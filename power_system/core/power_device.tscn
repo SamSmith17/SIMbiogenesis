@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://power_system/core/power_device.gd" id="1_script"]
+
+[node name="PowerDevice" type="Node"]
+script = ExtResource("1_script")
+device_name = "Power Device"
+rated_power_watts = 100.0
+

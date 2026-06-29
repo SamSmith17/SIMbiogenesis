@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="CampScatterProfile" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://vegetation/camp_scatter_profile.gd" id="1_profile"]
+
+[resource]
+script = ExtResource("1_profile")
+class_id = &"popup_tent"
+display_name = "Popup Tent (10x10)"
+fallback_color = Color(0.96, 0.96, 0.95, 1)
+fallback_size = Vector3(3.05, 2.6, 3.05)
+min_luma = 0.62
+max_luma = 1.0
+min_saturation = 0.0
+max_saturation = 0.32
+min_value = 0.6
+max_value = 1.0
+min_area_m2 = 5.0
+max_area_m2 = 24.0
+min_aspect_ratio = 0.55
+max_aspect_ratio = 1.9
+confidence_threshold = 0.4
+spacing_radius = 2.2
+expected_footprint_size = Vector2(3.05, 3.05)
+random_yaw_when_square = true
+min_aspect_for_oriented = 1.15
+orientation_snap_degrees = 90.0
+max_yaw_jitter_degrees = 0.0
+y_offset = 0.0
+align_to_surface_normal = false
+use_multimesh = true
+cast_shadows = true

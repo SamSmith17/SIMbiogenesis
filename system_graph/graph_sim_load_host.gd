@@ -1,0 +1,196 @@
+class_name GraphSimLoadHost
+extends Node
+## Manages GraphSimLoad child nodes for every non-virtual load item in the
+## associated GraphModel. Runs on setup() and whenever the model changes,
+## so library-spawned appliance / acload / processor items become first-class
+## power consumers (enabling SceneNodeAction-based automations to fire).
+
+const GraphSimLoadScript := preload("res://system_graph/graph_sim_load.gd")
+
+const LOAD_TYPES := ["appliance", "acload", "processor"]
+
+var _model: RefCounted = null
+## item_id → GraphSimLoad (Node child of this host).
+var _loads: Dictionary = {}
+## Reentrancy guard — `_sync_all` mutates the model (device_path / specs),
+## which in turn fires model.changed. The guard prevents feedback loops.
+var _syncing: bool = false
+
+
+func setup(model: RefCounted) -> void:
+	_model = model
+	if _model != null and _model.has_signal("changed"):
+		if not _model.changed.is_connected(_on_model_changed):
+			_model.changed.connect(_on_model_changed)
+	_sync_all()
+
+
+func teardown() -> void:
+	if _model != null and _model.has_signal("changed"):
+		if _model.changed.is_connected(_on_model_changed):
+			_model.changed.disconnect(_on_model_changed)
+	for load_id: String in _loads.keys().duplicate():
+		_remove_load(load_id)
+	_loads.clear()
+	_model = null
+
+
+func _on_model_changed(_reason: String) -> void:
+	if _syncing:
+		return
+	# Any change may add/remove/rename items — rebuild our mapping.
+	_sync_all()
+
+
+## Public entry-point used by SystemGraphView after deserialize/restore so we
+## immediately recreate sim-loads for every persisted library item.
+func refresh() -> void:
+	_sync_all()
+
+
+func is_load_on(item_id: String) -> bool:
+	var node: Node = _loads.get(item_id, null)
+	if node == null or not is_instance_valid(node):
+		return false
+	if node.get("is_on") != null:
+		return bool(node.is_on)
+	return false
+
+
+func has_sim_load(item_id: String) -> bool:
+	var node: Node = _loads.get(item_id, null)
+	return node != null and is_instance_valid(node)
+
+
+func _sync_all() -> void:
+	if _model == null or not ("items" in _model):
+		return
+	_syncing = true
+	var active_ids: Dictionary = {}
+	for it: Dictionary in (_model.items as Array):
+		var iid: String = str(it.get("id", ""))
+		if iid.is_empty():
+			continue
+		var itype: String = str(it.get("type", ""))
+		if not LOAD_TYPES.has(itype):
+			continue
+		if bool(it.get("is_virtual", false)):
+			continue
+		active_ids[iid] = true
+		_ensure_load(iid, it)
+	for existing_id: String in _loads.keys().duplicate():
+		if not active_ids.has(existing_id):
+			_remove_load(existing_id)
+	_syncing = false
+
+
+func _ensure_load(iid: String, item: Dictionary) -> void:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+
+	# Items created from the "Scene Devices" library entry mirror a scene node
+	# that already contributes to the power_consumers group directly.  No proxy
+	# is needed here; just keep device_path pointing at the scene node so that
+	# SceneNodeAction automations can target it.
+	var scene_dev_path: String = str(specs.get("scene_device_path", ""))
+	if not scene_dev_path.is_empty():
+		if str(item.get("device_path", "")) != scene_dev_path:
+			if _model.has_method("update_item"):
+				_model.call("update_item", iid, {"device_path": scene_dev_path})
+		return
+
+	var rated_w: float = float(specs.get("max_watts", specs.get("watts", 200.0)))
+	var avg_w: float = float(specs.get("avg_watts", rated_w))
+	# Items that have automations must start OFF so the automation manages state.
+	# Restoring a stale "on" from a save would cause the load to reappear every
+	# day when power becomes available, even after the user deletes the node.
+	# Manually-controlled items (no automations) still restore their saved state.
+	var autos: Array = specs.get("graph_automations", []) as Array
+	var target_on: bool
+	if not autos.is_empty():
+		target_on = false
+	else:
+		var req_s: String = str(specs.get("requested_state", specs.get("current_state", "off"))).to_lower()
+		target_on = (req_s == "on")
+
+	var node: Node = _loads.get(iid, null)
+	if node != null and not is_instance_valid(node):
+		_loads.erase(iid)
+		node = null
+
+	# Side-by-side V1/V2 parity: if another host in the scene already owns a
+	# sim-load for this item id, defer to it (prevents double-counting the
+	# same graph-only load in solar_ui's power_consumers sum). We still keep
+	# our own weak reference so teardown/refresh bookkeeping stays consistent.
+	if node == null:
+		var shared: Node = _find_foreign_sim_load(iid)
+		if shared != null:
+			_loads[iid] = shared
+			var shared_path: String = str(shared.get_path())
+			if str(item.get("device_path", "")) != shared_path:
+				if _model.has_method("update_item"):
+					_model.call("update_item", iid, {"device_path": shared_path})
+			if shared.has_method("sync_from_model"):
+				# Preserve runtime state for existing automation-managed nodes.
+				# Only force off for newly adopted nodes (no prior state).
+				var shared_target: bool = target_on
+				if not autos.is_empty():
+					var v: Variant = shared.get("_requested_on")
+					shared_target = v != null and bool(v)
+				shared.call("sync_from_model", shared_target, rated_w, avg_w)
+			return
+
+	var is_new_node: bool = (node == null)
+	if node == null:
+		node = GraphSimLoadScript.new()
+		node.name = "SimLoad_%s" % iid
+		node.set("item_id", iid)
+		node.set("model_ref", _model)
+		add_child(node)
+		_loads[iid] = node
+
+	# Always (re)set device_path on the item — NodePaths can change across
+	# scene reloads, and only this host knows the current runtime path.
+	var dev_path: String = str(node.get_path())
+	if str(item.get("device_path", "")) != dev_path:
+		if _model.has_method("update_item"):
+			_model.call("update_item", iid, {"device_path": dev_path})
+
+	# Sync live specs + state without triggering state_changed feedback.
+	# New nodes with automations start OFF (automation controls the first turn-on).
+	# Existing nodes with automations preserve their runtime _requested_on so that
+	# an automation firing turn_on() is not immediately undone by model.changed
+	# triggering _sync_all() again via _apply_state_to_model().
+	if node.has_method("sync_from_model"):
+		var effective_target: bool = target_on
+		if not is_new_node and not autos.is_empty():
+			var v: Variant = node.get("_requested_on")
+			effective_target = v != null and bool(v)
+		node.call("sync_from_model", effective_target, rated_w, avg_w)
+
+
+## Look for an existing GraphSimLoad (from a sibling view / host) that already
+## represents `iid`. Returns null if none exists. Walks the "power_consumers"
+## group so we don't rely on a specific parent layout.
+func _find_foreign_sim_load(iid: String) -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	for n: Node in tree.get_nodes_in_group("power_consumers"):
+		if n == null or not is_instance_valid(n):
+			continue
+		if not (n.has_meta("graph_sim_load") and bool(n.get_meta("graph_sim_load"))):
+			continue
+		if str(n.get("item_id")) == iid:
+			return n
+	return null
+
+
+func _remove_load(iid: String) -> void:
+	if not _loads.has(iid):
+		return
+	var node: Node = _loads[iid]
+	_loads.erase(iid)
+	# Only free sim-loads we actually own. Shared/foreign proxies (tracked for
+	# device_path sync only) are freed by their owning host.
+	if is_instance_valid(node) and node.get_parent() == self:
+		node.queue_free()

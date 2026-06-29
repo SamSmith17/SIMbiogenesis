@@ -1,0 +1,47 @@
+[gd_scene format=3 uid="uid://bwbd37x6yk1l5"]
+
+[ext_resource type="Script" uid="uid://cjqgul8kighao" path="res://scenes/gameplay/player.gd" id="1_player"]
+[ext_resource type="PackedScene" uid="uid://xyqy2s5p5wvm" path="res://Player Character/Walking (in place).fbx" id="2_character"]
+[ext_resource type="Script" path="res://scenes/gameplay/player_health.gd" id="3_health"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
+radius = 0.35
+height = 1.8
+
+[sub_resource type="CameraAttributesPractical" id="CameraAttributesPractical_cam"]
+auto_exposure_enabled = true
+auto_exposure_min_ev = -3.0
+auto_exposure_max_ev = 1.2
+
+[node name="Player" type="CharacterBody3D" groups=["player"]]
+collision_layer = 3
+collision_mask = 1
+floor_constant_speed = true
+floor_block_on_wall = false
+floor_max_angle = 1.22173
+floor_snap_length = 0.22
+safe_margin = 0.05
+max_slides = 6
+script = ExtResource("1_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("CapsuleShape3D_body")
+
+[node name="CameraArm" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
+
+[node name="Camera3D" type="Camera3D" parent="CameraArm"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.046013355, 0)
+attributes = SubResource("CameraAttributesPractical_cam")
+current = true
+fov = 50.0
+
+[node name="CharacterModel" type="Node3D" parent="."]
+
+[node name="Remy" parent="CharacterModel" instance=ExtResource("2_character")]
+transform = Transform3D(-0.5, 0, 0, 0, 0.5, 0, 0, 0, -0.5, 0, 0, 0.25)
+
+[node name="PlayerHealth" type="Node" parent="."]
+script = ExtResource("3_health")
+fire_damage_distance = 0.91

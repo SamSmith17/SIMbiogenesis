@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="MapDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://maps/map_definition.gd" id="1_mapdef"]
+
+[resource]
+script = ExtResource("1_mapdef")
+display_name = "SOAK Festival 2026 (local)"
+scene_path = "res://scenes/maps/soak_festival_2026.tscn"
+description = "Copy to maps/soak_camp_map.tres and keep soak_festival_2026.tscn beside project.godot (gitignored). Requires local asset pack — see ASSETS.md."

@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scenes/gameplay/collision_platform.gd" id="1_script"]
+
+[node name="CollisionPlatform" type="StaticBody3D"]
+script = ExtResource("1_script")
+platform_size = Vector3(2, 0.2, 2)

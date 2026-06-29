@@ -1,0 +1,12 @@
+[gd_scene load_steps=2 format=3 uid="uid://c1uispcnnctui"]
+
+[ext_resource type="Script" uid="uid://duispconnui" path="res://uisp/uisp_connection_ui.gd" id="1_connui"]
+
+[node name="UISPConnectionUI" type="Control"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_connui")
+

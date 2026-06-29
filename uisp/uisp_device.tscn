@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3 uid="uid://cuispdevice"]
+
+[ext_resource type="Script" uid="uid://duispdevice" path="res://uisp/uisp_device.gd" id="1_device"]
+
+[node name="UISPDevice" type="Node3D"]
+script = ExtResource("1_device")
+

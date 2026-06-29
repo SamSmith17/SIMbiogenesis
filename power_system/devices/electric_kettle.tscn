@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://power_system/devices/electric_kettle.gd" id="1_script"]
+
+[node name="ElectricKettle" type="Node3D"]
+script = ExtResource("1_script")
+display_name = "Electric Kettle"
+capacity_liters = 1.7
+heating_power_watts = 1500.0
+

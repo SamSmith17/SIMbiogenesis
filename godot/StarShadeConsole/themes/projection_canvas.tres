@@ -1,0 +1,18 @@
+[gd_resource type="Theme" load_steps=4 format=3]
+
+[ext_resource type="StyleBoxFlat" path="res://godot/StarShadeConsole/resources/styleboxes/panel_quadrant.tres" id="1_panel_quadrant"]
+[ext_resource type="StyleBoxFlat" path="res://godot/StarShadeConsole/resources/styleboxes/panel_inset.tres" id="2_panel_inset"]
+[ext_resource type="StyleBoxFlat" path="res://godot/StarShadeConsole/resources/styleboxes/divider.tres" id="3_divider"]
+
+[resource]
+default_font_size = 16
+PanelContainer/styles/panel = ExtResource("1_panel_quadrant")
+Panel/styles/panel = ExtResource("2_panel_inset")
+HSeparator/styles/separator = ExtResource("3_divider")
+VSeparator/styles/separator = ExtResource("3_divider")
+Label/colors/font_color = Color(0.862745, 0.913725, 0.980392, 1)
+Label/colors/font_outline_color = Color(0.027451, 0.0509804, 0.0823529, 1)
+Label/constants/outline_size = 1
+ProgressBar/styles/background = ExtResource("2_panel_inset")
+ProgressBar/styles/fill = ExtResource("3_divider")
+ProgressBar/constants/outline_size = 0

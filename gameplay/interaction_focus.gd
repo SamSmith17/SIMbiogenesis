@@ -1,0 +1,182 @@
+extends Node
+
+## Center-screen raycast focus for Interactable nodes + OSM building pick fallback.
+
+const RAY_LENGTH: float = 12.0
+
+var _player: Node3D = null
+var _camera: Camera3D = null
+var _focused: Interactable = null
+var _crosshair: CanvasLayer = null
+var _prompt_ui: CanvasLayer = null
+var _loader: Node = null
+
+
+func setup(player: Node3D, camera: Camera3D) -> void:
+	_player = player
+	_camera = camera
+	call_deferred("_find_ui")
+	call_deferred("_find_loader")
+
+
+func _find_loader() -> void:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return
+	_loader = tree.current_scene.get_node_or_null("TerrainLoader")
+
+
+func get_focused() -> Interactable:
+	return _focused
+
+
+func clear_focus() -> void:
+	_clear_focus()
+
+
+func _physics_process(_delta: float) -> void:
+	if _player == null or _camera == null:
+		return
+	var route_ctrl: Node = _player.get_node_or_null("ConduitRouteController")
+	if route_ctrl != null and route_ctrl.has_method("is_routing") \
+			and bool(route_ctrl.call("is_routing")):
+		_clear_focus()
+		_clear_building_focus()
+		return
+	if not _should_update_focus():
+		_clear_focus()
+		_clear_building_focus()
+		return
+	if bool(_player.get("is_fpv_drone_mode") if _player.get("is_fpv_drone_mode") != null else false):
+		_clear_focus()
+		_clear_building_focus()
+		return
+	var hit := _raycast_center()
+	var next: Interactable = null
+	if hit.has("collider"):
+		next = _find_interactable(hit.collider as Object)
+		if next != null and not next.can_interact(_player):
+			next = null
+		if next != null:
+			var dist: float = _camera.global_position.distance_to(hit.position)
+			if dist > next.max_distance:
+				next = null
+	if next != _focused:
+		if _focused != null:
+			_focused.on_focus_exit(_player)
+		_focused = next
+		if _focused != null:
+			_focused.on_focus_enter(_player)
+		_update_ui()
+	elif _focused != null:
+		_update_ui()
+	if _focused == null and hit.has("position"):
+		_update_building_focus(hit["position"] as Vector3)
+	else:
+		_clear_building_focus()
+
+
+func _should_update_focus() -> bool:
+	if CursorController.should_capture_look():
+		return true
+	if CursorController.is_paused():
+		return true
+	return false
+
+
+func _raycast_center() -> Dictionary:
+	var vp := get_viewport()
+	if vp == null:
+		return {}
+	var center := vp.get_visible_rect().size * 0.5
+	var origin := _camera.project_ray_origin(center)
+	var dir := _camera.project_ray_normal(center)
+	var space := _player.get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(origin, origin + dir * RAY_LENGTH)
+	query.collide_with_areas = true
+	query.collide_with_bodies = true
+	return space.intersect_ray(query)
+
+
+func _find_interactable(obj: Object) -> Interactable:
+	var node: Node = obj as Node
+	while node != null:
+		if node is Interactable:
+			return node as Interactable
+		node = node.get_parent()
+	return null
+
+
+func _clear_focus() -> void:
+	if _focused != null:
+		_focused.on_focus_exit(_player)
+		_focused = null
+	_update_ui()
+
+
+func _update_building_focus(hit_pos: Vector3) -> void:
+	if _loader == null or not _loader.has_method("pick_building_at_world"):
+		return
+	var pick: Dictionary = _loader.call("pick_building_at_world", hit_pos.x, hit_pos.z)
+	if not bool(pick.get("valid", false)):
+		_clear_building_focus()
+		return
+	var idx := int(pick.get("building_idx", -1))
+	if _loader.has_method("is_building_replaced") and bool(_loader.call("is_building_replaced", idx)):
+		_clear_building_focus()
+		return
+	if _loader.has_method("set_building_focus_idx"):
+		_loader.call("set_building_focus_idx", idx)
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(true)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		_crosshair.set_prompt_text("Replace building (use P panel or OSM mode)")
+
+
+func _clear_building_focus() -> void:
+	if _loader != null and _loader.has_method("set_building_focus_idx"):
+		if int(_loader.call("get_building_focus_idx")) >= 0:
+			_loader.call("set_building_focus_idx", -1)
+	if _focused != null:
+		return
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(false)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		_crosshair.set_prompt_text("")
+
+
+func _update_ui() -> void:
+	if _crosshair != null:
+		if _crosshair.has_method("set_target_active"):
+			_crosshair.set_target_active(_focused != null)
+		if _crosshair.has_method("set_prompt_text"):
+			if _focused != null:
+				var lbl := _focused.get_prompt_text()
+				if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
+					lbl = "[%s] %s" % [_prompt_ui.get_action_label(_focused.get_action_name()), lbl]
+				_crosshair.set_prompt_text(lbl)
+			else:
+				_crosshair.set_prompt_text("")
+
+
+func _find_ui() -> void:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return
+	var ui_layer := tree.current_scene.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	_crosshair = ui_layer.get_node_or_null("CrosshairUI")
+	_prompt_ui = ui_layer.get_node_or_null("InteractionPromptUI")
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if _focused == null or _player == null:
+		return
+	if _focused is PlacedProp:
+		return
+	if not CursorController.should_capture_look():
+		return
+	if event.is_action_pressed("interact"):
+		_focused.interact(_player)
+		get_viewport().set_input_as_handled()

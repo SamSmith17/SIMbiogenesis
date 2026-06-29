@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="MapDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://maps/map_definition.gd" id="1_mapdef"]
+
+[resource]
+script = ExtResource("1_mapdef")
+display_name = "Mars Aerial (local)"
+scene_path = "res://scenes/maps/mars_aerial.tscn"
+description = "Copy to maps/mars_aerial_map.tres and keep mars_aerial.tscn beside project.godot (gitignored). Requires local asset pack — see ASSETS.md."

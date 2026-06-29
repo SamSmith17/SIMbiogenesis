@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://crosshair_ui_001"]
+
+[ext_resource type="Script" path="res://scenes/ui/crosshair_ui.gd" id="1"]
+
+[node name="CrosshairUI" type="CanvasLayer"]
+script = ExtResource("1")

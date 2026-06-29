@@ -1,0 +1,366 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://main.gd" id="1_sj4uw"]
+[ext_resource type="Shader" path="res://sky.gdshader" id="2_60swm"]
+[ext_resource type="Texture2D" path="res://stellarium-002.png" id="3_olklb"]
+[ext_resource type="Script" path="res://planets.gd" id="4_uuouk"]
+[ext_resource type="Script" path="res://star_system.gd" id="5_vd1b2"]
+[ext_resource type="Texture2D" path="res://stellarium_starmap.png" id="6_trt2q"]
+[ext_resource type="PackedScene" path="res://scenes/gameplay/player.tscn" id="7_kxe5h"]
+[ext_resource type="Script" path="res://scenes/gameplay/player.gd" id="8_mixbn"]
+[ext_resource type="Script" path="res://scenes/gameplay/player_health.gd" id="9_eugwe"]
+[ext_resource type="PackedScene" path="res://scenes/ui/time_ui.tscn" id="10_biwn4"]
+[ext_resource type="Script" path="res://scenes/ui/time_ui.gd" id="11_fh54n"]
+[ext_resource type="PackedScene" path="res://scenes/ui/game_over_ui.tscn" id="12_yp3nw"]
+[ext_resource type="Script" path="res://scenes/ui/game_over_ui.gd" id="13_n77oe"]
+[ext_resource type="PackedScene" path="res://scenes/ui/solar_ui.tscn" id="14_jbp40"]
+[ext_resource type="Script" path="res://scenes/ui/solar_ui.gd" id="15_s1lq0"]
+[ext_resource type="PackedScene" path="res://scenes/ui/interaction_prompt_ui.tscn" id="16_88g4c"]
+[ext_resource type="Script" path="res://scenes/ui/interaction_prompt_ui.gd" id="17_m6xea"]
+[ext_resource type="PackedScene" path="res://scenes/ui/euc_ui.tscn" id="18_edoaq"]
+[ext_resource type="Script" path="res://scenes/ui/euc_ui.gd" id="19_2eldb"]
+[ext_resource type="PackedScene" path="res://scenes/ui/health_ui.tscn" id="20_qks01"]
+[ext_resource type="Script" path="res://scenes/ui/health_ui.gd" id="21_ko2gb"]
+[ext_resource type="PackedScene" path="res://scenes/ui/ha_connection_ui.tscn" id="22_r7gu0"]
+[ext_resource type="Script" path="res://scenes/ui/ha_connection_ui.gd" id="23_n2xnc"]
+[ext_resource type="PackedScene" path="res://scenes/ui/save_load_ui.tscn" id="24_03pwh"]
+[ext_resource type="Script" path="res://scenes/ui/save_load_ui.gd" id="25_v78ji"]
+[ext_resource type="PackedScene" path="res://system_graph/system_graph_view.tscn" id="26_c6g33"]
+[ext_resource type="Script" path="res://system_graph/system_graph_view.gd" id="27_t7f11"]
+[ext_resource type="PackedScene" path="res://scenes/ui/timeline_ui.tscn" id="28_ah531"]
+[ext_resource type="Script" path="res://scenes/ui/timeline_ui.gd" id="29_1glnn"]
+[ext_resource type="PackedScene" path="res://location_picker/location_picker_ui.tscn" id="30_k77fk"]
+[ext_resource type="Script" path="res://location_picker/location_picker_ui.gd" id="31_myaw8"]
+[ext_resource type="Script" path="res://ha_websocket_client.gd" id="32_qksf1"]
+[ext_resource type="Script" path="res://core/terrain/terrain_loader.gd" id="33_sy4ww"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_msgkm"]
+shader = ExtResource("2_60swm")
+shader_parameter/day_top_color = Color(0.25, 0.55, 0.95, 1)
+shader_parameter/day_bottom_color = Color(0.7, 0.85, 1, 1)
+shader_parameter/sunset_top_color = Color(0.7, 0.75, 1, 1)
+shader_parameter/sunset_bottom_color = Color(1, 0.5, 0.7, 1)
+shader_parameter/night_top_color = Color(0.005, 0.002, 0.015, 1)
+shader_parameter/night_bottom_color = Color(0.015, 0.005, 0.04, 1)
+shader_parameter/horizon_color = Color(0, 0.5, 0.6, 1)
+shader_parameter/horizon_blur = 0.03
+shader_parameter/sun_color = Color(10, 9, 2, 1)
+shader_parameter/sun_sunset_color = Color(10, 0, 0, 1)
+shader_parameter/sun_size = 0.03
+shader_parameter/sun_blur = 3.0
+shader_parameter/moon_color = Color(1, 1, 0.98, 1)
+shader_parameter/moon_size = 0.01
+shader_parameter/moon_blur = 0.02
+shader_parameter/moon_glow = 0.5
+shader_parameter/moon_glow_color = Color(0.6, 0.7, 1, 1)
+shader_parameter/clouds_edge_color = Color(0.8, 0.8, 0.98, 1)
+shader_parameter/clouds_top_color = Color(1, 1, 1, 1)
+shader_parameter/clouds_middle_color = Color(0.92, 0.92, 0.98, 1)
+shader_parameter/clouds_bottom_color = Color(0.83, 0.83, 0.94, 1)
+shader_parameter/clouds_speed = 2.0
+shader_parameter/clouds_direction = 0.2
+shader_parameter/clouds_scale = 1.0
+shader_parameter/clouds_cutoff = 1.0
+shader_parameter/clouds_fuzziness = 0.5
+shader_parameter/clouds_weight = 0.0
+shader_parameter/clouds_blur = 0.25
+shader_parameter/stars_texture = ExtResource("3_olklb")
+shader_parameter/stars_speed = 1.0
+shader_parameter/stars_scale = 1.0
+shader_parameter/stars_opacity = 0.1
+shader_parameter/stars_north_offset = -84.0
+shader_parameter/stars_lst = 303.1547837406397
+shader_parameter/stars_declination_offset = 0.0
+shader_parameter/stars_flip_vertical = 0.0
+shader_parameter/stars_flip_horizontal = 0.0
+shader_parameter/stars_twinkle = 0.4
+shader_parameter/stars_horizon_fade = 0.05
+shader_parameter/planet_direction_0 = Vector3(0.07560562, 0.5793188, 0.81158704)
+shader_parameter/planet_direction_1 = Vector3(0.11705042, 0.5969934, 0.7936613)
+shader_parameter/planet_direction_2 = Vector3(-0.012495433, 0.5806128, 0.81408393)
+shader_parameter/planet_direction_3 = Vector3(0.21800296, -0.5391551, -0.8135026)
+shader_parameter/planet_direction_4 = Vector3(0.8229795, 0.44394752, 0.35442254)
+shader_parameter/planet_color_0 = Color(0.85, 0.85, 0.8, 1)
+shader_parameter/planet_color_1 = Color(1, 0.98, 0.9, 1)
+shader_parameter/planet_color_2 = Color(1, 0.6, 0.4, 1)
+shader_parameter/planet_color_3 = Color(1, 0.95, 0.85, 1)
+shader_parameter/planet_color_4 = Color(1, 0.93, 0.75, 1)
+shader_parameter/planet_size_0 = 0.001
+shader_parameter/planet_size_1 = 0.002
+shader_parameter/planet_size_2 = 0.002
+shader_parameter/planet_size_3 = 0.002
+shader_parameter/planet_size_4 = 0.002
+shader_parameter/planet_enabled_0 = 1.0
+shader_parameter/planet_enabled_1 = 1.0
+shader_parameter/planet_enabled_2 = 1.0
+shader_parameter/planet_enabled_3 = 0.0
+shader_parameter/planet_enabled_4 = 1.0
+shader_parameter/planet_glow_0 = 0.3
+shader_parameter/planet_glow_1 = 0.6
+shader_parameter/planet_glow_2 = 0.4
+shader_parameter/planet_glow_3 = 0.5
+shader_parameter/planet_glow_4 = 0.35
+shader_parameter/planet_glow_color_0 = Color(0.9, 0.9, 0.85, 1)
+shader_parameter/planet_glow_color_1 = Color(1, 0.98, 0.85, 1)
+shader_parameter/planet_glow_color_2 = Color(1, 0.7, 0.5, 1)
+shader_parameter/planet_glow_color_3 = Color(1, 0.95, 0.8, 1)
+shader_parameter/planet_glow_color_4 = Color(1, 0.9, 0.7, 1)
+shader_parameter/ref_star_direction_0 = Vector3(0, 1, 0)
+shader_parameter/ref_star_direction_1 = Vector3(0, 1, 0)
+shader_parameter/ref_star_direction_2 = Vector3(0, 1, 0)
+shader_parameter/ref_star_direction_3 = Vector3(0, 1, 0)
+shader_parameter/ref_star_direction_4 = Vector3(0, 1, 0)
+shader_parameter/ref_star_direction_5 = Vector3(0, 1, 0)
+shader_parameter/ref_star_direction_6 = Vector3(0, 1, 0)
+shader_parameter/ref_star_direction_7 = Vector3(0, 1, 0)
+shader_parameter/ref_star_color_0 = Color(0, 1, 1, 1)
+shader_parameter/ref_star_color_1 = Color(0, 1, 0.8, 1)
+shader_parameter/ref_star_color_2 = Color(1, 0.5, 0, 1)
+shader_parameter/ref_star_color_3 = Color(0.5, 0.8, 1, 1)
+shader_parameter/ref_star_color_4 = Color(1, 1, 1, 1)
+shader_parameter/ref_star_color_5 = Color(0.8, 0.9, 1, 1)
+shader_parameter/ref_star_color_6 = Color(1, 0.8, 0.5, 1)
+shader_parameter/ref_star_color_7 = Color(1, 1, 0.8, 1)
+shader_parameter/ref_star_enabled_0 = 0.0
+shader_parameter/ref_star_enabled_1 = 0.0
+shader_parameter/ref_star_enabled_2 = 0.0
+shader_parameter/ref_star_enabled_3 = 0.0
+shader_parameter/ref_star_enabled_4 = 0.0
+shader_parameter/ref_star_enabled_5 = 0.0
+shader_parameter/ref_star_enabled_6 = 0.0
+shader_parameter/ref_star_enabled_7 = 0.0
+shader_parameter/overwritten_time = 56400.0
+shader_parameter/star_rotation_angle = 1.090830782496456
+shader_parameter/celestial_pole_elevation = 33.36
+
+[sub_resource type="Sky" id="Sky_q13r3"]
+sky_material = SubResource("ShaderMaterial_msgkm")
+process_mode = 1
+
+[sub_resource type="Environment" id="Environment_bh1jy"]
+background_mode = 2
+sky = SubResource("Sky_q13r3")
+ambient_light_source = 3
+ambient_light_sky_contribution = 0.15
+ambient_light_energy = 0.269112
+reflected_light_source = 2
+sdfgi_use_occlusion = true
+glow_bloom = 0.12
+glow_blend_mode = 0
+fog_enabled = true
+fog_light_color = Color(0.40366718, 0.45120862, 0.56393784, 1)
+fog_sun_scatter = 0.1
+fog_density = 0.000311176
+fog_aerial_perspective = 0.36655948
+fog_sky_affect = 0.0
+fog_height = 8.92
+fog_depth_end = 8000.0
+volumetric_fog_density = 0.2546
+volumetric_fog_emission_energy = 0.0
+volumetric_fog_anisotropy = -0.37
+volumetric_fog_length = 602.71
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
+radius = 0.35
+height = 1.8
+
+[node name="Main" type="Node3D" unique_id=496568162]
+script = ExtResource("1_sj4uw")
+day = 23
+latitude = 33.36
+longitude = -115.74
+moon_orbital_period = 29.53
+fog_amount = 0.0
+twilight_cool_bias = 1.0
+use_day_time_for_shader = true
+enable_random_fires = true
+sun_base_enegry = 2.19
+sun_size = 0.03
+moon_base_enegry = 0.07
+moon_size = 0.01
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1417553034]
+environment = SubResource("Environment_bh1jy")
+
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=115544899]
+transform = Transform3D(0.99752, 0.042518847, -0.056089006, 3.7252903e-09, 0.7969063, 0.604103, 0.07038344, -0.6026048, 0.7949299, 0, 0, 0)
+rotation_order = 4
+light_color = Color(1, 0.98, 0.92, 1)
+light_energy = 2.6234722
+shadow_enabled = true
+shadow_bias = 0.03
+shadow_normal_bias = 1.0
+shadow_opacity = 0.98
+shadow_blur = 0.55
+directional_shadow_split_1 = 0.08
+directional_shadow_split_2 = 0.25
+directional_shadow_split_3 = 0.58
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 230.0
+directional_shadow_pancake_size = 40.0
+
+[node name="Moon" type="DirectionalLight3D" parent="." unique_id=1208388147]
+transform = Transform3D(0.2627768, -0.4408006, 0.8582792, 7.450581e-09, 0.8895407, 0.45685607, -0.9648566, -0.12005116, 0.23375063, 0, 0, 0)
+rotation_order = 4
+light_color = Color(0.85, 0.9, 1, 1)
+light_energy = 0.027753584
+light_indirect_energy = 0.02
+light_specular = 0.5
+shadow_bias = 0.0375
+shadow_normal_bias = 1.2
+shadow_opacity = 0.4
+shadow_blur = 0.7
+directional_shadow_split_1 = 0.08
+directional_shadow_split_2 = 0.25
+directional_shadow_split_3 = 0.58
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 150.0
+directional_shadow_pancake_size = 40.0
+
+[node name="PlanetSystem" type="Node3D" parent="." unique_id=1224120648]
+script = ExtResource("4_uuouk")
+
+[node name="StarSystem" type="Node" parent="." unique_id=1448065320]
+script = ExtResource("5_vd1b2")
+stars_texture = ExtResource("6_trt2q")
+stars_north_offset = -156.6
+stars_declination_offset = -31.19999999999999
+stars_brightness = 0.7
+stars_twinkle = 1.0
+stars_horizon_fade = 0.65
+
+[node name="Player" parent="." unique_id=1517963726 groups=["player"] instance=ExtResource("7_kxe5h")]
+transform = Transform3D(0.9986577, 0, -0.05179564, 0, 1, 0, 0.05179564, 0, 0.9986577, 1.2438431, 2, 11.618996)
+collision_layer = 3
+floor_stop_on_slope = false
+floor_constant_speed = true
+floor_max_angle = 1.5201818
+floor_snap_length = 0.3
+safe_margin = 0.05
+script = ExtResource("8_mixbn")
+move_speed = 9.0
+invert_y_axis = false
+fatal_fall_distance = 3.92
+
+[node name="CollisionShape3D" parent="Player" index="0"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("CapsuleShape3D_body")
+
+[node name="CameraArm" parent="Player" index="1"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
+
+[node name="Camera3D" parent="Player/CameraArm" index="0"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.046013355, 0)
+current = true
+fov = 45.9
+far = 20000.0
+
+[node name="Remy" parent="Player/CharacterModel" index="0"]
+transform = Transform3D(-0.5, 0, 0, 0, 0.5, 0, 0, 0, -0.5, 0, 0, 0.25)
+
+[node name="PlayerHealth" parent="Player" index="3"]
+script = ExtResource("9_eugwe")
+
+[node name="UILayer" type="CanvasLayer" parent="." unique_id=1300269253]
+
+[node name="TimeUI" type="Control" parent="UILayer" unique_id=1178743605 instance=ExtResource("10_biwn4")]
+layout_mode = 3
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -440.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = -68.0
+grow_horizontal = 0
+grow_vertical = 2
+script = ExtResource("11_fh54n")
+
+[node name="GameOverUI" type="CanvasLayer" parent="UILayer" unique_id=376391621 instance=ExtResource("12_yp3nw")]
+layer = 100
+visible = false
+script = ExtResource("13_n77oe")
+
+[node name="SolarUI" type="Control" parent="UILayer" unique_id=361366752 instance=ExtResource("14_jbp40")]
+custom_minimum_size = Vector2(380, 0)
+layout_mode = 3
+anchors_preset = 0
+offset_left = 12.0
+offset_top = 10.0
+offset_right = 392.0
+offset_bottom = 620.0
+script = ExtResource("15_s1lq0")
+ha_battery_soc_entity = "sensor.canbus_esp32_s3_battery_soc_inverter"
+ha_load_entity = "sensor.canbus_esp32_s3_ac_output_power"
+ha_solar_entity = "sensor.canbus_esp32_s3_pv_input_power"
+ha_daily_solar_entity = "sensor.canbus_esp32_s3_pv_generation_today"
+ha_solar_energy_entity = "sensor.canbus_esp32_s3_solar_energy_integrated"
+ha_additional_subscribe_entities = PackedStringArray()
+
+[node name="InteractionPromptUI" type="CanvasLayer" parent="UILayer" unique_id=1258130480 instance=ExtResource("16_88g4c")]
+layer = 50
+visible = false
+script = ExtResource("17_m6xea")
+
+[node name="EUCUI" type="CanvasLayer" parent="UILayer" unique_id=567647717 instance=ExtResource("18_edoaq")]
+layer = 40
+visible = false
+script = ExtResource("19_2eldb")
+
+[node name="HealthUI" type="CanvasLayer" parent="UILayer" unique_id=919325488 instance=ExtResource("20_qks01")]
+layer = 10
+visible = false
+script = ExtResource("21_ko2gb")
+
+[node name="HAConnectionUI" type="Control" parent="UILayer" unique_id=1408706981 instance=ExtResource("22_r7gu0")]
+layout_mode = 3
+anchors_preset = 0
+offset_top = 537.0
+offset_right = 445.0
+offset_bottom = 1027.0
+script = ExtResource("23_n2xnc")
+
+[node name="SaveLoadUI" type="CanvasLayer" parent="UILayer" unique_id=165617117 instance=ExtResource("24_03pwh")]
+layer = 50
+script = ExtResource("25_v78ji")
+
+[node name="SystemGraphView" type="Control" parent="UILayer" unique_id=977183507 instance=ExtResource("26_c6g33")]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("27_t7f11")
+
+[node name="TimelineUI" type="Control" parent="UILayer" unique_id=-1194967295 instance=ExtResource("28_ah531")]
+layout_mode = 3
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="LocationPickerUI" type="Control" parent="UILayer" unique_id=1073865937 instance=ExtResource("30_k77fk")]
+visible = false
+z_index = 20
+z_as_relative = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("31_myaw8")
+
+[node name="HAClient" type="Node" parent="." unique_id=1682824333]
+script = ExtResource("32_qksf1")
+
+[node name="TerrainLoader" type="Node3D" parent="." unique_id=423037111]
+script = ExtResource("33_sy4ww")
+
+[editable path="Player"]

@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="CampScatterProfile" format=3 uid="uid://vm816efhqv5e"]
+
+[ext_resource type="Script" uid="uid://40h5wj338683" path="res://vegetation/camp_scatter_profile.gd" id="1_profile"]
+[ext_resource type="PackedScene" uid="uid://c5y2afig10oxp" path="res://Imported Models/Soak Terrain/Camps/Camp Components/RV.glb" id="1_uipgd"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_hcr0c"]
+
+[resource]
+script = ExtResource("1_profile")
+class_id = &"rv"
+display_name = "RV / Motorhome"
+scene = ExtResource("1_uipgd")
+fallback_color = Color(0.86, 0.86, 0.9, 1)
+fallback_size = Vector3(8.5, 3, 2.6)
+min_luma = 0.42
+max_luma = 0.96
+max_saturation = 0.3
+min_value = 0.4
+min_area_m2 = 16.0
+max_area_m2 = 65.0
+min_aspect_ratio = 3.0
+max_aspect_ratio = 5.1
+confidence_threshold = 0.43
+spacing_radius = 3.4
+expected_footprint_size = Vector2(8.5, 2.6)
+min_aspect_for_oriented = 1.4
+align_to_surface_normal = true
+use_multimesh = true
+multimesh_mesh = SubResource("BoxMesh_hcr0c")

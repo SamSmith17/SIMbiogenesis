@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scenes/gameplay/collision_stairs.gd" id="1_script"]
+
+[node name="CollisionStairs" type="StaticBody3D"]
+script = ExtResource("1_script")
+total_height = 2.0
+total_length = 3.0
+stair_width = 1.0

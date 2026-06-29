@@ -1,0 +1,11 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://power_system/devices/electric_water_heater.gd" id="1_script"]
+
+[node name="ElectricWaterHeater" type="Node3D"]
+script = ExtResource("1_script")
+display_name = "Water Heater"
+tank_capacity_gallons = 50.0
+heating_power_watts = 4500.0
+target_temp_celsius = 60.0
+

@@ -1,0 +1,137 @@
+[gd_scene format=3 uid="uid://bq8hk0hveybu"]
+
+[ext_resource type="Script" path="res://scenes/ui/ha_connection_ui.gd" id="1_haconnui"]
+
+[node name="HAConnectionUI" type="Control"]
+layout_mode = 3
+anchors_preset = 0
+anchor_left = 0.0
+anchor_right = 0.0
+anchor_top = 0.0
+anchor_bottom = 0.0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = 455.0
+offset_bottom = 500.0
+grow_horizontal = 1
+grow_vertical = 1
+script = ExtResource("1_haconnui")
+
+[node name="Panel" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MarginContainer" type="MarginContainer" parent="Panel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 10
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/MarginContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="TitleLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+text = "Home Assistant Connection"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="ConnectionSection" type="VBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="ConnectionSectionLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/ConnectionSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "🔌 Connection"
+
+[node name="URLLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/ConnectionSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "WebSocket URL:"
+
+[node name="URLInput" type="LineEdit" parent="Panel/MarginContainer/VBoxContainer/ConnectionSection"]
+layout_mode = 2
+placeholder_text = "ws://YOUR_HA_IP:8123/api/websocket"
+
+[node name="TokenLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/ConnectionSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Long-lived Access Token:"
+
+[node name="TokenInput" type="LineEdit" parent="Panel/MarginContainer/VBoxContainer/ConnectionSection"]
+layout_mode = 2
+placeholder_text = "Enter your Home Assistant long-lived access token"
+secret = true
+
+[node name="ButtonContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer/ConnectionSection"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ConnectButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/ConnectionSection/ButtonContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Connect"
+
+[node name="DisconnectButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/ConnectionSection/ButtonContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+disabled = true
+text = "Disconnect"
+
+[node name="StatusLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/ConnectionSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Status: Disconnected"
+horizontal_alignment = 1
+
+[node name="HSeparator2" type="HSeparator" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="EntitySection" type="VBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 4
+
+[node name="EntitySectionLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/EntitySection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "📡 Entity Subscriptions"
+
+[node name="EntityListLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/EntitySection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Entity IDs (one per line or comma-separated):"
+
+[node name="EntityListInput" type="TextEdit" parent="Panel/MarginContainer/VBoxContainer/EntitySection"]
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+size_flags_vertical = 3
+placeholder_text = "light.living_room
+sensor.temperature
+switch.outlet"
+
+[node name="SubscribeButton" type="Button" parent="Panel/MarginContainer/VBoxContainer/EntitySection"]
+layout_mode = 2
+disabled = true
+text = "Subscribe to Entities"
+
+[connection signal="pressed" from="Panel/MarginContainer/VBoxContainer/ConnectionSection/ButtonContainer/ConnectButton" to="." method="_on_connect_button_pressed"]
+[connection signal="pressed" from="Panel/MarginContainer/VBoxContainer/ConnectionSection/ButtonContainer/DisconnectButton" to="." method="_on_disconnect_button_pressed"]
+[connection signal="pressed" from="Panel/MarginContainer/VBoxContainer/EntitySection/SubscribeButton" to="." method="_on_subscribe_button_pressed"]
+

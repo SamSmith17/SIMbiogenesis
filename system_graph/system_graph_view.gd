@@ -1,0 +1,4038 @@
+extends Control
+## Solar Circuit Designer — Godot port of the LinkageLab webapp.
+## Phases: 1=layout shell, 4=node renderer, 7=library, 11=solar bridge.
+## Toggle: input action `system_graph_toggle` (default G).
+
+# ---------------------------------------------------------------------------
+# Mission-control color palette  (mirrors css/variables.css)
+# ---------------------------------------------------------------------------
+const C_BG       := Color(0.039, 0.055, 0.098, 1.0)    # --space-900  #0a0e1a
+const C_SIDEBAR  := Color(0.082, 0.114, 0.208, 1.0)    # --space-700  #151d35
+const C_PANEL    := Color(0.110, 0.145, 0.255, 1.0)    # --space-600  #1c2541
+const C_BORDER   := Color(0.227, 0.290, 0.420, 1.0)    # --space-400  #3a4a6b
+const C_PRIMARY  := Color(0.133, 0.827, 0.933, 1.0)    # --clr-primary  #22d3ee
+const C_AMBER    := Color(0.961, 0.620, 0.043, 1.0)    # --energy-amber #f59e0b
+const C_TEXT     := Color(0.886, 0.910, 0.941, 1.0)    # --text-primary #e2e8f0
+const C_TEXT_S   := Color(0.580, 0.639, 0.722, 1.0)    # --text-secondary #94a3b8
+const C_TEXT_M   := Color(0.392, 0.447, 0.545, 1.0)    # --text-muted   #64748b
+
+const TOPBAR_H    := 60.0
+## Bottom clearance — matches TimelineUI.BAR_HEIGHT so sidebars don't hide behind it.
+const TIMELINE_H  := 76.0
+## Left: wide enough for embedded SolarUI (see solar_ui.tscn root width)
+const SIDEBAR_L_W := 340.0
+const SIDEBAR_R_W := 340.0
+const TOGGLE_W    := 20.0   # width of the sidebar collapse tabs
+
+const _CANVAS_SCRIPT    := preload("res://system_graph_v2/graph_canvas_v2.gd")
+const _LIB_PANEL_SCRIPT := preload("res://system_graph/library_panel.gd")
+const _INSP_PANEL_SCRIPT := preload("res://system_graph/inspector_panel.gd")
+const _BRIDGE_SCRIPT         := preload("res://system_graph/solar_bridge.gd")
+const _HISTORY_PLAYER_SCRIPT := preload("res://system_graph/history_player.gd")
+const _SOLAR_UI_PACKED  := preload("res://scenes/ui/solar_ui.tscn")
+const _HISTORY_SCRIPT   := preload("res://system_graph/history_manager.gd")
+const _LINKER_SCRIPT    := preload("res://system_graph/ha_entity_linker.gd")
+const _SIM_LOAD_HOST_SCRIPT := preload("res://system_graph/graph_sim_load_host.gd")
+const _RESOURCE_FLOW_SCRIPT := preload("res://system_graph/resource_flow_engine.gd")
+const _CONDUIT_MGR_SCRIPT := preload("res://core/conduits/conduit_manager.gd")
+const _PLACEHOLDER_HOST_SCRIPT := preload("res://system_graph/graph_placeholder_host.gd")
+## Global `class_name` is not always resolved here during parse; preload gives a stable entry point.
+const _GAMEPLAY_RULES_SCRIPT := preload("res://gameplay/gameplay_rules.gd")
+const GRAPH_AUTOSAVE_DIR := "user://saves/graph_autosave"
+const GRAPH_AUTOSAVE_DEBOUNCE_SEC := 0.75
+const GRAPH_AUTOSAVE_REASONS := {
+	"add_item": true,
+	"remove_item": true,
+	"update_item": true,
+	"add_connection": true,
+	"remove_connection": true,
+	"update_connection": true,
+	"reset": true,
+}
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
+var _sidebar_l_open := true
+var _sidebar_r_open := true
+var _mode := "build"   # "build" | "test"
+
+var _solar_ui: Control = null
+## Test-mode left panel: mirrors main UILayer/SolarUI (solar_ui.gd embed mode)
+var _graph_embed_solar: Control = null
+var _pan_right_mouse := true
+## Populated on first deferred init from the owning Main node's scene path.
+var _cached_scene_tag: String = ""
+
+## Survival state before graph was opened — restored when the graph closes.
+var _gameplay_paused_before_graph: bool = true
+
+## SolarBridge instance — polls solar_ui and keeps virtual graph nodes in sync.
+var _bridge: RefCounted = null
+
+## HistoryPlayer Node — fetches and replays HA history when the user enters
+## HISTORICAL mode.  Lazily instantiated when the History button is pressed.
+var _history_player: Node = null
+## Bottom-edge UI strip shown only while a historical playback session is
+## active.  Holds time display, scrubber, play/pause, speed.
+var _history_panel: PanelContainer = null
+var _history_btn:        Button = null   # topbar button that opens the panel
+var _history_play_btn:   Button = null
+var _history_stop_btn:   Button = null
+var _history_speed_opt:  OptionButton = null
+var _history_slider:     HSlider = null
+var _history_status_lbl: Label = null
+var _history_time_lbl:   Label = null
+var _history_user_seeking: bool = false   # suppress slider→playback feedback
+const HISTORY_PANEL_H := 68.0
+
+## IDs of virtual nodes / connections the user has manually deleted from the
+## canvas.  Forwarded to SolarBridge.suppressed_ids so they are not re-created
+## on the next tick.  Also persisted through save / load.
+var _suppressed_virtuals: Dictionary = {}
+
+## GraphSimLoadHost — owns lightweight Node proxies for every non-virtual
+## load item so SceneNodeAction automations (dump load, battery-SOC gates,
+## etc.) can actually toggle library-spawned appliances / chargers.
+var _sim_load_host: Node = null
+
+## ResourceFlowEngine — reversible multi-resource tank simulation.
+var _resource_flow: RefCounted = null
+var _conduit_manager: Node3D = null
+var _placeholder_host: Node3D = null
+var _conduit_route_wired: bool = false
+
+## Home Assistant entity linker (Node — keeps a signal connection to HAClient).
+var _ha_linker: Node = null
+
+## Undo/redo history (snapshot-based).
+var _history: RefCounted = null
+## True while bridge.tick() or a bulk operation runs — skips history recording.
+var _history_suppress:     bool = false
+## Becomes true after the first _process() tick so we capture the initial state.
+var _history_initialized:  bool = false
+## Topbar undo/redo buttons — stored so we can update their disabled state.
+var _undo_btn: Button = null
+var _redo_btn: Button = null
+var _group_btn: Button = null
+var _ungroup_btn: Button = null
+var _make_array_btn: Button = null
+var _make_battery_bank_btn: Button = null
+var _placeholder_btn: Button = null
+var _enter_btn: Button = null
+var _back_btn: Button = null
+var _scope_breadcrumb: Label = null
+
+## Full-screen background rect — alpha driven by the transparency slider.
+var _bg_rect: ColorRect = null
+var _bg_alpha: float = 1.0
+
+## Reasons that should be recorded in the undo history.
+const HISTORY_REASONS: Array[String] = [
+	"add_item", "remove_item",
+	"add_connection", "remove_connection",
+	"reset",
+]
+
+## The central data model.  All graph edits go through here.
+var model: GraphModel = null
+
+# Node references (all built in _build_layout)
+var _graph_canvas      = null
+var _left_sidebar:     Control = null
+var _right_sidebar:    Control = null
+var _left_toggle:      Button  = null
+var _right_toggle:     Button  = null
+var _build_btn:        Button  = null
+var _test_btn:         Button  = null
+var _simulate_btn:     Button  = null
+var _lib_tab_btn:      Button  = null
+var _insp_tab_btn:     Button  = null
+var _inspector_panel   = null
+var _selected_item_ids: Array[String] = []
+var _active_scope_id: String = "root"
+var _scope_trail: Array[String] = ["root"]
+
+# Build / Test left sidebar content containers (swapped on mode change)
+var _left_build_content: Control = null
+var _left_test_content:  Control = null
+
+# Toast notification
+var _toast_panel: PanelContainer = null
+var _toast_label: Label          = null
+var _toast_timer: float          = 0.0
+var _autosave_timer: Timer = null
+var _autosave_pending: bool = false
+
+# Hints overlay
+var _hints_panel:   Control = null
+var _hints_visible: bool    = false
+
+# System Review modal (rebuilt on each open)
+var _review_modal: Control = null
+
+## Phase 10 will populate these from graph items.  Phase 1 leaves them at 0.
+var _score_labels: Dictionary = {}
+
+# ---------------------------------------------------------------------------
+# Library panel & drag-to-spawn
+# ---------------------------------------------------------------------------
+var _lib_panel = null            # LibraryPanel script instance (right sidebar)
+var _lib_ghost: PanelContainer = null
+var _lib_ghost_label: Label    = null
+var _lib_drag_active: bool     = false   # dragging past threshold
+var _lib_drag_preset: Dictionary = {}    # preset being dragged / clicked
+var _lib_drag_start:  Vector2  = Vector2.ZERO
+const LIB_DRAG_THRESHOLD := 6.0
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+func _ready() -> void:
+	focus_mode = Control.FOCUS_ALL
+	model = GraphModel.new()
+	model.changed.connect(_on_model_changed)
+	_history = _HISTORY_SCRIPT.new()
+	_ha_linker = _LINKER_SCRIPT.new()
+	_ha_linker.name = "HAEntityLinker"
+	add_child(_ha_linker)
+	_ha_linker.call("setup", model)
+	_init_sim_load_host()
+	_init_resource_flow()
+	_refresh_solar_ui_ref()
+	_build_layout()
+	_sync_graph_embed_mirror()
+	_init_bridge()
+	_init_graph_autosave()
+	call_deferred("_deferred_restore_graph_autosave")
+	call_deferred("_init_conduit_manager")
+	call_deferred("_init_placeholder_host")
+	set_process(false)
+
+
+func _exit_tree() -> void:
+	_flush_graph_autosave()
+	if _sim_load_host != null and _sim_load_host.has_method("teardown"):
+		_sim_load_host.call("teardown")
+	# Make sure a hot historical session does not leave the global SimMode
+	# latched on after the graph view is dismissed.
+	if _history_player != null and is_instance_valid(_history_player):
+		_history_player.call("stop")
+
+
+func _init_resource_flow() -> void:
+	if _resource_flow == null:
+		_resource_flow = _RESOURCE_FLOW_SCRIPT.new()
+	if _resource_flow != null and _resource_flow.has_method("setup"):
+		_resource_flow.call("setup", model, self)
+	if _graph_canvas != null:
+		_graph_canvas.set("resource_flow_engine", _resource_flow)
+
+
+func _init_sim_load_host() -> void:
+	if _sim_load_host != null:
+		return
+	_sim_load_host = _SIM_LOAD_HOST_SCRIPT.new()
+	_sim_load_host.name = "GraphSimLoadHost"
+	add_child(_sim_load_host)
+	_sim_load_host.call("setup", model)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		set_process(visible)
+		mouse_filter = (
+			Control.MOUSE_FILTER_STOP if visible
+			else Control.MOUSE_FILTER_IGNORE
+		)
+		if visible:
+			_refresh_solar_ui_ref()
+			_sync_graph_embed_mirror()
+			_init_bridge()
+			if _graph_canvas != null:
+				_graph_canvas.set("pan_right_mouse", _pan_right_mouse)
+			call_deferred("grab_focus")
+			call_deferred("_init_placeholder_host")
+		else:
+			_flush_graph_autosave()
+		_apply_mouse_for_graph(visible)
+
+
+func _init_graph_autosave() -> void:
+	if Engine.is_editor_hint():
+		return
+	if _autosave_timer != null:
+		return
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(GRAPH_AUTOSAVE_DIR))
+	_autosave_timer = Timer.new()
+	_autosave_timer.one_shot = true
+	_autosave_timer.wait_time = GRAPH_AUTOSAVE_DEBOUNCE_SEC
+	_autosave_timer.timeout.connect(_flush_graph_autosave)
+	add_child(_autosave_timer)
+
+
+func _graph_autosave_path() -> String:
+	return "%s/%s.graph.json" % [GRAPH_AUTOSAVE_DIR, _resolve_scene_tag()]
+
+
+func _resolve_scene_tag() -> String:
+	if not _cached_scene_tag.is_empty():
+		return _cached_scene_tag
+	var main_node := _get_scene_main_node()
+	if main_node != null:
+		var path := String(main_node.scene_file_path)
+		if not path.is_empty():
+			var file := path.get_file().trim_suffix(".tscn")
+			return file.replace(" ", "_")
+	var tree := get_tree()
+	if tree != null and tree.current_scene != null:
+		var path := String(tree.current_scene.scene_file_path)
+		if not path.is_empty():
+			var file := path.get_file().trim_suffix(".tscn")
+			return file.replace(" ", "_")
+	return "unknown_scene"
+
+
+func _cache_scene_tag() -> void:
+	_cached_scene_tag = _resolve_scene_tag()
+
+
+func _deferred_restore_graph_autosave() -> void:
+	_cache_scene_tag()
+	_try_restore_graph_autosave()
+	if _bridge != null and _bridge.has_method("setup") and is_instance_valid(_solar_ui):
+		_bridge.call("setup", model, _solar_ui)
+
+
+func has_user_graph_layout() -> bool:
+	if Engine.is_editor_hint():
+		return false
+	return FileAccess.file_exists(_graph_autosave_path())
+
+
+func _schedule_graph_autosave() -> void:
+	if Engine.is_editor_hint():
+		return
+	if _autosave_timer == null:
+		return
+	_autosave_pending = true
+	_autosave_timer.start()
+
+
+func _flush_graph_autosave() -> void:
+	if Engine.is_editor_hint() or not _autosave_pending:
+		return
+	_cache_scene_tag()
+	_autosave_pending = false
+	var payload := collect_save_state()
+	var f := FileAccess.open(_graph_autosave_path(), FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(JSON.stringify(payload))
+	f.close()
+
+
+func _try_restore_graph_autosave() -> void:
+	if Engine.is_editor_hint():
+		return
+	var path := _graph_autosave_path()
+	if not FileAccess.file_exists(path):
+		return
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return
+	var txt := f.get_as_text()
+	f.close()
+	var parsed: Variant = JSON.parse_string(txt)
+	if parsed is Dictionary and not (parsed as Dictionary).is_empty():
+		apply_save_state(parsed as Dictionary)
+
+
+
+# ---------------------------------------------------------------------------
+# Layout construction
+# ---------------------------------------------------------------------------
+
+func _build_layout() -> void:
+	# Fullscreen dark background (rendered first = bottom of stack)
+	var bg := ColorRect.new()
+	bg.color        = C_BG
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor_full(bg)
+	add_child(bg)
+	_bg_rect = bg
+
+	# Graph canvas (central area — drawn next so sidebars overlay it)
+	var gc := Control.new()
+	gc.name = "GraphCanvas"
+	gc.set_script(_CANVAS_SCRIPT)
+	add_child(gc)
+	_graph_canvas = gc
+	gc.set("resource_flow_engine", _resource_flow)
+	# Connect canvas selection signals
+	_connect_canvas_signals(gc)
+
+	# Left sidebar
+	_left_sidebar = _build_left_sidebar()
+	add_child(_left_sidebar)
+
+	# Left collapse tab (separate node, always visible)
+	_left_toggle = _make_collapse_tab("◀", _on_left_toggle,
+		CORNER_TOP_RIGHT, CORNER_BOTTOM_RIGHT)
+	add_child(_left_toggle)
+
+	# Right sidebar
+	_right_sidebar = _build_right_sidebar()
+	add_child(_right_sidebar)
+	# Connect library / inspector panel signals after they're in the tree
+	if _lib_panel != null and _lib_panel.has_signal("item_picked"):
+		_lib_panel.connect("item_picked", _on_lib_item_picked)
+
+	# Right collapse tab
+	_right_toggle = _make_collapse_tab("▶", _on_right_toggle,
+		CORNER_TOP_LEFT, CORNER_BOTTOM_LEFT)
+	add_child(_right_toggle)
+
+	# Topbar — added last so it renders on top of everything
+	var topbar := _build_topbar()
+	add_child(topbar)
+
+	# Drag ghost — added absolutely last so it renders above everything
+	_lib_ghost = _make_lib_ghost()
+	add_child(_lib_ghost)
+
+	_build_make_array_quick_button()
+
+	_apply_layout()
+
+
+func _connect_canvas_signals(gc: Node) -> void:
+	if gc.has_signal("item_selected"):
+		if not gc.is_connected("item_selected", _on_canvas_item_selected):
+			gc.connect("item_selected", _on_canvas_item_selected)
+	if gc.has_signal("item_double_tapped"):
+		if not gc.is_connected("item_double_tapped", _on_canvas_item_double_tapped):
+			gc.connect("item_double_tapped", _on_canvas_item_double_tapped)
+	if gc.has_signal("items_multi_selected"):
+		if not gc.is_connected("items_multi_selected", _on_canvas_items_multi_selected):
+			gc.connect("items_multi_selected", _on_canvas_items_multi_selected)
+	if gc.has_signal("connection_selected"):
+		if not gc.is_connected("connection_selected", _on_canvas_connection_selected):
+			gc.connect("connection_selected", _on_canvas_connection_selected)
+	if gc.has_signal("compound_open_requested"):
+		if not gc.is_connected("compound_open_requested", _on_open_compound_requested):
+			gc.connect("compound_open_requested", _on_open_compound_requested)
+	if gc.has_signal("layout_changed"):
+		if not gc.is_connected("layout_changed", _on_canvas_layout_changed):
+			gc.connect("layout_changed", _on_canvas_layout_changed)
+
+
+func _on_canvas_layout_changed() -> void:
+	_autosave_pending = true
+	_flush_graph_autosave()
+
+
+func _apply_layout() -> void:
+	var left_w  := SIDEBAR_L_W if _sidebar_l_open else 0.0
+	var right_w := SIDEBAR_R_W if _sidebar_r_open else 0.0
+
+	# Left sidebar — stop above the timeline bar so its items are never hidden
+	if _left_sidebar:
+		_left_sidebar.visible = _sidebar_l_open
+		_anchor(_left_sidebar,
+			0.0, 0.0, 0.0, 1.0,
+			0.0, TOPBAR_H, SIDEBAR_L_W, -TIMELINE_H)
+
+	# Left collapse tab: immediately right of sidebar's right edge
+	if _left_toggle:
+		_anchor(_left_toggle,
+			0.0, 0.5, 0.0, 0.5,
+			left_w, -20.0, left_w + TOGGLE_W, 20.0)
+		_left_toggle.text = "◀" if _sidebar_l_open else "▶"
+
+	# Right sidebar — stop above the timeline bar
+	if _right_sidebar:
+		_right_sidebar.visible = _sidebar_r_open
+		_anchor(_right_sidebar,
+			1.0, 0.0, 1.0, 1.0,
+			-SIDEBAR_R_W, TOPBAR_H, 0.0, -TIMELINE_H)
+
+	# Right collapse tab: immediately left of sidebar's left edge
+	if _right_toggle:
+		_anchor(_right_toggle,
+			1.0, 0.5, 1.0, 0.5,
+			-(right_w + TOGGLE_W), -20.0, -right_w, 20.0)
+		_right_toggle.text = "▶" if _sidebar_r_open else "◀"
+
+	# Graph canvas fills the remaining space between sidebars, below topbar,
+	# above the timeline bar (and history panel, when visible).
+	var bottom_offset: float = TIMELINE_H
+	if _history_panel != null and is_instance_valid(_history_panel) \
+			and _history_panel.visible:
+		bottom_offset += HISTORY_PANEL_H
+	if _graph_canvas:
+		_anchor(_graph_canvas,
+			0.0, 0.0, 1.0, 1.0,
+			left_w, TOPBAR_H, -right_w, -bottom_offset)
+		# Keep model reference in sync whenever layout is re-applied
+		_graph_canvas.set("model", model)
+		_graph_canvas.set("active_scope_id", _active_scope_id)
+	_layout_history_panel()
+	_update_scope_breadcrumb()
+
+
+# ---------------------------------------------------------------------------
+# Top bar
+# ---------------------------------------------------------------------------
+
+func _build_topbar() -> Control:
+	var bar := Control.new()
+	bar.name         = "TopBar"
+	bar.mouse_filter = Control.MOUSE_FILTER_STOP
+	_anchor(bar, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, TOPBAR_H)
+
+	# Dark gradient background
+	var bg := ColorRect.new()
+	bg.color        = Color(0.055, 0.075, 0.140, 1.0)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor_full(bg)
+	bar.add_child(bg)
+
+	# Glow bottom border line (2 px)
+	var glow_line := ColorRect.new()
+	glow_line.color        = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.38)
+	glow_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor(glow_line, 0.0, 1.0, 1.0, 1.0, 0.0, -2.0, 0.0, 0.0)
+	bar.add_child(glow_line)
+
+	var margin := MarginContainer.new()
+	_anchor_full(margin)
+	margin.add_theme_constant_override("margin_left",   8)
+	margin.add_theme_constant_override("margin_right",  8)
+	margin.add_theme_constant_override("margin_top",    7)
+	margin.add_theme_constant_override("margin_bottom", 7)
+	bar.add_child(margin)
+
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 5)
+	margin.add_child(hbox)
+
+	# ── LEFT: edit controls ────────────────────────────────────────────────
+	var left_grp := HBoxContainer.new()
+	left_grp.add_theme_constant_override("separation", 4)
+	left_grp.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	hbox.add_child(left_grp)
+
+	_undo_btn = _make_topbar_btn("↶")
+	_redo_btn = _make_topbar_btn("↷")
+	var reset_btn  := _make_topbar_btn("Reset")
+	var sysrev_btn := _make_topbar_btn("⚡ Review")
+	_undo_btn.tooltip_text = "Undo  (Ctrl+Z)"
+	_redo_btn.tooltip_text = "Redo  (Ctrl+Y)"
+	_undo_btn.pressed.connect(_do_undo)
+	_redo_btn.pressed.connect(_do_redo)
+	reset_btn.pressed.connect(_on_reset_graph)
+	sysrev_btn.pressed.connect(_on_system_review)
+	for b: Button in [_undo_btn, _redo_btn, reset_btn, sysrev_btn]:
+		left_grp.add_child(b)
+	_update_undo_redo_btns()
+
+	var sep1 := VSeparator.new()
+	sep1.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
+	sep1.add_theme_constant_override("separation", 8)
+	left_grp.add_child(sep1)
+
+	_group_btn             = _make_topbar_btn("Group")
+	_ungroup_btn           = _make_topbar_btn("Ungroup")
+	_make_array_btn        = _make_topbar_btn("Array")
+	_make_battery_bank_btn = _make_topbar_btn("Bank")
+	_placeholder_btn       = _make_topbar_btn("3D Ph")
+	_enter_btn             = _make_topbar_btn("▸ Enter")
+	_back_btn              = _make_topbar_btn("◂ Back")
+	_make_array_btn.tooltip_text     = "Make Array from selection"
+	_make_battery_bank_btn.tooltip_text = "Make Battery Bank"
+	_placeholder_btn.tooltip_text = "Spawn a 3D cube placeholder linked to the selected node"
+	_group_btn.pressed.connect(_on_group_selected_pressed)
+	_ungroup_btn.pressed.connect(_on_ungroup_selected_pressed)
+	_make_array_btn.pressed.connect(_on_make_array_pressed)
+	_make_battery_bank_btn.pressed.connect(_on_make_battery_bank_pressed)
+	_placeholder_btn.pressed.connect(_on_spawn_3d_placeholder_pressed)
+	_enter_btn.pressed.connect(_on_enter_selected_compound)
+	_back_btn.pressed.connect(_on_back_scope_pressed)
+	for b2: Button in [_group_btn, _ungroup_btn, _make_array_btn, _make_battery_bank_btn, _placeholder_btn, _enter_btn, _back_btn]:
+		left_grp.add_child(b2)
+	_update_special_group_buttons()
+
+	# ── CENTER: flexible fill ──────────────────────────────────────────────
+	hbox.add_child(_hspacer())
+
+	# ── RIGHT: utility controls + breadcrumb ───────────────────────────────
+	var right_grp := HBoxContainer.new()
+	right_grp.add_theme_constant_override("separation", 4)
+	right_grp.size_flags_horizontal = Control.SIZE_SHRINK_END
+	right_grp.alignment = BoxContainer.ALIGNMENT_END
+	hbox.add_child(right_grp)
+
+	_scope_breadcrumb = Label.new()
+	_scope_breadcrumb.add_theme_color_override("font_color", C_TEXT_S)
+	_scope_breadcrumb.add_theme_font_size_override("font_size", 13)
+	_scope_breadcrumb.text               = "Root"
+	_scope_breadcrumb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	right_grp.add_child(_scope_breadcrumb)
+
+	var sep2 := VSeparator.new()
+	sep2.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
+	sep2.add_theme_constant_override("separation", 8)
+	right_grp.add_child(sep2)
+
+	# ── Transparency slider ────────────────────────────────────────────────
+	var alpha_lbl := Label.new()
+	alpha_lbl.text               = "BG"
+	alpha_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	alpha_lbl.add_theme_font_size_override("font_size", 11)
+	alpha_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	alpha_lbl.tooltip_text       = "Background transparency — drag left to see the 3D world"
+	right_grp.add_child(alpha_lbl)
+
+	var alpha_slider := HSlider.new()
+	alpha_slider.min_value              = 0.0
+	alpha_slider.max_value              = 1.0
+	alpha_slider.step                   = 0.01
+	alpha_slider.value                  = _bg_alpha
+	alpha_slider.custom_minimum_size    = Vector2(88.0, 0.0)
+	alpha_slider.size_flags_vertical    = Control.SIZE_SHRINK_CENTER
+	alpha_slider.focus_mode             = Control.FOCUS_NONE
+	alpha_slider.tooltip_text           = "Background transparency — drag left to see the 3D world"
+	alpha_slider.value_changed.connect(_on_bg_alpha_changed)
+	right_grp.add_child(alpha_slider)
+
+	var sep3 := VSeparator.new()
+	sep3.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
+	sep3.add_theme_constant_override("separation", 8)
+	right_grp.add_child(sep3)
+
+	var hints_btn := _make_topbar_btn("Hints")
+	_history_btn  = _make_topbar_btn("🕒 History")
+	var save_btn  := _make_topbar_btn("💾 Save")
+	var load_btn  := _make_topbar_btn("📂 Load")
+	hints_btn.pressed.connect(_on_show_hints)
+	_history_btn.pressed.connect(_on_history_btn_pressed)
+	save_btn.pressed.connect(_on_save_pressed)
+	load_btn.pressed.connect(_on_load_pressed)
+	for b: Button in [hints_btn, _history_btn, save_btn, load_btn]:
+		right_grp.add_child(b)
+
+	return bar
+
+
+func _make_topbar_btn(label: String) -> Button:
+	var b := Button.new()
+	b.text       = label
+	b.focus_mode = Control.FOCUS_NONE
+
+	var sb_n := StyleBoxFlat.new()
+	sb_n.bg_color     = Color(0.10, 0.14, 0.24, 1.0)
+	sb_n.border_color = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.55)
+	sb_n.set_border_width_all(1)
+	sb_n.set_corner_radius_all(6)
+	sb_n.content_margin_left   = 13.0
+	sb_n.content_margin_right  = 13.0
+	sb_n.content_margin_top    = 6.0
+	sb_n.content_margin_bottom = 6.0
+
+	var sb_h := sb_n.duplicate() as StyleBoxFlat
+	sb_h.bg_color     = Color(0.13, 0.20, 0.36, 1.0)
+	sb_h.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.85)
+	sb_h.set_border_width_all(1)
+
+	var sb_p := sb_h.duplicate() as StyleBoxFlat
+	sb_p.bg_color = Color(C_PRIMARY.r * 0.22, C_PRIMARY.g * 0.22, C_PRIMARY.b * 0.22, 1.0)
+
+	b.add_theme_stylebox_override("normal",  sb_n)
+	b.add_theme_stylebox_override("hover",   sb_h)
+	b.add_theme_stylebox_override("pressed", sb_p)
+	b.add_theme_color_override("font_color", C_TEXT)
+	b.add_theme_font_size_override("font_size", 13)
+	return b
+
+
+func _restyle_btn_amber(b: Button) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = C_AMBER
+	sb.set_corner_radius_all(6)
+	sb.content_margin_left   = 13.0
+	sb.content_margin_right  = 13.0
+	sb.content_margin_top    = 6.0
+	sb.content_margin_bottom = 6.0
+	var sb_h := sb.duplicate() as StyleBoxFlat
+	sb_h.bg_color = Color(C_AMBER.r * 1.12, C_AMBER.g * 1.12, C_AMBER.b * 1.12).clamp()
+	b.add_theme_stylebox_override("normal",  sb)
+	b.add_theme_stylebox_override("hover",   sb_h)
+	b.add_theme_stylebox_override("pressed", sb_h)
+	b.add_theme_color_override("font_color", C_BG)
+	b.add_theme_font_size_override("font_size", 13)
+
+
+func _on_bg_alpha_changed(value: float) -> void:
+	_bg_alpha = value
+	if _bg_rect != null and is_instance_valid(_bg_rect):
+		_bg_rect.color = Color(C_BG.r, C_BG.g, C_BG.b, value)
+	if _graph_canvas != null and is_instance_valid(_graph_canvas):
+		_graph_canvas.set("canvas_bg_alpha", value)
+
+
+func _restyle_btn_primary(b: Button) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(C_PRIMARY.r * 0.28, C_PRIMARY.g * 0.28, C_PRIMARY.b * 0.28, 1.0)
+	sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.9)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(6)
+	sb.content_margin_left   = 13.0
+	sb.content_margin_right  = 13.0
+	sb.content_margin_top    = 6.0
+	sb.content_margin_bottom = 6.0
+	var sb_h := sb.duplicate() as StyleBoxFlat
+	sb_h.bg_color = Color(C_PRIMARY.r * 0.40, C_PRIMARY.g * 0.40, C_PRIMARY.b * 0.40, 1.0)
+	b.add_theme_stylebox_override("normal",  sb)
+	b.add_theme_stylebox_override("hover",   sb_h)
+	b.add_theme_stylebox_override("pressed", sb_h)
+	b.add_theme_color_override("font_color", Color(C_PRIMARY.r * 1.4, C_PRIMARY.g * 1.4, C_PRIMARY.b * 1.4, 1.0).clamp())
+	b.add_theme_font_size_override("font_size", 14)
+
+
+func _make_mode_btn(label: String, active: bool) -> Button:
+	var b := Button.new()
+	b.text       = label
+	b.focus_mode = Control.FOCUS_NONE
+	_set_mode_btn_style(b, active)
+	return b
+
+
+func _set_mode_btn_style(b: Button, active: bool) -> void:
+	if b == null:
+		return
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(4)
+	sb.content_margin_left   = 16.0
+	sb.content_margin_right  = 16.0
+	sb.content_margin_top    = 6.0
+	sb.content_margin_bottom = 6.0
+	if active:
+		sb.bg_color = C_PRIMARY
+		b.add_theme_color_override("font_color", C_BG)
+	else:
+		sb.bg_color = C_PANEL
+		b.add_theme_color_override("font_color", C_TEXT_S)
+	b.add_theme_stylebox_override("normal",  sb)
+	b.add_theme_stylebox_override("hover",   sb)
+	b.add_theme_stylebox_override("pressed", sb)
+	b.add_theme_font_size_override("font_size", 13)
+
+
+# ---------------------------------------------------------------------------
+# Left sidebar
+# ---------------------------------------------------------------------------
+
+func _build_left_sidebar() -> Control:
+	var bar := Control.new()
+	bar.name         = "LeftSidebar"
+	bar.mouse_filter = Control.MOUSE_FILTER_STOP
+	bar.clip_contents = true
+
+	# Background
+	var bg := ColorRect.new()
+	bg.color        = C_SIDEBAR
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor_full(bg)
+	bar.add_child(bg)
+
+	# Right border
+	var bdr := ColorRect.new()
+	bdr.color        = C_BORDER
+	bdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor(bdr, 1.0, 0.0, 1.0, 1.0, -1.0, 0.0, 0.0, 0.0)
+	bar.add_child(bdr)
+
+	# Scrollable content
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_anchor_full(scroll)
+	bar.add_child(scroll)
+
+	var vbox := VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.size_flags_vertical   = Control.SIZE_SHRINK_BEGIN
+	vbox.add_theme_constant_override("separation", 0)
+	scroll.add_child(vbox)
+
+	# ── Build-mode content ──────────────────────────────────────────────────
+	var build_content := VBoxContainer.new()
+	build_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	build_content.add_theme_constant_override("separation", 0)
+	vbox.add_child(build_content)
+	_left_build_content = build_content
+
+	build_content.add_child(_build_score_section(
+		"⚡ SYSTEM TELEMETRY", [
+			["Array Wmp",       "0 W",   "scoreArrayWmp"],
+			["Array Voc",       "0 V",   "scoreArrayVoc"],
+			["Array Imp",       "0 A",   "scoreArrayImp"],
+			["Array Config",    "—",     "scoreArrayConfig"],
+			["Battery",         "0 kWh", "scoreBattery"],
+			["Battery Config",  "—",     "scoreBatteryConfig"],
+			["Battery Voltage", "—",     "scoreBatteryVoltage"],
+			["Optimization",    "0%",    "scoreOptimization"],
+			["Total Cost",      "$0",    "scoreTotalCost"],
+		]
+	))
+
+	build_content.add_child(_build_score_section(
+		"💰 COST BREAKDOWN", [
+			["Solar Panels",        "$0.00", "costPanels"],
+			["Inverter/Controller", "$0.00", "costInverter"],
+			["Batteries",           "$0.00", "costBatteries"],
+			["Components",          "$0.00", "costComponents"],
+			["Wires",               "$0.00", "costWires"],
+			["Total",               "$0.00", "costTotal"],
+		],
+		"costTotal"
+	))
+
+	# ── Test-mode content (hidden by default; Phase 12 populates)  ──────────
+	var test_content := VBoxContainer.new()
+	test_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	test_content.add_theme_constant_override("separation", 0)
+	test_content.visible = false
+	vbox.add_child(test_content)
+	_left_test_content = test_content
+
+	# Test mode: same SolarUI as the 3D view (mirrors main panel; no duplicate sim)
+	var test_embed_wrap := MarginContainer.new()
+	test_embed_wrap.name = "TestSolarUIWrap"
+	test_embed_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	test_embed_wrap.add_theme_constant_override("margin_left", 0)
+	test_embed_wrap.add_theme_constant_override("margin_right", 0)
+	test_embed_wrap.add_theme_constant_override("margin_top", 0)
+	test_embed_wrap.add_theme_constant_override("margin_bottom", 0)
+	test_content.add_child(test_embed_wrap)
+
+	var emb: Control = _SOLAR_UI_PACKED.instantiate() as Control
+	emb.name = "GraphEmbedSolarUI"
+	if emb.has_method("set_graph_embed_mirror_from"):
+		emb.call("set_graph_embed_mirror_from", _solar_ui)
+	emb.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	emb.position = Vector2.ZERO
+	emb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	emb.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	emb.custom_minimum_size = Vector2(300.0, 580.0)
+	_graph_embed_solar = emb
+	test_embed_wrap.add_child(emb)
+
+	return bar
+
+
+func _build_score_section(title: String, rows: Array,
+		bold_id: String = "") -> VBoxContainer:
+	var section := VBoxContainer.new()
+	section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	section.add_theme_constant_override("separation", 0)
+
+	# Section header
+	var hdr_bg := PanelContainer.new()
+	var hdr_sb := StyleBoxFlat.new()
+	hdr_sb.bg_color     = C_PANEL
+	hdr_sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.25)
+	hdr_sb.set_border_width(SIDE_BOTTOM, 1)
+	hdr_sb.content_margin_left   = 12.0
+	hdr_sb.content_margin_right  = 12.0
+	hdr_sb.content_margin_top    = 8.0
+	hdr_sb.content_margin_bottom = 8.0
+	hdr_bg.add_theme_stylebox_override("panel", hdr_sb)
+	var hdr_lbl := Label.new()
+	hdr_lbl.text = title
+	hdr_lbl.add_theme_color_override("font_color", C_PRIMARY)
+	hdr_lbl.add_theme_font_size_override("font_size", 11)
+	hdr_bg.add_child(hdr_lbl)
+	section.add_child(hdr_bg)
+
+	# Rows
+	var rows_vbox := VBoxContainer.new()
+	rows_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rows_vbox.add_theme_constant_override("separation", 0)
+	section.add_child(rows_vbox)
+
+	for row in rows:
+		var row_id: String  = row[2]
+		var is_bold := (row_id == bold_id)
+
+		# Divider line above the total row
+		if is_bold:
+			var div := ColorRect.new()
+			div.color                = C_BORDER
+			div.custom_minimum_size  = Vector2(0.0, 1.0)
+			div.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			rows_vbox.add_child(div)
+
+		var row_pc := PanelContainer.new()
+		row_pc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var row_sb := StyleBoxFlat.new()
+		row_sb.bg_color     = C_BG if is_bold else Color(0.0, 0.0, 0.0, 0.0)
+		row_sb.border_color = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.35)
+		row_sb.set_border_width(SIDE_BOTTOM, 1)
+		row_sb.content_margin_left   = 12.0
+		row_sb.content_margin_right  = 12.0
+		row_sb.content_margin_top    = 6.0
+		row_sb.content_margin_bottom = 6.0
+		row_pc.add_theme_stylebox_override("panel", row_sb)
+
+		var row_hbox := HBoxContainer.new()
+		row_pc.add_child(row_hbox)
+
+		var key_lbl := Label.new()
+		key_lbl.text                  = row[0]
+		key_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		key_lbl.add_theme_color_override("font_color",
+			C_TEXT if is_bold else C_TEXT_S)
+		key_lbl.add_theme_font_size_override("font_size", 11)
+		row_hbox.add_child(key_lbl)
+
+		var val_lbl := Label.new()
+		val_lbl.name                    = row_id
+		val_lbl.text                    = row[1]
+		val_lbl.horizontal_alignment    = HORIZONTAL_ALIGNMENT_RIGHT
+		val_lbl.add_theme_color_override("font_color",
+			C_TEXT if is_bold else C_PRIMARY)
+		val_lbl.add_theme_font_size_override("font_size", 11)
+		row_hbox.add_child(val_lbl)
+
+		rows_vbox.add_child(row_pc)
+		_score_labels[row_id] = val_lbl
+
+	return section
+
+
+# ---------------------------------------------------------------------------
+# Right sidebar
+# ---------------------------------------------------------------------------
+
+func _build_right_sidebar() -> Control:
+	var bar := Control.new()
+	bar.name          = "RightSidebar"
+	bar.mouse_filter  = Control.MOUSE_FILTER_STOP
+	bar.clip_contents = true
+
+	# Background
+	var bg := ColorRect.new()
+	bg.color        = C_SIDEBAR
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor_full(bg)
+	bar.add_child(bg)
+
+	# Left border
+	var bdr := ColorRect.new()
+	bdr.color        = C_BORDER
+	bdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor(bdr, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0)
+	bar.add_child(bdr)
+
+	# Tab header
+	var tab_hbox := HBoxContainer.new()
+	tab_hbox.add_theme_constant_override("separation", 0)
+	_anchor(tab_hbox, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 44.0)
+	bar.add_child(tab_hbox)
+
+	_lib_tab_btn  = _make_tab_btn("📦 Library",   true)
+	_insp_tab_btn = _make_tab_btn("🔧 Inspector", false)
+	_lib_tab_btn.pressed.connect(func(): _show_right_tab("library"))
+	_insp_tab_btn.pressed.connect(func(): _show_right_tab("inspector"))
+	tab_hbox.add_child(_lib_tab_btn)
+	tab_hbox.add_child(_insp_tab_btn)
+
+	# Tab bottom-border accent
+	var tab_bdr := ColorRect.new()
+	tab_bdr.color        = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.3)
+	tab_bdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor(tab_bdr, 0.0, 0.0, 1.0, 0.0, 0.0, 43.0, 0.0, 44.0)
+	bar.add_child(tab_bdr)
+
+	# Library panel (Phase 7)
+	var lp := Control.new()
+	lp.name = "LibraryPanel"
+	lp.set_script(_LIB_PANEL_SCRIPT)
+	_anchor(lp, 0.0, 0.0, 1.0, 1.0, 1.0, 44.0, 0.0, 0.0)
+	bar.add_child(lp)
+	_lib_panel = lp
+
+	# Inspector panel (Phase 8) — same anchor, hidden by default
+	var ip := Control.new()
+	ip.name    = "InspectorPanel"
+	ip.visible = false
+	ip.set_script(_INSP_PANEL_SCRIPT)
+	_anchor(ip, 0.0, 0.0, 1.0, 1.0, 1.0, 44.0, 0.0, 0.0)
+	bar.add_child(ip)
+	_inspector_panel = ip
+	if _inspector_panel != null and _inspector_panel.has_method("set_toast_callback"):
+		_inspector_panel.call("set_toast_callback", Callable(self, "_show_toast"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_ha_linker"):
+		_inspector_panel.call("set_ha_linker", _ha_linker)
+	if _inspector_panel != null and _inspector_panel.has_method("set_compound_callbacks"):
+		_inspector_panel.call("set_compound_callbacks",
+			Callable(self, "_enter_compound"),
+			Callable(self, "_on_ungroup_selected_pressed"),
+			Callable(self, "_on_back_scope_pressed"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_conduit_callbacks"):
+		_inspector_panel.call("set_conduit_callbacks",
+			Callable(self, "_start_conduit_route"),
+			Callable(self, "_clear_conduit_route"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_placeholder_callback"):
+		_inspector_panel.call("set_placeholder_callback",
+			Callable(self, "_spawn_3d_placeholder_for_item"))
+
+	return bar
+
+
+## Switch the right sidebar between Library and Inspector tabs.
+func _show_right_tab(tab: String) -> void:
+	var to_lib := (tab == "library")
+	if _lib_panel        != null: _lib_panel.visible        = to_lib
+	if _inspector_panel  != null: _inspector_panel.visible  = not to_lib
+	if _lib_tab_btn      != null: _apply_tab_style(_lib_tab_btn,  to_lib)
+	if _insp_tab_btn     != null: _apply_tab_style(_insp_tab_btn, not to_lib)
+
+
+func _apply_tab_style(btn: Button, active: bool) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.content_margin_left   = 8.0
+	sb.content_margin_right  = 8.0
+	sb.content_margin_top    = 10.0
+	sb.content_margin_bottom = 10.0
+	if active:
+		sb.bg_color = C_PANEL
+		sb.border_color = C_PRIMARY
+		sb.set_border_width(SIDE_BOTTOM, 2)
+		btn.add_theme_color_override("font_color", C_TEXT)
+	else:
+		sb.bg_color = C_SIDEBAR
+		btn.add_theme_color_override("font_color", C_TEXT_M)
+	btn.add_theme_stylebox_override("normal",  sb)
+	btn.add_theme_stylebox_override("hover",   sb)
+	btn.add_theme_stylebox_override("pressed", sb)
+
+
+func _make_tab_btn(label: String, active: bool) -> Button:
+	var b := Button.new()
+	b.text                  = label
+	b.focus_mode            = Control.FOCUS_NONE
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.size_flags_vertical   = Control.SIZE_EXPAND_FILL
+
+	var sb := StyleBoxFlat.new()
+	sb.content_margin_left   = 8.0
+	sb.content_margin_right  = 8.0
+	sb.content_margin_top    = 10.0
+	sb.content_margin_bottom = 10.0
+	if active:
+		sb.bg_color = C_PANEL
+		sb.border_color = C_PRIMARY
+		sb.set_border_width(SIDE_BOTTOM, 2)
+		b.add_theme_color_override("font_color", C_TEXT)
+	else:
+		sb.bg_color = C_SIDEBAR
+		b.add_theme_color_override("font_color", C_TEXT_M)
+	b.add_theme_stylebox_override("normal",  sb)
+	b.add_theme_stylebox_override("hover",   sb)
+	b.add_theme_stylebox_override("pressed", sb)
+	b.add_theme_font_size_override("font_size", 12)
+	return b
+
+
+# ---------------------------------------------------------------------------
+# Collapse tab buttons
+# ---------------------------------------------------------------------------
+
+func _make_collapse_tab(label: String, cb: Callable,
+		corner_a: int, corner_b: int) -> Button:
+	var b := Button.new()
+	b.text       = label
+	b.focus_mode = Control.FOCUS_NONE
+
+	var sb := StyleBoxFlat.new()
+	sb.bg_color     = C_PANEL
+	sb.border_color = C_BORDER
+	sb.set_border_width_all(1)
+	sb.set_corner_radius(corner_a, 4)
+	sb.set_corner_radius(corner_b, 4)
+	sb.content_margin_left   = 3.0
+	sb.content_margin_right  = 3.0
+	sb.content_margin_top    = 8.0
+	sb.content_margin_bottom = 8.0
+
+	var sb_h := sb.duplicate() as StyleBoxFlat
+	sb_h.border_color = C_PRIMARY
+	sb_h.bg_color     = Color(0.145, 0.192, 0.322, 1.0)  # space-500
+
+	b.add_theme_stylebox_override("normal",  sb)
+	b.add_theme_stylebox_override("hover",   sb_h)
+	b.add_theme_stylebox_override("pressed", sb_h)
+	b.add_theme_color_override("font_color", C_TEXT_M)
+	b.add_theme_font_size_override("font_size", 11)
+	b.pressed.connect(cb)
+	return b
+
+
+# ---------------------------------------------------------------------------
+# Sidebar + mode callbacks
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Library drag-to-spawn  (Phase 7)
+# ---------------------------------------------------------------------------
+
+func _make_lib_ghost() -> PanelContainer:
+	var pc := PanelContainer.new()
+	pc.name         = "LibDragGhost"
+	pc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pc.visible      = false
+
+	var sb := StyleBoxFlat.new()
+	sb.bg_color              = Color(C_PANEL.r, C_PANEL.g, C_PANEL.b, 0.92)
+	sb.border_color          = C_PRIMARY
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(5)
+	sb.content_margin_left   = 10.0
+	sb.content_margin_right  = 10.0
+	sb.content_margin_top    =  5.0
+	sb.content_margin_bottom =  5.0
+	pc.add_theme_stylebox_override("panel", sb)
+
+	var lbl := Label.new()
+	lbl.name = "GhostLabel"
+	lbl.add_theme_color_override("font_color", C_TEXT)
+	lbl.add_theme_font_size_override("font_size", 11)
+	pc.add_child(lbl)
+	_lib_ghost_label = lbl
+	return pc
+
+
+## Called by LibraryPanel when the user presses an item button.
+func _on_lib_item_picked(preset: Dictionary, screen_pos: Vector2) -> void:
+	_lib_drag_preset = preset
+	_lib_drag_start  = screen_pos
+	_lib_drag_active = false
+	if _lib_ghost_label != null:
+		_lib_ghost_label.text = "%s  %s" % [
+			preset.get("icon", ""),
+			preset.get("label", "?"),
+		]
+
+
+## Called when the in-progress library drag ends (LMB released).
+func _end_lib_drag(screen_pos: Vector2) -> void:
+	if _lib_drag_active and _graph_canvas != null:
+		var canvas_global: Vector2 = (_graph_canvas as Control).global_position
+		var canvas_rect: Rect2     = Rect2(canvas_global, (_graph_canvas as Control).size)
+		if canvas_rect.has_point(screen_pos):
+			var local_pos: Vector2 = screen_pos - canvas_global
+			_spawn_from_preset(_lib_drag_preset, local_pos)
+	elif not _lib_drag_active:
+		# Short press / click → spawn near canvas center
+		_spawn_at_canvas_center(_lib_drag_preset)
+
+	_lib_drag_active  = false
+	_lib_drag_preset  = {}
+	if _lib_ghost != null:
+		_lib_ghost.visible = false
+
+
+func _spawn_at_canvas_center(preset: Dictionary) -> void:
+	if _graph_canvas == null:
+		return
+	var offset := Vector2(randf_range(-60.0, 60.0), randf_range(-40.0, 40.0))
+	_spawn_from_preset(preset, _graph_canvas.size * 0.5 + offset)
+
+
+func _spawn_from_preset(preset: Dictionary, canvas_local_pos: Vector2) -> void:
+	if model == null or _graph_canvas == null:
+		return
+	var pan:    Vector2 = _graph_canvas.get("_pan")  as Vector2
+	var zoom:   float   = float(_graph_canvas.get("_zoom"))
+	var center: Vector2 = _graph_canvas.size * 0.5
+	var graph_pos := (canvas_local_pos - center - pan) / zoom
+
+	var ptype: String = str(preset.get("type", "appliance"))
+	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+	var item_id: String = model.generate_item_id()
+	var proc_w: float = float(preset.get("width", 120.0))
+	var proc_h: float = float(preset.get("height", 80.0))
+	var dev_path: String = str(specs.get("scene_device_path", ""))
+	var item_data: Dictionary = {
+		"id":         item_id,
+		"type":       ptype,
+		"x":          graph_pos.x,
+		"y":          graph_pos.y,
+		"width":      proc_w,
+		"height":     proc_h,
+		"scope_id":   _active_scope_id,
+		"specs":      specs,
+		"is_virtual": false,
+	}
+	if not dev_path.is_empty():
+		item_data["device_path"] = dev_path
+	model.add_item(item_data)
+
+	if ptype == "processor":
+		ResourceKinds.new().migrate_processor_specs(specs)
+		_spawn_processor_ghost_containers(item_id, specs, graph_pos, proc_w, proc_h)
+
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+	call_deferred("_populate_library_scene_devices")
+
+
+## Insert solar panel nodes derived from an imported real-world array (e.g. OSM
+## rooftop PV). Idempotent: panels from a previous import (specs.osm_import == true)
+## are removed first, so reloading a map does not stack duplicates. Node spawning is
+## capped to keep the canvas readable; SolarUI / world placement use the true count.
+func add_imported_solar_panels(count: int, watts: float, label: String = "OSM Solar") -> void:
+	if model == null or count <= 0:
+		return
+	var stale: Array = []
+	for it in model.items:
+		if it is Dictionary and bool((it as Dictionary).get("specs", {}).get("osm_import", false)):
+			stale.append(str((it as Dictionary).get("id", "")))
+	for sid in stale:
+		model.remove_item(sid)
+	var max_nodes := 48
+	var n := mini(count, max_nodes)
+	var cols := maxi(int(ceil(sqrt(float(n)))), 1)
+	var rows := int(ceil(float(n) / float(cols)))
+	var spacing_x := 140.0
+	var spacing_y := 120.0
+	var origin := Vector2(-float(cols - 1) * spacing_x * 0.5, -float(rows - 1) * spacing_y * 0.5)
+	for i in n:
+		var gx := origin.x + float(i % cols) * spacing_x
+		var gy := origin.y + float(i / cols) * spacing_y
+		model.add_item({
+			"id": model.generate_item_id(),
+			"type": "panel",
+			"x": gx, "y": gy,
+			"width": 120.0, "height": 100.0,
+			"scope_id": "root",
+			"specs": {
+				"name": "%s #%d" % [label, i + 1],
+				"wmp": watts, "voc": 48.0, "vmp": 41.0, "isc": 11.0, "imp": 9.76,
+				"cost": 300.0, "osm_import": true,
+			},
+			"is_virtual": false,
+		})
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+	print("SystemGraphView: imported %d solar panel node(s) @ %.0f W (label '%s', source count %d)" % [
+		n, watts, label, count])
+
+
+const _GHOST_CONTAINER_OFFSET_X := 160.0
+
+
+func _spawn_processor_ghost_containers(proc_id: String, proc_specs: Dictionary,
+		proc_pos: Vector2, proc_w: float, proc_h: float) -> void:
+	var inputs: Array = proc_specs.get("inputs", []) as Array
+	var outputs: Array = proc_specs.get("outputs", []) as Array
+	var in_h: float = 100.0
+	var out_h: float = 100.0
+
+	for i: int in inputs.size():
+		var inp: Dictionary = inputs[i] as Dictionary
+		var kind: String = str(inp.get("kind", "water"))
+		var ghost_id: String = model.generate_item_id()
+		var gy: float = proc_pos.y + (float(i) - float(inputs.size() - 1) * 0.5) * (in_h + 16.0)
+		model.add_item({
+			"id": ghost_id,
+			"type": "resource",
+			"x": proc_pos.x - _GHOST_CONTAINER_OFFSET_X - 90.0,
+			"y": gy,
+			"width": 90.0,
+			"height": in_h,
+			"scope_id": _active_scope_id,
+			"is_ghost": true,
+			"specs": {
+				"name": "%s (in)" % ResourceKinds.display_name(kind),
+				"resource_kind": kind,
+				"capacity_qty": 100.0,
+				"capacity_unit": ResourceKinds.default_unit(kind),
+				"level": 0.5,
+				"is_ghost": true,
+				"cost": 0.0,
+			},
+		})
+		model.add_connection({
+			"scope_id": _active_scope_id,
+			"polarity": "resource",
+			"resource_type": kind,
+			"source_item_id": ghost_id,
+			"source_handle_id": "output",
+			"target_item_id": proc_id,
+			"target_handle_id": "res_in_%d" % i,
+			"waypoints": [],
+			"line_style": "bezier",
+			"curve_tension": 1.0,
+			"corner_radius": 28.0,
+		})
+
+	for i: int in outputs.size():
+		var outp: Dictionary = outputs[i] as Dictionary
+		var kind: String = str(outp.get("kind", "water"))
+		var ghost_id: String = model.generate_item_id()
+		var gy: float = proc_pos.y + (float(i) - float(outputs.size() - 1) * 0.5) * (out_h + 16.0)
+		model.add_item({
+			"id": ghost_id,
+			"type": "resource",
+			"x": proc_pos.x + proc_w + _GHOST_CONTAINER_OFFSET_X * 0.35,
+			"y": gy,
+			"width": 90.0,
+			"height": out_h,
+			"scope_id": _active_scope_id,
+			"is_ghost": true,
+			"specs": {
+				"name": "%s (out)" % ResourceKinds.display_name(kind),
+				"resource_kind": kind,
+				"capacity_qty": 100.0,
+				"capacity_unit": ResourceKinds.default_unit(kind),
+				"level": 0.0,
+				"is_ghost": true,
+				"cost": 0.0,
+			},
+		})
+		model.add_connection({
+			"scope_id": _active_scope_id,
+			"polarity": "resource",
+			"resource_type": kind,
+			"source_item_id": proc_id,
+			"source_handle_id": "res_out_%d" % i,
+			"target_item_id": ghost_id,
+			"target_handle_id": "input",
+			"waypoints": [],
+			"line_style": "bezier",
+			"curve_tension": 1.0,
+			"corner_radius": 28.0,
+		})
+
+
+# ---------------------------------------------------------------------------
+# Selection callbacks
+# ---------------------------------------------------------------------------
+
+func _on_canvas_item_selected(item_id: String) -> void:
+	_selected_item_ids.clear()
+	if not item_id.is_empty():
+		_selected_item_ids.append(item_id)
+	_update_special_group_buttons()
+	if item_id.is_empty():
+		# Deselected — return to library tab, clear inspector
+		if _inspector_panel != null and _inspector_panel.has_method("clear_selection"):
+			_inspector_panel.call("clear_selection")
+		_show_right_tab("library")
+		return
+	if model == null:
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	if _inspector_panel != null and _inspector_panel.has_method("inspect_item"):
+		_inspector_panel.call("inspect_item", item, model)
+	_show_right_tab("inspector")
+	_update_make_array_quick_button()
+
+
+func _on_canvas_item_double_tapped(item_id: String) -> void:
+	if item_id.is_empty() or model == null:
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	if _mode == "test" and item.has("device_path"):
+		_try_toggle_device(item)
+
+
+func _on_canvas_items_multi_selected(item_ids: Array) -> void:
+	_selected_item_ids.clear()
+	for v in item_ids:
+		var sid: String = str(v)
+		if not sid.is_empty():
+			_selected_item_ids.append(sid)
+	_update_special_group_buttons()
+	if _inspector_panel != null and _inspector_panel.has_method("clear_selection"):
+		_inspector_panel.call("clear_selection")
+	_show_right_tab("library")
+	_update_make_array_quick_button()
+
+
+func _on_open_compound_requested(item_id: String) -> void:
+	_enter_compound(item_id)
+
+
+func _on_canvas_connection_selected(conn_id: String) -> void:
+	_selected_item_ids.clear()
+	_update_special_group_buttons()
+	if conn_id.is_empty():
+		if _inspector_panel != null and _inspector_panel.has_method("clear_selection"):
+			_inspector_panel.call("clear_selection")
+		_show_right_tab("library")
+		return
+	if model == null:
+		return
+	var conn := model.get_connection(conn_id)
+	if conn.is_empty():
+		return
+	if _inspector_panel != null and _inspector_panel.has_method("inspect_connection"):
+		_inspector_panel.call("inspect_connection", conn, model)
+	_show_right_tab("inspector")
+	_update_make_array_quick_button()
+
+
+func _on_left_toggle() -> void:
+	_sidebar_l_open = not _sidebar_l_open
+	_apply_layout()
+
+
+func _on_right_toggle() -> void:
+	_sidebar_r_open = not _sidebar_r_open
+	_apply_layout()
+
+
+# ---------------------------------------------------------------------------
+# Topbar callbacks  (Phase 9)
+# ---------------------------------------------------------------------------
+
+func _on_save_pressed() -> void:
+	var main := get_tree().current_scene
+	if main != null and main.has_method("request_autosave"):
+		main.call("request_autosave")
+		_show_toast("💾  Saved!")
+	else:
+		_show_toast("⚠  Save unavailable")
+
+
+func _on_load_pressed() -> void:
+	var ul := get_parent()
+	if ul == null:
+		_show_toast("⚠  Load panel unavailable")
+		return
+	var sl := ul.get_node_or_null("SaveLoadUI")
+	if sl != null and sl.has_method("show_panel"):
+		visible = false          # close graph so SaveLoadUI is visible
+		sl.call("show_panel")
+	elif sl != null and sl.has_method("open"):
+		visible = false
+		sl.call("open")
+	else:
+		_show_toast("⚠  Load panel unavailable")
+
+
+func _on_reset_graph() -> void:
+	if model == null:
+		return
+	# Suppress per-item change events; we record one snapshot for the whole reset
+	_history_suppress = true
+	var ids: Array = []
+	for item: Dictionary in model.items:
+		if not bool(item.get("is_virtual", false)):
+			ids.append(item.get("id", "") as String)
+			if _inspector_panel != null and _inspector_panel.has_method("unregister_item_automations"):
+				_inspector_panel.call("unregister_item_automations", item)
+	for id: String in ids:
+		model.remove_item(id)
+	# Connections touching removed items were cascade-deleted;
+	# clear any orphans that remain.
+	for i in range(model.connections.size() - 1, -1, -1):
+		model.connections.remove_at(i)
+	_active_scope_id = "root"
+	_scope_trail = ["root"]
+	_selected_item_ids.clear()
+	_history_suppress = false
+	model.changed.emit("reset")   # triggers _on_model_changed → _push_history
+	_apply_scope_to_canvas()
+	_show_toast("Graph reset")
+
+
+func _on_show_hints() -> void:
+	if _hints_panel == null:
+		_hints_panel = _build_hints_panel()
+		add_child(_hints_panel)   # added on top
+	_hints_visible = not _hints_visible
+	_hints_panel.visible = _hints_visible
+
+
+func _on_group_selected_pressed() -> void:
+	var load_ids := _get_load_group_candidates()
+	if load_ids.size() >= 2:
+		_group_load_items(load_ids)
+		return
+	_group_selected_items()
+
+
+func _group_load_items(candidate_ids: Array[String]) -> void:
+	if model == null or candidate_ids.size() < 2:
+		_show_toast("Select 2+ loads to group")
+		return
+	var total_max := 0.0
+	var total_avg := 0.0
+	for sid: String in candidate_ids:
+		var it := model.get_item(sid)
+		if it.is_empty():
+			continue
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		total_max += float(sp.get("max_watts", sp.get("watts", 0.0)))
+		total_avg += float(sp.get("avg_watts", sp.get("watts", sp.get("max_watts", 0.0))))
+	_selected_item_ids = candidate_ids.duplicate()
+	_group_selected_items(false, "load_group", "Load Group (%d)" % candidate_ids.size(), {
+		"max_watts": total_max,
+		"avg_watts": total_avg,
+		"summary":   "%.0f W combined · %d loads" % [total_avg, candidate_ids.size()],
+	})
+
+
+func _on_make_array_pressed() -> void:
+	_make_special_compound("array", "Solar Array", [])
+
+
+func _on_make_battery_bank_pressed() -> void:
+	_make_special_compound("battery_bank", "Battery Bank", [])
+
+
+func _make_special_compound(kind: String, title: String, _allowed_types: Array[String]) -> void:
+	var selected := _get_group_candidates(true)
+	if selected.size() < 2:
+		_show_toast("Select 2+ nodes to %s" % title)
+		return
+	var extra_specs: Dictionary = {}
+	for sid: String in selected:
+		var it := model.get_item(sid)
+		if kind == "array":
+			if not _is_array_candidate(it):
+				_show_toast("Selection must only include panel/array nodes")
+				return
+		elif kind == "battery_bank":
+			if not _is_battery_candidate(it):
+				_show_toast("Selection must only include battery/bank nodes")
+				return
+	if kind != "array" and not _ids_form_connected_component(selected):
+		_show_toast("%s requires connected nodes" % title)
+		return
+	if kind == "array":
+		extra_specs = _compute_array_equivalent_from_selection(selected)
+	var new_compound_id := _group_selected_items(true, kind, title, extra_specs)
+	if kind == "array" and not new_compound_id.is_empty():
+		var comp := model.get_item(new_compound_id)
+		if not comp.is_empty():
+			var sp := (comp.get("specs", {}) as Dictionary).duplicate(true)
+			sp["summary"] = "%s  •  %.0fW  %.1fV  %.1fA" % [
+				str(sp.get("array_topology", "Array")),
+				float(sp.get("array_equiv_wmp", 0.0)),
+				float(sp.get("array_equiv_vmp", 0.0)),
+				float(sp.get("array_equiv_imp", 0.0)),
+			]
+			model.update_item(new_compound_id, {"specs": sp})
+
+
+func _get_load_group_candidates() -> Array[String]:
+	var out: Array[String] = []
+	if model == null:
+		return out
+	for sid: String in _selected_item_ids:
+		var it := model.get_item(sid)
+		if it.is_empty():
+			continue
+		if str(it.get("scope_id", "root")) != _active_scope_id:
+			continue
+		if bool(it.get("is_ghost", false)):
+			continue
+		if _is_load_group_candidate(it):
+			out.append(sid)
+	return out
+
+
+func _is_load_group_candidate(item: Dictionary) -> bool:
+	var ty := str(item.get("type", ""))
+	if ty in ["appliance", "acload", "processor"]:
+		return true
+	if ty == "compound":
+		var sp: Dictionary = item.get("specs", {}) as Dictionary
+		return str(sp.get("compound_kind", "")) == "load_group"
+	return false
+
+
+func _get_group_candidates(allow_virtual: bool = false) -> Array[String]:
+	var out: Array[String] = []
+	if model == null:
+		return out
+	for sid: String in _selected_item_ids:
+		var it := model.get_item(sid)
+		if it.is_empty():
+			continue
+		if str(it.get("scope_id", "root")) != _active_scope_id:
+			continue
+		if not allow_virtual and bool(it.get("is_virtual", false)):
+			continue
+		out.append(sid)
+	return out
+
+
+func _ids_form_connected_component(ids: Array[String]) -> bool:
+	if ids.size() <= 1 or model == null:
+		return true
+	var allowed: Dictionary = {}
+	for sid: String in ids:
+		allowed[sid] = true
+	var adj: Dictionary = {}
+	for sid: String in ids:
+		adj[sid] = []
+	for conn: Dictionary in model.get_connections_in_scope(_active_scope_id):
+		var a := str(conn.get("source_item_id", ""))
+		var b := str(conn.get("target_item_id", ""))
+		if allowed.has(a) and allowed.has(b):
+			(adj[a] as Array).append(b)
+			(adj[b] as Array).append(a)
+	var start: String = ids[0]
+	var queue: Array[String] = [start]
+	var seen: Dictionary = {start: true}
+	while not queue.is_empty():
+		var cur: String = queue.pop_front()
+		for nxt_v in (adj.get(cur, []) as Array):
+			var nxt := str(nxt_v)
+			if seen.has(nxt):
+				continue
+			seen[nxt] = true
+			queue.append(nxt)
+	return seen.size() == ids.size()
+
+
+func _update_special_group_buttons() -> void:
+	if _make_array_btn == null or _make_battery_bank_btn == null:
+		return
+	var selected := _get_group_candidates(true)
+	var load_selected := _get_load_group_candidates()
+	var can_array := selected.size() >= 2
+	var can_bank := selected.size() >= 2 and _ids_form_connected_component(selected)
+	var can_group_loads := load_selected.size() >= 2
+	if can_array:
+		for sid: String in selected:
+			var it := model.get_item(sid)
+			if not _is_array_candidate(it):
+				can_array = false
+				break
+	if can_bank:
+		for sid: String in selected:
+			if not _is_battery_candidate(model.get_item(sid)):
+				can_bank = false
+				break
+	_make_array_btn.disabled = not can_array
+	_make_battery_bank_btn.disabled = not can_bank
+	_make_array_btn.tooltip_text = "Select 2+ panel/array nodes to condense into one explicit array"
+	_make_battery_bank_btn.tooltip_text = "Select connected batteries/banks to condense into one bank node"
+	if _group_btn != null:
+		_group_btn.disabled = not can_group_loads
+		_group_btn.tooltip_text = "Select 2+ wired load/processor nodes, then group into one combined node"
+	if _ungroup_btn != null:
+		var can_ungroup := false
+		if _selected_item_ids.size() == 1 and model != null:
+			var comp := model.get_item(_selected_item_ids[0])
+			if not comp.is_empty() and str(comp.get("type", "")) == "compound":
+				can_ungroup = true
+		_ungroup_btn.disabled = not can_ungroup
+		_ungroup_btn.tooltip_text = "Ungroup a selected load group or compound"
+
+
+func _is_array_candidate(item: Dictionary) -> bool:
+	var ty := str(item.get("type", ""))
+	if ty == "panel":
+		return true
+	if ty == "compound":
+		var sp: Dictionary = item.get("specs", {}) as Dictionary
+		return str(sp.get("compound_kind", "")) == "array"
+	return false
+
+
+func _is_battery_candidate(item: Dictionary) -> bool:
+	var ty := str(item.get("type", ""))
+	if ty == "battery" or ty == "smartbattery":
+		return true
+	if ty == "compound":
+		var sp: Dictionary = item.get("specs", {}) as Dictionary
+		return str(sp.get("compound_kind", "")) == "battery_bank"
+	return false
+
+
+func _array_unit_equivalent(item: Dictionary) -> Dictionary:
+	var ty := str(item.get("type", ""))
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	if ty == "panel":
+		var wmp := float(sp.get("wmp", 220.0))
+		var vmp := float(sp.get("vmp", 30.0))
+		var voc := float(sp.get("voc", 37.5))
+		var imp := float(sp.get("imp", wmp / maxf(vmp, 0.001)))
+		var isc := float(sp.get("isc", imp))
+		return {"valid": true, "series": 1, "parallel": 1, "panel_units": 1, "wmp": wmp, "vmp": vmp, "voc": voc, "imp": imp, "isc": isc}
+	if ty == "compound" and str(sp.get("compound_kind", "")) == "array":
+		return {
+			"valid": true,
+			"series": int(sp.get("array_series", 1)),
+			"parallel": int(sp.get("array_parallel", 1)),
+			"panel_units": int(sp.get("array_panel_units", sp.get("child_count", 0))),
+			"wmp": float(sp.get("array_equiv_wmp", 0.0)),
+			"vmp": float(sp.get("array_equiv_vmp", 0.0)),
+			"voc": float(sp.get("array_equiv_voc", 0.0)),
+			"imp": float(sp.get("array_equiv_imp", 0.0)),
+			"isc": float(sp.get("array_equiv_isc", 0.0)),
+		}
+	return {"valid": false}
+
+
+func _selection_components(ids: Array[String]) -> Array[Array]:
+	var out: Array[Array] = []
+	if model == null or ids.is_empty():
+		return out
+	var allowed: Dictionary = {}
+	var adj: Dictionary = {}
+	for sid: String in ids:
+		allowed[sid] = true
+		adj[sid] = []
+	for conn: Dictionary in model.get_connections_in_scope(_active_scope_id):
+		var a := str(conn.get("source_item_id", ""))
+		var b := str(conn.get("target_item_id", ""))
+		if allowed.has(a) and allowed.has(b):
+			(adj[a] as Array).append(b)
+			(adj[b] as Array).append(a)
+	var seen: Dictionary = {}
+	for sid: String in ids:
+		if seen.has(sid):
+			continue
+		var comp: Array = []
+		var q: Array[String] = [sid]
+		seen[sid] = true
+		while not q.is_empty():
+			var cur: String = q.pop_front()
+			comp.append(cur)
+			for nv in (adj.get(cur, []) as Array):
+				var nxt := str(nv)
+				if seen.has(nxt):
+					continue
+				seen[nxt] = true
+				q.append(nxt)
+		out.append(comp)
+	return out
+
+
+func _compute_array_equivalent_from_selection(ids: Array[String]) -> Dictionary:
+	var comps := _selection_components(ids)
+	if comps.is_empty():
+		comps = [ids]
+	var branch_series: Array = []
+	var total_parallel := 0
+	var total_wmp := 0.0
+	var total_imp := 0.0
+	var total_isc := 0.0
+	var branch_voc_max := 0.0
+	var mixed_voltage := false
+	var panel_units := 0
+	var first_series_vmp := -1.0
+	var first_series_voc := -1.0
+	var uniform_series := true
+	for comp in comps:
+		var comp_series := 0
+		var comp_parallel := 1
+		var comp_vmp := 0.0
+		var comp_voc := 0.0
+		var comp_imp := 1e20
+		var comp_isc := 1e20
+		var comp_has_unit := false
+		var comp_panel_units := 0
+		for sid_v in comp:
+			var sid := str(sid_v)
+			var it := model.get_item(sid)
+			var u := _array_unit_equivalent(it)
+			if not bool(u.get("valid", false)):
+				continue
+			comp_has_unit = true
+			comp_series += int(u.get("series", 1))
+			comp_parallel = mini(comp_parallel, maxi(1, int(u.get("parallel", 1))))
+			comp_vmp += float(u.get("vmp", 0.0))
+			comp_voc += float(u.get("voc", 0.0))
+			comp_imp = minf(comp_imp, float(u.get("imp", 0.0)))
+			comp_isc = minf(comp_isc, float(u.get("isc", 0.0)))
+			comp_panel_units += int(u.get("panel_units", 0))
+		if not comp_has_unit:
+			continue
+		panel_units += comp_panel_units
+		if comp_imp == 1e20:
+			comp_imp = 0.0
+		if comp_isc == 1e20:
+			comp_isc = 0.0
+		var comp_series_i := maxi(1, comp_series)
+		branch_series.append(comp_series_i)
+		total_parallel += maxi(1, comp_parallel)
+		var comp_wmp := comp_vmp * comp_imp
+		total_wmp += comp_wmp
+		total_imp += comp_imp
+		total_isc += comp_isc
+		branch_voc_max = maxf(branch_voc_max, comp_voc)
+		if first_series_vmp < 0.0:
+			first_series_vmp = comp_vmp
+			first_series_voc = comp_voc
+		elif absf(comp_vmp - first_series_vmp) > 0.25 or absf(comp_voc - first_series_voc) > 0.25:
+			mixed_voltage = true
+		if int(comp_series_i) != int(branch_series[0]):
+			uniform_series = false
+	var s_ref: int = int(branch_series[0]) if not branch_series.is_empty() else 1
+	var topo := ("%dS x %dP" % [s_ref, maxi(total_parallel, 1)]) if uniform_series else ("Mixed Series x %dP" % maxi(total_parallel, 1))
+	var equiv_vmp := 0.0
+	if total_imp > 0.0:
+		equiv_vmp = total_wmp / total_imp
+	elif first_series_vmp > 0.0:
+		equiv_vmp = first_series_vmp
+	var equiv_voc := branch_voc_max if branch_voc_max > 0.0 else maxf(first_series_voc, 0.0)
+	return {
+		"array_topology": topo,
+		"array_series": int(s_ref),
+		"array_parallel": maxi(total_parallel, 1),
+		"array_branches": comps.size(),
+		"array_mixed_voltage": mixed_voltage,
+		"array_panel_units": panel_units,
+		"array_equiv_wmp": total_wmp,
+		"array_equiv_vmp": equiv_vmp,
+		"array_equiv_voc": equiv_voc,
+		"array_equiv_imp": total_imp,
+		"array_equiv_isc": total_isc,
+	}
+
+
+func _on_ungroup_selected_pressed(item_id: String = "") -> void:
+	if not item_id.is_empty():
+		_selected_item_ids.clear()
+		_selected_item_ids.append(item_id)
+		if _graph_canvas != null:
+			_graph_canvas.set("selected_item_ids", _selected_item_ids)
+			_graph_canvas.set("selected_item_id", item_id)
+	_ungroup_selected_compound()
+
+
+func _on_enter_selected_compound() -> void:
+	if _selected_item_ids.size() != 1:
+		_show_toast("Select one compound node")
+		return
+	_enter_compound(_selected_item_ids[0])
+
+
+func _on_back_scope_pressed() -> void:
+	if _scope_trail.size() <= 1:
+		return
+	_scope_trail.pop_back()
+	_active_scope_id = _scope_trail[_scope_trail.size() - 1]
+	_selected_item_ids.clear()
+	_update_special_group_buttons()
+	_apply_scope_to_canvas()
+
+
+func _update_scope_breadcrumb() -> void:
+	if _scope_breadcrumb == null:
+		return
+	var parts: Array[String] = []
+	for sid: String in _scope_trail:
+		if sid == "root":
+			parts.append("Root")
+		elif model != null and model.has_method("get_scope"):
+			var sc: Dictionary = model.get_scope(sid)
+			var t: String = sc.get("title", sid) as String
+			parts.append(t)
+		else:
+			parts.append(sid)
+	_scope_breadcrumb.text = " / ".join(PackedStringArray(parts))
+
+
+func _apply_scope_to_canvas() -> void:
+	if _graph_canvas != null:
+		_graph_canvas.set("active_scope_id", _active_scope_id)
+		_graph_canvas.call("queue_redraw")
+	_update_scope_breadcrumb()
+
+
+func _enter_compound(item_id: String) -> void:
+	if model == null:
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty() or str(item.get("type", "")) != "compound":
+		return
+	var child_scope_id: String = item.get("child_scope_id", "") as String
+	if child_scope_id.is_empty():
+		return
+	_active_scope_id = child_scope_id
+	_scope_trail.append(child_scope_id)
+	_selected_item_ids.clear()
+	_apply_scope_to_canvas()
+
+
+func _compound_handle_for_boundary(conn: Dictionary, selected_ids: Dictionary, counters: Dictionary) -> Dictionary:
+	var src_sel: bool = selected_ids.has(conn.get("source_item_id", "") as String)
+	var polarity: String = conn.get("polarity", "ac") as String
+	var direction: String = "in"
+	if src_sel:
+		direction = "out"
+	var key := "%s_%s" % [direction, polarity]
+	var idx: int = int(counters.get(key, 0)) + 1
+	counters[key] = idx
+	var hid := "%s_%s_%d" % [direction, polarity, idx]
+	return {
+		"id": hid,
+		"polarity": polarity,
+		"direction": direction,
+		"index": idx,
+	}
+
+
+func _compound_handle_pos(direction: String, idx: int, side_count: int, compound_kind: String = "") -> Vector2:
+	var n := maxi(1, side_count)
+	var t := float(idx) / float(n + 1)
+	# Array compounds default to bottom-facing ports so external wires route
+	# downward from the condensed panel cluster instead of rightward.
+	if compound_kind == "array":
+		return Vector2(t, 1.0)
+	if direction == "in":
+		return Vector2(0.0, t)
+	return Vector2(1.0, t)
+
+
+func _group_selected_items(allow_virtual: bool = false, compound_kind: String = "", group_title: String = "Group", extra_specs: Dictionary = {}) -> String:
+	if model == null:
+		return ""
+	var candidates := _get_group_candidates(allow_virtual)
+	var selected_ids_set: Dictionary = {}
+	for sid: String in candidates:
+		selected_ids_set[sid] = true
+	if candidates.size() < 2:
+		_show_toast("Select 2+ nodes to group")
+		return ""
+	var min_x := 1e20
+	var min_y := 1e20
+	var max_x := -1e20
+	var max_y := -1e20
+	for sid: String in candidates:
+		var it := model.get_item(sid)
+		var x := float(it.get("x", 0.0))
+		var y := float(it.get("y", 0.0))
+		var w := float(it.get("width", 120.0))
+		var h := float(it.get("height", 90.0))
+		min_x = minf(min_x, x)
+		min_y = minf(min_y, y)
+		max_x = maxf(max_x, x + w)
+		max_y = maxf(max_y, y + h)
+	var center_x := (min_x + max_x) * 0.5 - 90.0
+	var center_y := (min_y + max_y) * 0.5 - 60.0
+	var comp_w := 180.0
+	var comp_h := 120.0
+	if compound_kind == "load_group":
+		comp_w = 168.0
+		comp_h = 104.0
+		center_x = (min_x + max_x) * 0.5 - comp_w * 0.5
+		center_y = (min_y + max_y) * 0.5 - comp_h * 0.5
+	var comp_item: Dictionary = {
+		"type": "compound",
+		"x": center_x,
+		"y": center_y,
+		"width": comp_w,
+		"height": comp_h,
+		"scope_id": _active_scope_id,
+		"specs": {
+			"name": group_title,
+			"summary": "Nested graph",
+			"child_count": candidates.size(),
+			"port_in_count": 0,
+			"port_out_count": 0,
+			"boundary_links": [],
+			"compound_kind": compound_kind,
+		},
+		"handles": [],
+		"is_virtual": false,
+	}
+	_history_suppress = true
+	model.add_item(comp_item)
+	var compound_id: String = ""
+	if model.items.size() > 0:
+		compound_id = model.items[model.items.size() - 1].get("id", "") as String
+	var child_scope_id := "scope_%s" % compound_id
+	model.ensure_scope(child_scope_id, _active_scope_id, compound_id, group_title)
+	model.update_item(compound_id, {"child_scope_id": child_scope_id})
+
+	for sid: String in candidates:
+		var it := model.get_item(sid)
+		if it.is_empty():
+			continue
+		model.update_item(sid, {"scope_id": child_scope_id, "parent_compound_id": compound_id})
+
+	var boundary_links: Array = []
+	var handle_defs: Array = []
+	var handle_counters: Dictionary = {}
+	var conns := model.get_connections_in_scope(_active_scope_id)
+	# duplicate because we'll remove and add while iterating
+	var conns_copy: Array = conns.duplicate()
+	var side_in_count: int = 0
+	var side_out_count: int = 0
+	for conn: Dictionary in conns_copy:
+		var sid: String = conn.get("source_item_id", "") as String
+		var tid: String = conn.get("target_item_id", "") as String
+		var src_sel: bool = selected_ids_set.has(sid)
+		var tgt_sel: bool = selected_ids_set.has(tid)
+		if src_sel and tgt_sel:
+			model.update_connection(conn.get("id", "") as String, {"scope_id": child_scope_id})
+			continue
+		if src_sel == tgt_sel:
+			continue
+		var hd: Dictionary = _compound_handle_for_boundary(conn, selected_ids_set, handle_counters)
+		var direction: String = hd.get("direction", "in") as String
+		var idx: int = int(hd.get("index", 1))
+		if direction == "in":
+			side_in_count = maxi(side_in_count, idx)
+		else:
+			side_out_count = maxi(side_out_count, idx)
+		var pos := _compound_handle_pos(direction, idx, maxi(side_in_count, side_out_count), compound_kind)
+		handle_defs.append({
+			"id": hd.get("id", "") as String,
+			"polarity": hd.get("polarity", "ac") as String,
+			"rx": pos.x,
+			"ry": pos.y,
+		})
+		boundary_links.append({
+			"compound_handle_id": hd.get("id", "") as String,
+			"polarity": conn.get("polarity", "ac"),
+			"child_item_id": sid if src_sel else tid,
+			"child_handle_id": conn.get("source_handle_id", "") if src_sel else conn.get("target_handle_id", ""),
+			"external_item_id": tid if src_sel else sid,
+			"external_handle_id": conn.get("target_handle_id", "") if src_sel else conn.get("source_handle_id", ""),
+			"source_was_child": src_sel,
+		})
+		model.remove_connection(conn.get("id", "") as String)
+		var nconn := conn.duplicate(true)
+		nconn["scope_id"] = _active_scope_id
+		if src_sel:
+			nconn["source_item_id"] = compound_id
+			nconn["source_handle_id"] = hd.get("id", "") as String
+		else:
+			nconn["target_item_id"] = compound_id
+			nconn["target_handle_id"] = hd.get("id", "") as String
+		model.add_connection(nconn)
+
+	var comp := model.get_item(compound_id)
+	if not comp.is_empty():
+		var specs: Dictionary = (comp.get("specs", {}) as Dictionary).duplicate(true)
+		specs["child_count"] = candidates.size()
+		specs["boundary_links"] = boundary_links
+		specs["port_in_count"] = side_in_count
+		specs["port_out_count"] = side_out_count
+		for k in extra_specs.keys():
+			specs[k] = extra_specs[k]
+		if compound_kind == "load_group":
+			var has_ac_in := false
+			for hd: Dictionary in handle_defs:
+				if str(hd.get("polarity", "")) in ["ac", "load"]:
+					has_ac_in = true
+					break
+			if not has_ac_in:
+				handle_defs.append({"id": "input", "polarity": "load", "rx": 0.0, "ry": 0.5})
+				side_in_count = maxi(side_in_count, 1)
+			specs["summary"] = str(specs.get("summary", "%d loads" % candidates.size()))
+		model.update_item(compound_id, {
+			"handles": handle_defs,
+			"specs": specs,
+		})
+	_history_suppress = false
+	model.changed.emit("reset")
+	_selected_item_ids.clear()
+	_selected_item_ids.append(compound_id)
+	if _graph_canvas != null:
+		_graph_canvas.set("selected_item_ids", _selected_item_ids)
+		_graph_canvas.set("selected_item_id", compound_id)
+		_graph_canvas.call("queue_redraw")
+	_on_canvas_item_selected(compound_id)
+	_update_special_group_buttons()
+	_show_toast("Grouped %d nodes" % candidates.size())
+	return compound_id
+
+
+func _ungroup_selected_compound() -> void:
+	if model == null:
+		return
+	if _selected_item_ids.size() != 1:
+		_show_toast("Select one compound to ungroup")
+		return
+	var compound_id: String = _selected_item_ids[0]
+	var comp := model.get_item(compound_id)
+	if comp.is_empty() or str(comp.get("type", "")) != "compound":
+		_show_toast("Select a compound node")
+		return
+	if str(comp.get("scope_id", "root")) != _active_scope_id:
+		return
+	var child_scope_id: String = comp.get("child_scope_id", "") as String
+	if child_scope_id.is_empty():
+		return
+	var specs: Dictionary = comp.get("specs", {}) as Dictionary
+	var boundary_links: Array = specs.get("boundary_links", []) as Array
+	_history_suppress = true
+	# Move children and internal connections back to current scope.
+	for item: Dictionary in model.get_items_in_scope(child_scope_id):
+		model.update_item(item.get("id", "") as String, {
+			"scope_id": _active_scope_id,
+			"parent_compound_id": "",
+		})
+	for conn: Dictionary in model.get_connections_in_scope(child_scope_id):
+		model.update_connection(conn.get("id", "") as String, {"scope_id": _active_scope_id})
+	# Remove parent-side boundary wires and restore original child↔external wires.
+	for link: Dictionary in boundary_links:
+		var ch: String = link.get("compound_handle_id", "") as String
+		var to_remove: Array[String] = []
+		for conn: Dictionary in model.get_connections_in_scope(_active_scope_id):
+			if (conn.get("source_item_id", "") == compound_id and conn.get("source_handle_id", "") == ch) \
+				or (conn.get("target_item_id", "") == compound_id and conn.get("target_handle_id", "") == ch):
+				to_remove.append(conn.get("id", "") as String)
+		for cid: String in to_remove:
+			model.remove_connection(cid)
+		model.add_connection({
+			"scope_id": _active_scope_id,
+			"polarity": link.get("polarity", "ac"),
+			"source_item_id": link.get("child_item_id", "") if bool(link.get("source_was_child", false)) else link.get("external_item_id", ""),
+			"source_handle_id": link.get("child_handle_id", "") if bool(link.get("source_was_child", false)) else link.get("external_handle_id", ""),
+			"target_item_id": link.get("external_item_id", "") if bool(link.get("source_was_child", false)) else link.get("child_item_id", ""),
+			"target_handle_id": link.get("external_handle_id", "") if bool(link.get("source_was_child", false)) else link.get("child_handle_id", ""),
+			"waypoints": [],
+			"line_style": "bezier",
+			"curve_tension": 1.0,
+			"corner_radius": 28.0,
+			"voltage_mismatch": false,
+		})
+	model.remove_item(compound_id)
+	model.remove_scope(child_scope_id)
+	_history_suppress = false
+	model.changed.emit("reset")
+	_selected_item_ids.clear()
+	if _graph_canvas != null:
+		_graph_canvas.set("selected_item_ids", [])
+		_graph_canvas.set("selected_item_id", "")
+		_graph_canvas.call("queue_redraw")
+	_update_special_group_buttons()
+	_show_toast("Ungrouped compound")
+
+func _on_system_review() -> void:
+	# Toggle: close if already open
+	if _review_modal != null and is_instance_valid(_review_modal):
+		_review_modal.queue_free()
+		_review_modal = null
+		return
+	_review_modal = _build_review_modal()
+	add_child(_review_modal)
+
+
+# ---------------------------------------------------------------------------
+# System Review modal  (Phase 13)
+# ---------------------------------------------------------------------------
+
+func _build_review_modal() -> Control:
+	# ── Overlay ──────────────────────────────────────────────────────────────
+	var overlay := Control.new()
+	overlay.name         = "ReviewModal"
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_anchor_full(overlay)
+
+	var dim := ColorRect.new()
+	dim.color        = Color(0.0, 0.0, 0.0, 0.6)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor_full(dim)
+	overlay.add_child(dim)
+
+	# ── Center container ──────────────────────────────────────────────────────
+	var center := CenterContainer.new()
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor_full(center)
+	overlay.add_child(center)
+
+	# ── Panel ─────────────────────────────────────────────────────────────────
+	var panel_sb := StyleBoxFlat.new()
+	panel_sb.bg_color            = C_SIDEBAR
+	panel_sb.border_color        = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.55)
+	panel_sb.set_border_width_all(1)
+	panel_sb.set_corner_radius_all(10)
+	panel_sb.content_margin_left   = 0.0
+	panel_sb.content_margin_right  = 0.0
+	panel_sb.content_margin_top    = 0.0
+	panel_sb.content_margin_bottom = 0.0
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(620.0, 0.0)
+	panel.mouse_filter        = Control.MOUSE_FILTER_STOP
+	panel.add_theme_stylebox_override("panel", panel_sb)
+	center.add_child(panel)
+
+	var outer_vbox := VBoxContainer.new()
+	outer_vbox.add_theme_constant_override("separation", 0)
+	panel.add_child(outer_vbox)
+
+	# ── Title bar ─────────────────────────────────────────────────────────────
+	var title_bar := _rv_title_bar(overlay)
+	outer_vbox.add_child(title_bar)
+
+	# ── Gather data ───────────────────────────────────────────────────────────
+	var solar_kw:  float = 0.0
+	var load_kw:   float = 0.0
+	var bat_soc:   float = 0.0
+	var net_kw:    float = 0.0
+	var day_solar: float = 0.0
+	var day_load:  float = 0.0
+	var powered:   bool  = true
+	var has_live:  bool  = is_instance_valid(_solar_ui)
+	if has_live:
+		solar_kw  = float(_solar_ui.get("current_solar_kw") if _solar_ui.get("current_solar_kw") != null else 0.0)
+		load_kw   = float(_solar_ui.get("current_load_kw")  if _solar_ui.get("current_load_kw")  != null else 0.0)
+		var bk: float = float(_solar_ui.get("battery_kwh_stored")   if _solar_ui.get("battery_kwh_stored")   != null else 0.0)
+		var bc: float = float(_solar_ui.get("BATTERY_CAPACITY_KWH") if _solar_ui.get("BATTERY_CAPACITY_KWH") != null else 16.0)
+		bat_soc   = bk / bc * 100.0 if bc > 0.0 else 0.0
+		net_kw    = solar_kw - load_kw
+		day_solar = float(_solar_ui.get("daily_solar_generated_kwh") if _solar_ui.get("daily_solar_generated_kwh") != null else 0.0)
+		day_load  = float(_solar_ui.get("daily_load_consumed_kwh")   if _solar_ui.get("daily_load_consumed_kwh")   != null else 0.0)
+		powered   = _solar_ui.is_power_available() if _solar_ui.has_method("is_power_available") else true
+
+	# Design totals from model (root scope only; skip virtual internals)
+	var agg := _collect_root_array_aggregate()
+	var panel_wmp:      float = float(agg.get("panel_wmp", 0.0))
+	var panel_count:    int   = int(agg.get("panel_count", 0))
+	var bat_kwh_total:  float = 0.0
+	var bat_v_set:      float = 48.0
+	var ctrl_max_watts: float = 0.0
+	var total_cost:     float = 0.0
+	var user_items:     int   = 0
+	if model != null:
+		for item: Dictionary in model.get_items_in_scope("root"):
+			if bool(item.get("is_virtual", false)):
+				continue
+			var sp := item.get("specs", {}) as Dictionary
+			match item.get("type", ""):
+				"battery":
+					bat_kwh_total += float(sp.get("kwh", 0.0))
+					bat_v_set      = float(sp.get("voltage", 48.0))
+				"controller":
+					ctrl_max_watts += float(sp.get("max_pv_watts", 0.0))
+			total_cost += float(sp.get("cost", 0.0))
+			if not bool(item.get("is_virtual", false)):
+				user_items += 1
+
+	# ── Sections ──────────────────────────────────────────────────────────────
+	if has_live:
+		outer_vbox.add_child(_rv_section("⚡  LIVE SYSTEM STATUS", [
+			["Solar Output",    "%.0f W"  % (solar_kw * 1000.0),    Color(0.27, 0.9, 0.42) if solar_kw > 0.05 else C_TEXT_S],
+			["Load Demand",     "%.0f W"  % (load_kw  * 1000.0),    C_TEXT_S],
+			["Battery SOC",     "%.0f %%"  % bat_soc,
+				Color(0.27, 0.9, 0.42) if bat_soc > 60.0 else C_AMBER if bat_soc > 25.0 else Color(0.9, 0.35, 0.3)],
+			["Net Power Flow",  "%+.0f W" % (net_kw   * 1000.0),
+				Color(0.27, 0.9, 0.42) if net_kw > 0.05 else C_AMBER if net_kw < -0.05 else C_TEXT_S],
+			["Power State",     "✔ Available" if powered else "✘ Depleted",
+				Color(0.27, 0.9, 0.42) if powered else Color(0.9, 0.35, 0.3)],
+		]))
+		var day_balance := day_solar - day_load
+		outer_vbox.add_child(_rv_section("📅  TODAY'S ENERGY", [
+			["Solar Generated",  "%.3f kWh" % day_solar,
+				Color(0.27, 0.9, 0.42) if day_solar > 0.0 else C_TEXT_S],
+			["Load Consumed",    "%.3f kWh" % day_load,   C_TEXT_S],
+			["Net Balance",      "%+.3f kWh" % day_balance,
+				Color(0.27, 0.9, 0.42) if day_balance > 0.01 else C_AMBER if day_balance < -0.01 else C_TEXT_S],
+		]))
+
+	var array_label := "%d panel%s = %.0f W" % [panel_count, "s" if panel_count != 1 else "", panel_wmp] if panel_count > 0 else "—"
+	var bat_label   := "%.1f kWh @ %.0fV"    % [bat_kwh_total, bat_v_set]                                  if bat_kwh_total > 0.0 else "—"
+	var ctrl_label  := "%.0f W max"           % ctrl_max_watts                                              if ctrl_max_watts > 0.0 else "—"
+	outer_vbox.add_child(_rv_section("🏗  SYSTEM DESIGN", [
+		["Solar Array",       array_label,                                 C_TEXT_S],
+		["Battery Bank",      bat_label,                                   C_TEXT_S],
+		["Controller",        ctrl_label,                                  C_TEXT_S],
+		["User Components",   "%d item%s" % [user_items, "s" if user_items != 1 else ""],  C_TEXT_S],
+		["Estimated Cost",    "$%.0f" % total_cost,                        C_PRIMARY],
+	]))
+
+	outer_vbox.add_child(_rv_hints_section(
+		panel_wmp, ctrl_max_watts, bat_kwh_total, load_kw,
+		day_solar, day_load, user_items, has_live))
+
+	return overlay
+
+
+## Generates the title bar row with "📊 System Review" label and × close button.
+func _rv_title_bar(overlay: Control) -> Control:
+	var tb_sb := StyleBoxFlat.new()
+	tb_sb.bg_color = C_PANEL
+	tb_sb.set_border_width(SIDE_BOTTOM, 1)
+	tb_sb.border_color        = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.3)
+	tb_sb.content_margin_left   = 16.0
+	tb_sb.content_margin_right  = 16.0
+	tb_sb.content_margin_top    = 10.0
+	tb_sb.content_margin_bottom = 10.0
+	var tb := PanelContainer.new()
+	tb.add_theme_stylebox_override("panel", tb_sb)
+
+	var hbox := HBoxContainer.new()
+	tb.add_child(hbox)
+
+	var title := Label.new()
+	title.text = "📊  System Review"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_color_override("font_color", C_PRIMARY)
+	title.add_theme_font_size_override("font_size", 14)
+	hbox.add_child(title)
+
+	var close_btn := Button.new()
+	close_btn.text = "✕"
+	close_btn.flat = true
+	close_btn.add_theme_color_override("font_color",       C_TEXT_S)
+	close_btn.add_theme_color_override("font_hover_color", C_TEXT)
+	close_btn.add_theme_font_size_override("font_size", 14)
+	close_btn.pressed.connect(func():
+		if is_instance_valid(overlay):
+			overlay.queue_free()
+		_review_modal = null
+	)
+	hbox.add_child(close_btn)
+
+	return tb
+
+
+## Builds one data section for the review modal.
+## rows: Array of [label_str, value_str, Color]
+func _rv_section(title: String, rows: Array) -> Control:
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 0)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	# Section header
+	var hdr_sb := StyleBoxFlat.new()
+	hdr_sb.bg_color             = C_PANEL
+	hdr_sb.border_color         = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.2)
+	hdr_sb.set_border_width(SIDE_BOTTOM, 1)
+	hdr_sb.content_margin_left   = 16.0
+	hdr_sb.content_margin_right  = 16.0
+	hdr_sb.content_margin_top    = 7.0
+	hdr_sb.content_margin_bottom = 7.0
+	var hdr := PanelContainer.new()
+	hdr.add_theme_stylebox_override("panel", hdr_sb)
+	var hdr_lbl := Label.new()
+	hdr_lbl.text = title
+	hdr_lbl.add_theme_color_override("font_color", C_PRIMARY)
+	hdr_lbl.add_theme_font_size_override("font_size", 11)
+	hdr.add_child(hdr_lbl)
+	vbox.add_child(hdr)
+
+	for row: Array in rows:
+		var row_sb := StyleBoxFlat.new()
+		row_sb.bg_color             = Color(0.0, 0.0, 0.0, 0.0)
+		row_sb.border_color         = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.3)
+		row_sb.set_border_width(SIDE_BOTTOM, 1)
+		row_sb.content_margin_left   = 16.0
+		row_sb.content_margin_right  = 16.0
+		row_sb.content_margin_top    = 6.0
+		row_sb.content_margin_bottom = 6.0
+		var row_pc := PanelContainer.new()
+		row_pc.add_theme_stylebox_override("panel", row_sb)
+		row_pc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+		var row_hbox := HBoxContainer.new()
+		row_pc.add_child(row_hbox)
+
+		var k := Label.new()
+		k.text                  = row[0]
+		k.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		k.add_theme_color_override("font_color", C_TEXT_S)
+		k.add_theme_font_size_override("font_size", 11)
+		row_hbox.add_child(k)
+
+		var v := Label.new()
+		v.text                  = row[1]
+		v.horizontal_alignment  = HORIZONTAL_ALIGNMENT_RIGHT
+		v.add_theme_color_override("font_color", row[2] as Color)
+		v.add_theme_font_size_override("font_size", 11)
+		row_hbox.add_child(v)
+
+		vbox.add_child(row_pc)
+
+	return vbox
+
+
+## Generates the hints section with smart tips based on system data.
+func _rv_hints_section(panel_wmp: float, ctrl_max_watts: float,
+		bat_kwh: float, load_kw: float,
+		day_solar: float, day_load: float,
+		user_items: int, has_live: bool) -> Control:
+	var hints: Array = []
+
+	if user_items == 0:
+		hints.append(["💡", "Add components from the library to design your system.", C_TEXT_S])
+	else:
+		# Panel ↔ controller matching
+		if ctrl_max_watts > 0.0:
+			var ratio := panel_wmp / ctrl_max_watts
+			if ratio > 1.15:
+				hints.append(["⚠", "Panels (%.0f W) exceed controller max (%.0f W) by %.0f%% — energy is wasted." % [panel_wmp, ctrl_max_watts, (ratio - 1.0) * 100.0], C_AMBER])
+			elif ratio < 0.65:
+				hints.append(["⚡", "Panels (%.0f W) are undersized for the controller (%.0f W) — add more panels." % [panel_wmp, ctrl_max_watts], C_AMBER])
+			else:
+				hints.append(["✔", "Panel-to-controller ratio is well-matched (%.0f%%)." % (ratio * 100.0), Color(0.27, 0.9, 0.42)])
+
+		# Battery autonomy
+		if bat_kwh > 0.0 and load_kw > 0.001:
+			var days := bat_kwh / (load_kw * 24.0)
+			if days < 0.5:
+				hints.append(["⚠", "Battery (%.1f kWh) covers only %.1fh of load — consider expanding." % [bat_kwh, days * 24.0], C_AMBER])
+			elif days < 1.5:
+				hints.append(["💡", "Battery covers %.1f day(s) of load — adequate for short outages." % days, C_TEXT_S])
+			else:
+				hints.append(["✔", "Battery autonomy is %.1f days — good resilience." % days, Color(0.27, 0.9, 0.42)])
+
+		# Daily energy balance
+		if has_live:
+			var balance := day_solar - day_load
+			if balance > 0.01:
+				hints.append(["✔", "Today's surplus: +%.3f kWh — system generating more than consumed." % balance, Color(0.27, 0.9, 0.42)])
+			elif balance < -0.01:
+				hints.append(["⚠", "Today's deficit: %.3f kWh — grid or battery drawdown." % absf(balance), C_AMBER])
+
+	if hints.is_empty():
+		hints.append(["✔", "System looks good!", Color(0.27, 0.9, 0.42)])
+
+	# Build the UI
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 0)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var hdr_sb := StyleBoxFlat.new()
+	hdr_sb.bg_color             = C_PANEL
+	hdr_sb.border_color         = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.2)
+	hdr_sb.set_border_width(SIDE_BOTTOM, 1)
+	hdr_sb.content_margin_left   = 16.0
+	hdr_sb.content_margin_right  = 16.0
+	hdr_sb.content_margin_top    = 7.0
+	hdr_sb.content_margin_bottom = 7.0
+	var hdr := PanelContainer.new()
+	hdr.add_theme_stylebox_override("panel", hdr_sb)
+	var hdr_lbl := Label.new()
+	hdr_lbl.text = "💡  OPTIMIZATION HINTS"
+	hdr_lbl.add_theme_color_override("font_color", C_PRIMARY)
+	hdr_lbl.add_theme_font_size_override("font_size", 11)
+	hdr.add_child(hdr_lbl)
+	vbox.add_child(hdr)
+
+	for hint: Array in hints:
+		var row_sb := StyleBoxFlat.new()
+		row_sb.bg_color             = Color(0.0, 0.0, 0.0, 0.0)
+		row_sb.border_color         = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.3)
+		row_sb.set_border_width(SIDE_BOTTOM, 1)
+		row_sb.content_margin_left   = 16.0
+		row_sb.content_margin_right  = 16.0
+		row_sb.content_margin_top    = 8.0
+		row_sb.content_margin_bottom = 8.0
+		var row_pc := PanelContainer.new()
+		row_pc.add_theme_stylebox_override("panel", row_sb)
+		row_pc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+		var row_hbox := HBoxContainer.new()
+		row_hbox.add_theme_constant_override("separation", 10)
+		row_pc.add_child(row_hbox)
+
+		var icon := Label.new()
+		icon.text = hint[0]
+		icon.add_theme_font_size_override("font_size", 13)
+		row_hbox.add_child(icon)
+
+		var txt := Label.new()
+		txt.text                  = hint[1]
+		txt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		txt.autowrap_mode         = TextServer.AUTOWRAP_WORD_SMART
+		txt.add_theme_color_override("font_color", hint[2] as Color)
+		txt.add_theme_font_size_override("font_size", 11)
+		row_hbox.add_child(txt)
+
+		vbox.add_child(row_pc)
+
+	# Bottom padding
+	var pad := Control.new()
+	pad.custom_minimum_size = Vector2(0.0, 8.0)
+	vbox.add_child(pad)
+
+	return vbox
+
+
+func _delete_selected() -> void:
+	if model == null or _graph_canvas == null:
+		return
+	var sel_item: String = _graph_canvas.get("selected_item_id") as String
+	var sel_items: Array = _graph_canvas.get("selected_item_ids") as Array
+	var sel_conn: String = _graph_canvas.get("selected_connection_id") as String
+	if sel_items.size() > 1:
+		for sid_v in sel_items:
+			var sid: String = str(sid_v)
+			var it := model.get_item(sid)
+			if it.is_empty():
+				continue
+			if str(it.get("scope_id", "root")) != _active_scope_id:
+				continue
+			if _inspector_panel != null and _inspector_panel.has_method("unregister_item_automations"):
+				_inspector_panel.call("unregister_item_automations", it)
+			if bool(it.get("is_virtual", false)):
+				_suppress_virtual(sid)
+			model.remove_item(sid)
+		_selected_item_ids.clear()
+		return
+	if not sel_item.is_empty():
+		var it := model.get_item(sel_item)
+		if _inspector_panel != null and _inspector_panel.has_method("unregister_item_automations"):
+			_inspector_panel.call("unregister_item_automations", it)
+		if bool(it.get("is_virtual", false)):
+			_suppress_virtual(sel_item)
+		model.remove_item(sel_item)
+	elif not sel_conn.is_empty():
+		if sel_conn.begins_with("vconn_"):
+			_suppress_virtual(sel_conn)
+		model.remove_connection(sel_conn)
+
+
+func _suppress_virtual(id: String) -> void:
+	_suppressed_virtuals[id] = true
+	# When a virtual consumer node is removed, also suppress its auto AC wire
+	# so solar_bridge does not re-draw the vconn_ac_<id> connection.
+	if id.begins_with("virtual_device_") or id.begins_with("virtual_load_") \
+			or id == "virtual_baseline":
+		_suppressed_virtuals["vconn_ac_%s" % id] = true
+	if _bridge != null:
+		_bridge.suppressed_ids = _suppressed_virtuals
+
+
+# ---------------------------------------------------------------------------
+# Toast notification  (Phase 9)
+# ---------------------------------------------------------------------------
+
+func _show_toast(msg: String, duration: float = 2.5) -> void:
+	if _toast_panel == null:
+		_toast_panel = _build_toast_panel()
+		add_child(_toast_panel)   # on top
+
+	_toast_label.text    = msg
+	_toast_panel.visible = true
+	_toast_timer         = duration
+
+	# Center horizontally just below topbar
+	var left_w  := SIDEBAR_L_W if _sidebar_l_open else 0.0
+	var right_w := SIDEBAR_R_W if _sidebar_r_open else 0.0
+	var canvas_w := size.x - left_w - right_w
+	_toast_panel.reset_size()
+	_toast_panel.position = Vector2(
+		left_w + (canvas_w - _toast_panel.size.x) * 0.5,
+		TOPBAR_H + 12.0
+	)
+
+
+func _build_toast_panel() -> PanelContainer:
+	var pc := PanelContainer.new()
+	pc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pc.visible      = false
+
+	var sb := StyleBoxFlat.new()
+	sb.bg_color              = Color(C_BG.r, C_BG.g, C_BG.b, 0.92)
+	sb.border_color          = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.6)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(6)
+	sb.content_margin_left   = 16.0
+	sb.content_margin_right  = 16.0
+	sb.content_margin_top    =  8.0
+	sb.content_margin_bottom =  8.0
+	pc.add_theme_stylebox_override("panel", sb)
+
+	_toast_label = Label.new()
+	_toast_label.add_theme_color_override("font_color", C_TEXT)
+	_toast_label.add_theme_font_size_override("font_size", 12)
+	pc.add_child(_toast_label)
+	return pc
+
+
+# ---------------------------------------------------------------------------
+# Hints overlay  (Phase 9)
+# ---------------------------------------------------------------------------
+
+func _build_hints_panel() -> Control:
+	var pc := PanelContainer.new()
+	pc.mouse_filter = Control.MOUSE_FILTER_STOP
+
+	var sb := StyleBoxFlat.new()
+	sb.bg_color              = Color(C_BG.r, C_BG.g, C_BG.b, 0.95)
+	sb.border_color          = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.5)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(8)
+	sb.content_margin_left   = 20.0
+	sb.content_margin_right  = 20.0
+	sb.content_margin_top    = 16.0
+	sb.content_margin_bottom = 16.0
+	pc.add_theme_stylebox_override("panel", sb)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	pc.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "⌨  Keyboard & Mouse Shortcuts"
+	title.add_theme_color_override("font_color", C_PRIMARY)
+	title.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(title)
+
+	var div := ColorRect.new()
+	div.color               = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.5)
+	div.custom_minimum_size = Vector2(0.0, 1.0)
+	div.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(div)
+
+	var shortcuts: Array = [
+		["G",                      "Toggle graph view"],
+		["Del",                    "Delete selected node / wire"],
+		["Scroll wheel",           "Zoom canvas"],
+		["Middle / Right drag",    "Pan canvas"],
+		["Left-click node",        "Select & open Inspector"],
+		["Drag from port dot",     "Create wire connection"],
+		["Left-click wire",        "Select wire"],
+		["Click library item",     "Spawn at canvas center"],
+		["Drag library item",      "Drag-drop onto canvas"],
+	]
+
+	for pair: Array in shortcuts:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		vbox.add_child(row)
+
+		var key_lbl := Label.new()
+		key_lbl.text               = pair[0]
+		key_lbl.custom_minimum_size = Vector2(160.0, 0.0)
+		key_lbl.add_theme_color_override("font_color", C_AMBER)
+		key_lbl.add_theme_font_size_override("font_size", 11)
+		row.add_child(key_lbl)
+
+		var desc_lbl := Label.new()
+		desc_lbl.text = pair[1]
+		desc_lbl.add_theme_color_override("font_color", C_TEXT_S)
+		desc_lbl.add_theme_font_size_override("font_size", 11)
+		row.add_child(desc_lbl)
+
+	var close_btn := Button.new()
+	close_btn.text       = "Close"
+	close_btn.focus_mode = Control.FOCUS_NONE
+	close_btn.pressed.connect(func():
+		_hints_visible = false
+		pc.visible = false
+	)
+	_restyle_btn_amber(close_btn)
+	vbox.add_child(close_btn)
+
+	# Position: centered in canvas area
+	pc.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+
+	return pc
+
+
+func _on_build_mode() -> void:
+	_mode = "build"
+	if _build_btn != null:
+		_set_mode_btn_style(_build_btn, true)
+	if _test_btn != null:
+		_set_mode_btn_style(_test_btn, false)
+	if _graph_canvas != null:
+		_graph_canvas.set("current_mode", "build")
+	if _left_build_content != null: _left_build_content.visible = true
+	if _left_test_content  != null: _left_test_content.visible  = false
+
+
+func _on_test_mode() -> void:
+	_mode = "test"
+	if _build_btn != null:
+		_set_mode_btn_style(_build_btn, false)
+	if _test_btn != null:
+		_set_mode_btn_style(_test_btn, true)
+	if _graph_canvas != null:
+		_graph_canvas.set("current_mode", "test")
+	if _left_build_content != null: _left_build_content.visible = false
+	if _left_test_content  != null: _left_test_content.visible  = true
+	_sync_graph_embed_mirror()
+
+
+# ---------------------------------------------------------------------------
+# Process — drives GraphCanvas.tick()
+# ---------------------------------------------------------------------------
+
+func _process(delta: float) -> void:
+	if not visible:
+		return
+	var sim_ts := -1.0
+	var main_node := _get_scene_main_node()
+	if main_node != null and main_node.get("time_scale") != null:
+		sim_ts = float(main_node.time_scale)
+	# Auto-switch between Test (running) and Build (paused) based on simulation state
+	if sim_ts >= 0.0:
+		var want_mode := "test" if sim_ts > 0.0 else "build"
+		if _mode != want_mode:
+			if want_mode == "test":
+				_on_test_mode()
+			else:
+				_on_build_mode()
+	if _graph_canvas != null and _graph_canvas.has_method("tick"):
+		_graph_canvas.call("tick", delta, sim_ts)
+	# Bridge tick — suppress history so its model updates are not recorded
+	_history_suppress = true
+	if _bridge != null:
+		_bridge.call("tick", delta)
+	_tick_graph_renewables(delta)
+	if _resource_flow != null:
+		_resource_flow.call("tick", delta)
+	_history_suppress = false
+	# Push the initial snapshot once, after the bridge has seeded virtual nodes
+	if not _history_initialized:
+		_history_initialized = true
+		_push_history()
+	if _lib_ghost != null and _lib_ghost.visible:
+		_lib_ghost.position = get_viewport().get_mouse_position() + Vector2(10.0, 8.0)
+	# Toast countdown
+	if _toast_timer > 0.0:
+		_toast_timer -= delta
+		if _toast_timer <= 0.0 and _toast_panel != null:
+			_toast_panel.visible = false
+
+
+# ---------------------------------------------------------------------------
+# Input — G toggle
+# ---------------------------------------------------------------------------
+
+func _input(event: InputEvent) -> void:
+	# ---- Library drag tracking ----
+	if not _lib_drag_preset.is_empty():
+		if event is InputEventMouseMotion:
+			var mm := event as InputEventMouseMotion
+			if not _lib_drag_active:
+				if mm.global_position.distance_to(_lib_drag_start) > LIB_DRAG_THRESHOLD:
+					_lib_drag_active     = true
+					if _lib_ghost != null:
+						_lib_ghost.visible = true
+			# Ghost position is updated in _process via get_mouse_position()
+		elif event is InputEventMouseButton:
+			var mb := event as InputEventMouseButton
+			if mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
+				_end_lib_drag(mb.global_position)
+				get_viewport().set_input_as_handled()
+				return
+
+	# ---- Keyboard shortcuts (Delete / Ctrl+Z / Ctrl+Y) ----
+	if event is InputEventKey:
+		var ke := event as InputEventKey
+		if ke.pressed and not ke.echo:
+			var focus := get_viewport().gui_get_focus_owner()
+			var in_text := focus is LineEdit or focus is TextEdit or focus is CodeEdit
+			if not in_text:
+				if ke.keycode == KEY_DELETE:
+					_delete_selected()
+					get_viewport().set_input_as_handled()
+					return
+				if ke.ctrl_pressed and ke.keycode == KEY_Z:
+					_do_undo()
+					get_viewport().set_input_as_handled()
+					return
+				if ke.ctrl_pressed and ke.keycode == KEY_Y:
+					_do_redo()
+					get_viewport().set_input_as_handled()
+					return
+
+	# ---- G toggle ----
+	if not InputMap.has_action("system_graph_toggle"):
+		return
+	if not event.is_action_pressed("system_graph_toggle"):
+		return
+
+	# Don't steal input from text fields
+	var focus := get_viewport().gui_get_focus_owner()
+	if focus is LineEdit or focus is TextEdit or focus is CodeEdit:
+		return
+
+	# Don't open while save/load panel is up
+	var ui_layer := get_parent()
+	if ui_layer:
+		var sl := ui_layer.get_node_or_null("SaveLoadUI")
+		if sl != null and sl.has_method("is_panel_visible") and sl.is_panel_visible():
+			return
+
+	visible = not visible
+	if visible:
+		_apply_graph_open_mode_from_sim_state()
+		# Pause survival mechanics while graph is open
+		var m := _get_scene_main_node()
+		if m != null and m.get("gameplay_mechanics_paused") != null:
+			_gameplay_paused_before_graph = bool(m.gameplay_mechanics_paused)
+			m.gameplay_mechanics_paused = true
+		var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
+		if gr != null:
+			gr.set_survival_paused(true)
+		# Re-sync load automations so rules fire even if the graph was
+		# closed and the engine was cleared since last inspect
+		if _inspector_panel != null and _inspector_panel.has_method("sync_all_load_automations"):
+			_inspector_panel.call("sync_all_load_automations", model)
+	else:
+		# Restore survival state from before the graph was opened
+		var m := _get_scene_main_node()
+		if m != null and m.get("gameplay_mechanics_paused") != null:
+			m.gameplay_mechanics_paused = _gameplay_paused_before_graph
+		var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
+		if gr != null:
+			gr.set_survival_paused(_gameplay_paused_before_graph)
+	_update_make_array_quick_button()
+	get_viewport().set_input_as_handled()
+
+
+# ---------------------------------------------------------------------------
+# Scene main (Main node under UILayer parent)
+# ---------------------------------------------------------------------------
+
+func _get_scene_main_node() -> Node:
+	var ul := get_parent()
+	if ul == null:
+		return null
+	return ul.get_parent()
+
+
+func _init_conduit_manager() -> void:
+	var main_node := _get_scene_main_node()
+	if main_node == null or model == null:
+		return
+	_conduit_manager = main_node.get_node_or_null("ConduitManager") as Node3D
+	if _conduit_manager == null:
+		_conduit_manager = _CONDUIT_MGR_SCRIPT.new()
+		_conduit_manager.name = "ConduitManager"
+		main_node.add_child(_conduit_manager)
+	if _conduit_manager.has_method("setup"):
+		_conduit_manager.call("setup", model, main_node)
+	_ensure_conduit_route_ui(main_node)
+	_wire_player_conduit_controller(main_node)
+
+
+func _ensure_conduit_route_ui(main_node: Node) -> void:
+	var ul := main_node.get_node_or_null("UILayer")
+	if ul == null:
+		return
+	if ul.get_node_or_null("ConduitRouteUI") != null:
+		return
+	var ui := CanvasLayer.new()
+	ui.name = "ConduitRouteUI"
+	ui.set_script(load("res://scenes/ui/conduit_route_ui.gd") as Script)
+	ul.add_child(ui)
+
+
+func _wire_player_conduit_controller(main_node: Node) -> void:
+	if _conduit_route_wired:
+		return
+	var player := main_node.get_node_or_null("Player")
+	if player == null:
+		return
+	var ctrl := player.get_node_or_null("ConduitRouteController")
+	if ctrl == null:
+		return
+	var ui := main_node.get_node_or_null("UILayer/ConduitRouteUI")
+	if ctrl.has_method("setup") and _conduit_manager != null:
+		var cam: Camera3D = player.get("camera") as Camera3D
+		if cam == null:
+			cam = player.get_node_or_null("Camera3D") as Camera3D
+		ctrl.call("setup", player, cam, _conduit_manager, ui)
+	if ctrl.has_signal("route_committed") and not ctrl.is_connected("route_committed", _on_conduit_route_finished):
+		ctrl.connect("route_committed", _on_conduit_route_finished)
+	if ctrl.has_signal("route_cancelled") and not ctrl.is_connected("route_cancelled", _on_conduit_route_finished):
+		ctrl.connect("route_cancelled", _on_conduit_route_finished)
+	_conduit_route_wired = true
+
+
+func _get_conduit_manager() -> Node3D:
+	if _conduit_manager == null or not is_instance_valid(_conduit_manager):
+		_init_conduit_manager()
+	return _conduit_manager
+
+
+func _init_placeholder_host() -> void:
+	var main_node := _get_scene_main_node()
+	if main_node == null or model == null:
+		return
+	_placeholder_host = main_node.get_node_or_null("GraphPlaceholderHost") as Node3D
+	if _placeholder_host == null:
+		_placeholder_host = _PLACEHOLDER_HOST_SCRIPT.new()
+		_placeholder_host.name = "GraphPlaceholderHost"
+		main_node.add_child(_placeholder_host)
+	if _placeholder_host.has_method("setup"):
+		_placeholder_host.call("setup", model, main_node)
+	if _placeholder_host.has_method("auto_link_battery_to_ibc"):
+		if bool(_placeholder_host.call("auto_link_battery_to_ibc")):
+			_schedule_graph_autosave()
+	var mgr := _get_conduit_manager()
+	if mgr != null and mgr.has_method("sync_all"):
+		mgr.call("sync_all")
+
+
+func _get_placeholder_host() -> Node3D:
+	if _placeholder_host == null or not is_instance_valid(_placeholder_host):
+		_init_placeholder_host()
+	return _placeholder_host
+
+
+func _spawn_3d_placeholder_for_item(item_id: String) -> void:
+	if item_id.is_empty():
+		_show_toast("Select a graph node first")
+		return
+	var host := _get_placeholder_host()
+	if host == null or not host.has_method("spawn_placeholder_for_item"):
+		_show_toast("3D placeholder host unavailable")
+		return
+	var path: String = str(host.call("spawn_placeholder_for_item", item_id))
+	if path.is_empty():
+		_show_toast("Could not spawn 3D placeholder")
+		return
+	_schedule_graph_autosave()
+	var mgr := _get_conduit_manager()
+	if mgr != null and mgr.has_method("sync_all"):
+		mgr.call("sync_all")
+	_show_toast("Linked 3D placeholder")
+	if _inspector_panel != null and _inspector_panel.has_method("inspect_item"):
+		var item := model.get_item(item_id) if model != null else {}
+		if not item.is_empty():
+			_inspector_panel.call("inspect_item", item, model)
+
+
+func _on_spawn_3d_placeholder_pressed() -> void:
+	var item_id := ""
+	if _graph_canvas != null:
+		item_id = str(_graph_canvas.get("selected_item_id"))
+	_spawn_3d_placeholder_for_item(item_id)
+
+
+func _start_conduit_route(conn_id: String) -> void:
+	if model == null:
+		return
+	var conn := model.get_connection(conn_id)
+	if conn.is_empty():
+		return
+	if not model.connection_is_3d_routable(conn):
+		_show_toast("Link both nodes to 3D scene objects before routing.")
+		return
+	var mgr := _get_conduit_manager()
+	if mgr == null:
+		_show_toast("Conduit manager unavailable.")
+		return
+	var src := model.get_item(str(conn.get("source_item_id", "")))
+	var tgt := model.get_item(str(conn.get("target_item_id", "")))
+	var tree := get_tree()
+	var anchor_a: Vector3 = ConduitManager.anchor_global_for_item(src, tree)
+	var anchor_b: Vector3 = ConduitManager.anchor_global_for_item(tgt, tree)
+	if not is_finite(anchor_a.x) or not is_finite(anchor_b.x):
+		_show_toast("Could not resolve 3D anchor positions.")
+		return
+	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
+	var main_node := _get_scene_main_node()
+	if main_node == null:
+		return
+	_wire_player_conduit_controller(main_node)
+	var player := main_node.get_node_or_null("Player")
+	if player == null:
+		return
+	var ctrl := player.get_node_or_null("ConduitRouteController")
+	if ctrl == null or not ctrl.has_method("begin_route"):
+		_show_toast("Conduit route controller not ready.")
+		return
+	visible = false
+	_apply_mouse_for_graph(false)
+	var route: Array = conn.get("route_3d", []) as Array
+	ctrl.call("begin_route", conn_id, anchor_a, anchor_b, type_id, route)
+	_show_toast("Routing 3D conduit — LMB pin, Enter commit, Esc cancel")
+
+
+func _clear_conduit_route(conn_id: String) -> void:
+	var mgr := _get_conduit_manager()
+	if mgr != null and mgr.has_method("clear_route"):
+		mgr.call("clear_route", conn_id)
+	if model != null:
+		var conn := model.get_connection(conn_id)
+		if not conn.is_empty() and _inspector_panel != null \
+				and _inspector_panel.has_method("inspect_connection"):
+			_inspector_panel.call("inspect_connection", conn, model)
+	_schedule_graph_autosave()
+
+
+func _on_conduit_route_finished(_conn_id: String) -> void:
+	_schedule_graph_autosave()
+	if model != null and _inspector_panel != null \
+			and _inspector_panel.has_method("inspect_connection"):
+		var conn := model.get_connection(_conn_id)
+		if not conn.is_empty():
+			_inspector_panel.call("inspect_connection", conn, model)
+
+
+## When opening the graph, use Test mode if the simulation clock is running, Build mode if paused.
+func _apply_graph_open_mode_from_sim_state() -> void:
+	var m := _get_scene_main_node()
+	if m == null or m.get("time_scale") == null:
+		_on_build_mode()
+		return
+	if float(m.time_scale) > 0.0:
+		_on_test_mode()
+	else:
+		_on_build_mode()
+
+
+# ---------------------------------------------------------------------------
+# SolarUI discovery
+# ---------------------------------------------------------------------------
+
+func _refresh_solar_ui_ref() -> void:
+	var root := get_tree().root
+	if root:
+		_solar_ui = root.get_node_or_null("Main/UILayer/SolarUI") as Control
+	if not is_instance_valid(_solar_ui):
+		var scene := get_tree().current_scene
+		if scene:
+			_solar_ui = scene.get_node_or_null("UILayer/SolarUI") as Control
+	_populate_library_scene_devices()
+	_populate_library_graph_linkables()
+
+
+func _scene_device_path_on_graph(path_str: String) -> bool:
+	if model == null or path_str.is_empty():
+		return false
+	for item: Dictionary in model.items:
+		if bool(item.get("is_ghost", false)):
+			continue
+		var dev := str(item.get("device_path", ""))
+		if dev == path_str:
+			return true
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if str(specs.get("scene_device_path", "")) == path_str:
+			return true
+	return false
+
+
+## Build the "In Model" library shelf: scene power_consumers not yet on the graph.
+func _populate_library_scene_devices() -> void:
+	if _lib_panel == null:
+		return
+	if not _lib_panel.has_method("populate_in_model") and not _lib_panel.has_method("populate_scene_devices"):
+		return
+	if not is_instance_valid(_solar_ui):
+		return
+	var tree := _solar_ui.get_tree()
+	if tree == null:
+		return
+	var consumers: Array[Node] = tree.get_nodes_in_group("power_consumers")
+	consumers.sort_custom(func(a: Node, b: Node) -> bool:
+		return str(a.get_path()) < str(b.get_path())
+	)
+	var presets: Array = []
+	for consumer: Node in consumers:
+		if consumer == null or not is_instance_valid(consumer):
+			continue
+		if consumer.has_meta("graph_sim_load") and bool(consumer.get_meta("graph_sim_load")):
+			continue
+		var path_str := str(consumer.get_path())
+		if _scene_device_path_on_graph(path_str):
+			continue
+		var nm: String = str(consumer.name)
+		var max_w := 25.0
+		var avg_w := 0.0
+		if consumer is PowerDevice:
+			var pd := consumer as PowerDevice
+			nm    = pd.device_name
+			max_w = pd.rated_power_watts
+			avg_w = pd.get_current_power()
+		else:
+			if consumer.get("display_name") != null:
+				nm = str(consumer.get("display_name"))
+			if consumer.get("wattage") != null:
+				max_w = float(consumer.get("wattage"))
+			if consumer.has_method("get_current_power"):
+				avg_w = float(consumer.call("get_current_power"))
+		presets.append({
+			"type":   "appliance",
+			"label":  nm,
+			"icon":   "🔌",
+			"width":  160.0,
+			"height": 104.0,
+			"specs": {
+				"name":              nm,
+				"max_watts":         max_w,
+				"avg_watts":         avg_w,
+				"scene_device_path": path_str,
+				"in_model":          true,
+			},
+		})
+	if _lib_panel.has_method("populate_in_model"):
+		_lib_panel.call("populate_in_model", presets)
+	else:
+		_lib_panel.call("populate_scene_devices", presets)
+
+
+func _populate_library_graph_linkables() -> void:
+	if _lib_panel == null or not _lib_panel.has_method("populate_graph_linkables"):
+		return
+	if not is_instance_valid(_solar_ui):
+		return
+	var tree := _solar_ui.get_tree()
+	if tree == null:
+		return
+	var seen: Dictionary = {}
+	var presets: Array = []
+	for group_name: String in ["graph_linkable", "energy_sources"]:
+		for node: Node in tree.get_nodes_in_group(group_name):
+			if node == null or not is_instance_valid(node):
+				continue
+			var path_str: String = str(node.get_path())
+			if seen.has(path_str):
+				continue
+			seen[path_str] = true
+			var nm: String = str(node.name)
+			if node.get("source_name") != null:
+				nm = str(node.get("source_name"))
+			elif node.get("display_name") != null:
+				nm = str(node.get("display_name"))
+			var gtype := "appliance"
+			var icon := "🔌"
+			if node is WindTurbineSource or str(node.get_script()).find("wind_turbine") >= 0:
+				gtype = "wind"
+				icon = "🌬"
+			elif node is HydroSource or str(node.get_script()).find("hydro_source") >= 0:
+				gtype = "hydro"
+				icon = "💧"
+			elif node is SolarPanelSource or str(node.get_script()).find("solar_calculator") >= 0:
+				gtype = "panel"
+				icon = "☀"
+			presets.append({
+				"type": gtype,
+				"label": nm,
+				"icon": icon,
+				"width": 140.0,
+				"height": 104.0,
+				"specs": {
+					"name": nm,
+					"scene_device_path": path_str,
+				},
+			})
+	if not presets.is_empty():
+		_lib_panel.call("populate_graph_linkables", presets)
+
+
+## Re-point the embedded test-mode SolarUI at the main instance (e.g. after load / toggle).
+func _sync_graph_embed_mirror() -> void:
+	if is_instance_valid(_graph_embed_solar) and _graph_embed_solar.has_method("set_graph_embed_mirror_from"):
+		_graph_embed_solar.call("set_graph_embed_mirror_from", _solar_ui)
+
+
+## Toggle the world PowerDevice bound to a virtual graph item.
+## Called from _on_canvas_item_double_tapped when mode == "test".
+func _try_toggle_device(item: Dictionary) -> void:
+	var path_str: String = item.get("device_path", "") as String
+	if path_str.is_empty():
+		return
+	# Absolute NodePath stored as string (e.g. "/root/Main/World/...")
+	var node: Node = get_tree().root.get_node_or_null(NodePath(path_str))
+	if node == null:
+		_show_toast("Device not found in scene")
+		return
+	if not node.has_method("toggle"):
+		_show_toast("Node has no toggle()")
+		return
+	node.call("toggle")
+	var name_: String = item.get("specs", {}).get("name", "Device") as String
+	var state_lbl := "?"
+	if node.get("current_state") != null:
+		state_lbl = "ON" if int(node.get("current_state")) != 0 else "OFF"
+	elif node.get("is_on") != null:
+		state_lbl = "ON" if bool(node.get("is_on")) else "OFF"
+	_show_toast("%s → %s" % [name_, state_lbl])
+	# Force bridge to refresh device state immediately
+	if _bridge != null:
+		_bridge.call("tick", 1.0)
+
+
+## Create (or reconnect) the SolarBridge when solar_ui becomes available.
+func _init_bridge() -> void:
+	if not is_instance_valid(_solar_ui):
+		return
+	if _bridge == null:
+		_bridge = _BRIDGE_SCRIPT.new()
+	_bridge.call("setup", model, _solar_ui)
+	# Restore any user-deleted virtual IDs so the bridge does not re-create them.
+	_bridge.suppressed_ids = _suppressed_virtuals
+
+
+# ---------------------------------------------------------------------------
+# Historical playback (HA history → graph scrubber)
+# ---------------------------------------------------------------------------
+
+const _HISTORY_HOURS_BACK := 72       # 3 days
+const _HISTORY_SPEEDS: Array = [
+	{"label": "60×",   "x": 60.0},
+	{"label": "300×",  "x": 300.0},
+	{"label": "1500×", "x": 1500.0},
+	{"label": "3600×", "x": 3600.0},
+]
+
+
+func _ensure_history_player() -> void:
+	if _history_player != null and is_instance_valid(_history_player):
+		return
+	var ha_client := _resolve_ha_client_node()
+	_history_player = _HISTORY_PLAYER_SCRIPT.new()
+	_history_player.name = "HistoryPlayer"
+	add_child(_history_player)
+	_history_player.call("setup", model, _ha_linker, ha_client)
+	_history_player.state_changed.connect(_on_history_state_changed)
+	_history_player.loading_progress.connect(_on_history_loading_progress)
+	_history_player.data_ready.connect(_on_history_data_ready)
+	_history_player.playback_progress.connect(_on_history_playback_progress)
+
+
+func _resolve_ha_client_node() -> Node:
+	var tr := get_tree()
+	if tr == null:
+		return null
+	var direct := tr.root.get_node_or_null("HAClient")
+	if direct != null:
+		return direct
+	for c in tr.root.get_children():
+		var nested := c.get_node_or_null("HAClient")
+		if nested != null:
+			return nested
+	return null
+
+
+func _on_history_btn_pressed() -> void:
+	_ensure_history_player()
+	# Toggle: if a session is active, stop & hide.  Otherwise start a fresh
+	# 3-day playback at 60× speed.
+	var st: int = int(_history_player.call("get_state"))
+	if st in [_history_player.State.PLAYING, _history_player.State.PAUSED,
+			_history_player.State.LOADING, _history_player.State.READY]:
+		_history_player.stop()
+		_hide_history_panel()
+		return
+	_ensure_history_panel()
+	_history_panel.visible = true
+	_apply_layout()
+	_history_player.start({
+		"hours_back": _HISTORY_HOURS_BACK,
+		"speed_x":    60.0,
+	})
+	if _history_status_lbl != null:
+		_history_status_lbl.text = "Loading last %d h…" % _HISTORY_HOURS_BACK
+
+
+func _ensure_history_panel() -> void:
+	if _history_panel != null and is_instance_valid(_history_panel):
+		return
+	_history_panel = PanelContainer.new()
+	_history_panel.visible = false
+	_history_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var sb := StyleBoxFlat.new()
+	sb.bg_color              = Color(0.05, 0.07, 0.13, 0.98)
+	sb.set_border_width(SIDE_TOP, 2)
+	sb.border_color          = Color(C_AMBER.r, C_AMBER.g, C_AMBER.b, 0.70)
+	sb.content_margin_left   = 12.0
+	sb.content_margin_right  = 12.0
+	sb.content_margin_top    =  8.0
+	sb.content_margin_bottom =  8.0
+	_history_panel.add_theme_stylebox_override("panel", sb)
+	add_child(_history_panel)
+
+	# Three-zone layout: [left status | center controls | right speed+stop]
+	var outer_hbox := HBoxContainer.new()
+	outer_hbox.add_theme_constant_override("separation", 0)
+	_history_panel.add_child(outer_hbox)
+
+	# ── LEFT: icon + status label ──────────────────────────────────────────
+	var left_zone := HBoxContainer.new()
+	left_zone.add_theme_constant_override("separation", 8)
+	left_zone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_zone.alignment = BoxContainer.ALIGNMENT_BEGIN
+	outer_hbox.add_child(left_zone)
+
+	var icon_lbl := Label.new()
+	icon_lbl.text = "🕒"
+	icon_lbl.add_theme_color_override("font_color", C_AMBER)
+	icon_lbl.add_theme_font_size_override("font_size", 20)
+	icon_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	left_zone.add_child(icon_lbl)
+
+	var status_vbox := VBoxContainer.new()
+	status_vbox.add_theme_constant_override("separation", 0)
+	status_vbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	left_zone.add_child(status_vbox)
+
+	var hist_title := Label.new()
+	hist_title.text = "HA HISTORY PLAYBACK"
+	hist_title.add_theme_color_override("font_color", Color(C_AMBER.r, C_AMBER.g, C_AMBER.b, 0.95))
+	hist_title.add_theme_font_size_override("font_size", 11)
+	status_vbox.add_child(hist_title)
+
+	_history_status_lbl = Label.new()
+	_history_status_lbl.text = "Ready"
+	_history_status_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	_history_status_lbl.add_theme_font_size_override("font_size", 13)
+	_history_status_lbl.custom_minimum_size = Vector2(130.0, 0.0)
+	status_vbox.add_child(_history_status_lbl)
+
+	# ── CENTER: play + slider + time ───────────────────────────────────────
+	var center_zone := HBoxContainer.new()
+	center_zone.add_theme_constant_override("separation", 8)
+	center_zone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center_zone.alignment = BoxContainer.ALIGNMENT_CENTER
+	outer_hbox.add_child(center_zone)
+
+	_history_play_btn = _make_topbar_btn("⏸ Pause")
+	_history_play_btn.custom_minimum_size = Vector2(96.0, 0.0)
+	_restyle_btn_primary(_history_play_btn)
+	_history_play_btn.pressed.connect(_on_history_play_pressed)
+	center_zone.add_child(_history_play_btn)
+
+	_history_slider = HSlider.new()
+	_history_slider.min_value = 0.0
+	_history_slider.max_value = 1.0
+	_history_slider.step      = 0.0001
+	_history_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_history_slider.custom_minimum_size   = Vector2(260.0, 28.0)
+	_history_slider.drag_started.connect(_on_history_slider_drag_started)
+	_history_slider.drag_ended.connect(_on_history_slider_drag_ended)
+	_history_slider.value_changed.connect(_on_history_slider_value_changed)
+	center_zone.add_child(_history_slider)
+
+	_history_time_lbl = Label.new()
+	_history_time_lbl.text = "——"
+	_history_time_lbl.add_theme_color_override("font_color", C_TEXT)
+	_history_time_lbl.add_theme_font_size_override("font_size", 13)
+	_history_time_lbl.custom_minimum_size     = Vector2(184.0, 0.0)
+	_history_time_lbl.horizontal_alignment    = HORIZONTAL_ALIGNMENT_CENTER
+	_history_time_lbl.vertical_alignment      = VERTICAL_ALIGNMENT_CENTER
+	center_zone.add_child(_history_time_lbl)
+
+	# ── RIGHT: speed + stop ────────────────────────────────────────────────
+	var right_zone := HBoxContainer.new()
+	right_zone.add_theme_constant_override("separation", 6)
+	right_zone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right_zone.alignment = BoxContainer.ALIGNMENT_END
+	outer_hbox.add_child(right_zone)
+
+	var speed_lbl := Label.new()
+	speed_lbl.text = "Speed"
+	speed_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	speed_lbl.add_theme_font_size_override("font_size", 11)
+	speed_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	right_zone.add_child(speed_lbl)
+
+	_history_speed_opt = OptionButton.new()
+	_history_speed_opt.focus_mode = Control.FOCUS_NONE
+	_history_speed_opt.add_theme_font_size_override("font_size", 13)
+	_history_speed_opt.custom_minimum_size = Vector2(90.0, 0.0)
+	for i: int in _HISTORY_SPEEDS.size():
+		_history_speed_opt.add_item(str(_HISTORY_SPEEDS[i].get("label", "")), i)
+	_history_speed_opt.select(0)
+	_history_speed_opt.item_selected.connect(_on_history_speed_changed)
+	right_zone.add_child(_history_speed_opt)
+
+	_history_stop_btn = _make_topbar_btn("■ Stop")
+	_restyle_btn_amber(_history_stop_btn)
+	_history_stop_btn.pressed.connect(_on_history_stop_pressed)
+	right_zone.add_child(_history_stop_btn)
+
+
+func _hide_history_panel() -> void:
+	if _history_panel != null and is_instance_valid(_history_panel):
+		_history_panel.visible = false
+	_apply_layout()
+
+
+func _layout_history_panel() -> void:
+	if _history_panel == null or not is_instance_valid(_history_panel) \
+			or not _history_panel.visible:
+		return
+	var left_w  := SIDEBAR_L_W if _sidebar_l_open else 0.0
+	var right_w := SIDEBAR_R_W if _sidebar_r_open else 0.0
+	_anchor(_history_panel, 0.0, 1.0, 1.0, 1.0,
+		left_w, -(TIMELINE_H + HISTORY_PANEL_H), -right_w, -TIMELINE_H)
+
+
+func _on_history_state_changed(s: int) -> void:
+	if _history_player == null:
+		return
+	if _history_play_btn != null:
+		match s:
+			_history_player.State.PLAYING:
+				_history_play_btn.text = "⏸ Pause"
+			_history_player.State.PAUSED, _history_player.State.READY:
+				_history_play_btn.text = "▶ Play"
+			_history_player.State.LOADING:
+				_history_play_btn.text = "…"
+			_history_player.State.STOPPED, _history_player.State.IDLE:
+				_history_play_btn.text = "▶ Play"
+	if _history_status_lbl != null:
+		match s:
+			_history_player.State.LOADING:
+				pass   # progress label handled by _on_history_loading_progress
+			_history_player.State.READY:
+				_history_status_lbl.text = "Ready"
+			_history_player.State.PLAYING:
+				_history_status_lbl.text = "Playing %.0f×" % _history_player.get_speed()
+			_history_player.State.PAUSED:
+				_history_status_lbl.text = "Paused"
+			_history_player.State.STOPPED:
+				_history_status_lbl.text = "Stopped"
+
+
+func _on_history_loading_progress(loaded: int, total: int) -> void:
+	if _history_status_lbl != null:
+		_history_status_lbl.text = "Loading %d / %d" % [loaded, total]
+
+
+func _on_history_data_ready(start_t: int, end_t: int) -> void:
+	if _history_time_lbl != null:
+		_history_time_lbl.text = "%s … %s" % [
+			Time.get_datetime_string_from_unix_time(start_t),
+			Time.get_datetime_string_from_unix_time(end_t),
+		]
+
+
+func _on_history_playback_progress(cursor_t: int, fraction: float) -> void:
+	if _history_user_seeking:
+		return   # user is dragging — don't fight them
+	if _history_slider != null:
+		# value_changed is connected; suppress feedback by checking the flag
+		# in the handler.  Use set_value_no_signal? HSlider supports it.
+		_history_slider.set_value_no_signal(fraction)
+	if _history_time_lbl != null:
+		_history_time_lbl.text = Time.get_datetime_string_from_unix_time(cursor_t)
+
+
+func _on_history_play_pressed() -> void:
+	if _history_player == null:
+		return
+	_history_player.toggle_play()
+
+
+func _on_history_stop_pressed() -> void:
+	if _history_player != null:
+		_history_player.stop()
+	_hide_history_panel()
+
+
+func _on_history_speed_changed(idx: int) -> void:
+	if _history_player == null:
+		return
+	if idx < 0 or idx >= _HISTORY_SPEEDS.size():
+		return
+	var x: float = float(_HISTORY_SPEEDS[idx].get("x", 60.0))
+	_history_player.set_speed(x)
+	# Refresh status text
+	_on_history_state_changed(int(_history_player.call("get_state")))
+
+
+func _on_history_slider_drag_started() -> void:
+	_history_user_seeking = true
+
+
+func _on_history_slider_drag_ended(_value_changed: bool) -> void:
+	_history_user_seeking = false
+	if _history_player != null:
+		_history_player.seek(_history_slider.value)
+
+
+func _on_history_slider_value_changed(_v: float) -> void:
+	# Scrub instantly while dragging so the user gets feedback.
+	if _history_user_seeking and _history_player != null:
+		_history_player.seek(_history_slider.value)
+
+
+# ---------------------------------------------------------------------------
+# Mouse-capture management  (preserves existing 3D camera behaviour)
+# ---------------------------------------------------------------------------
+
+func _apply_mouse_for_graph(graph_open: bool) -> void:
+	var parent := get_parent()
+	if parent == null:
+		return
+	var main_node := parent.get_parent() as Node3D
+	if main_node == null:
+		return
+	var player := main_node.get_node_or_null("Player")
+	if player == null:
+		return
+
+	if graph_open:
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		if "is_mouse_captured" in player:
+			player.is_mouse_captured = false
+		return
+
+	if _other_ui_needs_free_mouse():
+		return
+
+	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	if "is_mouse_captured" in player:
+		player.is_mouse_captured = true
+
+
+func _other_ui_needs_free_mouse() -> bool:
+	var ul := get_parent()
+	if ul == null:
+		return false
+	var time_ui := ul.get_node_or_null("TimeUI")
+	if time_ui != null and time_ui.get("ui_visible") == true:
+		return true
+	var sl := ul.get_node_or_null("SaveLoadUI")
+	if sl != null and sl.has_method("is_panel_visible") and sl.is_panel_visible():
+		return true
+	var go_ui := ul.get_node_or_null("GameOverUI")
+	if go_ui is CanvasItem and (go_ui as CanvasItem).visible:
+		return true
+	var ha_conn := ul.get_node_or_null("HAConnectionUI")
+	if ha_conn is Control and (ha_conn as Control).visible:
+		return true
+	return false
+
+
+# ---------------------------------------------------------------------------
+# Model events
+# ---------------------------------------------------------------------------
+
+func _on_model_changed(reason: String) -> void:
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	_refresh_telemetry()
+	# Record structural user changes in the undo history
+	if _history != null and _history_initialized and not _history_suppress:
+		if reason in HISTORY_REASONS:
+			_push_history()
+			_update_undo_redo_btns()
+		if GRAPH_AUTOSAVE_REASONS.has(reason):
+			_schedule_graph_autosave()
+	call_deferred("_populate_library_scene_devices")
+
+
+# ---------------------------------------------------------------------------
+# Undo / Redo  (Phase 14)
+# ---------------------------------------------------------------------------
+
+## Save the current model state onto the undo stack.
+func _push_history() -> void:
+	if _history == null or model == null:
+		return
+	_history.call("push", model.serialize())
+
+
+## Restore the previous model state.
+func _do_undo() -> void:
+	if _history == null:
+		return
+	var snap: Dictionary = _history.call("undo") as Dictionary
+	if snap.is_empty():
+		_show_toast("Nothing to undo", 1.5)
+		return
+	_history_suppress = true
+	model.deserialize(snap)
+	_history_suppress = false
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	_refresh_telemetry()
+	_update_undo_redo_btns()
+	_show_toast("Undo", 1.2)
+
+
+## Restore the next model state (after an undo).
+func _do_redo() -> void:
+	if _history == null:
+		return
+	var snap: Dictionary = _history.call("redo") as Dictionary
+	if snap.is_empty():
+		_show_toast("Nothing to redo", 1.5)
+		return
+	_history_suppress = true
+	model.deserialize(snap)
+	_history_suppress = false
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	_refresh_telemetry()
+	_update_undo_redo_btns()
+	_show_toast("Redo", 1.2)
+
+
+## Refresh the disabled / enabled visual state of the Undo and Redo buttons.
+func _update_undo_redo_btns() -> void:
+	if _history == null:
+		return
+	if _undo_btn != null:
+		_undo_btn.disabled = not bool(_history.call("can_undo"))
+		_undo_btn.modulate = Color(1, 1, 1, 0.45 if _undo_btn.disabled else 1.0)
+	if _redo_btn != null:
+		_redo_btn.disabled = not bool(_history.call("can_redo"))
+		_redo_btn.modulate = Color(1, 1, 1, 0.45 if _redo_btn.disabled else 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Build-mode telemetry & cost  (Phase 10)
+# ---------------------------------------------------------------------------
+
+func _refresh_telemetry() -> void:
+	if model == null:
+		return
+
+	# ── Aggregate panels ────────────────────────────────────────────────────
+	var agg := _collect_root_array_aggregate()
+	var panel_wmp:     float = float(agg.get("panel_wmp", 0.0))
+	var panel_voc_max: float = float(agg.get("panel_voc_max", 0.0))
+	var panel_imp:     float = float(agg.get("panel_imp", 0.0))
+	var panel_count:   int   = int(agg.get("panel_count", 0))
+
+	# ── Aggregate batteries ─────────────────────────────────────────────────
+	var bat_kwh:   float = 0.0
+	var bat_ah:    float = 0.0
+	var bat_v_set: Array = []     # unique voltages seen
+
+	# ── Aggregate controllers ────────────────────────────────────────────────
+	var ctrl_max_watts: float = 0.0
+
+	# ── Cost buckets ─────────────────────────────────────────────────────────
+	var cost_panels:      float = 0.0
+	var cost_controllers: float = 0.0
+	var cost_batteries:   float = 0.0
+	var cost_components:  float = 0.0
+
+	for item: Dictionary in model.get_items_in_scope("root"):
+		if bool(item.get("is_virtual", false)):
+			continue
+		var itype: String    = item.get("type",  "") as String
+		var specs: Dictionary = item.get("specs", {})
+		var cost: float      = float(specs.get("cost", 0.0))
+
+		match itype:
+			"panel":
+				cost_panels += cost
+			"compound":
+				if str(specs.get("compound_kind", "")) == "array":
+					cost_panels += cost
+
+			"battery", "smartbattery":
+				bat_kwh     += float(specs.get("kwh",     0.0))
+				bat_ah      += float(specs.get("ah",      0.0))
+				var bv: float = float(specs.get("voltage", 0.0))
+				if bv > 0.0 and not bat_v_set.has(bv):
+					bat_v_set.append(bv)
+				cost_batteries += cost
+
+			"controller":
+				ctrl_max_watts += float(specs.get("max_pv_watts", 0.0))
+				cost_controllers += cost
+
+			_:
+				cost_components += cost
+
+	# Wire costs
+	var cost_wires: float = 0.0
+	for conn: Dictionary in model.connections:
+		cost_wires += float(conn.get("total_wire_cost", 0.0))
+
+	var cost_total: float = cost_panels + cost_controllers + cost_batteries + cost_components + cost_wires
+
+	# ── Derived metrics ──────────────────────────────────────────────────────
+
+	# Optimization: how much of controller capacity is filled by panels
+	var optimization: float = 0.0
+	if ctrl_max_watts > 0.0:
+		optimization = minf(100.0, (panel_wmp / ctrl_max_watts) * 100.0)
+
+	# Battery voltage string
+	var bat_v_str: String
+	match bat_v_set.size():
+		0: bat_v_str = "—"
+		1: bat_v_str = "%.0fV" % float(bat_v_set[0])
+		_: bat_v_str = "Mixed"
+
+	# Battery config: count × voltage (or kWh if voltages differ)
+	var bat_count: int = 0
+	for item: Dictionary in model.get_items_in_scope("root"):
+		if bool(item.get("is_virtual", false)):
+			continue
+		if item.get("type", "") in ["battery", "smartbattery"]:
+			bat_count += 1
+	var bat_config: String
+	if bat_count == 0:
+		bat_config = "—"
+	elif bat_v_set.size() == 1:
+		bat_config = "%d × %.0fV" % [bat_count, float(bat_v_set[0])]
+	else:
+		bat_config = "%d batteries" % bat_count
+
+	# Array config: panel count
+	var array_config: String = str(agg.get("array_config", "—"))
+
+	# ── Update telemetry labels ──────────────────────────────────────────────
+	_set_score("scoreArrayWmp",      "%.0f W"  % panel_wmp if panel_count > 0 else "—")
+	_set_score("scoreArrayVoc",      "%.1f V"  % panel_voc_max if panel_count > 0 else "—")
+	_set_score("scoreArrayImp",      "%.2f A"  % panel_imp if panel_count > 0 else "—")
+	_set_score("scoreArrayConfig",   array_config)
+	_set_score("scoreBattery",       "%.2f kWh" % bat_kwh if bat_count > 0 else "—")
+	_set_score("scoreBatteryConfig", bat_config)
+	_set_score("scoreBatteryVoltage",bat_v_str)
+
+	var opt_str: String = "%.0f %%" % optimization if ctrl_max_watts > 0.0 else "—"
+	_set_score("scoreOptimization",  opt_str)
+	_set_score_color("scoreOptimization",
+		C_AMBER if optimization >= 100.0
+		else (C_PRIMARY if optimization >= 70.0 else C_TEXT_M))
+
+	_set_score("scoreTotalCost", "$%.0f" % cost_total)
+
+	# ── Update cost labels ───────────────────────────────────────────────────
+	_set_score("costPanels",      "$%.2f" % cost_panels)
+	_set_score("costInverter",    "$%.2f" % cost_controllers)
+	_set_score("costBatteries",   "$%.2f" % cost_batteries)
+	_set_score("costComponents",  "$%.2f" % cost_components)
+	_set_score("costWires",       "$%.2f" % cost_wires)
+	_set_score("costTotal",       "$%.2f" % cost_total)
+
+
+func _set_score(key: String, value: String) -> void:
+	if _score_labels.has(key):
+		(_score_labels[key] as Label).text = value
+
+
+func _set_score_color(key: String, color: Color) -> void:
+	if _score_labels.has(key):
+		(_score_labels[key] as Label).add_theme_color_override("font_color", color)
+
+
+func _collect_root_array_aggregate() -> Dictionary:
+	var panel_wmp: float = 0.0
+	var panel_voc_max: float = 0.0
+	var panel_imp: float = 0.0
+	var panel_count: int = 0
+	if model == null:
+		return {"panel_wmp": 0.0, "panel_voc_max": 0.0, "panel_imp": 0.0, "panel_count": 0, "array_config": "—"}
+	for item: Dictionary in model.get_items_in_scope("root"):
+		if bool(item.get("is_virtual", false)):
+			continue
+		var itype := str(item.get("type", ""))
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if itype == "panel":
+			panel_wmp += float(specs.get("wmp", 0.0))
+			panel_voc_max = maxf(panel_voc_max, float(specs.get("voc", 0.0)))
+			panel_imp += float(specs.get("imp", 0.0))
+			panel_count += 1
+		elif itype == "compound" and str(specs.get("compound_kind", "")) == "array":
+			panel_wmp += float(specs.get("array_equiv_wmp", 0.0))
+			panel_voc_max = maxf(panel_voc_max, float(specs.get("array_equiv_voc", 0.0)))
+			panel_imp += float(specs.get("array_equiv_imp", 0.0))
+			panel_count += int(specs.get("array_panel_units", specs.get("child_count", 0)))
+	var cfg := "%d panel%s" % [panel_count, "s" if panel_count != 1 else ""] if panel_count > 0 else "—"
+	return {
+		"panel_wmp": panel_wmp,
+		"panel_voc_max": panel_voc_max,
+		"panel_imp": panel_imp,
+		"panel_count": panel_count,
+		"array_config": cfg,
+	}
+
+
+
+
+# ---------------------------------------------------------------------------
+# Save / Load  (matches solar_ui pattern used in main.gd)
+# ---------------------------------------------------------------------------
+
+func collect_save_state() -> Dictionary:
+	var pan  := Vector2.ZERO
+	var zoom := 1.0
+	if _graph_canvas != null:
+		pan  = _graph_canvas.get("_pan") if _graph_canvas.get("_pan") != null else Vector2.ZERO
+		zoom = float(_graph_canvas.get("_zoom")) if _graph_canvas.get("_zoom") != null else 1.0
+
+	return {
+		"graph":               model.serialize() if model != null else {},
+		"sidebar_l_open":      _sidebar_l_open,
+		"sidebar_r_open":      _sidebar_r_open,
+		"mode":                _mode,
+		"active_scope_id":     _active_scope_id,
+		"scope_trail":         _scope_trail.duplicate(),
+		"canvas_pan_x":        pan.x,
+		"canvas_pan_y":        pan.y,
+		"canvas_zoom":         zoom,
+		"suppressed_virtuals": _suppressed_virtuals.duplicate(),
+	}
+
+
+func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
+	if data.is_empty():
+		return
+
+	var preserve_positions := bool(options.get("preserve_positions", false))
+	var position_backup: Dictionary = {}
+	if preserve_positions and model != null:
+		for item: Dictionary in model.items:
+			var iid: String = str(item.get("id", ""))
+			if iid.is_empty():
+				continue
+			position_backup[iid] = Vector2(float(item.get("x", 0.0)), float(item.get("y", 0.0)))
+
+	# Restore graph model (suppress history — a fresh baseline is pushed below)
+	_history_suppress = true
+	var graph_d: Variant = data.get("graph", {})
+	if graph_d is Dictionary and not (graph_d as Dictionary).is_empty():
+		if model != null:
+			model.deserialize(graph_d as Dictionary)
+	if preserve_positions and not position_backup.is_empty():
+		for iid: String in position_backup.keys():
+			if model.get_item(iid).is_empty():
+				continue
+			var pos: Vector2 = position_backup[iid] as Vector2
+			model.update_item(iid, {"x": pos.x, "y": pos.y})
+	_history_suppress = false
+	# Reset undo/redo so the loaded state becomes the new baseline
+	if _history != null:
+		_history.call("clear")
+		_history_initialized = false   # re-push initial on next _process() tick
+	_update_undo_redo_btns()
+
+	# Recreate sim-load proxies for every non-virtual load item and refresh
+	# their device_paths BEFORE we re-register automations — otherwise any
+	# SceneNodeActions wired up below would still point at stale paths.
+	if _sim_load_host != null and _sim_load_host.has_method("refresh"):
+		_sim_load_host.call("refresh")
+
+	if _resource_flow != null and _resource_flow.has_method("clear_timelines"):
+		_resource_flow.call("clear_timelines")
+
+	call_deferred("_init_conduit_manager")
+	call_deferred("_init_placeholder_host")
+
+	# Re-register any saved per-load automations with the engine so they fire
+	# immediately on load (the engine state itself isn't persisted; we rebuild
+	# it from the graph's specs).
+	if _inspector_panel != null and _inspector_panel.has_method("sync_all_load_automations"):
+		_inspector_panel.call("sync_all_load_automations", model)
+
+	# Restore user-deleted virtual IDs so bridge does not re-create them.
+	var sv: Variant = data.get("suppressed_virtuals", {})
+	_suppressed_virtuals = sv as Dictionary if sv is Dictionary else {}
+	if _bridge != null:
+		_bridge.suppressed_ids = _suppressed_virtuals
+
+	# Restore sidebar / mode state
+	_sidebar_l_open = bool(data.get("sidebar_l_open", true))
+	_sidebar_r_open = bool(data.get("sidebar_r_open", true))
+	_mode           = str(data.get("mode", "build"))
+	_active_scope_id = str(data.get("active_scope_id", "root"))
+	var tr: Variant = data.get("scope_trail", ["root"])
+	_scope_trail.clear()
+	if tr is Array:
+		for sid_v: Variant in (tr as Array):
+			var sid: String = str(sid_v)
+			if sid.is_empty():
+				continue
+			_scope_trail.append(sid)
+	if _scope_trail.is_empty():
+		_scope_trail.append("root")
+
+	_apply_layout()
+	_set_mode_btn_style(_build_btn, _mode == "build")
+	_set_mode_btn_style(_test_btn,  _mode == "test")
+
+	# Restore canvas viewport
+	if _graph_canvas != null:
+		_graph_canvas.set("_pan",  Vector2(
+			float(data.get("canvas_pan_x", 0.0)),
+			float(data.get("canvas_pan_y", 0.0))
+		))
+		_graph_canvas.set("_zoom", float(data.get("canvas_zoom", 1.0)))
+		_graph_canvas.set("active_scope_id", _active_scope_id)
+		_graph_canvas.call("queue_redraw")
+
+	_refresh_telemetry()
+	_update_scope_breadcrumb()
+
+	# Subscribe to any ha_links already saved in the graph (e.g. Shelly 4PM
+	# nodes created from the preset that carry pre-filled entity IDs).
+	if _ha_linker != null and _ha_linker.has_method("refresh_subscriptions"):
+		_ha_linker.call_deferred("refresh_subscriptions")
+
+
+# ---------------------------------------------------------------------------
+# Layout helpers
+# ---------------------------------------------------------------------------
+
+func _anchor(ctrl: Control,
+		al: float, at: float, ar: float, ab: float,
+		ol: float, ot: float, or_: float, ob: float) -> void:
+	ctrl.anchor_left   = al;  ctrl.anchor_top    = at
+	ctrl.anchor_right  = ar;  ctrl.anchor_bottom = ab
+	ctrl.offset_left   = ol;  ctrl.offset_top    = ot
+	ctrl.offset_right  = or_; ctrl.offset_bottom = ob
+
+
+func _anchor_full(ctrl: Control) -> void:
+	_anchor(ctrl, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0)
+
+
+func _hspacer() -> Control:
+	var s := Control.new()
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.mouse_filter          = Control.MOUSE_FILTER_IGNORE
+	return s
+
+
+# ---------------------------------------------------------------------------
+# Wind / hydro graph items — live output refresh
+# ---------------------------------------------------------------------------
+
+const _RENEWABLES_POLL_INTERVAL := 0.25  # matches SolarBridge cadence
+var _renewables_acc: float = _RENEWABLES_POLL_INTERVAL
+
+
+## Recompute current_output_kw for user-placed "wind" and "hydro" items from
+## their inspector-edited specs and the world clock, using the same physics
+## as the 3D EnergySource nodes (power_kw_from_graph_specs adapters).
+func _tick_graph_renewables(delta: float) -> void:
+	if model == null:
+		return
+	_renewables_acc += delta
+	if _renewables_acc < _RENEWABLES_POLL_INTERVAL:
+		return
+	_renewables_acc = 0.0
+
+	var hour := 12.0
+	var month := 6
+	var day := 15
+	var m := _get_scene_main_node()
+	if m != null:
+		var dt: Variant = m.get("day_time")
+		if dt != null:
+			hour = float(dt)
+		var mo: Variant = m.get("month")
+		if mo != null:
+			month = clampi(int(mo), 1, 12)
+		var dd: Variant = m.get("day")
+		if dd != null:
+			day = clampi(int(dd), 1, 31)
+
+	# Real weather inputs (shared by every item this tick): measured 10 m wind
+	# and precipitation-derived flow multipliers, when WeatherService covers
+	# the sim location. NAN / [] keep the items on their synthetic models.
+	var real_wind_10m := NAN
+	var precip_mults: Array = []
+	var ws := get_node_or_null("/root/WeatherService")
+	if ws != null and m != null and ws.has_method("covers"):
+		var lat: Variant = m.get("latitude")
+		var lon: Variant = m.get("longitude")
+		if lat != null and lon != null and bool(ws.call("covers", float(lat), float(lon))):
+			real_wind_10m = float(ws.call("wind_speed_ms", month, day, hour))
+			precip_mults = ws.call("monthly_precip_multipliers") as Array
+
+	for item: Dictionary in model.items:
+		var ty: String = item.get("type", "") as String
+		if ty != "wind" and ty != "hydro" and ty != "panel":
+			continue
+		var iid: String = item.get("id", "") as String
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var scene_path: String = str(specs.get("scene_device_path", item.get("device_path", "")))
+		if not scene_path.is_empty():
+			var scene_node: Node = get_tree().root.get_node_or_null(NodePath(scene_path))
+			if scene_node != null and scene_node.has_method("get_current_power_kw"):
+				var kw: float = maxf(0.0, float(scene_node.call("get_current_power_kw")))
+				if absf(float(specs.get("current_output_kw", 0.0)) - kw) >= 0.0005:
+					specs["current_output_kw"] = kw
+					model.update_item(iid, {"specs": specs, "device_path": scene_path})
+				continue
+		if ty == "panel":
+			continue
+		var kw := 0.0
+		if ty == "wind":
+			kw = WindTurbineSource.power_kw_from_graph_specs(specs, hour, real_wind_10m)
+		else:
+			kw = HydroSource.power_kw_from_graph_specs(specs, month, precip_mults)
+		if absf(float(specs.get("current_output_kw", 0.0)) - kw) < 0.0005:
+			continue
+		specs["current_output_kw"] = kw
+		model.update_item(iid, {"specs": specs})
+
+
+# ---------------------------------------------------------------------------
+# Make Array quick button (floats over a multi-selection of array candidates)
+# ---------------------------------------------------------------------------
+
+var _make_array_quick_btn: Button = null
+
+
+func _build_make_array_quick_button() -> void:
+	_make_array_quick_btn = Button.new()
+	_make_array_quick_btn.text = "Make Array"
+	_make_array_quick_btn.custom_minimum_size = Vector2(108.0, 28.0)
+	_make_array_quick_btn.visible = false
+	_make_array_quick_btn.focus_mode = Control.FOCUS_NONE
+	_make_array_quick_btn.mouse_filter = Control.MOUSE_FILTER_STOP
+	_make_array_quick_btn.add_theme_font_size_override("font_size", 11)
+	_make_array_quick_btn.pressed.connect(func() -> void:
+		_on_make_array_pressed()
+		_update_make_array_quick_button()
+	)
+	add_child(_make_array_quick_btn)
+
+
+func _selection_screen_bounds(ids: Array[String]) -> Rect2:
+	var c := _graph_canvas as Control
+	if c == null:
+		return Rect2()
+	var pan := c.get("_pan") as Vector2
+	var zoom := float(c.get("_zoom"))
+	var canvas_center := c.size * 0.5
+	var min_x := 1e20
+	var min_y := 1e20
+	var max_x := -1e20
+	var max_y := -1e20
+	for sid: String in ids:
+		var it := model.get_item(sid)
+		if it.is_empty():
+			continue
+		var tl := canvas_center + pan + Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0))) * zoom
+		var sz := Vector2(float(it.get("width", 120.0)), float(it.get("height", 90.0))) * zoom
+		min_x = minf(min_x, tl.x)
+		min_y = minf(min_y, tl.y)
+		max_x = maxf(max_x, tl.x + sz.x)
+		max_y = maxf(max_y, tl.y + sz.y)
+	if min_x > max_x or min_y > max_y:
+		return Rect2()
+	return Rect2(Vector2(min_x, min_y), Vector2(max_x - min_x, max_y - min_y))
+
+
+func _update_make_array_quick_button() -> void:
+	if _make_array_quick_btn == null:
+		return
+	_make_array_quick_btn.visible = false
+	if not visible or model == null or _graph_canvas == null:
+		return
+	var selected := _get_group_candidates(true)
+	if selected.size() < 2:
+		return
+	for sid: String in selected:
+		if not _is_array_candidate(model.get_item(sid)):
+			return
+	var rect := _selection_screen_bounds(selected)
+	if rect.size.length() <= 0.0:
+		return
+	var gc := _graph_canvas as Control
+	var center := rect.position + rect.size * 0.5
+	var btn_size := _make_array_quick_btn.size
+	if btn_size.x <= 0.0:
+		btn_size = _make_array_quick_btn.get_combined_minimum_size()
+	_make_array_quick_btn.position = gc.position + center - Vector2(btn_size.x * 0.5, 34.0)
+	_make_array_quick_btn.visible = true

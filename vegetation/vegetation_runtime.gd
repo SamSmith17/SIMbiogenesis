@@ -1,0 +1,238 @@
+class_name VegetationRuntime
+extends RefCounted
+
+## Rebuilds MultiMesh bulk layers + hero tree instances under a terrain parent.
+
+const VISIBILITY_BEGIN := 0.0
+const VISIBILITY_END := 900.0
+const GRASS_VISIBILITY_END := 380.0
+
+
+static func ensure_root(terrain: Node3D) -> Node3D:
+	var root := terrain.get_node_or_null("Vegetation") as Node3D
+	if root == null:
+		root = Node3D.new()
+		root.name = "Vegetation"
+		terrain.add_child(root)
+	return root
+
+
+static func _clear_shader_registrations() -> void:
+	var tree := Engine.get_main_loop()
+	if tree == null or not (tree is SceneTree):
+		return
+	var root := (tree as SceneTree).root
+	var env := root.get_node_or_null("VegetationEnvironmentSync")
+	if env != null and env.has_method("clear_registered_materials"):
+		env.clear_registered_materials()
+	var wind := root.get_node_or_null("VegetationWindDriver")
+	if wind != null and wind.has_method("clear_registered_materials"):
+		wind.clear_registered_materials()
+
+
+static func _build_grass_bulk_batches(root: Node3D, species: String, records: Array,
+		ground_y_at: Callable, settings: Dictionary) -> void:
+	var species_scale := GrassBuilder.bulk_scale(species, settings)
+	var foot_y := GrassBuilder.foot_local_y()
+	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
+	for tier in [GrassBuilder.LodTier.NEAR, GrassBuilder.LodTier.MID, GrassBuilder.LodTier.FAR]:
+		var mesh := GrassBuilder.mesh_for_lod(species, settings, tier)
+		var mat := GrassBuilder.material_for_species(species, settings, tier)
+		var vis := GrassBuilder.visibility_range_for_tier(tier)
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh
+		mm.instance_count = records.size()
+		var i := 0
+		for item in records:
+			if not (item is Dictionary):
+				continue
+			var d: Dictionary = item
+			var x := float(d.get("x", 0.0))
+			var z := float(d.get("z", 0.0))
+			var yaw := float(d.get("yaw", 0.0))
+			var scale := float(d.get("scale", 1.0)) * species_scale
+			var record_vert := float(d.get("vert_off", vert_off))
+			var gy: float = float(ground_y_at.call(x, z))
+			mm.set_instance_transform(i, VegetationPaint.build_transform(
+				x, gy, z, yaw, scale, false, Vector3.UP, record_vert, foot_y))
+			i += 1
+		mm.instance_count = i
+		if i == 0:
+			continue
+		var mi := MultiMeshInstance3D.new()
+		mi.name = "Bulk_%s_%s" % [species, tier]
+		mi.multimesh = mm
+		mi.material_override = mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.visibility_range_begin = vis.x
+		mi.visibility_range_end = vis.y
+		root.add_child(mi)
+		var tree := Engine.get_main_loop()
+		if tree is SceneTree:
+			var env := (tree as SceneTree).root.get_node_or_null("VegetationEnvironmentSync")
+			if env != null and env.has_method("register_multimesh_instance"):
+				env.register_multimesh_instance(mi, species)
+
+
+static func rebuild(terrain: Node3D, layer: VegetationLayer,
+		ground_y_at: Callable, align_to_surface: bool = false,
+		settings: Dictionary = {}) -> void:
+	if terrain == null or layer == null:
+		return
+	_clear_shader_registrations()
+	var s := layer.get_settings()
+	if not settings.is_empty():
+		s = settings.duplicate(true)
+	var root := ensure_root(terrain)
+	_clear_children(root)
+	for species in VegetationLayer.ALL_SPECIES:
+		_build_bulk_layer(root, species, layer.bulk.get(species, []), ground_y_at,
+			align_to_surface, s)
+	_build_hero_layer(root, layer.hero, ground_y_at, s)
+
+
+static func _clear_children(root: Node3D) -> void:
+	for child in root.get_children():
+		child.queue_free()
+
+
+static func _visibility_end_for_species(species: String) -> float:
+	if species in VegetationLayer.GRASS_SPECIES:
+		return GRASS_VISIBILITY_END
+	return VISIBILITY_END
+
+
+static func _casts_shadow(species: String) -> int:
+	if species in VegetationLayer.GRASS_SPECIES:
+		return GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+
+
+static func _build_bulk_layer(root: Node3D, species: String, records: Array,
+		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary) -> void:
+	if records.is_empty():
+		return
+	var batches := _partition_bulk_batches(records, settings)
+	for batch in batches:
+		_build_bulk_batch(root, species, batch["records"], ground_y_at, align_to_surface, batch["settings"])
+
+
+static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -> Array:
+	var groups: Dictionary = {}
+	for item in records:
+		if not (item is Dictionary):
+			continue
+		var d: Dictionary = item
+		var s := base_settings.duplicate()
+		if d.has("vert_off"):
+			s["vertical_offset_m"] = float(d["vert_off"])
+		var card: Variant = d.get("card_settings", {})
+		if card is Dictionary and not (card as Dictionary).is_empty():
+			s.merge(card, true)
+		var key := hash(s)
+		if key not in groups:
+			groups[key] = {"settings": s, "records": []}
+		(groups[key]["records"] as Array).append(d)
+	var out: Array = []
+	for key in groups:
+		out.append(groups[key])
+	return out
+
+
+static func _build_bulk_batch(root: Node3D, species: String, records: Array,
+		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary) -> void:
+	if records.is_empty():
+		return
+	if species in VegetationLayer.GRASS_SPECIES:
+		_build_grass_bulk_batches(root, species, records, ground_y_at, settings)
+		return
+	var mesh := VegetationCardFactory.mesh_for_species(species, settings)
+	var use_surface := VegetationCardFactory.mesh_has_surface_materials(species)
+	var mat: ShaderMaterial = null
+	if not use_surface:
+		mat = VegetationCardFactory.material_for_species(species, settings)
+	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
+	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
+	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = records.size()
+	var i := 0
+	for item in records:
+		if not (item is Dictionary):
+			continue
+		var d: Dictionary = item
+		var x := float(d.get("x", 0.0))
+		var z := float(d.get("z", 0.0))
+		var yaw := float(d.get("yaw", 0.0))
+		var scale := float(d.get("scale", 1.0)) * species_scale
+		var record_vert := float(d.get("vert_off", vert_off))
+		var gy: float = float(ground_y_at.call(x, z))
+		mm.set_instance_transform(i, VegetationPaint.build_transform(
+			x, gy, z, yaw, scale, align_to_surface, Vector3.UP, record_vert, foot_y))
+		i += 1
+	mm.instance_count = i
+	if i == 0:
+		return
+	var mi := MultiMeshInstance3D.new()
+	mi.name = "Bulk_%s" % species
+	mi.multimesh = mm
+	if use_surface:
+		mi.material_override = null
+	else:
+		mi.material_override = mat
+	mi.cast_shadow = _casts_shadow(species)
+	mi.visibility_range_begin = VISIBILITY_BEGIN
+	mi.visibility_range_end = _visibility_end_for_species(species)
+	root.add_child(mi)
+	var tree := Engine.get_main_loop()
+	if tree is SceneTree:
+		var env := (tree as SceneTree).root.get_node_or_null("VegetationEnvironmentSync")
+		if env != null and env.has_method("register_multimesh_instance"):
+			env.register_multimesh_instance(mi, species)
+
+
+static func _build_hero_layer(root: Node3D, records: Array,
+		ground_y_at: Callable, settings: Dictionary) -> void:
+	if records.is_empty():
+		return
+	var heroes := Node3D.new()
+	heroes.name = "HeroTrees"
+	root.add_child(heroes)
+	var vert_off := float(settings.get("vertical_offset_m", 0.0))
+	var idx := 0
+	for item in records:
+		if not (item is Dictionary):
+			continue
+		var d: Dictionary = item
+		var preset := str(d.get("preset", "pine_1"))
+		var scene := HeroTreeCatalog.load_scene(preset)
+		if scene == null:
+			continue
+		var inst: Node3D = scene.instantiate() as Node3D
+		if inst == null:
+			continue
+		var x := float(d.get("x", 0.0))
+		var z := float(d.get("z", 0.0))
+		var yaw := float(d.get("yaw", 0.0))
+		var user_scale := float(d.get("scale", 1.0))
+		var gy: float = float(d.get("ground_y", ground_y_at.call(x, z)))
+		var world_scale := HeroTreeCatalog.resolved_hero_scale(preset, user_scale)
+		var foot_y := HeroTreeCatalog.foot_local_y(preset)
+		inst.name = "Hero_%d" % idx
+		heroes.add_child(inst)
+		HeroTreeCatalog.strip_night_glow(inst)
+		inst.scale = Vector3.ONE * world_scale
+		inst.rotation = Vector3(0.0, yaw, 0.0)
+		inst.position = Vector3(
+			x,
+			gy + vert_off - foot_y * world_scale - VegetationPaint.GROUND_SINK_M,
+			z)
+		idx += 1
+
+
+static func reground(terrain: Node3D, layer: VegetationLayer,
+		ground_y_at: Callable) -> void:
+	rebuild(terrain, layer, ground_y_at, false)

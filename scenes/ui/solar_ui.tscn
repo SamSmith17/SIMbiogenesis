@@ -1,0 +1,299 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scenes/ui/solar_ui.gd" id="1_script"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.08, 0.1, 0.14, 0.92)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.2, 0.4, 0.6, 0.8)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+shadow_color = Color(0, 0, 0, 0.3)
+shadow_size = 4
+
+[node name="SolarUI" type="Control"]
+anchors_preset = 0
+offset_left = 12.0
+offset_top = 10.0
+offset_right = 392.0
+offset_bottom = 620.0
+custom_minimum_size = Vector2(380, 0)
+script = ExtResource("1_script")
+
+[node name="Panel" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 1
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="MarginContainer" type="MarginContainer" parent="Panel"]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 12
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="TitleLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+clip_text = true
+theme_override_colors/font_color = Color(0.4, 0.8, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.5)
+theme_override_constants/outline_size = 2
+theme_override_font_sizes/font_size = 20
+text = "⚡ POWER SCOREBOARD"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxFlat_panel")
+
+[node name="ScoreboardHeader" type="Label" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.65, 0.8, 1)
+theme_override_font_sizes/font_size = 10
+text = "DAILY SOLAR (kWh)"
+horizontal_alignment = 1
+
+[node name="ScoreboardRow" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 12
+
+[node name="ColToday" type="VBoxContainer" parent="Panel/MarginContainer/VBoxContainer/ScoreboardRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+
+[node name="Hdr" type="Label" parent="Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColToday"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.6, 0.65, 1)
+theme_override_font_sizes/font_size = 9
+text = "TODAY"
+horizontal_alignment = 1
+
+[node name="ScoreboardToday" type="Label" parent="Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColToday"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4, 0.95, 0.5, 1)
+theme_override_font_sizes/font_size = 17
+text = "0.0"
+horizontal_alignment = 1
+
+[node name="ColPrev" type="VBoxContainer" parent="Panel/MarginContainer/VBoxContainer/ScoreboardRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+
+[node name="Hdr2" type="Label" parent="Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColPrev"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.6, 0.65, 1)
+theme_override_font_sizes/font_size = 9
+text = "YESTERDAY"
+horizontal_alignment = 1
+
+[node name="ScoreboardPrev" type="Label" parent="Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColPrev"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.75, 0.8, 0.88, 1)
+theme_override_font_sizes/font_size = 17
+text = "0.0"
+horizontal_alignment = 1
+
+[node name="ColBest" type="VBoxContainer" parent="Panel/MarginContainer/VBoxContainer/ScoreboardRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+
+[node name="Hdr3" type="Label" parent="Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColBest"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.6, 0.65, 1)
+theme_override_font_sizes/font_size = 9
+text = "BEST DAY"
+horizontal_alignment = 1
+
+[node name="ScoreboardBest" type="Label" parent="Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColBest"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.75, 0.2, 1)
+theme_override_font_sizes/font_size = 17
+text = "0.0"
+horizontal_alignment = 1
+
+[node name="BatteryLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+theme_override_font_sizes/font_size = 12
+text = "BATTERY"
+
+[node name="BatteryContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="BatteryBar" type="ProgressBar" parent="Panel/MarginContainer/VBoxContainer/BatteryContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 1
+custom_minimum_size = Vector2(0, 22)
+max_value = 100.0
+value = 50.0
+show_percentage = false
+
+[node name="BatteryPercent" type="Label" parent="Panel/MarginContainer/VBoxContainer/BatteryContainer"]
+custom_minimum_size = Vector2(55, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 16
+text = "50%"
+horizontal_alignment = 2
+
+[node name="BatteryKwhLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_font_sizes/font_size = 11
+text = "16.0 / 32 kWh"
+horizontal_alignment = 1
+
+[node name="HSeparator2" type="HSeparator" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxFlat_panel")
+
+[node name="SolarContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="SolarIcon" type="Label" parent="Panel/MarginContainer/VBoxContainer/SolarContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.9, 0.2, 1)
+theme_override_font_sizes/font_size = 16
+text = "☀"
+
+[node name="SolarLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/SolarContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.8, 0.8, 0.8, 1)
+theme_override_font_sizes/font_size = 14
+text = "  Solar in"
+
+[node name="SolarValue" type="Label" parent="Panel/MarginContainer/VBoxContainer/SolarContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.9, 0.2, 1)
+theme_override_font_sizes/font_size = 16
+text = "0.00 kW"
+horizontal_alignment = 2
+
+[node name="PotentialContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="PotIcon" type="Label" parent="Panel/MarginContainer/VBoxContainer/PotentialContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.35, 0.95, 0.4, 1)
+theme_override_font_sizes/font_size = 16
+text = "⬡"
+
+[node name="PotentialLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/PotentialContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.75, 0.8, 0.82, 1)
+theme_override_font_sizes/font_size = 12
+text = "  Max capture"
+
+[node name="PotentialValue" type="Label" parent="Panel/MarginContainer/VBoxContainer/PotentialContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.35, 0.95, 0.4, 1)
+theme_override_font_sizes/font_size = 16
+text = "0.00 kW"
+horizontal_alignment = 2
+
+[node name="LoadContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="LoadIcon" type="Label" parent="Panel/MarginContainer/VBoxContainer/LoadContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.5, 0.3, 1)
+theme_override_font_sizes/font_size = 16
+text = "💡"
+
+[node name="LoadLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/LoadContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.8, 0.8, 0.8, 1)
+theme_override_font_sizes/font_size = 14
+text = "  Load"
+
+[node name="LoadValue" type="Label" parent="Panel/MarginContainer/VBoxContainer/LoadContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.5, 0.3, 1)
+theme_override_font_sizes/font_size = 16
+text = "0.00 kW"
+horizontal_alignment = 2
+
+[node name="HSeparator3" type="HSeparator" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="NetContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="NetIcon" type="Label" parent="Panel/MarginContainer/VBoxContainer/NetContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.3, 1, 0.3, 1)
+theme_override_font_sizes/font_size = 16
+text = "⚡"
+
+[node name="NetLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/NetContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.8, 0.8, 0.8, 1)
+theme_override_font_sizes/font_size = 14
+text = "  Net"
+
+[node name="NetValue" type="Label" parent="Panel/MarginContainer/VBoxContainer/NetContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.3, 1, 0.3, 1)
+theme_override_font_sizes/font_size = 18
+text = "+0.00 kW"
+horizontal_alignment = 2
+
+[node name="StatusLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_font_sizes/font_size = 14
+text = "— IDLE"
+horizontal_alignment = 1
+
+[node name="HSeparator4" type="HSeparator" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="GraphTitleContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="GraphTitle" type="Label" parent="Panel/MarginContainer/VBoxContainer/GraphTitleContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+theme_override_font_sizes/font_size = 11
+text = "SOLAR OUTPUT (24h)"
+
+[node name="SolarGraphContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="SolarGraph" type="Control" parent="Panel/MarginContainer/VBoxContainer/SolarGraphContainer"]
+custom_minimum_size = Vector2(240, 80)
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="GraphPeakLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/SolarGraphContainer"]
+custom_minimum_size = Vector2(70, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.9, 0.2, 1)
+theme_override_font_sizes/font_size = 10
+text = "Peak: 0.0 kW"
+horizontal_alignment = 2
+vertical_alignment = 1

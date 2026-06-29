@@ -1,0 +1,369 @@
+[gd_scene format=3 uid="uid://detsmv1c8fbb0"]
+
+[ext_resource type="Script" uid="uid://qq8hk0hveybu" path="res://scenes/ui/time_ui.gd" id="1_timeui"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.039, 0.055, 0.098, 0.96)
+border_color = Color(0.227, 0.290, 0.420, 1.0)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+shadow_color = Color(0.0, 0.0, 0.0, 0.35)
+shadow_size = 6
+
+[node name="TimeUI" type="Control"]
+layout_mode = 3
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -440.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = -68.0
+grow_horizontal = 0
+grow_vertical = 2
+script = ExtResource("1_timeui")
+
+[node name="Panel" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="MarginContainer" type="MarginContainer" parent="Panel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 14
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 14
+theme_override_constants/margin_bottom = 12
+
+[node name="ScrollContainer" type="ScrollContainer" parent="Panel/MarginContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+vertical_scroll_mode = 3
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 0
+theme_override_constants/separation = 4
+
+[node name="TitleLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.133, 0.827, 0.933, 1.0)
+theme_override_font_sizes/font_size = 14
+text = "☁  World Controls"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="TimeSection" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="TimeSectionLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.133, 0.827, 0.933, 0.8)
+theme_override_font_sizes/font_size = 12
+text = "⏰ Time"
+
+[node name="TimeLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.886, 0.910, 0.941, 1.0)
+theme_override_font_sizes/font_size = 26
+text = "12:00"
+horizontal_alignment = 1
+
+[node name="DateLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+theme_override_font_sizes/font_size = 13
+text = "Jan 1, 2024"
+horizontal_alignment = 1
+
+[node name="LiveModeCheckbox" type="CheckBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection"]
+layout_mode = 2
+text = "📡 Live Mode (sync with real time)"
+tooltip_text = "Enable to sync game time with real-world time and view live Home Assistant data"
+
+[node name="LiveModeStatus" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "🎮 Simulation Mode"
+horizontal_alignment = 1
+
+[node name="GameplayToggle" type="CheckBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection"]
+layout_mode = 2
+button_pressed = true
+text = "🎮 Survival Mode (health, fire, damage)"
+tooltip_text = "Toggle gameplay mechanics on/off. Auto-disables when time is accelerated."
+
+[node name="GameplayStatus" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = ""
+horizontal_alignment = 1
+
+[node name="HSeparator2" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="DateSection" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="DateSectionLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.133, 0.827, 0.933, 0.8)
+theme_override_font_sizes/font_size = 12
+text = "📅 Date"
+
+[node name="DateInputContainer" type="HBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="YearLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection/DateInputContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+text = "Year:"
+
+[node name="YearInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection/DateInputContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 1.0
+max_value = 9999.0
+value = 2024.0
+
+[node name="MonthLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection/DateInputContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+text = "Month:"
+
+[node name="MonthInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection/DateInputContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 1.0
+max_value = 12.0
+value = 1.0
+
+[node name="DayLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection/DateInputContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+text = "Day:"
+
+[node name="DayInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection/DateInputContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 1.0
+max_value = 31.0
+value = 1.0
+
+[node name="HSeparatorDate" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="LocationSection" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="LocationSectionLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.133, 0.827, 0.933, 0.8)
+theme_override_font_sizes/font_size = 12
+text = "🌍 Location"
+
+[node name="LatitudeContainer" type="HBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="LatLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection/LatitudeContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+text = "Lat:"
+
+[node name="LatitudeInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection/LatitudeContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -90.0
+max_value = 90.0
+step = 0.5
+value = 33.5
+suffix = "°"
+
+[node name="LatitudeLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection/LatitudeContainer"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.392, 0.447, 0.545, 1.0)
+theme_override_font_sizes/font_size = 10
+text = "33.36° N (Subtropics)"
+horizontal_alignment = 2
+
+[node name="LongitudeContainer" type="HBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="LonLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection/LongitudeContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+text = "Lon:"
+
+[node name="LongitudeInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection/LongitudeContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -180.0
+max_value = 180.0
+step = 0.5
+value = -115.5
+suffix = "°"
+
+[node name="LongitudeLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection/LongitudeContainer"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.392, 0.447, 0.545, 1.0)
+theme_override_font_sizes/font_size = 10
+text = "115.74° W"
+horizontal_alignment = 2
+
+[node name="AutoDSTCheckbox" type="CheckBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection"]
+layout_mode = 2
+button_pressed = true
+text = "Auto DST (US rules)"
+tooltip_text = "Automatically switch DST on/off based on US rules (2nd Sunday March - 1st Sunday November)"
+
+[node name="ManualDSTCheckbox" type="CheckBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection"]
+layout_mode = 2
+visible = false
+text = "DST Active"
+tooltip_text = "Manually enable/disable Daylight Saving Time"
+
+[node name="DSTStatusLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+theme_override_font_sizes/font_size = 11
+text = "DST: OFF (auto)"
+
+[node name="HSeparator3" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="CloudsSection" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="CloudsSectionLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/CloudsSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.133, 0.827, 0.933, 0.8)
+theme_override_font_sizes/font_size = 12
+text = "☁ Clouds"
+
+[node name="CloudsCutoffLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/CloudsSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+theme_override_font_sizes/font_size = 11
+text = "Cloud Cover (0 = clear)"
+
+[node name="CloudsCutoffSlider" type="HSlider" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/CloudsSection"]
+layout_mode = 2
+max_value = 1.0
+step = 0.01
+value = 0.7
+
+[node name="CloudsWeightLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/CloudsSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+theme_override_font_sizes/font_size = 11
+text = "Storm Darkness"
+
+[node name="CloudsWeightSlider" type="HSlider" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/CloudsSection"]
+layout_mode = 2
+max_value = 1.0
+step = 0.01
+
+[node name="HSeparator4" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="LightingSection" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="LightingSectionLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.133, 0.827, 0.933, 0.8)
+theme_override_font_sizes/font_size = 12
+text = "☀ Sun & Moon"
+
+[node name="SunEnergyLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+theme_override_font_sizes/font_size = 11
+text = "Sun Brightness"
+
+[node name="SunEnergySlider" type="HSlider" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection"]
+layout_mode = 2
+max_value = 3.0
+step = 0.05
+value = 1.0
+
+[node name="ShadowQualityValueLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+theme_override_font_sizes/font_size = 11
+text = "Shadow Quality: High"
+
+[node name="ShadowQualitySlider" type="HSlider" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection"]
+layout_mode = 2
+max_value = 3.0
+step = 1.0
+value = 2.0
+
+[node name="MoonEnergyLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
+theme_override_font_sizes/font_size = 11
+text = "Moon Brightness"
+
+[node name="MoonEnergySlider" type="HSlider" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection"]
+layout_mode = 2
+max_value = 1.0
+step = 0.01
+value = 0.1
+
+[node name="MoonPhaseLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.686, 0.600, 1.000, 1.0)
+theme_override_font_sizes/font_size = 13
+text = "🌑 New Moon"
+horizontal_alignment = 1
+
+[node name="MarginBottom" type="Control" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+custom_minimum_size = Vector2(0, 10)
+layout_mode = 2
+
+[connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection/DateInputContainer/YearInput" to="." method="_on_year_input_value_changed"]
+[connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection/DateInputContainer/MonthInput" to="." method="_on_month_input_value_changed"]
+[connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/DateSection/DateInputContainer/DayInput" to="." method="_on_day_input_value_changed"]
+[connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection/LatitudeContainer/LatitudeInput" to="." method="_on_latitude_input_value_changed"]
+[connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection/LongitudeContainer/LongitudeInput" to="." method="_on_longitude_input_value_changed"]
+[connection signal="toggled" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection/AutoDSTCheckbox" to="." method="_on_auto_dst_checkbox_toggled"]
+[connection signal="toggled" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LocationSection/ManualDSTCheckbox" to="." method="_on_manual_dst_checkbox_toggled"]
+[connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/CloudsSection/CloudsCutoffSlider" to="." method="_on_clouds_cutoff_slider_value_changed"]
+[connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/CloudsSection/CloudsWeightSlider" to="." method="_on_clouds_weight_slider_value_changed"]
+[connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection/SunEnergySlider" to="." method="_on_sun_energy_slider_value_changed"]
+[connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection/ShadowQualitySlider" to="." method="_on_shadow_quality_slider_value_changed"]
+[connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection/MoonEnergySlider" to="." method="_on_moon_energy_slider_value_changed"]
+[connection signal="toggled" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection/LiveModeCheckbox" to="." method="_on_live_mode_checkbox_toggled"]
+[connection signal="toggled" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection/GameplayToggle" to="." method="_on_gameplay_toggle_toggled"]

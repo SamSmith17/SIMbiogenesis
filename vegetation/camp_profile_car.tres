@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="CampScatterProfile" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://vegetation/camp_scatter_profile.gd" id="1_profile"]
+
+[resource]
+script = ExtResource("1_profile")
+class_id = &"car"
+display_name = "Car"
+fallback_color = Color(0.72, 0.78, 0.86, 1)
+fallback_size = Vector3(4.6, 1.6, 1.8)
+min_luma = 0.3
+max_luma = 0.92
+min_saturation = 0.02
+max_saturation = 0.85
+min_value = 0.25
+max_value = 1.0
+min_area_m2 = 4.0
+max_area_m2 = 20.0
+min_aspect_ratio = 1.2
+max_aspect_ratio = 3.2
+confidence_threshold = 0.4
+spacing_radius = 1.9
+expected_footprint_size = Vector2(4.6, 1.8)
+random_yaw_when_square = false
+min_aspect_for_oriented = 1.4
+orientation_snap_degrees = 0.0
+max_yaw_jitter_degrees = 0.0
+y_offset = 0.0
+align_to_surface_normal = false
+use_multimesh = true
+cast_shadows = true

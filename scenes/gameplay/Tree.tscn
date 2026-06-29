@@ -1,0 +1,17 @@
+[gd_scene format=3 uid="uid://c5nb8kagm7pyj"]
+
+[ext_resource type="PackedScene" uid="uid://cviab31ga52yb" path="res://Imported Models/Trees/low_poly_trees_free.glb" id="1_nbyt5"]
+
+[node name="Sketchfab_Scene" unique_id=2028200138 instance=ExtResource("1_nbyt5")]
+
+[node name="Tree-1_1" parent="Sketchfab_model/root/GLTF_SceneRootNode" parent_id_path=PackedInt32Array(89481034) index="1" unique_id=41925946]
+visible = false
+
+[node name="Object_7" parent="Sketchfab_model/root/GLTF_SceneRootNode/Tree-1_1" index="0" unique_id=1076299829]
+visible = false
+
+[node name="Object_8" parent="Sketchfab_model/root/GLTF_SceneRootNode/Tree-1_1" index="1" unique_id=2032524306]
+visible = false
+
+[node name="Tree-2_2" parent="Sketchfab_model/root/GLTF_SceneRootNode" parent_id_path=PackedInt32Array(89481034) index="2" unique_id=1368129694]
+visible = false

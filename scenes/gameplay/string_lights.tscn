@@ -1,0 +1,1049 @@
+[gd_scene format=3 uid="uid://cilqca87mlvo3"]
+
+[ext_resource type="Script" uid="uid://cdxp5pe0gqh" path="res://scenes/gameplay/string_lights.gd" id="1_script"]
+
+[sub_resource type="Curve3D" id="Curve3D_default"]
+_data = {
+"points": PackedVector3Array(-0.15, 0.15, 0, 0.15, -0.15, 0, -2, 2.5, 0, -0.1, -0.2, 0, 0.1, 0.2, 0, 0, 2.3780837, 0, -0.15, 0.15, 0, 0.15, -0.15, 0, 2, 2.5, 0, 0, 0, 0, 0, 0, 0, 2.9473183, 2.4134955, 0.08254838, 0, 0, 0, 0, 0, 0, 3.9299703, 2.5449543, 0.15208316, 0, 0, 0, 0, 0, 0, 4.987838, 2.5311165, 0.23824358, 0, 0, 0, 0, 0, 0, 5.8936224, 2.5241976, 0.31165862, 0, 0, 0, 0, 0, 0, 6.4462347, 2.427333, 0.26837158, 0, 0, 0, 0, 0, 0, 7.115299, 2.458206, 0.120378494, 0, 0, 0, 0, 0, 0, 7.91687, 2.6392024, 0.86013794, 0, 0, 0, 0, 0, 0, 8.349504, 2.4694788, 1.6772574, 0, 0, 0, 0, 0, 0, 9.092697, 2.401841, 2.1884117),
+"tilts": PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+}
+point_count = 12
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_a7o6b"]
+shading_mode = 0
+albedo_color = Color(0.1, 0.085, 0.060000002, 0.1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_sqwex"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_r16br"]
+transparency = 1
+shading_mode = 0
+albedo_color = Color(1, 0.85, 0.6, 0)
+billboard_mode = 1
+billboard_keep_scale = true
+
+[sub_resource type="QuadMesh" id="QuadMesh_pif6o"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_etwbq"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_lkc4d"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_c503u"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_3mg74"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_ta276"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_ikp8k"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_bygkm"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_mbebq"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_cw0gq"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_6k8l7"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_vi1xk"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_8rcmp"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_vbaqv"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_br2y3"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_0pd5l"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_kamqg"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_5hlrl"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_ta8wt"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_wis3w"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_8pg54"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_2h54c"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_4rgs8"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_ijwn4"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_khyhr"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_u70r5"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_nqul7"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_qi7kp"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_2dr3a"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_eg1dd"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_uo4ao"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_bs6i2"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_sj04j"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_mhj0j"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_2ajyy"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_5s0mw"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_e7hkv"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_v3tlo"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_fsq7x"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_nbq47"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_xd3ik"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_ywa7v"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_rxmwd"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_ilql2"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_aebsw"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_0kyie"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_sktud"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="SphereMesh" id="SphereMesh_3gyos"]
+radius = 0.03
+height = 0.06
+radial_segments = 8
+rings = 4
+
+[sub_resource type="QuadMesh" id="QuadMesh_73t6i"]
+size = Vector2(0.15, 0.15)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_0rr50"]
+albedo_color = Color(0.1, 0.1, 0.1, 1)
+roughness = 0.9
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_wl8iy"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.50617516
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_jo1j1"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.50875384
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_qjw6n"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.5087181
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_fo24e"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.5005559
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_j66ge"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.5022138
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_oo5ws"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.5087339
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_0rmpx"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.50876075
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_0eihx"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.5051806
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_lwkm2"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.5018414
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_olnse"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.50842774
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_bc6t2"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.50886625
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_vva5p"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.50828034
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_byk4c"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.50886655
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_4cqvd"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.508866
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_w6e37"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.5088663
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_h8kxv"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.5063614
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_e0g1k"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.5067569
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_uhp5d"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.50886637
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_lg2wc"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.47224882
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_aggb8"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.5088666
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_5cacq"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.4950403
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_i1fgu"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.50886536
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_s0kfu"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.49844852
+radial_segments = 6
+rings = 1
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_wfvi6"]
+top_radius = 0.005
+bottom_radius = 0.005
+height = 0.50886554
+radial_segments = 6
+rings = 1
+
+[node name="StringLights" type="Node3D"]
+script = ExtResource("1_script")
+light_energy = 0.4
+halo_opacity = 0.0
+
+[node name="Path3D" type="Path3D" parent="."]
+curve = SubResource("Curve3D_default")
+
+[node name="Bulbs" type="Node3D" parent="."]
+
+[node name="@MeshInstance3D@21382" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 2.5, 0)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_sqwex")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/@MeshInstance3D@21382"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/@MeshInstance3D@21382"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_pif6o")
+
+[node name="@MeshInstance3D@21383" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.5112009, 2.3685133, 0)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_etwbq")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/@MeshInstance3D@21383"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/@MeshInstance3D@21383"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_lkc4d")
+
+[node name="@MeshInstance3D@21385" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.0058235, 2.3099968, 0)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_c503u")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/@MeshInstance3D@21385"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/@MeshInstance3D@21385"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_3mg74")
+
+[node name="@MeshInstance3D@21387" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.49759278, 2.2877333, 0)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_ta276")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/@MeshInstance3D@21387"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/@MeshInstance3D@21387"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_ikp8k")
+
+[node name="@MeshInstance3D@21389" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.0047925934, 2.3755069, 0)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_bygkm")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/@MeshInstance3D@21389"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/@MeshInstance3D@21389"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_mbebq")
+
+[node name="@MeshInstance3D@21391" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.47475126, 2.5246925, 0)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_cw0gq")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/@MeshInstance3D@21391"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/@MeshInstance3D@21391"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_6k8l7")
+
+[node name="@MeshInstance3D@21393" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.9814368, 2.5702994, 0)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_vi1xk")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/@MeshInstance3D@21393"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/@MeshInstance3D@21393"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_8rcmp")
+
+[node name="@MeshInstance3D@21395" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.4901321, 2.5784607, 0)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_vbaqv")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/@MeshInstance3D@21395"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/@MeshInstance3D@21395"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_br2y3")
+
+[node name="@MeshInstance3D@21397" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.9897612, 2.5037735, 0)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_0pd5l")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/@MeshInstance3D@21397"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/@MeshInstance3D@21397"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_kamqg")
+
+[node name="Bulb_9" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.479886, 2.40239, 0.036658637)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_5hlrl")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_9"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_9"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_ta8wt")
+
+[node name="Bulb_10" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.9857242, 2.4186335, 0.08526607)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_wis3w")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_10"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_10"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_8pg54")
+
+[node name="Bulb_11" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.488861, 2.4859428, 0.12086922)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_2h54c")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_11"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_11"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_4rgs8")
+
+[node name="Bulb_12" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.9924922, 2.5441365, 0.15717539)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_ijwn4")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_12"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_12"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_khyhr")
+
+[node name="Bulb_13" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.499636, 2.5375025, 0.19848087)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_u70r5")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_13"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_13"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_nqul7")
+
+[node name="Bulb_14" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5.0067816, 2.5309718, 0.23977898)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_qi7kp")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_14"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_14"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_2dr3a")
+
+[node name="Bulb_15" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5.51397, 2.5270975, 0.28088725)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_eg1dd")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_15"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_15"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_uo4ao")
+
+[node name="Bulb_16" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6.0192842, 2.502171, 0.3018153)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_bs6i2")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_16"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_16"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_sj04j")
+
+[node name="Bulb_17" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6.51853, 2.430669, 0.25238034)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_mhj0j")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_17"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_17"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_2ajyy")
+
+[node name="Bulb_18" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 7.014883, 2.4535723, 0.14258988)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_5s0mw")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_18"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_18"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_e7hkv")
+
+[node name="Bulb_19" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 7.4095736, 2.5246537, 0.39196065)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_v3tlo")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_19"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_19"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_fsq7x")
+
+[node name="Bulb_20" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 7.7784815, 2.6079538, 0.732421)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_nbq47")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_20"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_20"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_xd3ik")
+
+[node name="Bulb_21" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8.063212, 2.5817919, 1.1365358)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_ywa7v")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_21"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_21"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_rxmwd")
+
+[node name="Bulb_22" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8.297409, 2.4899158, 1.5788645)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_ilql2")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_22"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_22"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_aebsw")
+
+[node name="Bulb_23" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8.6746, 2.439892, 1.9008517)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_0kyie")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_23"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_23"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_sktud")
+
+[node name="Bulb_24" type="MeshInstance3D" parent="Bulbs"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 9.092697, 2.401841, 2.1884117)
+material_override = SubResource("StandardMaterial3D_a7o6b")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_3gyos")
+
+[node name="Light" type="OmniLight3D" parent="Bulbs/Bulb_24"]
+visible = false
+light_color = Color(1, 0.85, 0.6, 1)
+light_energy = 0.0
+omni_range = 2.5
+omni_attenuation = 1.5
+
+[node name="Halo" type="MeshInstance3D" parent="Bulbs/Bulb_24"]
+visible = false
+material_override = SubResource("StandardMaterial3D_r16br")
+cast_shadow = 0
+mesh = SubResource("QuadMesh_73t6i")
+
+[node name="Wire" type="Node3D" parent="."]
+
+[node name="@MeshInstance3D@21384" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0, 0.96567184, 0.25976512, 0, -0.25976512, 0.96567184, -1, 0, 0, -1.7556005, 2.4342566, 0)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_wl8iy")
+
+[node name="@MeshInstance3D@21386" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0, 0.9933633, 0.115019284, 0, -0.115019284, 0.9933633, -1, 0, 0, -1.2585123, 2.339255, 0)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_jo1j1")
+
+[node name="@MeshInstance3D@21388" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0, 0.9990419, 0.04376398, 0, -0.04376398, 0.9990419, -1, 0, 0, -0.75170815, 2.298865, 0)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_qjw6n")
+
+[node name="@MeshInstance3D@21390" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0, 0.98450583, -0.17535217, 0, 0.17535217, 0.98450583, -1, 0, 0, -0.2511927, 2.3316202, 0)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_fo24e")
+
+[node name="@MeshInstance3D@21392" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0, 0.95486003, -0.29705608, 0, 0.29705608, 0.95486003, -1, 0, 0, 0.23497933, 2.4500997, 0)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_j66ge")
+
+[node name="@MeshInstance3D@21394" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0, 0.99597347, -0.089647755, 0, 0.08964775, 0.9959735, -1, 0, 0, 0.72809404, 2.5474958, 0)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_oo5ws")
+
+[node name="@MeshInstance3D@21396" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0, 0.9998714, -0.016041541, 0, 0.016041541, 0.9998714, -1, 0, 0, 1.2357844, 2.57438, 0)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_0rmpx")
+
+[node name="@MeshInstance3D@21398" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0, 0.98901093, 0.14784266, 0, -0.14784266, 0.98901093, -1, 0, 0, 1.7399466, 2.5411172, 0)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_0eihx")
+
+[node name="Wire_9" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.07458616, 0.9766528, 0.20146017, 0, -0.20202288, 0.97938085, -0.99721456, 0.07304825, 0.015068112, 2.2348237, 2.4530816, 0.018329319)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_lwkm2")
+
+[node name="Wire_10" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.09565225, 0.99490666, -0.03180192, 0, 0.03194841, 0.99948955, -0.99541485, 0.09560342, -0.0030559374, 2.7328053, 2.4105117, 0.060962353)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_olnse")
+
+[node name="Wire_11" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.070585854, 0.9887409, -0.13194332, 0, 0.13227323, 0.9912133, -0.99750566, 0.06996564, -0.00933662, 3.2372928, 2.4522882, 0.103067644)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_bc6t2")
+
+[node name="Wire_12" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.07190223, 0.990853, -0.114194974, 0, 0.11449131, 0.9934243, -0.99741167, 0.071429424, -0.008232181, 3.7406766, 2.5150397, 0.1390223)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_vva5p")
+
+[node name="Wire_13" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.08117844, 0.9966149, 0.012993785, 0, -0.013036811, 0.999915, -0.9966996, 0.08117154, 0.0010583081, 4.246064, 2.5408196, 0.17782813)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_byk4c")
+
+[node name="Wire_14" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.081163816, 0.99661875, 0.012791608, 0, -0.012833951, 0.9999177, -0.99670076, 0.08115713, 0.0010416524, 4.753209, 2.5342371, 0.21912992)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_4cqvd")
+
+[node name="Wire_15" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.08078636, 0.9967025, 0.0075887097, 0, -0.0076135946, 0.99997103, -0.99673146, 0.080784015, 0.00061507465, 5.260376, 2.5290346, 0.26033312)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_w6e37")
+
+[node name="Wire_16" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.04138044, 0.99793214, 0.049184382, 0, -0.049226545, 0.99878764, -0.9991435, 0.04133027, 0.002037016, 5.7666273, 2.5146341, 0.29135126)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_h8kxv")
+
+[node name="Wire_17" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(-0.09853742, 0.9851778, 0.14041051, 0, -0.14109719, 0.9899958, -0.99513334, -0.09755163, -0.013903353, 6.268907, 2.4664202, 0.27709782)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_e0g1k")
+
+[node name="Wire_18" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(-0.21597387, 0.9754096, -0.043946058, 0, 0.045008287, 0.99898666, -0.9763992, -0.21575499, 0.009720615, 6.7667065, 2.4421206, 0.19748512)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_uhp5d")
+
+[node name="Wire_19" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.5341347, 0.8357681, -0.12724684, 0, 0.15051684, 0.9886074, -0.8453994, 0.5280495, -0.080396265, 7.2122283, 2.4891129, 0.26727527)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_lg2wc")
+
+[node name="Wire_20" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.6782047, 0.72495997, -0.12029678, 0, 0.16369735, 0.98651063, -0.734873, 0.6690561, -0.11102033, 7.5940275, 2.5663037, 0.56219083)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_aggb8")
+
+[node name="Wire_21" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.8174694, 0.5751671, 0.030438993, 0, -0.05284804, 0.99860257, -0.575972, 0.81632704, 0.04320166, 7.920847, 2.594873, 0.9344784)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_5cacq")
+
+[node name="Wire_22" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.8837692, 0.46023306, 0.08448386, 0, -0.18055077, 0.9835657, -0.46792305, 0.86924505, 0.15956521, 8.180311, 2.5358539, 1.3577001)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_i1fgu")
+
+[node name="Wire_23" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.6492569, 0.7567293, 0.07632997, 0, -0.100359, 0.9949513, -0.76056916, 0.645979, 0.06515878, 8.486004, 2.4649038, 1.7398582)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_s0kfu")
+
+[node name="Wire_24" type="MeshInstance3D" parent="Wire"]
+transform = Transform3D(0.5666867, 0.82162666, 0.061610766, 0, -0.07477639, 0.99720037, -0.8239334, 0.56510013, 0.042374786, 8.883648, 2.4208665, 2.0446317)
+material_override = SubResource("StandardMaterial3D_0rr50")
+cast_shadow = 0
+mesh = SubResource("CylinderMesh_wfvi6")

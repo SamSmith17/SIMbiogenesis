@@ -1,0 +1,200 @@
+[gd_scene format=3 uid="uid://starcalibui"]
+
+[ext_resource type="Script" path="res://scenes/ui/star_calibration_ui.gd" id="1_script"]
+
+[node name="StarCalibrationUI" type="CanvasLayer"]
+layer = 100
+script = ExtResource("1_script")
+
+[node name="Panel" type="PanelContainer" parent="."]
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -280.0
+offset_top = -320.0
+offset_right = 280.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="VBox" type="VBoxContainer" parent="Panel"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+text = "★ STAR CALIBRATION ★"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="Instructions" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+text = "Adjust until the CROSSHAIR overlaps Polaris. Try flipping if poles are swapped."
+horizontal_alignment = 1
+
+[node name="HSeparator2" type="HSeparator" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="NorthLabel" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+text = "RA Offset (horizontal rotation) — Move Polaris left/right"
+
+[node name="NorthContainer" type="HBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="NorthMinus" type="Button" parent="Panel/VBox/NorthContainer"]
+layout_mode = 2
+text = "◀◀"
+tooltip_text = "-10°"
+
+[node name="NorthMinus2" type="Button" parent="Panel/VBox/NorthContainer"]
+layout_mode = 2
+text = "◀"
+tooltip_text = "-1°"
+
+[node name="NorthSlider" type="HSlider" parent="Panel/VBox/NorthContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -360.0
+max_value = 360.0
+step = 0.1
+value = 0.0
+
+[node name="NorthPlus2" type="Button" parent="Panel/VBox/NorthContainer"]
+layout_mode = 2
+text = "▶"
+tooltip_text = "+1°"
+
+[node name="NorthPlus" type="Button" parent="Panel/VBox/NorthContainer"]
+layout_mode = 2
+text = "▶▶"
+tooltip_text = "+10°"
+
+[node name="NorthValue" type="Label" parent="Panel/VBox/NorthContainer"]
+custom_minimum_size = Vector2(70, 0)
+layout_mode = 2
+text = "0.0°"
+horizontal_alignment = 2
+
+[node name="DecLabel" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+text = "Dec Offset (vertical shift) — Move Polaris up/down"
+
+[node name="DecContainer" type="HBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="DecMinus" type="Button" parent="Panel/VBox/DecContainer"]
+layout_mode = 2
+text = "◀◀"
+tooltip_text = "-10°"
+
+[node name="DecMinus2" type="Button" parent="Panel/VBox/DecContainer"]
+layout_mode = 2
+text = "◀"
+tooltip_text = "-1°"
+
+[node name="DecSlider" type="HSlider" parent="Panel/VBox/DecContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -180.0
+max_value = 180.0
+step = 0.1
+value = 0.0
+
+[node name="DecPlus2" type="Button" parent="Panel/VBox/DecContainer"]
+layout_mode = 2
+text = "▶"
+tooltip_text = "+1°"
+
+[node name="DecPlus" type="Button" parent="Panel/VBox/DecContainer"]
+layout_mode = 2
+text = "▶▶"
+tooltip_text = "+10°"
+
+[node name="DecValue" type="Label" parent="Panel/VBox/DecContainer"]
+custom_minimum_size = Vector2(70, 0)
+layout_mode = 2
+text = "0.0°"
+horizontal_alignment = 2
+
+[node name="FlipContainer" type="HBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+alignment = 1
+
+[node name="FlipVertical" type="CheckBox" parent="Panel/VBox/FlipContainer"]
+layout_mode = 2
+text = "Flip Vertical (swap N/S poles)"
+
+[node name="FlipHorizontal" type="CheckBox" parent="Panel/VBox/FlipContainer"]
+layout_mode = 2
+text = "Flip Horizontal"
+
+[node name="HSeparator5" type="HSeparator" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="BrightnessLabel" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+text = "Star Brightness"
+
+[node name="BrightnessContainer" type="HBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="BrightnessSlider" type="HSlider" parent="Panel/VBox/BrightnessContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.0
+max_value = 2.0
+step = 0.05
+value = 0.1
+
+[node name="BrightnessValue" type="Label" parent="Panel/VBox/BrightnessContainer"]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+text = "0.10"
+horizontal_alignment = 2
+
+[node name="HSeparator3" type="HSeparator" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="PolarisInfo" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+text = "Polaris: calculating..."
+horizontal_alignment = 1
+
+[node name="HSeparator4" type="HSeparator" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="ButtonContainer" type="HBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+alignment = 1
+
+[node name="ResetButton" type="Button" parent="Panel/VBox/ButtonContainer"]
+layout_mode = 2
+text = "Reset All"
+
+[node name="QuickAlignButton" type="Button" parent="Panel/VBox/ButtonContainer"]
+layout_mode = 2
+text = "Try Dec +90°"
+tooltip_text = "If SCP is centered in your starmap, try shifting Dec by 90°"
+
+[node name="CloseHint" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+text = "Press HOME to close"
+horizontal_alignment = 1
+modulate = Color(0.7, 0.7, 0.7, 1)
+
+[connection signal="pressed" from="Panel/VBox/NorthContainer/NorthMinus" to="." method="_on_north_minus_big"]
+[connection signal="pressed" from="Panel/VBox/NorthContainer/NorthMinus2" to="." method="_on_north_minus"]
+[connection signal="pressed" from="Panel/VBox/NorthContainer/NorthPlus2" to="." method="_on_north_plus"]
+[connection signal="pressed" from="Panel/VBox/NorthContainer/NorthPlus" to="." method="_on_north_plus_big"]
+[connection signal="pressed" from="Panel/VBox/DecContainer/DecMinus" to="." method="_on_dec_minus_big"]
+[connection signal="pressed" from="Panel/VBox/DecContainer/DecMinus2" to="." method="_on_dec_minus"]
+[connection signal="pressed" from="Panel/VBox/DecContainer/DecPlus2" to="." method="_on_dec_plus"]
+[connection signal="pressed" from="Panel/VBox/DecContainer/DecPlus" to="." method="_on_dec_plus_big"]
+[connection signal="toggled" from="Panel/VBox/FlipContainer/FlipVertical" to="." method="_on_flip_vertical_toggled"]
+[connection signal="toggled" from="Panel/VBox/FlipContainer/FlipHorizontal" to="." method="_on_flip_horizontal_toggled"]
+[connection signal="pressed" from="Panel/VBox/ButtonContainer/ResetButton" to="." method="_on_reset_pressed"]
+[connection signal="pressed" from="Panel/VBox/ButtonContainer/QuickAlignButton" to="." method="_on_quick_align_pressed"]

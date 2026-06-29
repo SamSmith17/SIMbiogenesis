@@ -1,0 +1,79 @@
+# Godot 4+ editor data (local; do not commit)
+.godot/
+
+# Imported-file metadata. Removing this line commits *.import for reproducible clones
+# across machines at the cost of larger diffs and merge noise.
+*.import
+
+# Local export outputs (see export_presets.cfg paths under build/)
+build/
+export/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# If someone mistakenly copies runtime configs into the project tree, do not track them.
+# Real saves live under user:// (see LOCAL_CONFIG.md).
+**/ha_connection.cfg
+**/uisp_settings.cfg
+**/solar_ui_ha_entities.cfg
+**/solar_panel_config.cfg
+**/star_calibration.cfg
+**/location_prefs.cfg
+**/terrain_config.cfg
+**/keys_config.cfg
+**/climate_prefs.cfg
+**/weather_gen_engine.cfg
+**/sim_settings.cfg
+**/ui_prefs.cfg
+**/planet_prefs.cfg
+**/saves/
+
+# Godot headless / import TMP artifacts
+**/~*.TMP
+**/*~RF*.TMP
+
+# HA data exports and site-specific reports (never commit real entity history)
+/Full SOAK 2026 Datastream*
+/starshade_soak_report*.html
+
+# Local bespoke maps (maintainer copies stay beside project.godot; see maps/examples/)
+/scenes/maps/soak_festival_2026.tscn
+/scenes/maps/mars_aerial.tscn
+/maps/soak_camp_map.tres
+/maps/mars_aerial_map.tres
+/main.tscn
+
+# Future local env files (not used by core Godot; safe to ignore if added later)
+.env
+.env.*
+!.env.example
+
+# LinkageLab local test exports (embedded GLB payloads — not source)
+*.gamebundle.json
+
+# -----------------------------------------------------------------------------
+# GitHub lite — heavy art ships via local asset pack (see ASSETS.md, PHASE3_ASSET_PACK.md)
+# -----------------------------------------------------------------------------
+/Imported Models/
+/StarShade FBX/
+/Starshade Pretty Version/
+/Player Character/
+/Wood034_1K-JPG/
+/Metal051C_1K-JPG/
+
+# Root-level map blobs (Mars / SOAK bespoke scenes)
+/SoakSim.exe
+/10m_*.obj
+/10m_*.STL
+/Mars *.glb
+/Mars*.jpg
+/Mars*.png
+/motorhome.glb
+/motorhome_*.jpg
+/Starshade Pretty Version*.glb
+/Starshade Pretty Version*.jpg
+/Starshade Pretty Version*.png
+/Bombay Beach*.jpg

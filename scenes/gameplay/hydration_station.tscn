@@ -1,0 +1,13 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scenes/gameplay/hydration_station.gd" id="1_script"]
+
+[node name="HydrationStation" type="Node3D"]
+script = ExtResource("1_script")
+interaction_radius = 2.0
+display_name = "Water Bubbler"
+hydration_restore_percent = 100.0
+placeholder_size = Vector3(0.3, 0.5, 0.3)
+placeholder_color = Color(0.3, 0.5, 0.9, 1)
+enable_glow = true
+

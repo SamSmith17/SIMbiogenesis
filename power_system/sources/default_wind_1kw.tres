@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="WindTurbineConfig" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://power_system/sources/wind_turbine_config.gd" id="1_windcfg"]
+
+[resource]
+script = ExtResource("1_windcfg")
+turbine_type = 0
+rotor_diameter_m = 2.1
+rated_power_w = 1000.0
+cp_peak = 0.42
+cut_in_ms = 3.0
+rated_ms = 11.0
+cut_out_ms = 20.0
+generator_efficiency = 0.9
+hub_height_m = 10.0
+anemometer_height_m = 10.0
+surface_roughness_m = 0.03
+site_altitude_m = 0.0
+site_mean_wind_ms = 6.0
+enable_wind_variation = true
+diurnal_amplitude = 0.25
+gust_amplitude = 0.15

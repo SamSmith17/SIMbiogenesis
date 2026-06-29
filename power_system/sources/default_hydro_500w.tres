@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="HydroConfig" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://power_system/sources/hydro_config.gd" id="1_hydrocfg"]
+
+[resource]
+script = ExtResource("1_hydrocfg")
+turbine_type = 0
+gross_head_m = 25.0
+design_flow_m3s = 0.003
+penstock_length_m = 60.0
+penstock_diameter_m = 0.063
+pipe_roughness_m = 1.5e-06
+turbine_efficiency = 0.0
+generator_efficiency = 0.85
+monthly_flow_multipliers = Array[float]([0.8, 0.9, 1.2, 1.4, 1.3, 1.1, 0.8, 0.6, 0.6, 0.7, 0.8, 0.8])

@@ -1,0 +1,15 @@
+[gd_scene format=3 uid="uid://ckppdtf7vld4"]
+
+[ext_resource type="ArrayMesh" uid="uid://cg2mwatl6lx04" path="res://10m_-115.74_33.76_tile_1_1.obj" id="1_46jbc"]
+[ext_resource type="Material" uid="uid://eocg1a2eayuk" path="res://Ground088_1K-JPG.tres" id="2_nrd8o"]
+
+[node name="Node3D" type="Node3D"]
+
+[node name="10m115_7433_76Tile11" type="MeshInstance3D" parent="."]
+transform = Transform3D(-4.371139e-08, 1, 4.371139e-08, 0, -4.371139e-08, 1, 1, 4.371139e-08, 1.9106855e-15, -62.950916, 0, -149.29295)
+mesh = ExtResource("1_46jbc")
+surface_material_override/0 = ExtResource("2_nrd8o")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.192522, 0, -0.98129267, 0, 1, 0, 0.98129267, 0, -0.192522, 0, 159.84271, 0)
+visible = false

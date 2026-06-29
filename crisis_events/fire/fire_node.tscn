@@ -1,0 +1,117 @@
+[gd_scene load_steps=10 format=3 uid="uid://fire_node_001"]
+
+[ext_resource type="Script" path="res://crisis_events/fire/fire_node.gd" id="1_fire"]
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_1"]
+radius = 1.5
+
+[sub_resource type="Gradient" id="Gradient_1"]
+colors = PackedColorArray(1, 0.5, 0.2, 1, 1, 0.2, 0, 0.8, 0.5, 0.1, 0, 0)
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_1"]
+direction = Vector3(0, 1, 0)
+initial_velocity_min = 2.0
+initial_velocity_max = 4.0
+gravity = Vector3(0, -2, 0)
+scale_min = 0.5
+scale_max = 1.0
+color = Color(1, 0.5, 0.2, 1)
+color_ramp = SubResource("Gradient_1")
+
+[sub_resource type="Gradient" id="Gradient_2"]
+colors = PackedColorArray(0.1, 0.1, 0.1, 1, 0.2, 0.2, 0.2, 0.8, 0.3, 0.3, 0.3, 0.4, 0.4, 0.4, 0.4, 0, 0.5, 0.5, 0.5, 0)
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_2"]
+direction = Vector3(0, 1, 0)
+initial_velocity_min = 1.5
+initial_velocity_max = 3.0
+gravity = Vector3(0, 0.5, 0)
+scale_min = 0.8
+scale_max = 2.0
+color = Color(0.1, 0.1, 0.1, 1)
+color_ramp = SubResource("Gradient_2")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_flame"]
+shading_mode = 1
+flags_unshaded = true
+albedo_color = Color(1, 0.5, 0.2, 1)
+emission_enabled = true
+emission = Color(1, 0.3, 0.1, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_smoke"]
+shading_mode = 1
+flags_unshaded = true
+albedo_color = Color(0.1, 0.1, 0.1, 1)
+emission_enabled = true
+emission = Color(0.2, 0.2, 0.2, 1)
+
+[sub_resource type="QuadMesh" id="QuadMesh_1"]
+material = SubResource("StandardMaterial3D_flame")
+size = Vector2(1, 1)
+
+[sub_resource type="QuadMesh" id="QuadMesh_2"]
+material = SubResource("StandardMaterial3D_smoke")
+size = Vector2(1, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_1"]
+radius = 0.5
+height = 1.0
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_indicator"]
+shading_mode = 1
+flags_unshaded = true
+albedo_color = Color(1, 0.3, 0, 1)
+emission_enabled = true
+emission = Color(1, 0.5, 0, 1)
+emission_energy_multiplier = 3.0
+
+[node name="FireNode" type="Node3D"]
+script = ExtResource("1_fire")
+
+[node name="FlameParticles" type="GPUParticles3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+emitting = false
+amount = 50
+lifetime = 1.0
+one_shot = false
+preprocess = 0.0
+speed_scale = 1.0
+explosiveness = 0.0
+randomness = 0.3
+visibility_aabb = AABB(-3, -3, -3, 6, 6, 6)
+draw_pass_1 = SubResource("QuadMesh_1")
+process_material = SubResource("ParticleProcessMaterial_1")
+
+[node name="SmokeParticles" type="GPUParticles3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+emitting = false
+amount = 40
+lifetime = 2.0
+one_shot = false
+preprocess = 0.0
+speed_scale = 1.0
+explosiveness = 0.0
+randomness = 0.4
+visibility_aabb = AABB(-5, -5, -5, 10, 10, 10)
+draw_pass_1 = SubResource("QuadMesh_2")
+process_material = SubResource("ParticleProcessMaterial_2")
+
+[node name="FireIndicator" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+mesh = SubResource("SphereMesh_1")
+surface_material_override/0 = SubResource("StandardMaterial3D_indicator")
+
+[node name="DetectionArea" type="Area3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="DetectionArea"]
+shape = SubResource("SphereShape3D_1")
+
+[node name="FireLight" type="OmniLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+light_energy = 1.0
+light_color = Color(1, 0.42, 0.21, 1)
+omni_range = 4.0
+omni_attenuation = 0.7
+shadow_enabled = false
+

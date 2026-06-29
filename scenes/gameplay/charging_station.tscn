@@ -1,0 +1,27 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scenes/gameplay/charging_station.gd" id="1_script"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_outlet"]
+albedo_color = Color(0.2, 0.2, 0.2, 1)
+metallic = 0.3
+roughness = 0.7
+
+[sub_resource type="BoxMesh" id="BoxMesh_outlet"]
+material = SubResource("StandardMaterial3D_outlet")
+size = Vector3(0.15, 0.2, 0.08)
+
+[node name="ChargingStation" type="Node3D"]
+script = ExtResource("1_script")
+
+[node name="OutletMesh" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+mesh = SubResource("BoxMesh_outlet")
+
+[node name="IndicatorLight" type="OmniLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.55, 0.05)
+light_color = Color(0.2, 1, 0.3, 1)
+light_energy = 0.0
+light_indirect_energy = 0.0
+omni_range = 0.5
+

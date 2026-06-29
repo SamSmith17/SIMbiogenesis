@@ -1,0 +1,101 @@
+[gd_scene load_steps=2 format=3 uid="uid://c8save_load_ui01"]
+
+[ext_resource type="Script" path="res://scenes/ui/save_load_ui.gd" id="1_slui"]
+
+[node name="SaveLoadUI" type="CanvasLayer"]
+layer = 50
+script = ExtResource("1_slui")
+
+[node name="Root" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+
+[node name="Panel" type="Panel" parent="Root"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -280.0
+offset_top = -240.0
+offset_right = 280.0
+offset_bottom = 240.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Margin" type="MarginContainer" parent="Root/Panel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 10
+
+[node name="VBox" type="VBoxContainer" parent="Root/Panel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Root/Panel/Margin/VBox"]
+layout_mode = 2
+text = "Save / Load"
+horizontal_alignment = 1
+
+[node name="SlotList" type="ItemList" parent="Root/Panel/Margin/VBox"]
+custom_minimum_size = Vector2(0, 200)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ButtonsRow1" type="HBoxContainer" parent="Root/Panel/Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ContinueButton" type="Button" parent="Root/Panel/Margin/VBox/ButtonsRow1"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Continue"
+
+[node name="SaveButton" type="Button" parent="Root/Panel/Margin/VBox/ButtonsRow1"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Save"
+
+[node name="LoadButton" type="Button" parent="Root/Panel/Margin/VBox/ButtonsRow1"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Load"
+
+[node name="ButtonsRow2" type="HBoxContainer" parent="Root/Panel/Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="DeleteButton" type="Button" parent="Root/Panel/Margin/VBox/ButtonsRow2"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Delete"
+
+[node name="CloseButton" type="Button" parent="Root/Panel/Margin/VBox/ButtonsRow2"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Close"
+
+[node name="StatusLabel" type="Label" parent="Root/Panel/Margin/VBox"]
+layout_mode = 2
+text = ""
+
+[node name="ConfirmOverwrite" type="ConfirmationDialog" parent="."]
+title = "Overwrite save?"
+dialog_text = "Overwrite this slot?"
+
+[node name="ConfirmDelete" type="ConfirmationDialog" parent="."]
+title = "Delete save?"
+dialog_text = "Delete this save?"

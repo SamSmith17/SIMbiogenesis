@@ -1,0 +1,457 @@
+extends SceneTree
+
+## Headless self-test for the location→world terrain math (GeoMath +
+## TerrainBuilder). Pure / offline — no network.
+## Run with:
+##   godot --headless --path . --script core/terrain/terrain_selftest.gd
+## Exits 0 when all assertions pass, 1 otherwise.
+
+const ElevationServiceScript := preload("res://core/terrain/elevation_service.gd")
+const BuildingServiceScript := preload("res://core/terrain/building_service.gd")
+
+var _failures: int = 0
+var _checks: int = 0
+
+
+func _initialize() -> void:
+	_test_hyperbolic()
+	_test_metric()
+	_test_tiles()
+	_test_resample()
+	_test_local_metric()
+	_test_buildings()
+	_test_solar_array()
+	_test_mesh()
+	_test_terrain_node()
+	_test_coarse_hide()
+	_test_aaigrid()
+	_test_cache_settings()
+	_test_load_progress()
+	if _failures == 0:
+		print("TERRAIN SELFTEST PASS  (%d checks)" % _checks)
+		quit(0)
+	else:
+		print("TERRAIN SELFTEST FAIL  (%d of %d checks failed)" % [_failures, _checks])
+		quit(1)
+
+
+func _test_solar_array() -> void:
+	_check("solar tilt mid-lat", _approx(SolarArrayBuilder.default_tilt_deg(42.43), 35.4, 0.5),
+		"got %f" % SolarArrayBuilder.default_tilt_deg(42.43))
+	_check("solar azimuth N hemi", SolarArrayBuilder.default_azimuth_deg(42.0) == 180.0)
+	_check("solar azimuth S hemi", SolarArrayBuilder.default_azimuth_deg(-33.0) == 0.0)
+
+	var sq := PackedVector2Array([Vector2(-6, -6), Vector2(6, -6), Vector2(6, 6), Vector2(-6, 6)])
+	var panels := SolarArrayBuilder.plan_panels(sq, 35.0)
+	_check("solar packing positive", panels.size() > 10, "got %d" % panels.size())
+	_check("solar packing bounded", panels.size() < 200, "got %d" % panels.size())
+	var all_in := true
+	for rec in panels:
+		if not Geometry2D.is_point_in_polygon(Vector2(float(rec["x"]), float(rec["z"])), sq):
+			all_in = false
+	_check("solar panels inside footprint", all_in)
+
+	var sm := SolarArrayBuilder.summarize(30)
+	_check("solar capacity 30x400W=12kW", _approx(float(sm["capacity_kw"]), 12.0, 0.001),
+		"got %f" % float(sm["capacity_kw"]))
+
+	var node := SolarArrayBuilder.build_array_node("Test", panels, 5.0, 35.0)
+	var mmi := node.get_node_or_null("Panels") as MultiMeshInstance3D
+	_check("solar node has MultiMesh", mmi != null and mmi.multimesh != null)
+	if mmi != null and mmi.multimesh != null:
+		_check("solar instance count matches placement",
+			mmi.multimesh.instance_count == panels.size(),
+			"mm=%d panels=%d" % [mmi.multimesh.instance_count, panels.size()])
+	node.free()
+
+	var c := SolarArrayBuilder.centroid(sq)
+	_check("solar centroid at origin", c.length() < 0.001)
+
+	_check("solar tag detect source",
+		BuildingServiceScript.is_solar_generator_tags({"generator:source": "solar"}))
+	_check("solar tag detect method",
+		BuildingServiceScript.is_solar_generator_tags({"generator:method": "photovoltaic"}))
+	_check("solar tag rejects building",
+		not BuildingServiceScript.is_solar_generator_tags({"building": "yes"}))
+
+	var raw := {"solar": [{"points": [[-6, -6], [6, -6], [6, 6], [-6, 6]],
+		"tags": {"power": "generator"}, "area_m2": 144.0}]}
+	var de := BuildingServiceScript.deserialize_payload(raw)
+	_check("solar payload round-trips", (de.get("solar", []) as Array).size() == 1,
+		"got %d" % (de.get("solar", []) as Array).size())
+
+
+func _check(label: String, ok: bool, detail: String = "") -> void:
+	_checks += 1
+	if not ok:
+		_failures += 1
+		print("  FAIL: %s  %s" % [label, detail])
+
+
+func _approx(a: float, b: float, eps: float) -> bool:
+	return absf(a - b) <= eps
+
+
+func _test_hyperbolic() -> void:
+	_check("sinh(0)==0", _approx(GeoMath.sinh(0.0), 0.0, 1e-9))
+	_check("asinh(sinh(x)) round-trip", _approx(GeoMath.asinh(GeoMath.sinh(1.3)), 1.3, 1e-6))
+	_check("sinh odd", _approx(GeoMath.sinh(-0.7), -GeoMath.sinh(0.7), 1e-9))
+
+
+func _test_metric() -> void:
+	# Latitude metric ~constant; longitude metric shrinks with cos(lat).
+	var eq := GeoMath.meters_per_deg(0.0)
+	_check("m/deg lon at equator ~111320", _approx(eq.x, 111320.0, 1.0), "got %.1f" % eq.x)
+	var hi := GeoMath.meters_per_deg(60.0)
+	_check("m/deg lon at 60N ~half", _approx(hi.x, 111320.0 * 0.5, 50.0), "got %.1f" % hi.x)
+	_check("m/deg lat constant", _approx(hi.y, eq.y, 0.001))
+
+	# A 30 km square (half-extent 15 km) about Seattle.
+	var bbox := GeoMath.bbox_for(47.6062, -122.3321, 15000.0)
+	var dlat: float = float(bbox["north"]) - float(bbox["south"])
+	var span_m := dlat * GeoMath.M_PER_DEG_LAT
+	_check("bbox N-S spans ~30 km", _approx(span_m, 30000.0, 100.0), "got %.0f m" % span_m)
+	_check("bbox ordered N>S", float(bbox["north"]) > float(bbox["south"]))
+	_check("bbox ordered E>W", float(bbox["east"]) > float(bbox["west"]))
+
+
+func _test_tiles() -> void:
+	# Round-trip a known location through tile space at several zooms.
+	for z in [4, 10, 15]:
+		var lon := -122.3321
+		var lat := 47.6062
+		var tf := GeoMath.lonlat_to_tile_f(lon, lat, z)
+		var back := GeoMath.tile_to_lonlat(tf.x, tf.y, z)
+		_check("tile lon round-trip z=%d" % z, _approx(back.x, lon, 1e-4),
+			"got %.5f" % back.x)
+		_check("tile lat round-trip z=%d" % z, _approx(back.y, lat, 1e-4),
+			"got %.5f" % back.y)
+
+	# Tile x grows east, y grows south.
+	var t_w := GeoMath.lonlat_to_tile(-100.0, 40.0, 8)
+	var t_e := GeoMath.lonlat_to_tile(-90.0, 40.0, 8)
+	_check("tile x grows east", t_e.x > t_w.x)
+	var t_n := GeoMath.lonlat_to_tile(-100.0, 50.0, 8)
+	var t_s := GeoMath.lonlat_to_tile(-100.0, 30.0, 8)
+	_check("tile y grows south", t_s.y > t_n.y)
+
+	# Range + zoom selection for a 30 km bbox.
+	var bbox := GeoMath.bbox_for(47.6062, -122.3321, 15000.0)
+	var z2 := GeoMath.pick_zoom(bbox, 2048)
+	_check("pick_zoom in range", z2 >= 8 and z2 <= 17, "got %d" % z2)
+	var rng := GeoMath.tile_range_for_bbox(bbox, z2)
+	_check("tile range x ordered", int(rng["max_x"]) >= int(rng["min_x"]))
+	_check("tile range y ordered", int(rng["max_y"]) >= int(rng["min_y"]))
+	var across := int(rng["max_x"]) - int(rng["min_x"]) + 1
+	_check("tile range stitches <= ~2048px", across * 256 <= 2048 + 512,
+		"%d tiles across" % across)
+
+
+func _test_resample() -> void:
+	# 2×2 source ramp 0,1 / 2,3 → corners preserved, centre is the average.
+	var src := PackedFloat32Array([0.0, 1.0, 2.0, 3.0])
+	_check("bilinear corner NW", _approx(TerrainBuilder.sample_bilinear(src, 2, 2, 0, 0), 0.0, 1e-6))
+	_check("bilinear corner SE", _approx(TerrainBuilder.sample_bilinear(src, 2, 2, 1, 1), 3.0, 1e-6))
+	_check("bilinear centre avg", _approx(TerrainBuilder.sample_bilinear(src, 2, 2, 0.5, 0.5), 1.5, 1e-6))
+
+	# NAN corner is filled from finite neighbours rather than poisoning output.
+	var holed := PackedFloat32Array([NAN, 10.0, 10.0, 10.0])
+	var s := TerrainBuilder.sample_bilinear(holed, 2, 2, 0.5, 0.5)
+	_check("bilinear ignores NAN", not is_nan(s) and s > 0.0, "got %f" % s)
+
+	var up := TerrainBuilder.resample(src, 2, 2, 5)
+	_check("resample size", up.size() == 25)
+	_check("resample keeps NW corner", _approx(up[0], 0.0, 1e-6))
+	_check("resample keeps SE corner", _approx(up[24], 3.0, 1e-6))
+
+	_check("mean_elevation", _approx(TerrainBuilder.mean_elevation(src), 1.5, 1e-6))
+	_check("mean_elevation skips NAN",
+		_approx(TerrainBuilder.mean_elevation(PackedFloat32Array([NAN, 2.0, 4.0])), 3.0, 1e-6))
+	_check("variant_to_float null safe", _approx(TerrainBuilder.variant_to_float(null, 5.0), 5.0, 1e-6))
+
+	# Flat tile at 500 m AMSL → world y is 0 everywhere after mean-centring.
+	var flat := PackedFloat32Array()
+	flat.resize(9)
+	flat.fill(500.0)
+	_check("height_at_world flat tile", _approx(
+		TerrainBuilder.height_at_world_xz(flat, 3, 30000.0, 500.0, 0.0, 0.0), 0.0, 1e-6))
+	# Single centre spike: mean-centring leaves map centre well above y=0.
+	var spike := PackedFloat32Array()
+	spike.resize(9)
+	spike.fill(0.0)
+	spike[4] = 1000.0
+	var spike_center := TerrainBuilder.mean_elevation(spike)
+	var spike_y := TerrainBuilder.height_at_world_xz(spike, 3, 30000.0, spike_center, 0.0, 0.0)
+	_check("height_at_world centre spike above mean", spike_y > 100.0, "got %.1f" % spike_y)
+
+
+func _test_local_metric() -> void:
+	var lat := 47.6062
+	var lon := -122.3321
+	var local := GeoMath.lonlat_to_local_m(lat, lon, lat, lon)
+	_check("local origin is 0,0", _approx(local.x, 0.0, 1e-6) and _approx(local.y, 0.0, 1e-6))
+	var east := GeoMath.lonlat_to_local_m(lat, lon + 0.001, lat, lon)
+	_check("local +X is east", east.x > 50.0 and absf(east.y) < 5.0, "got %s" % str(east))
+	var back := GeoMath.local_m_to_lonlat(east.x, east.y, lat, lon)
+	_check("local round-trip lon", _approx(back.x, lon + 0.001, 1e-4))
+	_check("local round-trip lat", _approx(back.y, lat, 1e-4))
+
+
+func _test_buildings() -> void:
+	_check("height tag metres", _approx(BuildingBuilder.parse_height_m({"height": "12"}), 12.0, 1e-6))
+	_check("height tag with m suffix", _approx(BuildingBuilder.parse_height_m({"height": "8 m"}), 8.0, 1e-6))
+	_check("height tag feet", _approx(BuildingBuilder.parse_height_m({"height": "30 ft"}), 30.0 * 0.3048, 1e-3))
+	_check("levels default", _approx(BuildingBuilder.parse_height_m({"building:levels": "4"}), 11.2, 1e-6))
+	_check("default height", _approx(BuildingBuilder.parse_height_m({}), BuildingBuilder.DEFAULT_HEIGHT_M, 1e-6))
+
+	var sample := {
+		"elements": [
+			{"type": "node", "id": 1, "lat": 47.6062, "lon": -122.3321},
+			{"type": "node", "id": 2, "lat": 47.6062, "lon": -122.3311},
+			{"type": "node", "id": 3, "lat": 47.6052, "lon": -122.3311},
+			{"type": "node", "id": 4, "lat": 47.6052, "lon": -122.3321},
+			{"type": "way", "id": 10, "nodes": [1, 2, 3, 4, 1],
+				"tags": {"building": "yes", "height": "15"}},
+		],
+	}
+	var parsed: Dictionary = BuildingServiceScript._parse_overpass(sample, 47.6060, -122.3320, false)
+	var buildings: Array = parsed.get("buildings", [])
+	_check("overpass parse one building", buildings.size() == 1)
+	if not buildings.is_empty():
+		var pts: PackedVector2Array = buildings[0]["points"]
+		_check("footprint has 5 pts (closed)", pts.size() == 5)
+		_check("footprint height", _approx(float(buildings[0]["height_m"]), 15.0, 1e-6))
+
+	var roof := BuildingBuilder.parse_roof_spec({"roof:shape": "gabled", "roof:angle": "35"})
+	_check("roof shape parsed", str(roof.get("shape")) == "gabled")
+	_check("roof angle parsed", _approx(float(roof.get("angle_deg")), 35.0, 1e-6))
+	var oblong := PackedVector2Array([
+		Vector2(-30, -8), Vector2(30, -8), Vector2(30, 8), Vector2(-30, 8),
+	])
+	var inferred: Dictionary = BuildingBuilder.infer_roof_spec({}, oblong)
+	_check("inferred flat for oblong without roof tags", str(inferred.get("shape")) == "flat")
+
+	_check("highway half width residential",
+		_approx(TerrainRoadFlatten.highway_half_width({"highway": "residential"}), 4.0, 1e-6))
+	var road_pts := PackedVector2Array([Vector2(-120, 0), Vector2(120, 0)])
+	var slope := PackedFloat32Array([0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0])
+	var roads := [{"points": road_pts, "half_width_m": 40.0}]
+	var flat_roads := TerrainRoadFlatten.apply_road_corridors(slope, 3, 300.0, roads, 0.0)
+	_check("road flatten preserves grid size", flat_roads.size() == slope.size())
+	var coarse_roads := TerrainRoadFlatten.apply_road_corridors(slope, 3, 30000.0, roads, 0.0)
+	_check("road flatten skips coarse grid", coarse_roads == slope)
+
+	var base := PackedFloat32Array()
+	base.resize(25)
+	base.fill(100.0)
+	var detail := PackedFloat32Array()
+	detail.resize(25)
+	for i in 25:
+		detail[i] = 120.0
+	var patched := TerrainBuilder.patch_centre_heights(base, 5, detail, 5, 1000.0, 400.0, 0.0)
+	_check("detail patch raises centre", patched[12] > 100.0, "got %.1f" % patched[12])
+	_check("detail patch leaves corner", _approx(patched[0], 100.0, 1e-6))
+	var sunk := patched.duplicate()
+	TerrainBuilder.sink_coarse_centre_for_detail(sunk, 5, 1000.0, 400.0, 100.0)
+	_check("sink lowers centre for detail collision", sunk[12] < patched[12],
+		"sunk=%.1f patched=%.1f" % [sunk[12], patched[12]])
+	var detail_foot := detail.duplicate()
+	var sunk_y := TerrainBuilder.height_at_world_xz(sunk, 5, 1000.0, 100.0, 0.0, 0.0)
+	var detail_y := TerrainBuilder.height_at_world_xz_rect(detail_foot, 5, 5, 400.0, 100.0, 0.0, 0.0)
+	var sample_y := TerrainBuilder.sample_footing_height(
+		0.0, 0.0, sunk, 5, 1000.0, 100.0, detail_foot, 5, 5, 400.0)
+	_check("footing prefers detail over sunk coarse", _approx(sample_y, detail_y, 0.01),
+		"sample=%.2f detail=%.2f sunk=%.2f" % [sample_y, detail_y, sunk_y])
+	_check("sunk coarse differs from detail centre", absf(sunk_y - detail_y) > 1.0)
+
+	var flat := PackedFloat32Array()
+	flat.resize(4)
+	flat.fill(100.0)
+	var square := PackedVector2Array([
+		Vector2(-20, -20), Vector2(20, -20), Vector2(20, 20), Vector2(-20, 20),
+	])
+	var bdata := [{"points": square, "height_m": 12.0}]
+	var node := BuildingBuilder.build_buildings_node(
+		bdata, flat, 2, 30000.0, 100.0, null, null, 0.0)
+	_check("building mesh node built", node != null)
+	if node != null:
+		var mi := node.get_node_or_null("BuildingMeshes") as MeshInstance3D
+		_check("building mesh exists", mi != null and mi.mesh != null)
+		node.free()
+
+
+func _test_mesh() -> void:
+	var res := 8
+	var extent := 30000.0
+	# A plane tilted so the SE corner is highest.
+	var elev := PackedFloat32Array()
+	elev.resize(res * res)
+	for r in res:
+		for c in res:
+			elev[r * res + c] = float(r + c) * 10.0
+	var center := TerrainBuilder.mean_elevation(elev)
+	var mesh := TerrainBuilder.build_mesh(elev, res, extent, center)
+	var arrays := mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	_check("mesh vertex count == res*res", verts.size() == res * res,
+		"got %d" % verts.size())
+
+	# NW corner (index 0) is lowest elevation → lowest y; SE corner highest.
+	var y_nw := verts[0].y
+	var y_se := verts[res * res - 1].y
+	_check("displacement sign (SE higher than NW)", y_se > y_nw,
+		"nw=%.1f se=%.1f" % [y_nw, y_se])
+
+	# Horizontal extent matches; mesh centred on origin in X/Z.
+	var aabb := mesh.get_aabb()
+	_check("mesh spans extent in X", _approx(aabb.size.x, extent, 1.0),
+		"got %.1f" % aabb.size.x)
+	_check("mesh spans extent in Z", _approx(aabb.size.z, extent, 1.0),
+		"got %.1f" % aabb.size.z)
+	_check("mesh centred X", _approx(aabb.position.x + aabb.size.x * 0.5, 0.0, 1.0))
+	_check("mesh centred Z", _approx(aabb.position.z + aabb.size.z * 0.5, 0.0, 1.0))
+
+	# Normals must point up (winding correct) or the surface is invisible from above.
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var navg := Vector3.ZERO
+	for nv in normals:
+		navg += nv
+	navg /= float(maxi(normals.size(), 1))
+	_check("mesh normals point +Y (front face up)", navg.y > 0.5,
+		"avg normal=%s" % str(navg))
+
+	# UVs span 0..1.
+	var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var uv_min := Vector2(INF, INF)
+	var uv_max := Vector2(-INF, -INF)
+	for uv in uvs:
+		uv_min = uv_min.min(uv)
+		uv_max = uv_max.max(uv)
+	_check("UV min ~0", _approx(uv_min.x, 0.0, 1e-4) and _approx(uv_min.y, 0.0, 1e-4))
+	_check("UV max ~1", _approx(uv_max.x, 1.0, 1e-4) and _approx(uv_max.y, 1.0, 1e-4))
+
+
+func _test_terrain_node() -> void:
+	var res := 16
+	var elev := PackedFloat32Array()
+	elev.resize(res * res)
+	elev.fill(100.0)
+	var center := TerrainBuilder.mean_elevation(elev)
+	var node := TerrainBuilder.build_terrain_node(elev, res, 30000.0, center, null)
+	_check("terrain node returned", node != null)
+	var ground := node.get_node_or_null("Ground")
+	_check("has Ground MeshInstance3D", ground is MeshInstance3D)
+	var body := node.get_node_or_null("TerrainCollision")
+	_check("has StaticBody3D", body is StaticBody3D)
+	if body != null:
+		var cs := body.get_child(0) as CollisionShape3D
+		_check("collision shape is HeightMapShape3D", cs != null and cs.shape is HeightMapShape3D)
+		if cs != null and cs.shape is HeightMapShape3D:
+			var hm := cs.shape as HeightMapShape3D
+			_check("heightmap dims", hm.map_width == res and hm.map_depth == res)
+			# Collision scale aligns unit grid to mesh spacing.
+			var spacing := 30000.0 / float(res - 1)
+			_check("collision scaled to spacing", _approx(cs.scale.x, spacing, 0.5))
+	node.free()
+
+
+func _shader_param(mat: Material, name: String) -> Variant:
+	if mat is ShaderMaterial:
+		return (mat as ShaderMaterial).get_shader_parameter(name)
+	return null
+
+
+func _test_coarse_hide() -> void:
+	var res := 8
+	var elev := PackedFloat32Array()
+	elev.resize(res * res)
+	elev.fill(50.0)
+	var center := TerrainBuilder.mean_elevation(elev)
+	var node := TerrainBuilder.build_terrain_node(elev, res, 30000.0, center, null)
+	_check("no DetailGround initially", not TerrainBuilder.has_detail_ground(node))
+
+	var detail_elev := elev.duplicate()
+	TerrainBuilder.upsert_detail_patch(
+		node, detail_elev, res, 1000.0, center, null, null, 30000.0)
+	_check("DetailGround after upsert", TerrainBuilder.has_detail_ground(node))
+	_check("DetailCollision after upsert", node.get_node_or_null("DetailCollision") != null)
+
+	var detail_body := node.get_node_or_null("DetailCollision") as StaticBody3D
+	if detail_body != null:
+		_check("detail collision child", detail_body.get_child_count() > 0)
+		var dcs := detail_body.get_child(0) as CollisionShape3D
+		_check("detail collision shape", dcs != null and dcs.shape != null)
+
+	var ground := node.get_node_or_null("Ground") as MeshInstance3D
+	var coarse_mat := ground.material_override if ground != null else null
+	_check("coarse uses shader when hiding centre", coarse_mat is ShaderMaterial)
+	_check("coarse hide_centre_region", _shader_param(coarse_mat, "hide_centre_region") == true)
+	_check("coarse use_detail off", _shader_param(coarse_mat, "use_detail") == false)
+
+	var detail_ground := node.get_node_or_null("DetailGround") as MeshInstance3D
+	var detail_mat := detail_ground.material_override if detail_ground != null else null
+	_check("detail patch_mesh", _shader_param(detail_mat, "patch_mesh") == true)
+	_check("detail render priority above coarse",
+		detail_mat.render_priority > coarse_mat.render_priority)
+
+	TerrainBuilder.remove_detail_patch(node)
+	var dg := node.get_node_or_null("DetailGround")
+	if dg != null:
+		dg.free()
+	_check("DetailGround removed", not TerrainBuilder.has_detail_ground(node))
+	node.free()
+
+
+func _test_aaigrid() -> void:
+	# Minimal ESRI ASCII grid: 3×2, one NODATA cell.
+	var text := "ncols 3\nnrows 2\nxllcorner 0.0\nyllcorner 0.0\ncellsize 0.01\nNODATA_value -9999\n10 20 30\n40 -9999 60\n"
+	var parsed := ElevationServiceScript.parse_aaigrid(text)
+	_check("aaigrid parsed", not parsed.is_empty())
+	if not parsed.is_empty():
+		_check("aaigrid cols/rows", int(parsed["cols"]) == 3 and int(parsed["rows"]) == 2)
+		var g: PackedFloat32Array = parsed["grid"]
+		_check("aaigrid size", g.size() == 6)
+		_check("aaigrid north-first ordering", _approx(g[0], 10.0, 1e-6))
+		_check("aaigrid NODATA→NAN", is_nan(g[4]))
+	_check("aaigrid rejects malformed", ElevationServiceScript.parse_aaigrid("ncols 3\n1 2").is_empty())
+
+
+func _test_cache_settings() -> void:
+	var lat := 46.2445
+	var lon := -121.0722
+	var token := TerrainCacheSettings.coord_token(lat, lon)
+	_check("coord token format", token == "46.2445_-121.0722")
+	_check("warm cache false for unused site",
+		not TerrainCacheSettings.has_warm_cache(-48.0, 88.0))
+	var dem_dir := TerrainCacheSettings.DEM_DIR
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dem_dir))
+	var keep := "%s/dem_other_47.0000_-122.0000_15000.json" % dem_dir
+	var drop := "%s/dem_selftest_%s_15000.json" % [dem_dir, token]
+	for p in [keep, drop]:
+		var f := FileAccess.open(p, FileAccess.WRITE)
+		if f != null:
+			f.store_string("{}")
+			f.close()
+	var removed := TerrainCacheSettings.invalidate_dem(lat, lon)
+	_check("invalidate_dem removes site files", removed >= 1, "removed %d" % removed)
+	_check("other site dem file kept", FileAccess.file_exists(keep))
+	if FileAccess.file_exists(drop):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(drop))
+	if FileAccess.file_exists(keep):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(keep))
+
+
+func _test_load_progress() -> void:
+	var p := TerrainLoadProgress.new()
+	p.mark_done("base_dem")
+	p.mark_done("base_img")
+	p.set_partial("detail_dem", 0.5)
+	_check("load progress partial", p.fraction() > 0.3 and p.fraction() < 0.6,
+		"got %.3f" % p.fraction())
+	p.mark_done("walkable")
+	p.mark_done("detail_dem")
+	p.mark_done("detail_img")
+	p.mark_done("osm_map")
+	p.mark_done("osm_veg")
+	_check("load progress complete", p.is_complete() and _approx(p.fraction(), 1.0, 1e-6))
+	_check("complete label", p.active_label() == "Map loaded")

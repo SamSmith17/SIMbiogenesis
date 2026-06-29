@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://power_system/devices/laptop_charger.gd" id="1_script"]
+
+[node name="LaptopCharger" type="Node3D"]
+script = ExtResource("1_script")
+display_name = "Laptop Charger"
+battery_capacity_wh = 60.0
+max_charging_power_watts = 65.0
+

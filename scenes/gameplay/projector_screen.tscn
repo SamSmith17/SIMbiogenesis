@@ -1,0 +1,12 @@
+[gd_scene load_steps=2 format=3 uid="uid://projector_screen_scene"]
+
+[ext_resource type="Script" path="res://scenes/gameplay/projector_screen.gd" id="1_script"]
+
+[node name="ProjectorScreen" type="Node3D"]
+script = ExtResource("1_script")
+screen_width = 3.0
+screen_height = 2.0
+frame_delay = 2
+glow_intensity = 0.5
+viewport_resolution = Vector2i(640, 480)
+

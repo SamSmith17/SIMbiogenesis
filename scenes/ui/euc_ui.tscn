@@ -1,0 +1,160 @@
+[gd_scene format=3 uid="uid://dcl5sxloqaa6k"]
+
+[ext_resource type="Script" uid="uid://cfer61w7iscg7" path="res://scenes/ui/euc_ui.gd" id="1_script"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.05, 0.08, 0.12, 0.95)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.1, 0.6, 0.9, 0.9)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+shadow_color = Color(0, 0.3, 0.5, 0.4)
+shadow_size = 6
+
+[node name="EUCUI" type="CanvasLayer"]
+layer = 40
+visible = false
+script = ExtResource("1_script")
+
+[node name="Panel" type="PanelContainer" parent="."]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = -220.0
+offset_right = 340.0
+offset_bottom = -20.0
+grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="MarginContainer" type="MarginContainer" parent="Panel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 16
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel/MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="TitleContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="EUCIcon" type="Label" parent="Panel/MarginContainer/VBoxContainer/TitleContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.1, 0.7, 1, 1)
+theme_override_font_sizes/font_size = 28
+text = "⚡"
+
+[node name="TitleLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/TitleContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.1, 0.7, 1, 1)
+theme_override_font_sizes/font_size = 22
+text = " EUC STATUS"
+
+[node name="HSeparator" type="HSeparator" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="BatteryContainer" type="VBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="BatteryLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/BatteryContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_font_sizes/font_size = 14
+text = "BATTERY"
+
+[node name="BatteryBarContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer/BatteryContainer"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="BatteryBar" type="ProgressBar" parent="Panel/MarginContainer/VBoxContainer/BatteryContainer/BatteryBarContainer"]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+size_flags_horizontal = 3
+value = 100.0
+show_percentage = false
+
+[node name="BatteryPercent" type="Label" parent="Panel/MarginContainer/VBoxContainer/BatteryContainer/BatteryBarContainer"]
+custom_minimum_size = Vector2(70, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.2, 1, 0.4, 1)
+theme_override_font_sizes/font_size = 20
+text = "100%"
+horizontal_alignment = 2
+
+[node name="BatteryWh" type="Label" parent="Panel/MarginContainer/VBoxContainer/BatteryContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.5, 1)
+theme_override_font_sizes/font_size = 13
+text = "1000 / 1000 Wh"
+horizontal_alignment = 1
+
+[node name="HSeparator2" type="HSeparator" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="StatsContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="DistanceContainer" type="VBoxContainer" parent="Panel/MarginContainer/VBoxContainer/StatsContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="DistanceLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/StatsContainer/DistanceContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_font_sizes/font_size = 12
+text = "TRIP"
+horizontal_alignment = 1
+
+[node name="DistanceValue" type="Label" parent="Panel/MarginContainer/VBoxContainer/StatsContainer/DistanceContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 24
+text = "0.0 mi"
+horizontal_alignment = 1
+
+[node name="SpeedContainer" type="VBoxContainer" parent="Panel/MarginContainer/VBoxContainer/StatsContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="SpeedLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/StatsContainer/SpeedContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_font_sizes/font_size = 12
+text = "SPEED"
+horizontal_alignment = 1
+
+[node name="SpeedValue" type="Label" parent="Panel/MarginContainer/VBoxContainer/StatsContainer/SpeedContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.9, 0.3, 1)
+theme_override_font_sizes/font_size = 24
+text = "0 mph"
+horizontal_alignment = 1
+
+[node name="RangeContainer" type="VBoxContainer" parent="Panel/MarginContainer/VBoxContainer/StatsContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RangeLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/StatsContainer/RangeContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_font_sizes/font_size = 12
+text = "RANGE"
+horizontal_alignment = 1
+
+[node name="RangeValue" type="Label" parent="Panel/MarginContainer/VBoxContainer/StatsContainer/RangeContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.8, 1, 1)
+theme_override_font_sizes/font_size = 24
+text = "33 mi"
+horizontal_alignment = 1
