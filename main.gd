@@ -472,6 +472,8 @@ func solar_time_to_clock_time( solar_time: float ) -> float :
 @onready var crisis_event_manager : Node = get_node_or_null( "CrisisEventManager" )
 @onready var crisis_event_ui : CanvasLayer = get_node_or_null( "UILayer/CrisisEventUI" ) as CanvasLayer
 @onready var save_load_ui : CanvasLayer = get_node_or_null( "UILayer/SaveLoadUI" ) as CanvasLayer
+var toast_ui : ToastUI = null
+var help_overlay_ui : HelpOverlayUI = null
 @onready var location_picker : Control = get_node_or_null( "UILayer/LocationPickerUI" ) as Control
 @onready var projection_canvas : Control = get_node_or_null( "UILayer/ProjectionCanvas" ) as Control
 @onready var pov_warp_overlay : Control = get_node_or_null( "UILayer/POVWarpOverlay" ) as Control
@@ -521,6 +523,10 @@ func _ready() -> void :
 	# Restore the user's chosen location so it persists across playtests
 	# (independent of save games). Default scene coords stand until first set.
 	_load_location_prefs()
+
+	_setup_toast_ui()
+	_setup_help_overlay_ui()
+	_maybe_show_first_run_help()
 
 	_apply_scenario_rules()
 
@@ -594,6 +600,7 @@ func _try_apply_pending_resume() -> void :
 		return
 	if not _apply_save_snapshot( data ) :
 		push_warning( "Save/Load: pending resume could not be applied." )
+		show_toast( "Could not resume your save — data was invalid or incompatible.", ToastUI.Level.ERROR )
 
 
 func _consume_save_payload( data: Dictionary ) -> bool :
@@ -607,17 +614,59 @@ func _consume_save_payload( data: Dictionary ) -> bool :
 		want = MapDefinition.snapshot_scene_path( self )
 	var want_file : String = MapDefinition.resolve_playable_scene_path( want )
 	var cur : String = MapDefinition.normalize_scene_path( String( scene_file_path ).strip_edges() )
-	if want == cur :
+	# Every user location map shares one scene shell (generated_location.tscn), so
+	# matching scene paths is NOT sufficient — a save from Washington and one from
+	# Texas both report that same scene. For generated maps also compare the saved
+	# coordinates; when the site differs we must rebuild the terrain, not just
+	# stamp the saved time/position onto whatever world is currently loaded.
+	var same_target : bool = ( want == cur )
+	if same_target and want == MapDefinition.GENERATED_SCENE :
+		same_target = _save_matches_current_site( data )
+	if same_target :
 		return _apply_save_snapshot( data )
 	var payload : Dictionary = data.duplicate( true )
 	payload["scene_path"] = want
 	sg.set_pending_resume_payload( payload )
+	# Generated maps can't receive args across change_scene_to_file, so hand the
+	# saved site to the loader via MapContext and flag it as a resume (rebuild the
+	# right terrain, but keep the restored player position instead of re-centring).
+	if want == MapDefinition.GENERATED_SCENE :
+		_set_map_context_from_save( data )
 	var err : Error = get_tree().change_scene_to_file( want_file )
 	if err != OK :
 		sg.clear_pending_resume_payload()
 		push_warning( "Save/Load: could not change scene to %s (err %d)" % [ want, err ] )
+		show_toast( "Could not load that map — the scene failed to change.", ToastUI.Level.ERROR )
 		return false
 	return true
+
+
+## True when the save's coordinates match the live world (same generated site).
+## ~1e-4° ≈ 11 m tolerance absorbs float round-trips while still distinguishing
+## genuinely different cities.
+func _save_matches_current_site( data: Dictionary ) -> bool :
+	var md : Variant = data.get( "main", {} )
+	if not ( md is Dictionary ) :
+		return true
+	var d : Dictionary = md
+	var slat : float = float( d.get( "latitude", latitude ) )
+	var slon : float = float( d.get( "longitude", longitude ) )
+	return absf( slat - latitude ) < 1e-4 and absf( slon - longitude ) < 1e-4
+
+
+## Seed MapContext from a save payload so the generated-map loader rebuilds the
+## saved site (from_resume keeps the restored player position).
+func _set_map_context_from_save( data: Dictionary ) -> void :
+	var ctx := get_node_or_null( "/root/MapContext" )
+	if ctx == null or not ctx.has_method( "set_pending" ) :
+		return
+	var md : Variant = data.get( "main", {} )
+	var d : Dictionary = md if md is Dictionary else {}
+	var slat : float = float( d.get( "latitude", latitude ) )
+	var slon : float = float( d.get( "longitude", longitude ) )
+	var half : float = float( data.get( "half_extent_m", 0.0 ) )
+	var label : String = str( data.get( "map_display_name", "" ) )
+	ctx.set_pending( slat, slon, label, half, true )
 
 
 func _apply_scenario_rules() -> void :
@@ -839,7 +888,9 @@ func _on_save_slot( slot_index: int ) -> void :
 	if sg == null :
 		return
 	var snap : Dictionary = build_save_snapshot()
-	sg.save_manual_slot( slot_index, snap )
+	if not sg.save_manual_slot( slot_index, snap ) :
+		push_warning( "Save/Load: could not write slot %d." % slot_index )
+		show_toast( "Save failed — could not write slot %d." % ( slot_index + 1 ), ToastUI.Level.ERROR )
 
 func _on_delete_slot( slot_index: int ) -> void :
 	var sg : SaveGameService = _save_game_service()
@@ -854,7 +905,9 @@ func request_autosave() -> void :
 	var sg : SaveGameService = _save_game_service()
 	if sg == null :
 		return
-	sg.save_autosave( build_save_snapshot() )
+	if not sg.save_autosave( build_save_snapshot() ) :
+		push_warning( "Save/Load: autosave failed to write." )
+		show_toast( "Autosave failed — check disk space.", ToastUI.Level.WARN )
 
 
 func build_save_snapshot() -> Dictionary :
@@ -935,6 +988,7 @@ func _apply_save_snapshot( data: Dictionary ) -> bool :
 		return false
 	if not sg.validate_payload( data ) :
 		push_warning( "Save/Load: invalid or incompatible save data." )
+		show_toast( "Save data invalid or incompatible — could not load.", ToastUI.Level.ERROR )
 		return false
 	var main_d: Variant = data.get( "main", {} )
 	if main_d is Dictionary :
@@ -2324,6 +2378,77 @@ func _setup_interaction_ui() -> void :
 		player.interaction_ui = interaction_ui
 	if is_instance_valid( player ) and is_instance_valid( euc_ui ) :
 		player.euc_ui = euc_ui
+
+
+## Instances the global HUD toast stack under UILayer (once per scene tree).
+func _setup_toast_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing := ui_layer.get_node_or_null( "ToastUI" )
+	if existing != null :
+		toast_ui = existing as ToastUI
+		return
+	toast_ui = ToastUI.new()
+	toast_ui.name = "ToastUI"
+	ui_layer.add_child( toast_ui )
+
+
+## Shows a HUD toast. level: ToastUI.Level (INFO/OK/WARN/ERROR).
+func show_toast( text: String, level: ToastUI.Level = ToastUI.Level.INFO, duration: float = 5.0 ) -> void :
+	if is_instance_valid( toast_ui ) :
+		toast_ui.show_toast( text, level, duration )
+
+
+## Instances the F1 controls/tips overlay under UILayer (once per scene tree).
+func _setup_help_overlay_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing := ui_layer.get_node_or_null( "HelpOverlayUI" )
+	if existing != null :
+		help_overlay_ui = existing as HelpOverlayUI
+		return
+	help_overlay_ui = HelpOverlayUI.new()
+	help_overlay_ui.name = "HelpOverlayUI"
+	ui_layer.add_child( help_overlay_ui )
+
+
+const _UI_PREFS_CFG : String = "user://ui_prefs.cfg"
+
+## Auto-opens the help overlay once on this PC's first boot, staggered a beat
+## after any terrain-load overlay clears so the two full-screen modals never
+## stack. No-op on every later boot (persists a "seen" flag).
+func _maybe_show_first_run_help( attempts_left: int = 120 ) -> void :
+	var cfg := ConfigFile.new()
+	if cfg.load( _UI_PREFS_CFG ) == OK and bool( cfg.get_value( "help", "first_run_seen", false ) ) :
+		return
+	var ui_layer := get_node_or_null( "UILayer" )
+	var loading := ui_layer != null and ui_layer.get_node_or_null( "TerrainLoadOverlay" ) != null
+	if loading and attempts_left > 0 :
+		get_tree().create_timer( 0.5 ).timeout.connect( _maybe_show_first_run_help.bind( attempts_left - 1 ), CONNECT_ONE_SHOT )
+		return
+	var cfg2 := ConfigFile.new()
+	cfg2.load( _UI_PREFS_CFG )
+	cfg2.set_value( "help", "first_run_seen", true )
+	var err := cfg2.save( _UI_PREFS_CFG )
+	if err != OK :
+		push_warning( "UI prefs: could not write %s (err %d)" % [ _UI_PREFS_CFG, err ] )
+	if is_instance_valid( help_overlay_ui ) :
+		help_overlay_ui.open()
+	_queue_first_run_hint_toasts()
+
+
+func _queue_first_run_hint_toasts() -> void :
+	var hints := [
+		"Press G to open the system graph and wire up your power grid.",
+		"Aim your crosshair at a solar array and press Interact to add it to your grid.",
+		"Press F1 anytime for controls and tips.",
+	]
+	for i in hints.size() :
+		var delay : float = 4.0 + float( i ) * 5.0
+		get_tree().create_timer( delay ).timeout.connect(
+			show_toast.bind( hints[ i ], ToastUI.Level.INFO, 6.0 ), CONNECT_ONE_SHOT )
 
 
 func _setup_baked_placed_props_ui() -> void :
