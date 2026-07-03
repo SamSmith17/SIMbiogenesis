@@ -62,6 +62,29 @@ from re-seating the player on save resume). `core/terrain/terrain_loader.gd`
 (main.gd save snapshot + `_apply_save_snapshot`); resume rebuilds the same terrain
 (deterministic, same mean-elevation centring → saved player y still valid).
 
+**OSM solar arrays (player-selected, not auto-added).** BuildingService pulls
+`power=generator` solar ways; `terrain_loader._apply_solar_arrays()` builds each
+footprint's panels in-world (`core/terrain/solar_array_builder.gd`) and records them
+in `_solar_arrays` (poly + panel_count + base_y + stable centroid `tag`), but adds
+NOTHING to the graph/SolarUI on load. The player aims the crosshair at an array
+(`interaction_focus.gd:_update_solar_focus` → `pick_solar_array_at_world`), it
+highlights **red** (`_draw_solar_highlight`, reuses `TerrainBuilder.build_polygon_highlight`),
+and Interact calls `add_solar_array_to_graph(idx)` → `SystemGraphView.add_imported_solar_panels(count, watts, label, array_tag)`
+(per-`array_tag` idempotent: re-adding replaces only that array's nodes, keeps
+others) + `_refresh_added_solar_total()` feeds the accumulated count to SolarUI.
+Added-set (`_added_solar_tags`) survives in-session terrain rebuilds; graph autosave
+persists nodes across loads (tag keying prevents duplicates on re-add).
+
+**Graph PV electrical + layout (system_graph/).** `PvElectrical` computes string Voc
+(series sum / parallel branch max, cold-temp boost) on PV connections; exceeding
+`controller.specs.max_voc` sets `destroyed` + education overlay + smoke FX on the
+canvas; RESET hit-test on the node (`controller_reset_pressed`) or inspector button
+clears fault and re-checks wiring. `GraphLayout.resolve_overlaps` + fit-to-view run
+on first load (no saved layout) and via toolbar **Arrange**; `GraphPvWiring` wires
+marquee-selected panels **Series** or **Parallel** to nearest controller `pvPositive`/
+`pvNegative`. Destroyed controllers shed AC via `SolarUI.set_graph_controller_destroyed`.
+Self-test: `system_graph/graph_electrical_selftest.gd`.
+
 **Terrain data services (autoloads, copy the weather_service HTTP+cache+deferred
 pattern):**
 - `core/terrain/elevation_service.gd` (`ElevationService`): DEM grid. No-key
@@ -69,11 +92,35 @@ pattern):**
   CONCURRENT connections per IP (429), not request count** — so batches are
   fetched SEQUENTIALLY (POOL_SIZE=1, DISPATCH_DELAY between requests). A concurrent
   pool tripped 429 and fell back to flat terrain; sequential is reliable.
-  DEFAULT_GRID_N=16 = 3 requests (~15 s first time, then cached; ~1.9 km spacing,
-  upsampled to mesh res). Optional upgrade = OpenTopography SRTM 30 m (single
-  AAIGrid request, no rate issues) when `user://terrain_config.cfg
-  [opentopography] api_key=` is set (gitignored, never commit). 429/5xx → backoff
-  retry (MAX_RETRIES=3, then flat fallback). Cache `user://terrain_cache/dem/`.
+ DEFAULT_GRID_N=16 = 3 requests (~15 s first time, then cached; ~1.9 km spacing,
+ upsampled to mesh res). **Detail (centre 3 km) DEM is ALWAYS fetched now** — with
+ an OpenTopography key it's a single 512² AAIGrid; without a key the service caps
+ the Open-Meteo detail fetch to OPENMETEO_DETAIL_N (64² ≈ ~47 m spacing, far finer
+ than the 1.9 km base grid) at ~40 serial requests. The `terrain_loader` step-4
+ gate that used to `_skip_detail_dem()` without a key was removed — the DEM caches,
+ so the first visit per site pays the ~30 s fetch once (inside the blocking load
+ sequence) and every reload is an instant cache hit. Optional upgrade =
+ OpenTopography SRTM 30 m when `user://terrain_config.cfg [opentopography]
+ api_key=` is set (gitignored, never commit). 429/5xx → backoff retry
+ (MAX_RETRIES=3). **Open-Meteo enforces a DAILY quota per IP** — when a batch
+ returns `{"error":true,"reason":"Daily API request limit exceeded"}`
+ (`_is_openmeteo_daily_limit`), the service fails FAST (no wasteful retries),
+ latches `is_openmeteo_daily_exhausted()`, and the loader then SKIPS the no-key
+ detail-DEM storm so OSM + vegetation phases aren't blocked ~20 min. **Cache
+ recovery:** `find_usable_cached_dem(lat, lon, tag)` returns the best on-disk DEM
+ for a site IGNORING the cache_enabled toggle; the loader's `_apply_elevation_fallback`
+ (base) and `_recover_detail_dem_from_cache` (detail) use it so a quota/offline
+ failure reuses the last good DEM instead of going flat. `grid_is_usable()` rejects
+ flat 2×2 / zero-relief grids (both live results and corrupt caches, which are then
+ deleted). Only when NO usable cache exists does it fall back to the flat 2×2 grid
+ (with a user-visible "Elevation unavailable" warning). Each load phase in
+ `terrain_loader._run_load_sequence` now has a TIMEOUT (`_phase_await(secs)`: base
+ 120 s, detail 300 s, OSM/veg 180 s) so a lost/stale callback can't hang the load
+ forever; `ElevationService.reset_session()` cancels in-flight HTTP on each new load.
+ Refresh/reset-fresh are blocked while `_load_sequence_active` or when quota is
+ exhausted with no OpenTopography key (would delete cache with no way to refetch).
+ Cache `user://terrain_cache/dem/`. Both ElevationService + ImageryService print
+ `served from cache — no download` vs `not cached — fetching …` per layer.
 - `core/terrain/imagery_service.gd` (`ImageryService`): ESRI World Imagery XYZ
   JPEG tiles (no key), stitched + cropped to the bbox so UV 0..1 aligns with the
   mesh. Cache `user://terrain_cache/imagery/`. `attribution()` must be credited.
@@ -97,6 +144,58 @@ pattern):**
   HeightMapShape3D collision). Both covered by `terrain_selftest.gd`.
 Both services emit `*_ready`/`*_failed`/`*_progress`; offline → loader falls back
 to a flat grid / neutral drape so the world still loads.
+- `core/terrain/vegetation_osm_service.gd` (`VegetationService`): one Overpass
+ request per site → polygons (wood/forest/scrub/orchard/grass…), `tree_row` lines,
+ `barrier=hedge` lines, and `natural=tree` points; feeds AutoVegetationGenerator's
+ scatter phases. Cache `user://terrain_cache/osm_vegetation/`. **Cache serializer
+ must include `hedge_rows`** — it previously omitted them, so cached reloads
+ silently dropped every hedge (fresh fetch had them, cache didn't); fixed +
+ CACHE_VERSION bumped v4→v5. Any new payload key needs matching
+ `_serialize_payload`/`deserialize_payload` entries or it vanishes on reload.
+
+**Vegetation paint + live preview (`scenes/ui/vegetation_edit_ui.gd`,
+`scenes/ui/vegetation_preview_editor.gd`).** V toggles the bottom paint dock
+(paint/place/clear/select, density, shape tools, Advanced per-species sliders).
+**Tune look…** opens a modal with an isolated `SubViewport` studio (neutral ground +
+fixed key/fill lights) showing a configurable-diameter preview patch filled via
+`VegetationCardFactory`/`GrassBuilder` MultiMesh scatter; right sidebar has veg-type
+dropdown, density, patch diameter, per-species shape sliders, tint, and shader knobs.
+Live edits debounce ~0.1 s; **Apply to map** writes through
+`terrain_loader.set_vegetation_settings` / `set_vegetation_style` (same persistence as
+the dock). Per-tree layout knobs (Tune look + Advanced): pine `pine_whorl_count`,
+`pine_bough_scale`, `pine_whorl_spacing` (whorls centered on trunk); deciduous
+`deciduous_cluster_count/spread/size/tightness`, `deciduous_branch_count/thickness/reach/base`;
+shrub `shrub_cluster_count/spread/size`. Style defaults + per-map JSON in `vegetation/vegetation_style_config.gd`.
+
+**OSM → species binding (Tune look… modal "OSM → tree type" section).** The player
+picks which shader species fills each OSM area kind: `wood`/`scrub`/`park`/`cemetery`/
+`orchard`/`vineyard`/`wetland` → `auto` (biome) | `pine` | `deciduous` | `shrub` |
+`mixed`. Stored as `style["osm_species_map"]` (kind→choice dict, JSON round-trips via
+`VegetationStyleConfig`). `BiomePalette.MAPPABLE_KINDS` / `SPECIES_OVERRIDE_OPTIONS`
+drive the UI; `BiomePalette.species_override_for_kind()` returns a weight dict (or {}
+for auto) that `AutoVegetationGenerator._scatter_polygon` applies over the biome/tag
+default (row crops use `override_single_species`). Changing the map requires a FULL
+generator re-run — `terrain_loader._osm_species_map_changed` (inside
+`_forest_params_changed`) triggers `_full_regenerate_auto_vegetation`. NOTE: a
+format-string bug in `VegetationCardFactory._foot_settings_key` (12 specifiers vs 13
+args) used to spam a runtime error on every scatter batch → slow, error-flooded veg
+loads; fixed to 13 specifiers.
+Card meshes + materials: `vegetation/vegetation_card_factory.gd` → `foliage.gdshader`
+(canopy) + `bark.gdshader` (trunks); shared wind in `wind_vertex.gdshaderinc`.
+Configurable realism uniforms (no extra texture fetches): `translucency_strength`,
+`canopy_roundness`, `color_variation`, `foliage_roughness`, `ao_strength`,
+`subsurface_strength`, `bark_roughness`, `bark_ao_strength`, `bark_color_jitter`.
+
+**OSM water (`core/terrain/water_builder.gd` + `osm_water_parser.gd`).** Two
+surfaces under the `Water` node: **still water** (lake/pond/reservoir/wetland/bay)
+is one flat plane per body at a low percentile of bank heights (`terrain_water.gdshader`
++ per-lake ReflectionProbe); **flowing water** (`FLOWING_KINDS` = river/stream/canal/
+ditch/drain/riverbank) is **draped per-vertex onto the terrain** so the ribbon follows
+the downhill contour instead of floating as one flat plane (the old ~10 m "hover"
+bug). Per-vertex COLOR encodes local downhill flow (rg = −∇height dir, b = slope-scaled
+speed); `terrain_river.gdshader` scrolls ripples + foam streaks downstream, faster on
+steeper reaches. `_ground_y` cross-fades the detail↔base DEM heights within
+`DEM_SEAM_FEATHER_M` (40 m) of the hi-res patch edge so ribbons don't step at the seam.
 
 `main.gd` (~1,900 lines) owns: environment/sky, shadow quality, collision
 generation, save/load orchestration, vehicle/death-zone/crisis wiring.
@@ -355,6 +454,13 @@ not a 4th mode).
 ## Conventions
 
 - Signals are wired in code in `_ready()` (zero editor connections).
+- UI styling goes through `scenes/ui/ui_theme.gd` (`UITheme`): palette,
+  status colors (`C_OK/C_WARN/C_ERROR/C_INFO` — one red, not four), StyleBox
+  factories (`panel_style`/`card_style`/`button_style`/`chip_style`), font +
+  spacing scales, and `LAYER_*` CanvasLayer bands. Migrating files keep their
+  local const names but redirect values (`const C_BG := UITheme.C_BG`).
+  Semantic registries (graph PORT_COLORS etc.) stay local. Multi-phase UX/veg
+  improvement plan: `UX_IMPROVEMENT_PLAN.md`.
 - Physics: cite formula sources in comments; never invent constants; every
   physics change adds checks to source_physics_selftest.gd.
 - Node-name lookups are load-bearing (e.g. "SystemGraphView", "SolarUI",
