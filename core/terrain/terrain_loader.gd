@@ -1135,6 +1135,7 @@ func _attach_buildings(enable_shadows: bool = true) -> void:
 	var styled := _styled_building_indices()
 	for idx in styled:
 		excluded.append(idx)
+	var t0 := Time.get_ticks_msec()
 	var visible_buildings := _features_intersecting_square(_buildings_data, DETAIL_HALF_EXTENT)
 	var node := BuildingBuilder.build_buildings_node(
 		visible_buildings, _built_grid, MESH_RES, _built_extent, _built_center_elev,
@@ -1144,8 +1145,8 @@ func _attach_buildings(enable_shadows: bool = true) -> void:
 		terrain.add_child(node)
 		_buildings_root = node
 	_attach_custom_buildings(terrain, styled, enable_shadows)
-	print("TerrainLoader: extruded %d OSM buildings (%d styled, natural footing, hi-res drape=%s)" % [
-		visible_buildings.size(), styled.size(),
+	print("TerrainLoader: extruded %d OSM buildings (%d styled) in %d ms (hi-res drape=%s)" % [
+		visible_buildings.size(), styled.size(), Time.get_ticks_msec() - t0,
 		"yes" if _detail_drape != null else "base only"])
 
 

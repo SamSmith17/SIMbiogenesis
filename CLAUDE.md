@@ -26,6 +26,9 @@ Godot.exe.exe --headless --path . --quit-after 120 res://scenes/maps/mars_aerial
 
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
+# Building pipeline self-test (offline — roof geometry/UVs/styles/facade
+# elements/wall picking/model catalog; extend it with every building change):
+Godot.exe.exe --headless --path . --script core/terrain/building_builder_selftest.gd
 # Terrain live-fetch smoke test (NETWORK — elevation + imagery for one site):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_fetch_smoketest.gd
 ```
@@ -74,6 +77,35 @@ and Interact calls `add_solar_array_to_graph(idx)` → `SystemGraphView.add_impo
 others) + `_refresh_added_solar_total()` feeds the accumulated count to SolarUI.
 Added-set (`_added_solar_tags`) survives in-session terrain rebuilds; graph autosave
 persists nodes across loads (tag keying prevents duplicates on re-add).
+
+**OSM buildings + Building Builder (core/terrain/building_builder.gd).** Extruded
+footprints seat at ONE base Y (lowest corner sample + 0.35 m skirt) so eaves/roofs
+stay LEVEL on slopes. Roofs honor `roof:shape`/`roof:angle`/`roof:orientation`/
+`roof:direction`; with no tag, residential types default gabled 28°, commercial flat,
+`building=yes` by footprint heuristic (`infer_roof_spec`; cache needs NO version bump
+for tag-parsing changes — `_deser_item` re-derives from cached tags). Ridge geometry
+is a Chebyshev height field over the ridge frame with triangles split at crease
+lines (gable/hip/pyramid faces exactly planar; gable-end wall fills share
+`_roof_height_at` → watertight; star-shaped footprints fall back flat). Merged mesh
+= 2 surfaces (0 walls+floor with per-facade metric UVs, 1 roof with eave-aligned
+slope-metric UVs) under procedural `building_wall.gdshader` (lap siding, foundation
+band at V<0) + `building_roof.gdshader` (staggered shingles; COLOR.a=0 → flat
+membrane); per-building tint in vertex COLOR from `building:colour`/`roof:colour`
+or a tag-hashed palette. **Per-building styles:** `BuildingStyleLayer`
+(`user://maps/building_styles_<lat>_<lon>.json`, keyed by `building_tag` =
+metre-rounded centroid) overrides roof shape/pitch/colors/height/base offset +
+facade `elements` (doors/windows as proud quads on a 3rd surface); styled buildings
+are EXCLUDED from the merged mesh and rebuilt as `BuildingsCustom/B_<tag>` children
+via `build_single_building` (same `_append_footprint` path; the modal previews with
+a flat 2×2 DEM). Crosshair focus draws an amber roof-level outline; Interact or B
+(`building_builder` action) opens `scenes/ui/building_builder_modal.gd` (veg
+"Tune look" pattern: SubViewport studio + debounced sidebar; clicking the preview
+ray-picks the wall via `pick_wall_point` — pure math, no studio physics — to place
+doors/windows; Library tab lists `ModelCatalog.models_in_category("structures")`
+incl. StarShade and hands off to `PlacedPropService` ghost placement or
+`replace_osm_building`). `apply_building_style` rebuilds one child; entering/leaving
+the styled set re-runs `_attach_buildings`. Selftest:
+`core/terrain/building_builder_selftest.gd` (100 checks).
 
 **Graph PV electrical + layout (system_graph/).** `PvElectrical` computes string Voc
 (series sum / parallel branch max, cold-temp boost) on PV connections; exceeding
