@@ -43,9 +43,20 @@ const FPV_DRONE_SCENE := preload("res://scenes/gameplay/fpv_drone.tscn")
 const DRONE_SPAWN_CLEARANCE_M := 0.1
 const DRONE_SPAWN_OFFSET := Vector3(5.0, 0.0, 5.0)
 
+# Spawn-clearing: when the map centre falls inside an OSM building footprint
+# (e.g. the picked address is a rooftop), walk outward on a widening ring until
+# an open-ground point is found so the player doesn't start trapped in the mesh.
+const SPAWN_CLEAR_RING_STEP_M := 5.0
+const SPAWN_CLEAR_MAX_RADIUS_M := 150.0
+const SPAWN_CLEAR_ANGLE_STEPS := 16
+# Extra push (m) past the first clear point so the player lands clearly outside
+# the wall rather than flush against it.
+const SPAWN_CLEAR_MARGIN_M := 3.0
+
 const TERRAIN_EDIT_UI_SCRIPT := preload("res://scenes/ui/terrain_edit_ui.gd")
 const TERRAIN_OPTIONS_UI_SCRIPT := preload("res://scenes/ui/terrain_options_ui.gd")
 const VEGETATION_EDIT_UI_SCRIPT := preload("res://scenes/ui/vegetation_edit_ui.gd")
+const VEGETATION_PREVIEW_EDITOR_SCRIPT := preload("res://scenes/ui/vegetation_preview_editor.gd")
 const CAMP_SCATTER_UI_SCRIPT := preload("res://scenes/ui/camp_scatter_ui.gd")
 const PLACED_PROPS_UI_SCRIPT := preload("res://scenes/ui/placed_props_ui.gd")
 const PLACED_PROP_EDIT_UI_SCRIPT: GDScript = preload("res://scenes/ui/placed_prop_edit_ui.gd")
@@ -96,16 +107,33 @@ var _terrain_edit_ui: Control = null
 var _terrain_options_ui: Control = null
 var _vegetation_layer: VegetationLayer = null
 var _vegetation_edit_ui: Control = null
+var _vegetation_preview_ui: Control = null
 var _auto_veg_layer: AutoVegetationLayer = null
 var _auto_veg_data: Dictionary = {}
 var _auto_veg_generated := false
 var _auto_veg_edits: AutoVegetationEdits = null
 var _veg_style: Dictionary = {}
+## Re-entrancy guard for the async auto-veg GPU rebuild: overlapping rebuilds
+## clear + re-add the same MultiMesh children concurrently (a native crash / GPU
+## spike risk), so a rebuild requested while one is running just marks it dirty
+## and the in-flight rebuild re-runs once with the latest state when it finishes.
+var _auto_rebuild_active := false
+var _auto_rebuild_dirty := false
 var _veg_undo := VegetationUndo.new()
 var _placed_prop_layer: PlacedPropLayer = null
 var _placed_props_ui: Control = null
 var _placed_prop_edit_ui: Control = null
 var _building_focus_idx: int = -1
+## OSM solar arrays built in-world but NOT auto-added to the graph. Each record:
+## {name, poly, panel_count, watts, base_y, tilt, azimuth, tag, added}. The player
+## targets one via the crosshair (see pick_solar_array_at_world) and confirms to add
+## it to the system graph — nothing is added automatically on load.
+var _solar_arrays: Array = []
+var _solar_focus_idx: int = -1
+var _solar_highlight: MeshInstance3D = null
+## Persist which arrays the player already added across in-session terrain rebuilds
+## (tag -> {count, watts}); drives the accumulated SolarUI generation total.
+var _added_solar_tags: Dictionary = {}
 var _veg_highlight: MeshInstance3D = null
 var _footing_grid := PackedFloat32Array()
 var _detail_surface_grid := PackedFloat32Array()
@@ -143,6 +171,26 @@ func _ready() -> void:
 	# Deferred: Main is still "busy setting up children" during our _ready, so
 	# add_child() on it would fail. By the deferred call Main is fully ready.
 	_begin.call_deferred()
+
+
+## Push the current weather-driven ground snow cover to the terrain shader(s).
+## Cheap (two shader-param sets); runs only once terrain is built.
+func _process(_delta: float) -> void:
+	if Engine.is_editor_hint() or not _built or _main == null:
+		return
+	if not _main.has_method("get_snow_amount"):
+		return
+	var snow := clampf(float(_main.call("get_snow_amount")), 0.0, 1.0)
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	for node_name in ["Ground", "DetailGround"]:
+		var mi := terrain.get_node_or_null(node_name) as MeshInstance3D
+		if mi == null:
+			continue
+		var mat := mi.material_override
+		if mat is ShaderMaterial:
+			(mat as ShaderMaterial).set_shader_parameter("snow_amount", snow)
 
 
 func _begin() -> void:
@@ -315,8 +363,14 @@ func _phase_resolve(key: String, ok: bool) -> void:
 	_phase_waiting = false
 
 
-func _phase_await() -> bool:
+func _phase_await(timeout_s: float = 0.0) -> bool:
+	var deadline_ms := Time.get_ticks_msec() + int(timeout_s * 1000.0) if timeout_s > 0.0 else -1
 	while _phase_waiting:
+		if deadline_ms >= 0 and Time.get_ticks_msec() >= deadline_ms:
+			push_warning("TerrainLoader: phase '%s' timed out after %.0fs" % [_phase_key, timeout_s])
+			_phase_waiting = false
+			_phase_ok = false
+			return false
 		await get_tree().process_frame
 	return _phase_ok
 
@@ -331,13 +385,15 @@ func _settle_gpu(frames: int = SETTLE_FRAMES) -> void:
 
 func _run_load_sequence() -> void:
 	_load_sequence_active = true
+	var es := get_node_or_null("/root/ElevationService")
+	if es != null and es.has_method("reset_session"):
+		es.reset_session()
 
 	# 1. Base DEM
-	var es := get_node_or_null("/root/ElevationService")
 	if es != null:
 		_phase_begin("elev:base")
 		es.request_elevation(_lat, _lon, _half_extent, ElevationService.DEFAULT_GRID_N, "base")
-		if not await _phase_await():
+		if not await _phase_await(120.0):
 			_apply_elevation_fallback("base")
 		await _settle_gpu()
 	else:
@@ -348,7 +404,7 @@ func _run_load_sequence() -> void:
 	if img != null:
 		_phase_begin("img:base")
 		img.request_imagery(_lat, _lon, _half_extent)
-		if not await _phase_await():
+		if not await _phase_await(180.0):
 			_apply_imagery_fallback("base")
 		await _settle_gpu()
 	else:
@@ -370,18 +426,41 @@ func _run_load_sequence() -> void:
 
 
 func _run_post_terrain_sequence() -> void:
-	# 4. Hi-res centre DEM (OpenTopography only — skipped when no key).
+	# 4. Hi-res centre DEM. OpenTopography (key) delivers a single 512² AAIGrid;
+	# without a key we still fetch via Open-Meteo — the ElevationService caps that
+	# to OPENMETEO_DETAIL_N (64²) so the centre ~3 km gets ~47 m spacing (far finer
+	# than the ~1.9 km base grid) at a bounded ~40-request cost. The result caches,
+	# so the first load per site pays the fetch once and every reload is instant.
+	# When Open-Meteo daily quota is exhausted and there is no OpenTopography key,
+	# skip detail entirely so OSM + vegetation phases are not blocked for ~20 min.
 	var es := get_node_or_null("/root/ElevationService")
-	if es != null and es.has_method("has_opentopo_key") and es.has_opentopo_key():
+	var skip_detail := false
+	if es != null:
+		var has_key: bool = es.has_method("has_opentopo_key") and es.has_opentopo_key()
+		var quota_hit: bool = es.has_method("is_openmeteo_daily_exhausted") \
+				and es.is_openmeteo_daily_exhausted()
+		skip_detail = not has_key and quota_hit
+	if es != null and not skip_detail:
+		var has_key: bool = es.has_method("has_opentopo_key") and es.has_opentopo_key()
+		if not has_key:
+			_update_load_ui("Loading hi-res centre elevation (first visit only — cached after) …")
 		_phase_begin("elev:detail")
 		es.request_elevation(_lat, _lon, DETAIL_HALF_EXTENT,
 			ElevationService.DETAIL_GRID_N, "detail")
-		if await _phase_await():
+		if await _phase_await(300.0):
+			await _rebuild_heightfield_staggered(true)
+		elif _recover_detail_dem_from_cache():
 			await _rebuild_heightfield_staggered(true)
 		else:
 			_skip_detail_dem()
 	else:
-		_skip_detail_dem()
+		if skip_detail:
+			push_warning("TerrainLoader: skipping detail DEM — Open-Meteo daily quota exhausted")
+			_toast("Elevation quota reached — skipping hi-res detail terrain for now.", ToastUI.Level.WARN)
+		if _recover_detail_dem_from_cache():
+			await _rebuild_heightfield_staggered(true)
+		else:
+			_skip_detail_dem()
 	await _settle_gpu()
 
 	# 5. Hi-res centre imagery + detail-drape shader.
@@ -389,7 +468,7 @@ func _run_post_terrain_sequence() -> void:
 	if img != null:
 		_phase_begin("img:detail")
 		img.request_imagery(_lat, _lon, DETAIL_HALF_EXTENT, DETAIL_TARGET_PX, "detail", DETAIL_MAX_ZOOM)
-		if await _phase_await():
+		if await _phase_await(180.0):
 			_apply_detail()
 			_resolve_detail_imagery()
 		else:
@@ -404,7 +483,7 @@ func _run_post_terrain_sequence() -> void:
 		_phase_begin("osm_map")
 		var cfg := _terrain_config()
 		bs.request_osm_vectors(_lat, _lon, AUTO_VEG_HALF_EXTENT, cfg.flatten_landuse)
-		if await _phase_await():
+		if await _phase_await(180.0):
 			await _apply_osm_overlays()
 		else:
 			_load_progress_mark_done("osm_map")
@@ -418,7 +497,7 @@ func _run_post_terrain_sequence() -> void:
 		if vs != null:
 			_phase_begin("osm_veg")
 			vs.request_vegetation(_lat, _lon, AUTO_VEG_HALF_EXTENT)
-			if await _phase_await():
+			if await _phase_await(180.0):
 				await _auto_veg_scatter_async(false)
 			_load_progress_mark_done("osm_veg")
 		else:
@@ -437,7 +516,24 @@ func _apply_elevation_fallback(tag: String) -> void:
 	if tag == "detail":
 		_skip_detail_dem()
 		return
+	var recovered := ElevationService.find_usable_cached_dem(_lat, _lon, "base")
+	if recovered.is_empty():
+		recovered = ElevationService.find_usable_cached_dem(_lat, _lon)
+	if not recovered.is_empty():
+		push_warning("TerrainLoader: live elevation failed — using recovered cached DEM")
+		_elev_grid = recovered["grid"]
+		_elev_cols = int(recovered["cols"])
+		_elev_rows = int(recovered["rows"])
+		_elev_done = true
+		_load_progress_mark_done("base_dem")
+		_notify_options_status("Elevation fetch failed — using last cached terrain", "warn")
+		_toast("Elevation fetch failed — using last cached terrain for this site.", ToastUI.Level.WARN)
+		return
 	push_warning("TerrainLoader: elevation fetch failed — using flat fallback")
+	_notify_options_status(
+		"Elevation unavailable (flat terrain) — Open-Meteo quota or network; add OpenTopography key",
+		"warn")
+	_toast("Elevation unavailable — using flat terrain (network/quota issue).", ToastUI.Level.WARN)
 	_elev_grid = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 	_elev_cols = 2
 	_elev_rows = 2
@@ -450,6 +546,7 @@ func _apply_imagery_fallback(tag: String) -> void:
 		_resolve_detail_imagery()
 		return
 	push_warning("TerrainLoader: imagery fetch failed — using neutral drape")
+	_toast("Satellite imagery unavailable — using a neutral ground drape.", ToastUI.Level.WARN)
 	_drape = null
 	_img_done = true
 	_load_progress_mark_done("base_img")
@@ -458,6 +555,30 @@ func _apply_imagery_fallback(tag: String) -> void:
 func _skip_detail_dem() -> void:
 	_detail_elev_resolved = true
 	_load_progress_mark_done("detail_dem")
+
+
+## Load a usable hi-res centre DEM from disk when the live detail fetch can't run
+## (quota/offline). Returns true and seats _detail_elev_* so the heightfield rebuild
+## picks up local relief; false when no cached detail DEM exists for this site.
+func _recover_detail_dem_from_cache() -> bool:
+	var recovered := ElevationService.find_usable_cached_dem(_lat, _lon, "detail")
+	if recovered.is_empty():
+		return false
+	var grid: PackedFloat32Array = recovered["grid"]
+	var cols := int(recovered["cols"])
+	var rows := int(recovered["rows"])
+	if cols > DETAIL_MESH_RES or rows > DETAIL_MESH_RES:
+		grid = TerrainBuilder.resample(grid, cols, rows, DETAIL_MESH_RES)
+		cols = DETAIL_MESH_RES
+		rows = DETAIL_MESH_RES
+	_detail_elev_grid = grid
+	_detail_elev_cols = cols
+	_detail_elev_rows = rows
+	_detail_elev_done = true
+	_detail_elev_resolved = true
+	_load_progress_mark_done("detail_dem")
+	push_warning("TerrainLoader: recovered hi-res centre DEM from cache (live fetch unavailable)")
+	return true
 
 
 ## Attach buildings + water after OSM vectors arrive (sequential load phase 6–7).
@@ -475,9 +596,12 @@ func _apply_osm_overlays() -> void:
 	_load_progress_mark_done("osm_map")
 
 
-## Build OSM rooftop/ground PV arrays in-world and feed the array sizing into both
-## SolarUI (generation estimate) and the system graph (panel components). Idempotent:
-## rebuilds the world node and replaces prior OSM-derived panels each call.
+## Build OSM rooftop/ground PV arrays in-world so the player can SEE them, and record
+## each array's footprint + sizing for crosshair selection. Nothing is fed into the
+## system graph or SolarUI automatically — the player targets an array (crosshair
+## raycast → red highlight) and confirms to add it (see add_solar_array_to_graph).
+## Idempotent: rebuilds the world node + records each call, preserving the set of
+## arrays the player already added this session (_added_solar_tags).
 func _apply_solar_arrays() -> void:
 	if _main == null:
 		return
@@ -487,6 +611,9 @@ func _apply_solar_arrays() -> void:
 	var existing := terrain.get_node_or_null("SolarArrays")
 	if existing != null:
 		existing.queue_free()
+	_clear_solar_highlight()
+	_solar_focus_idx = -1
+	_solar_arrays.clear()
 	var arrays: Array = _osm_vectors.get("solar", []) as Array
 	if arrays.is_empty():
 		return
@@ -509,18 +636,36 @@ func _apply_solar_arrays() -> void:
 		var base_y := _solar_array_base_y(poly, (rec as Dictionary).get("tags", {}))
 		var node := SolarArrayBuilder.build_array_node("Array_%d" % idx, panels, base_y, tilt)
 		container.add_child(node)
+		var tag := _solar_array_tag(poly)
+		_solar_arrays.append({
+			"name": "Array_%d" % idx,
+			"poly": poly,
+			"panel_count": panels.size(),
+			"watts": SolarArrayBuilder.PANEL_WATTS,
+			"base_y": base_y,
+			"tilt": tilt,
+			"azimuth": azimuth,
+			"tag": tag,
+			"added": _added_solar_tags.has(tag),
+		})
 		total += panels.size()
 		idx += 1
-	if total <= 0:
+	if _solar_arrays.is_empty():
 		container.queue_free()
 		return
-	var summary := SolarArrayBuilder.summarize(total)
-	var kw := float(summary["capacity_kw"])
-	print("TerrainLoader: built %d OSM solar panel(s) across %d array(s) — %.2f kW @ %.0f° tilt, %.0f° azimuth" % [
-		total, idx, kw, tilt, azimuth])
-	_feed_solar_ui(total, SolarArrayBuilder.PANEL_WATTS, tilt, azimuth)
-	_feed_solar_graph(total, SolarArrayBuilder.PANEL_WATTS)
-	_notify_options_status("Solar array: %d panels, %.2f kW (from OSM)" % [total, kw], "ok")
+	var kw := float(total) * SolarArrayBuilder.PANEL_WATTS / 1000.0
+	print("TerrainLoader: built %d OSM solar array(s), %d panel(s) (%.2f kW) — aim the crosshair at one and press Interact to add it to the system graph" % [
+		_solar_arrays.size(), total, kw])
+	_notify_options_status("Found %d OSM solar array(s) — look at one and press Interact to add it" % _solar_arrays.size(), "info")
+	# Re-apply the accumulated total for any arrays the player added before a rebuild.
+	_refresh_added_solar_total()
+
+
+## Stable per-site key for an array from its footprint centroid (local metres, rounded).
+## Lets the added-set survive terrain rebuilds without duplicating panels in the graph.
+func _solar_array_tag(poly: PackedVector2Array) -> String:
+	var c := SolarArrayBuilder.centroid(poly)
+	return "osm_solar_%d_%d" % [roundi(c.x), roundi(c.y)]
 
 
 ## Roof-top Y for a PV footprint: ground at its centroid plus the host building
@@ -553,14 +698,159 @@ func _feed_solar_ui(panel_count: int, watts: float, tilt_deg: float, azimuth_deg
 		solar_ui.call("apply_imported_solar", panel_count, watts, tilt_deg, azimuth_deg, -1.0)
 
 
-func _feed_solar_graph(panel_count: int, watts: float) -> void:
+func _feed_solar_graph(panel_count: int, watts: float, label: String = "OSM Solar",
+		array_tag: String = "") -> void:
 	if _main == null:
 		return
 	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
 	if sgv == null:
 		sgv = get_tree().root.find_child("SystemGraphView", true, false)
 	if sgv != null and sgv.has_method("add_imported_solar_panels"):
-		sgv.call("add_imported_solar_panels", panel_count, watts, "6 Canaan Dr roof")
+		sgv.call("add_imported_solar_panels", panel_count, watts, label, array_tag)
+
+
+## ---------------------------------------------------------------------------
+## OSM solar array crosshair selection (player targets an array → adds to graph)
+## ---------------------------------------------------------------------------
+
+func has_solar_arrays() -> bool:
+	return not _solar_arrays.is_empty()
+
+
+## Which built array footprint contains the world XZ point (topmost / smallest wins
+## when nested). Returns {valid, array_idx}.
+func pick_solar_array_at_world(x: float, z: float) -> Dictionary:
+	var p := Vector2(x, z)
+	var best := -1
+	var best_area := INF
+	for i in _solar_arrays.size():
+		var poly: PackedVector2Array = _solar_arrays[i].get("poly", PackedVector2Array())
+		if poly.size() < 3 or not Geometry2D.is_point_in_polygon(p, poly):
+			continue
+		var area := _poly_area(poly)
+		if area < best_area:
+			best_area = area
+			best = i
+	if best < 0:
+		return {"valid": false}
+	return {"valid": true, "array_idx": best}
+
+
+func _poly_area(poly: PackedVector2Array) -> float:
+	var a := 0.0
+	var n := poly.size()
+	for i in n:
+		var p0 := poly[i]
+		var p1 := poly[(i + 1) % n]
+		a += p0.x * p1.y - p1.x * p0.y
+	return absf(a) * 0.5
+
+
+func get_solar_array_focus_idx() -> int:
+	return _solar_focus_idx
+
+
+## Set (or clear with -1) the crosshair-focused array. Draws a red footprint overlay
+## for arrays not yet added; clears it otherwise.
+func set_solar_array_focus_idx(idx: int) -> void:
+	if idx == _solar_focus_idx:
+		return
+	_solar_focus_idx = idx
+	if idx < 0 or idx >= _solar_arrays.size() or bool(_solar_arrays[idx].get("added", false)):
+		_clear_solar_highlight()
+		return
+	_draw_solar_highlight(idx)
+
+
+func is_solar_array_added(idx: int) -> bool:
+	if idx < 0 or idx >= _solar_arrays.size():
+		return false
+	return bool(_solar_arrays[idx].get("added", false))
+
+
+## UI-facing summary for the crosshair prompt.
+func get_solar_array_info(idx: int) -> Dictionary:
+	if idx < 0 or idx >= _solar_arrays.size():
+		return {}
+	var rec: Dictionary = _solar_arrays[idx]
+	var count := int(rec.get("panel_count", 0))
+	return {
+		"panel_count": count,
+		"capacity_kw": float(count) * float(rec.get("watts", SolarArrayBuilder.PANEL_WATTS)) / 1000.0,
+		"added": bool(rec.get("added", false)),
+	}
+
+
+## Add the targeted array's panels to the system graph and fold its capacity into the
+## accumulated SolarUI generation. Idempotent per array (keyed by tag).
+func add_solar_array_to_graph(idx: int) -> bool:
+	if idx < 0 or idx >= _solar_arrays.size():
+		return false
+	var rec: Dictionary = _solar_arrays[idx]
+	if bool(rec.get("added", false)):
+		return false
+	var count := int(rec.get("panel_count", 0))
+	if count <= 0:
+		return false
+	var watts := float(rec.get("watts", SolarArrayBuilder.PANEL_WATTS))
+	var tag := str(rec.get("tag", ""))
+	rec["added"] = true
+	_added_solar_tags[tag] = {"count": count, "watts": watts}
+	_feed_solar_graph(count, watts, "OSM Solar", tag)
+	_refresh_added_solar_total()
+	if idx == _solar_focus_idx:
+		_clear_solar_highlight()
+	var kw := float(count) * watts / 1000.0
+	_notify_options_status("Added solar array: %d panels, %.2f kW → system graph" % [count, kw], "ok")
+	print("TerrainLoader: added OSM solar array '%s' (%d panels, %.2f kW) to the system graph" % [tag, count, kw])
+	return true
+
+
+## Feed SolarUI the accumulated panel total across every array the player has added.
+func _refresh_added_solar_total() -> void:
+	var total := 0
+	var tilt := SolarArrayBuilder.default_tilt_deg(_lat)
+	var azimuth := SolarArrayBuilder.default_azimuth_deg(_lat)
+	for tag in _added_solar_tags:
+		total += int((_added_solar_tags[tag] as Dictionary).get("count", 0))
+	if total <= 0:
+		return
+	_feed_solar_ui(total, SolarArrayBuilder.PANEL_WATTS, tilt, azimuth)
+
+
+func _draw_solar_highlight(idx: int) -> void:
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain")
+	if terrain == null:
+		return
+	var rec: Dictionary = _solar_arrays[idx]
+	var poly: PackedVector2Array = rec.get("poly", PackedVector2Array())
+	if poly.size() < 3:
+		return
+	if _solar_highlight == null:
+		_solar_highlight = MeshInstance3D.new()
+		_solar_highlight.name = "SolarArrayHighlight"
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color(1.0, 0.12, 0.12, 0.5)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_solar_highlight.material_override = mat
+		terrain.add_child(_solar_highlight)
+	# Sit the red overlay just above the panels (roof arrays float above the ground).
+	var c := SolarArrayBuilder.centroid(poly)
+	var ground := _ground_height_at(c.x, c.y)
+	var lift := maxf(float(rec.get("base_y", ground)) - ground, 0.0) + 0.6
+	var footing := _highlight_footing_grid(false)
+	_solar_highlight.mesh = TerrainBuilder.build_polygon_highlight(
+		poly, footing["grid"], footing["res"], footing["extent"], _built_center_elev, lift)
+	_solar_highlight.visible = true
+
+
+func _clear_solar_highlight() -> void:
+	if _solar_highlight != null:
+		_solar_highlight.visible = false
 
 
 ## ---------------------------------------------------------------------------
@@ -802,6 +1092,7 @@ func _apply_osm_vectors_after_fetch() -> void:
 
 func _on_buildings_failed(reason: String) -> void:
 	push_warning("TerrainLoader: OSM buildings unavailable (%s)" % reason)
+	_toast("OSM building/water data unavailable — map will load without them.", ToastUI.Level.WARN)
 	if _load_sequence_active:
 		_phase_resolve("osm_map", false)
 		return
@@ -1147,10 +1438,63 @@ func _reseat_player() -> void:
 func _finalize_spawn_actors() -> void:
 	if _main == null:
 		return
+	# Buildings exist by now, so nudge the player off any footprint at the centre
+	# BEFORE the ground sync and drone spawn (both key off the player XZ).
+	_relocate_player_off_buildings()
 	_sync_actors_to_ground(true)
 	var player := _main.get_node_or_null("Player")
 	if player != null:
 		_spawn_explore_drone(player.global_position)
+
+
+## If the spawn XZ sits inside an OSM building footprint, move the player to the
+## nearest open ground. No-op when the centre is already clear or when there are
+## no buildings (also skipped entirely on save resume via _finalize_spawn_actors).
+func _relocate_player_off_buildings() -> void:
+	if _buildings_data.is_empty():
+		return
+	var player := _main.get_node_or_null("Player") as Node3D
+	if player == null:
+		return
+	var origin := Vector2(player.global_position.x, player.global_position.z)
+	if not _xz_inside_building(origin.x, origin.y):
+		return
+	var clear: Variant = _search_clear_xz(origin)
+	if clear == null:
+		# Fully built-up within the search radius — leave the player where it was.
+		return
+	var target: Vector2 = clear
+	var pos := player.global_position
+	pos.x = target.x
+	pos.z = target.y
+	player.global_position = pos
+	if player is CharacterBody3D:
+		(player as CharacterBody3D).velocity = Vector3.ZERO
+	if "player_spawn_position" in _main:
+		_main.player_spawn_position = pos
+
+
+func _xz_inside_building(x: float, z: float) -> bool:
+	return bool(BuildingPicker.pick_at_xz(_buildings_data, x, z).get("valid", false))
+
+
+## Widening-ring search for the nearest XZ not inside any building footprint.
+## Returns a Vector2 (with a small outward margin) or null if none found.
+func _search_clear_xz(origin: Vector2) -> Variant:
+	var radius := SPAWN_CLEAR_RING_STEP_M
+	while radius <= SPAWN_CLEAR_MAX_RADIUS_M:
+		for i in SPAWN_CLEAR_ANGLE_STEPS:
+			var ang := TAU * float(i) / float(SPAWN_CLEAR_ANGLE_STEPS)
+			var dir := Vector2(cos(ang), sin(ang))
+			var cand := origin + dir * radius
+			if not _xz_inside_building(cand.x, cand.y):
+				# Push a little further along the same bearing so we clear the wall.
+				var pushed := cand + dir * SPAWN_CLEAR_MARGIN_M
+				if not _xz_inside_building(pushed.x, pushed.y):
+					return pushed
+				return cand
+		radius += SPAWN_CLEAR_RING_STEP_M
+	return null
 
 
 func _terrain_height_at(x: float, z: float) -> float:
@@ -1236,18 +1580,13 @@ func _spawn_explore_drone(near_player: Vector3) -> void:
 	print("TerrainLoader: explore FPV drone at %s (%.1f m above ground)" % [str(pos), DRONE_GROUND_CLEARANCE_M])
 
 
-## Request the hi-res detail DEM — but only when OpenTopography (30 m / 10 m) is
-## available. With no key the only source is Open-Meteo, which serves the SAME
-## ~90 m Copernicus DEM the base layer already fetched, so a detail DEM adds no
-## elevation fidelity while costing ~40 serial point-queries (the "loading high
-## res elevation" stall that can take the process down on an uncached load). In
-## that case we skip it: the base DEM backs the centre footing and the hi-res
-## detail *imagery* still drapes over the coarse centre.
+## Request the hi-res detail DEM. OpenTopography (30 m / 10 m, key) returns a
+## single 512² AAIGrid; without a key we still fetch via Open-Meteo, which the
+## ElevationService caps to OPENMETEO_DETAIL_N (64²) — the centre ~3 km grid
+## (~47 m spacing) is far finer than the ~1.9 km base grid, at a bounded ~40-
+## request cost. Either way the DEM caches, so a site is fetched once and every
+## reload is instant.
 func _request_detail_dem(es: Object) -> void:
-	if es.has_method("has_opentopo_key") and not es.has_opentopo_key():
-		print("TerrainLoader: skipping detail DEM (no OpenTopography key — base DEM covers the centre; detail imagery still drapes)")
-		_resolve_detail_dem_skipped()
-		return
 	es.request_elevation(_lat, _lon, DETAIL_HALF_EXTENT,
 		ElevationService.DETAIL_GRID_N, "detail")
 
@@ -1348,6 +1687,16 @@ func set_cache_enabled(on: bool) -> void:
 func refresh_dem() -> void:
 	if not _built:
 		return
+	if _load_sequence_active:
+		_notify_options_status("Still loading — wait for the map to finish", "warn")
+		return
+	var es := get_node_or_null("/root/ElevationService")
+	if es != null and es.has_method("is_openmeteo_daily_exhausted") \
+			and es.is_openmeteo_daily_exhausted() and not es.has_opentopo_key():
+		_notify_options_status(
+			"Open-Meteo daily limit — cannot refresh without OpenTopography key or cached DEM",
+			"warn")
+		return
 	_begin_refresh("dem")
 	var n := TerrainCacheSettings.invalidate_dem(_lat, _lon)
 	_begin_dem_refetch()
@@ -1387,6 +1736,16 @@ func refresh_osm_vegetation() -> void:
 func refresh_all_cached_layers() -> void:
 	if not _built:
 		return
+	if _load_sequence_active:
+		_notify_options_status("Still loading — wait for the map to finish", "warn")
+		return
+	var es := get_node_or_null("/root/ElevationService")
+	if es != null and es.has_method("is_openmeteo_daily_exhausted") \
+			and es.is_openmeteo_daily_exhausted() and not es.has_opentopo_key():
+		_notify_options_status(
+			"Open-Meteo daily limit — cannot reload fresh without OpenTopography key",
+			"warn")
+		return
 	_begin_refresh("dem")
 	_begin_refresh("imagery")
 	_begin_refresh("osm_map")
@@ -1422,6 +1781,23 @@ func needs_opentopo_hint() -> bool:
 
 func _notify_options_status(msg: String, kind: String = "info") -> void:
 	options_status_changed.emit(msg, kind)
+
+
+## Surfaces a curated fallback/failure notice to the global HUD toast stack
+## (the settings-panel status line via _notify_options_status is a separate,
+## quieter channel meant for busy/progress states — this is for the handful
+## of moments a player should actually notice: quota exhaustion, flat-terrain
+## fallback, neutral-drape fallback, and OSM data unavailable).
+func _toast(text: String, level: ToastUI.Level) -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var toast := ui_layer.get_node_or_null("ToastUI")
+	if toast == null or not toast.has_method("show_toast"):
+		return
+	toast.show_toast(text, level)
 
 
 func _begin_refresh(layer: String) -> void:
@@ -1711,8 +2087,15 @@ func _actors_off_ground() -> bool:
 
 func _maybe_opentopo_hint() -> void:
 	var es := get_node_or_null("/root/ElevationService")
-	if es != null and not es.has_opentopo_key():
-		print("TerrainLoader: add an OpenTopography API key to user://terrain_config.cfg for 30 m / 10 m DEM (see LOCAL_CONFIG.md)")
+	if es == null:
+		return
+	if es.has_opentopo_key():
+		return
+	if es.has_method("is_openmeteo_daily_exhausted") and es.is_openmeteo_daily_exhausted():
+		_notify_options_status(
+			"Open-Meteo elevation quota used up today — add OpenTopography key (see LOCAL_CONFIG.md) or reload tomorrow",
+			"warn")
+	print("TerrainLoader: add an OpenTopography API key to user://terrain_config.cfg for 30 m / 10 m DEM (see LOCAL_CONFIG.md)")
 
 
 func _setup_terrain_options_ui() -> void:
@@ -1746,6 +2129,18 @@ func _setup_vegetation_edit_ui() -> void:
 	layer.add_child(edit_ui)
 	edit_ui.bind_loader(self)
 	_vegetation_edit_ui = edit_ui
+	var preview_ui := Control.new()
+	preview_ui.name = "VegetationPreviewEditor"
+	preview_ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	preview_ui.set_script(VEGETATION_PREVIEW_EDITOR_SCRIPT)
+	layer.add_child(preview_ui)
+	preview_ui.bind_loader(self, edit_ui)
+	_vegetation_preview_ui = preview_ui
+
+
+func open_vegetation_preview_editor(initial_preset: int = -1) -> void:
+	if _vegetation_preview_ui != null and _vegetation_preview_ui.has_method("open"):
+		_vegetation_preview_ui.call("open", initial_preset)
 
 
 func _setup_camp_scatter_ui() -> void:
@@ -1849,7 +2244,7 @@ func set_vegetation_settings(patch: Dictionary, rebuild: bool = true, persist: b
 func _rebuild_all_vegetation() -> void:
 	_rebuild_vegetation()
 	if _auto_veg_generated:
-		_rebuild_auto_vegetation()
+		_rebuild_auto_vegetation_async()
 
 
 func _reground_vegetation() -> void:
@@ -1909,6 +2304,7 @@ func _on_vegetation_osm_ready(_key: String, payload: Dictionary) -> void:
 
 func _on_vegetation_osm_failed(reason: String) -> void:
 	push_warning("TerrainLoader: OSM vegetation unavailable (%s)" % reason)
+	_toast("Vegetation data unavailable — map will load without auto-vegetation.", ToastUI.Level.WARN)
 	if _load_sequence_active:
 		_phase_resolve("osm_veg", false)
 		return
@@ -2113,6 +2509,11 @@ func _rebuild_auto_vegetation() -> void:
 	if not _terrain_config().show_auto_vegetation:
 		AutoVegetationRuntime.clear(terrain)
 		return
+	# Never stomp an in-flight async rebuild (they'd both mutate the same
+	# MultiMesh children across frames → native crash); let the async one re-run.
+	if _auto_rebuild_active:
+		_auto_rebuild_dirty = true
+		return
 	var settings := _auto_veg_runtime_settings()
 	var exclusions := _auto_veg_exclusions()
 	AutoVegetationRuntime.rebuild(terrain, _auto_veg_layer,
@@ -2130,10 +2531,56 @@ func _rebuild_auto_vegetation_async() -> void:
 	if not _terrain_config().show_auto_vegetation:
 		AutoVegetationRuntime.clear(terrain)
 		return
+	if _auto_rebuild_active:
+		_auto_rebuild_dirty = true
+		return
+	_auto_rebuild_active = true
 	var settings := _auto_veg_runtime_settings()
 	var exclusions := _auto_veg_exclusions()
 	await AutoVegetationRuntime.rebuild_async(terrain, _auto_veg_layer,
 		Callable(self, "_ground_height_at"), settings, exclusions)
+	_auto_rebuild_active = false
+	if _auto_rebuild_dirty:
+		_auto_rebuild_dirty = false
+		await _rebuild_auto_vegetation_async()
+
+
+## Async sibling of _full_regenerate_auto_vegetation: regenerates the layer, then
+## uploads to the GPU via the frame-chunked rebuild so runtime edits (e.g. "Apply
+## to map") don't dump the whole vegetation set on one frame.
+func _full_regenerate_auto_vegetation_async() -> void:
+	if not _auto_veg_generated or _auto_veg_data.is_empty():
+		await _rebuild_auto_vegetation_async()
+		return
+	_auto_veg_layer = AutoVegetationGenerator.generate(_auto_veg_data, _auto_veg_ctx())
+	_apply_auto_veg_edits()
+	await _rebuild_auto_vegetation_async()
+
+
+## Single coalesced entry point for the "Tune look… → Apply to map" action.
+## Applies BOTH the shape settings (layer + style, so the render's layer-wins
+## merge stays consistent) and the style/shader/tint/density in one shot, persists
+## once, and schedules exactly ONE rebuild path — instead of the old cascade where
+## set_vegetation_settings + set_vegetation_style each queued their own synchronous
+## manual + auto rebuilds (~4 full GPU uploads in a frame → spike / silent crash).
+func apply_vegetation_look(shape: Dictionary, style: Dictionary) -> void:
+	if _vegetation_layer == null:
+		return
+	var prev := _veg_style.duplicate(true)
+	_vegetation_layer.apply_settings(shape)
+	_veg_style.merge(shape, true)
+	_veg_style = VegetationStyleConfig.apply_patch(_veg_style, style)
+	_vegetation_layer.save(_lat, _lon)
+	VegetationStyleConfig.save_map(_lat, _lon, _veg_style)
+	VegetationCardFactory.clear_foot_cache()
+	call_deferred("_rebuild_vegetation")
+	if _auto_veg_generated and (_forest_params_changed(prev, _veg_style) \
+			or _exclusion_buffers_loosened(prev, _veg_style)):
+		call_deferred("_full_regenerate_auto_vegetation_async")
+	elif _auto_veg_generated and _exclusion_buffers_changed(prev, _veg_style):
+		call_deferred("_prune_auto_veg_by_exclusions")
+	else:
+		call_deferred("_rebuild_auto_vegetation_async")
 
 
 func get_vegetation_style() -> Dictionary:
@@ -2153,15 +2600,13 @@ func set_vegetation_style(patch: Dictionary, regen_auto: bool = true, persist: b
 		VegetationStyleConfig.save_map(_lat, _lon, _veg_style)
 	if regen_auto and _auto_veg_generated:
 		if _forest_params_changed(prev, _veg_style) or _exclusion_buffers_loosened(prev, _veg_style):
-			call_deferred("_full_regenerate_auto_vegetation")
+			call_deferred("_full_regenerate_auto_vegetation_async")
 		elif _exclusion_buffers_changed(prev, _veg_style):
 			call_deferred("_prune_auto_veg_by_exclusions")
 		else:
-			call_deferred("_rebuild_auto_vegetation")
-	elif regen_auto:
-		call_deferred("_rebuild_auto_vegetation")
+			call_deferred("_rebuild_auto_vegetation_async")
 	else:
-		call_deferred("_rebuild_auto_vegetation")
+		call_deferred("_rebuild_auto_vegetation_async")
 	if _vegetation_layer != null:
 		call_deferred("_rebuild_vegetation")
 
@@ -2203,6 +2648,26 @@ func _exclusion_buffers_changed(prev: Dictionary, next: Dictionary) -> bool:
 func _forest_params_changed(prev: Dictionary, next: Dictionary) -> bool:
 	for key in ["forest_auto_min_area_m2", "forest_trunk_spacing_m", "forest_canopy_height_m"]:
 		if absf(float(next.get(key, 0.0)) - float(prev.get(key, 0.0))) > 0.01:
+			return true
+	if absf(float(next.get("auto_density_scale", 1.0)) - float(prev.get("auto_density_scale", 1.0))) > 0.01:
+		return true
+	if _osm_species_map_changed(prev, next):
+		return true
+	return false
+
+
+## OSM→species bindings drive which species get scattered per polygon, so any
+## change requires a full re-run of the generator (not just a rebuild).
+func _osm_species_map_changed(prev: Dictionary, next: Dictionary) -> bool:
+	var a: Dictionary = prev.get("osm_species_map", {})
+	var b: Dictionary = next.get("osm_species_map", {})
+	if a.size() != b.size():
+		return true
+	for k in b:
+		if str(a.get(k, "auto")) != str(b.get(k, "auto")):
+			return true
+	for k in a:
+		if not b.has(k):
 			return true
 	return false
 
@@ -2305,12 +2770,25 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 		scale_max = float(params.get("scale_max", 1.15))
 	var existing := _vegetation_layer.all_placement_points()
 	var area := VegetationPaint.polygon_area(poly)
-	var est_slots := int(area / (spacing * spacing * 0.866)) + 8
 	var fill_cap := VegetationPaint.fill_cap_for_preset(preset_enum)
-	var cap := mini(mini(est_slots, fill_cap), _vegetation_layer.remaining_bulk_capacity())
+	var cap := mini(_vegetation_layer.remaining_bulk_capacity(), fill_cap)
 	if cap <= 0:
 		return 0
-	var spots := VegetationPaint.poisson_fill(poly, spacing, rng, existing, cap)
+	var spots: Array[Dictionary]
+	if preset_enum == VegetationPaint.Preset.GRASS_LAWN:
+		var mat_w := float(_veg_style.get("grass_lawn_card_w", 0.45))
+		var est := VegetationPaint.estimate_hex_fill_count(poly, mat_w, fill_cap)
+		cap = mini(cap, est)
+		spots = VegetationPaint.hex_grid_fill(poly, mat_w, existing, cap)
+		scale_min = 1.0
+		scale_max = 1.0
+	else:
+		var est_slots := int(area / (spacing * spacing * 0.866)) + 8
+		cap = mini(mini(est_slots, fill_cap), cap)
+		spots = VegetationPaint.poisson_fill(poly, spacing, rng, existing, cap)
+	# Optional per-brush look snapshot ("Apply to brush"): stamped onto every new
+	# instance so these trees keep their custom look regardless of later map edits.
+	var brush_card: Dictionary = params.get("card_settings", {}) if params.get("card_settings") is Dictionary else {}
 	var added := 0
 	for spot in spots:
 		var species := VegetationPaint.pick_species(
@@ -2320,9 +2798,11 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 			float(params.get("mix_shrub", 0.2)), rng,
 			float(params.get("mix_grass_lawn", 0.1)),
 			float(params.get("mix_grass_field", 0.1)))
-		var yaw := rng.randf() * TAU
-		var scale := lerpf(scale_min, scale_max, rng.randf())
-		if _vegetation_layer.add_bulk(species, float(spot["x"]), float(spot["z"]), yaw, scale):
+		var yaw := 0.0 if preset_enum == VegetationPaint.Preset.GRASS_LAWN \
+			else rng.randf() * TAU
+		var scale := 1.0 if preset_enum == VegetationPaint.Preset.GRASS_LAWN \
+			else lerpf(scale_min, scale_max, rng.randf())
+		if _vegetation_layer.add_bulk(species, float(spot["x"]), float(spot["z"]), yaw, scale, brush_card):
 			added += 1
 	if added > 0:
 		_vegetation_layer.save(_lat, _lon)

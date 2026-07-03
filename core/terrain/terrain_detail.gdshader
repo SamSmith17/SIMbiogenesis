@@ -19,6 +19,21 @@ uniform bool patch_mesh = false;
 uniform bool use_detail = false;
 uniform bool hide_detail_region = false;
 uniform bool hide_centre_region = false;
+// Seasonal ground snow (driven live by TerrainLoader from weather data).
+uniform float snow_amount : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 snow_color : source_color = vec3(0.90, 0.93, 0.98);
+// Steep terrain sheds snow: below snow_slope_min it stays bare; above
+// snow_slope_max it holds fully. Values are world-up dot (1 = flat ground).
+uniform float snow_slope_min : hint_range(0.0, 1.0) = 0.45;
+uniform float snow_slope_max : hint_range(0.0, 1.0) = 0.80;
+
+varying vec3 v_world_normal;
+varying vec3 v_world_pos;
+
+void vertex() {
+	v_world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
 
 void fragment() {
 	vec2 uv = UV;
@@ -58,7 +73,19 @@ void fragment() {
 		}
 	}
 
+	float rough = 1.0;
+	if (snow_amount > 0.001) {
+		// Flat ground accumulates; steep faces shed. Small spatial break-up so
+		// the snow line is not a perfectly uniform sheet.
+		float slope_hold = smoothstep(snow_slope_min, snow_slope_max, clamp(v_world_normal.y, 0.0, 1.0));
+		vec2 ncell = floor(v_world_pos.xz / 12.0);
+		float n = fract(sin(dot(ncell, vec2(45.2, 17.9))) * 43758.5453) * 2.0 - 1.0;
+		float cover = clamp(snow_amount * (0.45 + 0.55 * slope_hold) + n * 0.06 * snow_amount, 0.0, 1.0);
+		col = mix(col, snow_color, cover);
+		rough = mix(1.0, 0.7, cover);
+	}
+
 	ALBEDO = col;
-	ROUGHNESS = 1.0;
+	ROUGHNESS = rough;
 	METALLIC = 0.0;
 }

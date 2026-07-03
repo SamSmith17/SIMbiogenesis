@@ -10,6 +10,7 @@ var _focused: Interactable = null
 var _crosshair: CanvasLayer = null
 var _prompt_ui: CanvasLayer = null
 var _loader: Node = null
+var _solar_focus_idx: int = -1
 
 
 func setup(player: Node3D, camera: Camera3D) -> void:
@@ -41,14 +42,17 @@ func _physics_process(_delta: float) -> void:
 	if route_ctrl != null and route_ctrl.has_method("is_routing") \
 			and bool(route_ctrl.call("is_routing")):
 		_clear_focus()
+		_clear_solar_focus()
 		_clear_building_focus()
 		return
 	if not _should_update_focus():
 		_clear_focus()
+		_clear_solar_focus()
 		_clear_building_focus()
 		return
 	if bool(_player.get("is_fpv_drone_mode") if _player.get("is_fpv_drone_mode") != null else false):
 		_clear_focus()
+		_clear_solar_focus()
 		_clear_building_focus()
 		return
 	var hit := _raycast_center()
@@ -71,8 +75,14 @@ func _physics_process(_delta: float) -> void:
 	elif _focused != null:
 		_update_ui()
 	if _focused == null and hit.has("position"):
-		_update_building_focus(hit["position"] as Vector3)
+		# OSM solar arrays take priority over the building-replace pick (panels sit on
+		# top of / next to their host footprints).
+		if _update_solar_focus(hit["position"] as Vector3):
+			_clear_building_focus()
+		else:
+			_update_building_focus(hit["position"] as Vector3)
 	else:
+		_clear_solar_focus()
 		_clear_building_focus()
 
 
@@ -145,6 +155,42 @@ func _clear_building_focus() -> void:
 		_crosshair.set_prompt_text("")
 
 
+func _update_solar_focus(hit_pos: Vector3) -> bool:
+	if _loader == null or not _loader.has_method("pick_solar_array_at_world"):
+		return false
+	var pick: Dictionary = _loader.call("pick_solar_array_at_world", hit_pos.x, hit_pos.z)
+	if not bool(pick.get("valid", false)):
+		_clear_solar_focus()
+		return false
+	var idx := int(pick.get("array_idx", -1))
+	_solar_focus_idx = idx
+	if _loader.has_method("set_solar_array_focus_idx"):
+		_loader.call("set_solar_array_focus_idx", idx)
+	var info: Dictionary = {}
+	if _loader.has_method("get_solar_array_info"):
+		info = _loader.call("get_solar_array_info", idx)
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(true)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		if bool(info.get("added", false)):
+			_crosshair.set_prompt_text("Solar array added (%d panels)" % int(info.get("panel_count", 0)))
+		else:
+			var act := "Interact"
+			if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
+				act = _prompt_ui.get_action_label("interact")
+			_crosshair.set_prompt_text("[%s] Add solar array to graph — %d panels, %.1f kW" % [
+				act, int(info.get("panel_count", 0)), float(info.get("capacity_kw", 0.0))])
+	return true
+
+
+func _clear_solar_focus() -> void:
+	_solar_focus_idx = -1
+	if _loader != null and _loader.has_method("set_solar_array_focus_idx"):
+		if _loader.has_method("get_solar_array_focus_idx") \
+				and int(_loader.call("get_solar_array_focus_idx")) >= 0:
+			_loader.call("set_solar_array_focus_idx", -1)
+
+
 func _update_ui() -> void:
 	if _crosshair != null:
 		if _crosshair.has_method("set_target_active"):
@@ -171,12 +217,23 @@ func _find_ui() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _focused == null or _player == null:
-		return
-	if _focused is PlacedProp:
+	if _player == null:
 		return
 	if not CursorController.should_capture_look():
 		return
-	if event.is_action_pressed("interact"):
+	if not event.is_action_pressed("interact"):
+		return
+	if _focused != null:
+		if _focused is PlacedProp:
+			return
 		_focused.interact(_player)
 		get_viewport().set_input_as_handled()
+		return
+	# No interactable under the crosshair — add a targeted OSM solar array to the graph.
+	if _solar_focus_idx >= 0 and _loader != null \
+			and _loader.has_method("add_solar_array_to_graph"):
+		if _loader.has_method("is_solar_array_added") \
+				and bool(_loader.call("is_solar_array_added", _solar_focus_idx)):
+			return
+		if bool(_loader.call("add_solar_array_to_graph", _solar_focus_idx)):
+			get_viewport().set_input_as_handled()
