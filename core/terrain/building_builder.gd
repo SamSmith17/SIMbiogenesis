@@ -299,22 +299,13 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 
 	# OSM `height` is top-of-structure above local ground — roof must not exceed it.
 	var wall_h := _wall_height_m(height_m, roof, poly)
-	var eave_y := base_y + wall_h
+	var frame := _roof_frame(poly, roof, base_y, wall_h, height_m)
+	var top_y := base_y + height_m
 
-	var roof_y := _roof_corner_heights(poly, base_y, height_m, wall_h, roof)
-
-	# Corner positions at each ring level.
 	var bottom_p: Array[Vector3] = []
-	var eave_p: Array[Vector3] = []
-	var roof_p: Array[Vector3] = []
 	bottom_p.resize(n)
-	eave_p.resize(n)
-	roof_p.resize(n)
 	for i in n:
-		var p := poly[i]
-		bottom_p[i] = Vector3(p.x, skirt_y, p.y)
-		eave_p[i] = Vector3(p.x, eave_y, p.y)
-		roof_p[i] = Vector3(p.x, roof_y[i], p.y)
+		bottom_p[i] = Vector3(poly[i].x, skirt_y, poly[i].y)
 
 	# Flat shading: every triangle carries its own three vertices + a single face
 	# normal, so wall corners and roof edges stay crisp instead of being averaged
@@ -334,18 +325,15 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 			f2 = tmp
 		tris.append([bottom_p[f0], bottom_p[f1], bottom_p[f2]])
 
-	# Walls (outward-facing).
-	for i in n:
-		var j := (i + 1) % n
-		tris.append([bottom_p[i], eave_p[i], eave_p[j]])
-		tris.append([bottom_p[i], eave_p[j], bottom_p[j]])
-
-	var shape := str(roof.get("shape", "flat"))
-	var is_pyramid := shape in ["pyramidal", "hipped", "round", "mansard"]
-
-	if not is_pyramid:
-		# Roof cap (sloped corners already encoded in roof_p for gabled/skillion),
-		# oriented to face up.
+	if frame.is_empty():
+		# Flat roof (explicit tag, unknown shape, or degenerate-footprint
+		# guardrail): walls straight up to the roof plane, level cap on top.
+		for i in n:
+			var j := (i + 1) % n
+			var t0 := Vector3(poly[i].x, top_y, poly[i].y)
+			var t1 := Vector3(poly[j].x, top_y, poly[j].y)
+			tris.append([bottom_p[i], t0, t1])
+			tris.append([bottom_p[i], t1, bottom_p[j]])
 		for t in range(0, tri_indices.size(), 3):
 			var r0 := tri_indices[t]
 			var r1 := tri_indices[t + 1]
@@ -354,14 +342,48 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 				var tmp := r1
 				r1 = r2
 				r2 = tmp
-			tris.append([roof_p[r0], roof_p[r1], roof_p[r2]])
+			tris.append([Vector3(poly[r0].x, top_y, poly[r0].y),
+				Vector3(poly[r1].x, top_y, poly[r1].y),
+				Vector3(poly[r2].x, top_y, poly[r2].y)])
 	else:
-		var center := _poly_centroid(poly)
-		var apex := Vector3(center.x, base_y + height_m, center.y)
-		# CCW winding + j→i→apex order = outward/up-facing slope normals.
+		var creases := _crease_lines(frame)
+
+		# Walls, including the triangular gable-end fills: each boundary edge is
+		# split where a roof crease crosses it, then extruded up to the roof
+		# height field. Sharing _roof_height_at with the roof surface keeps wall
+		# tops and roof edges watertight.
 		for i in n:
 			var j := (i + 1) % n
-			tris.append([eave_p[j], eave_p[i], apex])
+			var edge_pts := _split_edge_at_creases(poly[i], poly[j], frame, creases)
+			for k in edge_pts.size() - 1:
+				var q0: Vector2 = edge_pts[k]
+				var q1: Vector2 = edge_pts[k + 1]
+				var b0 := Vector3(q0.x, skirt_y, q0.y)
+				var b1 := Vector3(q1.x, skirt_y, q1.y)
+				var t0 := Vector3(q0.x, _roof_height_at(q0, frame), q0.y)
+				var t1 := Vector3(q1.x, _roof_height_at(q1, frame), q1.y)
+				tris.append([b0, t0, t1])
+				tris.append([b0, t1, b1])
+
+		# Roof: footprint triangulation split along every crease line so each
+		# resulting triangle lies inside one planar roof face, then lifted.
+		var tris2d: Array = []
+		for t in range(0, tri_indices.size(), 3):
+			tris2d.append([poly[tri_indices[t]], poly[tri_indices[t + 1]],
+				poly[tri_indices[t + 2]]])
+		for line in creases:
+			tris2d = _split_tris_at_line(tris2d, frame, line)
+		for tri2 in tris2d:
+			var p0: Vector2 = tri2[0]
+			var p1: Vector2 = tri2[1]
+			var p2: Vector2 = tri2[2]
+			if _plan_cross(p0, p1, p2) > 0.0:
+				var tmp2 := p1
+				p1 = p2
+				p2 = tmp2
+			tris.append([Vector3(p0.x, _roof_height_at(p0, frame), p0.y),
+				Vector3(p1.x, _roof_height_at(p1, frame), p1.y),
+				Vector3(p2.x, _roof_height_at(p2, frame), p2.y)])
 
 	var emitted := 0
 	for tri in tris:
@@ -390,50 +412,160 @@ static func _wall_height_m(total_m: float, roof: Dictionary, poly: PackedVector2
 	var roof_rise := TerrainBuilder.dict_float(roof, "roof_height_m", 0.0)
 	if roof_rise <= 0.0:
 		var angle := deg_to_rad(TerrainBuilder.dict_float(roof, "angle_deg", 30.0))
-		if shape in ["gabled", "saltbox"]:
+		if shape in ["gabled", "saltbox", "pyramidal", "hipped", "round", "mansard"]:
+			# Slope run is the OBB half-width for every ridge/hip shape (the
+			# height field is Chebyshev distance to the ridge segment).
 			roof_rise = _obb_half_width(poly, _ridge_axis(poly, roof)) * tan(angle)
-		elif shape in ["pyramidal", "hipped", "round", "mansard"]:
-			var center := _poly_centroid(poly)
-			var max_dist := 0.0
-			for p in poly:
-				max_dist = maxf(max_dist, p.distance_to(center))
-			roof_rise = max_dist * tan(angle)
 		elif shape in ["skillion", "lean_to"]:
 			roof_rise = total_m * 0.2
 	roof_rise = clampf(roof_rise, 0.0, minf(total_m * 0.3, 3.5))
 	return maxf(total_m - roof_rise, total_m * 0.72)
 
 
-static func _roof_corner_heights(poly: PackedVector2Array, base_y: float,
-		total_m: float, wall_h: float, roof: Dictionary) -> PackedFloat32Array:
-	var n := poly.size()
-	var out := PackedFloat32Array()
-	out.resize(n)
+## Ridge frame for a pitched roof: the local (along-ridge a, across-ridge b)
+## coordinate system plus the ridge segment half-length. Returns {} for flat /
+## unknown shapes and for degenerate footprints (star-shaped or self-
+## intersecting ways get a flat roof rather than garbage creases).
+static func _roof_frame(poly: PackedVector2Array, roof: Dictionary, base_y: float,
+		wall_h: float, height_m: float) -> Dictionary:
 	var shape := str(roof.get("shape", "flat"))
-	if shape in ["flat", ""]:
-		for i in n:
-			out[i] = base_y + total_m
-		return out
-	if shape in ["pyramidal", "hipped", "round", "mansard"]:
-		for i in n:
-			out[i] = base_y + wall_h
-		return out
+	if shape in ["flat", ""] or wall_h >= height_m - 0.001:
+		return {}
+	if not shape in ["gabled", "saltbox", "hipped", "pyramidal", "round", "mansard",
+			"skillion", "lean_to"]:
+		return {}
 	var axis := _ridge_axis(poly, roof)
-	var half_w := _obb_half_width(poly, axis)
 	var center := _poly_centroid(poly)
-	if shape in ["gabled", "saltbox"]:
-		for i in n:
-			var dist := absf(_signed_ridge_dist(poly[i], axis, center))
-			var t := clampf(dist / maxf(half_w, 1.0), 0.0, 1.0)
-			out[i] = lerpf(base_y + total_m, base_y + wall_h, t)
+	var half_w := _obb_half_width(poly, axis)
+	var half_len := _obb_half_len(poly, axis)
+	if footprint_area_m2(poly) < 0.3 * (4.0 * half_w * half_len):
+		return {}
+	var eave_y := base_y + wall_h
+	var top_y := base_y + height_m
+	var frame := {
+		"shape": shape,
+		"axis": axis,
+		"perp": Vector2(-axis.y, axis.x),
+		"center": center,
+		"half_w": half_w,
+		"eave_y": eave_y,
+		"top_y": top_y,
+		"rise": maxf(top_y - eave_y, 0.0),
+		"ridge_half_len": half_len,
+	}
+	if shape in ["hipped", "round", "mansard"]:
+		frame["ridge_half_len"] = maxf(half_len - half_w, 0.0)
+	elif shape == "pyramidal":
+		frame["ridge_half_len"] = 0.0
 	elif shape in ["skillion", "lean_to"]:
-		var angle := deg_to_rad(TerrainBuilder.dict_float(roof, "angle_deg", 30.0))
-		var slope := tan(angle)
-		for i in n:
-			var dist := _signed_ridge_dist(poly[i], axis, center)
-			var rise := clampf(dist * slope, 0.0, total_m - wall_h)
-			out[i] = minf(base_y + wall_h + rise, base_y + total_m)
+		frame["slope"] = tan(deg_to_rad(TerrainBuilder.dict_float(roof, "angle_deg", 30.0)))
+	return frame
+
+
+## Roof surface height at plan position p. Ridge shapes use Chebyshev distance
+## to the ridge segment (u = max(|b|, |a| - ridge_half_len)) which produces the
+## classic planar gable/hip/pyramid faces; skillion is a one-sided ramp.
+static func _roof_height_at(p: Vector2, frame: Dictionary) -> float:
+	var rel: Vector2 = p - (frame["center"] as Vector2)
+	var a := rel.dot(frame["axis"] as Vector2)
+	var b := rel.dot(frame["perp"] as Vector2)
+	var eave_y := float(frame["eave_y"])
+	if str(frame["shape"]) in ["skillion", "lean_to"]:
+		return eave_y + clampf(b * float(frame["slope"]), 0.0,
+			float(frame["top_y"]) - eave_y)
+	var r := float(frame["ridge_half_len"])
+	var u := maxf(maxf(absf(b), a - r), maxf(-a - r, 0.0))
+	var t := clampf(u / maxf(float(frame["half_w"]), 0.001), 0.0, 1.0)
+	return eave_y + float(frame["rise"]) * (1.0 - t)
+
+
+## Crease lines of the roof height field as Vector3(ca, cb, c0) coefficients
+## over ridge-frame coordinates: the crease is the zero set of ca*a + cb*b + c0.
+static func _crease_lines(frame: Dictionary) -> Array:
+	var shape := str(frame["shape"])
+	if shape in ["skillion", "lean_to"]:
+		var lines: Array = [Vector3(0, 1, 0)]
+		var slope := float(frame["slope"])
+		if slope > 0.001:
+			var clamp_b := (float(frame["top_y"]) - float(frame["eave_y"])) / slope
+			lines.append(Vector3(0, 1, -clamp_b))
+		return lines
+	if shape in ["gabled", "saltbox"]:
+		return [Vector3(0, 1, 0)]
+	var r := float(frame["ridge_half_len"])
+	if r <= 0.001:
+		# Pyramid: the two plan diagonals |b| == |a|.
+		return [Vector3(-1, 1, 0), Vector3(1, 1, 0)]
+	# Hip: ridge plus the four hip creases |b| == ±a - r.
+	return [Vector3(0, 1, 0), Vector3(-1, 1, r), Vector3(1, 1, -r),
+		Vector3(1, 1, r), Vector3(-1, 1, -r)]
+
+
+static func _crease_eval(p: Vector2, frame: Dictionary, line: Vector3) -> float:
+	var rel: Vector2 = p - (frame["center"] as Vector2)
+	return line.x * rel.dot(frame["axis"] as Vector2) \
+		+ line.y * rel.dot(frame["perp"] as Vector2) + line.z
+
+
+## Split 2D triangles at the zero set of one crease line so each output
+## triangle lies entirely on one side (each side of a crease is planar).
+static func _split_tris_at_line(tris_2d: Array, frame: Dictionary, line: Vector3) -> Array:
+	var out: Array = []
+	for tri in tris_2d:
+		var d0 := _crease_eval(tri[0], frame, line)
+		var d1 := _crease_eval(tri[1], frame, line)
+		var d2 := _crease_eval(tri[2], frame, line)
+		var ds := [d0, d1, d2]
+		var has_pos := false
+		var has_neg := false
+		for dv in ds:
+			if dv > 0.001:
+				has_pos = true
+			elif dv < -0.001:
+				has_neg = true
+		if not (has_pos and has_neg):
+			out.append(tri)
+			continue
+		var pos: Array = []
+		var neg: Array = []
+		for i in 3:
+			var j := (i + 1) % 3
+			var di: float = ds[i]
+			var dj: float = ds[j]
+			if di >= -0.001:
+				pos.append(tri[i])
+			if di <= 0.001:
+				neg.append(tri[i])
+			if (di > 0.001 and dj < -0.001) or (di < -0.001 and dj > 0.001):
+				var x: Vector2 = (tri[i] as Vector2).lerp(tri[j], di / (di - dj))
+				pos.append(x)
+				neg.append(x)
+		for side in [pos, neg]:
+			for k in range(1, side.size() - 1):
+				if absf(_plan_cross(side[0], side[k], side[k + 1])) > 1e-7:
+					out.append([side[0], side[k], side[k + 1]])
 	return out
+
+
+## Points along boundary edge p0→p1, split where crease lines cross it.
+static func _split_edge_at_creases(p0: Vector2, p1: Vector2, frame: Dictionary,
+		creases: Array) -> Array:
+	var ts: Array[float] = []
+	for line in creases:
+		var d0 := _crease_eval(p0, frame, line)
+		var d1 := _crease_eval(p1, frame, line)
+		if (d0 > 0.001 and d1 < -0.001) or (d0 < -0.001 and d1 > 0.001):
+			ts.append(d0 / (d0 - d1))
+	ts.sort()
+	var pts: Array = [p0]
+	for t in ts:
+		if t <= 1e-5 or t >= 1.0 - 1e-5:
+			continue
+		var q := p0.lerp(p1, t)
+		if q.distance_squared_to(pts[pts.size() - 1]) > 1e-10:
+			pts.append(q)
+	pts.append(p1)
+	return pts
 
 
 static func _ridge_axis(poly: PackedVector2Array, roof: Dictionary) -> Vector2:
@@ -464,6 +596,14 @@ static func _obb_half_width(poly: PackedVector2Array, axis: Vector2) -> float:
 	var max_d := 0.0
 	for p in poly:
 		max_d = maxf(max_d, absf((p - center).dot(perp)))
+	return maxf(max_d, 1.0)
+
+
+static func _obb_half_len(poly: PackedVector2Array, axis: Vector2) -> float:
+	var center := _poly_centroid(poly)
+	var max_d := 0.0
+	for p in poly:
+		max_d = maxf(max_d, absf((p - center).dot(axis)))
 	return maxf(max_d, 1.0)
 
 

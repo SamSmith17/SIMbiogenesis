@@ -18,6 +18,11 @@ func _initialize() -> void:
 	_test_pyramid_apex_on_slope()
 	_test_roof_defaults()
 	_test_winding_and_normals()
+	_test_gabled_ridge()
+	_test_ridge_orientation()
+	_test_hipped_faces()
+	_test_concave_and_degenerate()
+	_test_skillion()
 	if _failures == 0:
 		print("BUILDING SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -240,3 +245,222 @@ func _signed_area(poly: PackedVector2Array) -> float:
 		var j := (i + 1) % poly.size()
 		area += poly[i].x * poly[j].y - poly[j].x * poly[i].y
 	return area * 0.5
+
+
+func _flat_grid() -> PackedFloat32Array:
+	var elev := PackedFloat32Array()
+	elev.resize(GRID_RES * GRID_RES)
+	elev.fill(0.0)
+	return elev
+
+
+## Build on flat ground (base_y == 0) and return {verts, normals}.
+func _build_arrays(poly: PackedVector2Array, height_m: float, roof: Dictionary) -> Dictionary:
+	var buildings := [{"idx": 0, "points": poly, "height_m": height_m, "tags": {},
+		"roof": roof}]
+	var node := BuildingBuilder.build_buildings_node(
+		buildings, _flat_grid(), GRID_RES, EXTENT_M, 0.0, null)
+	if node == null:
+		return {}
+	var mi := node.get_node_or_null("BuildingMeshes") as MeshInstance3D
+	var arrays: Array = mi.mesh.surface_get_arrays(0)
+	var out := {"verts": arrays[Mesh.ARRAY_VERTEX], "normals": arrays[Mesh.ARRAY_NORMAL]}
+	node.free()
+	return out
+
+
+func _roof_spec(shape: String, angle: float = 30.0, direction: float = NAN,
+		orientation: String = "along") -> Dictionary:
+	return {"shape": shape, "angle_deg": angle, "orientation": orientation,
+		"direction_deg": direction, "roof_height_m": 0.0}
+
+
+func _rect_poly(hx: float, hz: float) -> PackedVector2Array:
+	return PackedVector2Array([
+		Vector2(-hx, -hz), Vector2(hx, -hz), Vector2(hx, hz), Vector2(-hx, hz)])
+
+
+func _test_gabled_ridge() -> void:
+	# 10×6 rectangle, 30° gable: half_w = 3, rise = 3·tan(30°) ≈ 1.732 (below the
+	# 0.3·height clamp), eave = 8 − 1.732, ridge = 8.
+	var out := _build_arrays(_rect_poly(5.0, 3.0), 8.0, _roof_spec("gabled"))
+	_check("gable: mesh built", not out.is_empty())
+	if out.is_empty():
+		return
+	var verts: PackedVector3Array = out["verts"]
+	var normals: PackedVector3Array = out["normals"]
+	var rise := 3.0 * tan(deg_to_rad(30.0))
+	var eave := 8.0 - rise
+
+	# Every roof vertex is at eave or ridge height, ridge verts on the long axis.
+	var heights_ok := true
+	var ridge_on_axis := true
+	var seen_ridge := false
+	var seen_eave := false
+	for t in range(0, verts.size(), 3):
+		if normals[t].y < 0.1:
+			continue
+		for k in 3:
+			var v := verts[t + k]
+			if absf(v.y - 8.0) < 1e-3:
+				seen_ridge = true
+				if absf(v.z) > 0.01:
+					ridge_on_axis = false
+			elif absf(v.y - eave) < 1e-3:
+				seen_eave = true
+			else:
+				heights_ok = false
+	_check("gable: roof verts at eave or ridge only", heights_ok and seen_ridge and seen_eave)
+	_check("gable: ridge parallel to long edge", ridge_on_axis)
+
+	# No flat roof triangles; both slope directions present.
+	var pos_z := false
+	var neg_z := false
+	var no_flat := true
+	for t in range(0, verts.size(), 3):
+		var nrm := normals[t]
+		if nrm.y > 0.1 and (verts[t].y + verts[t + 1].y + verts[t + 2].y) / 3.0 > eave - 0.01:
+			if nrm.y > 0.999:
+				no_flat = false
+			if nrm.z > 0.3:
+				pos_z = true
+			elif nrm.z < -0.3:
+				neg_z = true
+	_check("gable: no flat roof tris", no_flat)
+	_check("gable: both slopes present", pos_z and neg_z)
+
+	# Gable-end wall fill reaches the ridge (watertight wall/roof boundary).
+	var gable_fill := false
+	for t in range(0, verts.size(), 3):
+		if absf(normals[t].y) < 0.1:
+			for k in 3:
+				if absf(verts[t + k].y - 8.0) < 1e-3:
+					gable_fill = true
+	_check("gable: end walls reach ridge", gable_fill)
+
+
+func _test_ridge_orientation() -> void:
+	# orientation=across rotates the ridge 90°: ridge verts on x == 0 instead.
+	var out := _build_arrays(_rect_poly(5.0, 3.0), 8.0,
+		_roof_spec("gabled", 30.0, NAN, "across"))
+	var ok := _ridge_verts_on(out, "x")
+	_check("gable: orientation=across rotates ridge", ok)
+
+	# roof:direction=0 pins the ridge along +Z regardless of the long edge.
+	out = _build_arrays(_rect_poly(5.0, 3.0), 8.0, _roof_spec("gabled", 30.0, 0.0))
+	_check("gable: roof:direction pins ridge", _ridge_verts_on(out, "x"))
+
+
+## True when every max-height roof vertex sits on the given axis plane.
+func _ridge_verts_on(out: Dictionary, zero_coord: String) -> bool:
+	if out.is_empty():
+		return false
+	var verts: PackedVector3Array = out["verts"]
+	var normals: PackedVector3Array = out["normals"]
+	var max_y := -INF
+	for v in verts:
+		max_y = maxf(max_y, v.y)
+	var ok := false
+	for t in range(0, verts.size(), 3):
+		if normals[t].y < 0.1:
+			continue
+		for k in 3:
+			var v := verts[t + k]
+			if absf(v.y - max_y) < 1e-3:
+				ok = true
+				var coord := v.x if zero_coord == "x" else v.z
+				if absf(coord) > 0.01:
+					return false
+	return ok
+
+
+func _test_hipped_faces() -> void:
+	var out := _build_arrays(_rect_poly(5.0, 3.0), 8.0, _roof_spec("hipped"))
+	_check("hip: mesh built", not out.is_empty())
+	if out.is_empty():
+		return
+	var verts: PackedVector3Array = out["verts"]
+	var normals: PackedVector3Array = out["normals"]
+	var max_y := -INF
+	for v in verts:
+		max_y = maxf(max_y, v.y)
+	_check("hip: ridge at total height", absf(max_y - 8.0) < 1e-3, "max %f" % max_y)
+
+	var dir_px := false
+	var dir_nx := false
+	var dir_pz := false
+	var dir_nz := false
+	for t in range(0, verts.size(), 3):
+		var nrm := normals[t]
+		if nrm.y < 0.1 or nrm.y > 0.999:
+			continue
+		if nrm.x > 0.3:
+			dir_px = true
+		elif nrm.x < -0.3:
+			dir_nx = true
+		if nrm.z > 0.3:
+			dir_pz = true
+		elif nrm.z < -0.3:
+			dir_nz = true
+	_check("hip: four slope directions", dir_px and dir_nx and dir_pz and dir_nz,
+		"px=%s nx=%s pz=%s nz=%s" % [dir_px, dir_nx, dir_pz, dir_nz])
+
+	# Ridge verts confined to the shortened segment |x| <= half_len - half_w = 2.
+	var seg_ok := true
+	for t in range(0, verts.size(), 3):
+		for k in 3:
+			var v := verts[t + k]
+			if absf(v.y - max_y) < 1e-3 and absf(v.x) > 2.01:
+				seg_ok = false
+	_check("hip: ridge shortened to segment", seg_ok)
+
+
+func _test_concave_and_degenerate() -> void:
+	# L-shaped concave footprint builds clean, roof within [eave, height].
+	var l_poly := PackedVector2Array([
+		Vector2(0, 0), Vector2(10, 0), Vector2(10, 4),
+		Vector2(4, 4), Vector2(4, 10), Vector2(0, 10)])
+	var out := _build_arrays(l_poly, 8.0, _roof_spec("gabled"))
+	_check("L-shape: mesh built", not out.is_empty())
+	if not out.is_empty():
+		var verts: PackedVector3Array = out["verts"]
+		var ok := true
+		for v in verts:
+			if v.y > 8.0 + 1e-3:
+				ok = false
+		_check("L-shape: nothing above total height", ok)
+
+	# Star-shaped footprint (OBB fill « 0.3) falls back to a flat roof.
+	var star := PackedVector2Array()
+	for i in 10:
+		var ang := TAU * float(i) / 10.0
+		var rad := 10.0 if i % 2 == 0 else 1.5
+		star.append(Vector2(cos(ang) * rad, sin(ang) * rad))
+	out = _build_arrays(star, 8.0, _roof_spec("gabled"))
+	_check("star: mesh built", not out.is_empty())
+	if not out.is_empty():
+		var verts: PackedVector3Array = out["verts"]
+		var normals: PackedVector3Array = out["normals"]
+		var flat_ok := true
+		for t in range(0, verts.size(), 3):
+			if normals[t].y > 0.1 and normals[t].y < 0.999:
+				flat_ok = false
+		_check("star: guardrail forces flat roof", flat_ok)
+
+
+func _test_skillion() -> void:
+	var out := _build_arrays(_rect_poly(5.0, 3.0), 8.0, _roof_spec("skillion"))
+	_check("skillion: mesh built", not out.is_empty())
+	if out.is_empty():
+		return
+	var verts: PackedVector3Array = out["verts"]
+	var normals: PackedVector3Array = out["normals"]
+	var max_y := -INF
+	for v in verts:
+		max_y = maxf(max_y, v.y)
+	_check("skillion: capped at total height", max_y <= 8.0 + 1e-3, "max %f" % max_y)
+	var sloped := false
+	for t in range(0, verts.size(), 3):
+		if normals[t].y > 0.1 and normals[t].y < 0.999:
+			sloped = true
+	_check("skillion: has sloped face", sloped)
