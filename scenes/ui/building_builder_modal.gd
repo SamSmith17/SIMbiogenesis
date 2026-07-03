@@ -39,6 +39,11 @@ var _wall_picker: ColorPickerButton = null
 var _roof_picker: ColorPickerButton = null
 var _prov_label: Label = null
 var _title_label: Label = null
+var _kind_opt: OptionButton = null
+var _elem_list: ItemList = null
+var _elem_spins: Dictionary = {}   # "u_m"/"v_m"/"w_m"/"h_m" -> SpinBox
+var _elem_delete: Button = null
+var _selected_elem := -1
 var _rebuild_pending := false
 var _rebuild_timer := 0.0
 
@@ -70,7 +75,10 @@ func open(building_idx: int) -> void:
 	_working_style = {}
 	if _loader.has_method("get_building_style"):
 		_working_style = _loader.call("get_building_style", building_idx)
+	_working_style.erase("selected_element")
+	_selected_elem = -1
 	_sync_controls_from_style()
+	_sync_element_list()
 	_active = true
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -218,6 +226,7 @@ func _build_ui() -> void:
 	vp_container.custom_minimum_size = Vector2(590, 550)
 	vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vp_container.mouse_filter = Control.MOUSE_FILTER_STOP
+	vp_container.gui_input.connect(_on_preview_input)
 	hbox.add_child(vp_container)
 	_viewport = SubViewport.new()
 	_viewport.own_world_3d = true
@@ -276,6 +285,48 @@ func _build_ui() -> void:
 
 	side.add_child(HSeparator.new())
 
+	# Details: click the preview to drop a door/window at that exact spot,
+	# then fine-tune with the nudge fields.
+	var det_lbl := Label.new()
+	det_lbl.text = "Details — click the preview to place"
+	det_lbl.add_theme_font_size_override("font_size", 12)
+	det_lbl.modulate = Color(0.7, 0.8, 0.9)
+	side.add_child(det_lbl)
+
+	var kind_row := HBoxContainer.new()
+	side.add_child(kind_row)
+	var kind_lbl := Label.new()
+	kind_lbl.text = "Place"
+	kind_lbl.custom_minimum_size = Vector2(90, 0)
+	kind_row.add_child(kind_lbl)
+	_kind_opt = OptionButton.new()
+	_kind_opt.add_item("Door", 0)
+	_kind_opt.add_item("Window", 1)
+	_kind_opt.select(1)
+	_kind_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	kind_row.add_child(_kind_opt)
+
+	_elem_list = ItemList.new()
+	_elem_list.custom_minimum_size = Vector2(0, 92)
+	_elem_list.item_selected.connect(_on_element_selected)
+	side.add_child(_elem_list)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	side.add_child(grid)
+	_elem_spins["u_m"] = _nudge_spin(grid, "Along m", 0.0, 500.0)
+	_elem_spins["v_m"] = _nudge_spin(grid, "Up m", 0.0, 30.0)
+	_elem_spins["w_m"] = _nudge_spin(grid, "Width m", 0.2, 10.0)
+	_elem_spins["h_m"] = _nudge_spin(grid, "Height m", 0.2, 10.0)
+
+	_elem_delete = Button.new()
+	_elem_delete.text = "Delete element"
+	_elem_delete.add_theme_stylebox_override("normal", _secondary_btn_style())
+	_elem_delete.pressed.connect(_delete_selected_element)
+	side.add_child(_elem_delete)
+
+	side.add_child(HSeparator.new())
+
 	var btn_row := VBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 4)
 	side.add_child(btn_row)
@@ -320,6 +371,22 @@ func _labeled_slider(parent: Control, label: String, minv: float, maxv: float,
 		if not _syncing:
 			on_change.call(v))
 	return slider
+
+
+func _nudge_spin(grid: GridContainer, label: String, minv: float, maxv: float) -> SpinBox:
+	var lbl := Label.new()
+	lbl.text = label
+	grid.add_child(lbl)
+	var spin := SpinBox.new()
+	spin.min_value = minv
+	spin.max_value = maxv
+	spin.step = 0.05
+	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_child(spin)
+	spin.value_changed.connect(func(_v: float) -> void:
+		if not _syncing:
+			_on_nudge_changed())
+	return spin
 
 
 func _color_row(parent: Control, label: String, on_change: Callable) -> ColorPickerButton:
@@ -465,6 +532,7 @@ func _on_shape_selected(index: int) -> void:
 func _apply_to_map() -> void:
 	if _loader == null or _building_idx < 0:
 		return
+	_working_style.erase("selected_element")
 	if _loader.has_method("apply_building_style"):
 		_loader.call("apply_building_style", _building_idx, _working_style)
 	applied.emit()
@@ -476,5 +544,127 @@ func _reset_to_osm() -> void:
 			and _loader.has_method("clear_building_style"):
 		_loader.call("clear_building_style", _building_idx)
 	_working_style = {}
+	_selected_elem = -1
 	_sync_controls_from_style()
+	_sync_element_list()
+	_queue_rebuild()
+
+
+# ---------------------------------------------------------------------------
+# Facade elements (doors/windows)
+# ---------------------------------------------------------------------------
+
+func _elements() -> Array:
+	var v: Variant = _working_style.get("elements", [])
+	if not (v is Array):
+		v = []
+		_working_style["elements"] = v
+	return v
+
+
+## Click on the preview → ray-pick the wall face (pure math, no studio
+## physics) → drop the selected element kind at that exact u/v spot.
+func _on_preview_input(event: InputEvent) -> void:
+	if not _active or _camera == null or _record.is_empty():
+		return
+	if not (event is InputEventMouseButton):
+		return
+	var mb := event as InputEventMouseButton
+	if not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
+	var poly: PackedVector2Array = params["poly"]
+	# Studio DEM is flat zero, so the building base sits at the Raise offset.
+	var base_y := float(params["base_offset_m"])
+	var origin := _camera.project_ray_origin(mb.position)
+	var dir := _camera.project_ray_normal(mb.position)
+	var pick := BuildingBuilder.pick_wall_point(
+		poly, base_y, float(params["height_m"]), origin, dir)
+	if not bool(pick.get("valid", false)):
+		return
+	var is_door := _kind_opt != null and _kind_opt.selected == 0
+	var height_m := float(params["height_m"])
+	var elem: Dictionary
+	if is_door:
+		elem = {"kind": "door", "edge": int(pick["edge"]),
+			"u_m": float(pick["u_m"]), "v_m": 0.0, "w_m": 1.0, "h_m": 2.05}
+	else:
+		var h := 1.4
+		var v := clampf(float(pick["v_m"]) - h * 0.5, 0.0, maxf(height_m - h, 0.0))
+		elem = {"kind": "window", "edge": int(pick["edge"]),
+			"u_m": float(pick["u_m"]), "v_m": v, "w_m": 1.2, "h_m": h}
+	var elems := _elements()
+	elems.append(elem)
+	_working_style["elements"] = elems
+	_select_element(elems.size() - 1)
+	_sync_element_list()
+	_queue_rebuild()
+	accept_event()
+
+
+func _select_element(idx: int) -> void:
+	_selected_elem = idx
+	if idx >= 0:
+		_working_style["selected_element"] = idx
+	else:
+		_working_style.erase("selected_element")
+	_sync_nudge_spins()
+
+
+func _on_element_selected(idx: int) -> void:
+	_select_element(idx)
+	_queue_rebuild()
+
+
+func _sync_element_list() -> void:
+	if _elem_list == null:
+		return
+	_elem_list.clear()
+	for e in _elements():
+		if not (e is Dictionary):
+			continue
+		var d: Dictionary = e
+		_elem_list.add_item("%s — wall %d, %.2f m along, %.2f m up" % [
+			str(d.get("kind", "?")).capitalize(), int(d.get("edge", 0)),
+			float(d.get("u_m", 0.0)), float(d.get("v_m", 0.0))])
+	if _selected_elem >= 0 and _selected_elem < _elem_list.item_count:
+		_elem_list.select(_selected_elem)
+	_sync_nudge_spins()
+
+
+func _sync_nudge_spins() -> void:
+	_syncing = true
+	var elems := _elements()
+	var have := _selected_elem >= 0 and _selected_elem < elems.size()
+	for key in _elem_spins:
+		var spin: SpinBox = _elem_spins[key]
+		spin.editable = have
+		if have:
+			spin.value = float((elems[_selected_elem] as Dictionary).get(key, 0.0))
+	if _elem_delete != null:
+		_elem_delete.disabled = not have
+	_syncing = false
+
+
+func _on_nudge_changed() -> void:
+	var elems := _elements()
+	if _selected_elem < 0 or _selected_elem >= elems.size():
+		return
+	var d: Dictionary = elems[_selected_elem]
+	for key in _elem_spins:
+		d[key] = (_elem_spins[key] as SpinBox).value
+	elems[_selected_elem] = d
+	_working_style["elements"] = elems
+	_sync_element_list()
+	_queue_rebuild()
+
+
+func _delete_selected_element() -> void:
+	var elems := _elements()
+	if _selected_elem < 0 or _selected_elem >= elems.size():
+		return
+	elems.remove_at(_selected_elem)
+	_working_style["elements"] = elems
+	_select_element(-1)
+	_sync_element_list()
 	_queue_rebuild()

@@ -29,6 +29,8 @@ func _initialize() -> void:
 	_test_style_overrides()
 	_test_single_building_parity()
 	_test_modal_script()
+	_test_facade_elements()
+	_test_wall_pick()
 	if _failures == 0:
 		print("BUILDING SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -684,3 +686,78 @@ func _test_modal_script() -> void:
 	var script := load("res://scenes/ui/building_builder_modal.gd")
 	_check("modal: script loads", script != null and script is GDScript)
 	_check("modal: hotkey action registered", InputMap.has_action("building_builder"))
+
+
+func _test_facade_elements() -> void:
+	# Door centered on edge 0 of a 10×10 square: edge (-5,-5)→(5,-5), outward -Z.
+	var d := {"idx": 0, "points": _square_poly(5.0), "height_m": 8.0, "tags": {},
+		"roof": _roof_spec("flat")}
+	var style := {"elements": [
+		{"kind": "door", "edge": 0, "u_m": 5.0, "v_m": 0.0, "w_m": 1.0, "h_m": 2.05}]}
+	var mi := BuildingBuilder.build_single_building(
+		d, style, _flat_grid(), GRID_RES, EXTENT_M, 0.0)
+	_check("facade: mesh built", mi != null)
+	if mi == null:
+		return
+	_check("facade: third surface", mi.mesh.get_surface_count() == 3,
+		"got %d" % mi.mesh.get_surface_count())
+	if mi.mesh.get_surface_count() < 3:
+		mi.free()
+		return
+	var arrays: Array = mi.mesh.surface_get_arrays(2)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var pos_ok := true
+	var nrm_ok := true
+	for i in verts.size():
+		var v := verts[i]
+		# Proud of the -Z wall, horizontally near the door, vertically 0..~2.11.
+		if v.z < -5.12 or v.z > -5.02 or absf(v.x) > 0.6 or v.y < -0.01 or v.y > 2.2:
+			pos_ok = false
+		if normals[i].distance_to(Vector3(0, 0, -1)) > 0.01:
+			nrm_ok = false
+	_check("facade: door quad on wall", pos_ok)
+	_check("facade: normal faces outward", nrm_ok)
+	mi.free()
+
+	# Oversized element clamps inside the wall rectangle.
+	var big := {"elements": [
+		{"kind": "window", "edge": 0, "u_m": 100.0, "v_m": 50.0, "w_m": 50.0, "h_m": 50.0}]}
+	mi = BuildingBuilder.build_single_building(
+		d, big, _flat_grid(), GRID_RES, EXTENT_M, 0.0)
+	_check("facade: clamped mesh built", mi != null and mi.mesh.get_surface_count() == 3)
+	if mi != null and mi.mesh.get_surface_count() == 3:
+		var cl_verts: PackedVector3Array = \
+			mi.mesh.surface_get_arrays(2)[Mesh.ARRAY_VERTEX]
+		var inside := true
+		for v in cl_verts:
+			if absf(v.x) > 5.2 or v.y < -0.1 or v.y > 8.2:
+				inside = false
+		_check("facade: oversize clamped into wall", inside)
+	if mi != null:
+		mi.free()
+
+
+func _test_wall_pick() -> void:
+	var poly := _square_poly(5.0)
+	# Ray straight at the -Z face: hits edge 0 at u = 6 (x = +1), v = 2.5.
+	var pick := BuildingBuilder.pick_wall_point(
+		poly, 0.0, 8.0, Vector3(1, 2.5, -20), Vector3(0, 0, 1))
+	_check("pick: hit valid", bool(pick.get("valid", false)))
+	if bool(pick.get("valid", false)):
+		_check("pick: edge 0", int(pick["edge"]) == 0, "got %d" % int(pick["edge"]))
+		_check("pick: u along edge", absf(float(pick["u_m"]) - 6.0) < 1e-4,
+			"got %f" % float(pick["u_m"]))
+		_check("pick: v above base", absf(float(pick["v_m"]) - 2.5) < 1e-4,
+			"got %f" % float(pick["v_m"]))
+
+	# Nearest face wins: ray through the whole building still reports edge 0.
+	var through := BuildingBuilder.pick_wall_point(
+		poly, 0.0, 8.0, Vector3(0, 4.0, -30), Vector3(0, 0, 1))
+	_check("pick: nearest face wins", bool(through.get("valid", false))
+		and int(through.get("edge", -1)) == 0)
+
+	# Miss above the walls.
+	var miss := BuildingBuilder.pick_wall_point(
+		poly, 0.0, 8.0, Vector3(0, 20.0, -20), Vector3(0, 0, 1))
+	_check("pick: miss above walls", not bool(miss.get("valid", false)))

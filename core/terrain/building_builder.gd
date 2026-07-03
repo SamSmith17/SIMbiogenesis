@@ -29,6 +29,14 @@ const DEFAULT_GABLED_ANGLE_DEG := 28.0
 const GABLED_YES_MAX_AREA_M2 := 350.0
 const GABLED_YES_MIN_ASPECT := 1.2
 
+## Facade elements (doors/windows): flat quads slightly proud of the wall.
+const FACADE_PROUD_M := 0.04
+const FACADE_FRAME_PROUD_M := 0.08
+const FACADE_FRAME_W_M := 0.06
+const DOOR_COLOR := Color(0.30, 0.19, 0.11)
+const WINDOW_COLOR := Color(0.52, 0.64, 0.74)
+const FACADE_SELECT_TINT := Color(1.0, 0.85, 0.3)
+
 
 static func parse_height_m(tags: Dictionary) -> float:
 	var from_levels := -1.0
@@ -188,6 +196,13 @@ static func building_tag(poly: PackedVector2Array) -> String:
 static func resolve_building_params(d: Dictionary, style: Dictionary) -> Dictionary:
 	var pts: Variant = d.get("points", PackedVector2Array())
 	var poly: PackedVector2Array = pts if pts is PackedVector2Array else PackedVector2Array()
+	# Normalize the footprint HERE (strip closing point, force CCW) so facade
+	# element edge indices mean the same thing in the modal's picking math and
+	# the mesh build (_append_footprint's own normalization becomes a no-op).
+	if poly.size() >= 4 and poly[0].distance_squared_to(poly[poly.size() - 1]) < 0.01:
+		poly = poly.slice(0, poly.size() - 1)
+	if poly.size() >= 3:
+		poly = _ensure_ccw(poly)
 	var tags: Dictionary = d.get("tags", {})
 	var height_m := TerrainBuilder.dict_float(d, "height_m", DEFAULT_HEIGHT_M)
 	var style_h := TerrainBuilder.dict_float(style, "height_m", 0.0)
@@ -382,12 +397,152 @@ static func build_single_building(d: Dictionary, style: Dictionary,
 	mi.name = "BuildingMesh"
 	var mesh: ArrayMesh = st_walls.commit()
 	mesh = st_roof.commit(mesh)
+
+	# Facade elements (doors/windows) ride on a third surface with their own
+	# flat-color material — only styled buildings pay for it.
+	var elements: Array = params["elements"] if params["elements"] is Array else []
+	if not elements.is_empty():
+		var base_y := footprint_base_y(poly, elev, res, height_extent_m, center_elev,
+			detail_elev, detail_cols, detail_rows, detail_foot_extent) \
+			+ float(params["base_offset_m"])
+		var selected := int(TerrainBuilder.dict_float(style, "selected_element", -1.0))
+		var st_fac := SurfaceTool.new()
+		st_fac.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var any_elem := false
+		for e_i in elements.size():
+			if elements[e_i] is Dictionary:
+				if _append_facade_element(st_fac, poly, base_y,
+						float(params["height_m"]), elements[e_i], e_i == selected):
+					any_elem = true
+		if any_elem:
+			mesh = st_fac.commit(mesh)
+			mi.set_surface_override_material(2, make_facade_material())
+
 	mi.mesh = mesh
 	mi.set_surface_override_material(0, make_wall_material())
 	mi.set_surface_override_material(1, make_roof_material())
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows \
 		else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return mi
+
+
+## Lowest corner ground sample — the Y the whole building seats at (before the
+## style layer's base offset). Shared by walls/roof and facade elements.
+static func footprint_base_y(poly: PackedVector2Array, elev: PackedFloat32Array,
+		res: int, height_extent_m: float, center_elev: float,
+		detail_elev: PackedFloat32Array = PackedFloat32Array(), detail_cols: int = 0,
+		detail_rows: int = 0, detail_extent_m: float = 0.0) -> float:
+	var base := INF
+	for p in poly:
+		base = minf(base, _sample_ground_y(p.x, p.y, elev, res, height_extent_m,
+			center_elev, detail_elev, detail_cols, detail_rows, detail_extent_m))
+	return base if base != INF else 0.0
+
+
+## Ray-pick a wall face (pure math — the Building Builder studio has no
+## physics). poly must be the resolve_building_params-normalized footprint.
+## Returns {valid, edge, u_m (metres along edge), v_m (metres above base)}.
+static func pick_wall_point(poly: PackedVector2Array, base_y: float, height_m: float,
+		origin: Vector3, ray_dir: Vector3) -> Dictionary:
+	var n := poly.size()
+	var best := {"valid": false}
+	var best_t := INF
+	for i in n:
+		var p_i := poly[i]
+		var p_j := poly[(i + 1) % n]
+		var edge_len := p_i.distance_to(p_j)
+		if edge_len < 0.05:
+			continue
+		var dir2 := (p_j - p_i) / edge_len
+		var out := Vector2(dir2.y, -dir2.x)
+		var nrm := Vector3(out.x, 0.0, out.y)
+		var denom := ray_dir.dot(nrm)
+		if absf(denom) < 1e-6:
+			continue
+		var t := (Vector3(p_i.x, base_y, p_i.y) - origin).dot(nrm) / denom
+		if t <= 0.0 or t >= best_t:
+			continue
+		var hit := origin + ray_dir * t
+		var u := (Vector2(hit.x, hit.z) - p_i).dot(dir2)
+		var v := hit.y - base_y
+		if u < 0.0 or u > edge_len or v < 0.0 or v > height_m:
+			continue
+		best = {"valid": true, "edge": i, "u_m": u, "v_m": v}
+		best_t = t
+	return best
+
+
+static func _append_facade_element(st: SurfaceTool, poly: PackedVector2Array,
+		base_y: float, height_m: float, elem: Dictionary, selected: bool) -> bool:
+	var n := poly.size()
+	var edge := int(TerrainBuilder.dict_float(elem, "edge", -1.0))
+	if edge < 0 or edge >= n:
+		return false
+	var p_i := poly[edge]
+	var p_j := poly[(edge + 1) % n]
+	var edge_len := p_i.distance_to(p_j)
+	if edge_len < 0.5:
+		return false
+	var dir := (p_j - p_i) / edge_len
+	var out := Vector2(dir.y, -dir.x)  # outward for the CCW-normalized footprint
+	var kind := str(elem.get("kind", "window"))
+	# Clamp the element inside its wall rectangle.
+	var w := clampf(TerrainBuilder.dict_float(elem, "w_m", 1.2), 0.2,
+		maxf(edge_len - 0.1, 0.2))
+	var h := clampf(TerrainBuilder.dict_float(elem, "h_m", 1.4), 0.2, height_m)
+	var u := clampf(TerrainBuilder.dict_float(elem, "u_m", edge_len * 0.5),
+		w * 0.5, edge_len - w * 0.5)
+	var v := clampf(TerrainBuilder.dict_float(elem, "v_m", 0.0), 0.0, height_m - h)
+	var col := DOOR_COLOR if kind == "door" else WINDOW_COLOR
+	var frame_col := Color(0.85, 0.82, 0.78) if kind == "door" else Color(0.9, 0.9, 0.88)
+	if selected:
+		col = col.lerp(FACADE_SELECT_TINT, 0.45)
+		frame_col = frame_col.lerp(FACADE_SELECT_TINT, 0.45)
+	var nrm := Vector3(out.x, 0.0, out.y)
+
+	# Panel 4 cm proud; frame strips 8 cm proud (doors skip the sill).
+	_facade_quad(st, p_i, dir, out, u - w * 0.5, u + w * 0.5,
+		base_y + v, base_y + v + h, FACADE_PROUD_M, col, nrm)
+	var fw := FACADE_FRAME_W_M
+	_facade_quad(st, p_i, dir, out, u - w * 0.5 - fw, u + w * 0.5 + fw,
+		base_y + v + h, base_y + v + h + fw, FACADE_FRAME_PROUD_M, frame_col, nrm)
+	if kind != "door":
+		_facade_quad(st, p_i, dir, out, u - w * 0.5 - fw, u + w * 0.5 + fw,
+			base_y + v - fw, base_y + v, FACADE_FRAME_PROUD_M, frame_col, nrm)
+	_facade_quad(st, p_i, dir, out, u - w * 0.5 - fw, u - w * 0.5,
+		base_y + v, base_y + v + h, FACADE_FRAME_PROUD_M, frame_col, nrm)
+	_facade_quad(st, p_i, dir, out, u + w * 0.5, u + w * 0.5 + fw,
+		base_y + v, base_y + v + h, FACADE_FRAME_PROUD_M, frame_col, nrm)
+	return true
+
+
+static func _facade_quad(st: SurfaceTool, p_i: Vector2, dir: Vector2, out: Vector2,
+		u0: float, u1: float, y0: float, y1: float, proud: float,
+		col: Color, nrm: Vector3) -> void:
+	if u1 <= u0 or y1 <= y0:
+		return
+	var o := out * proud
+	var a2 := p_i + dir * u0 + o
+	var b2 := p_i + dir * u1 + o
+	var a0 := Vector3(a2.x, y0, a2.y)
+	var a1 := Vector3(a2.x, y1, a2.y)
+	var b0 := Vector3(b2.x, y0, b2.y)
+	var b1 := Vector3(b2.x, y1, b2.y)
+	for v in [a0, a1, b1, a0, b1, b0]:
+		st.set_normal(nrm)
+		st.set_color(col)
+		st.set_uv(Vector2.ZERO)
+		st.add_vertex(v)
+
+
+static func make_facade_material() -> Material:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.4
+	mat.metallic = 0.1
+	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
 
 
 static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
@@ -410,12 +565,8 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 	# Seat the whole building at its lowest corner sample: real eaves and roofs
 	# are level regardless of slope; the uphill walls simply bury into the hill.
 	# base_offset_m is the user's vertical-placement nudge from the style layer.
-	var base_y := INF
-	for i in n:
-		base_y = minf(base_y, _sample_ground_y(poly[i].x, poly[i].y, elev, res,
-			height_extent_m, center_elev, detail_elev, detail_cols, detail_rows,
-			detail_extent_m))
-	base_y += base_offset_m
+	var base_y := footprint_base_y(poly, elev, res, height_extent_m, center_elev,
+		detail_elev, detail_cols, detail_rows, detail_extent_m) + base_offset_m
 	var skirt_y := base_y - FOUNDATION_SKIRT_M
 
 	var tri_indices := Geometry2D.triangulate_polygon(poly)
