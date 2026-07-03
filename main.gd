@@ -1603,9 +1603,49 @@ const _ENV_UPDATE_INTERVAL : float = 0.05  # ~20 Hz
 var _env_update_accum : float = 0.0
 var _vegetation_night_factor : float = 0.0
 var _vegetation_sun_direction : Vector3 = Vector3.UP
+## Seasonal phenology signals + weather-driven snow cover, cached in
+## _update_environment() and read by VegetationEnvironmentSync / TerrainLoader.
+var _season_signals : Dictionary = {
+	"leaf_coverage": 1.0, "autumn": 0.0, "bud": 0.0, "summer": 1.0, "winter": 0.0
+}
+var _snow_amount : float = 0.0
+var _weather_service_node : Node = null
+## When true, _process discrete-steps one day per frame to its mean solar noon,
+## tracing the analemma and advancing across successive years (set by TimelineUI's
+## ∞ speed preset). time_scale is held at 0 so the sim is visual-only.
+var analemma_mode : bool = false :
+	set( value ) :
+		var was : bool = analemma_mode
+		analemma_mode = value
+		if value != was :
+			_on_analemma_mode_changed( value )
+
+## Earliest year the ∞ analemma view cycles back to before wrapping — the start
+## of the Open-Meteo ERA5 archive, so every pass down to 1940 still lands on a
+## year with real historical weather.
+const ANALEMMA_ARCHIVE_START_YEAR : int = 1940
+
+## Distance (m) at which the white analemma guide path is drawn around the camera.
+## Kept comfortably inside the default camera far plane (4000 m) so the whole
+## figure-eight stays visible while reading as if painted on the sky dome.
+const ANALEMMA_PATH_RADIUS : float = 2000.0
+
+## Educational overlay: the white curve the sun traces at mean solar noon over a
+## full year. Only shown in analemma mode. Rebuilt when the observer moves
+## (the figure-eight's tilt and span are latitude-dependent).
+var _analemma_path : MeshInstance3D = null
+var _analemma_path_lat : float = INF
+var _analemma_path_lon : float = INF
 
 func _process( delta: float ) -> void :
 	if not Engine.is_editor_hint() :
+		# Analemma / ∞ view: each frame jumps to the next day's solar noon and
+		# refreshes the world. Visual-only — time_scale is 0 so no other system
+		# integrates (battery/energy stay frozen).
+		if analemma_mode :
+			_step_analemma()
+			_session_playtime_seconds += delta
+			return
 		# Advance the clock directly so the date still rolls (clock.day_time setter
 		# handles rollover both directions) WITHOUT triggering the per-frame
 		# _update() inside main.gd's day_time setter. The visual recompute is
@@ -1861,6 +1901,7 @@ func _update_environment() -> void :
 	_vegetation_night_factor = night_amount
 	if sun_direction.length_squared() > 1e-6 :
 		_vegetation_sun_direction = sun_direction.normalized()
+	_update_seasonal()
 	
 	# Sunset amount: broad indicator around dawn/dusk.
 	var sunset_amount : float = clamp( 0.5 - abs( sun_height ), 0.0, 0.5 ) * 2.0
@@ -2028,6 +2069,189 @@ func get_vegetation_night_factor() -> float :
 
 func get_vegetation_sun_direction() -> Vector3 :
 	return _vegetation_sun_direction
+
+
+## Recompute seasonal phenology + snow cover for the current clock date.
+## Cheap phenology (pure math) plus a throttled-by-frequency snow estimate.
+func _update_seasonal() -> void :
+	var lat : float = latitude
+	_season_signals = SeasonModel.season_signals( day_of_year, lat )
+	if _weather_service_node == null or not is_instance_valid( _weather_service_node ) :
+		_weather_service_node = get_node_or_null( "/root/WeatherService" )
+	_snow_amount = SeasonModel.estimate_snow_cover(
+		_weather_service_node, month, day, day_time, lat
+	)
+
+
+## Seasonal phenology signals (leaf_coverage/autumn/bud/summer/winter), read by
+## VegetationEnvironmentSync. Cached in _update_environment().
+func get_season_signals() -> Dictionary :
+	return _season_signals
+
+
+## Weather-driven ground snow cover, 0..1. Read by VegetationEnvironmentSync and
+## TerrainLoader to drive snow shaders.
+func get_snow_amount() -> float :
+	return _snow_amount
+
+
+## Advance one calendar day and snap to that day's MEAN solar noon. The sun
+## retraces its analemma over each year, and the year advances naturally from one
+## to the next so every winter pulls that year's *real* historical weather (snow,
+## etc.). Once we run past the newest complete-archive year we wrap back to the
+## start of the recent historical window, cycling through distinct real years
+## rather than replaying one.
+##
+## Holding a FIXED MEAN solar time (not apparent solar noon) is what makes the sun
+## trace the figure-eight: the equation of time (up to ~±16 min ≈ ±4° of hour
+## angle) then shows up as the sun's day-to-day east/west wander, while the
+## declination drives the ±23.4° north/south swing. Snapping to apparent solar
+## noon instead pins the hour angle to 0 and collapses the analemma to a vertical
+## line — the bug this replaces.
+func _step_analemma() -> void :
+	var start_year : int = clock.year
+	var cur : float = clock.get_absolute_hours()
+	var next_midnight : float = ( floor( cur / 24.0 ) + 1.0 ) * 24.0
+	clock.set_absolute_hours( next_midnight )
+	# Let the year roll forward; only wrap once we exhaust real historical data
+	# so the analemma keeps landing on years the weather archive actually covers.
+	var bounds : Vector2i = _analemma_year_bounds()
+	if clock.year > bounds.y :
+		clock.year = bounds.x
+		clock.month = 1
+		clock.day = 1
+	# When the calendar year changed, force WeatherService to refetch that year's
+	# archive right away so snow/weather match the new year without poll lag.
+	if clock.year != start_year :
+		_notify_weather_year_changed()
+	# Fixed mean solar noon: the sun sits on (or near) the meridian each frame; its
+	# N/S declination swing plus E/W equation-of-time wander over the year is the
+	# analemma.
+	clock.day_time = clock.mean_solar_time_to_clock_time( 12.0 )
+	_force_planet_update()
+	_update()
+	# Keep the white guide curve rebuilt for the current site and pinned to the
+	# camera so it reads as painted on the sky dome.
+	_ensure_analemma_path()
+	_position_analemma_path()
+
+# ==================== ANALEMMA GUIDE PATH ====================
+
+## Show/hide the white analemma guide when ∞ mode toggles.
+func _on_analemma_mode_changed( active: bool ) -> void :
+	if Engine.is_editor_hint() or not is_inside_tree() :
+		return
+	if active :
+		_ensure_analemma_path()
+		if is_instance_valid( _analemma_path ) :
+			_analemma_path.visible = true
+			_position_analemma_path()
+	elif is_instance_valid( _analemma_path ) :
+		_analemma_path.visible = false
+
+## Build (or rebuild after the observer moves) the year-long sun-path mesh. The
+## shape depends on latitude/longitude, so it is cached against those and only
+## regenerated when they change.
+func _ensure_analemma_path() -> void :
+	if Engine.is_editor_hint() or not is_inside_tree() :
+		return
+	if is_instance_valid( _analemma_path ) \
+			and is_equal_approx( _analemma_path_lat, clock.latitude ) \
+			and is_equal_approx( _analemma_path_lon, clock.longitude ) :
+		return
+	if not is_instance_valid( _analemma_path ) :
+		_analemma_path = MeshInstance3D.new()
+		_analemma_path.name = "AnalemmaPath"
+		_analemma_path.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_analemma_path.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		_analemma_path.visible = analemma_mode
+		add_child( _analemma_path )
+	_build_analemma_mesh()
+	_analemma_path_lat = clock.latitude
+	_analemma_path_lon = clock.longitude
+
+## Sample the sun direction at mean solar noon for every day of the year on a
+## throwaway clock (pure — never touches the live clock), then stroke it as one
+## closed white line-strip at ANALEMMA_PATH_RADIUS.
+func _build_analemma_mesh() -> void :
+	var tc := CelestialClock.new()
+	tc.latitude = clock.latitude
+	tc.longitude = clock.longitude
+	tc.planet_axial_tilt = clock.planet_axial_tilt
+	tc.auto_dst = clock.auto_dst
+	tc.manual_dst = clock.manual_dst
+	tc.year = clock.year
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color( 1.0, 1.0, 1.0 )
+	mat.vertex_color_use_as_albedo = true
+	mat.disable_receive_shadows = true
+
+	var mesh := ImmediateMesh.new()
+	mesh.surface_begin( Mesh.PRIMITIVE_LINE_STRIP, mat )
+	var days : int = 365
+	if tc._is_leap_year( tc.year ) :
+		days = 366
+	# One extra vertex wrapping to day 1 closes the loop cleanly.
+	for i in range( days + 1 ) :
+		var doy : int = ( i % days ) + 1
+		_set_clock_to_doy( tc, doy )
+		tc.day_time = tc.mean_solar_time_to_clock_time( 12.0 )
+		var dir : Vector3 = tc.get_sun_direction()
+		mesh.surface_set_color( Color( 1.0, 1.0, 1.0 ) )
+		mesh.surface_add_vertex( dir * ANALEMMA_PATH_RADIUS )
+	mesh.surface_end()
+	_analemma_path.mesh = mesh
+
+## Set a clock's month/day from a 1-based day-of-year (uses the clock's own
+## month-length rules so leap years are handled).
+func _set_clock_to_doy( c: CelestialClock, doy: int ) -> void :
+	var m : int = 1
+	var d : int = doy
+	while m < 12 :
+		var dim : int = c.get_days_in_month( m, c.year )
+		if d <= dim :
+			break
+		d -= dim
+		m += 1
+	c.month = m
+	c.day = clampi( d, 1, c.get_days_in_month( m, c.year ) )
+
+## Pin the guide's origin to the active camera so its direction-based vertices sit
+## on the sky dome regardless of where the player walks.
+func _position_analemma_path() -> void :
+	if not is_instance_valid( _analemma_path ) :
+		return
+	var vp := get_viewport()
+	if vp == null :
+		return
+	var cam := vp.get_camera_3d()
+	if cam != null :
+		_analemma_path.global_position = cam.global_position
+
+## Inclusive [min, max] sim-year range the ∞ analemma view cycles through: the
+## full weather archive, from 1940 (the ERA5 archive start) up to the newest
+## complete year — extended FORWARD through any generated future weather so the
+## analemma also scrubs the projected years with their synthesized weather
+## (snow/cloud/temperature) instead of stopping at real history.
+func _analemma_year_bounds() -> Vector2i :
+	var hi : int = int( Time.get_date_dict_from_system().year ) - 1
+	if _weather_service_node == null or not is_instance_valid( _weather_service_node ) :
+		_weather_service_node = get_node_or_null( "/root/WeatherService" )
+	if _weather_service_node != null and _weather_service_node.has_method( "generated_years" ) :
+		for y_v in _weather_service_node.call( "generated_years" ) :
+			hi = maxi( hi, int( y_v ) )
+	var lo : int = mini( ANALEMMA_ARCHIVE_START_YEAR, hi )
+	return Vector2i( lo, hi )
+
+## Nudge WeatherService to refresh immediately for the current year instead of
+## waiting up to its ~3 s location poll (keeps analemma weather in step).
+func _notify_weather_year_changed() -> void :
+	if _weather_service_node == null or not is_instance_valid( _weather_service_node ) :
+		_weather_service_node = get_node_or_null( "/root/WeatherService" )
+	if _weather_service_node != null and _weather_service_node.has_method( "notify_location_changed" ) :
+		_weather_service_node.notify_location_changed( latitude, longitude )
 
 func _update_shader() -> void :
 	if is_instance_valid( environment ) :
