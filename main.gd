@@ -159,6 +159,20 @@ func is_dst_active() -> bool :
 		clouds_weight = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.0
 		_update_clouds()
 
+## High wispy cirrus streak clouds (independent of the cumulus layer above).
+## 0 = none, ~0.35 = fair-weather wisps, 1 = heavily streaked sky. The live value is
+## written by SolarUI from the weather (scaled by cirrus_user_scale below).
+@export_range( 0.0, 1.0, 0.01 ) var cirrus_amount : float = 0.3 :
+	set( value ) :
+		cirrus_amount = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.0
+		_update_clouds()
+
+## User multiplier over the weather-driven cirrus amount (gear slider). 1.0 = as the
+## weather dictates, 0 = suppress cirrus, 2 = double. SolarUI reads this each tick.
+var cirrus_user_scale : float = 1.0 :
+	set( value ) :
+		cirrus_user_scale = clampf( value, 0.0, 2.0 ) if is_finite( value ) else 1.0
+
 ## Weather light factor - set by SolarUI to attenuate sun/moon based on cloud cover
 ## 1.0 = clear sky full brightness, 0.15 = heavy overcast
 ## Setter rejects non-finite values: a NaN/Inf here would propagate into
@@ -235,6 +249,24 @@ var gameplay_mechanics_paused : bool = true   # Off by default; TimeUI toggle ca
 		sun_size = value
 		_update_celestial_sizes()
 
+## Sun corona glow strength (soft radial halo around the disc; 0 = hard disc only)
+@export_range( 0.0, 4.0, 0.05 ) var sun_glow : float = 1.4 :
+	set( value ) :
+		sun_glow = value
+		_update_celestial_sizes()
+
+## Sun corona glow radius (multiple of the sun disc size)
+@export_range( 1.0, 30.0, 0.5 ) var sun_glow_size : float = 9.0 :
+	set( value ) :
+		sun_glow_size = value
+		_update_celestial_sizes()
+
+## Broad atmospheric aureole washing the sky around the sun (Mie forward-scatter; sunset drama)
+@export_range( 0.0, 3.0, 0.05 ) var sun_aureole : float = 0.8 :
+	set( value ) :
+		sun_aureole = value
+		_update_celestial_sizes()
+
 ## Moon light intensity (0 = use node default)
 @export_range( 0.0, 10.0, 0.01 ) var moon_base_enegry : float = 0.0 :
 	set( value ) :
@@ -279,6 +311,29 @@ var gameplay_mechanics_paused : bool = true   # Off by default; TimeUI toggle ca
 		moon_glow = value
 		_update_celestial_sizes()
 
+# ==================== CAMERA (user-tunable) ====================
+
+## First-person player camera field of view, in degrees. 0 = leave the scene's
+## own camera FOV untouched (per-map default). Non-zero overrides it.
+var player_fov : float = 0.0 :
+	set( value ) :
+		if is_finite( value ) and value > 0.0 :
+			player_fov = clampf( value, 30.0, 120.0 )
+		else :
+			player_fov = 0.0
+		_apply_camera_fov()
+
+## FPV drone camera field of view, in degrees (the drone reuses the player camera,
+## so this is applied while mounted and reverted to player_fov on dismount).
+## 0 = leave the scene default untouched.
+var drone_fov : float = 0.0 :
+	set( value ) :
+		if is_finite( value ) and value > 0.0 :
+			drone_fov = clampf( value, 30.0, 120.0 )
+		else :
+			drone_fov = 0.0
+		_apply_camera_fov()
+
 # ==================== ADVANCED RENDERING (user-tunable) ====================
 
 ## Multiplier over the automatic day/night ambient energy ramp.
@@ -310,7 +365,10 @@ var ssao_user_enabled : bool = true :
 		ssao_user_enabled = value
 		_apply_advanced_rendering_toggles()
 
-var ssil_user_enabled : bool = true :
+# Default OFF: under Forward+ SSIL is real (it was a silent no-op on the old
+# GL Compatibility renderer) and costs noticeably more than SSAO for a subtle
+# effect on this outdoor scene. Users can enable it in gear settings (persisted).
+var ssil_user_enabled : bool = false :
 	set( value ) :
 		ssil_user_enabled = value
 		_apply_advanced_rendering_toggles()
@@ -325,7 +383,42 @@ var volumetric_fog_user_enabled : bool = false :
 		volumetric_fog_user_enabled = value
 		_apply_advanced_rendering_toggles()
 
-var tonemap_mode : int = Environment.TONE_MAPPER_LINEAR :
+## Crepuscular "god rays" (light shafts). Implemented via Godot's volumetric fog +
+## a boosted directional-light volumetric energy, so the sun casts visible shafts,
+## most dramatically at sunrise/sunset. Tuned thin so it adds shafts, not a grey haze.
+var god_rays_enabled : bool = false :
+	set( value ) :
+		god_rays_enabled = value
+		# _apply_advanced_rendering_toggles fully handles the volumetric-fog + sun
+		# shaft setup; no need for the heavier full _update_environment() here.
+		_apply_advanced_rendering_toggles()
+
+## Drifting cloud shadows: the direct sun dims and brightens as clouds pass, synced
+## to the sky's cloud density/drift. A cheap global light attenuation (no per-pixel
+## ground projection), so it costs nothing beyond one noise sample per env update.
+var cloud_shadows_enabled : bool = true :
+	set( value ) :
+		cloud_shadows_enabled = value
+		_update_sun()
+
+## How deeply a passing cloud can dim the direct sun (0 = off, 1 = strong).
+var cloud_shadow_strength : float = 0.6 :
+	set( value ) :
+		cloud_shadow_strength = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.6
+		_update_sun()
+
+## Lazily-created noise for the cloud-shadow drift (see _compute_cloud_shadow_factor).
+var _cloud_shadow_noise : FastNoiseLite = null
+## Cached cloud drift speed/direction (static sky-shader uniforms), read once.
+var _cloud_shadow_speed : float = 2.0
+var _cloud_shadow_dir : float = 0.2
+
+# ACES over Linear (Forward+ default): an A/B screenshot comparison (vista/
+# golden-hour/night, both maps) showed Linear leaves distant terrain visibly
+# pale/washed-out under the real HDR pipeline â€” ACES fixed that with no
+# regression elsewhere. AgX was also compared and was nearly indistinguishable
+# from Linear in this scene, so it wasn't chosen. Gear-panel override persists.
+var tonemap_mode : int = Environment.TONE_MAPPER_ACES :
 	set( value ) :
 		tonemap_mode = clampi( value, 0, 4 )
 		_apply_tonemap_settings()
@@ -339,6 +432,14 @@ var tonemap_white : float = 1.0 :
 	set( value ) :
 		tonemap_white = clampf( value, 0.1, 16.0 ) if is_finite( value ) else 1.0
 		_apply_tonemap_settings()
+
+## Forward+ MSAA level, independent of the TAA implied by graphics_quality â€”
+## some players prefer MSAA's sharper edges over TAA's smoothing/ghosting
+## trade-off on wind-animated vegetation. 0=Off, 1=2x, 2=4x, 3=8x.
+var msaa_level : int = 0 :
+	set( value ) :
+		msaa_level = clampi( value, 0, 3 )
+		_apply_msaa_level()
 
 # ==================== CALCULATED SUNRISE/SUNSET ====================
 
@@ -447,6 +548,14 @@ func _ready() -> void :
 		if player.has_signal( "player_died" ) :
 			if not player.is_connected( "player_died", Callable( self, "_on_player_died_with_message" ) ) :
 				player.connect( "player_died", Callable( self, "_on_player_died_with_message" ) )
+		# Re-apply the configured FOV whenever the player enters/leaves FPV drone
+		# mode (both modes share the player's Camera3D).
+		var fov_cb := Callable( self, "_on_vehicle_camera_change" )
+		if player.has_signal( "mounted_vehicle" ) and not player.is_connected( "mounted_vehicle", fov_cb ) :
+			player.connect( "mounted_vehicle", fov_cb )
+		if player.has_signal( "dismounted_vehicle" ) and not player.is_connected( "dismounted_vehicle", fov_cb ) :
+			player.connect( "dismounted_vehicle", fov_cb )
+		_apply_camera_fov()
 	# Connect game over UI respawn signal
 	if is_instance_valid( game_over_ui ) and game_over_ui.has_signal( "respawn_requested" ) :
 		var respawn_cb := Callable( self, "_respawn_player" )
@@ -468,6 +577,7 @@ func _ready() -> void :
 	call_deferred( "_spawn_fire_extinguisher_pickups" )
 	_apply_advanced_rendering_toggles()
 	_apply_tonemap_settings()
+	_apply_msaa_level()
 	_update()
 	_setup_save_load_ui()
 	_setup_location_picker()
@@ -1034,6 +1144,91 @@ func set_moon_glow( value: float ) -> void :
 func get_moon_glow() -> float :
 	return moon_glow
 
+func set_sun_glow( value: float ) -> void :
+	sun_glow = value
+
+func get_sun_glow() -> float :
+	return sun_glow
+
+func set_sun_glow_size( value: float ) -> void :
+	sun_glow_size = value
+
+func get_sun_glow_size() -> float :
+	return sun_glow_size
+
+func set_sun_aureole( value: float ) -> void :
+	sun_aureole = value
+
+func get_sun_aureole() -> float :
+	return sun_aureole
+
+func set_cirrus_amount( value: float ) -> void :
+	cirrus_amount = value
+
+func get_cirrus_amount() -> float :
+	return cirrus_amount
+
+func set_cirrus_user_scale( value: float ) -> void :
+	cirrus_user_scale = value
+
+func get_cirrus_user_scale() -> float :
+	return cirrus_user_scale
+
+func set_cloud_shadows_enabled( on: bool ) -> void :
+	cloud_shadows_enabled = on
+
+func get_cloud_shadows_enabled() -> bool :
+	return cloud_shadows_enabled
+
+func set_god_rays_enabled( on: bool ) -> void :
+	god_rays_enabled = on
+
+func get_god_rays_enabled() -> bool :
+	return god_rays_enabled
+
+# ---- Camera field of view (player + FPV drone share one Camera3D) ----
+
+func _player_camera() -> Camera3D :
+	if not is_instance_valid( player ) :
+		return null
+	return player.get_node_or_null( "CameraArm/Camera3D" ) as Camera3D
+
+## Push the correct FOV onto the shared camera based on the current mode. The
+## drone borrows the player's Camera3D, so it gets drone_fov while mounted and
+## reverts to player_fov once the player is back on foot.
+func _apply_camera_fov() -> void :
+	var cam := _player_camera()
+	if cam == null :
+		return
+	var drone_active : bool = false
+	if is_instance_valid( player ) and player.get( "is_fpv_drone_mode" ) != null :
+		drone_active = bool( player.get( "is_fpv_drone_mode" ) )
+	var target : float = drone_fov if drone_active else player_fov
+	if target > 0.0 and is_finite( target ) :
+		cam.fov = clampf( target, 1.0, 179.0 )
+
+func set_player_fov( value: float ) -> void :
+	player_fov = value
+
+func get_player_fov() -> float :
+	if player_fov > 0.0 :
+		return player_fov
+	var cam := _player_camera()
+	return cam.fov if cam != null else 50.0
+
+func set_drone_fov( value: float ) -> void :
+	drone_fov = value
+
+func get_drone_fov() -> float :
+	if drone_fov > 0.0 :
+		return drone_fov
+	return get_player_fov()
+
+## Re-apply FOV when the player mounts/dismounts a vehicle (deferred so the
+## mode flag has settled). Ignores the emitted vehicle argument.
+func _on_vehicle_camera_change( _vehicle: Node3D = null ) -> void :
+	call_deferred( "_apply_camera_fov" )
+
 func set_fog_amount( value: float ) -> void :
 	fog_amount = value
 
@@ -1057,7 +1252,23 @@ func _apply_advanced_rendering_toggles() -> void :
 	env.ssao_enabled = ssao_user_enabled
 	env.ssil_enabled = ssil_user_enabled
 	env.sdfgi_enabled = sdfgi_user_enabled
-	env.volumetric_fog_enabled = volumetric_fog_user_enabled
+	# God rays ride on the volumetric fog pass, so enable it when either the plain
+	# volumetric-fog toggle OR the god-rays toggle is on.
+	env.volumetric_fog_enabled = volumetric_fog_user_enabled or god_rays_enabled
+	if god_rays_enabled :
+		# Thin fog + strong in-scattering length so the sun scatters into visible
+		# shafts without fogging the whole scene into a grey wash.
+		env.volumetric_fog_density = 0.018 if not volumetric_fog_user_enabled else maxf( env.volumetric_fog_density, 0.018 )
+		env.volumetric_fog_length = 96.0
+		env.volumetric_fog_detail_spread = 2.0
+		env.volumetric_fog_gi_inject = 0.0
+		env.volumetric_fog_ambient_inject = 0.0
+		env.volumetric_fog_albedo = Color( 1.0, 0.95, 0.85 )
+		if is_instance_valid( sun ) :
+			# The directional light's contribution to the fog = the shafts themselves.
+			sun.light_volumetric_fog_energy = 2.2
+	elif is_instance_valid( sun ) :
+		sun.light_volumetric_fog_energy = 1.0
 
 func _apply_tonemap_settings() -> void :
 	if not is_instance_valid( environment ) or environment.environment == null :
@@ -1066,6 +1277,19 @@ func _apply_tonemap_settings() -> void :
 	env.tonemap_mode = tonemap_mode as Environment.ToneMapper
 	env.tonemap_exposure = tonemap_exposure
 	env.tonemap_white = tonemap_white
+
+func _apply_msaa_level() -> void :
+	if Engine.is_editor_hint() :
+		return
+	var vp := get_viewport()
+	if vp != null :
+		vp.msaa_3d = msaa_level as Viewport.MSAA
+
+func set_msaa_level( level: int ) -> void :
+	msaa_level = level
+
+func get_msaa_level() -> int :
+	return msaa_level
 
 ## Apply the global graphics preset via RenderingServer + the active viewport.
 ## These are global/viewport knobs (not per-light), so they take effect immediately.
@@ -1460,11 +1684,48 @@ func _update_sun() -> void :
 	var horizon_fade : float = smoothstep( -0.1, 0.2, sun_direction.y )
 	# Add extra intensity when sun is high (simulates less atmospheric scattering)
 	var high_sun_boost : float = 1.0 + smoothstep( 0.3, 0.8, sun_direction.y ) * 0.3
-	# Apply weather attenuation (clouds reduce direct sunlight).
+	# Apply weather attenuation (clouds reduce direct sunlight) plus the drifting
+	# cloud-shadow factor (a passing cloud briefly dims the direct sun).
 	# Final clamp at the GPU boundary: a non-finite light_energy hard-hangs the
 	# Vulkan renderer (full-desktop "shattered glass" + reboot), so never let one through.
-	var sun_e : float = horizon_fade * high_sun_boost * sun_base_enegry * weather_light_factor
+	var sun_e : float = horizon_fade * high_sun_boost * sun_base_enegry * weather_light_factor * _compute_cloud_shadow_factor()
 	sun.light_energy = clampf(sun_e, 0.0, 64.0) if is_finite(sun_e) else 0.0
+
+## Global direct-sun attenuation that drifts with the visible clouds, giving the
+## "sun ducked behind a cloud" dimming on partly-cloudy days. Returns 1.0 (no
+## change) when disabled or when the sky is clear. Cheap: one noise sample.
+func _compute_cloud_shadow_factor() -> float :
+	if not cloud_shadows_enabled :
+		return 1.0
+	var coverage : float = clampf( 1.0 - clouds_cutoff, 0.0, 1.0 )
+	if coverage <= 0.001 :
+		return 1.0
+	if _cloud_shadow_noise == null :
+		_cloud_shadow_noise = FastNoiseLite.new()
+		_cloud_shadow_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		_cloud_shadow_noise.fractal_octaves = 2
+		_cloud_shadow_noise.frequency = 0.5
+		# Cache the static cloud drift uniforms once (they don't change at runtime),
+		# rather than reading shader parameters every _update_sun() call.
+		if is_instance_valid( environment ) and environment.environment != null \
+				and environment.environment.sky != null \
+				and environment.environment.sky.sky_material != null :
+			var mat := environment.environment.sky.sky_material
+			var sv = mat.get_shader_parameter( "clouds_speed" )
+			var dv = mat.get_shader_parameter( "clouds_direction" )
+			if sv != null :
+				_cloud_shadow_speed = float( sv )
+			if dv != null :
+				_cloud_shadow_dir = float( dv )
+	# Drift along the same bearing/speed as the sky-shader clouds (real engine
+	# seconds, since the sky clouds scroll on TIME, not sim time).
+	var t : float = float( Time.get_ticks_msec() ) / 1000.0 * maxf( _cloud_shadow_speed, 0.01 ) * 0.06
+	var ang : float = _cloud_shadow_dir * TAU
+	var n : float = _cloud_shadow_noise.get_noise_2d( cos( ang ) * t, sin( ang ) * t ) * 0.5 + 0.5
+	# Only denser cloud patches cast a shadow; more coverage â†’ shadowed more often.
+	var shadow : float = smoothstep( 1.0 - coverage, 1.0 - coverage * 0.35, n )
+	var factor : float = 1.0 - shadow * cloud_shadow_strength * coverage
+	return clampf( factor, 0.12, 1.0 ) if is_finite( factor ) else 1.0
 
 # ==================== MOON UPDATE ====================
 
@@ -1575,12 +1836,16 @@ func _update_clouds() -> void :
 	if is_instance_valid( environment ) :
 		environment.environment.sky.sky_material.set_shader_parameter( "clouds_cutoff", clouds_cutoff )
 		environment.environment.sky.sky_material.set_shader_parameter( "clouds_weight", clouds_weight )
+		environment.environment.sky.sky_material.set_shader_parameter( "cirrus_amount", cirrus_amount )
 
 func _update_celestial_sizes() -> void :
 	if is_instance_valid( environment ) :
 		environment.environment.sky.sky_material.set_shader_parameter( "sun_size", sun_size )
 		environment.environment.sky.sky_material.set_shader_parameter( "moon_size", moon_size )
 		environment.environment.sky.sky_material.set_shader_parameter( "moon_glow", moon_glow )
+		environment.environment.sky.sky_material.set_shader_parameter( "sun_glow", sun_glow )
+		environment.environment.sky.sky_material.set_shader_parameter( "sun_glow_size", sun_glow_size )
+		environment.environment.sky.sky_material.set_shader_parameter( "sun_aureole", sun_aureole )
 
 func _update_environment() -> void :
 	if not is_instance_valid( environment ) or not is_instance_valid( sun ) :
