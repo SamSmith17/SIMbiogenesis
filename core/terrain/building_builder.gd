@@ -181,6 +181,58 @@ static func building_tag(poly: PackedVector2Array) -> String:
 	return "bldg_%d_%d" % [roundi(c.x), roundi(c.y)]
 
 
+## Effective build parameters for one building record + optional per-building
+## style overrides, precedence style > OSM tags > defaults. Recognized style
+## keys: roof_shape, roof_pitch_deg, wall_color / roof_color (Color, [r,g,b,a]
+## array, or CSS string), height_m, base_y_offset_m, elements.
+static func resolve_building_params(d: Dictionary, style: Dictionary) -> Dictionary:
+	var pts: Variant = d.get("points", PackedVector2Array())
+	var poly: PackedVector2Array = pts if pts is PackedVector2Array else PackedVector2Array()
+	var tags: Dictionary = d.get("tags", {})
+	var height_m := TerrainBuilder.dict_float(d, "height_m", DEFAULT_HEIGHT_M)
+	var style_h := TerrainBuilder.dict_float(style, "height_m", 0.0)
+	if style_h > 0.0:
+		height_m = clampf(style_h, 1.0, MAX_HEIGHT_M)
+	var roof_v: Variant = d.get("roof", infer_roof_spec(tags, poly))
+	var roof: Dictionary = (roof_v as Dictionary).duplicate() if roof_v is Dictionary \
+		else infer_roof_spec(tags, poly)
+	if str(style.get("roof_shape", "")) != "":
+		roof["shape"] = str(style["roof_shape"])
+		roof["source"] = "user"
+	if style.has("roof_pitch_deg"):
+		roof["angle_deg"] = clampf(
+			TerrainBuilder.dict_float(style, "roof_pitch_deg", 30.0), 5.0, 60.0)
+		roof["roof_height_m"] = 0.0
+		roof["source"] = "user"
+	var colors := resolve_building_colors(tags, building_tag(poly))
+	if style.has("wall_color"):
+		colors["wall"] = style_color(style["wall_color"], colors["wall"])
+	if style.has("roof_color"):
+		colors["roof"] = style_color(style["roof_color"], colors["roof"])
+	return {
+		"poly": poly,
+		"height_m": height_m,
+		"roof": roof,
+		"colors": colors,
+		"base_offset_m": clampf(
+			TerrainBuilder.dict_float(style, "base_y_offset_m", 0.0), -5.0, 5.0),
+		"elements": style.get("elements", []),
+	}
+
+
+## Style colors may be Color values, [r,g,b(,a)] JSON arrays, or CSS strings.
+static func style_color(v: Variant, fallback: Color) -> Color:
+	if v is Color:
+		return v
+	if v is Array and (v as Array).size() >= 3:
+		var arr: Array = v
+		var a := float(arr[3]) if arr.size() > 3 else 1.0
+		return Color(float(arr[0]), float(arr[1]), float(arr[2]), a)
+	if v is String:
+		return Color.from_string(v, fallback)
+	return fallback
+
+
 ## Wall/roof colors: OSM building:colour / roof:colour when tagged, otherwise
 ## a deterministic palette pick + value jitter hashed from the stable tag.
 static func resolve_building_colors(tags: Dictionary, stable_tag: String) -> Dictionary:
@@ -276,12 +328,10 @@ static func build_buildings_node(buildings: Array, elev: PackedFloat32Array, res
 			continue
 		if footprint_area_m2(poly) < MIN_FOOTPRINT_AREA_M2:
 			continue
-		var tags: Dictionary = d.get("tags", {})
-		var height_m := TerrainBuilder.dict_float(d, "height_m", DEFAULT_HEIGHT_M)
-		var roof: Dictionary = d.get("roof", infer_roof_spec(tags, poly))
-		var colors := resolve_building_colors(tags, building_tag(poly))
-		if _append_footprint(st_walls, st_roof, poly, height_m, roof, colors,
-				elev, res, height_extent_m, center_elev,
+		var params := resolve_building_params(d, {})
+		if _append_footprint(st_walls, st_roof, poly, params["height_m"],
+				params["roof"], params["colors"], elev, res,
+				height_extent_m, center_elev,
 				detail_elev, detail_cols, detail_rows, detail_foot_extent):
 			added += 1
 	if added == 0:
@@ -305,12 +355,48 @@ static func build_buildings_node(buildings: Array, elev: PackedFloat32Array, res
 	return root
 
 
+## One styled building as its own MeshInstance3D. Styled buildings are
+## excluded from the merged mesh and rebuilt individually; the Building
+## Builder studio calls this with a flat 2×2 zero DEM so the preview and the
+## world share one geometry code path.
+static func build_single_building(d: Dictionary, style: Dictionary,
+		elev: PackedFloat32Array, res: int, height_extent_m: float, center_elev: float,
+		detail_elev: PackedFloat32Array = PackedFloat32Array(), detail_cols: int = 0,
+		detail_rows: int = 0, detail_extent_m: float = 0.0,
+		cast_shadows: bool = true) -> MeshInstance3D:
+	var params := resolve_building_params(d, style)
+	var poly: PackedVector2Array = params["poly"]
+	if poly.size() < 3:
+		return null
+	var st_walls := SurfaceTool.new()
+	st_walls.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var st_roof := SurfaceTool.new()
+	st_roof.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var detail_foot_extent := detail_extent_m if not detail_elev.is_empty() else 0.0
+	if not _append_footprint(st_walls, st_roof, poly, params["height_m"],
+			params["roof"], params["colors"], elev, res, height_extent_m, center_elev,
+			detail_elev, detail_cols, detail_rows, detail_foot_extent,
+			float(params["base_offset_m"])):
+		return null
+	var mi := MeshInstance3D.new()
+	mi.name = "BuildingMesh"
+	var mesh: ArrayMesh = st_walls.commit()
+	mesh = st_roof.commit(mesh)
+	mi.mesh = mesh
+	mi.set_surface_override_material(0, make_wall_material())
+	mi.set_surface_override_material(1, make_roof_material())
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows \
+		else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+
 static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 		poly: PackedVector2Array, height_m: float, roof: Dictionary, colors: Dictionary,
 		elev: PackedFloat32Array, res: int,
 		height_extent_m: float, center_elev: float,
 		detail_elev: PackedFloat32Array = PackedFloat32Array(),
-		detail_cols: int = 0, detail_rows: int = 0, detail_extent_m: float = 0.0) -> bool:
+		detail_cols: int = 0, detail_rows: int = 0, detail_extent_m: float = 0.0,
+		base_offset_m: float = 0.0) -> bool:
 	var n := poly.size()
 	if n < 3:
 		return false
@@ -323,11 +409,13 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 
 	# Seat the whole building at its lowest corner sample: real eaves and roofs
 	# are level regardless of slope; the uphill walls simply bury into the hill.
+	# base_offset_m is the user's vertical-placement nudge from the style layer.
 	var base_y := INF
 	for i in n:
 		base_y = minf(base_y, _sample_ground_y(poly[i].x, poly[i].y, elev, res,
 			height_extent_m, center_elev, detail_elev, detail_cols, detail_rows,
 			detail_extent_m))
+	base_y += base_offset_m
 	var skirt_y := base_y - FOUNDATION_SKIRT_M
 
 	var tri_indices := Geometry2D.triangulate_polygon(poly)

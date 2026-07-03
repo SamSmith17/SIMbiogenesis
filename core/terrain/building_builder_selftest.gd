@@ -25,6 +25,9 @@ func _initialize() -> void:
 	_test_skillion()
 	_test_uvs_and_colors()
 	_test_materials()
+	_test_style_layer()
+	_test_style_overrides()
+	_test_single_building_parity()
 	if _failures == 0:
 		print("BUILDING SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -567,3 +570,110 @@ func _test_materials() -> void:
 		roof is ShaderMaterial and (roof as ShaderMaterial).shader != null)
 	_check("materials: independent instances",
 		BuildingBuilder.make_wall_material() != wall)
+
+
+func _test_style_layer() -> void:
+	var layer := BuildingStyleLayer.create_empty()
+	var ok := layer.set_style("bldg_3_4", {
+		"roof_shape": "gabled",
+		"roof_pitch_deg": 35.0,
+		"wall_color": Color(0.2, 0.4, 0.6, 1.0),
+		"height_m": 11.5,
+		"base_y_offset_m": -0.5,
+		"elements": [{"kind": "door", "edge": 0, "u_m": 2.0, "v_m": 0.0,
+			"w_m": 1.0, "h_m": 2.05}],
+	})
+	_check("style layer: set_style accepts", ok)
+
+	# Round-trip through actual JSON text (what lands on disk).
+	var json_text := JSON.stringify(layer.serialize())
+	var reparsed: Variant = JSON.parse_string(json_text)
+	var layer2 := BuildingStyleLayer.create_empty()
+	layer2.deserialize(reparsed as Dictionary)
+	var got := layer2.get_style("bldg_3_4")
+	_check("style layer: round-trips shape", str(got.get("roof_shape", "")) == "gabled")
+	_check("style layer: round-trips height", absf(float(got.get("height_m", 0.0)) - 11.5) < 1e-6)
+	var col := BuildingStyleLayer.array_to_color(got.get("wall_color"), Color.BLACK)
+	_check("style layer: color survives JSON",
+		absf(col.r - 0.2) < 1e-5 and absf(col.g - 0.4) < 1e-5 and absf(col.b - 0.6) < 1e-5)
+	var elems: Array = got.get("elements", [])
+	_check("style layer: elements survive", elems.size() == 1
+		and str((elems[0] as Dictionary).get("kind", "")) == "door")
+	_check("style layer: all_tags", layer2.all_tags() == ["bldg_3_4"])
+	layer2.remove_style("bldg_3_4")
+	_check("style layer: remove", not layer2.has_style("bldg_3_4"))
+
+
+func _test_style_overrides() -> void:
+	var d := {"idx": 0, "points": _rect_poly(5.0, 3.0), "height_m": 8.0,
+		"tags": {"building": "house"}}
+
+	# No style: house defaults to gabled (record has no precomputed roof).
+	var params := BuildingBuilder.resolve_building_params(d, {})
+	_check("params: default roof from tags",
+		str((params["roof"] as Dictionary).get("shape", "")) == "gabled")
+
+	# Style overrides shape, pitch, height, colors, base offset.
+	params = BuildingBuilder.resolve_building_params(d, {
+		"roof_shape": "flat", "roof_pitch_deg": 45.0, "height_m": 12.0,
+		"wall_color": [0.1, 0.2, 0.3, 1.0], "roof_color": "red",
+		"base_y_offset_m": 1.25})
+	var roof: Dictionary = params["roof"]
+	_check("params: style shape wins", str(roof.get("shape", "")) == "flat")
+	_check("params: style pitch wins", absf(float(roof.get("angle_deg", 0.0)) - 45.0) < 1e-5)
+	_check("params: provenance user", str(roof.get("source", "")) == "user")
+	_check("params: style height wins", absf(float(params["height_m"]) - 12.0) < 1e-5)
+	var wall_c: Color = (params["colors"] as Dictionary)["wall"]
+	_check("params: wall color array decoded", absf(wall_c.b - 0.3) < 1e-5)
+	var roof_c: Color = (params["colors"] as Dictionary)["roof"]
+	_check("params: roof color css decoded", roof_c.r > 0.9 and roof_c.g < 0.1)
+	_check("params: base offset", absf(float(params["base_offset_m"]) - 1.25) < 1e-6)
+
+	# Base offset moves the whole mesh vertically.
+	var v0 := _mesh_data(_square_poly(5.0), 8.0, _roof_spec("flat"), _flat_grid())
+	var buildings := [{"idx": 0, "points": _square_poly(5.0), "height_m": 8.0,
+		"tags": {}, "roof": _roof_spec("flat")}]
+	var mi := BuildingBuilder.build_single_building(
+		buildings[0], {"base_y_offset_m": 2.0}, _flat_grid(), GRID_RES, EXTENT_M, 0.0)
+	_check("params: offset mesh built", mi != null)
+	if mi != null and not v0.is_empty():
+		var max_y := -INF
+		for s in mi.mesh.get_surface_count():
+			for v in (mi.mesh.surface_get_arrays(s)[Mesh.ARRAY_VERTEX] as PackedVector3Array):
+				max_y = maxf(max_y, v.y)
+		var base_max := -INF
+		for v in (v0["verts"] as PackedVector3Array):
+			base_max = maxf(base_max, v.y)
+		_check("params: offset shifts mesh +2 m", absf(max_y - (base_max + 2.0)) < 1e-3,
+			"max %f vs %f" % [max_y, base_max])
+		mi.free()
+
+
+func _test_single_building_parity() -> void:
+	# build_single_building with an empty style must vertex-match the same
+	# building's merged-mesh build (one shared geometry code path).
+	var d := {"idx": 0, "points": _rect_poly(5.0, 3.0), "height_m": 8.0,
+		"tags": {"building": "house"}}
+	var merged := _mesh_data(_rect_poly(5.0, 3.0), 8.0,
+		BuildingBuilder.infer_roof_spec({"building": "house"}, _rect_poly(5.0, 3.0)),
+		_tilted_grid())
+	var mi := BuildingBuilder.build_single_building(
+		d, {}, _tilted_grid(), GRID_RES, EXTENT_M, 0.0)
+	_check("parity: single build ok", mi != null and not merged.is_empty())
+	if mi == null or merged.is_empty():
+		return
+	_check("parity: same surface count",
+		mi.mesh.get_surface_count() == int(merged["surface_count"]))
+	var single_verts := PackedVector3Array()
+	for s in mi.mesh.get_surface_count():
+		single_verts += mi.mesh.surface_get_arrays(s)[Mesh.ARRAY_VERTEX] as PackedVector3Array
+	var merged_verts: PackedVector3Array = merged["verts"]
+	var same := single_verts.size() == merged_verts.size()
+	if same:
+		for i in single_verts.size():
+			if single_verts[i].distance_to(merged_verts[i]) > 1e-5:
+				same = false
+				break
+	_check("parity: identical vertices", same,
+		"single=%d merged=%d" % [single_verts.size(), merged_verts.size()])
+	mi.free()

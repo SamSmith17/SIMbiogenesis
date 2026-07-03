@@ -124,6 +124,11 @@ var _placed_prop_layer: PlacedPropLayer = null
 var _placed_props_ui: Control = null
 var _placed_prop_edit_ui: Control = null
 var _building_focus_idx: int = -1
+## Per-building style overrides (Building Builder). Styled buildings are
+## excluded from the merged Buildings mesh and rebuilt as individual children
+## of the BuildingsCustom node ("B_<tag>").
+var _building_style_layer: BuildingStyleLayer = null
+var _custom_buildings_root: Node3D = null
 ## OSM solar arrays built in-world but NOT auto-added to the graph. Each record:
 ## {name, poly, panel_count, watts, base_y, tilt, azimuth, tag, added}. The player
 ## targets one via the crosshair (see pick_solar_array_at_world) and confirms to add
@@ -1123,17 +1128,80 @@ func _attach_buildings(enable_shadows: bool = true) -> void:
 	var excluded: Array = []
 	if _placed_prop_layer != null:
 		excluded = _placed_prop_layer.get_replaced_building_indices()
+	# Styled buildings leave the merged mesh and get individual instances.
+	var styled := _styled_building_indices()
+	for idx in styled:
+		excluded.append(idx)
 	var visible_buildings := _features_intersecting_square(_buildings_data, DETAIL_HALF_EXTENT)
 	var node := BuildingBuilder.build_buildings_node(
 		visible_buildings, _built_grid, MESH_RES, _built_extent, _built_center_elev,
 		_drape, _detail_drape, DETAIL_HALF_EXTENT * 2.0, _built_extent,
 		_detail_surface_grid, detail_cols, detail_rows, excluded, enable_shadows)
-	if node == null:
+	if node != null:
+		terrain.add_child(node)
+		_buildings_root = node
+	_attach_custom_buildings(terrain, styled, enable_shadows)
+	print("TerrainLoader: extruded %d OSM buildings (%d styled, natural footing, hi-res drape=%s)" % [
+		visible_buildings.size(), styled.size(),
+		"yes" if _detail_drape != null else "base only"])
+
+
+## idx -> stable tag for every building carrying a style override. Prop-replaced
+## buildings stay with the prop (the model wins over a style record).
+func _styled_building_indices() -> Dictionary:
+	var out: Dictionary = {}
+	if _building_style_layer == null or _building_style_layer.styles.is_empty():
+		return out
+	for item in _buildings_data:
+		if not (item is Dictionary):
+			continue
+		var d: Dictionary = item
+		var pts: Variant = d.get("points", PackedVector2Array())
+		if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 3:
+			continue
+		var tag := BuildingBuilder.building_tag(pts)
+		if not _building_style_layer.has_style(tag):
+			continue
+		var idx := int(d.get("idx", -1))
+		if _placed_prop_layer != null and _placed_prop_layer.is_building_replaced(idx):
+			continue
+		out[idx] = tag
+	return out
+
+
+func _attach_custom_buildings(terrain: Node, styled: Dictionary,
+		enable_shadows: bool = true) -> void:
+	if styled.is_empty():
 		return
-	terrain.add_child(node)
-	_buildings_root = node
-	print("TerrainLoader: extruded %d OSM buildings (natural footing, hi-res drape=%s)" % [
-		visible_buildings.size(), "yes" if _detail_drape != null else "base only"])
+	var detail_cols := _detail_elev_cols if not _detail_surface_grid.is_empty() else 0
+	var detail_rows := _detail_elev_rows if not _detail_surface_grid.is_empty() else 0
+	var root := Node3D.new()
+	root.name = "BuildingsCustom"
+	for idx in styled:
+		var d := _find_building_record(int(idx))
+		if d.is_empty():
+			continue
+		var tag: String = styled[idx]
+		var mi := BuildingBuilder.build_single_building(
+			d, _building_style_layer.get_style(tag),
+			_built_grid, MESH_RES, _built_extent, _built_center_elev,
+			_detail_surface_grid, detail_cols, detail_rows,
+			DETAIL_HALF_EXTENT * 2.0, enable_shadows)
+		if mi != null:
+			mi.name = "B_%s" % tag
+			root.add_child(mi)
+	if root.get_child_count() == 0:
+		root.free()
+		return
+	terrain.add_child(root)
+	_custom_buildings_root = root
+
+
+func _find_building_record(building_idx: int) -> Dictionary:
+	for item in _buildings_data:
+		if item is Dictionary and int((item as Dictionary).get("idx", -1)) == building_idx:
+			return item
+	return {}
 
 
 func _attach_water() -> void:
@@ -3166,6 +3234,8 @@ func select_nearest_parcel(world_xz: Vector2) -> void:
 func _setup_placed_props() -> void:
 	_placed_prop_layer = PlacedPropLayer.create_empty()
 	_placed_prop_layer.load_for_map(_lat, _lon)
+	_building_style_layer = BuildingStyleLayer.create_empty()
+	_building_style_layer.load_for_map(_lat, _lon)
 	_setup_placed_props_ui()
 	_setup_placed_prop_edit_ui()
 	call_deferred("_rebuild_placed_props")
@@ -3292,13 +3362,15 @@ func _reground_placed_props() -> void:
 func _clear_building_nodes(terrain: Node) -> void:
 	if terrain == null:
 		_buildings_root = null
+		_custom_buildings_root = null
 		return
 	for i in range(terrain.get_child_count() - 1, -1, -1):
 		var child := terrain.get_child(i)
-		if child.name == "Buildings":
+		if child.name == "Buildings" or child.name == "BuildingsCustom":
 			terrain.remove_child(child)
 			child.free()
 	_buildings_root = null
+	_custom_buildings_root = null
 
 
 func is_building_replaced(building_idx: int) -> bool:
@@ -3325,6 +3397,77 @@ func pick_building_at_screen(screen_pos: Vector2) -> Dictionary:
 		return {"valid": false}
 	var p: Vector3 = hit as Vector3
 	return pick_building_at_world(p.x, p.z)
+
+
+## ---------------------------------------------------------------------------
+## Per-building styles (Building Builder)
+## ---------------------------------------------------------------------------
+
+func get_building_tag(building_idx: int) -> String:
+	var d := _find_building_record(building_idx)
+	var pts: Variant = d.get("points", PackedVector2Array())
+	if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 3:
+		return ""
+	return BuildingBuilder.building_tag(pts)
+
+
+func get_building_style(building_idx: int) -> Dictionary:
+	if _building_style_layer == null:
+		return {}
+	return _building_style_layer.get_style(get_building_tag(building_idx))
+
+
+## Persist a style and rebuild only what changed: a re-style of an already
+## customized building swaps its one BuildingsCustom child; a NEW style changes
+## the styled set, so the merged mesh must be rebuilt to exclude it.
+func apply_building_style(building_idx: int, style: Dictionary) -> bool:
+	if _building_style_layer == null:
+		return false
+	var tag := get_building_tag(building_idx)
+	if tag.is_empty():
+		return false
+	var was_styled := _building_style_layer.has_style(tag)
+	if not _building_style_layer.set_style(tag, style):
+		return false
+	_building_style_layer.save(_lat, _lon)
+	if was_styled:
+		_rebuild_custom_building(building_idx, tag)
+	else:
+		_attach_buildings()
+	return true
+
+
+func clear_building_style(building_idx: int) -> void:
+	if _building_style_layer == null:
+		return
+	var tag := get_building_tag(building_idx)
+	if tag.is_empty() or not _building_style_layer.remove_style(tag):
+		return
+	_building_style_layer.save(_lat, _lon)
+	_attach_buildings()
+
+
+func _rebuild_custom_building(building_idx: int, tag: String) -> void:
+	if _custom_buildings_root == null or not is_instance_valid(_custom_buildings_root):
+		_attach_buildings()
+		return
+	var old := _custom_buildings_root.get_node_or_null("B_%s" % tag)
+	if old != null:
+		_custom_buildings_root.remove_child(old)
+		old.free()
+	var d := _find_building_record(building_idx)
+	if d.is_empty():
+		return
+	var detail_cols := _detail_elev_cols if not _detail_surface_grid.is_empty() else 0
+	var detail_rows := _detail_elev_rows if not _detail_surface_grid.is_empty() else 0
+	var mi := BuildingBuilder.build_single_building(
+		d, _building_style_layer.get_style(tag),
+		_built_grid, MESH_RES, _built_extent, _built_center_elev,
+		_detail_surface_grid, detail_cols, detail_rows,
+		DETAIL_HALF_EXTENT * 2.0, true)
+	if mi != null:
+		mi.name = "B_%s" % tag
+		_custom_buildings_root.add_child(mi)
 
 
 func place_prop_from_screen(screen_pos: Vector2, model_id: String) -> bool:
