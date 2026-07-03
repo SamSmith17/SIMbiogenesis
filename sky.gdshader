@@ -18,8 +18,16 @@ group_uniforms horizon;
 group_uniforms sun; // First DirectionalLight3D will be the sun
 	uniform vec3 sun_color : source_color = vec3( 10.0, 8.0, 1.0 );
 	uniform vec3 sun_sunset_color : source_color = vec3( 10.0, 0.0, 0.0 );
+	uniform vec3 sun_gold_color : source_color = vec3( 10.0, 5.0, 1.2 ); // mid golden-hour disc tint
 	uniform float sun_size : hint_range( 0.01, 1.0 ) = 0.2;
 	uniform float sun_blur : hint_range( 0.01, 20.0 ) = 10.0;
+	// Soft radial corona around the sun disc (the "glow", not a hard disc).
+	uniform float sun_glow : hint_range( 0.0, 4.0 ) = 1.4;
+	uniform float sun_glow_size : hint_range( 1.0, 30.0 ) = 9.0;
+	uniform vec3 sun_glow_color : source_color = vec3( 1.0, 0.75, 0.42 );
+	// Broad Mie forward-scatter aureole washing the sky around the sun (sunset drama).
+	uniform float sun_aureole : hint_range( 0.0, 3.0 ) = 0.8;
+	uniform vec3 sun_aureole_color : source_color = vec3( 1.0, 0.6, 0.32 );
 
 group_uniforms moon; // Second DirectionalLight3D will be the moon
 	uniform vec3 moon_color : source_color = vec3( 1.0, 0.95, 0.7 );
@@ -45,6 +53,16 @@ group_uniforms clouds;
 	// More weight is simply a darker color, usefull for rain/storm
 	uniform float clouds_weight : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
 	uniform float clouds_blur : hint_range( 0.0, 1.0, 0.01 ) = 0.25;
+	// Storm / nimbus base tint applied as clouds_weight rises (blue-grey, not flat black).
+	uniform vec3 storm_cloud_color : source_color = vec3( 0.16, 0.17, 0.22 );
+
+group_uniforms cirrus; // High wispy streak clouds, independent of the cumulus layer
+	uniform float cirrus_amount : hint_range( 0.0, 1.0, 0.01 ) = 0.35;
+	uniform float cirrus_scale : hint_range( 0.1, 8.0, 0.01 ) = 2.6;
+	uniform float cirrus_speed : hint_range( 0.0, 20.0, 0.01 ) = 1.0;
+	uniform float cirrus_stretch : hint_range( 1.0, 16.0, 0.1 ) = 7.0;
+	uniform float cirrus_coverage : hint_range( 0.0, 1.0, 0.01 ) = 0.55; // higher = more sky filled
+	uniform vec3 cirrus_color : source_color = vec3( 1.0, 1.0, 1.0 );
 
 group_uniforms stars;
 	// Stars texture - MUST be equirectangular projection with:
@@ -225,6 +243,15 @@ group_uniforms settings;
 	    }
 	    return sum * 0.5 + 0.5;
 	}
+	// Lightweight 2-octave value noise for the wispy cirrus layer. Cirrus renders
+	// almost all day across the upper sky, so it uses a cheaper noise than the full
+	// 3-octave ping-pong fractal above (fewer cubic evaluations per pixel).
+	float gen_cirrus_noise( vec2 p )
+	{
+		float n = single_value_cubic( 51, p.x, p.y );
+		n += 0.5 * single_value_cubic( 52, p.x * 2.31 + 11.7, p.y * 2.31 - 4.3 );
+		return clamp( n / 1.5 * 0.5 + 0.5, 0.0, 1.0 );
+	}
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Function needed to calculate the phase of the moon
@@ -241,6 +268,21 @@ void sky()
 {
 	float time = overwritten_time != 0.0 ? overwritten_time : TIME;
 
+	//////////////////// SHARED SOLAR GEOMETRY //////////////////////////////////////////////////////
+	// Computed once and reused by the sunset sky, the sun glow/aureole, cirrus and cumulus
+	// lighting so the whole dome shares a single, consistent golden-hour direction and warmth.
+	float _sun_view_dist = distance( EYEDIR, LIGHT0_DIRECTION );
+	// Horizontal bearing toward vs. away from the sun (1 = looking at sun, 0 = looking away).
+	float _sun_hz_len = length( LIGHT0_DIRECTION.xz );
+	float _eye_hz_len = length( EYEDIR.xz );
+	float _toward_sun = 0.5;
+	if( _sun_hz_len > 0.01 && _eye_hz_len > 0.01 )
+		_toward_sun = dot( EYEDIR.xz / _eye_hz_len, LIGHT0_DIRECTION.xz / _sun_hz_len ) * 0.5 + 0.5;
+	// Reddening ramp: 0 when the sun is high, 1 near/below the horizon.
+	float _sun_redden = 1.0 - smoothstep( 0.0, 0.32, LIGHT0_DIRECTION.y );
+	// Normalized warm tint (LDR) used to tint glows, rims and cloud silver-linings.
+	vec3 _sun_warm = mix( vec3( 1.0, 0.92, 0.72 ), vec3( 1.0, 0.55, 0.28 ), _sun_redden );
+
 	//////////////////// SKY ///////////////////////////////////////////////////////////////////////
 	float _eyedir_y = abs( sin( EYEDIR.y * PI * 0.5 ));
 
@@ -249,11 +291,22 @@ void sky()
 	_sky_color = mix( _sky_color, vec3( 0.0 ), clamp(( 0.7 - clouds_cutoff ) * clouds_weight, 0.0, 1.0 ));
 
 	float _sunset_amount = clamp( 0.5 - abs( LIGHT0_DIRECTION.y ), 0.0, 0.5 ) * 2.0;
-	// The sky should be more red around the west, on the opposite side you don't see it as much
-	float _sunset_distance = clamp( 1.0 - pow( distance( EYEDIR, LIGHT0_DIRECTION ), 2 ), 0.0, 1.0 );
-	vec3 _sky_sunset_color = mix( sunset_bottom_color, sunset_top_color, _eyedir_y + 0.5 );
-	_sky_sunset_color = mix( _sky_sunset_color, sunset_bottom_color, _sunset_amount * _sunset_distance );
-	_sky_color = mix( _sky_color, _sky_sunset_color, _sunset_amount );
+	// Dramatic multi-band twilight gradient — only computed while the sun is near the
+	// horizon (skipped entirely at midday/deep night, where _sunset_amount is 0).
+	//   • Toward the sun: fiery orange near the horizon → pink/magenta mid → deep blue up high.
+	//   • Away from the sun: cooler violet/indigo, so the dome reads directional and real.
+	if( _sunset_amount > 0.0 )
+	{
+		float _sky_h = clamp( EYEDIR.y, 0.0, 1.0 );
+		vec3 _fire = mix( vec3( 1.0, 0.42, 0.14 ), vec3( 0.98, 0.40, 0.52 ), smoothstep( 0.0, 0.16, _sky_h ) );
+		_fire = mix( _fire, sunset_top_color, smoothstep( 0.14, 0.55, _sky_h ) );
+		vec3 _cool_sky = mix( vec3( 0.40, 0.30, 0.52 ), sunset_top_color, smoothstep( 0.0, 0.5, _sky_h ) );
+		vec3 _sky_sunset_color = mix( _cool_sky, _fire, smoothstep( 0.15, 0.85, _toward_sun ) );
+		// Concentrate the strongest fiery band right around the sun on the horizon.
+		float _sunset_focus = clamp( 1.0 - pow( _sun_view_dist, 2.0 ), 0.0, 1.0 );
+		_sky_sunset_color = mix( _sky_sunset_color, vec3( 1.0, 0.5, 0.2 ), _sunset_amount * _sunset_focus * 0.6 );
+		_sky_color = mix( _sky_color, _sky_sunset_color, _sunset_amount );
+	}
 
 	float _night_amount = clamp( -LIGHT0_DIRECTION.y + 0.7, 0.0, 1.0 );
 	vec3 _sky_night_color = mix( night_bottom_color, night_top_color, _eyedir_y );
@@ -322,29 +375,48 @@ void sky()
 	}
 
 	//////////////////// SUN ///////////////////////////////////////////////////////////////////////
-	float _sun_distance = 0.0;
+	float _sun_distance = _sun_view_dist;
 	if( LIGHT0_ENABLED )
 	{
-		_sun_distance = distance( EYEDIR, LIGHT0_DIRECTION );
-		// Bigger sun near the horizon
-		float _sun_size = sun_size + cos( LIGHT0_DIRECTION.y * PI ) * sun_size * 0.25;
+		// Bigger, softer sun near the horizon (atmospheric swelling)
+		float _sun_size = sun_size + cos( LIGHT0_DIRECTION.y * PI ) * sun_size * 0.35;
+		// The sun is hidden by the horizon and by the moon (eclipse).
+		float _sun_visible = ( 1.0 - _horizon_amount ) * ( 1.0 - _moon_amount );
+
+		// Golden-hour disc color: white-gold when high → gold → deep orange/red at the horizon.
+		vec3 _sun_disc_color = mix( sun_color, sun_gold_color, smoothstep( 0.0, 0.55, _sun_redden ) );
+		_sun_disc_color = mix( _sun_disc_color, sun_sunset_color, smoothstep( 0.55, 1.0, _sun_redden ) );
+
+		// Broad Mie forward-scatter aureole: a wide warm wash across the sky near the sun.
+		// Single pow — cheap — and it's what makes the whole sky around the sun glow, most
+		// dramatically at sunset.  Whitish at noon, orange at dusk.
+		if( sun_aureole > 0.0 && LIGHT0_DIRECTION.y > -0.12 )
+		{
+			float _aur = pow( max( 0.0, 1.0 - _sun_view_dist / 1.3 ), 2.5 );
+			vec3 _aur_col = mix( vec3( 0.85, 0.88, 0.95 ), sun_aureole_color, _sun_redden );
+			_aur *= sun_aureole * ( 0.30 + _sun_redden * 1.5 ) * _sun_visible;
+			COLOR += _aur_col * _aur;
+		}
+
+		// Soft radial corona hugging the disc — the "glow" instead of a hard bright disc.
+		if( sun_glow > 0.0 && LIGHT0_DIRECTION.y > -0.12 )
+		{
+			float _glow_radius = _sun_size * sun_glow_size;
+			float _sg = pow( max( 0.0, 1.0 - _sun_view_dist / _glow_radius ), 2.5 );
+			vec3 _glow_col = mix( sun_glow_color, _sun_warm, _sun_redden );
+			COLOR = mix( COLOR, _glow_col, clamp( _sg * sun_glow * _sun_visible, 0.0, 1.0 ) );
+		}
+
 		// Finding sun disc and edge blur
 		float _sun_amount = clamp(( 1.0 - _sun_distance / _sun_size ) / sun_blur, 0.0, 1.0 );
 		if( _sun_amount > 0.0 )
 		{
-			// Changing color of the sun during sunset
-			float _sunset_amount = 1.0;
-			if( LIGHT0_DIRECTION.y > 0.0 )
-				_sunset_amount = clamp( cos( LIGHT0_DIRECTION.y * PI ), 0.0, 1.0 );
-			vec3 _sun_color = mix( sun_color, sun_sunset_color, _sunset_amount );
-			// Hiding the sun behind the moon
-			_sun_amount = clamp( _sun_amount * ( 1.0 - _moon_amount ), 0.0, 1.0 );
-			// Hiding the sun behind the horizon
-			_sun_amount *= 1.0 - _horizon_amount;
+			_sun_amount = clamp( _sun_amount * _sun_visible, 0.0, 1.0 );
+			vec3 _sun_col = _sun_disc_color;
 			// Leveling the "glow" in color
-			if( _sun_color.r > 1.0 || _sun_color.g > 1.0 || _sun_color.b > 1.0 )
-				_sun_color *= _sun_amount;
-			COLOR = mix( COLOR, _sun_color, _sun_amount );
+			if( _sun_col.r > 1.0 || _sun_col.g > 1.0 || _sun_col.b > 1.0 )
+				_sun_col *= _sun_amount;
+			COLOR = mix( COLOR, _sun_col, _sun_amount );
 		}
 	}
 
@@ -575,6 +647,42 @@ void sky()
 		COLOR += _ref_accum * ( 1.0 - _moon_amount );
 	}
 
+	//////////////////// CIRRUS //////////////////////////////////////////////////////////////////
+	// High, wispy, streaked clouds rendered independently of the cumulus layer (so they can
+	// appear in otherwise-clear skies).  A single stretched-and-rotated fractal makes the thin
+	// filament look; they catch sunset color dramatically since they sit high in the atmosphere.
+	if( EYEDIR.y > 0.02 && cirrus_amount > 0.01 && LIGHT0_DIRECTION.y > -0.25 )
+	{
+		vec2 _cir_base = EYEDIR.xz / sqrt( EYEDIR.y );
+		// Rotate UVs so the streaks align with the wind (clouds_direction), then squash one
+		// axis to stretch the noise into filaments.
+		float _cir_ang = clouds_direction * PI * 2.0;
+		float _cca = cos( _cir_ang );
+		float _csa = sin( _cir_ang );
+		vec2 _cir_uv = vec2( _cir_base.x * _cca - _cir_base.y * _csa,
+							 _cir_base.x * _csa + _cir_base.y * _cca );
+		_cir_uv = vec2( _cir_uv.x, _cir_uv.y * cirrus_stretch ) * cirrus_scale;
+		_cir_uv += vec2( time * cirrus_speed * 0.004, 0.0 );
+		float _cir_noise = gen_cirrus_noise( _cir_uv * 0.55 );
+		// Coverage widens the accepted band; higher coverage = more of the sky filled.
+		float _cir_lo = mix( 0.62, 0.40, cirrus_coverage );
+		float _cir = smoothstep( _cir_lo, _cir_lo + 0.28, _cir_noise ) * cirrus_amount;
+		// Fade out toward the horizon and at night.
+		_cir *= clamp( ( EYEDIR.y - 0.02 ) / 0.14, 0.0, 1.0 );
+		_cir *= 1.0 - _night_amount * 0.92;
+
+		vec3 _cir_col = cirrus_color;
+		if( _sunset_amount > 0.0 )
+		{
+			vec3 _cir_warm = mix( vec3( 1.0, 0.52, 0.32 ), vec3( 1.0, 0.82, 0.5 ), clamp( EYEDIR.y * 2.0, 0.0, 1.0 ) );
+			vec3 _cir_cool = vec3( 0.72, 0.6, 0.86 );
+			vec3 _cir_sunset = mix( _cir_cool, _cir_warm, _toward_sun );
+			_cir_col = mix( cirrus_color, _cir_sunset, clamp( _sunset_amount * 1.3, 0.0, 1.0 ) );
+		}
+		_cir_col = mix( _cir_col, _sky_color, _night_amount );
+		COLOR = mix( COLOR, _cir_col, clamp( _cir, 0.0, 1.0 ) );
+	}
+
 	//////////////////// CLOUDS ////////////////////////////////////////////////////////////////
 	if( EYEDIR.y > 0.0 && clouds_cutoff < 0.99 )
 	{
@@ -611,22 +719,20 @@ void sky()
 		_clouds_color = mix( clouds_edge_color, _clouds_color, _noise_top );
 		// The sun passing through the clouds effect
 		_clouds_color = mix( _clouds_color, clamp( sun_color, 0.0, 1.0 ), pow( 1.0 - clamp( _sun_distance, 0.0, 1.0 ), 5 ));
+		// Silver / gold lining: bright warm rim where a cloud edge is backlit by the sun.
+		// Edges have low _noise_top (thin cloud) but high overall amount, and it strengthens
+		// toward the sun and near sunset — the classic dramatic backlit-cloud look.
+		float _rim = pow( max( 0.0, 1.0 - _sun_distance ), 3.0 ) * ( 1.0 - _noise_top ) * _clouds_amount;
+		_clouds_color += _sun_warm * _rim * ( 0.6 + _sun_redden * 1.4 );
 		// Directional sunset / sunrise cloud lighting.
 		// Real-world golden-hour clouds are lit asymmetrically:
 		//   • Sun-facing sides: warm golden-yellow tops, deep orange bases
 		//   • Anti-solar sides: indigo-purple bases, blue-lavender tops
 		//   • Mid-elevation, anti-solar: pink Belt-of-Venus band
 		// All effects scale with _sunset_amount so they're zero at noon/midnight.
+		// _toward_sun is the shared horizontal bearing computed once at the top.
 		if( _sunset_amount > 0.0 )
 		{
-			// Horizontal bearing toward vs. away from sun on the sky dome.
-			// _toward_sun: 1.0 = looking toward sun, 0.0 = looking away.
-			float _sun_hz_len = length( LIGHT0_DIRECTION.xz );
-			float _eye_hz_len = length( EYEDIR.xz );
-			float _toward_sun = 0.5;
-			if( _sun_hz_len > 0.01 && _eye_hz_len > 0.01 )
-				_toward_sun = dot( EYEDIR.xz / _eye_hz_len, LIGHT0_DIRECTION.xz / _sun_hz_len ) * 0.5 + 0.5;
-
 			// Height proxy: 0 = near horizon (cloud underside view), 1 = overhead (lit tops).
 			float _ch = clamp( EYEDIR.y * 4.0, 0.0, 1.0 );
 
@@ -645,7 +751,10 @@ void sky()
 
 		// Color depending on the "progress" of the night.
 		_clouds_color = mix( _clouds_color, _sky_color, clamp( _night_amount, 0.0, 0.98 ));
-		_clouds_color = mix( _clouds_color, vec3( 0.0 ), clouds_weight * 0.9 );
+		// Storm / nimbus styling: instead of flatly crushing to black, tint toward a heavy
+		// blue-grey and darken the undersides for a moody, three-dimensional storm cloud.
+		_clouds_color = mix( _clouds_color, storm_cloud_color, clouds_weight * 0.82 );
+		_clouds_color *= 1.0 - clouds_weight * 0.35 * ( 1.0 - _noise_top );
 		COLOR = mix( COLOR, _clouds_color, _clouds_amount );
 	}
 

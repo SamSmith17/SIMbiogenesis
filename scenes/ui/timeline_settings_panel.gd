@@ -5,11 +5,11 @@ extends Control
 ## so future sections can be added without touching layout.  Each tab is a
 ## ScrollContainer so content is never clipped by the viewport.
 
-const C_PANEL  := Color(0.082, 0.114, 0.208, 1.0)
-const C_BORDER := Color(0.227, 0.290, 0.420, 1.0)
-const C_PRIMARY := Color(0.133, 0.827, 0.933, 1.0)
-const C_TEXT   := Color(0.886, 0.910, 0.941, 1.0)
-const C_TEXT_S := Color(0.580, 0.639, 0.722, 1.0)
+const C_PANEL  := UITheme.C_PANEL
+const C_BORDER := UITheme.C_BORDER
+const C_PRIMARY := UITheme.C_PRIMARY
+const C_TEXT   := UITheme.C_TEXT
+const C_TEXT_S := UITheme.C_TEXT_S
 
 var _timeline: Control = null
 var _syncing: bool = false
@@ -32,11 +32,20 @@ var _sdfgi_enabled: CheckBox
 var _volumetric_fog: CheckBox
 var _fog_amount: HSlider
 var _tonemap_mode: OptionButton
+var _msaa_mode: OptionButton
 var _tonemap_exposure: HSlider
 var _tonemap_white: HSlider
 var _sun_size: HSlider
 var _moon_size: HSlider
 var _moon_glow: HSlider
+var _sun_glow: HSlider
+var _sun_glow_size: HSlider
+var _sun_aureole: HSlider
+var _god_rays: CheckBox
+var _cirrus_amount: HSlider
+var _cloud_shadows: CheckBox
+var _player_fov: HSlider
+var _drone_fov: HSlider
 var _stars_brightness: HSlider
 var _stars_scale: HSlider
 var _stars_twinkle: HSlider
@@ -682,6 +691,15 @@ func _build_environment_tab(tabs: TabContainer) -> void:
 	_add_section_lbl(v, "Clouds")
 	_clouds_cutoff = _add_slider(v, "Cloud cover",  0.0, 1.0, 0.01, _on_clouds_cutoff)
 	_clouds_weight = _add_slider(v, "Cloud weight", 0.0, 1.0, 0.01, _on_clouds_weight)
+	_cirrus_amount = _add_slider(v, "Cirrus (wispy) ×", 0.0, 2.0, 0.05, _on_cirrus_amount)
+	_cloud_shadows = _add_check(v, "Drifting cloud shadows (sun dims as clouds pass)", _on_cloud_shadows)
+	var cs_hint := Label.new()
+	cs_hint.text = "Cirrus adds high, streaky clouds (auto-driven by weather; slider is a boost). Cloud shadows dim the direct sun as clouds drift over — cheap global lighting, no ground projection."
+	cs_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	cs_hint.custom_minimum_size = Vector2(420, 0)
+	cs_hint.add_theme_color_override("font_color", C_TEXT_S)
+	cs_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(cs_hint)
 
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Future Climate Scenario")
@@ -739,9 +757,39 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	_tonemap_mode = _add_option(v, "Tonemap", ["Linear", "Reinhard", "Filmic", "ACES", "AgX"], _on_tonemap_mode)
 	_tonemap_exposure = _add_slider(v, "Exposure", 0.1, 4.0, 0.05, _on_tonemap_exposure)
 	_tonemap_white = _add_slider(v, "Tonemap white", 0.1, 16.0, 0.1, _on_tonemap_white)
+	_msaa_mode = _add_option(v, "MSAA", ["Off", "2x", "4x", "8x"], _on_msaa_mode)
+	var msaa_hint := Label.new()
+	msaa_hint.text = "Alternative to TAA's smoothing — sharper edges, no ghosting on wind-animated foliage, more GPU cost."
+	msaa_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	msaa_hint.custom_minimum_size = Vector2(420, 0)
+	msaa_hint.add_theme_color_override("font_color", C_TEXT_S)
+	msaa_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(msaa_hint)
 	_sun_size = _add_slider(v, "Sun disc size", 0.02, 0.5, 0.005, _on_sun_size)
+	_sun_glow = _add_slider(v, "Sun glow", 0.0, 4.0, 0.05, _on_sun_glow)
+	_sun_glow_size = _add_slider(v, "Sun glow size", 1.0, 30.0, 0.5, _on_sun_glow_size)
+	_sun_aureole = _add_slider(v, "Sun aureole", 0.0, 3.0, 0.05, _on_sun_aureole)
+	_god_rays = _add_check(v, "God rays (light shafts via volumetric fog)", _on_god_rays)
+	var gr_hint := Label.new()
+	gr_hint.text = "God rays enable a thin volumetric fog so the sun casts crepuscular shafts, strongest at sunrise/sunset. Adds some GPU cost."
+	gr_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	gr_hint.custom_minimum_size = Vector2(420, 0)
+	gr_hint.add_theme_color_override("font_color", C_TEXT_S)
+	gr_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(gr_hint)
 	_moon_size = _add_slider(v, "Moon disc size", 0.01, 0.2, 0.005, _on_moon_size)
 	_moon_glow = _add_slider(v, "Moon glow", 0.0, 2.0, 0.05, _on_moon_glow)
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Camera (field of view)")
+	_player_fov = _add_slider(v, "Player FOV°", 30.0, 120.0, 1.0, _on_player_fov)
+	_drone_fov = _add_slider(v, "Drone FOV°", 30.0, 120.0, 1.0, _on_drone_fov)
+	var fov_hint := Label.new()
+	fov_hint.text = "Horizontal field of view for first-person walking vs. the FPV drone. Wider = more peripheral view (and more lens distortion)."
+	fov_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	fov_hint.custom_minimum_size = Vector2(420, 0)
+	fov_hint.add_theme_color_override("font_color", C_TEXT_S)
+	fov_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(fov_hint)
 
 
 func _build_stars_planets_tab(tabs: TabContainer) -> void:
@@ -1000,7 +1048,9 @@ func _sync_advanced_from_snapshot(snap: Dictionary) -> void:
 	if _fog_amount:
 		_fog_amount.value = snap.get("fog_amount", 0.2)
 	if _tonemap_mode:
-		_tonemap_mode.selected = clampi(int(snap.get("tonemap_mode", Environment.TONE_MAPPER_LINEAR)), 0, 4)
+		_tonemap_mode.selected = clampi(int(snap.get("tonemap_mode", Environment.TONE_MAPPER_ACES)), 0, 4)
+	if _msaa_mode:
+		_msaa_mode.selected = clampi(int(snap.get("msaa_level", 0)), 0, 3)
 	if _tonemap_exposure:
 		_tonemap_exposure.value = snap.get("tonemap_exposure", 1.0)
 	if _tonemap_white:
@@ -1011,6 +1061,22 @@ func _sync_advanced_from_snapshot(snap: Dictionary) -> void:
 		_moon_size.value = snap.get("moon_size", 0.05)
 	if _moon_glow:
 		_moon_glow.value = snap.get("moon_glow", 0.5)
+	if _sun_glow:
+		_sun_glow.value = snap.get("sun_glow", 1.4)
+	if _sun_glow_size:
+		_sun_glow_size.value = snap.get("sun_glow_size", 9.0)
+	if _sun_aureole:
+		_sun_aureole.value = snap.get("sun_aureole", 0.8)
+	if _god_rays:
+		_god_rays.button_pressed = snap.get("god_rays_enabled", false)
+	if _player_fov:
+		_player_fov.value = snap.get("player_fov", 50.0)
+	if _drone_fov:
+		_drone_fov.value = snap.get("drone_fov", 50.0)
+	if _cirrus_amount:
+		_cirrus_amount.value = snap.get("cirrus_user_scale", 1.0)
+	if _cloud_shadows:
+		_cloud_shadows.button_pressed = snap.get("cloud_shadows_enabled", true)
 
 
 func _sync_stars_planets_from_snapshot(snap: Dictionary) -> void:
@@ -1119,6 +1185,10 @@ func _on_tonemap_mode(idx: int) -> void:
 	if _syncing: return
 	SimSettingsController.apply_tonemap_mode(idx)
 
+func _on_msaa_mode(idx: int) -> void:
+	if _syncing: return
+	SimSettingsController.apply_msaa_level(idx)
+
 func _on_tonemap_exposure(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_tonemap_exposure(v)
@@ -1138,6 +1208,38 @@ func _on_moon_size(v: float) -> void:
 func _on_moon_glow(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_moon_glow(v)
+
+func _on_sun_glow(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sun_glow(v)
+
+func _on_sun_glow_size(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sun_glow_size(v)
+
+func _on_sun_aureole(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sun_aureole(v)
+
+func _on_god_rays(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_god_rays_enabled(on)
+
+func _on_player_fov(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_player_fov(v)
+
+func _on_drone_fov(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_fov(v)
+
+func _on_cirrus_amount(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_cirrus_scale(v)
+
+func _on_cloud_shadows(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_cloud_shadows_enabled(on)
 
 func _on_stars_brightness(v: float) -> void:
 	if _syncing: return

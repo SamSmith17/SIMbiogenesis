@@ -301,6 +301,8 @@ var ha_client: Node = null
 var _ha_battery_soc_override: float = -1.0  # -1 = not overridden
 var _ha_load_override: float = -1.0  # -1 = not overridden
 var _ha_solar_override: float = -1.0  # -1 = not overridden
+## Set by SystemGraphView when a controller node is destroyed by over-voltage fault.
+var _graph_controller_destroyed: bool = false
 var _ha_daily_solar_override: float = -1.0  # -1 = not overridden (kWh)
 var _ha_connected: bool = false
 
@@ -1987,6 +1989,15 @@ func _update_sky_visuals() -> void:
 		main_node.clouds_cutoff = target_cutoff
 	if "clouds_weight" in main_node:
 		main_node.clouds_weight = target_weight
+	# High wispy cirrus is most visible in fair / partly-cloudy skies and gets
+	# masked out under heavy overcast or storms (the cumulus/nimbus layer dominates).
+	# Scaled by the user's gear-panel cirrus multiplier.
+	if "cirrus_amount" in main_node:
+		var cirrus : float = clampf(0.15 + cloud_cover * 1.1, 0.0, 0.6) * (1.0 - smoothstep(0.6, 0.95, cloud_cover))
+		var scale : float = 1.0
+		if "cirrus_user_scale" in main_node:
+			scale = float(main_node.cirrus_user_scale)
+		main_node.cirrus_amount = clampf(cirrus * scale, 0.0, 1.0)
 	
 	if not _slider_is_driving:
 		_sync_time_ui_cloud_sliders(target_cutoff, target_weight)
@@ -3356,11 +3367,17 @@ func _publish_ac_power_bus(force: bool = false) -> void:
 	var apb := get_node_or_null("/root/AcPowerBus")
 	if apb == null or not apb.has_method("publish"):
 		return
-	var shut := _soc_protect_active or _inverter_lockout_remaining > 0.0
-	apb.call("publish", _power_available, is_ac_output_enabled(), _ac_shutdown_reason, shut, force)
+	var shut := _soc_protect_active or _inverter_lockout_remaining > 0.0 \
+		or _graph_controller_destroyed
+	var reason: String = _ac_shutdown_reason
+	if _graph_controller_destroyed and reason.is_empty():
+		reason = "controller_destroyed"
+	apb.call("publish", _power_available, is_ac_output_enabled(), reason, shut, force)
 
 
 func _ac_shutdown_reason_label() -> String:
+	if _graph_controller_destroyed:
+		return "Controller destroyed — over-voltage fault (reset in graph view)"
 	if _soc_protect_active:
 		return "Battery below %.0f%% — AC off until %.0f%%" % [
 			battery_soc_shutdown_pct, battery_soc_resume_pct]
@@ -3494,7 +3511,7 @@ func _update_display() -> void:
 	var battery_linked = _source_link_icon("battery_soc", _ha_battery_soc_override >= 0.0)
 	if _soc_protect_active or _inverter_lockout_remaining > 0.0:
 		battery_percent.text = "AC OFF  %.0f%%%s" % [battery_percent_val, battery_linked]
-		battery_percent.add_theme_color_override("font_color", Color(1.0, 0.35, 0.28, 1.0))
+		battery_percent.add_theme_color_override("font_color", UITheme.C_ERROR)
 		battery_percent.tooltip_text = _ac_shutdown_reason_label()
 	else:
 		battery_percent.text = "%.0f%%%s" % [battery_percent_val, battery_linked]
@@ -3753,7 +3770,15 @@ func is_power_available() -> bool:
 
 ## True when the inverter may deliver AC (not in low-SOC or overload lockout).
 func is_ac_output_enabled() -> bool:
-	return not _soc_protect_active and _inverter_lockout_remaining <= 0.0
+	return not _soc_protect_active and _inverter_lockout_remaining <= 0.0 \
+		and not _graph_controller_destroyed
+
+
+func set_graph_controller_destroyed(active: bool) -> void:
+	if _graph_controller_destroyed == active:
+		return
+	_graph_controller_destroyed = active
+	_publish_ac_power_bus(true)
 
 
 func is_soc_protect_active() -> bool:

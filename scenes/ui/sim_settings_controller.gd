@@ -27,6 +27,15 @@ func _ready() -> void:
 	set_process(true)
 
 
+## Safety net: persist_settings() normally runs when the settings panel closes,
+## but a player can quit via the OS window close button / Alt+F4 without ever
+## closing that panel, silently dropping any changes made since it was last
+## closed. Catch that path here too.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		persist_settings()
+
+
 func reset_scene_binding() -> void:
 	_on_scene_changed()
 
@@ -132,13 +141,22 @@ func get_state_snapshot() -> Dictionary:
 		"ssil_enabled": _main_bool("get_ssil_enabled", true),
 		"sdfgi_enabled": _main_bool("get_sdfgi_enabled", false),
 		"volumetric_fog_enabled": _main_bool("get_volumetric_fog_enabled", false),
-		"tonemap_mode": _main_int("get_tonemap_mode", Environment.TONE_MAPPER_LINEAR),
+		"tonemap_mode": _main_int("get_tonemap_mode", Environment.TONE_MAPPER_ACES),
+		"msaa_level": _main_int("get_msaa_level", 0),
 		"tonemap_exposure": _main_float("get_tonemap_exposure", 1.0),
 		"tonemap_white": _main_float("get_tonemap_white", 1.0),
 		"fog_amount": _main_float("get_fog_amount", 0.2),
 		"sun_size": _main_float("get_sun_size", 0.15),
 		"moon_size": _main_float("get_moon_size", 0.05),
 		"moon_glow": _main_float("get_moon_glow", 0.5),
+		"sun_glow": _main_float("get_sun_glow", 1.4),
+		"sun_glow_size": _main_float("get_sun_glow_size", 9.0),
+		"sun_aureole": _main_float("get_sun_aureole", 0.8),
+		"cirrus_user_scale": _main_float("get_cirrus_user_scale", 1.0),
+		"cloud_shadows_enabled": _main_bool("get_cloud_shadows_enabled", true),
+		"god_rays_enabled": _main_bool("get_god_rays_enabled", false),
+		"player_fov": _main_float("get_player_fov", 50.0),
+		"drone_fov": _main_float("get_drone_fov", 50.0),
 	}
 	var star := _star_system()
 	if star != null and star.has_method("get_settings"):
@@ -319,6 +337,12 @@ func apply_tonemap_mode(mode: int) -> void:
 		main.call("set_tonemap_mode", mode)
 
 
+func apply_msaa_level(level: int) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_msaa_level"):
+		main.call("set_msaa_level", level)
+
+
 func apply_tonemap_exposure(value: float) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_tonemap_exposure"):
@@ -353,6 +377,54 @@ func apply_moon_glow(value: float) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_moon_glow"):
 		main.call("set_moon_glow", value)
+
+
+func apply_sun_glow(value: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_sun_glow"):
+		main.call("set_sun_glow", value)
+
+
+func apply_sun_glow_size(value: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_sun_glow_size"):
+		main.call("set_sun_glow_size", value)
+
+
+func apply_sun_aureole(value: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_sun_aureole"):
+		main.call("set_sun_aureole", value)
+
+
+func apply_cirrus_scale(value: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_cirrus_user_scale"):
+		main.call("set_cirrus_user_scale", value)
+
+
+func apply_cloud_shadows_enabled(on: bool) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_cloud_shadows_enabled"):
+		main.call("set_cloud_shadows_enabled", on)
+
+
+func apply_god_rays_enabled(on: bool) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_god_rays_enabled"):
+		main.call("set_god_rays_enabled", on)
+
+
+func apply_player_fov(value: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_player_fov"):
+		main.call("set_player_fov", value)
+
+
+func apply_drone_fov(value: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_drone_fov"):
+		main.call("set_drone_fov", value)
 
 
 func apply_star_setting(key: String, value: Variant) -> void:
@@ -577,12 +649,23 @@ func persist_settings() -> void:
 		cfg.set_value("rendering_adv", "sdfgi_enabled", main_node.call("get_sdfgi_enabled"))
 		cfg.set_value("rendering_adv", "volumetric_fog_enabled", main_node.call("get_volumetric_fog_enabled"))
 		cfg.set_value("rendering_adv", "tonemap_mode", main_node.call("get_tonemap_mode"))
+		cfg.set_value("rendering_adv", "msaa_level", main_node.call("get_msaa_level"))
 		cfg.set_value("rendering_adv", "tonemap_exposure", main_node.call("get_tonemap_exposure"))
 		cfg.set_value("rendering_adv", "tonemap_white", main_node.call("get_tonemap_white"))
 		cfg.set_value("rendering_adv", "fog_amount", main_node.call("get_fog_amount"))
 		cfg.set_value("rendering_adv", "sun_size", main_node.call("get_sun_size"))
 		cfg.set_value("rendering_adv", "moon_size", main_node.call("get_moon_size"))
 		cfg.set_value("rendering_adv", "moon_glow", main_node.call("get_moon_glow"))
+	if main_node.has_method("get_sun_glow"):
+		cfg.set_value("rendering_adv", "sun_glow", main_node.call("get_sun_glow"))
+		cfg.set_value("rendering_adv", "sun_glow_size", main_node.call("get_sun_glow_size"))
+		cfg.set_value("rendering_adv", "sun_aureole", main_node.call("get_sun_aureole"))
+		cfg.set_value("rendering_adv", "cirrus_user_scale", main_node.call("get_cirrus_user_scale"))
+		cfg.set_value("rendering_adv", "cloud_shadows_enabled", main_node.call("get_cloud_shadows_enabled"))
+		cfg.set_value("rendering_adv", "god_rays_enabled", main_node.call("get_god_rays_enabled"))
+	if main_node.has_method("get_player_fov"):
+		cfg.set_value("camera", "player_fov", main_node.call("get_player_fov"))
+		cfg.set_value("camera", "drone_fov", main_node.call("get_drone_fov"))
 	save_star_calibration()
 	save_planet_prefs()
 	save_ha_connection_from_panel()
@@ -641,6 +724,8 @@ func _load_rendering_adv(cfg: ConfigFile) -> void:
 		apply_volumetric_fog_enabled(bool(cfg.get_value("rendering_adv", "volumetric_fog_enabled")))
 	if cfg.has_section_key("rendering_adv", "tonemap_mode"):
 		apply_tonemap_mode(int(cfg.get_value("rendering_adv", "tonemap_mode")))
+	if cfg.has_section_key("rendering_adv", "msaa_level"):
+		apply_msaa_level(int(cfg.get_value("rendering_adv", "msaa_level")))
 	if cfg.has_section_key("rendering_adv", "tonemap_exposure"):
 		apply_tonemap_exposure(float(cfg.get_value("rendering_adv", "tonemap_exposure")))
 	if cfg.has_section_key("rendering_adv", "tonemap_white"):
@@ -653,6 +738,22 @@ func _load_rendering_adv(cfg: ConfigFile) -> void:
 		apply_moon_size(float(cfg.get_value("rendering_adv", "moon_size")))
 	if cfg.has_section_key("rendering_adv", "moon_glow"):
 		apply_moon_glow(float(cfg.get_value("rendering_adv", "moon_glow")))
+	if cfg.has_section_key("rendering_adv", "sun_glow"):
+		apply_sun_glow(float(cfg.get_value("rendering_adv", "sun_glow")))
+	if cfg.has_section_key("rendering_adv", "sun_glow_size"):
+		apply_sun_glow_size(float(cfg.get_value("rendering_adv", "sun_glow_size")))
+	if cfg.has_section_key("rendering_adv", "sun_aureole"):
+		apply_sun_aureole(float(cfg.get_value("rendering_adv", "sun_aureole")))
+	if cfg.has_section_key("rendering_adv", "cirrus_user_scale"):
+		apply_cirrus_scale(float(cfg.get_value("rendering_adv", "cirrus_user_scale")))
+	if cfg.has_section_key("rendering_adv", "cloud_shadows_enabled"):
+		apply_cloud_shadows_enabled(bool(cfg.get_value("rendering_adv", "cloud_shadows_enabled")))
+	if cfg.has_section_key("rendering_adv", "god_rays_enabled"):
+		apply_god_rays_enabled(bool(cfg.get_value("rendering_adv", "god_rays_enabled")))
+	if cfg.has_section_key("camera", "player_fov"):
+		apply_player_fov(float(cfg.get_value("camera", "player_fov")))
+	if cfg.has_section_key("camera", "drone_fov"):
+		apply_drone_fov(float(cfg.get_value("camera", "drone_fov")))
 
 
 func _main_float(method: String, default: float) -> float:

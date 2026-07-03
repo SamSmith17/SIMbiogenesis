@@ -135,7 +135,7 @@ shader_parameter/celestial_pole_elevation = 33.36
 
 [sub_resource type="Sky" id="Sky_q13r3"]
 sky_material = SubResource("ShaderMaterial_msgkm")
-process_mode = 1
+process_mode = 2
 
 [sub_resource type="Environment" id="Environment_bh1jy"]
 background_mode = 2
