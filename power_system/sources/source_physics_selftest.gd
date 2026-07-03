@@ -22,6 +22,7 @@ func _initialize() -> void:
 	_test_timeline_view()
 	_test_comparison()
 	_test_resource_flow()
+	_test_season()
 	if _failures == 0:
 		print("SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -577,6 +578,219 @@ func _test_comparison() -> void:
 	td2.clear_observed_range()
 	_check("compare: observed range cleared", not bool(td2.has_observed_range()))
 	td2.free()
+
+
+func _doy(month: int, day: int) -> int:
+	var c := CelestialClock.new()
+	c.year = 2025
+	c.month = month
+	c.day = day
+	return c.day_of_year
+
+
+# Replicates main._step_analemma() on a bare clock to validate the primitives.
+func _analemma_bounds() -> Vector2i:
+	var hi: int = int(Time.get_date_dict_from_system().year) - 1
+	var lo: int = mini(1940, hi)  # mirrors main.ANALEMMA_ARCHIVE_START_YEAR
+	return Vector2i(lo, hi)
+
+
+func _analemma_advance(c: CelestialClock) -> void:
+	var cur: float = c.get_absolute_hours()
+	var next_mid: float = (floor(cur / 24.0) + 1.0) * 24.0
+	c.set_absolute_hours(next_mid)
+	# Multi-year analemma: advance naturally, wrapping only past the newest
+	# complete-archive year back to the start of the historical window.
+	var bounds: Vector2i = _analemma_bounds()
+	if c.year > bounds.y:
+		c.year = bounds.x
+		c.month = 1
+		c.day = 1
+	# Fixed MEAN solar noon (not apparent) so the equation of time re-appears as
+	# the sun's east/west wander — that is what traces the figure-eight.
+	c.day_time = c.mean_solar_time_to_clock_time(12.0)
+
+
+func _test_season() -> void:
+	# --- Phenology signals (northern hemisphere, mid-latitude) ---
+	var win := SeasonModel.season_signals(_doy(1, 15), 40.0)
+	_check("season: winter canopy bare", float(win["leaf_coverage"]) < 0.05)
+	_check("season: winter signal high", float(win["winter"]) > 0.6)
+	_check("season: winter not summer", float(win["summer"]) < 0.1)
+
+	_check("season: winter grass short", float(win["grass_growth"]) < 0.1)
+
+	var sum := SeasonModel.season_signals(_doy(7, 15), 40.0)
+	_check("season: summer canopy full", float(sum["leaf_coverage"]) > 0.95)
+	_check("season: summer signal high", float(sum["summer"]) > 0.6)
+	_check("season: summer no autumn", float(sum["autumn"]) < 0.05)
+	_check("season: summer grass tall", float(sum["grass_growth"]) > 0.9)
+
+	# Grass grows in over spring: mid-April is partway up, well short of full.
+	var spring := SeasonModel.season_signals(_doy(4, 15), 40.0)
+	_check("season: spring grass growing",
+		float(spring["grass_growth"]) > 0.1 and float(spring["grass_growth"]) < 0.95)
+
+	var aut := SeasonModel.season_signals(_doy(10, 25), 40.0)
+	_check("season: autumn colour peaks", float(aut["autumn"]) > 0.7)
+
+	var late := SeasonModel.season_signals(_doy(11, 28), 40.0)
+	_check("season: late autumn leaves down", float(late["leaf_coverage"]) < 0.1)
+
+	# --- Hemisphere flip: southern January behaves like northern summer ---
+	var sh := SeasonModel.season_signals(_doy(1, 15), -40.0)
+	_check("season: SH January is summer",
+		float(sh["leaf_coverage"]) > 0.9 and float(sh["summer"]) > 0.5)
+	var nh := SeasonModel.to_nh_doy(_doy(1, 15), -40.0)
+	_check("season: SH doy shifted ~half year", _approx(nh, 180.0, 215.0), "nh=%.1f" % nh)
+
+	# --- Snow estimate: no weather service -> no snow, range-clamped ---
+	var s0 := SeasonModel.estimate_snow_cover(null, 1, 15, 12.0, 40.0)
+	_check("snow: null ws -> 0", s0 == 0.0)
+
+	# --- Analemma stepping primitives ---
+	var c := CelestialClock.new()
+	c.longitude = 0.0
+	c.latitude = 40.0
+	c.year = 2025
+	c.month = 6
+	c.day = 1
+	c.day_time = 12.0
+	var before := c.day_of_year
+	_analemma_advance(c)
+	_check("analemma: advances one day", c.day_of_year == before + 1,
+		"%d -> %d" % [before, c.day_of_year])
+	_check("analemma: day_time finite in range",
+		is_finite(c.day_time) and c.day_time >= 0.0 and c.day_time < 24.0,
+		"day_time=%.3f" % c.day_time)
+
+	# Year advance: Dec 31 -> Jan 1 of the *next* year (within the archive window),
+	# so successive analemma passes pull different real historical weather.
+	var _b: Vector2i = _analemma_bounds()
+	c.year = _b.y - 1
+	c.month = 12
+	c.day = 31
+	c.day_time = 12.0
+	_analemma_advance(c)
+	_check("analemma: advances into next year",
+		c.month == 1 and c.day == 1 and c.year == _b.y,
+		"%04d-%02d-%02d (expected %04d-01-01)" % [c.year, c.month, c.day, _b.y])
+
+	# Year wrap: past the newest complete-archive year rolls back to the window
+	# start (still real historical data, just a different year).
+	c.year = _b.y
+	c.month = 12
+	c.day = 31
+	c.day_time = 12.0
+	_analemma_advance(c)
+	_check("analemma: wraps to historical window start",
+		c.month == 1 and c.day == 1 and c.year == _b.x,
+		"%04d-%02d-%02d (expected %04d-01-01)" % [c.year, c.month, c.day, _b.x])
+	# The window must reach the full ERA5 archive start (1940), not a recent cap.
+	_check("analemma: cycles all the way back to 1940", _b.x == 1940,
+		"lower bound=%d" % _b.x)
+
+	# --- Analemma shape: mean solar noon traces a figure-eight, apparent does not ---
+	# Sampling the sun over a year at a FIXED MEAN solar time must produce both a
+	# north/south (declination) swing AND an east/west (equation-of-time) wander.
+	# Snapping to APPARENT solar noon zeroes the hour angle, collapsing the E/W
+	# wander to ~0 (a vertical line) — that was the bug.
+	var ac := CelestialClock.new()
+	ac.longitude = 0.0
+	ac.latitude = 40.0
+	ac.auto_dst = false
+	ac.manual_dst = false
+	ac.year = 2025
+	var mean_x_min := INF
+	var mean_x_max := -INF
+	var mean_y_min := INF
+	var mean_y_max := -INF
+	var app_x_min := INF
+	var app_x_max := -INF
+	for doy in range(1, 366):
+		var m := 1
+		var d := doy
+		while m < 12:
+			var dim := ac.get_days_in_month(m, ac.year)
+			if d <= dim:
+				break
+			d -= dim
+			m += 1
+		ac.month = m
+		ac.day = clampi(d, 1, ac.get_days_in_month(m, ac.year))
+		ac.day_time = ac.mean_solar_time_to_clock_time(12.0)
+		var md := ac.get_sun_direction()
+		mean_x_min = minf(mean_x_min, md.x)
+		mean_x_max = maxf(mean_x_max, md.x)
+		mean_y_min = minf(mean_y_min, md.y)
+		mean_y_max = maxf(mean_y_max, md.y)
+		ac.day_time = ac.solar_time_to_clock_time(12.0)
+		var ad := ac.get_sun_direction()
+		app_x_min = minf(app_x_min, ad.x)
+		app_x_max = maxf(app_x_max, ad.x)
+	var mean_x_span := mean_x_max - mean_x_min
+	var mean_y_span := mean_y_max - mean_y_min
+	var app_x_span := app_x_max - app_x_min
+	_check("analemma: N/S declination swing present", mean_y_span > 0.4,
+		"y span=%.3f" % mean_y_span)
+	_check("analemma: E/W equation-of-time wander present", mean_x_span > 0.02,
+		"x span=%.4f" % mean_x_span)
+	_check("analemma: apparent-noon E/W wander ~collapsed (old bug)",
+		app_x_span < mean_x_span * 0.25,
+		"apparent x span=%.4f vs mean=%.4f" % [app_x_span, mean_x_span])
+
+	# --- Equation of time: correct annual harmonics (guards the analemma shape) ---
+	# The real EoT bottoms out near -14.2 min around Feb 11 and peaks near +16.4 min
+	# around Nov 3, with a single sign structure per lobe. A spurious 3rd harmonic
+	# (the old 2L+g bug) shifts these extrema and their timing, and adds an extra
+	# analemma self-crossing.
+	var ec := CelestialClock.new()
+	ec.longitude = 0.0
+	ec.latitude = 40.0
+	ec.year = 2025
+	var eot_min := INF
+	var eot_max := -INF
+	var eot_min_doy := 0
+	var eot_max_doy := 0
+	var eot: Array[float] = []
+	for doy in range(1, 366):
+		var m := 1
+		var d := doy
+		while m < 12:
+			var dim := ec.get_days_in_month(m, ec.year)
+			if d <= dim:
+				break
+			d -= dim
+			m += 1
+		ec.month = m
+		ec.day = clampi(d, 1, ec.get_days_in_month(m, ec.year))
+		ec.day_time = 12.0
+		var e_min := ec.get_equation_of_time(ec.get_julian_day()) * 60.0  # minutes
+		eot.append(e_min)
+		if e_min < eot_min:
+			eot_min = e_min
+			eot_min_doy = doy
+		if e_min > eot_max:
+			eot_max = e_min
+			eot_max_doy = doy
+	_check("EoT: minimum ~-14 min (elliptical+tilt)", _approx(eot_min, -15.5, -12.5),
+		"min=%.2f min" % eot_min)
+	_check("EoT: maximum ~+16.4 min", _approx(eot_max, 15.0, 18.0),
+		"max=%.2f min" % eot_max)
+	_check("EoT: minimum falls in early-mid February", eot_min_doy >= 30 and eot_min_doy <= 55,
+		"min doy=%d" % eot_min_doy)
+	_check("EoT: maximum falls in late Oct / early Nov", eot_max_doy >= 295 and eot_max_doy <= 315,
+		"max doy=%d" % eot_max_doy)
+	# Count sign changes of the EoT over the year — the true curve has exactly 4
+	# zero crossings; the spurious 3rd harmonic adds two more.
+	var sign_changes := 0
+	for i in range(eot.size()):
+		var a := eot[i]
+		var b := eot[(i + 1) % eot.size()]
+		if (a < 0.0 and b >= 0.0) or (a >= 0.0 and b < 0.0):
+			sign_changes += 1
+	_check("EoT: exactly 4 zero crossings per year", sign_changes == 4,
+		"sign changes=%d" % sign_changes)
 
 
 func _test_resource_flow() -> void:

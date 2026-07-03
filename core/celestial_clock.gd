@@ -359,16 +359,22 @@ func abs_hours_to_julian_day_utc( h: float ) -> float :
 	return _julian_day_utc_for( int( dd[ "year" ] ), int( dd[ "month" ] ),
 		int( dd[ "day" ] ), float( dd[ "day_time" ] ) )
 
-## Calculate Equation of Time (correction for sun's position due to Earth's elliptical orbit)
+## Calculate Equation of Time (correction for sun's position due to Earth's
+## elliptical orbit + axial tilt). Returns hours (sundial minus clock).
 func get_equation_of_time( jd: float ) -> float :
-	# Simplified equation of time calculation
 	var n : float = jd - 2451545.0  # Days since J2000.0
-	var L : float = fmod( 280.460 + 0.9856474 * n, 360.0 )  # Mean longitude
-	var g : float = fmod( 357.528 + 0.9856003 * n, 360.0 )  # Mean anomaly
-	var L_rad : float = deg_to_rad( L )
+	# Sun's mean anomaly (degrees) — the SAME orbital element used for declination.
+	var g : float = fmod( 357.528 + 0.9856003 * n, 360.0 )
+	var g_rad : float = deg_to_rad( g )
 
-	# Equation of time in minutes
-	var eq_time : float = -7.655 * sin( L_rad ) + 9.873 * sin( 2.0 * L_rad + deg_to_rad( g ) )
+	# Equation of time in minutes, Wikipedia "alternative calculation":
+	#   E = -7.659·sin(g) + 9.863·sin(2g + 3.5932 rad)
+	# Both terms are driven by the mean anomaly g, so the second is the true 2nd
+	# annual harmonic (obliquity term) and the phase 3.5932 rad (≈205.9°) folds in
+	# the longitude of perihelion. The previous form used 2·L + g (with L the mean
+	# longitude ≈ g + 282.9°), i.e. a spurious 3rd harmonic, which warped the
+	# analemma into an extra self-crossing.
+	var eq_time : float = -7.659 * sin( g_rad ) + 9.863 * sin( 2.0 * g_rad + 3.5932 )
 	return eq_time / 60.0  # Convert minutes to hours
 
 ## Calculate sun's declination (angle from celestial equator)
@@ -426,6 +432,31 @@ func solar_time_to_clock_time( solar_time: float ) -> float :
 	var clock_time : float = solar_time - longitude_correction + dst_correction - eq_time
 
 	# Normalize to 0-24 range
+	while clock_time < 0.0 :
+		clock_time += 24.0
+	while clock_time >= 24.0 :
+		clock_time -= 24.0
+
+	return clock_time
+
+## Convert a Local Mean Solar Time to clock time. This is solar_time_to_clock_time
+## WITHOUT the equation-of-time term. Observing the sun at a FIXED MEAN solar time
+## each day (e.g. mean solar noon) is exactly what traces the analemma: the
+## equation of time then re-appears as the sun's east/west wander instead of being
+## cancelled out. Snapping to apparent solar noon (solar_time_to_clock_time(12))
+## instead pins the hour angle to 0 every day, collapsing the figure-eight into a
+## vertical line.
+##
+## Note the DST term keeps the same sign as solar_time_to_clock_time so it cancels
+## against get_solar_time()'s DST correction — the resulting sun direction lands on
+## mean solar noon regardless of DST, giving a continuous (undistorted) analemma.
+func mean_solar_time_to_clock_time( mean_solar_time: float ) -> float :
+	var timezone_meridian : float = round( longitude / 15.0 ) * 15.0
+	var longitude_correction : float = ( longitude - timezone_meridian ) / 15.0
+	var dst_correction : float = 1.0 if is_dst_active() else 0.0
+
+	var clock_time : float = mean_solar_time - longitude_correction + dst_correction
+
 	while clock_time < 0.0 :
 		clock_time += 24.0
 	while clock_time >= 24.0 :

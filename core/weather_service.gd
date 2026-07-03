@@ -31,7 +31,7 @@ signal generation_training_started()
 
 const ARCHIVE_URL := "https://archive-api.open-meteo.com/v1/archive"
 const FORECAST_URL := "https://api.open-meteo.com/v1/forecast"
-const HOURLY_VARS := "shortwave_radiation,diffuse_radiation,wind_speed_10m,windgusts_10m,wind_direction_10m,temperature_2m,relative_humidity_2m,precipitation,cloud_cover"
+const HOURLY_VARS := "shortwave_radiation,diffuse_radiation,wind_speed_10m,windgusts_10m,wind_direction_10m,temperature_2m,relative_humidity_2m,precipitation,cloud_cover,snowfall,snow_depth"
 ## Daily variables fetched for the 1940-present record book (separate request).
 const RECORDS_DAILY_VARS := "temperature_2m_max,temperature_2m_min,precipitation_sum"
 ## Bump when RECORDS_DAILY_VARS changes so old record caches are retired.
@@ -40,7 +40,8 @@ const CACHE_DIR := "user://weather_cache"
 ## Reject / delete cache blobs larger than this (guards corrupt or foreign files).
 const MAX_CACHE_BYTES := 25 * 1024 * 1024
 ## Bump this suffix when HOURLY_VARS changes so old cached responses are retired.
-const CACHE_VERSION := "v3"
+## v4 = added snowfall + snow_depth for seasonal snow visuals.
+const CACHE_VERSION := "v4"
 ## Bump when forecast cache envelope changes (stored Open-Meteo JSON + metadata).
 const FORECAST_CACHE_VERSION := "v1"
 ## Re-fetch the live forecast when older than this (models update several times/day).
@@ -817,6 +818,25 @@ func _get_climate_svc() -> Node:
 		return _climate_svc
 	_climate_svc = get_node_or_null("/root/ClimateProjectionService")
 	return _climate_svc
+
+
+## Snowfall over the sampled hour, in centimetres of fresh snow (Open-Meteo unit).
+## NAN when the dataset lacks snow data (e.g. stochastic-generated years).
+func snowfall_cm(month: int, day: int, hour: float) -> float:
+	return sample("snowfall", month, day, hour)
+
+
+## Snow depth on the ground in metres (Open-Meteo `snow_depth`). This is the
+## modelled snowpack, so it already integrates accumulation and melt. NAN when
+## unavailable; callers should fall back to SeasonModel's degree-day estimate.
+func snow_depth_m(month: int, day: int, hour: float) -> float:
+	return sample("snow_depth", month, day, hour)
+
+
+## True when the active dataset carries real snow_depth samples (archive/forecast).
+## Generated/synthetic years return false so consumers use the modelled estimate.
+func has_snow_data(month: int, day: int, hour: float) -> bool:
+	return not is_nan(sample("snow_depth", month, day, hour))
 
 
 func solar_radiation_wm2(month: int, day: int, hour: float) -> float:
