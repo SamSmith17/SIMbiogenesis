@@ -51,14 +51,17 @@ var _maps_resolved: Array[MapDefinition] = []
 var _maps_list: ItemList = null
 var _launch_status: Label = null
 var _continue_btn: Button = null
+var _load_saved_btn: Button = null
 var _start_btn: Button = null
 var _quit_btn: Button = null
 var _close_btn: Button = null
 var _confirm_btn: Button = null
 var _syncing_map_list: bool = false
+var _save_load_ui: CanvasLayer = null
 
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
 const DESIGN_BUNDLE_SCRIPT := preload("res://core/linkagelab/design_bundle.gd")
+const SAVE_LOAD_UI_SCENE := preload("res://scenes/ui/save_load_ui.tscn")
 
 const _DEFAULT_MAP_PATHS: Array[String] = [
 	"res://maps/mars_aerial_map.tres",
@@ -112,6 +115,7 @@ func _ready() -> void:
 		_resolve_maps()
 		_refresh_maps_list()
 		_refresh_panels()
+		_setup_launch_save_load_ui()
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		call_deferred("_layout_panel")
 	else:
@@ -335,12 +339,17 @@ func _build_ui() -> void:
 		_continue_btn.tooltip_text = "Load latest autosave or newest manual slot."
 		_style_primary_button(_continue_btn)
 		_continue_btn.pressed.connect(_on_continue_pressed)
+		_load_saved_btn = Button.new()
+		_load_saved_btn.text = "Load saved"
+		_load_saved_btn.tooltip_text = "Pick a save slot (same as the disc icon in the timeline)."
+		_load_saved_btn.pressed.connect(_on_load_saved_pressed)
 		var sg := _save_game()
 		if sg == null or not sg.can_continue():
 			_continue_btn.disabled = true
 		_quit_btn = Button.new()
 		_quit_btn.text = "Quit"
 		_quit_btn.pressed.connect(_on_quit_pressed)
+		header_btns.add_child(_load_saved_btn)
 		header_btns.add_child(_continue_btn)
 		header_btns.add_child(_quit_btn)
 		header.add_child(header_btns)
@@ -1146,17 +1155,70 @@ func _on_start_pressed() -> void:
 		_launch_status.text = "Could not load scene (error %d)." % err
 
 
-func _on_continue_pressed() -> void:
+func _setup_launch_save_load_ui() -> void:
+	if _save_load_ui != null:
+		return
+	_save_load_ui = SAVE_LOAD_UI_SCENE.instantiate() as CanvasLayer
+	_save_load_ui.name = "SaveLoadUI"
+	add_child(_save_load_ui)
+	if _save_load_ui.has_method("set_in_game_save_enabled"):
+		_save_load_ui.set_in_game_save_enabled(false)
+	if _save_load_ui.has_signal("continue_requested"):
+		_save_load_ui.continue_requested.connect(_on_continue_pressed)
+	if _save_load_ui.has_signal("load_slot_requested"):
+		_save_load_ui.load_slot_requested.connect(_on_load_slot_pressed)
+	if _save_load_ui.has_signal("save_slot_requested"):
+		_save_load_ui.save_slot_requested.connect(_on_launch_save_blocked)
+	if _save_load_ui.has_signal("delete_slot_requested"):
+		_save_load_ui.delete_slot_requested.connect(_on_launch_delete_slot)
+
+
+func _on_load_saved_pressed() -> void:
+	if _save_load_ui != null and _save_load_ui.has_method("show_panel"):
+		_save_load_ui.show_panel()
+
+
+func _on_load_slot_pressed(slot_index: int) -> void:
 	var sg := _save_game()
 	if sg == null:
 		if _launch_status != null:
 			_launch_status.text = "Save system not available."
 		return
-	var data := sg.load_continue_payload()
+	var data := sg.load_manual_slot(slot_index)
+	if not _resume_from_save_payload(data, "Could not load that slot."):
+		if _save_load_ui != null and _save_load_ui.has_method("show_load_message"):
+			_save_load_ui.show_load_message("Could not load that slot.", false)
+		return
+	if _save_load_ui != null and _save_load_ui.has_method("hide_panel"):
+		_save_load_ui.hide_panel()
+
+
+func _on_launch_save_blocked(_slot_index: int) -> void:
+	if _save_load_ui != null and _save_load_ui.has_method("show_load_message"):
+		_save_load_ui.show_load_message("Start or load a world before saving.", false)
+
+
+func _on_launch_delete_slot(slot_index: int) -> void:
+	var sg := _save_game()
+	if sg == null:
+		return
+	sg.delete_manual_slot(slot_index)
+	if _save_load_ui != null and _save_load_ui.has_method("refresh_slot_list"):
+		_save_load_ui.refresh_slot_list()
+	if _continue_btn != null:
+		_continue_btn.disabled = sg == null or not sg.can_continue()
+
+
+func _resume_from_save_payload(data: Dictionary, fail_msg: String) -> bool:
+	var sg := _save_game()
+	if sg == null:
+		if _launch_status != null:
+			_launch_status.text = "Save system not available."
+		return false
 	if data.is_empty() or not sg.validate_payload(data):
 		if _launch_status != null:
-			_launch_status.text = "No valid save to continue."
-		return
+			_launch_status.text = fail_msg
+		return false
 	var want := MapDefinition.normalize_scene_path(str(data.get("scene_path", "")).strip_edges())
 	if not MapDefinition.is_trusted_scene_path(want):
 		want = MapDefinition.snapshot_scene_path(self)
@@ -1174,8 +1236,28 @@ func _on_continue_pressed() -> void:
 	if err != OK:
 		sg.clear_pending_resume_payload()
 		if _launch_status != null:
-			_launch_status.text = "Could not load saved map (error %d)." % err
+			_launch_status.text = "%s (error %d)." % [fail_msg, err]
+		return false
+	return true
+
+
+func _on_continue_pressed() -> void:
+	var sg := _save_game()
+	if sg == null:
+		if _launch_status != null:
+			_launch_status.text = "Save system not available."
+		return
+	var data := sg.load_continue_payload()
+	if not _resume_from_save_payload(data, "No valid save to continue."):
+		if _save_load_ui != null and _save_load_ui.has_method("show_load_message"):
+			_save_load_ui.show_load_message("No valid save to continue.", false)
+		return
+	if _save_load_ui != null and _save_load_ui.has_method("hide_panel"):
+		_save_load_ui.hide_panel()
 
 
 func _on_quit_pressed() -> void:
+	var ssc := get_node_or_null("/root/SimSettingsController")
+	if ssc != null and ssc.has_method("persist_settings"):
+		ssc.persist_settings()
 	get_tree().quit()

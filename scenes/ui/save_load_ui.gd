@@ -6,6 +6,8 @@ signal save_slot_requested(slot_index: int)
 signal delete_slot_requested(slot_index: int)
 
 @onready var root: Control = $Root
+@onready var panel: Panel = $Root/Panel
+@onready var title_label: Label = $Root/Panel/Margin/VBox/Title
 @onready var slot_list: ItemList = $Root/Panel/Margin/VBox/SlotList
 @onready var continue_btn: Button = $Root/Panel/Margin/VBox/ButtonsRow1/ContinueButton
 @onready var save_btn: Button = $Root/Panel/Margin/VBox/ButtonsRow1/SaveButton
@@ -29,7 +31,8 @@ func _save_game() -> SaveGameService:
 
 
 func _ready() -> void:
-	layer = 50
+	layer = UITheme.LAYER_MODAL
+	_style_ui()
 	add_to_group("save_load_ui")
 	var p := get_parent()
 	if p != null:
@@ -48,6 +51,19 @@ func _ready() -> void:
 	if confirm_delete.has_signal("canceled"):
 		confirm_delete.canceled.connect(_on_delete_canceled)
 	refresh_slot_list()
+
+
+## Applies the shared dark/cyan chrome (this dialog previously used the
+## engine's default gray theme, inconsistent with every other panel).
+func _style_ui() -> void:
+	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
+	title_label.add_theme_font_size_override("font_size", UITheme.FONT_LG)
+	title_label.add_theme_color_override("font_color", UITheme.C_TEXT)
+	status_label.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	status_label.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	for btn in [continue_btn, save_btn, load_btn, delete_btn, close_btn]:
+		UITheme.style_button(btn)
+		btn.add_theme_color_override("font_color", UITheme.C_TEXT)
 
 
 func is_panel_visible() -> bool:
@@ -74,6 +90,13 @@ func hide_panel() -> void:
 	root.visible = false
 	_visible = false
 	CursorController.release_modal("save_load")
+
+
+## When false (launch / map-select screen), saving is disabled — load/delete still work.
+func set_in_game_save_enabled(enabled: bool) -> void:
+	if is_instance_valid(save_btn):
+		save_btn.visible = enabled
+		save_btn.disabled = not enabled
 
 
 func refresh_slot_list() -> void:
@@ -136,7 +159,7 @@ func _on_overwrite_canceled() -> void:
 func _do_save_slot(idx: int) -> void:
 	save_slot_requested.emit(idx)
 	refresh_slot_list()
-	status_label.text = "Saved to slot %d." % (idx + 1)
+	show_load_message("Saved to slot %d." % (idx + 1), true)
 
 
 func _on_load_pressed() -> void:
@@ -151,8 +174,9 @@ func _on_load_pressed() -> void:
 	load_slot_requested.emit(idx)
 
 
-func show_load_message(text: String, _success: bool = true) -> void:
+func show_load_message(text: String, success: bool = true) -> void:
 	status_label.text = text
+	status_label.add_theme_color_override("font_color", UITheme.C_OK if success else UITheme.C_ERROR)
 
 
 var _pending_delete_slot: int = -1
@@ -165,7 +189,7 @@ func _on_delete_pressed() -> void:
 		return
 	var path: String = sg.get_manual_slot_path(idx)
 	if not FileAccess.file_exists(path):
-		status_label.text = "Slot %d is already empty." % (idx + 1)
+		show_load_message("Slot %d is already empty." % (idx + 1), false)
 		return
 	_pending_delete_slot = idx
 	confirm_delete.dialog_text = "Delete save in slot %d? This cannot be undone." % (idx + 1)
@@ -176,7 +200,7 @@ func _on_delete_confirmed() -> void:
 	if _pending_delete_slot >= 0:
 		delete_slot_requested.emit(_pending_delete_slot)
 		refresh_slot_list()
-		status_label.text = "Deleted slot %d." % (_pending_delete_slot + 1)
+		show_load_message("Deleted slot %d." % (_pending_delete_slot + 1), true)
 	_pending_delete_slot = -1
 
 
