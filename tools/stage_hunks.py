@@ -8,7 +8,7 @@ from collections import defaultdict
 
 
 def get_hunks(path: str) -> tuple[list[str], list[str]]:
-	diff = subprocess.check_output(["git", "diff", path], text=True)
+	diff = subprocess.check_output(["git", "diff", path]).decode("utf-8", errors="replace")
 	lines = diff.splitlines()
 	header: list[str] = []
 	hunks: list[str] = []

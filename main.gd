@@ -415,7 +415,7 @@ var _cloud_shadow_dir : float = 0.2
 
 # ACES over Linear (Forward+ default): an A/B screenshot comparison (vista/
 # golden-hour/night, both maps) showed Linear leaves distant terrain visibly
-# pale/washed-out under the real HDR pipeline â€” ACES fixed that with no
+# pale/washed-out under the real HDR pipeline — ACES fixed that with no
 # regression elsewhere. AgX was also compared and was nearly indistinguishable
 # from Linear in this scene, so it wasn't chosen. Gear-panel override persists.
 var tonemap_mode : int = Environment.TONE_MAPPER_ACES :
@@ -433,7 +433,7 @@ var tonemap_white : float = 1.0 :
 		tonemap_white = clampf( value, 0.1, 16.0 ) if is_finite( value ) else 1.0
 		_apply_tonemap_settings()
 
-## Forward+ MSAA level, independent of the TAA implied by graphics_quality â€”
+## Forward+ MSAA level, independent of the TAA implied by graphics_quality —
 ## some players prefer MSAA's sharper edges over TAA's smoothing/ghosting
 ## trade-off on wind-animated vegetation. 0=Off, 1=2x, 2=4x, 3=8x.
 var msaa_level : int = 0 :
@@ -1841,7 +1841,7 @@ func _compute_cloud_shadow_factor() -> float :
 	var t : float = float( Time.get_ticks_msec() ) / 1000.0 * maxf( _cloud_shadow_speed, 0.01 ) * 0.06
 	var ang : float = _cloud_shadow_dir * TAU
 	var n : float = _cloud_shadow_noise.get_noise_2d( cos( ang ) * t, sin( ang ) * t ) * 0.5 + 0.5
-	# Only denser cloud patches cast a shadow; more coverage â†’ shadowed more often.
+	# Only denser cloud patches cast a shadow; more coverage → shadowed more often.
 	var shadow : float = smoothstep( 1.0 - coverage, 1.0 - coverage * 0.35, n )
 	var factor : float = 1.0 - shadow * cloud_shadow_strength * coverage
 	return clampf( factor, 0.12, 1.0 ) if is_finite( factor ) else 1.0
