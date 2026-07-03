@@ -8,18 +8,21 @@ extends Control
 # ResourceKinds — global class_name from system_graph/data/resource_kinds.gd
 
 # ---------------------------------------------------------------------------
-# Color constants (webapp css/variables.css)
+# Color constants. Chrome (bg/border/text) redirected to UITheme, single
+# source of truth. C_AMBER/C_GREEN/C_RED/C_WIRE_DC are NOT chrome — they are
+# the semantic "energy" wire colors matching PORT_COLORS below (distinct
+# shades from the UITheme accent colors) and stay local.
 # ---------------------------------------------------------------------------
-const C_CANVAS_BG  := Color(0.039, 0.055, 0.098, 1.0)   # align with SolarUI / timeline
-const C_PANEL_BG   := Color(0.082, 0.114, 0.208, 0.96)  # deeper panel
-const C_BORDER     := Color(0.227, 0.290, 0.420, 1.0)   # --space-400
-const C_PRIMARY    := Color(0.133, 0.827, 0.933, 1.0)   # --clr-primary
+const C_CANVAS_BG  := UITheme.C_BG
+const C_PANEL_BG   := Color(UITheme.C_PANEL, 0.96)      # deeper panel
+const C_BORDER     := UITheme.C_BORDER
+const C_PRIMARY    := UITheme.C_PRIMARY
 const C_AMBER      := Color(0.941, 0.678, 0.306, 1.0)   # --energy-amber
 const C_GREEN      := Color(0.063, 0.722, 0.506, 1.0)   # --energy-green
 const C_RED        := Color(0.847, 0.329, 0.329, 1.0)   # #d9534f DC+
-const C_TEXT       := Color(0.886, 0.910, 0.941, 1.0)   # --text-primary
-const C_TEXT_S     := Color(0.580, 0.639, 0.722, 1.0)   # --text-secondary
-const C_TEXT_M     := Color(0.392, 0.447, 0.545, 1.0)   # --text-muted
+const C_TEXT       := UITheme.C_TEXT
+const C_TEXT_S     := UITheme.C_TEXT_S
+const C_TEXT_M     := UITheme.C_TEXT_M
 const C_WIRE_DC    := Color(0.847, 0.329, 0.329, 1.0)   # DC positive wire
 
 # Port colours — matches webapp getWireStyle (~9705)
@@ -262,6 +265,11 @@ var _item_drag_start_map:   Dictionary = {}
 var _marquee_selecting:     bool = false
 var _marquee_start:         Vector2 = Vector2.ZERO
 var _marquee_end:           Vector2 = Vector2.ZERO
+## Screen-space hit rects for destroyed-controller Reset buttons (cleared each draw).
+var _controller_reset_rects: Dictionary = {}
+## Short-lived smoke puffs when a controller is destroyed: {item_id, center, age}.
+var _destroy_fx: Array = []
+var _needs_continuous_redraw: bool = false
 
 ## 2D wire waypoint drag (graph-space coords stored on connection).
 var _waypoint_dragging:  bool   = false
@@ -282,6 +290,7 @@ signal items_multi_selected(item_ids: Array)
 signal connection_selected(conn_id: String)
 signal compound_open_requested(item_id: String)
 signal layout_changed()
+signal controller_reset_pressed(item_id: String)
 
 # ---------------------------------------------------------------------------
 # External references (set by SystemGraphView)
@@ -340,10 +349,23 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 		if _ac_shed_active and flow_mult <= 0.0:
 			vis_speed = 6.0
 		_flow_phase = fmod(_flow_phase + delta * vis_speed, TAU)
+		_needs_continuous_redraw = true
+	# Smoke / destroy FX decay
+	var fx_alive := false
+	for i in range(_destroy_fx.size() - 1, -1, -1):
+		var fx: Dictionary = _destroy_fx[i]
+		fx["age"] = float(fx.get("age", 0.0)) + delta
+		if float(fx["age"]) > 2.5:
+			_destroy_fx.remove_at(i)
+		else:
+			fx_alive = true
 	_redraw_accum += delta
-	if _redraw_accum >= REDRAW_INTERVAL:
+	var interval := REDRAW_INTERVAL if (current_mode == "test" or _needs_continuous_redraw or fx_alive) else 0.25
+	if _redraw_accum >= interval:
 		_redraw_accum = 0.0
 		queue_redraw()
+		if current_mode != "test" and not fx_alive:
+			_needs_continuous_redraw = false
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +392,8 @@ func _gui_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		if not DisplayServer.is_touchscreen_available() and _touch_input_active():
+			_clear_touch_state()
 		# Pan start (MMB or RMB)
 		var is_pan := mb.pressed and (
 			mb.button_index == MOUSE_BUTTON_MIDDLE
@@ -450,11 +474,27 @@ func _touch_input_active() -> bool:
 func _should_ignore_emulated_mouse(event: InputEvent) -> bool:
 	if not _touch_input_active():
 		return false
+	# Wheel zoom must always work (hybrid touch + mouse devices).
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			return false
+	# On non-touch devices, stale touch-emulation state would block all mouse input.
+	if not DisplayServer.is_touchscreen_available():
+		_clear_touch_state()
+		return false
 	# Block all emulated mouse traffic during touch — some panels emit RMB/MMB
 	# on drag which would otherwise steal single-finger node moves as canvas pan.
 	if event is InputEventMouseButton or event is InputEventMouseMotion:
 		return true
 	return false
+
+
+func _clear_touch_state() -> void:
+	_touch_positions.clear()
+	_touch_primary_index = -1
+	_touch_pan_active = false
+	_touch_interaction = ""
 
 
 func _handle_screen_touch(st: InputEventScreenTouch) -> void:
@@ -647,10 +687,32 @@ func _visible_connections() -> Array:
 	return out
 
 
+func play_controller_destroy_fx(item_id: String, screen_center: Vector2) -> void:
+	_destroy_fx.append({"item_id": item_id, "center": screen_center, "age": 0.0})
+	_needs_continuous_redraw = true
+	queue_redraw()
+
+
+func request_continuous_redraw() -> void:
+	_needs_continuous_redraw = true
+	queue_redraw()
+
+
 # Left-button press: port hit → wire drag; item hit → item drag.
 func _on_lmb_press(screen_pos: Vector2) -> void:
 	if model == null:
 		return
+	for rid in _controller_reset_rects:
+		var item := model.get_item(str(rid))
+		if item.is_empty():
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if not bool(specs.get("destroyed", false)):
+			continue
+		var rr: Rect2 = _controller_reset_rects[rid]
+		if rr.has_point(screen_pos):
+			controller_reset_pressed.emit(str(rid))
+			return
 	_marquee_selecting = false
 	var wp_hit := _waypoint_hit(screen_pos)
 	if not wp_hit.is_empty():
@@ -1518,6 +1580,8 @@ func _render_connection(
 	var polarity    := conn.get("polarity", "positive") as String
 	var is_sel:  bool = (conn.get("id", "") as String == selected_connection_id)
 	var base_col  := _wire_color_for_connection(conn, polarity)
+	if bool(conn.get("voltage_mismatch", false)):
+		base_col = Color(1.0, 0.15, 0.15, 0.95)
 	var col: Color = C_SELECTED_BORDER if is_sel else base_col
 	var flow_est      := _estimate_connection_flow(conn, solar_w, load_w)
 	var flow_watts:   float  = float(flow_est.get("watts", 100.0))
@@ -2205,6 +2269,7 @@ func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 var canvas_bg_alpha: float = 1.0
 
 func _draw() -> void:
+	_controller_reset_rects.clear()
 	draw_rect(Rect2(Vector2.ZERO, size), Color(C_CANVAS_BG.r, C_CANVAS_BG.g, C_CANVAS_BG.b, C_CANVAS_BG.a * canvas_bg_alpha))
 	_draw_dot_grid()
 
@@ -2213,6 +2278,7 @@ func _draw() -> void:
 		for item: Dictionary in _visible_items():
 			_render_item(item)
 
+	_draw_destroy_fx()
 	_draw_temp_wire()                # always on top of everything
 	if _marquee_selecting:
 		var rect := Rect2(_marquee_start, _marquee_end - _marquee_start).abs()
@@ -2248,6 +2314,8 @@ func _render_item(item: Dictionary) -> void:
 		border_col = Color(border_col.r, border_col.g, border_col.b, 0.45)
 	if is_sel:
 		border_col = C_SELECTED_BORDER
+	if itype == "controller" and bool(specs.get("destroyed", false)):
+		border_col = Color(0.95, 0.25, 0.25, 1.0)
 	_draw_node_frame(rect, border_col)
 
 	# Title band
@@ -2267,7 +2335,7 @@ func _render_item(item: Dictionary) -> void:
 		"battery", "smartbattery":
 			_draw_battery_body(body_rect, specs)
 		"controller":
-			_draw_controller_body(body_rect, specs)
+			_draw_controller_body(body_rect, specs, iid, rect)
 		"compound":
 			_draw_compound_body(body_rect, specs)
 		"appliance", "acload":
@@ -2568,14 +2636,53 @@ func _draw_battery_body(rect: Rect2, specs: Dictionary) -> void:
 		draw_string(fnt, Vector2(tx, y), "SoC %.0f%%" % (soc * 100.0), HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
 
 
-func _draw_controller_body(rect: Rect2, specs: Dictionary) -> void:
+func _draw_controller_body(body_rect: Rect2, specs: Dictionary, item_id: String = "",
+		full_rect: Rect2 = Rect2()) -> void:
 	var fnt   := ThemeDB.fallback_font
-	var fsize := _fit_font_size(rect, 1, 11.0)
-	var x     := rect.position.x + 10.0
-	var y     := rect.position.y + fsize + 6.0
+	var fsize := _fit_font_size(body_rect, 1, 11.0)
+	var x     := body_rect.position.x + 10.0
+	var y     := body_rect.position.y + fsize + 6.0
 	var name_ := specs.get("name", "MPPT Controller") as String
+	var destroyed := bool(specs.get("destroyed", false))
+	if destroyed:
+		name_ = "DESTROYED"
 	draw_string(fnt, Vector2(x, y), name_,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT)
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(1.0, 0.35, 0.35) if destroyed else C_TEXT)
+	if destroyed:
+		var reason := str(specs.get("destroyed_reason", "Over-voltage fault"))
+		y += fsize + 4.0
+		draw_string(fnt, Vector2(x, y), reason,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 2), C_TEXT_M)
+		var btn_w := minf(full_rect.size.x - 20.0, 88.0)
+		var btn_h := 22.0
+		var btn_rect := Rect2(
+			full_rect.position.x + (full_rect.size.x - btn_w) * 0.5,
+			full_rect.end.y - btn_h - 8.0, btn_w, btn_h)
+		draw_rect(btn_rect, Color(0.15, 0.45, 0.22, 0.95), true)
+		draw_rect(btn_rect, Color(0.35, 0.85, 0.45, 0.9), false, 1.5)
+		draw_string(fnt, Vector2(btn_rect.position.x + 14.0, btn_rect.end.y - 6.0), "RESET",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(9, fsize), Color(0.9, 1.0, 0.92))
+		if not item_id.is_empty():
+			_controller_reset_rects[item_id] = btn_rect
+
+
+func _draw_destroy_fx() -> void:
+	var fnt := ThemeDB.fallback_font
+	for fx in _destroy_fx:
+		if not (fx is Dictionary):
+			continue
+		var age := float((fx as Dictionary).get("age", 0.0))
+		var c: Vector2 = (fx as Dictionary).get("center", Vector2.ZERO)
+		var n := 8 + int(age * 6.0)
+		for i in n:
+			var t := float(i) / float(maxi(n - 1, 1))
+			var ang := t * TAU + age * 2.3
+			var rad := 8.0 + age * 28.0 + sin(t * 5.0 + age * 3.0) * 6.0
+			var p := c + Vector2(cos(ang), sin(ang)) * rad
+			var alpha := clampf(1.0 - age / 2.5, 0.0, 0.75) * (1.0 - t * 0.6)
+			draw_circle(p, 3.0 + t * 4.0, Color(0.45, 0.45, 0.48, alpha))
+		draw_string(fnt, c + Vector2(-36.0, -18.0 - age * 8.0), "💥",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(1, 1, 1, clampf(1.0 - age / 2.0, 0.0, 1.0)))
 
 
 func _draw_load_body(rect: Rect2, specs: Dictionary) -> void:

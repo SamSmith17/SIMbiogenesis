@@ -4,16 +4,17 @@ extends Control
 ## All edits are routed through GraphModel so other views stay in sync.
 
 # ---------------------------------------------------------------------------
-# Palette
+# Palette — redirected to UITheme (single source of truth); local const
+# names kept so existing call sites are unchanged.
 # ---------------------------------------------------------------------------
-const C_BG      := Color(0.039, 0.055, 0.098, 1.0)
-const C_PANEL   := Color(0.110, 0.145, 0.255, 1.0)
-const C_BORDER  := Color(0.227, 0.290, 0.420, 1.0)
-const C_PRIMARY := Color(0.133, 0.827, 0.933, 1.0)
-const C_TEXT    := Color(0.886, 0.910, 0.941, 1.0)
-const C_TEXT_S  := Color(0.580, 0.639, 0.722, 1.0)
-const C_TEXT_M  := Color(0.392, 0.447, 0.545, 1.0)
-const C_AMBER   := Color(0.961, 0.620, 0.043, 1.0)
+const C_BG      := UITheme.C_BG
+const C_PANEL   := UITheme.C_PANEL_RAISED
+const C_BORDER  := UITheme.C_BORDER
+const C_PRIMARY := UITheme.C_PRIMARY
+const C_TEXT    := UITheme.C_TEXT
+const C_TEXT_S  := UITheme.C_TEXT_S
+const C_TEXT_M  := UITheme.C_TEXT_M
+const C_AMBER   := UITheme.C_AMBER
 
 const _HA_PUSHER         := preload("res://system_graph/ha_automation_pusher.gd")
 const _CALIBRATOR_SCRIPT := preload("res://system_graph/load_calibrator.gd")
@@ -46,6 +47,7 @@ var _compound_back_cb: Callable = Callable()
 var _conduit_route_cb: Callable = Callable()
 var _conduit_clear_cb: Callable = Callable()
 var _placeholder_cb: Callable = Callable()
+var _controller_reset_cb: Callable = Callable()
 
 ## Per-automation UI state. Key = automation id, value = true if the editor
 ## panel is expanded. Persists across inspector rebuilds for the same node.
@@ -174,6 +176,10 @@ func set_placeholder_callback(cb: Callable) -> void:
 	_placeholder_cb = cb
 
 
+func set_controller_reset_callback(cb: Callable) -> void:
+	_controller_reset_cb = cb
+
+
 # ---------------------------------------------------------------------------
 # Form building
 # ---------------------------------------------------------------------------
@@ -257,6 +263,18 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_num_field("Max PV Voltage (V)", specs.get("max_voc", 150.0),       "specs/max_voc",         0, 1000,  1.0)
 			_num_field("Charge Current (A)", specs.get("max_charge_amps", 30.0),"specs/max_charge_amps", 0,  500,  1.0)
 			_num_field("Max PV Power (W)",   specs.get("max_pv_watts", 2400.0), "specs/max_pv_watts",    0, 50000, 10.0)
+			if bool(specs.get("destroyed", false)):
+				_section("Fault")
+				_readonly_field("Status", "DESTROYED — %s" % str(specs.get("destroyed_reason", "Over-voltage")))
+				var reset_btn := Button.new()
+				reset_btn.text = "Reset Controller"
+				reset_btn.add_theme_color_override("font_color", Color(0.4, 0.95, 0.55))
+				var cid := str(item.get("id", ""))
+				reset_btn.pressed.connect(func() -> void:
+					if _controller_reset_cb.is_valid():
+						_controller_reset_cb.call(cid)
+				)
+				_form_vbox.add_child(reset_btn)
 			_section("Cost")
 			_num_field("Unit Cost ($)",      specs.get("cost", 0.0),            "specs/cost", 0, 99999, 1.0)
 			_section("Overload Protection")

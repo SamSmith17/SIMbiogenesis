@@ -306,16 +306,19 @@ func _refresh_controller() -> void:
 		var w:   float = float(_read("PANEL_WATTAGE", 220.0))
 		peak_kw = cnt * w / 1000.0
 	var prev := (_model.get_item(V_CTRL_ID).get("specs", {}) as Dictionary).duplicate(true)
-	_model.update_item(V_CTRL_ID, {
-		"specs": _merge_specs(prev, {
-			"name":              "Hybrid Inverter / MPPT",
-			"max_voc":           150.0,
-			"max_charge_amps":   50.0,
-			"max_pv_watts":      peak_kw * 1000.0,
-			"cost":              0.0,
-			"current_output_kw": solar_kw,
-		}),
+	var merged := _merge_specs(prev, {
+		"name":              "Hybrid Inverter / MPPT",
+		"max_voc":           prev.get("max_voc", 150.0),
+		"max_charge_amps":   prev.get("max_charge_amps", 50.0),
+		"max_pv_watts":      peak_kw * 1000.0,
+		"cost":              0.0,
+		"current_output_kw": solar_kw,
 	})
+	if bool(prev.get("destroyed", false)):
+		merged["destroyed"] = true
+		merged["destroyed_reason"] = prev.get("destroyed_reason", "")
+		merged["fault_voc"] = prev.get("fault_voc", 0.0)
+	_model.update_item(V_CTRL_ID, {"specs": merged})
 	# Push user-configured overload protection thresholds to solar_ui
 	if is_instance_valid(_solar_ui):
 		var ctrl_specs := (_model.get_item(V_CTRL_ID).get("specs", {}) as Dictionary)
@@ -430,6 +433,7 @@ func _make_panel_item() -> Dictionary:
 		"width":      168.0,
 		"height":     96.0,
 		"is_virtual": true,
+		"layout_exclude": true,
 		"specs": {
 			"name": "%d× %.0fW Solar Array" % [cnt, w],
 			"wmp":  cnt * w,
@@ -451,8 +455,8 @@ func _make_controller_item() -> Dictionary:
 	return {
 		"id":         V_CTRL_ID,
 		"type":       "controller",
-		"x":          -200.0,
-		"y":          -60.0,
+		"x":          140.0,
+		"y":          -120.0,
 		"width":      140.0,
 		"height":     120.0,
 		"is_virtual": true,
@@ -478,8 +482,8 @@ func _make_battery_item() -> Dictionary:
 	return {
 		"id":         V_BATTERY_ID,
 		"type":       "battery",
-		"x":          100.0,
-		"y":          -40.0,
+		"x":          340.0,
+		"y":          -100.0,
 		"width":      100.0,
 		"height":     136.0,
 		"is_virtual": true,
@@ -501,8 +505,8 @@ func _make_baseline_item() -> Dictionary:
 	return {
 		"id":         V_BASELINE_ID,
 		"type":       "appliance",
-		"x":          360.0,
-		"y":          -20.0,
+		"x":          540.0,
+		"y":          80.0,
 		"width":      130.0,
 		"height":     70.0,
 		"is_virtual": true,
@@ -532,9 +536,9 @@ func _panel_node_position(idx: int) -> Vector2:
 	var rem := idx % per_group
 	var s := rem / ARRAY_SERIES_PER_STRING
 	var p := rem % ARRAY_SERIES_PER_STRING
-	var x0 := -740.0 + float(g) * 230.0
-	var y0 := -210.0 + float(s) * 188.0
-	return Vector2(x0 + float(p) * 74.0, y0)
+	var x0 := -980.0 + float(g) * 300.0
+	var y0 := -380.0 + float(s) * 210.0
+	return Vector2(x0 + float(p) * 82.0, y0)
 
 
 func _ensure_virtual_panel_cluster() -> void:

@@ -19,6 +19,9 @@ const V2_TITLE_GLOW := Color(0.13, 0.83, 0.93, 0.14)
 const V2_PORT_RING := Color(0.95, 0.97, 1.0, 0.75)
 const V2_FLOW_ARROW_ALPHA := 0.82
 
+var _hud_panel_style: StyleBoxFlat = null
+var _rounded_rect_style: StyleBoxFlat = null
+
 
 func _ready() -> void:
 	super._ready()
@@ -209,13 +212,18 @@ func _draw_v2_education_panel() -> void:
 			draw_string(fnt, Vector2(irect.position.x + 10.0, ry), rows[ri].text as String, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, rows[ri].col as Color)
 
 
+func _cached_hud_panel_style(alpha: float) -> StyleBoxFlat:
+	if _hud_panel_style == null:
+		_hud_panel_style = StyleBoxFlat.new()
+		_hud_panel_style.set_corner_radius_all(8)
+		_hud_panel_style.set_border_width_all(1)
+	_hud_panel_style.bg_color = Color(0.05, 0.08, 0.17, 0.88 * alpha)
+	_hud_panel_style.border_color = Color(0.22, 0.30, 0.44, 0.75 * alpha)
+	return _hud_panel_style
+
+
 func _draw_hud_panel(rect: Rect2, alpha: float) -> void:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.05, 0.08, 0.17, 0.88 * alpha)
-	sb.set_corner_radius_all(8)
-	sb.set_border_width_all(1)
-	sb.border_color = Color(0.22, 0.30, 0.44, 0.75 * alpha)
-	draw_style_box(sb, rect)
+	draw_style_box(_cached_hud_panel_style(alpha), rect)
 
 
 func _draw_v2_connection_feedback() -> void:

@@ -4,17 +4,18 @@ extends Control
 ## Toggle: input action `system_graph_toggle` (default G).
 
 # ---------------------------------------------------------------------------
-# Mission-control color palette  (mirrors css/variables.css)
+# Mission-control color palette — redirected to UITheme (single source of
+# truth); local const names kept so existing call sites are unchanged.
 # ---------------------------------------------------------------------------
-const C_BG       := Color(0.039, 0.055, 0.098, 1.0)    # --space-900  #0a0e1a
-const C_SIDEBAR  := Color(0.082, 0.114, 0.208, 1.0)    # --space-700  #151d35
-const C_PANEL    := Color(0.110, 0.145, 0.255, 1.0)    # --space-600  #1c2541
-const C_BORDER   := Color(0.227, 0.290, 0.420, 1.0)    # --space-400  #3a4a6b
-const C_PRIMARY  := Color(0.133, 0.827, 0.933, 1.0)    # --clr-primary  #22d3ee
-const C_AMBER    := Color(0.961, 0.620, 0.043, 1.0)    # --energy-amber #f59e0b
-const C_TEXT     := Color(0.886, 0.910, 0.941, 1.0)    # --text-primary #e2e8f0
-const C_TEXT_S   := Color(0.580, 0.639, 0.722, 1.0)    # --text-secondary #94a3b8
-const C_TEXT_M   := Color(0.392, 0.447, 0.545, 1.0)    # --text-muted   #64748b
+const C_BG       := UITheme.C_BG
+const C_SIDEBAR  := UITheme.C_PANEL
+const C_PANEL    := UITheme.C_PANEL_RAISED
+const C_BORDER   := UITheme.C_BORDER
+const C_PRIMARY  := UITheme.C_PRIMARY
+const C_AMBER    := UITheme.C_AMBER
+const C_TEXT     := UITheme.C_TEXT
+const C_TEXT_S   := UITheme.C_TEXT_S
+const C_TEXT_M   := UITheme.C_TEXT_M
 
 const TOPBAR_H    := 60.0
 ## Bottom clearance — matches TimelineUI.BAR_HEIGHT so sidebars don't hide behind it.
@@ -38,6 +39,9 @@ const _CONDUIT_MGR_SCRIPT := preload("res://core/conduits/conduit_manager.gd")
 const _PLACEHOLDER_HOST_SCRIPT := preload("res://system_graph/graph_placeholder_host.gd")
 ## Global `class_name` is not always resolved here during parse; preload gives a stable entry point.
 const _GAMEPLAY_RULES_SCRIPT := preload("res://gameplay/gameplay_rules.gd")
+const _PV_ELECTRICAL_SCRIPT := preload("res://system_graph/pv_electrical.gd")
+const _GRAPH_LAYOUT_SCRIPT := preload("res://system_graph/graph_layout.gd")
+const _GRAPH_PV_WIRING_SCRIPT := preload("res://system_graph/graph_pv_wiring.gd")
 const GRAPH_AUTOSAVE_DIR := "user://saves/graph_autosave"
 const GRAPH_AUTOSAVE_DEBOUNCE_SEC := 0.75
 const GRAPH_AUTOSAVE_REASONS := {
@@ -118,6 +122,9 @@ var _group_btn: Button = null
 var _ungroup_btn: Button = null
 var _make_array_btn: Button = null
 var _make_battery_bank_btn: Button = null
+var _series_btn: Button = null
+var _parallel_btn: Button = null
+var _arrange_btn: Button = null
 var _placeholder_btn: Button = null
 var _enter_btn: Button = null
 var _back_btn: Button = null
@@ -161,6 +168,12 @@ var _left_test_content:  Control = null
 var _toast_panel: PanelContainer = null
 var _toast_label: Label          = null
 var _toast_timer: float          = 0.0
+var _edu_overlay: PanelContainer = null
+var _edu_title: Label = null
+var _edu_body: Label = null
+var _first_load_layout_done: bool = false
+var _fit_deferred_pending: bool = false
+var _checking_voltage: bool = false
 var _autosave_timer: Timer = null
 var _autosave_pending: bool = false
 
@@ -427,6 +440,9 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("layout_changed"):
 		if not gc.is_connected("layout_changed", _on_canvas_layout_changed):
 			gc.connect("layout_changed", _on_canvas_layout_changed)
+	if gc.has_signal("controller_reset_pressed"):
+		if not gc.is_connected("controller_reset_pressed", _on_controller_reset_pressed):
+			gc.connect("controller_reset_pressed", _on_controller_reset_pressed)
 
 
 func _on_canvas_layout_changed() -> void:
@@ -548,20 +564,30 @@ func _build_topbar() -> Control:
 	_ungroup_btn           = _make_topbar_btn("Ungroup")
 	_make_array_btn        = _make_topbar_btn("Array")
 	_make_battery_bank_btn = _make_topbar_btn("Bank")
+	_series_btn            = _make_topbar_btn("Series")
+	_parallel_btn          = _make_topbar_btn("Parallel")
+	_arrange_btn           = _make_topbar_btn("Arrange")
 	_placeholder_btn       = _make_topbar_btn("3D Ph")
 	_enter_btn             = _make_topbar_btn("▸ Enter")
 	_back_btn              = _make_topbar_btn("◂ Back")
 	_make_array_btn.tooltip_text     = "Make Array from selection"
 	_make_battery_bank_btn.tooltip_text = "Make Battery Bank"
+	_series_btn.tooltip_text = "Wire selected panels in series → controller PV ports"
+	_parallel_btn.tooltip_text = "Wire selected panels in parallel → controller PV ports"
+	_arrange_btn.tooltip_text = "Auto-space overlapping nodes and fit view"
 	_placeholder_btn.tooltip_text = "Spawn a 3D cube placeholder linked to the selected node"
 	_group_btn.pressed.connect(_on_group_selected_pressed)
 	_ungroup_btn.pressed.connect(_on_ungroup_selected_pressed)
 	_make_array_btn.pressed.connect(_on_make_array_pressed)
 	_make_battery_bank_btn.pressed.connect(_on_make_battery_bank_pressed)
+	_series_btn.pressed.connect(_on_series_wiring_pressed)
+	_parallel_btn.pressed.connect(_on_parallel_wiring_pressed)
+	_arrange_btn.pressed.connect(_on_arrange_graph_pressed)
 	_placeholder_btn.pressed.connect(_on_spawn_3d_placeholder_pressed)
 	_enter_btn.pressed.connect(_on_enter_selected_compound)
 	_back_btn.pressed.connect(_on_back_scope_pressed)
-	for b2: Button in [_group_btn, _ungroup_btn, _make_array_btn, _make_battery_bank_btn, _placeholder_btn, _enter_btn, _back_btn]:
+	for b2: Button in [_group_btn, _ungroup_btn, _make_array_btn, _make_battery_bank_btn,
+			_series_btn, _parallel_btn, _arrange_btn, _placeholder_btn, _enter_btn, _back_btn]:
 		left_grp.add_child(b2)
 	_update_special_group_buttons()
 
@@ -989,6 +1015,9 @@ func _build_right_sidebar() -> Control:
 	if _inspector_panel != null and _inspector_panel.has_method("set_placeholder_callback"):
 		_inspector_panel.call("set_placeholder_callback",
 			Callable(self, "_spawn_3d_placeholder_for_item"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_controller_reset_callback"):
+		_inspector_panel.call("set_controller_reset_callback",
+			Callable(self, "reset_controller_from_inspector"))
 
 	return bar
 
@@ -1149,8 +1178,22 @@ func _end_lib_drag(screen_pos: Vector2) -> void:
 func _spawn_at_canvas_center(preset: Dictionary) -> void:
 	if _graph_canvas == null:
 		return
+	var gc := _graph_canvas as Control
 	var offset := Vector2(randf_range(-60.0, 60.0), randf_range(-40.0, 40.0))
-	_spawn_from_preset(preset, _graph_canvas.size * 0.5 + offset)
+	var local_pos: Vector2 = gc.size * 0.5 + offset
+	if model != null:
+		var pw := float(preset.get("width", 120.0))
+		var ph := float(preset.get("height", 80.0))
+		var center: Vector2 = gc.size * 0.5
+		var pan := gc.get("_pan") as Vector2
+		var zoom := float(gc.get("_zoom"))
+		var graph_pos: Vector2 = (local_pos - center - pan) / maxf(zoom, 0.001)
+		graph_pos -= Vector2(pw, ph) * 0.5
+		var items: Array = model.get_items_in_scope(_active_scope_id)
+		graph_pos = _GRAPH_LAYOUT_SCRIPT.nudge_spawn_position(
+			graph_pos, Vector2(pw, ph), items)
+		local_pos = center + pan + graph_pos * zoom
+	_spawn_from_preset(preset, local_pos)
 
 
 func _spawn_from_preset(preset: Dictionary, canvas_local_pos: Vector2) -> void:
@@ -1196,13 +1239,30 @@ func _spawn_from_preset(preset: Dictionary, canvas_local_pos: Vector2) -> void:
 ## rooftop PV). Idempotent: panels from a previous import (specs.osm_import == true)
 ## are removed first, so reloading a map does not stack duplicates. Node spawning is
 ## capped to keep the canvas readable; SolarUI / world placement use the true count.
-func add_imported_solar_panels(count: int, watts: float, label: String = "OSM Solar") -> void:
+## Import an OSM solar array as panel nodes. `array_tag` (when non-empty) scopes the
+## import to a single real-world array: re-importing the same tag replaces only that
+## array's nodes, and other imported arrays are kept — so the player can add several
+## arrays from the world without each one wiping the last. An empty tag preserves the
+## legacy single-array behaviour (replace all OSM-imported panels).
+func add_imported_solar_panels(count: int, watts: float, label: String = "OSM Solar",
+		array_tag: String = "") -> void:
 	if model == null or count <= 0:
 		return
+	# Remove only the nodes this call supersedes; count what survives so the new group
+	# is offset clear of arrays already on the canvas.
 	var stale: Array = []
+	var kept_osm := 0
 	for it in model.items:
-		if it is Dictionary and bool((it as Dictionary).get("specs", {}).get("osm_import", false)):
+		if not (it is Dictionary):
+			continue
+		var specs: Dictionary = (it as Dictionary).get("specs", {})
+		if not bool(specs.get("osm_import", false)):
+			continue
+		var same := array_tag.is_empty() or str(specs.get("osm_tag", "")) == array_tag
+		if same:
 			stale.append(str((it as Dictionary).get("id", "")))
+		else:
+			kept_osm += 1
 	for sid in stale:
 		model.remove_item(sid)
 	var max_nodes := 48
@@ -1212,6 +1272,8 @@ func add_imported_solar_panels(count: int, watts: float, label: String = "OSM So
 	var spacing_x := 140.0
 	var spacing_y := 120.0
 	var origin := Vector2(-float(cols - 1) * spacing_x * 0.5, -float(rows - 1) * spacing_y * 0.5)
+	# Shift each freshly imported array down so multiple arrays don't stack on origin.
+	origin.y += float(kept_osm) / float(maxi(cols, 1)) * spacing_y + (spacing_y if kept_osm > 0 else 0.0)
 	for i in n:
 		var gx := origin.x + float(i % cols) * spacing_x
 		var gy := origin.y + float(i / cols) * spacing_y
@@ -1224,15 +1286,15 @@ func add_imported_solar_panels(count: int, watts: float, label: String = "OSM So
 			"specs": {
 				"name": "%s #%d" % [label, i + 1],
 				"wmp": watts, "voc": 48.0, "vmp": 41.0, "isc": 11.0, "imp": 9.76,
-				"cost": 300.0, "osm_import": true,
+				"cost": 300.0, "osm_import": true, "osm_tag": array_tag,
 			},
 			"is_virtual": false,
 		})
 	_schedule_graph_autosave()
 	_autosave_pending = true
 	_flush_graph_autosave()
-	print("SystemGraphView: imported %d solar panel node(s) @ %.0f W (label '%s', source count %d)" % [
-		n, watts, label, count])
+	print("SystemGraphView: imported %d solar panel node(s) @ %.0f W (label '%s', tag '%s', source count %d)" % [
+		n, watts, label, array_tag, count])
 
 
 const _GHOST_CONTAINER_OFFSET_X := 160.0
@@ -1632,6 +1694,10 @@ func _update_special_group_buttons() -> void:
 				break
 	_make_array_btn.disabled = not can_array
 	_make_battery_bank_btn.disabled = not can_bank
+	if _series_btn != null:
+		var can_wire := _count_panel_selection() >= 2
+		_series_btn.disabled = not can_wire
+		_parallel_btn.disabled = not can_wire
 	_make_array_btn.tooltip_text = "Select 2+ panel/array nodes to condense into one explicit array"
 	_make_battery_bank_btn.tooltip_text = "Select connected batteries/banks to condense into one bank node"
 	if _group_btn != null:
@@ -2697,6 +2763,7 @@ func _process(delta: float) -> void:
 	if not _history_initialized:
 		_history_initialized = true
 		_push_history()
+		call_deferred("_maybe_apply_first_load_layout")
 	if _lib_ghost != null and _lib_ghost.visible:
 		_lib_ghost.position = get_viewport().get_mouse_position() + Vector2(10.0, 8.0)
 	# Toast countdown
@@ -3511,6 +3578,9 @@ func _on_model_changed(reason: String) -> void:
 	if _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
 	_refresh_telemetry()
+	_sync_graph_controller_ac_fault()
+	if reason in ["add_connection", "remove_connection", "update_connection"]:
+		call_deferred("_check_pv_voltage_faults")
 	# Record structural user changes in the undo history
 	if _history != null and _history_initialized and not _history_suppress:
 		if reason in HISTORY_REASONS:
@@ -3854,12 +3924,13 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 			float(data.get("canvas_pan_x", 0.0)),
 			float(data.get("canvas_pan_y", 0.0))
 		))
-		_graph_canvas.set("_zoom", float(data.get("canvas_zoom", 1.0)))
+		_graph_canvas.set("_zoom", clampf(float(data.get("canvas_zoom", 1.0)), 0.25, 4.0))
 		_graph_canvas.set("active_scope_id", _active_scope_id)
 		_graph_canvas.call("queue_redraw")
 
 	_refresh_telemetry()
 	_update_scope_breadcrumb()
+	call_deferred("_post_restore_layout_fixup")
 
 	# Subscribe to any ha_links already saved in the graph (e.g. Shelly 4PM
 	# nodes created from the preset that carry pre-filled entity IDs).
@@ -4036,3 +4107,289 @@ func _update_make_array_quick_button() -> void:
 		btn_size = _make_array_quick_btn.get_combined_minimum_size()
 	_make_array_quick_btn.position = gc.position + center - Vector2(btn_size.x * 0.5, 34.0)
 	_make_array_quick_btn.visible = true
+
+
+# ---------------------------------------------------------------------------
+# PV voltage faults, controller destroy/reset, layout, series/parallel wiring
+# ---------------------------------------------------------------------------
+
+func _ambient_temp_c_for_voc() -> float:
+	if is_instance_valid(_solar_ui):
+		if _solar_ui.has_method("_estimate_ambient_temp"):
+			return float(_solar_ui.call("_estimate_ambient_temp"))
+	return 15.0
+
+
+func _count_panel_selection() -> int:
+	var n := 0
+	for sid: String in _selected_item_ids:
+		if _is_array_candidate(model.get_item(sid)):
+			n += 1
+	return n
+
+
+func _panel_selection_ids() -> Array[String]:
+	var out: Array[String] = []
+	for sid: String in _selected_item_ids:
+		if _is_array_candidate(model.get_item(sid)):
+			out.append(sid)
+	return out
+
+
+func _any_controller_destroyed() -> bool:
+	if model == null:
+		return false
+	for item in model.get_items_in_scope("root"):
+		if not (item is Dictionary):
+			continue
+		if str((item as Dictionary).get("type", "")) != "controller":
+			continue
+		var sp: Dictionary = (item as Dictionary).get("specs", {}) as Dictionary
+		if bool(sp.get("destroyed", false)):
+			return true
+	return false
+
+
+func _sync_graph_controller_ac_fault() -> void:
+	if not is_instance_valid(_solar_ui):
+		return
+	if _solar_ui.has_method("set_graph_controller_destroyed"):
+		_solar_ui.call("set_graph_controller_destroyed", _any_controller_destroyed())
+
+
+func _check_pv_voltage_faults() -> void:
+	if model == null or _checking_voltage:
+		return
+	_checking_voltage = true
+	var temp_c := _ambient_temp_c_for_voc()
+	PvElectrical.update_connection_voltage_flags(model, _active_scope_id, temp_c)
+	for scope_id in _scope_trail:
+		var faults: Array = PvElectrical.find_overvoltage_faults(model, scope_id, temp_c)
+		for f in faults:
+			if not (f is Dictionary):
+				continue
+			var cid := str((f as Dictionary).get("controller_id", ""))
+			var it := model.get_item(cid)
+			if it.is_empty():
+				continue
+			var sp: Dictionary = it.get("specs", {}) as Dictionary
+			if bool(sp.get("destroyed", false)):
+				continue
+			_destroy_controller(cid, float((f as Dictionary).get("string_voc", 0.0)),
+				float((f as Dictionary).get("max_voc", 0.0)))
+	_sync_graph_controller_ac_fault()
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	_checking_voltage = false
+
+
+func _destroy_controller(controller_id: String, string_voc: float, max_voc: float) -> void:
+	if model == null:
+		return
+	var it := model.get_item(controller_id)
+	if it.is_empty():
+		return
+	var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	sp["destroyed"] = true
+	sp["fault_voc"] = string_voc
+	sp["destroyed_reason"] = "Voc %.0f V > max %.0f V" % [string_voc, max_voc]
+	model.update_item(controller_id, {"specs": sp})
+	_play_controller_destroy_fx(controller_id)
+	_show_controller_education_card(string_voc, max_voc)
+	_sync_graph_controller_ac_fault()
+	print("SystemGraphView: controller '%s' destroyed (Voc %.1f V > max %.1f V)" % [
+		controller_id, string_voc, max_voc])
+
+
+func _reset_controller(controller_id: String) -> void:
+	if model == null:
+		return
+	var it := model.get_item(controller_id)
+	if it.is_empty():
+		return
+	var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	sp["destroyed"] = false
+	sp.erase("destroyed_reason")
+	sp.erase("fault_voc")
+	model.update_item(controller_id, {"specs": sp})
+	_sync_graph_controller_ac_fault()
+	call_deferred("_check_pv_voltage_faults")
+	_show_toast("Controller reset — check wiring before re-energizing", 3.0)
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+
+
+func _on_controller_reset_pressed(controller_id: String) -> void:
+	_reset_controller(controller_id)
+
+
+func _play_controller_destroy_fx(controller_id: String) -> void:
+	if _graph_canvas == null or not _graph_canvas.has_method("play_controller_destroy_fx"):
+		return
+	var it := model.get_item(controller_id)
+	if it.is_empty():
+		return
+	var c := _graph_canvas as Control
+	var pan := c.get("_pan") as Vector2
+	var zoom := float(c.get("_zoom"))
+	var center := c.size * 0.5
+	var tl := center + pan + Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0))) * zoom
+	var sz := Vector2(float(it.get("width", 120.0)), float(it.get("height", 90.0))) * zoom
+	var screen_center := tl + sz * 0.5
+	_graph_canvas.call("play_controller_destroy_fx", controller_id, screen_center)
+
+
+func _ensure_education_overlay() -> void:
+	if _edu_overlay != null:
+		return
+	_edu_overlay = PanelContainer.new()
+	_edu_overlay.name = "ControllerEduOverlay"
+	_edu_overlay.visible = false
+	_edu_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 20)
+	margin.add_theme_constant_override("margin_right", 20)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	_edu_overlay.add_child(margin)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	margin.add_child(vbox)
+	_edu_title = Label.new()
+	_edu_title.add_theme_font_size_override("font_size", 20)
+	_edu_title.add_theme_color_override("font_color", Color(1.0, 0.45, 0.4))
+	vbox.add_child(_edu_title)
+	_edu_body = Label.new()
+	_edu_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_edu_body.custom_minimum_size = Vector2(420, 0)
+	_edu_body.add_theme_color_override("font_color", C_TEXT)
+	vbox.add_child(_edu_body)
+	var dismiss := Button.new()
+	dismiss.text = "Got it"
+	dismiss.pressed.connect(func() -> void:
+		if _edu_overlay != null:
+			_edu_overlay.visible = false
+	)
+	vbox.add_child(dismiss)
+	add_child(_edu_overlay)
+	_anchor(_edu_overlay, 0.5, 0.5, 0.5, 0.5, -240.0, -120.0, 240.0, 120.0)
+
+
+func _show_controller_education_card(string_voc: float, max_voc: float) -> void:
+	_ensure_education_overlay()
+	_edu_title.text = "Controller destroyed"
+	_edu_body.text = (
+		"The PV string open-circuit voltage (Voc) reached %.0f V, exceeding this "
+		+ "controller's maximum input rating of %.0f V.\n\n"
+		+ "Cold weather increases Voc. Fix the wiring (fewer panels in series or a "
+		+ "higher-voltage controller), then press RESET on the controller node."
+		% [string_voc, max_voc]
+	)
+	_edu_overlay.visible = true
+	_edu_overlay.move_to_front()
+
+
+func reset_controller_from_inspector(controller_id: String) -> void:
+	_reset_controller(controller_id)
+
+
+func _apply_graph_auto_layout(fit_view: bool = true) -> void:
+	if model == null:
+		return
+	var items: Array = GraphLayout.filter_layout_items(model.get_items_in_scope(_active_scope_id))
+	if items.size() < 2:
+		return
+	_history_suppress = true
+	var patches: Dictionary = GraphLayout.resolve_overlaps(items)
+	for iid in patches:
+		model.update_item(str(iid), {"x": (patches[iid] as Vector2).x, "y": (patches[iid] as Vector2).y})
+	_history_suppress = false
+	_push_history()
+	if fit_view and _graph_canvas != null:
+		_fit_canvas_to_content()
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	_schedule_graph_autosave()
+
+
+func _fit_canvas_to_content() -> void:
+	if _graph_canvas == null or model == null:
+		return
+	var items: Array = GraphLayout.filter_layout_items(model.get_items_in_scope(_active_scope_id))
+	if items.is_empty():
+		return
+	var c := _graph_canvas as Control
+	if c.size.x < 32.0 or c.size.y < 32.0:
+		if not _fit_deferred_pending:
+			_fit_deferred_pending = true
+			call_deferred("_fit_canvas_to_content")
+		return
+	_fit_deferred_pending = false
+	var bounds := GraphLayout.content_bounds(items)
+	var fit: Dictionary = GraphLayout.compute_fit_view(bounds, c.size)
+	c.set("_pan", Vector2(float(fit.get("pan_x", 0.0)), float(fit.get("pan_y", 0.0))))
+	c.set("_zoom", clampf(float(fit.get("zoom", 1.0)), 0.25, 4.0))
+
+
+func _post_restore_layout_fixup() -> void:
+	if model == null or not visible:
+		return
+	var items: Array = GraphLayout.filter_layout_items(model.get_items_in_scope(_active_scope_id))
+	if items.size() < 2:
+		return
+	if GraphLayout.has_overlaps(items):
+		_apply_graph_auto_layout(true)
+		_show_toast("Overlapping nodes auto-arranged", 2.5)
+		return
+	# Recover from autosaves written when off-canvas nodes crushed zoom to minimum.
+	if _graph_canvas != null and float(_graph_canvas.get("_zoom")) <= 0.26:
+		_fit_canvas_to_content()
+
+
+func _maybe_apply_first_load_layout() -> void:
+	if _first_load_layout_done or model == null:
+		return
+	_first_load_layout_done = true
+	if has_user_graph_layout():
+		call_deferred("_post_restore_layout_fixup")
+		return
+	_apply_graph_auto_layout(true)
+	_show_toast("Graph auto-arranged — drag nodes anytime", 2.5)
+
+
+func _on_arrange_graph_pressed() -> void:
+	_apply_graph_auto_layout(true)
+	_show_toast("Nodes arranged")
+
+
+func _on_series_wiring_pressed() -> void:
+	_wire_selected_panels(true)
+
+
+func _on_parallel_wiring_pressed() -> void:
+	_wire_selected_panels(false)
+
+
+func _wire_selected_panels(series: bool) -> void:
+	if model == null:
+		return
+	var ids := _panel_selection_ids()
+	if ids.size() < 2:
+		_show_toast("Select 2+ panel nodes")
+		return
+	var ctrl_id := GraphPvWiring.nearest_controller_id(model, ids, _active_scope_id)
+	if ctrl_id.is_empty():
+		_show_toast("Add a controller to connect panels")
+		return
+	_history_suppress = true
+	GraphPvWiring.layout_panels_row(model, ids)
+	if series:
+		GraphPvWiring.wire_series(model, ids, ctrl_id, _active_scope_id)
+	else:
+		GraphPvWiring.wire_parallel(model, ids, ctrl_id, _active_scope_id)
+	_history_suppress = false
+	_push_history()
+	call_deferred("_check_pv_voltage_faults")
+	_show_toast("Wired %d panel(s) %s → controller" % [
+		ids.size(), "in series" if series else "in parallel"])
+	_update_special_group_buttons()
