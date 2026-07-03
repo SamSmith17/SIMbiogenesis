@@ -205,25 +205,23 @@ static func _sample_ground_y(x: float, z: float, elev: PackedFloat32Array, res: 
 		detail_elev, detail_cols, detail_rows, detail_extent_m)
 
 
+const WALL_SHADER := preload("res://core/terrain/building_wall.gdshader")
+const ROOF_SHADER := preload("res://core/terrain/building_roof.gdshader")
+
+
+## Procedural lap-siding walls; per-building tint arrives in vertex COLOR.
+## Shared instance semantics: each call returns a fresh material so callers
+## (world mesh vs Building Builder studio) can tweak uniforms independently.
 static func make_wall_material() -> Material:
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.88
-	mat.metallic = 0.0
-	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	# The floor cap faces down and OSM footprints can self-touch — keep both
-	# faces like the terrain drape does.
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mat := ShaderMaterial.new()
+	mat.shader = WALL_SHADER
 	return mat
 
 
+## Procedural shingle/membrane roof; COLOR.a picks the branch per building.
 static func make_roof_material() -> Material:
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.92
-	mat.metallic = 0.0
-	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mat := ShaderMaterial.new()
+	mat.shader = ROOF_SHADER
 	return mat
 
 

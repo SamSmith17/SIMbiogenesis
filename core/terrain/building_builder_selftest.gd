@@ -24,6 +24,7 @@ func _initialize() -> void:
 	_test_concave_and_degenerate()
 	_test_skillion()
 	_test_uvs_and_colors()
+	_test_materials()
 	if _failures == 0:
 		print("BUILDING SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -553,3 +554,16 @@ func _test_uvs_and_colors() -> void:
 		moved.append(p + Vector2(50, 50))
 	_check("tag: stable", tag1 == BuildingBuilder.building_tag(_square_poly(5.0)))
 	_check("tag: position-keyed", tag1 != BuildingBuilder.building_tag(moved))
+
+
+func _test_materials() -> void:
+	var wall := BuildingBuilder.make_wall_material()
+	var roof := BuildingBuilder.make_roof_material()
+	_check("materials: wall is ShaderMaterial", wall is ShaderMaterial)
+	_check("materials: roof is ShaderMaterial", roof is ShaderMaterial)
+	_check("materials: wall shader loaded",
+		wall is ShaderMaterial and (wall as ShaderMaterial).shader != null)
+	_check("materials: roof shader loaded",
+		roof is ShaderMaterial and (roof as ShaderMaterial).shader != null)
+	_check("materials: independent instances",
+		BuildingBuilder.make_wall_material() != wall)
