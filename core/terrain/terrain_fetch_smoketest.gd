@@ -64,13 +64,13 @@ func _test_vegetation(vs: Node) -> bool:
 func _test_elevation(es: Node) -> bool:
 	print("SMOKETEST elevation %.4f,%.4f (%dx%d grid)..." % [LAT, LON, GRID_N, GRID_N])
 	var result: Array = ["pending", null, null]
-	es.elevation_ready.connect(func(_k: String, grid: PackedFloat32Array, c: int, r: int) -> void:
-		if result[0] == "pending":
+	es.elevation_ready.connect(func(_k: String, grid: PackedFloat32Array, c: int, r: int, tag: String) -> void:
+		if tag == "base" and result[0] == "pending":
 			result[0] = "ready"
 			result[1] = grid
 			result[2] = Vector2i(c, r))
-	es.elevation_failed.connect(func(reason: String) -> void:
-		if result[0] == "pending":
+	es.elevation_failed.connect(func(reason: String, tag: String) -> void:
+		if tag == "base" and result[0] == "pending":
 			result[0] = "failed"
 			result[1] = reason)
 	es.request_elevation(LAT, LON, HALF_EXTENT, GRID_N)

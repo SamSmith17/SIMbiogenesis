@@ -72,8 +72,10 @@ func request_imagery(lat: float, lon: float, half_extent_m: float,
 	if TerrainCacheSettings.cache_enabled() and FileAccess.file_exists(cache_path):
 		var img := Image.new()
 		if img.load(cache_path) == OK:
-			imagery_ready.emit.call_deferred(key, ImageTexture.create_from_image(img), tag)
+			print("ImageryService: '%s' layer served from cache (%s, z%d) — no download" % [tag, key, z])
+			imagery_ready.emit.call_deferred(key, _make_drape_texture(img), tag)
 			return
+	print("ImageryService: '%s' layer not cached — fetching z%d tiles …" % [tag, z])
 
 	var rng := GeoMath.tile_range_for_bbox(bbox, z)
 	var cols := int(rng["max_x"]) - int(rng["min_x"]) + 1
@@ -190,8 +192,24 @@ func _finish() -> void:
 		region.save_png("%s/%s.png" % [CACHE_DIR, key])
 	_busy = false
 	_job = {}
-	imagery_ready.emit(key, ImageTexture.create_from_image(region), tag)
+	imagery_ready.emit(key, _make_drape_texture(region), tag)
 	_start_next()
+
+
+## Builds the GPU texture for a drape image: mipmaps + S3TC/DXT compression.
+## A 4096² RGBA8 drape with mips is ~89 MB of VRAM; DXT brings it to ~11-22 MB —
+## real headroom on the 2 GB shared-memory iGPUs this runs on (and VRAM pressure
+## is a contributor to the Vulkan device-lost crashes seen when the editor and
+## game share the GPU). CPU-side consumers that call get_image() on the drape
+## (landcover gate, scatter samplers, camp scatter) decompress on read.
+## Disk cache stays PNG — only the GPU copy is compressed, so cache files and
+## every existing code path that loads them are unchanged.
+static func _make_drape_texture(img: Image) -> ImageTexture:
+	if img.get_width() >= 1024:
+		if not img.has_mipmaps():
+			img.generate_mipmaps()
+		img.compress(Image.COMPRESS_S3TC, Image.COMPRESS_SOURCE_GENERIC)
+	return ImageTexture.create_from_image(img)
 
 
 func _fail(reason: String) -> void:

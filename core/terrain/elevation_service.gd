@@ -33,6 +33,9 @@ var _busy: bool = false
 var _job: Dictionary = {}
 var _pending: Array[Dictionary] = []
 var _opentopo_http: HTTPRequest = null
+## Set when Open-Meteo returns a daily quota error — further Open-Meteo fetches
+## fail fast and the loader skips the no-key detail storm.
+var _openmeteo_daily_exhausted := false
 
 
 func _ready() -> void:
@@ -53,6 +56,85 @@ func _ensure_pool() -> void:
 
 func has_opentopo_key() -> bool:
 	return _opentopo_key() != ""
+
+
+func is_openmeteo_daily_exhausted() -> bool:
+	return _openmeteo_daily_exhausted
+
+
+## Cancel in-flight HTTP and queued jobs (map switch / new load sequence).
+func reset_session() -> void:
+	for http in _pool:
+		if is_instance_valid(http):
+			http.cancel_request()
+	if _opentopo_http != null and is_instance_valid(_opentopo_http):
+		_opentopo_http.cancel_request()
+	_busy = false
+	_job = {}
+	_pending.clear()
+
+
+## True when a DEM has real relief (rejects flat 2×2 fallbacks and corrupt caches).
+static func grid_is_usable(grid: PackedFloat32Array, cols: int, rows: int) -> bool:
+	if grid.is_empty() or cols < 2 or rows < 2 or grid.size() != cols * rows:
+		return false
+	var lo := INF
+	var hi := -INF
+	var valid := 0
+	for v in grid:
+		if is_nan(v):
+			continue
+		valid += 1
+		lo = minf(lo, v)
+		hi = maxf(hi, v)
+	if valid < 4:
+		return false
+	if cols == 2 and rows == 2 and hi - lo < 0.01:
+		return false
+	return hi > lo and (hi - lo) >= 0.5
+
+
+## Best on-disk DEM for a site (ignores cache_enabled — used when live fetch fails).
+static func find_usable_cached_dem(lat: float, lon: float, tag: String = "") -> Dictionary:
+	var token := TerrainCacheSettings.coord_token(lat, lon)
+	var da := DirAccess.open(CACHE_DIR)
+	if da == null:
+		return {}
+	var best: Dictionary = {}
+	var best_range := -1.0
+	da.list_dir_begin()
+	var fn := da.get_next()
+	while fn != "":
+		if not da.current_is_dir() and fn.begins_with("dem_") and fn.ends_with(".json") and token in fn:
+			if not tag.is_empty():
+				var tag_needle := "_%s_" % tag
+				if tag_needle not in fn:
+					fn = da.get_next()
+					continue
+			var path := "%s/%s" % [CACHE_DIR, fn]
+			var loaded := _load_cache_file(path)
+			if loaded.is_empty():
+				fn = da.get_next()
+				continue
+			var grid: PackedFloat32Array = loaded["grid"]
+			var cols: int = int(loaded["cols"])
+			var rows: int = int(loaded["rows"])
+			if not grid_is_usable(grid, cols, rows):
+				fn = da.get_next()
+				continue
+			var lo := INF
+			var hi := -INF
+			for v in grid:
+				if not is_nan(v):
+					lo = minf(lo, v)
+					hi = maxf(hi, v)
+			var span := hi - lo
+			if span > best_range:
+				best_range = span
+				best = loaded
+		fn = da.get_next()
+	da.list_dir_end()
+	return best
 
 
 ## Fetch elevation for square of side (2*half_extent_m). `tag` labels the layer
@@ -99,10 +181,22 @@ func _start_next() -> void:
 	if TerrainCacheSettings.cache_enabled() and FileAccess.file_exists(cache_path):
 		var cached := _load_cache(cache_path)
 		if not cached.is_empty():
+			print("ElevationService: '%s' DEM served from cache (%s) — no download" % [tag, key])
 			elevation_ready.emit.call_deferred(key,
 				cached["grid"], int(cached["cols"]), int(cached["rows"]), tag)
 			_start_next()
 			return
+	if source == "openmeteo" and _openmeteo_daily_exhausted:
+		var recovered := find_usable_cached_dem(lat, lon, tag)
+		if not recovered.is_empty():
+			push_warning("ElevationService: Open-Meteo quota exhausted — using recovered '%s' DEM from disk" % tag)
+			elevation_ready.emit.call_deferred(key,
+				recovered["grid"], int(recovered["cols"]), int(recovered["rows"]), tag)
+			_start_next()
+			return
+		_fail("Open-Meteo daily elevation quota exceeded — add OpenTopography key or try tomorrow")
+		return
+	print("ElevationService: '%s' DEM not cached — fetching via %s (grid %d²) …" % [tag, source, effective_n])
 	match source:
 		"openmeteo":
 			_request_open_meteo(lat, lon, half_extent_m, effective_n, key, tag)
@@ -210,7 +304,12 @@ func _on_pool_completed(result: int, response_code: int,
 	if result != HTTPRequest.RESULT_SUCCESS:
 		_fail("fetch failed (result %d, HTTP %d)" % [result, response_code])
 		return
+	var body_text := body.get_string_from_utf8()
 	if response_code == 429 or response_code >= 500:
+		if _is_openmeteo_daily_limit(response_code, body_text):
+			_openmeteo_daily_exhausted = true
+			_fail("Open-Meteo daily elevation quota exceeded — add OpenTopography key or try tomorrow")
+			return
 		var retries: Dictionary = _job["retries"]
 		var n := int(retries.get(batch, 0)) + 1
 		retries[batch] = n
@@ -226,7 +325,15 @@ func _on_pool_completed(result: int, response_code: int,
 	if response_code != 200:
 		_fail("fetch failed (result %d, HTTP %d)" % [result, response_code])
 		return
-	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+	var parsed: Variant = JSON.parse_string(body_text)
+	if parsed is Dictionary and bool((parsed as Dictionary).get("error", false)):
+		var reason := str((parsed as Dictionary).get("reason", "Open-Meteo error"))
+		if _is_openmeteo_daily_limit(response_code, body_text):
+			_openmeteo_daily_exhausted = true
+			_fail("Open-Meteo daily elevation quota exceeded — add OpenTopography key or try tomorrow")
+		else:
+			_fail(reason)
+		return
 	if not (parsed is Dictionary) or not (parsed as Dictionary).has("elevation"):
 		_fail("unparseable elevation response")
 		return
@@ -256,6 +363,9 @@ func _finish_open_meteo() -> void:
 		grid.append_array(part as PackedFloat32Array)
 	if grid.size() != cols * rows:
 		_fail("grid size mismatch (%d != %d)" % [grid.size(), cols * rows])
+		return
+	if not grid_is_usable(grid, cols, rows):
+		_fail("elevation grid has no usable relief")
 		return
 	_save_cache(key, grid, cols, rows)
 	_busy = false
@@ -402,6 +512,10 @@ func _save_cache(key: String, grid: PackedFloat32Array, cols: int, rows: int) ->
 
 
 func _load_cache(path: String) -> Dictionary:
+	return _load_cache_file(path)
+
+
+static func _load_cache_file(path: String) -> Dictionary:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return {}
@@ -410,12 +524,33 @@ func _load_cache(path: String) -> Dictionary:
 	if not (parsed is Dictionary):
 		return {}
 	var d: Dictionary = parsed
+	var cols := int(d.get("cols", 0))
+	var rows := int(d.get("rows", 0))
 	var grid := PackedFloat32Array()
 	for v in (d.get("grid", []) as Array):
 		grid.append(TerrainBuilder.variant_to_float(v, NAN))
 	if grid.is_empty():
 		return {}
-	return {"grid": grid, "cols": int(d.get("cols", 0)), "rows": int(d.get("rows", 0))}
+	if not grid_is_usable(grid, cols, rows):
+		push_warning("ElevationService: rejecting unusable cached DEM %s" % path)
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+		return {}
+	return {"grid": grid, "cols": cols, "rows": rows}
+
+
+static func _is_openmeteo_daily_limit(response_code: int, body_text: String) -> bool:
+	if body_text.is_empty():
+		return false
+	if body_text.to_lower().contains("daily api request limit"):
+		return true
+	var parsed: Variant = JSON.parse_string(body_text)
+	if parsed is Dictionary:
+		var reason := str((parsed as Dictionary).get("reason", "")).to_lower()
+		if "daily" in reason and "limit" in reason:
+			return true
+		if bool((parsed as Dictionary).get("error", false)) and response_code == 429:
+			return "limit" in reason
+	return false
 
 
 func _opentopo_key() -> String:

@@ -60,8 +60,10 @@ func _run() -> void:
 
 	_log("1/8 fetch base dem")
 	var base_dem: Dictionary = await _fetch_dem(es, "base", HALF, BASE_GRID_N)
-	if base_dem.is_empty():
-		push_error("base dem failed")
+	if not base_dem.has("grid"):
+		var reason := str(base_dem.get("error", "unknown"))
+		print("LOAD_DIAG base dem failed: %s" % reason)
+		push_error("base dem failed: %s" % reason)
 		return
 	await _settle()
 
@@ -91,8 +93,8 @@ func _run() -> void:
 
 	_log("4/8 fetch detail dem")
 	var detail_dem: Dictionary = await _fetch_dem(es, "detail", DETAIL_HALF, DETAIL_GRID_N)
-	if detail_dem.is_empty():
-		push_error("detail dem failed")
+	if not detail_dem.has("grid"):
+		push_error("detail dem failed: %s" % detail_dem.get("error", "unknown"))
 		return
 	await _settle()
 
@@ -173,20 +175,21 @@ func _run() -> void:
 
 
 func _fetch_dem(es: Node, tag: String, half: float, grid_n: int) -> Dictionary:
-	var result: Array = ["pending", null, null, null]
+	var result: Array = ["pending", null, null, null, ""]
 	es.elevation_ready.connect(func(_k, grid, c, r, t) -> void:
 		if t == tag and result[0] == "pending":
 			result[0] = "ready"
 			result[1] = grid
 			result[2] = c
 			result[3] = r)
-	es.elevation_failed.connect(func(_r, t) -> void:
+	es.elevation_failed.connect(func(reason, t) -> void:
 		if t == tag and result[0] == "pending":
-			result[0] = "fail")
+			result[0] = "fail"
+			result[4] = reason)
 	es.request_elevation(LAT, LON, half, grid_n, tag)
 	await _wait(result, 180.0)
 	if result[0] != "ready":
-		return {}
+		return {"error": result[4]}
 	return {"grid": result[1], "cols": result[2], "rows": result[3]}
 
 

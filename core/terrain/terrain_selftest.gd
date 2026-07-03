@@ -25,6 +25,7 @@ func _initialize() -> void:
 	_test_terrain_node()
 	_test_coarse_hide()
 	_test_aaigrid()
+	_test_dem_usability()
 	_test_cache_settings()
 	_test_load_progress()
 	if _failures == 0:
@@ -414,6 +415,21 @@ func _test_aaigrid() -> void:
 		_check("aaigrid north-first ordering", _approx(g[0], 10.0, 1e-6))
 		_check("aaigrid NODATA→NAN", is_nan(g[4]))
 	_check("aaigrid rejects malformed", ElevationServiceScript.parse_aaigrid("ncols 3\n1 2").is_empty())
+
+
+func _test_dem_usability() -> void:
+	var flat := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+	_check("flat 2x2 not usable", not ElevationServiceScript.grid_is_usable(flat, 2, 2))
+	var real := PackedFloat32Array()
+	real.resize(16)
+	for i in 16:
+		real[i] = 100.0 + float(i) * 0.5
+	_check("16x1 relief usable", ElevationServiceScript.grid_is_usable(real, 4, 4))
+	_check("daily limit detect",
+		ElevationServiceScript._is_openmeteo_daily_limit(429,
+			'{"error":true,"reason":"Daily API request limit exceeded. Please try again tomorrow."}'))
+	_check("concurrent 429 not daily",
+		not ElevationServiceScript._is_openmeteo_daily_limit(429, ""))
 
 
 func _test_cache_settings() -> void:
