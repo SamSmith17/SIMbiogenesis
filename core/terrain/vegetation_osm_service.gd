@@ -12,7 +12,7 @@ signal vegetation_progress(message: String)
 
 const OVERPASS_URL := "https://overpass-api.de/api/interpreter"
 const CACHE_DIR := "user://terrain_cache/osm_vegetation"
-const CACHE_VERSION := "v4"
+const CACHE_VERSION := "v5"
 const ATTRIBUTION := "© OpenStreetMap contributors"
 const REQUEST_TIMEOUT := 90.0
 const MAX_RETRIES := 3
@@ -210,7 +210,19 @@ static func _serialize_payload(payload: Dictionary) -> Dictionary:
 		if t is Dictionary:
 			var pos: Vector2 = (t as Dictionary).get("pos", Vector2.ZERO)
 			pts.append([pos.x, pos.y, float((t as Dictionary).get("height_m", 0.0))])
-	return {"version": CACHE_VERSION, "polygons": polys, "tree_rows": rows, "tree_points": pts}
+	# Hedge rows are a full scatter phase in AutoVegetationGenerator; omitting them
+	# here dropped every hedge on cached reloads (fresh fetch had them, cache did not).
+	var hedges: Array = []
+	for r in payload.get("hedge_rows", []):
+		if r is Dictionary:
+			var d: Dictionary = r
+			var entry := {"points": _ser_points(d.get("points", PackedVector2Array()))}
+			var tags: Dictionary = d.get("tags", {})
+			if not tags.is_empty():
+				entry["tags"] = tags
+			hedges.append(entry)
+	return {"version": CACHE_VERSION, "polygons": polys, "tree_rows": rows,
+		"tree_points": pts, "hedge_rows": hedges}
 
 
 static func _ser_points(pts: PackedVector2Array) -> Array:

@@ -1,6 +1,12 @@
 extends Control
 
 ## Vegetation paint toolbar — click/drag area selection + compact dock over timeline.
+##
+## Appearance (shape / shader / tints / density) is owned entirely by the
+## "Tune look…" modal (vegetation_preview_editor.gd). This dock only handles
+## WHERE and WHICH species to paint. The modal can push its look either to the
+## whole map ("Apply to map") or to this dock's paint brush ("Apply to brush"),
+## in which case newly-painted trees carry that look as a per-instance override.
 
 signal vegetation_applied
 signal mode_changed(active: bool)
@@ -9,9 +15,8 @@ enum Tool { PAINT, PLACE, CLEAR, SELECT }
 enum ShapeMode { CIRCLE, RECT, LASSO, POLYGON }
 
 const MODAL_NAME := "vegetation_edit"
-const PANEL_HEIGHT := 172.0
+const PANEL_HEIGHT := 132.0
 const HIGHLIGHT_DEBOUNCE_S := 0.016
-const SHAPE_LIVE_DEBOUNCE_S := 0.12
 const RESPECIES_DEBOUNCE_S := 0.35
 const MAX_SELECTION_RADIUS_M := 75.0
 const MAX_SELECTION_AREA_M2 := 17500.0
@@ -25,7 +30,6 @@ var _tool := Tool.PAINT
 var _preset := VegetationPaint.Preset.SHRUB
 var _spacing_m := 4.0
 var _density := 1.0
-var _scale_mul := 1.0
 var _scale_min := 1.0
 var _scale_max := 1.8
 var _seed_value := 1337
@@ -37,42 +41,9 @@ var _mix_grass_lawn := 0.1
 var _mix_grass_field := 0.1
 var _hero_preset := "pine_1"
 var _hero_scale := 1.0
-var _vertical_offset := 0.0
-var _decid_canopy_w := 11.0
-var _decid_canopy_h := 4.5
-var _decid_trunk_w := 0.45
-var _decid_trunk_h := 4.5
-var _decid_bulk_scale := 1.35
-var _decid_raise := 0.0
-var _pine_card_w := 0.85
-var _pine_card_h := 4.5
-var _pine_trunk_w := 0.24
-var _pine_bulk_scale := 1.0
-var _pine_raise := 0.0
-var _shrub_card_w := 1.4
-var _shrub_card_h := 1.15
-var _shrub_bulk_scale := 1.0
-var _shrub_raise := 0.0
-var _grass_lawn_w := 0.08
-var _grass_lawn_h := 0.42
-var _grass_lawn_bulk_scale := 1.35
-var _grass_lawn_raise := 0.0
-var _grass_field_w := 0.11
-var _grass_field_h := 0.88
-var _grass_field_bulk_scale := 1.25
-var _grass_field_raise := 0.0
-var _tint_pine := Color.WHITE
-var _tint_deciduous := Color.WHITE
-var _tint_shrub := Color.WHITE
-var _tint_grass_lawn := Color.WHITE
-var _tint_grass_field := Color.WHITE
-var _style_drape_match := 0.35
-var _style_hue_jitter := 0.05
-var _style_dither := 1.0
-var _style_building_excl := 0.0
-var _style_road_excl := 0.0
-var _style_building_excl_enabled := true
-var _style_road_excl_enabled := true
+## Per-brush look snapshot from the modal's "Apply to brush" (empty = paint with
+## the global map style). Stamped onto every instance painted while active.
+var _brush_card: Dictionary = {}
 var _brushing := false
 var _brush_anchor := Vector2.ZERO
 var _brush_poly := PackedVector2Array()
@@ -84,39 +55,21 @@ var _shape_mode_buttons: Array[Button] = []
 var _poly_points := PackedVector2Array()
 var _selection_locked := false
 var _selection_poly := PackedVector2Array()
-var _edit_all_map := false
-var _select_all_btn: Button = null
-var _mix_tune_hint: Label = null
 
 var _capture: ColorRect = null
 var _poly_draw: Control = null
 var _undo_btn: Button = null
 var _panel: PanelContainer = null
-var _advanced_drawer: VBoxContainer = null
 var _status: Label = null
-var _mix_row: HBoxContainer = null
 var _hero_section: HBoxContainer = null
 var _tool_buttons: Array[Button] = []
 var _preset_buttons: Array[Button] = []
-var _decid_section: VBoxContainer = null
-var _pine_section: VBoxContainer = null
-var _shrub_section: VBoxContainer = null
-var _grass_lawn_section: VBoxContainer = null
-var _grass_field_section: VBoxContainer = null
-var _style_drawer: VBoxContainer = null
 var _progress_bar: ProgressBar = null
 var _busy := false
 var _highlight_pending := false
 var _highlight_timer := 0.0
-var _style_regen_pending := false
-var _style_regen_timer := 0.0
-var _shape_live_pending := false
-var _shape_live_timer := 0.0
-var _selection_patch_pending := false
-var _selection_patch_timer := 0.0
 var _respecies_pending := false
 var _respecies_timer := 0.0
-var _shape_rendering := false
 var _place_click_armed := false
 
 
@@ -130,7 +83,6 @@ func _ready() -> void:
 
 func bind_loader(loader: Node) -> void:
 	_loader = loader
-	_load_settings_from_loader()
 	if _loader != null and _loader.has_signal("vegetation_operation_progress"):
 		var cb := Callable(self, "_on_veg_operation_progress")
 		if not _loader.is_connected("vegetation_operation_progress", cb):
@@ -142,6 +94,38 @@ func toggle_mode() -> void:
 		_exit_mode()
 	else:
 		_enter_mode()
+
+
+func get_paint_density() -> float:
+	return _density
+
+
+func set_paint_density(value: float) -> void:
+	# Range matches the Tune look… density slider + auto_density_scale (0.25–3.0)
+	# so a modal density isn't silently capped when pushed to the brush.
+	_density = clampf(value, 0.25, 3.0)
+	_spacing_m = _effective_spacing()
+
+
+## Called by the "Tune look…" modal's "Apply to brush": subsequently-painted
+## vegetation carries this look snapshot (empty dict clears it → paint uses the
+## global map style, same as "Apply to map").
+func set_brush_style(card: Dictionary) -> void:
+	_brush_card = card.duplicate(true) if card != null else {}
+	if _brush_card.is_empty():
+		_set_status("Brush look cleared — painting uses the map style")
+	else:
+		_set_status("Custom brush look set — paint to place trees with this look")
+
+
+func has_brush_style() -> bool:
+	return not _brush_card.is_empty()
+
+
+func _open_preview_editor() -> void:
+	if _loader == null or not _loader.has_method("open_vegetation_preview_editor"):
+		return
+	_loader.call("open_vegetation_preview_editor", int(_preset))
 
 
 func _process(delta: float) -> void:
@@ -159,21 +143,6 @@ func _process(delta: float) -> void:
 			_highlight_pending = false
 			_highlight_timer = 0.0
 			_do_refresh_highlight(true)
-	if _style_regen_pending:
-		_style_regen_timer += delta
-		if _style_regen_timer >= SHAPE_LIVE_DEBOUNCE_S:
-			_style_regen_pending = false
-			_commit_style_changes(true)
-	if _shape_live_pending and not _selection_locked:
-		_shape_live_timer += delta
-		if _shape_live_timer >= SHAPE_LIVE_DEBOUNCE_S:
-			_shape_live_pending = false
-			_apply_shape_live()
-	if _selection_patch_pending:
-		_selection_patch_timer += delta
-		if _selection_patch_timer >= SHAPE_LIVE_DEBOUNCE_S:
-			_selection_patch_pending = false
-			_apply_selection_patch()
 	if _respecies_pending:
 		_respecies_timer += delta
 		if _respecies_timer >= RESPECIES_DEBOUNCE_S:
@@ -346,12 +315,12 @@ func _build_ui() -> void:
 	_undo_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
 	_undo_btn.pressed.connect(_do_undo)
 	tool_row.add_child(_undo_btn)
-	var adv_btn := Button.new()
-	adv_btn.text = "Advanced ▾"
-	adv_btn.custom_minimum_size = Vector2(88, 28)
-	adv_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	adv_btn.pressed.connect(_toggle_advanced)
-	tool_row.add_child(adv_btn)
+	var tune_btn := Button.new()
+	tune_btn.text = "Tune look…"
+	tune_btn.custom_minimum_size = Vector2(92, 28)
+	tune_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	tune_btn.pressed.connect(_open_preview_editor)
+	tool_row.add_child(tune_btn)
 	var exit_btn := Button.new()
 	exit_btn.text = "Exit"
 	exit_btn.custom_minimum_size = Vector2(52, 28)
@@ -360,7 +329,7 @@ func _build_ui() -> void:
 	tool_row.add_child(exit_btn)
 	_status = Label.new()
 	_style_muted(_status)
-	_status.text = "V — click terrain, drag to select · Ctrl+Z undo"
+	_status.text = "V — click terrain, drag to select · Ctrl+Z undo · Tune look… to style"
 	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_status.autowrap_mode = TextServer.AUTOWRAP_OFF
 	tool_row.add_child(_status)
@@ -381,12 +350,8 @@ func _build_ui() -> void:
 		_style_tool_button(b, i == int(_preset))
 		param_row.add_child(b)
 		_preset_buttons.append(b)
-	_labeled_slider_row(param_row, "Density", 0.25, 2.0, _density,
-		func(v: float) -> void:
-			_density = v
-			_spacing_m = _effective_spacing()
-			if _selection_locked:
-				_queue_respecies(), 64)
+	_labeled_slider_row(param_row, "Seed", 1.0, 9999.0, float(_seed_value),
+		func(v: float) -> void: _seed_value = int(v), 72)
 
 	var shape_row := HBoxContainer.new()
 	shape_row.add_theme_constant_override("separation", 4)
@@ -406,20 +371,6 @@ func _build_ui() -> void:
 		_style_tool_button(sb, mode == _shape_mode)
 		shape_row.add_child(sb)
 		_shape_mode_buttons.append(sb)
-
-	_mix_row = HBoxContainer.new()
-	_mix_row.visible = _preset == VegetationPaint.Preset.MIX
-	col.add_child(_mix_row)
-	_labeled_slider_row(_mix_row, "Pine", 0.0, 1.0, _mix_pine,
-		func(v: float) -> void: _on_mix_changed("pine", v), 52)
-	_labeled_slider_row(_mix_row, "Decid", 0.0, 1.0, _mix_deciduous,
-		func(v: float) -> void: _on_mix_changed("deciduous", v), 52)
-	_labeled_slider_row(_mix_row, "Shrub", 0.0, 1.0, _mix_shrub,
-		func(v: float) -> void: _on_mix_changed("shrub", v), 52)
-	_labeled_slider_row(_mix_row, "Lawn", 0.0, 1.0, _mix_grass_lawn,
-		func(v: float) -> void: _on_mix_changed("grass_lawn", v), 52)
-	_labeled_slider_row(_mix_row, "Field", 0.0, 1.0, _mix_grass_field,
-		func(v: float) -> void: _on_mix_changed("grass_field", v), 52)
 
 	_progress_bar = ProgressBar.new()
 	_progress_bar.visible = false
@@ -443,195 +394,9 @@ func _build_ui() -> void:
 	_hero_section.add_child(opt)
 	_labeled_slider_row(_hero_section, "Scale", 0.15, 2.5, _hero_scale, func(v: float) -> void: _hero_scale = v, 70)
 
-	_advanced_drawer = VBoxContainer.new()
-	_advanced_drawer.visible = false
-	_advanced_drawer.add_theme_constant_override("separation", 4)
-	col.add_child(_advanced_drawer)
-	_build_advanced_drawer(_advanced_drawer)
-
-
-func _build_advanced_drawer(parent: VBoxContainer) -> void:
-	var universal_row := HBoxContainer.new()
-	parent.add_child(universal_row)
-	_labeled_slider_row(universal_row, "Raise all", -25.0, 25.0, _vertical_offset,
-		func(v: float) -> void: _on_vertical_offset_changed(v), 72, false,
-		Callable(self, "_persist_shape_settings"))
-	_select_all_btn = Button.new()
-	_select_all_btn.text = "Select all"
-	_select_all_btn.custom_minimum_size = Vector2(72, 24)
-	_select_all_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	_select_all_btn.pressed.connect(_toggle_select_all)
-	universal_row.add_child(_select_all_btn)
-
-	_mix_tune_hint = Label.new()
-	_style_muted(_mix_tune_hint)
-	_mix_tune_hint.text = "Mix paints with each type's current settings below — switch Type to tune one species."
-	_mix_tune_hint.autowrap_mode = TextServer.AUTOWRAP_WORD
-	_mix_tune_hint.visible = false
-	parent.add_child(_mix_tune_hint)
-
-	var adv_row := HBoxContainer.new()
-	parent.add_child(adv_row)
-	_labeled_slider_row(adv_row, "Seed", 1.0, 9999.0, float(_seed_value),
-		func(v: float) -> void: _seed_value = int(v), 56)
-	_labeled_slider_row(adv_row, "MinR", 1.0, 30.0, _brush_min_m,
-		func(v: float) -> void: _brush_min_m = v, 48)
-	_labeled_slider_row(adv_row, "H×", 0.25, 3.0, _scale_mul,
-		func(v: float) -> void:
-			_scale_mul = v
-			_queue_selection_patch(), 56)
-	_labeled_slider_row(adv_row, "H min", 0.5, 3.0, _scale_min, func(v: float) -> void: _scale_min = v, 70)
-	_labeled_slider_row(adv_row, "H max", 0.5, 4.0, _scale_max, func(v: float) -> void: _scale_max = v, 70)
-
-	var act_row := HBoxContainer.new()
-	parent.add_child(act_row)
-	var patch_btn := Button.new()
-	patch_btn.text = "Patch auto"
-	patch_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	patch_btn.pressed.connect(_patch_auto_veg)
-	act_row.add_child(patch_btn)
-
-	_decid_section = _build_species_section(parent, "Deciduous", [
-		{"label": "Can W", "min": 4.0, "max": 16.0, "value": _decid_canopy_w, "key": "deciduous_canopy_w", "width": 70},
-		{"label": "Can H", "min": 2.0, "max": 8.0, "value": _decid_canopy_h, "key": "deciduous_canopy_h", "width": 70},
-		{"label": "Tr W", "min": 0.2, "max": 1.2, "value": _decid_trunk_w, "key": "deciduous_trunk_w", "width": 60},
-		{"label": "Tr H", "min": 2.0, "max": 8.0, "value": _decid_trunk_h, "key": "deciduous_trunk_h", "width": 60},
-		{"label": "Bulk×", "min": 0.5, "max": 3.0, "value": _decid_bulk_scale, "key": "deciduous_bulk_scale", "width": 60},
-	], "deciduous", _decid_raise, _tint_deciduous)
-
-	_pine_section = _build_species_section(parent, "Pine", [
-		{"label": "Bulk×", "min": 0.5, "max": 3.0, "value": _pine_bulk_scale, "key": "pine_bulk_scale", "width": 60},
-		{"label": "W", "min": 0.3, "max": 2.5, "value": _pine_card_w, "key": "pine_card_w", "width": 56},
-		{"label": "H", "min": 1.5, "max": 10.0, "value": _pine_card_h, "key": "pine_card_h", "width": 56},
-		{"label": "Trunk", "min": 0.08, "max": 0.8, "value": _pine_trunk_w, "key": "pine_trunk_w", "width": 62},
-	], "pine", _pine_raise, _tint_pine)
-
-	_shrub_section = _build_species_section(parent, "Shrub", [
-		{"label": "Bulk×", "min": 0.5, "max": 3.0, "value": _shrub_bulk_scale, "key": "shrub_bulk_scale", "width": 60},
-		{"label": "W", "min": 0.4, "max": 3.5, "value": _shrub_card_w, "key": "shrub_card_w", "width": 56},
-		{"label": "H", "min": 0.4, "max": 3.0, "value": _shrub_card_h, "key": "shrub_card_h", "width": 56},
-	], "shrub", _shrub_raise, _tint_shrub)
-
-	_grass_lawn_section = _build_species_section(parent, "Lawn grass", [
-		{"label": "Bulk×", "min": 0.5, "max": 3.0, "value": _grass_lawn_bulk_scale, "key": "grass_lawn_bulk_scale", "width": 60},
-		{"label": "Blade W", "min": 0.04, "max": 0.2, "value": _grass_lawn_w, "key": "grass_lawn_card_w", "width": 70},
-		{"label": "Blade H", "min": 0.15, "max": 1.2, "value": _grass_lawn_h, "key": "grass_lawn_card_h", "width": 70},
-	], "grass_lawn", _grass_lawn_raise, _tint_grass_lawn)
-
-	_grass_field_section = _build_species_section(parent, "Field grass", [
-		{"label": "Bulk×", "min": 0.5, "max": 3.0, "value": _grass_field_bulk_scale, "key": "grass_field_bulk_scale", "width": 60},
-		{"label": "Blade W", "min": 0.06, "max": 0.25, "value": _grass_field_w, "key": "grass_field_card_w", "width": 70},
-		{"label": "Blade H", "min": 0.3, "max": 1.5, "value": _grass_field_h, "key": "grass_field_card_h", "width": 70},
-	], "grass_field", _grass_field_raise, _tint_grass_field)
-
-	_style_drawer = VBoxContainer.new()
-	parent.add_child(_style_drawer)
-	var style_row := HBoxContainer.new()
-	_style_drawer.add_child(style_row)
-	_labeled_slider_row(style_row, "Drape", 0.0, 1.0, _style_drape_match,
-		func(v: float) -> void: _on_style_shader_live("drape_match_strength", v), 70)
-	_labeled_slider_row(style_row, "Hue", 0.0, 0.15, _style_hue_jitter,
-		func(v: float) -> void: _on_style_shader_live("hue_jitter", v), 60)
-	_update_preset_sections()
-
-
-func _build_species_section(parent: VBoxContainer, title: String, sliders: Array,
-		species: String, raise_value: float, tint: Color) -> VBoxContainer:
-	var section := VBoxContainer.new()
-	section.add_theme_constant_override("separation", 2)
-	parent.add_child(section)
-	var hdr := Label.new()
-	_style_section(hdr, title)
-	section.add_child(hdr)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	section.add_child(row)
-	for spec in sliders:
-		var sd: Dictionary = spec
-		var slider_key := str(sd["key"])
-		_labeled_slider_row(row, str(sd["label"]), float(sd["min"]), float(sd["max"]),
-			float(sd["value"]),
-			func(v: float) -> void: _on_shape_setting_changed(slider_key, v),
-			int(sd.get("width", 60)), false, Callable(self, "_on_selection_shape_drag_end"))
-	var row2 := HBoxContainer.new()
-	row2.add_theme_constant_override("separation", 4)
-	section.add_child(row2)
-	var raise_key := "%s_vertical_offset_m" % species
-	_labeled_slider_row(row2, "Raise", -8.0, 8.0, raise_value,
-		func(v: float) -> void: _on_shape_setting_changed(raise_key, v),
-		56, false, Callable(self, "_on_selection_shape_drag_end"))
-	_add_species_tint_picker(row2, "Color", species, tint)
-	return section
-
-
-func _make_confirm_button(label: String, handler: Callable) -> Button:
-	var cb := Button.new()
-	cb.text = label
-	cb.custom_minimum_size = Vector2(88, 26)
-	cb.add_theme_stylebox_override("normal", _secondary_btn_style())
-	cb.pressed.connect(handler)
-	return cb
-
-
-func _add_species_tint_picker(parent: Control, label: String, species: String, start: Color) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	parent.add_child(row)
-	var lbl := Label.new()
-	_style_section(lbl, label)
-	lbl.custom_minimum_size = Vector2(36, 0)
-	row.add_child(lbl)
-	var cp := ColorPickerButton.new()
-	cp.color = start
-	cp.custom_minimum_size = Vector2(44, 22)
-	cp.color_changed.connect(func(c: Color) -> void: _on_species_tint_changed(species, c))
-	row.add_child(cp)
-
-
-func _on_species_tint_changed(species: String, color: Color) -> void:
-	match species:
-		"pine":
-			_tint_pine = color
-		"deciduous":
-			_tint_deciduous = color
-		"shrub":
-			_tint_shrub = color
-		"grass_lawn":
-			_tint_grass_lawn = color
-		"grass_field":
-			_tint_grass_field = color
-	if _loader == null or not _loader.has_method("set_vegetation_style"):
-		return
-	_loader.call("set_vegetation_style", {"%s_albedo_tint" % species: color}, false, false)
-	_set_status("%s tint updated (live)" % species.capitalize())
-
-
-func _on_mix_changed(which: String, value: float) -> void:
-	match which:
-		"pine":
-			_mix_pine = value
-		"deciduous":
-			_mix_deciduous = value
-		"shrub":
-			_mix_shrub = value
-		"grass_lawn":
-			_mix_grass_lawn = value
-		"grass_field":
-			_mix_grass_field = value
-	if _selection_locked:
-		_queue_respecies()
-
-
-func _on_veg_operation_progress(message: String, fraction: float) -> void:
-	if _progress_bar != null:
-		_progress_bar.visible = fraction >= 0.0 and fraction < 1.0
-		_progress_bar.value = clampf(fraction, 0.0, 1.0)
-	_set_status(message)
-
 
 func _labeled_slider_row(parent: Control, label: String, min_v: float, max_v: float,
-		start: float, handler: Callable, slider_min_w: int = 80,
-		defer_mesh_rebuild: bool = false, drag_end_handler: Callable = Callable()) -> HBoxContainer:
+		start: float, handler: Callable, slider_min_w: int = 80) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
 	parent.add_child(row)
@@ -648,27 +413,14 @@ func _labeled_slider_row(parent: Control, label: String, min_v: float, max_v: fl
 	sl.custom_minimum_size = Vector2(slider_min_w, 0)
 	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sl.value_changed.connect(handler)
-	if drag_end_handler.is_valid():
-		sl.drag_ended.connect(func(_changed: bool) -> void: drag_end_handler.call())
-	elif defer_mesh_rebuild:
-		sl.drag_ended.connect(func(_changed: bool) -> void: _sync_settings_to_loader(true))
 	row.add_child(sl)
 	return row
-
-
-func _toggle_advanced() -> void:
-	if _advanced_drawer != null:
-		_advanced_drawer.visible = not _advanced_drawer.visible
-		_layout_panel()
 
 
 func _layout_panel() -> void:
 	if _panel == null:
 		return
-	var h := PANEL_HEIGHT
-	if _advanced_drawer != null and _advanced_drawer.visible:
-		h += 300.0
-	UiScreenLayout.pin_over_timeline(_panel, h)
+	UiScreenLayout.pin_over_timeline(_panel, PANEL_HEIGHT)
 
 
 # ---------------------------------------------------------------------------
@@ -681,7 +433,6 @@ func _enter_mode() -> void:
 	if _capture != null:
 		_capture.mouse_filter = Control.MOUSE_FILTER_STOP
 	mode_changed.emit(true)
-	_load_settings_from_loader()
 	if _loader != null and _loader.has_method("reground_all_vegetation"):
 		_loader.call("reground_all_vegetation")
 	_set_tool(Tool.PAINT)
@@ -701,7 +452,6 @@ func _exit_mode() -> void:
 	_brushing = false
 	_place_click_armed = false
 	_highlight_pending = false
-	_selection_patch_pending = false
 	_poly_points = PackedVector2Array()
 	_lasso_pts = PackedVector2Array()
 	if _poly_draw != null:
@@ -745,10 +495,6 @@ func _clear_selection_or_exit() -> bool:
 func _clear_locked_selection() -> void:
 	_selection_locked = false
 	_selection_poly = PackedVector2Array()
-	_edit_all_map = false
-	if _select_all_btn != null:
-		_select_all_btn.text = "Select all"
-		_style_tool_button(_select_all_btn, false)
 	if _loader != null and _loader.has_method("clear_vegetation_highlight"):
 		_loader.call("clear_vegetation_highlight")
 	if _poly_draw != null:
@@ -976,12 +722,6 @@ func _push_undo(label: String) -> void:
 	_update_undo_button()
 
 
-func _on_vertical_offset_changed(value: float) -> void:
-	_vertical_offset = value
-	_on_setting_changed("vertical_offset_m", value)
-	_queue_shape_live()
-
-
 func _fill_cap_for_preset() -> int:
 	return VegetationPaint.fill_cap_for_preset(_preset)
 
@@ -1000,7 +740,6 @@ func _preset_label() -> String:
 			return "field grass"
 		_:
 			return "mixed veg"
-
 
 
 func _queue_highlight_refresh(immediate: bool) -> void:
@@ -1058,8 +797,6 @@ func _apply_paint(poly: PackedVector2Array) -> void:
 	if _busy or _loader == null or not _loader.has_method("populate_vegetation"):
 		return
 	_push_undo("paint")
-	if _loader.has_method("set_vegetation_settings"):
-		_loader.call("set_vegetation_settings", _settings_dict(), false, false)
 	_set_busy(true)
 	if _progress_bar != null:
 		_progress_bar.visible = true
@@ -1071,7 +808,8 @@ func _apply_paint(poly: PackedVector2Array) -> void:
 	if _progress_bar != null:
 		_progress_bar.visible = false
 	if n > 0:
-		_set_status("Painted %d %s — hold LMB to add more" % [n, _preset_label()])
+		var suffix := " (custom brush look)" if has_brush_style() else ""
+		_set_status("Painted %d %s%s — hold LMB to add more" % [n, _preset_label(), suffix])
 	else:
 		var area := VegetationPaint.polygon_area(poly)
 		_set_status("No vegetation placed (~%.0f m²) — widen area, reduce spacing, or check capacity" % area)
@@ -1101,13 +839,7 @@ func _lock_selection(poly: PackedVector2Array) -> void:
 	var manual_n := 0
 	if _loader != null and _loader.has_method("count_manual_bulk_in_polygon"):
 		manual_n = int(_loader.call("count_manual_bulk_in_polygon", poly))
-	_set_status("Selected area — adjust H× / Advanced to restyle, or change Type to re-scatter %d+ bulk" % manual_n)
-
-
-func _lock_selection_poly_for_advanced() -> PackedVector2Array:
-	if _selection_locked:
-		return _selection_poly
-	return _brush_poly if _brush_poly.size() >= 3 else PackedVector2Array()
+	_set_status("Selected area — change Type to re-scatter %d+ bulk (heroes untouched)" % manual_n)
 
 
 # ---------------------------------------------------------------------------
@@ -1122,8 +854,6 @@ func _on_preset_pressed(idx: int) -> void:
 	_preset = idx as VegetationPaint.Preset
 	for i in _preset_buttons.size():
 		_style_tool_button(_preset_buttons[i], i == idx)
-	if _mix_row != null:
-		_mix_row.visible = _preset == VegetationPaint.Preset.MIX
 	_spacing_m = _effective_spacing()
 	match _preset:
 		VegetationPaint.Preset.DECIDUOUS:
@@ -1132,25 +862,8 @@ func _on_preset_pressed(idx: int) -> void:
 		VegetationPaint.Preset.GRASS_LAWN, VegetationPaint.Preset.GRASS_FIELD:
 			_scale_min = 0.75
 			_scale_max = 1.15
-	_update_preset_sections()
 	if _selection_locked:
 		_queue_respecies()
-
-
-func _update_preset_sections() -> void:
-	var is_mix := _preset == VegetationPaint.Preset.MIX
-	if _mix_tune_hint != null:
-		_mix_tune_hint.visible = is_mix
-	if _decid_section != null:
-		_decid_section.visible = _preset == VegetationPaint.Preset.DECIDUOUS
-	if _pine_section != null:
-		_pine_section.visible = _preset == VegetationPaint.Preset.PINE
-	if _shrub_section != null:
-		_shrub_section.visible = _preset == VegetationPaint.Preset.SHRUB
-	if _grass_lawn_section != null:
-		_grass_lawn_section.visible = _preset == VegetationPaint.Preset.GRASS_LAWN
-	if _grass_field_section != null:
-		_grass_field_section.visible = _preset == VegetationPaint.Preset.GRASS_FIELD
 
 
 func _preset_to_species() -> String:
@@ -1167,26 +880,6 @@ func _preset_to_species() -> String:
 			return "grass_field"
 		_:
 			return ""
-
-
-func _toggle_select_all() -> void:
-	if _edit_all_map:
-		_clear_locked_selection()
-		return
-	_edit_all_map = true
-	_selection_locked = true
-	if _loader != null and _loader.has_method("get_map_vegetation_bounds"):
-		_selection_poly = _loader.call("get_map_vegetation_bounds")
-	else:
-		_selection_poly = PackedVector2Array([
-			Vector2(-15000, -15000), Vector2(15000, -15000),
-			Vector2(15000, 15000), Vector2(-15000, 15000),
-		])
-	if _select_all_btn != null:
-		_select_all_btn.text = "Clear all"
-		_style_tool_button(_select_all_btn, true)
-	_do_refresh_highlight(true)
-	_set_status("Select all — Advanced edits apply to the whole map")
 
 
 func _set_tool(t: Tool) -> void:
@@ -1221,9 +914,9 @@ func _update_shape_prompt() -> void:
 		Tool.SELECT:
 			match _shape_mode:
 				ShapeMode.POLYGON:
-					_set_status("Select — use Circle or Rect to lock an area for Advanced")
+					_set_status("Select — use Circle or Rect to lock an area, then change Type")
 				_:
-					_set_status("Select — click center, drag to size, release to lock for Advanced")
+					_set_status("Select — click center, drag to size, release to lock; change Type to re-scatter")
 	_update_crosshair_prompt()
 
 
@@ -1299,11 +992,11 @@ func _update_crosshair_prompt() -> void:
 
 
 # ---------------------------------------------------------------------------
-# Selection patch + shape/style (advanced)
+# Scatter params + selection re-scatter
 # ---------------------------------------------------------------------------
 
 func _scatter_params() -> Dictionary:
-	return {
+	var params := {
 		"preset": _preset,
 		"spacing_m": _effective_spacing(),
 		"scale_min": _scale_min,
@@ -1315,14 +1008,8 @@ func _scatter_params() -> Dictionary:
 		"mix_grass_lawn": _mix_grass_lawn,
 		"mix_grass_field": _mix_grass_field,
 	}
-
-
-func _selection_patch_params() -> Dictionary:
-	var params := _scatter_params()
-	params["scale_mul"] = _scale_mul
-	params["patch_species"] = _preset_to_species()
-	params["patch_all_map"] = _edit_all_map
-	params.merge(_settings_dict(), true)
+	if not _brush_card.is_empty():
+		params["card_settings"] = _brush_card
 	return params
 
 
@@ -1361,98 +1048,6 @@ func _respecies_async() -> void:
 	_set_status("Re-scattered selection — %d instances" % n)
 
 
-func _queue_selection_patch() -> void:
-	if not _selection_locked:
-		return
-	_selection_patch_pending = true
-	_selection_patch_timer = 0.0
-	_update_process_enabled()
-
-
-func _apply_selection_patch() -> void:
-	if not _selection_locked or _loader == null:
-		return
-	if not _loader.has_method("apply_selection_patch"):
-		return
-	var result: Dictionary = _loader.call("apply_selection_patch", _selection_poly, _selection_patch_params())
-	var manual_n := int(result.get("manual", 0))
-	var auto_n := int(result.get("auto", 0))
-	vegetation_applied.emit()
-	_set_status("Patched selection — manual %d, auto %d (heroes untouched)" % [manual_n, auto_n])
-
-
-func _on_selection_shape_drag_end(_changed: bool = true) -> void:
-	if _selection_locked:
-		_queue_selection_patch()
-		return
-	_persist_shape_settings(_changed)
-
-
-func _on_shape_setting_changed(key: String, value: float) -> void:
-	_on_setting_changed(key, value)
-	if _selection_locked:
-		_queue_selection_patch()
-	else:
-		_queue_shape_live()
-
-
-func _queue_shape_live() -> void:
-	_shape_live_pending = true
-	_shape_live_timer = 0.0
-	_update_process_enabled()
-
-
-func _apply_shape_live() -> void:
-	if _loader == null or not _loader.has_method("set_vegetation_settings"):
-		return
-	_loader.call("set_vegetation_settings", _settings_dict(), true, false)
-
-
-func _persist_shape_settings(_changed: bool = true) -> void:
-	if _shape_live_pending:
-		_shape_live_pending = false
-		_apply_shape_live()
-	if _loader == null or not _loader.has_method("set_vegetation_settings"):
-		return
-	_loader.call("set_vegetation_settings", _settings_dict(), false, true)
-
-
-func _on_style_shader_live(key: String, value: float) -> void:
-	match key:
-		"drape_match_strength":
-			_style_drape_match = value
-		"hue_jitter":
-			_style_hue_jitter = value
-		"dither_strength":
-			_style_dither = value
-	_sync_style_to_loader(false)
-
-
-func _queue_style_regen() -> void:
-	_style_regen_pending = true
-	_style_regen_timer = 0.0
-	_update_process_enabled()
-
-
-func _commit_style_changes(regen: bool) -> void:
-	if _loader == null or not _loader.has_method("set_vegetation_style"):
-		return
-	_loader.call("set_vegetation_style", _style_dict(), regen, true)
-	_set_status("Map style updated")
-
-
-func _patch_auto_veg() -> void:
-	var poly := _lock_selection_poly_for_advanced()
-	if poly.size() < 3:
-		_set_status("Select an area first (Select tool + LMB drag)")
-		return
-	if _loader == null or not _loader.has_method("apply_auto_vegetation_patch"):
-		return
-	var n: int = int(_loader.call("apply_auto_vegetation_patch", poly, _selection_patch_params()))
-	vegetation_applied.emit()
-	_set_status("Patched %d auto trees" % n)
-
-
 func _place_hero_at_crosshair() -> void:
 	if _loader == null or not _loader.has_method("place_hero_tree"):
 		return
@@ -1466,157 +1061,3 @@ func _place_hero_at_crosshair() -> void:
 		_set_status("Placed hero tree")
 	else:
 		_set_status("Could not place hero (limit reached?)")
-
-
-func _on_setting_changed(key: String, value: float) -> void:
-	match key:
-		"vertical_offset_m":
-			_vertical_offset = value
-		"deciduous_canopy_w":
-			_decid_canopy_w = value
-		"deciduous_canopy_h":
-			_decid_canopy_h = value
-		"deciduous_trunk_w":
-			_decid_trunk_w = value
-		"deciduous_trunk_h":
-			_decid_trunk_h = value
-		"deciduous_bulk_scale":
-			_decid_bulk_scale = value
-		"deciduous_vertical_offset_m":
-			_decid_raise = value
-		"pine_card_w":
-			_pine_card_w = value
-		"pine_card_h":
-			_pine_card_h = value
-		"pine_trunk_w":
-			_pine_trunk_w = value
-		"pine_bulk_scale":
-			_pine_bulk_scale = value
-		"pine_vertical_offset_m":
-			_pine_raise = value
-		"shrub_card_w":
-			_shrub_card_w = value
-		"shrub_card_h":
-			_shrub_card_h = value
-		"shrub_bulk_scale":
-			_shrub_bulk_scale = value
-		"shrub_vertical_offset_m":
-			_shrub_raise = value
-		"grass_lawn_card_w":
-			_grass_lawn_w = value
-		"grass_lawn_card_h":
-			_grass_lawn_h = value
-		"grass_lawn_bulk_scale":
-			_grass_lawn_bulk_scale = value
-		"grass_lawn_vertical_offset_m":
-			_grass_lawn_raise = value
-		"grass_field_card_w":
-			_grass_field_w = value
-		"grass_field_card_h":
-			_grass_field_h = value
-		"grass_field_bulk_scale":
-			_grass_field_bulk_scale = value
-		"grass_field_vertical_offset_m":
-			_grass_field_raise = value
-
-
-func _settings_dict() -> Dictionary:
-	return {
-		"vertical_offset_m": _vertical_offset,
-		"deciduous_canopy_w": _decid_canopy_w,
-		"deciduous_canopy_h": _decid_canopy_h,
-		"deciduous_trunk_w": _decid_trunk_w,
-		"deciduous_trunk_h": _decid_trunk_h,
-		"deciduous_bulk_scale": _decid_bulk_scale,
-		"deciduous_vertical_offset_m": _decid_raise,
-		"pine_card_w": _pine_card_w,
-		"pine_card_h": _pine_card_h,
-		"pine_trunk_w": _pine_trunk_w,
-		"pine_bulk_scale": _pine_bulk_scale,
-		"pine_vertical_offset_m": _pine_raise,
-		"shrub_card_w": _shrub_card_w,
-		"shrub_card_h": _shrub_card_h,
-		"shrub_bulk_scale": _shrub_bulk_scale,
-		"shrub_vertical_offset_m": _shrub_raise,
-		"grass_lawn_card_w": _grass_lawn_w,
-		"grass_lawn_card_h": _grass_lawn_h,
-		"grass_lawn_bulk_scale": _grass_lawn_bulk_scale,
-		"grass_lawn_vertical_offset_m": _grass_lawn_raise,
-		"grass_field_card_w": _grass_field_w,
-		"grass_field_card_h": _grass_field_h,
-		"grass_field_bulk_scale": _grass_field_bulk_scale,
-		"grass_field_vertical_offset_m": _grass_field_raise,
-	}
-
-
-func _style_dict() -> Dictionary:
-	return {
-		"drape_match_strength": _style_drape_match,
-		"hue_jitter": _style_hue_jitter,
-		"dither_strength": _style_dither,
-		"building_exclusion_m": _style_building_excl,
-		"road_exclusion_m": _style_road_excl,
-		"building_exclusion_enabled": _style_building_excl_enabled,
-		"road_exclusion_enabled": _style_road_excl_enabled,
-		"pine_albedo_tint": _tint_pine,
-		"deciduous_albedo_tint": _tint_deciduous,
-		"shrub_albedo_tint": _tint_shrub,
-		"grass_lawn_albedo_tint": _tint_grass_lawn,
-		"grass_field_albedo_tint": _tint_grass_field,
-	}
-
-
-func _sync_style_to_loader(regen: bool = true) -> void:
-	if _loader == null or not _loader.has_method("set_vegetation_style"):
-		return
-	_loader.call("set_vegetation_style", _style_dict(), regen, false)
-
-
-func _sync_settings_to_loader(rebuild: bool = true) -> void:
-	if _loader == null or not _loader.has_method("set_vegetation_settings"):
-		return
-	_loader.call("set_vegetation_settings", _settings_dict(), rebuild)
-
-
-func _load_settings_from_loader() -> void:
-	if _loader == null or not _loader.has_method("get_vegetation_settings"):
-		return
-	var s: Dictionary = _loader.call("get_vegetation_settings")
-	_vertical_offset = float(s.get("vertical_offset_m", 0.0))
-	_decid_canopy_w = float(s.get("deciduous_canopy_w", 11.0))
-	_decid_canopy_h = float(s.get("deciduous_canopy_h", 4.5))
-	_decid_trunk_w = float(s.get("deciduous_trunk_w", 0.45))
-	_decid_trunk_h = float(s.get("deciduous_trunk_h", 4.5))
-	_decid_bulk_scale = float(s.get("deciduous_bulk_scale", 1.35))
-	_decid_raise = float(s.get("deciduous_vertical_offset_m", 0.0))
-	_pine_card_w = float(s.get("pine_card_w", 0.85))
-	_pine_card_h = float(s.get("pine_card_h", 4.5))
-	_pine_trunk_w = float(s.get("pine_trunk_w", 0.24))
-	_pine_bulk_scale = float(s.get("pine_bulk_scale", 1.0))
-	_pine_raise = float(s.get("pine_vertical_offset_m", 0.0))
-	_shrub_card_w = float(s.get("shrub_card_w", 1.4))
-	_shrub_card_h = float(s.get("shrub_card_h", 1.15))
-	_shrub_bulk_scale = float(s.get("shrub_bulk_scale", 1.0))
-	_shrub_raise = float(s.get("shrub_vertical_offset_m", 0.0))
-	_grass_lawn_w = float(s.get("grass_lawn_card_w", 0.08))
-	_grass_lawn_h = float(s.get("grass_lawn_card_h", 0.42))
-	_grass_lawn_bulk_scale = float(s.get("grass_lawn_bulk_scale", 1.0))
-	_grass_lawn_raise = float(s.get("grass_lawn_vertical_offset_m", 0.0))
-	_grass_field_w = float(s.get("grass_field_card_w", 0.11))
-	_grass_field_h = float(s.get("grass_field_card_h", 0.88))
-	_grass_field_bulk_scale = float(s.get("grass_field_bulk_scale", 1.0))
-	_grass_field_raise = float(s.get("grass_field_vertical_offset_m", 0.0))
-	if _loader.has_method("get_vegetation_style"):
-		var st: Dictionary = _loader.call("get_vegetation_style")
-		_style_drape_match = float(st.get("drape_match_strength", 0.35))
-		_style_hue_jitter = float(st.get("hue_jitter", 0.05))
-		_style_dither = float(st.get("dither_strength", 1.0))
-		_style_building_excl = float(st.get("building_exclusion_m", 0.0))
-		_style_road_excl = float(st.get("road_exclusion_m", 0.0))
-		_style_building_excl_enabled = bool(st.get("building_exclusion_enabled", true))
-		_style_road_excl_enabled = bool(st.get("road_exclusion_enabled", true))
-		_tint_pine = st.get("pine_albedo_tint", Color.WHITE)
-		_tint_deciduous = st.get("deciduous_albedo_tint", Color.WHITE)
-		_tint_shrub = st.get("shrub_albedo_tint", Color.WHITE)
-		_tint_grass_lawn = st.get("grass_lawn_albedo_tint", Color.WHITE)
-		_tint_grass_field = st.get("grass_field_albedo_tint", Color.WHITE)

@@ -23,6 +23,53 @@ const TEMPERATE_LIMIT := 55.0
 const WC_TREE := 10
 const WC_SHRUB := 20
 
+## OSM vegetation "kind" categories the player can bind to a specific tree/shrub
+## shader type via the vegetation modal's OSM→species picker. [kind, label].
+const MAPPABLE_KINDS := [
+	["wood", "Woodland (wood / forest)"],
+	["scrub", "Scrub / heath"],
+	["park", "Park"],
+	["cemetery", "Cemetery"],
+	["orchard", "Orchard"],
+	["vineyard", "Vineyard"],
+	["wetland", "Wetland"],
+]
+
+## Options offered per kind in the picker (id, label). "auto" defers to biome/tags.
+const SPECIES_OVERRIDE_OPTIONS := ["auto", "pine", "deciduous", "shrub", "mixed"]
+const SPECIES_OVERRIDE_LABELS := [
+	"Auto (biome)", "Pine", "Deciduous", "Shrub", "Mixed pine + deciduous",
+]
+
+
+## Resolve the user's OSM→species choice for a kind into a species-weight dict.
+## Returns {} when the choice is "auto" (or unset) so callers keep biome defaults.
+static func species_override_for_kind(osm_species_map: Dictionary, kind: String) -> Dictionary:
+	if osm_species_map.is_empty():
+		return {}
+	match str(osm_species_map.get(kind, "auto")):
+		"pine":
+			return {"pine": 1.0}
+		"deciduous":
+			return {"deciduous": 1.0}
+		"shrub":
+			return {"shrub": 1.0}
+		"mixed":
+			return {"pine": 0.5, "deciduous": 0.5}
+	return {}
+
+
+## Dominant species from an override weight dict (for row crops), else `fallback`.
+static func override_single_species(override: Dictionary, fallback: String) -> String:
+	var best := fallback
+	var best_w := -1.0
+	for k in override:
+		var w := maxf(float(override[k]), 0.0)
+		if w > best_w:
+			best_w = w
+			best = str(k)
+	return best
+
 
 static func for_location(latitude: float, worldcover_class: int = -1) -> Dictionary:
 	if worldcover_class == WC_SHRUB:
