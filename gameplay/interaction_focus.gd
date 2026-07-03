@@ -140,7 +140,10 @@ func _update_building_focus(hit_pos: Vector3) -> void:
 	if _crosshair != null and _crosshair.has_method("set_target_active"):
 		_crosshair.set_target_active(true)
 	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
-		_crosshair.set_prompt_text("Replace building (use P panel or OSM mode)")
+		var act := "Interact"
+		if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
+			act = _prompt_ui.get_action_label("interact")
+		_crosshair.set_prompt_text("[%s] Customize building" % act)
 
 
 func _clear_building_focus() -> void:
@@ -236,4 +239,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				and bool(_loader.call("is_solar_array_added", _solar_focus_idx)):
 			return
 		if bool(_loader.call("add_solar_array_to_graph", _solar_focus_idx)):
+			get_viewport().set_input_as_handled()
+		return
+	# Focused OSM building → open the Building Builder modal.
+	if _loader != null and _loader.has_method("get_building_focus_idx") \
+			and _loader.has_method("open_building_builder"):
+		var bidx := int(_loader.call("get_building_focus_idx"))
+		if bidx >= 0:
+			_loader.call("open_building_builder", bidx)
 			get_viewport().set_input_as_handled()

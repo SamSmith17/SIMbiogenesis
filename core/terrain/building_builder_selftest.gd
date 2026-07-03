@@ -28,6 +28,7 @@ func _initialize() -> void:
 	_test_style_layer()
 	_test_style_overrides()
 	_test_single_building_parity()
+	_test_modal_script()
 	if _failures == 0:
 		print("BUILDING SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -677,3 +678,9 @@ func _test_single_building_parity() -> void:
 	_check("parity: identical vertices", same,
 		"single=%d merged=%d" % [single_verts.size(), merged_verts.size()])
 	mi.free()
+
+
+func _test_modal_script() -> void:
+	var script := load("res://scenes/ui/building_builder_modal.gd")
+	_check("modal: script loads", script != null and script is GDScript)
+	_check("modal: hotkey action registered", InputMap.has_action("building_builder"))

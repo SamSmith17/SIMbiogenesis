@@ -60,6 +60,7 @@ const VEGETATION_PREVIEW_EDITOR_SCRIPT := preload("res://scenes/ui/vegetation_pr
 const CAMP_SCATTER_UI_SCRIPT := preload("res://scenes/ui/camp_scatter_ui.gd")
 const PLACED_PROPS_UI_SCRIPT := preload("res://scenes/ui/placed_props_ui.gd")
 const PLACED_PROP_EDIT_UI_SCRIPT: GDScript = preload("res://scenes/ui/placed_prop_edit_ui.gd")
+const BUILDING_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/building_builder_modal.gd")
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
 const PLACED_PROP_SERVICE_SCRIPT := preload("res://core/placed_models/placed_prop_service.gd")
 const CONFIG_PATH := "user://terrain_config.cfg"
@@ -129,6 +130,8 @@ var _building_focus_idx: int = -1
 ## of the BuildingsCustom node ("B_<tag>").
 var _building_style_layer: BuildingStyleLayer = null
 var _custom_buildings_root: Node3D = null
+var _building_builder_ui: Control = null
+var _building_highlight: MeshInstance3D = null
 ## OSM solar arrays built in-world but NOT auto-added to the graph. Each record:
 ## {name, poly, panel_count, watts, base_y, tilt, azimuth, tag, added}. The player
 ## targets one via the crosshair (see pick_solar_array_at_world) and confirms to add
@@ -3238,6 +3241,7 @@ func _setup_placed_props() -> void:
 	_building_style_layer.load_for_map(_lat, _lon)
 	_setup_placed_props_ui()
 	_setup_placed_prop_edit_ui()
+	_setup_building_builder_ui()
 	call_deferred("_rebuild_placed_props")
 	call_deferred("_consume_design_context")
 
@@ -3383,8 +3387,51 @@ func get_building_focus_idx() -> int:
 	return _building_focus_idx
 
 
+## Set (or clear with -1) the crosshair-focused building. Draws an amber
+## footprint outline lifted above the roof (solar arrays own red).
 func set_building_focus_idx(idx: int) -> void:
+	if idx == _building_focus_idx:
+		return
 	_building_focus_idx = idx
+	if idx < 0:
+		_clear_building_highlight()
+		return
+	_draw_building_highlight(idx)
+
+
+func _draw_building_highlight(idx: int) -> void:
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain")
+	if terrain == null:
+		return
+	var rec := _find_building_record(idx)
+	var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
+	if poly.size() < 3:
+		return
+	if _building_highlight == null or not is_instance_valid(_building_highlight) \
+			or _building_highlight.get_parent() != terrain:
+		_building_highlight = MeshInstance3D.new()
+		_building_highlight.name = "BuildingFocusHighlight"
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color(1.0, 0.75, 0.15, 0.4)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_building_highlight.material_override = mat
+		terrain.add_child(_building_highlight)
+	# Float the outline just above the roof so it reads from street level
+	# (a ground-level drape would hide inside the walls).
+	var lift := TerrainBuilder.dict_float(rec, "height_m", BuildingBuilder.DEFAULT_HEIGHT_M) + 0.8
+	var footing := _highlight_footing_grid(true)
+	_building_highlight.mesh = TerrainBuilder.build_polygon_highlight(
+		poly, footing["grid"], footing["res"], footing["extent"], _built_center_elev, lift)
+	_building_highlight.visible = true
+
+
+func _clear_building_highlight() -> void:
+	if _building_highlight != null and is_instance_valid(_building_highlight):
+		_building_highlight.visible = false
 
 
 func pick_building_at_world(x: float, z: float) -> Dictionary:
@@ -3402,6 +3449,34 @@ func pick_building_at_screen(screen_pos: Vector2) -> Dictionary:
 ## ---------------------------------------------------------------------------
 ## Per-building styles (Building Builder)
 ## ---------------------------------------------------------------------------
+
+func _setup_building_builder_ui() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "BuildingBuilderLayer"
+	layer.layer = 26
+	ui_layer.add_child(layer)
+	var ui := Control.new()
+	ui.name = "BuildingBuilderModal"
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui.set_script(BUILDING_BUILDER_MODAL_SCRIPT)
+	layer.add_child(ui)
+	ui.bind_loader(self)
+	_building_builder_ui = ui
+
+
+func open_building_builder(building_idx: int) -> void:
+	if _building_builder_ui != null and _building_builder_ui.has_method("open"):
+		_building_builder_ui.call("open", building_idx)
+
+
+func get_building_record(building_idx: int) -> Dictionary:
+	return _find_building_record(building_idx).duplicate(true)
+
 
 func get_building_tag(building_idx: int) -> String:
 	var d := _find_building_record(building_idx)
