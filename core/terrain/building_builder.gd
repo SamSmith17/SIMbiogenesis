@@ -165,11 +165,35 @@ static func footprint_area_m2(points: PackedVector2Array) -> float:
 	return absf(area) * 0.5
 
 
-static func _terrain_uv(x: float, z: float, extent_m: float) -> Vector2:
-	var half := extent_m * 0.5
-	return Vector2(
-		clampf((x + half) / extent_m, 0.0, 1.0),
-		clampf((z + half) / extent_m, 0.0, 1.0))
+## Muted fallback palettes hashed off the stable tag (deterministic per site).
+const WALL_PALETTE: Array[Color] = [
+	Color(0.78, 0.73, 0.62), Color(0.72, 0.72, 0.70), Color(0.66, 0.70, 0.60),
+	Color(0.70, 0.56, 0.48), Color(0.82, 0.78, 0.70), Color(0.63, 0.65, 0.56)]
+const ROOF_PALETTE: Array[Color] = [
+	Color(0.29, 0.29, 0.31), Color(0.42, 0.33, 0.27), Color(0.50, 0.50, 0.52),
+	Color(0.47, 0.30, 0.26)]
+
+
+## Stable identity for a footprint: metre-rounded centroid (mirrors the solar
+## array tag scheme) — survives re-fetches as long as the way's geometry holds.
+static func building_tag(poly: PackedVector2Array) -> String:
+	var c := _poly_centroid(poly)
+	return "bldg_%d_%d" % [roundi(c.x), roundi(c.y)]
+
+
+## Wall/roof colors: OSM building:colour / roof:colour when tagged, otherwise
+## a deterministic palette pick + value jitter hashed from the stable tag.
+static func resolve_building_colors(tags: Dictionary, stable_tag: String) -> Dictionary:
+	var h := stable_tag.hash()
+	var wall: Color = WALL_PALETTE[h % WALL_PALETTE.size()]
+	var roof: Color = ROOF_PALETTE[(h / 7) % ROOF_PALETTE.size()]
+	var jitter := 0.92 + 0.16 * float(h % 97) / 97.0
+	wall = Color(wall.r * jitter, wall.g * jitter, wall.b * jitter)
+	if tags.has("building:colour"):
+		wall = Color.from_string(str(tags["building:colour"]).strip_edges(), wall)
+	if tags.has("roof:colour"):
+		roof = Color.from_string(str(tags["roof:colour"]).strip_edges(), roof)
+	return {"wall": wall, "roof": roof}
 
 
 static func _sample_ground_y(x: float, z: float, elev: PackedFloat32Array, res: int,
@@ -181,14 +205,24 @@ static func _sample_ground_y(x: float, z: float, elev: PackedFloat32Array, res: 
 		detail_elev, detail_cols, detail_rows, detail_extent_m)
 
 
-static func make_building_material() -> Material:
+static func make_wall_material() -> Material:
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.74, 0.71, 0.67)
+	mat.vertex_color_use_as_albedo = true
 	mat.roughness = 0.88
 	mat.metallic = 0.0
 	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	# Match terrain drape (CULL_DISABLED): OSM footprints arrive in mixed winding
-	# orders so back-face culling hides walls/roofs from some viewing angles.
+	# The floor cap faces down and OSM footprints can self-touch — keep both
+	# faces like the terrain drape does.
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
+
+
+static func make_roof_material() -> Material:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.92
+	mat.metallic = 0.0
+	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return mat
 
@@ -221,11 +255,11 @@ static func build_buildings_node(buildings: Array, elev: PackedFloat32Array, res
 	var excluded: Dictionary = {}
 	for i in excluded_indices:
 		excluded[int(i)] = true
-	var uv_extent := terrain_extent_m if terrain_extent_m > 0.0 else height_extent_m
 	var detail_foot_extent := detail_extent_m if not detail_elev.is_empty() else 0.0
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var vtx_base := 0
+	var st_walls := SurfaceTool.new()
+	st_walls.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var st_roof := SurfaceTool.new()
+	st_roof.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var added := 0
 	for item in buildings:
 		if added >= MAX_BUILDINGS:
@@ -244,44 +278,49 @@ static func build_buildings_node(buildings: Array, elev: PackedFloat32Array, res
 			continue
 		if footprint_area_m2(poly) < MIN_FOOTPRINT_AREA_M2:
 			continue
+		var tags: Dictionary = d.get("tags", {})
 		var height_m := TerrainBuilder.dict_float(d, "height_m", DEFAULT_HEIGHT_M)
-		var roof: Dictionary = d.get("roof", infer_roof_spec(d.get("tags", {}), poly))
-		var next_base: int = _append_footprint(st, poly, height_m, roof, elev, res,
-			height_extent_m, center_elev, uv_extent, vtx_base,
-			detail_elev, detail_cols, detail_rows, detail_foot_extent)
-		if next_base > vtx_base:
-			vtx_base = next_base
+		var roof: Dictionary = d.get("roof", infer_roof_spec(tags, poly))
+		var colors := resolve_building_colors(tags, building_tag(poly))
+		if _append_footprint(st_walls, st_roof, poly, height_m, roof, colors,
+				elev, res, height_extent_m, center_elev,
+				detail_elev, detail_cols, detail_rows, detail_foot_extent):
 			added += 1
 	if added == 0:
 		return null
 	# Normals are set per-face in _append_footprint for crisp, faceted walls/roofs;
 	# generate_normals() here would average them across corners and smear the look.
+	# Surface 0 = walls (+ gable fills + floor), surface 1 = roof planes: one
+	# mesh, two draw calls, each surface with its own material.
 	var root := Node3D.new()
 	root.name = "Buildings"
 	var mi := MeshInstance3D.new()
 	mi.name = "BuildingMeshes"
-	mi.mesh = st.commit()
-	mi.material_override = make_building_material()
+	var mesh: ArrayMesh = st_walls.commit()
+	mesh = st_roof.commit(mesh)
+	mi.mesh = mesh
+	mi.set_surface_override_material(0, make_wall_material())
+	mi.set_surface_override_material(1, make_roof_material())
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows \
 		else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(mi)
 	return root
 
 
-static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_m: float,
-		roof: Dictionary, elev: PackedFloat32Array, res: int,
-		height_extent_m: float, center_elev: float, uv_extent_m: float,
-		vtx_base: int,
+static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
+		poly: PackedVector2Array, height_m: float, roof: Dictionary, colors: Dictionary,
+		elev: PackedFloat32Array, res: int,
+		height_extent_m: float, center_elev: float,
 		detail_elev: PackedFloat32Array = PackedFloat32Array(),
-		detail_cols: int = 0, detail_rows: int = 0, detail_extent_m: float = 0.0) -> int:
+		detail_cols: int = 0, detail_rows: int = 0, detail_extent_m: float = 0.0) -> bool:
 	var n := poly.size()
 	if n < 3:
-		return vtx_base
+		return false
 	if poly[0].distance_squared_to(poly[n - 1]) < 0.01:
 		poly = poly.slice(0, n - 1)
 		n = poly.size()
 	if n < 3:
-		return vtx_base
+		return false
 	poly = _ensure_ccw(poly)
 
 	# Seat the whole building at its lowest corner sample: real eaves and roofs
@@ -295,7 +334,7 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 
 	var tri_indices := Geometry2D.triangulate_polygon(poly)
 	if tri_indices.is_empty():
-		return vtx_base
+		return false
 
 	# OSM `height` is top-of-structure above local ground — roof must not exceed it.
 	var wall_h := _wall_height_m(height_m, roof, poly)
@@ -310,11 +349,13 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 	# Flat shading: every triangle carries its own three vertices + a single face
 	# normal, so wall corners and roof edges stay crisp instead of being averaged
 	# into a smeared, balloon-like surface (shared vertices + generate_normals).
-	var tris: Array = []
+	# Wall faces carry explicit metric UVs ([a, b, c, uv_a, uv_b, uv_c]); roof
+	# UVs are derived per-face at emission time.
+	var wall_faces: Array = []
+	var roof_faces: Array = []
 
-	# Floor (faces down). triangulate_polygon's output winding follows the
-	# input polygon, but orient every horizontal face explicitly so lighting
-	# stays correct regardless of triangulation details.
+	# Floor (faces down), on the walls surface — unseen underground; its
+	# negative V lands in the wall shader's foundation band.
 	for t in range(0, tri_indices.size(), 3):
 		var f0 := tri_indices[t]
 		var f1 := tri_indices[t + 1]
@@ -323,17 +364,19 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 			var tmp := f1
 			f1 = f2
 			f2 = tmp
-		tris.append([bottom_p[f0], bottom_p[f1], bottom_p[f2]])
+		wall_faces.append([bottom_p[f0], bottom_p[f1], bottom_p[f2],
+			Vector2(poly[f0].x, -FOUNDATION_SKIRT_M),
+			Vector2(poly[f1].x, -FOUNDATION_SKIRT_M),
+			Vector2(poly[f2].x, -FOUNDATION_SKIRT_M)])
 
 	if frame.is_empty():
 		# Flat roof (explicit tag, unknown shape, or degenerate-footprint
 		# guardrail): walls straight up to the roof plane, level cap on top.
 		for i in n:
 			var j := (i + 1) % n
-			var t0 := Vector3(poly[i].x, top_y, poly[i].y)
-			var t1 := Vector3(poly[j].x, top_y, poly[j].y)
-			tris.append([bottom_p[i], t0, t1])
-			tris.append([bottom_p[i], t1, bottom_p[j]])
+			var dir := (poly[j] - poly[i]).normalized()
+			_wall_quad(wall_faces, poly[i], dir, poly[i], poly[j],
+				skirt_y, top_y, top_y, base_y)
 		for t in range(0, tri_indices.size(), 3):
 			var r0 := tri_indices[t]
 			var r1 := tri_indices[t + 1]
@@ -342,7 +385,7 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 				var tmp := r1
 				r1 = r2
 				r2 = tmp
-			tris.append([Vector3(poly[r0].x, top_y, poly[r0].y),
+			roof_faces.append([Vector3(poly[r0].x, top_y, poly[r0].y),
 				Vector3(poly[r1].x, top_y, poly[r1].y),
 				Vector3(poly[r2].x, top_y, poly[r2].y)])
 	else:
@@ -354,16 +397,13 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 		# tops and roof edges watertight.
 		for i in n:
 			var j := (i + 1) % n
+			var dir := (poly[j] - poly[i]).normalized()
 			var edge_pts := _split_edge_at_creases(poly[i], poly[j], frame, creases)
 			for k in edge_pts.size() - 1:
 				var q0: Vector2 = edge_pts[k]
 				var q1: Vector2 = edge_pts[k + 1]
-				var b0 := Vector3(q0.x, skirt_y, q0.y)
-				var b1 := Vector3(q1.x, skirt_y, q1.y)
-				var t0 := Vector3(q0.x, _roof_height_at(q0, frame), q0.y)
-				var t1 := Vector3(q1.x, _roof_height_at(q1, frame), q1.y)
-				tris.append([b0, t0, t1])
-				tris.append([b0, t1, b1])
+				_wall_quad(wall_faces, poly[i], dir, q0, q1, skirt_y,
+					_roof_height_at(q0, frame), _roof_height_at(q1, frame), base_y)
 
 		# Roof: footprint triangulation split along every crease line so each
 		# resulting triangle lies inside one planar roof face, then lifted.
@@ -381,27 +421,83 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 				var tmp2 := p1
 				p1 = p2
 				p2 = tmp2
-			tris.append([Vector3(p0.x, _roof_height_at(p0, frame), p0.y),
+			roof_faces.append([Vector3(p0.x, _roof_height_at(p0, frame), p0.y),
 				Vector3(p1.x, _roof_height_at(p1, frame), p1.y),
 				Vector3(p2.x, _roof_height_at(p2, frame), p2.y)])
 
-	var emitted := 0
-	for tri in tris:
-		var a: Vector3 = tri[0]
-		var b: Vector3 = tri[1]
-		var c: Vector3 = tri[2]
+	var wall_col: Color = colors.get("wall", Color(0.74, 0.71, 0.67))
+	wall_col.a = 1.0
+	var roof_col: Color = colors.get("roof", Color(0.35, 0.33, 0.32))
+	# COLOR.a flags the roof shader per building: 1 = pitched (shingle courses),
+	# 0 = flat (membrane/gravel).
+	roof_col.a = 0.0 if frame.is_empty() else 1.0
+
+	var emitted := false
+	for f in wall_faces:
+		var a: Vector3 = f[0]
+		var b: Vector3 = f[1]
+		var c: Vector3 = f[2]
 		var nrm := (b - a).cross(c - a)
 		if nrm.length_squared() < 1e-10:
 			continue
 		nrm = nrm.normalized()
-		for v in [a, b, c]:
-			st.set_normal(nrm)
-			st.set_uv(_terrain_uv(v.x, v.z, uv_extent_m))
-			st.add_vertex(v)
-			st.add_index(vtx_base + emitted)
-			emitted += 1
+		for k in 3:
+			st_walls.set_normal(nrm)
+			st_walls.set_color(wall_col)
+			st_walls.set_uv(f[3 + k])
+			st_walls.add_vertex(f[k])
+		emitted = true
+	for f in roof_faces:
+		var a: Vector3 = f[0]
+		var b: Vector3 = f[1]
+		var c: Vector3 = f[2]
+		var nrm := (b - a).cross(c - a)
+		if nrm.length_squared() < 1e-10:
+			continue
+		nrm = nrm.normalized()
+		var uvs := _roof_face_uvs(a, b, c, nrm)
+		for k in 3:
+			st_roof.set_normal(nrm)
+			st_roof.set_color(roof_col)
+			st_roof.set_uv(uvs[k])
+			st_roof.add_vertex(f[k])
+		emitted = true
+	return emitted
 
-	return vtx_base + emitted
+
+## Two wall triangles for the sub-edge q0→q1, with metric UVs measured from the
+## façade start: U = metres along the edge (courses restart per façade, no
+## corner stretch), V = metres above the building base (the skirt goes
+## negative, which the wall shader renders as foundation concrete).
+static func _wall_quad(faces: Array, edge_start: Vector2, edge_dir: Vector2,
+		q0: Vector2, q1: Vector2, skirt_y: float, h0: float, h1: float,
+		base_y: float) -> void:
+	var u0 := (q0 - edge_start).dot(edge_dir)
+	var u1 := (q1 - edge_start).dot(edge_dir)
+	var vb := skirt_y - base_y
+	var b0 := Vector3(q0.x, skirt_y, q0.y)
+	var b1 := Vector3(q1.x, skirt_y, q1.y)
+	var t0 := Vector3(q0.x, h0, q0.y)
+	var t1 := Vector3(q1.x, h1, q1.y)
+	faces.append([b0, t0, t1,
+		Vector2(u0, vb), Vector2(u0, h0 - base_y), Vector2(u1, h1 - base_y)])
+	faces.append([b0, t1, b1,
+		Vector2(u0, vb), Vector2(u1, h1 - base_y), Vector2(u1, vb)])
+
+
+## Per-face planar UVs for a roof triangle: U runs along the eave (course
+## direction), V is true metric distance up the slope — shingle courses stay
+## level and square on any face. Flat faces use plan-space metres.
+static func _roof_face_uvs(a: Vector3, b: Vector3, c: Vector3, nrm: Vector3) -> Array:
+	if nrm.y > 0.99:
+		return [Vector2(a.x, a.z), Vector2(b.x, b.z), Vector2(c.x, c.z)]
+	var course := Vector3(nrm.z, 0.0, -nrm.x).normalized()
+	var slope_dir := nrm.cross(course).normalized()
+	return [
+		Vector2(a.dot(course), a.dot(slope_dir)),
+		Vector2(b.dot(course), b.dot(slope_dir)),
+		Vector2(c.dot(course), c.dot(slope_dir)),
+	]
 
 
 ## Wall height below the OSM total height; remainder is reserved for roof slope.

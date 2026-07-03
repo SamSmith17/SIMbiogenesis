@@ -23,6 +23,7 @@ func _initialize() -> void:
 	_test_hipped_faces()
 	_test_concave_and_degenerate()
 	_test_skillion()
+	_test_uvs_and_colors()
 	if _failures == 0:
 		print("BUILDING SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -63,18 +64,40 @@ func _lowest_corner_sample(poly: PackedVector2Array, elev: PackedFloat32Array) -
 	return base
 
 
-func _build_vertices(poly: PackedVector2Array, height_m: float, roof: Dictionary) -> PackedVector3Array:
-	var buildings := [{"idx": 0, "points": poly, "height_m": height_m, "tags": {}, "roof": roof}]
+## All surfaces' data for a building built on the given grid.
+func _mesh_data(poly: PackedVector2Array, height_m: float, roof: Dictionary,
+		grid: PackedFloat32Array, tags: Dictionary = {}) -> Dictionary:
+	var buildings := [{"idx": 0, "points": poly, "height_m": height_m, "tags": tags,
+		"roof": roof}]
 	var node := BuildingBuilder.build_buildings_node(
-		buildings, _tilted_grid(), GRID_RES, EXTENT_M, 0.0, null)
+		buildings, grid, GRID_RES, EXTENT_M, 0.0, null)
 	if node == null:
-		return PackedVector3Array()
+		return {}
 	var mi := node.get_node_or_null("BuildingMeshes") as MeshInstance3D
-	var verts: PackedVector3Array = PackedVector3Array()
-	if mi != null and mi.mesh != null and mi.mesh.get_surface_count() > 0:
-		verts = mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var out := {"surface_count": mi.mesh.get_surface_count(),
+		"verts": PackedVector3Array(), "normals": PackedVector3Array(),
+		"surfaces": []}
+	for s in mi.mesh.get_surface_count():
+		var arrays: Array = mi.mesh.surface_get_arrays(s)
+		(out["surfaces"] as Array).append({
+			"verts": arrays[Mesh.ARRAY_VERTEX],
+			"normals": arrays[Mesh.ARRAY_NORMAL],
+			"uvs": arrays[Mesh.ARRAY_TEX_UV],
+			"colors": arrays[Mesh.ARRAY_COLOR],
+		})
+		out["verts"] = (out["verts"] as PackedVector3Array) + \
+			(arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array)
+		out["normals"] = (out["normals"] as PackedVector3Array) + \
+			(arrays[Mesh.ARRAY_NORMAL] as PackedVector3Array)
 	node.free()
-	return verts
+	return out
+
+
+func _build_vertices(poly: PackedVector2Array, height_m: float, roof: Dictionary) -> PackedVector3Array:
+	var data := _mesh_data(poly, height_m, roof, _tilted_grid())
+	if data.is_empty():
+		return PackedVector3Array()
+	return data["verts"]
 
 
 func _test_level_roof_on_slope() -> void:
@@ -190,21 +213,14 @@ func _test_winding_and_normals() -> void:
 		"area %f" % _signed_area(fixed))
 	_check("winding: CCW square untouched", BuildingBuilder._ensure_ccw(ccw) == ccw)
 
-	# Build from the CW input on flat-ish ground: orientation must still come out
+	# Build from the CW input on sloped ground: orientation must still come out
 	# deterministic — roof up, floor down, walls outward.
-	var buildings := [{"idx": 0, "points": cw, "height_m": 8.0, "tags": {},
-		"roof": {"shape": "flat", "angle_deg": 30.0, "orientation": "along",
-			"direction_deg": NAN, "roof_height_m": 0.0}}]
-	var node := BuildingBuilder.build_buildings_node(
-		buildings, _tilted_grid(), GRID_RES, EXTENT_M, 0.0, null)
-	_check("normals: mesh built from CW input", node != null)
-	if node == null:
+	var data := _mesh_data(cw, 8.0, _roof_spec("flat"), _tilted_grid())
+	_check("normals: mesh built from CW input", not data.is_empty())
+	if data.is_empty():
 		return
-	var mi := node.get_node_or_null("BuildingMeshes") as MeshInstance3D
-	var arrays: Array = mi.mesh.surface_get_arrays(0)
-	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-	node.free()
+	var verts: PackedVector3Array = data["verts"]
+	var normals: PackedVector3Array = data["normals"]
 
 	var max_y := -INF
 	var min_y := INF
@@ -254,19 +270,9 @@ func _flat_grid() -> PackedFloat32Array:
 	return elev
 
 
-## Build on flat ground (base_y == 0) and return {verts, normals}.
+## Build on flat ground (base_y == 0) and return combined {verts, normals}.
 func _build_arrays(poly: PackedVector2Array, height_m: float, roof: Dictionary) -> Dictionary:
-	var buildings := [{"idx": 0, "points": poly, "height_m": height_m, "tags": {},
-		"roof": roof}]
-	var node := BuildingBuilder.build_buildings_node(
-		buildings, _flat_grid(), GRID_RES, EXTENT_M, 0.0, null)
-	if node == null:
-		return {}
-	var mi := node.get_node_or_null("BuildingMeshes") as MeshInstance3D
-	var arrays: Array = mi.mesh.surface_get_arrays(0)
-	var out := {"verts": arrays[Mesh.ARRAY_VERTEX], "normals": arrays[Mesh.ARRAY_NORMAL]}
-	node.free()
-	return out
+	return _mesh_data(poly, height_m, roof, _flat_grid())
 
 
 func _roof_spec(shape: String, angle: float = 30.0, direction: float = NAN,
@@ -464,3 +470,86 @@ func _test_skillion() -> void:
 		if normals[t].y > 0.1 and normals[t].y < 0.999:
 			sloped = true
 	_check("skillion: has sloped face", sloped)
+
+
+func _test_uvs_and_colors() -> void:
+	# Two surfaces: walls (0) and roof (1).
+	var data := _mesh_data(_square_poly(5.0), 8.0, _roof_spec("flat"), _flat_grid())
+	_check("surfaces: exactly 2", int(data.get("surface_count", 0)) == 2,
+		"got %d" % int(data.get("surface_count", 0)))
+	if data.is_empty():
+		return
+
+	# Wall UVs are metric: U spans 0..edge length (10 m per facade), V spans
+	# -skirt..height above base.
+	var wall: Dictionary = (data["surfaces"] as Array)[0]
+	var wuvs: PackedVector2Array = wall["uvs"]
+	var wverts: PackedVector3Array = wall["verts"]
+	var wnorms: PackedVector3Array = wall["normals"]
+	var max_u := -INF
+	var min_v := INF
+	var max_v := -INF
+	var u_in_range := true
+	for t in range(0, wverts.size(), 3):
+		if absf(wnorms[t].y) > 0.1:
+			continue  # skip floor tris sharing the walls surface
+		for k in 3:
+			var uv := wuvs[t + k]
+			max_u = maxf(max_u, uv.x)
+			min_v = minf(min_v, uv.y)
+			max_v = maxf(max_v, uv.y)
+			if uv.x < -0.001 or uv.x > 10.001:
+				u_in_range = false
+	_check("wall UV: U spans facade length", absf(max_u - 10.0) < 1e-3 and u_in_range,
+		"max_u %f" % max_u)
+	_check("wall UV: V spans skirt..height",
+		absf(min_v + BuildingBuilder.FOUNDATION_SKIRT_M) < 1e-3 and absf(max_v - 8.0) < 1e-3,
+		"%f..%f" % [min_v, max_v])
+
+	# Roof UVs are isometric with 3D distances on sloped faces (true metres).
+	data = _mesh_data(_rect_poly(5.0, 3.0), 8.0, _roof_spec("gabled"), _flat_grid())
+	var roofd: Dictionary = (data["surfaces"] as Array)[1]
+	var ruvs: PackedVector2Array = roofd["uvs"]
+	var rverts: PackedVector3Array = roofd["verts"]
+	var metric_ok := true
+	for t in range(0, rverts.size(), 3):
+		for k in 3:
+			var k2 := (k + 1) % 3
+			var d3 := rverts[t + k].distance_to(rverts[t + k2])
+			var d2 := ruvs[t + k].distance_to(ruvs[t + k2])
+			if absf(d3 - d2) > 0.01:
+				metric_ok = false
+	_check("roof UV: metric on slopes", metric_ok)
+
+	# COLOR.a encodes pitched (1) vs flat (0) per building for the roof shader.
+	var rcols: PackedColorArray = roofd["colors"]
+	var pitched_a_ok := rcols.size() > 0
+	for ccol in rcols:
+		if absf(ccol.a - 1.0) > 0.01:
+			pitched_a_ok = false
+	_check("roof color: pitched alpha flag", pitched_a_ok)
+	data = _mesh_data(_square_poly(5.0), 8.0, _roof_spec("flat"), _flat_grid())
+	var fcols: PackedColorArray = ((data["surfaces"] as Array)[1] as Dictionary)["colors"]
+	var flat_a_ok := fcols.size() > 0
+	for ccol in fcols:
+		if absf(ccol.a) > 0.01:
+			flat_a_ok = false
+	_check("roof color: flat alpha flag", flat_a_ok)
+
+	# OSM colour tags honored; palette deterministic per stable tag.
+	var cols := BuildingBuilder.resolve_building_colors({"roof:colour": "red"}, "bldg_1_1")
+	_check("colors: roof:colour honored",
+		(cols["roof"] as Color).r > 0.9 and (cols["roof"] as Color).g < 0.1)
+	var c1 := BuildingBuilder.resolve_building_colors({}, "bldg_5_9")
+	var c2 := BuildingBuilder.resolve_building_colors({}, "bldg_5_9")
+	var c3 := BuildingBuilder.resolve_building_colors({}, "bldg_100_-42")
+	_check("colors: deterministic", c1["wall"] == c2["wall"] and c1["roof"] == c2["roof"])
+	_check("colors: tag-dependent", c1["wall"] != c3["wall"] or c1["roof"] != c3["roof"])
+
+	# Stable tag: same poly → same tag; translated poly → a different tag.
+	var tag1 := BuildingBuilder.building_tag(_square_poly(5.0))
+	var moved := PackedVector2Array()
+	for p in _square_poly(5.0):
+		moved.append(p + Vector2(50, 50))
+	_check("tag: stable", tag1 == BuildingBuilder.building_tag(_square_poly(5.0)))
+	_check("tag: position-keyed", tag1 != BuildingBuilder.building_tag(moved))

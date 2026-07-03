@@ -1357,7 +1357,10 @@ func _apply_building_textures() -> void:
 	var mi := _buildings_root.get_node_or_null("BuildingMeshes") as MeshInstance3D
 	if mi == null:
 		return
-	mi.material_override = BuildingBuilder.make_building_material()
+	mi.material_override = null
+	mi.set_surface_override_material(0, BuildingBuilder.make_wall_material())
+	if mi.mesh != null and mi.mesh.get_surface_count() > 1:
+		mi.set_surface_override_material(1, BuildingBuilder.make_roof_material())
 
 
 ## ---------------------------------------------------------------------------
