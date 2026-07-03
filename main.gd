@@ -668,33 +668,58 @@ func apply_location( lat : float, lon : float, label : String = "", persist : bo
 	var ws := get_node_or_null( "/root/WeatherService" )
 	if ws != null and ws.has_method( "notify_location_changed" ):
 		ws.call( "notify_location_changed", lat, lon )
+	# Refresh the nearest-NWS-station lookup immediately instead of waiting for its
+	# ~10 s location poll, so the weather tooltip never shows a previous map's
+	# station (e.g. Hanscom AFB from a prior Lincoln, MA map).
+	var nz := get_node_or_null( "/root/NwsZoneService" )
+	if nz != null and nz.has_method( "request_zone" ):
+		nz.call( "request_zone", lat, lon )
 
 func _save_location_prefs( lat : float, lon : float, label : String ) -> void :
 	var cfg2 : ConfigFile = ConfigFile.new()
 	cfg2.load( _LOCATION_USER_CFG )   # preserve any other keys
-	cfg2.set_value( "location", "has_been_set", true )
-	cfg2.set_value( "location", "latitude", lat )
-	cfg2.set_value( "location", "longitude", lon )
-	cfg2.set_value( "location", "label", label )
+	var section := _location_prefs_section()
+	cfg2.set_value( section, "has_been_set", true )
+	cfg2.set_value( section, "latitude", lat )
+	cfg2.set_value( section, "longitude", lon )
+	cfg2.set_value( section, "label", label )
 	var err2 : int = cfg2.save( _LOCATION_USER_CFG )
 	if err2 != OK :
 		push_warning( "Location prefs: could not write %s (err %d)" % [ _LOCATION_USER_CFG, err2 ] )
 
+## Config section that scopes the remembered location to the ACTIVE map (by scene
+## path). Each map keeps its own last-used location so a site chosen in one map
+## never leaks into another — e.g. a generated Lincoln, MA map bleeding its
+## coordinates (and NWS station) into the Bombay Beach Mars sandbox.
+func _location_prefs_section() -> String :
+	var path := String( scene_file_path ).strip_edges()
+	if path.is_empty() :
+		return "location"
+	var key := path.replace( "res://", "" ).replace( "/", "_" ).replace( ".", "_" )
+	return "location_" + key
+
 ## Apply the persisted location at startup so a chosen site survives across
-## playtests independent of save games. No-op when nothing has been set yet
-## (keeps the scene's default until the user picks a location).
+## playtests independent of save games. No-op when nothing has been set yet for
+## THIS map (keeps the scene's baked default until the user picks a location).
 func _load_location_prefs() -> void :
+	# Generated location maps get their coordinates from MapContext / the save
+	# payload (authoritative), so they must NOT read the shared prefs — that would
+	# briefly seat them at a previous generated map's location and fire a wasteful
+	# weather/NWS fetch for the wrong site before the loader corrects it.
+	if MapDefinition.normalize_scene_path( String( scene_file_path ) ) == MapDefinition.GENERATED_SCENE :
+		return
 	var cfg : ConfigFile = ConfigFile.new()
 	if cfg.load( _LOCATION_USER_CFG ) != OK :
 		return
-	if not bool( cfg.get_value( "location", "has_been_set", false ) ) :
+	var section := _location_prefs_section()
+	if not bool( cfg.get_value( section, "has_been_set", false ) ) :
 		return
-	var lat : Variant = cfg.get_value( "location", "latitude", null )
-	var lon : Variant = cfg.get_value( "location", "longitude", null )
+	var lat : Variant = cfg.get_value( section, "latitude", null )
+	var lon : Variant = cfg.get_value( section, "longitude", null )
 	if lat == null or lon == null :
 		return
 	# persist=false: we're loading the saved value, not re-writing it.
-	apply_location( float( lat ), float( lon ), str( cfg.get_value( "location", "label", "" ) ), false )
+	apply_location( float( lat ), float( lon ), str( cfg.get_value( section, "label", "" ) ), false )
 
 func _on_location_picker_confirmed( lat2 : float, lnn2 : float, plabel2 : String ) -> void :
 	apply_location( lat2, lnn2, plabel2 )
