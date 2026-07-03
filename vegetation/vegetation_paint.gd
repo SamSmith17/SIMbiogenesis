@@ -195,6 +195,55 @@ static func poisson_fill(poly: PackedVector2Array, spacing_m: float, rng: Random
 	return out
 
 
+## Flat-top hex grid fill for mowed lawn mats — edge-to-edge tiling, fixed yaw.
+## `mat_width_m` is the flat-to-flat width of one hex mat (matches grass_lawn_card_w).
+static func hex_grid_fill(poly: PackedVector2Array, mat_width_m: float,
+		existing: Array[Vector2], max_count: int) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	if poly.size() < 3 or mat_width_m <= 0.0 or max_count <= 0:
+		return out
+	var col_step := mat_width_m
+	var row_step := mat_width_m * sqrt(3.0) * 0.5
+	var min_sep_sq := mat_width_m * mat_width_m * 0.25
+	var aabb := polygon_aabb(poly)
+	var row_min := int(floor(aabb.position.y / row_step)) - 1
+	var row_max := int(ceil(aabb.end.y / row_step)) + 1
+	for row in range(row_min, row_max + 1):
+		if out.size() >= max_count:
+			break
+		var z := float(row) * row_step
+		var x_off := col_step * 0.5 if (row & 1) != 0 else 0.0
+		var col_min := int(floor((aabb.position.x - x_off) / col_step)) - 1
+		var col_max := int(ceil((aabb.end.x - x_off) / col_step)) + 1
+		for col in range(col_min, col_max + 1):
+			if out.size() >= max_count:
+				break
+			var x := float(col) * col_step + x_off
+			var pt := Vector2(x, z)
+			if not point_in_polygon(pt, poly):
+				continue
+			var blocked := false
+			for e in existing:
+				if pt.distance_squared_to(e) < min_sep_sq:
+					blocked = true
+					break
+			if blocked:
+				continue
+			out.append({"x": x, "z": z, "yaw": 0.0, "scale": 1.0})
+	return out
+
+
+## Rough hex-tile count for UI caps (one mat per hex cell).
+static func estimate_hex_fill_count(poly: PackedVector2Array, mat_width_m: float,
+		max_count: int = GRASS_FILL_CAP) -> int:
+	var area := polygon_area(poly)
+	if area < 1.0 or mat_width_m <= 0.0:
+		return 0
+	var cell_area := mat_width_m * mat_width_m * sqrt(3.0) * 0.5
+	var est := int(area / cell_area) + 4
+	return mini(est, max_count)
+
+
 static func default_spacing_for_preset(preset: Preset) -> float:
 	match preset:
 		Preset.GRASS_LAWN:

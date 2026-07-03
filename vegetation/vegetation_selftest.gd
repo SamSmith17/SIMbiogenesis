@@ -11,10 +11,13 @@ var _checks: int = 0
 func _initialize() -> void:
 	_test_polygon()
 	_test_poisson_spacing()
+	_test_hex_grid_fill()
 	_test_species_mix()
 	_test_bulk_patch()
 	_test_json_roundtrip()
 	_test_transform_ground_y()
+	_test_style_defaults_and_materials()
+	_test_osm_species_override()
 	if _failures == 0:
 		print("VEGETATION SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -66,6 +69,44 @@ func _test_poisson_spacing() -> void:
 				"%.2f m apart" % sqrt(a.distance_squared_to(b)))
 
 
+func _test_hex_grid_fill() -> void:
+	var poly := VegetationPaint.rect_to_polygon(Vector2(-10.0, -10.0), Vector2(10.0, 10.0))
+	var mat_w := 0.45
+	var spots := VegetationPaint.hex_grid_fill(poly, mat_w, [], 500)
+	_check("hex grid produces instances", spots.size() > 10, "got %d" % spots.size())
+	for spot in spots:
+		_check("hex grid fixed yaw", absf(float(spot.get("yaw", 0.0))) < 1e-5)
+		_check("hex grid unit scale", absf(float(spot.get("scale", 1.0)) - 1.0) < 1e-5)
+	var defs := VegetationStyleConfig.defaults()
+	var near := VegetationCardFactory.mesh_for_deciduous_lod(
+		defs, VegetationCardFactory.CanopyLodTier.NEAR)
+	var far := VegetationCardFactory.mesh_for_deciduous_lod(
+		defs, VegetationCardFactory.CanopyLodTier.FAR)
+	_check("deciduous near lod mesh", near != null and near.get_surface_count() == 3)
+	_check("deciduous far lod mesh", far != null and far.get_surface_count() == 2)
+	var proxy_mat := near.surface_get_material(1) as ShaderMaterial
+	var leaf_surf_mat := near.surface_get_material(2) as ShaderMaterial
+	_check("deciduous shadow proxy", proxy_mat != null
+		and float(proxy_mat.get_shader_parameter("color_fade")) < 0.15)
+	_check("deciduous leaf overlay", leaf_surf_mat != null and leaf_surf_mat.shader != null)
+	var pine_near := VegetationCardFactory.mesh_for_pine_lod(
+		defs, VegetationCardFactory.CanopyLodTier.NEAR)
+	var pine_far := VegetationCardFactory.mesh_for_pine_lod(
+		defs, VegetationCardFactory.CanopyLodTier.FAR)
+	_check("pine near lod mesh", pine_near != null and pine_near.get_surface_count() == 2)
+	_check("pine far lod mesh", pine_far != null and pine_far.get_surface_count() == 2)
+	var pine_near_mat := pine_near.surface_get_material(1) as ShaderMaterial
+	var pine_far_mat := pine_far.surface_get_material(1) as ShaderMaterial
+	_check("pine near fur", pine_near_mat != null
+		and float(pine_near_mat.get_shader_parameter("fur_strength")) > 0.2)
+	_check("pine far plain", pine_far_mat != null
+		and float(pine_far_mat.get_shader_parameter("fur_strength")) < 0.01)
+	var leaf_mat := VegetationCardFactory.leaf_canopy_material_for_species("deciduous", defs)
+	_check("leaf canopy material", leaf_mat != null and leaf_mat.shader != null)
+	var lawn_mesh := GrassBuilder.mesh_for_lod("grass_lawn", {}, GrassBuilder.LodTier.NEAR)
+	_check("lawn hex shell mesh", lawn_mesh != null and lawn_mesh.get_surface_count() > 0)
+
+
 func _test_species_mix() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 1
@@ -109,9 +150,95 @@ func _test_json_roundtrip() -> void:
 	_check("hero preset preserved", str(restored.hero[0].get("preset", "")) == "pine_1")
 	var path := layer.save_path_for_map(47.6062, -122.3321)
 	_check("save path under user maps", path.begins_with("user://maps/vegetation_"))
+	_test_card_settings_json()
+
+
+## Regression: "Apply to brush" stamps a Color tint into per-instance
+## card_settings. Plain JSON.stringify would turn that Color into a String
+## ("(r, g, b, a)"), and the card factory's typed `Color` assignment would then
+## throw on reload — the map "sometimes fails to load". Verify the full
+## stringify -> parse -> deserialize cycle restores a real Color.
+func _test_card_settings_json() -> void:
+	var layer := VegetationLayer.create_empty()
+	var card := {"pine_card_h": 6.5, "pine_albedo_tint": Color(0.8, 0.5, 0.3, 1.0)}
+	layer.add_bulk("pine", 2.0, 2.0, 0.0, 1.3, card)
+	var text := JSON.stringify(layer.serialize())
+	var parsed: Variant = JSON.parse_string(text)
+	_check("card json parses", parsed is Dictionary)
+	var restored := VegetationLayer.create_empty()
+	restored.deserialize(parsed as Dictionary)
+	var recs: Array = restored.bulk.get("pine", [])
+	_check("card record restored", recs.size() == 1)
+	if recs.size() == 1:
+		var cs: Dictionary = (recs[0] as Dictionary).get("card_settings", {})
+		_check("card tint is Color after roundtrip", cs.get("pine_albedo_tint") is Color)
+		var c: Color = cs.get("pine_albedo_tint", Color.WHITE)
+		_check("card tint value preserved",
+			absf(c.r - 0.8) < 1e-3 and absf(c.g - 0.5) < 1e-3 and absf(c.b - 0.3) < 1e-3)
+		_check("card scalar preserved", absf(float(cs.get("pine_card_h", 0.0)) - 6.5) < 1e-3)
+	# Legacy-corrupt recovery: a String tint (old broken save) coerces to Color.
+	var legacy := VegetationLayer.coerce_card_colors({"pine_albedo_tint": "(0.2, 0.4, 0.6, 1.0)"})
+	_check("legacy string tint coerces to Color", legacy.get("pine_albedo_tint") is Color)
 
 
 func _test_transform_ground_y() -> void:
 	var xf := VegetationPaint.build_transform(1.0, 12.0, 2.0, 0.5, 1.0, false, Vector3.UP)
 	_check("transform Y sinks", absf(xf.origin.y - (12.0 - VegetationPaint.GROUND_SINK_M)) < 1e-5)
 	_check("transform XZ", absf(xf.origin.x - 1.0) < 1e-5 and absf(xf.origin.z - 2.0) < 1e-5)
+
+
+func _test_style_defaults_and_materials() -> void:
+	var defs := VegetationStyleConfig.defaults()
+	for k in ["translucency_strength", "canopy_roundness", "color_variation",
+			"foliage_roughness", "ao_strength", "bark_roughness",
+			"bark_ao_strength", "bark_color_jitter",
+			"pine_whorl_count", "deciduous_cluster_count", "deciduous_branch_count"]:
+		_check("style default %s" % k, defs.has(k))
+	var settings := defs.duplicate(true)
+	settings["pine_whorl_count"] = 10
+	settings["deciduous_cluster_count"] = 12
+	settings["deciduous_branch_count"] = 6
+	for species in ["pine", "deciduous", "shrub"]:
+		var mesh := VegetationCardFactory.mesh_for_species(species, settings)
+		_check("%s preview mesh" % species, mesh != null and mesh.get_surface_count() > 0)
+		var mat := VegetationCardFactory.material_for_species(species, settings)
+		_check("%s preview mat" % species, mat != null)
+		_check("%s translucency uniform" % species,
+			mat.get_shader_parameter("translucency_strength") != null)
+		var bark := VegetationCardFactory.bark_material_for_species(species, settings)
+		_check("%s bark mat" % species, bark != null)
+		_check("%s bark jitter uniform" % species,
+			bark.get_shader_parameter("bark_color_jitter") != null)
+
+
+func _test_osm_species_override() -> void:
+	_check("osm_species_map default present",
+		VegetationStyleConfig.defaults().has("osm_species_map"))
+	_check("auto override empty",
+		BiomePalette.species_override_for_kind({}, "wood").is_empty())
+	_check("auto value empty",
+		BiomePalette.species_override_for_kind({"wood": "auto"}, "wood").is_empty())
+	_check("pine override",
+		BiomePalette.species_override_for_kind({"wood": "pine"}, "wood").has("pine"))
+	_check("shrub override single",
+		BiomePalette.override_single_species(
+			BiomePalette.species_override_for_kind({"wood": "shrub"}, "wood"), "deciduous") == "shrub")
+	_check("mixed override two species",
+		BiomePalette.species_override_for_kind({"scrub": "mixed"}, "scrub").size() == 2)
+
+	# End-to-end: a wood polygon forced to pine must scatter only pine.
+	var square := PackedVector2Array([
+		Vector2(-40, -40), Vector2(40, -40), Vector2(40, 40), Vector2(-40, 40)])
+	var payload := {"polygons": [{"points": square, "kind": "wood", "tags": {}}]}
+	var ctx := {"latitude": 42.0, "seed": 7, "half_extent_m": 100.0,
+		"style": {"osm_species_map": {"wood": "pine"}}}
+	var layer := AutoVegetationGenerator.generate(payload, ctx)
+	var only_pine := layer.bulk.has("pine") and not layer.bulk.has("deciduous")
+	_check("forced pine wood scatters pine only", only_pine and layer.total_bulk() > 0,
+		"bulk keys=%s" % str(layer.bulk.keys()))
+
+	# Round-trip osm_species_map through the JSON style persistence.
+	var saved := VegetationStyleConfig._color_dict_to_json({"osm_species_map": {"wood": "pine"}})
+	var loaded := VegetationStyleConfig._json_to_color_dict(saved)
+	_check("osm map survives json roundtrip",
+		str((loaded.get("osm_species_map", {}) as Dictionary).get("wood", "")) == "pine")

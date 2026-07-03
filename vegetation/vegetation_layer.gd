@@ -21,21 +21,35 @@ static func default_settings() -> Dictionary:
 		"deciduous_trunk_h": 4.5,
 		"deciduous_bulk_scale": 1.35,
 		"deciduous_vertical_offset_m": 0.0,
+		"deciduous_cluster_count": 8,
+		"deciduous_cluster_spread": 1.0,
+		"deciduous_cluster_size": 1.0,
+		"deciduous_cluster_tightness": 1.0,
+		"deciduous_branch_count": 4,
+		"deciduous_branch_thickness": 1.0,
+		"deciduous_branch_reach": 1.0,
+		"deciduous_branch_base": 0.82,
 		"pine_bulk_scale": 1.0,
 		"pine_card_w": 0.85,
 		"pine_card_h": 4.5,
 		"pine_trunk_w": 0.24,
 		"pine_vertical_offset_m": 0.0,
+		"pine_whorl_count": 7,
+		"pine_bough_scale": 1.0,
+		"pine_whorl_spacing": 1.0,
 		"shrub_bulk_scale": 1.0,
 		"shrub_card_w": 1.4,
 		"shrub_card_h": 1.15,
 		"shrub_vertical_offset_m": 0.0,
-		"grass_lawn_bulk_scale": 1.35,
-		"grass_lawn_card_w": 0.08,
-		"grass_lawn_card_h": 0.42,
+		"shrub_cluster_count": 6,
+		"shrub_cluster_spread": 1.0,
+		"shrub_cluster_size": 1.0,
+		"grass_lawn_bulk_scale": 1.0,
+		"grass_lawn_card_w": 0.45,
+		"grass_lawn_card_h": 0.12,
 		"grass_lawn_vertical_offset_m": 0.0,
 		"grass_field_bulk_scale": 1.25,
-		"grass_field_card_w": 0.11,
+		"grass_field_card_w": 0.55,
 		"grass_field_card_h": 0.88,
 		"grass_field_vertical_offset_m": 0.0,
 	}
@@ -61,13 +75,20 @@ var hero: Array = []
 var settings: Dictionary = {}
 
 
-func add_bulk(species: String, x: float, z: float, yaw: float, scale: float) -> bool:
+func add_bulk(species: String, x: float, z: float, yaw: float, scale: float,
+		card: Dictionary = {}) -> bool:
 	if species not in bulk:
 		return false
 	var arr: Array = bulk[species]
 	if arr.size() >= max_bulk_for_species(species):
 		return false
-	arr.append({"x": x, "z": z, "yaw": yaw, "scale": scale})
+	var rec := {"x": x, "z": z, "yaw": yaw, "scale": scale}
+	# Optional per-instance look override ("Apply to brush" snapshot) so these
+	# painted trees keep their custom shape/shader independent of the global map
+	# style set later by "Apply to map".
+	if not card.is_empty():
+		rec["card_settings"] = card.duplicate(true)
+	arr.append(rec)
 	return true
 
 
@@ -182,12 +203,17 @@ static func _card_settings_for_species(params: Dictionary, species: String) -> D
 	var keys: Array[String] = []
 	match species:
 		"pine":
-			keys = ["pine_card_w", "pine_card_h", "pine_trunk_w", "pine_bulk_scale", "pine_vertical_offset_m"]
+			keys = ["pine_card_w", "pine_card_h", "pine_trunk_w", "pine_bulk_scale",
+				"pine_vertical_offset_m", "pine_whorl_count", "pine_bough_scale", "pine_whorl_spacing"]
 		"deciduous":
 			keys = ["deciduous_canopy_w", "deciduous_canopy_h", "deciduous_trunk_w",
-				"deciduous_trunk_h", "deciduous_bulk_scale", "deciduous_vertical_offset_m"]
+				"deciduous_trunk_h", "deciduous_bulk_scale", "deciduous_vertical_offset_m",
+				"deciduous_cluster_count", "deciduous_cluster_spread", "deciduous_cluster_size",
+				"deciduous_cluster_tightness", "deciduous_branch_count", "deciduous_branch_thickness",
+				"deciduous_branch_reach", "deciduous_branch_base"]
 		"shrub":
-			keys = ["shrub_card_w", "shrub_card_h", "shrub_bulk_scale", "shrub_vertical_offset_m"]
+			keys = ["shrub_card_w", "shrub_card_h", "shrub_bulk_scale", "shrub_vertical_offset_m",
+				"shrub_cluster_count", "shrub_cluster_spread", "shrub_cluster_size"]
 		"grass_lawn":
 			keys = ["grass_lawn_card_w", "grass_lawn_card_h", "grass_lawn_bulk_scale",
 				"grass_lawn_vertical_offset_m"]
@@ -206,8 +232,13 @@ static func _card_settings_from_params(params: Dictionary) -> Dictionary:
 	for key in [
 		"deciduous_canopy_w", "deciduous_canopy_h", "deciduous_trunk_w", "deciduous_trunk_h",
 		"deciduous_bulk_scale", "deciduous_vertical_offset_m",
+		"deciduous_cluster_count", "deciduous_cluster_spread", "deciduous_cluster_size",
+		"deciduous_cluster_tightness", "deciduous_branch_count", "deciduous_branch_thickness",
+		"deciduous_branch_reach", "deciduous_branch_base",
 		"pine_card_w", "pine_card_h", "pine_trunk_w", "pine_bulk_scale", "pine_vertical_offset_m",
+		"pine_whorl_count", "pine_bough_scale", "pine_whorl_spacing",
 		"shrub_card_w", "shrub_card_h", "shrub_bulk_scale", "shrub_vertical_offset_m",
+		"shrub_cluster_count", "shrub_cluster_spread", "shrub_cluster_size",
 		"grass_lawn_card_w", "grass_lawn_card_h", "grass_lawn_bulk_scale", "grass_lawn_vertical_offset_m",
 		"grass_field_card_w", "grass_field_card_h", "grass_field_bulk_scale", "grass_field_vertical_offset_m",
 	]:
@@ -287,13 +318,92 @@ func load_for_map(lat: float, lon: float) -> bool:
 func serialize() -> Dictionary:
 	var bulk_out := {}
 	for species in ALL_SPECIES:
-		bulk_out[species] = bulk.get(species, [])
+		bulk_out[species] = _records_to_json(bulk.get(species, []))
 	return {
 		"version": VERSION,
 		"bulk": bulk_out,
 		"hero": hero.duplicate(true),
 		"settings": get_settings(),
 	}
+
+
+const TINT_SUFFIX := "_albedo_tint"
+
+
+## Per-instance "Apply to brush" card_settings can hold Color tints. Plain
+## JSON.stringify turns a Color into the string "(r, g, b, a)", so we convert
+## tints to [r,g,b,a] arrays on save and back to Color on load — otherwise the
+## card factory's typed `Color` assignment throws on reload and the map fails.
+static func _records_to_json(records: Array) -> Array:
+	var out: Array = []
+	for item in records:
+		if item is Dictionary and (item as Dictionary).has("card_settings"):
+			var rec: Dictionary = (item as Dictionary).duplicate()
+			rec["card_settings"] = _card_to_json(item["card_settings"])
+			out.append(rec)
+		else:
+			out.append(item)
+	return out
+
+
+static func _records_from_json(records: Array) -> Array:
+	var out: Array = []
+	for item in records:
+		if item is Dictionary and (item as Dictionary).has("card_settings"):
+			var rec: Dictionary = (item as Dictionary).duplicate()
+			rec["card_settings"] = coerce_card_colors(item["card_settings"] as Dictionary)
+			out.append(rec)
+		else:
+			out.append(item)
+	return out
+
+
+static func _card_to_json(card: Dictionary) -> Dictionary:
+	var out := {}
+	for k in card:
+		var v: Variant = card[k]
+		if v is Color:
+			var c: Color = v
+			out[k] = [c.r, c.g, c.b, c.a]
+		else:
+			out[k] = v
+	return out
+
+
+## Coerce any *_albedo_tint value (Color, [r,g,b,a] array, or a legacy
+## JSON-stringified "(r, g, b, a)" string) back to a real Color so consumers
+## that assign to a typed Color never trip. Recovers maps saved before the
+## array round-trip fix as well.
+static func coerce_card_colors(card: Dictionary) -> Dictionary:
+	# Fast path: skip the per-record copy on rebuilds when tints are already
+	# Colors (the normal post-load state) so this stays cheap in the hot loop.
+	var needs_fix := false
+	for k in card:
+		if str(k).ends_with(TINT_SUFFIX) and not (card[k] is Color):
+			needs_fix = true
+			break
+	if not needs_fix:
+		return card
+	var out := card.duplicate()
+	for k in out:
+		if str(k).ends_with(TINT_SUFFIX):
+			out[k] = _as_color(out[k])
+	return out
+
+
+static func _as_color(v: Variant) -> Color:
+	if v is Color:
+		return v
+	if v is Array and (v as Array).size() >= 3:
+		var a: Array = v
+		return Color(float(a[0]), float(a[1]), float(a[2]),
+			float(a[3]) if a.size() >= 4 else 1.0)
+	if v is String:
+		var parts := (v as String).strip_edges().trim_prefix("(").trim_suffix(")").split(",")
+		if parts.size() >= 3:
+			return Color(float(parts[0]), float(parts[1]), float(parts[2]),
+				float(parts[3]) if parts.size() >= 4 else 1.0)
+	return Color.WHITE
 
 
 func ensure_species_keys() -> void:
@@ -306,7 +416,7 @@ func deserialize(data: Dictionary) -> void:
 	bulk = {}
 	var src: Dictionary = data.get("bulk", {}) as Dictionary
 	for species in ALL_SPECIES:
-		bulk[species] = src.get(species, [])
+		bulk[species] = _records_from_json(src.get(species, []))
 	hero = []
 	for item in data.get("hero", []):
 		if item is Dictionary:

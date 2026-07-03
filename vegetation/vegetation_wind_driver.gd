@@ -7,6 +7,7 @@ const LERP_SPEED := 0.35
 const CALM_SPEED_MS := 1.5
 
 const FOLIAGE_SHADER := "res://vegetation/foliage.gdshader"
+const LEAF_CANOPY_SHADER := "res://vegetation/leaf_canopy.gdshader"
 const BARK_SHADER := "res://vegetation/bark.gdshader"
 
 var _materials: Array[ShaderMaterial] = []
@@ -30,7 +31,7 @@ func register_material(mat: Material) -> void:
 	if sm.shader == null or sm in _materials:
 		return
 	var path := sm.shader.resource_path
-	if path != FOLIAGE_SHADER and path != BARK_SHADER:
+	if path != FOLIAGE_SHADER and path != LEAF_CANOPY_SHADER and path != BARK_SHADER:
 		return
 	_materials.append(sm)
 

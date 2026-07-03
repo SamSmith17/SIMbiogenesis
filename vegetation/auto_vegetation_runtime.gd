@@ -51,6 +51,46 @@ static func clear(terrain: Node3D) -> void:
 		root.queue_free()
 
 
+## Re-registers already-built auto-vegetation batches with
+## VegetationEnvironmentSync + VegetationWindDriver, without rebuilding meshes.
+##
+## Needed because the manual-layer rebuild (VegetationRuntime.rebuild(), driven
+## by terrain_loader's deferred _start_manual_veg_rebuild) unconditionally
+## clears ALL shader registrations via _clear_shader_registrations() — and on a
+## fresh site the manual layer is usually empty, so nothing re-registers after
+## it clears. Since that manual rebuild is deliberately deferred until the load
+## sequence fully completes (i.e. AFTER auto-vegetation scatter already
+## registered its batches), auto-scattered trees/grass would otherwise silently
+## stop receiving seasonal (autumn/winter/snow) and wind uniform updates for
+## the rest of the session. Call this right after any manual-layer rebuild.
+static func reregister_existing(terrain: Node3D) -> void:
+	if terrain == null:
+		return
+	var root := terrain.get_node_or_null(ROOT_NAME) as Node3D
+	if root == null:
+		return
+	for child in root.get_children():
+		if child is MultiMeshInstance3D:
+			_register_multimesh(child as MultiMeshInstance3D, _species_for_node(child as MultiMeshInstance3D))
+
+
+static func _species_for_node(mi: MultiMeshInstance3D) -> String:
+	var n := mi.name
+	if not n.begins_with("Bulk_"):
+		return ""
+	var rest := n.substr(5)
+	# Grass batches are named "Bulk_<species>_<lod_tier_int>" (one MultiMesh
+	# per LOD tier) — strip the numeric tier suffix to recover the species.
+	for gs in VegetationLayer.GRASS_SPECIES:
+		if rest.begins_with(gs + "_"):
+			return gs
+	if rest.ends_with("_0") or rest.ends_with("_1"):
+		var base := rest.substr(0, rest.length() - 2)
+		if base in VegetationLayer.ALL_SPECIES:
+			return base
+	return rest
+
+
 static func _clear_shader_registrations() -> void:
 	var tree := Engine.get_main_loop()
 	if tree == null or not (tree is SceneTree):
@@ -82,6 +122,9 @@ static func rebuild(terrain: Node3D, layer: AutoVegetationLayer,
 	for slot in layer.slots():
 		_build_bulk_layer(root, str(slot), layer.bulk.get(slot, []), ground_y_at, s)
 	_build_hero_layer(root, layer.hero, ground_y_at, s)
+	# See VegetationRuntime.rebuild()'s matching comment: _clear_shader_registrations()
+	# above wipes the manual layer's registrations too, which this rebuild doesn't touch.
+	VegetationRuntime.reregister_existing(terrain)
 
 
 ## Same as rebuild() but spreads the multimesh builds and hero-scene instantiation
@@ -111,6 +154,7 @@ static func rebuild_async(terrain: Node3D, layer: AutoVegetationLayer,
 	if not is_instance_valid(root):
 		return
 	await _build_hero_layer_async(root, layer.hero, ground_y_at, s, tree)
+	VegetationRuntime.reregister_existing(terrain)
 
 
 ## Re-sample ground Y under each instance (called after a heightfield rebuild).
@@ -151,7 +195,7 @@ static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -
 			s["vertical_offset_m"] = float(d["vert_off"])
 		var card: Variant = d.get("card_settings", {})
 		if card is Dictionary and not (card as Dictionary).is_empty():
-			s.merge(card, true)
+			s.merge(VegetationLayer.coerce_card_colors(card as Dictionary), true)
 		var key := _batch_settings_key(s)
 		if key not in groups:
 			groups[key] = {"settings": s, "records": []}
@@ -162,13 +206,15 @@ static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -
 	return out
 
 
+## Batch by the FULL settings content (matches VegetationRuntime._partition_bulk_batches).
+## The old partial key hashed only tint/wind keys, so records carrying per-instance
+## card_settings (shape, LOD, leaf density) were merged into a batch built from a
+## DIFFERENT record's settings — some trees then rendered with the wrong mesh/LOD
+## (e.g. billboards instead of leaf canopy) and ignored their own edits. Hashing the
+## whole dict keeps identical settings in one batch while giving each distinct
+## look its own correctly-built MultiMesh.
 static func _batch_settings_key(settings: Dictionary) -> int:
-	var h := 0
-	for k in ["vertical_offset_m", "foliage_tint", "seasonal_tint", "drape_match_strength",
-			"haze_color", "wind_strength", "wind_speed"]:
-		if settings.has(k):
-			h = h ^ hash(settings[k])
-	return h
+	return hash(settings)
 
 
 static func _build_bulk_batch(root: Node3D, slot: String, species: String, records: Array,
@@ -177,6 +223,10 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 		return
 	if species in VegetationLayer.GRASS_SPECIES:
 		VegetationRuntime._build_grass_bulk_batches(root, species, records, ground_y_at, settings)
+		return
+	if species == "deciduous" or species == "pine":
+		VegetationRuntime._build_canopy_lod_bulk_batches(root, species, records, ground_y_at, false,
+			settings, VISIBILITY_END)
 		return
 	var mesh := VegetationCardFactory.mesh_for_species(species, settings)
 	var use_surface_mats := VegetationCardFactory.mesh_has_surface_materials(species)

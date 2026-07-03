@@ -235,8 +235,13 @@ static func _scatter_polygon(layer: AutoVegetationLayer, rec: Dictionary,
 	if kind == "grass_lawn" or kind == "grass_field":
 		_scatter_grass_polygon(layer, poly, kind, exclusion_index, rng)
 		return
+	# Player-configured OSM→species override (vegetation modal). Empty = biome/tags.
+	var osm_map: Dictionary = (ctx.get("style", {}) as Dictionary).get("osm_species_map", {})
+	var override: Dictionary = BiomePalette.species_override_for_kind(osm_map, kind)
 	var weights: Dictionary = BiomePalette.weights_for_osm_tags(
 		biome.get("weights", {"deciduous": 1.0}), tags)
+	if not override.is_empty():
+		weights = override.duplicate(true)
 	var height := float(biome.get("default_height_m", 12.0))
 	match kind:
 		"park":
@@ -246,15 +251,18 @@ static func _scatter_polygon(layer: AutoVegetationLayer, rec: Dictionary,
 			_scatter_cemetery_polygon(layer, poly, weights, height, exclusion_index, rng, ctx)
 			return
 		"orchard":
-			_scatter_row_crop_polygon(layer, poly, "deciduous", 6.0,
+			_scatter_row_crop_polygon(layer, poly,
+				BiomePalette.override_single_species(override, "deciduous"), 6.0,
 				ORCHARD_ROW_SPACING_M, ORCHARD_IN_ROW_M, exclusion_index, rng, ctx)
 			return
 		"vineyard":
-			_scatter_row_crop_polygon(layer, poly, "deciduous", 4.5,
+			_scatter_row_crop_polygon(layer, poly,
+				BiomePalette.override_single_species(override, "deciduous"), 4.5,
 				VINEYARD_ROW_SPACING_M, VINEYARD_IN_ROW_M, exclusion_index, rng, ctx)
 			return
 		"wetland":
-			_scatter_polygon_poisson(layer, poly, {"shrub": 1.0}, 1.2, 3.5,
+			var wet_weights: Dictionary = override if not override.is_empty() else {"shrub": 1.0}
+			_scatter_polygon_poisson(layer, poly, wet_weights, 1.2, 3.5,
 				exclusion_index, rng, ctx, false)
 			return
 	var spacing := float(biome.get("spacing_m", 6.0))
@@ -262,7 +270,8 @@ static func _scatter_polygon(layer: AutoVegetationLayer, rec: Dictionary,
 	match kind:
 		"scrub":
 			spacing = maxf(spacing * 0.85, 3.0)
-			weights = {"shrub": 1.0}
+			if override.is_empty():
+				weights = {"shrub": 1.0}
 			height = 1.5
 		_:
 			pass
@@ -279,6 +288,10 @@ static func _scatter_polygon_poisson(layer: AutoVegetationLayer, poly: PackedVec
 	if area < 16.0:
 		return
 	var style: Dictionary = ctx.get("style", {})
+	# Global density knob from the Tune Look modal (auto_density_scale): >1 packs
+	# trees tighter (smaller spacing → more instances), <1 thins them out.
+	var density_scale := clampf(float(style.get("auto_density_scale", 1.0)), 0.25, 3.0)
+	spacing = maxf(spacing / density_scale, 0.5)
 	var even_spacing := sqrt(area / float(PER_POLY_CAP))
 	spacing = maxf(spacing, even_spacing)
 	var est := int(area / (spacing * spacing * 0.866)) + 4
@@ -310,22 +323,32 @@ static func _scatter_polygon_poisson(layer: AutoVegetationLayer, poly: PackedVec
 static func _scatter_grass_polygon(layer: AutoVegetationLayer, poly: PackedVector2Array,
 		kind: String, exclusion_index: VegExclusionBuilder.ExclusionIndex,
 		rng: RandomNumberGenerator) -> void:
-	var preset := VegetationPaint.Preset.GRASS_LAWN if kind == "grass_lawn" \
-			else VegetationPaint.Preset.GRASS_FIELD
-	var spacing := VegetationPaint.default_spacing_for_preset(preset)
 	var area := VegetationPaint.polygon_area(poly)
 	if area < 4.0:
 		return
-	var even_spacing := sqrt(area / float(GRASS_PER_POLY_CAP))
-	spacing = maxf(spacing, even_spacing)
-	var est := int(area / (spacing * spacing * 0.866)) + 4
-	var cap := mini(mini(est, GRASS_PER_POLY_CAP), VegetationPaint.GRASS_FILL_CAP)
-	var spots := VegetationPaint.poisson_fill(poly, spacing, rng, [] as Array[Vector2], cap)
+	var cap := mini(VegetationPaint.GRASS_FILL_CAP, GRASS_PER_POLY_CAP)
+	var spots: Array[Dictionary]
+	if kind == "grass_lawn":
+		var mat_w := float(GrassBuilder.SPECS["grass_lawn"]["mat_w"])
+		var est := VegetationPaint.estimate_hex_fill_count(poly, mat_w, cap)
+		cap = mini(est, cap)
+		spots = VegetationPaint.hex_grid_fill(poly, mat_w, [] as Array[Vector2], cap)
+	else:
+		var preset := VegetationPaint.Preset.GRASS_FIELD
+		var spacing := VegetationPaint.default_spacing_for_preset(preset)
+		var even_spacing := sqrt(area / float(GRASS_PER_POLY_CAP))
+		spacing = maxf(spacing, even_spacing)
+		var est := int(area / (spacing * spacing * 0.866)) + 4
+		cap = mini(mini(est, GRASS_PER_POLY_CAP), VegetationPaint.GRASS_FILL_CAP)
+		spots = VegetationPaint.poisson_fill(poly, spacing, rng, [] as Array[Vector2], cap)
 	for spot in spots:
 		var p := Vector2(float(spot["x"]), float(spot["z"]))
 		if _excluded(p, exclusion_index):
 			continue
-		layer.add_bulk(kind, p.x, p.y, rng.randf() * TAU, rng.randf_range(0.75, 1.15), 0.0)
+		if kind == "grass_lawn":
+			layer.add_bulk(kind, p.x, p.y, 0.0, 1.0, 0.0)
+		else:
+			layer.add_bulk(kind, p.x, p.y, rng.randf() * TAU, rng.randf_range(0.75, 1.15), 0.0)
 
 
 static func _scatter_park_polygon(layer: AutoVegetationLayer, poly: PackedVector2Array,
