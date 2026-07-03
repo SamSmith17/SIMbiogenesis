@@ -14,6 +14,21 @@ const MAX_BUILDINGS := 800
 ## never floats above DEM noise while eaves/roof stay level.
 const FOUNDATION_SKIRT_M := 0.35
 
+## Building types that read as houses — default gabled when OSM has no roof:shape.
+const RESIDENTIAL_TYPES := ["house", "detached", "residential", "semidetached_house",
+	"semi", "bungalow", "terrace", "terraced_house", "farm", "farmhouse", "cabin",
+	"hut", "dormitory", "static_caravan", "villa", "cottage"]
+## Types that keep the flat default (big-box / multi-storey / utility).
+const FLAT_TYPES := ["commercial", "retail", "industrial", "warehouse", "office",
+	"supermarket", "school", "hospital", "university", "college", "civic",
+	"government", "public", "apartments", "hotel", "garage", "garages", "parking",
+	"service", "roof", "hangar"]
+## Typical US residential pitch (~6:12) for defaulted gables.
+const DEFAULT_GABLED_ANGLE_DEG := 28.0
+## `building=yes` heuristic: small, elongated footprints read as houses.
+const GABLED_YES_MAX_AREA_M2 := 350.0
+const GABLED_YES_MIN_ASPECT := 1.2
+
 
 static func parse_height_m(tags: Dictionary) -> float:
 	var from_levels := -1.0
@@ -76,12 +91,51 @@ static func parse_roof_spec(tags: Dictionary) -> Dictionary:
 	}
 
 
-## Best-guess roof when OSM has no roof:shape — keep flat so total `height` stays accurate.
+## Best-guess roof when OSM has no roof:shape: residential types default to a
+## gabled roof, commercial/industrial stay flat, and bare `building=yes` falls
+## back to a footprint heuristic. Explicit roof tags always win. The `source`
+## key ("osm" | "default") records provenance for the Building Builder UI.
 static func infer_roof_spec(tags: Dictionary, poly: PackedVector2Array) -> Dictionary:
 	var spec := parse_roof_spec(tags)
 	if tags.has("roof:shape") or tags.has("building:roof:shape"):
+		spec["source"] = "osm"
 		return spec
+	spec["source"] = "default"
+	var btype := str(tags.get("building", "")).to_lower()
+	var gabled: bool
+	if btype in RESIDENTIAL_TYPES:
+		gabled = true
+	elif btype in FLAT_TYPES:
+		gabled = false
+	else:
+		gabled = footprint_area_m2(poly) < GABLED_YES_MAX_AREA_M2 \
+			and _footprint_aspect(poly) >= GABLED_YES_MIN_ASPECT
+	if gabled:
+		spec["shape"] = "gabled"
+		if not tags.has("roof:angle"):
+			spec["angle_deg"] = DEFAULT_GABLED_ANGLE_DEG
 	return spec
+
+
+## OSM ways arrive in either winding; normalize to positive signed area in the
+## XZ plane so wall quads always face outward and face orientation is
+## deterministic downstream.
+static func _ensure_ccw(poly: PackedVector2Array) -> PackedVector2Array:
+	var area := 0.0
+	for i in poly.size():
+		var j := (i + 1) % poly.size()
+		area += poly[i].x * poly[j].y - poly[j].x * poly[i].y
+	if area < 0.0:
+		var rev := poly.duplicate()
+		rev.reverse()
+		return rev
+	return poly
+
+
+## 2D cross (x,z plan view) of triangle p0→p1→p2. Positive = plan-CCW, which
+## maps to a downward (-Y) face normal once lifted into 3D.
+static func _plan_cross(p0: Vector2, p1: Vector2, p2: Vector2) -> float:
+	return (p1 - p0).cross(p2 - p0)
 
 
 static func _footprint_aspect(poly: PackedVector2Array) -> float:
@@ -228,6 +282,7 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 		n = poly.size()
 	if n < 3:
 		return vtx_base
+	poly = _ensure_ccw(poly)
 
 	# Seat the whole building at its lowest corner sample: real eaves and roofs
 	# are level regardless of slope; the uphill walls simply bury into the hill.
@@ -266,10 +321,18 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 	# into a smeared, balloon-like surface (shared vertices + generate_normals).
 	var tris: Array = []
 
-	# Floor (faces down).
+	# Floor (faces down). triangulate_polygon's output winding follows the
+	# input polygon, but orient every horizontal face explicitly so lighting
+	# stays correct regardless of triangulation details.
 	for t in range(0, tri_indices.size(), 3):
-		tris.append([bottom_p[tri_indices[t + 2]], bottom_p[tri_indices[t + 1]],
-			bottom_p[tri_indices[t]]])
+		var f0 := tri_indices[t]
+		var f1 := tri_indices[t + 1]
+		var f2 := tri_indices[t + 2]
+		if _plan_cross(poly[f0], poly[f1], poly[f2]) < 0.0:
+			var tmp := f1
+			f1 = f2
+			f2 = tmp
+		tris.append([bottom_p[f0], bottom_p[f1], bottom_p[f2]])
 
 	# Walls (outward-facing).
 	for i in n:
@@ -281,16 +344,24 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 	var is_pyramid := shape in ["pyramidal", "hipped", "round", "mansard"]
 
 	if not is_pyramid:
-		# Roof cap (sloped corners already encoded in roof_p for gabled/skillion).
+		# Roof cap (sloped corners already encoded in roof_p for gabled/skillion),
+		# oriented to face up.
 		for t in range(0, tri_indices.size(), 3):
-			tris.append([roof_p[tri_indices[t]], roof_p[tri_indices[t + 1]],
-				roof_p[tri_indices[t + 2]]])
+			var r0 := tri_indices[t]
+			var r1 := tri_indices[t + 1]
+			var r2 := tri_indices[t + 2]
+			if _plan_cross(poly[r0], poly[r1], poly[r2]) > 0.0:
+				var tmp := r1
+				r1 = r2
+				r2 = tmp
+			tris.append([roof_p[r0], roof_p[r1], roof_p[r2]])
 	else:
 		var center := _poly_centroid(poly)
 		var apex := Vector3(center.x, base_y + height_m, center.y)
+		# CCW winding + j→i→apex order = outward/up-facing slope normals.
 		for i in n:
 			var j := (i + 1) % n
-			tris.append([eave_p[i], eave_p[j], apex])
+			tris.append([eave_p[j], eave_p[i], apex])
 
 	var emitted := 0
 	for tri in tris:
