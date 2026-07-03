@@ -69,8 +69,10 @@ var _proj_lat:      float = NAN
 var _proj_lon:      float = NAN
 var _proj_scenario: int   = -1
 
-## Cached ERA5 daily temps for record-book projection (key "MM-DD" → °C).
+## Cached ERA5 daily-high proxy temps for record-book projection (key "MM-DD" → °C, 14:00 sample).
 var _era5_day_cache: Dictionary = {}
+## Cached ERA5 daily-minimum temps for record-book projection (key "MM-DD" → °C, min over 24 h).
+var _era5_min_cache: Dictionary = {}
 
 var _main_node:       Node  = null
 var _record_book_active: bool = false
@@ -268,14 +270,19 @@ func count_record_breaks_for_month(year: int, month: int) -> Dictionary:
 		var rec := WeatherService.get_records(month, day)
 		if rec.is_empty():
 			continue
-		var era5_t := _era5_temp_for(month, day)
-		if is_nan(era5_t):
+		# High proxy = archive 14:00 sample; low proxy = archive daily minimum. Both
+		# are shifted by the CMIP6 monthly warming delta. Using distinct high/low
+		# proxies (instead of one 14:00 value for both) lets the projection actually
+		# register future record LOWS — with warming these stay rare, but a cold
+		# climatological day plus a small delta can still dip below an all-time low,
+		# so the blue future bars are no longer structurally zero.
+		var era5_high := _era5_temp_for(month, day)
+		var era5_low := _era5_min_for(month, day)
+		if is_nan(era5_high) and is_nan(era5_low):
 			continue
-		var projected := era5_t + delta
-		# TODO(weather-gen): projected path still uses a single 14:00 sample for both
-		# high and low proxy — replace with daily min/max from full archive hourly when
-		# the record-book panel needs tighter CMIP6 fallback accuracy.
-		var part := RecordBreakCounter.count_day(rec, projected, projected)
+		var proj_high := era5_high + delta
+		var proj_low := era5_low + delta
+		var part := RecordBreakCounter.count_day(rec, proj_high, proj_low)
 		RecordBreakCounter.accumulate(out, part)
 	return out
 
@@ -311,6 +318,22 @@ func _era5_temp_for(month: int, day: int) -> float:
 	return t
 
 
+## Daily-minimum ERA5 temperature proxy for a MM-DD slot (min over the 24 hourly
+## archive samples). Cached per calendar day; used as the record-low projection base.
+func _era5_min_for(month: int, day: int) -> float:
+	var key := "%02d-%02d" % [month, day]
+	if _era5_min_cache.has(key):
+		return float(_era5_min_cache[key])
+	var lo := INF
+	for h in range(24):
+		var t := WeatherService.sample("temperature_2m", month, day, float(h))
+		if not is_nan(t):
+			lo = minf(lo, t)
+	var result := lo if lo != INF else NAN
+	_era5_min_cache[key] = result
+	return result
+
+
 ## Switch active scenario → clears loaded data → emits scenario_changed.
 ## Immediately re-fetches if a location is already known.
 func set_scenario(s: int) -> void:
@@ -321,6 +344,7 @@ func set_scenario(s: int) -> void:
 	_monthly.clear()
 	_baseline.clear()
 	_era5_day_cache.clear()
+	_era5_min_cache.clear()
 	_proj_scenario = -1
 	_data_source = ""
 	_save_prefs()

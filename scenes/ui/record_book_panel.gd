@@ -51,6 +51,16 @@ const CHART_TOTAL_H     := 412  # canvas height
 const MIN_BAR_PX        := 2.0  # floor so 1-record years are still visible
 const MAX_DOT_RADIUS    := 7.0
 
+## Warming-scenario dropdown labels, indexed by ClimateProjectionService.Scenario
+## (LOW, MODERATE, HIGH, VERY_HIGH). Kept self-contained (compact SSP + °C hints)
+## rather than pulling the service's longer SCENARIO_LABELS.
+const SCENARIO_CHOICES: Array[String] = [
+	"SSP1-2.6 · Low (+1.5°C)",
+	"SSP2-4.5 · Moderate (+2°C)",
+	"SSP3-7.0 · High (+3-4°C)",
+	"SSP5-8.5 · Very high (+5°C)",
+]
+
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
@@ -66,6 +76,12 @@ var _detail_lbl: RichTextLabel = null
 var _progress_lbl: Label = null
 var _status_lbl: Label = null
 var _compute_btn: Button = null
+var _scenario_opt: OptionButton = null
+## Compute the scenario automatically once projection data is (re)loaded. Set when
+## the user switches scenario in the dropdown or after weather generation, so the
+## chart repopulates without a manual "Compute Scenario" click. Left false on first
+## visit to preserve the manual incremental reveal.
+var _auto_compute_on_ready: bool = false
 var _gen_seed_spin: SpinBox = null
 var _gen_years_spin: SpinBox = null
 var _gen_engine_opt: OptionButton = null
@@ -157,10 +173,16 @@ func _connect_signals() -> void:
 	if cps != null:
 		if cps.has_signal("projection_ready"):
 			cps.connect("projection_ready", func(_la: float, _lo: float, _s: int):
-				_invalidate_proj_cache())
+				_invalidate_proj_cache()
+				_update_scenario_dropdown()
+				# Auto-recompute after a dropdown scenario switch or a generation run
+				# so the future bars repopulate without a manual "Compute" click.
+				if _auto_compute_on_ready and visible:
+					_start_proj_cache_build())
 		if cps.has_signal("scenario_changed"):
 			cps.connect("scenario_changed", func(_s: int):
-				_invalidate_proj_cache())
+				_invalidate_proj_cache()
+				_update_scenario_dropdown())
 	if WeatherService.has_signal("generation_complete"):
 		WeatherService.connect("generation_complete", func(years: Array):
 			_weather_gen_active = false
@@ -168,7 +190,11 @@ func _connect_signals() -> void:
 			_gen_training_model = false
 			_update_gen_weather_button()
 			_update_progress()
-			_start_generated_yearbook_build(years))
+			_start_generated_yearbook_build(years)
+			# Populate the projected future bars automatically (req: no manual
+			# "Compute Scenario" click after generating weather).
+			_auto_compute_on_ready = true
+			_start_proj_cache_build())
 	if WeatherService.has_signal("generation_progress"):
 		WeatherService.connect("generation_progress", func(yr: int, mo: int, _frac: float):
 			_gen_progress_year = yr
@@ -530,6 +556,22 @@ func _build_legend(parent: VBoxContainer) -> void:
 	_mk_legend_item(hbox, C_ORANGE, "● NWS alerts")
 	_mk_legend_item(hbox, Color(0.90, 0.22, 0.22, 0.72), "▲ Generated highs")
 	_mk_legend_item(hbox, Color(0.35, 0.35, 0.35, 0.42), "▲ CMIP6 estimate")
+	var sc_lbl := Label.new()
+	sc_lbl.text = "Warming"
+	sc_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	sc_lbl.add_theme_font_size_override("font_size", 10)
+	hbox.add_child(sc_lbl)
+	_scenario_opt = OptionButton.new()
+	_scenario_opt.focus_mode = Control.FOCUS_NONE
+	for i in SCENARIO_CHOICES.size():
+		_scenario_opt.add_item(SCENARIO_CHOICES[i], i)
+	_scenario_opt.tooltip_text = (
+		"Climate warming scenario (CMIP6 SSP pathway). Drives both the projected "
+		+ "future record estimates and the warming embedded in generated weather. "
+		+ "Switching re-fetches the projection and recomputes the future bars."
+	)
+	_scenario_opt.item_selected.connect(_on_scenario_selected)
+	hbox.add_child(_scenario_opt)
 	_compute_btn = Button.new()
 	_compute_btn.text = "Compute Scenario"
 	_compute_btn.focus_mode = Control.FOCUS_NONE
@@ -744,6 +786,7 @@ func _on_opened() -> void:
 	call_deferred("_scroll_to_right")
 	_update_compute_button_state()
 	_update_gen_weather_button()
+	_update_scenario_dropdown()
 
 
 func _on_generate_weather_pressed() -> void:
@@ -792,6 +835,36 @@ func _start_weather_generation(seed_val: int, num_years: int, lat: float, lon: f
 		set_process(true)
 		_update_gen_weather_button()
 		_update_progress()
+
+
+func _on_scenario_selected(index: int) -> void:
+	if _scenario_opt == null:
+		return
+	var cps := get_node_or_null("/root/ClimateProjectionService")
+	if cps == null or not cps.has_method("set_scenario"):
+		return
+	var new_s := _scenario_opt.get_item_id(index)
+	if int(cps.get("active_scenario")) == new_s:
+		return
+	# Recompute automatically once the newly-selected scenario's projection loads
+	# so the future bars refresh straight from the dropdown, no manual click.
+	_auto_compute_on_ready = true
+	cps.call("set_scenario", new_s)
+	_update_scenario_dropdown()
+	_update_compute_button_state()
+
+
+## Sync the dropdown to the service's active scenario without re-emitting.
+func _update_scenario_dropdown() -> void:
+	if _scenario_opt == null:
+		return
+	var cps := get_node_or_null("/root/ClimateProjectionService")
+	if cps == null:
+		return
+	var sc := clampi(int(cps.get("active_scenario")), 0, SCENARIO_CHOICES.size() - 1)
+	var idx := _scenario_opt.get_item_index(sc)
+	if idx >= 0 and _scenario_opt.selected != idx:
+		_scenario_opt.select(idx)
 
 
 func _on_compute_scenario_pressed() -> void:
@@ -1001,6 +1074,8 @@ func _update_gen_weather_button() -> void:
 	_gen_weather_btn.disabled = busy
 	if _gen_engine_opt != null:
 		_gen_engine_opt.disabled = busy
+	if _scenario_opt != null:
+		_scenario_opt.disabled = busy
 	if _weather_gen_waiting_training:
 		if not _gen_weather_btn.text.begins_with("Loading training"):
 			_gen_weather_btn.text = "Loading training…"
