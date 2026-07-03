@@ -2357,6 +2357,9 @@ func _on_video_faster_pressed() -> void:
 				best_d = d
 				best_i = i
 		best_i = min(best_i + 1, TimelineUI.SPEED_STEPS.size() - 1)
+		# Skip the ∞ analemma preset (INF) — video sync uses finite speeds only.
+		while best_i > 0 and not is_finite(float(TimelineUI.SPEED_STEPS[best_i][1])):
+			best_i -= 1
 		_video_sync_main.set("time_scale", float(TimelineUI.SPEED_STEPS[best_i][1]))
 
 

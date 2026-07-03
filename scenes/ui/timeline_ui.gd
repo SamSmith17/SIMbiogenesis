@@ -9,19 +9,20 @@ extends Control
 ## @tool makes _build_bar() run in the editor so the layout is visible in the 2D editor.
 
 # ---------------------------------------------------------------------------
-# Palette  (mirrors system_graph_view.gd / solar_ui)
+# Palette — redirected to UITheme (single source of truth); local const
+# names kept so existing call sites are unchanged.
 # ---------------------------------------------------------------------------
-const C_BG       := Color(0.039, 0.055, 0.098, 0.97)
-const C_PANEL    := Color(0.082, 0.114, 0.208, 1.0)
-const C_BORDER   := Color(0.227, 0.290, 0.420, 1.0)
-const C_PRIMARY  := Color(0.133, 0.827, 0.933, 1.0)
-const C_AMBER    := Color(0.961, 0.620, 0.043, 1.0)
-const C_GOLD     := Color(1.000, 0.816, 0.310, 1.0)
-const C_LAVENDER := Color(0.686, 0.600, 1.000, 1.0)
-const C_GREEN    := Color(0.149, 0.902, 0.467, 1.0)
-const C_TEXT     := Color(0.886, 0.910, 0.941, 1.0)
-const C_TEXT_S   := Color(0.580, 0.639, 0.722, 1.0)
-const C_TEXT_M   := Color(0.392, 0.447, 0.545, 1.0)
+const C_BG       := Color(UITheme.C_BG, 0.97)
+const C_PANEL    := UITheme.C_PANEL
+const C_BORDER   := UITheme.C_BORDER
+const C_PRIMARY  := UITheme.C_PRIMARY
+const C_AMBER    := UITheme.C_AMBER
+const C_GOLD     := UITheme.C_GOLD
+const C_LAVENDER := UITheme.C_LAVENDER
+const C_GREEN    := UITheme.C_GREEN
+const C_TEXT     := UITheme.C_TEXT
+const C_TEXT_S   := UITheme.C_TEXT_S
+const C_TEXT_M   := UITheme.C_TEXT_M
 
 # NLE track (variable) + clip-controls (22) + main info row + padding.
 # INFO_ROW_HEIGHT must comfortably fit the tallest cluster (the two-line
@@ -53,6 +54,7 @@ const SPEED_STEPS : Array = [
 	["450×",  0.125000],
 	["1440×", 0.400000],
 	["Max",   2.000000],
+	["∞",     INF],       # Analemma view: 1 frame = solar noon of the next day.
 ]
 
 const MOON_EMOJIS  : Array = ["🌑","🌒","🌓","🌔","🌕","🌖","🌗","🌘"]
@@ -335,10 +337,9 @@ func _on_dpad_right() -> void:
 	if _main == null or not is_instance_valid(_main):
 		return
 	var ts := float(_main.get("time_scale") if _main.get("time_scale") != null else 0.0)
-	if ts <= 0.0:
+	if ts <= 0.0 and not _analemma_active():
 		# Paused or reversed — resume forward at stored speed
-		var resume := _stored_scale if _stored_scale > 1e-6 else float(SPEED_STEPS[_speed_idx][1])
-		_main.set("time_scale", resume)
+		_resume_forward()
 		_sim_paused_by_bar = false
 		CursorController.set_paused(false)
 	else:
@@ -349,6 +350,12 @@ func _on_dpad_right() -> void:
 ## D-pad left: slow down → pause → reverse
 func _on_dpad_left() -> void:
 	if _main == null or not is_instance_valid(_main):
+		return
+	# Analemma is forward-only: a slow-down drops back to the fastest normal speed.
+	if _analemma_active():
+		_speed_idx = _last_finite_idx()
+		_apply_speed()
+		_update_display()
 		return
 	var ts := float(_main.get("time_scale") if _main.get("time_scale") != null else 0.0)
 	if ts > 0.0:
@@ -365,8 +372,9 @@ func _on_dpad_left() -> void:
 		_sim_paused_by_bar = false
 		CursorController.set_paused(false)
 	else:
-		# Already reversing — speed up the reverse (more negative)
-		_speed_idx = min(_speed_idx + 1, SPEED_STEPS.size() - 1)
+		# Already reversing — speed up the reverse (more negative); never reverse
+		# into the ∞ analemma preset.
+		_speed_idx = min(_speed_idx + 1, _last_finite_idx())
 		var val := -float(SPEED_STEPS[_speed_idx][1])
 		_main.set("time_scale", val)
 	_update_display()
@@ -696,7 +704,8 @@ func _update_display() -> void:
 
 	# ── Play / speed ─────────────────────────────────────────────────────────
 	var ts : float = float(_main.get("time_scale") if _main.get("time_scale") != null else 0.0)
-	_is_playing    = ts > 0.0
+	var analemma := _analemma_active()
+	_is_playing    = ts > 0.0 or analemma
 	_play_btn.text = "⏸" if _is_playing else ("◀" if ts < 0.0 else "▶")
 	# Update the ring border and icon colour to signal play/pause state.
 	var ring_col   : Color = C_AMBER if _is_playing else C_PRIMARY
@@ -733,14 +742,14 @@ func _on_play_pressed() -> void:
 	if get_viewport() != null:
 		get_viewport().gui_release_focus()
 	var ts := float(_main.get("time_scale") if _main.get("time_scale") != null else 0.0)
-	if ts > 0.0:
-		_stored_scale = maxf(ts, 1e-6)
-		_main.set("time_scale", 0.0)
+	if ts > 0.0 or _analemma_active():
+		if ts > 0.0:
+			_stored_scale = maxf(ts, 1e-6)
+		_pause_motion()
 		_sim_paused_by_bar = true
 		CursorController.set_paused(true)
 	else:
-		var resume := _stored_scale if _stored_scale > 1e-6 else float(SPEED_STEPS[_speed_idx][1])
-		_main.set("time_scale", resume)
+		_resume_forward()
 		_sim_paused_by_bar = false
 		CursorController.set_paused(false)
 	_update_display()
@@ -756,11 +765,64 @@ func _on_faster_pressed() -> void:
 	_apply_speed()
 
 
+## True when the current preset is the ∞ / analemma step.
+func _is_analemma_idx() -> bool:
+	return is_inf(float(SPEED_STEPS[_speed_idx][1]))
+
+
+## Highest preset index that is a normal (finite) playback speed.
+func _last_finite_idx() -> int:
+	for i in range(SPEED_STEPS.size() - 1, -1, -1):
+		if is_finite(float(SPEED_STEPS[i][1])):
+			return i
+	return 0
+
+
+## True when main is currently running the analemma stepper.
+func _analemma_active() -> bool:
+	if _main == null or not is_instance_valid(_main):
+		return false
+	var v: Variant = _main.get("analemma_mode")
+	return v != null and bool(v)
+
+
+## Push "play forward at the current preset" to main, routing the ∞ preset to
+## the analemma stepper (visual-only; time_scale stays 0 so nothing integrates).
+func _resume_forward() -> void:
+	if _main == null or not is_instance_valid(_main):
+		return
+	if _is_analemma_idx():
+		_main.set("analemma_mode", true)
+		_main.set("time_scale", 0.0)
+	else:
+		var resume := _stored_scale if _stored_scale > 1e-6 else float(SPEED_STEPS[_speed_idx][1])
+		_main.set("analemma_mode", false)
+		_main.set("time_scale", resume)
+
+
+## Stop all motion (normal pause or leaving analemma).
+func _pause_motion() -> void:
+	if _main == null or not is_instance_valid(_main):
+		return
+	_main.set("analemma_mode", false)
+	_main.set("time_scale", 0.0)
+
+
 func _apply_speed() -> void:
 	var val := float(SPEED_STEPS[_speed_idx][1])
-	_stored_scale = val
-	if _is_playing and _main != null and is_instance_valid(_main):
-		_main.set("time_scale", val)
+	if _main != null and is_instance_valid(_main):
+		if is_inf(val):
+			# Analemma preset: drive the stepper instead of a continuous scale.
+			_main.set("analemma_mode", _is_playing)
+			if _is_playing:
+				_main.set("time_scale", 0.0)
+		else:
+			_stored_scale = val
+			_main.set("analemma_mode", false)
+			if _is_playing:
+				_main.set("time_scale", val)
+	elif is_finite(val):
+		_stored_scale = val
 	_speed_lbl.text = str(SPEED_STEPS[_speed_idx][0])
 
 
@@ -1246,10 +1308,15 @@ func _recapture_mouse() -> void:
 # ---------------------------------------------------------------------------
 
 func _nearest_speed_idx(scale: float) -> int:
+	if is_inf(scale):
+		return SPEED_STEPS.size() - 1
 	var best      : int   = 0
 	var best_dist : float = 1e9
 	for i in SPEED_STEPS.size():
-		var d := absf(scale - float(SPEED_STEPS[i][1]))
+		var v := float(SPEED_STEPS[i][1])
+		if not is_finite(v):
+			continue
+		var d := absf(scale - v)
 		if d < best_dist:
 			best_dist = d
 			best      = i
@@ -1810,7 +1877,8 @@ func _build_center_time_cluster() -> Control:
 	var date_row := HBoxContainer.new()
 	date_row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	date_row.add_theme_constant_override("separation", 4)
-	_year_input = _mk_date_spin(2000, 2100, 1.0, "Simulation year")
+	# Floor at 1940 = start of the Open-Meteo ERA5 archive (earliest real weather).
+	_year_input = _mk_date_spin(1940, 2100, 1.0, "Simulation year")
 	_month_input = _mk_date_spin(1, 12, 1.0, "Month (1–12)")
 	_day_input = _mk_date_spin(1, 31, 1.0, "Day of month")
 	_year_input.value_changed.connect(_on_year_changed)
