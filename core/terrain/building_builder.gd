@@ -10,6 +10,9 @@ const LEVELS_TO_METRES := 2.8
 const MAX_HEIGHT_M := 200.0
 const MIN_FOOTPRINT_AREA_M2 := 16.0
 const MAX_BUILDINGS := 800
+## Walls extend this far below the lowest corner sample so the downhill side
+## never floats above DEM noise while eaves/roof stay level.
+const FOUNDATION_SKIRT_M := 0.35
 
 
 static func parse_height_m(tags: Dictionary) -> float:
@@ -226,11 +229,14 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 	if n < 3:
 		return vtx_base
 
-	var bottoms := PackedFloat32Array()
-	bottoms.resize(n)
+	# Seat the whole building at its lowest corner sample: real eaves and roofs
+	# are level regardless of slope; the uphill walls simply bury into the hill.
+	var base_y := INF
 	for i in n:
-		bottoms[i] = _sample_ground_y(poly[i].x, poly[i].y, elev, res, height_extent_m,
-			center_elev, detail_elev, detail_cols, detail_rows, detail_extent_m)
+		base_y = minf(base_y, _sample_ground_y(poly[i].x, poly[i].y, elev, res,
+			height_extent_m, center_elev, detail_elev, detail_cols, detail_rows,
+			detail_extent_m))
+	var skirt_y := base_y - FOUNDATION_SKIRT_M
 
 	var tri_indices := Geometry2D.triangulate_polygon(poly)
 	if tri_indices.is_empty():
@@ -238,12 +244,9 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 
 	# OSM `height` is top-of-structure above local ground — roof must not exceed it.
 	var wall_h := _wall_height_m(height_m, roof, poly)
-	var eave_y := PackedFloat32Array()
-	eave_y.resize(n)
-	for i in n:
-		eave_y[i] = bottoms[i] + wall_h
+	var eave_y := base_y + wall_h
 
-	var roof_y := _roof_corner_heights(poly, bottoms, height_m, wall_h, roof)
+	var roof_y := _roof_corner_heights(poly, base_y, height_m, wall_h, roof)
 
 	# Corner positions at each ring level.
 	var bottom_p: Array[Vector3] = []
@@ -254,8 +257,8 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 	roof_p.resize(n)
 	for i in n:
 		var p := poly[i]
-		bottom_p[i] = Vector3(p.x, bottoms[i], p.y)
-		eave_p[i] = Vector3(p.x, eave_y[i], p.y)
+		bottom_p[i] = Vector3(p.x, skirt_y, p.y)
+		eave_p[i] = Vector3(p.x, eave_y, p.y)
 		roof_p[i] = Vector3(p.x, roof_y[i], p.y)
 
 	# Flat shading: every triangle carries its own three vertices + a single face
@@ -284,11 +287,7 @@ static func _append_footprint(st: SurfaceTool, poly: PackedVector2Array, height_
 				roof_p[tri_indices[t + 2]]])
 	else:
 		var center := _poly_centroid(poly)
-		var ground_y := 0.0
-		for i in n:
-			ground_y += bottoms[i]
-		ground_y /= float(maxi(n, 1))
-		var apex := Vector3(center.x, ground_y + height_m, center.y)
+		var apex := Vector3(center.x, base_y + height_m, center.y)
 		for i in n:
 			var j := (i + 1) % n
 			tris.append([eave_p[i], eave_p[j], apex])
@@ -334,7 +333,7 @@ static func _wall_height_m(total_m: float, roof: Dictionary, poly: PackedVector2
 	return maxf(total_m - roof_rise, total_m * 0.72)
 
 
-static func _roof_corner_heights(poly: PackedVector2Array, bottoms: PackedFloat32Array,
+static func _roof_corner_heights(poly: PackedVector2Array, base_y: float,
 		total_m: float, wall_h: float, roof: Dictionary) -> PackedFloat32Array:
 	var n := poly.size()
 	var out := PackedFloat32Array()
@@ -342,11 +341,11 @@ static func _roof_corner_heights(poly: PackedVector2Array, bottoms: PackedFloat3
 	var shape := str(roof.get("shape", "flat"))
 	if shape in ["flat", ""]:
 		for i in n:
-			out[i] = bottoms[i] + total_m
+			out[i] = base_y + total_m
 		return out
 	if shape in ["pyramidal", "hipped", "round", "mansard"]:
 		for i in n:
-			out[i] = bottoms[i] + wall_h
+			out[i] = base_y + wall_h
 		return out
 	var axis := _ridge_axis(poly, roof)
 	var half_w := _obb_half_width(poly, axis)
@@ -355,15 +354,14 @@ static func _roof_corner_heights(poly: PackedVector2Array, bottoms: PackedFloat3
 		for i in n:
 			var dist := absf(_signed_ridge_dist(poly[i], axis, center))
 			var t := clampf(dist / maxf(half_w, 1.0), 0.0, 1.0)
-			out[i] = lerpf(bottoms[i] + total_m, bottoms[i] + wall_h, t)
+			out[i] = lerpf(base_y + total_m, base_y + wall_h, t)
 	elif shape in ["skillion", "lean_to"]:
 		var angle := deg_to_rad(TerrainBuilder.dict_float(roof, "angle_deg", 30.0))
 		var slope := tan(angle)
 		for i in n:
 			var dist := _signed_ridge_dist(poly[i], axis, center)
 			var rise := clampf(dist * slope, 0.0, total_m - wall_h)
-			out[i] = bottoms[i] + wall_h + rise
-			out[i] = minf(out[i], bottoms[i] + total_m)
+			out[i] = minf(base_y + wall_h + rise, base_y + total_m)
 	return out
 
 
