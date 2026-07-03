@@ -3470,12 +3470,30 @@ func _setup_building_builder_ui() -> void:
 
 
 func open_building_builder(building_idx: int) -> void:
-	if _building_builder_ui != null and _building_builder_ui.has_method("open"):
+	if _building_builder_ui == null:
+		return
+	if building_idx < 0:
+		if _building_builder_ui.has_method("open_library"):
+			_building_builder_ui.call("open_library")
+	elif _building_builder_ui.has_method("open"):
 		_building_builder_ui.call("open", building_idx)
 
 
 func get_building_record(building_idx: int) -> Dictionary:
 	return _find_building_record(building_idx).duplicate(true)
+
+
+## Start the ghost-placement flow for a library structure (the placed-props UI
+## drives per-frame aim + click-confirm once notified).
+func begin_structure_placement(model_id: String) -> bool:
+	if _main == null or model_id.is_empty():
+		return false
+	var r: Dictionary = PlacedPropService.begin_placement(_main, model_id)
+	if not bool(r.get("ok", false)):
+		return false
+	if _placed_props_ui != null and _placed_props_ui.has_method("notify_bundle_imported"):
+		_placed_props_ui.call("notify_bundle_imported", r)
+	return true
 
 
 func get_building_tag(building_idx: int) -> String:

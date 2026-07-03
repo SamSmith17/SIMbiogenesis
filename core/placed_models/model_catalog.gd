@@ -31,6 +31,15 @@ static func find(model_id: String) -> Dictionary:
 	return {}
 
 
+## Shipped models filtered by their "category" key ("structures", "nature", …).
+static func models_in_category(category: String) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for m in all_models():
+		if str(m.get("category", "")) == category:
+			out.append(m)
+	return out
+
+
 static func load_scene(model_id: String) -> PackedScene:
 	var entry := find(model_id)
 	var path := str(entry.get("path", ""))
@@ -165,13 +174,17 @@ static func scale_to_footprint(model_id: String, width_m: float, depth_m: float,
 static func _shipped_models() -> Array[Dictionary]:
 	return [
 		{"id": "shiftpod", "label": "Shiftpod", "path": "res://Imported Models/Soak Terrain/Camps/Camp Components/Shiftpod.glb",
-			"target_height_m": 2.5, "mesh_scale": 1.0},
+			"target_height_m": 2.5, "mesh_scale": 1.0, "category": "structures"},
 		{"id": "carport", "label": "Carport", "path": "res://Imported Models/Soak Terrain/Camps/Camp Components/Carport.glb",
-			"target_height_m": 3.5, "mesh_scale": 1.0},
+			"target_height_m": 3.5, "mesh_scale": 1.0, "category": "structures"},
 		{"id": "ez_up", "label": "10x10 EZ-UP", "path": "res://Imported Models/Soak Terrain/Camps/Camp Components/10 x 10 EZ-UP 2.glb",
-			"target_height_m": 3.0, "mesh_scale": 1.0},
+			"target_height_m": 3.0, "mesh_scale": 1.0, "category": "structures"},
+		# This LinkageLab export is metre-unit (AABB height ≈ 2.4 — unlike the
+		# inch-unit GLB bundles), so preserve_scale alone keeps true size.
+		{"id": "starshade", "label": "StarShade", "path": "res://Imported Models/StarShades/LinkageLab_Export_1777324209080.gltf",
+			"preserve_scale": true, "category": "structures"},
 		{"id": "pine_1", "label": "Pine Tree", "path": "res://Imported Models/Trees/free_tree_1.glb",
-			"target_height_m": 13.0, "mesh_scale": 1.0},
+			"target_height_m": 13.0, "mesh_scale": 1.0, "category": "nature"},
 	]
 
 

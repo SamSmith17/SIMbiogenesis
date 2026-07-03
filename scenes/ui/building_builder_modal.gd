@@ -44,6 +44,10 @@ var _elem_list: ItemList = null
 var _elem_spins: Dictionary = {}   # "u_m"/"v_m"/"w_m"/"h_m" -> SpinBox
 var _elem_delete: Button = null
 var _selected_elem := -1
+var _tabs: TabContainer = null
+var _lib_list: ItemList = null
+var _lib_models: Array = []
+var _lib_replace_btn: Button = null
 var _rebuild_pending := false
 var _rebuild_timer := 0.0
 
@@ -79,14 +83,33 @@ func open(building_idx: int) -> void:
 	_selected_elem = -1
 	_sync_controls_from_style()
 	_sync_element_list()
+	_activate()
+	_tabs.current_tab = 0
+	_fit_camera()
+	_queue_rebuild(true)
+
+
+## Open straight to the structure library (B with no building focused).
+func open_library() -> void:
+	if _active or _loader == null:
+		return
+	_building_idx = -1
+	_record = {}
+	_working_style = {}
+	_selected_elem = -1
+	_activate()
+	_tabs.current_tab = 1
+
+
+func _activate() -> void:
 	_active = true
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
-	_fit_camera()
-	_queue_rebuild(true)
 	move_to_front()
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	if _lib_replace_btn != null:
+		_lib_replace_btn.disabled = _building_idx < 0
 
 
 func close() -> void:
@@ -110,9 +133,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	var idx := -1
 	if _loader.has_method("get_building_focus_idx"):
 		idx = int(_loader.call("get_building_focus_idx"))
-	if idx < 0:
-		return
-	open(idx)
+	if idx >= 0:
+		open(idx)
+	else:
+		open_library()
 	get_viewport().set_input_as_handled()
 
 
@@ -235,15 +259,23 @@ func _build_ui() -> void:
 	vp_container.add_child(_viewport)
 	_build_studio_world()
 
-	# Right: parameter sidebar.
+	# Right: tabs — parametric customization + the structure library.
+	_tabs = TabContainer.new()
+	_tabs.custom_minimum_size = Vector2(340, 550)
+	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tabs.tab_changed.connect(_on_tab_changed)
+	hbox.add_child(_tabs)
+
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(340, 550)
+	scroll.name = "Customize"
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	hbox.add_child(scroll)
+	_tabs.add_child(scroll)
 	var side := VBoxContainer.new()
-	side.custom_minimum_size = Vector2(320, 0)
+	side.custom_minimum_size = Vector2(300, 0)
 	side.add_theme_constant_override("separation", 6)
 	scroll.add_child(side)
+
+	_build_library_tab()
 
 	_prov_label = Label.new()
 	_prov_label.add_theme_font_size_override("font_size", 12)
@@ -465,11 +497,16 @@ func _fit_camera() -> void:
 		half = maxf(half, maxf(absf(p.x), absf(p.y)))
 	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
 	var height: float = params["height_m"]
-	var size := maxf(half * 2.0, height)
+	_fit_camera_size(maxf(half * 2.0, height), height * 0.45)
+
+
+func _fit_camera_size(size: float, target_y: float) -> void:
+	if _camera == null:
+		return
 	var dist := clampf(size * 1.8, 8.0, 400.0)
 	var az := deg_to_rad(35.0)
 	var el := deg_to_rad(28.0)
-	var target := Vector3(0, height * 0.45, 0)
+	var target := Vector3(0, target_y, 0)
 	_camera.position = target + Vector3(
 		sin(az) * cos(el), sin(el), cos(az) * cos(el)) * dist
 	_camera.look_at(target)
@@ -478,6 +515,8 @@ func _fit_camera() -> void:
 func _rebuild_preview() -> void:
 	if _holder == null or _record.is_empty():
 		return
+	if _tabs != null and _tabs.current_tab != 0:
+		return  # library tab owns the preview right now
 	for child in _holder.get_children():
 		child.free()
 	# Flat 2×2 zero DEM: the studio building seats at y = 0 through the same
@@ -548,6 +587,119 @@ func _reset_to_osm() -> void:
 	_sync_controls_from_style()
 	_sync_element_list()
 	_queue_rebuild()
+
+
+# ---------------------------------------------------------------------------
+# Structure library
+# ---------------------------------------------------------------------------
+
+func _build_library_tab() -> void:
+	var lib := VBoxContainer.new()
+	lib.name = "Library"
+	lib.add_theme_constant_override("separation", 6)
+	_tabs.add_child(lib)
+
+	var hint := Label.new()
+	hint.text = "Preset structures + your imported models"
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.modulate = Color(0.7, 0.8, 0.9)
+	lib.add_child(hint)
+
+	_lib_list = ItemList.new()
+	_lib_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_lib_list.item_selected.connect(func(_i: int) -> void: _preview_library_model())
+	lib.add_child(_lib_list)
+
+	var place_btn := Button.new()
+	place_btn.text = "Place in world"
+	place_btn.pressed.connect(_on_library_place)
+	lib.add_child(place_btn)
+
+	_lib_replace_btn = Button.new()
+	_lib_replace_btn.text = "Replace this building"
+	_lib_replace_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	_lib_replace_btn.pressed.connect(_on_library_replace)
+	lib.add_child(_lib_replace_btn)
+
+
+func _on_tab_changed(tab: int) -> void:
+	if not _active:
+		return
+	if tab == 1:
+		_refresh_library()
+		_preview_library_model()
+	else:
+		_fit_camera()
+		_queue_rebuild(true)
+
+
+func _refresh_library() -> void:
+	if _lib_list == null:
+		return
+	var prev := _selected_library_id()
+	_lib_models = []
+	for m in ModelCatalog.models_in_category("structures"):
+		_lib_models.append(m)
+	# User-imported GLBs (uploaded via the P panel / LinkageLab bundles).
+	for m in ModelCatalog.all_models():
+		if str(m.get("path", "")).begins_with("user://"):
+			_lib_models.append(m)
+	_lib_list.clear()
+	var reselect := 0
+	for i in _lib_models.size():
+		var m: Dictionary = _lib_models[i]
+		_lib_list.add_item(str(m.get("label", m.get("id", "?"))))
+		if str(m.get("id", "")) == prev:
+			reselect = i
+	if _lib_list.item_count > 0:
+		_lib_list.select(reselect)
+
+
+func _selected_library_id() -> String:
+	if _lib_list == null or _lib_list.get_selected_items().is_empty():
+		return ""
+	var i: int = _lib_list.get_selected_items()[0]
+	if i < 0 or i >= _lib_models.size():
+		return ""
+	return str((_lib_models[i] as Dictionary).get("id", ""))
+
+
+func _preview_library_model() -> void:
+	if _holder == null:
+		return
+	for child in _holder.get_children():
+		child.free()
+	var id := _selected_library_id()
+	if id.is_empty():
+		return
+	var inst := ModelCatalog.instantiate(id)
+	if inst == null:
+		return
+	var s := ModelCatalog.resolved_scale(id, 1.0)
+	inst.scale = Vector3.ONE * s
+	inst.position.y = -ModelCatalog.foot_local_y(id) * s
+	_holder.add_child(inst)
+	var m := ModelCatalog.mesh_metrics(id)
+	var size: float = maxf(maxf(float(m.width), float(m.depth)), float(m.unit_height)) * s
+	_fit_camera_size(maxf(size, 2.0), float(m.unit_height) * s * 0.45)
+
+
+func _on_library_place() -> void:
+	var id := _selected_library_id()
+	if id.is_empty() or _loader == null:
+		return
+	if _loader.has_method("begin_structure_placement") \
+			and bool(_loader.call("begin_structure_placement", id)):
+		close()
+
+
+func _on_library_replace() -> void:
+	var id := _selected_library_id()
+	if id.is_empty() or _loader == null or _building_idx < 0:
+		return
+	if _loader.has_method("replace_osm_building") \
+			and bool(_loader.call("replace_osm_building", _building_idx, id)):
+		close()
 
 
 # ---------------------------------------------------------------------------

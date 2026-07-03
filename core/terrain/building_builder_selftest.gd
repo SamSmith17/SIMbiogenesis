@@ -31,6 +31,7 @@ func _initialize() -> void:
 	_test_modal_script()
 	_test_facade_elements()
 	_test_wall_pick()
+	_test_model_catalog()
 	if _failures == 0:
 		print("BUILDING SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -761,3 +762,20 @@ func _test_wall_pick() -> void:
 	var miss := BuildingBuilder.pick_wall_point(
 		poly, 0.0, 8.0, Vector3(0, 20.0, -20), Vector3(0, 0, 1))
 	_check("pick: miss above walls", not bool(miss.get("valid", false)))
+
+
+func _test_model_catalog() -> void:
+	var structures := ModelCatalog.models_in_category("structures")
+	_check("catalog: structures category populated", structures.size() >= 4,
+		"got %d" % structures.size())
+	var ids: Array[String] = []
+	for m in structures:
+		ids.append(str((m as Dictionary).get("id", "")))
+	_check("catalog: starshade present", "starshade" in ids)
+	for m in structures:
+		var id := str((m as Dictionary).get("id", ""))
+		_check("catalog: %s scene loads" % id, ModelCatalog.load_scene(id) != null)
+	# StarShade real-world size stays sane through the inch-unit fit.
+	var s := ModelCatalog.resolved_scale("starshade", 1.0)
+	var h := float(ModelCatalog.mesh_metrics("starshade").unit_height) * s
+	_check("catalog: starshade height sane", h > 1.5 and h < 12.0, "h=%.2f m" % h)
