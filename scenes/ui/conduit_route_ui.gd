@@ -2,9 +2,9 @@ extends CanvasLayer
 
 ## HUD for in-world 3D conduit routing mode.
 
-const C_BG := Color(0.039, 0.055, 0.098, 0.82)
-const C_TEXT := Color(0.886, 0.910, 0.941, 1.0)
-const C_ACCENT := Color(0.133, 0.827, 0.933, 1.0)
+const C_BG := Color(UITheme.C_BG, 0.82)
+const C_TEXT := UITheme.C_TEXT
+const C_ACCENT := UITheme.C_PRIMARY
 
 var _panel: PanelContainer = null
 var _title: Label = null
@@ -13,7 +13,8 @@ var _hint: Label = null
 
 
 func _ready() -> void:
-	layer = 6
+	# +1 over LAYER_WORLD_HINT: this HUD must render above the crosshair reticle.
+	layer = UITheme.LAYER_WORLD_HINT + 1
 	visible = false
 	_build_ui()
 

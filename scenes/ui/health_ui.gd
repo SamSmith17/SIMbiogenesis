@@ -26,9 +26,9 @@ enum UIPosition { TOP_LEFT, TOP_CENTER, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_CENTER, B
 
 @export_group("Colors")
 ## Health bar gradient colors
-@export var health_color_high: Color = Color(0.2, 0.9, 0.3, 1.0)  # Green
-@export var health_color_mid: Color = Color(0.9, 0.8, 0.2, 1.0)   # Yellow
-@export var health_color_low: Color = Color(0.9, 0.2, 0.2, 1.0)   # Red
+@export var health_color_high: Color = UITheme.C_OK
+@export var health_color_mid: Color = UITheme.C_WARN
+@export var health_color_low: Color = UITheme.C_ERROR
 
 ## Hydration bar color
 @export var hydration_color: Color = Color(0.3, 0.6, 0.95, 1.0)  # Blue
@@ -81,7 +81,7 @@ var _rules_vis_poll_left: float = 0.0
 var _cached_show_survival_ui: bool = true
 
 func _ready() -> void:
-	layer = 10  # Above most UI
+	layer = UITheme.LAYER_HUD
 	_create_ui()
 	call_deferred("_find_health_system")
 

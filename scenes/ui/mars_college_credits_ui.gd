@@ -15,7 +15,7 @@ var _popup_tween : Tween
 
 
 func _ready() -> void :
-	layer = 25
+	layer = UITheme.LAYER_PANEL
 	add_to_group( "mars_college_credits_ui" )
 	_root = Control.new()
 	_root.set_anchors_preset( Control.PRESET_FULL_RECT )

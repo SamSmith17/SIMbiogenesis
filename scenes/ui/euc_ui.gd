@@ -67,8 +67,8 @@ func _update_display() -> void:
 	
 	# Color code battery
 	if battery_percent > 50.0:
-		battery_percent_label.add_theme_color_override("font_color", Color(0.2, 1.0, 0.4, 1.0))
-		battery_bar.modulate = Color(0.2, 1.0, 0.4, 1.0)
+		battery_percent_label.add_theme_color_override("font_color", UITheme.C_OK)
+		battery_bar.modulate = UITheme.C_OK
 	elif battery_percent > 25.0:
 		battery_percent_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.2, 1.0))
 		battery_bar.modulate = Color(1.0, 0.9, 0.2, 1.0)
@@ -76,8 +76,8 @@ func _update_display() -> void:
 		battery_percent_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.2, 1.0))
 		battery_bar.modulate = Color(1.0, 0.5, 0.2, 1.0)
 	else:
-		battery_percent_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.2, 1.0))
-		battery_bar.modulate = Color(1.0, 0.2, 0.2, 1.0)
+		battery_percent_label.add_theme_color_override("font_color", UITheme.C_ERROR)
+		battery_bar.modulate = UITheme.C_ERROR
 	
 	# Update distance
 	distance_value.text = "%.1f mi" % distance_miles

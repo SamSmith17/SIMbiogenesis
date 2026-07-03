@@ -6,12 +6,11 @@ extends CanvasLayer
 
 signal dismissed
 
-const C_BG := Color(0.04, 0.05, 0.10, 0.72)
-const C_TEXT := Color(0.88, 0.91, 0.94, 1.0)
-const C_MUTED := Color(0.58, 0.64, 0.72, 1.0)
-const C_ACCENT := Color(0.13, 0.82, 0.93, 1.0)
-const C_OK := Color(0.15, 0.90, 0.47, 1.0)
-const TIMELINE_CLEARANCE := 162.0  # TimelineUI bar + margin
+const C_BG := Color(UITheme.C_BG, 0.72)
+const C_TEXT := UITheme.C_TEXT
+const C_MUTED := UITheme.C_TEXT_S
+const C_ACCENT := UITheme.C_PRIMARY
+const C_OK := UITheme.C_OK
 
 const COMPLETE_HOLD_S := 2.2
 const COMPLETE_HOLD_FAST_S := 0.75
@@ -34,7 +33,7 @@ var _dismiss_timer: SceneTreeTimer = null
 
 
 func setup(title: String) -> void:
-	layer = 100
+	layer = UITheme.LAYER_LOAD_OVERLAY
 	_build_full(title)
 	_build_compact()
 	_set_compact_visible(false)
@@ -171,12 +170,13 @@ func _build_full(title: String) -> void:
 
 
 func _build_compact() -> void:
+	var clearance := UiScreenLayout.timeline_stack_height()
 	_compact_bar = PanelContainer.new()
 	_compact_bar.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	_compact_bar.offset_left = 80.0
 	_compact_bar.offset_right = -80.0
-	_compact_bar.offset_bottom = -TIMELINE_CLEARANCE
-	_compact_bar.offset_top = -(TIMELINE_CLEARANCE + 44.0)
+	_compact_bar.offset_bottom = -clearance
+	_compact_bar.offset_top = -(clearance + 44.0)
 	_compact_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_compact_bar)
 	var margin := MarginContainer.new()

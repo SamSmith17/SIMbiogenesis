@@ -11,7 +11,7 @@ const C_ACTIVE := Color(0.2, 0.95, 0.35, 0.95)
 
 
 func _ready() -> void:
-	layer = 5
+	layer = UITheme.LAYER_WORLD_HINT
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(center)
