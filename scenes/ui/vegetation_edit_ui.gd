@@ -20,6 +20,9 @@ const HIGHLIGHT_DEBOUNCE_S := 0.016
 const RESPECIES_DEBOUNCE_S := 0.35
 const MAX_SELECTION_RADIUS_M := 75.0
 const MAX_SELECTION_AREA_M2 := 17500.0
+## A LMB press+release that moves less than this (screen px) in Paint mode is a
+## "click, not a drag" → drop a single instance instead of scattering a circle.
+const SINGLE_CLICK_PX := 6.0
 const HIGHLIGHT_CLEAR := Color(0.95, 0.25, 0.2, 0.42)
 const HIGHLIGHT_PAINT := Color(0.2, 0.9, 0.4, 0.42)
 const HIGHLIGHT_SELECT := Color(0.35, 0.75, 0.95, 0.42)
@@ -71,6 +74,8 @@ var _highlight_timer := 0.0
 var _respecies_pending := false
 var _respecies_timer := 0.0
 var _place_click_armed := false
+var _paint_press_pos := Vector2.ZERO
+var _paint_click_candidate := false
 
 
 func _ready() -> void:
@@ -451,6 +456,7 @@ func _exit_mode() -> void:
 	_active = false
 	_brushing = false
 	_place_click_armed = false
+	_paint_click_candidate = false
 	_highlight_pending = false
 	_poly_points = PackedVector2Array()
 	_lasso_pts = PackedVector2Array()
@@ -569,6 +575,11 @@ func _on_lmb_pressed() -> void:
 		return
 	_brushing = true
 	_brush_anchor = Vector2(p.x, p.z)
+	# Arm single-instance placement: a Paint circle/rect press that releases with
+	# almost no drag drops one tree instead of scattering the minimum-radius brush.
+	_paint_click_candidate = _tool == Tool.PAINT \
+		and (_shape_mode == ShapeMode.CIRCLE or _shape_mode == ShapeMode.RECT)
+	_paint_press_pos = get_viewport().get_mouse_position()
 	if _loader != null and _loader.has_method("reset_vegetation_highlight_cache"):
 		_loader.call("reset_vegetation_highlight_cache")
 	_update_brush_from_crosshair(true)
@@ -589,6 +600,19 @@ func _on_lmb_released() -> void:
 		if _poly_draw != null:
 			_poly_draw.queue_redraw()
 		return
+	# Single click (no meaningful drag) in Paint mode → drop one instance.
+	if _paint_click_candidate:
+		_paint_click_candidate = false
+		var moved := get_viewport().get_mouse_position().distance_to(_paint_press_pos)
+		if moved < SINGLE_CLICK_PX:
+			_brushing = false
+			_brush_poly = PackedVector2Array()
+			_place_single_at_crosshair()
+			if _loader != null and _loader.has_method("clear_vegetation_highlight"):
+				_loader.call("clear_vegetation_highlight")
+			if _poly_draw != null:
+				_poly_draw.queue_redraw()
+			return
 	if _shape_mode != ShapeMode.POLYGON:
 		_update_brush_from_crosshair(true)
 	_brushing = false
@@ -901,8 +925,10 @@ func _update_shape_prompt() -> void:
 			match _shape_mode:
 				ShapeMode.POLYGON:
 					_set_status("Paint — click corners, Enter/RMB to finish, then confirm")
+				ShapeMode.LASSO:
+					_set_status("Paint — drag to lasso an area, release to apply")
 				_:
-					_set_status("Paint — click center, drag to size (max %.0f m), release to apply" % MAX_SELECTION_RADIUS_M)
+					_set_status("Paint — click to drop one, or drag to scatter a circle/rect")
 		Tool.PLACE:
 			_set_status("Place — click terrain to drop hero tree")
 		Tool.CLEAR:
@@ -1046,6 +1072,38 @@ func _respecies_async() -> void:
 	if _progress_bar != null:
 		_progress_bar.visible = false
 	_set_status("Re-scattered selection — %d instances" % n)
+
+
+## Resolve the concrete species for a single-instance drop. Mix picks one weighted
+## by the mix sliders; grass presets stay grass.
+func _resolve_single_species() -> String:
+	var s := _preset_to_species()
+	if s != "":
+		return s
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _seed_value ^ int(Time.get_ticks_usec())
+	return VegetationPaint.pick_species(_preset, _mix_pine, _mix_deciduous,
+		_mix_shrub, rng, _mix_grass_lawn, _mix_grass_field)
+
+
+func _place_single_at_crosshair() -> void:
+	if _loader == null or not _loader.has_method("place_single_vegetation"):
+		return
+	var hit: Variant = _pick_pointer()
+	if not (hit is Vector3):
+		_set_status("Click terrain to place one %s" % _preset_label())
+		return
+	var p: Vector3 = hit
+	var species := _resolve_single_species()
+	if species.is_empty():
+		return
+	_push_undo("place one")
+	if bool(_loader.call("place_single_vegetation", species, p.x, p.z, _scatter_params())):
+		vegetation_applied.emit()
+		var suffix := " (custom brush look)" if has_brush_style() else ""
+		_set_status("Placed 1 %s%s — click to add more, drag to scatter" % [_preset_label(), suffix])
+	else:
+		_set_status("Could not place %s (capacity reached?)" % _preset_label())
 
 
 func _place_hero_at_crosshair() -> void:

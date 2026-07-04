@@ -4,6 +4,9 @@ extends RefCounted
 ## Global + per-map vegetation style defaults. Merge order: defaults → map file → live patch.
 
 const GLOBAL_PATH := "user://vegetation_style.cfg"
+## Named per-species look presets the player can quick-load from the Tune look…
+## modal. One ConfigFile section per species; each key = preset name → value dict.
+const PRESETS_PATH := "user://vegetation_presets.cfg"
 
 
 static func defaults() -> Dictionary:
@@ -18,6 +21,7 @@ static func defaults() -> Dictionary:
 		"pine_whorl_count": 7,
 		"pine_bough_scale": 1.0,
 		"pine_whorl_spacing": 1.0,
+		"pine_growth_years": 20.0,
 		"pine_trunk_taper": 0.38,
 		"pine_fur_enabled": true,
 		"pine_fur_lod_enabled": true,
@@ -49,6 +53,13 @@ static func defaults() -> Dictionary:
 		"deciduous_branch_thickness": 1.0,
 		"deciduous_branch_reach": 1.0,
 		"deciduous_branch_base": 0.82,
+		"deciduous_branch_levels": 4,
+		"deciduous_branch_split": 3,
+		"deciduous_branch_angle": 38.0,
+		"deciduous_branch_length_ratio": 0.72,
+		"deciduous_branch_droop": 0.12,
+		"deciduous_branch_gnarl": 0.22,
+		"deciduous_growth_years": 16.0,
 		"deciduous_leaf_shells_enabled": true,
 		"deciduous_leaf_lod_enabled": true,
 		"deciduous_lod_near_m": 200.0,
@@ -71,6 +82,7 @@ static func defaults() -> Dictionary:
 		"shrub_cluster_count": 6,
 		"shrub_cluster_spread": 1.0,
 		"shrub_cluster_size": 1.0,
+		"shrub_growth_years": 5.0,
 		"grass_lawn_albedo_tint": Color(1.0, 1.0, 1.0),
 		"grass_lawn_highlight_tint": Color(0.22, 0.62, 0.16),
 		"grass_lawn_bulk_scale": 1.0,
@@ -82,6 +94,7 @@ static func defaults() -> Dictionary:
 		"grass_lawn_blade_thickness": 0.55,
 		"grass_lawn_blade_lean": 0.10,
 		"grass_lawn_hue_jitter": 0.02,
+		"grass_lawn_growth_years": 0.0,
 		"grass_field_albedo_tint": Color(1.0, 1.0, 1.0),
 		"grass_field_highlight_tint": Color(0.52, 0.58, 0.20),
 		"grass_field_bulk_scale": 1.25,
@@ -93,6 +106,7 @@ static func defaults() -> Dictionary:
 		"grass_field_blade_thickness": 0.5,
 		"grass_field_blade_lean": 0.22,
 		"grass_field_hue_jitter": 0.06,
+		"grass_field_growth_years": 0.0,
 		"wind_strength": 0.03,
 		"wind_speed": 0.7,
 		"dither_strength": 1.0,
@@ -152,6 +166,79 @@ static func save_map(lat: float, lon: float, settings: Dictionary) -> void:
 	if f == null:
 		return
 	f.store_string(JSON.stringify(_color_dict_to_json(settings)))
+
+
+## Persist the given keys as the GLOBAL default look (defaults ← here ← per-map).
+## Called from the Tune look… modal's "Apply to map" so a tuned look becomes the
+## default for every future map until re-tuned (a per-map save still overrides).
+## Existing keys are merged, not clobbered, so partial saves keep prior defaults.
+static func save_global(settings: Dictionary) -> void:
+	var cfg := ConfigFile.new()
+	if FileAccess.file_exists(GLOBAL_PATH):
+		cfg.load(GLOBAL_PATH)
+	for k in settings:
+		cfg.set_value("style", str(k), settings[k])
+	cfg.save(GLOBAL_PATH)
+
+
+static func clear_global() -> void:
+	if FileAccess.file_exists(GLOBAL_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(GLOBAL_PATH))
+
+
+## Shape-only subset of a style dict (keys the VegetationLayer owns). Used to seed
+## a fresh map's layer with the global tune-look shape so it renders as the player
+## last tuned it (the render path lets layer shape win over style shape).
+static func shape_subset(style: Dictionary) -> Dictionary:
+	var out := {}
+	for k in VegetationLayer.default_settings():
+		if style.has(k):
+			out[k] = style[k]
+	return out
+
+
+# --- Per-species look presets -------------------------------------------------
+
+static func list_presets(species: String) -> PackedStringArray:
+	if not FileAccess.file_exists(PRESETS_PATH):
+		return PackedStringArray()
+	var cfg := ConfigFile.new()
+	if cfg.load(PRESETS_PATH) != OK or not cfg.has_section(species):
+		return PackedStringArray()
+	return cfg.get_section_keys(species)
+
+
+static func save_preset(species: String, preset_name: String, values: Dictionary) -> void:
+	if species.is_empty() or preset_name.strip_edges().is_empty():
+		return
+	var cfg := ConfigFile.new()
+	if FileAccess.file_exists(PRESETS_PATH):
+		cfg.load(PRESETS_PATH)
+	cfg.set_value(species, preset_name.strip_edges(), _color_dict_to_json(values))
+	cfg.save(PRESETS_PATH)
+
+
+static func load_preset(species: String, preset_name: String) -> Dictionary:
+	if not FileAccess.file_exists(PRESETS_PATH):
+		return {}
+	var cfg := ConfigFile.new()
+	if cfg.load(PRESETS_PATH) != OK or not cfg.has_section_key(species, preset_name):
+		return {}
+	var raw: Variant = cfg.get_value(species, preset_name, {})
+	if raw is Dictionary:
+		return _json_to_color_dict(raw as Dictionary)
+	return {}
+
+
+static func delete_preset(species: String, preset_name: String) -> void:
+	if not FileAccess.file_exists(PRESETS_PATH):
+		return
+	var cfg := ConfigFile.new()
+	if cfg.load(PRESETS_PATH) != OK:
+		return
+	if cfg.has_section_key(species, preset_name):
+		cfg.erase_section_key(species, preset_name)
+		cfg.save(PRESETS_PATH)
 
 
 static func apply_patch(base: Dictionary, patch: Dictionary) -> Dictionary:

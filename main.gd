@@ -1731,6 +1731,12 @@ func _process( delta: float ) -> void :
 		# throttled below.
 		clock.day_time += delta * time_scale
 		_session_playtime_seconds += delta
+		# Planets are tiny points, so the 20 Hz sky throttle below makes them
+		# visibly jump at high speed while the sun/moon glide. Push them every
+		# frame (cheap — 5 planets × a few uniforms); PlanetSystem eases each
+		# rendered direction toward its freshly computed position per frame, so
+		# the motion stays smooth even at Max speed.
+		_update_planets()
 		_env_update_accum += delta
 		if _env_update_accum >= _ENV_UPDATE_INTERVAL :
 			_env_update_accum = 0.0

@@ -27,6 +27,7 @@ var _syncing := false
 
 var _dim: ColorRect = null
 var _panel: PanelContainer = null
+var _vp_container: SubViewportContainer = null
 var _viewport: SubViewport = null
 var _studio: Node3D = null
 var _holder: Node3D = null
@@ -245,18 +246,22 @@ func _build_ui() -> void:
 	root_v.add_child(hbox)
 
 	# Left: studio viewport.
-	var vp_container := SubViewportContainer.new()
-	vp_container.stretch = true
-	vp_container.custom_minimum_size = Vector2(590, 550)
-	vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vp_container.mouse_filter = Control.MOUSE_FILTER_STOP
-	vp_container.gui_input.connect(_on_preview_input)
-	hbox.add_child(vp_container)
+	_vp_container = SubViewportContainer.new()
+	_vp_container.stretch = true
+	_vp_container.custom_minimum_size = Vector2(590, 550)
+	_vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_vp_container.mouse_filter = Control.MOUSE_FILTER_STOP
+	_vp_container.gui_input.connect(_on_preview_input)
+	hbox.add_child(_vp_container)
 	_viewport = SubViewport.new()
 	_viewport.own_world_3d = true
 	_viewport.transparent_bg = false
 	_viewport.msaa_3d = Viewport.MSAA_2X
-	vp_container.add_child(_viewport)
+	# Match the veg-editor pattern: a real size + always-update so the preview
+	# renders and the click coordinates map cleanly into camera ray space.
+	_viewport.size = Vector2i(590, 550)
+	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_vp_container.add_child(_viewport)
 	_build_studio_world()
 
 	# Right: tabs — parametric customization + the structure library.
@@ -317,10 +322,10 @@ func _build_ui() -> void:
 
 	side.add_child(HSeparator.new())
 
-	# Details: click the preview to drop a door/window at that exact spot,
-	# then fine-tune with the nudge fields.
+	# Details: click a wall in the preview to add a door/window. Elements on a
+	# wall auto-arrange — the door centers, windows flank it symmetrically.
 	var det_lbl := Label.new()
-	det_lbl.text = "Details — click the preview to place"
+	det_lbl.text = "Details — click a wall to add (auto-centered)"
 	det_lbl.add_theme_font_size_override("font_size", 12)
 	det_lbl.modulate = Color(0.7, 0.8, 0.9)
 	side.add_child(det_lbl)
@@ -343,11 +348,11 @@ func _build_ui() -> void:
 	_elem_list.item_selected.connect(_on_element_selected)
 	side.add_child(_elem_list)
 
+	# Only size controls remain — horizontal placement is auto-centered, so the
+	# old "Along m" / "Up m" nudges are gone.
 	var grid := GridContainer.new()
 	grid.columns = 2
 	side.add_child(grid)
-	_elem_spins["u_m"] = _nudge_spin(grid, "Along m", 0.0, 500.0)
-	_elem_spins["v_m"] = _nudge_spin(grid, "Up m", 0.0, 30.0)
 	_elem_spins["w_m"] = _nudge_spin(grid, "Width m", 0.2, 10.0)
 	_elem_spins["h_m"] = _nudge_spin(grid, "Height m", 0.2, 10.0)
 
@@ -714,8 +719,9 @@ func _elements() -> Array:
 	return v
 
 
-## Click on the preview → ray-pick the wall face (pure math, no studio
-## physics) → drop the selected element kind at that exact u/v spot.
+## Click on the preview → ray-pick which wall face was hit (pure math, no studio
+## physics) → add the selected element kind to that wall. Horizontal position is
+## then auto-arranged (door centered, windows flanking) by layout_elements_on_edge.
 func _on_preview_input(event: InputEvent) -> void:
 	if not _active or _camera == null or _record.is_empty():
 		return
@@ -728,30 +734,47 @@ func _on_preview_input(event: InputEvent) -> void:
 	var poly: PackedVector2Array = params["poly"]
 	# Studio DEM is flat zero, so the building base sits at the Raise offset.
 	var base_y := float(params["base_offset_m"])
-	var origin := _camera.project_ray_origin(mb.position)
-	var dir := _camera.project_ray_normal(mb.position)
+	var vp_pos := _to_viewport_pos(mb.position)
+	var origin := _camera.project_ray_origin(vp_pos)
+	var dir := _camera.project_ray_normal(vp_pos)
 	var pick := BuildingBuilder.pick_wall_point(
 		poly, base_y, float(params["height_m"]), origin, dir)
 	if not bool(pick.get("valid", false)):
 		return
+	var edge := int(pick["edge"])
 	var is_door := _kind_opt != null and _kind_opt.selected == 0
 	var height_m := float(params["height_m"])
 	var elem: Dictionary
 	if is_door:
-		elem = {"kind": "door", "edge": int(pick["edge"]),
-			"u_m": float(pick["u_m"]), "v_m": 0.0, "w_m": 1.0, "h_m": 2.05}
+		elem = {"kind": "door", "edge": edge,
+			"u_m": 0.0, "v_m": 0.0, "w_m": 1.0, "h_m": 2.05}
 	else:
 		var h := 1.4
-		var v := clampf(float(pick["v_m"]) - h * 0.5, 0.0, maxf(height_m - h, 0.0))
-		elem = {"kind": "window", "edge": int(pick["edge"]),
-			"u_m": float(pick["u_m"]), "v_m": v, "w_m": 1.2, "h_m": h}
+		# Windows sit at a standard sill height, clamped inside the wall.
+		var v := clampf(0.9, 0.0, maxf(height_m - h, 0.0))
+		elem = {"kind": "window", "edge": edge,
+			"u_m": 0.0, "v_m": v, "w_m": 1.2, "h_m": h}
 	var elems := _elements()
 	elems.append(elem)
+	BuildingBuilder.layout_elements_on_edge(poly, edge, elems)
 	_working_style["elements"] = elems
 	_select_element(elems.size() - 1)
 	_sync_element_list()
 	_queue_rebuild()
 	accept_event()
+
+
+## Map a click in the SubViewportContainer's local space into the SubViewport's
+## pixel space so Camera3D.project_ray_* aims where the user actually clicked.
+## With stretch=true and shrink=1 this ratio is ~1, but staying explicit keeps
+## picking correct if the container and viewport sizes ever diverge.
+func _to_viewport_pos(local_pos: Vector2) -> Vector2:
+	if _vp_container == null or _viewport == null:
+		return local_pos
+	var cont := _vp_container.size
+	if cont.x <= 0.0 or cont.y <= 0.0:
+		return local_pos
+	return local_pos * (Vector2(_viewport.size) / cont)
 
 
 func _select_element(idx: int) -> void:
@@ -806,6 +829,10 @@ func _on_nudge_changed() -> void:
 	for key in _elem_spins:
 		d[key] = (_elem_spins[key] as SpinBox).value
 	elems[_selected_elem] = d
+	# A wider door/window changes the spacing, so re-run the auto-layout.
+	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
+	BuildingBuilder.layout_elements_on_edge(
+		params["poly"], int(d.get("edge", 0)), elems)
 	_working_style["elements"] = elems
 	_sync_element_list()
 	_queue_rebuild()
@@ -815,7 +842,12 @@ func _delete_selected_element() -> void:
 	var elems := _elements()
 	if _selected_elem < 0 or _selected_elem >= elems.size():
 		return
+	var edge := int((elems[_selected_elem] as Dictionary).get("edge", -1))
 	elems.remove_at(_selected_elem)
+	# Re-center whatever remains on that wall.
+	if edge >= 0:
+		var params := BuildingBuilder.resolve_building_params(_record, _working_style)
+		BuildingBuilder.layout_elements_on_edge(params["poly"], edge, elems)
 	_working_style["elements"] = elems
 	_select_element(-1)
 	_sync_element_list()

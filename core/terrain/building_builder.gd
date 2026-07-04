@@ -9,10 +9,22 @@ const DEFAULT_HEIGHT_M := 8.0
 const LEVELS_TO_METRES := 2.8
 const MAX_HEIGHT_M := 200.0
 const MIN_FOOTPRINT_AREA_M2 := 16.0
-const MAX_BUILDINGS := 800
-## Walls extend this far below the lowest corner sample so the downhill side
-## never floats above DEM noise while eaves/roof stay level.
+## Upper bound on footprints merged into the single ArrayMesh. Dense residential
+## grids (e.g. Portland's ~10.7 k buildings inside the 3 km detail square) blew
+## far past the old 800 cap, so ~93 % of houses silently never extruded — the
+## crosshair still picked those un-built footprints and drew an amber roof-level
+## outline over empty ground (the "floating highlight" + "most buildings missing"
+## reports). 12 000 covers a full dense neighbourhood; when a mega-city exceeds
+## it, build_buildings_node keeps the NEAREST N (distance-sorted) so the ring
+## around the player stays solid instead of dropping an arbitrary array slice.
+const MAX_BUILDINGS := 12000
+## The foundation skirt embeds this far below the LOWEST corner sample so the
+## downhill edge rests slightly into the ground instead of skimming DEM noise.
 const FOUNDATION_SKIRT_M := 0.35
+## Cap the auto-foundation height. The house body seats on the highest corner and
+## the skirt runs down to the lowest; on a steep lot (or a lone DEM spike) that
+## gap could balloon, so clamp it — beyond this the skirt just embeds at the cap.
+const MAX_FOUNDATION_STEP_M := 6.0
 
 ## Building types that read as houses — default gabled when OSM has no roof:shape.
 const RESIDENTIAL_TYPES := ["house", "detached", "residential", "semidetached_house",
@@ -36,6 +48,24 @@ const FACADE_FRAME_W_M := 0.06
 const DOOR_COLOR := Color(0.30, 0.19, 0.11)
 const WINDOW_COLOR := Color(0.52, 0.64, 0.74)
 const FACADE_SELECT_TINT := Color(1.0, 0.85, 0.3)
+## Clear metre gap kept between adjacent facade elements on one wall.
+const FACADE_LAYOUT_GAP_M := 0.5
+
+## Per-batch build diagnostics — enabled only while build_buildings_node runs so
+## build_single_building (the modal preview) never spams. Records why footprints
+## are skipped so first-load "missing residential houses" is visible in the log.
+static var _diag_enabled := false
+static var _diag: Dictionary = {}
+
+
+static func _diag_reset() -> void:
+	_diag = {"pitched": 0, "flat": 0, "flat_fallback": 0, "tri_fail": 0,
+		"too_few": 0, "no_geom": 0}
+
+
+static func _bump(key: String) -> void:
+	if _diag_enabled:
+		_diag[key] = int(_diag.get(key, 0)) + 1
 
 
 static func parse_height_m(tags: Dictionary) -> float:
@@ -146,6 +176,44 @@ static func _plan_cross(p0: Vector2, p1: Vector2, p2: Vector2) -> float:
 	return (p1 - p0).cross(p2 - p0)
 
 
+## Perpendicular distance from p to the infinite line through a→b.
+static func _perp_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab := b - a
+	var l := ab.length()
+	if l < 1e-6:
+		return p.distance_to(a)
+	return absf((p - a).cross(ab)) / l
+
+
+## Rescue pass for messy OSM footprints the ear-clipper rejects: drop
+## consecutive duplicate vertices and near-collinear "spike" vertices (within
+## 2 cm of the line through their neighbours). Returns the cleaned ring; the
+## caller re-checks the size and winding.
+static func _clean_poly(poly: PackedVector2Array) -> PackedVector2Array:
+	var n := poly.size()
+	if n < 3:
+		return poly
+	var dedup := PackedVector2Array()
+	for i in n:
+		var p := poly[i]
+		if dedup.is_empty() or p.distance_squared_to(dedup[dedup.size() - 1]) > 1e-6:
+			dedup.append(p)
+	if dedup.size() >= 2 \
+			and dedup[0].distance_squared_to(dedup[dedup.size() - 1]) < 1e-6:
+		dedup.remove_at(dedup.size() - 1)
+	if dedup.size() < 3:
+		return dedup
+	var out := PackedVector2Array()
+	var m := dedup.size()
+	for i in m:
+		var prev := dedup[(i - 1 + m) % m]
+		var cur := dedup[i]
+		var nxt := dedup[(i + 1) % m]
+		if _perp_dist(cur, prev, nxt) > 0.02:
+			out.append(cur)
+	return out if out.size() >= 3 else dedup
+
+
 static func _footprint_aspect(poly: PackedVector2Array) -> float:
 	if poly.size() < 3:
 		return 1.0
@@ -173,13 +241,28 @@ static func footprint_area_m2(points: PackedVector2Array) -> float:
 	return absf(area) * 0.5
 
 
-## Muted fallback palettes hashed off the stable tag (deterministic per site).
+## Typical residential siding colours, hashed off the stable tag (deterministic
+## per site) so a street reads as a varied-but-believable mix of painted houses:
+## warm neutrals, greiges, sage/olive, colonial blue-grey, barn red, buttery
+## yellow, slate, and clean whites.
 const WALL_PALETTE: Array[Color] = [
-	Color(0.78, 0.73, 0.62), Color(0.72, 0.72, 0.70), Color(0.66, 0.70, 0.60),
-	Color(0.70, 0.56, 0.48), Color(0.82, 0.78, 0.70), Color(0.63, 0.65, 0.56)]
+	Color(0.86, 0.84, 0.79),  # warm white
+	Color(0.78, 0.73, 0.62),  # tan / khaki
+	Color(0.72, 0.72, 0.70),  # light grey
+	Color(0.63, 0.66, 0.58),  # sage green
+	Color(0.55, 0.60, 0.62),  # colonial blue-grey
+	Color(0.70, 0.56, 0.48),  # muted terracotta
+	Color(0.60, 0.36, 0.32),  # barn red
+	Color(0.84, 0.78, 0.60),  # buttery yellow
+	Color(0.50, 0.54, 0.52),  # slate green-grey
+	Color(0.90, 0.89, 0.86)]  # off-white
+## Shingle roofs default to near-black asphalt grey; OSM `roof:colour` overrides
+## it. A tiny palette of dark grey shades keeps a street from looking
+## rubber-stamped without drifting into the old brown/red mix that read as noise.
+const DEFAULT_ROOF_COLOR := Color(0.15, 0.16, 0.18)  # near-black asphalt shingle
 const ROOF_PALETTE: Array[Color] = [
-	Color(0.29, 0.29, 0.31), Color(0.42, 0.33, 0.27), Color(0.50, 0.50, 0.52),
-	Color(0.47, 0.30, 0.26)]
+	Color(0.15, 0.16, 0.18), Color(0.18, 0.19, 0.21),
+	Color(0.12, 0.13, 0.14), Color(0.21, 0.22, 0.24)]
 
 
 ## Stable identity for a footprint: metre-rounded centroid (mirrors the solar
@@ -252,10 +335,16 @@ static func style_color(v: Variant, fallback: Color) -> Color:
 ## a deterministic palette pick + value jitter hashed from the stable tag.
 static func resolve_building_colors(tags: Dictionary, stable_tag: String) -> Dictionary:
 	var h := stable_tag.hash()
+	# Siding: a varied typical-house colour with a gentle value jitter (keeps the
+	# hue, just lightens/darkens per building so identical picks aren't twins).
 	var wall: Color = WALL_PALETTE[h % WALL_PALETTE.size()]
+	var wall_jitter := 0.92 + 0.16 * float(h % 97) / 97.0
+	wall = Color(wall.r * wall_jitter, wall.g * wall_jitter, wall.b * wall_jitter)
+	# Roof: dark grey asphalt shingle by default, with a barely-there shade spread
+	# so a row of grey roofs still has life. OSM tags win over both.
 	var roof: Color = ROOF_PALETTE[(h / 7) % ROOF_PALETTE.size()]
-	var jitter := 0.92 + 0.16 * float(h % 97) / 97.0
-	wall = Color(wall.r * jitter, wall.g * jitter, wall.b * jitter)
+	var roof_jitter := 0.94 + 0.12 * float((h / 13) % 89) / 89.0
+	roof = Color(roof.r * roof_jitter, roof.g * roof_jitter, roof.b * roof_jitter)
 	if tags.has("building:colour"):
 		wall = Color.from_string(str(tags["building:colour"]).strip_edges(), wall)
 	if tags.has("roof:colour"):
@@ -325,8 +414,16 @@ static func build_buildings_node(buildings: Array, elev: PackedFloat32Array, res
 	st_walls.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var st_roof := SurfaceTool.new()
 	st_roof.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# When the set exceeds the merge budget, keep the footprints nearest the map
+	# centre (where the player spawns) so the surrounding blocks stay solid rather
+	# than dropping a scattered array slice. Cheap enough to skip when under budget.
+	var ordered := buildings
+	if buildings.size() > MAX_BUILDINGS:
+		ordered = _sort_by_distance_to_centre(buildings)
+	_diag_enabled = true
+	_diag_reset()
 	var added := 0
-	for item in buildings:
+	for item in ordered:
 		if added >= MAX_BUILDINGS:
 			break
 		if not (item is Dictionary):
@@ -349,6 +446,12 @@ static func build_buildings_node(buildings: Array, elev: PackedFloat32Array, res
 				height_extent_m, center_elev,
 				detail_elev, detail_cols, detail_rows, detail_foot_extent):
 			added += 1
+	if _diag_enabled:
+		print("BuildingBuilder: extruded %d of %d (pitched %d, flat %d, flat-fallback %d); skipped tri_fail=%d too_few=%d no_geom=%d" % [
+			added, buildings.size(), int(_diag["pitched"]), int(_diag["flat"]),
+			int(_diag["flat_fallback"]), int(_diag["tri_fail"]),
+			int(_diag["too_few"]), int(_diag["no_geom"])])
+		_diag_enabled = false
 	if added == 0:
 		return null
 	# Normals are set per-face in _append_footprint for crisp, faceted walls/roofs;
@@ -368,6 +471,30 @@ static func build_buildings_node(buildings: Array, elev: PackedFloat32Array, res
 		else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(mi)
 	return root
+
+
+## Order building records by squared distance of their centroid to the map centre
+## (0,0), nearest first. Used only when the set overflows MAX_BUILDINGS so the cap
+## keeps the ring around the player instead of an arbitrary OSM-id slice.
+static func _sort_by_distance_to_centre(buildings: Array) -> Array:
+	var out := buildings.duplicate()
+	out.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return _record_centre_dist2(a) < _record_centre_dist2(b))
+	return out
+
+
+static func _record_centre_dist2(item: Variant) -> float:
+	if not (item is Dictionary):
+		return INF
+	var pts: Variant = (item as Dictionary).get("points", PackedVector2Array())
+	if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 1:
+		return INF
+	var poly: PackedVector2Array = pts
+	var c := Vector2.ZERO
+	for p in poly:
+		c += p
+	c /= float(poly.size())
+	return c.length_squared()
 
 
 ## One styled building as its own MeshInstance3D. Styled buildings are
@@ -401,6 +528,7 @@ static func build_single_building(d: Dictionary, style: Dictionary,
 	# Facade elements (doors/windows) ride on a third surface with their own
 	# flat-color material — only styled buildings pay for it.
 	var elements: Array = params["elements"] if params["elements"] is Array else []
+	var has_facade := false
 	if not elements.is_empty():
 		var base_y := footprint_base_y(poly, elev, res, height_extent_m, center_elev,
 			detail_elev, detail_cols, detail_rows, detail_foot_extent) \
@@ -408,19 +536,22 @@ static func build_single_building(d: Dictionary, style: Dictionary,
 		var selected := int(TerrainBuilder.dict_float(style, "selected_element", -1.0))
 		var st_fac := SurfaceTool.new()
 		st_fac.begin(Mesh.PRIMITIVE_TRIANGLES)
-		var any_elem := false
 		for e_i in elements.size():
 			if elements[e_i] is Dictionary:
 				if _append_facade_element(st_fac, poly, base_y,
 						float(params["height_m"]), elements[e_i], e_i == selected):
-					any_elem = true
-		if any_elem:
+					has_facade = true
+		if has_facade:
 			mesh = st_fac.commit(mesh)
-			mi.set_surface_override_material(2, make_facade_material())
 
+	# Assign every surface override AFTER mi.mesh so the internal override array
+	# is sized to the surface count first — setting surface 2 before the mesh
+	# exists silently drops the facade material and doors/windows render bare.
 	mi.mesh = mesh
 	mi.set_surface_override_material(0, make_wall_material())
 	mi.set_surface_override_material(1, make_roof_material())
+	if has_facade:
+		mi.set_surface_override_material(2, make_facade_material())
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows \
 		else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return mi
@@ -428,15 +559,34 @@ static func build_single_building(d: Dictionary, style: Dictionary,
 
 ## Lowest corner ground sample — the Y the whole building seats at (before the
 ## style layer's base offset). Shared by walls/roof and facade elements.
+## Lowest and highest ground samples under the footprint corners, returned as
+## [low, high]. The house body seats on `high` (so no corner buries into the
+## hill) and the foundation skirt reaches down to `low`, filling the downhill gap.
+static func footprint_ground_extents(poly: PackedVector2Array, elev: PackedFloat32Array,
+		res: int, height_extent_m: float, center_elev: float,
+		detail_elev: PackedFloat32Array = PackedFloat32Array(), detail_cols: int = 0,
+		detail_rows: int = 0, detail_extent_m: float = 0.0) -> Array:
+	var lo := INF
+	var hi := -INF
+	for p in poly:
+		var y := _sample_ground_y(p.x, p.y, elev, res, height_extent_m,
+			center_elev, detail_elev, detail_cols, detail_rows, detail_extent_m)
+		lo = minf(lo, y)
+		hi = maxf(hi, y)
+	if lo == INF:
+		return [0.0, 0.0]
+	return [lo, hi]
+
+
+## The Y the house body seats at — the HIGHEST corner ground sample, so eaves and
+## floors clear the uphill terrain and a foundation fills the downhill gap. Shared
+## by the wall/roof build and facade-element placement so they stay aligned.
 static func footprint_base_y(poly: PackedVector2Array, elev: PackedFloat32Array,
 		res: int, height_extent_m: float, center_elev: float,
 		detail_elev: PackedFloat32Array = PackedFloat32Array(), detail_cols: int = 0,
 		detail_rows: int = 0, detail_extent_m: float = 0.0) -> float:
-	var base := INF
-	for p in poly:
-		base = minf(base, _sample_ground_y(p.x, p.y, elev, res, height_extent_m,
-			center_elev, detail_elev, detail_cols, detail_rows, detail_extent_m))
-	return base if base != INF else 0.0
+	return footprint_ground_extents(poly, elev, res, height_extent_m, center_elev,
+		detail_elev, detail_cols, detail_rows, detail_extent_m)[1]
 
 
 ## Ray-pick a wall face (pure math — the Building Builder studio has no
@@ -470,6 +620,74 @@ static func pick_wall_point(poly: PackedVector2Array, base_y: float, height_m: f
 		best = {"valid": true, "edge": i, "u_m": u, "v_m": v}
 		best_t = t
 	return best
+
+
+## Auto-arrange every facade element that shares one wall edge: the (first) door
+## sits dead-centre and all other elements flank it symmetrically, so 1 door +
+## 2 windows reads as window–door–window. With no door, windows are centred as an
+## even symmetric group. Mutates each element's `u_m` in place (sizes/heights
+## untouched); this replaces the old free-form "Along m" nudge with predictable,
+## centred placement. `poly` must be the resolve_building_params-normalized ring.
+static func layout_elements_on_edge(poly: PackedVector2Array, edge: int,
+		elements: Array) -> void:
+	var n := poly.size()
+	if edge < 0 or edge >= n:
+		return
+	var edge_len := poly[edge].distance_to(poly[(edge + 1) % n])
+	if edge_len <= 0.0:
+		return
+	var on_edge: Array = []
+	for e in elements:
+		if e is Dictionary and int((e as Dictionary).get("edge", -1)) == edge:
+			on_edge.append(e)
+	if on_edge.is_empty():
+		return
+	var center := edge_len * 0.5
+	var door: Dictionary = {}
+	var flankers: Array = []
+	for e in on_edge:
+		if door.is_empty() and str((e as Dictionary).get("kind", "window")) == "door":
+			door = e
+		else:
+			flankers.append(e)
+	if not door.is_empty():
+		# Door pinned to centre; flankers grow outward, alternating right/left.
+		door["u_m"] = center
+		var right_b := center + _elem_half_w(door, edge_len)
+		var left_b := center - _elem_half_w(door, edge_len)
+		for i in flankers.size():
+			var el: Dictionary = flankers[i]
+			var hw := _elem_half_w(el, edge_len)
+			if i % 2 == 0:
+				right_b += FACADE_LAYOUT_GAP_M + hw
+				el["u_m"] = right_b
+				right_b += hw
+			else:
+				left_b -= FACADE_LAYOUT_GAP_M + hw
+				el["u_m"] = left_b
+				left_b -= hw
+	else:
+		# No door: centre the windows as one symmetric, evenly-spaced group.
+		var total := 0.0
+		for e in flankers:
+			total += 2.0 * _elem_half_w(e, edge_len)
+		total += FACADE_LAYOUT_GAP_M * float(maxi(flankers.size() - 1, 0))
+		var cursor := center - total * 0.5
+		for e in flankers:
+			var hw := _elem_half_w(e, edge_len)
+			cursor += hw
+			(e as Dictionary)["u_m"] = cursor
+			cursor += hw + FACADE_LAYOUT_GAP_M
+	# Final clamp so nothing spills past the wall corners.
+	for e in on_edge:
+		var hw := _elem_half_w(e, edge_len)
+		(e as Dictionary)["u_m"] = clampf(
+			float((e as Dictionary).get("u_m", center)), hw, maxf(edge_len - hw, hw))
+
+
+static func _elem_half_w(elem: Dictionary, edge_len: float) -> float:
+	return clampf(TerrainBuilder.dict_float(elem, "w_m", 1.2), 0.2,
+		maxf(edge_len - 0.1, 0.2)) * 0.5
 
 
 static func _append_facade_element(st: SurfaceTool, poly: PackedVector2Array,
@@ -554,24 +772,47 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 		base_offset_m: float = 0.0) -> bool:
 	var n := poly.size()
 	if n < 3:
+		_bump("too_few")
 		return false
 	if poly[0].distance_squared_to(poly[n - 1]) < 0.01:
 		poly = poly.slice(0, n - 1)
 		n = poly.size()
 	if n < 3:
+		_bump("too_few")
 		return false
 	poly = _ensure_ccw(poly)
 
-	# Seat the whole building at its lowest corner sample: real eaves and roofs
-	# are level regardless of slope; the uphill walls simply bury into the hill.
-	# base_offset_m is the user's vertical-placement nudge from the style layer.
-	var base_y := footprint_base_y(poly, elev, res, height_extent_m, center_elev,
-		detail_elev, detail_cols, detail_rows, detail_extent_m) + base_offset_m
-	var skirt_y := base_y - FOUNDATION_SKIRT_M
-
+	# Triangulate; if the ear-clipper rejects the raw OSM way, retry on a cleaned
+	# footprint (dedupe + drop collinear spikes). This rescues the many messy
+	# residential ways that would otherwise vanish entirely on first load.
 	var tri_indices := Geometry2D.triangulate_polygon(poly)
 	if tri_indices.is_empty():
+		var cleaned := _ensure_ccw(_clean_poly(poly))
+		if cleaned.size() >= 3:
+			var tri2 := Geometry2D.triangulate_polygon(cleaned)
+			if not tri2.is_empty():
+				poly = cleaned
+				n = poly.size()
+				tri_indices = tri2
+	if tri_indices.is_empty():
+		_bump("tri_fail")
 		return false
+
+	# Seat the house body on the HIGHEST corner sample so eaves/floors clear the
+	# uphill terrain (no more sunk-into-the-hill look), then drop a foundation
+	# skirt to the LOWEST corner so the downhill side rests on a plinth instead of
+	# floating — the wall shader paints everything below the base line as concrete.
+	# base_offset_m is the user's vertical-placement nudge from the style layer.
+	var extents := footprint_ground_extents(poly, elev, res, height_extent_m,
+		center_elev, detail_elev, detail_cols, detail_rows, detail_extent_m)
+	var foot_low: float = extents[0]
+	var foot_high: float = extents[1]
+	var base_y := foot_high + base_offset_m
+	var skirt_y := foot_low - FOUNDATION_SKIRT_M
+	# Clamp the auto-foundation so a steep lot or a lone DEM spike can't launch the
+	# house onto an absurd plinth (the skirt just embeds at the cap instead).
+	if base_y - skirt_y > MAX_FOUNDATION_STEP_M:
+		skirt_y = base_y - MAX_FOUNDATION_STEP_M
 
 	# OSM `height` is top-of-structure above local ground — roof must not exceed it.
 	var wall_h := _wall_height_m(height_m, roof, poly)
@@ -601,73 +842,36 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 			var tmp := f1
 			f1 = f2
 			f2 = tmp
+		var floor_v := skirt_y - base_y
 		wall_faces.append([bottom_p[f0], bottom_p[f1], bottom_p[f2],
-			Vector2(poly[f0].x, -FOUNDATION_SKIRT_M),
-			Vector2(poly[f1].x, -FOUNDATION_SKIRT_M),
-			Vector2(poly[f2].x, -FOUNDATION_SKIRT_M)])
+			Vector2(poly[f0].x, floor_v),
+			Vector2(poly[f1].x, floor_v),
+			Vector2(poly[f2].x, floor_v)])
 
-	if frame.is_empty():
-		# Flat roof (explicit tag, unknown shape, or degenerate-footprint
-		# guardrail): walls straight up to the roof plane, level cap on top.
-		for i in n:
-			var j := (i + 1) % n
-			var dir := (poly[j] - poly[i]).normalized()
-			_wall_quad(wall_faces, poly[i], dir, poly[i], poly[j],
-				skirt_y, top_y, top_y, base_y)
-		for t in range(0, tri_indices.size(), 3):
-			var r0 := tri_indices[t]
-			var r1 := tri_indices[t + 1]
-			var r2 := tri_indices[t + 2]
-			if _plan_cross(poly[r0], poly[r1], poly[r2]) > 0.0:
-				var tmp := r1
-				r1 = r2
-				r2 = tmp
-			roof_faces.append([Vector3(poly[r0].x, top_y, poly[r0].y),
-				Vector3(poly[r1].x, top_y, poly[r1].y),
-				Vector3(poly[r2].x, top_y, poly[r2].y)])
-	else:
-		var creases := _crease_lines(frame)
-
-		# Walls, including the triangular gable-end fills: each boundary edge is
-		# split where a roof crease crosses it, then extruded up to the roof
-		# height field. Sharing _roof_height_at with the roof surface keeps wall
-		# tops and roof edges watertight.
-		for i in n:
-			var j := (i + 1) % n
-			var dir := (poly[j] - poly[i]).normalized()
-			var edge_pts := _split_edge_at_creases(poly[i], poly[j], frame, creases)
-			for k in edge_pts.size() - 1:
-				var q0: Vector2 = edge_pts[k]
-				var q1: Vector2 = edge_pts[k + 1]
-				_wall_quad(wall_faces, poly[i], dir, q0, q1, skirt_y,
-					_roof_height_at(q0, frame), _roof_height_at(q1, frame), base_y)
-
-		# Roof: footprint triangulation split along every crease line so each
-		# resulting triangle lies inside one planar roof face, then lifted.
-		var tris2d: Array = []
-		for t in range(0, tri_indices.size(), 3):
-			tris2d.append([poly[tri_indices[t]], poly[tri_indices[t + 1]],
-				poly[tri_indices[t + 2]]])
-		for line in creases:
-			tris2d = _split_tris_at_line(tris2d, frame, line)
-		for tri2 in tris2d:
-			var p0: Vector2 = tri2[0]
-			var p1: Vector2 = tri2[1]
-			var p2: Vector2 = tri2[2]
-			if _plan_cross(p0, p1, p2) > 0.0:
-				var tmp2 := p1
-				p1 = p2
-				p2 = tmp2
-			roof_faces.append([Vector3(p0.x, _roof_height_at(p0, frame), p0.y),
-				Vector3(p1.x, _roof_height_at(p1, frame), p1.y),
-				Vector3(p2.x, _roof_height_at(p2, frame), p2.y)])
+	# Pitched roofs take the crease-split ridge path; flat roofs (explicit tag,
+	# unknown shape, degenerate-footprint guardrail) get walls straight up + a
+	# level cap. When the ridge path collapses to zero valid triangles (slivers,
+	# self-intersections), fall back to the flat cap so the house never vanishes.
+	var used_flat := frame.is_empty()
+	if not used_flat:
+		var pitched_roof: Array = []
+		_emit_pitched_roof(pitched_roof, poly, tri_indices, frame)
+		if _count_valid_tris(pitched_roof) == 0:
+			used_flat = true
+			_bump("flat_fallback")
+		else:
+			roof_faces.append_array(pitched_roof)
+			_emit_pitched_walls(wall_faces, poly, frame, skirt_y, base_y)
+	if used_flat:
+		_emit_flat_walls_roof(wall_faces, roof_faces, poly, tri_indices,
+			skirt_y, top_y, base_y)
 
 	var wall_col: Color = colors.get("wall", Color(0.74, 0.71, 0.67))
 	wall_col.a = 1.0
 	var roof_col: Color = colors.get("roof", Color(0.35, 0.33, 0.32))
 	# COLOR.a flags the roof shader per building: 1 = pitched (shingle courses),
 	# 0 = flat (membrane/gravel).
-	roof_col.a = 0.0 if frame.is_empty() else 1.0
+	roof_col.a = 0.0 if used_flat else 1.0
 
 	var emitted := false
 	for f in wall_faces:
@@ -699,7 +903,90 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 			st_roof.set_uv(uvs[k])
 			st_roof.add_vertex(f[k])
 		emitted = true
+	if emitted:
+		_bump("flat" if used_flat else "pitched")
+	else:
+		_bump("no_geom")
 	return emitted
+
+
+## Walls straight up to a level roof cap, plus the flat roof triangles. Shared
+## by explicitly-flat buildings and the pitched-roof fallback so a house with
+## broken ridge geometry still renders a solid (if flat) roof instead of a hole.
+static func _emit_flat_walls_roof(wall_faces: Array, roof_faces: Array,
+		poly: PackedVector2Array, tri_indices: PackedInt32Array,
+		skirt_y: float, top_y: float, base_y: float) -> void:
+	var n := poly.size()
+	for i in n:
+		var j := (i + 1) % n
+		var dir := (poly[j] - poly[i]).normalized()
+		_wall_quad(wall_faces, poly[i], dir, poly[i], poly[j],
+			skirt_y, top_y, top_y, base_y)
+	for t in range(0, tri_indices.size(), 3):
+		var r0 := tri_indices[t]
+		var r1 := tri_indices[t + 1]
+		var r2 := tri_indices[t + 2]
+		if _plan_cross(poly[r0], poly[r1], poly[r2]) > 0.0:
+			var tmp := r1
+			r1 = r2
+			r2 = tmp
+		roof_faces.append([Vector3(poly[r0].x, top_y, poly[r0].y),
+			Vector3(poly[r1].x, top_y, poly[r1].y),
+			Vector3(poly[r2].x, top_y, poly[r2].y)])
+
+
+## Pitched walls (incl. triangular gable-end fills): each boundary edge is split
+## where a roof crease crosses it, then extruded up to the roof height field.
+## Sharing _roof_height_at with the roof surface keeps wall tops watertight.
+static func _emit_pitched_walls(wall_faces: Array, poly: PackedVector2Array,
+		frame: Dictionary, skirt_y: float, base_y: float) -> void:
+	var n := poly.size()
+	var creases := _crease_lines(frame)
+	for i in n:
+		var j := (i + 1) % n
+		var dir := (poly[j] - poly[i]).normalized()
+		var edge_pts := _split_edge_at_creases(poly[i], poly[j], frame, creases)
+		for k in edge_pts.size() - 1:
+			var q0: Vector2 = edge_pts[k]
+			var q1: Vector2 = edge_pts[k + 1]
+			_wall_quad(wall_faces, poly[i], dir, q0, q1, skirt_y,
+				_roof_height_at(q0, frame), _roof_height_at(q1, frame), base_y)
+
+
+## Pitched roof faces: footprint triangulation split along every crease line so
+## each resulting triangle lies inside one planar roof face, then lifted onto the
+## ridge height field. Appends [a, b, c] Vector3 triples to roof_faces.
+static func _emit_pitched_roof(roof_faces: Array, poly: PackedVector2Array,
+		tri_indices: PackedInt32Array, frame: Dictionary) -> void:
+	var creases := _crease_lines(frame)
+	var tris2d: Array = []
+	for t in range(0, tri_indices.size(), 3):
+		tris2d.append([poly[tri_indices[t]], poly[tri_indices[t + 1]],
+			poly[tri_indices[t + 2]]])
+	for line in creases:
+		tris2d = _split_tris_at_line(tris2d, frame, line)
+	for tri2 in tris2d:
+		var p0: Vector2 = tri2[0]
+		var p1: Vector2 = tri2[1]
+		var p2: Vector2 = tri2[2]
+		if _plan_cross(p0, p1, p2) > 0.0:
+			var tmp2 := p1
+			p1 = p2
+			p2 = tmp2
+		roof_faces.append([Vector3(p0.x, _roof_height_at(p0, frame), p0.y),
+			Vector3(p1.x, _roof_height_at(p1, frame), p1.y),
+			Vector3(p2.x, _roof_height_at(p2, frame), p2.y)])
+
+
+## Count roof triangles that survive the degenerate-normal filter, so the
+## pitched branch knows whether it produced any real geometry before committing.
+static func _count_valid_tris(faces: Array) -> int:
+	var c := 0
+	for f in faces:
+		var nrm: Vector3 = (f[1] - f[0]).cross(f[2] - f[0])
+		if nrm.length_squared() >= 1e-10:
+			c += 1
+	return c
 
 
 ## Two wall triangles for the sub-edge q0→q1, with metric UVs measured from the

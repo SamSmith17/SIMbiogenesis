@@ -249,6 +249,7 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 		var z := float(d.get("z", 0.0))
 		var yaw := float(d.get("yaw", 0.0))
 		var scale := float(d.get("scale", 1.0)) * species_scale
+		scale *= VegetationGrowth.instance_scale_mult(species, d, settings)
 		var record_vert := float(d.get("vert_off", vert_off))
 		var gy: float = float(ground_y_at.call(x, z))
 		mm.set_instance_transform(i, VegetationPaint.build_transform(

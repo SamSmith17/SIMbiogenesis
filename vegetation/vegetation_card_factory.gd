@@ -294,20 +294,10 @@ static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> Arr
 			_trunk_taper_top(settings, "deciduous"), Vector3.ZERO, trunk_w * 0.72)
 
 	var clusters := _deciduous_cluster_layout(crown_w, crown_h, trunk_h, settings)
-	var branch_max := clampi(int(round(float(settings.get("deciduous_branch_count", 4)))), 0, 12)
-	var branch_thick := float(settings.get("deciduous_branch_thickness", 1.0))
-	var branch_reach := float(settings.get("deciduous_branch_reach", 1.0))
-	var branch_base_y := float(settings.get("deciduous_branch_base", 0.82))
-	var branches_added := 0
-	for i in clusters.size():
-		var c: Dictionary = clusters[i]
-		var pos: Vector3 = c["pos"]
-		if i > 0 and branches_added < branch_max:
-			_add_branch_card(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
-				Vector3(0.0, trunk_h * branch_base_y, 0.0),
-				pos + Vector3(0.0, -float(c["h"]) * 0.25 * branch_reach, 0.0),
-				trunk_w * 0.32 * branch_thick)
-			branches_added += 1
+	# Fractal bough skeleton: self-similar forks fill the crown so the tree reads
+	# as a real branching structure once the leaf shells drop in winter.
+	_build_fractal_branches(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
+		trunk_w, trunk_h, crown_w, crown_h, settings)
 
 	var mesh := ArrayMesh.new()
 	var trunk_arr: Array = []
@@ -585,28 +575,132 @@ static func _add_cluster_cards(verts: PackedVector3Array, uvs: PackedVector2Arra
 			Vector3(center.x, 0.0, center.z))
 
 
-## Tapered bark card between trunk and a canopy cluster.
-static func _add_branch_card(verts: PackedVector3Array, uvs: PackedVector2Array,
+## Deterministic seed for the fractal branch skeleton, so identical settings always
+## build the identical tree (the mesh is shared across every MultiMesh instance).
+const _BRANCH_SEED := 0x2f9a37
+
+## Recursive fractal branch skeleton for deciduous trees. Real trees follow a
+## self-similar fork pattern — a trunk splits into primaries, each of which splits
+## again into smaller boughs, recursively — so the crown reads as a believable
+## bare structure in winter when the leaf shells drop out (leaf_canopy.gdshader
+## discards foliage as leaf_coverage falls). Returns bark geometry appended into
+## the passed arrays, plus a list of tip Vector3 positions (leaf anchors for the
+## caller). Curvature (gnarl) + gravitropism (droop) bend each bough so the
+## silhouette avoids the "straight sticks" look.
+##
+## Cost is bounded by levels + children: e.g. 5 primaries × Σ children^k over
+## `levels` levels. Defaults stay well under ~250 segments (a few hundred quads on
+## the shared mesh), so per-instance cost is unchanged (MultiMesh reuses one mesh).
+static func _build_fractal_branches(verts: PackedVector3Array, uvs: PackedVector2Array,
 		normals: PackedVector3Array, indices: PackedInt32Array,
-		base: Vector3, tip: Vector3, width: float) -> void:
-	var dir := tip - base
-	if dir.length_squared() < 1e-6:
+		trunk_w: float, trunk_h: float, crown_w: float, crown_h: float,
+		settings: Dictionary) -> Array:
+	var levels := clampi(int(round(float(settings.get("deciduous_branch_levels", 4)))), 1, 5)
+	var primaries := clampi(int(round(float(settings.get("deciduous_branch_count", 5)))), 2, 12)
+	var children := clampi(int(round(float(settings.get("deciduous_branch_split", 3)))), 2, 4)
+	var thick := maxf(float(settings.get("deciduous_branch_thickness", 1.0)), 0.05)
+	var reach := maxf(float(settings.get("deciduous_branch_reach", 1.0)), 0.2)
+	var base_frac := clampf(float(settings.get("deciduous_branch_base", 0.82)), 0.2, 1.0)
+	var fork_deg := clampf(float(settings.get("deciduous_branch_angle", 38.0)), 8.0, 75.0)
+	var len_ratio := clampf(float(settings.get("deciduous_branch_length_ratio", 0.72)), 0.45, 0.92)
+	var droop := clampf(float(settings.get("deciduous_branch_droop", 0.12)), -0.6, 0.6)
+	var gnarl := clampf(float(settings.get("deciduous_branch_gnarl", 0.22)), 0.0, 1.0)
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _BRANCH_SEED
+	var tips: Array = []
+	var start_y := trunk_h * base_frac
+	var primary_len := crown_h * 0.55 * reach
+	var primary_w := trunk_w * 0.60 * thick
+	for i in primaries:
+		var t := float(i) / maxf(float(primaries), 1.0)
+		# Bases march up the upper trunk; lower forks tilt outward, higher ones
+		# reach up — the classic vase/oak crown spread.
+		var by := lerpf(start_y, trunk_h * 1.03, t)
+		var az := float(i) * TAU * 0.618034 + rng.randf() * 0.6
+		var out_tilt := deg_to_rad(lerpf(58.0, 28.0, t))
+		var dir := Vector3(cos(az) * sin(out_tilt), cos(out_tilt), sin(az) * sin(out_tilt)).normalized()
+		var plen := primary_len * lerpf(1.0, 0.68, t)
+		var pw := primary_w * lerpf(1.0, 0.72, t)
+		_grow_branch(verts, uvs, normals, indices, tips,
+			Vector3(0.0, by, 0.0), dir, plen, pw, 1, levels, children,
+			fork_deg, len_ratio, droop, gnarl, rng)
+	return tips
+
+
+## Grow one bough (a gently curved, tapering limb) then recursively fork children
+## off its tip. `level` counts from 1 (primary) up to `max_level`.
+static func _grow_branch(verts: PackedVector3Array, uvs: PackedVector2Array,
+		normals: PackedVector3Array, indices: PackedInt32Array, tips: Array,
+		base: Vector3, dir: Vector3, length: float, width: float,
+		level: int, max_level: int, children: int, fork_deg: float,
+		len_ratio: float, droop: float, gnarl: float, rng: RandomNumberGenerator) -> void:
+	# Subdivide the limb into curved sub-segments so gnarl/droop bend it smoothly.
+	var sub := 3 if level <= 2 else 2
+	var p := base
+	var d := dir
+	var seg_len := length / float(sub)
+	for k in sub:
+		# Random gnarl wobble + gravitropism (droop>0 lifts toward sky, <0 sags).
+		var axis := Vector3(rng.randf() * 2.0 - 1.0, rng.randf() * 2.0 - 1.0,
+			rng.randf() * 2.0 - 1.0)
+		if axis.length_squared() > 1e-6:
+			d = d.rotated(axis.normalized(), (rng.randf() * 2.0 - 1.0) * gnarl * 0.5)
+		d = (d + Vector3.UP * droop * 0.18).normalized()
+		var np := p + d * seg_len
+		var w0 := width * (1.0 - float(k) / float(sub) * 0.35)
+		var w1 := width * (1.0 - float(k + 1) / float(sub) * 0.35)
+		_add_branch_segment(verts, uvs, normals, indices, p, np, maxf(w0, 0.02), maxf(w1, 0.015))
+		p = np
+	if level >= max_level:
+		tips.append(p)
+		return
+	# Fork: rotate the parent dir out by fork_deg to form a cone, then spin each
+	# child around the parent axis (golden-ish spacing + jitter). A child count of
+	# 2 gives a Y-fork; 3–4 gives a bushier crown.
+	var n := maxi(children, 2)
+	var perp := d.cross(Vector3.UP)
+	if perp.length_squared() < 1e-6:
+		perp = d.cross(Vector3.RIGHT)
+	perp = perp.normalized()
+	for c in n:
+		var az := float(c) / float(n) * TAU + rng.randf() * 0.8
+		var spread := deg_to_rad(fork_deg * lerpf(0.7, 1.2, rng.randf()))
+		var child := d.rotated(perp, spread).rotated(d, az)
+		_grow_branch(verts, uvs, normals, indices, tips, p, child.normalized(),
+			length * len_ratio, width * len_ratio, level + 1, max_level, children,
+			fork_deg, len_ratio, droop, gnarl, rng)
+
+
+## A limb segment as two perpendicular tapered quads (a cheap "tube") so a bough
+## reads as solid bark from any view angle, not a flat card.
+static func _add_branch_segment(verts: PackedVector3Array, uvs: PackedVector2Array,
+		normals: PackedVector3Array, indices: PackedInt32Array,
+		a: Vector3, b: Vector3, w0: float, w1: float) -> void:
+	var dir := b - a
+	if dir.length_squared() < 1e-8:
 		return
 	dir = dir.normalized()
-	var side := dir.cross(Vector3.UP)
-	if side.length_squared() < 1e-6:
-		side = dir.cross(Vector3.FORWARD)
-	side = side.normalized() * width * 0.5
+	var side1 := dir.cross(Vector3.UP)
+	if side1.length_squared() < 1e-6:
+		side1 = dir.cross(Vector3.RIGHT)
+	side1 = side1.normalized()
+	var side2 := dir.cross(side1).normalized()
+	_add_branch_quad(verts, uvs, normals, indices, a, b, w0, w1, side1)
+	_add_branch_quad(verts, uvs, normals, indices, a, b, w0, w1, side2)
+
+
+static func _add_branch_quad(verts: PackedVector3Array, uvs: PackedVector2Array,
+		normals: PackedVector3Array, indices: PackedInt32Array,
+		a: Vector3, b: Vector3, w0: float, w1: float, side: Vector3) -> void:
+	var s0 := side * (w0 * 0.5)
+	var s1 := side * (w1 * 0.5)
 	var idx := verts.size()
-	verts.append_array([
-		base - side, base + side, tip + side * 0.55, tip - side * 0.55,
-	])
-	uvs.append_array([
-		Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vector2(0.0, 0.0),
-	])
-	var face_normal := side.cross(dir).normalized()
+	verts.append_array([a - s0, a + s0, b + s1, b - s1])
+	uvs.append_array([Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vector2(0.0, 0.0)])
+	var nrm := side.cross(b - a).normalized()
 	for _j in 4:
-		normals.append(face_normal)
+		normals.append(nrm)
 	indices.append_array([idx, idx + 1, idx + 2, idx, idx + 2, idx + 3])
 
 

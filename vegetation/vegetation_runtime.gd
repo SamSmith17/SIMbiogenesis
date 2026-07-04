@@ -54,6 +54,7 @@ static func _build_grass_bulk_batches(root: Node3D, species: String, records: Ar
 			var scale := float(d.get("scale", 1.0))
 			if species != "grass_lawn":
 				scale *= species_scale
+			scale *= VegetationGrowth.instance_scale_mult(species, d, settings)
 			var record_vert := float(d.get("vert_off", vert_off))
 			var gy: float = float(ground_y_at.call(x, z))
 			mm.set_instance_transform(i, VegetationPaint.build_transform(
@@ -105,6 +106,7 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 			var z := float(d.get("z", 0.0))
 			var yaw := float(d.get("yaw", 0.0))
 			var scale := float(d.get("scale", 1.0)) * species_scale
+			scale *= VegetationGrowth.instance_scale_mult(species, d, settings)
 			var record_vert := float(d.get("vert_off", vert_off))
 			var gy: float = float(ground_y_at.call(x, z))
 			mm.set_instance_transform(i, VegetationPaint.build_transform(
@@ -149,6 +151,7 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 		var z := float(d.get("z", 0.0))
 		var yaw := float(d.get("yaw", 0.0))
 		var scale := float(d.get("scale", 1.0)) * species_scale
+		scale *= VegetationGrowth.instance_scale_mult(species, d, settings)
 		var record_vert := float(d.get("vert_off", vert_off))
 		var gy: float = float(ground_y_at.call(x, z))
 		mm.set_instance_transform(i, VegetationPaint.build_transform(
@@ -317,6 +320,7 @@ static func _build_bulk_batch(root: Node3D, species: String, records: Array,
 		var z := float(d.get("z", 0.0))
 		var yaw := float(d.get("yaw", 0.0))
 		var scale := float(d.get("scale", 1.0)) * species_scale
+		scale *= VegetationGrowth.instance_scale_mult(species, d, settings)
 		var record_vert := float(d.get("vert_off", vert_off))
 		var gy: float = float(ground_y_at.call(x, z))
 		mm.set_instance_transform(i, VegetationPaint.build_transform(

@@ -50,21 +50,22 @@ func _physics_process(_delta: float) -> void:
 		_clear_solar_focus()
 		_clear_building_focus()
 		return
-	if bool(_player.get("is_fpv_drone_mode") if _player.get("is_fpv_drone_mode") != null else false):
-		_clear_focus()
-		_clear_solar_focus()
-		_clear_building_focus()
-		return
-	var hit := _raycast_center()
+	# On foot, a short physics ray finds nearby Interactable props. In the FPV
+	# drone there are no walkable props, so that step is skipped entirely — but
+	# OSM building/solar picking runs in BOTH modes via a long-range ground ray
+	# so buildings can be selected from any altitude/distance.
+	var drone := _is_drone_mode()
 	var next: Interactable = null
-	if hit.has("collider"):
-		next = _find_interactable(hit.collider as Object)
-		if next != null and not next.can_interact(_player):
-			next = null
-		if next != null:
-			var dist: float = _camera.global_position.distance_to(hit.position)
-			if dist > next.max_distance:
+	if not drone:
+		var hit := _raycast_center()
+		if hit.has("collider"):
+			next = _find_interactable(hit.collider as Object)
+			if next != null and not next.can_interact(_player):
 				next = null
+			if next != null:
+				var dist: float = _camera.global_position.distance_to(hit.position)
+				if dist > next.max_distance:
+					next = null
 	if next != _focused:
 		if _focused != null:
 			_focused.on_focus_exit(_player)
@@ -74,16 +75,41 @@ func _physics_process(_delta: float) -> void:
 		_update_ui()
 	elif _focused != null:
 		_update_ui()
-	if _focused == null and hit.has("position"):
-		# OSM solar arrays take priority over the building-replace pick (panels sit on
-		# top of / next to their host footprints).
-		if _update_solar_focus(hit["position"] as Vector3):
-			_clear_building_focus()
+	if _focused == null:
+		# Long-range ground point under the crosshair → OSM polygon pick. Solar
+		# arrays take priority over the building pick (panels sit on top of / next
+		# to their host footprints).
+		var ground: Variant = _ground_pick_center()
+		if ground is Vector3:
+			if _update_solar_focus(ground as Vector3):
+				_clear_building_focus()
+			else:
+				_update_building_focus(ground as Vector3)
 		else:
-			_update_building_focus(hit["position"] as Vector3)
+			_clear_solar_focus()
+			_clear_building_focus()
 	else:
 		_clear_solar_focus()
 		_clear_building_focus()
+
+
+func _is_drone_mode() -> bool:
+	var v: Variant = _player.get("is_fpv_drone_mode")
+	return bool(v) if v != null else false
+
+
+## Ground point under the crosshair via the loader's long-range (50 km) terrain
+## ray — reaches the ground from drone altitude where the on-foot 12 m ray never
+## would. Returns a Vector3 or null.
+func _ground_pick_center() -> Variant:
+	if _loader == null or not _loader.has_method("terrain_pick_ray"):
+		return null
+	var vp := get_viewport()
+	if vp == null:
+		return null
+	var center := vp.get_visible_rect().size * 0.5
+	var p: Variant = _loader.call("terrain_pick_ray", center)
+	return p if p is Vector3 else null
 
 
 func _should_update_focus() -> bool:

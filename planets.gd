@@ -94,10 +94,15 @@ const ORBITAL_ELEMENTS := {
 	}
 }
 
-const _UPDATE_INTERVAL : float = 1.0
-var _update_timer : float = _UPDATE_INTERVAL  # run immediately on first frame
 const PREFS_PATH := "user://planet_prefs.cfg"
 const PLANET_NAMES := ["mercury", "venus", "mars", "jupiter", "saturn"]
+
+## Slerp rate (per second) for easing each rendered planet direction toward its
+## freshly computed position. High enough to track fast motion at Max speed with
+## only ~2° of lag, low enough to erase per-frame stepping. Discrete time jumps
+## (date/location/analemma) snap instead of easing — see force_update() and the
+## >90° guard in _smooth_render_directions().
+const _SMOOTH_RATE : float = 16.0
 
 # Reference to main scene for accessing time/location data
 var main_scene: Node = null
@@ -120,6 +125,17 @@ var planet_altitudes := {
 	"saturn": 0.0
 }
 
+# Rendered (smoothed) directions actually sent to the sky shader. planet_directions
+# holds the instantaneous target; these ease toward it each frame so the planets
+# glide instead of teleporting between updates at high time_scale.
+var _render_directions := {
+	"mercury": Vector3.UP,
+	"venus": Vector3.UP,
+	"mars": Vector3.UP,
+	"jupiter": Vector3.UP,
+	"saturn": Vector3.UP
+}
+
 func _ready() -> void:
 	# Find main scene reference
 	main_scene = get_parent()
@@ -130,23 +146,43 @@ func _ready() -> void:
 		_load_prefs()
 	if main_scene != null:
 		update_all_planets()
+		_snap_render_to_target()
 
 func _process(delta: float) -> void:
 	if Engine.is_editor_hint():
 		return
-	
-	_update_timer += delta
-	if _update_timer < _UPDATE_INTERVAL:
-		return
-	_update_timer -= _UPDATE_INTERVAL
-	
+	# Recompute the true positions every frame (a handful of Kepler solves — cheap)
+	# so planets are never stale, then ease the rendered directions toward them.
+	# main.gd pushes these to the sky shader every frame, so the motion stays
+	# continuous even at Max speed instead of jumping in coarse steps.
 	if main_scene != null and main_scene.has_method("get_julian_day_utc"):
 		update_all_planets()
+	_smooth_render_directions(delta)
 
 func force_update() -> void:
-	_update_timer = _UPDATE_INTERVAL
+	# Discrete jump (date/location/analemma/save-load): recompute AND snap the
+	# rendered directions so the planets don't slowly ease across the whole sky.
 	if main_scene != null and main_scene.has_method("get_julian_day_utc"):
 		update_all_planets()
+	_snap_render_to_target()
+
+## Copy the instantaneous targets into the rendered directions with no easing.
+func _snap_render_to_target() -> void:
+	for pname in PLANET_NAMES:
+		_render_directions[pname] = planet_directions[pname]
+
+## Ease each rendered direction toward its target along the great circle. Big
+## jumps (>90°, e.g. a scrub that bypassed force_update) snap so we never rotate
+## the long way round or lag on a teleport; small motion eases for smoothness.
+func _smooth_render_directions(delta: float) -> void:
+	var t : float = 1.0 - exp(-_SMOOTH_RATE * delta)
+	for pname in PLANET_NAMES:
+		var target : Vector3 = planet_directions[pname]
+		var cur : Vector3 = _render_directions[pname]
+		if cur.length_squared() < 1e-6 or cur.dot(target) <= 0.0:
+			_render_directions[pname] = target
+		else:
+			_render_directions[pname] = cur.slerp(target, t)
 
 func set_all_enabled(on: bool) -> void:
 	for pname in PLANET_NAMES:
@@ -397,8 +433,8 @@ func get_shader_data() -> Dictionary:
 	var glows: Array[float] = []
 	var glow_colors: Array[Color] = []
 	
-	# Mercury
-	directions.append(planet_directions.mercury)
+	# Mercury (directions use the eased _render_directions for smooth motion)
+	directions.append(_render_directions.mercury)
 	colors.append(mercury_color * mercury_brightness)
 	sizes.append(mercury_size)
 	enabled.append(mercury_enabled and planet_altitudes.mercury > -5.0)
@@ -406,7 +442,7 @@ func get_shader_data() -> Dictionary:
 	glow_colors.append(mercury_glow_color)
 	
 	# Venus
-	directions.append(planet_directions.venus)
+	directions.append(_render_directions.venus)
 	colors.append(venus_color * venus_brightness)
 	sizes.append(venus_size)
 	enabled.append(venus_enabled and planet_altitudes.venus > -5.0)
@@ -414,7 +450,7 @@ func get_shader_data() -> Dictionary:
 	glow_colors.append(venus_glow_color)
 	
 	# Mars
-	directions.append(planet_directions.mars)
+	directions.append(_render_directions.mars)
 	colors.append(mars_color * mars_brightness)
 	sizes.append(mars_size)
 	enabled.append(mars_enabled and planet_altitudes.mars > -5.0)
@@ -422,7 +458,7 @@ func get_shader_data() -> Dictionary:
 	glow_colors.append(mars_glow_color)
 	
 	# Jupiter
-	directions.append(planet_directions.jupiter)
+	directions.append(_render_directions.jupiter)
 	colors.append(jupiter_color * jupiter_brightness)
 	sizes.append(jupiter_size)
 	enabled.append(jupiter_enabled and planet_altitudes.jupiter > -5.0)
@@ -430,7 +466,7 @@ func get_shader_data() -> Dictionary:
 	glow_colors.append(jupiter_glow_color)
 	
 	# Saturn
-	directions.append(planet_directions.saturn)
+	directions.append(_render_directions.saturn)
 	colors.append(saturn_color * saturn_brightness)
 	sizes.append(saturn_size)
 	enabled.append(saturn_enabled and planet_altitudes.saturn > -5.0)

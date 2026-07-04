@@ -31,6 +31,10 @@ func _initialize() -> void:
 	_test_modal_script()
 	_test_facade_elements()
 	_test_wall_pick()
+	_test_messy_footprints_render()
+	_test_element_layout()
+	_test_building_sort()
+	_test_default_colors()
 	_test_model_catalog()
 	if _failures == 0:
 		print("BUILDING SELFTEST PASS  (%d checks)" % _checks)
@@ -70,6 +74,14 @@ func _lowest_corner_sample(poly: PackedVector2Array, elev: PackedFloat32Array) -
 		base = minf(base, TerrainBuilder.sample_footing_height(
 			p.x, p.y, elev, GRID_RES, EXTENT_M, 0.0))
 	return base
+
+
+func _highest_corner_sample(poly: PackedVector2Array, elev: PackedFloat32Array) -> float:
+	var top := -INF
+	for p in poly:
+		top = maxf(top, TerrainBuilder.sample_footing_height(
+			p.x, p.y, elev, GRID_RES, EXTENT_M, 0.0))
+	return top
 
 
 ## All surfaces' data for a building built on the given grid.
@@ -118,9 +130,10 @@ func _test_level_roof_on_slope() -> void:
 	if verts.is_empty():
 		return
 
-	var base_y := _lowest_corner_sample(poly, _tilted_grid())
-	_check("flat: DEM actually sloped under footprint", base_y < -0.5,
-		"lowest corner sample %f" % base_y)
+	var foot_low := _lowest_corner_sample(poly, _tilted_grid())
+	var foot_high := _highest_corner_sample(poly, _tilted_grid())
+	_check("flat: DEM actually sloped under footprint", foot_high - foot_low > 1.0,
+		"corner spread %f" % (foot_high - foot_low))
 
 	var min_y := INF
 	var max_y := -INF
@@ -128,9 +141,11 @@ func _test_level_roof_on_slope() -> void:
 		min_y = minf(min_y, v.y)
 		max_y = maxf(max_y, v.y)
 
-	# Roof top sits exactly height_m above the lowest corner sample.
-	_check("flat: roof top = base + height", absf(max_y - (base_y + height_m)) < 1e-3,
-		"max_y %f expected %f" % [max_y, base_y + height_m])
+	# Roof top sits height_m above the HIGHEST corner: the body seats on the
+	# uphill terrain so it never buries, and the foundation fills the downhill gap.
+	_check("flat: roof top = highest corner + height",
+		absf(max_y - (foot_high + height_m)) < 1e-3,
+		"max_y %f expected %f" % [max_y, foot_high + height_m])
 
 	# Level-roof invariant: every vertex near the top is at the SAME height
 	# (pre-fix the roof followed the terrain and spanned ~SLOPE * 10 m).
@@ -140,10 +155,11 @@ func _test_level_roof_on_slope() -> void:
 			top_spread = maxf(top_spread, max_y - v.y)
 	_check("flat: roof is level on slope", top_spread < 1e-3, "spread %f" % top_spread)
 
-	# Skirt invariant: walls extend below the lowest ground sample.
-	_check("flat: skirt below lowest sample",
-		min_y <= base_y and absf(min_y - (base_y - BuildingBuilder.FOUNDATION_SKIRT_M)) < 1e-3,
-		"min_y %f base_y %f" % [min_y, base_y])
+	# Foundation invariant: the skirt reaches down to the LOWEST corner (+embed)
+	# so the downhill side rests on a plinth instead of floating.
+	_check("flat: foundation fills to lowest corner",
+		absf(min_y - (foot_low - BuildingBuilder.FOUNDATION_SKIRT_M)) < 1e-3,
+		"min_y %f expected %f" % [min_y, foot_low - BuildingBuilder.FOUNDATION_SKIRT_M])
 
 
 func _test_pyramid_apex_on_slope() -> void:
@@ -156,11 +172,12 @@ func _test_pyramid_apex_on_slope() -> void:
 	if verts.is_empty():
 		return
 
-	var base_y := _lowest_corner_sample(poly, _tilted_grid())
+	var base_y := _highest_corner_sample(poly, _tilted_grid())
 	var max_y := -INF
 	for v in verts:
 		max_y = maxf(max_y, v.y)
-	_check("pyramid: apex = base + height", absf(max_y - (base_y + height_m)) < 1e-3,
+	_check("pyramid: apex = highest corner + height",
+		absf(max_y - (base_y + height_m)) < 1e-3,
 		"max_y %f expected %f" % [max_y, base_y + height_m])
 
 	# All eave corners level: vertices in the eave band share one height.
@@ -762,6 +779,140 @@ func _test_wall_pick() -> void:
 	var miss := BuildingBuilder.pick_wall_point(
 		poly, 0.0, 8.0, Vector3(0, 20.0, -20), Vector3(0, 0, 1))
 	_check("pick: miss above walls", not bool(miss.get("valid", false)))
+
+
+## Regression: residential pitched footprints that arrive "messy" from OSM
+## (duplicate vertices, near-collinear spikes, tiny gables) must still render
+## BOTH walls and a roof — the "houses missing on first load" bug.
+func _test_messy_footprints_render() -> void:
+	# 1. Gabled house with a duplicated vertex + a collinear midpoint spike on
+	#    one edge. Raw triangulation may reject this; the cleanup retry rescues it.
+	var messy := PackedVector2Array([
+		Vector2(-5, -3), Vector2(-5, -3),         # exact duplicate
+		Vector2(0, -3.001),                        # near-collinear midpoint
+		Vector2(5, -3), Vector2(5, 3), Vector2(-5, 3)])
+	var out := _mesh_data(messy, 8.0, _roof_spec("gabled"), _flat_grid())
+	_check("messy: gabled house renders", not out.is_empty())
+	if not out.is_empty():
+		var surfaces: Array = out["surfaces"]
+		var walls: PackedVector3Array = (surfaces[0] as Dictionary)["verts"]
+		var roof: PackedVector3Array = (surfaces[1] as Dictionary)["verts"]
+		_check("messy: has wall geometry", walls.size() > 0)
+		_check("messy: has roof geometry", roof.size() > 0,
+			"roof verts %d" % roof.size())
+
+	# 2. A small gabled footprint (5 m × 4 m = 20 m², just over the min-area
+	#    filter) — a modest residential house/outbuilding.
+	var tiny := _mesh_data(_rect_poly(2.5, 2.0), 3.0, _roof_spec("gabled"), _flat_grid())
+	_check("messy: tiny gable renders", not tiny.is_empty())
+	if not tiny.is_empty():
+		var s2: Array = tiny["surfaces"]
+		_check("messy: tiny gable has roof",
+			(s2[1] as Dictionary)["verts"].size() > 0)
+
+	# 3. Fallback: a star-shaped (self-crossing-ish) footprint tagged gabled must
+	#    never come back roofless — the flat-cap fallback covers it.
+	var star := PackedVector2Array([
+		Vector2(-6, 0), Vector2(-1, 1), Vector2(0, 6), Vector2(1, 1),
+		Vector2(6, 0), Vector2(1, -1), Vector2(0, -6), Vector2(-1, -1)])
+	var star_out := _mesh_data(star, 7.0, _roof_spec("gabled"), _flat_grid())
+	_check("messy: star footprint renders", not star_out.is_empty())
+	if not star_out.is_empty():
+		var s3: Array = star_out["surfaces"]
+		_check("messy: star has walls + roof",
+			(s3[0] as Dictionary)["verts"].size() > 0
+			and (s3[1] as Dictionary)["verts"].size() > 0)
+
+
+## Centered facade layout: door pins to the wall center, windows flank it
+## symmetrically; with no door the windows form a symmetric centered group.
+func _test_element_layout() -> void:
+	var poly := _square_poly(5.0)  # edge 0 length 10 m, center at u = 5
+	# 1 door + 2 windows on edge 0 → window, door(center), window.
+	var elems: Array = [
+		{"kind": "door", "edge": 0, "u_m": 0.0, "v_m": 0.0, "w_m": 1.0, "h_m": 2.05},
+		{"kind": "window", "edge": 0, "u_m": 0.0, "v_m": 0.9, "w_m": 1.2, "h_m": 1.4},
+		{"kind": "window", "edge": 0, "u_m": 0.0, "v_m": 0.9, "w_m": 1.2, "h_m": 1.4}]
+	BuildingBuilder.layout_elements_on_edge(poly, 0, elems)
+	var door_u := float((elems[0] as Dictionary)["u_m"])
+	var w1_u := float((elems[1] as Dictionary)["u_m"])
+	var w2_u := float((elems[2] as Dictionary)["u_m"])
+	_check("layout: door centered", absf(door_u - 5.0) < 1e-4, "door u=%f" % door_u)
+	_check("layout: windows straddle door",
+		(w1_u - 5.0) * (w2_u - 5.0) < 0.0, "w1=%f w2=%f" % [w1_u, w2_u])
+	_check("layout: windows symmetric about center",
+		absf((w1_u - 5.0) + (w2_u - 5.0)) < 1e-4, "w1=%f w2=%f" % [w1_u, w2_u])
+
+	# No door: 2 windows centered symmetrically about u = 5.
+	var wins: Array = [
+		{"kind": "window", "edge": 0, "u_m": 0.0, "v_m": 0.9, "w_m": 1.2, "h_m": 1.4},
+		{"kind": "window", "edge": 0, "u_m": 0.0, "v_m": 0.9, "w_m": 1.2, "h_m": 1.4}]
+	BuildingBuilder.layout_elements_on_edge(poly, 0, wins)
+	var a := float((wins[0] as Dictionary)["u_m"])
+	var b := float((wins[1] as Dictionary)["u_m"])
+	_check("layout: windows centered group", absf((a + b) * 0.5 - 5.0) < 1e-4,
+		"mid=%f" % ((a + b) * 0.5))
+	_check("layout: windows non-overlapping", absf(a - b) >= 1.2, "gap=%f" % absf(a - b))
+
+	# Everything stays inside the wall (u in [w/2, L - w/2]).
+	for e in elems:
+		var u := float((e as Dictionary)["u_m"])
+		_check("layout: inside wall", u >= 0.4 and u <= 9.6, "u=%f" % u)
+
+
+## When a dense city overflows MAX_BUILDINGS, build_buildings_node keeps the
+## footprints nearest the map centre. Verify the distance sort orders records
+## nearest-first and leaves the caller's array untouched.
+func _test_building_sort() -> void:
+	var far := _offset_square(500.0, 0.0, 4.0)
+	var near := _offset_square(10.0, 0.0, 4.0)
+	var mid := _offset_square(0.0, 120.0, 4.0)
+	var recs: Array = [
+		{"idx": 0, "points": far},
+		{"idx": 1, "points": near},
+		{"idx": 2, "points": mid}]
+	var sorted: Array = BuildingBuilder._sort_by_distance_to_centre(recs)
+	_check("sort: nearest first", int((sorted[0] as Dictionary)["idx"]) == 1,
+		"got idx=%d" % int((sorted[0] as Dictionary)["idx"]))
+	_check("sort: middle second", int((sorted[1] as Dictionary)["idx"]) == 2,
+		"got idx=%d" % int((sorted[1] as Dictionary)["idx"]))
+	_check("sort: farthest last", int((sorted[2] as Dictionary)["idx"]) == 0,
+		"got idx=%d" % int((sorted[2] as Dictionary)["idx"]))
+	_check("sort: input array not reordered", int((recs[0] as Dictionary)["idx"]) == 0,
+		"input mutated")
+
+
+## Autoloaded OSM houses must default to a dark-grey shingle roof + a typical
+## siding colour, with OSM colour tags still overriding both.
+func _test_default_colors() -> void:
+	var colors := BuildingBuilder.resolve_building_colors({}, "bldg_10_20")
+	var roof: Color = colors["roof"]
+	_check("colors: default roof is dark", roof.r < 0.4 and roof.g < 0.4 and roof.b < 0.4,
+		"roof=(%.2f,%.2f,%.2f)" % [roof.r, roof.g, roof.b])
+	_check("colors: default roof is neutral grey (not brown/red)",
+		absf(roof.r - roof.b) < 0.06 and absf(roof.g - roof.b) < 0.06,
+		"roof=(%.2f,%.2f,%.2f)" % [roof.r, roof.g, roof.b])
+	var wall: Color = colors["wall"]
+	_check("colors: default siding within house range",
+		wall.r > 0.2 and wall.g > 0.2 and wall.b > 0.2 and wall.r < 1.0,
+		"wall=(%.2f,%.2f,%.2f)" % [wall.r, wall.g, wall.b])
+	# Different footprints draw different siding tints (variation across a street).
+	var other := BuildingBuilder.resolve_building_colors({}, "bldg_400_120")
+	var w2: Color = other["wall"]
+	_check("colors: siding varies between houses",
+		absf(wall.r - w2.r) + absf(wall.g - w2.g) + absf(wall.b - w2.b) > 0.02)
+	# roof:colour tag overrides the grey default with a warm brown.
+	var tagged := BuildingBuilder.resolve_building_colors(
+		{"roof:colour": "#804020"}, "bldg_10_20")
+	var troof: Color = tagged["roof"]
+	_check("colors: roof:colour overrides default", troof.r > troof.b + 0.1,
+		"roof=(%.2f,%.2f,%.2f)" % [troof.r, troof.g, troof.b])
+
+
+func _offset_square(cx: float, cz: float, half: float) -> PackedVector2Array:
+	return PackedVector2Array([
+		Vector2(cx - half, cz - half), Vector2(cx + half, cz - half),
+		Vector2(cx + half, cz + half), Vector2(cx - half, cz + half)])
 
 
 func _test_model_catalog() -> void:

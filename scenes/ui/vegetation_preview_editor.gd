@@ -24,11 +24,18 @@ const SPECIES_SHAPE_SLIDERS := {
 		{"key": "deciduous_trunk_h", "label": "Tr H", "min": 2.0, "max": 18.0},
 		{"key": "deciduous_trunk_taper", "label": "Trunk taper", "min": 0.12, "max": 1.0},
 		{"key": "deciduous_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
+		{"key": "deciduous_growth_years", "label": "Growth yrs", "min": 0.0, "max": 80.0},
 		{"key": "deciduous_cluster_count", "label": "Clusters", "min": 3.0, "max": 16.0},
 		{"key": "deciduous_cluster_spread", "label": "Spread", "min": 0.3, "max": 1.5},
 		{"key": "deciduous_cluster_size", "label": "Clump sz", "min": 0.5, "max": 1.5},
 		{"key": "deciduous_cluster_tightness", "label": "Tightness", "min": 0.5, "max": 1.5},
-		{"key": "deciduous_branch_count", "label": "Branches", "min": 0.0, "max": 12.0},
+		{"key": "deciduous_branch_count", "label": "Primaries", "min": 3.0, "max": 12.0},
+		{"key": "deciduous_branch_levels", "label": "Fork levels", "min": 1.0, "max": 5.0},
+		{"key": "deciduous_branch_split", "label": "Fork count", "min": 2.0, "max": 4.0},
+		{"key": "deciduous_branch_angle", "label": "Fork angle", "min": 8.0, "max": 75.0},
+		{"key": "deciduous_branch_length_ratio", "label": "Taper len", "min": 0.45, "max": 0.92},
+		{"key": "deciduous_branch_droop", "label": "Droop/lift", "min": -0.6, "max": 0.6},
+		{"key": "deciduous_branch_gnarl", "label": "Gnarl", "min": 0.0, "max": 1.0},
 		{"key": "deciduous_branch_thickness", "label": "Br thick", "min": 0.3, "max": 2.0},
 		{"key": "deciduous_branch_reach", "label": "Br reach", "min": 0.4, "max": 1.6},
 		{"key": "deciduous_branch_base", "label": "Br base", "min": 0.5, "max": 0.95},
@@ -45,6 +52,7 @@ const SPECIES_SHAPE_SLIDERS := {
 	],
 	"pine": [
 		{"key": "pine_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
+		{"key": "pine_growth_years", "label": "Growth yrs", "min": 0.0, "max": 80.0},
 		{"key": "pine_card_w", "label": "W", "min": 0.3, "max": 4.0},
 		{"key": "pine_card_h", "label": "H", "min": 1.5, "max": 20.0},
 		{"key": "pine_trunk_w", "label": "Trunk", "min": 0.08, "max": 1.5},
@@ -64,6 +72,7 @@ const SPECIES_SHAPE_SLIDERS := {
 	],
 	"shrub": [
 		{"key": "shrub_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
+		{"key": "shrub_growth_years", "label": "Growth yrs", "min": 0.0, "max": 40.0},
 		{"key": "shrub_card_w", "label": "W", "min": 0.4, "max": 5.0},
 		{"key": "shrub_card_h", "label": "H", "min": 0.4, "max": 5.0},
 		{"key": "shrub_cluster_count", "label": "Clumps", "min": 3.0, "max": 10.0},
@@ -73,6 +82,7 @@ const SPECIES_SHAPE_SLIDERS := {
 	],
 	"grass_lawn": [
 		{"key": "grass_lawn_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 3.0},
+		{"key": "grass_lawn_growth_years", "label": "Growth yrs", "min": 0.0, "max": 10.0},
 		{"key": "grass_lawn_card_w", "label": "Mat width", "min": 0.2, "max": 1.0},
 		{"key": "grass_lawn_card_h", "label": "Height", "min": 0.05, "max": 0.30},
 		{"key": "grass_lawn_vertical_offset_m", "label": "Raise", "min": -8.0, "max": 8.0},
@@ -84,6 +94,7 @@ const SPECIES_SHAPE_SLIDERS := {
 	],
 	"grass_field": [
 		{"key": "grass_field_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 3.0},
+		{"key": "grass_field_growth_years", "label": "Growth yrs", "min": 0.0, "max": 10.0},
 		{"key": "grass_field_card_w", "label": "Mat width", "min": 0.25, "max": 1.2},
 		{"key": "grass_field_card_h", "label": "Height", "min": 0.3, "max": 1.5},
 		{"key": "grass_field_vertical_offset_m", "label": "Raise", "min": -8.0, "max": 8.0},
@@ -131,6 +142,8 @@ var _veg_root: Node3D = null
 var _camera: Camera3D = null
 var _ground: MeshInstance3D = null
 var _species_opt: OptionButton = null
+var _preset_opt: OptionButton = null
+var _preset_name_edit: LineEdit = null
 var _species_section: VBoxContainer = null
 var _tint_picker: ColorPickerButton = null
 var _density_slider: HSlider = null
@@ -161,6 +174,7 @@ func open(initial_preset: int = -1) -> void:
 		_set_species_from_preset(initial_preset)
 	_sync_species_dropdown()
 	_rebuild_species_section()
+	_refresh_preset_dropdown()
 	_sync_tint_picker()
 	_sync_top_sliders()
 	_sync_osm_opts()
@@ -314,6 +328,8 @@ func _build_ui() -> void:
 	_species_opt.item_selected.connect(_on_species_selected)
 	type_row.add_child(_species_opt)
 
+	_build_preset_row(sidebar)
+
 	_density_slider = _labeled_slider(sidebar, "Density", 0.25, 3.0, _density,
 		func(v: float) -> void:
 			_density = v
@@ -421,6 +437,122 @@ func _rebuild_species_section() -> void:
 			func(v: float) -> void:
 				_values[key] = v
 				_queue_rebuild())
+
+
+# ---------------------------------------------------------------------------
+# Per-species look presets
+# ---------------------------------------------------------------------------
+
+func _build_preset_row(sidebar: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	sidebar.add_child(row)
+	var lbl := Label.new()
+	_style_section(lbl, "Preset")
+	lbl.custom_minimum_size = Vector2(44, 0)
+	row.add_child(lbl)
+	_preset_opt = OptionButton.new()
+	_preset_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preset_opt.item_selected.connect(_on_preset_selected)
+	row.add_child(_preset_opt)
+
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 4)
+	sidebar.add_child(row2)
+	_preset_name_edit = LineEdit.new()
+	_preset_name_edit.placeholder_text = "Preset name…"
+	_preset_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preset_name_edit.text_submitted.connect(func(_t: String) -> void: _on_preset_save())
+	row2.add_child(_preset_name_edit)
+	var save_btn := Button.new()
+	save_btn.text = "Save"
+	save_btn.custom_minimum_size = Vector2(52, 26)
+	save_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	save_btn.tooltip_text = "Save current %s look as a named preset" % _species
+	save_btn.pressed.connect(_on_preset_save)
+	row2.add_child(save_btn)
+	var del_btn := Button.new()
+	del_btn.text = "Del"
+	del_btn.custom_minimum_size = Vector2(40, 26)
+	del_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	del_btn.tooltip_text = "Delete the selected preset"
+	del_btn.pressed.connect(_on_preset_delete)
+	row2.add_child(del_btn)
+
+
+## Refresh the preset dropdown for the current species. Item 0 is a placeholder.
+func _refresh_preset_dropdown() -> void:
+	if _preset_opt == null:
+		return
+	_preset_opt.clear()
+	_preset_opt.add_item("— presets —", 0)
+	_preset_opt.set_item_disabled(0, true)
+	for preset_name in VegetationStyleConfig.list_presets(_species):
+		_preset_opt.add_item(str(preset_name))
+	_preset_opt.select(0)
+
+
+## Shape sliders + tint for the current species — the unit a preset captures.
+func _species_preset_values() -> Dictionary:
+	var out := {}
+	for spec in SPECIES_SHAPE_SLIDERS.get(_species, []):
+		var key := str((spec as Dictionary)["key"])
+		if _values.has(key):
+			out[key] = _values[key]
+	out["%s_albedo_tint" % _species] = _tints.get(_species, Color.WHITE)
+	return out
+
+
+func _apply_preset_values(values: Dictionary) -> void:
+	for k in values:
+		if str(k).ends_with("_albedo_tint"):
+			_tints[_species] = values[k]
+		else:
+			_values[k] = values[k]
+	_rebuild_species_section()
+	_sync_tint_picker()
+	_sync_top_sliders()
+	_queue_rebuild(true)
+
+
+func _on_preset_selected(idx: int) -> void:
+	if idx <= 0 or _preset_opt == null:
+		return
+	var preset_name := _preset_opt.get_item_text(idx)
+	var values := VegetationStyleConfig.load_preset(_species, preset_name)
+	if values.is_empty():
+		return
+	if _preset_name_edit != null:
+		_preset_name_edit.text = preset_name
+	_apply_preset_values(values)
+
+
+func _on_preset_save() -> void:
+	if _preset_name_edit == null:
+		return
+	var preset_name := _preset_name_edit.text.strip_edges()
+	if preset_name.is_empty():
+		_preset_name_edit.placeholder_text = "Type a name first…"
+		return
+	VegetationStyleConfig.save_preset(_species, preset_name, _species_preset_values())
+	_refresh_preset_dropdown()
+	for i in _preset_opt.item_count:
+		if _preset_opt.get_item_text(i) == preset_name:
+			_preset_opt.select(i)
+			break
+
+
+func _on_preset_delete() -> void:
+	if _preset_opt == null:
+		return
+	var idx := _preset_opt.selected
+	if idx <= 0:
+		return
+	var preset_name := _preset_opt.get_item_text(idx)
+	VegetationStyleConfig.delete_preset(_species, preset_name)
+	if _preset_name_edit != null:
+		_preset_name_edit.text = ""
+	_refresh_preset_dropdown()
 
 
 # ---------------------------------------------------------------------------
@@ -780,15 +912,23 @@ func _brush_card() -> Dictionary:
 func _apply_to_map() -> void:
 	if _loader == null:
 		return
+	var shape := _shape_dict()
+	var style := _style_dict()
 	# One coalesced apply (shape + style together, single rebuild) avoids the old
 	# set_vegetation_settings + set_vegetation_style double-cascade of rebuilds.
 	if _loader.has_method("apply_vegetation_look"):
-		_loader.call("apply_vegetation_look", _shape_dict(), _style_dict())
+		_loader.call("apply_vegetation_look", shape, style)
 	else:
 		if _loader.has_method("set_vegetation_settings"):
-			_loader.call("set_vegetation_settings", _shape_dict(), true, true)
+			_loader.call("set_vegetation_settings", shape, true, true)
 		if _loader.has_method("set_vegetation_style"):
-			_loader.call("set_vegetation_style", _style_dict(), true, true)
+			_loader.call("set_vegetation_style", style, true, true)
+	# Persist this look as the GLOBAL default so future maps inherit it (per-map
+	# saves still override). This is what makes tune-look changes "stick" between
+	# maps and reloads instead of resetting to hardcoded defaults every time.
+	var global_look := shape.duplicate(true)
+	global_look.merge(style, true)
+	VegetationStyleConfig.save_global(global_look)
 	if _dock != null and _dock.has_method("set_paint_density"):
 		_dock.call("set_paint_density", _density)
 	# Apply to map = one global look; clear any per-brush override so future
@@ -827,6 +967,9 @@ func _on_species_selected(idx: int) -> void:
 	if idx >= 0 and idx < SPECIES_IDS.size():
 		_species = SPECIES_IDS[idx]
 	_rebuild_species_section()
+	_refresh_preset_dropdown()
+	if _preset_name_edit != null:
+		_preset_name_edit.text = ""
 	_sync_tint_picker()
 	_queue_rebuild(true)
 

@@ -121,6 +121,20 @@ var _veg_style: Dictionary = {}
 var _auto_rebuild_active := false
 var _auto_rebuild_dirty := false
 var _veg_undo := VegetationUndo.new()
+## Vegetation growth (VegetationGrowth): a monotonic sim-hours clock that ages the
+## plants. It advances mostly in analemma / ∞ mode (a day per frame) so the player
+## watches forests grow, die at maturity, and reseed over seasons; at normal play
+## speeds growth is imperceptible so ticks essentially never fire. Reset each load
+## — growth PROGRESS isn't persisted (birth times are re-seeded), only the tunable
+## <species>_growth_years survives. See _advance_growth / _growth_tick.
+const GROWTH_TICK_H := 720.0        # rebuild + reseed at most every ~30 sim-days
+const GROWTH_MAX_STEP_H := 48.0     # ignore bigger per-frame clock jumps (UI scrubs)
+var _growth_clock_h := 0.0
+var _growth_last_tick_h := 0.0
+var _growth_prev_abs_h := 0.0
+var _growth_caps_manual := {}
+var _growth_caps_auto := {}
+var _growth_rng := RandomNumberGenerator.new()
 var _placed_prop_layer: PlacedPropLayer = null
 var _placed_props_ui: Control = null
 var _placed_prop_edit_ui: Control = null
@@ -186,6 +200,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if Engine.is_editor_hint() or not _built or _main == null:
 		return
+	_advance_growth()
 	if not _main.has_method("get_snow_amount"):
 		return
 	var snow := clampf(float(_main.call("get_snow_amount")), 0.0, 1.0)
@@ -2239,7 +2254,15 @@ func _setup_camp_scatter_ui() -> void:
 
 func _setup_vegetation() -> void:
 	_vegetation_layer = VegetationLayer.create_empty()
+	# Seed shape defaults from the merged global tune-look style BEFORE loading the
+	# per-map layer file, so fresh maps inherit the player's last-tuned look. The
+	# render path (_auto_veg_runtime_settings) lets layer shape win over style
+	# shape, so without this a fresh layer's hardcoded defaults would mask the
+	# global tune-look. load_for_map() overrides these when a per-map file exists.
+	_vegetation_layer.apply_settings(
+		VegetationStyleConfig.shape_subset(VegetationStyleConfig.load_merged(_lat, _lon)))
 	_vegetation_layer.load_for_map(_lat, _lon)
+	_growth_init_manual()
 	_setup_vegetation_edit_ui()
 	_setup_camp_scatter_ui()
 	_manual_veg_pending = true
@@ -2451,6 +2474,7 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 			return
 	_auto_veg_layer = state.layer
 	_apply_auto_veg_edits()
+	_growth_init_auto()
 	_auto_veg_generated = true
 	await get_tree().process_frame
 	if not _built:
@@ -2509,7 +2533,128 @@ func _auto_veg_runtime_settings() -> Dictionary:
 		if gate != null and gate.is_valid():
 			s["haze_color"] = gate.compute_haze_color()
 	s.merge(_vegetation_layer.get_settings() if _vegetation_layer != null else {}, true)
+	# Current growth-clock time so the runtime can scale each instance by its age
+	# (VegetationGrowth.instance_scale_mult). Same value for every record in a
+	# rebuild, so it never affects batch partitioning.
+	s["growth_now_h"] = _growth_clock_h
 	return s
+
+
+# ==================== VEGETATION GROWTH ====================
+
+func _current_abs_h() -> float:
+	if _main != null and _main.has_method("get_absolute_hours"):
+		return float(_main.call("get_absolute_hours"))
+	return 0.0
+
+
+## Light settings dict for the growth math: growth_years per species + the clock.
+func _growth_style() -> Dictionary:
+	var s := {"growth_now_h": _growth_clock_h}
+	for sp in VegetationLayer.ALL_SPECIES:
+		s["%s_growth_years" % sp] = float(_veg_style.get("%s_growth_years" % sp, 0.0))
+	return s
+
+
+## Cheap per-frame check (reads _veg_style directly, no dict build).
+func _growth_any_enabled() -> bool:
+	for sp in VegetationLayer.ALL_SPECIES:
+		if float(_veg_style.get("%s_growth_years" % sp, 0.0)) > 0.0:
+			return true
+	return false
+
+
+## Advance the monotonic growth clock; when enough sim-time has accrued, run a
+## growth tick (reseed matured trees + rebuild so every instance re-scales to its
+## age). Forward-only — rewinding the world clock freezes growth rather than
+## resurrecting dead trees. Analemma contributes a fixed day per frame; normal
+## play uses the real clock delta but ignores big jumps (UI scrubs) via the clamp.
+func _advance_growth() -> void:
+	if not _growth_any_enabled():
+		return
+	var now_abs := _current_abs_h()
+	var step := 0.0
+	if bool(_main.get("analemma_mode")):
+		step = 24.0
+	else:
+		step = clampf(now_abs - _growth_prev_abs_h, 0.0, GROWTH_MAX_STEP_H)
+	_growth_prev_abs_h = now_abs
+	if step <= 0.0:
+		return
+	_growth_clock_h += step
+	if _growth_clock_h - _growth_last_tick_h < GROWTH_TICK_H:
+		return
+	_growth_last_tick_h = _growth_clock_h
+	_growth_tick()
+
+
+func _growth_tick() -> void:
+	var st := _growth_style()
+	if _vegetation_layer != null:
+		VegetationGrowth.advance_generations(_vegetation_layer.bulk, _growth_clock_h,
+			st, _growth_rng, _growth_caps_manual, Callable(self, "_growth_add_manual"))
+	if _auto_veg_generated and _auto_veg_layer != null:
+		if VegetationGrowth.advance_generations(_auto_veg_layer.bulk, _growth_clock_h,
+				st, _growth_rng, _growth_caps_auto, Callable(self, "_growth_add_auto")):
+			_auto_veg_layer._recount_bulk()
+	# Rebuild both layers so the growth SCALE (a pure function of the clock)
+	# refreshes even on ticks with no death/reseed. Throttled by GROWTH_TICK_H.
+	_rebuild_vegetation()
+	if _auto_veg_generated:
+		_rebuild_auto_vegetation()
+
+
+## add_cb for reseeding — appends one manual bulk record and returns it so the
+## growth pass can stamp its birth time (a fresh seedling: birth = now).
+func _growth_add_manual(species: String, x: float, z: float, yaw: float,
+		scale: float, card: Variant) -> Variant:
+	if _vegetation_layer == null:
+		return null
+	var card_dict: Dictionary = card if card is Dictionary else {}
+	if not _vegetation_layer.add_bulk(species, x, z, yaw, scale, card_dict):
+		return null
+	return (_vegetation_layer.bulk[species] as Array).back()
+
+
+func _growth_add_auto(slot: String, x: float, z: float, yaw: float,
+		scale: float, _card: Variant) -> Variant:
+	if _auto_veg_layer == null:
+		return null
+	if not _auto_veg_layer.add_bulk(slot, x, z, yaw, scale):
+		return null
+	return (_auto_veg_layer.bulk[slot] as Array).back()
+
+
+## Seed the growth RNG/clock + per-instance birth times right after the manual
+## layer loads, so the first render already shows an established age mix. reset=true
+## discards any birth_h persisted from a prior session (different clock epoch).
+func _growth_init_manual() -> void:
+	if _vegetation_layer == null:
+		return
+	_growth_rng.seed = int(_lat * 10000.0) ^ int(_lon * 10000.0) ^ 0x6b7f
+	_growth_prev_abs_h = _current_abs_h()
+	VegetationGrowth.ensure_birth_times(_vegetation_layer.bulk, _growth_clock_h,
+		_growth_style(), _growth_rng, true)
+	_growth_caps_manual = VegetationGrowth.capture_caps(_vegetation_layer.bulk)
+
+
+func _growth_init_auto() -> void:
+	if _auto_veg_layer == null:
+		return
+	VegetationGrowth.ensure_birth_times(_auto_veg_layer.bulk, _growth_clock_h,
+		_growth_style(), _growth_rng, true)
+	_growth_caps_auto = VegetationGrowth.capture_caps(_auto_veg_layer.bulk)
+
+
+## After a manual placement (paint scatter / single drop) give the new records an
+## established age mix (so a painted grove isn't a field of seedlings) and refresh
+## the population cap so reseeding holds the new density.
+func _growth_after_manual_edit() -> void:
+	if _vegetation_layer == null or not _growth_any_enabled():
+		return
+	VegetationGrowth.ensure_birth_times(_vegetation_layer.bulk, _growth_clock_h,
+		_growth_style(), _growth_rng, false)
+	_growth_caps_manual = VegetationGrowth.capture_caps(_vegetation_layer.bulk)
 
 
 ## Building / water / road polygons the generator must avoid scattering onto.
@@ -2629,6 +2774,7 @@ func _full_regenerate_auto_vegetation_async() -> void:
 		return
 	_auto_veg_layer = AutoVegetationGenerator.generate(_auto_veg_data, _auto_veg_ctx())
 	_apply_auto_veg_edits()
+	_growth_init_auto()
 	await _rebuild_auto_vegetation_async()
 
 
@@ -2753,6 +2899,7 @@ func _full_regenerate_auto_vegetation() -> void:
 		return
 	_auto_veg_layer = AutoVegetationGenerator.generate(_auto_veg_data, _auto_veg_ctx())
 	_apply_auto_veg_edits()
+	_growth_init_auto()
 	_rebuild_auto_vegetation()
 
 
@@ -2880,9 +3027,41 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 		if _vegetation_layer.add_bulk(species, float(spot["x"]), float(spot["z"]), yaw, scale, brush_card):
 			added += 1
 	if added > 0:
+		_growth_after_manual_edit()
 		_vegetation_layer.save(_lat, _lon)
 		_rebuild_vegetation()
 	return added
+
+
+## Drop a SINGLE bulk instance of `species` at (x, z) — the paint dock's
+## single-click (no-drag) placement. Scale/yaw come from the same params as a
+## scatter so a solo tree matches the brush; an optional card_settings snapshot
+## ("Apply to brush") is carried through. Returns true if placed.
+func place_single_vegetation(species: String, x: float, z: float, params: Dictionary = {}) -> bool:
+	if _vegetation_layer == null:
+		return false
+	_vegetation_layer.ensure_species_keys()
+	if species.is_empty() or species not in VegetationLayer.ALL_SPECIES:
+		return false
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(params.get("seed", 1337)) ^ int(x * 131.0) ^ int(z * 977.0)
+	var is_lawn := species == "grass_lawn"
+	var scale_min := float(params.get("scale_min", 0.85))
+	var scale_max := float(params.get("scale_max", 1.25))
+	var yaw := 0.0 if is_lawn else rng.randf() * TAU
+	var scale := 1.0 if is_lawn else lerpf(scale_min, scale_max, rng.randf())
+	var brush_card: Dictionary = params.get("card_settings", {}) if params.get("card_settings") is Dictionary else {}
+	if not _vegetation_layer.add_bulk(species, x, z, yaw, scale, brush_card):
+		return false
+	# A single deliberate drop is planted as a seedling (birth = now) so the player
+	# can watch this one grow from scratch, rather than the established age mix a
+	# paint scatter gets. Cap refresh keeps reseeding density honest.
+	if _growth_any_enabled():
+		(_vegetation_layer.bulk[species] as Array).back()["birth_h"] = _growth_clock_h
+		_growth_caps_manual = VegetationGrowth.capture_caps(_vegetation_layer.bulk)
+	_vegetation_layer.save(_lat, _lon)
+	_rebuild_vegetation()
+	return true
 
 
 func clear_vegetation_in_polygon(poly: PackedVector2Array) -> void:
