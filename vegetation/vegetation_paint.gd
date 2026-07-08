@@ -8,6 +8,12 @@ enum Preset { PINE, DECIDUOUS, SHRUB, MIX, GRASS_LAWN, GRASS_FIELD }
 const GROUND_SINK_M := 0.05
 const GRASS_FILL_CAP := 8000
 
+## Hard ceiling on grid cells scanned by square_grid_fill for one polygon. A
+## pathologically large footprint (e.g. a multi-km OSM park) at sub-metre spacing
+## would otherwise scan tens of millions of cells synchronously and freeze the
+## frame; beyond this budget the step is coarsened so the scan stays bounded.
+const MAX_GRID_FILL_CELLS := 400000
+
 
 static func circle_polygon(center: Vector2, radius_m: float, segments: int = 32) -> PackedVector2Array:
 	var out := PackedVector2Array()
@@ -197,28 +203,34 @@ static func poisson_fill(poly: PackedVector2Array, spacing_m: float, rng: Random
 
 ## Flat-top hex grid fill for mowed lawn mats — edge-to-edge tiling, fixed yaw.
 ## `mat_width_m` is the flat-to-flat width of one hex mat (matches grass_lawn_card_w).
-static func hex_grid_fill(poly: PackedVector2Array, mat_width_m: float,
+static func square_grid_fill(poly: PackedVector2Array, mat_width_m: float,
 		existing: Array[Vector2], max_count: int) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	if poly.size() < 3 or mat_width_m <= 0.0 or max_count <= 0:
 		return out
-	var col_step := mat_width_m
-	var row_step := mat_width_m * sqrt(3.0) * 0.5
 	var min_sep_sq := mat_width_m * mat_width_m * 0.25
 	var aabb := polygon_aabb(poly)
-	var row_min := int(floor(aabb.position.y / row_step)) - 1
-	var row_max := int(ceil(aabb.end.y / row_step)) + 1
+	# Bound the scan: a huge polygon at fine spacing can't be filled at cap
+	# density anyway, so coarsen the step rather than iterate millions of cells
+	# on one frame (that froze the load-time grass scatter).
+	var step := mat_width_m
+	var cells_est := (aabb.size.x / step) * (aabb.size.y / step)
+	if cells_est > float(MAX_GRID_FILL_CELLS):
+		step = sqrt(maxf(aabb.size.x * aabb.size.y, 1.0) / float(MAX_GRID_FILL_CELLS))
+	var col_min := int(floor(aabb.position.x / step)) - 1
+	var col_max := int(ceil(aabb.end.x / step)) + 1
+	var row_min := int(floor(aabb.position.y / step)) - 1
+	var row_max := int(ceil(aabb.end.y / step)) + 1
+	
+	var rng := RandomNumberGenerator.new()
 	for row in range(row_min, row_max + 1):
 		if out.size() >= max_count:
 			break
-		var z := float(row) * row_step
-		var x_off := col_step * 0.5 if (row & 1) != 0 else 0.0
-		var col_min := int(floor((aabb.position.x - x_off) / col_step)) - 1
-		var col_max := int(ceil((aabb.end.x - x_off) / col_step)) + 1
+		var z := float(row) * step
 		for col in range(col_min, col_max + 1):
 			if out.size() >= max_count:
 				break
-			var x := float(col) * col_step + x_off
+			var x := float(col) * step
 			var pt := Vector2(x, z)
 			if not point_in_polygon(pt, poly):
 				continue
@@ -229,17 +241,20 @@ static func hex_grid_fill(poly: PackedVector2Array, mat_width_m: float,
 					break
 			if blocked:
 				continue
-			out.append({"x": x, "z": z, "yaw": 0.0, "scale": 1.0})
+			# Deterministic yaw rotation in 90-degree increments
+			rng.seed = int(x * 1000.0) ^ int(z * 1000.0)
+			var yaw := float(rng.randi_range(0, 3)) * (PI / 2.0)
+			out.append({"x": x, "z": z, "yaw": yaw, "scale": 1.0})
 	return out
 
 
-## Rough hex-tile count for UI caps (one mat per hex cell).
-static func estimate_hex_fill_count(poly: PackedVector2Array, mat_width_m: float,
+## Rough square-tile count for UI caps.
+static func estimate_square_fill_count(poly: PackedVector2Array, mat_width_m: float,
 		max_count: int = GRASS_FILL_CAP) -> int:
 	var area := polygon_area(poly)
 	if area < 1.0 or mat_width_m <= 0.0:
 		return 0
-	var cell_area := mat_width_m * mat_width_m * sqrt(3.0) * 0.5
+	var cell_area := mat_width_m * mat_width_m
 	var est := int(area / cell_area) + 4
 	return mini(est, max_count)
 

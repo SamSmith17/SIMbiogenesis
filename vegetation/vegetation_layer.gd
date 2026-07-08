@@ -15,27 +15,32 @@ const MAX_GRASS_PER_SPECIES := 15000
 static func default_settings() -> Dictionary:
 	return {
 		"vertical_offset_m": 0.0,
-		"deciduous_canopy_w": 11.0,
-		"deciduous_canopy_h": 4.5,
-		"deciduous_trunk_w": 0.45,
-		"deciduous_trunk_h": 4.5,
-		"deciduous_bulk_scale": 1.35,
-		"deciduous_vertical_offset_m": 0.0,
-		"deciduous_cluster_count": 8,
-		"deciduous_cluster_spread": 1.0,
+		# Deciduous defaults = the player's tuned "2" preset (the desired default
+		# tree). Shape keys the layer owns MUST match VegetationStyleConfig.defaults()
+		# because the render path merges layer settings ON TOP of the style, so a
+		# stale layer default here would override the style and auto (OSM) trees
+		# would render with the old shape instead of the tuned one.
+		"deciduous_canopy_w": 12.05,
+		"deciduous_canopy_h": 4.35,
+		"deciduous_trunk_w": 1.31,
+		"deciduous_trunk_h": 4.25,
+		"deciduous_bulk_scale": 1.6,
+		"deciduous_vertical_offset_m": -2.0,
+		"deciduous_cluster_count": 10.05,
+		"deciduous_cluster_spread": 0.67,
 		"deciduous_cluster_size": 1.0,
-		"deciduous_cluster_tightness": 1.0,
-		"deciduous_branch_count": 4,
-		"deciduous_branch_thickness": 1.0,
-		"deciduous_branch_reach": 1.0,
-		"deciduous_branch_base": 0.82,
-		"deciduous_branch_levels": 4,
-		"deciduous_branch_split": 3,
+		"deciduous_cluster_tightness": 1.12,
+		"deciduous_branch_count": 9.55,
+		"deciduous_branch_thickness": 0.64,
+		"deciduous_branch_reach": 0.89,
+		"deciduous_branch_base": 0.71,
+		"deciduous_branch_levels": 2.15,
+		"deciduous_branch_split": 2.65,
 		"deciduous_branch_angle": 38.0,
-		"deciduous_branch_length_ratio": 0.72,
+		"deciduous_branch_length_ratio": 0.62,
 		"deciduous_branch_droop": 0.12,
-		"deciduous_branch_gnarl": 0.22,
-		"deciduous_growth_years": 16.0,
+		"deciduous_branch_gnarl": 0.21,
+		"deciduous_growth_years": 9.85,
 		"pine_bulk_scale": 1.0,
 		"pine_card_w": 0.85,
 		"pine_card_h": 4.5,
@@ -78,12 +83,15 @@ static func create_empty() -> VegetationLayer:
 		layer.bulk[species] = []
 	layer.hero = []
 	layer.settings = default_settings()
+	layer.growth_zones = []
 	return layer
 
 
 var bulk: Dictionary = {}
 var hero: Array = []
 var settings: Dictionary = {}
+## Paint polygons that define where generational reseeding may place seedlings.
+var growth_zones: Array = []
 
 
 func add_bulk(species: String, x: float, z: float, yaw: float, scale: float,
@@ -122,6 +130,23 @@ func get_settings() -> Dictionary:
 
 func apply_settings(patch: Dictionary) -> void:
 	settings.merge(patch, true)
+
+
+## Strip per-instance card_settings ("Apply to brush" snapshots) from every bulk
+## record so all trees conform to the global map look. Returns the count cleared.
+## "Apply to map" is authoritative over the whole map (see
+## terrain_loader.apply_vegetation_look): without this, any tree painted with a
+## custom brush look keeps a per-instance override that wins over the global
+## settings in _partition_bulk_batches — and since card_settings persists to the
+## map JSON, those trees stay pinned to a stale appearance even across reloads.
+func clear_card_overrides() -> int:
+	var n := 0
+	for species in ALL_SPECIES:
+		for item in bulk.get(species, []):
+			if item is Dictionary and (item as Dictionary).has("card_settings"):
+				(item as Dictionary).erase("card_settings")
+				n += 1
+	return n
 
 
 func remove_bulk_in_polygon(poly: PackedVector2Array) -> void:
@@ -326,6 +351,12 @@ func load_for_map(lat: float, lon: float) -> bool:
 	return true
 
 
+func add_growth_zone(poly: PackedVector2Array) -> void:
+	if poly.size() < 3:
+		return
+	growth_zones.append(poly)
+
+
 func serialize() -> Dictionary:
 	var bulk_out := {}
 	for species in ALL_SPECIES:
@@ -335,6 +366,7 @@ func serialize() -> Dictionary:
 		"bulk": bulk_out,
 		"hero": hero.duplicate(true),
 		"settings": get_settings(),
+		"growth_zones": _zones_to_json(growth_zones),
 	}
 
 
@@ -345,6 +377,33 @@ const TINT_SUFFIX := "_albedo_tint"
 ## JSON.stringify turns a Color into the string "(r, g, b, a)", so we convert
 ## tints to [r,g,b,a] arrays on save and back to Color on load — otherwise the
 ## card factory's typed `Color` assignment throws on reload and the map fails.
+static func _zones_to_json(zones: Array) -> Array:
+	var out: Array = []
+	for poly in zones:
+		if poly is PackedVector2Array:
+			var pts: Array = []
+			for p in poly:
+				pts.append([p.x, p.y])
+			out.append(pts)
+	return out
+
+
+static func _zones_from_json(raw: Variant) -> Array:
+	var out: Array = []
+	if not (raw is Array):
+		return out
+	for item in raw:
+		if not (item is Array):
+			continue
+		var poly := PackedVector2Array()
+		for pt in item:
+			if pt is Array and (pt as Array).size() >= 2:
+				poly.append(Vector2(float(pt[0]), float(pt[1])))
+		if poly.size() >= 3:
+			out.append(poly)
+	return out
+
+
 static func _records_to_json(records: Array) -> Array:
 	var out: Array = []
 	for item in records:
@@ -432,6 +491,7 @@ func deserialize(data: Dictionary) -> void:
 	for item in data.get("hero", []):
 		if item is Dictionary:
 			hero.append(item)
+	growth_zones = _zones_from_json(data.get("growth_zones", []))
 	settings = default_settings()
 	if data.get("settings") is Dictionary:
 		settings.merge(data["settings"], true)

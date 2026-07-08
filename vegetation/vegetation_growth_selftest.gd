@@ -18,6 +18,9 @@ func _initialize() -> void:
 	_test_birth_times()
 	_test_reseed_population()
 	_test_reseed_radius()
+	_test_reseed_zone()
+	_test_seasonal_growth()
+	_test_instance_map()
 	_test_disabled_species()
 	if _failures == 0:
 		print("VEG GROWTH SELFTEST PASS  (%d checks)" % _checks)
@@ -152,7 +155,7 @@ func _test_reseed_radius() -> void:
 	rng.seed = 7
 	var gy := 2.0
 	var settings := {"pine_growth_years": gy}
-	# One matured parent at a known spot; its seedlings must land within 2 m.
+	# One matured parent at a known spot; its seedlings must land within 1 m.
 	var bulk := {"pine": [{"x": 100.0, "z": 50.0, "scale": 1.0, "birth_h": -gy * HPY * 2.0}]}
 	var caps := {"pine": 8}
 	var seedling_positions: Array = []
@@ -169,6 +172,74 @@ func _test_reseed_radius() -> void:
 		if Vector2(p.x - 100.0, p.y - 50.0).length() > VegetationGrowth.SEED_RADIUS_M + 1e-4:
 			all_near = false
 	_check("seedlings within SEED_RADIUS_M", all_near)
+
+
+func _test_reseed_zone() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 42
+	var gy := 2.0
+	var settings := {"pine_growth_years": gy}
+	var zone_poly := VegetationPaint.rect_to_polygon(Vector2(98.0, 48.0), Vector2(102.0, 52.0))
+	var zone := GrowthZoneIndex.from_polygons([zone_poly])
+	var bulk := {"pine": [{"x": 100.0, "z": 50.0, "scale": 1.0, "birth_h": -gy * HPY * 2.0}]}
+	var caps := {"pine": 8}
+	var seedling_positions: Array = []
+	var add := func(slot: String, x: float, z: float, yaw: float, sc: float, card: Variant) -> Variant:
+		var rec := {"x": x, "z": z, "yaw": yaw, "scale": sc}
+		(bulk[slot] as Array).append(rec)
+		seedling_positions.append(Vector2(x, z))
+		return rec
+	VegetationGrowth.advance_generations(bulk, 0.0, settings, rng, caps, add, zone)
+	var in_zone := true
+	for p in seedling_positions:
+		if not zone.contains(p.x, p.y):
+			in_zone = false
+	_check("zone-bound seedlings inside polygon", in_zone or seedling_positions.is_empty())
+	# Parent outside a distant zone → no reseeds escape into that zone from far away.
+	seedling_positions.clear()
+	bulk = {"pine": [{"x": 100.0, "z": 50.0, "scale": 1.0, "birth_h": -gy * HPY * 2.0}]}
+	var far_zone := GrowthZoneIndex.from_polygons([
+		VegetationPaint.rect_to_polygon(Vector2(0.0, 0.0), Vector2(2.0, 2.0))])
+	VegetationGrowth.advance_generations(bulk, 0.0, settings, rng, caps, add, far_zone)
+	_check("seedlings rejected outside distant zone", seedling_positions.is_empty())
+
+
+func _doy(month: int, day: int) -> int:
+	var c := CelestialClock.new()
+	c.month = month
+	c.day = day
+	return c.day_of_year
+
+
+func _test_seasonal_growth() -> void:
+	var jan15 := _doy(1, 15)
+	var jul15 := _doy(7, 15)
+	var apr1 := _doy(4, 1)
+	_check("winter structural factor low",
+		VegetationGrowth.structural_growth_factor(jan15, 40.0) < VegetationGrowth.DORMANCY_THRESHOLD)
+	_check("summer structural factor high",
+		VegetationGrowth.structural_growth_factor(jul15, 40.0) > 0.8)
+	_check("winter reseed blocked", not VegetationGrowth.reseed_allowed(jan15, 40.0))
+	_check("summer reseed allowed", VegetationGrowth.reseed_allowed(jul15, 40.0))
+	_check("milestone crossed spring (Mar→Apr)",
+		VegetationGrowth.milestones_crossed(_doy(3, 20), apr1, 40.0))
+	_check("no milestone within same week",
+		not VegetationGrowth.milestones_crossed(jul15, _doy(7, 20), 40.0))
+	# Southern hemisphere: January local summer → high factor at lat -40.
+	_check("southern hemisphere summer factor high",
+		VegetationGrowth.structural_growth_factor(jan15, -40.0) > 0.8)
+	_check("generations skip when reseed disallowed", not VegetationGrowth.advance_generations(
+		{"pine": [{"x": 0.0, "z": 0.0, "scale": 1.0, "birth_h": -200.0 * HPY}]},
+		0.0, {"pine_growth_years": 5.0}, RandomNumberGenerator.new(), {"pine": 4},
+		func(_s, _x, _z, _y, _sc, _c): return null, null, false))
+
+
+func _test_instance_map() -> void:
+	var map := VegetationInstanceMap.new()
+	var gy := func(x: float, _z: float) -> float: return x * 0.0
+	_check("empty map preserves budget", map.apply_scales({}, gy, 100) == 100)
+	map.clear()
+	_check("cleared map empty", map.is_empty())
 
 
 func _test_disabled_species() -> void:

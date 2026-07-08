@@ -44,7 +44,10 @@ const SPECIES_OVERRIDE_LABELS := [
 
 ## Resolve the user's OSM→species choice for a kind into a species-weight dict.
 ## Returns {} when the choice is "auto" (or unset) so callers keep biome defaults.
-static func species_override_for_kind(osm_species_map: Dictionary, kind: String) -> Dictionary:
+## `mix_weights` (from the Tune Look "Mixed woodland" type) customizes the "mixed"
+## choice; empty falls back to an even pine/deciduous split.
+static func species_override_for_kind(osm_species_map: Dictionary, kind: String,
+		mix_weights: Dictionary = {}) -> Dictionary:
 	if osm_species_map.is_empty():
 		return {}
 	match str(osm_species_map.get(kind, "auto")):
@@ -55,8 +58,22 @@ static func species_override_for_kind(osm_species_map: Dictionary, kind: String)
 		"shrub":
 			return {"shrub": 1.0}
 		"mixed":
-			return {"pine": 0.5, "deciduous": 0.5}
+			return mix_weights.duplicate(true) if not mix_weights.is_empty() \
+				else {"pine": 0.5, "deciduous": 0.5}
 	return {}
+
+
+## The player-tuned mixed-woodland composition (Tune Look "Mixed woodland" type),
+## read from the style's mix_pine/mix_deciduous/mix_shrub weights. Zero-weight
+## species are dropped; returns {} when the style carries no positive weights so
+## callers fall back to the even pine/deciduous default.
+static func mix_weights_from_style(style: Dictionary) -> Dictionary:
+	var out := {}
+	for species in ["pine", "deciduous", "shrub"]:
+		var w := maxf(float(style.get("mix_%s" % species, 0.0)), 0.0)
+		if w > 0.0:
+			out[species] = w
+	return out
 
 
 ## Dominant species from an override weight dict (for row crops), else `fallback`.
@@ -74,19 +91,19 @@ static func override_single_species(override: Dictionary, fallback: String) -> S
 static func for_location(latitude: float, worldcover_class: int = -1) -> Dictionary:
 	if worldcover_class == WC_SHRUB:
 		return {"biome": "shrubland", "weights": {"shrub": 1.0},
-			"spacing_m": 5.0, "default_height_m": 1.3}
+			"spacing_m": 6.0, "default_height_m": 1.3}
 	var lat := absf(latitude)
 	if lat < TROPICAL_LIMIT:
 		return {"biome": "tropical", "weights": {"palm": 0.45, "deciduous": 0.45, "shrub": 0.10},
-			"spacing_m": 6.0, "default_height_m": 13.0}
+			"spacing_m": 8.0, "default_height_m": 13.0}
 	if lat < SUBTROPICAL_LIMIT:
 		return {"biome": "subtropical", "weights": {"deciduous": 0.55, "shrub": 0.45},
-			"spacing_m": 7.0, "default_height_m": 9.0}
+			"spacing_m": 9.0, "default_height_m": 9.0}
 	if lat < TEMPERATE_LIMIT:
 		return {"biome": "temperate", "weights": {"deciduous": 0.45, "conifer": 0.45, "shrub": 0.10},
-			"spacing_m": 6.0, "default_height_m": 14.0}
+			"spacing_m": 8.0, "default_height_m": 14.0}
 	return {"biome": "boreal", "weights": {"conifer": 0.85, "shrub": 0.15},
-		"spacing_m": 5.0, "default_height_m": 13.0}
+		"spacing_m": 7.0, "default_height_m": 13.0}
 
 
 static func weights_for_osm_tags(base_weights: Dictionary, tags: Dictionary) -> Dictionary:

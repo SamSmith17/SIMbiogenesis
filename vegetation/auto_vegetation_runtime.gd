@@ -33,7 +33,6 @@ const NEUTRAL_BULK := {
 	"shrub_bulk_scale": 1.0,
 }
 
-
 static func ensure_root(terrain: Node3D) -> Node3D:
 	var root := terrain.get_node_or_null(ROOT_NAME) as Node3D
 	if root == null:
@@ -111,16 +110,18 @@ const HERO_CHUNK := 6
 
 static func rebuild(terrain: Node3D, layer: AutoVegetationLayer,
 		ground_y_at: Callable, settings: Dictionary = {},
-		exclusions: Array = []) -> void:
+		exclusions: Array = [], growth_map: VegetationInstanceMap = null) -> void:
 	if terrain == null or layer == null:
 		return
+	if growth_map != null:
+		growth_map.clear()
 	_clear_shader_registrations()
 	var s := NEUTRAL_BULK.duplicate()
 	s.merge(settings, true)
 	var root := ensure_root(terrain)
 	_clear_children(root)
 	for slot in layer.slots():
-		_build_bulk_layer(root, str(slot), layer.bulk.get(slot, []), ground_y_at, s)
+		_build_bulk_layer(root, str(slot), layer.bulk.get(slot, []), ground_y_at, s, growth_map)
 	_build_hero_layer(root, layer.hero, ground_y_at, s)
 	# See VegetationRuntime.rebuild()'s matching comment: _clear_shader_registrations()
 	# above wipes the manual layer's registrations too, which this rebuild doesn't touch.
@@ -134,13 +135,15 @@ static func rebuild(terrain: Node3D, layer: AutoVegetationLayer,
 ## synchronous path when no SceneTree is available (e.g. headless tools).
 static func rebuild_async(terrain: Node3D, layer: AutoVegetationLayer,
 		ground_y_at: Callable, settings: Dictionary = {},
-		exclusions: Array = []) -> void:
+		exclusions: Array = [], growth_map: VegetationInstanceMap = null) -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:
-		rebuild(terrain, layer, ground_y_at, settings, exclusions)
+		rebuild(terrain, layer, ground_y_at, settings, exclusions, growth_map)
 		return
 	if terrain == null or layer == null:
 		return
+	if growth_map != null:
+		growth_map.clear()
 	_clear_shader_registrations()
 	var s := NEUTRAL_BULK.duplicate()
 	s.merge(settings, true)
@@ -149,7 +152,7 @@ static func rebuild_async(terrain: Node3D, layer: AutoVegetationLayer,
 	for slot in layer.slots():
 		if not is_instance_valid(root):
 			return
-		_build_bulk_layer(root, str(slot), layer.bulk.get(slot, []), ground_y_at, s)
+		_build_bulk_layer(root, str(slot), layer.bulk.get(slot, []), ground_y_at, s, growth_map)
 		await tree.process_frame
 	if not is_instance_valid(root):
 		return
@@ -169,19 +172,55 @@ static func _resolve_species(slot: String) -> String:
 	return str(SLOT_ALIAS.get(slot, "deciduous"))
 
 
+## Auto (OSM) forests span ~3 km and are viewed from the drone, so the manual
+## leaf/fur NEAR reach (deciduous ~100 m) drops them to the leafless FAR billboard
+## tier at typical altitudes — the "auto trees have no leaves / wrong branches" bug.
+## Copy the batch settings with the canopy LOD near/far distances remapped to the
+## auto-only overrides so the leaf-shell NEAR tier stays alive much farther out.
+## The manual (painted) render path never calls this, so its close-up reach is
+## unchanged. Falls back to the manual keys, then hardcoded generous defaults.
+static func _with_auto_lod_reach(species: String, settings: Dictionary) -> Dictionary:
+	var np := "deciduous" if species == "deciduous" else "pine"
+	# Precedence: the single Tune-look slider (auto_foliage_lod_reach_m) → a
+	# per-species auto override → the manual near reach → a generous fallback.
+	var near := float(settings.get("auto_foliage_lod_reach_m",
+		settings.get("%s_auto_lod_near_m" % np,
+			settings.get("%s_lod_near_m" % np, 300.0))))
+	var s := settings.duplicate()
+	# DISABLE the two-tier canopy LOD for auto forests. Godot evaluates a
+	# MultiMeshInstance's visibility_range against the WHOLE batch AABB (not per
+	# tree), so for a scattered ~3 km OSM forest the FAR/billboard tier wins and the
+	# leaf-shell NEAR tier never draws — every auto tree renders as a leafless
+	# straight-branch "umbrella". Forcing the single NEAR (leaf/fur) mesh out to the
+	# cull distance makes auto forests actually show foliage. Painted trees keep the
+	# real LOD (they're a small local layer where per-batch AABB LOD behaves).
+	s["deciduous_leaf_lod_enabled"] = false
+	s["pine_fur_lod_enabled"] = false
+	s["pine_needle_lod_enabled"] = false
+	s["%s_lod_near_m" % np] = near
+	s["%s_lod_far_begin_m" % np] = maxf(near - 20.0, 10.0)
+	# Keep the (density-floored) canopy CRISP across the full cull range so the
+	# shader's distance alpha-dither doesn't re-thin it back to a skeleton at range.
+	s["near_crisp_m"] = maxf(VISIBILITY_END, float(settings.get("near_crisp_m", 40.0)))
+	s["far_dither_m"] = VISIBILITY_END + 60.0
+	return s
+
+
 static func _clear_children(root: Node3D) -> void:
 	for child in root.get_children():
 		child.queue_free()
 
 
 static func _build_bulk_layer(root: Node3D, slot: String, records: Array,
-		ground_y_at: Callable, settings: Dictionary) -> void:
+		ground_y_at: Callable, settings: Dictionary,
+		growth_map: VegetationInstanceMap = null) -> void:
 	if records.is_empty():
 		return
 	var species := _resolve_species(slot)
 	var batches := _partition_bulk_batches(records, settings)
 	for batch in batches:
-		_build_bulk_batch(root, slot, species, batch["records"], ground_y_at, batch["settings"])
+		_build_bulk_batch(root, slot, species, batch["records"], ground_y_at,
+			batch["settings"], growth_map)
 
 
 static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -> Array:
@@ -218,15 +257,17 @@ static func _batch_settings_key(settings: Dictionary) -> int:
 
 
 static func _build_bulk_batch(root: Node3D, slot: String, species: String, records: Array,
-		ground_y_at: Callable, settings: Dictionary) -> void:
+		ground_y_at: Callable, settings: Dictionary,
+		growth_map: VegetationInstanceMap = null) -> void:
 	if records.is_empty():
 		return
 	if species in VegetationLayer.GRASS_SPECIES:
-		VegetationRuntime._build_grass_bulk_batches(root, species, records, ground_y_at, settings)
+		VegetationRuntime._build_grass_bulk_batches(root, species, records, ground_y_at,
+			settings, growth_map)
 		return
 	if species == "deciduous" or species == "pine":
-		VegetationRuntime._build_canopy_lod_bulk_batches(root, species, records, ground_y_at, false,
-			settings, VISIBILITY_END)
+		VegetationRuntime._build_canopy_lod_bulk_batches(root, species, records, ground_y_at,
+			false, _with_auto_lod_reach(species, settings), VISIBILITY_END, growth_map)
 		return
 	var mesh := VegetationCardFactory.mesh_for_species(species, settings)
 	var use_surface_mats := VegetationCardFactory.mesh_has_surface_materials(species)
@@ -240,6 +281,7 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = mesh
 	mm.instance_count = records.size()
+	var pending: Array = []
 	var i := 0
 	for item in records:
 		if not (item is Dictionary):
@@ -248,12 +290,17 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 		var x := float(d.get("x", 0.0))
 		var z := float(d.get("z", 0.0))
 		var yaw := float(d.get("yaw", 0.0))
-		var scale := float(d.get("scale", 1.0)) * species_scale
-		scale *= VegetationGrowth.instance_scale_mult(species, d, settings)
+		var base_scale := float(d.get("scale", 1.0)) * species_scale
+		var scale := base_scale * VegetationGrowth.instance_scale_mult(species, d, settings)
 		var record_vert := float(d.get("vert_off", vert_off))
 		var gy: float = float(ground_y_at.call(x, z))
 		mm.set_instance_transform(i, VegetationPaint.build_transform(
 			x, gy, z, yaw, scale, false, Vector3.UP, record_vert, foot_y))
+		if growth_map != null:
+			pending.append({
+				"record": d, "base_scale": base_scale, "vert_off": record_vert,
+				"x": x, "z": z, "yaw": yaw, "ground_y": gy,
+			})
 		i += 1
 	mm.instance_count = i
 	if i == 0:
@@ -268,11 +315,18 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	if species in VegetationLayer.GRASS_SPECIES:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		mi.visibility_range_end = VegetationRuntime.GRASS_VISIBILITY_END
+		mi.visibility_range_end = float(settings.get("grass_visibility_end_m",
+			VegetationRuntime.GRASS_VISIBILITY_END))
 	else:
 		mi.visibility_range_end = VISIBILITY_END
 	mi.visibility_range_begin = VISIBILITY_BEGIN
 	root.add_child(mi)
+	if growth_map != null:
+		for j in pending.size():
+			var p: Dictionary = pending[j]
+			VegetationRuntime._register_growth(growth_map, mi, j, p["record"], species,
+				float(p["base_scale"]), float(p["vert_off"]), foot_y, false,
+				float(p["x"]), float(p["z"]), float(p["yaw"]), float(p["ground_y"]))
 	_register_multimesh(mi, species)
 
 

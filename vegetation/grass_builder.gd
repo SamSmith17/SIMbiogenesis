@@ -32,7 +32,6 @@ const SPECS := {
 const SHELL_COUNT_NEAR := 14
 const SHELL_COUNT_MID := 7
 const LOD_MID_SCALE := 1.35
-const LOD_FAR_PATCH_W := 0.85
 const LOD_FAR_PATCH_H := 0.02
 
 
@@ -57,7 +56,7 @@ static func foot_local_y() -> float:
 
 static func mesh_for_lod(species: String, settings: Dictionary, tier: LodTier) -> ArrayMesh:
 	var spec := spec_for_species(species, settings)
-	var use_hex := species == "grass_lawn"
+	var use_hex := false
 	match tier:
 		LodTier.FAR:
 			return _build_hex_patch_mesh(spec) if use_hex else _build_patch_mesh(spec)
@@ -92,6 +91,7 @@ static func material_for_species(species: String, settings: Dictionary,
 	var default_hue_jitter := float(settings.get("hue_jitter", 0.04))
 	mat.set_shader_parameter("hue_jitter", float(settings.get("%s_hue_jitter" % prefix, default_hue_jitter)))
 	mat.set_shader_parameter("drape_match_strength", float(settings.get("drape_match_strength", 0.35)))
+	mat.set_shader_parameter("mat_width", float(spec.get("mat_w", 0.45)))
 	# Shell "fake blade" density — configurable per species (see grass.gdshader).
 	mat.set_shader_parameter("cells_per_side", float(settings.get("%s_cells_per_side" % prefix, 6.0)))
 	mat.set_shader_parameter("height_variation", float(settings.get("%s_height_variation" % prefix, 0.35)))
@@ -102,28 +102,45 @@ static func material_for_species(species: String, settings: Dictionary,
 		mat.set_shader_parameter("mid_fade_m", 120.0)
 		mat.set_shader_parameter("far_patch_m", 320.0)
 	elif tier == LodTier.FAR:
+		var far_end := float(settings.get("grass_visibility_end_m", DEFAULT_FAR_VISIBILITY_M))
 		mat.set_shader_parameter("near_full_m", 0.0)
 		mat.set_shader_parameter("mid_fade_m", 180.0)
-		mat.set_shader_parameter("far_patch_m", 350.0)
+		mat.set_shader_parameter("far_patch_m", maxf(far_end - 30.0, 220.0))
 		mat.set_shader_parameter("patch_strength", 1.0)
 	if settings.has("drape_tex") and settings["drape_tex"] is Texture2D:
 		mat.set_shader_parameter("drape_tex", settings["drape_tex"])
 		mat.set_shader_parameter("use_drape", true)
 		mat.set_shader_parameter("drape_extent_m", float(settings.get("drape_extent_m", 30000.0)))
+	
+	if settings.has("grass_summer_color"):
+		var sc: Color = settings["grass_summer_color"]
+		mat.set_shader_parameter("summer_color", Vector3(sc.r, sc.g, sc.b))
+	if settings.has("grass_fall_color"):
+		var fc: Color = settings["grass_fall_color"]
+		mat.set_shader_parameter("dry_color", Vector3(fc.r, fc.g, fc.b))
+
 	if settings.has("haze_color"):
 		pass  # grass uses patch fade instead of haze
 	return mat
 
 
-static func visibility_range_for_tier(tier: LodTier) -> Vector2:
+## Default cull distance of the FAR patch tier. Overridable per map via the
+## `grass_visibility_end_m` style key — 380 m was tuned for the manual layer's
+## camp scale and made OSM meadows "down the street" pop out of existence.
+const DEFAULT_FAR_VISIBILITY_M := 380.0
+
+
+static func visibility_range_for_tier(tier: LodTier,
+		far_end_m: float = DEFAULT_FAR_VISIBILITY_M) -> Vector2:
+	var far := maxf(far_end_m, 240.0)
 	match tier:
 		LodTier.NEAR:
 			return Vector2(0.0, 90.0)
 		LodTier.MID:
 			return Vector2(75.0, 220.0)
 		LodTier.FAR:
-			return Vector2(200.0, 380.0)
-	return Vector2(0.0, 380.0)
+			return Vector2(200.0, far)
+	return Vector2(0.0, far)
 
 
 ## Builds a stack of `shell_count` flat horizontal quads ("shells") from y=0 to
@@ -220,15 +237,20 @@ static func _build_hex_patch_mesh(spec: Dictionary) -> ArrayMesh:
 	return _arrays_to_mesh(verts, uvs, normals, indices, colors)
 
 
+## Flat HORIZONTAL ground patch for the field FAR tier, sized to the mat
+## footprint so scattered patches tile into continuous ground from a distance.
+## (Previously a tiny VERTICAL 0.85×0.02 sliver — distant meadows read as
+## detached green flecks that never overlapped instead of a grassy field.)
 static func _build_patch_mesh(spec: Dictionary) -> ArrayMesh:
-	var w := LOD_FAR_PATCH_W
+	var w := float(spec["mat_w"])
+	var half := w * 0.5
 	var h := LOD_FAR_PATCH_H
 	var verts := PackedVector3Array([
-		Vector3(-w * 0.5, 0.0, 0.0), Vector3(w * 0.5, 0.0, 0.0),
-		Vector3(w * 0.5, h, 0.0), Vector3(-w * 0.5, h, 0.0),
+		Vector3(-half, h, -half), Vector3(half, h, -half),
+		Vector3(half, h, half), Vector3(-half, h, half),
 	])
 	var uvs := PackedVector2Array([
-		Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vector2(0.0, 0.0),
+		Vector2(0.0, 0.0), Vector2(1.0, 0.0), Vector2(1.0, 1.0), Vector2(0.0, 1.0),
 	])
 	var normals := PackedVector3Array()
 	var colors := PackedColorArray()

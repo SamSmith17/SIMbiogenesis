@@ -4,7 +4,7 @@ extends RefCounted
 ## Builds an AutoVegetationLayer from real-world data sources.
 
 const PER_POLY_CAP := 14000
-const GRASS_PER_POLY_CAP := 6000
+const GRASS_PER_POLY_CAP := 35000
 const LARGE_WOOD_SCATTER_CAP := 3200
 const DENSE_POLY_BUDGET := 640
 const DENSE_POLY_SKIP_GAP_FILL := 48
@@ -16,6 +16,40 @@ const ORCHARD_IN_ROW_M := 5.5
 const VINEYARD_ROW_SPACING_M := 4.0
 const VINEYARD_IN_ROW_M := 2.8
 const SCATTER_BATCH_DEFAULT := 5
+
+## Clamp for OSM natural=tree height tags — mis-entered or mis-parsed values
+## (feet read as meters) otherwise produce skyscraper hero trees. ~45 m covers
+## the tallest realistically mapped urban/park trees.
+const TREE_POINT_MIN_HEIGHT_M := 4.0
+const TREE_POINT_MAX_HEIGHT_M := 45.0
+
+## Wetland shrub scatter may claim at most this share of the tree bulk budget.
+## Sites like Canaan (92 wetland polygons vs 66 woods) otherwise let wetland
+## shrubs drain MAX_TREE_BULK_TOTAL before any wood polygon scatters.
+const WETLAND_TREE_BUDGET_SHARE := 0.35
+
+## Partition of AutoVegetationLayer.MAX_GRASS_BULK_TOTAL (40000). Without these
+## sub-budgets, park/cemetery lawn underlay drained ~31k first-come at the
+## Canaan site, leaving 25 of 29 meadows and all 8 lawn polygons bare.
+const GRASS_LAWN_BUDGET := 40000
+const GRASS_UNDERLAY_BUDGET := 30000
+const GRASS_FIELD_BUDGET := 50000
+
+## Dense 3D grass is only generated within this radius of the site centre (the
+## player spawn); the whole 3-km site can't be grassed at close-up density
+## within budget, and grass past MID visibility (~220 m) never renders anyway.
+## Concentrating the budget here is what makes grass read as real up close
+## instead of a few starved tufts spread thin over distant meadows.
+## Overridable via the `grass_detail_radius_m` style key.
+const GRASS_DETAIL_RADIUS_M := 150.0
+
+## Scatter order under the shared tree budget: tree-bearing kinds first so
+## budget exhaustion trims understory/shrub kinds, never the woods. Within a
+## priority band, largest polygons scatter first (deterministic exhaustion).
+const KIND_SCATTER_PRIORITY := {
+	"wood": 0, "orchard": 1, "vineyard": 1, "park": 2, "cemetery": 2,
+	"scrub": 3, "wetland": 4, "grass_lawn": 5, "grass_field": 5,
+}
 
 const NOMINAL_CARD_H := {
 	"deciduous": 6.0, "broadleaf": 6.0, "palm": 6.0,
@@ -44,6 +78,10 @@ class GeneratorState:
 	var dense := false
 	var exclusion_index: VegExclusionBuilder.ExclusionIndex = null
 	var style: Dictionary = {}
+	## Per-polygon scatter diagnostics: {kind, tag, area_m2, candidates, placed,
+	## rej_excluded, rej_slope, rej_open, rej_edge, rej_budget}. Consumed by the
+	## loader's post-scatter summary and (later) the veg-area inspector UI.
+	var poly_stats: Array = []
 
 
 	func progress_ratio() -> float:
@@ -61,6 +99,21 @@ class GeneratorState:
 			done += 1.0
 		total += 1.0
 		return clampf(done / total, 0.0, 1.0)
+
+
+## Biome weights with shrub/scrub removed — an explicitly mapped natural=tree point
+## should always become a tree (deciduous/pine), never a shrub. Falls back to
+## deciduous when a biome has no tree species at all.
+static func _tree_only_weights(biome: Dictionary) -> Dictionary:
+	var weights: Dictionary = biome.get("weights", {"deciduous": 1.0})
+	var out := {}
+	for sp in weights:
+		if sp == "shrub" or sp == "scrub":
+			continue
+		out[sp] = weights[sp]
+	if out.is_empty():
+		return {"deciduous": 1.0}
+	return out
 
 
 static func _scale_for(species: String, target_h: float, rng: RandomNumberGenerator) -> float:
@@ -90,11 +143,30 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 	state.style = ctx.get("style", {})
 	state.forest_min_area = float(state.style.get("forest_auto_min_area_m2", 12000.0))
 	state.biome = BiomePalette.for_location(float(ctx.get("latitude", 0.0)))
-	state.polys = _trim_polygons(osm_payload.get("polygons", []), DENSE_POLY_BUDGET)
+	state.polys = _sort_polys_for_budget(
+		_trim_polygons(osm_payload.get("polygons", []), DENSE_POLY_BUDGET))
 	state.dense = state.polys.size() >= DENSE_POLY_SKIP_GAP_FILL
 	var exclusions: Array = ctx.get("exclusions", [])
 	var half := float(ctx.get("half_extent_m", 1500.0))
 	state.exclusion_index = VegExclusionBuilder.build_index(exclusions, half)
+	# Meadow/lawn footprints veto tree scatter from overlapping polygons (a
+	# wood polygon drawn over a mapped meadow must not forest it). Threaded via
+	# ctx so the static scatter helpers can reach it without signature churn.
+	if bool(state.style.get("open_areas_exclude_trees", true)):
+		ctx["open_areas"] = _build_open_area_index(osm_payload.get("polygons", []))
+	# Wetland shrubs draw from the shared tree budget; cap their cumulative share.
+	ctx["wetland_bulk_max"] = int(AutoVegetationLayer.MAX_TREE_BULK_TOTAL
+		* WETLAND_TREE_BUDGET_SHARE)
+	ctx["wetland_bulk_used"] = 0
+	# Grass sub-budget counters. Combined with the near-first poly ordering and
+	# the detail radius, the near meadows/lawns fill densely (matching the Tune
+	# Look studio) before the budget runs out; distant grass relies on the
+	# terrain photo drape (and never renders past MID visibility anyway).
+	ctx["grass_lawn_used"] = 0
+	ctx["grass_underlay_used"] = 0
+	ctx["grass_field_used"] = 0
+	ctx["grass_detail_radius_m"] = float(state.style.get(
+		"grass_detail_radius_m", GRASS_DETAIL_RADIUS_M))
 	return state
 
 
@@ -108,9 +180,12 @@ static func scatter_batch(state: GeneratorState, batch_size: int = SCATTER_BATCH
 			for i in n:
 				var rec: Variant = state.polys[state.poly_idx + i]
 				if rec is Dictionary:
+					var stat: Dictionary = {}
 					_scatter_polygon(state.layer, rec as Dictionary, state.biome,
 						state.exclusion_index, state.rng, state.ctx,
-						state.forest_min_area, state.dense)
+						state.forest_min_area, state.dense, stat)
+					if not stat.is_empty():
+						state.poly_stats.append(stat)
 			state.poly_idx += n
 			if state.poly_idx >= state.polys.size():
 				state.phase = ScatterPhase.POINTS
@@ -224,20 +299,120 @@ static func _in_any_polygon(p: Vector2, polys: Array) -> bool:
 	return false
 
 
+## Kind-priority band (KIND_SCATTER_PRIORITY) then NEAREST-to-spawn first. Under
+## a bounded budget the player experiences vegetation near them, so the wood
+## behind the house and the meadow down the street must scatter before distant
+## polygons of the same kind claim the budget. Spawn is the site centre (origin).
+static func _sort_polys_for_budget(polys: Array) -> Array:
+	var ranked: Array = []
+	for rec in polys:
+		if not (rec is Dictionary):
+			continue
+		var d: Dictionary = rec
+		var poly: PackedVector2Array = d.get("points", PackedVector2Array())
+		ranked.append({
+			"rec": d,
+			"pri": int(KIND_SCATTER_PRIORITY.get(str(d.get("kind", "wood")), 3)),
+			"dist": _poly_dist_to_origin(poly),
+		})
+	ranked.sort_custom(func(a, b):
+		if int(a["pri"]) != int(b["pri"]):
+			return int(a["pri"]) < int(b["pri"])
+		return float(a["dist"]) < float(b["dist"]))
+	var out: Array = []
+	for r in ranked:
+		out.append(r["rec"])
+	return out
+
+
+## Distance from the site centre to the polygon's nearest edge (0 if origin is
+## inside it) — the proximity key that puts the vegetation around the player first.
+static func _poly_dist_to_origin(poly: PackedVector2Array) -> float:
+	if poly.size() < 3:
+		return INF
+	if Geometry2D.is_point_in_polygon(Vector2.ZERO, poly):
+		return 0.0
+	return _dist_to_edge(Vector2.ZERO, poly)
+
+
+## Open ground (mapped meadow/lawn) polygons as {poly, rect} for the tree-scatter
+## veto; the Rect2 prefilter keeps the point-in-polygon cost near zero for
+## non-overlapping areas.
+static func _build_open_area_index(raw_polys: Array) -> Array:
+	var out: Array = []
+	for rec in raw_polys:
+		if not (rec is Dictionary):
+			continue
+		var d: Dictionary = rec
+		var kind := str(d.get("kind", ""))
+		if kind != "grass_lawn" and kind != "grass_field":
+			continue
+		var poly: PackedVector2Array = d.get("points", PackedVector2Array())
+		if poly.size() < 3:
+			continue
+		var b := _poly_bounds(poly)
+		out.append({"poly": poly, "rect": Rect2(
+			float(b["min_x"]), float(b["min_z"]),
+			float(b["max_x"]) - float(b["min_x"]),
+			float(b["max_z"]) - float(b["min_z"]))})
+	return out
+
+
+static func _in_open_area(p: Vector2, ctx: Dictionary) -> bool:
+	var areas: Array = ctx.get("open_areas", [])
+	for entry in areas:
+		var e: Dictionary = entry
+		if not (e["rect"] as Rect2).has_point(p):
+			continue
+		if Geometry2D.is_point_in_polygon(p, e["poly"]):
+			return true
+	return false
+
+
+static func _stat(stats: Dictionary, key: String, n: int = 1) -> void:
+	if stats.is_empty():
+		return
+	stats[key] = int(stats.get(key, 0)) + n
+
+
+static func _primary_tag(tags: Dictionary, kind: String) -> String:
+	for k in ["natural", "landuse", "leisure"]:
+		if tags.has(k):
+			return "%s=%s" % [k, str(tags[k])]
+	return kind
+
+
 static func _scatter_polygon(layer: AutoVegetationLayer, rec: Dictionary,
 		biome: Dictionary, exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
-		ctx: Dictionary, forest_min_area: float, dense_site: bool = false) -> void:
+		ctx: Dictionary, forest_min_area: float, dense_site: bool = false,
+		stats: Dictionary = {}) -> void:
 	var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
 	if poly.size() < 3:
 		return
 	var kind := str(rec.get("kind", "wood"))
 	var tags: Dictionary = rec.get("tags", {})
+	stats["kind"] = kind
+	stats["tag"] = _primary_tag(tags, kind)
+	stats["area_m2"] = VegetationPaint.polygon_area(poly)
+	for key in ["candidates", "placed", "rej_excluded", "rej_slope", "rej_open",
+			"rej_edge", "rej_budget"]:
+		stats[key] = 0
 	if kind == "grass_lawn" or kind == "grass_field":
-		_scatter_grass_polygon(layer, poly, kind, exclusion_index, rng)
+		var bkey := "grass_lawn_used" if kind == "grass_lawn" else "grass_field_used"
+		var budget := GRASS_LAWN_BUDGET if kind == "grass_lawn" else GRASS_FIELD_BUDGET
+		var used := int(ctx.get(bkey, 0))
+		if used >= budget:
+			_stat(stats, "rej_budget")
+			return
+		var placed := _scatter_grass_polygon(layer, poly, kind, exclusion_index, rng, ctx,
+			stats, budget - used)
+		ctx[bkey] = used + placed
 		return
 	# Player-configured OSM→species override (vegetation modal). Empty = biome/tags.
-	var osm_map: Dictionary = (ctx.get("style", {}) as Dictionary).get("osm_species_map", {})
-	var override: Dictionary = BiomePalette.species_override_for_kind(osm_map, kind)
+	var style_d: Dictionary = ctx.get("style", {})
+	var osm_map: Dictionary = style_d.get("osm_species_map", {})
+	var override: Dictionary = BiomePalette.species_override_for_kind(osm_map, kind,
+		BiomePalette.mix_weights_from_style(style_d))
 	var weights: Dictionary = BiomePalette.weights_for_osm_tags(
 		biome.get("weights", {"deciduous": 1.0}), tags)
 	if not override.is_empty():
@@ -245,25 +420,33 @@ static func _scatter_polygon(layer: AutoVegetationLayer, rec: Dictionary,
 	var height := float(biome.get("default_height_m", 12.0))
 	match kind:
 		"park":
-			_scatter_park_polygon(layer, poly, weights, height, exclusion_index, rng, ctx)
+			_scatter_park_polygon(layer, poly, weights, height, exclusion_index, rng, ctx, stats)
 			return
 		"cemetery":
-			_scatter_cemetery_polygon(layer, poly, weights, height, exclusion_index, rng, ctx)
+			_scatter_cemetery_polygon(layer, poly, weights, height, exclusion_index, rng, ctx, stats)
 			return
 		"orchard":
 			_scatter_row_crop_polygon(layer, poly,
 				BiomePalette.override_single_species(override, "deciduous"), 6.0,
-				ORCHARD_ROW_SPACING_M, ORCHARD_IN_ROW_M, exclusion_index, rng, ctx)
+				ORCHARD_ROW_SPACING_M, ORCHARD_IN_ROW_M, exclusion_index, rng, ctx, stats)
 			return
 		"vineyard":
 			_scatter_row_crop_polygon(layer, poly,
 				BiomePalette.override_single_species(override, "deciduous"), 4.5,
-				VINEYARD_ROW_SPACING_M, VINEYARD_IN_ROW_M, exclusion_index, rng, ctx)
+				VINEYARD_ROW_SPACING_M, VINEYARD_IN_ROW_M, exclusion_index, rng, ctx, stats)
 			return
 		"wetland":
 			var wet_weights: Dictionary = override if not override.is_empty() else {"shrub": 1.0}
-			_scatter_polygon_poisson(layer, poly, wet_weights, 1.2, 3.5,
-				exclusion_index, rng, ctx, false)
+			var wet_max := int(ctx.get("wetland_bulk_max", -1))
+			var wet_used := int(ctx.get("wetland_bulk_used", 0))
+			if wet_max >= 0 and wet_used >= wet_max:
+				_stat(stats, "rej_budget")
+				return
+			var wet_cap := (wet_max - wet_used) if wet_max >= 0 else -1
+			var wet_placed := _scatter_polygon_poisson(layer, poly, wet_weights, 1.2, 3.5,
+				exclusion_index, rng, ctx, false, "wetland", 999999.0, dense_site,
+				stats, wet_cap)
+			ctx["wetland_bulk_used"] = wet_used + wet_placed
 			return
 	var spacing := float(biome.get("spacing_m", 6.0))
 	var check_slope := kind != "scrub"
@@ -276,17 +459,21 @@ static func _scatter_polygon(layer: AutoVegetationLayer, rec: Dictionary,
 		_:
 			pass
 	_scatter_polygon_poisson(layer, poly, weights, height, spacing, exclusion_index, rng,
-		ctx, check_slope, kind, forest_min_area, dense_site)
+		ctx, check_slope, kind, forest_min_area, dense_site, stats)
 
 
 static func _scatter_polygon_poisson(layer: AutoVegetationLayer, poly: PackedVector2Array,
 		weights: Dictionary, height: float, spacing: float,
 		exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
 		ctx: Dictionary, check_slope: bool, kind: String = "wood",
-		forest_min_area: float = 12000.0, dense_site: bool = false) -> void:
+		forest_min_area: float = 12000.0, dense_site: bool = false,
+		stats: Dictionary = {}, extra_cap: int = -1) -> int:
 	var area := VegetationPaint.polygon_area(poly)
 	if area < 16.0:
-		return
+		return 0
+	if layer.tree_bulk_count() >= AutoVegetationLayer.MAX_TREE_BULK_TOTAL:
+		_stat(stats, "rej_budget")
+		return 0
 	var style: Dictionary = ctx.get("style", {})
 	# Global density knob from the Tune Look modal (auto_density_scale): >1 packs
 	# trees tighter (smaller spacing → more instances), <1 thins them out.
@@ -304,75 +491,159 @@ static func _scatter_polygon_poisson(layer: AutoVegetationLayer, poly: PackedVec
 		cap = mini(cap, LARGE_WOOD_SCATTER_CAP)
 	if dense_site:
 		cap = mini(cap, DENSE_POLY_SCATTER_CAP)
+	if extra_cap >= 0:
+		cap = mini(cap, extra_cap)
 	var edge_feather := float(style.get("forest_edge_feather_m", 20.0))
 	var spots := VegetationPaint.poisson_fill(poly, spacing, rng, [] as Array[Vector2], cap)
+	_stat(stats, "candidates", spots.size())
+	var placed := 0
 	for spot in spots:
 		var p := Vector2(float(spot["x"]), float(spot["z"]))
 		if _excluded(p, exclusion_index):
+			_stat(stats, "rej_excluded")
 			continue
 		if check_slope and _slope_too_steep(p.x, p.y, ctx):
+			_stat(stats, "rej_slope")
+			continue
+		if _in_open_area(p, ctx):
+			_stat(stats, "rej_open")
 			continue
 		var edge_w := _edge_spawn_weight(p, poly, edge_feather)
 		if rng.randf() > edge_w:
+			_stat(stats, "rej_edge")
 			continue
 		var species := BiomePalette.pick_species(weights, rng)
-		layer.add_bulk(species, p.x, p.y, rng.randf() * TAU,
-			_scale_for(species, height, rng), height)
+		if layer.add_bulk(species, p.x, p.y, rng.randf() * TAU,
+				_scale_for(species, height, rng), height):
+			placed += 1
+			_stat(stats, "placed")
+		else:
+			_stat(stats, "rej_budget")
+	return placed
 
 
 static func _scatter_grass_polygon(layer: AutoVegetationLayer, poly: PackedVector2Array,
 		kind: String, exclusion_index: VegExclusionBuilder.ExclusionIndex,
-		rng: RandomNumberGenerator) -> void:
-	var area := VegetationPaint.polygon_area(poly)
-	if area < 4.0:
-		return
-	var cap := mini(VegetationPaint.GRASS_FILL_CAP, GRASS_PER_POLY_CAP)
-	var spots: Array[Dictionary]
-	if kind == "grass_lawn":
-		var mat_w := float(GrassBuilder.SPECS["grass_lawn"]["mat_w"])
-		var est := VegetationPaint.estimate_hex_fill_count(poly, mat_w, cap)
-		cap = mini(est, cap)
-		spots = VegetationPaint.hex_grid_fill(poly, mat_w, [] as Array[Vector2], cap)
-	else:
-		var preset := VegetationPaint.Preset.GRASS_FIELD
-		var spacing := VegetationPaint.default_spacing_for_preset(preset)
-		var even_spacing := sqrt(area / float(GRASS_PER_POLY_CAP))
-		spacing = maxf(spacing, even_spacing)
-		var est := int(area / (spacing * spacing * 0.866)) + 4
-		cap = mini(mini(est, GRASS_PER_POLY_CAP), VegetationPaint.GRASS_FILL_CAP)
-		spots = VegetationPaint.poisson_fill(poly, spacing, rng, [] as Array[Vector2], cap)
-	for spot in spots:
-		var p := Vector2(float(spot["x"]), float(spot["z"]))
-		if _excluded(p, exclusion_index):
-			continue
+		rng: RandomNumberGenerator, ctx: Dictionary = {}, stats: Dictionary = {},
+		extra_cap: int = -1) -> int:
+	if VegetationPaint.polygon_area(poly) < 4.0:
+		return 0
+	# Only grass the part of the polygon within the detail radius of spawn — the
+	# budget can't cover a whole 3-km site at close-up density, and far grass is
+	# culled at render time anyway. Regions preserve holes/concavity via clipping.
+	var regions := _grass_detail_regions(poly, ctx)
+	if regions.is_empty():
+		return 0
+	var style: Dictionary = ctx.get("style", {})
+	var density_scale := clampf(float(style.get("auto_density_scale", 1.0)), 0.25, 3.0)
+	var bulk_scale := float(style.get("grass_lawn_bulk_scale", 1.0)) if kind == "grass_lawn" \
+		else float(style.get("grass_field_bulk_scale", 1.25))
+	var cap := extra_cap if extra_cap >= 0 else GRASS_PER_POLY_CAP
+	var placed := 0
+	for region in regions:
+		if cap <= 0:
+			break
+		# Spacing MATCHES the Tune Look studio (VegetationPreviewEditor._base_spacing
+		# / density) so "Apply to map" reproduces the previewed density — no
+		# even-spacing/fair-share dilution that used to make map grass far sparser.
+		var spots: Array[Dictionary]
 		if kind == "grass_lawn":
-			layer.add_bulk(kind, p.x, p.y, 0.0, 1.0, 0.0)
+			var mat_w := float(style.get("grass_lawn_card_w",
+				GrassBuilder.SPECS["grass_lawn"]["mat_w"]))
+			mat_w = maxf(mat_w / sqrt(density_scale), 0.15)
+			spots = VegetationPaint.square_grid_fill(region, mat_w, [] as Array[Vector2], cap)
 		else:
-			layer.add_bulk(kind, p.x, p.y, rng.randf() * TAU, rng.randf_range(0.75, 1.15), 0.0)
+			var spacing := maxf(1.1 / density_scale, 0.35)  # GRASS_FIELD studio base
+			spots = VegetationPaint.poisson_fill(region, spacing, rng, [] as Array[Vector2], cap)
+		_stat(stats, "candidates", spots.size())
+		for spot in spots:
+			var p := Vector2(float(spot["x"]), float(spot["z"]))
+			if _excluded(p, exclusion_index):
+				_stat(stats, "rej_excluded")
+				continue
+			var added: bool
+			if kind == "grass_lawn":
+				var yaw := float(spot.get("yaw", 0.0))
+				added = layer.add_bulk(kind, p.x, p.y, yaw, bulk_scale, 0.0)
+			else:
+				added = layer.add_bulk(kind, p.x, p.y, rng.randf() * TAU,
+					rng.randf_range(bulk_scale * 0.75, bulk_scale * 1.15), 0.0)
+			if added:
+				placed += 1
+				cap -= 1
+			_stat(stats, "placed" if added else "rej_budget")
+	return placed
+
+
+## Clip a grass polygon to the spawn-centred detail region. Returns [poly] when
+## no radius is set or the footprint already fits inside the region, [] when the
+## polygon lies entirely outside it, else the polygon clipped to a spawn-centred
+## bounding SQUARE of half-size `radius`.
+##
+## The square (straight edges) avoids a visible arc cut at the disc boundary
+## while bounding the footprint the grass grid must scan. Without this a large
+## OSM park/meadow near spawn was scanned over its whole multi-km footprint at
+## sub-metre spacing — tens of millions of point-in-polygon tests on one frame,
+## which froze the load-time scatter at "OSM data".
+static func _grass_detail_regions(poly: PackedVector2Array, ctx: Dictionary) -> Array:
+	var radius := float(ctx.get("grass_detail_radius_m", 0.0))
+	if radius <= 0.0:
+		return [poly]
+	if _poly_dist_to_origin(poly) > radius:
+		return []
+	var b := _poly_bounds(poly)
+	if b.is_empty():
+		return []
+	# Footprint already within the spawn box → no clip needed (common small lawn).
+	if float(b["min_x"]) >= -radius and float(b["max_x"]) <= radius \
+			and float(b["min_z"]) >= -radius and float(b["max_z"]) <= radius:
+		return [poly]
+	var clip := PackedVector2Array([
+		Vector2(-radius, -radius), Vector2(radius, -radius),
+		Vector2(radius, radius), Vector2(-radius, radius)])
+	var out: Array = []
+	for region in Geometry2D.intersect_polygons(poly, clip):
+		var r: PackedVector2Array = region
+		if r.size() >= 3:
+			out.append(r)
+	return out
 
 
 static func _scatter_park_polygon(layer: AutoVegetationLayer, poly: PackedVector2Array,
 		weights: Dictionary, height: float,
 		exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
-		ctx: Dictionary) -> void:
-	_scatter_grass_polygon(layer, poly, "grass_lawn", exclusion_index, rng)
+		ctx: Dictionary, stats: Dictionary = {}) -> void:
+	_scatter_underlay_lawn(layer, poly, exclusion_index, rng, ctx, stats)
 	_scatter_polygon_poisson(layer, poly, weights, height * 0.85, 14.0,
-		exclusion_index, rng, ctx, true, "wood", 999999.0, false)
+		exclusion_index, rng, ctx, true, "wood", 999999.0, false, stats)
 
 
 static func _scatter_cemetery_polygon(layer: AutoVegetationLayer, poly: PackedVector2Array,
 		weights: Dictionary, height: float,
 		exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
-		ctx: Dictionary) -> void:
-	_scatter_grass_polygon(layer, poly, "grass_lawn", exclusion_index, rng)
+		ctx: Dictionary, stats: Dictionary = {}) -> void:
+	_scatter_underlay_lawn(layer, poly, exclusion_index, rng, ctx, stats)
 	_scatter_polygon_poisson(layer, poly, weights, height * 0.7, 12.0,
-		exclusion_index, rng, ctx, true, "wood", 999999.0, false)
+		exclusion_index, rng, ctx, true, "wood", 999999.0, false, stats)
+
+
+## Park/cemetery ground-cover lawn, drawn from its own grass sub-budget so big
+## parks can't starve mapped lawns and meadows of the shared grass total.
+static func _scatter_underlay_lawn(layer: AutoVegetationLayer, poly: PackedVector2Array,
+		exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
+		ctx: Dictionary, stats: Dictionary) -> void:
+	var used := int(ctx.get("grass_underlay_used", 0))
+	if used >= GRASS_UNDERLAY_BUDGET:
+		return
+	var placed := _scatter_grass_polygon(layer, poly, "grass_lawn", exclusion_index,
+		rng, ctx, stats, GRASS_UNDERLAY_BUDGET - used)
+	ctx["grass_underlay_used"] = used + placed
 
 
 static func _scatter_row_crop_polygon(layer: AutoVegetationLayer, poly: PackedVector2Array,
 		species: String, target_h: float, row_spacing: float, in_row_spacing: float,
 		exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
-		ctx: Dictionary) -> void:
+		ctx: Dictionary, stats: Dictionary = {}) -> void:
 	var bounds := _poly_bounds(poly)
 	if bounds.is_empty():
 		return
@@ -384,10 +655,19 @@ static func _scatter_row_crop_polygon(layer: AutoVegetationLayer, poly: PackedVe
 		var step := in_row_spacing if not flip else -in_row_spacing
 		while (not flip and x <= x_end + 0.001) or (flip and x >= x_end - 0.001):
 			var p := Vector2(x, z)
-			if Geometry2D.is_point_in_polygon(p, poly) and not _excluded(p, exclusion_index) \
-					and not _slope_too_steep(p.x, p.y, ctx):
-				layer.add_bulk(species, p.x, p.y, rng.randf() * TAU,
-					_scale_for(species, target_h, rng), target_h)
+			if Geometry2D.is_point_in_polygon(p, poly):
+				_stat(stats, "candidates")
+				if _excluded(p, exclusion_index):
+					_stat(stats, "rej_excluded")
+				elif _slope_too_steep(p.x, p.y, ctx):
+					_stat(stats, "rej_slope")
+				elif _in_open_area(p, ctx):
+					_stat(stats, "rej_open")
+				elif layer.add_bulk(species, p.x, p.y, rng.randf() * TAU,
+						_scale_for(species, target_h, rng), target_h):
+					_stat(stats, "placed")
+				else:
+					_stat(stats, "rej_budget")
 			x += step
 		z += row_spacing
 		flip = not flip
@@ -480,10 +760,22 @@ static func _place_tree_point(layer: AutoVegetationLayer, tp: Dictionary,
 	if _excluded(p, exclusion_index) or _slope_too_steep(p.x, p.y, ctx):
 		return
 	var h := float(tp.get("height_m", 0.0))
+	if h > 0.0:
+		# OSM height tags can be mis-entered or mis-parsed (feet vs meters); the
+		# tallest realistic mapped trees are ~45 m. Clamping here also sanitizes
+		# stale height_m values already sitting in cached payloads.
+		h = clampf(h, TREE_POINT_MIN_HEIGHT_M, TREE_POINT_MAX_HEIGHT_M)
 	if h <= 0.0:
 		h = float(biome.get("default_height_m", 12.0))
-	var weights: Dictionary = biome.get("weights", {"deciduous": 1.0})
-	var species := BiomePalette.pick_species(weights, rng)
+	# Individually-mapped OSM trees (natural=tree, esp. with height/dbh tags) used
+	# to become low-poly GLB hero models (HeroTreeCatalog "deciduous_low"), which
+	# ignore the tuned Tune-Look / preset look entirely — a campus like Arcosanti is
+	# mostly these points, so its trees rendered as the old low-poly GLB (no leaf
+	# shells, wrong branches) while painted/forest trees used the procedural mesh.
+	# Route them through the same procedural bulk species so every deciduous tree —
+	# mapped point, forest scatter, or brush — shares the one tuned look. Explicit
+	# trees pick a TREE species only (deciduous/pine), never shrub.
+	var species := BiomePalette.pick_species(_tree_only_weights(biome), rng)
 	layer.add_bulk(species, p.x, p.y, rng.randf() * TAU, _scale_for(species, h, rng), h)
 
 

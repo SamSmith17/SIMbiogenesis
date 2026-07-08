@@ -4,6 +4,9 @@ extends RefCounted
 ## Maps preset ids to imported GLB scenes; auto-scales meshes to world meters.
 
 const DEFAULT_TARGET_HEIGHT_M := 14.0
+## Hard ceiling on the world scale multiplier — belt-and-braces against a bad
+## GLB/tag combination producing a skyscraper tree (mirrors ModelCatalog.MAX_WORLD_SCALE).
+const MAX_HERO_WORLD_SCALE := 40.0
 
 static var _fit_cache: Dictionary = {}
 
@@ -56,36 +59,39 @@ static func mesh_metrics(preset_id: String) -> Dictionary:
 	var scene := load_scene(preset_id)
 	if scene == null:
 		return {"unit_height": 1.0, "foot_local_y": 0.0}
-	var holder := Node3D.new()
-	var tree := Engine.get_main_loop()
-	if tree != null and tree.root != null:
-		tree.root.add_child(holder)
 	var inst: Node3D = scene.instantiate() as Node3D
 	if inst == null:
-		holder.queue_free()
 		return {"unit_height": 1.0, "foot_local_y": 0.0}
-	holder.add_child(inst)
+	var metrics := measure_instance(inst)
+	inst.free()
+	_fit_cache[preset_id] = metrics
+	return metrics
+
+
+## Combined mesh AABB in `inst`'s local space. Each mesh transform is composed up
+## the node chain (NOT just mi.transform), so a GLB authored under scaled parent
+## nodes measures at its true size — mi.transform alone mis-measured unit_height
+## and blew up the target-height normalization (the ~300 ft hero tree). Pure math,
+## no tree insertion needed; public so the selftest can feed a synthetic scene.
+static func measure_instance(inst: Node3D) -> Dictionary:
 	var aabb := AABB()
 	var found := false
 	for node in inst.find_children("*", "MeshInstance3D", true, false):
 		var mi := node as MeshInstance3D
 		if mi.mesh == null:
 			continue
-		var local: AABB = mi.transform * mi.mesh.get_aabb()
+		var box: AABB = ModelCatalog._xform_relative_to(inst, mi) * mi.mesh.get_aabb()
 		if not found:
-			aabb = local
+			aabb = box
 			found = true
 		else:
-			aabb = aabb.merge(local)
-	holder.queue_free()
-	if not found:
+			aabb = aabb.merge(box)
+	if not found or aabb.size.length_squared() < 0.0001:
 		return {"unit_height": 1.0, "foot_local_y": 0.0}
-	var metrics := {
+	return {
 		"unit_height": maxf(aabb.size.y, 0.01),
 		"foot_local_y": aabb.position.y,
 	}
-	_fit_cache[preset_id] = metrics
-	return metrics
 
 
 static func resolved_hero_scale(preset_id: String, user_scale: float) -> float:
@@ -93,11 +99,40 @@ static func resolved_hero_scale(preset_id: String, user_scale: float) -> float:
 	var metrics := mesh_metrics(preset_id)
 	var target := float(preset.get("target_height_m", DEFAULT_TARGET_HEIGHT_M))
 	var mesh_mult := float(preset.get("mesh_scale", 1.0))
-	return (target / metrics.unit_height) * mesh_mult * maxf(user_scale, 0.05)
+	var scale := (target / float(metrics.unit_height)) * mesh_mult * maxf(user_scale, 0.05)
+	return minf(scale, MAX_HERO_WORLD_SCALE)
 
 
 static func foot_local_y(preset_id: String) -> float:
 	return float(mesh_metrics(preset_id).foot_local_y)
+
+
+static func user_scale_for_target_height(preset_id: String, desired_height_m: float) -> float:
+	var preset := find(preset_id)
+	var preset_target := float(preset.get("target_height_m", DEFAULT_TARGET_HEIGHT_M))
+	var mesh_mult := float(preset.get("mesh_scale", 1.0))
+	var denom := preset_target * mesh_mult
+	if denom <= 0.01:
+		return 1.0
+	return maxf(desired_height_m / denom, 0.05)
+
+
+## Map OSM natural=tree tags to a hero GLB preset id.
+static func preset_for_osm_tree_tags(tags: Dictionary) -> String:
+	var blob := " ".join([
+		str(tags.get("species", "")),
+		str(tags.get("genus", "")),
+		str(tags.get("taxon", "")),
+		str(tags.get("taxon:cen", "")),
+		str(tags.get("description", "")),
+		str(tags.get("species:en", "")),
+	]).to_lower()
+	for token in ["aesculus hippocastanum", "aesculus", "horse chestnut", "horse-chestnut"]:
+		if token in blob:
+			return "deciduous_low"
+	if tags.has("height") or tags.has("circumference") or tags.has("dbh"):
+		return "deciduous_low"
+	return ""
 
 
 ## Zero emission on imported hero GLB materials so trees don't bloom at night.

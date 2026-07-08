@@ -15,6 +15,7 @@ enum Tool { PAINT, PLACE, CLEAR, SELECT }
 enum ShapeMode { CIRCLE, RECT, LASSO, POLYGON }
 
 const MODAL_NAME := "vegetation_edit"
+const SliderSpinRowScript := preload("res://scenes/ui/slider_spin_row.gd")
 const PANEL_HEIGHT := 132.0
 const HIGHLIGHT_DEBOUNCE_S := 0.016
 const RESPECIES_DEBOUNCE_S := 0.35
@@ -356,7 +357,7 @@ func _build_ui() -> void:
 		param_row.add_child(b)
 		_preset_buttons.append(b)
 	_labeled_slider_row(param_row, "Seed", 1.0, 9999.0, float(_seed_value),
-		func(v: float) -> void: _seed_value = int(v), 72)
+		func(v: float) -> void: _seed_value = int(v), 72, 1.0)
 
 	var shape_row := HBoxContainer.new()
 	shape_row.add_theme_constant_override("separation", 4)
@@ -401,25 +402,11 @@ func _build_ui() -> void:
 
 
 func _labeled_slider_row(parent: Control, label: String, min_v: float, max_v: float,
-		start: float, handler: Callable, slider_min_w: int = 80) -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	parent.add_child(row)
-	if not label.is_empty():
-		var lbl := Label.new()
-		_style_section(lbl, label)
-		lbl.custom_minimum_size = Vector2(36, 0)
-		row.add_child(lbl)
-	var sl := HSlider.new()
-	sl.min_value = min_v
-	sl.max_value = max_v
-	sl.step = 0.05 if max_v <= 16.0 else 1.0
-	sl.value = start
-	sl.custom_minimum_size = Vector2(slider_min_w, 0)
-	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sl.value_changed.connect(handler)
-	row.add_child(sl)
-	return row
+		start: float, handler: Callable, slider_min_w: int = 80, step: float = -1.0) -> HBoxContainer:
+	var pair := SliderSpinRowScript.add(parent, label, min_v, max_v, start, handler,
+		func(lbl: Label, txt: String) -> void: _style_section(lbl, txt),
+		36, slider_min_w, 58, step)
+	return pair.get("row")
 
 
 func _layout_panel() -> void:

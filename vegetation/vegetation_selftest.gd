@@ -11,7 +11,7 @@ var _checks: int = 0
 func _initialize() -> void:
 	_test_polygon()
 	_test_poisson_spacing()
-	_test_hex_grid_fill()
+	_test_square_grid_fill()
 	_test_species_mix()
 	_test_bulk_patch()
 	_test_json_roundtrip()
@@ -69,14 +69,16 @@ func _test_poisson_spacing() -> void:
 				"%.2f m apart" % sqrt(a.distance_squared_to(b)))
 
 
-func _test_hex_grid_fill() -> void:
+func _test_square_grid_fill() -> void:
 	var poly := VegetationPaint.rect_to_polygon(Vector2(-10.0, -10.0), Vector2(10.0, 10.0))
 	var mat_w := 0.45
-	var spots := VegetationPaint.hex_grid_fill(poly, mat_w, [], 500)
-	_check("hex grid produces instances", spots.size() > 10, "got %d" % spots.size())
+	var spots := VegetationPaint.square_grid_fill(poly, mat_w, [], 500)
+	_check("square grid produces instances", spots.size() > 10, "got %d" % spots.size())
 	for spot in spots:
-		_check("hex grid fixed yaw", absf(float(spot.get("yaw", 0.0))) < 1e-5)
-		_check("hex grid unit scale", absf(float(spot.get("scale", 1.0)) - 1.0) < 1e-5)
+		var yaw := float(spot.get("yaw", 0.0))
+		var rem := fmod(yaw, PI / 2.0)
+		_check("square grid 90-deg yaw", absf(rem) < 1e-5 or absf(rem - PI / 2.0) < 1e-5)
+		_check("square grid unit scale", absf(float(spot.get("scale", 1.0)) - 1.0) < 1e-5)
 	var defs := VegetationStyleConfig.defaults()
 	var near := VegetationCardFactory.mesh_for_deciduous_lod(
 		defs, VegetationCardFactory.CanopyLodTier.NEAR)

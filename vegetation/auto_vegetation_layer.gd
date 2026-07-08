@@ -24,7 +24,7 @@ extends RefCounted
 ## silently stop appearing in tagged areas ("veg only shows up in some places").
 ## Splitting the budgets lets dense grass and dense woods coexist.
 const MAX_TREE_BULK_TOTAL := 24000
-const MAX_GRASS_BULK_TOTAL := 40000
+const MAX_GRASS_BULK_TOTAL := 120000
 const MAX_BULK_TOTAL := MAX_TREE_BULK_TOTAL + MAX_GRASS_BULK_TOTAL
 const MAX_HERO := 4000
 
@@ -85,6 +85,27 @@ func add_hero(preset: String, x: float, z: float, yaw: float, scale: float,
 
 func slots() -> Array:
 	return bulk.keys()
+
+
+## Strip per-instance card_settings overrides from every bulk record (see
+## VegetationLayer.clear_card_overrides). Lets "Apply to map" restyle auto (OSM)
+## trees that were painted with a custom brush look too. Returns the count cleared.
+func clear_card_overrides() -> int:
+	var n := 0
+	for slot in bulk.keys():
+		for item in bulk.get(slot, []):
+			if item is Dictionary and (item as Dictionary).has("card_settings"):
+				(item as Dictionary).erase("card_settings")
+				n += 1
+	return n
+
+
+func tree_bulk_count() -> int:
+	return _tree_bulk
+
+
+func grass_bulk_count() -> int:
+	return _grass_bulk
 
 
 func total_bulk() -> int:

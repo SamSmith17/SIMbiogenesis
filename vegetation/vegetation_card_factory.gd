@@ -294,10 +294,28 @@ static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> Arr
 			_trunk_taper_top(settings, "deciduous"), Vector3.ZERO, trunk_w * 0.72)
 
 	var clusters := _deciduous_cluster_layout(crown_w, crown_h, trunk_h, settings)
-	# Fractal bough skeleton: self-similar forks fill the crown so the tree reads
-	# as a real branching structure once the leaf shells drop in winter.
-	_build_fractal_branches(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
-		trunk_w, trunk_h, crown_w, crown_h, settings)
+
+	var is_near_lod := bool(settings.get("deciduous_leaf_shells_enabled", true))
+	if is_near_lod:
+		# Fractal bough skeleton: self-similar forks fill the crown so the tree reads
+		# as a real branching structure once the leaf shells drop in winter.
+		_build_fractal_branches(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
+			trunk_w, trunk_h, crown_w, crown_h, settings)
+	else:
+		var branch_max := clampi(int(round(float(settings.get("deciduous_branch_count", 4)))), 0, 12)
+		var branch_thick := float(settings.get("deciduous_branch_thickness", 1.0))
+		var branch_reach := float(settings.get("deciduous_branch_reach", 1.0))
+		var branch_base_y := float(settings.get("deciduous_branch_base", 0.82))
+		var branches_added := 0
+		for i in clusters.size():
+			var c: Dictionary = clusters[i]
+			var pos: Vector3 = c["pos"]
+			if i > 0 and branches_added < branch_max:
+				_add_branch_card(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
+					Vector3(0.0, trunk_h * branch_base_y, 0.0),
+					pos + Vector3(0.0, -float(c["h"]) * 0.25 * branch_reach, 0.0),
+					trunk_w * 0.32 * branch_thick)
+				branches_added += 1
 
 	var mesh := ArrayMesh.new()
 	var trunk_arr: Array = []
@@ -342,10 +360,12 @@ static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> Arr
 	var canopy_uvs := PackedVector2Array()
 	var canopy_normals := PackedVector3Array()
 	var canopy_indices := PackedInt32Array()
+	var billboard_offset := float(settings.get("deciduous_billboard_y_offset", -0.4))
 	for c in clusters:
 		var pos: Vector3 = c["pos"]
 		_add_cluster_cards(canopy_verts, canopy_uvs, canopy_normals, canopy_indices,
-			pos, float(c["w"]), float(c["h"]), Vector3(0.0, 0.55, 0.0))
+			pos, float(c["w"]), float(c["h"]), Vector3(0.0, 0.55, 0.0),
+			0.0, 3, billboard_offset)
 
 	var canopy_arr: Array = []
 	canopy_arr.resize(Mesh.ARRAY_MAX)
@@ -365,15 +385,16 @@ static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> Arr
 ## canopy of discrete leaves (see leaf_canopy.gdshader).
 static func _build_leaf_shell_canopy(crown_w: float, crown_h: float, trunk_h: float,
 		settings: Dictionary) -> Array:
-	var shells := clampi(int(round(float(settings.get("deciduous_leaf_shell_count", 4)))), 2, 10)
+	# Floor the shell count too (legacy maps saved ~5) so stacked shells fill the
+	# crown volume — pairs with the leaf-grid density floor in _apply_leaf_canopy_uniforms.
+	var shells := clampi(maxi(int(round(float(settings.get("deciduous_leaf_shell_count", 4)))), 7), 2, 10)
 	var lump := clampf(float(settings.get("deciduous_leaf_lump", 0.18)), 0.0, 0.6)
-	var rings := 5
-	var segs := 10
-	var inner_frac := 0.6
-	var rx := crown_w * 0.42
-	var ry := crown_h * 0.62
-	var rz := rx
-	var center_y := trunk_h + crown_h * 0.35
+	var rings := 4
+	var segs := 8
+	# Fill more of the crown core so the stacked shells read as a solid leafy
+	# volume instead of a thin speckled rind (the "sparse canopy" bug). Independent
+	# of the saved shape params, so existing maps get denser trees without re-tuning.
+	var inner_frac := 0.42
 	var total_h := maxf(trunk_h + crown_h, 0.001)
 
 	var verts := PackedVector3Array()
@@ -383,36 +404,43 @@ static func _build_leaf_shell_canopy(crown_w: float, crown_h: float, trunk_h: fl
 	var indices := PackedInt32Array()
 	var row_stride := segs + 1
 
-	for s in shells:
-		var st := float(s) / maxf(float(shells - 1), 1.0)
-		var scale := lerpf(inner_frac, 1.0, st)
-		var base := verts.size()
-		for iy in rings + 1:
-			var theta := PI * float(iy) / float(rings)
-			var sin_t := sin(theta)
-			var cos_t := cos(theta)
-			for ix in segs + 1:
-				var phi := TAU * float(ix) / float(segs)
-				var dir := Vector3(sin_t * cos(phi), cos_t, sin_t * sin(phi))
-				# Organic lumpy silhouette, identical per direction across shells
-				# so the shells stay nested (radial displacement scales with shell).
-				var bump := 1.0 + lump * (
-					sin(dir.x * 5.1 + dir.y * 3.3) * 0.5
-					+ sin(dir.z * 4.7 - dir.y * 2.9) * 0.5)
-				var pos := Vector3(
-					dir.x * rx, dir.y * ry, dir.z * rz) * scale * bump
-				pos.y += center_y
-				verts.append(pos)
-				normals.append(dir)
-				uvs.append(Vector2(phi / TAU, theta / PI))
-				colors.append(Color(st, clampf(pos.y / total_h, 0.0, 1.0), 0.0, 1.0))
-		for iy in rings:
-			for ix in segs:
-				var a := base + iy * row_stride + ix
-				var b := a + 1
-				var c := a + row_stride
-				var d := c + 1
-				indices.append_array([a, c, b, b, c, d])
+	var clusters := _deciduous_cluster_layout(crown_w, crown_h, trunk_h, settings)
+
+	for cluster in clusters:
+		var center: Vector3 = cluster["pos"]
+		# Bigger leaf ellipsoids so neighbouring clusters overlap into one continuous
+		# canopy rather than isolated puffs with branch gaps between them.
+		var rx = float(cluster["w"]) * 0.62
+		var ry = float(cluster["h"]) * 0.55
+		var rz = rx
+
+		for s in shells:
+			var st := float(s) / maxf(float(shells - 1), 1.0)
+			var scale := lerpf(inner_frac, 1.0, st)
+			var base := verts.size()
+			for iy in rings + 1:
+				var theta := PI * float(iy) / float(rings)
+				var sin_t := sin(theta)
+				var cos_t := cos(theta)
+				for ix in segs + 1:
+					var phi := TAU * float(ix) / float(segs)
+					var dir := Vector3(sin_t * cos(phi), cos_t, sin_t * sin(phi))
+					var bump := 1.0 + lump * (
+						sin(dir.x * 5.1 + dir.y * 3.3 + center.x) * 0.5
+						+ sin(dir.z * 4.7 - dir.y * 2.9 + center.z) * 0.5)
+					var pos := Vector3(dir.x * rx, dir.y * ry, dir.z * rz) * scale * bump
+					pos += center
+					verts.append(pos)
+					normals.append(dir)
+					uvs.append(Vector2(phi / TAU, theta / PI))
+					colors.append(Color(st, clampf(pos.y / total_h, 0.0, 1.0), 0.0, 1.0))
+			for iy in rings:
+				for ix in segs:
+					var a := base + iy * row_stride + ix
+					var b := a + 1
+					var c := a + row_stride
+					var d := c + 1
+					indices.append_array([a, c, b, b, c, d])
 
 	var arr: Array = []
 	arr.resize(Mesh.ARRAY_MAX)
@@ -459,10 +487,14 @@ static func _apply_leaf_canopy_uniforms(mat: ShaderMaterial, species: String,
 	mat.set_shader_parameter("wind_strength", float(settings.get("wind_strength", 0.03)))
 	mat.set_shader_parameter("sway_frequency", float(settings.get("wind_speed", 0.7)))
 	mat.set_shader_parameter("wind_profile", 1.0)
+	# Canopy density FLOOR: legacy maps saved a sparse leaf grid (small leaves, big
+	# gaps) that renders as a see-through speckled skeleton. Clamp toward full so
+	# every map — old per-map styles included — reads as solid foliage. Only raises
+	# density, so denser custom looks still pass through unchanged.
 	mat.set_shader_parameter("cells_per_side", float(settings.get("deciduous_leaf_density", 22.0)))
-	mat.set_shader_parameter("leaf_size", float(settings.get("deciduous_leaf_size", 0.85)))
+	mat.set_shader_parameter("leaf_size", maxf(float(settings.get("deciduous_leaf_size", 0.85)), 0.92))
 	mat.set_shader_parameter("leaf_aspect", float(settings.get("deciduous_leaf_aspect", 1.9)))
-	mat.set_shader_parameter("shell_gap", float(settings.get("deciduous_leaf_gap", 0.30)))
+	mat.set_shader_parameter("shell_gap", minf(float(settings.get("deciduous_leaf_gap", 0.30)), 0.12))
 	mat.set_shader_parameter("dither_strength", float(settings.get("dither_strength", 1.0)))
 	mat.set_shader_parameter("alpha_dither_min", float(settings.get("alpha_dither_min", 0.20)))
 	mat.set_shader_parameter("alpha_dither_max", float(settings.get("alpha_dither_max", 0.50)))
@@ -475,12 +507,41 @@ static func _apply_leaf_canopy_uniforms(mat: ShaderMaterial, species: String,
 	mat.set_shader_parameter("roughness_value", float(settings.get("foliage_roughness", 0.95)))
 	mat.set_shader_parameter("ao_strength", float(settings.get("ao_strength", 0.40)))
 	mat.set_shader_parameter("hue_jitter", float(settings.get("hue_jitter", 0.0)))
+	
+	mat.set_shader_parameter("spring_bud", float(settings.get("spring_bud", 0.0)))
+	mat.set_shader_parameter("autumn", float(settings.get("autumn", 0.0)))
+	if settings.has("bud_color"):
+		var c: Color = settings["bud_color"]
+		mat.set_shader_parameter("bud_color", Vector3(c.r, c.g, c.b))
+	if settings.has("autumn_warm"):
+		var c: Color = settings["autumn_warm"]
+		mat.set_shader_parameter("autumn_warm", Vector3(c.r, c.g, c.b))
+	if settings.has("autumn_orange"):
+		var c: Color = settings["autumn_orange"]
+		mat.set_shader_parameter("autumn_orange", Vector3(c.r, c.g, c.b))
+	if settings.has("autumn_hot"):
+		var c: Color = settings["autumn_hot"]
+		mat.set_shader_parameter("autumn_hot", Vector3(c.r, c.g, c.b))
+	
 	if settings.has("ao_tint"):
 		var aoc: Color = settings["ao_tint"]
 		mat.set_shader_parameter("ao_tint", Vector3(aoc.r, aoc.g, aoc.b))
 	if settings.has("haze_color"):
 		var hc: Color = settings["haze_color"]
 		mat.set_shader_parameter("haze_color", Vector3(hc.r, hc.g, hc.b))
+	
+	if settings.has("bud_color"):
+		var bc: Color = settings["bud_color"]
+		mat.set_shader_parameter("bud_color", Vector3(bc.r, bc.g, bc.b))
+	if settings.has("autumn_warm"):
+		var ac: Color = settings["autumn_warm"]
+		mat.set_shader_parameter("autumn_warm", Vector3(ac.r, ac.g, ac.b))
+	if settings.has("autumn_orange"):
+		var ac: Color = settings["autumn_orange"]
+		mat.set_shader_parameter("autumn_orange", Vector3(ac.r, ac.g, ac.b))
+	if settings.has("autumn_hot"):
+		var ac: Color = settings["autumn_hot"]
+		mat.set_shader_parameter("autumn_hot", Vector3(ac.r, ac.g, ac.b))
 
 
 static func trunk_mesh_for_forest(settings: Dictionary = {}) -> ArrayMesh:
@@ -540,6 +601,30 @@ static func _add_tapered_trunk_card(verts: PackedVector3Array, uvs: PackedVector
 	indices.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
 
 
+static func _add_branch_card(verts: PackedVector3Array, uvs: PackedVector2Array,
+		normals: PackedVector3Array, indices: PackedInt32Array,
+		base: Vector3, tip: Vector3, width: float) -> void:
+	var dir := tip - base
+	if dir.length_squared() < 1e-6:
+		return
+	dir = dir.normalized()
+	var side := dir.cross(Vector3.UP)
+	if side.length_squared() < 1e-6:
+		side = dir.cross(Vector3.FORWARD)
+	side = side.normalized() * width * 0.5
+	var idx := verts.size()
+	verts.append_array([
+		base - side, base + side, tip + side * 0.55, tip - side * 0.55,
+	])
+	uvs.append_array([
+		Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vector2(0.0, 0.0),
+	])
+	var face_normal := side.cross(dir).normalized()
+	for _j in 4:
+		normals.append(face_normal)
+	indices.append_array([idx, idx + 1, idx + 2, idx, idx + 2, idx + 3])
+
+
 static func _add_card(verts: PackedVector3Array, uvs: PackedVector2Array,
 		normals: PackedVector3Array, indices: PackedInt32Array,
 		card_w: float, card_h: float, y_base: float, angle: float, normal_lift: Vector3,
@@ -566,8 +651,8 @@ static func _add_card(verts: PackedVector3Array, uvs: PackedVector2Array,
 static func _add_cluster_cards(verts: PackedVector3Array, uvs: PackedVector2Array,
 		normals: PackedVector3Array, indices: PackedInt32Array,
 		center: Vector3, card_w: float, card_h: float, normal_lift: Vector3,
-		base_yaw: float = 0.0, card_count: int = 3) -> void:
-	var y_base := center.y - card_h * 0.20
+		base_yaw: float = 0.0, card_count: int = 3, y_offset: float = 0.0) -> void:
+	var y_base := center.y - card_h * 0.20 + y_offset
 	var n := clampi(card_count, 2, 4)
 	for card_i in n:
 		_add_card(verts, uvs, normals, indices, card_w, card_h, y_base,
@@ -1071,6 +1156,22 @@ static func _apply_foliage_uniforms(mat: ShaderMaterial, species: String, settin
 		mat.set_shader_parameter("ao_tint", Vector3(aoc.r, aoc.g, aoc.b))
 	mat.set_shader_parameter("hue_jitter", float(settings.get("hue_jitter", 0.0)))
 	mat.set_shader_parameter("seasonal_strength", float(settings.get("seasonal_strength", 0.0)))
+	
+	mat.set_shader_parameter("spring_bud", float(settings.get("spring_bud", 0.0)))
+	mat.set_shader_parameter("autumn", float(settings.get("autumn", 0.0)))
+	if settings.has("bud_color"):
+		var c: Color = settings["bud_color"]
+		mat.set_shader_parameter("bud_color", Vector3(c.r, c.g, c.b))
+	if settings.has("autumn_warm"):
+		var c: Color = settings["autumn_warm"]
+		mat.set_shader_parameter("autumn_warm", Vector3(c.r, c.g, c.b))
+	if settings.has("autumn_orange"):
+		var c: Color = settings["autumn_orange"]
+		mat.set_shader_parameter("autumn_orange", Vector3(c.r, c.g, c.b))
+	if settings.has("autumn_hot"):
+		var c: Color = settings["autumn_hot"]
+		mat.set_shader_parameter("autumn_hot", Vector3(c.r, c.g, c.b))
+		
 	if settings.has("haze_color"):
 		var hc: Color = settings["haze_color"]
 		mat.set_shader_parameter("haze_color", Vector3(hc.r, hc.g, hc.b))

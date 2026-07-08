@@ -21,9 +21,15 @@ const HOURS_PER_YEAR := 8766.0        # 365.25 × 24
 const SEEDLING_SCALE := 0.14          # apparent size at age 0
 ## Growth curve exponent (<1 = grows fast early, tapering toward maturity).
 const GROWTH_EASE := 0.6
-const SEED_RADIUS_M := 2.0            # seedlings spring up within this of the parent
+const SEED_RADIUS_M := 1.0            # seedlings spring up within this of the parent
 const SEEDLINGS_MIN := 1
 const SEEDLINGS_MAX := 2
+const SEED_ATTEMPTS := 8              # retries when a zone boundary rejects a sample
+## Structural clock advance below this factor is treated as winter dormancy (no aging).
+const DORMANCY_THRESHOLD := 0.05
+## Phenology milestone days (NH reference) when scale refresh + optional reseed run.
+## ~4 pulses per growing season vs ~12 under the old fixed 720 h throttle.
+const GROWTH_MILESTONE_DOYS: Array[float] = [84.0, 135.0, 172.0, 260.0]
 ## Only these species die at maturity and reseed. Grass / shrub grow-and-hold.
 const TREE_SPECIES: Array[String] = ["pine", "deciduous"]
 
@@ -51,6 +57,42 @@ static func any_enabled(settings: Dictionary) -> bool:
 		if float(settings.get("%s_growth_years" % species, 0.0)) > 0.0:
 			return true
 	return false
+
+
+## 0..1 envelope for how much the structural growth clock should advance today.
+## Uses canopy + grass phenology so temperate sites pause in winter and pulse in
+## spring/summer (matches shader seasonality without a separate model).
+static func structural_growth_factor(day_of_year: int, latitude: float) -> float:
+	var sig := SeasonModel.season_signals(day_of_year, latitude)
+	var leaf := float(sig.get("leaf_coverage", 0.0))
+	var grass := float(sig.get("grass_growth", 0.0))
+	return clampf(maxf(leaf, grass), 0.0, 1.0)
+
+
+## Death/reseed only during the active growing window (not deep winter dormancy).
+static func reseed_allowed(day_of_year: int, latitude: float) -> bool:
+	var nh := SeasonModel.to_nh_doy(day_of_year, latitude)
+	return nh >= SeasonModel.LEAF_OUT_START and nh <= SeasonModel.GRASS_FADE_END
+
+
+## True when the calendar crossed a growth milestone between two day-of-year samples.
+## Handles year rollover (Dec → Jan) for analemma multi-year loops.
+static func milestones_crossed(from_doy: int, to_doy: int, latitude: float) -> bool:
+	if from_doy == to_doy:
+		return false
+	var nh_from := SeasonModel.to_nh_doy(from_doy, latitude)
+	var nh_to := SeasonModel.to_nh_doy(to_doy, latitude)
+	for m in GROWTH_MILESTONE_DOYS:
+		if _milestone_in_crossing(nh_from, nh_to, m):
+			return true
+	return false
+
+
+static func _milestone_in_crossing(nh_from: float, nh_to: float, milestone: float) -> bool:
+	if nh_from < nh_to:
+		return milestone > nh_from and milestone <= nh_to
+	# Year wrap (e.g. Dec → Jan).
+	return milestone > nh_from or milestone <= nh_to
 
 
 ## Age fraction (age / growth_years) → apparent scale multiplier (seedling → full).
@@ -114,7 +156,10 @@ static func capture_caps(bulk_dict: Dictionary) -> Dictionary:
 ## record changed so the caller can rebuild.
 static func advance_generations(bulk_dict: Dictionary, now_h: float,
 		settings: Dictionary, rng: RandomNumberGenerator, caps: Dictionary,
-		add_cb: Callable) -> bool:
+		add_cb: Callable, zone: GrowthZoneIndex = null,
+		allow_reseed: bool = true) -> bool:
+	if not allow_reseed:
+		return false
 	var changed := false
 	for slot in bulk_dict.keys():
 		var species := _species_for_slot(str(slot))
@@ -146,18 +191,35 @@ static func advance_generations(bulk_dict: Dictionary, now_h: float,
 			for _k in count:
 				if (bulk_dict[slot] as Array).size() >= cap:
 					break
-				var ang := rng.randf() * TAU
-				# sqrt keeps seedlings uniformly spread over the disc, not clumped centre.
-				var r := sqrt(rng.randf()) * SEED_RADIUS_M
+				var pos := _sample_seed_pos(parent, rng, zone)
+				if not is_finite(pos.x):
+					continue
 				var rec: Variant = add_cb.call(str(slot),
-					float(parent.get("x", 0.0)) + cos(ang) * r,
-					float(parent.get("z", 0.0)) + sin(ang) * r,
+					pos.x, pos.y,
 					rng.randf() * TAU,
 					float(parent.get("scale", 1.0)),
 					parent.get("card_settings", {}))
 				if rec is Dictionary:
 					(rec as Dictionary)["birth_h"] = now_h
 	return changed
+
+
+## Uniform disc sample around parent; when `zone` is non-empty, only accept
+## positions inside the zone (up to SEED_ATTEMPTS). Empty zone → radius only.
+static func _sample_seed_pos(parent: Dictionary, rng: RandomNumberGenerator,
+		zone: GrowthZoneIndex) -> Vector2:
+	var px := float(parent.get("x", 0.0))
+	var pz := float(parent.get("z", 0.0))
+	var use_zone := zone != null and not zone.is_empty()
+	for _attempt in SEED_ATTEMPTS:
+		var ang := rng.randf() * TAU
+		# sqrt keeps seedlings uniformly spread over the disc, not clumped centre.
+		var r := sqrt(rng.randf()) * SEED_RADIUS_M
+		var x := px + cos(ang) * r
+		var z := pz + sin(ang) * r
+		if not use_zone or zone.contains(x, z):
+			return Vector2(x, z)
+	return Vector2(NAN, NAN)
 
 
 ## Auto-vegetation slots may be biome names (conifer/broadleaf/…); map to the

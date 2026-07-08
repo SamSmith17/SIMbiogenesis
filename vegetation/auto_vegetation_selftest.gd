@@ -19,6 +19,8 @@ func _initialize() -> void:
 	_test_runtime_render()
 	_test_biome()
 	_test_overpass_parse()
+	_test_osm_tree_hero()
+	_test_grass_tune_style()
 	_test_scatter_and_exclusion()
 	_test_runtime_validity()
 	_test_imagery_gate()
@@ -37,10 +39,19 @@ func _initialize() -> void:
 	_test_grass_species()
 	_test_grass_builder()
 	_test_leaf_type_weights()
+	_test_mix_weights()
 	_test_osm_v4_kinds()
 	_test_vegetation_undo()
 	_test_ground_y_monotonic()
 	_test_pick_species_grass()
+	_test_height_parse()
+	_test_hero_metrics_composition()
+	_test_hero_scale_clamp()
+	_test_tree_point_height_clamp()
+	_test_open_area_exclusion()
+	_test_budget_priority()
+	_test_grass_detail_radius()
+	_test_poly_stats()
 	if _failures == 0:
 		print("AUTO-VEG SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -85,7 +96,9 @@ func _test_runtime_render() -> void:
 	var root := terrain.get_node_or_null(AutoVegetationRuntime.ROOT_NAME)
 	_check("AutoVegetation node created", root != null)
 	if root != null:
-		_check("pine multimesh built", root.get_node_or_null("Bulk_pine") != null)
+		# Pine now renders through the canopy-LOD path (NEAR + FAR tiers), so the
+		# MultiMesh nodes are Bulk_pine_0 / Bulk_pine_1 rather than a single Bulk_pine.
+		_check("pine multimesh built", root.get_node_or_null("Bulk_pine_0") != null)
 		_check("shrub multimesh built", root.get_node_or_null("Bulk_shrub") != null)
 	# Slot alias resolution falls back to a known card species.
 	_check("conifer -> pine", AutoVegetationRuntime._resolve_species("conifer") == "pine")
@@ -132,6 +145,8 @@ func _test_overpass_parse() -> void:
 	if not (payload["tree_points"] as Array).is_empty():
 		_check("tree height tag parsed ~12",
 			absf(float(payload["tree_points"][0]["height_m"]) - 12.0) < 0.01)
+		_check("tree point carries OSM tags",
+			(payload["tree_points"][0] as Dictionary).get("tags", {}).has("natural"))
 	_check("parsed one tree row", (payload["tree_rows"] as Array).size() == 1)
 
 	# Grass / meadow polygons map to grass_lawn / grass_field kinds.
@@ -152,6 +167,78 @@ func _test_overpass_parse() -> void:
 			str(grass_payload["polygons"][0]["kind"]) == "grass_lawn")
 		_check("landuse=meadow -> grass_field",
 			str(grass_payload["polygons"][1]["kind"]) == "grass_field")
+
+
+func _test_osm_tree_hero() -> void:
+	_check("horse chestnut maps to deciduous_low",
+		HeroTreeCatalog.preset_for_osm_tree_tags(
+			{"species": "Aesculus hippocastanum", "natural": "tree"}) == "deciduous_low")
+	_check("height tag maps to deciduous_low",
+		HeroTreeCatalog.preset_for_osm_tree_tags({"natural": "tree", "height": "20"}) == "deciduous_low")
+	var ctx := {"latitude": 42.4, "seed": 7, "exclusions": []}
+	var payload := {
+		"polygons": [],
+		"tree_points": [{
+			"pos": Vector2(0.0, 0.0),
+			"height_m": 24.0,
+			"tags": {
+				"natural": "tree",
+				"species": "Aesculus hippocastanum",
+				"height": "24 m",
+			},
+		}],
+		"tree_rows": [],
+	}
+	var layer := AutoVegetationGenerator.generate(payload, ctx)
+	# Mapped OSM tree points now scatter as procedural bulk trees (NOT low-poly GLB
+	# heroes) so every deciduous tree shares the one tuned/preset look. A temperate
+	# biome tree point must land in a tree slot (deciduous/pine), never shrub/hero.
+	_check("OSM tree becomes procedural bulk, not hero", layer.hero.size() == 0,
+		"hero=%d bulk=%d" % [layer.hero.size(), layer.total_bulk()])
+	_check("OSM tree placed one bulk instance", layer.total_bulk() == 1,
+		"bulk=%d" % layer.total_bulk())
+	_check("OSM tree bulk is a tree species (not shrub)",
+		int((layer.bulk.get("shrub", []) as Array).size()) == 0)
+	# Tree-point tags survive veg-cache serialization.
+	var ser: Dictionary = VegService._serialize_payload(payload)
+	var deser: Dictionary = VegService.deserialize_payload(ser)
+	_check("tree point tags round-trip",
+		str((deser["tree_points"][0] as Dictionary).get("tags", {}).get("species", ""))
+		== "Aesculus hippocastanum")
+
+
+func _test_grass_tune_style() -> void:
+	var lawn_poly := PackedVector2Array([
+		Vector2(-40, -40), Vector2(40, -40), Vector2(40, 40), Vector2(-40, 40)])
+	var meadow_poly := PackedVector2Array([
+		Vector2(-60, -30), Vector2(60, -30), Vector2(60, 30), Vector2(-60, 30)])
+	var lawn_payload := {
+		"polygons": [{"points": lawn_poly, "kind": "grass_lawn", "tags": {"landuse": "grass"}}],
+		"tree_points": [], "tree_rows": [],
+	}
+	var meadow_payload := {
+		"polygons": [{"points": meadow_poly, "kind": "grass_field", "tags": {"landuse": "meadow"}}],
+		"tree_points": [], "tree_rows": [],
+	}
+	var ctx_dense := {
+		"latitude": 42.4, "seed": 3, "exclusions": [],
+		"style": {"grass_lawn_card_w": 0.22, "auto_density_scale": 2.0, "grass_lawn_bulk_scale": 1.2},
+	}
+	var ctx_sparse := {
+		"latitude": 42.4, "seed": 3, "exclusions": [],
+		"style": {"grass_lawn_card_w": 0.9, "auto_density_scale": 0.5, "grass_lawn_bulk_scale": 1.0},
+	}
+	var dense := AutoVegetationGenerator.generate(lawn_payload, ctx_dense)
+	var sparse := AutoVegetationGenerator.generate(lawn_payload, ctx_sparse)
+	_check("tune look lawn card_w affects scatter count",
+		dense.total_bulk() > sparse.total_bulk(),
+		"dense=%d sparse=%d" % [dense.total_bulk(), sparse.total_bulk()])
+	var meadow_layer := AutoVegetationGenerator.generate(meadow_payload,
+		{"latitude": 42.4, "seed": 5, "exclusions": [],
+			"style": {"grass_field_bulk_scale": 1.4, "auto_density_scale": 1.5}})
+	_check("meadow scatter uses grass_field slot", meadow_layer.slots().has("grass_field"))
+	_check("meadow scatter produces instances", meadow_layer.total_bulk() > 10,
+		"got %d" % meadow_layer.total_bulk())
 
 
 func _test_scatter_and_exclusion() -> void:
@@ -349,7 +436,9 @@ func _test_card_orientation() -> void:
 
 func _test_deciduous_split_mesh() -> void:
 	var mesh := VegetationCardFactory.mesh_for_species("deciduous", {})
-	_check("deciduous has 2 surfaces", mesh.get_surface_count() == 2,
+	# NEAR-LOD deciduous now builds 3 surfaces: 0 = trunk/branches (bark),
+	# 1 = billboard shadow proxy (crown silhouette caster), 2 = leaf-shell canopy.
+	_check("deciduous has 3 surfaces", mesh.get_surface_count() == 3,
 		"got %d" % mesh.get_surface_count())
 	var trunk_arrays := mesh.surface_get_arrays(0)
 	var canopy_arrays := mesh.surface_get_arrays(1)
@@ -535,6 +624,35 @@ func _test_grass_builder() -> void:
 	_check("grass far patch mesh", far != null)
 
 
+## The Tune Look "Mixed woodland" ratios customize the "mixed" OSM binding.
+func _test_mix_weights() -> void:
+	var style := {"mix_pine": 0.7, "mix_deciduous": 0.2, "mix_shrub": 0.1}
+	var mix := BiomePalette.mix_weights_from_style(style)
+	_check("mix weights read from style", mix.size() == 3
+		and absf(float(mix.get("pine", 0.0)) - 0.7) < 0.001)
+	_check("zero-weight mix species dropped",
+		BiomePalette.mix_weights_from_style({"mix_pine": 1.0}).size() == 1)
+	var osm := {"wood": "mixed"}
+	var override := BiomePalette.species_override_for_kind(osm, "wood", mix)
+	_check("mixed override uses custom weights",
+		absf(float(override.get("pine", 0.0)) - 0.7) < 0.001)
+	var default_mix := BiomePalette.species_override_for_kind(osm, "wood", {})
+	_check("mixed override falls back to even split",
+		absf(float(default_mix.get("pine", 0.0)) - 0.5) < 0.001)
+	# End-to-end: a wood bound to mixed with pine-heavy ratio scatters mostly pine.
+	var poly := PackedVector2Array([
+		Vector2(-60, -60), Vector2(60, -60), Vector2(60, 60), Vector2(-60, 60)])
+	var payload := {"polygons": [{"points": poly, "kind": "wood", "tags": {}}],
+		"tree_points": [], "tree_rows": []}
+	var layer := AutoVegetationGenerator.generate(payload, {"latitude": 47.6, "seed": 3,
+		"exclusions": [], "style": {"osm_species_map": {"wood": "mixed"},
+			"mix_pine": 0.9, "mix_deciduous": 0.1, "mix_shrub": 0.0}})
+	var pine_n: int = (layer.bulk.get("pine", []) as Array).size()
+	var decid_n: int = (layer.bulk.get("deciduous", []) as Array).size()
+	_check("pine-heavy mix scatters mostly pine", pine_n > decid_n * 3,
+		"pine=%d decid=%d" % [pine_n, decid_n])
+
+
 func _test_leaf_type_weights() -> void:
 	var base := {"deciduous": 0.5, "conifer": 0.5}
 	var needle := BiomePalette.weights_for_osm_tags(base, {"leaf_type": "needleleaved"})
@@ -573,6 +691,205 @@ func _test_ground_y_monotonic() -> void:
 	var grass_y := gy + 1.0 - GrassBuilder.foot_local_y() * scale - VegetationPaint.GROUND_SINK_M
 	var grass_y2 := gy - 1.0 - GrassBuilder.foot_local_y() * scale - VegetationPaint.GROUND_SINK_M
 	_check("grass offset monotonic", grass_y2 < grass_y)
+
+
+## OSM height values come with units — "90 ft" must not read as 90 meters.
+func _test_height_parse() -> void:
+	_check("plain number is meters", absf(VegService.parse_height_m("30") - 30.0) < 0.01)
+	_check("explicit meters", absf(VegService.parse_height_m("30 m") - 30.0) < 0.01)
+	_check("no-space meters", absf(VegService.parse_height_m("12.5m") - 12.5) < 0.01)
+	_check("feet converted", absf(VegService.parse_height_m("90 ft") - 27.432) < 0.01)
+	_check("apostrophe feet", absf(VegService.parse_height_m("30'") - 9.144) < 0.01)
+	_check("centimeters converted", absf(VegService.parse_height_m("250 cm") - 2.5) < 0.01)
+	_check("comma decimal", absf(VegService.parse_height_m("7,5") - 7.5) < 0.01)
+	_check("garbage -> 0", VegService.parse_height_m("tall") == 0.0)
+	_check("empty -> 0", VegService.parse_height_m("") == 0.0)
+
+
+## mesh height must compose parent transforms — a GLB with a scaled intermediate
+## node used to mis-measure and blow up the target-height fit (~300 ft hero tree).
+func _test_hero_metrics_composition() -> void:
+	var root := Node3D.new()
+	var mid := Node3D.new()
+	mid.scale = Vector3.ONE * 0.1
+	root.add_child(mid)
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(1.0, 10.0, 1.0)
+	mi.mesh = box
+	mid.add_child(mi)
+	var metrics := HeroTreeCatalog.measure_instance(root)
+	_check("parent scale composed into unit_height",
+		absf(float(metrics["unit_height"]) - 1.0) < 0.01,
+		"got %.3f (10.0 means parent scale ignored)" % float(metrics["unit_height"]))
+	_check("foot composes too", absf(float(metrics["foot_local_y"]) + 0.5) < 0.01,
+		"got %.3f" % float(metrics["foot_local_y"]))
+	root.free()
+
+
+func _test_hero_scale_clamp() -> void:
+	var s := HeroTreeCatalog.resolved_hero_scale("deciduous_low", 10000.0)
+	_check("hero world scale clamped", s <= HeroTreeCatalog.MAX_HERO_WORLD_SCALE,
+		"got %.1f" % s)
+
+
+## Absurd OSM height tags (mis-entered feet) clamp to a realistic tree height.
+func _test_tree_point_height_clamp() -> void:
+	var payload := {
+		"polygons": [],
+		"tree_points": [{"pos": Vector2.ZERO, "height_m": 300.0,
+			"tags": {"natural": "tree", "height": "300"}}],
+		"tree_rows": [],
+	}
+	var layer := AutoVegetationGenerator.generate(payload,
+		{"latitude": 42.4, "seed": 7, "exclusions": []})
+	# Tree points are procedural bulk now; the absurd height still clamps.
+	_check("clamped tree places a bulk instance", layer.total_bulk() == 1,
+		"bulk=%d hero=%d" % [layer.total_bulk(), layer.hero.size()])
+	var rec := {}
+	for sp in layer.bulk.keys():
+		for item in layer.bulk.get(sp, []):
+			rec = item
+	if not rec.is_empty():
+		_check("bulk tree height clamped to max",
+			float(rec.get("height_m", 0.0)) <= AutoVegetationGenerator.TREE_POINT_MAX_HEIGHT_M,
+			"got %.1f" % float(rec.get("height_m", 0.0)))
+
+
+func _count_trees_in_poly(layer: AutoVegetationLayer, poly: PackedVector2Array) -> int:
+	var n := 0
+	for slot in layer.bulk.keys():
+		if str(slot) in VegetationLayer.GRASS_SPECIES:
+			continue
+		for rec in layer.bulk[slot]:
+			var p := Vector2(float(rec["x"]), float(rec["z"]))
+			if Geometry2D.is_point_in_polygon(p, poly):
+				n += 1
+	return n
+
+
+## A mapped meadow inside a wood polygon must stay tree-free (meadow wins),
+## while the rest of the wood still forests — the osm.org semantic.
+func _test_open_area_exclusion() -> void:
+	var wood := PackedVector2Array([
+		Vector2(-100, -100), Vector2(100, -100), Vector2(100, 100), Vector2(-100, 100)])
+	var meadow := PackedVector2Array([
+		Vector2(-40, -40), Vector2(40, -40), Vector2(40, 40), Vector2(-40, 40)])
+	var payload := {
+		"polygons": [
+			{"points": wood, "kind": "wood", "tags": {"natural": "wood"}},
+			{"points": meadow, "kind": "grass_field", "tags": {"landuse": "meadow"}},
+		],
+		"tree_points": [], "tree_rows": [],
+	}
+	var layer := AutoVegetationGenerator.generate(payload,
+		{"latitude": 47.6, "seed": 42, "exclusions": []})
+	var inside := _count_trees_in_poly(layer, meadow)
+	var total := _count_trees_in_poly(layer, wood)
+	_check("no trees inside the meadow", inside == 0, "got %d" % inside)
+	_check("wood still forests outside the meadow", total > 10, "got %d" % total)
+	var grass_in := 0
+	for rec in layer.bulk.get("grass_field", []):
+		if Geometry2D.is_point_in_polygon(Vector2(float(rec["x"]), float(rec["z"])), meadow):
+			grass_in += 1
+	_check("meadow still receives grass", grass_in > 10, "got %d" % grass_in)
+	# Style toggle off restores the old overlap behavior.
+	var layer_off := AutoVegetationGenerator.generate(payload,
+		{"latitude": 47.6, "seed": 42, "exclusions": [],
+			"style": {"open_areas_exclude_trees": false}})
+	_check("toggle off allows trees in meadow",
+		_count_trees_in_poly(layer_off, meadow) > 0)
+
+
+## Wetland shrub swarms (92 polys at the Canaan site) must not starve wood
+## polygons of the shared tree budget: woods scatter first, wetlands are capped.
+func _test_budget_priority() -> void:
+	var polys: Array = []
+	# 40 large wetlands FIRST in payload order…
+	for i in 40:
+		var off := -1400.0 + float(i) * 70.0
+		polys.append({"points": PackedVector2Array([
+			Vector2(off, 200), Vector2(off + 60, 200),
+			Vector2(off + 60, 260), Vector2(off, 260)]),
+			"kind": "wetland", "tags": {"natural": "wetland"}})
+	# …then one wood.
+	polys.append({"points": PackedVector2Array([
+		Vector2(-80, -80), Vector2(80, -80), Vector2(80, 80), Vector2(-80, 80)]),
+		"kind": "wood", "tags": {"natural": "wood"}})
+	var payload := {"polygons": polys, "tree_points": [], "tree_rows": []}
+	var ctx := {"latitude": 47.6, "seed": 9, "exclusions": [], "half_extent_m": 1500.0}
+	var state := AutoVegetationGenerator.prepare_context(payload, ctx)
+	_check("wood sorted before wetlands",
+		str((state.polys[0] as Dictionary).get("kind", "")) == "wood")
+	while AutoVegetationGenerator.scatter_batch(state, 999999):
+		pass
+	var wood_poly: PackedVector2Array = (polys.back() as Dictionary)["points"]
+	_check("wood polygon got trees", _count_trees_in_poly(state.layer, wood_poly) > 10,
+		"got %d" % _count_trees_in_poly(state.layer, wood_poly))
+	var wet_cap := int(AutoVegetationLayer.MAX_TREE_BULK_TOTAL
+		* AutoVegetationGenerator.WETLAND_TREE_BUDGET_SHARE)
+	_check("wetland share respected", int(ctx.get("wetland_bulk_used", 0)) <= wet_cap,
+		"used %d cap %d" % [int(ctx.get("wetland_bulk_used", 0)), wet_cap])
+
+
+## Grass is dense near spawn (matching the Tune Look studio) and skipped past
+## the detail radius, so the budget concentrates where the player actually is.
+func _test_grass_detail_radius() -> void:
+	var near_poly := PackedVector2Array([
+		Vector2(-40, -40), Vector2(40, -40), Vector2(40, 40), Vector2(-40, 40)])
+	var far_poly := PackedVector2Array([
+		Vector2(760, -40), Vector2(840, -40), Vector2(840, 40), Vector2(760, 40)])
+	var payload := {
+		"polygons": [
+			{"points": near_poly, "kind": "grass_field", "tags": {"landuse": "meadow"}},
+			{"points": far_poly, "kind": "grass_field", "tags": {"landuse": "meadow"}},
+		],
+		"tree_points": [], "tree_rows": [],
+	}
+	var ctx := {"latitude": 42.4, "seed": 4, "exclusions": [], "half_extent_m": 1500.0,
+		"style": {"grass_detail_radius_m": 150.0}}
+	var layer := AutoVegetationGenerator.generate(payload, ctx)
+	var near_n := 0
+	var far_n := 0
+	for g in layer.bulk.get("grass_field", []):
+		var p := Vector2(float(g["x"]), float(g["z"]))
+		if Geometry2D.is_point_in_polygon(p, near_poly):
+			near_n += 1
+		elif Geometry2D.is_point_in_polygon(p, far_poly):
+			far_n += 1
+	_check("near meadow densely grassed", near_n > 200, "got %d" % near_n)
+	_check("meadow past detail radius skipped", far_n == 0, "got %d" % far_n)
+	# Density tracks the Tune Look studio: 80x80 m at ~1.1 m spacing ≈ 5500 tufts.
+	_check("near meadow near studio density", near_n > 3000, "got %d" % near_n)
+
+
+## Every scattered polygon emits one diagnostics record with coherent counts.
+func _test_poly_stats() -> void:
+	var payload := {
+		"polygons": [
+			{"points": PackedVector2Array([
+				Vector2(-60, -60), Vector2(60, -60), Vector2(60, 60), Vector2(-60, 60)]),
+				"kind": "wood", "tags": {"natural": "wood"}},
+			{"points": PackedVector2Array([
+				Vector2(100, 100), Vector2(140, 100), Vector2(140, 140), Vector2(100, 140)]),
+				"kind": "grass_field", "tags": {"landuse": "meadow"}},
+		],
+		"tree_points": [], "tree_rows": [],
+	}
+	var state := AutoVegetationGenerator.prepare_context(payload,
+		{"latitude": 47.6, "seed": 5, "exclusions": []})
+	while AutoVegetationGenerator.scatter_batch(state, 999999):
+		pass
+	_check("one stats record per polygon", state.poly_stats.size() == 2,
+		"got %d" % state.poly_stats.size())
+	var placed_sum := 0
+	for s in state.poly_stats:
+		var d: Dictionary = s
+		_check("stats record has kind", not str(d.get("kind", "")).is_empty())
+		_check("stats record has tag", not str(d.get("tag", "")).is_empty())
+		placed_sum += int(d.get("placed", 0))
+	_check("stats placed matches layer bulk", placed_sum == state.layer.total_bulk(),
+		"placed=%d bulk=%d" % [placed_sum, state.layer.total_bulk()])
 
 
 func _test_pick_species_grass() -> void:

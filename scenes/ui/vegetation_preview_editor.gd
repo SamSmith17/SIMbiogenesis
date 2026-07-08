@@ -9,12 +9,19 @@ const REBUILD_DEBOUNCE_S := 0.10
 const PREVIEW_SEED := 4242
 const STUDIO_SUN := Vector3(0.35, 0.88, 0.32)
 
+const SliderSpinRowScript := preload("res://scenes/ui/slider_spin_row.gd")
+
 const SPECIES_IDS: Array[String] = [
-	"pine", "deciduous", "shrub", "grass_lawn", "grass_field",
+	"pine", "deciduous", "shrub", "mix", "grass_lawn", "grass_field",
 ]
 const SPECIES_LABELS: Array[String] = [
-	"Pine", "Deciduous", "Shrub", "Lawn grass", "Field grass",
+	"Pine", "Deciduous", "Shrub", "Mixed woodland", "Lawn grass", "Field grass",
 ]
+
+## Mixed-woodland composition weights (Type = "Mixed woodland"). Drive both the
+## studio preview and, on Apply, any OSM kind bound to "Mixed pine + deciduous".
+const MIX_KEYS: Array[String] = ["mix_pine", "mix_deciduous", "mix_shrub"]
+const MIX_LABELS: Array[String] = ["Pine %", "Deciduous %", "Shrub %"]
 
 const SPECIES_SHAPE_SLIDERS := {
 	"deciduous": [
@@ -25,10 +32,10 @@ const SPECIES_SHAPE_SLIDERS := {
 		{"key": "deciduous_trunk_taper", "label": "Trunk taper", "min": 0.12, "max": 1.0},
 		{"key": "deciduous_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
 		{"key": "deciduous_growth_years", "label": "Growth yrs", "min": 0.0, "max": 80.0},
-		{"key": "deciduous_cluster_count", "label": "Clusters", "min": 3.0, "max": 16.0},
+		{"key": "deciduous_cluster_count", "label": "Clusters", "min": 3.0, "max": 64.0},
 		{"key": "deciduous_cluster_spread", "label": "Spread", "min": 0.3, "max": 1.5},
-		{"key": "deciduous_cluster_size", "label": "Clump sz", "min": 0.5, "max": 1.5},
-		{"key": "deciduous_cluster_tightness", "label": "Tightness", "min": 0.5, "max": 1.5},
+		{"key": "deciduous_cluster_size", "label": "Clump sz", "min": 0.5, "max": 3.0},
+		{"key": "deciduous_cluster_tightness", "label": "Tightness", "min": 0.1, "max": 2.5},
 		{"key": "deciduous_branch_count", "label": "Primaries", "min": 3.0, "max": 12.0},
 		{"key": "deciduous_branch_levels", "label": "Fork levels", "min": 1.0, "max": 5.0},
 		{"key": "deciduous_branch_split", "label": "Fork count", "min": 2.0, "max": 4.0},
@@ -49,6 +56,7 @@ const SPECIES_SHAPE_SLIDERS := {
 		{"key": "deciduous_shadow_proxy_visibility", "label": "Shadow proxy", "min": 0.0, "max": 0.25},
 		{"key": "deciduous_lod_near_m", "label": "Leaf LOD m", "min": 80.0, "max": 400.0},
 		{"key": "deciduous_lod_far_begin_m", "label": "Billboard m", "min": 70.0, "max": 390.0},
+		{"key": "deciduous_billboard_y_offset", "label": "Billboard Y", "min": -2.0, "max": 2.0},
 	],
 	"pine": [
 		{"key": "pine_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
@@ -119,17 +127,26 @@ const SHADER_SLIDERS := [
 	{"key": "wind_strength", "label": "Wind", "min": 0.0, "max": 0.12},
 	{"key": "wind_speed", "label": "Sway", "min": 0.2, "max": 2.0},
 	{"key": "hue_jitter", "label": "Hue jitter", "min": 0.0, "max": 0.15},
+	# Distance (m) at which OSM-scattered forests drop from leaf/fur to billboards.
+	# Global (not previewed in the studio, which is always close-up); affects auto
+	# veg only. Higher = leaves persist farther from the drone at more vertex cost.
+	{"key": "auto_foliage_lod_reach_m", "label": "Auto foliage reach (m)", "min": 120.0, "max": 500.0},
 ]
 
 var _loader: Node = null
 var _dock: Control = null
 var _active := false
+static var _last_species := "shrub"
 var _species := "shrub"
 var _density := 1.0
 var _patch_diameter := 10.0
 var _values: Dictionary = {}
 var _baseline: Dictionary = {}
 var _tints: Dictionary = {}
+## Live seasonal uniforms snapshotted per rebuild (see _live_season_uniforms).
+var _season_uniforms: Dictionary = {}
+
+var _scroll_container: ScrollContainer
 ## Player OSM-kind → species override (e.g. {"wood": "pine"}). "auto" = biome.
 var _osm_species_map: Dictionary = {}
 var _osm_opts: Dictionary = {}
@@ -147,10 +164,17 @@ var _preset_name_edit: LineEdit = null
 var _species_section: VBoxContainer = null
 var _tint_picker: ColorPickerButton = null
 var _density_slider: HSlider = null
+var _density_spin: SpinBox = null
 var _diameter_slider: HSlider = null
+var _diameter_spin: SpinBox = null
 var _shader_sliders: Dictionary = {}
 var _rebuild_pending := false
 var _rebuild_timer := 0.0
+var _cam_yaw: float = PI / 4.0
+var _cam_pitch: float = -0.35
+var _cam_dist_mult: float = 1.0
+var _cam_drag: bool = false
+var _cam_last_pos: Vector2
 
 
 func _ready() -> void:
@@ -169,6 +193,7 @@ func bind_loader(loader: Node, dock: Control = null) -> void:
 func open(initial_preset: int = -1) -> void:
 	if _active:
 		return
+	_species = _last_species
 	_load_from_loader()
 	if initial_preset >= 0:
 		_set_species_from_preset(initial_preset)
@@ -185,6 +210,10 @@ func open(initial_preset: int = -1) -> void:
 	_update_ground_and_camera()
 	_queue_rebuild(true)
 	move_to_front()
+	
+	if _scroll_container != null:
+		_scroll_container.set_deferred("scroll_vertical", 0)
+		
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
 
 
@@ -295,6 +324,7 @@ func _build_ui() -> void:
 	vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vp_container.custom_minimum_size = Vector2(480, 460)
 	vp_container.stretch = true
+	vp_container.gui_input.connect(_on_vp_gui_input)
 	preview_col.add_child(vp_container)
 
 	_viewport = SubViewport.new()
@@ -304,16 +334,16 @@ func _build_ui() -> void:
 	_build_studio_world()
 
 	# Right: controls
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(360, 520)
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	root_row.add_child(scroll)
+	_scroll_container = ScrollContainer.new()
+	_scroll_container.custom_minimum_size = Vector2(360, 520)
+	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	root_row.add_child(_scroll_container)
 
 	var sidebar := VBoxContainer.new()
 	sidebar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sidebar.add_theme_constant_override("separation", 6)
-	scroll.add_child(sidebar)
+	_scroll_container.add_child(sidebar)
 
 	var type_row := HBoxContainer.new()
 	sidebar.add_child(type_row)
@@ -330,15 +360,19 @@ func _build_ui() -> void:
 
 	_build_preset_row(sidebar)
 
-	_density_slider = _labeled_slider(sidebar, "Density", 0.25, 3.0, _density,
+	var dens := _labeled_slider(sidebar, "Density", 0.25, 3.0, _density,
 		func(v: float) -> void:
 			_density = v
 			_queue_rebuild())
-	_diameter_slider = _labeled_slider(sidebar, "Patch Ø m", 4.0, 24.0, _patch_diameter,
+	_density_slider = dens.get("slider")
+	_density_spin = dens.get("spin")
+	var dia := _labeled_slider(sidebar, "Patch Ø m", 4.0, 24.0, _patch_diameter,
 		func(v: float) -> void:
 			_patch_diameter = v
 			_update_ground_and_camera()
 			_queue_rebuild())
+	_diameter_slider = dia.get("slider")
+	_diameter_spin = dia.get("spin")
 
 	_species_section = VBoxContainer.new()
 	_species_section.add_theme_constant_override("separation", 4)
@@ -398,24 +432,10 @@ func _build_ui() -> void:
 
 
 func _labeled_slider(parent: Control, label: String, min_v: float, max_v: float,
-		start: float, handler: Callable) -> HSlider:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	parent.add_child(row)
-	var lbl := Label.new()
-	_style_section(lbl, label)
-	lbl.custom_minimum_size = Vector2(72, 0)
-	row.add_child(lbl)
-	var sl := HSlider.new()
-	sl.min_value = min_v
-	sl.max_value = max_v
-	sl.step = 0.01 if max_v <= 2.0 else 0.05
-	sl.value = start
-	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sl.custom_minimum_size = Vector2(120, 0)
-	sl.value_changed.connect(handler)
-	row.add_child(sl)
-	return sl
+		start: float, handler: Callable, step: float = -1.0) -> Dictionary:
+	return SliderSpinRowScript.add(parent, label, min_v, max_v, start, handler,
+		func(lbl: Label, txt: String) -> void: _style_section(lbl, txt),
+		72, 120, 64, step)
 
 
 func _rebuild_species_section() -> void:
@@ -423,6 +443,9 @@ func _rebuild_species_section() -> void:
 		return
 	for child in _species_section.get_children():
 		child.queue_free()
+	if _species == "mix":
+		_build_mix_section()
+		return
 	var specs: Array = SPECIES_SHAPE_SLIDERS.get(_species, [])
 	if specs.is_empty():
 		return
@@ -437,6 +460,26 @@ func _rebuild_species_section() -> void:
 			func(v: float) -> void:
 				_values[key] = v
 				_queue_rebuild())
+
+
+## Mixed-woodland ratio sliders. Per-species SHAPE (canopy size, etc.) is edited
+## on each species' own Type page; here the player tunes only the blend.
+func _build_mix_section() -> void:
+	var hdr := Label.new()
+	_style_section(hdr, "Mixed woodland blend")
+	_species_section.add_child(hdr)
+	for i in MIX_KEYS.size():
+		var key := MIX_KEYS[i]
+		_labeled_slider(_species_section, MIX_LABELS[i], 0.0, 1.0,
+			float(_values.get(key, 0.0)),
+			func(v: float) -> void:
+				_values[key] = v
+				_queue_rebuild())
+	var hint := Label.new()
+	hint.text = "Edit each tree's shape on its own Type page."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", 11)
+	_species_section.add_child(hint)
 
 
 # ---------------------------------------------------------------------------
@@ -662,9 +705,35 @@ func _update_ground_and_camera() -> void:
 	cyl.height = 0.06
 	_ground.mesh = cyl
 	_ground.position.y = -0.03
-	var dist := _patch_diameter * 1.2
-	_camera.position = Vector3(dist * 0.72, _patch_diameter * 0.48, dist * 0.72)
-	_camera.look_at(Vector3(0.0, _patch_diameter * 0.12, 0.0))
+	var dist := _patch_diameter * 1.2 * _cam_dist_mult
+	var target := Vector3(0.0, _patch_diameter * 0.12, 0.0)
+	var dir := Vector3(cos(_cam_yaw) * cos(_cam_pitch), sin(_cam_pitch), sin(_cam_yaw) * cos(_cam_pitch))
+	_camera.position = target - dir * dist
+	_camera.look_at(target)
+
+func _on_vp_gui_input(ev: InputEvent) -> void:
+	if ev is InputEventMouseButton:
+		var emb = ev as InputEventMouseButton
+		if emb.button_index == MOUSE_BUTTON_LEFT or emb.button_index == MOUSE_BUTTON_MIDDLE or emb.button_index == MOUSE_BUTTON_RIGHT:
+			if emb.pressed:
+				_cam_drag = true
+				_cam_last_pos = emb.position
+			else:
+				_cam_drag = false
+		elif emb.button_index == MOUSE_BUTTON_WHEEL_UP and emb.pressed:
+			_cam_dist_mult = clampf(_cam_dist_mult * 0.85, 0.1, 5.0)
+			_update_ground_and_camera()
+		elif emb.button_index == MOUSE_BUTTON_WHEEL_DOWN and emb.pressed:
+			_cam_dist_mult = clampf(_cam_dist_mult * 1.15, 0.1, 5.0)
+			_update_ground_and_camera()
+	elif ev is InputEventMouseMotion and _cam_drag:
+		var emm = ev as InputEventMouseMotion
+		var d = emm.position - _cam_last_pos
+		_cam_last_pos = emm.position
+		_cam_yaw -= d.x * 0.01
+		_cam_pitch += d.y * 0.01
+		_cam_pitch = clampf(_cam_pitch, -PI/2.0 + 0.1, PI/2.0 - 0.1)
+		_update_ground_and_camera()
 
 
 # ---------------------------------------------------------------------------
@@ -678,7 +747,7 @@ func _merged_settings() -> Dictionary:
 	return out
 
 
-func _apply_studio(mat: ShaderMaterial) -> void:
+func _apply_studio(mat: ShaderMaterial, species: String = "") -> void:
 	if mat == null:
 		return
 	mat.set_shader_parameter("use_drape", false)
@@ -686,6 +755,68 @@ func _apply_studio(mat: ShaderMaterial) -> void:
 	mat.set_shader_parameter("night_factor", 0.0)
 	mat.set_shader_parameter("haze_strength", 0.12)
 	mat.set_shader_parameter("drape_match_strength", 0.0)
+	# WYSIWYG seasonal state: on the map VegetationEnvironmentSync continuously
+	# drives these from the live clock (autumn tint, leaf drop, snow, spring bud).
+	# The studio is an isolated viewport with no env-sync, so without this it would
+	# always show a peak-summer full-green tree — which is why a tree tuned here
+	# looked nothing like the same tree placed under the map's current season.
+	# Fixed daylight (night_factor 0, STUDIO_SUN) is kept so the tuned look stays
+	# lit regardless of the in-world time of day.
+	mat.set_shader_parameter("autumn", float(_season_uniforms.get("autumn", 0.0)))
+	mat.set_shader_parameter("leaf_coverage", float(_season_uniforms.get("leaf_coverage", 1.0)))
+	mat.set_shader_parameter("spring_bud", float(_season_uniforms.get("spring_bud", 0.0)))
+	mat.set_shader_parameter("winter", float(_season_uniforms.get("winter", 0.0)))
+	mat.set_shader_parameter("summer", float(_season_uniforms.get("summer", 1.0)))
+	mat.set_shader_parameter("snow_amount", float(_season_uniforms.get("snow_amount", 0.0)))
+	mat.set_shader_parameter("snow_depth_m", float(_season_uniforms.get("snow_depth_m", 0.0)))
+	# Grass shader reads seasonal growth as "growth".
+	mat.set_shader_parameter("growth", float(_season_uniforms.get("grass_growth", 1.0)))
+	if not species.is_empty():
+		mat.set_shader_parameter("deciduousness", _deciduousness_for(species))
+
+
+## Mirrors VegetationEnvironmentSync._deciduousness_for so deciduous canopies shed
+## in autumn/winter in the preview exactly as they do on the map.
+func _deciduousness_for(species: String) -> float:
+	var s := species.to_lower()
+	if s.begins_with("pine") or s == "conifer" or s == "taiga":
+		return 0.0
+	if s.begins_with("deciduous") or s == "broadleaf" or s == "palm":
+		return 1.0
+	if s.begins_with("shrub"):
+		return 0.55
+	if s.begins_with("grass"):
+		return 0.0
+	return 0.8
+
+
+## Live seasonal/snow signals from the running map (group "main_scene"), matching
+## the uniforms VegetationEnvironmentSync pushes. Peak-summer defaults when no map
+## is running yet (e.g. the modal opened before a location loads).
+func _live_season_uniforms() -> Dictionary:
+	var out := {
+		"autumn": 0.0, "leaf_coverage": 1.0, "spring_bud": 0.0,
+		"winter": 0.0, "summer": 1.0, "snow_amount": 0.0, "snow_depth_m": 0.0,
+		"grass_growth": 1.0,
+	}
+	if not is_inside_tree():
+		return out
+	var main := get_tree().get_first_node_in_group("main_scene")
+	if main == null:
+		return out
+	if main.has_method("get_season_signals"):
+		var s: Dictionary = main.call("get_season_signals")
+		out["autumn"] = float(s.get("autumn", 0.0))
+		out["leaf_coverage"] = float(s.get("leaf_coverage", 1.0))
+		out["spring_bud"] = float(s.get("bud", 0.0))
+		out["winter"] = float(s.get("winter", 0.0))
+		out["summer"] = float(s.get("summer", 1.0))
+		out["grass_growth"] = float(s.get("grass_growth", 1.0))
+	if main.has_method("get_snow_amount"):
+		out["snow_amount"] = clampf(float(main.call("get_snow_amount")), 0.0, 1.0)
+	if main.has_method("get_snow_depth_m"):
+		out["snow_depth_m"] = float(main.call("get_snow_depth_m"))
+	return out
 
 
 func _base_spacing() -> float:
@@ -700,6 +831,8 @@ func _base_spacing() -> float:
 			return 6.0
 		"deciduous":
 			return 8.0
+		"mix":
+			return 6.5
 		_:
 			return 4.0
 
@@ -722,31 +855,64 @@ func _rebuild_preview() -> void:
 		return
 	for child in _veg_root.get_children():
 		child.queue_free()
+	_season_uniforms = _live_season_uniforms()
 	var settings := _merged_settings()
 	var spots: Array = _scatter_spots()
 	if spots.is_empty():
 		return
 	if _species in VegetationLayer.GRASS_SPECIES:
 		_build_grass_preview(spots, settings)
+	elif _species == "mix":
+		_build_mix_preview(spots, settings)
 	else:
-		_build_card_preview(spots, settings)
+		_build_species_cards(_species, spots, settings)
+
+
+## Studio preview of a mixed woodland: each spot is assigned pine/deciduous/shrub
+## by the mix ratio sliders, then drawn as one MultiMesh per constituent species.
+func _build_mix_preview(spots: Array, settings: Dictionary) -> void:
+	var weights := _mix_weight_dict()
+	if weights.is_empty():
+		weights = {"pine": 0.5, "deciduous": 0.5}
+	var rng := RandomNumberGenerator.new()
+	rng.seed = PREVIEW_SEED + 17
+	var by_species := {"pine": [], "deciduous": [], "shrub": []}
+	for item in spots:
+		if not (item is Dictionary):
+			continue
+		var sp := BiomePalette.pick_species(weights, rng)
+		if sp not in by_species:
+			sp = "deciduous"
+		(by_species[sp] as Array).append(item)
+	for sp in by_species:
+		if not (by_species[sp] as Array).is_empty():
+			_build_species_cards(str(sp), by_species[sp], settings)
 
 
 func _build_card_preview(spots: Array, settings: Dictionary) -> void:
+	_build_species_cards(_species, spots, settings)
+
+
+func _build_species_cards(species: String, spots: Array, settings: Dictionary) -> void:
 	VegetationCardFactory.clear_foot_cache()
-	var mesh := VegetationCardFactory.mesh_for_species(_species, settings)
-	var use_surface := VegetationCardFactory.mesh_has_surface_materials(_species)
+	var mesh: ArrayMesh
+	if VegetationCardFactory.canopy_lod_enabled(species, settings):
+		mesh = VegetationCardFactory.mesh_for_canopy_lod(species, settings, VegetationCardFactory.CanopyLodTier.NEAR)
+	else:
+		mesh = VegetationCardFactory.mesh_for_species(species, settings)
+	
+	var use_surface := VegetationCardFactory.mesh_has_surface_materials(species)
 	var mat: ShaderMaterial = null
 	if not use_surface:
-		mat = VegetationCardFactory.material_for_species(_species, settings)
-		_apply_studio(mat)
+		mat = VegetationCardFactory.material_for_species(species, settings)
+		_apply_studio(mat, species)
 	else:
 		for surf_i in mesh.get_surface_count():
 			var sm := mesh.surface_get_material(surf_i) as ShaderMaterial
-			_apply_studio(sm)
-	var species_scale := VegetationCardFactory.species_bulk_scale(_species, settings)
-	var foot_y := VegetationCardFactory.foot_local_y(_species, settings)
-	var vert_off := VegetationLayer.vertical_offset_for(_species, settings)
+			_apply_studio(sm, species)
+	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
+	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
+	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = mesh
@@ -767,7 +933,7 @@ func _build_card_preview(spots: Array, settings: Dictionary) -> void:
 	if i == 0:
 		return
 	var mi := MultiMeshInstance3D.new()
-	mi.name = "PreviewBulk"
+	mi.name = "PreviewBulk_%s" % species
 	mi.multimesh = mm
 	if not use_surface:
 		mi.material_override = mat
@@ -775,10 +941,21 @@ func _build_card_preview(spots: Array, settings: Dictionary) -> void:
 	_veg_root.add_child(mi)
 
 
+## Current mix ratios as a species-weight dict (drops zero weights).
+func _mix_weight_dict() -> Dictionary:
+	var out := {}
+	for i in MIX_KEYS.size():
+		var species := MIX_KEYS[i].trim_prefix("mix_")
+		var w := maxf(float(_values.get(MIX_KEYS[i], 0.0)), 0.0)
+		if w > 0.0:
+			out[species] = w
+	return out
+
+
 func _build_grass_preview(spots: Array, settings: Dictionary) -> void:
 	var mesh := GrassBuilder.mesh_for_lod(_species, settings, GrassBuilder.LodTier.NEAR)
 	var mat := GrassBuilder.material_for_species(_species, settings, GrassBuilder.LodTier.NEAR)
-	_apply_studio(mat)
+	_apply_studio(mat, _species)
 	var species_scale := GrassBuilder.bulk_scale(_species, settings)
 	var vert_off := VegetationLayer.vertical_offset_for(_species, settings)
 	var mm := MultiMesh.new()
@@ -838,6 +1015,9 @@ func _load_from_loader() -> void:
 		"pine": style.get("pine_albedo_tint", Color.WHITE),
 		"deciduous": style.get("deciduous_albedo_tint", Color.WHITE),
 		"shrub": style.get("shrub_albedo_tint", Color.WHITE),
+		# "mix" has no tint of its own — its trees use their own species tints;
+		# present only so the SPECIES_IDS-keyed baseline/apply loops don't miss it.
+		"mix": Color.WHITE,
 		"grass_lawn": style.get("grass_lawn_albedo_tint", Color.WHITE),
 		"grass_field": style.get("grass_field_albedo_tint", Color.WHITE),
 	}
@@ -858,13 +1038,11 @@ func _load_from_loader() -> void:
 
 
 func _sync_top_sliders() -> void:
-	if _density_slider != null:
-		_density_slider.value = _density
-	if _diameter_slider != null:
-		_diameter_slider.value = _patch_diameter
+	SliderSpinRowScript.set_values({"slider": _density_slider, "spin": _density_spin}, _density)
+	SliderSpinRowScript.set_values({"slider": _diameter_slider, "spin": _diameter_spin}, _patch_diameter)
 	for key in _shader_sliders:
 		if _values.has(key):
-			(_shader_sliders[key] as HSlider).value = float(_values[key])
+			SliderSpinRowScript.set_values(_shader_sliders[key], float(_values[key]))
 
 
 func _shape_dict() -> Dictionary:
@@ -890,6 +1068,9 @@ func _style_dict() -> Dictionary:
 		var tk := "%s_albedo_tint" % species
 		out[tk] = _tints.get(species, Color.WHITE)
 	out["osm_species_map"] = _osm_species_map.duplicate(true)
+	for key in MIX_KEYS:
+		if _values.has(key):
+			out[key] = _values[key]
 	# Density drives the auto (OSM) forest scatter density on Apply to map.
 	out["auto_density_scale"] = _density
 	return out
@@ -931,8 +1112,10 @@ func _apply_to_map() -> void:
 	VegetationStyleConfig.save_global(global_look)
 	if _dock != null and _dock.has_method("set_paint_density"):
 		_dock.call("set_paint_density", _density)
-	# Apply to map = one global look; clear any per-brush override so future
-	# painting matches the map (custom brush trees already placed keep their look).
+	# Apply to map = one authoritative global look. Clear the brush override so
+	# future painting matches the map; the loader also strips per-instance
+	# card_settings from already-placed trees (apply_vegetation_look) so EVERY tree
+	# of each type adopts this look, not just newly painted ones.
 	if _dock != null and _dock.has_method("set_brush_style"):
 		_dock.call("set_brush_style", {})
 	applied.emit()
@@ -964,8 +1147,12 @@ func _reset_values() -> void:
 
 
 func _on_species_selected(idx: int) -> void:
-	if idx >= 0 and idx < SPECIES_IDS.size():
-		_species = SPECIES_IDS[idx]
+	var sp: String = SPECIES_IDS[idx]
+	if sp == _species:
+		return
+	_species = sp
+	_last_species = sp
+	_sync_tint_picker()
 	_rebuild_species_section()
 	_refresh_preset_dropdown()
 	if _preset_name_edit != null:
@@ -1002,5 +1189,7 @@ func _set_species_from_preset(preset: int) -> void:
 			_species = "grass_lawn"
 		VegetationPaint.Preset.GRASS_FIELD:
 			_species = "grass_field"
+		VegetationPaint.Preset.MIX:
+			_species = "mix"
 		_:
 			_species = "shrub"

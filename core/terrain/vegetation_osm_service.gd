@@ -12,7 +12,7 @@ signal vegetation_progress(message: String)
 
 const OVERPASS_URL := "https://overpass-api.de/api/interpreter"
 const CACHE_DIR := "user://terrain_cache/osm_vegetation"
-const CACHE_VERSION := "v5"
+const CACHE_VERSION := "v6"
 const ATTRIBUTION := "© OpenStreetMap contributors"
 const REQUEST_TIMEOUT := 90.0
 const MAX_RETRIES := 3
@@ -208,8 +208,13 @@ static func _serialize_payload(payload: Dictionary) -> Dictionary:
 	var pts: Array = []
 	for t in payload.get("tree_points", []):
 		if t is Dictionary:
-			var pos: Vector2 = (t as Dictionary).get("pos", Vector2.ZERO)
-			pts.append([pos.x, pos.y, float((t as Dictionary).get("height_m", 0.0))])
+			var d: Dictionary = t
+			var pos: Vector2 = d.get("pos", Vector2.ZERO)
+			var entry: Array = [pos.x, pos.y, float(d.get("height_m", 0.0))]
+			var tags: Dictionary = d.get("tags", {})
+			if not tags.is_empty():
+				entry.append(tags)
+			pts.append(entry)
 	# Hedge rows are a full scatter phase in AutoVegetationGenerator; omitting them
 	# here dropped every hedge on cached reloads (fresh fetch had them, cache did not).
 	var hedges: Array = []
@@ -243,6 +248,16 @@ static func _deser_points(arr: Variant) -> PackedVector2Array:
 	return pts
 
 
+static func _deser_vec2(v: Variant) -> Vector2:
+	if v is Vector2:
+		return v
+	if v is Array and (v as Array).size() >= 2:
+		return Vector2(
+			TerrainBuilder.variant_to_float(v[0]),
+			TerrainBuilder.variant_to_float(v[1]))
+	return Vector2.ZERO
+
+
 static func deserialize_payload(raw: Dictionary) -> Dictionary:
 	var polys: Array = []
 	for p in raw.get("polygons", []):
@@ -263,13 +278,24 @@ static func deserialize_payload(raw: Dictionary) -> Dictionary:
 			})
 	var pts: Array = []
 	for t in raw.get("tree_points", []):
-		if t is Array and (t as Array).size() >= 2:
+		if t is Dictionary:
+			var d: Dictionary = t
+			pts.append({
+				"pos": _deser_vec2(d.get("pos", Vector2.ZERO)),
+				"height_m": float(d.get("height_m", 0.0)),
+				"tags": d.get("tags", {}),
+			})
+		elif t is Array and (t as Array).size() >= 2:
+			var arr: Array = t
 			var h := 0.0
-			if (t as Array).size() >= 3:
-				h = TerrainBuilder.variant_to_float(t[2])
+			if arr.size() >= 3:
+				h = TerrainBuilder.variant_to_float(arr[2])
+			var tags: Dictionary = {}
+			if arr.size() >= 4 and arr[3] is Dictionary:
+				tags = arr[3]
 			pts.append({"pos": Vector2(
-				TerrainBuilder.variant_to_float(t[0]),
-				TerrainBuilder.variant_to_float(t[1])), "height_m": h})
+				TerrainBuilder.variant_to_float(arr[0]),
+				TerrainBuilder.variant_to_float(arr[1])), "height_m": h, "tags": tags})
 	var hedges: Array = []
 	for r in raw.get("hedge_rows", []):
 		if r is Dictionary:
@@ -305,6 +331,7 @@ static func _parse_overpass(doc: Dictionary, center_lat: float, center_lon: floa
 						"pos": GeoMath.lonlat_to_local_m(
 							float(e["lat"]), float(e["lon"]), center_lat, center_lon),
 						"height_m": _height_tag(ntags),
+						"tags": ntags,
 					})
 			"way":
 				ways_by_id[int(e["id"])] = e
@@ -452,8 +479,31 @@ static func _veg_kind(tags: Dictionary) -> String:
 static func _height_tag(tags: Dictionary) -> float:
 	if not tags.has("height"):
 		return 0.0
-	var raw := str(tags["height"]).strip_edges().to_lower().replace("m", "").strip_edges()
-	return maxf(raw.to_float(), 0.0)
+	return parse_height_m(str(tags["height"]))
+
+
+## Parse an OSM height value ("30", "30 m", "90 ft", "25'", "250 cm") to meters.
+## OSM's convention is meters when no unit is given; feet appear in US-mapped
+## data — the old parser stripped only "m", so "90 ft" read as 90 meters.
+## Unparseable input returns 0 (caller treats as "no tag").
+static func parse_height_m(raw_value: String) -> float:
+	var raw := raw_value.strip_edges().to_lower().replace(",", ".")
+	if raw.is_empty():
+		return 0.0
+	var factor := 1.0
+	if raw.ends_with("ft") or raw.ends_with("feet") or raw.ends_with("'"):
+		factor = 0.3048
+	elif raw.ends_with("in") or raw.ends_with("\""):
+		factor = 0.0254
+	elif raw.ends_with("cm"):
+		factor = 0.01
+	var num := ""
+	for ch in raw:
+		if (ch >= "0" and ch <= "9") or ch == "." or ch == "-":
+			num += ch
+		elif not num.is_empty():
+			break
+	return maxf(num.to_float() * factor, 0.0)
 
 
 static func _way_to_local_poly(way: Dictionary, nodes: Dictionary,

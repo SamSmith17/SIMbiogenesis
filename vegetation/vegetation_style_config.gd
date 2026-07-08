@@ -27,6 +27,12 @@ static func defaults() -> Dictionary:
 		"pine_fur_lod_enabled": true,
 		"pine_lod_near_m": 200.0,
 		"pine_lod_far_begin_m": 190.0,
+		# Auto (OSM-scattered) forests are viewed from the drone across ~3 km, so the
+		# short manual near/far reach above drops them to the leafless FAR billboard
+		# tier at typical altitudes. These auto-only overrides keep the leaf/fur NEAR
+		# tier alive much farther out; the manual painted-tree reach is untouched.
+		"pine_auto_lod_near_m": 300.0,
+		"pine_auto_lod_far_begin_m": 280.0,
 		"pine_fur_strength": 0.38,
 		"pine_fur_cells": 20.0,
 		"pine_fur_tuft_size": 0.58,
@@ -36,40 +42,51 @@ static func defaults() -> Dictionary:
 		"pine_whorl_band_h": 0.62,
 		"pine_cone_sharpness": 0.42,
 		"pine_canopy_roundness": 0.52,
-		"deciduous_trunk_taper": 0.42,
-		"deciduous_albedo_tint": Color(1.0, 1.0, 1.0),
+		# Deciduous defaults = the player's tuned "2" preset (see also
+		# VegetationLayer.default_settings, which must mirror the shape keys). This is
+		# the default deciduous tree every fresh map inherits.
+		"deciduous_trunk_taper": 0.7,
+		"deciduous_albedo_tint": Color(0.0435791, 0.19921875, 0.075193405),
 		"deciduous_highlight_tint": Color(0.42, 0.52, 0.16),
-		"deciduous_bulk_scale": 1.35,
-		"deciduous_canopy_w": 11.0,
-		"deciduous_canopy_h": 4.5,
-		"deciduous_trunk_w": 0.45,
-		"deciduous_trunk_h": 4.5,
-		"deciduous_vertical_offset_m": 0.0,
-		"deciduous_cluster_count": 8,
-		"deciduous_cluster_spread": 1.0,
+		"deciduous_bulk_scale": 1.6,
+		"deciduous_canopy_w": 12.05,
+		"deciduous_canopy_h": 4.35,
+		"deciduous_trunk_w": 1.31,
+		"deciduous_trunk_h": 4.25,
+		"deciduous_vertical_offset_m": -2.0,
+		"deciduous_cluster_count": 10.05,
+		"deciduous_cluster_spread": 0.67,
 		"deciduous_cluster_size": 1.0,
-		"deciduous_cluster_tightness": 1.0,
-		"deciduous_branch_count": 4,
-		"deciduous_branch_thickness": 1.0,
-		"deciduous_branch_reach": 1.0,
-		"deciduous_branch_base": 0.82,
-		"deciduous_branch_levels": 4,
-		"deciduous_branch_split": 3,
+		"deciduous_cluster_tightness": 1.12,
+		"deciduous_branch_count": 9.55,
+		"deciduous_branch_thickness": 0.64,
+		"deciduous_branch_reach": 0.89,
+		"deciduous_branch_base": 0.71,
+		"deciduous_branch_levels": 2.15,
+		"deciduous_branch_split": 2.65,
 		"deciduous_branch_angle": 38.0,
-		"deciduous_branch_length_ratio": 0.72,
+		"deciduous_branch_length_ratio": 0.62,
 		"deciduous_branch_droop": 0.12,
-		"deciduous_branch_gnarl": 0.22,
-		"deciduous_growth_years": 16.0,
+		"deciduous_branch_gnarl": 0.21,
+		"deciduous_growth_years": 9.85,
 		"deciduous_leaf_shells_enabled": true,
 		"deciduous_leaf_lod_enabled": true,
-		"deciduous_lod_near_m": 200.0,
-		"deciduous_lod_far_begin_m": 190.0,
-		"deciduous_leaf_shell_count": 4,
-		"deciduous_leaf_density": 22.0,
-		"deciduous_leaf_size": 0.85,
-		"deciduous_leaf_aspect": 1.9,
-		"deciduous_leaf_gap": 0.30,
-		"deciduous_leaf_lump": 0.18,
+		"deciduous_lod_near_m": 99.7,
+		"deciduous_lod_far_begin_m": 92.15,
+		# Auto-only leaf-shell reach (see pine_auto_lod_* above for the rationale):
+		# keeps OSM-scattered deciduous forests in the leaf-shell NEAR tier at drone
+		# distances instead of the leafless FAR billboard. Manual reach stays at 99.7.
+		"deciduous_auto_lod_near_m": 300.0,
+		"deciduous_auto_lod_far_begin_m": 280.0,
+		"deciduous_billboard_y_offset": -1.11,
+		# Denser default canopy: fewer but BIGGER leaves with minimal gaps + more
+		# shells read as solid foliage instead of the old speckled/see-through rind.
+		"deciduous_leaf_shell_count": 7.0,
+		"deciduous_leaf_density": 15.0,
+		"deciduous_leaf_size": 0.95,
+		"deciduous_leaf_aspect": 1.5,
+		"deciduous_leaf_gap": 0.08,
+		"deciduous_leaf_lump": 0.39,
 		"deciduous_shadow_proxy_enabled": true,
 		"deciduous_shadow_proxy_scale": 1.06,
 		"deciduous_shadow_proxy_visibility": 0.04,
@@ -86,11 +103,11 @@ static func defaults() -> Dictionary:
 		"grass_lawn_albedo_tint": Color(1.0, 1.0, 1.0),
 		"grass_lawn_highlight_tint": Color(0.22, 0.62, 0.16),
 		"grass_lawn_bulk_scale": 1.0,
-		"grass_lawn_card_w": 0.45,
+		"grass_lawn_card_w": 0.8,
 		"grass_lawn_card_h": 0.12,
 		"grass_lawn_vertical_offset_m": 0.0,
-		"grass_lawn_cells_per_side": 10.0,
-		"grass_lawn_height_variation": 0.12,
+		"grass_lawn_cells_per_side": 18.0,
+		"grass_lawn_height_variation": 0.02,
 		"grass_lawn_blade_thickness": 0.55,
 		"grass_lawn_blade_lean": 0.10,
 		"grass_lawn_hue_jitter": 0.02,
@@ -107,6 +124,10 @@ static func defaults() -> Dictionary:
 		"grass_field_blade_lean": 0.22,
 		"grass_field_hue_jitter": 0.06,
 		"grass_field_growth_years": 0.0,
+		# Single Tune-look knob for how far OSM-scattered forests keep their leaf/fur
+		# NEAR tier (see *_auto_lod_* above). Higher = leaves persist farther (nicer
+		# from the drone) at more vertex cost; lower = billboards sooner (cheaper).
+		"auto_foliage_lod_reach_m": 300.0,
 		"wind_strength": 0.03,
 		"wind_speed": 0.7,
 		"dither_strength": 1.0,
@@ -127,6 +148,12 @@ static func defaults() -> Dictionary:
 		"bark_roughness": 0.98,
 		"bark_ao_strength": 0.28,
 		"bark_color_jitter": 0.06,
+		"bud_color": Color(0.55, 0.78, 0.24),
+		"autumn_warm": Color(0.96, 0.78, 0.12),
+		"autumn_orange": Color(0.93, 0.45, 0.06),
+		"autumn_hot": Color(0.80, 0.13, 0.04),
+		"grass_summer_color": Color(0.68, 0.65, 0.22),
+		"grass_fall_color": Color(0.52, 0.44, 0.18),
 		"haze_sync": true,
 		"building_exclusion_m": 3.0,
 		"road_exclusion_m": 2.5,
@@ -146,6 +173,20 @@ static func defaults() -> Dictionary:
 		"slope_max_deg": 25.0,
 		"auto_density_scale": 1.0,
 		"osm_species_map": {},
+		# Mixed-woodland composition (Tune Look "Mixed woodland" type) used by any
+		# OSM kind bound to "Mixed pine + deciduous".
+		"mix_pine": 0.45,
+		"mix_deciduous": 0.45,
+		"mix_shrub": 0.10,
+		# Mapped meadow/lawn polygons veto tree scatter from overlapping OSM
+		# areas (a wood drawn over a meadow must not forest it).
+		"open_areas_exclude_trees": true,
+		# FAR grass LOD cull distance. 380 m (GrassBuilder default) was tuned
+		# for camp scale; OSM meadows a few hundred metres out need more reach.
+		"grass_visibility_end_m": 520.0,
+		# Dense 3D grass is only generated within this radius of spawn (auto veg
+		# only — the budget can't grass a whole 3-km site at close-up density).
+		"grass_detail_radius_m": 500.0,
 	}
 
 
