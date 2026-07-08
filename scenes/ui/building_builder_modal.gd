@@ -18,6 +18,12 @@ const ROOF_SHAPE_IDS: Array[String] = [
 const ROOF_SHAPE_LABELS: Array[String] = [
 	"Auto (OSM/default)", "Flat", "Gabled", "Hipped", "Pyramidal", "Skillion"]
 
+## Wall material dropdown: index 0 = auto (tags/size heuristic), index i>0 =
+## BuildingBuilder.WallMode i−1. Order must match the WallMode enum.
+const WALL_MODE_LABELS: Array[String] = [
+	"Auto (tags/size)", "Lap siding", "Trailer (ribbed metal)",
+	"Corrugated steel", "Plywood / T1-11", "Stucco / block"]
+
 var _loader: Node = null
 var _active := false
 var _building_idx := -1
@@ -38,6 +44,11 @@ var _height_slider: HSlider = null
 var _offset_slider: HSlider = null
 var _wall_picker: ColorPickerButton = null
 var _roof_picker: ColorPickerButton = null
+var _wall_mode_opt: OptionButton = null
+var _facade_tex_opt: OptionButton = null
+var _facade_files: PackedStringArray = PackedStringArray()
+var _tex_w_spin: SpinBox = null
+var _tex_h_spin: SpinBox = null
 var _prov_label: Label = null
 var _title_label: Label = null
 var _kind_opt: OptionButton = null
@@ -46,6 +57,9 @@ var _elem_spins: Dictionary = {}   # "u_m"/"v_m"/"w_m"/"h_m" -> SpinBox
 var _elem_delete: Button = null
 var _selected_elem := -1
 var _tabs: TabContainer = null
+var _ref_list: VBoxContainer = null
+var _ref_status: Label = null
+var _ref_thumbs: Dictionary = {}   # photo id -> TextureRect awaiting thumb_ready
 var _lib_list: ItemList = null
 var _lib_models: Array = []
 var _lib_replace_btn: Button = null
@@ -320,6 +334,44 @@ func _build_ui() -> void:
 		_working_style["roof_color"] = c
 		_queue_rebuild())
 
+	var mat_row := HBoxContainer.new()
+	side.add_child(mat_row)
+	var mat_lbl := Label.new()
+	mat_lbl.text = "Material"
+	mat_lbl.custom_minimum_size = Vector2(90, 0)
+	mat_row.add_child(mat_lbl)
+	_wall_mode_opt = OptionButton.new()
+	_wall_mode_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for i in WALL_MODE_LABELS.size():
+		_wall_mode_opt.add_item(WALL_MODE_LABELS[i], i)
+	_wall_mode_opt.item_selected.connect(_on_wall_mode_selected)
+	mat_row.add_child(_wall_mode_opt)
+
+	# Facade texture (hero buildings): PNG/JPG strips from
+	# user://maps/facade_textures/ tiled at real-world size on the walls.
+	var ftex_row := HBoxContainer.new()
+	side.add_child(ftex_row)
+	var ftex_lbl := Label.new()
+	ftex_lbl.text = "Facade tex"
+	ftex_lbl.custom_minimum_size = Vector2(90, 0)
+	ftex_row.add_child(ftex_lbl)
+	_facade_tex_opt = OptionButton.new()
+	_facade_tex_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_facade_tex_opt.item_selected.connect(_on_facade_tex_selected)
+	ftex_row.add_child(_facade_tex_opt)
+
+	var tsize := GridContainer.new()
+	tsize.columns = 2
+	side.add_child(tsize)
+	_tex_w_spin = _plain_spin(tsize, "Tile W m", 0.5, 50.0, 4.0,
+		func(v: float) -> void:
+			_working_style["wall_tex_w_m"] = v
+			_queue_rebuild())
+	_tex_h_spin = _plain_spin(tsize, "Tile H m", 0.5, 50.0, 3.0,
+		func(v: float) -> void:
+			_working_style["wall_tex_h_m"] = v
+			_queue_rebuild())
+
 	side.add_child(HSeparator.new())
 
 	# Details: click a wall in the preview to add a door/window. Elements on a
@@ -408,6 +460,25 @@ func _labeled_slider(parent: Control, label: String, minv: float, maxv: float,
 		if not _syncing:
 			on_change.call(v))
 	return slider
+
+
+## Labeled SpinBox with its own change callback (no element-nudge coupling).
+func _plain_spin(grid: GridContainer, label: String, minv: float, maxv: float,
+		value: float, on_change: Callable) -> SpinBox:
+	var lbl := Label.new()
+	lbl.text = label
+	grid.add_child(lbl)
+	var spin := SpinBox.new()
+	spin.min_value = minv
+	spin.max_value = maxv
+	spin.step = 0.05
+	spin.value = value
+	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_child(spin)
+	spin.value_changed.connect(func(v: float) -> void:
+		if not _syncing:
+			on_change.call(v))
+	return spin
 
 
 func _nudge_spin(grid: GridContainer, label: String, minv: float, maxv: float) -> SpinBox:
@@ -530,8 +601,27 @@ func _rebuild_preview() -> void:
 	var mi := BuildingBuilder.build_single_building(
 		_record, _working_style, flat, 2, STUDIO_EXTENT_M, 0.0)
 	if mi != null:
+		_apply_facade_texture_preview(mi)
 		_holder.add_child(mi)
 	_fit_camera()
+
+
+## Mirror the loader's styled-wall texture application in the studio so the
+## Facade texture dropdown previews live (world path: terrain_loader
+## _apply_styled_wall_material — same style keys).
+func _apply_facade_texture_preview(mi: MeshInstance3D) -> void:
+	var file := str(_working_style.get("wall_texture", ""))
+	if file.is_empty() or _loader == null:
+		return
+	if not _loader.has_method("_facade_texture"):
+		return
+	var tex: Texture2D = _loader.call("_facade_texture", file)
+	if tex == null:
+		return
+	var size := Vector2(
+		clampf(float(_working_style.get("wall_tex_w_m", 4.0)), 0.5, 50.0),
+		clampf(float(_working_style.get("wall_tex_h_m", 3.0)), 0.5, 50.0))
+	mi.set_surface_override_material(0, BuildingBuilder.make_wall_material(tex, size))
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +642,14 @@ func _sync_controls_from_style() -> void:
 	_offset_slider.value = float(params["base_offset_m"])
 	_wall_picker.color = colors["wall"]
 	_roof_picker.color = colors["roof"]
+	var wm := int(_working_style.get("wall_mode", BuildingBuilder.WALL_MODE_AUTO))
+	_wall_mode_opt.select(clampi(wm + 1, 0, WALL_MODE_LABELS.size() - 1))
+	_refresh_facade_tex_options()
+	var cur_tex := str(_working_style.get("wall_texture", ""))
+	var tex_idx := _facade_files.find(cur_tex)
+	_facade_tex_opt.select(tex_idx + 1 if tex_idx >= 0 else 0)
+	_tex_w_spin.value = float(_working_style.get("wall_tex_w_m", 4.0))
+	_tex_h_spin.value = float(_working_style.get("wall_tex_h_m", 3.0))
 
 	var src := str(roof.get("source", "default"))
 	var src_txt := "OSM tag" if src == "osm" else ("your override" if src == "user" else "default")
@@ -559,6 +657,38 @@ func _sync_controls_from_style() -> void:
 	var tags: Dictionary = _record.get("tags", {})
 	_title_label.text = "Building Builder — %s" % str(tags.get("building", "building"))
 	_syncing = false
+
+
+func _refresh_facade_tex_options() -> void:
+	if _facade_tex_opt == null:
+		return
+	_facade_files = PackedStringArray()
+	if _loader != null and _loader.has_method("list_facade_textures"):
+		_facade_files = _loader.call("list_facade_textures")
+	_facade_tex_opt.clear()
+	_facade_tex_opt.add_item("None (procedural)", 0)
+	for i in _facade_files.size():
+		_facade_tex_opt.add_item(_facade_files[i], i + 1)
+
+
+func _on_facade_tex_selected(index: int) -> void:
+	if _syncing:
+		return
+	if index <= 0 or index > _facade_files.size():
+		_working_style.erase("wall_texture")
+	else:
+		_working_style["wall_texture"] = _facade_files[index - 1]
+	_queue_rebuild()
+
+
+func _on_wall_mode_selected(index: int) -> void:
+	if _syncing:
+		return
+	if index <= 0:
+		_working_style.erase("wall_mode")
+	else:
+		_working_style["wall_mode"] = index - 1
+	_queue_rebuild()
 
 
 func _on_shape_selected(index: int) -> void:
@@ -626,6 +756,156 @@ func _build_library_tab() -> void:
 	_lib_replace_btn.pressed.connect(_on_library_replace)
 	lib.add_child(_lib_replace_btn)
 
+	_build_reference_tab()
+
+
+## Reference tab: nearby real Mapillary street photos of the focused building
+## (CC BY-SA, attributed) so styles can be matched to reality. Left-click a
+## photo = eyedrop wall color, right-click = roof color.
+func _build_reference_tab() -> void:
+	var tab := VBoxContainer.new()
+	tab.name = "Reference"
+	tab.add_theme_constant_override("separation", 6)
+	_tabs.add_child(tab)
+
+	_ref_status = Label.new()
+	_ref_status.add_theme_font_size_override("font_size", 12)
+	_ref_status.modulate = Color(0.7, 0.8, 0.9)
+	_ref_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tab.add_child(_ref_status)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tab.add_child(scroll)
+	_ref_list = VBoxContainer.new()
+	_ref_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ref_list.add_theme_constant_override("separation", 8)
+	scroll.add_child(_ref_list)
+
+	var attr := Label.new()
+	var svc := get_node_or_null("/root/MapillaryService")
+	attr.text = svc.attribution() if svc != null else "Photos © Mapillary contributors, CC BY-SA 4.0"
+	attr.add_theme_font_size_override("font_size", 10)
+	attr.modulate = Color(0.6, 0.65, 0.7)
+	tab.add_child(attr)
+
+	if svc != null:
+		svc.thumb_ready.connect(_on_ref_thumb_ready)
+		svc.photo_index_ready.connect(func(_tag: String, _photos: Array) -> void:
+			if _active and _tabs.current_tab == 2:
+				_refresh_reference())
+
+
+func _refresh_reference() -> void:
+	if _ref_list == null:
+		return
+	for child in _ref_list.get_children():
+		child.queue_free()
+	_ref_thumbs.clear()
+	var svc := get_node_or_null("/root/MapillaryService")
+	if svc == null:
+		_ref_status.text = "MapillaryService unavailable."
+		return
+	if not svc.is_configured():
+		_ref_status.text = "No Mapillary token. Add to user://terrain_config.cfg:\n[mapillary]\naccess_token=MLY|…\n(free token: mapillary.com/developer)"
+		return
+	# Centroid of the ORIGINAL (world-local) footprint — _record is re-centered
+	# for the studio, so pull the raw record for position.
+	var rec: Dictionary = {}
+	if _loader != null and _loader.has_method("get_building_record") and _building_idx >= 0:
+		rec = _loader.call("get_building_record", _building_idx)
+	var pts: Variant = rec.get("points", PackedVector2Array())
+	if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 3:
+		_ref_status.text = "Open a building to see nearby street photos."
+		return
+	var centroid := Vector2.ZERO
+	for p in (pts as PackedVector2Array):
+		centroid += p
+	centroid /= float((pts as PackedVector2Array).size())
+	if svc.photo_count() == 0:
+		_ref_status.text = "Loading photo index …"
+		var lat := float(_loader.get("_lat")) if _loader != null else 0.0
+		var lon := float(_loader.get("_lon")) if _loader != null else 0.0
+		if lat != 0.0 or lon != 0.0:
+			svc.request_photo_index(lat, lon, 1500.0, "site")
+		return
+	var near: Array = svc.photos_near(centroid.x, centroid.y, 150.0)
+	if near.is_empty():
+		_ref_status.text = "No street photos within 150 m of this building."
+		return
+	_ref_status.text = "%d street photo(s) nearby — click: wall color, right-click: roof color" % mini(near.size(), 6)
+	for i in mini(near.size(), 6):
+		var photo: Dictionary = near[i]
+		var id := str(photo.get("id", ""))
+		var card := VBoxContainer.new()
+		_ref_list.add_child(card)
+		var tex_rect := TextureRect.new()
+		tex_rect.custom_minimum_size = Vector2(300, 170)
+		tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tex_rect.gui_input.connect(_on_ref_thumb_input.bind(tex_rect))
+		card.add_child(tex_rect)
+		_ref_thumbs[id] = tex_rect
+		var cap := HBoxContainer.new()
+		card.add_child(cap)
+		var lbl := Label.new()
+		lbl.text = "%.0f m %s" % [float(photo.get("dist_m", 0.0)),
+			_bearing_label(centroid, Vector2(float(photo.get("x_m", 0.0)),
+				float(photo.get("z_m", 0.0))))]
+		lbl.add_theme_font_size_override("font_size", 11)
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cap.add_child(lbl)
+		var open_btn := Button.new()
+		open_btn.text = "Open"
+		open_btn.add_theme_font_size_override("font_size", 11)
+		open_btn.pressed.connect(func() -> void:
+			OS.shell_open("https://www.mapillary.com/app/?pKey=%s&focus=photo" % id))
+		cap.add_child(open_btn)
+		svc.request_thumb(id, str(photo.get("thumb_url", "")))
+
+
+func _on_ref_thumb_ready(id: String, tex: ImageTexture) -> void:
+	var tr: TextureRect = _ref_thumbs.get(id)
+	if tr != null and is_instance_valid(tr):
+		tr.texture = tex
+
+
+## Eyedropper: sample the clicked pixel of a reference photo into the wall
+## (left) or roof (right) color style.
+func _on_ref_thumb_input(event: InputEvent, tex_rect: TextureRect) -> void:
+	if not (event is InputEventMouseButton) or not event.pressed:
+		return
+	var mb := event as InputEventMouseButton
+	if mb.button_index != MOUSE_BUTTON_LEFT and mb.button_index != MOUSE_BUTTON_RIGHT:
+		return
+	if tex_rect.texture == null:
+		return
+	var img := tex_rect.texture.get_image()
+	if img == null:
+		return
+	var size := tex_rect.size
+	var px := Vector2i(clampi(int(mb.position.x / maxf(size.x, 1.0) * img.get_width()),
+		0, img.get_width() - 1),
+		clampi(int(mb.position.y / maxf(size.y, 1.0) * img.get_height()),
+		0, img.get_height() - 1))
+	var c := img.get_pixelv(px)
+	c.a = 1.0
+	if mb.button_index == MOUSE_BUTTON_LEFT:
+		_working_style["wall_color"] = c
+		_wall_picker.color = c
+	else:
+		_working_style["roof_color"] = c
+		_roof_picker.color = c
+	_queue_rebuild()
+
+
+static func _bearing_label(from: Vector2, to: Vector2) -> String:
+	# +X east, −Z north (see GeoMath.lonlat_to_local_m).
+	var ang := rad_to_deg(atan2(to.x - from.x, -(to.y - from.y)))
+	ang = fmod(ang + 360.0, 360.0)
+	var dirs := ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+	return dirs[int(round(ang / 45.0)) % 8]
+
 
 func _on_tab_changed(tab: int) -> void:
 	if not _active:
@@ -633,6 +913,8 @@ func _on_tab_changed(tab: int) -> void:
 	if tab == 1:
 		_refresh_library()
 		_preview_library_model()
+	elif tab == 2:
+		_refresh_reference()
 	else:
 		_fit_camera()
 		_queue_rebuild(true)

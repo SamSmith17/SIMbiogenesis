@@ -41,6 +41,28 @@ const DEFAULT_GABLED_ANGLE_DEG := 28.0
 const GABLED_YES_MAX_AREA_M2 := 350.0
 const GABLED_YES_MIN_ASPECT := 1.2
 
+## Procedural wall material modes — building_wall.gdshader branches on
+## floor(UV2.x) of the wall surface. LAP (0) is the original lap-board path and
+## must stay visually identical: meshes with no UV2 read (0,0) and land there.
+enum WallMode { LAP = 0, TRAILER = 1, CORRUGATED = 2, PLYWOOD = 3, STUCCO = 4 }
+## style["wall_mode"] value meaning "derive from tags/heuristics".
+const WALL_MODE_AUTO := -1
+## Footprints under this area read as trailer-town stock (mobile homes, plywood
+## shacks) — the Bombay Beach case, where OSM has zero material tags and 336
+## `building=house` ways are mostly ~40–60 m² trailers.
+const SMALL_FOOTPRINT_M2 := 80.0
+
+## Roof geo-UVs (UV2): every roof vertex carries the footprint's plan position
+## normalized against the central "hyper" ortho square (TerrainLoader's
+## HYPER_HALF_EXTENT references THIS const — one canonical value) so the roof
+## shader can sample the real aerial photo geo-registered: UV2 (0,0) = NW corner
+## of the patch (x=−500, z=−500; image row 0 = north, matching
+## TerrainBuilder.build_mesh's drape UVs), (1,1) = SE. Buildings outside the
+## patch get UV2 outside 0..1 and the shader falls back to procedural. Because
+## UV2 is normalized against this fixed constant, meshes never rebuild when
+## imagery arrives late.
+const ORTHO_HALF_EXTENT_M := 500.0
+
 ## Facade elements (doors/windows): flat quads slightly proud of the wall.
 const FACADE_PROUD_M := 0.04
 const FACADE_FRAME_PROUD_M := 0.08
@@ -302,11 +324,15 @@ static func resolve_building_params(d: Dictionary, style: Dictionary) -> Diction
 			TerrainBuilder.dict_float(style, "roof_pitch_deg", 30.0), 5.0, 60.0)
 		roof["roof_height_m"] = 0.0
 		roof["source"] = "user"
-	var colors := resolve_building_colors(tags, building_tag(poly))
+	var stable_tag := building_tag(poly)
+	var colors := resolve_building_colors(tags, stable_tag)
 	if style.has("wall_color"):
 		colors["wall"] = style_color(style["wall_color"], colors["wall"])
 	if style.has("roof_color"):
 		colors["roof"] = style_color(style["roof_color"], colors["roof"])
+	var wall_mode := resolve_wall_mode(tags, poly)
+	if style.has("wall_mode") and int(style["wall_mode"]) >= 0:
+		wall_mode = clampi(int(style["wall_mode"]), WallMode.LAP, WallMode.STUCCO)
 	return {
 		"poly": poly,
 		"height_m": height_m,
@@ -315,7 +341,47 @@ static func resolve_building_params(d: Dictionary, style: Dictionary) -> Diction
 		"base_offset_m": clampf(
 			TerrainBuilder.dict_float(style, "base_y_offset_m", 0.0), -5.0, 5.0),
 		"elements": style.get("elements", []),
+		"wall_mode": wall_mode,
+		"wall_seed": float(stable_tag.hash() % 1024) / 1024.0,
 	}
+
+
+## Wall material mode for a building. OSM material/type tags win; with no tags
+## (rural US OSM rarely has them) footprint size does the sorting: sub-80 m²
+## reads as trailer-town stock, full-size houses stay lap siding with occasional
+## plywood/stucco, commercial boxes go corrugated/stucco. Deterministic per
+## building (hashed from the stable centroid tag).
+static func resolve_wall_mode(tags: Dictionary, poly: PackedVector2Array) -> int:
+	var mat := str(tags.get("building:material", "")).to_lower()
+	if mat.contains("metal") or mat.contains("corrugated") or mat.contains("tin") \
+			or mat.contains("steel"):
+		return WallMode.CORRUGATED
+	if mat.contains("wood") or mat.contains("plywood") or mat.contains("timber"):
+		return WallMode.PLYWOOD
+	if mat.contains("concrete") or mat.contains("brick") or mat.contains("stucco") \
+			or mat.contains("cement") or mat.contains("plaster") or mat.contains("masonry"):
+		return WallMode.STUCCO
+	var btype := str(tags.get("building", "")).to_lower()
+	if btype == "static_caravan" or btype == "caravan":
+		return WallMode.TRAILER
+	var h := building_tag(poly).hash()
+	if btype == "shed" or btype == "hut" or btype == "cabin":
+		return WallMode.PLYWOOD if h % 3 != 0 else WallMode.CORRUGATED
+	if FLAT_TYPES.has(btype):
+		return WallMode.CORRUGATED if h % 2 == 0 else WallMode.STUCCO
+	if footprint_area_m2(poly) < SMALL_FOOTPRINT_M2:
+		var pick := h % 10
+		if pick < 5:
+			return WallMode.TRAILER
+		if pick < 8:
+			return WallMode.PLYWOOD
+		return WallMode.CORRUGATED
+	var pick2 := h % 10
+	if pick2 < 7:
+		return WallMode.LAP
+	if pick2 < 9:
+		return WallMode.PLYWOOD
+	return WallMode.STUCCO
 
 
 ## Style colors may be Color values, [r,g,b(,a)] JSON arrays, or CSS strings.
@@ -368,9 +434,16 @@ const ROOF_SHADER := preload("res://core/terrain/building_roof.gdshader")
 ## Procedural lap-siding walls; per-building tint arrives in vertex COLOR.
 ## Shared instance semantics: each call returns a fresh material so callers
 ## (world mesh vs Building Builder studio) can tweak uniforms independently.
-static func make_wall_material() -> Material:
+## Optional wall_tex (styled hero buildings): a real/AI facade strip tiled in
+## metric wall UVs — wall_tex_size_m = the metres one tile covers.
+static func make_wall_material(wall_tex: Texture2D = null,
+		wall_tex_size_m: Vector2 = Vector2(4.0, 3.0)) -> Material:
 	var mat := ShaderMaterial.new()
 	mat.shader = WALL_SHADER
+	if wall_tex != null:
+		mat.set_shader_parameter("use_wall_tex", true)
+		mat.set_shader_parameter("wall_tex", wall_tex)
+		mat.set_shader_parameter("wall_tex_size_m", wall_tex_size_m)
 	return mat
 
 
@@ -444,7 +517,8 @@ static func build_buildings_node(buildings: Array, elev: PackedFloat32Array, res
 		if _append_footprint(st_walls, st_roof, poly, params["height_m"],
 				params["roof"], params["colors"], elev, res,
 				height_extent_m, center_elev,
-				detail_elev, detail_cols, detail_rows, detail_foot_extent):
+				detail_elev, detail_cols, detail_rows, detail_foot_extent,
+				0.0, int(params["wall_mode"]), float(params["wall_seed"])):
 			added += 1
 	if _diag_enabled:
 		print("BuildingBuilder: extruded %d of %d (pitched %d, flat %d, flat-fallback %d); skipped tri_fail=%d too_few=%d no_geom=%d" % [
@@ -518,7 +592,8 @@ static func build_single_building(d: Dictionary, style: Dictionary,
 	if not _append_footprint(st_walls, st_roof, poly, params["height_m"],
 			params["roof"], params["colors"], elev, res, height_extent_m, center_elev,
 			detail_elev, detail_cols, detail_rows, detail_foot_extent,
-			float(params["base_offset_m"])):
+			float(params["base_offset_m"]), int(params["wall_mode"]),
+			float(params["wall_seed"])):
 		return null
 	var mi := MeshInstance3D.new()
 	mi.name = "BuildingMesh"
@@ -769,7 +844,8 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 		height_extent_m: float, center_elev: float,
 		detail_elev: PackedFloat32Array = PackedFloat32Array(),
 		detail_cols: int = 0, detail_rows: int = 0, detail_extent_m: float = 0.0,
-		base_offset_m: float = 0.0) -> bool:
+		base_offset_m: float = 0.0, wall_mode: int = WallMode.LAP,
+		wall_seed: float = 0.0) -> bool:
 	var n := poly.size()
 	if n < 3:
 		_bump("too_few")
@@ -873,6 +949,9 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 	# 0 = flat (membrane/gravel).
 	roof_col.a = 0.0 if used_flat else 1.0
 
+	# UV2 on walls carries (material mode + 0.5, per-building weathering seed)
+	# for building_wall.gdshader — see WallMode.
+	var wall_uv2 := Vector2(float(wall_mode) + 0.5, wall_seed)
 	var emitted := false
 	for f in wall_faces:
 		var a: Vector3 = f[0]
@@ -886,6 +965,7 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 			st_walls.set_normal(nrm)
 			st_walls.set_color(wall_col)
 			st_walls.set_uv(f[3 + k])
+			st_walls.set_uv2(wall_uv2)
 			st_walls.add_vertex(f[k])
 		emitted = true
 	for f in roof_faces:
@@ -901,6 +981,7 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 			st_roof.set_normal(nrm)
 			st_roof.set_color(roof_col)
 			st_roof.set_uv(uvs[k])
+			st_roof.set_uv2(_roof_geo_uv(f[k]))
 			st_roof.add_vertex(f[k])
 		emitted = true
 	if emitted:
@@ -1007,6 +1088,15 @@ static func _wall_quad(faces: Array, edge_start: Vector2, edge_dir: Vector2,
 		Vector2(u0, vb), Vector2(u0, h0 - base_y), Vector2(u1, h1 - base_y)])
 	faces.append([b0, t1, b1,
 		Vector2(u0, vb), Vector2(u1, h1 - base_y), Vector2(u1, vb)])
+
+
+## Geo-registered UV2 for a roof vertex: plan position normalized against the
+## central ortho square (see ORTHO_HALF_EXTENT_M). Pure plan projection — the
+## aerial photo is orthographic, so pitched faces sample the same footprint
+## pixels the satellite saw from above.
+static func _roof_geo_uv(p: Vector3) -> Vector2:
+	var span := ORTHO_HALF_EXTENT_M * 2.0
+	return Vector2(p.x / span + 0.5, p.z / span + 0.5)
 
 
 ## Per-face planar UVs for a roof triangle: U runs along the eave (course

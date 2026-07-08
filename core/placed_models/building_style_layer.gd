@@ -3,9 +3,11 @@ extends RefCounted
 
 ## Per-map, per-building style overrides keyed by the stable building tag
 ## (BuildingBuilder.building_tag — metre-rounded footprint centroid). A style
-## record holds roof shape/pitch, wall/roof colors, height, base offset, and
-## facade elements (doors/windows). Buildings with a style are excluded from
-## the merged OSM mesh and rebuilt individually by the terrain loader.
+## record holds roof shape/pitch, wall/roof colors, height, base offset,
+## facade elements (doors/windows), and `wall_mode` (int — a
+## BuildingBuilder.WallMode value; absent or −1 = auto from tags/size).
+## Buildings with a style are excluded from the merged OSM mesh and rebuilt
+## individually by the terrain loader.
 
 const VERSION := 1
 const MAX_STYLES := 300

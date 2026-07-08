@@ -76,8 +76,16 @@ static func raycast_ground_at_camera(main: Node, camera: Camera3D,
 		origin, origin + dir * CAMERA_RAY_LEN)
 	query.collide_with_areas = false
 	query.collide_with_bodies = true
-	query.exclude = _placed_prop_rids(main)
-	return space.intersect_ray(query)
+	query.exclude = _terrain_physics_excludes(main)
+	var hit: Dictionary = space.intersect_ray(query)
+	if hit.is_empty():
+		return {}
+	var p: Vector3 = hit["position"] as Vector3
+	# Authoritative walkable footing (hi-res detail DEM when inside the patch).
+	p.y = ground_height_at(main, p.x, p.z)
+	var out := hit.duplicate()
+	out["position"] = p
+	return out
 
 
 static func _placed_prop_rids(main: Node) -> Array[RID]:
@@ -121,7 +129,8 @@ static func _raycast_ground_y_from(world: World3D, x: float, z: float, from_y: f
 	var hit: Dictionary = space.intersect_ray(query)
 	if hit.is_empty():
 		return 0.0
-	return float((hit["position"] as Vector3).y)
+	var p: Vector3 = hit["position"] as Vector3
+	return p.y
 
 
 static func find_terrain_loader(main: Node) -> Node:
@@ -130,4 +139,28 @@ static func find_terrain_loader(main: Node) -> Node:
 	var direct := main.get_node_or_null("TerrainLoader")
 	if direct != null:
 		return direct
+	var terrain := main.get_node_or_null("Terrain")
+	if terrain != null:
+		var under := terrain.get_node_or_null("TerrainLoader")
+		if under != null:
+			return under
 	return main.find_child("TerrainLoader", true, false)
+
+
+static func _terrain_physics_excludes(main: Node) -> Array[RID]:
+	var rids := _placed_prop_rids(main)
+	var loader := find_terrain_loader(main)
+	if loader == null:
+		return rids
+	var has_detail := false
+	if loader.has_method("has_detail_footing"):
+		has_detail = bool(loader.call("has_detail_footing"))
+	if not has_detail:
+		return rids
+	var terrain := main.get_node_or_null("Terrain")
+	if terrain == null:
+		return rids
+	var coarse := terrain.get_node_or_null("TerrainCollision")
+	if coarse is CollisionObject3D:
+		rids.append((coarse as CollisionObject3D).get_rid())
+	return rids

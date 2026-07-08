@@ -63,6 +63,14 @@ static func plan_panels(poly: PackedVector2Array, tilt_deg: float) -> Array:
 	var step_z := PANEL_H * cos(tilt) + ROW_GAP
 	if step_x <= 0.0 or step_z <= 0.0:
 		return out
+	
+	# Safety check: prevent freeze if footprint is extremely large or malformed
+	var iter_x := int(ceil((max_x - min_x) / step_x))
+	var iter_z := int(ceil((max_z - min_z) / step_z))
+	if iter_x <= 0 or iter_z <= 0 or iter_x * iter_z > 100000:
+		push_warning("SolarArrayBuilder: plan_panels footprint too large or invalid (%dx%d iterations)" % [iter_x, iter_z])
+		return out
+		
 	var z := min_z + step_z * 0.5
 	while z <= max_z:
 		var x := min_x + step_x * 0.5

@@ -1,0 +1,14 @@
+# Facade texture prompts for tools/generate_facades.py — format: name|prompt
+# A "seamless tileable, orthographic, photoreal" style suffix is appended
+# automatically. Aim each prompt at ONE material strip, not a whole house.
+# Starter set tuned to Bombay Beach, CA (weathered Salton Sea trailer town);
+# use the Building Builder's Reference tab (Mapillary) to write new ones.
+
+trailer_white_ribbed|weathered white ribbed aluminum mobile home siding, horizontal ribs, faded chalky paint, light rust streaks below rivet lines, desert dust film near the bottom
+trailer_turquoise|sun-faded turquoise painted ribbed aluminum trailer siding, horizontal ribs, peeling paint patches showing dull silver metal, rust blooms
+trailer_cream_brown|vintage 1960s mobile home siding, cream upper band and brown lower band, horizontal aluminum ribs, oxidized and dusty
+corrugated_rust|heavily rusted corrugated steel sheet wall, vertical ribs, orange-brown rust with remnants of galvanized silver, desert weathering
+plywood_gray|unpainted weathered plywood sheet wall, sun-grayed wood grain, vertical panel seams, staple marks and water stains
+plywood_white_mural|white painted plywood wall with faded paint, brush marks, small patches of bare wood, desert grime at the bottom edge
+stucco_tan|close-up macro photo of a tan stucco wall surface, fine sand-float texture, hairline cracks, dusty base, sun-bleached upper area, material sample only, no objects, no vehicles, no people, no scenery
+cmu_painted|painted concrete block wall, visible mortar joints, chipped light blue paint over gray block, desert weathering

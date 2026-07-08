@@ -36,12 +36,185 @@ func _initialize() -> void:
 	_test_building_sort()
 	_test_default_colors()
 	_test_model_catalog()
+	_test_roof_ortho_uv2()
+	_test_wall_modes()
 	if _failures == 0:
 		print("BUILDING SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
 	else:
 		print("BUILDING SELFTEST FAIL  (%d of %d checks failed)" % [_failures, _checks])
 		quit(1)
+
+
+## Roof UV2 carries geo-registered plan coordinates over the central ortho
+## square: (0,0) = NW corner (x=−500, z=−500), (1,1) = SE — matching the
+## terrain drape's UV convention (image row 0 = north = −Z). Both merged and
+## single-building paths share _append_footprint, so parity is exact.
+func _test_roof_ortho_uv2() -> void:
+	var grid := _tilted_grid()
+	var span := BuildingBuilder.ORTHO_HALF_EXTENT_M * 2.0
+
+	# 1. Origin-centred footprint, gabled roof: UV2 present, mean ≈ (0.5, 0.5).
+	var poly := _square_poly(5.0)
+	var roof := {"shape": "gabled", "angle_deg": 30.0, "source": "osm"}
+	var data := _mesh_data(poly, 8.0, roof, grid)
+	var surfaces: Array = data["surfaces"]
+	_check("uv2: two surfaces", surfaces.size() >= 2)
+	if surfaces.size() < 2:
+		return
+	var roof_s: Dictionary = surfaces[1]
+	var uv2s_v = roof_s["uv2s"]
+	_check("uv2: roof surface has UV2", uv2s_v != null)
+	if uv2s_v == null:
+		return
+	var uv2s: PackedVector2Array = uv2s_v
+	var verts: PackedVector3Array = roof_s["verts"]
+	_check("uv2: one per roof vertex", uv2s.size() == verts.size(),
+		"%d vs %d" % [uv2s.size(), verts.size()])
+	var mean := Vector2.ZERO
+	for uv in uv2s:
+		mean += uv
+	mean /= float(maxi(uv2s.size(), 1))
+	_check("uv2: origin footprint centres at (0.5, 0.5)",
+		mean.distance_to(Vector2(0.5, 0.5)) < 0.02, str(mean))
+
+	# 2. Exact mapping + orientation: UV2 = plan/span + 0.5 per vertex, and V
+	# grows with +Z (north edge of the patch = image row 0 = v 0).
+	var mapping_ok := true
+	for i in uv2s.size():
+		var expect := Vector2(verts[i].x / span + 0.5, verts[i].z / span + 0.5)
+		if uv2s[i].distance_to(expect) > 1e-4:
+			mapping_ok = false
+			break
+	_check("uv2: exact plan/span mapping (north = v0)", mapping_ok)
+
+	# 3. Offset footprint: +400 m east → mean x ≈ 0.9; 900 m → outside 0..1.
+	var poly_e := PackedVector2Array()
+	for p in _square_poly(5.0):
+		poly_e.append(p + Vector2(400.0, 0.0))
+	var data_e := _mesh_data(poly_e, 8.0, roof, grid)
+	var uv2_e: PackedVector2Array = (data_e["surfaces"] as Array)[1]["uv2s"]
+	var mean_e := Vector2.ZERO
+	for uv in uv2_e:
+		mean_e += uv
+	mean_e /= float(maxi(uv2_e.size(), 1))
+	_check("uv2: +400 m footprint maps to x ≈ 0.9",
+		absf(mean_e.x - 0.9) < 0.02 and absf(mean_e.y - 0.5) < 0.02, str(mean_e))
+	var poly_out := PackedVector2Array()
+	for p in _square_poly(5.0):
+		poly_out.append(p + Vector2(900.0, 0.0))
+	var data_out := _mesh_data(poly_out, 8.0, roof, grid)
+	var uv2_out: PackedVector2Array = (data_out["surfaces"] as Array)[1]["uv2s"]
+	var outside := true
+	for uv in uv2_out:
+		if uv.x <= 1.0:
+			outside = false
+			break
+	_check("uv2: 900 m footprint lands outside 0..1", outside)
+
+	# 4. COLOR.a pitched/flat flag is untouched by the UV2 channel.
+	var cols: PackedColorArray = roof_s["colors"]
+	_check("uv2: pitched roof keeps COLOR.a = 1",
+		cols.size() > 0 and cols[0].a > 0.5)
+	var data_flat := _mesh_data(poly, 8.0, {"shape": "flat", "source": "osm"}, grid)
+	var cols_flat: PackedColorArray = (data_flat["surfaces"] as Array)[1]["colors"]
+	var uv2_flat = (data_flat["surfaces"] as Array)[1]["uv2s"]
+	_check("uv2: flat roof keeps COLOR.a = 0",
+		cols_flat.size() > 0 and cols_flat[0].a < 0.5)
+	_check("uv2: flat roof also carries UV2", uv2_flat != null)
+
+	# 5. Single-building parity: same footprint through build_single_building
+	# yields identical roof UV2s.
+	var d := {"idx": 0, "points": poly, "height_m": 8.0, "tags": {},
+		"roof": roof}
+	var mi := BuildingBuilder.build_single_building(d, {}, grid, GRID_RES, EXTENT_M, 0.0)
+	_check("uv2: single building built", mi != null)
+	if mi != null:
+		var arrays: Array = mi.mesh.surface_get_arrays(1)
+		var single_uv2 = arrays[Mesh.ARRAY_TEX_UV2]
+		_check("uv2: single-building roof has UV2", single_uv2 != null)
+		if single_uv2 != null:
+			var s_uv2: PackedVector2Array = single_uv2
+			var parity := s_uv2.size() == uv2s.size()
+			if parity:
+				for i in s_uv2.size():
+					if s_uv2[i].distance_to(uv2s[i]) > 1e-5:
+						parity = false
+						break
+			_check("uv2: merged vs single parity", parity)
+		mi.free()
+
+
+## Wall material modes: tag mapping, size heuristic, determinism, style
+## override, and the UV2 (mode + 0.5, seed) channel on the wall surface.
+func _test_wall_modes() -> void:
+	var small := _square_poly(4.0)   # 64 m² — trailer-town scale
+	var big := _square_poly(6.0)     # 144 m² — full-size house
+
+	# Tag mappings win over heuristics.
+	_check("wallmode: static_caravan → TRAILER",
+		BuildingBuilder.resolve_wall_mode({"building": "static_caravan"}, big)
+			== BuildingBuilder.WallMode.TRAILER)
+	_check("wallmode: building:material=metal → CORRUGATED",
+		BuildingBuilder.resolve_wall_mode({"building:material": "metal"}, big)
+			== BuildingBuilder.WallMode.CORRUGATED)
+	_check("wallmode: building:material=wood → PLYWOOD",
+		BuildingBuilder.resolve_wall_mode({"building:material": "wood"}, small)
+			== BuildingBuilder.WallMode.PLYWOOD)
+	_check("wallmode: building:material=concrete → STUCCO",
+		BuildingBuilder.resolve_wall_mode({"building:material": "concrete"}, small)
+			== BuildingBuilder.WallMode.STUCCO)
+
+	# Size heuristic: small untagged footprints land in the trailer-town set.
+	var m_small := BuildingBuilder.resolve_wall_mode({"building": "house"}, small)
+	_check("wallmode: small house → trailer-town stock",
+		m_small == BuildingBuilder.WallMode.TRAILER
+			or m_small == BuildingBuilder.WallMode.PLYWOOD
+			or m_small == BuildingBuilder.WallMode.CORRUGATED)
+	# Deterministic: same footprint, same answer.
+	_check("wallmode: deterministic",
+		BuildingBuilder.resolve_wall_mode({"building": "house"}, small) == m_small)
+
+	# Style override beats resolution; WALL_MODE_AUTO (−1) defers to it.
+	var params := BuildingBuilder.resolve_building_params(
+		{"idx": 0, "points": small, "height_m": 8.0,
+			"tags": {"building": "static_caravan"}},
+		{"wall_mode": BuildingBuilder.WallMode.STUCCO})
+	_check("wallmode: style override wins",
+		int(params["wall_mode"]) == BuildingBuilder.WallMode.STUCCO)
+	var params_auto := BuildingBuilder.resolve_building_params(
+		{"idx": 0, "points": small, "height_m": 8.0,
+			"tags": {"building": "static_caravan"}},
+		{"wall_mode": BuildingBuilder.WALL_MODE_AUTO})
+	_check("wallmode: auto defers to tags",
+		int(params_auto["wall_mode"]) == BuildingBuilder.WallMode.TRAILER)
+
+	# Wall surface UV2 encodes (mode + 0.5, seed 0..1) on every vertex.
+	var data := _mesh_data(small, 8.0, {"shape": "flat", "source": "osm"},
+		_tilted_grid(), {"building": "static_caravan"})
+	var wall_s: Dictionary = (data["surfaces"] as Array)[0]
+	var uv2s_v = wall_s["uv2s"]
+	_check("wallmode: wall surface has UV2", uv2s_v != null)
+	if uv2s_v != null:
+		var uv2s: PackedVector2Array = uv2s_v
+		var ok := uv2s.size() > 0
+		for uv in uv2s:
+			if int(floor(uv.x)) != BuildingBuilder.WallMode.TRAILER \
+					or uv.y < 0.0 or uv.y > 1.0:
+				ok = false
+				break
+		_check("wallmode: UV2 = (TRAILER + 0.5, seed01) on all wall verts", ok)
+
+	# Facade-texture style keys must not break the geometry build — texture
+	# loading (and missing-file fallback) is the terrain loader's concern.
+	var mi2 := BuildingBuilder.build_single_building(
+		{"idx": 0, "points": small, "height_m": 8.0, "tags": {}},
+		{"wall_texture": "does_not_exist.png", "wall_tex_w_m": 4.0,
+			"wall_tex_h_m": 3.0},
+		_tilted_grid(), GRID_RES, EXTENT_M, 0.0)
+	_check("wallmode: style with wall_texture builds", mi2 != null)
+	if mi2 != null:
+		mi2.free()
 
 
 func _check(label: String, ok: bool, detail: String = "") -> void:
@@ -103,6 +276,7 @@ func _mesh_data(poly: PackedVector2Array, height_m: float, roof: Dictionary,
 			"verts": arrays[Mesh.ARRAY_VERTEX],
 			"normals": arrays[Mesh.ARRAY_NORMAL],
 			"uvs": arrays[Mesh.ARRAY_TEX_UV],
+			"uv2s": arrays[Mesh.ARRAY_TEX_UV2],
 			"colors": arrays[Mesh.ARRAY_COLOR],
 		})
 		out["verts"] = (out["verts"] as PackedVector3Array) + \
