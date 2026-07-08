@@ -12,6 +12,8 @@ func _initialize() -> void:
 	_test_river_buffer()
 	_test_waterway_dedupe()
 	_test_flat_water_level()
+	_test_ribbon_lateral()
+	_test_water_flow_model()
 	_test_reflection_probes()
 	if _failures == 0:
 		print("OSM WATER SELFTEST PASS  (%d checks)" % _checks)
@@ -103,6 +105,29 @@ func _test_flat_water_level() -> void:
 		node.free()
 
 
+func _test_ribbon_lateral() -> void:
+	var line := PackedVector2Array([Vector2(0, 0), Vector2(100, 0)])
+	var left := WaterBuilder._ribbon_lateral_uv2(Vector2(50, 10), line, 10.0)
+	var right := WaterBuilder._ribbon_lateral_uv2(Vector2(50, -10), line, 10.0)
+	_check("left bank lateral +", left.x > 0.8, "got %.2f" % left.x)
+	_check("right bank lateral -", right.x < -0.8, "got %.2f" % right.x)
+	_check("lateral stores half_w", absf(left.y - 10.0) < 0.01)
+
+
+func _test_water_flow_model() -> void:
+	var ws := _MockWeather.new()
+	var dry := WaterFlowModel.compute(ws, 1, 1, 0.0, 0.0)
+	_check("dry low hydro", float(dry.get("hydro", 1.0)) < 0.05)
+	ws.rain_24h = 30.0
+	var wet := WaterFlowModel.compute(ws, 6, 1, 12.0, 0.0)
+	_check("rain raises width",
+		float(wet.get("width_scale", 0.0)) > float(dry.get("width_scale", 0.0)))
+	ws.rain_24h = 0.0
+	ws.temp_c = 12.0
+	var melt := WaterFlowModel.compute(ws, 4, 1, 12.0, 1.5)
+	_check("melt raises level", float(melt.get("level_m", 0.0)) > 0.15)
+
+
 func _test_reflection_probes() -> void:
 	var elev := PackedFloat32Array()
 	elev.resize(4)
@@ -127,11 +152,25 @@ func _test_reflection_probes() -> void:
 		_check("probe is ReflectionProbe", probe is ReflectionProbe)
 		if probe is ReflectionProbe:
 			var rp := probe as ReflectionProbe
-			_check("probe uses box projection", rp.box_projection)
+			_check("probe avoids box projection", not rp.box_projection)
+			_check("probe excludes water layer",
+				(rp.cull_mask & WaterBuilder.WATER_RENDER_LAYER) == 0)
 			_check("probe captures once", rp.update_mode == ReflectionProbe.UPDATE_ONCE)
+			_check("probe has blend falloff", rp.blend_distance >= 18.0)
 	WaterBuilder.refresh_reflection_probes(node)
 	node.free()
 	_check("river ribbon skipped", not WaterBuilder._wants_reflection_probe(
 		river, "river"))
 	_check("small puddle skipped", not WaterBuilder._wants_reflection_probe(
 		PackedVector2Array([Vector2(0, 0), Vector2(5, 0), Vector2(5, 5)]), "lake"))
+
+
+class _MockWeather:
+	var rain_24h := 0.0
+	var temp_c := 5.0
+
+	func rain_24h_mm(_month: int, _day: int, _hour: float) -> float:
+		return rain_24h
+
+	func temperature_c(_month: int, _day: int, _hour: float) -> float:
+		return temp_c

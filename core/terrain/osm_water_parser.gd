@@ -60,7 +60,13 @@ static func extract_water(nodes: Dictionary, ways_by_id: Dictionary,
 		var half_w := _waterway_half_width(tags)
 		var ribbon := _buffer_polyline(line, half_w)
 		if ribbon.size() >= 3 and _polygon_area(ribbon) >= MIN_RING_AREA_M2:
-			out.append({"points": ribbon, "kind": str(tags.get("waterway", "river")), "tags": tags})
+			out.append({
+				"points": ribbon,
+				"kind": str(tags.get("waterway", "river")),
+				"tags": tags,
+				"centerline": line,
+				"half_width": half_w,
+			})
 
 	return out
 

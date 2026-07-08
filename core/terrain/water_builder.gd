@@ -11,10 +11,14 @@ const MIN_AREA_M2 := 80.0
 const MAX_BODIES := 200
 const MIN_PROBE_AREA_M2 := 250.0
 const MAX_REFLECTION_PROBES := 28
-const PROBE_MARGIN_M := 10.0
+const PROBE_MARGIN_M := 24.0
 const PROBE_HEIGHT_M := 32.0
 const PROBE_MIN_EXTENT_M := 8.0
 const PROBE_MAX_ASPECT := 5.5
+## Layer 20 — water renders here so reflection probes can omit it (capturing
+## semi-transparent water into the cubemap washes out box faces as white tiles).
+const WATER_RENDER_LAYER := 1 << 19
+const PROBE_CAPTURE_LAYERS := (1 << 20) - 1
 ## Skip narrow waterway ribbons — probes are sized for lake-like footprints.
 const WATERWAY_KINDS := ["river", "stream", "canal", "ditch", "drain"]
 ## Flowing water: draped per-vertex onto the terrain (follows downhill contour) and
@@ -43,7 +47,9 @@ static func _is_flowing(kind: String) -> bool:
 static func build_water_node(waters: Array, elev: PackedFloat32Array, res: int,
 		extent_m: float, center_elev: float,
 		detail_elev: PackedFloat32Array = PackedFloat32Array(),
-		detail_res: int = 0, detail_extent_m: float = 0.0) -> Node3D:
+		detail_res: int = 0, detail_extent_m: float = 0.0,
+		seam_feather_m: float = 0.0) -> Node3D:
+	var feather := seam_feather_m if seam_feather_m > 0.0 else DEM_SEAM_FEATHER_M
 	var still_st := SurfaceTool.new()
 	still_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var flow_st := SurfaceTool.new()
@@ -64,15 +70,18 @@ static func build_water_node(waters: Array, elev: PackedFloat32Array, res: int,
 			continue
 		var kind := str(item.get("kind", "water"))
 		if _is_flowing(kind):
+			var centerline: PackedVector2Array = item.get("centerline", PackedVector2Array())
+			var half_w := float(item.get("half_width", 0.0))
 			var flowed := _append_flowing_polygon(flow_st, poly, flow_vtx, elev, res,
-				extent_m, center_elev, detail_elev, detail_res, detail_extent_m)
+				extent_m, center_elev, detail_elev, detail_res, detail_extent_m, feather,
+				centerline, half_w)
 			if flowed.is_empty():
 				continue
 			flow_vtx = int(flowed["next_vtx"])
 			added += 1
 			continue
 		var body := _append_water_polygon(still_st, poly, still_vtx, elev, res,
-			extent_m, center_elev, detail_elev, detail_res, detail_extent_m)
+			extent_m, center_elev, detail_elev, detail_res, detail_extent_m, feather)
 		if body.is_empty():
 			continue
 		still_vtx = int(body["next_vtx"])
@@ -88,6 +97,7 @@ static func build_water_node(waters: Array, elev: PackedFloat32Array, res: int,
 		mi.name = "WaterSurface"
 		mi.mesh = still_st.commit()
 		mi.material_override = _make_water_material()
+		mi.layers = WATER_RENDER_LAYER
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		root.add_child(mi)
 	if flow_vtx > 0:
@@ -96,6 +106,7 @@ static func build_water_node(waters: Array, elev: PackedFloat32Array, res: int,
 		rmi.name = "RiverSurface"
 		rmi.mesh = flow_st.commit()
 		rmi.material_override = _make_river_material()
+		rmi.layers = WATER_RENDER_LAYER
 		rmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		root.add_child(rmi)
 	_attach_reflection_probes(root, probe_specs)
@@ -163,17 +174,22 @@ static func _attach_reflection_probes(root: Node3D, specs: Array) -> void:
 static func _make_reflection_probe(spec: Dictionary) -> ReflectionProbe:
 	var center: Vector3 = spec.get("center", Vector3.ZERO)
 	var size: Vector3 = spec.get("size", Vector3(16.0, PROBE_HEIGHT_M, 16.0))
+	var horiz := maxf(size.x, size.z)
 	var probe := ReflectionProbe.new()
 	probe.name = "LakeReflection"
 	probe.position = center + Vector3(0.0, size.y * 0.5, 0.0)
 	probe.size = size
-	probe.box_projection = true
-	probe.enable_shadows = true
+	# Box projection parallax-maps to the probe AABB; at grazing angles the box
+	# faces read as bright white rectangles around each lake from drone view.
+	probe.box_projection = false
+	probe.enable_shadows = false
 	probe.interior = false
 	probe.update_mode = ReflectionProbe.UPDATE_ONCE
-	probe.intensity = 1.05
-	probe.max_distance = maxf(size.x, size.z) * 0.65
+	probe.intensity = 1.0
+	probe.max_distance = horiz * 0.75
 	probe.origin_offset = Vector3(0.0, -size.y * 0.15, 0.0)
+	probe.blend_distance = clampf(horiz * 0.42, 18.0, 96.0)
+	probe.cull_mask = PROBE_CAPTURE_LAYERS & ~WATER_RENDER_LAYER
 	return probe
 
 
@@ -210,7 +226,7 @@ static func _poly_aabb(poly: PackedVector2Array) -> Dictionary:
 static func _append_water_polygon(st: SurfaceTool, poly: PackedVector2Array,
 		vtx_base: int, elev: PackedFloat32Array, res: int, extent_m: float,
 		center_elev: float, detail_elev: PackedFloat32Array, detail_res: int,
-		detail_extent_m: float) -> Dictionary:
+		detail_extent_m: float, seam_feather_m: float = DEM_SEAM_FEATHER_M) -> Dictionary:
 	var n := poly.size()
 	if n >= 3 and poly[0].distance_squared_to(poly[n - 1]) < 0.01:
 		poly = poly.slice(0, n - 1)
@@ -224,7 +240,7 @@ static func _append_water_polygon(st: SurfaceTool, poly: PackedVector2Array,
 	bank_heights.resize(n)
 	for i in n:
 		bank_heights[i] = _ground_y(poly[i].x, poly[i].y, elev, res, extent_m,
-			center_elev, detail_elev, detail_res, detail_extent_m)
+			center_elev, detail_elev, detail_res, detail_extent_m, seam_feather_m)
 	var level := _water_level(bank_heights) + SURFACE_OFFSET_M
 	for i in n:
 		var p := poly[i]
@@ -248,7 +264,9 @@ static func _append_water_polygon(st: SurfaceTool, poly: PackedVector2Array,
 static func _append_flowing_polygon(st: SurfaceTool, poly: PackedVector2Array,
 		vtx_base: int, elev: PackedFloat32Array, res: int, extent_m: float,
 		center_elev: float, detail_elev: PackedFloat32Array, detail_res: int,
-		detail_extent_m: float) -> Dictionary:
+		detail_extent_m: float, seam_feather_m: float = DEM_SEAM_FEATHER_M,
+		centerline: PackedVector2Array = PackedVector2Array(),
+		half_w: float = 0.0) -> Dictionary:
 	var n := poly.size()
 	if n >= 3 and poly[0].distance_squared_to(poly[n - 1]) < 0.01:
 		poly = poly.slice(0, n - 1)
@@ -261,15 +279,16 @@ static func _append_flowing_polygon(st: SurfaceTool, poly: PackedVector2Array,
 	for i in n:
 		var p := poly[i]
 		var gy := _ground_y(p.x, p.y, elev, res, extent_m, center_elev,
-			detail_elev, detail_res, detail_extent_m)
+			detail_elev, detail_res, detail_extent_m, seam_feather_m)
 		var flow := _flow_vector(p.x, p.y, elev, res, extent_m, center_elev,
-			detail_elev, detail_res, detail_extent_m)
+			detail_elev, detail_res, detail_extent_m, seam_feather_m)
 		st.set_color(Color(
 			flow.x * 0.5 + 0.5,   # downhill dir X  (decoded to −1..1 in shader)
 			flow.y * 0.5 + 0.5,   # downhill dir Z
 			flow.z,               # slope-scaled flow speed 0..1
 			1.0))
 		st.set_uv(Vector2(p.x, p.y))
+		st.set_uv2(_ribbon_lateral_uv2(p, centerline, half_w))
 		st.add_vertex(Vector3(p.x, gy + FLOW_SURFACE_OFFSET_M, p.y))
 	for t in range(0, tris.size(), 3):
 		st.add_index(vtx_base + tris[t])
@@ -278,16 +297,67 @@ static func _append_flowing_polygon(st: SurfaceTool, poly: PackedVector2Array,
 	return {"next_vtx": vtx_base + n}
 
 
+## Signed lateral position on a buffered waterway ribbon: UV2.x = −1..1 across
+## the channel, UV2.y = nominal half-width (m) used when the mesh was built.
+static func _ribbon_lateral_uv2(p: Vector2, centerline: PackedVector2Array,
+		half_w: float) -> Vector2:
+	if centerline.size() < 2 or half_w <= 0.01:
+		return Vector2(0.0, maxf(half_w, 1.0))
+	var best_dist_sq := INF
+	var best_signed := 0.0
+	for i in range(centerline.size() - 1):
+		var a := centerline[i]
+		var b := centerline[i + 1]
+		var seg := b - a
+		var len_sq := seg.length_squared()
+		if len_sq < 1e-8:
+			continue
+		var t := clampf((p - a).dot(seg) / len_sq, 0.0, 1.0)
+		var closest := a + seg * t
+		var d_vec := p - closest
+		var dist_sq := d_vec.length_squared()
+		if dist_sq >= best_dist_sq:
+			continue
+		best_dist_sq = dist_sq
+		var tangent := seg / sqrt(len_sq)
+		var normal := Vector2(-tangent.y, tangent.x)
+		var signed := d_vec.dot(normal)
+		best_signed = (1.0 if signed >= 0.0 else -1.0) * sqrt(dist_sq)
+	return Vector2(clampf(best_signed / half_w, -1.0, 1.0), half_w)
+
+
+## Push weather-driven flow uniforms to still + river water materials.
+static func apply_flow_visuals(root: Node3D, width_scale: float, level_m: float,
+		speed_scale: float, churn: float, water_alpha: float) -> void:
+	if root == null:
+		return
+	var still := root.get_node_or_null("WaterSurface") as MeshInstance3D
+	if still != null and still.material_override is ShaderMaterial:
+		var mat := still.material_override as ShaderMaterial
+		mat.set_shader_parameter("flow_level_m", level_m)
+		mat.set_shader_parameter("flow_churn", churn)
+		mat.set_shader_parameter("water_alpha", water_alpha)
+	var river := root.get_node_or_null("RiverSurface") as MeshInstance3D
+	if river != null and river.material_override is ShaderMaterial:
+		var mat := river.material_override as ShaderMaterial
+		mat.set_shader_parameter("flow_width_scale", width_scale)
+		mat.set_shader_parameter("flow_level_m", level_m)
+		mat.set_shader_parameter("flow_speed_scale", speed_scale)
+		mat.set_shader_parameter("flow_churn", churn)
+		mat.set_shader_parameter("water_alpha", water_alpha)
+
+
 ## Downhill flow at (x, z): direction = −∇(terrain height), speed ∝ slope. Returned
 ## as (dir_x, dir_z, speed01). Flat ground → tiny speed and an arbitrary direction.
 static func _flow_vector(x: float, z: float, elev: PackedFloat32Array, res: int,
 		extent_m: float, center_elev: float, detail_elev: PackedFloat32Array,
-		detail_res: int, detail_extent_m: float) -> Vector3:
+		detail_res: int, detail_extent_m: float,
+		seam_feather_m: float = DEM_SEAM_FEATHER_M) -> Vector3:
 	var d := FLOW_GRADIENT_STEP_M
-	var hx0 := _ground_y(x - d, z, elev, res, extent_m, center_elev, detail_elev, detail_res, detail_extent_m)
-	var hx1 := _ground_y(x + d, z, elev, res, extent_m, center_elev, detail_elev, detail_res, detail_extent_m)
-	var hz0 := _ground_y(x, z - d, elev, res, extent_m, center_elev, detail_elev, detail_res, detail_extent_m)
-	var hz1 := _ground_y(x, z + d, elev, res, extent_m, center_elev, detail_elev, detail_res, detail_extent_m)
+	var hx0 := _ground_y(x - d, z, elev, res, extent_m, center_elev, detail_elev, detail_res, detail_extent_m, seam_feather_m)
+	var hx1 := _ground_y(x + d, z, elev, res, extent_m, center_elev, detail_elev, detail_res, detail_extent_m, seam_feather_m)
+	var hz0 := _ground_y(x, z - d, elev, res, extent_m, center_elev, detail_elev, detail_res, detail_extent_m, seam_feather_m)
+	var hz1 := _ground_y(x, z + d, elev, res, extent_m, center_elev, detail_elev, detail_res, detail_extent_m, seam_feather_m)
 	var grad := Vector2((hx1 - hx0) / (2.0 * d), (hz1 - hz0) / (2.0 * d))
 	var slope := grad.length()
 	var dir := Vector2.ZERO if slope < 1e-4 else (-grad / slope)
@@ -315,7 +385,8 @@ static func _water_level(heights: PackedFloat32Array) -> float:
 ## the ~10 m "hover at the boundary" artefact. Outside the patch it's the base grid.
 static func _ground_y(x: float, z: float, elev: PackedFloat32Array, res: int,
 		extent_m: float, center_elev: float,
-		detail_elev: PackedFloat32Array, detail_res: int, detail_extent_m: float) -> float:
+		detail_elev: PackedFloat32Array, detail_res: int, detail_extent_m: float,
+		seam_feather_m: float = DEM_SEAM_FEATHER_M) -> float:
 	var coarse_h := TerrainBuilder.height_at_world_xz(elev, res, extent_m, center_elev, x, z)
 	if detail_elev.is_empty() or detail_res <= 1 or detail_extent_m <= 0.0:
 		return coarse_h
@@ -325,9 +396,9 @@ static func _ground_y(x: float, z: float, elev: PackedFloat32Array, res: int,
 	var detail_h := TerrainBuilder.height_at_world_xz(
 		detail_elev, detail_res, detail_extent_m, center_elev, x, z)
 	var edge_dist := half_d - maxf(absf(x), absf(z))
-	if edge_dist >= DEM_SEAM_FEATHER_M:
+	if edge_dist >= seam_feather_m:
 		return detail_h
-	var t := clampf(edge_dist / DEM_SEAM_FEATHER_M, 0.0, 1.0)
+	var t := clampf(edge_dist / seam_feather_m, 0.0, 1.0)
 	return lerpf(coarse_h, detail_h, t)
 
 
