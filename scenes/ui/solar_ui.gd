@@ -133,17 +133,9 @@ const CLOUD_REPR_RAINY : float = 0.95
 const PRECIP_RAIN_THRESHOLD_MMH : float = 0.01  # Open-Meteo hourly precipitation (mm)
 const WIND_DISPLAY_LERP_SPEED : float = 1.25
 
-# Rain system
-var rain_particles : GPUParticles3D = null
-var _rain_particle_mat : ParticleProcessMaterial = null
-var _rain_drop_mesh : QuadMesh = null
-var _rain_drop_mat : StandardMaterial3D = null
-var _rain_vfx_blend : float = 0.0  # smoothed 0..1 intensity from precip rate
-## Log-scale reference: ~0.5 mm/h = light drizzle, ~15 mm/h = heavy rain.
-const RAIN_VFX_RATE_HEAVY_MMH : float = 15.0
-## Fixed particle pool — scale emission with amount_ratio (changing amount resets the system).
-const RAIN_VFX_AMOUNT_MAX : int = 4000
-const RAIN_VFX_LERP_SPEED : float = 5.0
+# Rain / snow VFX (PrecipitationVfx on Main) + lightning
+var _precip_vfx : PrecipitationVfx
+var _lightning_vfx : LightningVfx
 var daily_rain_inches : float = 0.0  # Current day's rain amount in inches
 var rain_rate_per_hour : float = 0.0  # Inches per hour for current rain event
 var is_ground_muddy : bool = false
@@ -437,8 +429,6 @@ func _ready() -> void:
 	_connect_to_ha_client()
 	_connect_to_time_ui()
 	
-	# Initialize rain system
-	_setup_rain_particles()
 	_find_ground_materials()
 	
 	# Connect graph drawing
@@ -1982,7 +1972,7 @@ func _update_sky_visuals() -> void:
 	var target_weight : float = 0.0
 	if _is_actively_precipitating():
 		var storm := clampf((cloud_cover - 0.75) / 0.25, 0.0, 1.0)
-		var rain_t := _rain_vfx_intensity_t(_current_precip_rate_mmh())
+		var rain_t := PrecipitationVfx.rain_intensity_t(_current_precip_rate_mmh())
 		target_weight = storm * lerpf(0.2, 0.75, rain_t)
 	
 	if "clouds_cutoff" in main_node:
@@ -1991,13 +1981,19 @@ func _update_sky_visuals() -> void:
 		main_node.clouds_weight = target_weight
 	# High wispy cirrus is most visible in fair / partly-cloudy skies and gets
 	# masked out under heavy overcast or storms (the cumulus/nimbus layer dominates).
-	# Scaled by the user's gear-panel cirrus multiplier.
+	# Ramps up from true zero at a perfectly clear cloud_cover so the sky can
+	# actually go fully clear (previously a flat +0.15 floor meant cirrus never
+	# fully vanished even at cloud_cover == 0). Scaled by the user's gear-panel
+	# cirrus multiplier.
 	if "cirrus_amount" in main_node:
-		var cirrus : float = clampf(0.15 + cloud_cover * 1.1, 0.0, 0.6) * (1.0 - smoothstep(0.6, 0.95, cloud_cover))
+		var cirrus_ramp : float = smoothstep(0.0, 0.55, cloud_cover)
+		var cirrus : float = clampf(cirrus_ramp * 0.6, 0.0, 0.6) * (1.0 - smoothstep(0.6, 0.95, cloud_cover))
 		var scale : float = 1.0
 		if "cirrus_user_scale" in main_node:
 			scale = float(main_node.cirrus_user_scale)
 		main_node.cirrus_amount = clampf(cirrus * scale, 0.0, 1.0)
+	if "rainbow_strength" in main_node:
+		main_node.rainbow_strength = _compute_rainbow_strength()
 	
 	if not _slider_is_driving:
 		_sync_time_ui_cloud_sliders(target_cutoff, target_weight)
@@ -2036,7 +2032,7 @@ func _update_weather_lighting() -> void:
 	
 	var attenuation := clampf(1.0 - cloud_cover * 0.85, 0.15, 1.0)
 	if _is_actively_precipitating():
-		var rain_t := _rain_vfx_intensity_t(_current_precip_rate_mmh())
+		var rain_t := PrecipitationVfx.rain_intensity_t(_current_precip_rate_mmh())
 		# Light drizzle keeps more sun; heavy rain can dim further.
 		attenuation = maxf(attenuation, lerpf(0.5, 0.18, rain_t))
 	_target_light_attenuation = attenuation
@@ -2081,67 +2077,6 @@ func _apply_smooth_weather_lighting(delta: float) -> void:
 
 # ==================== RAIN SYSTEM ====================
 
-## Setup rain particle system
-func _setup_rain_particles() -> void:
-	# Create rain particles attached to camera/player
-	rain_particles = GPUParticles3D.new()
-	rain_particles.name = "RainParticles"
-	rain_particles.amount = RAIN_VFX_AMOUNT_MAX
-	rain_particles.amount_ratio = 0.0
-	rain_particles.lifetime = 1.5
-	rain_particles.emitting = false
-	rain_particles.local_coords = true
-	rain_particles.visibility_aabb = AABB(Vector3(-35, -15, -35), Vector3(70, 50, 70))
-	
-	# Create particle material (tuned each frame from simulated precip rate mm/h).
-	_rain_particle_mat = ParticleProcessMaterial.new()
-	_rain_particle_mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	_rain_particle_mat.emission_box_extents = Vector3(25, 0.1, 25)
-	_rain_particle_mat.direction = Vector3(0, -1, 0)
-	_rain_particle_mat.spread = 5.0
-	_rain_particle_mat.initial_velocity_min = 15.0
-	_rain_particle_mat.initial_velocity_max = 25.0
-	_rain_particle_mat.gravity = Vector3(0, -15, 0)
-	_rain_particle_mat.scale_min = 0.02
-	_rain_particle_mat.scale_max = 0.04
-	
-	rain_particles.process_material = _rain_particle_mat
-	
-	# Create simple mesh for rain drops (stretched quad)
-	_rain_drop_mesh = QuadMesh.new()
-	_rain_drop_mesh.size = Vector2(0.02, 0.3)
-	
-	# Create transparent blue material for rain
-	_rain_drop_mat = StandardMaterial3D.new()
-	_rain_drop_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_rain_drop_mat.albedo_color = Color(0.88, 0.92, 1.0, 0.65)
-	_rain_drop_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_rain_drop_mat.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
-	_rain_drop_mat.no_depth_test = false
-	_rain_drop_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_rain_drop_mesh.material = _rain_drop_mat
-	
-	rain_particles.draw_pass_1 = _rain_drop_mesh
-	
-	# Add to Main — position follows active view each frame (player or FPV drone camera).
-	var tree := get_tree()
-	if tree and tree.root:
-		call_deferred("_add_rain_to_scene")
-
-func _add_rain_to_scene() -> void:
-	var tree := get_tree()
-	if tree == null or rain_particles == null:
-		return
-	var main := tree.root.get_node_or_null("Main")
-	if main == null:
-		for child in tree.root.get_children():
-			if child.get_node_or_null("Player") != null:
-				main = child
-				break
-	if main:
-		main.add_child(rain_particles)
-		rain_particles.global_position = _get_rain_follow_position()
-
 ## Find ground materials for wetness effects
 func _find_ground_materials() -> void:
 	_ground_materials.clear()
@@ -2163,6 +2098,70 @@ func _find_ground_materials() -> void:
 			_original_ground_roughness.append(mat.roughness)
 			_original_ground_albedo.append(mat.albedo_color)
 
+## "none" | "rain" | "snow" — frozen precip uses snowflakes, not rain streaks.
+func _precip_kind() -> String:
+	if not _is_actively_precipitating():
+		return "none"
+	if _open_meteo_active and main_node != null:
+		var m := int(main_node.month)
+		var d := int(main_node.day)
+		var h := float(main_node.day_time)
+		var t := WeatherService.temperature_c(m, d, h)
+		if is_finite(t) and t <= SeasonModel.SNOW_T_THRESHOLD_C:
+			return "snow"
+		var sf := WeatherService.snowfall_cm(m, d, h)
+		if not is_nan(sf) and sf > 0.01:
+			return "snow"
+	return "rain"
+
+
+func _current_snowfall_cmh() -> float:
+	if not _open_meteo_active or main_node == null:
+		return 0.0
+	var sf := WeatherService.snowfall_cm(int(main_node.month), int(main_node.day), float(main_node.day_time))
+	return maxf(sf, 0.0) if not is_nan(sf) else 0.0
+
+
+func _is_thunderstorm() -> bool:
+	if not _is_actively_precipitating():
+		return false
+	if cloud_cover < 0.75:
+		return false
+	return _current_precip_rate_mmh() > 2.0
+
+
+func _thunderstorm_intensity() -> float:
+	var storm := clampf((cloud_cover - 0.75) / 0.25, 0.0, 1.0)
+	var rain_t := PrecipitationVfx.rain_intensity_t(_current_precip_rate_mmh())
+	return storm * rain_t
+
+
+func _compute_rainbow_strength() -> float:
+	if main_node == null or not is_instance_valid(main_node.sun):
+		return 0.0
+	if _precip_kind() != "rain":
+		return 0.0
+	var sun_dir: Vector3 = main_node.sun.to_global(Vector3(0.0, 0.0, 1.0)).normalized()
+	if sun_dir.y < sin(deg_to_rad(5.0)):
+		return 0.0
+	if cloud_cover < 0.25 or cloud_cover > 0.85:
+		return 0.0
+	var storm_w := float(main_node.clouds_weight) if "clouds_weight" in main_node else 0.0
+	if storm_w >= 0.5:
+		return 0.0
+	var partly := clampf((cloud_cover - 0.25) / 0.35, 0.0, 1.0)
+	return partly * (1.0 - storm_w * 1.4)
+
+
+func _ensure_environment_vfx() -> void:
+	if main_node == null:
+		return
+	if _precip_vfx == null:
+		_precip_vfx = main_node.get_node_or_null("PrecipitationVfx") as PrecipitationVfx
+	if _lightning_vfx == null:
+		_lightning_vfx = main_node.get_node_or_null("LightningVfx") as LightningVfx
+
+
 ## Active precipitation rate in mm/h (HA live, Open-Meteo/generated, or legacy synthetic).
 func _current_precip_rate_mmh() -> float:
 	if _weather_live_mode:
@@ -2177,38 +2176,7 @@ func _current_precip_rate_mmh() -> float:
 	return 0.0
 
 
-## Map mm/h precip rate to 0..1 visual intensity (log scale: drizzle vs downpour).
-func _rain_vfx_intensity_t(rate_mmh: float) -> float:
-	if rate_mmh <= PRECIP_RAIN_THRESHOLD_MMH:
-		return 0.0
-	var lo := log(maxf(PRECIP_RAIN_THRESHOLD_MMH, 0.001))
-	var hi := log(RAIN_VFX_RATE_HEAVY_MMH)
-	return clampf((log(maxf(rate_mmh, PRECIP_RAIN_THRESHOLD_MMH)) - lo) / (hi - lo), 0.0, 1.0)
-
-
-func _update_rain_particle_intensity(delta: float, rate_mmh: float) -> void:
-	if _rain_particle_mat == null or rain_particles == null:
-		return
-	var target_t := _rain_vfx_intensity_t(rate_mmh)
-	_rain_vfx_blend = lerpf(_rain_vfx_blend, target_t, 1.0 - exp(-delta * RAIN_VFX_LERP_SPEED))
-	var t := _rain_vfx_blend
-	# amount_ratio scales density without resetting the particle pool (unlike amount).
-	var emit_ratio := lerpf(0.15, 1.0, t)
-	rain_particles.amount_ratio = emit_ratio
-	_rain_particle_mat.initial_velocity_min = lerpf(12.0, 28.0, t)
-	_rain_particle_mat.initial_velocity_max = lerpf(20.0, 38.0, t)
-	_rain_particle_mat.gravity = Vector3(0, lerpf(-14.0, -22.0, t), 0)
-	_rain_particle_mat.scale_min = lerpf(0.018, 0.035, t)
-	_rain_particle_mat.scale_max = lerpf(0.03, 0.055, t)
-	if _rain_drop_mesh != null:
-		_rain_drop_mesh.size = Vector2(lerpf(0.018, 0.032, t), lerpf(0.28, 0.5, t))
-	if _rain_drop_mat != null:
-		var col := _rain_drop_mat.albedo_color
-		col.a = lerpf(0.5, 0.85, t)
-		_rain_drop_mat.albedo_color = col
-
-
-## Update rain system each frame
+## Update precipitation VFX, lightning, and ground-wetness each frame.
 func _update_rain_system(delta: float) -> void:
 	if main_node == null:
 		return
@@ -2234,22 +2202,21 @@ func _update_rain_system(delta: float) -> void:
 		
 		_last_rain_day = current_day
 	
-	# Update rain particles — density/velocity/opacity track simulated mm/h rate.
 	var precip_rate_mmh := _current_precip_rate_mmh()
-	if rain_particles:
-		var precipitating := _is_actively_precipitating()
-		rain_particles.emitting = precipitating
-		if precipitating:
-			# Jump partway to target so drops are visible on the first rainy frame.
-			if _rain_vfx_blend < 0.05:
-				_rain_vfx_blend = _rain_vfx_intensity_t(precip_rate_mmh) * 0.65
-			_update_rain_particle_intensity(delta, precip_rate_mmh)
-		else:
-			_update_rain_particle_intensity(delta, 0.0)
-			rain_particles.amount_ratio = 0.0
-
-		_ensure_rain_on_main()
-		rain_particles.global_position = _get_rain_follow_position()
+	var kind := _precip_kind()
+	var snow_cmh := _current_snowfall_cmh()
+	if kind == "snow" and snow_cmh < 0.01 and precip_rate_mmh > PRECIP_RAIN_THRESHOLD_MMH:
+		snow_cmh = maxf(precip_rate_mmh * 0.1, 0.05)
+	var wind_down := Vector2(0.0, 1.0)
+	if main_node != null and _open_meteo_active:
+		var from_deg := WeatherService.wind_direction_deg(
+			int(main_node.month), int(main_node.day), float(main_node.day_time))
+		wind_down = WindMath.downwind_xz(from_deg)
+	_ensure_environment_vfx()
+	if _precip_vfx != null:
+		_precip_vfx.update_frame(delta, kind, precip_rate_mmh, snow_cmh, wind_down, _get_rain_follow_position())
+	if _lightning_vfx != null:
+		_lightning_vfx.set_storm_active(_is_thunderstorm(), _thunderstorm_intensity())
 	
 	# Accumulate rain if precipitating
 	if _is_actively_precipitating():
@@ -2284,34 +2251,17 @@ func _get_player() -> CharacterBody3D:
 	return null
 
 
-## World position for the rain particle volume — active camera in FPV drone mode,
-## otherwise above the player body (on-foot / vehicle modes move the player).
+## World position for the precipitation volume — centred on the active camera so
+## flakes/streaks fill the sky as well as the ground half of the view.
 func _get_rain_follow_position() -> Vector3:
 	var player := _get_player()
 	if player == null:
 		return Vector3.ZERO
-	if player.get("is_fpv_drone_mode") and bool(player.is_fpv_drone_mode):
-		var cam := player.get_node_or_null("CameraArm/Camera3D") as Camera3D
-		if cam != null:
-			return cam.global_position
-	return player.global_position + Vector3(0, 20, 0)
+	var cam := player.get_node_or_null("CameraArm/Camera3D") as Camera3D
+	if cam != null:
+		return cam.global_position
+	return player.global_position + Vector3(0, 1.6, 0)
 
-
-func _ensure_rain_on_main() -> void:
-	if rain_particles == null:
-		return
-	var tree := get_tree()
-	if tree == null:
-		return
-	var main := tree.root.get_node_or_null("Main")
-	if main == null:
-		return
-	if rain_particles.get_parent() == main:
-		return
-	var parent := rain_particles.get_parent()
-	if parent != null:
-		parent.remove_child(rain_particles)
-	main.add_child(rain_particles)
 
 ## Apply mud effects (wet ground + slow player)
 func _apply_mud() -> void:

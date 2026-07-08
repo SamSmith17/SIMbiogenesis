@@ -413,6 +413,15 @@ var _cloud_shadow_noise : FastNoiseLite = null
 var _cloud_shadow_speed : float = 2.0
 var _cloud_shadow_dir : float = 0.2
 
+## Antisolar rainbow visibility (0-1), driven by SolarUI when sun + rain align.
+var rainbow_strength : float = 0.0
+
+## Brief exposure bump when lightning strikes (decays in _process).
+var lightning_flash_boost : float = 0.0
+
+var _precipitation_vfx : PrecipitationVfx
+var _lightning_vfx : LightningVfx
+
 # ACES over Linear (Forward+ default): an A/B screenshot comparison (vista/
 # golden-hour/night, both maps) showed Linear leaves distant terrain visibly
 # pale/washed-out under the real HDR pipeline — ACES fixed that with no
@@ -584,6 +593,7 @@ func _ready() -> void :
 	_apply_advanced_rendering_toggles()
 	_apply_tonemap_settings()
 	_apply_msaa_level()
+	_setup_environment_vfx()
 	_update()
 	_setup_save_load_ui()
 	_setup_location_picker()
@@ -1349,12 +1359,29 @@ func _apply_advanced_rendering_toggles() -> void :
 	elif is_instance_valid( sun ) :
 		sun.light_volumetric_fog_energy = 1.0
 
+func _setup_environment_vfx() -> void :
+	if Engine.is_editor_hint() :
+		return
+	_precipitation_vfx = PrecipitationVfx.new()
+	_precipitation_vfx.name = "PrecipitationVfx"
+	add_child( _precipitation_vfx )
+	_lightning_vfx = LightningVfx.new()
+	_lightning_vfx.name = "LightningVfx"
+	add_child( _lightning_vfx )
+	_lightning_vfx.flash_triggered.connect( _on_lightning_flash )
+
+
+func _on_lightning_flash( intensity: float ) -> void :
+	lightning_flash_boost = maxf( lightning_flash_boost, 0.12 + intensity * 0.5 )
+	_apply_tonemap_settings()
+
+
 func _apply_tonemap_settings() -> void :
 	if not is_instance_valid( environment ) or environment.environment == null :
 		return
 	var env : Environment = environment.environment
 	env.tonemap_mode = tonemap_mode as Environment.ToneMapper
-	env.tonemap_exposure = tonemap_exposure
+	env.tonemap_exposure = tonemap_exposure + lightning_flash_boost
 	env.tonemap_white = tonemap_white
 
 func _apply_msaa_level() -> void :
@@ -1717,6 +1744,9 @@ var _analemma_path_lat : float = INF
 var _analemma_path_lon : float = INF
 
 func _process( delta: float ) -> void :
+	if lightning_flash_boost > 0.001 :
+		lightning_flash_boost = lerpf( lightning_flash_boost, 0.0, 1.0 - exp( -delta * 18.0 ) )
+		_apply_tonemap_settings()
 	if not Engine.is_editor_hint() :
 		# Analemma / ∞ view: each frame jumps to the next day's solar noon and
 		# refreshes the world. Visual-only — time_scale is 0 so no other system
