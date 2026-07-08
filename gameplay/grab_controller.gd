@@ -41,7 +41,8 @@ func blocks_tool_use() -> bool:
 		return true
 	if _focus != null and _focus.has_method("get_focused"):
 		var focused: Variant = _focus.call("get_focused")
-		if focused is PlacedProp and (_lmb_down or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)):
+		if focused is Object and is_instance_valid(focused) and focused is PlacedProp \
+				and (_lmb_down or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)):
 			return true
 	return false
 
@@ -50,7 +51,19 @@ func get_grabbed_prop() -> PlacedProp:
 	return _grabbed_prop
 
 
+func release_prop_refs() -> void:
+	_pending_prop = null
+	_grabbed_prop = null
+	_lmb_down = false
+	_hold_timer = 0.0
+	_hold_triggered = false
+
+
 func _physics_process(delta: float) -> void:
+	if _pending_prop != null and not is_instance_valid(_pending_prop):
+		_pending_prop = null
+	if _grabbed_prop != null and not is_instance_valid(_grabbed_prop):
+		_grabbed_prop = null
 	if PlacedPropService.is_placement_active():
 		return
 	if not _lmb_down or _pending_prop == null or _hold_triggered:
@@ -83,7 +96,7 @@ func _can_handle_input() -> bool:
 		return true
 	if CursorController.is_paused() and _focus != null and _focus.has_method("get_focused"):
 		var focused: Variant = _focus.call("get_focused")
-		return focused is PlacedProp
+		return focused is Object and is_instance_valid(focused) and focused is PlacedProp
 	return false
 
 
@@ -95,7 +108,7 @@ func _on_lmb_down() -> void:
 	if _focus == null or not _focus.has_method("get_focused"):
 		return
 	var focused: Variant = _focus.call("get_focused")
-	if focused is PlacedProp:
+	if focused is Object and is_instance_valid(focused) and focused is PlacedProp:
 		_pending_prop = focused as PlacedProp
 
 
