@@ -1,13 +1,19 @@
-# Energy Simulator — Product Roadmap
+# SIMbiogenesis — Product Roadmap
 *Built with Fable 5 · Open Source Stack · Community-Driven · Digital Twin Ready*
+
+**Detailed 2D graph / ISRU vision:** [`SYSTEMS_GRAPH_VISION.md`](SYSTEMS_GRAPH_VISION.md)
 
 ---
 
 ## What This Game Actually Is
 
-A first-person energy installation simulator that uses real physics, real weather data, and real terrain — making professional-grade renewable energy design tools accessible to anyone who can play a video game. Systems designed in-game are exportable as real ESPHome/HA configurations. Real installed systems can feed live data back into the simulation. The community collectively explores the design space, and the best installations — simulated and real — rise to the top of a shared, decentralized registry.
+An **in situ resource utilization (ISRU) simulator** disguised as a first-person exploration game. The player picks a real location on Earth — an **origin point** — and defines a **Sphere of Influence**: a conceptual open-system volume (surface, atmosphere, subsurface) for which they accept stewardship. Within that sphere, the game tracks the flux of **sun, wind, rain, and biomass** — Earth's **Planetary Basic Income**, the unstoppable solar-driven energy and material flows that sustain all life for free.
 
-Think: *Factorio* meets *Google Earth* meets *PVsyst* — open source, community-owned, Home Assistant-native.
+The **2D systems graph** (G toggle) is the **core gameplay surface**: a schematic, node-based map of every connection, storage, process, and resource flow within the sphere — like Grasshopper or TouchDesigner for real infrastructure. The **3D world** is the **embodied digital twin**: walk the site, place modules, see weather and terrain. Together they let players design closed-loop pathways (water recovery, waste recycling, energy storage, food production), simulate efficiency in their exact location, **export configs to Home Assistant**, link live sensor data, and **calibrate simulation against reality** until simulated and real performance converge.
+
+The problem the game teaches is not scarcity — Earth has enough sunlight, water, and material for everyone — but **integration efficiency**: kWh per liter of recovered water, kg of plastic recycled per kWh, reliability of off-the-shelf open-source hardware. Every graph module represents a **real product or technology** with known costs and performance. Players start partially open (Earth never requires 100% closure on day one) and work toward self-sustaining spheres that can overlap with others — training for the 100% ISRU required on Moon and Mars.
+
+Think: *Factorio* meets *Google Earth* meets *PVsyst* meets *TouchDesigner* — open source, community-owned, Home Assistant-native, ISRU-first.
 
 ---
 
@@ -368,6 +374,65 @@ The Sentinel-2 tile for a 2km × 2km area is approximately 15MB compressed — c
 
 ---
 
+### Pillar 9: Sphere of Influence & Systems Graph *(core gameplay — see SYSTEMS_GRAPH_VISION.md)*
+
+The 2D graph is the game's **conceptual map** of the 3D digital twin. Everything else (terrain, first-person placement, HA bridge) exists to ground this schematic in reality.
+
+#### Sphere of Influence (SoI)
+
+- **Origin:** map location (lat/lon) from LocationPicker / user map `.tres`
+- **Radius:** user-defined; defines conceptual stewardship volume (atmosphere + habitable surface + subsurface)
+- **Open system:** not physically enclosed; tracks boundary-crossing flows for closure accounting
+- **Expansion:** increase radius as closure improves; future overlap with other players' spheres
+
+#### Planetary Basic Income — primary catchments
+
+All catchment nodes derive rates from location + weather + SoI footprint area:
+
+| Input | Source data | Satisfies |
+|-------|-------------|-----------|
+| Sun | GHI / Open-Meteo radiation | Electric, thermal, biomass (via photosynthesis) |
+| Wind | Open-Meteo 10 m wind | Electric |
+| Rain | Precipitation × SoI area | Water tanks, aquifer recharge |
+| Biomass | OSM vegetation + NDVI + season | Food, biochar, fuel feedstock |
+
+#### ISRU module library
+
+Every library item = real product or open-source design with:
+
+- Typed input/output ports (`ResourceKinds` + extensions)
+- Efficiency metrics (`energy_wh_per_unit`, throughput, loss factors)
+- Capital/operating cost · HA entity template · datasheet link
+
+Categories beyond today's electrical focus: water recovery, waste sorting/shredding, biochar, digesters, greenhouses, atmospheric moisture, soil amendment.
+
+#### Graph UX — TouchDesigner-style nested canvases
+
+- **Compound nodes** expose a child scope canvas (partially implemented: scope stack, breadcrumbs, Enter/Back)
+- Double-click compound → drill in; breadcrumb → navigate up
+- **Promoted ports** on compound boundary = external API of a subsystem
+- Wire animation ∝ flow rate; tank levels scrub on timeline (ResourceTimeline, like battery SOC)
+- **Build** mode (paused) vs **Test** mode (time running) — extend with closure dashboards
+
+#### 3D ↔ 2D linkage
+
+- Placed 3D props ↔ graph nodes (prop_id / catalog_id)
+- OSM solar arrays → panel compounds (working today)
+- Conduit routes ↔ optional spatial overlay; graph owns logical topology
+- Select in either view → highlight counterpart
+
+#### Sim ↔ real calibration loop
+
+1. Design pathway in graph → export HA/ESPHome (Pillar 5)
+2. Build hardware → link sensors via `HAEntityLinker`
+3. Compare observed vs simulated resource timelines (extend SolarUI NLE compare pattern)
+4. Auto-calibrate efficiency coefficients → suggest graph improvements
+5. Track **closure fraction** per human-need resource (% sourced inside SoI)
+
+**Fable session:** `"Read SYSTEMS_GRAPH_VISION.md. Implement SoI metadata on graph root scope (radius, area, closure metrics panel). Add catchment source nodes for rain and biomass driven by WeatherService + SoI area. Extend ResourceFlowEngine to inject PBI at catchment nodes. Complete compound promoted-port wiring and TouchDesigner-style drill-in UX. Add three water-processor catalog entries with energy_wh_per_liter specs."`
+
+---
+
 ## Roadmap Phases
 
 ### Phase 0 — Architecture Sprint *(in progress with Fable now)*
@@ -442,6 +507,21 @@ The Sentinel-2 tile for a 2km × 2km area is approximately 15MB compressed — c
 - Battery dispatch optimizer (dynamic programming on TOU schedule)
 - Shared installation API alternative (self-hostable REST backend for orgs)
 
+### Phase 8 — Systems Graph Overhaul *(4–6 Fable sessions — Pillar 9)*
+
+Priority order (each milestone independently shippable):
+
+1. **SoI model** — radius UI, area math, metadata on graph root, closure fraction readout
+2. **PBI catchments** — sun/wind/rain/biomass source nodes tied to WeatherService + SoI area
+3. **Nested canvas completion** — promoted ports, TD-style drill-in/out, scope save round-trip
+4. **ISRU catalog expansion** — water, waste, biomass processors with real efficiency specs
+5. **Flow UX** — wire animation, tank level overlays, multi-resource timeline lanes on TimelineUI
+6. **3D ↔ 2D binding** — placed prop ↔ graph node, cross-highlight, import from world
+7. **Calibration loop** — observed vs sim per resource channel, auto-tune `energy_wh_per_unit`
+8. **HA pathway export** — graph-native automation authoring → AutomationEngine YAML push
+
+**Milestone:** Player designs a rain → tank → filter → tap pathway at their real address, runs a dry-week scenario, exports HA config, links one live flow sensor, and sees sim vs observed divergence on the timeline.
+
 ---
 
 ## Fable Session Strategy
@@ -490,4 +570,4 @@ The HACS integration is always-running, handles HA's authentication and SSL, and
 
 ---
 
-*Last updated: June 2026. Update this document after each Fable session.*
+*Last updated: July 2026. Update this document after each Fable session.*

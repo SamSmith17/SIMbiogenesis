@@ -1,6 +1,9 @@
 # SIMbiogenesis — renewable energy simulator (Godot 4.6)
 
-First-person simulator with real weather, terrain from GPS, solar/wind/hydro physics, and Home Assistant digital-twin bridge. **Godot 4.6**, Forward Plus.
+First-person ISRU simulator with real weather, terrain from GPS, solar/wind/hydro
+physics, multi-resource systems graph, and Home Assistant digital-twin bridge.
+**Godot 4.6**, Forward Plus. Product vision: [`ROADMAP.md`](ROADMAP.md) · Graph design:
+[`SYSTEMS_GRAPH_VISION.md`](SYSTEMS_GRAPH_VISION.md).
 
 **GitHub lite clone:** bespoke SOAK/Mars art is not in Git — see [ASSETS.md](ASSETS.md). Generated location maps work without the asset pack.
 

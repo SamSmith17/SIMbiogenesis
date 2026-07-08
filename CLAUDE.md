@@ -1,7 +1,9 @@
 # SIMbiogenesis — Project Memory
 
-Godot 4.6 (Forward Plus). First-person renewable-energy simulator with a real
-Home Assistant digital-twin bridge. Product vision: `ROADMAP.md`. Restructure
+Godot 4.6 (Forward Plus). First-person ISRU / renewable-energy simulator with a real
+Home Assistant digital-twin bridge. **Core gameplay = 2D systems graph** (schematic
+map of resource flows within a Sphere of Influence); **3D world = embodied digital twin**.
+Product vision: `ROADMAP.md` + graph overhaul: `SYSTEMS_GRAPH_VISION.md`. Restructure
 history: `PHASE1_INVENTORY.md` … `PHASE7_PERFORMANCE.md`. Secrets policy:
 `LOCAL_CONFIG.md` (real HA/UISP credentials live under `user://` only — never
 commit URLs or tokens).
@@ -26,11 +28,23 @@ Godot.exe.exe --headless --path . --quit-after 120 res://scenes/maps/mars_aerial
 
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
+# Terrain seam compose diagnostic (offline, synthetic mismatch grid):
+Godot.exe.exe --headless --path . --script core/terrain/terrain_seam_diag_run.gd
 # Building pipeline self-test (offline — roof geometry/UVs/styles/facade
 # elements/wall picking/model catalog; extend it with every building change):
 Godot.exe.exe --headless --path . --script core/terrain/building_builder_selftest.gd
+# Climelapse keyframe + scale-bake round-trip (offline):
+Godot.exe.exe --headless --path . --script core/climelapse/climelapse_series_selftest.gd
+# Climelapse MP4 export (in-game): Render ▾ → Climelapse → export MP4… — requires ffmpeg in PATH
+# Vegetation growth seasonal gate + instance map (offline):
+Godot.exe.exe --headless --path . --script vegetation/vegetation_growth_selftest.gd
 # Terrain live-fetch smoke test (NETWORK — elevation + imagery for one site):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_fetch_smoketest.gd
+
+# Visual playtest capture (WINDOWED — cannot be --headless): launch a user map
+# by CLI, freeze a daytime clock, hide HUD, shoot drone-orbit + street PNG sets
+# (+ manifest.json) to user://screenshots/<label>/ for agent/visual review:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres> --capture=both --shots-dir=<label> --quit-after-capture
 ```
 
 Gotchas: headless runs rename `addons/**/~lib*.dll` → `*.TMP` (restore with
@@ -105,7 +119,44 @@ doors/windows; Library tab lists `ModelCatalog.models_in_category("structures")`
 incl. StarShade and hands off to `PlacedPropService` ghost placement or
 `replace_osm_building`). `apply_building_style` rebuilds one child; entering/leaving
 the styled set re-runs `_attach_buildings`. Selftest:
-`core/terrain/building_builder_selftest.gd` (100 checks).
+`core/terrain/building_builder_selftest.gd` (148 checks).
+
+**Photoreal buildings (ortho roofs + wall modes + facade textures).** Roof
+surface carries geo-registered **UV2** (plan position / `ORTHO_HALF_EXTENT_M`
+= 500 m square, (0,0) = NW like the terrain drape; fixed constant → mesh never
+rebuilds when imagery lands). A third imagery layer "hyper" (`HYPER_HALF_EXTENT`
+500 m, `HYPER_MAX_ZOOM` 19 ≈ 0.24 m/px; cfg override `[terrain]
+hyper_target_px`) is requested after the detail layer, never gating load.
+**ESRI z20+ exists only in select metros — elsewhere it returns HTTP-200 "Map
+data not yet available" placeholder tiles** (a z20 fetch at Bombay Beach cached
+an all-grey mosaic → blank grey roofs); ImageryService `_region_is_placeholder`
+now rejects near-uniform mosaics as failed layers. `_make_world_roof_material()` sets `use_ortho`/`ortho_tex`/`ortho_uv_scale`
+on `building_roof.gdshader` so roofs inside the patch sample the REAL aerial
+photo (procedural shingle shade layered on top via `ortho_relief`; detail-drape
+fallback remaps UV2 by extent ratio; outside-patch/no-texture → procedural).
+Wall surface UV2 = `(WallMode + 0.5, seed01)`: `building_wall.gdshader` modes
+LAP(0, byte-identical original)/TRAILER/CORRUGATED/PLYWOOD/STUCCO +
+`weathering` uniform; `resolve_wall_mode` maps `building:material`/
+`static_caravan` tags, else footprint <80 m² = trailer-town stock (Bombay Beach
+has ZERO material tags in OSM — size heuristic does the lifting). Style keys:
+`wall_mode` (int, −1 auto), `wall_texture` (+`wall_tex_w_m/h_m`) — a PNG from
+`user://maps/facade_textures/` (drop-in or `tools/generate_facades.py`, Gemini
+Imagen, GEMINI_API_KEY env) tiled in metric wall UVs on styled buildings only
+(missing file → warn + procedural). Modal adds Material + Facade tex controls
+and a **Reference** tab: `MapillaryService` autoload (token
+`user://terrain_config.cfg [mapillary] access_token=`, cache
+`user://terrain_cache/mapillary/`, CC-BY-SA attribution shown; Google Street
+View is ToS-forbidden for texturing) shows nearby street photos; click = wall
+eyedropper, right-click = roof.
+
+**Playtest harness (`core/terrain/playtest_harness.gd`, autoload).** Hard no-op
+without CLI user args (after `--`). `--user-map=<user://maps/*.tres>` (or
+`--map-lat/--map-lon`) seeds MapContext + switches to the generated shell;
+`--capture=orbit|street|both` waits for `TerrainLoader.map_load_complete`
+(+ the hyper drape, bounded 420 s), freezes `--time=<hour>` (default 10.0),
+hides CanvasLayers, shoots PNG sets + `manifest.json` (pos/yaw/pitch per shot)
+to `user://screenshots/<--shots-dir>/`; `--quit-after-capture` exits. F12 =
+manual shot any windowed run. Captures need a window (no --headless).
 
 **Graph PV electrical + layout (system_graph/).** `PvElectrical` computes string Voc
 (series sum / parallel branch max, cold-temp boost) on PV connections; exceeding
@@ -124,18 +175,23 @@ pattern):**
   CONCURRENT connections per IP (429), not request count** — so batches are
   fetched SEQUENTIALLY (POOL_SIZE=1, DISPATCH_DELAY between requests). A concurrent
   pool tripped 429 and fell back to flat terrain; sequential is reliable.
- DEFAULT_GRID_N=16 = 3 requests (~15 s first time, then cached; ~1.9 km spacing,
- upsampled to mesh res). **Detail (centre 3 km) DEM is ALWAYS fetched now** — with
- an OpenTopography key it's a single 512² AAIGrid; without a key the service caps
- the Open-Meteo detail fetch to OPENMETEO_DETAIL_N (64² ≈ ~47 m spacing, far finer
- than the 1.9 km base grid) at ~40 serial requests. The `terrain_loader` step-4
- gate that used to `_skip_detail_dem()` without a key was removed — the DEM caches,
- so the first visit per site pays the ~30 s fetch once (inside the blocking load
- sequence) and every reload is an instant cache hit. Optional upgrade =
- OpenTopography SRTM 30 m when `user://terrain_config.cfg [opentopography]
- api_key=` is set (gitignored, never commit). 429/5xx → backoff retry
- (MAX_RETRIES=3). **Open-Meteo enforces a DAILY quota per IP** — when a batch
- returns `{"error":true,"reason":"Daily API request limit exceeded"}`
+ DEFAULT_GRID_N=64 (configurable via `[terrain] base_dem_grid_n`) = ~41 serial
+ Open-Meteo batches first visit (~30 s), then cached; ~470 m spacing over 30 km,
+ upsampled to mesh res). **Detail DEM is fetched before the first walkable terrain
+ build** (not lazy-loaded afterward). With an OpenTopography key it's a single
+ 512² AAIGrid; without a key the service caps the Open-Meteo detail fetch to
+ OPENMETEO_DETAIL_N (64² ≈ ~47 m spacing) at ~40 serial requests. **Seam compose**
+ (`TerrainBuilder` + `TerrainSeamDiag`): vertical offset alignment in the overlap
+ ring, adaptive feather (80–800 m from boundary delta), exterior coarse ring blend,
+ and player spawn gated until composed heightfield is ready. Configurable extents:
+ `MapDefinition.half_extent_m` / `detail_half_extent_m` / `osm_half_extent_m` +
+ location picker Advanced + in-game Terrain options. The `terrain_loader` used to
+ gate detail behind post-terrain phases — detail now blocks terrain build. DEM caches,
+ so the first visit per site pays the fetch once (inside the blocking load sequence)
+ and every reload is an instant cache hit. Optional upgrade = OpenTopography SRTM 30 m
+ when `user://terrain_config.cfg [opentopography] api_key=` is set (gitignored, never
+ commit). 429/5xx → backoff retry (MAX_RETRIES=3). **Open-Meteo enforces a DAILY quota
+ per IP** — when a batch returns `{"error":true,"reason":"Daily API request limit exceeded"}`
  (`_is_openmeteo_daily_limit`), the service fails FAST (no wasteful retries),
  latches `is_openmeteo_daily_exhausted()`, and the loader then SKIPS the no-key
  detail-DEM storm so OSM + vegetation phases aren't blocked ~20 min. **Cache
@@ -151,8 +207,9 @@ pattern):**
  forever; `ElevationService.reset_session()` cancels in-flight HTTP on each new load.
  Refresh/reset-fresh are blocked while `_load_sequence_active` or when quota is
  exhausted with no OpenTopography key (would delete cache with no way to refetch).
- Cache `user://terrain_cache/dem/`. Both ElevationService + ImageryService print
- `served from cache — no download` vs `not cached — fetching …` per layer.
+ Cache `user://terrain_cache/dem/` (CACHE_VERSION v3 bumps on grid-N default change).
+ Both ElevationService + ImageryService print `served from cache — no download` vs
+ `not cached — fetching …` per layer.
 - `core/terrain/imagery_service.gd` (`ImageryService`): ESRI World Imagery XYZ
   JPEG tiles (no key), stitched + cropped to the bbox so UV 0..1 aligns with the
   mesh. Cache `user://terrain_cache/imagery/`. `attribution()` must be credited.
@@ -289,7 +346,11 @@ clock. `contribute_to_grid=false` opts out of the grid balance
 SolarUI sums contributing sources via `_poll_aux_generation()` into
 `current_aux_generation_kw` → battery balance + HUD net.
 
-## System graph (system_graph/ + system_graph_v2/)
+## System graph (system_graph/ + system_graph_v2/) — **core gameplay surface**
+
+**Vision:** `SYSTEMS_GRAPH_VISION.md` (SoI, Planetary Basic Income catchments, ISRU
+catalog, TouchDesigner nested canvases, sim↔real calibration). ROADMAP Pillar 9 +
+Phase 8.
 
 One view: `system_graph/system_graph_view.gd` (G toggles), using the V2 canvas
 `system_graph_v2/graph_canvas_v2.gd` (extends graph_canvas.gd). Type
@@ -299,8 +360,14 @@ HANDLES / `_type_title`. Library presets: `system_graph/data/component_presets.g
 acload, processor, resource, shelly4pm, compound). Inspector forms:
 `inspector_panel.gd` `_rebuild_for_item` match. Solar mirroring:
 `solar_bridge.gd` (virtual_* items @0.25s). Wind/hydro live refresh:
-`system_graph_view._tick_graph_renewables()`. Graph state round-trips via
-`collect_save_state()`/`apply_save_state()` + per-scene autosave JSON.
+`system_graph_view._tick_graph_renewables()`. Multi-resource flow:
+`resource_flow_engine.gd` + `ResourceTimeline` (scrub-safe tanks). Typed resources:
+`resource_kinds.gd` (water, biomass, plastic_waste, …). Nested scopes:
+`_active_scope_id` / compound Enter-Back (partial TD-style drill-in).
+Graph state round-trips via `collect_save_state()`/`apply_save_state()` + per-scene
+autosave JSON. **Overhaul direction:** SoI metadata, PBI catchment nodes, full
+compound promoted ports, ISRU catalog beyond electrical, 3D↔2D node binding,
+observed-vs-sim calibration per resource channel.
 
 ## HA digital twin (working today)
 
