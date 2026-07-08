@@ -4,17 +4,14 @@
 
 [node name="FPVDrone" type="Area3D"]
 script = ExtResource("1_drone")
-max_forward_speed = 45.0
-vertical_speed = 25.0
-gravity_strength = 4.0
-max_fall_speed = 10.0
-steering_sensitivity = 3.0
-acceleration = 28.0
-deceleration = 6.0
-tilt_intensity = 25.0
+max_forward_speed = 65.0
+vertical_speed = 35.0
+steering_sensitivity = 2.5
+acceleration = 45.0
+drag = 10.0
+tilt_intensity = 35.0
 max_altitude = 8000.0
 interaction_radius = 2.0
 display_name = "FPV Drone"
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
-

@@ -14,11 +14,11 @@ signal player_exited_range(drone: FPVDrone)
 
 # Flight characteristics - tuned for DJI Avata-style FPV feel
 @export_group("Flight Settings")
-@export var max_forward_speed: float = 45.0  # m/s horizontal at full stick
-@export var vertical_speed: float = 25.0  # m/s ascend/descend at full trigger
+@export var max_forward_speed: float = 65.0  # m/s horizontal at full stick
+@export var vertical_speed: float = 35.0  # m/s ascend/descend at full trigger
 @export var steering_sensitivity: float = 2.5  # Mouse/head tracking sensitivity
-@export var acceleration: float = 28.0  # How fast drone accelerates
-@export var drag: float = 8.0  # How fast drone decelerates to hover
+@export var acceleration: float = 45.0  # How fast drone accelerates
+@export var drag: float = 10.0  # How fast drone decelerates to hover
 @export var tilt_intensity: float = 35.0  # Max visual tilt angle in degrees
 @export var tilt_speed: float = 8.0  # How fast drone tilts (visual banking)
 
@@ -83,6 +83,39 @@ func _ready() -> void:
 	
 	# Setup interaction area
 	_setup_interaction_area()
+	call_deferred("_apply_settings_from_controller")
+
+
+func _apply_settings_from_controller() -> void:
+	if not is_instance_valid(SimSettingsController):
+		return
+	if not SimSettingsController.drone_settings_changed.is_connected(_apply_settings_from_controller):
+		SimSettingsController.drone_settings_changed.connect(_apply_settings_from_controller)
+	apply_flight_settings(SimSettingsController.get_drone_flight_settings())
+
+
+func apply_flight_settings(settings: Dictionary) -> void:
+	for key in settings:
+		match key:
+			"max_forward_speed":
+				max_forward_speed = float(settings[key])
+			"vertical_speed":
+				vertical_speed = float(settings[key])
+			"acceleration":
+				acceleration = float(settings[key])
+			"drag":
+				drag = float(settings[key])
+			"steering_sensitivity":
+				steering_sensitivity = float(settings[key])
+			"min_altitude":
+				min_altitude = float(settings[key])
+			"max_altitude":
+				max_altitude = float(settings[key])
+			"tilt_intensity":
+				tilt_intensity = float(settings[key])
+			"tilt_speed":
+				tilt_speed = float(settings[key])
+
 
 func _create_drone_mesh() -> void:
 	# Main body - flattened box shape typical of FPV drones
@@ -229,9 +262,13 @@ func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 	var input_strafe := move_input.x
 	
 	# Shift / Ctrl (or triggers) for altitude; no vertical input while sim is paused.
+	# NOTE: analemma (∞) mode also runs with time_scale == 0 (it advances via a
+	# per-frame day-stepper instead of integrating time_scale), so it must NOT
+	# be treated as "paused" here or drone altitude control silently breaks.
 	var input_altitude := 0.0
 	var main := get_tree().get_first_node_in_group("main_scene") if get_tree() != null else null
-	var sim_paused := main != null and float(main.get("time_scale") if main.get("time_scale") != null else 1.0) == 0.0
+	var analemma_active := main != null and bool(main.get("analemma_mode"))
+	var sim_paused := main != null and not analemma_active and float(main.get("time_scale") if main.get("time_scale") != null else 1.0) == 0.0
 	if not sim_paused:
 		input_altitude = Input.get_action_strength("drone_ascend") - Input.get_action_strength("drone_descend")
 	
@@ -266,18 +303,33 @@ func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 		_update_visual_tilt(delta)
 
 func _get_ground_height() -> float:
-	# Raycast down to find ground
+	var main := _find_main()
+	if main != null:
+		return TerrainSurfaceQuery.ground_height_at(main, global_position.x, global_position.z)
 	var space_state := get_world_3d().direct_space_state
+	if space_state == null:
+		return 0.0
 	var query := PhysicsRayQueryParameters3D.create(
 		global_position,
 		global_position + Vector3.DOWN * maxf(500.0, max_altitude + 500.0)
 	)
 	query.exclude = [self]
-	
 	var result := space_state.intersect_ray(query)
 	if result:
-		return result.position.y
+		return float((result["position"] as Vector3).y)
 	return 0.0
+
+
+func _find_main() -> Node:
+	var n: Node = self
+	while n != null:
+		if n.has_method("get_lunar_phase"):
+			return n
+		n = n.get_parent()
+	var tree := get_tree()
+	if tree != null and tree.current_scene != null:
+		return tree.current_scene
+	return null
 
 func _update_visual_tilt(delta: float) -> void:
 	var horizontal_vel := Vector3(current_velocity.x, 0, current_velocity.z)

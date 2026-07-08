@@ -114,8 +114,8 @@
 | Move Forward / Back | Left Joystick (Axis 1) |
 | Strafe Left / Right | Left Joystick (Axis 0) |
 | Look / Pan | Right Joystick (Axes 2 & 3) |
-| Ascend | Shift (keyboard) or R2 (Axis 5) |
-| Descend | Ctrl (keyboard) or L2 (Axis 4) |
+| Ascend | Shift **or** Up Arrow (keyboard), or R2 (Axis 5) |
+| Descend | Down Arrow (keyboard) or L2 (Axis 4) |
 
 ---
 
