@@ -83,11 +83,10 @@ func _draw_v2_legend() -> void:
 		{"label": "DC negative  (grey)",  "color": PORT_COLORS.get("negative", Color(0.48, 0.48, 0.48, 1.0))},
 		{"label": "AC output  (amber)",   "color": PORT_COLORS.get("ac", Color(0.94, 0.68, 0.30, 1.0))},
 		{"label": "PV string  (gold)",    "color": PORT_COLORS.get("pv", Color(0.96, 0.62, 0.04, 1.0))},
-		{"label": "Water",                "color": ResourceKinds.wire_color("water")},
-		{"label": "Biomass",              "color": ResourceKinds.wire_color("biomass")},
-		{"label": "Plastic / shred",      "color": ResourceKinds.wire_color("plastic_shred")},
-		{"label": "Flow animation  (cyan)","color": Color(0.13, 0.83, 0.93, 1.0)},
 	]
+	for e: Dictionary in ResourceKinds.legend_entries(false):
+		entries.append({"label": e.get("label", ""), "color": e.get("color", Color.WHITE)})
+	entries.append({"label": "Flow animation  (scroll)", "color": Color(0.13, 0.83, 0.93, 1.0)})
 	# Anchor legend to bottom-right of canvas
 	var legend_w := 238.0
 	var legend_h := 20.0 + entries.size() * 20.0 + 8.0
@@ -240,7 +239,11 @@ func _draw_v2_connection_feedback() -> void:
 			txt = "Release to connect: %s.%s" % [item_id, handle_id]
 			col = Color(0.33, 0.92, 0.55, 0.95)
 		else:
-			txt = "Invalid connection: polarity mismatch on %s.%s" % [item_id, handle_id]
+			if _wire_src_polarity == "resource":
+				txt = ResourceKinds.mismatch_message(
+					_wire_src_resource_kind, str(_wire_snap.get("resource_kind", "")))
+			else:
+				txt = "Invalid connection: polarity mismatch on %s.%s" % [item_id, handle_id]
 			col = Color(0.95, 0.45, 0.45, 0.95)
 	else:
 		txt = "Drag to a compatible port to connect wires"

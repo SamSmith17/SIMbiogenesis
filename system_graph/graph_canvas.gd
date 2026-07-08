@@ -1168,12 +1168,16 @@ func _on_wire_drag_move(screen_pos: Vector2) -> void:
 
 
 func _finalize_connection() -> void:
-	if model == null or _wire_snap.is_empty():
+	if model == null or _wire_snap.is_empty() or not _wire_snap_valid:
 		return
+	var tgt_kind := str(_wire_snap.get("resource_kind", ""))
+	var res_type := ""
+	if _wire_src_polarity == "resource":
+		res_type = ResourceKinds.normalize_kind(_wire_src_resource_kind)
 	model.add_connection({
 		"scope_id":         active_scope_id,
 		"polarity":         _wire_src_polarity,
-		"resource_type":    _wire_src_resource_kind if _wire_src_polarity == "resource" else "",
+		"resource_type":    res_type if _wire_src_polarity == "resource" else "",
 		"source_item_id":   _wire_src_item_id,
 		"source_handle_id": _wire_src_handle_id,
 		"target_item_id":   _wire_snap.get("item_id",   "") as String,
@@ -1259,9 +1263,7 @@ func _port_at_screen(screen_pos: Vector2,
 func _polarity_compatible(src: String, tgt: String,
 		src_kind: String = "", tgt_kind: String = "") -> bool:
 	if src == "resource" and tgt == "resource":
-		if src_kind.is_empty() or tgt_kind.is_empty():
-			return true
-		return src_kind == tgt_kind
+		return ResourceKinds.kinds_compatible(src_kind, tgt_kind)
 	if src == tgt:
 		return true
 	# load ↔ ac (appliance into outlet)
@@ -1280,8 +1282,16 @@ func _draw_temp_wire() -> void:
 		return
 
 	var col := _wire_color_for_port(_wire_src_polarity, _wire_src_resource_kind)
+	var preview_width := 2.5
+	if _wire_src_polarity == "resource":
+		var stroke := ResourceEdgeVis.stroke_for(
+			ResourceKinds.normalize_kind(_wire_src_resource_kind),
+			0.0, false, false)
+		col = stroke.get("color", col) as Color
+		preview_width = float(stroke.get("width", 1.6))
 	if not _wire_snap.is_empty() and not _wire_snap_valid:
 		col = C_RED
+		preview_width = 2.0
 
 	var to_pos:  Vector2
 	var to_tang_in: Vector2
@@ -1297,15 +1307,21 @@ func _draw_temp_wire() -> void:
 	var c1: Vector2 = ctrl["c1"]
 	var c2: Vector2 = ctrl["c2"]
 
-	# Dashed preview: draw only even-numbered segments
-	var steps := 28
-	var prev  := _wire_src_pos
-	for i in range(1, steps + 1):
-		var t := float(i) / float(steps)
-		var p := _wire_src_pos.bezier_interpolate(c1, c2, to_pos, t)
-		if i % 2 == 0:
-			draw_line(prev, p, Color(col.r, col.g, col.b, 0.75), 2.5)
-		prev = p
+	if _wire_src_polarity == "resource":
+		_draw_bezier_stroke(_wire_src_pos, c1, c2, to_pos, 28, col, preview_width)
+		if not _wire_snap.is_empty() and _wire_snap_valid:
+			ResourceEdgeVis.draw_bezier_flow_cues(
+				self, _wire_src_pos, c1, c2, to_pos, col, preview_width, _flow_phase, false)
+	else:
+		# Dashed preview: draw only even-numbered segments
+		var steps := 28
+		var prev  := _wire_src_pos
+		for i in range(1, steps + 1):
+			var t := float(i) / float(steps)
+			var p := _wire_src_pos.bezier_interpolate(c1, c2, to_pos, t)
+			if i % 2 == 0:
+				draw_line(prev, p, Color(col.r, col.g, col.b, 0.75), 2.5)
+			prev = p
 
 	# Source port pulse
 	draw_circle(_wire_src_pos, 9.0 * _zoom,
@@ -1317,6 +1333,12 @@ func _draw_temp_wire() -> void:
 		var ring_col := C_GREEN if _wire_snap_valid else C_RED
 		draw_circle(snap_pos, 10.0 * _zoom, Color(ring_col.r, ring_col.g, ring_col.b, 0.25))
 		draw_circle(snap_pos, 9.0  * _zoom, ring_col, false)
+		if not _wire_snap_valid and _wire_src_polarity == "resource":
+			var msg := ResourceKinds.mismatch_message(
+				_wire_src_resource_kind, str(_wire_snap.get("resource_kind", "")))
+			var fnt := ThemeDB.fallback_font
+			draw_string(fnt, snap_pos + Vector2(12.0, -8.0), msg,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.98, 0.45, 0.42, 0.95))
 
 
 # ---------------------------------------------------------------------------
@@ -1435,16 +1457,19 @@ func _renewable_output_w() -> float:
 	return total
 
 
-## Live PV output in watts (virtual array or any panel item).
+## Live PV output in watts — sum every panel / virtual array node.
 func _solar_array_output_w() -> float:
 	if model == null:
 		return 0.0
+	var total := 0.0
+	var found := false
 	for it: Dictionary in _visible_items():
 		var iid: String = it.get("id", "") as String
 		if iid == "virtual_solar_array" or it.get("type", "") == "panel":
 			var sp: Dictionary = it.get("specs", {}) as Dictionary
-			return maxf(0.0, float(sp.get("current_output_kw", 0.0)) * 1000.0)
-	return 0.0
+			total += maxf(0.0, float(sp.get("current_output_kw", 0.0)) * 1000.0)
+			found = true
+	return total if found else 0.0
 
 
 ## Estimated power (W), flow direction, and whether the wire is actively carrying power.
@@ -1509,17 +1534,23 @@ func _estimate_connection_flow(
 			w_pv = 5.0 + solar_w * 0.15
 		return {"watts": w_pv, "reverse": false, "active": producing}
 
-	# Controller ↔ battery (graph stores controller as source, battery as target)
-	if (sid == "virtual_controller" and tid == "virtual_battery") or \
-			(sid == "virtual_battery" and tid == "virtual_controller"):
+	# Controller ↔ battery (virtual or real StarShade / LinkageLab nodes)
+	var bat_ctrl := (_is_battery_type(st) and tt == "controller") \
+			or (st == "controller" and _is_battery_type(tt)) \
+			or (sid == "virtual_controller" and tid == "virtual_battery") \
+			or (sid == "virtual_battery" and tid == "virtual_controller")
+	if bat_ctrl:
 		var w_b: float  = minf(12000.0, maxf(WIRE_FLOW_FLOOR, absf(net) * 0.95))
 		var rev:  bool  = (net < 0.0) # discharge: power runs battery → controller
-		# Battery ↔ controller always active as long as something is happening
-		var active_b: bool = (w_b > WIRE_DEAD_W * 2.0)
+		var active_b: bool = (w_b > WIRE_DEAD_W * 2.0) or solar_w > WIRE_DEAD_W
 		return {"watts": w_b, "reverse": rev, "active": active_b}
 
-	# Resource flow wires — animate from ResourceFlowEngine throughput
+	# Resource flow wires — Sankey width from ResourceFlowEngine throughput
 	if pol == "resource":
+		var kind: String = str(conn.get("resource_type", ""))
+		if kind.is_empty():
+			kind = _resource_kind_for_port(sid, conn.get("source_handle_id", "") as String)
+		kind = ResourceKinds.normalize_kind(kind)
 		var flow_rate: float = 0.0
 		var active_r: bool = false
 		if resource_flow_engine != null and resource_flow_engine.has_method("get_connection_flow"):
@@ -1527,17 +1558,14 @@ func _estimate_connection_flow(
 				"get_connection_flow", str(conn.get("id", ""))) as Dictionary
 			flow_rate = float(rf.get("rate", 0.0))
 			active_r = bool(rf.get("active", false))
-		if not active_r:
-			# Fallback: driving processor output rate label
-			var proc: Dictionary = sitem if st == "processor" else titem if tt == "processor" else {}
-			if not proc.is_empty():
-				var psp: Dictionary = (proc.get("specs", {}) as Dictionary).duplicate(true)
-				ResourceKinds.new().migrate_processor_specs(psp)
-				var outs: Array = psp.get("outputs", []) as Array
-				if outs.size() > 0:
-					flow_rate = float((outs[0] as Dictionary).get("rate", 0.0))
-					active_r = flow_rate > 0.001 and _processor_is_active(proc)
-		return {"watts": maxf(flow_rate, WIRE_FLOW_FLOOR), "reverse": false, "active": active_r}
+		return {
+			"watts": flow_rate,
+			"rate": flow_rate,
+			"reverse": false,
+			"active": active_r,
+			"is_resource": true,
+			"resource_kind": kind,
+		}
 
 	# Other DC: carry same net magnitude as a hint, consider active if net > threshold
 	var w2: float = minf(8000.0, maxf(40.0, 0.5 * (solar_w + load_w) + 50.0))
@@ -1568,34 +1596,48 @@ func _draw_connections() -> void:
 
 func _render_connection(
 		conn: Dictionary, center: Vector2, solar_w: float, load_w: float) -> void:
+	var sid: String = conn.get("source_item_id", "") as String
+	var tid: String = conn.get("target_item_id", "") as String
+	var pol: String = conn.get("polarity", "positive") as String
 	var src := _get_handle_info(
-		conn.get("source_item_id", "") as String,
-		conn.get("source_handle_id", "") as String, center)
+		sid, conn.get("source_handle_id", "") as String, center, tid, pol)
 	var tgt := _get_handle_info(
-		conn.get("target_item_id", "") as String,
-		conn.get("target_handle_id", "") as String, center)
+		tid, conn.get("target_handle_id", "") as String, center, sid, pol)
 	if src.is_empty() or tgt.is_empty():
 		return
 
 	var polarity    := conn.get("polarity", "positive") as String
 	var is_sel:  bool = (conn.get("id", "") as String == selected_connection_id)
-	var base_col  := _wire_color_for_connection(conn, polarity)
-	if bool(conn.get("voltage_mismatch", false)):
-		base_col = Color(1.0, 0.15, 0.15, 0.95)
-	var col: Color = C_SELECTED_BORDER if is_sel else base_col
+	var is_resource_wire: bool = polarity == "resource"
 	var flow_est      := _estimate_connection_flow(conn, solar_w, load_w)
 	var flow_watts:   float  = float(flow_est.get("watts", 100.0))
 	var reverse: bool = bool(flow_est.get("reverse", false))
 	var flow_active:  bool   = bool(flow_est.get("active", true))
 	var wire_shed: bool = bool(flow_est.get("shed", false))
+
+	var base_col  := _wire_color_for_connection(conn, polarity)
+	if is_resource_wire:
+		var rk: String = str(flow_est.get("resource_kind", conn.get("resource_type", "")))
+		base_col = ResourceKinds.wire_color(ResourceKinds.normalize_kind(rk))
+	if bool(conn.get("voltage_mismatch", false)):
+		base_col = Color(1.0, 0.15, 0.15, 0.95)
+	var col: Color = C_SELECTED_BORDER if is_sel else base_col
 	if wire_shed:
 		flow_active = false
 		var flash: float = 0.62 + 0.38 * abs(sin(_flow_phase * 7.5))
 		col = Color(col.r * 0.40 * flash, col.g * 0.40 * flash, col.b * 0.40 * flash, 0.45 + 0.25 * flash)
 
-	# Power-scaled wire width: thicker at high load so flow is obvious at a glance
-	var gscale_w  := _wire_glow_scale_from_watts(flow_watts)
-	var width: float = (6.5 if is_sel else WIRE_BASE_W + gscale_w * 2.4)
+	var width: float
+	if is_resource_wire:
+		var rk2: String = ResourceKinds.normalize_kind(
+			str(flow_est.get("resource_kind", conn.get("resource_type", ""))))
+		var stroke: Dictionary = ResourceEdgeVis.stroke_for(
+			rk2, float(flow_est.get("rate", flow_watts)), flow_active, is_sel)
+		col = stroke.get("color", col) as Color
+		width = float(stroke.get("width", ResourceEdgeVis.WIDTH_IDLE))
+	else:
+		var gscale_w  := _wire_glow_scale_from_watts(flow_watts)
+		width = (6.5 if is_sel else WIRE_BASE_W + gscale_w * 2.4)
 
 	# In Test mode wires animate if power is actually flowing; Build mode is always static
 	var flowing: bool = (current_mode == "test") and flow_active
@@ -1607,6 +1649,20 @@ func _render_connection(
 	var src_pos: Vector2 = src.get("pos", Vector2.ZERO) as Vector2
 	var tgt_pos: Vector2 = tgt.get("pos", Vector2.ZERO) as Vector2
 	var src_t: Vector2 = src.get("tangent", Vector2.RIGHT) as Vector2
+	if is_resource_wire:
+		if style == "orthogonal":
+			var pts_r: Array = [src_pos] + wps + [tgt_pos]
+			_draw_resource_wire_orthogonal_path(
+				pts_r, [src_t, tgt_tang_in], col, width, flowing, reverse, curve_t)
+		elif wps.is_empty():
+			_draw_resource_wire_bezier(
+				src_pos, src_t, tgt_pos, tgt_tang_in, col, width, flowing, reverse, curve_t)
+		else:
+			_draw_resource_wire_path(
+				[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_in],
+				col, width, flowing, reverse, curve_t)
+		_draw_connection_waypoint_handles(conn, center)
+		return
 	if style == "orthogonal":
 		var pts: Array = [src_pos] + wps + [tgt_pos]
 		_draw_wire_orthogonal_path(
@@ -1624,6 +1680,84 @@ func _render_connection(
 
 func _bezier_pos(from: Vector2, c1: Vector2, c2: Vector2, to: Vector2, t: float) -> Vector2:
 	return from.bezier_interpolate(c1, c2, to, t)
+
+
+## Sankey-style typed resource wire — width/color from ResourceEdgeVis; scroll dashes when flowing.
+func _draw_resource_wire_bezier(from: Vector2, from_tang: Vector2,
+		to: Vector2, to_tang_in: Vector2,
+		col: Color, width: float, flow_active: bool,
+		reverse_chase: bool, curve_tension: float = 1.0) -> void:
+	var ctrl := _wire_bezier_controls(from, from_tang, to, to_tang_in, curve_tension)
+	var c1: Vector2 = ctrl["c1"]
+	var c2: Vector2 = ctrl["c2"]
+	# Ghost track (shows route when idle)
+	_draw_bezier_stroke(from, c1, c2, to, 24,
+		Color(col.r, col.g, col.b, col.a * 0.22), maxf(1.0, width * 0.55))
+	_draw_bezier_stroke(from, c1, c2, to, 30, col, maxf(1.2, width))
+	if flow_active:
+		ResourceEdgeVis.draw_bezier_flow_cues(
+			self, from, c1, c2, to, col, width, _flow_phase, reverse_chase)
+
+
+func _draw_resource_wire_path(points: Array, end_tangents: Array,
+		col: Color, width: float, flow_active: bool,
+		reverse_chase: bool, curve_tension: float = 1.0) -> void:
+	if points.size() < 2:
+		return
+	for seg: int in range(points.size() - 1):
+		var from: Vector2 = points[seg] as Vector2
+		var to: Vector2 = points[seg + 1] as Vector2
+		var from_t: Vector2
+		var to_t_in: Vector2
+		if seg == 0:
+			from_t = end_tangents[0] as Vector2 if end_tangents.size() > 0 else (to - from).normalized()
+		else:
+			from_t = (to - from).normalized()
+		if seg == points.size() - 2:
+			to_t_in = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
+		else:
+			to_t_in = (from - to).normalized()
+		_draw_resource_wire_bezier(from, from_t, to, to_t_in, col, width, false, reverse_chase, curve_tension)
+	if flow_active:
+		var sample_fn := func(t: float) -> Vector2:
+			return _sample_wire_path(points, end_tangents, t, curve_tension)
+		ResourceEdgeVis.draw_path_flow_cues(self, sample_fn, col, width, _flow_phase, reverse_chase)
+
+
+func _draw_resource_wire_orthogonal_path(points: Array, end_tangents: Array,
+		col: Color, width: float, flow_active: bool,
+		reverse_chase: bool, _curve_tension: float = 1.0) -> void:
+	if points.size() < 2:
+		return
+	for i in range(points.size() - 1):
+		var a: Vector2 = points[i] as Vector2
+		var b: Vector2 = points[i + 1] as Vector2
+		draw_line(a, b, Color(col.r, col.g, col.b, col.a * 0.22), maxf(1.0, width * 0.55))
+		draw_line(a, b, col, maxf(1.2, width))
+	if flow_active and points.size() >= 2:
+		var total := 0.0
+		var segs: Array = []
+		for i in range(points.size() - 1):
+			var a: Vector2 = points[i] as Vector2
+			var b: Vector2 = points[i + 1] as Vector2
+			total += a.distance_to(b)
+			segs.append({"a": a, "b": b, "len": total})
+		if total < 1.0:
+			return
+		var sample_fn := func(t: float) -> Vector2:
+			var dist := t * total
+			var prev := points[0] as Vector2
+			for seg: Dictionary in segs:
+				if dist <= float(seg.get("len", 0.0)):
+					var seg_a: Vector2 = seg.get("a", Vector2.ZERO)
+					var seg_b: Vector2 = seg.get("b", Vector2.ZERO)
+					var seg_start_len: float = float(seg.get("len", 0.0)) - seg_a.distance_to(seg_b)
+					var seg_len: float = maxf(seg_a.distance_to(seg_b), 0.001)
+					var u: float = (dist - seg_start_len) / seg_len
+					return seg_a.lerp(seg_b, clampf(u, 0.0, 1.0))
+				prev = seg.get("b", prev) as Vector2
+			return points[points.size() - 1] as Vector2
+		ResourceEdgeVis.draw_path_flow_cues(self, sample_fn, col, width, _flow_phase, reverse_chase)
 
 
 ## Glow underlay + main stroke + moving chase (source → target; `reverse` when battery discharges).
@@ -1951,12 +2085,13 @@ func _remove_waypoint(conn_id: String, index: int) -> void:
 
 func _connection_polyline_graph(conn: Dictionary) -> PackedVector2Array:
 	var center := size * 0.5
+	var sid: String = conn.get("source_item_id", "") as String
+	var tid: String = conn.get("target_item_id", "") as String
+	var pol: String = conn.get("polarity", "positive") as String
 	var src := _get_handle_info(
-		conn.get("source_item_id", "") as String,
-		conn.get("source_handle_id", "") as String, center)
+		sid, conn.get("source_handle_id", "") as String, center, tid, pol)
 	var tgt := _get_handle_info(
-		conn.get("target_item_id", "") as String,
-		conn.get("target_handle_id", "") as String, center)
+		tid, conn.get("target_handle_id", "") as String, center, sid, pol)
 	if src.is_empty() or tgt.is_empty():
 		return PackedVector2Array()
 	var wps: Array = _waypoints_graph(conn)
@@ -1970,12 +2105,13 @@ func _connection_polyline_graph(conn: Dictionary) -> PackedVector2Array:
 
 
 func _connection_polyline_screen(conn: Dictionary, center: Vector2, apply_rounding: bool) -> PackedVector2Array:
+	var sid: String = conn.get("source_item_id", "") as String
+	var tid: String = conn.get("target_item_id", "") as String
+	var pol: String = conn.get("polarity", "positive") as String
 	var src := _get_handle_info(
-		conn.get("source_item_id", "") as String,
-		conn.get("source_handle_id", "") as String, center)
+		sid, conn.get("source_handle_id", "") as String, center, tid, pol)
 	var tgt := _get_handle_info(
-		conn.get("target_item_id", "") as String,
-		conn.get("target_handle_id", "") as String, center)
+		tid, conn.get("target_handle_id", "") as String, center, sid, pol)
 	if src.is_empty() or tgt.is_empty():
 		return PackedVector2Array()
 	var wps: Array = _waypoints_screen(conn, center)
@@ -2141,10 +2277,76 @@ func _array_compound_handle_override(item: Dictionary, handle_id: String) -> Dic
 	return {"rx": t, "ry": 1.0}
 
 
+const _HANDLE_ID_ALIASES := {
+	"pv-positive": "pvPositive",
+	"pv-negative": "pvNegative",
+	"pv_positive": "pvPositive",
+	"pv_negative": "pvNegative",
+	"battery-positive": "batteryPositive",
+	"battery-negative": "batteryNegative",
+	"battery_positive": "batteryPositive",
+	"battery_negative": "batteryNegative",
+	"ac-output": "acOutput",
+	"ac_output": "acOutput",
+}
+
+
+func _normalize_handle_id(handle_id: String) -> String:
+	return str(_HANDLE_ID_ALIASES.get(handle_id, handle_id))
+
+
+func _is_battery_type(itype: String) -> bool:
+	return itype == "battery" or itype == "smartbattery"
+
+
+func _is_generator_type(itype: String) -> bool:
+	return itype == "panel" or itype == "wind" or itype == "hydro"
+
+
+func _controller_handle_candidates(handle_id: String, peer_type: String,
+		conn_polarity: String) -> Array:
+	var out: Array = [_normalize_handle_id(handle_id)]
+	if handle_id.is_empty():
+		return out
+	var pos_keys := ["positive", "pv-positive", "pv_positive"]
+	var neg_keys := ["negative", "pv-negative", "pv_negative"]
+	var bat_pos_keys := pos_keys + ["battery-positive", "battery_positive"]
+	var bat_neg_keys := neg_keys + ["battery-negative", "battery_negative"]
+	if _is_battery_type(peer_type):
+		if handle_id in bat_pos_keys or conn_polarity == "positive":
+			out.append("batteryPositive")
+		if handle_id in bat_neg_keys or conn_polarity == "negative":
+			out.append("batteryNegative")
+	elif _is_generator_type(peer_type):
+		if handle_id in pos_keys or conn_polarity == "positive":
+			out.append("pvPositive")
+		if handle_id in neg_keys or conn_polarity == "negative":
+			out.append("pvNegative")
+	return out
+
+
+func _lookup_handle_fraction(item: Dictionary, handle_id: String) -> Dictionary:
+	for h: Dictionary in (item.get("handles", []) as Array):
+		if h.get("id", "") == handle_id:
+			if h.has("rx"):
+				return {"rx": float(h["rx"]), "ry": float(h["ry"])}
+			var iw := float(item.get("width", 120.0))
+			var ih := float(item.get("height", 90.0))
+			return {
+				"rx": float(h.get("x", 0.0)) / maxf(1.0, iw),
+				"ry": float(h.get("y", 0.0)) / maxf(1.0, ih),
+			}
+	for h: Dictionary in _resolved_handles(item):
+		if h.get("id", "") == handle_id:
+			return {"rx": float(h.get("rx", 0.5)), "ry": float(h.get("ry", 0.5))}
+	return {}
+
+
 ## Returns {pos: Vector2, tangent: Vector2} for a named handle on an item,
 ## or {} if the item or handle cannot be found.
 func _get_handle_info(item_id: String, handle_id: String,
-		center: Vector2) -> Dictionary:
+		center: Vector2, peer_item_id: String = "",
+		conn_polarity: String = "") -> Dictionary:
 	if model == null or item_id.is_empty() or handle_id.is_empty():
 		return {}
 	var item := model.get_item(item_id)
@@ -2154,34 +2356,28 @@ func _get_handle_info(item_id: String, handle_id: String,
 	var tl    := _item_screen_tl(item, center)
 	var sz    := _item_screen_size(item)
 	var itype := item.get("type", "generic") as String
+	var peer_type := ""
+	if not peer_item_id.is_empty():
+		peer_type = str(model.get_item(peer_item_id).get("type", ""))
+
+	var candidates: Array = [handle_id]
+	if itype == "controller" and not peer_type.is_empty():
+		candidates = _controller_handle_candidates(handle_id, peer_type, conn_polarity)
+	else:
+		candidates = [_normalize_handle_id(handle_id)]
 
 	var rx := 0.5
 	var ry := 0.5
 	var found := false
-
-	# 1. Check item's own handles array (may have absolute x/y or rx/ry)
-	for h: Dictionary in (item.get("handles", []) as Array):
-		if h.get("id", "") == handle_id:
-			if h.has("rx"):
-				rx = float(h["rx"])
-				ry = float(h["ry"])
-			else:
-				# Absolute pixel offsets stored during Phase 6 wiring
-				var iw := float(item.get("width",  120.0))
-				var ih := float(item.get("height",  90.0))
-				rx = float(h.get("x", 0.0)) / maxf(1.0, iw)
-				ry = float(h.get("y", 0.0)) / maxf(1.0, ih)
-			found = true
-			break
-
-	# 2. Fall back to built-in / dynamic handles for the type
-	if not found:
-		for h: Dictionary in _resolved_handles(item):
-			if h.get("id", "") == handle_id:
-				rx = float(h.get("rx", 0.5))
-				ry = float(h.get("ry", 0.5))
-				found = true
-				break
+	for cand_v: Variant in candidates:
+		var cand: String = _normalize_handle_id(str(cand_v))
+		var frac: Dictionary = _lookup_handle_fraction(item, cand)
+		if frac.is_empty():
+			continue
+		rx = float(frac.get("rx", 0.5))
+		ry = float(frac.get("ry", 0.5))
+		found = true
+		break
 
 	if not found:
 		return {}
@@ -2214,12 +2410,13 @@ func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 	var center := size * 0.5
 
 	for conn: Dictionary in _visible_connections():
+		var sid: String = conn.get("source_item_id", "") as String
+		var tid: String = conn.get("target_item_id", "") as String
+		var pol: String = conn.get("polarity", "positive") as String
 		var src := _get_handle_info(
-			conn.get("source_item_id", "") as String,
-			conn.get("source_handle_id", "") as String, center)
+			sid, conn.get("source_handle_id", "") as String, center, tid, pol)
 		var tgt := _get_handle_info(
-			conn.get("target_item_id", "") as String,
-			conn.get("target_handle_id", "") as String, center)
+			tid, conn.get("target_handle_id", "") as String, center, sid, pol)
 		if src.is_empty() or tgt.is_empty():
 			continue
 

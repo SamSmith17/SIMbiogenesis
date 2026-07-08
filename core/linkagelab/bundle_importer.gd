@@ -76,6 +76,8 @@ static func apply_to_scene(tree: SceneTree, prep: Dictionary) -> Dictionary:
 	var ibc_attached := false
 
 	_start_placement_ui(tree, placed_result)
+	if ModelCatalog.is_starshade_model(model_id):
+		PLACED_PROP_SERVICE_SCRIPT.seed_starshade_graph(main, prep)
 
 	return {
 		"ok": true,

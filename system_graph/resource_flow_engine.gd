@@ -166,7 +166,7 @@ func _process_catchment(item: Dictionary, net_rates: Dictionary, _dt: float) -> 
 		if str(tgt_specs.get("resource_kind", "")) != "water":
 			continue
 		net_rates[tgt_id] = float(net_rates.get(tgt_id, 0.0)) + capture_lph
-		_cache_conn_flow(str(conn.get("id", "")), capture_lph)
+		_cache_conn_flow(str(conn.get("id", "")), capture_lph, "water")
 
 
 func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float) -> void:
@@ -247,7 +247,7 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float) -> 
 			continue
 		net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) - portion
 		for conn: Dictionary in _connections_to_handle(str(item.get("id", "")), "res_in_%d" % i):
-			_cache_conn_flow(str(conn.get("id", "")), portion)
+			_cache_conn_flow(str(conn.get("id", "")), portion, kind)
 
 	for i: int in outputs.size():
 		var outp: Dictionary = outputs[i] as Dictionary
@@ -262,10 +262,10 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float) -> 
 			continue
 		net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) + portion
 		for conn: Dictionary in _connections_from_handle(str(item.get("id", "")), "res_out_%d" % i):
-			_cache_conn_flow(str(conn.get("id", "")), portion)
+			_cache_conn_flow(str(conn.get("id", "")), portion, str(outp.get("kind", "")))
 		if i == 0 and outputs.size() == 1:
 			for conn: Dictionary in _connections_from_handle(str(item.get("id", "")), "output"):
-				_cache_conn_flow(str(conn.get("id", "")), portion)
+				_cache_conn_flow(str(conn.get("id", "")), portion, str(outp.get("kind", "")))
 
 
 func _total_io_rate(arr: Array) -> float:
@@ -415,8 +415,18 @@ func _connections_to_handle(item_id: String, handle_id: String) -> Array:
 	return out
 
 
-func _cache_conn_flow(conn_id: String, rate: float) -> void:
-	_conn_flow[conn_id] = {"rate": rate, "active": rate > 0.001}
+func _cache_conn_flow(conn_id: String, rate: float, kind: String = "") -> void:
+	_conn_flow[conn_id] = {"rate": rate, "active": rate > 0.001, "kind": kind}
+	# Mirror live rate on the connection dict for inspector/tooling (no changed signal).
+	if _model == null:
+		return
+	for conn: Dictionary in _model.connections:
+		if str(conn.get("id", "")) == conn_id:
+			conn["flow_rate"] = rate
+			conn["flow_active"] = rate > 0.001
+			if not kind.is_empty():
+				conn["resource_type"] = ResourceKinds.normalize_kind(kind)
+			break
 
 
 func get_connection_flow(conn_id: String) -> Dictionary:

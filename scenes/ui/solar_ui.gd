@@ -2593,6 +2593,10 @@ func set_cloud_cover_from_history(cover: float) -> void:
 		_update_weather_button()
 
 func _calculate_solar_power() -> void:
+	if PANEL_COUNT <= 0 or PEAK_CAPACITY_KW <= 0.0:
+		current_solar_kw = 0.0
+		_raw_solar_kw = 0.0
+		return
 	# Use HA override if available
 	if _ha_solar_override >= 0.0:
 		current_solar_kw = _ha_solar_override
@@ -2691,6 +2695,10 @@ func _calculate_solar_power() -> void:
 ## irradiance is available, real ambient temperature from WeatherService,
 ## and an optional 3D shadow raycast. Falls back gracefully at each step.
 func _calculate_solar_power_enhanced() -> void:
+	if PANEL_COUNT <= 0 or PEAK_CAPACITY_KW <= 0.0:
+		current_solar_kw = 0.0
+		_raw_solar_kw = 0.0
+		return
 	if main_node == null:
 		current_solar_kw = 0.0
 		_raw_solar_kw = 0.0
@@ -4074,7 +4082,8 @@ func _sync_timeline_weather_row() -> void:
 const PANEL_CONFIG_PATH = "user://solar_panel_config.cfg"
 const COLLAPSED_BAR_HEIGHT : float = 44.0
 
-var _expanded : bool = true
+var _expanded : bool = false
+var _graph_has_solar : bool = false
 var _collapse_btn : Button = null
 var _body : VBoxContainer = null
 var _expanded_height : float = 610.0
@@ -4110,6 +4119,54 @@ func _save_panel_settings() -> void:
 
 
 ## Apply aggregate panel/battery specs from a LinkageLab game bundle import.
+func apply_from_graph(data: Dictionary) -> void:
+	var pc := int(data.get("panel_count", 0))
+	var pw := float(data.get("panel_watts", PANEL_WATTAGE))
+	var pk := float(data.get("peak_kw", 0.0))
+	var bk := float(data.get("battery_kwh", -1.0))
+	var bank_soc := float(data.get("battery_soc", -1.0))
+	PANEL_COUNT = maxi(pc, 0)
+	if pw > 0.0:
+		PANEL_WATTAGE = pw
+	PEAK_CAPACITY_KW = pk if pk > 0.0 else (PANEL_COUNT * PANEL_WATTAGE / 1000.0)
+	if bk >= 0.0:
+		BATTERY_CAPACITY_KWH = bk
+		if bank_soc >= 0.0:
+			battery_kwh_stored = BATTERY_CAPACITY_KWH * clampf(bank_soc, 0.0, 1.0)
+		else:
+			battery_kwh_stored = minf(battery_kwh_stored, BATTERY_CAPACITY_KWH)
+	if energy_timeline != null:
+		energy_timeline.clear()
+		if main_node == null:
+			_find_main_node()
+		if main_node != null and main_node.has_method("get_absolute_hours"):
+			var abs_h: float = float(main_node.call("get_absolute_hours"))
+			var min_kwh: float = BATTERY_CAPACITY_KWH * MIN_BATTERY_PERCENT / 100.0
+			energy_timeline.configure(
+				BATTERY_CAPACITY_KWH, CHARGE_EFFICIENCY, DISCHARGE_EFFICIENCY, min_kwh)
+			energy_timeline.init_anchor(abs_h, battery_kwh_stored,
+				current_solar_kw, current_aux_generation_kw, current_load_kw)
+
+
+func set_graph_has_solar(has: bool) -> void:
+	if _graph_has_solar == has:
+		return
+	_graph_has_solar = has
+	if not has:
+		_expanded = false
+		if _body != null:
+			_body.visible = false
+	elif _collapse_btn == null:
+		_expanded = false
+	else:
+		_expanded = true
+		if _body != null:
+			_body.visible = true
+	if _collapse_btn != null:
+		_update_collapse_btn_text()
+		_apply_collapsed_size()
+
+
 func apply_imported_solar(panel_count: int, panel_watts: float, tilt_deg: float,
 		azimuth_deg: float, battery_kwh: float = -1.0) -> void:
 	if panel_count > 0:
@@ -4184,6 +4241,7 @@ func _setup_collapse() -> void:
 	for n in to_move:
 		n.reparent(_body)
 	vbox.add_child(_body)
+	_body.visible = _expanded
 	_apply_collapsed_size()
 
 func _on_collapse_toggled() -> void:
@@ -4195,6 +4253,11 @@ func _on_collapse_toggled() -> void:
 
 func _update_collapse_btn_text() -> void:
 	if _collapse_btn == null:
+		return
+	if not _graph_has_solar:
+		_collapse_btn.text = ("▾ " if _expanded else "▸ ") \
+				+ "No solar on graph — add panels or import OSM array"
+		_collapse_btn.tooltip_text = "Add solar panels on the system graph (G) to enable simulation"
 		return
 	var title := title_label.text if title_label != null else "⚡ POWER SCOREBOARD"
 	_collapse_btn.text = ("▾ " if _expanded else "▸ ") + title

@@ -271,7 +271,7 @@ func total_cost() -> float:
 func serialize() -> Dictionary:
 	_ensure_root_scope()
 	return {
-		"version":            4,
+		"version":            5,
 		"items":              items.duplicate(true),
 		"connections":        connections.duplicate(true),
 		"scopes":             scopes.duplicate(true),
@@ -366,8 +366,10 @@ func _migrate_item_specs(item: Dictionary) -> void:
 func _migrate_connection(conn: Dictionary) -> void:
 	if not conn.has("resource_type"):
 		conn["resource_type"] = ""
-	if str(conn.get("resource_type", "")).is_empty() \
-			and str(conn.get("polarity", "")) == "resource":
+	var rt: String = str(conn.get("resource_type", ""))
+	if not rt.is_empty():
+		conn["resource_type"] = ResourceKinds.normalize_kind(rt)
+	elif str(conn.get("polarity", "")) == "resource":
 		var src_id: String = str(conn.get("source_item_id", ""))
 		var src_h: String = str(conn.get("source_handle_id", ""))
 		var item := get_item(src_id)
@@ -389,6 +391,8 @@ func _migrate_connection(conn: Dictionary) -> void:
 						conn["resource_type"] = str((outs[idx] as Dictionary).get("kind", ""))
 			elif str(item.get("type", "")) == "catchment":
 				conn["resource_type"] = "water"
+	if not str(conn.get("resource_type", "")).is_empty():
+		conn["resource_type"] = ResourceKinds.normalize_kind(str(conn.get("resource_type", "")))
 	ConduitKinds.migrate_connection_conduit_fields(conn)
 	if not conn.has("line_style"):
 		conn["line_style"] = "bezier"

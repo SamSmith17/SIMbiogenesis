@@ -74,18 +74,37 @@ func _on_model_changed(reason: String) -> void:
 
 
 func _ensure_virtual_nodes() -> void:
-	if not suppressed_ids.has(V_PANEL_ID) and _model.get_item(V_PANEL_ID).is_empty():
-		_model.add_item(_make_panel_item())
-	if not suppressed_ids.has(V_PANEL_ID):
-		_ensure_virtual_panel_cluster()
-	if not suppressed_ids.has(V_CTRL_ID) and _model.get_item(V_CTRL_ID).is_empty():
-		_model.add_item(_make_controller_item())
-	if not suppressed_ids.has(V_BATTERY_ID) and _model.get_item(V_BATTERY_ID).is_empty():
-		_model.add_item(_make_battery_item())
-	if not suppressed_ids.has(V_BASELINE_ID) and _model.get_item(V_BASELINE_ID).is_empty():
-		_model.add_item(_make_baseline_item())
-	_ensure_virtual_connections()
+	_ensure_consumer_nodes()
+	if _legacy_virtual_solar_active():
+		if not suppressed_ids.has(V_PANEL_ID) and _model.get_item(V_PANEL_ID).is_empty():
+			_model.add_item(_make_panel_item())
+		if not suppressed_ids.has(V_PANEL_ID):
+			_ensure_virtual_panel_cluster()
+		if not suppressed_ids.has(V_CTRL_ID) and _model.get_item(V_CTRL_ID).is_empty():
+			_model.add_item(_make_controller_item())
+		if not suppressed_ids.has(V_BATTERY_ID) and _model.get_item(V_BATTERY_ID).is_empty():
+			_model.add_item(_make_battery_item())
+		if not suppressed_ids.has(V_BASELINE_ID) and _model.get_item(V_BASELINE_ID).is_empty():
+			_model.add_item(_make_baseline_item())
+		_ensure_virtual_connections()
 	_ensure_ac_load_connections()
+
+
+## Legacy saves still carry virtual_panel_* / virtual_controller; refresh those only
+## when they already exist and were not user-suppressed. New maps stay blank.
+func _legacy_virtual_solar_active() -> bool:
+	if suppressed_ids.has(V_PANEL_ID):
+		return false
+	if not _model.get_item(V_PANEL_ID).is_empty():
+		return true
+	for i in range(ARRAY_PANEL_COUNT):
+		if not _model.get_item(_panel_node_id(i)).is_empty():
+			return true
+	if not _model.get_item(V_CTRL_ID).is_empty():
+		return true
+	if not _model.get_item(V_BATTERY_ID).is_empty():
+		return true
+	return false
 
 
 func _consumer_graph_id(consumer: Node) -> String:
@@ -225,10 +244,17 @@ func _maybe_add_conn(conn_id: String, polarity: String,
 
 
 func _refresh_virtual_nodes() -> void:
-	_refresh_panel()
-	_refresh_controller()
-	_refresh_battery()
-	_refresh_baseline()
+	_refresh_consumers()
+	if not _legacy_virtual_solar_active():
+		return
+	if not _model.get_item(V_PANEL_ID).is_empty():
+		_refresh_panel()
+	if not _model.get_item(V_CTRL_ID).is_empty():
+		_refresh_controller()
+	if not _model.get_item(V_BATTERY_ID).is_empty():
+		_refresh_battery()
+	if not _model.get_item(V_BASELINE_ID).is_empty():
+		_refresh_baseline()
 
 
 ## Merge live bridge values into the item's existing specs without clobbering
@@ -531,14 +557,7 @@ func _panel_node_id(idx: int) -> String:
 
 
 func _panel_node_position(idx: int) -> Vector2:
-	var per_group := ARRAY_STRINGS_PER_GROUP * ARRAY_SERIES_PER_STRING # 6
-	var g := idx / per_group
-	var rem := idx % per_group
-	var s := rem / ARRAY_SERIES_PER_STRING
-	var p := rem % ARRAY_SERIES_PER_STRING
-	var x0 := -980.0 + float(g) * 300.0
-	var y0 := -380.0 + float(s) * 210.0
-	return Vector2(x0 + float(p) * 82.0, y0)
+	return GraphVirtualIds.panel_node_position(idx)
 
 
 func _ensure_virtual_panel_cluster() -> void:

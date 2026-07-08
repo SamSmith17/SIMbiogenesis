@@ -15,6 +15,24 @@ const TYPE_MAP := {
 	"breakerpanel": "compound",
 }
 
+const HANDLE_ID_MAP := {
+	"pv-positive": "pvPositive",
+	"pv-negative": "pvNegative",
+	"pv_positive": "pvPositive",
+	"pv_negative": "pvNegative",
+	"battery-positive": "batteryPositive",
+	"battery-negative": "batteryNegative",
+	"battery_positive": "batteryPositive",
+	"battery_negative": "batteryNegative",
+	"ac-output": "acOutput",
+	"ac_output": "acOutput",
+}
+
+
+static func normalize_handle_id(handle_id: String) -> String:
+	return str(HANDLE_ID_MAP.get(handle_id, handle_id))
+
+
 const POLARITY_MAP := {
 	"pv-positive": "positive",
 	"pv-negative": "negative",
@@ -174,12 +192,12 @@ static func _map_connection(raw: Dictionary) -> Dictionary:
 	var tgt_id := str(raw.get("target_item_id", raw.get("targetItemId", "")))
 	if src_id.is_empty() or tgt_id.is_empty():
 		return {}
-	var src_handle := str(raw.get("source_handle_id", raw.get("sourceHandleId", "")))
+	var src_handle := normalize_handle_id(str(raw.get("source_handle_id", raw.get("sourceHandleId", ""))))
 	if src_handle.is_empty():
-		src_handle = str(raw.get("sourceHandleKey", raw.get("source_handle", "")))
-	var tgt_handle := str(raw.get("target_handle_id", raw.get("targetHandleId", "")))
+		src_handle = normalize_handle_id(str(raw.get("sourceHandleKey", raw.get("source_handle", ""))))
+	var tgt_handle := normalize_handle_id(str(raw.get("target_handle_id", raw.get("targetHandleId", ""))))
 	if tgt_handle.is_empty():
-		tgt_handle = str(raw.get("targetHandleKey", raw.get("target_handle", "")))
+		tgt_handle = normalize_handle_id(str(raw.get("targetHandleKey", raw.get("target_handle", ""))))
 	var polarity := str(raw.get("polarity", "positive"))
 	if POLARITY_MAP.has(polarity):
 		polarity = str(POLARITY_MAP[polarity])

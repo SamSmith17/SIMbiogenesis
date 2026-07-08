@@ -9,70 +9,104 @@ const CONFIG_PATH := "user://resource_kinds.cfg"
 
 const BUILTIN: Dictionary = {
 	"electric": {
-		"display": "Electric",
+		"display": "Electricity",
 		"color": Color(0.941, 0.820, 0.282, 1.0),
 		"unit": "kWh",
 		"abbrev": "⚡",
+		"flow_ref_rate": 3500.0,
 	},
 	"water": {
-		"display": "Water",
+		"display": "Potable Water",
 		"color": Color(0.231, 0.510, 0.965, 1.0),
 		"unit": "L",
 		"abbrev": "💧",
+		"flow_ref_rate": 120.0,
+		"aliases": ["potable_water"],
+	},
+	"greywater": {
+		"display": "Greywater",
+		"color": Color(0.420, 0.620, 0.780, 1.0),
+		"unit": "L",
+		"abbrev": "🚿",
+		"flow_ref_rate": 80.0,
+	},
+	"blackwater": {
+		"display": "Blackwater",
+		"color": Color(0.420, 0.320, 0.220, 1.0),
+		"unit": "L",
+		"abbrev": "🚽",
+		"flow_ref_rate": 50.0,
 	},
 	"biomass": {
 		"display": "Biomass",
 		"color": Color(0.545, 0.353, 0.176, 1.0),
 		"unit": "kg",
 		"abbrev": "🌿",
+		"flow_ref_rate": 25.0,
 	},
 	"plastic_waste": {
-		"display": "Waste Plastic",
+		"display": "Plastic Waste",
 		"color": Color(0.580, 0.639, 0.722, 1.0),
 		"unit": "kg",
 		"abbrev": "♻",
+		"flow_ref_rate": 12.0,
 	},
 	"plastic_shred": {
 		"display": "Shredded Plastic",
 		"color": Color(0.392, 0.710, 0.965, 1.0),
 		"unit": "kg",
 		"abbrev": "✂",
+		"flow_ref_rate": 15.0,
 	},
 	"biochar": {
 		"display": "Biochar",
 		"color": Color(0.180, 0.180, 0.180, 1.0),
 		"unit": "kg",
 		"abbrev": "🔥",
+		"flow_ref_rate": 8.0,
 	},
 	"hot_water": {
 		"display": "Hot Water",
 		"color": Color(0.937, 0.420, 0.420, 1.0),
 		"unit": "L",
 		"abbrev": "♨",
+		"flow_ref_rate": 60.0,
 	},
 	"woodgas": {
-		"display": "Woodgas",
+		"display": "Syngas / Woodgas",
 		"color": Color(0.706, 0.627, 0.353, 1.0),
 		"unit": "m³",
 		"abbrev": "💨",
+		"flow_ref_rate": 6.0,
+		"aliases": ["syngas"],
 	},
 	"food": {
 		"display": "Food",
 		"color": Color(0.063, 0.722, 0.506, 1.0),
 		"unit": "kg",
 		"abbrev": "🍎",
+		"flow_ref_rate": 10.0,
+	},
+	"nutrients": {
+		"display": "Nutrients",
+		"color": Color(0.820, 0.720, 0.180, 1.0),
+		"unit": "kg",
+		"abbrev": "🌱",
+		"flow_ref_rate": 8.0,
 	},
 	"propane": {
 		"display": "Propane",
 		"color": Color(0.961, 0.620, 0.043, 1.0),
 		"unit": "kg",
 		"abbrev": "🛢",
+		"flow_ref_rate": 5.0,
 	},
 	"thermal": {
-		"display": "Thermal",
+		"display": "Heat",
 		"color": Color(0.847, 0.329, 0.329, 1.0),
 		"unit": "kWh",
 		"abbrev": "♨",
+		"flow_ref_rate": 15.0,
 	},
 }
 
@@ -99,12 +133,14 @@ static func _ensure_loaded() -> void:
 		var cr: float = float(cfg.get_value(section, "color_r", 0.58))
 		var cg: float = float(cfg.get_value(section, "color_g", 0.64))
 		var cb: float = float(cfg.get_value(section, "color_b", 0.72))
-		_extra[section] = {
+		var entry: Dictionary = {
 			"display": display,
 			"color": Color(cr, cg, cb, 1.0),
 			"unit": unit,
 			"abbrev": abbrev,
+			"flow_ref_rate": float(cfg.get_value(section, "flow_ref_rate", 10.0)),
 		}
+		_extra[section] = entry
 
 
 static func all_kinds() -> Array:
@@ -150,6 +186,73 @@ static func default_unit(kind_id: String) -> String:
 	return str(kind_meta(kind_id).get("unit", "unit"))
 
 
+static func flow_ref_rate(kind_id: String) -> float:
+	return float(kind_meta(kind_id).get("flow_ref_rate", 10.0))
+
+
+## Canonical id for compatibility checks (water ↔ potable_water via aliases).
+static func normalize_kind(kind_id: String) -> String:
+	var k := kind_id.strip_edges()
+	if k.is_empty():
+		return ""
+	_ensure_loaded()
+	for canon: String in BUILTIN.keys():
+		var aliases: Array = (BUILTIN[canon] as Dictionary).get("aliases", []) as Array
+		if aliases.has(k):
+			return canon
+	for canon: String in _extra.keys():
+		var aliases2: Array = (_extra[canon] as Dictionary).get("aliases", []) as Array
+		if aliases2.has(k):
+			return canon
+	if BUILTIN.has(k) or _extra.has(k):
+		return k
+	return k
+
+
+## True when two resource port kinds may be wired together.
+static func kinds_compatible(src_kind: String, tgt_kind: String) -> bool:
+	var a := normalize_kind(src_kind)
+	var b := normalize_kind(tgt_kind)
+	if a.is_empty() or b.is_empty():
+		return false
+	return a == b
+
+
+## Resource kinds for graph legend (excludes electrical — use PORT_COLORS for that).
+static func legend_entries(include_electric: bool = false) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var alias_ids: Dictionary = {}
+	for k: String in all_kinds():
+		for alias: Variant in kind_meta(k).get("aliases", []):
+			alias_ids[str(alias)] = true
+	if include_electric:
+		out.append({
+			"label": "Electricity",
+			"color": wire_color("electric"),
+			"kind": "electric",
+		})
+	for k: String in all_kinds():
+		if alias_ids.has(k):
+			continue
+		if k == "electric" and not include_electric:
+			continue
+		out.append({
+			"label": display_name(k),
+			"color": wire_color(k),
+			"kind": k,
+		})
+	return out
+
+
+## Human-readable rejection when resource kinds mismatch.
+static func mismatch_message(src_kind: String, tgt_kind: String) -> String:
+	var a := display_name(normalize_kind(src_kind) if not src_kind.is_empty() else src_kind)
+	var b := display_name(normalize_kind(tgt_kind) if not tgt_kind.is_empty() else tgt_kind)
+	if src_kind.is_empty() or tgt_kind.is_empty():
+		return "Resource port missing a type — assign input/output kinds in the inspector"
+	return "%s cannot connect to %s" % [a, b]
+
+
 ## Parse legacy free-text capacity strings like "50 gal" or "100 lb".
 static func parse_capacity_text(text: String) -> Dictionary:
 	var t := text.strip_edges()
@@ -166,6 +269,14 @@ static func parse_capacity_text(text: String) -> Dictionary:
 ## Infer resource kind from a container preset name.
 static func infer_kind_from_name(name: String) -> String:
 	var n := name.to_lower()
+	if "grey" in n:
+		return "greywater"
+	if "black" in n and "water" in n:
+		return "blackwater"
+	if "syngas" in n or "woodgas" in n:
+		return "woodgas"
+	if "nutrient" in n or "fertil" in n:
+		return "nutrients"
 	if "water" in n or "tank" in n and "propane" not in n:
 		return "water"
 	if "propane" in n:
