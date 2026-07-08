@@ -52,6 +52,8 @@ static func place_model(main: Node, model_id: String, near_player: bool = true,
 		return {"ok": false, "error": "Failed to add prop record"}
 	_save_layer(main, layer)
 	_rebuild_scene_props(main, layer)
+	if ModelCatalog.is_starshade_model(model_id):
+		_trigger_starshade_graph_seed(main)
 	return {"ok": true, "prop_id": prop_id, "x": xz.x, "z": xz.y, "ground_y": gy}
 
 
@@ -155,17 +157,77 @@ static func confirm_placement() -> bool:
 		_clear_placement()
 		return false
 	_placement_prop_id = prop_id
+	# Merge any placement-time record extras (e.g. VAWT spin binding: kind /
+	# turbine_node / wind_specs) BEFORE the prop node is built so the runtime can
+	# attach the spin controller as it spawns.
+	var record_extra := _placement_prep.get("record_extra", {}) as Dictionary
+	if not record_extra.is_empty():
+		layer.update_prop(prop_id, record_extra.duplicate(true))
+	# Create + bind the 2D graph node for a linked generator (VAWT), stamping the
+	# resulting item id back onto the record so save/reload keeps the link.
+	var graph_link := _placement_prep.get("graph_link", {}) as Dictionary
+	if not graph_link.is_empty():
+		var node_id := _create_bound_graph_node(main, prop_id, graph_link)
+		if not node_id.is_empty():
+			layer.update_prop(prop_id, {"graph_item_id": node_id})
 	_save_layer(main, layer)
 	var rec := layer.find_by_id(prop_id)
 	var parent := _props_parent(main)
 	var gy_fn := TerrainSurfaceQuery.ground_y_callable(main)
 	var prop := PlacedPropRuntime.add_one(parent, rec, gy_fn)
 	var ibc := _placement_prep.get("ibc", {}) as Dictionary
+	var seed_prep := _placement_prep.duplicate(true)
 	if prop != null and not ibc.is_empty() and main.get_tree() != null:
 		BUNDLE_IMPORTER_SCRIPT.attach_ibc_to_imported_canopy(
 			main.get_tree(), model_id, ibc)
 	_clear_placement()
+	if ModelCatalog.is_starshade_model(model_id):
+		_trigger_starshade_graph_seed(main, seed_prep)
 	return true
+
+
+## Ask the SystemGraphView to create a 2D node bound to a just-placed 3D prop
+## (e.g. the VAWT). Returns the new node's item id, or "" if the graph is absent.
+static func _create_bound_graph_node(main: Node, prop_id: String,
+		graph_link: Dictionary) -> String:
+	if main == null or graph_link.is_empty():
+		return ""
+	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	if sgv == null:
+		sgv = main.find_child("SystemGraphView", true, false)
+	if sgv == null or not sgv.has_method("create_bound_generator_node"):
+		return ""
+	return str(sgv.call("create_bound_generator_node", prop_id, graph_link))
+
+
+static func seed_starshade_graph(main: Node, prep: Dictionary = {}) -> void:
+	_trigger_starshade_graph_seed(main, prep)
+
+
+static func _trigger_starshade_graph_seed(main: Node, prep: Dictionary = {}) -> void:
+	if main == null:
+		return
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if StarShadeGraphSeeder.try_seed_from_main(main, loader):
+		return
+	var solar: Dictionary = prep.get("solar", {}) as Dictionary
+	var panel_count := int(solar.get("panelCount", 0))
+	if panel_count <= 0:
+		return
+	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	if sgv == null:
+		sgv = main.find_child("SystemGraphView", true, false)
+	if sgv == null or not sgv.has_method("seed_starshade_system"):
+		return
+	var model: GraphModel = sgv.get("model") as GraphModel
+	if model == null:
+		return
+	if bool(sgv.call("seed_starshade_system",
+			panel_count, float(solar.get("panelWatts", 220.0)), "linkagelab_import")):
+		if sgv.has_method("_sync_solar_ui_from_graph"):
+			sgv.call("_sync_solar_ui_from_graph")
+		if sgv.has_method("_schedule_graph_autosave"):
+			sgv.call("_schedule_graph_autosave")
 
 
 static func cancel_placement() -> void:

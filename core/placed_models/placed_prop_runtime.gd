@@ -65,10 +65,25 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	_disable_embedded_physics(model)
 	_apply_transform(prop, model, rec, ground_y_at)
 	prop.setup_collision()
+	_maybe_attach_wind_spin(prop, rec)
 	var prop_id := str(rec.get("id", ""))
 	if PlacedPropService.is_placement_active() and prop_id == PlacedPropService.placement_prop_id():
 		prop.set_collision_enabled(false)
 	return prop
+
+
+## Attach the rotor-spin controller for a placed VAWT (record kind == "vawt").
+static func _maybe_attach_wind_spin(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("kind", "")) != "vawt":
+		return
+	var specs: Dictionary = rec.get("wind_specs", {}) as Dictionary
+	if specs.is_empty():
+		return
+	var spin := WindTurbineSpin.new()
+	spin.name = "WindTurbineSpin"
+	spin.configure(specs, str(rec.get("turbine_node", "")),
+		str(rec.get("graph_item_id", "")))
+	prop.add_child(spin)
 
 
 static func apply_record_to_prop(prop: PlacedProp, rec: Dictionary,

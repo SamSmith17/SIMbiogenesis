@@ -60,6 +60,11 @@ const BATTERIES: Array = [
 		"specs": { "name": "12V 100Ah AGM",           "voltage": 12.0, "ah": 100.0, "kwh": 1.20, "soc": 0.50, "cost":  200.0 },
 	},
 	{
+		"type": "battery", "label": "48V 50Ah LiFePO4", "icon": "🔋",
+		"width": 100.0, "height": 136.0,
+		"specs": { "name": "48V 50Ah LiFePO4",       "voltage": 51.2, "ah": 50.0, "kwh": 2.56, "soc": 0.80, "cost": 650.0 },
+	},
+	{
 		"type": "battery", "label": "48V 100Ah LiFePO4", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
 		"specs": { "name": "48V 100Ah LiFePO4",      "voltage": 51.2, "ah": 100.0, "kwh": 5.12, "soc": 0.80, "cost": 1500.0 },
@@ -80,6 +85,15 @@ const BATTERIES: Array = [
 # Charge Controllers / Inverters  (type = "controller")
 # ---------------------------------------------------------------------------
 const CONTROLLERS: Array = [
+	{
+		"type": "controller", "label": "EcoWorthy SL3500", "icon": "🎛",
+		"width": 140.0, "height": 120.0,
+		"specs": {
+			"name": "EcoWorthy SL3500 Hybrid", "max_voc": 450.0, "max_charge_amps": 80.0,
+			"max_pv_watts": 3500.0, "cost": 900.0, "overload_watts": 3500.0,
+			"overload_duration_s": 10.0, "overload_lockout_s": 30.0,
+		},
+	},
 	{
 		"type": "controller", "label": "Generic MPPT 150/50", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
@@ -434,6 +448,26 @@ const WIND_TURBINES: Array = [
 			"surface_roughness_m": 0.03, "site_altitude_m": 0.0,
 			"site_mean_wind_ms": 6.0, "generator_efficiency": 0.90,
 			"current_output_kw": 0.0, "cost": 900.0,
+		},
+	},
+	# 3D-linked VAWT: has a `model_id` so the library shows a "Place Model" button
+	# that drops the GLB into the world (ghost placement) and binds this node to it.
+	# Geometry matches the shipped VAWT.glb (rotor ≈ 2 m dia × 5 m tall on a 6.4 m
+	# mast → ~9 m hub). Rotor swept area ≈ D·H drives a ~1.2 kW class output.
+	{
+		"type": "wind", "label": "VAWT 1.2kW (3D)", "icon": "🌀",
+		"width": 124.0, "height": 112.0,
+		"specs": {
+			"name": "VAWT 1.2kW", "kind": "vawt",
+			"rated_w": 1200.0, "rotor_diameter_m": 2.0, "cp_peak": 0.35,
+			"cut_in_ms": 3.0, "rated_ms": 12.0, "cut_out_ms": 25.0,
+			"hub_height_m": 9.0, "anemometer_height_m": 10.0,
+			"surface_roughness_m": 0.03, "site_altitude_m": 0.0,
+			"site_mean_wind_ms": 6.0, "generator_efficiency": 0.90,
+			"current_output_kw": 0.0, "cost": 1500.0,
+			# 3D link: placed via ModelCatalog + WindTurbineSpin animation.
+			"model_id": "vawt", "turbine_node": "Component#2",
+			"tip_speed_ratio": 2.6, "rotor_radius_m": 1.0,
 		},
 	},
 ]

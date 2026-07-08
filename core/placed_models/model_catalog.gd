@@ -31,6 +31,23 @@ static func find(model_id: String) -> Dictionary:
 	return {}
 
 
+## True for the shipped StarShade or any LinkageLab bundle import (user_* ids).
+static func is_starshade_model(model_id: String) -> bool:
+	if model_id.is_empty():
+		return false
+	if model_id == "starshade":
+		return true
+	var entry := find(model_id)
+	if entry.is_empty():
+		return false
+	if str(entry.get("source", "")) == "linkagelab":
+		return true
+	var label := str(entry.get("label", "")).to_lower()
+	if label.contains("starshade") or label.contains("linkagelab"):
+		return true
+	return false
+
+
 ## Shipped models filtered by their "category" key ("structures", "nature", …).
 static func models_in_category(category: String) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
@@ -185,6 +202,14 @@ static func _shipped_models() -> Array[Dictionary]:
 			"preserve_scale": true, "category": "structures"},
 		{"id": "pine_1", "label": "Pine Tree", "path": "res://Imported Models/Trees/free_tree_1.glb",
 			"target_height_m": 13.0, "mesh_scale": 1.0, "category": "nature"},
+		# Vertical Axis Wind Turbine — authored in SketchUp, exported to GLB already
+		# in metres (~11.5 m tall: 6.4 m mast + 5 m rotor). preserve_scale keeps that
+		# real size. The rotor sub-node ("Component#2") spins about the vertical axis;
+		# WindTurbineSpin (attached at placement) reads turbine_node to find it.
+		{"id": "vawt", "label": "Vertical Axis Wind Turbine",
+			"path": "res://Imported Models/Wind/VAWT.glb",
+			"preserve_scale": true, "category": "structures",
+			"turbine_node": "Component#2"},
 	]
 
 

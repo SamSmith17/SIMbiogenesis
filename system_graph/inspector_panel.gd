@@ -47,6 +47,7 @@ var _compound_back_cb: Callable = Callable()
 var _conduit_route_cb: Callable = Callable()
 var _conduit_clear_cb: Callable = Callable()
 var _placeholder_cb: Callable = Callable()
+var _place_model_cb: Callable = Callable()
 var _controller_reset_cb: Callable = Callable()
 
 ## Per-automation UI state. Key = automation id, value = true if the editor
@@ -174,6 +175,10 @@ func set_conduit_callbacks(route_cb: Callable, clear_cb: Callable) -> void:
 
 func set_placeholder_callback(cb: Callable) -> void:
 	_placeholder_cb = cb
+
+
+func set_place_model_callback(cb: Callable) -> void:
+	_place_model_cb = cb
 
 
 func set_controller_reset_callback(cb: Callable) -> void:
@@ -2244,7 +2249,19 @@ func _build_scene_link_section(item: Dictionary) -> void:
 		_readonly_field("3D link", "Cube placeholder (test)")
 	elif is_ibc:
 		_readonly_field("3D link", "IBC tank mesh")
-	if _placeholder_cb.is_valid():
+	var model_id := str(specs.get("model_id", ""))
+	if not model_id.is_empty() and _place_model_cb.is_valid():
+		# This node has a linked 3D model — offer real-world placement instead of
+		# a generic cube placeholder.
+		var place_btn := Button.new()
+		place_btn.text = "Place in 3D"
+		place_btn.tooltip_text = "Close the graph and place the linked 3D model in the world"
+		place_btn.pressed.connect(func() -> void:
+			if _place_model_cb.is_valid() and not _item_id.is_empty():
+				_place_model_cb.call(_item_id)
+		)
+		_form_vbox.add_child(place_btn)
+	elif _placeholder_cb.is_valid():
 		var ph_btn := Button.new()
 		ph_btn.text = "Spawn 3D placeholder" if path_val.is_empty() else "Recreate 3D placeholder"
 		ph_btn.pressed.connect(func() -> void:

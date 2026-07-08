@@ -4,6 +4,9 @@ extends Control
 ## (system_graph_view distinguishes click vs drag from the subsequent input).
 
 signal item_picked(preset: Dictionary, screen_pos: Vector2)
+## Emitted when a model-linked preset's "Place Model" button is pressed. The
+## graph view closes and starts a ghost placement of the linked 3D model.
+signal place_model_requested(preset: Dictionary)
 
 # ---------------------------------------------------------------------------
 # Palette  (mirrors system_graph_view constants)
@@ -41,6 +44,34 @@ func _ready() -> void:
 	_build()
 	_touch_scroll = _TOUCH_SCROLL_HANDLER.new()
 	_touch_scroll.bind(_scroll, self)
+	call_deferred("_refresh_scroll_content_height")
+
+
+func _gui_input(event: InputEvent) -> void:
+	if _scroll == null:
+		return
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if not mb.pressed:
+			return
+		var step := int(32.0 * mb.factor)
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_scroll.scroll_vertical = maxi(0, _scroll.scroll_vertical - step)
+			accept_event()
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			var vbar := _scroll.get_v_scroll_bar()
+			var max_v := int(vbar.max_value) if vbar != null else 99999
+			_scroll.scroll_vertical = mini(max_v, _scroll.scroll_vertical + step)
+			accept_event()
+
+
+func _refresh_scroll_content_height() -> void:
+	if _categories_vbox == null:
+		return
+	var h := 0.0
+	for child in _categories_vbox.get_children():
+		h += child.get_minimum_size().y
+	_categories_vbox.custom_minimum_size.y = maxf(h, _scroll.size.y + 1.0)
 
 
 func _input(event: InputEvent) -> void:
@@ -125,9 +156,15 @@ func _build_categories() -> Control:
 
 	for i: int in ComponentPresets.CATEGORIES.size():
 		var cat: Dictionary = ComponentPresets.CATEGORIES[i]
-		_cat_expanded.append(true)
+		var expanded := i <= 1  # Solar + Wind open; rest collapsed
+		_cat_expanded.append(expanded)
 		vbox.add_child(_build_category(cat, i))
+		_cat_contents[i].visible = expanded
+		_cat_headers[i].text = "%s  %s  %s" % [
+			cat.get("icon", ""), cat.get("label", ""), "▼" if expanded else "▶"
+		]
 
+	scroll.follow_focus = true
 	return scroll
 
 
@@ -175,13 +212,54 @@ func _build_category(cat: Dictionary, idx: int) -> Control:
 	# ---- Item buttons ----
 	var presets: Array = cat.get("presets", [])
 	for p: Dictionary in presets:
-		var btn := _make_item_btn(p, idx)
-		content_vbox.add_child(btn)
-		_item_btns.append(btn)
+		content_vbox.add_child(_make_item_row(p, idx))
 
 	wrapper.add_child(hdr)
 	wrapper.add_child(content_pc)
 	return wrapper
+
+
+## One library row. Normally just the drag/click spawn button; for presets that
+## carry a `specs.model_id` (a 3D-linked component such as the VAWT), a compact
+## "Place in world" button is appended that emits place_model_requested.
+func _make_item_row(preset: Dictionary, cat_idx: int) -> Control:
+	var btn := _make_item_btn(preset, cat_idx)
+	_item_btns.append(btn)
+	var specs: Dictionary = preset.get("specs", {})
+	if str(specs.get("model_id", "")).is_empty():
+		return btn
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(btn)
+	row.add_child(_make_place_btn(preset))
+	return row
+
+
+func _make_place_btn(preset: Dictionary) -> Button:
+	var pb := Button.new()
+	pb.text = "🌍\nPlace"
+	pb.tooltip_text = "Place the 3D model in the world"
+	pb.focus_mode = Control.FOCUS_NONE
+	pb.custom_minimum_size = Vector2(44.0, 0.0)
+	pb.add_theme_font_size_override("font_size", 10)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.16)
+	sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.55)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(3)
+	sb.content_margin_left = 4.0
+	sb.content_margin_right = 4.0
+	sb.content_margin_top = 4.0
+	sb.content_margin_bottom = 4.0
+	var sb_h := sb.duplicate() as StyleBoxFlat
+	sb_h.bg_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.32)
+	pb.add_theme_stylebox_override("normal", sb)
+	pb.add_theme_stylebox_override("hover", sb_h)
+	pb.add_theme_stylebox_override("pressed", sb_h)
+	pb.add_theme_color_override("font_color", C_PRIMARY)
+	pb.pressed.connect(func() -> void: place_model_requested.emit(preset))
+	return pb
 
 
 func _make_item_btn(preset: Dictionary, cat_idx: int) -> Button:
@@ -251,20 +329,16 @@ func populate_in_model(presets: Array) -> void:
 	_cat_expanded.append(true)
 	var display_presets: Array = presets.duplicate()
 	if display_presets.is_empty():
-		display_presets.append({
-			"type": "appliance",
-			"label": "All scene loads are on the graph",
-			"icon": "✓",
-			"disabled": true,
-			"specs": {},
-		})
+		if old_cat != null:
+			old_cat.queue_free()
+		call_deferred("_refresh_scroll_content_height")
+		return
 	var cat := {"label": "In Model", "icon": "🏗", "presets": display_presets}
 	var cat_ctrl := _build_category(cat, idx)
 	cat_ctrl.name = "InModelCategory"
 	cat_ctrl.set_meta("cat_idx", idx)
-	# Move In Model near the top (after built-in categories).
 	_categories_vbox.add_child(cat_ctrl)
-	_categories_vbox.move_child(cat_ctrl, mini(2, _categories_vbox.get_child_count() - 1))
+	call_deferred("_refresh_scroll_content_height")
 
 
 ## Back-compat alias.

@@ -193,6 +193,31 @@ func get_peak_capacity_kw() -> float:
 ##   generator_efficiency
 ## `real_wind_10m_ms`: measured wind at 10 m reference height (from
 ## WeatherService); pass NAN to use the synthetic site model.
+## Hub-height wind speed (m/s) for a flat graph specs Dictionary, using the
+## exact same real/synthetic + log-shear model as power_kw_from_graph_specs.
+## Shared so the 3D turbine spin animation (WindTurbineSpin) and the 2D node's
+## electrical output are always driven by one wind number. `hour` is day_time
+## (0–24); `real_wind_10m_ms` is the measured 10 m wind (NAN → synthetic).
+static func hub_wind_speed_ms_from_specs(specs: Dictionary, hour: float,
+		real_wind_10m_ms: float = NAN) -> float:
+	if not is_nan(real_wind_10m_ms):
+		return shear_correct_ms(maxf(real_wind_10m_ms, 0.0),
+			WEATHER_WIND_REF_HEIGHT_M,
+			float(specs.get("hub_height_m", 10.0)),
+			float(specs.get("surface_roughness_m", 0.03)))
+	# Site wind with the same deterministic diurnal + gust model as
+	# the synthetic fallback (fixed default amplitudes for graph items).
+	var v := maxf(float(specs.get("site_mean_wind_ms", 6.0)), 0.0)
+	var diurnal := sin((hour - 9.0) / 24.0 * TAU)
+	var gust := 0.6 * sin(hour * 7.3) + 0.4 * sin(hour * 13.7)
+	v *= 1.0 + 0.25 * diurnal + 0.15 * gust
+	v = maxf(v, 0.0)
+	return shear_correct_ms(v,
+		float(specs.get("anemometer_height_m", 10.0)),
+		float(specs.get("hub_height_m", 10.0)),
+		float(specs.get("surface_roughness_m", 0.03)))
+
+
 static func power_kw_from_graph_specs(specs: Dictionary, hour: float,
 		real_wind_10m_ms: float = NAN) -> float:
 	var rated_ms := maxf(float(specs.get("rated_ms", 11.0)), 0.1)
@@ -200,24 +225,7 @@ static func power_kw_from_graph_specs(specs: Dictionary, hour: float,
 	var cut_out := float(specs.get("cut_out_ms", 20.0))
 	var rated_w := maxf(float(specs.get("rated_w", 1000.0)), 0.0)
 
-	var v_hub: float
-	if not is_nan(real_wind_10m_ms):
-		v_hub = shear_correct_ms(maxf(real_wind_10m_ms, 0.0),
-			WEATHER_WIND_REF_HEIGHT_M,
-			float(specs.get("hub_height_m", 10.0)),
-			float(specs.get("surface_roughness_m", 0.03)))
-	else:
-		# Site wind with the same deterministic diurnal + gust model as
-		# the synthetic fallback (fixed default amplitudes for graph items).
-		var v := maxf(float(specs.get("site_mean_wind_ms", 6.0)), 0.0)
-		var diurnal := sin((hour - 9.0) / 24.0 * TAU)
-		var gust := 0.6 * sin(hour * 7.3) + 0.4 * sin(hour * 13.7)
-		v *= 1.0 + 0.25 * diurnal + 0.15 * gust
-		v = maxf(v, 0.0)
-		v_hub = shear_correct_ms(v,
-			float(specs.get("anemometer_height_m", 10.0)),
-			float(specs.get("hub_height_m", 10.0)),
-			float(specs.get("surface_roughness_m", 0.03)))
+	var v_hub := hub_wind_speed_ms_from_specs(specs, hour, real_wind_10m_ms)
 
 	if v_hub < cut_in or v_hub > cut_out:
 		return 0.0
