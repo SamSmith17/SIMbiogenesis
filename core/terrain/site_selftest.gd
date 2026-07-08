@@ -167,14 +167,36 @@ func _fetch_vegetation(vs: Node) -> Dictionary:
 
 func _check_terrain_build(base_dem: Dictionary, detail_dem: Dictionary,
 		base_img: ImageTexture, detail_img: ImageTexture) -> void:
-	var base_grid: PackedFloat32Array = base_dem["grid"]
-	var base_res: int = base_dem["cols"]
+	var base_grid: PackedFloat32Array = TerrainBuilder.resample(
+		base_dem["grid"], base_dem["cols"], base_dem["rows"], 32)
+	var base_res := 32
 	var center := TerrainBuilder.mean_elevation(base_grid)
 	var extent := HALF_EXTENT * 2.0
 	var detail_extent := DETAIL_HALF * 2.0
 
+	var detail_grid: PackedFloat32Array = TerrainBuilder.resample(
+		detail_dem["grid"], detail_dem["cols"], detail_dem["rows"], 32)
+	var detail_res := 32
+	var offset := TerrainBuilder.compute_detail_vertical_offset(
+		detail_grid, detail_res, detail_extent, base_grid, base_res, extent, center)
+	var aligned := TerrainBuilder.apply_detail_vertical_offset(detail_grid, offset)
+	var feather := TerrainBuilder.compute_adaptive_feather_m(
+		aligned, detail_res, detail_extent, base_grid, base_res, extent, center)
+	var detail_surf := TerrainBuilder.feather_detail_to_coarse(
+		aligned, detail_res, detail_extent, base_grid, base_res, extent, center, feather)
+	var built := TerrainBuilder.patch_centre_heights(
+		base_grid, base_res, detail_surf, detail_res, extent, detail_extent, feather)
+	built = TerrainBuilder.feather_coarse_exterior_ring(
+		built, base_res, extent, center, detail_surf, detail_res, detail_extent)
+	var seam := TerrainSeamDiag.measure_boundary_delta(
+		detail_surf, detail_res, detail_extent, built, base_res, extent, center)
+	print("  seam: max_delta=%.2f m rms=%.2f m feather=%.0f m offset=%.1f m" % [
+		float(seam.get("max_delta_m", 0.0)), float(seam.get("rms_delta_m", 0.0)), feather, offset])
+	_check("seam max_delta < 15 m (live DEM)", float(seam.get("max_delta_m", 99.0)) < 15.0,
+		"max=%.1f" % float(seam.get("max_delta_m", 0.0)))
+
 	var terrain := TerrainBuilder.build_terrain_node(
-		base_grid, base_res, extent, center, base_img)
+		built, base_res, extent, center, base_img)
 	_check("terrain node built", terrain != null)
 	if terrain == null:
 		return
@@ -184,11 +206,9 @@ func _check_terrain_build(base_dem: Dictionary, detail_dem: Dictionary,
 	_check("spawn ground height finite", not is_nan(ground_y) and not is_inf(ground_y),
 		"y=%.2f" % ground_y)
 
-	var detail_grid: PackedFloat32Array = detail_dem["grid"]
-	var detail_res: int = detail_dem["cols"]
 	TerrainBuilder.upsert_detail_patch(
-		terrain, detail_grid, detail_res, detail_extent, center,
-		base_img, detail_img, extent)
+		terrain, detail_surf, detail_res, detail_extent, center,
+		base_img, detail_img, extent, feather)
 
 	_check("DetailGround present", TerrainBuilder.has_detail_ground(terrain))
 	_check("DetailCollision present", terrain.get_node_or_null("DetailCollision") != null)

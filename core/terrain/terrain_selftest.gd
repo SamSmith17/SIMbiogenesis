@@ -24,8 +24,10 @@ func _initialize() -> void:
 	_test_mesh()
 	_test_terrain_node()
 	_test_coarse_hide()
+	_test_seam_compose()
 	_test_aaigrid()
 	_test_dem_usability()
+	_test_base_grid_extent()
 	_test_cache_settings()
 	_test_load_progress()
 	if _failures == 0:
@@ -403,6 +405,39 @@ func _test_coarse_hide() -> void:
 	node.free()
 
 
+func _test_seam_compose() -> void:
+	# Synthetic 100 m step: detail centre high, coarse low — compose should feather below 2 m.
+	var coarse_res := 9
+	var detail_res := 9
+	var coarse := PackedFloat32Array()
+	coarse.resize(coarse_res * coarse_res)
+	coarse.fill(100.0)
+	var detail := PackedFloat32Array()
+	detail.resize(detail_res * detail_res)
+	detail.fill(200.0)
+	var center := 150.0
+	var terrain_extent := 3000.0
+	var detail_extent := 1000.0
+	var feather := TerrainBuilder.compute_adaptive_feather_m(
+		detail, detail_res, detail_extent, coarse, coarse_res, terrain_extent, center)
+	_check("adaptive feather >= min", feather >= TerrainBuilder.MIN_FEATHER_M)
+	var aligned := TerrainBuilder.apply_detail_vertical_offset(detail, -100.0)
+	var feathered := TerrainBuilder.feather_detail_to_coarse(
+		aligned, detail_res, detail_extent, coarse, coarse_res, terrain_extent, center, feather)
+	var patched := TerrainBuilder.patch_centre_heights(
+		coarse, coarse_res, feathered, detail_res, terrain_extent, detail_extent, feather)
+	var exterior := TerrainBuilder.feather_coarse_exterior_ring(
+		patched, coarse_res, terrain_extent, center,
+		feathered, detail_res, detail_extent)
+	var diag := TerrainSeamDiag.measure_boundary_delta(
+		feathered, detail_res, detail_extent, exterior, coarse_res, terrain_extent, center)
+	_check("seam max delta after compose < 2 m", float(diag.get("max_delta_m", 99.0)) < 2.0,
+		"max=%.2f feather=%.0f" % [float(diag.get("max_delta_m", 0.0)), feather])
+	var offset := TerrainBuilder.compute_detail_vertical_offset(
+		detail, detail_res, detail_extent, coarse, coarse_res, terrain_extent, center)
+	_check("vertical offset detects 100 m step", absf(absf(offset) - 100.0) < 5.0, "got %.1f" % offset)
+
+
 func _test_aaigrid() -> void:
 	# Minimal ESRI ASCII grid: 3×2, one NODATA cell.
 	var text := "ncols 3\nnrows 2\nxllcorner 0.0\nyllcorner 0.0\ncellsize 0.01\nNODATA_value -9999\n10 20 30\n40 -9999 60\n"
@@ -457,14 +492,29 @@ func _test_cache_settings() -> void:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(keep))
 
 
+func _test_base_grid_extent() -> void:
+	var n30 := ElevationServiceScript.base_grid_n_for_extent(15000.0)
+	_check("base grid 30 km >= cfg default", n30 >= 64, "got %d" % n30)
+	var n50 := ElevationServiceScript.base_grid_n_for_extent(50000.0)
+	_check("base grid 50 km > 30 km", n50 > n30, "%d vs %d" % [n50, n30])
+	_check("base grid capped", n50 <= 256, "got %d" % n50)
+	_check("large world uses COP90", ElevationServiceScript.opentopo_global_demtype(50000.0, "base") == "COP90")
+	_check("small world uses SRTMGL1", ElevationServiceScript.opentopo_global_demtype(5000.0, "base") == "SRTMGL1")
+	_check("mid world uses SRTMGL3", ElevationServiceScript.opentopo_global_demtype(15000.0, "base") == "SRTMGL3")
+
+
 func _test_load_progress() -> void:
 	var p := TerrainLoadProgress.new()
+	p.configure_for_extents(50000.0, 2000.0)
+	p.set_partial("base_dem", 0.2)
+	_check("extent label world", "100 km" in p.active_label())
 	p.mark_done("base_dem")
 	p.mark_done("base_img")
+	p.mark_done("walkable")
 	p.set_partial("detail_dem", 0.5)
+	_check("extent label detail", "4.0 km" in p.active_label())
 	_check("load progress partial", p.fraction() > 0.3 and p.fraction() < 0.6,
 		"got %.3f" % p.fraction())
-	p.mark_done("walkable")
 	p.mark_done("detail_dem")
 	p.mark_done("detail_img")
 	p.mark_done("osm_map")

@@ -64,12 +64,13 @@ func attribution() -> String:
 ## Multiple requests serialise through one HTTPRequest, so base + detail can be
 ## fired together without colliding.
 func request_imagery(lat: float, lon: float, half_extent_m: float,
-		target_px: int = 2048, tag: String = "base", max_zoom: int = 17) -> void:
+		target_px: int = 2048, tag: String = "base", max_zoom: int = 17,
+		force_refetch: bool = false) -> void:
 	var bbox := GeoMath.bbox_for(lat, lon, half_extent_m)
 	var z := GeoMath.pick_zoom(bbox, target_px, max_zoom)
 	var key := _cache_key(lat, lon, half_extent_m, z)
 	var cache_path := "%s/%s.png" % [CACHE_DIR, key]
-	if TerrainCacheSettings.cache_enabled() and FileAccess.file_exists(cache_path):
+	if not force_refetch and TerrainCacheSettings.cache_enabled() and FileAccess.file_exists(cache_path):
 		var img := Image.new()
 		if img.load(cache_path) == OK:
 			print("ImageryService: '%s' layer served from cache (%s, z%d) — no download" % [tag, key, z])
@@ -186,6 +187,20 @@ func _finish() -> void:
 	var rh := clampi(y1 - y0, 1, stitched.get_height() - y0)
 	var region := stitched.get_region(Rect2i(x0, y0, rw, rh))
 
+	# ESRI returns HTTP-200 "Map data not yet available" placeholder tiles at
+	# zooms it doesn't cover for a region (rural z20+). A mosaic of them is
+	# near-uniform light grey — caching/serving that poisons drapes and roof
+	# orthos, so treat it as a failed layer instead.
+	if _region_is_placeholder(region):
+		var bad_tag := str(_job.get("tag", "base"))
+		var bad_z := int(_job["z"])
+		_busy = false
+		_job = {}
+		imagery_failed.emit(
+			"zoom %d not covered here (placeholder tiles)" % bad_z, bad_tag)
+		_start_next()
+		return
+
 	var key := str(_job["key"])
 	var tag := str(_job.get("tag", "base"))
 	if TerrainCacheSettings.cache_enabled():
@@ -194,6 +209,25 @@ func _finish() -> void:
 	_job = {}
 	imagery_ready.emit(key, _make_drape_texture(region), tag)
 	_start_next()
+
+
+## True when the stitched result is a near-uniform image (ESRI "Map data not
+## yet available" placeholders): sample a coarse grid and measure luminance
+## spread. Real satellite imagery of ANY landscape has far more variance.
+static func _region_is_placeholder(img: Image) -> bool:
+	var w := img.get_width()
+	var h := img.get_height()
+	if w < 8 or h < 8:
+		return false
+	var lo := 1.0
+	var hi := 0.0
+	for sy in 8:
+		for sx in 8:
+			var c := img.get_pixel(w * (2 * sx + 1) / 16, h * (2 * sy + 1) / 16)
+			var lum := (c.r + c.g + c.b) / 3.0
+			lo = minf(lo, lum)
+			hi = maxf(hi, lum)
+	return hi - lo < 0.04
 
 
 ## Builds the GPU texture for a drape image: mipmaps + S3TC/DXT compression.

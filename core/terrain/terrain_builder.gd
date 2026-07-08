@@ -24,6 +24,14 @@ const DETAIL_GROUND_RENDER_PRIORITY := 1
 ## Neutral ground colour when no imagery is available (offline / headless).
 const NEUTRAL_GROUND := Color(0.45, 0.42, 0.38)
 
+## Seam blending between hi-res detail patch and coarse world terrain.
+const MIN_FEATHER_M := 80.0
+const MAX_FEATHER_M := 800.0
+const EXTERIOR_RING_M := 600.0
+const FOOTING_CROSSFADE_M := 20.0
+const FEATHER_DELTA_SCALE := 3.0
+const DEFAULT_FEATHER_M := 80.0
+
 
 ## Mean of a height grid, ignoring NANs. Used as the vertical centring offset.
 static func mean_elevation(grid: PackedFloat32Array) -> float:
@@ -114,23 +122,37 @@ static func height_at_world_xz_rect(elev: PackedFloat32Array, cols: int, rows: i
 
 
 ## Walkable ground height: hi-res detail patch inside its square, coarse grid outside.
-## Never samples a sunk coarse collision grid when detail footing is available.
+## Cross-fades across FOOTING_CROSSFADE_M at the boundary when both grids exist.
 static func sample_footing_height(x: float, z: float, coarse: PackedFloat32Array, coarse_res: int,
 		coarse_extent_m: float, center_elev: float,
 		detail: PackedFloat32Array = PackedFloat32Array(), detail_cols: int = 0,
 		detail_rows: int = 0, detail_extent_m: float = 0.0,
-		detail_fallback_coarse: PackedFloat32Array = PackedFloat32Array()) -> float:
+		detail_fallback_coarse: PackedFloat32Array = PackedFloat32Array(),
+		crossfade_m: float = FOOTING_CROSSFADE_M) -> float:
 	var detail_half := detail_extent_m * 0.5 if detail_extent_m > 0.0 else 0.0
+	var has_detail := not detail.is_empty() and detail_cols > 1 and detail_rows > 1 and detail_half > 0.0
 	var in_detail := detail_half > 0.0 and absf(x) <= detail_half and absf(z) <= detail_half
-	if in_detail and not detail.is_empty() and detail_cols > 1 and detail_rows > 1:
-		return height_at_world_xz_rect(
-			detail, detail_cols, detail_rows, detail_extent_m, center_elev, x, z)
-	if in_detail and not detail_fallback_coarse.is_empty() and coarse_res > 1:
+	var coarse_y := 0.0
+	var has_coarse := not coarse.is_empty() and coarse_res > 1
+	if has_coarse:
+		coarse_y = height_at_world_xz(coarse, coarse_res, coarse_extent_m, center_elev, x, z)
+	if in_detail and not has_detail and not detail_fallback_coarse.is_empty() and coarse_res > 1:
 		return height_at_world_xz(
 			detail_fallback_coarse, coarse_res, coarse_extent_m, center_elev, x, z)
-	if not coarse.is_empty() and coarse_res > 1:
-		return height_at_world_xz(coarse, coarse_res, coarse_extent_m, center_elev, x, z)
-	return 0.0
+	if not has_detail:
+		if has_coarse:
+			return coarse_y
+		return 0.0
+	var detail_y := height_at_world_xz_rect(
+		detail, detail_cols, detail_rows, detail_extent_m, center_elev, x, z)
+	var dist_in := maxf(absf(x), absf(z))
+	if dist_in >= detail_half:
+		return coarse_y
+	if crossfade_m <= 0.0 or dist_in <= detail_half - crossfade_m:
+		return detail_y
+	var edge_dist := detail_half - dist_in
+	var t := clampf(edge_dist / crossfade_m, 0.0, 1.0)
+	return lerpf(coarse_y, detail_y, t)
 
 
 ## Resample a source grid to a (dst × dst) grid by bilinear interpolation.
@@ -213,7 +235,7 @@ static func build_heightmap_shape(elev: PackedFloat32Array, res: int,
 static func make_terrain_material(base: Texture2D, detail: Texture2D,
 		terrain_extent_m: float, detail_extent_m: float,
 		patch_mesh: bool = false, hide_detail_region: bool = false,
-		hide_centre_region: bool = false) -> Material:
+		hide_centre_region: bool = false, feather_uv: float = 0.06) -> Material:
 	if detail == null and not hide_centre_region and not patch_mesh:
 		var mat := StandardMaterial3D.new()
 		if base != null:
@@ -236,6 +258,7 @@ static func make_terrain_material(base: Texture2D, detail: Texture2D,
 	sm.set_shader_parameter("use_detail", detail != null)
 	sm.set_shader_parameter("hide_detail_region", hide_detail_region)
 	sm.set_shader_parameter("hide_centre_region", hide_centre_region)
+	sm.set_shader_parameter("feather", feather_uv)
 	return sm
 
 
@@ -251,15 +274,17 @@ static func has_detail_ground(terrain: Node3D) -> bool:
 
 ## Punch a visibility hole in the coarse Ground material when DetailGround exists.
 static func sync_coarse_ground_hide(terrain: Node3D, base_drape: Texture2D,
-		detail_drape: Texture2D, terrain_extent_m: float, detail_extent_m: float) -> void:
+		detail_drape: Texture2D, terrain_extent_m: float, detail_extent_m: float,
+		feather_m: float = DEFAULT_FEATHER_M) -> void:
 	if terrain == null or not has_detail_ground(terrain):
 		return
 	var ground := terrain.get_node_or_null("Ground") as MeshInstance3D
 	if ground == null:
 		return
+	var feather_uv := feather_uv_from_metres(feather_m, detail_extent_m)
 	ground.material_override = make_terrain_material(
 		base_drape, detail_drape, terrain_extent_m, detail_extent_m,
-		false, false, true)
+		false, false, true, feather_uv)
 	_apply_render_priority(ground.material_override, GROUND_RENDER_PRIORITY)
 
 
@@ -293,6 +318,139 @@ static func build_terrain_node(elev: PackedFloat32Array, res: int, extent_m: flo
 	root.add_child(body)
 
 	return root
+
+
+## UV-space feather width from metres on the detail patch edge.
+static func feather_uv_from_metres(feather_m: float, detail_extent_m: float) -> float:
+	if detail_extent_m <= 0.0:
+		return 0.06
+	return clampf(feather_m / detail_extent_m, 0.01, 0.35)
+
+
+## Max |detail − coarse| height difference along the detail square perimeter.
+static func compute_boundary_delta_m(detail: PackedFloat32Array, detail_res: int,
+		detail_extent_m: float, coarse: PackedFloat32Array, coarse_res: int,
+		coarse_extent_m: float, center_elev: float, sample_count: int = 32) -> float:
+	if detail.is_empty() or coarse.is_empty():
+		return 0.0
+	var diag := TerrainSeamDiag.measure_boundary_delta(
+		detail, detail_res, detail_extent_m, coarse, coarse_res,
+		coarse_extent_m, center_elev, sample_count)
+	return float(diag.get("max_delta_m", 0.0))
+
+
+## Adaptive feather width from measured boundary mismatch.
+static func compute_adaptive_feather_m(detail: PackedFloat32Array, detail_res: int,
+		detail_extent_m: float, coarse: PackedFloat32Array, coarse_res: int,
+		coarse_extent_m: float, center_elev: float) -> float:
+	var max_delta := compute_boundary_delta_m(
+		detail, detail_res, detail_extent_m, coarse, coarse_res, coarse_extent_m, center_elev)
+	return clampf(FEATHER_DELTA_SCALE * max_delta, MIN_FEATHER_M, MAX_FEATHER_M)
+
+
+## Median vertical offset (coarse − detail) along the detail-square perimeter; shift
+## detail by this so the patch edge meets the coarse heightfield.
+static func compute_detail_vertical_offset(detail: PackedFloat32Array, detail_res: int,
+		detail_extent_m: float, coarse: PackedFloat32Array, coarse_res: int,
+		coarse_extent_m: float, center_elev: float, sample_count: int = 32) -> float:
+	if detail.is_empty() or coarse.is_empty() or detail_res < 2:
+		return 0.0
+	var half_d := detail_extent_m * 0.5
+	var samples: Array[float] = []
+	for i in sample_count:
+		var t := float(i) / float(maxi(sample_count - 1, 1))
+		var perim := t * 4.0
+		var x := 0.0
+		var z := 0.0
+		if perim < 1.0:
+			x = lerpf(half_d, -half_d, perim)
+			z = half_d
+		elif perim < 2.0:
+			x = -half_d
+			z = lerpf(half_d, -half_d, perim - 1.0)
+		elif perim < 3.0:
+			x = lerpf(-half_d, half_d, perim - 2.0)
+			z = -half_d
+		else:
+			x = half_d
+			z = lerpf(-half_d, half_d, perim - 3.0)
+		var u := clampf((x + half_d) / detail_extent_m, 0.0, 1.0)
+		var v := clampf((z + half_d) / detail_extent_m, 0.0, 1.0)
+		var d_amsl := sample_bilinear(detail, detail_res, detail_res, u, v)
+		var c_amsl := height_at_world_xz(coarse, coarse_res, coarse_extent_m,
+			center_elev, x, z) + center_elev
+		if is_nan(d_amsl) or is_nan(c_amsl):
+			continue
+		samples.append(c_amsl - d_amsl)
+	if samples.is_empty():
+		return 0.0
+	samples.sort()
+	var mid := samples.size() / 2
+	if samples.size() % 2 == 1:
+		return samples[mid]
+	return (samples[mid - 1] + samples[mid]) * 0.5
+
+
+static func apply_detail_vertical_offset(detail: PackedFloat32Array, offset_m: float) -> PackedFloat32Array:
+	if absf(offset_m) < 1e-6:
+		return detail
+	var out := detail.duplicate()
+	for i in out.size():
+		if not is_nan(out[i]):
+			out[i] += offset_m
+	return out
+
+
+## Nearest point on the detail-square boundary from world (x, z).
+static func _nearest_detail_edge_xz(x: float, z: float, half_d: float) -> Vector2:
+	var px := clampf(x, -half_d, half_d)
+	var pz := clampf(z, -half_d, half_d)
+	if absf(x) > half_d:
+		px = signf(x) * half_d
+	if absf(z) > half_d:
+		pz = signf(z) * half_d
+	return Vector2(px, pz)
+
+
+## Pull coarse heights in an exterior ring toward the detail edge so cliffs don't form.
+static func feather_coarse_exterior_ring(coarse: PackedFloat32Array, coarse_res: int,
+		coarse_extent_m: float, center_elev: float,
+		detail_surf: PackedFloat32Array, detail_res: int, detail_extent_m: float,
+		ring_m: float = EXTERIOR_RING_M) -> PackedFloat32Array:
+	var out := coarse.duplicate()
+	if detail_surf.is_empty() or coarse.is_empty() or ring_m <= 0.0:
+		return out
+	var half_d := detail_extent_m * 0.5
+	var half_t := coarse_extent_m * 0.5
+	var inv_t := 1.0 / float(maxi(coarse_res - 1, 1))
+	for r in coarse_res:
+		var z := float(r) * inv_t * coarse_extent_m - half_t
+		for c in coarse_res:
+			var x := float(c) * inv_t * coarse_extent_m - half_t
+			var dist_in := maxf(absf(x), absf(z))
+			if dist_in <= half_d or dist_in > half_d + ring_m:
+				continue
+			var edge := _nearest_detail_edge_xz(x, z, half_d)
+			var edge_amsl := sample_bilinear(detail_surf, detail_res, detail_res,
+				(edge.x + half_d) / detail_extent_m, (edge.y + half_d) / detail_extent_m)
+			var blend := 1.0 - clampf((dist_in - half_d) / ring_m, 0.0, 1.0)
+			var idx := r * coarse_res + c
+			out[idx] = lerpf(out[idx], edge_amsl, blend)
+	return out
+
+
+## Scale sink depth to local relief so flat sites aren't over-sunk.
+static func compute_sink_depth_m(detail: PackedFloat32Array, default_depth: float = 80.0) -> float:
+	if detail.is_empty():
+		return default_depth
+	var lo := INF
+	var hi := -INF
+	for v in detail:
+		if not is_nan(v):
+			lo = minf(lo, v)
+			hi = maxf(hi, v)
+	var relief := hi - lo
+	return maxf(default_depth, relief * 0.25)
 
 
 ## Merge a hi-res centre DEM patch into the full terrain grid with edge feathering.
@@ -345,19 +503,24 @@ static func sink_coarse_centre_for_detail(out: PackedFloat32Array, base_res: int
 			out[idx] = lerpf(out[idx], floor_y, sink_blend)
 
 
-## Replace Ground mesh and heightmap collision on an existing terrain node.
+## Replace Ground mesh on an existing terrain node. Optional `collision_elev` uses a
+## separate heightfield for TerrainCollision (e.g. centre-sunk to avoid doming).
 static func rebuild_terrain_surfaces(terrain: Node3D, elev: PackedFloat32Array,
 		res: int, extent_m: float, center_elev: float,
 		base_drape: Texture2D = null, detail_drape: Texture2D = null,
-		detail_extent_m: float = 0.0, hide_coarse_centre: bool = false) -> void:
+		detail_extent_m: float = 0.0, hide_coarse_centre: bool = false,
+		seam_feather_m: float = DEFAULT_FEATHER_M,
+		collision_elev: PackedFloat32Array = PackedFloat32Array()) -> void:
 	if terrain == null:
 		return
+	var coll := collision_elev if not collision_elev.is_empty() else elev
+	var feather_uv := feather_uv_from_metres(seam_feather_m, detail_extent_m) if detail_extent_m > 0.0 else 0.06
 	var ground := terrain.get_node_or_null("Ground") as MeshInstance3D
 	if ground != null:
 		ground.mesh = build_mesh(elev, res, extent_m, center_elev)
 		ground.material_override = make_terrain_material(
 			base_drape, detail_drape, extent_m, detail_extent_m,
-			false, false, hide_coarse_centre)
+			false, false, hide_coarse_centre, feather_uv)
 		_apply_render_priority(ground.material_override, GROUND_RENDER_PRIORITY)
 	var body := terrain.get_node_or_null("TerrainCollision") as StaticBody3D
 	if body != null:
@@ -365,9 +528,27 @@ static func rebuild_terrain_surfaces(terrain: Node3D, elev: PackedFloat32Array,
 		if cs == null and body.get_child_count() > 0:
 			cs = body.get_child(0) as CollisionShape3D
 		if cs != null:
-			cs.shape = build_heightmap_shape(elev, res, center_elev)
+			cs.shape = build_heightmap_shape(coll, res, center_elev)
 			var spacing := extent_m / float(maxi(res - 1, 1))
 			cs.scale = Vector3(spacing, 1.0, spacing)
+
+
+## Update coarse TerrainCollision only (visual Ground mesh unchanged).
+static func update_terrain_collision(terrain: Node3D, elev: PackedFloat32Array,
+		res: int, extent_m: float, center_elev: float) -> void:
+	if terrain == null or elev.is_empty() or res < 2:
+		return
+	var body := terrain.get_node_or_null("TerrainCollision") as StaticBody3D
+	if body == null:
+		return
+	var cs := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if cs == null and body.get_child_count() > 0:
+		cs = body.get_child(0) as CollisionShape3D
+	if cs == null:
+		return
+	cs.shape = build_heightmap_shape(elev, res, center_elev)
+	var spacing := extent_m / float(maxi(res - 1, 1))
+	cs.scale = Vector3(spacing, 1.0, spacing)
 
 
 ## Blend detail-patch edge heights into the coarse grid so the two meshes meet cleanly.
@@ -400,9 +581,11 @@ static func feather_detail_to_coarse(detail: PackedFloat32Array, detail_res: int
 ## over detail valleys after Phase 6 hid the coarse mesh there).
 static func upsert_detail_patch(terrain: Node3D, elev: PackedFloat32Array, res: int,
 		detail_extent_m: float, center_elev: float, base_drape: Texture2D = null,
-		detail_drape: Texture2D = null, terrain_extent_m: float = 0.0) -> void:
+		detail_drape: Texture2D = null, terrain_extent_m: float = 0.0,
+		seam_feather_m: float = DEFAULT_FEATHER_M) -> void:
 	if terrain == null or elev.is_empty() or res < 2:
 		return
+	var feather_uv := feather_uv_from_metres(seam_feather_m, detail_extent_m)
 	var ground := terrain.get_node_or_null("DetailGround") as MeshInstance3D
 	if ground == null:
 		ground = MeshInstance3D.new()
@@ -410,7 +593,7 @@ static func upsert_detail_patch(terrain: Node3D, elev: PackedFloat32Array, res: 
 		terrain.add_child(ground)
 	ground.mesh = build_mesh(elev, res, detail_extent_m, center_elev)
 	ground.material_override = make_terrain_material(
-		base_drape, detail_drape, terrain_extent_m, detail_extent_m, true, false)
+		base_drape, detail_drape, terrain_extent_m, detail_extent_m, true, false, false, feather_uv)
 	_apply_render_priority(ground.material_override, DETAIL_GROUND_RENDER_PRIORITY)
 	ground.extra_cull_margin = detail_extent_m
 
@@ -427,7 +610,7 @@ static func upsert_detail_patch(terrain: Node3D, elev: PackedFloat32Array, res: 
 	var spacing := detail_extent_m / float(maxi(res - 1, 1))
 	cs.scale = Vector3(spacing, 1.0, spacing)
 
-	sync_coarse_ground_hide(terrain, base_drape, detail_drape, terrain_extent_m, detail_extent_m)
+	sync_coarse_ground_hide(terrain, base_drape, detail_drape, terrain_extent_m, detail_extent_m, seam_feather_m)
 
 
 static func remove_detail_patch(terrain: Node3D) -> void:

@@ -9,11 +9,11 @@ const STAGE_ORDER: Array[String] = [
 ]
 
 const STAGE_LABELS: Dictionary = {
-	"base_dem": "Elevation (30 km)",
+	"base_dem": "Elevation",
 	"base_img": "Satellite imagery",
 	"walkable": "Building terrain",
-	"detail_dem": "Hi-res elevation (3 km)",
-	"detail_img": "Hi-res imagery (3 km)",
+	"detail_dem": "Hi-res elevation",
+	"detail_img": "Hi-res imagery",
 	"osm_map": "OSM map data",
 	"osm_veg": "Vegetation",
 }
@@ -30,11 +30,24 @@ const STAGE_WEIGHTS: Dictionary = {
 
 var _done: Dictionary = {}
 var _partial: Dictionary = {}
+var _extent_labels: Dictionary = {}
 
 
 func reset() -> void:
 	_done.clear()
 	_partial.clear()
+	_extent_labels.clear()
+
+
+## Optional per-load labels that include the configured world/hi-res radii.
+func configure_for_extents(world_half_m: float, detail_half_m: float) -> void:
+	var world_km := world_half_m * 2.0 / 1000.0
+	var detail_km := detail_half_m * 2.0 / 1000.0
+	_extent_labels = {
+		"base_dem": "Elevation (%.0f km world)" % world_km,
+		"detail_dem": "Hi-res elevation (%.1f km)" % detail_km,
+		"detail_img": "Hi-res imagery (%.1f km)" % detail_km,
+	}
 
 
 func mark_done(stage: String) -> void:
@@ -76,6 +89,8 @@ func active_label() -> String:
 	var sid := active_stage_id()
 	if sid.is_empty():
 		return "Map loaded"
+	if sid in _extent_labels:
+		return str(_extent_labels[sid])
 	return str(STAGE_LABELS.get(sid, sid))
 
 

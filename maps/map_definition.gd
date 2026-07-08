@@ -36,6 +36,10 @@ const TRUSTED_SCENE_PATHS: Array[String] = [
 @export var latitude: float = 0.0
 @export var longitude: float = 0.0
 @export var half_extent_m: float = 0.0
+## Hi-res DEM patch half-extent (m). 0 = TerrainLoader default (~1500 m).
+@export var detail_half_extent_m: float = 0.0
+## OSM buildings/vegetation fetch half-extent (m). 0 = TerrainLoader default (~1500 m).
+@export var osm_half_extent_m: float = 0.0
 
 ## True when this definition drives the runtime-terrain generated scene.
 func is_generated() -> bool:

@@ -21,11 +21,14 @@ uniform bool hide_detail_region = false;
 uniform bool hide_centre_region = false;
 // Seasonal ground snow (driven live by TerrainLoader from weather data).
 uniform float snow_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float snow_depth_m = 0.0; // modelled pack depth — fakes raised surface on flats
 uniform vec3 snow_color : source_color = vec3(0.90, 0.93, 0.98);
 // Steep terrain sheds snow: below snow_slope_min it stays bare; above
 // snow_slope_max it holds fully. Values are world-up dot (1 = flat ground).
 uniform float snow_slope_min : hint_range(0.0, 1.0) = 0.45;
 uniform float snow_slope_max : hint_range(0.0, 1.0) = 0.80;
+
+#include "res://core/soi/shaders/soi_clip.gdshaderinc"
 
 varying vec3 v_world_normal;
 varying vec3 v_world_pos;
@@ -36,6 +39,7 @@ void vertex() {
 }
 
 void fragment() {
+	soi_clip_fragment(v_world_pos);
 	vec2 uv = UV;
 	vec3 col;
 
@@ -74,15 +78,19 @@ void fragment() {
 	}
 
 	float rough = 1.0;
-	if (snow_amount > 0.001) {
+	if (snow_amount > 0.001 || snow_depth_m > 0.001) {
+		float depth_t = clamp(snow_depth_m / 1.5, 0.0, 1.0);
 		// Flat ground accumulates; steep faces shed. Small spatial break-up so
 		// the snow line is not a perfectly uniform sheet.
 		float slope_hold = smoothstep(snow_slope_min, snow_slope_max, clamp(v_world_normal.y, 0.0, 1.0));
 		vec2 ncell = floor(v_world_pos.xz / 12.0);
 		float n = fract(sin(dot(ncell, vec2(45.2, 17.9))) * 43758.5453) * 2.0 - 1.0;
-		float cover = clamp(snow_amount * (0.45 + 0.55 * slope_hold) + n * 0.06 * snow_amount, 0.0, 1.0);
-		col = mix(col, snow_color, cover);
-		rough = mix(1.0, 0.7, cover);
+		float cover_strength = clamp(snow_amount * 0.35 + depth_t * 0.75, 0.0, 1.0);
+		float cover = clamp(cover_strength * (0.40 + 0.60 * slope_hold) + n * 0.05 * cover_strength, 0.0, 1.0);
+		// Deep packs read brighter / softer on horizontal terrain.
+		vec3 pack_col = mix(snow_color, vec3(0.96, 0.98, 1.0), depth_t * slope_hold * 0.35);
+		col = mix(col, pack_col, cover);
+		rough = mix(1.0, mix(0.72, 0.88, depth_t), cover);
 	}
 
 	ALBEDO = col;

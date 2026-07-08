@@ -12,17 +12,24 @@ var longitude: float = 0.0
 var label: String = ""
 ## Half-extent in metres (terrain is a square of side 2× this). 0 = use default.
 var half_extent_m: float = 0.0
+## Hi-res DEM patch half-extent (m). 0 = loader default.
+var detail_half_extent_m: float = 0.0
+## OSM / vegetation fetch half-extent (m). 0 = loader default.
+var osm_half_extent_m: float = 0.0
 ## True when this hand-off is a save resume — the loader then leaves the player at
 ## the restored save position instead of re-seating at the terrain centre.
 var from_resume: bool = false
 
 
 func set_pending(lat: float, lon: float, place_label: String,
-		half_extent: float = 0.0, resume: bool = false) -> void:
+		half_extent: float = 0.0, resume: bool = false,
+		detail_half_extent: float = 0.0, osm_half_extent: float = 0.0) -> void:
 	latitude = lat
 	longitude = lon
 	label = place_label
 	half_extent_m = half_extent
+	detail_half_extent_m = detail_half_extent
+	osm_half_extent_m = osm_half_extent
 	from_resume = resume
 	has_pending = true
 
@@ -33,6 +40,8 @@ func consume() -> Dictionary:
 		"longitude": longitude,
 		"label": label,
 		"half_extent_m": half_extent_m,
+		"detail_half_extent_m": detail_half_extent_m,
+		"osm_half_extent_m": osm_half_extent_m,
 		"from_resume": from_resume,
 		"has_pending": has_pending,
 	}

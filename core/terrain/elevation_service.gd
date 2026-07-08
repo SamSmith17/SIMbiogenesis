@@ -12,10 +12,11 @@ const OPEN_METEO_URL := "https://api.open-meteo.com/v1/elevation"
 const OPENTOPO_GLOBAL_URL := "https://portal.opentopography.org/API/globaldem"
 const OPENTOPO_USGS_URL := "https://portal.opentopography.org/API/usgsdem"
 const CACHE_DIR := "user://terrain_cache/dem"
-const CACHE_VERSION := "v2"
+const CACHE_VERSION := "v3"
 const CONFIG_PATH := "user://terrain_config.cfg"
 
-const DEFAULT_GRID_N := 16
+const DEFAULT_GRID_N := 64
+const DEFAULT_GRID_N_LEGACY := 16
 const DETAIL_GRID_N := 512
 const OPENTOPO_GRID_N := 256
 ## Cap for the Open-Meteo (no-key) detail fetch: 64² = 4,096 points = ~41 serial
@@ -41,6 +42,33 @@ var _openmeteo_daily_exhausted := false
 func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(CACHE_DIR))
 	_ensure_pool()
+
+
+## Base DEM grid N from terrain_config.cfg (default 64²).
+static func base_grid_n() -> int:
+	var n := DEFAULT_GRID_N
+	if FileAccess.file_exists(CONFIG_PATH):
+		var cfg := ConfigFile.new()
+		if cfg.load(CONFIG_PATH) == OK:
+			n = int(cfg.get_value("terrain", "base_dem_grid_n", DEFAULT_GRID_N))
+	return maxi(n, 8)
+
+
+## Scale base DEM density with world radius so distant peaks stay on the mesh.
+## Open-Meteo (no key) caps lower to avoid multi-thousand serial point queries.
+static func base_grid_n_for_extent(half_extent_m: float) -> int:
+	var cfg_n := base_grid_n()
+	var extent_m := half_extent_m * 2.0
+	var target_spacing_m := 700.0
+	var needed := int(ceil(extent_m / target_spacing_m)) + 1
+	needed = clampi(maxi(needed, cfg_n), 8, 256)
+	if not _static_has_opentopo_key():
+		needed = mini(needed, 96)
+	return needed
+
+
+static func _static_has_opentopo_key() -> bool:
+	return not _sanitize_api_key(_read_config_api_key()).is_empty()
 
 
 func _ensure_pool() -> void:
@@ -139,14 +167,16 @@ static func find_usable_cached_dem(lat: float, lon: float, tag: String = "") -> 
 
 ## Fetch elevation for square of side (2*half_extent_m). `tag` labels the layer
 ## ("base", "detail", …). Jobs queue through a single active fetch.
+## Pass `force_refetch` to bypass disk cache (refresh without deleting backups).
 func request_elevation(lat: float, lon: float, half_extent_m: float,
-		grid_n: int = DEFAULT_GRID_N, tag: String = "base") -> void:
+		grid_n: int = DEFAULT_GRID_N, tag: String = "base", force_refetch: bool = false) -> void:
 	var req := {
 		"lat": lat,
 		"lon": lon,
 		"half_extent_m": half_extent_m,
 		"grid_n": grid_n,
 		"tag": tag,
+		"force_refetch": force_refetch,
 	}
 	_pending.append(req)
 	_start_next()
@@ -161,24 +191,17 @@ func _start_next() -> void:
 	var half_extent_m: float = float(req["half_extent_m"])
 	var grid_n: int = int(req["grid_n"])
 	var tag: String = str(req["tag"])
+	var force_refetch: bool = bool(req.get("force_refetch", false))
 	var source := _pick_source(lat, lon, tag)
 	var effective_n := grid_n
 	if source.begins_with("opentopo"):
 		effective_n = maxi(grid_n, OPENTOPO_GRID_N if tag == "base" else DETAIL_GRID_N)
 	elif tag == "detail" and source == "openmeteo":
-		# Open-Meteo is point-query only (BATCH_SIZE per request) and rate-limits
-		# CONCURRENT connections hard, so fetches run sequentially. The detail layer
-		# asks for DETAIL_GRID_N (512²) which over OpenMeteo would be ~2,600 serial
-		# requests — a 20-minute storm that rate-limit-fails and can take the process
-		# down ("exits without error" on an uncached load). Open-Meteo's source is
-		# only ~90 m Copernicus anyway, so cap the fetched grid at OPENMETEO_DETAIL_N
-		# (~47 m spacing over the 3 km patch, still finer than the source); the
-		# mesh/collider upsample from it. OpenTopography (key) keeps full resolution
-		# via a single AAIGrid request and is unaffected.
 		effective_n = mini(grid_n, OPENMETEO_DETAIL_N)
-	var key := _cache_key(lat, lon, half_extent_m, effective_n, tag, source)
+	var cache_source := _cache_source_label(source, half_extent_m, tag)
+	var key := _cache_key(lat, lon, half_extent_m, effective_n, tag, cache_source)
 	var cache_path := "%s/%s.json" % [CACHE_DIR, key]
-	if TerrainCacheSettings.cache_enabled() and FileAccess.file_exists(cache_path):
+	if not force_refetch and TerrainCacheSettings.cache_enabled() and FileAccess.file_exists(cache_path):
 		var cached := _load_cache(cache_path)
 		if not cached.is_empty():
 			print("ElevationService: '%s' DEM served from cache (%s) — no download" % [tag, key])
@@ -204,17 +227,14 @@ func _start_next() -> void:
 			_request_opentopo(lat, lon, half_extent_m, effective_n, key, tag,
 				"USGS10m", OPENTOPO_USGS_URL)
 		_:
+			var demtype := opentopo_global_demtype(half_extent_m, tag)
 			_request_opentopo(lat, lon, half_extent_m, effective_n, key, tag,
-				"SRTMGL1", OPENTOPO_GLOBAL_URL)
+				demtype, OPENTOPO_GLOBAL_URL)
 
 
 static func _pick_source(lat: float, lon: float, tag: String) -> String:
-	var api_key := ""
-	if FileAccess.file_exists(CONFIG_PATH):
-		var cfg := ConfigFile.new()
-		if cfg.load(CONFIG_PATH) == OK:
-			api_key = str(cfg.get_value("opentopography", "api_key", ""))
-	if api_key != "":
+	var api_key := _sanitize_api_key(_read_config_api_key())
+	if not api_key.is_empty():
 		if tag == "detail" and _is_us_site(lat, lon):
 			return "opentopo_usgs10"
 		return "opentopo_global"
@@ -223,8 +243,40 @@ static func _pick_source(lat: float, lon: float, tag: String) -> String:
 	return "openmeteo"
 
 
+## Coarser global DEM for large base bboxes — SRTM GL1 at native 30 m over a
+## 100 km square is ~3300² AAIGrid cells and routinely times out in Godot.
+static func opentopo_global_demtype(half_extent_m: float, tag: String) -> String:
+	if tag != "base":
+		return "SRTMGL1"
+	var side_m := half_extent_m * 2.0
+	if side_m > 60000.0:
+		return "COP90"
+	if side_m > 20000.0:
+		return "SRTMGL3"
+	return "SRTMGL1"
+
+
+static func _read_config_api_key() -> String:
+	if not FileAccess.file_exists(CONFIG_PATH):
+		return ""
+	var cfg := ConfigFile.new()
+	if cfg.load(CONFIG_PATH) != OK:
+		return ""
+	return str(cfg.get_value("opentopography", "api_key", ""))
+
+
+static func _sanitize_api_key(raw: String) -> String:
+	return raw.strip_edges().replace("\n", "").replace("\r", "")
+
+
 static func _is_us_site(lat: float, lon: float) -> bool:
 	return lat >= 24.0 and lat <= 50.0 and lon >= -125.0 and lon <= -66.0
+
+
+static func _cache_source_label(source: String, half_extent_m: float, tag: String) -> String:
+	if source == "opentopo_global":
+		return "opentopo_%s" % opentopo_global_demtype(half_extent_m, tag)
+	return source
 
 
 func _request_open_meteo(lat: float, lon: float, half_extent_m: float,
@@ -378,33 +430,48 @@ func _request_opentopo(lat: float, lon: float, half_extent_m: float,
 		grid_n: int, key: String, tag: String, dem_name: String, base_url: String) -> void:
 	var bbox := GeoMath.bbox_for(lat, lon, half_extent_m)
 	var api_key := _opentopo_key()
-	var url := ""
-	if base_url == OPENTOPO_USGS_URL:
-		url = "%s?datasetName=%s&south=%.6f&north=%.6f&west=%.6f&east=%.6f&outputFormat=AAIGrid&API_Key=%s" % [
-			base_url, dem_name, bbox["south"], bbox["north"], bbox["west"], bbox["east"], api_key]
-	else:
-		url = "%s?demtype=%s&south=%.6f&north=%.6f&west=%.6f&east=%.6f&outputFormat=AAIGrid&API_Key=%s" % [
-			base_url, dem_name, bbox["south"], bbox["north"], bbox["west"], bbox["east"], api_key]
+	if api_key.is_empty():
+		_fail("OpenTopography API key missing in user://terrain_config.cfg")
+		return
+	var url := _build_opentopo_url(base_url, dem_name, bbox, api_key)
+	var cache_source := "opentopo_usgs10" if base_url == OPENTOPO_USGS_URL else "opentopo_%s" % dem_name
 	_job = {
 		"source": "opentopo",
 		"key": key,
+		"cache_source": cache_source,
 		"tag": tag,
 		"target_n": grid_n,
 		"url": url,
 		"retries": 0,
+		"dem_name": dem_name,
+		"base_url": base_url,
+		"lat": lat,
+		"lon": lon,
+		"half_extent_m": half_extent_m,
 	}
 	_busy = true
 	_ensure_opentopo_http()
+	print("ElevationService: OpenTopography %s fetch (%.0f km square) …" % [
+		dem_name, half_extent_m * 2.0 / 1000.0])
 	var err := _opentopo_http.request(url)
 	if err != OK:
 		_fail("HTTPRequest error %d" % err)
+
+
+static func _build_opentopo_url(base_url: String, dem_name: String, bbox: Dictionary,
+		api_key: String) -> String:
+	if base_url == OPENTOPO_USGS_URL:
+		return "%s?datasetName=%s&south=%.6f&north=%.6f&west=%.6f&east=%.6f&outputFormat=AAIGrid&API_Key=%s" % [
+			base_url, dem_name, bbox["south"], bbox["north"], bbox["west"], bbox["east"], api_key]
+	return "%s?demtype=%s&south=%.6f&north=%.6f&west=%.6f&east=%.6f&outputFormat=AAIGrid&API_Key=%s" % [
+		base_url, dem_name, bbox["south"], bbox["north"], bbox["west"], bbox["east"], api_key]
 
 
 func _ensure_opentopo_http() -> void:
 	if _opentopo_http != null and is_instance_valid(_opentopo_http):
 		return
 	_opentopo_http = HTTPRequest.new()
-	_opentopo_http.timeout = 90.0
+	_opentopo_http.timeout = 180.0
 	add_child(_opentopo_http)
 	_opentopo_http.request_completed.connect(_on_opentopo_completed)
 
@@ -413,13 +480,18 @@ func _on_opentopo_completed(result: int, response_code: int,
 		_headers: PackedStringArray, body: PackedByteArray) -> void:
 	if _job.is_empty() or str(_job.get("source", "")) != "opentopo":
 		return
+	var body_text := body.get_string_from_utf8()
 	if result != HTTPRequest.RESULT_SUCCESS:
+		if _retry_opentopo_coarser("network result %d" % result):
+			return
 		_fail("fetch failed (result %d, HTTP %d)" % [result, response_code])
 		return
 	if response_code == 429 or response_code >= 500:
 		var n := int(_job.get("retries", 0)) + 1
 		_job["retries"] = n
 		if n > MAX_RETRIES:
+			if _retry_opentopo_coarser("HTTP %d after %d retries" % [response_code, MAX_RETRIES]):
+				return
 			_fail("rate limited (HTTP %d) after %d retries" % [response_code, MAX_RETRIES])
 			return
 		_after(RETRY_BACKOFF * float(n), func() -> void:
@@ -427,22 +499,65 @@ func _on_opentopo_completed(result: int, response_code: int,
 				_opentopo_http.request(str(_job.get("url", ""))))
 		return
 	if response_code != 200:
-		_fail("fetch failed (result %d, HTTP %d)" % [result, response_code])
+		var preview := body_text.substr(0, min(body_text.length(), 240)).strip_edges()
+		if _retry_opentopo_coarser("HTTP %d: %s" % [response_code, preview]):
+			return
+		_fail("OpenTopography HTTP %d: %s" % [response_code, preview])
 		return
 	var target_n := int(_job.get("target_n", DEFAULT_GRID_N))
 	var key := str(_job.get("key", ""))
 	var tag := str(_job.get("tag", "base"))
-	var parsed := parse_aaigrid(body.get_string_from_utf8())
+	var parsed := parse_aaigrid(body_text)
 	if parsed.is_empty():
-		_fail("opentopo parse failed")
+		if _retry_opentopo_coarser("AAIGrid parse failed (%d bytes)" % body.size()):
+			return
+		_fail("opentopo parse failed (%d bytes)" % body.size())
 		return
 	var src: PackedFloat32Array = parsed["grid"]
+	if not grid_is_usable(src, int(parsed["cols"]), int(parsed["rows"])):
+		if _retry_opentopo_coarser("DEM has no usable relief"):
+			return
+		_fail("elevation grid has no usable relief")
+		return
 	var grid := TerrainBuilder.resample(src, int(parsed["cols"]), int(parsed["rows"]), target_n)
 	_save_cache(key, grid, target_n, target_n)
 	_busy = false
 	_job = {}
 	elevation_ready.emit(key, grid, target_n, target_n, tag)
 	_start_next()
+
+
+func _retry_opentopo_coarser(reason: String) -> bool:
+	if _job.is_empty() or str(_job.get("tag", "")) != "base":
+		return false
+	if str(_job.get("base_url", "")) != OPENTOPO_GLOBAL_URL:
+		return false
+	var dem := str(_job.get("dem_name", "SRTMGL1"))
+	var next := ""
+	match dem:
+		"SRTMGL1":
+			next = "SRTMGL3"
+		"SRTMGL3":
+			next = "COP90"
+		_:
+			return false
+	push_warning("ElevationService: OpenTopography %s failed (%s) — retrying %s" % [dem, reason, next])
+	var lat := float(_job.get("lat", 0.0))
+	var lon := float(_job.get("lon", 0.0))
+	var half_extent_m := float(_job.get("half_extent_m", 0.0))
+	var target_n := int(_job.get("target_n", DEFAULT_GRID_N))
+	var tag := str(_job.get("tag", "base"))
+	var api_key := _opentopo_key()
+	var bbox := GeoMath.bbox_for(lat, lon, half_extent_m)
+	_job["dem_name"] = next
+	_job["cache_source"] = "opentopo_%s" % next
+	_job["key"] = _cache_key(lat, lon, half_extent_m, target_n, tag, str(_job["cache_source"]))
+	_job["url"] = _build_opentopo_url(OPENTOPO_GLOBAL_URL, next, bbox, api_key)
+	_job["retries"] = 0
+	print("ElevationService: OpenTopography retry with %s (%.0f km square) …" % [
+		next, half_extent_m * 2.0 / 1000.0])
+	_opentopo_http.request(str(_job["url"]))
+	return true
 
 
 static func parse_aaigrid(text: String) -> Dictionary:
@@ -554,9 +669,4 @@ static func _is_openmeteo_daily_limit(response_code: int, body_text: String) -> 
 
 
 func _opentopo_key() -> String:
-	if not FileAccess.file_exists(CONFIG_PATH):
-		return ""
-	var cfg := ConfigFile.new()
-	if cfg.load(CONFIG_PATH) != OK:
-		return ""
-	return str(cfg.get_value("opentopography", "api_key", ""))
+	return _sanitize_api_key(_read_config_api_key())

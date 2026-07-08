@@ -45,7 +45,11 @@ var _panel_margin: MarginContainer = null
 var _details_scroll: ScrollContainer = null
 var _details_root: VBoxContainer = null
 var _pending_bundle_path: String = ""
-var _bundle_status: Label = null
+var _bundle_status: Label
+var _world_radius_km_spin: SpinBox
+var _detail_radius_spin: SpinBox
+var _osm_radius_spin: SpinBox
+var _advanced_body: VBoxContainer = null
 var _bundle_file_dialog: FileDialog = null
 var _maps_resolved: Array[MapDefinition] = []
 var _maps_list: ItemList = null
@@ -569,6 +573,8 @@ func _build_ui() -> void:
 		rv.add_child(node)
 
 	vroot.add_child(_make_separator())
+	_build_advanced_extent_ui(vroot)
+	vroot.add_child(_make_separator())
 	_bundle_status = Label.new()
 	_bundle_status.text = ""
 	_bundle_status.autowrap_mode = TextServer.AUTOWRAP_WORD
@@ -750,6 +756,59 @@ func _confirm() -> void:
 
 ## Persist a MapDefinition for the selected site and launch the generated world
 ## scene, which builds real terrain + satellite imagery from open data.
+func _build_advanced_extent_ui(parent: Control) -> void:
+	var wrap := VBoxContainer.new()
+	wrap.add_theme_constant_override("separation", 4)
+	parent.add_child(wrap)
+	var toggle := Button.new()
+	toggle.text = "▸ Advanced terrain size"
+	toggle.flat = true
+	toggle.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	wrap.add_child(toggle)
+	_advanced_body = VBoxContainer.new()
+	_advanced_body.add_theme_constant_override("separation", 4)
+	_advanced_body.visible = false
+	wrap.add_child(_advanced_body)
+	toggle.pressed.connect(func() -> void:
+		_advanced_body.visible = not _advanced_body.visible
+		toggle.text = "▾ Advanced terrain size" if _advanced_body.visible else "▸ Advanced terrain size")
+	var hint := Label.new()
+	hint.text = "Defaults: 30 km world, 1.5 km hi-res DEM, 1.5 km OSM. Adjust in Advanced — larger = longer load."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", 11)
+	_style_muted_label(hint)
+	_advanced_body.add_child(hint)
+	_world_radius_km_spin = _add_extent_spin(_advanced_body, "World radius", 30.0, 5.0, 100.0, 1.0, " km",
+		"Lo-res terrain half-width (full map square = 2× this)")
+	_detail_radius_spin = _add_extent_spin(_advanced_body, "Hi-res DEM radius", 1500.0, 500.0, 5000.0, 100.0, " m",
+		"Centre elevation patch radius")
+	_osm_radius_spin = _add_extent_spin(_advanced_body, "OSM radius", 1500.0, 500.0, 8000.0, 100.0, " m",
+		"Buildings, water, vegetation fetch radius")
+
+
+func _add_extent_spin(parent: Control, label: String, default_v: float,
+		min_v: float, max_v: float, step: float, suffix: String, tip: String) -> SpinBox:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+	var lbl := Label.new()
+	lbl.text = label
+	lbl.custom_minimum_size.x = 120.0
+	lbl.tooltip_text = tip
+	_style_muted_label(lbl)
+	row.add_child(lbl)
+	var spin := SpinBox.new()
+	spin.min_value = min_v
+	spin.max_value = max_v
+	spin.step = step
+	spin.value = default_v
+	spin.suffix = suffix
+	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spin.tooltip_text = tip
+	row.add_child(spin)
+	return spin
+
+
 func _create_map() -> void:
 	if is_nan(_sel_lat) or is_nan(_sel_lng):
 		return
@@ -760,7 +819,9 @@ func _create_map() -> void:
 	md.description = "User-created location map for %s.\nTerrain + imagery from open data." % label
 	md.latitude = _sel_lat
 	md.longitude = _sel_lng
-	md.half_extent_m = 0.0  # TerrainLoader default (~30 km square)
+	md.half_extent_m = _world_radius_km_spin.value * 1000.0 if _world_radius_km_spin != null else 0.0
+	md.detail_half_extent_m = _detail_radius_spin.value if _detail_radius_spin != null else 0.0
+	md.osm_half_extent_m = _osm_radius_spin.value if _osm_radius_spin != null else 0.0
 
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
 	# Key the file by coordinates so re-creating the same spot updates in place.
@@ -768,6 +829,9 @@ func _create_map() -> void:
 	if ResourceSaver.save(md, path) != OK:
 		push_warning("LocationPicker: could not write %s" % path)
 
+	var world_he := md.half_extent_m
+	var detail_he := md.detail_half_extent_m
+	var osm_he := md.osm_half_extent_m
 	if not _pending_bundle_path.is_empty():
 		var prep := BUNDLE_IMPORTER_SCRIPT.queue_for_new_map(
 			_pending_bundle_path, _sel_lat, _sel_lng, label)
@@ -775,11 +839,11 @@ func _create_map() -> void:
 			push_warning("LocationPicker: bundle import failed: %s" % str(prep.get("error", "unknown")))
 			var ctx := get_node_or_null("/root/MapContext")
 			if ctx != null:
-				ctx.set_pending(_sel_lat, _sel_lng, label, 0.0)
+				ctx.set_pending(_sel_lat, _sel_lng, label, world_he, false, detail_he, osm_he)
 	else:
 		var ctx := get_node_or_null("/root/MapContext")
 		if ctx != null:
-			ctx.set_pending(_sel_lat, _sel_lng, label, 0.0)
+			ctx.set_pending(_sel_lat, _sel_lng, label, world_he, false, detail_he, osm_he)
 	_pending_bundle_path = ""
 	if _bundle_status != null:
 		_bundle_status.text = ""
@@ -1148,7 +1212,8 @@ func _on_start_pressed() -> void:
 	if md.is_generated():
 		var ctx := get_node_or_null("/root/MapContext")
 		if ctx != null:
-			ctx.set_pending(md.latitude, md.longitude, md.display_name, md.half_extent_m)
+			ctx.set_pending(md.latitude, md.longitude, md.display_name, md.half_extent_m,
+				false, md.detail_half_extent_m, md.osm_half_extent_m)
 	var path_file := MapDefinition.resolve_playable_scene_path(MapDefinition.normalize_scene_path(path))
 	var err := get_tree().change_scene_to_file(path_file)
 	if err != OK and _launch_status != null:
