@@ -47,8 +47,11 @@ const MELT_T_BASE_C := 0.0        # melt accrues above this
 const MELT_RATE_MM_PER_DEG_DAY := 2.6
 const SNOW_WINDOW_DAYS := 70       # trailing days integrated
 const SNOW_SAMPLE_STRIDE_DAYS := 2 # sample every N days for cost
-const SWE_FULL_MM := 22.0          # snow-water-equiv for full white cover
-const SNOW_DEPTH_FULL_M := 0.10    # modelled snow_depth for full white cover
+const SWE_FULL_MM := 22.0          # legacy reference (degree-day scale)
+const COVER_DEPTH_M := 0.12        # depth for snow_amount = 1.0 (surface tint)
+const SNOW_DEPTH_MAX_M := 2.5      # clamp for shaders / API spikes
+## Fresh snow ~10:1 depth:SWE — 100 mm SWE ≈ 1 m pack.
+const DEPTH_PER_SWE_MM := 0.01
 
 
 ## Map a 1-based day-of-year to its northern-hemisphere phenological equivalent,
@@ -113,14 +116,13 @@ static func _leaf_coverage(doy: float) -> float:
 	return 0.0
 
 
-## Estimate ground snow cover (0..1) at a date. `ws` is the WeatherService
-## (or null). Prefers real modelled snow_depth; otherwise integrates a
-## degree-day snowpack over the trailing window from temperature + precip.
-static func estimate_snow_cover(ws: Object, month: int, day: int, hour: float, latitude: float) -> float:
+## Estimate snowpack depth on the ground in metres. Prefers Open-Meteo `snow_depth`;
+## otherwise integrates degree-day SWE over a trailing window and converts to depth.
+static func estimate_snow_depth_m(ws: Object, month: int, day: int, hour: float, latitude: float) -> float:
 	if ws != null and ws.has_method("has_snow_data") and bool(ws.call("has_snow_data", month, day, hour)):
 		var depth := float(ws.call("snow_depth_m", month, day, hour))
 		if is_finite(depth):
-			return clampf(depth / SNOW_DEPTH_FULL_M, 0.0, 1.0)
+			return clampf(maxf(depth, 0.0), 0.0, SNOW_DEPTH_MAX_M)
 
 	if ws == null or not ws.has_method("temperature_c"):
 		return 0.0
@@ -148,7 +150,16 @@ static func estimate_snow_cover(ws: Object, month: int, day: int, hour: float, l
 		swe = maxf(swe, 0.0)
 		d += SNOW_SAMPLE_STRIDE_DAYS
 
-	return clampf(swe / SWE_FULL_MM, 0.0, 1.0)
+	var depth_m := swe * DEPTH_PER_SWE_MM
+	return clampf(depth_m, 0.0, SNOW_DEPTH_MAX_M)
+
+
+## Ground snow cover tint strength 0..1 from pack depth.
+static func estimate_snow_cover(ws: Object, month: int, day: int, hour: float, latitude: float) -> float:
+	var depth := estimate_snow_depth_m(ws, month, day, hour, latitude)
+	if depth <= 0.0:
+		return 0.0
+	return clampf(depth / COVER_DEPTH_M, 0.0, 1.0)
 
 
 ## Wrap a (possibly out-of-range) 1-based day-of-year to a Vector2i(month, day),
