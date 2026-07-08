@@ -106,14 +106,11 @@ func _poll_weather() -> void:
 	var from_deg := NAN
 	if WeatherService.has_method("wind_direction_deg"):
 		from_deg = float(WeatherService.wind_direction_deg(month, day, hour))
-	_target_dir = _downwind_xz(from_deg)
+	_target_dir = WindMath.downwind_xz(from_deg)
 
 
 static func _downwind_xz(from_deg: float) -> Vector2:
-	if is_nan(from_deg):
-		return Vector2(0.0, 1.0)
-	var to_rad := deg_to_rad(from_deg + 180.0)
-	return Vector2(sin(to_rad), cos(to_rad)).normalized()
+	return WindMath.downwind_xz(from_deg)
 
 
 func _push_uniforms() -> void:

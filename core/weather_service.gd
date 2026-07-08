@@ -32,6 +32,9 @@ signal generation_training_started()
 const ARCHIVE_URL := "https://archive-api.open-meteo.com/v1/archive"
 const FORECAST_URL := "https://api.open-meteo.com/v1/forecast"
 const HOURLY_VARS := "shortwave_radiation,diffuse_radiation,wind_speed_10m,windgusts_10m,wind_direction_10m,temperature_2m,relative_humidity_2m,precipitation,cloud_cover,snowfall,snow_depth"
+## Forecast-only extras (archive API returns null for 80 m / 180 m fields).
+const FORECAST_EXTRA_VARS := "wind_direction_80m,wind_direction_180m,wind_speed_80m,wind_speed_180m"
+const FORECAST_HOURLY_VARS := HOURLY_VARS + "," + FORECAST_EXTRA_VARS
 ## Daily variables fetched for the 1940-present record book (separate request).
 const RECORDS_DAILY_VARS := "temperature_2m_max,temperature_2m_min,precipitation_sum"
 ## Bump when RECORDS_DAILY_VARS changes so old record caches are retired.
@@ -43,7 +46,7 @@ const MAX_CACHE_BYTES := 25 * 1024 * 1024
 ## v4 = added snowfall + snow_depth for seasonal snow visuals.
 const CACHE_VERSION := "v4"
 ## Bump when forecast cache envelope changes (stored Open-Meteo JSON + metadata).
-const FORECAST_CACHE_VERSION := "v1"
+const FORECAST_CACHE_VERSION := "v2"
 ## Re-fetch the live forecast when older than this (models update several times/day).
 const FORECAST_MAX_AGE_SEC := 6 * 3600
 ## Bump when the generation schema/output changes. v11 = selectable engine
@@ -474,7 +477,7 @@ func request_forecast(lat: float, lon: float) -> void:
 		return
 	_ensure_http_forecast()
 	var url := "%s?latitude=%.4f&longitude=%.4f&hourly=%s&forecast_days=%d&past_days=%d&timezone=auto" \
-		% [FORECAST_URL, lat, lon, HOURLY_VARS, FORECAST_FUTURE_DAYS, FORECAST_PAST_DAYS]
+		% [FORECAST_URL, lat, lon, FORECAST_HOURLY_VARS, FORECAST_FUTURE_DAYS, FORECAST_PAST_DAYS]
 	var err := _http_forecast.request(url)
 	if err != OK:
 		forecast_fetch_failed.emit.call_deferred("HTTPRequest error %d" % err)
@@ -532,7 +535,7 @@ func parse_forecast_json(text: String, lat: float, lon: float,
 	var start_hoy := start_doy * 24 + start_hour
 	# Parse per-variable arrays.
 	var new_series: Dictionary = {}
-	for var_name in HOURLY_VARS.split(","):
+	for var_name in FORECAST_HOURLY_VARS.split(","):
 		var raw: Array = hourly.get(var_name, []) as Array
 		if raw.is_empty():
 			continue
@@ -850,6 +853,67 @@ func diffuse_radiation_wm2(month: int, day: int, hour: float) -> float:
 ## Wind direction in degrees (0 = N, 90 = E, 180 = S, 270 = W — meteorological).
 func wind_direction_deg(month: int, day: int, hour: float) -> float:
 	return sample("wind_direction_10m", month, day, hour)
+
+
+func _sample_forecast_var(var_name: String, month: int, day: int, hour: float) -> float:
+	if not is_forecast_date(month, day):
+		return NAN
+	var fi := _forecast_hour_idx(month, day, hour)
+	if fi < 0:
+		return NAN
+	var farr: PackedFloat32Array = _forecast_series.get(var_name, PackedFloat32Array())
+	if farr.is_empty() or fi >= farr.size():
+		return NAN
+	var h := float(_DAYS_BEFORE_MONTH[clampi(month, 1, 12) - 1] + clampi(day, 1, 31) - 1) * 24.0 \
+			+ clampf(hour, 0.0, 23.999)
+	var i0 := clampi(int(h), 0, farr.size() - 1)
+	var i1 := mini(i0 + 1, farr.size() - 1)
+	var a := farr[i0]
+	var b := farr[i1]
+	if is_nan(a):
+		return b
+	if is_nan(b):
+		return a
+	return lerpf(a, b, h - float(i0))
+
+
+## Low-cloud / cumulus drift: 80 m when forecast has it, else 10 m surface.
+func wind_direction_deg_low(month: int, day: int, hour: float, latitude_deg: float = 33.0) -> float:
+	var v80 := _sample_forecast_var("wind_direction_80m", month, day, hour)
+	if not is_nan(v80):
+		return v80
+	return wind_direction_deg(month, day, hour)
+
+
+## High cirrus drift: 180 m in forecast window, else veered surface wind (archive years).
+func wind_direction_deg_high(month: int, day: int, hour: float, latitude_deg: float = 33.0) -> float:
+	var v180 := _sample_forecast_var("wind_direction_180m", month, day, hour)
+	if not is_nan(v180):
+		return v180
+	var surface := wind_direction_deg(month, day, hour)
+	if is_nan(surface):
+		return NAN
+	var spd := wind_speed_ms(month, day, hour)
+	if is_nan(spd):
+		spd = 3.0
+	return WindMath.veered_from_deg(surface, spd, latitude_deg)
+
+
+func wind_speed_ms_low(month: int, day: int, hour: float) -> float:
+	var kmh := _sample_forecast_var("wind_speed_80m", month, day, hour)
+	if not is_nan(kmh):
+		return kmh / 3.6
+	return wind_speed_ms(month, day, hour)
+
+
+func wind_speed_ms_high(month: int, day: int, hour: float) -> float:
+	var kmh := _sample_forecast_var("wind_speed_180m", month, day, hour)
+	if not is_nan(kmh):
+		return kmh / 3.6
+	var s10 := wind_speed_ms(month, day, hour)
+	if is_nan(s10):
+		return NAN
+	return s10 * 1.35
 
 
 ## Relative humidity as a percent (0–100). NAN when unavailable.
