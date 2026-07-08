@@ -422,16 +422,23 @@ func solar_time_to_clock_time( solar_time: float ) -> float :
 	# Longitude correction (reverse sign from get_solar_time)
 	var longitude_correction : float = ( longitude - timezone_meridian ) / 15.0
 
-	# DST correction (reverse sign)
-	var dst_correction : float = 1.0 if is_dst_active() else 0.0
-
 	# Equation of Time (reverse sign)
 	var eq_time : float = get_equation_of_time( jd )
 
-	# Convert solar time to clock time
-	var clock_time : float = solar_time - longitude_correction + dst_correction - eq_time
+	var standard_time : float = solar_time - longitude_correction - eq_time
+	var dst_correction : float = 0.0
 
-	# Normalize to 0-24 range
+	if auto_dst :
+		var st_mod : float = fmod( standard_time + 24.0, 24.0 )
+		var is_dst : bool = _calculate_dst_for_date( year, month, day, st_mod )
+		var is_dst_plus1 : bool = _calculate_dst_for_date( year, month, day, fmod( st_mod + 1.0, 24.0 ) )
+		if is_dst and is_dst_plus1 :
+			dst_correction = 1.0
+	elif manual_dst :
+		dst_correction = 1.0
+
+	var clock_time : float = standard_time + dst_correction
+
 	while clock_time < 0.0 :
 		clock_time += 24.0
 	while clock_time >= 24.0 :
@@ -453,9 +460,20 @@ func solar_time_to_clock_time( solar_time: float ) -> float :
 func mean_solar_time_to_clock_time( mean_solar_time: float ) -> float :
 	var timezone_meridian : float = round( longitude / 15.0 ) * 15.0
 	var longitude_correction : float = ( longitude - timezone_meridian ) / 15.0
-	var dst_correction : float = 1.0 if is_dst_active() else 0.0
+	
+	var standard_time : float = mean_solar_time - longitude_correction
+	var dst_correction : float = 0.0
 
-	var clock_time : float = mean_solar_time - longitude_correction + dst_correction
+	if auto_dst :
+		var st_mod : float = fmod( standard_time + 24.0, 24.0 )
+		var is_dst : bool = _calculate_dst_for_date( year, month, day, st_mod )
+		var is_dst_plus1 : bool = _calculate_dst_for_date( year, month, day, fmod( st_mod + 1.0, 24.0 ) )
+		if is_dst and is_dst_plus1 :
+			dst_correction = 1.0
+	elif manual_dst :
+		dst_correction = 1.0
+
+	var clock_time : float = standard_time + dst_correction
 
 	while clock_time < 0.0 :
 		clock_time += 24.0
@@ -627,7 +645,6 @@ func get_sun_direction() -> Vector3 :
 	var lat_rad : float = deg_to_rad( latitude )
 
 	# Calculate sun's altitude using spherical trigonometry
-	# This is the proper formula that accounts for latitude, declination, and hour angle
 	var sin_altitude : float = sin( lat_rad ) * sin( declination ) + cos( lat_rad ) * cos( declination ) * cos( hour_angle )
 	sin_altitude = clamp( sin_altitude, -1.0, 1.0 )
 	var altitude : float = asin( sin_altitude )
@@ -650,55 +667,36 @@ func get_sun_direction() -> Vector3 :
 	var sun_dir_z : float = -cos_altitude * cos( azimuth )
 	return Vector3( sun_dir_x, sun_dir_y, sun_dir_z ).normalized()
 
-## Direction vector pointing from the scene toward the moon.
+## Direction vector pointing from the scene toward the moon (Meeus Ch. 47 + parallax).
 func get_moon_direction() -> Vector3 :
-	# Use UTC-based Julian Day for accurate astronomical calculations
-	var jd_utc : float = get_julian_day_utc()
+	var pos : Dictionary = LunarPosition.get_position( latitude, longitude, get_julian_day_utc() )
+	return LunarPosition.direction_from_position( pos )
 
-	# Calculate moon's actual celestial position using UTC Julian Day
-	var moon_ecl : Dictionary = get_moon_position( jd_utc )
-	var moon_eq : Dictionary = ecliptic_to_equatorial( moon_ecl.longitude, moon_ecl.latitude )
+# ==================== SOLAR ECLIPSE ====================
 
-	# Get Local Sidereal Time using UTC Julian Day
-	var lst : float = get_local_sidereal_time( jd_utc )
+## Geometric eclipse sample from Meeus sun/moon directions (~0.1° — good for sky
+## dimming and totality; not for sub-km Besselian shadow-path prediction).
+func sample_solar_eclipse() -> Dictionary :
+	return SolarEclipse.sample_observer( latitude, longitude, get_julian_day_utc() )
 
-	# Calculate hour angle: H = LST - RA
-	var moon_hour_angle_deg : float = lst - moon_eq.ra
-	# Normalize to -180 to +180
-	while moon_hour_angle_deg > 180.0 :
-		moon_hour_angle_deg -= 360.0
-	while moon_hour_angle_deg < -180.0 :
-		moon_hour_angle_deg += 360.0
 
-	var moon_hour_angle : float = deg_to_rad( moon_hour_angle_deg )
-	var moon_declination : float = deg_to_rad( moon_eq.dec )
-	var lat_rad : float = deg_to_rad( latitude )
+## Peak eclipse at the current observer location (searches ±half_window_hours).
+func find_local_eclipse_peak( half_window_hours: float = 5.0 ) -> Dictionary :
+	return SolarEclipse.find_peak_at_observer(
+		latitude, longitude, get_julian_day_utc(), half_window_hours )
 
-	# Calculate moon's altitude using spherical trigonometry (same as sun)
-	var sin_altitude : float = sin( lat_rad ) * sin( moon_declination ) + cos( lat_rad ) * cos( moon_declination ) * cos( moon_hour_angle )
-	sin_altitude = clamp( sin_altitude, -1.0, 1.0 )
-	var altitude : float = asin( sin_altitude )
 
-	# Calculate moon's azimuth
-	var cos_altitude : float = cos( altitude )
-	var cos_azimuth : float = 0.0
-	if abs( cos_altitude ) > 0.0001 and abs( cos( lat_rad ) ) > 0.0001 :
-		cos_azimuth = ( sin( moon_declination ) - sin( lat_rad ) * sin_altitude ) / ( cos( lat_rad ) * cos_altitude )
-		cos_azimuth = clamp( cos_azimuth, -1.0, 1.0 )
-	var azimuth : float = acos( cos_azimuth )
+## Peak eclipse on a calendar date at UTC-noon anchor (for future-event lookup).
+func find_eclipse_peak_on_date( y: int, mo: int, d: int,
+		half_window_hours: float = 5.0 ) -> Dictionary :
+	var jd : float = _julian_day_utc_for( y, mo, d, 12.0 )
+	return SolarEclipse.find_peak_at_observer(
+		latitude, longitude, jd, half_window_hours )
 
-	# Adjust azimuth for western sky
-	# Use sin(hour_angle) to determine east vs west - this correctly handles wrap-around
-	# sin > 0 means hour angle is in (0, PI) range = western sky (afternoon/evening)
-	# sin < 0 means hour angle is in (-PI, 0) or equivalent = eastern sky (morning)
-	if sin( moon_hour_angle ) > 0.0 :
-		azimuth = TAU - azimuth
 
-	# Convert to direction vector
-	var moon_dir_x : float = cos_altitude * sin( azimuth )
-	var moon_dir_y : float = sin_altitude
-	var moon_dir_z : float = -cos_altitude * cos( azimuth )
-	return Vector3( moon_dir_x, moon_dir_y, moon_dir_z ).normalized()
+## List significant solar eclipses visible at this lat/lon during [year].
+func scan_solar_eclipses_in_year( y: int, min_obscuration: float = 0.08 ) -> Array :
+	return SolarEclipse.scan_year_at_observer( latitude, longitude, y, min_obscuration )
 
 # ==================== LUNAR PHASE ====================
 

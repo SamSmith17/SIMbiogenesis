@@ -113,6 +113,14 @@ static func get_position(lat_deg: float, lon_deg: float, jd_utc: float) -> Dicti
 	}
 
 
+## Unit direction from horizon azimuth/elevation (0=N, 90=E; same as CelestialClock).
+static func direction_from_horizon(az_deg: float, elevation_deg: float) -> Vector3:
+	var az := az_deg * _DEG2RAD
+	var el := elevation_deg * _DEG2RAD
+	var ce := cos(el)
+	return Vector3(ce * sin(az), sin(el), -ce * cos(az)).normalized()
+
+
 ## Cosine of the angle between the sun and a tilted panel's normal vector.
 ## Returns 0.0 when the sun is behind the panel face.
 ##
