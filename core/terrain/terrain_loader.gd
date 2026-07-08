@@ -12,12 +12,15 @@ extends Node3D
 
 signal options_status_changed(message: String, kind: String)
 signal vegetation_operation_progress(message: String, fraction: float)
+## Emitted once per full load sequence (base terrain + all post-terrain phases).
+## `load_completed` latches true at the same moment for late subscribers
+## (PlaytestHarness capture waits on this).
+signal map_load_complete
+signal climelapse_state_changed
 
 const HALF_EXTENT_DEFAULT := 15000.0   # 30 km square
-## Auto-vegetation + hi-res detail share the same mid-range square (~3 km / ~1.9 mi).
-const AUTO_VEG_HALF_EXTENT := 1500.0
-## High-resolution centre patch: same footprint as auto-veg so trees sit on hi-res mesh + drape.
-const DETAIL_HALF_EXTENT := AUTO_VEG_HALF_EXTENT
+const DETAIL_HALF_EXTENT_DEFAULT := 1500.0
+const OSM_HALF_EXTENT_DEFAULT := 1500.0
 # Centre drape resolution. pick_zoom() picks the highest ESRI zoom whose stitched
 # width stays <= DETAIL_TARGET_PX, so this is the real lever on sharpness: 2048 px
 # only reaches z17 (~1.5 m/px) on the 3 km patch, while 4096 px reaches z18
@@ -27,7 +30,22 @@ const DETAIL_HALF_EXTENT := AUTO_VEG_HALF_EXTENT
 # stack onto the load-phase GPU peak. ESRI serves this source up to z19–23 globally;
 # push DETAIL_TARGET_PX to 8192 (z19, ~0.4 m/px) only if VRAM/stitch RAM allows.
 const DETAIL_TARGET_PX := 4096
-const DETAIL_MAX_ZOOM := 20
+## Capped at z19 — ESRI z20+ is metro-only and returns placeholder tiles elsewhere
+## (same guard as HYPER_MAX_ZOOM); a failed detail layer leaves the centre blurry.
+const DETAIL_MAX_ZOOM := 19
+## "Hyper" ortho patch: a third imagery layer over the central ~1 km townsite at
+## high ESRI zoom — the texture source for ortho-projected building roofs.
+## CAPPED AT z19 (~0.24 m/px at lat 33): ESRI serves z20+ only in select metros
+## and returns HTTP-200 "Map data not yet available" PLACEHOLDER tiles
+## elsewhere — a z20 fetch at Bombay Beach cached an all-grey 8k mosaic and
+## every roof sampled blank grey (ImageryService now also rejects near-uniform
+## mosaics as a general guard). z19 over 1 km ≈ 230 tiles ≈ ~30 s first fetch,
+## then PNG-cached. Override `[terrain] hyper_target_px=2048` in
+## user://terrain_config.cfg for low-VRAM machines (z18, ~0.5 m/px). Fetched
+## AFTER the detail layer, never gating load — it pops in like the detail drape.
+const HYPER_HALF_EXTENT := 500.0
+const HYPER_TARGET_PX_DEFAULT := 8192
+const HYPER_MAX_ZOOM := 19
 const MESH_RES := TerrainBuilder.DEFAULT_MESH_RES
 # The detail DEM is fetched at 512² but its real source resolution is only ~30–90 m
 # (SRTM / Copernicus, or ~10 m USGS), so a 512² visual mesh + 512² HeightMapShape3D
@@ -70,10 +88,16 @@ const DEBUG_LOAD := false
 const SETTLE_FRAMES := 3
 
 var _main: Node = null
+## True once the full load sequence has finished at least once (see map_load_complete).
+var load_completed := false
 var _lat := 0.0
 var _lon := 0.0
 var _map_label := ""
 var _half_extent := HALF_EXTENT_DEFAULT
+var _detail_half_extent := DETAIL_HALF_EXTENT_DEFAULT
+var _osm_half_extent := OSM_HALF_EXTENT_DEFAULT
+var _seam_feather_m := TerrainBuilder.DEFAULT_FEATHER_M
+var _detail_vertical_offset := 0.0
 var _from_resume := false
 
 var _elev_grid := PackedFloat32Array()
@@ -83,9 +107,11 @@ var _elev_done := false
 var _drape: Texture2D = null
 var _img_done := false
 var _detail_drape: Texture2D = null
+var _hyper_drape: Texture2D = null
 var _built := false
 var _spawn_ground_y := 0.0
 var _built_grid := PackedFloat32Array()
+var _built_collision_grid := PackedFloat32Array()
 var _built_center_elev := 0.0
 var _built_extent := 0.0
 var _explore_drone: FPVDrone = null
@@ -93,6 +119,11 @@ var _buildings_root: Node3D = null
 var _buildings_data: Array = []
 var _water_root: Node3D = null
 var _water_data: Array = []
+var _flow_w := 1.0
+var _flow_level := 0.0
+var _flow_speed := 1.0
+var _flow_churn := 1.0
+var _flow_alpha := 0.88
 var _camps_root: Node3D = null
 var _camp_profiles: Dictionary = {}
 var _camp_scatter_ui: Control = null
@@ -127,14 +158,35 @@ var _veg_undo := VegetationUndo.new()
 ## speeds growth is imperceptible so ticks essentially never fire. Reset each load
 ## — growth PROGRESS isn't persisted (birth times are re-seeded), only the tunable
 ## <species>_growth_years survives. See _advance_growth / _growth_tick.
-const GROWTH_TICK_H := 720.0        # rebuild + reseed at most every ~30 sim-days
 const GROWTH_MAX_STEP_H := 48.0     # ignore bigger per-frame clock jumps (UI scrubs)
+const GROWTH_SCALE_BUDGET_PER_FRAME := 2000
 var _growth_clock_h := 0.0
-var _growth_last_tick_h := 0.0
+var _growth_last_calendar_doy := -1
 var _growth_prev_abs_h := 0.0
+var _manual_growth_map := VegetationInstanceMap.new()
+var _auto_growth_map := VegetationInstanceMap.new()
+var _growth_scale_apply_doy := -1
 var _growth_caps_manual := {}
+## Climelapse pre-bake (Phase 3–4): calendar keyframes + per-instance scale snapshots.
+const CLIMELAPSE_ROOT := "user://climelapses"
+var _climelapse_series: ClimelapseSeries = null
+var _climelapse_bake: ClimelapseScaleBake = null
+var _climelapse_renderer: ClimelapseRenderer = null
+var _climelapse_playback := false
+var _climelapse_ready := false
+var _climelapse_render_start := NAN
+var _climelapse_render_end := NAN
+var _climelapse_label := ""
+var _clim_play_target_kf := -1
+const CLIM_PLAY_SCALE_BUDGET := 12000
+var _climelapse_capture: ClimelapseCapture = null
+var _export_mp4_path := ""
+var _export_camera: ClimelapseCameraRig = null
+var _export_pending := false
+var _export_fps := 30
 var _growth_caps_auto := {}
 var _growth_rng := RandomNumberGenerator.new()
+var _auto_growth_zone_index: GrowthZoneIndex = null
 var _placed_prop_layer: PlacedPropLayer = null
 var _placed_props_ui: Control = null
 var _placed_prop_edit_ui: Control = null
@@ -157,6 +209,11 @@ var _solar_highlight: MeshInstance3D = null
 ## (tag -> {count, watts}); drives the accumulated SolarUI generation total.
 var _added_solar_tags: Dictionary = {}
 var _veg_highlight: MeshInstance3D = null
+## Crosshair-focused OSM vegetation area (index into _auto_veg_data["polygons"]).
+## Highlighted like buildings; Interact / the O action opens the Tune look modal
+## seeded to that area's veg type (see pick_veg_area_at_world / open_veg_area_modal).
+var _veg_focus_idx: int = -1
+var _veg_focus_area: Dictionary = {}
 var _footing_grid := PackedFloat32Array()
 var _detail_surface_grid := PackedFloat32Array()
 var _detail_collision_active := false
@@ -174,6 +231,7 @@ var _load_ui_active := false
 var _load_hint := ""
 var _load_fast_path := false
 var _detail_img_resolved := false
+var _detail_img_retry_zoom := -1
 var _refresh_pending: Dictionary = {}
 var _auto_veg_generate_queued := false
 var _auto_veg_scatter_pending := false
@@ -197,13 +255,19 @@ func _ready() -> void:
 
 ## Push the current weather-driven ground snow cover to the terrain shader(s).
 ## Cheap (two shader-param sets); runs only once terrain is built.
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if Engine.is_editor_hint() or not _built or _main == null:
 		return
 	_advance_growth()
+	if _climelapse_playback and _climelapse_ready:
+		_apply_climelapse_playback_budgeted(CLIM_PLAY_SCALE_BUDGET)
+	_apply_water_flow(delta)
 	if not _main.has_method("get_snow_amount"):
 		return
 	var snow := clampf(float(_main.call("get_snow_amount")), 0.0, 1.0)
+	var depth_m := 0.0
+	if _main.has_method("get_snow_depth_m"):
+		depth_m = clampf(float(_main.call("get_snow_depth_m")), 0.0, SeasonModel.SNOW_DEPTH_MAX_M)
 	var terrain := _main.get_node_or_null("Terrain") as Node3D
 	if terrain == null:
 		return
@@ -211,9 +275,57 @@ func _process(_delta: float) -> void:
 		var mi := terrain.get_node_or_null(node_name) as MeshInstance3D
 		if mi == null:
 			continue
-		var mat := mi.material_override
-		if mat is ShaderMaterial:
-			(mat as ShaderMaterial).set_shader_parameter("snow_amount", snow)
+		_push_snow_to_mesh(mi, snow, depth_m)
+	_apply_snow_to_buildings(terrain, snow, depth_m)
+
+
+func _apply_water_flow(delta: float) -> void:
+	if _water_root == null or _main == null or not _main.has_method("get_water_flow"):
+		return
+	var target: Dictionary = _main.call("get_water_flow")
+	var k := clampf(delta * 3.0, 0.0, 1.0)
+	_flow_w = lerpf(_flow_w, float(target.get("width_scale", 1.0)), k)
+	_flow_level = lerpf(_flow_level, float(target.get("level_m", 0.0)), k)
+	_flow_speed = lerpf(_flow_speed, float(target.get("speed_scale", 1.0)), k)
+	_flow_churn = lerpf(_flow_churn, float(target.get("churn", 1.0)), k)
+	_flow_alpha = lerpf(_flow_alpha, float(target.get("water_alpha", 0.88)), k)
+	WaterBuilder.apply_flow_visuals(_water_root, _flow_w, _flow_level,
+		_flow_speed, _flow_churn, _flow_alpha)
+
+
+func _push_snow_to_mesh(mi: MeshInstance3D, snow: float, depth_m: float) -> void:
+	if mi == null:
+		return
+	var mats: Array[ShaderMaterial] = []
+	if mi.material_override is ShaderMaterial:
+		mats.append(mi.material_override as ShaderMaterial)
+	if mi.mesh != null:
+		for si in mi.mesh.get_surface_count():
+			var sm := mi.get_surface_override_material(si)
+			if sm is ShaderMaterial and not mats.has(sm):
+				mats.append(sm as ShaderMaterial)
+	for sm in mats:
+		if sm.shader == null:
+			continue
+		var p := sm.shader.resource_path
+		if not (p.ends_with("terrain_detail.gdshader")
+				or p.ends_with("building_wall.gdshader")
+				or p.ends_with("building_roof.gdshader")):
+			continue
+		sm.set_shader_parameter("snow_amount", snow)
+		sm.set_shader_parameter("snow_depth_m", depth_m)
+
+
+func _apply_snow_to_buildings(terrain: Node3D, snow: float, depth_m: float) -> void:
+	var merged := terrain.get_node_or_null("Buildings") as MeshInstance3D
+	if merged != null:
+		_push_snow_to_mesh(merged, snow, depth_m)
+	var custom := terrain.get_node_or_null("BuildingsCustom")
+	if custom == null:
+		return
+	for child in custom.get_children():
+		if child is MeshInstance3D:
+			_push_snow_to_mesh(child as MeshInstance3D, snow, depth_m)
 
 
 func _begin() -> void:
@@ -350,6 +462,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _resolve_location() -> void:
+	_apply_extent_defaults_from_config()
 	var ctx := get_node_or_null("/root/MapContext")
 	if ctx != null and ctx.has_pending:
 		var d: Dictionary = ctx.consume()
@@ -358,6 +471,10 @@ func _resolve_location() -> void:
 		_map_label = str(d.get("label", ""))
 		var he := float(d["half_extent_m"])
 		_half_extent = he if he > 0.0 else HALF_EXTENT_DEFAULT
+		var dhe := float(d.get("detail_half_extent_m", 0.0))
+		_detail_half_extent = dhe if dhe > 0.0 else DETAIL_HALF_EXTENT_DEFAULT
+		var ohe := float(d.get("osm_half_extent_m", 0.0))
+		_osm_half_extent = ohe if ohe > 0.0 else OSM_HALF_EXTENT_DEFAULT
 		_from_resume = bool(d.get("from_resume", false))
 		return
 	# Fallback: the scene's current coordinates (set by save-load / location prefs).
@@ -367,6 +484,36 @@ func _resolve_location() -> void:
 		if la != null and lo != null:
 			_lat = float(la)
 			_lon = float(lo)
+
+
+func _apply_extent_defaults_from_config() -> void:
+	if not FileAccess.file_exists(CONFIG_PATH):
+		return
+	var cfg := ConfigFile.new()
+	if cfg.load(CONFIG_PATH) != OK:
+		return
+	var wh := float(cfg.get_value("terrain", "world_half_extent_m", 0.0))
+	if wh > 0.0:
+		_half_extent = wh
+	var dh := float(cfg.get_value("terrain", "detail_half_extent_m", 0.0))
+	if dh > 0.0:
+		_detail_half_extent = dh
+	var oh := float(cfg.get_value("terrain", "osm_half_extent_m", 0.0))
+	if oh > 0.0:
+		_osm_half_extent = oh
+
+
+func _detail_extent_m() -> float:
+	return _detail_half_extent * 2.0
+
+
+func get_terrain_extents() -> Dictionary:
+	return {
+		"half_extent_m": _half_extent,
+		"detail_half_extent_m": _detail_half_extent,
+		"osm_half_extent_m": _osm_half_extent,
+		"seam_feather_m": _seam_feather_m,
+	}
 
 
 ## ---------------------------------------------------------------------------
@@ -408,6 +555,9 @@ func _settle_gpu(frames: int = SETTLE_FRAMES) -> void:
 
 func _run_load_sequence() -> void:
 	_load_sequence_active = true
+	_detail_img_retry_zoom = -1
+	if _load_progress != null:
+		_load_progress.configure_for_extents(_half_extent, _detail_half_extent)
 	var es := get_node_or_null("/root/ElevationService")
 	if es != null and es.has_method("reset_session"):
 		es.reset_session()
@@ -415,29 +565,35 @@ func _run_load_sequence() -> void:
 	# 1. Base DEM
 	if es != null:
 		_phase_begin("elev:base")
-		es.request_elevation(_lat, _lon, _half_extent, ElevationService.DEFAULT_GRID_N, "base")
-		if not await _phase_await(120.0):
-			_apply_elevation_fallback("base")
+		es.request_elevation(_lat, _lon, _half_extent,
+			ElevationService.base_grid_n_for_extent(_half_extent), "base")
+		if not await _phase_await(_elev_phase_timeout_s()):
+			_apply_elevation_fallback("base", "timed out waiting for elevation")
 		await _settle_gpu()
 	else:
 		_apply_elevation_fallback("base")
 
-	# 2. Base imagery
+	# 2. Detail DEM (before walkable terrain — composed heightfield is mandatory).
+	await _fetch_detail_dem_phase(es)
+	await _settle_gpu()
+
+	# 3. Base imagery
 	var img := get_node_or_null("/root/ImageryService")
 	if img != null:
 		_phase_begin("img:base")
-		img.request_imagery(_lat, _lon, _half_extent)
-		if not await _phase_await(180.0):
+		img.request_imagery(_lat, _lon, _half_extent, _base_imagery_target_px())
+		if not await _phase_await(_imagery_phase_timeout_s()):
 			_apply_imagery_fallback("base")
 		await _settle_gpu()
 	else:
 		_apply_imagery_fallback("base")
 
-	# 3. Build walkable terrain (base drape only — detail arrives later).
+	# 4. Build terrain from composed base+detail heightfield.
+	_update_load_ui("Merging elevation layers …")
 	_build_terrain()
 	await _settle_gpu()
 
-	# 4–9. Detail DEM, detail imagery, OSM overlays, vegetation, camps.
+	# 5–9. Detail imagery, OSM overlays, vegetation, camps.
 	await _run_post_terrain_sequence()
 
 	if not _from_resume:
@@ -446,17 +602,20 @@ func _run_load_sequence() -> void:
 	_load_sequence_active = false
 	_check_load_complete()
 	_maybe_opentopo_hint()
+	var mly := get_node_or_null("/root/MapillaryService")
+	if mly != null and bool(mly.is_configured()):
+		mly.request_photo_index(_lat, _lon, _osm_half_extent, "site")
+	load_completed = true
+	map_load_complete.emit()
+	call_deferred("_on_map_load_try_climelapse_restore")
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null:
+		soi.load_for_site(_lat, _lon)
+		soi.bind_terrain(self)
+	call_deferred("_try_seed_starshade_graph")
 
 
-func _run_post_terrain_sequence() -> void:
-	# 4. Hi-res centre DEM. OpenTopography (key) delivers a single 512² AAIGrid;
-	# without a key we still fetch via Open-Meteo — the ElevationService caps that
-	# to OPENMETEO_DETAIL_N (64²) so the centre ~3 km gets ~47 m spacing (far finer
-	# than the ~1.9 km base grid) at a bounded ~40-request cost. The result caches,
-	# so the first load per site pays the fetch once and every reload is instant.
-	# When Open-Meteo daily quota is exhausted and there is no OpenTopography key,
-	# skip detail entirely so OSM + vegetation phases are not blocked for ~20 min.
-	var es := get_node_or_null("/root/ElevationService")
+func _fetch_detail_dem_phase(es: Node) -> void:
 	var skip_detail := false
 	if es != null:
 		var has_key: bool = es.has_method("has_opentopo_key") and es.has_opentopo_key()
@@ -468,34 +627,34 @@ func _run_post_terrain_sequence() -> void:
 		if not has_key:
 			_update_load_ui("Loading hi-res centre elevation (first visit only — cached after) …")
 		_phase_begin("elev:detail")
-		es.request_elevation(_lat, _lon, DETAIL_HALF_EXTENT,
+		es.request_elevation(_lat, _lon, _detail_half_extent,
 			ElevationService.DETAIL_GRID_N, "detail")
-		if await _phase_await(300.0):
-			await _rebuild_heightfield_staggered(true)
-		elif _recover_detail_dem_from_cache():
-			await _rebuild_heightfield_staggered(true)
-		else:
+		if not await _phase_await(300.0):
+			if not _recover_detail_dem_from_cache():
+				_skip_detail_dem()
+	elif skip_detail:
+		push_warning("TerrainLoader: skipping detail DEM — Open-Meteo daily quota exhausted")
+		_toast("Elevation quota reached — skipping hi-res detail terrain for now.", ToastUI.Level.WARN)
+		if not _recover_detail_dem_from_cache():
 			_skip_detail_dem()
 	else:
-		if skip_detail:
-			push_warning("TerrainLoader: skipping detail DEM — Open-Meteo daily quota exhausted")
-			_toast("Elevation quota reached — skipping hi-res detail terrain for now.", ToastUI.Level.WARN)
-		if _recover_detail_dem_from_cache():
-			await _rebuild_heightfield_staggered(true)
-		else:
-			_skip_detail_dem()
-	await _settle_gpu()
+		_skip_detail_dem()
+
+
+func _run_post_terrain_sequence() -> void:
+	# Detail DEM already fetched in _run_load_sequence before terrain build.
 
 	# 5. Hi-res centre imagery + detail-drape shader.
 	var img := get_node_or_null("/root/ImageryService")
 	if img != null:
 		_phase_begin("img:detail")
-		img.request_imagery(_lat, _lon, DETAIL_HALF_EXTENT, DETAIL_TARGET_PX, "detail", DETAIL_MAX_ZOOM)
-		if await _phase_await(180.0):
+		img.request_imagery(_lat, _lon, _detail_half_extent, DETAIL_TARGET_PX, "detail", DETAIL_MAX_ZOOM)
+		if not await _phase_await(180.0):
+			push_warning("TerrainLoader: detail imagery phase timed out — applying if ready")
+		if _detail_drape != null:
 			_apply_detail()
-			_resolve_detail_imagery()
-		else:
-			_resolve_detail_imagery()
+		_resolve_detail_imagery()
+		_request_hyper_imagery()
 	else:
 		_resolve_detail_imagery()
 	await _settle_gpu()
@@ -505,7 +664,7 @@ func _run_post_terrain_sequence() -> void:
 	if bs != null:
 		_phase_begin("osm_map")
 		var cfg := _terrain_config()
-		bs.request_osm_vectors(_lat, _lon, AUTO_VEG_HALF_EXTENT, cfg.flatten_landuse)
+		bs.request_osm_vectors(_lat, _lon, _osm_half_extent, cfg.flatten_landuse)
 		if await _phase_await(180.0):
 			await _apply_osm_overlays()
 		else:
@@ -519,7 +678,7 @@ func _run_post_terrain_sequence() -> void:
 		var vs := get_node_or_null("/root/VegetationService")
 		if vs != null:
 			_phase_begin("osm_veg")
-			vs.request_vegetation(_lat, _lon, AUTO_VEG_HALF_EXTENT)
+			vs.request_vegetation(_lat, _lon, _osm_half_extent)
 			if await _phase_await(180.0):
 				await _auto_veg_scatter_async(false)
 			_load_progress_mark_done("osm_veg")
@@ -535,7 +694,7 @@ func _run_post_terrain_sequence() -> void:
 	_refresh_water_reflection_probes()
 
 
-func _apply_elevation_fallback(tag: String) -> void:
+func _apply_elevation_fallback(tag: String, reason: String = "") -> void:
 	if tag == "detail":
 		_skip_detail_dem()
 		return
@@ -549,14 +708,23 @@ func _apply_elevation_fallback(tag: String) -> void:
 		_elev_rows = int(recovered["rows"])
 		_elev_done = true
 		_load_progress_mark_done("base_dem")
-		_notify_options_status("Elevation fetch failed — using last cached terrain", "warn")
-		_toast("Elevation fetch failed — using last cached terrain for this site.", ToastUI.Level.WARN)
+		var msg := "Elevation fetch failed — using last cached terrain"
+		if not reason.is_empty():
+			msg += " (%s)" % _short_fetch_error(reason)
+		_notify_options_status(msg, "warn")
+		_toast(msg, ToastUI.Level.WARN)
 		return
-	push_warning("TerrainLoader: elevation fetch failed — using flat fallback")
-	_notify_options_status(
-		"Elevation unavailable (flat terrain) — Open-Meteo quota or network; add OpenTopography key",
-		"warn")
-	_toast("Elevation unavailable — using flat terrain (network/quota issue).", ToastUI.Level.WARN)
+	push_warning("TerrainLoader: elevation fetch failed — using flat fallback (%s)" % reason)
+	var es := get_node_or_null("/root/ElevationService")
+	var has_key: bool = es != null and es.has_method("has_opentopo_key") and bool(es.has_opentopo_key())
+	var detail := _short_fetch_error(reason) if not reason.is_empty() else "network or API error"
+	if has_key:
+		_notify_options_status("Elevation unavailable (flat terrain) — %s" % detail, "warn")
+	else:
+		_notify_options_status(
+			"Elevation unavailable (flat terrain) — %s; add OpenTopography key or reduce world radius" % detail,
+			"warn")
+	_toast("Elevation unavailable — using flat terrain.", ToastUI.Level.WARN)
 	_elev_grid = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 	_elev_cols = 2
 	_elev_rows = 2
@@ -900,7 +1068,7 @@ func _on_elevation_ready(_key: String, grid: PackedFloat32Array, cols: int, rows
 		_detail_elev_resolved = true
 		_load_progress_mark_done("detail_dem")
 		print("TerrainLoader: detail DEM ready (%d×%d, %.0f m square)" % [
-			_detail_elev_cols, _detail_elev_rows, DETAIL_HALF_EXTENT * 2.0])
+			_detail_elev_cols, _detail_elev_rows, _detail_extent_m()])
 		_log_load_mem("detail DEM ready")
 		if _load_sequence_active:
 			_phase_resolve("elev:detail", true)
@@ -924,7 +1092,7 @@ func _on_elevation_ready(_key: String, grid: PackedFloat32Array, cols: int, rows
 		if _refresh_pending.has("dem"):
 			var es_svc := get_node_or_null("/root/ElevationService")
 			if es_svc != null:
-				_request_detail_dem(es_svc)
+				_request_detail_dem(es_svc, true)
 		return
 	_try_build()
 
@@ -940,13 +1108,16 @@ func _on_elevation_failed(reason: String, tag: String = "base") -> void:
 		_queue_auto_veg_generate(false)
 		_check_load_complete()
 		if _built:
-			_finish_refresh("dem")
+			_abort_refresh("dem", reason)
 		return
 	if _load_sequence_active:
 		_phase_resolve("elev:base", false)
 		return
+	if _built:
+		_abort_refresh("dem", reason)
+		return
 	push_warning("TerrainLoader: elevation fetch failed (%s) — using flat fallback" % reason)
-	_apply_elevation_fallback("base")
+	_apply_elevation_fallback("base", reason)
 	_try_build()
 
 
@@ -964,15 +1135,24 @@ func _on_elevation_progress(done: int, total: int) -> void:
 
 
 func _on_imagery_ready(_key: String, texture: ImageTexture, tag: String) -> void:
+	if tag == "hyper":
+		_hyper_drape = texture
+		_log_load_mem("hyper img ready")
+		print("TerrainLoader: hyper roof ortho ready (%.0f m square)" % (HYPER_HALF_EXTENT * 2.0))
+		_apply_building_textures()
+		return
 	if tag == "detail":
 		_log_load_mem("detail img ready")
 		_detail_drape = texture
 		if _load_sequence_active:
 			_phase_resolve("img:detail", true)
+			if _built:
+				_apply_detail()
 			return
 		_resolve_detail_imagery()
 		_apply_detail()
 		_log_load_mem("detail applied")
+		_request_hyper_imagery()
 		if _built:
 			_finish_refresh("imagery")
 		return
@@ -987,15 +1167,27 @@ func _on_imagery_ready(_key: String, texture: ImageTexture, tag: String) -> void
 		if _refresh_pending.has("imagery"):
 			var img_svc := get_node_or_null("/root/ImageryService")
 			if img_svc != null:
-				img_svc.request_imagery(_lat, _lon, DETAIL_HALF_EXTENT,
-					DETAIL_TARGET_PX, "detail", DETAIL_MAX_ZOOM)
+				img_svc.request_imagery(_lat, _lon, _detail_half_extent,
+					DETAIL_TARGET_PX, "detail", DETAIL_MAX_ZOOM, true)
 		return
 	_img_done = true
 	_try_build()
 
 
 func _on_imagery_failed(reason: String, tag: String) -> void:
+	if tag == "hyper":
+		push_warning("TerrainLoader: hyper roof ortho failed (%s) — roofs use detail/procedural" % reason)
+		return
 	if tag == "detail":
+		if _detail_img_retry_zoom < 0:
+			_detail_img_retry_zoom = DETAIL_MAX_ZOOM - 1
+			var img_retry := get_node_or_null("/root/ImageryService")
+			if img_retry != null and _detail_img_retry_zoom >= 15:
+				push_warning("TerrainLoader: detail imagery failed (%s) — retrying at z%d" % [
+					reason, _detail_img_retry_zoom])
+				img_retry.request_imagery(_lat, _lon, _detail_half_extent,
+					DETAIL_TARGET_PX, "detail", _detail_img_retry_zoom)
+				return
 		push_warning("TerrainLoader: detail imagery failed (%s) — base drape only" % reason)
 		if _load_sequence_active:
 			_phase_resolve("img:detail", false)
@@ -1003,7 +1195,7 @@ func _on_imagery_failed(reason: String, tag: String) -> void:
 		_resolve_detail_imagery()
 		_check_load_complete()
 		if _built:
-			_finish_refresh("imagery")
+			_abort_refresh("imagery", reason)
 		return
 	if _load_sequence_active:
 		_phase_resolve("img:base", false)
@@ -1036,27 +1228,49 @@ func _on_vegetation_progress(message: String) -> void:
 	_update_load_ui()
 
 
+## Queue the hyper roof-ortho fetch (rides ImageryService's serialized queue, so
+## it never races the base/detail layers; result lands in _on_imagery_ready).
+func _request_hyper_imagery() -> void:
+	var img := get_node_or_null("/root/ImageryService")
+	if img == null:
+		return
+	img.request_imagery(_lat, _lon, HYPER_HALF_EXTENT, _hyper_target_px(),
+		"hyper", HYPER_MAX_ZOOM)
+
+
+func _hyper_target_px() -> int:
+	var cfg := ConfigFile.new()
+	if cfg.load(CONFIG_PATH) == OK:
+		return int(cfg.get_value("terrain", "hyper_target_px", HYPER_TARGET_PX_DEFAULT))
+	return HYPER_TARGET_PX_DEFAULT
+
+
+## Scale base drape resolution with world radius so large sites stay readable at distance.
+func _base_imagery_target_px() -> int:
+	var side_km := _half_extent * 2.0 / 1000.0
+	return clampi(int(side_km * 32.0), 2048, 8192)
+
+
 ## Swap the Ground material to the high-res-centre shader once the detail patch
 ## arrives. If the terrain isn't built yet, _try_build() will pick up _detail_drape.
 func _apply_detail() -> void:
-	if not _built or _main == null:
+	if not _built or _main == null or _detail_drape == null:
 		return
-	var terrain := _main.get_node_or_null("Terrain")
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
 	if terrain == null:
-		return
-	var ground := terrain.get_node_or_null("Ground") as MeshInstance3D
-	if ground != null:
-		var hide := TerrainBuilder.has_detail_ground(terrain)
-		ground.material_override = TerrainBuilder.make_terrain_material(
-			_drape, _detail_drape, _built_extent, DETAIL_HALF_EXTENT * 2.0,
-			false, false, hide)
-	if _detail_drape == null:
 		return
 	var detail_ground := terrain.get_node_or_null("DetailGround") as MeshInstance3D
 	if detail_ground != null:
+		var feather_uv := TerrainBuilder.feather_uv_from_metres(
+			_seam_feather_m, _detail_extent_m())
 		detail_ground.material_override = TerrainBuilder.make_terrain_material(
-			_drape, _detail_drape, _built_extent, DETAIL_HALF_EXTENT * 2.0, true, false)
-	print("TerrainLoader: applied high-res centre drape (%.0f m square)" % (DETAIL_HALF_EXTENT * 2.0))
+			_drape, _detail_drape, _built_extent, _detail_extent_m(),
+			true, false, false, feather_uv)
+		if detail_ground.material_override != null:
+			detail_ground.material_override.render_priority = TerrainBuilder.DETAIL_GROUND_RENDER_PRIORITY
+	TerrainBuilder.sync_coarse_ground_hide(
+		terrain, _drape, _detail_drape, _built_extent, _detail_extent_m(), _seam_feather_m)
+	print("TerrainLoader: applied high-res centre drape (%.0f m square)" % (_detail_extent_m()))
 	_apply_building_textures()
 	_queue_auto_veg_generate(_auto_veg_generated)
 
@@ -1139,6 +1353,7 @@ func _attach_buildings(enable_shadows: bool = true) -> void:
 		var grids := _compose_terrain_grids()
 		_footing_grid = grids["footing"]
 		_built_grid = grids["built"]
+		_built_collision_grid = grids.get("collision_coarse", _built_grid)
 		_detail_surface_grid = grids["detail_surface"]
 	_clear_building_nodes(terrain)
 	var detail_cols := _detail_elev_cols if not _detail_surface_grid.is_empty() else 0
@@ -1151,15 +1366,18 @@ func _attach_buildings(enable_shadows: bool = true) -> void:
 	for idx in styled:
 		excluded.append(idx)
 	var t0 := Time.get_ticks_msec()
-	var visible_buildings := _features_intersecting_square(_buildings_data, DETAIL_HALF_EXTENT)
+	var visible_buildings := _features_intersecting_square(_buildings_data, _detail_half_extent)
 	var node := BuildingBuilder.build_buildings_node(
 		visible_buildings, _built_grid, MESH_RES, _built_extent, _built_center_elev,
-		_drape, _detail_drape, DETAIL_HALF_EXTENT * 2.0, _built_extent,
+		_drape, _detail_drape, _detail_extent_m(), _built_extent,
 		_detail_surface_grid, detail_cols, detail_rows, excluded, enable_shadows)
 	if node != null:
 		terrain.add_child(node)
 		_buildings_root = node
 	_attach_custom_buildings(terrain, styled, enable_shadows)
+	# Ortho roof uniforms: the hyper/detail drape may have landed BEFORE the
+	# buildings existed (cached imagery resolves early), so re-apply here too.
+	_apply_building_textures()
 	print("TerrainLoader: extruded %d OSM buildings (%d styled) in %d ms (hi-res drape=%s)" % [
 		visible_buildings.size(), styled.size(), Time.get_ticks_msec() - t0,
 		"yes" if _detail_drape != null else "base only"])
@@ -1201,19 +1419,73 @@ func _attach_custom_buildings(terrain: Node, styled: Dictionary,
 		if d.is_empty():
 			continue
 		var tag: String = styled[idx]
+		var style: Dictionary = _building_style_layer.get_style(tag)
 		var mi := BuildingBuilder.build_single_building(
-			d, _building_style_layer.get_style(tag),
+			d, style,
 			_built_grid, MESH_RES, _built_extent, _built_center_elev,
 			_detail_surface_grid, detail_cols, detail_rows,
-			DETAIL_HALF_EXTENT * 2.0, enable_shadows)
+			_detail_extent_m(), enable_shadows)
 		if mi != null:
 			mi.name = "B_%s" % tag
+			_apply_styled_wall_material(mi, style)
 			root.add_child(mi)
 	if root.get_child_count() == 0:
 		root.free()
 		return
 	terrain.add_child(root)
 	_custom_buildings_root = root
+
+
+## Facade textures for styled hero buildings: PNG/JPG dropped by the user (or
+## tools/generate_facades.py) into user://maps/facade_textures/, referenced by
+## file name in style["wall_texture"] with real-world tile size
+## style["wall_tex_w_m"]/["wall_tex_h_m"]. Missing/unreadable → warn once,
+## procedural wall (the style's wall_mode) stays.
+const FACADE_TEX_DIR := "user://maps/facade_textures"
+var _facade_tex_cache: Dictionary = {}   # file -> Texture2D or null (negative-cached)
+
+
+func _apply_styled_wall_material(mi: MeshInstance3D, style: Dictionary) -> void:
+	var file := str(style.get("wall_texture", ""))
+	if file.is_empty():
+		return
+	var tex := _facade_texture(file)
+	if tex == null:
+		return
+	var size := Vector2(
+		clampf(TerrainBuilder.dict_float(style, "wall_tex_w_m", 4.0), 0.5, 50.0),
+		clampf(TerrainBuilder.dict_float(style, "wall_tex_h_m", 3.0), 0.5, 50.0))
+	mi.set_surface_override_material(0, BuildingBuilder.make_wall_material(tex, size))
+
+
+func _facade_texture(file: String) -> Texture2D:
+	if _facade_tex_cache.has(file):
+		return _facade_tex_cache[file]
+	var path := "%s/%s" % [FACADE_TEX_DIR, file.get_file()]
+	var tex: Texture2D = null
+	if FileAccess.file_exists(path):
+		var img := Image.new()
+		if img.load(path) == OK:
+			img.generate_mipmaps()
+			tex = ImageTexture.create_from_image(img)
+	if tex == null:
+		push_warning("TerrainLoader: facade texture missing/unreadable: %s" % path)
+	_facade_tex_cache[file] = tex
+	return tex
+
+
+static func list_facade_textures() -> PackedStringArray:
+	var out := PackedStringArray()
+	var dir := DirAccess.open(FACADE_TEX_DIR)
+	if dir == null:
+		return out
+	for f in dir.get_files():
+		var ext := f.get_extension().to_lower()
+		if ext == "png" or ext == "jpg" or ext == "jpeg":
+			out.append(f)
+		if out.size() >= 64:
+			break
+	return out
 
 
 func _find_building_record(building_idx: int) -> Dictionary:
@@ -1242,7 +1514,7 @@ func _attach_water() -> void:
 	var coarse_elev := _built_grid if not _built_grid.is_empty() else _footing_grid
 	var node := WaterBuilder.build_water_node(
 		_water_data, coarse_elev, MESH_RES, _built_extent, _built_center_elev,
-		_detail_surface_grid, detail_res, DETAIL_HALF_EXTENT * 2.0)
+		_detail_surface_grid, detail_res, _detail_extent_m(), _seam_feather_m)
 	if node == null:
 		return
 	terrain.add_child(node)
@@ -1290,13 +1562,13 @@ func _attach_camps() -> void:
 	if not _detail_surface_grid.is_empty() and _detail_elev_cols > 1:
 		height_grid = _detail_surface_grid
 		height_res = _detail_elev_cols
-		height_extent = DETAIL_HALF_EXTENT * 2.0
+		height_extent = _detail_extent_m()
 	var seed := _camp_seed()
 	print("TerrainLoader._attach_camps: generating (seed=%d, height_grid_size=%d, extent=%.0f)" % [
 		seed, height_grid.size(), height_extent])
 	var node := BrcCampGenerator.build_camps_node(
 		roads, _buildings_data, height_grid, height_res, height_extent,
-		_built_center_elev, DETAIL_HALF_EXTENT, seed, _load_camp_profiles(), _main,
+		_built_center_elev, _detail_half_extent, seed, _load_camp_profiles(), _main,
 		PackedVector2Array(), BrcCampGenerator.FILL_PROBABILITY, 0.0, 0.9, 1.18,
 		cfg.camp_exclusion_r)
 	if node == null:
@@ -1388,11 +1660,11 @@ func generate_camps_in_polygon(poly: PackedVector2Array, params: Dictionary) -> 
 	if not _detail_surface_grid.is_empty() and _detail_elev_cols > 1:
 		height_grid = _detail_surface_grid
 		height_res = _detail_elev_cols
-		height_extent = DETAIL_HALF_EXTENT * 2.0
+		height_extent = _detail_extent_m()
 
 	var node := BrcCampGenerator.build_camps_node(
 		roads, _buildings_data, height_grid, height_res, height_extent,
-		_built_center_elev, DETAIL_HALF_EXTENT, use_seed,
+		_built_center_elev, _detail_half_extent, use_seed,
 		_load_camp_profiles(), _main,
 		poly, density, mix_bias, scale_min, scale_max, excl_r)
 	if node == null:
@@ -1439,15 +1711,46 @@ func _remove_existing_camps() -> void:
 
 
 func _apply_building_textures() -> void:
-	if _buildings_root == null:
-		return
-	var mi := _buildings_root.get_node_or_null("BuildingMeshes") as MeshInstance3D
-	if mi == null:
-		return
-	mi.material_override = null
-	mi.set_surface_override_material(0, BuildingBuilder.make_wall_material())
-	if mi.mesh != null and mi.mesh.get_surface_count() > 1:
-		mi.set_surface_override_material(1, BuildingBuilder.make_roof_material())
+	var roof_mat := _make_world_roof_material()
+	if _buildings_root != null:
+		var mi := _buildings_root.get_node_or_null("BuildingMeshes") as MeshInstance3D
+		if mi != null:
+			mi.material_override = null
+			mi.set_surface_override_material(0, BuildingBuilder.make_wall_material())
+			if mi.mesh != null and mi.mesh.get_surface_count() > 1:
+				mi.set_surface_override_material(1, roof_mat)
+				var uv2_ok := mi.mesh.surface_get_arrays(1)[Mesh.ARRAY_TEX_UV2] != null
+				print("TerrainLoader: roof ortho=%s (hyper=%s detail=%s uv2=%s)" % [
+					str((roof_mat as ShaderMaterial).get_shader_parameter("use_ortho")),
+					str(_hyper_drape != null), str(_detail_drape != null), str(uv2_ok)])
+	# Styled buildings are separate MeshInstance3D children; their roofs share the
+	# same world material so a styled house still matches its merged neighbours.
+	if _custom_buildings_root != null and is_instance_valid(_custom_buildings_root):
+		for child in _custom_buildings_root.get_children():
+			var cmi := child as MeshInstance3D
+			if cmi == null or cmi.mesh == null:
+				continue
+			if cmi.mesh.get_surface_count() > 1:
+				cmi.set_surface_override_material(1, roof_mat)
+
+
+## Roof material for buildings placed in WORLD coordinates: ortho projection from
+## the hyper patch when it has arrived, else the 3 km detail drape (UV2 remapped
+## by the extent ratio), else plain procedural. The modal's studio preview keeps
+## BuildingBuilder.make_roof_material() — studio coordinates are not world coords.
+func _make_world_roof_material() -> Material:
+	var mat := BuildingBuilder.make_roof_material()
+	var ortho: Texture2D = _hyper_drape if _hyper_drape != null else _detail_drape
+	if ortho == null or not (mat is ShaderMaterial):
+		return mat
+	var sm := mat as ShaderMaterial
+	sm.set_shader_parameter("use_ortho", true)
+	sm.set_shader_parameter("ortho_tex", ortho)
+	var scale := 1.0
+	if _hyper_drape == null:
+		scale = BuildingBuilder.ORTHO_HALF_EXTENT_M / _detail_half_extent
+	sm.set_shader_parameter("ortho_uv_scale", scale)
+	return mat
 
 
 ## ---------------------------------------------------------------------------
@@ -1463,21 +1766,43 @@ func _build_terrain() -> void:
 	var center_elev := TerrainBuilder.mean_elevation(grid)
 	var extent := _half_extent * 2.0
 	_base_dem_grid = grid
-	_built_grid = grid
 	_built_center_elev = center_elev
 	_built_extent = extent
 	_terrain_edits = TerrainEditGrid.create_empty(MESH_RES)
 	_terrain_edits.load_for_map(_lat, _lon)
-	_spawn_ground_y = TerrainBuilder.height_at_world_xz(grid, MESH_RES, extent, center_elev, 0.0, 0.0)
-	var terrain := TerrainBuilder.build_terrain_node(grid, MESH_RES, extent, center_elev,
-		_drape, null, DETAIL_HALF_EXTENT * 2.0)
+
+	var grids := _compose_terrain_grids(false)
+	_built_grid = grids["built"]
+	_built_collision_grid = grids.get("collision_coarse", _built_grid)
+	_footing_grid = grids["footing"]
+	_detail_surface_grid = grids["detail_surface"]
+	_detail_collision_active = not _detail_surface_grid.is_empty()
+
+	if not _detail_surface_grid.is_empty():
+		_spawn_ground_y = TerrainBuilder.height_at_world_xz_rect(
+			_detail_surface_grid, _detail_elev_cols, _detail_elev_rows,
+			_detail_extent_m(), center_elev, 0.0, 0.0)
+	else:
+		_spawn_ground_y = TerrainBuilder.height_at_world_xz(
+			_built_grid, MESH_RES, extent, center_elev, 0.0, 0.0)
+
+	var terrain := TerrainBuilder.build_terrain_node(
+		_built_grid, MESH_RES, extent, center_elev, _drape, null, _detail_extent_m())
 	terrain.name = "Terrain"
 	if _main != null:
 		_main.add_child(terrain)
 
-	_remove_temp_floor()
-	if not _from_resume:
-		_reseat_player.call_deferred()
+	if not _detail_surface_grid.is_empty():
+		var mesh_grid := _detail_surface_grid
+		var mesh_res := _detail_elev_cols
+		TerrainBuilder.upsert_detail_patch(
+			terrain, mesh_grid, mesh_res, _detail_extent_m(), center_elev,
+			_drape, null, extent, _seam_feather_m)
+	if _built_collision_grid.size() == _built_grid.size():
+		TerrainBuilder.update_terrain_collision(
+			terrain, _built_collision_grid, MESH_RES, extent, center_elev)
+
+	# Temp floor stays until _finalize_spawn_actors seats the player on composed ground.
 	_setup_terrain_edit_ui()
 	_setup_terrain_options_ui()
 	_setup_vegetation()
@@ -1528,8 +1853,9 @@ func _reseat_player() -> void:
 func _finalize_spawn_actors() -> void:
 	if _main == null:
 		return
-	# Buildings exist by now, so nudge the player off any footprint at the centre
-	# BEFORE the ground sync and drone spawn (both key off the player XZ).
+	_remove_temp_floor()
+	if not _from_resume:
+		_reseat_player()
 	_relocate_player_off_buildings()
 	_sync_actors_to_ground(true)
 	var player := _main.get_node_or_null("Player")
@@ -1596,6 +1922,10 @@ func ground_height_at(x: float, z: float) -> float:
 	return _ground_height_at(x, z)
 
 
+func has_detail_footing() -> bool:
+	return not _detail_footing_grid().is_empty()
+
+
 func _detail_footing_grid() -> PackedFloat32Array:
 	if not _detail_surface_grid.is_empty():
 		return _detail_surface_grid
@@ -1607,13 +1937,13 @@ func _detail_footing_grid() -> PackedFloat32Array:
 
 func _ground_height_at(x: float, z: float) -> float:
 	var detail := _detail_footing_grid()
-	var in_detail := absf(x) <= DETAIL_HALF_EXTENT and absf(z) <= DETAIL_HALF_EXTENT
+	var in_detail := absf(x) <= _detail_half_extent and absf(z) <= _detail_half_extent
 	var fallback := PackedFloat32Array()
 	if in_detail and detail.is_empty() and _detail_elev_resolved:
 		fallback = _compose_base_footing_grid(true)
 	var y := TerrainBuilder.sample_footing_height(
 		x, z, _built_grid, MESH_RES, _built_extent, _built_center_elev,
-		detail, _detail_elev_cols, _detail_elev_rows, DETAIL_HALF_EXTENT * 2.0,
+		detail, _detail_elev_cols, _detail_elev_rows, _detail_extent_m(),
 		fallback)
 	if _built_grid.is_empty() and detail.is_empty():
 		return _spawn_ground_y
@@ -1628,7 +1958,8 @@ func _sync_actors_to_ground(force: bool = false) -> void:
 		var pos := player.global_position
 		var gy := _ground_height_at(pos.x, pos.z)
 		var target_y := gy + TerrainBuilder.PLAYER_SPAWN_CLEARANCE_M
-		if force or absf(pos.y - target_y) > 0.35:
+		var threshold := 0.05 if force else 0.35
+		if force or absf(pos.y - target_y) > threshold:
 			pos.y = target_y
 			player.global_position = pos
 			player.velocity = Vector3.ZERO
@@ -1642,7 +1973,7 @@ func _sync_actors_to_ground(force: bool = false) -> void:
 		var dpos := drone.global_position
 		var dgy := _ground_height_at(dpos.x, dpos.z)
 		var dtarget := dgy + DRONE_GROUND_CLEARANCE_M
-		if force or absf(dpos.y - dtarget) > 0.35:
+		if force or absf(dpos.y - dtarget) > (0.05 if force else 0.35):
 			dpos.y = dtarget
 			drone.global_position = dpos
 			drone.drone_spawn_position = dpos
@@ -1676,9 +2007,9 @@ func _spawn_explore_drone(near_player: Vector3) -> void:
 ## (~47 m spacing) is far finer than the ~1.9 km base grid, at a bounded ~40-
 ## request cost. Either way the DEM caches, so a site is fetched once and every
 ## reload is instant.
-func _request_detail_dem(es: Object) -> void:
-	es.request_elevation(_lat, _lon, DETAIL_HALF_EXTENT,
-		ElevationService.DETAIL_GRID_N, "detail")
+func _request_detail_dem(es: Object, force: bool = false) -> void:
+	es.request_elevation(_lat, _lon, _detail_half_extent,
+		ElevationService.DETAIL_GRID_N, "detail", force)
 
 
 ## Mark the detail-DEM stage resolved without fetching (no key / no service).
@@ -1731,7 +2062,46 @@ func _save_terrain_config_value(key: String, value: Variant) -> void:
 
 
 func get_terrain_options() -> Dictionary:
-	return _terrain_config()
+	var opts := _terrain_config()
+	opts["half_extent_m"] = _half_extent
+	opts["detail_half_extent_m"] = _detail_half_extent
+	opts["osm_half_extent_m"] = _osm_half_extent
+	return opts
+
+
+func apply_terrain_extents(world_half_m: float, detail_half_m: float, osm_half_m: float) -> void:
+	if world_half_m > 0.0:
+		_half_extent = world_half_m
+	if detail_half_m > 0.0:
+		_detail_half_extent = detail_half_m
+	if osm_half_m > 0.0:
+		_osm_half_extent = osm_half_m
+	_save_terrain_config_value("world_half_extent_m", _half_extent)
+	_save_terrain_config_value("detail_half_extent_m", _detail_half_extent)
+	_save_terrain_config_value("osm_half_extent_m", _osm_half_extent)
+	_persist_active_map_definition_extents()
+	if not _built:
+		return
+	if _load_sequence_active:
+		_notify_options_status("Still loading — wait for the map to finish", "warn")
+		return
+	_notify_options_status("Extents saved — resetting site to rebuild …", "busy")
+	reset_site_to_fresh()
+
+
+func _persist_active_map_definition_extents() -> void:
+	var path := "user://maps/loc_%s_%s.tres" % [
+		TerrainCacheSettings.coord_token(_lat, _lon),
+	]
+	if not FileAccess.file_exists(path):
+		return
+	var md := load(path) as MapDefinition
+	if md == null:
+		return
+	md.half_extent_m = _half_extent
+	md.detail_half_extent_m = _detail_half_extent
+	md.osm_half_extent_m = _osm_half_extent
+	ResourceSaver.save(md, path)
 
 
 func set_flatten_roads(on: bool) -> void:
@@ -1788,9 +2158,8 @@ func refresh_dem() -> void:
 			"warn")
 		return
 	_begin_refresh("dem")
-	var n := TerrainCacheSettings.invalidate_dem(_lat, _lon)
-	_begin_dem_refetch()
-	print("TerrainLoader: refreshing DEM (%d cache file(s) cleared) …" % n)
+	_begin_dem_refetch(true)
+	print("TerrainLoader: refreshing DEM (force re-fetch, keeping cache backup) …")
 
 
 ## Delete cached imagery and re-fetch base + centre drape.
@@ -1798,9 +2167,8 @@ func refresh_imagery() -> void:
 	if not _built:
 		return
 	_begin_refresh("imagery")
-	var n := TerrainCacheSettings.invalidate_imagery(_lat, _lon)
-	_begin_imagery_refetch()
-	print("TerrainLoader: refreshing imagery (%d cache file(s) cleared) …" % n)
+	_begin_imagery_refetch(true)
+	print("TerrainLoader: refreshing imagery (force re-fetch, keeping cache backup) …")
 
 
 ## Delete cached OSM vectors (buildings, roads, water) and re-fetch.
@@ -1840,12 +2208,13 @@ func refresh_all_cached_layers() -> void:
 	_begin_refresh("imagery")
 	_begin_refresh("osm_map")
 	_begin_refresh("osm_veg")
-	var n := TerrainCacheSettings.invalidate_all(_lat, _lon)
-	_begin_dem_refetch()
-	_begin_imagery_refetch()
+	var n := TerrainCacheSettings.invalidate_osm_vectors(_lat, _lon)
+	n += TerrainCacheSettings.invalidate_osm_vegetation(_lat, _lon)
+	_begin_dem_refetch(true)
+	_begin_imagery_refetch(true)
 	_begin_osm_vectors_refetch()
 	_begin_osm_vegetation_refetch()
-	print("TerrainLoader: refreshing all terrain layers (%d cache file(s) cleared) …" % n)
+	print("TerrainLoader: refreshing all terrain layers (%d OSM cache file(s) cleared) …" % n)
 
 
 ## Wipe painted vegetation sidecars + in-memory edits, then re-fetch all terrain layers live.
@@ -1860,6 +2229,7 @@ func reset_site_to_fresh() -> void:
 	_clear_auto_vegetation()
 	_auto_veg_generated = false
 	_auto_veg_data = {}
+	_auto_growth_zone_index = null
 	_notify_options_status("Resetting site — cleared %d user veg file(s) …" % n_edits, "busy")
 	refresh_all_cached_layers()
 
@@ -1905,6 +2275,35 @@ func _finish_refresh(layer: String) -> void:
 		_emit_refresh_status()
 
 
+func _abort_refresh(layer: String, reason: String) -> void:
+	if _refresh_pending.has(layer):
+		_refresh_pending.erase(layer)
+	var label: String = str({
+		"dem": "Elevation",
+		"imagery": "Imagery",
+		"osm_map": "Map data",
+		"osm_veg": "Vegetation",
+	}.get(layer, layer))
+	_notify_options_status("%s refresh failed: %s" % [label, _short_fetch_error(reason)], "warn")
+	if not _refresh_pending.is_empty():
+		_emit_refresh_status()
+
+
+func _short_fetch_error(reason: String) -> String:
+	var r := reason.strip_edges()
+	if r.length() > 120:
+		r = r.substr(0, 117) + "…"
+	return r
+
+
+func _elev_phase_timeout_s() -> float:
+	return clampf(_half_extent / 25000.0 * 120.0, 120.0, 360.0)
+
+
+func _imagery_phase_timeout_s() -> float:
+	return clampf(_half_extent / 25000.0 * 180.0, 180.0, 480.0)
+
+
 func _emit_refresh_status() -> void:
 	if _refresh_pending.is_empty():
 		return
@@ -1920,7 +2319,7 @@ func _emit_refresh_status() -> void:
 	_notify_options_status("Refreshing %s …" % ", ".join(parts), "busy")
 
 
-func _begin_dem_refetch() -> void:
+func _begin_dem_refetch(force: bool = false) -> void:
 	_detail_elev_grid = PackedFloat32Array()
 	_detail_elev_cols = 0
 	_detail_elev_rows = 0
@@ -1931,16 +2330,18 @@ func _begin_dem_refetch() -> void:
 	if es == null:
 		push_warning("TerrainLoader: ElevationService unavailable")
 		return
-	es.request_elevation(_lat, _lon, _half_extent, ElevationService.DEFAULT_GRID_N, "base")
+	es.request_elevation(_lat, _lon, _half_extent,
+		ElevationService.base_grid_n_for_extent(_half_extent), "base", force)
 	# Detail DEM is requested after base completes (_on_elevation_ready refresh path).
 
 
-func _begin_imagery_refetch() -> void:
+func _begin_imagery_refetch(force: bool = false) -> void:
+	_detail_img_retry_zoom = -1
 	var img := get_node_or_null("/root/ImageryService")
 	if img == null:
 		push_warning("TerrainLoader: ImageryService unavailable")
 		return
-	img.request_imagery(_lat, _lon, _half_extent)
+	img.request_imagery(_lat, _lon, _half_extent, _base_imagery_target_px(), "base", 17, force)
 	# Detail imagery is applied after base in _on_imagery_ready refresh path.
 
 
@@ -1950,12 +2351,13 @@ func _begin_osm_vectors_refetch() -> void:
 		push_warning("TerrainLoader: BuildingService unavailable")
 		return
 	var cfg := _terrain_config()
-	bs.request_osm_vectors(_lat, _lon, AUTO_VEG_HALF_EXTENT, cfg.flatten_landuse)
+	bs.request_osm_vectors(_lat, _lon, _osm_half_extent, cfg.flatten_landuse)
 
 
 func _begin_osm_vegetation_refetch() -> void:
 	_auto_veg_data = {}
 	_auto_veg_generated = false
+	_auto_growth_zone_index = null
 	var vs := get_node_or_null("/root/VegetationService")
 	if vs == null:
 		push_warning("TerrainLoader: VegetationService unavailable")
@@ -1963,7 +2365,7 @@ func _begin_osm_vegetation_refetch() -> void:
 	if not _terrain_config().show_auto_vegetation:
 		_clear_auto_vegetation()
 		return
-	vs.request_vegetation(_lat, _lon, AUTO_VEG_HALF_EXTENT)
+	vs.request_vegetation(_lat, _lon, _osm_half_extent)
 
 
 ## Natural DEM + user sculpt edits — no road/site flatten.
@@ -1979,11 +2381,12 @@ func _compose_detail_surface(apply_user_edits: bool = true) -> PackedFloat32Arra
 	if not _detail_elev_done or _detail_elev_grid.is_empty():
 		return PackedFloat32Array()
 	var res := _detail_elev_cols
-	var extent := DETAIL_HALF_EXTENT * 2.0
-	var grid := _detail_elev_grid.duplicate()
+	var extent := _detail_extent_m()
+	var grid := TerrainBuilder.apply_detail_vertical_offset(
+		_detail_elev_grid.duplicate(), _detail_vertical_offset)
 	var coarse := _compose_base_footing_grid(false)
 	grid = TerrainBuilder.feather_detail_to_coarse(
-		grid, res, extent, coarse, MESH_RES, _built_extent, _built_center_elev)
+		grid, res, extent, coarse, MESH_RES, _built_extent, _built_center_elev, _seam_feather_m)
 	var cfg := _terrain_config()
 	if cfg.flatten_roads and not _osm_vectors.is_empty():
 		grid = TerrainRoadFlatten.apply_road_corridors(
@@ -1998,17 +2401,45 @@ func _compose_detail_surface(apply_user_edits: bool = true) -> PackedFloat32Arra
 
 func _compose_terrain_grids(apply_user_edits: bool = true) -> Dictionary:
 	var coarse_foot := _compose_base_footing_grid(apply_user_edits)
+	_detail_vertical_offset = 0.0
+	_seam_feather_m = TerrainBuilder.DEFAULT_FEATHER_M
+	if _detail_elev_done and not _detail_elev_grid.is_empty():
+		_detail_vertical_offset = TerrainBuilder.compute_detail_vertical_offset(
+			_detail_elev_grid, _detail_elev_cols, _detail_extent_m(),
+			coarse_foot, MESH_RES, _built_extent, _built_center_elev)
+		if absf(_detail_vertical_offset) > 20.0:
+			push_warning("TerrainLoader: detail vertical offset %.1f m — verify DEM cache/sources" \
+				% _detail_vertical_offset)
+		var aligned := TerrainBuilder.apply_detail_vertical_offset(
+			_detail_elev_grid, _detail_vertical_offset)
+		_seam_feather_m = TerrainBuilder.compute_adaptive_feather_m(
+			aligned, _detail_elev_cols, _detail_extent_m(),
+			coarse_foot, MESH_RES, _built_extent, _built_center_elev)
 	var detail_surf := _compose_detail_surface(apply_user_edits)
-	var built := coarse_foot
+	var built_visual := coarse_foot
+	var built_collision := coarse_foot
 	if not detail_surf.is_empty():
-		built = TerrainBuilder.patch_centre_heights(
+		built_visual = TerrainBuilder.patch_centre_heights(
 			coarse_foot, MESH_RES, detail_surf, _detail_elev_cols,
-			_built_extent, DETAIL_HALF_EXTENT * 2.0, 40.0)
+			_built_extent, _detail_extent_m(), _seam_feather_m)
+		built_visual = TerrainBuilder.feather_coarse_exterior_ring(
+			built_visual, MESH_RES, _built_extent, _built_center_elev,
+			detail_surf, _detail_elev_cols, _detail_extent_m())
+		built_collision = built_visual.duplicate()
+		var sink_depth := TerrainBuilder.compute_sink_depth_m(detail_surf)
 		TerrainBuilder.sink_coarse_centre_for_detail(
-			built, MESH_RES, _built_extent, DETAIL_HALF_EXTENT * 2.0, _built_center_elev)
+			built_collision, MESH_RES, _built_extent, _detail_extent_m(), _built_center_elev,
+			sink_depth, _seam_feather_m * 0.75)
+		var seam := TerrainSeamDiag.measure_boundary_delta(
+			detail_surf, _detail_elev_cols, _detail_extent_m(),
+			built_visual, MESH_RES, _built_extent, _built_center_elev)
+		print("TerrainLoader: seam max_delta=%.2f m rms=%.2f m (feather=%.0f m, v_offset=%.2f m)" % [
+			float(seam.get("max_delta_m", 0.0)), float(seam.get("rms_delta_m", 0.0)),
+			_seam_feather_m, _detail_vertical_offset])
 	return {
-		"footing": built,
-		"built": built,
+		"footing": built_visual,
+		"built": built_visual,
+		"collision_coarse": built_collision,
 		"detail_surface": detail_surf,
 	}
 
@@ -2107,9 +2538,14 @@ func _begin_heightfield_rebuild() -> Node3D:
 	var grids := _compose_terrain_grids()
 	_footing_grid = grids["footing"]
 	_built_grid = grids["built"]
+	_built_collision_grid = grids.get("collision_coarse", _built_grid)
 	_detail_surface_grid = grids["detail_surface"]
 	_spawn_ground_y = TerrainBuilder.height_at_world_xz(
 		_built_grid, MESH_RES, _built_extent, _built_center_elev, 0.0, 0.0)
+	if not _detail_surface_grid.is_empty():
+		_spawn_ground_y = TerrainBuilder.height_at_world_xz_rect(
+			_detail_surface_grid, _detail_elev_cols, _detail_elev_rows,
+			_detail_extent_m(), _built_center_elev, 0.0, 0.0)
 	return _main.get_node_or_null("Terrain") if _main != null else null
 
 
@@ -2118,12 +2554,14 @@ func _rebuild_coarse_surface(terrain: Node3D) -> void:
 	if not _detail_surface_grid.is_empty():
 		TerrainBuilder.rebuild_terrain_surfaces(
 			terrain, _built_grid, MESH_RES, _built_extent, _built_center_elev,
-			_drape, _detail_drape, DETAIL_HALF_EXTENT * 2.0, false)
+			_drape, _detail_drape, _detail_extent_m(), false, _seam_feather_m,
+			_built_collision_grid)
 	else:
 		TerrainBuilder.remove_detail_patch(terrain)
 		TerrainBuilder.rebuild_terrain_surfaces(
 			terrain, _built_grid, MESH_RES, _built_extent, _built_center_elev,
-			_drape, _detail_drape, DETAIL_HALF_EXTENT * 2.0, false)
+			_drape, _detail_drape, _detail_extent_m(), false, _seam_feather_m,
+			_built_collision_grid)
 
 
 ## Hi-res centre patch: visual mesh + HeightMapShape3D collider (the big spike).
@@ -2139,11 +2577,11 @@ func _rebuild_detail_patch(terrain: Node3D) -> void:
 			_detail_surface_grid, _detail_elev_cols, _detail_elev_rows, DETAIL_MESH_RES)
 		mesh_res = DETAIL_MESH_RES
 	TerrainBuilder.upsert_detail_patch(
-		terrain, mesh_grid, mesh_res, DETAIL_HALF_EXTENT * 2.0,
-		_built_center_elev, _drape, _detail_drape, _built_extent)
+		terrain, mesh_grid, mesh_res, _detail_extent_m(),
+		_built_center_elev, _drape, _detail_drape, _built_extent, _seam_feather_m)
 	print("TerrainLoader: hi-res centre mesh %d×%d (%.0f m, ~%.1f m/vertex)" % [
-		mesh_res, mesh_res, DETAIL_HALF_EXTENT * 2.0,
-		(DETAIL_HALF_EXTENT * 2.0) / float(maxi(mesh_res - 1, 1))])
+		mesh_res, mesh_res, _detail_extent_m(),
+		(_detail_extent_m()) / float(maxi(mesh_res - 1, 1))])
 
 
 ## Re-ground dynamic content and re-seat actors after a heightfield change.
@@ -2155,6 +2593,9 @@ func _finish_heightfield_rebuild(had_detail: bool) -> void:
 	_detail_collision_active = not _detail_surface_grid.is_empty()
 	if _detail_collision_active and (not had_detail or _actors_off_ground()):
 		_sync_actors_to_ground(not had_detail)
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("refresh_footing"):
+		soi.refresh_footing()
 
 
 func _actors_off_ground() -> bool:
@@ -2284,7 +2725,8 @@ func _rebuild_vegetation() -> void:
 	if terrain == null:
 		return
 	VegetationRuntime.rebuild(terrain, _vegetation_layer, Callable(self, "_ground_height_at"),
-		false, _auto_veg_runtime_settings())
+		false, _auto_veg_runtime_settings(), _manual_growth_map)
+	_maybe_rebind_climelapse_bake()
 
 
 func push_vegetation_undo(label: String = "") -> void:
@@ -2388,7 +2830,7 @@ func _request_auto_vegetation() -> void:
 		_load_progress_mark_done("osm_veg")
 		_check_load_complete()
 		return
-	vs.request_vegetation(_lat, _lon, AUTO_VEG_HALF_EXTENT)
+	vs.request_vegetation(_lat, _lon, _osm_half_extent)
 
 
 func _on_vegetation_osm_ready(_key: String, payload: Dictionary) -> void:
@@ -2467,13 +2909,23 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 	var ctx := _auto_veg_ctx()
 	var state := AutoVegetationGenerator.prepare_context(_auto_veg_data, ctx)
 	while AutoVegetationGenerator.scatter_batch(state, SCATTER_BATCH_POLYS):
-		var pct := int(round(state.progress_ratio() * 100.0))
-		_load_hint = "Scattering trees… %d%%" % pct
+		var ratio := state.progress_ratio()
+		var pct := int(round(ratio * 100.0))
+		_load_hint = "Scattering vegetation… %d%%" % pct
+		# Advance the load bar through the osm_veg stage so the scatter reads as
+		# progress rather than a frozen bar (the pipeline UI is otherwise only
+		# repainted by the elevation/imagery fetch callbacks).
+		if _load_ui_active and _load_progress != null:
+			_load_progress.set_partial("osm_veg", ratio)
+			_update_load_ui()
 		await get_tree().process_frame
 		if not _built:
 			return
 	_auto_veg_layer = state.layer
+	_auto_veg_poly_stats = state.poly_stats
+	_print_auto_veg_diag(state)
 	_apply_auto_veg_edits()
+	_rebuild_auto_growth_zone_index()
 	_growth_init_auto()
 	_auto_veg_generated = true
 	await get_tree().process_frame
@@ -2494,6 +2946,49 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 		_finish_refresh("osm_veg")
 
 
+## Per-polygon scatter diagnostics from the last generator run (see
+## GeneratorState.poly_stats). Also feeds the veg-area inspector UI.
+var _auto_veg_poly_stats: Array = []
+
+
+func get_auto_veg_poly_stats() -> Array:
+	return _auto_veg_poly_stats
+
+
+## Per-kind scatter summary: why polygons did/didn't populate (budget, slope,
+## exclusion buffers, open-area veto). One table per generator run.
+func _print_auto_veg_diag(state: AutoVegetationGenerator.GeneratorState) -> void:
+	if state.poly_stats.is_empty():
+		return
+	var by_kind: Dictionary = {}
+	for stat in state.poly_stats:
+		var s: Dictionary = stat
+		var kind := str(s.get("kind", "?"))
+		if kind not in by_kind:
+			by_kind[kind] = {"polys": 0, "area": 0.0, "candidates": 0, "placed": 0,
+				"rej_excluded": 0, "rej_slope": 0, "rej_open": 0, "rej_edge": 0,
+				"rej_budget": 0, "empty": 0}
+		var agg: Dictionary = by_kind[kind]
+		agg["polys"] += 1
+		agg["area"] += float(s.get("area_m2", 0.0))
+		for key in ["candidates", "placed", "rej_excluded", "rej_slope", "rej_open",
+				"rej_edge", "rej_budget"]:
+			agg[key] += int(s.get(key, 0))
+		if int(s.get("placed", 0)) == 0:
+			agg["empty"] += 1
+	print("TerrainLoader: OSM veg scatter by kind (polys/empty · area · placed | rejected: excl/slope/open/edge/budget)")
+	for kind in by_kind:
+		var a: Dictionary = by_kind[kind]
+		print("  %-12s %3d/%-3d · %7.1f ha · %6d | %d/%d/%d/%d/%d" % [
+			kind, a["polys"], a["empty"], float(a["area"]) / 10000.0, a["placed"],
+			a["rej_excluded"], a["rej_slope"], a["rej_open"], a["rej_edge"], a["rej_budget"]])
+	print("  budgets: trees %d/%d, grass %d/%d, heroes %d/%d%s" % [
+		state.layer.tree_bulk_count(), AutoVegetationLayer.MAX_TREE_BULK_TOTAL,
+		state.layer.grass_bulk_count(), AutoVegetationLayer.MAX_GRASS_BULK_TOTAL,
+		state.layer.hero.size(), AutoVegetationLayer.MAX_HERO,
+		" · DENSE site (per-poly cap %d, gap fill off)" % AutoVegetationGenerator.DENSE_POLY_SCATTER_CAP if state.dense else ""])
+
+
 ## True once stage-2 detail elevation has succeeded or failed (never while pending).
 func _auto_veg_ground_ready() -> bool:
 	return _detail_elev_resolved
@@ -2502,12 +2997,12 @@ func _auto_veg_ground_ready() -> bool:
 func _auto_veg_ctx() -> Dictionary:
 	var gate: LandcoverImageryGate = null
 	if _drape != null and _built_extent > 0.0:
-		var detail_ext := DETAIL_HALF_EXTENT * 2.0 if _detail_drape != null else 0.0
+		var detail_ext := _detail_extent_m() if _detail_drape != null else 0.0
 		gate = LandcoverImageryGate.from_texture_downsampled(
 			_drape, _built_extent, 512, _detail_drape, detail_ext, 512)
 	return {
 		"latitude": _lat,
-		"half_extent_m": AUTO_VEG_HALF_EXTENT,
+		"half_extent_m": _osm_half_extent,
 		"seed": int(_lat * 10000.0) ^ int(_lon * 10000.0),
 		"exclusions": _auto_veg_exclusions(),
 		"ground_y_at": Callable(self, "_ground_height_at"),
@@ -2527,7 +3022,7 @@ func _auto_veg_runtime_settings() -> Dictionary:
 		# Haze colour is just an average tint — decode a 512 px downsample, not the
 		# full 2048² drape (a full-res Image decode every rebuild is a needless RAM
 		# spike during the load-completion build burst).
-		var detail_ext := DETAIL_HALF_EXTENT * 2.0 if _detail_drape != null else 0.0
+		var detail_ext := _detail_extent_m() if _detail_drape != null else 0.0
 		var gate := LandcoverImageryGate.from_texture_downsampled(
 			_drape, _built_extent, 512, _detail_drape, detail_ext, 512)
 		if gate != null and gate.is_valid():
@@ -2558,50 +3053,564 @@ func _growth_style() -> Dictionary:
 
 ## Cheap per-frame check (reads _veg_style directly, no dict build).
 func _growth_any_enabled() -> bool:
+	if _main != null and _main.get("plant_growth_enabled") == false:
+		return false
 	for sp in VegetationLayer.ALL_SPECIES:
 		if float(_veg_style.get("%s_growth_years" % sp, 0.0)) > 0.0:
 			return true
 	return false
 
 
-## Advance the monotonic growth clock; when enough sim-time has accrued, run a
-## growth tick (reseed matured trees + rebuild so every instance re-scales to its
-## age). Forward-only — rewinding the world clock freezes growth rather than
-## resurrecting dead trees. Analemma contributes a fixed day per frame; normal
-## play uses the real clock delta but ignores big jumps (UI scrubs) via the clamp.
+## Advance the monotonic growth clock; on phenology milestones during the growing
+## season, run a growth tick (reseed + rebuild). Winter dormancy freezes the clock.
+## Forward-only — rewinding the world clock freezes growth rather than resurrecting
+## dead trees. Analemma contributes a fixed day per frame; normal play uses the
+## real clock delta but ignores big jumps (UI scrubs) via the clamp.
 func _advance_growth() -> void:
 	if not _growth_any_enabled():
 		return
+	# Baked climelapse playback owns structural veg inside the rendered span — skip
+	# live clock integration, milestone ticks, and full rebuilds that cause hangs.
+	if _climelapse_playback and _climelapse_ready and _in_climelapse_range(_current_abs_h()):
+		_growth_prev_abs_h = _current_abs_h()
+		return
 	var now_abs := _current_abs_h()
+	var calendar_doy := _growth_calendar_doy()
+	var season := VegetationGrowth.structural_growth_factor(calendar_doy, _lat)
 	var step := 0.0
 	if bool(_main.get("analemma_mode")):
-		step = 24.0
+		var days := 1
+		if _main.get("analemma_days_per_frame") != null:
+			days = maxi(1, int(_main.get("analemma_days_per_frame")))
+		step = 24.0 * float(days)
 	else:
 		step = clampf(now_abs - _growth_prev_abs_h, 0.0, GROWTH_MAX_STEP_H)
 	_growth_prev_abs_h = now_abs
 	if step <= 0.0:
 		return
-	_growth_clock_h += step
-	if _growth_clock_h - _growth_last_tick_h < GROWTH_TICK_H:
+	if season > VegetationGrowth.DORMANCY_THRESHOLD:
+		_growth_clock_h += step * season
+		if bool(_main.get("analemma_mode")) and not _climelapse_playback:
+			if calendar_doy != _growth_scale_apply_doy:
+				_growth_scale_apply_doy = calendar_doy
+				_manual_growth_map.reset_cursor()
+				_auto_growth_map.reset_cursor()
+			_apply_growth_scales_budgeted(GROWTH_SCALE_BUDGET_PER_FRAME)
+	var prev_doy := _growth_last_calendar_doy
+	_growth_last_calendar_doy = calendar_doy
+	if prev_doy < 0:
+		prev_doy = calendar_doy
+	if not VegetationGrowth.milestones_crossed(prev_doy, calendar_doy, _lat):
 		return
-	_growth_last_tick_h = _growth_clock_h
-	_growth_tick()
+	if season <= VegetationGrowth.DORMANCY_THRESHOLD:
+		return
+	var allow_reseed := VegetationGrowth.reseed_allowed(calendar_doy, _lat)
+	_growth_tick(allow_reseed)
 
 
-func _growth_tick() -> void:
+func _growth_calendar_doy() -> int:
+	if _main != null:
+		var v: Variant = _main.get("day_of_year")
+		if v != null:
+			return int(v)
+	return 1
+
+
+func _growth_tick(allow_reseed: bool = true) -> void:
 	var st := _growth_style()
-	if _vegetation_layer != null:
-		VegetationGrowth.advance_generations(_vegetation_layer.bulk, _growth_clock_h,
-			st, _growth_rng, _growth_caps_manual, Callable(self, "_growth_add_manual"))
-	if _auto_veg_generated and _auto_veg_layer != null:
-		if VegetationGrowth.advance_generations(_auto_veg_layer.bulk, _growth_clock_h,
-				st, _growth_rng, _growth_caps_auto, Callable(self, "_growth_add_auto")):
+	var manual_zone := _manual_growth_zone_index()
+	var manual_pop := false
+	if allow_reseed and _vegetation_layer != null:
+		manual_pop = VegetationGrowth.advance_generations(_vegetation_layer.bulk,
+			_growth_clock_h, st, _growth_rng, _growth_caps_manual,
+			Callable(self, "_growth_add_manual"), manual_zone)
+	var auto_pop := false
+	if allow_reseed and _auto_veg_generated and _auto_veg_layer != null:
+		auto_pop = VegetationGrowth.advance_generations(_auto_veg_layer.bulk,
+			_growth_clock_h, st, _growth_rng, _growth_caps_auto,
+			Callable(self, "_growth_add_auto"), _auto_growth_zone_index)
+		if auto_pop:
 			_auto_veg_layer._recount_bulk()
-	# Rebuild both layers so the growth SCALE (a pure function of the clock)
-	# refreshes even on ticks with no death/reseed. Throttled by GROWTH_TICK_H.
-	_rebuild_vegetation()
-	if _auto_veg_generated:
-		_rebuild_auto_vegetation()
+	# During analemma / ∞ playback a reseed milestone fires while the world is
+	# stepping a day per frame; a SYNCHRONOUS full MultiMesh rebuild (~50k auto
+	# instances) then hitches a single frame — the periodic spring/fall spikes.
+	# Use the frame-chunked async rebuild so the reseed spreads across frames.
+	var analemma := _main != null and bool(_main.get("analemma_mode"))
+	if manual_pop:
+		_rebuild_vegetation()
+	elif not _manual_growth_map.is_empty():
+		_manual_growth_map.reset_cursor()
+		_manual_growth_map.apply_scales(st, Callable(self, "_ground_height_at"), -1)
+	if auto_pop:
+		if analemma:
+			_rebuild_auto_vegetation_async()
+		else:
+			_rebuild_auto_vegetation()
+	elif _auto_veg_generated and not _auto_growth_map.is_empty():
+		_auto_growth_map.reset_cursor()
+		_auto_growth_map.apply_scales(st, Callable(self, "_ground_height_at"), -1)
+
+
+func _apply_growth_scales_budgeted(budget: int) -> void:
+	if budget <= 0 or not _growth_any_enabled():
+		return
+	if _climelapse_playback and _climelapse_ready:
+		return
+	var st := _growth_style()
+	var gy := Callable(self, "_ground_height_at")
+	var rem := budget
+	if _vegetation_layer != null and not _manual_growth_map.is_empty():
+		rem = _manual_growth_map.apply_scales(st, gy, rem)
+	if rem == 0:
+		return
+	if _auto_veg_generated and not _auto_growth_map.is_empty():
+		_auto_growth_map.apply_scales(st, gy, rem)
+
+
+# ==================== CLIMELAPSE BAKE / PLAYBACK ====================
+
+func _ensure_climelapse_renderer() -> void:
+	if is_instance_valid(_climelapse_renderer):
+		return
+	_climelapse_renderer = ClimelapseRenderer.new()
+	_climelapse_renderer.name = "ClimelapseRenderer"
+	add_child(_climelapse_renderer)
+	_climelapse_renderer.climelapse_progress.connect(_on_climelapse_progress)
+	_climelapse_renderer.climelapse_complete.connect(_on_climelapse_render_complete)
+
+
+func _ensure_climelapse_capture() -> void:
+	if is_instance_valid(_climelapse_capture):
+		return
+	_climelapse_capture = ClimelapseCapture.new()
+	_climelapse_capture.name = "ClimelapseCapture"
+	add_child(_climelapse_capture)
+	_climelapse_capture.capture_progress.connect(_on_climelapse_progress)
+	_climelapse_capture.capture_complete.connect(_on_climelapse_capture_complete)
+
+
+func _climelapse_step_days() -> int:
+	if _main != null and bool(_main.get("analemma_mode")):
+		var d: Variant = _main.get("analemma_days_per_frame")
+		if d != null:
+			return maxi(1, int(d))
+	return 1
+
+
+func _default_climelapse_label(start_abs: float) -> String:
+	var clock := CelestialClock.new()
+	var dt: Dictionary = clock.abs_hours_to_date(start_abs)
+	return "clim_%d_%02d_%02d" % [int(dt.get("year", 1)), int(dt.get("month", 1)), int(dt.get("day", 1))]
+
+
+func start_climelapse_render(start_abs: float, end_abs: float, label: String = "",
+		step_days: int = -1) -> bool:
+	return _start_climelapse_render_internal(start_abs, end_abs, label, step_days, "", null)
+
+
+## Bake climelapse data then capture an MP4 from the locked active camera (player or drone).
+func start_climelapse_export(start_abs: float, end_abs: float, output_mp4: String,
+		label: String = "", step_days: int = -1, fps: int = 30) -> bool:
+	if output_mp4.is_empty():
+		return false
+	var tree := get_tree()
+	if tree == null:
+		return false
+	var rig := ClimelapseCameraRig.snapshot_from_tree(tree)
+	if not rig.is_valid():
+		push_warning("Climelapse export: no active Camera3D — switch to player or drone view.")
+		return false
+	if _main != null and _main.has_method("set_absolute_hours"):
+		_main.call("set_absolute_hours", start_abs)
+	return _start_climelapse_render_internal(start_abs, end_abs, label, step_days, output_mp4, rig, fps)
+
+
+func _start_climelapse_render_internal(start_abs: float, end_abs: float, label: String,
+		step_days: int, output_mp4: String, camera: ClimelapseCameraRig, fps: int = 30) -> bool:
+	if not _growth_any_enabled() or not _built:
+		return false
+	if end_abs <= start_abs:
+		return false
+	# Ensure birth times exist so the bake captures non-unity scale multipliers.
+	if _vegetation_layer != null:
+		VegetationGrowth.ensure_birth_times(_vegetation_layer.bulk, _growth_clock_h,
+			_growth_style(), _growth_rng, false)
+	if _auto_veg_layer != null:
+		VegetationGrowth.ensure_birth_times(_auto_veg_layer.bulk, _growth_clock_h,
+			_growth_style(), _growth_rng, false)
+	_ensure_climelapse_renderer()
+	if _climelapse_renderer.is_rendering():
+		return false
+	var step := step_days if step_days > 0 else _climelapse_step_days()
+	_climelapse_series = ClimelapseSeries.new()
+	_climelapse_series.configure(start_abs, end_abs, _lat, step)
+	_climelapse_bake = ClimelapseScaleBake.new()
+	_climelapse_render_start = start_abs
+	_climelapse_render_end = end_abs
+	_climelapse_label = label if not label.is_empty() else _default_climelapse_label(start_abs)
+	_climelapse_ready = false
+	_clim_play_target_kf = -1
+	_export_mp4_path = output_mp4
+	_export_camera = camera
+	_export_fps = maxi(1, fps)
+	_export_pending = not output_mp4.is_empty() and camera != null
+	_export_status_message = ""
+	var mc := _manual_growth_map.entry_count()
+	var ac := _auto_growth_map.entry_count()
+	if mc == 0 and ac == 0:
+		push_warning("Climelapse render: growth instance maps are empty — bake will store calendar keyframes only. Open vegetation settings and confirm growth years > 0, then reload the map.")
+	_climelapse_renderer.start_render(_climelapse_series, _climelapse_bake,
+		_manual_growth_map, _auto_growth_map, _growth_style(), _growth_clock_h)
+	climelapse_state_changed.emit()
+	return true
+
+
+func cancel_climelapse_render() -> void:
+	if _climelapse_capture != null and _climelapse_capture.is_active():
+		_climelapse_capture.cancel()
+	if _climelapse_renderer != null and _climelapse_renderer.is_rendering():
+		_climelapse_renderer.cancel()
+	_climelapse_playback = false
+	_export_pending = false
+	_export_mp4_path = ""
+	_export_camera = null
+	_export_status_message = "Render cancelled."
+	climelapse_state_changed.emit()
+
+
+func is_climelapse_exporting() -> bool:
+	return _climelapse_capture != null and _climelapse_capture.is_active()
+
+
+func get_climelapse_export_message() -> String:
+	return _export_status_message
+
+
+var _export_status_message := ""
+var _export_cull_saved: Array = []
+
+
+func get_climelapse_bake_stats() -> Dictionary:
+	var mc := _manual_growth_map.entry_count()
+	var ac := _auto_growth_map.entry_count()
+	var kf := _climelapse_series.keyframe_count() if _climelapse_series != null else 0
+	return {
+		"manual_entries": mc,
+		"auto_entries": ac,
+		"keyframes": kf,
+		"has_manual_bake": _manual_growth_map.has_baked_scales(),
+		"has_auto_bake": _auto_growth_map.has_baked_scales(),
+	}
+
+
+func is_climelapse_rendering() -> bool:
+	return (_climelapse_renderer != null and _climelapse_renderer.is_rendering()) \
+		or is_climelapse_exporting()
+
+
+func get_climelapse_progress() -> float:
+	if _climelapse_renderer != null and _climelapse_renderer.is_rendering():
+		var bake_frac := _climelapse_renderer.get_progress()
+		return bake_frac * (0.70 if _export_pending else 1.0)
+	if is_climelapse_exporting():
+		return 0.70 + 0.25 * _climelapse_capture.get_progress()
+	if _climelapse_renderer == null and not _climelapse_ready:
+		return -1.0
+	return 1.0 if _climelapse_ready else -1.0
+
+
+func get_climelapse_range_abs() -> Vector2:
+	if not _climelapse_ready or is_nan(_climelapse_render_start):
+		return Vector2(NAN, NAN)
+	return Vector2(_climelapse_render_start, _climelapse_render_end)
+
+
+func set_climelapse_playback(active: bool) -> void:
+	if active and _climelapse_ready:
+		if _main != null and _main.has_method("set_absolute_hours"):
+			_main.call("set_absolute_hours", _climelapse_render_start)
+	_climelapse_playback = active and _climelapse_ready
+	_clim_play_target_kf = -1
+	if _climelapse_playback:
+		_manual_growth_map.reset_cursor()
+		_auto_growth_map.reset_cursor()
+		_apply_climelapse_season_for_abs(_current_abs_h())
+		if _climelapse_series != null:
+			_clim_play_target_kf = _climelapse_series.keyframe_index_at(_current_abs_h())
+		_apply_climelapse_playback_full()
+	elif _main != null and _main.has_method("clear_climelapse_season_override"):
+		_main.call("clear_climelapse_season_override")
+	climelapse_state_changed.emit()
+
+
+func is_climelapse_playback() -> bool:
+	return _climelapse_playback
+
+
+func _on_climelapse_progress(_frac: float) -> void:
+	climelapse_state_changed.emit()
+
+
+func _on_climelapse_render_complete() -> void:
+	if _climelapse_series == null or _climelapse_bake == null:
+		return
+	_install_climelapse_baked_scales()
+	var dir := "%s/%s" % [CLIMELAPSE_ROOT, _climelapse_label]
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	_climelapse_series.save_json(dir.path_join("climelapse.json"))
+	var meta: Dictionary = _climelapse_bake.save_to_dir(dir)
+	meta["label"] = _climelapse_label
+	meta["start_abs_h"] = _climelapse_render_start
+	meta["end_abs_h"] = _climelapse_render_end
+	meta["latitude"] = _lat
+	meta["longitude"] = _lon
+	meta["step_days"] = _climelapse_series.step_days
+	if not _export_mp4_path.is_empty():
+		meta["mp4_export"] = _export_mp4_path
+	var mf := FileAccess.open(dir.path_join("meta.json"), FileAccess.WRITE)
+	if mf != null:
+		mf.store_string(JSON.stringify(meta))
+	_climelapse_ready = true
+	climelapse_state_changed.emit()
+	if _export_pending and _export_camera != null and not _export_mp4_path.is_empty():
+		_ensure_climelapse_capture()
+		_climelapse_capture.start_capture(self, _climelapse_series, _export_mp4_path,
+			_export_camera, _export_fps)
+	else:
+		_export_pending = false
+		_export_mp4_path = ""
+
+
+func _on_climelapse_capture_complete(success: bool, path: String, message: String) -> void:
+	_export_pending = false
+	_export_mp4_path = ""
+	_export_camera = null
+	_export_status_message = message
+	if success:
+		print("Climelapse export: %s" % message)
+	else:
+		push_warning("Climelapse export: %s" % message)
+	if _main != null and _main.has_method("set_absolute_hours"):
+		_main.call("set_absolute_hours", _climelapse_render_start)
+	climelapse_state_changed.emit()
+
+
+## Synchronous climelapse state for offline MP4 frame capture.
+func apply_climelapse_frame_for_export(abs_h: float, export_cam: Camera3D = null) -> void:
+	if _climelapse_series == null:
+		return
+	if _main != null and _main.has_method("set_absolute_hours"):
+		_main.call("set_absolute_hours", abs_h)
+	var kf := _climelapse_series.keyframe_index_at(abs_h)
+	_clim_play_target_kf = kf
+	_apply_climelapse_season_for_abs(abs_h)
+	var gy := Callable(self, "_ground_height_at")
+	if _manual_growth_map.has_baked_scales():
+		_manual_growth_map.reset_cursor()
+		_manual_growth_map.apply_baked_scales(kf, gy, -1, export_cam)
+	if _auto_growth_map.has_baked_scales():
+		_auto_growth_map.reset_cursor()
+		_auto_growth_map.apply_baked_scales(kf, gy, -1, export_cam)
+
+
+## Tighten draw distance + enable frustum-only scale updates for MP4 capture.
+func begin_climelapse_export_cull(export_cam: Camera3D) -> void:
+	_export_cull_saved.clear()
+	if export_cam == null or _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	var end_m := _export_visibility_end_m(export_cam)
+	for root_name in ["Vegetation", "AutoVegetation"]:
+		var veg_root := terrain.get_node_or_null(root_name)
+		if veg_root != null:
+			_save_tighten_visibility(veg_root, end_m)
+
+
+func end_climelapse_export_cull() -> void:
+	for item in _export_cull_saved:
+		if not (item is Dictionary):
+			continue
+		var node: Variant = (item as Dictionary).get("node")
+		if node is MultiMeshInstance3D and is_instance_valid(node):
+			var mi := node as MultiMeshInstance3D
+			mi.visibility_range_begin = float((item as Dictionary).get("begin", 0.0))
+			mi.visibility_range_end = float((item as Dictionary).get("end", 0.0))
+	_export_cull_saved.clear()
+
+
+func _export_visibility_end_m(cam: Camera3D) -> float:
+	var half_fov := deg_to_rad(cam.fov * 0.5)
+	var reach := cam.far * tan(half_fov) * 1.4
+	return clampf(reach, 150.0, minf(cam.far, 2800.0))
+
+
+func _save_tighten_visibility(node: Node, end_m: float) -> void:
+	if node is MultiMeshInstance3D:
+		var mi := node as MultiMeshInstance3D
+		_export_cull_saved.append({
+			"node": mi,
+			"begin": mi.visibility_range_begin,
+			"end": mi.visibility_range_end,
+		})
+		var prev_end := mi.visibility_range_end
+		if prev_end <= 0.0:
+			mi.visibility_range_end = end_m
+		else:
+			mi.visibility_range_end = minf(prev_end, end_m)
+	for child in node.get_children():
+		_save_tighten_visibility(child, end_m)
+
+
+func _in_climelapse_range(abs_h: float) -> bool:
+	if is_nan(_climelapse_render_start) or is_nan(_climelapse_render_end):
+		return false
+	return abs_h >= _climelapse_render_start - 0.01 and abs_h <= _climelapse_render_end + 0.01
+
+
+func _apply_climelapse_season_for_abs(abs_h: float) -> void:
+	if _climelapse_series == null or _main == null:
+		return
+	var sample: Dictionary = _climelapse_series.sample_at(abs_h)
+	if sample.is_empty():
+		return
+	var sig: Dictionary = sample.get("season", {})
+	if sig.is_empty():
+		var doy := int(sample.get("day_of_year", 1))
+		sig = SeasonModel.season_signals(doy, _lat)
+	if _main.has_method("set_climelapse_season_override"):
+		_main.call("set_climelapse_season_override", sig)
+
+
+func _apply_climelapse_playback_budgeted(budget: int) -> void:
+	if not _climelapse_playback or not _climelapse_ready or _climelapse_series == null:
+		return
+	var abs_h := _current_abs_h()
+	if not _in_climelapse_range(abs_h):
+		return
+	var kf := _climelapse_series.keyframe_index_at(abs_h)
+	if kf != _clim_play_target_kf:
+		_clim_play_target_kf = kf
+		_apply_climelapse_playback_full()
+		_apply_climelapse_season_for_abs(abs_h)
+
+
+func _apply_climelapse_playback_full() -> void:
+	if _clim_play_target_kf < 0:
+		return
+	var has_bake := _manual_growth_map.has_baked_scales() or _auto_growth_map.has_baked_scales()
+	if not has_bake:
+		return
+	var gy := Callable(self, "_ground_height_at")
+	if _manual_growth_map.has_baked_scales():
+		_manual_growth_map.reset_cursor()
+		_manual_growth_map.apply_baked_scales(_clim_play_target_kf, gy, -1)
+	if _auto_growth_map.has_baked_scales():
+		_auto_growth_map.reset_cursor()
+		_auto_growth_map.apply_baked_scales(_clim_play_target_kf, gy, -1)
+
+
+func _try_restore_climelapse_scales_from_disk(dir: String) -> void:
+	if _climelapse_bake == null:
+		return
+	var meta_path := dir.path_join("meta.json")
+	if not FileAccess.file_exists(meta_path):
+		return
+	var f := FileAccess.open(meta_path, FileAccess.READ)
+	if f == null:
+		return
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	if not (parsed is Dictionary):
+		return
+	var loaded := ClimelapseScaleBake.new()
+	if loaded.load_from_dir(dir, parsed as Dictionary):
+		_climelapse_bake = loaded
+		_install_climelapse_baked_scales()
+
+
+func try_load_climelapse_for_site() -> bool:
+	var best_dir := ""
+	var best_start := -INF
+	var global_root := ProjectSettings.globalize_path(CLIMELAPSE_ROOT)
+	if not DirAccess.dir_exists_absolute(global_root):
+		return false
+	var dir := DirAccess.open(CLIMELAPSE_ROOT)
+	if dir == null:
+		return false
+	dir.list_dir_begin()
+	var entry := dir.get_next()
+	while entry != "":
+		if dir.current_is_dir() and not entry.begins_with("."):
+			var sub := "%s/%s" % [CLIMELAPSE_ROOT, entry]
+			var mp := sub.path_join("meta.json")
+			if FileAccess.file_exists(mp):
+				var f := FileAccess.open(mp, FileAccess.READ)
+				if f != null:
+					var meta: Variant = JSON.parse_string(f.get_as_text())
+					if meta is Dictionary:
+						var m: Dictionary = meta as Dictionary
+						if is_equal_approx(float(m.get("latitude", 0.0)), _lat) \
+								and is_equal_approx(float(m.get("longitude", 0.0)), _lon):
+							var st := float(m.get("start_abs_h", 0.0))
+							if st >= best_start:
+								best_start = st
+								best_dir = sub
+		entry = dir.get_next()
+	dir.list_dir_end()
+	if best_dir.is_empty():
+		return false
+	return load_climelapse_from_dir(best_dir)
+
+
+func load_climelapse_from_dir(dir: String) -> bool:
+	var series := ClimelapseSeries.load_json(dir.path_join("climelapse.json"))
+	if series == null:
+		return false
+	var meta_path := dir.path_join("meta.json")
+	if not FileAccess.file_exists(meta_path):
+		return false
+	var f := FileAccess.open(meta_path, FileAccess.READ)
+	if f == null:
+		return false
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	if not (parsed is Dictionary):
+		return false
+	var bake := ClimelapseScaleBake.new()
+	if not bake.load_from_dir(dir, parsed as Dictionary):
+		return false
+	_climelapse_series = series
+	_climelapse_bake = bake
+	_climelapse_render_start = series.start_abs_h
+	_climelapse_render_end = series.end_abs_h
+	_climelapse_label = str((parsed as Dictionary).get("label", dir.get_file()))
+	_install_climelapse_baked_scales()
+	_climelapse_ready = true
+	_clim_play_target_kf = -1
+	climelapse_state_changed.emit()
+	return true
+
+
+func _install_climelapse_baked_scales() -> void:
+	if _climelapse_bake == null:
+		return
+	if _climelapse_bake.has_manual():
+		_manual_growth_map.set_baked_scales(_climelapse_bake.manual_scales,
+			_climelapse_bake.keyframe_count)
+	if _climelapse_bake.has_auto():
+		_auto_growth_map.set_baked_scales(_climelapse_bake.auto_scales,
+			_climelapse_bake.keyframe_count)
+
+
+func _maybe_rebind_climelapse_bake() -> void:
+	if _climelapse_ready and _climelapse_bake != null:
+		_install_climelapse_baked_scales()
+
+
+func _on_map_load_try_climelapse_restore() -> void:
+	if _climelapse_ready:
+		return
+	try_load_climelapse_for_site()
 
 
 ## add_cb for reseeding — appends one manual bulk record and returns it so the
@@ -2625,6 +3634,32 @@ func _growth_add_auto(slot: String, x: float, z: float, yaw: float,
 	return (_auto_veg_layer.bulk[slot] as Array).back()
 
 
+const _AUTO_GROWTH_ZONE_SKIP_KINDS: Array[String] = ["grass_lawn", "grass_field"]
+
+
+func _rebuild_auto_growth_zone_index() -> void:
+	_auto_growth_zone_index = null
+	if _auto_veg_data.is_empty():
+		return
+	var polys: Array = []
+	for rec in _auto_veg_data.get("polygons", []):
+		if not (rec is Dictionary):
+			continue
+		var kind := str((rec as Dictionary).get("kind", ""))
+		if kind in _AUTO_GROWTH_ZONE_SKIP_KINDS:
+			continue
+		var pts: PackedVector2Array = (rec as Dictionary).get("points", PackedVector2Array())
+		if pts.size() >= 3:
+			polys.append(pts)
+	_auto_growth_zone_index = GrowthZoneIndex.from_polygons(polys)
+
+
+func _manual_growth_zone_index() -> GrowthZoneIndex:
+	if _vegetation_layer == null:
+		return null
+	return GrowthZoneIndex.from_polygons(_vegetation_layer.growth_zones)
+
+
 ## Seed the growth RNG/clock + per-instance birth times right after the manual
 ## layer loads, so the first render already shows an established age mix. reset=true
 ## discards any birth_h persisted from a prior session (different clock epoch).
@@ -2633,6 +3668,7 @@ func _growth_init_manual() -> void:
 		return
 	_growth_rng.seed = int(_lat * 10000.0) ^ int(_lon * 10000.0) ^ 0x6b7f
 	_growth_prev_abs_h = _current_abs_h()
+	_growth_last_calendar_doy = _growth_calendar_doy()
 	VegetationGrowth.ensure_birth_times(_vegetation_layer.bulk, _growth_clock_h,
 		_growth_style(), _growth_rng, true)
 	_growth_caps_manual = VegetationGrowth.capture_caps(_vegetation_layer.bulk)
@@ -2737,7 +3773,8 @@ func _rebuild_auto_vegetation() -> void:
 	var settings := _auto_veg_runtime_settings()
 	var exclusions := _auto_veg_exclusions()
 	AutoVegetationRuntime.rebuild(terrain, _auto_veg_layer,
-		Callable(self, "_ground_height_at"), settings, exclusions)
+		Callable(self, "_ground_height_at"), settings, exclusions, _auto_growth_map)
+	_maybe_rebind_climelapse_bake()
 
 
 ## Frame-chunked variant of _rebuild_auto_vegetation for the initial load, so the
@@ -2758,8 +3795,9 @@ func _rebuild_auto_vegetation_async() -> void:
 	var settings := _auto_veg_runtime_settings()
 	var exclusions := _auto_veg_exclusions()
 	await AutoVegetationRuntime.rebuild_async(terrain, _auto_veg_layer,
-		Callable(self, "_ground_height_at"), settings, exclusions)
+		Callable(self, "_ground_height_at"), settings, exclusions, _auto_growth_map)
 	_auto_rebuild_active = false
+	_maybe_rebind_climelapse_bake()
 	if _auto_rebuild_dirty:
 		_auto_rebuild_dirty = false
 		await _rebuild_auto_vegetation_async()
@@ -2772,7 +3810,14 @@ func _full_regenerate_auto_vegetation_async() -> void:
 	if not _auto_veg_generated or _auto_veg_data.is_empty():
 		await _rebuild_auto_vegetation_async()
 		return
-	_auto_veg_layer = AutoVegetationGenerator.generate(_auto_veg_data, _auto_veg_ctx())
+	var state := AutoVegetationGenerator.prepare_context(_auto_veg_data, _auto_veg_ctx())
+	while AutoVegetationGenerator.scatter_batch(state, SCATTER_BATCH_POLYS):
+		await get_tree().process_frame
+		if not _built:
+			return
+	_auto_veg_layer = state.layer
+	_auto_veg_poly_stats = state.poly_stats
+	_print_auto_veg_diag(state)
 	_apply_auto_veg_edits()
 	_growth_init_auto()
 	await _rebuild_auto_vegetation_async()
@@ -2788,6 +3833,14 @@ func apply_vegetation_look(shape: Dictionary, style: Dictionary) -> void:
 	if _vegetation_layer == null:
 		return
 	var prev := _veg_style.duplicate(true)
+	# "Apply to map" restyles EVERY tree of each type. Painted trees can carry a
+	# per-instance card_settings override ("Apply to brush") that otherwise wins over
+	# the global look forever (it persists to disk), so drop those overrides here so
+	# the whole map adopts the new look. Per-brush trees are a paint-time choice; a
+	# deliberate global apply is authoritative.
+	_vegetation_layer.clear_card_overrides()
+	if _auto_veg_layer != null:
+		_auto_veg_layer.clear_card_overrides()
 	_vegetation_layer.apply_settings(shape)
 	_veg_style.merge(shape, true)
 	_veg_style = VegetationStyleConfig.apply_patch(_veg_style, style)
@@ -2872,6 +3925,12 @@ func _forest_params_changed(prev: Dictionary, next: Dictionary) -> bool:
 			return true
 	if absf(float(next.get("auto_density_scale", 1.0)) - float(prev.get("auto_density_scale", 1.0))) > 0.01:
 		return true
+	for key in ["grass_lawn_card_w", "grass_lawn_bulk_scale", "grass_field_bulk_scale"]:
+		if absf(float(next.get(key, 0.0)) - float(prev.get(key, 0.0))) > 0.01:
+			return true
+	if bool(next.get("open_areas_exclude_trees", true)) \
+			!= bool(prev.get("open_areas_exclude_trees", true)):
+		return true
 	if _osm_species_map_changed(prev, next):
 		return true
 	return false
@@ -2897,7 +3956,14 @@ func _full_regenerate_auto_vegetation() -> void:
 	if not _auto_veg_generated or _auto_veg_data.is_empty():
 		_rebuild_auto_vegetation()
 		return
-	_auto_veg_layer = AutoVegetationGenerator.generate(_auto_veg_data, _auto_veg_ctx())
+	var state := AutoVegetationGenerator.prepare_context(_auto_veg_data, _auto_veg_ctx())
+	while AutoVegetationGenerator.scatter_batch(state, SCATTER_BATCH_POLYS):
+		await get_tree().process_frame
+		if not _built:
+			return
+	_auto_veg_layer = state.layer
+	_auto_veg_poly_stats = state.poly_stats
+	_print_auto_veg_diag(state)
 	_apply_auto_veg_edits()
 	_growth_init_auto()
 	_rebuild_auto_vegetation()
@@ -2999,9 +4065,9 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 	var spots: Array[Dictionary]
 	if preset_enum == VegetationPaint.Preset.GRASS_LAWN:
 		var mat_w := float(_veg_style.get("grass_lawn_card_w", 0.45))
-		var est := VegetationPaint.estimate_hex_fill_count(poly, mat_w, fill_cap)
+		var est := VegetationPaint.estimate_square_fill_count(poly, mat_w, fill_cap)
 		cap = mini(cap, est)
-		spots = VegetationPaint.hex_grid_fill(poly, mat_w, existing, cap)
+		spots = VegetationPaint.square_grid_fill(poly, mat_w, existing, cap)
 		scale_min = 1.0
 		scale_max = 1.0
 	else:
@@ -3027,6 +4093,9 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 		if _vegetation_layer.add_bulk(species, float(spot["x"]), float(spot["z"]), yaw, scale, brush_card):
 			added += 1
 	if added > 0:
+		if preset_enum != VegetationPaint.Preset.GRASS_LAWN \
+				and preset_enum != VegetationPaint.Preset.GRASS_FIELD:
+			_vegetation_layer.add_growth_zone(poly)
 		_growth_after_manual_edit()
 		_vegetation_layer.save(_lat, _lon)
 		_rebuild_vegetation()
@@ -3220,14 +4289,14 @@ func _highlight_footing_grid(fast_preview: bool) -> Dictionary:
 		if not _detail_surface_grid.is_empty():
 			use_grid = _detail_surface_grid
 			use_res = _detail_elev_cols
-			use_extent = DETAIL_HALF_EXTENT * 2.0
+			use_extent = _detail_extent_m()
 	else:
 		var detail := _compose_detail_surface(false)
 		if not detail.is_empty():
 			_detail_surface_grid = detail
 			use_grid = detail
 			use_res = _detail_elev_cols
-			use_extent = DETAIL_HALF_EXTENT * 2.0
+			use_extent = _detail_extent_m()
 	return {"grid": use_grid, "res": use_res, "extent": use_extent}
 
 
@@ -3274,24 +4343,10 @@ func terrain_pick_ray(screen_pos: Vector2) -> Variant:
 	var cam := get_viewport().get_camera_3d()
 	if cam == null or _main == null:
 		return null
-	var from := cam.project_ray_origin(screen_pos)
-	var dir := cam.project_ray_normal(screen_pos)
-	var space: PhysicsDirectSpaceState3D = _main.get_world_3d().direct_space_state
-	var query := PhysicsRayQueryParameters3D.create(from, from + dir * 50000.0)
-	query.collide_with_areas = false
-	query.collide_with_bodies = true
-	# Sunk coarse TerrainCollision sits under DetailGround — exclude it when hi-res footing exists.
-	if not _detail_footing_grid().is_empty():
-		var terrain := _main.get_node_or_null("Terrain")
-		var coarse := terrain.get_node_or_null("TerrainCollision") if terrain != null else null
-		if coarse is CollisionObject3D:
-			query.exclude = [(coarse as CollisionObject3D).get_rid()]
-	var hit: Dictionary = space.intersect_ray(query)
+	var hit := TerrainSurfaceQuery.raycast_ground_at_camera(_main, cam, screen_pos)
 	if hit.is_empty():
 		return null
-	var p: Vector3 = hit["position"]
-	p.y = _ground_height_at(p.x, p.z)
-	return p
+	return hit["position"]
 
 
 func apply_sculpt_op(op: String, rect_min: Vector2, rect_max: Vector2,
@@ -3366,7 +4421,7 @@ func update_selection_highlight(world_min: Vector2, world_max: Vector2) -> void:
 	var detail := _compose_detail_surface(false)
 	var use_grid := detail if not detail.is_empty() else _built_grid
 	var use_res := _detail_elev_cols if not detail.is_empty() else MESH_RES
-	var use_extent := DETAIL_HALF_EXTENT * 2.0 if not detail.is_empty() else _built_extent
+	var use_extent := _detail_extent_m() if not detail.is_empty() else _built_extent
 	_selection_highlight.mesh = TerrainBuilder.build_selection_highlight(
 		world_min, world_max, use_grid, use_res, use_extent, _built_center_elev)
 	_selection_highlight.visible = true
@@ -3445,7 +4500,28 @@ func _consume_design_context() -> void:
 		call_deferred("_attach_imported_ibc", model_id, d.get("ibc", {}))
 	_apply_imported_graph(d.get("graph_save_state", {}) as Dictionary)
 	_apply_imported_solar(d.get("solar", {}) as Dictionary)
+	call_deferred("_seed_starshade_after_import", model_id, d)
 	_sync_actors_to_ground(true)
+
+
+func _seed_starshade_after_import(model_id: String, design: Dictionary) -> void:
+	if _main == null or not ModelCatalog.is_starshade_model(model_id):
+		return
+	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+	if sgv != null and sgv.has_method("has_starshade_graph_content"):
+		if bool(sgv.call("has_starshade_graph_content")):
+			return
+		if sgv.has_method("seed_starshade_system"):
+			var solar: Dictionary = design.get("solar", {}) as Dictionary
+			var n := int(solar.get("panelCount", StarShadeGraphSeeder.DEFAULT_PANEL_COUNT))
+			var w := float(solar.get("panelWatts", StarShadeGraphSeeder.DEFAULT_PANEL_WATTS))
+			if bool(sgv.call("seed_starshade_system", n, w, "linkagelab_import")):
+				if sgv.has_method("_sync_solar_ui_from_graph"):
+					sgv.call("_sync_solar_ui_from_graph")
+				if sgv.has_method("_schedule_graph_autosave"):
+					sgv.call("_schedule_graph_autosave")
+				return
+	StarShadeGraphSeeder.try_seed_from_main(_main, self)
 
 
 func _attach_imported_ibc(model_id: String, ibc_info: Variant) -> void:
@@ -3522,7 +4598,31 @@ func _rebuild_placed_props() -> void:
 	var terrain := _main.get_node_or_null("Terrain") as Node3D
 	if terrain == null:
 		return
+	# Drop crosshair/grab refs before queue_free — otherwise the next `is PlacedProp`
+	# check hits a freed instance ("Left operand of 'is' is a previously freed instance").
+	_clear_placed_prop_focus()
 	PlacedPropRuntime.rebuild(terrain, _placed_prop_layer, Callable(self, "_ground_height_at"))
+	call_deferred("_try_seed_starshade_graph")
+
+
+func _try_seed_starshade_graph() -> void:
+	if _main == null:
+		return
+	StarShadeGraphSeeder.try_seed_from_main(_main, self)
+
+
+func _clear_placed_prop_focus() -> void:
+	if _main == null:
+		return
+	var player := _main.get_node_or_null("Player")
+	if player == null:
+		return
+	var focus := player.get_node_or_null("InteractionFocus")
+	if focus != null and focus.has_method("clear_focus"):
+		focus.call("clear_focus")
+	var grab := player.get_node_or_null("GrabController")
+	if grab != null and grab.has_method("release_prop_refs"):
+		grab.call("release_prop_refs")
 
 
 func rebuild_placed_props() -> void:
@@ -3627,6 +4727,93 @@ func pick_building_at_screen(screen_pos: Vector2) -> Dictionary:
 
 
 ## ---------------------------------------------------------------------------
+## Crosshair focus on OSM vegetation areas (lawn / field / forest polygons)
+## ---------------------------------------------------------------------------
+
+## True only while the vegetation paint dock (V) is open — gates the crosshair
+## OSM-vegetation highlight/prompt so it doesn't light up every OSM tree patch
+## the player merely walks past outside of veg-editing.
+func is_vegetation_edit_active() -> bool:
+	return _vegetation_edit_ui != null and is_instance_valid(_vegetation_edit_ui) \
+		and bool(_vegetation_edit_ui.visible)
+
+func pick_veg_area_at_world(x: float, z: float) -> Dictionary:
+	var polys: Variant = _auto_veg_data.get("polygons", [])
+	if not (polys is Array):
+		return {"valid": false}
+	return VegAreaPicker.pick_at_xz(polys as Array, x, z)
+
+
+func get_veg_focus_idx() -> int:
+	return _veg_focus_idx
+
+
+## Set (or clear with -1) the crosshair-focused OSM veg area. Draws an amber
+## ground-draped outline over the polygon (reusing the paint highlight mesh), the
+## same "focused, interactable" affordance buildings use.
+func set_veg_focus_idx(idx: int) -> void:
+	if idx == _veg_focus_idx:
+		return
+	_veg_focus_idx = idx
+	if idx < 0:
+		_veg_focus_area = {}
+		clear_vegetation_highlight()
+		return
+	var polys: Variant = _auto_veg_data.get("polygons", [])
+	if not (polys is Array):
+		return
+	var info := VegAreaPicker.area_info(polys as Array, idx)
+	if not bool(info.get("valid", false)):
+		clear_vegetation_highlight()
+		return
+	_veg_focus_area = info
+	var poly: PackedVector2Array = info.get("points", PackedVector2Array())
+	update_vegetation_highlight(poly, Color(1.0, 0.75, 0.15, 0.4), true)
+
+
+## Interact / O on a focused veg area → open the Tune look modal seeded to that
+## area's veg type. (Per-area vs all-of-type apply lands in a later phase; for now
+## the modal opens on the right species so edits target the correct look.)
+func open_veg_area_modal(area_idx: int) -> void:
+	var polys: Variant = _auto_veg_data.get("polygons", [])
+	if not (polys is Array) or area_idx < 0 or area_idx >= (polys as Array).size():
+		return
+	var d: Variant = (polys as Array)[area_idx]
+	if not (d is Dictionary):
+		return
+	var kind := str((d as Dictionary).get("kind", "grass_field"))
+	open_vegetation_preview_editor(_preset_for_veg_kind(kind))
+
+
+## OSM area kind → VegetationPaint.Preset for seeding the modal. Honors an explicit
+## player osm_species_map binding first, else a per-kind heuristic.
+func _preset_for_veg_kind(kind: String) -> int:
+	var osm_map: Variant = _veg_style.get("osm_species_map", {})
+	if osm_map is Dictionary:
+		match str((osm_map as Dictionary).get(kind, "auto")):
+			"pine":
+				return VegetationPaint.Preset.PINE
+			"deciduous":
+				return VegetationPaint.Preset.DECIDUOUS
+			"shrub":
+				return VegetationPaint.Preset.SHRUB
+			"mixed":
+				return VegetationPaint.Preset.MIX
+	match kind:
+		"grass_lawn":
+			return VegetationPaint.Preset.GRASS_LAWN
+		"grass_field", "wetland":
+			return VegetationPaint.Preset.GRASS_FIELD
+		"scrub", "vineyard":
+			return VegetationPaint.Preset.SHRUB
+		"park", "cemetery":
+			return VegetationPaint.Preset.MIX
+		_:
+			# wood / forest / orchard and any unknown tree area.
+			return VegetationPaint.Preset.DECIDUOUS
+
+
+## ---------------------------------------------------------------------------
 ## Per-building styles (Building Builder)
 ## ---------------------------------------------------------------------------
 
@@ -3676,12 +4863,91 @@ func begin_structure_placement(model_id: String) -> bool:
 	return true
 
 
+## Hand an already-started PlacedPropService placement (e.g. begun by the system
+## graph's "Place Model" button) to the placed-props UI so its per-frame aim +
+## click-to-confirm loop drives the ghost. `result` is the begin_placement return.
+func notify_external_placement_started(result: Dictionary) -> void:
+	if _placed_props_ui != null and _placed_props_ui.has_method("notify_bundle_imported"):
+		_placed_props_ui.call("notify_bundle_imported", result)
+
+
 func get_building_tag(building_idx: int) -> String:
 	var d := _find_building_record(building_idx)
 	var pts: Variant = d.get("points", PackedVector2Array())
 	if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 3:
 		return ""
 	return BuildingBuilder.building_tag(pts)
+
+
+## Building records within radius_m of (x, z) whose footprint area falls in
+## [min_area_m2, max_area_m2], nearest first: [{idx, tag, dist_m, area_m2}].
+## Used to pick "hero" buildings (near spawn, house-sized) for facade texture
+## assignment — house-sized excludes both sheds and outliers like the church.
+func list_buildings_near(x: float, z: float, radius_m: float,
+		min_area_m2: float = 20.0, max_area_m2: float = 250.0) -> Array:
+	var out: Array = []
+	for item in _buildings_data:
+		if not (item is Dictionary):
+			continue
+		var d: Dictionary = item
+		var pts: Variant = d.get("points", PackedVector2Array())
+		if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 3:
+			continue
+		var poly: PackedVector2Array = pts
+		var area := BuildingBuilder.footprint_area_m2(poly)
+		if area < min_area_m2 or area > max_area_m2:
+			continue
+		var cx := 0.0
+		var cz := 0.0
+		for p in poly:
+			cx += p.x
+			cz += p.y
+		cx /= float(poly.size())
+		cz /= float(poly.size())
+		var dist := Vector2(cx - x, cz - z).length()
+		if dist > radius_m:
+			continue
+		out.append({
+			"idx": int(d.get("idx", -1)),
+			"tag": BuildingBuilder.building_tag(poly),
+			"dist_m": dist,
+			"area_m2": area,
+		})
+	out.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return float((a as Dictionary)["dist_m"]) < float((b as Dictionary)["dist_m"]))
+	return out
+
+
+## Every building currently carrying a style override: [{idx, tag, x, z, area_m2}].
+## Used by playtest tooling to photograph exactly the buildings a session just
+## customized (e.g. after assigning facade textures), regardless of location.
+func list_styled_buildings() -> Array:
+	var out: Array = []
+	if _building_style_layer == null:
+		return out
+	for item in _buildings_data:
+		if not (item is Dictionary):
+			continue
+		var d: Dictionary = item
+		var pts: Variant = d.get("points", PackedVector2Array())
+		if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 3:
+			continue
+		var poly: PackedVector2Array = pts
+		var tag := BuildingBuilder.building_tag(poly)
+		if not _building_style_layer.has_style(tag):
+			continue
+		var cx := 0.0
+		var cz := 0.0
+		for p in poly:
+			cx += p.x
+			cz += p.y
+		cx /= float(poly.size())
+		cz /= float(poly.size())
+		out.append({
+			"idx": int(d.get("idx", -1)), "tag": tag, "x": cx, "z": cz,
+			"area_m2": BuildingBuilder.footprint_area_m2(poly),
+		})
+	return out
 
 
 func get_building_style(building_idx: int) -> Dictionary:
@@ -3733,14 +4999,19 @@ func _rebuild_custom_building(building_idx: int, tag: String) -> void:
 		return
 	var detail_cols := _detail_elev_cols if not _detail_surface_grid.is_empty() else 0
 	var detail_rows := _detail_elev_rows if not _detail_surface_grid.is_empty() else 0
+	var style: Dictionary = _building_style_layer.get_style(tag)
 	var mi := BuildingBuilder.build_single_building(
-		d, _building_style_layer.get_style(tag),
+		d, style,
 		_built_grid, MESH_RES, _built_extent, _built_center_elev,
 		_detail_surface_grid, detail_cols, detail_rows,
-		DETAIL_HALF_EXTENT * 2.0, true)
+		_detail_extent_m(), true)
 	if mi != null:
 		mi.name = "B_%s" % tag
+		_apply_styled_wall_material(mi, style)
 		_custom_buildings_root.add_child(mi)
+		# Late rebuilds must also re-pick up the ortho roof uniforms.
+		if mi.mesh != null and mi.mesh.get_surface_count() > 1:
+			mi.set_surface_override_material(1, _make_world_roof_material())
 
 
 func place_prop_from_screen(screen_pos: Vector2, model_id: String) -> bool:

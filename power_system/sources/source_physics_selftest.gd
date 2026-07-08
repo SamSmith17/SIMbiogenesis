@@ -6,6 +6,7 @@ extends SceneTree
 ## Exits 0 when all assertions pass, 1 otherwise.
 
 const ResourceKindsScript := preload("res://system_graph/data/resource_kinds.gd")
+const ResourceEdgeVisScript := preload("res://system_graph/data/resource_edge_vis.gd")
 
 var _failures: int = 0
 var _checks: int = 0
@@ -22,7 +23,9 @@ func _initialize() -> void:
 	_test_timeline_view()
 	_test_comparison()
 	_test_resource_flow()
+	_test_resource_edges()
 	_test_season()
+	_test_solar_eclipse()
 	if _failures == 0:
 		print("SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -590,25 +593,33 @@ func _doy(month: int, day: int) -> int:
 
 # Replicates main._step_analemma() on a bare clock to validate the primitives.
 func _analemma_bounds() -> Vector2i:
-	var hi: int = int(Time.get_date_dict_from_system().year) - 1
-	var lo: int = mini(1940, hi)  # mirrors main.ANALEMMA_ARCHIVE_START_YEAR
-	return Vector2i(lo, hi)
+	var hi: int = int(Time.get_date_dict_from_system().year)
+	return Vector2i(mini(1940, hi), hi)
 
 
 func _analemma_advance(c: CelestialClock) -> void:
+	var start_year: int = c.year
 	var cur: float = c.get_absolute_hours()
 	var next_mid: float = (floor(cur / 24.0) + 1.0) * 24.0
 	c.set_absolute_hours(next_mid)
-	# Multi-year analemma: advance naturally, wrapping only past the newest
-	# complete-archive year back to the start of the historical window.
 	var bounds: Vector2i = _analemma_bounds()
-	if c.year > bounds.y:
+	bounds.y = maxi(bounds.y, start_year)
+	if start_year <= bounds.y and c.year > bounds.y:
 		c.year = bounds.x
 		c.month = 1
 		c.day = 1
-	# Fixed MEAN solar noon (not apparent) so the equation of time re-appears as
-	# the sun's east/west wander — that is what traces the figure-eight.
 	c.day_time = c.mean_solar_time_to_clock_time(12.0)
+
+
+func _analemma_advance_days(c: CelestialClock, days: int) -> void:
+	for _i in maxi(0, days):
+		_analemma_advance(c)
+
+
+func _drift_mean_h(day_index: int, offset_min: float) -> float:
+	if is_zero_approx(offset_min):
+		return 12.0
+	return fmod(12.0 + float(day_index) * offset_min / 60.0, 24.0)
 
 
 func _test_season() -> void:
@@ -647,6 +658,12 @@ func _test_season() -> void:
 	# --- Snow estimate: no weather service -> no snow, range-clamped ---
 	var s0 := SeasonModel.estimate_snow_cover(null, 1, 15, 12.0, 40.0)
 	_check("snow: null ws -> 0", s0 == 0.0)
+	var d0 := SeasonModel.estimate_snow_depth_m(null, 1, 15, 12.0, 40.0)
+	_check("snow: null ws depth -> 0", d0 == 0.0)
+	_check("snow: cover from depth", SeasonModel.estimate_snow_cover(null, 7, 1, 12.0, 40.0) == 0.0)
+	# 0.6 m pack -> cover > 1 clamped, depth preserved
+	var cov_deep := clampf(0.6 / SeasonModel.COVER_DEPTH_M, 0.0, 1.0)
+	_check("snow: deep cover saturates", cov_deep >= 1.0)
 
 	# --- Analemma stepping primitives ---
 	var c := CelestialClock.new()
@@ -660,13 +677,26 @@ func _test_season() -> void:
 	_analemma_advance(c)
 	_check("analemma: advances one day", c.day_of_year == before + 1,
 		"%d -> %d" % [before, c.day_of_year])
+	before = c.day_of_year
+	_analemma_advance_days(c, 2)
+	_check("analemma: advances two days (∞×2)", c.day_of_year == before + 2,
+		"%d -> %d" % [before, c.day_of_year])
 	_check("analemma: day_time finite in range",
 		is_finite(c.day_time) and c.day_time >= 0.0 and c.day_time < 24.0,
 		"day_time=%.3f" % c.day_time)
 
+	var _b: Vector2i = _analemma_bounds()
+	# Must not snap to 1940 when already at the current calendar year.
+	c.year = _b.y
+	c.month = 3
+	c.day = 1
+	c.day_time = 12.0
+	_analemma_advance(c)
+	_check("analemma: no snap from current playhead",
+		c.year == _b.y, "expected %d got %d" % [_b.y, c.year])
+
 	# Year advance: Dec 31 -> Jan 1 of the *next* year (within the archive window),
 	# so successive analemma passes pull different real historical weather.
-	var _b: Vector2i = _analemma_bounds()
 	c.year = _b.y - 1
 	c.month = 12
 	c.day = 31
@@ -689,6 +719,16 @@ func _test_season() -> void:
 	# The window must reach the full ERA5 archive start (1940), not a recent cap.
 	_check("analemma: cycles all the way back to 1940", _b.x == 1940,
 		"lower bound=%d" % _b.x)
+
+	# --- Diurnal drift offset (corkscrew time stepping) ---
+	_check("drift: zero offset is mean noon",
+		absf(_drift_mean_h(0, 0.0) - 12.0) < 0.001)
+	_check("drift: 60 min/day on day 1",
+		absf(_drift_mean_h(1, 60.0) - 13.0) < 0.001)
+	_check("drift: wraps after 24h cycle",
+		absf(_drift_mean_h(24, 60.0) - 12.0) < 0.001)
+	_check("drift: distinct times over a week",
+		_drift_mean_h(0, 30.0) != _drift_mean_h(7, 30.0))
 
 	# --- Analemma shape: mean solar noon traces a figure-eight, apparent does not ---
 	# Sampling the sun over a year at a FIXED MEAN solar time must produce both a
@@ -805,3 +845,68 @@ func _test_resource_flow() -> void:
 	var specs: Dictionary = {"watts": 800.0, "output_rate": "5 kg/h"}
 	ResourceKindsScript.new().migrate_processor_specs(specs)
 	_check("resource processor outputs", (specs.get("outputs", []) as Array).size() >= 1)
+
+
+func _test_resource_edges() -> void:
+	_check("water/potable alias compatible",
+		ResourceKindsScript.kinds_compatible("water", "potable_water"))
+	_check("greywater != potable",
+		not ResourceKindsScript.kinds_compatible("greywater", "water"))
+	_check("empty kind rejected",
+		not ResourceKindsScript.kinds_compatible("", "water"))
+	_check("syngas/woodgas alias",
+		ResourceKindsScript.kinds_compatible("syngas", "woodgas"))
+	var idle: Dictionary = ResourceEdgeVisScript.stroke_for("water", 0.0, false)
+	var live: Dictionary = ResourceEdgeVisScript.stroke_for("water", 60.0, true)
+	_check("idle wire thinner than live",
+		float(idle.get("width", 99.0)) < float(live.get("width", 0.0)))
+	_check("idle wire not active", not bool(idle.get("active", true)))
+	_check("live wire active", bool(live.get("active", false)))
+	_check("legend has biomass entry", ResourceKindsScript.legend_entries().size() >= 8)
+
+
+func _test_solar_eclipse() -> void:
+	var sun := Vector3( 0.2, 0.9, -0.3 ).normalized()
+	var moon_same := sun
+	var full := SolarEclipse.sample( sun, moon_same )
+	_check( "eclipse: conjunction obscured", float( full.get( "obscuration", 0.0 ) ) > 0.85 )
+	_check( "eclipse: conjunction total", bool( full.get( "is_total", false ) ) )
+	var moon_opp := ( -sun ).normalized()
+	var none := SolarEclipse.sample( sun, moon_opp )
+	_check( "eclipse: opposition clear", float( none.get( "obscuration", 0.0 ) ) < 0.01 )
+	# 2024-04-08 total eclipse — Dallas, TX near maximum (~18:40 UTC).
+	var clk := CelestialClock.new()
+	clk.latitude = 32.78
+	clk.longitude = -96.80
+	clk.auto_dst = true
+	clk.year = 2024
+	clk.month = 4
+	clk.day = 8
+	clk.day_time = 13.35  # near maximum totality (~13:21-13:40 CDT window)
+	var dallas := clk.sample_solar_eclipse()
+	var dallas_obs := float( dallas.get( "obscuration", 0.0 ) )
+	var dallas_sep := float( dallas.get( "separation_deg", 99.0 ) )
+	_check( "eclipse 2024-04-08 Dallas: near-total",
+		bool( dallas.get( "is_total", false ) ) and dallas_obs > 0.85,
+		"obs=%.2f sep=%.2f°" % [dallas_obs, dallas_sep] )
+	_check( "moon/sun angular ratio ~1",
+		_approx( SolarEclipse.moon_to_sun_angular_ratio(), 0.95, 1.08 ) )
+	# Peak finder: Apr 8 2024 Dallas maximum within ~5 min of published ~18:40 UTC.
+	var peak := SolarEclipse.find_peak_at_observer( 32.78, -96.80,
+		SolarEclipse.calendar_jd_utc( 2024, 4, 8, 18.5 ), 5.0 )
+	var peak_obs := float( peak.get( "obscuration", 0.0 ) )
+	var peak_utc_h := float( SolarEclipse.jd_to_utc_calendar( float( peak.get( "jd_utc", 0.0 ) ) ).get( "day_time", 0.0 ) )
+	_check( "eclipse peak 2024-04-08 Dallas: near-total",
+		bool( peak.get( "is_total", false ) ) and peak_obs > 0.85,
+		"obs=%.2f utc=%.2fh" % [peak_obs, peak_utc_h] )
+	_check( "eclipse peak 2024-04-08 time ~18:40 UTC",
+		peak_utc_h > 18.2 and peak_utc_h < 19.0,
+		"utc=%.3fh" % peak_utc_h )
+	# Year scan finds the April 2024 event at Dallas.
+	var scan24 : Array = SolarEclipse.scan_year_at_observer( 32.78, -96.80, 2024, 0.5 )
+	var found_apr8 := false
+	for hit in scan24 :
+		if int( hit.get( "month", 0 ) ) == 4 and int( hit.get( "day", 0 ) ) == 8 :
+			found_apr8 = true
+			break
+	_check( "eclipse scan 2024 Dallas includes Apr 8", found_apr8, "hits=%d" % scan24.size() )

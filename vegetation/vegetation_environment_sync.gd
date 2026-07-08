@@ -29,6 +29,7 @@ var _bud := 0.0
 var _winter := 0.0
 var _summer := 1.0
 var _snow := 0.0
+var _snow_depth := 0.0
 var _grass_growth := 1.0
 var _t_autumn := 0.0
 var _t_leaf := 1.0
@@ -36,6 +37,7 @@ var _t_bud := 0.0
 var _t_winter := 0.0
 var _t_summer := 1.0
 var _t_snow := 0.0
+var _t_snow_depth := 0.0
 var _t_grass_growth := 1.0
 
 
@@ -141,14 +143,31 @@ func _process(delta: float) -> void:
 	if Engine.is_editor_hint():
 		return
 	# Smoothly approach seasonal targets every frame for pop-free transitions.
+	var snap_season := false
+	var tree := get_tree()
+	if tree != null:
+		var main: Node = tree.get_first_node_in_group("main_scene")
+		if main != null and main.has_method("has_climelapse_season_override"):
+			snap_season = bool(main.call("has_climelapse_season_override"))
 	var k := clampf(delta * 2.5, 0.0, 1.0)
-	_autumn = lerpf(_autumn, _t_autumn, k)
-	_leaf_coverage = lerpf(_leaf_coverage, _t_leaf, k)
-	_bud = lerpf(_bud, _t_bud, k)
-	_winter = lerpf(_winter, _t_winter, k)
-	_summer = lerpf(_summer, _t_summer, k)
-	_snow = lerpf(_snow, _t_snow, k)
-	_grass_growth = lerpf(_grass_growth, _t_grass_growth, k)
+	if snap_season:
+		_autumn = _t_autumn
+		_leaf_coverage = _t_leaf
+		_bud = _t_bud
+		_winter = _t_winter
+		_summer = _t_summer
+		_snow = _t_snow
+		_snow_depth = _t_snow_depth
+		_grass_growth = _t_grass_growth
+	else:
+		_autumn = lerpf(_autumn, _t_autumn, k)
+		_leaf_coverage = lerpf(_leaf_coverage, _t_leaf, k)
+		_bud = lerpf(_bud, _t_bud, k)
+		_winter = lerpf(_winter, _t_winter, k)
+		_summer = lerpf(_summer, _t_summer, k)
+		_snow = lerpf(_snow, _t_snow, k)
+		_snow_depth = lerpf(_snow_depth, _t_snow_depth, k)
+		_grass_growth = lerpf(_grass_growth, _t_grass_growth, k)
 	_accum += delta
 	if _accum < UPDATE_INTERVAL:
 		_push_uniforms()
@@ -181,6 +200,8 @@ func _poll_main() -> void:
 		_t_grass_growth = float(s.get("grass_growth", 1.0))
 	if main.has_method("get_snow_amount"):
 		_t_snow = clampf(float(main.call("get_snow_amount")), 0.0, 1.0)
+	if main.has_method("get_snow_depth_m"):
+		_t_snow_depth = clampf(float(main.call("get_snow_depth_m")), 0.0, SeasonModel.SNOW_DEPTH_MAX_M)
 
 
 func _push_uniforms() -> void:
@@ -201,6 +222,8 @@ func _push_uniforms() -> void:
 		sm.set_shader_parameter("spring_bud", _bud)
 		sm.set_shader_parameter("winter", _winter)
 		sm.set_shader_parameter("snow_amount", _snow)
+		sm.set_shader_parameter("snow_depth_m", _snow_depth)
+		sm.set_shader_parameter("summer", _summer)
 		i += 1
 
 	i = 0
@@ -211,9 +234,11 @@ func _push_uniforms() -> void:
 			continue
 		gm.set_shader_parameter("night_factor", _night_factor)
 		gm.set_shader_parameter("sun_direction", sun)
+		gm.set_shader_parameter("summer", _summer)
 		gm.set_shader_parameter("autumn", _autumn)
 		gm.set_shader_parameter("winter", _winter)
 		gm.set_shader_parameter("snow_amount", _snow)
+		gm.set_shader_parameter("snow_depth_m", _snow_depth)
 		gm.set_shader_parameter("growth", _grass_growth)
 		i += 1
 
@@ -224,4 +249,5 @@ func _push_uniforms() -> void:
 			_bark_materials.remove_at(i)
 			continue
 		bm.set_shader_parameter("snow_amount", _snow)
+		bm.set_shader_parameter("snow_depth_m", _snow_depth)
 		i += 1

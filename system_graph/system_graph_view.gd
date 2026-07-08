@@ -18,8 +18,8 @@ const C_TEXT_S   := UITheme.C_TEXT_S
 const C_TEXT_M   := UITheme.C_TEXT_M
 
 const TOPBAR_H    := 60.0
-## Bottom clearance — matches TimelineUI.BAR_HEIGHT so sidebars don't hide behind it.
-const TIMELINE_H  := 76.0
+## Fallback when TimelineUI is unavailable; prefer _timeline_bottom_inset().
+const TIMELINE_H  := 178.0
 ## Left: wide enough for embedded SolarUI (see solar_ui.tscn root width)
 const SIDEBAR_L_W := 340.0
 const SIDEBAR_R_W := 340.0
@@ -129,6 +129,7 @@ var _placeholder_btn: Button = null
 var _enter_btn: Button = null
 var _back_btn: Button = null
 var _scope_breadcrumb: Label = null
+var _soi_chip: Label = null
 
 ## Full-screen background rect — alpha driven by the transparency slider.
 var _bg_rect: ColorRect = null
@@ -317,6 +318,7 @@ func _deferred_restore_graph_autosave() -> void:
 	_try_restore_graph_autosave()
 	if _bridge != null and _bridge.has_method("setup") and is_instance_valid(_solar_ui):
 		_bridge.call("setup", model, _solar_ui)
+	call_deferred("_sync_solar_ui_from_graph")
 
 
 func has_user_graph_layout() -> bool:
@@ -402,6 +404,8 @@ func _build_layout() -> void:
 	# Connect library / inspector panel signals after they're in the tree
 	if _lib_panel != null and _lib_panel.has_signal("item_picked"):
 		_lib_panel.connect("item_picked", _on_lib_item_picked)
+	if _lib_panel != null and _lib_panel.has_signal("place_model_requested"):
+		_lib_panel.connect("place_model_requested", _on_lib_place_model_requested)
 
 	# Right collapse tab
 	_right_toggle = _make_collapse_tab("▶", _on_right_toggle,
@@ -453,13 +457,14 @@ func _on_canvas_layout_changed() -> void:
 func _apply_layout() -> void:
 	var left_w  := SIDEBAR_L_W if _sidebar_l_open else 0.0
 	var right_w := SIDEBAR_R_W if _sidebar_r_open else 0.0
+	var timeline_inset := _timeline_bottom_inset()
 
 	# Left sidebar — stop above the timeline bar so its items are never hidden
 	if _left_sidebar:
 		_left_sidebar.visible = _sidebar_l_open
 		_anchor(_left_sidebar,
 			0.0, 0.0, 0.0, 1.0,
-			0.0, TOPBAR_H, SIDEBAR_L_W, -TIMELINE_H)
+			0.0, TOPBAR_H, SIDEBAR_L_W, -timeline_inset)
 
 	# Left collapse tab: immediately right of sidebar's right edge
 	if _left_toggle:
@@ -473,7 +478,7 @@ func _apply_layout() -> void:
 		_right_sidebar.visible = _sidebar_r_open
 		_anchor(_right_sidebar,
 			1.0, 0.0, 1.0, 1.0,
-			-SIDEBAR_R_W, TOPBAR_H, 0.0, -TIMELINE_H)
+			-SIDEBAR_R_W, TOPBAR_H, 0.0, -timeline_inset)
 
 	# Right collapse tab: immediately left of sidebar's left edge
 	if _right_toggle:
@@ -484,7 +489,7 @@ func _apply_layout() -> void:
 
 	# Graph canvas fills the remaining space between sidebars, below topbar,
 	# above the timeline bar (and history panel, when visible).
-	var bottom_offset: float = TIMELINE_H
+	var bottom_offset: float = timeline_inset
 	if _history_panel != null and is_instance_valid(_history_panel) \
 			and _history_panel.visible:
 		bottom_offset += HISTORY_PANEL_H
@@ -607,6 +612,13 @@ func _build_topbar() -> Control:
 	_scope_breadcrumb.text               = "Root"
 	_scope_breadcrumb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	right_grp.add_child(_scope_breadcrumb)
+
+	_soi_chip = Label.new()
+	_soi_chip.add_theme_color_override("font_color", C_TEXT_S)
+	_soi_chip.add_theme_font_size_override("font_size", 12)
+	_soi_chip.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_soi_chip.text = "SoI: —"
+	right_grp.add_child(_soi_chip)
 
 	var sep2 := VSeparator.new()
 	sep2.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
@@ -1015,6 +1027,9 @@ func _build_right_sidebar() -> Control:
 	if _inspector_panel != null and _inspector_panel.has_method("set_placeholder_callback"):
 		_inspector_panel.call("set_placeholder_callback",
 			Callable(self, "_spawn_3d_placeholder_for_item"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_place_model_callback"):
+		_inspector_panel.call("set_place_model_callback",
+			Callable(self, "_place_model_for_item"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_controller_reset_callback"):
 		_inspector_panel.call("set_controller_reset_callback",
 			Callable(self, "reset_controller_from_inspector"))
@@ -1157,6 +1172,119 @@ func _on_lib_item_picked(preset: Dictionary, screen_pos: Vector2) -> void:
 		]
 
 
+## "Place Model" pressed on a 3D-linked library preset (e.g. the VAWT). Closes
+## the graph and starts a ghost placement of the linked GLB. When the player
+## confirms the spot, PlacedPropService calls create_bound_generator_node() to
+## spawn this preset's 2D node, bound to the placed prop (see wind_turbine_spin.gd).
+func _on_lib_place_model_requested(preset: Dictionary) -> void:
+	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+	var model_id := str(specs.get("model_id", ""))
+	if model_id.is_empty():
+		return
+	var main := _get_scene_main_node()
+	if main == null:
+		return
+	# Carry everything PlacedPropService needs to (a) tag the placed prop for the
+	# spin animation and (b) create + bind the 2D node once the player confirms.
+	var prep := {
+		"ok": true,
+		"model_id": model_id,
+		"graph_link": {
+			"node_type": str(preset.get("type", "wind")),
+			"label": str(preset.get("label", "Wind Turbine")),
+			"icon": str(preset.get("icon", "🌀")),
+			"width": float(preset.get("width", 124.0)),
+			"height": float(preset.get("height", 112.0)),
+			"specs": specs,
+		},
+		"record_extra": {
+			"kind": "vawt",
+			"turbine_node": str(specs.get("turbine_node",
+				ModelCatalog.find(model_id).get("turbine_node", ""))),
+			"wind_specs": specs,
+		},
+	}
+	var r: Dictionary = PlacedPropService.begin_placement(main, model_id, prep)
+	if not bool(r.get("ok", false)):
+		_show_toast("Could not start placement")
+		return
+	# Close the graph so the player can aim + click in the 3D world, restoring the
+	# gameplay/survival state the graph paused on open.
+	visible = false
+	_apply_mouse_for_graph(false)
+	if main.get("gameplay_mechanics_paused") != null:
+		main.gameplay_mechanics_paused = _gameplay_paused_before_graph
+	var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
+	if gr != null:
+		gr.set_survival_paused(_gameplay_paused_before_graph)
+	# Hand the per-frame aim/confirm loop to the placed-props UI (same path the
+	# building-builder library uses).
+	var loader := _find_terrain_loader(main)
+	if loader != null and loader.has_method("notify_external_placement_started"):
+		loader.call("notify_external_placement_started", r)
+	else:
+		var ppui := main.get_node_or_null("UILayer/PlacedPropsUI")
+		if ppui != null and ppui.has_method("notify_bundle_imported"):
+			ppui.call("notify_bundle_imported", r)
+
+
+func _find_terrain_loader(main: Node) -> Node:
+	if main == null:
+		return null
+	return main.find_child("TerrainLoader", true, false)
+
+
+## Create a graph node for a placed 3D generator and bind it to the prop. Called
+## by PlacedPropService.confirm_placement() once the player commits a spot.
+## Returns the new node's item id (or "" on failure).
+func create_bound_generator_node(prop_id: String, graph_link: Dictionary) -> String:
+	if model == null or graph_link.is_empty():
+		return ""
+	var specs: Dictionary = (graph_link.get("specs", {}) as Dictionary).duplicate(true)
+	specs["bound_prop_id"] = prop_id
+	var item_id: String = model.generate_item_id()
+	# Spawn near the canvas centre in graph space so it's visible when reopened.
+	var gc := _graph_canvas as Control
+	var graph_pos := Vector2(randf_range(-80.0, 80.0), randf_range(-60.0, 60.0))
+	if gc != null and model != null:
+		var items: Array = model.get_items_in_scope(_active_scope_id)
+		graph_pos = _GRAPH_LAYOUT_SCRIPT.nudge_spawn_position(
+			graph_pos, Vector2(float(graph_link.get("width", 124.0)),
+				float(graph_link.get("height", 112.0))), items)
+	model.add_item({
+		"id": item_id,
+		"type": str(graph_link.get("node_type", "wind")),
+		"x": graph_pos.x,
+		"y": graph_pos.y,
+		"width": float(graph_link.get("width", 124.0)),
+		"height": float(graph_link.get("height", 112.0)),
+		"scope_id": _active_scope_id,
+		"specs": specs,
+		"is_virtual": false,
+	})
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+	_show_toast("%s linked to placed turbine" % str(graph_link.get("label", "Turbine")))
+	return item_id
+
+
+## Called when the current world time changes for a placed generator's bound
+## node — used by WindTurbineSpin to keep the 2D node's output in sync even
+## while the graph is closed. Safe no-op if the node is gone.
+func refresh_bound_generator_output(item_id: String, kw: float) -> void:
+	if model == null or item_id.is_empty():
+		return
+	var it := model.get_item(item_id)
+	if it.is_empty():
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	if absf(float(specs.get("current_output_kw", 0.0)) - kw) < 0.0005:
+		return
+	specs["current_output_kw"] = kw
+	model.update_item(item_id, {"specs": specs})
+
+
 ## Called when the in-progress library drag ends (LMB released).
 func _end_lib_drag(screen_pos: Vector2) -> void:
 	if _lib_drag_active and _graph_canvas != null:
@@ -1295,6 +1423,22 @@ func add_imported_solar_panels(count: int, watts: float, label: String = "OSM So
 	_flush_graph_autosave()
 	print("SystemGraphView: imported %d solar panel node(s) @ %.0f W (label '%s', tag '%s', source count %d)" % [
 		n, watts, label, array_tag, count])
+	_sync_solar_ui_from_graph()
+
+
+func has_starshade_graph_content() -> bool:
+	return StarShadeGraphSeeder.has_graph_content(model)
+
+
+## Idempotent: adds real (non-virtual) panels + EcoWorthy controller + 2×48V 50Ah bank.
+func seed_starshade_system(panel_count: int, panel_watts: float, tag: String = "starshade_site") -> bool:
+	if model == null:
+		return false
+	if not StarShadeGraphSeeder.seed_graph(model, panel_count, panel_watts, tag):
+		return false
+	_schedule_graph_autosave()
+	_sync_solar_ui_from_graph()
+	return true
 
 
 const _GHOST_CONTAINER_OFFSET_X := 160.0
@@ -1498,25 +1642,24 @@ func _on_load_pressed() -> void:
 func _on_reset_graph() -> void:
 	if model == null:
 		return
-	# Suppress per-item change events; we record one snapshot for the whole reset
 	_history_suppress = true
-	var ids: Array = []
 	for item: Dictionary in model.items:
-		if not bool(item.get("is_virtual", false)):
-			ids.append(item.get("id", "") as String)
-			if _inspector_panel != null and _inspector_panel.has_method("unregister_item_automations"):
-				_inspector_panel.call("unregister_item_automations", item)
-	for id: String in ids:
-		model.remove_item(id)
-	# Connections touching removed items were cascade-deleted;
-	# clear any orphans that remain.
+		var iid := str(item.get("id", ""))
+		if _inspector_panel != null and _inspector_panel.has_method("unregister_item_automations"):
+			_inspector_panel.call("unregister_item_automations", item)
+		if bool(item.get("is_virtual", false)):
+			_suppress_virtual(iid)
+		model.remove_item(iid)
 	for i in range(model.connections.size() - 1, -1, -1):
 		model.connections.remove_at(i)
+	_suppressed_virtuals = GraphVirtualIds.merge_suppression(_suppressed_virtuals)
+	if _bridge != null:
+		_bridge.suppressed_ids = _suppressed_virtuals
 	_active_scope_id = "root"
 	_scope_trail = ["root"]
 	_selected_item_ids.clear()
 	_history_suppress = false
-	model.changed.emit("reset")   # triggers _on_model_changed → _push_history
+	model.changed.emit("reset")
 	_apply_scope_to_canvas()
 	_show_toast("Graph reset")
 
@@ -2568,11 +2711,13 @@ func _delete_selected() -> void:
 
 func _suppress_virtual(id: String) -> void:
 	_suppressed_virtuals[id] = true
-	# When a virtual consumer node is removed, also suppress its auto AC wire
-	# so solar_bridge does not re-draw the vconn_ac_<id> connection.
+	if id.begins_with("virtual_panel_"):
+		_suppressed_virtuals[GraphVirtualIds.V_PANEL_ID] = true
 	if id.begins_with("virtual_device_") or id.begins_with("virtual_load_") \
 			or id == "virtual_baseline":
 		_suppressed_virtuals["vconn_ac_%s" % id] = true
+	if id.begins_with("vconn_"):
+		_suppressed_virtuals[id] = true
 	if _bridge != null:
 		_bridge.suppressed_ids = _suppressed_virtuals
 
@@ -2756,6 +2901,10 @@ func _process(delta: float) -> void:
 	if _bridge != null:
 		_bridge.call("tick", delta)
 	_tick_graph_renewables(delta)
+	_energy_sync_acc += delta
+	if _energy_sync_acc >= _ENERGY_SYNC_INTERVAL:
+		_energy_sync_acc = 0.0
+		_sync_graph_energy_from_solar()
 	if _resource_flow != null:
 		_resource_flow.call("tick", delta)
 	_history_suppress = false
@@ -2981,6 +3130,34 @@ func _on_spawn_3d_placeholder_pressed() -> void:
 	_spawn_3d_placeholder_for_item(item_id)
 
 
+## "Place in 3D" pressed in the inspector for a model-linked node (e.g. VAWT).
+## Reconstructs the preset dict from the item's own specs and delegates to the
+## same ghost-placement path used by the library-panel Place button.
+func _place_model_for_item(item_id: String) -> void:
+	if model == null or item_id.is_empty():
+		_show_toast("Select a graph node first")
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var model_id := str(specs.get("model_id", ""))
+	if model_id.is_empty():
+		_show_toast("This node has no linked 3D model")
+		return
+	# Build a minimal preset dict identical to what the library emits, then reuse
+	# the same placement handler so both paths stay consistent.
+	var preset := {
+		"type": str(item.get("type", "wind")),
+		"label": str(specs.get("name", item.get("type", "Turbine"))),
+		"icon": "🌀",
+		"width": float(item.get("width", 124.0)),
+		"height": float(item.get("height", 112.0)),
+		"specs": specs,
+	}
+	_on_lib_place_model_requested(preset)
+
+
 func _start_conduit_route(conn_id: String) -> void:
 	if model == null:
 		return
@@ -3085,6 +3262,21 @@ func _scene_device_path_on_graph(path_str: String) -> bool:
 	return false
 
 
+func _is_graph_proxy_consumer(consumer: Node) -> bool:
+	if consumer == null:
+		return true
+	if consumer.get_script() != null:
+		var scr := str(consumer.get_script().resource_path)
+		if scr.ends_with("graph_sim_load.gd"):
+			return true
+	var p := consumer.get_parent()
+	while p != null:
+		if str(p.name) == "GraphSimLoadHost" or str(p.name) == "SystemGraphView":
+			return true
+		p = p.get_parent()
+	return str(consumer.name).begins_with("SimLoad_")
+
+
 ## Build the "In Model" library shelf: scene power_consumers not yet on the graph.
 func _populate_library_scene_devices() -> void:
 	if _lib_panel == null:
@@ -3103,6 +3295,8 @@ func _populate_library_scene_devices() -> void:
 	var presets: Array = []
 	for consumer: Node in consumers:
 		if consumer == null or not is_instance_valid(consumer):
+			continue
+		if _is_graph_proxy_consumer(consumer):
 			continue
 		if consumer.has_meta("graph_sim_load") and bool(consumer.get_meta("graph_sim_load")):
 			continue
@@ -3124,6 +3318,10 @@ func _populate_library_scene_devices() -> void:
 				max_w = float(consumer.get("wattage"))
 			if consumer.has_method("get_current_power"):
 				avg_w = float(consumer.call("get_current_power"))
+		if nm.strip_edges().is_empty():
+			nm = path_str.get_file()
+		if nm.begins_with("SimLoad_") or nm.begins_with("@"):
+			continue
 		presets.append({
 			"type":   "appliance",
 			"label":  nm,
@@ -3428,8 +3626,27 @@ func _layout_history_panel() -> void:
 		return
 	var left_w  := SIDEBAR_L_W if _sidebar_l_open else 0.0
 	var right_w := SIDEBAR_R_W if _sidebar_r_open else 0.0
+	var timeline_inset := _timeline_bottom_inset()
 	_anchor(_history_panel, 0.0, 1.0, 1.0, 1.0,
-		left_w, -(TIMELINE_H + HISTORY_PANEL_H), -right_w, -TIMELINE_H)
+		left_w, -(timeline_inset + HISTORY_PANEL_H), -right_w, -timeline_inset)
+
+
+func _timeline_bottom_inset() -> float:
+	var ul := get_parent()
+	if ul != null:
+		var tl := ul.get_node_or_null("TimelineUI")
+		if tl != null and tl.has_method("get_stack_height"):
+			return float(tl.call("get_stack_height"))
+	return UiScreenLayout.timeline_stack_height()
+
+
+func _set_graph_companion_ui_visible(graph_open: bool) -> void:
+	var ul := get_parent()
+	if ul == null:
+		return
+	var terrain_opts := ul.get_node_or_null("TerrainOptionsUI")
+	if terrain_opts is CanvasItem:
+		(terrain_opts as CanvasItem).visible = not graph_open
 
 
 func _on_history_state_changed(s: int) -> void:
@@ -3527,28 +3744,11 @@ func _on_history_slider_value_changed(_v: float) -> void:
 # ---------------------------------------------------------------------------
 
 func _apply_mouse_for_graph(graph_open: bool) -> void:
-	var parent := get_parent()
-	if parent == null:
-		return
-	var main_node := parent.get_parent() as Node3D
-	if main_node == null:
-		return
-	var player := main_node.get_node_or_null("Player")
-	if player == null:
-		return
-
+	_set_graph_companion_ui_visible(graph_open)
 	if graph_open:
-		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-		if "is_mouse_captured" in player:
-			player.is_mouse_captured = false
-		return
-
-	if _other_ui_needs_free_mouse():
-		return
-
-	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
-	if "is_mouse_captured" in player:
-		player.is_mouse_captured = true
+		CursorController.request_modal("system_graph")
+	else:
+		CursorController.release_modal("system_graph")
 
 
 func _other_ui_needs_free_mouse() -> bool:
@@ -3578,6 +3778,7 @@ func _on_model_changed(reason: String) -> void:
 	if _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
 	_refresh_telemetry()
+	_sync_solar_ui_from_graph()
 	_sync_graph_controller_ac_fault()
 	if reason in ["add_connection", "remove_connection", "update_connection"]:
 		call_deferred("_check_pv_voltage_faults")
@@ -3772,6 +3973,15 @@ func _refresh_telemetry() -> void:
 	_set_score("costWires",       "$%.2f" % cost_wires)
 	_set_score("costTotal",       "$%.2f" % cost_total)
 
+	var soi_svc := get_node_or_null("/root/SoiService")
+	if _soi_chip != null:
+		if soi_svc != null and soi_svc.has_method("radius_m"):
+			var r: float = soi_svc.radius_m()
+			var km2: float = soi_svc.area_m2() / 1_000_000.0
+			_soi_chip.text = "SoI: %d m · %.2f km²" % [int(round(r)), km2]
+		else:
+			_soi_chip.text = "SoI: —"
+
 
 func _set_score(key: String, value: String) -> void:
 	if _score_labels.has(key):
@@ -3813,6 +4023,117 @@ func _collect_root_array_aggregate() -> Dictionary:
 		"panel_count": panel_count,
 		"array_config": cfg,
 	}
+
+
+func _collect_battery_aggregate() -> Dictionary:
+	var bat_kwh: float = 0.0
+	var bat_count: int = 0
+	if model == null:
+		return {"total_kwh": 0.0, "count": 0}
+	for item: Dictionary in model.get_items_in_scope("root"):
+		if bool(item.get("is_virtual", false)):
+			continue
+		var itype := str(item.get("type", ""))
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		match itype:
+			"battery", "smartbattery":
+				bat_kwh += float(specs.get("kwh", 0.0))
+				bat_count += 1
+			"compound":
+				if str(specs.get("compound_kind", "")) == "battery_bank":
+					bat_kwh += float(specs.get("bank_total_kwh", specs.get("kwh", 0.0)))
+					bat_count += int(specs.get("child_count", 1))
+	return {"total_kwh": bat_kwh, "count": bat_count}
+
+
+func _average_graph_battery_soc() -> float:
+	if model == null:
+		return -1.0
+	var weighted := 0.0
+	var total_kwh := 0.0
+	for item: Dictionary in model.get_items_in_scope("root"):
+		if bool(item.get("is_virtual", false)):
+			continue
+		var itype := str(item.get("type", ""))
+		if itype not in ["battery", "smartbattery"]:
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		var kwh := float(specs.get("kwh", 0.0))
+		if kwh <= 0.0:
+			continue
+		weighted += kwh * clampf(float(specs.get("soc", 0.5)), 0.0, 1.0)
+		total_kwh += kwh
+	if total_kwh <= 0.0:
+		return -1.0
+	return weighted / total_kwh
+
+
+## Keep graph panel output + battery SOC aligned with the canonical SolarUI bank.
+func _sync_graph_energy_from_solar() -> void:
+	if model == null or _solar_ui == null or not is_instance_valid(_solar_ui):
+		return
+	var solar_kw := maxf(0.0, float(_solar_ui.get("current_solar_kw") if _solar_ui.get("current_solar_kw") != null else 0.0))
+	var cap := maxf(0.0, float(_solar_ui.get("BATTERY_CAPACITY_KWH") if _solar_ui.get("BATTERY_CAPACITY_KWH") != null else 0.0))
+	var stored := maxf(0.0, float(_solar_ui.get("battery_kwh_stored") if _solar_ui.get("battery_kwh_stored") != null else 0.0))
+	var bank_soc := clampf(stored / cap, 0.0, 1.0) if cap > 0.0 else 0.0
+
+	var panel_items: Array[Dictionary] = []
+	var total_wmp := 0.0
+	for item: Dictionary in model.get_items_in_scope("root"):
+		if bool(item.get("is_virtual", false)):
+			continue
+		if str(item.get("type", "")) != "panel":
+			continue
+		panel_items.append(item)
+		total_wmp += float((item.get("specs", {}) as Dictionary).get("wmp", 0.0))
+
+	if not panel_items.is_empty():
+		var per_kw := solar_kw / float(panel_items.size()) if total_wmp <= 0.0 else 0.0
+		for item: Dictionary in panel_items:
+			var iid: String = str(item.get("id", ""))
+			var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+			var share := per_kw
+			if total_wmp > 0.0:
+				share = solar_kw * float(specs.get("wmp", 0.0)) / total_wmp
+			if absf(float(specs.get("current_output_kw", 0.0)) - share) < 0.0005:
+				continue
+			specs["current_output_kw"] = share
+			model.update_item(iid, {"specs": specs})
+
+	for item: Dictionary in model.get_items_in_scope("root"):
+		if bool(item.get("is_virtual", false)):
+			continue
+		var itype := str(item.get("type", ""))
+		if itype not in ["battery", "smartbattery"]:
+			continue
+		var iid: String = str(item.get("id", ""))
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		if absf(float(specs.get("soc", -1.0)) - bank_soc) < 0.0005:
+			continue
+		specs["soc"] = bank_soc
+		model.update_item(iid, {"specs": specs})
+
+
+func _sync_solar_ui_from_graph() -> void:
+	if _solar_ui == null or not is_instance_valid(_solar_ui):
+		return
+	var agg := _collect_root_array_aggregate()
+	var bat := _collect_battery_aggregate()
+	var panel_count := int(agg.get("panel_count", 0))
+	var panel_wmp := float(agg.get("panel_wmp", 0.0))
+	var avg_watts := panel_wmp / float(panel_count) if panel_count > 0 else 220.0
+	var bank_soc := _average_graph_battery_soc()
+	if _solar_ui.has_method("apply_from_graph"):
+		_solar_ui.call("apply_from_graph", {
+			"panel_count": panel_count,
+			"panel_watts": avg_watts,
+			"peak_kw": panel_wmp / 1000.0,
+			"battery_kwh": float(bat.get("total_kwh", 0.0)),
+			"battery_soc": bank_soc,
+		})
+	if _solar_ui.has_method("set_graph_has_solar"):
+		_solar_ui.call("set_graph_has_solar", panel_count > 0)
+	_sync_graph_energy_from_solar()
 
 
 
@@ -3857,10 +4178,12 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 
 	# Restore graph model (suppress history — a fresh baseline is pushed below)
 	_history_suppress = true
+	var legacy_stripped := false
 	var graph_d: Variant = data.get("graph", {})
 	if graph_d is Dictionary and not (graph_d as Dictionary).is_empty():
 		if model != null:
 			model.deserialize(graph_d as Dictionary)
+			legacy_stripped = GraphVirtualIds.strip_legacy_virtual_solar(model)
 	if preserve_positions and not position_backup.is_empty():
 		for iid: String in position_backup.keys():
 			if model.get_item(iid).is_empty():
@@ -3895,6 +4218,8 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 	# Restore user-deleted virtual IDs so bridge does not re-create them.
 	var sv: Variant = data.get("suppressed_virtuals", {})
 	_suppressed_virtuals = sv as Dictionary if sv is Dictionary else {}
+	if legacy_stripped:
+		_suppressed_virtuals = GraphVirtualIds.merge_suppression(_suppressed_virtuals)
 	if _bridge != null:
 		_bridge.suppressed_ids = _suppressed_virtuals
 
@@ -3929,6 +4254,7 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 		_graph_canvas.call("queue_redraw")
 
 	_refresh_telemetry()
+	_sync_solar_ui_from_graph()
 	_update_scope_breadcrumb()
 	call_deferred("_post_restore_layout_fixup")
 
@@ -3968,6 +4294,8 @@ func _hspacer() -> Control:
 
 const _RENEWABLES_POLL_INTERVAL := 0.25  # matches SolarBridge cadence
 var _renewables_acc: float = _RENEWABLES_POLL_INTERVAL
+const _ENERGY_SYNC_INTERVAL := 0.25
+var _energy_sync_acc: float = 0.0
 
 
 ## Recompute current_output_kw for user-placed "wind" and "hydro" items from

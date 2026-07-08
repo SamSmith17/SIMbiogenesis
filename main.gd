@@ -300,7 +300,7 @@ var gameplay_mechanics_paused : bool = true   # Off by default; TimeUI toggle ca
 		_apply_graphics_quality()
 
 ## Moon apparent size in the sky
-@export_range( 0.01, 0.2, 0.005 ) var moon_size : float = 0.05 :
+@export_range( 0.01, 0.2, 0.005 ) var moon_size : float = 0.148 :
 	set( value ) :
 		moon_size = value
 		_update_celestial_sizes()
@@ -703,8 +703,31 @@ func _set_map_context_from_save( data: Dictionary ) -> void :
 	var slat : float = float( d.get( "latitude", latitude ) )
 	var slon : float = float( d.get( "longitude", longitude ) )
 	var half : float = float( data.get( "half_extent_m", 0.0 ) )
+	var detail_half : float = float( data.get( "detail_half_extent_m", 0.0 ) )
+	var osm_half : float = float( data.get( "osm_half_extent_m", 0.0 ) )
 	var label : String = str( data.get( "map_display_name", "" ) )
-	ctx.set_pending( slat, slon, label, half, true )
+	ctx.set_pending( slat, slon, label, half, true, detail_half, osm_half )
+
+
+func _terrain_half_extent_for_save() -> float:
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader != null and loader.has_method( "get_terrain_extents" ):
+		return float( loader.call( "get_terrain_extents" ).get( "half_extent_m", 0.0 ) )
+	return 0.0
+
+
+func _terrain_detail_half_extent_for_save() -> float:
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader != null and loader.has_method( "get_terrain_extents" ):
+		return float( loader.call( "get_terrain_extents" ).get( "detail_half_extent_m", 0.0 ) )
+	return 0.0
+
+
+func _terrain_osm_half_extent_for_save() -> float:
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader != null and loader.has_method( "get_terrain_extents" ):
+		return float( loader.call( "get_terrain_extents" ).get( "osm_half_extent_m", 0.0 ) )
+	return 0.0
 
 
 func _apply_scenario_rules() -> void :
@@ -1001,6 +1024,10 @@ func build_save_snapshot() -> Dictionary :
 	var sg_view : Node = get_node_or_null( "UILayer/SystemGraphView" )
 	if sg_view != null and sg_view.has_method( "collect_save_state" ) :
 		system_graph_state = sg_view.collect_save_state()
+	var soi_state : Dictionary = {}
+	var soi_svc := get_node_or_null( "/root/SoiService" )
+	if soi_svc != null and soi_svc.has_method( "collect_save_state" ) :
+		soi_state = soi_svc.collect_save_state()
 	var rules_save : Dictionary = {}
 	var gr_save := GameplayRulesImpl.from_node( self )
 	if gr_save != null :
@@ -1010,12 +1037,16 @@ func build_save_snapshot() -> Dictionary :
 		"created_at_unix": Time.get_unix_time_from_system(),
 		"playtime_seconds": _session_playtime_seconds,
 		"scene_path": MapDefinition.snapshot_scene_path( self ),
+		"half_extent_m": _terrain_half_extent_for_save(),
+		"detail_half_extent_m": _terrain_detail_half_extent_for_save(),
+		"osm_half_extent_m": _terrain_osm_half_extent_for_save(),
 		"main": main_state,
 		"player": player_state,
 		"health": health_state,
 		"solar": solar_state,
 		"mars_credits": mars_credits_state,
 		"system_graph": system_graph_state,
+		"soi": soi_state,
 		"gameplay_rules": rules_save,
 	}
 
@@ -1064,6 +1095,10 @@ func _apply_save_snapshot( data: Dictionary ) -> bool :
 	var sg_view : Node = get_node_or_null( "UILayer/SystemGraphView" )
 	if sg_view != null and sg_d is Dictionary and sg_view.has_method( "apply_save_state" ) :
 		sg_view.apply_save_state( sg_d )
+	var soi_d: Variant = data.get( "soi", {} )
+	var soi_svc := get_node_or_null( "/root/SoiService" )
+	if soi_svc != null and soi_d is Dictionary and soi_svc.has_method( "apply_save_state" ) :
+		soi_svc.apply_save_state( soi_d )
 	if is_instance_valid( player ) :
 		if player.is_riding and player.has_method( "_dismount_vehicle" ) :
 			player._dismount_vehicle()
@@ -1302,6 +1337,27 @@ func set_god_rays_enabled( on: bool ) -> void :
 
 func get_god_rays_enabled() -> bool :
 	return god_rays_enabled
+
+func set_plant_growth_enabled( on: bool ) -> void :
+	plant_growth_enabled = on
+
+func get_plant_growth_enabled() -> bool :
+	return plant_growth_enabled
+
+func set_analemma_diurnal_offset_min_per_day( minutes: float ) -> void :
+	analemma_diurnal_offset_min_per_day = clampf( minutes, 0.0, 180.0 )
+	if analemma_mode and not _analemma_using_trail :
+		_build_analemma_preview_mesh()
+
+func get_analemma_diurnal_offset_min_per_day() -> float :
+	return analemma_diurnal_offset_min_per_day
+
+## Mean solar hour (0..24) sampled on analemma day `day_index` (0 = first step).
+func analemma_mean_solar_hours_for_day( day_index: int ) -> float :
+	if is_zero_approx( analemma_diurnal_offset_min_per_day ) :
+		return 12.0
+	var offset_h : float = float( day_index ) * analemma_diurnal_offset_min_per_day / 60.0
+	return fmod( 12.0 + offset_h, 24.0 )
 
 # ---- Camera field of view (player + FPV drone share one Camera3D) ----
 
@@ -1742,7 +1798,18 @@ var _vegetation_sun_direction : Vector3 = Vector3.UP
 var _season_signals : Dictionary = {
 	"leaf_coverage": 1.0, "autumn": 0.0, "bud": 0.0, "summer": 1.0, "winter": 0.0
 }
+var _climelapse_season_override : Dictionary = {}
+var _solar_eclipse : Dictionary = {}
 var _snow_amount : float = 0.0
+var _snow_depth_m : float = 0.0
+var _water_flow : Dictionary = {
+	"width_scale": 1.0,
+	"level_m": 0.0,
+	"speed_scale": 1.0,
+	"churn": 1.0,
+	"water_alpha": 0.88,
+	"hydro": 0.0,
+}
 var _weather_service_node : Node = null
 ## When true, _process discrete-steps one day per frame to its mean solar noon,
 ## tracing the analemma and advancing across successive years (set by TimelineUI's
@@ -1753,6 +1820,27 @@ var analemma_mode : bool = false :
 		analemma_mode = value
 		if value != was :
 			_on_analemma_mode_changed( value )
+		if not value :
+			analemma_days_per_frame = 1
+
+## Calendar days advanced per frame while analemma_mode is active (1 = ∞, 2 = ∞×2).
+var analemma_days_per_frame : int = 1 :
+	set( value ) :
+		analemma_days_per_frame = clampi( value, 1, 7 )
+
+## Live vegetation growth (scale + reseed). Off = skip per-frame growth work (faster ∞ / analemma).
+var plant_growth_enabled : bool = true
+
+## Minutes added to mean solar noon each ∞ / analemma day (0 = fixed noon figure-eight).
+var analemma_diurnal_offset_min_per_day : float = 0.0
+
+## Dynamic white sun-trail built during ∞ playback (corkscrew when offset ≠ 0).
+var _analemma_trail : PackedVector3Array = PackedVector3Array()
+var _analemma_session_day_index : int = 0
+var _analemma_using_trail : bool = false
+var _analemma_path_mat : StandardMaterial3D = null
+var _analemma_path_offset_cached : float = INF
+const ANALEMMA_TRAIL_MAX_POINTS : int = 5000
 
 ## Earliest year the ∞ analemma view cycles back to before wrapping — the start
 ## of the Open-Meteo ERA5 archive, so every pass down to 1940 still lands on a
@@ -1802,6 +1890,7 @@ func _process( delta: float ) -> void :
 			_update()
 
 func _update() -> void :
+	_solar_eclipse = clock.sample_solar_eclipse()
 	_update_sun()
 	_update_moon()
 	_update_planets()
@@ -1873,7 +1962,18 @@ func _update_sun() -> void :
 	# Final clamp at the GPU boundary: a non-finite light_energy hard-hangs the
 	# Vulkan renderer (full-desktop "shattered glass" + reboot), so never let one through.
 	var sun_e : float = horizon_fade * high_sun_boost * sun_base_enegry * weather_light_factor * _compute_cloud_shadow_factor()
+	sun_e *= _eclipse_sun_transmission()
 	sun.light_energy = clampf(sun_e, 0.0, 64.0) if is_finite(sun_e) else 0.0
+
+
+## Direct sunlight retained during eclipse (corona sliver at totality).
+func _eclipse_sun_transmission() -> float :
+	var obs := float( _solar_eclipse.get( "obscuration", 0.0 ) )
+	if obs <= 0.001 :
+		return 1.0
+	if bool( _solar_eclipse.get( "is_total", false ) ) :
+		return 0.03
+	return clampf( 1.0 - obs * 0.96, 0.04, 1.0 )
 
 ## Global direct-sun attenuation that drifts with the visible clouds, giving the
 ## "sun ducked behind a cloud" dimming on partly-cloudy days. Returns 1.0 (no
@@ -2092,10 +2192,17 @@ func _update_celestial_sizes() -> void :
 		environment.environment.sky.sky_material.set_shader_parameter( "sun_glow", sun_glow )
 		environment.environment.sky.sky_material.set_shader_parameter( "sun_glow_size", sun_glow_size )
 		environment.environment.sky.sky_material.set_shader_parameter( "sun_aureole", sun_aureole )
+		var obs := float( _solar_eclipse.get( "obscuration", 0.0 ) )
+		environment.environment.sky.sky_material.set_shader_parameter( "eclipse_obscuration", obs )
+		var tot := 1.0 if bool( _solar_eclipse.get( "is_total", false ) ) else 0.0
+		environment.environment.sky.sky_material.set_shader_parameter( "eclipse_totality", tot )
 
 func _update_environment() -> void :
 	if not is_instance_valid( environment ) or not is_instance_valid( sun ) :
 		return
+
+	var eclipse_obs := float( _solar_eclipse.get( "obscuration", 0.0 ) )
+	var eclipse_total := bool( _solar_eclipse.get( "is_total", false ) )
 	
 	# Get sun direction to determine day/night
 	var sun_direction = sun.to_global( Vector3( 0.0, 0.0, 1.0 ) ).normalized()
@@ -2104,6 +2211,10 @@ func _update_environment() -> void :
 	# Calculate night amount (0 = full day, 1 = full night)
 	var night_amount : float = clamp( -sun_height + 0.1, 0.0, 1.0 )
 	night_amount = smoothstep( 0.0, 0.5, night_amount )
+	# Totality / deep partial eclipse: daylight collapses even with the sun above the horizon.
+	if sun_height > 0.0 and eclipse_obs > 0.05 :
+		var eclipse_night := eclipse_obs * ( 0.92 if eclipse_total else 0.55 )
+		night_amount = maxf( night_amount, eclipse_night )
 	_vegetation_night_factor = night_amount
 	if sun_direction.length_squared() > 1e-6 :
 		_vegetation_sun_direction = sun_direction.normalized()
@@ -2200,7 +2311,10 @@ func _update_environment() -> void :
 	# Dynamic ambient light - brighter during day, dimmer at night but with moon contribution
 	var day_ambient : float = 0.3
 	var night_ambient : float = 0.003 + moon_ambient_contribution
-	environment.environment.ambient_light_energy = lerpf( day_ambient, night_ambient, night_amount ) * ambient_energy_mult
+	var ambient := lerpf( day_ambient, night_ambient, night_amount ) * ambient_energy_mult
+	if eclipse_obs > 0.05 and sun_height > 0.0 :
+		ambient *= lerpf( 1.0, 0.04 if eclipse_total else 0.18, eclipse_obs )
+	environment.environment.ambient_light_energy = ambient
 
 	_update_glow( night_amount )
 	
@@ -2284,21 +2398,51 @@ func _update_seasonal() -> void :
 	_season_signals = SeasonModel.season_signals( day_of_year, lat )
 	if _weather_service_node == null or not is_instance_valid( _weather_service_node ) :
 		_weather_service_node = get_node_or_null( "/root/WeatherService" )
+	_snow_depth_m = SeasonModel.estimate_snow_depth_m(
+		_weather_service_node, month, day, day_time, lat
+	)
 	_snow_amount = SeasonModel.estimate_snow_cover(
 		_weather_service_node, month, day, day_time, lat
+	)
+	_water_flow = WaterFlowModel.compute(
+		_weather_service_node, month, day, day_time, _snow_depth_m
 	)
 
 
 ## Seasonal phenology signals (leaf_coverage/autumn/bud/summer/winter), read by
 ## VegetationEnvironmentSync. Cached in _update_environment().
 func get_season_signals() -> Dictionary :
+	if not _climelapse_season_override.is_empty() :
+		return _climelapse_season_override
 	return _season_signals
+
+
+func set_climelapse_season_override( sig: Dictionary ) -> void :
+	_climelapse_season_override = sig.duplicate( true )
+
+
+func clear_climelapse_season_override() -> void :
+	_climelapse_season_override = {}
+
+
+func has_climelapse_season_override() -> bool :
+	return not _climelapse_season_override.is_empty()
 
 
 ## Weather-driven ground snow cover, 0..1. Read by VegetationEnvironmentSync and
 ## TerrainLoader to drive snow shaders.
 func get_snow_amount() -> float :
 	return _snow_amount
+
+
+## Modelled snowpack depth on the ground in metres (Open-Meteo or degree-day fallback).
+func get_snow_depth_m() -> float :
+	return _snow_depth_m
+
+
+## Weather-driven water-flow visuals (width/level/speed/churn/alpha).
+func get_water_flow() -> Dictionary :
+	return _water_flow
 
 
 ## Advance one calendar day and snap to that day's MEAN solar noon. The sun
@@ -2315,31 +2459,87 @@ func get_snow_amount() -> float :
 ## noon instead pins the hour angle to 0 and collapses the analemma to a vertical
 ## line — the bug this replaces.
 func _step_analemma() -> void :
+	for _day in analemma_days_per_frame :
+		if not _advance_analemma_one_day() :
+			break
+	# Rebuild preview if the observer moved; trail playback owns the mesh otherwise.
+	if not _analemma_using_trail :
+		if not is_equal_approx( _analemma_path_lat, clock.latitude ) \
+				or not is_equal_approx( _analemma_path_lon, clock.longitude ) \
+				or not is_equal_approx( _analemma_path_offset_cached, analemma_diurnal_offset_min_per_day ) :
+			_build_analemma_preview_mesh()
+	_position_analemma_path()
+
+
+## Advance one calendar day. Returns false when climelapse playback reached its
+## Out point and motion should stop (analemma + playback are cleared).
+func _advance_analemma_one_day() -> bool :
+	var clim_rng := _climelapse_playback_range()
+	var clim_play := not is_nan( clim_rng.x )
 	var start_year : int = clock.year
 	var cur : float = clock.get_absolute_hours()
+	if clim_play and cur >= clim_rng.y - 0.01 :
+		_stop_climelapse_analemma_at( clim_rng.y, clim_rng.x )
+		return false
 	var next_midnight : float = ( floor( cur / 24.0 ) + 1.0 ) * 24.0
+	if clim_play and next_midnight > clim_rng.y + 0.01 :
+		_stop_climelapse_analemma_at( clim_rng.y, clim_rng.x )
+		return false
 	clock.set_absolute_hours( next_midnight )
-	# Let the year roll forward; only wrap once we exhaust real historical data
-	# so the analemma keeps landing on years the weather archive actually covers.
-	var bounds : Vector2i = _analemma_year_bounds()
-	if clock.year > bounds.y :
-		clock.year = bounds.x
-		clock.month = 1
-		clock.day = 1
+	if clim_play :
+		# Baked climelapse scrub: stay inside the rendered span — never wrap to 1940.
+		if clock.get_absolute_hours() > clim_rng.y + 0.01 :
+			_stop_climelapse_analemma_at( clim_rng.y, clim_rng.x )
+			return false
+	else :
+		# Wrap only when we *cross* past the top of the archive window (Dec 31 → Jan 1
+		# of year bounds.y + 1). Playheads already above bounds.y (e.g. current calendar
+		# year) must not snap to 1940 on the first ∞ step.
+		var bounds : Vector2i = _analemma_year_bounds()
+		if start_year <= bounds.y and clock.year > bounds.y :
+			clock.year = bounds.x
+			clock.month = 1
+			clock.day = 1
 	# When the calendar year changed, force WeatherService to refetch that year's
 	# archive right away so snow/weather match the new year without poll lag.
 	if clock.year != start_year :
 		_notify_weather_year_changed()
-	# Fixed mean solar noon: the sun sits on (or near) the meridian each frame; its
-	# N/S declination swing plus E/W equation-of-time wander over the year is the
-	# analemma.
-	clock.day_time = clock.mean_solar_time_to_clock_time( 12.0 )
+	# Fixed mean solar noon (+ optional diurnal drift) traces the analemma; drift ≠ 0
+	# adds a time-of-day wander that turns the figure-eight into a corkscrew.
+	if not _analemma_using_trail :
+		_analemma_using_trail = true
+		_analemma_trail.clear()
+		_ensure_analemma_path()
+	var sample_mean : float = analemma_mean_solar_hours_for_day( _analemma_session_day_index )
+	clock.day_time = clock.mean_solar_time_to_clock_time( sample_mean )
+	_analemma_session_day_index += 1
+	_append_analemma_trail_point()
 	_force_planet_update()
 	_update()
-	# Keep the white guide curve rebuilt for the current site and pinned to the
-	# camera so it reads as painted on the sky dome.
-	_ensure_analemma_path()
-	_position_analemma_path()
+	return true
+
+
+func _climelapse_playback_range() -> Vector2 :
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader == null or not loader.has_method( "is_climelapse_playback" ) \
+			or not bool( loader.call( "is_climelapse_playback" ) ) :
+		return Vector2( NAN, NAN )
+	if not loader.has_method( "get_climelapse_range_abs" ) :
+		return Vector2( NAN, NAN )
+	return loader.call( "get_climelapse_range_abs" ) as Vector2
+
+
+func _stop_climelapse_analemma_at( end_abs: float, _start_abs: float ) -> void :
+	clock.set_absolute_hours( end_abs )
+	var idx : int = maxi( 0, _analemma_session_day_index - 1 )
+	clock.day_time = clock.mean_solar_time_to_clock_time(
+		analemma_mean_solar_hours_for_day( idx ) )
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader != null and loader.has_method( "set_climelapse_playback" ) :
+		loader.call( "set_climelapse_playback", false )
+	analemma_mode = false
+	_force_planet_update()
+	_update()
 
 # ==================== ANALEMMA GUIDE PATH ====================
 
@@ -2348,22 +2548,21 @@ func _on_analemma_mode_changed( active: bool ) -> void :
 	if Engine.is_editor_hint() or not is_inside_tree() :
 		return
 	if active :
+		_analemma_session_day_index = 0
+		_analemma_using_trail = false
+		_analemma_trail.clear()
 		_ensure_analemma_path()
+		_build_analemma_preview_mesh()
 		if is_instance_valid( _analemma_path ) :
 			_analemma_path.visible = true
 			_position_analemma_path()
 	elif is_instance_valid( _analemma_path ) :
 		_analemma_path.visible = false
+		_analemma_using_trail = false
 
-## Build (or rebuild after the observer moves) the year-long sun-path mesh. The
-## shape depends on latitude/longitude, so it is cached against those and only
-## regenerated when they change.
+## Create the path node + material once.
 func _ensure_analemma_path() -> void :
 	if Engine.is_editor_hint() or not is_inside_tree() :
-		return
-	if is_instance_valid( _analemma_path ) \
-			and is_equal_approx( _analemma_path_lat, clock.latitude ) \
-			and is_equal_approx( _analemma_path_lon, clock.longitude ) :
 		return
 	if not is_instance_valid( _analemma_path ) :
 		_analemma_path = MeshInstance3D.new()
@@ -2372,14 +2571,52 @@ func _ensure_analemma_path() -> void :
 		_analemma_path.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 		_analemma_path.visible = analemma_mode
 		add_child( _analemma_path )
-	_build_analemma_mesh()
+	if _analemma_path_mat == null :
+		_analemma_path_mat = StandardMaterial3D.new()
+		_analemma_path_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_analemma_path_mat.albedo_color = Color( 1.0, 1.0, 1.0 )
+		_analemma_path_mat.disable_receive_shadows = true
+		_analemma_path.material_override = _analemma_path_mat
+
+## Full-year preview curve (before ∞ playback starts, or when offset changes while paused).
+func _build_analemma_preview_mesh() -> void :
+	if not is_instance_valid( _analemma_path ) :
+		return
+	_ensure_analemma_path()
+	var tc := _analemma_throwaway_clock()
+	var days : int = 365
+	if tc._is_leap_year( tc.year ) :
+		days = 366
+	var verts := PackedVector3Array()
+	verts.resize( days + 1 )
+	for i in range( days + 1 ) :
+		var doy : int = ( i % days ) + 1
+		_set_clock_to_doy( tc, doy )
+		tc.day_time = tc.mean_solar_time_to_clock_time(
+			analemma_mean_solar_hours_for_day( i ) )
+		verts[i] = tc.get_sun_direction() * ANALEMMA_PATH_RADIUS
+	_apply_analemma_line_mesh( verts )
 	_analemma_path_lat = clock.latitude
 	_analemma_path_lon = clock.longitude
+	_analemma_path_offset_cached = analemma_diurnal_offset_min_per_day
 
-## Sample the sun direction at mean solar noon for every day of the year on a
-## throwaway clock (pure — never touches the live clock), then stroke it as one
-## closed white line-strip at ANALEMMA_PATH_RADIUS.
-func _build_analemma_mesh() -> void :
+func _append_analemma_trail_point() -> void :
+	_analemma_trail.append( clock.get_sun_direction() * ANALEMMA_PATH_RADIUS )
+	if _analemma_trail.size() > ANALEMMA_TRAIL_MAX_POINTS :
+		_analemma_trail = _analemma_trail.slice( _analemma_trail.size() - ANALEMMA_TRAIL_MAX_POINTS )
+	_apply_analemma_line_mesh( _analemma_trail )
+
+func _apply_analemma_line_mesh( verts: PackedVector3Array ) -> void :
+	if not is_instance_valid( _analemma_path ) or verts.size() < 2 :
+		return
+	var arrays : Array = []
+	arrays.resize( Mesh.ARRAY_MAX )
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays( Mesh.PRIMITIVE_LINE_STRIP, arrays )
+	_analemma_path.mesh = mesh
+
+func _analemma_throwaway_clock() -> CelestialClock :
 	var tc := CelestialClock.new()
 	tc.latitude = clock.latitude
 	tc.longitude = clock.longitude
@@ -2387,28 +2624,11 @@ func _build_analemma_mesh() -> void :
 	tc.auto_dst = clock.auto_dst
 	tc.manual_dst = clock.manual_dst
 	tc.year = clock.year
+	return tc
 
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color( 1.0, 1.0, 1.0 )
-	mat.vertex_color_use_as_albedo = true
-	mat.disable_receive_shadows = true
-
-	var mesh := ImmediateMesh.new()
-	mesh.surface_begin( Mesh.PRIMITIVE_LINE_STRIP, mat )
-	var days : int = 365
-	if tc._is_leap_year( tc.year ) :
-		days = 366
-	# One extra vertex wrapping to day 1 closes the loop cleanly.
-	for i in range( days + 1 ) :
-		var doy : int = ( i % days ) + 1
-		_set_clock_to_doy( tc, doy )
-		tc.day_time = tc.mean_solar_time_to_clock_time( 12.0 )
-		var dir : Vector3 = tc.get_sun_direction()
-		mesh.surface_set_color( Color( 1.0, 1.0, 1.0 ) )
-		mesh.surface_add_vertex( dir * ANALEMMA_PATH_RADIUS )
-	mesh.surface_end()
-	_analemma_path.mesh = mesh
+## Legacy name kept for call sites — rebuilds preview or refreshes lat/lon cache.
+func _build_analemma_mesh() -> void :
+	_build_analemma_preview_mesh()
 
 ## Set a clock's month/day from a 1-based day-of-year (uses the clock's own
 ## month-length rules so leap years are handled).
@@ -2442,7 +2662,8 @@ func _position_analemma_path() -> void :
 ## analemma also scrubs the projected years with their synthesized weather
 ## (snow/cloud/temperature) instead of stopping at real history.
 func _analemma_year_bounds() -> Vector2i :
-	var hi : int = int( Time.get_date_dict_from_system().year ) - 1
+	var hi : int = int( Time.get_date_dict_from_system().year )
+	hi = maxi( hi, clock.year )
 	if _weather_service_node == null or not is_instance_valid( _weather_service_node ) :
 		_weather_service_node = get_node_or_null( "/root/WeatherService" )
 	if _weather_service_node != null and _weather_service_node.has_method( "generated_years" ) :
