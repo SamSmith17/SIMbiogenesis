@@ -5,9 +5,23 @@ extends Node
 
 signal live_mode_changed(enabled: bool)
 signal simulation_started(initial_battery_soc: float, initial_load_kw: float, initial_solar_kw: float)
+signal drone_settings_changed
 
 const REALTIME_SCALE: float = 1.0 / 3600.0
 const LIVE_SYNC_INTERVAL: float = 10.0
+
+## Single source of truth for FPV drone flight defaults (m/s unless noted).
+const DRONE_DEFAULTS := {
+	"max_forward_speed": 65.0,
+	"vertical_speed": 35.0,
+	"acceleration": 45.0,
+	"drag": 10.0,
+	"steering_sensitivity": 2.5,
+	"min_altitude": 0.5,
+	"max_altitude": 8000.0,
+	"tilt_intensity": 35.0,
+	"tilt_speed": 8.0,
+}
 
 var main_node: Node3D = null
 var live_mode_enabled: bool = false
@@ -17,9 +31,12 @@ var _live_mode_syncing: bool = false
 var _live_sync_counter: float = 0.0
 var _loc_updating: bool = false
 var _solar_ui: Control = null
+var _drone_settings: Dictionary = {}
 
 
 func _ready() -> void:
+	_drone_settings = DRONE_DEFAULTS.duplicate(true)
+	_load_drone_settings_from_disk()
 	var tree := get_tree()
 	if tree != null:
 		tree.scene_changed.connect(_on_scene_changed)
@@ -44,6 +61,7 @@ func _on_scene_changed() -> void:
 	_detach_main_signals()
 	main_node = null
 	call_deferred("_resolve_main")
+	call_deferred("_push_drone_settings_to_vehicles")
 
 
 func _detach_main_signals() -> void:
@@ -129,6 +147,8 @@ func get_state_snapshot() -> Dictionary:
 		"moon_energy": float(main.get("moon_base_enegry")),
 		"live_mode": live_mode_enabled,
 		"survival_active": not bool(main.get("gameplay_mechanics_paused")),
+		"plant_growth_enabled": _main_bool("get_plant_growth_enabled", true),
+		"analemma_diurnal_offset_min_per_day": _main_float("get_analemma_diurnal_offset_min_per_day", 0.0),
 		"moon_phase_text": get_moon_phase_text(),
 		"live_mode_status": get_live_mode_status(),
 		"gameplay_status": get_gameplay_status(),
@@ -166,6 +186,7 @@ func get_state_snapshot() -> Dictionary:
 		snap.merge(planet.get_settings())
 	snap.merge(get_solar_panel_settings())
 	snap.merge(get_ha_connection_snapshot())
+	snap.merge(get_drone_flight_settings())
 	return snap
 
 
@@ -173,16 +194,14 @@ func apply_year(value: int) -> void:
 	var main := _valid_main()
 	if main == null:
 		return
-	main.year = value
-	update_day_max_for(int(main.month), value)
+	_apply_calendar(main, value, int(main.month), int(main.day))
 
 
 func apply_month(value: int) -> void:
 	var main := _valid_main()
 	if main == null:
 		return
-	main.month = value
-	update_day_max_for(value, int(main.year))
+	_apply_calendar(main, int(main.year), value, int(main.day))
 
 
 func apply_day(value: int) -> void:
@@ -190,7 +209,32 @@ func apply_day(value: int) -> void:
 	if main == null:
 		return
 	var max_days := get_days_in_month(int(main.month), int(main.year))
-	main.day = clampi(value, 1, max_days)
+	_apply_calendar(main, int(main.year), int(main.month), clampi(value, 1, max_days))
+
+
+## Set calendar fields via set_absolute_hours so spinboxes and the timeline track
+## always share one canonical timecode.
+func _apply_calendar(main: Node, yr: int, mo: int, dy: int) -> void:
+	if not main.has_method("get_absolute_hours") or not main.has_method("set_absolute_hours"):
+		main.year = yr
+		main.month = mo
+		main.day = dy
+		return
+	var clk: Variant = main.get("clock")
+	if clk == null or not clk.has_method("abs_hours_to_date"):
+		main.year = yr
+		main.month = mo
+		main.day = dy
+		return
+	var cur: float = float(main.call("get_absolute_hours"))
+	var dd: Dictionary = clk.abs_hours_to_date(cur)
+	var tod: float = float(dd.get("day_time", 12.0))
+	mo = clampi(mo, 1, 12)
+	dy = clampi(dy, 1, get_days_in_month(mo, yr))
+	var doy: int = clk.call("_calculate_day_of_year", mo, dy, yr)
+	var abs_h: float = float(clk.call("_days_before_year", yr) + (doy - 1)) * 24.0 + tod
+	main.call("set_absolute_hours", abs_h)
+	update_day_max_for(mo, yr)
 
 
 func get_days_in_month(month: int, year: int) -> int:
@@ -415,6 +459,18 @@ func apply_god_rays_enabled(on: bool) -> void:
 		main.call("set_god_rays_enabled", on)
 
 
+func apply_plant_growth_enabled(on: bool) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_plant_growth_enabled"):
+		main.call("set_plant_growth_enabled", on)
+
+
+func apply_analemma_diurnal_offset(minutes: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_analemma_diurnal_offset_min_per_day"):
+		main.call("set_analemma_diurnal_offset_min_per_day", minutes)
+
+
 func apply_player_fov(value: float) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_player_fov"):
@@ -425,6 +481,49 @@ func apply_drone_fov(value: float) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_drone_fov"):
 		main.call("set_drone_fov", value)
+
+
+func get_drone_flight_settings() -> Dictionary:
+	return _drone_settings.duplicate(true)
+
+
+func get_drone_flight_setting(key: String, fallback: float = 0.0) -> float:
+	if _drone_settings.has(key):
+		return float(_drone_settings[key])
+	if DRONE_DEFAULTS.has(key):
+		return float(DRONE_DEFAULTS[key])
+	return fallback
+
+
+func apply_drone_flight_setting(key: String, value: float) -> void:
+	if not DRONE_DEFAULTS.has(key):
+		return
+	_drone_settings[key] = value
+	_push_drone_settings_to_vehicles()
+	drone_settings_changed.emit()
+
+
+func _push_drone_settings_to_vehicles() -> void:
+	var tree := get_tree()
+	if tree == null:
+		return
+	for node in tree.get_nodes_in_group("vehicles"):
+		if node is FPVDrone:
+			(node as FPVDrone).apply_flight_settings(_drone_settings)
+
+
+func _persist_drone_to_cfg(cfg: ConfigFile) -> void:
+	for key in DRONE_DEFAULTS:
+		cfg.set_value("drone", key, float(_drone_settings.get(key, DRONE_DEFAULTS[key])))
+
+
+func _load_drone_settings_from_disk() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(SETTINGS_CFG) != OK or not cfg.has_section("drone"):
+		return
+	for key in DRONE_DEFAULTS:
+		if cfg.has_section_key("drone", key):
+			_drone_settings[key] = float(cfg.get_value("drone", key))
 
 
 func apply_star_setting(key: String, value: Variant) -> void:
@@ -624,9 +723,12 @@ const SETTINGS_CFG := "user://sim_settings.cfg"
 
 
 func persist_settings() -> void:
-	if main_node == null:
-		return
 	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS_CFG)
+	_persist_drone_to_cfg(cfg)
+	if main_node == null:
+		cfg.save(SETTINGS_CFG)
+		return
 	cfg.set_value("rendering", "clouds_cutoff", float(main_node.get("clouds_cutoff")))
 	cfg.set_value("rendering", "clouds_weight", float(main_node.get("clouds_weight")))
 	cfg.set_value("rendering", "sun_energy", float(main_node.get("sun_base_enegry")))
@@ -639,6 +741,11 @@ func persist_settings() -> void:
 	cfg.set_value("time", "manual_dst", bool(main_node.get("manual_dst")))
 	cfg.set_value("gameplay", "live_mode", live_mode_enabled)
 	cfg.set_value("gameplay", "survival_active", not bool(main_node.get("gameplay_mechanics_paused")))
+	if main_node.has_method("get_plant_growth_enabled"):
+		cfg.set_value("gameplay", "plant_growth_enabled", main_node.call("get_plant_growth_enabled"))
+	if main_node.has_method("get_analemma_diurnal_offset_min_per_day"):
+		cfg.set_value("gameplay", "analemma_diurnal_offset_min_per_day",
+			main_node.call("get_analemma_diurnal_offset_min_per_day"))
 	if main_node.has_method("get_ambient_energy_mult"):
 		cfg.set_value("rendering_adv", "ambient_energy_mult", main_node.call("get_ambient_energy_mult"))
 		cfg.set_value("rendering_adv", "ambient_sky_contribution", main_node.call("get_ambient_sky_contribution"))
@@ -698,6 +805,10 @@ func _load_persisted_settings() -> void:
 		main_node.manual_dst = bool(cfg.get_value("time", "manual_dst"))
 	if cfg.has_section_key("gameplay", "survival_active"):
 		set_survival_active(bool(cfg.get_value("gameplay", "survival_active")))
+	if cfg.has_section_key("gameplay", "plant_growth_enabled"):
+		apply_plant_growth_enabled(bool(cfg.get_value("gameplay", "plant_growth_enabled")))
+	if cfg.has_section_key("gameplay", "analemma_diurnal_offset_min_per_day"):
+		apply_analemma_diurnal_offset(float(cfg.get_value("gameplay", "analemma_diurnal_offset_min_per_day")))
 	if cfg.has_section_key("gameplay", "live_mode") and bool(cfg.get_value("gameplay", "live_mode")):
 		set_live_mode(true)
 	_load_rendering_adv(cfg)

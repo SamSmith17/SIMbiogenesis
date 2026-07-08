@@ -14,6 +14,7 @@ func _initialize() -> void:
 	_test_mapping()
 	_test_zoom_anchor()
 	_test_pan()
+	_test_playhead_follow()
 	_test_tick_ladder()
 	_test_calendar_ticks()
 	if _failures == 0:
@@ -64,6 +65,17 @@ func _test_pan() -> void:
 	_check("pan: shifts start", absf(v.start - 994.0) < 1e-6, "start %.3f" % v.start)
 	v.pan_by_pixels(240.0)
 	_check("pan: pixel drag", absf(v.start - 982.0) < 0.05, "start %.3f" % v.start)
+
+
+func _test_playhead_follow() -> void:
+	var v := _make_view(1000.0, 168.0, 800.0)
+	var ph := 1084.0
+	_check("contains: mid-window playhead", v.contains_time(ph))
+	v.pan_by_hours(500.0)
+	_check("contains: playhead outside after pan", not v.contains_time(ph))
+	v.follow_playhead = true
+	v.apply_playhead_follow(ph)
+	_check("follow: recenters off-screen playhead", v.contains_time(ph))
 
 
 func _test_tick_ladder() -> void:

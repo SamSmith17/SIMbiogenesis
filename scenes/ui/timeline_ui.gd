@@ -54,7 +54,8 @@ const SPEED_STEPS : Array = [
 	["450×",  0.125000],
 	["1440×", 0.400000],
 	["Max",   2.000000],
-	["∞",     INF],       # Analemma view: 1 frame = solar noon of the next day.
+	["∞×2",   INF],       # Analemma view: 2 calendar days per frame.
+	["∞",     INF],       # Analemma view: 1 calendar day per frame.
 ]
 
 const MOON_EMOJIS  : Array = ["🌑","🌒","🌓","🌔","🌕","🌖","🌗","🌘"]
@@ -103,6 +104,10 @@ var _tracks_menu : PopupMenu = null
 var _tracks_btn : Button = null
 
 
+func get_stack_height() -> float:
+	return _bar_height() + float(BAR_BOTTOM_PAD)
+
+
 func _bar_height() -> float:
 	return float(BAR_CHROME_HEIGHT + _track_layout.content_height())
 
@@ -129,12 +134,16 @@ const LANE_SIM_FILL  := Color(0.133, 0.827, 0.933, 0.55)  # cyan — rendered si
 const LANE_SIM_BG    := Color(0.133, 0.827, 0.933, 0.10)
 const LANE_VID_FILL  := Color(0.149, 0.902, 0.467, 0.55)  # green — timelapse video
 const LANE_VID_BG    := Color(0.149, 0.902, 0.467, 0.10)
+const LANE_CLIM_FILL := Color(0.686, 0.420, 0.933, 0.55)  # purple — climelapse bake
+const LANE_CLIM_BG   := Color(0.686, 0.420, 0.933, 0.10)
 const SEL_FILL       := Color(1.0, 1.0, 1.0, 0.09)        # selection span
 const SEL_EDGE       := Color(1.0, 1.0, 1.0, 0.55)
 # NLE control buttons (built in _build_nle_row).
 var _import_btn        : Button = null
 var _linkagelab_btn    : Button = null
 var _render_btn        : Button = null
+var _export_mp4_btn    : Button = null
+var _play_clim_btn     : Button = null
 var _loadmode_btn      : Button = null
 var _compare_btn       : Button = null
 var _load_video_btn    : Button = null
@@ -150,6 +159,15 @@ var _selecting         : bool = false
 var _sel_anchor_abs    : float = NAN
 ## True once SolarUI's compare signals are connected (lazy, once).
 var _solar_signals_connected : bool = false
+var _clim_signals_connected : bool = false
+var _clim_progress_dialog : Window = null
+var _clim_progress_bar : ProgressBar = null
+var _clim_progress_lbl : Label = null
+var _clim_cancel_btn : Button = null
+var _clim_export_dialog : FileDialog = null
+var _pending_clim_export_start := NAN
+var _pending_clim_export_end := NAN
+var _clim_pending_auto_play := false
 var _sunrise_lbl  : Label
 var _sunset_lbl   : Label
 var _moon_lbl     : Label
@@ -433,6 +451,8 @@ func _try_connect_main() -> void:
 		if ts > 0.0:
 			_stored_scale = ts
 			_speed_idx    = _nearest_speed_idx(ts)
+		if is_nan(_track_view.start):
+			_track_view.reset_to_playhead(_playhead_abs())
 		_update_display()
 
 
@@ -674,11 +694,19 @@ func _update_display() -> void:
 	# ── Time label ───────────────────────────────────────────────────────────
 	_time_lbl.text = _fmt_hour_full(dt)
 
-	# ── Date spinboxes ─────────────────────────────────────────────────────
+	# ── Date spinboxes (always derived from the canonical absolute timecode) ──
 	_date_syncing = true
 	var yr : int = int(_main.get("year")  if _main.get("year")  != null else 2025)
 	var mo : int = int(_main.get("month") if _main.get("month") != null else 1)
 	var dy : int = int(_main.get("day")   if _main.get("day")   != null else 1)
+	var clk_spin : CelestialClock = _track_clock()
+	var ph_spin := _playhead_abs()
+	if clk_spin != null:
+		var dd : Dictionary = clk_spin.abs_hours_to_date(ph_spin)
+		if not dd.is_empty():
+			yr = int(dd.get("year", yr))
+			mo = int(dd.get("month", mo))
+			dy = int(dd.get("day", dy))
 	if _year_input:
 		_year_input.set_value_no_signal(yr)
 	if _month_input:
@@ -770,6 +798,22 @@ func _is_analemma_idx() -> bool:
 	return is_inf(float(SPEED_STEPS[_speed_idx][1]))
 
 
+## Calendar days per analemma frame (1 for ∞, 2 for ∞×2).
+func _analemma_days_per_frame() -> int:
+	if not _is_analemma_idx():
+		return 1
+	if str(SPEED_STEPS[_speed_idx][0]) == "∞×2":
+		return 2
+	return 1
+
+
+func _push_analemma_days() -> void:
+	if _main == null or not is_instance_valid(_main):
+		return
+	if _main.get("analemma_days_per_frame") != null:
+		_main.set("analemma_days_per_frame", _analemma_days_per_frame())
+
+
 ## Highest preset index that is a normal (finite) playback speed.
 func _last_finite_idx() -> int:
 	for i in range(SPEED_STEPS.size() - 1, -1, -1):
@@ -794,6 +838,8 @@ func _resume_forward() -> void:
 	if _is_analemma_idx():
 		_main.set("analemma_mode", true)
 		_main.set("time_scale", 0.0)
+		_push_analemma_days()
+		_recenter_track_on_playhead()
 	else:
 		var resume := _stored_scale if _stored_scale > 1e-6 else float(SPEED_STEPS[_speed_idx][1])
 		_main.set("analemma_mode", false)
@@ -814,6 +860,7 @@ func _apply_speed() -> void:
 		if is_inf(val):
 			# Analemma preset: drive the stepper instead of a continuous scale.
 			_main.set("analemma_mode", _is_playing)
+			_push_analemma_days()
 			if _is_playing:
 				_main.set("time_scale", 0.0)
 		else:
@@ -850,7 +897,18 @@ func _sync_track_view() -> void:
 	if _track == null:
 		return
 	_track_view.width_px = _track.size.x
-	_track_view.apply_playhead_follow(_playhead_abs())
+	var ph := _playhead_abs()
+	_track_view.apply_playhead_follow(ph)
+	# When the user panned away, still snap if the playhead is completely off-screen.
+	if not _track_view.contains_time(ph):
+		_track_view.reset_to_playhead(ph)
+
+
+func _recenter_track_on_playhead() -> void:
+	if _track == null:
+		return
+	_track_view.width_px = _track.size.x
+	_track_view.reset_to_playhead(_playhead_abs())
 
 
 func _track_window() -> Vector2:
@@ -888,27 +946,15 @@ func _update_track_edge_labels() -> void:
 			+ "White = NOW  •  View: %s  •  Alt+Right-click: re-center on playhead" % zoom_lbl
 		)
 
-## "Mon D" for an absolute-hours value (uses Unix epoch conversion for naming).
+## "Mon D" for an absolute-hours value (uses the sim clock calendar).
 func _short_date_for_abs(abs_hours: float) -> String:
-	# Absolute hours since year 1; convert to a date dict via day arithmetic.
-	var total_days : int = int(floor(abs_hours / 24.0))
-	# Reuse the engine's clock if available for an exact calendar mapping.
-	if _main != null and _main.get("clock") != null:
-		var clk = _main.get("clock")
-		if clk.has_method("_year_from_abs_days") and clk.has_method("_days_before_year"):
-			var y : int = clk._year_from_abs_days(total_days)
-			var doy : int = total_days - clk._days_before_year(y) + 1
-			var mo : int = 1
-			var dd : int = doy
-			var acc : int = 0
-			for m in range(1, 13):
-				var dim : int = clk.get_days_in_month(m, y)
-				if acc + dim >= doy:
-					mo = m
-					dd = doy - acc
-					break
-				acc += dim
-			return "%s %d" % [MONTH_NAMES[clamp(mo - 1, 0, 11)], dd]
+	var clk : CelestialClock = _track_clock()
+	if clk != null:
+		var dd: Dictionary = clk.abs_hours_to_date(abs_hours)
+		if not dd.is_empty():
+			var mo := int(dd.get("month", 1))
+			var day := int(dd.get("day", 1))
+			return "%s %d" % [MONTH_NAMES[clamp(mo - 1, 0, 11)], day]
 	return ""
 
 func _draw_track() -> void:
@@ -1057,36 +1103,50 @@ func _draw_clips_lane(lane_rect : Rect2, win_start : float, span : float, w : fl
 		solar : Node, fnt : Font) -> void:
 	var lane_h := lane_rect.size.y
 	var lane_y := lane_rect.position.y
-	var third := lane_h / 3.0
+	var quarter := lane_h / 4.0
 	_track.draw_rect(lane_rect, Color(LANE_OBS_BG.r, LANE_OBS_BG.g, LANE_OBS_BG.b, 0.35), true)
-	_track.draw_string(fnt, Vector2(3.0, lane_y + third * 0.8), "OBS",
+	_track.draw_string(fnt, Vector2(3.0, lane_y + quarter * 0.8), "OBS",
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(LANE_OBS_FILL.r, LANE_OBS_FILL.g, LANE_OBS_FILL.b, 0.75))
-	_track.draw_string(fnt, Vector2(3.0, lane_y + third * 1.8), "SIM",
+	_track.draw_string(fnt, Vector2(3.0, lane_y + quarter * 1.8), "SIM",
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(LANE_SIM_FILL.r, LANE_SIM_FILL.g, LANE_SIM_FILL.b, 0.75))
-	_track.draw_string(fnt, Vector2(3.0, lane_y + third * 2.7), "VID",
+	_track.draw_string(fnt, Vector2(3.0, lane_y + quarter * 2.8), "CLIM",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(LANE_CLIM_FILL.r, LANE_CLIM_FILL.g, LANE_CLIM_FILL.b, 0.75))
+	_track.draw_string(fnt, Vector2(3.0, lane_y + quarter * 3.7), "VID",
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(LANE_VID_FILL.r, LANE_VID_FILL.g, LANE_VID_FILL.b, 0.75))
 	if solar != null:
 		if solar.has_method("get_observed_range_abs"):
 			var orng : Vector2 = solar.call("get_observed_range_abs")
 			if not is_nan(orng.x):
-				_draw_clip(orng.x, orng.y, win_start, span, w, lane_y, third, LANE_OBS_FILL)
+				_draw_clip(orng.x, orng.y, win_start, span, w, lane_y, quarter, LANE_OBS_FILL)
 		if solar.has_method("get_rendered_range_abs"):
 			var rrng : Vector2 = solar.call("get_rendered_range_abs")
 			if not is_nan(rrng.x):
 				_draw_clip(rrng.x, rrng.y, win_start, span, w,
-					lane_y + third, third, LANE_SIM_FILL)
+					lane_y + quarter, quarter, LANE_SIM_FILL)
 				if solar.has_method("is_rendering") and bool(solar.call("is_rendering")):
 					var prog := clampf(float(solar.call("get_render_progress")), 0.0, 1.0)
 					var fx0 := clampf((rrng.x - win_start) / span * w, 0.0, w)
 					var fx1 := clampf((rrng.x + (rrng.y - rrng.x) * prog - win_start) / span * w, 0.0, w)
 					if fx1 > fx0:
-						_track.draw_rect(Rect2(fx0, lane_y + third, fx1 - fx0, third),
+						_track.draw_rect(Rect2(fx0, lane_y + quarter, fx1 - fx0, quarter),
 							Color(LANE_SIM_FILL.r, LANE_SIM_FILL.g, LANE_SIM_FILL.b, 0.9), true)
+	var tl := _get_terrain_loader()
+	if tl != null and tl.has_method("get_climelapse_range_abs"):
+		var crng : Vector2 = tl.call("get_climelapse_range_abs")
+		if not is_nan(crng.x):
+			_draw_clip(crng.x, crng.y, win_start, span, w, lane_y + quarter * 2.0, quarter, LANE_CLIM_FILL)
+			if tl.has_method("is_climelapse_rendering") and bool(tl.call("is_climelapse_rendering")):
+				var cprog := clampf(float(tl.call("get_climelapse_progress")), 0.0, 1.0)
+				var cx0 := clampf((crng.x - win_start) / span * w, 0.0, w)
+				var cx1 := clampf((crng.x + (crng.y - crng.x) * cprog - win_start) / span * w, 0.0, w)
+				if cx1 > cx0:
+					_track.draw_rect(Rect2(cx0, lane_y + quarter * 2.0, cx1 - cx0, quarter),
+						Color(LANE_CLIM_FILL.r, LANE_CLIM_FILL.g, LANE_CLIM_FILL.b, 0.9), true)
 	var pc := _get_projection_canvas()
 	if pc != null and pc.has_method("get_video_clip_range_abs"):
 		var vrng : Vector2 = pc.call("get_video_clip_range_abs")
 		if not is_nan(vrng.x):
-			_draw_clip(vrng.x, vrng.y, win_start, span, w, lane_y + third * 2.0, third, LANE_VID_FILL)
+			_draw_clip(vrng.x, vrng.y, win_start, span, w, lane_y + quarter * 3.0, quarter, LANE_VID_FILL)
 
 
 func _draw_waveform_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float,
@@ -1309,6 +1369,7 @@ func _recapture_mouse() -> void:
 
 func _nearest_speed_idx(scale: float) -> int:
 	if is_inf(scale):
+		# Default ∞ (1 day/frame), not ∞×2, when matching by scale alone.
 		return SPEED_STEPS.size() - 1
 	var best      : int   = 0
 	var best_dist : float = 1e9
@@ -1476,10 +1537,23 @@ func _build_nle_row(parent: VBoxContainer) -> void:
 	_import_btn.add_theme_font_size_override("font_size", 11)
 	row.add_child(_import_btn)
 
-	_render_btn = _mk_flat_btn("⚙ Render selection", _on_render_pressed,
-		"Batch-render a simulated datastream over the selected range")
+	_render_btn = _mk_flat_btn("⚙ Render", _on_render_pressed,
+		"Render energy sim or vegetation climelapse for the Ctrl-drag selection")
 	_render_btn.add_theme_font_size_override("font_size", 11)
+	_render_btn.custom_minimum_size = Vector2(0, 32)
 	row.add_child(_render_btn)
+
+	_export_mp4_btn = _mk_flat_btn("🎬 Export MP4", _on_export_clim_mp4_pressed,
+		"Export a climelapse video of the Ctrl-drag selection to MP4")
+	_export_mp4_btn.add_theme_font_size_override("font_size", 11)
+	_export_mp4_btn.add_theme_color_override("font_color", Color(0.4, 0.7, 1.0))
+	_export_mp4_btn.custom_minimum_size = Vector2(0, 32)
+	row.add_child(_export_mp4_btn)
+
+	_play_clim_btn = _mk_flat_btn("▶ Play climelapse", _on_play_clim_pressed,
+		"Scrub/play using baked climelapse scales inside the rendered range")
+	_play_clim_btn.add_theme_font_size_override("font_size", 11)
+	row.add_child(_play_clim_btn)
 
 	_loadmode_btn = _mk_flat_btn("Load: CSV", _on_loadmode_pressed,
 		"Simulated-battery load source — CSV: feed observed load (isolates solar/weather error); Modeled: simulate load too")
@@ -1536,6 +1610,12 @@ func _build_nle_row(parent: VBoxContainer) -> void:
 func _get_solar() -> Node:
 	_ensure_solar_ref()
 	return _solar_ui
+
+
+func _get_terrain_loader() -> Node:
+	if _main == null:
+		return null
+	return _main.get_node_or_null("TerrainLoader")
 
 
 func _get_projection_canvas() -> Node:
@@ -1598,11 +1678,193 @@ func _on_linkagelab_file_selected(path: String) -> void:
 			props_ui.call("notify_bundle_imported", result)
 
 
+
+
+
+func _climelapse_selection_range() -> Vector2:
+	var s := _get_solar()
+	var sel := Vector2(NAN, NAN)
+	if s != null and s.has_method("get_selection_abs"):
+		sel = s.call("get_selection_abs")
+	if is_nan(sel.x) or is_nan(sel.y) or sel.y <= sel.x:
+		return Vector2(NAN, NAN)
+	return sel
+
+
+func _default_clim_mp4_name(start_abs: float) -> String:
+	var clock := CelestialClock.new()
+	var dt: Dictionary = clock.abs_hours_to_date(start_abs)
+	return "climelapse_%d_%02d_%02d.mp4" % [
+		int(dt.get("year", 1)), int(dt.get("month", 1)), int(dt.get("day", 1))]
+
+
+func _on_export_clim_mp4_pressed() -> void:
+	var tl := _get_terrain_loader()
+	if tl == null or not tl.has_method("start_climelapse_export"):
+		push_warning("Climelapse MP4 export requires a user map with TerrainLoader.")
+		return
+	var sel := _climelapse_selection_range()
+	if is_nan(sel.x):
+		push_warning("Ctrl-drag a range on the timeline before exporting climelapse MP4.")
+		return
+	_pending_clim_export_start = sel.x
+	_pending_clim_export_end = sel.y
+	if _clim_export_dialog == null:
+		_clim_export_dialog = FileDialog.new()
+		_clim_export_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+		_clim_export_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		_clim_export_dialog.filters = PackedStringArray(["*.mp4 ; MPEG-4 video"])
+		_clim_export_dialog.title = "Save climelapse MP4"
+		_clim_export_dialog.size = Vector2i(900, 600)
+		_clim_export_dialog.file_selected.connect(_on_clim_export_path_selected)
+		add_child(_clim_export_dialog)
+	_clim_export_dialog.current_file = _default_clim_mp4_name(sel.x)
+	_clim_export_dialog.popup_centered_ratio(0.6)
+
+
+func _on_clim_export_path_selected(path: String) -> void:
+	var tl := _get_terrain_loader()
+	if tl == null or not tl.has_method("start_climelapse_export"):
+		return
+	var out := path
+	if not out.to_lower().ends_with(".mp4"):
+		out += ".mp4"
+	if _main != null:
+		if _main.has_method("set_absolute_hours"):
+			_main.call("set_absolute_hours", _pending_clim_export_start)
+		if "analemma_mode" in _main:
+			_main.set("analemma_mode", true)
+	_clim_pending_auto_play = true
+	if tl.call("start_climelapse_export", _pending_clim_export_start, _pending_clim_export_end, out):
+		_update_clim_progress_dialog()
+	_update_nle_controls()
+
+
+func _ensure_clim_progress_dialog() -> void:
+	if _clim_progress_dialog != null:
+		return
+	_clim_progress_dialog = Window.new()
+	_clim_progress_dialog.title = "Climelapse render (MP4 export uses ffmpeg)"
+	_clim_progress_dialog.size = Vector2i(420, 130)
+	_clim_progress_dialog.unresizable = true
+	_clim_progress_dialog.close_requested.connect(func() -> void:
+		_clim_progress_dialog.hide())
+	var vb := VBoxContainer.new()
+	vb.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vb.offset_left = 12
+	vb.offset_top = 12
+	vb.offset_right = -12
+	vb.offset_bottom = -12
+	vb.add_theme_constant_override("separation", 8)
+	_clim_progress_dialog.add_child(vb)
+	_clim_progress_lbl = Label.new()
+	_clim_progress_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_clim_progress_lbl.text = "Baking calendar keyframes and tree scales…"
+	vb.add_child(_clim_progress_lbl)
+	_clim_progress_bar = ProgressBar.new()
+	_clim_progress_bar.custom_minimum_size = Vector2(0, 22)
+	_clim_progress_bar.show_percentage = true
+	vb.add_child(_clim_progress_bar)
+	_clim_cancel_btn = Button.new()
+	_clim_cancel_btn.text = "Cancel"
+	_clim_cancel_btn.pressed.connect(_on_clim_cancel_pressed)
+	vb.add_child(_clim_cancel_btn)
+	add_child(_clim_progress_dialog)
+
+
+func _on_clim_cancel_pressed() -> void:
+	var tl := _get_terrain_loader()
+	if tl != null and tl.has_method("is_climelapse_rendering") \
+			and bool(tl.call("is_climelapse_rendering")):
+		tl.call("cancel_climelapse_render")
+		_clim_pending_auto_play = false
+	elif _clim_progress_dialog != null:
+		_clim_progress_dialog.hide()
+	if _clim_cancel_btn != null:
+		_clim_cancel_btn.text = "Cancel"
+	_update_nle_controls()
+
+
+func _update_clim_progress_dialog() -> void:
+	var tl := _get_terrain_loader()
+	if tl == null:
+		return
+	# Bake phase shows progress.
+	var exporting := tl.has_method("is_climelapse_exporting") \
+		and bool(tl.call("is_climelapse_exporting"))
+	var busy := (tl.has_method("is_climelapse_rendering") and bool(tl.call("is_climelapse_rendering"))) or exporting
+	if busy:
+		_ensure_clim_progress_dialog()
+		if _clim_cancel_btn != null:
+			_clim_cancel_btn.text = "Cancel"
+		var prog := clampf(float(tl.call("get_climelapse_progress")), 0.0, 1.0)
+		if _clim_progress_bar != null:
+			_clim_progress_bar.value = prog * 100.0
+		if _clim_progress_lbl != null:
+			var stats: Dictionary = tl.call("get_climelapse_bake_stats") if tl.has_method("get_climelapse_bake_stats") else {}
+			var kf := int(stats.get("keyframes", 0))
+			var trees := int(stats.get("auto_entries", 0)) + int(stats.get("manual_entries", 0))
+			var phase := "Baking"
+			_clim_progress_lbl.text = "%s — %d keyframes × %d trees (%d%%)" % [
+				phase, kf, trees, int(round(prog * 100.0))]
+		if _clim_progress_dialog != null and not _clim_progress_dialog.visible:
+			_clim_progress_dialog.popup_centered()
+	elif _clim_progress_dialog != null and _clim_progress_dialog.visible:
+		var ready := tl.has_method("get_climelapse_progress") \
+			and float(tl.call("get_climelapse_progress")) >= 1.0
+		if ready:
+			var msg := ""
+			if tl.has_method("get_climelapse_export_message"):
+				msg = str(tl.call("get_climelapse_export_message"))
+			if _clim_progress_lbl != null:
+				if not msg.is_empty():
+					_clim_progress_lbl.text = msg
+				else:
+					_clim_progress_lbl.text = "Climelapse ready — playing from In point…"
+			if _clim_progress_bar != null:
+				_clim_progress_bar.value = 100.0
+			if _clim_cancel_btn != null:
+				_clim_cancel_btn.text = "Close"
+			_maybe_auto_play_climelapse()
+		else:
+			_clim_progress_dialog.hide()
+
+
 func _on_render_pressed() -> void:
 	var s := _get_solar()
 	if s != null and s.has_method("start_batch_render"):
 		s.call("start_batch_render")
 		_update_nle_controls()
+
+
+func _on_render_clim_pressed() -> void:
+	var tl := _get_terrain_loader()
+	if tl == null or not tl.has_method("start_climelapse_render"):
+		push_warning("Climelapse render requires a user map with TerrainLoader.")
+		return
+	var sel := _climelapse_selection_range()
+	if is_nan(sel.x):
+		push_warning("Ctrl-drag a range on the timeline before rendering climelapse.")
+		return
+	if _main != null and _main.has_method("set_absolute_hours"):
+		_main.call("set_absolute_hours", sel.x)
+	_clim_pending_auto_play = true
+	if tl.call("start_climelapse_render", sel.x, sel.y, ""):
+		_update_clim_progress_dialog()
+	_update_nle_controls()
+
+
+func _on_play_clim_pressed() -> void:
+	var tl := _get_terrain_loader()
+	if tl == null or not tl.has_method("set_climelapse_playback"):
+		return
+	var on := tl.has_method("is_climelapse_playback") and bool(tl.call("is_climelapse_playback"))
+	tl.call("set_climelapse_playback", not on)
+	if not on and _render_progress_lbl != null:
+		var stats: Dictionary = tl.call("get_climelapse_bake_stats") if tl.has_method("get_climelapse_bake_stats") else {}
+		if not bool(stats.get("has_auto_bake", false)) and not bool(stats.get("has_manual_bake", false)):
+			_render_progress_lbl.text = "Clim: season only (re-render after veg rebuild for tree scales)"
+	_update_nle_controls()
 
 
 func _on_loadmode_pressed() -> void:
@@ -1648,18 +1910,41 @@ func _on_snap_video_pressed() -> void:
 ## Refresh the NLE control labels/enabled state from SolarUI.
 func _update_nle_controls() -> void:
 	var s := _get_solar()
-	if s == null:
-		return
-	if not _solar_signals_connected:
-		if s.has_signal("observed_clip_changed"):
-			s.connect("observed_clip_changed", Callable(self, "_on_solar_clip_changed"))
-		if s.has_signal("render_state_changed"):
-			s.connect("render_state_changed", Callable(self, "_on_solar_clip_changed"))
-		# Connect ProjectionCanvas video_clip_changed so the VID lane redraws.
-		var pc := _get_projection_canvas()
-		if pc != null and pc.has_signal("video_clip_changed"):
-			pc.connect("video_clip_changed", Callable(self, "_on_solar_clip_changed"))
-		_solar_signals_connected = true
+	if s != null:
+		if not _solar_signals_connected:
+			if s.has_signal("observed_clip_changed"):
+				s.connect("observed_clip_changed", Callable(self, "_on_solar_clip_changed"))
+			if s.has_signal("render_state_changed"):
+				s.connect("render_state_changed", Callable(self, "_on_solar_clip_changed"))
+			var pc := _get_projection_canvas()
+			if pc != null and pc.has_signal("video_clip_changed"):
+				pc.connect("video_clip_changed", Callable(self, "_on_solar_clip_changed"))
+			_solar_signals_connected = true
+		if _loadmode_btn != null and s.has_method("get_render_load_mode"):
+			_loadmode_btn.text = "Load: CSV" if int(s.call("get_render_load_mode")) == 0 else "Load: Modeled"
+		if _render_btn != null and s.has_method("has_observed_clip"):
+			_render_btn.disabled = not bool(s.call("has_observed_clip"))
+		if _compare_btn != null:
+			var has_render := false
+			if s.has_method("get_rendered_range_abs"):
+				has_render = not is_nan((s.call("get_rendered_range_abs") as Vector2).x)
+			_compare_btn.disabled = not has_render
+			var on := s.has_method("is_compare_active") and bool(s.call("is_compare_active"))
+			_compare_btn.add_theme_color_override("font_color", C_GREEN if on else C_TEXT)
+		if _render_progress_lbl != null and s.has_method("get_render_progress"):
+			var parts: PackedStringArray = []
+			if s.has_method("is_rendering") and bool(s.call("is_rendering")):
+				parts.append("Energy %d%%" % int(round(float(s.call("get_render_progress")) * 100.0)))
+			elif float(s.call("get_render_progress")) >= 1.0:
+				parts.append("Energy ✓")
+			var tl := _get_terrain_loader()
+			if tl != null and tl.has_method("is_climelapse_rendering"):
+				if bool(tl.call("is_climelapse_rendering")):
+					var cp := float(tl.call("get_climelapse_progress"))
+					parts.append("Clim %d%%" % int(round(cp * 100.0)))
+				elif tl.has_method("get_climelapse_progress") and float(tl.call("get_climelapse_progress")) >= 1.0:
+					parts.append("Clim ✓")
+			_render_progress_lbl.text = " · ".join(parts)
 
 	# Snap button enabled only when a video is loaded.
 	if _snap_video_btn != null:
@@ -1667,30 +1952,86 @@ func _update_nle_controls() -> void:
 		var has_video := pc2 != null and pc2.has_method("get_video_clip_range_abs") and \
 			not is_nan((pc2.call("get_video_clip_range_abs") as Vector2).x)
 		_snap_video_btn.disabled = not has_video
-	if _loadmode_btn != null and s.has_method("get_render_load_mode"):
-		_loadmode_btn.text = "Load: CSV" if int(s.call("get_render_load_mode")) == 0 else "Load: Modeled"
-	if _render_btn != null and s.has_method("has_observed_clip"):
-		_render_btn.disabled = not bool(s.call("has_observed_clip"))
-	if _compare_btn != null:
-		var has_render := false
-		if s.has_method("get_rendered_range_abs"):
-			has_render = not is_nan((s.call("get_rendered_range_abs") as Vector2).x)
-		_compare_btn.disabled = not has_render
-		var on := s.has_method("is_compare_active") and bool(s.call("is_compare_active"))
-		_compare_btn.add_theme_color_override("font_color", C_GREEN if on else C_TEXT)
-	if _render_progress_lbl != null and s.has_method("get_render_progress"):
-		if s.has_method("is_rendering") and bool(s.call("is_rendering")):
-			_render_progress_lbl.text = "Rendering %d%%" % int(round(float(s.call("get_render_progress")) * 100.0))
-		elif float(s.call("get_render_progress")) >= 1.0:
-			_render_progress_lbl.text = "Rendered ✓"
-		else:
-			_render_progress_lbl.text = ""
+	if _render_btn != null:
+		var tl2 := _get_terrain_loader()
+		var clim_busy := tl2 != null and tl2.has_method("is_climelapse_rendering") \
+			and bool(tl2.call("is_climelapse_rendering"))
+		_render_btn.disabled = clim_busy
+	if _play_clim_btn != null:
+		var tl3 := _get_terrain_loader()
+		var clim_ready := tl3 != null and tl3.has_method("get_climelapse_progress") \
+			and float(tl3.call("get_climelapse_progress")) >= 1.0
+		_play_clim_btn.disabled = not clim_ready
+		if tl3 != null and tl3.has_method("is_climelapse_playback"):
+			var clim_on := bool(tl3.call("is_climelapse_playback"))
+			_play_clim_btn.text = "⏸ Climelapse on" if clim_on else "▶ Play climelapse"
+			_play_clim_btn.add_theme_color_override("font_color", C_GREEN if clim_on else C_TEXT)
+	if not _clim_signals_connected:
+		var tl4 := _get_terrain_loader()
+		if tl4 != null and tl4.has_signal("climelapse_state_changed"):
+			tl4.connect("climelapse_state_changed", Callable(self, "_on_climelapse_changed"))
+			_clim_signals_connected = true
 
 
 func _on_solar_clip_changed() -> void:
 	if _track != null:
 		_track.queue_redraw()
 	_update_nle_controls()
+
+
+func _on_climelapse_changed() -> void:
+	if _track != null:
+		_track.queue_redraw()
+	_update_clim_progress_dialog()
+	_update_nle_controls()
+	_maybe_auto_play_climelapse()
+
+
+func _analemma_speed_idx() -> int:
+	for i in range(SPEED_STEPS.size()):
+		if str(SPEED_STEPS[i][0]) == "∞":
+			return i
+	return SPEED_STEPS.size() - 1
+
+
+func _maybe_auto_play_climelapse() -> void:
+	if not _clim_pending_auto_play or _main == null or not is_instance_valid(_main):
+		return
+	var tl := _get_terrain_loader()
+	if tl == null:
+		return
+	if tl.has_method("is_climelapse_rendering") and bool(tl.call("is_climelapse_rendering")):
+		return
+	if not tl.has_method("get_climelapse_progress") or float(tl.call("get_climelapse_progress")) < 1.0:
+		return
+	var rng: Vector2 = tl.call("get_climelapse_range_abs")
+	if is_nan(rng.x) or rng.y <= rng.x:
+		_clim_pending_auto_play = false
+		return
+	_clim_pending_auto_play = false
+	_start_climelapse_playback_after_render(rng)
+
+
+func _start_climelapse_playback_after_render(rng: Vector2) -> void:
+	var tl := _get_terrain_loader()
+	if tl == null or _main == null:
+		return
+	_main.call("set_absolute_hours", rng.x)
+	var span_h := clampf(rng.y - rng.x, TimelineViewScript.MIN_SPAN_HOURS,
+		TimelineViewScript.MAX_SPAN_HOURS)
+	_track_view.start = rng.x
+	_track_view.span = span_h
+	_track_view.follow_playhead = true
+	if tl.has_method("set_climelapse_playback"):
+		tl.call("set_climelapse_playback", true)
+	_speed_idx = _analemma_speed_idx()
+	_sim_paused_by_bar = false
+	CursorController.set_paused(false)
+	_resume_forward()
+	if _track != null:
+		_track.queue_redraw()
+	_update_track_edge_labels()
+	_update_display()
 
 
 func _build_info_row(parent: VBoxContainer) -> void:
@@ -1997,6 +2338,7 @@ func _on_year_changed(value: float) -> void:
 	if is_instance_valid(SimSettingsController):
 		SimSettingsController.apply_year(int(value))
 		_update_day_spin_max(int(_month_input.value), int(value))
+	_recenter_track_on_playhead()
 
 
 func _on_month_changed(value: float) -> void:
@@ -2005,6 +2347,7 @@ func _on_month_changed(value: float) -> void:
 	if is_instance_valid(SimSettingsController):
 		SimSettingsController.apply_month(int(value))
 		_update_day_spin_max(int(value), int(_year_input.value))
+	_recenter_track_on_playhead()
 
 
 func _on_day_changed(value: float) -> void:
@@ -2012,6 +2355,7 @@ func _on_day_changed(value: float) -> void:
 		return
 	if is_instance_valid(SimSettingsController):
 		SimSettingsController.apply_day(int(value))
+	_recenter_track_on_playhead()
 
 
 func _update_day_spin_max(month: int, year: int) -> void:
@@ -2376,27 +2720,13 @@ func _wx_value_str_for_key(key: String, month: int, day: int, hour: float) -> St
 ## Converts absolute hours to (month, day) using the same calendar arithmetic
 ## as _short_date_for_abs(). Returns Vector2i(-1, -1) on failure.
 func _month_day_for_abs(abs_hours: float) -> Vector2i:
-	var total_days := int(floor(abs_hours / 24.0))
-	if _main == null:
-		return Vector2i(-1, -1)
-	var clk: Variant = _main.get("clock")
+	var clk : CelestialClock = _track_clock()
 	if clk == null:
 		return Vector2i(-1, -1)
-	if not (clk.has_method("_year_from_abs_days") and clk.has_method("_days_before_year")):
+	var dd: Dictionary = clk.abs_hours_to_date(abs_hours)
+	if dd.is_empty():
 		return Vector2i(-1, -1)
-	var y: int = clk._year_from_abs_days(total_days)
-	var doy: int = total_days - clk._days_before_year(y) + 1
-	var mo := 1
-	var dd := doy
-	var acc := 0
-	for m in range(1, 13):
-		var dim: int = clk.get_days_in_month(m, y)
-		if acc + dim >= doy:
-			mo = m
-			dd = doy - acc
-			break
-		acc += dim
-	return Vector2i(mo, dd)
+	return Vector2i(int(dd.get("month", 1)), int(dd.get("day", 1)))
 
 
 ## Build a labelled stat tile (header + value), add it to parent, return the

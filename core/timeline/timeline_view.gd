@@ -9,7 +9,8 @@ const HOURS_PER_YEAR := 8766.0  # mean Gregorian year length in hours
 
 const DEFAULT_SPAN_HOURS := 7.0 * HOURS_PER_DAY
 const MIN_SPAN_HOURS := 1.0
-const MAX_SPAN_HOURS := 50.0 * HOURS_PER_YEAR
+## Wide enough to frame the full ERA5 archive (1940) through projected years at once.
+const MAX_SPAN_HOURS := 120.0 * HOURS_PER_YEAR
 
 const ZOOM_IN_FACTOR := 0.85
 const ZOOM_OUT_FACTOR := 1.0 / ZOOM_IN_FACTOR
@@ -46,6 +47,12 @@ func reset_to_playhead(playhead_abs : float) -> void:
 	follow_playhead = true
 
 
+func contains_time(t : float) -> bool:
+	if is_nan(start) or span <= 0.0:
+		return false
+	return t >= start and t <= start + span
+
+
 func clamp_span(hours : float) -> float:
 	return clampf(hours, MIN_SPAN_HOURS, MAX_SPAN_HOURS)
 
@@ -71,6 +78,8 @@ func time_to_x(t : float) -> float:
 
 
 func x_to_time(x : float) -> float:
+	if is_nan(start):
+		return 0.0
 	if span <= 0.0 or width_px <= 1.0:
 		return start
 	var frac := clampf(x / width_px, 0.0, 1.0)
@@ -81,6 +90,9 @@ func apply_playhead_follow(playhead_abs : float) -> void:
 	if not follow_playhead:
 		return
 	if is_nan(start):
+		reset_to_playhead(playhead_abs)
+		return
+	if not contains_time(playhead_abs):
 		reset_to_playhead(playhead_abs)
 		return
 	var rel := (playhead_abs - start) / span

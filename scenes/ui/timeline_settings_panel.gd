@@ -11,6 +11,10 @@ const C_PRIMARY := UITheme.C_PRIMARY
 const C_TEXT   := UITheme.C_TEXT
 const C_TEXT_S := UITheme.C_TEXT_S
 
+## Centred modal size — wide enough that all tab titles fit without horizontal scroll.
+const PANEL_DESIRED_SIZE := Vector2(780.0, 800.0)
+const TABS_MIN_HEIGHT := 580.0
+
 var _timeline: Control = null
 var _syncing: bool = false
 
@@ -46,6 +50,15 @@ var _cirrus_amount: HSlider
 var _cloud_shadows: CheckBox
 var _player_fov: HSlider
 var _drone_fov: HSlider
+var _drone_max_speed: HSlider
+var _drone_vertical_speed: HSlider
+var _drone_acceleration: HSlider
+var _drone_drag: HSlider
+var _drone_steering: HSlider
+var _drone_min_altitude: HSlider
+var _drone_max_altitude: HSlider
+var _drone_tilt_intensity: HSlider
+var _drone_tilt_speed: HSlider
 var _stars_brightness: HSlider
 var _stars_scale: HSlider
 var _stars_twinkle: HSlider
@@ -72,6 +85,8 @@ var _dst_status: Label
 var _live_mode: CheckBox
 var _live_status: Label
 var _survival: CheckBox
+var _plant_growth: CheckBox
+var _analemma_drift: HSlider
 var _survival_status: Label
 
 var _scenario_opt:   OptionButton = null
@@ -119,7 +134,7 @@ func _layout_center_panel() -> void:
 	_center_layout_pending = false
 	if _center_panel == null:
 		return
-	UiScreenLayout.clamped_center(_center_panel, Vector2(540.0, 640.0))
+	UiScreenLayout.clamped_center(_center_panel, PANEL_DESIRED_SIZE)
 
 
 func bind_timeline(timeline: Control) -> void:
@@ -184,7 +199,12 @@ func refresh_from_controller() -> void:
 		_live_mode.button_pressed = snap.get("live_mode", false)
 	if _survival:
 		_survival.button_pressed = snap.get("survival_active", false)
+	if _plant_growth:
+		_plant_growth.button_pressed = snap.get("plant_growth_enabled", true)
+	if _analemma_drift:
+		_analemma_drift.value = snap.get("analemma_diurnal_offset_min_per_day", 0.0)
 	_sync_advanced_from_snapshot(snap)
+	_sync_drone_from_snapshot(snap)
 	_sync_stars_planets_from_snapshot(snap)
 	_sync_solar_from_snapshot(snap)
 	_sync_ha_from_snapshot(snap)
@@ -271,7 +291,7 @@ func _build_ui() -> void:
 
 	# TabContainer — one per settings section.
 	var tabs := TabContainer.new()
-	tabs.custom_minimum_size = Vector2(0, 500)
+	tabs.custom_minimum_size = Vector2(0, TABS_MIN_HEIGHT)
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var tab_panel_sb := StyleBoxFlat.new()
 	tab_panel_sb.bg_color = C_PANEL
@@ -279,6 +299,7 @@ func _build_ui() -> void:
 	outer.add_child(tabs)
 
 	_build_gameplay_tab(tabs)
+	_build_drone_tab(tabs)
 	_build_environment_tab(tabs)
 	_build_lighting_tab(tabs)
 	_build_stars_planets_tab(tabs)
@@ -677,8 +698,54 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Gameplay")
 	_survival        = _add_check(v, "Survival mechanics active", _on_survival)
 	_survival_status = _add_status_label(v, "")
+	_plant_growth    = _add_check(v, "Plant growth (vegetation aging)", _on_plant_growth)
+	var growth_hint := Label.new()
+	growth_hint.text = "Animates trees growing and reseeding over seasons. Turn off for smoother ∞ / analemma mode (skips per-frame scale updates)."
+	growth_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	growth_hint.custom_minimum_size = Vector2(520, 0)
+	growth_hint.add_theme_color_override("font_color", C_TEXT_S)
+	growth_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(growth_hint)
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "∞ / Analemma")
+	_analemma_drift = _add_slider(v, "Diurnal drift (min/day)", 0.0, 120.0, 1.0, _on_analemma_drift)
+	var drift_hint := Label.new()
+	drift_hint.text = "Shifts each day's sample time later by this many minutes, layering diurnal motion onto the seasonal analemma. 0 = fixed mean solar noon (classic figure-eight). Non-zero traces a corkscrew path."
+	drift_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	drift_hint.custom_minimum_size = Vector2(520, 0)
+	drift_hint.add_theme_color_override("font_color", C_TEXT_S)
+	drift_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(drift_hint)
 	var hint := Label.new()
 	hint.text = "Random fires and survival rules when time is at or below realtime speed."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(420, 0)
+	hint.add_theme_color_override("font_color", C_TEXT_S)
+	hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(hint)
+
+
+func _build_drone_tab(tabs: TabContainer) -> void:
+	var v := _make_tab(tabs, "Drone")
+	_add_section_lbl(v, "Flight")
+	_drone_max_speed = _add_slider(v, "Max speed m/s", 5.0, 120.0, 1.0, _on_drone_max_speed)
+	_drone_acceleration = _add_slider(v, "Acceleration", 5.0, 100.0, 1.0, _on_drone_acceleration)
+	_drone_drag = _add_slider(v, "Deceleration", 2.0, 40.0, 1.0, _on_drone_drag)
+	_drone_vertical_speed = _add_slider(v, "Climb speed m/s", 2.0, 80.0, 1.0, _on_drone_vertical_speed)
+	_drone_steering = _add_slider(v, "Look sensitivity", 0.5, 6.0, 0.1, _on_drone_steering)
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Altitude limits (AGL)")
+	_drone_min_altitude = _add_slider(v, "Min altitude m", 0.5, 50.0, 0.5, _on_drone_min_altitude)
+	_drone_max_altitude = _add_slider(v, "Max altitude m", 100.0, 20000.0, 100.0, _on_drone_max_altitude)
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Visual banking")
+	_drone_tilt_intensity = _add_slider(v, "Tilt angle °", 0.0, 60.0, 1.0, _on_drone_tilt_intensity)
+	_drone_tilt_speed = _add_slider(v, "Tilt response", 1.0, 20.0, 0.5, _on_drone_tilt_speed)
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Camera")
+	_drone_fov = _add_slider(v, "Drone FOV°", 30.0, 120.0, 1.0, _on_drone_fov)
+	var hint := Label.new()
+	hint.text = "FPV drone flight feel for explore maps. WASD / left stick = horizontal, Space / Shift or triggers = climb/descend. Changes apply immediately to any drone in the world."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(420, 0)
 	hint.add_theme_color_override("font_color", C_TEXT_S)
@@ -782,9 +849,8 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Camera (field of view)")
 	_player_fov = _add_slider(v, "Player FOV°", 30.0, 120.0, 1.0, _on_player_fov)
-	_drone_fov = _add_slider(v, "Drone FOV°", 30.0, 120.0, 1.0, _on_drone_fov)
 	var fov_hint := Label.new()
-	fov_hint.text = "Horizontal field of view for first-person walking vs. the FPV drone. Wider = more peripheral view (and more lens distortion)."
+	fov_hint.text = "Horizontal field of view for first-person walking. Wider = more peripheral view (and more lens distortion). Drone FOV is under the Drone tab."
 	fov_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	fov_hint.custom_minimum_size = Vector2(420, 0)
 	fov_hint.add_theme_color_override("font_color", C_TEXT_S)
@@ -1071,12 +1137,34 @@ func _sync_advanced_from_snapshot(snap: Dictionary) -> void:
 		_god_rays.button_pressed = snap.get("god_rays_enabled", false)
 	if _player_fov:
 		_player_fov.value = snap.get("player_fov", 50.0)
-	if _drone_fov:
-		_drone_fov.value = snap.get("drone_fov", 50.0)
 	if _cirrus_amount:
 		_cirrus_amount.value = snap.get("cirrus_user_scale", 1.0)
 	if _cloud_shadows:
 		_cloud_shadows.button_pressed = snap.get("cloud_shadows_enabled", true)
+
+
+func _sync_drone_from_snapshot(snap: Dictionary) -> void:
+	var defaults: Dictionary = SimSettingsController.DRONE_DEFAULTS if is_instance_valid(SimSettingsController) else {}
+	if _drone_max_speed:
+		_drone_max_speed.value = snap.get("max_forward_speed", defaults.get("max_forward_speed", 65.0))
+	if _drone_vertical_speed:
+		_drone_vertical_speed.value = snap.get("vertical_speed", defaults.get("vertical_speed", 35.0))
+	if _drone_acceleration:
+		_drone_acceleration.value = snap.get("acceleration", defaults.get("acceleration", 45.0))
+	if _drone_drag:
+		_drone_drag.value = snap.get("drag", defaults.get("drag", 10.0))
+	if _drone_steering:
+		_drone_steering.value = snap.get("steering_sensitivity", defaults.get("steering_sensitivity", 2.5))
+	if _drone_min_altitude:
+		_drone_min_altitude.value = snap.get("min_altitude", defaults.get("min_altitude", 0.5))
+	if _drone_max_altitude:
+		_drone_max_altitude.value = snap.get("max_altitude", defaults.get("max_altitude", 8000.0))
+	if _drone_tilt_intensity:
+		_drone_tilt_intensity.value = snap.get("tilt_intensity", defaults.get("tilt_intensity", 35.0))
+	if _drone_tilt_speed:
+		_drone_tilt_speed.value = snap.get("tilt_speed", defaults.get("tilt_speed", 8.0))
+	if _drone_fov:
+		_drone_fov.value = snap.get("drone_fov", 50.0)
 
 
 func _sync_stars_planets_from_snapshot(snap: Dictionary) -> void:
@@ -1233,6 +1321,42 @@ func _on_drone_fov(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_drone_fov(v)
 
+func _on_drone_max_speed(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_flight_setting("max_forward_speed", v)
+
+func _on_drone_vertical_speed(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_flight_setting("vertical_speed", v)
+
+func _on_drone_acceleration(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_flight_setting("acceleration", v)
+
+func _on_drone_drag(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_flight_setting("drag", v)
+
+func _on_drone_steering(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_flight_setting("steering_sensitivity", v)
+
+func _on_drone_min_altitude(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_flight_setting("min_altitude", v)
+
+func _on_drone_max_altitude(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_flight_setting("max_altitude", v)
+
+func _on_drone_tilt_intensity(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_flight_setting("tilt_intensity", v)
+
+func _on_drone_tilt_speed(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_flight_setting("tilt_speed", v)
+
 func _on_cirrus_amount(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_cirrus_scale(v)
@@ -1350,7 +1474,18 @@ func _on_live_mode(on: bool) -> void:
 func _on_survival(on: bool) -> void:
 	if _syncing: return
 	SimSettingsController.set_survival_active(on)
+
+func _on_plant_growth(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_plant_growth_enabled(on)
 	_refresh_labels()
+
+
+func _on_analemma_drift(value: float) -> void:
+	if _syncing:
+		return
+	SimSettingsController.apply_analemma_diurnal_offset(value)
+
 
 func _on_scenario_changed(idx: int) -> void:
 	if _syncing:
