@@ -16,6 +16,7 @@ shader_type spatial;
 render_mode cull_disabled, depth_prepass_alpha;
 
 #include "res://vegetation/wind_vertex.gdshaderinc"
+#include "res://core/soi/shaders/soi_clip.gdshaderinc"
 
 // 0 = deciduous broadleaf, 1 = conifer needle (grass-style streak mask).
 uniform int canopy_profile = 0;
@@ -63,6 +64,7 @@ uniform float leaf_coverage : hint_range(0.0, 1.0) = 1.0;
 uniform float spring_bud : hint_range(0.0, 1.0) = 0.0;
 uniform float winter : hint_range(0.0, 1.0) = 0.0;
 uniform float snow_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float snow_depth_m = 0.0;
 uniform vec3 snow_color : source_color = vec3(0.92, 0.94, 0.98);
 uniform vec3 autumn_warm : source_color = vec3(0.96, 0.78, 0.12);
 uniform vec3 autumn_orange : source_color = vec3(0.93, 0.45, 0.06);
@@ -92,13 +94,13 @@ void vertex() {
 	float vert_phase = dot(VERTEX, vec3(17.3, 31.1, 11.7)) + inst_pos.x * 3.7 + inst_pos.z * 5.1;
 	VERTEX = apply_vegetation_wind(VERTEX, inst_pos, top_mask, vert_phase);
 	vec3 world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(world_pos, 1.0);
 	v_view_dist = length((VIEW_MATRIX * vec4(world_pos, 1.0)).xyz);
 	v_world_pos = world_pos;
 	v_inst_pos = inst_pos;
 }
 
 void fragment() {
+	soi_clip_fragment(v_world_pos);
 	// ---- Per-cell procedural leaf over the crown surface ----
 	// Spherical parameterisation of the crown-radial direction gives a stable
 	// 2D grid that sticks to the canopy surface. A per-instance rotation of the
@@ -124,23 +126,30 @@ void fragment() {
 	float sa = sin(ang);
 	vec2 p = vec2(local.x * ca - local.y * sa, local.x * sa + local.y * ca);
 	float mask;
+	// Shrink deciduous leaves when dormant (falling/budding).
+	float size_mul = mix(1.0, leaf_coverage, deciduousness);
+	float eff_size = max(leaf_size * size_mul, 0.001);
+	
 	if (canopy_profile > 0) {
 		// Conifer needles: thin elongated streaks (same technique as grass blades).
 		float lean = hash21(cell + seed2 + 9.3) * 0.35;
 		vec2 shifted = local - vec2(cos(ang), sin(ang)) * lean * 0.25;
 		vec2 blade_local = vec2(shifted.x * ca - shifted.y * sa, shifted.x * sa + shifted.y * ca);
-		float radius = max(leaf_size * 0.5 / max(leaf_aspect, 1.0), 0.015);
+		float radius = max(eff_size * 0.5 / max(leaf_aspect, 1.0), 0.015);
 		mask = (1.0 - smoothstep(radius * 0.55, radius, abs(blade_local.x)));
 		mask *= 1.0 - smoothstep(0.38, 0.52, abs(blade_local.y));
 	} else {
-		float half_w = max(0.5 * leaf_size / leaf_aspect, 0.02);
-		float half_l = max(0.5 * leaf_size, 0.04);
+		float half_w = max(0.5 * eff_size / leaf_aspect, 0.02);
+		float half_l = max(0.5 * eff_size, 0.04);
 		float ex = p.x / half_w;
 		float ey = p.y / half_l;
+		float leaf_angle = atan(ex, ey);
+		// Lobed edge for realistic broadleaf look (e.g. oak/maple)
+		float lobes = 1.0 + 0.25 * sin(leaf_angle * 5.0) * sin(leaf_angle * 3.0);
 		// Lanceolate taper: leaf narrows toward its tip (|ey| -> 1).
-		float taper = 1.0 - smoothstep(0.15, 1.0, abs(ey)) * 0.8;
-		float d = (ex * ex) / max(taper * taper, 0.05) + ey * ey;
-		mask = 1.0 - smoothstep(0.78, 1.0, d);
+		float taper = 1.0 - smoothstep(0.0, 1.0, abs(ey)) * 0.65;
+		float d = (ex * ex) + (ey * ey);
+		mask = 1.0 - smoothstep(0.70, 1.0, d / max(taper * taper * lobes * lobes, 0.05));
 	}
 	float gap = hash21(cell + vec2(v_shell_t * 37.0, v_shell_t * 23.0) + seed2);
 	if (gap < shell_gap) {
@@ -167,12 +176,6 @@ void fragment() {
 			discard;
 		}
 	} else if (mask < eff_thresh) {
-		discard;
-	}
-
-	// Deciduous leaf loss: thin the canopy as leaf_coverage drops in late autumn.
-	float leaf_loss = clamp((1.0 - leaf_coverage) * deciduousness, 0.0, 1.0);
-	if (leaf_loss > 0.001 && dith < leaf_loss) {
 		discard;
 	}
 
@@ -245,10 +248,11 @@ void fragment() {
 
 	// Snow settling on the canopy: favours upward-facing normals + the crown top.
 	float snow_rough = roughness_value;
-	if (snow_amount > 0.001) {
+	if (snow_amount > 0.001 || snow_depth_m > 0.001) {
+		float depth_t = clamp(snow_depth_m / 1.5, 0.0, 1.0);
 		float up = clamp(NORMAL.y * 0.5 + 0.5, 0.0, 1.0);
 		float hold = mix(0.6, 1.0, 1.0 - deciduousness);
-		float snow_mask = clamp(snow_amount * mix(0.3, 1.0, canopy_top) * (0.35 + 0.65 * up) * hold, 0.0, 1.0);
+		float snow_mask = clamp((snow_amount * 0.35 + depth_t * 0.8) * mix(0.3, 1.0, canopy_top) * (0.35 + 0.65 * up) * hold, 0.0, 1.0);
 		albedo = mix(albedo, snow_color, snow_mask);
 		snow_rough = mix(roughness_value, 0.6, snow_mask);
 	}

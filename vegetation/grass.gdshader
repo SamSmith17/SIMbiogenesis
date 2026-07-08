@@ -12,6 +12,7 @@ shader_type spatial;
 render_mode cull_disabled;
 
 #include "res://vegetation/wind_vertex.gdshaderinc"
+#include "res://core/soi/shaders/soi_clip.gdshaderinc"
 
 uniform vec3 root_color : source_color = vec3(0.10, 0.32, 0.08);
 uniform vec3 tip_color : source_color = vec3(0.14, 0.42, 0.12);
@@ -39,6 +40,7 @@ uniform float night_darkness : hint_range(0.0, 1.0) = 0.82;
 // summer and lay down in autumn/winter. growth_floor keeps a short dormant mat.
 uniform float growth : hint_range(0.0, 1.0) = 1.0;
 uniform float growth_floor : hint_range(0.0, 1.0) = 0.30;
+uniform float mat_width = 0.45;
 // --- Shell "fake blade" density (see grass_builder.gd) ---
 uniform float cells_per_side : hint_range(2.0, 32.0) = 6.0;
 uniform float height_variation : hint_range(0.0, 1.0) = 0.35;
@@ -47,7 +49,10 @@ uniform float blade_lean : hint_range(0.0, 0.5) = 0.2;
 // --- Seasonal dormancy + snow (driven live by VegetationEnvironmentSync) ---
 uniform float autumn : hint_range(0.0, 1.0) = 0.0;
 uniform float winter : hint_range(0.0, 1.0) = 0.0;
+uniform float summer : hint_range(0.0, 1.0) = 1.0;
 uniform float snow_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float snow_depth_m = 0.0;
+uniform vec3 summer_color : source_color = vec3(0.68, 0.65, 0.22);
 uniform vec3 dry_color : source_color = vec3(0.52, 0.44, 0.18);   // dormant tan/gold
 uniform vec3 snow_color : source_color = vec3(0.92, 0.94, 0.98);
 
@@ -80,6 +85,7 @@ void vertex() {
 }
 
 void fragment() {
+	soi_clip_fragment(v_world_pos);
 	float dist_fade = 1.0 - smoothstep(mid_fade_m, far_patch_m, v_view_dist);
 	float patch_blend = smoothstep(mid_fade_m, far_patch_m, v_view_dist) * patch_strength;
 	float blade_fade = smoothstep(far_patch_m * 0.92, far_patch_m, v_view_dist);
@@ -90,7 +96,14 @@ void fragment() {
 	// streak runs in its own direction, then only the across-blade axis is
 	// thresholded — the along-blade axis stays open (softened near the cell
 	// edge) so the streak reads as a line/blade rather than a stacked circle.
-	vec2 cell_f = UV * cells_per_side + v_inst_seed * 0.913;
+	
+	// Domain warping to make the grid organic and curved
+	vec2 warp = vec2(
+		sin(v_world_pos.z * 1.5 + v_world_pos.x * 0.8),
+		cos(v_world_pos.x * 1.5 + v_world_pos.z * 0.8)
+	) * 0.08;
+	vec2 warped_pos = v_world_pos.xz + warp;
+	vec2 cell_f = warped_pos * (cells_per_side / mat_width);
 	vec2 cell = floor(cell_f);
 	vec2 cell_local = fract(cell_f) - 0.5;
 	float cell_h = hash21(cell);
@@ -156,14 +169,16 @@ void fragment() {
 	}
 	vec3 albedo = mix(base * dist_fade + patch_col * patch_blend, patch_col, blade_fade);
 
-	// Seasonal dormancy: grass cures to gold in autumn and browns off in winter.
-	float dryness = clamp(max(winter, autumn * 0.5), 0.0, 1.0);
-	albedo = mix(albedo, dry_color, dryness * 0.7);
+	// Seasonal dormancy: grass greens up in spring, yellows slightly in summer, cures to gold in autumn and browns off in winter.
+	float dryness = clamp(max(winter, autumn * 0.7), 0.0, 1.0);
+	albedo = mix(albedo, summer_color, clamp(summer, 0.0, 1.0) * 0.65);
+	albedo = mix(albedo, dry_color, dryness * 0.85);
 
 	// Snow burial: lying snow covers low turf; taller blades poke through.
 	float grass_rough = roughness_value;
-	if (snow_amount > 0.001) {
-		float bury = clamp(snow_amount * (1.0 - v_height_t * 0.5), 0.0, 1.0);
+	if (snow_amount > 0.001 || snow_depth_m > 0.001) {
+		float depth_t = clamp(snow_depth_m / 1.2, 0.0, 1.0);
+		float bury = clamp(snow_amount * (1.0 - v_height_t * 0.5) + depth_t * 1.15, 0.0, 1.0);
 		albedo = mix(albedo, snow_color, bury);
 		grass_rough = mix(roughness_value, 0.55, bury);
 	}

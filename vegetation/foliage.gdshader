@@ -4,6 +4,8 @@ render_mode cull_disabled, depth_prepass_alpha;
 
 #include "res://vegetation/wind_vertex.gdshaderinc"
 
+#include "res://core/soi/shaders/soi_clip.gdshaderinc"
+
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic;
 uniform sampler2D drape_tex : source_color, filter_linear_mipmap, repeat_disable;
 uniform bool use_drape = false;
@@ -58,6 +60,7 @@ uniform float leaf_coverage : hint_range(0.0, 1.0) = 1.0; // 1 full canopy, 0 ba
 uniform float spring_bud : hint_range(0.0, 1.0) = 0.0;    // fresh growth tint
 uniform float winter : hint_range(0.0, 1.0) = 0.0;        // dormancy desaturation
 uniform float snow_amount : hint_range(0.0, 1.0) = 0.0;   // ground snow cover
+uniform float snow_depth_m = 0.0;
 uniform vec3 snow_color : source_color = vec3(0.92, 0.94, 0.98);
 uniform vec3 autumn_warm : source_color = vec3(0.96, 0.78, 0.12);   // yellow
 uniform vec3 autumn_orange : source_color = vec3(0.93, 0.45, 0.06); // orange
@@ -128,6 +131,7 @@ void vertex() {
 }
 
 void fragment() {
+	soi_clip_fragment(v_world_pos);
 	vec4 tex = texture(albedo_tex, UV);
 	float alpha = tex.a;
 	if (cone_sharpness > 0.001) {
@@ -264,11 +268,12 @@ void fragment() {
 	// Snow settling on the canopy: favours upward-facing normals and the top of
 	// the card. Evergreens (low deciduousness) hold more snow than bare branches.
 	float snow_rough = roughness_value;
-	if (snow_amount > 0.001) {
+	if (snow_amount > 0.001 || snow_depth_m > 0.001) {
+		float depth_t = clamp(snow_depth_m / 1.5, 0.0, 1.0);
 		float up = clamp(NORMAL.y * 0.5 + 0.5, 0.0, 1.0);
 		float top = 1.0 - UV.y;
 		float hold = mix(0.6, 1.0, 1.0 - deciduousness);
-		float snow_mask = clamp(snow_amount * mix(0.25, 1.0, top) * (0.35 + 0.65 * up) * hold, 0.0, 1.0);
+		float snow_mask = clamp((snow_amount * 0.35 + depth_t * 0.8) * mix(0.25, 1.0, top) * (0.35 + 0.65 * up) * hold, 0.0, 1.0);
 		albedo = mix(albedo, snow_color, snow_mask);
 		snow_rough = mix(roughness_value, 0.6, snow_mask);
 	}
