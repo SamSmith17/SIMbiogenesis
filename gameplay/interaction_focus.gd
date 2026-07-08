@@ -36,6 +36,9 @@ func clear_focus() -> void:
 
 
 func _physics_process(_delta: float) -> void:
+	if _focused != null and not is_instance_valid(_focused):
+		_focused = null
+		_update_ui()
 	if _player == null or _camera == null:
 		return
 	var route_ctrl: Node = _player.get_node_or_null("ConduitRouteController")
@@ -44,11 +47,13 @@ func _physics_process(_delta: float) -> void:
 		_clear_focus()
 		_clear_solar_focus()
 		_clear_building_focus()
+		_clear_veg_focus()
 		return
 	if not _should_update_focus():
 		_clear_focus()
 		_clear_solar_focus()
 		_clear_building_focus()
+		_clear_veg_focus()
 		return
 	# On foot, a short physics ray finds nearby Interactable props. In the FPV
 	# drone there are no walkable props, so that step is skipped entirely — but
@@ -76,26 +81,42 @@ func _physics_process(_delta: float) -> void:
 	elif _focused != null:
 		_update_ui()
 	if _focused == null:
-		# Long-range ground point under the crosshair → OSM polygon pick. Solar
-		# arrays take priority over the building pick (panels sit on top of / next
-		# to their host footprints).
+		# Long-range ground point under the crosshair → OSM polygon pick. Priority:
+		# solar arrays (panels sit on/next to their host footprints) → buildings →
+		# vegetation areas (large ground polygons; the most specific target wins).
 		var ground: Variant = _ground_pick_center()
 		if ground is Vector3:
 			if _update_solar_focus(ground as Vector3):
 				_clear_building_focus()
+				_clear_veg_focus()
+			elif _update_building_focus(ground as Vector3):
+				_clear_veg_focus()
+			elif _is_vegetation_edit_active():
+				_update_veg_focus(ground as Vector3)
 			else:
-				_update_building_focus(ground as Vector3)
+				_clear_veg_focus()
 		else:
 			_clear_solar_focus()
 			_clear_building_focus()
+			_clear_veg_focus()
 	else:
 		_clear_solar_focus()
 		_clear_building_focus()
+		_clear_veg_focus()
 
 
 func _is_drone_mode() -> bool:
 	var v: Variant = _player.get("is_fpv_drone_mode")
 	return bool(v) if v != null else false
+
+
+## Only show/interact with the OSM-vegetation crosshair highlight while the
+## vegetation paint dock (V) is already open — otherwise it lights up every
+## patch of OSM-tagged vegetation the player merely walks past, which reads as
+## distracting noise during normal play.
+func _is_vegetation_edit_active() -> bool:
+	return _loader != null and _loader.has_method("is_vegetation_edit_active") \
+		and bool(_loader.call("is_vegetation_edit_active"))
 
 
 ## Ground point under the crosshair via the loader's long-range (50 km) terrain
@@ -150,17 +171,17 @@ func _clear_focus() -> void:
 	_update_ui()
 
 
-func _update_building_focus(hit_pos: Vector3) -> void:
+func _update_building_focus(hit_pos: Vector3) -> bool:
 	if _loader == null or not _loader.has_method("pick_building_at_world"):
-		return
+		return false
 	var pick: Dictionary = _loader.call("pick_building_at_world", hit_pos.x, hit_pos.z)
 	if not bool(pick.get("valid", false)):
 		_clear_building_focus()
-		return
+		return false
 	var idx := int(pick.get("building_idx", -1))
 	if _loader.has_method("is_building_replaced") and bool(_loader.call("is_building_replaced", idx)):
 		_clear_building_focus()
-		return
+		return false
 	if _loader.has_method("set_building_focus_idx"):
 		_loader.call("set_building_focus_idx", idx)
 	if _crosshair != null and _crosshair.has_method("set_target_active"):
@@ -170,12 +191,46 @@ func _update_building_focus(hit_pos: Vector3) -> void:
 		if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
 			act = _prompt_ui.get_action_label("interact")
 		_crosshair.set_prompt_text("[%s] Customize building" % act)
+	return true
 
 
 func _clear_building_focus() -> void:
 	if _loader != null and _loader.has_method("set_building_focus_idx"):
 		if int(_loader.call("get_building_focus_idx")) >= 0:
 			_loader.call("set_building_focus_idx", -1)
+	if _focused != null:
+		return
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(false)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		_crosshair.set_prompt_text("")
+
+
+func _update_veg_focus(hit_pos: Vector3) -> bool:
+	if _loader == null or not _loader.has_method("pick_veg_area_at_world"):
+		return false
+	var pick: Dictionary = _loader.call("pick_veg_area_at_world", hit_pos.x, hit_pos.z)
+	if not bool(pick.get("valid", false)):
+		_clear_veg_focus()
+		return false
+	var idx := int(pick.get("area_idx", -1))
+	if _loader.has_method("set_veg_focus_idx"):
+		_loader.call("set_veg_focus_idx", idx)
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(true)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		var act := "Interact"
+		if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
+			act = _prompt_ui.get_action_label("interact")
+		_crosshair.set_prompt_text("[%s] Tune %s look" % [act, str(pick.get("kind_label", "vegetation"))])
+	return true
+
+
+func _clear_veg_focus() -> void:
+	if _loader != null and _loader.has_method("set_veg_focus_idx") \
+			and _loader.has_method("get_veg_focus_idx"):
+		if int(_loader.call("get_veg_focus_idx")) >= 0:
+			_loader.call("set_veg_focus_idx", -1)
 	if _focused != null:
 		return
 	if _crosshair != null and _crosshair.has_method("set_target_active"):
@@ -250,9 +305,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not CursorController.should_capture_look():
 		return
-	if not event.is_action_pressed("interact"):
+	var is_interact := event.is_action_pressed("interact")
+	var is_veg_edit := event.is_action_pressed("vegetation_area_edit")
+	if not is_interact and not is_veg_edit:
 		return
-	if _focused != null:
+	# NOTE: "vegetation_area_edit" shares the O key with "interact" (see
+	# project.godot), so both fire on the same keypress. A genuinely focused
+	# Interactable (SoI marker, placed prop, etc.) must win — vegetation-area
+	# tuning is only reached via the _try_open_veg_area() fallback below once
+	# nothing else (interactable / solar / building) is focused. Do NOT
+	# short-circuit on is_veg_edit here, or focused Interactables never get
+	# their interact() call.
+	if _focused != null and is_instance_valid(_focused):
 		if _focused is PlacedProp:
 			return
 		_focused.interact(_player)
@@ -274,3 +338,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		if bidx >= 0:
 			_loader.call("open_building_builder", bidx)
 			get_viewport().set_input_as_handled()
+			return
+	# Otherwise a focused OSM veg area → open its Tune look modal.
+	_try_open_veg_area()
+
+
+func _try_open_veg_area() -> bool:
+	if _loader == null or not _loader.has_method("get_veg_focus_idx") \
+			or not _loader.has_method("open_veg_area_modal"):
+		return false
+	var vidx := int(_loader.call("get_veg_focus_idx"))
+	if vidx < 0:
+		return false
+	_loader.call("open_veg_area_modal", vidx)
+	get_viewport().set_input_as_handled()
+	return true
