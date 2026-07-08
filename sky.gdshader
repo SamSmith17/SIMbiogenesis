@@ -35,6 +35,10 @@ group_uniforms moon; // Second DirectionalLight3D will be the moon
 	uniform float moon_blur : hint_range( 0.01, 10.0 ) = 0.1;
 	uniform float moon_glow : hint_range( 0.0, 2.0 ) = 0.5;
 	uniform vec3 moon_glow_color : source_color = vec3( 0.6, 0.7, 1.0 );
+	// 0 = no eclipse, 1 = full solar disc covered (drives totality sky dimming).
+	uniform float eclipse_obscuration : hint_range( 0.0, 1.0 ) = 0.0;
+	// 1 during total/near-total eclipse — enables photosphere-hidden solar corona.
+	uniform float eclipse_totality : hint_range( 0.0, 1.0 ) = 0.0;
 
 group_uniforms clouds;
 	// Replaced by noise functions, unncomment if you want to use graphical textures
@@ -61,8 +65,21 @@ group_uniforms cirrus; // High wispy streak clouds, independent of the cumulus l
 	uniform float cirrus_scale : hint_range( 0.1, 8.0, 0.01 ) = 2.6;
 	uniform float cirrus_speed : hint_range( 0.0, 20.0, 0.01 ) = 1.0;
 	uniform float cirrus_stretch : hint_range( 1.0, 16.0, 0.1 ) = 7.0;
+	uniform float cirrus_direction : hint_range( -0.5, 0.5, 0.01 ) = 0.2;
+	// Previous streak bearing + crossfade blend (0 = fully "prev", 1 = fully
+	// "direction"). Driven from GDScript (main._advance_cirrus_direction):
+	// large wind-bearing jumps are crossfaded between old/new orientation over
+	// real time instead of snapping instantly, since a hard rotation of the
+	// whole noise field reads as the entire sky spinning — real cirrus doesn't
+	// reorient as a solid sheet, new streaks form while old ones dissipate.
+	uniform float cirrus_direction_prev : hint_range( -0.5, 0.5, 0.01 ) = 0.2;
+	uniform float cirrus_dir_blend : hint_range( 0.0, 1.0, 0.01 ) = 1.0;
 	uniform float cirrus_coverage : hint_range( 0.0, 1.0, 0.01 ) = 0.55; // higher = more sky filled
 	uniform vec3 cirrus_color : source_color = vec3( 1.0, 1.0, 1.0 );
+
+group_uniforms rainbow;
+	// Primary + secondary bows opposite the sun (antisolar point); driven from SolarUI.
+	uniform float rainbow_strength : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
 
 group_uniforms stars;
 	// Stars texture - MUST be equirectangular projection with:
@@ -161,6 +178,13 @@ group_uniforms reference_stars;
 
 group_uniforms settings;
 	uniform float overwritten_time = 0.0;
+	// Dedicated clock for cloud/cirrus noise scroll (main._sky_motion_hours),
+	// decoupled from overwritten_time: at high simulation speeds, scrolling the
+	// cloud noise exactly in lockstep with the compressed calendar makes the sky
+	// whip past unrealistically fast, so this value grows sub-linearly with
+	// time_scale instead of 1:1 (see main._sky_motion_rate). Falls back to
+	// `time` (below) when unset, e.g. before the first update.
+	uniform float cloud_motion_time = 0.0;
 	uniform float star_rotation_angle = 0.0;
 	uniform float celestial_pole_elevation = 0.0;
 
@@ -252,6 +276,21 @@ group_uniforms settings;
 		n += 0.5 * single_value_cubic( 52, p.x * 2.31 + 11.7, p.y * 2.31 - 4.3 );
 		return clamp( n / 1.5 * 0.5 + 0.5, 0.0, 1.0 );
 	}
+	// Cirrus fractal noise sampled with UVs rotated to a given wind bearing
+	// (fraction of a full turn). Called twice per pixel — once for the old
+	// bearing, once for the new — so a wind-direction change can crossfade
+	// between orientations (see cirrus_dir_blend) instead of visibly rotating
+	// the whole streak field.
+	float sample_cirrus_noise( vec2 base_uv, float dir_frac, float cloud_time_v )
+	{
+		float _ang = dir_frac * PI * 2.0;
+		float _ca = cos( _ang );
+		float _sa = sin( _ang );
+		vec2 _uv = vec2( base_uv.x * _ca - base_uv.y * _sa, base_uv.x * _sa + base_uv.y * _ca );
+		_uv = vec2( _uv.x, _uv.y * cirrus_stretch ) * cirrus_scale;
+		_uv += vec2( cloud_time_v * cirrus_speed * 0.004, 0.0 );
+		return gen_cirrus_noise( _uv * 0.55 );
+	}
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Function needed to calculate the phase of the moon
@@ -267,6 +306,9 @@ float sphere_intersect( vec3 view_dir, vec3 sphere_pos, float radius )
 void sky()
 {
 	float time = overwritten_time != 0.0 ? overwritten_time : TIME;
+	// Cloud/cirrus noise scroll uses its own (sub-linearly time_scale-damped)
+	// clock so fast-forwarding the sim doesn't whip the sky past unrealistically.
+	float cloud_time = cloud_motion_time != 0.0 ? cloud_motion_time : time;
 
 	//////////////////// SHARED SOLAR GEOMETRY //////////////////////////////////////////////////////
 	// Computed once and reused by the sunset sky, the sun glow/aureole, cirrus and cumulus
@@ -309,6 +351,12 @@ void sky()
 	}
 
 	float _night_amount = clamp( -LIGHT0_DIRECTION.y + 0.7, 0.0, 1.0 );
+	// Totality / deep partial eclipse: daylight collapses while the sun is still up.
+	if( LIGHT0_DIRECTION.y > 0.0 && eclipse_obscuration > 0.05 )
+	{
+		float _eclipse_night = eclipse_obscuration * ( eclipse_obscuration > 0.92 ? 0.95 : 0.55 );
+		_night_amount = max( _night_amount, _eclipse_night );
+	}
 	vec3 _sky_night_color = mix( night_bottom_color, night_top_color, _eyedir_y );
 	_sky_color = mix( _sky_color, _sky_night_color, _night_amount );
 
@@ -329,8 +377,10 @@ void sky()
 
 	//////////////////// MOON //////////////////////////////////////////////////////////////////////
 	float _moon_amount = 0.0;
+	float _moon_phase_lit = 0.0; // 0 at new moon, 1 at full moon
 	if( LIGHT1_ENABLED )
 	{
+		_moon_phase_lit = pow( ( 1.0 - dot( LIGHT1_DIRECTION, LIGHT0_DIRECTION ) ) * 0.5, 0.7 );
 		// Subtle size increase near the horizon (reduced from 25% to 8%)
 		float _moon_size = moon_size + cos( LIGHT1_DIRECTION.y * PI ) * moon_size * 0.08;
 		float _moon_distance = distance( EYEDIR, LIGHT1_DIRECTION ) / _moon_size;
@@ -343,34 +393,29 @@ void sky()
 			float _glow_distance = distance( EYEDIR, LIGHT1_DIRECTION ) / _glow_radius;
 			// Soft radial falloff for circular glow (not affected by phase shape)
 			float _glow_amount = pow( max( 0.0, 1.0 - _glow_distance ), 2.0 + moon_glow );
-			
-			// Calculate overall moon phase brightness as a single value
-			// Based on angle between sun and moon directions (not per-pixel)
-			// When sun and moon are opposite (full moon), dot product is -1
-			// When same direction (new moon), dot product is 1
-			float _sun_moon_angle = dot( LIGHT1_DIRECTION, LIGHT0_DIRECTION );
-			float _phase_brightness = ( 1.0 - _sun_moon_angle ) * 0.5; // 0 at new moon, 1 at full moon
-			_phase_brightness = pow( _phase_brightness, 0.7 ); // Slight curve for more realistic falloff
-			
 			// Apply uniform glow intensity based on overall phase
-			_glow_amount *= moon_glow * _phase_brightness * ( 1.0 - _horizon_amount );
+			_glow_amount *= moon_glow * _moon_phase_lit * ( 1.0 - _horizon_amount );
 			// Blend glow color with sky
 			COLOR = mix( COLOR, moon_glow_color, _glow_amount * 0.4 );
 		}
 		
-		// Finding moon disc and edge blur
-		_moon_amount = clamp(( 1.0 - _moon_distance ) / moon_blur, 0.0, 1.0 );
-		if( _moon_amount > 0.0 )
+		// Skip the geometric disc at new moon — unlit moon is invisible against the sky.
+		if( _moon_phase_lit > 0.01 )
 		{
-			// Moon illumination depending on the position of the sun
-			float _moon_intersect = sphere_intersect( EYEDIR, LIGHT1_DIRECTION, _moon_size );
-			vec3 _moon_normal = normalize( LIGHT1_DIRECTION - EYEDIR * _moon_intersect );
-			// Sharp terminator line - use smoothstep for crisp shadow edge
-			float _raw_n_dot_l = dot( _moon_normal, -LIGHT0_DIRECTION );
-			float _moon_n_dot_l = smoothstep( -0.02, 0.08, _raw_n_dot_l );
-			// Hiding the moon behind the horizon
-			_moon_amount *= 1.0 - _horizon_amount;
-			COLOR = mix( COLOR, moon_color, _moon_n_dot_l * _moon_amount );
+			// Finding moon disc and edge blur
+			_moon_amount = clamp(( 1.0 - _moon_distance ) / moon_blur, 0.0, 1.0 );
+			if( _moon_amount > 0.0 )
+			{
+				// Moon illumination depending on the position of the sun
+				float _moon_intersect = sphere_intersect( EYEDIR, LIGHT1_DIRECTION, _moon_size );
+				vec3 _moon_normal = normalize( LIGHT1_DIRECTION - EYEDIR * _moon_intersect );
+				// Sharp terminator line - use smoothstep for crisp shadow edge
+				float _raw_n_dot_l = dot( _moon_normal, -LIGHT0_DIRECTION );
+				float _moon_n_dot_l = smoothstep( -0.02, 0.08, _raw_n_dot_l );
+				// Hiding the moon behind the horizon
+				_moon_amount *= 1.0 - _horizon_amount;
+				COLOR = mix( COLOR, moon_color, _moon_n_dot_l * _moon_amount );
+			}
 		}
 	}
 
@@ -380,8 +425,43 @@ void sky()
 	{
 		// Bigger, softer sun near the horizon (atmospheric swelling)
 		float _sun_size = sun_size + cos( LIGHT0_DIRECTION.y * PI ) * sun_size * 0.35;
-		// The sun is hidden by the horizon and by the moon (eclipse).
-		float _sun_visible = ( 1.0 - _horizon_amount ) * ( 1.0 - _moon_amount );
+		// Only a lit moon occludes the sun (new moon must not leave a black disc).
+		float _moon_occlude = _moon_amount * smoothstep( 0.04, 0.18, _moon_phase_lit );
+		float _cover = max( _moon_occlude, eclipse_obscuration );
+		float _sun_visible = ( 1.0 - _horizon_amount ) * ( 1.0 - _cover );
+
+		// === TOTALITY CORONA ===
+		// When the photosphere is covered the sky goes dark, but the solar corona remains
+		// visible as a pale wispy halo with streamers and a thin chromosphere ring.
+		if( eclipse_totality > 0.01 && eclipse_obscuration > 0.75 && LIGHT0_DIRECTION.y > 0.02 )
+		{
+			float _totality = eclipse_totality * smoothstep( 0.75, 0.90, eclipse_obscuration );
+			_totality *= ( 1.0 - _horizon_amount );
+			vec3 _sun_ax = normalize( LIGHT0_DIRECTION );
+			vec3 _ref_up = abs( _sun_ax.y ) > 0.95 ? vec3( 1.0, 0.0, 0.0 ) : vec3( 0.0, 1.0, 0.0 );
+			vec3 _tan = normalize( cross( _ref_up, _sun_ax ) );
+			vec3 _bit = cross( _sun_ax, _tan );
+			vec3 _to_pix = normalize( EYEDIR );
+			float _along_s = dot( _to_pix, _sun_ax );
+			vec3 _perp = _to_pix - _sun_ax * _along_s;
+			float _perp_len = length( _perp );
+			vec3 _perp_n = _perp_len > 1e-5 ? _perp / _perp_len : _tan;
+			float _ang = atan( dot( _perp_n, _tan ), dot( _perp_n, _bit ) );
+			// Normalized angular distance from sun centre (1 ≈ one disc radius).
+			float _r_norm = _sun_view_dist / max( _sun_size, 0.001 );
+			// Block the lunar silhouette; corona blooms outside the moon disc.
+			float _outside_moon = smoothstep( 0.85, 1.15, _r_norm );
+			float _stream = 0.55 + 0.45 * sin( _ang * 3.0 + sin( _ang * 7.0 ) * 0.35 );
+			float _wisp = 0.65 + 0.35 * gen_cirrus_noise( vec2( _ang * 1.8, _r_norm * 2.5 ) );
+			float _corona_rad = pow( max( 0.0, 1.0 - ( _r_norm - 0.9 ) / 9.0 ), 1.35 );
+			_corona_rad *= _outside_moon * _stream * _wisp;
+			vec3 _corona_col = mix( vec3( 0.88, 0.92, 1.0 ), vec3( 1.0, 0.96, 0.90 ), 0.25 );
+			COLOR += _corona_col * _corona_rad * _totality * 0.42;
+			// Chromosphere / Baily's-bead hint — warm thin ring just outside the limb.
+			float _beads = smoothstep( 0.92, 1.05, _r_norm ) * ( 1.0 - smoothstep( 1.35, 1.75, _r_norm ) );
+			_beads *= 0.82 + 0.18 * sin( _ang * 11.0 );
+			COLOR += vec3( 1.0, 0.48, 0.18 ) * _beads * _totality * 0.22;
+		}
 
 		// Golden-hour disc color: white-gold when high → gold → deep orange/red at the horizon.
 		vec3 _sun_disc_color = mix( sun_color, sun_gold_color, smoothstep( 0.0, 0.55, _sun_redden ) );
@@ -647,6 +727,24 @@ void sky()
 		COLOR += _ref_accum * ( 1.0 - _moon_amount );
 	}
 
+	//////////////////// RAINBOW /////////////////////////////////////////////////////////////////
+	// Descartes minimum-deviation arc (~42°) around the antisolar point; needs sun + rain.
+	if( rainbow_strength > 0.01 && LIGHT0_DIRECTION.y > 0.08 && EYEDIR.y > 0.02 )
+	{
+		vec3 _antisun = normalize( -LIGHT0_DIRECTION );
+		float _theta = acos( clamp( dot( EYEDIR, _antisun ), -1.0, 1.0 ) );
+		const float _PRIMARY = 0.733038; // 42 deg
+		const float _SECONDARY = 0.890118; // 51 deg
+		float _prim_band = 1.0 - smoothstep( 0.0, 0.035, abs( _theta - _PRIMARY ) );
+		_prim_band *= smoothstep( 0.02, 0.12, EYEDIR.y );
+		float _spec_t = clamp( ( _theta - 0.68 ) / 0.10, 0.0, 1.0 );
+		vec3 _bow_col = mix( vec3( 1.0, 0.25, 0.08 ), vec3( 0.45, 0.15, 0.95 ), _spec_t );
+		COLOR += _bow_col * _prim_band * rainbow_strength * 0.38;
+		float _sec_band = 1.0 - smoothstep( 0.0, 0.028, abs( _theta - _SECONDARY ) );
+		vec3 _bow2 = mix( vec3( 0.45, 0.15, 0.95 ), vec3( 1.0, 0.25, 0.08 ), _spec_t );
+		COLOR += _bow2 * _sec_band * rainbow_strength * 0.07;
+	}
+
 	//////////////////// CIRRUS //////////////////////////////////////////////////////////////////
 	// High, wispy, streaked clouds rendered independently of the cumulus layer (so they can
 	// appear in otherwise-clear skies).  A single stretched-and-rotated fractal makes the thin
@@ -654,19 +752,16 @@ void sky()
 	if( EYEDIR.y > 0.02 && cirrus_amount > 0.01 && LIGHT0_DIRECTION.y > -0.25 )
 	{
 		vec2 _cir_base = EYEDIR.xz / sqrt( EYEDIR.y );
-		// Rotate UVs so the streaks align with the wind (clouds_direction), then squash one
-		// axis to stretch the noise into filaments.
-		float _cir_ang = clouds_direction * PI * 2.0;
-		float _cca = cos( _cir_ang );
-		float _csa = sin( _cir_ang );
-		vec2 _cir_uv = vec2( _cir_base.x * _cca - _cir_base.y * _csa,
-							 _cir_base.x * _csa + _cir_base.y * _cca );
-		_cir_uv = vec2( _cir_uv.x, _cir_uv.y * cirrus_stretch ) * cirrus_scale;
-		_cir_uv += vec2( time * cirrus_speed * 0.004, 0.0 );
-		float _cir_noise = gen_cirrus_noise( _cir_uv * 0.55 );
+		// Sample the streak noise at both the previous and current wind bearing and
+		// crossfade between them (cirrus_dir_blend) — avoids the whole sky visibly
+		// "spinning" when the high-altitude wind direction jumps.
+		float _cir_noise_from = sample_cirrus_noise( _cir_base, cirrus_direction_prev, cloud_time );
+		float _cir_noise_to = sample_cirrus_noise( _cir_base, cirrus_direction, cloud_time );
 		// Coverage widens the accepted band; higher coverage = more of the sky filled.
 		float _cir_lo = mix( 0.62, 0.40, cirrus_coverage );
-		float _cir = smoothstep( _cir_lo, _cir_lo + 0.28, _cir_noise ) * cirrus_amount;
+		float _cir_from = smoothstep( _cir_lo, _cir_lo + 0.28, _cir_noise_from );
+		float _cir_to = smoothstep( _cir_lo, _cir_lo + 0.28, _cir_noise_to );
+		float _cir = mix( _cir_from, _cir_to, clamp( cirrus_dir_blend, 0.0, 1.0 ) ) * cirrus_amount;
 		// Fade out toward the horizon and at night.
 		_cir *= clamp( ( EYEDIR.y - 0.02 ) / 0.14, 0.0, 1.0 );
 		_cir *= 1.0 - _night_amount * 0.92;
@@ -690,7 +785,7 @@ void sky()
 		vec2 _sky_uv = EYEDIR.xz / sqrt( EYEDIR.y );
 		
 		// Clouds UV movement direction
-		float _clouds_speed = time * clouds_speed * 0.01;
+		float _clouds_speed = cloud_time * clouds_speed * 0.01;
 		float _sin_x = sin( clouds_direction * PI * 2.0 );
 		float _cos_y = cos( clouds_direction * PI * 2.0 );
 		// I using 3 levels of clouds. Top is the lightes and botom the darkest.

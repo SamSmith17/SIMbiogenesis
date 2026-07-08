@@ -409,11 +409,36 @@ var cloud_shadow_strength : float = 0.6 :
 
 ## Lazily-created noise for the cloud-shadow drift (see _compute_cloud_shadow_factor).
 var _cloud_shadow_noise : FastNoiseLite = null
-## Cached cloud drift speed/direction (static sky-shader uniforms), read once.
+## Cached cloud drift speed/direction — refreshed from Open-Meteo wind in _update_clouds().
 var _cloud_shadow_speed : float = 2.0
 var _cloud_shadow_dir : float = 0.2
 
-## Antisolar rainbow visibility (0-1), driven by SolarUI when sun + rain align.
+## Dedicated clock for the sky shader's cloud/cirrus noise scroll (sent as
+## "cloud_motion_time"), advanced every frame in _process() by REAL delta ×
+## _sky_motion_rate(time_scale). Kept separate from the sim's absolute date
+## clock (day_of_year/day_time) so cloud drift doesn't scale 1:1 with
+## simulation speed — at high time_scale (fast-forward), scrolling the noise
+## exactly in lockstep with the compressed calendar made the sky whip past
+## unrealistically fast (even the default 60x speed looked wrong).
+var _sky_motion_hours : float = 0.0
+## time_scale (hours of sim time per real second) at the "1x" speed preset —
+## below/at this rate, cloud motion is left exactly as before (unchanged
+## real-time behavior); only faster-than-1x speeds get damped.
+const _SKY_MOTION_REF_TIME_SCALE : float = 1.0 / 3600.0
+
+## Cirrus streak wind bearing crossfade (see _advance_cirrus_direction): a hard
+## rotation of the whole noise field reads as the entire sky spinning, which
+## real high cirrus doesn't do (new streaks form in the new wind direction
+## while old ones dissipate). Large bearing jumps fade between the old and new
+## orientation over real time instead of snapping instantly.
+var _cirrus_dir_from : float = 0.2
+var _cirrus_dir_to : float = 0.2
+var _cirrus_dir_blend : float = 1.0  # 0 = fully "_from", 1 = fully "_to" (settled)
+var _cirrus_dir_last_ms : int = -1
+const _CIRRUS_DIR_JUMP_THRESHOLD : float = 0.06  # ~22 deg bearing change starts a crossfade
+const _CIRRUS_DIR_TRANSITION_S : float = 1.6  # real seconds for a full crossfade
+
+## Antisolar rainbow visibility (0–1), driven by SolarUI when sun + rain align.
 var rainbow_strength : float = 0.0
 
 ## Brief exposure bump when lightning strikes (decays in _process).
@@ -421,6 +446,9 @@ var lightning_flash_boost : float = 0.0
 
 var _precipitation_vfx : PrecipitationVfx
 var _lightning_vfx : LightningVfx
+
+const CLOUDS_SPEED_BASE : float = 2.0
+const CIRRUS_SPEED_BASE : float = 1.0
 
 # ACES over Linear (Forward+ default): an A/B screenshot comparison (vista/
 # golden-hour/night, both maps) showed Linear leaves distant terrain visibly
@@ -1761,6 +1789,7 @@ func _process( delta: float ) -> void :
 		# throttled below.
 		clock.day_time += delta * time_scale
 		_session_playtime_seconds += delta
+		_sky_motion_hours += delta * _sky_motion_rate( time_scale )
 		# Planets are tiny points, so the 20 Hz sky throttle below makes them
 		# visibly jump at high speed while the sun/moon glide. Push them every
 		# frame (cheap — 5 planets × a few uniforms); PlanetSystem eases each
@@ -1860,20 +1889,8 @@ func _compute_cloud_shadow_factor() -> float :
 		_cloud_shadow_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 		_cloud_shadow_noise.fractal_octaves = 2
 		_cloud_shadow_noise.frequency = 0.5
-		# Cache the static cloud drift uniforms once (they don't change at runtime),
-		# rather than reading shader parameters every _update_sun() call.
-		if is_instance_valid( environment ) and environment.environment != null \
-				and environment.environment.sky != null \
-				and environment.environment.sky.sky_material != null :
-			var mat := environment.environment.sky.sky_material
-			var sv = mat.get_shader_parameter( "clouds_speed" )
-			var dv = mat.get_shader_parameter( "clouds_direction" )
-			if sv != null :
-				_cloud_shadow_speed = float( sv )
-			if dv != null :
-				_cloud_shadow_dir = float( dv )
-	# Drift along the same bearing/speed as the sky-shader clouds (real engine
-	# seconds, since the sky clouds scroll on TIME, not sim time).
+	# Drift along the same bearing/speed as the sky-shader clouds (updated each
+	# _update_clouds() from live Open-Meteo wind).
 	var t : float = float( Time.get_ticks_msec() ) / 1000.0 * maxf( _cloud_shadow_speed, 0.01 ) * 0.06
 	var ang : float = _cloud_shadow_dir * TAU
 	var n : float = _cloud_shadow_noise.get_noise_2d( cos( ang ) * t, sin( ang ) * t ) * 0.5 + 0.5
@@ -1987,11 +2004,85 @@ func get_lunar_phase() -> float :
 func get_lunar_phase_name() -> String :
 	return clock.get_lunar_phase_name()
 
+## Sub-linear (sqrt) damping of the sky-shader "cloud clock" rate vs. time_scale.
+## At or below the "1x" reference speed, behaves exactly like before (rate ==
+## time_scale). Above it, the effective rate grows with sqrt(ratio) instead of
+## the ratio itself, so e.g. the default 60x speed drives clouds ~7.7x faster
+## than real-time (still a visible time-lapse) instead of a literal 60x — and
+## even "Max" (~7200x) stays bounded instead of strobing.
+func _sky_motion_rate( ts : float ) -> float :
+	var ref := _SKY_MOTION_REF_TIME_SCALE
+	var mag := absf( ts )
+	if ref <= 0.0 or mag <= ref :
+		return ts
+	return sqrt( ref * mag ) * signf( ts )
+
+## Shortest signed distance (in turns, i.e. fraction-of-360°) from `b` to `a`,
+## wrapped to [-0.5, 0.5]. Used to detect/smooth cirrus wind-bearing jumps.
+static func _wrapped_turn_delta( a : float, b : float ) -> float :
+	var dist := a - b
+	dist -= round( dist )
+	return dist
+
+## Advances the cirrus streak bearing crossfade toward `target_dir` (a
+## WindMath.bearing_fraction value). Small drifts creep the settled direction
+## smoothly; a jump past _CIRRUS_DIR_JUMP_THRESHOLD starts a real-time
+## crossfade from the old bearing to the new one (see sky.gdshader cirrus_*).
+func _advance_cirrus_direction( target_dir : float ) -> void :
+	var now_ms := Time.get_ticks_msec()
+	var real_dt := 0.0
+	if _cirrus_dir_last_ms >= 0 :
+		real_dt = clampf( float( now_ms - _cirrus_dir_last_ms ) / 1000.0, 0.0, 0.5 )
+	_cirrus_dir_last_ms = now_ms
+
+	if _cirrus_dir_blend >= 1.0 :
+		var jump := _wrapped_turn_delta( target_dir, _cirrus_dir_to )
+		if absf( jump ) > _CIRRUS_DIR_JUMP_THRESHOLD :
+			_cirrus_dir_from = _cirrus_dir_to
+			_cirrus_dir_to = target_dir
+			_cirrus_dir_blend = 0.0
+		else :
+			# Below the jump threshold: creep the settled bearing smoothly rather
+			# than snapping every update (keeps slow diurnal wind drift smooth).
+			_cirrus_dir_to = wrapf( _cirrus_dir_to + jump, -0.5, 0.5 )
+			_cirrus_dir_from = _cirrus_dir_to
+	else :
+		# Mid-crossfade: keep tracking the latest target so a fast-changing wind
+		# doesn't leave the streaks chasing a stale bearing once it completes.
+		_cirrus_dir_to = target_dir
+		_cirrus_dir_blend = minf( 1.0, _cirrus_dir_blend + real_dt / _CIRRUS_DIR_TRANSITION_S )
+		if _cirrus_dir_blend >= 1.0 :
+			_cirrus_dir_from = _cirrus_dir_to
+
 func _update_clouds() -> void :
-	if is_instance_valid( environment ) :
-		environment.environment.sky.sky_material.set_shader_parameter( "clouds_cutoff", clouds_cutoff )
-		environment.environment.sky.sky_material.set_shader_parameter( "clouds_weight", clouds_weight )
-		environment.environment.sky.sky_material.set_shader_parameter( "cirrus_amount", cirrus_amount )
+	if not is_instance_valid( environment ) :
+		return
+	var mat := environment.environment.sky.sky_material
+	mat.set_shader_parameter( "clouds_cutoff", clouds_cutoff )
+	mat.set_shader_parameter( "clouds_weight", clouds_weight )
+	mat.set_shader_parameter( "cirrus_amount", cirrus_amount )
+	mat.set_shader_parameter( "rainbow_strength", rainbow_strength )
+	mat.set_shader_parameter( "cloud_motion_time", _sky_motion_hours * 100.0 )
+	var m := month
+	var d := day
+	var h := day_time
+	var low_dir := WeatherService.wind_direction_deg_low( m, d, h, latitude )
+	var high_dir := WeatherService.wind_direction_deg_high( m, d, h, latitude )
+	var low_spd := WeatherService.wind_speed_ms_low( m, d, h )
+	var high_spd := WeatherService.wind_speed_ms_high( m, d, h )
+	var low_bear := WindMath.bearing_fraction( low_dir )
+	var high_bear := WindMath.bearing_fraction( high_dir )
+	mat.set_shader_parameter( "clouds_direction", low_bear )
+	_advance_cirrus_direction( high_bear )
+	mat.set_shader_parameter( "cirrus_direction", _cirrus_dir_to )
+	mat.set_shader_parameter( "cirrus_direction_prev", _cirrus_dir_from )
+	mat.set_shader_parameter( "cirrus_dir_blend", _cirrus_dir_blend )
+	var spd_scale := clampf( low_spd / 6.0, 0.35, 2.2 ) if is_finite( low_spd ) and not is_nan( low_spd ) else 1.0
+	var cir_scale := clampf( high_spd / 8.0, 0.3, 2.0 ) if is_finite( high_spd ) and not is_nan( high_spd ) else 1.0
+	mat.set_shader_parameter( "clouds_speed", CLOUDS_SPEED_BASE * spd_scale )
+	mat.set_shader_parameter( "cirrus_speed", CIRRUS_SPEED_BASE * cir_scale )
+	_cloud_shadow_speed = CLOUDS_SPEED_BASE * spd_scale
+	_cloud_shadow_dir = low_bear
 
 func _update_celestial_sizes() -> void :
 	if is_instance_valid( environment ) :
