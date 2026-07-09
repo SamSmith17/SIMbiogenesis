@@ -84,8 +84,8 @@ func _process(delta: float) -> void:
 	if _graph_poll_accum < 0.25:
 		return
 	_graph_poll_accum = 0.0
-	var graph := get_parent().get_node_or_null("SystemGraphView") if get_parent() != null else null
-	var want_hidden := graph != null and graph.visible
+	var graph: Node = get_parent().get_node_or_null("SystemGraphView") if get_parent() != null else null
+	var want_hidden: bool = graph is CanvasItem and (graph as CanvasItem).visible
 	if visible == want_hidden:
 		visible = not want_hidden
 

@@ -8,14 +8,16 @@ const BADGE_TEXT := Color(0.92, 0.96, 1.00, 1.0)
 
 
 ## Draws a pill-shaped badge anchored to the top-right corner of `rect`.
-func draw_badge(canvas: CanvasItem, rect: Rect2, label: String, accent: Color) -> void:
+## `zoom` scales font + padding (graph zoom-proportional convention).
+func draw_badge(canvas: CanvasItem, rect: Rect2, label: String, accent: Color,
+		zoom: float = 1.0) -> void:
 	var fnt  := ThemeDB.fallback_font
-	var fs   := 13
+	var fs   := maxi(6, int(round(13.0 * zoom)))
 	var size := fnt.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
-	var pad  := Vector2(10.0, 5.0)
+	var pad  := Vector2(10.0, 5.0) * maxf(zoom, 0.35)
 	var bw   := size.x + pad.x * 2.0
 	var bh   := size.y + pad.y * 2.0
-	var bg   := Rect2(rect.position + Vector2(rect.size.x - bw - 5.0, 5.0), Vector2(bw, bh))
+	var bg   := Rect2(rect.position + Vector2(rect.size.x - bw - 5.0 * zoom, 5.0 * zoom), Vector2(bw, bh))
 
 	# Pill background + accent outline
 	var sb := StyleBoxFlat.new()

@@ -62,8 +62,10 @@ func _process(delta: float) -> void:
 		var automation : Automation = _automations[automation_id]
 		if automation != null and automation.enabled:
 			var triggered := automation.evaluate(_context)
-			if triggered and debug_logging:
-				pass
+			if triggered:
+				# Signal was declared but never emitted — UI consumers (graph
+				# node flash, badges) rely on it now.
+				automation_triggered.emit(automation_id)
 
 func _update_context() -> void:
 	var tree := get_tree()

@@ -68,7 +68,11 @@ var _mode := "build"   # "build" | "test"
 
 var _solar_ui: Control = null
 var _graph_dashboard: GraphDashboardPanel = null
-var _legend_btn: Button = null
+var _legend_btn: Button = null   # legacy (unused since View ▾ menu); kept for safety
+var _view_menu: MenuButton = null
+const VIEW_LEGEND := 100
+const VIEW_HISTORY := 101
+const VIEW_HINTS := 102
 var _pan_right_mouse := true
 ## Populated on first deferred init from the owning Main node's scene path.
 var _cached_scene_tag: String = ""
@@ -125,14 +129,17 @@ var _history_initialized:  bool = false
 ## Topbar undo/redo buttons — stored so we can update their disabled state.
 var _undo_btn: Button = null
 var _redo_btn: Button = null
-var _group_btn: Button = null
-var _ungroup_btn: Button = null
-var _make_array_btn: Button = null
-var _make_battery_bank_btn: Button = null
-var _series_btn: Button = null
-var _parallel_btn: Button = null
-var _arrange_btn: Button = null
-var _placeholder_btn: Button = null
+# Combine ▾ dropdown replaces the old Group/Ungroup/Array/Bank/Series/
+# Parallel/Arrange/3D-Ph button row (topbar streamlining).
+var _combine_menu: MenuButton = null
+const COMBINE_GROUP := 0
+const COMBINE_UNGROUP := 1
+const COMBINE_ARRAY := 2
+const COMBINE_BANK := 3
+const COMBINE_SERIES := 4
+const COMBINE_PARALLEL := 5
+const COMBINE_ARRANGE := 6
+const COMBINE_PLACEHOLDER := 7
 var _enter_btn: Button = null
 var _back_btn: Button = null
 var _scope_breadcrumb: Label = null
@@ -233,7 +240,32 @@ func _ready() -> void:
 	call_deferred("_deferred_restore_graph_autosave")
 	call_deferred("_init_conduit_manager")
 	call_deferred("_init_placeholder_host")
+	_connect_automation_feedback()
 	set_process(false)
+
+
+## Flash the bound graph node when one of its automation rules fires.
+func _connect_automation_feedback() -> void:
+	var eng := get_node_or_null("/root/AutomationEngine")
+	if eng == null or not eng.has_signal("automation_triggered"):
+		return
+	if not eng.is_connected("automation_triggered", _on_automation_triggered):
+		eng.connect("automation_triggered", _on_automation_triggered)
+
+
+func _on_automation_triggered(automation_id: String) -> void:
+	if model == null or _graph_canvas == null or automation_id.is_empty():
+		return
+	if not visible:
+		return
+	for it: Dictionary in model.items:
+		var specs: Dictionary = it.get("specs", {}) as Dictionary
+		var autos: Array = specs.get("graph_automations", []) as Array
+		for a: Variant in autos:
+			if a is Dictionary and str((a as Dictionary).get("id", "")) == automation_id:
+				if _graph_canvas.has_method("flash_item"):
+					_graph_canvas.call("flash_item", str(it.get("id", "")))
+				return
 
 
 func _exit_tree() -> void:
@@ -653,35 +685,34 @@ func _build_topbar() -> Control:
 	sep1.add_theme_constant_override("separation", 8)
 	left_grp.add_child(sep1)
 
-	_group_btn             = _make_topbar_btn("Group")
-	_ungroup_btn           = _make_topbar_btn("Ungroup")
-	_make_array_btn        = _make_topbar_btn("Array")
-	_make_battery_bank_btn = _make_topbar_btn("Bank")
-	_series_btn            = _make_topbar_btn("Series")
-	_parallel_btn          = _make_topbar_btn("Parallel")
-	_arrange_btn           = _make_topbar_btn("Arrange")
-	_placeholder_btn       = _make_topbar_btn("3D Ph")
-	_enter_btn             = _make_topbar_btn("▸ Enter")
-	_back_btn              = _make_topbar_btn("◂ Back")
-	_make_array_btn.tooltip_text     = "Make Array from selection"
-	_make_battery_bank_btn.tooltip_text = "Make Battery Bank"
-	_series_btn.tooltip_text = "Wire selected panels in series → controller PV ports"
-	_parallel_btn.tooltip_text = "Wire selected panels in parallel → controller PV ports"
-	_arrange_btn.tooltip_text = "Auto-space overlapping nodes and fit view"
-	_placeholder_btn.tooltip_text = "Spawn a 3D cube placeholder linked to the selected node"
-	_group_btn.pressed.connect(_on_group_selected_pressed)
-	_ungroup_btn.pressed.connect(_on_ungroup_selected_pressed)
-	_make_array_btn.pressed.connect(_on_make_array_pressed)
-	_make_battery_bank_btn.pressed.connect(_on_make_battery_bank_pressed)
-	_series_btn.pressed.connect(_on_series_wiring_pressed)
-	_parallel_btn.pressed.connect(_on_parallel_wiring_pressed)
-	_arrange_btn.pressed.connect(_on_arrange_graph_pressed)
-	_placeholder_btn.pressed.connect(_on_spawn_3d_placeholder_pressed)
+	# Combine ▾ — grouping / compound / wiring / layout ops in one dropdown
+	# (was 8 equal-weight buttons crowding the bar).
+	_combine_menu = _make_topbar_menu_btn("Combine ▾")
+	_combine_menu.tooltip_text = "Group, arrays, banks, series/parallel wiring, arrange"
+	var cp := _combine_menu.get_popup()
+	cp.add_item("Group loads", COMBINE_GROUP)
+	cp.add_item("Ungroup", COMBINE_UNGROUP)
+	cp.add_separator()
+	cp.add_item("Make Solar Array", COMBINE_ARRAY)
+	cp.add_item("Make Battery Bank", COMBINE_BANK)
+	cp.add_separator()
+	cp.add_item("Wire panels in Series", COMBINE_SERIES)
+	cp.add_item("Wire panels in Parallel", COMBINE_PARALLEL)
+	cp.add_separator()
+	cp.add_item("Arrange layout", COMBINE_ARRANGE)
+	cp.add_item("Spawn 3D placeholder", COMBINE_PLACEHOLDER)
+	cp.id_pressed.connect(_on_combine_menu_id)
+	left_grp.add_child(_combine_menu)
+
+	_enter_btn = _make_topbar_btn("▸ Enter")
+	_back_btn  = _make_topbar_btn("◂ Back")
 	_enter_btn.pressed.connect(_on_enter_selected_compound)
 	_back_btn.pressed.connect(_on_back_scope_pressed)
-	for b2: Button in [_group_btn, _ungroup_btn, _make_array_btn, _make_battery_bank_btn,
-			_series_btn, _parallel_btn, _arrange_btn, _placeholder_btn, _enter_btn, _back_btn]:
-		left_grp.add_child(b2)
+	var sep_nav := VSeparator.new()
+	sep_nav.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
+	left_grp.add_child(sep_nav)
+	left_grp.add_child(_enter_btn)
+	left_grp.add_child(_back_btn)
 	_update_special_group_buttons()
 
 	# ── CENTER: flexible fill ──────────────────────────────────────────────
@@ -740,28 +771,54 @@ func _build_topbar() -> Control:
 	sep3.add_theme_constant_override("separation", 8)
 	right_grp.add_child(sep3)
 
-	var hints_btn := _make_topbar_btn("Hints")
-	_legend_btn = _make_topbar_btn("Legend")
-	_legend_btn.tooltip_text = "Toggle wire-color legend on the canvas"
-	_legend_btn.pressed.connect(_on_legend_toggle)
-	_history_btn  = _make_topbar_btn("🕒 History")
+	# View ▾ — Legend / History / Hints consolidated (was three buttons).
+	_view_menu = _make_topbar_menu_btn("View ▾")
+	_view_menu.tooltip_text = "Legend, history playback, hints"
+	var vp := _view_menu.get_popup()
+	vp.add_check_item("Wire-color legend", VIEW_LEGEND)
+	vp.add_check_item("🕒 History playback", VIEW_HISTORY)
+	vp.add_separator()
+	vp.add_item("Hints & shortcuts", VIEW_HINTS)
+	vp.id_pressed.connect(_on_view_menu_id)
+	right_grp.add_child(_view_menu)
+
 	var save_btn  := _make_topbar_btn("💾 Save")
 	var load_btn  := _make_topbar_btn("📂 Load")
-	hints_btn.pressed.connect(_on_show_hints)
-	_history_btn.pressed.connect(_on_history_btn_pressed)
 	save_btn.pressed.connect(_on_save_pressed)
 	load_btn.pressed.connect(_on_load_pressed)
-	for b: Button in [_legend_btn, hints_btn, _history_btn, save_btn, load_btn]:
-		right_grp.add_child(b)
+	right_grp.add_child(save_btn)
+	right_grp.add_child(load_btn)
 
 	return bar
+
+
+func _on_view_menu_id(id: int) -> void:
+	match id:
+		VIEW_LEGEND:  _on_legend_toggle()
+		VIEW_HISTORY: _on_history_btn_pressed()
+		VIEW_HINTS:   _on_show_hints()
 
 
 func _make_topbar_btn(label: String) -> Button:
 	var b := Button.new()
 	b.text       = label
 	b.focus_mode = Control.FOCUS_NONE
+	_apply_topbar_btn_style(b)
+	return b
 
+
+## Topbar dropdown (MenuButton shares Button's stylebox slots).
+func _make_topbar_menu_btn(label: String) -> MenuButton:
+	var b := MenuButton.new()
+	b.text       = label
+	b.focus_mode = Control.FOCUS_NONE
+	b.flat       = false
+	b.switch_on_hover = false
+	_apply_topbar_btn_style(b)
+	return b
+
+
+func _apply_topbar_btn_style(b: Button) -> void:
 	var sb_n := StyleBoxFlat.new()
 	sb_n.bg_color     = Color(0.10, 0.14, 0.24, 1.0)
 	sb_n.border_color = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.55)
@@ -785,7 +842,6 @@ func _make_topbar_btn(label: String) -> Button:
 	b.add_theme_stylebox_override("pressed", sb_p)
 	b.add_theme_color_override("font_color", C_TEXT)
 	b.add_theme_font_size_override("font_size", 13)
-	return b
 
 
 func _restyle_btn_amber(b: Button) -> void:
@@ -1995,9 +2051,24 @@ func _ids_form_connected_component(ids: Array[String]) -> bool:
 	return seen.size() == ids.size()
 
 
+func _on_combine_menu_id(id: int) -> void:
+	match id:
+		COMBINE_GROUP:       _on_group_selected_pressed()
+		COMBINE_UNGROUP:     _on_ungroup_selected_pressed()
+		COMBINE_ARRAY:       _on_make_array_pressed()
+		COMBINE_BANK:        _on_make_battery_bank_pressed()
+		COMBINE_SERIES:      _on_series_wiring_pressed()
+		COMBINE_PARALLEL:    _on_parallel_wiring_pressed()
+		COMBINE_ARRANGE:     _on_arrange_graph_pressed()
+		COMBINE_PLACEHOLDER: _on_spawn_3d_placeholder_pressed()
+
+
+## Enable/disable Combine ▾ items from the current selection (same predicates
+## the old dedicated buttons used).
 func _update_special_group_buttons() -> void:
-	if _make_array_btn == null or _make_battery_bank_btn == null:
+	if _combine_menu == null:
 		return
+	var popup := _combine_menu.get_popup()
 	var selected := _get_group_candidates(true)
 	var load_selected := _get_load_group_candidates()
 	var can_array := selected.size() >= 2
@@ -2014,25 +2085,26 @@ func _update_special_group_buttons() -> void:
 			if not _is_battery_candidate(model.get_item(sid)):
 				can_bank = false
 				break
-	_make_array_btn.disabled = not can_array
-	_make_battery_bank_btn.disabled = not can_bank
-	if _series_btn != null:
-		var can_wire := _count_panel_selection() >= 2
-		_series_btn.disabled = not can_wire
-		_parallel_btn.disabled = not can_wire
-	_make_array_btn.tooltip_text = "Select 2+ panel/array nodes to condense into one explicit array"
-	_make_battery_bank_btn.tooltip_text = "Select connected batteries/banks to condense into one bank node"
-	if _group_btn != null:
-		_group_btn.disabled = not can_group_loads
-		_group_btn.tooltip_text = "Select 2+ wired load/processor nodes, then group into one combined node"
-	if _ungroup_btn != null:
-		var can_ungroup := false
-		if _selected_item_ids.size() == 1 and model != null:
-			var comp := model.get_item(_selected_item_ids[0])
-			if not comp.is_empty() and str(comp.get("type", "")) == "compound":
-				can_ungroup = true
-		_ungroup_btn.disabled = not can_ungroup
-		_ungroup_btn.tooltip_text = "Ungroup a selected load group or compound"
+	var can_ungroup := false
+	if _selected_item_ids.size() == 1 and model != null:
+		var comp := model.get_item(_selected_item_ids[0])
+		if not comp.is_empty() and str(comp.get("type", "")) == "compound":
+			can_ungroup = true
+	var can_wire := _count_panel_selection() >= 2
+	var states := {
+		COMBINE_GROUP: can_group_loads,
+		COMBINE_UNGROUP: can_ungroup,
+		COMBINE_ARRAY: can_array,
+		COMBINE_BANK: can_bank,
+		COMBINE_SERIES: can_wire,
+		COMBINE_PARALLEL: can_wire,
+		COMBINE_ARRANGE: true,
+		COMBINE_PLACEHOLDER: true,
+	}
+	for id: int in states:
+		var idx := popup.get_item_index(id)
+		if idx >= 0:
+			popup.set_item_disabled(idx, not bool(states[id]))
 
 
 func _is_array_candidate(item: Dictionary) -> bool:
@@ -3724,12 +3796,16 @@ func _on_legend_toggle() -> void:
 
 
 func _update_legend_btn() -> void:
-	if _legend_btn == null:
-		return
 	var on := false
 	if _graph_canvas != null and _graph_canvas.has_method("is_legend_visible"):
 		on = bool(_graph_canvas.call("is_legend_visible"))
-	_set_mode_btn_style(_legend_btn, on)
+	if _legend_btn != null:
+		_set_mode_btn_style(_legend_btn, on)
+	if _view_menu != null:
+		var popup := _view_menu.get_popup()
+		var idx := popup.get_item_index(VIEW_LEGEND)
+		if idx >= 0:
+			popup.set_item_checked(idx, on)
 
 
 ## Toggle the world PowerDevice bound to a virtual graph item.
@@ -3820,6 +3896,7 @@ func _on_history_btn_pressed() -> void:
 			_history_player.State.LOADING, _history_player.State.READY]:
 		_history_player.stop()
 		_hide_history_panel()
+		_set_view_menu_checked(VIEW_HISTORY, false)
 		return
 	_ensure_history_panel()
 	_history_panel.visible = true
@@ -3830,6 +3907,16 @@ func _on_history_btn_pressed() -> void:
 	})
 	if _history_status_lbl != null:
 		_history_status_lbl.text = "Loading last %d h…" % _HISTORY_HOURS_BACK
+	_set_view_menu_checked(VIEW_HISTORY, true)
+
+
+func _set_view_menu_checked(id: int, on: bool) -> void:
+	if _view_menu == null:
+		return
+	var popup := _view_menu.get_popup()
+	var idx := popup.get_item_index(id)
+	if idx >= 0:
+		popup.set_item_checked(idx, on)
 
 
 func _ensure_history_panel() -> void:

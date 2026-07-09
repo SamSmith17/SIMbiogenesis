@@ -364,6 +364,13 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 			vis_speed = 6.0
 		_flow_phase = fmod(_flow_phase + delta * vis_speed, TAU)
 		_needs_continuous_redraw = true
+	# Automation flash pulse decay
+	if not _item_flash.is_empty():
+		for fid: Variant in _item_flash.keys():
+			_item_flash[fid] = float(_item_flash[fid]) - delta
+			if float(_item_flash[fid]) <= 0.0:
+				_item_flash.erase(fid)
+		_needs_continuous_redraw = true
 	# Smoke / destroy FX decay
 	var fx_alive := false
 	for i in range(_destroy_fx.size() - 1, -1, -1):
@@ -1972,6 +1979,8 @@ func _render_connection(
 			_draw_resource_wire_path(
 				[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_in],
 				col, width, flowing, reverse, curve_t, res_rate, res_kind, sankey_scale)
+		if flowing and _zoom >= WIRE_LABEL_MIN_ZOOM:
+			_draw_flow_label(src_pos, tgt_pos, wps, res_rate, true, res_kind, col)
 		_draw_connection_waypoint_handles(conn, center)
 		return
 	if style == "orthogonal":
@@ -1986,7 +1995,50 @@ func _render_connection(
 			[src_pos] + wps + [tgt_pos],
 			[src_t, tgt_tang_in],
 			col, width, flowing, flow_watts, reverse, curve_t)
+	if flowing and _zoom >= WIRE_LABEL_MIN_ZOOM:
+		_draw_flow_label(src_pos, tgt_pos, wps, flow_watts, false, "", col)
 	_draw_connection_waypoint_handles(conn, center)
+
+
+# Flow-rate labels on wires (Test mode only — callers gate on `flowing`).
+const WIRE_LABEL_MIN_ZOOM := 0.8
+const WIRE_LABEL_FONT_PX := 10.0   # graph-space design size (× _zoom on draw)
+
+## Small readout pill at the wire midpoint: "512 W" / "1.20 kW" for electrical,
+## "6.3 L/h" for typed resources.
+func _draw_flow_label(src_pos: Vector2, tgt_pos: Vector2, wps: Array,
+		value: float, is_resource: bool, kind: String, wire_col: Color) -> void:
+	var txt: String
+	if is_resource:
+		if value <= ResourceEdgeVis.FLOW_DEAD_RATE:
+			return
+		txt = "%.1f %s/h" % [value, ResourceKinds.default_unit(kind)]
+	else:
+		if value < WIRE_DEAD_W:
+			return
+		txt = ("%.2f kW" % (value / 1000.0)) if value >= 1000.0 else ("%d W" % int(round(value)))
+
+	# Midpoint of the middle segment of the (src + waypoints + tgt) polyline —
+	# robust for bezier and orthogonal styles without resampling the curve.
+	var pts: Array = [src_pos] + wps + [tgt_pos]
+	@warning_ignore("integer_division")
+	var mid_seg: int = (pts.size() - 1) / 2
+	var mid: Vector2 = ((pts[mid_seg] as Vector2) + (pts[mini(mid_seg + 1, pts.size() - 1)] as Vector2)) * 0.5
+
+	var fnt := ThemeDB.fallback_font
+	var fs := maxi(6, int(round(WIRE_LABEL_FONT_PX * _zoom)))
+	var ts := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+	var pad := 3.0 * _zoom
+	var rect := Rect2(mid - ts * 0.5 - Vector2(pad, pad),
+			ts + Vector2(pad * 2.0, pad * 2.0))
+	draw_rect(rect, Color(0.04, 0.06, 0.11, 0.85), true)
+	draw_rect(rect, Color(wire_col.r, wire_col.g, wire_col.b, 0.45), false, maxf(0.8, 1.0 * _zoom))
+	var txt_col := Color(
+		lerpf(wire_col.r, 1.0, 0.35),
+		lerpf(wire_col.g, 1.0, 0.35),
+		lerpf(wire_col.b, 1.0, 0.35), 0.96)
+	draw_string(fnt, Vector2(rect.position.x + pad, rect.end.y - pad - fs * 0.18),
+		txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, txt_col)
 
 
 func _bezier_pos(from: Vector2, c1: Vector2, c2: Vector2, to: Vector2, t: float) -> Vector2:
@@ -2830,6 +2882,8 @@ func _draw() -> void:
 		_draw_connections()
 		for item: Dictionary in _visible_items():
 			_render_item(item)
+		for item: Dictionary in _visible_items():
+			_draw_item_overlays(item)
 
 	_draw_destroy_fx()
 	_draw_temp_wire()                # always on top of everything
@@ -2842,6 +2896,46 @@ func _draw() -> void:
 # ---------------------------------------------------------------------------
 # Model-driven item rendering
 # ---------------------------------------------------------------------------
+
+## Item id -> seconds remaining of automation-fire flash pulse.
+var _item_flash: Dictionary = {}
+const ITEM_FLASH_SECONDS := 0.8
+
+## Pulse a node's border (called when an automation bound to it fires).
+func flash_item(item_id: String) -> void:
+	if item_id.is_empty():
+		return
+	_item_flash[item_id] = ITEM_FLASH_SECONDS
+	_needs_continuous_redraw = true
+	queue_redraw()
+
+
+## Post-render overlay pass — runs for EVERY visible item regardless of which
+## renderer (V1 base or V2 override) drew the body:
+##   · ⚙ badge when the item has automation rules bound
+##   · pulsing border while an automation fire flash is active
+func _draw_item_overlays(item: Dictionary) -> void:
+	var iid := str(item.get("id", ""))
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var center := size * 0.5
+	var tl := _item_screen_tl(item, center)
+	var sz := _item_screen_size(item)
+
+	var autos: Array = specs.get("graph_automations", []) as Array
+	if not autos.is_empty():
+		var fnt := ThemeDB.fallback_font
+		var fs := maxi(7, int(round(12.0 * _zoom)))
+		draw_string(fnt, tl + Vector2(3.0 * _zoom, float(fs) + 2.0 * _zoom),
+			"⚙", HORIZONTAL_ALIGNMENT_LEFT, -1, fs,
+			Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.85))
+
+	if _item_flash.has(iid):
+		var t := clampf(float(_item_flash[iid]) / ITEM_FLASH_SECONDS, 0.0, 1.0)
+		var pulse := 0.35 + 0.65 * absf(sin(t * PI * 3.0))
+		draw_rect(Rect2(tl, sz).grow(3.0 * _zoom),
+			Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.75 * t * pulse),
+			false, maxf(1.5, 3.0 * _zoom))
+
 
 func _render_item(item: Dictionary) -> void:
 	var itype   := item.get("type", "generic") as String

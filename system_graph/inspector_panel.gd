@@ -19,6 +19,8 @@ const C_AMBER   := UITheme.C_AMBER
 const _HA_PUSHER         := preload("res://system_graph/ha_automation_pusher.gd")
 const _CALIBRATOR_SCRIPT := preload("res://system_graph/load_calibrator.gd")
 const _CAL_GRAPH_SCRIPT  := preload("res://system_graph/calibration_graph.gd")
+const _EDU_CARDS_SCRIPT  := preload("res://system_graph/graph_education_cards.gd")
+const _GRAPH_CANVAS_SCRIPT := preload("res://system_graph/graph_canvas.gd")
 
 const _TOUCH_SCROLL_HANDLER := preload("res://system_graph/touch_scroll_handler.gd")
 
@@ -48,13 +50,19 @@ var _conduit_route_cb: Callable = Callable()
 var _conduit_clear_cb: Callable = Callable()
 var _placeholder_cb: Callable = Callable()
 var _place_model_cb: Callable = Callable()
+var _preview_refresh_cb: Callable = Callable()
 var _controller_reset_cb: Callable = Callable()
 
 ## Per-automation UI state. Key = automation id, value = true if the editor
 ## panel is expanded. Persists across inspector rebuilds for the same node.
 var _auto_expanded: Dictionary = {}
+## Collapsible Advanced subsections (HA twin, HA export, manual scene path…).
+## Key = section id, value = expanded bool. Persists across rebuilds.
+var _advanced_expanded: Dictionary = {}
 ## Monotonic counter used when minting fresh automation ids for new rules.
 var _auto_id_counter: int = 0
+## FileDialog for attaching a user GLB to the selected graph node.
+var _glb_file_dialog: FileDialog = null
 
 ## Single shared LoadCalibrator instance.  Live progress is reported through
 ## these widget refs so the panel doesn't need to be rebuilt every tick.
@@ -181,6 +189,10 @@ func set_place_model_callback(cb: Callable) -> void:
 	_place_model_cb = cb
 
 
+func set_preview_refresh_callback(cb: Callable) -> void:
+	_preview_refresh_cb = cb
+
+
 func set_controller_reset_callback(cb: Callable) -> void:
 	_controller_reset_cb = cb
 
@@ -199,6 +211,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 
 	_title_lbl.text = "%s  %s" % [_type_icon(itype), iname]
 	_title_lbl.add_theme_color_override("font_color", C_TEXT)
+	_append_education_card(item)
 
 	match itype:
 		"panel":
@@ -248,7 +261,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_section("Cost")
 			_num_field("Unit Cost ($)",       specs.get("cost", 0.0),             "specs/cost", 0, 99999, 1.0)
 
-		"battery":
+		"battery", "smartbattery":
 			_section("Specs")
 			_text_field("Name",              specs.get("name", ""),      "specs/name")
 			_num_field("Nominal Voltage (V)",specs.get("voltage", 12.0), "specs/voltage",  0, 1000, 0.1)
@@ -260,6 +273,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_section("Battery Protection")
 			_num_field("Shut off below (%)", specs.get("soc_shutdown_pct", 10.0), "specs/soc_shutdown_pct", 1.0, 99.0, 1.0)
 			_num_field("Resume above (%)",   specs.get("soc_resume_pct",   20.0), "specs/soc_resume_pct",   1.0, 99.0, 1.0)
+			_num_field("Alert Threshold (%)", specs.get("alert_threshold_pct", 95.0), "specs/alert_threshold_pct", 0.0, 100.0, 1.0)
 			_build_battery_cells_section(item)
 
 		"controller":
@@ -296,11 +310,25 @@ func _rebuild_for_item(item: Dictionary) -> void:
 		"processor":
 			_section("Specs")
 			_text_field("Name",              specs.get("name", ""),         "specs/name")
-			_build_processor_energy_picker(specs)
-			_num_field("Power Draw (W)",     specs.get("watts", 0.0),       "specs/watts",       0, 100000, 10.0)
-			_num_field("Efficiency",         specs.get("efficiency", 1.0),  "specs/efficiency",  0.0, 1.0, 0.01)
-			_num_field("Energy (Wh/unit)",   specs.get("energy_wh_per_unit", 0.0), "specs/energy_wh_per_unit", 0, 100000, 1.0)
-			_build_processor_io_summary(specs)
+			if str(specs.get("role", "")) == "habitat":
+				_num_field("Occupants", specs.get("occupants", 1.0), "specs/occupants", 1, 64, 1.0)
+				var starved: Array = specs.get("starved_kinds", []) as Array
+				if starved.is_empty():
+					_readonly_field("Demand status", "OK — all inputs supplied")
+				else:
+					var parts: PackedStringArray = PackedStringArray()
+					for sk: Variant in starved:
+						parts.append(ResourceKinds.display_name(str(sk)))
+					_readonly_field("Demand status", "STARVED: %s" % ", ".join(parts))
+			else:
+				_build_processor_energy_picker(specs)
+				_num_field("Power Draw (W)",     specs.get("watts", 0.0),       "specs/watts",       0, 100000, 10.0)
+				_num_field("Efficiency",         specs.get("efficiency", 1.0),  "specs/efficiency",  0.0, 1.0, 0.01)
+				_num_field("Energy (Wh/unit)",   specs.get("energy_wh_per_unit", 0.0), "specs/energy_wh_per_unit", 0, 100000, 1.0)
+				var daily_note := str(specs.get("daily_note", ""))
+				if not daily_note.is_empty():
+					_readonly_field("Daily design", daily_note)
+			_build_processor_batch_editor(specs)
 			_section("Cost")
 			_num_field("Unit Cost ($)",      specs.get("cost", 0.0),        "specs/cost", 0, 99999, 1.0)
 
@@ -311,14 +339,26 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_num_field("Capacity",      specs.get("capacity_qty", 100.0), "specs/capacity_qty", 0.0, 1e9, 1.0)
 			_text_field("Capacity Unit", specs.get("capacity_unit", "L"), "specs/capacity_unit")
 			_readonly_field("Fill Level (sim)", "%.1f%%" % (float(specs.get("level", 0.0)) * 100.0))
+			_num_field("Alert Threshold (%)", specs.get("alert_threshold_pct", 95.0), "specs/alert_threshold_pct", 0.0, 100.0, 1.0)
 			_section("Cost")
 			_num_field("Unit Cost ($)", specs.get("cost", 0.0),     "specs/cost", 0, 99999, 1.0)
 
 		"catchment":
 			_section("Specs")
 			_text_field("Name", specs.get("name", ""), "specs/name")
+			_text_field("Catchment kind", str(specs.get("catchment_kind", "rain")), "specs/catchment_kind")
+			var soi_row := _row_container()
+			var soi_h: HBoxContainer = soi_row.get_child(0) as HBoxContainer
+			soi_h.add_child(_key_label("Use SoI area"))
+			var soi_cb := CheckBox.new()
+			soi_cb.button_pressed = bool(specs.get("use_soi_area", false))
+			soi_cb.focus_mode = Control.FOCUS_NONE
+			soi_cb.toggled.connect(func(on: bool) -> void: _commit_field("specs/use_soi_area", on))
+			soi_h.add_child(soi_cb)
+			_form_vbox.add_child(soi_row)
 			_num_field("Catchment Area (m²)", specs.get("area_m2", 10.0), "specs/area_m2", 0.0, 100000.0, 1.0)
-			_num_field("Runoff Coefficient", specs.get("runoff_coeff", 0.85), "specs/runoff_coeff", 0.0, 1.0, 0.01)
+			if str(specs.get("catchment_kind", "rain")) != "biomass":
+				_num_field("Runoff Coefficient", specs.get("runoff_coeff", 0.85), "specs/runoff_coeff", 0.0, 1.0, 0.01)
 			_section("Cost")
 			_num_field("Unit Cost ($)", specs.get("cost", 0.0), "specs/cost", 0, 99999, 1.0)
 
@@ -336,28 +376,31 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_section("Specs")
 			_text_field("Name", specs.get("name", ""), "specs/name")
 
-	# Any load-like node can be automated. Graph-only library items get a
-	# runtime proxy (GraphSimLoad) from SystemGraphView so their device_path
-	# is always populated by the time an automation tries to fire.
-	if itype in ["appliance", "acload", "processor"]:
+	# Automations are sim/gameplay-first — surfaced right after the core specs
+	# so bound rules are visible without scrolling. HA export lives under Advanced.
+	if _item_supports_automation(item):
 		_build_load_automation_section(item)
 
-	if itype in ["panel", "battery", "smartbattery", "controller", "shelly4pm",
-			"appliance", "acload"]:
-		_build_ha_link_section(item)
-	if itype in ["appliance", "acload"]:
-		_build_load_calibration_section(item)
-	if itype in ["panel", "wind", "hydro", "processor", "resource", "catchment"]:
+	# Look & layout — editable size + canvas position (after type specs).
+	_build_appearance_section(item)
+
+	# 3D embodiment — Place in 3D when a GLB is attached, else prompt to add one.
+	if itype in ["panel", "wind", "hydro", "processor", "resource", "catchment",
+			"appliance", "acload", "battery", "smartbattery", "controller"]:
 		_build_scene_link_section(item)
+
 	if itype == "shelly4pm":
 		_build_shelly4pm_controls_section(item)
 	if itype == "compound":
 		_build_compound_section(item)
 
-	# Position always shown
-	_section("Position")
-	_num_field("X", float(item.get("x", 0.0)), "x", -99999, 99999, 0.5)
-	_num_field("Y", float(item.get("y", 0.0)), "y", -99999, 99999, 0.5)
+	# Optional LIVE twin + calibration — tucked under Advanced so the default
+	# inspector stays focused on simulation gameplay.
+	if itype in ["panel", "battery", "smartbattery", "controller", "shelly4pm",
+			"appliance", "acload"]:
+		_build_advanced_ha_twin_section(item)
+	if itype in ["appliance", "acload"]:
+		_build_advanced_calibration_section(item)
 
 	_updating_form = false
 
@@ -380,10 +423,38 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 	_readonly_field("Target item",  conn.get("target_item_id",   "—"))
 	_readonly_field("Target port",  conn.get("target_handle_id", "—"))
 
-	_section("Wire Info")
-	_num_field("Gauge (AWG)",    float(conn.get("wire_gauge",   12.0)), "wire_gauge",       0, 40, 1.0)
-	_num_field("Length (m)",     float(conn.get("estimated_length",  1.0)), "estimated_length", 0, 9999, 0.1)
-	_num_field("Max Amps",       float(conn.get("wire_amps",     20.0)), "wire_amps",         0,  500, 1.0)
+	var is_res: bool = (polarity == "resource")
+	if is_res:
+		_section("Conduit Info")
+		_num_field("Diameter (mm)",    float(conn.get("conduit_diameter",   25.0)), "conduit_diameter",       1, 1000, 1.0)
+		_num_field("Length (m)",       float(conn.get("estimated_length",  1.0)), "estimated_length", 0, 9999, 0.1)
+		_num_field("Max Pressure (PSI)", float(conn.get("max_pressure",     150.0)), "max_pressure",         0,  5000, 1.0)
+	else:
+		_section("Wire Info")
+		_num_field("Gauge (AWG)",    float(conn.get("wire_gauge",   12.0)), "wire_gauge",       0, 40, 1.0)
+		_num_field("Length (m)",     float(conn.get("estimated_length",  1.0)), "estimated_length", 0, 9999, 0.1)
+		_num_field("Max Amps",       float(conn.get("wire_amps",     20.0)), "wire_amps",         0,  500, 1.0)
+
+	_section("Style Overrides")
+	_text_field("Color", str(conn.get("color_override", "")), "color_override")
+	_num_field("Base Thickness", float(conn.get("thickness_override", 0.0)), "thickness_override", 0, 50, 0.5)
+	
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var lbl := Label.new()
+	lbl.text = "Sankey Scale (Flow)"
+	lbl.add_theme_color_override("font_color", C_TEXT_S)
+	lbl.custom_minimum_size.x = 120.0
+	row.add_child(lbl)
+	var cb := CheckBox.new()
+	cb.button_pressed = bool(conn.get("sankey_scale", true))
+	cb.toggled.connect(func(toggled_on: bool) -> void:
+		if _updating_form or _model == null or _item_id.is_empty():
+			return
+		_model.update_connection(_item_id, {"sankey_scale": toggled_on})
+	)
+	row.add_child(cb)
+	_form_vbox.add_child(row)
 
 	_build_connection_2d_route_section(conn)
 
@@ -619,6 +690,174 @@ func _section(title: String) -> void:
 	_form_vbox.add_child(pc)
 
 
+## Collapsible Advanced header. Returns true when the body should be built.
+func _advanced_section(section_id: String, title: String, hint: String = "") -> bool:
+	var expanded: bool = bool(_advanced_expanded.get(section_id, false))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var btn := Button.new()
+	btn.text = "%s  %s" % ["▼" if expanded else "▶", title]
+	btn.flat = true
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	btn.add_theme_color_override("font_color", C_TEXT_S)
+	btn.add_theme_font_size_override("font_size", 10)
+	if not hint.is_empty():
+		btn.tooltip_text = hint
+	btn.pressed.connect(func() -> void:
+		_advanced_expanded[section_id] = not expanded
+		_rebuild_current_item()
+	)
+	row.add_child(btn)
+	_form_vbox.add_child(_wrap_margin(row, 8, 2))
+	return expanded
+
+
+func _hint_label(text: String) -> void:
+	var hint := Label.new()
+	hint.text = text
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_color_override("font_color", C_TEXT_M)
+	hint.add_theme_font_size_override("font_size", 10)
+	_form_vbox.add_child(_wrap_margin(hint, 12, 4))
+
+
+## Controllable loads / processors that can turn on/off. Habitats, imports,
+## and catchments are not automation targets.
+func _item_supports_automation(item: Dictionary) -> bool:
+	var itype := str(item.get("type", ""))
+	if itype in ["appliance", "acload"]:
+		return true
+	if itype != "processor":
+		return false
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var role := str(specs.get("role", ""))
+	if role in ["habitat", "import", "export"]:
+		return false
+	# Controllable when it draws power or has an explicit energy source.
+	if float(specs.get("watts", 0.0)) > 0.0:
+		return true
+	return not str(specs.get("energy_source", "")).is_empty()
+
+
+func _build_appearance_section(item: Dictionary) -> void:
+	_section("Appearance")
+	var itype := str(item.get("type", ""))
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var def_w := _GRAPH_CANVAS_SCRIPT.default_width(itype)
+	var def_h := _GRAPH_CANVAS_SCRIPT.default_height(itype)
+	var cur_w := float(item.get("width", def_w))
+	var cur_h := float(item.get("height", def_h))
+	_num_field("Width (px)", cur_w, "width", 64.0, 640.0, 2.0)
+	_num_field("Height (px)", cur_h, "height", 48.0, 480.0, 2.0)
+	_num_field("Canvas X", float(item.get("x", 0.0)), "x", -99999, 99999, 0.5)
+	_num_field("Canvas Y", float(item.get("y", 0.0)), "y", -99999, 99999, 0.5)
+
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 8)
+	var reset_btn := Button.new()
+	reset_btn.text = "Reset size to type default"
+	reset_btn.flat = true
+	reset_btn.focus_mode = Control.FOCUS_NONE
+	reset_btn.add_theme_color_override("font_color", C_PRIMARY)
+	reset_btn.add_theme_font_size_override("font_size", 10)
+	reset_btn.tooltip_text = "Restore %s × %s for this node type" % [str(int(def_w)), str(int(def_h))]
+	reset_btn.pressed.connect(func() -> void:
+		if _model == null or _item_id.is_empty():
+			return
+		_model.update_item(_item_id, {"width": def_w, "height": def_h})
+		_rebuild_current_item()
+	)
+	btn_row.add_child(reset_btn)
+	_form_vbox.add_child(_wrap_margin(btn_row, 12, 4))
+
+	_hint_label("Width and height control the node footprint on the graph. Ports stay at their relative positions.")
+
+	# Card preview camera — only when a GLB is attached.
+	var model_id := str(specs.get("model_id", ""))
+	if not model_id.is_empty():
+		_section("Card Preview")
+		_hint_label("Snapshot of the attached 3D model shown on the node card. Default is head-on.")
+		_num_field("Yaw (°)", float(specs.get("card_preview_yaw_deg", 0.0)),
+			"specs/card_preview_yaw_deg", -180.0, 180.0, 5.0)
+		_num_field("Pitch (°)", float(specs.get("card_preview_pitch_deg", 12.0)),
+			"specs/card_preview_pitch_deg", -60.0, 80.0, 1.0)
+		_num_field("Distance", float(specs.get("card_preview_dist_mult", 1.9)),
+			"specs/card_preview_dist_mult", 0.6, 6.0, 0.1)
+
+		var prev_row := HBoxContainer.new()
+		prev_row.add_theme_constant_override("separation", 8)
+		var head_btn := Button.new()
+		head_btn.text = "Reset head-on"
+		head_btn.flat = true
+		head_btn.focus_mode = Control.FOCUS_NONE
+		head_btn.add_theme_color_override("font_color", C_PRIMARY)
+		head_btn.add_theme_font_size_override("font_size", 10)
+		head_btn.pressed.connect(func() -> void:
+			if _model == null or _item_id.is_empty():
+				return
+			var it := _model.get_item(_item_id)
+			var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+			sp["card_preview_yaw_deg"] = 0.0
+			sp["card_preview_pitch_deg"] = 12.0
+			sp["card_preview_dist_mult"] = 1.9
+			_model.update_item(_item_id, {"specs": sp})
+			if _preview_refresh_cb.is_valid():
+				_preview_refresh_cb.call(_item_id)
+			_rebuild_current_item()
+		)
+		prev_row.add_child(head_btn)
+		var refresh_btn := Button.new()
+		refresh_btn.text = "Refresh preview"
+		refresh_btn.flat = true
+		refresh_btn.focus_mode = Control.FOCUS_NONE
+		refresh_btn.add_theme_color_override("font_color", C_AMBER)
+		refresh_btn.add_theme_font_size_override("font_size", 10)
+		refresh_btn.tooltip_text = "Re-render the card snapshot from the GLB"
+		refresh_btn.pressed.connect(func() -> void:
+			if _preview_refresh_cb.is_valid() and not _item_id.is_empty():
+				_preview_refresh_cb.call(_item_id)
+		)
+		prev_row.add_child(refresh_btn)
+		_form_vbox.add_child(_wrap_margin(prev_row, 12, 4))
+
+
+func _append_education_card(item: Dictionary) -> void:
+	var card: Dictionary = _EDU_CARDS_SCRIPT.card_for_item(item)
+	if card.is_empty():
+		return
+	var pc := PanelContainer.new()
+	pc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.10)
+	sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.45)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(6)
+	sb.content_margin_left = 12.0
+	sb.content_margin_right = 12.0
+	sb.content_margin_top = 8.0
+	sb.content_margin_bottom = 8.0
+	pc.add_theme_stylebox_override("panel", sb)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 4)
+	pc.add_child(col)
+	var t := Label.new()
+	t.text = "📘  %s" % str(card.get("title", ""))
+	t.add_theme_color_override("font_color", C_PRIMARY)
+	t.add_theme_font_size_override("font_size", 11)
+	col.add_child(t)
+	var b := Label.new()
+	b.text = str(card.get("body", ""))
+	b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	b.add_theme_color_override("font_color", C_TEXT_S)
+	b.add_theme_font_size_override("font_size", 10)
+	col.add_child(b)
+	_form_vbox.add_child(pc)
+
+
 func _text_field(label: String, value: String, path: String) -> void:
 	var row := _row_container()
 	var hbox: HBoxContainer = row.get_child(0)
@@ -789,6 +1028,11 @@ func _commit_field(path: String, value: Variant) -> void:
 				var sdev: String = str(sub.get("scene_device_path", ""))
 				if not sdev.is_empty():
 					_model.update_item(_item_id, {"device_path": sdev})
+			# Card preview camera / model changes → re-render snapshot.
+			if path in ["specs/card_preview_yaw_deg", "specs/card_preview_pitch_deg",
+					"specs/card_preview_dist_mult", "specs/model_id"]:
+				if _preview_refresh_cb.is_valid():
+					_preview_refresh_cb.call(_item_id)
 
 
 # ---------------------------------------------------------------------------
@@ -807,17 +1051,15 @@ func _get_automation_engine() -> Node:
 	return tr.root.get_node_or_null("AutomationEngine")
 
 
-## Top-level automation section. Renders the per-load HA entity_id row, a
-## scrollable list of automations (collapsed summary rows with per-row toggle /
-## edit / delete / push buttons), an expanded editor when a row is open, and an
-## "add" footer with presets + a blank custom automation.
+## Top-level automation section — sim/gameplay first. WHEN / IF / THEN mirrors
+## Home Assistant so future LIVE export stays 1:1, but no HA entity is required.
 func _build_load_automation_section(item: Dictionary) -> void:
 	_migrate_legacy_automation_if_needed(item)
 
-	_section("Automation")
-
-	# HA entity field (shared across all scene-node actions on this load).
-	_build_ha_entity_row(item)
+	var pre_specs: Dictionary = item.get("specs", {}) as Dictionary
+	var rule_count: int = (pre_specs.get("graph_automations", []) as Array).size()
+	_section("Automation (%d)" % rule_count if rule_count > 0 else "Automation")
+	_hint_label("Rules run in the simulation. Link Home Assistant later under Advanced if you want a live twin.")
 
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var autos: Array = (specs.get("graph_automations", []) as Array)
@@ -827,20 +1069,21 @@ func _build_load_automation_section(item: Dictionary) -> void:
 	_sync_engine_from_specs(item, autos)
 
 	if autos.is_empty():
-		var hint := Label.new()
-		hint.text = "No automations yet.\nAdd a preset below, or build a custom rule."
-		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		hint.add_theme_color_override("font_color", C_TEXT_M)
-		hint.add_theme_font_size_override("font_size", 10)
-		_form_vbox.add_child(_wrap_margin(hint, 12, 4))
+		_hint_label("No automations yet. Pick a preset below, or build a custom WHEN → THEN rule.")
 	else:
 		for i in range(autos.size()):
 			_build_auto_card(item, i)
 
 	_build_auto_add_footer(item)
 
+	# Optional HA export / entity mapping — secondary, not required for gameplay.
+	if _advanced_section("auto_ha", "Advanced · Home Assistant link",
+			"Optional — map this load to an HA entity and push rules for LIVE mode"):
+		_hint_label("Only needed when mirroring this load to a real Home Assistant entity. Simulation automations work without it.")
+		_build_ha_entity_row(item)
 
-## HA entity_id field (per load). Applied to every scene-node action.
+
+## HA entity_id field (per load). Applied to every scene-node action on export.
 func _build_ha_entity_row(item: Dictionary) -> void:
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var row := HBoxContainer.new()
@@ -854,7 +1097,7 @@ func _build_ha_entity_row(item: Dictionary) -> void:
 	row.add_child(lbl)
 
 	var ed := LineEdit.new()
-	ed.placeholder_text = "light.path_lights"
+	ed.placeholder_text = "light.path_lights  (optional)"
 	ed.text = str(specs.get("ha_entity_id", ""))
 	ed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_edit(ed, false)
@@ -876,7 +1119,8 @@ func _build_ha_entity_row(item: Dictionary) -> void:
 
 
 ## One automation "card": header row (enabled toggle, alias summary, trigger
-## summary, push, expand, delete) plus an expanded editor below.
+## summary, expand, delete) plus an expanded editor below. HA push lives in
+## the Advanced submenu so the default card stays sim-focused.
 func _build_auto_card(item: Dictionary, index: int) -> void:
 	var autos: Array = _get_autos()
 	if index < 0 or index >= autos.size():
@@ -938,17 +1182,6 @@ func _build_auto_card(item: Dictionary, index: int) -> void:
 	alias_lbl.tooltip_text = _summarize_auto(aut)
 	hdr.add_child(alias_lbl)
 
-	var push_btn := Button.new()
-	push_btn.text = "HA"
-	push_btn.flat = true
-	push_btn.focus_mode = Control.FOCUS_NONE
-	push_btn.tooltip_text = "Push this automation to Home Assistant"
-	push_btn.add_theme_color_override("font_color", C_AMBER)
-	push_btn.add_theme_font_size_override("font_size", 10)
-	push_btn.custom_minimum_size = Vector2(24, 0)
-	push_btn.pressed.connect(_on_push_auto_pressed.bind(auto_id))
-	hdr.add_child(push_btn)
-
 	var del_btn := Button.new()
 	del_btn.text = "×"
 	del_btn.flat = true
@@ -991,6 +1224,20 @@ func _build_auto_card(item: Dictionary, index: int) -> void:
 		# THEN (actions)
 		_build_auto_subsection(card_vbox, "THEN  (actions run in order)", C_PRIMARY,
 			_AUTO_KIND_ACTION, index, (aut.get("actions", []) as Array))
+
+		# Optional HA push tucked under the rule editor.
+		var push_row := HBoxContainer.new()
+		push_row.add_theme_constant_override("separation", 6)
+		var push_btn := Button.new()
+		push_btn.text = "Push to Home Assistant…"
+		push_btn.flat = true
+		push_btn.focus_mode = Control.FOCUS_NONE
+		push_btn.tooltip_text = "Export this rule to HA (requires HA entity under Advanced)"
+		push_btn.add_theme_color_override("font_color", C_TEXT_S)
+		push_btn.add_theme_font_size_override("font_size", 10)
+		push_btn.pressed.connect(_on_push_auto_pressed.bind(auto_id))
+		push_row.add_child(push_btn)
+		card_vbox.add_child(push_row)
 
 		var id_lbl := Label.new()
 		id_lbl.text = "ID: %s" % auto_id
@@ -1131,8 +1378,21 @@ func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int
 						-6.0, 6.0, 0.25,
 						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["offset_hours"], v))
 				"numeric":
-					_add_text_row(parent, "Entity", str(sub.get("entity_id", "sensor.battery_level")),
-						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
+					_add_enum_row(parent, "Signal", [
+							{"label": "Battery SOC %", "key": "sensor.battery_level"},
+							{"label": "Solar power (W)", "key": "sensor.solar_power"},
+							{"label": "Load power (W)", "key": "sensor.load_power"},
+							{"label": "Custom (HA entity…)", "key": "__custom__"},
+						], _numeric_signal_key(str(sub.get("entity_id", "sensor.battery_level"))),
+						func(v: String) -> void:
+							if v == "__custom__":
+								_auto_patch_field(auto_index, path_base + ["entity_id"], "sensor.")
+							else:
+								_auto_patch_field(auto_index, path_base + ["entity_id"], v))
+					var eid := str(sub.get("entity_id", "sensor.battery_level"))
+					if not (eid in ["sensor.battery_level", "sensor.solar_power", "sensor.load_power"]):
+						_add_text_row(parent, "Entity id", eid,
+							func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
 					_add_optional_spin_row(parent, "Above", sub.get("above", null),
 						0.0, 100.0, 1.0,
 						func(v: Variant) -> void: _auto_patch_field(auto_index, path_base + ["above"], v))
@@ -1140,7 +1400,7 @@ func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int
 						0.0, 100.0, 1.0,
 						func(v: Variant) -> void: _auto_patch_field(auto_index, path_base + ["below"], v))
 				"state":
-					_add_text_row(parent, "Entity", str(sub.get("entity_id", "")),
+					_add_text_row(parent, "Device / entity", str(sub.get("entity_id", "")),
 						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
 					_add_text_row(parent, "To state", str(sub.get("to_state", "on")),
 						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["to_state"], v))
@@ -1154,8 +1414,21 @@ func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int
 						0.0, 24.0, 0.25,
 						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["before_hour"], v))
 				"numeric":
-					_add_text_row(parent, "Entity", str(sub.get("entity_id", "sensor.battery_level")),
-						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
+					_add_enum_row(parent, "Signal", [
+							{"label": "Battery SOC %", "key": "sensor.battery_level"},
+							{"label": "Solar power (W)", "key": "sensor.solar_power"},
+							{"label": "Load power (W)", "key": "sensor.load_power"},
+							{"label": "Custom (HA entity…)", "key": "__custom__"},
+						], _numeric_signal_key(str(sub.get("entity_id", "sensor.battery_level"))),
+						func(v: String) -> void:
+							if v == "__custom__":
+								_auto_patch_field(auto_index, path_base + ["entity_id"], "sensor.")
+							else:
+								_auto_patch_field(auto_index, path_base + ["entity_id"], v))
+					var eid2 := str(sub.get("entity_id", "sensor.battery_level"))
+					if not (eid2 in ["sensor.battery_level", "sensor.solar_power", "sensor.load_power"]):
+						_add_text_row(parent, "Entity id", eid2,
+							func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
 					_add_optional_spin_row(parent, "Above", sub.get("above", null),
 						0.0, 100.0, 1.0,
 						func(v: Variant) -> void: _auto_patch_field(auto_index, path_base + ["above"], v))
@@ -1169,7 +1442,7 @@ func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int
 						], str(sub.get("state", "above_horizon")),
 						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["state"], v))
 				"state":
-					_add_text_row(parent, "Entity", str(sub.get("entity_id", "")),
+					_add_text_row(parent, "Device / entity", str(sub.get("entity_id", "")),
 						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
 					var cur_states: Array = sub.get("states", []) as Array
 					var joined := ""
@@ -1200,26 +1473,33 @@ func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int
 						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["delay_seconds"], v))
 
 
+## Map a stored entity_id onto the Signal picker key (or __custom__).
+func _numeric_signal_key(entity_id: String) -> String:
+	if entity_id in ["sensor.battery_level", "sensor.solar_power", "sensor.load_power"]:
+		return entity_id
+	return "__custom__"
+
+
 ## Available "kinds" (trigger type, condition type, action type) for the dropdown.
 func _get_kind_options(kind: String) -> Array:
 	match kind:
 		_AUTO_KIND_TRIGGER:
 			return [
 				{"id": 0, "key": "time",    "label": "Time of day"},
-				{"id": 1, "key": "sun",     "label": "Sun (sunrise/sunset)"},
-				{"id": 2, "key": "numeric", "label": "Numeric state (battery %, etc.)"},
+				{"id": 1, "key": "sun",     "label": "Sunrise / sunset"},
+				{"id": 2, "key": "numeric", "label": "Battery / power signal"},
 				{"id": 3, "key": "state",   "label": "Device state"},
 			]
 		_AUTO_KIND_CONDITION:
 			return [
 				{"id": 0, "key": "time",    "label": "Time window"},
 				{"id": 1, "key": "sun",     "label": "Sun above/below horizon"},
-				{"id": 2, "key": "numeric", "label": "Numeric state"},
+				{"id": 2, "key": "numeric", "label": "Battery / power signal"},
 				{"id": 3, "key": "state",   "label": "Device state"},
 			]
 		_:
 			return [
-				{"id": 0, "key": "scene_node", "label": "Turn load on/off/toggle"},
+				{"id": 0, "key": "scene_node", "label": "Turn this load on/off/toggle"},
 				{"id": 1, "key": "delay",      "label": "Delay (seconds)"},
 			]
 
@@ -1379,7 +1659,7 @@ const _TEMPLATES := [
 		],
 	},
 	{
-		"label": "☀ Solar dump load  (ON >99% / OFF <95%)",
+		"label": "☀ Solar dump load  (ON >99% SOC / OFF <95%)",
 		"specs": [
 			{"alias": "Solar dump: on above 99% battery",
 			 "triggers":   [{"kind": "numeric", "entity_id": "sensor.battery_level", "above": 99.0}],
@@ -1392,7 +1672,7 @@ const _TEMPLATES := [
 		],
 	},
 	{
-		"label": "🔋 On above 80%  /  Off below 20%  battery",
+		"label": "🔋 On above 80% SOC  /  Off below 20%",
 		"specs": [
 			{"alias": "On above 80% battery",
 			 "triggers":   [{"kind": "numeric", "entity_id": "sensor.battery_level", "above": 80.0}],
@@ -1405,7 +1685,7 @@ const _TEMPLATES := [
 		],
 	},
 	{
-		"label": "🔋↓ Off below 20% battery  (load shedding, any time)",
+		"label": "🔋↓ Load shedding — off below 20% SOC",
 		"specs": [
 			{"alias": "Off below 20% battery",
 			 "triggers":   [{"kind": "numeric", "entity_id": "sensor.battery_level", "below": 20.0}],
@@ -1434,7 +1714,7 @@ func _build_auto_add_footer(item: Dictionary) -> void:
 	row.add_theme_constant_override("separation", 8)
 
 	var std_btn := MenuButton.new()
-	std_btn.text = "+ Standard…"
+	std_btn.text = "+ Preset…"
 	std_btn.flat = true
 	std_btn.focus_mode = Control.FOCUS_NONE
 	std_btn.add_theme_color_override("font_color", C_PRIMARY)
@@ -1449,7 +1729,7 @@ func _build_auto_add_footer(item: Dictionary) -> void:
 	row.add_child(std_btn)
 
 	var custom_btn := Button.new()
-	custom_btn.text = "+ Custom"
+	custom_btn.text = "+ Custom rule"
 	custom_btn.flat = true
 	custom_btn.focus_mode = Control.FOCUS_NONE
 	custom_btn.add_theme_color_override("font_color", C_PRIMARY)
@@ -2020,12 +2300,20 @@ func _summarize_trigger(t: Dictionary) -> String:
 			return "%s %s%.1fh" % [event, ("+" if off > 0 else ""), off]
 		"numeric":
 			var ent := str(t.get("entity_id", ""))
+			var friendly := ent.trim_prefix("sensor.")
+			match ent:
+				"sensor.battery_level":
+					friendly = "battery SOC"
+				"sensor.solar_power":
+					friendly = "solar W"
+				"sensor.load_power":
+					friendly = "load W"
 			var parts: Array = []
 			if t.has("above") and t.get("above") != null:
 				parts.append("> %.0f" % float(t.get("above")))
 			if t.has("below") and t.get("below") != null:
 				parts.append("< %.0f" % float(t.get("below")))
-			return "%s %s" % [ent.trim_prefix("sensor."), " ".join(PackedStringArray(parts))]
+			return "%s %s" % [friendly, " ".join(PackedStringArray(parts))]
 		"state":
 			return "%s = %s" % [str(t.get("entity_id", "")), str(t.get("to_state", ""))]
 	return ""
@@ -2177,31 +2465,188 @@ func _build_processor_energy_picker(specs: Dictionary) -> void:
 	_form_vbox.add_child(row)
 
 
-func _build_processor_io_summary(specs: Dictionary) -> void:
+func _build_processor_batch_editor(specs: Dictionary) -> void:
 	ResourceKinds.new().migrate_processor_specs(specs)
-	_section("Inputs / Outputs")
+	_section("Input / Output Editor")
+	
+	var batch_mode: bool = bool(specs.get("batch_mode", false))
+	var mode_row := _row_container()
+	var mode_hb := HBoxContainer.new()
+	mode_row.add_child(mode_hb)
+	var mode_lbl := _key_label("Batch Cycle Mode")
+	mode_hb.add_child(mode_lbl)
+	var mode_chk := CheckButton.new()
+	mode_chk.button_pressed = batch_mode
+	mode_chk.toggled.connect(func(v: bool):
+		specs["batch_mode"] = v
+		_commit_field("specs", specs)
+		_rebuild_current_item()
+	)
+	mode_hb.add_child(mode_chk)
+	_form_vbox.add_child(mode_row)
+	
+	if batch_mode:
+		_num_field("Cycle Time (hrs)", float(specs.get("batch_time_hrs", 1.0)), "specs/batch_time_hrs", 0.01, 10000.0, 0.1)
+		var fail_opts := ["pause_and_resume", "restart_with_penalty", "destroy_batch"]
+		var fail_names := ["Pause & Resume", "Restart (Penalty)", "Destroy Batch"]
+		var fail_val := str(specs.get("batch_failure_mode", "pause_and_resume"))
+		
+		var fail_row := _row_container()
+		var fail_hb := HBoxContainer.new()
+		fail_row.add_child(fail_hb)
+		var fail_lbl := _key_label("Failure Mode")
+		fail_hb.add_child(fail_lbl)
+		var fail_opt := OptionButton.new()
+		fail_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var fsel := 0
+		for i in fail_opts.size():
+			fail_opt.add_item(fail_names[i], i)
+			if fail_opts[i] == fail_val:
+				fsel = i
+		fail_opt.select(fsel)
+		fail_opt.item_selected.connect(func(id: int):
+			specs["batch_failure_mode"] = fail_opts[id]
+			_commit_field("specs", specs)
+			_rebuild_current_item()
+		)
+		fail_hb.add_child(fail_opt)
+		_form_vbox.add_child(fail_row)
+		
+		if fail_val == "restart_with_penalty" or fail_val == "destroy_batch":
+			_num_field("Penalty Qty", float(specs.get("batch_failure_penalty_qty", 0.0)), "specs/batch_failure_penalty_qty", 0.0, 99999.0, 0.1)
+	
+	_section("Inputs")
 	var inputs: Array = specs.get("inputs", []) as Array
+	for i in inputs.size():
+		_build_io_row(specs, "inputs", i, batch_mode)
+	
+	var add_in_btn := Button.new()
+	add_in_btn.text = "+ Add Input"
+	add_in_btn.pressed.connect(func():
+		var arr: Array = specs.get("inputs", []) as Array
+		arr.append({"kind": "electric", "rate": 1000.0, "mode": "continuous"})
+		specs["inputs"] = arr
+		_commit_field("specs", specs)
+		_rebuild_current_item()
+	)
+	_form_vbox.add_child(add_in_btn)
+	_form_vbox.add_child(Control.new())
+	
+	_section("Outputs")
 	var outputs: Array = specs.get("outputs", []) as Array
-	if inputs.is_empty() and outputs.is_empty():
-		_readonly_field("I/O", "(legacy single output — respawn from library for multi-port)")
-		return
-	for i: int in inputs.size():
-		var inp: Dictionary = inputs[i] as Dictionary
-		_readonly_field("Input %d" % i,
-			"%s @ %.2f %s" % [
-				ResourceKinds.display_name(str(inp.get("kind", ""))),
-				float(inp.get("rate", 0.0)),
-				str(inp.get("unit", "/h")),
-			])
-	for i: int in outputs.size():
-		var outp: Dictionary = outputs[i] as Dictionary
-		_readonly_field("Output %d" % i,
-			"%s @ %.2f %s" % [
-				ResourceKinds.display_name(str(outp.get("kind", ""))),
-				float(outp.get("rate", 0.0)),
-				str(outp.get("unit", "/h")),
-			])
+	for i in outputs.size():
+		_build_io_row(specs, "outputs", i, batch_mode)
+		
+	var add_out_btn := Button.new()
+	add_out_btn.text = "+ Add Output"
+	add_out_btn.pressed.connect(func():
+		var arr: Array = specs.get("outputs", []) as Array
+		arr.append({"kind": "water", "rate": 0.0, "mode": "continuous", "delay_hrs": 0.0, "duration_hrs": 1.0})
+		specs["outputs"] = arr
+		_commit_field("specs", specs)
+		_rebuild_current_item()
+	)
+	_form_vbox.add_child(add_out_btn)
+	_form_vbox.add_child(Control.new())
 
+func _build_io_row(specs: Dictionary, arr_name: String, idx: int, batch_mode: bool) -> void:
+	var arr: Array = specs.get(arr_name, []) as Array
+	var io: Dictionary = arr[idx] as Dictionary
+	
+	var row_ctr := _row_container()
+	var vbox := VBoxContainer.new()
+	row_ctr.add_child(vbox)
+	
+	var header := HBoxContainer.new()
+	var title_lbl := Label.new()
+	title_lbl.text = ("In %d" % (idx+1)) if arr_name == "inputs" else ("Out %d" % (idx+1))
+	title_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title_lbl)
+	
+	var del_btn := Button.new()
+	del_btn.text = "X"
+	del_btn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
+	del_btn.pressed.connect(func():
+		arr.remove_at(idx)
+		_commit_field("specs", specs)
+		_rebuild_current_item()
+	)
+	header.add_child(del_btn)
+	vbox.add_child(header)
+	
+	var hbox1 := HBoxContainer.new()
+	var kind_opt := OptionButton.new()
+	kind_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var kinds := ResourceKinds.all_kinds()
+	if not kinds.has("electric"): kinds.append("electric")
+	var cur_kind := str(io.get("kind", ""))
+	var sel := 0
+	for ki in kinds.size():
+		var k := str(kinds[ki])
+		kind_opt.add_item(ResourceKinds.display_name(k), ki)
+		if k == cur_kind: sel = ki
+	kind_opt.select(sel)
+	kind_opt.item_selected.connect(func(id: int):
+		io["kind"] = str(kinds[id])
+		_commit_field("specs", specs)
+		_rebuild_current_item()
+	)
+	hbox1.add_child(kind_opt)
+	
+	var qty_spin := SpinBox.new()
+	qty_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	qty_spin.prefix = "Qty:"
+	qty_spin.min_value = 0.0
+	qty_spin.max_value = 999999.0
+	qty_spin.step = 0.01
+	qty_spin.value = float(io.get("rate", 0.0))
+	qty_spin.value_changed.connect(func(v: float):
+		io["rate"] = v
+		_commit_field("specs", specs)
+	)
+	hbox1.add_child(qty_spin)
+	vbox.add_child(hbox1)
+	
+	if batch_mode:
+		var hbox2 := HBoxContainer.new()
+		var mode_opt := OptionButton.new()
+		mode_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var mode_vals := ["continuous", "frontloaded"] if arr_name == "inputs" else ["continuous", "delayed", "end_batch"]
+		var mode_names := ["Continuous", "Frontloaded"] if arr_name == "inputs" else ["Continuous", "Delayed", "End Batch"]
+		var cur_mode := str(io.get("mode", "continuous"))
+		var msel := 0
+		for mi in mode_vals.size():
+			mode_opt.add_item(mode_names[mi], mi)
+			if mode_vals[mi] == cur_mode: msel = mi
+		mode_opt.select(msel)
+		mode_opt.item_selected.connect(func(id: int):
+			io["mode"] = mode_vals[id]
+			_commit_field("specs", specs)
+			_rebuild_current_item()
+		)
+		hbox2.add_child(mode_opt)
+		vbox.add_child(hbox2)
+		
+		if cur_mode == "delayed":
+			var dbox := HBoxContainer.new()
+			var d_spin := SpinBox.new()
+			d_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			d_spin.prefix = "Delay:"
+			d_spin.step = 0.01
+			d_spin.value = float(io.get("delay_hrs", 0.0))
+			d_spin.value_changed.connect(func(v: float): io["delay_hrs"] = v; _commit_field("specs", specs))
+			dbox.add_child(d_spin)
+			var dur_spin := SpinBox.new()
+			dur_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			dur_spin.prefix = "Dur:"
+			dur_spin.step = 0.01
+			dur_spin.value = float(io.get("duration_hrs", 1.0))
+			dur_spin.value_changed.connect(func(v: float): io["duration_hrs"] = v; _commit_field("specs", specs))
+			dbox.add_child(dur_spin)
+			vbox.add_child(dbox)
+			
+	_form_vbox.add_child(row_ctr)
 
 func _build_resource_kind_picker(specs: Dictionary) -> void:
 	ResourceKinds.new().migrate_resource_specs(specs)
@@ -2238,42 +2683,152 @@ func _build_resource_kind_picker(specs: Dictionary) -> void:
 
 
 func _build_scene_link_section(item: Dictionary) -> void:
-	_section("3D Scene Link")
+	_section("Place in 3D")
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var model_id := str(specs.get("model_id", ""))
+	var bound_id := str(specs.get("bound_prop_id", ""))
 	var path_val: String = str(specs.get("scene_device_path", item.get("device_path", "")))
-	_text_field("Scene Node Path", path_val, "specs/scene_device_path")
-	_readonly_field("device_path", str(item.get("device_path", "—")))
 	var is_placeholder := bool(specs.get("graph_placeholder", false))
 	var is_ibc := bool(specs.get("ibc_tank_link", false))
-	if is_placeholder:
-		_readonly_field("3D link", "Cube placeholder (test)")
+	var bind := GraphEmbodiment.binding_kind(item)
+
+	# Status chip
+	var status := "No 3D model attached"
+	if not bound_id.is_empty():
+		var entry := ModelCatalog.find(model_id) if not model_id.is_empty() else {}
+		var label := str(entry.get("label", model_id)) if not entry.is_empty() else model_id
+		status = "Placed in world" + (" — %s" % label if not label.is_empty() else "")
+	elif not model_id.is_empty():
+		var entry2 := ModelCatalog.find(model_id)
+		var label2 := str(entry2.get("label", model_id)) if not entry2.is_empty() else model_id
+		status = "GLB ready — %s" % label2
 	elif is_ibc:
-		_readonly_field("3D link", "IBC tank mesh")
-	var model_id := str(specs.get("model_id", ""))
+		status = "IBC tank mesh linked"
+	elif is_placeholder or bind == "scene":
+		status = "Scene node linked (placeholder or device)"
+	elif bind == "solar":
+		status = "OSM solar array linked"
+	_readonly_field("Status", status)
+
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 8)
+
 	if not model_id.is_empty() and _place_model_cb.is_valid():
-		# This node has a linked 3D model — offer real-world placement instead of
-		# a generic cube placeholder.
 		var place_btn := Button.new()
-		place_btn.text = "Place in 3D"
-		place_btn.tooltip_text = "Close the graph and place the linked 3D model in the world"
+		place_btn.text = "Place in 3D" if bound_id.is_empty() else "Re-place in 3D"
+		place_btn.tooltip_text = "Close the graph and place this node's GLB in the world"
+		place_btn.focus_mode = Control.FOCUS_NONE
+		place_btn.add_theme_color_override("font_color", C_PRIMARY)
 		place_btn.pressed.connect(func() -> void:
 			if _place_model_cb.is_valid() and not _item_id.is_empty():
 				_place_model_cb.call(_item_id)
 		)
-		_form_vbox.add_child(place_btn)
-	elif _placeholder_cb.is_valid():
-		var ph_btn := Button.new()
-		ph_btn.text = "Spawn 3D placeholder" if path_val.is_empty() else "Recreate 3D placeholder"
-		ph_btn.pressed.connect(func() -> void:
-			if _placeholder_cb.is_valid() and not _item_id.is_empty():
-				_placeholder_cb.call(_item_id)
-		)
-		_form_vbox.add_child(ph_btn)
+		btn_row.add_child(place_btn)
+
+		var change_btn := Button.new()
+		change_btn.text = "Change GLB…"
+		change_btn.flat = true
+		change_btn.focus_mode = Control.FOCUS_NONE
+		change_btn.add_theme_color_override("font_color", C_TEXT_S)
+		change_btn.add_theme_font_size_override("font_size", 10)
+		change_btn.tooltip_text = "Import a different GLB/GLTF from your computer"
+		change_btn.pressed.connect(_on_choose_glb_pressed)
+		btn_row.add_child(change_btn)
+	else:
+		var add_btn := Button.new()
+		add_btn.text = "Add GLB from computer…"
+		add_btn.tooltip_text = "Import a .glb / .gltf and attach it to this node"
+		add_btn.focus_mode = Control.FOCUS_NONE
+		add_btn.add_theme_color_override("font_color", C_PRIMARY)
+		add_btn.pressed.connect(_on_choose_glb_pressed)
+		btn_row.add_child(add_btn)
+
+		if _placeholder_cb.is_valid():
+			var ph_btn := Button.new()
+			ph_btn.text = "Use cube placeholder"
+			ph_btn.flat = true
+			ph_btn.focus_mode = Control.FOCUS_NONE
+			ph_btn.add_theme_color_override("font_color", C_TEXT_S)
+			ph_btn.add_theme_font_size_override("font_size", 10)
+			ph_btn.tooltip_text = "Spawn a temporary cube in the world (no GLB)"
+			ph_btn.pressed.connect(func() -> void:
+				if _placeholder_cb.is_valid() and not _item_id.is_empty():
+					_placeholder_cb.call(_item_id)
+			)
+			btn_row.add_child(ph_btn)
+
+	_form_vbox.add_child(_wrap_margin(btn_row, 12, 6))
+
+	if not model_id.is_empty():
+		_hint_label("Attached model id: %s" % model_id)
+
+	# Manual scene path + device_path under Advanced.
+	if _advanced_section("scene_manual", "Advanced · Scene node path",
+			"Manual NodePath binding for existing scene devices"):
+		_text_field("Scene Node Path", path_val, "specs/scene_device_path")
+		_readonly_field("device_path", str(item.get("device_path", "—")))
+
+
+func _ensure_glb_file_dialog() -> void:
+	if _glb_file_dialog != null and is_instance_valid(_glb_file_dialog):
+		return
+	_glb_file_dialog = FileDialog.new()
+	_glb_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_glb_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_glb_file_dialog.filters = PackedStringArray(["*.glb ; GLB", "*.gltf ; GLTF"])
+	_glb_file_dialog.title = "Attach GLB to graph node"
+	_glb_file_dialog.file_selected.connect(_on_glb_file_selected)
+	add_child(_glb_file_dialog)
+
+
+func _on_choose_glb_pressed() -> void:
+	_ensure_glb_file_dialog()
+	_glb_file_dialog.popup_centered_ratio(0.6)
+
+
+func _on_glb_file_selected(path: String) -> void:
+	if _model == null or _item_id.is_empty():
+		return
+	var entry := ModelImporter.import_from_path(path)
+	if entry.is_empty():
+		_toast("Could not import GLB — check the file path")
+		return
+	var mid := str(entry.get("id", ""))
+	if mid.is_empty():
+		_toast("Import failed — no model id")
+		return
+	var item := _model.get_item(_item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	specs["model_id"] = mid
+	# Fresh GLB attachment — clear stale placeholder / prior prop binding.
+	specs.erase("graph_placeholder")
+	specs.erase("bound_prop_id")
+	_model.update_item(_item_id, {"specs": specs})
+	_toast("Attached “%s” — Place in 3D when ready" % str(entry.get("label", mid)))
+	if _preview_refresh_cb.is_valid():
+		_preview_refresh_cb.call(_item_id)
+	_rebuild_current_item()
+
+
+func _build_advanced_ha_twin_section(item: Dictionary) -> void:
+	if not _advanced_section("ha_twin", "Advanced · Live twin (Home Assistant)",
+			"Optional — mirror real HA sensors into this node in LIVE mode"):
+		return
+	_hint_label("Simulation does not need these links. Use them only when connected to Home Assistant.")
+	_build_ha_link_section(item)
+
+
+func _build_advanced_calibration_section(item: Dictionary) -> void:
+	if not _advanced_section("calibrate", "Advanced · Load calibration",
+			"Measure real load behavior from HA / meters"):
+		return
+	_build_load_calibration_section(item)
 
 
 func _build_ha_link_section(item: Dictionary) -> void:
-	_section("Home Assistant Sensors")
-
+	# Section title is provided by the Advanced wrapper — keep body only.
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var links: Dictionary = (specs.get("ha_links", {}) as Dictionary)
 	var live: Dictionary  = (specs.get("ha_live",  {}) as Dictionary)
@@ -2489,8 +3044,7 @@ const _LOAD_TYPE_OPTIONS := [
 
 
 func _build_load_calibration_section(item: Dictionary) -> void:
-	_section("Load Behavior Calibration")
-
+	# When nested under Advanced, the wrapper already provides the title.
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var item_id: String = item.get("id", "") as String
 	var current_type: String = str(specs.get("load_type", "unknown"))
