@@ -13,14 +13,13 @@ const C_PANEL    := UITheme.C_PANEL_RAISED
 const C_BORDER   := UITheme.C_BORDER
 const C_PRIMARY  := UITheme.C_PRIMARY
 const C_AMBER    := UITheme.C_AMBER
+const C_GREEN    := UITheme.C_GREEN
 const C_TEXT     := UITheme.C_TEXT
 const C_TEXT_S   := UITheme.C_TEXT_S
 const C_TEXT_M   := UITheme.C_TEXT_M
 
 const TOPBAR_H    := 60.0
-## Fallback when TimelineUI is unavailable; prefer _timeline_bottom_inset().
-const TIMELINE_H  := 178.0
-## Left: wide enough for embedded SolarUI (see solar_ui.tscn root width)
+## Left dashboard + telemetry column width.
 const SIDEBAR_L_W := 340.0
 const SIDEBAR_R_W := 340.0
 const TOGGLE_W    := 20.0   # width of the sidebar collapse tabs
@@ -30,11 +29,12 @@ const _LIB_PANEL_SCRIPT := preload("res://system_graph/library_panel.gd")
 const _INSP_PANEL_SCRIPT := preload("res://system_graph/inspector_panel.gd")
 const _BRIDGE_SCRIPT         := preload("res://system_graph/solar_bridge.gd")
 const _HISTORY_PLAYER_SCRIPT := preload("res://system_graph/history_player.gd")
-const _SOLAR_UI_PACKED  := preload("res://scenes/ui/solar_ui.tscn")
 const _HISTORY_SCRIPT   := preload("res://system_graph/history_manager.gd")
 const _LINKER_SCRIPT    := preload("res://system_graph/ha_entity_linker.gd")
 const _SIM_LOAD_HOST_SCRIPT := preload("res://system_graph/graph_sim_load_host.gd")
 const _RESOURCE_FLOW_SCRIPT := preload("res://system_graph/resource_flow_engine.gd")
+const _CLOSURE_METRICS_SCRIPT := preload("res://system_graph/closure_metrics.gd")
+const _HIGH_SCORE_STORE_SCRIPT := preload("res://core/high_score_store.gd")
 const _CONDUIT_MGR_SCRIPT := preload("res://core/conduits/conduit_manager.gd")
 const _PLACEHOLDER_HOST_SCRIPT := preload("res://system_graph/graph_placeholder_host.gd")
 ## Global `class_name` is not always resolved here during parse; preload gives a stable entry point.
@@ -42,6 +42,11 @@ const _GAMEPLAY_RULES_SCRIPT := preload("res://gameplay/gameplay_rules.gd")
 const _PV_ELECTRICAL_SCRIPT := preload("res://system_graph/pv_electrical.gd")
 const _GRAPH_LAYOUT_SCRIPT := preload("res://system_graph/graph_layout.gd")
 const _GRAPH_PV_WIRING_SCRIPT := preload("res://system_graph/graph_pv_wiring.gd")
+const _GRAPH_EMBODIMENT_SCRIPT := preload("res://system_graph/graph_embodiment.gd")
+const _PLACED_PROP_RUNTIME_SCRIPT := preload("res://core/placed_models/placed_prop_runtime.gd")
+const _DASHBOARD_SCRIPT := preload("res://system_graph/graph_dashboard_panel.gd")
+const _PREVIEW_SERVICE_SCRIPT := preload("res://system_graph/graph_model_preview_service.gd")
+const _UI_PREFS_CFG := "user://ui_prefs.cfg"
 const GRAPH_AUTOSAVE_DIR := "user://saves/graph_autosave"
 const GRAPH_AUTOSAVE_DEBOUNCE_SEC := 0.75
 const GRAPH_AUTOSAVE_REASONS := {
@@ -62,8 +67,8 @@ var _sidebar_r_open := true
 var _mode := "build"   # "build" | "test"
 
 var _solar_ui: Control = null
-## Test-mode left panel: mirrors main UILayer/SolarUI (solar_ui.gd embed mode)
-var _graph_embed_solar: Control = null
+var _graph_dashboard: GraphDashboardPanel = null
+var _legend_btn: Button = null
 var _pan_right_mouse := true
 ## Populated on first deferred init from the owning Main node's scene path.
 var _cached_scene_tag: String = ""
@@ -102,6 +107,8 @@ var _sim_load_host: Node = null
 
 ## ResourceFlowEngine — reversible multi-resource tank simulation.
 var _resource_flow: RefCounted = null
+var _closure_refresh_acc: float = 0.0
+const _CLOSURE_REFRESH_INTERVAL := 1.0
 var _conduit_manager: Node3D = null
 var _placeholder_host: Node3D = null
 var _conduit_route_wired: bool = false
@@ -147,23 +154,20 @@ var model: GraphModel = null
 
 # Node references (all built in _build_layout)
 var _graph_canvas      = null
+var _model_preview:    Node = null
 var _left_sidebar:     Control = null
 var _right_sidebar:    Control = null
 var _left_toggle:      Button  = null
 var _right_toggle:     Button  = null
-var _build_btn:        Button  = null
-var _test_btn:         Button  = null
 var _simulate_btn:     Button  = null
 var _lib_tab_btn:      Button  = null
 var _insp_tab_btn:     Button  = null
 var _inspector_panel   = null
 var _selected_item_ids: Array[String] = []
+var _embodiment_prop_id: String = ""
+var _embodiment_solar_tag: String = ""
 var _active_scope_id: String = "root"
 var _scope_trail: Array[String] = ["root"]
-
-# Build / Test left sidebar content containers (swapped on mode change)
-var _left_build_content: Control = null
-var _left_test_content:  Control = null
 
 # Toast notification
 var _toast_panel: PanelContainer = null
@@ -177,6 +181,7 @@ var _fit_deferred_pending: bool = false
 var _checking_voltage: bool = false
 var _autosave_timer: Timer = null
 var _autosave_pending: bool = false
+var _timeline_inset_hooked := false
 
 # Hints overlay
 var _hints_panel:   Control = null
@@ -215,9 +220,14 @@ func _ready() -> void:
 	_ha_linker.call("setup", model)
 	_init_sim_load_host()
 	_init_resource_flow()
+	_init_model_preview()
 	_refresh_solar_ui_ref()
 	_build_layout()
-	_sync_graph_embed_mirror()
+	_wire_model_preview()
+	_load_graph_ui_prefs()
+	if is_instance_valid(_graph_dashboard):
+		_graph_dashboard.bind_graph_view(self)
+		_graph_dashboard.set_mode(_mode)
 	_init_bridge()
 	_init_graph_autosave()
 	call_deferred("_deferred_restore_graph_autosave")
@@ -241,8 +251,21 @@ func _init_resource_flow() -> void:
 		_resource_flow = _RESOURCE_FLOW_SCRIPT.new()
 	if _resource_flow != null and _resource_flow.has_method("setup"):
 		_resource_flow.call("setup", model, self)
+	if _resource_flow != null and _resource_flow.has_signal("tank_overflow_changed") \
+			and not _resource_flow.is_connected("tank_overflow_changed", _on_tank_overflow_changed):
+		_resource_flow.connect("tank_overflow_changed", _on_tank_overflow_changed)
 	if _graph_canvas != null:
 		_graph_canvas.set("resource_flow_engine", _resource_flow)
+
+
+## Toast on false→true transitions only (the signal already guarantees edges).
+func _on_tank_overflow_changed(item_id: String, overflowing: bool) -> void:
+	if not overflowing:
+		return
+	var item := model.get_item(item_id) if model != null else {}
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var tank_name := str(specs.get("name", "Tank"))
+	_show_toast("⚠ %s overflowing — capacity exceeded, input is being lost" % tank_name)
 
 
 func _init_sim_load_host() -> void:
@@ -254,8 +277,51 @@ func _init_sim_load_host() -> void:
 	_sim_load_host.call("setup", model)
 
 
+func _init_model_preview() -> void:
+	if _model_preview != null and is_instance_valid(_model_preview):
+		return
+	_model_preview = _PREVIEW_SERVICE_SCRIPT.new()
+	_model_preview.name = "GraphModelPreviewService"
+	add_child(_model_preview)
+	if _model_preview.has_signal("preview_ready"):
+		_model_preview.connect("preview_ready", _on_model_preview_ready)
+
+
+func _wire_model_preview() -> void:
+	if _graph_canvas != null:
+		_graph_canvas.set("model_preview_service", _model_preview)
+	if _inspector_panel != null and _inspector_panel.has_method("set_preview_refresh_callback"):
+		_inspector_panel.call("set_preview_refresh_callback",
+			Callable(self, "_refresh_item_card_preview"))
+
+
+func _on_model_preview_ready(_cache_key: String, _texture: ImageTexture) -> void:
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+
+
+## Invalidate + re-queue the card snapshot for one graph item (inspector camera / GLB).
+func _refresh_item_card_preview(item_id: String) -> void:
+	if _model_preview == null or model == null or item_id.is_empty():
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(specs.get("model_id", "")).is_empty():
+		return
+	if _model_preview.has_method("request_refresh"):
+		_model_preview.call("request_refresh", specs)
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		var vp := get_viewport()
+		if vp != null:
+			vp.disable_3d = visible
+		
 		set_process(visible)
 		mouse_filter = (
 			Control.MOUSE_FILTER_STOP if visible
@@ -263,15 +329,21 @@ func _notification(what: int) -> void:
 		)
 		if visible:
 			_refresh_solar_ui_ref()
-			_sync_graph_embed_mirror()
 			_init_bridge()
 			if _graph_canvas != null:
 				_graph_canvas.set("pan_right_mouse", _pan_right_mouse)
+			_ensure_timeline_inset_hook()
+			# Re-measure after TimelineUI finishes its deferred bar layout.
+			call_deferred("_apply_layout")
 			call_deferred("grab_focus")
 			call_deferred("_init_placeholder_host")
 		else:
 			_flush_graph_autosave()
+			_clear_embodiment_highlight()
 		_apply_mouse_for_graph(visible)
+	elif what == NOTIFICATION_RESIZED:
+		if visible:
+			_apply_layout()
 
 
 func _init_graph_autosave() -> void:
@@ -316,6 +388,7 @@ func _cache_scene_tag() -> void:
 func _deferred_restore_graph_autosave() -> void:
 	_cache_scene_tag()
 	_try_restore_graph_autosave()
+	_ensure_pbi_nodes()
 	if _bridge != null and _bridge.has_method("setup") and is_instance_valid(_solar_ui):
 		_bridge.call("setup", model, _solar_ui)
 	call_deferred("_sync_solar_ui_from_graph")
@@ -444,6 +517,9 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("layout_changed"):
 		if not gc.is_connected("layout_changed", _on_canvas_layout_changed):
 			gc.connect("layout_changed", _on_canvas_layout_changed)
+	if gc.has_signal("resource_containers_merged"):
+		if not gc.is_connected("resource_containers_merged", _on_resource_containers_merged):
+			gc.connect("resource_containers_merged", _on_resource_containers_merged)
 	if gc.has_signal("controller_reset_pressed"):
 		if not gc.is_connected("controller_reset_pressed", _on_controller_reset_pressed):
 			gc.connect("controller_reset_pressed", _on_controller_reset_pressed)
@@ -452,6 +528,15 @@ func _connect_canvas_signals(gc: Node) -> void:
 func _on_canvas_layout_changed() -> void:
 	_autosave_pending = true
 	_flush_graph_autosave()
+
+
+func _on_resource_containers_merged(target_id: String, _absorbed_id: String, kind: String) -> void:
+	var label := ResourceKinds.display_name(kind)
+	_show_toast("Merged %s containers" % label)
+	if _resource_flow != null and _resource_flow.has_method("clear_timelines"):
+		_resource_flow.call("clear_timelines")
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
 
 
 func _apply_layout() -> void:
@@ -550,13 +635,16 @@ func _build_topbar() -> Control:
 	_redo_btn = _make_topbar_btn("↷")
 	var reset_btn  := _make_topbar_btn("Reset")
 	var sysrev_btn := _make_topbar_btn("⚡ Review")
+	var challenge_btn := _make_topbar_btn("🎯")
 	_undo_btn.tooltip_text = "Undo  (Ctrl+Z)"
 	_redo_btn.tooltip_text = "Redo  (Ctrl+Y)"
 	_undo_btn.pressed.connect(_do_undo)
 	_redo_btn.pressed.connect(_do_redo)
 	reset_btn.pressed.connect(_on_reset_graph)
 	sysrev_btn.pressed.connect(_on_system_review)
-	for b: Button in [_undo_btn, _redo_btn, reset_btn, sysrev_btn]:
+	challenge_btn.tooltip_text = "Challenges — structured survival missions"
+	challenge_btn.pressed.connect(_on_challenge_pressed)
+	for b: Button in [_undo_btn, _redo_btn, reset_btn, sysrev_btn, challenge_btn]:
 		left_grp.add_child(b)
 	_update_undo_redo_btns()
 
@@ -614,10 +702,11 @@ func _build_topbar() -> Control:
 	right_grp.add_child(_scope_breadcrumb)
 
 	_soi_chip = Label.new()
-	_soi_chip.add_theme_color_override("font_color", C_TEXT_S)
+	_soi_chip.add_theme_color_override("font_color", C_PRIMARY)
 	_soi_chip.add_theme_font_size_override("font_size", 12)
 	_soi_chip.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_soi_chip.text = "SoI: —"
+	_soi_chip.text = "SoI · —"
+	_soi_chip.tooltip_text = "Sphere of Influence — Interact with the map pin (O) to open Snowglobe and resize"
 	right_grp.add_child(_soi_chip)
 
 	var sep2 := VSeparator.new()
@@ -652,6 +741,9 @@ func _build_topbar() -> Control:
 	right_grp.add_child(sep3)
 
 	var hints_btn := _make_topbar_btn("Hints")
+	_legend_btn = _make_topbar_btn("Legend")
+	_legend_btn.tooltip_text = "Toggle wire-color legend on the canvas"
+	_legend_btn.pressed.connect(_on_legend_toggle)
 	_history_btn  = _make_topbar_btn("🕒 History")
 	var save_btn  := _make_topbar_btn("💾 Save")
 	var load_btn  := _make_topbar_btn("📂 Load")
@@ -659,7 +751,7 @@ func _build_topbar() -> Control:
 	_history_btn.pressed.connect(_on_history_btn_pressed)
 	save_btn.pressed.connect(_on_save_pressed)
 	load_btn.pressed.connect(_on_load_pressed)
-	for b: Button in [hints_btn, _history_btn, save_btn, load_btn]:
+	for b: Button in [_legend_btn, hints_btn, _history_btn, save_btn, load_btn]:
 		right_grp.add_child(b)
 
 	return bar
@@ -740,14 +832,6 @@ func _restyle_btn_primary(b: Button) -> void:
 	b.add_theme_font_size_override("font_size", 14)
 
 
-func _make_mode_btn(label: String, active: bool) -> Button:
-	var b := Button.new()
-	b.text       = label
-	b.focus_mode = Control.FOCUS_NONE
-	_set_mode_btn_style(b, active)
-	return b
-
-
 func _set_mode_btn_style(b: Button, active: bool) -> void:
 	if b == null:
 		return
@@ -805,14 +889,16 @@ func _build_left_sidebar() -> Control:
 	vbox.add_theme_constant_override("separation", 0)
 	scroll.add_child(vbox)
 
-	# ── Build-mode content ──────────────────────────────────────────────────
-	var build_content := VBoxContainer.new()
-	build_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	build_content.add_theme_constant_override("separation", 0)
-	vbox.add_child(build_content)
-	_left_build_content = build_content
+	_graph_dashboard = _DASHBOARD_SCRIPT.new() as GraphDashboardPanel
+	_graph_dashboard.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_graph_dashboard)
 
-	build_content.add_child(_build_score_section(
+	var design_content := VBoxContainer.new()
+	design_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	design_content.add_theme_constant_override("separation", 0)
+	vbox.add_child(design_content)
+
+	design_content.add_child(_build_score_section(
 		"⚡ SYSTEM TELEMETRY", [
 			["Array Wmp",       "0 W",   "scoreArrayWmp"],
 			["Array Voc",       "0 V",   "scoreArrayVoc"],
@@ -826,7 +912,7 @@ func _build_left_sidebar() -> Control:
 		]
 	))
 
-	build_content.add_child(_build_score_section(
+	design_content.add_child(_build_score_section(
 		"💰 COST BREAKDOWN", [
 			["Solar Panels",        "$0.00", "costPanels"],
 			["Inverter/Controller", "$0.00", "costInverter"],
@@ -837,36 +923,6 @@ func _build_left_sidebar() -> Control:
 		],
 		"costTotal"
 	))
-
-	# ── Test-mode content (hidden by default; Phase 12 populates)  ──────────
-	var test_content := VBoxContainer.new()
-	test_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	test_content.add_theme_constant_override("separation", 0)
-	test_content.visible = false
-	vbox.add_child(test_content)
-	_left_test_content = test_content
-
-	# Test mode: same SolarUI as the 3D view (mirrors main panel; no duplicate sim)
-	var test_embed_wrap := MarginContainer.new()
-	test_embed_wrap.name = "TestSolarUIWrap"
-	test_embed_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	test_embed_wrap.add_theme_constant_override("margin_left", 0)
-	test_embed_wrap.add_theme_constant_override("margin_right", 0)
-	test_embed_wrap.add_theme_constant_override("margin_top", 0)
-	test_embed_wrap.add_theme_constant_override("margin_bottom", 0)
-	test_content.add_child(test_embed_wrap)
-
-	var emb: Control = _SOLAR_UI_PACKED.instantiate() as Control
-	emb.name = "GraphEmbedSolarUI"
-	if emb.has_method("set_graph_embed_mirror_from"):
-		emb.call("set_graph_embed_mirror_from", _solar_ui)
-	emb.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	emb.position = Vector2.ZERO
-	emb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	emb.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	emb.custom_minimum_size = Vector2(300.0, 580.0)
-	_graph_embed_solar = emb
-	test_embed_wrap.add_child(emb)
 
 	return bar
 
@@ -1030,6 +1086,9 @@ func _build_right_sidebar() -> Control:
 	if _inspector_panel != null and _inspector_panel.has_method("set_place_model_callback"):
 		_inspector_panel.call("set_place_model_callback",
 			Callable(self, "_place_model_for_item"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_preview_refresh_callback"):
+		_inspector_panel.call("set_preview_refresh_callback",
+			Callable(self, "_refresh_item_card_preview"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_controller_reset_callback"):
 		_inspector_panel.call("set_controller_reset_callback",
 			Callable(self, "reset_controller_from_inspector"))
@@ -1186,6 +1245,7 @@ func _on_lib_place_model_requested(preset: Dictionary) -> void:
 		return
 	# Carry everything PlacedPropService needs to (a) tag the placed prop for the
 	# spin animation and (b) create + bind the 2D node once the player confirms.
+	var dims := ComponentPresets.spawn_dimensions(preset)
 	var prep := {
 		"ok": true,
 		"model_id": model_id,
@@ -1193,15 +1253,16 @@ func _on_lib_place_model_requested(preset: Dictionary) -> void:
 			"node_type": str(preset.get("type", "wind")),
 			"label": str(preset.get("label", "Wind Turbine")),
 			"icon": str(preset.get("icon", "🌀")),
-			"width": float(preset.get("width", 124.0)),
-			"height": float(preset.get("height", 112.0)),
+			"width": dims.x,
+			"height": dims.y,
 			"specs": specs,
 		},
 		"record_extra": {
-			"kind": "vawt",
+			"kind": "vawt" if str(specs.get("kind", "")) == "vawt" or str(preset.get("type", "")) == "wind" else (
+					"habitat" if str(specs.get("role", "")) == "habitat" else str(specs.get("kind", ""))),
 			"turbine_node": str(specs.get("turbine_node",
 				ModelCatalog.find(model_id).get("turbine_node", ""))),
-			"wind_specs": specs,
+			"wind_specs": specs if str(preset.get("type", "")) == "wind" else {},
 		},
 	}
 	var r: Dictionary = PlacedPropService.begin_placement(main, model_id, prep)
@@ -1265,7 +1326,14 @@ func create_bound_generator_node(prop_id: String, graph_link: Dictionary) -> Str
 	_schedule_graph_autosave()
 	_autosave_pending = true
 	_flush_graph_autosave()
-	_show_toast("%s linked to placed turbine" % str(graph_link.get("label", "Turbine")))
+	var link_label := str(graph_link.get("label", "Node"))
+	var role := str(specs.get("role", ""))
+	if role == "habitat":
+		_show_toast("%s linked to placed shelter" % link_label)
+	elif str(graph_link.get("node_type", "")) == "wind":
+		_show_toast("%s linked to placed turbine" % link_label)
+	else:
+		_show_toast("%s linked in 3D" % link_label)
 	return item_id
 
 
@@ -1310,8 +1378,9 @@ func _spawn_at_canvas_center(preset: Dictionary) -> void:
 	var offset := Vector2(randf_range(-60.0, 60.0), randf_range(-40.0, 40.0))
 	var local_pos: Vector2 = gc.size * 0.5 + offset
 	if model != null:
-		var pw := float(preset.get("width", 120.0))
-		var ph := float(preset.get("height", 80.0))
+		var dims := ComponentPresets.spawn_dimensions(preset)
+		var pw := dims.x
+		var ph := dims.y
 		var center: Vector2 = gc.size * 0.5
 		var pan := gc.get("_pan") as Vector2
 		var zoom := float(gc.get("_zoom"))
@@ -1335,8 +1404,9 @@ func _spawn_from_preset(preset: Dictionary, canvas_local_pos: Vector2) -> void:
 	var ptype: String = str(preset.get("type", "appliance"))
 	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
 	var item_id: String = model.generate_item_id()
-	var proc_w: float = float(preset.get("width", 120.0))
-	var proc_h: float = float(preset.get("height", 80.0))
+	var dims := ComponentPresets.spawn_dimensions(preset)
+	var proc_w: float = dims.x
+	var proc_h: float = dims.y
 	var dev_path: String = str(specs.get("scene_device_path", ""))
 	var item_data: Dictionary = {
 		"id":         item_id,
@@ -1441,27 +1511,35 @@ func seed_starshade_system(panel_count: int, panel_watts: float, tag: String = "
 	return true
 
 
-const _GHOST_CONTAINER_OFFSET_X := 160.0
-
-
 func _spawn_processor_ghost_containers(proc_id: String, proc_specs: Dictionary,
 		proc_pos: Vector2, proc_w: float, proc_h: float) -> void:
 	var inputs: Array = proc_specs.get("inputs", []) as Array
 	var outputs: Array = proc_specs.get("outputs", []) as Array
+	
+	var in_w: float = 90.0
 	var in_h: float = 100.0
+	var out_w: float = 90.0
 	var out_h: float = 100.0
-
+	
+	var offset_y := 120.0
+	
+	# Position inputs at the top
+	var total_in_w := float(inputs.size()) * in_w + float(inputs.size() - 1) * 24.0
+	var start_in_x := proc_pos.x + (proc_w - total_in_w) * 0.5
+	
 	for i: int in inputs.size():
 		var inp: Dictionary = inputs[i] as Dictionary
 		var kind: String = str(inp.get("kind", "water"))
 		var ghost_id: String = model.generate_item_id()
-		var gy: float = proc_pos.y + (float(i) - float(inputs.size() - 1) * 0.5) * (in_h + 16.0)
+		var gx := start_in_x + float(i) * (in_w + 24.0)
+		var gy := proc_pos.y - in_h - offset_y
+		
 		model.add_item({
 			"id": ghost_id,
 			"type": "resource",
-			"x": proc_pos.x - _GHOST_CONTAINER_OFFSET_X - 90.0,
+			"x": gx,
 			"y": gy,
-			"width": 90.0,
+			"width": in_w,
 			"height": in_h,
 			"scope_id": _active_scope_id,
 			"is_ghost": true,
@@ -1489,17 +1567,23 @@ func _spawn_processor_ghost_containers(proc_id: String, proc_specs: Dictionary,
 			"corner_radius": 28.0,
 		})
 
+	# Position outputs at the bottom
+	var total_out_w := float(outputs.size()) * out_w + float(outputs.size() - 1) * 24.0
+	var start_out_x := proc_pos.x + (proc_w - total_out_w) * 0.5
+	
 	for i: int in outputs.size():
 		var outp: Dictionary = outputs[i] as Dictionary
 		var kind: String = str(outp.get("kind", "water"))
 		var ghost_id: String = model.generate_item_id()
-		var gy: float = proc_pos.y + (float(i) - float(outputs.size() - 1) * 0.5) * (out_h + 16.0)
+		var gx := start_out_x + float(i) * (out_w + 24.0)
+		var gy := proc_pos.y + proc_h + offset_y
+		
 		model.add_item({
 			"id": ghost_id,
 			"type": "resource",
-			"x": proc_pos.x + proc_w + _GHOST_CONTAINER_OFFSET_X * 0.35,
+			"x": gx,
 			"y": gy,
-			"width": 90.0,
+			"width": out_w,
 			"height": out_h,
 			"scope_id": _active_scope_id,
 			"is_ghost": true,
@@ -1532,6 +1616,98 @@ func _spawn_processor_ghost_containers(proc_id: String, proc_specs: Dictionary,
 # Selection callbacks
 # ---------------------------------------------------------------------------
 
+func select_item_by_id(item_id: String) -> void:
+	if _graph_canvas == null:
+		return
+	_selected_item_ids.clear()
+	if not item_id.is_empty():
+		_selected_item_ids.append(item_id)
+	if _graph_canvas.has_method("_select_item"):
+		_graph_canvas.call("_select_item", item_id)
+	else:
+		_graph_canvas.set("selected_item_id", item_id)
+		_graph_canvas.set("selected_item_ids", _selected_item_ids.duplicate())
+		_graph_canvas.call("queue_redraw")
+	if item_id.is_empty():
+		_on_canvas_item_selected("")
+	else:
+		_on_canvas_item_selected(item_id)
+
+
+func find_item_by_bound_prop_id(prop_id: String) -> String:
+	if model == null or prop_id.is_empty():
+		return ""
+	return _GRAPH_EMBODIMENT_SCRIPT.find_item_by_bound_prop_id(model, prop_id)
+
+
+func find_items_by_osm_tag(tag: String) -> Array[String]:
+	if model == null or tag.is_empty():
+		return []
+	return _GRAPH_EMBODIMENT_SCRIPT.find_items_by_osm_tag(model, tag)
+
+
+func select_item_by_world_binding(prop_id: String = "", osm_tag: String = "",
+		scene_path: String = "") -> void:
+	if model == null:
+		return
+	var item_id := ""
+	if not prop_id.is_empty():
+		item_id = find_item_by_bound_prop_id(prop_id)
+	if item_id.is_empty() and not osm_tag.is_empty():
+		var ids := find_items_by_osm_tag(osm_tag)
+		if not ids.is_empty():
+			item_id = ids[0]
+	if item_id.is_empty() and not scene_path.is_empty():
+		item_id = _GRAPH_EMBODIMENT_SCRIPT.find_item_by_scene_path(model, scene_path)
+	if item_id.is_empty():
+		return
+	select_item_by_id(item_id)
+
+
+func _clear_embodiment_highlight() -> void:
+	var main := _get_scene_main_node()
+	if not _embodiment_prop_id.is_empty() and main != null:
+		var prop := _PLACED_PROP_RUNTIME_SCRIPT.find_by_prop_id(main, _embodiment_prop_id)
+		if prop != null:
+			prop.set_graph_highlight(false)
+	_embodiment_prop_id = ""
+	_embodiment_solar_tag = ""
+	var loader := _find_terrain_loader(main)
+	if loader != null:
+		if loader.has_method("clear_graph_solar_highlight"):
+			loader.call("clear_graph_solar_highlight")
+		if loader.has_method("clear_graph_scene_highlight"):
+			loader.call("clear_graph_scene_highlight")
+
+
+func _apply_embodiment_highlight(item: Dictionary) -> void:
+	_clear_embodiment_highlight()
+	if item.is_empty():
+		return
+	var main := _get_scene_main_node()
+	var loader := _find_terrain_loader(main)
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var prop_id := str(specs.get("bound_prop_id", ""))
+	if not prop_id.is_empty() and main != null:
+		_embodiment_prop_id = prop_id
+		var prop := _PLACED_PROP_RUNTIME_SCRIPT.find_by_prop_id(main, prop_id)
+		if prop != null:
+			prop.set_graph_highlight(true)
+		return
+	var osm_tag := str(specs.get("osm_tag", ""))
+	if not osm_tag.is_empty() and loader != null and loader.has_method("highlight_solar_by_tag"):
+		_embodiment_solar_tag = osm_tag
+		loader.call("highlight_solar_by_tag", osm_tag)
+		return
+	var scene_path := str(specs.get("scene_device_path", item.get("device_path", "")))
+	if not scene_path.is_empty() and main != null:
+		var node: Node = main.get_node_or_null(NodePath(scene_path))
+		if node == null:
+			node = get_tree().root.get_node_or_null(NodePath(scene_path))
+		if node != null and loader != null and loader.has_method("highlight_scene_node_for_graph"):
+			loader.call("highlight_scene_node_for_graph", node)
+
+
 func _on_canvas_item_selected(item_id: String) -> void:
 	_selected_item_ids.clear()
 	if not item_id.is_empty():
@@ -1539,6 +1715,7 @@ func _on_canvas_item_selected(item_id: String) -> void:
 	_update_special_group_buttons()
 	if item_id.is_empty():
 		# Deselected — return to library tab, clear inspector
+		_clear_embodiment_highlight()
 		if _inspector_panel != null and _inspector_panel.has_method("clear_selection"):
 			_inspector_panel.call("clear_selection")
 		_show_right_tab("library")
@@ -1548,6 +1725,7 @@ func _on_canvas_item_selected(item_id: String) -> void:
 	var item := model.get_item(item_id)
 	if item.is_empty():
 		return
+	_apply_embodiment_highlight(item)
 	if _inspector_panel != null and _inspector_panel.has_method("inspect_item"):
 		_inspector_panel.call("inspect_item", item, model)
 	_show_right_tab("inspector")
@@ -1565,6 +1743,7 @@ func _on_canvas_item_double_tapped(item_id: String) -> void:
 
 
 func _on_canvas_items_multi_selected(item_ids: Array) -> void:
+	_clear_embodiment_highlight()
 	_selected_item_ids.clear()
 	for v in item_ids:
 		var sid: String = str(v)
@@ -2147,6 +2326,15 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 		comp_h = 104.0
 		center_x = (min_x + max_x) * 0.5 - comp_w * 0.5
 		center_y = (min_y + max_y) * 0.5 - comp_h * 0.5
+	elif compound_kind == "array":
+		var layout_specs: Dictionary = extra_specs.duplicate(true)
+		if not layout_specs.has("array_panel_units"):
+			layout_specs["array_panel_units"] = candidates.size()
+		var arr_sz := GraphArrayLayout.compound_size(layout_specs)
+		comp_w = arr_sz.x
+		comp_h = arr_sz.y
+		center_x = (min_x + max_x) * 0.5 - comp_w * 0.5
+		center_y = (min_y + max_y) * 0.5 - comp_h * 0.5
 	var comp_item: Dictionary = {
 		"type": "compound",
 		"x": center_x,
@@ -2199,7 +2387,13 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 			continue
 		if src_sel == tgt_sel:
 			continue
-		var hd: Dictionary = _compound_handle_for_boundary(conn, selected_ids_set, handle_counters)
+		var hd: Dictionary
+		if compound_kind == "array":
+			var pol := str(conn.get("polarity", "positive"))
+			var hid := GraphArrayLayout.consolidated_handle_id(pol)
+			hd = {"id": hid, "polarity": pol, "direction": "out" if src_sel else "in", "index": 1}
+		else:
+			hd = _compound_handle_for_boundary(conn, selected_ids_set, handle_counters)
 		var direction: String = hd.get("direction", "in") as String
 		var idx: int = int(hd.get("index", 1))
 		if direction == "in":
@@ -2207,12 +2401,13 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 		else:
 			side_out_count = maxi(side_out_count, idx)
 		var pos := _compound_handle_pos(direction, idx, maxi(side_in_count, side_out_count), compound_kind)
-		handle_defs.append({
-			"id": hd.get("id", "") as String,
-			"polarity": hd.get("polarity", "ac") as String,
-			"rx": pos.x,
-			"ry": pos.y,
-		})
+		if compound_kind != "array":
+			handle_defs.append({
+				"id": hd.get("id", "") as String,
+				"polarity": hd.get("polarity", "ac") as String,
+				"rx": pos.x,
+				"ry": pos.y,
+			})
 		boundary_links.append({
 			"compound_handle_id": hd.get("id", "") as String,
 			"polarity": conn.get("polarity", "ac"),
@@ -2233,6 +2428,13 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 			nconn["target_handle_id"] = hd.get("id", "") as String
 		model.add_connection(nconn)
 
+	if compound_kind == "array":
+		handle_defs.clear()
+		for h: Dictionary in GraphArrayLayout.default_handles():
+			handle_defs.append(h.duplicate(true))
+		side_in_count = 0
+		side_out_count = 2
+
 	var comp := model.get_item(compound_id)
 	if not comp.is_empty():
 		var specs: Dictionary = (comp.get("specs", {}) as Dictionary).duplicate(true)
@@ -2240,6 +2442,9 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 		specs["boundary_links"] = boundary_links
 		specs["port_in_count"] = side_in_count
 		specs["port_out_count"] = side_out_count
+		if compound_kind == "array":
+			specs["port_in_count"] = 0
+			specs["port_out_count"] = 2
 		for k in extra_specs.keys():
 			specs[k] = extra_specs[k]
 		if compound_kind == "load_group":
@@ -2266,8 +2471,44 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 		_graph_canvas.call("queue_redraw")
 	_on_canvas_item_selected(compound_id)
 	_update_special_group_buttons()
-	_show_toast("Grouped %d nodes" % candidates.size())
+	if compound_kind == "array":
+		_show_toast("Solar array: %d panels tiled · single +/- bus" % candidates.size())
+	else:
+		_show_toast("Grouped %d nodes" % candidates.size())
 	return compound_id
+
+
+func _sync_array_compound_layouts() -> void:
+	if model == null:
+		return
+	for item: Dictionary in model.items:
+		if str(item.get("type", "")) != "compound":
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if str(specs.get("compound_kind", "")) != "array":
+			continue
+		var item_id := str(item.get("id", ""))
+		if item_id.is_empty():
+			continue
+		var want_sz := GraphArrayLayout.compound_size(specs)
+		var updates: Dictionary = {}
+		if absf(float(item.get("width", 0.0)) - want_sz.x) > 1.0 \
+				or absf(float(item.get("height", 0.0)) - want_sz.y) > 1.0:
+			updates["width"] = want_sz.x
+			updates["height"] = want_sz.y
+		var handles: Array = item.get("handles", []) as Array
+		var needs_handles := handles.is_empty()
+		if not needs_handles:
+			for h: Dictionary in handles:
+				var hid := str(h.get("id", ""))
+				if hid != "positive" and hid != "negative":
+					needs_handles = true
+					break
+		if needs_handles:
+			updates["handles"] = GraphArrayLayout.default_handles()
+		if updates.is_empty():
+			continue
+		model.update_item(item_id, updates)
 
 
 func _ungroup_selected_compound() -> void:
@@ -2331,6 +2572,12 @@ func _ungroup_selected_compound() -> void:
 		_graph_canvas.call("queue_redraw")
 	_update_special_group_buttons()
 	_show_toast("Ungrouped compound")
+
+func _on_challenge_pressed() -> void:
+	var main_node := get_tree().root.get_node_or_null("Main")
+	if main_node != null and main_node.has_method("open_challenge_picker"):
+		main_node.call("open_challenge_picker")
+
 
 func _on_system_review() -> void:
 	# Toggle: close if already open
@@ -2458,6 +2705,32 @@ func _build_review_modal() -> Control:
 	var array_label := "%d panel%s = %.0f W" % [panel_count, "s" if panel_count != 1 else "", panel_wmp] if panel_count > 0 else "—"
 	var bat_label   := "%.1f kWh @ %.0fV"    % [bat_kwh_total, bat_v_set]                                  if bat_kwh_total > 0.0 else "—"
 	var ctrl_label  := "%.0f W max"           % ctrl_max_watts                                              if ctrl_max_watts > 0.0 else "—"
+	var cm: Dictionary = compute_closure_metrics()
+	var chs: Dictionary = cm.get("channels", {}) as Dictionary
+	var closure_rows: Array = [
+		["Puzzle Score", "%.0f" % float(cm.get("score", 0.0)), C_PRIMARY],
+		["Mean Closure", "%.0f%%" % (float(cm.get("mean_closure_pct", 0.0)) * 100.0), C_TEXT_S],
+		["Autonomy", "%.1f person-days" % float(cm.get("autonomy_person_days", 0.0)), C_TEXT_S],
+	]
+	var pbi_kg_d := _soi_pbi_biomass_kg_day()
+	if pbi_kg_d > 0.01:
+		closure_rows.append(["PBI biomass", "%.1f kg/day" % pbi_kg_d, C_GREEN])
+	for nk: String in ["energy", "water", "food", "waste"]:
+		var ch: Dictionary = chs.get(nk, {}) as Dictionary
+		var st: String = str(ch.get("status", "idle"))
+		if st == "idle":
+			closure_rows.append([nk.capitalize(), "— (inactive)", C_TEXT_M])
+		else:
+			closure_rows.append([
+				nk.capitalize(),
+				"%.0f%% closed · %.1f d autonomy" % [
+						float(ch.get("closure_pct", 0.0)) * 100.0,
+						float(ch.get("autonomy_days", 0.0)),
+				],
+				_CLOSURE_METRICS_SCRIPT.status_color(st),
+			])
+	outer_vbox.add_child(_rv_section("🔁  CLOSURE METRICS", closure_rows))
+
 	outer_vbox.add_child(_rv_section("🏗  SYSTEM DESIGN", [
 		["Solar Array",       array_label,                                 C_TEXT_S],
 		["Battery Bank",      bat_label,                                   C_TEXT_S],
@@ -2468,7 +2741,7 @@ func _build_review_modal() -> Control:
 
 	outer_vbox.add_child(_rv_hints_section(
 		panel_wmp, ctrl_max_watts, bat_kwh_total, load_kw,
-		day_solar, day_load, user_items, has_live))
+		day_solar, day_load, user_items, has_live, cm))
 
 	return overlay
 
@@ -2576,11 +2849,12 @@ func _rv_section(title: String, rows: Array) -> Control:
 func _rv_hints_section(panel_wmp: float, ctrl_max_watts: float,
 		bat_kwh: float, load_kw: float,
 		day_solar: float, day_load: float,
-		user_items: int, has_live: bool) -> Control:
+		user_items: int, has_live: bool,
+		closure_metrics: Dictionary = {}) -> Control:
 	var hints: Array = []
 
 	if user_items == 0:
-		hints.append(["💡", "Add components from the library to design your system.", C_TEXT_S])
+		hints.append(["💡", "Press G, add a Habitat from the library, then start a Challenge (🎯).", C_TEXT_S])
 	else:
 		# Panel ↔ controller matching
 		if ctrl_max_watts > 0.0:
@@ -2609,6 +2883,39 @@ func _rv_hints_section(panel_wmp: float, ctrl_max_watts: float,
 				hints.append(["✔", "Today's surplus: +%.3f kWh — system generating more than consumed." % balance, Color(0.27, 0.9, 0.42)])
 			elif balance < -0.01:
 				hints.append(["⚠", "Today's deficit: %.3f kWh — grid or battery drawdown." % absf(balance), C_AMBER])
+
+	# Closure / import coaching
+	var chs: Dictionary = closure_metrics.get("channels", {}) as Dictionary
+	for nk: String in ["water", "food", "energy"]:
+		var ch: Dictionary = chs.get(nk, {}) as Dictionary
+		if ch.is_empty() or str(ch.get("status", "idle")) == "idle":
+			continue
+		var demand := float(ch.get("demand", 0.0))
+		var import_v := float(ch.get("supply_import", ch.get("import", 0.0)))
+		var local_v := float(ch.get("supply_local", 0.0))
+		if demand > 0.01 and import_v > 0.01:
+			var pct := clampf(import_v / demand, 0.0, 1.0) * 100.0
+			if pct >= 25.0:
+				var tip := ""
+				match nk:
+					"water":
+						tip = "You're importing %.0f%% of water — expand SoI rain catchment or cut occupants." % pct
+					"food":
+						tip = "You're importing %.0f%% of food — grow local biomass loops or reduce occupants." % pct
+					"energy":
+						tip = "You're importing %.0f%% of energy — add PV / battery or shed loads." % pct
+				hints.append(["📦", tip, C_AMBER])
+		elif demand > 0.01 and local_v / demand >= 0.85:
+			hints.append(["✔", "%s is mostly local (%.0f%% closed)." % [
+					nk.capitalize(), float(ch.get("closure_pct", 0.0)) * 100.0], Color(0.27, 0.9, 0.42)])
+		if str(ch.get("status", "")) == "critical":
+			hints.append(["■", "%s is critical — refill tanks or start an import bridge." % nk.capitalize(), Color(0.90, 0.35, 0.30)])
+
+	var waste_ch: Dictionary = chs.get("waste", {}) as Dictionary
+	if not waste_ch.is_empty() and str(waste_ch.get("status", "idle")) != "idle":
+		var w_close := float(waste_ch.get("closure_pct", 0.0))
+		if w_close < 0.4:
+			hints.append(["♻", "Waste loop is only %.0f%% closed — add greywater filter / digester." % (w_close * 100.0), C_AMBER])
 
 	if hints.is_empty():
 		hints.append(["✔", "System looks good!", Color(0.27, 0.9, 0.42)])
@@ -2852,27 +3159,18 @@ func _build_hints_panel() -> Control:
 
 func _on_build_mode() -> void:
 	_mode = "build"
-	if _build_btn != null:
-		_set_mode_btn_style(_build_btn, true)
-	if _test_btn != null:
-		_set_mode_btn_style(_test_btn, false)
 	if _graph_canvas != null:
 		_graph_canvas.set("current_mode", "build")
-	if _left_build_content != null: _left_build_content.visible = true
-	if _left_test_content  != null: _left_test_content.visible  = false
+	if is_instance_valid(_graph_dashboard):
+		_graph_dashboard.set_mode("build")
 
 
 func _on_test_mode() -> void:
 	_mode = "test"
-	if _build_btn != null:
-		_set_mode_btn_style(_build_btn, false)
-	if _test_btn != null:
-		_set_mode_btn_style(_test_btn, true)
 	if _graph_canvas != null:
 		_graph_canvas.set("current_mode", "test")
-	if _left_build_content != null: _left_build_content.visible = false
-	if _left_test_content  != null: _left_test_content.visible  = true
-	_sync_graph_embed_mirror()
+	if is_instance_valid(_graph_dashboard):
+		_graph_dashboard.set_mode("test")
 
 
 # ---------------------------------------------------------------------------
@@ -2901,12 +3199,17 @@ func _process(delta: float) -> void:
 	if _bridge != null:
 		_bridge.call("tick", delta)
 	_tick_graph_renewables(delta)
+	_tick_graph_pbis(delta)
 	_energy_sync_acc += delta
 	if _energy_sync_acc >= _ENERGY_SYNC_INTERVAL:
 		_energy_sync_acc = 0.0
 		_sync_graph_energy_from_solar()
 	if _resource_flow != null:
 		_resource_flow.call("tick", delta)
+	_closure_refresh_acc += delta
+	if _closure_refresh_acc >= _CLOSURE_REFRESH_INTERVAL:
+		_closure_refresh_acc = 0.0
+		_refresh_closure_telemetry()
 	_history_suppress = false
 	# Push the initial snapshot once, after the bridge has seeded virtual nodes
 	if not _history_initialized:
@@ -3391,10 +3694,42 @@ func _populate_library_graph_linkables() -> void:
 		_lib_panel.call("populate_graph_linkables", presets)
 
 
-## Re-point the embedded test-mode SolarUI at the main instance (e.g. after load / toggle).
-func _sync_graph_embed_mirror() -> void:
-	if is_instance_valid(_graph_embed_solar) and _graph_embed_solar.has_method("set_graph_embed_mirror_from"):
-		_graph_embed_solar.call("set_graph_embed_mirror_from", _solar_ui)
+func _load_graph_ui_prefs() -> void:
+	var cfg := ConfigFile.new()
+	var visible := false
+	if cfg.load(_UI_PREFS_CFG) == OK:
+		visible = bool(cfg.get_value("graph", "legend_visible", false))
+	if _graph_canvas != null and _graph_canvas.has_method("set_legend_visible"):
+		_graph_canvas.call("set_legend_visible", visible)
+	_update_legend_btn()
+
+
+func _save_graph_ui_prefs() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(_UI_PREFS_CFG)
+	var on := false
+	if _graph_canvas != null and _graph_canvas.has_method("is_legend_visible"):
+		on = bool(_graph_canvas.call("is_legend_visible"))
+	cfg.set_value("graph", "legend_visible", on)
+	cfg.save(_UI_PREFS_CFG)
+
+
+func _on_legend_toggle() -> void:
+	if _graph_canvas == null or not _graph_canvas.has_method("set_legend_visible"):
+		return
+	var on := not bool(_graph_canvas.call("is_legend_visible"))
+	_graph_canvas.call("set_legend_visible", on)
+	_update_legend_btn()
+	_save_graph_ui_prefs()
+
+
+func _update_legend_btn() -> void:
+	if _legend_btn == null:
+		return
+	var on := false
+	if _graph_canvas != null and _graph_canvas.has_method("is_legend_visible"):
+		on = bool(_graph_canvas.call("is_legend_visible"))
+	_set_mode_btn_style(_legend_btn, on)
 
 
 ## Toggle the world PowerDevice bound to a virtual graph item.
@@ -3632,12 +3967,35 @@ func _layout_history_panel() -> void:
 
 
 func _timeline_bottom_inset() -> float:
+	_ensure_timeline_inset_hook()
 	var ul := get_parent()
 	if ul != null:
 		var tl := ul.get_node_or_null("TimelineUI")
 		if tl != null and tl.has_method("get_stack_height"):
-			return float(tl.call("get_stack_height"))
+			var h := float(tl.call("get_stack_height"))
+			# Prefer live height; never undershoot the shared fallback.
+			return maxf(h, UiScreenLayout.timeline_stack_height())
 	return UiScreenLayout.timeline_stack_height()
+
+
+func _ensure_timeline_inset_hook() -> void:
+	if _timeline_inset_hooked:
+		return
+	var ul := get_parent()
+	if ul == null:
+		return
+	var tl := ul.get_node_or_null("TimelineUI")
+	if tl == null:
+		return
+	if tl.has_signal("stack_height_changed") \
+			and not tl.is_connected("stack_height_changed", _on_timeline_stack_height_changed):
+		tl.connect("stack_height_changed", _on_timeline_stack_height_changed)
+	_timeline_inset_hooked = true
+
+
+func _on_timeline_stack_height_changed(_height: float) -> void:
+	if visible:
+		_apply_layout()
 
 
 func _set_graph_companion_ui_visible(graph_open: bool) -> void:
@@ -3978,9 +4336,79 @@ func _refresh_telemetry() -> void:
 		if soi_svc != null and soi_svc.has_method("radius_m"):
 			var r: float = soi_svc.radius_m()
 			var km2: float = soi_svc.area_m2() / 1_000_000.0
-			_soi_chip.text = "SoI: %d m · %.2f km²" % [int(round(r)), km2]
+			var pbi: float = _soi_pbi_biomass_kg_day()
+			if pbi > 0.01:
+				_soi_chip.text = "🌐 SoI %d m · %.2f km² · PBI %.0f kg/d" % [
+						int(round(r)), km2, pbi]
+			else:
+				_soi_chip.text = "🌐 SoI %d m · %.2f km²" % [int(round(r)), km2]
+			_soi_chip.add_theme_color_override("font_color", C_PRIMARY)
 		else:
-			_soi_chip.text = "SoI: —"
+			_soi_chip.text = "🌐 SoI · —"
+			_soi_chip.add_theme_color_override("font_color", C_TEXT_S)
+
+	_refresh_closure_telemetry()
+
+
+## Public API for TimelineUI Needs strip / challenges.
+func compute_closure_metrics() -> Dictionary:
+	var abs_h := _closure_abs_hours()
+	var etl: RefCounted = null
+	if is_instance_valid(_solar_ui):
+		var et: Variant = _solar_ui.get("energy_timeline")
+		if et is RefCounted:
+			etl = et as RefCounted
+	return _CLOSURE_METRICS_SCRIPT.compute(model, _resource_flow, etl, abs_h)
+
+
+## Idempotent puzzle starter (habitat + tanks + SoI catchments). Called on challenge start.
+func try_seed_puzzle_starter(occupants: int = 1) -> bool:
+	if model == null:
+		return false
+	if not PuzzleStarterGraphSeeder.seed_graph(model, occupants):
+		return false
+	if _resource_flow != null:
+		_resource_flow.setup(model, self)
+	_schedule_graph_autosave()
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	_refresh_closure_telemetry()
+	_show_toast("Starter habitat graph seeded — wire imports to close the loop")
+	return true
+
+
+func _soi_pbi_biomass_kg_day() -> float:
+	var soi_svc := get_node_or_null("/root/SoiService")
+	if soi_svc == null or not soi_svc.has_method("area_m2"):
+		return 0.0
+	var month := 6
+	var main_node := _get_scene_main_node()
+	if main_node != null and main_node.get("month") != null:
+		month = int(main_node.get("month"))
+	return PbiBiomass.biomass_kg_per_day(float(soi_svc.call("area_m2")), month)
+
+
+func _closure_abs_hours() -> float:
+	var main_node := _get_scene_main_node()
+	if main_node != null and main_node.has_method("get_absolute_hours"):
+		return float(main_node.call("get_absolute_hours"))
+	return 0.0
+
+
+func _refresh_closure_telemetry() -> void:
+	var m: Dictionary = compute_closure_metrics()
+	var main_node := _get_scene_main_node()
+	var lat := 0.0
+	var lon := 0.0
+	if main_node != null:
+		lat = float(main_node.get("latitude")) if main_node.get("latitude") != null else 0.0
+		lon = float(main_node.get("longitude")) if main_node.get("longitude") != null else 0.0
+	_HIGH_SCORE_STORE_SCRIPT.record_if_best(lat, lon, "", float(m.get("score", 0.0)), {
+		"mean_closure_pct": float(m.get("mean_closure_pct", 0.0)),
+		"autonomy_person_days": float(m.get("autonomy_person_days", 0.0)),
+	})
+	if is_instance_valid(_graph_dashboard):
+		_graph_dashboard.refresh(true)
 
 
 func _set_score(key: String, value: String) -> void:
@@ -4076,6 +4504,16 @@ func _sync_graph_energy_from_solar() -> void:
 	var cap := maxf(0.0, float(_solar_ui.get("BATTERY_CAPACITY_KWH") if _solar_ui.get("BATTERY_CAPACITY_KWH") != null else 0.0))
 	var stored := maxf(0.0, float(_solar_ui.get("battery_kwh_stored") if _solar_ui.get("battery_kwh_stored") != null else 0.0))
 	var bank_soc := clampf(stored / cap, 0.0, 1.0) if cap > 0.0 else 0.0
+
+	# Publish the real battery flow to the canvas so wire animation uses
+	# SolarUI's balance instead of the |net|*0.95 heuristic.
+	if _graph_canvas != null:
+		var load_kw := maxf(0.0, float(_solar_ui.get("current_load_kw") if _solar_ui.get("current_load_kw") != null else 0.0))
+		var aux_kw := maxf(0.0, float(_solar_ui.get("current_aux_generation_kw") if _solar_ui.get("current_aux_generation_kw") != null else 0.0))
+		_graph_canvas.set("live_power_hint", {
+			"battery_w": (solar_kw + aux_kw - load_kw) * 1000.0,
+			"valid": true,
+		})
 
 	var panel_items: Array[Dictionary] = []
 	var total_wmp := 0.0
@@ -4184,6 +4622,7 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 		if model != null:
 			model.deserialize(graph_d as Dictionary)
 			legacy_stripped = GraphVirtualIds.strip_legacy_virtual_solar(model)
+	_sync_array_compound_layouts()
 	if preserve_positions and not position_backup.is_empty():
 		for iid: String in position_backup.keys():
 			if model.get_item(iid).is_empty():
@@ -4240,8 +4679,6 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 		_scope_trail.append("root")
 
 	_apply_layout()
-	_set_mode_btn_style(_build_btn, _mode == "build")
-	_set_mode_btn_style(_test_btn,  _mode == "test")
 
 	# Restore canvas viewport
 	if _graph_canvas != null:
@@ -4721,3 +5158,134 @@ func _wire_selected_panels(series: bool) -> void:
 	_show_toast("Wired %d panel(s) %s → controller" % [
 		ids.size(), "in series" if series else "in parallel"])
 	_update_special_group_buttons()
+func _ensure_pbi_nodes() -> void:
+	if model == null:
+		return
+	var has_sun := false
+	var has_rain := false
+	var has_wind := false
+	var has_bio := false
+	for item: Dictionary in model.items:
+		if str(item.get("type", "")) == "pbi":
+			var kind: String = str((item.get("specs", {}) as Dictionary).get("resource_kind", ""))
+			if kind == "sunlight" or kind == "solar": has_sun = true
+			elif kind == "water" or kind == "rain": has_rain = true
+			elif kind == "wind" or kind == "mechanical": has_wind = true
+			elif kind == "biomass": has_bio = true
+	
+	var to_add := []
+	if not has_sun:
+		to_add.append({"id": "pbi_sun", "kind": "sunlight", "name": "Sunlight"})
+	if not has_rain:
+		to_add.append({"id": "pbi_rain", "kind": "water", "name": "Rain"})
+	if not has_wind:
+		to_add.append({"id": "pbi_wind", "kind": "wind", "name": "Wind"})
+	if not has_bio:
+		to_add.append({"id": "pbi_bio", "kind": "biomass", "name": "Biomass"})
+		
+	if to_add.is_empty():
+		return
+		
+	var start_x = -400.0
+	var spacing = 200.0
+	for i in to_add.size():
+		var p = to_add[i]
+		model.add_item({
+			"id": p["id"],
+			"type": "pbi",
+			"x": start_x + i * spacing,
+			"y": -400.0,
+			"w": 100.0,
+			"h": 100.0,
+			"specs": {
+				"name": p["name"],
+				"resource_kind": p["kind"]
+			}
+		})
+
+
+func _tick_graph_pbis(delta: float) -> void:
+	if model == null:
+		return
+		
+	var area_m2 := 0.0
+	var soi_svc := get_node_or_null("/root/SoiService")
+	if soi_svc != null and soi_svc.has_method("area_m2"):
+		area_m2 = float(soi_svc.call("area_m2"))
+		
+	var month := 6
+	var day := 15
+	var hour := 12.0
+	var m := _get_scene_main_node()
+	if m != null:
+		var dt: Variant = m.get("day_time")
+		if dt != null: hour = float(dt)
+		var mo: Variant = m.get("month")
+		if mo != null: month = clampi(int(mo), 1, 12)
+		var dd: Variant = m.get("day")
+		if dd != null: day = clampi(int(dd), 1, 31)
+		
+	var real_wind_10m := 0.0
+	var precip_mults: Array = []
+	var ws := get_node_or_null("/root/WeatherService")
+	if ws != null and m != null and ws.has_method("covers"):
+		var lat: Variant = m.get("latitude")
+		var lon: Variant = m.get("longitude")
+		if lat != null and lon != null and bool(ws.call("covers", float(lat), float(lon))):
+			real_wind_10m = float(ws.call("wind_speed_ms", month, day, hour))
+			precip_mults = ws.call("monthly_precip_multipliers") as Array
+			
+	var rain_mm_h := 0.0
+	if precip_mults.size() >= 12:
+		var mult: float = precip_mults[month - 1]
+		# Crude estimation: say base rain is 1.0 mm/h when raining, scaled by monthly multiplier
+		rain_mm_h = mult * 1.5 if (randf() < 0.1) else 0.0 # Just a placeholder if we don't have real rain status
+		
+	var sun_active := hour > 6.0 and hour < 18.0
+	var rain_active := rain_mm_h > 0.1
+	var wind_active := real_wind_10m > 4.4 # ~10 mph
+	var bio_active := true
+	
+	for item: Dictionary in model.items:
+		if str(item.get("type", "")) != "pbi":
+			continue
+		var iid: String = item.get("id", "") as String
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var kind: String = str(specs.get("resource_kind", ""))
+		
+		var val_str = ""
+		var active = false
+		
+		if kind == "sunlight" or kind == "solar":
+			# Peak solar insolation ~1000 W/m2 = 1 kW/m2.
+			var total_kw = area_m2 * 1.0
+			var current_kw = total_kw * sin((hour - 6.0) / 12.0 * PI) if sun_active else 0.0
+			current_kw = maxf(0.0, current_kw)
+			val_str = "%.1f MW" % (current_kw / 1000.0) if current_kw > 1000.0 else "%.0f kW" % current_kw
+			active = sun_active
+			
+		elif kind == "water" or kind == "rain":
+			# 1 mm over 1 m2 = 1 liter
+			var liters_per_hour = area_m2 * rain_mm_h
+			val_str = "%.0f L/h" % liters_per_hour
+			active = rain_active
+			
+		elif kind == "wind" or kind == "mechanical":
+			# Kinetic energy in wind: P = 0.5 * rho * A * v^3
+			# A = vertical cross section? Let's approximate cross section as width of SoI * 10m height.
+			var radius = sqrt(area_m2 / PI)
+			var cross_area = (radius * 2.0) * 10.0
+			var rho = 1.225
+			var watts = 0.5 * rho * cross_area * pow(real_wind_10m, 3.0)
+			val_str = "%.1f MW" % (watts / 1000000.0) if watts > 1000000.0 else "%.0f kW" % (watts / 1000.0)
+			active = wind_active
+			
+		elif kind == "biomass":
+			var kg_d = PbiBiomass.biomass_kg_per_day(area_m2, month)
+			val_str = "%.1f kg/day" % kg_d
+			active = bio_active
+			
+		if specs.get("display_value", "") != val_str or specs.get("is_active", false) != active:
+			specs["display_value"] = val_str
+			specs["is_active"] = active
+			model.update_item(iid, {"specs": specs})

@@ -3,33 +3,26 @@ extends "res://system_graph/graph_canvas.gd"
 const InteractionController := preload("res://system_graph_v2/interaction_controller.gd")
 const NodeRenderer := preload("res://system_graph_v2/node_renderer.gd")
 const WireRenderer := preload("res://system_graph_v2/wire_renderer.gd")
-const PortResolver := preload("res://system_graph_v2/port_resolver.gd")
 
 var _interaction: GraphInteractionControllerV2
 var _node_renderer: GraphNodeRendererV2
 var _wire_renderer: GraphWireRendererV2
-var _port_resolver: GraphPortResolverV2
 
-var _legend_visible: bool = true
-var _hint_alpha: float = 0.0
+var _legend_visible: bool = false
 var _hover_port: Dictionary = {}
 
 const V2_NODE_SHADOW := Color(0.0, 0.0, 0.0, 0.26)
 const V2_TITLE_GLOW := Color(0.13, 0.83, 0.93, 0.14)
 const V2_PORT_RING := Color(0.95, 0.97, 1.0, 0.75)
-const V2_FLOW_ARROW_ALPHA := 0.82
 
-var _hud_panel_style: StyleBoxFlat = null
 var _rounded_rect_style: StyleBoxFlat = null
 
 
 func _ready() -> void:
 	super._ready()
-	set_process(true)
 	_interaction = InteractionController.new()
 	_node_renderer = NodeRenderer.new()
 	_wire_renderer = WireRenderer.new()
-	_port_resolver = PortResolver.new()
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -61,14 +54,17 @@ func _draw() -> void:
 	super._draw()
 	_draw_v2_badges()
 	_draw_v2_legend()
-	_draw_v2_education_panel()
 	_draw_v2_connection_feedback()
 	_draw_v2_hover_port_tooltip()
 
 
-func _process(delta: float) -> void:
-	# Smoothly hint to users this is a testing/education-focused V2 canvas.
-	_hint_alpha = lerpf(_hint_alpha, 0.95 if current_mode == "test" else 0.55, clampf(delta * 6.0, 0.0, 1.0))
+func set_legend_visible(on: bool) -> void:
+	_legend_visible = on
+	queue_redraw()
+
+
+func is_legend_visible() -> bool:
+	return _legend_visible
 
 
 func _draw_v2_badges() -> void:
@@ -94,137 +90,6 @@ func _draw_v2_legend() -> void:
 	_wire_renderer.draw_legend(self, origin, entries)
 
 
-func _draw_v2_education_panel() -> void:
-	if model == null:
-		return
-	var bat_msg := ""
-	var inv_msg := ""
-	var hover_msg := ""
-	var dump_msg := ""
-	var automation_msg := ""
-	var total_load_w := 0.0
-	var solar_kw := 0.0
-	if model != null:
-		var tree := get_tree()
-		if tree != null:
-			total_load_w = GraphAcLoad.compute_watts(model, tree)
-	for item: Dictionary in _visible_items():
-		var itype := item.get("type", "") as String
-		var iid   := item.get("id",   "") as String
-		var specs := item.get("specs", {}) as Dictionary
-		if itype == "panel":
-			solar_kw = float(specs.get("current_output_kw", solar_kw))
-		if itype == "appliance" or itype == "acload" or itype == "processor":
-			var autos := specs.get("graph_automations", []) as Array
-			if automation_msg.is_empty() and not autos.is_empty():
-				automation_msg = "%d automation rule(s) on graph loads" % autos.size()
-			if dump_msg.is_empty() and not autos.is_empty():
-				for a in autos:
-					var ad := a as Dictionary
-					var trigs := ad.get("triggers", []) as Array
-					for t in trigs:
-						var td := t as Dictionary
-						if str(td.get("kind", "")) == "numeric" and str(td.get("entity_id", "")) == "sensor.battery_level":
-							if (td.has("above") and float(td.get("above", 0.0)) >= 99.0) or \
-							   (td.has("below") and float(td.get("below", 100.0)) <= 95.0):
-								dump_msg = "⚡ Dump load detected  (ON >99%% / OFF <95%%)"
-								break
-					if not dump_msg.is_empty():
-						break
-		if bat_msg.is_empty() and (itype == "battery" or itype == "smartbattery") and (specs.has("soc_shutdown_pct") or specs.has("soc_resume_pct")):
-			bat_msg = _port_resolver.format_soc_protection(specs)
-		if inv_msg.is_empty() and itype == "controller" and (specs.has("overload_watts") or specs.has("overload_duration_s")):
-			inv_msg = _port_resolver.format_overload_protection(specs)
-		if hover_msg.is_empty() and iid == _interaction.hover_item_id:
-			var name_ := str(specs.get("name", itype))
-			if itype == "appliance" or itype == "acload":
-				hover_msg = "%s  ·  %.0f W" % [name_, float(specs.get("avg_watts", 0.0))]
-			elif itype == "battery" or itype == "smartbattery":
-				hover_msg = "%s  ·  %s" % [name_, _port_resolver.format_soc_protection(specs)]
-			elif itype == "controller":
-				hover_msg = "%s  ·  %s" % [name_, _port_resolver.format_overload_protection(specs)]
-		if not bat_msg.is_empty() and not inv_msg.is_empty():
-			break
-
-	# Always draw the live power HUD in test mode
-	var has_power_data := solar_kw > 0.0 or total_load_w > 0.0
-	var has_info := not (bat_msg.is_empty() and inv_msg.is_empty() and hover_msg.is_empty() and dump_msg.is_empty() and automation_msg.is_empty())
-	if not has_power_data and not has_info:
-		return
-
-	var fnt  := ThemeDB.fallback_font
-	var a    := _hint_alpha
-	var px   := 14.0
-	var py   := 14.0
-
-	# --- Live power ticker (top strip, always shown when data exists) ---
-	if has_power_data:
-		var solar_w := solar_kw * 1000.0
-		var net_w   := solar_w - total_load_w
-		var ticker_w := 520.0
-		var ticker_h := 44.0
-		var trect := Rect2(Vector2(px, py), Vector2(ticker_w, ticker_h))
-		_draw_hud_panel(trect, a)
-
-		# Title strip
-		var title_r := Rect2(trect.position, Vector2(trect.size.x, 16.0))
-		draw_rect(title_r, Color(0.13, 0.83, 0.93, 0.13 * a), true)
-		draw_string(fnt, trect.position + Vector2(10.0, 12.0), "LIVE POWER FLOW", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.13, 0.83, 0.93, 0.72 * a))
-
-		# Three value columns
-		var cols: Array[Dictionary] = [
-			{"label": "SOLAR",    "value": "%.0f W" % solar_w,     "col": Color(0.27, 0.90, 0.42, a)},
-			{"label": "LOAD",     "value": "%.0f W" % total_load_w, "col": Color(0.94, 0.68, 0.30, a)},
-			{"label": "NET",      "value": "%+.0f W" % net_w,       "col": Color(0.27, 0.90, 0.42, a) if net_w >= 0.0 else Color(0.95, 0.45, 0.35, a)},
-		]
-		var col_w := ticker_w / float(cols.size())
-		for ci in cols.size():
-			var col_x := trect.position.x + float(ci) * col_w + 10.0
-			var lbl_y := trect.position.y + 29.0
-			var val_y := trect.position.y + 42.0
-			draw_string(fnt, Vector2(col_x, lbl_y), cols[ci].label as String, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.58, 0.64, 0.72, 0.80 * a))
-			draw_string(fnt, Vector2(col_x, val_y), cols[ci].value as String, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, cols[ci].col as Color)
-
-		py += ticker_h + 6.0
-
-	# --- Info rows (battery/inverter/hover/dump/automation) ---
-	if has_info:
-		var rows: Array[Dictionary] = []
-		if not bat_msg.is_empty():
-			rows.append({"text": bat_msg,        "col": Color(0.27, 0.92, 0.55, a)})
-		if not inv_msg.is_empty():
-			rows.append({"text": inv_msg,        "col": Color(0.96, 0.78, 0.38, a)})
-		if not hover_msg.is_empty():
-			rows.append({"text": hover_msg,      "col": Color(0.75, 0.87, 1.00, a)})
-		if not dump_msg.is_empty():
-			rows.append({"text": dump_msg,       "col": Color(0.98, 0.87, 0.45, a)})
-		if not automation_msg.is_empty():
-			rows.append({"text": automation_msg, "col": Color(0.60, 0.87, 1.00, a)})
-
-		var row_h := 20.0
-		var info_w := 520.0
-		var info_h := 14.0 + float(rows.size()) * row_h + 4.0
-		var irect  := Rect2(Vector2(px, py), Vector2(info_w, info_h))
-		_draw_hud_panel(irect, a)
-		for ri in rows.size():
-			var ry := irect.position.y + 14.0 + float(ri) * row_h
-			draw_string(fnt, Vector2(irect.position.x + 10.0, ry), rows[ri].text as String, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, rows[ri].col as Color)
-
-
-func _cached_hud_panel_style(alpha: float) -> StyleBoxFlat:
-	if _hud_panel_style == null:
-		_hud_panel_style = StyleBoxFlat.new()
-		_hud_panel_style.set_corner_radius_all(8)
-		_hud_panel_style.set_border_width_all(1)
-	_hud_panel_style.bg_color = Color(0.05, 0.08, 0.17, 0.88 * alpha)
-	_hud_panel_style.border_color = Color(0.22, 0.30, 0.44, 0.75 * alpha)
-	return _hud_panel_style
-
-
-func _draw_hud_panel(rect: Rect2, alpha: float) -> void:
-	draw_style_box(_cached_hud_panel_style(alpha), rect)
-
-
 func _draw_v2_connection_feedback() -> void:
 	if not _wire_dragging:
 		return
@@ -232,7 +97,19 @@ func _draw_v2_connection_feedback() -> void:
 	var fs := 11
 	var txt := ""
 	var col := Color(0.75, 0.84, 0.95, 0.95)
-	if not _wire_snap.is_empty():
+	if not _wire_hub_drop.is_empty() and _wire_snap_valid:
+		txt = "Release on tank to add perimeter port"
+		col = Color(0.33, 0.92, 0.55, 0.95)
+		# Preview ghost port on the circle.
+		var drop_item := model.get_item(str(_wire_hub_drop.get("item_id", ""))) if model != null else {}
+		if not drop_item.is_empty():
+			var c := size * 0.5
+			var tl := _item_screen_tl(drop_item, c)
+			var sz := _item_screen_size(drop_item)
+			var gp := GraphHubPorts.screen_pos_on_circle(tl, sz, float(_wire_hub_drop.get("angle_rad", 0.0)))
+			draw_circle(gp, 8.0, Color(0.33, 0.92, 0.55, 0.35))
+			draw_circle(gp, 5.0, Color(0.33, 0.92, 0.55, 0.9))
+	elif not _wire_snap.is_empty():
 		var item_id := _wire_snap.get("item_id", "") as String
 		var handle_id := _wire_snap.get("handle_id", "") as String
 		if _wire_snap_valid:
@@ -246,10 +123,10 @@ func _draw_v2_connection_feedback() -> void:
 				txt = "Invalid connection: polarity mismatch on %s.%s" % [item_id, handle_id]
 			col = Color(0.95, 0.45, 0.45, 0.95)
 	else:
-		txt = "Drag to a compatible port to connect wires"
+		txt = "Drag to a port — or drop on a tank body to add a hub port"
 	var p := _interaction.last_pointer_pos + Vector2(14.0, -10.0)
 	draw_string(fnt, p, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
-	draw_string(fnt, p + Vector2(0.0, 14.0), "Touch: drag ports/nodes · 2-finger pan · pinch zoom · double-tap toggles loads", HORIZONTAL_ALIGNMENT_LEFT, -1, fs - 1, Color(0.75, 0.83, 0.95, 0.82))
+	draw_string(fnt, p + Vector2(0.0, 14.0), "Alt+drag hub port to rotate · Touch: drag ports/nodes · 2-finger pan", HORIZONTAL_ALIGNMENT_LEFT, -1, fs - 1, Color(0.75, 0.83, 0.95, 0.82))
 
 
 func _draw_v2_hover_port_tooltip() -> void:
@@ -297,6 +174,9 @@ func _render_item(item: Dictionary) -> void:
 	if itype == "resource":
 		_render_resource_item_v2(item)
 		return
+	if itype == "processor":
+		_render_processor_item_v2(item)
+		return
 	super._render_item(item)
 
 
@@ -316,27 +196,78 @@ func _render_resource_item_v2(item: Dictionary) -> void:
 	var border_col := accent if is_sel else Color(accent.r * 0.75, accent.g * 0.75, accent.b * 0.75, accent.a)
 	var level := clampf(float(specs.get("level", 0.5)), 0.0, 1.0)
 
-	_draw_rounded_rect(Rect2(rect.position + Vector2(2.0, 3.0), rect.size), V2_NODE_SHADOW, 12)
-	_draw_rounded_rect(rect, Color(0.05, 0.08, 0.14, 0.97), 12, Color(border_col.r, border_col.g, border_col.b, 0.75), 1.2)
-	var inner := rect.grow(-4.0)
-	_draw_rounded_rect(inner, Color(0.04, 0.07, 0.12, 0.98), 10, Color(border_col.r, border_col.g, border_col.b, 0.25), 1)
-	var fill_h := maxf(2.0, inner.size.y * level)
-	var fill_rect := Rect2(Vector2(inner.position.x, inner.position.y + inner.size.y - fill_h), Vector2(inner.size.x, fill_h))
-	_draw_rounded_rect(fill_rect, Color(accent.r, accent.g, accent.b, 0.88 if not bool(item.get("is_ghost", false)) else 0.35), 9)
+	# True circular hub — inscribed circle in the node rect.
+	var hub_c := GraphHubPorts.circle_center(tl, sz)
+	var hub_r := GraphHubPorts.circle_radius(sz)
+	# Soft shadow
+	draw_circle(hub_c + Vector2(2.0, 3.0), hub_r, V2_NODE_SHADOW)
+	# Outer shell
+	draw_circle(hub_c, hub_r, Color(0.05, 0.08, 0.14, 0.97))
+	draw_arc(hub_c, hub_r, 0.0, TAU, 48, Color(border_col.r, border_col.g, border_col.b, 0.85), 2.0, true)
+	# Inner well
+	var inner_r := maxf(4.0, hub_r - 4.0)
+	draw_circle(hub_c, inner_r, Color(0.04, 0.07, 0.12, 0.98))
+	# Level fill as a chord from the bottom (clip via arc wedges).
+	if level > 0.001:
+		var fill_col := Color(accent.r, accent.g, accent.b,
+				0.88 if not bool(item.get("is_ghost", false)) else 0.35)
+		_draw_circle_level_fill(hub_c, inner_r - 1.0, level, fill_col)
 
 	var fnt := ThemeDB.fallback_font
-	var fsize := maxi(10, int(round(12.0 * sqrt(_zoom))))
-	draw_string(fnt, inner.position + Vector2(4.0, fsize + 2.0),
-		str(specs.get("name", ResourceKinds.display_name(kind))),
-		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_S)
+	var name := str(specs.get("name", ResourceKinds.display_name(kind)))
+	var name_band := Rect2(hub_c - Vector2(hub_r * 0.72, hub_r * 0.55),
+			Vector2(hub_r * 1.44, hub_r * 0.28))
+	var name_h := GraphNodeLabel.body_font_size(name_band, 1, 10.0, 12.0, _zoom)
+	_draw_fitted_label(name_band.position + Vector2(0.0, name_h),
+		name, name_band.size.x, name_h, C_TEXT_S)
 	var pct := "%d%%" % int(round(level * 100.0))
-	var ts := fnt.get_string_size(pct, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize + 4)
-	draw_string(fnt, inner.position + Vector2((inner.size.x - ts.x) * 0.5, inner.size.y * 0.5),
-		pct, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize + 4, Color(1, 1, 1, 0.92))
+	var pct_fsize := GraphNodeLabel.stat_font_size(
+		Rect2(Vector2.ZERO, Vector2(hub_r * 1.2, hub_r * 0.7)), 20.0, _zoom)
+	var ts := fnt.get_string_size(pct, HORIZONTAL_ALIGNMENT_LEFT, -1, pct_fsize)
+	draw_string(fnt, hub_c + Vector2(-ts.x * 0.5, pct_fsize * 0.35),
+		pct, HORIZONTAL_ALIGNMENT_LEFT, -1, pct_fsize, Color(1, 1, 1, 0.92))
+
+	_draw_tank_overflow_glyph(specs,
+		hub_c + Vector2(hub_r * 0.85, -hub_r * 0.7))
 
 	_draw_item_handles(item, tl, sz)
 	if is_sel:
-		_draw_rounded_rect(rect.grow(1.0), Color(accent.r, accent.g, accent.b, 0.18), 13)
+		draw_arc(hub_c, hub_r + 2.0, 0.0, TAU, 48,
+				Color(accent.r, accent.g, accent.b, 0.55), 2.0, true)
+
+
+## Fill the lower fraction of a circle (tank level) with horizontal chord clipping.
+func _draw_circle_level_fill(c: Vector2, r: float, level: float, col: Color) -> void:
+	level = clampf(level, 0.0, 1.0)
+	if level >= 0.999:
+		draw_circle(c, r, col)
+		return
+	if level <= 0.001 or r < 2.0:
+		return
+	# Waterline y from bottom: y = c.y + r - 2*r*level
+	var water_y := c.y + r - 2.0 * r * level
+	var dy := water_y - c.y
+	if absf(dy) >= r:
+		if dy < 0.0:
+			draw_circle(c, r, col)
+		return
+	var half_chord := sqrt(maxf(0.0, r * r - dy * dy))
+	# Approximate fill with a fan of triangles below the waterline.
+	var steps := 24
+	var pts := PackedVector2Array()
+	pts.append(Vector2(c.x - half_chord, water_y))
+	pts.append(Vector2(c.x + half_chord, water_y))
+	# Walk the lower arc from right chord end → bottom → left chord end.
+	var a0 := atan2(dy, half_chord)   # right chord angle from center
+	var a1 := PI - a0                 # left chord angle
+	# Lower arc goes a0 → π/2 → a1 (clockwise in screen Y-down? use CCW via bezier samples)
+	for i in range(1, steps):
+		var t := float(i) / float(steps)
+		var ang := lerpf(a0, a1, t)
+		# Prefer the lower path: if a0 is small positive and a1 near π, lerp goes through bottom.
+		pts.append(c + Vector2(cos(ang), sin(ang)) * r)
+	if pts.size() >= 3:
+		draw_colored_polygon(pts, col)
 
 
 func _render_battery_item_v2(item: Dictionary) -> void:
@@ -369,7 +300,7 @@ func _render_battery_item_v2(item: Dictionary) -> void:
 
 	# Centered SOC percentage — scales with node size, never overflows the body.
 	var fnt := ThemeDB.fallback_font
-	var fsize := clampi(int(round(minf(rect.size.y * 0.38, rect.size.x * 0.32))), 12, 26)
+	var fsize := GraphNodeLabel.stat_font_size(rect, 26.0, _zoom)
 	var label := "%d%%" % int(round(soc * 100.0))
 	var ts := fnt.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize)
 	var tp := rect.position + Vector2((rect.size.x - ts.x) * 0.5, (rect.size.y + ts.y * 0.4) * 0.5)
@@ -396,51 +327,199 @@ func _render_panel_item_v2(item: Dictionary) -> void:
 	var iid := item.get("id", "") as String
 	var is_sel := (iid == selected_item_id) or selected_item_ids.has(iid)
 	var specs := item.get("specs", {}) as Dictionary
+	var z := _zoom
+	var fnt := ThemeDB.fallback_font
 
-	# Outer module frame
-	draw_rect(rect.grow(1.5), Color(0.01, 0.02, 0.05, 0.74), true)
+	# Outer module frame (all strokes/paddings in graph px × zoom so the whole
+	# card scales as one — no fixed-pixel offsets drifting relative to the ports).
+	draw_rect(rect.grow(1.5 * z), Color(0.01, 0.02, 0.05, 0.74), true)
 	draw_rect(rect, Color(0.03, 0.06, 0.12, 0.96), true)
-	draw_rect(rect, Color(0.20, 0.67, 0.90, 0.72), false, 1.2)
-	draw_rect(rect.grow(-3.0), Color(0.06, 0.13, 0.24, 0.96), true)
+	draw_rect(rect, Color(0.20, 0.67, 0.90, 0.72), false, maxf(1.0, 1.2 * z))
+
+	# Proportional zones: name band (top) · cell grid (middle) · telemetry (bottom).
+	var pad := maxf(2.0, 4.0 * z)
+	var name_h := clampf(sz.y * 0.18, 10.0 * z, 30.0 * z)
+	var strip_h := clampf(sz.y * 0.20, 12.0 * z, 30.0 * z)
 
 	# Cell grid (panel face)
-	var face := rect.grow(-6.0)
-	face.size.y -= 28.0
-	draw_rect(face, Color(0.05, 0.18, 0.33, 0.95), true)
-	var cols := 4
-	var rows := 8
-	for c in range(1, cols):
-		var x := face.position.x + face.size.x * (float(c) / float(cols))
-		draw_line(Vector2(x, face.position.y), Vector2(x, face.position.y + face.size.y), Color(0.56, 0.79, 0.95, 0.28), 1.0)
-	for r in range(1, rows):
-		var y := face.position.y + face.size.y * (float(r) / float(rows))
-		draw_line(Vector2(face.position.x, y), Vector2(face.position.x + face.size.x, y), Color(0.56, 0.79, 0.95, 0.24), 1.0)
-	# Glass sheen
-	var sheen := Rect2(face.position + Vector2(0.0, 2.0), Vector2(face.size.x, maxf(4.0, face.size.y * 0.14)))
-	draw_rect(sheen, Color(0.74, 0.89, 1.0, 0.10), true)
+	var face := Rect2(
+		rect.position + Vector2(pad, name_h),
+		Vector2(sz.x - pad * 2.0, sz.y - name_h - strip_h))
+	if face.size.x > 6.0 and face.size.y > 6.0:
+		draw_rect(face, Color(0.05, 0.18, 0.33, 0.95), true)
+		var line_w := maxf(0.6, 0.8 * z)
+		for c in range(1, 4):
+			var x := face.position.x + face.size.x * (float(c) / 4.0)
+			draw_line(Vector2(x, face.position.y), Vector2(x, face.end.y),
+				Color(0.56, 0.79, 0.95, 0.28), line_w)
+		var grid_rows := 8 if face.size.y > 60.0 else 4
+		for r in range(1, grid_rows):
+			var y := face.position.y + face.size.y * (float(r) / float(grid_rows))
+			draw_line(Vector2(face.position.x, y), Vector2(face.end.x, y),
+				Color(0.56, 0.79, 0.95, 0.24), line_w)
+		draw_rect(Rect2(face.position, Vector2(face.size.x, maxf(2.0, face.size.y * 0.14))),
+			Color(0.74, 0.89, 1.0, 0.10), true)
 
-	# Bottom telemetry strip
-	var strip := Rect2(Vector2(rect.position.x + 3.0, rect.position.y + rect.size.y - 22.0), Vector2(rect.size.x - 6.0, 18.0))
+	# Name band (top)
+	var name_band := Rect2(rect.position + Vector2(pad, maxf(1.0, 2.0 * z)),
+		Vector2(sz.x - pad * 2.0, maxf(6.0, name_h - 2.0 * z)))
+	var fs_name := GraphNodeLabel.body_font_size(name_band, 1, 10.0, 12.0, z)
+	_draw_fitted_label(name_band.position + Vector2(0.0, fs_name),
+		str(specs.get("name", "PV")), name_band.size.x, fs_name, Color(0.90, 0.96, 1.0, 0.95))
+
+	# Telemetry strip (bottom) — wattage left, array coordinate right.
+	var strip := Rect2(Vector2(rect.position.x + pad, rect.end.y - strip_h),
+		Vector2(sz.x - pad * 2.0, maxf(6.0, strip_h - pad)))
 	draw_rect(strip, Color(0.01, 0.03, 0.07, 0.82), true)
-	draw_rect(strip, Color(0.33, 0.72, 0.94, 0.38), false, 1.0)
-
-	var fnt := ThemeDB.fallback_font
-	var fs_name := maxi(9, int(round(10.0 * sqrt(_zoom))))
-	var fs_stats := maxi(8, int(round(9.0 * sqrt(_zoom))))
-	var label := str(specs.get("name", "PV"))
-	var watts := float(specs.get("wmp", 0.0))
-	draw_string(fnt, rect.position + Vector2(6.0, 13.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs_name, Color(0.90, 0.96, 1.0, 0.95))
+	draw_rect(strip, Color(0.33, 0.72, 0.94, 0.38), false, maxf(0.8, 1.0 * z))
+	var fs_stats := GraphNodeLabel.body_font_size(strip, 1, 9.0, 11.0, z)
+	var baseline := strip.position.y + strip.size.y * 0.5 + fs_stats * 0.36
+	draw_string(fnt, Vector2(strip.position.x + maxf(2.0, 4.0 * z), baseline),
+		"%.0fW" % float(specs.get("wmp", 0.0)),
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fs_stats, Color(0.78, 0.92, 1.0, 0.96))
 	var grp := int(specs.get("array_group", 0))
 	var str_idx := int(specs.get("array_string", 0))
 	var ser := int(specs.get("array_series_pos", 0))
 	if grp > 0 and str_idx > 0 and ser > 0:
-		draw_string(fnt, rect.position + Vector2(6.0, 24.0), "G%d S%d P%d" % [grp, str_idx, ser], HORIZONTAL_ALIGNMENT_LEFT, -1, fs_stats, Color(0.73, 0.90, 1.0, 0.86))
-	draw_string(fnt, strip.position + Vector2(4.0, 12.5), "%.0fW" % watts, HORIZONTAL_ALIGNMENT_LEFT, -1, fs_stats, Color(0.78, 0.92, 1.0, 0.96))
+		var gtxt := "G%d S%d P%d" % [grp, str_idx, ser]
+		var gsz := fnt.get_string_size(gtxt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs_stats)
+		if gsz.x < strip.size.x * 0.55:
+			draw_string(fnt, Vector2(strip.end.x - gsz.x - 2.0 * z, baseline),
+				gtxt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs_stats, Color(0.73, 0.90, 1.0, 0.86))
 
 	_draw_item_handles(item, tl, sz)
 	if is_sel:
-		draw_rect(rect.grow(1.5), Color(0.13, 0.83, 0.93, 0.16), true)
-		draw_rect(rect.grow(1.0), Color(0.13, 0.83, 0.93, 0.85), false, 1.4)
+		draw_rect(rect.grow(1.5 * z), Color(0.13, 0.83, 0.93, 0.16), true)
+		draw_rect(rect.grow(1.0 * z), Color(0.13, 0.83, 0.93, 0.85), false, maxf(1.0, 1.4 * z))
+
+
+## Processor card: generated image (GLB preview or icon) · title · critical stats.
+## Every offset is graph-space × zoom so the whole card scales as one unit —
+## legible up close, still readable as an image + title chip when zoomed out.
+func _render_processor_item_v2(item: Dictionary) -> void:
+	var center := size * 0.5
+	var tl := _item_screen_tl(item, center)
+	var sz := _item_screen_size(item)
+	var rect := Rect2(tl, sz)
+	var iid := item.get("id", "") as String
+	var is_sel := (iid == selected_item_id) or selected_item_ids.has(iid)
+	var specs := item.get("specs", {}) as Dictionary
+	var z := _zoom
+	var fnt := ThemeDB.fallback_font
+
+	var accent := NODE_BORDER_COLORS.get("processor", Color(0.58, 0.64, 0.72, 1.0)) as Color
+	if str(specs.get("role", "")) == "habitat":
+		accent = Color(0.62, 0.74, 0.44, 1.0)
+	if bool(item.get("is_ghost", false)):
+		accent = Color(accent.r, accent.g, accent.b, 0.5)
+
+	# Active-load glow behind the frame.
+	if _load_item_is_active(item):
+		draw_rect(rect.grow(maxf(2.5, 3.0 * z)), C_ACTIVE_LOAD_GLOW, true)
+
+	_draw_node_frame(rect, accent if is_sel else Color(accent.r * 0.85, accent.g * 0.85, accent.b * 0.85, 1.0))
+	var title_h := _title_band_height(sz.y)
+	_draw_title_band(rect, title_h, str(specs.get("name", "Processor")), accent)
+
+	var body := Rect2(tl + Vector2(0.0, title_h), sz - Vector2(0.0, title_h))
+	var pad := maxf(3.0, 6.0 * z)
+	var inner := body.grow(-pad)
+	if inner.size.x < 8.0 or inner.size.y < 8.0:
+		_draw_item_handles(item, tl, sz)
+		if is_sel:
+			draw_rect(rect.grow(1.2 * z), Color(0.13, 0.83, 0.93, 0.16), true)
+		return
+
+	# Image zone (left): rendered GLB thumbnail or emoji icon tile.
+	var img_w := clampf(inner.size.x * 0.42, 8.0, inner.size.y)
+	var img_zone := Rect2(inner.position, Vector2(img_w, inner.size.y))
+	_draw_processor_image_v2(img_zone, specs, accent, z)
+
+	# Stats column (right).
+	var sx := inner.position.x + img_w + pad
+	var col_w := inner.end.x - sx
+	if col_w > 12.0:
+		var fs := GraphNodeLabel.body_font_size(
+			Rect2(Vector2.ZERO, Vector2(col_w, inner.size.y * 0.24)), 1, 10.0, 12.0, z)
+		var line_gap := float(fs) + maxf(2.0, 3.0 * z)
+		var y := inner.position.y
+
+		# Headline: power draw.
+		var watts := float(specs.get("watts", specs.get("max_watts", 0.0)))
+		if watts > 0.0:
+			var fs_big := GraphNodeLabel.stat_font_size(
+				Rect2(Vector2.ZERO, Vector2(col_w, inner.size.y * 0.5)), 18.0, z)
+			y += float(fs_big)
+			draw_string(fnt, Vector2(sx, y),
+				_fmt_power_w(watts), HORIZONTAL_ALIGNMENT_LEFT, col_w, fs_big, C_TEXT)
+			y += maxf(2.0, 3.0 * z)
+		else:
+			y += float(fs)
+
+		# Energy-source chip.
+		var es := str(specs.get("energy_source", "ac"))
+		if es.is_empty() and watts > 0.0:
+			es = "ac"
+		if es == "ac" and y + line_gap < inner.end.y:
+			y += line_gap
+			draw_string(fnt, Vector2(sx, y), "⚡ AC in",
+				HORIZONTAL_ALIGNMENT_LEFT, col_w, fs, C_AMBER)
+		elif es in ["thermal", "mechanical"] and y + line_gap < inner.end.y:
+			y += line_gap
+			draw_string(fnt, Vector2(sx, y), "%s in" % es,
+				HORIZONTAL_ALIGNMENT_LEFT, col_w, fs, C_TEXT_M)
+
+		# Input → output resource kinds.
+		var inputs: Array = specs.get("inputs", []) as Array
+		var outputs: Array = specs.get("outputs", []) as Array
+		if (not inputs.is_empty() or not outputs.is_empty()) and y + line_gap < inner.end.y:
+			y += line_gap
+			var in_k := ResourceKinds.display_name(str((inputs[0] as Dictionary).get("kind", ""))) if not inputs.is_empty() else "—"
+			var out_k := ResourceKinds.display_name(str((outputs[0] as Dictionary).get("kind", ""))) if not outputs.is_empty() else "—"
+			_draw_fitted_label(Vector2(sx, y), "%s → %s" % [in_k, out_k],
+				col_w, fs, Color(0.72, 0.84, 0.96, 0.92))
+
+		# Output rate.
+		var rate_str := str(specs.get("output_rate", ""))
+		if not rate_str.is_empty() and y + line_gap < inner.end.y:
+			y += line_gap
+			_draw_fitted_label(Vector2(sx, y), rate_str, col_w, fs, C_TEXT_M)
+
+	_draw_item_handles(item, tl, sz)
+	if is_sel:
+		draw_rect(rect.grow(1.2 * z), Color(0.13, 0.83, 0.93, 0.16), true)
+		draw_rect(rect.grow(0.8 * z), Color(0.13, 0.83, 0.93, 0.85), false, maxf(1.0, 1.2 * z))
+
+
+## Left-zone image for a processor card: rendered GLB thumbnail when the preset
+## carries a model_id, else a large centered emoji icon on a tinted tile.
+func _draw_processor_image_v2(zone: Rect2, specs: Dictionary, accent: Color, z: float) -> void:
+	if zone.size.x < 6.0 or zone.size.y < 6.0:
+		return
+	var radius := int(maxf(2.0, 6.0 * z))
+	_draw_rounded_rect(zone, Color(0.04, 0.07, 0.12, 0.96), radius,
+		Color(accent.r, accent.g, accent.b, 0.35), 1)
+	# Preferred: cached GLB preview render (fills the tile, aspect-preserved).
+	if _draw_model_preview_zone(zone.grow(-maxf(1.0, 2.0 * z)), specs, 1.0):
+		return
+	# Fallback: emoji icon centered.
+	var icon := str(specs.get("icon", "⚙"))
+	if icon.is_empty():
+		icon = "⚙"
+	var fnt := ThemeDB.fallback_font
+	var fs := int(clampf(minf(zone.size.x, zone.size.y) * 0.6, 6.0, 220.0))
+	var isz := fnt.get_string_size(icon, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+	draw_string(fnt, zone.position + Vector2(
+			(zone.size.x - isz.x) * 0.5,
+			(zone.size.y + isz.y * 0.55) * 0.5),
+		icon, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+
+
+## Compact power formatter — kW above 1000 W so headline stays short when zoomed out.
+func _fmt_power_w(watts: float) -> String:
+	if watts >= 1000.0:
+		return "%.1f kW" % (watts / 1000.0)
+	return "%.0f W" % watts
 
 
 func _render_load_group_item_v2(item: Dictionary) -> void:
@@ -470,11 +549,15 @@ func _render_load_group_item_v2(item: Dictionary) -> void:
 			Color(accent.r, accent.g, accent.b, 0.10 - float(layer) * 0.03), true)
 
 	var fnt := ThemeDB.fallback_font
-	var fs_name := maxi(10, int(round(11.0 * sqrt(_zoom))))
-	var fs_stats := maxi(9, int(round(10.0 * sqrt(_zoom))))
+	var title_band := Rect2(rect.position + Vector2(6.0, 4.0), Vector2(rect.size.x - 12.0, minf(28.0, rect.size.y * 0.22)))
+	var fs_name := GraphNodeLabel.body_font_size(title_band, 1, 11.0, 13.0, _zoom)
+	var fs_stats := GraphNodeLabel.body_font_size(
+		Rect2(Vector2.ZERO, Vector2(rect.size.x, rect.size.y * 0.14)), 1, 10.0, 11.0, _zoom)
 	var title := str(specs.get("name", "Load Group"))
-	draw_string(fnt, rect.position + Vector2(8.0, 14.0), title, HORIZONTAL_ALIGNMENT_LEFT, -1, fs_name, Color(0.96, 0.92, 0.86, 0.96))
-	draw_string(fnt, rect.position + Vector2(8.0, 26.0), "⧉ %d loads grouped" % child_count,
+	_draw_fitted_label(title_band.position + Vector2(2.0, fs_name),
+		title, title_band.size.x, fs_name, Color(0.96, 0.92, 0.86, 0.96))
+	draw_string(fnt, rect.position + Vector2(8.0, title_band.position.y - rect.position.y + fs_name + 4.0),
+		"⧉ %d loads grouped" % child_count,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fs_stats, Color(0.78, 0.72, 0.62, 0.88))
 
 	var strip := Rect2(Vector2(rect.position.x + 4.0, rect.end.y - 22.0), Vector2(rect.size.x - 8.0, 18.0))
@@ -501,13 +584,14 @@ func _render_compound_item_v2(item: Dictionary) -> void:
 	var title := str(specs.get("name", "Compound"))
 	if kind == "array":
 		accent = Color(0.15, 0.76, 0.95, 1.0)
-		title = "Solar Array"
+		var n := int(specs.get("array_panel_units", specs.get("child_count", 0)))
+		title = "Solar Array · %d panels" % n if n > 0 else "Solar Array"
 	elif kind == "battery_bank":
 		accent = Color(0.17, 0.84, 0.52, 1.0)
 		title = "Battery Bank"
 
 	_draw_node_frame(rect, accent if is_sel else Color(accent.r * 0.85, accent.g * 0.85, accent.b * 0.85, 1.0))
-	var title_h := maxf(24.0, sz.y * 0.27)
+	var title_h := _title_band_height(sz.y)
 	_draw_title_band(rect, title_h, title, accent)
 	var body := Rect2(tl + Vector2(0.0, title_h), sz - Vector2(0.0, title_h))
 
@@ -525,44 +609,74 @@ func _render_compound_item_v2(item: Dictionary) -> void:
 
 
 func _draw_array_compound_body_v2(rect: Rect2, specs: Dictionary) -> void:
-	var panel_count := maxi(2, int(specs.get("array_panel_units", specs.get("child_count", 6))))
-	var s_count := maxi(1, int(specs.get("array_series", 1)))
-	var p_count := maxi(1, int(specs.get("array_parallel", 1)))
-	var topo := str(specs.get("array_topology", "%dS%dP" % [s_count, p_count]))
-	var body := rect.grow(-6.0)
-	var stack_h := maxf(34.0, body.size.y - 28.0)
-	var stack := Rect2(body.position + Vector2(0.0, 2.0), Vector2(body.size.x, stack_h))
-	var deck_count := mini(4, maxi(2, p_count))
-	var deck_gap := 3.0
-	var deck_size := Vector2(stack.size.x - 12.0, maxf(9.0, (stack.size.y - float(deck_count - 1) * deck_gap) / float(deck_count)))
-	for d in range(deck_count - 1, -1, -1):
-		var dd := float(deck_count - 1 - d)
-		var dx := 6.0 + dd * 2.2
-		var dy := dd * 2.4
-		var deck := Rect2(stack.position + Vector2(dx, dy), deck_size)
-		_draw_rounded_rect(deck, Color(0.05, 0.16, 0.30, 0.95), 5, Color(0.52, 0.80, 0.97, 0.35), 1)
-		var cols := mini(5, maxi(2, s_count))
-		for c in range(1, cols):
-			var x := deck.position.x + deck.size.x * (float(c) / float(cols))
-			draw_line(Vector2(x, deck.position.y + 1.0), Vector2(x, deck.position.y + deck.size.y - 1.0), Color(0.72, 0.90, 1.0, 0.24), 1.0)
-		var rows := 2
-		for r in range(1, rows):
-			var y := deck.position.y + deck.size.y * (float(r) / float(rows))
-			draw_line(Vector2(deck.position.x + 1.0, y), Vector2(deck.position.x + deck.size.x - 1.0, y), Color(0.72, 0.90, 1.0, 0.18), 1.0)
-		var sheen := Rect2(deck.position + Vector2(0.0, 1.0), Vector2(deck.size.x, maxf(2.0, deck.size.y * 0.16)))
-		_draw_rounded_rect(sheen, Color(0.72, 0.92, 1.0, 0.12), 3)
+	var grid := GraphArrayLayout.grid_dims(specs)
+	var cols := grid.x
+	var rows := grid.y
+	var panel_count := maxi(1, int(specs.get("array_panel_units", cols * rows)))
+	var s_count := cols
+	var p_count := rows
+	var topo := str(specs.get("array_topology", "%dS x %dP" % [s_count, p_count]))
+	var total_w := float(specs.get("array_equiv_wmp", 0.0))
 
-	# Small combiner rail and bus stubs to reinforce "condensed array" feel.
-	var rail_y := stack.end.y - 3.0
-	draw_line(Vector2(stack.position.x + 10.0, rail_y), Vector2(stack.end.x - 28.0, rail_y), Color(0.42, 0.90, 0.98, 0.58), 2.0)
-	draw_line(Vector2(stack.end.x - 26.0, rail_y), Vector2(stack.end.x - 14.0, rail_y), Color(0.33, 0.78, 0.92, 0.85), 3.0)
-	draw_circle(Vector2(stack.end.x - 12.0, rail_y), 2.2, Color(0.60, 0.95, 1.0, 0.90))
+	var gap := GraphArrayLayout.CELL_GAP * _zoom
+	var cell_sz := Vector2(GraphArrayLayout.PANEL_W, GraphArrayLayout.PANEL_H) * _zoom
+	var pad := GraphArrayLayout.BODY_PAD * _zoom
+	var footer_h := GraphArrayLayout.FOOTER_H * _zoom
+	var origin := rect.position + Vector2(pad, pad)
+	var grid_h := float(rows) * cell_sz.y + float(maxi(0, rows - 1)) * gap
+
+	var idx := 0
+	for r in range(rows):
+		for c in range(cols):
+			if idx >= panel_count:
+				break
+			var p := origin + Vector2(
+				float(c) * (cell_sz.x + gap),
+				float(r) * (cell_sz.y + gap))
+			_draw_array_panel_cell_v2(Rect2(p, cell_sz))
+			idx += 1
+
+	# Shared bottom bus bar across the array width.
+	var bus_y := origin.y + grid_h + maxf(2.0, gap)
+	draw_line(
+		Vector2(origin.x + cell_sz.x * 0.15, bus_y),
+		Vector2(origin.x + float(cols) * cell_sz.x + float(maxi(0, cols - 1)) * gap - cell_sz.x * 0.15, bus_y),
+		Color(0.42, 0.90, 0.98, 0.55), maxf(1.5, 2.0 * _zoom))
+	draw_line(
+		Vector2(origin.x + cell_sz.x * 0.28, bus_y + maxf(2.0, 3.0 * _zoom)),
+		Vector2(origin.x + float(cols) * cell_sz.x + float(maxi(0, cols - 1)) * gap - cell_sz.x * 0.28, bus_y + maxf(2.0, 3.0 * _zoom)),
+		Color(0.30, 0.32, 0.40, 0.65), maxf(1.2, 1.6 * _zoom))
 
 	var fnt := ThemeDB.fallback_font
-	var meta_col := Color(0.82, 0.94, 1.0, 0.92)
-	var sub_col := Color(0.74, 0.86, 0.98, 0.90)
-	draw_string(fnt, rect.position + Vector2(8.0, rect.size.y - 16.0), "Topology: %s  (%d panels)" % [topo, panel_count], HORIZONTAL_ALIGNMENT_LEFT, -1, 9, meta_col)
-	draw_string(fnt, rect.position + Vector2(8.0, rect.size.y - 4.0), "Condensed stack view · Enter to expand", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, sub_col)
+	var meta_y := rect.end.y - footer_h * 0.35
+	var fs_meta := maxi(GraphNodeLabel.BODY_FONT_MIN, int(round(10.0 * _zoom)))
+	var fs_hint := maxi(GraphNodeLabel.BODY_FONT_MIN, int(round(9.0 * _zoom)))
+	draw_string(fnt, rect.position + Vector2(pad, meta_y),
+			"%s  ·  %d panels  ·  %.0f W" % [topo, panel_count, total_w],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fs_meta, Color(0.82, 0.94, 1.0, 0.92))
+	draw_string(fnt, rect.position + Vector2(pad, rect.end.y - maxf(6.0, pad * 0.5)),
+			"Drag to move · single +/- bus",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fs_hint, Color(0.68, 0.82, 0.96, 0.82))
+
+
+func _draw_array_panel_cell_v2(cell: Rect2) -> void:
+	if cell.size.x < 6.0 or cell.size.y < 6.0:
+		return
+	draw_rect(cell, Color(0.03, 0.06, 0.12, 0.96), true)
+	draw_rect(cell, Color(0.20, 0.67, 0.90, 0.62), false, maxf(0.8, 1.0 * _zoom))
+	var face := cell.grow(-maxf(2.0, 3.0 * _zoom))
+	draw_rect(face, Color(0.05, 0.18, 0.33, 0.95), true)
+	for c in range(1, 4):
+		var x := face.position.x + face.size.x * (float(c) / 4.0)
+		draw_line(Vector2(x, face.position.y), Vector2(x, face.end.y),
+				Color(0.56, 0.79, 0.95, 0.28), maxf(0.6, 0.8 * _zoom))
+	for r in range(1, 4):
+		var y := face.position.y + face.size.y * (float(r) / 4.0)
+		draw_line(Vector2(face.position.x, y), Vector2(face.end.x, y),
+				Color(0.56, 0.79, 0.95, 0.22), maxf(0.6, 0.8 * _zoom))
+	var sheen := Rect2(face.position + Vector2(0.0, 1.0),
+			Vector2(face.size.x, maxf(2.0, face.size.y * 0.14)))
+	draw_rect(sheen, Color(0.74, 0.89, 1.0, 0.10), true)
 
 
 func _draw_battery_bank_compound_body_v2(rect: Rect2, specs: Dictionary) -> void:
@@ -669,10 +783,11 @@ func _draw_title_band(rect: Rect2, band_h: float, title: String, accent: Color) 
 	var band := Rect2(rect.position, Vector2(rect.size.x, band_h))
 	_draw_rounded_rect(band, Color(accent.r, accent.g, accent.b, 0.22), 11)
 	_draw_rounded_rect(Rect2(band.position, Vector2(band.size.x, 2.0)), Color(V2_TITLE_GLOW.r, V2_TITLE_GLOW.g, V2_TITLE_GLOW.b, 0.72), 2)
-	var fnt := ThemeDB.fallback_font
 	var fsize := _fit_title_font_size(band_h)
 	var cy := rect.position.y + band_h * 0.5 + fsize * 0.38
-	draw_string(fnt, Vector2(rect.position.x + 10.0, cy), title, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.93, 0.95, 0.99, 1.0))
+	var pad_x := 10.0
+	var max_w := maxf(8.0, rect.size.x - pad_x * 2.0)
+	_draw_fitted_label(Vector2(rect.position.x + pad_x, cy), title, max_w, fsize, Color(0.93, 0.95, 0.99, 1.0))
 
 
 func _draw_rounded_rect(rect: Rect2, fill: Color, radius: int, border_col: Color = Color(0, 0, 0, 0), border_w: int = 0) -> void:
@@ -738,27 +853,117 @@ func _draw_wire_bezier(from: Vector2, from_tang: Vector2,
 			arrow_t = 1.0 - arrow_t
 		for i in arrow_count:
 			var t := fposmod(arrow_t + float(i) * arrow_gap, 1.0)
-			_draw_v2_flow_arrow(from, c1, c2, to, t, col, body_w, reverse_chase, gscale_v2)
+			ResourceEdgeVis.draw_bezier_flow_arrow(
+					self, from, c1, c2, to, t, col, body_w, reverse_chase, gscale_v2)
 
 
-func _draw_v2_flow_arrow(from: Vector2, c1: Vector2, c2: Vector2, to: Vector2, t: float,
-		col: Color, body_w: float, reverse: bool, gscale: float = 0.5) -> void:
-	var p   := _bezier_pos(from, c1, c2, to, t)
-	var dt  := 0.018 if not reverse else -0.018
-	var t2  := clampf(t + dt, 0.0, 1.0)
-	var p2  := _bezier_pos(from, c1, c2, to, t2)
-	var dir := (p2 - p).normalized()
-	if dir.length_squared() < 0.0001:
+## V2 resource wires — glow + directional arrows (parity with power wires).
+func _draw_resource_wire_bezier(from: Vector2, from_tang: Vector2,
+		to: Vector2, to_tang_in: Vector2,
+		col: Color, width: float, flow_active: bool,
+		reverse_chase: bool, curve_tension: float = 1.0,
+		flow_rate: float = 0.0, resource_kind: String = "", sankey_scale: bool = true) -> void:
+	var ctrl := _wire_bezier_controls(from, from_tang, to, to_tang_in, curve_tension)
+	var c1: Vector2 = ctrl["c1"]
+	var c2: Vector2 = ctrl["c2"]
+	var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, flow_active)
+	var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
+
+	_draw_bezier_stroke(from, c1, c2, to, 24,
+		Color(col.r, col.g, col.b, col.a * 0.18), maxf(1.4, width * 0.6))
+	_draw_bezier_stroke(from, c1, c2, to, 26, Color(0.01, 0.01, 0.03, 0.28), body_w + 2.0)
+	if flow_active and gscale > 0.01:
+		var glow_a := 0.08 + 0.14 * gscale
+		_draw_bezier_stroke(from, c1, c2, to, 28,
+			Color(col.r, col.g, col.b, glow_a), body_w + 2.4 + 2.6 * gscale)
+	var core := Color(
+		lerpf(col.r, 1.0, 0.16 * gscale),
+		lerpf(col.g, 1.0, 0.14 * gscale),
+		lerpf(col.b, 1.0, 0.10 * gscale),
+		0.68 + 0.28 * gscale if flow_active else col.a)
+	_draw_bezier_stroke(from, c1, c2, to, 32, core, maxf(1.8, body_w))
+	if flow_active and gscale > 0.01:
+		_draw_bezier_stroke(from, c1, c2, to, 32,
+			Color(1.0, 1.0, 1.0, 0.12 + 0.18 * gscale), maxf(1.0, body_w * 0.22))
+		_draw_resource_flow_arrows_bezier(from, c1, c2, to, col, body_w, reverse_chase, gscale)
+
+
+func _draw_resource_wire_path(points: Array, end_tangents: Array,
+		col: Color, width: float, flow_active: bool,
+		reverse_chase: bool, curve_tension: float = 1.0,
+		flow_rate: float = 0.0, resource_kind: String = "", sankey_scale: bool = true) -> void:
+	if points.size() < 2:
 		return
-	var side := Vector2(-dir.y, dir.x)
-	# Scale arrow size with power level
-	var sz  := 1.0 + gscale * 0.7
-	var len := maxf(5.0, body_w * 1.85 * sz)
-	var wid := maxf(2.5, body_w * 0.75 * sz)
-	var a   := p + dir * len
-	var b   := p - dir * len * 0.55 + side * wid
-	var c   := p - dir * len * 0.55 - side * wid
-	# Outer white arrow
-	draw_colored_polygon(PackedVector2Array([a, b, c]), Color(1.0, 1.0, 1.0, V2_FLOW_ARROW_ALPHA * (0.7 + gscale * 0.3)))
-	# Inner colored arrow (gives each wire its polarity hue)
-	draw_colored_polygon(PackedVector2Array([p + dir * (len * 0.70), b, c]), Color(col.r, col.g, col.b, 0.60 + gscale * 0.25))
+	for seg: int in range(points.size() - 1):
+		var from: Vector2 = points[seg] as Vector2
+		var to: Vector2 = points[seg + 1] as Vector2
+		var from_t: Vector2
+		var to_t_in: Vector2
+		if seg == 0:
+			from_t = end_tangents[0] as Vector2 if end_tangents.size() > 0 else (to - from).normalized()
+		else:
+			from_t = (to - from).normalized()
+		if seg == points.size() - 2:
+			to_t_in = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
+		else:
+			to_t_in = (from - to).normalized()
+		_draw_resource_wire_bezier(from, from_t, to, to_t_in, col, width, false,
+				reverse_chase, curve_tension, flow_rate, resource_kind, sankey_scale)
+	if flow_active:
+		var sample_fn := func(t: float) -> Vector2:
+			return _sample_wire_path(points, end_tangents, t, curve_tension)
+		var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, true)
+		var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
+		_draw_resource_flow_arrows_on_sample(sample_fn, col, body_w, reverse_chase, gscale)
+
+
+func _draw_resource_wire_orthogonal_path(points: Array, end_tangents: Array,
+		col: Color, width: float, flow_active: bool,
+		reverse_chase: bool, _curve_tension: float = 1.0,
+		flow_rate: float = 0.0, resource_kind: String = "", sankey_scale: bool = true) -> void:
+	if points.size() < 2:
+		return
+	var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, flow_active)
+	var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
+	for i in range(points.size() - 1):
+		var a: Vector2 = points[i] as Vector2
+		var b: Vector2 = points[i + 1] as Vector2
+		draw_line(a, b, Color(col.r, col.g, col.b, col.a * 0.18), maxf(1.4, width * 0.6))
+		if flow_active and gscale > 0.01:
+			var glow_a := 0.08 + 0.14 * gscale
+			draw_line(a, b, Color(col.r, col.g, col.b, glow_a), body_w + 1.8 + 2.0 * gscale)
+		draw_line(a, b, col, maxf(1.8, body_w))
+	if flow_active and points.size() >= 2:
+		var total := 0.0
+		var segs: Array = []
+		for i in range(points.size() - 1):
+			var a: Vector2 = points[i] as Vector2
+			var b: Vector2 = points[i + 1] as Vector2
+			total += a.distance_to(b)
+			segs.append({"a": a, "b": b, "len": total})
+		if total < 1.0:
+			return
+		var sample_fn := func(t: float) -> Vector2:
+			var dist := t * total
+			for seg: Dictionary in segs:
+				if dist <= float(seg.get("len", 0.0)):
+					var seg_a: Vector2 = seg.get("a", Vector2.ZERO)
+					var seg_b: Vector2 = seg.get("b", Vector2.ZERO)
+					var seg_start_len: float = float(seg.get("len", 0.0)) - seg_a.distance_to(seg_b)
+					var seg_len: float = maxf(seg_a.distance_to(seg_b), 0.001)
+					var u: float = (dist - seg_start_len) / seg_len
+					return seg_a.lerp(seg_b, clampf(u, 0.0, 1.0))
+			return points[points.size() - 1] as Vector2
+		_draw_resource_flow_arrows_on_sample(sample_fn, col, body_w, reverse_chase, gscale)
+
+
+func _draw_resource_flow_arrows_bezier(from: Vector2, c1: Vector2, c2: Vector2, to: Vector2,
+		col: Color, body_w: float, reverse: bool, gscale: float) -> void:
+	ResourceEdgeVis.draw_bezier_flow_arrows(
+			self, from, c1, c2, to, col, body_w, _flow_phase, reverse, gscale)
+
+
+func _draw_resource_flow_arrows_on_sample(sample_fn: Callable, col: Color, body_w: float,
+		reverse: bool, gscale: float) -> void:
+	ResourceEdgeVis.draw_sample_flow_arrows(
+			self, sample_fn, col, body_w, _flow_phase, reverse, gscale)

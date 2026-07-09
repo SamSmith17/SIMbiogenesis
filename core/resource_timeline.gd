@@ -13,6 +13,11 @@ var _level: PackedFloat32Array = PackedFloat32Array()
 var _inflow: PackedFloat32Array = PackedFloat32Array()
 var _outflow: PackedFloat32Array = PackedFloat32Array()
 
+## Cumulative quantity lost to the full-tank clamp during forward integration
+## (record_step / _fill_forward_to). Mass is NOT silently conserved on overflow —
+## this counter lets the flow engine surface the loss instead of hiding it.
+var total_overflow_qty: float = 0.0
+
 var _eval: Callable = Callable()
 
 
@@ -22,6 +27,16 @@ static func step_level(level: float, net_qty_per_hour: float, capacity: float,
 		return clampf(level, 0.0, 1.0)
 	var delta := (net_qty_per_hour * dt_hours) / capacity
 	return clampf(level + delta, 0.0, 1.0)
+
+
+## Quantity (same units as capacity) that step_level would discard to the
+## 0..1 clamp on THIS step when the tank tops out. 0 when capacity invalid.
+static func step_overflow_qty(level: float, net_qty_per_hour: float, capacity: float,
+		dt_hours: float) -> float:
+	if capacity <= 0.0 or dt_hours <= 0.0:
+		return 0.0
+	var raw := level + (net_qty_per_hour * dt_hours) / capacity
+	return maxf(raw - 1.0, 0.0) * capacity
 
 
 static func unstep_level(level: float, net_qty_per_hour: float, capacity: float,
@@ -45,6 +60,7 @@ func clear() -> void:
 	_inflow = PackedFloat32Array()
 	_outflow = PackedFloat32Array()
 	_base_step = 0
+	total_overflow_qty = 0.0
 
 
 func is_empty() -> bool:
@@ -92,6 +108,7 @@ func record_step(abs_hours: float, net_qty_per_hour: float,
 	var lvl := float(_level[_level.size() - 1])
 	while cur_g < target_g:
 		cur_g += 1
+		total_overflow_qty += step_overflow_qty(lvl, net_qty_per_hour, capacity_qty, step_hours)
 		lvl = step_level(lvl, net_qty_per_hour, capacity_qty, step_hours)
 		_level.append(lvl)
 		_inflow.append(inflow)
@@ -131,6 +148,42 @@ func level_at(abs_hours: float) -> float:
 	return float(sample_at(abs_hours).get("level", 0.0))
 
 
+## Scrub-safe instantaneous overflow test: tank pinned at full while inflow
+## exceeds outflow. Derived from the sample buffers, so rewinding clears it.
+func is_overflowing_at(abs_hours: float) -> bool:
+	var s := sample_at(abs_hours)
+	return float(s.get("level", 0.0)) >= 0.999 \
+		and float(s.get("inflow_rate", 0.0)) > float(s.get("outflow_rate", 0.0)) + 0.001
+
+
+## Integrate a flow channel over [abs_start, abs_end] → quantity (same units as rates).
+## Channels: "inflow", "outflow", "net" (inflow − outflow).
+func integrate_channel(abs_start: float, abs_end: float, channel: String) -> float:
+	if is_empty() or abs_end <= abs_start:
+		return 0.0
+	var g0 := maxi(_step_of(abs_start), first_step())
+	var g1 := mini(_step_of(abs_end), last_step())
+	if g1 <= g0:
+		return 0.0
+	var total := 0.0
+	for g: int in range(g0, g1):
+		var idx := g - _base_step
+		if idx < 0 or idx >= _level.size():
+			continue
+		var rate := 0.0
+		match channel:
+			"inflow":
+				rate = float(_inflow[idx])
+			"outflow":
+				rate = float(_outflow[idx])
+			"net":
+				rate = float(_inflow[idx]) - float(_outflow[idx])
+			_:
+				rate = 0.0
+		total += rate * step_hours
+	return total
+
+
 func _sample_index(i: int) -> Dictionary:
 	return {
 		"level": float(_level[i]),
@@ -157,6 +210,7 @@ func _fill_forward_to(target_g: int) -> void:
 		var net: float = float(inp.get("net_qty_per_hour", 0.0))
 		var infl: float = float(inp.get("inflow_rate", last["inflow_rate"]))
 		var outf: float = float(inp.get("outflow_rate", last["outflow_rate"]))
+		total_overflow_qty += step_overflow_qty(lvl, net, capacity_qty, step_hours)
 		lvl = step_level(lvl, net, capacity_qty, step_hours)
 		_level.append(lvl)
 		_inflow.append(infl)

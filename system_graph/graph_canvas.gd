@@ -64,26 +64,26 @@ const C_ACTIVE_LOAD_GLOW := Color(0.149, 0.902, 0.467, 0.22)   # soft green when
 
 # Default node sizes by type  [width, height] — graph-space pixels
 const NODE_SIZES := {
-	"panel":         [196, 112],
-	"battery":       [118, 158],
-	"controller":    [168, 140],
-	"appliance":     [184, 118],
-	"acload":        [184, 118],
-	"breaker":       [ 72,  92],
-	"combiner":      [ 96, 118],
-	"solarcombiner": [108, 118],
-	"acbreaker":     [ 72,  82],
-	"acoutlet":      [ 96,  82],
-	"smartbattery":  [118, 158],
-	"processor":     [154, 118],
-	"resource":      [108, 104],
-	"compound":      [208, 136],
-	"shelly4pm":     [184, 148],
-	"wind":          [148, 128],
-	"hydro":         [148, 128],
-	"catchment":     [128, 104],
+	"panel":         [210, 128],
+	"battery":       [128, 172],
+	"controller":    [190, 160],
+	"appliance":     [200, 128],
+	"acload":        [200, 128],
+	"breaker":       [ 80, 100],
+	"combiner":      [108, 128],
+	"solarcombiner": [118, 128],
+	"acbreaker":     [ 80,  90],
+	"acoutlet":      [104,  90],
+	"smartbattery":  [128, 172],
+	"processor":     [180, 140],
+	"resource":      [136, 136],
+	"compound":      [228, 152],
+	"shelly4pm":     [200, 160],
+	"wind":          [160, 138],
+	"hydro":         [160, 138],
+	"catchment":     [140, 112],
 }
-const NODE_SIZE_DEFAULT := [142, 104]
+const NODE_SIZE_DEFAULT := [158, 118]
 
 # Handle definitions by type: Array of {id, polarity, rx, ry}
 # rx/ry are fractional positions (0-1) relative to node width/height
@@ -103,31 +103,31 @@ const HANDLES := {
 		{"id": "negative", "polarity": "negative", "rx": 0.33, "ry": 1.0},
 	],
 	"battery": [
-		{"id": "positive", "polarity": "positive", "rx": 1.0, "ry": 0.5},
-		{"id": "negative", "polarity": "negative", "rx": 0.0, "ry": 0.5},
+		{"id": "positive", "polarity": "positive", "rx": 0.25, "ry": 0.0},
+		{"id": "negative", "polarity": "negative", "rx": 0.75, "ry": 0.0},
 	],
 	"smartbattery": [
-		{"id": "positive", "polarity": "smart_battery", "rx": 1.0, "ry": 0.5},
-		{"id": "negative", "polarity": "negative",        "rx": 0.0, "ry": 0.5},
+		{"id": "positive", "polarity": "smart_battery", "rx": 0.25, "ry": 0.0},
+		{"id": "negative", "polarity": "negative",      "rx": 0.75, "ry": 0.0},
 	],
 	"controller": [
 		{"id": "pvPositive",       "polarity": "positive", "rx": 0.25, "ry": 0.0},
 		{"id": "pvNegative",       "polarity": "negative", "rx": 0.75, "ry": 0.0},
 		{"id": "batteryPositive",  "polarity": "positive", "rx": 0.25, "ry": 1.0},
 		{"id": "batteryNegative",  "polarity": "negative", "rx": 0.75, "ry": 1.0},
-		{"id": "acOutput",         "polarity": "ac",       "rx": 1.0,  "ry": 0.5},
+		{"id": "acOutput",         "polarity": "ac",       "rx": 0.5,  "ry": 1.0},
 		{"id": "acOutputLeft",     "polarity": "ac",       "rx": 0.0,  "ry": 0.5},
 		{"id": "acOutputTop",      "polarity": "ac",       "rx": 0.5,  "ry": 0.0},
 		{"id": "acOutputBottom",   "polarity": "ac",       "rx": 0.5,  "ry": 1.0},
 	],
 	"appliance": [
-		{"id": "input",       "polarity": "load", "rx": 0.0, "ry": 0.5},
+		{"id": "input",       "polarity": "load", "rx": 0.5, "ry": 0.0},
 		{"id": "inputRight",  "polarity": "load", "rx": 1.0, "ry": 0.5},
 		{"id": "inputTop",    "polarity": "load", "rx": 0.5, "ry": 0.0},
 		{"id": "inputBottom", "polarity": "load", "rx": 0.5, "ry": 1.0},
 	],
 	"acload": [
-		{"id": "input",       "polarity": "load", "rx": 0.0, "ry": 0.5},
+		{"id": "input",       "polarity": "load", "rx": 0.5, "ry": 0.0},
 		{"id": "inputRight",  "polarity": "load", "rx": 1.0, "ry": 0.5},
 		{"id": "inputTop",    "polarity": "load", "rx": 0.5, "ry": 0.0},
 		{"id": "inputBottom", "polarity": "load", "rx": 0.5, "ry": 1.0},
@@ -137,43 +137,43 @@ const HANDLES := {
 		{"id": "output", "polarity": "positive", "rx": 0.5, "ry": 1.0},
 	],
 	"combiner": [
-		{"id": "input1",  "polarity": "positive", "rx": 0.0, "ry": 0.25},
-		{"id": "input2",  "polarity": "positive", "rx": 0.0, "ry": 0.5},
-		{"id": "input3",  "polarity": "positive", "rx": 0.0, "ry": 0.75},
-		{"id": "output",  "polarity": "positive", "rx": 1.0, "ry": 0.5},
+		{"id": "input1",  "polarity": "positive", "rx": 0.2, "ry": 0.0},
+		{"id": "input2",  "polarity": "positive", "rx": 0.5, "ry": 0.0},
+		{"id": "input3",  "polarity": "positive", "rx": 0.8, "ry": 0.0},
+		{"id": "output",  "polarity": "positive", "rx": 0.5, "ry": 1.0},
 	],
 	"acbreaker": [
 		{"id": "input",  "polarity": "ac", "rx": 0.5, "ry": 0.0},
 		{"id": "output", "polarity": "ac", "rx": 0.5, "ry": 1.0},
 	],
 	"acoutlet": [
-		{"id": "input",  "polarity": "ac",   "rx": 0.0, "ry": 0.5},
-		{"id": "output", "polarity": "load", "rx": 1.0, "ry": 0.5},
+		{"id": "input",  "polarity": "ac",   "rx": 0.5, "ry": 0.0},
+		{"id": "output", "polarity": "load", "rx": 0.5, "ry": 1.0},
 	],
 	"processor": [
 		{"id": "power_in",  "polarity": "ac",       "rx": 0.5, "ry": 0.0},
-		{"id": "output",    "polarity": "resource",  "rx": 1.0, "ry": 0.5},
+		{"id": "output",    "polarity": "resource", "rx": 0.5, "ry": 1.0},
 	],
 	"resource": [
-		{"id": "input",  "polarity": "resource", "resource_kind": "water", "rx": 0.0, "ry": 0.5},
-		{"id": "output", "polarity": "resource", "resource_kind": "water", "rx": 1.0, "ry": 0.5},
+		{"id": "input",  "polarity": "resource", "resource_kind": "water", "rx": 0.5, "ry": 0.0},
+		{"id": "output", "polarity": "resource", "resource_kind": "water", "rx": 0.5, "ry": 1.0},
 	],
 	"catchment": [
-		{"id": "output", "polarity": "resource", "resource_kind": "water", "rx": 1.0, "ry": 0.5},
+		{"id": "output", "polarity": "resource", "resource_kind": "water", "rx": 0.5, "ry": 1.0},
 	],
 	"compound": [
-		{"id": "in_ac_1",   "polarity": "ac",       "rx": 0.0, "ry": 0.35},
-		{"id": "in_dc_1",   "polarity": "positive", "rx": 0.0, "ry": 0.65},
-		{"id": "out_ac_1",  "polarity": "ac",       "rx": 1.0, "ry": 0.35},
-		{"id": "out_dc_1",  "polarity": "positive", "rx": 1.0, "ry": 0.65},
+		{"id": "in_ac_1",   "polarity": "ac",       "rx": 0.35, "ry": 0.0},
+		{"id": "in_dc_1",   "polarity": "positive", "rx": 0.65, "ry": 0.0},
+		{"id": "out_ac_1",  "polarity": "ac",       "rx": 0.35, "ry": 1.0},
+		{"id": "out_dc_1",  "polarity": "positive", "rx": 0.65, "ry": 1.0},
 	],
-	# Shelly Pro 4PM: 1 AC feed in (left-center), 4 circuit outputs (right, evenly spaced)
+	# Shelly Pro 4PM: 1 AC feed in (top-center), 4 circuit outputs (bottom, evenly spaced)
 	"shelly4pm": [
-		{"id": "ac_in",     "polarity": "ac", "rx": 0.0, "ry": 0.50},
-		{"id": "circuit_0", "polarity": "ac", "rx": 1.0, "ry": 0.21},
-		{"id": "circuit_1", "polarity": "ac", "rx": 1.0, "ry": 0.40},
-		{"id": "circuit_2", "polarity": "ac", "rx": 1.0, "ry": 0.60},
-		{"id": "circuit_3", "polarity": "ac", "rx": 1.0, "ry": 0.79},
+		{"id": "ac_in",     "polarity": "ac", "rx": 0.5, "ry": 0.0},
+		{"id": "circuit_0", "polarity": "ac", "rx": 0.2, "ry": 1.0},
+		{"id": "circuit_1", "polarity": "ac", "rx": 0.4, "ry": 1.0},
+		{"id": "circuit_2", "polarity": "ac", "rx": 0.6, "ry": 1.0},
+		{"id": "circuit_3", "polarity": "ac", "rx": 0.8, "ry": 1.0},
 	],
 }
 
@@ -245,6 +245,12 @@ var _wire_src_item_id:   String     = ""
 var _wire_src_resource_kind: String = ""
 ## Set by SystemGraphView — supplies resource wire flow estimates.
 var resource_flow_engine: RefCounted = null
+## Set by SystemGraphView each tick from SolarUI:
+## {battery_w: float (+charge / −discharge), valid: bool}. Wire animation
+## prefers this real number over the |net| heuristic when valid.
+var live_power_hint: Dictionary = {}
+## Set by SystemGraphView — GraphModelPreviewService for GLB card thumbnails.
+var model_preview_service: Node = null
 var _wire_src_handle_id: String     = ""
 var _wire_src_polarity:  String     = ""
 var _wire_src_pos:       Vector2    = Vector2.ZERO
@@ -252,7 +258,14 @@ var _wire_src_tangent:   Vector2    = Vector2.ZERO
 var _wire_cursor_pos:    Vector2    = Vector2.ZERO
 var _wire_snap:          Dictionary = {}    # nearest compatible/incompatible port
 var _wire_snap_valid:    bool       = false
+## Drop-to-body hub target while dragging a resource wire onto a tank circle.
+var _wire_hub_drop:      Dictionary = {}    # {item_id, kind, angle_rad, role}
 const SNAP_RADIUS_PX := 24.0
+
+## Drag an existing hub port around the perimeter (Alt+drag or dedicated grab).
+var _hub_port_dragging:  bool   = false
+var _hub_port_item_id:   String = ""
+var _hub_port_handle_id: String = ""
 
 # ---------------------------------------------------------------------------
 # Selection
@@ -290,6 +303,7 @@ signal items_multi_selected(item_ids: Array)
 signal connection_selected(conn_id: String)
 signal compound_open_requested(item_id: String)
 signal layout_changed()
+signal resource_containers_merged(target_id: String, absorbed_id: String, kind: String)
 signal controller_reset_pressed(item_id: String)
 
 # ---------------------------------------------------------------------------
@@ -558,10 +572,15 @@ func _begin_touch_pan() -> void:
 
 
 func _cancel_pointer_interaction() -> void:
+	if _hub_port_dragging:
+		_hub_port_dragging = false
+		_hub_port_item_id = ""
+		_hub_port_handle_id = ""
 	if _wire_dragging:
 		_wire_dragging = false
 		_wire_snap = {}
 		_wire_snap_valid = false
+		_wire_hub_drop = {}
 	if _item_dragging:
 		_item_dragging = false
 		_item_drag_id = ""
@@ -572,6 +591,9 @@ func _cancel_pointer_interaction() -> void:
 
 
 func _on_pointer_move(screen_pos: Vector2) -> void:
+	if _hub_port_dragging:
+		_on_hub_port_drag_move(screen_pos)
+		return
 	if _ortho_seg_dragging and model != null and _ortho_seg_drag_idx >= 0:
 		_apply_ortho_segment_drag(screen_pos)
 		queue_redraw()
@@ -586,6 +608,9 @@ func _on_pointer_move(screen_pos: Vector2) -> void:
 				queue_redraw()
 		return
 	# Touch item/wire drags take priority over any stray mouse-emulation pan.
+	if _touch_interaction == "hub_port" and _hub_port_dragging:
+		_on_hub_port_drag_move(screen_pos)
+		return
 	if _touch_interaction == "item" and _item_dragging:
 		_on_item_drag_move(screen_pos)
 		return
@@ -736,6 +761,12 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 
 	var port := _port_at_screen(screen_pos, "", "", _port_grab_radius())
 	if not port.is_empty():
+		# Alt+drag (or Shift+Alt) on a hub port rotates it around the perimeter.
+		if bool(port.get("hub", false)) and (
+				Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_META)):
+			_begin_hub_port_drag(port)
+			_touch_interaction = "hub_port"
+			return
 		_start_wire_drag(port)
 		_touch_interaction = "wire"
 		return
@@ -748,6 +779,54 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 		return
 
 	_begin_item_press(screen_pos, hit)
+
+
+func _begin_hub_port_drag(port: Dictionary) -> void:
+	_hub_port_dragging = true
+	_hub_port_item_id = str(port.get("item_id", ""))
+	_hub_port_handle_id = str(port.get("handle_id", ""))
+	# Ensure handles are persisted before rotating.
+	if model == null:
+		return
+	var item := model.get_item(_hub_port_item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var kind := ""
+	if str(item.get("type", "")) == "catchment":
+		kind = PbiBiomass.catchment_output_kind(specs)
+	else:
+		ResourceKinds.new().migrate_resource_specs(specs)
+		kind = str(specs.get("resource_kind", "water"))
+	GraphHubPorts.ensure_hub_handles(item, kind)
+	model.update_item(_hub_port_item_id, {"handles": item.get("handles", [])})
+	queue_redraw()
+
+
+func _on_hub_port_drag_move(screen_pos: Vector2) -> void:
+	if model == null or _hub_port_item_id.is_empty():
+		return
+	var item := model.get_item(_hub_port_item_id)
+	if item.is_empty():
+		return
+	var center := size * 0.5
+	var tl := _item_screen_tl(item, center)
+	var sz := _item_screen_size(item)
+	var ang := GraphHubPorts.angle_from_center_to_point(
+		GraphHubPorts.circle_center(tl, sz), screen_pos)
+	if GraphHubPorts.set_handle_angle(item, _hub_port_handle_id, ang):
+		model.update_item(_hub_port_item_id, {"handles": item.get("handles", [])})
+		queue_redraw()
+
+
+func _end_hub_port_drag() -> void:
+	if _hub_port_dragging:
+		layout_changed.emit()
+	_hub_port_dragging = false
+	_hub_port_item_id = ""
+	_hub_port_handle_id = ""
+	_touch_interaction = ""
+	queue_redraw()
 
 
 func _begin_item_press(screen_pos: Vector2, hit: Dictionary) -> void:
@@ -807,6 +886,9 @@ func _touch_point_in_item_body(screen_pos: Vector2, item: Dictionary) -> bool:
 
 # Left-button release: finalise wire/item drag or treat as click.
 func _on_lmb_release(screen_pos: Vector2) -> void:
+	if _hub_port_dragging:
+		_end_hub_port_drag()
+		return
 	if _ortho_seg_dragging:
 		_ortho_seg_dragging = false
 		_ortho_seg_drag_conn = ""
@@ -823,24 +905,30 @@ func _on_lmb_release(screen_pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if _wire_dragging:
-		if not _wire_snap.is_empty() and _wire_snap_valid:
+		if (_wire_snap_valid and not _wire_snap.is_empty()) \
+				or (_wire_snap_valid and not _wire_hub_drop.is_empty()):
 			_finalize_connection()
 		_wire_dragging   = false
 		_wire_snap       = {}
 		_wire_snap_valid = false
+		_wire_hub_drop   = {}
 		queue_redraw()
 		return
 
 	if _item_dragging:
 		var dist := screen_pos.distance_to(_item_drag_start_px)
 		var moved := dist >= _effective_drag_threshold()
+		var drag_id := _item_drag_id
+		var drag_ids := _item_drag_ids.duplicate()
 		if not moved:
-			if selected_item_ids.size() <= 1 and not _item_drag_id.is_empty():
+			if selected_item_ids.size() <= 1 and not drag_id.is_empty():
 				if _touch_input_active():
-					_try_emit_touch_double_tap(screen_pos, _item_drag_id)
+					_try_emit_touch_double_tap(screen_pos, drag_id)
 				else:
-					_select_item(_item_drag_id)
+					_select_item(drag_id)
 		else:
+			if drag_ids.size() == 1 and not drag_id.is_empty():
+				_try_merge_resource_containers_on_drop(drag_id, screen_pos)
 			layout_changed.emit()
 		_item_dragging = false
 		_item_drag_id  = ""
@@ -903,6 +991,83 @@ func _on_item_drag_move(screen_pos: Vector2) -> void:
 		var new_pos := start_pos + delta_gr
 		model.update_item(iid, {"x": new_pos.x, "y": new_pos.y})
 	queue_redraw()
+
+
+## Drop one resource tank onto another of the same kind → single merged container.
+func _try_merge_resource_containers_on_drop(dragged_id: String, screen_pos: Vector2) -> bool:
+	if model == null or dragged_id.is_empty():
+		return false
+	var dragged := model.get_item(dragged_id)
+	if dragged.is_empty() or str(dragged.get("type", "")) != "resource":
+		return false
+	var target := _item_at_screen_excluding(screen_pos, dragged_id)
+	if target.is_empty():
+		return false
+	if str(target.get("type", "")) != "resource":
+		return false
+	if str(dragged.get("scope_id", "root")) != str(target.get("scope_id", "root")):
+		return false
+	var d_specs: Dictionary = (dragged.get("specs", {}) as Dictionary).duplicate(true)
+	var t_specs: Dictionary = (target.get("specs", {}) as Dictionary).duplicate(true)
+	ResourceKinds.new().migrate_resource_specs(d_specs)
+	ResourceKinds.new().migrate_resource_specs(t_specs)
+	var d_kind := ResourceKinds.normalize_kind(str(d_specs.get("resource_kind", "")))
+	var t_kind := ResourceKinds.normalize_kind(str(t_specs.get("resource_kind", "")))
+	if d_kind.is_empty() or d_kind != t_kind:
+		return false
+	var d_cap := float(d_specs.get("capacity_qty", 0.0))
+	var t_cap := float(t_specs.get("capacity_qty", 0.0))
+	if d_cap <= 0.0 and t_cap <= 0.0:
+		return false
+	var d_lvl := clampf(float(d_specs.get("level", 0.0)), 0.0, 1.0)
+	var t_lvl := clampf(float(t_specs.get("level", 0.0)), 0.0, 1.0)
+	var new_cap := d_cap + t_cap
+	var new_lvl := (d_cap * d_lvl + t_cap * t_lvl) / new_cap if new_cap > 0.001 else 0.0
+	var target_id := str(target.get("id", ""))
+	var unit := str(t_specs.get("capacity_unit", ResourceKinds.default_unit(t_kind)))
+	t_specs["capacity_qty"] = new_cap
+	t_specs["level"] = clampf(new_lvl, 0.0, 1.0)
+	t_specs["capacity"] = "%.0f %s" % [new_cap, unit] if unit in ["L", "kg"] else "%.1f %s" % [new_cap, unit]
+	var t_name := str(t_specs.get("name", "Tank"))
+	if not t_name.contains("merged"):
+		t_specs["name"] = "%s (merged)" % t_name
+	# Rewire connections from absorbed tank → survivor (remove/add for handle bookkeeping).
+	var to_rewire: Array = model.connections_for_item(dragged_id)
+	for conn_v: Variant in to_rewire:
+		var conn: Dictionary = conn_v as Dictionary
+		var cid := str(conn.get("id", ""))
+		if cid.is_empty():
+			continue
+		var fresh: Dictionary = conn.duplicate(true)
+		model.remove_connection(cid)
+		if str(fresh.get("source_item_id", "")) == dragged_id:
+			fresh["source_item_id"] = target_id
+		if str(fresh.get("target_item_id", "")) == dragged_id:
+			fresh["target_item_id"] = target_id
+		fresh.erase("id")
+		model.add_connection(fresh)
+	model.update_item(target_id, {"specs": t_specs})
+	model.remove_item(dragged_id)
+	_select_item(target_id)
+	resource_containers_merged.emit(target_id, dragged_id, d_kind)
+	queue_redraw()
+	return true
+
+
+func _item_at_screen_excluding(screen_pos: Vector2, exclude_id: String) -> Dictionary:
+	if model == null:
+		return {}
+	var center := size * 0.5
+	var vis := _visible_items()
+	for i in range(vis.size() - 1, -1, -1):
+		var item: Dictionary = vis[i]
+		if str(item.get("id", "")) == exclude_id:
+			continue
+		var tl := _item_screen_tl(item, center)
+		var sz := _item_screen_size(item)
+		if Rect2(tl, sz).has_point(screen_pos):
+			return item
+	return {}
 
 
 func _select_item(item_id: String) -> void:
@@ -980,28 +1145,54 @@ func _graph_to_screen(graph_pos: Vector2, center: Vector2) -> Vector2:
 	return center + _pan + graph_pos * _zoom
 
 
-## Label font size that scales with zoom but clamps to fit inside the node body.
+## Label font size that scales with zoom (base/max are graph-space design px).
 func _fit_font_size(inner: Rect2, lines: int = 1,
 		base_graph_px: float = 11.0, max_graph_px: float = 13.0) -> int:
-	var ideal := base_graph_px * _zoom
-	ideal = minf(ideal, max_graph_px * _zoom)
-	if lines > 0 and inner.size.y > 6.0:
-		var per_line := (inner.size.y - 4.0) / float(lines)
-		ideal = minf(ideal, per_line * 0.88)
-	return clampi(int(round(ideal)), 7, 17)
+	return GraphNodeLabel.body_font_size(inner, lines, base_graph_px, max_graph_px, _zoom)
+
+
+func _fit_stat_font_size(inner: Rect2, max_graph_px: float = 20.0) -> int:
+	return GraphNodeLabel.stat_font_size(inner, max_graph_px, _zoom)
 
 
 func _fit_title_font_size(band_h: float) -> int:
-	var ideal := minf(13.0, band_h * 0.42) * _zoom
-	return clampi(int(round(ideal)), 9, 16)
+	return GraphNodeLabel.title_font_size(band_h, _zoom)
+
+
+func _title_band_height(node_screen_h: float) -> float:
+	return GraphNodeLabel.title_band_height(node_screen_h, _zoom)
+
+
+func _draw_fitted_label(pos: Vector2, text: String, max_w: float, fsize: int, color: Color) -> void:
+	var fnt := ThemeDB.fallback_font
+	var shown := GraphNodeLabel.ellipsis(fnt, text, max_w, fsize)
+	draw_string(fnt, pos, shown, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, color)
 
 
 func _wire_bezier_controls(from: Vector2, from_tang: Vector2,
 		to: Vector2, to_tang_in: Vector2, curve_tension: float = 1.0) -> Dictionary:
+	if from.is_equal_approx(to):
+		return {"c1": from, "c2": to}
+		
 	var spread := _wire_spread(from, to) * curve_tension
+	
+	var dir1 := from.direction_to(to)
+	var t1 := from_tang
+	var dot1 := t1.dot(dir1)
+	if dot1 < 0.3:
+		var blend := clampf((0.3 - dot1) / 1.3, 0.0, 1.0)
+		t1 = t1.lerp(dir1, blend).normalized()
+		
+	var dir2 := to.direction_to(from)
+	var t2 := to_tang_in
+	var dot2 := t2.dot(dir2)
+	if dot2 < 0.3:
+		var blend := clampf((0.3 - dot2) / 1.3, 0.0, 1.0)
+		t2 = t2.lerp(dir2, blend).normalized()
+
 	return {
-		"c1": from + from_tang * spread,
-		"c2": to + to_tang_in * spread,
+		"c1": from + t1 * spread,
+		"c2": to + t2 * spread,
 	}
 
 
@@ -1056,72 +1247,18 @@ func _wire_color_for_port(polarity: String, resource_kind: String = "") -> Color
 	return PORT_COLORS.get(polarity, C_BORDER) as Color
 
 
-## Energy-input port for processors (top edge — separate from resource I/O on the sides).
-func _processor_energy_port(specs: Dictionary) -> Dictionary:
-	var src: String = str(specs.get("energy_source", "ac"))
-	if src.is_empty() and float(specs.get("watts", 0.0)) > 0.0:
-		src = "ac"
-	match src:
-		"ac":
-			return {"id": "power_in", "polarity": "ac", "rx": 0.5, "ry": 0.0}
-		"thermal":
-			return {"id": "energy_in", "polarity": "resource", "resource_kind": "thermal", "rx": 0.5, "ry": 0.0}
-		"mechanical":
-			return {"id": "energy_in", "polarity": "resource", "resource_kind": "biomass", "rx": 0.5, "ry": 0.0}
-		_:
-			return {}
-
-
 ## Dynamic port list from item specs (multi-I/O processors, typed resource tanks).
 func _resolved_handles(item: Dictionary) -> Array:
-	var custom: Array = item.get("handles", []) as Array
-	if not custom.is_empty():
-		return custom
-	var itype: String = str(item.get("type", ""))
-	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-	if itype == "processor":
-		ResourceKinds.new().migrate_processor_specs(specs)
-		var handles: Array = []
-		var energy_port := _processor_energy_port(specs)
-		if not energy_port.is_empty():
-			handles.append(energy_port)
-		var inputs: Array = specs.get("inputs", []) as Array
-		var outputs: Array = specs.get("outputs", []) as Array
-		if inputs.is_empty() and outputs.is_empty():
-			if handles.is_empty():
-				return HANDLES.get("processor", []) as Array
-			return handles
-		for i: int in inputs.size():
-			var inp: Dictionary = inputs[i] as Dictionary
-			var n: int = maxi(inputs.size(), 1)
-			var ry: float = float(i + 1) / float(n + 1)
-			handles.append({
-				"id": "res_in_%d" % i,
-				"polarity": "resource",
-				"resource_kind": str(inp.get("kind", "")),
-				"rx": 0.0, "ry": ry,
-			})
-		for i: int in outputs.size():
-			var outp: Dictionary = outputs[i] as Dictionary
-			var n: int = maxi(outputs.size(), 1)
-			var ry: float = float(i + 1) / float(n + 1)
-			handles.append({
-				"id": "res_out_%d" % i,
-				"polarity": "resource",
-				"resource_kind": str(outp.get("kind", "")),
-				"rx": 1.0, "ry": ry,
-			})
-		return handles
-	if itype == "resource":
-		ResourceKinds.new().migrate_resource_specs(specs)
-		var kind: String = str(specs.get("resource_kind", "water"))
-		return [
-			{"id": "input", "polarity": "resource", "resource_kind": kind, "rx": 0.0, "ry": 0.5},
-			{"id": "output", "polarity": "resource", "resource_kind": kind, "rx": 1.0, "ry": 0.5},
-		]
-	if itype == "catchment":
-		return HANDLES.get("catchment", []) as Array
-	return HANDLES.get(itype, []) as Array
+	# Solar-array compounds draw ONE +/- bus pair on the bottom edge
+	# (see _draw_array_compound_handles). Return the same handles here so that
+	# hit-testing / wire-snapping / connection routing all agree with what's
+	# drawn — otherwise the grabbable ports sit on the side edges (generic
+	# compound AC/DC) and the visible bottom dots can't be grabbed.
+	if str(item.get("type", "")) == "compound" \
+			and str((item.get("specs", {}) as Dictionary).get("compound_kind", "")) == "array" \
+			and (item.get("handles", []) as Array).is_empty():
+		return GraphArrayLayout.default_handles()
+	return GraphPortService.resolved_handles(item, HANDLES)
 
 
 func _handle_dict(item: Dictionary, handle_id: String) -> Dictionary:
@@ -1152,6 +1289,7 @@ func _start_wire_drag(port: Dictionary) -> void:
 	_wire_cursor_pos    = _wire_src_pos
 	_wire_snap          = {}
 	_wire_snap_valid    = false
+	_wire_hub_drop      = {}
 
 
 func _on_wire_drag_move(screen_pos: Vector2) -> void:
@@ -1164,11 +1302,58 @@ func _on_wire_drag_move(screen_pos: Vector2) -> void:
 			_wire_snap.get("polarity", "") as String,
 			_wire_src_resource_kind,
 			str(_wire_snap.get("resource_kind", "")))
+	_wire_hub_drop = {}
+	# Drop-to-body: resource wire released inside a hub circle (no port hit).
+	if not _wire_snap_valid and _wire_src_polarity == "resource":
+		_wire_hub_drop = _hub_body_at_screen(screen_pos, _wire_src_item_id)
+		if not _wire_hub_drop.is_empty():
+			var drop_kind := str(_wire_hub_drop.get("kind", ""))
+			if ResourceKinds.kinds_compatible(_wire_src_resource_kind, drop_kind):
+				_wire_snap_valid = true
+			else:
+				_wire_hub_drop = {}
 	queue_redraw()
 
 
+## Hub tank under cursor for drop-to-body connect. Returns {item_id, kind, angle_rad}.
+func _hub_body_at_screen(screen_pos: Vector2, skip_item: String) -> Dictionary:
+	if model == null:
+		return {}
+	var center := size * 0.5
+	for item: Dictionary in _visible_items():
+		var iid := str(item.get("id", ""))
+		if iid == skip_item:
+			continue
+		if not GraphHubPorts.is_hub_type(str(item.get("type", ""))):
+			continue
+		# Drop-to-body only on resource tanks (catchments are sources, not sinks).
+		if str(item.get("type", "")) != "resource":
+			continue
+		var tl := _item_screen_tl(item, center)
+		var sz := _item_screen_size(item)
+		if not GraphHubPorts.point_in_hub_body(tl, sz, screen_pos):
+			continue
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var kind := ""
+		if str(item.get("type", "")) == "catchment":
+			kind = PbiBiomass.catchment_output_kind(specs)
+		else:
+			ResourceKinds.new().migrate_resource_specs(specs)
+			kind = str(specs.get("resource_kind", "water"))
+		var ang := GraphHubPorts.angle_from_center_to_point(
+			GraphHubPorts.circle_center(tl, sz), screen_pos)
+		return {"item_id": iid, "kind": kind, "angle_rad": ang}
+	return {}
+
+
 func _finalize_connection() -> void:
-	if model == null or _wire_snap.is_empty() or not _wire_snap_valid:
+	if model == null:
+		return
+	# Drop-to-body hub connect (no discrete port snap).
+	if not _wire_hub_drop.is_empty() and _wire_snap_valid:
+		_finalize_hub_drop_connection()
+		return
+	if _wire_snap.is_empty() or not _wire_snap_valid:
 		return
 	var tgt_kind := str(_wire_snap.get("resource_kind", ""))
 	var res_type := ""
@@ -1193,6 +1378,44 @@ func _finalize_connection() -> void:
 	})
 
 
+func _finalize_hub_drop_connection() -> void:
+	var tgt_id := str(_wire_hub_drop.get("item_id", ""))
+	var kind := ResourceKinds.normalize_kind(str(_wire_hub_drop.get("kind", "")))
+	var ang := float(_wire_hub_drop.get("angle_rad", 0.0))
+	if tgt_id.is_empty() or model == null:
+		return
+	var item := model.get_item(tgt_id)
+	if item.is_empty():
+		return
+	# Wire ends on tank → "in" port; if somehow starting from tank body, "out".
+	var role := GraphHubPorts.ROLE_IN
+	var wired := _wired_handle_ids(tgt_id)
+	var port := GraphHubPorts.acquire_hub_port(item, kind, ang, role, wired)
+	# Persist handles on the item (acquire mutates item.handles).
+	model.update_item(tgt_id, {"handles": item.get("handles", [])})
+	var res_type := ResourceKinds.normalize_kind(_wire_src_resource_kind)
+	model.add_connection({
+		"scope_id":         active_scope_id,
+		"polarity":         "resource",
+		"resource_type":    res_type,
+		"source_item_id":   _wire_src_item_id,
+		"source_handle_id": _wire_src_handle_id,
+		"target_item_id":   tgt_id,
+		"target_handle_id": str(port.get("id", "")),
+		"waypoints":        [],
+		"route_3d":         [],
+		"conduit_type":     "",
+		"route_length_m":   0.0,
+		"line_style":       "bezier",
+		"curve_tension":    1.0,
+		"corner_radius":    28.0,
+		"voltage_mismatch": false,
+	})
+	_wire_hub_drop = {}
+	layout_changed.emit()
+	queue_redraw()
+
+
 ## Returns info for all handles on an item as an Array of Dictionaries.
 func _get_all_handle_infos(item: Dictionary, center: Vector2) -> Array:
 	var result: Array = []
@@ -1201,10 +1424,27 @@ func _get_all_handle_infos(item: Dictionary, center: Vector2) -> Array:
 	var itype := item.get("type", "generic") as String
 	var iw    := float(item.get("width",  120.0))
 	var ih    := float(item.get("height",  90.0))
+	var hub := GraphHubPorts.is_hub_type(itype)
 
 	var handles: Array = _resolved_handles(item)
 
 	for h: Dictionary in handles:
+		var hid := str(h.get("id", ""))
+		var pol := h.get("polarity", "positive") as String
+		var rk := str(h.get("resource_kind", ""))
+		if hub and h.has("angle_rad"):
+			var ang := float(h.get("angle_rad", 0.0))
+			result.append({
+				"item_id":   item.get("id", "") as String,
+				"handle_id": hid,
+				"polarity":  pol,
+				"resource_kind": rk,
+				"pos":       GraphHubPorts.screen_pos_on_circle(tl, sz, ang),
+				"tangent":   GraphHubPorts.outward_tangent(ang),
+				"angle_rad": ang,
+				"hub":       true,
+			})
+			continue
 		var rx: float
 		var ry: float
 		if h.has("rx"):
@@ -1215,11 +1455,12 @@ func _get_all_handle_infos(item: Dictionary, center: Vector2) -> Array:
 			ry = float(h.get("y", 0.0)) / maxf(1.0, ih)
 		result.append({
 			"item_id":   item.get("id",        "") as String,
-			"handle_id": h.get("id",           "") as String,
-			"polarity":  h.get("polarity", "positive") as String,
-			"resource_kind": str(h.get("resource_kind", "")),
+			"handle_id": hid,
+			"polarity":  pol,
+			"resource_kind": rk,
 			"pos":       tl + Vector2(sz.x * rx, sz.y * ry),
 			"tangent":   _tangent_from_rx_ry(rx, ry),
+			"hub":       false,
 		})
 	return result
 
@@ -1228,6 +1469,12 @@ func _get_all_handle_infos(item: Dictionary, center: Vector2) -> Array:
 func _get_interactive_handle_infos(item: Dictionary, center: Vector2) -> Array:
 	var all := _get_all_handle_infos(item, center)
 	var itype := item.get("type", "generic") as String
+	# Array compounds expose exactly the two bus ports from _resolved_handles;
+	# they must all stay interactive (the generic "compound" primary filter would
+	# otherwise drop them since their ids are "positive"/"negative").
+	if itype == "compound" \
+			and str((item.get("specs", {}) as Dictionary).get("compound_kind", "")) == "array":
+		return all
 	var primary: Array = _PRIMARY_HANDLES.get(itype, []) as Array
 	if primary.is_empty():
 		return all
@@ -1510,7 +1757,11 @@ func _estimate_connection_flow(
 		if not _load_item_is_active(load_item):
 			return {"watts": WIRE_FLOW_FLOOR, "reverse": false, "active": false}
 		var w: float
-		if _is_load_group_item(load_item):
+		var batch_w := float(load_item.get("batch_active_watts", 0.0))
+		if batch_w > 0.0:
+			# Real per-phase draw computed by ResourceFlowEngine batch sim.
+			w = maxf(WIRE_FLOW_FLOOR, batch_w)
+		elif _is_load_group_item(load_item):
 			w = maxf(WIRE_FLOW_FLOOR, _load_group_draw_w(load_item))
 		else:
 			var tsp: Dictionary = load_item.get("specs", {}) as Dictionary
@@ -1540,8 +1791,13 @@ func _estimate_connection_flow(
 			or (sid == "virtual_controller" and tid == "virtual_battery") \
 			or (sid == "virtual_battery" and tid == "virtual_controller")
 	if bat_ctrl:
-		var w_b: float  = minf(12000.0, maxf(WIRE_FLOW_FLOOR, absf(net) * 0.95))
-		var rev:  bool  = (net < 0.0) # discharge: power runs battery → controller
+		# Prefer the real battery flow published by SolarUI (via SystemGraphView)
+		# over the |net|*0.95 heuristic.
+		var bat_w := net
+		if bool(live_power_hint.get("valid", false)):
+			bat_w = float(live_power_hint.get("battery_w", net))
+		var w_b: float  = minf(12000.0, maxf(WIRE_FLOW_FLOOR, absf(bat_w)))
+		var rev:  bool  = (bat_w < 0.0) # discharge: power runs battery → controller
 		var active_b: bool = (w_b > WIRE_DEAD_W * 2.0) or solar_w > WIRE_DEAD_W
 		return {"watts": w_b, "reverse": rev, "active": active_b}
 
@@ -1558,6 +1814,12 @@ func _estimate_connection_flow(
 				"get_connection_flow", str(conn.get("id", ""))) as Dictionary
 			flow_rate = float(rf.get("rate", 0.0))
 			active_r = bool(rf.get("active", false))
+			if kind.is_empty() and rf.has("kind"):
+				kind = ResourceKinds.normalize_kind(str(rf.get("kind", "")))
+		if flow_rate <= ResourceEdgeVis.FLOW_DEAD_RATE and conn.get("flow_rate") != null:
+			flow_rate = float(conn.get("flow_rate", 0.0))
+		if not active_r and bool(conn.get("flow_active", false)):
+			active_r = true
 		return {
 			"watts": flow_rate,
 			"rate": flow_rate,
@@ -1628,16 +1890,21 @@ func _render_connection(
 		col = Color(col.r * 0.40 * flash, col.g * 0.40 * flash, col.b * 0.40 * flash, 0.45 + 0.25 * flash)
 
 	var width: float
+	var res_rate: float = 0.0
+	var res_kind: String = ""
 	if is_resource_wire:
 		var rk2: String = ResourceKinds.normalize_kind(
 			str(flow_est.get("resource_kind", conn.get("resource_type", ""))))
+		res_kind = rk2
+		res_rate = float(flow_est.get("rate", flow_watts))
 		var stroke: Dictionary = ResourceEdgeVis.stroke_for(
-			rk2, float(flow_est.get("rate", flow_watts)), flow_active, is_sel)
+			rk2, res_rate, flow_active, is_sel)
 		col = stroke.get("color", col) as Color
-		width = float(stroke.get("width", ResourceEdgeVis.WIDTH_IDLE))
+		# Wire body scales with zoom so ribbons stay proportional to the nodes.
+		width = float(stroke.get("width", ResourceEdgeVis.WIDTH_IDLE)) * _zoom
 	else:
 		var gscale_w  := _wire_glow_scale_from_watts(flow_watts)
-		width = (6.5 if is_sel else WIRE_BASE_W + gscale_w * 2.4)
+		width = (6.5 if is_sel else WIRE_BASE_W + gscale_w * 2.4) * _zoom
 
 	# In Test mode wires animate if power is actually flowing; Build mode is always static
 	var flowing: bool = (current_mode == "test") and flow_active
@@ -1648,19 +1915,63 @@ func _render_connection(
 	var curve_t := _conn_curve_tension(conn)
 	var src_pos: Vector2 = src.get("pos", Vector2.ZERO) as Vector2
 	var tgt_pos: Vector2 = tgt.get("pos", Vector2.ZERO) as Vector2
+	
+	if bool(src.get("hub", false)):
+		var next_pt: Vector2
+		if wps.size() > 0:
+			next_pt = wps[0]
+		else:
+			var t_item = model.get_item(tid)
+			next_pt = _item_screen_tl(t_item, center) + _item_screen_size(t_item) * 0.5
+			
+		var s_item = model.get_item(sid)
+		var s_center = _item_screen_tl(s_item, center) + _item_screen_size(s_item) * 0.5
+		var ang = GraphHubPorts.angle_from_center_to_point(s_center, next_pt)
+		src_pos = GraphHubPorts.screen_pos_on_circle(_item_screen_tl(s_item, center), _item_screen_size(s_item), ang)
+		src["tangent"] = GraphHubPorts.outward_tangent(ang)
+		src["pos"] = src_pos
+		
+	if bool(tgt.get("hub", false)):
+		var prev_pt: Vector2
+		if wps.size() > 0:
+			prev_pt = wps[-1]
+		else:
+			var s_item = model.get_item(sid)
+			prev_pt = _item_screen_tl(s_item, center) + _item_screen_size(s_item) * 0.5
+			
+		var t_item = model.get_item(tid)
+		var t_center = _item_screen_tl(t_item, center) + _item_screen_size(t_item) * 0.5
+		var ang = GraphHubPorts.angle_from_center_to_point(t_center, prev_pt)
+		tgt_pos = GraphHubPorts.screen_pos_on_circle(_item_screen_tl(t_item, center), _item_screen_size(t_item), ang)
+		tgt["tangent"] = GraphHubPorts.outward_tangent(ang)
+		tgt["pos"] = tgt_pos
+
 	var src_t: Vector2 = src.get("tangent", Vector2.RIGHT) as Vector2
+	tgt_tang_in = _incoming_tangent(tgt.get("tangent", Vector2.RIGHT) as Vector2)
+
+	# Connection style overrides
+	var c_color = str(conn.get("color_override", ""))
+	if not c_color.is_empty():
+		col = Color(c_color)
+	var c_thick = float(conn.get("thickness_override", 0.0))
+	if c_thick > 0.1:
+		width = c_thick * _zoom
+	var sankey_scale = bool(conn.get("sankey_scale", true))
+
 	if is_resource_wire:
 		if style == "orthogonal":
 			var pts_r: Array = [src_pos] + wps + [tgt_pos]
 			_draw_resource_wire_orthogonal_path(
-				pts_r, [src_t, tgt_tang_in], col, width, flowing, reverse, curve_t)
+				pts_r, [src_t, tgt_tang_in], col, width, flowing, reverse, curve_t,
+				res_rate, res_kind, sankey_scale)
 		elif wps.is_empty():
 			_draw_resource_wire_bezier(
-				src_pos, src_t, tgt_pos, tgt_tang_in, col, width, flowing, reverse, curve_t)
+				src_pos, src_t, tgt_pos, tgt_tang_in, col, width, flowing, reverse, curve_t,
+				res_rate, res_kind, sankey_scale)
 		else:
 			_draw_resource_wire_path(
 				[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_in],
-				col, width, flowing, reverse, curve_t)
+				col, width, flowing, reverse, curve_t, res_rate, res_kind, sankey_scale)
 		_draw_connection_waypoint_handles(conn, center)
 		return
 	if style == "orthogonal":
@@ -1682,28 +1993,43 @@ func _bezier_pos(from: Vector2, c1: Vector2, c2: Vector2, to: Vector2, t: float)
 	return from.bezier_interpolate(c1, c2, to, t)
 
 
-## Sankey-style typed resource wire — width/color from ResourceEdgeVis; scroll dashes when flowing.
+## Sankey-style typed resource wire — width/color from ResourceEdgeVis; glow + flow cues.
 func _draw_resource_wire_bezier(from: Vector2, from_tang: Vector2,
 		to: Vector2, to_tang_in: Vector2,
 		col: Color, width: float, flow_active: bool,
-		reverse_chase: bool, curve_tension: float = 1.0) -> void:
+		reverse_chase: bool, curve_tension: float = 1.0,
+		flow_rate: float = 0.0, resource_kind: String = "", sankey_scale: bool = true) -> void:
 	var ctrl := _wire_bezier_controls(from, from_tang, to, to_tang_in, curve_tension)
 	var c1: Vector2 = ctrl["c1"]
 	var c2: Vector2 = ctrl["c2"]
-	# Ghost track (shows route when idle)
+	var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, flow_active)
+	var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
+	# Ghost track (route visible when idle)
 	_draw_bezier_stroke(from, c1, c2, to, 24,
-		Color(col.r, col.g, col.b, col.a * 0.22), maxf(1.0, width * 0.55))
-	_draw_bezier_stroke(from, c1, c2, to, 30, col, maxf(1.2, width))
+		Color(col.r, col.g, col.b, col.a * 0.20), maxf(1.4, width * 0.65))
+	if flow_active and gscale > 0.01:
+		var glow_a := 0.07 + 0.13 * gscale
+		_draw_bezier_stroke(from, c1, c2, to, 28,
+			Color(col.r, col.g, col.b, glow_a), body_w + 2.2 + 2.4 * gscale)
+	var core := Color(
+		lerpf(col.r, 1.0, 0.14 * gscale),
+		lerpf(col.g, 1.0, 0.12 * gscale),
+		lerpf(col.b, 1.0, 0.08 * gscale),
+		lerpf(col.a, 1.0, 0.12 * gscale))
+	_draw_bezier_stroke(from, c1, c2, to, 30, core, maxf(1.6, body_w))
 	if flow_active:
 		ResourceEdgeVis.draw_bezier_flow_cues(
-			self, from, c1, c2, to, col, width, _flow_phase, reverse_chase)
+			self, from, c1, c2, to, col, body_w, _flow_phase, reverse_chase)
 
 
 func _draw_resource_wire_path(points: Array, end_tangents: Array,
 		col: Color, width: float, flow_active: bool,
-		reverse_chase: bool, curve_tension: float = 1.0) -> void:
+		reverse_chase: bool, curve_tension: float = 1.0,
+		flow_rate: float = 0.0, resource_kind: String = "", sankey_scale: bool = true) -> void:
 	if points.size() < 2:
 		return
+	var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, flow_active)
+	var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
 	for seg: int in range(points.size() - 1):
 		var from: Vector2 = points[seg] as Vector2
 		var to: Vector2 = points[seg + 1] as Vector2
@@ -1717,23 +2043,31 @@ func _draw_resource_wire_path(points: Array, end_tangents: Array,
 			to_t_in = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
 		else:
 			to_t_in = (from - to).normalized()
-		_draw_resource_wire_bezier(from, from_t, to, to_t_in, col, width, false, reverse_chase, curve_tension)
+		_draw_resource_wire_bezier(from, from_t, to, to_t_in, col, width, false,
+				reverse_chase, curve_tension, flow_rate, resource_kind)
 	if flow_active:
 		var sample_fn := func(t: float) -> Vector2:
 			return _sample_wire_path(points, end_tangents, t, curve_tension)
-		ResourceEdgeVis.draw_path_flow_cues(self, sample_fn, col, width, _flow_phase, reverse_chase)
+		var cue_w := ResourceEdgeVis.body_width(width, gscale)
+		ResourceEdgeVis.draw_path_flow_cues(self, sample_fn, col, cue_w, _flow_phase, reverse_chase)
 
 
 func _draw_resource_wire_orthogonal_path(points: Array, end_tangents: Array,
 		col: Color, width: float, flow_active: bool,
-		reverse_chase: bool, _curve_tension: float = 1.0) -> void:
+		reverse_chase: bool, curve_tension: float = 1.0,
+		flow_rate: float = 0.0, resource_kind: String = "", sankey_scale: bool = true) -> void:
 	if points.size() < 2:
 		return
+	var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, flow_active)
+	var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
 	for i in range(points.size() - 1):
 		var a: Vector2 = points[i] as Vector2
 		var b: Vector2 = points[i + 1] as Vector2
-		draw_line(a, b, Color(col.r, col.g, col.b, col.a * 0.22), maxf(1.0, width * 0.55))
-		draw_line(a, b, col, maxf(1.2, width))
+		draw_line(a, b, Color(col.r, col.g, col.b, col.a * 0.20), maxf(1.4, width * 0.65))
+		if flow_active and gscale > 0.01:
+			var glow_a := 0.07 + 0.13 * gscale
+			draw_line(a, b, Color(col.r, col.g, col.b, glow_a), body_w + 1.8 + 2.0 * gscale)
+		draw_line(a, b, col, maxf(1.6, body_w))
 	if flow_active and points.size() >= 2:
 		var total := 0.0
 		var segs: Array = []
@@ -1757,7 +2091,8 @@ func _draw_resource_wire_orthogonal_path(points: Array, end_tangents: Array,
 					return seg_a.lerp(seg_b, clampf(u, 0.0, 1.0))
 				prev = seg.get("b", prev) as Vector2
 			return points[points.size() - 1] as Vector2
-		ResourceEdgeVis.draw_path_flow_cues(self, sample_fn, col, width, _flow_phase, reverse_chase)
+		ResourceEdgeVis.draw_path_flow_cues(self, sample_fn, col,
+				ResourceEdgeVis.body_width(width, gscale), _flow_phase, reverse_chase)
 
 
 ## Glow underlay + main stroke + moving chase (source → target; `reverse` when battery discharges).
@@ -1815,11 +2150,11 @@ func _draw_wire_bezier(from: Vector2, from_tang: Vector2,
 			# Fade tail dots so only the first few are fully bright
 			var tail_fade := 1.0 - float(s) / float(chase_count)
 			# Wide soft outer ring
-			var wch_outer := maxf(3.5, (width * (1.2 + 1.8 * gscale) + 1.0) * _zoom)
+			var wch_outer := maxf(3.5, width * (1.2 + 1.8 * gscale) + _zoom)
 			draw_line(p0, p1, Color(col.r, col.g, col.b, (0.18 + 0.24 * gscale) * tail_fade), wch_outer)
 			# Bright core
 			var a_ch := (0.60 + 0.40 * gscale) * tail_fade
-			var wch  := maxf(2.0, (width * (0.9 + 1.5 * gscale) + 0.5) * _zoom)
+			var wch  := maxf(2.0, width * (0.9 + 1.5 * gscale) + 0.5 * _zoom)
 			draw_line(p0, p1, Color(1, 0.99, 0.94, a_ch), wch)
 			# White-hot tip (only on first dot)
 			if s == 0:
@@ -1896,10 +2231,11 @@ func _draw_bezier_path_chase(points: Array, end_tangents: Array,
 		if not found:
 			continue
 		var tail_fade := 1.0 - float(s) / float(chase_count)
-		var wch_outer := maxf(3.5, (width * (1.2 + 1.8 * gscale) + 1.0) * _zoom)
+		# `width` already carries zoom (see _render_connection).
+		var wch_outer := maxf(3.5, width * (1.2 + 1.8 * gscale) + _zoom)
 		draw_line(p0, p1, Color(col.r, col.g, col.b, (0.18 + 0.24 * gscale) * tail_fade), wch_outer)
 		var a_ch := (0.60 + 0.40 * gscale) * tail_fade
-		var wch := maxf(2.0, (width * (0.9 + 1.5 * gscale) + 0.5) * _zoom)
+		var wch := maxf(2.0, width * (0.9 + 1.5 * gscale) + 0.5 * _zoom)
 		draw_line(p0, p1, Color(1, 0.99, 0.94, a_ch), wch)
 		if s == 0:
 			draw_line(p0, p1, Color(1, 1, 1, a_ch * 0.65), wch * 0.38)
@@ -2262,19 +2598,14 @@ func _array_compound_handle_override(item: Dictionary, handle_id: String) -> Dic
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	if str(specs.get("compound_kind", "")) != "array":
 		return {}
-	var bits := handle_id.split("_")
-	if bits.size() < 3:
+	if handle_id in ["positive", "negative"]:
 		return {}
-	var idx: int = int(bits[bits.size() - 1])
-	if idx <= 0:
-		idx = 1
-	var in_count: int = maxi(0, int(specs.get("port_in_count", 0)))
-	var out_count: int = maxi(0, int(specs.get("port_out_count", 0)))
-	var total: int = maxi(1, in_count + out_count)
-	# Place all array boundary ports along the bottom edge so condensed arrays
-	# preserve the same downward visual flow as expanded panel strings.
-	var t := float(idx) / float(total + 1)
-	return {"rx": t, "ry": 1.0}
+	# Legacy multi-port handles collapse to one bus per polarity.
+	if handle_id.contains("negative"):
+		return {"rx": 0.33, "ry": 1.0}
+	if handle_id.contains("positive") or handle_id.contains("pv"):
+		return {"rx": 0.67, "ry": 1.0}
+	return {}
 
 
 const _HANDLE_ID_ALIASES := {
@@ -2328,6 +2659,14 @@ func _controller_handle_candidates(handle_id: String, peer_type: String,
 func _lookup_handle_fraction(item: Dictionary, handle_id: String) -> Dictionary:
 	for h: Dictionary in (item.get("handles", []) as Array):
 		if h.get("id", "") == handle_id:
+			if h.has("angle_rad"):
+				GraphHubPorts.migrate_handle(h)
+				return {
+					"rx": float(h.get("rx", 0.5)),
+					"ry": float(h.get("ry", 0.5)),
+					"angle_rad": float(h.get("angle_rad", 0.0)),
+					"hub": true,
+				}
 			if h.has("rx"):
 				return {"rx": float(h["rx"]), "ry": float(h["ry"])}
 			var iw := float(item.get("width", 120.0))
@@ -2338,6 +2677,13 @@ func _lookup_handle_fraction(item: Dictionary, handle_id: String) -> Dictionary:
 			}
 	for h: Dictionary in _resolved_handles(item):
 		if h.get("id", "") == handle_id:
+			if h.has("angle_rad"):
+				return {
+					"rx": float(h.get("rx", 0.5)),
+					"ry": float(h.get("ry", 0.5)),
+					"angle_rad": float(h.get("angle_rad", 0.0)),
+					"hub": true,
+				}
 			return {"rx": float(h.get("rx", 0.5)), "ry": float(h.get("ry", 0.5))}
 	return {}
 
@@ -2368,6 +2714,7 @@ func _get_handle_info(item_id: String, handle_id: String,
 
 	var rx := 0.5
 	var ry := 0.5
+	var angle_rad := NAN
 	var found := false
 	for cand_v: Variant in candidates:
 		var cand: String = _normalize_handle_id(str(cand_v))
@@ -2376,6 +2723,8 @@ func _get_handle_info(item_id: String, handle_id: String,
 			continue
 		rx = float(frac.get("rx", 0.5))
 		ry = float(frac.get("ry", 0.5))
+		if frac.has("angle_rad"):
+			angle_rad = float(frac.get("angle_rad", 0.0))
 		found = true
 		break
 
@@ -2385,6 +2734,13 @@ func _get_handle_info(item_id: String, handle_id: String,
 	if not arr_override.is_empty():
 		rx = float(arr_override.get("rx", rx))
 		ry = float(arr_override.get("ry", ry))
+		angle_rad = NAN
+
+	if GraphHubPorts.is_hub_type(itype) and not is_nan(angle_rad):
+		return {
+			"pos":     GraphHubPorts.screen_pos_on_circle(tl, sz, angle_rad),
+			"tangent": GraphHubPorts.outward_tangent(angle_rad),
+		}
 
 	return {
 		"pos":     tl + Vector2(sz.x * rx, sz.y * ry),
@@ -2490,23 +2846,64 @@ func _draw() -> void:
 func _render_item(item: Dictionary) -> void:
 	var itype   := item.get("type", "generic") as String
 	var center  := size * 0.5
-	var tl      := _item_screen_tl(item, center)
-	var sz      := _item_screen_size(item)
-	var rect    := Rect2(tl, sz)
+	var tl_orig := _item_screen_tl(item, center)
+	var sz_orig := _item_screen_size(item)
+	var tl      := tl_orig
+	var sz      := sz_orig
 	var iid: String = item.get("id", "") as String
 	var is_sel: bool = (iid == selected_item_id) or selected_item_ids.has(iid)
 	var specs   := item.get("specs", {}) as Dictionary
 
-	# Active load highlight (behind frame)
+	if itype in ["battery", "smartbattery", "resource"]:
+		var level: float = clampf(float(specs.get("soc", specs.get("level", 0.0))), 0.0, 1.0)
+		var scale_factor = 1.0 + (level * 0.15)
+		sz = sz_orig * scale_factor
+		tl = tl_orig - (sz - sz_orig) * 0.5
+		
+	var rect    := Rect2(tl, sz)
+
+	if itype in ["battery", "smartbattery", "resource"]:
+		var level: float = clampf(float(specs.get("soc", specs.get("level", 0.0))), 0.0, 1.0)
+		var alert_threshold = float(specs.get("alert_threshold_pct", 95.0)) / 100.0
+		if level >= alert_threshold:
+			var wave_count = 3
+			for w in wave_count:
+				var wave_phase = fmod(_flow_phase * 1.5 + float(w) / wave_count, 1.0)
+				var wave_expand = maxf(5.0, 30.0 * _zoom) * wave_phase
+				var wave_rect = rect.grow(wave_expand)
+				var alpha = (1.0 - wave_phase) * 0.6
+				draw_rect(wave_rect, Color(1.0, 0.2, 0.2, alpha), false, 2.0 * _zoom)
+
+	# Active load highlight / blocked vibration (behind frame)
 	if itype in ["appliance", "acload", "processor"]:
 		var st := str(specs.get("current_state", "")).to_lower()
 		var avg := float(specs.get("avg_watts", 0.0))
-		if st == "on" or (st.is_empty() and avg > 0.5):
-			var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
-			draw_rect(glow, C_ACTIVE_LOAD_GLOW, true)
+		var tries_to_run = (st == "on" or (st.is_empty() and avg > 0.5))
+		var is_starved = bool(specs.get("is_starved", false))
+		if tries_to_run:
+			if is_starved:
+				var offset = Vector2(randf_range(-3.0, 3.0), randf_range(-3.0, 3.0)) * _zoom
+				tl += offset
+				rect.position += offset
+				var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
+				draw_rect(glow, Color(0.9, 0.15, 0.2, 0.35), true)
+			else:
+				var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
+				draw_rect(glow, C_ACTIVE_LOAD_GLOW, true)
+
+	# Node background + border
+	if itype == "pbi":
+		_draw_pbi_body(rect, specs, item)
+		_draw_item_handles(item, tl_orig, sz_orig)
+		if is_sel:
+			var center_pt = rect.position + rect.size * 0.5
+			var rad = minf(rect.size.x, rect.size.y) * 0.5 + 4.0 * _zoom
+			draw_arc(center_pt, rad, 0, TAU, 32, C_PRIMARY, 2.0 * _zoom)
+		return
 
 	# Node background + border
 	var border_col := NODE_BORDER_COLORS.get(itype, C_BORDER) as Color
+
 	if bool(item.get("is_ghost", false)):
 		border_col = Color(border_col.r, border_col.g, border_col.b, 0.45)
 	if is_sel:
@@ -2516,7 +2913,7 @@ func _render_item(item: Dictionary) -> void:
 	_draw_node_frame(rect, border_col)
 
 	# Title band
-	var title_h := maxf(26.0, sz.y * 0.28)
+	var title_h := _title_band_height(sz.y)
 	var title   := _type_title(itype, specs)
 	_draw_title_band(rect, title_h, title, border_col)
 
@@ -2556,7 +2953,7 @@ func _render_item(item: Dictionary) -> void:
 		_draw_data_source_badge(rect, specs)
 
 	# Port dots
-	_draw_item_handles(item, tl, sz)
+	_draw_item_handles(item, tl_orig, sz_orig)
 
 	# Selection glow (cyan tint)
 	if is_sel:
@@ -2586,7 +2983,7 @@ func _draw_data_source_badge(rect: Rect2, specs: Dictionary) -> void:
 			icon_col = C_AMBER
 	# Match the title band's vertical centring (see _draw_title_band) so the
 	# badge sits on the same baseline as the type label.
-	var band_h: float = maxf(26.0, rect.size.y * 0.28)
+	var band_h: float = _title_band_height(rect.size.y)
 	var fsize_b := _fit_title_font_size(band_h)
 	var cy: float = rect.position.y + band_h * 0.5 + fsize_b * 0.38
 	var pos := Vector2(rect.position.x + rect.size.x - fsize_b - 8.0, cy)
@@ -2608,9 +3005,11 @@ func _draw_title_band(rect: Rect2, band_h: float, title: String,
 	var fnt   := ThemeDB.fallback_font
 	var fsize := _fit_title_font_size(band_h)
 	var cy    := rect.position.y + band_h * 0.5 + fsize * 0.38
-	draw_string(fnt,
-		Vector2(rect.position.x + 10.0, cy),
-		title, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.92, 0.95, 0.99, 1.0))
+	var pad_x := 10.0
+	var max_w := maxf(8.0, rect.size.x - pad_x * 2.0 - 20.0)
+	_draw_fitted_label(
+		Vector2(rect.position.x + pad_x, cy),
+		title, max_w, fsize, Color(0.92, 0.95, 0.99, 1.0))
 
 
 func _draw_wind_body(rect: Rect2, specs: Dictionary) -> void:
@@ -2622,20 +3021,22 @@ func _draw_wind_body(rect: Rect2, specs: Dictionary) -> void:
 	var out_kw := float(specs.get("current_output_kw", 0.0))
 	var producing := out_kw > 0.0001
 
-	# Rotor glyph: hub + three blades, spun by the flow phase when producing.
-	var hub := Vector2(inner.position.x + inner.size.x * 0.26,
-		inner.position.y + inner.size.y * 0.40)
-	var blade_len := minf(inner.size.y * 0.34, inner.size.x * 0.22)
-	var col := NODE_BORDER_COLORS.get("wind", C_TEXT) as Color
-	var spin := _flow_phase * 2.2 if producing else 0.0
-	for b in 3:
-		var ang := spin + float(b) * TAU / 3.0
-		draw_line(hub, hub + Vector2(cos(ang), sin(ang)) * blade_len,
-			Color(col.r, col.g, col.b, 0.9 if producing else 0.45), 2.0)
-	draw_circle(hub, 3.0, col)
-	# Tower
-	draw_line(hub, Vector2(hub.x, inner.end.y - 2.0),
-		Color(col.r, col.g, col.b, 0.5), 2.0)
+	var used_preview := _draw_model_preview_zone(inner, specs, 0.48)
+	if not used_preview:
+		# Rotor glyph: hub + three blades, spun by the flow phase when producing.
+		var hub := Vector2(inner.position.x + inner.size.x * 0.26,
+			inner.position.y + inner.size.y * 0.40)
+		var blade_len := minf(inner.size.y * 0.34, inner.size.x * 0.22)
+		var col := NODE_BORDER_COLORS.get("wind", C_TEXT) as Color
+		var spin := _flow_phase * 2.2 if producing else 0.0
+		for b in 3:
+			var ang := spin + float(b) * TAU / 3.0
+			draw_line(hub, hub + Vector2(cos(ang), sin(ang)) * blade_len,
+				Color(col.r, col.g, col.b, 0.9 if producing else 0.45), 2.0)
+		draw_circle(hub, 3.0, col)
+		# Tower
+		draw_line(hub, Vector2(hub.x, inner.end.y - 2.0),
+			Color(col.r, col.g, col.b, 0.5), 2.0)
 
 	# Readouts at right
 	var tx := inner.position.x + inner.size.x * 0.50
@@ -2663,15 +3064,17 @@ func _draw_hydro_body(rect: Rect2, specs: Dictionary) -> void:
 	var producing := out_kw > 0.0001
 	var col := NODE_BORDER_COLORS.get("hydro", C_TEXT) as Color
 
-	# Penstock glyph: sloped pipe into a runner wheel, ripple when producing.
-	var top := Vector2(inner.position.x + 6.0, inner.position.y + 6.0)
-	var wheel := Vector2(inner.position.x + inner.size.x * 0.26, inner.end.y - 12.0)
-	draw_line(top, wheel, Color(col.r, col.g, col.b, 0.7), 3.0)
-	draw_circle(wheel, 7.0, Color(col.r, col.g, col.b, 0.25))
-	draw_circle(wheel, 7.0, col, false, 1.5)
-	if producing:
-		var ripple := 7.0 + 3.0 * (0.5 + 0.5 * sin(_flow_phase * 3.0))
-		draw_circle(wheel, ripple, Color(col.r, col.g, col.b, 0.35), false, 1.0)
+	var used_preview := _draw_model_preview_zone(inner, specs, 0.48)
+	if not used_preview:
+		# Penstock glyph: sloped pipe into a runner wheel, ripple when producing.
+		var top := Vector2(inner.position.x + 6.0, inner.position.y + 6.0)
+		var wheel := Vector2(inner.position.x + inner.size.x * 0.26, inner.end.y - 12.0)
+		draw_line(top, wheel, Color(col.r, col.g, col.b, 0.7), 3.0)
+		draw_circle(wheel, 7.0, Color(col.r, col.g, col.b, 0.25))
+		draw_circle(wheel, 7.0, col, false, 1.5)
+		if producing:
+			var ripple := 7.0 + 3.0 * (0.5 + 0.5 * sin(_flow_phase * 3.0))
+			draw_circle(wheel, ripple, Color(col.r, col.g, col.b, 0.35), false, 1.0)
 
 	# Readouts at right
 	var tx := inner.position.x + inner.size.x * 0.50
@@ -2827,7 +3230,7 @@ func _draw_battery_body(rect: Rect2, specs: Dictionary) -> void:
 	draw_string(fnt, Vector2(tx, y), "%.0fV   %.0f Ah" % [volts, ah],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT)
 	y  += fsize + 3.0
-	draw_string(fnt, Vector2(tx, y), "Capacity %.2f kWh" % kwh, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_GREEN)
+	draw_string(fnt, Vector2(tx, y), "%.2f / %.2f kWh" % [kwh * soc, kwh], HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_GREEN)
 	y  += fsize + 2.0
 	if y < inner.end.y - 1.0:
 		draw_string(fnt, Vector2(tx, y), "SoC %.0f%%" % (soc * 100.0), HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
@@ -2911,9 +3314,11 @@ func _draw_load_body(rect: Rect2, specs: Dictionary) -> void:
 
 func _draw_generic_body(rect: Rect2, specs: Dictionary) -> void:
 	var fnt   := ThemeDB.fallback_font
-	var fsize := _fit_font_size(rect, 1, 10.0)
-	var x     := rect.position.x + 8.0
-	var y     := rect.position.y + fsize + 6.0
+	var inner := rect.grow(-4.0)
+	var fsize := _fit_font_size(inner, 1, 10.0)
+	var used_preview := _draw_model_preview_zone(inner, specs, 0.42)
+	var x := inner.position.x + (inner.size.x * 0.46 if used_preview else 8.0)
+	var y := inner.position.y + fsize + 6.0
 	var name_ := specs.get("name", "") as String
 	if not name_.is_empty():
 		draw_string(fnt, Vector2(x, y), name_,
@@ -2942,9 +3347,11 @@ func _draw_compound_body(rect: Rect2, specs: Dictionary) -> void:
 ## Processor: converts energy + resources into outputs (pump, shredder, reactor…)
 func _draw_processor_body(rect: Rect2, specs: Dictionary) -> void:
 	var fnt   := ThemeDB.fallback_font
-	var fsize := _fit_font_size(rect, 3, 10.0, 12.0)
-	var x     := rect.position.x + 10.0
-	var y     := rect.position.y + fsize + 5.0
+	var inner := rect.grow(-4.0)
+	var fsize := _fit_font_size(inner, 3, 10.0, 12.0)
+	var used_preview := _draw_model_preview_zone(inner, specs, 0.42)
+	var x := inner.position.x + (inner.size.x * 0.46 if used_preview else 10.0)
+	var y := inner.position.y + fsize + 5.0
 	var name_ := specs.get("name", "Processor") as String
 	draw_string(fnt, Vector2(x, y), name_,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_S)
@@ -2965,6 +3372,31 @@ func _draw_processor_body(rect: Rect2, specs: Dictionary) -> void:
 	if not rate_str.is_empty():
 		draw_string(fnt, Vector2(x, y), rate_str,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_M)
+
+
+## Draw a cached GLB card snapshot in the left zone of a node body.
+## Returns true when a texture was drawn (caller should skip procedural glyph).
+func _draw_model_preview_zone(inner: Rect2, specs: Dictionary, width_frac: float = 0.48) -> bool:
+	if model_preview_service == null or not is_instance_valid(model_preview_service):
+		return false
+	if str(specs.get("model_id", "")).is_empty():
+		return false
+	if not model_preview_service.has_method("get_or_request"):
+		return false
+	var tex: ImageTexture = model_preview_service.call("get_or_request", specs) as ImageTexture
+	if tex == null:
+		return false
+	var zone_w := maxf(24.0, inner.size.x * width_frac)
+	var zone := Rect2(inner.position, Vector2(zone_w, inner.size.y))
+	# Keep aspect: fit texture inside zone, centered.
+	var tex_sz := tex.get_size()
+	if tex_sz.x < 1.0 or tex_sz.y < 1.0:
+		return false
+	var scale := minf(zone.size.x / tex_sz.x, zone.size.y / tex_sz.y)
+	var draw_sz := tex_sz * scale
+	var draw_pos := zone.position + (zone.size - draw_sz) * 0.5
+	draw_texture_rect(tex, Rect2(draw_pos, draw_sz), false)
+	return true
 
 
 ## Shelly Pro 4PM: four metered 16 A AC circuits with on/off state and power readings.
@@ -3088,6 +3520,20 @@ func _draw_resource_body(rect: Rect2, specs: Dictionary, item: Dictionary = {}) 
 		draw_string(fnt, Vector2(inner.end.x - 80.0, inner.position.y + fsize),
 			"+%.1f/−%.1f" % [infl, outf], HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 2, C_GREEN)
 
+	_draw_tank_overflow_glyph(specs, Vector2(inner.end.x, bar_pos.y - 3.0))
+
+
+## Shared ⚠ overflow badge for tank renderers (V1 body + V2 hub).
+## Anchor = right-aligned baseline point; zoom-proportional per convention.
+func _draw_tank_overflow_glyph(specs: Dictionary, anchor: Vector2) -> void:
+	if not bool(specs.get("overflowing", false)):
+		return
+	var fnt := ThemeDB.fallback_font
+	var wf := maxi(8, int(round(11.0 * _zoom)))
+	var ts := fnt.get_string_size("⚠", HORIZONTAL_ALIGNMENT_LEFT, -1, wf)
+	draw_string(fnt, Vector2(anchor.x - ts.x, anchor.y), "⚠",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, wf, UITheme.C_WARN)
+
 
 func _draw_catchment_body(rect: Rect2, specs: Dictionary) -> void:
 	var fnt   := ThemeDB.fallback_font
@@ -3097,11 +3543,18 @@ func _draw_catchment_body(rect: Rect2, specs: Dictionary) -> void:
 	draw_string(fnt, Vector2(x, y), specs.get("name", "Rain Catchment") as String,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_S)
 	y += fsize + 4.0
-	draw_string(fnt, Vector2(x, y), "%.0f m²" % float(specs.get("area_m2", 10.0)),
+	var area_lbl := "%.0f m²" % float(specs.get("area_m2", 10.0))
+	if bool(specs.get("use_soi_area", false)):
+		area_lbl = "SoI area"
+	draw_string(fnt, Vector2(x, y), area_lbl,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT)
 	y += fsize + 3.0
-	draw_string(fnt, Vector2(x, y), "runoff %.0f%%" % (float(specs.get("runoff_coeff", 0.85)) * 100.0),
-		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
+	if str(specs.get("catchment_kind", "rain")) == "biomass":
+		draw_string(fnt, Vector2(x, y), "biomass PBI",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
+	else:
+		draw_string(fnt, Vector2(x, y), "runoff %.0f%%" % (float(specs.get("runoff_coeff", 0.85)) * 100.0),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
 
 
 # ---------------------------------------------------------------------------
@@ -3136,7 +3589,15 @@ func _wired_handle_ids(item_id: String) -> Dictionary:
 
 func _draw_item_handles(item: Dictionary, tl: Vector2, sz: Vector2) -> void:
 	var itype   := item.get("type", "generic") as String
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var compound_kind := str(specs.get("compound_kind", "")) if itype == "compound" else ""
 	var handles := _resolved_handles(item)
+	var hub := GraphHubPorts.is_hub_type(itype)
+
+	# Solar arrays expose one consolidated +/- pair on the bottom edge.
+	if compound_kind == "array":
+		_draw_array_compound_handles(tl, sz)
+		return
 
 	# For types that have "extra" symmetry handles, only render a dot for:
 	#   a) primary/canonical handles, OR
@@ -3145,21 +3606,47 @@ func _draw_item_handles(item: Dictionary, tl: Vector2, sz: Vector2) -> void:
 	var primary: Array = _PRIMARY_HANDLES.get(itype, []) as Array
 	var filter_extras: bool = not primary.is_empty()
 	var wired: Dictionary  = _wired_handle_ids(item.get("id", "") as String) if filter_extras else {}
+	# Hub mode: hide unused static defaults once any hub_* port exists.
+	var hub_wired := _wired_handle_ids(item.get("id", "") as String) if hub else {}
+	var has_extra_hub := false
+	if hub:
+		for h0: Dictionary in handles:
+			var id0 := str(h0.get("id", ""))
+			if id0.begins_with("hub_in_") or id0.begins_with("hub_out_"):
+				has_extra_hub = true
+				break
 
 	for h: Dictionary in handles:
 		var hid := h.get("id", "") as String
 		if filter_extras and not primary.has(hid) and not wired.has(hid):
+			if not (hid.begins_with("res_in_") or hid.begins_with("res_out_")):
+				continue
+		# Once hub ports exist, hide unused default input/output dots.
+		if hub and has_extra_hub and (hid == "input" or hid == "output") \
+				and not hub_wired.has(hid):
 			continue
-		var rx  := float(h.get("rx", h.get("x", 0.0) / maxf(1.0, float(item.get("width",  120.0)))))
-		var ry  := float(h.get("ry", h.get("y", 0.0) / maxf(1.0, float(item.get("height",  90.0)))))
-		var arr_override := _array_compound_handle_override(item, hid)
-		if not arr_override.is_empty():
-			rx = float(arr_override.get("rx", rx))
-			ry = float(arr_override.get("ry", ry))
 		var pol := h.get("polarity", "positive") as String
 		var rk := str(h.get("resource_kind", ""))
-		var sp  := tl + Vector2(sz.x * rx, sz.y * ry)
+		var sp: Vector2
+		if hub and h.has("angle_rad"):
+			sp = GraphHubPorts.screen_pos_on_circle(tl, sz, float(h.get("angle_rad", 0.0)))
+		else:
+			var rx  := float(h.get("rx", h.get("x", 0.0) / maxf(1.0, float(item.get("width",  120.0)))))
+			var ry  := float(h.get("ry", h.get("y", 0.0) / maxf(1.0, float(item.get("height",  90.0)))))
+			var arr_override := _array_compound_handle_override(item, hid)
+			if not arr_override.is_empty():
+				rx = float(arr_override.get("rx", rx))
+				ry = float(arr_override.get("ry", ry))
+			sp  = tl + Vector2(sz.x * rx, sz.y * ry)
 		_draw_port_dot(sp, pol, rk)
+
+
+func _draw_array_compound_handles(tl: Vector2, sz: Vector2) -> void:
+	for port: Dictionary in GraphArrayLayout.default_handles():
+		var rx := float(port.get("rx", 0.5))
+		var ry := float(port.get("ry", 1.0))
+		var sp := tl + Vector2(sz.x * rx, sz.y * ry)
+		_draw_port_dot(sp, str(port.get("polarity", "positive")))
 
 
 func _draw_port_dot(screen_pos: Vector2, polarity: String, resource_kind: String = "") -> void:
@@ -3251,3 +3738,39 @@ static func default_height(itype: String) -> float:
 
 # Workaround: reference NODE_SIZES via a renamed alias so static funcs can use it
 const NodeSizes := NODE_SIZES
+func _draw_pbi_body(rect: Rect2, specs: Dictionary, _item: Dictionary) -> void:
+	var kind: String = str(specs.get("resource_kind", ""))
+	var is_active: bool = bool(specs.get("is_active", false))
+	var pbi_val: String = str(specs.get("display_value", ""))
+	
+	var col := Color.GRAY
+	if kind == "solar" or kind == "sunlight" or kind == "thermal":
+		col = Color(0.9, 0.8, 0.2)
+	elif kind == "water" or kind == "rain":
+		col = Color(0.2, 0.5, 0.9)
+	elif kind == "wind" or kind == "mechanical":
+		col = Color(0.6, 0.6, 0.6)
+	elif kind == "biomass":
+		col = Color(0.2, 0.7, 0.3)
+		
+	var center = rect.position + rect.size * 0.5
+	var r = minf(rect.size.x, rect.size.y) * 0.5
+	
+	if is_active:
+		var glow_r = r + (10.0 * _zoom) * (0.8 + 0.2 * sin(_flow_phase * TAU * 2.0))
+		draw_circle(center, glow_r, Color(col.r, col.g, col.b, 0.3))
+		
+	draw_circle(center, r, col)
+	draw_arc(center, r, 0, TAU, 32, Color(1,1,1,0.2), 2.0 * _zoom)
+	
+	var fnt = ThemeDB.fallback_font
+	var fsize_title = _fit_font_size(rect, 1, 14.0)
+	var title = str(specs.get("name", kind.capitalize()))
+	
+	var ts = fnt.get_string_size(title, HORIZONTAL_ALIGNMENT_CENTER, -1, fsize_title)
+	draw_string(fnt, center - Vector2(ts.x * 0.5, 2.0 * _zoom), title, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize_title, Color.WHITE)
+	
+	if not pbi_val.is_empty():
+		var fsize_val = _fit_font_size(rect, 1, 11.0)
+		var vs = fnt.get_string_size(pbi_val, HORIZONTAL_ALIGNMENT_CENTER, -1, fsize_val)
+		draw_string(fnt, center + Vector2(-vs.x * 0.5, fsize_val + 2.0 * _zoom), pbi_val, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize_val, Color(1,1,1,0.9))
