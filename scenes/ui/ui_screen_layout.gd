@@ -3,7 +3,9 @@ extends RefCounted
 
 ## Viewport-aware layout helpers for UILayer / CanvasLayer controls.
 
-const TIMELINE_BAR_HEIGHT := 168.0
+## Fallback when TimelineUI.get_stack_height() is unavailable.
+## Matches default chrome (104) + tracks (~96) + bottom pad (10) ≈ 210.
+const TIMELINE_BAR_HEIGHT := 210.0
 const TIMELINE_MARGIN := 10.0
 const SIDE_MARGIN := 12.0
 

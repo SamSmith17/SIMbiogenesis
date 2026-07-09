@@ -25,9 +25,10 @@ const C_TEXT_S   := UITheme.C_TEXT_S
 const C_TEXT_M   := UITheme.C_TEXT_M
 
 # NLE track (variable) + clip-controls (22) + main info row + padding.
-# INFO_ROW_HEIGHT must comfortably fit the tallest cluster (the two-line
-# weather block: chip row + stat-tile row) or the value labels get clipped.
-const INFO_ROW_HEIGHT : int = 78
+# INFO_ROW_HEIGHT fits the tallest cluster — the centre time cluster (22 pt
+# time + date spin row, ~64 px). Weather lives in the floating WeatherCardUI
+# now, so the bar is a single-chip-row slab.
+const INFO_ROW_HEIGHT : int = 72
 const NLE_ROW_HEIGHT : int = 22
 const BAR_CHROME_HEIGHT : int = INFO_ROW_HEIGHT + NLE_ROW_HEIGHT + 10
 ## Gap between the bar bottom edge and the viewport (external padding).
@@ -41,6 +42,7 @@ const TimelineViewScript := preload("res://core/timeline/timeline_view.gd")
 const TimelineTrackLayoutScript := preload("res://core/timeline/timeline_track_layout.gd")
 const TimelineTrackDefScript := preload("res://core/timeline/timeline_track_def.gd")
 const TimelineWaveformDrawScript := preload("res://core/timeline/timeline_waveform_draw.gd")
+const _CLOSURE_METRICS_SCRIPT := preload("res://system_graph/closure_metrics.gd")
 
 # ---------------------------------------------------------------------------
 # Speed presets  [display_label, time_scale_value]
@@ -103,6 +105,15 @@ var _resize_track_idx : int = -1
 var _tracks_menu : PopupMenu = null
 var _tracks_btn : Button = null
 
+## Needs strip (Energy / Water / Food / Waste) — Phase 1 closure HUD.
+var _needs_chips: Dictionary = {}  # kind -> Button
+var _needs_score_lbl: Label = null
+## Phase 2 challenge progress chip + picker modal (lazy-init).
+var _challenge_chip: Button = null
+var _challenge_picker_panel: Control = null
+
+
+signal stack_height_changed(height: float)
 
 func get_stack_height() -> float:
 	return _bar_height() + float(BAR_BOTTOM_PAD)
@@ -185,20 +196,11 @@ const INFO_ROW_EDGE_PAD : float = 8.0
 const CENTER_CLUSTER_GAP : float = 18.0
 var _scrubber_updating : bool = false   # prevents feedback loop
 
-# Weather row (driven by SolarUI)
+# Weather display moved to the floating WeatherCardUI (sibling on UILayer);
+# SolarUI keeps pushing through this node and we forward (node-name contract).
 var _wx_status_lbl: Label  # kept for API compatibility; not rendered
-var _wx_source_lbl:  Label   # automatic weather-source indicator (no manual picker)
-var _wx_link_btn:     Button
-var _unit_toggle_btn: Button
-# Individual stat tile value labels (updated via set_weather_stats).
-var _wx_rad_lbl:    Label
-var _wx_temp_lbl:   Label
-var _wx_hum_lbl:    Label
-var _wx_wind_lbl:   Label
-var _wx_dir_lbl:    Label
-var _wx_rain_lbl:   Label
-var _wx_rain24_lbl: Label
-## True = show °F / mph / inches; false = show °C / m/s / mm.
+var _weather_card: Control = null
+## Kept for pref-file compatibility (card owns the live unit toggle now).
 var _use_imperial: bool = true
 var _solar_ui: Node = null
 var _map_confirm: ConfirmationDialog
@@ -210,16 +212,14 @@ var _last_viewport_size: Vector2 = Vector2.ZERO
 ## Record Book Modal — lazy-init on first press.
 var _record_book_panel: Control = null
 
-# Provenance tooltip panel (Phase 1) — sibling on the parent CanvasLayer.
+# Tooltip panel — sibling on the parent CanvasLayer. Still used by the NWS
+# alert-band hover on the track (stat-tile hovers moved to WeatherCardUI).
 var _wx_tooltip_panel: PanelContainer = null
 var _tip_var_lbl:  Label = null
 var _tip_val_lbl:  Label = null
 var _tip_time_lbl: Label = null
 var _tip_src_lbl:  Label = null
 var _tip_stn_lbl:  Label = null
-# Hoverable stat tile containers (parallel to _wx_*_lbl refs).
-var _wx_tile_containers: Array[Control] = []
-var _wx_tile_keys: Array[String] = []
 
 
 # ---------------------------------------------------------------------------
@@ -283,9 +283,33 @@ func _setup_runtime_ui() -> void:
 	_ensure_crosshair_ui()
 	_setup_settings_panel()
 	_setup_wx_tooltip()
+	_setup_weather_card()
 	_connect_weather_signals()
 	if is_instance_valid(CursorController):
 		CursorController.set_paused(false)
+
+
+## Floating weather card — sibling on the parent UILayer, centered above the
+## bar. All weather pushes from SolarUI are forwarded to it (the bar itself no
+## longer renders weather).
+func _setup_weather_card() -> void:
+	if _weather_card != null:
+		return
+	var ui_layer := get_parent()
+	if ui_layer == null:
+		return
+	if ui_layer.get_node_or_null("WeatherCardUI") != null:
+		_weather_card = ui_layer.get_node_or_null("WeatherCardUI")
+		return
+	var script := load("res://scenes/ui/weather_card_ui.gd") as Script
+	if script == null:
+		return
+	_weather_card = PanelContainer.new()
+	_weather_card.set_script(script)
+	ui_layer.add_child(_weather_card)
+	stack_height_changed.connect(func(_h: float) -> void:
+		if is_instance_valid(_weather_card) and _weather_card.has_method("refresh_position"):
+			_weather_card.call("refresh_position"))
 
 
 func _ensure_crosshair_ui() -> void:
@@ -502,70 +526,29 @@ func set_weather_status_text(line: String) -> void:
 		_wx_status_lbl.text = line
 
 
+## Forwarded to the floating WeatherCardUI (SolarUI keeps calling TimelineUI —
+## the node-name contract stays intact).
 func set_weather_cycle_display(caption: String, mod: Color, tip: String) -> void:
-	if _wx_source_lbl:
-		_wx_source_lbl.text = caption
-		_wx_source_lbl.add_theme_color_override("font_color", mod)
-		_wx_source_lbl.tooltip_text = tip
+	if is_instance_valid(_weather_card) and _weather_card.has_method("set_source_display"):
+		_weather_card.call("set_source_display", caption, mod, tip)
 
 
 func set_weather_link_display(tip: String, mod: Color) -> void:
-	if _wx_link_btn:
-		_wx_link_btn.tooltip_text = tip
-		_wx_link_btn.add_theme_color_override("font_color", mod)
+	if is_instance_valid(_weather_card) and _weather_card.has_method("set_link_display"):
+		_weather_card.call("set_link_display", tip, mod)
 
 
-## Update the prominent weather stat tiles. All inputs are SI units
-## (°C, m/s, mm/h, mm); conversion to imperial is done here based on
-## _use_imperial. Pass NAN for any unavailable value.
+## All inputs SI units (°C, m/s, mm/h, mm); the card converts per its unit pref.
 func set_weather_stats(rad: float, temp_c: float, hum: float,
 		wind_ms: float, wind_deg: float, rain_mmh: float, rain_24h_mm: float) -> void:
-	if _wx_rad_lbl:
-		_wx_rad_lbl.text = "—" if is_nan(rad) else "%.0f" % rad
-	if _wx_temp_lbl:
-		if is_nan(temp_c):
-			_wx_temp_lbl.text = "—"
-		elif _use_imperial:
-			_wx_temp_lbl.text = "%.0f°F" % (temp_c * 9.0 / 5.0 + 32.0)
-		else:
-			_wx_temp_lbl.text = "%.0f°C" % temp_c
-	if _wx_hum_lbl:
-		_wx_hum_lbl.text = "—" if is_nan(hum) else "%.0f%%" % hum
-	if _wx_wind_lbl:
-		if is_nan(wind_ms):
-			_wx_wind_lbl.text = "—"
-		elif _use_imperial:
-			_wx_wind_lbl.text = "%.0fmph" % (wind_ms * 2.23694)
-		else:
-			_wx_wind_lbl.text = "%.1fm/s" % wind_ms
-	if _wx_dir_lbl:
-		_wx_dir_lbl.text = "—" if is_nan(wind_deg) else _deg_to_compass(wind_deg)
-	if _wx_rain_lbl:
-		if is_nan(rain_mmh) or rain_mmh < 0.05:
-			_wx_rain_lbl.text = "dry"
-		elif _use_imperial:
-			_wx_rain_lbl.text = '%.2f"' % (rain_mmh / 25.4)
-		else:
-			_wx_rain_lbl.text = "%.1fmm" % rain_mmh
-	if _wx_rain24_lbl:
-		if is_nan(rain_24h_mm):
-			_wx_rain24_lbl.text = "—"
-		elif _use_imperial:
-			_wx_rain24_lbl.text = '%.2f"' % (rain_24h_mm / 25.4)
-		else:
-			_wx_rain24_lbl.text = "%.1fmm" % rain_24h_mm
+	if is_instance_valid(_weather_card) and _weather_card.has_method("set_weather_stats"):
+		_weather_card.call("set_weather_stats",
+			rad, temp_c, hum, wind_ms, wind_deg, rain_mmh, rain_24h_mm)
 
 
 static func _deg_to_compass(deg: float) -> String:
 	var dirs := ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 	return dirs[int(round(deg / 45.0)) % 8]
-
-
-func _on_unit_toggle_pressed() -> void:
-	_use_imperial = not _use_imperial
-	if _unit_toggle_btn:
-		_unit_toggle_btn.text = "°F" if _use_imperial else "°C"
-	_save_ui_prefs()
 
 
 func _load_ui_prefs() -> void:
@@ -576,8 +559,6 @@ func _load_ui_prefs() -> void:
 		var raw_tracks : Variant = cfg.get_value("timeline", "tracks", [])
 		if raw_tracks is Array and not (raw_tracks as Array).is_empty():
 			_track_layout.load_from_array(raw_tracks as Array)
-	if _unit_toggle_btn:
-		_unit_toggle_btn.text = "°F" if _use_imperial else "°C"
 	_sync_scrubber_row_height()
 	_request_bar_layout()
 
@@ -664,12 +645,6 @@ func _on_tracks_menu_id_pressed(id : int) -> void:
 		_track.queue_redraw()
 
 
-func _on_weather_link_pressed() -> void:
-	_ensure_solar_ref()
-	if _solar_ui != null and _solar_ui.has_method("show_weather_link_menu_for_anchor"):
-		_solar_ui.show_weather_link_menu_for_anchor(_wx_link_btn)
-
-
 func _ensure_solar_ref() -> void:
 	if is_instance_valid(_solar_ui):
 		return
@@ -690,6 +665,8 @@ func _update_display() -> void:
 		_update_track_edge_labels()
 	_update_mode_chips()
 	_update_nle_controls()
+	_update_needs_strip()
+	_update_challenge_chip()
 
 	# ── Time label ───────────────────────────────────────────────────────────
 	_time_lbl.text = _fmt_hour_full(dt)
@@ -1453,6 +1430,8 @@ func _enforce_bar_layout() -> void:
 	var want_top := -_bar_height() - BAR_BOTTOM_PAD
 	var want_bottom := -BAR_BOTTOM_PAD
 	var want_min := Vector2(0.0, _bar_height() + BAR_BOTTOM_PAD)
+	var height_changed := absf(offset_top - want_top) > 0.5 \
+			or absf(custom_minimum_size.y - want_min.y) > 0.5
 
 	if anchor_left != 0.0 or anchor_top != 1.0 or anchor_right != 1.0 or anchor_bottom != 1.0:
 		set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
@@ -1476,6 +1455,8 @@ func _enforce_bar_layout() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 	_bar_layout_guard = false
+	if height_changed:
+		stack_height_changed.emit(get_stack_height())
 
 
 func _build_scrubber_row(parent: VBoxContainer) -> void:
@@ -2099,39 +2080,27 @@ func _layout_info_clusters() -> void:
 			tx2 + tw + CENTER_CLUSTER_GAP)
 
 
-## LEFT — weather source/chips row stacked over the stat tiles, plus a compact
-## astro column. Pinned to the left edge of the info row.
+## LEFT — one chip row: mode/data chips · needs chips · score badge · mission,
+## plus a compact astro column. (Weather moved to the floating WeatherCardUI.)
 func _build_left_cluster() -> Control:
 	var left := HBoxContainer.new()
 	left.alignment             = BoxContainer.ALIGNMENT_BEGIN
 	left.add_theme_constant_override("separation", 8)
 
-	# Weather block — two stacked rows.
 	var wx_box := VBoxContainer.new()
 	wx_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	wx_box.add_theme_constant_override("separation", 4)
 
-	# Row 1: source indicator + mode/data chips + unit + link.
-	var wx_ctrl_row := HBoxContainer.new()
-	wx_ctrl_row.alignment = BoxContainer.ALIGNMENT_BEGIN
-	wx_ctrl_row.add_theme_constant_override("separation", 4)
-
-	# Automatic weather-source indicator (no manual picker). Shows the weather
-	# type + source glyph: 🌎 archive, 🌤 forecast, 📡 live HA, 🔄 synthetic.
-	_wx_source_lbl = Label.new()
-	_wx_source_lbl.text = "☀ —"
-	_wx_source_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_wx_source_lbl.custom_minimum_size = Vector2(72, 0)
-	_wx_source_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
-	_wx_source_lbl.tooltip_text = "Active weather source (hover a stat for details)"
-	_wx_source_lbl.add_theme_font_size_override("font_size", 11)
-	wx_ctrl_row.add_child(_wx_source_lbl)
+	# Single chip row: [MODE][DATA] | ⚡💧🍎♻ | SCORE | 🎯
+	var needs_row := HBoxContainer.new()
+	needs_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	needs_row.add_theme_constant_override("separation", 6)
 
 	# Mode chip (LIVE / PLAYBACK / SIM) — click to pin/unpin the mode.
 	_mode_chip = _mk_chip_btn("SIM", _on_mode_chip_pressed,
 		"Simulation mode. Click to pin LIVE / SIM (Auto when unpinned).")
 	_mode_chip.custom_minimum_size = Vector2(58, 22)
-	wx_ctrl_row.add_child(_mode_chip)
+	needs_row.add_child(_mode_chip)
 
 	# Data-provenance chip (REAL / OBSERVED / PROJECTED / RECORDED at playhead).
 	_data_chip = Label.new()
@@ -2141,46 +2110,58 @@ func _build_left_cluster() -> Control:
 	_data_chip.add_theme_font_size_override("font_size", 10)
 	_data_chip.add_theme_color_override("font_color", C_TEXT_S)
 	_data_chip.custom_minimum_size = Vector2(74, 0)
-	wx_ctrl_row.add_child(_data_chip)
+	needs_row.add_child(_data_chip)
+	for kind_label: Array in [
+			["energy", "⚡"],
+			["water", "💧"],
+			["food", "🍎"],
+			["waste", "♻"],
+	]:
+		var kind: String = str(kind_label[0])
+		var chip := _mk_chip_btn("%s —" % kind_label[1], _on_needs_chip_pressed.bind(kind),
+				"Needs: %s — click for System Review" % kind)
+		chip.custom_minimum_size = Vector2(58, 26)
+		chip.add_theme_font_size_override("font_size", 11)
+		_needs_chips[kind] = chip
+		needs_row.add_child(chip)
 
-	_unit_toggle_btn = _mk_flat_btn("°F", _on_unit_toggle_pressed,
-		"Switch units: imperial (°F, mph, in) ↔ metric (°C, m/s, mm)")
-	_unit_toggle_btn.add_theme_font_size_override("font_size", 11)
-	_unit_toggle_btn.add_theme_color_override("font_color", C_AMBER)
-	_unit_toggle_btn.custom_minimum_size = Vector2(30, 22)
-	wx_ctrl_row.add_child(_unit_toggle_btn)
+	# Prominent puzzle score badge
+	var score_wrap := PanelContainer.new()
+	var score_sb := StyleBoxFlat.new()
+	score_sb.bg_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.16)
+	score_sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.75)
+	score_sb.set_border_width_all(1)
+	score_sb.set_corner_radius_all(10)
+	score_sb.content_margin_left = 12.0
+	score_sb.content_margin_right = 12.0
+	score_sb.content_margin_top = 4.0
+	score_sb.content_margin_bottom = 4.0
+	score_wrap.add_theme_stylebox_override("panel", score_sb)
+	score_wrap.tooltip_text = "Puzzle score (autonomy person-days × 100 + mean closure × 50)"
+	var score_col := VBoxContainer.new()
+	score_col.add_theme_constant_override("separation", 0)
+	score_wrap.add_child(score_col)
+	var score_cap := Label.new()
+	score_cap.text = "SCORE"
+	score_cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	score_cap.add_theme_font_size_override("font_size", 8)
+	score_cap.add_theme_color_override("font_color", C_TEXT_M)
+	score_col.add_child(score_cap)
+	_needs_score_lbl = Label.new()
+	_needs_score_lbl.text = "—"
+	_needs_score_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_needs_score_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_needs_score_lbl.add_theme_font_size_override("font_size", 20)
+	_needs_score_lbl.add_theme_color_override("font_color", C_PRIMARY)
+	score_col.add_child(_needs_score_lbl)
+	needs_row.add_child(score_wrap)
 
-	_wx_link_btn = _mk_flat_btn("🔗", _on_weather_link_pressed,
-		"Link this location's weather to a Home Assistant feed")
-	_wx_link_btn.add_theme_font_size_override("font_size", 13)
-	wx_ctrl_row.add_child(_wx_link_btn)
-
-	wx_box.add_child(wx_ctrl_row)
-
-	# Row 2: stat tiles — generic headers; values include unit suffix after conversion.
-	var stat_row := HBoxContainer.new()
-	stat_row.alignment = BoxContainer.ALIGNMENT_BEGIN
-	stat_row.add_theme_constant_override("separation", 0)
-
-	# Widths chosen for the longest value each tile can show.
-	# W/m²: "1200"=4ch, TEMP: "100°F"=5ch, RH%: "100%"=4ch,
-	# WIND: "13.8m/s"=7ch (widest), DIR: "NW"=2ch,
-	# RAIN: "1.50\""=5ch, 24H: "2.50\""=5ch.
-	_wx_rad_lbl    = _mk_hoverable_stat_tile("rad",    "W/m²", "—", C_GOLD,                       stat_row, 46)
-	_mk_stat_vsep(stat_row)
-	_wx_temp_lbl   = _mk_hoverable_stat_tile("temp",   "TEMP", "—", Color(1.00, 0.55, 0.30, 1.0), stat_row, 52)
-	_mk_stat_vsep(stat_row)
-	_wx_hum_lbl    = _mk_hoverable_stat_tile("hum",    "RH%",  "—", Color(0.40, 0.80, 1.00, 1.0), stat_row, 44)
-	_mk_stat_vsep(stat_row)
-	_wx_wind_lbl   = _mk_hoverable_stat_tile("wind",   "WIND", "—", C_GREEN,                      stat_row, 64)
-	_mk_stat_vsep(stat_row)
-	_wx_dir_lbl    = _mk_hoverable_stat_tile("dir",    "DIR",  "—", C_TEXT_S,                     stat_row, 36)
-	_mk_stat_vsep(stat_row)
-	_wx_rain_lbl   = _mk_hoverable_stat_tile("rain",   "RAIN", "—", C_PRIMARY,                    stat_row, 50)
-	_mk_stat_vsep(stat_row)
-	_wx_rain24_lbl = _mk_hoverable_stat_tile("rain24", "24H",  "—", C_LAVENDER,                   stat_row, 50)
-
-	wx_box.add_child(stat_row)
+	_challenge_chip = _mk_chip_btn("🎯 Mission", _on_challenge_chip_pressed,
+			"Challenges — structured survival missions")
+	_challenge_chip.custom_minimum_size = Vector2(96, 26)
+	_challenge_chip.add_theme_font_size_override("font_size", 11)
+	needs_row.add_child(_challenge_chip)
+	wx_box.add_child(needs_row)
 	left.add_child(_mk_margin(wx_box, 8, 0))
 
 	left.add_child(_mk_vsep())
@@ -2307,6 +2288,8 @@ func _build_right_cluster() -> Control:
 	right.add_child(_linkagelab_btn)
 	var record_btn := _mk_icon_btn("🌡", _on_record_book_pressed, "Climate Record Book — historical records & global trends for this location")
 	right.add_child(record_btn)
+	var challenge_btn := _mk_icon_btn("🎯", _on_challenge_pressed, "Challenges — structured survival missions")
+	right.add_child(challenge_btn)
 	var map_btn := _mk_icon_btn("🗺", _on_map_select_pressed, "Return to map select")
 	right.add_child(map_btn)
 
@@ -2330,6 +2313,93 @@ func _on_record_book_pressed() -> void:
 			_record_book_panel.bind_timeline(self)
 	if _record_book_panel.has_method("toggle"):
 		_record_book_panel.toggle()
+
+
+func _on_challenge_pressed() -> void:
+	_open_challenge_picker()
+
+
+func _on_challenge_chip_pressed() -> void:
+	_open_challenge_picker()
+
+
+func _open_challenge_picker() -> void:
+	var panel := ensure_challenge_picker()
+	if panel != null and panel.has_method("toggle"):
+		panel.toggle()
+
+
+func ensure_challenge_picker() -> Control:
+	if _challenge_picker_panel == null:
+		var script := load("res://scenes/ui/challenge_picker_panel.gd") as Script
+		if script == null:
+			push_warning("TimelineUI: could not load challenge_picker_panel.gd")
+			return null
+		_challenge_picker_panel = Control.new()
+		_challenge_picker_panel.name = "ChallengePickerPanel"
+		_challenge_picker_panel.set_script(script)
+		if _challenge_picker_panel.has_method("bind_timeline"):
+			_challenge_picker_panel.bind_timeline(self)
+	return _challenge_picker_panel
+
+
+func on_challenge_started(_id: String, def: Variant) -> void:
+	_update_challenge_chip(def)
+	if _challenge_picker_panel != null and _challenge_picker_panel.has_method("refresh_active_label"):
+		_challenge_picker_panel.refresh_active_label()
+
+
+func on_challenge_tick(_id: String, _metrics: Dictionary, elapsed_h: float) -> void:
+	_update_challenge_chip(null, elapsed_h)
+
+
+func on_challenge_finished() -> void:
+	_update_challenge_chip()
+	if _challenge_picker_panel != null and _challenge_picker_panel.has_method("refresh_active_label"):
+		_challenge_picker_panel.refresh_active_label()
+
+
+func show_challenge_result(challenge_id: String, won: bool, payload: Dictionary) -> void:
+	var panel := ensure_challenge_picker()
+	if panel != null and panel.has_method("show_result"):
+		panel.show_result(challenge_id, won, payload)
+
+
+func _update_challenge_chip(def: Variant = null, elapsed_h: float = -1.0) -> void:
+	if _challenge_chip == null:
+		return
+	var runner: Node = null
+	if _main != null:
+		runner = _main.get_node_or_null("ChallengeRunner") as Node
+	if runner == null or not bool(runner.call("is_active")):
+		_challenge_chip.text = "🎯 Mission"
+		_challenge_chip.tooltip_text = "Challenges — click to pick a mission"
+		_style_challenge_chip(UITheme.C_TEXT_M)
+		return
+	if def == null and runner.has_method("active_def"):
+		def = runner.call("active_def")
+	var title := str(def.title) if def != null else str(runner.call("active_challenge_id"))
+	if elapsed_h < 0.0 and runner.has_method("evaluate_now"):
+		var ev: Dictionary = runner.call("evaluate_now") as Dictionary
+		elapsed_h = float(ev.get("elapsed_h", 0.0))
+	var dur := float(def.duration_hours) if def != null else 0.0
+	var short := title
+	if short.length() > 10:
+		short = short.substr(0, 9) + "…"
+	_challenge_chip.text = "🎯 %s %.0f/%.0fh" % [short, elapsed_h, dur]
+	_challenge_chip.tooltip_text = "%s — %.0f / %.0f h elapsed · click for missions" % [
+			title, elapsed_h, dur]
+	_style_challenge_chip(UITheme.C_AMBER)
+
+
+func _style_challenge_chip(col: Color) -> void:
+	var sb: StyleBox = _challenge_chip.get_theme_stylebox("normal")
+	if sb is StyleBoxFlat:
+		var sbf := (sb as StyleBoxFlat).duplicate() as StyleBoxFlat
+		sbf.border_color = col
+		sbf.bg_color = Color(col.r, col.g, col.b, 0.18)
+		_challenge_chip.add_theme_stylebox_override("normal", sbf)
+	_challenge_chip.add_theme_color_override("font_color", col)
 
 
 func _on_year_changed(value: float) -> void:
@@ -2409,6 +2479,71 @@ func _mk_astro_label(txt: String, color: Color, tip: String) -> Label:
 
 ## Pill-styled chip button (rounded, subtle fill) for the mode chip and other
 ## status toggles. Colours are overridden per-state by the caller / refresh.
+func _on_needs_chip_pressed(_kind: String = "") -> void:
+	var ui_layer := get_parent()
+	if ui_layer == null:
+		return
+	var gv := ui_layer.get_node_or_null("SystemGraphView")
+	if gv == null:
+		return
+	if not gv.visible and gv.has_method("toggle"):
+		gv.call("toggle")
+	elif not gv.visible:
+		gv.visible = true
+	if gv.has_method("_on_system_review"):
+		gv.call("_on_system_review")
+
+
+func _update_needs_strip() -> void:
+	if _needs_chips.is_empty():
+		return
+	var ui_layer := get_parent()
+	var gv: Node = ui_layer.get_node_or_null("SystemGraphView") if ui_layer != null else null
+	var m: Dictionary = {}
+	if gv != null and gv.has_method("compute_closure_metrics"):
+		m = gv.call("compute_closure_metrics") as Dictionary
+	var channels: Dictionary = m.get("channels", {}) as Dictionary
+	# Colorblind-safe: icon + letter + status glyph (not hue alone).
+	var icons := {"energy": "⚡", "water": "💧", "food": "🍎", "waste": "♻"}
+	var letters := {"energy": "E", "water": "W", "food": "F", "waste": "X"}
+	var glyphs := {"ok": "●", "warn": "▲", "critical": "■", "idle": "○"}
+	for kind: String in _needs_chips.keys():
+		var btn: Button = _needs_chips[kind] as Button
+		if btn == null:
+			continue
+		var ch: Dictionary = channels.get(kind, {}) as Dictionary
+		var st: String = str(ch.get("status", "idle"))
+		var icon: String = str(icons.get(kind, ""))
+		var letter: String = str(letters.get(kind, kind.substr(0, 1).to_upper()))
+		var glyph: String = str(glyphs.get(st, "○"))
+		if st == "idle":
+			btn.text = "%s %s %s" % [icon, letter, glyph]
+			btn.tooltip_text = "%s — inactive (place a Habitat / tanks)" % kind.capitalize()
+		else:
+			var pct := float(ch.get("closure_pct", 0.0)) * 100.0
+			btn.text = "%s %s%s" % [icon, letter, glyph]
+			btn.tooltip_text = "%s: %s · closure %.0f%% · autonomy %.1f d — click Review" % [
+					kind.capitalize(),
+					_CLOSURE_METRICS_SCRIPT.status_label(st),
+					pct,
+					float(ch.get("autonomy_days", 0.0)),
+			]
+		var col: Color = _CLOSURE_METRICS_SCRIPT.status_color(st)
+		btn.add_theme_color_override("font_color", col)
+		var sb: StyleBox = btn.get_theme_stylebox("normal")
+		if sb is StyleBoxFlat:
+			var sbf := (sb as StyleBoxFlat).duplicate() as StyleBoxFlat
+			sbf.border_color = col
+			sbf.bg_color = Color(col.r, col.g, col.b, 0.22)
+			sbf.set_border_width_all(2 if st == "critical" else 1)
+			btn.add_theme_stylebox_override("normal", sbf)
+	if _needs_score_lbl != null:
+		var score: float = float(m.get("score", 0.0))
+		_needs_score_lbl.text = ("%.0f" % score) if score > 0.01 else "—"
+		_needs_score_lbl.add_theme_color_override("font_color",
+				C_PRIMARY if score > 0.01 else C_TEXT_M)
+
+
 func _mk_chip_btn(txt: String, callback: Callable, tip: String = "") -> Button:
 	var btn := Button.new()
 	btn.text         = txt
@@ -2442,41 +2577,6 @@ func _mk_chip_btn(txt: String, callback: Callable, tip: String = "") -> Button:
 ## ---------------------------------------------------------------------------
 ## Phase 1: Provenance tooltip setup + helpers
 ## ---------------------------------------------------------------------------
-
-## Hoverable stat tile variant: same visual as _mk_stat_tile but enables mouse
-## events so hovering the tile shows the provenance tooltip. Returns the value
-## Label (same type as _mk_stat_tile) so existing assignments stay intact.
-func _mk_hoverable_stat_tile(key: String, header: String, init_val: String,
-		val_color: Color, parent: Control, min_w: int = 50) -> Label:
-	var tile := VBoxContainer.new()
-	tile.alignment = BoxContainer.ALIGNMENT_CENTER
-	tile.add_theme_constant_override("separation", 1)
-	tile.custom_minimum_size = Vector2(min_w, 0)
-	tile.mouse_filter = Control.MOUSE_FILTER_STOP
-
-	var hdr := Label.new()
-	hdr.text                 = header
-	hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hdr.add_theme_color_override("font_color", C_TEXT_M)
-	hdr.add_theme_font_size_override("font_size", 9)
-	hdr.mouse_filter = Control.MOUSE_FILTER_PASS
-	tile.add_child(hdr)
-
-	var val := Label.new()
-	val.text                 = init_val
-	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	val.add_theme_color_override("font_color", val_color)
-	val.add_theme_font_size_override("font_size", 13)
-	val.mouse_filter = Control.MOUSE_FILTER_PASS
-	tile.add_child(val)
-
-	parent.add_child(tile)
-	_wx_tile_containers.append(tile)
-	_wx_tile_keys.append(key)
-	tile.mouse_entered.connect(_on_stat_tile_entered.bind(key, tile))
-	tile.mouse_exited.connect(_on_stat_tile_exited)
-	return val
-
 
 ## Create the provenance tooltip panel and add it to the parent CanvasLayer
 ## (same pattern as _settings_panel) so it is not clipped by the bar.
@@ -2546,84 +2646,6 @@ func _on_weather_layer_ready() -> void:
 		_track.queue_redraw()
 
 
-func _on_stat_tile_entered(key: String, container: Control) -> void:
-	_show_wx_tooltip(key, container)
-
-
-func _on_stat_tile_exited() -> void:
-	if _wx_tooltip_panel != null:
-		_wx_tooltip_panel.visible = false
-
-
-func _show_wx_tooltip(key: String, anchor: Control) -> void:
-	if _wx_tooltip_panel == null or _main == null:
-		return
-	var month := int(_main.get("month") if _main.get("month") != null else 1)
-	var day   := int(_main.get("day")   if _main.get("day")   != null else 1)
-	var hour  := float(_main.get("day_time") if _main.get("day_time") != null else 0.0)
-	var year_v: Variant = _main.get("year")
-	var sim_year := int(year_v) if year_v != null else 0
-
-	# Detect HA-live mode from SolarUI.
-	_ensure_solar_ref()
-	var ha_active := false
-	if _solar_ui != null:
-		var wlm: Variant = _solar_ui.get("_weather_live_mode")
-		ha_active = bool(wlm) if wlm != null else false
-
-	# Data source.
-	var source := WeatherService.get_sample_source(month, day, hour, ha_active)
-	var src_str: String
-	match source:
-		"forecast":
-			src_str = "Open-Meteo GFS Forecast  (GFS/ERA5 blend)"
-		"ha":
-			src_str = "Home Assistant"
-		_:
-			src_str = "Open-Meteo ERA5 Archive  (~25 km grid)"
-
-	# Simulated date/time — read directly from Main.
-	var mo_name: String = MONTH_NAMES[clampi(month - 1, 0, 11)]
-	var h_int := int(hour)
-	var m_int := int((hour - h_int) * 60.0)
-	var time_str := "%s %d %d · %02d:%02d local" % [mo_name, day, sim_year, h_int, m_int]
-
-	# Nearest NWS station from zone service.
-	var lat := float(_main.get("latitude") if _main.get("latitude") != null else 0.0)
-	var lon := float(_main.get("longitude") if _main.get("longitude") != null else 0.0)
-	var stn_name := NwsZoneService.get_station_name(lat, lon)
-	var stn_icao := NwsZoneService.get_station_icao(lat, lon)
-	var stn_str: String
-	if stn_name.is_empty():
-		stn_str = "Nearest NWS station:  — (loading…)"
-	else:
-		stn_str = "Nearest NWS station:  %s  (%s)" % [stn_name, stn_icao]
-
-	# Variable display name and formatted value.
-	var var_names := {
-		"rad":    "SOLAR RADIATION", "temp": "TEMPERATURE",
-		"hum":    "HUMIDITY",        "wind": "WIND SPEED",
-		"dir":    "WIND DIRECTION",  "rain": "RAINFALL RATE",
-		"rain24": "24H RAINFALL",
-	}
-	_tip_var_lbl.text  = var_names.get(key, key.to_upper())
-	_tip_val_lbl.add_theme_color_override("font_color", C_TEXT)
-	_tip_val_lbl.text  = _wx_value_str_for_key(key, month, day, hour)
-	_tip_time_lbl.text = time_str
-	_tip_src_lbl.text  = src_str
-	_tip_stn_lbl.text  = stn_str
-
-	# Position above the anchor tile, clamped to viewport.
-	_wx_tooltip_panel.visible = true
-	_wx_tooltip_panel.reset_size()
-	var panel_sz := _wx_tooltip_panel.get_combined_minimum_size()
-	var anchor_rect := anchor.get_global_rect()
-	var vp_sz := get_viewport().get_visible_rect().size
-	var px := clampf(anchor_rect.position.x, 4.0, vp_sz.x - panel_sz.x - 4.0)
-	var py := clampf(anchor_rect.position.y - panel_sz.y - 6.0, 4.0, vp_sz.y - panel_sz.y - 4.0)
-	_wx_tooltip_panel.position = Vector2(px, py)
-
-
 ## Show an NWS alert tooltip when the mouse is over an alert band on the track.
 ## Alert bands are drawn at y ≈ 5–21 (groove_y=13, band_top=7, band_h=12).
 func _update_track_alert_tooltip(mouse_pos: Vector2) -> void:
@@ -2683,36 +2705,6 @@ func _update_track_alert_tooltip(mouse_pos: Vector2) -> void:
 	_wx_tooltip_panel.position = Vector2(px, py)
 
 
-func _wx_value_str_for_key(key: String, month: int, day: int, hour: float) -> String:
-	match key:
-		"rad":
-			var v := WeatherService.solar_radiation_wm2(month, day, hour)
-			return "%.0f W/m²" % v if not is_nan(v) else "—"
-		"temp":
-			var v := WeatherService.temperature_c(month, day, hour)
-			if is_nan(v): return "—"
-			return "%.0f °F  (%.1f °C)" % [v * 9.0 / 5.0 + 32.0, v] if _use_imperial else "%.1f °C" % v
-		"hum":
-			var v := WeatherService.humidity_pct(month, day, hour)
-			return "%.0f %%" % v if not is_nan(v) else "—"
-		"wind":
-			var v := WeatherService.wind_speed_ms(month, day, hour)
-			if is_nan(v): return "—"
-			return "%.0f mph  (%.1f m/s)" % [v * 2.23694, v] if _use_imperial else "%.1f m/s" % v
-		"dir":
-			var v := WeatherService.wind_direction_deg(month, day, hour)
-			return _deg_to_compass(v) if not is_nan(v) else "—"
-		"rain":
-			var v := WeatherService.rain_rate_mmh(month, day, hour)
-			if is_nan(v) or v < 0.05: return "dry"
-			return '%.2f"/hr' % (v / 25.4) if _use_imperial else "%.1f mm/h" % v
-		"rain24":
-			var v := WeatherService.rain_24h_mm(month, day, hour)
-			if is_nan(v): return "—"
-			return '%.2f" (24h)' % (v / 25.4) if _use_imperial else "%.1f mm (24h)" % v
-	return "—"
-
-
 ## ---------------------------------------------------------------------------
 ## Phase 4: Temperature record helpers
 ## ---------------------------------------------------------------------------
@@ -2727,42 +2719,6 @@ func _month_day_for_abs(abs_hours: float) -> Vector2i:
 	if dd.is_empty():
 		return Vector2i(-1, -1)
 	return Vector2i(int(dd.get("month", 1)), int(dd.get("day", 1)))
-
-
-## Build a labelled stat tile (header + value), add it to parent, return the
-## value Label so the caller can update it later. min_w sets the tile width;
-## choose it large enough for the widest possible value string at font 16.
-func _mk_stat_tile(header: String, init_val: String, val_color: Color,
-		parent: Control, min_w: int = 50) -> Label:
-	var tile := VBoxContainer.new()
-	tile.alignment = BoxContainer.ALIGNMENT_CENTER
-	tile.add_theme_constant_override("separation", 1)
-	tile.custom_minimum_size = Vector2(min_w, 0)
-
-	var hdr := Label.new()
-	hdr.text                  = header
-	hdr.horizontal_alignment  = HORIZONTAL_ALIGNMENT_CENTER
-	hdr.add_theme_color_override("font_color",  C_TEXT_M)
-	hdr.add_theme_font_size_override("font_size", 9)
-	tile.add_child(hdr)
-
-	var val := Label.new()
-	val.text                 = init_val
-	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	val.add_theme_color_override("font_color", val_color)
-	val.add_theme_font_size_override("font_size", 13)
-	tile.add_child(val)
-
-	parent.add_child(tile)
-	return val
-
-
-func _mk_stat_vsep(parent: Control) -> void:
-	var sep := ColorRect.new()
-	sep.color               = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.30)
-	sep.custom_minimum_size = Vector2(1, 18)
-	sep.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	parent.add_child(_mk_margin(sep, 4, 0))
 
 
 func _mk_play_btn() -> Button:
