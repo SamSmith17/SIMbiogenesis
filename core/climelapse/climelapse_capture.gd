@@ -2,7 +2,7 @@ class_name ClimelapseCapture
 extends Node
 
 ## Viewport frame capture for climelapse MP4 export (Phase 5).
-## Runs after the data bake; locks the camera rig and steps keyframes offline.
+## Drives the simulation forward frame by frame directly and captures the viewport.
 
 signal capture_started()
 signal capture_progress(frac: float)
@@ -28,21 +28,24 @@ func cancel() -> void:
 	_cancel = true
 
 
-func start_capture(loader: Node, series: ClimelapseSeries, output_mp4: String,
+func start_capture(loader: Node, start_abs: float, end_abs: float, time_scale: float, output_mp4: String,
 		camera: ClimelapseCameraRig, fps: int = DEFAULT_FPS) -> void:
-	if _active or loader == null or series == null or output_mp4.is_empty():
+	if _active or loader == null or output_mp4.is_empty():
 		return
 	if not camera.is_valid():
 		capture_complete.emit(false, output_mp4, "No active 3D camera to lock.")
+		return
+	if time_scale <= 0.0:
+		capture_complete.emit(false, output_mp4, "Time scale must be > 0.")
 		return
 	_active = true
 	_cancel = false
 	_frac = 0.0
 	capture_started.emit()
-	_run_capture.call_deferred(loader, series, output_mp4, camera, fps)
+	_run_capture.call_deferred(loader, start_abs, end_abs, time_scale, output_mp4, camera, fps)
 
 
-func _run_capture(loader: Node, series: ClimelapseSeries, output_mp4: String,
+func _run_capture(loader: Node, start_abs: float, end_abs: float, time_scale: float, output_mp4: String,
 		camera: ClimelapseCameraRig, fps: int) -> void:
 	var tree := get_tree()
 	if tree == null:
@@ -61,13 +64,29 @@ func _run_capture(loader: Node, series: ClimelapseSeries, output_mp4: String,
 	if prev_scale != null:
 		main.set("time_scale", 0.0)
 
-	# Hide every HUD layer and Window (progress popups live under TimelineUI, not Main/UILayer).
-	var hidden_ui: Array = _hide_all_ui(tree.root)
+	var hours_per_frame = time_scale / float(fps)
+	var total := maxi(1, int(ceil((end_abs - start_abs) / hours_per_frame)))
+	if total > 30000:
+		_finish(false, output_mp4, "Export would generate %d frames. Choose a faster speed or shorter duration." % total)
+		if prev_scale != null:
+			main.set("time_scale", prev_scale)
+		if cc != null and cc.has_method("release_modal"):
+			cc.call("release_modal", "climelapse_capture")
+		return
 
 	var composer := ClimelapseFrameCompose.new()
 	tree.root.add_child(composer)
 
-	var lock_cam := camera.spawn_lock_camera(main as Node3D)
+	# Use a SubViewport to capture a clean 3D frame without the 2D UI
+	var root_vp := tree.root.get_viewport()
+	var svp := SubViewport.new()
+	svp.size = root_vp.size
+	svp.world_3d = root_vp.world_3d
+	svp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	svp.transparent_bg = false
+	main.add_child(svp)
+
+	var lock_cam: Camera3D = camera.call("spawn_lock_camera", svp)
 	if loader.has_method("begin_climelapse_export_cull"):
 		loader.call("begin_climelapse_export_cull", lock_cam)
 
@@ -76,51 +95,48 @@ func _run_capture(loader: Node, series: ClimelapseSeries, output_mp4: String,
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(frames_dir))
 
 	var manifest: Array = []
-	var kfs: Array = series.keyframes
-	var total := maxi(1, kfs.size())
-	var vp := tree.root.get_viewport()
+	var clock := CelestialClock.new()
 
 	for i in total:
 		if _cancel:
 			break
 		
-		# Show UI to user so they see the progress dialog update
+		# Show progress to user
 		_frac = float(i) / float(total)
-		_restore_hidden_ui(hidden_ui)
 		capture_progress.emit(_frac)
+		
+		var abs_h = start_abs + i * hours_per_frame
+		if main.has_method("set_absolute_hours"):
+			main.call("set_absolute_hours", abs_h)
+			
+		# Step physics so vegetation growth catches up
+		if loader.has_method("_advance_growth"):
+			loader.call("_advance_growth")
+
 		await tree.process_frame
 		await RenderingServer.frame_post_draw
 		
-		# Hide UI for the actual frame capture
-		_hide_known_ui(hidden_ui)
-		
-		var kf: Dictionary = kfs[i] as Dictionary
-		var abs_h := float(kf.get("abs_h", series.start_abs_h))
-		if loader.has_method("apply_climelapse_frame_for_export"):
-			loader.call("apply_climelapse_frame_for_export", abs_h, lock_cam)
-		await tree.process_frame
-		await RenderingServer.frame_post_draw
 		lock_cam.global_transform = camera.global_xform
-		var tex := vp.get_texture()
+		var tex := svp.get_texture()
 		if tex != null:
 			var img := tex.get_image()
 			if img != null and not img.is_empty():
+				var dt: Dictionary = clock.abs_hours_to_date(abs_h)
 				var tc := ClimelapseFrameCompose.format_timecode(
-					int(kf.get("year", 1)),
-					int(kf.get("month", 1)),
-					int(kf.get("day", 1)),
-					float(kf.get("day_time", 12.0)))
+					int(dt.get("year", 1)),
+					int(dt.get("month", 1)),
+					int(dt.get("day", 1)),
+					fmod(abs_h, 24.0))
 				img = await composer.stamp_async(img, tc)
 				var frame_path := frames_dir.path_join("frame_%05d.png" % i)
 				img.save_png(frame_path)
 				manifest.append({
 					"index": i,
 					"abs_h": abs_h,
-					"year": kf.get("year", 0),
-					"month": kf.get("month", 1),
-					"day": kf.get("day", 1),
+					"year": dt.get("year", 0),
+					"month": dt.get("month", 1),
+					"day": dt.get("day", 1),
 					"timecode": tc,
-					"growth_clock_h": kf.get("growth_clock_h", 0.0),
 				})
 
 	if loader.has_method("end_climelapse_export_cull"):
@@ -128,11 +144,13 @@ func _run_capture(loader: Node, series: ClimelapseSeries, output_mp4: String,
 
 	if lock_cam != null and is_instance_valid(lock_cam):
 		lock_cam.queue_free()
+	if svp != null and is_instance_valid(svp):
+		svp.queue_free()
+
 
 	if is_instance_valid(composer):
 		composer.queue_free()
 
-	_restore_hidden_ui(hidden_ui)
 	if prev_scale != null:
 		main.set("time_scale", prev_scale)
 	if cc != null and cc.has_method("release_modal"):
@@ -148,7 +166,7 @@ func _run_capture(loader: Node, series: ClimelapseSeries, output_mp4: String,
 	_frac = 0.95
 	capture_progress.emit(_frac)
 	var enc: Dictionary = ClimelapseVideoEncoder.encode_png_sequence(frames_dir, fps, output_mp4)
-	_write_manifest(out_dir, output_mp4, series, camera, fps, manifest)
+	_write_manifest(out_dir, output_mp4, start_abs, end_abs, camera, fps, manifest)
 
 	if bool(enc.get("ok", false)):
 		_cleanup_frames(frames_dir)
@@ -190,15 +208,13 @@ static func _restore_hidden_ui(hidden: Array) -> void:
 			node.set("visible", true)
 
 
-func _write_manifest(out_dir: String, mp4: String, series: ClimelapseSeries,
+func _write_manifest(out_dir: String, mp4: String, start_abs: float, end_abs: float,
 		camera: ClimelapseCameraRig, fps: int, frames: Array) -> void:
 	var doc := {
-		"version": 1,
+		"version": 2,
 		"fps": fps,
-		"start_abs_h": series.start_abs_h,
-		"end_abs_h": series.end_abs_h,
-		"step_days": series.step_days,
-		"latitude": series.latitude,
+		"start_abs_h": start_abs,
+		"end_abs_h": end_abs,
 		"mp4": mp4.get_file(),
 		"camera_mode": camera.mode,
 		"timecode_bar_px": ClimelapseFrameCompose.BAR_HEIGHT,

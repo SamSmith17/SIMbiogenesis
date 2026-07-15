@@ -3,9 +3,13 @@ extends Node
 ## Runtime proxy for a graph-only load (library-spawned appliance / acload /
 ## processor items that are NOT linked to a real scene PowerDevice).
 ##
-## Joins the "power_consumers" group so its wattage contributes to
-## solar_ui.current_load_kw. Exposes turn_on/turn_off/toggle so
-## SceneNodeAction can target it via `device_path`.
+## Its ON/OFF STATE is authoritative: SolarUI's load total is computed by
+## GraphAcLoad from the model specs (BFS from controllers), which reads this
+## proxy's on/off via GraphSimLoadHost.is_load_on; the resource engine likewise
+## gates AC processors on it. (It still joins "power_consumers" for legacy
+## compatibility, but its avg_power_watts is no longer summed into the total —
+## the wattage comes from the item specs via GraphAcLoad.) Exposes
+## turn_on/turn_off/toggle so SceneNodeAction can target it via `device_path`.
 ##
 ## When state changes, the underlying graph item's specs.current_state is
 ## updated so the graph canvas flow animation reflects it.
@@ -23,6 +27,8 @@ var avg_power_watts: float = 200.0
 var is_on: bool = false
 ## User/requested switch state. Effective draw only occurs when AC is available.
 var _requested_on: bool = false
+var input_valve_open: bool = true
+var output_valve_open: bool = true
 var _ac_power_available: bool = true
 var _solar_ui: Node = null
 var _connect_attempts: int = 0
@@ -65,6 +71,27 @@ func toggle() -> void:
 		turn_on()
 
 
+func close_input_valve() -> void:
+	if not input_valve_open: return
+	input_valve_open = false
+	_apply_state_to_model()
+
+func open_input_valve() -> void:
+	if input_valve_open: return
+	input_valve_open = true
+	_apply_state_to_model()
+
+func close_output_valve() -> void:
+	if not output_valve_open: return
+	output_valve_open = false
+	_apply_state_to_model()
+
+func open_output_valve() -> void:
+	if output_valve_open: return
+	output_valve_open = true
+	_apply_state_to_model()
+
+
 # ---------------------------------------------------------------------------
 # Solar-UI load contribution
 # ---------------------------------------------------------------------------
@@ -83,10 +110,13 @@ func get_state_string() -> String:
 
 ## Mirror model → node without re-emitting state_changed (used by the host
 ## when live specs are refreshed or when the graph is loaded from disk).
-func sync_from_model(target_is_on: bool, rated_w: float, avg_w: float) -> void:
+func sync_from_model(target_is_on: bool, rated_w: float, avg_w: float,
+		in_valve_open: bool = true, out_valve_open: bool = true) -> void:
 	rated_power_watts = rated_w
 	avg_power_watts = avg_w
 	_requested_on = target_is_on
+	input_valve_open = in_valve_open
+	output_valve_open = out_valve_open
 	_recompute_effective_state(false)
 
 
@@ -154,4 +184,6 @@ func _apply_state_to_model() -> void:
 	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
 	specs["current_state"] = "on" if is_on else "off"
 	specs["requested_state"] = "on" if _requested_on else "off"
+	specs["input_valve_open"] = input_valve_open
+	specs["output_valve_open"] = output_valve_open
 	model_ref.call("update_item", item_id, {"specs": specs})

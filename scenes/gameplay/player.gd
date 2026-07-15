@@ -9,15 +9,19 @@ signal mounted_vehicle(vehicle: Node3D)
 signal dismounted_vehicle(vehicle: Node3D)
 
 # Movement settings
-@export var move_speed : float = 5.0
-@export var sprint_speed : float = 10.0
+@export var move_speed : float = 7.0
+@export var sprint_speed : float = 13.0
 @export var jump_velocity : float = 4.5
 @export var gravity_multiplier : float = 1.0
 
-# Step climbing settings - allows walking up stairs/ledges without jumping
-@export var step_height : float = 0.6  # Maximum height of step to climb (meters)
+# Step climbing settings - allows walking up stairs/ledges without jumping.
+# Loosened so the player can scramble over placed props/building clutter instead
+# of snagging on them (concave trimesh colliders are prone to catching a
+# character controller at the edges) — climbing near-anything is a deliberate
+# design choice here, not just a stairs convenience.
+@export var step_height : float = 1.1  # Maximum height of step to climb (meters)
 @export var step_climb_enabled : bool = true  # Enable/disable step climbing
-@export var step_climb_tolerance : float = 0.55  # How steep a surface can be to walk up (lower = steeper allowed)
+@export var step_climb_tolerance : float = 0.3  # How steep a surface can be to walk up (lower = steeper allowed)
 const _STEP_CLIMB_INTERVAL : float = 0.05  # ~20 Hz throttle for the step-climb ray fan
 var _step_climb_accum : float = 0.0
 

@@ -8,6 +8,9 @@ const HOURS_IN_DAY : float = 24.0
 const DAYS_IN_YEAR : int = 365
 const DAYS_IN_LEAP_YEAR : int = 366
 const PLACED_PROPS_UI_SCRIPT := preload("res://scenes/ui/placed_props_ui.gd")
+const PLACED_LIGHT_MODAL_SCRIPT := preload("res://scenes/ui/placed_light_modal.gd")
+const PlacedLightService := preload("res://core/placed_lights/placed_light_service.gd")
+const PlacedLightRuntime := preload("res://core/placed_lights/placed_light_runtime.gd")
 
 # ==================== DATE/TIME SYSTEM ====================
 
@@ -173,6 +176,14 @@ var cirrus_user_scale : float = 1.0 :
 	set( value ) :
 		cirrus_user_scale = clampf( value, 0.0, 2.0 ) if is_finite( value ) else 1.0
 
+var cirrus_wave_frequency_scale : float = 1.0 :
+	set( value ) :
+		cirrus_wave_frequency_scale = clampf( value, 0.0, 5.0 ) if is_finite( value ) else 1.0
+
+var cirrus_wave_intensity_scale : float = 1.0 :
+	set( value ) :
+		cirrus_wave_intensity_scale = clampf( value, 0.0, 2.0 ) if is_finite( value ) else 1.0
+
 ## Weather light factor - set by SolarUI to attenuate sun/moon based on cloud cover
 ## 1.0 = clear sky full brightness, 0.15 = heavy overcast
 ## Setter rejects non-finite values: a NaN/Inf here would propagate into
@@ -290,6 +301,16 @@ var gameplay_mechanics_paused : bool = true   # Off by default; TimeUI toggle ca
 		shadow_quality = clampi( value, 0, 3 )
 		_apply_shadow_quality()
 
+## The opacity of directional shadows cast by the sun and moon.
+@export_range( 0.0, 1.0, 0.05 ) var shadow_opacity : float = 1.0 :
+	set( value ) :
+		shadow_opacity = clampf( value, 0.0, 1.0 )
+		if is_instance_valid( sun ) :
+			sun.set("light_energy", sun_base_enegry) # Ensure properties reset or trigger updates
+			sun.set("shadow_opacity", shadow_opacity)
+		if is_instance_valid( moon ) :
+			moon.set("shadow_opacity", shadow_opacity)
+
 ## Global graphics quality preset (distinct from per-light shadow_quality above).
 ## Bundles the heaviest GPU knobs the project formerly hardcoded in project.godot:
 ## directional shadow atlas size, soft-shadow filter quality, and TAA.
@@ -400,6 +421,14 @@ var cloud_shadows_enabled : bool = true :
 	set( value ) :
 		cloud_shadows_enabled = value
 		_update_sun()
+		
+var building_shadows_enabled : bool = false :
+	set( value ) :
+		building_shadows_enabled = value
+		if is_inside_tree() :
+			var loader = get_node_or_null( "TerrainLoader" )
+			if loader != null and loader.has_method( "set_building_shadows" ) :
+				loader.set_building_shadows( value )
 
 ## How deeply a passing cloud can dim the direct sun (0 = off, 1 = strong).
 var cloud_shadow_strength : float = 0.6 :
@@ -413,30 +442,18 @@ var _cloud_shadow_noise : FastNoiseLite = null
 var _cloud_shadow_speed : float = 2.0
 var _cloud_shadow_dir : float = 0.2
 
-## Dedicated clock for the sky shader's cloud/cirrus noise scroll (sent as
-## "cloud_motion_time"), advanced every frame in _process() by REAL delta ×
-## _sky_motion_rate(time_scale). Kept separate from the sim's absolute date
-## clock (day_of_year/day_time) so cloud drift doesn't scale 1:1 with
-## simulation speed — at high time_scale (fast-forward), scrolling the noise
-## exactly in lockstep with the compressed calendar made the sky whip past
-## unrealistically fast (even the default 60x speed looked wrong).
-var _sky_motion_hours : float = 0.0
-## time_scale (hours of sim time per real second) at the "1x" speed preset —
-## below/at this rate, cloud motion is left exactly as before (unchanged
-## real-time behavior); only faster-than-1x speeds get damped.
-const _SKY_MOTION_REF_TIME_SCALE : float = 1.0 / 3600.0
+## Explicit cloud texture scroll offsets accumulated per-frame from real velocity.
+## Fixes the "boiling" glitch where changing direction/speed multiplied against
+## a large elapsed time value.
+var _cloud_uv_offset : Vector2 = Vector2.ZERO
+var _cirrus_uv_offset : Vector2 = Vector2.ZERO
 
-## Cirrus streak wind bearing crossfade (see _advance_cirrus_direction): a hard
-## rotation of the whole noise field reads as the entire sky spinning, which
-## real high cirrus doesn't do (new streaks form in the new wind direction
-## while old ones dissipate). Large bearing jumps fade between the old and new
-## orientation over real time instead of snapping instantly.
-var _cirrus_dir_from : float = 0.2
-var _cirrus_dir_to : float = 0.2
-var _cirrus_dir_blend : float = 1.0  # 0 = fully "_from", 1 = fully "_to" (settled)
-var _cirrus_dir_last_ms : int = -1
-const _CIRRUS_DIR_JUMP_THRESHOLD : float = 0.06  # ~22 deg bearing change starts a crossfade
-const _CIRRUS_DIR_TRANSITION_S : float = 1.6  # real seconds for a full crossfade
+## Smoothly tracks the target Open-Meteo wind vectors so clouds have inertia
+## and drift along curves during weather transitions instead of snapping.
+var _current_cloud_vel : Vector2 = Vector2.ZERO
+var _current_cirrus_vel : Vector2 = Vector2.ZERO
+var _target_cloud_vel : Vector2 = Vector2.ZERO
+var _target_cirrus_vel : Vector2 = Vector2.ZERO
 
 ## Antisolar rainbow visibility (0–1), driven by SolarUI when sun + rain align.
 var rainbow_strength : float = 0.0
@@ -509,6 +526,8 @@ func solar_time_to_clock_time( solar_time: float ) -> float :
 @onready var crisis_event_manager : Node = get_node_or_null( "CrisisEventManager" )
 @onready var crisis_event_ui : CanvasLayer = get_node_or_null( "UILayer/CrisisEventUI" ) as CanvasLayer
 @onready var save_load_ui : CanvasLayer = get_node_or_null( "UILayer/SaveLoadUI" ) as CanvasLayer
+## ChallengeRunner — systems-graph puzzle missions (lazy Main child).
+var challenge_runner : Node = null
 var toast_ui : ToastUI = null
 var help_overlay_ui : HelpOverlayUI = null
 @onready var location_picker : Control = get_node_or_null( "UILayer/LocationPickerUI" ) as Control
@@ -525,6 +544,7 @@ var _session_playtime_seconds : float = 0.0
 # Player spawn position
 var player_spawn_position : Vector3 = Vector3(0, 2, 0)
 var _placed_props_ui : Control = null
+var _placed_light_modal : Control = null
 var player_spawn_rotation : Vector3 = Vector3.ZERO
 
 
@@ -616,6 +636,8 @@ func _ready() -> void :
 	call_deferred( "_setup_auto_collision" )
 	# Setup crisis event system (deferred to ensure structure is loaded)
 	call_deferred( "_setup_crisis_events" )
+	# Challenge runner (systems-graph missions; UI cards deferred to Composer)
+	call_deferred( "_setup_challenge_runner" )
 	# Spawn fire extinguisher pickups at strategic locations
 	call_deferred( "_spawn_fire_extinguisher_pickups" )
 	_apply_advanced_rendering_toggles()
@@ -897,6 +919,25 @@ func _unhandled_input( e : InputEvent ) -> void :
 			_placed_props_ui.call( "toggle_mode" )
 		get_viewport().set_input_as_handled()
 		return
+	if InputMap.has_action( "place_light" ) and Input.is_action_just_pressed( "place_light" ) :
+		_ensure_placed_light_modal()
+		if PlacedLightService.is_placement_active():
+			PlacedLightService.cancel_placement()
+		else:
+			# For now, default to Omni. Modal can change it later.
+			PlacedLightService.begin_placement(self, "omni")
+		get_viewport().set_input_as_handled()
+		return
+	if PlacedLightService.is_placement_active():
+		if e is InputEventMouseButton and e.pressed:
+			if e.button_index == MOUSE_BUTTON_LEFT:
+				PlacedLightService.confirm_placement()
+				get_viewport().set_input_as_handled()
+				return
+			elif e.button_index == MOUSE_BUTTON_RIGHT:
+				PlacedLightService.cancel_placement()
+				get_viewport().set_input_as_handled()
+				return
 	var key_event : InputEventKey = e as InputEventKey
 	if key_event.keycode == KEY_P or key_event.physical_keycode == KEY_P :
 		if is_instance_valid( pov_warp_overlay ) and pov_warp_overlay.has_method( "toggle_warp_mode" ) :
@@ -1194,6 +1235,12 @@ func set_shadow_quality_level( level: int ) -> void :
 func get_shadow_quality_level() -> int :
 	return shadow_quality
 
+func set_shadow_opacity( level: float ) -> void :
+	shadow_opacity = level
+
+func get_shadow_opacity() -> float :
+	return shadow_opacity
+
 func get_graphics_quality_name() -> String :
 	match graphics_quality :
 		0 :
@@ -1326,11 +1373,29 @@ func set_cirrus_user_scale( value: float ) -> void :
 func get_cirrus_user_scale() -> float :
 	return cirrus_user_scale
 
+func set_cirrus_wave_frequency_scale( value: float ) -> void :
+	cirrus_wave_frequency_scale = value
+
+func get_cirrus_wave_frequency_scale() -> float :
+	return cirrus_wave_frequency_scale
+
+func set_cirrus_wave_intensity_scale( value: float ) -> void :
+	cirrus_wave_intensity_scale = value
+
+func get_cirrus_wave_intensity_scale() -> float :
+	return cirrus_wave_intensity_scale
+
 func set_cloud_shadows_enabled( on: bool ) -> void :
 	cloud_shadows_enabled = on
 
 func get_cloud_shadows_enabled() -> bool :
 	return cloud_shadows_enabled
+
+func set_building_shadows_enabled( on: bool ) -> void :
+	building_shadows_enabled = on
+
+func get_building_shadows_enabled() -> bool :
+	return building_shadows_enabled
 
 func set_god_rays_enabled( on: bool ) -> void :
 	god_rays_enabled = on
@@ -1344,20 +1409,48 @@ func set_plant_growth_enabled( on: bool ) -> void :
 func get_plant_growth_enabled() -> bool :
 	return plant_growth_enabled
 
+func set_show_sun_path( value: bool ) -> void :
+	show_sun_path = value
+
+func get_show_sun_path() -> bool :
+	return show_sun_path
+
+func set_show_moon_path( value: bool ) -> void :
+	show_moon_path = value
+
+func get_show_moon_path() -> bool :
+	return show_moon_path
+
+func set_analemma_type( value: int ) -> void :
+	analemma_type = value
+
+func get_analemma_type() -> int :
+	return analemma_type
+
 func set_analemma_diurnal_offset_min_per_day( minutes: float ) -> void :
 	analemma_diurnal_offset_min_per_day = clampf( minutes, 0.0, 180.0 )
 	if analemma_mode and not _analemma_using_trail :
 		_build_analemma_preview_mesh()
+		_build_moon_preview_mesh()
 
 func get_analemma_diurnal_offset_min_per_day() -> float :
 	return analemma_diurnal_offset_min_per_day
 
+func set_analemma_noon_offset_minutes( minutes: float ) -> void :
+	analemma_noon_offset_minutes = clampf( minutes, -720.0, 720.0 )
+	if analemma_mode and not _analemma_using_trail :
+		_build_analemma_preview_mesh()
+
+func get_analemma_noon_offset_minutes() -> float :
+	return analemma_noon_offset_minutes
+
 ## Mean solar hour (0..24) sampled on analemma day `day_index` (0 = first step).
 func analemma_mean_solar_hours_for_day( day_index: int ) -> float :
+	var base_h : float = 12.0 + ( analemma_noon_offset_minutes / 60.0 )
 	if is_zero_approx( analemma_diurnal_offset_min_per_day ) :
-		return 12.0
+		return base_h
 	var offset_h : float = float( day_index ) * analemma_diurnal_offset_min_per_day / 60.0
-	return fmod( 12.0 + offset_h, 24.0 )
+	return fmod( base_h + offset_h, 24.0 )
 
 # ---- Camera field of view (player + FPV drone share one Camera3D) ----
 
@@ -1431,15 +1524,19 @@ func _apply_advanced_rendering_toggles() -> void :
 	if god_rays_enabled :
 		# Thin fog + strong in-scattering length so the sun scatters into visible
 		# shafts without fogging the whole scene into a grey wash.
-		env.volumetric_fog_density = 0.018 if not volumetric_fog_user_enabled else maxf( env.volumetric_fog_density, 0.018 )
+		var god_ray_density = 0.002
+		# Fade ambient injection at night to prevent the fog frustum from appearing as a glowing square box
+		var ambient_inj = lerpf(0.8, 0.0, _vegetation_night_factor)
+		env.volumetric_fog_density = god_ray_density if not volumetric_fog_user_enabled else maxf( env.volumetric_fog_density, god_ray_density )
 		env.volumetric_fog_length = 96.0
 		env.volumetric_fog_detail_spread = 2.0
 		env.volumetric_fog_gi_inject = 0.0
-		env.volumetric_fog_ambient_inject = 0.0
+		env.volumetric_fog_ambient_inject = ambient_inj
 		env.volumetric_fog_albedo = Color( 1.0, 0.95, 0.85 )
 		if is_instance_valid( sun ) :
-			# The directional light's contribution to the fog = the shafts themselves.
-			sun.light_volumetric_fog_energy = 2.2
+			# Tie god ray visibility to cloud cover so beams only show when clouds occlude
+			var ray_energy = 1.5 + (clouds_weight * 2.5)
+			sun.light_volumetric_fog_energy = ray_energy
 	elif is_instance_valid( sun ) :
 		sun.light_volumetric_fog_energy = 1.0
 
@@ -1791,6 +1888,24 @@ func set_world_time_from_unix( t_unix: int ) -> void :
 # (UI date/time, location change, save-load) still force an immediate _update().
 const _ENV_UPDATE_INTERVAL : float = 0.05  # ~20 Hz
 var _env_update_accum : float = 0.0
+## Cached ref to the 2D graph overlay. While the graph is open the root
+## viewport has disable_3d=true, so env updates are skipped — unless the live
+## SoI SubViewport backdrop is active (then sun/sky still need to tick).
+var _graph_view_node : Node = null
+var _graph_view_was_visible : bool = false
+
+func _graph_view_visible() -> bool :
+	if _graph_view_node == null or not is_instance_valid( _graph_view_node ) :
+		_graph_view_node = get_node_or_null( "UILayer/SystemGraphView" )
+	return _graph_view_node != null and bool( _graph_view_node.get( "visible" ) )
+
+
+func _graph_soi_preview_active() -> bool :
+	if not _graph_view_visible() :
+		return false
+	if _graph_view_node != null and _graph_view_node.has_method( "is_soi_preview_active" ) :
+		return bool( _graph_view_node.call( "is_soi_preview_active" ) )
+	return false
 var _vegetation_night_factor : float = 0.0
 var _vegetation_sun_direction : Vector3 = Vector3.UP
 ## Seasonal phenology signals + weather-driven snow cover, cached in
@@ -1834,12 +1949,19 @@ var plant_growth_enabled : bool = true
 ## Minutes added to mean solar noon each ∞ / analemma day (0 = fixed noon figure-eight).
 var analemma_diurnal_offset_min_per_day : float = 0.0
 
+## Fixed offset from solar noon for the analemma start time (in minutes).
+var analemma_noon_offset_minutes : float = 0.0
+
 ## Dynamic white sun-trail built during ∞ playback (corkscrew when offset ≠ 0).
 var _analemma_trail : PackedVector3Array = PackedVector3Array()
 var _analemma_session_day_index : int = 0
 var _analemma_using_trail : bool = false
 var _analemma_path_mat : StandardMaterial3D = null
 var _analemma_path_offset_cached : float = INF
+
+var analemma_path_thickness : float = 1.0
+var analemma_solar_color : Color = Color( 1.0, 0.9, 0.3 )
+var analemma_lunar_color : Color = Color( 0.7, 0.85, 1.0 )
 const ANALEMMA_TRAIL_MAX_POINTS : int = 5000
 
 ## Earliest year the ∞ analemma view cycles back to before wrapping — the start
@@ -1855,6 +1977,36 @@ const ANALEMMA_PATH_RADIUS : float = 2000.0
 ## Educational overlay: the white curve the sun traces at mean solar noon over a
 ## full year. Only shown in analemma mode. Rebuilt when the observer moves
 ## (the figure-eight's tilt and span are latitude-dependent).
+var show_sun_path : bool = true :
+	set( value ) :
+		show_sun_path = value
+		_update_analemma_paths_visibility()
+		if value and not _analemma_using_trail :
+			_build_analemma_preview_mesh()
+
+var show_moon_path : bool = false :
+	set( value ) :
+		show_moon_path = value
+		_update_analemma_paths_visibility()
+		if value and not _analemma_using_trail :
+			_build_moon_preview_mesh()
+
+var analemma_type : int = 0 : # 0 = Solar, 1 = Lunar
+	set( value ) :
+		analemma_type = value
+		if analemma_mode :
+			_on_analemma_mode_changed( true )
+		else :
+			_on_analemma_mode_changed( false )
+
+var _moon_path : MeshInstance3D = null
+var _moon_path_mat : StandardMaterial3D = null
+var _moon_trail : PackedVector3Array = PackedVector3Array()
+var _lunar_analemma_start_abs_hours : float = 0.0
+var _moon_ghosts_container : Node3D = null
+var _moon_ghosts_trail : Array = []
+var _ghost_shader : Shader = null
+
 var _analemma_path : MeshInstance3D = null
 var _analemma_path_lat : float = INF
 var _analemma_path_lon : float = INF
@@ -1877,17 +2029,49 @@ func _process( delta: float ) -> void :
 		# throttled below.
 		clock.day_time += delta * time_scale
 		_session_playtime_seconds += delta
-		_sky_motion_hours += delta * _sky_motion_rate( time_scale )
-		# Planets are tiny points, so the 20 Hz sky throttle below makes them
-		# visibly jump at high speed while the sun/moon glide. Push them every
-		# frame (cheap — 5 planets × a few uniforms); PlanetSystem eases each
-		# rendered direction toward its freshly computed position per frame, so
-		# the motion stays smooth even at Max speed.
-		_update_planets()
-		_env_update_accum += delta
-		if _env_update_accum >= _ENV_UPDATE_INTERVAL :
+		
+		# Smoothly interpolate current wind velocity toward target
+		var vel_blend := 1.0 - exp( -delta * 0.2 )
+		if time_scale == 0.0:
+			vel_blend = 0.0
+		_current_cloud_vel = _current_cloud_vel.lerp( _target_cloud_vel, vel_blend )
+		_current_cirrus_vel = _current_cirrus_vel.lerp( _target_cirrus_vel, vel_blend )
+
+		# Accumulate UV offsets seamlessly for the sky shader (cheap — kept
+		# running even while the world is hidden so cloud position doesn't
+		# jump when the graph overlay closes).
+		var cloud_ts := time_scale
+		if time_scale > 30.0 :
+			cloud_ts = 30.0 + sqrt( time_scale - 30.0 ) * 3.0
+		_cloud_uv_offset += _current_cloud_vel * delta * cloud_ts
+		_cirrus_uv_offset += _current_cirrus_vel * delta * cloud_ts
+
+		# The graph overlay disables 3D rendering entirely while open — skip
+		# the light-placement raycast, the per-frame planet push, and the
+		# 20 Hz sun/moon/sky/environment recompute, none of which affects a
+		# single visible pixel while hidden. Force one full _update() on the
+		# graph-closes transition so lighting/sky/planets are correct
+		# immediately instead of stale by up to however long the graph was open.
+		var graph_visible := _graph_view_visible()
+		if _graph_view_was_visible and not graph_visible :
 			_env_update_accum = 0.0
 			_update()
+		_graph_view_was_visible = graph_visible
+
+		# Run env updates when the graph is closed, OR when its live SoI
+		# SubViewport backdrop needs sun/sky to keep ticking.
+		if not graph_visible or _graph_soi_preview_active() :
+			PlacedLightService.process_placement()
+			# Planets are tiny points, so the 20 Hz sky throttle below makes them
+			# visibly jump at high speed while the sun/moon glide. Push them every
+			# frame (cheap — 5 planets × a few uniforms); PlanetSystem eases each
+			# rendered direction toward its freshly computed position per frame, so
+			# the motion stays smooth even at Max speed.
+			_update_planets()
+			_env_update_accum += delta
+			if _env_update_accum >= _ENV_UPDATE_INTERVAL :
+				_env_update_accum = 0.0
+				_update()
 
 func _update() -> void :
 	_solar_eclipse = clock.sample_solar_eclipse()
@@ -1989,11 +2173,9 @@ func _compute_cloud_shadow_factor() -> float :
 		_cloud_shadow_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 		_cloud_shadow_noise.fractal_octaves = 2
 		_cloud_shadow_noise.frequency = 0.5
-	# Drift along the same bearing/speed as the sky-shader clouds (updated each
-	# _update_clouds() from live Open-Meteo wind).
-	var t : float = float( Time.get_ticks_msec() ) / 1000.0 * maxf( _cloud_shadow_speed, 0.01 ) * 0.06
-	var ang : float = _cloud_shadow_dir * TAU
-	var n : float = _cloud_shadow_noise.get_noise_2d( cos( ang ) * t, sin( ang ) * t ) * 0.5 + 0.5
+	# Drift along the exact accumulated UV offset of the clouds.
+	# Scale by a large factor so the noise frequency looks right for shadows.
+	var n : float = _cloud_shadow_noise.get_noise_2d( _cloud_uv_offset.x * 60.0, _cloud_uv_offset.y * 60.0 ) * 0.5 + 0.5
 	# Only denser cloud patches cast a shadow; more coverage → shadowed more often.
 	var shadow : float = smoothstep( 1.0 - coverage, 1.0 - coverage * 0.35, n )
 	var factor : float = 1.0 - shadow * cloud_shadow_strength * coverage
@@ -2104,56 +2286,6 @@ func get_lunar_phase() -> float :
 func get_lunar_phase_name() -> String :
 	return clock.get_lunar_phase_name()
 
-## Sub-linear (sqrt) damping of the sky-shader "cloud clock" rate vs. time_scale.
-## At or below the "1x" reference speed, behaves exactly like before (rate ==
-## time_scale). Above it, the effective rate grows with sqrt(ratio) instead of
-## the ratio itself, so e.g. the default 60x speed drives clouds ~7.7x faster
-## than real-time (still a visible time-lapse) instead of a literal 60x — and
-## even "Max" (~7200x) stays bounded instead of strobing.
-func _sky_motion_rate( ts : float ) -> float :
-	var ref := _SKY_MOTION_REF_TIME_SCALE
-	var mag := absf( ts )
-	if ref <= 0.0 or mag <= ref :
-		return ts
-	return sqrt( ref * mag ) * signf( ts )
-
-## Shortest signed distance (in turns, i.e. fraction-of-360°) from `b` to `a`,
-## wrapped to [-0.5, 0.5]. Used to detect/smooth cirrus wind-bearing jumps.
-static func _wrapped_turn_delta( a : float, b : float ) -> float :
-	var dist := a - b
-	dist -= round( dist )
-	return dist
-
-## Advances the cirrus streak bearing crossfade toward `target_dir` (a
-## WindMath.bearing_fraction value). Small drifts creep the settled direction
-## smoothly; a jump past _CIRRUS_DIR_JUMP_THRESHOLD starts a real-time
-## crossfade from the old bearing to the new one (see sky.gdshader cirrus_*).
-func _advance_cirrus_direction( target_dir : float ) -> void :
-	var now_ms := Time.get_ticks_msec()
-	var real_dt := 0.0
-	if _cirrus_dir_last_ms >= 0 :
-		real_dt = clampf( float( now_ms - _cirrus_dir_last_ms ) / 1000.0, 0.0, 0.5 )
-	_cirrus_dir_last_ms = now_ms
-
-	if _cirrus_dir_blend >= 1.0 :
-		var jump := _wrapped_turn_delta( target_dir, _cirrus_dir_to )
-		if absf( jump ) > _CIRRUS_DIR_JUMP_THRESHOLD :
-			_cirrus_dir_from = _cirrus_dir_to
-			_cirrus_dir_to = target_dir
-			_cirrus_dir_blend = 0.0
-		else :
-			# Below the jump threshold: creep the settled bearing smoothly rather
-			# than snapping every update (keeps slow diurnal wind drift smooth).
-			_cirrus_dir_to = wrapf( _cirrus_dir_to + jump, -0.5, 0.5 )
-			_cirrus_dir_from = _cirrus_dir_to
-	else :
-		# Mid-crossfade: keep tracking the latest target so a fast-changing wind
-		# doesn't leave the streaks chasing a stale bearing once it completes.
-		_cirrus_dir_to = target_dir
-		_cirrus_dir_blend = minf( 1.0, _cirrus_dir_blend + real_dt / _CIRRUS_DIR_TRANSITION_S )
-		if _cirrus_dir_blend >= 1.0 :
-			_cirrus_dir_from = _cirrus_dir_to
-
 func _update_clouds() -> void :
 	if not is_instance_valid( environment ) :
 		return
@@ -2162,7 +2294,6 @@ func _update_clouds() -> void :
 	mat.set_shader_parameter( "clouds_weight", clouds_weight )
 	mat.set_shader_parameter( "cirrus_amount", cirrus_amount )
 	mat.set_shader_parameter( "rainbow_strength", rainbow_strength )
-	mat.set_shader_parameter( "cloud_motion_time", _sky_motion_hours * 100.0 )
 	var m := month
 	var d := day
 	var h := day_time
@@ -2172,17 +2303,28 @@ func _update_clouds() -> void :
 	var high_spd := WeatherService.wind_speed_ms_high( m, d, h )
 	var low_bear := WindMath.bearing_fraction( low_dir )
 	var high_bear := WindMath.bearing_fraction( high_dir )
-	mat.set_shader_parameter( "clouds_direction", low_bear )
-	_advance_cirrus_direction( high_bear )
-	mat.set_shader_parameter( "cirrus_direction", _cirrus_dir_to )
-	mat.set_shader_parameter( "cirrus_direction_prev", _cirrus_dir_from )
-	mat.set_shader_parameter( "cirrus_dir_blend", _cirrus_dir_blend )
-	var spd_scale := clampf( low_spd / 6.0, 0.35, 2.2 ) if is_finite( low_spd ) and not is_nan( low_spd ) else 1.0
-	var cir_scale := clampf( high_spd / 8.0, 0.3, 2.0 ) if is_finite( high_spd ) and not is_nan( high_spd ) else 1.0
-	mat.set_shader_parameter( "clouds_speed", CLOUDS_SPEED_BASE * spd_scale )
-	mat.set_shader_parameter( "cirrus_speed", CIRRUS_SPEED_BASE * cir_scale )
-	_cloud_shadow_speed = CLOUDS_SPEED_BASE * spd_scale
-	_cloud_shadow_dir = low_bear
+	
+	var spd_scale := clampf( low_spd / 6.0, 0.6, 2.5 ) if is_finite( low_spd ) and not is_nan( low_spd ) else 1.0
+	var cir_scale := clampf( high_spd / 8.0, 0.5, 2.0 ) if is_finite( high_spd ) and not is_nan( high_spd ) else 1.0
+	
+	var c_ang := low_bear * TAU
+	var c_spd := CLOUDS_SPEED_BASE * spd_scale * 1.0
+	_target_cloud_vel = Vector2( sin( c_ang ), cos( c_ang ) ) * c_spd
+	
+	var cir_ang := high_bear * TAU
+	var cir_spd := CIRRUS_SPEED_BASE * cir_scale * 0.3
+	_target_cirrus_vel = Vector2( sin( cir_ang ), cos( cir_ang ) ) * cir_spd
+	
+	mat.set_shader_parameter( "cloud_uv_offset", _cloud_uv_offset )
+	mat.set_shader_parameter( "cirrus_uv_offset", _cirrus_uv_offset )
+	mat.set_shader_parameter( "cirrus_direction", fmod( atan2( _current_cirrus_vel.x, _current_cirrus_vel.y ) / TAU, 1.0 ) )
+	
+	# Mackerel sky dynamically tied to cloud speed
+	var wave_freq = (10.0 + _current_cirrus_vel.length() * 5.0) * cirrus_wave_frequency_scale
+	var wave_int = clampf(_current_cirrus_vel.length() * 0.25, 0.1, 0.7) * cirrus_wave_intensity_scale
+	mat.set_shader_parameter( "cirrus_wave_frequency", wave_freq )
+	mat.set_shader_parameter( "cirrus_wave_intensity", wave_int )
+
 
 func _update_celestial_sizes() -> void :
 	if is_instance_valid( environment ) :
@@ -2211,11 +2353,19 @@ func _update_environment() -> void :
 	# Calculate night amount (0 = full day, 1 = full night)
 	var night_amount : float = clamp( -sun_height + 0.1, 0.0, 1.0 )
 	night_amount = smoothstep( 0.0, 0.5, night_amount )
+	
+	# Trees should fade to dark exactly at sunset so they don't glow after the sun drops.
+	# Transition from day (0) at sun_height 0.08 to night (1) at sun_height 0.0
+	var veg_night : float = clamp( (0.08 - maxf(sun_height, 0.0)) / 0.08, 0.0, 1.0 )
+	veg_night = smoothstep( 0.0, 1.0, veg_night )
+
 	# Totality / deep partial eclipse: daylight collapses even with the sun above the horizon.
 	if sun_height > 0.0 and eclipse_obs > 0.05 :
 		var eclipse_night := eclipse_obs * ( 0.92 if eclipse_total else 0.55 )
 		night_amount = maxf( night_amount, eclipse_night )
-	_vegetation_night_factor = night_amount
+		veg_night = maxf( veg_night, eclipse_night )
+		
+	_vegetation_night_factor = veg_night
 	if sun_direction.length_squared() > 1e-6 :
 		_vegetation_sun_direction = sun_direction.normalized()
 	_update_seasonal()
@@ -2468,7 +2618,52 @@ func _step_analemma() -> void :
 				or not is_equal_approx( _analemma_path_lon, clock.longitude ) \
 				or not is_equal_approx( _analemma_path_offset_cached, analemma_diurnal_offset_min_per_day ) :
 			_build_analemma_preview_mesh()
+			_build_moon_preview_mesh()
 	_position_analemma_path()
+
+
+## Apply DST correction to standard local time for analemma.
+func _apply_dst_correction_to_clock( c: CelestialClock, base_abs_h: float ) -> void :
+	c.set_absolute_hours( base_abs_h )
+	var is_dst := false
+	if c.auto_dst :
+		var st_mod : float = fmod( c.day_time + 24.0, 24.0 )
+		var d1 := c._calculate_dst_for_date( c.year, c.month, c.day, st_mod )
+		var d2 := c._calculate_dst_for_date( c.year, c.month, c.day, fmod( st_mod + 1.0, 24.0 ) )
+		is_dst = d1 and d2
+	elif c.manual_dst :
+		is_dst = true
+	
+	if is_dst :
+		c.set_absolute_hours( base_abs_h + 1.0 )
+
+
+## Find moon transit hour for current day.
+func _find_moon_transit_hour_for_current_day() -> float :
+	var best_hour : float = 12.0
+	var max_elevation : float = -999.0
+	var tc := _analemma_throwaway_clock()
+	tc.year = clock.year
+	tc.month = clock.month
+	tc.day = clock.day
+	for h in range( 24 ) :
+		tc.day_time = float( h )
+		var pos : Dictionary = LunarPosition.get_position( tc.latitude, tc.longitude, tc.get_julian_day_utc() )
+		var elev : float = float( pos.elevation_deg )
+		if elev > max_elevation :
+			max_elevation = elev
+			best_hour = float( h )
+	var start_h : float = maxf( 0.0, best_hour - 1.0 )
+	var end_h : float = minf( 24.0, best_hour + 1.0 )
+	for i in range( 11 ) :
+		var h : float = start_h + ( end_h - start_h ) * float( i ) / 10.0
+		tc.day_time = h
+		var pos : Dictionary = LunarPosition.get_position( tc.latitude, tc.longitude, tc.get_julian_day_utc() )
+		var elev : float = float( pos.elevation_deg )
+		if elev > max_elevation :
+			max_elevation = elev
+			best_hour = h
+	return best_hour
 
 
 ## Advance one calendar day. Returns false when climelapse playback reached its
@@ -2481,11 +2676,25 @@ func _advance_analemma_one_day() -> bool :
 	if clim_play and cur >= clim_rng.y - 0.01 :
 		_stop_climelapse_analemma_at( clim_rng.y, clim_rng.x )
 		return false
-	var next_midnight : float = ( floor( cur / 24.0 ) + 1.0 ) * 24.0
-	if clim_play and next_midnight > clim_rng.y + 0.01 :
-		_stop_climelapse_analemma_at( clim_rng.y, clim_rng.x )
-		return false
-	clock.set_absolute_hours( next_midnight )
+		
+	var next_time : float
+	if analemma_type == 1 : # Lunar
+		var mean_lunar_day_h : float = 24.0 * clock.moon_orbital_period / ( clock.moon_orbital_period - 1.0 )
+		var drift_h : float = analemma_diurnal_offset_min_per_day / 60.0
+		_analemma_session_day_index += 1
+		next_time = _lunar_analemma_start_abs_hours + _analemma_session_day_index * ( mean_lunar_day_h + drift_h )
+	else : # Solar
+		var next_midnight : float = ( floor( cur / 24.0 ) + 1.0 ) * 24.0
+		if clim_play and next_midnight > clim_rng.y + 0.01 :
+			_stop_climelapse_analemma_at( clim_rng.y, clim_rng.x )
+			return false
+		next_time = next_midnight
+
+	if analemma_type == 1 : # Lunar
+		_apply_dst_correction_to_clock( clock, next_time )
+	else :
+		clock.set_absolute_hours( next_time )
+	
 	if clim_play :
 		# Baked climelapse scrub: stay inside the rendered span — never wrap to 1940.
 		if clock.get_absolute_hours() > clim_rng.y + 0.01 :
@@ -2497,22 +2706,35 @@ func _advance_analemma_one_day() -> bool :
 		# year) must not snap to 1940 on the first ∞ step.
 		var bounds : Vector2i = _analemma_year_bounds()
 		if start_year <= bounds.y and clock.year > bounds.y :
+			var abs_before : float = clock.get_absolute_hours()
 			clock.year = bounds.x
 			clock.month = 1
 			clock.day = 1
+			var abs_after : float = clock.get_absolute_hours()
+			if analemma_type == 1 :
+				_lunar_analemma_start_abs_hours += ( abs_after - abs_before )
+				
 	# When the calendar year changed, force WeatherService to refetch that year's
 	# archive right away so snow/weather match the new year without poll lag.
 	if clock.year != start_year :
 		_notify_weather_year_changed()
+		
 	# Fixed mean solar noon (+ optional diurnal drift) traces the analemma; drift ≠ 0
 	# adds a time-of-day wander that turns the figure-eight into a corkscrew.
 	if not _analemma_using_trail :
 		_analemma_using_trail = true
 		_analemma_trail.clear()
+		_moon_trail.clear()
+		_clear_ghost_moons()
+		_moon_ghosts_trail.clear()
 		_ensure_analemma_path()
-	var sample_mean : float = analemma_mean_solar_hours_for_day( _analemma_session_day_index )
-	clock.day_time = clock.mean_solar_time_to_clock_time( sample_mean )
-	_analemma_session_day_index += 1
+		_ensure_moon_path()
+		
+	if analemma_type == 0 : # Solar
+		var sample_mean : float = analemma_mean_solar_hours_for_day( _analemma_session_day_index )
+		clock.day_time = clock.mean_solar_time_to_clock_time( sample_mean )
+		_analemma_session_day_index += 1
+		
 	_append_analemma_trail_point()
 	_force_planet_update()
 	_update()
@@ -2532,8 +2754,9 @@ func _climelapse_playback_range() -> Vector2 :
 func _stop_climelapse_analemma_at( end_abs: float, _start_abs: float ) -> void :
 	clock.set_absolute_hours( end_abs )
 	var idx : int = maxi( 0, _analemma_session_day_index - 1 )
-	clock.day_time = clock.mean_solar_time_to_clock_time(
-		analemma_mean_solar_hours_for_day( idx ) )
+	if analemma_type == 0 :
+		clock.day_time = clock.mean_solar_time_to_clock_time(
+			analemma_mean_solar_hours_for_day( idx ) )
 	var loader := get_node_or_null( "TerrainLoader" )
 	if loader != null and loader.has_method( "set_climelapse_playback" ) :
 		loader.call( "set_climelapse_playback", false )
@@ -2543,7 +2766,7 @@ func _stop_climelapse_analemma_at( end_abs: float, _start_abs: float ) -> void :
 
 # ==================== ANALEMMA GUIDE PATH ====================
 
-## Show/hide the white analemma guide when ∞ mode toggles.
+## Show/hide the analemma guides when ∞ mode toggles.
 func _on_analemma_mode_changed( active: bool ) -> void :
 	if Engine.is_editor_hint() or not is_inside_tree() :
 		return
@@ -2551,14 +2774,24 @@ func _on_analemma_mode_changed( active: bool ) -> void :
 		_analemma_session_day_index = 0
 		_analemma_using_trail = false
 		_analemma_trail.clear()
+		_moon_trail.clear()
+		_clear_ghost_moons()
+		_moon_ghosts_trail.clear()
+		if analemma_type == 1 :
+			var transit_h : float = _find_moon_transit_hour_for_current_day()
+			clock.day_time = transit_h
+			_lunar_analemma_start_abs_hours = clock.get_absolute_hours()
 		_ensure_analemma_path()
+		_ensure_moon_path()
 		_build_analemma_preview_mesh()
-		if is_instance_valid( _analemma_path ) :
-			_analemma_path.visible = true
-			_position_analemma_path()
-	elif is_instance_valid( _analemma_path ) :
-		_analemma_path.visible = false
+		_build_moon_preview_mesh()
+		_update_analemma_paths_visibility()
+		_position_analemma_path()
+	else :
+		_update_analemma_paths_visibility()
 		_analemma_using_trail = false
+		_clear_ghost_moons()
+		_moon_ghosts_trail.clear()
 
 ## Create the path node + material once.
 func _ensure_analemma_path() -> void :
@@ -2566,17 +2799,84 @@ func _ensure_analemma_path() -> void :
 		return
 	if not is_instance_valid( _analemma_path ) :
 		_analemma_path = MeshInstance3D.new()
-		_analemma_path.name = "AnalemmaPath"
+		_analemma_path.name = "SunAnalemmaPath"
 		_analemma_path.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_analemma_path.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-		_analemma_path.visible = analemma_mode
+		_analemma_path.visible = analemma_mode and show_sun_path
 		add_child( _analemma_path )
 	if _analemma_path_mat == null :
 		_analemma_path_mat = StandardMaterial3D.new()
 		_analemma_path_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_analemma_path_mat.albedo_color = Color( 1.0, 1.0, 1.0 )
 		_analemma_path_mat.disable_receive_shadows = true
 		_analemma_path.material_override = _analemma_path_mat
+	_analemma_path_mat.albedo_color = analemma_solar_color
+
+func _ensure_moon_path() -> void :
+	if Engine.is_editor_hint() or not is_inside_tree() :
+		return
+	if not is_instance_valid( _moon_path ) :
+		_moon_path = MeshInstance3D.new()
+		_moon_path.name = "MoonAnalemmaPath"
+		_moon_path.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_moon_path.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		_moon_path.visible = analemma_mode and show_moon_path
+		add_child( _moon_path )
+	if _moon_path_mat == null :
+		_moon_path_mat = StandardMaterial3D.new()
+		_moon_path_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_moon_path_mat.disable_receive_shadows = true
+		_moon_path.material_override = _moon_path_mat
+	_moon_path_mat.albedo_color = analemma_lunar_color
+	if not is_instance_valid( _moon_ghosts_container ) :
+		_moon_ghosts_container = Node3D.new()
+		_moon_ghosts_container.name = "MoonGhostsContainer"
+		_moon_ghosts_container.visible = analemma_mode and show_moon_path
+		add_child( _moon_ghosts_container )
+
+func _update_analemma_paths_visibility() -> void :
+	if is_instance_valid( _analemma_path ) :
+		_analemma_path.visible = analemma_mode and show_sun_path
+	if is_instance_valid( _moon_path ) :
+		_moon_path.visible = analemma_mode and show_moon_path
+	if is_instance_valid( _moon_ghosts_container ) :
+		_moon_ghosts_container.visible = analemma_mode and show_moon_path
+
+func _ensure_ghost_shader() -> void :
+	if _ghost_shader == null :
+		_ghost_shader = Shader.new()
+		_ghost_shader.code = "shader_type spatial;\nrender_mode unshaded;\nuniform vec3 sun_dir_world;\nuniform float alpha : hint_range(0.0, 1.0) = 0.5;\nuniform vec3 moon_color : source_color = vec3(0.7, 0.85, 1.0);\nvoid fragment() {\n\tvec3 world_normal = normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);\n\tfloat n_dot_l = dot(world_normal, sun_dir_world);\n\tfloat phase = smoothstep(-0.05, 0.05, n_dot_l);\n\tALBEDO = moon_color;\n\tALPHA = alpha * phase;\n}"
+
+func _create_ghost_moon( local_pos: Vector3, sun_dir: Vector3, alpha: float ) -> MeshInstance3D :
+	_ensure_ghost_shader()
+	if not is_instance_valid( _moon_ghosts_container ) :
+		_ensure_moon_path()
+	if not is_instance_valid( _moon_ghosts_container ) :
+		return null
+	var ghost := MeshInstance3D.new()
+	ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ghost.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	
+	var sphere := SphereMesh.new()
+	var radius : float = ANALEMMA_PATH_RADIUS * moon_size
+	sphere.radius = radius
+	sphere.height = radius * 2.0
+	ghost.mesh = sphere
+	
+	var mat := ShaderMaterial.new()
+	mat.shader = _ghost_shader
+	mat.set_shader_parameter( "sun_dir_world", sun_dir )
+	mat.set_shader_parameter( "alpha", alpha )
+	mat.set_shader_parameter( "moon_color", Color( 0.7, 0.85, 1.0 ) )
+	ghost.material_override = mat
+	
+	_moon_ghosts_container.add_child( ghost )
+	ghost.position = local_pos
+	return ghost
+
+func _clear_ghost_moons() -> void :
+	if is_instance_valid( _moon_ghosts_container ) :
+		for child in _moon_ghosts_container.get_children() :
+			child.queue_free()
 
 ## Full-year preview curve (before ∞ playback starts, or when offset changes while paused).
 func _build_analemma_preview_mesh() -> void :
@@ -2600,21 +2900,123 @@ func _build_analemma_preview_mesh() -> void :
 	_analemma_path_lon = clock.longitude
 	_analemma_path_offset_cached = analemma_diurnal_offset_min_per_day
 
+func _build_moon_preview_mesh() -> void :
+	if not is_instance_valid( _moon_path ) :
+		return
+	_ensure_moon_path()
+	_clear_ghost_moons()
+	var tc := _analemma_throwaway_clock()
+	var start_hour : float = _find_moon_transit_hour_for_current_day()
+	var start_abs : float = tc.get_absolute_hours() - tc.day_time + start_hour
+	var mean_lunar_day_h : float = 24.0 * tc.moon_orbital_period / ( tc.moon_orbital_period - 1.0 )
+	var verts := PackedVector3Array()
+	verts.resize( 31 )
+	for i in range( 31 ) :
+		var abs_h : float = start_abs + float( i ) * mean_lunar_day_h
+		_apply_dst_correction_to_clock( tc, abs_h )
+		var moon_dir : Vector3 = tc.get_moon_direction()
+		verts[i] = moon_dir * ANALEMMA_PATH_RADIUS
+		if show_moon_path :
+			_create_ghost_moon( verts[i], tc.get_sun_direction(), 0.4 )
+	_apply_moon_line_mesh( verts )
+
 func _append_analemma_trail_point() -> void :
-	_analemma_trail.append( clock.get_sun_direction() * ANALEMMA_PATH_RADIUS )
-	if _analemma_trail.size() > ANALEMMA_TRAIL_MAX_POINTS :
-		_analemma_trail = _analemma_trail.slice( _analemma_trail.size() - ANALEMMA_TRAIL_MAX_POINTS )
-	_apply_analemma_line_mesh( _analemma_trail )
+	if show_sun_path :
+		_analemma_trail.append( clock.get_sun_direction() * ANALEMMA_PATH_RADIUS )
+		if _analemma_trail.size() > ANALEMMA_TRAIL_MAX_POINTS :
+			_analemma_trail = _analemma_trail.slice( _analemma_trail.size() - ANALEMMA_TRAIL_MAX_POINTS )
+		_apply_analemma_line_mesh( _analemma_trail )
+	if show_moon_path :
+		var local_pos : Vector3 = clock.get_moon_direction() * ANALEMMA_PATH_RADIUS
+		_moon_trail.append( local_pos )
+		if _moon_trail.size() > ANALEMMA_TRAIL_MAX_POINTS :
+			_moon_trail = _moon_trail.slice( _moon_trail.size() - ANALEMMA_TRAIL_MAX_POINTS )
+		_apply_moon_line_mesh( _moon_trail )
+		
+		# Instantiate a new live trail ghost
+		_ensure_moon_path()
+		var new_ghost := _create_ghost_moon( local_pos, clock.get_sun_direction(), 0.8 )
+		if new_ghost != null :
+			_moon_ghosts_trail.append( new_ghost )
+			
+		# Limit trail ghosts to the last 60 steps
+		const MAX_GHOSTS : int = 60
+		if _moon_ghosts_trail.size() > MAX_GHOSTS :
+			var old_ghost = _moon_ghosts_trail.pop_front()
+			if is_instance_valid( old_ghost ) :
+				old_ghost.queue_free()
+				
+		# Update opacity based on age
+		for idx in range( _moon_ghosts_trail.size() ) :
+			var ghost = _moon_ghosts_trail[idx]
+			if is_instance_valid( ghost ) :
+				var age : int = _moon_ghosts_trail.size() - 1 - idx
+				var fade_alpha : float = 0.8 * ( 1.0 - float( age ) / float( MAX_GHOSTS ) )
+				if ghost.material_override is ShaderMaterial :
+					ghost.material_override.set_shader_parameter( "alpha", fade_alpha )
+
+func _build_tube_mesh( verts: PackedVector3Array, thickness: float ) -> ArrayMesh :
+	var mesh := ArrayMesh.new()
+	if verts.size() < 2 : return mesh
+	
+	if thickness <= 1.0:
+		var arrays : Array = []
+		arrays.resize( Mesh.ARRAY_MAX )
+		arrays[Mesh.ARRAY_VERTEX] = verts
+		mesh.add_surface_from_arrays( Mesh.PRIMITIVE_LINE_STRIP, arrays )
+		return mesh
+		
+	var out_verts := PackedVector3Array()
+	var out_indices := PackedInt32Array()
+	var segments := 4
+	for i in verts.size() :
+		var p = verts[i]
+		var forward : Vector3
+		if i < verts.size() - 1 :
+			forward = ( verts[i+1] - p ).normalized()
+		else :
+			forward = ( p - verts[i-1] ).normalized()
+			
+		var up := Vector3.UP
+		if abs( forward.y ) > 0.99 :
+			up = Vector3.RIGHT
+		var right = forward.cross( up ).normalized()
+		up = right.cross( forward ).normalized()
+		
+		for s in segments :
+			var angle = ( float( s ) / segments ) * TAU
+			var offset = ( right * cos( angle ) + up * sin( angle ) ) * thickness
+			out_verts.append( p + offset )
+			
+		if i > 0 :
+			var curr = i * segments
+			var prev = ( i - 1 ) * segments
+			for s in segments :
+				var next_s = ( s + 1 ) % segments
+				out_indices.append( prev + s )
+				out_indices.append( curr + s )
+				out_indices.append( curr + next_s )
+				
+				out_indices.append( prev + s )
+				out_indices.append( curr + next_s )
+				out_indices.append( prev + next_s )
+				
+	var arr := []
+	arr.resize( Mesh.ARRAY_MAX )
+	arr[Mesh.ARRAY_VERTEX] = out_verts
+	arr[Mesh.ARRAY_INDEX] = out_indices
+	mesh.add_surface_from_arrays( Mesh.PRIMITIVE_TRIANGLES, arr )
+	return mesh
 
 func _apply_analemma_line_mesh( verts: PackedVector3Array ) -> void :
 	if not is_instance_valid( _analemma_path ) or verts.size() < 2 :
 		return
-	var arrays : Array = []
-	arrays.resize( Mesh.ARRAY_MAX )
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays( Mesh.PRIMITIVE_LINE_STRIP, arrays )
-	_analemma_path.mesh = mesh
+	_analemma_path.mesh = _build_tube_mesh( verts, analemma_path_thickness )
+
+func _apply_moon_line_mesh( verts: PackedVector3Array ) -> void :
+	if not is_instance_valid( _moon_path ) or verts.size() < 2 :
+		return
+	_moon_path.mesh = _build_tube_mesh( verts, analemma_path_thickness )
 
 func _analemma_throwaway_clock() -> CelestialClock :
 	var tc := CelestialClock.new()
@@ -2629,6 +3031,7 @@ func _analemma_throwaway_clock() -> CelestialClock :
 ## Legacy name kept for call sites — rebuilds preview or refreshes lat/lon cache.
 func _build_analemma_mesh() -> void :
 	_build_analemma_preview_mesh()
+	_build_moon_preview_mesh()
 
 ## Set a clock's month/day from a 1-based day-of-year (uses the clock's own
 ## month-length rules so leap years are handled).
@@ -2647,14 +3050,17 @@ func _set_clock_to_doy( c: CelestialClock, doy: int ) -> void :
 ## Pin the guide's origin to the active camera so its direction-based vertices sit
 ## on the sky dome regardless of where the player walks.
 func _position_analemma_path() -> void :
-	if not is_instance_valid( _analemma_path ) :
-		return
 	var vp := get_viewport()
 	if vp == null :
 		return
 	var cam := vp.get_camera_3d()
 	if cam != null :
-		_analemma_path.global_position = cam.global_position
+		if is_instance_valid( _analemma_path ) :
+			_analemma_path.global_position = cam.global_position
+		if is_instance_valid( _moon_path ) :
+			_moon_path.global_position = cam.global_position
+		if is_instance_valid( _moon_ghosts_container ) :
+			_moon_ghosts_container.global_position = cam.global_position
 
 ## Inclusive [min, max] sim-year range the ∞ analemma view cycles through: the
 ## full weather archive, from 1940 (the ERA5 archive start) up to the newest
@@ -2789,8 +3195,9 @@ func _maybe_show_first_run_help( attempts_left: int = 120 ) -> void :
 
 func _queue_first_run_hint_toasts() -> void :
 	var hints := [
-		"Press G to open the system graph and wire up your power grid.",
-		"Aim your crosshair at a solar array and press Interact to add it to your grid.",
+		"Press G, add a Habitat, then start Challenge 1 (🎯 Mission).",
+		"Interact with the SoI pin (O) to open Snowglobe and resize your radius.",
+		"Needs chips show Energy / Water / Food / Waste — click for System Review.",
 		"Press F1 anytime for controls and tips.",
 	]
 	for i in hints.size() :
@@ -2821,6 +3228,24 @@ func _ensure_placed_props_ui() -> void :
 	edit_ui.set_script( PLACED_PROPS_UI_SCRIPT )
 	ui_layer.add_child( edit_ui )
 	_placed_props_ui = edit_ui
+
+func _ensure_placed_light_modal() -> void :
+	if _placed_light_modal != null and is_instance_valid( _placed_light_modal ) :
+		return
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing = ui_layer.get_node_or_null( "PlacedLightModal" )
+	if existing != null :
+		_placed_light_modal = existing as Control
+		return
+	var modal = Control.new()
+	modal.name = "PlacedLightModal"
+	modal.set_script( PLACED_LIGHT_MODAL_SCRIPT )
+	ui_layer.add_child( modal )
+	_placed_light_modal = modal
+	if modal.has_method("bind_main"):
+		modal.call("bind_main", self)
 
 ## Setup crisis event UI
 func _setup_crisis_event_ui() -> void :
@@ -2929,6 +3354,118 @@ func _spawn_fire_extinguisher_pickups() -> void :
 			# node to be inside the tree (otherwise !is_inside_tree() warnings).
 			add_child( pickup )
 			pickup.global_position = loc["position"]
+
+# ==================== CHALLENGE RUNNER ====================
+
+## Lazy-create ChallengeRunner (Main child) and wire HUD signals.
+func _setup_challenge_runner() -> void :
+	if Engine.is_editor_hint() :
+		return
+	if is_instance_valid( challenge_runner ) :
+		return
+	var runner_script := load( "res://gameplay/challenge_runner.gd" ) as GDScript
+	if runner_script == null :
+		return
+	var runner: Node = runner_script.new()
+	runner.name = "ChallengeRunner"
+	add_child( runner )
+	challenge_runner = runner
+	_wire_challenge_runner_signals()
+
+
+func _wire_challenge_runner_signals() -> void :
+	if not is_instance_valid( challenge_runner ) :
+		return
+	if challenge_runner.has_signal( "challenge_toast" ) \
+			and not challenge_runner.is_connected( "challenge_toast", Callable( self, "_on_challenge_toast" ) ) :
+		challenge_runner.connect( "challenge_toast", Callable( self, "_on_challenge_toast" ) )
+	if challenge_runner.has_signal( "challenge_started" ) \
+			and not challenge_runner.is_connected( "challenge_started", Callable( self, "_on_challenge_started" ) ) :
+		challenge_runner.connect( "challenge_started", Callable( self, "_on_challenge_started" ) )
+	if challenge_runner.has_signal( "challenge_tick" ) \
+			and not challenge_runner.is_connected( "challenge_tick", Callable( self, "_on_challenge_tick" ) ) :
+		challenge_runner.connect( "challenge_tick", Callable( self, "_on_challenge_tick" ) )
+	if challenge_runner.has_signal( "challenge_won" ) \
+			and not challenge_runner.is_connected( "challenge_won", Callable( self, "_on_challenge_won" ) ) :
+		challenge_runner.connect( "challenge_won", Callable( self, "_on_challenge_won" ) )
+	if challenge_runner.has_signal( "challenge_failed" ) \
+			and not challenge_runner.is_connected( "challenge_failed", Callable( self, "_on_challenge_failed" ) ) :
+		challenge_runner.connect( "challenge_failed", Callable( self, "_on_challenge_failed" ) )
+	if challenge_runner.has_signal( "challenge_aborted" ) \
+			and not challenge_runner.is_connected( "challenge_aborted", Callable( self, "_on_challenge_aborted" ) ) :
+		challenge_runner.connect( "challenge_aborted", Callable( self, "_on_challenge_aborted" ) )
+
+
+func _timeline_ui() -> Node :
+	return get_node_or_null( "UILayer/TimelineUI" )
+
+
+func open_challenge_picker() -> void :
+	var tl := _timeline_ui()
+	if tl != null and tl.has_method( "_open_challenge_picker" ) :
+		tl.call( "_open_challenge_picker" )
+
+
+func _on_challenge_toast( message: String, level: int ) -> void :
+	show_toast( message, level )
+
+
+func _on_challenge_started( id: String, def: Variant ) -> void :
+	var tl := _timeline_ui()
+	if tl != null and tl.has_method( "on_challenge_started" ) :
+		tl.call( "on_challenge_started", id, def )
+
+
+func _on_challenge_tick( id: String, metrics: Dictionary, elapsed_h: float ) -> void :
+	var tl := _timeline_ui()
+	if tl != null and tl.has_method( "on_challenge_tick" ) :
+		tl.call( "on_challenge_tick", id, metrics, elapsed_h )
+
+
+func _on_challenge_won( id: String, result: Dictionary ) -> void :
+	var tl := _timeline_ui()
+	if tl != null and tl.has_method( "on_challenge_finished" ) :
+		tl.call( "on_challenge_finished" )
+	if tl != null and tl.has_method( "show_challenge_result" ) :
+		tl.call( "show_challenge_result", id, true, result )
+	var score := float( result.get( "score", 0.0 ) )
+	var extra := " — new best!" if bool( result.get( "new_best", false ) ) else ""
+	show_toast( "Challenge won! Score %.0f%s" % [ score, extra ], ToastUI.Level.OK, 7.0 )
+
+
+func _on_challenge_failed( id: String, reason: String ) -> void :
+	var tl := _timeline_ui()
+	if tl != null and tl.has_method( "on_challenge_finished" ) :
+		tl.call( "on_challenge_finished" )
+	var payload := {"reason": reason}
+	if is_instance_valid( challenge_runner ) and challenge_runner.has_method( "last_metrics" ) :
+		payload["metrics"] = challenge_runner.call( "last_metrics" )
+	if tl != null and tl.has_method( "show_challenge_result" ) :
+		tl.call( "show_challenge_result", id, false, payload )
+	var label := ChallengeDef.reason_label(reason)
+	show_toast("Challenge failed — %s" % label, ToastUI.Level.ERROR, 7.0)
+
+
+func _on_challenge_aborted( _id: String ) -> void :
+	var tl := _timeline_ui()
+	if tl != null and tl.has_method( "on_challenge_finished" ) :
+		tl.call( "on_challenge_finished" )
+
+
+func start_challenge( challenge_id: String ) -> bool :
+	if not is_instance_valid( challenge_runner ) :
+		_setup_challenge_runner()
+	if not is_instance_valid( challenge_runner ) :
+		return false
+	if challenge_runner.has_method( "start_challenge_id" ) :
+		return bool( challenge_runner.call( "start_challenge_id", challenge_id ) )
+	return false
+
+
+func abort_challenge() -> void :
+	if is_instance_valid( challenge_runner ) and challenge_runner.has_method( "abort_challenge" ) :
+		challenge_runner.call( "abort_challenge" )
+
 
 # ==================== CRISIS EVENT SYSTEM ====================
 

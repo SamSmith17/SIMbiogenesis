@@ -68,6 +68,8 @@ const RESOURCE_DEFAULTS: Dictionary = {
 	"biochar": "pvc_pipe",
 	"food": "garden_hose",
 	"propane": "pvc_pipe",
+	"money": "pvc_pipe",
+	"chore_hours": "pvc_pipe",
 }
 
 static var _extra: Dictionary = {}

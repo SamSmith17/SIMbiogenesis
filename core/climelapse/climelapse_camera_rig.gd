@@ -36,7 +36,7 @@ func is_valid() -> bool:
 	return valid
 
 
-func spawn_lock_camera(parent: Node3D) -> Camera3D:
+func spawn_lock_camera(parent: Node) -> Camera3D:
 	var cam := Camera3D.new()
 	cam.name = "ClimelapseLockCam"
 	cam.global_transform = global_xform

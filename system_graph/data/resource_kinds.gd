@@ -15,6 +15,13 @@ const BUILTIN: Dictionary = {
 		"abbrev": "⚡",
 		"flow_ref_rate": 3500.0,
 	},
+	"dc_electricity": {
+		"display": "DC Electricity",
+		"color": Color(0.847, 0.329, 0.329, 1.0),
+		"unit": "kW",
+		"abbrev": "🔌",
+		"flow_ref_rate": 3.0,
+	},
 	"water": {
 		"display": "Potable Water",
 		"color": Color(0.231, 0.510, 0.965, 1.0),
@@ -94,6 +101,21 @@ const BUILTIN: Dictionary = {
 		"abbrev": "🌱",
 		"flow_ref_rate": 8.0,
 	},
+	"liquid_fertilizer": {
+		"display": "Liquid Fertilizer",
+		"color": Color(0.420, 0.720, 0.280, 1.0),
+		"unit": "L",
+		"abbrev": "🧪",
+		"flow_ref_rate": 40.0,
+		"aliases": ["fertilizer_effluent"],
+	},
+	"biogas": {
+		"display": "Biogas",
+		"color": Color(0.820, 0.580, 0.220, 1.0),
+		"unit": "m³",
+		"abbrev": "💨",
+		"flow_ref_rate": 2.0,
+	},
 	"propane": {
 		"display": "Propane",
 		"color": Color(0.961, 0.620, 0.043, 1.0),
@@ -107,6 +129,20 @@ const BUILTIN: Dictionary = {
 		"unit": "kWh",
 		"abbrev": "♨",
 		"flow_ref_rate": 15.0,
+	},
+	"money": {
+		"display": "Money",
+		"color": Color(0.294, 0.686, 0.314, 1.0),
+		"unit": "$",
+		"abbrev": "💵",
+		"flow_ref_rate": 100.0,
+	},
+	"chore_hours": {
+		"display": "Chore Hours",
+		"color": Color(0.702, 0.443, 0.812, 1.0),
+		"unit": "h",
+		"abbrev": "🧹",
+		"flow_ref_rate": 8.0,
 	},
 }
 
@@ -141,6 +177,85 @@ static func _ensure_loaded() -> void:
 			"flow_ref_rate": float(cfg.get_value(section, "flow_ref_rate", 10.0)),
 		}
 		_extra[section] = entry
+
+
+## Turn an arbitrary label into a stable snake_case id (letters/digits/underscore).
+static func slugify(text: String) -> String:
+	var s := text.strip_edges().to_lower()
+	var out := ""
+	for i in s.length():
+		var c := s[i]
+		if (c >= "a" and c <= "z") or (c >= "0" and c <= "9"):
+			out += c
+		elif c == " " or c == "-" or c == "_" or c == "/":
+			out += "_"
+	while out.contains("__"):
+		out = out.replace("__", "_")
+	out = out.strip_edges().lstrip("_").rstrip("_")
+	return out
+
+
+## Create or update a user-defined resource kind and persist it to
+## user://resource_kinds.cfg (never committed). Returns the resolved id, or ""
+## if the label was empty or collides with a builtin id. Safe to call at runtime;
+## updates the in-memory registry immediately so pickers refresh on rebuild.
+static func add_custom_kind(display: String, unit: String, abbrev: String,
+		color: Color, id: String = "") -> String:
+	_ensure_loaded()
+	var kid := id.strip_edges()
+	if kid.is_empty():
+		kid = slugify(display)
+	else:
+		kid = slugify(kid)
+	if kid.is_empty():
+		return ""
+	# Never shadow a builtin kind's id.
+	if BUILTIN.has(kid):
+		return ""
+	var disp := display.strip_edges()
+	if disp.is_empty():
+		disp = kid.capitalize()
+	var entry := {
+		"display": disp,
+		"color": color,
+		"unit": unit.strip_edges() if not unit.strip_edges().is_empty() else "unit",
+		"abbrev": abbrev.strip_edges() if not abbrev.strip_edges().is_empty() else "•",
+		"flow_ref_rate": 10.0,
+	}
+	_extra[kid] = entry
+
+	var cfg := ConfigFile.new()
+	if FileAccess.file_exists(CONFIG_PATH):
+		cfg.load(CONFIG_PATH)   # keep existing user kinds
+	cfg.set_value(kid, "display", entry["display"])
+	cfg.set_value(kid, "unit", entry["unit"])
+	cfg.set_value(kid, "abbrev", entry["abbrev"])
+	cfg.set_value(kid, "color_r", color.r)
+	cfg.set_value(kid, "color_g", color.g)
+	cfg.set_value(kid, "color_b", color.b)
+	cfg.set_value(kid, "flow_ref_rate", 10.0)
+	cfg.save(CONFIG_PATH)
+	return kid
+
+
+## Remove a user-defined resource kind (builtins can't be removed).
+static func remove_custom_kind(kind_id: String) -> bool:
+	_ensure_loaded()
+	if BUILTIN.has(kind_id) or not _extra.has(kind_id):
+		return false
+	_extra.erase(kind_id)
+	if FileAccess.file_exists(CONFIG_PATH):
+		var cfg := ConfigFile.new()
+		if cfg.load(CONFIG_PATH) == OK and cfg.has_section(kind_id):
+			cfg.erase_section(kind_id)
+			cfg.save(CONFIG_PATH)
+	return true
+
+
+## True when a kind is user-defined (removable / editable), not a builtin.
+static func is_custom_kind(kind_id: String) -> bool:
+	_ensure_loaded()
+	return _extra.has(kind_id) and not BUILTIN.has(kind_id)
 
 
 static func all_kinds() -> Array:
@@ -218,6 +333,49 @@ static func kinds_compatible(src_kind: String, tgt_kind: String) -> bool:
 	return a == b
 
 
+## Maps a unit string to its fundamental measure so kinds with different
+## units (e.g. "L" vs "m³") aren't treated as the same dimension by mistake,
+## while unit variants of the same measure (mass/volume/energy/…) group together.
+const UNIT_DIMENSION: Dictionary = {
+	"kg": "mass",
+	"lb": "mass",
+	"L": "volume",
+	"gal": "volume",
+	"m³": "volume",
+	"kWh": "energy",
+	"Wh": "energy",
+	"BTU": "energy",
+	"kW": "power",
+	"$": "currency",
+	"h": "time",
+}
+
+
+## Fundamental measure (mass/volume/energy/currency/time/…) for a resource kind,
+## derived from its default unit. Unknown units fall back to the unit string
+## itself so at least identical-unit kinds still match.
+static func dimension_for_kind(kind_id: String) -> String:
+	var unit := default_unit(kind_id)
+	return str(UNIT_DIMENSION.get(unit, unit))
+
+
+## True when two resource kinds mismatch by kind but share the same
+## fundamental unit of measure (mass/volume/energy/…) — used to let a user
+## deliberately override the strict port-type check.
+static func dimensions_compatible(src_kind: String, tgt_kind: String) -> bool:
+	var a := normalize_kind(src_kind)
+	var b := normalize_kind(tgt_kind)
+	if a.is_empty() or b.is_empty():
+		return false
+	return dimension_for_kind(a) == dimension_for_kind(b)
+
+
+## True when a resource connection between these kinds is allowed at all —
+## either an exact kind match, or a user override via matching fundamental units.
+static func connection_allowed(src_kind: String, tgt_kind: String) -> bool:
+	return kinds_compatible(src_kind, tgt_kind) or dimensions_compatible(src_kind, tgt_kind)
+
+
 ## Resource kinds for graph legend (excludes electrical — use PORT_COLORS for that).
 static func legend_entries(include_electric: bool = false) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
@@ -236,6 +394,8 @@ static func legend_entries(include_electric: bool = false) -> Array[Dictionary]:
 			continue
 		if k == "electric" and not include_electric:
 			continue
+		if k == "dc_electricity":
+			continue
 		out.append({
 			"label": display_name(k),
 			"color": wire_color(k),
@@ -250,6 +410,8 @@ static func mismatch_message(src_kind: String, tgt_kind: String) -> String:
 	var b := display_name(normalize_kind(tgt_kind) if not tgt_kind.is_empty() else tgt_kind)
 	if src_kind.is_empty() or tgt_kind.is_empty():
 		return "Resource port missing a type — assign input/output kinds in the inspector"
+	if dimensions_compatible(src_kind, tgt_kind):
+		return "%s does not normally connect to %s (allowed — same unit of measure)" % [a, b]
 	return "%s cannot connect to %s" % [a, b]
 
 
@@ -276,7 +438,11 @@ static func infer_kind_from_name(name: String) -> String:
 	if "syngas" in n or "woodgas" in n:
 		return "woodgas"
 	if "nutrient" in n or "fertil" in n:
+		if "liquid" in n or "effluent" in n:
+			return "liquid_fertilizer"
 		return "nutrients"
+	if "biogas" in n or "methane" in n:
+		return "biogas"
 	if "water" in n or "tank" in n and "propane" not in n:
 		return "water"
 	if "propane" in n:
@@ -295,6 +461,10 @@ static func infer_kind_from_name(name: String) -> String:
 		return "biomass"
 	if "food" in n:
 		return "food"
+	if "money" in n or "cash" in n:
+		return "money"
+	if "chore" in n or "work" in n or "labor" in n or "labour" in n:
+		return "chore_hours"
 	return "water"
 
 
@@ -325,23 +495,82 @@ static func parse_rate_text(rate_text: String) -> Dictionary:
 
 ## Ensure processor specs carry structured inputs[] / outputs[].
 func migrate_processor_specs(specs: Dictionary) -> void:
+	if not specs.has("batch_mode"):
+		specs["batch_mode"] = false
+		specs["batch_time_hrs"] = 1.0
+		specs["batch_failure_mode"] = "pause_and_resume"
+		specs["batch_failure_penalty_qty"] = 0.0
+
 	if not specs.has("energy_source"):
 		specs["energy_source"] = "ac" if float(specs.get("watts", 0.0)) > 0.0 else ""
-	if specs.has("inputs") and specs.has("outputs"):
-		return
-	var outputs: Array = []
-	if specs.has("output_rate"):
-		outputs.append(parse_rate_text(str(specs.get("output_rate", ""))))
-	else:
-		outputs.append({"kind": "water", "rate": 0.0, "unit": "L/h"})
-	specs["inputs"] = []
-	specs["outputs"] = outputs
+	# Power supply is AC-only now (or "" = passive). A processor that instead
+	# CONSUMES DC power (as opposed to producing it — see the dc_electricity
+	# output migration below) would need its own energy_source value; not
+	# built yet. The old confusing thermal/mechanical energy types are
+	# retired — migrate them to passive.
+	var es := str(specs.get("energy_source", ""))
+	if es == "thermal" or es == "mechanical":
+		specs["energy_source"] = ""
+
+	if not specs.has("inputs"):
+		specs["inputs"] = []
+	if not specs.has("outputs"):
+		if specs.has("output_rate"):
+			specs["outputs"] = [parse_rate_text(str(specs.get("output_rate", "")))]
+		else:
+			specs["outputs"] = []  # New processors start with no I/Os; user adds them via inspector
+
+	# One-time migration: the old dc_direct_charge flat-kW mechanism
+	# (dc_direct_charge/dc_output_kw + dcPositive/dcNegative ports) is
+	# replaced by a dc_electricity-kind output entry (positive/negative
+	# ports, kW derived from fuel throughput each tick — see
+	# ResourceFlowEngine._process_processor). Convert existing saves so the
+	# engine/port resolver only need to know the new path.
+	if bool(specs.get("dc_direct_charge", false)):
+		var dc_outs: Array = specs.get("outputs", []) as Array
+		var dc_already_migrated := false
+		for dc_o: Variant in dc_outs:
+			if dc_o is Dictionary and str((dc_o as Dictionary).get("kind", "")) == "dc_electricity":
+				dc_already_migrated = true
+				break
+		if not dc_already_migrated:
+			var legacy_kw := float(specs.get("dc_output_kw", 0.0))
+			dc_outs.append({"kind": "dc_electricity", "rate": legacy_kw, "unit": "kW"})
+			specs["outputs"] = dc_outs
+			# Preserve the exact old peak (dc_output_kw*efficiency): the new
+			# formula is throughput_post_efficiency * energy_wh_per_unit/1000,
+			# and throughput_post_efficiency == fuel_rate*efficiency for a
+			# single-fuel-input generator, so back-derive:
+			#   energy_wh_per_unit = legacy_kw * 1000 / fuel_rate
+			var dc_fuel_rate := 0.0
+			for dc_inp: Variant in (specs.get("inputs", []) as Array):
+				if dc_inp is Dictionary and str((dc_inp as Dictionary).get("kind", "")) != "electric":
+					dc_fuel_rate = float((dc_inp as Dictionary).get("rate", 0.0))
+					break
+			if dc_fuel_rate > 0.0:
+				specs["energy_wh_per_unit"] = legacy_kw * 1000.0 / dc_fuel_rate
+		specs["dc_direct_charge"] = false
+		specs.erase("dc_output_kw")
+
 	if not specs.has("efficiency"):
 		specs["efficiency"] = 1.0
 	if not specs.has("energy_wh_per_unit"):
 		var watts: float = float(specs.get("watts", 0.0))
-		var rate: float = float(outputs[0].get("rate", 0.0)) if outputs.size() > 0 else 0.0
+		var outs: Array = specs.get("outputs", []) as Array
+		var rate: float = float(outs[0].get("rate", 0.0)) if outs.size() > 0 else 0.0
 		specs["energy_wh_per_unit"] = (watts / rate) if rate > 0.0 else 0.0
+
+	# AC power is modeled by `watts` + `energy_source` + the `power_in` handle —
+	# NOT by a resource input. A previous migration auto-inserted an "electric"
+	# resource input (unit "W") for every powered processor, which created a
+	# phantom "Electricity" input port and shifted the real resource ports (so a
+	# biomass wire landed on the electric port). Strip those auto-inserted entries
+	# so existing saves self-heal; leave any other inputs untouched.
+	var ins: Array = specs.get("inputs", []) as Array
+	for i in range(ins.size() - 1, -1, -1):
+		var inpd := ins[i] as Dictionary
+		if str(inpd.get("kind", "")) == "electric" and str(inpd.get("unit", "")) == "W":
+			ins.remove_at(i)
 
 
 ## Ensure resource tank specs carry resource_kind + numeric capacity.
@@ -358,3 +587,11 @@ func migrate_resource_specs(specs: Dictionary) -> void:
 		specs["inflow_rate"] = 0.0
 	if not specs.has("outflow_rate"):
 		specs["outflow_rate"] = 0.0
+	if not specs.has("unlimited_capacity"):
+		specs["unlimited_capacity"] = false
+	if not specs.has("allow_negative"):
+		specs["allow_negative"] = false
+	if not specs.has("scale_with_fill"):
+		specs["scale_with_fill"] = true
+	if not specs.has("jit_outflow"):
+		specs["jit_outflow"] = false

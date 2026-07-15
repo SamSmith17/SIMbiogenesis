@@ -108,6 +108,9 @@ func _on_moon_energy_slider_value_changed(value: float) -> void:
 	if is_instance_valid(SimSettingsController):
 		SimSettingsController.apply_moon_energy(value)
 
+func _on_building_shadows_toggled(toggled_on: bool) -> void:
+	if is_instance_valid(SimSettingsController):
+		SimSettingsController.apply_building_shadows_enabled(toggled_on)
 
 func _on_live_mode_checkbox_toggled(toggled_on: bool) -> void:
 	if is_instance_valid(SimSettingsController):

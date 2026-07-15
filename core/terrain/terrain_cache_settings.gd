@@ -39,6 +39,33 @@ static func invalidate_dem(lat: float, lon: float) -> int:
 	return _delete_matching(DEM_DIR, coord_token(lat, lon), "dem_")
 
 
+static func save_meta_extents(lat: float, lon: float, half_m: float, detail_m: float, osm_m: float) -> void:
+	var path := "user://terrain_cache/extents_%s.json" % coord_token(lat, lon)
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://terrain_cache"))
+	var data := {}
+	if FileAccess.file_exists(path):
+		var txt := FileAccess.get_file_as_string(path)
+		var p = JSON.parse_string(txt)
+		if p is Dictionary:
+			data = p
+	data["half_extent_m"] = half_m
+	data["detail_half_extent_m"] = detail_m
+	data["osm_half_extent_m"] = osm_m
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(data))
+
+
+static func get_meta_extents(lat: float, lon: float) -> Dictionary:
+	var path := "user://terrain_cache/extents_%s.json" % coord_token(lat, lon)
+	if FileAccess.file_exists(path):
+		var txt := FileAccess.get_file_as_string(path)
+		var p = JSON.parse_string(txt)
+		if p is Dictionary:
+			return p
+	return {}
+
+
 static func invalidate_imagery(lat: float, lon: float) -> int:
 	return _delete_matching(IMG_DIR, coord_token(lat, lon), "img_")
 

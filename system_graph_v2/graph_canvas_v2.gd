@@ -52,10 +52,14 @@ func _gui_input(event: InputEvent) -> void:
 
 func _draw() -> void:
 	super._draw()
+	# Reuse the per-draw visible cache (still populated by super._draw) for the
+	# V2 overlay passes below, then release it so input hit-testing recomputes.
+	_draw_cache_active = true
 	_draw_v2_badges()
 	_draw_v2_legend()
 	_draw_v2_connection_feedback()
 	_draw_v2_hover_port_tooltip()
+	_draw_cache_active = false
 
 
 func set_legend_visible(on: bool) -> void:
@@ -113,8 +117,13 @@ func _draw_v2_connection_feedback() -> void:
 		var item_id := _wire_snap.get("item_id", "") as String
 		var handle_id := _wire_snap.get("handle_id", "") as String
 		if _wire_snap_valid:
-			txt = "Release to connect: %s.%s" % [item_id, handle_id]
-			col = Color(0.33, 0.92, 0.55, 0.95)
+			if _wire_snap_is_kind_override():
+				txt = ResourceKinds.mismatch_message(
+					_wire_src_resource_kind, str(_wire_snap.get("resource_kind", "")))
+				col = Color(0.95, 0.78, 0.35, 0.95)
+			else:
+				txt = "Release to connect: %s.%s" % [item_id, handle_id]
+				col = Color(0.33, 0.92, 0.55, 0.95)
 		else:
 			if _wire_src_polarity == "resource":
 				txt = ResourceKinds.mismatch_message(
@@ -153,6 +162,13 @@ func _draw_v2_hover_port_tooltip() -> void:
 
 
 func _render_item(item: Dictionary) -> void:
+	# Site Plan / Elevation: always use map-scaled plan chips from the base
+	# canvas. V2 freeform bodies (especially solar-array compounds) size cells
+	# with GraphArrayLayout.PANEL_* × zoom, which ignores physical footprints and
+	# leaves a tiny hit rect under a huge visual — blocking drag/resize.
+	if _is_physical_view():
+		super._render_item(item)
+		return
 	var iid := item.get("id", "") as String
 	# Hide legacy aggregate panel card in V2; individual virtual panel nodes replace it.
 	if iid == "virtual_solar_array":
@@ -187,14 +203,20 @@ func _render_resource_item_v2(item: Dictionary) -> void:
 	var rect := Rect2(tl, sz)
 	var iid := item.get("id", "") as String
 	var is_sel := (iid == selected_item_id) or selected_item_ids.has(iid)
-	var specs := (item.get("specs", {}) as Dictionary).duplicate(true)
-	ResourceKinds.new().migrate_resource_specs(specs)
+	# Read-only: specs are already migrated at load/creation, and every read
+	# below default-guards missing keys — so avoid a per-draw deep copy +
+	# ResourceKinds allocation + re-migration on every resource node, every frame.
+	var specs := item.get("specs", {}) as Dictionary
 	var kind: String = str(specs.get("resource_kind", "water"))
 	var accent := ResourceKinds.wire_color(kind)
 	if bool(item.get("is_ghost", false)):
 		accent = Color(accent.r, accent.g, accent.b, 0.42)
+	var raw_level := float(specs.get("level", 0.5))
+	var in_deficit := bool(specs.get("allow_negative", false)) and raw_level < 0.0
+	if in_deficit:
+		accent = UITheme.C_WARN
 	var border_col := accent if is_sel else Color(accent.r * 0.75, accent.g * 0.75, accent.b * 0.75, accent.a)
-	var level := clampf(float(specs.get("level", 0.5)), 0.0, 1.0)
+	var level := clampf(raw_level, 0.0, 1.0)
 
 	# True circular hub — inscribed circle in the node rect.
 	var hub_c := GraphHubPorts.circle_center(tl, sz)
@@ -215,17 +237,76 @@ func _render_resource_item_v2(item: Dictionary) -> void:
 
 	var fnt := ThemeDB.fallback_font
 	var name := str(specs.get("name", ResourceKinds.display_name(kind)))
-	var name_band := Rect2(hub_c - Vector2(hub_r * 0.72, hub_r * 0.55),
-			Vector2(hub_r * 1.44, hub_r * 0.28))
-	var name_h := GraphNodeLabel.body_font_size(name_band, 1, 10.0, 12.0, _zoom)
-	_draw_fitted_label(name_band.position + Vector2(0.0, name_h),
-		name, name_band.size.x, name_h, C_TEXT_S)
-	var pct := "%d%%" % int(round(level * 100.0))
-	var pct_fsize := GraphNodeLabel.stat_font_size(
-		Rect2(Vector2.ZERO, Vector2(hub_r * 1.2, hub_r * 0.7)), 20.0, _zoom)
-	var ts := fnt.get_string_size(pct, HORIZONTAL_ALIGNMENT_LEFT, -1, pct_fsize)
-	draw_string(fnt, hub_c + Vector2(-ts.x * 0.5, pct_fsize * 0.35),
-		pct, HORIZONTAL_ALIGNMENT_LEFT, -1, pct_fsize, Color(1, 1, 1, 0.92))
+	var unlimited := bool(specs.get("unlimited_capacity", false))
+	var cap_qty := float(specs.get("capacity_qty", 100.0))
+	var unit := ("⚠" if in_deficit else ("∞" if unlimited else str(specs.get("capacity_unit", ""))))
+	var qty := level * cap_qty
+
+	var qty_str: String
+	if in_deficit:
+		qty_str = "-%.1f" % float(specs.get("deficit_qty", -raw_level * cap_qty))
+	elif unlimited:
+		qty_str = "∞"
+	else:
+		qty_str = "%.1f" % qty
+	if not unlimited and not in_deficit and qty_str.ends_with(".0"):
+		qty_str = qty_str.substr(0, qty_str.length() - 2)
+	
+	var net_flow := float(specs.get("inflow_rate", 0.0)) - float(specs.get("outflow_rate", 0.0))
+	var flow_str := ""
+	if absf(net_flow) > 0.001:
+		var sign_str := "+" if net_flow > 0 else ""
+		var nf_str := "%.2f" % net_flow
+		if nf_str.ends_with("0"):
+			nf_str = nf_str.substr(0, nf_str.length() - 1)
+		if nf_str.ends_with(".0"):
+			nf_str = nf_str.substr(0, nf_str.length() - 2)
+		flow_str = "%s%s/h" % [sign_str, nf_str]
+
+	var main_fsize := maxi(10, int(round(22.0 * _zoom)))
+	var name_fsize := maxi(8, int(round(11.0 * _zoom)))
+	var unit_fsize := maxi(8, int(round(10.0 * _zoom)))
+	var flow_fsize := maxi(8, int(round(10.0 * _zoom)))
+	var spacing := 2.0 * _zoom
+	var line_spacing := 4.0 * _zoom
+	
+	var total_h := name_fsize + line_spacing + main_fsize + spacing + unit_fsize
+	if flow_str != "":
+		total_h += line_spacing + flow_fsize
+		
+	var current_y := hub_c.y - total_h * 0.5
+	
+	# Draw Name
+	var ts_name := fnt.get_string_size(name, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fsize)
+	var pos_name := Vector2(hub_c.x - ts_name.x * 0.5, current_y + fnt.get_ascent(name_fsize))
+	var c_name := Color(0.9, 0.9, 0.9, 0.9)
+	draw_string(fnt, pos_name, name, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fsize, c_name)
+	draw_string_outline(fnt, pos_name, name, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fsize, maxi(1, int(round(1.0 * _zoom))), c_name)
+	current_y += name_fsize + line_spacing
+	
+	# Draw Qty
+	var ts_qty := fnt.get_string_size(qty_str, HORIZONTAL_ALIGNMENT_LEFT, -1, main_fsize)
+	var pos_qty := Vector2(hub_c.x - ts_qty.x * 0.5, current_y + fnt.get_ascent(main_fsize))
+	var text_c := Color(1, 1, 1, 1)
+	draw_string(fnt, pos_qty, qty_str, HORIZONTAL_ALIGNMENT_LEFT, -1, main_fsize, text_c)
+	draw_string_outline(fnt, pos_qty, qty_str, HORIZONTAL_ALIGNMENT_LEFT, -1, main_fsize, maxi(1, int(round(1.5 * _zoom))), text_c)
+	current_y += main_fsize + spacing
+	
+	# Draw Unit
+	var ts_unit := fnt.get_string_size(unit, HORIZONTAL_ALIGNMENT_LEFT, -1, unit_fsize)
+	var pos_unit := Vector2(hub_c.x - ts_unit.x * 0.5, current_y + fnt.get_ascent(unit_fsize))
+	var c_unit := Color(0.85, 0.85, 0.85, 0.9)
+	draw_string(fnt, pos_unit, unit, HORIZONTAL_ALIGNMENT_LEFT, -1, unit_fsize, c_unit)
+	draw_string_outline(fnt, pos_unit, unit, HORIZONTAL_ALIGNMENT_LEFT, -1, unit_fsize, maxi(1, int(round(1.0 * _zoom))), c_unit)
+	current_y += unit_fsize + line_spacing
+	
+	# Draw Flow
+	if flow_str != "":
+		var ts_flow := fnt.get_string_size(flow_str, HORIZONTAL_ALIGNMENT_LEFT, -1, flow_fsize)
+		var pos_flow := Vector2(hub_c.x - ts_flow.x * 0.5, current_y + fnt.get_ascent(flow_fsize))
+		var flow_col := Color(0.6, 1.0, 0.6, 0.95) if net_flow > 0 else Color(1.0, 0.7, 0.7, 0.95)
+		draw_string(fnt, pos_flow, flow_str, HORIZONTAL_ALIGNMENT_LEFT, -1, flow_fsize, flow_col)
+		draw_string_outline(fnt, pos_flow, flow_str, HORIZONTAL_ALIGNMENT_LEFT, -1, flow_fsize, maxi(1, int(round(1.0 * _zoom))), flow_col)
 
 	_draw_tank_overflow_glyph(specs,
 		hub_c + Vector2(hub_r * 0.85, -hub_r * 0.7))
@@ -410,6 +491,8 @@ func _render_processor_item_v2(item: Dictionary) -> void:
 	var accent := NODE_BORDER_COLORS.get("processor", Color(0.58, 0.64, 0.72, 1.0)) as Color
 	if str(specs.get("role", "")) == "habitat":
 		accent = Color(0.62, 0.74, 0.44, 1.0)
+	if item.get("batch_error", "") == "missing_inputs":
+		accent = Color(0.92, 0.28, 0.28, 1.0)
 	if bool(item.get("is_ghost", false)):
 		accent = Color(accent.r, accent.g, accent.b, 0.5)
 
@@ -421,69 +504,75 @@ func _render_processor_item_v2(item: Dictionary) -> void:
 	var title_h := _title_band_height(sz.y)
 	_draw_title_band(rect, title_h, str(specs.get("name", "Processor")), accent)
 
-	var body := Rect2(tl + Vector2(0.0, title_h), sz - Vector2(0.0, title_h))
 	var pad := maxf(3.0, 6.0 * z)
-	var inner := body.grow(-pad)
-	if inner.size.x < 8.0 or inner.size.y < 8.0:
+	var detail_h := maxf(24.0, 32.0 * z)
+	var body_top := rect.position.y + title_h
+	var body_h := sz.y - title_h
+	
+	if body_h < detail_h + pad * 3.0:
 		_draw_item_handles(item, tl, sz)
 		if is_sel:
 			draw_rect(rect.grow(1.2 * z), Color(0.13, 0.83, 0.93, 0.16), true)
 		return
-
-	# Image zone (left): rendered GLB thumbnail or emoji icon tile.
-	var img_w := clampf(inner.size.x * 0.42, 8.0, inner.size.y)
-	var img_zone := Rect2(inner.position, Vector2(img_w, inner.size.y))
+		
+	var inner_w := sz.x - pad * 2.0
+	var img_h := body_h - detail_h - pad * 1.5
+	var img_zone := Rect2(rect.position.x + pad, body_top + pad, inner_w, img_h)
+	
+	# Image zone (fills body width)
 	_draw_processor_image_v2(img_zone, specs, accent, z)
-
-	# Stats column (right).
-	var sx := inner.position.x + img_w + pad
-	var col_w := inner.end.x - sx
-	if col_w > 12.0:
+	
+	# Stats banner (bottom)
+	var detail_zone := Rect2(rect.position.x + pad, img_zone.end.y + pad * 0.5, inner_w, detail_h)
+	if inner_w > 12.0:
+		var half_w := inner_w * 0.5 - pad
+		var left_x := detail_zone.position.x
+		var right_x := detail_zone.position.x + inner_w * 0.5 + pad
 		var fs := GraphNodeLabel.body_font_size(
-			Rect2(Vector2.ZERO, Vector2(col_w, inner.size.y * 0.24)), 1, 10.0, 12.0, z)
+			Rect2(Vector2.ZERO, Vector2(half_w, detail_h * 0.4)), 1, 10.0, 12.0, z)
 		var line_gap := float(fs) + maxf(2.0, 3.0 * z)
-		var y := inner.position.y
-
-		# Headline: power draw.
+		
+		# Left side: Power Draw
 		var watts := float(specs.get("watts", specs.get("max_watts", 0.0)))
-		if watts > 0.0:
-			var fs_big := GraphNodeLabel.stat_font_size(
-				Rect2(Vector2.ZERO, Vector2(col_w, inner.size.y * 0.5)), 18.0, z)
-			y += float(fs_big)
-			draw_string(fnt, Vector2(sx, y),
-				_fmt_power_w(watts), HORIZONTAL_ALIGNMENT_LEFT, col_w, fs_big, C_TEXT)
-			y += maxf(2.0, 3.0 * z)
-		else:
-			y += float(fs)
-
-		# Energy-source chip.
-		var es := str(specs.get("energy_source", "ac"))
-		if es.is_empty() and watts > 0.0:
-			es = "ac"
-		if es == "ac" and y + line_gap < inner.end.y:
-			y += line_gap
-			draw_string(fnt, Vector2(sx, y), "⚡ AC in",
-				HORIZONTAL_ALIGNMENT_LEFT, col_w, fs, C_AMBER)
-		elif es in ["thermal", "mechanical"] and y + line_gap < inner.end.y:
-			y += line_gap
-			draw_string(fnt, Vector2(sx, y), "%s in" % es,
-				HORIZONTAL_ALIGNMENT_LEFT, col_w, fs, C_TEXT_M)
-
-		# Input → output resource kinds.
+		var fs_big := GraphNodeLabel.stat_font_size(
+			Rect2(Vector2.ZERO, Vector2(half_w, detail_h * 0.55)), 16.0, z)
+			
+		var y := detail_zone.position.y
+		if item.get("batch_error", "") == "missing_inputs":
+			draw_string(fnt, Vector2(left_x, y + float(fs_big)),
+				"Stalled", HORIZONTAL_ALIGNMENT_LEFT, -1, fs_big, Color(0.92, 0.28, 0.28, 1.0))
+			draw_string(fnt, Vector2(left_x, y + float(fs_big) + line_gap),
+				"Missing Inputs", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.92, 0.28, 0.28, 0.8))
+		elif watts > 0.0:
+			draw_string(fnt, Vector2(left_x, y + float(fs_big)),
+				_fmt_power_w(watts), HORIZONTAL_ALIGNMENT_LEFT, -1, fs_big, C_TEXT)
+			
+			var es := str(specs.get("energy_source", "ac"))
+			if es.is_empty(): es = "ac"
+			var es_str := "⚡ AC in" if es == "ac" else ("%s in" % es)
+			var es_c := C_AMBER if es == "ac" else C_TEXT_M
+			draw_string(fnt, Vector2(left_x, y + float(fs_big) + line_gap),
+				es_str, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, es_c)
+				
+		# Right side: I/O and Rates
 		var inputs: Array = specs.get("inputs", []) as Array
 		var outputs: Array = specs.get("outputs", []) as Array
-		if (not inputs.is_empty() or not outputs.is_empty()) and y + line_gap < inner.end.y:
-			y += line_gap
-			var in_k := ResourceKinds.display_name(str((inputs[0] as Dictionary).get("kind", ""))) if not inputs.is_empty() else "—"
-			var out_k := ResourceKinds.display_name(str((outputs[0] as Dictionary).get("kind", ""))) if not outputs.is_empty() else "—"
-			_draw_fitted_label(Vector2(sx, y), "%s → %s" % [in_k, out_k],
-				col_w, fs, Color(0.72, 0.84, 0.96, 0.92))
+		if not inputs.is_empty() or not outputs.is_empty():
+			var in_names: PackedStringArray = []
+			for inp: Variant in inputs:
+				in_names.append(ResourceKinds.display_name(str((inp as Dictionary).get("kind", ""))))
+			var out_names: PackedStringArray = []
+			for outp: Variant in outputs:
+				out_names.append(ResourceKinds.display_name(str((outp as Dictionary).get("kind", ""))))
+			
+			var in_k := ", ".join(in_names) if in_names.size() > 0 else "—"
+			var out_k := ", ".join(out_names) if out_names.size() > 0 else "—"
+			_draw_fitted_label(Vector2(right_x, y + float(fs)), "%s → %s" % [in_k, out_k],
+				half_w, fs, Color(0.72, 0.84, 0.96, 0.92))
 
-		# Output rate.
-		var rate_str := str(specs.get("output_rate", ""))
-		if not rate_str.is_empty() and y + line_gap < inner.end.y:
-			y += line_gap
-			_draw_fitted_label(Vector2(sx, y), rate_str, col_w, fs, C_TEXT_M)
+			var rate_str := str(specs.get("output_rate", ""))
+			if not rate_str.is_empty():
+				_draw_fitted_label(Vector2(right_x, y + float(fs) + line_gap), rate_str, half_w, fs, C_TEXT_M)
 
 	_draw_item_handles(item, tl, sz)
 	if is_sel:

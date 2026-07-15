@@ -10,7 +10,7 @@ var _head: MeshInstance3D = null
 
 func _ready() -> void:
 	super._ready()
-	prompt = "Configure Sphere of Influence"
+	prompt = "View Sphere of Influence (Snowglobe)"
 	max_distance = 12.0
 	_build_pin()
 	_build_collision()
@@ -26,7 +26,13 @@ func sync_position() -> void:
 
 func interact(_player: Node) -> void:
 	var svc := get_node_or_null("/root/SoiService")
-	if svc != null:
+	if svc == null:
+		return
+	if svc.has_method("open_from_marker"):
+		svc.open_from_marker()
+	elif svc.has_method("enter_snowglobe"):
+		svc.enter_snowglobe()
+	else:
 		svc.open_panel()
 
 

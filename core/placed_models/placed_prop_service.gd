@@ -64,6 +64,43 @@ static func place_model_at_hit(main: Node, model_id: String, hit: Dictionary) ->
 	return place_model(main, model_id, false, Vector2(pos.x, pos.z))
 
 
+## Place a model at an absolute world XZ (grounds Y via TerrainSurfaceQuery).
+## Optionally stamps graph_item_id / bound link extras onto the record.
+static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
+		extra: Dictionary = {}) -> Dictionary:
+	if main == null or model_id.is_empty():
+		return {"ok": false, "error": "Missing main or model_id"}
+	var gy := TerrainSurfaceQuery.ground_height_at(main, x, z)
+	var layer := _layer_for_main(main)
+	if layer == null:
+		return {"ok": false, "error": "Could not resolve placed-prop layer"}
+	var prop_id := layer.add_free_prop(model_id, x, NAN, z, 0.0, 0.0, 0.0, 1.0, gy)
+	if prop_id.is_empty():
+		return {"ok": false, "error": "Failed to add prop record"}
+	if not extra.is_empty():
+		layer.update_prop(prop_id, extra.duplicate(true))
+	_save_layer(main, layer)
+	_rebuild_scene_props(main, layer)
+	if ModelCatalog.is_starshade_model(model_id):
+		_trigger_starshade_graph_seed(main)
+	return {"ok": true, "prop_id": prop_id, "x": x, "z": z, "ground_y": gy}
+
+
+## Move an existing prop to a new world XZ and reground.
+static func move_prop_xz(main: Node, prop_id: String, x: float, z: float) -> bool:
+	if main == null or prop_id.is_empty():
+		return false
+	var layer := _layer_for_main(main)
+	if layer == null:
+		return false
+	var gy := TerrainSurfaceQuery.ground_height_at(main, x, z)
+	if not layer.update_prop(prop_id, {"x": x, "z": z, "ground_y": gy}):
+		return false
+	_save_layer(main, layer)
+	_rebuild_scene_props(main, layer)
+	return true
+
+
 static func begin_bundle_placement(main: Node, prep: Dictionary,
 		near_player: bool = true) -> Dictionary:
 	if main == null or not bool(prep.get("ok", false)):
@@ -174,13 +211,19 @@ static func confirm_placement() -> bool:
 	var rec := layer.find_by_id(prop_id)
 	var parent := _props_parent(main)
 	var gy_fn := TerrainSurfaceQuery.ground_y_callable(main)
-	var prop := PlacedPropRuntime.add_one(parent, rec, gy_fn)
 	var ibc := _placement_prep.get("ibc", {}) as Dictionary
 	var seed_prep := _placement_prep.duplicate(true)
+	# Clear the placement state BEFORE spawning the real node. _build_prop() checks
+	# is_placement_active()/placement_prop_id() to keep an IN-FLIGHT ghost's real
+	# record non-colliding, but by this point the placement is already committed —
+	# leaving the flags set here made the just-placed prop spawn with collision
+	# (and crosshair focus, which requires a physics hit) disabled until some
+	# unrelated later rebuild happened to reconstruct it.
+	_clear_placement()
+	var prop := PlacedPropRuntime.add_one(parent, rec, gy_fn)
 	if prop != null and not ibc.is_empty() and main.get_tree() != null:
 		BUNDLE_IMPORTER_SCRIPT.attach_ibc_to_imported_canopy(
 			main.get_tree(), model_id, ibc)
-	_clear_placement()
 	if ModelCatalog.is_starshade_model(model_id):
 		_trigger_starshade_graph_seed(main, seed_prep)
 	return true

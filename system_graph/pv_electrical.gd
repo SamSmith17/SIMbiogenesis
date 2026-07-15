@@ -11,14 +11,17 @@ static func temp_adjusted_voc(voc_stc: float, ambient_c: float) -> float:
 	return voc_stc * (1.0 + VOC_TEMP_COEFF * (25.0 - ambient_c))
 
 
+## Only DC PV strings contribute open-circuit voltage. Wind/hydro turbines are
+## AC/rectified sources with their own controllers — they carry no PV `voc` and
+## must NOT be treated as PV-string contributors (they'd fall back to a bogus
+## 37.5 V and inflate the string Voc fault check).
 static func is_pv_source_type(type_id: String) -> bool:
-	return type_id in ["panel", "wind", "hydro"] \
-		or (type_id == "compound" and false)  # compound handled separately
+	return type_id == "panel"  # array compound handled via is_pv_source_item
 
 
 static func is_pv_source_item(item: Dictionary) -> bool:
 	var ty := str(item.get("type", ""))
-	if ty in ["panel", "wind", "hydro"]:
+	if ty == "panel":
 		return true
 	if ty == "compound":
 		var sp: Dictionary = item.get("specs", {}) as Dictionary
@@ -29,7 +32,7 @@ static func is_pv_source_item(item: Dictionary) -> bool:
 static func unit_voc(item: Dictionary) -> float:
 	var ty := str(item.get("type", ""))
 	var sp: Dictionary = item.get("specs", {}) as Dictionary
-	if ty == "panel" or ty == "wind" or ty == "hydro":
+	if ty == "panel":
 		return float(sp.get("voc", 37.5))
 	if ty == "compound" and str(sp.get("compound_kind", "")) == "array":
 		return float(sp.get("array_equiv_voc", 0.0))

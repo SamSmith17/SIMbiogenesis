@@ -4,6 +4,14 @@ extends RefCounted
 ## All values are in SI units (W, V, A, kWh).  Costs are in USD.
 ## Node type strings must match GraphCanvas.HANDLES / NODE_SIZES keys.
 
+const _GraphCanvas := preload("res://system_graph/graph_canvas.gd")
+
+
+## Canonical library-spawn footprint from NODE_SIZES (Phase 4).
+static func spawn_dimensions(preset: Dictionary) -> Vector2:
+	var t := str(preset.get("type", ""))
+	return Vector2(_GraphCanvas.default_width(t), _GraphCanvas.default_height(t))
+
 # ---------------------------------------------------------------------------
 # Solar Panels  (type = "panel")
 # ---------------------------------------------------------------------------
@@ -279,6 +287,161 @@ const PROCESSORS: Array = [
 			"output_rate": "25 mi/h",
 		},
 	},
+	{
+		"type": "processor", "label": "Greywater Filter", "icon": "🚿",
+		"width": 140.0, "height": 130.0,
+		"specs": {
+			"name": "Greywater Filter", "watts": 40.0, "cost": 180.0,
+			"energy_source": "ac",
+			"efficiency": 0.85, "energy_wh_per_unit": 0.8,
+			"inputs": [{"kind": "greywater", "rate": 20.0, "unit": "L/h"}],
+			"outputs": [{"kind": "water", "rate": 17.0, "unit": "L/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "Compost Digester", "icon": "🌱",
+		"width": 140.0, "height": 130.0,
+		"specs": {
+			"name": "Compost Digester", "watts": 0.0, "cost": 120.0,
+			"energy_source": "",
+			"efficiency": 0.70, "energy_wh_per_unit": 0.0,
+			"inputs": [
+				{"kind": "biomass", "rate": 2.0, "unit": "kg/h"},
+				{"kind": "blackwater", "rate": 1.0, "unit": "L/h"},
+			],
+			"outputs": [{"kind": "nutrients", "rate": 1.5, "unit": "kg/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "IBC Biodigester", "icon": "♻",
+		"width": 160.0, "height": 150.0,
+		"specs": {
+			"name": "Solar Citi3s IBC Biodigester", "watts": 12.5, "cost": 950.0,
+			"energy_source": "ac",
+			"efficiency": 0.85, "energy_wh_per_unit": 15.0,
+			"processor_template": "ibc_biodigester",
+			"daily_note": "5 gal blackwater + 1 kg scraps + 300 Wh → 5 gal effluent + 1 m³ biogas",
+			"inputs": [
+				{"kind": "blackwater", "rate": 0.7886, "unit": "L/h"},
+				{"kind": "biomass", "rate": 0.04167, "unit": "kg/h"},
+			],
+			"outputs": [
+				{"kind": "liquid_fertilizer", "rate": 0.7886, "unit": "L/h"},
+				{"kind": "biogas", "rate": 0.04167, "unit": "m³/h"},
+			],
+		},
+	},
+	{
+		# Woodgas/syngas → 48VDC generator: its "dc_electricity" output entry
+		# gets a +/- port pair (see graph_port_service.gd) that wires straight
+		# into a battery's positive/negative ports, or a controller's
+		# pvPositive/pvNegative — no separate controller node needed. DC
+		# output is derived each tick from actual fuel throughput ×
+		# energy_wh_per_unit × efficiency (ResourceFlowEngine._process_processor),
+		# not a flat number — the fuel tank running dry throttles it for real.
+		"type": "processor", "label": "Woodgas DC Generator", "icon": "⚡",
+		"width": 150.0, "height": 140.0,
+		"specs": {
+			"name": "Woodgas DC Generator", "watts": 0.0, "cost": 1800.0,
+			"energy_source": "",
+			"efficiency": 0.85,
+			# Wh of DC electricity produced per m³ of woodgas consumed
+			# (producer-gas LHV ballpark ~1-1.7 kWh/m³); 1000 Wh/m³ keeps peak
+			# output at the default 3.0 m³/h fuel rate (~2.55 kW) matching the
+			# old flat-48VDC-generator's 3.0kW*0.85 peak.
+			"energy_wh_per_unit": 1000.0,
+			"current_output_kw": 0.0,
+			"daily_note": "DC output scales with fuel throughput — wire the +/- ports straight to a battery's +/-, or a controller's pvPositive/pvNegative.",
+			"inputs": [{"kind": "woodgas", "rate": 3.0, "unit": "m³/h"}],
+			"outputs": [{"kind": "dc_electricity", "rate": 3.0, "unit": "kW"}],
+			# Default automation: run only while fuel is connected/available
+			# (enforced by the normal empty-input block, not by a condition
+			# here) AND the battery needs it.
+			"graph_automations": [
+				{
+					"alias": "On below 20% battery",
+					"triggers": [{"kind": "numeric", "entity_id": "sensor.battery_level", "below": 20.0}],
+					"conditions": [],
+					"actions": [{"kind": "scene_node", "command": "turn_on"}],
+				},
+				{
+					"alias": "Off above 80% battery",
+					"triggers": [{"kind": "numeric", "entity_id": "sensor.battery_level", "above": 80.0}],
+					"conditions": [],
+					"actions": [{"kind": "scene_node", "command": "turn_off"}],
+				},
+			],
+		},
+	},
+	# Boundary imports — infinite supply that counts AGAINST closure score.
+	# Earth play allows partial openness; Moon/Mars challenges forbid these.
+	{
+		"type": "processor", "label": "Grid Import", "icon": "🔌",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Grid Import", "role": "import",
+			"counts_as_import": true,
+			"watts": 0.0, "cost": 0.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"inputs": [],
+			"outputs": [{"kind": "electric", "rate": 5.0, "unit": "kWh/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "Water Truck", "icon": "🚚",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Water Truck", "role": "import",
+			"counts_as_import": true,
+			"watts": 0.0, "cost": 0.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"inputs": [],
+			"outputs": [{"kind": "water", "rate": 200.0, "unit": "L/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "Food Delivery", "icon": "📦",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Food Delivery", "role": "import",
+			"counts_as_import": true,
+			"watts": 0.0, "cost": 0.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"inputs": [],
+			"outputs": [{"kind": "food", "rate": 2.0, "unit": "kg/h"}],
+		},
+	},
+]
+
+# ---------------------------------------------------------------------------
+# Habitats  (type = "processor", specs.role = "habitat")
+# Mouths to feed. Rates are per-occupant; ResourceFlowEngine multiplies by
+# specs.occupants. Water split: ~80% greywater / ~20% blackwater (WHO/UNEP
+# domestic wastewater fractions). Food scraps ~20% of intake as wet biomass.
+# ---------------------------------------------------------------------------
+const HABITATS: Array = [
+	{
+		"type": "processor", "label": "Population", "icon": "🏠",
+		"width": 150.0, "height": 150.0,
+		"specs": {
+			"name": "Population", "role": "habitat", "occupants": 1,
+			"watts": 0.0, "cost": 0.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"inputs": [
+				{"kind": "water", "rate": 2.083, "unit": "L/h"},
+				{"kind": "food", "rate": 0.0625, "unit": "kg/h"},
+			],
+			"outputs": [
+				{"kind": "greywater", "rate": 1.666, "unit": "L/h"},
+				{"kind": "blackwater", "rate": 0.417, "unit": "L/h"},
+				{"kind": "biomass", "rate": 0.0125, "unit": "kg/h"},
+			],
+		},
+	},
 ]
 
 # ---------------------------------------------------------------------------
@@ -359,6 +522,60 @@ const RESOURCES: Array = [
 			"level": 0.5, "cost": 350.0,
 		},
 	},
+	{
+		"type": "resource", "label": "Food Store (50 kg)", "icon": "🍎",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Food Store", "resource_kind": "food",
+			"capacity": "50 kg", "capacity_qty": 50.0, "capacity_unit": "kg",
+			"level": 0.8, "cost": 40.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Greywater Tank", "icon": "🚿",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Greywater Tank", "resource_kind": "greywater",
+			"capacity": "200 L", "capacity_qty": 200.0, "capacity_unit": "L",
+			"level": 0.0, "cost": 80.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Blackwater Tank", "icon": "🚽",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Blackwater Tank", "resource_kind": "blackwater",
+			"capacity": "100 L", "capacity_qty": 100.0, "capacity_unit": "L",
+			"level": 0.0, "cost": 90.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Nutrient Store", "icon": "🌱",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Nutrient Store", "resource_kind": "nutrients",
+			"capacity": "100 kg", "capacity_qty": 100.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 50.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Liquid Fertilizer Tank", "icon": "🧪",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Liquid Fertilizer Tank", "resource_kind": "liquid_fertilizer",
+			"capacity": "200 L", "capacity_qty": 200.0, "capacity_unit": "L",
+			"level": 0.0, "cost": 75.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Biogas Store", "icon": "💨",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Biogas Store", "resource_kind": "biogas",
+			"capacity": "10 m³", "capacity_qty": 10.0, "capacity_unit": "m³",
+			"level": 0.0, "cost": 120.0,
+		},
+	},
 ]
 
 # ---------------------------------------------------------------------------
@@ -366,6 +583,22 @@ const RESOURCES: Array = [
 # Credits captured rainwater into connected water tanks via ResourceFlowEngine.
 # ---------------------------------------------------------------------------
 const CATCHMENTS: Array = [
+	{
+		"type": "catchment", "label": "SoI Rain Catchment", "icon": "🌧",
+		"width": 110.0, "height": 90.0,
+		"specs": {
+			"name": "SoI Rain Catchment", "catchment_kind": "rain",
+			"use_soi_area": true, "area_m2": 50.0, "runoff_coeff": 0.75, "cost": 0.0,
+		},
+	},
+	{
+		"type": "catchment", "label": "SoI Biomass PBI", "icon": "🌿",
+		"width": 110.0, "height": 90.0,
+		"specs": {
+			"name": "SoI Biomass PBI", "catchment_kind": "biomass",
+			"use_soi_area": true, "area_m2": 100.0, "runoff_coeff": 1.0, "cost": 0.0,
+		},
+	},
 	{
 		"type": "catchment", "label": "Roof Catchment (50 m²)", "icon": "🌧",
 		"width": 110.0, "height": 90.0,
@@ -527,8 +760,218 @@ const CATEGORIES: Array = [
 	{ "id": "batteries",   "label": "Batteries",            "icon": "🔋", "presets": BATTERIES   },
 	{ "id": "controllers", "label": "Controllers",          "icon": "🎛", "presets": CONTROLLERS },
 	{ "id": "appliances",  "label": "Appliances & Loads",   "icon": "🏠", "presets": APPLIANCES  },
+	{ "id": "habitats",    "label": "Population",             "icon": "🏠", "presets": HABITATS    },
 	{ "id": "processors",  "label": "Processors",           "icon": "🌀", "presets": PROCESSORS  },
 	{ "id": "resources",   "label": "Resource Containers",  "icon": "🪣", "presets": RESOURCES   },
 	{ "id": "catchments",  "label": "Rain Catchment",       "icon": "🌧", "presets": CATCHMENTS  },
 	{ "id": "monitors",    "label": "Circuit Monitors",     "icon": "📊", "presets": SHELLY4PM   },
 ]
+
+
+## User-authored/edited presets, keyed by category id. Kept OUT of CATEGORIES
+## (whose "presets" arrays are `const` literals — Godot marks those read-only
+## at runtime, so mutating them in place throws "Array is in read-only state").
+## presets_for_category() merges this on top of the built-ins for display.
+static var _user_overrides: Dictionary = {}
+
+
+static func load_user_presets() -> void:
+	_user_overrides.clear()
+	if not FileAccess.file_exists("user://user_presets.json"):
+		return
+	var file := FileAccess.open("user://user_presets.json", FileAccess.READ)
+	if file == null:
+		return
+	var text := file.get_as_text()
+	file.close()
+	var json = JSON.new()
+	if json.parse(text) != OK:
+		return
+	var data = json.get_data()
+	if not (data is Dictionary):
+		return
+
+	for cat_id: String in data.keys():
+		if data[cat_id] is Array:
+			_user_overrides[cat_id] = (data[cat_id] as Array).duplicate(true)
+
+
+## Built-in presets for a category with any user overrides/additions merged
+## on top (matched by label). Always returns a fresh, mutable Array.
+static func presets_for_category(cat_id: String) -> Array:
+	var out: Array = []
+	for cat in CATEGORIES:
+		if cat.get("id", "") == cat_id:
+			out = (cat.get("presets", []) as Array).duplicate(true)
+			break
+	var overrides: Array = _user_overrides.get(cat_id, []) as Array
+	for up: Variant in overrides:
+		if not (up is Dictionary):
+			continue
+		var up_dict := up as Dictionary
+		var label: String = up_dict.get("label", "")
+		var found_idx := -1
+		for pi in out.size():
+			if (out[pi] as Dictionary).get("label", "") == label:
+				found_idx = pi
+				break
+		if found_idx >= 0:
+			out[found_idx] = up_dict
+		else:
+			out.append(up_dict)
+	return out
+
+
+static func save_user_preset(cat_id: String, preset: Dictionary) -> void:
+	var data := {}
+	if FileAccess.file_exists("user://user_presets.json"):
+		var file := FileAccess.open("user://user_presets.json", FileAccess.READ)
+		if file != null:
+			var text := file.get_as_text()
+			file.close()
+			var json = JSON.new()
+			if json.parse(text) == OK:
+				var parsed = json.get_data()
+				if parsed is Dictionary:
+					data = parsed
+	
+	if not data.has(cat_id):
+		data[cat_id] = []
+	var list: Array = data[cat_id] as Array
+	
+	var label: String = preset.get("label", "")
+	var found_idx := -1
+	for i in list.size():
+		var p = list[i]
+		if p is Dictionary and p.get("label", "") == label:
+			found_idx = i
+			break
+	if found_idx >= 0:
+		list[found_idx] = preset
+	else:
+		list.append(preset)
+	
+	var file_w := FileAccess.open("user://user_presets.json", FileAccess.WRITE)
+	if file_w != null:
+		file_w.store_string(JSON.stringify(data, "\t"))
+		file_w.close()
+
+	if not _user_overrides.has(cat_id):
+		_user_overrides[cat_id] = []
+	var mem_list: Array = _user_overrides[cat_id] as Array
+	var mem_idx := -1
+	for pi in mem_list.size():
+		if (mem_list[pi] as Dictionary).get("label", "") == label:
+			mem_idx = pi
+			break
+	if mem_idx >= 0:
+		mem_list[mem_idx] = preset
+	else:
+		mem_list.append(preset)
+
+
+static func create_default_preset(itype: String, name_val: String) -> Dictionary:
+	var preset := {
+		"type": itype,
+		"label": name_val,
+		"icon": _preset_icon_for_type(itype),
+		"width": 120.0,
+		"height": 100.0,
+		"specs": {
+			"name": name_val,
+			"cost": 100.0
+		}
+	}
+	
+	match itype:
+		"panel":
+			preset.specs.merge({
+				"wmp": 250.0, "voc": 37.5, "vmp": 30.5, "isc": 8.80, "imp": 8.20
+			})
+		"wind":
+			preset.specs.merge({
+				"kind": "hawt", "rated_w": 1000.0, "rotor_diameter_m": 2.1,
+				"cp_peak": 0.42, "generator_efficiency": 0.90,
+				"cut_in_ms": 3.0, "rated_ms": 11.0, "cut_out_ms": 20.0,
+				"hub_height_m": 10.0, "site_mean_wind_ms": 6.0,
+				"surface_roughness_m": 0.03, "site_altitude_m": 0.0
+			})
+		"hydro":
+			preset.specs.merge({
+				"kind": "pelton", "turbine_efficiency": 0.0, "generator_efficiency": 0.85,
+				"gross_head_m": 25.0, "design_flow_lps": 3.0,
+				"penstock_length_m": 60.0, "penstock_diameter_mm": 63.0,
+				"pipe_roughness_mm": 0.0015
+			})
+		"battery", "smartbattery":
+			preset.specs.merge({
+				"voltage": 12.0, "ah": 100.0, "kwh": 1.2, "soc": 0.8,
+				"soc_shutdown_pct": 10.0, "soc_resume_pct": 20.0, "alert_threshold_pct": 95.0
+			})
+		"controller":
+			preset.specs.merge({
+				"max_charge_amps": 30.0, "max_load_amps": 30.0, "system_voltage": 12.0
+			})
+		"appliance", "acload":
+			preset.specs.merge({
+				"avg_watts": 100.0, "max_watts": 120.0, "pf": 0.95
+			})
+		"population", "habitat":
+			preset.type = "habitat"
+			preset.specs.merge({
+				"population": 1.0,
+				"inputs": [{"kind": "water", "rate": 5.0, "unit": "L/d/p"}, {"kind": "oxygen", "rate": 840.0, "unit": "g/d/p"}],
+				"outputs": [{"kind": "co2", "rate": 1000.0, "unit": "g/d/p"}, {"kind": "urine", "rate": 1.5, "unit": "L/d/p"}]
+			})
+		"processor":
+			preset.specs.merge({
+				"watts": 500.0, "efficiency": 0.90, "energy_source": "ac",
+				"inputs": [{"kind": "water", "rate": 10.0, "unit": "L/h"}],
+				"outputs": [{"kind": "urine", "rate": 5.0, "unit": "L/h"}]
+			})
+		"resource":
+			preset.specs.merge({
+				"resource_kind": "water", "capacity_qty": 100.0, "capacity_unit": "L", "level": 0.5, "alert_threshold_pct": 95.0
+			})
+		"catchment":
+			preset.specs.merge({
+				"catchment_kind": "rain", "use_soi_area": false, "area_m2": 10.0, "runoff_coeff": 0.85
+			})
+		"shelly4pm":
+			preset.specs.merge({
+				"max_amps_per_circuit": 16.0, "c0_name": "Circuit 0", "c1_name": "Circuit 1", "c2_name": "Circuit 2", "c3_name": "Circuit 3"
+			})
+			
+	return preset
+
+
+static func _preset_icon_for_type(itype: String) -> String:
+	match itype:
+		"panel": return "☀"
+		"wind": return "🌬"
+		"hydro": return "💧"
+		"battery", "smartbattery": return "🔋"
+		"controller": return "🎛"
+		"appliance", "acload": return "🏠"
+		"population", "habitat": return "🏠"
+		"processor": return "🌀"
+		"resource": return "🪣"
+		"catchment": return "🌧"
+		"shelly4pm": return "📊"
+		_: return "📦"
+
+
+static func _category_id_for_type_static(itype: String) -> String:
+	match itype:
+		"panel": return "panels"
+		"wind": return "wind"
+		"hydro": return "hydro"
+		"battery", "smartbattery": return "batteries"
+		"controller": return "controllers"
+		"appliance", "acload": return "appliances"
+		"population", "habitat": return "habitats"
+		"processor": return "processors"
+		"resource": return "resources"
+		"catchment": return "catchments"
+		"shelly4pm": return "monitors"
+		_: return ""

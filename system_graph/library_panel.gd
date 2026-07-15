@@ -7,6 +7,11 @@ signal item_picked(preset: Dictionary, screen_pos: Vector2)
 ## Emitted when a model-linked preset's "Place Model" button is pressed. The
 ## graph view closes and starts a ghost placement of the linked 3D model.
 signal place_model_requested(preset: Dictionary)
+## Emitted right after a user-authored preset is saved via "Create Custom
+## Component" — unlike item_picked (which only arms a click/drag-to-place
+## gesture), this is a direct "spawn it now" request since Create has no
+## ambiguous click-vs-drag input to disambiguate.
+signal custom_component_created(preset: Dictionary)
 
 # ---------------------------------------------------------------------------
 # Palette  (mirrors system_graph_view constants)
@@ -41,10 +46,20 @@ var _categories_vbox: VBoxContainer = null  # root vbox for appending runtime ca
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	set_process_input(true)
+	ComponentPresets.load_user_presets()
 	_build()
 	_touch_scroll = _TOUCH_SCROLL_HANDLER.new()
 	_touch_scroll.bind(_scroll, self)
 	call_deferred("_refresh_scroll_content_height")
+
+
+func rebuild() -> void:
+	for child in get_children():
+		child.queue_free()
+	_cat_expanded.clear()
+	_cat_contents.clear()
+	_cat_headers.clear()
+	_build()
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -92,7 +107,104 @@ func _build() -> void:
 	add_child(root)
 
 	root.add_child(_build_search_bar())
+	root.add_child(_build_custom_creator())
 	root.add_child(_build_categories())
+
+
+func _build_custom_creator() -> Control:
+	var pc := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(C_PANEL.r, C_PANEL.g, C_PANEL.b, 0.4)
+	sb.set_border_width(SIDE_BOTTOM, 1)
+	sb.border_color = C_BORDER
+	sb.content_margin_left = 8.0
+	sb.content_margin_right = 8.0
+	sb.content_margin_top = 8.0
+	sb.content_margin_bottom = 8.0
+	pc.add_theme_stylebox_override("panel", sb)
+	
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 6)
+	pc.add_child(vbox)
+	
+	var lbl := Label.new()
+	lbl.text = "🆕 Create Custom Component"
+	lbl.add_theme_font_size_override("font_size", 10)
+	lbl.add_theme_color_override("font_color", C_PRIMARY)
+	vbox.add_child(lbl)
+	
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 4)
+	vbox.add_child(hbox)
+	
+	var type_opt := OptionButton.new()
+	type_opt.focus_mode = Control.FOCUS_NONE
+	type_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	type_opt.add_theme_font_size_override("font_size", 10)
+	
+	var types := [
+		{"label": "Solar Panel", "id": "panel"},
+		{"label": "Wind Turbine", "id": "wind"},
+		{"label": "Hydro Turbine", "id": "hydro"},
+		{"label": "Battery", "id": "battery"},
+		{"label": "Controller", "id": "controller"},
+		{"label": "Appliance / Load", "id": "appliance"},
+		{"label": "Population", "id": "habitat"},
+		{"label": "Processor", "id": "processor"},
+		{"label": "Resource Container", "id": "resource"},
+		{"label": "Rain Catchment", "id": "catchment"},
+		{"label": "Circuit Monitor", "id": "shelly4pm"}
+	]
+	
+	for i in types.size():
+		type_opt.add_item(types[i].label, i)
+	type_opt.select(0)
+	hbox.add_child(type_opt)
+	
+	var name_ed := LineEdit.new()
+	name_ed.placeholder_text = "Name..."
+	name_ed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_ed.add_theme_font_size_override("font_size", 10)
+	
+	var le_sb := StyleBoxFlat.new()
+	le_sb.bg_color              = Color(C_BG.r, C_BG.g, C_BG.b, 0.7)
+	le_sb.border_color          = C_BORDER
+	le_sb.set_border_width_all(1)
+	le_sb.set_corner_radius_all(3)
+	le_sb.content_margin_left   = 6.0
+	le_sb.content_margin_right  = 6.0
+	le_sb.content_margin_top    = 3.0
+	le_sb.content_margin_bottom = 3.0
+	name_ed.add_theme_stylebox_override("normal", le_sb)
+	name_ed.add_theme_stylebox_override("focus", le_sb)
+	
+	hbox.add_child(name_ed)
+	
+	var create_btn := Button.new()
+	create_btn.text = " Create "
+	create_btn.focus_mode = Control.FOCUS_NONE
+	create_btn.add_theme_font_size_override("font_size", 10)
+	create_btn.pressed.connect(func() -> void:
+		var name_val := name_ed.text.strip_edges()
+		if name_val.is_empty():
+			return
+		var type_idx := maxi(type_opt.selected, 0)
+		var itype := str(types[type_idx].id)
+
+		var preset := ComponentPresets.create_default_preset(itype, name_val)
+		var cat_id := ComponentPresets._category_id_for_type_static(itype)
+
+		ComponentPresets.save_user_preset(cat_id, preset)
+
+		name_ed.text = ""
+		rebuild()
+		# Place it immediately — a definitive click, not the click-vs-drag
+		# gesture item_picked exists to disambiguate for library items.
+		custom_component_created.emit(preset)
+	)
+	hbox.add_child(create_btn)
+	
+	return pc
 
 
 func _build_search_bar() -> Control:
@@ -209,8 +321,10 @@ func _build_category(cat: Dictionary, idx: int) -> Control:
 		]
 	)
 
-	# ---- Item buttons ----
-	var presets: Array = cat.get("presets", [])
+	# ---- Item buttons ---- (built-ins merged with any user-saved overrides —
+	# see ComponentPresets.presets_for_category, since CATEGORIES' own
+	# "presets" arrays are const/read-only and can't carry user edits).
+	var presets: Array = ComponentPresets.presets_for_category(str(cat.get("id", "")))
 	for p: Dictionary in presets:
 		content_vbox.add_child(_make_item_row(p, idx))
 
@@ -392,6 +506,13 @@ func _spec_hint(preset: Dictionary) -> String:
 		"appliance", "acload":
 			return "%.0f W avg" % float(specs.get("avg_watts", specs.get("max_watts", 0.0)))
 		"processor":
+			if str(specs.get("role", "")) == "habitat":
+				var n: int = int(specs.get("occupants", 1))
+				return "%d person%s · %.0f L/day" % [
+					n, "s" if n != 1 else "",
+					float(specs.get("occupants", 1.0)) * 2.083 * 24.0]
+			if str(specs.get("processor_template", "")) == "ibc_biodigester":
+				return "5 gal/d + 1 kg/d → effluent + biogas"
 			return "%.0f W" % float(specs.get("watts", 0.0))
 		"resource":
 			return ResourceKinds.display_name(str(specs.get("resource_kind", "water")))

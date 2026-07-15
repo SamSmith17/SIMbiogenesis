@@ -89,24 +89,24 @@ func find_by_id(prop_id: String) -> Dictionary:
 	return {}
 
 
-func add_free_prop(model_id: String, x: float, y: float, z: float,
+func add_free_prop(model_id: String, x: float, y_offset: float, z: float,
 		yaw: float = 0.0, pitch: float = 0.0, roll: float = 0.0,
 		scale: float = 1.0, ground_y: float = NAN) -> String:
 	if props.size() >= MAX_PROPS:
 		return ""
-	var rec := _new_record(model_id, x, y, z, yaw, pitch, roll, scale, ground_y)
+	var rec := _new_record(model_id, x, y_offset, z, yaw, pitch, roll, scale, ground_y)
 	rec["type"] = "free"
 	props.append(rec)
 	return str(rec["id"])
 
 
-func add_osm_prop(building_idx: int, model_id: String, x: float, y: float, z: float,
+func add_osm_prop(building_idx: int, model_id: String, x: float, y_offset: float, z: float,
 		yaw: float = 0.0, pitch: float = 0.0, roll: float = 0.0,
 		scale: float = 1.0, ground_y: float = NAN) -> String:
 	remove_osm_for_building(building_idx)
 	if props.size() >= MAX_PROPS:
 		return ""
-	var rec := _new_record(model_id, x, y, z, yaw, pitch, roll, scale, ground_y)
+	var rec := _new_record(model_id, x, y_offset, z, yaw, pitch, roll, scale, ground_y)
 	rec["type"] = "osm"
 	rec["building_idx"] = building_idx
 	props.append(rec)
@@ -182,7 +182,7 @@ func is_building_replaced(building_idx: int) -> bool:
 	return false
 
 
-static func _new_record(model_id: String, x: float, y: float, z: float,
+static func _new_record(model_id: String, x: float, y_offset: float, z: float,
 		yaw: float, pitch: float, roll: float, scale: float,
 		ground_y: float) -> Dictionary:
 	var rec := {
@@ -192,8 +192,8 @@ static func _new_record(model_id: String, x: float, y: float, z: float,
 		"yaw": yaw, "pitch": pitch, "roll": roll,
 		"scale": scale,
 	}
-	if not is_nan(y):
-		rec["y"] = y
+	if not is_nan(y_offset):
+		rec["y_offset"] = y_offset
 	if not is_nan(ground_y):
 		rec["ground_y"] = ground_y
 	return rec

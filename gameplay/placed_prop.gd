@@ -10,6 +10,8 @@ var building_idx: int = -1
 
 var _outline_mesh: MeshInstance3D = null
 var _outline_mat: StandardMaterial3D = null
+var _graph_outline_mat: StandardMaterial3D = null
+var _graph_highlight := false
 var _body: StaticBody3D = null
 
 
@@ -21,6 +23,10 @@ func _ready() -> void:
 	_outline_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_outline_mat.albedo_color = Color(0.05, 0.45, 0.12, 0.85)
 	_outline_mat.cull_mode = BaseMaterial3D.CULL_FRONT
+	_graph_outline_mat = StandardMaterial3D.new()
+	_graph_outline_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_graph_outline_mat.albedo_color = Color(0.1, 0.82, 0.95, 0.9)
+	_graph_outline_mat.cull_mode = BaseMaterial3D.CULL_FRONT
 
 
 func set_collision_enabled(enabled: bool) -> void:
@@ -110,7 +116,12 @@ func on_focus_enter(player: Node) -> void:
 
 func on_focus_exit(player: Node) -> void:
 	super.on_focus_exit(player)
-	_apply_outline(false)
+	_apply_outline(_graph_highlight)
+
+
+func set_graph_highlight(on: bool) -> void:
+	_graph_highlight = on
+	_apply_outline(on or _focus_active)
 
 
 func is_grabbable() -> bool:
@@ -133,9 +144,13 @@ func get_record_patch_from_node(ground_y_at: Callable) -> Dictionary:
 		if base > 0.0001:
 			scale = ws / base
 	var gy: float = float(ground_y_at.call(global_position.x, global_position.z))
+	var foot_y := ModelCatalog.foot_local_y(model_id)
+	var world_scale := ModelCatalog.resolved_scale(model_id, scale)
+	var grounded_y := gy - foot_y * world_scale
+	var y_offset := global_position.y - grounded_y
 	return {
 		"x": global_position.x,
-		"y": global_position.y,
+		"y_offset": y_offset,
 		"z": global_position.z,
 		"yaw": yaw_deg,
 		"pitch": pitch_deg,
@@ -166,7 +181,8 @@ func _apply_outline(on: bool) -> void:
 			_outline_mesh.name = "OutlinePass"
 			mesh.add_child(_outline_mesh)
 		_outline_mesh.mesh = mesh.mesh
-		_outline_mesh.material_override = _outline_mat
+		var mat := _graph_outline_mat if _graph_highlight else _outline_mat
+		_outline_mesh.material_override = mat
 		_outline_mesh.scale = Vector3(1.03, 1.03, 1.03)
 		_outline_mesh.visible = true
 	elif _outline_mesh != null:

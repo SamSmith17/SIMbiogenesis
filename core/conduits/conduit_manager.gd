@@ -187,7 +187,10 @@ func commit_route(conn_id: String, waypoints: Array) -> void:
 	if _model == null:
 		return
 	_updating_model = true
-	_model.update_connection(conn_id, {"route_3d": waypoints.duplicate(true)})
+	_model.update_connection(conn_id, {
+		"route_3d": waypoints.duplicate(true),
+		"route_locked": true,
+	})
 	_updating_model = false
 	_last_anchors.erase(conn_id)
 	var conn := _model.get_connection(conn_id)

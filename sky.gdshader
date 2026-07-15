@@ -49,8 +49,7 @@ group_uniforms clouds;
 	uniform vec3 clouds_top_color : source_color = vec3( 1.0, 1.0, 1.00 );
 	uniform vec3 clouds_middle_color : source_color = vec3( 0.92, 0.92, 0.98 );
 	uniform vec3 clouds_bottom_color : source_color = vec3( 0.83, 0.83, 0.94 );
-	uniform float clouds_speed : hint_range( 0.0, 20.0, 0.01 ) = 2.0;
-	uniform float clouds_direction : hint_range( -0.5, 0.5, 0.01 ) = 0.2;
+	uniform vec2 cloud_uv_offset = vec2( 0.0, 0.0 );
 	uniform float clouds_scale : hint_range( 0.0, 4.0, 0.01 ) = 1.0;
 	uniform float clouds_cutoff : hint_range( 0.0, 1.0, 0.01 ) = 0.3;
 	uniform float clouds_fuzziness : hint_range( 0.0, 2.0, 0.01 ) = 0.5;
@@ -61,19 +60,14 @@ group_uniforms clouds;
 	uniform vec3 storm_cloud_color : source_color = vec3( 0.16, 0.17, 0.22 );
 
 group_uniforms cirrus; // High wispy streak clouds, independent of the cumulus layer
+	uniform vec2 cirrus_uv_offset = vec2( 0.0, 0.0 );
 	uniform float cirrus_amount : hint_range( 0.0, 1.0, 0.01 ) = 0.35;
 	uniform float cirrus_scale : hint_range( 0.1, 8.0, 0.01 ) = 2.6;
-	uniform float cirrus_speed : hint_range( 0.0, 20.0, 0.01 ) = 1.0;
+	uniform float cirrus_wave_frequency : hint_range( 0.0, 50.0, 0.1 ) = 15.0;
+	uniform float cirrus_wave_intensity : hint_range( 0.0, 1.0, 0.01 ) = 0.5;
 	uniform float cirrus_stretch : hint_range( 1.0, 16.0, 0.1 ) = 7.0;
+	// Driven by the smoothed current velocity vector to align streaks to wind
 	uniform float cirrus_direction : hint_range( -0.5, 0.5, 0.01 ) = 0.2;
-	// Previous streak bearing + crossfade blend (0 = fully "prev", 1 = fully
-	// "direction"). Driven from GDScript (main._advance_cirrus_direction):
-	// large wind-bearing jumps are crossfaded between old/new orientation over
-	// real time instead of snapping instantly, since a hard rotation of the
-	// whole noise field reads as the entire sky spinning — real cirrus doesn't
-	// reorient as a solid sheet, new streaks form while old ones dissipate.
-	uniform float cirrus_direction_prev : hint_range( -0.5, 0.5, 0.01 ) = 0.2;
-	uniform float cirrus_dir_blend : hint_range( 0.0, 1.0, 0.01 ) = 1.0;
 	uniform float cirrus_coverage : hint_range( 0.0, 1.0, 0.01 ) = 0.55; // higher = more sky filled
 	uniform vec3 cirrus_color : source_color = vec3( 1.0, 1.0, 1.0 );
 
@@ -178,13 +172,7 @@ group_uniforms reference_stars;
 
 group_uniforms settings;
 	uniform float overwritten_time = 0.0;
-	// Dedicated clock for cloud/cirrus noise scroll (main._sky_motion_hours),
-	// decoupled from overwritten_time: at high simulation speeds, scrolling the
-	// cloud noise exactly in lockstep with the compressed calendar makes the sky
-	// whip past unrealistically fast, so this value grows sub-linearly with
-	// time_scale instead of 1:1 (see main._sky_motion_rate). Falls back to
-	// `time` (below) when unset, e.g. before the first update.
-	uniform float cloud_motion_time = 0.0;
+	// Cloud motion uses explicit UV offsets in the groups above.
 	uniform float star_rotation_angle = 0.0;
 	uniform float celestial_pole_elevation = 0.0;
 
@@ -276,20 +264,32 @@ group_uniforms settings;
 		n += 0.5 * single_value_cubic( 52, p.x * 2.31 + 11.7, p.y * 2.31 - 4.3 );
 		return clamp( n / 1.5 * 0.5 + 0.5, 0.0, 1.0 );
 	}
-	// Cirrus fractal noise sampled with UVs rotated to a given wind bearing
-	// (fraction of a full turn). Called twice per pixel — once for the old
-	// bearing, once for the new — so a wind-direction change can crossfade
-	// between orientations (see cirrus_dir_blend) instead of visibly rotating
-	// the whole streak field.
-	float sample_cirrus_noise( vec2 base_uv, float dir_frac, float cloud_time_v )
+	// Cirrus fractal noise sampled with UVs rotated to the smoothed wind bearing.
+	// Since we accumulate cirrus_uv_offset in world space, we must rotate the
+	// offset into the streak's local space to avoid sliding sideways.
+	float sample_cirrus_noise( vec2 base_uv )
 	{
-		float _ang = dir_frac * PI * 2.0;
+		float _ang = cirrus_direction * PI * 2.0;
 		float _ca = cos( _ang );
 		float _sa = sin( _ang );
+		// Rotate the base UV to align streaks with wind
 		vec2 _uv = vec2( base_uv.x * _ca - base_uv.y * _sa, base_uv.x * _sa + base_uv.y * _ca );
+		
+		// Rotate the world-space offset into the same local space so scrolling 
+		// exactly follows the streak orientation
+		vec2 _local_offset = vec2( cirrus_uv_offset.x * _ca - cirrus_uv_offset.y * _sa, cirrus_uv_offset.x * _sa + cirrus_uv_offset.y * _ca );
+		
 		_uv = vec2( _uv.x, _uv.y * cirrus_stretch ) * cirrus_scale;
-		_uv += vec2( cloud_time_v * cirrus_speed * 0.004, 0.0 );
-		return gen_cirrus_noise( _uv * 0.55 );
+		_uv += _local_offset * 1.5; // Apply offset
+		
+		float n = gen_cirrus_noise( _uv * 0.55 );
+		if( cirrus_wave_intensity > 0.01 )
+		{
+			// Mackerel sky gravity waves: banding perpendicular to the streak (wind) direction.
+			float wave = sin( _uv.y * cirrus_wave_frequency ) * 0.5 + 0.5;
+			n = mix( n, n * wave, cirrus_wave_intensity );
+		}
+		return n;
 	}
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -306,9 +306,6 @@ float sphere_intersect( vec3 view_dir, vec3 sphere_pos, float radius )
 void sky()
 {
 	float time = overwritten_time != 0.0 ? overwritten_time : TIME;
-	// Cloud/cirrus noise scroll uses its own (sub-linearly time_scale-damped)
-	// clock so fast-forwarding the sim doesn't whip the sky past unrealistically.
-	float cloud_time = cloud_motion_time != 0.0 ? cloud_motion_time : time;
 
 	//////////////////// SHARED SOLAR GEOMETRY //////////////////////////////////////////////////////
 	// Computed once and reused by the sunset sky, the sun glow/aureole, cirrus and cumulus
@@ -425,10 +422,17 @@ void sky()
 	{
 		// Bigger, softer sun near the horizon (atmospheric swelling)
 		float _sun_size = sun_size + cos( LIGHT0_DIRECTION.y * PI ) * sun_size * 0.35;
-		// Only a lit moon occludes the sun (new moon must not leave a black disc).
-		float _moon_occlude = _moon_amount * smoothstep( 0.04, 0.18, _moon_phase_lit );
-		float _cover = max( _moon_occlude, eclipse_obscuration );
-		float _sun_visible = ( 1.0 - _horizon_amount ) * ( 1.0 - _cover );
+		// The spatial moon mask takes a bite out of the sun disc.
+		// (Hack removed: new moon can now safely occlude the sun disc without leaving a black hole in the sky)
+		float _moon_occlude = _moon_amount;
+		
+		// The physical sun disc is blocked by the moon's shape, or by the horizon.
+		float _sun_disc_visible = ( 1.0 - _horizon_amount ) * ( 1.0 - max( _moon_occlude, eclipse_obscuration ) );
+		
+		// Atmospheric scattering (aureole and glow) happens IN FRONT OF the moon.
+		// It should only be dimmed by the global loss of sunlight during an eclipse,
+		// and never spatially masked by the moon's geometry.
+		float _atmos_illumination = ( 1.0 - _horizon_amount ) * ( 1.0 - eclipse_obscuration );
 
 		// === TOTALITY CORONA ===
 		// When the photosphere is covered the sky goes dark, but the solar corona remains
@@ -474,7 +478,7 @@ void sky()
 		{
 			float _aur = pow( max( 0.0, 1.0 - _sun_view_dist / 1.3 ), 2.5 );
 			vec3 _aur_col = mix( vec3( 0.85, 0.88, 0.95 ), sun_aureole_color, _sun_redden );
-			_aur *= sun_aureole * ( 0.30 + _sun_redden * 1.5 ) * _sun_visible;
+			_aur *= sun_aureole * ( 0.30 + _sun_redden * 1.5 ) * _atmos_illumination;
 			COLOR += _aur_col * _aur;
 		}
 
@@ -484,14 +488,14 @@ void sky()
 			float _glow_radius = _sun_size * sun_glow_size;
 			float _sg = pow( max( 0.0, 1.0 - _sun_view_dist / _glow_radius ), 2.5 );
 			vec3 _glow_col = mix( sun_glow_color, _sun_warm, _sun_redden );
-			COLOR = mix( COLOR, _glow_col, clamp( _sg * sun_glow * _sun_visible, 0.0, 1.0 ) );
+			COLOR = mix( COLOR, _glow_col, clamp( _sg * sun_glow * _atmos_illumination, 0.0, 1.0 ) );
 		}
 
 		// Finding sun disc and edge blur
 		float _sun_amount = clamp(( 1.0 - _sun_distance / _sun_size ) / sun_blur, 0.0, 1.0 );
 		if( _sun_amount > 0.0 )
 		{
-			_sun_amount = clamp( _sun_amount * _sun_visible, 0.0, 1.0 );
+			_sun_amount = clamp( _sun_amount * _sun_disc_visible, 0.0, 1.0 );
 			vec3 _sun_col = _sun_disc_color;
 			// Leveling the "glow" in color
 			if( _sun_col.r > 1.0 || _sun_col.g > 1.0 || _sun_col.b > 1.0 )
@@ -729,7 +733,7 @@ void sky()
 
 	//////////////////// RAINBOW /////////////////////////////////////////////////////////////////
 	// Descartes minimum-deviation arc (~42°) around the antisolar point; needs sun + rain.
-	if( rainbow_strength > 0.01 && LIGHT0_DIRECTION.y > 0.08 && EYEDIR.y > 0.02 )
+	if( rainbow_strength > 0.01 && LIGHT0_DIRECTION.y > -0.05 && EYEDIR.y > 0.02 )
 	{
 		vec3 _antisun = normalize( -LIGHT0_DIRECTION );
 		float _theta = acos( clamp( dot( EYEDIR, _antisun ), -1.0, 1.0 ) );
@@ -752,16 +756,11 @@ void sky()
 	if( EYEDIR.y > 0.02 && cirrus_amount > 0.01 && LIGHT0_DIRECTION.y > -0.25 )
 	{
 		vec2 _cir_base = EYEDIR.xz / sqrt( EYEDIR.y );
-		// Sample the streak noise at both the previous and current wind bearing and
-		// crossfade between them (cirrus_dir_blend) — avoids the whole sky visibly
-		// "spinning" when the high-altitude wind direction jumps.
-		float _cir_noise_from = sample_cirrus_noise( _cir_base, cirrus_direction_prev, cloud_time );
-		float _cir_noise_to = sample_cirrus_noise( _cir_base, cirrus_direction, cloud_time );
+		// Sample the streak noise directly (smoothly driven by accumulated offset)
+		float _cir_noise = sample_cirrus_noise( _cir_base );
 		// Coverage widens the accepted band; higher coverage = more of the sky filled.
 		float _cir_lo = mix( 0.62, 0.40, cirrus_coverage );
-		float _cir_from = smoothstep( _cir_lo, _cir_lo + 0.28, _cir_noise_from );
-		float _cir_to = smoothstep( _cir_lo, _cir_lo + 0.28, _cir_noise_to );
-		float _cir = mix( _cir_from, _cir_to, clamp( cirrus_dir_blend, 0.0, 1.0 ) ) * cirrus_amount;
+		float _cir = smoothstep( _cir_lo, _cir_lo + 0.28, _cir_noise ) * cirrus_amount;
 		// Fade out toward the horizon and at night.
 		_cir *= clamp( ( EYEDIR.y - 0.02 ) / 0.14, 0.0, 1.0 );
 		_cir *= 1.0 - _night_amount * 0.92;
@@ -784,21 +783,19 @@ void sky()
 		// Calculate sky UV for clouds
 		vec2 _sky_uv = EYEDIR.xz / sqrt( EYEDIR.y );
 		
-		// Clouds UV movement direction
-		float _clouds_speed = cloud_time * clouds_speed * 0.01;
-		float _sin_x = sin( clouds_direction * PI * 2.0 );
-		float _cos_y = cos( clouds_direction * PI * 2.0 );
-		// I using 3 levels of clouds. Top is the lightes and botom the darkest.
-		// The speed of movement (and direction a little) is different for the illusion of the changing shape of the clouds.
-		vec2 _clouds_movement = vec2( _sin_x, _cos_y ) * _clouds_speed;
-//		float _noise_top = texture( clouds_top_texture, ( _sky_uv + _clouds_movement ) * clouds_scale ).r;
-		float _noise_top = gen_fractal_ping_pong( ( _sky_uv + _clouds_movement ) * clouds_scale, 0, 0.5 );
-		_clouds_movement = vec2( _sin_x * 0.97, _cos_y * 1.07 ) * _clouds_speed * 0.89;
-//		float _noise_middle = texture( clouds_middle_texture, ( _sky_uv + _clouds_movement ) * clouds_scale ).r;
-		float _noise_middle = gen_fractal_ping_pong( ( _sky_uv + _clouds_movement ) * clouds_scale, 1, 0.75 );
-		_clouds_movement = vec2( _sin_x * 1.01, _cos_y * 0.89 ) * _clouds_speed * 0.79;
-//		float _noise_bottom = texture( clouds_bottom_texture, ( _sky_uv + _clouds_movement ) * clouds_scale ).r;
-		float _noise_bottom = gen_fractal_ping_pong( ( _sky_uv + _clouds_movement ) * clouds_scale, 2, 1.0 );
+		// Accumulated CPU-driven offset to prevent boiling/jumping.
+		// Slight variation in drift vector per layer to simulate volumetric shearing.
+		vec2 _clouds_movement_top = cloud_uv_offset * 1.1;
+		float _noise_top = gen_fractal_ping_pong( ( _sky_uv + _clouds_movement_top ) * clouds_scale, 0, 0.5 );
+		
+		vec2 _clouds_movement_mid = vec2(cloud_uv_offset.x * 0.97, cloud_uv_offset.y * 1.07);
+		float _noise_middle = gen_fractal_ping_pong( ( _sky_uv + _clouds_movement_mid ) * clouds_scale, 1, 0.75 );
+		
+		// Domain warp the bottom layer using the top layers to dynamically evolve the cloud shapes
+		vec2 _clouds_movement_bot = vec2(cloud_uv_offset.x * 1.01, cloud_uv_offset.y * 0.89);
+		vec2 _warp = vec2(_noise_top - 0.5, _noise_middle - 0.5) * 0.08;
+		
+		float _noise_bottom = gen_fractal_ping_pong( ( _sky_uv + _clouds_movement_bot + _warp ) * clouds_scale, 2, 1.0 );
 		// Smoothstep with the addition of a noise value from a lower level gives a nice, deep result
 		_noise_bottom = smoothstep( clouds_cutoff, clouds_cutoff + clouds_fuzziness, _noise_bottom );
 		_noise_middle = smoothstep( clouds_cutoff, clouds_cutoff + clouds_fuzziness, _noise_middle + _noise_bottom * 0.2 ) * 1.1;

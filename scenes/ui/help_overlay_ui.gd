@@ -10,9 +10,11 @@ extends CanvasLayer
 const _PROMPT_SCRIPT := preload("res://scenes/ui/interaction_prompt_ui.gd")
 
 const _TIPS := [
-	"Terrain, imagery, and vegetation load automatically for whatever location you pick — the first visit to a site is slower, later visits use the cache.",
+	"Press G to open the system graph. Add a Habitat, wire water/food/energy, then start a Challenge (🎯).",
+	"Interact with the SoI map pin (O) to open Snowglobe — drag the Radius slider to expand your stewardship volume.",
+	"Needs chips (⚡💧🍎♻) show closure health: ● OK · ▲ warn · ■ critical. Click any chip for System Review.",
+	"Terrain, imagery, and vegetation load automatically for whatever location you pick — the first visit is slower, later visits use the cache.",
 	"Aim your crosshair at an OSM solar array and press Interact to add it to your power grid.",
-	"The gear icon on the timeline bar opens simulation, lighting, solar, and location settings.",
 ]
 
 ## [action, display_label]
@@ -34,12 +36,17 @@ const _GROUPS := [
 		["unequip_tool", "Put away tool"],
 	]],
 	["Panels", [
-		["system_graph_toggle", "System graph (wire your power grid)"],
+		["system_graph_toggle", "System graph (wire habitat + power)"],
 		["toggle_location_picker", "Location / map picker"],
 		["vegetation_edit", "Vegetation paint dock"],
 		["terrain_edit", "Terrain sculpt dock"],
 		["placed_props_edit", "Placed props editor"],
 		["toggle_projection_canvas", "Projection canvas"],
+	]],
+	["Puzzle & SoI", [
+		["interact", "SoI pin → Snowglobe (resize radius)"],
+		["system_graph_toggle", "Graph / Challenges / System Review"],
+		["toggle_help", "This help overlay"],
 	]],
 	["Time & Menus", [
 		["sim_pause_toggle", "Pause / resume simulation"],

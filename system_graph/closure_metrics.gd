@@ -297,36 +297,24 @@ static func _compute_waste_channel(model: GraphModel, resource_flow: RefCounted,
 	if model != null:
 		for item: Dictionary in model.items:
 			var ty: String = str(item.get("type", ""))
+			if ty != "resource":
+				continue
 			var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-			if ty == "resource":
-				ResourceKinds.new().migrate_resource_specs(specs)
-				var rk: String = ResourceKinds.normalize_kind(str(specs.get("resource_kind", "")))
-				if not WASTE_KINDS.has(rk):
-					continue
-				var cap: float = float(specs.get("capacity_qty", 0.0))
-				var lvl: float = clampf(float(specs.get("level", 0.0)), 0.0, 1.0)
-				waste_stock += cap * lvl
-				waste_capacity += cap
-			elif ty == "processor":
-				if str(specs.get("role", "")) == "habitat":
-					continue
-				if bool(specs.get("counts_as_import", false)):
-					continue
-				var inputs: Array = specs.get("inputs", []) as Array
-				var takes_waste := false
-				for inp: Variant in inputs:
-					if inp is Dictionary:
-						var ik: String = ResourceKinds.normalize_kind(
-								str((inp as Dictionary).get("kind", "")))
-						if WASTE_KINDS.has(ik):
-							takes_waste = true
-							break
-				if not takes_waste:
-					continue
-				var outs: Array = specs.get("outputs", []) as Array
-				for outp: Variant in outs:
-					if outp is Dictionary:
-						recycled += float((outp as Dictionary).get("rate", 0.0)) * span
+			ResourceKinds.new().migrate_resource_specs(specs)
+			var rk: String = ResourceKinds.normalize_kind(str(specs.get("resource_kind", "")))
+			if not WASTE_KINDS.has(rk):
+				continue
+			var cap: float = float(specs.get("capacity_qty", 0.0))
+			var lvl: float = clampf(float(specs.get("level", 0.0)), 0.0, 1.0)
+			waste_stock += cap * lvl
+			waste_capacity += cap
+			# "Recycled" = waste that ACTUALLY left the waste tanks into downstream
+			# recyclers over the window (per-kind, from the reversible timeline) —
+			# not a nameplate sum across heterogeneous processor outputs.
+			var iid: String = str(item.get("id", ""))
+			var tl: RefCounted = _timeline_for(resource_flow, iid)
+			if tl != null and tl.has_method("integrate_channel") and not bool(tl.call("is_empty")):
+				recycled += maxf(float(tl.call("integrate_channel", t0, t1, "outflow")), 0.0)
 
 	var headroom := maxf(waste_capacity - waste_stock, 0.0)
 	var daily_prod := produced_ph * 24.0

@@ -85,19 +85,20 @@ func _build_ui() -> void:
 	margin.add_child(vbox)
 
 	var title := Label.new()
-	title.text = "Sphere of Influence"
+	title.text = "Sphere of Influence — Settings"
 	title.add_theme_font_size_override("font_size", 18)
-	title.add_theme_color_override("font_color", UITheme.C_TEXT)
+	title.add_theme_color_override("font_color", UITheme.C_PRIMARY)
 	vbox.add_child(title)
 
 	var subtitle := Label.new()
-	subtitle.text = "Stewardship volume for this site — drives future catchment sim."
+	subtitle.text = "Stewardship volume for this site. Prefer the Snowglobe view to resize the sphere visually."
 	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	subtitle.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	vbox.add_child(subtitle)
 
 	_radius_label = Label.new()
 	_radius_label.add_theme_color_override("font_color", UITheme.C_TEXT)
+	_radius_label.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 	vbox.add_child(_radius_label)
 
 	_radius_slider = HSlider.new()
@@ -106,6 +107,7 @@ func _build_ui() -> void:
 	_radius_slider.step = 5.0
 	_radius_slider.value = SoiConfig.DEFAULT_RADIUS_M
 	_radius_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_radius_slider.tooltip_text = "Radius in metres — or open Snowglobe to resize while looking at the globe"
 	_radius_slider.value_changed.connect(_on_radius_changed)
 	vbox.add_child(_radius_slider)
 
@@ -120,6 +122,11 @@ func _build_ui() -> void:
 	_placement_hint.add_theme_color_override("font_color", UITheme.C_AMBER)
 	vbox.add_child(_placement_hint)
 
+	var snow_btn := Button.new()
+	snow_btn.text = "Open Snowglobe (recommended)"
+	snow_btn.pressed.connect(_on_snowglobe)
+	vbox.add_child(snow_btn)
+
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	vbox.add_child(row)
@@ -133,11 +140,6 @@ func _build_ui() -> void:
 	reset_btn.text = "Reset to map centre"
 	reset_btn.pressed.connect(_on_reset_center)
 	row.add_child(reset_btn)
-
-	var snow_btn := Button.new()
-	snow_btn.text = "View Snowglobe"
-	snow_btn.pressed.connect(_on_snowglobe)
-	vbox.add_child(snow_btn)
 
 	var close_btn := Button.new()
 	close_btn.text = "Close"

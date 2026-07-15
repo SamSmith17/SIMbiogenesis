@@ -2,10 +2,11 @@ extends Area3D
 class_name FPVDrone
 
 ## FPV Drone vehicle - player body stays on ground while camera flies with drone
-## Left stick / WASD = horizontal flight relative to look direction
+## Standard FPV controls:
+## Left stick / WASD = fly horizontally in look direction
 ## Right trigger / Space = ascend, Left trigger / Shift = descend
 ## Right stick / mouse = look direction (steering)
-## Drone hovers at current altitude when no altitude input
+## Drone hovers at current altitude when neither moving nor using altitude inputs
 
 signal mounted(player: CharacterBody3D)
 signal dismounted(player: CharacterBody3D)
@@ -65,6 +66,7 @@ var _collision_shape: CollisionShape3D = null
 var _propellers: Array[MeshInstance3D] = []
 var _led_mesh: MeshInstance3D = null
 var _camera_mount: Node3D = null
+var _search_light: SpotLight3D = null
 
 func _ready() -> void:
 	add_to_group("vehicles")
@@ -196,6 +198,21 @@ func _create_drone_mesh() -> void:
 	_led_mesh.material_override = led_material
 	add_child(_led_mesh)
 
+	# Search light for night-time selection
+	_search_light = SpotLight3D.new()
+	_search_light.name = "SearchLight"
+	_search_light.position = Vector3(0, -0.05, -0.1)  # Slightly below and forward
+	_search_light.rotation.x = deg_to_rad(-15.0)  # Point slightly downwards
+	_search_light.spot_range = 150.0
+	_search_light.spot_angle = 35.0
+	_search_light.spot_attenuation = 1.0
+	_search_light.spot_angle_attenuation = 1.5
+	_search_light.light_color = Color(0.95, 0.98, 1.0)
+	_search_light.light_energy = 5.0
+	_search_light.shadow_enabled = true
+	_search_light.visible = false
+	_camera_mount.add_child(_search_light)
+
 func _setup_interaction_area() -> void:
 	# Check if collision shape exists, create if not
 	_collision_shape = get_node_or_null("CollisionShape3D") as CollisionShape3D
@@ -237,6 +254,11 @@ func _process(delta: float) -> void:
 	for prop in _propellers:
 		prop.rotate_y(delta * spin_speed)
 
+	if is_instance_valid(_search_light):
+		var in_select_mode := is_mounted and Input.is_key_pressed(KEY_ALT)
+		# Don't show searchlight in top-down terrain sculpt mode since camera is too high
+		_search_light.visible = in_select_mode and not _is_terrain_edit_ortho()
+
 func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 	if current_rider == null:
 		return
@@ -255,16 +277,12 @@ func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 	if not yaw_only_look:
 		current_pitch = clamp(current_pitch, deg_to_rad(-85), deg_to_rad(85))
 	
-	# Left stick / WASD for horizontal movement.
-	# Using get_vector keeps keyboard/controller mapping consistent with player movement.
+	# Left stick / WASD for movement. input_forward > 0 means flying in the look direction.
 	var move_input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var input_forward := -move_input.y
 	var input_strafe := move_input.x
 	
-	# Shift / Ctrl (or triggers) for altitude; no vertical input while sim is paused.
-	# NOTE: analemma (∞) mode also runs with time_scale == 0 (it advances via a
-	# per-frame day-stepper instead of integrating time_scale), so it must NOT
-	# be treated as "paused" here or drone altitude control silently breaks.
+	# Altitude keys / triggers (Space = up, Shift = down).
 	var input_altitude := 0.0
 	var main := get_tree().get_first_node_in_group("main_scene") if get_tree() != null else null
 	var analemma_active := main != null and bool(main.get("analemma_mode"))
@@ -272,14 +290,14 @@ func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 	if not sim_paused:
 		input_altitude = Input.get_action_strength("drone_ascend") - Input.get_action_strength("drone_descend")
 	
-	# Horizontal movement is relative to look yaw (pitch doesn't affect flight direction)
+	# Horizontal movement follows look yaw only (not pitch) — standard FPV behaviour.
 	var yaw_basis := Basis().rotated(Vector3.UP, current_yaw)
-	var forward_dir := -yaw_basis.z
-	var right_dir := yaw_basis.x
+	var forward_dir := -yaw_basis.z  # Horizontal forward in world space
+	var right_dir   :=  yaw_basis.x  # Horizontal strafe direction
 	
 	var target_velocity := Vector3.ZERO
 	target_velocity += forward_dir * input_forward * max_forward_speed
-	target_velocity += right_dir * input_strafe * max_forward_speed
+	target_velocity += right_dir   * input_strafe  * max_forward_speed
 	target_velocity.y = input_altitude * vertical_speed
 	
 	# Accelerate toward target; decelerate (drag) toward hover when no input
@@ -372,7 +390,10 @@ func _input(event: InputEvent) -> void:
 	if _is_terrain_edit_ortho():
 		return
 	
-	# Handle mouse look for steering (head tracking simulation)
+	# Handle mouse look for steering.
+	# Mouse Y: relative.y > 0 when moving down, < 0 when moving up.
+	# Subtract relative.y so moving mouse up (negative) decreases current_pitch
+	# (more negative = looking up) — standard FPS mouse convention.
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var mouse_event := event as InputEventMouseMotion
 		if mouse_event.relative.length_squared() > 1e-12:

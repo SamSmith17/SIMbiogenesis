@@ -63,6 +63,7 @@ var _ref_thumbs: Dictionary = {}   # photo id -> TextureRect awaiting thumb_read
 var _lib_list: ItemList = null
 var _lib_models: Array = []
 var _lib_replace_btn: Button = null
+var _file_dialog: FileDialog = null
 var _rebuild_pending := false
 var _rebuild_timer := 0.0
 
@@ -740,6 +741,18 @@ func _build_library_tab() -> void:
 	hint.modulate = Color(0.7, 0.8, 0.9)
 	lib.add_child(hint)
 
+	var upload_btn := Button.new()
+	upload_btn.text = "Upload GLB/GLTF…"
+	upload_btn.pressed.connect(_on_library_upload)
+	lib.add_child(upload_btn)
+
+	_file_dialog = FileDialog.new()
+	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_file_dialog.filters = PackedStringArray(["*.glb ; GLB", "*.gltf ; GLTF"])
+	_file_dialog.file_selected.connect(_on_library_file_selected)
+	add_child(_file_dialog)
+
 	_lib_list = ItemList.new()
 	_lib_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_lib_list.item_selected.connect(func(_i: int) -> void: _preview_library_model())
@@ -987,6 +1000,24 @@ func _on_library_replace() -> void:
 	if _loader.has_method("replace_osm_building") \
 			and bool(_loader.call("replace_osm_building", _building_idx, id)):
 		close()
+
+
+func _on_library_upload() -> void:
+	if _file_dialog != null:
+		_file_dialog.popup_centered(Vector2i(700, 450))
+
+
+func _on_library_file_selected(path: String) -> void:
+	var entry := ModelImporter.import_from_path(path)
+	if entry.is_empty():
+		return
+	_refresh_library()
+	var model_id := str(entry.get("id", ""))
+	for i in _lib_models.size():
+		if str(_lib_models[i].get("id", "")) == model_id:
+			_lib_list.select(i)
+			_preview_library_model()
+			break
 
 
 # ---------------------------------------------------------------------------

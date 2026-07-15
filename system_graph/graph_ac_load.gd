@@ -127,26 +127,40 @@ static func _item_draw_watts(
 		item: Dictionary,
 		tree: SceneTree,
 		sim_host: Node) -> float:
-	if sim_host != null and sim_host.has_method("has_sim_load") \
-			and bool(sim_host.call("has_sim_load", item_id)):
-		if not bool(sim_host.call("is_load_on", item_id)):
-			return 0.0
-		var specs: Dictionary = item.get("specs", {}) as Dictionary
-		return _rated_watts_from_specs(specs)
+		
+	# 1. Global check: If AC output is disabled at the bus, there is no AC load.
+	if tree != null and tree.root != null:
+		var apb: Node = tree.root.get_node_or_null("AcPowerBus")
+		if apb != null and "ac_output_enabled" in apb:
+			if not bool(apb.get("ac_output_enabled")):
+				return 0.0
 
-	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 	var ty := str(item.get("type", ""))
-	if ty == "processor":
-		ResourceKinds.new().migrate_processor_specs(specs)
-		var es := str(specs.get("energy_source", ""))
-		if es == "thermal" or es == "mechanical":
-			return 0.0
-		if es.is_empty() and float(specs.get("watts", 0.0)) <= 0.0:
-			return 0.0
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 
-	if not _item_is_on(item, specs):
+	# 2. Processors: draw is driven by the resource engine's RUNNING state (which
+	# already encodes switched-on + powered + fed), NOT the sim-load switch. A
+	# running continuous processor draws its rated watts; a batch draws its active
+	# phase watts; anything else (ready/blocked/idle) draws nothing.
+	if ty == "processor":
+		if item.has("batch_active_watts"):
+			return float(item.get("batch_active_watts", 0.0))
+		if str(specs.get("node_state", "")) == GraphNodeState.RUNNING:
+			return _rated_watts_from_specs(specs)
 		return 0.0
 
+	# 3. Non-processor loads: ON = requested on and power available.
+	var is_on := false
+	if sim_host != null and sim_host.has_method("has_sim_load") \
+			and bool(sim_host.call("has_sim_load", item_id)):
+		is_on = bool(sim_host.call("is_load_on", item_id))
+	else:
+		is_on = _item_is_on(item, specs)
+
+	if not is_on:
+		return 0.0
+
+	# 4. Live scene devices report their own draw.
 	var dev_path := str(item.get("device_path", specs.get("scene_device_path", "")))
 	if not dev_path.is_empty():
 		var node := _resolve_node(tree, dev_path)
@@ -156,6 +170,7 @@ static func _item_draw_watts(
 			if node.has_method("get_power_consumption"):
 				return maxf(0.0, float(node.call("get_power_consumption")))
 
+	# 5. Fallback for simple loads: use rated wattage.
 	return _rated_watts_from_specs(specs)
 
 

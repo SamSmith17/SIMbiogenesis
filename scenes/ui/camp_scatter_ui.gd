@@ -39,6 +39,7 @@ var _scale_min := 0.9
 var _scale_max := 1.18
 var _seed := 12345
 var _exclusion_r := 804.672  # playa exclusion radius in metres (default 0.5 mi)
+var _light_density := 1.0
 
 # UI refs.
 var _panel: PanelContainer = null
@@ -51,6 +52,7 @@ var _tool_buttons: Array[Button] = []
 var _density_slider: HSlider = null
 var _mix_slider: HSlider = null
 var _scale_slider: HSlider = null
+var _light_density_slider: HSlider = null
 var _seed_spin: SpinBox = null
 var _busy := false
 
@@ -298,9 +300,10 @@ func _build_ui() -> void:
 		func(v: float) -> void: _mix_bias = v)
 	_scale_slider = _add_slider(grid, "Scale", 0.4, 2.5, (_scale_min + _scale_max) * 0.5,
 		"Average structure scale (range ±15% around this)",
-		func(v: float) -> void:
-			_scale_min = maxf(v - 0.15, 0.2)
-			_scale_max = v + 0.15)
+		func(v: float) -> void: _scale_min = v * 0.85; _scale_max = v * 1.15)
+	_light_density_slider = _add_slider(grid, "Light Density", 0.0, 2.0, _light_density,
+		"Modulate the density of lights independent of camp geometry",
+		func(v: float) -> void: _light_density = v)
 	_add_slider(grid, "Playa excl. (mi)", 0.0, 1.0, _exclusion_r / 1609.344,
 		"Exclusion radius from city centre (Man) in miles — blocks open playa.\n0.5 mi ≈ 804 m covers the Esplanade inward.",
 		func(v: float) -> void:
@@ -581,6 +584,7 @@ func _generate() -> void:
 		"mix_bias": _mix_bias,
 		"scale_min": _scale_min,
 		"scale_max": _scale_max,
+		"light_density": _light_density,
 		"seed": _seed,
 		"exclusion_radius_m": _exclusion_r,
 	}

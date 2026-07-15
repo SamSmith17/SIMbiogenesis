@@ -45,9 +45,13 @@ var _moon_glow: HSlider
 var _sun_glow: HSlider
 var _sun_glow_size: HSlider
 var _sun_aureole: HSlider
+var _shadow_opacity: HSlider
 var _god_rays: CheckBox
 var _cirrus_amount: HSlider
+var _cirrus_wave_frequency: HSlider
+var _cirrus_wave_intensity: HSlider
 var _cloud_shadows: CheckBox
+var _building_shadows: CheckBox
 var _player_fov: HSlider
 var _drone_fov: HSlider
 var _drone_max_speed: HSlider
@@ -83,10 +87,17 @@ var _auto_dst: CheckBox
 var _manual_dst: CheckBox
 var _dst_status: Label
 var _live_mode: CheckBox
-var _live_status: Label
 var _survival: CheckBox
 var _plant_growth: CheckBox
 var _analemma_drift: HSlider
+var _analemma_noon: HSlider
+var _analemma_thickness: HSlider
+var _analemma_solar_col: ColorPickerButton
+var _analemma_lunar_col: ColorPickerButton
+var _analemma_type: OptionButton
+var _show_sun_path: CheckBox
+var _show_moon_path: CheckBox
+var _live_status: Label
 var _survival_status: Label
 
 var _scenario_opt:   OptionButton = null
@@ -180,9 +191,11 @@ func refresh_from_controller() -> void:
 	if _clouds_weight:
 		_clouds_weight.value = snap.get("clouds_weight", 0.5)
 	if _sun_energy:
-		_sun_energy.value = snap.get("sun_energy", 1.0)
+		_sun_energy.value = snap.get("sun_energy_mult", 1.0)
 	if _shadow_quality:
-		_shadow_quality.value = snap.get("shadow_quality", 2)
+		_shadow_quality.value = snap.get("shadow_quality", 2.0)
+	if _shadow_opacity:
+		_shadow_opacity.value = snap.get("shadow_opacity", 1.0)
 	if _graphics_quality:
 		_graphics_quality.selected = clampi(int(snap.get("graphics_quality", 2)), 0, 2)
 	if _moon_energy:
@@ -197,12 +210,7 @@ func refresh_from_controller() -> void:
 		_manual_dst.button_pressed = snap.get("manual_dst", false)
 	if _live_mode:
 		_live_mode.button_pressed = snap.get("live_mode", false)
-	if _survival:
-		_survival.button_pressed = snap.get("survival_active", false)
-	if _plant_growth:
-		_plant_growth.button_pressed = snap.get("plant_growth_enabled", true)
-	if _analemma_drift:
-		_analemma_drift.value = snap.get("analemma_diurnal_offset_min_per_day", 0.0)
+	_sync_gameplay_from_snapshot(snap)
 	_sync_advanced_from_snapshot(snap)
 	_sync_drone_from_snapshot(snap)
 	_sync_stars_planets_from_snapshot(snap)
@@ -377,10 +385,6 @@ func _build_solar_tab(tabs: TabContainer) -> void:
 	hint.add_theme_color_override("font_color", C_TEXT_S)
 	hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(hint)
-
-	_solar_panel_count = _add_slider(v, "Panel count", 1.0, 100.0, 1.0, _on_solar_panel_count)
-	_solar_panel_wattage = _add_slider(v, "Panel wattage (W)", 50.0, 600.0, 5.0, _on_solar_panel_wattage)
-	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Orientation")
 	_solar_panel_tilt = _add_slider(v, "Panel tilt (°)", 0.0, 90.0, 1.0, _on_solar_panel_tilt)
 	_solar_panel_azimuth = _add_slider(v, "Panel azimuth (°)", 0.0, 360.0, 1.0, _on_solar_panel_azimuth)
@@ -708,7 +712,15 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	v.add_child(growth_hint)
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "∞ / Analemma")
-	_analemma_drift = _add_slider(v, "Diurnal drift (min/day)", 0.0, 120.0, 1.0, _on_analemma_drift)
+	_analemma_type = OptionButton.new()
+	_analemma_type.add_item("Solar Analemma (Mean Solar Noon)", 0)
+	_analemma_type.add_item("Lunar Analemma (Mean Lunar Noon)", 1)
+	_analemma_type.add_theme_color_override("font_color", C_TEXT)
+	_analemma_type.item_selected.connect(_on_analemma_type)
+	v.add_child(_analemma_type)
+	
+	_analemma_noon = _add_slider(v, "Start time (min)", -720.0, 720.0, 0.1, _on_analemma_noon)
+	_analemma_drift = _add_slider(v, "Diurnal drift (min/day)", 0.0, 120.0, 0.1, _on_analemma_drift)
 	var drift_hint := Label.new()
 	drift_hint.text = "Shifts each day's sample time later by this many minutes, layering diurnal motion onto the seasonal analemma. 0 = fixed mean solar noon (classic figure-eight). Non-zero traces a corkscrew path."
 	drift_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -716,6 +728,13 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	drift_hint.add_theme_color_override("font_color", C_TEXT_S)
 	drift_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(drift_hint)
+	
+	_show_sun_path = _add_check(v, "Show sun path", _on_show_sun_path)
+	_show_moon_path = _add_check(v, "Show moon path", _on_show_moon_path)
+	_analemma_thickness = _add_slider(v, "Path thickness", 0.1, 20.0, 0.1, _on_analemma_thickness)
+	_analemma_solar_col = _add_color_picker(v, "Solar path color", _on_analemma_solar_col)
+	_analemma_lunar_col = _add_color_picker(v, "Lunar path color", _on_analemma_lunar_col)
+	
 	var hint := Label.new()
 	hint.text = "Random fires and survival rules when time is at or below realtime speed."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -728,7 +747,7 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 func _build_drone_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Drone")
 	_add_section_lbl(v, "Flight")
-	_drone_max_speed = _add_slider(v, "Max speed m/s", 5.0, 120.0, 1.0, _on_drone_max_speed)
+	_drone_max_speed = _add_slider(v, "Max speed m/s", 5.0, 240.0, 1.0, _on_drone_max_speed)
 	_drone_acceleration = _add_slider(v, "Acceleration", 5.0, 100.0, 1.0, _on_drone_acceleration)
 	_drone_drag = _add_slider(v, "Deceleration", 2.0, 40.0, 1.0, _on_drone_drag)
 	_drone_vertical_speed = _add_slider(v, "Climb speed m/s", 2.0, 80.0, 1.0, _on_drone_vertical_speed)
@@ -745,7 +764,7 @@ func _build_drone_tab(tabs: TabContainer) -> void:
 	_add_section_lbl(v, "Camera")
 	_drone_fov = _add_slider(v, "Drone FOV°", 30.0, 120.0, 1.0, _on_drone_fov)
 	var hint := Label.new()
-	hint.text = "FPV drone flight feel for explore maps. WASD / left stick = horizontal, Space / Shift or triggers = climb/descend. Changes apply immediately to any drone in the world."
+	hint.text = "Standard FPV controls: WASD / left stick = fly horizontally, Space/Shift or triggers = ascend/descend, mouse / right stick = look direction. Changes apply immediately to any drone in the world."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(420, 0)
 	hint.add_theme_color_override("font_color", C_TEXT_S)
@@ -756,10 +775,14 @@ func _build_drone_tab(tabs: TabContainer) -> void:
 func _build_environment_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Environment")
 	_add_section_lbl(v, "Clouds")
-	_clouds_cutoff = _add_slider(v, "Cloud cover",  0.0, 1.0, 0.01, _on_clouds_cutoff)
-	_clouds_weight = _add_slider(v, "Cloud weight", 0.0, 1.0, 0.01, _on_clouds_weight)
-	_cirrus_amount = _add_slider(v, "Cirrus (wispy) ×", 0.0, 2.0, 0.05, _on_cirrus_amount)
-	_cloud_shadows = _add_check(v, "Drifting cloud shadows (sun dims as clouds pass)", _on_cloud_shadows)
+	_clouds_weight      = _add_slider(v, "Cloud cover",    0.0, 1.0, 0.01, _on_clouds_weight)
+	_clouds_cutoff      = _add_slider(v, "Cloud density",  0.0, 1.0, 0.05, _on_clouds_cutoff)
+	_cirrus_amount      = _add_slider(v, "Cirrus amount",  0.0, 2.0, 0.05, _on_cirrus_amount)
+	_cirrus_wave_frequency = _add_slider(v, "Cirrus wave scale", 0.0, 5.0, 0.1, _on_cirrus_wave_frequency)
+	_cirrus_wave_intensity = _add_slider(v, "Cirrus wave intensity", 0.0, 2.0, 0.05, _on_cirrus_wave_intensity)
+	_cloud_shadows      = _add_check(v, "Cloud shadows", _on_cloud_shadows)
+	
+	v.add_child(HSeparator.new())
 	var cs_hint := Label.new()
 	cs_hint.text = "Cirrus adds high, streaky clouds (auto-driven by weather; slider is a boost). Cloud shadows dim the direct sun as clouds drift over — cheap global lighting, no ground projection."
 	cs_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -807,7 +830,9 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	v.add_child(HSeparator.new())
 	_sun_energy         = _add_slider(v, "Sun energy",     0.0, 3.0, 0.05, _on_sun_energy)
 	_shadow_quality     = _add_slider(v, "Shadow quality", 0.0, 3.0, 1.0,  _on_shadow_quality)
+	_shadow_opacity     = _add_slider(v, "Shadow darkness", 0.0, 1.0, 0.05, _on_shadow_opacity)
 	_shadow_quality_lbl = _add_status_label(v, "Shadow Quality: High")
+	_building_shadows   = _add_check(v, "Building shadows", _on_building_shadows)
 	_moon_energy        = _add_slider(v, "Moon energy",    0.0, 2.0, 0.05, _on_moon_energy)
 	_moon_phase_lbl     = _add_status_label(v, "")
 	v.add_child(HSeparator.new())
@@ -952,7 +977,26 @@ func _add_slider(parent: Control, label: String, min_v: float, max_v: float,
 	sl.max_value = max_v
 	sl.step = step
 	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sl.value_changed.connect(cb)
+	var val_spin := SpinBox.new()
+	val_spin.custom_minimum_size = Vector2(70, 0)
+	val_spin.min_value = min_v
+	val_spin.max_value = max_v
+	val_spin.step = step
+	val_spin.alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	row.add_child(val_spin)
+	
+	sl.value_changed.connect(func(v: float) -> void:
+		if val_spin.value != v: val_spin.value = v
+		cb.call(v)
+	)
+	
+	val_spin.value_changed.connect(func(v: float) -> void:
+		if sl.value != v: sl.value = v
+	)
+	
+	# Defer initialization so it grabs the initial value correctly
+	val_spin.value = sl.value
+	
 	row.add_child(sl)
 	parent.add_child(row)
 	return sl
@@ -965,6 +1009,21 @@ func _add_check(parent: Control, text: String, cb: Callable) -> CheckBox:
 	cbn.toggled.connect(cb)
 	parent.add_child(cbn)
 	return cbn
+
+func _add_color_picker(parent: Control, label: String, cb: Callable) -> ColorPickerButton:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var hdr := Label.new()
+	hdr.text = label
+	hdr.custom_minimum_size = Vector2(110, 0)
+	hdr.add_theme_color_override("font_color", C_TEXT_S)
+	row.add_child(hdr)
+	var cpb := ColorPickerButton.new()
+	cpb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cpb.color_changed.connect(cb)
+	row.add_child(cpb)
+	parent.add_child(row)
+	return cpb
 
 
 func _add_option(parent: Control, label: String, items: Array, cb: Callable) -> OptionButton:
@@ -1094,6 +1153,31 @@ func _refresh_labels() -> void:
 		_star_texture_lbl.text = "Texture: %s" % (tp if not tp.is_empty() else "default starmap")
 
 
+func _sync_gameplay_from_snapshot(snap: Dictionary) -> void:
+	if _survival:
+		_survival.button_pressed = bool(snap.get("survival_enabled", false))
+	if _plant_growth:
+		_plant_growth.button_pressed = bool(snap.get("plant_growth_enabled", true))
+	if _analemma_drift:
+		_analemma_drift.value = float(snap.get("analemma_diurnal_offset_min_per_day", 0.0))
+	if _analemma_noon:
+		_analemma_noon.value = float(snap.get("analemma_noon_offset_minutes", 0.0))
+	if _analemma_thickness:
+		_analemma_thickness.value = float(snap.get("analemma_path_thickness", 1.0))
+	if _analemma_solar_col:
+		_analemma_solar_col.color = snap.get("analemma_solar_color", Color(1.0, 0.9, 0.3)) as Color
+	if _analemma_lunar_col:
+		_analemma_lunar_col.color = snap.get("analemma_lunar_color", Color(0.7, 0.85, 1.0)) as Color
+	if _show_sun_path:
+		_show_sun_path.button_pressed = bool(snap.get("show_sun_path", true))
+	if _show_moon_path:
+		_show_moon_path.button_pressed = bool(snap.get("show_moon_path", false))
+	if _analemma_type:
+		var atype := int(snap.get("analemma_type", 0))
+		if atype >= 0 and atype < _analemma_type.item_count:
+			_analemma_type.select(atype)
+
+
 func _sync_advanced_from_snapshot(snap: Dictionary) -> void:
 	if _ambient_energy:
 		_ambient_energy.value = snap.get("ambient_energy_mult", 1.0)
@@ -1139,8 +1223,14 @@ func _sync_advanced_from_snapshot(snap: Dictionary) -> void:
 		_player_fov.value = snap.get("player_fov", 50.0)
 	if _cirrus_amount:
 		_cirrus_amount.value = snap.get("cirrus_user_scale", 1.0)
+	if _cirrus_wave_frequency:
+		_cirrus_wave_frequency.value = snap.get("cirrus_wave_frequency_scale", 1.0)
+	if _cirrus_wave_intensity:
+		_cirrus_wave_intensity.value = snap.get("cirrus_wave_intensity_scale", 1.0)
 	if _cloud_shadows:
 		_cloud_shadows.button_pressed = snap.get("cloud_shadows_enabled", true)
+	if _building_shadows:
+		_building_shadows.button_pressed = snap.get("building_shadows_enabled", false)
 
 
 func _sync_drone_from_snapshot(snap: Dictionary) -> void:
@@ -1212,6 +1302,19 @@ func _on_clouds_cutoff(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_clouds_cutoff_ui(v)
 
+
+func _on_analemma_type(idx: int) -> void:
+	if _syncing: return
+	SimSettingsController.apply_analemma_type(idx)
+
+func _on_show_sun_path(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_show_sun_path(on)
+
+func _on_show_moon_path(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_show_moon_path(on)
+
 func _on_clouds_weight(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_clouds_weight(v)
@@ -1224,6 +1327,10 @@ func _on_shadow_quality(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_shadow_quality(v)
 	_refresh_labels()
+
+func _on_shadow_opacity(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_shadow_opacity(v)
 
 func _on_graphics_quality(idx: int) -> void:
 	if _syncing: return
@@ -1357,13 +1464,29 @@ func _on_drone_tilt_speed(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_drone_flight_setting("tilt_speed", v)
 
+func _on_drone_controller_pitch_inverted(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_drone_bool_setting("controller_pitch_inverted", on)
+
 func _on_cirrus_amount(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_cirrus_scale(v)
 
+func _on_cirrus_wave_frequency(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_cirrus_wave_frequency_scale(v)
+
+func _on_cirrus_wave_intensity(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_cirrus_wave_intensity_scale(v)
+
 func _on_cloud_shadows(on: bool) -> void:
 	if _syncing: return
 	SimSettingsController.apply_cloud_shadows_enabled(on)
+
+func _on_building_shadows(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_building_shadows_enabled(on)
 
 func _on_stars_brightness(v: float) -> void:
 	if _syncing: return
@@ -1482,9 +1605,24 @@ func _on_plant_growth(on: bool) -> void:
 
 
 func _on_analemma_drift(value: float) -> void:
-	if _syncing:
-		return
+	if _syncing: return
 	SimSettingsController.apply_analemma_diurnal_offset(value)
+
+func _on_analemma_noon(value: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_analemma_noon_offset(value)
+
+func _on_analemma_thickness(value: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_analemma_path_thickness(value)
+
+func _on_analemma_solar_col(value: Color) -> void:
+	if _syncing: return
+	SimSettingsController.apply_analemma_solar_color(value)
+
+func _on_analemma_lunar_col(value: Color) -> void:
+	if _syncing: return
+	SimSettingsController.apply_analemma_lunar_color(value)
 
 
 func _on_scenario_changed(idx: int) -> void:

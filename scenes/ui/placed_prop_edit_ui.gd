@@ -22,6 +22,8 @@ var _yaw: SpinBox
 var _pitch: SpinBox
 var _roll: SpinBox
 var _scale: SpinBox
+var _collision_check: CheckBox
+var _del_btn: Button
 
 
 func _ready() -> void:
@@ -99,7 +101,7 @@ func _build_ui() -> void:
 	_roll = _spin(1.0, -360.0, 360.0)
 	_scale = _spin(0.05, 0.05, 20.0)
 	vbox.add_child(_labeled_row("Offset X", _off_x))
-	vbox.add_child(_labeled_row("Offset Y", _off_y))
+	vbox.add_child(_labeled_row("Height Offset", _off_y))
 	vbox.add_child(_labeled_row("Offset Z", _off_z))
 	vbox.add_child(_labeled_row("Yaw °", _yaw))
 	vbox.add_child(_labeled_row("Pitch °", _pitch))
@@ -109,15 +111,22 @@ func _build_ui() -> void:
 	for spin_box in [_off_x, _off_y, _off_z, _yaw, _pitch, _roll, _scale]:
 		spin_box.value_changed.connect(_on_spin_changed)
 
+	_collision_check = CheckBox.new()
+	_collision_check.text = "Collision enabled"
+	_collision_check.button_pressed = true
+	_collision_check.add_theme_color_override("font_color", C_TEXT)
+	_collision_check.toggled.connect(_on_collision_toggled)
+	vbox.add_child(_collision_check)
+
 	var actions := HBoxContainer.new()
 	var apply_btn := Button.new()
 	apply_btn.text = "Apply"
 	apply_btn.pressed.connect(_on_apply)
 	actions.add_child(apply_btn)
-	var del_btn := Button.new()
-	del_btn.text = "Delete"
-	del_btn.pressed.connect(_on_delete)
-	actions.add_child(del_btn)
+	_del_btn = Button.new()
+	_del_btn.text = "Delete"
+	_del_btn.pressed.connect(_on_delete)
+	actions.add_child(_del_btn)
 	var close_btn := Button.new()
 	close_btn.text = "Close"
 	close_btn.pressed.connect(close)
@@ -167,12 +176,31 @@ func _load_from_layer() -> void:
 			_model_option.select(i)
 			break
 	_off_x.value = float(d.get("x", 0.0))
-	_off_y.value = float(d.get("y", 0.0))
+	if d.has("y_offset"):
+		_off_y.value = float(d.get("y_offset", 0.0))
+	elif d.has("y"):
+		# Convert legacy absolute y coordinate to relative height offset
+		var foot_y := ModelCatalog.foot_local_y(str(d.get("model_id", "")))
+		var user_scale := float(d.get("scale", 1.0))
+		var world_scale := ModelCatalog.resolved_scale(str(d.get("model_id", "")), user_scale)
+		var gy := float(d.get("ground_y", 0.0))
+		var grounded_y := gy - foot_y * world_scale
+		_off_y.value = float(d["y"]) - grounded_y
+	else:
+		_off_y.value = 0.0
 	_off_z.value = float(d.get("z", 0.0))
 	_yaw.value = float(d.get("yaw", 0.0))
 	_pitch.value = float(d.get("pitch", 0.0))
 	_roll.value = float(d.get("roll", 0.0))
 	_scale.value = float(d.get("scale", 1.0))
+	_collision_check.button_pressed = bool(d.get("collision_enabled", true))
+
+	if _del_btn != null:
+		var is_osm := str(d.get("type", "")) == "osm"
+		if is_osm:
+			_del_btn.text = "Revert to OSM"
+		else:
+			_del_btn.text = "Delete"
 	_syncing = false
 	_preview_live()
 
@@ -189,6 +217,17 @@ func _on_spin_changed(_v: float) -> void:
 	_preview_live()
 
 
+## Collision is applied immediately (not just previewed) — unlike the transform
+## fields, there's no live-preview path for it on the runtime prop, and leaving a
+## player able to get stuck inside/on top of a placed object until they hit
+## "Apply" would defeat the point of an escape-hatch toggle.
+func _on_collision_toggled(pressed: bool) -> void:
+	if _syncing or _loader == null or _prop_id.is_empty():
+		return
+	if _loader.has_method("update_prop_record"):
+		_loader.call("update_prop_record", _prop_id, {"collision_enabled": pressed})
+
+
 func _preview_live() -> void:
 	if _loader == null or _prop_id.is_empty():
 		return
@@ -198,7 +237,7 @@ func _preview_live() -> void:
 			model_id = str(_model_option.get_item_metadata(_model_option.selected))
 		_loader.call("preview_prop", _prop_id, {
 			"model_id": model_id,
-			"x": _off_x.value, "y": _off_y.value, "z": _off_z.value,
+			"x": _off_x.value, "y_offset": _off_y.value, "z": _off_z.value,
 			"yaw": _yaw.value, "pitch": _pitch.value, "roll": _roll.value,
 			"scale": _scale.value,
 		})
@@ -213,7 +252,7 @@ func _on_apply() -> void:
 	if _loader.has_method("update_prop_record"):
 		_loader.call("update_prop_record", _prop_id, {
 			"model_id": model_id,
-			"x": _off_x.value, "y": _off_y.value, "z": _off_z.value,
+			"x": _off_x.value, "y_offset": _off_y.value, "z": _off_z.value,
 			"yaw": _yaw.value, "pitch": _pitch.value, "roll": _roll.value,
 			"scale": _scale.value,
 		})

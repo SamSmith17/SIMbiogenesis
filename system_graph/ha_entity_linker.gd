@@ -160,11 +160,15 @@ func _resolve_nodes() -> void:
 
 
 func _is_simulating_forward() -> bool:
-	# Prefer solar_ui's explicit flag if set (set by TimeUI.simulation_started).
+	# TimeDirector is the single mode authority — SIMULATE means "not mirroring
+	# live", which is exactly when HA overrides should be snapshotted then frozen.
+	var td := get_node_or_null("/root/TimeDirector")
+	if td != null and td.has_method("is_sim"):
+		return bool(td.call("is_sim"))
+	# Fallbacks when TimeDirector is unavailable (e.g. isolated tests).
 	if _solar_ui != null and _solar_ui.has_method("is_simulating_from_live"):
 		if bool(_solar_ui.is_simulating_from_live()):
 			return true
-	# Otherwise, fall back to "time_scale beyond realtime" heuristic.
 	if _main_node != null and _main_node.get("time_scale") != null:
 		return float(_main_node.time_scale) > REALTIME_THRESHOLD
 	return false

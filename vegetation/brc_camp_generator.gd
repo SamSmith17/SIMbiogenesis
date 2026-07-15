@@ -186,11 +186,12 @@ static func build_camps_node(roads: Array, buildings: Array,
 		fill_probability: float = FILL_PROBABILITY,
 		mix_bias: float = 0.0,
 		scale_min: float = 0.9, scale_max: float = 1.18,
+		light_density: float = 1.0,
 		exclusion_radius_m: float = 0.0) -> Node3D:
 	var candidates := generate_candidates(roads, buildings, footing_grid, mesh_res,
 		extent_m, center_elev, area_half_m, seed,
 		clip_polygon, fill_probability, mix_bias, scale_min, scale_max,
-		exclusion_radius_m)
+		light_density, exclusion_radius_m)
 	var classes: Dictionary = candidates.get("classes", {})
 	var glow: Array = candidates.get("glow", [])
 	var stats: Dictionary = candidates.get("stats", {})
@@ -274,6 +275,7 @@ static func generate_candidates(roads: Array, buildings: Array,
 		fill_probability: float = FILL_PROBABILITY,
 		mix_bias: float = 0.0,
 		scale_min: float = 0.9, scale_max: float = 1.18,
+		light_density: float = 1.0,
 		exclusion_radius_m: float = 0.0) -> Dictionary:
 
 	var road_pts := count_road_points(roads)
@@ -442,7 +444,7 @@ static func generate_candidates(roads: Array, buildings: Array,
 		structure_count += 1
 
 		# A fraction of camps carry a coloured night light atop the structure.
-		if glow.size() < MAX_GLOW and rng.randf() < 0.5:
+		if glow.size() < MAX_GLOW and rng.randf() < (0.5 * light_density):
 			var csize: Vector3 = FALLBACK_SIZE[class_id]
 			var h := csize.y * sc
 			glow.append({

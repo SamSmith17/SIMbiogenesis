@@ -11,6 +11,7 @@ const SoiPreviewScript := preload("res://core/soi/soi_preview.gd")
 const SoiSubsurfaceScript := preload("res://core/soi/soi_subsurface.gd")
 const SoiSnowglobeScript := preload("res://core/soi/soi_snowglobe_camera.gd")
 const SoiPanelScript := preload("res://scenes/ui/soi_panel_ui.gd")
+const SoiSnowglobeHudScript := preload("res://scenes/ui/soi_snowglobe_hud.gd")
 
 var _config: SoiConfig = SoiConfig.defaults()
 var _lat := 0.0
@@ -22,10 +23,17 @@ var _preview: Node3D = null
 var _subsurface: Node3D = null
 var _panel: Control = null
 var _snowglobe: Node = null
+var _snowglobe_hud: CanvasLayer = null
 var edit_mode := false
 var snowglobe_active := false
+## Graph-editor live SoI backdrop (SubViewport) — owns clip/subsurface when
+## snowglobe modal is not open.
+var graph_preview_active := false
+## When false, graph preview keeps clip but hides the glass dome (Site Plan).
+var _graph_preview_shell_visible := true
 var _placement_mode := false
 var _globals_registered := false
+var _save_pending := false
 
 ## How often (real seconds) to re-check hero-tree (individually placed OSM
 ## `natural=tree` GLB) visibility against the SOI sphere while in Snowglobe
@@ -33,7 +41,9 @@ var _globals_registered := false
 ## the soi_clip fragment-discard trick used by bark/foliage/grass can't reach
 ## them — instead we toggle each instance's `visible` from script.
 const _HERO_CLIP_POLL_S := 0.2
+const _SAVE_DEBOUNCE_S := 0.35
 var _hero_clip_acc := 0.0
+var _save_acc := 0.0
 
 
 func _ready() -> void:
@@ -44,11 +54,15 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if _placement_mode:
 		_process_placement_pick()
-	if snowglobe_active:
+	if snowglobe_active or graph_preview_active:
 		_hero_clip_acc += delta
 		if _hero_clip_acc >= _HERO_CLIP_POLL_S:
 			_hero_clip_acc = 0.0
 			_apply_hero_tree_clip()
+	if _save_pending:
+		_save_acc += delta
+		if _save_acc >= _SAVE_DEBOUNCE_S:
+			_flush_pending_save()
 
 
 func load_for_site(lat: float, lon: float) -> void:
@@ -67,12 +81,16 @@ func save_for_site() -> void:
 
 func bind_terrain(loader: Node) -> void:
 	_loader = loader
+	# Fresh map / terrain bind always opens in the full world — never inherit a
+	# latched graph SoI-preview clip (autosave view_mode restore used to do that).
+	clear_graph_preview_world_effects()
 	_ensure_world_nodes()
 	_ensure_panel()
 	refresh_footing()
 
 
 func unbind_terrain() -> void:
+	clear_graph_preview_world_effects()
 	_loader = null
 	if is_instance_valid(_root):
 		_root.queue_free()
@@ -95,24 +113,40 @@ func refresh_footing() -> void:
 func set_center_xz(x: float, z: float) -> void:
 	_config.center_x = x
 	_config.center_z = z
-	save_for_site()
+	_schedule_save()
 	refresh_footing()
 	soi_changed.emit()
 
 
 func set_radius_m(r: float) -> void:
 	_config.radius_m = clampf(r, SoiConfig.MIN_RADIUS_M, SoiConfig.MAX_RADIUS_M)
-	save_for_site()
+	_schedule_save()
 	if _preview != null and _preview.has_method("sync_transform"):
 		_preview.sync_transform()
 	if _subsurface != null and _subsurface.has_method("sync_transform"):
 		_subsurface.sync_transform()
 	_push_shader_globals()
+	# Hero-tree clip is expensive — refresh on next poll tick, not every slider step.
+	if snowglobe_active:
+		_hero_clip_acc = _HERO_CLIP_POLL_S
 	soi_changed.emit()
 
 
 func reset_to_map_center() -> void:
 	set_center_xz(0.0, 0.0)
+
+
+func _schedule_save() -> void:
+	_save_pending = true
+	_save_acc = 0.0
+	_sync_process()
+
+
+func _flush_pending_save() -> void:
+	_save_pending = false
+	_save_acc = 0.0
+	save_for_site()
+	_sync_process()
 
 
 func world_center() -> Vector3:
@@ -154,7 +188,71 @@ func cancel_placement_mode() -> void:
 
 
 func _sync_process() -> void:
-	set_process(_placement_mode or snowglobe_active)
+	set_process(_placement_mode or snowglobe_active or graph_preview_active or _save_pending)
+
+
+## Enable/disable SoI clip + glass shell for the graph SubViewport backdrop.
+## No-ops while full-screen snowglobe owns the same visuals.
+func set_graph_preview_active(on: bool) -> void:
+	if graph_preview_active == on:
+		# Force-clear clip when requesting off — guards inconsistent latches.
+		if not on and not snowglobe_active:
+			set_clip_enabled(false)
+			if _subsurface != null:
+				_subsurface.visible = false
+			_reset_hero_tree_visibility()
+		return
+	graph_preview_active = on
+	_sync_process()
+	if snowglobe_active:
+		return
+	set_clip_enabled(on)
+	if _subsurface != null:
+		_subsurface.visible = on and _graph_preview_shell_visible
+		if on and _subsurface.has_method("sync_transform"):
+			_subsurface.sync_transform()
+	if on:
+		if _preview != null:
+			_preview.visible = false
+		_hero_clip_acc = 999.0
+		_apply_hero_tree_clip()
+	else:
+		if _preview != null:
+			_preview.visible = edit_mode
+		_reset_hero_tree_visibility()
+
+
+## Used on map bind / graph close so FPS never remains in clipped snowglobe mode.
+func clear_graph_preview_world_effects() -> void:
+	graph_preview_active = false
+	_sync_process()
+	if snowglobe_active:
+		return
+	set_clip_enabled(false)
+	if _subsurface != null:
+		_subsurface.visible = false
+	if _preview != null:
+		_preview.visible = edit_mode
+	_reset_hero_tree_visibility()
+
+
+## Site Plan top-down should not paint the glass dome (it fills the ortho
+## view as a black disc). Perspective SoI preview keeps the shell.
+func set_graph_preview_shell_visible(on: bool) -> void:
+	_graph_preview_shell_visible = on
+	if not graph_preview_active or snowglobe_active:
+		return
+	if _subsurface != null:
+		_subsurface.visible = on
+		if on and _subsurface.has_method("sync_transform"):
+			_subsurface.sync_transform()
+
+
+## Toggle only the above-ground glass. Elevation section keeps the soil bowl
+## but turns glass off so the sky/clouds aren't covered by Fresnel bullseyes.
+func set_graph_preview_glass_enabled(on: bool) -> void:
+	if _subsurface != null and _subsurface.has_method("set_glass_enabled"):
+		_subsurface.call("set_glass_enabled", on)
 
 
 func open_panel() -> void:
@@ -164,11 +262,17 @@ func open_panel() -> void:
 		_panel.open_panel()
 
 
+## Default entry from the SoI marker (Interact / O): open Snowglobe with radius HUD.
+func open_from_marker() -> void:
+	enter_snowglobe()
+
+
 func enter_snowglobe() -> void:
 	if snowglobe_active or _loader == null:
 		return
 	if _panel != null and _panel.has_method("close_panel"):
 		_panel.close_panel()
+	# Hide the preview sphere so it doesn't Z-fight with the snowglobe glass dome.
 	if _preview != null:
 		_preview.visible = false
 	if _snowglobe == null:
@@ -183,6 +287,9 @@ func enter_snowglobe() -> void:
 		_subsurface.visible = true
 	_hero_clip_acc = 999.0
 	_apply_hero_tree_clip()
+	_ensure_snowglobe_hud()
+	if _snowglobe_hud != null and _snowglobe_hud.has_method("show_hud"):
+		_snowglobe_hud.call("show_hud")
 	snowglobe_active_changed.emit(true)
 
 
@@ -199,11 +306,27 @@ func _finalize_snowglobe_exit() -> void:
 	if not snowglobe_active:
 		return
 	snowglobe_active = false
+	if _save_pending:
+		_flush_pending_save()
 	_sync_process()
-	set_clip_enabled(false)
-	if _subsurface != null:
-		_subsurface.visible = false
-	_reset_hero_tree_visibility()
+	# Restore graph-editor SoI backdrop visuals if that mode is still on.
+	if graph_preview_active:
+		set_clip_enabled(true)
+		if _subsurface != null:
+			_subsurface.visible = true
+			if _subsurface.has_method("sync_transform"):
+				_subsurface.sync_transform()
+		_hero_clip_acc = 999.0
+		_apply_hero_tree_clip()
+	else:
+		set_clip_enabled(false)
+		if _subsurface != null:
+			_subsurface.visible = false
+		if _preview != null:
+			_preview.visible = edit_mode
+		_reset_hero_tree_visibility()
+	if _snowglobe_hud != null and _snowglobe_hud.has_method("hide_hud"):
+		_snowglobe_hud.call("hide_hud")
 	snowglobe_active_changed.emit(false)
 
 
@@ -294,6 +417,16 @@ func _ensure_panel() -> void:
 	_panel = SoiPanelScript.new()
 	_panel.name = "SoiPanelUI"
 	ui.add_child(_panel)
+
+
+func _ensure_snowglobe_hud() -> void:
+	if is_instance_valid(_snowglobe_hud):
+		return
+	_snowglobe_hud = SoiSnowglobeHudScript.new()
+	_snowglobe_hud.name = "SoiSnowglobeHud"
+	add_child(_snowglobe_hud)
+	if _snowglobe_hud.has_method("bind_service"):
+		_snowglobe_hud.call("bind_service", self)
 
 
 func _process_placement_pick() -> void:

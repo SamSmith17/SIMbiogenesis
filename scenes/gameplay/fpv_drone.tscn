@@ -1,17 +1,9 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://dj2w0148734i7"]
 
-[ext_resource type="Script" path="res://scenes/gameplay/fpv_drone.gd" id="1_drone"]
+[ext_resource type="Script" uid="uid://da6scoe51mpl1" path="res://scenes/gameplay/fpv_drone.gd" id="1_drone"]
 
-[node name="FPVDrone" type="Area3D"]
+[node name="FPVDrone" type="Area3D" unique_id=1444421836]
 script = ExtResource("1_drone")
-max_forward_speed = 65.0
-vertical_speed = 35.0
-steering_sensitivity = 2.5
-acceleration = 45.0
-drag = 10.0
-tilt_intensity = 35.0
-max_altitude = 8000.0
-interaction_radius = 2.0
-display_name = "FPV Drone"
+max_altitude = 30000.0
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1629427823]

@@ -189,6 +189,29 @@ theme_override_font_sizes/font_size = 16
 text = "0.00 kW"
 horizontal_alignment = 2
 
+[node name="AuxContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="AuxIcon" type="Label" parent="Panel/MarginContainer/VBoxContainer/AuxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.686, 0.6, 1, 1)
+theme_override_font_sizes/font_size = 16
+text = "🔌"
+
+[node name="AuxLabel" type="Label" parent="Panel/MarginContainer/VBoxContainer/AuxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.8, 0.8, 0.8, 1)
+theme_override_font_sizes/font_size = 14
+text = "  Aux in"
+
+[node name="AuxValue" type="Label" parent="Panel/MarginContainer/VBoxContainer/AuxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.686, 0.6, 1, 1)
+theme_override_font_sizes/font_size = 16
+text = "0.00 kW"
+horizontal_alignment = 2
+
 [node name="PotentialContainer" type="HBoxContainer" parent="Panel/MarginContainer/VBoxContainer"]
 layout_mode = 2
 

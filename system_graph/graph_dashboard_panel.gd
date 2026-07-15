@@ -14,6 +14,7 @@ var _mode := "build"
 var _refresh_acc := 0.0
 
 var _solar_lbl: Label = null
+var _aux_lbl: Label = null
 var _load_lbl: Label = null
 var _net_lbl: Label = null
 var _bat_bar: ProgressBar = null
@@ -65,12 +66,13 @@ func _build_ui() -> void:
 	var power_body := _card_inner(power_wrap)
 
 	var power_grid := GridContainer.new()
-	power_grid.columns = 3
+	power_grid.columns = 4
 	power_grid.add_theme_constant_override("h_separation", 6)
 	power_grid.add_theme_constant_override("v_separation", 2)
 	power_body.add_child(power_grid)
 
 	_solar_lbl = _stat_cell(power_grid, "SOLAR", "— kW", UITheme.C_GOLD)
+	_aux_lbl = _stat_cell(power_grid, "AUX", "— kW", UITheme.C_LAVENDER)
 	_load_lbl = _stat_cell(power_grid, "LOAD", "— kW", UITheme.C_TEXT)
 	_net_lbl = _stat_cell(power_grid, "NET", "— kW", UITheme.C_PRIMARY)
 
@@ -295,6 +297,7 @@ func _refresh_power() -> void:
 	var su := _solar_ui()
 	if su == null or not is_instance_valid(su):
 		_solar_lbl.text = "— kW"
+		_aux_lbl.text = "— kW"
 		_load_lbl.text = "— kW"
 		_net_lbl.text = "— kW"
 		_bat_bar.value = 0.0
@@ -305,10 +308,15 @@ func _refresh_power() -> void:
 
 	var solar_kw := float(su.get("current_solar_kw") if su.get("current_solar_kw") != null else 0.0)
 	var load_kw := float(su.get("current_load_kw") if su.get("current_load_kw") != null else 0.0)
-	var aux_kw := float(su.get("current_aux_generation_kw") if su.get("current_aux_generation_kw") != null else 0.0)
+	# Aux = real scene wind/hydro/etc EnergySource output + graph-simulated DC
+	# generation (fuel generators, graph-only wind/hydro wired into a
+	# battery — see system_graph/dc_power_wiring.gd).
+	var aux_kw := float(su.get("current_aux_generation_kw") if su.get("current_aux_generation_kw") != null else 0.0) \
+		+ float(su.get("current_graph_dc_kw") if su.get("current_graph_dc_kw") != null else 0.0)
 	var net_kw := solar_kw + aux_kw - load_kw
 
 	_solar_lbl.text = "%.2f kW" % solar_kw
+	_aux_lbl.text = "%.2f kW" % aux_kw
 	_load_lbl.text = "%.2f kW" % load_kw
 	_net_lbl.text = "%+.2f kW" % net_kw
 	_net_lbl.add_theme_color_override("font_color",
@@ -347,6 +355,7 @@ func _refresh_power() -> void:
 
 	var alpha := 1.0 if _mode == "test" else 0.72
 	_solar_lbl.modulate.a = alpha
+	_aux_lbl.modulate.a = alpha
 	_load_lbl.modulate.a = alpha
 	_net_lbl.modulate.a = alpha
 

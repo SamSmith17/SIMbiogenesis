@@ -5,6 +5,9 @@ extends RefCounted
 
 const DEFAULT_PADDING := 24.0
 const DEFAULT_ITERATIONS := 48
+## Shared with GraphCanvas — wide enough to frame a sprawling graph or a 0.5 m panel.
+const ZOOM_MIN := 0.005
+const ZOOM_MAX := 256.0
 
 ## Off-canvas / hidden summary nodes must not expand fit-to-view or push the main cluster.
 const HIDDEN_LAYOUT_IDS: Array[String] = ["virtual_solar_array"]
@@ -146,7 +149,7 @@ static func compute_fit_view(bounds: Rect2, canvas_size: Vector2,
 	var avail := canvas_size - margin * 2.0
 	var zx := avail.x / bounds.size.x
 	var zy := avail.y / bounds.size.y
-	var zoom := clampf(minf(zx, zy), 0.25, 1.5)
+	var zoom := clampf(minf(zx, zy), ZOOM_MIN, ZOOM_MAX)
 	var center := bounds.get_center()
 	var pan := -center * zoom
 	return {"pan_x": pan.x, "pan_y": pan.y, "zoom": zoom}

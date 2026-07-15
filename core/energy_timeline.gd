@@ -62,8 +62,6 @@ static func step_soc(soc: float, solar_kw: float, aux_kw: float, load_kw: float,
 		return soc - discharge
 
 
-## Best-effort inverse of step_soc (exact when no clamp rail was hit).
-## Recovers the SOC *before* a forward step that produced `soc`.
 static func unstep_soc(soc: float, solar_kw: float, aux_kw: float, load_kw: float,
 		dt_hours: float, _cap: float, ceff: float, deff: float, _min_kwh: float) -> float:
 	if dt_hours <= 0.0:
@@ -72,9 +70,11 @@ static func unstep_soc(soc: float, solar_kw: float, aux_kw: float, load_kw: floa
 	if net > 0.0:
 		return soc - net * dt_hours * ceff
 	else:
+		if soc <= _min_kwh + 1e-4:
+			# If we are currently at the floor, the forward step was clamped.
+			# Un-stepping the full discharge would falsely over-restore the SOC (often to 100%).
+			return soc
 		return soc + absf(net) * dt_hours / deff
-
-
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -154,6 +154,22 @@ func init_anchor(abs_hours: float, soc_kwh: float, solar_kw: float = 0.0,
 ## integrating SOC from the last cached sample. Inputs are held constant across
 ## the step (small per-tick dt). Forward-only; ignores backward calls (use
 ## seek() to move the playhead backward — that reads the existing curve).
+##
+## At high time_scale a single call can cover thousands of sim-minutes (one
+## real-time SolarUI tick advances the sim clock by delta*time_scale). Rather
+## than calling step_soc() once per minute — a function call plus two clamp
+## branches per sample, the dominant per-iteration cost — _append_exact_run()
+## fills the whole span with an inlined closed form. This is not an
+## approximation: with inputs held constant, step_soc()'s charge branch
+## algebraically reduces to exactly `min(soc + net*dt*ceff, cap)` and the
+## discharge branch to exactly `max(soc - |net|*dt/deff, min_kwh)` (both
+## verified by direct substitution — the inner clamps in step_soc are
+## redundant once cap/min_kwh bound soc from the previous call, as they always
+## do here). So soc(t) is a straight ramp toward the full/empty clamp, then
+## flat once clamped, and the inlined loop below reproduces every intermediate
+## per-minute value bit-for-bit with the old per-minute step_soc() loop — same
+## curve, same integrated kWh, just without the redundant function-call/branch
+## overhead per sample.
 func record_step(abs_hours: float, solar_kw: float, aux_kw: float, load_kw: float) -> void:
 	if is_empty():
 		init_anchor(abs_hours, clampf(capacity_kwh * 0.5, 0.0, capacity_kwh), solar_kw, aux_kw, load_kw)
@@ -164,15 +180,85 @@ func record_step(abs_hours: float, solar_kw: float, aux_kw: float, load_kw: floa
 		# Already cached (paused or moving back) — record() does not rewrite history.
 		return
 	var soc := _soc[_soc.size() - 1]
-	while cur_g < target_g:
-		cur_g += 1
-		soc = step_soc(soc, solar_kw, aux_kw, load_kw, step_hours,
+	var steps := target_g - cur_g
+
+	# A gap wider than the buffer's own retention window would have its
+	# earliest portion trimmed off immediately below anyway — skip straight
+	# past it with one exact closed-form step (step_soc already handles an
+	# arbitrary dt_hours correctly; see the class-level note above) instead of
+	# filling and then discarding samples nobody will ever read.
+	var skip_steps := maxi(0, steps - MAX_SAMPLES)
+	if skip_steps > 0:
+		soc = step_soc(soc, solar_kw, aux_kw, load_kw, float(skip_steps) * step_hours,
 			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh)
-		_soc.append(soc)
-		_solar.append(solar_kw)
-		_aux.append(aux_kw)
-		_load.append(load_kw)
+		steps -= skip_steps
+
+	_append_exact_run(soc, solar_kw, aux_kw, load_kw, steps)
 	_trim_if_needed()
+
+
+## Densely appends `steps` per-minute samples starting after `soc0`, exactly
+## reproducing what `steps` sequential step_soc() calls would produce (see the
+## note above record_step for why this is exact, not approximate). Uses
+## resize() + indexed writes instead of append() to avoid incremental
+## PackedArray reallocation across a large fast-forward run.
+func _append_exact_run(soc0: float, solar_kw: float, aux_kw: float, load_kw: float,
+		steps: int) -> void:
+	if steps <= 0:
+		return
+	var start := _soc.size()
+	var n := start + steps
+	_soc.resize(n)
+	_solar.resize(n)
+	_aux.resize(n)
+	_load.resize(n)
+
+	var net := solar_kw + aux_kw - load_kw
+	if net > 0.0:
+		var per_step := net * step_hours * charge_eff
+		var clamp_step := steps
+		if per_step > 0.0:
+			var headroom := maxf(capacity_kwh - soc0, 0.0)
+			clamp_step = mini(steps, _steps_to_cover(headroom, per_step))
+		var soc := soc0
+		for k in clamp_step:
+			soc = minf(soc + per_step, capacity_kwh)
+			_soc[start + k] = soc
+		for k in range(clamp_step, steps):
+			_soc[start + k] = capacity_kwh
+	elif net < 0.0:
+		var per_step := (-net) * step_hours / discharge_eff
+		var clamp_step := steps
+		if per_step > 0.0:
+			var avail := maxf(soc0 - min_soc_kwh, 0.0)
+			clamp_step = mini(steps, _steps_to_cover(avail, per_step))
+		var soc := soc0
+		for k in clamp_step:
+			soc = maxf(soc - per_step, min_soc_kwh)
+			_soc[start + k] = soc
+		for k in range(clamp_step, steps):
+			_soc[start + k] = min_soc_kwh
+	else:
+		for k in steps:
+			_soc[start + k] = soc0
+
+	for k in steps:
+		_solar[start + k] = solar_kw
+		_aux[start + k] = aux_kw
+		_load[start + k] = load_kw
+
+
+## Smallest step count k (>= 0) such that k*per_step covers `amount`, i.e. the
+## integer ceiling of amount/per_step. Written as an explicit search rather
+## than `int(ceil(amount/per_step))` because float division/ceil can land a
+## hair under the true integer (e.g. 4.999999994), silently truncating to one
+## step short — which would clamp the ramp loop one minute later than the
+## per-minute reference computation. per_step must be > 0.
+func _steps_to_cover(amount: float, per_step: float) -> int:
+	var k := int(amount / per_step)
+	if float(k) * per_step < amount - 1e-6:
+		k += 1
+	return k
 
 
 ## Append a directly-measured SOC sample (e.g. live HA reading) rather than an

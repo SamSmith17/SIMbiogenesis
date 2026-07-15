@@ -23,6 +23,7 @@ const DRONE_DEFAULTS := {
 	"tilt_speed": 8.0,
 }
 
+
 var main_node: Node3D = null
 var live_mode_enabled: bool = false
 var stored_time_scale: float = 0.016667
@@ -149,6 +150,13 @@ func get_state_snapshot() -> Dictionary:
 		"survival_active": not bool(main.get("gameplay_mechanics_paused")),
 		"plant_growth_enabled": _main_bool("get_plant_growth_enabled", true),
 		"analemma_diurnal_offset_min_per_day": _main_float("get_analemma_diurnal_offset_min_per_day", 0.0),
+		"analemma_noon_offset_minutes": _main_float("get_analemma_noon_offset_minutes", 0.0),
+		"show_sun_path": _main_bool("get_show_sun_path", true),
+		"show_moon_path": _main_bool("get_show_moon_path", false),
+		"analemma_type": _main_int("get_analemma_type", 0),
+		"analemma_path_thickness": float(main.get("analemma_path_thickness")) if "analemma_path_thickness" in main else 1.0,
+		"analemma_solar_color": main.get("analemma_solar_color") if "analemma_solar_color" in main else Color(1.0, 0.9, 0.3),
+		"analemma_lunar_color": main.get("analemma_lunar_color") if "analemma_lunar_color" in main else Color(0.7, 0.85, 1.0),
 		"moon_phase_text": get_moon_phase_text(),
 		"live_mode_status": get_live_mode_status(),
 		"gameplay_status": get_gameplay_status(),
@@ -173,7 +181,11 @@ func get_state_snapshot() -> Dictionary:
 		"sun_glow_size": _main_float("get_sun_glow_size", 9.0),
 		"sun_aureole": _main_float("get_sun_aureole", 0.8),
 		"cirrus_user_scale": _main_float("get_cirrus_user_scale", 1.0),
+		"cirrus_wave_frequency_scale": _main_float("get_cirrus_wave_frequency_scale", 1.0),
+		"cirrus_wave_intensity_scale": _main_float("get_cirrus_wave_intensity_scale", 1.0),
 		"cloud_shadows_enabled": _main_bool("get_cloud_shadows_enabled", true),
+		"building_shadows_enabled": _main_bool("get_building_shadows_enabled", false),
+		"shadow_opacity": _main_float("get_shadow_opacity", 1.0),
 		"god_rays_enabled": _main_bool("get_god_rays_enabled", false),
 		"player_fov": _main_float("get_player_fov", 50.0),
 		"drone_fov": _main_float("get_drone_fov", 50.0),
@@ -312,8 +324,14 @@ func apply_sun_energy(value: float) -> void:
 
 
 func apply_shadow_quality(value: float) -> void:
-	if main_node != null and main_node.has_method("set_shadow_quality_level"):
-		main_node.set_shadow_quality_level(int(value))
+	var main := _valid_main()
+	if main != null and main.has_method("set_shadow_quality_level"):
+		main.call("set_shadow_quality_level", int(value))
+
+func apply_shadow_opacity(value: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_shadow_opacity"):
+		main.call("set_shadow_opacity", value)
 
 
 func apply_graphics_quality(value: float) -> void:
@@ -442,15 +460,29 @@ func apply_sun_aureole(value: float) -> void:
 
 
 func apply_cirrus_scale(value: float) -> void:
+	if main_node != null and main_node.has_method("set_cirrus_user_scale"):
+		main_node.set_cirrus_user_scale(value)
+
+func apply_cirrus_wave_frequency_scale(value: float) -> void:
 	var main := _valid_main()
-	if main != null and main.has_method("set_cirrus_user_scale"):
-		main.call("set_cirrus_user_scale", value)
+	if main != null and main.has_method("set_cirrus_wave_frequency_scale"):
+		main.call("set_cirrus_wave_frequency_scale", value)
+
+func apply_cirrus_wave_intensity_scale(value: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_cirrus_wave_intensity_scale"):
+		main.call("set_cirrus_wave_intensity_scale", value)
 
 
 func apply_cloud_shadows_enabled(on: bool) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_cloud_shadows_enabled"):
 		main.call("set_cloud_shadows_enabled", on)
+
+func apply_building_shadows_enabled(on: bool) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_building_shadows_enabled"):
+		main.call("set_building_shadows_enabled", on)
 
 
 func apply_god_rays_enabled(on: bool) -> void:
@@ -469,6 +501,49 @@ func apply_analemma_diurnal_offset(minutes: float) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_analemma_diurnal_offset_min_per_day"):
 		main.call("set_analemma_diurnal_offset_min_per_day", minutes)
+
+
+func apply_analemma_noon_offset(minutes: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_analemma_noon_offset_minutes"):
+		main.call("set_analemma_noon_offset_minutes", minutes)
+
+
+func apply_show_sun_path(on: bool) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_show_sun_path"):
+		main.call("set_show_sun_path", on)
+
+
+func apply_show_moon_path(on: bool) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_show_moon_path"):
+		main.call("set_show_moon_path", on)
+
+
+func apply_analemma_type(type: int) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_analemma_type"):
+		main.call("set_analemma_type", type)
+
+func apply_analemma_path_thickness(thickness: float) -> void:
+	var main := _valid_main()
+	if main != null and "analemma_path_thickness" in main:
+		main.set("analemma_path_thickness", thickness)
+
+func apply_analemma_solar_color(col: Color) -> void:
+	var main := _valid_main()
+	if main != null and "analemma_solar_color" in main:
+		main.set("analemma_solar_color", col)
+		if main.has_method("_build_analemma_preview_mesh"):
+			main.call("_build_analemma_preview_mesh")
+
+func apply_analemma_lunar_color(col: Color) -> void:
+	var main := _valid_main()
+	if main != null and "analemma_lunar_color" in main:
+		main.set("analemma_lunar_color", col)
+		if main.has_method("_build_moon_preview_mesh"):
+			main.call("_build_moon_preview_mesh")
 
 
 func apply_player_fov(value: float) -> void:
@@ -501,6 +576,7 @@ func apply_drone_flight_setting(key: String, value: float) -> void:
 	_drone_settings[key] = value
 	_push_drone_settings_to_vehicles()
 	drone_settings_changed.emit()
+
 
 
 func _push_drone_settings_to_vehicles() -> void:
@@ -746,6 +822,21 @@ func persist_settings() -> void:
 	if main_node.has_method("get_analemma_diurnal_offset_min_per_day"):
 		cfg.set_value("gameplay", "analemma_diurnal_offset_min_per_day",
 			main_node.call("get_analemma_diurnal_offset_min_per_day"))
+	if main_node.has_method("get_analemma_noon_offset_minutes"):
+		cfg.set_value("gameplay", "analemma_noon_offset_minutes",
+			main_node.call("get_analemma_noon_offset_minutes"))
+	if main_node.has_method("get_show_sun_path"):
+		cfg.set_value("gameplay", "show_sun_path", main_node.call("get_show_sun_path"))
+	if main_node.has_method("get_show_moon_path"):
+		cfg.set_value("gameplay", "show_moon_path", main_node.call("get_show_moon_path"))
+	if main_node.has_method("get_analemma_type"):
+		cfg.set_value("gameplay", "analemma_type", main_node.call("get_analemma_type"))
+	if "analemma_path_thickness" in main_node:
+		cfg.set_value("gameplay", "analemma_path_thickness", main_node.get("analemma_path_thickness"))
+	if "analemma_solar_color" in main_node:
+		cfg.set_value("gameplay", "analemma_solar_color", main_node.get("analemma_solar_color"))
+	if "analemma_lunar_color" in main_node:
+		cfg.set_value("gameplay", "analemma_lunar_color", main_node.get("analemma_lunar_color"))
 	if main_node.has_method("get_ambient_energy_mult"):
 		cfg.set_value("rendering_adv", "ambient_energy_mult", main_node.call("get_ambient_energy_mult"))
 		cfg.set_value("rendering_adv", "ambient_sky_contribution", main_node.call("get_ambient_sky_contribution"))
@@ -767,8 +858,19 @@ func persist_settings() -> void:
 		cfg.set_value("rendering_adv", "sun_glow", main_node.call("get_sun_glow"))
 		cfg.set_value("rendering_adv", "sun_glow_size", main_node.call("get_sun_glow_size"))
 		cfg.set_value("rendering_adv", "sun_aureole", main_node.call("get_sun_aureole"))
-		cfg.set_value("rendering_adv", "cirrus_user_scale", main_node.call("get_cirrus_user_scale"))
-		cfg.set_value("rendering_adv", "cloud_shadows_enabled", main_node.call("get_cloud_shadows_enabled"))
+		if main_node.has_method("get_cirrus_user_scale"):
+			cfg.set_value("rendering_adv", "cirrus_user_scale", main_node.call("get_cirrus_user_scale"))
+		if main_node.has_method("get_cirrus_wave_frequency_scale"):
+			cfg.set_value("rendering_adv", "cirrus_wave_frequency_scale", main_node.call("get_cirrus_wave_frequency_scale"))
+		if main_node.has_method("get_cirrus_wave_intensity_scale"):
+			cfg.set_value("rendering_adv", "cirrus_wave_intensity_scale", main_node.call("get_cirrus_wave_intensity_scale"))
+		if main_node.has_method("get_cloud_shadows_enabled"):
+			cfg.set_value("rendering_adv", "cloud_shadows_enabled", main_node.call("get_cloud_shadows_enabled"))
+	if main_node.has_method("get_building_shadows_enabled"):
+		cfg.set_value("rendering_adv", "building_shadows_enabled", main_node.call("get_building_shadows_enabled"))
+	if main_node.has_method("get_shadow_opacity"):
+		cfg.set_value("rendering_adv", "shadow_opacity", main_node.call("get_shadow_opacity"))
+	if main_node.has_method("get_god_rays_enabled"):
 		cfg.set_value("rendering_adv", "god_rays_enabled", main_node.call("get_god_rays_enabled"))
 	if main_node.has_method("get_player_fov"):
 		cfg.set_value("camera", "player_fov", main_node.call("get_player_fov"))
@@ -809,6 +911,20 @@ func _load_persisted_settings() -> void:
 		apply_plant_growth_enabled(bool(cfg.get_value("gameplay", "plant_growth_enabled")))
 	if cfg.has_section_key("gameplay", "analemma_diurnal_offset_min_per_day"):
 		apply_analemma_diurnal_offset(float(cfg.get_value("gameplay", "analemma_diurnal_offset_min_per_day")))
+	if cfg.has_section_key("gameplay", "analemma_noon_offset_minutes"):
+		apply_analemma_noon_offset(float(cfg.get_value("gameplay", "analemma_noon_offset_minutes")))
+	if cfg.has_section_key("gameplay", "show_sun_path"):
+		apply_show_sun_path(bool(cfg.get_value("gameplay", "show_sun_path")))
+	if cfg.has_section_key("gameplay", "show_moon_path"):
+		apply_show_moon_path(bool(cfg.get_value("gameplay", "show_moon_path")))
+	if cfg.has_section_key("gameplay", "analemma_type"):
+		apply_analemma_type(int(cfg.get_value("gameplay", "analemma_type")))
+	if cfg.has_section_key("gameplay", "analemma_path_thickness"):
+		apply_analemma_path_thickness(float(cfg.get_value("gameplay", "analemma_path_thickness")))
+	if cfg.has_section_key("gameplay", "analemma_solar_color"):
+		apply_analemma_solar_color(cfg.get_value("gameplay", "analemma_solar_color") as Color)
+	if cfg.has_section_key("gameplay", "analemma_lunar_color"):
+		apply_analemma_lunar_color(cfg.get_value("gameplay", "analemma_lunar_color") as Color)
 	if cfg.has_section_key("gameplay", "live_mode") and bool(cfg.get_value("gameplay", "live_mode")):
 		set_live_mode(true)
 	_load_rendering_adv(cfg)
@@ -857,8 +973,16 @@ func _load_rendering_adv(cfg: ConfigFile) -> void:
 		apply_sun_aureole(float(cfg.get_value("rendering_adv", "sun_aureole")))
 	if cfg.has_section_key("rendering_adv", "cirrus_user_scale"):
 		apply_cirrus_scale(float(cfg.get_value("rendering_adv", "cirrus_user_scale")))
+	if cfg.has_section_key("rendering_adv", "cirrus_wave_frequency_scale"):
+		apply_cirrus_wave_frequency_scale(float(cfg.get_value("rendering_adv", "cirrus_wave_frequency_scale")))
+	if cfg.has_section_key("rendering_adv", "cirrus_wave_intensity_scale"):
+		apply_cirrus_wave_intensity_scale(float(cfg.get_value("rendering_adv", "cirrus_wave_intensity_scale")))
 	if cfg.has_section_key("rendering_adv", "cloud_shadows_enabled"):
 		apply_cloud_shadows_enabled(bool(cfg.get_value("rendering_adv", "cloud_shadows_enabled")))
+	if cfg.has_section_key("rendering_adv", "building_shadows_enabled"):
+		apply_building_shadows_enabled(bool(cfg.get_value("rendering_adv", "building_shadows_enabled")))
+	if cfg.has_section_key("rendering_adv", "shadow_opacity"):
+		apply_shadow_opacity(float(cfg.get_value("rendering_adv", "shadow_opacity")))
 	if cfg.has_section_key("rendering_adv", "god_rays_enabled"):
 		apply_god_rays_enabled(bool(cfg.get_value("rendering_adv", "god_rays_enabled")))
 	if cfg.has_section_key("camera", "player_fov"):

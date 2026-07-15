@@ -139,8 +139,8 @@ func _begin_scale_bake() -> void:
 func _process_scale_bake() -> void:
 	var budget := SCALE_ENTRIES_PER_FRAME
 	var st := _growth_settings.duplicate(true)
-	var mc := _manual_map.entry_count() if _manual_map != null else 0
-	var ac := _auto_map.entry_count() if _auto_map != null else 0
+	var mc := _scale_bake.manual_entry_count
+	var ac := _scale_bake.auto_entry_count
 	var kf_total := _series.keyframe_count()
 	while budget > 0 and _bake_kf < kf_total:
 		st["growth_now_h"] = _series.growth_clock_at(_bake_kf)

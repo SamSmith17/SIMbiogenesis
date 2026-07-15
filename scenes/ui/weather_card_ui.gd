@@ -126,24 +126,28 @@ func set_collapsed(on: bool) -> void:
 	call_deferred("refresh_position")
 
 
-## Re-anchor centered above the timeline bar (call on stack height changes).
+## Re-anchor above the Solar UI on the left side.
 func refresh_position() -> void:
-	anchor_left = 0.5
-	anchor_right = 0.5
-	anchor_top = 1.0
-	anchor_bottom = 1.0
-	grow_horizontal = Control.GROW_DIRECTION_BOTH
-	grow_vertical = Control.GROW_DIRECTION_BEGIN
-	var stack_h := 220.0
-	_ensure_timeline_ref()
-	if _timeline != null and _timeline.has_method("get_stack_height"):
-		stack_h = float(_timeline.call("get_stack_height"))
-	var w := CARD_WIDTH if not _collapsed else 220.0
-	offset_left = -w * 0.5
-	offset_right = w * 0.5
+	anchor_left = 0.0
+	anchor_right = 0.0
+	anchor_top = 0.0
+	anchor_bottom = 0.0
+	grow_horizontal = Control.GROW_DIRECTION_END
+	grow_vertical = Control.GROW_DIRECTION_END
+	
+	var w := 380.0 # Exactly matches SolarUI width
+	offset_left = 12.0
+	offset_right = offset_left + w
+	offset_top = 10.0
 	var h := get_combined_minimum_size().y
-	offset_bottom = -(stack_h + GAP_ABOVE_TIMELINE)
-	offset_top = offset_bottom - h
+	offset_bottom = offset_top + h
+	
+	# Push SolarUI down just below the weather card
+	_ensure_solar_ref()
+	if is_instance_valid(_solar_ui):
+		_solar_ui.offset_top = offset_bottom + 10.0
+		# Preserve its height of 610.0 from its original layout (default top 10, bottom 620)
+		_solar_ui.offset_bottom = _solar_ui.offset_top + 610.0
 
 
 # ---------------------------------------------------------------------------

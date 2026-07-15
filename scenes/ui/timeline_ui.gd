@@ -80,6 +80,18 @@ var _ready_done   : bool  = false
 
 const UPDATE_INTERVAL := 0.1
 
+## _draw_waveform_lane's get_timeline_waveform_bins() (up to 512 samples) and
+## the per-day WeatherService temperature-record loop in _draw_track both
+## recompute on every track redraw (~10 fps via UPDATE_INTERVAL above) even
+## when the view window hasn't moved and the sim is paused. Cache the last
+## result per track / per calendar day, bounded by a short TTL so data stays
+## fresh while actively simulating (or after a location/dataset change) but
+## an unchanged, paused view isn't recomputed ~10x/sec for nothing.
+const WAVEFORM_CACHE_TTL := 0.25
+var _waveform_cache : Dictionary = {}      # track label -> {key, bins, t}
+const WEATHER_PIP_CACHE_TTL := 0.5
+var _weather_pip_cache : Dictionary = {}   # day index (int) -> {rec, sim_t, t}
+
 # ---------------------------------------------------------------------------
 # UI node refs
 # ---------------------------------------------------------------------------
@@ -112,6 +124,12 @@ var _needs_score_lbl: Label = null
 var _challenge_chip: Button = null
 var _challenge_picker_panel: Control = null
 
+var _solar_analyzer: SolarShadingAnalyzer = null
+var _shading_overlay: PanelContainer = null
+var _shading_progress: ProgressBar = null
+var _shading_status: Label = null
+var _shading_decal: Decal = null
+var _shading_btn: Button = null
 
 signal stack_height_changed(height: float)
 
@@ -154,7 +172,6 @@ var _import_btn        : Button = null
 var _linkagelab_btn    : Button = null
 var _render_btn        : Button = null
 var _export_mp4_btn    : Button = null
-var _play_clim_btn     : Button = null
 var _loadmode_btn      : Button = null
 var _compare_btn       : Button = null
 var _load_video_btn    : Button = null
@@ -220,6 +237,7 @@ var _tip_val_lbl:  Label = null
 var _tip_time_lbl: Label = null
 var _tip_src_lbl:  Label = null
 var _tip_stn_lbl:  Label = null
+
 
 
 # ---------------------------------------------------------------------------
@@ -663,10 +681,7 @@ func _update_display() -> void:
 	if _track != null:
 		_track.queue_redraw()
 		_update_track_edge_labels()
-	_update_mode_chips()
 	_update_nle_controls()
-	_update_needs_strip()
-	_update_challenge_chip()
 
 	# ── Time label ───────────────────────────────────────────────────────────
 	_time_lbl.text = _fmt_hour_full(dt)
@@ -994,20 +1009,37 @@ func _draw_track() -> void:
 	if WeatherService.has_records() and span <= 60.0 * 24.0:
 		var _pip_y: float = groove_y - 9.0
 		var _d_pip: float = floor(win_start / 24.0)
+		var _pip_now := Time.get_ticks_msec() / 1000.0
 		while _d_pip * 24.0 <= win_start + span:
-			var _md := _month_day_for_abs(_d_pip * 24.0)
-			if _md.x > 0:
-				var _rec: Dictionary = WeatherService.get_records(_md.x, _md.y)
-				if not _rec.is_empty():
-					var _sim_t: float = WeatherService.temperature_c(_md.x, _md.y, 12.0)
-					var _px_pip: float = (_d_pip * 24.0 - win_start) / span * w
-					if _px_pip >= 0.0 and _px_pip <= w and not is_nan(_sim_t):
-						if _sim_t >= float(_rec.get("high", 1e9)):
-							_track.draw_circle(Vector2(_px_pip, _pip_y), 3.0,
-								Color(1.0, 0.25, 0.25, 0.9))
-						elif _sim_t <= float(_rec.get("low", -1e9)):
-							_track.draw_circle(Vector2(_px_pip, _pip_y), 3.0,
-								Color(0.25, 0.50, 1.0, 0.9))
+			# Noon-temperature/record lookup only depends on which calendar day
+			# this is, not the live playhead — cache per day (TTL-bounded so a
+			# location/dataset change still refreshes quickly) instead of
+			# re-querying WeatherService on every ~10 fps track redraw.
+			var _day_key := int(_d_pip)
+			var _pip_cached: Dictionary = _weather_pip_cache.get(_day_key, {})
+			var _rec: Dictionary
+			var _sim_t: float
+			if _pip_cached.has("t") and _pip_now - float(_pip_cached["t"]) < WEATHER_PIP_CACHE_TTL:
+				_rec = _pip_cached.get("rec", {})
+				_sim_t = float(_pip_cached.get("sim_t", NAN))
+			else:
+				_rec = {}
+				_sim_t = NAN
+				var _md := _month_day_for_abs(_d_pip * 24.0)
+				if _md.x > 0:
+					_rec = WeatherService.get_records(_md.x, _md.y)
+					if not _rec.is_empty():
+						_sim_t = WeatherService.temperature_c(_md.x, _md.y, 12.0)
+				_weather_pip_cache[_day_key] = {"rec": _rec, "sim_t": _sim_t, "t": _pip_now}
+			if not _rec.is_empty():
+				var _px_pip: float = (_d_pip * 24.0 - win_start) / span * w
+				if _px_pip >= 0.0 and _px_pip <= w and not is_nan(_sim_t):
+					if _sim_t >= float(_rec.get("high", 1e9)):
+						_track.draw_circle(Vector2(_px_pip, _pip_y), 3.0,
+							Color(1.0, 0.25, 0.25, 0.9))
+					elif _sim_t <= float(_rec.get("low", -1e9)):
+						_track.draw_circle(Vector2(_px_pip, _pip_y), 3.0,
+							Color(0.25, 0.50, 1.0, 0.9))
 			_d_pip += 1.0
 
 	# Adaptive ruler ticks (major + minor).
@@ -1134,8 +1166,16 @@ func _draw_waveform_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : f
 	if solar == null or not solar.has_method("get_timeline_waveform_bins"):
 		return
 	var bins : int = clampi(int(w), 64, 512)
-	var samples : PackedFloat32Array = solar.call("get_timeline_waveform_bins",
-		td.source, td.channel, win_start, win_start + span, bins)
+	var cache_key : Array = [td.source, td.channel, win_start, span, bins]
+	var now := Time.get_ticks_msec() / 1000.0
+	var cached : Dictionary = _waveform_cache.get(td.label, {})
+	var samples : PackedFloat32Array
+	if cached.get("key", []) == cache_key and now - float(cached.get("t", -1.0)) < WAVEFORM_CACHE_TTL:
+		samples = cached.get("bins", PackedFloat32Array())
+	else:
+		samples = solar.call("get_timeline_waveform_bins",
+			td.source, td.channel, win_start, win_start + span, bins)
+		_waveform_cache[td.label] = {"key": cache_key, "bins": samples, "t": now}
 	if samples.is_empty():
 		return
 	var cap := float(solar.call("get_timeline_capacity_kwh")) if solar.has_method("get_timeline_capacity_kwh") else 16.0
@@ -1505,13 +1545,9 @@ func _build_nle_row(parent: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.custom_minimum_size = Vector2(0, NLE_ROW_HEIGHT)
 	row.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 6)
 	parent.add_child(row)
-
-	var lead := Control.new()
-	lead.custom_minimum_size = Vector2(8, 0)
-	row.add_child(lead)
 
 	_import_btn = _mk_flat_btn("📂 Import datastream…", _on_import_pressed,
 		"Load a Home Assistant CSV export as an observed comparison clip")
@@ -1531,10 +1567,6 @@ func _build_nle_row(parent: VBoxContainer) -> void:
 	_export_mp4_btn.custom_minimum_size = Vector2(0, 32)
 	row.add_child(_export_mp4_btn)
 
-	_play_clim_btn = _mk_flat_btn("▶ Play climelapse", _on_play_clim_pressed,
-		"Scrub/play using baked climelapse scales inside the rendered range")
-	_play_clim_btn.add_theme_font_size_override("font_size", 11)
-	row.add_child(_play_clim_btn)
 
 	_loadmode_btn = _mk_flat_btn("Load: CSV", _on_loadmode_pressed,
 		"Simulated-battery load source — CSV: feed observed load (isolates solar/weather error); Modeled: simulate load too")
@@ -1716,7 +1748,12 @@ func _on_clim_export_path_selected(path: String) -> void:
 		if "analemma_mode" in _main:
 			_main.set("analemma_mode", true)
 	_clim_pending_auto_play = true
-	if tl.call("start_climelapse_export", _pending_clim_export_start, _pending_clim_export_end, out):
+	var time_scale := float(SPEED_STEPS[_speed_idx][1])
+	if is_inf(time_scale):
+		var is_x2 := str(SPEED_STEPS[_speed_idx][0]) == "∞×2"
+		time_scale = (48.0 if is_x2 else 24.0) * 30.0 # 1 or 2 days per frame at 30fps
+
+	if tl.call("start_climelapse_export", _pending_clim_export_start, _pending_clim_export_end, time_scale, out):
 		_update_clim_progress_dialog()
 	_update_nle_controls()
 
@@ -1835,18 +1872,6 @@ func _on_render_clim_pressed() -> void:
 	_update_nle_controls()
 
 
-func _on_play_clim_pressed() -> void:
-	var tl := _get_terrain_loader()
-	if tl == null or not tl.has_method("set_climelapse_playback"):
-		return
-	var on := tl.has_method("is_climelapse_playback") and bool(tl.call("is_climelapse_playback"))
-	tl.call("set_climelapse_playback", not on)
-	if not on and _render_progress_lbl != null:
-		var stats: Dictionary = tl.call("get_climelapse_bake_stats") if tl.has_method("get_climelapse_bake_stats") else {}
-		if not bool(stats.get("has_auto_bake", false)) and not bool(stats.get("has_manual_bake", false)):
-			_render_progress_lbl.text = "Clim: season only (re-render after veg rebuild for tree scales)"
-	_update_nle_controls()
-
 
 func _on_loadmode_pressed() -> void:
 	var s := _get_solar()
@@ -1938,15 +1963,6 @@ func _update_nle_controls() -> void:
 		var clim_busy := tl2 != null and tl2.has_method("is_climelapse_rendering") \
 			and bool(tl2.call("is_climelapse_rendering"))
 		_render_btn.disabled = clim_busy
-	if _play_clim_btn != null:
-		var tl3 := _get_terrain_loader()
-		var clim_ready := tl3 != null and tl3.has_method("get_climelapse_progress") \
-			and float(tl3.call("get_climelapse_progress")) >= 1.0
-		_play_clim_btn.disabled = not clim_ready
-		if tl3 != null and tl3.has_method("is_climelapse_playback"):
-			var clim_on := bool(tl3.call("is_climelapse_playback"))
-			_play_clim_btn.text = "⏸ Climelapse on" if clim_on else "▶ Play climelapse"
-			_play_clim_btn.add_theme_color_override("font_color", C_GREEN if clim_on else C_TEXT)
 	if not _clim_signals_connected:
 		var tl4 := _get_terrain_loader()
 		if tl4 != null and tl4.has_signal("climelapse_state_changed"):
@@ -2016,10 +2032,6 @@ func _start_climelapse_playback_after_render(rng: Vector2) -> void:
 
 
 func _build_info_row(parent: VBoxContainer) -> void:
-	# Plain Control host — Containers don't reposition plain-Control children,
-	# so we can pin the three clusters independently: weather hugs the left
-	# edge, icons hug the right edge, and the transport/time/date cluster sits
-	# at the TRUE horizontal centre (not merely between the two side groups).
 	_info_row = Control.new()
 	_info_row.name = "InfoRow"
 	_info_row.custom_minimum_size = Vector2(0, INFO_ROW_HEIGHT)
@@ -2030,22 +2042,14 @@ func _build_info_row(parent: VBoxContainer) -> void:
 	_info_row.resized.connect(_layout_info_clusters)
 	parent.add_child(_info_row)
 
-	_left_cluster = _build_left_cluster()
-	_info_row.add_child(_left_cluster)
-	_center_time_cluster = _build_center_time_cluster()
+	_center_time_cluster = _build_center_cluster()
 	_info_row.add_child(_center_time_cluster)
-	_center_transport_cluster = _build_center_transport_cluster()
-	_info_row.add_child(_center_transport_cluster)
-	_center_speed_cluster = _build_center_speed_cluster()
-	_info_row.add_child(_center_speed_cluster)
 	_right_cluster = _build_right_cluster()
 	_info_row.add_child(_right_cluster)
 
 	call_deferred("_layout_info_clusters")
 
 
-## Re-pin info-row clusters: weather → left, icons → right, transport → true
-## centre, time+date → left of transport, speed → right of transport.
 func _layout_info_clusters() -> void:
 	if _info_row == null:
 		return
@@ -2054,170 +2058,42 @@ func _layout_info_clusters() -> void:
 	if row_w <= 1.0:
 		return
 	var usable_h := maxf(1.0, row_h - INFO_ROW_BOTTOM_PAD)
-	for c: Control in [_left_cluster, _center_time_cluster, _center_transport_cluster,
-			_center_speed_cluster, _right_cluster]:
+	for c: Control in [_center_time_cluster, _right_cluster]:
 		if c == null:
 			continue
 		var cs: Vector2 = c.get_combined_minimum_size()
 		c.size = cs
 		c.position.y = maxf(0.0, (usable_h - cs.y) * 0.5)
-	if _left_cluster != null:
-		_left_cluster.position.x = INFO_ROW_EDGE_PAD
 	if _right_cluster != null:
 		_right_cluster.position.x = row_w - _right_cluster.size.x - INFO_ROW_EDGE_PAD
-	if _center_transport_cluster != null:
-		_center_transport_cluster.position.x = (row_w - _center_transport_cluster.size.x) * 0.5
-	if _center_time_cluster != null and _center_transport_cluster != null:
-		var tx := _center_transport_cluster.position.x
-		_center_time_cluster.position.x = maxf(
-			INFO_ROW_EDGE_PAD,
-			tx - CENTER_CLUSTER_GAP - _center_time_cluster.size.x)
-	if _center_speed_cluster != null and _center_transport_cluster != null:
-		var tx2 := _center_transport_cluster.position.x
-		var tw := _center_transport_cluster.size.x
-		_center_speed_cluster.position.x = minf(
-			row_w - _center_speed_cluster.size.x - INFO_ROW_EDGE_PAD,
-			tx2 + tw + CENTER_CLUSTER_GAP)
+	if _center_time_cluster != null:
+		_center_time_cluster.position.x = (row_w - _center_time_cluster.size.x) * 0.5
 
 
-## LEFT — one chip row: mode/data chips · needs chips · score badge · mission,
-## plus a compact astro column. (Weather moved to the floating WeatherCardUI.)
-func _build_left_cluster() -> Control:
-	var left := HBoxContainer.new()
-	left.alignment             = BoxContainer.ALIGNMENT_BEGIN
-	left.add_theme_constant_override("separation", 8)
-
-	var wx_box := VBoxContainer.new()
-	wx_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	wx_box.add_theme_constant_override("separation", 4)
-
-	# Single chip row: [MODE][DATA] | ⚡💧🍎♻ | SCORE | 🎯
-	var needs_row := HBoxContainer.new()
-	needs_row.alignment = BoxContainer.ALIGNMENT_BEGIN
-	needs_row.add_theme_constant_override("separation", 6)
-
-	# Mode chip (LIVE / PLAYBACK / SIM) — click to pin/unpin the mode.
-	_mode_chip = _mk_chip_btn("SIM", _on_mode_chip_pressed,
-		"Simulation mode. Click to pin LIVE / SIM (Auto when unpinned).")
-	_mode_chip.custom_minimum_size = Vector2(58, 22)
-	needs_row.add_child(_mode_chip)
-
-	# Data-provenance chip (REAL / OBSERVED / PROJECTED / RECORDED at playhead).
-	_data_chip = Label.new()
-	_data_chip.text = ""
-	_data_chip.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_data_chip.tooltip_text = "Data provenance at the playhead"
-	_data_chip.add_theme_font_size_override("font_size", 10)
-	_data_chip.add_theme_color_override("font_color", C_TEXT_S)
-	_data_chip.custom_minimum_size = Vector2(74, 0)
-	needs_row.add_child(_data_chip)
-	for kind_label: Array in [
-			["energy", "⚡"],
-			["water", "💧"],
-			["food", "🍎"],
-			["waste", "♻"],
-	]:
-		var kind: String = str(kind_label[0])
-		var chip := _mk_chip_btn("%s —" % kind_label[1], _on_needs_chip_pressed.bind(kind),
-				"Needs: %s — click for System Review" % kind)
-		chip.custom_minimum_size = Vector2(58, 26)
-		chip.add_theme_font_size_override("font_size", 11)
-		_needs_chips[kind] = chip
-		needs_row.add_child(chip)
-
-	# Prominent puzzle score badge
-	var score_wrap := PanelContainer.new()
-	var score_sb := StyleBoxFlat.new()
-	score_sb.bg_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.16)
-	score_sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.75)
-	score_sb.set_border_width_all(1)
-	score_sb.set_corner_radius_all(10)
-	score_sb.content_margin_left = 12.0
-	score_sb.content_margin_right = 12.0
-	score_sb.content_margin_top = 4.0
-	score_sb.content_margin_bottom = 4.0
-	score_wrap.add_theme_stylebox_override("panel", score_sb)
-	score_wrap.tooltip_text = "Puzzle score (autonomy person-days × 100 + mean closure × 50)"
-	var score_col := VBoxContainer.new()
-	score_col.add_theme_constant_override("separation", 0)
-	score_wrap.add_child(score_col)
-	var score_cap := Label.new()
-	score_cap.text = "SCORE"
-	score_cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	score_cap.add_theme_font_size_override("font_size", 8)
-	score_cap.add_theme_color_override("font_color", C_TEXT_M)
-	score_col.add_child(score_cap)
-	_needs_score_lbl = Label.new()
-	_needs_score_lbl.text = "—"
-	_needs_score_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_needs_score_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_needs_score_lbl.add_theme_font_size_override("font_size", 20)
-	_needs_score_lbl.add_theme_color_override("font_color", C_PRIMARY)
-	score_col.add_child(_needs_score_lbl)
-	needs_row.add_child(score_wrap)
-
-	_challenge_chip = _mk_chip_btn("🎯 Mission", _on_challenge_chip_pressed,
-			"Challenges — structured survival missions")
-	_challenge_chip.custom_minimum_size = Vector2(96, 26)
-	_challenge_chip.add_theme_font_size_override("font_size", 11)
-	needs_row.add_child(_challenge_chip)
-	wx_box.add_child(needs_row)
-	left.add_child(_mk_margin(wx_box, 8, 0))
-
-	left.add_child(_mk_vsep())
-
-	# Astro (sunrise / moon / sunset) — compact column next to the weather.
-	var astro := VBoxContainer.new()
-	astro.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	astro.alignment = BoxContainer.ALIGNMENT_CENTER
-	astro.add_theme_constant_override("separation", 1)
+func _build_center_cluster() -> Control:
+	var master := HBoxContainer.new()
+	master.alignment = BoxContainer.ALIGNMENT_CENTER
+	master.add_theme_constant_override("separation", 16)
+	
+	# [1] Sunrise
+	var astro_left := VBoxContainer.new()
+	astro_left.alignment = BoxContainer.ALIGNMENT_CENTER
 	_sunrise_lbl = _mk_astro_label("🌅 6:00", C_GOLD, "Sunrise (local solar time)")
-	astro.add_child(_sunrise_lbl)
-	_moon_lbl = _mk_astro_label("🌕 Full", C_LAVENDER, "Moon phase")
-	astro.add_child(_moon_lbl)
-	_sunset_lbl = _mk_astro_label("🌇 7:00", C_GOLD, "Sunset (local solar time)")
-	astro.add_child(_sunset_lbl)
-	left.add_child(astro)
-
-	return left
-
-
-## Time + date (day · month · year) — sits left of the transport cluster.
-func _build_center_time_cluster() -> Control:
-	var tbox := VBoxContainer.new()
-	tbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	tbox.add_theme_constant_override("separation", 2)
-
+	astro_left.add_child(_sunrise_lbl)
+	master.add_child(astro_left)
+	
+	# [2] Clock Time
 	_time_lbl = Label.new()
 	_time_lbl.text = "12:00 PM"
-	_time_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_time_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_time_lbl.tooltip_text = "Local time at the playhead. Drag the track above to scrub."
 	_time_lbl.add_theme_color_override("font_color", C_PRIMARY)
 	_time_lbl.add_theme_font_size_override("font_size", 22)
-	tbox.add_child(_time_lbl)
-
-	var date_row := HBoxContainer.new()
-	date_row.alignment = BoxContainer.ALIGNMENT_BEGIN
-	date_row.add_theme_constant_override("separation", 4)
-	# Floor at 1940 = start of the Open-Meteo ERA5 archive (earliest real weather).
-	_year_input = _mk_date_spin(1940, 2100, 1.0, "Simulation year")
-	_month_input = _mk_date_spin(1, 12, 1.0, "Month (1–12)")
-	_day_input = _mk_date_spin(1, 31, 1.0, "Day of month")
-	_year_input.value_changed.connect(_on_year_changed)
-	_month_input.value_changed.connect(_on_month_changed)
-	_day_input.value_changed.connect(_on_day_changed)
-	date_row.add_child(_wrap_date_spin("D", _day_input))
-	date_row.add_child(_wrap_date_spin("M", _month_input))
-	date_row.add_child(_wrap_date_spin("Y", _year_input))
-	tbox.add_child(date_row)
-
-	return tbox
-
-
-## Transport controls — pinned to the true horizontal centre of the bar.
-func _build_center_transport_cluster() -> Control:
-	var panel := PanelContainer.new()
-	panel.mouse_filter = Control.MOUSE_FILTER_PASS
+	master.add_child(_time_lbl)
+	
+	# [3] Transport Controls + Speed
+	var transport_panel := PanelContainer.new()
+	transport_panel.mouse_filter = Control.MOUSE_FILTER_PASS
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(C_PANEL.r, C_PANEL.g, C_PANEL.b, 0.72)
 	sb.border_color = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.85)
@@ -2226,48 +2102,63 @@ func _build_center_transport_cluster() -> Control:
 	sb.set_content_margin_all(4.0)
 	sb.content_margin_left = 10.0
 	sb.content_margin_right = 10.0
-	panel.add_theme_stylebox_override("panel", sb)
-
+	transport_panel.add_theme_stylebox_override("panel", sb)
 	var ctrl := HBoxContainer.new()
 	ctrl.alignment = BoxContainer.ALIGNMENT_CENTER
 	ctrl.add_theme_constant_override("separation", 10)
-
-	var slow_btn := _mk_transport_btn("◀◀", _on_slower_pressed, "Slower  (D-pad Left on controller)")
+	var slow_btn := _mk_transport_btn("◀◀", _on_slower_pressed, "Slower (D-pad Left on controller)")
 	ctrl.add_child(slow_btn)
-
 	_play_btn = _mk_play_btn()
 	ctrl.add_child(_play_btn)
-
-	var fast_btn := _mk_transport_btn("▶▶", _on_faster_pressed, "Faster  (D-pad Right on controller)")
+	var fast_btn := _mk_transport_btn("▶▶", _on_faster_pressed, "Faster (D-pad Right on controller)")
 	ctrl.add_child(fast_btn)
-
-	panel.add_child(ctrl)
-	return panel
-
-
-## Speed readout — sits right of the transport cluster.
-func _build_center_speed_cluster() -> Control:
 	var spd_box := VBoxContainer.new()
 	spd_box.alignment = BoxContainer.ALIGNMENT_CENTER
-	spd_box.add_theme_constant_override("separation", 1)
+	spd_box.add_theme_constant_override("separation", 0)
 	spd_box.tooltip_text = "Time-lapse speed. ◀◀ / ▶▶ to change (1× = real time)."
-
 	var spd_hdr := Label.new()
 	spd_hdr.text = "SPEED"
 	spd_hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	spd_hdr.add_theme_color_override("font_color", C_TEXT_M)
 	spd_hdr.add_theme_font_size_override("font_size", 8)
 	spd_box.add_child(spd_hdr)
-
 	_speed_lbl = Label.new()
 	_speed_lbl.text = str(SPEED_STEPS[_speed_idx][0])
 	_speed_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_speed_lbl.custom_minimum_size  = Vector2(46, 0)
 	_speed_lbl.add_theme_color_override("font_color", C_AMBER)
-	_speed_lbl.add_theme_font_size_override("font_size", 15)
+	_speed_lbl.add_theme_font_size_override("font_size", 14)
 	spd_box.add_child(_speed_lbl)
-
-	return spd_box
+	ctrl.add_child(spd_box)
+	transport_panel.add_child(ctrl)
+	master.add_child(transport_panel)
+	
+	# [4] Date Spinboxes (MM / DD / YYYY)
+	var date_row := HBoxContainer.new()
+	date_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	date_row.add_theme_constant_override("separation", 4)
+	_year_input = _mk_date_spin(1940, 2100, 1.0, "Simulation year")
+	_month_input = _mk_date_spin(1, 12, 1.0, "Month (1–12)")
+	_day_input = _mk_date_spin(1, 31, 1.0, "Day of month")
+	_year_input.value_changed.connect(_on_year_changed)
+	_month_input.value_changed.connect(_on_month_changed)
+	_day_input.value_changed.connect(_on_day_changed)
+	date_row.add_child(_wrap_date_spin("M", _month_input))
+	date_row.add_child(_wrap_date_spin("D", _day_input))
+	date_row.add_child(_wrap_date_spin("Y", _year_input))
+	master.add_child(date_row)
+	
+	# [5] Sunset & Moon Phase
+	var astro_right := VBoxContainer.new()
+	astro_right.alignment = BoxContainer.ALIGNMENT_CENTER
+	astro_right.add_theme_constant_override("separation", 1)
+	_sunset_lbl = _mk_astro_label("🌇 7:00", C_GOLD, "Sunset (local solar time)")
+	astro_right.add_child(_sunset_lbl)
+	_moon_lbl = _mk_astro_label("🌕 Full", C_LAVENDER, "Moon phase")
+	astro_right.add_child(_moon_lbl)
+	master.add_child(astro_right)
+	
+	return master
 
 
 ## RIGHT — icon buttons (save / settings / import / records / map). Pinned to
@@ -2281,6 +2172,8 @@ func _build_right_cluster() -> Control:
 	right.add_child(sl_btn)
 	var gear_btn := _mk_icon_btn("⚙", _on_settings_pressed, "Settings — clouds, sun/moon, stars & planets, location")
 	right.add_child(gear_btn)
+	_shading_btn = _mk_icon_btn("🔆", _on_solar_shading_pressed, "Solar Shading Analysis (Compute year-long shadow heatmap)")
+	right.add_child(_shading_btn)
 	var csv_btn := _mk_icon_btn("📂", _on_csv_playback_pressed, "Import a datastream CSV as a timeline clip")
 	right.add_child(csv_btn)
 	_linkagelab_btn = _mk_icon_btn("🎮", _on_linkagelab_import_pressed,
@@ -2299,6 +2192,94 @@ func _build_right_cluster() -> Control:
 func _on_settings_pressed() -> void:
 	if _settings_panel != null and _settings_panel.has_method("toggle"):
 		_settings_panel.toggle()
+
+
+func _on_solar_shading_pressed() -> void:
+	if _shading_decal != null and _shading_decal.is_inside_tree():
+		_shading_decal.queue_free()
+		_shading_decal = null
+		_shading_btn.text = "🔆"
+		return
+		
+	if _solar_analyzer != null and _solar_analyzer.is_running():
+		return
+		
+	if _solar_analyzer == null:
+		_solar_analyzer = SolarShadingAnalyzer.new()
+		add_child(_solar_analyzer)
+		_solar_analyzer.progress_updated.connect(_on_shading_progress)
+		_solar_analyzer.analysis_completed.connect(_on_shading_completed)
+		
+	if _shading_overlay == null:
+		_shading_overlay = PanelContainer.new()
+		var p_style = StyleBoxFlat.new()
+		p_style.bg_color = Color(0.1, 0.1, 0.1, 0.9)
+		p_style.set_corner_radius_all(8)
+		p_style.content_margin_left = 20
+		p_style.content_margin_right = 20
+		p_style.content_margin_top = 20
+		p_style.content_margin_bottom = 20
+		_shading_overlay.add_theme_stylebox_override("panel", p_style)
+		
+		var vbox = VBoxContainer.new()
+		vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+		vbox.add_theme_constant_override("separation", 10)
+		_shading_overlay.add_child(vbox)
+		
+		var title = Label.new()
+		title.text = "Solar Shading Analysis"
+		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		title.add_theme_font_size_override("font_size", 16)
+		vbox.add_child(title)
+		
+		_shading_status = Label.new()
+		_shading_status.text = "Initializing..."
+		_shading_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_shading_status.add_theme_font_size_override("font_size", 12)
+		vbox.add_child(_shading_status)
+		
+		_shading_progress = ProgressBar.new()
+		_shading_progress.custom_minimum_size = Vector2(300, 20)
+		_shading_progress.max_value = 1.0
+		vbox.add_child(_shading_progress)
+		
+		add_child(_shading_overlay)
+		_shading_overlay.set_anchors_preset(Control.PRESET_CENTER)
+		
+	_shading_overlay.show()
+	_solar_analyzer.start_analysis(_main, 128)
+
+func _on_shading_progress(pct: float, text: String) -> void:
+	if _shading_progress:
+		_shading_progress.value = pct
+	if _shading_status:
+		_shading_status.text = text
+
+func _on_shading_completed(heatmap: ImageTexture, rect: Rect2) -> void:
+	if _shading_overlay:
+		_shading_overlay.hide()
+	
+	if heatmap == null:
+		push_warning("TimelineUI: Shading analysis failed.")
+		return
+		
+	if _shading_decal == null:
+		_shading_decal = Decal.new()
+		var map_parent = _main.get_node_or_null("Terrain")
+		if not map_parent: map_parent = _main
+		map_parent.add_child(_shading_decal)
+		
+	_shading_decal.texture_albedo = heatmap
+	_shading_decal.size = Vector3(rect.size.x, 2000.0, rect.size.y)
+	
+	# Compute center and ground Y
+	var center_x = rect.position.x + rect.size.x * 0.5
+	var center_z = rect.position.y + rect.size.y * 0.5
+	var gy = TerrainSurfaceQuery.ground_height_at(_main, center_x, center_z)
+	
+	_shading_decal.global_position = Vector3(center_x, gy, center_z)
+	_shading_btn.text = "✖" # Turn into a clear button
+
 
 
 func _on_record_book_pressed() -> void:

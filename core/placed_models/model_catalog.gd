@@ -257,6 +257,7 @@ static func _packed_scene_for_user(path: String) -> PackedScene:
 	var root := gltf.generate_scene(state)
 	if root == null:
 		return null
+	_replace_importer_meshes(root, root)
 	var ps := PackedScene.new()
 	var err := ps.pack(root)
 	root.queue_free()
@@ -264,3 +265,20 @@ static func _packed_scene_for_user(path: String) -> PackedScene:
 		return null
 	_user_packed[path] = ps
 	return ps
+
+
+static func _replace_importer_meshes(node: Node, root: Node) -> void:
+	for i in range(node.get_child_count() - 1, -1, -1):
+		var child = node.get_child(i)
+		if child.get_class() == "ImporterMeshInstance3D":
+			var mi := MeshInstance3D.new()
+			mi.name = child.name
+			mi.transform = child.transform
+			if child.get("mesh") != null:
+				mi.mesh = child.get("mesh").get_mesh()
+			node.add_child(mi)
+			mi.owner = root
+			node.remove_child(child)
+			child.queue_free()
+			child = mi
+		_replace_importer_meshes(child, root)

@@ -330,6 +330,13 @@ max_value = 3.0
 step = 1.0
 value = 2.0
 
+[node name="BuildingShadowsCheckbox" type="CheckBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.58, 0.639, 0.722, 1)
+theme_override_font_sizes/font_size = 12
+button_pressed = true
+text = "Building Shadows"
+
 [node name="MoonEnergyLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.580, 0.639, 0.722, 1.0)
@@ -365,5 +372,6 @@ layout_mode = 2
 [connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection/SunEnergySlider" to="." method="_on_sun_energy_slider_value_changed"]
 [connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection/ShadowQualitySlider" to="." method="_on_shadow_quality_slider_value_changed"]
 [connection signal="value_changed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection/MoonEnergySlider" to="." method="_on_moon_energy_slider_value_changed"]
+[connection signal="toggled" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/LightingSection/BuildingShadowsCheckbox" to="." method="_on_building_shadows_toggled"]
 [connection signal="toggled" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection/LiveModeCheckbox" to="." method="_on_live_mode_checkbox_toggled"]
 [connection signal="toggled" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/TimeSection/GameplayToggle" to="." method="_on_gameplay_toggle_toggled"]

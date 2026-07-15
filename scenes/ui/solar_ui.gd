@@ -34,6 +34,7 @@ extends Control
 @onready var battery_percent : Label = $Panel/MarginContainer/VBoxContainer/BatteryContainer/BatteryPercent
 @onready var battery_kwh : Label = $Panel/MarginContainer/VBoxContainer/BatteryKwhLabel
 @onready var solar_value : Label = $Panel/MarginContainer/VBoxContainer/SolarContainer/SolarValue
+@onready var aux_value : Label = $Panel/MarginContainer/VBoxContainer/AuxContainer/AuxValue
 @onready var pot_icon : Label = $Panel/MarginContainer/VBoxContainer/PotentialContainer/PotIcon
 @onready var potential_value : Label = $Panel/MarginContainer/VBoxContainer/PotentialContainer/PotentialValue
 @onready var potential_label : Label = $Panel/MarginContainer/VBoxContainer/PotentialContainer/PotentialLabel
@@ -215,6 +216,15 @@ var _raw_solar_kw : float = 0.0  # Solar before battery-full throttling
 ## Sum of non-solar EnergySource outputs (wind, hydro, …) from the
 ## "energy_sources" group; included in the battery/net energy balance.
 var current_aux_generation_kw : float = 0.0
+## Live DC generation (kW) summed from graph DC-electricity generators/wind/
+## hydro items actually wired into a battery, pushed by SystemGraphView's
+## DcPowerWiring aggregator each ~0.25s energy-sync tick (see
+## system_graph/dc_power_wiring.gd). Folded into the aux term at point of use
+## (not merged into current_aux_generation_kw itself, which _poll_aux_generation()
+## resets every call on its own cadence) so the two channels don't clobber
+## each other. Not persisted — re-derived every tick, same as
+## current_aux_generation_kw.
+var current_graph_dc_kw : float = 0.0
 var current_load_kw : float = 0.0
 var battery_kwh_stored : float = 8.0  # Start at 50% of 16 kWh
 var last_time : float = -1.0
@@ -1867,11 +1877,16 @@ func _process(delta: float) -> void:
 		_calculate_load_power()
 		_apply_battery_full_throttle()
 		_update_battery(sim_step)
-		if not _csv_playback_active:
-			_update_solar_history()
 
 	if _ui_accumulator >= _UI_UPDATE_INTERVAL:
 		_ui_accumulator -= _UI_UPDATE_INTERVAL
+		# Scoreboard + 24h history are read-only views over the energy
+		# timeline (dropped from the 10 Hz sim tick to this 4 Hz UI tick —
+		# the underlying SOC integration above is unaffected).
+		if main_node != null and main_node.has_method("get_absolute_hours"):
+			_recompute_scoreboard_from_timeline(float(main_node.call("get_absolute_hours")))
+		if not _csv_playback_active:
+			_update_solar_history()
 		_update_display()
 		_update_graph()
 		_update_weather_data_display()
@@ -2142,15 +2157,18 @@ func _compute_rainbow_strength() -> float:
 	if _precip_kind() != "rain":
 		return 0.0
 	var sun_dir: Vector3 = main_node.sun.to_global(Vector3(0.0, 0.0, 1.0)).normalized()
-	if sun_dir.y < sin(deg_to_rad(5.0)):
+	# Loosen sun angle requirement so it can be seen closer to horizon
+	if sun_dir.y < -0.05:
 		return 0.0
-	if cloud_cover < 0.25 or cloud_cover > 0.85:
+	
+	# Any rain during daytime creates a chance for a rainbow. 
+	# Sun must be peeking through, so we require cloud_cover not to be 1.0 (fully overcast)
+	var sun_visibility := 1.0 - clampf((cloud_cover - 0.8) / 0.2, 0.0, 1.0)
+	if sun_visibility <= 0.01:
 		return 0.0
-	var storm_w := float(main_node.clouds_weight) if "clouds_weight" in main_node else 0.0
-	if storm_w >= 0.5:
-		return 0.0
-	var partly := clampf((cloud_cover - 0.25) / 0.35, 0.0, 1.0)
-	return partly * (1.0 - storm_w * 1.4)
+	
+	var rain_t := PrecipitationVfx.rain_intensity_t(_current_precip_rate_mmh())
+	return rain_t * sun_visibility
 
 
 func _ensure_environment_vfx() -> void:
@@ -3112,7 +3130,7 @@ func make_render_evaluator() -> Callable:
 ## Battery inputs at an arbitrary absolute-hours instant.
 func evaluate_inputs_at(abs_hours: float) -> Dictionary:
 	var solar : float = evaluate_solar_at(abs_hours)
-	var aux : float = 0.0  # v1: aux generation held at 0 during render.
+	var aux : float = evaluate_aux_at(abs_hours)
 	var load : float
 	if _render_load_mode == RenderLoadMode.CSV and _observed_series != null \
 			and bool(_observed_series.call("has_load")):
@@ -3120,6 +3138,15 @@ func evaluate_inputs_at(abs_hours: float) -> Dictionary:
 	else:
 		load = _modeled_load_at(abs_hours)
 	return {"solar_kw": solar, "aux_kw": aux, "load_kw": load}
+
+
+## Auxiliary generation (wind/hydro + graph DC generation) at an absolute-
+## hours instant, for the batch render. v1: the current summed aux output
+## held constant across the render — strictly better than the old hardcoded
+## 0. A fully time-varying model (each EnergySource weather-sampled at
+## abs_hours) is future work.
+func evaluate_aux_at(_abs_hours: float) -> float:
+	return maxf(current_aux_generation_kw + current_graph_dc_kw, 0.0)
 
 
 ## Pure solar AC output (kW) at an absolute-hours instant, off the live clock.
@@ -3345,6 +3372,11 @@ func _ac_shutdown_reason_label() -> String:
 
 
 func _update_battery(_delta: float) -> void:
+	# Graph DC generation (fuel generators, graph-only wind/hydro wired into
+	# a battery) rides the same aux-generation term real scene EnergySource
+	# output already uses — kept as a separate scalar (see
+	# current_graph_dc_kw) and combined here at point of use.
+	var aux_total := current_aux_generation_kw + current_graph_dc_kw
 	# HA only drives the battery while genuinely LIVE. In SIMULATE/PLAYBACK
 	# (including any scrubbing) the reversible EnergyTimeline owns SOC, so the
 	# battery uncharges on rewind instead of being pinned to the live reading.
@@ -3361,13 +3393,13 @@ func _update_battery(_delta: float) -> void:
 			var soc_live : float = (_ha_battery_soc_override / 100.0) * BATTERY_CAPACITY_KWH
 			battery_kwh_stored = soc_live
 			energy_timeline.record_measured(abs_h_live, soc_live,
-				current_solar_kw, current_aux_generation_kw, current_load_kw)
+				current_solar_kw, aux_total, current_load_kw)
 		# Update availability
 		var battery_percent_val : float = _ha_battery_soc_override
 		_apply_soc_hysteresis(battery_percent_val)
 		_sync_power_available(battery_percent_val)
 		return
-	
+
 	if main_node == null:
 		return
 
@@ -3379,16 +3411,18 @@ func _update_battery(_delta: float) -> void:
 	energy_timeline.configure(BATTERY_CAPACITY_KWH, CHARGE_EFFICIENCY, DISCHARGE_EFFICIENCY, min_kwh)
 	if energy_timeline.is_empty():
 		energy_timeline.init_anchor(abs_h, battery_kwh_stored,
-			current_solar_kw, current_aux_generation_kw, current_load_kw)
+			current_solar_kw, aux_total, current_load_kw)
 	if abs_h > energy_timeline.end_abs_hours():
 		# Forward — integrate with exact live inputs (held across the step).
-		energy_timeline.record_step(abs_h, current_solar_kw, current_aux_generation_kw, current_load_kw)
+		energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw)
 	elif abs_h < energy_timeline.start_abs_hours():
 		# Scrubbed before the cache start — extend backward (best-effort).
 		energy_timeline.seek(abs_h)
 	# else: playhead is within the cache — pure reversible read, no integration.
 	battery_kwh_stored = clampf(energy_timeline.soc_at(abs_h), 0.0, BATTERY_CAPACITY_KWH)
-	_recompute_scoreboard_from_timeline(abs_h)
+	# Scoreboard/24h-history are derived read-only views over the timeline —
+	# they don't need to recompute at the same 10 Hz cadence as the actual SOC
+	# integration above. Moved to the existing 4 Hz UI tick (see _process).
 	last_time = float(main_node.get("day_time"))
 
 	# Check power availability and emit signal if changed
@@ -3445,6 +3479,16 @@ func _poll_aux_generation() -> void:
 			continue
 		if source.has_method("get_current_power_kw"):
 			current_aux_generation_kw += maxf(float(source.call("get_current_power_kw")), 0.0)
+
+
+## Pushed by SystemGraphView each energy-sync tick with the live sum of
+## graph DC-electricity generation (fuel generators, graph-only wind/hydro)
+## actually wired into a battery — see system_graph/dc_power_wiring.gd. Kept
+## as its own scalar (not merged into current_aux_generation_kw, which
+## _poll_aux_generation() resets every call on a different cadence) and
+## folded into the aux term only at the point of use in _update_battery().
+func set_graph_dc_generation_kw(kw: float) -> void:
+	current_graph_dc_kw = maxf(0.0, kw)
 
 
 ## Derive the scoreboard (today / yesterday / best kWh) from the reversible
@@ -3570,7 +3614,18 @@ func _update_display() -> void:
 	else:
 		solar_value.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5, 1.0))
 	solar_value.tooltip_text = _get_link_tooltip("solar", ha_solar_entity)
-	
+
+	# Auxiliary power (real scene wind/hydro/etc EnergySource output + graph
+	# DC generation — fuel generators, graph-only wind/hydro wired into a
+	# battery, see system_graph/dc_power_wiring.gd). Included in Net below.
+	if aux_value:
+		var aux_kw := current_aux_generation_kw + current_graph_dc_kw
+		aux_value.text = "%.2f kW" % aux_kw
+		if aux_kw > 0.01:
+			aux_value.add_theme_color_override("font_color", Color(0.686, 0.6, 1.0, 1.0))
+		else:
+			aux_value.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5, 1.0))
+
 	# Max array output before battery curtailment (see _apply_battery_full_throttle)
 	if potential_value:
 		var pot_kw: float = _raw_solar_kw
@@ -3607,8 +3662,8 @@ func _update_display() -> void:
 	# Battery percent tooltip
 	battery_percent.tooltip_text = _get_link_tooltip("battery SOC", ha_battery_soc_entity)
 	
-	# Net power (solar + auxiliary sources such as wind/hydro)
-	var net_power : float = current_solar_kw + current_aux_generation_kw - current_load_kw
+	# Net power (solar + auxiliary sources such as wind/hydro + graph DC generation)
+	var net_power : float = current_solar_kw + current_aux_generation_kw + current_graph_dc_kw - current_load_kw
 	if net_power >= 0.0:
 		net_value.text = "+%.2f kW" % net_power
 		net_value.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3, 1.0))
@@ -4124,18 +4179,41 @@ func apply_from_graph(data: Dictionary) -> void:
 	var pw := float(data.get("panel_watts", PANEL_WATTAGE))
 	var pk := float(data.get("peak_kw", 0.0))
 	var bk := float(data.get("battery_kwh", -1.0))
+	# battery_count distinguishes "graph genuinely has 0 kWh of real batteries"
+	# (bk==0.0 with no battery items — do NOT touch SolarUI's own capacity) from
+	# "the graph's placed battery/smartbattery items sum to bk" (count>0 — this
+	# IS the intended override). Without this, a graph with no explicit battery
+	# node (relying on SolarUI's own battery) would zero BATTERY_CAPACITY_KWH on
+	# every graph edit — clamping SOC to [0,0] forever (can't charge or discharge).
+	var bcount := int(data.get("battery_count", 0))
 	var bank_soc := float(data.get("battery_soc", -1.0))
 	PANEL_COUNT = maxi(pc, 0)
 	if pw > 0.0:
 		PANEL_WATTAGE = pw
 	PEAK_CAPACITY_KW = pk if pk > 0.0 else (PANEL_COUNT * PANEL_WATTAGE / 1000.0)
-	if bk >= 0.0:
+	# This is called from SystemGraphView._on_model_changed — i.e. on EVERY graph
+	# model mutation, including the resource engine's own per-tick tank/state
+	# writes (many times per second). `bank_soc` is itself a MIRROR of this same
+	# SolarUI's battery_kwh_stored, written the other direction by
+	# _sync_graph_energy_from_solar() on its own throttled interval. If we
+	# repositioned battery_kwh_stored from bank_soc on every call here, we'd
+	# constantly stomp the smoothly-integrating live value back to a stale mirror
+	# snapshot — the true SOC would keep accumulating invisibly inside
+	# energy_timeline while the displayed battery_kwh_stored stayed frozen at the
+	# last mirrored value, until some call happened to observe + re-mirror the
+	# now-far-diverged true value, producing a big visible jump. So: only
+	# reposition SOC (and reset the timeline) when the battery HARDWARE actually
+	# changed (added/removed/resized) — never on routine graph edits.
+	var capacity_changed := false
+	if bk >= 0.0 and bcount > 0:
+		capacity_changed = absf(BATTERY_CAPACITY_KWH - bk) > 0.001
 		BATTERY_CAPACITY_KWH = bk
-		if bank_soc >= 0.0:
-			battery_kwh_stored = BATTERY_CAPACITY_KWH * clampf(bank_soc, 0.0, 1.0)
-		else:
-			battery_kwh_stored = minf(battery_kwh_stored, BATTERY_CAPACITY_KWH)
-	if energy_timeline != null:
+		if capacity_changed:
+			if bank_soc >= 0.0:
+				battery_kwh_stored = BATTERY_CAPACITY_KWH * clampf(bank_soc, 0.0, 1.0)
+			else:
+				battery_kwh_stored = minf(battery_kwh_stored, BATTERY_CAPACITY_KWH)
+	if energy_timeline != null and (capacity_changed or energy_timeline.is_empty()):
 		energy_timeline.clear()
 		if main_node == null:
 			_find_main_node()
@@ -4145,7 +4223,7 @@ func apply_from_graph(data: Dictionary) -> void:
 			energy_timeline.configure(
 				BATTERY_CAPACITY_KWH, CHARGE_EFFICIENCY, DISCHARGE_EFFICIENCY, min_kwh)
 			energy_timeline.init_anchor(abs_h, battery_kwh_stored,
-				current_solar_kw, current_aux_generation_kw, current_load_kw)
+				current_solar_kw, current_aux_generation_kw + current_graph_dc_kw, current_load_kw)
 
 
 func set_graph_has_solar(has: bool) -> void:

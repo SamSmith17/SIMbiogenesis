@@ -7,7 +7,7 @@ extends Node
 
 const GraphSimLoadScript := preload("res://system_graph/graph_sim_load.gd")
 
-const LOAD_TYPES := ["appliance", "acload", "processor"]
+const LOAD_TYPES := ["appliance", "acload", "processor", "resource"]
 
 var _model: RefCounted = null
 ## item_id → GraphSimLoad (Node child of this host).
@@ -136,7 +136,9 @@ func _ensure_load(iid: String, item: Dictionary) -> void:
 				if not autos.is_empty():
 					var v: Variant = shared.get("_requested_on")
 					shared_target = v != null and bool(v)
-				shared.call("sync_from_model", shared_target, rated_w, avg_w)
+				var in_valve: bool = bool(specs.get("input_valve_open", true))
+				var out_valve: bool = bool(specs.get("output_valve_open", true))
+				shared.call("sync_from_model", shared_target, rated_w, avg_w, in_valve, out_valve)
 			return
 
 	var is_new_node: bool = (node == null)
@@ -165,7 +167,9 @@ func _ensure_load(iid: String, item: Dictionary) -> void:
 		if not is_new_node and not autos.is_empty():
 			var v: Variant = node.get("_requested_on")
 			effective_target = v != null and bool(v)
-		node.call("sync_from_model", effective_target, rated_w, avg_w)
+		var in_valve: bool = bool(specs.get("input_valve_open", true))
+		var out_valve: bool = bool(specs.get("output_valve_open", true))
+		node.call("sync_from_model", effective_target, rated_w, avg_w, in_valve, out_valve)
 
 
 ## Look for an existing GraphSimLoad (from a sibling view / host) that already

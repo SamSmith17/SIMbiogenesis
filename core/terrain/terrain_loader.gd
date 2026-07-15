@@ -169,14 +169,9 @@ var _growth_scale_apply_doy := -1
 var _growth_caps_manual := {}
 ## Climelapse pre-bake (Phase 3–4): calendar keyframes + per-instance scale snapshots.
 const CLIMELAPSE_ROOT := "user://climelapses"
-var _climelapse_series: ClimelapseSeries = null
-var _climelapse_bake: ClimelapseScaleBake = null
-var _climelapse_renderer: ClimelapseRenderer = null
-var _climelapse_playback := false
-var _climelapse_ready := false
-var _climelapse_render_start := NAN
-var _climelapse_render_end := NAN
-var _climelapse_label := ""
+var _export_render_start := NAN
+var _export_render_end := NAN
+var _export_time_scale := 1.0
 var _clim_play_target_kf := -1
 const CLIM_PLAY_SCALE_BUDGET := 12000
 var _climelapse_capture: ClimelapseCapture = null
@@ -205,6 +200,8 @@ var _building_highlight: MeshInstance3D = null
 var _solar_arrays: Array = []
 var _solar_focus_idx: int = -1
 var _solar_highlight: MeshInstance3D = null
+var _solar_graph_highlight_idx: int = -1
+var _scene_graph_highlight: Node3D = null
 ## Persist which arrays the player already added across in-session terrain rebuilds
 ## (tag -> {count, watts}); drives the accumulated SolarUI generation total.
 var _added_solar_tags: Dictionary = {}
@@ -259,8 +256,7 @@ func _process(delta: float) -> void:
 	if Engine.is_editor_hint() or not _built or _main == null:
 		return
 	_advance_growth()
-	if _climelapse_playback and _climelapse_ready:
-		_apply_climelapse_playback_budgeted(CLIM_PLAY_SCALE_BUDGET)
+
 	_apply_water_flow(delta)
 	if not _main.has_method("get_snow_amount"):
 		return
@@ -470,11 +466,14 @@ func _resolve_location() -> void:
 		_lon = float(d["longitude"])
 		_map_label = str(d.get("label", ""))
 		var he := float(d["half_extent_m"])
-		_half_extent = he if he > 0.0 else HALF_EXTENT_DEFAULT
+		if he > 0.0:
+			_half_extent = he
 		var dhe := float(d.get("detail_half_extent_m", 0.0))
-		_detail_half_extent = dhe if dhe > 0.0 else DETAIL_HALF_EXTENT_DEFAULT
+		if dhe > 0.0:
+			_detail_half_extent = dhe
 		var ohe := float(d.get("osm_half_extent_m", 0.0))
-		_osm_half_extent = ohe if ohe > 0.0 else OSM_HALF_EXTENT_DEFAULT
+		if ohe > 0.0:
+			_osm_half_extent = ohe
 		_from_resume = bool(d.get("from_resume", false))
 		return
 	# Fallback: the scene's current coordinates (set by save-load / location prefs).
@@ -484,6 +483,18 @@ func _resolve_location() -> void:
 		if la != null and lo != null:
 			_lat = float(la)
 			_lon = float(lo)
+	
+	var meta := TerrainCacheSettings.get_meta_extents(_lat, _lon)
+	if not meta.is_empty():
+		var he := float(meta.get("half_extent_m", 0.0))
+		if he > 0.0:
+			_half_extent = he
+		var dhe := float(meta.get("detail_half_extent_m", 0.0))
+		if dhe > 0.0:
+			_detail_half_extent = dhe
+		var ohe := float(meta.get("osm_half_extent_m", 0.0))
+		if ohe > 0.0:
+			_osm_half_extent = ohe
 
 
 func _apply_extent_defaults_from_config() -> void:
@@ -607,7 +618,7 @@ func _run_load_sequence() -> void:
 		mly.request_photo_index(_lat, _lon, _osm_half_extent, "site")
 	load_completed = true
 	map_load_complete.emit()
-	call_deferred("_on_map_load_try_climelapse_restore")
+
 	var soi := get_node_or_null("/root/SoiService")
 	if soi != null:
 		soi.load_for_site(_lat, _lon)
@@ -910,6 +921,70 @@ func has_solar_arrays() -> bool:
 
 ## Which built array footprint contains the world XZ point (topmost / smallest wins
 ## when nested). Returns {valid, array_idx}.
+func get_solar_array_tag(idx: int) -> String:
+	if idx < 0 or idx >= _solar_arrays.size():
+		return ""
+	return str(_solar_arrays[idx].get("tag", ""))
+
+
+func find_solar_array_index_by_tag(tag: String) -> int:
+	if tag.is_empty():
+		return -1
+	for i in _solar_arrays.size():
+		if str(_solar_arrays[i].get("tag", "")) == tag:
+			return i
+	return -1
+
+
+## Graph-driven highlight — works even after the array is added to the graph.
+func highlight_solar_by_tag(tag: String) -> bool:
+	var idx := find_solar_array_index_by_tag(tag)
+	if idx < 0:
+		return false
+	_solar_graph_highlight_idx = idx
+	_draw_solar_highlight(idx, Color(0.1, 0.85, 1.0, 0.45))
+	return true
+
+
+func clear_graph_solar_highlight() -> void:
+	_solar_graph_highlight_idx = -1
+	if _solar_focus_idx >= 0:
+		_draw_solar_highlight(_solar_focus_idx)
+	else:
+		_clear_solar_highlight()
+
+
+func get_prop_graph_item_id(prop_id: String) -> String:
+	if _placed_prop_layer == null or prop_id.is_empty():
+		return ""
+	var rec := _placed_prop_layer.find_by_id(prop_id)
+	return str(rec.get("graph_item_id", ""))
+
+
+func clear_graph_scene_highlight() -> void:
+	if _scene_graph_highlight != null and is_instance_valid(_scene_graph_highlight):
+		if _scene_graph_highlight.has_method("set_graph_highlight"):
+			_scene_graph_highlight.call("set_graph_highlight", false)
+	_scene_graph_highlight = null
+
+
+func highlight_scene_node_for_graph(node: Node) -> void:
+	clear_graph_scene_highlight()
+	if node == null:
+		return
+	if node is PlacedProp:
+		_scene_graph_highlight = node as Node3D
+		(node as PlacedProp).set_graph_highlight(true)
+		return
+	var cur: Node = node
+	while cur != null:
+		if cur is PlacedProp:
+			_scene_graph_highlight = cur as Node3D
+			(cur as PlacedProp).set_graph_highlight(true)
+			return
+		cur = cur.get_parent()
+
+
 func pick_solar_array_at_world(x: float, z: float) -> Dictionary:
 	var p := Vector2(x, z)
 	var best := -1
@@ -1009,7 +1084,7 @@ func _refresh_added_solar_total() -> void:
 	_feed_solar_ui(total, SolarArrayBuilder.PANEL_WATTS, tilt, azimuth)
 
 
-func _draw_solar_highlight(idx: int) -> void:
+func _draw_solar_highlight(idx: int, tint: Color = Color(1.0, 0.12, 0.12, 0.5)) -> void:
 	if _main == null:
 		return
 	var terrain := _main.get_node_or_null("Terrain")
@@ -1022,13 +1097,15 @@ func _draw_solar_highlight(idx: int) -> void:
 	if _solar_highlight == null:
 		_solar_highlight = MeshInstance3D.new()
 		_solar_highlight.name = "SolarArrayHighlight"
-		var mat := StandardMaterial3D.new()
+		terrain.add_child(_solar_highlight)
+	var mat := _solar_highlight.material_override as StandardMaterial3D
+	if mat == null:
+		mat = StandardMaterial3D.new()
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.albedo_color = Color(1.0, 0.12, 0.12, 0.5)
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		_solar_highlight.material_override = mat
-		terrain.add_child(_solar_highlight)
+	mat.albedo_color = tint
 	# Sit the red overlay just above the panels (roof arrays float above the ground).
 	var c := SolarArrayBuilder.centroid(poly)
 	var ground := _ground_height_at(c.x, c.y)
@@ -1339,7 +1416,25 @@ func _on_buildings_failed(reason: String) -> void:
 	_check_load_complete()
 
 
+func set_building_shadows(enabled: bool) -> void:
+	if _buildings_root != null:
+		_set_shadows_recursive(_buildings_root, enabled)
+	if _main != null:
+		var terrain = _main.get_node_or_null("Terrain")
+		if terrain != null:
+			for c in terrain.get_children():
+				if c is GeometryInstance3D and c.name.begins_with("Bldg_"):
+					c.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if enabled else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+func _set_shadows_recursive(node: Node, enabled: bool) -> void:
+	if node is GeometryInstance3D:
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if enabled else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for child in node.get_children():
+		_set_shadows_recursive(child, enabled)
+
 func _attach_buildings(enable_shadows: bool = true) -> void:
+	if _main != null and _main.has_method("get_building_shadows_enabled"):
+		enable_shadows = _main.get_building_shadows_enabled()
 	if _main == null or _buildings_data.is_empty():
 		return
 	var cfg := _terrain_config()
@@ -1564,12 +1659,18 @@ func _attach_camps() -> void:
 		height_res = _detail_elev_cols
 		height_extent = _detail_extent_m()
 	var seed := _camp_seed()
-	print("TerrainLoader._attach_camps: generating (seed=%d, height_grid_size=%d, extent=%.0f)" % [
-		seed, height_grid.size(), height_extent])
+	# Scatter only where OSM road/building data was actually fetched — using
+	# _detail_half_extent alone (which the player can now size independently of
+	# _osm_half_extent) either wastes the outer ring on guaranteed-empty cells or,
+	# if OSM's extent is the smaller of the two, silently clips real roads out of
+	# the mask, both of which read as camps not matching the real city layout.
+	var camp_area_half := minf(_detail_half_extent, _osm_half_extent)
+	print("TerrainLoader._attach_camps: generating (seed=%d, height_grid_size=%d, extent=%.0f, area_half=%.0f)" % [
+		seed, height_grid.size(), height_extent, camp_area_half])
 	var node := BrcCampGenerator.build_camps_node(
 		roads, _buildings_data, height_grid, height_res, height_extent,
-		_built_center_elev, _detail_half_extent, seed, _load_camp_profiles(), _main,
-		PackedVector2Array(), BrcCampGenerator.FILL_PROBABILITY, 0.0, 0.9, 1.18,
+		_built_center_elev, camp_area_half, seed, _load_camp_profiles(), _main,
+		PackedVector2Array(), BrcCampGenerator.FILL_PROBABILITY, 0.0, 0.9, 1.18, 1.0,
 		cfg.camp_exclusion_r)
 	if node == null:
 		print("TerrainLoader._attach_camps: build_camps_node returned null")
@@ -1649,6 +1750,7 @@ func generate_camps_in_polygon(poly: PackedVector2Array, params: Dictionary) -> 
 	var mix_bias := float(params.get("mix_bias", 0.0))
 	var scale_min := float(params.get("scale_min", 0.9))
 	var scale_max := float(params.get("scale_max", 1.18))
+	var light_density := float(params.get("light_density", 1.0))
 	var use_seed := int(params.get("seed", _camp_seed()))
 	var excl_r := float(params.get("exclusion_radius_m", _terrain_config().camp_exclusion_r))
 
@@ -1664,9 +1766,9 @@ func generate_camps_in_polygon(poly: PackedVector2Array, params: Dictionary) -> 
 
 	var node := BrcCampGenerator.build_camps_node(
 		roads, _buildings_data, height_grid, height_res, height_extent,
-		_built_center_elev, _detail_half_extent, use_seed,
+		_built_center_elev, minf(_detail_half_extent, _osm_half_extent), use_seed,
 		_load_camp_profiles(), _main,
-		poly, density, mix_bias, scale_min, scale_max, excl_r)
+		poly, density, mix_bias, scale_min, scale_max, light_density, excl_r)
 	if node == null:
 		return 0
 	terrain.add_child(node)
@@ -2079,19 +2181,40 @@ func apply_terrain_extents(world_half_m: float, detail_half_m: float, osm_half_m
 	_save_terrain_config_value("world_half_extent_m", _half_extent)
 	_save_terrain_config_value("detail_half_extent_m", _detail_half_extent)
 	_save_terrain_config_value("osm_half_extent_m", _osm_half_extent)
+	TerrainCacheSettings.save_meta_extents(_lat, _lon, _half_extent, _detail_half_extent, _osm_half_extent)
 	_persist_active_map_definition_extents()
 	if not _built:
 		return
 	if _load_sequence_active:
 		_notify_options_status("Still loading — wait for the map to finish", "warn")
 		return
-	_notify_options_status("Extents saved — resetting site to rebuild …", "busy")
-	reset_site_to_fresh()
+	# The terrain mesh's size (_built_extent, set once in _build_terrain()) and
+	# MESH_RES are never touched by the in-place refresh paths (reset_site_to_fresh /
+	# refresh_all_cached_layers just re-fetch DEM/imagery/OSM data and resample it
+	# onto the EXISTING mesh footprint) — so a bigger world/detail/OSM extent never
+	# actually became visible, and _attach_camps()/_setup_placed_props() (which only
+	# run inside _build_terrain()'s one-shot path) kept using stale height data until
+	# the whole map was reloaded from scratch. Route extent changes through a genuine
+	# scene reload (same mechanism as picking the map from the map chooser) so
+	# _build_terrain() runs fresh and everything derived from it — mesh size, camp
+	# placement, placed props — rebuilds consistently the first time.
+	var n_edits := TerrainCacheSettings.invalidate_user_vegetation_edits(_lat, _lon)
+	_notify_options_status(
+		"Extents changed — reloading map to rebuild the terrain (cleared %d user veg file(s)) …" % n_edits,
+		"busy")
+	var ctx := get_node_or_null("/root/MapContext")
+	if ctx == null or get_tree() == null:
+		push_warning("TerrainLoader: MapContext unavailable — falling back to in-place refresh (terrain size will not update until the map is fully reloaded)")
+		reset_site_to_fresh()
+		return
+	ctx.set_pending(_lat, _lon, _map_label, _half_extent, false, _detail_half_extent, _osm_half_extent)
+	get_tree().change_scene_to_file(MapDefinition.GENERATED_SCENE)
 
 
 func _persist_active_map_definition_extents() -> void:
 	var path := "user://maps/loc_%s_%s.tres" % [
-		TerrainCacheSettings.coord_token(_lat, _lon),
+		CoordToken.token(_lat),
+		CoordToken.token(_lon),
 	]
 	if not FileAccess.file_exists(path):
 		return
@@ -2726,7 +2849,7 @@ func _rebuild_vegetation() -> void:
 		return
 	VegetationRuntime.rebuild(terrain, _vegetation_layer, Callable(self, "_ground_height_at"),
 		false, _auto_veg_runtime_settings(), _manual_growth_map)
-	_maybe_rebind_climelapse_bake()
+
 
 
 func push_vegetation_undo(label: String = "") -> void:
@@ -3069,11 +3192,6 @@ func _growth_any_enabled() -> bool:
 func _advance_growth() -> void:
 	if not _growth_any_enabled():
 		return
-	# Baked climelapse playback owns structural veg inside the rendered span — skip
-	# live clock integration, milestone ticks, and full rebuilds that cause hangs.
-	if _climelapse_playback and _climelapse_ready and _in_climelapse_range(_current_abs_h()):
-		_growth_prev_abs_h = _current_abs_h()
-		return
 	var now_abs := _current_abs_h()
 	var calendar_doy := _growth_calendar_doy()
 	var season := VegetationGrowth.structural_growth_factor(calendar_doy, _lat)
@@ -3090,7 +3208,7 @@ func _advance_growth() -> void:
 		return
 	if season > VegetationGrowth.DORMANCY_THRESHOLD:
 		_growth_clock_h += step * season
-		if bool(_main.get("analemma_mode")) and not _climelapse_playback:
+		if bool(_main.get("analemma_mode")):
 			if calendar_doy != _growth_scale_apply_doy:
 				_growth_scale_apply_doy = calendar_doy
 				_manual_growth_map.reset_cursor()
@@ -3154,8 +3272,7 @@ func _growth_tick(allow_reseed: bool = true) -> void:
 func _apply_growth_scales_budgeted(budget: int) -> void:
 	if budget <= 0 or not _growth_any_enabled():
 		return
-	if _climelapse_playback and _climelapse_ready:
-		return
+
 	var st := _growth_style()
 	var gy := Callable(self, "_ground_height_at")
 	var rem := budget
@@ -3169,16 +3286,6 @@ func _apply_growth_scales_budgeted(budget: int) -> void:
 
 # ==================== CLIMELAPSE BAKE / PLAYBACK ====================
 
-func _ensure_climelapse_renderer() -> void:
-	if is_instance_valid(_climelapse_renderer):
-		return
-	_climelapse_renderer = ClimelapseRenderer.new()
-	_climelapse_renderer.name = "ClimelapseRenderer"
-	add_child(_climelapse_renderer)
-	_climelapse_renderer.climelapse_progress.connect(_on_climelapse_progress)
-	_climelapse_renderer.climelapse_complete.connect(_on_climelapse_render_complete)
-
-
 func _ensure_climelapse_capture() -> void:
 	if is_instance_valid(_climelapse_capture):
 		return
@@ -3189,29 +3296,12 @@ func _ensure_climelapse_capture() -> void:
 	_climelapse_capture.capture_complete.connect(_on_climelapse_capture_complete)
 
 
-func _climelapse_step_days() -> int:
-	if _main != null and bool(_main.get("analemma_mode")):
-		var d: Variant = _main.get("analemma_days_per_frame")
-		if d != null:
-			return maxi(1, int(d))
-	return 1
-
-
-func _default_climelapse_label(start_abs: float) -> String:
-	var clock := CelestialClock.new()
-	var dt: Dictionary = clock.abs_hours_to_date(start_abs)
-	return "clim_%d_%02d_%02d" % [int(dt.get("year", 1)), int(dt.get("month", 1)), int(dt.get("day", 1))]
-
-
-func start_climelapse_render(start_abs: float, end_abs: float, label: String = "",
-		step_days: int = -1) -> bool:
-	return _start_climelapse_render_internal(start_abs, end_abs, label, step_days, "", null)
-
-
-## Bake climelapse data then capture an MP4 from the locked active camera (player or drone).
-func start_climelapse_export(start_abs: float, end_abs: float, output_mp4: String,
-		label: String = "", step_days: int = -1, fps: int = 30) -> bool:
+## Capture an MP4 from the locked active camera by simulating forward.
+func start_climelapse_export(start_abs: float, end_abs: float, time_scale: float, output_mp4: String, fps: int = 30) -> bool:
 	if output_mp4.is_empty():
+		return false
+	if end_abs <= start_abs:
+		push_warning("Climelapse export: end time must be after start time.")
 		return false
 	var tree := get_tree()
 	if tree == null:
@@ -3220,47 +3310,21 @@ func start_climelapse_export(start_abs: float, end_abs: float, output_mp4: Strin
 	if not rig.is_valid():
 		push_warning("Climelapse export: no active Camera3D — switch to player or drone view.")
 		return false
+		
+	_export_render_start = start_abs
+	_export_render_end = end_abs
+	_export_time_scale = time_scale
+	_export_mp4_path = output_mp4
+	_export_camera = rig
+	_export_fps = maxi(1, fps)
+	_export_pending = true
+	_export_status_message = ""
+	
 	if _main != null and _main.has_method("set_absolute_hours"):
 		_main.call("set_absolute_hours", start_abs)
-	return _start_climelapse_render_internal(start_abs, end_abs, label, step_days, output_mp4, rig, fps)
-
-
-func _start_climelapse_render_internal(start_abs: float, end_abs: float, label: String,
-		step_days: int, output_mp4: String, camera: ClimelapseCameraRig, fps: int = 30) -> bool:
-	if not _growth_any_enabled() or not _built:
-		return false
-	if end_abs <= start_abs:
-		return false
-	# Ensure birth times exist so the bake captures non-unity scale multipliers.
-	if _vegetation_layer != null:
-		VegetationGrowth.ensure_birth_times(_vegetation_layer.bulk, _growth_clock_h,
-			_growth_style(), _growth_rng, false)
-	if _auto_veg_layer != null:
-		VegetationGrowth.ensure_birth_times(_auto_veg_layer.bulk, _growth_clock_h,
-			_growth_style(), _growth_rng, false)
-	_ensure_climelapse_renderer()
-	if _climelapse_renderer.is_rendering():
-		return false
-	var step := step_days if step_days > 0 else _climelapse_step_days()
-	_climelapse_series = ClimelapseSeries.new()
-	_climelapse_series.configure(start_abs, end_abs, _lat, step)
-	_climelapse_bake = ClimelapseScaleBake.new()
-	_climelapse_render_start = start_abs
-	_climelapse_render_end = end_abs
-	_climelapse_label = label if not label.is_empty() else _default_climelapse_label(start_abs)
-	_climelapse_ready = false
-	_clim_play_target_kf = -1
-	_export_mp4_path = output_mp4
-	_export_camera = camera
-	_export_fps = maxi(1, fps)
-	_export_pending = not output_mp4.is_empty() and camera != null
-	_export_status_message = ""
-	var mc := _manual_growth_map.entry_count()
-	var ac := _auto_growth_map.entry_count()
-	if mc == 0 and ac == 0:
-		push_warning("Climelapse render: growth instance maps are empty — bake will store calendar keyframes only. Open vegetation settings and confirm growth years > 0, then reload the map.")
-	_climelapse_renderer.start_render(_climelapse_series, _climelapse_bake,
-		_manual_growth_map, _auto_growth_map, _growth_style(), _growth_clock_h)
+		
+	_ensure_climelapse_capture()
+	_climelapse_capture.start_capture(self, start_abs, end_abs, time_scale, output_mp4, rig, fps)
 	climelapse_state_changed.emit()
 	return true
 
@@ -3268,9 +3332,6 @@ func _start_climelapse_render_internal(start_abs: float, end_abs: float, label: 
 func cancel_climelapse_render() -> void:
 	if _climelapse_capture != null and _climelapse_capture.is_active():
 		_climelapse_capture.cancel()
-	if _climelapse_renderer != null and _climelapse_renderer.is_rendering():
-		_climelapse_renderer.cancel()
-	_climelapse_playback = false
 	_export_pending = false
 	_export_mp4_path = ""
 	_export_camera = null
@@ -3290,95 +3351,22 @@ var _export_status_message := ""
 var _export_cull_saved: Array = []
 
 
-func get_climelapse_bake_stats() -> Dictionary:
-	var mc := _manual_growth_map.entry_count()
-	var ac := _auto_growth_map.entry_count()
-	var kf := _climelapse_series.keyframe_count() if _climelapse_series != null else 0
-	return {
-		"manual_entries": mc,
-		"auto_entries": ac,
-		"keyframes": kf,
-		"has_manual_bake": _manual_growth_map.has_baked_scales(),
-		"has_auto_bake": _auto_growth_map.has_baked_scales(),
-	}
-
-
 func is_climelapse_rendering() -> bool:
-	return (_climelapse_renderer != null and _climelapse_renderer.is_rendering()) \
-		or is_climelapse_exporting()
+	return is_climelapse_exporting()
 
 
 func get_climelapse_progress() -> float:
-	if _climelapse_renderer != null and _climelapse_renderer.is_rendering():
-		var bake_frac := _climelapse_renderer.get_progress()
-		return bake_frac * (0.70 if _export_pending else 1.0)
 	if is_climelapse_exporting():
-		return 0.70 + 0.25 * _climelapse_capture.get_progress()
-	if _climelapse_renderer == null and not _climelapse_ready:
-		return -1.0
-	return 1.0 if _climelapse_ready else -1.0
+		return _climelapse_capture.get_progress()
+	return -1.0
 
 
 func get_climelapse_range_abs() -> Vector2:
-	if not _climelapse_ready or is_nan(_climelapse_render_start):
-		return Vector2(NAN, NAN)
-	return Vector2(_climelapse_render_start, _climelapse_render_end)
-
-
-func set_climelapse_playback(active: bool) -> void:
-	if active and _climelapse_ready:
-		if _main != null and _main.has_method("set_absolute_hours"):
-			_main.call("set_absolute_hours", _climelapse_render_start)
-	_climelapse_playback = active and _climelapse_ready
-	_clim_play_target_kf = -1
-	if _climelapse_playback:
-		_manual_growth_map.reset_cursor()
-		_auto_growth_map.reset_cursor()
-		_apply_climelapse_season_for_abs(_current_abs_h())
-		if _climelapse_series != null:
-			_clim_play_target_kf = _climelapse_series.keyframe_index_at(_current_abs_h())
-		_apply_climelapse_playback_full()
-	elif _main != null and _main.has_method("clear_climelapse_season_override"):
-		_main.call("clear_climelapse_season_override")
-	climelapse_state_changed.emit()
-
-
-func is_climelapse_playback() -> bool:
-	return _climelapse_playback
+	return Vector2(_export_render_start, _export_render_end)
 
 
 func _on_climelapse_progress(_frac: float) -> void:
 	climelapse_state_changed.emit()
-
-
-func _on_climelapse_render_complete() -> void:
-	if _climelapse_series == null or _climelapse_bake == null:
-		return
-	_install_climelapse_baked_scales()
-	var dir := "%s/%s" % [CLIMELAPSE_ROOT, _climelapse_label]
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
-	_climelapse_series.save_json(dir.path_join("climelapse.json"))
-	var meta: Dictionary = _climelapse_bake.save_to_dir(dir)
-	meta["label"] = _climelapse_label
-	meta["start_abs_h"] = _climelapse_render_start
-	meta["end_abs_h"] = _climelapse_render_end
-	meta["latitude"] = _lat
-	meta["longitude"] = _lon
-	meta["step_days"] = _climelapse_series.step_days
-	if not _export_mp4_path.is_empty():
-		meta["mp4_export"] = _export_mp4_path
-	var mf := FileAccess.open(dir.path_join("meta.json"), FileAccess.WRITE)
-	if mf != null:
-		mf.store_string(JSON.stringify(meta))
-	_climelapse_ready = true
-	climelapse_state_changed.emit()
-	if _export_pending and _export_camera != null and not _export_mp4_path.is_empty():
-		_ensure_climelapse_capture()
-		_climelapse_capture.start_capture(self, _climelapse_series, _export_mp4_path,
-			_export_camera, _export_fps)
-	else:
-		_export_pending = false
-		_export_mp4_path = ""
 
 
 func _on_climelapse_capture_complete(success: bool, path: String, message: String) -> void:
@@ -3390,27 +3378,7 @@ func _on_climelapse_capture_complete(success: bool, path: String, message: Strin
 		print("Climelapse export: %s" % message)
 	else:
 		push_warning("Climelapse export: %s" % message)
-	if _main != null and _main.has_method("set_absolute_hours"):
-		_main.call("set_absolute_hours", _climelapse_render_start)
 	climelapse_state_changed.emit()
-
-
-## Synchronous climelapse state for offline MP4 frame capture.
-func apply_climelapse_frame_for_export(abs_h: float, export_cam: Camera3D = null) -> void:
-	if _climelapse_series == null:
-		return
-	if _main != null and _main.has_method("set_absolute_hours"):
-		_main.call("set_absolute_hours", abs_h)
-	var kf := _climelapse_series.keyframe_index_at(abs_h)
-	_clim_play_target_kf = kf
-	_apply_climelapse_season_for_abs(abs_h)
-	var gy := Callable(self, "_ground_height_at")
-	if _manual_growth_map.has_baked_scales():
-		_manual_growth_map.reset_cursor()
-		_manual_growth_map.apply_baked_scales(kf, gy, -1, export_cam)
-	if _auto_growth_map.has_baked_scales():
-		_auto_growth_map.reset_cursor()
-		_auto_growth_map.apply_baked_scales(kf, gy, -1, export_cam)
 
 
 ## Tighten draw distance + enable frustum-only scale updates for MP4 capture.
@@ -3462,155 +3430,6 @@ func _save_tighten_visibility(node: Node, end_m: float) -> void:
 	for child in node.get_children():
 		_save_tighten_visibility(child, end_m)
 
-
-func _in_climelapse_range(abs_h: float) -> bool:
-	if is_nan(_climelapse_render_start) or is_nan(_climelapse_render_end):
-		return false
-	return abs_h >= _climelapse_render_start - 0.01 and abs_h <= _climelapse_render_end + 0.01
-
-
-func _apply_climelapse_season_for_abs(abs_h: float) -> void:
-	if _climelapse_series == null or _main == null:
-		return
-	var sample: Dictionary = _climelapse_series.sample_at(abs_h)
-	if sample.is_empty():
-		return
-	var sig: Dictionary = sample.get("season", {})
-	if sig.is_empty():
-		var doy := int(sample.get("day_of_year", 1))
-		sig = SeasonModel.season_signals(doy, _lat)
-	if _main.has_method("set_climelapse_season_override"):
-		_main.call("set_climelapse_season_override", sig)
-
-
-func _apply_climelapse_playback_budgeted(budget: int) -> void:
-	if not _climelapse_playback or not _climelapse_ready or _climelapse_series == null:
-		return
-	var abs_h := _current_abs_h()
-	if not _in_climelapse_range(abs_h):
-		return
-	var kf := _climelapse_series.keyframe_index_at(abs_h)
-	if kf != _clim_play_target_kf:
-		_clim_play_target_kf = kf
-		_apply_climelapse_playback_full()
-		_apply_climelapse_season_for_abs(abs_h)
-
-
-func _apply_climelapse_playback_full() -> void:
-	if _clim_play_target_kf < 0:
-		return
-	var has_bake := _manual_growth_map.has_baked_scales() or _auto_growth_map.has_baked_scales()
-	if not has_bake:
-		return
-	var gy := Callable(self, "_ground_height_at")
-	if _manual_growth_map.has_baked_scales():
-		_manual_growth_map.reset_cursor()
-		_manual_growth_map.apply_baked_scales(_clim_play_target_kf, gy, -1)
-	if _auto_growth_map.has_baked_scales():
-		_auto_growth_map.reset_cursor()
-		_auto_growth_map.apply_baked_scales(_clim_play_target_kf, gy, -1)
-
-
-func _try_restore_climelapse_scales_from_disk(dir: String) -> void:
-	if _climelapse_bake == null:
-		return
-	var meta_path := dir.path_join("meta.json")
-	if not FileAccess.file_exists(meta_path):
-		return
-	var f := FileAccess.open(meta_path, FileAccess.READ)
-	if f == null:
-		return
-	var parsed: Variant = JSON.parse_string(f.get_as_text())
-	if not (parsed is Dictionary):
-		return
-	var loaded := ClimelapseScaleBake.new()
-	if loaded.load_from_dir(dir, parsed as Dictionary):
-		_climelapse_bake = loaded
-		_install_climelapse_baked_scales()
-
-
-func try_load_climelapse_for_site() -> bool:
-	var best_dir := ""
-	var best_start := -INF
-	var global_root := ProjectSettings.globalize_path(CLIMELAPSE_ROOT)
-	if not DirAccess.dir_exists_absolute(global_root):
-		return false
-	var dir := DirAccess.open(CLIMELAPSE_ROOT)
-	if dir == null:
-		return false
-	dir.list_dir_begin()
-	var entry := dir.get_next()
-	while entry != "":
-		if dir.current_is_dir() and not entry.begins_with("."):
-			var sub := "%s/%s" % [CLIMELAPSE_ROOT, entry]
-			var mp := sub.path_join("meta.json")
-			if FileAccess.file_exists(mp):
-				var f := FileAccess.open(mp, FileAccess.READ)
-				if f != null:
-					var meta: Variant = JSON.parse_string(f.get_as_text())
-					if meta is Dictionary:
-						var m: Dictionary = meta as Dictionary
-						if is_equal_approx(float(m.get("latitude", 0.0)), _lat) \
-								and is_equal_approx(float(m.get("longitude", 0.0)), _lon):
-							var st := float(m.get("start_abs_h", 0.0))
-							if st >= best_start:
-								best_start = st
-								best_dir = sub
-		entry = dir.get_next()
-	dir.list_dir_end()
-	if best_dir.is_empty():
-		return false
-	return load_climelapse_from_dir(best_dir)
-
-
-func load_climelapse_from_dir(dir: String) -> bool:
-	var series := ClimelapseSeries.load_json(dir.path_join("climelapse.json"))
-	if series == null:
-		return false
-	var meta_path := dir.path_join("meta.json")
-	if not FileAccess.file_exists(meta_path):
-		return false
-	var f := FileAccess.open(meta_path, FileAccess.READ)
-	if f == null:
-		return false
-	var parsed: Variant = JSON.parse_string(f.get_as_text())
-	if not (parsed is Dictionary):
-		return false
-	var bake := ClimelapseScaleBake.new()
-	if not bake.load_from_dir(dir, parsed as Dictionary):
-		return false
-	_climelapse_series = series
-	_climelapse_bake = bake
-	_climelapse_render_start = series.start_abs_h
-	_climelapse_render_end = series.end_abs_h
-	_climelapse_label = str((parsed as Dictionary).get("label", dir.get_file()))
-	_install_climelapse_baked_scales()
-	_climelapse_ready = true
-	_clim_play_target_kf = -1
-	climelapse_state_changed.emit()
-	return true
-
-
-func _install_climelapse_baked_scales() -> void:
-	if _climelapse_bake == null:
-		return
-	if _climelapse_bake.has_manual():
-		_manual_growth_map.set_baked_scales(_climelapse_bake.manual_scales,
-			_climelapse_bake.keyframe_count)
-	if _climelapse_bake.has_auto():
-		_auto_growth_map.set_baked_scales(_climelapse_bake.auto_scales,
-			_climelapse_bake.keyframe_count)
-
-
-func _maybe_rebind_climelapse_bake() -> void:
-	if _climelapse_ready and _climelapse_bake != null:
-		_install_climelapse_baked_scales()
-
-
-func _on_map_load_try_climelapse_restore() -> void:
-	if _climelapse_ready:
-		return
-	try_load_climelapse_for_site()
 
 
 ## add_cb for reseeding — appends one manual bulk record and returns it so the
@@ -3774,7 +3593,7 @@ func _rebuild_auto_vegetation() -> void:
 	var exclusions := _auto_veg_exclusions()
 	AutoVegetationRuntime.rebuild(terrain, _auto_veg_layer,
 		Callable(self, "_ground_height_at"), settings, exclusions, _auto_growth_map)
-	_maybe_rebind_climelapse_bake()
+
 
 
 ## Frame-chunked variant of _rebuild_auto_vegetation for the initial load, so the
@@ -3797,7 +3616,7 @@ func _rebuild_auto_vegetation_async() -> void:
 	await AutoVegetationRuntime.rebuild_async(terrain, _auto_veg_layer,
 		Callable(self, "_ground_height_at"), settings, exclusions, _auto_growth_map)
 	_auto_rebuild_active = false
-	_maybe_rebind_climelapse_bake()
+
 	if _auto_rebuild_dirty:
 		_auto_rebuild_dirty = false
 		await _rebuild_auto_vegetation_async()
@@ -4603,6 +4422,13 @@ func _rebuild_placed_props() -> void:
 	_clear_placed_prop_focus()
 	PlacedPropRuntime.rebuild(terrain, _placed_prop_layer, Callable(self, "_ground_height_at"))
 	call_deferred("_try_seed_starshade_graph")
+	
+	# Also rebuild placed lights
+	var PlacedLightService = load("res://core/placed_lights/placed_light_service.gd")
+	var PlacedLightRuntime = load("res://core/placed_lights/placed_light_runtime.gd")
+	var light_layer = PlacedLightService.get_layer(_main)
+	if light_layer != null:
+		PlacedLightRuntime.rebuild(terrain, light_layer)
 
 
 func _try_seed_starshade_graph() -> void:
@@ -5033,7 +4859,7 @@ func _place_free_prop(model_id: String, x: float, z: float) -> bool:
 		return false
 	var gy := _ground_height_at(x, z)
 	var prop_id := _placed_prop_layer.add_free_prop(
-		model_id, x, NAN, z, 0.0, 0.0, 0.0, 1.0, gy)
+		model_id, x, 0.0, z, 0.0, 0.0, 0.0, 1.0, gy)
 	if prop_id.is_empty():
 		return false
 	_placed_prop_layer.save(_lat, _lon)
@@ -5066,7 +4892,7 @@ func _replace_osm_from_pick(pick: Dictionary, model_id: String) -> bool:
 	var gy := _ground_height_at(centroid.x, centroid.y)
 	var prop_id := _placed_prop_layer.add_osm_prop(
 		int(pick.get("building_idx", -1)), model_id,
-		centroid.x, gy, centroid.y, 0.0, 0.0, 0.0, fit_scale, gy)
+		centroid.x, 0.0, centroid.y, 0.0, 0.0, 0.0, fit_scale, gy)
 	if prop_id.is_empty():
 		return false
 	_placed_prop_layer.save(_lat, _lon)

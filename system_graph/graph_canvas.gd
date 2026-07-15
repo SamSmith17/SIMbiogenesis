@@ -159,6 +159,7 @@ const HANDLES := {
 		{"id": "output", "polarity": "resource", "resource_kind": "water", "rx": 0.5, "ry": 1.0},
 	],
 	"catchment": [
+		{"id": "input",  "polarity": "resource", "resource_kind": "water", "rx": 0.5, "ry": 0.0},
 		{"id": "output", "polarity": "resource", "resource_kind": "water", "rx": 0.5, "ry": 1.0},
 	],
 	"compound": [
@@ -180,8 +181,10 @@ const HANDLES := {
 # ---------------------------------------------------------------------------
 # Pan / zoom
 # ---------------------------------------------------------------------------
-const ZOOM_MIN       := 0.25
-const ZOOM_MAX       := 4.0
+## Canvas zoom range — keep in sync with GraphLayout.ZOOM_* (effectively
+## unbounded for Site Plan + freeform framing / centimetre footprints).
+const ZOOM_MIN       := GraphLayout.ZOOM_MIN
+const ZOOM_MAX       := GraphLayout.ZOOM_MAX
 const VALUE_EPS      := 0.0005
 const REDRAW_INTERVAL := 0.05
 ## ~1 sim-hour per real-hour; used to scale flow-dot speed with simulation time_scale.
@@ -201,24 +204,53 @@ const WIRE_DEAD_W := 3.0
 ## Base wire body width (px); thickened at high power
 const WIRE_BASE_W := 3.8
 
+## Flow-rendering level-of-detail. The 5-pass glow halo + chase trail were
+## tuned per-wire without regard to how many wires are on screen at once —
+## fine with a handful of wires, wasteful with dozens. When many wires are
+## visible, or the view is zoomed out enough that the extra detail isn't
+## perceptible anyway, drop to a single glow pass and a single (bright-head)
+## chase dot instead of a full trail — flow direction/activity stays legible,
+## the decorative glow/trail depth does not. Recomputed once per
+## _draw_connections() pass, read by the per-wire draw functions below.
+const WIRE_LOD_HIGH_COUNT := 40
+const WIRE_LOD_ZOOM_CUTOFF := 0.45
+var _wire_lod_simplify: bool = false
+## On-screen wire length (px) at which the reference segment counts below
+## (28/34/24/28/30) apply at full strength; shorter/zoomed-out wires use
+## proportionally fewer bezier segments down to a legibility floor.
+const WIRE_SEG_REF_LEN := 260.0
+
 var _pan:            Vector2 = Vector2.ZERO
 var _zoom:           float   = 1.0
 var _dragging:       bool    = false
 var _last_drag_pos:  Vector2 = Vector2.ZERO
 var _pan_button:     int     = -1
 var pan_right_mouse: bool    = true
+## Shift+LMB orbit while live SoI preview is showing behind the graph.
+var _soi_orbit_dragging: bool = false
+## Bottom-right (rect) or right-edge (circle) resize of the selected node.
+var _resize_dragging: bool = false
+var _resize_item_id: String = ""
+var _resize_start_screen: Vector2 = Vector2.ZERO
+var _resize_start_size: Vector2 = Vector2.ZERO  # freeform width/height or footprint_m
+var _resize_circular: bool = false
+const RESIZE_HANDLE_PX := 10.0
+const RESIZE_HIT_PAD := 14.0
 
 # ---------------------------------------------------------------------------
 # Item drag
 # ---------------------------------------------------------------------------
 var _item_dragging:       bool    = false
+var _item_drag_duplicated: bool    = false
 var _item_drag_id:        String  = ""
 var _item_drag_start_px:  Vector2 = Vector2.ZERO
 var _item_drag_start_pos: Vector2 = Vector2.ZERO
 const DRAG_THRESHOLD := 4.0
 const TOUCH_DRAG_THRESHOLD := 10.0
-const TOUCH_PORT_GRAB_MIN := 18.0
-const TOUCH_SNAP_RADIUS_MIN := 36.0
+const TOUCH_PORT_GRAB_MIN := 28.0
+const TOUCH_SNAP_RADIUS_MIN := 44.0
+## Minimum pick radius (px) for waypoints and ortho/metro segments on touch.
+const TOUCH_SEGMENT_PICK_MIN := 22.0
 const TOUCH_BODY_INSET := 28.0
 const TOUCH_LOAD_BODY_INSET_X := 40.0
 const TOUCH_LOAD_BODY_INSET_Y := 36.0
@@ -232,6 +264,9 @@ var _touch_positions: Dictionary = {}   # index -> Vector2
 var _touch_primary_index: int = -1
 var _touch_pan_active: bool = false
 var _touch_pan_last_mid: Vector2 = Vector2.ZERO
+## Mean finger distance from the touch centroid at the last drag frame — pinch
+## zoom compares the current spread against this to derive a zoom factor.
+var _touch_pan_last_spread: float = 0.0
 var _last_tap_time: float = 0.0
 var _last_tap_pos: Vector2 = Vector2.ZERO
 var _last_tap_item_id: String = ""
@@ -275,6 +310,8 @@ var selected_item_ids:      Array[String] = []
 var selected_connection_id: String = ""
 var _item_drag_ids:         Array[String] = []
 var _item_drag_start_map:   Dictionary = {}
+## Elevation view: starting elevation_m per dragged item (manual vertical moves).
+var _item_drag_start_elev:  Dictionary = {}
 var _marquee_selecting:     bool = false
 var _marquee_start:         Vector2 = Vector2.ZERO
 var _marquee_end:           Vector2 = Vector2.ZERO
@@ -283,6 +320,17 @@ var _controller_reset_rects: Dictionary = {}
 ## Short-lived smoke puffs when a controller is destroyed: {item_id, center, age}.
 var _destroy_fx: Array = []
 var _needs_continuous_redraw: bool = false
+## Alert-state pulse: decoupled from _flow_phase so it animates in build/paused
+## mode too (a faulted/starved node should still pulse when the sim is paused),
+## but at a coarse ~10 fps cadence instead of forcing the 20 fps interactive loop.
+## `_alert_nodes_present` is derived from the previous draw (`_alert_seen_this_draw`)
+## so we never scan the model separately just to pick a redraw rate.
+var _alert_phase: float = 0.0
+var _alert_nodes_present: bool = false
+var _alert_seen_this_draw: bool = false
+const ALERT_REDRAW_INTERVAL := 0.1
+## Shared pill-badge renderer for the unified node-state chip.
+var _state_badge := GraphNodeRendererV2.new()
 
 ## 2D wire waypoint drag (graph-space coords stored on connection).
 var _waypoint_dragging:  bool   = false
@@ -305,6 +353,11 @@ signal compound_open_requested(item_id: String)
 signal layout_changed()
 signal resource_containers_merged(target_id: String, absorbed_id: String, kind: String)
 signal controller_reset_pressed(item_id: String)
+## SoI live preview camera — Shift+drag orbit, Shift+wheel zoom.
+signal soi_preview_orbit(relative: Vector2)
+signal soi_preview_zoom(zoom_in: bool)
+## Elevation: Shift+drag rotates the section heading (continuous).
+signal elevation_heading_changed(heading_rad: float)
 
 # ---------------------------------------------------------------------------
 # External references (set by SystemGraphView)
@@ -314,6 +367,12 @@ var model:        GraphModel = null
 var _ac_shed_active: bool = false
 ## "build" or "test" — set by SystemGraphView when mode toggle changes.
 var current_mode: String     = "build"
+## Layout projection: freeform | site | elevation.
+var view_mode: String        = GraphSiteLayout.VIEW_FREEFORM
+## Cross-section heading for elevation view (radians; 0 = +X / east).
+var elevation_heading_rad: float = 0.0
+## Vertical exaggeration for elevation profile (1 or 5).
+var elevation_exaggeration: float = 5.0
 ## Current visible graph scope. Root matches historical behavior.
 var active_scope_id: String  = "root"
 
@@ -380,8 +439,17 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 			_destroy_fx.remove_at(i)
 		else:
 			fx_alive = true
+	# Alert pulse advances independently of test-mode flow so faulted/starved
+	# nodes still breathe while paused — but only drives a coarse ~10 fps redraw,
+	# not the 20 fps interactive loop.
+	if _alert_nodes_present:
+		_alert_phase = fmod(_alert_phase + delta * 1.6, TAU)
 	_redraw_accum += delta
-	var interval := REDRAW_INTERVAL if (current_mode == "test" or _needs_continuous_redraw or fx_alive) else 0.25
+	var interval := 0.25
+	if current_mode == "test" or _needs_continuous_redraw or fx_alive:
+		interval = REDRAW_INTERVAL
+	elif _alert_nodes_present:
+		interval = ALERT_REDRAW_INTERVAL
 	if _redraw_accum >= interval:
 		_redraw_accum = 0.0
 		queue_redraw()
@@ -392,6 +460,98 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 # ---------------------------------------------------------------------------
 # Input
 # ---------------------------------------------------------------------------
+
+func get_view_pan() -> Vector2:
+	return _pan
+
+
+func get_view_zoom() -> float:
+	return _zoom
+
+
+## Returns true when the event was consumed as SoI preview camera control.
+func _handle_soi_preview_camera_input(event: InputEvent) -> bool:
+	# Site Plan: scroll zoom is owned by the graph (2D+3D physically linked via
+	# `_zoom`). Shift+wheel must NOT steal those events for orbit zoom.
+	if view_mode == GraphSiteLayout.VIEW_SITE:
+		if event is InputEventMouseButton:
+			var mb_site := event as InputEventMouseButton
+			if mb_site.button_index == MOUSE_BUTTON_WHEEL_UP \
+					or mb_site.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				return false
+	# Elevation: Shift+drag rotates the section heading continuously. Wheel stays
+	# graph zoom. Do not steal events for freeform orbit zoom.
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		return _handle_elevation_heading_input(event)
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if not mb.shift_pressed:
+			if not mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and _soi_orbit_dragging:
+				_soi_orbit_dragging = false
+				accept_event()
+				return true
+			return false
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+			soi_preview_zoom.emit(true)
+			accept_event()
+			return true
+		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+			soi_preview_zoom.emit(false)
+			accept_event()
+			return true
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			_soi_orbit_dragging = mb.pressed
+			accept_event()
+			return true
+		return false
+	if event is InputEventMouseMotion:
+		if not _soi_orbit_dragging:
+			return false
+		var mm := event as InputEventMouseMotion
+		if not mm.shift_pressed:
+			_soi_orbit_dragging = false
+			return false
+		soi_preview_orbit.emit(mm.relative)
+		accept_event()
+		return true
+	return false
+
+
+const _ELEV_HEADING_SENS := 0.006
+
+
+func _handle_elevation_heading_input(event: InputEvent) -> bool:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP \
+				or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			return false
+		if not mb.shift_pressed:
+			if not mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and _soi_orbit_dragging:
+				_soi_orbit_dragging = false
+				accept_event()
+				return true
+			return false
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			_soi_orbit_dragging = mb.pressed
+			accept_event()
+			return true
+		return false
+	if event is InputEventMouseMotion:
+		if not _soi_orbit_dragging:
+			return false
+		var mm := event as InputEventMouseMotion
+		if not mm.shift_pressed:
+			_soi_orbit_dragging = false
+			return false
+		elevation_heading_rad = fposmod(
+				elevation_heading_rad - mm.relative.x * _ELEV_HEADING_SENS, TAU)
+		elevation_heading_changed.emit(elevation_heading_rad)
+		queue_redraw()
+		accept_event()
+		return true
+	return false
+
 
 func _gui_input(event: InputEvent) -> void:
 	# Native touch — Sharp / Windows touchscreens often omit drag motion in emulated mouse.
@@ -409,6 +569,10 @@ func _gui_input(event: InputEvent) -> void:
 
 	if _should_ignore_emulated_mouse(event):
 		accept_event()
+		return
+
+	# SoI live preview camera (Shift+drag orbit, Shift+wheel zoom).
+	if soi_live_preview and _handle_soi_preview_camera_input(event):
 		return
 
 	if event is InputEventMouseButton:
@@ -484,7 +648,7 @@ func _gui_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion:
 		_on_pointer_move((event as InputEventMouseMotion).position)
 		if _dragging or _wire_dragging or _item_dragging or _marquee_selecting \
-				or _waypoint_dragging or _ortho_seg_dragging:
+				or _waypoint_dragging or _ortho_seg_dragging or _resize_dragging:
 			accept_event()
 
 
@@ -541,6 +705,11 @@ func _handle_screen_touch(st: InputEventScreenTouch) -> void:
 			_touch_primary_index = -1
 		if _touch_positions.size() < 2:
 			_touch_pan_active = false
+		elif _touch_pan_active:
+			# Finger count changed but still pinching — re-baseline so the next
+			# drag frame doesn't see a discontinuous centroid/spread jump.
+			_touch_pan_last_mid = _touch_positions_midpoint()
+			_touch_pan_last_spread = _touch_positions_spread()
 		if _touch_positions.is_empty():
 			_touch_interaction = ""
 		accept_event()
@@ -550,8 +719,15 @@ func _handle_screen_drag(sd: InputEventScreenDrag) -> void:
 	_touch_positions[sd.index] = sd.position
 	if _touch_pan_active and _touch_interaction == "pan" and _touch_positions.size() >= 2:
 		var mid := _touch_positions_midpoint()
+		var spread := _touch_positions_spread()
+		# Pan by centroid movement, then pinch-zoom anchored at the centroid so
+		# the two gestures compose naturally (spread the fingers to zoom in while
+		# sliding them to reposition the canvas).
 		_pan += mid - _touch_pan_last_mid
+		if _touch_pan_last_spread > 4.0 and spread > 4.0:
+			_zoom_at(spread / _touch_pan_last_spread, mid)
 		_touch_pan_last_mid = mid
+		_touch_pan_last_spread = spread
 		queue_redraw()
 		accept_event()
 		return
@@ -576,9 +752,25 @@ func _begin_touch_pan() -> void:
 	_touch_pan_active = true
 	_touch_interaction = "pan"
 	_touch_pan_last_mid = _touch_positions_midpoint()
+	_touch_pan_last_spread = _touch_positions_spread()
+
+
+## Mean distance of the active touch points from their centroid — a rotation-
+## and translation-invariant proxy for pinch spread (works for 2+ fingers).
+func _touch_positions_spread() -> float:
+	if _touch_positions.size() < 2:
+		return 0.0
+	var mid := _touch_positions_midpoint()
+	var d := 0.0
+	for pos: Vector2 in _touch_positions.values():
+		d += pos.distance_to(mid)
+	return d / float(_touch_positions.size())
 
 
 func _cancel_pointer_interaction() -> void:
+	if _resize_dragging:
+		_resize_dragging = false
+		_resize_item_id = ""
 	if _hub_port_dragging:
 		_hub_port_dragging = false
 		_hub_port_item_id = ""
@@ -598,6 +790,9 @@ func _cancel_pointer_interaction() -> void:
 
 
 func _on_pointer_move(screen_pos: Vector2) -> void:
+	if _resize_dragging:
+		_on_resize_drag_move(screen_pos)
+		return
 	if _hub_port_dragging:
 		_on_hub_port_drag_move(screen_pos)
 		return
@@ -610,7 +805,32 @@ func _on_pointer_move(screen_pos: Vector2) -> void:
 		if not conn.is_empty():
 			var wps: Array = _waypoints_graph(conn)
 			if _waypoint_drag_idx < wps.size():
-				wps[_waypoint_drag_idx] = _screen_to_graph(screen_pos)
+				var new_gpos := _screen_to_graph(screen_pos)
+				if str(conn.get("line_style", "")) == "metro":
+					# Snap the dragged waypoint's angle relative to the previous point
+					# If there is a previous waypoint, use it; otherwise use the source port pos.
+					var prev_gpos: Vector2
+					if _waypoint_drag_idx > 0:
+						prev_gpos = wps[_waypoint_drag_idx - 1] as Vector2
+					else:
+						var center := size * 0.5
+						var src_info := _get_handle_info(
+							str(conn.get("source_item_id", "")),
+							str(conn.get("source_handle_id", "")),
+							center,
+							str(conn.get("target_item_id", "")),
+							str(conn.get("polarity", "positive"))
+						)
+						prev_gpos = _screen_to_graph(src_info.get("pos", screen_pos) as Vector2)
+					
+					var vec := new_gpos - prev_gpos
+					var dist := vec.length()
+					if dist > 0.1:
+						var angle := vec.angle()
+						var snap_angle := roundf(angle / (PI / 4.0)) * (PI / 4.0)
+						new_gpos = prev_gpos + Vector2(cos(snap_angle), sin(snap_angle)) * dist
+
+				wps[_waypoint_drag_idx] = new_gpos
 				_set_waypoints_graph(_waypoint_drag_conn, wps)
 				queue_redraw()
 		return
@@ -682,9 +902,14 @@ func _zoom_at(factor: float, screen_pos: Vector2) -> void:
 	_zoom = clampf(_zoom * factor, ZOOM_MIN, ZOOM_MAX)
 	if is_equal_approx(_zoom, old_zoom):
 		return
+	# Keep world point under the cursor stable. In Site Plan the SoI disc and
+	# top-down SubViewport both scale with `_zoom` (4 px/m × zoom), so 2D and
+	# 3D stay physically locked.
 	var world := (screen_pos - center - _pan) / old_zoom
 	_pan = screen_pos - center - world * _zoom
 	queue_redraw()
+	# SoI preview polls disc radius_px (includes zoom) each frame — do not emit
+	# layout_changed here (that path autosaves + resyncs 3D props).
 
 
 func _scope_of_item(item: Dictionary) -> String:
@@ -695,7 +920,23 @@ func _scope_of_conn(conn: Dictionary) -> String:
 	return str(conn.get("scope_id", "root"))
 
 
+## Per-draw cache: a single `_draw()` pass calls `_visible_items()` several times
+## directly plus inside the solar/renewable/load helpers, and the model cannot
+## change mid-draw. Computing the scoped list once and serving it for the whole
+## pass turns ~6·N scans into 1·N. Only active between draw start and end; input
+## hit-testing (outside draw) always computes fresh.
+var _draw_cache_active: bool = false
+var _cached_visible_items: Array = []
+var _cached_visible_connections: Array = []
+
+
 func _visible_items() -> Array:
+	if _draw_cache_active:
+		return _cached_visible_items
+	return _compute_visible_items()
+
+
+func _compute_visible_items() -> Array:
 	if model == null:
 		return []
 	if model.has_method("get_items_in_scope"):
@@ -708,6 +949,12 @@ func _visible_items() -> Array:
 
 
 func _visible_connections() -> Array:
+	if _draw_cache_active:
+		return _cached_visible_connections
+	return _compute_visible_connections()
+
+
+func _compute_visible_connections() -> Array:
 	if model == null:
 		return []
 	if model.has_method("get_connections_in_scope"):
@@ -717,6 +964,21 @@ func _visible_connections() -> Array:
 		if _scope_of_conn(conn) == active_scope_id:
 			out.append(conn)
 	return out
+
+
+## Cache for resolved absolute-path autoloads (SimMode / SoiService / AcPowerBus)
+## so hot per-tick / per-node-per-draw code doesn't re-walk the scene tree. These
+## are autoloads and effectively never freed, but re-resolve defensively if so.
+var _node_ref_cache: Dictionary = {}
+
+func _cached_autoload(abs_path: String) -> Node:
+	var n: Node = _node_ref_cache.get(abs_path)
+	if n != null and is_instance_valid(n):
+		return n
+	n = get_node_or_null(abs_path)
+	if n != null:
+		_node_ref_cache[abs_path] = n
+	return n
 
 
 func play_controller_destroy_fx(item_id: String, screen_center: Vector2) -> void:
@@ -742,14 +1004,26 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 		if not bool(specs.get("destroyed", false)):
 			continue
 		var rr: Rect2 = _controller_reset_rects[rid]
+		# Enlarge the tappable area on touch without growing the drawn button.
+		if _touch_input_active():
+			rr = rr.grow(10.0)
 		if rr.has_point(screen_pos):
 			controller_reset_pressed.emit(str(rid))
 			return
 	_marquee_selecting = false
 	var wp_hit := _waypoint_hit(screen_pos)
 	if not wp_hit.is_empty():
+		var conn_id := str(wp_hit.get("conn_id", ""))
+		var conn := model.get_connection(conn_id) if model != null else {}
+		if not conn.is_empty() and (conn.get("waypoints", []) as Array).is_empty():
+			var center := size * 0.5
+			var eff_wps := _effective_waypoints_screen(conn, center)
+			var wps_graph: Array = []
+			for wp_s in eff_wps:
+				wps_graph.append(_screen_to_graph(wp_s))
+			_set_waypoints_graph(conn_id, wps_graph)
 		_waypoint_dragging = true
-		_waypoint_drag_conn = str(wp_hit.get("conn_id", ""))
+		_waypoint_drag_conn = conn_id
 		_waypoint_drag_idx = int(wp_hit.get("index", -1))
 		_touch_interaction = "waypoint"
 		return
@@ -757,6 +1031,13 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 	if not ortho_hit.is_empty():
 		_begin_ortho_segment_drag(ortho_hit, screen_pos)
 		return
+
+	# Resize handle on the currently selected item (BR corner or right edge).
+	var resize_id := _resize_handle_item_at(screen_pos)
+	if not resize_id.is_empty():
+		_begin_resize_drag(resize_id, screen_pos)
+		return
+
 	var hit := _item_at_screen(screen_pos)
 	var touch_rules := _touch_input_active() or DisplayServer.is_touchscreen_available()
 
@@ -764,6 +1045,22 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 	# small load nodes remain draggable without accidentally starting wires.
 	if touch_rules and not hit.is_empty() and _touch_point_in_item_body(screen_pos, hit):
 		_begin_item_press(screen_pos, hit)
+		return
+
+	# Site / elevation: body wins over ports so tiny physical footprints stay
+	# movable (ports still reachable via Alt+drag on hub, or near rim).
+	if _is_physical_view() and not hit.is_empty():
+		var port_phys := _port_at_screen(screen_pos, "", "", _port_grab_radius())
+		if not port_phys.is_empty() and bool(port_phys.get("hub", false)) and (
+				Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_META)):
+			_begin_hub_port_drag(port_phys)
+			_touch_interaction = "hub_port"
+			return
+		if port_phys.is_empty() or _physical_prefer_body(screen_pos, hit):
+			_begin_item_press(screen_pos, hit)
+			return
+		_start_wire_drag(port_phys)
+		_touch_interaction = "wire"
 		return
 
 	var port := _port_at_screen(screen_pos, "", "", _port_grab_radius())
@@ -786,6 +1083,22 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 		return
 
 	_begin_item_press(screen_pos, hit)
+
+
+## True when the click is closer to the body center than to the rim (ports).
+func _physical_prefer_body(screen_pos: Vector2, item: Dictionary) -> bool:
+	var hit := _item_hit_rect(item)
+	# Array bus ports sit on the bottom edge — keep most of the footprint as
+	# drag/resize so clicks aren't swallowed into wire-drag.
+	var rim := maxf(4.0, minf(hit.size.x, hit.size.y) * 0.16)
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(item.get("type", "")) == "compound" \
+			and str(specs.get("compound_kind", "")) == "array":
+		rim = maxf(rim, minf(10.0, hit.size.y * 0.22))
+	var body := hit.grow(-rim)
+	if body.size.x < 8.0 or body.size.y < 8.0:
+		return true
+	return body.has_point(screen_pos)
 
 
 func _begin_hub_port_drag(port: Dictionary) -> void:
@@ -852,10 +1165,12 @@ func _begin_item_press(screen_pos: Vector2, hit: Dictionary) -> void:
 			queue_redraw()
 		return
 	_item_dragging       = true
+	_item_drag_duplicated = false
 	_item_drag_id        = hit_id
 	_item_drag_start_px  = screen_pos
 	_item_drag_ids.clear()
 	_item_drag_start_map.clear()
+	_item_drag_start_elev.clear()
 	if not selected_item_ids.has(hit_id):
 		selected_item_ids.clear()
 		selected_item_ids.append(hit_id)
@@ -864,17 +1179,22 @@ func _begin_item_press(screen_pos: Vector2, hit: Dictionary) -> void:
 		var it := model.get_item(iid)
 		if it.is_empty():
 			continue
-		_item_drag_start_map[iid] = Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0)))
+		if _is_physical_view() and GraphSiteLayout.has_site_coords(it):
+			_item_drag_start_map[iid] = GraphSiteLayout.site_xz(it)
+			_item_drag_start_elev[iid] = _elevation_m_for_item(it)
+		elif _is_physical_view():
+			# Unplaced → start at null sentinel; first move assigns site coords.
+			_item_drag_start_map[iid] = Vector2(NAN, NAN)
+			_item_drag_start_elev[iid] = _elevation_datum_m()
+		else:
+			_item_drag_start_map[iid] = Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0)))
 	_item_drag_start_pos = _item_drag_start_map.get(hit_id, Vector2(float(hit.get("x", 0.0)), float(hit.get("y", 0.0))))
 	_touch_interaction = "item"
 	_select_item(hit_id)
 
 
 func _touch_point_in_item_body(screen_pos: Vector2, item: Dictionary) -> bool:
-	var center := size * 0.5
-	var tl := _item_screen_tl(item, center)
-	var sz := _item_screen_size(item)
-	var rect := Rect2(tl, sz)
+	var rect := _item_hit_rect(item)
 	if not rect.has_point(screen_pos):
 		return false
 	var itype := str(item.get("type", ""))
@@ -893,6 +1213,9 @@ func _touch_point_in_item_body(screen_pos: Vector2, item: Dictionary) -> bool:
 
 # Left-button release: finalise wire/item drag or treat as click.
 func _on_lmb_release(screen_pos: Vector2) -> void:
+	if _resize_dragging:
+		_end_resize_drag()
+		return
 	if _hub_port_dragging:
 		_end_hub_port_drag()
 		return
@@ -915,6 +1238,10 @@ func _on_lmb_release(screen_pos: Vector2) -> void:
 		if (_wire_snap_valid and not _wire_snap.is_empty()) \
 				or (_wire_snap_valid and not _wire_hub_drop.is_empty()):
 			_finalize_connection()
+		elif _wire_src_polarity == "resource" and _wire_snap.is_empty() \
+				and _wire_hub_drop.is_empty() \
+				and screen_pos.distance_to(_wire_src_pos) >= _effective_drag_threshold():
+			_spawn_container_from_port_drag(screen_pos)
 		_wire_dragging   = false
 		_wire_snap       = {}
 		_wire_snap_valid = false
@@ -951,13 +1278,9 @@ func _on_lmb_release(screen_pos: Vector2) -> void:
 			queue_redraw()
 			# Treat tiny marquee as a normal click for deselect behavior
 		else:
-			var center := size * 0.5
 			var hits: Array[String] = []
 			for item: Dictionary in _visible_items():
-				var tl := _item_screen_tl(item, center)
-				var sz := _item_screen_size(item)
-				var ir := Rect2(tl, sz)
-				if rect.intersects(ir):
+				if rect.intersects(_item_hit_rect(item)):
 					hits.append(item.get("id", "") as String)
 			if Input.is_key_pressed(KEY_SHIFT):
 				for hid: String in hits:
@@ -975,7 +1298,15 @@ func _on_lmb_release(screen_pos: Vector2) -> void:
 				items_multi_selected.emit(selected_item_ids.duplicate())
 				queue_redraw()
 			else:
-				_select_item("")
+				var center := size * 0.5
+				var conn_hits: Array[String] = []
+				for conn: Dictionary in _visible_connections():
+					if _connection_intersects_rect(conn, rect, center):
+						conn_hits.append(conn.get("id", "") as String)
+				if conn_hits.size() > 0:
+					_select_connection(conn_hits[0])
+				else:
+					_select_item("")
 		return
 
 	# Click on background — check wires, then deselect
@@ -991,13 +1322,280 @@ func _on_lmb_release(screen_pos: Vector2) -> void:
 func _on_item_drag_move(screen_pos: Vector2) -> void:
 	if model == null or _item_drag_id.is_empty():
 		return
+		
+	if not _item_drag_duplicated and (Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_META)):
+		var delta_px := screen_pos - _item_drag_start_px
+		if delta_px.length() >= _effective_drag_threshold():
+			_item_drag_duplicated = true
+			_duplicate_dragged_items()
+			
 	var delta_px  := screen_pos - _item_drag_start_px
+	if view_mode == GraphSiteLayout.VIEW_SITE:
+		_on_site_item_drag_move(screen_pos, delta_px)
+		return
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		_on_elevation_item_drag_move(screen_pos, delta_px)
+		return
 	var delta_gr  := delta_px / _zoom
 	for iid: String in _item_drag_ids:
 		var start_pos: Vector2 = _item_drag_start_map.get(iid, Vector2.ZERO) as Vector2
 		var new_pos := start_pos + delta_gr
 		model.update_item(iid, {"x": new_pos.x, "y": new_pos.y})
 	queue_redraw()
+
+
+func _soi_radius_m() -> float:
+	var disc := get_soi_disc_layout()
+	return float(disc.get("radius_m", 150.0))
+
+
+func _on_site_item_drag_move(screen_pos: Vector2, delta_px: Vector2) -> void:
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var delta_m := delta_px / s
+	var r_m := _soi_radius_m()
+	var disc_o := _disc_origin_screen()
+	for iid: String in _item_drag_ids:
+		var start_pos: Vector2 = _item_drag_start_map.get(iid, Vector2.ZERO) as Vector2
+		var new_xz: Vector2
+		if is_nan(start_pos.x):
+			# Dropping from unplaced tray onto the disc.
+			new_xz = GraphSiteLayout.screen_to_site_m(screen_pos, disc_o, _zoom)
+		else:
+			new_xz = start_pos + delta_m
+		new_xz = GraphSiteLayout.clamp_to_soi(new_xz, r_m)
+		model.update_item(iid, {"site_x_m": new_xz.x, "site_z_m": new_xz.y})
+	queue_redraw()
+
+
+func _on_elevation_item_drag_move(screen_pos: Vector2, delta_px: Vector2) -> void:
+	# Horizontal → along-section site metres; vertical → elevation_m (screen-up = +Y).
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var ex := maxf(elevation_exaggeration, 0.001)
+	var r_m := _soi_radius_m()
+	var disc_o := _disc_origin_screen()
+	for iid: String in _item_drag_ids:
+		var start_xz: Vector2 = _item_drag_start_map.get(iid, Vector2.ZERO) as Vector2
+		var along_m: float
+		var cross_m: float
+		var elev_m: float
+		if is_nan(start_xz.x):
+			# Dropping from unplaced tray — seat under the pointer.
+			along_m = (screen_pos.x - disc_o.x) / s
+			cross_m = 0.0
+			elev_m = _elevation_datum_m() - (screen_pos.y - disc_o.y) / (s * ex)
+		else:
+			var proj0 := GraphSiteLayout.project_onto_section(start_xz, elevation_heading_rad)
+			along_m = proj0.x + delta_px.x / s
+			cross_m = proj0.y
+			var start_elev: float = float(_item_drag_start_elev.get(iid, _elevation_datum_m()))
+			elev_m = start_elev - delta_px.y / (s * ex)
+		var site := GraphSiteLayout.section_to_site(along_m, cross_m, elevation_heading_rad)
+		site = GraphSiteLayout.clamp_to_soi(site, r_m)
+		model.update_item(iid, {
+			"site_x_m": site.x,
+			"site_z_m": site.y,
+			"elevation_m": elev_m,
+		})
+	queue_redraw()
+
+
+# ---------------------------------------------------------------------------
+# Resize handles (freeform → width/height; site/elevation → footprint_*_m)
+# ---------------------------------------------------------------------------
+
+func _item_is_circular(item: Dictionary) -> bool:
+	# Physical plan chips: circular resize for circular symbols only.
+	if _is_physical_view():
+		return GraphSiteLayout.uses_circular_plan_chip(item)
+	return GraphSiteLayout.is_circular_node(str(item.get("type", "")))
+
+
+func _resize_handle_center(item: Dictionary) -> Vector2:
+	var center := size * 0.5
+	var tl := _item_screen_tl(item, center)
+	var sz := _item_screen_size(item)
+	if _item_is_circular(item):
+		# Invisible right-side handle at the equator of the circle / rect.
+		return Vector2(tl.x + sz.x, tl.y + sz.y * 0.5)
+	return tl + sz  # bottom-right corner
+
+
+func _resize_handle_hit_rect(item: Dictionary) -> Rect2:
+	var c := _resize_handle_center(item)
+	var pad := RESIZE_HIT_PAD
+	return Rect2(c - Vector2(pad, pad), Vector2(pad * 2.0, pad * 2.0))
+
+
+func _resize_handle_item_at(screen_pos: Vector2) -> String:
+	if model == null:
+		return ""
+	# Prefer the primary selected item, then any selected.
+	var candidates: Array[String] = []
+	if not selected_item_id.is_empty():
+		candidates.append(selected_item_id)
+	for iid: String in selected_item_ids:
+		if not candidates.has(iid):
+			candidates.append(iid)
+	for iid2: String in candidates:
+		var it := model.get_item(iid2)
+		if it.is_empty():
+			continue
+		if _resize_handle_hit_rect(it).has_point(screen_pos):
+			return iid2
+	return ""
+
+
+func _begin_resize_drag(item_id: String, screen_pos: Vector2) -> void:
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	_resize_dragging = true
+	_resize_item_id = item_id
+	_resize_start_screen = screen_pos
+	_resize_circular = _item_is_circular(item)
+	_select_item(item_id)
+	if _is_physical_view():
+		_resize_start_size = GraphSiteLayout.physical_footprint_m(item)
+	else:
+		_resize_start_size = Vector2(
+			float(item.get("width", default_width(str(item.get("type", ""))))),
+			float(item.get("height", default_height(str(item.get("type", ""))))))
+	_touch_interaction = "resize"
+	queue_redraw()
+
+
+func _on_resize_drag_move(screen_pos: Vector2) -> void:
+	if model == null or _resize_item_id.is_empty():
+		return
+	var item := model.get_item(_resize_item_id)
+	if item.is_empty():
+		return
+	var delta := screen_pos - _resize_start_screen
+	if _is_physical_view():
+		var s := GraphSiteLayout.px_per_m(_zoom)
+		var d_m := delta / maxf(s, 0.001)
+		var fp: Vector2
+		if _resize_circular:
+			# Uniform scale from right-edge pull (use X delta).
+			var d := d_m.x
+			var side := maxf(_resize_start_size.x + d, 0.5)
+			fp = GraphSiteLayout.clamp_footprint_m(Vector2(side, side))
+		else:
+			fp = GraphSiteLayout.clamp_footprint_m(Vector2(
+				_resize_start_size.x + d_m.x,
+				_resize_start_size.y + d_m.y))
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		specs["footprint_w_m"] = fp.x
+		specs["footprint_d_m"] = fp.y
+		model.update_item(_resize_item_id, {"specs": specs})
+	else:
+		# Freeform: graph-space px; do NOT touch site footprint keys.
+		var d_g := delta / maxf(_zoom, 0.001)
+		var nw: float
+		var nh: float
+		if _resize_circular:
+			nw = maxf(_resize_start_size.x + d_g.x, 48.0)
+			nh = nw
+		else:
+			nw = maxf(_resize_start_size.x + d_g.x, 48.0)
+			nh = maxf(_resize_start_size.y + d_g.y, 36.0)
+		model.update_item(_resize_item_id, {"width": nw, "height": nh})
+	queue_redraw()
+
+
+func _end_resize_drag() -> void:
+	if _resize_dragging:
+		layout_changed.emit()
+	_resize_dragging = false
+	_resize_item_id = ""
+	_touch_interaction = ""
+	queue_redraw()
+
+
+func _draw_resize_handle(item: Dictionary) -> void:
+	var iid := str(item.get("id", ""))
+	if iid.is_empty():
+		return
+	if iid != selected_item_id and not selected_item_ids.has(iid):
+		return
+	var c := _resize_handle_center(item)
+	var hs := RESIZE_HANDLE_PX
+	if _item_is_circular(item):
+		# Subtle right-edge grip (mostly invisible until hover/select).
+		var grip := Rect2(c.x - 2.0, c.y - hs, 4.0, hs * 2.0)
+		draw_rect(grip, Color(0.85, 0.95, 1.0, 0.55), true)
+		draw_rect(grip, Color(0.35, 0.75, 1.0, 0.9), false, 1.0)
+	else:
+		var r := Rect2(c - Vector2(hs, hs), Vector2(hs, hs))
+		draw_rect(r, Color(0.2, 0.55, 0.95, 0.95), true)
+		draw_rect(r, Color(1.0, 1.0, 1.0, 0.85), false, 1.0)
+		# Corner accent lines
+		draw_line(c + Vector2(-hs + 2.0, 0.0), c + Vector2(0.0, 0.0), Color(1, 1, 1, 0.7), 1.5)
+		draw_line(c + Vector2(0.0, -hs + 2.0), c + Vector2(0.0, 0.0), Color(1, 1, 1, 0.7), 1.5)
+
+
+func _duplicate_dragged_items() -> void:
+	if model == null:
+		return
+		
+	var new_drag_ids: Array[String] = []
+	var new_drag_start_map := {}
+	var new_drag_start_elev := {}
+	var new_drag_id := ""
+	
+	# Mapping from old IDs to new IDs
+	var old_to_new_id_map := {}
+	
+	for iid in _item_drag_ids:
+		var orig := model.get_item(iid)
+		if orig.is_empty():
+			continue
+		var copy := orig.duplicate(true)
+		var new_id := model.generate_item_id()
+		copy["id"] = new_id
+		old_to_new_id_map[iid] = new_id
+		
+		# Suffix the name of the copied item if it exists
+		var specs: Dictionary = copy.get("specs", {})
+		if specs.has("name"):
+			specs["name"] = str(specs["name"]) + " (Copy)"
+			
+		model.add_item(copy)
+		
+		new_drag_ids.append(new_id)
+		new_drag_start_map[new_id] = _item_drag_start_map.get(iid, Vector2.ZERO)
+		new_drag_start_elev[new_id] = _item_drag_start_elev.get(iid, _elevation_datum_m())
+		
+		if iid == _item_drag_id:
+			new_drag_id = new_id
+			
+	# Find and duplicate connections between the dragged items
+	var conns_to_add: Array[Dictionary] = []
+	for conn in model.connections:
+		var sid := str(conn.get("source_item_id", ""))
+		var tid := str(conn.get("target_item_id", ""))
+		if old_to_new_id_map.has(sid) and old_to_new_id_map.has(tid):
+			var conn_copy: Dictionary = conn.duplicate(true) as Dictionary
+			conn_copy["id"] = model.generate_connection_id()
+			conn_copy["source_item_id"] = old_to_new_id_map[sid]
+			conn_copy["target_item_id"] = old_to_new_id_map[tid]
+			conns_to_add.append(conn_copy)
+			
+	for new_conn in conns_to_add:
+		model.add_connection(new_conn)
+			
+	_item_drag_ids = new_drag_ids
+	_item_drag_start_map = new_drag_start_map
+	_item_drag_start_elev = new_drag_start_elev
+	_item_drag_id = new_drag_id
+	
+	selected_item_ids = new_drag_ids.duplicate()
+	if new_drag_ids.size() == 1:
+		_select_item(new_drag_id)
+	else:
+		selected_item_id = ""
+		selected_connection_id = ""
+		items_multi_selected.emit(new_drag_ids.duplicate())
 
 
 ## Drop one resource tank onto another of the same kind → single merged container.
@@ -1024,7 +1622,11 @@ func _try_merge_resource_containers_on_drop(dragged_id: String, screen_pos: Vect
 		return false
 	var d_cap := float(d_specs.get("capacity_qty", 0.0))
 	var t_cap := float(t_specs.get("capacity_qty", 0.0))
-	if d_cap <= 0.0 and t_cap <= 0.0:
+	var d_unlim := bool(d_specs.get("unlimited_capacity", false))
+	var t_unlim := bool(t_specs.get("unlimited_capacity", false))
+	var d_neg := bool(d_specs.get("allow_negative", false))
+	var t_neg := bool(t_specs.get("allow_negative", false))
+	if d_cap <= 0.0 and t_cap <= 0.0 and not d_unlim and not t_unlim:
 		return false
 	var d_lvl := clampf(float(d_specs.get("level", 0.0)), 0.0, 1.0)
 	var t_lvl := clampf(float(t_specs.get("level", 0.0)), 0.0, 1.0)
@@ -1032,12 +1634,24 @@ func _try_merge_resource_containers_on_drop(dragged_id: String, screen_pos: Vect
 	var new_lvl := (d_cap * d_lvl + t_cap * t_lvl) / new_cap if new_cap > 0.001 else 0.0
 	var target_id := str(target.get("id", ""))
 	var unit := str(t_specs.get("capacity_unit", ResourceKinds.default_unit(t_kind)))
-	t_specs["capacity_qty"] = new_cap
-	t_specs["level"] = clampf(new_lvl, 0.0, 1.0)
-	t_specs["capacity"] = "%.0f %s" % [new_cap, unit] if unit in ["L", "kg"] else "%.1f %s" % [new_cap, unit]
-	var t_name := str(t_specs.get("name", "Tank"))
-	if not t_name.contains("merged"):
-		t_specs["name"] = "%s (merged)" % t_name
+	# Infinity / deficit flags OR across both parents — do not collapse an
+	# unlimited tank into a finite sum of nominal capacity_qty alone.
+	t_specs["unlimited_capacity"] = d_unlim or t_unlim
+	t_specs["allow_negative"] = d_neg or t_neg
+	if bool(t_specs["unlimited_capacity"]):
+		# Keep a display nominal; survivor stays conceptual.
+		t_specs["capacity_qty"] = maxf(maxf(d_cap, t_cap), 100.0)
+		t_specs["level"] = clampf(new_lvl, 0.0, 1.0) if new_cap > 0.001 else t_lvl
+	else:
+		t_specs["capacity_qty"] = new_cap
+		t_specs["level"] = clampf(new_lvl, 0.0, 1.0)
+	t_specs["capacity"] = "%.0f %s" % [float(t_specs["capacity_qty"]), unit] if unit in ["L", "kg"] else "%.1f %s" % [float(t_specs["capacity_qty"]), unit]
+	# Preserve scale/JIT flags if either parent had them on.
+	if d_specs.has("scale_with_fill") or t_specs.has("scale_with_fill"):
+		t_specs["scale_with_fill"] = bool(d_specs.get("scale_with_fill", true)) \
+				and bool(t_specs.get("scale_with_fill", true))
+	if bool(d_specs.get("jit_outflow", false)) or bool(t_specs.get("jit_outflow", false)):
+		t_specs["jit_outflow"] = true
 	# Rewire connections from absorbed tank → survivor (remove/add for handle bookkeeping).
 	var to_rewire: Array = model.connections_for_item(dragged_id)
 	for conn_v: Variant in to_rewire:
@@ -1064,15 +1678,12 @@ func _try_merge_resource_containers_on_drop(dragged_id: String, screen_pos: Vect
 func _item_at_screen_excluding(screen_pos: Vector2, exclude_id: String) -> Dictionary:
 	if model == null:
 		return {}
-	var center := size * 0.5
 	var vis := _visible_items()
 	for i in range(vis.size() - 1, -1, -1):
 		var item: Dictionary = vis[i]
 		if str(item.get("id", "")) == exclude_id:
 			continue
-		var tl := _item_screen_tl(item, center)
-		var sz := _item_screen_size(item)
-		if Rect2(tl, sz).has_point(screen_pos):
+		if _item_hit_rect(item).has_point(screen_pos):
 			return item
 	return {}
 
@@ -1091,14 +1702,11 @@ func _select_item(item_id: String) -> void:
 func _item_at_screen(screen_pos: Vector2) -> Dictionary:
 	if model == null:
 		return {}
-	var center := size * 0.5
 	# Iterate in reverse so topmost (last drawn) is hit first
 	var vis := _visible_items()
 	for i in range(vis.size() - 1, -1, -1):
 		var item: Dictionary = vis[i]
-		var tl := _item_screen_tl(item, center)
-		var sz := _item_screen_size(item)
-		if Rect2(tl, sz).has_point(screen_pos):
+		if _item_hit_rect(item).has_point(screen_pos):
 			return item
 	return {}
 
@@ -1315,7 +1923,7 @@ func _on_wire_drag_move(screen_pos: Vector2) -> void:
 		_wire_hub_drop = _hub_body_at_screen(screen_pos, _wire_src_item_id)
 		if not _wire_hub_drop.is_empty():
 			var drop_kind := str(_wire_hub_drop.get("kind", ""))
-			if ResourceKinds.kinds_compatible(_wire_src_resource_kind, drop_kind):
+			if ResourceKinds.connection_allowed(_wire_src_resource_kind, drop_kind):
 				_wire_snap_valid = true
 			else:
 				_wire_hub_drop = {}
@@ -1333,8 +1941,9 @@ func _hub_body_at_screen(screen_pos: Vector2, skip_item: String) -> Dictionary:
 			continue
 		if not GraphHubPorts.is_hub_type(str(item.get("type", ""))):
 			continue
-		# Drop-to-body only on resource tanks (catchments are sources, not sinks).
-		if str(item.get("type", "")) != "resource":
+		# Drop-to-body on resource tanks and catchments (PBI → catchment).
+		var ity := str(item.get("type", ""))
+		if ity != "resource" and ity != "catchment":
 			continue
 		var tl := _item_screen_tl(item, center)
 		var sz := _item_screen_size(item)
@@ -1342,7 +1951,7 @@ func _hub_body_at_screen(screen_pos: Vector2, skip_item: String) -> Dictionary:
 			continue
 		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 		var kind := ""
-		if str(item.get("type", "")) == "catchment":
+		if ity == "catchment":
 			kind = PbiBiomass.catchment_output_kind(specs)
 		else:
 			ResourceKinds.new().migrate_resource_specs(specs)
@@ -1366,6 +1975,8 @@ func _finalize_connection() -> void:
 	var res_type := ""
 	if _wire_src_polarity == "resource":
 		res_type = ResourceKinds.normalize_kind(_wire_src_resource_kind)
+	var type_mismatch := _wire_src_polarity == "resource" \
+		and not ResourceKinds.kinds_compatible(_wire_src_resource_kind, tgt_kind)
 	model.add_connection({
 		"scope_id":         active_scope_id,
 		"polarity":         _wire_src_polarity,
@@ -1378,10 +1989,11 @@ func _finalize_connection() -> void:
 		"route_3d":         [],
 		"conduit_type":     "",
 		"route_length_m":   0.0,
-		"line_style":       "bezier",
+		"line_style":       model.last_line_style,
 		"curve_tension":    1.0,
 		"corner_radius":    28.0,
 		"voltage_mismatch": false,
+		"type_mismatch":    type_mismatch,
 	})
 
 
@@ -1413,14 +2025,90 @@ func _finalize_hub_drop_connection() -> void:
 		"route_3d":         [],
 		"conduit_type":     "",
 		"route_length_m":   0.0,
-		"line_style":       "bezier",
+		"line_style":       model.last_line_style,
 		"curve_tension":    1.0,
 		"corner_radius":    28.0,
 		"voltage_mismatch": false,
+		"type_mismatch":    not ResourceKinds.kinds_compatible(_wire_src_resource_kind, kind),
 	})
 	_wire_hub_drop = {}
 	layout_changed.emit()
 	queue_redraw()
+
+
+## True when a resource handle id is a consuming (input) port, as opposed to
+## a producing (output) port — mirrors the id conventions used by static
+## HANDLES, GraphPortService's dynamic res_in_/res_out_ ports, and hub ports.
+func _resource_port_is_input(handle_id: String) -> bool:
+	return handle_id == "input" \
+		or handle_id.begins_with("res_in_") \
+		or handle_id.begins_with("hub_in_")
+
+
+## Releasing a resource wire on empty canvas space spawns a new container
+## node pre-wired to the source port, instead of discarding the drag. Input
+## ports get a supply tank (unlimited + can run into deficit, so it never
+## blocks the consumer); output ports get an unlimited sink (never fills up
+## and blocks the producer) — same defaults as the inspector's "No capacity
+## limit" toggle (see ResourceKinds.migrate_resource_specs).
+func _spawn_container_from_port_drag(screen_pos: Vector2) -> void:
+	if model == null or _wire_src_item_id.is_empty():
+		return
+	var kind := ResourceKinds.normalize_kind(_wire_src_resource_kind)
+	if kind.is_empty():
+		return
+	var is_input := _resource_port_is_input(_wire_src_handle_id)
+	var graph_pos := _screen_to_graph(screen_pos)
+	var w := 110.0
+	var h := 96.0
+	var item_id := model.generate_item_id()
+	var specs := {
+		"name": "%s %s" % [ResourceKinds.display_name(kind), "Supply" if is_input else "Store"],
+		"resource_kind": kind,
+		"capacity_qty": 100.0,
+		"capacity_unit": ResourceKinds.default_unit(kind),
+		"level": 0.5 if is_input else 0.0,
+		"unlimited_capacity": true,
+		"allow_negative": is_input,
+		"alert_threshold_pct": 95.0,
+		"cost": 0.0,
+	}
+	model.add_item({
+		"id":       item_id,
+		"type":     "resource",
+		"x":        graph_pos.x - w * 0.5,
+		"y":        graph_pos.y - h * 0.5,
+		"width":    w,
+		"height":   h,
+		"scope_id": active_scope_id,
+		"specs":    specs,
+	})
+	var conn := {
+		"scope_id":         active_scope_id,
+		"polarity":         "resource",
+		"resource_type":    kind,
+		"waypoints":        [],
+		"route_3d":         [],
+		"conduit_type":     "",
+		"route_length_m":   0.0,
+		"line_style":       model.last_line_style,
+		"curve_tension":    1.0,
+		"corner_radius":    28.0,
+		"voltage_mismatch": false,
+		"type_mismatch":    false,
+	}
+	if is_input:
+		conn["source_item_id"]   = item_id
+		conn["source_handle_id"] = "output"
+		conn["target_item_id"]   = _wire_src_item_id
+		conn["target_handle_id"] = _wire_src_handle_id
+	else:
+		conn["source_item_id"]   = _wire_src_item_id
+		conn["source_handle_id"] = _wire_src_handle_id
+		conn["target_item_id"]   = item_id
+		conn["target_handle_id"] = "input"
+	model.add_connection(conn)
+	layout_changed.emit()
 
 
 ## Returns info for all handles on an item as an Array of Dictionaries.
@@ -1489,7 +2177,7 @@ func _get_interactive_handle_infos(item: Dictionary, center: Vector2) -> Array:
 	var out: Array = []
 	for h: Dictionary in all:
 		var hid := h.get("handle_id", "") as String
-		if primary.has(hid) or wired.has(hid):
+		if primary.has(hid) or wired.has(hid) or hid.begins_with("res_in_") or hid.begins_with("res_out_"):
 			out.append(h)
 	return out
 
@@ -1513,11 +2201,14 @@ func _port_at_screen(screen_pos: Vector2,
 	return best
 
 
-## True when src and tgt polarities form a valid connection.
+## True when src and tgt polarities form a valid connection. Resource↔resource
+## ports also allow a user override when kinds mismatch but share the same
+## fundamental unit of measure (mass/volume/energy/…) — see
+## ResourceKinds.connection_allowed.
 func _polarity_compatible(src: String, tgt: String,
 		src_kind: String = "", tgt_kind: String = "") -> bool:
 	if src == "resource" and tgt == "resource":
-		return ResourceKinds.kinds_compatible(src_kind, tgt_kind)
+		return ResourceKinds.connection_allowed(src_kind, tgt_kind)
 	if src == tgt:
 		return true
 	# load ↔ ac (appliance into outlet)
@@ -1528,6 +2219,16 @@ func _polarity_compatible(src: String, tgt: String,
 			or (src == "positive" and tgt == "smart_battery"):
 		return true
 	return false
+
+
+## True while the current wire-drag snap target is a resource port that only
+## connects via the fundamental-unit override (kinds differ, dimension matches) —
+## drives the amber "allowed but unusual" feedback instead of green/red.
+func _wire_snap_is_kind_override() -> bool:
+	if _wire_snap.is_empty() or not _wire_snap_valid or _wire_src_polarity != "resource":
+		return false
+	var tgt_kind := str(_wire_snap.get("resource_kind", ""))
+	return not ResourceKinds.kinds_compatible(_wire_src_resource_kind, tgt_kind)
 
 
 ## Draws the dashed preview wire while a drag is in progress.
@@ -1543,8 +2244,12 @@ func _draw_temp_wire() -> void:
 			0.0, false, false)
 		col = stroke.get("color", col) as Color
 		preview_width = float(stroke.get("width", 1.6))
+	var snap_kind_override := _wire_snap_is_kind_override()
 	if not _wire_snap.is_empty() and not _wire_snap_valid:
 		col = C_RED
+		preview_width = 2.0
+	elif snap_kind_override:
+		col = UITheme.C_WARN
 		preview_width = 2.0
 
 	var to_pos:  Vector2
@@ -1584,15 +2289,18 @@ func _draw_temp_wire() -> void:
 	# Snap-target highlight
 	if not _wire_snap.is_empty():
 		var snap_pos := _wire_snap.get("pos", Vector2.ZERO) as Vector2
-		var ring_col := C_GREEN if _wire_snap_valid else C_RED
+		var ring_col := C_RED
+		if _wire_snap_valid:
+			ring_col = UITheme.C_WARN if snap_kind_override else C_GREEN
 		draw_circle(snap_pos, 10.0 * _zoom, Color(ring_col.r, ring_col.g, ring_col.b, 0.25))
 		draw_circle(snap_pos, 9.0  * _zoom, ring_col, false)
-		if not _wire_snap_valid and _wire_src_polarity == "resource":
+		if (not _wire_snap_valid or snap_kind_override) and _wire_src_polarity == "resource":
 			var msg := ResourceKinds.mismatch_message(
 				_wire_src_resource_kind, str(_wire_snap.get("resource_kind", "")))
 			var fnt := ThemeDB.fallback_font
+			var msg_col := Color(0.98, 0.45, 0.42, 0.95) if not _wire_snap_valid else Color(0.98, 0.78, 0.35, 0.95)
 			draw_string(fnt, snap_pos + Vector2(12.0, -8.0), msg,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.98, 0.45, 0.42, 0.95))
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, msg_col)
 
 
 # ---------------------------------------------------------------------------
@@ -1669,7 +2377,7 @@ func _is_ac_sink_type(item_type: String) -> bool:
 
 
 func _refresh_ac_shed_state() -> void:
-	var apb := get_node_or_null("/root/AcPowerBus")
+	var apb := _cached_autoload("/root/AcPowerBus")
 	if apb != null and "ac_output_enabled" in apb:
 		_ac_shed_active = not bool(apb.ac_output_enabled)
 	else:
@@ -1784,6 +2492,22 @@ func _estimate_connection_flow(
 		var gw: float = maxf(0.0, float(gsp.get("current_output_kw", 0.0)) * 1000.0)
 		return {"watts": maxf(gw, 5.0), "reverse": false, "active": gw > WIRE_DEAD_W}
 
+	# DC-electricity generator wires (fuel processors with a dc_electricity
+	# output, e.g. the Woodgas DC Generator): animate from its live
+	# fuel-throughput-derived current_output_kw telemetry.
+	if (st == "processor" and pol in ["positive", "negative"]) \
+			or (tt == "processor" and pol in ["positive", "negative"]):
+		var gen_item2: Dictionary = sitem if st == "processor" else titem
+		var gsp2: Dictionary = gen_item2.get("specs", {}) as Dictionary
+		var has_dc_out := false
+		for dc_o: Variant in (gsp2.get("outputs", []) as Array):
+			if dc_o is Dictionary and str((dc_o as Dictionary).get("kind", "")) == "dc_electricity":
+				has_dc_out = true
+				break
+		if has_dc_out:
+			var gw2: float = maxf(0.0, float(gsp2.get("current_output_kw", 0.0)) * 1000.0)
+			return {"watts": maxf(gw2, 5.0), "reverse": false, "active": gw2 > WIRE_DEAD_W}
+
 	# PV string → controller: only animate when panels are actually producing
 	if sid == "virtual_solar_array" or tid == "virtual_solar_array" or st == "panel" or tt == "panel":
 		var producing: bool = solar_w > WIRE_DEAD_W
@@ -1859,8 +2583,22 @@ func _draw_connections() -> void:
 	# Generation feeding the DC bus: solar array plus wind/hydro items.
 	var solar_w: float  = _solar_array_output_w() + _renewable_output_w()
 	var load_w: float   = _sum_all_load_w()
-	for conn: Dictionary in _visible_connections():
+	var visible := _visible_connections()
+	_wire_lod_simplify = visible.size() > WIRE_LOD_HIGH_COUNT or _zoom < WIRE_LOD_ZOOM_CUTOFF
+	for conn: Dictionary in visible:
 		_render_connection(conn, center, solar_w, load_w)
+
+
+## Segment count for a bezier stroke of `base` reference segments (tuned for
+## a ~260px on-screen wire), scaled down for shorter/zoomed-out wires so the
+## fixed 24-34 segment counts don't spend draw_line calls a short span can't
+## show anyway. `_draw_bezier_stroke` already skips sub-pixel segments, but
+## computing fewer of them in the first place avoids the interpolation work.
+func _adaptive_segments(pixel_len: float, base: int, floor_segs: int = 8) -> int:
+	if base <= floor_segs:
+		return base
+	var frac := clampf(pixel_len / WIRE_SEG_REF_LEN, 0.0, 1.0)
+	return maxi(floor_segs, int(round(lerpf(float(floor_segs), float(base), frac))))
 
 
 func _render_connection(
@@ -1890,6 +2628,8 @@ func _render_connection(
 		base_col = ResourceKinds.wire_color(ResourceKinds.normalize_kind(rk))
 	if bool(conn.get("voltage_mismatch", false)):
 		base_col = Color(1.0, 0.15, 0.15, 0.95)
+	if bool(conn.get("needs_pump", false)):
+		base_col = Color(1.0, 0.55, 0.12, 0.95)
 	var col: Color = C_SELECTED_BORDER if is_sel else base_col
 	if wire_shed:
 		flow_active = false
@@ -1907,6 +2647,8 @@ func _render_connection(
 		var stroke: Dictionary = ResourceEdgeVis.stroke_for(
 			rk2, res_rate, flow_active, is_sel)
 		col = stroke.get("color", col) as Color
+		if bool(conn.get("type_mismatch", false)):
+			col = UITheme.C_WARN.lerp(col, 0.35)
 		# Wire body scales with zoom so ribbons stay proportional to the nodes.
 		width = float(stroke.get("width", ResourceEdgeVis.WIDTH_IDLE)) * _zoom
 	else:
@@ -1966,7 +2708,10 @@ func _render_connection(
 	var sankey_scale = bool(conn.get("sankey_scale", true))
 
 	if is_resource_wire:
-		if style == "orthogonal":
+		if style == "metro":
+			var pts_r: Array = [src_pos] + wps + [tgt_pos]
+			_draw_wire_metro_path(pts_r, [src_t, tgt_tang_in], col, width, flowing, res_rate, reverse, conn)
+		elif style == "orthogonal":
 			var pts_r: Array = [src_pos] + wps + [tgt_pos]
 			_draw_resource_wire_orthogonal_path(
 				pts_r, [src_t, tgt_tang_in], col, width, flowing, reverse, curve_t,
@@ -1983,7 +2728,10 @@ func _render_connection(
 			_draw_flow_label(src_pos, tgt_pos, wps, res_rate, true, res_kind, col)
 		_draw_connection_waypoint_handles(conn, center)
 		return
-	if style == "orthogonal":
+	if style == "metro":
+		var pts: Array = [src_pos] + wps + [tgt_pos]
+		_draw_wire_metro_path(pts, [src_t, tgt_tang_in], col, width, flowing, flow_watts, reverse, conn)
+	elif style == "orthogonal":
 		var pts: Array = [src_pos] + wps + [tgt_pos]
 		_draw_wire_orthogonal_path(
 			pts, [src_t, tgt_tang_in], col, width, flowing, flow_watts, reverse, conn)
@@ -2056,19 +2804,20 @@ func _draw_resource_wire_bezier(from: Vector2, from_tang: Vector2,
 	var c2: Vector2 = ctrl["c2"]
 	var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, flow_active)
 	var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
+	var pixel_len := from.distance_to(to)
 	# Ghost track (route visible when idle)
-	_draw_bezier_stroke(from, c1, c2, to, 24,
+	_draw_bezier_stroke(from, c1, c2, to, _adaptive_segments(pixel_len, 24),
 		Color(col.r, col.g, col.b, col.a * 0.20), maxf(1.4, width * 0.65))
-	if flow_active and gscale > 0.01:
+	if flow_active and gscale > 0.01 and not _wire_lod_simplify:
 		var glow_a := 0.07 + 0.13 * gscale
-		_draw_bezier_stroke(from, c1, c2, to, 28,
+		_draw_bezier_stroke(from, c1, c2, to, _adaptive_segments(pixel_len, 28),
 			Color(col.r, col.g, col.b, glow_a), body_w + 2.2 + 2.4 * gscale)
 	var core := Color(
 		lerpf(col.r, 1.0, 0.14 * gscale),
 		lerpf(col.g, 1.0, 0.12 * gscale),
 		lerpf(col.b, 1.0, 0.08 * gscale),
 		lerpf(col.a, 1.0, 0.12 * gscale))
-	_draw_bezier_stroke(from, c1, c2, to, 30, core, maxf(1.6, body_w))
+	_draw_bezier_stroke(from, c1, c2, to, _adaptive_segments(pixel_len, 30), core, maxf(1.6, body_w))
 	if flow_active:
 		ResourceEdgeVis.draw_bezier_flow_cues(
 			self, from, c1, c2, to, col, body_w, _flow_phase, reverse_chase)
@@ -2159,21 +2908,28 @@ func _draw_wire_bezier(from: Vector2, from_tang: Vector2,
 	var extra: float  = 4.0 + 18.0 * gscale
 	# Body is fully opaque when power is high, but stays visible when idle
 	var body_alpha: float  = 0.60 + 0.40 * gscale
+	var pixel_len := from.distance_to(to)
 
-	# 1) Glow halo — 5 concentric passes, innermost brightest
+	# 1) Glow halo — concentric passes, innermost brightest. Full lushness (3
+	# passes + a bright inner halo) when few wires are on screen; a single
+	# pass and no inner halo once WIRE_LOD_HIGH_COUNT wires are visible or the
+	# view is zoomed out far enough that the extra passes aren't perceptible.
 	if flow_active and flow_watts > WIRE_FLOW_FLOOR * 0.5:
-		for p in 5:
-			var layer:  float  = float(p) / 4.0
+		var glow_passes := 1 if _wire_lod_simplify else 3
+		var glow_segs := _adaptive_segments(pixel_len, 28)
+		for p in glow_passes:
+			var layer: float = float(p) / float(maxi(glow_passes - 1, 1))
 			# Outer passes are wider but more transparent; inner close to the wire body
 			var gw: float = width + 1.5 + (extra) * (1.0 - layer * 0.55)
 			var a_g:  float  = (0.15 - layer * 0.025) * gscale
-			_draw_bezier_stroke(from, c1, c2, to, 28, Color(col.r, col.g, col.b, a_g), gw)
-		# Extra tight inner halo at near-white to create a bright core
-		var inner_w: float = width * 0.9
-		var inner_a: float = 0.22 * gscale
-		_draw_bezier_stroke(from, c1, c2, to, 34,
-			Color(lerpf(col.r, 1.0, 0.5), lerpf(col.g, 1.0, 0.5), lerpf(col.b, 1.0, 0.5), inner_a),
-			inner_w)
+			_draw_bezier_stroke(from, c1, c2, to, glow_segs, Color(col.r, col.g, col.b, a_g), gw)
+		if not _wire_lod_simplify:
+			# Extra tight inner halo at near-white to create a bright core
+			var inner_w: float = width * 0.9
+			var inner_a: float = 0.22 * gscale
+			_draw_bezier_stroke(from, c1, c2, to, _adaptive_segments(pixel_len, 34),
+				Color(lerpf(col.r, 1.0, 0.5), lerpf(col.g, 1.0, 0.5), lerpf(col.b, 1.0, 0.5), inner_a),
+				inner_w)
 
 	# 2) Main body — slightly whitened core at high power
 	var core := Color(
@@ -2181,13 +2937,19 @@ func _draw_wire_bezier(from: Vector2, from_tang: Vector2,
 		lerpf(col.g, 1.0, 0.15 * gscale),
 		lerpf(col.b, 1.0, 0.12 * gscale),
 		body_alpha)
-	_draw_bezier_stroke(from, c1, c2, to, 34, core, maxf(1.2, width))
+	_draw_bezier_stroke(from, c1, c2, to, _adaptive_segments(pixel_len, 34), core, maxf(1.2, width))
 
 	# 3) Chase: bright head + thin trail along the line
 	# Chase count scales with power level and timescale so high-speed sim is still readable.
+	# Simplified LOD keeps only the lead dot (flow direction/activity stays
+	# legible) and drops the fading trail.
 	if flow_active:
-		var extra_dots := int(gscale * 3.0) + int(clampf(log(_sim_flow_mult + 1.0) * 1.2, 0.0, 4.0))
-		var chase_count := WIRE_CHASE_COUNT + extra_dots
+		var chase_count: int
+		if _wire_lod_simplify:
+			chase_count = 1
+		else:
+			var extra_dots := int(gscale * 3.0) + int(clampf(log(_sim_flow_mult + 1.0) * 1.2, 0.0, 4.0))
+			chase_count = WIRE_CHASE_COUNT + extra_dots
 		var spacing     := maxf(0.055, WIRE_CHASE_SPACING - gscale * 0.02)
 		var t_base: float = fmod(_flow_phase * 0.34, 1.0)
 		for s in chase_count:
@@ -2255,8 +3017,12 @@ func _draw_bezier_path_chase(points: Array, end_tangents: Array,
 	if total_len < 1.0:
 		return
 	var gscale: float = _wire_glow_scale_from_watts(flow_watts)
-	var extra_dots := int(gscale * 3.0) + int(clampf(log(_sim_flow_mult + 1.0) * 1.2, 0.0, 4.0))
-	var chase_count := WIRE_CHASE_COUNT + extra_dots
+	var chase_count: int
+	if _wire_lod_simplify:
+		chase_count = 1
+	else:
+		var extra_dots := int(gscale * 3.0) + int(clampf(log(_sim_flow_mult + 1.0) * 1.2, 0.0, 4.0))
+		chase_count = WIRE_CHASE_COUNT + extra_dots
 	var spacing := maxf(0.055, WIRE_CHASE_SPACING - gscale * 0.02)
 	var t_base: float = fmod(_flow_phase * 0.34, 1.0)
 	for s in chase_count:
@@ -2394,8 +3160,12 @@ func _draw_polyline_chase(poly: PackedVector2Array, _col: Color, width: float,
 	if total_len < 1.0:
 		return
 	var gscale: float = _wire_glow_scale_from_watts(flow_watts)
-	var extra_dots := int(gscale * 2.0) + int(clampf(log(_sim_flow_mult + 1.0), 0.0, 3.0))
-	var chase_count := WIRE_CHASE_COUNT + extra_dots
+	var chase_count: int
+	if _wire_lod_simplify:
+		chase_count = 1
+	else:
+		var extra_dots := int(gscale * 2.0) + int(clampf(log(_sim_flow_mult + 1.0), 0.0, 3.0))
+		chase_count = WIRE_CHASE_COUNT + extra_dots
 	var spacing := maxf(0.06, WIRE_CHASE_SPACING - gscale * 0.02)
 	var t_base: float = fmod(_flow_phase * 0.34, 1.0)
 	for s in chase_count:
@@ -2422,14 +3192,49 @@ func _draw_polyline_chase(poly: PackedVector2Array, _col: Color, width: float,
 			draw_line(p0, p1, Color(1, 1, 1, 0.55 * tail_fade), wch * 0.42)
 
 
+func _effective_waypoints_screen(conn: Dictionary, center: Vector2) -> Array:
+	var wps := _waypoints_screen(conn, center)
+	if not wps.is_empty():
+		return wps
+	var style := str(conn.get("line_style", ""))
+	if style == "metro" or style == "orthogonal":
+		var sid := str(conn.get("source_item_id", ""))
+		var tid := str(conn.get("target_item_id", ""))
+		var pol := str(conn.get("polarity", "positive"))
+		var src := _get_handle_info(sid, str(conn.get("source_handle_id", "")), center, tid, pol)
+		var tgt := _get_get_handle_info_or_empty(tid, str(conn.get("target_handle_id", "")), center, sid, pol)
+		if src.is_empty():
+			src = _get_handle_info(sid, str(conn.get("source_handle_id", "")), center, tid, pol)
+		if not src.is_empty() and not tgt.is_empty():
+			var src_pos: Vector2 = src.get("pos", Vector2.ZERO)
+			var tgt_pos: Vector2 = tgt.get("pos", Vector2.ZERO)
+			var mid_y := (src_pos.y + tgt_pos.y) * 0.5
+			var w1 := Vector2(src_pos.x, mid_y)
+			var w2 := Vector2(tgt_pos.x, mid_y)
+			return [w1, w2]
+	return []
+
+
+func _get_get_handle_info_or_empty(iid: String, hid: String, center: Vector2, skip_item: String, polarity: String) -> Dictionary:
+	return _get_handle_info(iid, hid, center, skip_item, polarity)
+
+
 func _draw_connection_waypoint_handles(conn: Dictionary, center: Vector2) -> void:
 	if str(conn.get("id", "")) != selected_connection_id:
 		return
-	for wp: Vector2 in _waypoints_screen(conn, center):
+	var wps := _effective_waypoints_screen(conn, center)
+	var is_default := (_waypoints_screen(conn, center)).is_empty()
+	for wp: Vector2 in wps:
 		var r := maxf(5.0, 6.0 * _zoom)
-		draw_circle(wp, r + 3.0, Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.22))
-		draw_circle(wp, r, C_PRIMARY)
-		draw_circle(wp, r * 0.45, Color(0.06, 0.09, 0.17, 0.9))
+		if is_default:
+			# Draw default waypoints as white dot handles with subtle glow
+			draw_circle(wp, r + 3.0, Color(1.0, 1.0, 1.0, 0.22))
+			draw_circle(wp, r, Color.WHITE)
+			draw_circle(wp, r * 0.45, Color(0.06, 0.09, 0.17, 0.9))
+		else:
+			draw_circle(wp, r + 3.0, Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.22))
+			draw_circle(wp, r, C_PRIMARY)
+			draw_circle(wp, r * 0.45, Color(0.06, 0.09, 0.17, 0.9))
 
 
 func _waypoint_hit(screen_pos: Vector2) -> Dictionary:
@@ -2439,8 +3244,10 @@ func _waypoint_hit(screen_pos: Vector2) -> Dictionary:
 	if conn.is_empty():
 		return {}
 	var center := size * 0.5
-	var wps: Array = _waypoints_screen(conn, center)
+	var wps: Array = _effective_waypoints_screen(conn, center)
 	var pick_r := maxf(10.0, 12.0 * _zoom)
+	if _touch_input_active():
+		pick_r = maxf(pick_r, TOUCH_SEGMENT_PICK_MIN)
 	for i: int in range(wps.size()):
 		if (wps[i] as Vector2).distance_to(screen_pos) < pick_r:
 			return {"conn_id": selected_connection_id, "index": i}
@@ -2512,6 +3319,57 @@ func _connection_polyline_screen(conn: Dictionary, center: Vector2, apply_roundi
 	return poly
 
 
+func _connection_intersects_rect(conn: Dictionary, rect: Rect2, center: Vector2) -> bool:
+	var sid: String = conn.get("source_item_id", "") as String
+	var tid: String = conn.get("target_item_id", "") as String
+	var pol: String = conn.get("polarity", "positive") as String
+	var src := _get_handle_info(
+		sid, conn.get("source_handle_id", "") as String, center, tid, pol)
+	var tgt := _get_handle_info(
+		tid, conn.get("target_handle_id", "") as String, center, sid, pol)
+	if src.is_empty() or tgt.is_empty():
+		return false
+	
+	var from: Vector2 = src["pos"]
+	var to: Vector2 = tgt["pos"]
+	if rect.has_point(from) or rect.has_point(to):
+		return true
+		
+	var wps: Array = _waypoints_screen(conn, center)
+	for wp in wps:
+		if rect.has_point(wp as Vector2):
+			return true
+			
+	var style: String = str(conn.get("line_style", "bezier"))
+	if style == "orthogonal":
+		var poly := _connection_polyline_screen(conn, center, true)
+		for i in range(poly.size() - 1):
+			if _rect_intersects_segment(rect, poly[i], poly[i+1]):
+				return true
+	elif style == "metro":
+		var poly := _connection_polyline_screen(conn, center, false)
+		for i in range(poly.size() - 1):
+			if _rect_intersects_segment(rect, poly[i], poly[i+1]):
+				return true
+	else:
+		# fallback rough check for bezier
+		if _rect_intersects_segment(rect, from, to):
+			return true
+	
+	return false
+
+func _rect_intersects_segment(rect: Rect2, p1: Vector2, p2: Vector2) -> bool:
+	if rect.has_point(p1) or rect.has_point(p2):
+		return true
+	var min_x = min(p1.x, p2.x)
+	var max_x = max(p1.x, p2.x)
+	var min_y = min(p1.y, p2.y)
+	var max_y = max(p1.y, p2.y)
+	if min_x > rect.end.x or max_x < rect.position.x or min_y > rect.end.y or max_y < rect.position.y:
+		return false
+	return true
+
+
 func _point_segment_distance(p: Vector2, a: Vector2, b: Vector2) -> float:
 	var ab := b - a
 	var len2 := ab.length_squared()
@@ -2529,15 +3387,20 @@ func _ortho_segment_hit(screen_pos: Vector2) -> Dictionary:
 	if selected_connection_id.is_empty() or model == null:
 		return {}
 	var conn := model.get_connection(selected_connection_id)
-	if conn.is_empty() or str(conn.get("line_style", "bezier")) != "orthogonal":
+	if conn.is_empty():
+		return {}
+	var style := str(conn.get("line_style", "bezier"))
+	if style != "orthogonal" and style != "metro":
 		return {}
 	var center := size * 0.5
 	var poly := _connection_polyline_screen(conn, center, false)
 	if poly.size() < 2:
 		return {}
-	const PICK_DIST := 10.0
+	var pick_dist := 10.0
+	if _touch_input_active():
+		pick_dist = maxf(pick_dist, TOUCH_SEGMENT_PICK_MIN)
 	var best_idx := -1
-	var best_dist := PICK_DIST
+	var best_dist := pick_dist
 	for i: int in range(poly.size() - 1):
 		var p0: Vector2 = poly[i]
 		var p1: Vector2 = poly[i + 1]
@@ -2806,6 +3669,16 @@ func _tangent_from_rx_ry(rx: float, ry: float) -> Vector2:
 	if rx >= 0.99:   return Vector2( 1.0,  0.0)  # right edge
 	if ry <= 0.01:   return Vector2( 0.0, -1.0)  # top edge
 	if ry >= 0.99:   return Vector2( 0.0,  1.0)  # bottom edge
+	# Interior port (not on an edge): face the nearest edge rather than always
+	# assuming RIGHT, so vertically-placed interior ports still route up/down.
+	var d_left := rx
+	var d_right := 1.0 - rx
+	var d_top := ry
+	var d_bottom := 1.0 - ry
+	var m := minf(minf(d_left, d_right), minf(d_top, d_bottom))
+	if m == d_top:      return Vector2( 0.0, -1.0)
+	if m == d_bottom:   return Vector2( 0.0,  1.0)
+	if m == d_left:     return Vector2(-1.0,  0.0)
 	return Vector2(1.0, 0.0)
 
 
@@ -2846,6 +3719,28 @@ func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 						break
 				if hit:
 					break
+		elif style == "metro":
+			var poly := PackedVector2Array()
+			if wps.size() == 0:
+				var mid_y := (from.y + to.y) * 0.5
+				poly.append(from)
+				poly.append(Vector2(from.x, mid_y))
+				poly.append(Vector2(to.x, mid_y))
+				poly.append(to)
+			else:
+				poly.append(from)
+				for wp in wps:
+					poly.append(wp as Vector2)
+				poly.append(to)
+			for i: int in range(poly.size() - 1):
+				for s: int in range(9):
+					var t: float = float(s) / 8.0
+					if _point_segment_distance(
+							screen_pos, poly[i], poly[i].lerp(poly[i + 1], t)) < PICK_DIST:
+						hit = true
+						break
+				if hit:
+					break
 		elif wps.is_empty():
 			var ctrl := _wire_bezier_controls(
 				from, src.get("tangent", Vector2.RIGHT) as Vector2, to, tgt_t_in, curve_t)
@@ -2870,13 +3765,30 @@ func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 # Drawing — top-level dispatch
 # ---------------------------------------------------------------------------
 
-## Alpha for the canvas background — driven by the graph view transparency slider.
+## Alpha for the canvas background — driven by the graph view transparency
+## slider historically; now also lowered when the live SoI preview is on.
 var canvas_bg_alpha: float = 1.0
+## When true, skip the filled SoI disc (live SubViewport shows through) and
+## only draw the ring / elevation guide.
+var soi_live_preview: bool = false
 
 func _draw() -> void:
 	_controller_reset_rects.clear()
-	draw_rect(Rect2(Vector2.ZERO, size), Color(C_CANVAS_BG.r, C_CANVAS_BG.g, C_CANVAS_BG.b, C_CANVAS_BG.a * canvas_bg_alpha))
+	_alert_seen_this_draw = false
+	# Populate the per-draw visible-items/connections cache for this whole pass
+	# (base + any V2 super._draw extension). Refreshed every draw so moves/adds
+	# show up; the model is immutable within a single draw.
+	_cached_visible_items = _compute_visible_items()
+	_cached_visible_connections = _compute_visible_connections()
+	_draw_cache_active = true
+	var fill := Color(C_CANVAS_BG.r, C_CANVAS_BG.g, C_CANVAS_BG.b, C_CANVAS_BG.a * canvas_bg_alpha)
+	if soi_live_preview:
+		_draw_canvas_fill_with_soi_hole(fill)
+	else:
+		draw_rect(Rect2(Vector2.ZERO, size), fill)
 	_draw_dot_grid()
+	_draw_soi_background()
+	_draw_unplaced_tray()
 
 	if model != null and _visible_items().size() > 0:
 		_draw_connections()
@@ -2884,6 +3796,17 @@ func _draw() -> void:
 			_render_item(item)
 		for item: Dictionary in _visible_items():
 			_draw_item_overlays(item)
+		for item2: Dictionary in _visible_items():
+			_draw_resize_handle(item2)
+	# Derive alert presence from what we actually drew, so tick() can pick a
+	# coarse animation cadence without a separate model scan. If the state just
+	# appeared, kick one redraw so the pulse cadence engages immediately.
+	if _alert_seen_this_draw and not _alert_nodes_present:
+		queue_redraw()
+	_alert_nodes_present = _alert_seen_this_draw
+	# Cache stays populated on the instance; a V2 override re-enables it for its
+	# extra passes (arrays are still valid — model can't change between passes).
+	_draw_cache_active = false
 
 	_draw_destroy_fx()
 	_draw_temp_wire()                # always on top of everything
@@ -2924,10 +3847,12 @@ func _draw_item_overlays(item: Dictionary) -> void:
 	var autos: Array = specs.get("graph_automations", []) as Array
 	if not autos.is_empty():
 		var fnt := ThemeDB.fallback_font
-		var fs := maxi(7, int(round(12.0 * _zoom)))
-		draw_string(fnt, tl + Vector2(3.0 * _zoom, float(fs) + 2.0 * _zoom),
-			"⚙", HORIZONTAL_ALIGNMENT_LEFT, -1, fs,
-			Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.85))
+		var fs_ideal := minf(12.0 * _zoom, minf(sz.x, sz.y) * 0.35)
+		if fs_ideal >= 5.0:
+			var fs := clampi(int(round(fs_ideal)), 5, 28)
+			draw_string(fnt, tl + Vector2(3.0 * _zoom, float(fs) + 2.0 * _zoom),
+				"⚙", HORIZONTAL_ALIGNMENT_LEFT, -1, fs,
+				Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.85))
 
 	if _item_flash.has(iid):
 		var t := clampf(float(_item_flash[iid]) / ITEM_FLASH_SECONDS, 0.0, 1.0)
@@ -2935,6 +3860,73 @@ func _draw_item_overlays(item: Dictionary) -> void:
 		draw_rect(Rect2(tl, sz).grow(3.0 * _zoom),
 			Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.75 * t * pulse),
 			false, maxf(1.5, 3.0 * _zoom))
+
+	# Unified node-state feedback — runs for every node in BOTH V1 and V2 (V2's
+	# _draw calls super._draw, which calls this). Draws the bold red/amber pulse,
+	# a reason chip, and procedural smoke for faults.
+	_draw_node_state_overlay(item, specs, Rect2(tl, sz))
+
+
+## Bold, type-agnostic state overlay driven by specs["node_state"]. Nominal
+## (running / idle / unset) draws nothing here — the RUNNING glow lives in the
+## body pass. Alert states get a pulsing outline + halo, a reason chip, and (for
+## faults) a rising procedural smoke plume that tracks pan/zoom every frame.
+func _draw_node_state_overlay(item: Dictionary, specs: Dictionary, rect: Rect2) -> void:
+	var state := str(specs.get("node_state", ""))
+	# Controllers flag faults via the legacy `destroyed` spec — treat that as
+	# FAULT so they gain the chip + pulse without a separate view write.
+	var destroyed := bool(specs.get("destroyed", false))
+	if destroyed and not GraphNodeState.is_alert(state):
+		state = GraphNodeState.FAULT
+	# READY is nominal: a quiet static chip only — no pulse, glow, or animation.
+	if GraphNodeState.is_ready(state):
+		var rc := GraphNodeState.state_color(state)
+		var rchip := (GraphNodeState.state_icon(state) + " "
+				+ GraphNodeState.chip_text(state)).strip_edges()
+		if not rchip.is_empty():
+			_state_badge.draw_badge(self, rect, rchip, rc, _zoom)
+		return
+	if not GraphNodeState.is_alert(state):
+		return
+	# Flag that an alert node was drawn — tick() reads _alert_nodes_present to run
+	# a coarse ~10 fps pulse cadence instead of the 20 fps interactive loop, so a
+	# faulted node no longer pins the canvas at full redraw rate while paused.
+	_alert_seen_this_draw = true
+	var col := GraphNodeState.state_color(state)
+	var pulse := 0.45 + 0.55 * absf(sin(_alert_phase * TAU))
+	var grow := maxf(3.0, 5.0 * _zoom)
+	draw_rect(rect.grow(grow * 0.6), Color(col.r, col.g, col.b, 0.16 * pulse), true)
+	draw_rect(rect.grow(grow), Color(col.r, col.g, col.b, 0.9 * pulse),
+		false, maxf(2.0, 3.0 * _zoom))
+
+	# Bespoke controller-destroy FX already renders its own smoke burst; only
+	# add the procedural plume for other faulted nodes.
+	if state == GraphNodeState.FAULT and not destroyed:
+		_draw_fault_smoke(rect)
+
+	var reason := str(specs.get("node_state_reason", ""))
+	if destroyed and reason.is_empty():
+		reason = GraphNodeState.REASON_OVERVOLTAGE
+	var kinds: Array = specs.get("node_state_kinds", []) as Array
+	var chip := (GraphNodeState.state_icon(state) + " "
+			+ GraphNodeState.chip_text(state, reason, kinds)).strip_edges()
+	if not chip.is_empty():
+		_state_badge.draw_badge(self, rect, chip, col, _zoom)
+
+
+## Continuous rising smoke plume above a faulted node. Purely procedural (no
+## spawn/aging state), so it correctly follows pan and zoom each frame.
+func _draw_fault_smoke(rect: Rect2) -> void:
+	var base := Vector2(rect.position.x + rect.size.x * 0.5, rect.position.y)
+	var puffs := 5
+	for i in puffs:
+		var ph := fmod(_alert_phase * 0.6 + float(i) / float(puffs), 1.0)
+		var rise := (16.0 + 46.0 * ph) * _zoom
+		var drift := sin((ph + float(i)) * 3.1) * 9.0 * _zoom
+		var pos := base + Vector2(drift, -rise)
+		var r := maxf(1.5, (3.5 + 9.0 * ph) * _zoom)
+		var a := (1.0 - ph) * 0.45
+		draw_circle(pos, r, Color(0.32, 0.31, 0.33, a))
 
 
 func _render_item(item: Dictionary) -> void:
@@ -2948,42 +3940,58 @@ func _render_item(item: Dictionary) -> void:
 	var is_sel: bool = (iid == selected_item_id) or selected_item_ids.has(iid)
 	var specs   := item.get("specs", {}) as Dictionary
 
+	# Site / elevation: always draw map-scaled footprints (never freeform cards —
+	# those ignored physical metres and fought zoom). Unplaced → tray chips.
+	if _is_physical_view():
+		_draw_site_plan_chip(item, Rect2(tl, sz), is_sel)
+		return
+
 	if itype in ["battery", "smartbattery", "resource"]:
 		var level: float = clampf(float(specs.get("soc", specs.get("level", 0.0))), 0.0, 1.0)
-		var scale_factor = 1.0 + (level * 0.15)
-		sz = sz_orig * scale_factor
-		tl = tl_orig - (sz - sz_orig) * 0.5
+		var do_balloon := itype != "resource" or bool(specs.get("scale_with_fill", true))
+		if do_balloon:
+			var scale_factor = 1.0 + (level * 0.15)
+			sz = sz_orig * scale_factor
+			tl = tl_orig - (sz - sz_orig) * 0.5
 		
 	var rect    := Rect2(tl, sz)
 
 	if itype in ["battery", "smartbattery", "resource"]:
 		var level: float = clampf(float(specs.get("soc", specs.get("level", 0.0))), 0.0, 1.0)
-		var alert_threshold = float(specs.get("alert_threshold_pct", 95.0)) / 100.0
-		if level >= alert_threshold:
-			var wave_count = 3
-			for w in wave_count:
-				var wave_phase = fmod(_flow_phase * 1.5 + float(w) / wave_count, 1.0)
-				var wave_expand = maxf(5.0, 30.0 * _zoom) * wave_phase
-				var wave_rect = rect.grow(wave_expand)
-				var alpha = (1.0 - wave_phase) * 0.6
-				draw_rect(wave_rect, Color(1.0, 0.2, 0.2, alpha), false, 2.0 * _zoom)
+		# Unlimited / conceptual tanks skip the near-full alert pulse.
+		if itype == "resource" and bool(specs.get("unlimited_capacity", false)):
+			pass
+		else:
+			var alert_threshold = float(specs.get("alert_threshold_pct", 95.0)) / 100.0
+			if level >= alert_threshold:
+				var wave_count = 3
+				for w in wave_count:
+					var wave_phase = fmod(_flow_phase * 1.5 + float(w) / wave_count, 1.0)
+					var wave_expand = maxf(5.0, 30.0 * _zoom) * wave_phase
+					var wave_rect = rect.grow(wave_expand)
+					var alpha = (1.0 - wave_phase) * 0.6
+					draw_rect(wave_rect, Color(1.0, 0.2, 0.2, alpha), false, 2.0 * _zoom)
 
-	# Active load highlight / blocked vibration (behind frame)
-	if itype in ["appliance", "acload", "processor"]:
+	# Active-load glow / blocked vibration (behind frame), driven by the unified
+	# node state. Blocked-family states jitter the body + red glow; RUNNING gets
+	# the green active glow. (The pulsing outline + chip come from the overlay pass.)
+	var node_state := str(specs.get("node_state", ""))
+	if GraphNodeState.is_blocked_family(node_state):
+		var offset = Vector2(randf_range(-3.0, 3.0), randf_range(-3.0, 3.0)) * _zoom
+		tl += offset
+		rect.position += offset
+		var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
+		draw_rect(glow, Color(0.9, 0.15, 0.2, 0.35), true)
+	elif node_state == GraphNodeState.RUNNING:
+		var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
+		draw_rect(glow, C_ACTIVE_LOAD_GLOW, true)
+	elif itype in ["appliance", "acload", "processor"]:
+		# Legacy fallback for load nodes not driven by the resource engine.
 		var st := str(specs.get("current_state", "")).to_lower()
 		var avg := float(specs.get("avg_watts", 0.0))
-		var tries_to_run = (st == "on" or (st.is_empty() and avg > 0.5))
-		var is_starved = bool(specs.get("is_starved", false))
-		if tries_to_run:
-			if is_starved:
-				var offset = Vector2(randf_range(-3.0, 3.0), randf_range(-3.0, 3.0)) * _zoom
-				tl += offset
-				rect.position += offset
-				var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
-				draw_rect(glow, Color(0.9, 0.15, 0.2, 0.35), true)
-			else:
-				var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
-				draw_rect(glow, C_ACTIVE_LOAD_GLOW, true)
+		if st == "on" or (st.is_empty() and avg > 0.5):
+			var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
+			draw_rect(glow, C_ACTIVE_LOAD_GLOW, true)
 
 	# Node background + border
 	if itype == "pbi":
@@ -3065,7 +4073,7 @@ func _render_item(item: Dictionary) -> void:
 func _draw_data_source_badge(rect: Rect2, specs: Dictionary) -> void:
 	var ha_live: Dictionary = (specs.get("ha_live", {}) as Dictionary)
 	var fnt   := ThemeDB.fallback_font
-	var sm := get_node_or_null("/root/SimMode")
+	var sm := _cached_autoload("/root/SimMode")
 	var icon_str: String = "💻"
 	var icon_col: Color = C_TEXT_M
 	if sm != null and not ha_live.is_empty():
@@ -3466,6 +4474,14 @@ func _draw_processor_body(rect: Rect2, specs: Dictionary) -> void:
 	if not rate_str.is_empty():
 		draw_string(fnt, Vector2(x, y), rate_str,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_M)
+	for dc_o: Variant in (specs.get("outputs", []) as Array):
+		if dc_o is Dictionary and str((dc_o as Dictionary).get("kind", "")) == "dc_electricity":
+			var dc_w: float = float(specs.get("current_output_kw", 0.0)) * 1000.0
+			draw_string(fnt, Vector2(x, y), "⚡ %.0f W" % dc_w,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, fsize + 1,
+				C_AMBER if dc_w > WIRE_DEAD_W else C_TEXT_M)
+			y += fsize + 4.0
+			break
 
 
 ## Draw a cached GLB card snapshot in the left zone of a node body.
@@ -3576,13 +4592,19 @@ func _draw_resource_body(rect: Rect2, specs: Dictionary, item: Dictionary = {}) 
 	var kind_col: Color = ResourceKinds.wire_color(kind)
 	var is_ghost: bool = bool(item.get("is_ghost", false)) or bool(specs.get("is_ghost", false))
 
-	var level: float = clampf(float(specs.get("level", 0.5)), 0.0, 1.0)
+	var raw_level: float = float(specs.get("level", 0.5))
+	var allow_negative: bool = bool(specs.get("allow_negative", false))
+	var in_deficit: bool = allow_negative and raw_level < 0.0
+	var level: float = clampf(raw_level, 0.0, 1.0)
 	var bar_w: float = inner.size.x
 	var bar_h: float = maxf(inner.size.y * 0.55, 12.0)
 	var bar_pos := Vector2(inner.position.x, inner.end.y - bar_h)
 
-	# Tank outline
-	var frame_col := kind_col if not is_ghost else Color(kind_col.r, kind_col.g, kind_col.b, 0.35)
+	# Tank outline — red when running a deficit (drawing more than it has,
+	# but never blocking the consumer — see allow_negative in resource_kinds.gd).
+	var frame_col := (UITheme.C_WARN if in_deficit else kind_col)
+	if is_ghost:
+		frame_col = Color(frame_col.r, frame_col.g, frame_col.b, 0.35)
 	draw_rect(Rect2(bar_pos, Vector2(bar_w, bar_h)), Color(0.10, 0.12, 0.20, 0.92))
 	draw_rect(Rect2(bar_pos, Vector2(bar_w, bar_h)), frame_col, false, 1.2)
 
@@ -3597,13 +4619,22 @@ func _draw_resource_body(rect: Rect2, specs: Dictionary, item: Dictionary = {}) 
 	draw_string(fnt, Vector2(inner.position.x, inner.position.y + fsize),
 		name_, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_S if not is_ghost else C_TEXT_M)
 
-	var pct_str := "%.0f%%" % (level * 100.0)
+	var unlimited: bool = bool(specs.get("unlimited_capacity", false))
+	var pct_str := "⚠" if in_deficit else ("∞" if unlimited else ("%.0f%%" % (level * 100.0)))
+	var pct_col := UITheme.C_WARN if in_deficit else Color(1, 1, 1, 0.92 if not is_ghost else 0.5)
 	draw_string(fnt, Vector2(bar_pos.x + bar_w * 0.5 - fsize, bar_pos.y + bar_h * 0.5 + fsize * 0.35),
-		pct_str, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize + 1, Color(1, 1, 1, 0.92 if not is_ghost else 0.5))
+		pct_str, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize + 1, pct_col)
 
 	var cap_qty: float = float(specs.get("capacity_qty", 0.0))
 	var cap_unit: String = str(specs.get("capacity_unit", ResourceKinds.default_unit(kind)))
-	if cap_qty > 0.0:
+	if in_deficit:
+		var deficit_str := "Deficit: %.0f %s" % [float(specs.get("deficit_qty", -raw_level * cap_qty)), cap_unit]
+		draw_string(fnt, Vector2(inner.position.x, bar_pos.y - 3.0),
+			deficit_str, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, UITheme.C_WARN)
+	elif unlimited:
+		draw_string(fnt, Vector2(inner.position.x, bar_pos.y - 3.0),
+			"No capacity limit", HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
+	elif cap_qty > 0.0:
 		var qty_str := "%.0f / %.0f %s" % [level * cap_qty, cap_qty, cap_unit]
 		draw_string(fnt, Vector2(inner.position.x, bar_pos.y - 3.0),
 			qty_str, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
@@ -3768,30 +4799,531 @@ func _draw_port_dot(screen_pos: Vector2, polarity: String, resource_kind: String
 # ---------------------------------------------------------------------------
 
 func _draw_dot_grid() -> void:
-	var step  := 40.0 * _zoom
+	# Floor the on-screen spacing: at low zoom `40*_zoom` shrinks toward a few
+	# pixels, turning this into tens of thousands of draw_circle calls across the
+	# viewport (quadratic in 1/zoom). The grid is decorative, so cap the density.
+	var step  := maxf(40.0 * _zoom, 26.0)
 	var off   := Vector2(fposmod(_pan.x, step), fposmod(_pan.y, step))
 	var dot_c := Color(0.133, 0.827, 0.933, 0.07 * canvas_bg_alpha)
+	var hole_r2 := 0.0
+	var hole_o := Vector2.ZERO
+	if soi_live_preview:
+		var soi_svc := _cached_autoload("/root/SoiService")
+		var r_m := 150.0
+		if soi_svc != null and soi_svc.has_method("radius_m"):
+			r_m = float(soi_svc.call("radius_m"))
+		var r_px := r_m * GraphSiteLayout.SOI_PX_PER_M * _zoom
+		hole_r2 = r_px * r_px
+		hole_o = size * 0.5 + _pan
 	var x     := off.x
 	while x < size.x:
 		var y := off.y
 		while y < size.y:
-			draw_circle(Vector2(x, y), 1.0, dot_c)
+			if hole_r2 <= 0.0 or Vector2(x, y).distance_squared_to(hole_o) > hole_r2:
+				draw_circle(Vector2(x, y), 1.0, dot_c)
 			y += step
 		x += step
+
+
+## Opaque canvas fill everywhere except the SoI disc (live SubViewport shows).
+func _draw_canvas_fill_with_soi_hole(fill: Color) -> void:
+	var soi_svc := _cached_autoload("/root/SoiService")
+	var r_m := 150.0
+	if soi_svc != null and soi_svc.has_method("radius_m"):
+		r_m = float(soi_svc.call("radius_m"))
+	var r_px := r_m * GraphSiteLayout.SOI_PX_PER_M * _zoom
+	var origin := size * 0.5 + _pan
+	var left := origin.x - r_px
+	var right := origin.x + r_px
+	var top := origin.y - r_px
+	var bottom := origin.y + r_px
+	# Four rectangles around the bounding square of the disc.
+	if top > 0.0:
+		draw_rect(Rect2(0.0, 0.0, size.x, clampf(top, 0.0, size.y)), fill)
+	if bottom < size.y:
+		draw_rect(Rect2(0.0, maxf(bottom, 0.0), size.x, size.y - maxf(bottom, 0.0)), fill)
+	var mid_top := clampf(top, 0.0, size.y)
+	var mid_h := clampf(bottom, 0.0, size.y) - mid_top
+	if mid_h > 0.0:
+		if left > 0.0:
+			draw_rect(Rect2(0.0, mid_top, clampf(left, 0.0, size.x), mid_h), fill)
+		if right < size.x:
+			draw_rect(Rect2(maxf(right, 0.0), mid_top, size.x - maxf(right, 0.0), mid_h), fill)
+	# Square corners outside the circle (four quadrant fans).
+	var segs := 10
+	var corners := [
+		Vector2(origin.x + r_px, origin.y - r_px), # NE, arc -PI/2 → 0
+		Vector2(origin.x + r_px, origin.y + r_px), # SE, arc 0 → PI/2
+		Vector2(origin.x - r_px, origin.y + r_px), # SW, arc PI/2 → PI
+		Vector2(origin.x - r_px, origin.y - r_px), # NW, arc PI → 3PI/2
+	]
+	var a0s := [-PI * 0.5, 0.0, PI * 0.5, PI]
+	for q in range(4):
+		var corner: Vector2 = corners[q]
+		var a0: float = a0s[q]
+		for i in range(segs):
+			var t0 := a0 + (PI * 0.5) * (float(i) / float(segs))
+			var t1 := a0 + (PI * 0.5) * (float(i + 1) / float(segs))
+			var p0 := origin + Vector2(cos(t0), sin(t0)) * r_px
+			var p1 := origin + Vector2(cos(t1), sin(t1)) * r_px
+			draw_colored_polygon(PackedVector2Array([corner, p0, p1]), fill)
+
+
+func _draw_soi_background() -> void:
+	var soi_svc := _cached_autoload("/root/SoiService")
+	var r_m := 150.0
+	if soi_svc != null and soi_svc.has_method("radius_m"):
+		r_m = soi_svc.radius_m()
+	
+	# Mapping radius in meters to graph coordinates (keep in sync with
+	# GraphSiteLayout.SOI_PX_PER_M).
+	var r_px := r_m * GraphSiteLayout.SOI_PX_PER_M * _zoom
+	var origin := size * 0.5 + _pan
+
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		_draw_elevation_section(origin, r_px, r_m, soi_svc)
+		return
+	
+	# When live SoI preview is on, leave the disc clear so the SubViewport
+	# shows through; keep a thin ring as a graph-coordinate reference.
+	if soi_live_preview:
+		var ring_col := Color(0.2, 0.75, 1.0, 0.55)
+		draw_arc(origin, r_px, 0.0, TAU, 96, ring_col, maxf(2.0, 2.5 * _zoom), true)
+		draw_line(Vector2(origin.x - r_px, origin.y), Vector2(origin.x + r_px, origin.y),
+				Color(1.0, 1.0, 1.0, 0.12), 1.0)
+		return
+
+	var ring_col2 := Color(0.2, 0.6, 0.9, 0.15)
+	draw_circle(origin, r_px, Color(0.05, 0.1, 0.15, 0.2))
+	draw_arc(origin, r_px, 0.0, TAU, 64, ring_col2, 4.0 * _zoom, true)
+	
+	# Decorative elevation slice (freeform only) — real profile is elevation view.
+	var line_pts := PackedVector2Array()
+	var segments := 32
+	var width_px := r_px * 2.0
+	for i in range(segments + 1):
+		var t := float(i) / float(segments)
+		var lx := origin.x - r_px + width_px * t
+		var elev_offset := sin(t * PI * 3.0) * 20.0 * _zoom + cos(t * PI * 7.0) * 10.0 * _zoom
+		line_pts.append(Vector2(lx, origin.y - elev_offset))
+	
+	if line_pts.size() > 1:
+		_draw_polyline_stroke(line_pts, Color(0.4, 0.8, 0.5, 0.3), 2.0 * _zoom)
+		draw_line(Vector2(origin.x - r_px, origin.y), Vector2(origin.x + r_px, origin.y), Color(1.0, 1.0, 1.0, 0.1), 1.0)
+
+
+func _draw_elevation_section(origin: Vector2, r_px: float, r_m: float, soi_svc: Node) -> void:
+	# Contained in the SoI disc. When the 3D section backdrop is live, leave the
+	# fill clear so sky / buildings show through; keep ring + terrain profile.
+	if not soi_live_preview:
+		draw_circle(origin, r_px, Color(0.04, 0.07, 0.12, 0.82))
+	var ring_col := Color(0.2, 0.75, 1.0, 0.55)
+	draw_arc(origin, r_px, 0.0, TAU, 96, ring_col, maxf(2.0, 2.5 * _zoom), true)
+
+	var heading_deg := rad_to_deg(elevation_heading_rad)
+	var fnt := ThemeDB.fallback_font
+	var mode_tag := " · 3D" if soi_live_preview else ""
+	# Label just above the disc so it isn't clipped oddly near the rim.
+	draw_string(fnt, origin + Vector2(-r_px + 6.0, -r_px - 6.0),
+			"Elevation · heading %.0f° · %d× vert%s  (Shift+drag rotate)" % [
+				heading_deg, int(elevation_exaggeration), mode_tag],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.65, 0.85, 1.0, 0.85))
+
+	var center3 := Vector3.ZERO
+	if soi_svc != null and soi_svc.has_method("world_center"):
+		center3 = soi_svc.call("world_center") as Vector3
+	var datum := center3.y
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var samples := 128
+	var line_pts := PackedVector2Array()
+	var along_dir := Vector2(cos(elevation_heading_rad), sin(elevation_heading_rad))
+	for i in range(samples + 1):
+		var t := float(i) / float(samples)
+		var along := lerpf(-r_m, r_m, t)
+		var site := along_dir * along
+		var world := GraphSiteLayout.site_to_world_xz(site, center3)
+		var gy := datum
+		if soi_svc != null and soi_svc.has_method("ground_y_at"):
+			gy = float(soi_svc.call("ground_y_at", world.x, world.y))
+		var sx := origin.x + along * s
+		var sy := origin.y - (gy - datum) * s * elevation_exaggeration
+		# Keep the profile inside the disc (soft radial clamp to rim chord).
+		var dx := sx - origin.x
+		var max_dy := sqrt(maxf(r_px * r_px - dx * dx, 0.0))
+		sy = clampf(sy, origin.y - max_dy, origin.y + max_dy)
+		line_pts.append(Vector2(sx, sy))
+
+	# Horizontal datum chord across the disc.
+	draw_line(Vector2(origin.x - r_px, origin.y), Vector2(origin.x + r_px, origin.y),
+			Color(1.0, 1.0, 1.0, 0.18), 1.0)
+
+	if line_pts.size() > 1:
+		if not soi_live_preview:
+			# Fill under the profile, closed along the lower disc rim.
+			var fill := PackedVector2Array()
+			for p in line_pts:
+				fill.append(p)
+			# Walk the lower semicircle from right → left.
+			var rim_segs := 48
+			for i in range(rim_segs + 1):
+				var a := lerpf(0.0, PI, float(i) / float(rim_segs))
+				fill.append(origin + Vector2(cos(a), sin(a)) * r_px)
+			if fill.size() >= 3:
+				draw_colored_polygon(fill, Color(0.18, 0.42, 0.28, 0.55))
+		_draw_polyline_stroke(line_pts, Color(0.45, 0.95, 0.65, 0.95), maxf(2.0, 2.5 * _zoom))
+
+
+
+# ---------------------------------------------------------------------------
+# Metro Style Routing
+# ---------------------------------------------------------------------------
+
+func _draw_wire_metro_path(pts: Array, tangents: Array, col: Color, width: float, flowing: bool, rate: float, reverse: bool, conn: Dictionary) -> void:
+	# Metro path consists of rectilinear segments and 45-degree chamfers.
+	var draw_pts := PackedVector2Array()
+	var src_p := pts[0] as Vector2
+	var tgt_p := pts[-1] as Vector2
+	
+	if pts.size() == 2:
+		# Auto-route honoring the actual port sides (tangents), so a metro track
+		# exits/enters along the port stub instead of always assuming top/bottom
+		# ports. src tangent points outward from the source port; tgt tangent is
+		# the incoming travel direction at the target port.
+		var src_t := Vector2(0.0, 1.0)
+		var tgt_t_in := Vector2(0.0, 1.0)
+		if tangents.size() > 0:
+			src_t = tangents[0] as Vector2
+		if tangents.size() > 1:
+			tgt_t_in = tangents[1] as Vector2
+		var src_horiz := absf(src_t.x) >= absf(src_t.y)
+		var tgt_horiz := absf(tgt_t_in.x) >= absf(tgt_t_in.y)
+		var mid_x := (src_p.x + tgt_p.x) * 0.5
+		var mid_y := (src_p.y + tgt_p.y) * 0.5
+		draw_pts.append(src_p)
+		if src_horiz and tgt_horiz:
+			# Both ports face sideways: Z with the cross-leg vertical at mid_x.
+			draw_pts.append(Vector2(mid_x, src_p.y))
+			draw_pts.append(Vector2(mid_x, tgt_p.y))
+		elif not src_horiz and not tgt_horiz:
+			# Both ports face up/down: Z with the cross-leg horizontal at mid_y.
+			draw_pts.append(Vector2(src_p.x, mid_y))
+			draw_pts.append(Vector2(tgt_p.x, mid_y))
+		elif src_horiz:
+			# L-route: horizontal stub out, then drop vertically into the target.
+			draw_pts.append(Vector2(tgt_p.x, src_p.y))
+		else:
+			# L-route: vertical stub out, then across horizontally into the target.
+			draw_pts.append(Vector2(src_p.x, tgt_p.y))
+		draw_pts.append(tgt_p)
+	else:
+		for p in pts:
+			draw_pts.append(p as Vector2)
+	
+	# Apply 45-degree corner break (chamfering) using corner radius
+	var r := float(conn.get("corner_radius", 28.0)) * _zoom
+	var final_pts := PackedVector2Array()
+	if draw_pts.size() >= 2:
+		final_pts.append(draw_pts[0])
+		for i in range(1, draw_pts.size() - 1):
+			var prev := draw_pts[i-1]
+			var cur := draw_pts[i]
+			var nxt := draw_pts[i+1]
+			var v1 := prev - cur
+			var v2 := nxt - cur
+			var len1 := v1.length()
+			var len2 := v2.length()
+			if len1 > 0.001 and len2 > 0.001:
+				var limit := minf(len1 * 0.5, len2 * 0.5)
+				var d := minf(r, limit)
+				if d > 0.001:
+					var c1 := cur + v1.normalized() * d
+					var c2 := cur + v2.normalized() * d
+					final_pts.append(c1)
+					final_pts.append(c2)
+				else:
+					final_pts.append(cur)
+			else:
+				final_pts.append(cur)
+		final_pts.append(draw_pts[-1])
+	else:
+		final_pts = draw_pts
+	
+	# Draw the thick track
+	var track_col := Color(col.r, col.g, col.b, 0.8)
+	var base_w := 15.0 * _zoom
+	var c_thick = float(conn.get("thickness_override", 0.0))
+	if c_thick > 0.1:
+		base_w = c_thick * _zoom
+	var track_w := base_w
+	
+	# Apply Sankey scaling if configured
+	if bool(conn.get("sankey_scale", true)):
+		# Scale width based on flow rate, assuming `base_w` is a base/default
+		var sankey_factor := clampf(rate / 500.0, 0.5, 4.0)
+		track_w = base_w * sankey_factor
+
+	# Draw segments
+	for i in range(final_pts.size() - 1):
+		var p1 := final_pts[i]
+		var p2 := final_pts[i+1]
+		draw_line(p1, p2, track_col, track_w)
+		draw_circle(p2, track_w * 0.5, track_col)
+	
+	if final_pts.size() > 0:
+		draw_circle(final_pts[0], track_w * 0.5, track_col)
+	
+	# Flow animation
+	if flowing:
+		var c2 := Color(1.0, 1.0, 1.0, 0.6)
+		_draw_polyline_chase(final_pts, c2, maxf(2.0, track_w * 0.3), rate, reverse)
+	
+	# Draw stations (waypoints)
+	if pts.size() > 2:
+		for i in range(1, pts.size() - 1):
+			var wp := pts[i] as Vector2
+			draw_circle(wp, track_w * 0.8, Color.WHITE)
+			draw_circle(wp, track_w * 0.5, track_col)
 
 
 # ---------------------------------------------------------------------------
 # Coordinate helpers
 # ---------------------------------------------------------------------------
 
+func _disc_origin_screen() -> Vector2:
+	return size * 0.5 + _pan
+
+
+func _is_physical_view() -> bool:
+	return view_mode == GraphSiteLayout.VIEW_SITE \
+			or view_mode == GraphSiteLayout.VIEW_ELEVATION
+
+
 func _item_screen_tl(item: Dictionary, center: Vector2) -> Vector2:
+	if view_mode == GraphSiteLayout.VIEW_SITE and GraphSiteLayout.has_site_coords(item):
+		return GraphSiteLayout.site_item_screen_tl(item, _disc_origin_screen(), _zoom)
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION and GraphSiteLayout.has_site_coords(item):
+		return _elevation_item_screen_tl(item)
+	if view_mode != GraphSiteLayout.VIEW_FREEFORM and not GraphSiteLayout.has_site_coords(item):
+		# Unplaced items sit in the tray (handled by _unplaced_tray_rect).
+		var idx := _unplaced_index(item)
+		if idx >= 0:
+			return _unplaced_slot_tl(idx)
 	return center + _pan + Vector2(float(item.get("x", 0.0)),
 		float(item.get("y", 0.0))) * _zoom
 
 
 func _item_screen_size(item: Dictionary) -> Vector2:
+	if view_mode == GraphSiteLayout.VIEW_SITE and GraphSiteLayout.has_site_coords(item):
+		return GraphSiteLayout.site_item_screen_size(item, _zoom)
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION and GraphSiteLayout.has_site_coords(item):
+		var fp := GraphSiteLayout.physical_footprint_m(item)
+		var s := GraphSiteLayout.px_per_m(_zoom)
+		# Depth along the section for width; height from a short elevation band.
+		return Vector2(maxf(maxf(fp.x, fp.y) * s, 0.5), maxf(maxf(fp.y, 1.0) * s * 0.35, 0.5))
+	if view_mode != GraphSiteLayout.VIEW_FREEFORM and not GraphSiteLayout.has_site_coords(item):
+		# Tray chips: scale with zoom like the rest of the map (no inverse floor).
+		return Vector2(72.0, 36.0) * maxf(_zoom, 0.15)
 	return Vector2(float(item.get("width", 120.0)),
 		float(item.get("height", 90.0))) * _zoom
+
+
+## Hit/pick rect — physical views enlarge tiny footprints for usability.
+func _item_hit_rect(item: Dictionary) -> Rect2:
+	var center := size * 0.5
+	if view_mode == GraphSiteLayout.VIEW_SITE and GraphSiteLayout.has_site_coords(item):
+		return GraphSiteLayout.site_item_hit_rect(item, _disc_origin_screen(), _zoom)
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION and GraphSiteLayout.has_site_coords(item):
+		var tl := _elevation_item_screen_tl(item)
+		var draw_sz := _item_screen_size(item)
+		var hit_sz := Vector2(
+			maxf(draw_sz.x, GraphSiteLayout.MIN_SITE_HIT_PX),
+			maxf(draw_sz.y, GraphSiteLayout.MIN_SITE_HIT_PX * 0.55))
+		var c := tl + draw_sz * 0.5
+		return Rect2(c - hit_sz * 0.5, hit_sz)
+	var tl2 := _item_screen_tl(item, center)
+	var sz2 := _item_screen_size(item)
+	return Rect2(tl2, sz2)
+
+
+func _elevation_item_screen_tl(item: Dictionary) -> Vector2:
+	var origin := _disc_origin_screen()
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var site := GraphSiteLayout.site_xz(item)
+	var proj := GraphSiteLayout.project_onto_section(site, elevation_heading_rad)
+	var elev_m := _elevation_m_for_item(item)
+	var datum := _elevation_datum_m()
+	var sz := _item_screen_size(item)
+	var cx := origin.x + proj.x * s
+	var cy := origin.y - (elev_m - datum) * s * elevation_exaggeration
+	return Vector2(cx, cy) - sz * 0.5
+
+
+func _elevation_datum_m() -> float:
+	var soi := _cached_autoload("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		return float((soi.call("world_center") as Vector3).y)
+	return 0.0
+
+
+func _elevation_m_for_item(item: Dictionary) -> float:
+	if item.has("elevation_m"):
+		return float(item.get("elevation_m", 0.0))
+	# Fall back to SoI center Y until refreshed by the view.
+	return _elevation_datum_m()
+
+
+func _unplaced_items() -> Array:
+	var out: Array = []
+	if not _is_physical_view() or model == null:
+		return out
+	for item: Dictionary in _visible_items():
+		if not GraphSiteLayout.has_site_coords(item):
+			out.append(item)
+	return out
+
+
+func _unplaced_index(item: Dictionary) -> int:
+	var iid := str(item.get("id", ""))
+	var list := _unplaced_items()
+	for i in list.size():
+		if str((list[i] as Dictionary).get("id", "")) == iid:
+			return i
+	return -1
+
+
+func _unplaced_tray_rect() -> Rect2:
+	var h := 48.0
+	return Rect2(8.0, size.y - h - 8.0, maxf(size.x - 16.0, 40.0), h)
+
+
+func _unplaced_slot_tl(idx: int) -> Vector2:
+	var tray := _unplaced_tray_rect()
+	return Vector2(tray.position.x + 8.0 + float(idx) * 80.0, tray.position.y + 6.0)
+
+
+func _draw_unplaced_tray() -> void:
+	if not _is_physical_view():
+		return
+	var list := _unplaced_items()
+	var tray := _unplaced_tray_rect()
+	draw_rect(tray, Color(0.06, 0.09, 0.16, 0.92), true)
+	draw_rect(tray, Color(0.25, 0.55, 0.85, 0.55), false, 1.5)
+	var fnt := ThemeDB.fallback_font
+	var label := "Unplaced (%d) — drag onto SoI disc" % list.size()
+	draw_string(fnt, tray.position + Vector2(10.0, -4.0), label,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.7, 0.85, 1.0, 0.85))
+
+
+## Graph-space disc matching `_draw_soi_background` (origin + radius_px).
+func get_soi_disc_layout() -> Dictionary:
+	var soi_svc := _cached_autoload("/root/SoiService")
+	var r_m := 150.0
+	if soi_svc != null and soi_svc.has_method("radius_m"):
+		r_m = float(soi_svc.call("radius_m"))
+	var r_px := r_m * GraphSiteLayout.SOI_PX_PER_M * _zoom
+	return {
+		"origin": size * 0.5 + _pan,
+		"radius_px": r_px,
+		"radius_m": r_m,
+	}
+
+
+func _draw_site_plan_chip(item: Dictionary, rect: Rect2, is_sel: bool) -> void:
+	var itype := str(item.get("type", ""))
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var border := NODE_BORDER_COLORS.get(itype, C_BORDER) as Color
+	if is_sel:
+		border = C_SELECTED_BORDER
+	var fill := Color(0.09, 0.14, 0.22, 0.92)
+	var min_side := minf(rect.size.x, rect.size.y)
+	# Stroke scales with footprint so a 2 px panel isn't buried under a 4 px border.
+	var stroke := clampf(min_side * 0.12, 0.75, maxf(1.25, 2.0 * _zoom))
+	var c := rect.get_center()
+	# Locator ring when the true footprint is smaller than the pick pad — shows
+	# where to click without inflating the filled area away from the map.
+	if GraphSiteLayout.has_site_coords(item) and min_side < GraphSiteLayout.MIN_SITE_HIT_PX * 0.85:
+		var loc_r := GraphSiteLayout.MIN_SITE_HIT_PX * 0.5
+		var loc_a := 0.55 if is_sel else 0.28
+		draw_arc(c, loc_r, 0.0, TAU, 28,
+				Color(border.r, border.g, border.b, loc_a), 1.0, true)
+	if GraphSiteLayout.uses_circular_plan_chip(item):
+		var r := maxf(min_side * 0.5, 0.5)
+		draw_circle(c, r, fill)
+		draw_arc(c, r, 0.0, TAU, 32, border, stroke, true)
+	else:
+		draw_rect(rect, fill, true)
+		draw_rect(rect, border, false, stroke)
+		# Solar-array packs: light module grid so the footprint reads as panels.
+		if itype == "compound" \
+				and str(specs.get("compound_kind", "")) == "array" \
+				and rect.size.x >= 10.0 and rect.size.y >= 8.0:
+			_draw_site_array_grid(rect, specs, border)
+	var title := _site_plan_chip_title(item, specs, itype)
+	_draw_site_plan_chip_label(rect, title, is_sel)
+
+
+## Title inside (or floating beside) a site-plan footprint — sized from the chip
+## metres×zoom; no fixed screen-px floor that fights the map when zooming.
+func _draw_site_plan_chip_label(rect: Rect2, title: String, is_sel: bool) -> void:
+	if title.is_empty():
+		return
+	var fnt := ThemeDB.fallback_font
+	var min_side := minf(rect.size.x, rect.size.y)
+	var c := rect.get_center()
+	# Design ~11 graph-px × zoom, capped so it stays inside the footprint.
+	var ideal := minf(11.0 * _zoom, min_side * 0.30)
+	ideal = minf(ideal, rect.size.x * 0.14)
+	var fsize := clampi(int(round(ideal)), 1, 36)
+	var pad := maxf(1.0, 3.0 * _zoom)
+	if fsize >= 5 and rect.size.x >= float(fsize) * 2.5:
+		var shown := GraphNodeLabel.ellipsis(fnt, title, maxf(rect.size.x - pad * 2.0, 4.0), fsize)
+		var ts := fnt.get_string_size(shown, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize)
+		# Centered in the chip so it stays locked when zooming.
+		draw_string(fnt, Vector2(c.x - ts.x * 0.5, c.y + float(fsize) * 0.35),
+				shown, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.9, 0.95, 1.0, 0.95))
+		return
+	# Too small to fit inside — selected only: callout scaled with zoom.
+	if not is_sel:
+		return
+	var call_ideal := maxf(8.0 * _zoom, ideal * 1.4)
+	if call_ideal < 5.0:
+		return
+	var call_fs := clampi(int(round(call_ideal)), 5, 14)
+	var z := maxf(_zoom, 0.05)
+	var call_off := Vector2(
+		maxf(rect.size.x * 0.5, 6.0 * z) + 4.0 * z,
+		-6.0 * z)
+	draw_string(fnt, c + call_off, title,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, call_fs, Color(0.95, 0.98, 1.0, 0.95))
+
+
+func _site_plan_chip_title(item: Dictionary, specs: Dictionary, itype: String) -> String:
+	if itype == "compound" and str(specs.get("compound_kind", "")) == "array":
+		var n := int(specs.get("array_panel_units", specs.get("child_count", 0)))
+		if n > 0:
+			return "Array · %d" % n
+		return "Solar Array"
+	return str(specs.get("name", itype.capitalize()))
+
+
+func _draw_site_array_grid(rect: Rect2, specs: Dictionary, accent: Color) -> void:
+	var grid: Vector2i = GraphArrayLayout.grid_dims(specs)
+	var cols := maxi(grid.x, 1)
+	var rows := maxi(grid.y, 1)
+	var pad := maxf(1.0, minf(rect.size.x, rect.size.y) * 0.06)
+	var gap := maxf(0.5, pad * 0.35)
+	var cell_w := (rect.size.x - pad * 2.0 - gap * float(maxi(cols - 1, 0))) / float(cols)
+	var cell_h := (rect.size.y - pad * 2.0 - gap * float(maxi(rows - 1, 0))) / float(rows)
+	if cell_w < 2.0 or cell_h < 2.0:
+		return
+	var origin := rect.position + Vector2(pad, pad)
+	for r in range(rows):
+		for c in range(cols):
+			var cell := Rect2(
+				origin + Vector2(float(c) * (cell_w + gap), float(r) * (cell_h + gap)),
+				Vector2(cell_w, cell_h))
+			draw_rect(cell, Color(0.05, 0.16, 0.28, 0.85), true)
+			draw_rect(cell, Color(accent.r, accent.g, accent.b, 0.45), false, 0.8)
 
 
 func _type_title(itype: String, specs: Dictionary) -> String:

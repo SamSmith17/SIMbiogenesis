@@ -16,11 +16,16 @@ global uniform vec4 soi_center_radius;
 global uniform float soi_clip_enabled;
 global uniform float soi_ground_y;
 global uniform float soi_water_table_m;
+/// When 0, above-ground glass is discarded so sky/clouds show (Elevation section
+/// / Site Plan). Below-ground soil cutaway still draws.
+uniform float glass_enabled = 1.0;
 
 varying vec3 v_world_pos;
+varying float v_terrain_y;
 
 void vertex() {
 	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	v_terrain_y = UV2.x;
 }
 
 float hash2(vec2 p) {
@@ -46,9 +51,14 @@ void fragment() {
 	float ndv = clamp(dot(normalize(nrm), normalize(VIEW)), 0.0, 1.0);
 	float fresnel = pow(1.0 - ndv, 4.0);
 
-	float surface_y = soi_ground_y;
+	float surface_y = v_terrain_y;
 	if (v_world_pos.y > surface_y - 0.05) {
 		// ---- Above ground: glass "bubble" shell (the snowglobe dome) ----
+		// Elevation-section / top-down previews turn this off — otherwise the
+		// Fresnel + UV seam paints a dark bullseye over the sky.
+		if (glass_enabled < 0.5) {
+			discard;
+		}
 		// Nearly invisible face-on, brightening to a soft bluish-white rim at
 		// grazing angles (the classic cheap thin-glass fresnel look). Low
 		// roughness + a touch of metallic gives the sun/sky a real specular

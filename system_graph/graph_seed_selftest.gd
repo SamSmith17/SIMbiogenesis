@@ -4,6 +4,7 @@ extends SceneTree
 
 const GraphModelScript := preload("res://system_graph/data/graph_model.gd")
 const SolarBridgeScript := preload("res://system_graph/solar_bridge.gd")
+const PuzzleStarterScript := preload("res://system_graph/puzzle_starter_graph_seeder.gd")
 
 
 func _initialize() -> void:
@@ -12,8 +13,9 @@ func _initialize() -> void:
 	fails += _test_bridge_no_autoseed()
 	fails += _test_starshade_idempotent()
 	fails += _test_aggregate_sync()
+	fails += _test_puzzle_starter_idempotent()
 	if fails == 0:
-		print("GRAPH SEED SELFTEST PASS  (4 checks)")
+		print("GRAPH SEED SELFTEST PASS  (5 checks)")
 	else:
 		print("GRAPH SEED SELFTEST FAIL  (%d failed)" % fails)
 	quit()
@@ -115,5 +117,26 @@ func _test_aggregate_sync() -> int:
 		return 1
 	if absf(StarShadeGraphSeeder.total_battery_kwh(model) - 5.12) > 0.01:
 		push_error("aggregate sync: expected 5.12 kWh bank got %.2f" % StarShadeGraphSeeder.total_battery_kwh(model))
+		return 1
+	return 0
+
+
+func _test_puzzle_starter_idempotent() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	if not PuzzleStarterScript.seed_graph(model, 1):
+		push_error("puzzle starter: first seed failed")
+		return 1
+	var first_count: int = model.items.size()
+	if not PuzzleStarterScript.has_starter_content(model):
+		push_error("puzzle starter: missing starter content after seed")
+		return 1
+	if not PuzzleStarterScript.has_habitat(model):
+		push_error("puzzle starter: missing habitat after seed")
+		return 1
+	if PuzzleStarterScript.seed_graph(model, 1):
+		push_error("puzzle starter: second seed should be skipped")
+		return 1
+	if model.items.size() != first_count:
+		push_error("puzzle starter: item count changed on re-seed")
 		return 1
 	return 0

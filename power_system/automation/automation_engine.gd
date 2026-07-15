@@ -63,8 +63,10 @@ func _process(delta: float) -> void:
 		if automation != null and automation.enabled:
 			var triggered := automation.evaluate(_context)
 			if triggered:
-				# Signal was declared but never emitted — UI consumers (graph
-				# node flash, badges) rely on it now.
+				# Single emission site for automation_triggered — fires on every
+				# successful evaluate() (incl. empty-action automations, which do
+				# not emit Automation.triggered). Do NOT also re-emit from the
+				# per-automation `triggered` signal or the node flashes twice.
 				automation_triggered.emit(automation_id)
 
 func _update_context() -> void:
@@ -148,6 +150,17 @@ func _update_context() -> void:
 			# Total AC output in watts for overload-style numeric triggers
 			numeric_values["sensor.total_ac_load"] = solar_ui.current_load_kw * 1000.0
 
+	# Graph resource state (tank levels %, starvation, overflow) so automations
+	# can react to the resource sim — e.g. "tank.water.level < 20 → turn off pump".
+	var graph_view : Node = _find_node_in_tree("SystemGraphView")
+	if graph_view != null and is_instance_valid(graph_view) \
+			and graph_view.has_method("get_automation_resource_context"):
+		var gctx : Dictionary = graph_view.call("get_automation_resource_context")
+		for k in (gctx.get("numeric_values", {}) as Dictionary):
+			numeric_values[k] = gctx["numeric_values"][k]
+		for k in (gctx.get("device_states", {}) as Dictionary):
+			device_states[k] = gctx["device_states"][k]
+
 func _find_main_node() -> Node:
 	var tree := get_tree()
 	if tree == null:
@@ -219,9 +232,9 @@ func register_automation(automation: Automation) -> void:
 	
 	_automations[automation_id] = automation
 	
-	# Connect signals
-	if not automation.triggered.is_connected(_on_automation_triggered):
-		automation.triggered.connect(_on_automation_triggered)
+	# Connect signals. NOTE: automation.triggered is intentionally NOT bridged to
+	# automation_triggered here — _process() is the single emission site (see
+	# above). Bridging both caused a double node-flash.
 	if not automation.actions_completed.is_connected(_on_automation_completed):
 		automation.actions_completed.connect(_on_automation_completed)
 	
@@ -235,8 +248,6 @@ func unregister_automation(automation_id: String) -> void:
 	
 	var automation : Automation = _automations[automation_id]
 	if automation != null:
-		if automation.triggered.is_connected(_on_automation_triggered):
-			automation.triggered.disconnect(_on_automation_triggered)
 		if automation.actions_completed.is_connected(_on_automation_completed):
 			automation.actions_completed.disconnect(_on_automation_completed)
 	
@@ -374,9 +385,6 @@ func export_automation_to_ha_yaml(automation_id: String) -> String:
 	return automation.to_ha_yaml()
 
 # ==================== SIGNAL HANDLERS ====================
-
-func _on_automation_triggered(automation_id: String) -> void:
-	automation_triggered.emit(automation_id)
 
 func _on_automation_completed(automation_id: String, success: bool) -> void:
 	automation_completed.emit(automation_id, success)

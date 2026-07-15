@@ -46,6 +46,21 @@ static func add_one(terrain: Node3D, rec: Dictionary,
 	return prop
 
 
+static func find_by_prop_id(main: Node, prop_id: String) -> PlacedProp:
+	if main == null or prop_id.is_empty():
+		return null
+	var terrain := main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return null
+	var root := terrain.get_node_or_null("PlacedProps")
+	if root == null:
+		return null
+	for child in root.get_children():
+		if child is PlacedProp and str((child as PlacedProp).prop_id) == prop_id:
+			return child as PlacedProp
+	return null
+
+
 static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	var model_id := str(rec.get("model_id", ""))
 	if model_id.is_empty():
@@ -68,6 +83,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	_maybe_attach_wind_spin(prop, rec)
 	var prop_id := str(rec.get("id", ""))
 	if PlacedPropService.is_placement_active() and prop_id == PlacedPropService.placement_prop_id():
+		prop.set_collision_enabled(false)
+	elif not bool(rec.get("collision_enabled", true)):
 		prop.set_collision_enabled(false)
 	return prop
 
@@ -93,6 +110,8 @@ static func apply_record_to_prop(prop: PlacedProp, rec: Dictionary,
 		return
 	_apply_transform(prop, model, rec, ground_y_at)
 	prop.setup_collision()
+	if not bool(rec.get("collision_enabled", true)):
+		prop.set_collision_enabled(false)
 
 
 static func _apply_transform(_prop: PlacedProp, model: Node3D, rec: Dictionary,
@@ -110,7 +129,10 @@ static func _apply_transform(_prop: PlacedProp, model: Node3D, rec: Dictionary,
 	model.rotation = Vector3(pitch, yaw, roll)
 	var grounded_y := gy - foot_y * world_scale
 	_prop.position = Vector3(x, grounded_y, z)
-	if rec.has("y"):
+	if rec.has("y_offset"):
+		_prop.position.y += float(rec["y_offset"])
+	elif rec.has("y"):
+		# Legacy absolute y coordinate fallback
 		_prop.position.y = float(rec["y"])
 
 

@@ -59,7 +59,7 @@ func enter(svc: Node, loader: Node) -> void:
 	_camera.current = true
 	_update_camera_transform()
 	set_process(true)
-	set_process_input(true)
+	set_process_unhandled_input(true)
 	CursorController.request_modal(MODAL_NAME, Callable(self, "exit"))
 
 
@@ -68,7 +68,7 @@ func exit() -> void:
 		return
 	_active = false
 	set_process(false)
-	set_process_input(false)
+	set_process_unhandled_input(false)
 	if is_instance_valid(_camera):
 		_camera.queue_free()
 		_camera = null
@@ -92,7 +92,7 @@ func _process(_delta: float) -> void:
 	_update_camera_transform()
 
 
-func _input(event: InputEvent) -> void:
+func _unhandled_input(event: InputEvent) -> void:
 	if not _active:
 		return
 	if event.is_action_pressed("ui_cancel"):
@@ -103,15 +103,30 @@ func _input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			_dragging = mb.pressed
+			get_viewport().set_input_as_handled()
+		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+			var tree := get_tree()
+			if tree != null:
+				var main := tree.current_scene
+				var TerrainSurfaceQuery = load("res://core/placed_models/terrain_surface_query.gd")
+				var hit := TerrainSurfaceQuery.raycast_ground_at_camera(main, _camera, mb.position) as Dictionary
+				if hit and hit.has("position"):
+					var p: Vector3 = hit["position"]
+					if _svc != null and _svc.has_method("set_center_xz"):
+						_svc.set_center_xz(p.x, p.z)
+			get_viewport().set_input_as_handled()
 		elif mb.pressed:
 			if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 				_orbit_mult = maxf(MIN_ORBIT_MULT, _orbit_mult - ZOOM_STEP)
+				get_viewport().set_input_as_handled()
 			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 				_orbit_mult = minf(MAX_ORBIT_MULT, _orbit_mult + ZOOM_STEP)
+				get_viewport().set_input_as_handled()
 	if event is InputEventMouseMotion and _dragging:
 		var mm := event as InputEventMouseMotion
 		_orbit_yaw -= mm.relative.x * 0.005
 		_orbit_pitch = clampf(_orbit_pitch - mm.relative.y * 0.004, 0.05, 1.45)
+		get_viewport().set_input_as_handled()
 
 
 func _update_camera_transform() -> void:

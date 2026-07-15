@@ -293,12 +293,16 @@ func _live_wins_for_key(live: Dictionary, key: String) -> bool:
 	return false
 
 
-## Live HA-linked values should only override simulation values when the
-## canonical SolarUI is in true live mode. During graph simulation runs,
-## virtual node specs must follow the simulated SolarUI state.
+## Live HA-linked values should only override simulation values in true LIVE
+## mode. TimeDirector is the single authority — consult it first so the bridge,
+## HAEntityLinker, and the graph view can't disagree; fall back to SolarUI's
+## own flag only when TimeDirector is unavailable.
 func _should_use_live_overrides() -> bool:
 	if not is_instance_valid(_solar_ui):
 		return false
+	var td := _solar_ui.get_node_or_null("/root/TimeDirector")
+	if td != null and td.has_method("should_apply_live_data"):
+		return bool(td.call("should_apply_live_data"))
 	if _solar_ui.has_method("is_in_live_mode"):
 		return bool(_solar_ui.call("is_in_live_mode"))
 	return true

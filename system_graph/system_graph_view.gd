@@ -46,6 +46,7 @@ const _GRAPH_EMBODIMENT_SCRIPT := preload("res://system_graph/graph_embodiment.g
 const _PLACED_PROP_RUNTIME_SCRIPT := preload("res://core/placed_models/placed_prop_runtime.gd")
 const _DASHBOARD_SCRIPT := preload("res://system_graph/graph_dashboard_panel.gd")
 const _PREVIEW_SERVICE_SCRIPT := preload("res://system_graph/graph_model_preview_service.gd")
+const _DC_POWER_WIRING_SCRIPT := preload("res://system_graph/dc_power_wiring.gd")
 const _UI_PREFS_CFG := "user://ui_prefs.cfg"
 const GRAPH_AUTOSAVE_DIR := "user://saves/graph_autosave"
 const GRAPH_AUTOSAVE_DEBOUNCE_SEC := 0.75
@@ -89,7 +90,6 @@ var _history_player: Node = null
 ## Bottom-edge UI strip shown only while a historical playback session is
 ## active.  Holds time display, scrubber, play/pause, speed.
 var _history_panel: PanelContainer = null
-var _history_btn:        Button = null   # topbar button that opens the panel
 var _history_play_btn:   Button = null
 var _history_stop_btn:   Button = null
 var _history_speed_opt:  OptionButton = null
@@ -124,8 +124,22 @@ var _ha_linker: Node = null
 var _history: RefCounted = null
 ## True while bridge.tick() or a bulk operation runs — skips history recording.
 var _history_suppress:     bool = false
+## True during the per-frame polling-tick block in _process(). While set,
+## _on_model_changed defers its redraw/telemetry work (queue_redraw,
+## _refresh_telemetry, _sync_solar_ui_from_graph, _sync_graph_controller_ac_fault)
+## instead of running it once per model.update_item — a single sim tick can
+## touch dozens of items (per-tank/per-virtual-node writes), and each write
+## used to force its own full redraw + telemetry rescan. _flush_sim_bulk_update
+## runs the deferred work exactly once after the tick block.
+var _sim_bulk_update:        bool = false
+var _pending_canvas_redraw:  bool = false
+var _pending_telemetry_refresh: bool = false
 ## Becomes true after the first _process() tick so we capture the initial state.
 var _history_initialized:  bool = false
+## Set once main.gd applies a save snapshot to the graph. Blocks the deferred
+## graph-autosave restore from clobbering the loaded game with last session's
+## autosave (the two persistence paths race; the explicit save must win).
+var _external_save_applied: bool = false
 ## Topbar undo/redo buttons — stored so we can update their disabled state.
 var _undo_btn: Button = null
 var _redo_btn: Button = null
@@ -145,9 +159,25 @@ var _back_btn: Button = null
 var _scope_breadcrumb: Label = null
 var _soi_chip: Label = null
 
-## Full-screen background rect — alpha driven by the transparency slider.
+## Full-screen background rect (opaque when SoI live preview is off).
 var _bg_rect: ColorRect = null
-var _bg_alpha: float = 1.0
+var _soi_preview: Node = null
+var _view_mode_menu: MenuButton = null
+var _graph_view_mode: String = GraphSiteLayout.VIEW_FREEFORM
+## Freeform-only: show orbitable SoI snowglobe behind the abstract graph.
+var _freeform_soi_bubble: bool = false
+## Elevation-only: full 3D snowglobe cross-section behind the 2D profile.
+var _elevation_3d_section: bool = false
+const _SOI_PREVIEW_SCRIPT := preload("res://system_graph/graph_soi_preview_service.gd")
+const VIEW_MODE_FREEFORM := 100
+const VIEW_MODE_SITE := 101
+const VIEW_MODE_ELEVATION := 102
+const VIEW_MODE_SEED_SITE := 103
+const VIEW_MODE_EXAG_1X := 104
+const VIEW_MODE_EXAG_5X := 105
+const VIEW_MODE_HEADING_ROTATE := 106
+const VIEW_MODE_SOI_BUBBLE := 107
+const VIEW_MODE_ELEV_3D := 108
 
 ## Reasons that should be recorded in the undo history.
 const HISTORY_REASONS: Array[String] = [
@@ -166,7 +196,6 @@ var _left_sidebar:     Control = null
 var _right_sidebar:    Control = null
 var _left_toggle:      Button  = null
 var _right_toggle:     Button  = null
-var _simulate_btn:     Button  = null
 var _lib_tab_btn:      Button  = null
 var _insp_tab_btn:     Button  = null
 var _inspector_panel   = null
@@ -270,6 +299,7 @@ func _on_automation_triggered(automation_id: String) -> void:
 
 func _exit_tree() -> void:
 	_flush_graph_autosave()
+	_shutdown_soi_preview_world_effects()
 	if _sim_load_host != null and _sim_load_host.has_method("teardown"):
 		_sim_load_host.call("teardown")
 	# Make sure a hot historical session does not leave the global SimMode
@@ -286,6 +316,9 @@ func _init_resource_flow() -> void:
 	if _resource_flow != null and _resource_flow.has_signal("tank_overflow_changed") \
 			and not _resource_flow.is_connected("tank_overflow_changed", _on_tank_overflow_changed):
 		_resource_flow.connect("tank_overflow_changed", _on_tank_overflow_changed)
+	if _resource_flow != null and _resource_flow.has_signal("processor_blocked") \
+			and not _resource_flow.is_connected("processor_blocked", _on_processor_blocked):
+		_resource_flow.connect("processor_blocked", _on_processor_blocked)
 	if _graph_canvas != null:
 		_graph_canvas.set("resource_flow_engine", _resource_flow)
 
@@ -298,6 +331,75 @@ func _on_tank_overflow_changed(item_id: String, overflowing: bool) -> void:
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var tank_name := str(specs.get("name", "Tank"))
 	_show_toast("⚠ %s overflowing — capacity exceeded, input is being lost" % tank_name)
+
+
+func _on_processor_blocked(item_id: String, missing_kinds: Array) -> void:
+	var item := model.get_item(item_id) if model != null else {}
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var p_name := str(specs.get("name", "Processor"))
+	var k_names: PackedStringArray = []
+	for k: Variant in missing_kinds:
+		k_names.append(ResourceKinds.display_name(str(k)))
+	var k_str := ", ".join(k_names)
+	_show_toast("⚠ %s blocked — waiting for %s" % [p_name, k_str])
+
+
+## Live resource/processor state snapshot for the automation context + HUD.
+## Tank levels are addressable by id and by lower_snake_case name; each resource
+## kind also gets its lowest tank level under "resource.<kind>.level".
+## Switchable nodes expose device_states["node.<id>"] = on|off|starved|blocked.
+func get_automation_resource_context() -> Dictionary:
+	var numeric: Dictionary = {}
+	var states: Dictionary = {}
+	# Always publish on/off from the live model so automations can key off
+	# graph neighbors even when DeviceRegistry has no entry for a sim-load.
+	if model != null:
+		for item: Dictionary in model.items:
+			var ity := str(item.get("type", ""))
+			if ity not in ["processor", "appliance", "acload"]:
+				continue
+			var iid := str(item.get("id", ""))
+			if iid.is_empty():
+				continue
+			var specs: Dictionary = item.get("specs", {}) as Dictionary
+			var st := str(specs.get("node_state", ""))
+			var on_off := str(specs.get("requested_state",
+					specs.get("current_state", "off"))).to_lower()
+			if on_off != "on":
+				on_off = "off"
+			# Prefer run switch; escalate to starvation/block when active.
+			if st == GraphNodeState.STARVED:
+				states["node.%s" % iid] = "starved"
+			elif st == GraphNodeState.BLOCKED:
+				states["node.%s" % iid] = "blocked"
+			else:
+				states["node.%s" % iid] = on_off
+			var nm := str(specs.get("name", "")).strip_edges().to_lower().replace(" ", "_")
+			if not nm.is_empty():
+				states["node.%s" % nm] = states["node.%s" % iid]
+	if _resource_flow == null or not _resource_flow.has_method("state_snapshot"):
+		return {"numeric_values": numeric, "device_states": states}
+	var snap: Dictionary = _resource_flow.call("state_snapshot")
+	var tanks: Dictionary = snap.get("tanks", {}) as Dictionary
+	for tid: String in tanks:
+		var t: Dictionary = tanks[tid] as Dictionary
+		var lvl := float(t.get("level_pct", 0.0))
+		numeric["tank.%s.level" % tid] = lvl
+		var nm := str(t.get("name", "")).strip_edges().to_lower().replace(" ", "_")
+		if not nm.is_empty():
+			numeric["tank.%s.level" % nm] = lvl
+		var kind := str(t.get("kind", ""))
+		if not kind.is_empty():
+			var key := "resource.%s.level" % kind
+			numeric[key] = minf(float(numeric.get(key, 100.0)), lvl)
+		states["tank.%s" % tid] = "overflow" if bool(t.get("overflow", false)) else "ok"
+		if not nm.is_empty():
+			states["tank.%s" % nm] = states["tank.%s" % tid]
+	for hid: String in (snap.get("starved", {}) as Dictionary):
+		states["node.%s" % hid] = "starved"
+	for bid: String in (snap.get("blocked", {}) as Dictionary):
+		states["node.%s" % bid] = "blocked"
+	return {"numeric_values": numeric, "device_states": states}
 
 
 func _init_sim_load_host() -> void:
@@ -369,13 +471,19 @@ func _notification(what: int) -> void:
 			call_deferred("_apply_layout")
 			call_deferred("grab_focus")
 			call_deferred("_init_placeholder_host")
+			# Re-enable SoI backdrop only once the graph is actually shown —
+			# view prefs may already be restored from autosave while hidden.
+			call_deferred("_apply_graph_view_mode", _graph_view_mode)
 		else:
 			_flush_graph_autosave()
 			_clear_embodiment_highlight()
+			_shutdown_soi_preview_world_effects()
 		_apply_mouse_for_graph(visible)
 	elif what == NOTIFICATION_RESIZED:
 		if visible:
 			_apply_layout()
+			if _soi_preview != null and _soi_preview.has_method("mark_layout_dirty"):
+				_soi_preview.call("mark_layout_dirty")
 
 
 func _init_graph_autosave() -> void:
@@ -419,7 +527,11 @@ func _cache_scene_tag() -> void:
 
 func _deferred_restore_graph_autosave() -> void:
 	_cache_scene_tag()
-	_try_restore_graph_autosave()
+	# If main.gd already applied a save snapshot, that loaded graph wins — do NOT
+	# overwrite it with the (older) per-scene autosave. Still run the bridge/PBI
+	# setup below either way.
+	if not _external_save_applied:
+		_try_restore_graph_autosave()
 	_ensure_pbi_nodes()
 	if _bridge != null and _bridge.has_method("setup") and is_instance_valid(_solar_ui):
 		_bridge.call("setup", model, _solar_ui)
@@ -511,6 +623,8 @@ func _build_layout() -> void:
 		_lib_panel.connect("item_picked", _on_lib_item_picked)
 	if _lib_panel != null and _lib_panel.has_signal("place_model_requested"):
 		_lib_panel.connect("place_model_requested", _on_lib_place_model_requested)
+	if _lib_panel != null and _lib_panel.has_signal("custom_component_created"):
+		_lib_panel.connect("custom_component_created", _on_lib_custom_component_created)
 
 	# Right collapse tab
 	_right_toggle = _make_collapse_tab("▶", _on_right_toggle,
@@ -555,14 +669,88 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("controller_reset_pressed"):
 		if not gc.is_connected("controller_reset_pressed", _on_controller_reset_pressed):
 			gc.connect("controller_reset_pressed", _on_controller_reset_pressed)
+	if gc.has_signal("elevation_heading_changed"):
+		if not gc.is_connected("elevation_heading_changed", _on_elevation_heading_changed):
+			gc.connect("elevation_heading_changed", _on_elevation_heading_changed)
 
 
 func _on_canvas_layout_changed() -> void:
 	_autosave_pending = true
 	_flush_graph_autosave()
+	if _graph_view_mode == GraphSiteLayout.VIEW_SITE \
+			or _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		_sync_bound_props_from_site()
+		# Site Plan: restamp ground Y after XZ moves. Elevation view lets the
+		# user drag vertically into elevation_m — do not clobber that here.
+		if _graph_view_mode == GraphSiteLayout.VIEW_SITE:
+			_refresh_item_elevations()
+			_refresh_site_autoroutes()
 
 
-func _on_resource_containers_merged(target_id: String, _absorbed_id: String, kind: String) -> void:
+## After a site-plan drag, move any bound 3D props to match site_x_m/site_z_m.
+func _sync_bound_props_from_site() -> void:
+	if model == null:
+		return
+	var main := _get_scene_main_node()
+	var soi := get_node_or_null("/root/SoiService")
+	if main == null or soi == null or not soi.has_method("world_center"):
+		return
+	var center: Vector3 = soi.call("world_center")
+	for item: Dictionary in model.items:
+		if not GraphSiteLayout.has_site_coords(item):
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		var prop_id := str(specs.get("bound_prop_id", ""))
+		if prop_id.is_empty():
+			continue
+		var wxz := GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(item), center)
+		PlacedPropService.move_prop_xz(main, prop_id, wxz.x, wxz.y)
+
+
+## Place (or re-place) a graph node's GLB twin at its site coords (grounded).
+func place_site_twin(item_id: String) -> void:
+	if model == null or item_id.is_empty():
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	if not GraphSiteLayout.has_site_coords(item):
+		_show_toast("Assign a Site Plan position first (drag onto the SoI disc)")
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var model_id := str(specs.get("model_id", ""))
+	if model_id.is_empty():
+		_show_toast("Attach a GLB model_id in Place in 3D first")
+		return
+	var main := _get_scene_main_node()
+	var soi := get_node_or_null("/root/SoiService")
+	if main == null or soi == null or not soi.has_method("world_center"):
+		_show_toast("No map / SoI center available")
+		return
+	var center: Vector3 = soi.call("world_center")
+	var wxz := GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(item), center)
+	var existing := str(specs.get("bound_prop_id", ""))
+	if not existing.is_empty():
+		if PlacedPropService.move_prop_xz(main, existing, wxz.x, wxz.y):
+			_show_toast("Moved 3D twin to site position")
+			_refresh_item_elevations()
+			_refresh_site_autoroutes()
+			return
+	var result := PlacedPropService.place_model_at_xz(main, model_id, wxz.x, wxz.y, {
+		"graph_item_id": item_id,
+	})
+	if not bool(result.get("ok", false)):
+		_show_toast("Place failed: %s" % str(result.get("error", "?")))
+		return
+	specs["bound_prop_id"] = str(result.get("prop_id", ""))
+	model.update_item(item_id, {"specs": specs})
+	_show_toast("Placed 3D twin at ground level")
+	_refresh_item_elevations()
+	_refresh_site_autoroutes()
+	_schedule_graph_autosave()
+
+
+func _on_resource_containers_merged(_target_id: String, _absorbed_id: String, kind: String) -> void:
 	var label := ResourceKinds.display_name(kind)
 	_show_toast("Merged %s containers" % label)
 	if _resource_flow != null and _resource_flow.has_method("clear_timelines"):
@@ -617,6 +805,8 @@ func _apply_layout() -> void:
 		# Keep model reference in sync whenever layout is re-applied
 		_graph_canvas.set("model", model)
 		_graph_canvas.set("active_scope_id", _active_scope_id)
+	if _soi_preview != null and _soi_preview.has_method("mark_layout_dirty"):
+		_soi_preview.call("mark_layout_dirty")
 	_layout_history_panel()
 	_update_scope_breadcrumb()
 
@@ -745,26 +935,30 @@ func _build_topbar() -> Control:
 	sep2.add_theme_constant_override("separation", 8)
 	right_grp.add_child(sep2)
 
-	# ── Transparency slider ────────────────────────────────────────────────
-	var alpha_lbl := Label.new()
-	alpha_lbl.text               = "BG"
-	alpha_lbl.add_theme_color_override("font_color", C_TEXT_S)
-	alpha_lbl.add_theme_font_size_override("font_size", 11)
-	alpha_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	alpha_lbl.tooltip_text       = "Background transparency — drag left to see the 3D world"
-	right_grp.add_child(alpha_lbl)
-
-	var alpha_slider := HSlider.new()
-	alpha_slider.min_value              = 0.0
-	alpha_slider.max_value              = 1.0
-	alpha_slider.step                   = 0.01
-	alpha_slider.value                  = _bg_alpha
-	alpha_slider.custom_minimum_size    = Vector2(88.0, 0.0)
-	alpha_slider.size_flags_vertical    = Control.SIZE_SHRINK_CENTER
-	alpha_slider.focus_mode             = Control.FOCUS_NONE
-	alpha_slider.tooltip_text           = "Background transparency — drag left to see the 3D world"
-	alpha_slider.value_changed.connect(_on_bg_alpha_changed)
-	right_grp.add_child(alpha_slider)
+	# ── Graph view mode: Freeform / Site Plan / Elevation ─────────────────
+	_view_mode_menu = _make_topbar_menu_btn("View: Freeform ▾")
+	_view_mode_menu.tooltip_text = (
+		"Freeform (abstract layout) · Site Plan (meters + 3D place) · Elevation.\n"
+		+ "SoI bubble (freeform): snowglobe behind nodes — Shift+drag orbit, Shift+scroll zoom.\n"
+		+ "Site Plan: scroll zooms 2D+3D together; top-down locked.\n"
+		+ "Elevation: drag nodes X/Y; Shift+drag rotates section; optional 3D snowglobe slice.")
+	var vmp := _view_mode_menu.get_popup()
+	vmp.add_radio_check_item("Freeform", VIEW_MODE_FREEFORM)
+	vmp.add_radio_check_item("Site Plan (top-down)", VIEW_MODE_SITE)
+	vmp.add_radio_check_item("Elevation (section)", VIEW_MODE_ELEVATION)
+	vmp.add_separator()
+	vmp.add_check_item("SoI bubble (freeform)", VIEW_MODE_SOI_BUBBLE)
+	vmp.add_check_item("3D snowglobe section (elevation)", VIEW_MODE_ELEV_3D)
+	vmp.add_separator()
+	vmp.add_item("Seed site from freeform…", VIEW_MODE_SEED_SITE)
+	vmp.add_separator()
+	vmp.add_radio_check_item("Elevation scale 1×", VIEW_MODE_EXAG_1X)
+	vmp.add_radio_check_item("Elevation scale 5×", VIEW_MODE_EXAG_5X)
+	vmp.add_item("Rotate section heading +15°", VIEW_MODE_HEADING_ROTATE)
+	vmp.id_pressed.connect(_on_view_mode_menu_id)
+	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_FREEFORM), true)
+	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_EXAG_5X), true)
+	right_grp.add_child(_view_mode_menu)
 
 	var sep3 := VSeparator.new()
 	sep3.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
@@ -861,8 +1055,295 @@ func _restyle_btn_amber(b: Button) -> void:
 	b.add_theme_font_size_override("font_size", 13)
 
 
+func _on_view_mode_menu_id(id: int) -> void:
+	match id:
+		VIEW_MODE_FREEFORM:
+			_apply_graph_view_mode(GraphSiteLayout.VIEW_FREEFORM)
+		VIEW_MODE_SITE:
+			_apply_graph_view_mode(GraphSiteLayout.VIEW_SITE)
+		VIEW_MODE_ELEVATION:
+			_apply_graph_view_mode(GraphSiteLayout.VIEW_ELEVATION)
+		VIEW_MODE_SOI_BUBBLE:
+			_freeform_soi_bubble = not _freeform_soi_bubble
+			_sync_view_mode_menu_checks()
+			_sync_soi_preview_for_mode()
+			_schedule_graph_autosave()
+		VIEW_MODE_ELEV_3D:
+			_elevation_3d_section = not _elevation_3d_section
+			_sync_view_mode_menu_checks()
+			_sync_soi_preview_for_mode()
+			_schedule_graph_autosave()
+		VIEW_MODE_SEED_SITE:
+			_seed_site_from_freeform()
+		VIEW_MODE_EXAG_1X:
+			_set_elevation_exaggeration(1.0)
+		VIEW_MODE_EXAG_5X:
+			_set_elevation_exaggeration(5.0)
+		VIEW_MODE_HEADING_ROTATE:
+			_rotate_elevation_heading(deg_to_rad(15.0))
+
+
+func _apply_graph_view_mode(mode: String) -> void:
+	_graph_view_mode = mode
+	if _graph_canvas != null:
+		_graph_canvas.set("view_mode", mode)
+		_graph_canvas.call("queue_redraw")
+	_sync_view_mode_menu_checks()
+	_sync_soi_preview_for_mode()
+	if mode == GraphSiteLayout.VIEW_SITE or mode == GraphSiteLayout.VIEW_ELEVATION:
+		_backfill_site_from_world()
+		_refresh_item_elevations()
+		if mode == GraphSiteLayout.VIEW_SITE:
+			_refresh_site_autoroutes()
+	_schedule_graph_autosave()
+
+
+## Site Plan → top-down. Freeform bubble → orbit. Elevation 3D → section camera.
+## Never latches world clip / SubViewport while the graph is hidden — otherwise
+## map load + autosave restore drops the player into a clipped snowglobe world.
+func _sync_soi_preview_for_mode() -> void:
+	_ensure_soi_preview()
+	var want_site := _graph_view_mode == GraphSiteLayout.VIEW_SITE
+	var want_freeform_bubble := (
+			_graph_view_mode == GraphSiteLayout.VIEW_FREEFORM and _freeform_soi_bubble)
+	var want_elev_3d := (
+			_graph_view_mode == GraphSiteLayout.VIEW_ELEVATION and _elevation_3d_section)
+	var want_preview := visible and (want_site or want_freeform_bubble or want_elev_3d)
+	if _soi_preview != null and _soi_preview.has_method("set_active"):
+		_soi_preview.call("set_active", want_preview)
+	if want_preview:
+		if _soi_preview != null and _soi_preview.has_method("set_top_down"):
+			_soi_preview.call("set_top_down", want_site)
+		if _soi_preview != null and _soi_preview.has_method("set_section_mode"):
+			_soi_preview.call("set_section_mode", want_elev_3d)
+		if want_elev_3d and _graph_canvas != null \
+				and _soi_preview != null and _soi_preview.has_method("set_section_heading"):
+			_soi_preview.call("set_section_heading",
+					float(_graph_canvas.get("elevation_heading_rad")))
+	if _bg_rect != null and is_instance_valid(_bg_rect):
+		_bg_rect.color = Color(C_BG.r, C_BG.g, C_BG.b, 1.0)
+
+
+func _sync_view_mode_menu_checks() -> void:
+	if _view_mode_menu == null:
+		return
+	var vp := _view_mode_menu.get_popup()
+	vp.set_item_checked(vp.get_item_index(VIEW_MODE_FREEFORM),
+			_graph_view_mode == GraphSiteLayout.VIEW_FREEFORM)
+	vp.set_item_checked(vp.get_item_index(VIEW_MODE_SITE),
+			_graph_view_mode == GraphSiteLayout.VIEW_SITE)
+	vp.set_item_checked(vp.get_item_index(VIEW_MODE_ELEVATION),
+			_graph_view_mode == GraphSiteLayout.VIEW_ELEVATION)
+	var bubble_idx := vp.get_item_index(VIEW_MODE_SOI_BUBBLE)
+	if bubble_idx >= 0:
+		vp.set_item_checked(bubble_idx, _freeform_soi_bubble)
+		vp.set_item_disabled(bubble_idx,
+				_graph_view_mode != GraphSiteLayout.VIEW_FREEFORM)
+	var elev3d_idx := vp.get_item_index(VIEW_MODE_ELEV_3D)
+	if elev3d_idx >= 0:
+		vp.set_item_checked(elev3d_idx, _elevation_3d_section)
+		vp.set_item_disabled(elev3d_idx,
+				_graph_view_mode != GraphSiteLayout.VIEW_ELEVATION)
+	var label := "View: Freeform ▾"
+	match _graph_view_mode:
+		GraphSiteLayout.VIEW_SITE:
+			label = "View: Site Plan ▾"
+		GraphSiteLayout.VIEW_ELEVATION:
+			label = "View: Elevation · 3D ▾" if _elevation_3d_section \
+					else "View: Elevation ▾"
+	if _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM and _freeform_soi_bubble:
+		label = "View: Freeform · SoI ▾"
+	_view_mode_menu.text = label
+
+
+func _set_elevation_exaggeration(ex: float) -> void:
+	if _graph_canvas != null:
+		_graph_canvas.set("elevation_exaggeration", ex)
+		_graph_canvas.call("queue_redraw")
+	if _view_mode_menu != null:
+		var vp := _view_mode_menu.get_popup()
+		vp.set_item_checked(vp.get_item_index(VIEW_MODE_EXAG_1X), is_equal_approx(ex, 1.0))
+		vp.set_item_checked(vp.get_item_index(VIEW_MODE_EXAG_5X), is_equal_approx(ex, 5.0))
+
+
+func _rotate_elevation_heading(delta_rad: float) -> void:
+	if _graph_canvas == null:
+		return
+	var h := fposmod(float(_graph_canvas.get("elevation_heading_rad")) + delta_rad, TAU)
+	_graph_canvas.set("elevation_heading_rad", h)
+	_graph_canvas.call("queue_redraw")
+	_on_elevation_heading_changed(h)
+
+
+func _on_elevation_heading_changed(heading_rad: float) -> void:
+	if _soi_preview != null and _soi_preview.has_method("set_section_heading") \
+			and _elevation_3d_section \
+			and _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		_soi_preview.call("set_section_heading", heading_rad)
+	_schedule_graph_autosave()
+
+
+func _seed_site_from_freeform() -> void:
+	if model == null:
+		return
+	var r_m := 150.0
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("radius_m"):
+		r_m = float(soi.call("radius_m"))
+	var n := GraphSiteLayout.seed_site_from_freeform(model.items, r_m)
+	# Persist via model.changed — seed mutated dicts in-place; poke once.
+	if n > 0 and model != null:
+		model.changed.emit("update_item")
+	_show_toast("Seeded site coords for %d nodes" % n)
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	_schedule_graph_autosave()
+
+
+func _backfill_site_from_world() -> void:
+	## Reverse-sync site coords from bound props / OSM solar centroids.
+	if model == null:
+		return
+	var soi := get_node_or_null("/root/SoiService")
+	if soi == null or not soi.has_method("world_center"):
+		return
+	var center: Vector3 = soi.call("world_center")
+	var main := _get_scene_main_node()
+	var changed_any := false
+	for item: Dictionary in model.items:
+		if GraphSiteLayout.has_site_coords(item):
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		var prop_id := str(specs.get("bound_prop_id", ""))
+		if not prop_id.is_empty() and main != null:
+			var xz: Variant = _world_xz_for_bound_prop(main, prop_id)
+			if xz is Vector2:
+				var site := GraphSiteLayout.world_xz_to_site(xz as Vector2, center)
+				model.update_item(str(item.get("id", "")), {
+					"site_x_m": site.x, "site_z_m": site.y})
+				changed_any = true
+				continue
+		var osm_tag := str(specs.get("osm_tag", ""))
+		if not osm_tag.is_empty() and main != null:
+			var sxz: Variant = _world_xz_for_osm_tag(main, osm_tag)
+			if sxz is Vector2:
+				var site2 := GraphSiteLayout.world_xz_to_site(sxz as Vector2, center)
+				model.update_item(str(item.get("id", "")), {
+					"site_x_m": site2.x, "site_z_m": site2.y})
+				changed_any = true
+	if changed_any and _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+
+
+func _world_xz_for_bound_prop(main: Node, prop_id: String) -> Variant:
+	var loader := _find_terrain_loader(main)
+	if loader == null:
+		return null
+	# Prefer PlacedPropService scene layer lookup via runtime nodes.
+	var props_parent := main.find_child("PlacedProps", true, false)
+	if props_parent == null and loader != null:
+		props_parent = loader.find_child("PlacedProps", true, false)
+	if props_parent != null:
+		for c in props_parent.get_children():
+			if str(c.get("prop_id")) == prop_id or str(c.name) == prop_id:
+				var p: Vector3 = (c as Node3D).global_position
+				return Vector2(p.x, p.z)
+	var layer: Variant = loader.get("_placed_prop_layer")
+	if layer != null and layer.has_method("find_by_id"):
+		var rec: Dictionary = layer.call("find_by_id", prop_id)
+		if not rec.is_empty():
+			return Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	return null
+
+
+func _world_xz_for_osm_tag(main: Node, tag: String) -> Variant:
+	var loader := _find_terrain_loader(main)
+	if loader == null or not loader.has_method("get_solar_array_centroid"):
+		# Parse tag "osm_solar_%d_%d" as rounded metres if helper missing.
+		if tag.begins_with("osm_solar_"):
+			var parts := tag.trim_prefix("osm_solar_").split("_")
+			if parts.size() >= 2:
+				return Vector2(float(parts[0]), float(parts[1]))
+		return null
+	var cent: Variant = loader.call("get_solar_array_centroid", tag)
+	return cent
+
+
+func _refresh_item_elevations() -> void:
+	if model == null:
+		return
+	var soi := get_node_or_null("/root/SoiService")
+	if soi == null or not soi.has_method("world_center"):
+		return
+	var center: Vector3 = soi.call("world_center")
+	for item: Dictionary in model.items:
+		if not GraphSiteLayout.has_site_coords(item):
+			continue
+		var site := GraphSiteLayout.site_xz(item)
+		var wxz := GraphSiteLayout.site_to_world_xz(site, center)
+		var gy := float(center.y)
+		if soi.has_method("ground_y_at"):
+			gy = float(soi.call("ground_y_at", wxz.x, wxz.y))
+		model.update_item(str(item.get("id", "")), {"elevation_m": gy})
+
+
+func _refresh_site_autoroutes() -> void:
+	if model == null:
+		return
+	var main := _get_scene_main_node()
+	var soi := get_node_or_null("/root/SoiService")
+	if main == null or soi == null or not soi.has_method("world_center"):
+		return
+	var center: Vector3 = soi.call("world_center")
+	var n := GraphSiteAutoroute.refresh_all(model, main, center)
+	if n > 0:
+		call_deferred("_init_conduit_manager")
+
+
+func _on_soi_preview_toggled(on: bool) -> void:
+	# Legacy entry: maps to freeform SoI bubble (does not switch view mode).
+	_freeform_soi_bubble = on
+	if _graph_view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		_apply_graph_view_mode(GraphSiteLayout.VIEW_FREEFORM)
+		return
+	_sync_view_mode_menu_checks()
+	_sync_soi_preview_for_mode()
+
+
+## True while the live SoI SubViewport backdrop is rendering (main.gd uses this
+## to keep sun/sky updates running for the preview).
+func is_soi_preview_active() -> bool:
+	return _soi_preview != null and bool(_soi_preview.get("active"))
+
+
+func _ensure_soi_preview() -> void:
+	if _soi_preview != null and is_instance_valid(_soi_preview):
+		return
+	_soi_preview = _SOI_PREVIEW_SCRIPT.new()
+	_soi_preview.name = "GraphSoiPreviewService"
+	add_child(_soi_preview)
+	if _soi_preview.has_method("setup"):
+		_soi_preview.call("setup", self, _graph_canvas)
+
+
+## Tear down graph SoI SubViewport and clear autoload clip so FPS world stays open.
+func _shutdown_soi_preview_world_effects() -> void:
+	if _soi_preview != null and is_instance_valid(_soi_preview):
+		if _soi_preview.has_method("set_active"):
+			_soi_preview.call("set_active", false)
+		if _soi_preview.has_method("teardown"):
+			_soi_preview.call("teardown")
+	var soi := get_node_or_null("/root/SoiService")
+	if soi == null:
+		return
+	if soi.has_method("clear_graph_preview_world_effects"):
+		soi.call("clear_graph_preview_world_effects")
+	elif soi.has_method("set_graph_preview_active"):
+		soi.call("set_graph_preview_active", false)
+
+
 func _on_bg_alpha_changed(value: float) -> void:
-	_bg_alpha = value
+	# Legacy hook kept for any external callers; BG slider was replaced by SoI view.
 	if _bg_rect != null and is_instance_valid(_bg_rect):
 		_bg_rect.color = Color(C_BG.r, C_BG.g, C_BG.b, value)
 	if _graph_canvas != null and is_instance_valid(_graph_canvas):
@@ -1142,12 +1623,24 @@ func _build_right_sidebar() -> Control:
 	if _inspector_panel != null and _inspector_panel.has_method("set_place_model_callback"):
 		_inspector_panel.call("set_place_model_callback",
 			Callable(self, "_place_model_for_item"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_place_site_twin_callback"):
+		_inspector_panel.call("set_place_site_twin_callback",
+			Callable(self, "place_site_twin"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_preview_refresh_callback"):
 		_inspector_panel.call("set_preview_refresh_callback",
 			Callable(self, "_refresh_item_card_preview"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_controller_reset_callback"):
 		_inspector_panel.call("set_controller_reset_callback",
 			Callable(self, "reset_controller_from_inspector"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_library_sync_callback"):
+		_inspector_panel.call("set_library_sync_callback",
+			Callable(self, "sync_library_instances_from_preset"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_ghost_sync_callback"):
+		_inspector_panel.call("set_ghost_sync_callback",
+			Callable(self, "sync_processor_ghost_containers_for_item"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_save_to_library_callback"):
+		_inspector_panel.call("set_save_to_library_callback",
+			Callable(self, "save_item_to_library"))
 
 	return bar
 
@@ -1285,6 +1778,12 @@ func _on_lib_item_picked(preset: Dictionary, screen_pos: Vector2) -> void:
 			preset.get("icon", ""),
 			preset.get("label", "?"),
 		]
+
+
+## Called by LibraryPanel right after a "Create Custom Component" preset is
+## saved — spawns it onto the canvas immediately (no drag gesture to arm).
+func _on_lib_custom_component_created(preset: Dictionary) -> void:
+	_spawn_at_canvas_center(preset)
 
 
 ## "Place Model" pressed on a 3D-linked library preset (e.g. the VAWT). Closes
@@ -1464,6 +1963,17 @@ func _spawn_from_preset(preset: Dictionary, canvas_local_pos: Vector2) -> void:
 	var proc_w: float = dims.x
 	var proc_h: float = dims.y
 	var dev_path: String = str(specs.get("scene_device_path", ""))
+	# Preset-declared default automations (e.g. "Woodgas DC Generator"'s
+	# SOC-based on/off) ship with no "id" — mint one per rule now so the engine can
+	# register them below (AutomationEngine ignores id-less rules).
+	var preset_autos: Array = specs.get("graph_automations", []) as Array
+	if not preset_autos.is_empty():
+		for i in preset_autos.size():
+			var a: Dictionary = preset_autos[i] as Dictionary
+			if str(a.get("id", "")).is_empty():
+				a["id"] = "graph_autom_%s_%d" % [item_id, i]
+				preset_autos[i] = a
+		specs["graph_automations"] = preset_autos
 	var item_data: Dictionary = {
 		"id":         item_id,
 		"type":       ptype,
@@ -1482,6 +1992,10 @@ func _spawn_from_preset(preset: Dictionary, canvas_local_pos: Vector2) -> void:
 	if ptype == "processor":
 		ResourceKinds.new().migrate_processor_specs(specs)
 		_spawn_processor_ghost_containers(item_id, specs, graph_pos, proc_w, proc_h)
+
+	if not preset_autos.is_empty() and _inspector_panel != null \
+			and _inspector_panel.has_method("sync_all_load_automations"):
+		_inspector_panel.call("sync_all_load_automations", model)
 
 	_schedule_graph_autosave()
 	_autosave_pending = true
@@ -1530,6 +2044,7 @@ func add_imported_solar_panels(count: int, watts: float, label: String = "OSM So
 	origin.y += float(kept_osm) / float(maxi(cols, 1)) * spacing_y + (spacing_y if kept_osm > 0 else 0.0)
 	for i in n:
 		var gx := origin.x + float(i % cols) * spacing_x
+		@warning_ignore("integer_division")
 		var gy := origin.y + float(i / cols) * spacing_y
 		model.add_item({
 			"id": model.generate_item_id(),
@@ -1600,7 +2115,7 @@ func _spawn_processor_ghost_containers(proc_id: String, proc_specs: Dictionary,
 			"scope_id": _active_scope_id,
 			"is_ghost": true,
 			"specs": {
-				"name": "%s (in)" % ResourceKinds.display_name(kind),
+				"name": ResourceKinds.display_name(kind),
 				"resource_kind": kind,
 				"capacity_qty": 100.0,
 				"capacity_unit": ResourceKinds.default_unit(kind),
@@ -1644,7 +2159,7 @@ func _spawn_processor_ghost_containers(proc_id: String, proc_specs: Dictionary,
 			"scope_id": _active_scope_id,
 			"is_ghost": true,
 			"specs": {
-				"name": "%s (out)" % ResourceKinds.display_name(kind),
+				"name": ResourceKinds.display_name(kind),
 				"resource_kind": kind,
 				"capacity_qty": 100.0,
 				"capacity_unit": ResourceKinds.default_unit(kind),
@@ -1666,6 +2181,238 @@ func _spawn_processor_ghost_containers(proc_id: String, proc_specs: Dictionary,
 			"curve_tension": 1.0,
 			"corner_radius": 28.0,
 		})
+
+
+# ---------------------------------------------------------------------------
+# Library preset -> placed instance sync ("prefab"-style propagation)
+# ---------------------------------------------------------------------------
+
+## Spec fields that are inherently per-instance — identity, live simulation
+## state, and HA/3D-scene bindings — and must never be overwritten when a
+## library preset's config is pushed to sibling instances of the same node.
+const _INSTANCE_ONLY_SPEC_KEYS := [
+	"name", "graph_automations",
+	"scene_device_path", "device_path", "ha_live",
+	"model_id", "bound_prop_id",
+	"card_preview_yaw_deg", "card_preview_pitch_deg", "card_preview_dist_mult",
+	"graph_placeholder", "ibc_tank_link",
+	"level", "soc", "current_output_kw", "inflow_rate", "outflow_rate",
+	"destroyed", "node_state", "node_state_reason", "node_state_kinds", "deficit_qty",
+	"unlimited_capacity", "allow_negative", "scale_with_fill", "jit_outflow",
+	"live_capture_lph", "live_capture_rate",
+]
+
+## Called by the inspector after "Save/Add to Library" writes `preset`. Pushes
+## the preset's configuration to every OTHER placed graph item of the same
+## type + name (the same identity ComponentPresets uses to match a preset) —
+## editing "the template" updates all its copies on the canvas, mirroring a
+## prefab workflow. Runtime state, HA links, and 3D bindings stay per-instance
+## (see _INSTANCE_ONLY_SPEC_KEYS). Processor instances also get their
+## auto-spawned resource-tank ports ("connected containers") resynced to
+## match any input/output changes in the preset.
+func sync_library_instances_from_preset(preset: Dictionary, source_item_id: String) -> void:
+	if model == null:
+		return
+	var itype := str(preset.get("type", ""))
+	var name_val := str(preset.get("label", ""))
+	if itype.is_empty() or name_val.is_empty():
+		return
+	var preset_specs: Dictionary = preset.get("specs", {}) as Dictionary
+	var updated := 0
+	for it: Dictionary in model.items.duplicate():
+		var iid := str(it.get("id", ""))
+		if iid == source_item_id or iid.is_empty():
+			continue
+		if str(it.get("type", "")) != itype:
+			continue
+		var cur_specs: Dictionary = it.get("specs", {}) as Dictionary
+		if str(cur_specs.get("name", "")) != name_val:
+			continue
+		var new_specs: Dictionary = preset_specs.duplicate(true)
+		for key: String in _INSTANCE_ONLY_SPEC_KEYS:
+			if cur_specs.has(key):
+				new_specs[key] = cur_specs[key]
+			else:
+				new_specs.erase(key)
+		model.update_item(iid, {"specs": new_specs})
+		if itype == "processor":
+			_sync_processor_ghost_containers(iid, new_specs)
+		updated += 1
+	if updated > 0:
+		_show_toast("Updated %d placed instance%s to match" % [updated, "" if updated == 1 else "s"])
+
+
+## Category id ("processors" vs "habitats") ComponentPresets uses to store/
+## look up a processor-type item's preset, keyed off specs.role.
+func _library_category_for_specs(specs: Dictionary) -> String:
+	return "habitats" if str(specs.get("role", "")) == "habitat" else "processors"
+
+
+## Called by the inspector's "Save to Library" button. Builds a preset from
+## the item's current specs (stripping instance-only state — see
+## _INSTANCE_ONLY_SPEC_KEYS — except the identity "name"), saves/updates it in
+## the user preset store, then reuses sync_library_instances_from_preset to
+## push the change to every other placed instance of the same template.
+func save_item_to_library(item_id: String) -> void:
+	if model == null:
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty() or str(item.get("type", "")) != "processor":
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var label := str(specs.get("name", "")).strip_edges()
+	if label.is_empty():
+		label = "Custom Component"
+		specs["name"] = label
+	var cat_id := _library_category_for_specs(specs)
+	var preset_specs: Dictionary = specs.duplicate(true)
+	for key: String in _INSTANCE_ONLY_SPEC_KEYS:
+		if key != "name":
+			preset_specs.erase(key)
+	var icon := "⚙"
+	for p: Dictionary in ComponentPresets.presets_for_category(cat_id):
+		if str(p.get("label", "")) == label:
+			icon = str(p.get("icon", icon))
+			break
+	var preset := {
+		"type": "processor", "label": label, "icon": icon,
+		"width": float(item.get("width", 130.0)),
+		"height": float(item.get("height", 120.0)),
+		"specs": preset_specs,
+	}
+	ComponentPresets.save_user_preset(cat_id, preset)
+	sync_library_instances_from_preset(preset, item_id)
+	_show_toast("Saved '%s' to library" % label)
+
+
+## Called by the inspector directly after an in-place I/O edit (add/remove
+## port, change a port's kind) on a single processor instance — resyncs that
+## instance's own auto-spawned resource-tank ports to match, independent of
+## any library-preset push. No-op for non-processor items.
+func sync_processor_ghost_containers_for_item(item_id: String) -> void:
+	if model == null:
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty() or str(item.get("type", "")) != "processor":
+		return
+	_sync_processor_ghost_containers(item_id, item.get("specs", {}) as Dictionary)
+
+
+## Resyncs a processor instance's auto-spawned resource-tank ports ("connected
+## containers") after `proc_specs` was refreshed from a library preset. Ports
+## whose kind changed get their tank refreshed in place (renamed only if the
+## label still matches the auto-generated pattern, so a user-renamed tank is
+## left alone); new ports (the preset grew inputs/outputs) get a freshly
+## spawned tank + wire. Ports removed from the preset are left as-is on the
+## canvas rather than silently deleted (same as manually removing an I/O row).
+func _sync_processor_ghost_containers(proc_id: String, proc_specs: Dictionary) -> void:
+	if model == null:
+		return
+	var proc_item := model.get_item(proc_id)
+	if proc_item.is_empty():
+		return
+	var proc_pos := Vector2(float(proc_item.get("x", 0.0)), float(proc_item.get("y", 0.0)))
+	var proc_w := float(proc_item.get("width", 130.0))
+	var proc_h := float(proc_item.get("height", 120.0))
+	var scope_id := str(proc_item.get("scope_id", _active_scope_id))
+
+	_sync_processor_ghost_side(proc_id, proc_specs.get("inputs", []) as Array, true,
+		proc_pos, proc_w, proc_h, scope_id)
+	_sync_processor_ghost_side(proc_id, proc_specs.get("outputs", []) as Array, false,
+		proc_pos, proc_w, proc_h, scope_id)
+
+
+func _sync_processor_ghost_side(proc_id: String, ports: Array, is_input: bool,
+		proc_pos: Vector2, proc_w: float, proc_h: float, scope_id: String) -> void:
+	var g_w: float = 90.0
+	var g_h: float = 100.0
+	var offset_y := 120.0
+	var count := ports.size()
+	var total_w := float(count) * g_w + float(maxi(count - 1, 0)) * 24.0
+	var start_x := proc_pos.x + (proc_w - total_w) * 0.5
+	var gy := (proc_pos.y - g_h - offset_y) if is_input else (proc_pos.y + proc_h + offset_y)
+
+	for i in count:
+		var port: Dictionary = ports[i] as Dictionary
+		var kind := str(port.get("kind", "water"))
+		var handle_id := ("res_in_%d" % i) if is_input else ("res_out_%d" % i)
+		var ghost_id := _ghost_tank_at_port(proc_id, handle_id, is_input)
+		var gx := start_x + float(i) * (g_w + 24.0)
+
+		if ghost_id.is_empty():
+			# New port on the resynced processor — spawn a tank + wire, matching
+			# the original spawn-time layout (_spawn_processor_ghost_containers).
+			var new_id := model.generate_item_id()
+			model.add_item({
+				"id": new_id, "type": "resource",
+				"x": gx, "y": gy, "width": g_w, "height": g_h,
+				"scope_id": scope_id, "is_ghost": true,
+				"specs": {
+					"name": ResourceKinds.display_name(kind),
+					"resource_kind": kind,
+					"capacity_qty": 100.0,
+					"capacity_unit": ResourceKinds.default_unit(kind),
+					"level": 0.5 if is_input else 0.0,
+					"is_ghost": true,
+					"cost": 0.0,
+				},
+			})
+			var conn := {
+				"scope_id": scope_id, "polarity": "resource", "resource_type": kind,
+				"waypoints": [], "line_style": "bezier",
+				"curve_tension": 1.0, "corner_radius": 28.0,
+			}
+			if is_input:
+				conn["source_item_id"] = new_id
+				conn["source_handle_id"] = "output"
+				conn["target_item_id"] = proc_id
+				conn["target_handle_id"] = handle_id
+			else:
+				conn["source_item_id"] = proc_id
+				conn["source_handle_id"] = handle_id
+				conn["target_item_id"] = new_id
+				conn["target_handle_id"] = "input"
+			model.add_connection(conn)
+			continue
+
+		var g_item := model.get_item(ghost_id)
+		if g_item.is_empty():
+			continue
+		var g_specs: Dictionary = (g_item.get("specs", {}) as Dictionary).duplicate(true)
+		var old_kind := str(g_specs.get("resource_kind", ""))
+		if old_kind == kind:
+			continue
+		var auto_name := ResourceKinds.display_name(old_kind)
+		if str(g_specs.get("name", "")) == auto_name:
+			g_specs["name"] = ResourceKinds.display_name(kind)
+		g_specs["resource_kind"] = kind
+		g_specs["capacity_unit"] = ResourceKinds.default_unit(kind)
+		model.update_item(ghost_id, {"specs": g_specs})
+
+
+## Finds the ghost resource-tank item wired to a processor's res_in_N/res_out_N
+## port, if any (mirrors ResourceFlowEngine._tank_at_port's lookup pattern).
+func _ghost_tank_at_port(proc_id: String, handle_id: String, is_input: bool) -> String:
+	if model == null:
+		return ""
+	for conn: Dictionary in model.connections:
+		if is_input:
+			if str(conn.get("target_item_id", "")) != proc_id:
+				continue
+			if str(conn.get("target_handle_id", "")) != handle_id:
+				continue
+			var src := model.get_item(str(conn.get("source_item_id", "")))
+			if not src.is_empty() and bool(src.get("is_ghost", false)):
+				return str(src.get("id", ""))
+		else:
+			if str(conn.get("source_item_id", "")) != proc_id:
+				continue
+			if str(conn.get("source_handle_id", "")) != handle_id:
+				continue
+			var tgt := model.get_item(str(conn.get("target_item_id", "")))
+			if not tgt.is_empty() and bool(tgt.get("is_ghost", false)):
+				return str(tgt.get("id", ""))
+	return ""
 
 
 # ---------------------------------------------------------------------------
@@ -3266,23 +4013,35 @@ func _process(delta: float) -> void:
 				_on_build_mode()
 	if _graph_canvas != null and _graph_canvas.has_method("tick"):
 		_graph_canvas.call("tick", delta, sim_ts)
-	# Bridge tick — suppress history so its model updates are not recorded
+	# Bridge tick — suppress history so its model updates are not recorded, and
+	# batch the redraw/telemetry cascade so a tick touching many items (tanks,
+	# virtual nodes) triggers one redraw instead of one per update_item.
 	_history_suppress = true
+	_sim_bulk_update = true
 	if _bridge != null:
 		_bridge.call("tick", delta)
 	_tick_graph_renewables(delta)
 	_tick_graph_pbis(delta)
 	_energy_sync_acc += delta
+	var _do_energy_sync := false
 	if _energy_sync_acc >= _ENERGY_SYNC_INTERVAL:
 		_energy_sync_acc = 0.0
+		_do_energy_sync = true
 		_sync_graph_energy_from_solar()
 	if _resource_flow != null:
 		_resource_flow.call("tick", delta)
+	# Runs after the resource-flow tick (not alongside the sync above) so it
+	# sees this frame's freshly recomputed DC-generator current_output_kw
+	# telemetry, not last frame's.
+	if _do_energy_sync:
+		_sync_graph_dc_generation_to_solar()
 	_closure_refresh_acc += delta
 	if _closure_refresh_acc >= _CLOSURE_REFRESH_INTERVAL:
 		_closure_refresh_acc = 0.0
 		_refresh_closure_telemetry()
 	_history_suppress = false
+	_sim_bulk_update = false
+	_flush_sim_bulk_update()
 	# Push the initial snapshot once, after the bridge has seeded virtual nodes
 	if not _history_initialized:
 		_history_initialized = true
@@ -3318,13 +4077,30 @@ func _input(event: InputEvent) -> void:
 				_end_lib_drag(mb.global_position)
 				get_viewport().set_input_as_handled()
 				return
+		# Native touch path (mirrors the mouse path; idempotent if mouse events are
+		# also emulated from touch, since _end_lib_drag clears the armed preset).
+		elif event is InputEventScreenDrag:
+			var sd := event as InputEventScreenDrag
+			if not _lib_drag_active:
+				if sd.position.distance_to(_lib_drag_start) > LIB_DRAG_THRESHOLD:
+					_lib_drag_active = true
+					if _lib_ghost != null:
+						_lib_ghost.visible = true
+			if _lib_ghost != null and _lib_ghost.visible:
+				_lib_ghost.position = sd.position + Vector2(10.0, 8.0)
+		elif event is InputEventScreenTouch:
+			var stc := event as InputEventScreenTouch
+			if not stc.pressed:
+				_end_lib_drag(stc.position)
+				get_viewport().set_input_as_handled()
+				return
 
 	# ---- Keyboard shortcuts (Delete / Ctrl+Z / Ctrl+Y) ----
 	if event is InputEventKey:
 		var ke := event as InputEventKey
 		if ke.pressed and not ke.echo:
-			var focus := get_viewport().gui_get_focus_owner()
-			var in_text := focus is LineEdit or focus is TextEdit or focus is CodeEdit
+			var key_focus := get_viewport().gui_get_focus_owner()
+			var in_text := key_focus is LineEdit or key_focus is TextEdit or key_focus is CodeEdit
 			if not in_text:
 				if ke.keycode == KEY_DELETE:
 					_delete_selected()
@@ -3768,11 +4544,11 @@ func _populate_library_graph_linkables() -> void:
 
 func _load_graph_ui_prefs() -> void:
 	var cfg := ConfigFile.new()
-	var visible := false
+	var legend_visible := false
 	if cfg.load(_UI_PREFS_CFG) == OK:
-		visible = bool(cfg.get_value("graph", "legend_visible", false))
+		legend_visible = bool(cfg.get_value("graph", "legend_visible", false))
 	if _graph_canvas != null and _graph_canvas.has_method("set_legend_visible"):
-		_graph_canvas.call("set_legend_visible", visible)
+		_graph_canvas.call("set_legend_visible", legend_visible)
 	_update_legend_btn()
 
 
@@ -3824,12 +4600,27 @@ func _try_toggle_device(item: Dictionary) -> void:
 		return
 	node.call("toggle")
 	var name_: String = item.get("specs", {}).get("name", "Device") as String
-	var state_lbl := "?"
-	if node.get("current_state") != null:
-		state_lbl = "ON" if int(node.get("current_state")) != 0 else "OFF"
+	# Report the SWITCH we just set (requested), not the momentary effective flag —
+	# the resolved run state comes from the engine's node_state (below), so the
+	# toast and the status chip can never contradict.
+	var switch_on := false
+	if node.get("_requested_on") != null:
+		switch_on = bool(node.get("_requested_on"))
+	elif node.get("current_state") != null:
+		switch_on = int(node.get("current_state")) != 0
 	elif node.get("is_on") != null:
-		state_lbl = "ON" if bool(node.get("is_on")) else "OFF"
-	_show_toast("%s → %s" % [name_, state_lbl])
+		switch_on = bool(node.get("is_on"))
+	var switch_lbl := "ON" if switch_on else "OFF"
+	# Resolved run state (may lag up to one resource tick).
+	var suffix := ""
+	var iid: String = str(item.get("id", ""))
+	if not iid.is_empty() and model != null:
+		var ns := str((model.get_item(iid).get("specs", {}) as Dictionary).get("node_state", ""))
+		match ns:
+			GraphNodeState.RUNNING: suffix = " — running"
+			GraphNodeState.BLOCKED: suffix = " — no power / blocked"
+			GraphNodeState.READY: suffix = " — ready"
+	_show_toast("%s: switched %s%s" % [name_, switch_lbl, suffix])
 	# Force bridge to refresh device state immediately
 	if _bridge != null:
 		_bridge.call("tick", 1.0)
@@ -3874,13 +4665,13 @@ func _ensure_history_player() -> void:
 
 
 func _resolve_ha_client_node() -> Node:
-	var tr := get_tree()
-	if tr == null:
+	var scene_tree := get_tree()
+	if scene_tree == null:
 		return null
-	var direct := tr.root.get_node_or_null("HAClient")
+	var direct := scene_tree.root.get_node_or_null("HAClient")
 	if direct != null:
 		return direct
-	for c in tr.root.get_children():
+	for c in scene_tree.root.get_children():
 		var nested := c.get_node_or_null("HAClient")
 		if nested != null:
 			return nested
@@ -4220,11 +5011,18 @@ func _other_ui_needs_free_mouse() -> bool:
 # ---------------------------------------------------------------------------
 
 func _on_model_changed(reason: String) -> void:
-	if _graph_canvas != null:
-		_graph_canvas.call("queue_redraw")
-	_refresh_telemetry()
-	_sync_solar_ui_from_graph()
-	_sync_graph_controller_ac_fault()
+	if _sim_bulk_update:
+		# Defer — a sim tick can call update_item dozens of times; coalesce into
+		# one redraw + one telemetry refresh via _flush_sim_bulk_update().
+		_pending_canvas_redraw = true
+		_pending_telemetry_refresh = true
+	else:
+		if _graph_canvas != null:
+			_graph_canvas.call("queue_redraw")
+		_refresh_telemetry()
+		_sync_solar_ui_from_graph()
+		_sync_graph_controller_ac_fault()
+		call_deferred("_populate_library_scene_devices")
 	if reason in ["add_connection", "remove_connection", "update_connection"]:
 		call_deferred("_check_pv_voltage_faults")
 	# Record structural user changes in the undo history
@@ -4234,7 +5032,23 @@ func _on_model_changed(reason: String) -> void:
 			_update_undo_redo_btns()
 		if GRAPH_AUTOSAVE_REASONS.has(reason):
 			_schedule_graph_autosave()
-	call_deferred("_populate_library_scene_devices")
+
+
+## Runs the redraw/telemetry work _on_model_changed deferred while
+## _sim_bulk_update was set, exactly once, covering every model.update_item
+## call made during the tick block. No-op if nothing changed this tick.
+func _flush_sim_bulk_update() -> void:
+	if not _pending_canvas_redraw and not _pending_telemetry_refresh:
+		return
+	if _pending_canvas_redraw and _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	if _pending_telemetry_refresh:
+		_refresh_telemetry()
+		_sync_solar_ui_from_graph()
+		_sync_graph_controller_ac_fault()
+		call_deferred("_populate_library_scene_devices")
+	_pending_canvas_redraw = false
+	_pending_telemetry_refresh = false
 
 
 # ---------------------------------------------------------------------------
@@ -4313,7 +5127,6 @@ func _refresh_telemetry() -> void:
 
 	# ── Aggregate batteries ─────────────────────────────────────────────────
 	var bat_kwh:   float = 0.0
-	var bat_ah:    float = 0.0
 	var bat_v_set: Array = []     # unique voltages seen
 
 	# ── Aggregate controllers ────────────────────────────────────────────────
@@ -4341,7 +5154,6 @@ func _refresh_telemetry() -> void:
 
 			"battery", "smartbattery":
 				bat_kwh     += float(specs.get("kwh",     0.0))
-				bat_ah      += float(specs.get("ah",      0.0))
 				var bv: float = float(specs.get("voltage", 0.0))
 				if bv > 0.0 and not bat_v_set.has(bv):
 					bat_v_set.append(bv)
@@ -4524,7 +5336,7 @@ func _collect_root_array_aggregate() -> Dictionary:
 			panel_wmp += float(specs.get("wmp", 0.0))
 			panel_voc_max = maxf(panel_voc_max, float(specs.get("voc", 0.0)))
 			panel_imp += float(specs.get("imp", 0.0))
-			panel_count += 1
+			panel_count += int(specs.get("panel_count", 1.0))
 		elif itype == "compound" and str(specs.get("compound_kind", "")) == "array":
 			panel_wmp += float(specs.get("array_equiv_wmp", 0.0))
 			panel_voc_max = maxf(panel_voc_max, float(specs.get("array_equiv_voc", 0.0)))
@@ -4597,8 +5409,9 @@ func _sync_graph_energy_from_solar() -> void:
 	if _graph_canvas != null:
 		var load_kw := maxf(0.0, float(_solar_ui.get("current_load_kw") if _solar_ui.get("current_load_kw") != null else 0.0))
 		var aux_kw := maxf(0.0, float(_solar_ui.get("current_aux_generation_kw") if _solar_ui.get("current_aux_generation_kw") != null else 0.0))
+		var graph_dc_kw := maxf(0.0, float(_solar_ui.get("current_graph_dc_kw") if _solar_ui.get("current_graph_dc_kw") != null else 0.0))
 		_graph_canvas.set("live_power_hint", {
-			"battery_w": (solar_kw + aux_kw - load_kw) * 1000.0,
+			"battery_w": (solar_kw + aux_kw + graph_dc_kw - load_kw) * 1000.0,
 			"valid": true,
 		})
 
@@ -4639,6 +5452,19 @@ func _sync_graph_energy_from_solar() -> void:
 		model.update_item(iid, {"specs": specs})
 
 
+## Sums live DC-electricity generation (fuel generators, graph-only wind/
+## hydro) that's actually wired into a root-scope battery, and pushes it into
+## SolarUI so it rides the same reversible EnergyTimeline SOC integrator as
+## real solar/aux generation instead of writing battery SOC directly. See
+## system_graph/dc_power_wiring.gd for the wiring trace.
+func _sync_graph_dc_generation_to_solar() -> void:
+	if model == null or _solar_ui == null or not is_instance_valid(_solar_ui):
+		return
+	var kw: float = _DC_POWER_WIRING_SCRIPT.sum_graph_dc_generation_kw(model)
+	if _solar_ui.has_method("set_graph_dc_generation_kw"):
+		_solar_ui.call("set_graph_dc_generation_kw", kw)
+
+
 func _sync_solar_ui_from_graph() -> void:
 	if _solar_ui == null or not is_instance_valid(_solar_ui):
 		return
@@ -4654,6 +5480,7 @@ func _sync_solar_ui_from_graph() -> void:
 			"panel_watts": avg_watts,
 			"peak_kw": panel_wmp / 1000.0,
 			"battery_kwh": float(bat.get("total_kwh", 0.0)),
+			"battery_count": int(bat.get("count", 0)),
 			"battery_soc": bank_soc,
 		})
 	if _solar_ui.has_method("set_graph_has_solar"):
@@ -4684,6 +5511,11 @@ func collect_save_state() -> Dictionary:
 		"canvas_pan_x":        pan.x,
 		"canvas_pan_y":        pan.y,
 		"canvas_zoom":         zoom,
+		"view_mode":           _graph_view_mode,
+		"freeform_soi_bubble": _freeform_soi_bubble,
+		"elevation_3d_section": _elevation_3d_section,
+		"elevation_heading_rad": float(_graph_canvas.get("elevation_heading_rad")) if _graph_canvas != null else 0.0,
+		"elevation_exaggeration": float(_graph_canvas.get("elevation_exaggeration")) if _graph_canvas != null else 5.0,
 		"suppressed_virtuals": _suppressed_virtuals.duplicate(),
 	}
 
@@ -4691,6 +5523,9 @@ func collect_save_state() -> Dictionary:
 func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 	if data.is_empty():
 		return
+	# Mark that an explicit save was applied so the deferred autosave restore
+	# (which may still be pending, or may fire later) won't clobber this graph.
+	_external_save_applied = true
 
 	var preserve_positions := bool(options.get("preserve_positions", false))
 	var position_backup: Dictionary = {}
@@ -4754,10 +5589,10 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 	_sidebar_r_open = bool(data.get("sidebar_r_open", true))
 	_mode           = str(data.get("mode", "build"))
 	_active_scope_id = str(data.get("active_scope_id", "root"))
-	var tr: Variant = data.get("scope_trail", ["root"])
+	var trail_data: Variant = data.get("scope_trail", ["root"])
 	_scope_trail.clear()
-	if tr is Array:
-		for sid_v: Variant in (tr as Array):
+	if trail_data is Array:
+		for sid_v: Variant in (trail_data as Array):
 			var sid: String = str(sid_v)
 			if sid.is_empty():
 				continue
@@ -4773,9 +5608,20 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 			float(data.get("canvas_pan_x", 0.0)),
 			float(data.get("canvas_pan_y", 0.0))
 		))
-		_graph_canvas.set("_zoom", clampf(float(data.get("canvas_zoom", 1.0)), 0.25, 4.0))
+		_graph_canvas.set("_zoom", clampf(float(data.get("canvas_zoom", 1.0)),
+				GraphLayout.ZOOM_MIN, GraphLayout.ZOOM_MAX))
 		_graph_canvas.set("active_scope_id", _active_scope_id)
+		_graph_canvas.set("elevation_heading_rad", float(data.get("elevation_heading_rad", 0.0)))
+		_graph_canvas.set("elevation_exaggeration", float(data.get("elevation_exaggeration", 5.0)))
 		_graph_canvas.call("queue_redraw")
+	_freeform_soi_bubble = bool(data.get("freeform_soi_bubble", false))
+	_elevation_3d_section = bool(data.get("elevation_3d_section", false))
+	var restored_view := str(data.get("view_mode", GraphSiteLayout.VIEW_FREEFORM))
+	if restored_view in [GraphSiteLayout.VIEW_FREEFORM, GraphSiteLayout.VIEW_SITE,
+			GraphSiteLayout.VIEW_ELEVATION]:
+		# Restore prefs only; `_sync_soi_preview_for_mode` no-ops world clip
+		# while the graph is hidden (first-person map load).
+		call_deferred("_apply_graph_view_mode", restored_view)
 
 	_refresh_telemetry()
 	_sync_solar_ui_from_graph()
@@ -4820,6 +5666,8 @@ const _RENEWABLES_POLL_INTERVAL := 0.25  # matches SolarBridge cadence
 var _renewables_acc: float = _RENEWABLES_POLL_INTERVAL
 const _ENERGY_SYNC_INTERVAL := 0.25
 var _energy_sync_acc: float = 0.0
+const _PBIS_POLL_INTERVAL := 0.25
+var _pbis_acc: float = _PBIS_POLL_INTERVAL
 
 
 ## Recompute current_output_kw for user-placed "wind" and "hydro" items from
@@ -4871,9 +5719,9 @@ func _tick_graph_renewables(delta: float) -> void:
 		if not scene_path.is_empty():
 			var scene_node: Node = get_tree().root.get_node_or_null(NodePath(scene_path))
 			if scene_node != null and scene_node.has_method("get_current_power_kw"):
-				var kw: float = maxf(0.0, float(scene_node.call("get_current_power_kw")))
-				if absf(float(specs.get("current_output_kw", 0.0)) - kw) >= 0.0005:
-					specs["current_output_kw"] = kw
+				var live_kw: float = maxf(0.0, float(scene_node.call("get_current_power_kw")))
+				if absf(float(specs.get("current_output_kw", 0.0)) - live_kw) >= 0.0005:
+					specs["current_output_kw"] = live_kw
 					model.update_item(iid, {"specs": specs, "device_path": scene_path})
 				continue
 		if ty == "panel":
@@ -4882,11 +5730,42 @@ func _tick_graph_renewables(delta: float) -> void:
 		if ty == "wind":
 			kw = WindTurbineSource.power_kw_from_graph_specs(specs, hour, real_wind_10m)
 		else:
-			kw = HydroSource.power_kw_from_graph_specs(specs, month, precip_mults)
+			# Prefer site-plan head when hydro + intake tank both have elevations.
+			var head_specs := specs.duplicate(true)
+			var derived := _derived_hydro_head_m(item)
+			if derived >= 0.0:
+				head_specs["gross_head_m"] = derived
+			kw = HydroSource.power_kw_from_graph_specs(head_specs, month, precip_mults)
 		if absf(float(specs.get("current_output_kw", 0.0)) - kw) < 0.0005:
 			continue
 		specs["current_output_kw"] = kw
 		model.update_item(iid, {"specs": specs})
+
+
+## Gross head from elevation_m delta between hydro node and its water intake tank.
+## Returns -1 when unavailable (keep manual gross_head_m).
+func _derived_hydro_head_m(hydro_item: Dictionary) -> float:
+	if model == null or not hydro_item.has("elevation_m"):
+		return -1.0
+	var hydro_e := float(hydro_item.get("elevation_m", 0.0))
+	var hid := str(hydro_item.get("id", ""))
+	for conn: Dictionary in model.connections:
+		if str(conn.get("target_item_id", "")) != hid \
+				and str(conn.get("source_item_id", "")) != hid:
+			continue
+		var other_id := str(conn.get("source_item_id", ""))
+		if other_id == hid:
+			other_id = str(conn.get("target_item_id", ""))
+		var other := model.get_item(other_id)
+		if other.is_empty() or not other.has("elevation_m"):
+			continue
+		var otype := str(other.get("type", ""))
+		if otype != "resource" and otype != "catchment":
+			continue
+		var other_e := float(other.get("elevation_m", 0.0))
+		# Intake above turbine → positive head.
+		return maxf(other_e - hydro_e, 0.0)
+	return -1.0
 
 
 # ---------------------------------------------------------------------------
@@ -5180,7 +6059,8 @@ func _fit_canvas_to_content() -> void:
 	var bounds := GraphLayout.content_bounds(items)
 	var fit: Dictionary = GraphLayout.compute_fit_view(bounds, c.size)
 	c.set("_pan", Vector2(float(fit.get("pan_x", 0.0)), float(fit.get("pan_y", 0.0))))
-	c.set("_zoom", clampf(float(fit.get("zoom", 1.0)), 0.25, 4.0))
+	c.set("_zoom", clampf(float(fit.get("zoom", 1.0)),
+			GraphLayout.ZOOM_MIN, GraphLayout.ZOOM_MAX))
 
 
 func _post_restore_layout_fixup() -> void:
@@ -5194,7 +6074,8 @@ func _post_restore_layout_fixup() -> void:
 		_show_toast("Overlapping nodes auto-arranged", 2.5)
 		return
 	# Recover from autosaves written when off-canvas nodes crushed zoom to minimum.
-	if _graph_canvas != null and float(_graph_canvas.get("_zoom")) <= 0.26:
+	if _graph_canvas != null \
+			and float(_graph_canvas.get("_zoom")) <= GraphLayout.ZOOM_MIN * 1.05:
 		_fit_canvas_to_content()
 
 
@@ -5294,7 +6175,14 @@ func _ensure_pbi_nodes() -> void:
 func _tick_graph_pbis(delta: float) -> void:
 	if model == null:
 		return
-		
+	# Was unthrottled (ran every frame with live WeatherService/SoiService
+	# queries + a full item scan + a per-frame randf()) — throttle to match the
+	# other 0.25s polling ticks.
+	_pbis_acc += delta
+	if _pbis_acc < _PBIS_POLL_INTERVAL:
+		return
+	_pbis_acc = 0.0
+
 	var area_m2 := 0.0
 	var soi_svc := get_node_or_null("/root/SoiService")
 	if soi_svc != null and soi_svc.has_method("area_m2"):
@@ -5313,23 +6201,18 @@ func _tick_graph_pbis(delta: float) -> void:
 		if dd != null: day = clampi(int(dd), 1, 31)
 		
 	var real_wind_10m := 0.0
-	var precip_mults: Array = []
+	var rain_mm_h := 0.0
 	var ws := get_node_or_null("/root/WeatherService")
 	if ws != null and m != null and ws.has_method("covers"):
 		var lat: Variant = m.get("latitude")
 		var lon: Variant = m.get("longitude")
 		if lat != null and lon != null and bool(ws.call("covers", float(lat), float(lon))):
 			real_wind_10m = float(ws.call("wind_speed_ms", month, day, hour))
-			precip_mults = ws.call("monthly_precip_multipliers") as Array
+			if ws.has_method("rain_rate_mmh"):
+				rain_mm_h = float(ws.call("rain_rate_mmh", month, day, hour))
 			
-	var rain_mm_h := 0.0
-	if precip_mults.size() >= 12:
-		var mult: float = precip_mults[month - 1]
-		# Crude estimation: say base rain is 1.0 mm/h when raining, scaled by monthly multiplier
-		rain_mm_h = mult * 1.5 if (randf() < 0.1) else 0.0 # Just a placeholder if we don't have real rain status
-		
 	var sun_active := hour > 6.0 and hour < 18.0
-	var rain_active := rain_mm_h > 0.1
+	var rain_active := rain_mm_h > 0.0
 	var wind_active := real_wind_10m > 4.4 # ~10 mph
 	var bio_active := true
 	

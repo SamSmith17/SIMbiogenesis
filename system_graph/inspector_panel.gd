@@ -4,7 +4,7 @@ extends Control
 ## All edits are routed through GraphModel so other views stay in sync.
 
 # ---------------------------------------------------------------------------
-# Palette — redirected to UITheme (single source of truth); local const
+# Palette - redirected to UITheme (single source of truth); local const
 # names kept so existing call sites are unchanged.
 # ---------------------------------------------------------------------------
 const C_BG      := UITheme.C_BG
@@ -41,7 +41,7 @@ var _form_vbox: VBoxContainer  = null
 var _toast_cb: Callable = Callable()
 ## Automation ID for the load section currently shown (Push reads latest from model).
 var _inspect_auto_id: String = ""
-## HAEntityLinker node (optional — injected by SystemGraphView).
+## HAEntityLinker node (optional - injected by SystemGraphView).
 var _ha_linker: Node = null
 var _compound_enter_cb: Callable = Callable()
 var _compound_ungroup_cb: Callable = Callable()
@@ -50,13 +50,20 @@ var _conduit_route_cb: Callable = Callable()
 var _conduit_clear_cb: Callable = Callable()
 var _placeholder_cb: Callable = Callable()
 var _place_model_cb: Callable = Callable()
+var _place_site_twin_cb: Callable = Callable()
 var _preview_refresh_cb: Callable = Callable()
 var _controller_reset_cb: Callable = Callable()
+## Resyncs a processor's dangling/ghost I/O tank containers after a direct
+## in-place port edit (add/remove/kind change) — SystemGraphView-injected.
+var _ghost_sync_cb: Callable = Callable()
+## "Save to Library" — pushes the current processor instance's config back to
+## its library preset and propagates it to sibling instances on the canvas.
+var _save_to_library_cb: Callable = Callable()
 
 ## Per-automation UI state. Key = automation id, value = true if the editor
 ## panel is expanded. Persists across inspector rebuilds for the same node.
 var _auto_expanded: Dictionary = {}
-## Collapsible Advanced subsections (HA twin, HA export, manual scene path…).
+## Collapsible Advanced subsections (HA twin, HA export, manual scene path...).
 ## Key = section id, value = expanded bool. Persists across rebuilds.
 var _advanced_expanded: Dictionary = {}
 ## Monotonic counter used when minting fresh automation ids for new rules.
@@ -189,12 +196,24 @@ func set_place_model_callback(cb: Callable) -> void:
 	_place_model_cb = cb
 
 
+func set_place_site_twin_callback(cb: Callable) -> void:
+	_place_site_twin_cb = cb
+
+
 func set_preview_refresh_callback(cb: Callable) -> void:
 	_preview_refresh_cb = cb
 
 
 func set_controller_reset_callback(cb: Callable) -> void:
 	_controller_reset_cb = cb
+
+
+func set_ghost_sync_callback(cb: Callable) -> void:
+	_ghost_sync_cb = cb
+
+
+func set_save_to_library_callback(cb: Callable) -> void:
+	_save_to_library_cb = cb
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +303,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_num_field("Max PV Power (W)",   specs.get("max_pv_watts", 2400.0), "specs/max_pv_watts",    0, 50000, 10.0)
 			if bool(specs.get("destroyed", false)):
 				_section("Fault")
-				_readonly_field("Status", "DESTROYED — %s" % str(specs.get("destroyed_reason", "Over-voltage")))
+				_readonly_field("Status", "DESTROYED - %s" % str(specs.get("destroyed_reason", "Over-voltage")))
 				var reset_btn := Button.new()
 				reset_btn.text = "Reset Controller"
 				reset_btn.add_theme_color_override("font_color", Color(0.4, 0.95, 0.55))
@@ -314,7 +333,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 				_num_field("Occupants", specs.get("occupants", 1.0), "specs/occupants", 1, 64, 1.0)
 				var starved: Array = specs.get("starved_kinds", []) as Array
 				if starved.is_empty():
-					_readonly_field("Demand status", "OK — all inputs supplied")
+					_readonly_field("Demand status", "OK - all inputs supplied")
 				else:
 					var parts: PackedStringArray = PackedStringArray()
 					for sk: Variant in starved:
@@ -331,15 +350,51 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_build_processor_batch_editor(specs)
 			_section("Cost")
 			_num_field("Unit Cost ($)",      specs.get("cost", 0.0),        "specs/cost", 0, 99999, 1.0)
+			_build_save_to_library_button(item)
 
 		"resource":
 			_section("Specs")
 			_text_field("Name",         specs.get("name", ""),      "specs/name")
 			_build_resource_kind_picker(specs)
-			_num_field("Capacity",      specs.get("capacity_qty", 100.0), "specs/capacity_qty", 0.0, 1e9, 1.0)
+			var unlimited := bool(specs.get("unlimited_capacity", false))
+			var unlim_row := _row_container()
+			var unlim_h: HBoxContainer = unlim_row.get_child(0) as HBoxContainer
+			unlim_h.add_child(_key_label("No capacity limit"))
+			var unlim_cb := CheckBox.new()
+			unlim_cb.button_pressed = unlimited
+			unlim_cb.focus_mode = Control.FOCUS_NONE
+			unlim_cb.toggled.connect(func(on: bool) -> void:
+				_commit_field("specs/unlimited_capacity", on)
+				_rebuild_current_item()
+			)
+			unlim_h.add_child(unlim_cb)
+			_form_vbox.add_child(unlim_row)
+			if unlimited:
+				_readonly_field("Capacity", "∞ (conceptual)")
+			else:
+				_num_field("Capacity",      specs.get("capacity_qty", 100.0), "specs/capacity_qty", 0.0, 1e9, 1.0)
 			_text_field("Capacity Unit", specs.get("capacity_unit", "L"), "specs/capacity_unit")
 			_readonly_field("Fill Level (sim)", "%.1f%%" % (float(specs.get("level", 0.0)) * 100.0))
 			_num_field("Alert Threshold (%)", specs.get("alert_threshold_pct", 95.0), "specs/alert_threshold_pct", 0.0, 100.0, 1.0)
+			var scale_row := _row_container()
+			var scale_h: HBoxContainer = scale_row.get_child(0) as HBoxContainer
+			scale_h.add_child(_key_label("Scale with fill"))
+			var scale_cb := CheckBox.new()
+			scale_cb.button_pressed = bool(specs.get("scale_with_fill", true))
+			scale_cb.focus_mode = Control.FOCUS_NONE
+			scale_cb.toggled.connect(func(on: bool) -> void: _commit_field("specs/scale_with_fill", on))
+			scale_h.add_child(scale_cb)
+			_form_vbox.add_child(scale_row)
+			var jit_row := _row_container()
+			var jit_h: HBoxContainer = jit_row.get_child(0) as HBoxContainer
+			jit_h.add_child(_key_label("Just-in-time outflow"))
+			var jit_cb := CheckBox.new()
+			jit_cb.button_pressed = bool(specs.get("jit_outflow", false))
+			jit_cb.focus_mode = Control.FOCUS_NONE
+			jit_cb.tooltip_text = "Fill connected downstream containers without overfilling; stop when they are full."
+			jit_cb.toggled.connect(func(on: bool) -> void: _commit_field("specs/jit_outflow", on))
+			jit_h.add_child(jit_cb)
+			_form_vbox.add_child(jit_row)
 			_section("Cost")
 			_num_field("Unit Cost ($)", specs.get("cost", 0.0),     "specs/cost", 0, 99999, 1.0)
 
@@ -359,6 +414,11 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_num_field("Catchment Area (m²)", specs.get("area_m2", 10.0), "specs/area_m2", 0.0, 100000.0, 1.0)
 			if str(specs.get("catchment_kind", "rain")) != "biomass":
 				_num_field("Runoff Coefficient", specs.get("runoff_coeff", 0.85), "specs/runoff_coeff", 0.0, 1.0, 0.01)
+			var live_lph := float(specs.get("live_capture_lph", specs.get("live_capture_rate", 0.0)))
+			if str(specs.get("catchment_kind", "rain")) == "biomass":
+				_readonly_field("Live capture", "%.3f kg/h" % live_lph)
+			else:
+				_readonly_field("Live capture", "%.1f L/h" % live_lph)
 			_section("Cost")
 			_num_field("Unit Cost ($)", specs.get("cost", 0.0), "specs/cost", 0, 99999, 1.0)
 
@@ -376,15 +436,15 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_section("Specs")
 			_text_field("Name", specs.get("name", ""), "specs/name")
 
-	# Automations are sim/gameplay-first — surfaced right after the core specs
+	# Automations are sim/gameplay-first - surfaced right after the core specs
 	# so bound rules are visible without scrolling. HA export lives under Advanced.
 	if _item_supports_automation(item):
 		_build_load_automation_section(item)
 
-	# Look & layout — editable size + canvas position (after type specs).
+	# Look & layout - editable size + canvas position (after type specs).
 	_build_appearance_section(item)
 
-	# 3D embodiment — Place in 3D when a GLB is attached, else prompt to add one.
+	# 3D embodiment - Place in 3D when a GLB is attached, else prompt to add one.
 	if itype in ["panel", "wind", "hydro", "processor", "resource", "catchment",
 			"appliance", "acload", "battery", "smartbattery", "controller"]:
 		_build_scene_link_section(item)
@@ -394,7 +454,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 	if itype == "compound":
 		_build_compound_section(item)
 
-	# Optional LIVE twin + calibration — tucked under Advanced so the default
+	# Optional LIVE twin + calibration - tucked under Advanced so the default
 	# inspector stays focused on simulation gameplay.
 	if itype in ["panel", "battery", "smartbattery", "controller", "shelly4pm",
 			"appliance", "acload"]:
@@ -410,7 +470,7 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 	_clear_form()
 
 	var polarity: String = conn.get("polarity", "positive")
-	_title_lbl.text = "⚡  Wire  (%s)" % polarity
+	_title_lbl.text = "  Wire  (%s)" % polarity
 	_title_lbl.add_theme_color_override("font_color", C_TEXT)
 
 	_section("Properties")
@@ -418,10 +478,10 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 	var rtype: String = str(conn.get("resource_type", ""))
 	if not rtype.is_empty():
 		_readonly_field("Resource kind", ResourceKinds.display_name(rtype))
-	_readonly_field("Source item",  conn.get("source_item_id",   "—"))
-	_readonly_field("Source port",  conn.get("source_handle_id", "—"))
-	_readonly_field("Target item",  conn.get("target_item_id",   "—"))
-	_readonly_field("Target port",  conn.get("target_handle_id", "—"))
+	_readonly_field("Source item",  conn.get("source_item_id",   "-"))
+	_readonly_field("Source port",  conn.get("source_handle_id", "-"))
+	_readonly_field("Target item",  conn.get("target_item_id",   "-"))
+	_readonly_field("Target port",  conn.get("target_handle_id", "-"))
 
 	var is_res: bool = (polarity == "resource")
 	if is_res:
@@ -589,7 +649,7 @@ func _build_line_style_picker(conn: Dictionary) -> void:
 func _build_connection_3d_route_section(conn: Dictionary) -> void:
 	_section("3D Route")
 	var routable := false
-	var status := "Unrouted — link both nodes to 3D scene objects"
+	var status := "Unrouted - link both nodes to 3D scene objects"
 	if _model != null:
 		routable = _model.connection_is_3d_routable(conn)
 		if routable:
@@ -604,12 +664,12 @@ func _build_connection_3d_route_section(conn: Dictionary) -> void:
 			if _model.item_scene_path(tgt).is_empty():
 				miss.append("target")
 			if not miss.is_empty():
-				status = "Unrouted — missing 3D link on: %s" % ", ".join(miss)
+				status = "Unrouted - missing 3D link on: %s" % ", ".join(miss)
 	_readonly_field("Status", status)
 	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
 	_readonly_field("Conduit (derived)", ConduitKinds.display_name(type_id))
 	var len_m: float = float(conn.get("route_length_m", conn.get("estimated_length", 0.0)))
-	_readonly_field("Run length (m)", "%.2f" % len_m if len_m > 0.001 else "—")
+	_readonly_field("Run length (m)", "%.2f" % len_m if len_m > 0.001 else "-")
 	_build_conduit_type_picker(conn)
 	if routable:
 		var route_btn := Button.new()
@@ -726,7 +786,9 @@ func _hint_label(text: String) -> void:
 
 
 ## Controllable loads / processors that can turn on/off. Habitats, imports,
-## and catchments are not automation targets.
+## and catchments are not automation targets. Passive generators (watts=0,
+## empty energy_source) like woodgas still support automations — the run
+## switch is what matters, not AC draw.
 func _item_supports_automation(item: Dictionary) -> bool:
 	var itype := str(item.get("type", ""))
 	if itype in ["appliance", "acload"]:
@@ -737,10 +799,7 @@ func _item_supports_automation(item: Dictionary) -> bool:
 	var role := str(specs.get("role", ""))
 	if role in ["habitat", "import", "export"]:
 		return false
-	# Controllable when it draws power or has an explicit energy source.
-	if float(specs.get("watts", 0.0)) > 0.0:
-		return true
-	return not str(specs.get("energy_source", "")).is_empty()
+	return true
 
 
 func _build_appearance_section(item: Dictionary) -> void:
@@ -755,6 +814,19 @@ func _build_appearance_section(item: Dictionary) -> void:
 	_num_field("Height (px)", cur_h, "height", 48.0, 480.0, 2.0)
 	_num_field("Canvas X", float(item.get("x", 0.0)), "x", -99999, 99999, 0.5)
 	_num_field("Canvas Y", float(item.get("y", 0.0)), "y", -99999, 99999, 0.5)
+	_section("Site Plan (meters)")
+	if GraphSiteLayout.has_site_coords(item):
+		_num_field("Site X (m east)", float(item.get("site_x_m", 0.0)), "site_x_m", -2000, 2000, 0.1)
+		_num_field("Site Z (m south)", float(item.get("site_z_m", 0.0)), "site_z_m", -2000, 2000, 0.1)
+		if item.has("elevation_m"):
+			_readonly_field("Ground elev (m)", "%.2f" % float(item.get("elevation_m", 0.0)))
+	else:
+		_hint_label("No site position yet — use View ▾ → Site Plan and drag onto the SoI disc.")
+	_num_field("Footprint W (m)", float(specs.get("footprint_w_m", 0.0)),
+			"specs/footprint_w_m", 0.0, 100.0, 0.1)
+	_num_field("Footprint D (m)", float(specs.get("footprint_d_m", 0.0)),
+			"specs/footprint_d_m", 0.0, 100.0, 0.1)
+	_hint_label("0 = auto from model / type defaults. Used in Site Plan view.")
 
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 8)
@@ -776,7 +848,7 @@ func _build_appearance_section(item: Dictionary) -> void:
 
 	_hint_label("Width and height control the node footprint on the graph. Ports stay at their relative positions.")
 
-	# Card preview camera — only when a GLB is attached.
+	# Card preview camera - only when a GLB is attached.
 	var model_id := str(specs.get("model_id", ""))
 	if not model_id.is_empty():
 		_section("Card Preview")
@@ -1051,7 +1123,7 @@ func _get_automation_engine() -> Node:
 	return tr.root.get_node_or_null("AutomationEngine")
 
 
-## Top-level automation section — sim/gameplay first. WHEN / IF / THEN mirrors
+## Top-level automation section - sim/gameplay first. WHEN / IF / THEN mirrors
 ## Home Assistant so future LIVE export stays 1:1, but no HA entity is required.
 func _build_load_automation_section(item: Dictionary) -> void:
 	_migrate_legacy_automation_if_needed(item)
@@ -1059,7 +1131,7 @@ func _build_load_automation_section(item: Dictionary) -> void:
 	var pre_specs: Dictionary = item.get("specs", {}) as Dictionary
 	var rule_count: int = (pre_specs.get("graph_automations", []) as Array).size()
 	_section("Automation (%d)" % rule_count if rule_count > 0 else "Automation")
-	_hint_label("Rules run in the simulation. Link Home Assistant later under Advanced if you want a live twin.")
+	_hint_label("Rules run in the simulation. Pick Upstream/Downstream nodes for fill levels and on/off states. Link Home Assistant later under Advanced if you want a live twin.")
 
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var autos: Array = (specs.get("graph_automations", []) as Array)
@@ -1076,9 +1148,9 @@ func _build_load_automation_section(item: Dictionary) -> void:
 
 	_build_auto_add_footer(item)
 
-	# Optional HA export / entity mapping — secondary, not required for gameplay.
+	# Optional HA export / entity mapping - secondary, not required for gameplay.
 	if _advanced_section("auto_ha", "Advanced · Home Assistant link",
-			"Optional — map this load to an HA entity and push rules for LIVE mode"):
+			"Optional - map this load to an HA entity and push rules for LIVE mode"):
 		_hint_label("Only needed when mirroring this load to a real Home Assistant entity. Simulation automations work without it.")
 		_build_ha_entity_row(item)
 
@@ -1214,11 +1286,11 @@ func _build_auto_card(item: Dictionary, index: int) -> void:
 		card_vbox.add_child(alias_edit)
 
 		# WHEN (triggers)
-		_build_auto_subsection(card_vbox, "WHEN  (triggers — any fires)", Color(0.55, 0.95, 0.55),
+		_build_auto_subsection(card_vbox, "WHEN  (triggers - any fires)", Color(0.55, 0.95, 0.55),
 			_AUTO_KIND_TRIGGER, index, (aut.get("triggers", []) as Array))
 
 		# IF (conditions)
-		_build_auto_subsection(card_vbox, "IF  (conditions — all must match, optional)", C_AMBER,
+		_build_auto_subsection(card_vbox, "IF  (conditions - all must match, optional)", C_AMBER,
 			_AUTO_KIND_CONDITION, index, (aut.get("conditions", []) as Array))
 
 		# THEN (actions)
@@ -1229,7 +1301,7 @@ func _build_auto_card(item: Dictionary, index: int) -> void:
 		var push_row := HBoxContainer.new()
 		push_row.add_theme_constant_override("separation", 6)
 		var push_btn := Button.new()
-		push_btn.text = "Push to Home Assistant…"
+		push_btn.text = "Push to Home Assistant..."
 		push_btn.flat = true
 		push_btn.focus_mode = Control.FOCUS_NONE
 		push_btn.tooltip_text = "Export this rule to HA (requires HA entity under Advanced)"
@@ -1378,19 +1450,16 @@ func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int
 						-6.0, 6.0, 0.25,
 						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["offset_hours"], v))
 				"numeric":
-					_add_enum_row(parent, "Signal", [
-							{"label": "Battery SOC %", "key": "sensor.battery_level"},
-							{"label": "Solar power (W)", "key": "sensor.solar_power"},
-							{"label": "Load power (W)", "key": "sensor.load_power"},
-							{"label": "Custom (HA entity…)", "key": "__custom__"},
-						], _numeric_signal_key(str(sub.get("entity_id", "sensor.battery_level"))),
+					_add_enum_row(parent, "Signal", _numeric_signal_options(),
+						_numeric_signal_key(str(sub.get("entity_id", "sensor.battery_level"))),
 						func(v: String) -> void:
 							if v == "__custom__":
 								_auto_patch_field(auto_index, path_base + ["entity_id"], "sensor.")
 							else:
-								_auto_patch_field(auto_index, path_base + ["entity_id"], v))
+								_auto_patch_field(auto_index, path_base + ["entity_id"], v)
+							_rebuild_current_item())
 					var eid := str(sub.get("entity_id", "sensor.battery_level"))
-					if not (eid in ["sensor.battery_level", "sensor.solar_power", "sensor.load_power"]):
+					if _numeric_signal_key(eid) == "__custom__":
 						_add_text_row(parent, "Entity id", eid,
 							func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
 					_add_optional_spin_row(parent, "Above", sub.get("above", null),
@@ -1400,9 +1469,30 @@ func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int
 						0.0, 100.0, 1.0,
 						func(v: Variant) -> void: _auto_patch_field(auto_index, path_base + ["below"], v))
 				"state":
-					_add_text_row(parent, "Device / entity", str(sub.get("entity_id", "")),
-						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
-					_add_text_row(parent, "To state", str(sub.get("to_state", "on")),
+					_add_enum_row(parent, "Node / device", _state_entity_options(),
+						_state_entity_key(str(sub.get("entity_id", ""))),
+						func(v: String) -> void:
+							var patch_eid := "" if v == "__custom__" else v
+							var patch_to := str(sub.get("to_state", "on"))
+							if v.begins_with("tank."):
+								patch_to = "overflow"
+							elif v.begins_with("node."):
+								patch_to = "on"
+							# One commit so we don't mid-rebuild between entity and to_state.
+							var autos_s: Array = _get_autos()
+							if auto_index >= 0 and auto_index < autos_s.size():
+								var aut_s: Dictionary = (autos_s[auto_index] as Dictionary).duplicate(true)
+								_apply_path(aut_s, path_base + ["entity_id"], patch_eid)
+								_apply_path(aut_s, path_base + ["to_state"], patch_to)
+								autos_s[auto_index] = aut_s
+								_commit_autos(autos_s)
+							_rebuild_current_item())
+					var seid := str(sub.get("entity_id", ""))
+					if _state_entity_key(seid) == "__custom__":
+						_add_text_row(parent, "Device / entity", seid,
+							func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
+					_add_enum_row(parent, "To state", _state_value_options(seid),
+						str(sub.get("to_state", "on")),
 						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["to_state"], v))
 		_AUTO_KIND_CONDITION:
 			match sub_kind:
@@ -1414,19 +1504,16 @@ func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int
 						0.0, 24.0, 0.25,
 						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["before_hour"], v))
 				"numeric":
-					_add_enum_row(parent, "Signal", [
-							{"label": "Battery SOC %", "key": "sensor.battery_level"},
-							{"label": "Solar power (W)", "key": "sensor.solar_power"},
-							{"label": "Load power (W)", "key": "sensor.load_power"},
-							{"label": "Custom (HA entity…)", "key": "__custom__"},
-						], _numeric_signal_key(str(sub.get("entity_id", "sensor.battery_level"))),
+					_add_enum_row(parent, "Signal", _numeric_signal_options(),
+						_numeric_signal_key(str(sub.get("entity_id", "sensor.battery_level"))),
 						func(v: String) -> void:
 							if v == "__custom__":
 								_auto_patch_field(auto_index, path_base + ["entity_id"], "sensor.")
 							else:
-								_auto_patch_field(auto_index, path_base + ["entity_id"], v))
+								_auto_patch_field(auto_index, path_base + ["entity_id"], v)
+							_rebuild_current_item())
 					var eid2 := str(sub.get("entity_id", "sensor.battery_level"))
-					if not (eid2 in ["sensor.battery_level", "sensor.solar_power", "sensor.load_power"]):
+					if _numeric_signal_key(eid2) == "__custom__":
 						_add_text_row(parent, "Entity id", eid2,
 							func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
 					_add_optional_spin_row(parent, "Above", sub.get("above", null),
@@ -1442,15 +1529,37 @@ func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int
 						], str(sub.get("state", "above_horizon")),
 						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["state"], v))
 				"state":
-					_add_text_row(parent, "Device / entity", str(sub.get("entity_id", "")),
-						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
+					_add_enum_row(parent, "Node / device", _state_entity_options(),
+						_state_entity_key(str(sub.get("entity_id", ""))),
+						func(v: String) -> void:
+							var patch_eid2 := "" if v == "__custom__" else v
+							var autos_c: Array = _get_autos()
+							if auto_index >= 0 and auto_index < autos_c.size():
+								var aut_c: Dictionary = (autos_c[auto_index] as Dictionary).duplicate(true)
+								_apply_path(aut_c, path_base + ["entity_id"], patch_eid2)
+								if v.begins_with("tank."):
+									_apply_path(aut_c, path_base + ["states"], ["overflow"])
+								elif v.begins_with("node."):
+									_apply_path(aut_c, path_base + ["states"], ["on"])
+								autos_c[auto_index] = aut_c
+								_commit_autos(autos_c)
+							_rebuild_current_item())
+					var seid2 := str(sub.get("entity_id", ""))
+					if _state_entity_key(seid2) == "__custom__":
+						_add_text_row(parent, "Device / entity", seid2,
+							func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
 					var cur_states: Array = sub.get("states", []) as Array
 					var joined := ""
 					for s in cur_states:
 						if joined != "":
 							joined += ","
 						joined += str(s)
-					_add_text_row(parent, "States (csv)", joined,
+					_add_enum_row(parent, "Match state", _state_value_options(seid2),
+						str(cur_states[0]) if not cur_states.is_empty() else "on",
+						func(v: String) -> void:
+							_auto_patch_field(auto_index, path_base + ["states"], [v])
+							_rebuild_current_item())
+					_add_text_row(parent, "States (csv)", joined if not joined.is_empty() else "",
 						func(v: String) -> void:
 							var arr: Array = []
 							for part in v.split(","):
@@ -1473,10 +1582,121 @@ func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int
 						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["delay_seconds"], v))
 
 
+## Global sensors + upstream/downstream graph neighbors for numeric triggers.
+func _numeric_signal_options() -> Array:
+	var opts: Array = [
+		{"label": "Battery SOC %", "key": "sensor.battery_level"},
+		{"label": "Solar power (W)", "key": "sensor.solar_power"},
+		{"label": "Load power (W)", "key": "sensor.load_power"},
+	]
+	for n: Dictionary in _iter_graph_neighbors():
+		var nid: String = str(n.get("id", ""))
+		var nname: String = str(n.get("name", nid))
+		var dir: String = str(n.get("dir", ""))
+		var ity: String = str(n.get("type", ""))
+		if ity == "resource":
+			opts.append({
+				"label": "%s: %s fill %%" % [dir, nname],
+				"key": "tank.%s.level" % nid,
+			})
+	opts.append({"label": "Custom (HA entity…)", "key": "__custom__"})
+	return opts
+
+
+## Upstream/downstream + custom entity for state triggers/conditions.
+func _state_entity_options() -> Array:
+	var opts: Array = []
+	for n: Dictionary in _iter_graph_neighbors():
+		var nid: String = str(n.get("id", ""))
+		var nname: String = str(n.get("name", nid))
+		var dir: String = str(n.get("dir", ""))
+		var ity: String = str(n.get("type", ""))
+		if ity == "resource":
+			opts.append({
+				"label": "%s: %s (tank)" % [dir, nname],
+				"key": "tank.%s" % nid,
+			})
+		elif ity in ["processor", "appliance", "acload"]:
+			opts.append({
+				"label": "%s: %s" % [dir, nname],
+				"key": "node.%s" % nid,
+			})
+	opts.append({"label": "Custom (HA / device id…)", "key": "__custom__"})
+	return opts
+
+
+## Suggested to-state / match-state values for a selected entity key.
+func _state_value_options(entity_id: String) -> Array:
+	if entity_id.begins_with("tank."):
+		return [
+			{"label": "OK (not overflowing)", "key": "ok"},
+			{"label": "Overflowing", "key": "overflow"},
+		]
+	if entity_id.begins_with("node."):
+		return [
+			{"label": "On", "key": "on"},
+			{"label": "Off", "key": "off"},
+			{"label": "Starved", "key": "starved"},
+			{"label": "Blocked", "key": "blocked"},
+		]
+	return [
+		{"label": "On", "key": "on"},
+		{"label": "Off", "key": "off"},
+	]
+
+
+## Immediate upstream/downstream graph neighbors of the inspected item.
+## Returns [{id, name, type, dir}] where dir is "Upstream" or "Downstream".
+func _iter_graph_neighbors() -> Array:
+	var out: Array = []
+	if _model == null or _item_id.is_empty():
+		return out
+	var seen: Dictionary = {}
+	for conn: Dictionary in _model.connections:
+		var src := str(conn.get("source_item_id", ""))
+		var tgt := str(conn.get("target_item_id", ""))
+		var other := ""
+		var dir := ""
+		if src == _item_id:
+			other = tgt
+			dir = "Downstream"
+		elif tgt == _item_id:
+			other = src
+			dir = "Upstream"
+		else:
+			continue
+		if other.is_empty() or seen.has(other):
+			continue
+		seen[other] = true
+		var it := _model.get_item(other)
+		if it.is_empty():
+			continue
+		var specs: Dictionary = it.get("specs", {}) as Dictionary
+		out.append({
+			"id": other,
+			"name": str(specs.get("name", other)),
+			"type": str(it.get("type", "")),
+			"dir": dir,
+		})
+	return out
+
+
 ## Map a stored entity_id onto the Signal picker key (or __custom__).
 func _numeric_signal_key(entity_id: String) -> String:
+	for o: Dictionary in _numeric_signal_options():
+		if str(o.get("key", "")) == entity_id:
+			return entity_id
 	if entity_id in ["sensor.battery_level", "sensor.solar_power", "sensor.load_power"]:
 		return entity_id
+	return "__custom__"
+
+
+func _state_entity_key(entity_id: String) -> String:
+	if entity_id.is_empty():
+		return "__custom__"
+	for o: Dictionary in _state_entity_options():
+		if str(o.get("key", "")) == entity_id:
+			return entity_id
 	return "__custom__"
 
 
@@ -1487,15 +1707,15 @@ func _get_kind_options(kind: String) -> Array:
 			return [
 				{"id": 0, "key": "time",    "label": "Time of day"},
 				{"id": 1, "key": "sun",     "label": "Sunrise / sunset"},
-				{"id": 2, "key": "numeric", "label": "Battery / power signal"},
-				{"id": 3, "key": "state",   "label": "Device state"},
+				{"id": 2, "key": "numeric", "label": "Fill level / power signal"},
+				{"id": 3, "key": "state",   "label": "Graph / device state"},
 			]
 		_AUTO_KIND_CONDITION:
 			return [
 				{"id": 0, "key": "time",    "label": "Time window"},
 				{"id": 1, "key": "sun",     "label": "Sun above/below horizon"},
-				{"id": 2, "key": "numeric", "label": "Battery / power signal"},
-				{"id": 3, "key": "state",   "label": "Device state"},
+				{"id": 2, "key": "numeric", "label": "Fill level / power signal"},
+				{"id": 3, "key": "state",   "label": "Graph / device state"},
 			]
 		_:
 			return [
@@ -1685,7 +1905,7 @@ const _TEMPLATES := [
 		],
 	},
 	{
-		"label": "🔋↓ Load shedding — off below 20% SOC",
+		"label": "🔋↓ Load shedding - off below 20% SOC",
 		"specs": [
 			{"alias": "Off below 20% battery",
 			 "triggers":   [{"kind": "numeric", "entity_id": "sensor.battery_level", "below": 20.0}],
@@ -1714,7 +1934,7 @@ func _build_auto_add_footer(item: Dictionary) -> void:
 	row.add_theme_constant_override("separation", 8)
 
 	var std_btn := MenuButton.new()
-	std_btn.text = "+ Preset…"
+	std_btn.text = "+ Preset..."
 	std_btn.flat = true
 	std_btn.focus_mode = Control.FOCUS_NONE
 	std_btn.add_theme_color_override("font_color", C_PRIMARY)
@@ -1869,7 +2089,7 @@ func _on_push_auto_pressed(auto_id: String) -> void:
 	_toast(str(res.get("message", "Done")))
 
 
-## Generic "patch one field" — path is an array like ["alias"] or
+## Generic "patch one field" - path is an array like ["alias"] or
 ## ["triggers", 0, "at_hour"]. Commits to the model and re-registers the
 ## automation so the engine sees the change immediately.
 func _auto_patch_field(auto_index: int, path: Array, value: Variant) -> void:
@@ -1966,7 +2186,7 @@ func _migrate_legacy_automation_if_needed(item: Dictionary) -> void:
 	var has_legacy: bool = not legacy_id.is_empty() \
 		or specs.has("automation_alias")
 	if not has_legacy:
-		# Nothing to migrate — don't touch the model.
+		# Nothing to migrate - don't touch the model.
 		return
 	var autos: Array = []
 	if not legacy_id.is_empty():
@@ -2308,6 +2528,11 @@ func _summarize_trigger(t: Dictionary) -> String:
 					friendly = "solar W"
 				"sensor.load_power":
 					friendly = "load W"
+				_:
+					if ent.begins_with("tank.") and ent.ends_with(".level"):
+						friendly = "fill %s" % ent.trim_prefix("tank.").trim_suffix(".level")
+					elif ent.begins_with("resource.") and ent.ends_with(".level"):
+						friendly = ent.trim_prefix("resource.").trim_suffix(".level") + " fill"
 			var parts: Array = []
 			if t.has("above") and t.get("above") != null:
 				parts.append("> %.0f" % float(t.get("above")))
@@ -2341,6 +2566,14 @@ func _fmt_hour(h: float) -> String:
 		mi = 0
 		hi += 1
 	return "%02d:%02d" % [hi, mi]
+
+
+## Resyncs the current processor's dangling/ghost I/O tank containers (name +
+## kind) to match a just-committed port edit. No-op if SystemGraphView hasn't
+## injected the callback or nothing is selected.
+func _sync_ghost_containers() -> void:
+	if _ghost_sync_cb.is_valid() and not _item_id.is_empty():
+		_ghost_sync_cb.call(_item_id)
 
 
 ## Ask the inspector to rebuild itself for the currently-selected load item.
@@ -2400,29 +2633,29 @@ const _HA_ROLES := {
 	# Shelly Pro 4PM: power sensor, switch state, and energy for each of 4 circuits.
 	# Default entity IDs match the ESPHome integration naming used in InverterBridge.
 	"shelly4pm": [
-		{"id": "c0_power",  "label": "Ch 0 — Power",   "required": false, "unit": "W",
+		{"id": "c0_power",  "label": "Ch 0 - Power",   "required": false, "unit": "W",
 			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_0_power"},
-		{"id": "c0_switch", "label": "Ch 0 — Switch",  "required": false, "unit": "",
+		{"id": "c0_switch", "label": "Ch 0 - Switch",  "required": false, "unit": "",
 			"placeholder": "switch.shellypro4pm_ece334ed2e80_output_0"},
-		{"id": "c0_energy", "label": "Ch 0 — Energy",  "required": false, "unit": "kWh",
+		{"id": "c0_energy", "label": "Ch 0 - Energy",  "required": false, "unit": "kWh",
 			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_0_energy"},
-		{"id": "c1_power",  "label": "Ch 1 — Power",   "required": false, "unit": "W",
+		{"id": "c1_power",  "label": "Ch 1 - Power",   "required": false, "unit": "W",
 			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_1_power"},
-		{"id": "c1_switch", "label": "Ch 1 — Switch",  "required": false, "unit": "",
+		{"id": "c1_switch", "label": "Ch 1 - Switch",  "required": false, "unit": "",
 			"placeholder": "switch.shellypro4pm_ece334ed2e80_output_1"},
-		{"id": "c1_energy", "label": "Ch 1 — Energy",  "required": false, "unit": "kWh",
+		{"id": "c1_energy", "label": "Ch 1 - Energy",  "required": false, "unit": "kWh",
 			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_1_energy"},
-		{"id": "c2_power",  "label": "Ch 2 — Power",   "required": false, "unit": "W",
+		{"id": "c2_power",  "label": "Ch 2 - Power",   "required": false, "unit": "W",
 			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_2_power"},
-		{"id": "c2_switch", "label": "Ch 2 — Switch",  "required": false, "unit": "",
+		{"id": "c2_switch", "label": "Ch 2 - Switch",  "required": false, "unit": "",
 			"placeholder": "switch.shellypro4pm_ece334ed2e80_output_2"},
-		{"id": "c2_energy", "label": "Ch 2 — Energy",  "required": false, "unit": "kWh",
+		{"id": "c2_energy", "label": "Ch 2 - Energy",  "required": false, "unit": "kWh",
 			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_2_energy"},
-		{"id": "c3_power",  "label": "Ch 3 — Power",   "required": false, "unit": "W",
+		{"id": "c3_power",  "label": "Ch 3 - Power",   "required": false, "unit": "W",
 			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_3_power"},
-		{"id": "c3_switch", "label": "Ch 3 — Switch",  "required": false, "unit": "",
+		{"id": "c3_switch", "label": "Ch 3 - Switch",  "required": false, "unit": "",
 			"placeholder": "switch.shellypro4pm_ece334ed2e80_output_3"},
-		{"id": "c3_energy", "label": "Ch 3 — Energy",  "required": false, "unit": "kWh",
+		{"id": "c3_energy", "label": "Ch 3 - Energy",  "required": false, "unit": "kWh",
 			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_3_energy"},
 	],
 }
@@ -2440,7 +2673,7 @@ func _build_processor_energy_picker(specs: Dictionary) -> void:
 	var opt := OptionButton.new()
 	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var options: Array = [
-		{"id": "ac", "label": "Electric (AC — top port)"},
+		{"id": "ac", "label": "Electric (AC - top port)"},
 		{"id": "thermal", "label": "Thermal (top port)"},
 		{"id": "mechanical", "label": "Mechanical (top port)"},
 		{"id": "", "label": "None (no energy port)"},
@@ -2463,6 +2696,22 @@ func _build_processor_energy_picker(specs: Dictionary) -> void:
 	)
 	row.add_child(opt)
 	_form_vbox.add_child(row)
+
+
+## "Save to Library": pushes this processor instance's current config (specs
+## minus per-instance state) back to its ComponentPresets library entry, then
+## live-updates every other placed instance of the same template to match.
+func _build_save_to_library_button(item: Dictionary) -> void:
+	_form_vbox.add_child(Control.new())
+	var btn := Button.new()
+	btn.text = "💾 Save to Library"
+	btn.tooltip_text = "Update this component's library preset with the current settings, and apply them to every other instance on the canvas."
+	var iid := str(item.get("id", ""))
+	btn.pressed.connect(func():
+		if _save_to_library_cb.is_valid():
+			_save_to_library_cb.call(iid)
+	)
+	_form_vbox.add_child(btn)
 
 
 func _build_processor_batch_editor(specs: Dictionary) -> void:
@@ -2527,6 +2776,7 @@ func _build_processor_batch_editor(specs: Dictionary) -> void:
 		arr.append({"kind": "electric", "rate": 1000.0, "mode": "continuous"})
 		specs["inputs"] = arr
 		_commit_field("specs", specs)
+		_sync_ghost_containers()
 		_rebuild_current_item()
 	)
 	_form_vbox.add_child(add_in_btn)
@@ -2544,6 +2794,7 @@ func _build_processor_batch_editor(specs: Dictionary) -> void:
 		arr.append({"kind": "water", "rate": 0.0, "mode": "continuous", "delay_hrs": 0.0, "duration_hrs": 1.0})
 		specs["outputs"] = arr
 		_commit_field("specs", specs)
+		_sync_ghost_containers()
 		_rebuild_current_item()
 	)
 	_form_vbox.add_child(add_out_btn)
@@ -2588,8 +2839,17 @@ func _build_io_row(specs: Dictionary, arr_name: String, idx: int, batch_mode: bo
 		if k == cur_kind: sel = ki
 	kind_opt.select(sel)
 	kind_opt.item_selected.connect(func(id: int):
-		io["kind"] = str(kinds[id])
+		var old_io_kind := str(io.get("kind", ""))
+		var new_io_kind := str(kinds[id])
+		io["kind"] = new_io_kind
 		_commit_field("specs", specs)
+		# dc_electricity swaps this row's single port for a +/- pair (or vice
+		# versa) — drop any stale customized port geometry so it doesn't
+		# linger with the wrong polarity/role alongside the new topology.
+		if (new_io_kind == "dc_electricity" or old_io_kind == "dc_electricity") \
+				and _model != null and not _item_id.is_empty():
+			_model.update_item(_item_id, {"handles": []})
+		_sync_ghost_containers()
 		_rebuild_current_item()
 	)
 	hbox1.add_child(kind_opt)
@@ -2674,9 +2934,17 @@ func _build_resource_kind_picker(specs: Dictionary) -> void:
 		var kind_id: String = str(kinds[idx])
 		var item := _model.get_item(_item_id)
 		var sub: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var old_kind := str(sub.get("resource_kind", "water"))
 		sub["resource_kind"] = kind_id
 		sub["capacity_unit"] = ResourceKinds.default_unit(kind_id)
-		_model.update_item(_item_id, {"specs": sub})
+		var updates: Dictionary = {"specs": sub}
+		# dc_electricity swaps the single generic in/out pair for a +/- pair
+		# (or vice versa) — drop any customized port geometry (rotated hub
+		# ports, extra drop-to-body ports) so it doesn't linger with the
+		# wrong polarity/role alongside the new topology.
+		if kind_id == "dc_electricity" or old_kind == "dc_electricity":
+			updates["handles"] = []
+		_model.update_item(_item_id, updates)
 	)
 	row.add_child(opt)
 	_form_vbox.add_child(row)
@@ -2697,11 +2965,11 @@ func _build_scene_link_section(item: Dictionary) -> void:
 	if not bound_id.is_empty():
 		var entry := ModelCatalog.find(model_id) if not model_id.is_empty() else {}
 		var label := str(entry.get("label", model_id)) if not entry.is_empty() else model_id
-		status = "Placed in world" + (" — %s" % label if not label.is_empty() else "")
+		status = "Placed in world" + (" - %s" % label if not label.is_empty() else "")
 	elif not model_id.is_empty():
 		var entry2 := ModelCatalog.find(model_id)
 		var label2 := str(entry2.get("label", model_id)) if not entry2.is_empty() else model_id
-		status = "GLB ready — %s" % label2
+		status = "GLB ready - %s" % label2
 	elif is_ibc:
 		status = "IBC tank mesh linked"
 	elif is_placeholder or bind == "scene":
@@ -2725,8 +2993,20 @@ func _build_scene_link_section(item: Dictionary) -> void:
 		)
 		btn_row.add_child(place_btn)
 
+		if GraphSiteLayout.has_site_coords(item) and _place_site_twin_cb.is_valid():
+			var site_btn := Button.new()
+			site_btn.text = "Place 3D twin at site"
+			site_btn.tooltip_text = "Place/move the GLB at the Site Plan coordinates (ground level)"
+			site_btn.focus_mode = Control.FOCUS_NONE
+			site_btn.add_theme_color_override("font_color", C_PRIMARY)
+			site_btn.pressed.connect(func() -> void:
+				if _place_site_twin_cb.is_valid() and not _item_id.is_empty():
+					_place_site_twin_cb.call(_item_id)
+			)
+			btn_row.add_child(site_btn)
+
 		var change_btn := Button.new()
-		change_btn.text = "Change GLB…"
+		change_btn.text = "Change GLB..."
 		change_btn.flat = true
 		change_btn.focus_mode = Control.FOCUS_NONE
 		change_btn.add_theme_color_override("font_color", C_TEXT_S)
@@ -2736,7 +3016,7 @@ func _build_scene_link_section(item: Dictionary) -> void:
 		btn_row.add_child(change_btn)
 	else:
 		var add_btn := Button.new()
-		add_btn.text = "Add GLB from computer…"
+		add_btn.text = "Add GLB from computer..."
 		add_btn.tooltip_text = "Import a .glb / .gltf and attach it to this node"
 		add_btn.focus_mode = Control.FOCUS_NONE
 		add_btn.add_theme_color_override("font_color", C_PRIMARY)
@@ -2766,7 +3046,7 @@ func _build_scene_link_section(item: Dictionary) -> void:
 	if _advanced_section("scene_manual", "Advanced · Scene node path",
 			"Manual NodePath binding for existing scene devices"):
 		_text_field("Scene Node Path", path_val, "specs/scene_device_path")
-		_readonly_field("device_path", str(item.get("device_path", "—")))
+		_readonly_field("device_path", str(item.get("device_path", "-")))
 
 
 func _ensure_glb_file_dialog() -> void:
@@ -2791,22 +3071,22 @@ func _on_glb_file_selected(path: String) -> void:
 		return
 	var entry := ModelImporter.import_from_path(path)
 	if entry.is_empty():
-		_toast("Could not import GLB — check the file path")
+		_toast("Could not import GLB - check the file path")
 		return
 	var mid := str(entry.get("id", ""))
 	if mid.is_empty():
-		_toast("Import failed — no model id")
+		_toast("Import failed - no model id")
 		return
 	var item := _model.get_item(_item_id)
 	if item.is_empty():
 		return
 	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 	specs["model_id"] = mid
-	# Fresh GLB attachment — clear stale placeholder / prior prop binding.
+	# Fresh GLB attachment - clear stale placeholder / prior prop binding.
 	specs.erase("graph_placeholder")
 	specs.erase("bound_prop_id")
 	_model.update_item(_item_id, {"specs": specs})
-	_toast("Attached “%s” — Place in 3D when ready" % str(entry.get("label", mid)))
+	_toast("Attached “%s” - Place in 3D when ready" % str(entry.get("label", mid)))
 	if _preview_refresh_cb.is_valid():
 		_preview_refresh_cb.call(_item_id)
 	_rebuild_current_item()
@@ -2814,7 +3094,7 @@ func _on_glb_file_selected(path: String) -> void:
 
 func _build_advanced_ha_twin_section(item: Dictionary) -> void:
 	if not _advanced_section("ha_twin", "Advanced · Live twin (Home Assistant)",
-			"Optional — mirror real HA sensors into this node in LIVE mode"):
+			"Optional - mirror real HA sensors into this node in LIVE mode"):
 		return
 	_hint_label("Simulation does not need these links. Use them only when connected to Home Assistant.")
 	_build_ha_link_section(item)
@@ -2828,7 +3108,7 @@ func _build_advanced_calibration_section(item: Dictionary) -> void:
 
 
 func _build_ha_link_section(item: Dictionary) -> void:
-	# Section title is provided by the Advanced wrapper — keep body only.
+	# Section title is provided by the Advanced wrapper - keep body only.
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var links: Dictionary = (specs.get("ha_links", {}) as Dictionary)
 	var live: Dictionary  = (specs.get("ha_live",  {}) as Dictionary)
@@ -2931,7 +3211,7 @@ func _build_shelly4pm_controls_section(item: Dictionary) -> void:
 		state_lbl.add_theme_font_size_override("font_size", 11)
 		row.add_child(state_lbl)
 
-		# Toggle button — behaviour depends on global SimMode:
+		# Toggle button - behaviour depends on global SimMode:
 		#   LIVE     → talk to HA via InverterBridge (the real switch flips,
 		#              and the linker mirrors the new state back into specs).
 		#   SIMULATE → flip the simulated c%d_on bit directly so the canvas
@@ -2959,7 +3239,7 @@ func _build_shelly4pm_controls_section(item: Dictionary) -> void:
 		_form_vbox.add_child(_wrap_margin(row, 12, 3))
 
 
-## Flip a Shelly 4PM circuit on/off in the graph model only — used when the
+## Flip a Shelly 4PM circuit on/off in the graph model only - used when the
 ## user clicks Toggle while the game is in SIMULATE mode and HA service calls
 ## are suppressed.
 func _simulate_shelly_toggle(item_id: String, circuit_idx: int) -> void:
@@ -3121,10 +3401,10 @@ func _build_load_calibration_section(item: Dictionary) -> void:
 	live_card.add_child(live_box)
 
 	_cal_status_lbl    = _cal_make_label("Idle.", C_TEXT_S, 11)
-	_cal_remaining_lbl = _cal_make_label("Time remaining: —", C_TEXT_M, 10)
-	_cal_live_lbl      = _cal_make_label("Live: — W", C_TEXT, 10)
-	_cal_avg_lbl       = _cal_make_label("Average: — W", C_TEXT, 10)
-	_cal_peak_lbl      = _cal_make_label("Peak: — W", C_TEXT, 10)
+	_cal_remaining_lbl = _cal_make_label("Time remaining: -", C_TEXT_M, 10)
+	_cal_live_lbl      = _cal_make_label("Live: - W", C_TEXT, 10)
+	_cal_avg_lbl       = _cal_make_label("Average: - W", C_TEXT, 10)
+	_cal_peak_lbl      = _cal_make_label("Peak: - W", C_TEXT, 10)
 	live_box.add_child(_cal_status_lbl)
 	live_box.add_child(_cal_remaining_lbl)
 	live_box.add_child(_cal_live_lbl)
@@ -3197,7 +3477,7 @@ func _render_calibration_summary(calib: Dictionary) -> void:
 			0.0, -1.0)
 
 	var ts: int = int(calib.get("calibrated_at", 0))
-	var dt := Time.get_datetime_string_from_unix_time(ts) if ts > 0 else "—"
+	var dt := Time.get_datetime_string_from_unix_time(ts) if ts > 0 else "-"
 	_readonly_field("Calibrated", dt)
 	_readonly_field("Samples",    str(int(calib.get("sample_count", 0))))
 	_readonly_field("Window",     "%.0f s" % float(calib.get("duration_s", 0.0)))
@@ -3234,7 +3514,7 @@ func _render_calibration_summary(calib: Dictionary) -> void:
 
 func _format_duration(s: float) -> String:
 	if s <= 0.0:
-		return "—"
+		return "-"
 	if s < 60.0:
 		return "%.0f s" % s
 	if s < 3600.0:
@@ -3274,7 +3554,7 @@ func _on_calibrate_pressed(item_id: String) -> void:
 	if _cal_btn != null:
 		_cal_btn.text = "■  Stop calibration"
 	if _cal_status_lbl != null:
-		_cal_status_lbl.text = "Recording…"
+		_cal_status_lbl.text = "Recording..."
 		_cal_status_lbl.add_theme_color_override("font_color", C_AMBER)
 
 
@@ -3349,7 +3629,7 @@ func _build_compound_section(item: Dictionary) -> void:
 	_readonly_field("Output ports", str(int(specs.get("port_out_count", 0))))
 	if kind == "array":
 		_readonly_field("Kind", "Solar Array")
-		_readonly_field("Topology", str(specs.get("array_topology", "—")))
+		_readonly_field("Topology", str(specs.get("array_topology", "-")))
 		_readonly_field("Panels", str(int(specs.get("array_panel_units", specs.get("child_count", 0)))))
 		_readonly_field("Vmp / Voc", "%.1fV / %.1fV" % [float(specs.get("array_equiv_vmp", 0.0)), float(specs.get("array_equiv_voc", 0.0))])
 		_readonly_field("Imp / Isc", "%.1fA / %.1fA" % [float(specs.get("array_equiv_imp", 0.0)), float(specs.get("array_equiv_isc", 0.0))])
@@ -3601,11 +3881,11 @@ func _type_icon(itype: String) -> String:
 	match itype:
 		"panel":                return "☀"
 		"wind":                 return "🌬"
-		"hydro":                return "💧"
+		"hydro":                return ""
 		"battery":              return "🔋"
 		"controller":           return "🎛"
 		"appliance", "acload":  return "🏠"
 		"processor":            return "🌀"
 		"resource":             return "🪣"
 		"shelly4pm":            return "📊"
-		_:                      return "⚡"
+		_:                      return ""

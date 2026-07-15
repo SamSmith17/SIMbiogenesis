@@ -7,8 +7,8 @@ func _ready() -> void:
 	var sphere := SphereMesh.new()
 	sphere.radius = 0.5
 	sphere.height = 1.0
-	sphere.radial_segments = 32
-	sphere.rings = 16
+	sphere.radial_segments = 128
+	sphere.rings = 64
 	mesh = sphere
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://core/soi/shaders/soi_sphere_preview.gdshader")

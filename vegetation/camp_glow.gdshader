@@ -16,12 +16,11 @@ shader_type spatial;
 // projection), NOT from VIEWPORT_SIZE. VIEWPORT_SIZE is unreliable in the vertex
 // stage (reported as (1,1) in some passes — see godot#82782); using it made every
 // marker explode to tens of metres and paint the whole screen a solid colour.
-render_mode unshaded, cull_disabled, shadows_disabled;
+render_mode unshaded, cull_disabled, shadows_disabled, blend_add, depth_draw_never;
 
 // 0 by day -> markers are nearly black and invisible. Raised at night so EMISSION
 // blooms through the WorldEnvironment glow into colourful points of light.
 uniform float glow_intensity = 0.0;
-uniform float base_albedo : hint_range(0.0, 1.0) = 0.05;
 // Diameter of a marker in metres when viewed up close (below the angular floor).
 uniform float world_size : hint_range(0.05, 5.0) = 0.6;
 // Minimum apparent diameter as a fraction of the view frustum height at the
@@ -38,6 +37,7 @@ uniform float near_fade_start : hint_range(0.0, 50.0) = 2.0;
 uniform float near_fade_end : hint_range(0.0, 100.0) = 9.0;
 
 varying float v_dist;
+varying float v_twinkle;
 
 void vertex() {
 	// Instance origin in view space (MODELVIEW includes the per-instance xform).
@@ -52,6 +52,10 @@ void vertex() {
 	// them in view space, so the card always faces the camera (drone or ground).
 	vec3 view_pos = origin_view.xyz + vec3(VERTEX.x, VERTEX.y, 0.0) * s;
 	POSITION = PROJECTION_MATRIX * vec4(view_pos, 1.0);
+	
+	// Twinkle effect calculated per-vertex using INSTANCE_ID
+	float t = TIME * 1.5 + float(INSTANCE_ID) * 2.1;
+	v_twinkle = mix(0.3, 1.0, (sin(t) + sin(t * 1.7 + 1.2)) * 0.25 + 0.5);
 }
 
 void fragment() {
@@ -63,6 +67,7 @@ void fragment() {
 	// Fade out cards very close to the camera so a player standing among the camps
 	// isn't blinded by full-screen emissive panels.
 	float near_fade = smoothstep(near_fade_start, near_fade_end, v_dist);
-	ALBEDO = COLOR.rgb * base_albedo;
-	EMISSION = COLOR.rgb * glow_intensity * mask * near_fade;
+	// Use ALBEDO + blend_add to purely add vibrant light to the background.
+	ALBEDO = COLOR.rgb * glow_intensity * mask * near_fade * v_twinkle;
+	EMISSION = vec3(0.0);
 }
