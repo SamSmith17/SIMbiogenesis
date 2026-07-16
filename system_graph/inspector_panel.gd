@@ -339,6 +339,8 @@ func _rebuild_for_item(item: Dictionary) -> void:
 					for sk: Variant in starved:
 						parts.append(ResourceKinds.display_name(str(sk)))
 					_readonly_field("Demand status", "STARVED: %s" % ", ".join(parts))
+			elif str(specs.get("role", "")) == "csp_concentrator":
+				_build_csp_concentrator_section(specs)
 			else:
 				_build_processor_energy_picker(specs)
 				_num_field("Power Draw (W)",     specs.get("watts", 0.0),       "specs/watts",       0, 100000, 10.0)
@@ -2696,6 +2698,31 @@ func _build_processor_energy_picker(specs: Dictionary) -> void:
 	)
 	row.add_child(opt)
 	_form_vbox.add_child(row)
+
+
+## Parabolic-trough CSP fields: geometry/optics inputs plus read-only live
+## telemetry written each tick by SystemGraphView._tick_graph_csp (see
+## power_system/sources/csp_trough_source.gd for the physics).
+func _build_csp_concentrator_section(specs: Dictionary) -> void:
+	_num_field("Aperture Width (m)",   specs.get("aperture_width_m", 5.0),   "specs/aperture_width_m",   0.5, 20.0, 0.1)
+	_num_field("Module Length (m)",    specs.get("module_length_m", 12.0),   "specs/module_length_m",    0.5, 100.0, 0.5)
+	_num_field("Focal Length (m)",     specs.get("focal_length_m", 1.7),     "specs/focal_length_m",     0.1, 10.0, 0.05)
+	_num_field("Optical Efficiency",   specs.get("optical_efficiency", 0.75),"specs/optical_efficiency", 0.0, 1.0, 0.01)
+	_num_field("Thermal Efficiency",   specs.get("thermal_efficiency", 0.85),"specs/thermal_efficiency", 0.0, 1.0, 0.01)
+	_num_field("Feedwater Temp (°C)",  specs.get("feedwater_temp_c", 20.0),  "specs/feedwater_temp_c",   0.0, 99.0, 1.0)
+	_num_field("Max Tracking Angle (°)", specs.get("max_tracking_angle_deg", 110.0),
+			"specs/max_tracking_angle_deg", 30.0, 120.0, 1.0)
+	var daily_note := str(specs.get("daily_note", ""))
+	if not daily_note.is_empty():
+		_readonly_field("Daily design", daily_note)
+
+	_section("Live Telemetry")
+	_readonly_field("Tracking Angle", "%.1f°" % float(specs.get("tracking_angle_deg", 0.0)))
+	_readonly_field("Incidence cos(θ)", "%.3f" % float(specs.get("cos_incidence", 0.0)))
+	_readonly_field("DNI", "%.0f W/m²" % float(specs.get("dni_wm2", 0.0)))
+	_readonly_field("End Loss", "%.1f%%" % (float(specs.get("end_loss_frac", 0.0)) * 100.0))
+	_readonly_field("Thermal Output", "%.2f kW" % float(specs.get("thermal_output_kw", 0.0)))
+	_readonly_field("Steam Output", "%.2f kg/h" % float(specs.get("steam_kg_h", 0.0)))
 
 
 ## "Save to Library": pushes this processor instance's current config (specs

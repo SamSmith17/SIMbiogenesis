@@ -81,6 +81,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	_apply_transform(prop, model, rec, ground_y_at)
 	prop.setup_collision()
 	_maybe_attach_wind_spin(prop, rec)
+	_maybe_attach_csp_tracker(prop, rec)
 	var prop_id := str(rec.get("id", ""))
 	if PlacedPropService.is_placement_active() and prop_id == PlacedPropService.placement_prop_id():
 		prop.set_collision_enabled(false)
@@ -101,6 +102,22 @@ static func _maybe_attach_wind_spin(prop: PlacedProp, rec: Dictionary) -> void:
 	spin.configure(specs, str(rec.get("turbine_node", "")),
 		str(rec.get("graph_item_id", "")))
 	prop.add_child(spin)
+
+
+## Attach the sun-tracking controller for a placed parabolic-trough CSP
+## (record kind == "csp_trough"). Purely visual — the 2D graph node's live
+## thermal/steam telemetry is computed centrally by
+## SystemGraphView._tick_graph_csp so it stays correct even if this prop's
+## script hasn't bound yet.
+static func _maybe_attach_csp_tracker(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("kind", "")) != "csp_trough":
+		return
+	var specs: Dictionary = rec.get("csp_specs", {}) as Dictionary
+	var tracker := CspTroughTracker.new()
+	tracker.name = "CspTroughTracker"
+	tracker.configure(specs, str(rec.get("csp_base_node", "Component#452")),
+		str(rec.get("csp_concentrator_node", "Component#453")))
+	prop.add_child(tracker)
 
 
 static func apply_record_to_prop(prop: PlacedProp, rec: Dictionary,

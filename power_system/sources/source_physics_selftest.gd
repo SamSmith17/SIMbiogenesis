@@ -7,6 +7,7 @@ extends SceneTree
 
 const ResourceKindsScript := preload("res://system_graph/data/resource_kinds.gd")
 const ResourceEdgeVisScript := preload("res://system_graph/data/resource_edge_vis.gd")
+const CspTroughSourceScript := preload("res://power_system/sources/csp_trough_source.gd")
 
 var _failures: int = 0
 var _checks: int = 0
@@ -26,6 +27,7 @@ func _initialize() -> void:
 	_test_resource_edges()
 	_test_season()
 	_test_solar_eclipse()
+	_test_csp()
 	if _failures == 0:
 		print("SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -910,3 +912,126 @@ func _test_solar_eclipse() -> void:
 			found_apr8 = true
 			break
 	_check( "eclipse scan 2024 Dallas includes Apr 8", found_apr8, "hits=%d" % scan24.size() )
+
+
+## Parabolic-trough CSP: single-axis N-S tracking law, incidence cosine loss,
+## end losses, and water->steam mass/energy balance (csp_trough_source.gd).
+func _test_csp() -> void:
+	# E-W horizontal single-axis tracker: at solar noon (az=180) the aperture
+	# tilts (90° - elevation) toward the equator to face the sun head-on.
+	var ang_noon := CspTroughSourceScript.tracking_angle_deg(180.0, 45.0)
+	_check("csp: tracking angle = 90-el (45°) at noon, el=45",
+		_approx(ang_noon, 44.0, 46.0), "got %.2f°" % ang_noon)
+	var ang_noon_high := CspTroughSourceScript.tracking_angle_deg(180.0, 70.0)
+	_check("csp: tracking angle = 90-el (20°) at noon, el=70",
+		_approx(ang_noon_high, 19.0, 21.0), "got %.2f°" % ang_noon_high)
+
+	# Due-east/west sun: no meridian tilt to make (the sun is on the E-W axis),
+	# so the tracker lies flat (angle ~0). This is the E-W tracker's morning/
+	# evening blind spot.
+	var ang_east := CspTroughSourceScript.tracking_angle_deg(90.0, 5.0)
+	_check("csp: tracking angle ~0 for due-east sun", absf(ang_east) < 0.5,
+		"got %.2f°" % ang_east)
+	var ang_west := CspTroughSourceScript.tracking_angle_deg(270.0, 5.0)
+	_check("csp: tracking angle ~0 for due-west sun", absf(ang_west) < 0.5,
+		"got %.2f°" % ang_west)
+
+	# Hemisphere-agnostic: a due-NORTH noon sun (southern hemisphere) tilts the
+	# aperture the opposite way (toward north = negative) by the same magnitude.
+	var ang_south_hemi := CspTroughSourceScript.tracking_angle_deg(0.0, 45.0)
+	_check("csp: tracking angle = -(90-el) for due-north noon sun",
+		_approx(ang_south_hemi, -46.0, -44.0), "got %.2f°" % ang_south_hemi)
+
+	# Mechanical stop clamps extreme angles.
+	var ang_clamped := CspTroughSourceScript.tracking_angle_deg(180.0, 5.0, 60.0)
+	_check("csp: tracking angle clamps to max_angle_deg",
+		absf(ang_clamped) <= 60.0 + 1e-6, "got %.2f°" % ang_clamped)
+
+	# Sun below horizon → parked at 0.
+	var ang_night := CspTroughSourceScript.tracking_angle_deg(180.0, -10.0)
+	_check("csp: tracking angle 0 when sun below horizon", ang_night == 0.0)
+
+	# Incidence cosine: perfect (1.0) whenever the sun sits in the N-S meridian
+	# plane (due south/north — i.e. every solar noon, at ANY elevation) or
+	# straight overhead. This zero-noon-incidence trait is the E-W tracker's
+	# signature advantage.
+	var cos_noon_low := CspTroughSourceScript.cos_incidence(180.0, 5.0)
+	_check("csp: cos_incidence = 1 for due-south sun at any elevation",
+		_approx(cos_noon_low, 0.999, 1.001), "got %.4f" % cos_noon_low)
+	var cos_overhead := CspTroughSourceScript.cos_incidence(90.0, 90.0)
+	_check("csp: cos_incidence = 1 for sun straight overhead",
+		_approx(cos_overhead, 0.999, 1.001), "got %.4f" % cos_overhead)
+
+	# Worst case: sun low on the horizon due east — entirely along the E-W axis,
+	# a 1-DOF E-W tracker cannot capture any of it (the sunrise/sunset cosine
+	# loss of E-W trough fields).
+	var cos_east_horizon := CspTroughSourceScript.cos_incidence(90.0, 0.0)
+	_check("csp: cos_incidence = 0 for due-east horizon sun",
+		cos_east_horizon < 0.01, "got %.4f" % cos_east_horizon)
+
+	# End losses vanish at normal incidence, grow with focal length / shrink
+	# with module length (Duffie & Beckman finite-length trough model).
+	var loss_normal := CspTroughSourceScript.end_loss_frac(1.0, 1.7, 12.0)
+	_check("csp: end loss = 0 at normal incidence", loss_normal == 0.0)
+	var loss_45 := CspTroughSourceScript.end_loss_frac(cos(deg_to_rad(45.0)), 1.7, 12.0)
+	_check("csp: end loss ~14% at 45° incidence, f=1.7m L=12m",
+		_approx(loss_45, 0.13, 0.15), "got %.4f" % loss_45)
+
+	# Full simulate(): midday, clear sky, default 5m x 12m trough — should
+	# produce sensible positive thermal output and mass-conserving water/steam
+	# (1 L water -> 1 kg steam at this model's density=1.0 kg/L).
+	var specs := {
+		"aperture_width_m": 5.0, "module_length_m": 12.0, "focal_length_m": 1.7,
+		"optical_efficiency": 0.75, "thermal_efficiency": 0.85,
+		"feedwater_temp_c": 20.0, "max_tracking_angle_deg": 110.0,
+	}
+	var clear_weather := {"has_real": false, "cloud": 0.0}
+	var midday := CspTroughSourceScript.simulate(specs, 180.0, 70.0, clear_weather)
+	_check("csp: midday thermal output > 0",
+		float(midday.get("thermal_output_kw", 0.0)) > 0.0,
+		"got %.3f kW" % float(midday.get("thermal_output_kw", 0.0)))
+	_check("csp: midday steam/water mass-conserving (density=1)",
+		absf(float(midday.get("steam_kg_h", 0.0)) - float(midday.get("water_lph", 0.0))) < 1e-6)
+
+	# Sun below horizon → no output at all.
+	var night := CspTroughSourceScript.simulate(specs, 180.0, -5.0, clear_weather)
+	_check("csp: night thermal output = 0",
+		float(night.get("thermal_output_kw", 0.0)) == 0.0)
+	_check("csp: night steam output = 0",
+		float(night.get("steam_kg_h", 0.0)) == 0.0)
+
+	# Cloud cover reduces DNI (and therefore thermal output) versus clear sky.
+	var cloudy := CspTroughSourceScript.simulate(specs, 180.0, 70.0, {"has_real": false, "cloud": 0.9})
+	_check("csp: heavy cloud reduces thermal output vs clear sky",
+		float(cloudy.get("thermal_output_kw", 0.0)) < float(midday.get("thermal_output_kw", 0.0)),
+		"cloudy=%.3f clear=%.3f" % [cloudy.get("thermal_output_kw", 0.0), midday.get("thermal_output_kw", 0.0)])
+
+	# tracking_offset_from_normal: used by CspTroughTracker to correct for a
+	# mesh whose REST pose isn't exactly "pointing straight up" (see that
+	# script's class doc). Axis = the shared E-W tracking pivot (world east),
+	# matching the tracker's forced orientation; +offset = tilt toward south.
+	var axis_ew := CspTroughSourceScript.TRACKING_AXIS
+	_check("csp: TRACKING_AXIS is world east", axis_ew.is_equal_approx(Vector3(1, 0, 0)))
+	# A normal pointing exactly straight up has zero offset.
+	var off_up := CspTroughSourceScript.tracking_offset_from_normal(Vector3(0, 1, 0), axis_ew)
+	_check("csp: rest offset = 0 for straight-up normal", absf(off_up) < 1e-6,
+		"got %.4f rad" % off_up)
+	# A normal leaning 45° toward south (up + south, +Z=south) offsets +45°.
+	var off_south45 := CspTroughSourceScript.tracking_offset_from_normal(
+		Vector3(0.0, 1.0, 1.0).normalized(), axis_ew)
+	_check("csp: rest offset = +45° for south-leaning normal",
+		_approx(rad_to_deg(off_south45), 44.0, 46.0), "got %.2f°" % rad_to_deg(off_south45))
+	# The GLB's actual measured rest normal at forced yaw=0° (from the
+	# node-hierarchy diagnostic): mirror_normal_world ≈ (0, 0.438, 0.899),
+	# i.e. leaning ~64° toward south of vertical. Pinning this regression-tests
+	# the empirical constant the tracker relies on without loading the GLB.
+	var off_measured := CspTroughSourceScript.tracking_offset_from_normal(
+		Vector3(0.000038, 0.437767, 0.899089), axis_ew)
+	_check("csp: rest offset ~64° matches GLB diagnostic measurement",
+		_approx(rad_to_deg(off_measured), 63.0, 65.0), "got %.2f°" % rad_to_deg(off_measured))
+	# An axis-aligned component (pure east/west lean) contributes nothing —
+	# it's un-recoverable by rotation about that same axis and must be dropped.
+	var off_axis_only := CspTroughSourceScript.tracking_offset_from_normal(
+		Vector3(1.0, 0.0, 0.0), axis_ew)
+	_check("csp: rest offset = 0 when normal is purely axis-aligned",
+		absf(off_axis_only) < 1e-6, "got %.4f rad" % off_axis_only)

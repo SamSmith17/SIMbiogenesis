@@ -178,6 +178,14 @@ static func foot_local_y(model_id: String) -> float:
 	return float(mesh_metrics(model_id).foot_local_y)
 
 
+## Fixed yaw (degrees) some models declare to align their own mesh axes onto
+## world cardinal directions (e.g. the CSP trough's N-S pivot). Applied to
+## BOTH the placement ghost and the real placed prop so confirming never
+## visibly rotates the model out from under the player.
+static func forced_yaw_deg(model_id: String) -> float:
+	return float(find(model_id).get("forced_yaw_deg", 0.0))
+
+
 static func scale_to_footprint(model_id: String, width_m: float, depth_m: float,
 		height_m: float, user_scale: float = 1.0) -> float:
 	var metrics := mesh_metrics(model_id)
@@ -210,6 +218,22 @@ static func _shipped_models() -> Array[Dictionary]:
 			"path": "res://Imported Models/Wind/VAWT.glb",
 			"preserve_scale": true, "category": "structures",
 			"turbine_node": "Component#2"},
+		# Single-axis parabolic-trough CSP. Authored in inches (Node2 child
+		# carries the 0.0254 inch→m scale baked into the GLB itself, like the
+		# StarShade exports), so preserve_scale keeps true size. Component#452
+		# is the fixed pedestal/base; Component#453 is the moving concentrator
+		# (mirror + focal tube). The GLB's natural orientation already runs the
+		# module-length / pivot axis (model local +X) along world EAST-WEST
+		# (verified empirically — see csp_trough_tracker.gd class doc), which is
+		# exactly what a single-axis E-W trough wants (long axis E-W, aperture
+		# tilting to face the equator). So forced_yaw_deg = 0 (no yaw); the
+		# concentrator only ever rotates about that E-W pivot to track the sun's
+		# altitude. Kept explicit so the ghost + placed prop share one constant.
+		{"id": "csp_trough", "label": "Parabolic Trough CSP",
+			"path": "res://Imported Models/CSP/single_axis_csp.glb",
+			"preserve_scale": true, "category": "structures",
+			"csp_base_node": "Component#452", "csp_concentrator_node": "Component#453",
+			"forced_yaw_deg": 0.0},
 	]
 
 

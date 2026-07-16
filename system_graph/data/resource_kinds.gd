@@ -79,6 +79,13 @@ const BUILTIN: Dictionary = {
 		"abbrev": "♨",
 		"flow_ref_rate": 60.0,
 	},
+	"steam": {
+		"display": "Steam",
+		"color": Color(0.870, 0.870, 0.900, 1.0),
+		"unit": "kg",
+		"abbrev": "♨",
+		"flow_ref_rate": 40.0,
+	},
 	"woodgas": {
 		"display": "Syngas / Woodgas",
 		"color": Color(0.706, 0.627, 0.353, 1.0),

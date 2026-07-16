@@ -523,6 +523,15 @@ const RESOURCES: Array = [
 		},
 	},
 	{
+		"type": "resource", "label": "Steam Buffer", "icon": "💨",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Steam Buffer", "resource_kind": "steam",
+			"capacity": "50 kg", "capacity_qty": 50.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 200.0,
+		},
+	},
+	{
 		"type": "resource", "label": "Food Store (50 kg)", "icon": "🍎",
 		"width": 90.0, "height": 100.0,
 		"specs": {
@@ -751,6 +760,38 @@ const HYDRO_TURBINES: Array = [
 ]
 
 # ---------------------------------------------------------------------------
+# Solar Concentrators (type = "processor", specs.role = "csp_concentrator")
+# Physics: power_system/sources/csp_trough_source.gd (single-axis N-S
+# horizontal tracking, Duffie & Beckman end losses, water→steam boil-off).
+# `model_id` gives the library a "Place Model" button (see library_panel.gd)
+# that drops the linked GLB and binds this node to it — same VAWT pattern.
+# ---------------------------------------------------------------------------
+const CSP_CONCENTRATORS: Array = [
+	{
+		"type": "processor", "label": "Parabolic Trough CSP", "icon": "🛰",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Parabolic Trough CSP", "role": "csp_concentrator",
+			"kind": "csp_trough", "cost": 4500.0,
+			"energy_source": "", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"aperture_width_m": 5.0, "module_length_m": 12.0,
+			"focal_length_m": 1.7, "optical_efficiency": 0.75,
+			"thermal_efficiency": 0.85, "feedwater_temp_c": 20.0,
+			"max_tracking_angle_deg": 110.0,
+			"tracking_angle_deg": 0.0, "dni_wm2": 0.0, "cos_incidence": 0.0,
+			"end_loss_frac": 0.0, "thermal_output_kw": 0.0, "steam_kg_h": 0.0,
+			"daily_note": "Water in -> steam out; thermal output scales with live DNI x tracking cosine x aperture area, minus end losses.",
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h"}],
+			"outputs": [{"kind": "steam", "rate": 0.0, "unit": "kg/h"}],
+			# 3D link: placed via ModelCatalog + CspTroughTracker (auto south
+			# alignment + live sun tracking; see gameplay/csp_trough_tracker.gd).
+			"model_id": "csp_trough",
+			"csp_base_node": "Component#452", "csp_concentrator_node": "Component#453",
+		},
+	},
+]
+
+# ---------------------------------------------------------------------------
 # Category list consumed by LibraryPanel to build the UI
 # ---------------------------------------------------------------------------
 const CATEGORIES: Array = [
@@ -762,6 +803,7 @@ const CATEGORIES: Array = [
 	{ "id": "appliances",  "label": "Appliances & Loads",   "icon": "🏠", "presets": APPLIANCES  },
 	{ "id": "habitats",    "label": "Population",             "icon": "🏠", "presets": HABITATS    },
 	{ "id": "processors",  "label": "Processors",           "icon": "🌀", "presets": PROCESSORS  },
+	{ "id": "csp",         "label": "Solar Concentrators",  "icon": "🛰", "presets": CSP_CONCENTRATORS },
 	{ "id": "resources",   "label": "Resource Containers",  "icon": "🪣", "presets": RESOURCES   },
 	{ "id": "catchments",  "label": "Rain Catchment",       "icon": "🌧", "presets": CATCHMENTS  },
 	{ "id": "monitors",    "label": "Circuit Monitors",     "icon": "📊", "presets": SHELLY4PM   },

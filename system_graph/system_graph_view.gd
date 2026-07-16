@@ -1820,6 +1820,11 @@ func _on_lib_place_model_requested(preset: Dictionary) -> void:
 			"wind_specs": specs if str(preset.get("type", "")) == "wind" else {},
 		},
 	}
+	if str(specs.get("kind", "")) == "csp_trough":
+		var record_extra: Dictionary = prep["record_extra"]
+		record_extra["csp_specs"] = specs
+		record_extra["csp_base_node"] = str(specs.get("csp_base_node", "Component#452"))
+		record_extra["csp_concentrator_node"] = str(specs.get("csp_concentrator_node", "Component#453"))
 	var r: Dictionary = PlacedPropService.begin_placement(main, model_id, prep)
 	if not bool(r.get("ok", false)):
 		_show_toast("Could not start placement")
@@ -4021,6 +4026,7 @@ func _process(delta: float) -> void:
 	if _bridge != null:
 		_bridge.call("tick", delta)
 	_tick_graph_renewables(delta)
+	_tick_graph_csp(delta)
 	_tick_graph_pbis(delta)
 	_energy_sync_acc += delta
 	var _do_energy_sync := false
@@ -5739,6 +5745,92 @@ func _tick_graph_renewables(delta: float) -> void:
 		if absf(float(specs.get("current_output_kw", 0.0)) - kw) < 0.0005:
 			continue
 		specs["current_output_kw"] = kw
+		model.update_item(iid, {"specs": specs})
+
+
+const _CspTroughSource := preload("res://power_system/sources/csp_trough_source.gd")
+const _CSP_POLL_INTERVAL := 0.25
+var _csp_acc: float = _CSP_POLL_INTERVAL
+
+
+## Recompute live tracking angle + thermal/steam output for "processor" items
+## with specs.role == "csp_concentrator" (Parabolic Trough CSP). Physics in
+## power_system/sources/csp_trough_source.gd (single-axis N-S tracking, real
+## sun position + weather-attenuated DNI). Drives specs.inputs[0].rate (water
+## L/h) / specs.outputs[0].rate (steam kg/h) so ResourceFlowEngine's generic
+## tank-throughput logic moves the right mass through the water→steam ports.
+func _tick_graph_csp(delta: float) -> void:
+	if model == null:
+		return
+	_csp_acc += delta
+	if _csp_acc < _CSP_POLL_INTERVAL:
+		return
+	_csp_acc = 0.0
+
+	var m := _get_scene_main_node()
+	if m == null:
+		return
+	var clock_obj: Variant = m.get("clock")
+	if clock_obj == null or not (clock_obj as Object).has_method("get_julian_day_utc"):
+		return
+	var lat_v: Variant = m.get("latitude")
+	var lon_v: Variant = m.get("longitude")
+	var lat: float = float(lat_v) if lat_v != null else 33.36
+	var lon: float = float(lon_v) if lon_v != null else -115.74
+	var jd_utc: float = float((clock_obj as Object).call("get_julian_day_utc"))
+	var sp := SolarPosition.get_position(lat, lon, jd_utc)
+	var sun_el: float = float(sp.get("elevation_deg", 0.0))
+	var sun_az: float = float(sp.get("azimuth_deg", 180.0))
+
+	var hour := 12.0
+	var month := 6
+	var day := 15
+	var dt_v: Variant = m.get("day_time")
+	if dt_v != null:
+		hour = float(dt_v)
+	var mo_v: Variant = m.get("month")
+	if mo_v != null:
+		month = clampi(int(mo_v), 1, 12)
+	var dd_v: Variant = m.get("day")
+	if dd_v != null:
+		day = clampi(int(dd_v), 1, 31)
+	var ws := get_node_or_null("/root/WeatherService")
+	var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, ws)
+
+	for item: Dictionary in model.items:
+		if str(item.get("type", "")) != "processor":
+			continue
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		if str(specs.get("role", "")) != "csp_concentrator":
+			continue
+		var iid: String = item.get("id", "") as String
+		var result := _CspTroughSource.simulate(specs, sun_az, sun_el, weather)
+
+		var dirty := absf(float(specs.get("thermal_output_kw", 0.0)) - float(result.get("thermal_output_kw", 0.0))) > 0.001 \
+			or absf(float(specs.get("tracking_angle_deg", 0.0)) - float(result.get("tracking_angle_deg", 0.0))) > 0.05
+		if not dirty:
+			continue
+
+		specs["tracking_angle_deg"] = result.get("tracking_angle_deg", 0.0)
+		specs["cos_incidence"] = result.get("cos_incidence", 0.0)
+		specs["dni_wm2"] = result.get("dni_wm2", 0.0)
+		specs["end_loss_frac"] = result.get("end_loss_frac", 0.0)
+		specs["thermal_output_kw"] = result.get("thermal_output_kw", 0.0)
+		specs["steam_kg_h"] = result.get("steam_kg_h", 0.0)
+
+		var inputs: Array = (specs.get("inputs", []) as Array).duplicate(true)
+		if not inputs.is_empty():
+			var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+			inp0["rate"] = result.get("water_lph", 0.0)
+			inputs[0] = inp0
+			specs["inputs"] = inputs
+		var outputs: Array = (specs.get("outputs", []) as Array).duplicate(true)
+		if not outputs.is_empty():
+			var out0: Dictionary = (outputs[0] as Dictionary).duplicate(true)
+			out0["rate"] = result.get("steam_kg_h", 0.0)
+			outputs[0] = out0
+			specs["outputs"] = outputs
+
 		model.update_item(iid, {"specs": specs})
 
 

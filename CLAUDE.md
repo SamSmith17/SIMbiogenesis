@@ -168,6 +168,115 @@ marquee-selected panels **Series** or **Parallel** to nearest controller `pvPosi
 `pvNegative`. Destroyed controllers shed AC via `SolarUI.set_graph_controller_destroyed`.
 Self-test: `system_graph/graph_electrical_selftest.gd`.
 
+**Solar Concentrators (parabolic-trough CSP, Library category "csp").**
+`ComponentPresets.CSP_CONCENTRATORS` (type `"processor"`, `specs.role =
+"csp_concentrator"`, reuses the processor UI/save-to-library/inspector path —
+see `inspector_panel.gd:_build_csp_concentrator_section`) with `model_id =
+"csp_trough"` → same "Place Model" library flow as the 3D VAWT
+(`system_graph_view.gd:_on_lib_place_model_requested` → `PlacedPropService` →
+`PlacedPropRuntime._maybe_attach_csp_tracker`, which attaches
+`gameplay/csp_trough_tracker.gd` to the placed prop). The GLB
+(`Imported Models/CSP/single_axis_csp.glb`, inch-unit like the StarShade
+bundles → `preserve_scale: true`) splits into `Component#452` (fixed base)
+and `Component#453` (the moving concentrator — mirror + focal tube, pivot at
+its own origin). **This is an E-W horizontal single-axis tracker**: the pivot
+axis runs east-west (`CspTroughSource.TRACKING_AXIS` = world east, the shared
+source of truth for physics + 3D), so the trough's long axis lies E-W and the
+aperture faces the equator (south in N hemisphere, north in S) while tilting
+up/down to follow the sun's altitude. The GLB's NATURAL pose already runs
+`Component#453`'s local +X (the ~12 m module-length / pivot axis) along world
+east-west — verified empirically (a throwaway diagnostic instantiated the GLB
+and measured that axis + the mirror mesh's average normal in world space at
+several yaws) — so `ModelCatalog.forced_yaw_deg("csp_trough")` is 0 (no yaw);
+`PlacedPropService._build_ghost` applies the SAME forced-yaw constant to the
+placement ghost so the preview matches the placed prop exactly (no snap on
+confirm). `CspTroughTracker` force-holds `ModelRoot`'s yaw every frame (a
+single-axis trough's heading is physically fixed; only its tilt tracks) and
+drives `Component#453.rotation.x` from the live tracking angle. Because the
+GLB's OWN rest pose (`Component#453.rotation == 0`) doesn't correspond to
+"aperture normal straight up" — it measured ~64° tilted toward south, an
+artifact of the asset's export pose — `_bind()` measures that bias once from
+the actual mesh geometry (`CspTroughSource.tracking_offset_from_normal`:
+average local normal of the mirror mesh, composed up the local-transform
+chain to `ModelRoot`, projected onto the plane perpendicular to the E-W axis)
+rather than hardcoding it, so `rotation.x = ideal_tracking_angle − rest_offset`
+lands exactly on the ideal angle regardless of the asset's rest pose (a
+re-export keeps working). **Slewing is sim-time aware** (the sun is a function
+of the sim clock, which can run at big time-scales or be scrubbed): each frame
+the target is refreshed and the concentrator eases toward it with a smoothing
+factor driven by BOTH real time (`_TRACK_TAU_REAL`/`_RESET_TAU_REAL`, so it
+visibly eases in when the clock is idle) AND elapsed sim-hours from
+`clock.get_absolute_hours()` (`_TRACK_TAU_SIM`/`_RESET_TAU_SIM`, so it stays
+locked to the sun at any speed); a single-frame sim jump beyond
+`_SNAP_SIM_HOURS` snaps instantly (fixes lag at high speed + crawl across
+timeline scrubs). Below the horizon it stops chasing the sun and eases toward
+the sunrise-ready pose (flat/facing up, angle 0 — an E-W axis can't face the
+due-east dawn sun) over the slower reset constants, reading as "park at
+sunset, slowly reset overnight". `CspTroughTracker` also paints the curved
+mirror mesh (material `Metal_06_1K`) with a near-mirror `StandardMaterial3D`
+(metallic≈1, roughness≈0.02). **Absorber-tube identification is geometric, not
+by material name**: the model has TWO thin cylinders — an on-axis torque tube
+(material `<LightGray>`, perpendicular offset ~0 from the pivot) and the real
+solar-collector tube held at the focal line ~188 cm in front of the mirrors
+(authored as a glass-envelope material). `_resolve_meshes` picks the thin/long
+mesh (`length/cross ≥ _TUBE_MIN_ASPECT`) whose center is FARTHEST from the
+local-X pivot axis (via `_relative_to_pivot`), so it glows the focal tube, not
+the axis tube (the earlier `<LightGray>`-name heuristic wrongly lit the torque
+tube on the rotation axis).
+
+**"Blinding" focal-tube glow.** A plain self-emissive tube material reads as
+flat white, not brilliant: this project's WorldEnvironment deliberately caps
+DAYTIME bloom to a compact core (fine mips only, capped HDR luminance — see
+`main.gd`'s glow setup comments) so ordinary bright surfaces don't wash out
+daylight scenes; pushing raw emission higher barely helps once past that cap.
+`_update_glow` (per-frame, from `_refresh_target`) therefore drives THREE
+layered elements off the same `focus = clamp(dni × cos_incidence /
+_GLOW_REF_WM2, 0, 1)` (already cloud- and low-sun-angle-attenuated) with a
+shared perceptual gamma curve (`_GLOW_GAMMA`) and an ember→white-hot color
+ramp: (1) the tube's own emissive `StandardMaterial3D` (self-lit surface,
+peak `_TUBE_EMISSION_PEAK`), (2) a child `OmniLight3D` (shadow/bake/GI-cost
+disabled except a touch of `light_indirect_energy`, distance-fade for perf)
+that actually lights the mirror/mount around the tube — the "this is really a
+light source" cue bloom alone can't sell, and (3) a small camera-facing
+additive glow card (`gameplay/csp_focal_glow.gdshader`, a soft radial-falloff
+quad drawn straight into the HDR framebuffer — same trick as
+`vegetation/camp_glow.gdshader`'s night-light dots) that reads as a convincing
+hot point independent of how conservative the daytime bloom tuning is.
+**Positioning/scale gotcha:** the GLB has an internal `Node2` ancestor between
+`ModelRoot` and `Component#453` carrying a baked 0.0254 (inch→metre) scale
+(confirmed empirically) — a light/card parented directly under the tube mesh
+would have `omni_range`/card size silently divided by ~39, and spatial
+shaders have NO built-in `billboard` render_mode (must face the camera by
+hand in the vertex stage via `MODELVIEW_MATRIX`, as `camp_glow.gdshader`
+already does — `render_mode billboard` does not exist and fails to compile).
+So the light + card are children of `CspTroughTracker` itself (a sibling of
+`ModelRoot` under `PlacedProp`, already real-world metres) with their LOCAL
+position resynced every `_process` via `_local_chain_transform(_tube_mesh,
+_model_root)` — pure local-transform composition, the same technique
+`_measure_rest_offset_rad` already uses, robust regardless of the GLB's
+internal scale/rest-pose quirks and not dependent on `global_transform` cache
+timing. `SystemGraphView._tick_graph_csp` (same cadence/
+pattern as `_tick_graph_renewables`) is the authority for telemetry + resource
+ports: each tick it computes real sun az/el (`SolarPosition` +
+`main.clock.get_julian_day_utc()`) and weather (`SolarIrradiance.sample_weather`),
+calls `CspTroughSource.simulate()`, and writes the result onto `specs`
+(tracking angle, DNI, end loss, thermal_output_kw) plus `specs.inputs[0].rate`
+(water L/h) / `specs.outputs[0].rate` (steam kg/h) so `ResourceFlowEngine`'s
+generic tank-throughput logic moves the mass (density 1 kg/L, so the two rates
+are numerically equal — mass-conserving). `efficiency: 1.0` / `energy_source: ""`
+on the preset bypasses the generic power-draw gating (the CSP is passive — no
+AC/DC energy port). Tracking math (`tracking_angle_deg`/`cos_incidence`) is a
+pure function of sun azimuth/elevation, so it needs no hemisphere-specific
+branches — a southern-hemisphere site's midday sun (in the north) tilts the
+aperture the opposite way from the same formula. The E-W config's signature:
+zero incidence at every solar noon (perfect, any elevation), worst at
+sunrise/sunset (sun on-axis due E/W). New `"steam"` `ResourceKinds` entry +
+a "Steam Buffer" resource-container preset close the loop. Self-test:
+`_test_csp()` in `source_physics_selftest.gd` (E-W tracking/incidence,
+hemisphere symmetry, and `tracking_offset_from_normal` regression checks
+pinned to the GLB's measured rest-pose bias — the identity is covered without
+loading the GLB).
+
 **Terrain data services (autoloads, copy the weather_service HTTP+cache+deferred
 pattern):**
 - `core/terrain/elevation_service.gd` (`ElevationService`): DEM grid. No-key
@@ -340,6 +449,15 @@ clock. `contribute_to_grid=false` opts out of the grid balance
   Betz cap 16/27, ISA density, log-law shear. Default: default_wind_1kw.tres.
 - `HydroSource` + `HydroConfig` — P=ρgQh_netη (Paish 2002), Darcy–Weisbach via
   Swamee–Jain, monthly flow multipliers. Default: default_hydro_500w.tres.
+- `CspTroughSource` (`power_system/sources/csp_trough_source.gd`, static, no
+  3D EnergySource node — not an electrical source) — parabolic-trough CSP:
+  single-axis N-S tracking law `cos θi = sqrt(1-(cosEl·cosAz)²)` (general
+  1-DOF-tracker incidence formula; zero loss when the sun is due east/west,
+  worst at solar noon high in the south — the real, documented "cosine loss"
+  of N-S trough fields), Duffie & Beckman finite-length end losses, DNI via
+  `SolarIrradiance` + cloud attenuation, water→steam boil-off (cp + h_fg).
+  `simulate(specs, sun_az, sun_el, weather)` returns tracking angle +
+  telemetry + `water_lph`/`steam_kg_h`.
 - Static graph adapters: `power_kw_from_graph_specs(specs, hour|month)` drive
   the 2D graph items — extend these (not the canvas) for new physics params.
 

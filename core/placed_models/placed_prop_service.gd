@@ -296,6 +296,13 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 	ghost.add_child(model)
 	model.name = "GhostModel"
 	ghost.scale = Vector3.ONE * ModelCatalog.resolved_scale(model_id, 1.0)
+	# Some models (e.g. the CSP trough) declare a fixed yaw that aligns their
+	# mesh axes to world cardinals; apply it to the ghost too so the preview
+	# already shows the same orientation PlacedPropRuntime will force on
+	# confirm — otherwise the model visibly snaps/rotates the instant it's placed.
+	var forced_yaw := ModelCatalog.forced_yaw_deg(model_id)
+	if absf(forced_yaw) > 0.0001:
+		model.rotation.y = deg_to_rad(forced_yaw)
 	_disable_node_physics(model)
 	_apply_ghost_tint_to(ghost, GHOST_VALID_COLOR)
 	ghost.visible = false
