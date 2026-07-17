@@ -45,14 +45,14 @@ var _panel_margin: MarginContainer = null
 var _details_scroll: ScrollContainer = null
 var _details_root: VBoxContainer = null
 var _pending_bundle_path: String = ""
+var _pending_starshade: bool = false
 var _bundle_status: Label
-var _world_radius_km_spin: SpinBox
-var _detail_radius_spin: SpinBox
-var _osm_radius_spin: SpinBox
-var _advanced_body: VBoxContainer = null
-var _bundle_file_dialog: FileDialog = null
 var _maps_resolved: Array[MapDefinition] = []
-var _maps_list: ItemList = null
+## Parallel to `_maps_resolved`: user:// path for deletable maps, else "".
+var _maps_file_paths: Array[String] = []
+var _maps_list: VBoxContainer = null
+var _maps_selected_idx: int = -1
+var _map_row_panels: Array[PanelContainer] = []
 var _launch_status: Label = null
 var _continue_btn: Button = null
 var _load_saved_btn: Button = null
@@ -64,8 +64,8 @@ var _syncing_map_list: bool = false
 var _save_load_ui: CanvasLayer = null
 
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
-const DESIGN_BUNDLE_SCRIPT := preload("res://core/linkagelab/design_bundle.gd")
 const SAVE_LOAD_UI_SCENE := preload("res://scenes/ui/save_load_ui.tscn")
+const PLACED_PROP_SERVICE_SCRIPT := preload("res://core/placed_models/placed_prop_service.gd")
 
 const _DEFAULT_MAP_PATHS: Array[String] = [
 	"res://maps/mars_aerial_map.tres",
@@ -256,7 +256,13 @@ func _deferred_size_map() -> void:
 	if c.size.x <= 0.0:
 		return
 	var w2: float = maxf(240.0, c.size.x)
-	_map.custom_minimum_size = Vector2(w2, w2 * 0.5)
+	var map_h: float = w2 * 0.5
+	# Launch hub also hosts the YOUR WORLDS list + bottom Start/Create row.
+	# Cap the world-map min height so those controls stay on-screen.
+	if _is_launch_mode() and c.size.y > 1.0:
+		const RESERVE_BELOW_MAP := 340.0  # search + coords + maps list + gaps
+		map_h = clampf(c.size.y - RESERVE_BELOW_MAP, 140.0, w2 * 0.5)
+	_map.custom_minimum_size = Vector2(w2, map_h)
 
 func hide_picker() -> void:
 	if _is_launch_mode():
@@ -461,9 +467,12 @@ func _build_ui() -> void:
 
 	if launch:
 		left.add_child(_make_separator())
+		# Fixed-height scrollable list — expand_fill + large min-height was
+		# stealing vertical space from the Start/Create action row below.
 		var maps_panel := PanelContainer.new()
 		maps_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		maps_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		maps_panel.size_flags_vertical = Control.SIZE_SHRINK_END
+		maps_panel.custom_minimum_size.y = 200.0
 		maps_panel.add_theme_stylebox_override("panel", _solar_panel_style(Color(0.06, 0.08, 0.12, 0.9)))
 		left.add_child(maps_panel)
 		var maps_inner := VBoxContainer.new()
@@ -486,12 +495,12 @@ func _build_ui() -> void:
 		var maps_scroll := ScrollContainer.new()
 		maps_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		maps_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		maps_scroll.custom_minimum_size.y = 140.0
 		maps_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 		maps_inner.add_child(maps_scroll)
-		_maps_list = ItemList.new()
+		_maps_list = VBoxContainer.new()
 		_maps_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_maps_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		_maps_list.item_selected.connect(_on_map_list_selected)
+		_maps_list.add_theme_constant_override("separation", 4)
 		maps_scroll.add_child(_maps_list)
 		_launch_status = Label.new()
 		_style_muted_label(_launch_status)
@@ -573,8 +582,6 @@ func _build_ui() -> void:
 		rv.add_child(node)
 
 	vroot.add_child(_make_separator())
-	_build_advanced_extent_ui(vroot)
-	vroot.add_child(_make_separator())
 	_bundle_status = Label.new()
 	_bundle_status.text = ""
 	_bundle_status.autowrap_mode = TextServer.AUTOWRAP_WORD
@@ -585,10 +592,12 @@ func _build_ui() -> void:
 	bot.alignment = BoxContainer.ALIGNMENT_CENTER
 	bot.add_theme_constant_override("separation", 12)
 	bot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bot.size_flags_vertical = Control.SIZE_SHRINK_END
+	bot.custom_minimum_size.y = 40.0
 	var import_btn: Button = Button.new()
-	import_btn.text = "Import StarShade design…"
-	import_btn.tooltip_text = "Load a LinkageLab .gamebundle.json, then pick a location and create the map"
-	import_btn.pressed.connect(_on_import_bundle_pressed)
+	import_btn.text = "Add StarShade"
+	import_btn.tooltip_text = "Place the V1 StarShade model on the next map load (or begin placement in-game)"
+	import_btn.pressed.connect(_on_add_starshade_pressed)
 	_close_btn = Button.new()
 	_close_btn.text = "Close"
 	_close_btn.pressed.connect(_close_dismiss)
@@ -756,59 +765,6 @@ func _confirm() -> void:
 
 ## Persist a MapDefinition for the selected site and launch the generated world
 ## scene, which builds real terrain + satellite imagery from open data.
-func _build_advanced_extent_ui(parent: Control) -> void:
-	var wrap := VBoxContainer.new()
-	wrap.add_theme_constant_override("separation", 4)
-	parent.add_child(wrap)
-	var toggle := Button.new()
-	toggle.text = "▸ Advanced terrain size"
-	toggle.flat = true
-	toggle.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	wrap.add_child(toggle)
-	_advanced_body = VBoxContainer.new()
-	_advanced_body.add_theme_constant_override("separation", 4)
-	_advanced_body.visible = false
-	wrap.add_child(_advanced_body)
-	toggle.pressed.connect(func() -> void:
-		_advanced_body.visible = not _advanced_body.visible
-		toggle.text = "▾ Advanced terrain size" if _advanced_body.visible else "▸ Advanced terrain size")
-	var hint := Label.new()
-	hint.text = "Defaults: 30 km world, 1.5 km hi-res DEM, 1.5 km OSM. Adjust in Advanced — larger = longer load."
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 11)
-	_style_muted_label(hint)
-	_advanced_body.add_child(hint)
-	_world_radius_km_spin = _add_extent_spin(_advanced_body, "World radius", 30.0, 5.0, 100.0, 1.0, " km",
-		"Lo-res terrain half-width (full map square = 2× this)")
-	_detail_radius_spin = _add_extent_spin(_advanced_body, "Hi-res DEM radius", 1500.0, 500.0, 5000.0, 100.0, " m",
-		"Centre elevation patch radius")
-	_osm_radius_spin = _add_extent_spin(_advanced_body, "OSM radius", 1500.0, 500.0, 8000.0, 100.0, " m",
-		"Buildings, water, vegetation fetch radius")
-
-
-func _add_extent_spin(parent: Control, label: String, default_v: float,
-		min_v: float, max_v: float, step: float, suffix: String, tip: String) -> SpinBox:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	parent.add_child(row)
-	var lbl := Label.new()
-	lbl.text = label
-	lbl.custom_minimum_size.x = 120.0
-	lbl.tooltip_text = tip
-	_style_muted_label(lbl)
-	row.add_child(lbl)
-	var spin := SpinBox.new()
-	spin.min_value = min_v
-	spin.max_value = max_v
-	spin.step = step
-	spin.value = default_v
-	spin.suffix = suffix
-	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	spin.tooltip_text = tip
-	row.add_child(spin)
-	return spin
-
-
 func _create_map() -> void:
 	if is_nan(_sel_lat) or is_nan(_sel_lng):
 		return
@@ -819,9 +775,13 @@ func _create_map() -> void:
 	md.description = "User-created location map for %s.\nTerrain + imagery from open data." % label
 	md.latitude = _sel_lat
 	md.longitude = _sel_lng
-	md.half_extent_m = _world_radius_km_spin.value * 1000.0 if _world_radius_km_spin != null else 0.0
-	md.detail_half_extent_m = _detail_radius_spin.value if _detail_radius_spin != null else 0.0
-	md.osm_half_extent_m = _osm_radius_spin.value if _osm_radius_spin != null else 0.0
+	md.load_from_cache = true
+	md.touch_last_loaded()
+	# Prefer last-built extents for this site (cache key match); else 0 = loader defaults.
+	var meta := TerrainCacheSettings.get_meta_extents(_sel_lat, _sel_lng)
+	md.half_extent_m = float(meta.get("half_extent_m", 0.0))
+	md.detail_half_extent_m = float(meta.get("detail_half_extent_m", 0.0))
+	md.osm_half_extent_m = float(meta.get("osm_half_extent_m", 0.0))
 
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
 	# Key the file by coordinates so re-creating the same spot updates in place.
@@ -839,12 +799,15 @@ func _create_map() -> void:
 			push_warning("LocationPicker: bundle import failed: %s" % str(prep.get("error", "unknown")))
 			var ctx := get_node_or_null("/root/MapContext")
 			if ctx != null:
-				ctx.set_pending(_sel_lat, _sel_lng, label, world_he, false, detail_he, osm_he)
+				ctx.set_pending(_sel_lat, _sel_lng, label, world_he, false, detail_he, osm_he, false)
 	else:
 		var ctx := get_node_or_null("/root/MapContext")
 		if ctx != null:
-			ctx.set_pending(_sel_lat, _sel_lng, label, world_he, false, detail_he, osm_he)
+			ctx.set_pending(_sel_lat, _sel_lng, label, world_he, false, detail_he, osm_he, false)
+	if _pending_starshade:
+		_queue_starshade_design()
 	_pending_bundle_path = ""
+	_pending_starshade = false
 	if _bundle_status != null:
 		_bundle_status.text = ""
 	if not _is_launch_mode():
@@ -852,43 +815,49 @@ func _create_map() -> void:
 	get_tree().change_scene_to_file(MapDefinition.GENERATED_SCENE)
 
 
-func _on_import_bundle_pressed() -> void:
-	if _bundle_file_dialog == null:
-		_bundle_file_dialog = FileDialog.new()
-		_bundle_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-		_bundle_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
-		_bundle_file_dialog.filters = PackedStringArray([
-			"*.gamebundle.json ; LinkageLab Game Bundle",
-			"*.json ; JSON",
-		])
-		_bundle_file_dialog.title = "Import StarShade Design"
-		_bundle_file_dialog.size = Vector2i(900, 600)
-		_bundle_file_dialog.file_selected.connect(_on_bundle_file_selected)
-		add_child(_bundle_file_dialog)
-	_bundle_file_dialog.popup_centered_ratio(0.6)
-
-
-func _on_bundle_file_selected(path: String) -> void:
-	var loaded: Dictionary = DESIGN_BUNDLE_SCRIPT.load_from_path(path)
-	if not bool(loaded.get("ok", false)):
+func _on_add_starshade_pressed() -> void:
+	## Place the catalog V1 StarShade — no LinkageLab bundle dance.
+	if _is_launch_mode():
+		_pending_starshade = true
+		_queue_starshade_design()
 		if _bundle_status != null:
-			_bundle_status.text = "Import failed: %s" % str(loaded.get("error", "unknown"))
+			_bundle_status.text = "StarShade queued — create or start a map to place it."
 		return
-	_pending_bundle_path = path
-	if _bundle_status != null:
-		_bundle_status.text = ("Design loaded: %s — pick a location, then Create map here."
-			% str(loaded.get("name", path.get_file())))
-	var loc: Dictionary = loaded.get("location", {}) as Dictionary
-	var lat_v: Variant = loc.get("latitude", null)
-	var lon_v: Variant = loc.get("longitude", null)
-	if lat_v != null and lon_v != null:
-		_sel_lat = float(lat_v)
-		_sel_lng = float(lon_v)
-		if is_instance_valid(_map):
-			_map.set_selection_lat_lng(_sel_lat, _sel_lng)
-			_map.set_focus_zone_id(_compute_map_focus())
-		_refresh_legend()
-		_refresh_panels()
+	var main := _find_main_node()
+	if main == null:
+		if _bundle_status != null:
+			_bundle_status.text = "Could not find Main — open a world first."
+		return
+	var r: Dictionary = PLACED_PROP_SERVICE_SCRIPT.begin_placement(main, "starshade")
+	if bool(r.get("ok", false)):
+		var loader := main.get_node_or_null("TerrainLoader")
+		if loader != null and loader.has_method("notify_external_placement_started"):
+			loader.call("notify_external_placement_started", r)
+		if _bundle_status != null:
+			_bundle_status.text = "StarShade placement active — aim and click to confirm."
+		hide_picker()
+	else:
+		# Fallback: drop at player / origin immediately.
+		var placed: Dictionary = PLACED_PROP_SERVICE_SCRIPT.place_model(main, "starshade", true)
+		if _bundle_status != null:
+			_bundle_status.text = ("StarShade placed." if bool(placed.get("ok", false))
+				else "Could not place StarShade.")
+
+
+func _queue_starshade_design() -> void:
+	var dc := get_node_or_null("/root/DesignContext")
+	if dc != null and dc.has_method("set_pending"):
+		dc.call("set_pending", "starshade", {}, {}, {}, "StarShade", "")
+
+
+func _find_main_node() -> Node:
+	var st := get_tree()
+	if st == null:
+		return null
+	var cur := st.current_scene
+	if cur != null and str(cur.name) == "Main":
+		return cur
+	return st.root.find_child("Main", true, false)
 
 ## Filename-safe token for a coordinate, e.g. -122.3321 -> "n122p3321".
 static func _coord_token(v: float) -> String:
@@ -1099,10 +1068,13 @@ func _save_game() -> SaveGameService:
 
 func _resolve_maps() -> void:
 	_maps_resolved.clear()
+	_maps_file_paths.clear()
 	if not maps.is_empty():
 		for m in maps:
 			if m is MapDefinition and MapDefinition.is_trusted_scene_path(m.scene_path):
 				_maps_resolved.append(m)
+				_maps_file_paths.append("")
+		_sort_maps_by_recency()
 		return
 	for p in _DEFAULT_MAP_PATHS:
 		var r := load(p)
@@ -1110,7 +1082,9 @@ func _resolve_maps() -> void:
 			var md := r as MapDefinition
 			if MapDefinition.is_trusted_scene_path(md.scene_path):
 				_maps_resolved.append(md)
+				_maps_file_paths.append("")
 	_resolve_user_maps()
+	_sort_maps_by_recency()
 
 
 func _resolve_user_maps() -> void:
@@ -1120,28 +1094,196 @@ func _resolve_user_maps() -> void:
 	for fn in dir.get_files():
 		if not fn.ends_with(".tres"):
 			continue
-		var r := load("%s/%s" % [_USER_MAPS_DIR, fn])
+		var path := "%s/%s" % [_USER_MAPS_DIR, fn]
+		var r := load(path)
 		if r is MapDefinition:
 			var md := r as MapDefinition
 			if MapDefinition.is_trusted_scene_path(md.scene_path):
+				# Heal maps corrupted by CheckBox toggled(false) on list rebuild
+				# (force-refetch every Start → load screen stuck at 0%).
+				if not md.load_from_cache:
+					md.load_from_cache = true
+					ResourceSaver.save(md, path)
 				_maps_resolved.append(md)
+				_maps_file_paths.append(path)
+
+
+## Most recently Start/Create'd first; never-launched (0) sink to the bottom.
+func _sort_maps_by_recency() -> void:
+	var n := _maps_resolved.size()
+	if n <= 1:
+		return
+	var order: Array[int] = []
+	for i in n:
+		order.append(i)
+	order.sort_custom(func(a: int, b: int) -> bool:
+		var ta := float(_maps_resolved[a].last_loaded_unix)
+		var tb := float(_maps_resolved[b].last_loaded_unix)
+		if ta == tb:
+			return a < b
+		return ta > tb
+	)
+	var maps_sorted: Array[MapDefinition] = []
+	var paths_sorted: Array[String] = []
+	for i in order:
+		maps_sorted.append(_maps_resolved[i])
+		paths_sorted.append(_maps_file_paths[i] if i < _maps_file_paths.size() else "")
+	_maps_resolved = maps_sorted
+	_maps_file_paths = paths_sorted
+
+
+func _touch_map_loaded(index: int) -> void:
+	if index < 0 or index >= _maps_resolved.size():
+		return
+	var md: MapDefinition = _maps_resolved[index]
+	md.touch_last_loaded()
+	var path := _maps_file_paths[index] if index < _maps_file_paths.size() else ""
+	if not path.is_empty():
+		ResourceSaver.save(md, path)
 
 
 func _refresh_maps_list() -> void:
 	if _maps_list == null:
 		return
-	_maps_list.clear()
+	# Guard cache checkboxes: freeing a pressed CheckBox can emit toggled(false)
+	# and would persist load_from_cache=false → every Start force-refetches DEM.
+	_syncing_map_list = true
+	while _maps_list.get_child_count() > 0:
+		var c := _maps_list.get_child(0)
+		_disconnect_map_row_signals(c)
+		_maps_list.remove_child(c)
+		c.free()
+	_map_row_panels.clear()
+	_maps_selected_idx = -1
 	for i in _maps_resolved.size():
-		var m: MapDefinition = _maps_resolved[i]
-		_maps_list.add_item(m.display_name)
+		_maps_list.add_child(_make_map_row(i))
+	_syncing_map_list = false
 	if _maps_resolved.is_empty():
 		if _launch_status != null:
 			_launch_status.text = "No saved worlds yet — click the map and press Create map here."
 		return
 	if _launch_status != null:
 		_launch_status.text = ""
-	_maps_list.select(0)
-	_on_map_list_selected(0)
+	_select_map_row(0)
+
+
+func _disconnect_map_row_signals(node: Node) -> void:
+	if node == null:
+		return
+	if node is CheckBox:
+		var cb := node as CheckBox
+		var conns := cb.toggled.get_connections()
+		for c in conns:
+			cb.toggled.disconnect(c["callable"])
+	for child in node.get_children():
+		_disconnect_map_row_signals(child)
+
+
+func _make_map_row(index: int) -> PanelContainer:
+	var m: MapDefinition = _maps_resolved[index]
+	var path := _maps_file_paths[index] if index < _maps_file_paths.size() else ""
+	var row := PanelContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.mouse_filter = Control.MOUSE_FILTER_STOP
+	row.gui_input.connect(_on_map_row_gui_input.bind(index))
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.10, 0.13, 0.18, 0.92)
+	sb.set_content_margin_all(6)
+	sb.set_corner_radius_all(4)
+	row.add_theme_stylebox_override("panel", sb)
+	_map_row_panels.append(row)
+
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 8)
+	row.add_child(h)
+	var name_lbl := Label.new()
+	name_lbl.text = m.display_name
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.clip_text = true
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(name_lbl)
+
+	var cache_cb := CheckBox.new()
+	cache_cb.text = "Load from cache"
+	cache_cb.button_pressed = bool(m.load_from_cache)
+	cache_cb.tooltip_text = (
+		"Prefer cached DEM, imagery, and OSM. Uncheck for a fresh download and "
+		+ "skip placed models / building styles for this launch (files stay on disk)."
+	)
+	cache_cb.toggled.connect(_on_map_cache_toggled.bind(index))
+	h.add_child(cache_cb)
+
+	if not path.is_empty():
+		var del_btn := Button.new()
+		del_btn.text = "Delete"
+		del_btn.tooltip_text = "Remove this world from your list"
+		del_btn.pressed.connect(_on_map_delete_pressed.bind(index))
+		h.add_child(del_btn)
+	return row
+
+
+func _on_map_row_gui_input(event: InputEvent, index: int) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			_select_map_row(index)
+
+
+func _select_map_row(index: int) -> void:
+	if index < 0 or index >= _maps_resolved.size():
+		return
+	_maps_selected_idx = index
+	for i in _map_row_panels.size():
+		var panel: PanelContainer = _map_row_panels[i]
+		if not is_instance_valid(panel):
+			continue
+		var sb := StyleBoxFlat.new()
+		sb.set_content_margin_all(6)
+		sb.set_corner_radius_all(4)
+		if i == index:
+			sb.bg_color = Color(0.14, 0.28, 0.36, 0.95)
+			sb.set_border_width_all(1)
+			sb.border_color = _PRIMARY
+		else:
+			sb.bg_color = Color(0.10, 0.13, 0.18, 0.92)
+		panel.add_theme_stylebox_override("panel", sb)
+	_on_map_list_selected(index)
+
+
+func _on_map_cache_toggled(on: bool, index: int) -> void:
+	if _syncing_map_list:
+		return
+	if index < 0 or index >= _maps_resolved.size():
+		return
+	var m: MapDefinition = _maps_resolved[index]
+	m.load_from_cache = on
+	var path := _maps_file_paths[index] if index < _maps_file_paths.size() else ""
+	if not path.is_empty():
+		ResourceSaver.save(m, path)
+
+
+func _on_map_delete_pressed(index: int) -> void:
+	if index < 0 or index >= _maps_resolved.size():
+		return
+	var path := _maps_file_paths[index] if index < _maps_file_paths.size() else ""
+	if path.is_empty():
+		if _launch_status != null:
+			_launch_status.text = "Built-in maps can't be deleted."
+		return
+	var removed := false
+	var dir := DirAccess.open(_USER_MAPS_DIR)
+	if dir != null:
+		removed = dir.remove(path.get_file()) == OK
+	if not removed:
+		removed = DirAccess.remove_absolute(ProjectSettings.globalize_path(path)) == OK
+	if FileAccess.file_exists(path):
+		if _launch_status != null:
+			_launch_status.text = "Could not delete map file."
+		return
+	_resolve_maps()
+	_refresh_maps_list()
+	if _launch_status != null:
+		_launch_status.text = "Map deleted."
 
 
 func _on_map_list_selected(index: int) -> void:
@@ -1176,8 +1318,7 @@ func _try_highlight_map_for_coords(lat: float, lon: float) -> void:
 	var idx := _find_map_index_for_coords(lat, lon)
 	if idx >= 0:
 		_syncing_map_list = true
-		_maps_list.select(idx)
-		_on_map_list_selected(idx)
+		_select_map_row(idx)
 		_syncing_map_list = false
 
 
@@ -1192,16 +1333,36 @@ func _find_map_index_for_coords(lat: float, lon: float) -> int:
 	return -1
 
 
+func _map_row_wants_cache(index: int, md: MapDefinition) -> bool:
+	## Live checkbox state wins; default to cache-on when the row isn't built yet.
+	if index >= 0 and index < _map_row_panels.size():
+		var panel: PanelContainer = _map_row_panels[index]
+		if is_instance_valid(panel):
+			var cb := _find_cache_checkbox(panel)
+			if cb != null:
+				return cb.button_pressed
+	return bool(md.load_from_cache) if md != null else true
+
+
+func _find_cache_checkbox(node: Node) -> CheckBox:
+	if node is CheckBox:
+		var cb := node as CheckBox
+		if cb.text.findn("cache") >= 0:
+			return cb
+	for child in node.get_children():
+		var found := _find_cache_checkbox(child)
+		if found != null:
+			return found
+	return null
+
+
 func _on_start_pressed() -> void:
 	if _maps_list == null:
 		return
-	var sel := _maps_list.get_selected_items()
-	if sel.is_empty():
+	var idx := _maps_selected_idx
+	if idx < 0 or idx >= _maps_resolved.size():
 		if _launch_status != null:
 			_launch_status.text = "Select a world from the list, or create one on the map."
-		return
-	var idx := int(sel[0])
-	if idx < 0 or idx >= _maps_resolved.size():
 		return
 	var md: MapDefinition = _maps_resolved[idx]
 	var path: String = md.scene_path.strip_edges()
@@ -1212,8 +1373,43 @@ func _on_start_pressed() -> void:
 	if md.is_generated():
 		var ctx := get_node_or_null("/root/MapContext")
 		if ctx != null:
-			ctx.set_pending(md.latitude, md.longitude, md.display_name, md.half_extent_m,
-				false, md.detail_half_extent_m, md.osm_half_extent_m)
+			# Prefer cache unless the row checkbox is explicitly off. Also heal
+			# maps that were corrupted to load_from_cache=false by checkbox free.
+			var use_cache := _map_row_wants_cache(idx, md)
+			if md.load_from_cache != use_cache:
+				md.load_from_cache = use_cache
+			_touch_map_loaded(idx)
+			# Pass last-known site extents when the .tres still has 0 (= default)
+			# so TerrainLoader hits the same DEM/imagery cache keys as last visit.
+			var he := float(md.half_extent_m)
+			var dhe := float(md.detail_half_extent_m)
+			var ohe := float(md.osm_half_extent_m)
+			if he <= 0.0 or dhe <= 0.0 or ohe <= 0.0:
+				var meta := TerrainCacheSettings.get_meta_extents(md.latitude, md.longitude)
+				if he <= 0.0:
+					he = float(meta.get("half_extent_m", 0.0))
+				if dhe <= 0.0:
+					dhe = float(meta.get("detail_half_extent_m", 0.0))
+				if ohe <= 0.0:
+					ohe = float(meta.get("osm_half_extent_m", 0.0))
+				# Persist resolved extents onto the map so future Starts are stable.
+				if he > 0.0:
+					md.half_extent_m = he
+				if dhe > 0.0:
+					md.detail_half_extent_m = dhe
+				if ohe > 0.0:
+					md.osm_half_extent_m = ohe
+				var save_path := _maps_file_paths[idx] if idx < _maps_file_paths.size() else ""
+				if not save_path.is_empty():
+					ResourceSaver.save(md, save_path)
+			var force_refetch := not use_cache
+			ctx.set_pending(md.latitude, md.longitude, md.display_name, he,
+				false, dhe, ohe, force_refetch)
+	else:
+		_touch_map_loaded(idx)
+	if _pending_starshade:
+		_queue_starshade_design()
+		_pending_starshade = false
 	var path_file := MapDefinition.resolve_playable_scene_path(MapDefinition.normalize_scene_path(path))
 	var err := get_tree().change_scene_to_file(path_file)
 	if err != OK and _launch_status != null:

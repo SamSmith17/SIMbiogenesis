@@ -15,10 +15,12 @@ const DEFAULT_ORBIT_PITCH := 0.42
 const DEFAULT_ORBIT_MULT := 2.2
 const MIN_ORBIT_MULT := 0.35
 const MAX_ORBIT_MULT := 4.5
-const ZOOM_STEP := 0.12
+const ZOOM_STEP := 0.06
+const ZOOM_SMOOTH := 10.0
 const MIN_ORBIT_DIST_M := 8.0
 const MIN_VIEWPORT_PX := 64
-const MAX_VIEWPORT_PX := 1024
+## Higher cap reduces UV stretch pinch on large Site Plan discs / HiDPI.
+const MAX_VIEWPORT_PX := 2048
 ## Above this disc diameter, cover the canvas and crop the ortho frustum instead
 ## of growing a Control to tens of thousands of pixels (extreme 2D zoom-in).
 const MAX_DISC_CONTAINER_PX := 4096.0
@@ -26,6 +28,8 @@ const YAW_SENS := 0.005
 const PITCH_SENS := 0.004
 const PITCH_MIN := 0.05
 const PITCH_MAX := 1.45
+## Cap idle redraws while SoI lite preview is active (~24 FPS).
+const IDLE_REFRESH_HZ := 24.0
 
 signal preview_active_changed(active: bool)
 
@@ -39,6 +43,7 @@ var _camera: Camera3D = null
 var _yaw: float = DEFAULT_ORBIT_YAW
 var _pitch: float = DEFAULT_ORBIT_PITCH
 var _orbit_mult: float = DEFAULT_ORBIT_MULT
+var _orbit_mult_target: float = DEFAULT_ORBIT_MULT
 var _top_down: bool = false
 ## True when top-down preview covers the canvas and zooms with 2D pan/zoom.
 var _top_down_cropped: bool = false
@@ -47,7 +52,10 @@ var _section_mode: bool = false
 var _section_heading: float = 0.0
 var _clip_owned: bool = false
 var _layout_dirty: bool = true
+var _camera_dirty: bool = true
 var _last_layout_key: String = ""
+var _refresh_acc: float = 0.0
+var _saved_shadows: int = -1
 
 
 func setup(host: Control, canvas: Control) -> void:
@@ -75,10 +83,12 @@ func _connect_canvas_camera_signals() -> void:
 
 func _on_soi_changed() -> void:
 	_layout_dirty = true
+	_camera_dirty = true
 	if active:
 		_apply_soi_visuals(true)
 		_sync_layout()
 		_update_camera()
+		_request_viewport_refresh()
 
 
 func set_active(on: bool) -> void:
@@ -92,18 +102,21 @@ func set_active(on: bool) -> void:
 		_apply_soi_visuals(true)
 		_apply_preview_shell_visuals()
 		_layout_dirty = true
+		_camera_dirty = true
+		_orbit_mult_target = _orbit_mult
 		_sync_layout()
 		_update_camera()
 		_set_visible(true)
 		set_process(true)
-		if _viewport != null:
-			_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		_apply_lite_camera()
+		_request_viewport_refresh()
 	else:
 		set_process(false)
 		_set_visible(false)
 		_apply_soi_visuals(false)
+		_restore_lite_camera()
 		if _viewport != null:
-			_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+			_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	if _canvas != null and is_instance_valid(_canvas):
 		_canvas.set("soi_live_preview", on)
 		_canvas.queue_redraw()
@@ -121,6 +134,7 @@ func teardown() -> void:
 
 func mark_layout_dirty() -> void:
 	_layout_dirty = true
+	_camera_dirty = true
 
 
 func apply_orbit_delta(relative: Vector2) -> void:
@@ -128,17 +142,18 @@ func apply_orbit_delta(relative: Vector2) -> void:
 		return
 	_yaw = fposmod(_yaw - relative.x * YAW_SENS, TAU)
 	_pitch = clampf(_pitch - relative.y * PITCH_SENS, PITCH_MIN, PITCH_MAX)
+	_camera_dirty = true
 	_update_camera()
+	_request_viewport_refresh()
 
 
 func apply_zoom_step(zoom_in: bool) -> void:
 	if not active or _top_down or _section_mode:
 		return
-	if zoom_in:
-		_orbit_mult = maxf(MIN_ORBIT_MULT, _orbit_mult - ZOOM_STEP)
-	else:
-		_orbit_mult = minf(MAX_ORBIT_MULT, _orbit_mult + ZOOM_STEP)
-	_update_camera()
+	var factor := 1.0 - ZOOM_STEP if zoom_in else 1.0 + ZOOM_STEP
+	_orbit_mult_target = clampf(_orbit_mult_target * factor, MIN_ORBIT_MULT, MAX_ORBIT_MULT)
+	_camera_dirty = true
+	_request_viewport_refresh()
 
 
 ## Orthographic north-up top-down for Site Plan (screen up = −Z / north).
@@ -151,7 +166,9 @@ func set_top_down(on: bool) -> void:
 		_camera.projection = Camera3D.PROJECTION_ORTHOGONAL if (on or _section_mode) \
 				else Camera3D.PROJECTION_PERSPECTIVE
 	_layout_dirty = true
+	_camera_dirty = true
 	_update_camera()
+	_request_viewport_refresh()
 
 
 ## Orthographic vertical cross-section of the snowglobe (Elevation 3D option).
@@ -164,13 +181,37 @@ func set_section_mode(on: bool) -> void:
 		_camera.projection = Camera3D.PROJECTION_ORTHOGONAL if (_section_mode or _top_down) \
 				else Camera3D.PROJECTION_PERSPECTIVE
 	_layout_dirty = true
+	_camera_dirty = true
 	_update_camera()
+	_request_viewport_refresh()
 
 
 func set_section_heading(heading_rad: float) -> void:
 	_section_heading = fposmod(heading_rad, TAU)
 	if active and _section_mode:
+		_camera_dirty = true
 		_update_camera()
+		_request_viewport_refresh()
+
+
+func _request_viewport_refresh() -> void:
+	if _viewport == null or not active:
+		return
+	# Dirty-driven: one frame now; _process re-arms on orbit/layout/time scrub.
+	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+
+func _apply_lite_camera() -> void:
+	if _camera == null:
+		return
+	_saved_shadows = int(_camera.attributes != null)
+	_camera.fov = 68.0
+	# Preview camera: no directional shadows (cheap fill light from environment).
+	_camera.keep_aspect = Camera3D.KEEP_HEIGHT
+
+
+func _restore_lite_camera() -> void:
+	_saved_shadows = -1
 
 
 func _apply_preview_shell_visuals() -> void:
@@ -201,7 +242,7 @@ func _apply_top_down_visuals() -> void:
 	_apply_preview_shell_visuals()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not active:
 		return
 	var soi := _soi()
@@ -213,9 +254,26 @@ func _process(_delta: float) -> void:
 	# Re-bind if the root World3D wasn't ready at activate time.
 	if _viewport != null and _viewport.world_3d == null:
 		_bind_world()
-	if _layout_dirty or _layout_changed():
+	# Smooth freeform zoom toward target.
+	if not _top_down and not _section_mode \
+			and not is_equal_approx(_orbit_mult, _orbit_mult_target):
+		var t := clampf(delta * ZOOM_SMOOTH, 0.0, 1.0)
+		_orbit_mult = lerpf(_orbit_mult, _orbit_mult_target, t)
+		_camera_dirty = true
+	var need_layout := _layout_dirty or _layout_changed()
+	if need_layout:
 		_sync_layout()
-	_update_camera()
+		_camera_dirty = true
+	if _camera_dirty or need_layout:
+		_update_camera()
+		_camera_dirty = false
+		_request_viewport_refresh()
+	else:
+		# Idle throttle: soft refresh so sky/time scrub still updates.
+		_refresh_acc += delta
+		if _refresh_acc >= 1.0 / IDLE_REFRESH_HZ:
+			_refresh_acc = 0.0
+			_request_viewport_refresh()
 
 
 func _ensure_nodes() -> void:

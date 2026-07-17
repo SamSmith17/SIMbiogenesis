@@ -8,6 +8,8 @@ extends SceneTree
 
 const ElevationServiceScript := preload("res://core/terrain/elevation_service.gd")
 const BuildingServiceScript := preload("res://core/terrain/building_service.gd")
+const ImageryServiceScript := preload("res://core/terrain/imagery_service.gd")
+const OsmRegistrationScript := preload("res://core/terrain/osm_registration.gd")
 
 var _failures: int = 0
 var _checks: int = 0
@@ -26,10 +28,15 @@ func _initialize() -> void:
 	_test_coarse_hide()
 	_test_seam_compose()
 	_test_aaigrid()
+	_test_aaigrid_georef()
+	_test_dem_extent_recovery()
+	_test_imagery_equirect_warp()
+	_test_osm_registration()
 	_test_dem_usability()
 	_test_base_grid_extent()
 	_test_cache_settings()
 	_test_load_progress()
+	_test_sculpt_ops()
 	if _failures == 0:
 		print("TERRAIN SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -54,6 +61,14 @@ func _test_solar_array() -> void:
 			all_in = false
 	_check("solar panels inside footprint", all_in)
 
+	# Larger modules → fewer panels that fit the same footprint.
+	var big_spec := SolarArrayBuilder.resolve_panel_spec({"panel_w_m": 2.1, "panel_h_m": 3.5})
+	var fewer := SolarArrayBuilder.plan_panels(sq, 35.0, big_spec)
+	_check("solar larger panels fit fewer", fewer.size() < panels.size(),
+		"default=%d big=%d" % [panels.size(), fewer.size()])
+	_check("solar count_panels matches plan",
+		SolarArrayBuilder.count_panels_for_footprint(sq, 35.0) == panels.size())
+
 	var sm := SolarArrayBuilder.summarize(30)
 	_check("solar capacity 30x400W=12kW", _approx(float(sm["capacity_kw"]), 12.0, 0.001),
 		"got %f" % float(sm["capacity_kw"]))
@@ -66,6 +81,24 @@ func _test_solar_array() -> void:
 			mmi.multimesh.instance_count == panels.size(),
 			"mm=%d panels=%d" % [mmi.multimesh.instance_count, panels.size()])
 	node.free()
+
+	# Mount styles: ground has posts + taller rack; flat uses shallow tilt.
+	_check("mount resolve ground",
+		SolarArrayBuilder.resolve_mount_style("ground") == SolarArrayBuilder.MOUNT_GROUND)
+	_check("mount infer roof",
+		SolarArrayBuilder.infer_mount_style({"location": "roof"}) == SolarArrayBuilder.MOUNT_ROOF)
+	var gdefs := SolarArrayBuilder.mount_defaults(SolarArrayBuilder.MOUNT_GROUND, 35.0)
+	var fdefs := SolarArrayBuilder.mount_defaults(SolarArrayBuilder.MOUNT_FLAT, 35.0)
+	_check("ground rack taller than flat",
+		float(gdefs["rack_height_m"]) > float(fdefs["rack_height_m"]))
+	_check("flat tilt shallow", float(fdefs["tilt_deg"]) <= 10.0)
+	var gnode := SolarArrayBuilder.build_array_node(
+		"Ground", panels, 5.0, float(gdefs["tilt_deg"]), {}, SolarArrayBuilder.MOUNT_GROUND)
+	_check("ground mount has posts", gnode.get_node_or_null("RackPosts") != null)
+	gnode.free()
+	var rack := PalletRackBuilder.build_node({"bay_count": 2, "levels": 2})
+	_check("pallet rack builds children", rack.get_child_count() > 0)
+	rack.free()
 
 	var c := SolarArrayBuilder.centroid(sq)
 	_check("solar centroid at origin", c.length() < 0.001)
@@ -449,7 +482,85 @@ func _test_aaigrid() -> void:
 		_check("aaigrid size", g.size() == 6)
 		_check("aaigrid north-first ordering", _approx(g[0], 10.0, 1e-6))
 		_check("aaigrid NODATA→NAN", is_nan(g[4]))
+		_check("aaigrid stores xllcorner", _approx(float(parsed.get("xllcorner", NAN)), 0.0, 1e-6))
+		_check("aaigrid stores cellsize", _approx(float(parsed.get("cellsize", NAN)), 0.01, 1e-6))
 	_check("aaigrid rejects malformed", ElevationServiceScript.parse_aaigrid("ncols 3\n1 2").is_empty())
+
+
+func _test_aaigrid_georef() -> void:
+	# 3×3 ramp; request a sub-bbox so naive stretch would disagree with georef.
+	var text := "ncols 3\nnrows 3\nxllcorner -1.0\nyllcorner -1.0\ncellsize 1.0\nNODATA_value -9999\n"
+	text += "9 8 7\n6 5 4\n3 2 1\n"
+	var parsed := ElevationServiceScript.parse_aaigrid(text)
+	_check("georef aaigrid parsed", not parsed.is_empty())
+	if parsed.is_empty():
+		return
+	var bbox := {"north": 1.0, "south": -1.0, "east": 1.0, "west": -1.0}
+	var grid := ElevationServiceScript.resample_aaigrid_to_bbox(parsed, bbox, 3)
+	_check("georef resample size", grid.size() == 9, "got %d" % grid.size())
+	if grid.size() == 9:
+		# Cell centres: NW ≈ 9, centre ≈ 5, SE ≈ 1.
+		_check("georef NW ~9", _approx(grid[0], 9.0, 1.5), "got %f" % grid[0])
+		_check("georef centre ~5", _approx(grid[4], 5.0, 1.5), "got %f" % grid[4])
+		_check("georef SE ~1", _approx(grid[8], 1.0, 1.5), "got %f" % grid[8])
+	_check("georef empty without headers",
+		ElevationServiceScript.resample_aaigrid_to_bbox(
+			{"cols": 2, "rows": 2, "grid": PackedFloat32Array([1, 2, 3, 4])},
+			bbox, 2).is_empty())
+
+
+func _test_dem_extent_recovery() -> void:
+	var half := ElevationServiceScript._half_extent_from_dem_filename(
+		"dem_v4_base_opentopo_COP90_40.7871_-119.2025_60000_256.json")
+	_check("dem filename half_extent", _approx(half, 60000.0, 0.1), "got %f" % half)
+	var half2 := ElevationServiceScript._half_extent_from_dem_filename(
+		"dem_v4_detail_opentopo_usgs10_40.7871_-119.2025_4000_512.json")
+	_check("dem filename detail half", _approx(half2, 4000.0, 0.1), "got %f" % half2)
+
+
+func _test_imagery_equirect_warp() -> void:
+	# Exact bbox crop stays inside the mosaic and keeps a positive size.
+	var bbox := {"west": -1.0, "east": 1.0, "north": 1.0, "south": -1.0}
+	var rect := ImageryServiceScript.mercator_bbox_crop_rect(
+		1024, 1024, 0, 0, 8, bbox)
+	_check("mercator crop positive", rect.size.x > 0 and rect.size.y > 0)
+	_check("mercator crop in bounds",
+		rect.position.x >= 0 and rect.position.y >= 0
+		and rect.end.x <= 1024 and rect.end.y <= 1024)
+	var bb := TerrainBuilder.bbox_to_shader_vec4(
+		{"west": -2.0, "east": 2.0, "south": -1.0, "north": 1.0})
+	_check("bbox shader vec4 west", _approx(bb.x, -2.0, 1e-6))
+	_check("bbox shader vec4 north", _approx(bb.w, 1.0, 1e-6))
+
+
+func _test_osm_registration() -> void:
+	var p0 := Vector2(100.0, 200.0)
+	var p1: Vector2 = OsmRegistrationScript.offset_local_m(p0, 10.0, 20.0)
+	_check("offset +E +N", _approx(p1.x, 110.0, 1e-6) and _approx(p1.y, 180.0, 1e-6))
+	var payload := {
+		"buildings": [{
+			"points": PackedVector2Array([
+				Vector2(-460.0, 420.0), Vector2(-450.0, 420.0),
+				Vector2(-450.0, 430.0), Vector2(-460.0, 430.0),
+			]),
+			"tags": {"name": "The Man"},
+		}],
+	}
+	var man: Vector2 = OsmRegistrationScript.find_brc_man_local(payload)
+	_check("find BRC Man", is_finite(man.x) and _approx(man.x, -455.0, 0.1))
+	# Map centre ≈ 2025 spike; OSM Man ≈ 2026 spike → ~400 m NE slide.
+	var sug: Vector2 = OsmRegistrationScript.suggest_brc_offset_m(
+		40.7870812, -119.2024765, payload)
+	_check("BRC suggest length hundreds of m",
+		sug.length() > 300.0 and sug.length() < 600.0,
+		"got %.1f m" % sug.length())
+	_check("BRC suggest moves Man NE onto scars",
+		sug.x > 300.0 and sug.y > 300.0,
+		"got E=%.1f N=%.1f" % [sug.x, sug.y])
+	var shifted: Dictionary = OsmRegistrationScript.offset_payload(payload, sug.x, sug.y)
+	var man2: Vector2 = OsmRegistrationScript.find_brc_man_local(shifted)
+	_check("after offset Man near centre",
+		man2.length() < 80.0, "got %.1f m from origin" % man2.length())
 
 
 func _test_dem_usability() -> void:
@@ -521,3 +632,39 @@ func _test_load_progress() -> void:
 	p.mark_done("osm_veg")
 	_check("load progress complete", p.is_complete() and _approx(p.fraction(), 1.0, 1e-6))
 	_check("complete label", p.active_label() == "Map loaded")
+
+
+func _test_sculpt_ops() -> void:
+	var res := 17
+	var extent := 160.0
+	var base := PackedFloat32Array()
+	base.resize(res * res)
+	base.fill(100.0)
+	var delta := PackedFloat32Array()
+	delta.resize(res * res)
+	delta.fill(0.0)
+	var rmin := Vector2(-20.0, -20.0)
+	var rmax := Vector2(20.0, 20.0)
+	TerrainSculpt.apply_rect(delta, res, extent, rmin, rmax, "hill", 4.0, 2.0, base, 100.0)
+	var c := TerrainSculpt.world_to_cell(0.0, 0.0, res, extent)
+	var edge := TerrainSculpt.world_to_cell(18.0, 0.0, res, extent)
+	_check("sculpt hill peaks at centre",
+		delta[c.y * res + c.x] > delta[edge.y * res + edge.x] + 0.5,
+		"mid=%f edge=%f" % [delta[c.y * res + c.x], delta[edge.y * res + edge.x]])
+	delta.fill(0.0)
+	TerrainSculpt.apply_rect(delta, res, extent, rmin, rmax, "berm", 3.0, 2.0, base, 100.0)
+	var crest := TerrainSculpt.world_to_cell(0.0, 0.0, res, extent)
+	var flank := TerrainSculpt.world_to_cell(0.0, 18.0, res, extent)
+	_check("sculpt berm crest > flank",
+		delta[crest.y * res + crest.x] > delta[flank.y * res + flank.x] + 0.3,
+		"crest=%f flank=%f" % [delta[crest.y * res + crest.x], delta[flank.y * res + flank.x]])
+	delta.fill(0.0)
+	TerrainSculpt.apply_rect(delta, res, extent, rmin, rmax, "swale", 3.0, 2.0, base, 100.0)
+	_check("sculpt swale digs below zero",
+		delta[crest.y * res + crest.x] < -0.5,
+		"got %f" % delta[crest.y * res + crest.x])
+	delta.fill(0.0)
+	TerrainSculpt.apply_rect(delta, res, extent, rmin, rmax, "level", 5.0, 4.0, base, 100.0)
+	_check("sculpt level mid near target",
+		_approx(delta[c.y * res + c.x], 5.0, 0.6),
+		"got %f" % delta[c.y * res + c.x])

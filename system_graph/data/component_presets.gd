@@ -193,6 +193,28 @@ const APPLIANCES: Array = [
 		"width": 160.0, "height": 104.0,
 		"specs": { "name": "Phone Charger",       "max_watts":  20.0, "avg_watts":   15.0 },
 	},
+	# Wave 8 lights-as-wires: the AC wire INTO these loads renders in 3D as the
+	# light string itself (ConduitKinds light kinds — bulbs along a catenary).
+	# `light_conduit` auto-sets conduit_type on connect (GraphModel.add_connection);
+	# `watts_per_m` scales the draw with the routed 3D length (GraphAcLoad).
+	{
+		"type": "appliance", "label": "Patio String Lights", "icon": "🌃",
+		"width": 160.0, "height": 104.0,
+		"specs": { "name": "Patio String Lights", "max_watts": 50.0, "avg_watts": 33.0,
+			"watts_per_m": 3.3, "light_conduit": "led_patio" },
+	},
+	{
+		"type": "appliance", "label": "LED Strip (12 V)", "icon": "🟨",
+		"width": 160.0, "height": 104.0,
+		"specs": { "name": "LED Strip (12 V)",    "max_watts": 90.0, "avg_watts": 70.0,
+			"watts_per_m": 14.0, "light_conduit": "led_strip" },
+	},
+	{
+		"type": "appliance", "label": "Fairy Lights",     "icon": "✨",
+		"width": 160.0, "height": 104.0,
+		"specs": { "name": "Fairy Lights",        "max_watts": 12.0, "avg_watts": 6.0,
+			"watts_per_m": 0.6, "light_conduit": "led_fairy" },
+	},
 ]
 
 # ---------------------------------------------------------------------------
@@ -588,6 +610,37 @@ const RESOURCES: Array = [
 ]
 
 # ---------------------------------------------------------------------------
+# Planetary Basic Income (type = "pbi") — fundamental SoI sources.
+# Always present on the graph; locked / non-removable.
+# ---------------------------------------------------------------------------
+const PBIS: Array = [
+	{
+		"type": "pbi", "label": "Sunlight", "icon": "☀",
+		"width": 128.0, "height": 128.0, "locked": true,
+		"specs": {
+			"name": "Sunlight", "resource_kind": "sunlight",
+			"fundamental": true, "locked": true,
+		},
+	},
+	{
+		"type": "pbi", "label": "Rain", "icon": "🌧",
+		"width": 128.0, "height": 128.0, "locked": true,
+		"specs": {
+			"name": "Rain", "resource_kind": "water",
+			"fundamental": true, "locked": true,
+		},
+	},
+	{
+		"type": "pbi", "label": "Wind", "icon": "🌬",
+		"width": 128.0, "height": 128.0, "locked": true,
+		"specs": {
+			"name": "Wind", "resource_kind": "wind",
+			"fundamental": true, "locked": true,
+		},
+	},
+]
+
+# ---------------------------------------------------------------------------
 # Rain catchment sources  (type = "catchment")
 # Credits captured rainwater into connected water tanks via ResourceFlowEngine.
 # ---------------------------------------------------------------------------
@@ -598,14 +651,6 @@ const CATCHMENTS: Array = [
 		"specs": {
 			"name": "SoI Rain Catchment", "catchment_kind": "rain",
 			"use_soi_area": true, "area_m2": 50.0, "runoff_coeff": 0.75, "cost": 0.0,
-		},
-	},
-	{
-		"type": "catchment", "label": "SoI Biomass PBI", "icon": "🌿",
-		"width": 110.0, "height": 90.0,
-		"specs": {
-			"name": "SoI Biomass PBI", "catchment_kind": "biomass",
-			"use_soi_area": true, "area_m2": 100.0, "runoff_coeff": 1.0, "cost": 0.0,
 		},
 	},
 	{
@@ -625,9 +670,50 @@ const CATCHMENTS: Array = [
 ]
 
 # ---------------------------------------------------------------------------
-# Smart Circuit Monitors  (type = "shelly4pm")
-# Shelly Pro 4PM: one AC input, four individually metered 16 A circuit outputs.
-# Handles: ac_in (ac, left) | circuit_0–3 (ac, right, evenly spaced)
+# Grow beds / plants  (type = "plant")
+# Monteith LUE: ambient PAR × area × LUE → biomass; water required, nutrients
+# optional. Sunlight is non-blocking (no radiant wire needed).
+# ---------------------------------------------------------------------------
+const PLANTS: Array = [
+	{
+		"type": "plant", "label": "Grow Bed (10 m²)", "icon": "🌱",
+		"width": 160.0, "height": 130.0,
+		"specs": {
+			"name": "Grow Bed", "area_m2": 10.0, "use_soi_area": false,
+			"lue_g_per_mj": 2.0, "water_l_per_kg": 50.0, "nutrient_kg_per_kg": 0.02,
+			"sunlight_factor": 1.0, "cost": 200.0,
+			# 3D link: Place in world → procedural grow bed + bound graph node.
+			"model_id": "grow_bed",
+		},
+	},
+	{
+		"type": "plant", "label": "Garden Plot (50 m²)", "icon": "🌱",
+		"width": 160.0, "height": 130.0,
+		"specs": {
+			"name": "Garden Plot", "area_m2": 50.0, "use_soi_area": false,
+			"lue_g_per_mj": 2.0, "water_l_per_kg": 50.0, "nutrient_kg_per_kg": 0.02,
+			"sunlight_factor": 1.0, "cost": 500.0,
+			"model_id": "grow_bed",
+		},
+	},
+	{
+		"type": "plant", "label": "SoI Canopy Bed", "icon": "🌳",
+		"width": 160.0, "height": 130.0,
+		"specs": {
+			"name": "SoI Canopy Bed", "area_m2": 100.0, "use_soi_area": true,
+			"lue_g_per_mj": 1.5, "water_l_per_kg": 40.0, "nutrient_kg_per_kg": 0.015,
+			"sunlight_factor": 1.0, "cost": 0.0,
+		},
+	},
+]
+
+# ---------------------------------------------------------------------------
+# Smart Circuit Monitors / AC distribution  (shelly4pm, spiderbox, breaker_panel)
+#
+# AC passthrough model (used by GraphAcLoad):
+#   AC feed → ac_in → N switched circuit_* outlets.
+#   When channel cN_on is false, loads wired to circuit_N are unreachable and
+#   draw 0 W (they do not contribute to the AC bus balance).
 # ---------------------------------------------------------------------------
 const SHELLY4PM: Array = [
 	{
@@ -635,11 +721,14 @@ const SHELLY4PM: Array = [
 		"width": 164.0, "height": 130.0,
 		"specs": {
 			"name": "Shelly Pro 4PM",
+			"passthrough": true,
+			"channel_count": 4,
 			"max_amps_per_circuit": 16.0,
-			"c0_name": "Circuit 0", "c0_power_w": 0.0, "c0_on": false,
-			"c1_name": "Circuit 1", "c1_power_w": 0.0, "c1_on": false,
-			"c2_name": "Circuit 2", "c2_power_w": 0.0, "c2_on": false,
-			"c3_name": "Circuit 3", "c3_power_w": 0.0, "c3_on": false,
+			# Start ON in SIM so wired loads energize until the player toggles.
+			"c0_name": "Circuit 0", "c0_power_w": 0.0, "c0_on": true,
+			"c1_name": "Circuit 1", "c1_power_w": 0.0, "c1_on": true,
+			"c2_name": "Circuit 2", "c2_power_w": 0.0, "c2_on": true,
+			"c3_name": "Circuit 3", "c3_power_w": 0.0, "c3_on": true,
 			# Pre-linked HA entities — subscribed automatically on load.
 			"ha_links": {
 				"c0_power":  "sensor.shellypro4pm_ece334ed2e80_output_0_power",
@@ -655,6 +744,67 @@ const SHELLY4PM: Array = [
 				"c3_switch": "switch.shellypro4pm_ece334ed2e80_output_3",
 				"c3_energy": "sensor.shellypro4pm_ece334ed2e80_output_3_energy",
 			},
+		},
+	},
+]
+
+const SPIDERBOX: Array = [
+	{
+		"type": "spiderbox", "label": "Spiderbox 6-way", "icon": "🕷",
+		"width": 180.0, "height": 140.0,
+		"specs": {
+			"name": "Spiderbox 6-way",
+			"passthrough": true,
+			"channel_count": 6,
+			"max_amps_per_circuit": 20.0,
+			"c0_name": "Outlet A", "c0_power_w": 0.0, "c0_on": true,
+			"c1_name": "Outlet B", "c1_power_w": 0.0, "c1_on": true,
+			"c2_name": "Outlet C", "c2_power_w": 0.0, "c2_on": true,
+			"c3_name": "Outlet D", "c3_power_w": 0.0, "c3_on": true,
+			"c4_name": "Outlet E", "c4_power_w": 0.0, "c4_on": true,
+			"c5_name": "Outlet F", "c5_power_w": 0.0, "c5_on": true,
+			"cost": 180.0,
+		},
+	},
+]
+
+const BREAKER_PANELS: Array = [
+	{
+		"type": "breaker_panel", "label": "Breaker Panel 4-ckt", "icon": "🔌",
+		"width": 170.0, "height": 150.0,
+		"specs": {
+			"name": "Breaker Panel",
+			"passthrough": true,
+			"channel_count": 4,
+			"main_on": true,
+			"main_amps": 100.0,
+			"max_amps_per_circuit": 20.0,
+			"c0_name": "Branch 1", "c0_power_w": 0.0, "c0_on": true,
+			"c1_name": "Branch 2", "c1_power_w": 0.0, "c1_on": true,
+			"c2_name": "Branch 3", "c2_power_w": 0.0, "c2_on": true,
+			"c3_name": "Branch 4", "c3_power_w": 0.0, "c3_on": true,
+			"cost": 320.0,
+		},
+	},
+	{
+		"type": "breaker_panel", "label": "Breaker Panel 8-ckt", "icon": "🔌",
+		"width": 190.0, "height": 170.0,
+		"specs": {
+			"name": "Breaker Panel 8",
+			"passthrough": true,
+			"channel_count": 8,
+			"main_on": true,
+			"main_amps": 200.0,
+			"max_amps_per_circuit": 20.0,
+			"c0_name": "Branch 1", "c0_on": true, "c0_power_w": 0.0,
+			"c1_name": "Branch 2", "c1_on": true, "c1_power_w": 0.0,
+			"c2_name": "Branch 3", "c2_on": true, "c2_power_w": 0.0,
+			"c3_name": "Branch 4", "c3_on": true, "c3_power_w": 0.0,
+			"c4_name": "Branch 5", "c4_on": true, "c4_power_w": 0.0,
+			"c5_name": "Branch 6", "c5_on": true, "c5_power_w": 0.0,
+			"c6_name": "Branch 7", "c6_on": true, "c6_power_w": 0.0,
+			"c7_name": "Branch 8", "c7_on": true, "c7_power_w": 0.0,
+			"cost": 480.0,
 		},
 	},
 ]
@@ -795,6 +945,7 @@ const CSP_CONCENTRATORS: Array = [
 # Category list consumed by LibraryPanel to build the UI
 # ---------------------------------------------------------------------------
 const CATEGORIES: Array = [
+	{ "id": "pbis",        "label": "Planetary Basic Income", "icon": "🌍", "presets": PBIS },
 	{ "id": "panels",      "label": "Solar Panels",         "icon": "☀",  "presets": PANELS      },
 	{ "id": "wind",        "label": "Wind Turbines",        "icon": "🌬", "presets": WIND_TURBINES },
 	{ "id": "hydro",       "label": "Hydro Turbines",       "icon": "💧", "presets": HYDRO_TURBINES },
@@ -806,7 +957,10 @@ const CATEGORIES: Array = [
 	{ "id": "csp",         "label": "Solar Concentrators",  "icon": "🛰", "presets": CSP_CONCENTRATORS },
 	{ "id": "resources",   "label": "Resource Containers",  "icon": "🪣", "presets": RESOURCES   },
 	{ "id": "catchments",  "label": "Rain Catchment",       "icon": "🌧", "presets": CATCHMENTS  },
+	{ "id": "plants",      "label": "Grow Beds",            "icon": "🌱", "presets": PLANTS      },
 	{ "id": "monitors",    "label": "Circuit Monitors",     "icon": "📊", "presets": SHELLY4PM   },
+	{ "id": "spiderbox",   "label": "Spiderbox",            "icon": "🕷", "presets": SPIDERBOX },
+	{ "id": "breakers",    "label": "Breaker Panels",       "icon": "🔌", "presets": BREAKER_PANELS },
 ]
 
 
@@ -979,9 +1133,40 @@ static func create_default_preset(itype: String, name_val: String) -> Dictionary
 			preset.specs.merge({
 				"catchment_kind": "rain", "use_soi_area": false, "area_m2": 10.0, "runoff_coeff": 0.85
 			})
+		"plant":
+			preset.specs.merge({
+				"area_m2": 10.0, "use_soi_area": false,
+				"lue_g_per_mj": 2.0, "water_l_per_kg": 50.0, "nutrient_kg_per_kg": 0.02,
+				"sunlight_factor": 1.0,
+			})
 		"shelly4pm":
 			preset.specs.merge({
-				"max_amps_per_circuit": 16.0, "c0_name": "Circuit 0", "c1_name": "Circuit 1", "c2_name": "Circuit 2", "c3_name": "Circuit 3"
+				"passthrough": true, "channel_count": 4,
+				"max_amps_per_circuit": 16.0,
+				"c0_name": "Circuit 0", "c0_on": true,
+				"c1_name": "Circuit 1", "c1_on": true,
+				"c2_name": "Circuit 2", "c2_on": true,
+				"c3_name": "Circuit 3", "c3_on": true,
+			})
+		"spiderbox":
+			preset.specs.merge({
+				"passthrough": true, "channel_count": 6,
+				"max_amps_per_circuit": 20.0,
+				"c0_name": "Outlet A", "c0_on": true,
+				"c1_name": "Outlet B", "c1_on": true,
+				"c2_name": "Outlet C", "c2_on": true,
+				"c3_name": "Outlet D", "c3_on": true,
+				"c4_name": "Outlet E", "c4_on": true,
+				"c5_name": "Outlet F", "c5_on": true,
+			})
+		"breaker_panel":
+			preset.specs.merge({
+				"passthrough": true, "channel_count": 4, "main_on": true,
+				"main_amps": 100.0, "max_amps_per_circuit": 20.0,
+				"c0_name": "Branch 1", "c0_on": true,
+				"c1_name": "Branch 2", "c1_on": true,
+				"c2_name": "Branch 3", "c2_on": true,
+				"c3_name": "Branch 4", "c3_on": true,
 			})
 			
 	return preset
@@ -999,7 +1184,10 @@ static func _preset_icon_for_type(itype: String) -> String:
 		"processor": return "🌀"
 		"resource": return "🪣"
 		"catchment": return "🌧"
+		"plant": return "🌱"
 		"shelly4pm": return "📊"
+		"spiderbox": return "🕷"
+		"breaker_panel": return "🔌"
 		_: return "📦"
 
 
@@ -1015,5 +1203,8 @@ static func _category_id_for_type_static(itype: String) -> String:
 		"processor": return "processors"
 		"resource": return "resources"
 		"catchment": return "catchments"
+		"plant": return "plants"
 		"shelly4pm": return "monitors"
+		"spiderbox": return "spiderbox"
+		"breaker_panel": return "breakers"
 		_: return ""

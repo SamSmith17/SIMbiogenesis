@@ -8,11 +8,18 @@ const DEFAULT_RADIAL_SEGMENTS := 8
 const DEFAULT_SEGMENTS_PER_SPAN := 12
 
 
+## Extra clearance kept above the ground when a draped run rests on it.
+const DRAPE_CLEARANCE_M := 0.02
+
 ## Full build: control points → {mesh, material, arc_length_m, sample_points}.
+## ground_y_fn: optional Callable(Vector3) -> float returning terrain height at
+## a world position; when supplied and the kind has ground_drape, flexible sag
+## is clamped so the run rests on (never sinks below) the ground.
 static func build(control_points: Array, type_id: String,
-		segments_per_span: int = DEFAULT_SEGMENTS_PER_SPAN) -> Dictionary:
+		segments_per_span: int = DEFAULT_SEGMENTS_PER_SPAN,
+		ground_y_fn: Callable = Callable()) -> Dictionary:
 	var style: Dictionary = ConduitKinds.type_meta(type_id)
-	var samples := sample_path(control_points, style, segments_per_span)
+	var samples := sample_path(control_points, style, segments_per_span, ground_y_fn)
 	var radius: float = float(style.get("radius_m", 0.01))
 	var mesh := _build_tube_mesh(samples, radius, DEFAULT_RADIAL_SEGMENTS)
 	var mat := ConduitKinds.make_material(type_id)
@@ -26,8 +33,11 @@ static func build(control_points: Array, type_id: String,
 
 
 ## Sample a path through control points with per-span flexible sag or rigid lines.
+## When ground_y_fn is valid and the style has ground_drape, sagged points are
+## clamped to ground + clearance (extension cord / hose resting on terrain).
 static func sample_path(control_points: Array, style: Dictionary,
-		segments_per_span: int = DEFAULT_SEGMENTS_PER_SPAN) -> PackedVector3Array:
+		segments_per_span: int = DEFAULT_SEGMENTS_PER_SPAN,
+		ground_y_fn: Callable = Callable()) -> PackedVector3Array:
 	var out := PackedVector3Array()
 	if control_points.is_empty():
 		return out
@@ -36,6 +46,7 @@ static func sample_path(control_points: Array, style: Dictionary,
 		return out
 	var flexible: bool = bool(style.get("flexible", true))
 	var sag_amount: float = float(style.get("sag_amount", 0.3))
+	var drape: bool = bool(style.get("ground_drape", false)) and ground_y_fn.is_valid()
 	for span: int in range(control_points.size() - 1):
 		var start: Vector3 = control_points[span] as Vector3
 		var end: Vector3 = control_points[span + 1] as Vector3
@@ -49,7 +60,49 @@ static func sample_path(control_points: Array, style: Dictionary,
 				var hz: float = Vector2(end.x - start.x, end.z - start.z).length()
 				var sag: float = hz * sag_amount * 0.3
 				pos.y -= sag * 4.0 * t * (1.0 - t)
+				if drape:
+					var floor_y: float = float(ground_y_fn.call(pos)) + DRAPE_CLEARANCE_M
+					if pos.y < floor_y:
+						pos.y = floor_y
 			out.append(pos)
+	return out
+
+
+## Light-string build: tube mesh plus evenly spaced bulb transforms along the
+## sampled catenary. Returns {mesh, material, arc_length_m, sample_points,
+## bulb_positions: PackedVector3Array}. Continuous strips (bulb_spacing_m == 0)
+## return no bulb positions — the strip itself is made emissive by the caller.
+static func build_light_string(control_points: Array, type_id: String,
+		segments_per_span: int = DEFAULT_SEGMENTS_PER_SPAN,
+		ground_y_fn: Callable = Callable()) -> Dictionary:
+	var built := build(control_points, type_id, segments_per_span, ground_y_fn)
+	var style: Dictionary = ConduitKinds.type_meta(type_id)
+	var spacing: float = float(style.get("bulb_spacing_m", 0.0))
+	var samples: PackedVector3Array = built.get("sample_points", PackedVector3Array())
+	built["bulb_positions"] = bulb_positions_along(samples, spacing)
+	return built
+
+
+## Evenly spaced points along a sampled polyline (arc-length parameterized).
+## First bulb sits half a spacing in from the start so ends stay bulb-free.
+static func bulb_positions_along(samples: PackedVector3Array,
+		spacing_m: float) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	if spacing_m <= 0.001 or samples.size() < 2:
+		return out
+	var next_at: float = spacing_m * 0.5
+	var walked: float = 0.0
+	for i: int in range(1, samples.size()):
+		var a: Vector3 = samples[i - 1]
+		var b: Vector3 = samples[i]
+		var seg_len: float = a.distance_to(b)
+		if seg_len <= 1e-9:
+			continue
+		while next_at <= walked + seg_len:
+			var t: float = (next_at - walked) / seg_len
+			out.append(a.lerp(b, t))
+			next_at += spacing_m
+		walked += seg_len
 	return out
 
 

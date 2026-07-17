@@ -42,8 +42,14 @@ func attribution() -> String:
 	return ATTRIBUTION
 
 
-func request_vegetation(lat: float, lon: float, half_extent_m: float) -> void:
-	var req := {"lat": lat, "lon": lon, "half_extent_m": half_extent_m}
+func request_vegetation(lat: float, lon: float, half_extent_m: float,
+		force_refetch: bool = false) -> void:
+	var req := {
+		"lat": lat,
+		"lon": lon,
+		"half_extent_m": half_extent_m,
+		"force_refetch": force_refetch,
+	}
 	if _busy:
 		_pending = req
 		return
@@ -54,9 +60,11 @@ func _start_veg_job(req: Dictionary) -> void:
 	var lat: float = float(req["lat"])
 	var lon: float = float(req["lon"])
 	var half_extent_m: float = float(req["half_extent_m"])
+	var force_refetch: bool = bool(req.get("force_refetch", false))
 	var key := _cache_key(lat, lon, half_extent_m)
 	var cache_path := "%s/%s.json" % [CACHE_DIR, key]
-	if TerrainCacheSettings.cache_enabled() and FileAccess.file_exists(cache_path):
+	if not force_refetch and TerrainCacheSettings.cache_enabled() \
+			and FileAccess.file_exists(cache_path):
 		var parsed: Variant = _load_cache(cache_path)
 		if parsed is Dictionary:
 			var payload := deserialize_payload(parsed as Dictionary)

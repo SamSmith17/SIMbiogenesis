@@ -65,16 +65,37 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	var model_id := str(rec.get("model_id", ""))
 	if model_id.is_empty():
 		return null
-	var model := ModelCatalog.instantiate(model_id)
+	var extras: Dictionary = {}
+	if rec.has("rack_spec"):
+		extras["rack_spec"] = rec.get("rack_spec", {})
+	if model_id == GrowBed.MODEL_ID:
+		var bed_spec: Dictionary = {}
+		if rec.has("grow_bed_spec"):
+			bed_spec = (rec.get("grow_bed_spec", {}) as Dictionary).duplicate(true)
+		if rec.has("plant_abs_h"):
+			bed_spec["plant_abs_h"] = rec.get("plant_abs_h")
+		if rec.has("grow_days"):
+			bed_spec["grow_days"] = rec.get("grow_days")
+		extras["grow_bed_spec"] = bed_spec
+	var model := ModelCatalog.instantiate(model_id, extras)
 	if model == null:
 		return null
+	if model is GrowBed:
+		(model as GrowBed).configure_from_record(rec)
 	var prop := PlacedProp.new()
 	prop.name = "PlacedProp_%s" % str(rec.get("id", "unknown"))
 	prop.prop_id = str(rec.get("id", ""))
 	prop.model_id = model_id
 	prop.is_osm_replacement = str(rec.get("type", "")) == "osm"
 	prop.building_idx = int(rec.get("building_idx", -1))
-	prop.prompt = "Edit prop (click) / Grab (hold)"
+	if ModelCatalog.is_starshade_model(model_id):
+		prop.prompt = "Edit StarShade (Interact)"
+	elif model_id == PalletRackBuilder.MODEL_ID:
+		prop.prompt = "Edit prop / Grab (hold)"
+	elif model_id == GrowBed.MODEL_ID:
+		prop.prompt = "Edit grow bed (click) / Grab (hold)"
+	else:
+		prop.prompt = "Edit prop (click) / Grab (hold)"
 	prop.add_child(model)
 	model.name = "ModelRoot"
 	_disable_embedded_physics(model)
@@ -82,6 +103,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	prop.setup_collision()
 	_maybe_attach_wind_spin(prop, rec)
 	_maybe_attach_csp_tracker(prop, rec)
+	prop.set_burnable(bool(rec.get("burnable", false)))
 	var prop_id := str(rec.get("id", ""))
 	if PlacedPropService.is_placement_active() and prop_id == PlacedPropService.placement_prop_id():
 		prop.set_collision_enabled(false)
@@ -127,6 +149,7 @@ static func apply_record_to_prop(prop: PlacedProp, rec: Dictionary,
 		return
 	_apply_transform(prop, model, rec, ground_y_at)
 	prop.setup_collision()
+	prop.set_burnable(bool(rec.get("burnable", false)))
 	if not bool(rec.get("collision_enabled", true)):
 		prop.set_collision_enabled(false)
 
@@ -141,15 +164,20 @@ static func _apply_transform(_prop: PlacedProp, model: Node3D, rec: Dictionary,
 	var user_scale := float(rec.get("scale", 1.0))
 	var world_scale := ModelCatalog.resolved_scale(str(rec.get("model_id", "")), user_scale)
 	var foot_y := ModelCatalog.foot_local_y(str(rec.get("model_id", "")))
-	var gy: float = float(rec.get("ground_y", ground_y_at.call(x, z)))
+	# Prefer live footing so reload after DEM/mean-elev changes doesn't float.
+	var gy: float
+	if ground_y_at.is_valid():
+		gy = float(ground_y_at.call(x, z))
+	else:
+		gy = float(rec.get("ground_y", 0.0))
 	model.scale = Vector3.ONE * world_scale
 	model.rotation = Vector3(pitch, yaw, roll)
 	var grounded_y := gy - foot_y * world_scale
 	_prop.position = Vector3(x, grounded_y, z)
 	if rec.has("y_offset"):
 		_prop.position.y += float(rec["y_offset"])
-	elif rec.has("y"):
-		# Legacy absolute y coordinate fallback
+	elif rec.has("y") and not rec.has("ground_y"):
+		# Legacy absolute y — only when no ground_y was ever recorded.
 		_prop.position.y = float(rec["y"])
 
 

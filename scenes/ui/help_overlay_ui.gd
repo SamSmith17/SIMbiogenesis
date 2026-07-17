@@ -11,6 +11,7 @@ const _PROMPT_SCRIPT := preload("res://scenes/ui/interaction_prompt_ui.gd")
 
 const _TIPS := [
 	"Press G to open the system graph. Add a Habitat, wire water/food/energy, then start a Challenge (🎯).",
+	"Press U (or 📦 on the timeline) for the Library — place structures, grow beds, graph nodes, and veg tools.",
 	"Interact with the SoI map pin (O) to open Snowglobe — drag the Radius slider to expand your stewardship volume.",
 	"Needs chips (⚡💧🍎♻) show closure health: ● OK · ▲ warn · ■ critical. Click any chip for System Review.",
 	"Terrain, imagery, and vegetation load automatically for whatever location you pick — the first visit is slower, later visits use the cache.",
@@ -37,6 +38,7 @@ const _GROUPS := [
 	]],
 	["Panels", [
 		["system_graph_toggle", "System graph (wire habitat + power)"],
+		["toggle_library", "Unified library (buildings / graph / veg / structures)"],
 		["toggle_location_picker", "Location / map picker"],
 		["vegetation_edit", "Vegetation paint dock"],
 		["terrain_edit", "Terrain sculpt dock"],

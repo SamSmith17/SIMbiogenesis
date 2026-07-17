@@ -7,6 +7,7 @@ extends Node3D
 var _model: GraphModel = null
 var _main: Node = null
 var _instances: Dictionary = {}  ## conn_id -> MeshInstance3D
+var _light_runtimes: Dictionary = {}  ## conn_id -> LightStringRuntime
 var _last_anchors: Dictionary = {}  ## conn_id -> PackedVector3Array hash
 var _updating_model: bool = false
 
@@ -28,6 +29,7 @@ func teardown() -> void:
 	for cid: String in _instances.keys().duplicate():
 		_remove_instance(cid)
 	_instances.clear()
+	_light_runtimes.clear()
 	_last_anchors.clear()
 	_model = null
 	_main = null
@@ -126,12 +128,24 @@ func _rebuild_if_dirty(conn: Dictionary) -> void:
 	if control.size() < 2:
 		_remove_instance(cid)
 		return
+	var severed: bool = bool(conn.get("severed", false))
 	var sig := _control_signature(control)
 	if _last_anchors.has(cid) and (_last_anchors[cid] as PackedVector3Array) == sig:
+		_apply_severed_state(cid, severed)
 		return
 	_last_anchors[cid] = sig
 	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
-	var built: Dictionary = ConduitMeshBuilder.build(control, type_id)
+	var ground_fn := Callable()
+	if ConduitKinds.is_ground_drape_type(type_id):
+		ground_fn = Callable(self, "ground_y_at")
+	var is_light: bool = ConduitKinds.is_light_type(type_id)
+	var built: Dictionary
+	if is_light:
+		built = ConduitMeshBuilder.build_light_string(
+			control, type_id, ConduitMeshBuilder.DEFAULT_SEGMENTS_PER_SPAN, ground_fn)
+	else:
+		built = ConduitMeshBuilder.build(
+			control, type_id, ConduitMeshBuilder.DEFAULT_SEGMENTS_PER_SPAN, ground_fn)
 	var inst: MeshInstance3D = _instances.get(cid, null)
 	if inst == null or not is_instance_valid(inst):
 		inst = MeshInstance3D.new()
@@ -141,8 +155,72 @@ func _rebuild_if_dirty(conn: Dictionary) -> void:
 		_instances[cid] = inst
 	inst.mesh = built.get("mesh", null)
 	inst.material_override = built.get("material", null)
+	_sync_light_runtime(cid, conn, type_id, built, inst)
+	_apply_severed_state(cid, severed)
 	var arc: float = float(built.get("arc_length_m", 0.0))
 	_write_length_back(cid, arc)
+
+
+## Wave 8 burnout: scorched charcoal material on severed conduits + lights out.
+func _apply_severed_state(cid: String, severed: bool) -> void:
+	var inst: MeshInstance3D = _instances.get(cid, null)
+	if inst != null and is_instance_valid(inst):
+		var was: bool = bool(inst.get_meta("severed", false))
+		if was != severed:
+			inst.set_meta("severed", severed)
+			if severed:
+				var scorched := StandardMaterial3D.new()
+				scorched.albedo_color = Color(0.09, 0.07, 0.06, 1.0)
+				scorched.roughness = 1.0
+				inst.material_override = scorched
+			else:
+				var conn := _model.get_connection(cid) if _model != null else {}
+				var type_id: String = ConduitKinds.derive_type_for_connection(conn)
+				inst.material_override = ConduitKinds.make_material(type_id)
+	var rt: Node = _light_runtimes.get(cid, null)
+	if rt != null and is_instance_valid(rt) and rt.has_method("set_severed"):
+		rt.call("set_severed", severed)
+
+
+## Terrain height under a world position (raycast down). Used for ground drape.
+func ground_y_at(pos: Vector3) -> float:
+	var world := get_world_3d()
+	if world == null:
+		return pos.y
+	var space := world.direct_space_state
+	if space == null:
+		return pos.y
+	var from := Vector3(pos.x, pos.y + 50.0, pos.z)
+	var query := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * 300.0)
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	var hit := space.intersect_ray(query)
+	if hit.has("position"):
+		return (hit["position"] as Vector3).y
+	return pos.y
+
+
+func _sync_light_runtime(cid: String, conn: Dictionary, type_id: String,
+		built: Dictionary, tube: MeshInstance3D) -> void:
+	var is_light: bool = ConduitKinds.is_light_type(type_id)
+	var rt: Node = _light_runtimes.get(cid, null)
+	if not is_light:
+		if rt != null and is_instance_valid(rt):
+			rt.queue_free()
+		_light_runtimes.erase(cid)
+		return
+	if rt == null or not is_instance_valid(rt):
+		rt = LightStringRuntime.new()
+		rt.name = "Lights_%s" % cid
+		add_child(rt)
+		_light_runtimes[cid] = rt
+	var bulbs: PackedVector3Array = built.get("bulb_positions", PackedVector3Array())
+	var arc: float = float(built.get("arc_length_m", 0.0))
+	(rt as LightStringRuntime).configure(type_id, bulbs, arc)
+	var meta: Dictionary = ConduitKinds.type_meta(type_id)
+	if float(meta.get("bulb_spacing_m", 0.0)) <= 0.001:
+		(rt as LightStringRuntime).set_strip_mesh(tube)
+	(rt as LightStringRuntime).set_severed(bool(conn.get("severed", false)))
 
 
 func _control_signature(control: Array) -> PackedVector3Array:
@@ -203,6 +281,10 @@ func get_instance(conn_id: String) -> MeshInstance3D:
 
 
 func _remove_instance(conn_id: String) -> void:
+	var rt: Node = _light_runtimes.get(conn_id, null)
+	if rt != null and is_instance_valid(rt):
+		rt.queue_free()
+	_light_runtimes.erase(conn_id)
 	if not _instances.has(conn_id):
 		return
 	var inst: MeshInstance3D = _instances[conn_id]

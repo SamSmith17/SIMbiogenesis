@@ -44,11 +44,17 @@ func _check_layer_json_roundtrip() -> bool:
 	var id := layer.add_free_prop("pine_1", 10.0, 5.0, 20.0, 45.0, 0.0, 0.0, 1.2, 4.5)
 	if id.is_empty():
 		return false
+	layer.update_prop(id, {"burnable": true, "collision_enabled": false})
 	layer.add_osm_prop(3, "shiftpod", 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.8, 2.0)
 	var data := layer.serialize()
 	var layer2 := PlacedPropLayer.create_empty()
 	layer2.deserialize(data)
 	if layer2.props.size() != 2:
+		return false
+	var free_rec := layer2.find_by_id(id)
+	if not bool(free_rec.get("burnable", false)):
+		return false
+	if bool(free_rec.get("collision_enabled", true)):
 		return false
 	var replaced: Array[int] = layer2.get_replaced_building_indices()
 	return replaced.size() == 1 and replaced[0] == 3

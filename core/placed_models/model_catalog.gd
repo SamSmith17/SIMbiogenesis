@@ -35,17 +35,36 @@ static func find(model_id: String) -> Dictionary:
 static func is_starshade_model(model_id: String) -> bool:
 	if model_id.is_empty():
 		return false
-	if model_id == "starshade":
+	if model_id == "starshade" or model_id.begins_with("starshade_"):
 		return true
 	var entry := find(model_id)
 	if entry.is_empty():
 		return false
+	if str(entry.get("family", "")) == "starshade":
+		return true
 	if str(entry.get("source", "")) == "linkagelab":
 		return true
 	var label := str(entry.get("label", "")).to_lower()
 	if label.contains("starshade") or label.contains("linkagelab"):
 		return true
+	var path := str(entry.get("path", "")).to_lower()
+	if path.contains("starshades"):
+		return true
 	return false
+
+
+## Designs offered by the StarShade editor (family + path heuristic).
+static func starshade_designs() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var seen: Dictionary = {}
+	for m in all_models():
+		var mid := str(m.get("id", ""))
+		if mid.is_empty() or seen.has(mid):
+			continue
+		if is_starshade_model(mid):
+			seen[mid] = true
+			out.append(m)
+	return out
 
 
 ## Shipped models filtered by their "category" key ("structures", "nature", …).
@@ -72,7 +91,13 @@ static func load_scene(model_id: String) -> PackedScene:
 	return null
 
 
-static func instantiate(model_id: String) -> Node3D:
+static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
+	if model_id == PalletRackBuilder.MODEL_ID:
+		var rack_spec: Dictionary = extras.get("rack_spec", extras) as Dictionary
+		return PalletRackBuilder.build_node(rack_spec)
+	if model_id == GrowBed.MODEL_ID:
+		var bed_spec: Dictionary = extras.get("grow_bed_spec", extras) as Dictionary
+		return GrowBed.build_node(bed_spec)
 	var ps := load_scene(model_id)
 	if ps == null:
 		return null
@@ -207,7 +232,21 @@ static func _shipped_models() -> Array[Dictionary]:
 		# This LinkageLab export is metre-unit (AABB height ≈ 2.4 — unlike the
 		# inch-unit GLB bundles), so preserve_scale alone keeps true size.
 		{"id": "starshade", "label": "StarShade", "path": "res://Imported Models/StarShades/LinkageLab_Export_1777324209080.gltf",
-			"preserve_scale": true, "category": "structures"},
+			"preserve_scale": true, "category": "structures", "family": "starshade"},
+		{"id": "starshade_center_camp", "label": "StarShade Center Camp",
+			"path": "res://Imported Models/StarShades/Center Camp.glb",
+			"preserve_scale": true, "category": "structures", "family": "starshade"},
+		{"id": "starshade_man_effigy", "label": "StarShade Man Effigy",
+			"path": "res://Imported Models/StarShades/Man Effigy.glb",
+			"preserve_scale": true, "category": "structures", "family": "starshade"},
+		# Procedural — instantiate() builds via PalletRackBuilder.
+		{"id": "pallet_rack", "label": "Pallet Rack (parametric)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 2.0},
+		# Procedural grow bed — library "Grow Beds" → Place in world.
+		{"id": "grow_bed", "label": "Grow Bed",
+			"procedural": true, "preserve_scale": true, "category": "nature",
+			"target_height_m": 0.5},
 		{"id": "pine_1", "label": "Pine Tree", "path": "res://Imported Models/Trees/free_tree_1.glb",
 			"target_height_m": 13.0, "mesh_scale": 1.0, "category": "nature"},
 		# Vertical Axis Wind Turbine — authored in SketchUp, exported to GLB already

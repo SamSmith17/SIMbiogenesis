@@ -1,8 +1,8 @@
 class_name VegetationGrowth
 extends RefCounted
 
-## Per-instance plant growth over sim-years: seedling → full size, then (for
-## trees) death at maturity + local reseeding within a couple of metres.
+## Per-instance plant growth over sim-years (or crop days): seedling → full size,
+## then optional senescence fade, then (for trees) death at maturity + reseeding.
 ##
 ## Growth is a SESSION-LIVE effect layered over the vegetation layers, driven by a
 ## monotonic "growth clock" the terrain loader advances (mainly in analemma / ∞
@@ -18,7 +18,9 @@ extends RefCounted
 ##     which is fine for a visual time-lapse feature.
 
 const HOURS_PER_YEAR := 8766.0        # 365.25 × 24
+const HOURS_PER_DAY := 24.0
 const SEEDLING_SCALE := 0.14          # apparent size at age 0
+const SENESCENT_SCALE := 0.35         # floor after full senescence
 ## Growth curve exponent (<1 = grows fast early, tapering toward maturity).
 const GROWTH_EASE := 0.6
 const SEED_RADIUS_M := 1.0            # seedlings spring up within this of the parent
@@ -30,7 +32,8 @@ const DORMANCY_THRESHOLD := 0.05
 ## Phenology milestone days (NH reference) when scale refresh + optional reseed run.
 ## ~4 pulses per growing season vs ~12 under the old fixed 720 h throttle.
 const GROWTH_MILESTONE_DOYS: Array[float] = [84.0, 135.0, 172.0, 260.0]
-## Only these species die at maturity and reseed. Grass / shrub grow-and-hold.
+## Only these mesh families die at maturity and reseed. Grass / shrub grow-and-hold
+## (plus optional senescence scale fade without removal).
 const TREE_SPECIES: Array[String] = ["pine", "deciduous"]
 
 ## Kept local (not VegetationLayer.ALL_SPECIES / AutoVegetationRuntime.SLOT_ALIAS)
@@ -44,17 +47,95 @@ const _SLOT_ALIAS := {
 	"palm": "deciduous",
 	"broadleaf": "deciduous",
 	"scrub": "shrub",
+	"spruce": "pine",
+	"cedar": "pine",
+	"fir": "pine",
+	"redwood": "pine",
+	"chestnut": "deciduous",
+	"maple": "deciduous",
+	"cottonwood": "deciduous",
+	"aspen": "deciduous",
+	"birch": "deciduous",
+	"beech": "deciduous",
+	"apple": "deciduous",
+	"pear": "deciduous",
+	"orange": "deciduous",
+	"avocado": "deciduous",
+	"cactus": "shrub",
+	"joshua_tree": "shrub",
+	"corn": "grass_field",
+	"wheat": "grass_field",
+	"barley": "grass_field",
+	"beans": "grass_field",
+	"quinoa": "grass_field",
+	"squash": "grass_field",
+	"tomatoes": "grass_field",
+	"potatoes": "grass_field",
+	"brassicas": "grass_field",
+	"lettuce": "grass_field",
 }
 
 
 static func growth_years(species: String, settings: Dictionary) -> float:
-	return float(settings.get("%s_growth_years" % species, 0.0))
+	var key := "%s_growth_years" % species
+	if settings.has(key):
+		return float(settings[key])
+	var fam := _species_for_slot(species)
+	return float(settings.get("%s_growth_years" % fam, 0.0))
+
+
+## Crop / short-cycle species: growth length in days (takes precedence when > 0).
+static func growth_days(species: String, settings: Dictionary) -> float:
+	var key := "%s_growth_days" % species
+	if settings.has(key):
+		return float(settings[key])
+	return 0.0
+
+
+## Senescence length after maturity (years for trees, days for crops when using days).
+static func senescence_span(species: String, settings: Dictionary) -> float:
+	var day_key := "%s_senescence_days" % species
+	if settings.has(day_key):
+		return float(settings[day_key])
+	var yr_key := "%s_senescence_years" % species
+	if settings.has(yr_key):
+		return float(settings[yr_key])
+	return 0.0
+
+
+## Span of the grow phase in hours (days or years depending on species settings).
+static func growth_span_hours(species: String, settings: Dictionary) -> float:
+	var days := growth_days(species, settings)
+	if days > 0.0:
+		return days * HOURS_PER_DAY
+	var gy := growth_years(species, settings)
+	if gy > 0.0:
+		return gy * HOURS_PER_YEAR
+	return 0.0
+
+
+static func senescence_span_hours(species: String, settings: Dictionary) -> float:
+	var days := growth_days(species, settings)
+	var sen := senescence_span(species, settings)
+	if sen <= 0.0:
+		return 0.0
+	if days > 0.0:
+		return sen * HOURS_PER_DAY
+	return sen * HOURS_PER_YEAR
 
 
 ## True if the settings enable growth for at least one species.
 static func any_enabled(settings: Dictionary) -> bool:
 	for species in _SPECIES:
 		if float(settings.get("%s_growth_years" % species, 0.0)) > 0.0:
+			return true
+		if float(settings.get("%s_growth_days" % species, 0.0)) > 0.0:
+			return true
+	for k in settings.keys():
+		var ks := str(k)
+		if ks.ends_with("_growth_days") and float(settings[k]) > 0.0:
+			return true
+		if ks.ends_with("_growth_years") and float(settings[k]) > 0.0:
 			return true
 	return false
 
@@ -103,15 +184,45 @@ static func scale_for_age(age_years: float, gy: float) -> float:
 	return SEEDLING_SCALE + (1.0 - SEEDLING_SCALE) * pow(t, GROWTH_EASE)
 
 
+## Full lifecycle: seed → full over grow_h, then fade toward SENESCENT_SCALE over
+## senesce_h. Ages are in hours. When senesce_h <= 0, holds at full after maturity.
+static func scale_for_lifecycle(age_h: float, grow_h: float, senesce_h: float = 0.0) -> float:
+	if grow_h <= 0.0:
+		return 1.0
+	if age_h <= grow_h:
+		var t := clampf(age_h / grow_h, 0.0, 1.0)
+		return SEEDLING_SCALE + (1.0 - SEEDLING_SCALE) * pow(t, GROWTH_EASE)
+	if senesce_h <= 0.0:
+		return 1.0
+	var u := clampf((age_h - grow_h) / senesce_h, 0.0, 1.0)
+	return lerpf(1.0, SENESCENT_SCALE, u)
+
+
+## Stage label for UI: "seed" | "growing" | "full" | "senescent".
+static func growth_stage(age_h: float, grow_h: float, senesce_h: float = 0.0) -> String:
+	if grow_h <= 0.0:
+		return "full"
+	if age_h <= 0.0:
+		return "seed"
+	if age_h < grow_h * 0.15:
+		return "seed"
+	if age_h < grow_h:
+		return "growing"
+	if senesce_h > 0.0 and age_h > grow_h + senesce_h * 0.2:
+		return "senescent"
+	return "full"
+
+
 ## Per-instance render scale multiplier from its birth time + the growth clock.
 ## Records with no birth_h (growth off, or not yet seeded) render at full size.
 static func instance_scale_mult(species: String, d: Dictionary, settings: Dictionary) -> float:
-	var gy := growth_years(species, settings)
-	if gy <= 0.0 or not d.has("birth_h"):
+	var grow_h := growth_span_hours(species, settings)
+	if grow_h <= 0.0 or not d.has("birth_h"):
 		return 1.0
 	var now_h := float(settings.get("growth_now_h", 0.0))
-	var age := (now_h - float(d["birth_h"])) / HOURS_PER_YEAR
-	return scale_for_age(age, gy)
+	var age_h := now_h - float(d["birth_h"])
+	var sen_h := senescence_span_hours(species, settings)
+	return scale_for_lifecycle(age_h, grow_h, sen_h)
 
 
 ## Assign birth times to bulk records. With reset=false only records missing a
@@ -122,12 +233,12 @@ static func instance_scale_mult(species: String, d: Dictionary, settings: Dictio
 static func ensure_birth_times(bulk_dict: Dictionary, now_h: float,
 		settings: Dictionary, rng: RandomNumberGenerator, reset: bool = false) -> void:
 	for slot in bulk_dict.keys():
-		var species := _species_for_slot(str(slot))
-		var gy := growth_years(species, settings)
+		var species := str(slot)
+		var grow_h := growth_span_hours(species, settings)
 		# Growth disabled for this species → leave birth_h unset so the instance
 		# renders at full size. (Stamping "now" here would make every tree an age-0
 		# seedling the moment growth is later enabled — a sudden shrink.)
-		if gy <= 0.0:
+		if grow_h <= 0.0:
 			continue
 		for item in bulk_dict[slot]:
 			if not (item is Dictionary):
@@ -137,7 +248,7 @@ static func ensure_birth_times(bulk_dict: Dictionary, now_h: float,
 				continue
 			# age_frac skews high (mature): 1 − rand^1.6 clusters near 1.0.
 			var age_frac := 1.0 - pow(rng.randf(), 1.6)
-			d["birth_h"] = now_h - age_frac * gy * HOURS_PER_YEAR
+			d["birth_h"] = now_h - age_frac * grow_h
 
 
 ## Per-slot record counts — the population caps captured when growth starts so
@@ -149,7 +260,7 @@ static func capture_caps(bulk_dict: Dictionary) -> Dictionary:
 	return caps
 
 
-## Kill matured trees (age ≥ growth_years) and spring up SEEDLINGS_MIN..MAX
+## Kill matured trees (age ≥ growth span + senescence) and spring up SEEDLINGS_MIN..MAX
 ## seedlings within SEED_RADIUS_M of each, holding each slot near its cap so the
 ## population stays stable. `add_cb(slot, x, z, yaw, scale, card) -> Dictionary`
 ## adds one record and returns it (or null on capacity). Returns true if any
@@ -165,9 +276,11 @@ static func advance_generations(bulk_dict: Dictionary, now_h: float,
 		var species := _species_for_slot(str(slot))
 		if species not in TREE_SPECIES:
 			continue
-		var gy := growth_years(species, settings)
-		if gy <= 0.0:
+		var grow_h := growth_span_hours(str(slot), settings)
+		if grow_h <= 0.0:
 			continue
+		var sen_h := senescence_span_hours(str(slot), settings)
+		var life_h := grow_h + maxf(sen_h, 0.0)
 		var arr: Array = bulk_dict[slot]
 		var kept: Array = []
 		var dead: Array = []
@@ -176,8 +289,8 @@ static func advance_generations(bulk_dict: Dictionary, now_h: float,
 				kept.append(item)
 				continue
 			var d: Dictionary = item
-			var age := (now_h - float(d.get("birth_h", now_h))) / HOURS_PER_YEAR
-			if age >= gy:
+			var age := now_h - float(d.get("birth_h", now_h))
+			if age >= life_h:
 				dead.append(d)
 			else:
 				kept.append(d)

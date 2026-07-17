@@ -7,12 +7,19 @@ const ORBIT_DIST_MULT := 2.2
 # Low enough to fly through the glass shell and orbit close to the SOI
 # center from inside the globe (see _update_camera_transform's absolute-
 # distance floor for the numeric safety clamp near zero).
-const MIN_ORBIT_MULT := 0.03
+const MIN_ORBIT_MULT := 0.012
 const MAX_ORBIT_MULT := 4.5
-const ZOOM_STEP := 0.12
+## Continuous zoom uses an exponential feel; wheel nudges the target.
+const ZOOM_STEP := 0.06
+const ZOOM_SMOOTH := 10.0
+## Narrower than Godot's ~75° default so the dome doesn't fish-eye.
+const CAMERA_FOV := 68.0
 ## Absolute minimum camera-to-center distance (m), regardless of radius, so
 ## look_at(center) never degenerates when orbit_mult is tiny on a small SOI.
-const MIN_ORBIT_DIST_M := 2.0
+const MIN_ORBIT_DIST_M := 1.0
+## Below this pitch (rad), fade glass so sky isn't Fresnel-bullseyed.
+const GLASS_PITCH_FADE_START := 0.55
+const GLASS_PITCH_FADE_END := 0.22
 
 var _svc: Node = null
 var _loader: Node = null
@@ -23,6 +30,7 @@ var _player_mesh: Node3D = null
 var _orbit_yaw := 0.6
 var _orbit_pitch := 0.35
 var _orbit_mult := ORBIT_DIST_MULT
+var _orbit_mult_target := ORBIT_DIST_MULT
 var _dragging := false
 var _saved_time_scale := 1.0
 var _active := false
@@ -35,6 +43,7 @@ func enter(svc: Node, loader: Node) -> void:
 	_loader = loader
 	_active = true
 	_orbit_mult = ORBIT_DIST_MULT
+	_orbit_mult_target = ORBIT_DIST_MULT
 	var tree := get_tree()
 	if tree == null:
 		return
@@ -55,9 +64,13 @@ func enter(svc: Node, loader: Node) -> void:
 				_player_mesh.visible = false
 	_camera = Camera3D.new()
 	_camera.name = "SoiSnowglobeCamera"
+	_camera.fov = CAMERA_FOV
+	_camera.near = 0.5
+	_camera.far = 8000.0
 	main.add_child(_camera)
 	_camera.current = true
 	_update_camera_transform()
+	_update_glass_fade()
 	set_process(true)
 	set_process_unhandled_input(true)
 	CursorController.request_modal(MODAL_NAME, Callable(self, "exit"))
@@ -86,10 +99,13 @@ func exit() -> void:
 		_svc._finalize_snowglobe_exit()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not _active:
 		return
+	var t := clampf(delta * ZOOM_SMOOTH, 0.0, 1.0)
+	_orbit_mult = lerpf(_orbit_mult, _orbit_mult_target, t)
 	_update_camera_transform()
+	_update_glass_fade()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -116,17 +132,27 @@ func _unhandled_input(event: InputEvent) -> void:
 						_svc.set_center_xz(p.x, p.z)
 			get_viewport().set_input_as_handled()
 		elif mb.pressed:
-			if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
-				_orbit_mult = maxf(MIN_ORBIT_MULT, _orbit_mult - ZOOM_STEP)
-				get_viewport().set_input_as_handled()
-			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				_orbit_mult = minf(MAX_ORBIT_MULT, _orbit_mult + ZOOM_STEP)
+			# Exponential zoom: closer steps are smaller in distance space.
+			var factor := 1.0 - ZOOM_STEP if mb.button_index == MOUSE_BUTTON_WHEEL_UP \
+					else 1.0 + ZOOM_STEP
+			if mb.button_index == MOUSE_BUTTON_WHEEL_UP \
+					or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				_orbit_mult_target = clampf(
+						_orbit_mult_target * factor, MIN_ORBIT_MULT, MAX_ORBIT_MULT)
 				get_viewport().set_input_as_handled()
 	if event is InputEventMouseMotion and _dragging:
 		var mm := event as InputEventMouseMotion
 		_orbit_yaw -= mm.relative.x * 0.005
 		_orbit_pitch = clampf(_orbit_pitch - mm.relative.y * 0.004, 0.05, 1.45)
 		get_viewport().set_input_as_handled()
+
+
+func _update_glass_fade() -> void:
+	if _svc == null or not _svc.has_method("set_snowglobe_glass_opacity"):
+		return
+	# Horizon-ish pitch → kill Fresnel sky bullseye; high pitch → full glass.
+	var t := inverse_lerp(GLASS_PITCH_FADE_END, GLASS_PITCH_FADE_START, _orbit_pitch)
+	_svc.call("set_snowglobe_glass_opacity", clampf(t, 0.0, 1.0))
 
 
 func _update_camera_transform() -> void:
@@ -142,3 +168,6 @@ func _update_camera_transform() -> void:
 	) * dist
 	_camera.global_position = center + offset
 	_camera.look_at(center, Vector3.UP)
+	# Near clip tracks zoom so deep close-in SOI views don't clip the disc.
+	_camera.near = clampf(dist * 0.02, 0.05, 0.5)
+	_camera.far = maxf(8000.0, dist * 8.0 + r * 4.0)

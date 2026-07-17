@@ -13,8 +13,11 @@ func _initialize() -> void:
 	fails += _test_layout_resolver()
 	fails += _test_layout_bounds_filter()
 	fails += _test_controller_reset()
+	fails += _test_array_topology()
+	fails += _test_array_wire_and_voc()
+	fails += _test_controller_ranking()
 	if fails == 0:
-		print("GRAPH ELECTRICAL SELFTEST PASS  (6 checks)")
+		print("GRAPH ELECTRICAL SELFTEST PASS  (9 checks)")
 	else:
 		print("GRAPH ELECTRICAL SELFTEST FAIL  (%d failed)" % fails)
 	quit()
@@ -116,6 +119,83 @@ func _test_controller_reset() -> int:
 	model.update_item("ctrl", {"specs": sp})
 	if bool((model.get_item("ctrl").get("specs", {}) as Dictionary).get("destroyed", true)):
 		push_error("controller reset did not clear destroyed flag")
+		return 1
+	return 0
+
+
+func _test_array_topology() -> int:
+	# 12 panels @ 48 V on a 150 V controller → max series = 3 → 3S×4P.
+	var topo := SolarArrayIntelligence.best_series_parallel(12, 48.0, 150.0)
+	if int(topo.get("series", 0)) != 3:
+		push_error("expected series 3 got %s" % str(topo))
+		return 1
+	if int(topo.get("parallel", 0)) != 4:
+		push_error("expected parallel 4 got %s" % str(topo))
+		return 1
+	if absf(float(topo.get("equiv_voc", 0.0)) - 144.0) > 0.5:
+		push_error("expected equiv_voc 144 got %s" % str(topo))
+		return 1
+	# Panel Voc alone exceeds controller → fitted 0.
+	var bad := SolarArrayIntelligence.best_series_parallel(6, 200.0, 150.0)
+	if int(bad.get("fitted", 1)) != 0:
+		push_error("expected fitted 0 when panel Voc > max_voc")
+		return 1
+	return 0
+
+
+func _test_array_wire_and_voc() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	var array_id := "arr1"
+	var topo := SolarArrayIntelligence.best_series_parallel(6, 48.0, 150.0)
+	var equiv := SolarArrayIntelligence.build_array_equiv_specs(
+			6, 400.0, 48.0, 41.0, 9.76, 11.0, topo)
+	model.add_item({
+		"id": array_id, "type": "compound", "x": 0.0, "y": 0.0,
+		"width": 200.0, "height": 140.0, "scope_id": "root",
+		"specs": {
+			"compound_kind": "array",
+			"array_equiv_voc": float(equiv.get("array_equiv_voc", 0.0)),
+			"array_panel_units": 6,
+			"osm_import": true, "osm_tag": "osm_solar_0_0",
+		},
+	})
+	_add_controller(model, "ctrl", 150.0)
+	SolarArrayIntelligence.wire_array_to_controller(model, array_id, "ctrl", "root")
+	var voc := PvElectrical.max_string_voc_for_controller(model, "ctrl", "root", 25.0)
+	var want := float(equiv.get("array_equiv_voc", 0.0))
+	if absf(voc - want) > 0.5:
+		push_error("array compound Voc expected ~%f got %f" % [want, voc])
+		return 1
+	if not PvElectrical.is_pv_source_item(model.get_item(array_id)):
+		push_error("array compound should be a PV source")
+		return 1
+	return 0
+
+
+func _test_controller_ranking() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	_add_controller(model, "near", 150.0)
+	model.update_item("near", {"x": 50.0, "y": 0.0})
+	_add_controller(model, "far_big", 500.0)
+	model.update_item("far_big", {"x": 2000.0, "y": 0.0})
+	# 20 panels × 48 V needs ~3S (144 V) — both fit; nearer 150 V should rank high.
+	var ranked := SolarArrayIntelligence.rank_controllers(
+			model, Vector2(0.0, 0.0), 20, 48.0, 400.0, "root")
+	if ranked.is_empty():
+		push_error("expected ranked controllers")
+		return 1
+	var top: Dictionary = ranked[0]
+	# Top should be an on-canvas fit (near) or a fitting preset — not a over-Voc.
+	if not bool(top.get("fits", false)):
+		push_error("top-ranked controller should fit Voc")
+		return 1
+	var rec := SolarArrayIntelligence.recommend_controller_preset(20, 48.0, 400.0)
+	if rec.is_empty() or not (rec.get("specs", {}) is Dictionary):
+		push_error("recommend_controller_preset returned empty")
+		return 1
+	var max_voc := float((rec.get("specs", {}) as Dictionary).get("max_voc", 0.0))
+	if max_voc < 144.0:
+		push_error("recommended preset max_voc too low: %f" % max_voc)
 		return 1
 	return 0
 

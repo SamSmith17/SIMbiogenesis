@@ -1,10 +1,9 @@
 extends CanvasLayer
 
-## In-Snowglobe SoI controls: labeled radius slider, area/PBI readout, exit.
+## In-Snowglobe SoI controls: labeled radius slider, area/atmosphere readout, exit.
 ## Root ignores mouse so orbit drag still works; only the dock captures input.
 
 const MODAL_HINT := "Drag to orbit · Scroll to zoom · Esc to exit"
-const PbiBiomassScript := preload("res://system_graph/pbi_biomass.gd")
 
 var _svc: Node = null
 var _dock: PanelContainer = null
@@ -203,8 +202,18 @@ func _refresh() -> void:
 		_area_lbl.text = "Area  %.2f km²" % km2
 	if _pbi_lbl != null:
 		var month := _sim_month()
-		var kg_d := PbiBiomassScript.biomass_kg_per_day(float(_svc.call("area_m2")), month)
-		_pbi_lbl.text = "PBI biomass  %.0f kg/day" % kg_d
+		var day := _sim_day()
+		var hour := _sim_hour()
+		var lat := _sim_lat()
+		var lon := _sim_lon()
+		var ws := get_node_or_null("/root/WeatherService")
+		var atmo: Dictionary = AtmospherePbi.sample(lat, lon, month, day, hour, ws)
+		var wind_ms: float = float(atmo.get("wind_ms", 0.0))
+		var kinetic: float = AtmospherePbi.kinetic_flux_kw(wind_ms, float(_svc.call("area_m2")))
+		if kinetic >= 1000.0:
+			_pbi_lbl.text = "Wind PBI  %.1f MW · %.0f m/s" % [kinetic / 1000.0, wind_ms]
+		else:
+			_pbi_lbl.text = "Wind PBI  %.0f kW · %.0f m/s" % [kinetic, wind_ms]
 
 
 func _sim_month() -> int:
@@ -213,6 +222,38 @@ func _sim_month() -> int:
 		return 6
 	var m: Variant = tree.current_scene.get("month")
 	return int(m) if m != null else 6
+
+
+func _sim_day() -> int:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return 15
+	var d: Variant = tree.current_scene.get("day")
+	return int(d) if d != null else 15
+
+
+func _sim_hour() -> float:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return 12.0
+	var h: Variant = tree.current_scene.get("day_time")
+	return float(h) if h != null else 12.0
+
+
+func _sim_lat() -> float:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return 0.0
+	var v: Variant = tree.current_scene.get("latitude")
+	return float(v) if v != null else 0.0
+
+
+func _sim_lon() -> float:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return 0.0
+	var v: Variant = tree.current_scene.get("longitude")
+	return float(v) if v != null else 0.0
 
 
 func _on_radius_changed(v: float) -> void:

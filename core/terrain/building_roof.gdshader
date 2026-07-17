@@ -26,6 +26,9 @@ uniform bool use_ortho = false;
 uniform float ortho_blend : hint_range(0.0, 1.0) = 1.0;
 uniform float ortho_relief : hint_range(0.0, 1.0) = 0.35;
 uniform float ortho_uv_scale = 1.0;
+// (west, east, south, north) of the bound ortho texture; Mercator sample fix.
+uniform vec4 ortho_bbox = vec4(-1.0, 1.0, -1.0, 1.0);
+uniform bool correct_ortho_mercator = false;
 uniform float snow_amount : hint_range(0.0, 1.0) = 0.0;
 uniform float snow_depth_m = 0.0;
 uniform vec3 snow_color : source_color = vec3(0.90, 0.93, 0.98);
@@ -38,6 +41,22 @@ varying vec3 v_world_normal;
 
 float hash2(vec2 p) {
 	return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453);
+}
+
+float _asinh(float x) {
+	return log(x + sqrt(x * x + 1.0));
+}
+
+vec2 equirect_to_mercator_uv(vec2 uv, vec4 bbox_wesn) {
+	float lat = mix(bbox_wesn.w, bbox_wesn.z, uv.y);
+	lat = clamp(lat, -85.05112878, 85.05112878);
+	float lat_n = clamp(bbox_wesn.w, -85.05112878, 85.05112878);
+	float lat_s = clamp(bbox_wesn.z, -85.05112878, 85.05112878);
+	float my = _asinh(tan(radians(lat)));
+	float my_n = _asinh(tan(radians(lat_n)));
+	float my_s = _asinh(tan(radians(lat_s)));
+	float v = (my_n - my) / max(my_n - my_s, 1e-12);
+	return vec2(uv.x, v);
 }
 
 float vnoise(vec2 p) {
@@ -98,7 +117,8 @@ void fragment() {
 		// never lands on a roof.
 		vec2 ouv = (v_geo_uv - 0.5) * ortho_uv_scale + 0.5;
 		if (all(greaterThan(ouv, vec2(0.005))) && all(lessThan(ouv, vec2(0.995)))) {
-			vec3 photo = texture(ortho_tex, ouv).rgb
+			vec2 suv = correct_ortho_mercator ? equirect_to_mercator_uv(ouv, ortho_bbox) : ouv;
+			vec3 photo = texture(ortho_tex, suv).rgb
 				* mix(1.0, shade, ortho_relief);
 			base_rgb = mix(base_rgb, photo, ortho_blend);
 		}

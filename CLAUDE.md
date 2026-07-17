@@ -38,6 +38,8 @@ Godot.exe.exe --headless --path . --script core/climelapse/climelapse_series_sel
 # Climelapse MP4 export (in-game): Render ▾ → Climelapse → export MP4… — requires ffmpeg in PATH
 # Vegetation growth seasonal gate + instance map (offline):
 Godot.exe.exe --headless --path . --script vegetation/vegetation_growth_selftest.gd
+# Site Report metrics/data + UI-compile self-test (offline, deterministic):
+Godot.exe.exe --headless --path . --script core/report/site_report_selftest.gd
 # Terrain live-fetch smoke test (NETWORK — elevation + imagery for one site):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_fetch_smoketest.gd
 
@@ -667,6 +669,46 @@ and SolarUI's `_tick_compare_feed()` pushes one synced frame each tick
 playhead. `TimeDirector.register_observed_range()` makes provenance read OBSERVED
 inside the clip; `set_compare_active()` is a flag (compare rides on PLAYBACK/SIM,
 not a 4th mode).
+
+## Site Report (interactive infographic)
+
+Full-screen modal giving a **deep single representative year, month-by-month**
+site analysis: solar radiation resource (GHI), PV potential of the *current graph*,
+windrose + wind energy potential, rainflow/precipitation, temperature bands, and
+hydro potential (when the graph has hydro). Opened by the timeline toolbar **📊**
+button (`timeline_ui._on_site_report_pressed`, lazy-instantiated like the Record
+Book) or the `toggle_site_report` input action (**K**, routed via
+`main._unhandled_input`). New files under `core/report/` + `scenes/ui/`:
+- `core/report/site_report_metrics.gd` (`SiteReportMetrics`, pure static): calendar
+  ↔ absolute-hours (same proleptic-Gregorian epoch as `CelestialClock`, so it feeds
+  `SolarUI.evaluate_solar_at`), 8760-hour monthly aggregation (sum/mean/min/max,
+  wet-day counts), windrose sector binning, capacity factor, peak-sun-hours.
+- `core/report/site_report_data.gd` (`SiteReportData`): typed container (12-length
+  monthly arrays + annual scalars + site header + `capacity_signature`) with
+  `to_dict()`/`from_dict()` JSON round-trip.
+- `core/report/site_report_builder.gd` (`SiteReportBuilder extends Node`): async,
+  chunked (`DAYS_PER_CHUNK` days/frame, mirrors `batch_renderer`) engine. Samples
+  `WeatherService` for radiation/wind/precip/temp, reuses `SolarUI.evaluate_solar_at`
+  for PV yield (graph-synced capacity/tilt/azimuth), enumerates graph `wind`/`hydro`
+  items via `model.get_items_in_scope("root")` → `WindTurbineSource`/`HydroSource`
+  adapters. Uses `WeatherService.effective_year(sim_year)` for the representative
+  year. Caches to `user://site_reports/report_v1_<lat>_<lon>_<year>.json`, keyed by a
+  `capacity_signature` (site + PV + turbine/hydro specs + weather source) so an
+  unchanged report re-opens instantly and a graph/site change invalidates it.
+- `core/report/site_report_selftest.gd`: offline deterministic selftest (57 checks:
+  abs-hours vs CelestialClock, windrose bins, monthly aggregation, wet days, capacity
+  factor, data round-trip, and a UI-script compile smoke since the panel/charts have
+  no `class_name`).
+- `scenes/ui/site_report_charts.gd` (`SiteReportCharts`, static): `UITheme`-styled
+  drawers — `draw_monthly_bars`, `draw_temp_band`, `draw_windrose` (+ `windrose_sector_at`).
+- `scenes/ui/site_report_panel.gd`: dim-backdrop centered modal (record_book pattern),
+  scrollable cards (solar/PV/windrose/wind/rain/temp/hydro) with per-month hover, a
+  compute-progress overlay, `Recompute` button, and `CursorController.request_modal`.
+  Ensures weather coverage (fires `request_weather`, waits on `weather_data_ready`
+  with a timeout) before building; offline → PV still computes via clear-sky geometry.
+First-draft limits (stated in the panel footnote): single representative year (no
+multi-year/decade or `ClimateProjectionService` scenarios yet), PV uses SolarUI's
+global tilt/azimuth and ignores 3D shading (live-only), no PNG export.
 
 ## Conventions
 

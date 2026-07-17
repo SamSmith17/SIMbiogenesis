@@ -115,8 +115,13 @@ func _run_capture(loader: Node, start_abs: float, end_abs: float, time_scale: fl
 
 		await tree.process_frame
 		await RenderingServer.frame_post_draw
-		
-		lock_cam.global_transform = camera.global_xform
+
+		# Moving hyperlapse: interpolate drone path; else hold the locked pose.
+		var t_path := 0.0 if total <= 1 else float(i) / float(total - 1)
+		if camera.has_path():
+			lock_cam.global_transform = camera.interpolate_at(t_path)
+		else:
+			lock_cam.global_transform = camera.global_xform
 		var tex := svp.get_texture()
 		if tex != null:
 			var img := tex.get_image()
@@ -210,13 +215,23 @@ static func _restore_hidden_ui(hidden: Array) -> void:
 
 func _write_manifest(out_dir: String, mp4: String, start_abs: float, end_abs: float,
 		camera: ClimelapseCameraRig, fps: int, frames: Array) -> void:
+	var path_out: Array = []
+	for wp in camera.path:
+		if wp is Dictionary:
+			var p: Vector3 = (wp as Dictionary).get("pos", Vector3.ZERO)
+			path_out.append({
+				"pos": [p.x, p.y, p.z],
+				"yaw": float((wp as Dictionary).get("yaw", 0.0)),
+				"pitch": float((wp as Dictionary).get("pitch", 0.0)),
+			})
 	var doc := {
-		"version": 2,
+		"version": 3,
 		"fps": fps,
 		"start_abs_h": start_abs,
 		"end_abs_h": end_abs,
 		"mp4": mp4.get_file(),
 		"camera_mode": camera.mode,
+		"drone_path": path_out,
 		"timecode_bar_px": ClimelapseFrameCompose.BAR_HEIGHT,
 		"frames": frames,
 	}

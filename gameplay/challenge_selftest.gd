@@ -77,7 +77,8 @@ func _test_starvation_fail() -> void:
 	var m: Dictionary = ClosureMetricsScript.compute(model, null, null, 100.0)
 	_check("metrics any_starved", bool(m.get("any_starved", false)))
 	var def: ChallengeDef = ChallengeCatalogScript.by_id("keep_lights_on")
-	_check("lights fails on starvation flag", def.fail_on_starvation)
+	_check("lights is power-only (no starvation fail)", def != null and not def.fail_on_starvation)
+	_check("lights has no water/food fail kinds", def != null and def.fail_on_kinds.is_empty())
 
 
 func _test_close_loop_win_rules() -> void:

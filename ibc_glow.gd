@@ -7,7 +7,7 @@ extends Node
 
 @export_group("Glow Material")
 @export var glow_color : Color = Color(0.0, 1.0, 0.15, 1.0)
-@export_range(0.0, 20.0, 0.1) var emission_energy : float = 5.5
+@export_range(0.0, 20.0, 0.1) var emission_energy : float = 9.0
 @export_range(0.0, 1.0, 0.01) var albedo_opacity : float = 1.0
 @export_range(0.0, 1.0, 0.01) var night_roughness : float = 0.7
 @export_range(0.0, 1.0, 0.01) var night_tint_strength : float = 0.22
@@ -23,18 +23,22 @@ extends Node
 @export_group("Interior Light")
 @export var light_enabled : bool = true
 @export var light_color : Color = Color(0.0, 1.0, 0.15, 1.0)
-@export_range(0.0, 20.0, 0.1) var light_energy : float = 5.0
+@export_range(0.0, 20.0, 0.1) var light_energy : float = 9.0
 @export_range(0.0, 30.0, 0.1) var light_range : float = 11.0
 @export_range(0.0, 1.0, 0.01) var light_attenuation : float = 0.7
 
 @export_group("Mesh Targets")
 @export var target_mesh_names : PackedStringArray = PackedStringArray(["Mesh36", "Mesh73"])
+## Mesh name substrings (case-insensitive) for the IBC metal cage — gray/opaque silhouette.
+@export var cage_name_contains : PackedStringArray = PackedStringArray(["cage", "geom3d_cage"])
 
 @export var wattage : float = 20.0
 @export var display_name : String = "IBC Glow Lights"
 
 var _material : StandardMaterial3D
+var _cage_material : StandardMaterial3D
 var _found_meshes : Array[MeshInstance3D] = []
+var _cage_meshes : Array[MeshInstance3D] = []
 var _omni_lights : Array[OmniLight3D] = []
 var _sun : DirectionalLight3D
 var _night_factor : float = 0.0
@@ -47,12 +51,18 @@ var _graph_item_id : String = ""
 var _graph_view : Node = null
 var _connect_attempts : int = 0
 const _UPDATE_INTERVAL : float = 0.25
+## Discrete charging-icon bands (ceil SOC%/10 → 1..10 lit levels).
+const SOC_BAND_COUNT := 10
+var _soc_level : int = 5
+var _band_materials : Array[StandardMaterial3D] = []
+var _band_meshes : Array[MeshInstance3D] = []
 
 func _ready() -> void:
 	if Engine.is_editor_hint():
 		return
 	add_to_group("power_consumers")
 	_material = _create_glow_material()
+	_cage_material = _create_cage_material()
 	_update_timer = randf() * _UPDATE_INTERVAL
 	call_deferred("_connect_to_power_system")
 	call_deferred("_apply_glow")
@@ -151,6 +161,7 @@ func _process(_delta: float) -> void:
 	if _update_timer >= _UPDATE_INTERVAL:
 		_update_timer -= _UPDATE_INTERVAL
 		_update_night_factor()
+		_update_soc_level()
 	_night_factor = lerpf(_night_factor, _target_night_factor, clampf(_delta * 5.0, 0.0, 1.0))
 	_apply_night_fade()
 
@@ -232,44 +243,97 @@ func _unregister_graph_load_node() -> void:
 	_graph_item_id = ""
 	_graph_view = null
 
+func _update_soc_level() -> void:
+	var pct := _read_battery_soc_pct()
+	# Charging-icon style: 0% → 0 bands, 1–10% → 1, …, 91–100% → 10.
+	_soc_level = clampi(int(ceil(pct / 10.0)), 0, SOC_BAND_COUNT)
+
+
+func _read_battery_soc_pct() -> float:
+	if is_instance_valid(_solar_ui):
+		var cap := float(_solar_ui.get("BATTERY_CAPACITY_KWH")) if _solar_ui.get("BATTERY_CAPACITY_KWH") != null else 0.0
+		var stored := float(_solar_ui.get("battery_kwh_stored")) if _solar_ui.get("battery_kwh_stored") != null else 0.0
+		if cap > 0.001:
+			return clampf((stored / cap) * 100.0, 0.0, 100.0)
+	if is_instance_valid(_graph_view) and _graph_view.has_method("_average_graph_battery_soc"):
+		var avg := float(_graph_view.call("_average_graph_battery_soc"))
+		if avg >= 0.0:
+			return clampf(avg * 100.0, 0.0, 100.0)
+	return 50.0
+
+
+func _soc_band_color() -> Color:
+	if _soc_level * 10 > 50:
+		return Color(0.05, 1.0, 0.22, 1.0)
+	if _soc_level * 10 > 30:
+		return Color(1.0, 0.85, 0.12, 1.0)
+	return Color(1.0, 0.18, 0.12, 1.0)
+
+
 func _apply_night_fade() -> void:
 	var effective_night : float = _night_factor if _power_available else 0.0
+	var band_col := _soc_band_color()
+	# Fill fraction of the tank that "lights" like a battery icon (discrete steps).
+	var fill_frac := float(_soc_level) / float(SOC_BAND_COUNT)
+	var step_energy := emission_energy * (0.12 + 0.88 * fill_frac)
 	if _material != null:
-		_material.emission_energy_multiplier = emission_energy * effective_night
+		_material.emission = band_col
+		_material.emission_energy_multiplier = step_energy * effective_night
 		var day_albedo := Color(day_albedo_color.r, day_albedo_color.g, day_albedo_color.b, albedo_opacity)
-		# Keep the tank mostly white at night, but let the green glow tint it softly.
+		# Keep the tank mostly white at night, but let the SOC colour tint it softly.
 		var glow_tinted_albedo := Color(
-			lerpf(day_albedo.r, maxf(day_albedo.r, glow_color.r * 0.45 + 0.55), night_tint_strength),
-			lerpf(day_albedo.g, maxf(day_albedo.g, glow_color.g * 0.45 + 0.55), night_tint_strength),
-			lerpf(day_albedo.b, maxf(day_albedo.b, glow_color.b * 0.45 + 0.55), night_tint_strength),
+			lerpf(day_albedo.r, maxf(day_albedo.r, band_col.r * 0.45 + 0.55), night_tint_strength),
+			lerpf(day_albedo.g, maxf(day_albedo.g, band_col.g * 0.45 + 0.55), night_tint_strength),
+			lerpf(day_albedo.b, maxf(day_albedo.b, band_col.b * 0.45 + 0.55), night_tint_strength),
 			albedo_opacity
 		)
 		_material.albedo_color = day_albedo.lerp(glow_tinted_albedo, effective_night)
 		_material.roughness = lerpf(day_roughness, night_roughness, effective_night)
 		var base_backlight := day_backlight_color * day_backlight_strength
-		_material.backlight = base_backlight + (glow_color * 0.6 * effective_night)
+		_material.backlight = base_backlight + (band_col * 0.6 * effective_night * fill_frac)
 		if opaque_diffuse_translucency:
 			_material.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 		else:
 			_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 
+	_apply_soc_band_stack(effective_night, band_col, fill_frac)
+
 	for light in _omni_lights:
 		if is_instance_valid(light):
-			light.light_energy = light_energy * effective_night
-			light.visible = effective_night > 0.01
+			light.light_color = band_col
+			light.light_energy = light_energy * effective_night * (0.25 + 0.75 * fill_frac)
+			light.visible = effective_night > 0.01 and _soc_level > 0
 
 	# Drive a child SpotLight3D (accent light) with night factor.
 	var spot := get_parent().get_node_or_null("SpotLight3D") if get_parent() != null else null
 	if spot is SpotLight3D:
-		(spot as SpotLight3D).light_energy = 0.795 * effective_night
+		(spot as SpotLight3D).light_color = band_col
+		(spot as SpotLight3D).light_energy = 0.795 * effective_night * fill_frac
 
 	# Drive a child PowerDevice (20 W draw when glow is active).
 	var pd: Node = get_node_or_null("PowerDevice")
 	if is_instance_valid(pd) and pd.has_method("turn_on"):
-		if effective_night > 0.05:
+		if effective_night > 0.05 and _soc_level > 0:
 			pd.call("turn_on")
 		else:
 			pd.call("turn_off")
+
+
+## Vertical stack of 10 emission bands (bottom→top) like a battery charge icon.
+func _apply_soc_band_stack(night: float, col: Color, _fill_frac: float) -> void:
+	if _band_meshes.is_empty() or _found_meshes.is_empty():
+		return
+	for i in SOC_BAND_COUNT:
+		var lit := i < _soc_level
+		var mat := _band_materials[i] if i < _band_materials.size() else null
+		var mi := _band_meshes[i] if i < _band_meshes.size() else null
+		if mat == null or mi == null or not is_instance_valid(mi):
+			continue
+		mat.emission = col
+		mat.emission_energy_multiplier = (emission_energy * 0.55 * night) if lit else 0.0
+		mat.albedo_color = Color(col.r, col.g, col.b, 0.55 if lit else 0.08) * Color(1, 1, 1, 1)
+		mat.albedo_color.a = 0.55 if lit else 0.06
+		mi.visible = night > 0.02
 
 func smoothstep(edge0: float, edge1: float, x: float) -> float:
 	var t := clampf((x - edge0) / (edge1 - edge0), 0.0, 1.0)
@@ -293,6 +357,20 @@ func _create_glow_material() -> StandardMaterial3D:
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	return mat
 
+
+## Gray/opaque cage so the IBC metal frame silhouettes against the green glow at night.
+func _create_cage_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.32, 0.33, 0.35, 1.0)
+	mat.roughness = 0.72
+	mat.metallic = 0.55
+	mat.metallic_specular = 0.45
+	mat.emission_enabled = false
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
+	return mat
+
+
 func _apply_glow() -> void:
 	var starshade := get_parent()
 	if starshade == null:
@@ -300,23 +378,80 @@ func _apply_glow() -> void:
 		return
 
 	_found_meshes.clear()
+	_cage_meshes.clear()
 	_find_target_meshes(starshade)
 
 	if _found_meshes.is_empty():
 		push_warning("IBCGlow: No IBC meshes found matching: %s" % str(target_mesh_names))
-		return
+	else:
+		for mesh in _found_meshes:
+			mesh.material_override = _material
 
-	for mesh in _found_meshes:
-		mesh.material_override = _material
+	if _cage_material != null:
+		for cage_mesh in _cage_meshes:
+			cage_mesh.material_override = _cage_material
 
-	if light_enabled:
+	if light_enabled and not _found_meshes.is_empty():
 		_add_interior_lights()
+	_build_soc_band_stack()
+
+
+func _build_soc_band_stack() -> void:
+	for old in _band_meshes:
+		if is_instance_valid(old):
+			old.queue_free()
+	_band_meshes.clear()
+	_band_materials.clear()
+	if _found_meshes.is_empty():
+		return
+	var mesh := _found_meshes[0]
+	var aabb := mesh.get_aabb()
+	var parent := get_parent()
+	if parent == null:
+		return
+	var root := Node3D.new()
+	root.name = "IBCSocBands"
+	parent.add_child(root)
+	# Stack bands inside the tank AABB in world space (bottom → top).
+	var min_y := mesh.to_global(aabb.position).y
+	var max_y := mesh.to_global(aabb.position + Vector3(0, aabb.size.y, 0)).y
+	var mid := mesh.to_global(aabb.get_center())
+	var band_h := maxf((max_y - min_y) / float(SOC_BAND_COUNT + 1), 0.05)
+	var band_r := maxf(minf(aabb.size.x, aabb.size.z) * 0.28, 0.12)
+	for i in SOC_BAND_COUNT:
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color = Color(0.05, 1.0, 0.22, 0.06)
+		mat.emission_enabled = true
+		mat.emission = Color(0.05, 1.0, 0.22)
+		mat.emission_energy_multiplier = 0.0
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_band_materials.append(mat)
+		var mi := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(band_r * 2.0, band_h * 0.55, band_r * 2.0)
+		mi.mesh = box
+		mi.material_override = mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(mi)
+		var y := min_y + band_h * (float(i) + 0.75)
+		mi.global_position = Vector3(mid.x, y, mid.z)
+		_band_meshes.append(mi)
+
 
 func _find_target_meshes(node: Node) -> void:
 	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		var nlow := str(mi.name).to_lower()
 		for target_name in target_mesh_names:
-			if node.name == target_name:
-				_found_meshes.append(node as MeshInstance3D)
+			if mi.name == target_name:
+				_found_meshes.append(mi)
+				break
+		for frag in cage_name_contains:
+			if nlow.contains(str(frag).to_lower()):
+				if not _cage_meshes.has(mi):
+					_cage_meshes.append(mi)
 				break
 	for child in node.get_children():
 		_find_target_meshes(child)

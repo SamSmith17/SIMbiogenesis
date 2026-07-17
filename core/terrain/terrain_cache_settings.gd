@@ -39,7 +39,8 @@ static func invalidate_dem(lat: float, lon: float) -> int:
 	return _delete_matching(DEM_DIR, coord_token(lat, lon), "dem_")
 
 
-static func save_meta_extents(lat: float, lon: float, half_m: float, detail_m: float, osm_m: float) -> void:
+static func save_meta_extents(lat: float, lon: float, half_m: float, detail_m: float, osm_m: float,
+		osm_offset_east_m: float = 0.0, osm_offset_north_m: float = 0.0) -> void:
 	var path := "user://terrain_cache/extents_%s.json" % coord_token(lat, lon)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://terrain_cache"))
 	var data := {}
@@ -51,6 +52,8 @@ static func save_meta_extents(lat: float, lon: float, half_m: float, detail_m: f
 	data["half_extent_m"] = half_m
 	data["detail_half_extent_m"] = detail_m
 	data["osm_half_extent_m"] = osm_m
+	data["osm_offset_east_m"] = osm_offset_east_m
+	data["osm_offset_north_m"] = osm_offset_north_m
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(data))

@@ -40,10 +40,22 @@ const TRUSTED_SCENE_PATHS: Array[String] = [
 @export var detail_half_extent_m: float = 0.0
 ## OSM buildings/vegetation fetch half-extent (m). 0 = TerrainLoader default (~1500 m).
 @export var osm_half_extent_m: float = 0.0
+## Slide OSM local geometry onto imagery (metres). +east / +north. Used when
+## OSM plan year ≠ scar year on the aerial (classic Black Rock City case).
+@export var osm_offset_east_m: float = 0.0
+@export var osm_offset_north_m: float = 0.0
+## When true (default), prefer on-disk terrain cache on load. Uncheck to force network refetch.
+@export var load_from_cache: bool = true
+## Unix time of last Start / Create launch (for map-select recency sort). 0 = never.
+@export var last_loaded_unix: float = 0.0
 
 ## True when this definition drives the runtime-terrain generated scene.
 func is_generated() -> bool:
 	return normalize_scene_path(scene_path) == GENERATED_SCENE
+
+
+func touch_last_loaded() -> void:
+	last_loaded_unix = Time.get_unix_time_from_system()
 
 
 static func normalize_scene_path(path: String) -> String:

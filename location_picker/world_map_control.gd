@@ -9,7 +9,7 @@ const GRID_ROWS: int = 180
 const ZONE_UNFOCUSED: float = 0.07
 const ZONE_KML_ALPHA: float = 0.85
 const MIN_ZOOM: float = 1.0
-const MAX_ZOOM: float = 24.0
+const MAX_ZOOM: float = 56.0
 const ZOOM_WHEEL: float = 1.12
 const OCEAN_COLOR := Color(0.06, 0.09, 0.16, 1.0)
 

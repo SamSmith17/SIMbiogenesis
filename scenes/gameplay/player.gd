@@ -1490,49 +1490,72 @@ func _trigger_fire_event_debug() -> void:
 		_show_fire_debug_toast("⚠ Fire event alloc failed", false)
 		return
 	
-	# Build context. FireEvent walks the entire scene tree itself; the structure
-	# hint is mostly for compatibility with other event types.
+	# Build context: fire locks to ONE selected structure (focused or nearest
+	# burnable PlacedProp). Never spreads to player / drone / SoI poles.
 	var context := {}
 	context["scene_tree"] = tree
 	context["player"] = self
 	context["prefer_near_player"] = true
-	var main_scene := tree.current_scene
-	if main_scene != null:
-		var burnable_roots : Array[Node3D] = []
-		var soak_camps := main_scene.get_node_or_null("Soak Site Camps2")
-		if soak_camps != null and soak_camps is Node3D:
-			burnable_roots.append(soak_camps as Node3D)
-		context["burnable_roots"] = burnable_roots
-		context["burnable_root_paths"] = PackedStringArray(["Soak Site Camps2"])
-		
-		var structure_node : Node3D = null
-		if "structure" in main_scene:
-			var maybe : Variant = main_scene.get("structure")
-			if maybe != null and is_instance_valid(maybe) and maybe is Node3D:
-				structure_node = maybe
-		if structure_node == null:
-			structure_node = _find_structure_node(main_scene)
-		if structure_node != null:
-			context["structure"] = structure_node
-			if not burnable_roots.has(structure_node):
-				burnable_roots.append(structure_node)
-	
+	context["prefer_bottom"] = true
+	context["restrict_to_structure"] = true
+
+	var scope: Node3D = null
+	# Prefer the interactable currently under the crosshair.
+	if _interaction_focus != null and _interaction_focus.has_method("get_focused"):
+		var focused = _interaction_focus.get_focused()
+		if focused is PlacedProp and (focused as PlacedProp).burnable:
+			scope = focused as PlacedProp
+	# Else nearest burnable placed prop within 80 m.
+	if scope == null:
+		scope = _find_nearest_burnable_prop(80.0)
+	if scope != null:
+		context["structure"] = scope
+		var roots: Array[Node3D] = []
+		roots.append(scope)
+		context["burnable_roots"] = roots
+	else:
+		# Fallback: classic scene structures (Soak / LinkageLab) if no prop nearby.
+		var main_scene := tree.current_scene
+		if main_scene != null:
+			var structure_node := _find_structure_node(main_scene)
+			if structure_node != null:
+				context["structure"] = structure_node
+				var roots2: Array[Node3D] = []
+				roots2.append(structure_node)
+				context["burnable_roots"] = roots2
+
 	if not fire_event.can_trigger(context):
-		push_warning("[FireDebug] FireEvent.can_trigger() = false — no burnable structures or meshes found in scene")
+		push_warning("[FireDebug] FireEvent.can_trigger() = false — aim at a burnable prop (Burnable toggle) or stand near one")
 		_show_fire_debug_toast("⚠ No burnable geometry found", false)
 		return
-	
+
 	var ok : bool = manager.trigger_event_manual(fire_event, context)
 	if ok:
-		print("[FireDebug] 🔥 Fire spawned successfully")
+		print("[FireDebug] 🔥 Fire spawned on '%s'" % str(context.get("structure", "?")))
 		_show_fire_debug_toast("🔥 Fire triggered!", true)
 	else:
 		push_warning("[FireDebug] trigger_event_manual returned false")
 		_show_fire_debug_toast("⚠ Fire failed to start", false)
 
 
-## Brief on-screen toast for fire-debug feedback. Uses the InteractionPromptUI's
-## generic show_prompt API and auto-hides after a short delay.
+func _find_nearest_burnable_prop(max_dist_m: float) -> PlacedProp:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return null
+	var best: PlacedProp = null
+	var best_d := max_dist_m * max_dist_m
+	for node in tree.current_scene.find_children("*", "PlacedProp", true, false):
+		var prop := node as PlacedProp
+		if prop == null or not prop.burnable:
+			continue
+		var d := global_position.distance_squared_to(prop.global_position)
+		if d < best_d:
+			best_d = d
+			best = prop
+	return best
+
+
+## Brief on-screen toast for fire-debug feedback — top of screen (CrisisEventUI).
 func _show_fire_debug_toast(message: String, success: bool) -> void:
 	var tree := get_tree()
 	if tree == null:
@@ -1540,17 +1563,16 @@ func _show_fire_debug_toast(message: String, success: bool) -> void:
 	var main_scene := tree.current_scene
 	if main_scene == null:
 		return
-	var ipui := main_scene.get_node_or_null("UILayer/InteractionPromptUI")
-	if ipui == null or not ipui.has_method("show_prompt"):
+	var crisis_ui := main_scene.get_node_or_null("UILayer/CrisisEventUI")
+	if crisis_ui != null and crisis_ui.has_method("_show_alert"):
+		var title := "FIRE" if success else "FIRE"
+		crisis_ui.call("_show_alert", title, message)
+		if crisis_ui.has_method("_hide_alert_after_delay"):
+			crisis_ui.call("_hide_alert_after_delay", 2.5)
 		return
-	var tag := "F" if success else "!"
-	ipui.show_prompt(tag, message)
-	# Auto-hide after 2.5 s without clobbering other prompts permanently
-	var timer := tree.create_timer(2.5)
-	timer.timeout.connect(func():
-		if is_instance_valid(ipui) and ipui.has_method("hide_prompt"):
-			ipui.hide_prompt()
-	)
+	# Fallback: ToastUI (bottom-right) if crisis UI missing.
+	if main_scene.has_method("show_toast"):
+		main_scene.call("show_toast", message, 1 if success else 2, 2.5)
 
 func _find_structure_node(root: Node) -> Node3D:
 	# Unstable soak scene preferred burnable root

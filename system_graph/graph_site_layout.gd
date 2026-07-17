@@ -9,12 +9,15 @@ const SOI_PX_PER_M := 4.0
 const ABSTRACT_FOOTPRINT_M := 3.0
 const CLEARANCE_M := 0.15
 const ROUTE_SAMPLE_M := 5.0
-## Minimum pick target for Site Plan / Elevation hit-testing. Draw size always
-## matches physical metres × SOI_PX_PER_M × zoom (no floor) so nodes grow when
-## zooming in and shrink with the map when zooming out.
+## Minimum pick target for Site Plan / Elevation hit-testing.
 const MIN_SITE_HIT_PX := 28.0
 ## @deprecated Alias — prefer MIN_SITE_HIT_PX (kept for call sites still updating).
 const MIN_SITE_NODE_PX := MIN_SITE_HIT_PX
+## Display-only floor so tiny physical footprints stay visible as chips.
+## Does NOT change physical_footprint_m / area_m2 / 3D scale.
+const MIN_CHIP_PX := 28.0
+const MAP_DISPLAY_SCALE_MIN := 0.5
+const MAP_DISPLAY_SCALE_MAX := 8.0
 
 ## View modes shared with GraphCanvas / SystemGraphView.
 const VIEW_FREEFORM := "freeform"
@@ -85,6 +88,10 @@ static func physical_footprint_m(item: Dictionary) -> Vector2:
 			var area_m2 := float(specs.get("area_m2", 50.0))
 			var side := sqrt(maxf(area_m2, 4.0))
 			return Vector2(side, side)
+		"plant":
+			var bed := float(specs.get("area_m2", 10.0))
+			var side_p := sqrt(maxf(bed, 1.0))
+			return Vector2(side_p, side_p)
 		"compound":
 			return _compound_footprint_m(specs)
 		"controller", "pbi", "import", "export":
@@ -113,7 +120,7 @@ static func _compound_footprint_m(specs: Dictionary) -> Vector2:
 
 static func is_abstract_type(itype: String) -> bool:
 	return itype in ["pbi", "controller", "compound", "combiner", "solarcombiner",
-		"breaker", "acbreaker", "shelly4pm"]
+		"breaker", "acbreaker", "shelly4pm", "spiderbox", "breaker_panel"]
 
 
 ## True when Site Plan should draw a circle (not a footprint rectangle).
@@ -133,12 +140,23 @@ static func is_circular_node(itype: String) -> bool:
 	return itype in ["pbi", "resource", "catchment"]
 
 
-## True map-scaled screen size (physical metres × px/m). Grows with zoom-in.
-static func site_item_screen_size(item: Dictionary, zoom: float) -> Vector2:
+## Display-only map chip scale (inspector / specs). Independent of sim footprint.
+static func map_display_scale(item: Dictionary) -> float:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	return clampf(float(specs.get("map_display_scale", 1.0)),
+			MAP_DISPLAY_SCALE_MIN, MAP_DISPLAY_SCALE_MAX)
+
+
+## True physical footprint in screen px (no display scale / chip floor).
+static func true_footprint_screen_size(item: Dictionary, zoom: float) -> Vector2:
 	var raw := physical_footprint_m(item) * px_per_m(zoom)
-	# Sub-pixel floor only — never inflate to a UI chip size (that made nodes
-	# look larger when zooming out relative to the SoI / terrain).
 	return Vector2(maxf(raw.x, 0.5), maxf(raw.y, 0.5))
+
+
+## Map chip draw size: physical × display scale × zoom, floored for visibility.
+static func site_item_screen_size(item: Dictionary, zoom: float) -> Vector2:
+	var raw := physical_footprint_m(item) * px_per_m(zoom) * map_display_scale(item)
+	return Vector2(maxf(raw.x, MIN_CHIP_PX), maxf(raw.y, MIN_CHIP_PX))
 
 
 ## Hit-test size: at least MIN_SITE_HIT_PX so tiny footprints stay pickable.

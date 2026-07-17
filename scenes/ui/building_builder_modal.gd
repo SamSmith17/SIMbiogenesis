@@ -763,6 +763,12 @@ func _build_library_tab() -> void:
 	place_btn.pressed.connect(_on_library_place)
 	lib.add_child(place_btn)
 
+	var starshade_btn := Button.new()
+	starshade_btn.text = "Add StarShade"
+	starshade_btn.tooltip_text = "Place the V1 StarShade model in the world"
+	starshade_btn.pressed.connect(_on_add_starshade)
+	lib.add_child(starshade_btn)
+
 	_lib_replace_btn = Button.new()
 	_lib_replace_btn.text = "Replace this building"
 	_lib_replace_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
@@ -990,6 +996,14 @@ func _on_library_place() -> void:
 		return
 	if _loader.has_method("begin_structure_placement") \
 			and bool(_loader.call("begin_structure_placement", id)):
+		close()
+
+
+func _on_add_starshade() -> void:
+	if _loader == null:
+		return
+	if _loader.has_method("begin_structure_placement") \
+			and bool(_loader.call("begin_structure_placement", "starshade")):
 		close()
 
 

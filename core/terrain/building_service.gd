@@ -47,12 +47,13 @@ func request_buildings(lat: float, lon: float, half_extent_m: float) -> void:
 
 
 func request_osm_vectors(lat: float, lon: float, half_extent_m: float,
-		include_landuse: bool = false) -> void:
+		include_landuse: bool = false, force_refetch: bool = false) -> void:
 	var req := {
 		"lat": lat,
 		"lon": lon,
 		"half_extent_m": half_extent_m,
 		"include_landuse": include_landuse,
+		"force_refetch": force_refetch,
 	}
 	if _busy:
 		_pending = req
@@ -65,9 +66,11 @@ func _start_osm_job(req: Dictionary) -> void:
 	var lon: float = float(req["lon"])
 	var half_extent_m: float = float(req["half_extent_m"])
 	var include_landuse: bool = bool(req.get("include_landuse", false))
+	var force_refetch: bool = bool(req.get("force_refetch", false))
 	var key := _cache_key(lat, lon, half_extent_m, include_landuse)
 	var cache_path := "%s/%s.json" % [CACHE_DIR, key]
-	if TerrainCacheSettings.cache_enabled() and FileAccess.file_exists(cache_path):
+	if not force_refetch and TerrainCacheSettings.cache_enabled() \
+			and FileAccess.file_exists(cache_path):
 		var parsed: Variant = _load_cache(cache_path)
 		if parsed is Dictionary:
 			var payload: Dictionary = deserialize_payload(parsed as Dictionary)

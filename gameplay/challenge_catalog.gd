@@ -23,15 +23,15 @@ static func keep_the_lights_on() -> ChallengeDef:
 	return ChallengeDef.from_dict({
 		"id": "keep_lights_on",
 		"title": "Keep the Lights On",
-		"description": "Survive 72 hours on local solar + battery. Fail if AC is unavailable for more than 30 minutes while the habitat needs power, or if the habitat starves.",
+		"description": "Survive 72 hours on local solar + battery. Fail if AC is unavailable for more than 30 minutes while the habitat needs power.",
 		"duration_hours": 72.0,
 		"occupants": 1,
 		"use_current_date": true,
-		"fail_on_starvation": true,
-		"require_no_starvation": true,
+		"fail_on_starvation": false,
+		"require_no_starvation": false,
 		"track_ac_availability": true,
 		"max_ac_down_hours": 0.5,
-		"fail_on_kinds": ["water", "food"],
+		"fail_on_kinds": [],
 	})
 
 

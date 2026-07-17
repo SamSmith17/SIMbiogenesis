@@ -19,11 +19,14 @@ var osm_half_extent_m: float = 0.0
 ## True when this hand-off is a save resume — the loader then leaves the player at
 ## the restored save position instead of re-seating at the terrain centre.
 var from_resume: bool = false
+## When true, Elevation/Imagery services bypass disk cache for this load.
+var force_refetch: bool = false
 
 
 func set_pending(lat: float, lon: float, place_label: String,
 		half_extent: float = 0.0, resume: bool = false,
-		detail_half_extent: float = 0.0, osm_half_extent: float = 0.0) -> void:
+		detail_half_extent: float = 0.0, osm_half_extent: float = 0.0,
+		force_refetch_in: bool = false) -> void:
 	latitude = lat
 	longitude = lon
 	label = place_label
@@ -31,6 +34,7 @@ func set_pending(lat: float, lon: float, place_label: String,
 	detail_half_extent_m = detail_half_extent
 	osm_half_extent_m = osm_half_extent
 	from_resume = resume
+	force_refetch = force_refetch_in
 	has_pending = true
 
 
@@ -43,8 +47,10 @@ func consume() -> Dictionary:
 		"detail_half_extent_m": detail_half_extent_m,
 		"osm_half_extent_m": osm_half_extent_m,
 		"from_resume": from_resume,
+		"force_refetch": force_refetch,
 		"has_pending": has_pending,
 	}
 	has_pending = false
 	from_resume = false
+	force_refetch = false
 	return d

@@ -4,21 +4,19 @@ extends Control
 ## camp geometry inside a user-drawn or auto-detected area.
 ##
 ## Toggle with C key (wired in terrain_loader._unhandled_input).
-## Three selection tools:
-##   Rect  — drag a rectangle on terrain
-##   Lasso — freehand trace
-##   BRC Auto — convex hull of all OSM road points (the full BRC footprint)
+## Selection tools (reuse VegetationPaint helpers like vegetation_edit_ui):
+##   Circle / Rect / Lasso / Polygon / BRC Auto
 ##
-## Parameters: density, mix bias (shade+RV ↔ tent), scale, seed.
-## Generate rebuilds the Camps node; Clear removes it.
+## Parameters: density, mix bias (shade+RV ↔ tent), scale, seed + Advanced
+## (plot depth, scatter step, light LOD). Generate rebuilds Camps; Clear removes it.
 
 signal mode_changed(active: bool)
 
-enum Tool { RECT, LASSO, BRC_AUTO }
+enum Tool { CIRCLE, RECT, LASSO, POLYGON, BRC_AUTO }
 
 const MODAL_NAME := "camp_scatter"
 const TIMELINE_CLEARANCE := 162.0
-const PANEL_HEIGHT := 300.0
+const PANEL_HEIGHT := 360.0
 
 var _loader: Node = null
 var _active := false
@@ -28,6 +26,9 @@ var _tool := Tool.BRC_AUTO
 var _selecting := false
 var _sel_start := Vector2.ZERO
 var _sel_end := Vector2.ZERO
+var _brush_anchor := Vector2.ZERO
+var _brush_poly := PackedVector2Array()
+var _poly_points := PackedVector2Array()
 var _lasso_pts := PackedVector2Array()
 var _auto_area := PackedVector2Array()     # cached BRC convex hull
 var _last_lasso_sample := Vector2.ZERO
@@ -40,6 +41,12 @@ var _scale_max := 1.18
 var _seed := 12345
 var _exclusion_r := 804.672  # playa exclusion radius in metres (default 0.5 mi)
 var _light_density := 1.0
+var _plot_depth_m := 60.0
+var _scatter_step_m := 6.0
+var _light_lod_m := 130.0
+var _max_pool_lights := 40
+var _advanced_open := false
+var _advanced_box: VBoxContainer = null
 
 # UI refs.
 var _panel: PanelContainer = null
@@ -244,18 +251,20 @@ func _build_ui() -> void:
 	mid_row.add_child(tool_lbl)
 
 	_tool_buttons.clear()
-	for i in [Tool.RECT, Tool.LASSO, Tool.BRC_AUTO]:
-		var lbl: String = (["Rect", "Lasso", "BRC Auto"] as Array)[i]
-		var tip: String = ([
-			"Drag a rectangle on terrain",
-			"Freehand trace on terrain",
-			"Auto-detect BRC footprint from OSM roads",
-		] as Array)[i]
+	var tool_specs: Array = [
+		["Circle", Tool.CIRCLE, "Drag radius from centre (veg select shape)"],
+		["Rect", Tool.RECT, "Drag a rectangle on terrain"],
+		["Lasso", Tool.LASSO, "Freehand trace on terrain"],
+		["Polygon", Tool.POLYGON, "Click points · Enter/RMB to finish"],
+		["BRC Auto", Tool.BRC_AUTO, "Auto-detect BRC footprint from OSM roads"],
+	]
+	for spec: Array in tool_specs:
 		var b := Button.new()
-		b.text = lbl
-		b.tooltip_text = tip
-		b.pressed.connect(_on_tool_pressed.bind(i))
-		_style_tool_button(b, i == int(_tool))
+		b.text = str(spec[0])
+		b.tooltip_text = str(spec[2])
+		var tool_id: int = int(spec[1])
+		b.pressed.connect(_on_tool_pressed.bind(tool_id))
+		_style_tool_button(b, tool_id == int(_tool))
 		mid_row.add_child(b)
 		_tool_buttons.append(b)
 
@@ -311,9 +320,43 @@ func _build_ui() -> void:
 			if _loader != null and _loader.has_method("set_camp_exclusion_r"):
 				_loader.call("set_camp_exclusion_r", _exclusion_r))
 
+	var adv_btn := Button.new()
+	adv_btn.text = "▸ Advanced"
+	adv_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	adv_btn.add_theme_stylebox_override("hover", _secondary_btn_style())
+	adv_btn.add_theme_color_override("font_color", Color(0.75, 0.70, 0.58, 1.0))
+	adv_btn.pressed.connect(func() -> void:
+		_advanced_open = not _advanced_open
+		if _advanced_box != null:
+			_advanced_box.visible = _advanced_open
+		adv_btn.text = ("▾ Advanced" if _advanced_open else "▸ Advanced"))
+	col.add_child(adv_btn)
+
+	_advanced_box = VBoxContainer.new()
+	_advanced_box.visible = false
+	_advanced_box.add_theme_constant_override("separation", 4)
+	col.add_child(_advanced_box)
+	var adv_grid := GridContainer.new()
+	adv_grid.columns = 2
+	adv_grid.add_theme_constant_override("h_separation", 12)
+	adv_grid.add_theme_constant_override("v_separation", 4)
+	_advanced_box.add_child(adv_grid)
+	_add_slider(adv_grid, "Plot depth (m)", 10.0, 120.0, _plot_depth_m,
+		"How far from a street a cell may still be camped",
+		func(v: float) -> void: _plot_depth_m = v)
+	_add_slider(adv_grid, "Scatter step (m)", 2.0, 16.0, _scatter_step_m,
+		"Average spacing between camp components",
+		func(v: float) -> void: _scatter_step_m = v)
+	_add_slider(adv_grid, "Light LOD (m)", 40.0, 400.0, _light_lod_m,
+		"Real OmniLight pool only considers glow points within this camera radius",
+		func(v: float) -> void: _light_lod_m = v)
+	_add_slider(adv_grid, "Billboard lights", 4.0, 80.0, float(_max_pool_lights),
+		"Max live OmniLights following the camera (billboard glow density)",
+		func(v: float) -> void: _max_pool_lights = int(round(v)))
+
 	# Status.
 	_status = Label.new()
-	_status.text = "Select an area · Rect/Lasso: drag terrain · BRC Auto: auto-detect"
+	_status.text = "Select an area · Circle/Rect/Lasso/Polygon · BRC Auto: auto-detect"
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.add_theme_font_size_override("font_size", 11)
 	_status.add_theme_color_override("font_color", Color(0.68, 0.60, 0.45, 1.0))
@@ -406,7 +449,10 @@ func _on_capture_input(event: InputEvent) -> void:
 			_handle_mouse_btn(mb)
 			get_viewport().set_input_as_handled()
 		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
-			_reset_selection()
+			if _tool == Tool.POLYGON and _poly_points.size() >= 3:
+				_handle_mouse_btn(mb)
+			else:
+				_reset_selection()
 			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion:
 		_handle_mouse_move(event as InputEventMouseMotion)
@@ -414,17 +460,31 @@ func _on_capture_input(event: InputEvent) -> void:
 
 
 func _handle_mouse_btn(mb: InputEventMouseButton) -> void:
+	if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and _tool == Tool.POLYGON:
+		if _poly_points.size() >= 3:
+			_brush_poly = _poly_points.duplicate()
+			_set_status("Polygon closed (%d pts) · press GENERATE" % _poly_points.size())
+			_poly_draw.queue_redraw()
+		return
 	match _tool:
-		Tool.RECT:
+		Tool.CIRCLE, Tool.RECT:
 			if mb.pressed:
+				var hit := _pick_world(mb.position)
+				if hit == Vector2.INF:
+					return
 				_selecting = true
+				_brush_anchor = hit
+				_brush_poly = PackedVector2Array()
 				_sel_start = mb.position
 				_sel_end = mb.position
 				_update_rect_overlay()
 			else:
 				_selecting = false
+				_rect_overlay.visible = false
+				_update_brush_from_screen(mb.position)
 				_poly_draw.queue_redraw()
-				_set_status("Area selected · press Enter or GENERATE")
+				if _brush_poly.size() >= 3:
+					_set_status("Area selected · press Enter or GENERATE")
 		Tool.LASSO:
 			if mb.pressed:
 				_selecting = true
@@ -436,30 +496,71 @@ func _handle_mouse_btn(mb: InputEventMouseButton) -> void:
 				_poly_draw.queue_redraw()
 				if _lasso_pts.size() >= 3:
 					_set_status("Lasso area selected (%d pts) · press GENERATE" % _lasso_pts.size())
+		Tool.POLYGON:
+			if mb.pressed:
+				var hit := _pick_world(mb.position)
+				if hit == Vector2.INF:
+					return
+				if _poly_points.size() >= 3 and hit.distance_to(_poly_points[0]) < 3.0:
+					_brush_poly = _poly_points.duplicate()
+					_set_status("Polygon closed (%d pts) · press GENERATE" % _poly_points.size())
+				else:
+					_poly_points.append(hit)
+					_brush_poly = _poly_points.duplicate()
+					_set_status("Polygon: %d points — Enter/RMB to finish" % _poly_points.size())
+				_poly_draw.queue_redraw()
 
 
 func _handle_mouse_move(mm: InputEventMouseMotion) -> void:
 	match _tool:
-		Tool.RECT:
+		Tool.CIRCLE, Tool.RECT:
 			if _selecting:
 				_sel_end = mm.position
+				_update_brush_from_screen(mm.position)
 				_update_rect_overlay()
+				_poly_draw.queue_redraw()
 		Tool.LASSO:
 			if _selecting and mm.position.distance_to(_last_lasso_sample) >= 8.0:
 				_append_lasso(mm.position)
 				_last_lasso_sample = mm.position
 				_poly_draw.queue_redraw()
+		Tool.POLYGON:
+			if _poly_points.size() >= 1:
+				_poly_draw.queue_redraw()
+
+
+func _pick_world(screen_pos: Vector2) -> Vector2:
+	if _loader == null or not _loader.has_method("terrain_pick_ray"):
+		return Vector2.INF
+	var hit: Variant = _loader.call("terrain_pick_ray", screen_pos)
+	if hit is Vector3:
+		return Vector2((hit as Vector3).x, (hit as Vector3).z)
+	return Vector2.INF
+
+
+func _update_brush_from_screen(screen_pos: Vector2) -> void:
+	var cursor := _pick_world(screen_pos)
+	if cursor == Vector2.INF:
+		return
+	match _tool:
+		Tool.CIRCLE:
+			var radius := maxf(_brush_anchor.distance_to(cursor), 2.0)
+			_brush_poly = VegetationPaint.circle_polygon(_brush_anchor, radius)
+		Tool.RECT:
+			_brush_poly = VegetationPaint.rect_to_polygon(_brush_anchor, cursor)
 
 
 func _append_lasso(screen_pos: Vector2) -> void:
-	if _loader == null or not _loader.has_method("terrain_pick_ray"):
-		return
-	var hit: Variant = _loader.call("terrain_pick_ray", screen_pos)
-	if hit is Vector3:
-		_lasso_pts.append(Vector2((hit as Vector3).x, (hit as Vector3).z))
+	var hit := _pick_world(screen_pos)
+	if hit != Vector2.INF:
+		_lasso_pts.append(hit)
 
 
 func _update_rect_overlay() -> void:
+	# Screen rect preview only for RECT; CIRCLE uses world poly overlay.
+	if _tool != Tool.RECT:
+		_rect_overlay.visible = false
+		return
 	var r := Rect2(_sel_start, _sel_end - _sel_start).abs()
 	_rect_overlay.visible = r.size.length_squared() > 4.0
 	_rect_overlay.position = r.position
@@ -475,8 +576,15 @@ func _draw_selection_overlay() -> void:
 
 	var pts_world := PackedVector2Array()
 	match _tool:
+		Tool.CIRCLE, Tool.RECT:
+			pts_world = _brush_poly
 		Tool.LASSO:
 			pts_world = _lasso_pts
+		Tool.POLYGON:
+			pts_world = _poly_points.duplicate()
+			var cursor := _pick_world(get_viewport().get_mouse_position())
+			if cursor != Vector2.INF and _poly_points.size() >= 1:
+				pts_world.append(cursor)
 		Tool.BRC_AUTO:
 			pts_world = _auto_area
 
@@ -489,7 +597,6 @@ func _draw_selection_overlay() -> void:
 	if screen_pts.size() >= 2:
 		var col := Color(0.95, 0.65, 0.12, 0.85)
 		_poly_draw.draw_polyline(screen_pts, col, 2.5, true)
-		# Close the hull.
 		if screen_pts.size() >= 3:
 			_poly_draw.draw_line(screen_pts[screen_pts.size() - 1], screen_pts[0], col, 2.5, true)
 
@@ -504,10 +611,14 @@ func _on_tool_pressed(t: int) -> void:
 		_style_tool_button(_tool_buttons[i], i == t)
 	_reset_selection()
 	match _tool:
+		Tool.CIRCLE:
+			_set_status("Drag from centre to set circle radius on terrain")
 		Tool.RECT:
 			_set_status("Drag a rectangle on the terrain to define camp area")
 		Tool.LASSO:
 			_set_status("Click and drag freehand on terrain · release to finish")
+		Tool.POLYGON:
+			_set_status("Click points on terrain · Enter/RMB or click near start to finish")
 		Tool.BRC_AUTO:
 			_fetch_brc_auto_area()
 
@@ -518,17 +629,20 @@ func _fetch_brc_auto_area() -> void:
 		return
 	var area: PackedVector2Array = _loader.call("get_brc_city_area")
 	if area.size() < 3:
-		_set_status("BRC Auto: no road data found — load a BRC map first or use Rect/Lasso")
+		_set_status("BRC Auto: no road data found — load a BRC map first or use Circle/Rect/Lasso")
 		_auto_area = PackedVector2Array()
 		_poly_draw.queue_redraw()
 		return
 	_auto_area = area
 	_poly_draw.queue_redraw()
-	_set_status("BRC Auto: %d-pt hull detected · press GENERATE to populate" % area.size())
+	_set_status("BRC Auto: %d-pt city outline · press GENERATE to populate" % area.size())
 
 
 func _reset_selection() -> void:
 	_lasso_pts = PackedVector2Array()
+	_poly_points = PackedVector2Array()
+	_brush_poly = PackedVector2Array()
+	_brush_anchor = Vector2.ZERO
 	_sel_start = Vector2.ZERO
 	_sel_end = Vector2.ZERO
 	_rect_overlay.visible = false
@@ -543,39 +657,25 @@ func _reset_selection() -> void:
 
 func _current_polygon() -> PackedVector2Array:
 	match _tool:
-		Tool.RECT:
-			return _world_rect_poly()
+		Tool.CIRCLE, Tool.RECT:
+			return _brush_poly
 		Tool.LASSO:
 			return _lasso_pts
+		Tool.POLYGON:
+			return _poly_points if _poly_points.size() >= 3 else _brush_poly
 		Tool.BRC_AUTO:
 			return _auto_area
 	return PackedVector2Array()
 
 
-func _world_rect_poly() -> PackedVector2Array:
-	if _loader == null or not _loader.has_method("terrain_pick_ray"):
-		return PackedVector2Array()
-	var a: Variant = _loader.call("terrain_pick_ray", _sel_start)
-	var b: Variant = _loader.call("terrain_pick_ray", _sel_end)
-	if not (a is Vector3) or not (b is Vector3):
-		return PackedVector2Array()
-	var ax := minf((a as Vector3).x, (b as Vector3).x)
-	var bx := maxf((a as Vector3).x, (b as Vector3).x)
-	var az := minf((a as Vector3).z, (b as Vector3).z)
-	var bz := maxf((a as Vector3).z, (b as Vector3).z)
-	if bx - ax < 1.0 or bz - az < 1.0:
-		return PackedVector2Array()
-	return PackedVector2Array([
-		Vector2(ax, az), Vector2(bx, az), Vector2(bx, bz), Vector2(ax, bz),
-	])
-
-
 func _generate() -> void:
 	if _busy or _loader == null or not _loader.has_method("generate_camps_in_polygon"):
 		return
+	if _tool == Tool.POLYGON and _poly_points.size() >= 3 and _brush_poly.size() < 3:
+		_brush_poly = _poly_points.duplicate()
 	var poly := _current_polygon()
 	if poly.size() < 3:
-		_set_status("No area selected — use Rect, Lasso, or BRC Auto first")
+		_set_status("No area selected — use Circle, Rect, Lasso, Polygon, or BRC Auto")
 		return
 	_set_busy(true)
 	_set_status("Generating camps…")
@@ -587,6 +687,10 @@ func _generate() -> void:
 		"light_density": _light_density,
 		"seed": _seed,
 		"exclusion_radius_m": _exclusion_r,
+		"plot_depth_m": _plot_depth_m,
+		"scatter_step_m": _scatter_step_m,
+		"light_lod_m": _light_lod_m,
+		"max_pool_lights": _max_pool_lights,
 	}
 	var n: int = int(_loader.call("generate_camps_in_polygon", poly, params))
 	_set_busy(false)

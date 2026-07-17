@@ -55,9 +55,12 @@ const NODE_BORDER_COLORS := {
 	"resource":     Color(0.392, 0.447, 0.545, 1.0),
 	"compound":     Color(0.565, 0.478, 0.902, 1.0),
 	"shelly4pm":    Color(0.588, 0.322, 0.933, 1.0),  # violet — smart monitor
+	"spiderbox":    Color(0.850, 0.450, 0.200, 1.0),  # amber — portable AC distro
+	"breaker_panel":Color(0.820, 0.280, 0.280, 1.0),  # red — breaker panel
 	"wind":         Color(0.360, 0.840, 0.780, 1.0),  # teal — wind turbine
 	"hydro":        Color(0.250, 0.620, 0.950, 1.0),  # water blue — hydro turbine
 	"catchment":    Color(0.200, 0.550, 0.900, 1.0),
+	"plant":        Color(0.290, 0.720, 0.360, 1.0),  # leaf green — grow bed
 }
 const C_SELECTED_BORDER := Color(0.133, 0.827, 0.933, 1.0)   # cyan ring (SolarUI primary)
 const C_ACTIVE_LOAD_GLOW := Color(0.149, 0.902, 0.467, 0.22)   # soft green when load is ON
@@ -79,9 +82,12 @@ const NODE_SIZES := {
 	"resource":      [136, 136],
 	"compound":      [228, 152],
 	"shelly4pm":     [200, 160],
+	"spiderbox":     [220, 168],
+	"breaker_panel": [200, 170],
 	"wind":          [160, 138],
 	"hydro":         [160, 138],
 	"catchment":     [140, 112],
+	"plant":         [170, 140],
 }
 const NODE_SIZE_DEFAULT := [158, 118]
 
@@ -91,12 +97,20 @@ const HANDLES := {
 	"panel": [
 		{"id": "positive", "polarity": "positive", "rx": 0.67, "ry": 1.0},
 		{"id": "negative", "polarity": "negative", "rx": 0.33, "ry": 1.0},
+		# Optional, non-blocking — sunlight reaches every panel in the SoI
+		# ambiently (mirrors real life: nothing "pipes" sunlight). Drawing
+		# this wire from the sun PBI is purely visual/documentary and is
+		# NEVER required for the panel to produce; see solar_pbi_selftest.gd.
+		{"id": "sunlight_in", "polarity": "resource", "resource_kind": "sunlight", "rx": 0.5, "ry": 0.0},
 	],
 	# Wind/hydro generators wire like panels: DC out the bottom into a
 	# controller PV input or a combiner.
 	"wind": [
 		{"id": "positive", "polarity": "positive", "rx": 0.67, "ry": 1.0},
 		{"id": "negative", "polarity": "negative", "rx": 0.33, "ry": 1.0},
+		# Optional ambient atmosphere link from Wind PBI — turbines already
+		# read WeatherService; this wire is documentary only.
+		{"id": "wind_in", "polarity": "resource", "resource_kind": "wind", "rx": 0.5, "ry": 0.0},
 	],
 	"hydro": [
 		{"id": "positive", "polarity": "positive", "rx": 0.67, "ry": 1.0},
@@ -162,6 +176,15 @@ const HANDLES := {
 		{"id": "input",  "polarity": "resource", "resource_kind": "water", "rx": 0.5, "ry": 0.0},
 		{"id": "output", "polarity": "resource", "resource_kind": "water", "rx": 0.5, "ry": 1.0},
 	],
+	# Grow bed / plant: sunlight is optional+non-blocking (ambient SoI PAR);
+	# water is required; nutrients optional (if wired, then depleting blocks);
+	# biomass out to a resource tank.
+	"plant": [
+		{"id": "sunlight_in", "polarity": "resource", "resource_kind": "sunlight", "rx": 0.5, "ry": 0.0},
+		{"id": "water_in", "polarity": "resource", "resource_kind": "water", "rx": 0.22, "ry": 0.0},
+		{"id": "nutrients_in", "polarity": "resource", "resource_kind": "nutrients", "rx": 0.78, "ry": 0.0},
+		{"id": "biomass_out", "polarity": "resource", "resource_kind": "biomass", "rx": 0.5, "ry": 1.0},
+	],
 	"compound": [
 		{"id": "in_ac_1",   "polarity": "ac",       "rx": 0.35, "ry": 0.0},
 		{"id": "in_dc_1",   "polarity": "positive", "rx": 0.65, "ry": 0.0},
@@ -175,6 +198,28 @@ const HANDLES := {
 		{"id": "circuit_1", "polarity": "ac", "rx": 0.4, "ry": 1.0},
 		{"id": "circuit_2", "polarity": "ac", "rx": 0.6, "ry": 1.0},
 		{"id": "circuit_3", "polarity": "ac", "rx": 0.8, "ry": 1.0},
+	],
+	# Spiderbox: AC in → 6 switched outlets
+	"spiderbox": [
+		{"id": "ac_in",     "polarity": "ac", "rx": 0.5, "ry": 0.0},
+		{"id": "circuit_0", "polarity": "ac", "rx": 0.12, "ry": 1.0},
+		{"id": "circuit_1", "polarity": "ac", "rx": 0.28, "ry": 1.0},
+		{"id": "circuit_2", "polarity": "ac", "rx": 0.44, "ry": 1.0},
+		{"id": "circuit_3", "polarity": "ac", "rx": 0.60, "ry": 1.0},
+		{"id": "circuit_4", "polarity": "ac", "rx": 0.76, "ry": 1.0},
+		{"id": "circuit_5", "polarity": "ac", "rx": 0.92, "ry": 1.0},
+	],
+	# Breaker panel: AC in → branch breakers (up to 8 positions)
+	"breaker_panel": [
+		{"id": "ac_in",     "polarity": "ac", "rx": 0.5, "ry": 0.0},
+		{"id": "circuit_0", "polarity": "ac", "rx": 0.10, "ry": 1.0},
+		{"id": "circuit_1", "polarity": "ac", "rx": 0.21, "ry": 1.0},
+		{"id": "circuit_2", "polarity": "ac", "rx": 0.32, "ry": 1.0},
+		{"id": "circuit_3", "polarity": "ac", "rx": 0.43, "ry": 1.0},
+		{"id": "circuit_4", "polarity": "ac", "rx": 0.54, "ry": 1.0},
+		{"id": "circuit_5", "polarity": "ac", "rx": 0.65, "ry": 1.0},
+		{"id": "circuit_6", "polarity": "ac", "rx": 0.76, "ry": 1.0},
+		{"id": "circuit_7", "polarity": "ac", "rx": 0.87, "ry": 1.0},
 	],
 }
 
@@ -358,6 +403,10 @@ signal soi_preview_orbit(relative: Vector2)
 signal soi_preview_zoom(zoom_in: bool)
 ## Elevation: Shift+drag rotates the section heading (continuous).
 signal elevation_heading_changed(heading_rad: float)
+## Site Plan empty-canvas click (world designate tools).
+signal site_background_clicked(screen_pos: Vector2)
+## Designate tool mode: "" | "catchment" | "crop" (set by SystemGraphView).
+var site_designate_mode: String = ""
 
 # ---------------------------------------------------------------------------
 # External references (set by SystemGraphView)
@@ -1315,6 +1364,8 @@ func _on_lmb_release(screen_pos: Vector2) -> void:
 		if not conn.is_empty():
 			_select_connection(conn.get("id", "") as String)
 		else:
+			if view_mode == GraphSiteLayout.VIEW_SITE and not site_designate_mode.is_empty():
+				site_background_clicked.emit(screen_pos)
 			_select_item("")
 
 
@@ -2630,6 +2681,10 @@ func _render_connection(
 		base_col = Color(1.0, 0.15, 0.15, 0.95)
 	if bool(conn.get("needs_pump", false)):
 		base_col = Color(1.0, 0.55, 0.12, 0.95)
+	if bool(conn.get("severed", false)):
+		# Wave 8 burnout: scorched charcoal wire, no flow animation.
+		base_col = Color(0.16, 0.13, 0.11, 0.9)
+		flow_active = false
 	var col: Color = C_SELECTED_BORDER if is_sel else base_col
 	if wire_shed:
 		flow_active = false
@@ -2708,6 +2763,26 @@ func _render_connection(
 	var sankey_scale = bool(conn.get("sankey_scale", true))
 
 	if is_resource_wire:
+		# Radiant (sunlight) links are always dashed/glowing regardless of
+		# line_style — they visualize an ambient, non-blocking connection
+		# rather than a piped one (Phase 3 solar PBI).
+		# Ambient radiant links (sunlight / wind) are always dashed/glowing
+		# regardless of line_style — they visualize optional non-blocking
+		# environment links (see atmosphere_pbi.gd / solar_pbi_selftest.gd).
+		if res_kind == "sunlight" or res_kind == "wind":
+			if wps.is_empty():
+				_draw_radiant_wire_bezier(
+					src_pos, src_t, tgt_pos, tgt_tang_in, col, width, flowing, curve_t, res_rate, res_kind)
+			else:
+				_draw_radiant_wire_path(
+					[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_in],
+					col, width, flowing, curve_t, res_rate, res_kind)
+			# Always show the flux label when there's meaningful flux (educational),
+			# even in Build mode — radiant links are documentary.
+			if res_rate > ResourceEdgeVis.FLOW_DEAD_RATE and _zoom >= WIRE_LABEL_MIN_ZOOM:
+				_draw_flow_label(src_pos, tgt_pos, wps, res_rate, true, res_kind, col)
+			_draw_connection_waypoint_handles(conn, center)
+			return
 		if style == "metro":
 			var pts_r: Array = [src_pos] + wps + [tgt_pos]
 			_draw_wire_metro_path(pts_r, [src_t, tgt_tang_in], col, width, flowing, res_rate, reverse, conn)
@@ -2760,7 +2835,12 @@ func _draw_flow_label(src_pos: Vector2, tgt_pos: Vector2, wps: Array,
 	if is_resource:
 		if value <= ResourceEdgeVis.FLOW_DEAD_RATE:
 			return
-		txt = "%.1f %s/h" % [value, ResourceKinds.default_unit(kind)]
+		if kind == "sunlight" or kind == "wind":
+			# Instantaneous SoI flux (kW), not a per-hour accumulation like
+			# rain — omit the "/h" so the readout stays dimensionally honest.
+			txt = ("%.2f MW" % (value / 1000.0)) if value >= 1000.0 else ("%.1f kW" % value)
+		else:
+			txt = "%.1f %s/h" % [value, ResourceKinds.default_unit(kind)]
 	else:
 		if value < WIRE_DEAD_W:
 			return
@@ -2821,6 +2901,58 @@ func _draw_resource_wire_bezier(from: Vector2, from_tang: Vector2,
 	if flow_active:
 		ResourceEdgeVis.draw_bezier_flow_cues(
 			self, from, c1, c2, to, col, body_w, _flow_phase, reverse_chase)
+
+
+## Radiant (sunlight / wind) wire — always rendered dashed + soft-glowing, never
+## solid, to signal it's an OPTIONAL/AMBIENT link. Dash speed and glow scale with
+## SoI flux (`flow_rate` in kW).
+func _draw_radiant_wire_bezier(from: Vector2, from_tang: Vector2,
+		to: Vector2, to_tang_in: Vector2, col: Color, width: float,
+		flow_active: bool, curve_tension: float = 1.0, flow_rate: float = 0.0,
+		res_kind: String = "sunlight") -> void:
+	var ctrl := _wire_bezier_controls(from, from_tang, to, to_tang_in, curve_tension)
+	var c1: Vector2 = ctrl["c1"]
+	var c2: Vector2 = ctrl["c2"]
+	var pixel_len := from.distance_to(to)
+	var segs := _adaptive_segments(pixel_len, 30)
+	var gscale := ResourceEdgeVis.glow_scale(
+			res_kind, flow_rate, flow_active or flow_rate > ResourceEdgeVis.FLOW_DEAD_RATE)
+	var dash_len: float = maxf(6.0 * _zoom, 2.0)
+	var gap_len: float = maxf(5.0 * _zoom, 2.0)
+	# Marching speed scales with flux intensity (idle = static dashes).
+	var speed: float = 10.0 + 50.0 * gscale
+	var offset: float = -_flow_phase * speed if (flow_active or gscale > 0.01) else 0.0
+	var body_w: float = maxf(1.2, width * (0.85 + 0.55 * gscale))
+	# Soft under-glow proportional to flux.
+	if gscale > 0.01 and not _wire_lod_simplify:
+		_draw_bezier_stroke_dashed(from, c1, c2, to, segs,
+			Color(col.r, col.g, col.b, 0.10 + 0.18 * gscale),
+			body_w + (4.0 + 8.0 * gscale) * _zoom, dash_len, gap_len, offset)
+	var alpha: float = lerpf(0.38, 0.95, gscale) if gscale > 0.01 else 0.38
+	_draw_bezier_stroke_dashed(from, c1, c2, to, segs,
+		Color(col.r, col.g, col.b, alpha), body_w, dash_len, gap_len, offset)
+
+
+## Multi-segment version of `_draw_radiant_wire_bezier` for waypointed links.
+func _draw_radiant_wire_path(points: Array, end_tangents: Array,
+		col: Color, width: float, flow_active: bool, curve_tension: float = 1.0,
+		flow_rate: float = 0.0, res_kind: String = "sunlight") -> void:
+	if points.size() < 2:
+		return
+	for seg: int in range(points.size() - 1):
+		var from: Vector2 = points[seg] as Vector2
+		var to: Vector2 = points[seg + 1] as Vector2
+		var from_t: Vector2
+		var to_t_in: Vector2
+		if seg == 0:
+			from_t = end_tangents[0] as Vector2 if end_tangents.size() > 0 else (to - from).normalized()
+		else:
+			from_t = (to - from).normalized()
+		if seg == points.size() - 2:
+			to_t_in = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
+		else:
+			to_t_in = (from - to).normalized()
+		_draw_radiant_wire_bezier(from, from_t, to, to_t_in, col, width, flow_active, curve_tension, flow_rate, res_kind)
 
 
 func _draw_resource_wire_path(points: Array, end_tangents: Array,
@@ -3507,6 +3639,28 @@ func _draw_bezier_stroke(
 		prev = p
 
 
+## Dashed variant of `_draw_bezier_stroke` — walks cumulative screen-space
+## distance along the curve so dash/gap length stay constant regardless of
+## curve length or segment count. `offset` (px) shifts the pattern; feed a
+## time-varying offset for a "marching" animation (used by radiant wires).
+func _draw_bezier_stroke_dashed(from: Vector2, c1: Vector2, c2: Vector2, to: Vector2,
+		segments: int, col: Color, line_w: float,
+		dash_len: float, gap_len: float, offset: float = 0.0) -> void:
+	var period := maxf(dash_len + gap_len, 0.001)
+	var prev: Vector2 = from
+	var dist_walked := offset
+	for i in range(1, segments + 1):
+		var t: float = float(i) / float(segments)
+		var p: Vector2 = from.bezier_interpolate(c1, c2, to, t)
+		var seg_len := prev.distance_to(p)
+		if seg_len < 0.05:
+			continue
+		if fposmod(dist_walked, period) < dash_len:
+			draw_line(prev, p, col, line_w)
+		dist_walked += seg_len
+		prev = p
+
+
 func _array_compound_handle_override(item: Dictionary, handle_id: String) -> Dictionary:
 	if item.is_empty() or str(item.get("type", "")) != "compound":
 		return {}
@@ -4012,6 +4166,20 @@ func _render_item(item: Dictionary) -> void:
 		border_col = C_SELECTED_BORDER
 	if itype == "controller" and bool(specs.get("destroyed", false)):
 		border_col = Color(0.95, 0.25, 0.25, 1.0)
+
+	# Icon / GLB preview replaces the frame + title when requested (default on
+	# for items that carry a model_id or icon glyph).
+	if _icon_replaces_frame(specs):
+		_draw_icon_as_node(rect, specs, border_col, is_sel)
+		_draw_item_handles(item, tl_orig, sz_orig)
+		if is_sel:
+			draw_rect(rect.grow(maxf(1.0, 1.5 * _zoom)),
+				Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.14), true)
+			draw_rect(rect.grow(maxf(0.5, 1.0 * _zoom)),
+				Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.9), false,
+				maxf(1.0, 1.4 * _zoom))
+		return
+
 	_draw_node_frame(rect, border_col)
 
 	# Title band
@@ -4042,7 +4210,9 @@ func _render_item(item: Dictionary) -> void:
 			_draw_resource_body(body_rect, specs, item)
 		"catchment":
 			_draw_catchment_body(body_rect, specs)
-		"shelly4pm":
+		"plant":
+			_draw_plant_body(body_rect, specs)
+		"shelly4pm", "spiderbox", "breaker_panel":
 			_draw_shelly4pm_body(body_rect, specs)
 		_:
 			_draw_generic_body(body_rect, specs)
@@ -4051,7 +4221,7 @@ func _render_item(item: Dictionary) -> void:
 	# currently displayed comes from real HA pushes or from the in-game
 	# simulation.  Only meaningful for data-bearing node types.
 	if itype in ["panel", "battery", "smartbattery", "controller",
-			"appliance", "acload", "shelly4pm"]:
+			"appliance", "acload", "shelly4pm", "spiderbox", "breaker_panel"]:
 		_draw_data_source_badge(rect, specs)
 
 	# Port dots
@@ -4097,6 +4267,43 @@ func _draw_node_frame(rect: Rect2, border_col: Color) -> void:
 	_sb_node_base.bg_color     = C_PANEL_BG
 	_sb_node_base.border_color = border_col
 	draw_style_box(_sb_node_base, rect)
+
+
+## True when the node should be drawn as a full-bleed icon/preview (no title band).
+## Default ON when a GLB model_id is present; emoji-only nodes opt in via
+## specs.icon_replaces_frame = true.
+func _icon_replaces_frame(specs: Dictionary) -> bool:
+	var has_model := not str(specs.get("model_id", "")).is_empty()
+	var has_icon := not str(specs.get("icon", "")).is_empty()
+	if not has_model and not has_icon:
+		return false
+	if specs.has("icon_replaces_frame"):
+		return bool(specs.get("icon_replaces_frame"))
+	return has_model
+
+
+## Full-node icon or GLB preview; ports + selection still drawn by the caller.
+func _draw_icon_as_node(rect: Rect2, specs: Dictionary, border_col: Color,
+		is_sel: bool) -> void:
+	var z := _zoom
+	var pad := maxf(2.0, 3.0 * z)
+	# Soft shadow + transparent plate (no title band).
+	draw_rect(Rect2(rect.position + Vector2(1.5 * z, 2.0 * z), rect.size),
+		Color(0, 0, 0, 0.35), true)
+	draw_rect(rect, Color(0.04, 0.06, 0.10, 0.55), true)
+	draw_rect(rect, Color(border_col.r, border_col.g, border_col.b,
+		0.85 if is_sel else 0.45), false, maxf(1.0, 1.2 * z))
+	var inner := rect.grow(-pad)
+	if _draw_model_preview_zone(inner, specs, 1.0):
+		return
+	var icon := str(specs.get("icon", ""))
+	if icon.is_empty():
+		icon = "⚙"
+	var fnt := ThemeDB.fallback_font
+	var fs := int(clampf(minf(inner.size.x, inner.size.y) * 0.62, 8.0, 240.0))
+	var isz := fnt.get_string_size(icon, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+	var pos := inner.position + (inner.size - isz) * 0.5 + Vector2(0.0, fs * 0.72)
+	draw_string(fnt, pos, icon, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.95, 0.97, 1.0, 0.96))
 
 
 func _draw_title_band(rect: Rect2, band_h: float, title: String,
@@ -4675,11 +4882,43 @@ func _draw_catchment_body(rect: Rect2, specs: Dictionary) -> void:
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT)
 	y += fsize + 3.0
 	if str(specs.get("catchment_kind", "rain")) == "biomass":
-		draw_string(fnt, Vector2(x, y), "biomass PBI",
+		draw_string(fnt, Vector2(x, y), "legacy · use Grow Bed",
 			HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
 	else:
 		draw_string(fnt, Vector2(x, y), "runoff %.0f%%" % (float(specs.get("runoff_coeff", 0.85)) * 100.0),
 			HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
+
+
+func _draw_plant_body(rect: Rect2, specs: Dictionary) -> void:
+	var fnt := ThemeDB.fallback_font
+	var fsize := _fit_font_size(rect, 1, 10.0)
+	var x := rect.position.x + 8.0
+	var y := rect.position.y + fsize + 4.0
+	draw_string(fnt, Vector2(x, y), specs.get("name", "Grow Bed") as String,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_S)
+	y += fsize + 4.0
+	var area_lbl := "%.0f m²" % float(specs.get("area_m2", 10.0))
+	if bool(specs.get("use_soi_area", false)):
+		area_lbl = "SoI area"
+	draw_string(fnt, Vector2(x, y), area_lbl,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT)
+	y += fsize + 3.0
+	var rate := float(specs.get("biomass_kg_h", 0.0))
+	var rate_col := C_AMBER if rate > 0.0001 else C_TEXT_M
+	var rate_str: String
+	if rate >= 0.01:
+		rate_str = "%.2f kg/h" % rate
+	elif rate > 0.0001:
+		rate_str = "%.1f g/h" % (rate * 1000.0)
+	else:
+		rate_str = "0 kg/h"
+	draw_string(fnt, Vector2(x, y), rate_str,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, rate_col)
+	y += fsize + 2.0
+	var sun_f := float(specs.get("sunlight_factor", 1.0))
+	if sun_f < 0.995 and y < rect.end.y - 2.0:
+		draw_string(fnt, Vector2(x, y), "shade %.0f%%" % (sun_f * 100.0),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 1), C_TEXT_M)
 
 
 # ---------------------------------------------------------------------------
@@ -4696,6 +4935,11 @@ const _PRIMARY_HANDLES := {
 	"processor":   ["power_in", "energy_in"],
 	"compound":    ["in_ac_1", "in_dc_1", "out_ac_1", "out_dc_1"],
 	"shelly4pm":   ["ac_in", "circuit_0", "circuit_1", "circuit_2", "circuit_3"],
+	"spiderbox":   ["ac_in", "circuit_0", "circuit_1", "circuit_2", "circuit_3", "circuit_4", "circuit_5"],
+	"breaker_panel": ["ac_in", "circuit_0", "circuit_1", "circuit_2", "circuit_3"],
+	"panel":       ["positive", "negative", "sunlight_in"],
+	"plant":       ["sunlight_in", "water_in", "nutrients_in", "biomass_out"],
+	"wind":        ["positive", "negative", "wind_in"],
 }
 
 ## Build a set of handle IDs that are actually used in at least one connection
@@ -5209,9 +5453,17 @@ func _draw_unplaced_tray() -> void:
 	draw_rect(tray, Color(0.06, 0.09, 0.16, 0.92), true)
 	draw_rect(tray, Color(0.25, 0.55, 0.85, 0.55), false, 1.5)
 	var fnt := ThemeDB.fallback_font
-	var label := "Unplaced (%d) — drag onto SoI disc" % list.size()
+	var label := "Unplaced (%d) — drop onto SoI disc" % list.size()
 	draw_string(fnt, tray.position + Vector2(10.0, -4.0), label,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.7, 0.85, 1.0, 0.85))
+	# Soft glow on the SoI disc when items wait to be placed.
+	if list.size() > 0:
+		var disc := get_soi_disc_layout()
+		var origin: Vector2 = disc.get("origin", Vector2.ZERO)
+		var r_px: float = float(disc.get("radius_px", 0.0))
+		if r_px > 8.0:
+			draw_arc(origin, r_px, 0.0, TAU, 64,
+					Color(0.3, 0.7, 1.0, 0.28), 2.0, true)
 
 
 ## Graph-space disc matching `_draw_soi_background` (origin + radius_px).
@@ -5234,11 +5486,24 @@ func _draw_site_plan_chip(item: Dictionary, rect: Rect2, is_sel: bool) -> void:
 	var border := NODE_BORDER_COLORS.get(itype, C_BORDER) as Color
 	if is_sel:
 		border = C_SELECTED_BORDER
+	# OSM imports: amber roof / green field highlight matching world outlines.
+	if not str(specs.get("osm_tag", "")).is_empty():
+		if itype == "catchment":
+			border = Color(1.0, 0.72, 0.18, 1.0) if not is_sel else C_SELECTED_BORDER
+		elif itype == "plant":
+			border = Color(0.35, 0.85, 0.42, 1.0) if not is_sel else C_SELECTED_BORDER
 	var fill := Color(0.09, 0.14, 0.22, 0.92)
 	var min_side := minf(rect.size.x, rect.size.y)
 	# Stroke scales with footprint so a 2 px panel isn't buried under a 4 px border.
 	var stroke := clampf(min_side * 0.12, 0.75, maxf(1.25, 2.0 * _zoom))
 	var c := rect.get_center()
+	# True physical outline (1 px) when chip is scaled up beyond footprint.
+	_draw_true_footprint_outline(item, c, border)
+	# OSM polygon outline chip when local site-poly exists.
+	if _draw_osm_site_poly(item, c, border, is_sel):
+		var title_osm := _site_plan_chip_title(item, specs, itype)
+		_draw_site_plan_chip_label(rect, title_osm, is_sel)
+		return
 	# Locator ring when the true footprint is smaller than the pick pad — shows
 	# where to click without inflating the filled area away from the map.
 	if GraphSiteLayout.has_site_coords(item) and min_side < GraphSiteLayout.MIN_SITE_HIT_PX * 0.85:
@@ -5260,6 +5525,54 @@ func _draw_site_plan_chip(item: Dictionary, rect: Rect2, is_sel: bool) -> void:
 			_draw_site_array_grid(rect, specs, border)
 	var title := _site_plan_chip_title(item, specs, itype)
 	_draw_site_plan_chip_label(rect, title, is_sel)
+
+
+## Translucent outline at physical size when map_display_scale / min chip inflate.
+func _draw_true_footprint_outline(item: Dictionary, center: Vector2, border: Color) -> void:
+	if not GraphSiteLayout.has_site_coords(item):
+		return
+	var true_sz := GraphSiteLayout.true_footprint_screen_size(item, _zoom)
+	var chip_sz := GraphSiteLayout.site_item_screen_size(item, _zoom)
+	if true_sz.x >= chip_sz.x * 0.92 and true_sz.y >= chip_sz.y * 0.92:
+		return
+	var true_rect := Rect2(center - true_sz * 0.5, true_sz)
+	var col := Color(border.r, border.g, border.b, 0.45 if true_sz.x >= 4.0 else 0.3)
+	if GraphSiteLayout.uses_circular_plan_chip(item):
+		var r := maxf(minf(true_sz.x, true_sz.y) * 0.5, 0.5)
+		draw_arc(center, r, 0.0, TAU, 28, col, 1.0, true)
+	else:
+		draw_rect(true_rect, col, false, 1.0)
+
+
+## Draw OSM polygon (site-relative metres) as outline chip; returns true if drawn.
+func _draw_osm_site_poly(item: Dictionary, center: Vector2, border: Color, is_sel: bool) -> bool:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var poly_v: Variant = specs.get("osm_poly_site", null)
+	if not (poly_v is PackedVector2Array) and not (poly_v is Array):
+		return false
+	var pts := PackedVector2Array()
+	if poly_v is PackedVector2Array:
+		pts = poly_v as PackedVector2Array
+	else:
+		for p in poly_v as Array:
+			if p is Vector2:
+				pts.append(p as Vector2)
+			elif p is Array and (p as Array).size() >= 2:
+				pts.append(Vector2(float((p as Array)[0]), float((p as Array)[1])))
+	if pts.size() < 3:
+		return false
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var screen := PackedVector2Array()
+	screen.resize(pts.size())
+	for i in pts.size():
+		screen[i] = center + pts[i] * s
+	var fill := Color(border.r, border.g, border.b, 0.22 if is_sel else 0.14)
+	draw_colored_polygon(screen, fill)
+	for i in screen.size():
+		var a := screen[i]
+		var b := screen[(i + 1) % screen.size()]
+		draw_line(a, b, border, 1.5 if is_sel else 1.0, true)
+	return true
 
 
 ## Title inside (or floating beside) a site-plan footprint — sized from the chip
@@ -5336,6 +5649,8 @@ func _type_title(itype: String, specs: Dictionary) -> String:
 		"controller":   return "CONTROLLER"
 		"appliance", "acload": return "LOAD"
 		"shelly4pm":    return "SHELLY PRO 4PM"
+		"spiderbox":    return "SPIDERBOX"
+		"breaker_panel": return "BREAKER PANEL"
 		"breaker":      return "BREAKER"
 		"combiner":     return "COMBINER"
 		"solarcombiner":return "SOLAR COMBINER"
@@ -5344,6 +5659,7 @@ func _type_title(itype: String, specs: Dictionary) -> String:
 		"processor":    return "PROCESSOR"
 		"resource":     return "RESOURCE"
 		"catchment":    return "CATCHMENT"
+		"plant":        return "GROW BED"
 		"compound":     return "COMPOUND"
 	return itype.to_upper()
 
@@ -5364,39 +5680,190 @@ static func default_height(itype: String) -> float:
 
 # Workaround: reference NODE_SIZES via a renamed alias so static funcs can use it
 const NodeSizes := NODE_SIZES
+
 func _draw_pbi_body(rect: Rect2, specs: Dictionary, _item: Dictionary) -> void:
 	var kind: String = str(specs.get("resource_kind", ""))
 	var is_active: bool = bool(specs.get("is_active", false))
 	var pbi_val: String = str(specs.get("display_value", ""))
-	
-	var col := Color.GRAY
+	var center: Vector2 = rect.position + rect.size * 0.5
+	var r: float = minf(rect.size.x, rect.size.y) * 0.5
+	var title := str(specs.get("name", kind.capitalize()))
+
 	if kind == "solar" or kind == "sunlight" or kind == "thermal":
-		col = Color(0.9, 0.8, 0.2)
-	elif kind == "water" or kind == "rain":
-		col = Color(0.2, 0.5, 0.9)
-	elif kind == "wind" or kind == "mechanical":
-		col = Color(0.6, 0.6, 0.6)
-	elif kind == "biomass":
-		col = Color(0.2, 0.7, 0.3)
-		
-	var center = rect.position + rect.size * 0.5
-	var r = minf(rect.size.x, rect.size.y) * 0.5
-	
+		_draw_sun_pbi_body(center, r, is_active, title, pbi_val)
+		return
+	if kind == "wind" or kind == "mechanical" or kind == "atmosphere" or kind == "air":
+		_draw_wind_pbi_body(center, r, is_active, specs, title, pbi_val)
+		return
+	if kind == "water" or kind == "rain":
+		_draw_rain_pbi_body(center, r, is_active, title, pbi_val)
+		return
+
+	var col := Color(0.45, 0.55, 0.5)
 	if is_active:
 		var glow_r = r + (10.0 * _zoom) * (0.8 + 0.2 * sin(_flow_phase * TAU * 2.0))
 		draw_circle(center, glow_r, Color(col.r, col.g, col.b, 0.3))
-		
 	draw_circle(center, r, col)
-	draw_arc(center, r, 0, TAU, 32, Color(1,1,1,0.2), 2.0 * _zoom)
-	
-	var fnt = ThemeDB.fallback_font
-	var fsize_title = _fit_font_size(rect, 1, 14.0)
-	var title = str(specs.get("name", kind.capitalize()))
-	
-	var ts = fnt.get_string_size(title, HORIZONTAL_ALIGNMENT_CENTER, -1, fsize_title)
-	draw_string(fnt, center - Vector2(ts.x * 0.5, 2.0 * _zoom), title, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize_title, Color.WHITE)
-	
-	if not pbi_val.is_empty():
-		var fsize_val = _fit_font_size(rect, 1, 11.0)
-		var vs = fnt.get_string_size(pbi_val, HORIZONTAL_ALIGNMENT_CENTER, -1, fsize_val)
-		draw_string(fnt, center + Vector2(-vs.x * 0.5, fsize_val + 2.0 * _zoom), pbi_val, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize_val, Color(1,1,1,0.9))
+	draw_arc(center, r, 0, TAU, 32, Color(1, 1, 1, 0.2), 2.0 * _zoom)
+	_draw_pbi_labels(center, r * 0.85, title, pbi_val, Color.WHITE, Color(1, 1, 1, 0.9))
+
+
+## Bold, oversized PBI title + value with dark outline for contrast on icons.
+func _draw_pbi_labels(center: Vector2, max_w: float, title: String, value: String,
+		title_col: Color, value_col: Color) -> void:
+	var fnt := ThemeDB.fallback_font
+	var fsize_title: int = maxi(12, int(round(max_w * 0.38 / maxf(_zoom, 0.01))))
+	var fsize_val: int = maxi(10, int(round(max_w * 0.26 / maxf(_zoom, 0.01))))
+	while fsize_title > 9:
+		var tw := fnt.get_string_size(title, HORIZONTAL_ALIGNMENT_CENTER, -1, fsize_title).x
+		if tw <= max_w * 1.85:
+			break
+		fsize_title -= 1
+	while fsize_val > 8 and not value.is_empty():
+		var vw := fnt.get_string_size(value, HORIZONTAL_ALIGNMENT_CENTER, -1, fsize_val).x
+		if vw <= max_w * 1.95:
+			break
+		fsize_val -= 1
+	var outline := Color(0.0, 0.0, 0.0, 0.72)
+	var title_y: float = -4.0 * _zoom if value.is_empty() else -max_w * 0.22
+	_draw_outlined_string(fnt, center + Vector2(0.0, title_y), title, fsize_title, title_col, outline)
+	if not value.is_empty():
+		_draw_outlined_string(fnt, center + Vector2(0.0, max_w * 0.32), value, fsize_val, value_col, outline)
+
+
+func _draw_outlined_string(fnt: Font, center_baseline: Vector2, text: String,
+		fsize: int, fill: Color, outline: Color) -> void:
+	var ts := fnt.get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, fsize)
+	var origin := center_baseline - Vector2(ts.x * 0.5, 0.0)
+	var o := maxf(1.0, 1.4 * _zoom)
+	for d: Vector2 in [
+		Vector2(-o, 0), Vector2(o, 0), Vector2(0, -o), Vector2(0, o),
+		Vector2(-o, -o), Vector2(o, -o), Vector2(-o, o), Vector2(o, o),
+	]:
+		draw_string(fnt, origin + d, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, outline)
+	draw_string(fnt, origin, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, fill)
+
+
+## Weather-forecast sun: bright disc + triangular rays (pulse when active).
+func _draw_sun_pbi_body(center: Vector2, outer_r: float, is_active: bool,
+		title: String, pbi_val: String) -> void:
+	var gold := Color(1.0, 0.82, 0.18)
+	var amber := Color(1.0, 0.55, 0.08)
+	var core := Color(1.0, 0.96, 0.55)
+	var pulse: float = 1.0
+	if is_active:
+		pulse = 0.92 + 0.08 * sin(_flow_phase * TAU * 1.6)
+	var halo_r: float = outer_r * (1.18 + 0.06 * pulse)
+	draw_circle(center, halo_r, Color(gold.r, gold.g, gold.b, 0.18 if is_active else 0.08))
+	if is_active:
+		draw_circle(center, outer_r * (1.08 + 0.04 * pulse), Color(1.0, 0.9, 0.35, 0.22))
+	var disc_r: float = outer_r * 0.48
+	var ray_inner: float = disc_r * 1.08
+	var ray_outer: float = outer_r * (0.96 + 0.04 * pulse)
+	var ray_count := 12
+	var half_w: float = TAU / float(ray_count) * 0.28
+	var rot: float = _flow_phase * TAU * 0.04 if is_active else 0.0
+	for i in ray_count:
+		var a: float = rot + float(i) * TAU / float(ray_count)
+		var tip := center + Vector2(cos(a), sin(a)) * ray_outer
+		var b0 := center + Vector2(cos(a - half_w), sin(a - half_w)) * ray_inner
+		var b1 := center + Vector2(cos(a + half_w), sin(a + half_w)) * ray_inner
+		var ray_col := Color(gold.r, gold.g, gold.b, 0.95 if is_active else 0.55)
+		if i % 2 == 1:
+			ray_col = Color(amber.r, amber.g, amber.b, ray_col.a)
+		draw_colored_polygon(PackedVector2Array([tip, b0, b1]), ray_col)
+		draw_line(b0, tip, Color(1.0, 0.95, 0.6, 0.55), maxf(0.8, 1.1 * _zoom))
+		draw_line(b1, tip, Color(1.0, 0.95, 0.6, 0.55), maxf(0.8, 1.1 * _zoom))
+	draw_circle(center, disc_r, amber)
+	draw_circle(center, disc_r * 0.88, gold)
+	draw_circle(center, disc_r * 0.55, core)
+	draw_arc(center, disc_r, 0.0, TAU, 48, Color(1.0, 1.0, 1.0, 0.35), maxf(1.2, 2.0 * _zoom))
+	_draw_pbi_labels(center, disc_r * 0.95, title, pbi_val,
+			Color(0.18, 0.08, 0.02, 1.0), Color(0.22, 0.10, 0.03, 0.95))
+
+
+## Rain PBI: blue disc with droplet silhouette.
+func _draw_rain_pbi_body(center: Vector2, outer_r: float, is_active: bool,
+		title: String, pbi_val: String) -> void:
+	var deep := Color(0.12, 0.35, 0.72)
+	var mid := Color(0.22, 0.55, 0.92)
+	var lite := Color(0.55, 0.82, 1.0)
+	if is_active:
+		var glow_r = outer_r * (1.12 + 0.05 * sin(_flow_phase * TAU * 2.0))
+		draw_circle(center, glow_r, Color(mid.r, mid.g, mid.b, 0.28))
+	draw_circle(center, outer_r * 0.92, deep)
+	draw_circle(center, outer_r * 0.78, mid)
+	var tip := center + Vector2(0.0, -outer_r * 0.42)
+	var left := center + Vector2(-outer_r * 0.28, outer_r * 0.08)
+	var right := center + Vector2(outer_r * 0.28, outer_r * 0.08)
+	var bot := center + Vector2(0.0, outer_r * 0.38)
+	draw_colored_polygon(PackedVector2Array([tip, left, bot, right]), lite)
+	draw_circle(center + Vector2(0.0, outer_r * 0.12), outer_r * 0.22, lite)
+	if is_active:
+		for i in 3:
+			var ox := (float(i) - 1.0) * outer_r * 0.22
+			var ph := fposmod(_flow_phase * 1.8 + float(i) * 0.33, 1.0)
+			var dy := lerpf(-outer_r * 0.15, outer_r * 0.55, ph)
+			draw_line(center + Vector2(ox, dy), center + Vector2(ox, dy + 6.0 * _zoom),
+					Color(1, 1, 1, 0.55), maxf(1.0, 1.5 * _zoom))
+	_draw_pbi_labels(center, outer_r * 0.72, title, pbi_val, Color.WHITE, Color(0.9, 0.95, 1.0, 0.95))
+
+
+## Dynamic weather cloud icon — changes with cloud_frac / rain (forecast style).
+func _draw_wind_pbi_body(center: Vector2, outer_r: float, is_active: bool,
+		specs: Dictionary, title: String, pbi_val: String) -> void:
+	var cloud_frac := clampf(float(specs.get("cloud_frac", 0.0)), 0.0, 1.0)
+	var rain_mmh := maxf(0.0, float(specs.get("rain_mmh", 0.0)))
+	var wind_ms := maxf(0.0, float(specs.get("wind_ms", 0.0)))
+	var wclass := int(specs.get("weather_class",
+			AtmospherePbi.weather_visual_class(cloud_frac, rain_mmh)))
+	var sky := Color(0.35, 0.62, 0.88)
+	if wclass >= 3:
+		sky = Color(0.32, 0.40, 0.52)
+	elif wclass == 2:
+		sky = Color(0.40, 0.55, 0.72)
+	draw_circle(center, outer_r * 0.96, sky)
+	if is_active:
+		draw_circle(center, outer_r * (1.08 + 0.03 * sin(_flow_phase * TAU)),
+				Color(sky.r, sky.g, sky.b, 0.22))
+	if wclass <= 1:
+		var sun_c := center + Vector2(-outer_r * 0.28, -outer_r * 0.22)
+		draw_circle(sun_c, outer_r * 0.18, Color(1.0, 0.9, 0.35, 0.95))
+	var puff_n := 2 + mini(3, wclass)
+	var base_y := center.y + outer_r * 0.02
+	var drift := sin(_flow_phase * TAU * 0.35) * outer_r * 0.04 * clampf(wind_ms / 12.0, 0.0, 1.0)
+	var cloud_col := Color(0.92, 0.94, 0.97, 0.95)
+	if wclass >= 3:
+		cloud_col = Color(0.55, 0.58, 0.64, 0.96)
+	elif wclass == 2:
+		cloud_col = Color(0.78, 0.80, 0.85, 0.95)
+	elif wclass == 4:
+		cloud_col = Color(0.42, 0.45, 0.52, 0.97)
+	var sizes: Array = [0.32, 0.26, 0.22, 0.20, 0.18]
+	var offsets: Array = [-0.22, 0.05, 0.28, -0.08, 0.18]
+	for i in puff_n:
+		var ox: float = float(offsets[i]) * outer_r + drift
+		var pr: float = float(sizes[i]) * outer_r * (1.0 + 0.12 * cloud_frac)
+		var py: float = base_y + (0.0 if i < 3 else outer_r * 0.06)
+		draw_circle(Vector2(center.x + ox, py), pr, cloud_col)
+	draw_circle(Vector2(center.x + drift, base_y + outer_r * 0.08),
+			outer_r * (0.38 + 0.08 * cloud_frac), cloud_col)
+	if wclass >= 4 or rain_mmh > 0.05:
+		var streak_n := 5
+		for i in streak_n:
+			var t := float(i) / float(maxi(streak_n - 1, 1))
+			var sx := center.x + lerpf(-outer_r * 0.28, outer_r * 0.28, t) + drift * 0.5
+			var ph := fposmod(_flow_phase * 2.2 + t * 0.4, 1.0)
+			var sy0 := base_y + outer_r * 0.22 + ph * outer_r * 0.15
+			draw_line(Vector2(sx, sy0), Vector2(sx - 2.0 * _zoom, sy0 + 10.0 * _zoom),
+					Color(0.75, 0.85, 1.0, 0.7), maxf(1.0, 1.6 * _zoom))
+	if wind_ms > 2.0:
+		var ticks := 3 + int(clampf(wind_ms / 4.0, 0.0, 4.0))
+		for i in ticks:
+			var a := -0.35 + float(i) * 0.18 + _flow_phase * 0.5
+			var p0 := center + Vector2(cos(a), sin(a)) * outer_r * 0.78
+			var p1 := center + Vector2(cos(a), sin(a)) * outer_r * 0.92
+			draw_line(p0, p1, Color(1, 1, 1, 0.45), maxf(1.0, 1.4 * _zoom))
+	draw_arc(center, outer_r * 0.96, 0.0, TAU, 48, Color(1, 1, 1, 0.18), maxf(1.0, 1.5 * _zoom))
+	_draw_pbi_labels(center, outer_r * 0.70, title, pbi_val,
+			Color(1, 1, 1, 1.0), Color(0.95, 0.98, 1.0, 0.95))

@@ -8,6 +8,7 @@ const CrisisEvent = preload("res://crisis_events/crisis_event.gd")
 @onready var alert_panel: PanelContainer = $AlertPanel
 @onready var alert_label: Label = $AlertPanel/MarginContainer/VBoxContainer/AlertLabel
 @onready var status_label: Label = $AlertPanel/MarginContainer/VBoxContainer/StatusLabel
+@onready var restore_button: Button = $AlertPanel/MarginContainer/VBoxContainer/RestoreButton
 @onready var extinguisher_panel: PanelContainer = $ExtinguisherPanel
 @onready var pressure_bar: ProgressBar = $ExtinguisherPanel/MarginContainer/VBoxContainer/PressureBar
 @onready var pressure_label: Label = $ExtinguisherPanel/MarginContainer/VBoxContainer/PressureLabel
@@ -19,10 +20,14 @@ var _cached_tool_manager: Node = null
 var _tool_manager_connected: bool = false
 
 func _ready() -> void:
+	layer = UITheme.LAYER_TOAST
 	# Start hidden
 	alert_panel.visible = false
 	extinguisher_panel.visible = false
-	
+	if restore_button != null:
+		restore_button.pressed.connect(_on_restore_burned_pressed)
+		restore_button.visible = false
+
 	# Connect to crisis event manager (deferred to ensure it exists)
 	call_deferred("_connect_crisis_manager")
 	call_deferred("_connect_tool_manager")
@@ -150,11 +155,13 @@ func _on_event_started(event) -> void:
 func _on_event_updated(event) -> void:
 	if _current_event == event:
 		status_label.text = event.get_status_description()
+		_refresh_restore_button()
 
 func _on_event_resolved(event) -> void:
 	if _current_event == event:
-		_show_achievement("🎉 CRISIS AVERTED!", "Nice work! %s extinguished!" % event.event_name)
+		_show_achievement("CRISIS AVERTED!", "Nice work! %s extinguished!" % event.event_name)
 		_current_event = null
+		_refresh_restore_button()
 		_hide_alert_after_delay(4.0)
 	else:
 		pass
@@ -163,21 +170,44 @@ func _on_event_failed(event) -> void:
 	if _current_event == event:
 		_show_alert("CRISIS FAILED", "%s has caused significant damage." % event.event_name)
 		_current_event = null
+		_refresh_restore_button()
 		_hide_alert_after_delay(3.0)
 
 func _show_alert(title: String, message: String) -> void:
 	alert_label.text = title
 	status_label.text = message
 	alert_panel.visible = true
-	
+	_refresh_restore_button()
+
 	# Reset to normal color
 	alert_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))  # Red for alerts
-	
+
 	# Fade in
 	if _alert_tween:
 		_alert_tween.kill()
 	_alert_tween = create_tween()
 	_alert_tween.tween_property(alert_panel, "modulate:a", 1.0, 0.3)
+
+
+func _refresh_restore_button() -> void:
+	if restore_button == null:
+		return
+	var burned := FireNode.get_burned_meshes()
+	restore_button.visible = burned.size() > 0
+	if burned.size() > 0:
+		restore_button.text = "Regenerate burned (%d)" % burned.size()
+
+
+func _on_restore_burned_pressed() -> void:
+	var n := FireNode.regenerate_burned_meshes()
+	_refresh_restore_button()
+	if n > 0:
+		status_label.text = "Restored %d burned mesh(es)" % n
+		alert_panel.visible = true
+		if _alert_tween:
+			_alert_tween.kill()
+		alert_panel.modulate.a = 1.0
+		_hide_alert_after_delay(2.5)
 
 func _show_achievement(title: String, message: String) -> void:
 	alert_label.text = title

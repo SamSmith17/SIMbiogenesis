@@ -222,11 +222,13 @@ func _test_grass_tune_style() -> void:
 	}
 	var ctx_dense := {
 		"latitude": 42.4, "seed": 3, "exclusions": [],
-		"style": {"grass_lawn_card_w": 0.22, "auto_density_scale": 2.0, "grass_lawn_bulk_scale": 1.2},
+		"style": {"scatter_lawn_field": true, "grass_lawn_card_w": 0.22,
+			"auto_density_scale": 2.0, "grass_lawn_bulk_scale": 1.2},
 	}
 	var ctx_sparse := {
 		"latitude": 42.4, "seed": 3, "exclusions": [],
-		"style": {"grass_lawn_card_w": 0.9, "auto_density_scale": 0.5, "grass_lawn_bulk_scale": 1.0},
+		"style": {"scatter_lawn_field": true, "grass_lawn_card_w": 0.9,
+			"auto_density_scale": 0.5, "grass_lawn_bulk_scale": 1.0},
 	}
 	var dense := AutoVegetationGenerator.generate(lawn_payload, ctx_dense)
 	var sparse := AutoVegetationGenerator.generate(lawn_payload, ctx_sparse)
@@ -235,10 +237,15 @@ func _test_grass_tune_style() -> void:
 		"dense=%d sparse=%d" % [dense.total_bulk(), sparse.total_bulk()])
 	var meadow_layer := AutoVegetationGenerator.generate(meadow_payload,
 		{"latitude": 42.4, "seed": 5, "exclusions": [],
-			"style": {"grass_field_bulk_scale": 1.4, "auto_density_scale": 1.5}})
+			"style": {"scatter_lawn_field": true, "grass_field_bulk_scale": 1.4,
+				"auto_density_scale": 1.5}})
 	_check("meadow scatter uses grass_field slot", meadow_layer.slots().has("grass_field"))
 	_check("meadow scatter produces instances", meadow_layer.total_bulk() > 10,
 		"got %d" % meadow_layer.total_bulk())
+	var skipped := AutoVegetationGenerator.generate(lawn_payload,
+		{"latitude": 42.4, "seed": 3, "exclusions": [], "style": {}})
+	_check("default skips OSM lawn scatter", skipped.total_bulk() == 0,
+		"got %d" % skipped.total_bulk())
 
 
 func _test_scatter_and_exclusion() -> void:
@@ -265,7 +272,9 @@ func _test_scatter_and_exclusion() -> void:
 		"polygons": [{"points": lawn_poly, "kind": "grass_lawn", "tags": {"landuse": "grass"}}],
 		"tree_points": [], "tree_rows": [],
 	}
-	var grass_layer := AutoVegetationGenerator.generate(grass_payload, ctx)
+	var grass_ctx := ctx.duplicate(true)
+	grass_ctx["style"] = {"scatter_lawn_field": true}
+	var grass_layer := AutoVegetationGenerator.generate(grass_payload, grass_ctx)
 	_check("OSM grass_lawn scatter produces instances", grass_layer.total_bulk() > 20,
 		"got %d" % grass_layer.total_bulk())
 	var slots: Array = grass_layer.slots()
@@ -783,7 +792,8 @@ func _test_open_area_exclusion() -> void:
 		"tree_points": [], "tree_rows": [],
 	}
 	var layer := AutoVegetationGenerator.generate(payload,
-		{"latitude": 47.6, "seed": 42, "exclusions": []})
+		{"latitude": 47.6, "seed": 42, "exclusions": [],
+			"style": {"scatter_lawn_field": true}})
 	var inside := _count_trees_in_poly(layer, meadow)
 	var total := _count_trees_in_poly(layer, wood)
 	_check("no trees inside the meadow", inside == 0, "got %d" % inside)
@@ -792,7 +802,7 @@ func _test_open_area_exclusion() -> void:
 	for rec in layer.bulk.get("grass_field", []):
 		if Geometry2D.is_point_in_polygon(Vector2(float(rec["x"]), float(rec["z"])), meadow):
 			grass_in += 1
-	_check("meadow still receives grass", grass_in > 10, "got %d" % grass_in)
+	_check("meadow still receives grass when opt-in", grass_in > 10, "got %d" % grass_in)
 	# Style toggle off restores the old overlap behavior.
 	var layer_off := AutoVegetationGenerator.generate(payload,
 		{"latitude": 47.6, "seed": 42, "exclusions": [],
@@ -847,7 +857,7 @@ func _test_grass_detail_radius() -> void:
 		"tree_points": [], "tree_rows": [],
 	}
 	var ctx := {"latitude": 42.4, "seed": 4, "exclusions": [], "half_extent_m": 1500.0,
-		"style": {"grass_detail_radius_m": 150.0}}
+		"style": {"scatter_lawn_field": true, "grass_detail_radius_m": 150.0}}
 	var layer := AutoVegetationGenerator.generate(payload, ctx)
 	var near_n := 0
 	var far_n := 0

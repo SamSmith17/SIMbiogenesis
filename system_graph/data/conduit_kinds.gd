@@ -7,6 +7,22 @@ extends RefCounted
 
 const CONFIG_PATH := "user://conduit_kinds.cfg"
 
+## Loss-model fields (Wave 8):
+##  Electrical kinds:
+##    resistance_ohm_per_m — ROUND-TRIP loop resistance per metre of run
+##      (both conductors). Copper resistivity per AWG from NEC Ch.9 Table 8.
+##    ampacity_a           — continuous current rating (NEC 400.5 flexible cords
+##                           / NEC 310.16 building wire).
+##    nominal_volts        — operating voltage used to derive current from power.
+##  Fluid kinds:
+##    inner_diameter_m     — hydraulic inner diameter.
+##    hw_c                 — Hazen-Williams roughness coefficient C
+##                           (Mays, Water Distribution Systems Handbook, ~150 smooth plastic).
+##    max_flow_lpm         — practical flow rating.
+##    burst_pressure_psi   — burst rating (overload/burst threshold).
+##  Light kinds additionally set:
+##    is_light: true, bulb_spacing_m (0 = continuous emissive strip),
+##    watts_per_m, light_color.
 const BUILTIN: Dictionary = {
 	"extension_cord": {
 		"label": "Extension Cord",
@@ -16,6 +32,37 @@ const BUILTIN: Dictionary = {
 		"metallic": 0.0,
 		"flexible": true,
 		"sag_amount": 0.35,
+		"ground_drape": true,
+		# 16 AWG copper: 13.2 mOhm/m/conductor -> 26.4 mOhm/m loop (NEC Ch.9 T8).
+		"resistance_ohm_per_m": 0.0264,
+		"ampacity_a": 13.0,  # NEC 400.5 16 AWG cord
+		"nominal_volts": 120.0,
+	},
+	"romex": {
+		"label": "Romex / NM-B",
+		"radius_m": 0.006,
+		"color": Color(0.9, 0.88, 0.78, 1.0),
+		"roughness": 0.8,
+		"metallic": 0.0,
+		"flexible": false,
+		"sag_amount": 0.0,
+		# 12 AWG copper: 5.21 mOhm/m/conductor -> 10.4 mOhm/m loop.
+		"resistance_ohm_per_m": 0.0104,
+		"ampacity_a": 20.0,  # NEC 310.16 12 AWG @60C
+		"nominal_volts": 120.0,
+	},
+	"dc_solar": {
+		"label": "DC Solar Wire",
+		"radius_m": 0.005,
+		"color": Color(0.08, 0.08, 0.1, 1.0),
+		"roughness": 0.8,
+		"metallic": 0.0,
+		"flexible": true,
+		"sag_amount": 0.1,
+		# 10 AWG PV wire: 3.28 mOhm/m/conductor -> 6.6 mOhm/m loop.
+		"resistance_ohm_per_m": 0.0066,
+		"ampacity_a": 30.0,  # NEC 310.16 10 AWG
+		"nominal_volts": 48.0,
 	},
 	"garden_hose": {
 		"label": "Garden Hose",
@@ -25,6 +72,11 @@ const BUILTIN: Dictionary = {
 		"metallic": 0.0,
 		"flexible": true,
 		"sag_amount": 0.25,
+		"ground_drape": true,
+		"inner_diameter_m": 0.016,  # 5/8 in ID
+		"hw_c": 140.0,
+		"max_flow_lpm": 40.0,
+		"burst_pressure_psi": 350.0,
 	},
 	"pvc_pipe": {
 		"label": "PVC / ABS Pipe",
@@ -34,6 +86,49 @@ const BUILTIN: Dictionary = {
 		"metallic": 0.0,
 		"flexible": false,
 		"sag_amount": 0.0,
+		"inner_diameter_m": 0.0266,  # 1 in Sch40 ID
+		"hw_c": 150.0,
+		"max_flow_lpm": 100.0,
+		"burst_pressure_psi": 450.0,
+	},
+	"pex_red": {
+		"label": "PEX (Red / Hot)",
+		"radius_m": 0.008,
+		"color": Color(0.78, 0.16, 0.14, 1.0),
+		"roughness": 0.45,
+		"metallic": 0.0,
+		"flexible": true,
+		"sag_amount": 0.08,
+		"inner_diameter_m": 0.0121,  # 1/2 in PEX ID
+		"hw_c": 150.0,
+		"max_flow_lpm": 30.0,
+		"burst_pressure_psi": 480.0,
+	},
+	"pex_blue": {
+		"label": "PEX (Blue / Cold)",
+		"radius_m": 0.008,
+		"color": Color(0.16, 0.34, 0.78, 1.0),
+		"roughness": 0.45,
+		"metallic": 0.0,
+		"flexible": true,
+		"sag_amount": 0.08,
+		"inner_diameter_m": 0.0121,
+		"hw_c": 150.0,
+		"max_flow_lpm": 30.0,
+		"burst_pressure_psi": 480.0,
+	},
+	"pex_white": {
+		"label": "PEX (White)",
+		"radius_m": 0.008,
+		"color": Color(0.9, 0.9, 0.88, 1.0),
+		"roughness": 0.45,
+		"metallic": 0.0,
+		"flexible": true,
+		"sag_amount": 0.08,
+		"inner_diameter_m": 0.0121,
+		"hw_c": 150.0,
+		"max_flow_lpm": 30.0,
+		"burst_pressure_psi": 480.0,
 	},
 	"ethernet": {
 		"label": "Ethernet",
@@ -43,6 +138,10 @@ const BUILTIN: Dictionary = {
 		"metallic": 0.0,
 		"flexible": true,
 		"sag_amount": 0.15,
+		# 24 AWG copper: 84.2 mOhm/m/conductor -> 168 mOhm/m loop (PoE pair).
+		"resistance_ohm_per_m": 0.168,
+		"ampacity_a": 0.6,  # IEEE 802.3bt per-pair limit
+		"nominal_volts": 48.0,
 	},
 	"ducting": {
 		"label": "Ducting",
@@ -52,6 +151,62 @@ const BUILTIN: Dictionary = {
 		"metallic": 0.1,
 		"flexible": false,
 		"sag_amount": 0.0,
+		"inner_diameter_m": 0.15,
+		"hw_c": 120.0,
+		"max_flow_lpm": 5000.0,
+		"burst_pressure_psi": 10.0,
+	},
+	"led_strip": {
+		"label": "LED Strip",
+		"radius_m": 0.004,
+		"color": Color(0.85, 0.85, 0.8, 1.0),
+		"roughness": 0.5,
+		"metallic": 0.0,
+		"flexible": true,
+		"sag_amount": 0.05,
+		"is_light": true,
+		"bulb_spacing_m": 0.0,  # continuous emissive strip, no discrete bulbs
+		"watts_per_m": 14.0,    # 5050 SMD strip @ 12 V
+		"light_color": Color(1.0, 0.92, 0.8, 1.0),
+		# 12 V strip copper traces: ~0.15 Ohm/m loop (typical 10 mm 2 oz PCB).
+		"resistance_ohm_per_m": 0.15,
+		"ampacity_a": 5.0,
+		"nominal_volts": 12.0,
+	},
+	"led_fairy": {
+		"label": "Fairy Lights",
+		"radius_m": 0.0015,
+		"color": Color(0.35, 0.3, 0.2, 1.0),
+		"roughness": 0.9,
+		"metallic": 0.0,
+		"flexible": true,
+		"sag_amount": 0.3,
+		"ground_drape": true,
+		"is_light": true,
+		"bulb_spacing_m": 0.15,
+		"watts_per_m": 0.6,  # 5 V USB micro-LED string
+		"light_color": Color(1.0, 0.88, 0.65, 1.0),
+		# 30 AWG copper: 0.34 Ohm/m/conductor -> 0.68 Ohm/m loop.
+		"resistance_ohm_per_m": 0.68,
+		"ampacity_a": 0.8,
+		"nominal_volts": 5.0,
+	},
+	"led_patio": {
+		"label": "Patio String Lights",
+		"radius_m": 0.004,
+		"color": Color(0.08, 0.08, 0.08, 1.0),
+		"roughness": 0.85,
+		"metallic": 0.0,
+		"flexible": true,
+		"sag_amount": 0.35,
+		"is_light": true,
+		"bulb_spacing_m": 0.9,
+		"watts_per_m": 3.3,  # ~3 W LED filament bulb every 0.9 m
+		"light_color": Color(1.0, 0.82, 0.55, 1.0),
+		# 18 AWG SPT-1 lamp cord: 21 mOhm/m/conductor -> 42 mOhm/m loop.
+		"resistance_ohm_per_m": 0.042,
+		"ampacity_a": 10.0,
+		"nominal_volts": 120.0,
 	},
 }
 
@@ -59,7 +214,7 @@ const BUILTIN: Dictionary = {
 const RESOURCE_DEFAULTS: Dictionary = {
 	"electric": "extension_cord",
 	"water": "garden_hose",
-	"hot_water": "garden_hose",
+	"hot_water": "pex_red",
 	"woodgas": "pvc_pipe",
 	"thermal": "ducting",
 	"biomass": "pvc_pipe",
@@ -135,6 +290,26 @@ static func type_meta(type_id: String) -> Dictionary:
 
 static func display_name(type_id: String) -> String:
 	return str(type_meta(type_id).get("label", type_id.capitalize()))
+
+
+## True when the conduit kind carries electrical power (has a loop resistance).
+static func is_electrical_type(type_id: String) -> bool:
+	return type_meta(type_id).has("resistance_ohm_per_m")
+
+
+## True when the conduit kind carries fluid (has a hydraulic inner diameter).
+static func is_fluid_type(type_id: String) -> bool:
+	return type_meta(type_id).has("inner_diameter_m")
+
+
+## True when the conduit kind is itself a light source (LED strip/fairy/patio).
+static func is_light_type(type_id: String) -> bool:
+	return bool(type_meta(type_id).get("is_light", false))
+
+
+## True when flexible slack should drape onto the ground instead of hanging.
+static func is_ground_drape_type(type_id: String) -> bool:
+	return bool(type_meta(type_id).get("ground_drape", false))
 
 
 ## Derive conduit type from a graph connection dict (respects conduit_type override).

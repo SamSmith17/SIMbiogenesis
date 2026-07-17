@@ -26,6 +26,14 @@ static func apply_rect(delta: PackedFloat32Array, res: int, extent_m: float,
 	var x1 := maxf(rect_min.x, rect_max.x)
 	var z0 := minf(rect_min.y, rect_max.y)
 	var z1 := maxf(rect_min.y, rect_max.y)
+	var cx := (x0 + x1) * 0.5
+	var cz := (z0 + z1) * 0.5
+	var half_w := maxf((x1 - x0) * 0.5, 0.5)
+	var half_d := maxf((z1 - z0) * 0.5, 0.5)
+	# Ridge axis along the longer rect side (berm / swale).
+	var ridge_along_x := half_w >= half_d
+	var touched := PackedByteArray()
+	touched.resize(res * res)
 	for r in res:
 		for c in res:
 			var w := cell_to_world(c, r, res, extent_m)
@@ -35,6 +43,8 @@ static func apply_rect(delta: PackedFloat32Array, res: int, extent_m: float,
 			var blend := 1.0 if falloff_m <= 0.0 else clampf(edge_dist / falloff_m, 0.0, 1.0)
 			var idx := r * res + c
 			var abs_h := base_grid[idx] - center_elev
+			var dx := (w.x - cx) / half_w
+			var dz := (w.y - cz) / half_d
 			match op:
 				"level":
 					delta[idx] = lerpf(delta[idx], value - abs_h, blend)
@@ -42,6 +52,93 @@ static func apply_rect(delta: PackedFloat32Array, res: int, extent_m: float,
 					delta[idx] = lerpf(delta[idx], delta[idx] + value, blend)
 				"lower":
 					delta[idx] = lerpf(delta[idx], delta[idx] - value, blend)
+				"hill":
+					var radial := 1.0 - clampf(sqrt(dx * dx + dz * dz), 0.0, 1.0)
+					var bump := value * radial * radial * blend
+					delta[idx] = lerpf(delta[idx], delta[idx] + bump, blend)
+				"berm":
+					var flank := absf(dz) if ridge_along_x else absf(dx)
+					var crest := 1.0 - clampf(flank, 0.0, 1.0)
+					# Soft flanks: cosine lobe along the short axis.
+					var lobe := 0.5 * (1.0 + cos(PI * clampf(flank, 0.0, 1.0)))
+					var bump := value * crest * lobe * blend
+					delta[idx] = lerpf(delta[idx], delta[idx] + bump, blend)
+				"swale":
+					var flank := absf(dz) if ridge_along_x else absf(dx)
+					var crest := 1.0 - clampf(flank, 0.0, 1.0)
+					var lobe := 0.5 * (1.0 + cos(PI * clampf(flank, 0.0, 1.0)))
+					var ditch := value * crest * lobe * blend
+					delta[idx] = lerpf(delta[idx], delta[idx] - ditch, blend)
+			touched[idx] = 1
+	if op == "level":
+		_smooth_perimeter(delta, res, touched, 2)
+
+
+## Multi-ring box average on cells that touch unselected neighbours — softens
+## the level falloff shoulder after the main pass.
+static func _smooth_perimeter(delta: PackedFloat32Array, res: int,
+		touched: PackedByteArray, rings: int) -> void:
+	var border := PackedByteArray()
+	border.resize(res * res)
+	for r in res:
+		for c in res:
+			var idx := r * res + c
+			if touched[idx] == 0:
+				continue
+			var is_border := false
+			for dr in range(-1, 2):
+				for dc in range(-1, 2):
+					if dr == 0 and dc == 0:
+						continue
+					var rr := r + dr
+					var cc := c + dc
+					if rr < 0 or rr >= res or cc < 0 or cc >= res \
+							or touched[rr * res + cc] == 0:
+						is_border = true
+						break
+				if is_border:
+					break
+			if is_border:
+				border[idx] = 1
+	# Grow the border ring outward within the selection for multi-ring averages.
+	for _pass in rings:
+		var next := border.duplicate()
+		for r in res:
+			for c in res:
+				var idx := r * res + c
+				if touched[idx] == 0 or border[idx] != 0:
+					continue
+				for dr in range(-1, 2):
+					for dc in range(-1, 2):
+						var rr := r + dr
+						var cc := c + dc
+						if rr < 0 or rr >= res or cc < 0 or cc >= res:
+							continue
+						if border[rr * res + cc] != 0:
+							next[idx] = 1
+							break
+		border = next
+	var scratch := delta.duplicate()
+	for r in res:
+		for c in res:
+			var idx := r * res + c
+			if border[idx] == 0:
+				continue
+			var sum := 0.0
+			var wsum := 0.0
+			for dr in range(-1, 2):
+				for dc in range(-1, 2):
+					var rr := r + dr
+					var cc := c + dc
+					if rr < 0 or rr >= res or cc < 0 or cc >= res:
+						continue
+					# Approximate Gaussian 3×3: centre 4, edges 2, corners 1.
+					var w := 4.0 if (dr == 0 and dc == 0) \
+							else (2.0 if (dr == 0 or dc == 0) else 1.0)
+					sum += scratch[rr * res + cc] * w
+					wsum += w
+			if wsum > 0.0:
+				delta[idx] = sum / wsum
 
 
 static func nearest_parcel(polygons: Array, world_xz: Vector2) -> PackedVector2Array:

@@ -11,9 +11,8 @@ extends RefCounted
 ##   boreal        55°+    dense conifer, sparse taiga
 ## WorldCover class 20 (Shrubland) → low scrub regardless of latitude.
 ##
-## Species ids are card-factory slots; Phase 1 uses the built-in
-## pine / deciduous / shrub. Phase 3 adds palm / conifer / taiga slots here and
-## AutoVegetationRuntime.SLOT_ALIAS resolves them until real meshes exist.
+## Species ids are card-factory slots; named sub-species resolve via
+## VegSpeciesCatalog / AutoVegetationRuntime.SLOT_ALIAS to mesh families.
 
 const TROPICAL_LIMIT := 23.0
 const SUBTROPICAL_LIMIT := 40.0
@@ -33,13 +32,43 @@ const MAPPABLE_KINDS := [
 	["orchard", "Orchard"],
 	["vineyard", "Vineyard"],
 	["wetland", "Wetland"],
+	["farmland", "Farmland / crops"],
 ]
 
+## Meadow/lawn/field polygons are intentionally NOT auto-scattered as 3D grass
+## (ortho imagery already shows the landcover). Keep for tree-scatter veto only.
+const SKIP_AUTO_SCATTER_KINDS := ["grass_lawn", "grass_field"]
+
+
+static func should_auto_scatter(kind: String) -> bool:
+	return not SKIP_AUTO_SCATTER_KINDS.has(kind)
+
 ## Options offered per kind in the picker (id, label). "auto" defers to biome/tags.
-const SPECIES_OVERRIDE_OPTIONS := ["auto", "pine", "deciduous", "shrub", "mixed"]
-const SPECIES_OVERRIDE_LABELS := [
-	"Auto (biome)", "Pine", "Deciduous", "Shrub", "Mixed pine + deciduous",
-]
+## Built once from catalog so OSM→species and local-mix stay in sync.
+static var SPECIES_OVERRIDE_OPTIONS: Array[String] = []
+static var SPECIES_OVERRIDE_LABELS: Array[String] = []
+
+
+static func _ensure_override_lists() -> void:
+	if not SPECIES_OVERRIDE_OPTIONS.is_empty():
+		return
+	SPECIES_OVERRIDE_OPTIONS = ["auto", "pine", "deciduous", "shrub", "mixed"]
+	for id in VegSpeciesCatalog.all_selectable_ids():
+		if id not in SPECIES_OVERRIDE_OPTIONS:
+			SPECIES_OVERRIDE_OPTIONS.append(id)
+	SPECIES_OVERRIDE_LABELS.clear()
+	for id in SPECIES_OVERRIDE_OPTIONS:
+		SPECIES_OVERRIDE_LABELS.append(VegSpeciesCatalog.label_for(id))
+
+
+static func override_options() -> Array[String]:
+	_ensure_override_lists()
+	return SPECIES_OVERRIDE_OPTIONS
+
+
+static func override_labels() -> Array[String]:
+	_ensure_override_lists()
+	return SPECIES_OVERRIDE_LABELS
 
 
 ## Resolve the user's OSM→species choice for a kind into a species-weight dict.
@@ -50,7 +79,10 @@ static func species_override_for_kind(osm_species_map: Dictionary, kind: String,
 		mix_weights: Dictionary = {}) -> Dictionary:
 	if osm_species_map.is_empty():
 		return {}
-	match str(osm_species_map.get(kind, "auto")):
+	var choice := str(osm_species_map.get(kind, "auto"))
+	match choice:
+		"auto":
+			return {}
 		"pine":
 			return {"pine": 1.0}
 		"deciduous":
@@ -60,12 +92,15 @@ static func species_override_for_kind(osm_species_map: Dictionary, kind: String,
 		"mixed":
 			return mix_weights.duplicate(true) if not mix_weights.is_empty() \
 				else {"pine": 0.5, "deciduous": 0.5}
+	# Named sub-species / crops — single-weight dict keyed by selectable id.
+	if choice in VegSpeciesCatalog.MESH_FAMILY or choice in VegSpeciesCatalog.BASE_FAMILIES:
+		return {choice: 1.0}
 	return {}
 
 
 ## The player-tuned mixed-woodland composition (Tune Look "Mixed woodland" type),
-## read from the style's mix_pine/mix_deciduous/mix_shrub weights. Zero-weight
-## species are dropped; returns {} when the style carries no positive weights so
+## read from the style's mix_* weights plus optional local_mix dict of named
+## sub-species. Zero-weight species are dropped; returns {} when empty so
 ## callers fall back to the even pine/deciduous default.
 static func mix_weights_from_style(style: Dictionary) -> Dictionary:
 	var out := {}
@@ -73,6 +108,12 @@ static func mix_weights_from_style(style: Dictionary) -> Dictionary:
 		var w := maxf(float(style.get("mix_%s" % species, 0.0)), 0.0)
 		if w > 0.0:
 			out[species] = w
+	var local: Variant = style.get("local_mix", {})
+	if local is Dictionary:
+		for k in local:
+			var lw := maxf(float(local[k]), 0.0)
+			if lw > 0.0:
+				out[str(k)] = lw
 	return out
 
 

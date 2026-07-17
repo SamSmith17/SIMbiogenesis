@@ -79,6 +79,8 @@ const CAMP_SCATTER_UI_SCRIPT := preload("res://scenes/ui/camp_scatter_ui.gd")
 const PLACED_PROPS_UI_SCRIPT := preload("res://scenes/ui/placed_props_ui.gd")
 const PLACED_PROP_EDIT_UI_SCRIPT: GDScript = preload("res://scenes/ui/placed_prop_edit_ui.gd")
 const BUILDING_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/building_builder_modal.gd")
+const STARSHADE_EDIT_MODAL_SCRIPT := preload("res://scenes/ui/starshade_edit_modal.gd")
+const PALLET_RACK_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/pallet_rack_builder_modal.gd")
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
 const PLACED_PROP_SERVICE_SCRIPT := preload("res://core/placed_models/placed_prop_service.gd")
 const CONFIG_PATH := "user://terrain_config.cfg"
@@ -98,7 +100,22 @@ var _detail_half_extent := DETAIL_HALF_EXTENT_DEFAULT
 var _osm_half_extent := OSM_HALF_EXTENT_DEFAULT
 var _seam_feather_m := TerrainBuilder.DEFAULT_FEATHER_M
 var _detail_vertical_offset := 0.0
+## Slide OSM geometry onto imagery (m): +east / +north. Raw Overpass/cache stays
+## unoffset in _osm_vectors_raw / _auto_veg_data_raw; applied copies feed attach.
+var _osm_offset_east_m := 0.0
+var _osm_offset_north_m := 0.0
+## True after the player nudges or locks an auto-seed (don't re-overwrite).
+var _osm_offset_user_set := false
+var _osm_vectors_raw: Dictionary = {}
+var _auto_veg_data_raw: Dictionary = {}
 var _from_resume := false
+var _force_refetch := false
+## True when this launch skipped loading user:// placed props / building styles
+## (fresh / no-cache). Prevents reground from wiping the on-disk prop file.
+var _user_overlays_ephemeral := false
+## Terrain UI: show/hide DEM+OSM world geometry (does NOT control cache loading —
+## map-select "Load from cache" / _force_refetch is the source of truth for that).
+var _cached_geometry_visible := true
 
 var _elev_grid := PackedFloat32Array()
 var _elev_cols := 0
@@ -179,12 +196,19 @@ var _export_mp4_path := ""
 var _export_camera: ClimelapseCameraRig = null
 var _export_pending := false
 var _export_fps := 30
+## Waypoints collected for hyperlapse export ({pos, yaw, pitch}).
+var _climelapse_drone_path: Array = []
 var _growth_caps_auto := {}
 var _growth_rng := RandomNumberGenerator.new()
 var _auto_growth_zone_index: GrowthZoneIndex = null
 var _placed_prop_layer: PlacedPropLayer = null
 var _placed_props_ui: Control = null
 var _placed_prop_edit_ui: Control = null
+## Click-to-move from PlacedPropEditUI Move button (see begin_prop_reposition).
+var _reposition_prop: PlacedProp = null
+var _reposition_valid := false
+var _reposition_cam_follow := true
+const REPOSITION_FOLLOW_LERP := 4.0
 var _building_focus_idx: int = -1
 ## Per-building style overrides (Building Builder). Styled buildings are
 ## excluded from the merged Buildings mesh and rebuilt as individual children
@@ -192,6 +216,8 @@ var _building_focus_idx: int = -1
 var _building_style_layer: BuildingStyleLayer = null
 var _custom_buildings_root: Node3D = null
 var _building_builder_ui: Control = null
+var _starshade_edit_ui: Control = null
+var _pallet_rack_builder_ui: Control = null
 var _building_highlight: MeshInstance3D = null
 ## OSM solar arrays built in-world but NOT auto-added to the graph. Each record:
 ## {name, poly, panel_count, watts, base_y, tilt, azimuth, tag, added}. The player
@@ -205,6 +231,12 @@ var _scene_graph_highlight: Node3D = null
 ## Persist which arrays the player already added across in-session terrain rebuilds
 ## (tag -> {count, watts}); drives the accumulated SolarUI generation total.
 var _added_solar_tags: Dictionary = {}
+## OSM / sculpted still-water pond focus (crosshair → Add pond to graph).
+var _water_focus_idx: int = -1
+var _water_highlight: MeshInstance3D = null
+var _added_pond_tags: Dictionary = {}
+## Cached D8 watershed on the composed walkable heightfield (optional overlay).
+var _watershed_analysis = null
 var _veg_highlight: MeshInstance3D = null
 ## Crosshair-focused OSM vegetation area (index into _auto_veg_data["polygons"]).
 ## Highlighted like buildings; Interact / the O action opens the Tune look modal
@@ -255,6 +287,8 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if Engine.is_editor_hint() or not _built or _main == null:
 		return
+	if _reposition_prop != null:
+		_tick_prop_reposition(delta)
 	_advance_growth()
 
 	_apply_water_flow(delta)
@@ -412,6 +446,17 @@ func _exit_tree() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _built:
 		return
+	if _reposition_prop != null:
+		if event.is_action_pressed("ui_cancel"):
+			_cancel_prop_reposition()
+			get_viewport().set_input_as_handled()
+			return
+		if event is InputEventMouseButton:
+			var mb := event as InputEventMouseButton
+			if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
+				_confirm_prop_reposition()
+				get_viewport().set_input_as_handled()
+				return
 	if event.is_action_pressed("vegetation_edit") and _vegetation_edit_ui != null:
 		if _terrain_edit_ui != null and _terrain_edit_ui.has_method("toggle_mode"):
 			if _terrain_edit_ui.visible:
@@ -458,7 +503,15 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _resolve_location() -> void:
-	_apply_extent_defaults_from_config()
+	# Extent priority: MapContext (this launch) → per-site meta → global config
+	# → code defaults. Never seed from global config first — the last map's
+	# 60 km world half-extent would otherwise pollute every other site.
+	_half_extent = HALF_EXTENT_DEFAULT
+	_detail_half_extent = DETAIL_HALF_EXTENT_DEFAULT
+	_osm_half_extent = OSM_HALF_EXTENT_DEFAULT
+	_osm_offset_east_m = 0.0
+	_osm_offset_north_m = 0.0
+	_osm_offset_user_set = false
 	var ctx := get_node_or_null("/root/MapContext")
 	if ctx != null and ctx.has_pending:
 		var d: Dictionary = ctx.consume()
@@ -466,15 +519,20 @@ func _resolve_location() -> void:
 		_lon = float(d["longitude"])
 		_map_label = str(d.get("label", ""))
 		var he := float(d["half_extent_m"])
+		var dhe := float(d.get("detail_half_extent_m", 0.0))
+		var ohe := float(d.get("osm_half_extent_m", 0.0))
 		if he > 0.0:
 			_half_extent = he
-		var dhe := float(d.get("detail_half_extent_m", 0.0))
 		if dhe > 0.0:
 			_detail_half_extent = dhe
-		var ohe := float(d.get("osm_half_extent_m", 0.0))
 		if ohe > 0.0:
 			_osm_half_extent = ohe
 		_from_resume = bool(d.get("from_resume", false))
+		_force_refetch = bool(d.get("force_refetch", false))
+		_fill_extent_gaps(he <= 0.0, dhe <= 0.0, ohe <= 0.0)
+		# Map-select "Load from cache" is the sole source of truth for this session.
+		TerrainCacheSettings.set_cache_enabled(not _force_refetch)
+		_load_osm_offset_prefs()
 		return
 	# Fallback: the scene's current coordinates (set by save-load / location prefs).
 	if _main != null:
@@ -483,35 +541,37 @@ func _resolve_location() -> void:
 		if la != null and lo != null:
 			_lat = float(la)
 			_lon = float(lo)
-	
+	_fill_extent_gaps(true, true, true)
+	TerrainCacheSettings.set_cache_enabled(not _force_refetch)
+	_load_osm_offset_prefs()
+
+
+## Fill unset extent fields: per-site meta first, then global config. Meta wins
+## over config so a prior visit to this site isn't overwritten by another map.
+func _fill_extent_gaps(fill_world: bool, fill_detail: bool, fill_osm: bool) -> void:
+	if not fill_world and not fill_detail and not fill_osm:
+		return
 	var meta := TerrainCacheSettings.get_meta_extents(_lat, _lon)
-	if not meta.is_empty():
+	var cfg := ConfigFile.new()
+	var has_cfg := FileAccess.file_exists(CONFIG_PATH) and cfg.load(CONFIG_PATH) == OK
+	if fill_world:
 		var he := float(meta.get("half_extent_m", 0.0))
+		if he <= 0.0 and has_cfg:
+			he = float(cfg.get_value("terrain", "world_half_extent_m", 0.0))
 		if he > 0.0:
 			_half_extent = he
+	if fill_detail:
 		var dhe := float(meta.get("detail_half_extent_m", 0.0))
+		if dhe <= 0.0 and has_cfg:
+			dhe = float(cfg.get_value("terrain", "detail_half_extent_m", 0.0))
 		if dhe > 0.0:
 			_detail_half_extent = dhe
+	if fill_osm:
 		var ohe := float(meta.get("osm_half_extent_m", 0.0))
+		if ohe <= 0.0 and has_cfg:
+			ohe = float(cfg.get_value("terrain", "osm_half_extent_m", 0.0))
 		if ohe > 0.0:
 			_osm_half_extent = ohe
-
-
-func _apply_extent_defaults_from_config() -> void:
-	if not FileAccess.file_exists(CONFIG_PATH):
-		return
-	var cfg := ConfigFile.new()
-	if cfg.load(CONFIG_PATH) != OK:
-		return
-	var wh := float(cfg.get_value("terrain", "world_half_extent_m", 0.0))
-	if wh > 0.0:
-		_half_extent = wh
-	var dh := float(cfg.get_value("terrain", "detail_half_extent_m", 0.0))
-	if dh > 0.0:
-		_detail_half_extent = dh
-	var oh := float(cfg.get_value("terrain", "osm_half_extent_m", 0.0))
-	if oh > 0.0:
-		_osm_half_extent = oh
 
 
 func _detail_extent_m() -> float:
@@ -524,7 +584,122 @@ func get_terrain_extents() -> Dictionary:
 		"detail_half_extent_m": _detail_half_extent,
 		"osm_half_extent_m": _osm_half_extent,
 		"seam_feather_m": _seam_feather_m,
+		"osm_offset_east_m": _osm_offset_east_m,
+		"osm_offset_north_m": _osm_offset_north_m,
 	}
+
+
+## Load persisted OSM↔imagery offset from map .tres / site meta (if any).
+func _load_osm_offset_prefs() -> void:
+	var path := "user://maps/loc_%s_%s.tres" % [
+		CoordToken.token(_lat), CoordToken.token(_lon)]
+	if FileAccess.file_exists(path):
+		var md := load(path) as MapDefinition
+		if md != null and (absf(md.osm_offset_east_m) > 0.01 \
+				or absf(md.osm_offset_north_m) > 0.01):
+			_osm_offset_east_m = md.osm_offset_east_m
+			_osm_offset_north_m = md.osm_offset_north_m
+			_osm_offset_user_set = true
+			return
+	var meta := TerrainCacheSettings.get_meta_extents(_lat, _lon)
+	var ee := float(meta.get("osm_offset_east_m", 0.0))
+	var nn := float(meta.get("osm_offset_north_m", 0.0))
+	if absf(ee) > 0.01 or absf(nn) > 0.01:
+		_osm_offset_east_m = ee
+		_osm_offset_north_m = nn
+		_osm_offset_user_set = true
+
+
+func _persist_osm_offset() -> void:
+	TerrainCacheSettings.save_meta_extents(
+		_lat, _lon, _half_extent, _detail_half_extent, _osm_half_extent,
+		_osm_offset_east_m, _osm_offset_north_m)
+	var path := "user://maps/loc_%s_%s.tres" % [
+		CoordToken.token(_lat), CoordToken.token(_lon)]
+	if not FileAccess.file_exists(path):
+		return
+	var md := load(path) as MapDefinition
+	if md == null:
+		return
+	md.osm_offset_east_m = _osm_offset_east_m
+	md.osm_offset_north_m = _osm_offset_north_m
+	ResourceSaver.save(md, path)
+
+
+## Rebind working OSM / veg arrays from raw payloads + current offset, then
+## re-attach overlays when the world is already built.
+func _rebind_osm_registration(reattach: bool = true) -> void:
+	if not _osm_vectors_raw.is_empty():
+		_osm_vectors = OsmRegistration.offset_payload(
+			_osm_vectors_raw, _osm_offset_east_m, _osm_offset_north_m)
+		_buildings_data = _osm_vectors.get("buildings", []) as Array
+		_water_data = _osm_vectors.get("water", []) as Array
+	if not _auto_veg_data_raw.is_empty():
+		_auto_veg_data = OsmRegistration.offset_payload(
+			_auto_veg_data_raw, _osm_offset_east_m, _osm_offset_north_m)
+	if not reattach or not _built or _load_sequence_active:
+		return
+	_apply_osm_vectors_after_fetch()
+	if not _auto_veg_data.is_empty():
+		_queue_auto_veg_generate(_auto_veg_generated)
+
+
+func _maybe_autoseed_brc_osm_offset() -> void:
+	if _osm_offset_user_set:
+		return
+	if absf(_osm_offset_east_m) > 0.01 or absf(_osm_offset_north_m) > 0.01:
+		return
+	if _osm_vectors_raw.is_empty():
+		return
+	var suggested := OsmRegistration.suggest_brc_offset_m(
+		_lat, _lon, _osm_vectors_raw)
+	if suggested.length() < 80.0:
+		return
+	_osm_offset_east_m = suggested.x
+	_osm_offset_north_m = suggested.y
+	_osm_offset_user_set = true
+	_persist_osm_offset()
+	print("TerrainLoader: auto OSM↔imagery offset %+0.f m E, %+0.f m N (BRC year mismatch)" % [
+		_osm_offset_east_m, _osm_offset_north_m])
+	_toast("Aligned OSM to aerial scars (%+.0f m E, %+.0f m N). Nudge in Terrain options if needed." % [
+		_osm_offset_east_m, _osm_offset_north_m], ToastUI.Level.INFO)
+
+
+## Player / UI: set absolute OSM registration offset (metres east / north).
+func set_osm_imagery_offset(east_m: float, north_m: float, reattach: bool = true) -> void:
+	_osm_offset_east_m = east_m
+	_osm_offset_north_m = north_m
+	_osm_offset_user_set = true
+	_persist_osm_offset()
+	_rebind_osm_registration(reattach)
+	_notify_options_status("OSM offset %+.0f m E, %+.0f m N" % [
+		_osm_offset_east_m, _osm_offset_north_m], "ok")
+
+
+func nudge_osm_imagery_offset(east_delta_m: float, north_delta_m: float) -> void:
+	set_osm_imagery_offset(
+		_osm_offset_east_m + east_delta_m,
+		_osm_offset_north_m + north_delta_m)
+
+
+func auto_align_osm_to_imagery() -> void:
+	if _osm_vectors_raw.is_empty():
+		_notify_options_status("No OSM data yet — wait for map load", "warn")
+		return
+	_osm_offset_user_set = false
+	_osm_offset_east_m = 0.0
+	_osm_offset_north_m = 0.0
+	var suggested := OsmRegistration.suggest_brc_offset_m(
+		_lat, _lon, _osm_vectors_raw)
+	if suggested.length() < 80.0:
+		_notify_options_status("No BRC year mismatch detected at this site", "info")
+		_rebind_osm_registration(true)
+		return
+	set_osm_imagery_offset(suggested.x, suggested.y)
+
+
+func clear_osm_imagery_offset() -> void:
+	set_osm_imagery_offset(0.0, 0.0)
 
 
 ## ---------------------------------------------------------------------------
@@ -573,11 +748,29 @@ func _run_load_sequence() -> void:
 	if es != null and es.has_method("reset_session"):
 		es.reset_session()
 
+	# Fresh launch: bypass DEM/imagery AND wipe OSM caches so BuildingService
+	# cannot serve a stale vector file while Elevation/Imagery refetch.
+	if _force_refetch or not TerrainCacheSettings.cache_enabled():
+		var n := TerrainCacheSettings.invalidate_osm_vectors(_lat, _lon)
+		n += TerrainCacheSettings.invalidate_osm_vegetation(_lat, _lon)
+		if _force_refetch:
+			n += TerrainCacheSettings.invalidate_dem(_lat, _lon)
+			n += TerrainCacheSettings.invalidate_imagery(_lat, _lon)
+		print("TerrainLoader: fresh load — cleared %d site cache file(s); skipping placed props" % n)
+
 	# 1. Base DEM
 	if es != null:
 		_phase_begin("elev:base")
+		if _force_refetch or not TerrainCacheSettings.cache_enabled():
+			_update_load_ui("Elevation — downloading (cache bypassed) …")
+		else:
+			_update_load_ui("Elevation — checking cache / fetching …")
+		if _load_progress != null:
+			_load_progress.set_partial("base_dem", 0.02)
+			_update_load_ui()
+		var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
 		es.request_elevation(_lat, _lon, _half_extent,
-			ElevationService.base_grid_n_for_extent(_half_extent), "base")
+			ElevationService.base_grid_n_for_extent(_half_extent), "base", bypass)
 		if not await _phase_await(_elev_phase_timeout_s()):
 			_apply_elevation_fallback("base", "timed out waiting for elevation")
 		await _settle_gpu()
@@ -592,7 +785,9 @@ func _run_load_sequence() -> void:
 	var img := get_node_or_null("/root/ImageryService")
 	if img != null:
 		_phase_begin("img:base")
-		img.request_imagery(_lat, _lon, _half_extent, _base_imagery_target_px())
+		var bypass_img := _force_refetch or not TerrainCacheSettings.cache_enabled()
+		img.request_imagery(_lat, _lon, _half_extent, _base_imagery_target_px(),
+			"base", 17, bypass_img)
 		if not await _phase_await(_imagery_phase_timeout_s()):
 			_apply_imagery_fallback("base")
 		await _settle_gpu()
@@ -607,8 +802,17 @@ func _run_load_sequence() -> void:
 	# 5–9. Detail imagery, OSM overlays, vegetation, camps.
 	await _run_post_terrain_sequence()
 
+	# Final seating pass: props/buildings/camps on the composed heightfield
+	# before first-person control (stored ground_y can be stale after mean-elev
+	# or DEM changes; OSM/camps already use live footing on attach).
+	_seat_world_content_for_play()
+
 	if not _from_resume:
 		_finalize_spawn_actors()
+
+	TerrainCacheSettings.save_meta_extents(
+		_lat, _lon, _half_extent, _detail_half_extent, _osm_half_extent,
+		_osm_offset_east_m, _osm_offset_north_m)
 
 	_load_sequence_active = false
 	_check_load_complete()
@@ -624,6 +828,7 @@ func _run_load_sequence() -> void:
 		soi.load_for_site(_lat, _lon)
 		soi.bind_terrain(self)
 	call_deferred("_try_seed_starshade_graph")
+	call_deferred("_notify_graph_map_ready")
 
 
 func _fetch_detail_dem_phase(es: Node) -> void:
@@ -638,8 +843,9 @@ func _fetch_detail_dem_phase(es: Node) -> void:
 		if not has_key:
 			_update_load_ui("Loading hi-res centre elevation (first visit only — cached after) …")
 		_phase_begin("elev:detail")
+		var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
 		es.request_elevation(_lat, _lon, _detail_half_extent,
-			ElevationService.DETAIL_GRID_N, "detail")
+			ElevationService.DETAIL_GRID_N, "detail", bypass)
 		if not await _phase_await(300.0):
 			if not _recover_detail_dem_from_cache():
 				_skip_detail_dem()
@@ -654,12 +860,14 @@ func _fetch_detail_dem_phase(es: Node) -> void:
 
 func _run_post_terrain_sequence() -> void:
 	# Detail DEM already fetched in _run_load_sequence before terrain build.
+	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
 
 	# 5. Hi-res centre imagery + detail-drape shader.
 	var img := get_node_or_null("/root/ImageryService")
 	if img != null:
 		_phase_begin("img:detail")
-		img.request_imagery(_lat, _lon, _detail_half_extent, DETAIL_TARGET_PX, "detail", DETAIL_MAX_ZOOM)
+		img.request_imagery(_lat, _lon, _detail_half_extent, DETAIL_TARGET_PX, "detail",
+			DETAIL_MAX_ZOOM, bypass)
 		if not await _phase_await(180.0):
 			push_warning("TerrainLoader: detail imagery phase timed out — applying if ready")
 		if _detail_drape != null:
@@ -675,7 +883,7 @@ func _run_post_terrain_sequence() -> void:
 	if bs != null:
 		_phase_begin("osm_map")
 		var cfg := _terrain_config()
-		bs.request_osm_vectors(_lat, _lon, _osm_half_extent, cfg.flatten_landuse)
+		bs.request_osm_vectors(_lat, _lon, _osm_half_extent, cfg.flatten_landuse, bypass)
 		if await _phase_await(180.0):
 			await _apply_osm_overlays()
 		else:
@@ -689,7 +897,7 @@ func _run_post_terrain_sequence() -> void:
 		var vs := get_node_or_null("/root/VegetationService")
 		if vs != null:
 			_phase_begin("osm_veg")
-			vs.request_vegetation(_lat, _lon, _osm_half_extent)
+			vs.request_vegetation(_lat, _lon, _osm_half_extent, bypass)
 			if await _phase_await(180.0):
 				await _auto_veg_scatter_async(false)
 			_load_progress_mark_done("osm_veg")
@@ -709,22 +917,26 @@ func _apply_elevation_fallback(tag: String, reason: String = "") -> void:
 	if tag == "detail":
 		_skip_detail_dem()
 		return
-	var recovered := ElevationService.find_usable_cached_dem(_lat, _lon, "base")
-	if recovered.is_empty():
-		recovered = ElevationService.find_usable_cached_dem(_lat, _lon)
-	if not recovered.is_empty():
-		push_warning("TerrainLoader: live elevation failed — using recovered cached DEM")
-		_elev_grid = recovered["grid"]
-		_elev_cols = int(recovered["cols"])
-		_elev_rows = int(recovered["rows"])
-		_elev_done = true
-		_load_progress_mark_done("base_dem")
-		var msg := "Elevation fetch failed — using last cached terrain"
-		if not reason.is_empty():
-			msg += " (%s)" % _short_fetch_error(reason)
-		_notify_options_status(msg, "warn")
-		_toast(msg, ToastUI.Level.WARN)
-		return
+	# Fresh / no-cache launches must not silently revive a deleted DEM.
+	if not _force_refetch and TerrainCacheSettings.cache_enabled():
+		var recovered := ElevationService.find_usable_cached_dem(
+			_lat, _lon, "base", _half_extent)
+		if recovered.is_empty():
+			recovered = ElevationService.find_usable_cached_dem(
+				_lat, _lon, "", _half_extent)
+		if not recovered.is_empty():
+			push_warning("TerrainLoader: live elevation failed — using recovered cached DEM")
+			_elev_grid = recovered["grid"]
+			_elev_cols = int(recovered["cols"])
+			_elev_rows = int(recovered["rows"])
+			_elev_done = true
+			_load_progress_mark_done("base_dem")
+			var msg := "Elevation fetch failed — using last cached terrain"
+			if not reason.is_empty():
+				msg += " (%s)" % _short_fetch_error(reason)
+			_notify_options_status(msg, "warn")
+			_toast(msg, ToastUI.Level.WARN)
+			return
 	push_warning("TerrainLoader: elevation fetch failed — using flat fallback (%s)" % reason)
 	var es := get_node_or_null("/root/ElevationService")
 	var has_key: bool = es != null and es.has_method("has_opentopo_key") and bool(es.has_opentopo_key())
@@ -763,7 +975,10 @@ func _skip_detail_dem() -> void:
 ## (quota/offline). Returns true and seats _detail_elev_* so the heightfield rebuild
 ## picks up local relief; false when no cached detail DEM exists for this site.
 func _recover_detail_dem_from_cache() -> bool:
-	var recovered := ElevationService.find_usable_cached_dem(_lat, _lon, "detail")
+	if _force_refetch or not TerrainCacheSettings.cache_enabled():
+		return false
+	var recovered := ElevationService.find_usable_cached_dem(
+		_lat, _lon, "detail", _detail_half_extent)
 	if recovered.is_empty():
 		return false
 	var grid: PackedFloat32Array = recovered["grid"]
@@ -819,8 +1034,8 @@ func _apply_solar_arrays() -> void:
 	var arrays: Array = _osm_vectors.get("solar", []) as Array
 	if arrays.is_empty():
 		return
-	var tilt := SolarArrayBuilder.default_tilt_deg(_lat)
 	var azimuth := SolarArrayBuilder.default_azimuth_deg(_lat)
+	var panel_spec := SolarArrayBuilder.default_panel_spec()
 	var container := Node3D.new()
 	container.name = "SolarArrays"
 	terrain.add_child(container)
@@ -829,24 +1044,37 @@ func _apply_solar_arrays() -> void:
 	for rec in arrays:
 		if not (rec is Dictionary):
 			continue
+		var tags: Dictionary = (rec as Dictionary).get("tags", {})
 		var poly: PackedVector2Array = (rec as Dictionary).get("points", PackedVector2Array())
 		if poly.size() < 3:
 			continue
-		var panels := SolarArrayBuilder.plan_panels(poly, tilt)
+		var mount_style := SolarArrayBuilder.infer_mount_style(tags)
+		var mount_defs := SolarArrayBuilder.mount_defaults(mount_style, _lat)
+		var tilt := float(mount_defs["tilt_deg"])
+		var row_spec := panel_spec.duplicate(true)
+		row_spec["row_gap_m"] = float(panel_spec["row_gap_m"]) * float(mount_defs.get("row_gap_scale", 1.0))
+		var panels := SolarArrayBuilder.plan_panels(poly, tilt, row_spec)
 		if panels.is_empty():
 			continue
-		var base_y := _solar_array_base_y(poly, (rec as Dictionary).get("tags", {}))
-		var node := SolarArrayBuilder.build_array_node("Array_%d" % idx, panels, base_y, tilt)
+		var base_y := _solar_array_base_y(poly, tags)
+		var node := SolarArrayBuilder.build_array_node(
+			"Array_%d" % idx, panels, base_y, tilt, row_spec, mount_style)
 		container.add_child(node)
 		var tag := _solar_array_tag(poly)
 		_solar_arrays.append({
 			"name": "Array_%d" % idx,
 			"poly": poly,
 			"panel_count": panels.size(),
-			"watts": SolarArrayBuilder.PANEL_WATTS,
+			"watts": float(panel_spec["panel_watts"]),
+			"panel_w_m": float(panel_spec["panel_w_m"]),
+			"panel_h_m": float(panel_spec["panel_h_m"]),
+			"gap_x_m": float(panel_spec["gap_x_m"]),
+			"row_gap_m": float(row_spec["row_gap_m"]),
+			"voc": float(panel_spec["voc"]),
 			"base_y": base_y,
 			"tilt": tilt,
 			"azimuth": azimuth,
+			"mount_style": mount_style,
 			"tag": tag,
 			"added": _added_solar_tags.has(tag),
 		})
@@ -855,7 +1083,7 @@ func _apply_solar_arrays() -> void:
 	if _solar_arrays.is_empty():
 		container.queue_free()
 		return
-	var kw := float(total) * SolarArrayBuilder.PANEL_WATTS / 1000.0
+	var kw := float(total) * float(panel_spec["panel_watts"]) / 1000.0
 	print("TerrainLoader: built %d OSM solar array(s), %d panel(s) (%.2f kW) — aim the crosshair at one and press Interact to add it to the system graph" % [
 		_solar_arrays.size(), total, kw])
 	_notify_options_status("Found %d OSM solar array(s) — look at one and press Interact to add it" % _solar_arrays.size(), "info")
@@ -901,14 +1129,14 @@ func _feed_solar_ui(panel_count: int, watts: float, tilt_deg: float, azimuth_deg
 
 
 func _feed_solar_graph(panel_count: int, watts: float, label: String = "OSM Solar",
-		array_tag: String = "") -> void:
+		array_tag: String = "", opts: Dictionary = {}) -> void:
 	if _main == null:
 		return
 	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
 	if sgv == null:
 		sgv = get_tree().root.find_child("SystemGraphView", true, false)
 	if sgv != null and sgv.has_method("add_imported_solar_panels"):
-		sgv.call("add_imported_solar_panels", panel_count, watts, label, array_tag)
+		sgv.call("add_imported_solar_panels", panel_count, watts, label, array_tag, opts)
 
 
 ## ---------------------------------------------------------------------------
@@ -952,6 +1180,353 @@ func clear_graph_solar_highlight() -> void:
 		_draw_solar_highlight(_solar_focus_idx)
 	else:
 		_clear_solar_highlight()
+
+
+## Import OSM roof footprint as a rain catchment on the system graph.
+func add_building_catchment_to_graph(idx: int) -> bool:
+	var info := BuildingPicker.footprint_info(_buildings_data, idx)
+	if not bool(info.get("valid", false)):
+		return false
+	var tag := get_building_tag(idx)
+	if tag.is_empty():
+		return false
+	var poly: PackedVector2Array = info.get("points", PackedVector2Array())
+	var centroid: Vector2 = info.get("centroid", Vector2.ZERO)
+	var area := float(info.get("area_m2", BuildingBuilder.footprint_area_m2(poly)))
+	var graph := _find_system_graph_view()
+	if graph == null or not graph.has_method("add_imported_catchment"):
+		_notify_options_status("System graph unavailable for catchment import", "warn")
+		return false
+	var ok: bool = bool(graph.call("add_imported_catchment", {
+		"osm_tag": tag,
+		"label": "Roof Catchment",
+		"area_m2": maxf(area, 1.0),
+		"runoff_coeff": 0.85,
+		"centroid": centroid,
+		"width_m": float(info.get("width_m", 5.0)),
+		"depth_m": float(info.get("depth_m", 5.0)),
+		"points": poly,
+	}))
+	if ok:
+		_notify_options_status(
+				"Added roof catchment: %.0f m² → system graph" % area, "ok")
+		print("TerrainLoader: added OSM building catchment '%s' (%.0f m²) to the system graph" % [tag, area])
+	return ok
+
+
+## Stable identity for a still-water body (metre-rounded centroid).
+func _water_body_tag(poly: PackedVector2Array) -> String:
+	var c := SolarArrayBuilder.centroid(poly)
+	return "osm_water_%d_%d" % [roundi(c.x), roundi(c.y)]
+
+
+## Mean pond depth heuristic (m) from surface area — shallow farm ponds → deeper basins.
+static func _pond_mean_depth_m(area_m2: float) -> float:
+	return clampf(0.8 + sqrt(maxf(area_m2, 1.0)) / 40.0, 0.8, 3.5)
+
+
+## Import OSM still-water polygon as graph catchment + linked water storage tank.
+func add_pond_to_graph(idx: int) -> bool:
+	if idx < 0 or idx >= _water_data.size():
+		return false
+	var item: Variant = _water_data[idx]
+	if not (item is Dictionary):
+		return false
+	var kind := str((item as Dictionary).get("kind", "water"))
+	if kind in WaterBuilder.FLOWING_KINDS:
+		_notify_options_status("Flowing waterway — pick a pond/lake body", "warn")
+		return false
+	var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
+	if poly.size() < 3:
+		return false
+	var area := BuildingBuilder.footprint_area_m2(poly)
+	if area < 1.0:
+		return false
+	var tag := _water_body_tag(poly)
+	var c := SolarArrayBuilder.centroid(poly)
+	var depth := _pond_mean_depth_m(area)
+	var capacity_l := area * depth * 1000.0
+	var graph := _find_system_graph_view()
+	if graph == null or not graph.has_method("add_imported_pond"):
+		_notify_options_status("System graph unavailable for pond import", "warn")
+		return false
+	var min_v := poly[0]
+	var max_v := poly[0]
+	for p in poly:
+		min_v.x = minf(min_v.x, p.x)
+		min_v.y = minf(min_v.y, p.y)
+		max_v.x = maxf(max_v.x, p.x)
+		max_v.y = maxf(max_v.y, p.y)
+	var ok: bool = bool(graph.call("add_imported_pond", {
+		"osm_water_tag": tag,
+		"label": "Pond (%s)" % kind.capitalize(),
+		"area_m2": area,
+		"mean_depth_m": depth,
+		"capacity_l": capacity_l,
+		"runoff_coeff": 1.0,
+		"centroid": c,
+		"width_m": maxf(max_v.x - min_v.x, 1.0),
+		"depth_m": maxf(max_v.y - min_v.y, 1.0),
+		"points": poly,
+	}))
+	if ok:
+		_added_pond_tags[tag] = true
+		_notify_options_status(
+				"Added pond: %.0f m² / %.0f L → system graph" % [area, capacity_l], "ok")
+		print("TerrainLoader: added pond '%s' (%.0f m², %.0f L) to the system graph" % [
+			tag, area, capacity_l])
+	return ok
+
+
+## Sculpt-selection basin → catchment + storage (tag from rect centroid).
+func add_sculpted_pond_to_graph(rect_min: Vector2, rect_max: Vector2) -> bool:
+	var x0 := minf(rect_min.x, rect_max.x)
+	var x1 := maxf(rect_min.x, rect_max.x)
+	var z0 := minf(rect_min.y, rect_max.y)
+	var z1 := maxf(rect_min.y, rect_max.y)
+	var w := x1 - x0
+	var d := z1 - z0
+	if w < 2.0 or d < 2.0:
+		return false
+	var poly := PackedVector2Array([
+		Vector2(x0, z0), Vector2(x1, z0), Vector2(x1, z1), Vector2(x0, z1),
+	])
+	var area := w * d
+	var c := Vector2((x0 + x1) * 0.5, (z0 + z1) * 0.5)
+	var tag := "sculpt_pond_%d_%d" % [roundi(c.x), roundi(c.y)]
+	var depth := _pond_mean_depth_m(area)
+	var capacity_l := area * depth * 1000.0
+	var graph := _find_system_graph_view()
+	if graph == null or not graph.has_method("add_imported_pond"):
+		_notify_options_status("System graph unavailable for pond import", "warn")
+		return false
+	var ok: bool = bool(graph.call("add_imported_pond", {
+		"osm_water_tag": tag,
+		"label": "Sculpted Pond",
+		"area_m2": area,
+		"mean_depth_m": depth,
+		"capacity_l": capacity_l,
+		"runoff_coeff": 1.0,
+		"centroid": c,
+		"width_m": w,
+		"depth_m": d,
+		"points": poly,
+	}))
+	if ok:
+		_added_pond_tags[tag] = true
+		_notify_options_status(
+				"Added sculpted pond: %.0f m² / %.0f L → system graph" % [area, capacity_l], "ok")
+	return ok
+
+
+func pick_water_at_world(x: float, z: float) -> Dictionary:
+	var p := Vector2(x, z)
+	var best_idx := -1
+	var best_area := INF
+	for i in _water_data.size():
+		var item: Variant = _water_data[i]
+		if not (item is Dictionary):
+			continue
+		var kind := str((item as Dictionary).get("kind", "water"))
+		if kind in WaterBuilder.FLOWING_KINDS:
+			continue
+		var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
+		if poly.size() < 3 or not Geometry2D.is_point_in_polygon(p, poly):
+			continue
+		var area := BuildingBuilder.footprint_area_m2(poly)
+		# Prefer the smallest containing body (pond over lake containing it).
+		if area < best_area:
+			best_area = area
+			best_idx = i
+	if best_idx < 0:
+		return {"valid": false}
+	var rec: Dictionary = _water_data[best_idx]
+	var poly2: PackedVector2Array = rec.get("points", PackedVector2Array())
+	var tag := _water_body_tag(poly2)
+	return {
+		"valid": true,
+		"water_idx": best_idx,
+		"kind": str(rec.get("kind", "water")),
+		"area_m2": BuildingBuilder.footprint_area_m2(poly2),
+		"tag": tag,
+		"added": _added_pond_tags.has(tag),
+	}
+
+
+func get_water_focus_idx() -> int:
+	return _water_focus_idx
+
+
+func set_water_focus_idx(idx: int) -> void:
+	if idx == _water_focus_idx:
+		return
+	_water_focus_idx = idx
+	if idx < 0:
+		_clear_water_highlight()
+		return
+	_draw_water_highlight(idx)
+
+
+func is_pond_added(idx: int) -> bool:
+	if idx < 0 or idx >= _water_data.size():
+		return false
+	var item: Variant = _water_data[idx]
+	if not (item is Dictionary):
+		return false
+	var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
+	return _added_pond_tags.has(_water_body_tag(poly))
+
+
+func _draw_water_highlight(idx: int, tint: Color = Color(0.15, 0.55, 1.0, 0.45)) -> void:
+	if _main == null or idx < 0 or idx >= _water_data.size():
+		return
+	var terrain := _main.get_node_or_null("Terrain")
+	if terrain == null:
+		return
+	var rec: Dictionary = _water_data[idx]
+	var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
+	if poly.size() < 3:
+		return
+	if _water_highlight == null:
+		_water_highlight = MeshInstance3D.new()
+		_water_highlight.name = "WaterPondHighlight"
+		terrain.add_child(_water_highlight)
+	var mat := _water_highlight.material_override as StandardMaterial3D
+	if mat == null:
+		mat = StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_water_highlight.material_override = mat
+	mat.albedo_color = tint
+	var footing := _highlight_footing_grid(false)
+	_water_highlight.mesh = TerrainBuilder.build_polygon_highlight(
+		poly, footing["grid"], footing["res"], footing["extent"], _built_center_elev, 0.35)
+	_water_highlight.visible = true
+
+
+func _clear_water_highlight() -> void:
+	if _water_highlight != null:
+		_water_highlight.visible = false
+
+
+## Refresh D8 watershed on the composed heightfield (call after major rebuilds).
+func refresh_watershed_analysis() -> void:
+	if _built_grid.is_empty() or _built_extent <= 0.0:
+		_watershed_analysis = null
+		return
+	_watershed_analysis = Watershed.analyze(_built_grid, MESH_RES, _built_extent)
+
+
+func get_watershed_analysis():
+	if _watershed_analysis == null and not _built_grid.is_empty():
+		refresh_watershed_analysis()
+	return _watershed_analysis
+
+
+## Upstream catchment area (m²) at a world XZ — 0 when analysis unavailable.
+func watershed_upstream_area_m2(x: float, z: float) -> float:
+	var a: Variant = get_watershed_analysis()
+	if a == null:
+		return 0.0
+	var cell := Watershed.world_to_cell(a, x, z)
+	return Watershed.upstream_area_m2(a, cell.x, cell.y)
+
+
+## Import OSM vegetation polygon as a plant/crop bed on the system graph.
+## Prefer grass_field / orchard / vineyard; other kinds still allowed if caller asks.
+func add_veg_area_plant_to_graph(idx: int) -> bool:
+	var polys: Variant = _auto_veg_data.get("polygons", [])
+	if not (polys is Array):
+		return false
+	var info := VegAreaPicker.area_info(polys as Array, idx)
+	if not bool(info.get("valid", false)):
+		return false
+	var kind := str(info.get("kind", ""))
+	var preferred := kind in ["grass_field", "orchard", "vineyard", "park", "grass_lawn"]
+	if not preferred and not kind.is_empty():
+		# Still allow forest/scrub as canopy beds — label reflects kind.
+		pass
+	var tag := str(info.get("tag", ""))
+	if tag.is_empty():
+		return false
+	var poly: PackedVector2Array = info.get("points", PackedVector2Array())
+	var centroid: Vector2 = info.get("centroid", Vector2.ZERO)
+	var area := float(info.get("area_m2", 0.0))
+	if area <= 0.0 and poly.size() >= 3:
+		area = BuildingBuilder.footprint_area_m2(poly)
+	var min_v := poly[0]
+	var max_v := poly[0]
+	for p in poly:
+		min_v.x = minf(min_v.x, p.x)
+		min_v.y = minf(min_v.y, p.y)
+		max_v.x = maxf(max_v.x, p.x)
+		max_v.y = maxf(max_v.y, p.y)
+	var graph := _find_system_graph_view()
+	if graph == null or not graph.has_method("add_imported_plant"):
+		_notify_options_status("System graph unavailable for plant import", "warn")
+		return false
+	var label := "OSM %s" % str(info.get("kind_label", "field")).capitalize()
+	var ok: bool = bool(graph.call("add_imported_plant", {
+		"osm_tag": tag,
+		"label": label,
+		"area_m2": maxf(area, 1.0),
+		"centroid": centroid,
+		"width_m": maxf(max_v.x - min_v.x, 1.0),
+		"depth_m": maxf(max_v.y - min_v.y, 1.0),
+		"points": poly,
+		"veg_kind": kind,
+	}))
+	if ok:
+		_notify_options_status(
+				"Added crop area: %.0f m² (%s) → system graph" % [area, kind], "ok")
+		print("TerrainLoader: added OSM veg plant '%s' (%.0f m², %s) to the system graph" % [tag, area, kind])
+	return ok
+
+
+## Highlight roof / veg by osm_tag for graph ↔ world selection sync.
+func highlight_building_by_tag(tag: String) -> bool:
+	if tag.is_empty():
+		return false
+	for i in _buildings_data.size():
+		if not (_buildings_data[i] is Dictionary):
+			continue
+		var pts: Variant = (_buildings_data[i] as Dictionary).get("points", PackedVector2Array())
+		if not (pts is PackedVector2Array):
+			continue
+		if BuildingBuilder.building_tag(pts) == tag:
+			var idx := int((_buildings_data[i] as Dictionary).get("idx", i))
+			set_building_focus_idx(idx)
+			return true
+	return false
+
+
+func highlight_veg_by_tag(tag: String) -> bool:
+	if tag.is_empty():
+		return false
+	var polys: Variant = _auto_veg_data.get("polygons", [])
+	if not (polys is Array):
+		return false
+	for i in (polys as Array).size():
+		var info := VegAreaPicker.area_info(polys as Array, i)
+		if str(info.get("tag", "")) == tag:
+			set_veg_focus_idx(i)
+			return true
+	return false
+
+
+func clear_graph_osm_area_highlight() -> void:
+	set_building_focus_idx(-1)
+	set_veg_focus_idx(-1)
+
+
+func _find_system_graph_view() -> Node:
+	if _main == null:
+		return null
+	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+	if sgv == null:
+		sgv = get_tree().root.find_child("SystemGraphView", true, false)
+	return sgv
 
 
 func get_prop_graph_item_id(prop_id: String) -> String:
@@ -1047,22 +1622,56 @@ func get_solar_array_info(idx: int) -> Dictionary:
 	}
 
 
-## Add the targeted array's panels to the system graph and fold its capacity into the
-## accumulated SolarUI generation. Idempotent per array (keyed by tag).
-func add_solar_array_to_graph(idx: int) -> bool:
+## Add the targeted array to the system graph as one compound array node and fold
+## its capacity into SolarUI. Idempotent per array (keyed by tag). Recomputes
+## panel count from the footprint + configured module dimensions before import.
+func add_solar_array_to_graph(idx: int, opts: Dictionary = {}) -> bool:
 	if idx < 0 or idx >= _solar_arrays.size():
 		return false
 	var rec: Dictionary = _solar_arrays[idx]
 	if bool(rec.get("added", false)):
 		return false
+	var poly: PackedVector2Array = rec.get("poly", PackedVector2Array())
+	var tilt := float(rec.get("tilt", SolarArrayBuilder.default_tilt_deg(_lat)))
+	var panel_spec := SolarArrayBuilder.resolve_panel_spec({
+		"panel_w_m": float(opts.get("panel_w_m", rec.get("panel_w_m", SolarArrayBuilder.PANEL_W))),
+		"panel_h_m": float(opts.get("panel_h_m", rec.get("panel_h_m", SolarArrayBuilder.PANEL_H))),
+		"panel_watts": float(opts.get("watts", rec.get("watts", SolarArrayBuilder.PANEL_WATTS))),
+		"gap_x_m": float(opts.get("gap_x_m", rec.get("gap_x_m", SolarArrayBuilder.GAP_X))),
+		"row_gap_m": float(opts.get("row_gap_m", rec.get("row_gap_m", SolarArrayBuilder.ROW_GAP))),
+		"voc": float(opts.get("voc", rec.get("voc", SolarArrayBuilder.PANEL_VOC))),
+	})
 	var count := int(rec.get("panel_count", 0))
+	if poly.size() >= 3:
+		count = SolarArrayBuilder.count_panels_for_footprint(poly, tilt, panel_spec)
+		rec["panel_count"] = count
+		rec["watts"] = float(panel_spec["panel_watts"])
+		rec["panel_w_m"] = float(panel_spec["panel_w_m"])
+		rec["panel_h_m"] = float(panel_spec["panel_h_m"])
 	if count <= 0:
 		return false
-	var watts := float(rec.get("watts", SolarArrayBuilder.PANEL_WATTS))
+	var watts := float(panel_spec["panel_watts"])
 	var tag := str(rec.get("tag", ""))
 	rec["added"] = true
 	_added_solar_tags[tag] = {"count": count, "watts": watts}
-	_feed_solar_graph(count, watts, "OSM Solar", tag)
+	var feed_opts := {
+		"panel_w_m": float(panel_spec["panel_w_m"]),
+		"panel_h_m": float(panel_spec["panel_h_m"]),
+		"gap_x_m": float(panel_spec["gap_x_m"]),
+		"row_gap_m": float(panel_spec["row_gap_m"]),
+		"voc": float(panel_spec["voc"]),
+		"vmp": float(panel_spec["vmp"]),
+		"isc": float(panel_spec["isc"]),
+		"imp": float(panel_spec["imp"]),
+		"tilt_deg": tilt,
+		"mount_style": str(opts.get("mount_style", rec.get("mount_style", SolarArrayBuilder.MOUNT_ROOF))),
+		"footprint_xz": poly,
+		"auto_wire": bool(opts.get("auto_wire", true)),
+		"show_picker": bool(opts.get("show_picker", true)),
+	}
+	if opts.has("controller_id"):
+		feed_opts["controller_id"] = str(opts["controller_id"])
+	_feed_solar_graph(count, watts, "OSM Solar", tag, feed_opts)
 	_refresh_added_solar_total()
 	if idx == _solar_focus_idx:
 		_clear_solar_highlight()
@@ -1070,6 +1679,48 @@ func add_solar_array_to_graph(idx: int) -> bool:
 	_notify_options_status("Added solar array: %d panels, %.2f kW → system graph" % [count, kw], "ok")
 	print("TerrainLoader: added OSM solar array '%s' (%d panels, %.2f kW) to the system graph" % [tag, count, kw])
 	return true
+
+
+## Arrays whose centroid lies inside the current SoI and are not yet graph-imported.
+## Returns [{idx, tag, panel_count, watts, centroid}].
+func list_soi_solar_arrays_pending() -> Array:
+	var out: Array = []
+	var soi := get_node_or_null("/root/SoiService")
+	for i in _solar_arrays.size():
+		var rec: Dictionary = _solar_arrays[i]
+		if bool(rec.get("added", false)):
+			continue
+		var poly: PackedVector2Array = rec.get("poly", PackedVector2Array())
+		if poly.size() < 3:
+			continue
+		var c := SolarArrayBuilder.centroid(poly)
+		if soi != null and soi.has_method("contains_xz") \
+				and not bool(soi.call("contains_xz", c.x, c.y)):
+			continue
+		out.append({
+			"idx": i,
+			"tag": str(rec.get("tag", "")),
+			"panel_count": int(rec.get("panel_count", 0)),
+			"watts": float(rec.get("watts", SolarArrayBuilder.PANEL_WATTS)),
+			"centroid": c,
+		})
+	return out
+
+
+## Import every pending SoI solar array into the graph. Returns how many arrays added.
+## Bulk import auto-wires without a per-array picker dialog.
+func add_all_soi_solar_arrays_to_graph() -> int:
+	var pending := list_soi_solar_arrays_pending()
+	var n := 0
+	for entry in pending:
+		if add_solar_array_to_graph(int(entry.get("idx", -1)), {
+			"show_picker": false,
+			"auto_wire": true,
+		}):
+			n += 1
+	if n > 0:
+		_notify_options_status("Added %d OSM solar array(s) inside SoI → system graph" % n, "ok")
+	return n
 
 
 ## Feed SolarUI the accumulated panel total across every array the player has added.
@@ -1311,8 +1962,9 @@ func _request_hyper_imagery() -> void:
 	var img := get_node_or_null("/root/ImageryService")
 	if img == null:
 		return
+	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
 	img.request_imagery(_lat, _lon, HYPER_HALF_EXTENT, _hyper_target_px(),
-		"hyper", HYPER_MAX_ZOOM)
+		"hyper", HYPER_MAX_ZOOM, bypass)
 
 
 func _hyper_target_px() -> int:
@@ -1326,6 +1978,31 @@ func _hyper_target_px() -> int:
 func _base_imagery_target_px() -> int:
 	var side_km := _half_extent * 2.0 / 1000.0
 	return clampi(int(side_km * 32.0), 2048, 8192)
+
+
+func _base_drape_bbox() -> Dictionary:
+	return GeoMath.bbox_for(_lat, _lon, _half_extent)
+
+
+func _detail_drape_bbox() -> Dictionary:
+	return GeoMath.bbox_for(_lat, _lon, _detail_half_extent)
+
+
+## Stamp Mercator-correction bboxes onto Ground / DetailGround shader materials
+## so mesh UV (lon/lat-linear) samples ESRI drapes at the matching WGS84 point.
+func _stamp_drape_mercator_bboxes(terrain: Node3D = null) -> void:
+	if terrain == null and _main != null:
+		terrain = _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	var base_bb := _base_drape_bbox()
+	var detail_bb := _detail_drape_bbox()
+	for child_name in ["Ground", "DetailGround"]:
+		var mi := terrain.get_node_or_null(child_name) as MeshInstance3D
+		if mi == null or not (mi.material_override is ShaderMaterial):
+			continue
+		TerrainBuilder.apply_drape_bboxes(
+			mi.material_override as ShaderMaterial, base_bb, detail_bb)
 
 
 ## Swap the Ground material to the high-res-centre shader once the detail patch
@@ -1342,11 +2019,12 @@ func _apply_detail() -> void:
 			_seam_feather_m, _detail_extent_m())
 		detail_ground.material_override = TerrainBuilder.make_terrain_material(
 			_drape, _detail_drape, _built_extent, _detail_extent_m(),
-			true, false, false, feather_uv)
+			true, false, false, feather_uv, _base_drape_bbox(), _detail_drape_bbox())
 		if detail_ground.material_override != null:
 			detail_ground.material_override.render_priority = TerrainBuilder.DETAIL_GROUND_RENDER_PRIORITY
 	TerrainBuilder.sync_coarse_ground_hide(
 		terrain, _drape, _detail_drape, _built_extent, _detail_extent_m(), _seam_feather_m)
+	_stamp_drape_mercator_bboxes(terrain)
 	print("TerrainLoader: applied high-res centre drape (%.0f m square)" % (_detail_extent_m()))
 	_apply_building_textures()
 	_queue_auto_veg_generate(_auto_veg_generated)
@@ -1371,15 +2049,16 @@ func _apply_drape_materials() -> void:
 		return
 	_rebuild_coarse_surface(terrain)
 	_rebuild_detail_patch(terrain)
+	_stamp_drape_mercator_bboxes(terrain)
 	_apply_building_textures()
 	_queue_auto_veg_generate(_auto_veg_generated)
 	print("TerrainLoader: imagery drape refreshed")
 
 
 func _on_osm_vectors_ready(_key: String, payload: Dictionary) -> void:
-	_osm_vectors = payload
-	_buildings_data = payload.get("buildings", []) as Array
-	_water_data = payload.get("water", []) as Array
+	_osm_vectors_raw = payload
+	_maybe_autoseed_brc_osm_offset()
+	_rebind_osm_registration(false)
 	if _load_sequence_active:
 		_phase_resolve("osm_map", true)
 		return
@@ -1476,6 +2155,7 @@ func _attach_buildings(enable_shadows: bool = true) -> void:
 	print("TerrainLoader: extruded %d OSM buildings (%d styled) in %d ms (hi-res drape=%s)" % [
 		visible_buildings.size(), styled.size(), Time.get_ticks_msec() - t0,
 		"yes" if _detail_drape != null else "base only"])
+	_apply_cached_geometry_visibility()
 
 
 ## idx -> stable tag for every building carrying a style override. Prop-replaced
@@ -1640,10 +2320,14 @@ func _attach_camps() -> void:
 	if not cfg.generate_camps:
 		print("TerrainLoader._attach_camps: generate_camps disabled in config")
 		return
-	var roads: Array = _osm_vectors.get("roads", []) as Array
+	var all_roads: Array = _osm_vectors.get("roads", []) as Array
+	# Core annular streets only — Gate Road / airport / service spurs seed no camps.
+	var roads: Array = BrcCampGenerator.filter_camp_streets(all_roads)
+	if BrcCampGenerator.count_road_points(roads) < BrcCampGenerator.MIN_ROAD_SEGMENTS:
+		roads = all_roads
 	var road_pts := BrcCampGenerator.count_road_points(roads)
-	print("TerrainLoader._attach_camps: roads=%d ways, road_pts=%d (need>=%d)" % [
-		roads.size(), road_pts, BrcCampGenerator.MIN_ROAD_SEGMENTS])
+	print("TerrainLoader._attach_camps: roads=%d city_streets=%d road_pts=%d (need>=%d)" % [
+		all_roads.size(), roads.size(), road_pts, BrcCampGenerator.MIN_ROAD_SEGMENTS])
 	if road_pts < BrcCampGenerator.MIN_ROAD_SEGMENTS:
 		print("TerrainLoader._attach_camps: not enough road points — skipping auto-generate")
 		print("  Tip: open camp scatter UI (C key) and use BRC Auto or draw a selection")
@@ -1665,18 +2349,22 @@ func _attach_camps() -> void:
 	# if OSM's extent is the smaller of the two, silently clips real roads out of
 	# the mask, both of which read as camps not matching the real city layout.
 	var camp_area_half := minf(_detail_half_extent, _osm_half_extent)
-	print("TerrainLoader._attach_camps: generating (seed=%d, height_grid_size=%d, extent=%.0f, area_half=%.0f)" % [
-		seed, height_grid.size(), height_extent, camp_area_half])
+	# Clip to the city-street hull so camps stop at the outer ring (not Gate /
+	# airport roads that survive inside the OSM fetch radius).
+	var city_clip := BrcCampGenerator.compute_city_area(roads)
+	print("TerrainLoader._attach_camps: generating (seed=%d, height_grid_size=%d, extent=%.0f, area_half=%.0f, clip_pts=%d)" % [
+		seed, height_grid.size(), height_extent, camp_area_half, city_clip.size()])
 	var node := BrcCampGenerator.build_camps_node(
 		roads, _buildings_data, height_grid, height_res, height_extent,
 		_built_center_elev, camp_area_half, seed, _load_camp_profiles(), _main,
-		PackedVector2Array(), BrcCampGenerator.FILL_PROBABILITY, 0.0, 0.9, 1.18, 1.0,
+		city_clip, BrcCampGenerator.FILL_PROBABILITY, 0.0, 0.9, 1.18, 1.0,
 		cfg.camp_exclusion_r)
 	if node == null:
 		print("TerrainLoader._attach_camps: build_camps_node returned null")
 		return
 	terrain.add_child(node)
 	_camps_root = node
+	_apply_cached_geometry_visibility()
 	var stats: Dictionary = node.get_meta("stats", {})
 	print("TerrainLoader._attach_camps: done — %s" % str(stats))
 
@@ -1726,7 +2414,8 @@ func get_osm_roads() -> Array:
 	return _osm_vectors.get("roads", []) as Array
 
 
-## Convex hull of all road points — the camp scatter UI's "BRC Auto" area.
+## Convex hull of core city streets — the camp scatter UI's "BRC Auto" area.
+## For BRC this is an annular-sector outline (not a radial-percentile hull).
 func get_brc_city_area() -> PackedVector2Array:
 	var roads := get_osm_roads()
 	if roads.is_empty():
@@ -1745,7 +2434,10 @@ func generate_camps_in_polygon(poly: PackedVector2Array, params: Dictionary) -> 
 		return 0
 	_remove_existing_camps()
 
-	var roads: Array = _osm_vectors.get("roads", []) as Array
+	var all_roads: Array = _osm_vectors.get("roads", []) as Array
+	var roads: Array = BrcCampGenerator.filter_camp_streets(all_roads)
+	if BrcCampGenerator.count_road_points(roads) < 40:
+		roads = all_roads
 	var density := float(params.get("density", BrcCampGenerator.FILL_PROBABILITY))
 	var mix_bias := float(params.get("mix_bias", 0.0))
 	var scale_min := float(params.get("scale_min", 0.9))
@@ -1753,6 +2445,10 @@ func generate_camps_in_polygon(poly: PackedVector2Array, params: Dictionary) -> 
 	var light_density := float(params.get("light_density", 1.0))
 	var use_seed := int(params.get("seed", _camp_seed()))
 	var excl_r := float(params.get("exclusion_radius_m", _terrain_config().camp_exclusion_r))
+	var plot_depth := float(params.get("plot_depth_m", BrcCampGenerator.PLOT_DEPTH_M))
+	var scatter_step := float(params.get("scatter_step_m", BrcCampGenerator.SCATTER_STEP_M))
+	var light_lod := float(params.get("light_lod_m", -1.0))
+	var max_lights := int(params.get("max_pool_lights", -1))
 
 	if _footing_grid.is_empty():
 		_footing_grid = _compose_terrain_grids()["footing"]
@@ -1768,11 +2464,13 @@ func generate_camps_in_polygon(poly: PackedVector2Array, params: Dictionary) -> 
 		roads, _buildings_data, height_grid, height_res, height_extent,
 		_built_center_elev, minf(_detail_half_extent, _osm_half_extent), use_seed,
 		_load_camp_profiles(), _main,
-		poly, density, mix_bias, scale_min, scale_max, light_density, excl_r)
+		poly, density, mix_bias, scale_min, scale_max, light_density, excl_r,
+		plot_depth, scatter_step, light_lod, max_lights)
 	if node == null:
 		return 0
 	terrain.add_child(node)
 	_camps_root = node
+	_apply_cached_geometry_visibility()
 	var stats: Dictionary = node.get_meta("stats", {})
 	return int(stats.get("structures", 0))
 
@@ -1849,9 +2547,18 @@ func _make_world_roof_material() -> Material:
 	sm.set_shader_parameter("use_ortho", true)
 	sm.set_shader_parameter("ortho_tex", ortho)
 	var scale := 1.0
+	var ortho_half := HYPER_HALF_EXTENT
 	if _hyper_drape == null:
 		scale = BuildingBuilder.ORTHO_HALF_EXTENT_M / _detail_half_extent
+		ortho_half = _detail_half_extent
+	else:
+		ortho_half = HYPER_HALF_EXTENT
 	sm.set_shader_parameter("ortho_uv_scale", scale)
+	# Ortho texture covers this half-extent; UV2 is ORTHO_HALF-normalized then
+	# scaled — Mercator-correct samples into that coverage square.
+	var bb := GeoMath.bbox_for(_lat, _lon, ortho_half)
+	sm.set_shader_parameter("ortho_bbox", TerrainBuilder.bbox_to_shader_vec4(bb))
+	sm.set_shader_parameter("correct_ortho_mercator", true)
 	return mat
 
 
@@ -1903,6 +2610,7 @@ func _build_terrain() -> void:
 	if _built_collision_grid.size() == _built_grid.size():
 		TerrainBuilder.update_terrain_collision(
 			terrain, _built_collision_grid, MESH_RES, extent, center_elev)
+	_stamp_drape_mercator_bboxes(terrain)
 
 	# Temp floor stays until _finalize_spawn_actors seats the player on composed ground.
 	_setup_terrain_edit_ui()
@@ -2168,6 +2876,11 @@ func get_terrain_options() -> Dictionary:
 	opts["half_extent_m"] = _half_extent
 	opts["detail_half_extent_m"] = _detail_half_extent
 	opts["osm_half_extent_m"] = _osm_half_extent
+	opts["osm_offset_east_m"] = _osm_offset_east_m
+	opts["osm_offset_north_m"] = _osm_offset_north_m
+	# Terrain UI "geometry" toggle — not the map-select cache load flag.
+	opts["cached_geometry_visible"] = _cached_geometry_visible
+	opts["load_from_cache"] = not _force_refetch
 	return opts
 
 
@@ -2181,7 +2894,9 @@ func apply_terrain_extents(world_half_m: float, detail_half_m: float, osm_half_m
 	_save_terrain_config_value("world_half_extent_m", _half_extent)
 	_save_terrain_config_value("detail_half_extent_m", _detail_half_extent)
 	_save_terrain_config_value("osm_half_extent_m", _osm_half_extent)
-	TerrainCacheSettings.save_meta_extents(_lat, _lon, _half_extent, _detail_half_extent, _osm_half_extent)
+	TerrainCacheSettings.save_meta_extents(
+		_lat, _lon, _half_extent, _detail_half_extent, _osm_half_extent,
+		_osm_offset_east_m, _osm_offset_north_m)
 	_persist_active_map_definition_extents()
 	if not _built:
 		return
@@ -2224,6 +2939,8 @@ func _persist_active_map_definition_extents() -> void:
 	md.half_extent_m = _half_extent
 	md.detail_half_extent_m = _detail_half_extent
 	md.osm_half_extent_m = _osm_half_extent
+	md.osm_offset_east_m = _osm_offset_east_m
+	md.osm_offset_north_m = _osm_offset_north_m
 	ResourceSaver.save(md, path)
 
 
@@ -2262,8 +2979,44 @@ func set_show_water(on: bool) -> void:
 	_attach_water()
 
 
-func set_cache_enabled(on: bool) -> void:
-	TerrainCacheSettings.set_cache_enabled(on)
+## @deprecated Cache load is owned by map-select. Kept as a no-op redirect so
+## older UI hooks don't write a conflicting global cache flag mid-session.
+func set_cache_enabled(_on: bool) -> void:
+	pass
+
+
+## Show/hide DEM + OSM world geometry (Ground, buildings, water, camps, veg).
+## Does not affect placed props/lights or whether the next load uses disk cache.
+func set_cached_geometry_visible(on: bool) -> void:
+	_cached_geometry_visible = on
+	_apply_cached_geometry_visibility()
+
+
+func is_cached_geometry_visible() -> bool:
+	return _cached_geometry_visible
+
+
+func _apply_cached_geometry_visibility() -> void:
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	var on := _cached_geometry_visible
+	for child_name in ["Ground", "DetailGround", "Buildings", "BuildingsCustom",
+			"Water", "Camps", "AutoVegetation", "Vegetation", "SolarArrays"]:
+		var n := terrain.get_node_or_null(child_name) as Node3D
+		if n != null:
+			n.visible = on
+	# Named roots may differ slightly — also toggle known loader handles.
+	if _buildings_root != null and is_instance_valid(_buildings_root):
+		_buildings_root.visible = on
+	if _custom_buildings_root != null and is_instance_valid(_custom_buildings_root):
+		_custom_buildings_root.visible = on
+	if _water_root != null and is_instance_valid(_water_root):
+		_water_root.visible = on
+	if _camps_root != null and is_instance_valid(_camps_root):
+		_camps_root.visible = on
 
 
 ## Delete cached files for this map and re-fetch elevation (base + detail).
@@ -2607,6 +3360,7 @@ func _rebuild_heightfield(skip_overlays: bool = false) -> void:
 		_attach_buildings()
 		_attach_water()
 	_finish_heightfield_rebuild(had_detail)
+	_watershed_analysis = null  # lazy recompute via get_watershed_analysis()
 
 
 ## Same rebuild as _rebuild_heightfield, but spreads the heavy node construction
@@ -2651,6 +3405,7 @@ func _rebuild_heightfield_staggered(skip_overlays: bool = false) -> void:
 		if not is_instance_valid(terrain):
 			return
 	_finish_heightfield_rebuild(had_detail)
+	_watershed_analysis = null
 
 
 ## Recompose the terrain grids and refresh the synchronous footing state every
@@ -2685,6 +3440,7 @@ func _rebuild_coarse_surface(terrain: Node3D) -> void:
 			terrain, _built_grid, MESH_RES, _built_extent, _built_center_elev,
 			_drape, _detail_drape, _detail_extent_m(), false, _seam_feather_m,
 			_built_collision_grid)
+	_stamp_drape_mercator_bboxes(terrain)
 
 
 ## Hi-res centre patch: visual mesh + HeightMapShape3D collider (the big spike).
@@ -2702,6 +3458,7 @@ func _rebuild_detail_patch(terrain: Node3D) -> void:
 	TerrainBuilder.upsert_detail_patch(
 		terrain, mesh_grid, mesh_res, _detail_extent_m(),
 		_built_center_elev, _drape, _detail_drape, _built_extent, _seam_feather_m)
+	_stamp_drape_mercator_bboxes(terrain)
 	print("TerrainLoader: hi-res centre mesh %d×%d (%.0f m, ~%.1f m/vertex)" % [
 		mesh_res, mesh_res, _detail_extent_m(),
 		(_detail_extent_m()) / float(maxi(mesh_res - 1, 1))])
@@ -2719,6 +3476,19 @@ func _finish_heightfield_rebuild(had_detail: bool) -> void:
 	var soi := get_node_or_null("/root/SoiService")
 	if soi != null and soi.has_method("refresh_footing"):
 		soi.refresh_footing()
+
+
+## Seat props (and refresh building footing) on the final composed heightfield
+## before the player takes control. Camps are left alone — `_attach_camps` would
+## wipe manually scattered BRC camps when generate_camps is off.
+func _seat_world_content_for_play() -> void:
+	if not _built:
+		return
+	_reground_placed_props()
+	# Re-extrude OSM so skirts/floors use the composed footing (deferred prop
+	# rebuild can race the first attach; this is the authoritative pass).
+	if not _buildings_data.is_empty():
+		_attach_buildings(false)
 
 
 func _actors_off_ground() -> bool:
@@ -2957,7 +3727,9 @@ func _request_auto_vegetation() -> void:
 
 
 func _on_vegetation_osm_ready(_key: String, payload: Dictionary) -> void:
-	_auto_veg_data = payload
+	_auto_veg_data_raw = payload
+	_auto_veg_data = OsmRegistration.offset_payload(
+		_auto_veg_data_raw, _osm_offset_east_m, _osm_offset_north_m)
 	if _load_sequence_active:
 		_phase_resolve("osm_veg", true)
 		return
@@ -3297,6 +4069,8 @@ func _ensure_climelapse_capture() -> void:
 
 
 ## Capture an MP4 from the locked active camera by simulating forward.
+## When climelapse drone path has ≥2 waypoints, camera interpolates along it
+## (moving hyperlapse); otherwise the view stays locked at the current pose.
 func start_climelapse_export(start_abs: float, end_abs: float, time_scale: float, output_mp4: String, fps: int = 30) -> bool:
 	if output_mp4.is_empty():
 		return false
@@ -3310,7 +4084,13 @@ func start_climelapse_export(start_abs: float, end_abs: float, time_scale: float
 	if not rig.is_valid():
 		push_warning("Climelapse export: no active Camera3D — switch to player or drone view.")
 		return false
-		
+	if _climelapse_drone_path.size() >= 2:
+		rig.path = _climelapse_drone_path.duplicate(true)
+		rig.mode = "path"
+	elif bool(rig.mode == "drone") and _climelapse_drone_path.is_empty():
+		# Optional default sweep when exporting from drone with no saved points.
+		rig.ensure_default_hyperlapse_path()
+
 	_export_render_start = start_abs
 	_export_render_end = end_abs
 	_export_time_scale = time_scale
@@ -3319,14 +4099,36 @@ func start_climelapse_export(start_abs: float, end_abs: float, time_scale: float
 	_export_fps = maxi(1, fps)
 	_export_pending = true
 	_export_status_message = ""
-	
+
 	if _main != null and _main.has_method("set_absolute_hours"):
 		_main.call("set_absolute_hours", start_abs)
-		
+
 	_ensure_climelapse_capture()
 	_climelapse_capture.start_capture(self, start_abs, end_abs, time_scale, output_mp4, rig, fps)
 	climelapse_state_changed.emit()
 	return true
+
+
+func add_climelapse_path_waypoint() -> bool:
+	var tree := get_tree()
+	if tree == null:
+		return false
+	var cam := tree.root.get_viewport().get_camera_3d() if tree.root.get_viewport() else null
+	if cam == null:
+		push_warning("Climelapse path: no active Camera3D.")
+		return false
+	_climelapse_drone_path.append(ClimelapseCameraRig.waypoint_from_transform(cam.global_transform))
+	climelapse_state_changed.emit()
+	return true
+
+
+func clear_climelapse_path() -> void:
+	_climelapse_drone_path.clear()
+	climelapse_state_changed.emit()
+
+
+func get_climelapse_path_count() -> int:
+	return _climelapse_drone_path.size()
 
 
 func cancel_climelapse_render() -> void:
@@ -4288,14 +5090,26 @@ func select_nearest_parcel(world_xz: Vector2) -> void:
 ## Placed props (user GLB + OSM replacement)
 ## ---------------------------------------------------------------------------
 
+func _should_load_user_map_overlays() -> bool:
+	## Map-select "Load from cache" off → _force_refetch → clean world (no props/styles).
+	return not _force_refetch
+
+
 func _setup_placed_props() -> void:
 	_placed_prop_layer = PlacedPropLayer.create_empty()
-	_placed_prop_layer.load_for_map(_lat, _lon)
 	_building_style_layer = BuildingStyleLayer.create_empty()
-	_building_style_layer.load_for_map(_lat, _lon)
+	_user_overlays_ephemeral = not _should_load_user_map_overlays()
+	if _user_overlays_ephemeral:
+		print("TerrainLoader: fresh/no-cache load — not loading placed props or building styles")
+	else:
+		_placed_prop_layer.load_for_map(_lat, _lon)
+		_building_style_layer.load_for_map(_lat, _lon)
 	_setup_placed_props_ui()
 	_setup_placed_prop_edit_ui()
 	_setup_building_builder_ui()
+	_setup_starshade_edit_ui()
+	_setup_pallet_rack_builder_ui()
+	# Unified library lives on Main (all maps); bind this loader when opening.
 	call_deferred("_rebuild_placed_props")
 	call_deferred("_consume_design_context")
 
@@ -4437,6 +5251,21 @@ func _try_seed_starshade_graph() -> void:
 	StarShadeGraphSeeder.try_seed_from_main(_main, self)
 
 
+## Tell the graph view this map's world/OSM data is ready (per-map key + OSM btn).
+func _notify_graph_map_ready() -> void:
+	if _main == null:
+		return
+	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+	if sgv == null:
+		sgv = get_tree().root.find_child("SystemGraphView", true, false)
+	if sgv == null:
+		return
+	if sgv.has_method("_on_map_world_ready"):
+		sgv.call("_on_map_world_ready")
+	elif sgv.has_method("_refresh_osm_solar_btn"):
+		sgv.call("_refresh_osm_solar_btn")
+
+
 func _clear_placed_prop_focus() -> void:
 	if _main == null:
 		return
@@ -4464,6 +5293,10 @@ func _reground_placed_props() -> void:
 		var d: Dictionary = item
 		d["ground_y"] = _ground_height_at(float(d.get("x", 0.0)), float(d.get("z", 0.0)))
 	_rebuild_placed_props()
+	# Never overwrite the user's saved props after a fresh/no-cache launch that
+	# intentionally left the in-memory layer empty.
+	if not _user_overlays_ephemeral:
+		_placed_prop_layer.save(_lat, _lon)
 
 
 ## Remove every Buildings overlay under Terrain (sync). queue_free() alone leaves
@@ -4660,6 +5493,76 @@ func _setup_building_builder_ui() -> void:
 	layer.add_child(ui)
 	ui.bind_loader(self)
 	_building_builder_ui = ui
+
+
+func _setup_starshade_edit_ui() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "StarShadeEditLayer"
+	layer.layer = 27
+	ui_layer.add_child(layer)
+	var ui := Control.new()
+	ui.name = "StarShadeEditModal"
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui.set_script(STARSHADE_EDIT_MODAL_SCRIPT)
+	layer.add_child(ui)
+	ui.bind_loader(self)
+	_starshade_edit_ui = ui
+
+
+func _setup_pallet_rack_builder_ui() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "PalletRackBuilderLayer"
+	layer.layer = 27
+	ui_layer.add_child(layer)
+	var ui := Control.new()
+	ui.name = "PalletRackBuilderModal"
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui.set_script(PALLET_RACK_BUILDER_MODAL_SCRIPT)
+	layer.add_child(ui)
+	ui.bind_loader(self)
+	_pallet_rack_builder_ui = ui
+
+
+func open_starshade_editor(prop_id: String) -> void:
+	if _starshade_edit_ui != null and _starshade_edit_ui.has_method("open_for_prop"):
+		_starshade_edit_ui.call("open_for_prop", prop_id)
+
+
+func open_pallet_rack_builder() -> void:
+	if _pallet_rack_builder_ui != null and _pallet_rack_builder_ui.has_method("open"):
+		_pallet_rack_builder_ui.call("open")
+
+
+func open_unified_library(tab: String = "") -> void:
+	# Prefer Main's always-available modal (works on soak / mars too).
+	if _main != null and _main.has_method("open_unified_library"):
+		_main.call("open_unified_library", tab)
+		return
+	push_warning("TerrainLoader: Main.open_unified_library unavailable")
+
+
+func begin_pallet_rack_placement(rack_spec: Dictionary) -> bool:
+	if _main == null:
+		return false
+	var spec := PalletRackBuilder.resolve_spec(rack_spec)
+	var r: Dictionary = PlacedPropService.begin_placement(_main, PalletRackBuilder.MODEL_ID, {
+		"record_extra": {"rack_spec": spec},
+	})
+	if not bool(r.get("ok", false)):
+		return false
+	if _placed_props_ui != null and _placed_props_ui.has_method("notify_bundle_imported"):
+		_placed_props_ui.call("notify_bundle_imported", r)
+	return true
 
 
 func open_building_builder(building_idx: int) -> void:
@@ -4962,6 +5865,121 @@ func save_prop_from_node(prop: PlacedProp) -> void:
 	var patch := prop.get_record_patch_from_node(Callable(self, "_ground_height_at"))
 	_placed_prop_layer.update_prop(prop.prop_id, patch)
 	_placed_prop_layer.save(_lat, _lon)
+
+
+## Enter click-to-move for a placed prop (edit-UI Move button). The real node
+## follows the crosshair terrain hit; LMB confirms, Esc cancels. Camera XZ
+## lerps toward the prop while active (drone or player).
+func begin_prop_reposition(prop_id: String) -> void:
+	if prop_id.is_empty() or _main == null:
+		return
+	_cancel_prop_reposition()
+	var prop := _find_placed_prop_node(prop_id)
+	if prop == null:
+		return
+	_reposition_prop = prop
+	_reposition_valid = false
+	_reposition_cam_follow = true
+	prop.set_collision_enabled(false)
+	if prop.has_method("on_focus_exit"):
+		var player := _main.get_node_or_null("Player")
+		prop.on_focus_exit(player)
+	_clear_placed_prop_focus()
+	if _placed_prop_edit_ui != null and _placed_prop_edit_ui.has_method("close"):
+		_placed_prop_edit_ui.call("close")
+	CursorController.request_modal("prop_reposition", Callable(self, "_cancel_prop_reposition"))
+
+
+func _find_placed_prop_node(prop_id: String) -> PlacedProp:
+	if _main == null or prop_id.is_empty():
+		return null
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return null
+	var root := terrain.get_node_or_null("PlacedProps")
+	if root == null:
+		return null
+	for child in root.get_children():
+		if child is PlacedProp and str((child as PlacedProp).prop_id) == prop_id:
+			return child as PlacedProp
+	return null
+
+
+func _tick_prop_reposition(delta: float) -> void:
+	if _reposition_prop == null or not is_instance_valid(_reposition_prop):
+		_reposition_prop = null
+		CursorController.release_modal("prop_reposition")
+		return
+	var cam := _active_world_camera()
+	if cam == null:
+		return
+	var hit := TerrainSurfaceQuery.raycast_ground_at_camera(_main, cam)
+	if hit.is_empty():
+		_reposition_valid = false
+	else:
+		var pos: Vector3 = hit["position"] as Vector3
+		var model := _reposition_prop.get_node_or_null("ModelRoot") as Node3D
+		var foot_y := ModelCatalog.foot_local_y(_reposition_prop.model_id)
+		var ws := model.scale.x if model != null else 1.0
+		_reposition_prop.global_position = Vector3(pos.x, pos.y - foot_y * ws, pos.z)
+		_reposition_valid = true
+	if _reposition_cam_follow:
+		_follow_camera_toward_prop(delta, _reposition_prop.global_position)
+
+
+func _active_world_camera() -> Camera3D:
+	if _main == null:
+		return null
+	var vp_cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+	if vp_cam != null:
+		return vp_cam
+	var player := _main.get_node_or_null("Player")
+	if player != null:
+		var pc := player.get_node_or_null("CameraArm/Camera3D") as Camera3D
+		if pc != null:
+			return pc
+	return null
+
+
+func _follow_camera_toward_prop(delta: float, target: Vector3) -> void:
+	if _main == null:
+		return
+	var t := clampf(delta * REPOSITION_FOLLOW_LERP, 0.0, 1.0)
+	var drone := _main.get_node_or_null("FPVDrone") as Node3D
+	var player := _main.get_node_or_null("Player") as Node3D
+	var body: Node3D = null
+	if drone != null and bool(drone.get("is_mounted")):
+		body = drone
+	elif player != null:
+		body = player
+	if body == null:
+		return
+	var gp := body.global_position
+	body.global_position = Vector3(
+		lerpf(gp.x, target.x, t),
+		gp.y,
+		lerpf(gp.z, target.z, t))
+
+
+func _confirm_prop_reposition() -> void:
+	var prop := _reposition_prop
+	_reposition_prop = null
+	CursorController.release_modal("prop_reposition")
+	if prop == null or not is_instance_valid(prop):
+		return
+	if _reposition_valid:
+		save_prop_from_node(prop)
+	rebuild_placed_props()
+
+
+func _cancel_prop_reposition() -> void:
+	if _reposition_prop == null:
+		CursorController.release_modal("prop_reposition")
+		return
+	_reposition_prop = null
+	_reposition_valid = false
+	CursorController.release_modal("prop_reposition")
+	rebuild_placed_props()
 
 
 ## Keep only OSM footprints that touch the hi-res centre square (building meshes).

@@ -12,7 +12,9 @@ const OPEN_METEO_URL := "https://api.open-meteo.com/v1/elevation"
 const OPENTOPO_GLOBAL_URL := "https://portal.opentopography.org/API/globaldem"
 const OPENTOPO_USGS_URL := "https://portal.opentopography.org/API/usgsdem"
 const CACHE_DIR := "user://terrain_cache/dem"
-const CACHE_VERSION := "v3"
+## v4: OpenTopo AAIGrid is georeferenced into the requested bbox (v3 stretched
+## cell-snapped grids onto the mesh and shifted relief vs OSM/imagery).
+const CACHE_VERSION := "v4"
 const CONFIG_PATH := "user://terrain_config.cfg"
 
 const DEFAULT_GRID_N := 64
@@ -123,13 +125,19 @@ static func grid_is_usable(grid: PackedFloat32Array, cols: int, rows: int) -> bo
 
 
 ## Best on-disk DEM for a site (ignores cache_enabled — used when live fetch fails).
-static func find_usable_cached_dem(lat: float, lon: float, tag: String = "") -> Dictionary:
+## Prefer an exact `preferred_half_extent_m` match (from the cache filename); never
+## return a DEM whose half-extent differs by more than 5% — stretching a wrong
+## span onto the mesh shifts OSM buildings/camps relative to the drape.
+static func find_usable_cached_dem(lat: float, lon: float, tag: String = "",
+		preferred_half_extent_m: float = 0.0) -> Dictionary:
 	var token := TerrainCacheSettings.coord_token(lat, lon)
 	var da := DirAccess.open(CACHE_DIR)
 	if da == null:
 		return {}
-	var best: Dictionary = {}
-	var best_range := -1.0
+	var best_exact: Dictionary = {}
+	var best_exact_range := -1.0
+	var best_any: Dictionary = {}
+	var best_any_range := -1.0
 	da.list_dir_begin()
 	var fn := da.get_next()
 	while fn != "":
@@ -139,6 +147,7 @@ static func find_usable_cached_dem(lat: float, lon: float, tag: String = "") -> 
 				if tag_needle not in fn:
 					fn = da.get_next()
 					continue
+			var file_half := _half_extent_from_dem_filename(fn)
 			var path := "%s/%s" % [CACHE_DIR, fn]
 			var loaded := _load_cache_file(path)
 			if loaded.is_empty():
@@ -157,12 +166,33 @@ static func find_usable_cached_dem(lat: float, lon: float, tag: String = "") -> 
 					lo = minf(lo, v)
 					hi = maxf(hi, v)
 			var span := hi - lo
-			if span > best_range:
-				best_range = span
-				best = loaded
+			loaded["half_extent_m"] = file_half
+			if preferred_half_extent_m > 0.0 and file_half > 0.0:
+				var rel := absf(file_half - preferred_half_extent_m) / preferred_half_extent_m
+				if rel <= 0.05 and span > best_exact_range:
+					best_exact_range = span
+					best_exact = loaded
+			if span > best_any_range:
+				best_any_range = span
+				best_any = loaded
 		fn = da.get_next()
 	da.list_dir_end()
-	return best
+	if not best_exact.is_empty():
+		return best_exact
+	# No safe match for the requested span — refuse a mismatched DEM (caller
+	# falls back to flat / refetch) rather than stretch the wrong footprint.
+	if preferred_half_extent_m > 0.0:
+		return {}
+	return best_any
+
+
+## Filename: dem_<ver>_<tag>_<source>_<lat>_<lon>_<half>_<grid>.json
+static func _half_extent_from_dem_filename(fn: String) -> float:
+	var base := fn.get_basename()
+	var parts := base.split("_")
+	if parts.size() < 2:
+		return 0.0
+	return float(parts[parts.size() - 2])
 
 
 ## Fetch elevation for square of side (2*half_extent_m). `tag` labels the layer
@@ -201,8 +231,17 @@ func _start_next() -> void:
 	var cache_source := _cache_source_label(source, half_extent_m, tag)
 	var key := _cache_key(lat, lon, half_extent_m, effective_n, tag, cache_source)
 	var cache_path := "%s/%s.json" % [CACHE_DIR, key]
-	if not force_refetch and TerrainCacheSettings.cache_enabled() and FileAccess.file_exists(cache_path):
+	if not force_refetch and TerrainCacheSettings.cache_enabled():
 		var cached := _load_cache(cache_path)
+		if cached.is_empty():
+			# Prefer a prior CACHE_VERSION file over a multi-minute OpenTopo refetch.
+			var legacy_path := _legacy_dem_cache_path(cache_path)
+			if not legacy_path.is_empty():
+				cached = _load_cache(legacy_path)
+				if not cached.is_empty():
+					print("ElevationService: '%s' DEM served from legacy cache (%s) — promoting" % [
+						tag, legacy_path.get_file()])
+					_save_cache(key, cached["grid"], int(cached["cols"]), int(cached["rows"]))
 		if not cached.is_empty():
 			print("ElevationService: '%s' DEM served from cache (%s) — no download" % [tag, key])
 			elevation_ready.emit.call_deferred(key,
@@ -210,7 +249,7 @@ func _start_next() -> void:
 			_start_next()
 			return
 	if source == "openmeteo" and _openmeteo_daily_exhausted:
-		var recovered := find_usable_cached_dem(lat, lon, tag)
+		var recovered := find_usable_cached_dem(lat, lon, tag, half_extent_m)
 		if not recovered.is_empty():
 			push_warning("ElevationService: Open-Meteo quota exhausted — using recovered '%s' DEM from disk" % tag)
 			elevation_ready.emit.call_deferred(key,
@@ -507,6 +546,9 @@ func _on_opentopo_completed(result: int, response_code: int,
 	var target_n := int(_job.get("target_n", DEFAULT_GRID_N))
 	var key := str(_job.get("key", ""))
 	var tag := str(_job.get("tag", "base"))
+	var lat := float(_job.get("lat", 0.0))
+	var lon := float(_job.get("lon", 0.0))
+	var half_extent_m := float(_job.get("half_extent_m", 0.0))
 	var parsed := parse_aaigrid(body_text)
 	if parsed.is_empty():
 		if _retry_opentopo_coarser("AAIGrid parse failed (%d bytes)" % body.size()):
@@ -519,7 +561,12 @@ func _on_opentopo_completed(result: int, response_code: int,
 			return
 		_fail("elevation grid has no usable relief")
 		return
-	var grid := TerrainBuilder.resample(src, int(parsed["cols"]), int(parsed["rows"]), target_n)
+	# Georeference into the requested bbox so OSM metres stay registered to DEM
+	# (OpenTopo AAIGrid corners are cell-snapped and often ≠ the request).
+	var bbox := GeoMath.bbox_for(lat, lon, half_extent_m)
+	var grid := resample_aaigrid_to_bbox(parsed, bbox, target_n)
+	if grid.is_empty():
+		grid = TerrainBuilder.resample(src, int(parsed["cols"]), int(parsed["rows"]), target_n)
 	_save_cache(key, grid, target_n, target_n)
 	_busy = false
 	_job = {}
@@ -564,6 +611,11 @@ static func parse_aaigrid(text: String) -> Dictionary:
 	var cols := 0
 	var rows := 0
 	var nodata := -9999.0
+	var xll := NAN
+	var yll := NAN
+	var cell := NAN
+	var xll_is_center := false
+	var yll_is_center := false
 	var values := PackedFloat32Array()
 	var in_data := false
 	for raw_line in text.split("\n", false):
@@ -583,6 +635,20 @@ static func parse_aaigrid(text: String) -> Dictionary:
 					rows = int(parts[1])
 				elif low.begins_with("nodata"):
 					nodata = TerrainBuilder.variant_to_float(parts[1], -9999.0)
+				elif low.begins_with("xllcorner"):
+					xll = TerrainBuilder.variant_to_float(parts[1], NAN)
+					xll_is_center = false
+				elif low.begins_with("yllcorner"):
+					yll = TerrainBuilder.variant_to_float(parts[1], NAN)
+					yll_is_center = false
+				elif low.begins_with("xllcenter"):
+					xll = TerrainBuilder.variant_to_float(parts[1], NAN)
+					xll_is_center = true
+				elif low.begins_with("yllcenter"):
+					yll = TerrainBuilder.variant_to_float(parts[1], NAN)
+					yll_is_center = true
+				elif low.begins_with("cellsize"):
+					cell = TerrainBuilder.variant_to_float(parts[1], NAN)
 			continue
 		in_data = true
 		for tok in line.split(" ", false):
@@ -592,7 +658,78 @@ static func parse_aaigrid(text: String) -> Dictionary:
 			values.append(NAN if is_equal_approx(v, nodata) else v)
 	if cols <= 0 or rows <= 0 or values.size() != cols * rows:
 		return {}
-	return {"cols": cols, "rows": rows, "grid": values}
+	# Normalize center headers to SW corner.
+	if not is_nan(cell) and cell > 0.0:
+		if xll_is_center and not is_nan(xll):
+			xll -= cell * 0.5
+		if yll_is_center and not is_nan(yll):
+			yll -= cell * 0.5
+	return {
+		"cols": cols, "rows": rows, "grid": values,
+		"xllcorner": xll, "yllcorner": yll, "cellsize": cell,
+	}
+
+
+## Sample an AAIGrid into a target_n² grid covering `bbox` {north,south,east,west}.
+## Falls back to empty when georef headers are missing.
+static func resample_aaigrid_to_bbox(parsed: Dictionary, bbox: Dictionary,
+		target_n: int) -> PackedFloat32Array:
+	var cols := int(parsed.get("cols", 0))
+	var rows := int(parsed.get("rows", 0))
+	var src: PackedFloat32Array = parsed.get("grid", PackedFloat32Array())
+	var xll := float(parsed.get("xllcorner", NAN))
+	var yll := float(parsed.get("yllcorner", NAN))
+	var cell := float(parsed.get("cellsize", NAN))
+	if cols <= 0 or rows <= 0 or src.size() != cols * rows:
+		return PackedFloat32Array()
+	if is_nan(xll) or is_nan(yll) or is_nan(cell) or cell <= 0.0 or target_n < 2:
+		return PackedFloat32Array()
+	var north := float(bbox.get("north", 0.0))
+	var south := float(bbox.get("south", 0.0))
+	var east := float(bbox.get("east", 0.0))
+	var west := float(bbox.get("west", 0.0))
+	var out := PackedFloat32Array()
+	out.resize(target_n * target_n)
+	var inv := 1.0 / float(target_n - 1)
+	for r in target_n:
+		var lat := lerpf(north, south, float(r) * inv)
+		for c in target_n:
+			var lon := lerpf(west, east, float(c) * inv)
+			# AAIGrid row 0 is north. Column grows east from xll.
+			var fx := (lon - xll) / cell - 0.5
+			var fy := (yll + float(rows) * cell - lat) / cell - 0.5
+			out[r * target_n + c] = _sample_grid_bilinear(src, cols, rows, fx, fy)
+	return out
+
+
+static func _sample_grid_bilinear(grid: PackedFloat32Array, cols: int, rows: int,
+		fx: float, fy: float) -> float:
+	if cols <= 0 or rows <= 0 or grid.is_empty():
+		return NAN
+	var x0 := clampi(int(floor(fx)), 0, cols - 1)
+	var y0 := clampi(int(floor(fy)), 0, rows - 1)
+	var x1 := mini(x0 + 1, cols - 1)
+	var y1 := mini(y0 + 1, rows - 1)
+	var tx := clampf(fx - float(x0), 0.0, 1.0)
+	var ty := clampf(fy - float(y0), 0.0, 1.0)
+	var v00 := grid[y0 * cols + x0]
+	var v10 := grid[y0 * cols + x1]
+	var v01 := grid[y1 * cols + x0]
+	var v11 := grid[y1 * cols + x1]
+	# Prefer neighbours when a corner is NODATA/NaN.
+	if is_nan(v00) and is_nan(v10) and is_nan(v01) and is_nan(v11):
+		return NAN
+	if is_nan(v00):
+		v00 = v10 if not is_nan(v10) else (v01 if not is_nan(v01) else v11)
+	if is_nan(v10):
+		v10 = v00
+	if is_nan(v01):
+		v01 = v11 if not is_nan(v11) else v00
+	if is_nan(v11):
+		v11 = v01
+	var a := lerpf(v00, v10, tx)
+	var b := lerpf(v01, v11, tx)
+	return lerpf(a, b, ty)
 
 
 func _after(delay: float, cb: Callable) -> void:
@@ -614,6 +751,22 @@ static func _cache_key(lat: float, lon: float, half_extent_m: float,
 		grid_n: int, tag: String, source: String) -> String:
 	return "dem_%s_%s_%s_%.4f_%.4f_%d_%d" % [
 		CACHE_VERSION, tag, source, lat, lon, int(half_extent_m), grid_n]
+
+
+## Older on-disk DEM for the same site/params (e.g. v3 after a v4 bump).
+static func _legacy_dem_cache_path(current_path: String) -> String:
+	var fn := current_path.get_file()
+	var needle := "dem_%s_" % CACHE_VERSION
+	if not fn.begins_with(needle):
+		return ""
+	# Walk back a few versions; stop at the first file that exists.
+	for ver in ["v3", "v2", "v1"]:
+		if ver == CACHE_VERSION:
+			continue
+		var alt := "%s/%s" % [current_path.get_base_dir(), fn.replace(needle, "dem_%s_" % ver)]
+		if FileAccess.file_exists(alt):
+			return alt
+	return ""
 
 
 func _save_cache(key: String, grid: PackedFloat32Array, cols: int, rows: int) -> void:

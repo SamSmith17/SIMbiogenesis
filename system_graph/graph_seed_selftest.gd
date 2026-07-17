@@ -139,4 +139,15 @@ func _test_puzzle_starter_idempotent() -> int:
 	if model.items.size() != first_count:
 		push_error("puzzle starter: item count changed on re-seed")
 		return 1
+	var power_model: GraphModel = GraphModelScript.new()
+	if not PuzzleStarterScript.seed_graph(power_model, 1, true):
+		push_error("puzzle starter power-only: seed failed")
+		return 1
+	var kinds: Array = []
+	for it: Dictionary in power_model.items:
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		kinds.append(str(sp.get("resource_kind", sp.get("role", ""))))
+	if kinds.has("water") or kinds.has("food"):
+		push_error("puzzle starter power-only: must not seed water/food")
+		return 1
 	return 0

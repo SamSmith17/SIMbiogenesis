@@ -22,6 +22,9 @@ func _initialize() -> void:
 	_test_generates(roads, buildings)
 	_test_determinism(roads, buildings)
 	_test_exclusions(roads, buildings)
+	_test_city_street_filter()
+	_test_city_area_excludes_access()
+	_test_city_area_crescent_tips()
 	_test_sparse_rejected()
 	_test_caps(roads, buildings)
 	_test_build_node(roads, buildings)
@@ -142,6 +145,111 @@ func _point_segment_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
 	return p.distance_to(a + ab * t)
 
 
+func _test_city_street_filter() -> void:
+	var keep := {
+		"points": _ring(300.0, 16),
+		"half_width_m": 4.0,
+		"highway_type": "residential",
+		"tags": {"highway": "residential", "name": "Esplanade"},
+	}
+	var gate := {
+		"points": PackedVector2Array([Vector2(0, 500), Vector2(0, 2800)]),
+		"half_width_m": 5.0,
+		"highway_type": "unclassified",
+		"tags": {"highway": "unclassified", "name": "Gate Road"},
+	}
+	var service := {
+		"points": PackedVector2Array([Vector2(800, 800), Vector2(1200, 800)]),
+		"half_width_m": 3.0,
+		"highway_type": "service",
+		"tags": {"highway": "service", "name": "Airport Service"},
+	}
+	_check("keeps residential camp street", BrcCampGenerator.is_camp_block_street(keep))
+	_check("drops Gate Road by name", not BrcCampGenerator.is_camp_block_street(gate))
+	_check("drops service highway", not BrcCampGenerator.is_camp_block_street(service))
+	var filtered := BrcCampGenerator.filter_camp_streets([keep, gate, service])
+	_check("filter keeps only city street", filtered.size() == 1)
+
+
+func _test_city_area_excludes_access() -> void:
+	var roads := _brc_like_roads()
+	# Access spur far outside the ring city.
+	roads.append({
+		"points": PackedVector2Array([Vector2(0, 700), Vector2(0, 2500)]),
+		"half_width_m": 5.0,
+		"highway_type": "unclassified",
+		"tags": {"highway": "unclassified", "name": "Gate Road"},
+	})
+	var hull := BrcCampGenerator.compute_city_area(roads)
+	_check("city hull non-empty", hull.size() >= 3)
+	# Far gate endpoint must sit outside the clip hull.
+	var far := Vector2(0, 2400)
+	_check("Gate Road tip outside city hull",
+		not Geometry2D.is_point_in_polygon(far, hull),
+		"hull still contains far access point")
+	# A mid-ring camp block point must remain inside.
+	var inner := Vector2(400, 0)
+	_check("ring city inside hull",
+		Geometry2D.is_point_in_polygon(inner, hull))
+
+
+func _test_city_area_crescent_tips() -> void:
+	# Open-mouthed BRC (C-shape): tips must stay inside; desert past the closed
+	# outer ring and the playa mouth must stay outside.
+	var roads := _brc_crescent_roads()
+	var poly := BrcCampGenerator.compute_city_area(roads)
+	_check("crescent clip non-empty", poly.size() >= 4)
+	# Slightly inset from the outer ring so chordal edges don't false-fail.
+	var tip_a := Vector2(cos(deg_to_rad(-30.0)), sin(deg_to_rad(-30.0))) * 580.0
+	var tip_b := Vector2(cos(deg_to_rad(210.0)), sin(deg_to_rad(210.0))) * 580.0
+	_check("crescent tip A inside clip", Geometry2D.is_point_in_polygon(tip_a, poly),
+		"tip_a=%s" % tip_a)
+	_check("crescent tip B inside clip", Geometry2D.is_point_in_polygon(tip_b, poly),
+		"tip_b=%s" % tip_b)
+	# Closed-side mid-ring (north) stays inside.
+	var mid := Vector2(0.0, 450.0)
+	_check("crescent mid-ring inside", Geometry2D.is_point_in_polygon(mid, poly))
+	# Beyond outer perimeter on the closed side.
+	var beyond := Vector2(0.0, 900.0)
+	_check("beyond outer ring outside clip",
+		not Geometry2D.is_point_in_polygon(beyond, poly),
+		"beyond still inside")
+	# Open mouth / playa should be outside the annular sector polygon.
+	var mouth := Vector2(0.0, -200.0)
+	_check("open mouth outside clip",
+		not Geometry2D.is_point_in_polygon(mouth, poly),
+		"mouth still inside")
+
+
+## Open-mouthed BRC: rings + radials on a 240° sector centred on +Y (open to −Y).
+func _brc_crescent_roads() -> Array:
+	var roads: Array = []
+	var ang0 := deg_to_rad(-30.0)
+	var ang1 := deg_to_rad(210.0)
+	var r := 240.0
+	while r <= 640.0:
+		roads.append({
+			"points": _arc(r, ang0, ang1, 48),
+			"half_width_m": 4.0,
+			"highway_type": "residential",
+			"tags": {"highway": "residential"},
+		})
+		r += 25.0
+	var inner := 240.0
+	var outer := 640.0
+	for i in 20:
+		var t := float(i) / 19.0
+		var ang := lerpf(ang0, ang1, t)
+		var dir := Vector2(cos(ang), sin(ang))
+		roads.append({
+			"points": PackedVector2Array([dir * inner, dir * outer]),
+			"half_width_m": 4.0,
+			"highway_type": "residential",
+			"tags": {"highway": "residential"},
+		})
+	return roads
+
+
 func _test_sparse_rejected() -> void:
 	# 3 small rings with 8 pts each = 24 total points < MIN_ROAD_SEGMENTS (150).
 	var few: Array = []
@@ -221,7 +329,12 @@ func _brc_like_roads() -> Array:
 	# Concentric ring streets (Esplanade outward).
 	var r := 240.0
 	while r <= 640.0:
-		roads.append({"points": _ring(r, 64), "half_width_m": 4.0})
+		roads.append({
+			"points": _ring(r, 64),
+			"half_width_m": 4.0,
+			"highway_type": "residential",
+			"tags": {"highway": "residential"},
+		})
 		r += 25.0
 	# Radial avenues from inner to outer radius.
 	var inner := 240.0
@@ -232,6 +345,8 @@ func _brc_like_roads() -> Array:
 		roads.append({
 			"points": PackedVector2Array([dir * inner, dir * outer]),
 			"half_width_m": 4.0,
+			"highway_type": "residential",
+			"tags": {"highway": "residential"},
 		})
 	return roads
 
@@ -240,6 +355,15 @@ func _ring(radius: float, segments: int) -> PackedVector2Array:
 	var pts := PackedVector2Array()
 	for i in segments + 1:
 		var a := TAU * float(i) / float(segments)
+		pts.append(Vector2(cos(a), sin(a)) * radius)
+	return pts
+
+
+func _arc(radius: float, ang0: float, ang1: float, segments: int) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for i in segments + 1:
+		var t := float(i) / float(segments)
+		var a := lerpf(ang0, ang1, t)
 		pts.append(Vector2(cos(a), sin(a)) * radius)
 	return pts
 

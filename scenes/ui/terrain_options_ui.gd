@@ -26,10 +26,7 @@ var _cache_cb: CheckBox = null
 var _status_lbl: Label = null
 var _refresh_btns: Array[Button] = []
 var _reset_confirm: ConfirmationDialog = null
-var _world_radius_km_spin: SpinBox = null
-var _detail_radius_spin: SpinBox = null
-var _osm_radius_spin: SpinBox = null
-var _extents_confirm: ConfirmationDialog = null
+var _osm_offset_lbl: Label = null
 
 
 func _ready() -> void:
@@ -84,7 +81,7 @@ func _set_expanded(on: bool) -> void:
 
 func _apply_collapsed_size() -> void:
 	if _expanded:
-		offset_bottom = 580.0
+		offset_bottom = 520.0
 	else:
 		offset_bottom = 52.0
 
@@ -178,31 +175,47 @@ func _build_ui() -> void:
 	_auto_veg_density_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_auto_veg_density_spin.value_changed.connect(_on_auto_veg_density_changed)
 	veg_row.add_child(_auto_veg_density_spin)
-	_cache_cb = _add_toggle(_body, "Use terrain cache",
-		"Reuse cached elevation, imagery, and OSM on this PC", _on_cache_toggled)
+	_cache_cb = _add_toggle(_body, "Show terrain geometry",
+		"Show/hide DEM + OSM world meshes (ground, buildings, water, camps, veg). "
+		+ "Does not control cache loading — use map-select “Load from cache” for that.",
+		_on_cache_toggled)
 
-	var ext_sep := HSeparator.new()
-	_body.add_child(ext_sep)
-	var ext_lbl := Label.new()
-	ext_lbl.text = "Terrain extent (rebuild required)"
-	ext_lbl.add_theme_font_size_override("font_size", 12)
-	ext_lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 0.82))
-	_body.add_child(ext_lbl)
-	_world_radius_km_spin = _add_extent_spin(_body, "World", 30.0, 5.0, 100.0, 1.0, " km half")
-	_detail_radius_spin = _add_extent_spin(_body, "Hi-res DEM", 1500.0, 500.0, 5000.0, 100.0, " m half")
-	_osm_radius_spin = _add_extent_spin(_body, "OSM data", 1500.0, 500.0, 8000.0, 100.0, " m half")
-	var apply_ext_btn := Button.new()
-	apply_ext_btn.text = "Apply extents & rebuild"
-	apply_ext_btn.tooltip_text = "Save radii and reset the site (re-download + rebuild terrain)"
-	apply_ext_btn.pressed.connect(_on_apply_extents_pressed)
-	_body.add_child(apply_ext_btn)
-
-	_extents_confirm = ConfirmationDialog.new()
-	_extents_confirm.title = "Rebuild terrain?"
-	_extents_confirm.dialog_text = "Changing terrain extent requires a full site reset and re-download. Continue?"
-	_extents_confirm.ok_button_text = "Rebuild"
-	_extents_confirm.confirmed.connect(_on_apply_extents_confirmed)
-	add_child(_extents_confirm)
+	var align_sep := HSeparator.new()
+	_body.add_child(align_sep)
+	var align_lbl := Label.new()
+	align_lbl.text = "Align OSM to imagery"
+	align_lbl.tooltip_text = "Slide buildings/roads/camps onto the aerial when OSM and the photo disagree (e.g. BRC year mismatch)."
+	align_lbl.add_theme_font_size_override("font_size", 12)
+	align_lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 0.82))
+	_body.add_child(align_lbl)
+	_osm_offset_lbl = Label.new()
+	_osm_offset_lbl.text = "Offset: 0 m E, 0 m N"
+	_osm_offset_lbl.add_theme_font_size_override("font_size", 11)
+	_osm_offset_lbl.add_theme_color_override("font_color", C_MUTED)
+	_body.add_child(_osm_offset_lbl)
+	var nudge := GridContainer.new()
+	nudge.columns = 4
+	nudge.add_theme_constant_override("h_separation", 4)
+	nudge.add_theme_constant_override("v_separation", 4)
+	_body.add_child(nudge)
+	_add_nudge_btn(nudge, "N", "Nudge OSM 25 m north", 0.0, 25.0)
+	_add_nudge_btn(nudge, "S", "Nudge OSM 25 m south", 0.0, -25.0)
+	_add_nudge_btn(nudge, "E", "Nudge OSM 25 m east", 25.0, 0.0)
+	_add_nudge_btn(nudge, "W", "Nudge OSM 25 m west", -25.0, 0.0)
+	var align_row := HBoxContainer.new()
+	align_row.add_theme_constant_override("separation", 6)
+	_body.add_child(align_row)
+	var auto_btn := Button.new()
+	auto_btn.text = "Auto (BRC)"
+	auto_btn.tooltip_text = "Match OSM Golden Spike / The Man to the published spike nearest the map centre (imagery scars)."
+	auto_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	auto_btn.pressed.connect(_on_auto_align_osm)
+	align_row.add_child(auto_btn)
+	var clear_btn := Button.new()
+	clear_btn.text = "Reset"
+	clear_btn.tooltip_text = "Clear OSM↔imagery offset"
+	clear_btn.pressed.connect(_on_clear_osm_offset)
+	align_row.add_child(clear_btn)
 
 	var sep := HSeparator.new()
 	_body.add_child(sep)
@@ -274,28 +287,6 @@ func _add_refresh_btn(parent: Control, label: String, tip: String, handler: Call
 	_refresh_btns.append(btn)
 
 
-func _add_extent_spin(parent: Control, label: String, default_v: float,
-		min_v: float, max_v: float, step: float, suffix: String) -> SpinBox:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	parent.add_child(row)
-	var lbl := Label.new()
-	lbl.text = label
-	lbl.custom_minimum_size.x = 72.0
-	lbl.add_theme_font_size_override("font_size", 11)
-	lbl.add_theme_color_override("font_color", C_MUTED)
-	row.add_child(lbl)
-	var spin := SpinBox.new()
-	spin.min_value = min_v
-	spin.max_value = max_v
-	spin.step = step
-	spin.value = default_v
-	spin.suffix = suffix
-	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(spin)
-	return spin
-
-
 func _sync_from_loader() -> void:
 	if _loader == null or not _loader.has_method("get_terrain_options"):
 		return
@@ -315,19 +306,46 @@ func _sync_from_loader() -> void:
 		var style: Dictionary = VegetationStyleConfig.defaults()
 		_auto_veg_density_spin.value = float(style.get("auto_density_scale", 1.0))
 		_auto_veg_density_spin.set_block_signals(false)
-	_set_cb(_cache_cb, bool(opts.get("cache_enabled", true)))
-	if _world_radius_km_spin != null:
-		_world_radius_km_spin.set_block_signals(true)
-		_world_radius_km_spin.value = float(opts.get("half_extent_m", 15000.0)) / 1000.0
-		_world_radius_km_spin.set_block_signals(false)
-	if _detail_radius_spin != null:
-		_detail_radius_spin.set_block_signals(true)
-		_detail_radius_spin.value = float(opts.get("detail_half_extent_m", 1500.0))
-		_detail_radius_spin.set_block_signals(false)
-	if _osm_radius_spin != null:
-		_osm_radius_spin.set_block_signals(true)
-		_osm_radius_spin.value = float(opts.get("osm_half_extent_m", 1500.0))
-		_osm_radius_spin.set_block_signals(false)
+	_set_cb(_cache_cb, bool(opts.get("cached_geometry_visible", true)))
+	_sync_osm_offset_lbl(opts)
+
+
+func _sync_osm_offset_lbl(opts: Dictionary = {}) -> void:
+	if _osm_offset_lbl == null:
+		return
+	var ee := float(opts.get("osm_offset_east_m", 0.0))
+	var nn := float(opts.get("osm_offset_north_m", 0.0))
+	if opts.is_empty() and _loader != null and _loader.has_method("get_terrain_options"):
+		var live: Dictionary = _loader.call("get_terrain_options")
+		ee = float(live.get("osm_offset_east_m", 0.0))
+		nn = float(live.get("osm_offset_north_m", 0.0))
+	_osm_offset_lbl.text = "Offset: %+.0f m E, %+.0f m N" % [ee, nn]
+
+
+func _add_nudge_btn(parent: Control, label: String, tip: String,
+		east_m: float, north_m: float) -> void:
+	var btn := Button.new()
+	btn.text = label
+	btn.tooltip_text = tip
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.pressed.connect(func() -> void:
+		if _loader != null and _loader.has_method("nudge_osm_imagery_offset"):
+			_loader.call("nudge_osm_imagery_offset", east_m, north_m)
+			_sync_osm_offset_lbl()
+	)
+	parent.add_child(btn)
+
+
+func _on_auto_align_osm() -> void:
+	if _loader != null and _loader.has_method("auto_align_osm_to_imagery"):
+		_loader.call("auto_align_osm_to_imagery")
+		_sync_osm_offset_lbl()
+
+
+func _on_clear_osm_offset() -> void:
+	if _loader != null and _loader.has_method("clear_osm_imagery_offset"):
+		_loader.call("clear_osm_imagery_offset")
+		_sync_osm_offset_lbl()
 
 
 func _set_cb(cb: CheckBox, on: bool) -> void:
@@ -414,8 +432,8 @@ func _on_auto_veg_density_changed(val: float) -> void:
 
 
 func _on_cache_toggled(on: bool) -> void:
-	if _loader != null and _loader.has_method("set_cache_enabled"):
-		_loader.call("set_cache_enabled", on)
+	if _loader != null and _loader.has_method("set_cached_geometry_visible"):
+		_loader.call("set_cached_geometry_visible", on)
 
 
 func _on_refresh_dem() -> void:
@@ -436,23 +454,6 @@ func _on_refresh_osm_veg() -> void:
 
 func _on_refresh_all() -> void:
 	_call_refresh("refresh_all_cached_layers", "all layers")
-
-
-func _on_apply_extents_pressed() -> void:
-	if _extents_confirm != null:
-		_extents_confirm.popup_centered()
-
-
-func _on_apply_extents_confirmed() -> void:
-	if _loader == null or not _loader.has_method("apply_terrain_extents"):
-		set_status("Terrain not ready", "error")
-		return
-	var world_m := _world_radius_km_spin.value * 1000.0 if _world_radius_km_spin != null else 0.0
-	var detail_m := _detail_radius_spin.value if _detail_radius_spin != null else 0.0
-	var osm_m := _osm_radius_spin.value if _osm_radius_spin != null else 0.0
-	_loader.call("apply_terrain_extents", world_m, detail_m, osm_m)
-	if not _expanded:
-		_set_expanded(true)
 
 
 func _on_reset_site_pressed() -> void:

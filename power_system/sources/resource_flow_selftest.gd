@@ -50,6 +50,8 @@ func _initialize() -> void:
 	_test_graph_wind_hydro_dc_aggregation()
 	_test_gravity_jit_gate()
 	_test_site_layout_seed_and_clamp()
+	_test_jit_conduit_derate()
+	_test_jit_severed_conduit()
 	if _failures == 0:
 		print("RESOURCE SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -575,6 +577,80 @@ func _test_jit_tank_transfer() -> void:
 		not bool((model.get_item("down").get("specs", {}) as Dictionary).get("overflowing", false)))
 	_check("JIT downstream stays ~full", _tank_level(model, "down") >= 0.99,
 		"down=%.3f" % _tank_level(model, "down"))
+
+
+## Wave 8: shared builder for JIT conduit tests — big upstream, thirsty
+## downstream, one water connection with optional conduit fields.
+func _build_jit_conduit_graph(conn_extra: Dictionary) -> GraphModel:
+	var model = GraphModelScript.new()
+	model.add_item({
+		"id": "up", "type": "resource", "x": 0.0, "y": 0.0,
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Upstream", "resource_kind": "water",
+			"capacity_qty": 10000.0, "capacity_unit": "L", "level": 1.0,
+			"jit_outflow": true,
+		},
+	})
+	# Small downstream tank keeps the commanded JIT rate modest (~7 L/min) so
+	# a 200 m hose derates partially rather than clamping to zero.
+	model.add_item({
+		"id": "down", "type": "resource", "x": 200.0, "y": 0.0,
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Downstream", "resource_kind": "water",
+			"capacity_qty": 100.0, "capacity_unit": "L", "level": 0.0,
+		},
+	})
+	var conn := {
+		"id": "c_jit", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "up", "source_handle_id": "output",
+		"target_item_id": "down", "target_handle_id": "input",
+	}
+	conn.merge(conn_extra, true)
+	model.add_connection(conn)
+	return model
+
+
+func _test_jit_conduit_derate() -> void:
+	# 200 m garden hose at full-bore JIT flow: Hazen-Williams friction must
+	# derate the transfer, so the lossy downstream fills SLOWER than lossless.
+	var free_model := _build_jit_conduit_graph({"route_length_m": 200.0})
+	var free_engine = ResourceFlowEngineScript.new()
+	free_engine.setup(free_model, null)
+	free_engine.connector_losses_override = 0
+	free_engine.simulate_step_for_test(0.0, 0.0)
+	free_engine.simulate_step_for_test(0.25, 0.25)
+	var free_down := _tank_level(free_model, "down")
+
+	var lossy_model := _build_jit_conduit_graph({"route_length_m": 200.0})
+	var lossy_engine = ResourceFlowEngineScript.new()
+	lossy_engine.setup(lossy_model, null)
+	lossy_engine.connector_losses_override = 1
+	lossy_engine.simulate_step_for_test(0.0, 0.0)
+	lossy_engine.simulate_step_for_test(0.25, 0.25)
+	var lossy_down := _tank_level(lossy_model, "down")
+
+	_check("derate slows JIT fill", lossy_down < free_down,
+		"lossy=%.4f free=%.4f" % [lossy_down, free_down])
+	_check("derate still delivers some", lossy_down > 0.0, "lossy=%.4f" % lossy_down)
+	var conn := lossy_model.get_connection("c_jit")
+	_check("pressure drop written", float(conn.get("pressure_drop_psi", 0.0)) > 0.0)
+	_check("flow_derate < 1", float(conn.get("flow_derate", 1.0)) < 1.0,
+		"derate=%.3f" % float(conn.get("flow_derate", 1.0)))
+
+
+func _test_jit_severed_conduit() -> void:
+	var model := _build_jit_conduit_graph({"severed": true})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.connector_losses_override = 1
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	_check("severed conduit carries nothing", _tank_level(model, "down") < 0.001,
+		"down=%.4f" % _tank_level(model, "down"))
+	_check("severed upstream keeps water", _tank_level(model, "up") > 0.99,
+		"up=%.4f" % _tank_level(model, "up"))
 
 
 ## Water tank → AC pump → out tank, with a controller wired into power_in.

@@ -204,6 +204,15 @@ static func confirm_placement() -> bool:
 	# resulting item id back onto the record so save/reload keeps the link.
 	var graph_link := _placement_prep.get("graph_link", {}) as Dictionary
 	if not graph_link.is_empty():
+		# Stamp XY footprint onto the graph specs from mesh metrics × scale.
+		var gl_specs: Dictionary = (graph_link.get("specs", {}) as Dictionary).duplicate(true)
+		var fp := footprint_from_model(model_id, 1.0)
+		if fp.x > 0.0 and fp.y > 0.0:
+			gl_specs["footprint_w_m"] = fp.x
+			gl_specs["footprint_d_m"] = fp.y
+			gl_specs["model_id"] = model_id
+			graph_link = graph_link.duplicate(true)
+			graph_link["specs"] = gl_specs
 		var node_id := _create_bound_graph_node(main, prop_id, graph_link)
 		if not node_id.is_empty():
 			layer.update_prop(prop_id, {"graph_item_id": node_id})
@@ -227,6 +236,17 @@ static func confirm_placement() -> bool:
 	if ModelCatalog.is_starshade_model(model_id):
 		_trigger_starshade_graph_seed(main, seed_prep)
 	return true
+
+
+## World-metre plan footprint (W×D) from ModelCatalog metrics × resolved_scale.
+static func footprint_from_model(model_id: String, user_scale: float = 1.0) -> Vector2:
+	if model_id.is_empty():
+		return Vector2.ZERO
+	var metrics := ModelCatalog.mesh_metrics(model_id)
+	var ws := ModelCatalog.resolved_scale(model_id, user_scale)
+	return Vector2(
+		maxf(float(metrics.get("width", 0.0)) * ws, 0.0),
+		maxf(float(metrics.get("depth", 0.0)) * ws, 0.0))
 
 
 ## Ask the SystemGraphView to create a 2D node bound to a just-placed 3D prop
@@ -287,7 +307,20 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 	var existing := parent.get_node_or_null("PlacementGhost")
 	if existing != null:
 		existing.free()
-	var model := ModelCatalog.instantiate(model_id)
+	var extras: Dictionary = {}
+	if model_id == PalletRackBuilder.MODEL_ID:
+		var rec_extra: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+		if rec_extra.has("rack_spec"):
+			extras["rack_spec"] = rec_extra["rack_spec"]
+		elif _placement_prep.has("rack_spec"):
+			extras["rack_spec"] = _placement_prep["rack_spec"]
+	elif model_id == GrowBed.MODEL_ID:
+		var rec_extra2: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+		if rec_extra2.has("grow_bed_spec"):
+			extras["grow_bed_spec"] = rec_extra2["grow_bed_spec"]
+		elif rec_extra2.has("plant_abs_h"):
+			extras["grow_bed_spec"] = {"plant_abs_h": rec_extra2["plant_abs_h"]}
+	var model := ModelCatalog.instantiate(model_id, extras)
 	if model == null:
 		return null
 	var ghost := Node3D.new()
@@ -374,7 +407,27 @@ static func _layer_for_main(main: Node) -> PlacedPropLayer:
 static func _save_layer(main: Node, layer: PlacedPropLayer) -> void:
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 	if loader != null and "_lat" in loader and "_lon" in loader:
-		layer.save(float(loader.get("_lat")), float(loader.get("_lon")))
+		var lat := float(loader.get("_lat"))
+		var lon := float(loader.get("_lon"))
+		# Fresh/no-cache launches skip loading disk props — merge before write
+		# so a single place action cannot wipe the user's saved set.
+		if bool(loader.get("_user_overlays_ephemeral")):
+			var disk := PlacedPropLayer.create_empty()
+			disk.load_for_map(lat, lon)
+			var seen: Dictionary = {}
+			for item in disk.props:
+				if item is Dictionary:
+					seen[str((item as Dictionary).get("id", ""))] = true
+			for item in layer.props:
+				if not (item is Dictionary):
+					continue
+				var id := str((item as Dictionary).get("id", ""))
+				if id.is_empty() or not seen.has(id):
+					disk.props.append(item)
+			layer.props = disk.props
+			if loader.get("_user_overlays_ephemeral") != null:
+				loader.set("_user_overlays_ephemeral", false)
+		layer.save(lat, lon)
 		return
 	layer.save_for_scene(_layer_key(main))
 

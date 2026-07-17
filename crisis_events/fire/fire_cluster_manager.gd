@@ -180,36 +180,56 @@ func _create_cluster_visual() -> Node3D:
 	mat.color_ramp = color_tex
 	
 	particles.process_material = mat
-	
-	# Sphere mesh for particles
-	var pmesh := SphereMesh.new()
-	pmesh.radius = 0.6
-	pmesh.height = 1.2
-	pmesh.radial_segments = 6
-	pmesh.rings = 3
-	var pmesh_mat := StandardMaterial3D.new()
-	pmesh_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	pmesh_mat.vertex_color_use_as_albedo = true  # Use particle colors from gradient!
-	pmesh_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)  # White to show gradient
-	pmesh_mat.emission_enabled = true
-	pmesh_mat.emission = Color(1.0, 0.6, 0.2)
-	pmesh_mat.emission_energy_multiplier = 2.0
-	pmesh_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	pmesh.material = pmesh_mat
-	particles.draw_pass_1 = pmesh
-	
+
+	# Soft round billboards (not low-poly spheres) — readable at distance, cheap.
+	particles.draw_pass_1 = FireVfx.make_billboard_quad(
+		Vector2(1.0, 1.4), true, Color(1.0, 0.55, 0.15), 2.2)
+
 	node.add_child(particles)
-	
+
+	# Rising ember sparkles for the cluster centre.
+	var embers := GPUParticles3D.new()
+	embers.name = "Embers"
+	embers.amount = 18
+	embers.lifetime = 3.0
+	embers.emitting = true
+	embers.fixed_fps = 18
+	embers.visibility_aabb = AABB(Vector3(-20, -2, -20), Vector3(40, 60, 40))
+	var emat := ParticleProcessMaterial.new()
+	emat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	emat.emission_sphere_radius = 2.5
+	emat.direction = Vector3(0, 1, 0)
+	emat.spread = 25.0
+	emat.initial_velocity_min = 1.5
+	emat.initial_velocity_max = 4.0
+	emat.gravity = Vector3(0, 2.5, 0)
+	emat.scale_min = 0.4
+	emat.scale_max = 1.1
+	var egrad := Gradient.new()
+	egrad.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
+	egrad.colors = PackedColorArray([
+		Color(1.0, 0.7, 0.2, 1.0),
+		Color(1.0, 0.2, 0.05, 0.9),
+		Color(0.4, 0.05, 0.0, 0.0),
+	])
+	var etex := GradientTexture1D.new()
+	etex.gradient = egrad
+	emat.color_ramp = etex
+	embers.process_material = emat
+	embers.draw_pass_1 = FireVfx.make_ember_quad()
+	node.add_child(embers)
+
 	# ===== BRIGHT FLICKERING LIGHT - Critical for visibility! =====
 	var light := OmniLight3D.new()
 	light.name = "FireLight"
 	light.light_color = Color(1.0, 0.5, 0.15)
-	light.light_energy = 15.0  # BRIGHT
-	light.omni_range = 40.0    # Wide range
+	light.light_energy = 12.0
+	light.omni_range = 36.0
 	light.omni_attenuation = 1.0
+	light.shadow_enabled = false
 	light.position = Vector3(0, 2, 0)
 	node.add_child(light)
-	
+
 	return node
 
 func _update_cluster_visuals(_delta: float) -> void:

@@ -19,9 +19,16 @@ const SPECIES_LABELS: Array[String] = [
 ]
 
 ## Mixed-woodland composition weights (Type = "Mixed woodland"). Drive both the
-## studio preview and, on Apply, any OSM kind bound to "Mixed pine + deciduous".
+## studio preview and, on Apply, any OSM kind bound to "Mixed (local blend)".
 const MIX_KEYS: Array[String] = ["mix_pine", "mix_deciduous", "mix_shrub"]
 const MIX_LABELS: Array[String] = ["Pine %", "Deciduous %", "Shrub %"]
+## Named sub-species toggles added into style["local_mix"] for the mixed blend.
+const LOCAL_MIX_CANDIDATES: Array[String] = [
+	"spruce", "cedar", "fir", "redwood",
+	"maple", "aspen", "birch", "apple",
+	"cactus", "joshua_tree",
+	"corn", "wheat", "lettuce",
+]
 
 const SPECIES_SHAPE_SLIDERS := {
 	"deciduous": [
@@ -131,6 +138,9 @@ const SHADER_SLIDERS := [
 	# Global (not previewed in the studio, which is always close-up); affects auto
 	# veg only. Higher = leaves persist farther from the drone at more vertex cost.
 	{"key": "auto_foliage_lod_reach_m", "label": "Auto foliage reach (m)", "min": 120.0, "max": 500.0},
+	{"key": "auto_max_tree_instances", "label": "Max tree instances", "min": 2000.0, "max": 24000.0},
+	{"key": "auto_detail_radius_m", "label": "Tree detail radius m", "min": 100.0, "max": 2000.0},
+	{"key": "auto_distant_density", "label": "Distant tree density", "min": 0.0, "max": 1.0},
 ]
 
 var _loader: Node = null
@@ -150,6 +160,9 @@ var _scroll_container: ScrollContainer
 ## Player OSM-kind → species override (e.g. {"wood": "pine"}). "auto" = biome.
 var _osm_species_map: Dictionary = {}
 var _osm_opts: Dictionary = {}
+## Named species included in the Mixed woodland local blend (id → weight).
+var _local_mix: Dictionary = {}
+var _local_mix_checks: Dictionary = {}
 
 var _dim: ColorRect = null
 var _panel: PanelContainer = null
@@ -475,6 +488,34 @@ func _build_mix_section() -> void:
 			func(v: float) -> void:
 				_values[key] = v
 				_queue_rebuild())
+	var local_hdr := Label.new()
+	_style_section(local_hdr, "Local-mix species")
+	_species_section.add_child(local_hdr)
+	var local_hint := Label.new()
+	local_hint.text = "Include named sub-types / crops in the mixed blend."
+	local_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	local_hint.add_theme_font_size_override("font_size", 10)
+	local_hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
+	_species_section.add_child(local_hint)
+	_local_mix_checks.clear()
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 2)
+	_species_section.add_child(grid)
+	for sid in LOCAL_MIX_CANDIDATES:
+		var cb := CheckBox.new()
+		cb.text = VegSpeciesCatalog.label_for(sid)
+		cb.button_pressed = float(_local_mix.get(sid, 0.0)) > 0.0
+		var captured := sid
+		cb.toggled.connect(func(on: bool) -> void:
+			if on:
+				_local_mix[captured] = 1.0
+			else:
+				_local_mix.erase(captured)
+			_queue_rebuild())
+		grid.add_child(cb)
+		_local_mix_checks[sid] = cb
 	var hint := Label.new()
 	hint.text = "Edit each tree's shape on its own Type page."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -625,10 +666,12 @@ func _build_osm_section(sidebar: VBoxContainer) -> void:
 		row.add_child(lbl)
 		var opt := OptionButton.new()
 		opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		for i in BiomePalette.SPECIES_OVERRIDE_OPTIONS.size():
-			opt.add_item(str(BiomePalette.SPECIES_OVERRIDE_LABELS[i]), i)
+		var opts := BiomePalette.override_options()
+		var labels := BiomePalette.override_labels()
+		for i in opts.size():
+			opt.add_item(str(labels[i]), i)
 		opt.item_selected.connect(func(idx: int) -> void:
-			_osm_species_map[kind] = str(BiomePalette.SPECIES_OVERRIDE_OPTIONS[idx]))
+			_osm_species_map[kind] = str(BiomePalette.override_options()[idx]))
 		row.add_child(opt)
 		_osm_opts[kind] = opt
 
@@ -639,7 +682,7 @@ func _sync_osm_opts() -> void:
 		if opt == null:
 			continue
 		var choice := str(_osm_species_map.get(kind, "auto"))
-		var idx := BiomePalette.SPECIES_OVERRIDE_OPTIONS.find(choice)
+		var idx := BiomePalette.override_options().find(choice)
 		opt.select(idx if idx >= 0 else 0)
 
 
@@ -868,21 +911,21 @@ func _rebuild_preview() -> void:
 		_build_species_cards(_species, spots, settings)
 
 
-## Studio preview of a mixed woodland: each spot is assigned pine/deciduous/shrub
-## by the mix ratio sliders, then drawn as one MultiMesh per constituent species.
+## Studio preview of a mixed woodland: each spot is assigned by mix ratio +
+## local-mix named species, then drawn as one MultiMesh per constituent.
 func _build_mix_preview(spots: Array, settings: Dictionary) -> void:
 	var weights := _mix_weight_dict()
 	if weights.is_empty():
 		weights = {"pine": 0.5, "deciduous": 0.5}
 	var rng := RandomNumberGenerator.new()
 	rng.seed = PREVIEW_SEED + 17
-	var by_species := {"pine": [], "deciduous": [], "shrub": []}
+	var by_species: Dictionary = {}
 	for item in spots:
 		if not (item is Dictionary):
 			continue
 		var sp := BiomePalette.pick_species(weights, rng)
-		if sp not in by_species:
-			sp = "deciduous"
+		if not by_species.has(sp):
+			by_species[sp] = []
 		(by_species[sp] as Array).append(item)
 	for sp in by_species:
 		if not (by_species[sp] as Array).is_empty():
@@ -912,7 +955,8 @@ func _build_species_cards(species: String, spots: Array, settings: Dictionary) -
 			_apply_studio(sm, species)
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
 	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
-	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
+	var family := VegetationCardFactory.mesh_family(species)
+	var vert_off := VegetationLayer.vertical_offset_for(family, settings)
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = mesh
@@ -943,13 +987,10 @@ func _build_species_cards(species: String, spots: Array, settings: Dictionary) -
 
 ## Current mix ratios as a species-weight dict (drops zero weights).
 func _mix_weight_dict() -> Dictionary:
-	var out := {}
+	var style := {"local_mix": _local_mix.duplicate(true)}
 	for i in MIX_KEYS.size():
-		var species := MIX_KEYS[i].trim_prefix("mix_")
-		var w := maxf(float(_values.get(MIX_KEYS[i], 0.0)), 0.0)
-		if w > 0.0:
-			out[species] = w
-	return out
+		style[MIX_KEYS[i]] = float(_values.get(MIX_KEYS[i], 0.0))
+	return BiomePalette.mix_weights_from_style(style)
 
 
 func _build_grass_preview(spots: Array, settings: Dictionary) -> void:
@@ -1025,10 +1066,18 @@ func _load_from_loader() -> void:
 	_osm_species_map = {}
 	for k in raw_map:
 		_osm_species_map[str(k)] = str(raw_map[k])
+	_local_mix = {}
+	var raw_local: Variant = style.get("local_mix", {})
+	if raw_local is Dictionary:
+		for k in raw_local:
+			var w := maxf(float(raw_local[k]), 0.0)
+			if w > 0.0:
+				_local_mix[str(k)] = w
 	_baseline = _values.duplicate(true)
 	for species in SPECIES_IDS:
 		_baseline["%s_albedo_tint" % species] = _tints[species]
 	_baseline["osm_species_map"] = _osm_species_map.duplicate(true)
+	_baseline["local_mix"] = _local_mix.duplicate(true)
 	# Density slider drives the auto-forest density (auto_density_scale) and the
 	# brush; reflect the map's stored value so it matches what's on the ground.
 	if style.has("auto_density_scale"):
@@ -1068,6 +1117,7 @@ func _style_dict() -> Dictionary:
 		var tk := "%s_albedo_tint" % species
 		out[tk] = _tints.get(species, Color.WHITE)
 	out["osm_species_map"] = _osm_species_map.duplicate(true)
+	out["local_mix"] = _local_mix.duplicate(true)
 	for key in MIX_KEYS:
 		if _values.has(key):
 			out[key] = _values[key]
@@ -1139,6 +1189,7 @@ func _reset_values() -> void:
 		if _baseline.has(tk):
 			_tints[species] = _baseline[tk]
 	_osm_species_map = (_baseline.get("osm_species_map", {}) as Dictionary).duplicate(true)
+	_local_mix = (_baseline.get("local_mix", {}) as Dictionary).duplicate(true)
 	_rebuild_species_section()
 	_sync_tint_picker()
 	_sync_top_sliders()

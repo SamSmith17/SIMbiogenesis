@@ -1,10 +1,13 @@
 class_name PbiBiomass
 extends RefCounted
 
-## Planetary Basic Income — local biomass yield from SoI area.
+## Seasonal biomass yield curve shared by grow beds (PlantGrowth.season_factor).
+## Biomass is NOT a Planetary Basic Income — it is a downstream product of
+## sunlight via photosynthesis. This helper remains for seasonality + any
+## legacy SoI biomass catchments still present in older saves.
 ##
 ## Reference: Field et al. (1998) / MODIS terrestrial NPP reviews cite ~0.5–2.0 kg C
-## m⁻² yr⁻¹ for productive land; playable PBI uses ~1.2 kg dry harvestable biomass
+## m⁻² yr⁻¹ for productive land; playable estimate uses ~1.2 kg dry harvestable biomass
 ## m⁻² yr⁻¹ (≈ mid-range herbaceous/grassland harvestable fraction, not full NPP).
 
 ## Dry harvestable biomass per m² per calendar year (kg/m²/yr).

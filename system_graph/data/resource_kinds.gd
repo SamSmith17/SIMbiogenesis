@@ -12,21 +12,21 @@ const BUILTIN: Dictionary = {
 		"display": "Electricity",
 		"color": Color(0.941, 0.820, 0.282, 1.0),
 		"unit": "kWh",
-		"abbrev": "⚡",
+		"abbrev": "âš¡",
 		"flow_ref_rate": 3500.0,
 	},
 	"dc_electricity": {
 		"display": "DC Electricity",
 		"color": Color(0.847, 0.329, 0.329, 1.0),
 		"unit": "kW",
-		"abbrev": "🔌",
+		"abbrev": "ðŸ”Œ",
 		"flow_ref_rate": 3.0,
 	},
 	"water": {
 		"display": "Potable Water",
 		"color": Color(0.231, 0.510, 0.965, 1.0),
 		"unit": "L",
-		"abbrev": "💧",
+		"abbrev": "ðŸ’§",
 		"flow_ref_rate": 120.0,
 		"aliases": ["potable_water"],
 	},
@@ -34,63 +34,63 @@ const BUILTIN: Dictionary = {
 		"display": "Greywater",
 		"color": Color(0.420, 0.620, 0.780, 1.0),
 		"unit": "L",
-		"abbrev": "🚿",
+		"abbrev": "ðŸš¿",
 		"flow_ref_rate": 80.0,
 	},
 	"blackwater": {
 		"display": "Blackwater",
 		"color": Color(0.420, 0.320, 0.220, 1.0),
 		"unit": "L",
-		"abbrev": "🚽",
+		"abbrev": "ðŸš½",
 		"flow_ref_rate": 50.0,
 	},
 	"biomass": {
 		"display": "Biomass",
 		"color": Color(0.545, 0.353, 0.176, 1.0),
 		"unit": "kg",
-		"abbrev": "🌿",
+		"abbrev": "ðŸŒ¿",
 		"flow_ref_rate": 25.0,
 	},
 	"plastic_waste": {
 		"display": "Plastic Waste",
 		"color": Color(0.580, 0.639, 0.722, 1.0),
 		"unit": "kg",
-		"abbrev": "♻",
+		"abbrev": "â™»",
 		"flow_ref_rate": 12.0,
 	},
 	"plastic_shred": {
 		"display": "Shredded Plastic",
 		"color": Color(0.392, 0.710, 0.965, 1.0),
 		"unit": "kg",
-		"abbrev": "✂",
+		"abbrev": "âœ‚",
 		"flow_ref_rate": 15.0,
 	},
 	"biochar": {
 		"display": "Biochar",
 		"color": Color(0.180, 0.180, 0.180, 1.0),
 		"unit": "kg",
-		"abbrev": "🔥",
+		"abbrev": "ðŸ”¥",
 		"flow_ref_rate": 8.0,
 	},
 	"hot_water": {
 		"display": "Hot Water",
 		"color": Color(0.937, 0.420, 0.420, 1.0),
 		"unit": "L",
-		"abbrev": "♨",
+		"abbrev": "â™¨",
 		"flow_ref_rate": 60.0,
 	},
 	"steam": {
 		"display": "Steam",
 		"color": Color(0.870, 0.870, 0.900, 1.0),
 		"unit": "kg",
-		"abbrev": "♨",
+		"abbrev": "â™¨",
 		"flow_ref_rate": 40.0,
 	},
 	"woodgas": {
 		"display": "Syngas / Woodgas",
 		"color": Color(0.706, 0.627, 0.353, 1.0),
-		"unit": "m³",
-		"abbrev": "💨",
+		"unit": "mÂ³",
+		"abbrev": "ðŸ’¨",
 		"flow_ref_rate": 6.0,
 		"aliases": ["syngas"],
 	},
@@ -98,57 +98,78 @@ const BUILTIN: Dictionary = {
 		"display": "Food",
 		"color": Color(0.063, 0.722, 0.506, 1.0),
 		"unit": "kg",
-		"abbrev": "🍎",
+		"abbrev": "ðŸŽ",
 		"flow_ref_rate": 10.0,
 	},
 	"nutrients": {
 		"display": "Nutrients",
 		"color": Color(0.820, 0.720, 0.180, 1.0),
 		"unit": "kg",
-		"abbrev": "🌱",
+		"abbrev": "ðŸŒ±",
 		"flow_ref_rate": 8.0,
 	},
 	"liquid_fertilizer": {
 		"display": "Liquid Fertilizer",
 		"color": Color(0.420, 0.720, 0.280, 1.0),
 		"unit": "L",
-		"abbrev": "🧪",
+		"abbrev": "ðŸ§ª",
 		"flow_ref_rate": 40.0,
 		"aliases": ["fertilizer_effluent"],
 	},
 	"biogas": {
 		"display": "Biogas",
 		"color": Color(0.820, 0.580, 0.220, 1.0),
-		"unit": "m³",
-		"abbrev": "💨",
+		"unit": "mÂ³",
+		"abbrev": "ðŸ’¨",
 		"flow_ref_rate": 2.0,
 	},
 	"propane": {
 		"display": "Propane",
 		"color": Color(0.961, 0.620, 0.043, 1.0),
 		"unit": "kg",
-		"abbrev": "🛢",
+		"abbrev": "ðŸ›¢",
 		"flow_ref_rate": 5.0,
 	},
 	"thermal": {
 		"display": "Heat",
 		"color": Color(0.847, 0.329, 0.329, 1.0),
 		"unit": "kWh",
-		"abbrev": "♨",
+		"abbrev": "â™¨",
 		"flow_ref_rate": 15.0,
+	},
+	"sunlight": {
+		# Wire quantity is the SoI-wide flux (kW = irradiance × SoI area,
+		# matching how the Rain PBI wire carries total L/h rather than mm/h) —
+		# NOT the per-m² irradiance shown on the PBI node's own readout.
+		"display": "Sunlight",
+		"color": Color(1.0, 0.85, 0.3, 1.0),
+		"unit": "kW",
+		"abbrev": "☀",
+		"flow_ref_rate": 75000.0,
+		"aliases": ["solar", "radiation"],
+	},
+	"wind": {
+		# Atmosphere PBI — wire quantity is SoI kinetic flux (kW, ½ρAv³ slab).
+		# Node readout shows wind / temp / RH; turbines use WeatherService ambiently.
+		"display": "Wind",
+		"color": Color(0.55, 0.78, 0.92, 1.0),
+		"unit": "kW",
+		"abbrev": "🌬",
+		"flow_ref_rate": 50000.0,
+		"aliases": ["atmosphere", "air", "mechanical"],
 	},
 	"money": {
 		"display": "Money",
 		"color": Color(0.294, 0.686, 0.314, 1.0),
 		"unit": "$",
-		"abbrev": "💵",
+		"abbrev": "ðŸ’µ",
 		"flow_ref_rate": 100.0,
 	},
 	"chore_hours": {
 		"display": "Chore Hours",
 		"color": Color(0.702, 0.443, 0.812, 1.0),
 		"unit": "h",
-		"abbrev": "🧹",
+		"abbrev": "ðŸ§¹",
 		"flow_ref_rate": 8.0,
 	},
 }
@@ -172,7 +193,7 @@ static func _ensure_loaded() -> void:
 			continue
 		var display: String = str(cfg.get_value(section, "display", section.capitalize()))
 		var unit: String = str(cfg.get_value(section, "unit", "unit"))
-		var abbrev: String = str(cfg.get_value(section, "abbrev", "•"))
+		var abbrev: String = str(cfg.get_value(section, "abbrev", "â€¢"))
 		var cr: float = float(cfg.get_value(section, "color_r", 0.58))
 		var cg: float = float(cfg.get_value(section, "color_g", 0.64))
 		var cb: float = float(cfg.get_value(section, "color_b", 0.72))
@@ -226,7 +247,7 @@ static func add_custom_kind(display: String, unit: String, abbrev: String,
 		"display": disp,
 		"color": color,
 		"unit": unit.strip_edges() if not unit.strip_edges().is_empty() else "unit",
-		"abbrev": abbrev.strip_edges() if not abbrev.strip_edges().is_empty() else "•",
+		"abbrev": abbrev.strip_edges() if not abbrev.strip_edges().is_empty() else "â€¢",
 		"flow_ref_rate": 10.0,
 	}
 	_extra[kid] = entry
@@ -290,7 +311,7 @@ static func kind_meta(kind_id: String) -> Dictionary:
 		"display": kind_id.capitalize(),
 		"color": Color(0.580, 0.639, 0.722, 1.0),
 		"unit": "unit",
-		"abbrev": "•",
+		"abbrev": "â€¢",
 	}
 
 
@@ -312,7 +333,7 @@ static func flow_ref_rate(kind_id: String) -> float:
 	return float(kind_meta(kind_id).get("flow_ref_rate", 10.0))
 
 
-## Canonical id for compatibility checks (water ↔ potable_water via aliases).
+## Canonical id for compatibility checks (water â†” potable_water via aliases).
 static func normalize_kind(kind_id: String) -> String:
 	var k := kind_id.strip_edges()
 	if k.is_empty():
@@ -341,14 +362,14 @@ static func kinds_compatible(src_kind: String, tgt_kind: String) -> bool:
 
 
 ## Maps a unit string to its fundamental measure so kinds with different
-## units (e.g. "L" vs "m³") aren't treated as the same dimension by mistake,
-## while unit variants of the same measure (mass/volume/energy/…) group together.
+## units (e.g. "L" vs "mÂ³") aren't treated as the same dimension by mistake,
+## while unit variants of the same measure (mass/volume/energy/â€¦) group together.
 const UNIT_DIMENSION: Dictionary = {
 	"kg": "mass",
 	"lb": "mass",
 	"L": "volume",
 	"gal": "volume",
-	"m³": "volume",
+	"mÂ³": "volume",
 	"kWh": "energy",
 	"Wh": "energy",
 	"BTU": "energy",
@@ -358,7 +379,7 @@ const UNIT_DIMENSION: Dictionary = {
 }
 
 
-## Fundamental measure (mass/volume/energy/currency/time/…) for a resource kind,
+## Fundamental measure (mass/volume/energy/currency/time/â€¦) for a resource kind,
 ## derived from its default unit. Unknown units fall back to the unit string
 ## itself so at least identical-unit kinds still match.
 static func dimension_for_kind(kind_id: String) -> String:
@@ -367,7 +388,7 @@ static func dimension_for_kind(kind_id: String) -> String:
 
 
 ## True when two resource kinds mismatch by kind but share the same
-## fundamental unit of measure (mass/volume/energy/…) — used to let a user
+## fundamental unit of measure (mass/volume/energy/â€¦) â€” used to let a user
 ## deliberately override the strict port-type check.
 static func dimensions_compatible(src_kind: String, tgt_kind: String) -> bool:
 	var a := normalize_kind(src_kind)
@@ -377,13 +398,13 @@ static func dimensions_compatible(src_kind: String, tgt_kind: String) -> bool:
 	return dimension_for_kind(a) == dimension_for_kind(b)
 
 
-## True when a resource connection between these kinds is allowed at all —
+## True when a resource connection between these kinds is allowed at all â€”
 ## either an exact kind match, or a user override via matching fundamental units.
 static func connection_allowed(src_kind: String, tgt_kind: String) -> bool:
 	return kinds_compatible(src_kind, tgt_kind) or dimensions_compatible(src_kind, tgt_kind)
 
 
-## Resource kinds for graph legend (excludes electrical — use PORT_COLORS for that).
+## Resource kinds for graph legend (excludes electrical â€” use PORT_COLORS for that).
 static func legend_entries(include_electric: bool = false) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	var alias_ids: Dictionary = {}
@@ -416,9 +437,9 @@ static func mismatch_message(src_kind: String, tgt_kind: String) -> String:
 	var a := display_name(normalize_kind(src_kind) if not src_kind.is_empty() else src_kind)
 	var b := display_name(normalize_kind(tgt_kind) if not tgt_kind.is_empty() else tgt_kind)
 	if src_kind.is_empty() or tgt_kind.is_empty():
-		return "Resource port missing a type — assign input/output kinds in the inspector"
+		return "Resource port missing a type â€” assign input/output kinds in the inspector"
 	if dimensions_compatible(src_kind, tgt_kind):
-		return "%s does not normally connect to %s (allowed — same unit of measure)" % [a, b]
+		return "%s does not normally connect to %s (allowed â€” same unit of measure)" % [a, b]
 	return "%s cannot connect to %s" % [a, b]
 
 
@@ -511,10 +532,10 @@ func migrate_processor_specs(specs: Dictionary) -> void:
 	if not specs.has("energy_source"):
 		specs["energy_source"] = "ac" if float(specs.get("watts", 0.0)) > 0.0 else ""
 	# Power supply is AC-only now (or "" = passive). A processor that instead
-	# CONSUMES DC power (as opposed to producing it — see the dc_electricity
+	# CONSUMES DC power (as opposed to producing it â€” see the dc_electricity
 	# output migration below) would need its own energy_source value; not
 	# built yet. The old confusing thermal/mechanical energy types are
-	# retired — migrate them to passive.
+	# retired â€” migrate them to passive.
 	var es := str(specs.get("energy_source", ""))
 	if es == "thermal" or es == "mechanical":
 		specs["energy_source"] = ""
@@ -530,7 +551,7 @@ func migrate_processor_specs(specs: Dictionary) -> void:
 	# One-time migration: the old dc_direct_charge flat-kW mechanism
 	# (dc_direct_charge/dc_output_kw + dcPositive/dcNegative ports) is
 	# replaced by a dc_electricity-kind output entry (positive/negative
-	# ports, kW derived from fuel throughput each tick — see
+	# ports, kW derived from fuel throughput each tick â€” see
 	# ResourceFlowEngine._process_processor). Convert existing saves so the
 	# engine/port resolver only need to know the new path.
 	if bool(specs.get("dc_direct_charge", false)):
@@ -567,7 +588,7 @@ func migrate_processor_specs(specs: Dictionary) -> void:
 		var rate: float = float(outs[0].get("rate", 0.0)) if outs.size() > 0 else 0.0
 		specs["energy_wh_per_unit"] = (watts / rate) if rate > 0.0 else 0.0
 
-	# AC power is modeled by `watts` + `energy_source` + the `power_in` handle —
+	# AC power is modeled by `watts` + `energy_source` + the `power_in` handle â€”
 	# NOT by a resource input. A previous migration auto-inserted an "electric"
 	# resource input (unit "W") for every powered processor, which created a
 	# phantom "Electricity" input port and shifted the real resource ports (so a

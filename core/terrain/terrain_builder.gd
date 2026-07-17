@@ -227,21 +227,18 @@ static func build_heightmap_shape(elev: PackedFloat32Array, res: int,
 	return shape
 
 
-## Drape material for the Ground mesh. With no `detail` it's a plain
-## StandardMaterial3D (base drape or neutral colour). With a `detail` texture it's
-## a ShaderMaterial that blends the high-res centre patch (covering the central
-## `detail_extent_m` square) over the base drape. Shared by build_terrain_node and
-## the loader's pop-in upgrade so both paths produce an identical material.
+## Drape material for the Ground mesh. Always a ShaderMaterial when a drape is
+## present so Mercator→equirect sampling can keep OSM registered to the photo.
+## `base_bbox` / `detail_bbox` are GeoMath.bbox_for dicts (optional — omit to
+## skip Mercator correction, e.g. headless selftests).
 static func make_terrain_material(base: Texture2D, detail: Texture2D,
 		terrain_extent_m: float, detail_extent_m: float,
 		patch_mesh: bool = false, hide_detail_region: bool = false,
-		hide_centre_region: bool = false, feather_uv: float = 0.06) -> Material:
-	if detail == null and not hide_centre_region and not patch_mesh:
+		hide_centre_region: bool = false, feather_uv: float = 0.06,
+		base_bbox: Dictionary = {}, detail_bbox: Dictionary = {}) -> Material:
+	if base == null and detail == null and not hide_centre_region and not patch_mesh:
 		var mat := StandardMaterial3D.new()
-		if base != null:
-			mat.albedo_texture = base
-		else:
-			mat.albedo_color = NEUTRAL_GROUND
+		mat.albedo_color = NEUTRAL_GROUND
 		mat.roughness = 1.0
 		mat.metallic = 0.0
 		mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
@@ -259,7 +256,31 @@ static func make_terrain_material(base: Texture2D, detail: Texture2D,
 	sm.set_shader_parameter("hide_detail_region", hide_detail_region)
 	sm.set_shader_parameter("hide_centre_region", hide_centre_region)
 	sm.set_shader_parameter("feather", feather_uv)
+	apply_drape_bboxes(sm, base_bbox, detail_bbox)
 	return sm
+
+
+## bbox dict → shader vec4 (west, east, south, north).
+static func bbox_to_shader_vec4(bbox: Dictionary) -> Vector4:
+	if bbox.is_empty():
+		return Vector4(-1.0, 1.0, -1.0, 1.0)
+	return Vector4(
+		float(bbox.get("west", -1.0)),
+		float(bbox.get("east", 1.0)),
+		float(bbox.get("south", -1.0)),
+		float(bbox.get("north", 1.0)))
+
+
+static func apply_drape_bboxes(sm: ShaderMaterial, base_bbox: Dictionary = {},
+		detail_bbox: Dictionary = {}) -> void:
+	if sm == null:
+		return
+	var has_base := not base_bbox.is_empty()
+	var has_detail := not detail_bbox.is_empty()
+	sm.set_shader_parameter("base_bbox", bbox_to_shader_vec4(base_bbox))
+	sm.set_shader_parameter("detail_bbox", bbox_to_shader_vec4(detail_bbox))
+	sm.set_shader_parameter("correct_base_mercator", has_base)
+	sm.set_shader_parameter("correct_detail_mercator", has_detail)
 
 
 static func _apply_render_priority(mat: Material, priority: int) -> void:
@@ -282,6 +303,8 @@ static func sync_coarse_ground_hide(terrain: Node3D, base_drape: Texture2D,
 	if ground == null:
 		return
 	var feather_uv := feather_uv_from_metres(feather_m, detail_extent_m)
+	# Bboxes stamped by TerrainLoader._stamp_drape_mercator_bboxes after this;
+	# keep ShaderMaterial path so Mercator correction can be applied.
 	ground.material_override = make_terrain_material(
 		base_drape, detail_drape, terrain_extent_m, detail_extent_m,
 		false, false, true, feather_uv)

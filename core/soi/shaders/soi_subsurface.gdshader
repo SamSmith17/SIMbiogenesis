@@ -19,6 +19,8 @@ global uniform float soi_water_table_m;
 /// When 0, above-ground glass is discarded so sky/clouds show (Elevation section
 /// / Site Plan). Below-ground soil cutaway still draws.
 uniform float glass_enabled = 1.0;
+/// Multiplier on glass alpha (Snowglobe pitch fade near horizon).
+uniform float glass_opacity = 1.0;
 
 varying vec3 v_world_pos;
 varying float v_terrain_y;
@@ -56,7 +58,7 @@ void fragment() {
 		// ---- Above ground: glass "bubble" shell (the snowglobe dome) ----
 		// Elevation-section / top-down previews turn this off — otherwise the
 		// Fresnel + UV seam paints a dark bullseye over the sky.
-		if (glass_enabled < 0.5) {
+		if (glass_enabled < 0.5 || glass_opacity < 0.02) {
 			discard;
 		}
 		// Nearly invisible face-on, brightening to a soft bluish-white rim at
@@ -65,7 +67,7 @@ void fragment() {
 		// highlight so it reads as reflective glass rather than empty space.
 		vec3 glass_tint = vec3(0.85, 0.93, 1.0);
 		ALBEDO = glass_tint;
-		ALPHA = clamp(0.025 + fresnel * 0.45, 0.0, 0.55);
+		ALPHA = clamp(0.025 + fresnel * 0.45, 0.0, 0.55) * clamp(glass_opacity, 0.0, 1.0);
 		ROUGHNESS = 0.04;
 		METALLIC = 0.2;
 		SPECULAR = 0.9;

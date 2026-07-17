@@ -243,10 +243,10 @@ var gameplay_mechanics_paused : bool = true   # Off by default; TimeUI toggle ca
 @export var scenario_config : ScenarioConfig
 
 ## Fire spread range in meters (how far fire can jump to nearby objects)
-@export_range( 1.0, 20.0, 0.5 ) var fire_spread_range : float = 3.0
+@export_range( 1.0, 40.0, 0.5 ) var fire_spread_range : float = 8.0
 
 ## Fire engulf range in meters (how far fire can engulf nearby objects when intense)
-@export_range( 1.0, 15.0, 0.5 ) var fire_engulf_range : float = 2.0
+@export_range( 1.0, 30.0, 0.5 ) var fire_engulf_range : float = 5.0
 
 ## Sun light intensity (0 = use node default)
 @export_range( 0.0, 10.0, 0.01 ) var sun_base_enegry : float = 0.0 :
@@ -530,6 +530,8 @@ func solar_time_to_clock_time( solar_time: float ) -> float :
 var challenge_runner : Node = null
 var toast_ui : ToastUI = null
 var help_overlay_ui : HelpOverlayUI = null
+var unified_library_ui : Control = null
+const UNIFIED_LIBRARY_MODAL_SCRIPT := preload( "res://scenes/ui/unified_library_modal.gd" )
 @onready var location_picker : Control = get_node_or_null( "UILayer/LocationPickerUI" ) as Control
 @onready var projection_canvas : Control = get_node_or_null( "UILayer/ProjectionCanvas" ) as Control
 @onready var pov_warp_overlay : Control = get_node_or_null( "UILayer/POVWarpOverlay" ) as Control
@@ -583,6 +585,7 @@ func _ready() -> void :
 
 	_setup_toast_ui()
 	_setup_help_overlay_ui()
+	_setup_unified_library_ui()
 	_maybe_show_first_run_help()
 
 	_apply_scenario_rules()
@@ -911,6 +914,23 @@ func _unhandled_input( e : InputEvent ) -> void :
 			solar_node.visible = not solar_node.visible
 		get_viewport().set_input_as_handled()
 		return
+	# Light place mode: mouse must be handled before the key-only early return
+	# (otherwise LMB/RMB never reach confirm/cancel).
+	if PlacedLightService.is_placement_active() and e is InputEventMouseButton \
+			and ( e as InputEventMouseButton ).pressed :
+		var mb := e as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT :
+			# Ctrl/Alt = select/edit an existing light (interaction_focus); bare click places.
+			if Input.is_key_pressed( KEY_CTRL ) or Input.is_key_pressed( KEY_ALT ) :
+				return
+			_ensure_placed_light_modal()
+			PlacedLightService.confirm_placement()
+			get_viewport().set_input_as_handled()
+			return
+		if mb.button_index == MOUSE_BUTTON_RIGHT :
+			PlacedLightService.cancel_placement()
+			get_viewport().set_input_as_handled()
+			return
 	if e is not InputEventKey or not ( e as InputEventKey ).pressed or ( e as InputEventKey ).echo :
 		return
 	if InputMap.has_action( "placed_props_edit" ) and Input.is_action_just_pressed( "placed_props_edit" ) :
@@ -924,20 +944,9 @@ func _unhandled_input( e : InputEvent ) -> void :
 		if PlacedLightService.is_placement_active():
 			PlacedLightService.cancel_placement()
 		else:
-			# For now, default to Omni. Modal can change it later.
 			PlacedLightService.begin_placement(self, "omni")
 		get_viewport().set_input_as_handled()
 		return
-	if PlacedLightService.is_placement_active():
-		if e is InputEventMouseButton and e.pressed:
-			if e.button_index == MOUSE_BUTTON_LEFT:
-				PlacedLightService.confirm_placement()
-				get_viewport().set_input_as_handled()
-				return
-			elif e.button_index == MOUSE_BUTTON_RIGHT:
-				PlacedLightService.cancel_placement()
-				get_viewport().set_input_as_handled()
-				return
 	var key_event : InputEventKey = e as InputEventKey
 	if key_event.keycode == KEY_P or key_event.physical_keycode == KEY_P :
 		if is_instance_valid( pov_warp_overlay ) and pov_warp_overlay.has_method( "toggle_warp_mode" ) :
@@ -951,6 +960,12 @@ func _unhandled_input( e : InputEvent ) -> void :
 			return
 	if InputMap.has_action( "toggle_location_picker" ) and Input.is_action_just_pressed( "toggle_location_picker" ) :
 		_toggle_location_picker()
+		get_viewport().set_input_as_handled()
+		return
+	if InputMap.has_action( "toggle_site_report" ) and Input.is_action_just_pressed( "toggle_site_report" ) :
+		var tl := get_node_or_null( "UILayer/TimelineUI" )
+		if tl != null and tl.has_method( "_on_site_report_pressed" ) :
+			tl.call( "_on_site_report_pressed" )
 		get_viewport().set_input_as_handled()
 
 func _setup_save_load_ui() -> void :
@@ -1135,7 +1150,7 @@ func _apply_save_snapshot( data: Dictionary ) -> bool :
 	var sg_d: Variant = data.get( "system_graph", {} )
 	var sg_view : Node = get_node_or_null( "UILayer/SystemGraphView" )
 	if sg_view != null and sg_d is Dictionary and sg_view.has_method( "apply_save_state" ) :
-		sg_view.apply_save_state( sg_d )
+		sg_view.apply_save_state( sg_d, {"from_game_save": true} )
 	var soi_d: Variant = data.get( "soi", {} )
 	var soi_svc := get_node_or_null( "/root/SoiService" )
 	if soi_svc != null and soi_d is Dictionary and soi_svc.has_method( "apply_save_state" ) :
@@ -1553,7 +1568,7 @@ func _setup_environment_vfx() -> void :
 
 
 func _on_lightning_flash( intensity: float ) -> void :
-	lightning_flash_boost = maxf( lightning_flash_boost, 0.12 + intensity * 0.5 )
+	lightning_flash_boost = maxf( lightning_flash_boost, 0.28 + intensity * 0.9 )
 	_apply_tonemap_settings()
 
 
@@ -3166,6 +3181,42 @@ func _setup_help_overlay_ui() -> void :
 	help_overlay_ui = HelpOverlayUI.new()
 	help_overlay_ui.name = "HelpOverlayUI"
 	ui_layer.add_child( help_overlay_ui )
+
+
+## Wave 7 unified library — available on every map (not only TerrainLoader maps).
+func _setup_unified_library_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "UnifiedLibraryLayer" )
+	if existing_layer != null :
+		unified_library_ui = existing_layer.get_node_or_null( "UnifiedLibraryModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "UnifiedLibraryLayer"
+	layer.layer = UITheme.LAYER_MODAL
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "UnifiedLibraryModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( UNIFIED_LIBRARY_MODAL_SCRIPT )
+	layer.add_child( ui )
+	unified_library_ui = ui
+
+
+## Open the unified library browser (Buildings / Graph / Vegetation / Structures).
+func open_unified_library( tab: String = "" ) -> void :
+	if not is_instance_valid( unified_library_ui ) :
+		_setup_unified_library_ui()
+	if not is_instance_valid( unified_library_ui ) :
+		return
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader == null :
+		loader = TerrainSurfaceQuery.find_terrain_loader( self )
+	if unified_library_ui.has_method( "bind_loader" ) :
+		unified_library_ui.call( "bind_loader", loader )
+	if unified_library_ui.has_method( "open" ) :
+		unified_library_ui.call( "open", tab )
 
 
 const _UI_PREFS_CFG : String = "user://ui_prefs.cfg"

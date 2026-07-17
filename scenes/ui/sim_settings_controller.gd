@@ -6,6 +6,8 @@ extends Node
 signal live_mode_changed(enabled: bool)
 signal simulation_started(initial_battery_soc: float, initial_load_kw: float, initial_solar_kw: float)
 signal drone_settings_changed
+signal connector_losses_changed(enabled: bool)
+signal force_rainbow_changed(enabled: bool)
 
 const REALTIME_SCALE: float = 1.0 / 3600.0
 const LIVE_SYNC_INTERVAL: float = 10.0
@@ -27,6 +29,12 @@ const DRONE_DEFAULTS := {
 var main_node: Node3D = null
 var live_mode_enabled: bool = false
 var stored_time_scale: float = 0.016667
+## Wave 8: opt-in connector loss simulation (wire I^2R loss + pipe friction
+## derate + overload burnout). Default OFF so existing saves are unchanged.
+var connector_losses_enabled: bool = false
+## Debug/test: force the antisolar rainbow on regardless of rain. The shader still
+## only draws it when the geometry is right (sun low, arc above the horizon).
+var force_rainbow: bool = false
 
 var _live_mode_syncing: bool = false
 var _live_sync_counter: float = 0.0
@@ -690,6 +698,20 @@ func sync_to_system_time() -> void:
 	_live_mode_syncing = false
 
 
+func set_connector_losses_enabled(enabled: bool) -> void:
+	if connector_losses_enabled == enabled:
+		return
+	connector_losses_enabled = enabled
+	connector_losses_changed.emit(enabled)
+
+
+func set_force_rainbow(enabled: bool) -> void:
+	if force_rainbow == enabled:
+		return
+	force_rainbow = enabled
+	force_rainbow_changed.emit(enabled)
+
+
 func set_survival_active(active: bool) -> void:
 	set_gameplay_paused(not active)
 
@@ -816,6 +838,8 @@ func persist_settings() -> void:
 	cfg.set_value("time", "auto_dst", bool(main_node.get("auto_dst")))
 	cfg.set_value("time", "manual_dst", bool(main_node.get("manual_dst")))
 	cfg.set_value("gameplay", "live_mode", live_mode_enabled)
+	cfg.set_value("gameplay", "connector_losses_enabled", connector_losses_enabled)
+	cfg.set_value("gameplay", "force_rainbow", force_rainbow)
 	cfg.set_value("gameplay", "survival_active", not bool(main_node.get("gameplay_mechanics_paused")))
 	if main_node.has_method("get_plant_growth_enabled"):
 		cfg.set_value("gameplay", "plant_growth_enabled", main_node.call("get_plant_growth_enabled"))
@@ -927,6 +951,10 @@ func _load_persisted_settings() -> void:
 		apply_analemma_lunar_color(cfg.get_value("gameplay", "analemma_lunar_color") as Color)
 	if cfg.has_section_key("gameplay", "live_mode") and bool(cfg.get_value("gameplay", "live_mode")):
 		set_live_mode(true)
+	if cfg.has_section_key("gameplay", "connector_losses_enabled"):
+		set_connector_losses_enabled(bool(cfg.get_value("gameplay", "connector_losses_enabled")))
+	if cfg.has_section_key("gameplay", "force_rainbow"):
+		set_force_rainbow(bool(cfg.get_value("gameplay", "force_rainbow")))
 	_load_rendering_adv(cfg)
 
 

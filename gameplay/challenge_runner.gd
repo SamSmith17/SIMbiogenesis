@@ -98,7 +98,8 @@ func start_challenge(def: ChallengeDef) -> bool:
 	challenge_toast.emit("Challenge started: %s" % def.title, TOAST_INFO)
 	var gv := _graph_view()
 	if gv != null and gv.has_method("try_seed_puzzle_starter"):
-		gv.call("try_seed_puzzle_starter", def.occupants)
+		var power_only := def.id == "keep_lights_on"
+		gv.call("try_seed_puzzle_starter", def.occupants, power_only)
 	_evaluate(true)
 	return true
 

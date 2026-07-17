@@ -11,6 +11,8 @@ extends RefCounted
 
 const ResourceTimelineScript := preload("res://core/resource_timeline.gd")
 const PbiBiomassScript := preload("res://system_graph/pbi_biomass.gd")
+const PlantGrowthScript := preload("res://system_graph/plant_growth.gd")
+const AtmospherePbiScript := preload("res://system_graph/atmosphere_pbi.gd")
 
 ## Emitted when any habitat's starved_kinds set changes (empty = all fed).
 signal habitat_starvation_changed(item_id: String, starved_kinds: Array)
@@ -40,6 +42,28 @@ var power_available_override: int = -1
 
 ## Rain-rate override for selftests (mm/h). Negative = use WeatherService.
 var rain_rate_override_mmh: float = -1.0
+
+## Connector-loss override for selftests: -1 = auto (SimSettingsController),
+## 0 = force off, 1 = force on. (Wave 8 hydraulic derate in JIT transfers.)
+var connector_losses_override: int = -1
+
+## Sunlight GHI override for selftests (W/m²). Negative = compute from real
+## sun position (SolarIrradiance/SolarPosition) + WeatherService, falling
+## back to clear-sky geometry when there is no weather coverage.
+var sun_ghi_override_wm2: float = -1.0
+
+## Cloud-fraction override for selftests (0–1). Negative = sample WeatherService.
+var sun_cloud_override: float = -1.0
+
+## SoI area override for selftests (m²). Negative = use SoiService.area_m2().
+var soi_area_override_m2: float = -1.0
+
+## Atmosphere overrides for Wind PBI selftests. Negative = sample WeatherService.
+var wind_speed_override_ms: float = -1.0
+var wind_temp_override_c: float = -999.0
+var wind_humidity_override_pct: float = -1.0
+var wind_cloud_override: float = -1.0
+var wind_rain_override_mmh: float = -1.0
 
 ## Batch-render context. When active, weather (rain/month) is sampled at
 ## `_render_abs_hours` instead of the live clock so the resource sim becomes a
@@ -398,6 +422,8 @@ func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 			_process_catchment(item, net_rates, dt_hours, abs_hours)
 		elif ty == "processor":
 			_process_processor(item, net_rates, dt_hours, abs_hours)
+		elif ty == "plant":
+			_process_plant(item, net_rates, dt_hours, abs_hours)
 
 	_process_jit_transfers(net_rates, dt_hours, abs_hours)
 
@@ -423,13 +449,19 @@ func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 		_apply_tank_sample(item, sample, tl, abs_hours)
 
 
-## Rain PBI (this pass): environment-driven telemetry + wire flow viz only.
-## Does not credit tanks directly — catchments multiply rain intensity by area.
+## Rain / Sunlight / Wind PBI: environment-driven telemetry + optional wire viz.
+## Does not credit tanks directly — catchments / turbines / plants consume ambiently.
 ## Never counts as an import (local Planetary Basic Income).
 func _process_pbi(item: Dictionary, _abs_hours: float) -> void:
 	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 	var kind := ResourceKinds.normalize_kind(str(specs.get("resource_kind", "water")))
-	# Only Rain/water PBI is functional this pass; sun/wind/biomass stay display-only.
+	if kind == "sunlight" or kind == "solar":
+		_process_sun_pbi(item, specs)
+		return
+	if kind == "wind" or kind == "atmosphere" or kind == "air" or kind == "mechanical":
+		_process_wind_pbi(item, specs)
+		return
+	# Rain/water PBI
 	if kind != "water" and kind != "rain":
 		return
 	var rain_mmh := _rain_rate_mmh()
@@ -445,6 +477,228 @@ func _process_pbi(item: Dictionary, _abs_hours: float) -> void:
 		return
 	for conn: Dictionary in (_resource_conns_by_source_item.get(iid, []) as Array):
 		_cache_conn_flow(str(conn.get("id", "")), total_lph, "water")
+
+
+## Solar PBI: GHI (W/m²) × SoI area (m²) = total flux (kW), plus a normalized
+## `sun_availability` (0–~1.2, 1.0 ≈ STC) that receivers (panels, plants —
+## Phase 3+) read to modulate their own output whether or not an optional
+## radiant wire is drawn from this node. Ambient, non-blocking by design —
+## sunlight is not delivered through a conduit in real life.
+func _process_sun_pbi(item: Dictionary, specs: Dictionary) -> void:
+	var ghi := _sun_ghi_wm2()
+	var area_m2 := _soi_area_m2()
+	var flux_kw: float = SolarIrradiance.flux_kw_from_ghi(ghi, area_m2)
+	specs["irradiance_wm2"] = ghi
+	specs["flux_kw"] = flux_kw
+	specs["sun_availability"] = SolarIrradiance.sun_availability(ghi)
+	specs["cloud_frac"] = _sun_cloud_frac()
+	specs["display_value"] = SolarIrradiance.pbi_display_string(ghi, flux_kw)
+	specs["is_active"] = ghi > 1.0
+	var iid := str(item.get("id", ""))
+	_model.update_item(iid, {"specs": specs})
+	# Animate outbound (optional) radiant wires at the SoI total flux — informational.
+	if flux_kw <= 0.0:
+		return
+	for conn: Dictionary in (_resource_conns_by_source_item.get(iid, []) as Array):
+		_cache_conn_flow(str(conn.get("id", "")), flux_kw, "sunlight")
+
+
+## Wind / atmosphere PBI: live weather (wind, temp, RH) + educational kinetic
+## flux through a SoI-wide vertical slab. Turbines already read WeatherService
+## ambiently — optional dashed wires are documentary only.
+func _process_wind_pbi(item: Dictionary, specs: Dictionary) -> void:
+	var sample := _atmosphere_sample()
+	var wind_ms: float = float(sample.get("wind_ms", 0.0))
+	var temp_c: float = float(sample.get("temp_c", 20.0))
+	var humidity: float = float(sample.get("humidity_pct", 50.0))
+	var cloud: float = float(sample.get("cloud_frac", 0.0))
+	var rain: float = float(sample.get("rain_mmh", 0.0))
+	var area_m2 := _soi_area_m2()
+	var kinetic_kw: float = AtmospherePbiScript.kinetic_flux_kw(wind_ms, area_m2)
+	specs["wind_ms"] = wind_ms
+	specs["temp_c"] = temp_c
+	specs["humidity_pct"] = humidity
+	specs["cloud_frac"] = cloud
+	specs["rain_mmh"] = rain
+	specs["kinetic_kw"] = kinetic_kw
+	specs["weather_class"] = AtmospherePbiScript.weather_visual_class(cloud, rain)
+	specs["display_value"] = AtmospherePbiScript.pbi_display_string(wind_ms, temp_c, humidity)
+	specs["is_active"] = wind_ms > 0.5 or rain > 0.05 or cloud > 0.05
+	var iid := str(item.get("id", ""))
+	_model.update_item(iid, {"specs": specs})
+	if kinetic_kw <= 0.0:
+		return
+	for conn: Dictionary in (_resource_conns_by_source_item.get(iid, []) as Array):
+		_cache_conn_flow(str(conn.get("id", "")), kinetic_kw, "wind")
+
+
+## Grow-bed / plant node: Monteith LUE biomass from ambient PAR (non-blocking
+## sunlight — same SoI GHI whether or not a radiant wire is drawn), gated by
+## wired water (required) and optional nutrients. Credits a biomass tank.
+## Biomass is a downstream consequence of sunlight — not a separate PBI.
+func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
+		abs_hours: float = -1.0) -> void:
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var iid := str(item.get("id", ""))
+	var abs_h: float = abs_hours if abs_hours >= 0.0 else _get_abs_hours()
+	if abs_h < 0.0:
+		abs_h = 0.0
+
+	var ghi := _sun_ghi_wm2()
+	var par := SolarIrradiance.par_wm2_from_ghi(ghi)
+	var area := PlantGrowthScript.effective_area_m2(specs, _soi_area_m2())
+	var sun_f := PlantGrowthScript.sunlight_factor_from_specs(specs)
+	var lue := PlantGrowthScript.lue_from_specs(specs)
+	var month := _sim_month()
+	var potential := PlantGrowthScript.potential_biomass_kg_h(par, area, lue, month) * sun_f
+
+	specs["irradiance_wm2"] = ghi
+	specs["par_wm2"] = par
+	specs["sunlight_factor"] = sun_f
+	specs["area_m2_effective"] = area
+
+	# --- Water (required, blocking) ---
+	var water_id := _tank_at_port(iid, "water_in", true)
+	var water_factor := 0.0
+	var water_specs: Dictionary = {}
+	var water_tl: ResourceTimeline = null
+	if water_id.is_empty():
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "needs water"
+		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
+				GraphNodeState.REASON_EMPTY_INPUT, ["water"])
+		_model.update_item(iid, {"specs": specs})
+		return
+	var water_item := _model.get_item(water_id)
+	water_specs = (water_item.get("specs", {}) as Dictionary).duplicate(true)
+	_rk.migrate_resource_specs(water_specs)
+	water_tl = _timelines.get(water_id) as ResourceTimeline
+	var water_ok: bool = _tank_has_supply(water_specs, water_tl, abs_h) \
+			or (water_tl == null and bool(water_specs.get("allow_negative", false)))
+	if not water_ok:
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "no water"
+		_write_node_state(iid, specs, GraphNodeState.STARVED,
+				GraphNodeState.REASON_EMPTY_INPUT, ["water"])
+		_model.update_item(iid, {"specs": specs})
+		return
+	water_factor = 1.0
+
+	# --- Nutrients (optional; if wired, depleting blocks) ---
+	var nutrient_id := _tank_at_port(iid, "nutrients_in", true)
+	var nutrient_factor := 1.0
+	var nutrient_specs: Dictionary = {}
+	var nutrient_tl: ResourceTimeline = null
+	var nutrients_wired := not nutrient_id.is_empty()
+	if nutrients_wired:
+		var nut_item := _model.get_item(nutrient_id)
+		nutrient_specs = (nut_item.get("specs", {}) as Dictionary).duplicate(true)
+		_rk.migrate_resource_specs(nutrient_specs)
+		nutrient_tl = _timelines.get(nutrient_id) as ResourceTimeline
+		var nut_ok: bool = _tank_has_supply(nutrient_specs, nutrient_tl, abs_h) \
+				or (nutrient_tl == null and bool(nutrient_specs.get("allow_negative", false)))
+		if not nut_ok:
+			specs["biomass_kg_h"] = 0.0
+			specs["display_value"] = "no nutrients"
+			_write_node_state(iid, specs, GraphNodeState.STARVED,
+					GraphNodeState.REASON_EMPTY_INPUT, ["nutrients"])
+			_model.update_item(iid, {"specs": specs})
+			return
+
+	# --- Biomass output tank (required) ---
+	var bio_id := _tank_at_port(iid, "biomass_out", false)
+	if bio_id.is_empty():
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "unwired out"
+		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
+				GraphNodeState.REASON_OUTPUT_UNWIRED, ["biomass"])
+		_model.update_item(iid, {"specs": specs})
+		return
+	var bio_item := _model.get_item(bio_id)
+	var bio_specs: Dictionary = (bio_item.get("specs", {}) as Dictionary).duplicate(true)
+	_rk.migrate_resource_specs(bio_specs)
+	if ResourceKinds.normalize_kind(str(bio_specs.get("resource_kind", ""))) != "biomass":
+		# Allow any tank but prefer biomass; still credit if kind mismatches
+		# only when the tank is biomass (strict).
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "need biomass tank"
+		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
+				GraphNodeState.REASON_OUTPUT_UNWIRED, ["biomass"])
+		_model.update_item(iid, {"specs": specs})
+		return
+	var bio_tl: ResourceTimeline = _timelines.get(bio_id) as ResourceTimeline
+	if not bool(bio_specs.get("input_valve_open", true)):
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "out closed"
+		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
+				GraphNodeState.REASON_OUTPUT_UNWIRED, ["biomass"])
+		_model.update_item(iid, {"specs": specs})
+		return
+	if not _tank_accepts_inflow(bio_specs, bio_tl, abs_h):
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "tank full"
+		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
+				GraphNodeState.REASON_OUTPUT_FULL, ["biomass"])
+		_model.update_item(iid, {"specs": specs})
+		return
+
+	var rate := PlantGrowthScript.biomass_kg_per_hour(
+			par, area, lue, month, water_factor, nutrient_factor, sun_f)
+	# Cap by remaining biomass headroom so we don't overflow.
+	if not _tank_is_unlimited(bio_specs) and dt_hours > 0.001:
+		var lvl: float = bio_tl.level_at(abs_h) if bio_tl != null else float(bio_specs.get("level", 0.0))
+		var cap: float = maxf(_effective_capacity_qty(bio_specs), 0.001)
+		var headroom: float = maxf(0.998 - lvl, 0.0) * cap
+		rate = minf(rate, headroom / dt_hours)
+
+	if rate <= 0.0 or potential <= 0.0:
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "0 kg/h" if ghi <= 1.0 else "idle"
+		_write_node_state(iid, specs, GraphNodeState.IDLE)
+		_model.update_item(iid, {"specs": specs})
+		return
+
+	var water_lph := PlantGrowthScript.water_demand_lph(
+			rate, PlantGrowthScript.water_l_per_kg_from_specs(specs))
+	var nut_kgph := 0.0
+	if nutrients_wired:
+		nut_kgph = PlantGrowthScript.nutrient_demand_kgph(
+				rate, PlantGrowthScript.nutrient_kg_per_kg_from_specs(specs))
+
+	# Apply rates
+	net_rates[water_id] = float(net_rates.get(water_id, 0.0)) - water_lph
+	if nutrients_wired and nut_kgph > 0.0:
+		net_rates[nutrient_id] = float(net_rates.get(nutrient_id, 0.0)) - nut_kgph
+	net_rates[bio_id] = float(net_rates.get(bio_id, 0.0)) + rate
+
+	# Wire animation
+	for conn: Dictionary in (_resource_conns_by_target_item.get(iid, []) as Array):
+		var src := _model.get_item(str(conn.get("source_item_id", "")))
+		if src.is_empty():
+			continue
+		var rk := ResourceKinds.normalize_kind(str(conn.get("resource_type", "")))
+		if rk.is_empty():
+			rk = ResourceKinds.normalize_kind(str(
+					(src.get("specs", {}) as Dictionary).get("resource_kind", "")))
+		if rk == "water":
+			_cache_conn_flow(str(conn.get("id", "")), water_lph, "water")
+		elif rk == "nutrients":
+			_cache_conn_flow(str(conn.get("id", "")), nut_kgph, "nutrients")
+		elif rk == "sunlight":
+			# Radiant wire is informational — animate at PAR×area (kW of PAR).
+			_cache_conn_flow(str(conn.get("id", "")), par * area / 1000.0, "sunlight")
+	for conn: Dictionary in (_resource_conns_by_source_item.get(iid, []) as Array):
+		_cache_conn_flow(str(conn.get("id", "")), rate, "biomass")
+
+	specs["biomass_kg_h"] = rate
+	specs["water_lph"] = water_lph
+	specs["nutrient_kgph"] = nut_kgph
+	if rate >= 0.01:
+		specs["display_value"] = "%.2f kg/h" % rate
+	else:
+		specs["display_value"] = "%.1f g/h" % (rate * 1000.0)
+	_write_node_state(iid, specs, GraphNodeState.RUNNING)
+	_model.update_item(iid, {"specs": specs})
 
 
 func _process_catchment(item: Dictionary, net_rates: Dictionary, dt_hours: float,
@@ -516,6 +770,8 @@ func _catchment_area_m2(specs: Dictionary) -> float:
 
 
 func _soi_area_m2() -> float:
+	if soi_area_override_m2 >= 0.0:
+		return soi_area_override_m2
 	if _host == null:
 		return 0.0
 	var tree: SceneTree = _host.get_tree()
@@ -682,6 +938,11 @@ func _process_jit_transfers(net_rates: Dictionary, dt_hours: float,
 			var tgt_id2: String = str(d.get("tgt_id", ""))
 			var tgt_specs2: Dictionary = d.get("specs", {}) as Dictionary
 			var tgt_tl2: ResourceTimeline = d.get("tl") as ResourceTimeline
+			var dconn: Dictionary = d.get("conn") as Dictionary
+			if bool(dconn.get("severed", false)):
+				# Burst conduit carries nothing (Wave 8 burnout).
+				_cache_conn_flow(str(dconn.get("id", "")), 0.0, src_kind)
+				continue
 			var max_in: float = remaining_rate
 			if not _tank_is_unlimited(tgt_specs2):
 				var dlvl: float = float(tgt_specs2.get("level", 0.0))
@@ -691,13 +952,53 @@ func _process_jit_transfers(net_rates: Dictionary, dt_hours: float,
 				# Stop short of the overflow threshold (level >= 0.999 + inflow).
 				var headroom: float = maxf(0.998 - dlvl, 0.0) * dcap
 				max_in = minf(max_in, headroom / dt_hours)
+			max_in = _apply_conduit_derate(dconn, max_in)
 			if max_in <= 0.0:
-				_cache_conn_flow(str((d.get("conn") as Dictionary).get("id", "")), 0.0, src_kind)
+				_cache_conn_flow(str(dconn.get("id", "")), 0.0, src_kind)
 				continue
 			net_rates[src_id] = float(net_rates.get(src_id, 0.0)) - max_in
 			net_rates[tgt_id2] = float(net_rates.get(tgt_id2, 0.0)) + max_in
-			_cache_conn_flow(str((d.get("conn") as Dictionary).get("id", "")), max_in, src_kind)
+			_cache_conn_flow(str(dconn.get("id", "")), max_in, src_kind)
 			remaining_rate -= max_in
+
+
+## Wave 8: opt-in Hazen-Williams friction derate on a JIT transfer. rate_qph is
+## qty/hour (water kinds use liters); telemetry is written straight onto the
+## connection dict (same in-place pattern as _cache_conn_flow).
+func _apply_conduit_derate(conn: Dictionary, rate_qph: float) -> float:
+	if rate_qph <= 0.0:
+		return rate_qph
+	var enabled: bool = bool(conn.get("simulate_losses", _connector_losses_enabled()))
+	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
+	if not enabled or not ConduitKinds.is_fluid_type(type_id):
+		conn["pressure_drop_psi"] = 0.0
+		conn["flow_derate"] = 1.0
+		conn["overload_ratio"] = 0.0
+		return rate_qph
+	var meta: Dictionary = ConduitKinds.type_meta(type_id)
+	var flow_lpm: float = rate_qph / 60.0
+	var rep: Dictionary = ConduitLoss.hydraulic_report_for_connection(conn, meta, flow_lpm)
+	var derate: float = clampf(float(rep.get("derate_frac", 1.0)), 0.0, 1.0)
+	conn["pressure_drop_psi"] = float(rep.get("drop_psi", 0.0))
+	conn["flow_derate"] = derate
+	conn["overload_ratio"] = float(rep.get("overload_ratio", 0.0))
+	return rate_qph * derate
+
+
+func _connector_losses_enabled() -> bool:
+	if connector_losses_override == 0:
+		return false
+	if connector_losses_override == 1:
+		return true
+	if _host == null or not is_instance_valid(_host):
+		return false
+	var tree := _host.get_tree()
+	if tree == null or tree.root == null:
+		return false
+	var ctrl := tree.root.get_node_or_null("SimSettingsController")
+	if ctrl == null:
+		return false
+	return bool(ctrl.get("connector_losses_enabled"))
 
 
 ## Returns {ok, delta_m}. ok=false when source elev < target elev and no pump.
@@ -1504,6 +1805,129 @@ func _rain_rate_mmh() -> float:
 	if ws.has_method("rain_rate_mmh"):
 		return float(ws.call("rain_rate_mmh", month, day, hour))
 	return 0.0
+
+
+## Horizontal global irradiance (W/m²) at the live clock instant (or render
+## instant during a batch render). Real sun position (Meeus SPA via
+## SolarIrradiance) + measured WeatherService GHI when covered, else the
+## shared clear-sky model — never zero just because weather is unavailable.
+func _sun_ghi_wm2() -> float:
+	if sun_ghi_override_wm2 >= 0.0:
+		return sun_ghi_override_wm2
+	var main_node: Node = null
+	if _host != null and _host.has_method("_get_scene_main_node"):
+		main_node = _host.call("_get_scene_main_node")
+	if main_node == null:
+		return 0.0
+	var year: int = int(main_node.get("year")) if main_node.get("year") != null else 2026
+	var month: int = int(main_node.get("month")) if main_node.get("month") != null else 6
+	var day: int = int(main_node.get("day")) if main_node.get("day") != null else 1
+	var hour: float = float(main_node.get("day_time")) if main_node.get("day_time") != null else 12.0
+	if _render_ctx_active:
+		var d := _date_at_render()
+		if not d.is_empty():
+			year = int(d.get("year", year))
+			month = int(d.get("month", month))
+			day = int(d.get("day", day))
+			hour = float(d.get("day_time", hour))
+	var lat: float = float(main_node.get("latitude")) if main_node.get("latitude") != null else 0.0
+	var lon: float = float(main_node.get("longitude")) if main_node.get("longitude") != null else 0.0
+	var ws: Node = null
+	var tree: SceneTree = _host.get_tree() if _host != null else null
+	if tree != null:
+		ws = tree.root.get_node_or_null("WeatherService")
+	var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, ws)
+	return SolarIrradiance.ghi_wm2_at_calendar(lat, lon, month, day, hour, weather, year)
+
+
+## Cloud cover fraction (0–1) at the live/render instant — folded into GHI via
+## SolarIrradiance and published on the sunlight PBI as specs.cloud_frac so
+## overcast reduces shared availability even without per-node 3D geometry.
+func _sun_cloud_frac() -> float:
+	if sun_cloud_override >= 0.0:
+		return clampf(sun_cloud_override, 0.0, 1.0)
+	var main_node: Node = null
+	if _host != null and _host.has_method("_get_scene_main_node"):
+		main_node = _host.call("_get_scene_main_node")
+	if main_node == null:
+		return 0.0
+	var year: int = int(main_node.get("year")) if main_node.get("year") != null else 2026
+	var month: int = int(main_node.get("month")) if main_node.get("month") != null else 6
+	var day: int = int(main_node.get("day")) if main_node.get("day") != null else 1
+	var hour: float = float(main_node.get("day_time")) if main_node.get("day_time") != null else 12.0
+	if _render_ctx_active:
+		var d := _date_at_render()
+		if not d.is_empty():
+			year = int(d.get("year", year))
+			month = int(d.get("month", month))
+			day = int(d.get("day", day))
+			hour = float(d.get("day_time", hour))
+	var lat: float = float(main_node.get("latitude")) if main_node.get("latitude") != null else 0.0
+	var lon: float = float(main_node.get("longitude")) if main_node.get("longitude") != null else 0.0
+	var ws: Node = null
+	var tree: SceneTree = _host.get_tree() if _host != null else null
+	if tree != null:
+		ws = tree.root.get_node_or_null("WeatherService")
+	var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, ws)
+	return clampf(float(weather.get("cloud", 0.0)), 0.0, 1.0)
+
+
+## Atmosphere sample for Wind PBI (honors selftest overrides).
+func _atmosphere_sample() -> Dictionary:
+	var out := {
+		"wind_ms": 0.0, "temp_c": 20.0, "humidity_pct": 50.0,
+		"cloud_frac": 0.0, "rain_mmh": 0.0, "has_real": false,
+	}
+	if wind_speed_override_ms >= 0.0:
+		out["wind_ms"] = wind_speed_override_ms
+	if wind_temp_override_c > -900.0:
+		out["temp_c"] = wind_temp_override_c
+	if wind_humidity_override_pct >= 0.0:
+		out["humidity_pct"] = wind_humidity_override_pct
+	if wind_cloud_override >= 0.0:
+		out["cloud_frac"] = clampf(wind_cloud_override, 0.0, 1.0)
+	if wind_rain_override_mmh >= 0.0:
+		out["rain_mmh"] = wind_rain_override_mmh
+	# If all overrides set, skip WeatherService (deterministic selftests).
+	var all_overridden: bool = wind_speed_override_ms >= 0.0 \
+			and wind_temp_override_c > -900.0 \
+			and wind_humidity_override_pct >= 0.0
+	if all_overridden:
+		out["has_real"] = true
+		return out
+	var main_node: Node = null
+	if _host != null and _host.has_method("_get_scene_main_node"):
+		main_node = _host.call("_get_scene_main_node")
+	if main_node == null:
+		return out
+	var month: int = int(main_node.get("month")) if main_node.get("month") != null else 6
+	var day: int = int(main_node.get("day")) if main_node.get("day") != null else 1
+	var hour: float = float(main_node.get("day_time")) if main_node.get("day_time") != null else 12.0
+	if _render_ctx_active:
+		var d := _date_at_render()
+		if not d.is_empty():
+			month = int(d.get("month", month))
+			day = int(d.get("day", day))
+			hour = float(d.get("day_time", hour))
+	var lat: float = float(main_node.get("latitude")) if main_node.get("latitude") != null else 0.0
+	var lon: float = float(main_node.get("longitude")) if main_node.get("longitude") != null else 0.0
+	var ws: Node = null
+	var tree: SceneTree = _host.get_tree() if _host != null else null
+	if tree != null:
+		ws = tree.root.get_node_or_null("WeatherService")
+	var sample: Dictionary = AtmospherePbiScript.sample(lat, lon, month, day, hour, ws)
+	if wind_speed_override_ms < 0.0:
+		out["wind_ms"] = float(sample.get("wind_ms", 0.0))
+	if wind_temp_override_c <= -900.0:
+		out["temp_c"] = float(sample.get("temp_c", 20.0))
+	if wind_humidity_override_pct < 0.0:
+		out["humidity_pct"] = float(sample.get("humidity_pct", 50.0))
+	if wind_cloud_override < 0.0:
+		out["cloud_frac"] = float(sample.get("cloud_frac", 0.0))
+	if wind_rain_override_mmh < 0.0:
+		out["rain_mmh"] = float(sample.get("rain_mmh", 0.0))
+	out["has_real"] = bool(sample.get("has_real", false))
+	return out
 
 
 func _tank_at_port(proc_id: String, handle_id: String, want_input: bool) -> String:

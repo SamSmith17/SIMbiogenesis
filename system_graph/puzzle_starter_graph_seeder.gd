@@ -3,6 +3,7 @@ extends RefCounted
 
 ## Seeds a playable habitat subgraph (tanks + catchment + optional imports).
 ## Idempotent — skips if starter content or an existing habitat is present.
+## `power_only` (Mission 1) seeds AC load + grid import only — no water/food.
 
 const STARTER_SOURCE := "puzzle_starter"
 const ComponentPresetsScript := preload("res://system_graph/data/component_presets.gd")
@@ -31,12 +32,16 @@ static func has_habitat(model: GraphModel) -> bool:
 	return false
 
 
-static func seed_graph(model: GraphModel, occupants: int = 1) -> bool:
+static func seed_graph(model: GraphModel, occupants: int = 1,
+		power_only: bool = false) -> bool:
 	if model == null:
 		return false
 	if has_starter_content(model) or has_habitat(model):
 		return false
 	occupants = maxi(occupants, 1)
+
+	if power_only:
+		return _seed_power_only(model, occupants)
 
 	var hab_specs := _habitat_specs(occupants)
 	_add(model, "starter_hab", "processor", -80.0, 0.0, 150.0, 150.0, hab_specs)
@@ -72,17 +77,16 @@ static func seed_graph(model: GraphModel, occupants: int = 1) -> bool:
 		"use_soi_area": true, "area_m2": 50.0, "runoff_coeff": 0.75, "cost": 0.0,
 		"source": STARTER_SOURCE, "starter_seed": STARTER_SOURCE,
 	})
-	_add(model, "starter_biomass_pbi", "catchment", -520.0, 120.0, 110.0, 90.0, {
-		"name": "SoI Biomass PBI", "catchment_kind": "biomass",
-		"use_soi_area": true, "area_m2": 100.0, "runoff_coeff": 1.0, "cost": 0.0,
-		"source": STARTER_SOURCE, "starter_seed": STARTER_SOURCE,
-	})
 	# Rain PBI circular source — reuse the auto-seeded node if present.
 	if model.get_item("pbi_rain").is_empty():
 		_add(model, "pbi_rain", "pbi", -700.0, -20.0, 100.0, 100.0, {
 			"name": "Rain", "resource_kind": "water",
 			"source": STARTER_SOURCE, "starter_seed": STARTER_SOURCE,
+			"fundamental": true, "locked": true,
 		})
+		var rain_item := model.get_item("pbi_rain")
+		if not rain_item.is_empty():
+			rain_item["locked"] = true
 
 	_add(model, "starter_water_truck", "processor", 300.0, -120.0, 130.0, 110.0,
 			_import_specs("Water Truck", "water", 200.0, "L/h"))
@@ -93,20 +97,32 @@ static func seed_graph(model: GraphModel, occupants: int = 1) -> bool:
 
 	_connect_resource(model, "pbi_rain", "output", "starter_rain", "input", "water")
 	_connect_resource(model, "starter_rain", "output", "starter_water", "input", "water")
-	_connect_resource(model, "starter_biomass_pbi", "output", "starter_biomass", "input", "biomass")
 	_connect_resource(model, "starter_water", "output", "starter_hab", "res_in_0", "water")
 	_connect_resource(model, "starter_food", "output", "starter_hab", "res_in_1", "food")
 	_connect_resource(model, "starter_hab", "res_out_0", "starter_grey", "input", "greywater")
 	_connect_resource(model, "starter_hab", "res_out_1", "starter_black", "input", "blackwater")
 
+	_finish_seed(model, "habitat + tanks + SoI catchments + import nodes")
+	return true
+
+
+## Mission 1 (Keep the Lights On): AC habitat load + grid import only.
+static func _seed_power_only(model: GraphModel, occupants: int) -> bool:
+	_add(model, "starter_hab", "processor", -80.0, 0.0, 150.0, 150.0,
+			_power_habitat_specs(occupants))
+	_add(model, "starter_grid", "processor", 220.0, 0.0, 130.0, 110.0,
+			_import_specs("Grid Import", "electric", 5.0, "kWh/h"))
+	_finish_seed(model, "power-only habitat + grid import")
+	return true
+
+
+static func _finish_seed(model: GraphModel, label: String) -> void:
 	var patches := GraphLayoutScript.resolve_overlaps(model.items)
 	for iid: String in patches.keys():
 		var pos: Vector2 = patches[iid] as Vector2
 		model.update_item(iid, {"x": pos.x, "y": pos.y})
-
 	model.changed.emit("puzzle_starter_seed")
-	print("PuzzleStarterGraphSeeder: habitat + tanks + SoI catchments + import nodes")
-	return true
+	print("PuzzleStarterGraphSeeder: %s" % label)
 
 
 static func _habitat_specs(occupants: int) -> Dictionary:
@@ -124,6 +140,19 @@ static func _habitat_specs(occupants: int) -> Dictionary:
 	return specs
 
 
+## Power-only habitat: AC draw, no water/food resource I/O.
+static func _power_habitat_specs(occupants: int) -> Dictionary:
+	return {
+		"name": "Habitat Power", "role": "habitat", "occupants": occupants,
+		"watts": 400.0 * float(occupants), "cost": 0.0,
+		"energy_source": "",
+		"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+		"inputs": [],
+		"outputs": [],
+		"source": STARTER_SOURCE, "starter_seed": STARTER_SOURCE,
+	}
+
+
 static func _import_specs(label: String, kind: String, rate: float, unit: String) -> Dictionary:
 	return {
 		"name": label, "role": "import", "counts_as_import": true,
@@ -137,7 +166,7 @@ static func _import_specs(label: String, kind: String, rate: float, unit: String
 
 static func _add(model: GraphModel, iid: String, ty: String,
 		x: float, y: float, w: float, h: float, specs: Dictionary) -> void:
-	model.add_item({
+	var item := {
 		"id": iid,
 		"type": ty,
 		"x": x,
@@ -147,7 +176,10 @@ static func _add(model: GraphModel, iid: String, ty: String,
 		"scope_id": "root",
 		"is_virtual": false,
 		"specs": specs,
-	})
+	}
+	if ty == "pbi" or bool(specs.get("fundamental", false)) or bool(specs.get("locked", false)):
+		item["locked"] = true
+	model.add_item(item)
 
 
 static func _connect_resource(model: GraphModel, src_id: String, src_h: String,

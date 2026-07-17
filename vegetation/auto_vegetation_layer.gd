@@ -30,10 +30,15 @@ const MAX_HERO := 4000
 
 var _grass_bulk := 0
 var _tree_bulk := 0
+## Per-layer caps (set from style via apply_instance_caps). Default = constants.
+var max_tree_bulk: int = MAX_TREE_BULK_TOTAL
+var max_grass_bulk: int = MAX_GRASS_BULK_TOTAL
 
 
 static func _is_grass_slot(slot: String) -> bool:
-	return slot in VegetationLayer.GRASS_SPECIES
+	if slot in VegetationLayer.GRASS_SPECIES:
+		return true
+	return VegSpeciesCatalog.mesh_family(slot).begins_with("grass_")
 
 
 static func create_empty() -> AutoVegetationLayer:
@@ -51,13 +56,20 @@ var hero: Array = []
 var forests: Array = []
 
 
+func apply_instance_caps(style: Dictionary) -> void:
+	max_tree_bulk = clampi(int(style.get("auto_max_tree_instances", MAX_TREE_BULK_TOTAL)),
+		1000, MAX_TREE_BULK_TOTAL)
+	max_grass_bulk = clampi(int(style.get("auto_max_grass_instances", MAX_GRASS_BULK_TOTAL)),
+		2000, MAX_GRASS_BULK_TOTAL)
+
+
 func add_bulk(slot: String, x: float, z: float, yaw: float, scale: float,
 		height_m: float = 0.0) -> bool:
 	var is_grass := _is_grass_slot(slot)
 	if is_grass:
-		if _grass_bulk >= MAX_GRASS_BULK_TOTAL:
+		if _grass_bulk >= max_grass_bulk:
 			return false
-	elif _tree_bulk >= MAX_TREE_BULK_TOTAL:
+	elif _tree_bulk >= max_tree_bulk:
 		return false
 	if slot not in bulk:
 		bulk[slot] = []

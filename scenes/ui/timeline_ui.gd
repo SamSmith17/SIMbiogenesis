@@ -24,17 +24,20 @@ const C_TEXT     := UITheme.C_TEXT
 const C_TEXT_S   := UITheme.C_TEXT_S
 const C_TEXT_M   := UITheme.C_TEXT_M
 
-# NLE track (variable) + clip-controls (22) + main info row + padding.
+# Variable scrubber track + main info row (transport / left NLE icons /
+# right system icons). NLE clip controls live in the left icon cluster so
+# the bar no longer needs a separate 22 px button strip.
 # INFO_ROW_HEIGHT fits the tallest cluster — the centre time cluster (22 pt
-# time + date spin row, ~64 px). Weather lives in the floating WeatherCardUI
-# now, so the bar is a single-chip-row slab.
-const INFO_ROW_HEIGHT : int = 72
-const NLE_ROW_HEIGHT : int = 22
-const BAR_CHROME_HEIGHT : int = INFO_ROW_HEIGHT + NLE_ROW_HEIGHT + 10
+# time + date spin row). Weather lives in the floating WeatherCardUI.
+# Kept slim so graph sidebars / place-edit dock sit flush above the bar.
+const INFO_ROW_HEIGHT : int = 56
+## @deprecated Kept for older references; chrome no longer includes an NLE row.
+const NLE_ROW_HEIGHT : int = 0
+const BAR_CHROME_HEIGHT : int = INFO_ROW_HEIGHT + 6
 ## Gap between the bar bottom edge and the viewport (external padding).
-const BAR_BOTTOM_PAD : int = 10
+const BAR_BOTTOM_PAD : int = 4
 ## Extra breathing room inside the info row above the bar bottom.
-const INFO_ROW_BOTTOM_PAD : int = 4
+const INFO_ROW_BOTTOM_PAD : int = 2
 ## Legacy alias — minimum scrubber height before waveform tracks.
 const TRACK_ROW_HEIGHT : int = 54
 const NWS_ALERT_SERVICE_SCRIPT := preload("res://core/nws_alert_service.gd")
@@ -167,7 +170,7 @@ const LANE_CLIM_FILL := Color(0.686, 0.420, 0.933, 0.55)  # purple — climelaps
 const LANE_CLIM_BG   := Color(0.686, 0.420, 0.933, 0.10)
 const SEL_FILL       := Color(1.0, 1.0, 1.0, 0.09)        # selection span
 const SEL_EDGE       := Color(1.0, 1.0, 1.0, 0.55)
-# NLE control buttons (built in _build_nle_row).
+# NLE control buttons (built in _build_left_cluster).
 var _import_btn        : Button = null
 var _linkagelab_btn    : Button = null
 var _render_btn        : Button = null
@@ -201,8 +204,8 @@ var _sunset_lbl   : Label
 var _moon_lbl     : Label
 var _play_btn     : Button
 var _speed_lbl    : Label
-# Info-row clusters (manually centred: weather left · transport/time/date centre
-# · icon buttons right). Parent is a plain Control so we position them ourselves.
+# Info-row clusters (manually placed: NLE icons left · transport/time/date
+# centre · system icons right). Parent is a plain Control so we position them.
 var _info_row       : Control = null
 var _left_cluster   : Control = null
 var _center_time_cluster : Control = null
@@ -228,6 +231,7 @@ var _bar_layout_guard: bool = false
 var _last_viewport_size: Vector2 = Vector2.ZERO
 ## Record Book Modal — lazy-init on first press.
 var _record_book_panel: Control = null
+var _site_report_panel: Control = null
 
 # Tooltip panel — sibling on the parent CanvasLayer. Still used by the NWS
 # alert-band hover on the track (stat-tile hovers moved to WeatherCardUI).
@@ -625,13 +629,15 @@ func _rebuild_tracks_menu() -> void:
 		idx += 1
 	if idx > 0:
 		_tracks_menu.add_separator()
+	# PopupMenu.set_item_metadata takes the item INDEX, not the id. Using
+	# id=1000+ as the index was spamming "Index p_idx out of bounds" on load.
 	var add_base := 1000
 	var add_i := 0
 	for ch in TimelineTrackDef.channel_catalog():
 		var cid := str(ch.get("id", ""))
 		for src in ch.get("sources", []):
 			_tracks_menu.add_item("＋ %s (%s)" % [str(ch.get("label", cid)), src], add_base + add_i)
-			_tracks_menu.set_item_metadata(add_base + add_i, {"add": cid, "source": str(src)})
+			_tracks_menu.set_item_metadata(_tracks_menu.item_count - 1, {"add": cid, "source": str(src)})
 			add_i += 1
 
 
@@ -1454,7 +1460,6 @@ func _build_bar() -> void:
 	bg.add_child(vbox)
 
 	_build_scrubber_row(vbox)
-	_build_nle_row(vbox)
 	_build_info_row(vbox)
 	_sync_scrubber_row_height()
 	_request_bar_layout()
@@ -1539,81 +1544,72 @@ func _build_scrubber_row(parent: VBoxContainer) -> void:
 	row.add_child(_track_lbl_end)
 
 
-## NLE clip-controls strip: import datastream, render selection, load-mode
-## toggle, compare toggle, and a render-progress readout.
-func _build_nle_row(parent: VBoxContainer) -> void:
-	var row := HBoxContainer.new()
-	row.custom_minimum_size = Vector2(0, NLE_ROW_HEIGHT)
-	row.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 6)
-	parent.add_child(row)
+## LEFT — NLE / clip / video icon cluster (pinned left, mirrors right system icons).
+## Icons deliberately differ from the right cluster (📥 vs 📂, 📈 vs ⚙).
+func _build_left_cluster() -> Control:
+	var left := HBoxContainer.new()
+	left.alignment = BoxContainer.ALIGNMENT_BEGIN
+	left.add_theme_constant_override("separation", 4)
 
-	_import_btn = _mk_flat_btn("📂 Import datastream…", _on_import_pressed,
-		"Load a Home Assistant CSV export as an observed comparison clip")
-	_import_btn.add_theme_font_size_override("font_size", 11)
-	row.add_child(_import_btn)
+	_import_btn = _mk_icon_btn("📥", _on_import_pressed,
+			"Import datastream — load a Home Assistant CSV as an observed comparison clip")
+	left.add_child(_import_btn)
 
-	_render_btn = _mk_flat_btn("⚙ Render", _on_render_pressed,
-		"Render energy sim or vegetation climelapse for the Ctrl-drag selection")
-	_render_btn.add_theme_font_size_override("font_size", 11)
-	_render_btn.custom_minimum_size = Vector2(0, 32)
-	row.add_child(_render_btn)
+	_render_btn = _mk_icon_btn("📈", _on_render_pressed,
+			"Render — bake energy sim (or climelapse) for the Ctrl-drag selection on the track")
+	left.add_child(_render_btn)
 
-	_export_mp4_btn = _mk_flat_btn("🎬 Export MP4", _on_export_clim_mp4_pressed,
-		"Export a climelapse video of the Ctrl-drag selection to MP4")
-	_export_mp4_btn.add_theme_font_size_override("font_size", 11)
-	_export_mp4_btn.add_theme_color_override("font_color", Color(0.4, 0.7, 1.0))
-	_export_mp4_btn.custom_minimum_size = Vector2(0, 32)
-	row.add_child(_export_mp4_btn)
+	_export_mp4_btn = _mk_icon_btn("🎬", _on_export_clim_mp4_pressed,
+			"Export MP4 — write a climelapse video of the Ctrl-drag selection (needs ffmpeg)")
+	_export_mp4_btn.add_theme_color_override("font_color", Color(0.45, 0.75, 1.0))
+	left.add_child(_export_mp4_btn)
 
+	var path_add := _mk_icon_btn("📍", _on_clim_path_add_pressed,
+			"Add drone path waypoint — current camera pose for moving hyperlapse export")
+	left.add_child(path_add)
+	var path_clr := _mk_icon_btn("🧹", _on_clim_path_clear_pressed,
+			"Clear climelapse drone path waypoints")
+	left.add_child(path_clr)
 
-	_loadmode_btn = _mk_flat_btn("Load: CSV", _on_loadmode_pressed,
-		"Simulated-battery load source — CSV: feed observed load (isolates solar/weather error); Modeled: simulate load too")
-	_loadmode_btn.add_theme_font_size_override("font_size", 11)
-	row.add_child(_loadmode_btn)
+	_loadmode_btn = _mk_icon_btn("📄", _on_loadmode_pressed,
+			"Render load source — CSV uses observed load (isolates solar/weather error); Modeled also simulates load")
+	left.add_child(_loadmode_btn)
 
-	_compare_btn = _mk_flat_btn("⧉ Compare", _on_compare_pressed,
-		"Split-screen observed vs simulated on the projection canvas (I)")
-	_compare_btn.add_theme_font_size_override("font_size", 11)
-	row.add_child(_compare_btn)
+	_compare_btn = _mk_icon_btn("⧉", _on_compare_pressed,
+			"Compare — split-screen observed vs simulated on the projection canvas (I)")
+	left.add_child(_compare_btn)
 
-	_tracks_btn = _mk_flat_btn("Tracks", _on_tracks_pressed,
-		"Show/hide sensor waveform tracks and add channels")
-	_tracks_btn.add_theme_font_size_override("font_size", 11)
-	row.add_child(_tracks_btn)
+	_tracks_btn = _mk_icon_btn("🎚", _on_tracks_pressed,
+			"Tracks — show/hide sensor waveform lanes and add channels")
+	left.add_child(_tracks_btn)
 	_setup_tracks_menu()
 
-	# Separator before video controls.
-	var vid_sep := ColorRect.new()
-	vid_sep.color = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.35)
-	vid_sep.custom_minimum_size = Vector2(1, 18)
-	vid_sep.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(_mk_margin(vid_sep, 4, 0))
+	# Visual break before video/live tools.
+	left.add_child(_mk_vsep())
 
-	_load_video_btn = _mk_flat_btn("📹 Load video", _on_load_video_pressed,
-		"Load a timelapse video file for the TR panel (auto-synced to timecode)")
-	_load_video_btn.add_theme_font_size_override("font_size", 11)
+	_load_video_btn = _mk_icon_btn("📹", _on_load_video_pressed,
+			"Load video — open a timelapse file for the TR panel (auto-synced to timecode)")
 	_load_video_btn.add_theme_color_override("font_color", C_GREEN)
-	row.add_child(_load_video_btn)
+	left.add_child(_load_video_btn)
 
-	_live_feed_btn = _mk_flat_btn("📷 Live feed", _on_live_feed_pressed,
-		"Select a live camera / OBS virtual camera feed for the TR panel")
-	_live_feed_btn.add_theme_font_size_override("font_size", 11)
+	_live_feed_btn = _mk_icon_btn("📷", _on_live_feed_pressed,
+			"Live feed — pick a camera / OBS virtual camera for the TR panel")
 	_live_feed_btn.add_theme_color_override("font_color", C_GREEN)
-	row.add_child(_live_feed_btn)
+	left.add_child(_live_feed_btn)
 
-	_snap_video_btn = _mk_flat_btn("⏮ Snap video", _on_snap_video_pressed,
-		"Align video frame 0 to the current playhead position (re-syncs the VID track)")
-	_snap_video_btn.add_theme_font_size_override("font_size", 11)
-	row.add_child(_snap_video_btn)
+	_snap_video_btn = _mk_icon_btn("⏲", _on_snap_video_pressed,
+			"Snap video — align video frame 0 to the current playhead (re-syncs the VID track)")
+	left.add_child(_snap_video_btn)
 
 	_render_progress_lbl = Label.new()
 	_render_progress_lbl.text = ""
 	_render_progress_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_render_progress_lbl.add_theme_font_size_override("font_size", 10)
+	_render_progress_lbl.add_theme_font_size_override("font_size", 9)
 	_render_progress_lbl.add_theme_color_override("font_color", C_TEXT_S)
-	row.add_child(_render_progress_lbl)
+	_render_progress_lbl.custom_minimum_size = Vector2(52, 0)
+	left.add_child(_render_progress_lbl)
+
+	return left
 
 
 # ---------------------------------------------------------------------------
@@ -1709,6 +1705,23 @@ func _default_clim_mp4_name(start_abs: float) -> String:
 	var dt: Dictionary = clock.abs_hours_to_date(start_abs)
 	return "climelapse_%d_%02d_%02d.mp4" % [
 		int(dt.get("year", 1)), int(dt.get("month", 1)), int(dt.get("day", 1))]
+
+
+func _on_clim_path_add_pressed() -> void:
+	var tl := _get_terrain_loader()
+	if tl == null or not tl.has_method("add_climelapse_path_waypoint"):
+		push_warning("Drone path waypoints require a user map with TerrainLoader.")
+		return
+	if bool(tl.call("add_climelapse_path_waypoint")):
+		var n := int(tl.call("get_climelapse_path_count")) if tl.has_method("get_climelapse_path_count") else 0
+		print("Climelapse path: %d waypoint(s)" % n)
+
+
+func _on_clim_path_clear_pressed() -> void:
+	var tl := _get_terrain_loader()
+	if tl != null and tl.has_method("clear_climelapse_path"):
+		tl.call("clear_climelapse_path")
+		print("Climelapse path cleared.")
 
 
 func _on_export_clim_mp4_pressed() -> void:
@@ -1913,7 +1926,7 @@ func _on_snap_video_pressed() -> void:
 		_track.queue_redraw()
 
 
-## Refresh the NLE control labels/enabled state from SolarUI.
+## Refresh the left-cluster NLE icons / enabled state from SolarUI.
 func _update_nle_controls() -> void:
 	var s := _get_solar()
 	if s != null:
@@ -1927,9 +1940,12 @@ func _update_nle_controls() -> void:
 				pc.connect("video_clip_changed", Callable(self, "_on_solar_clip_changed"))
 			_solar_signals_connected = true
 		if _loadmode_btn != null and s.has_method("get_render_load_mode"):
-			_loadmode_btn.text = "Load: CSV" if int(s.call("get_render_load_mode")) == 0 else "Load: Modeled"
-		if _render_btn != null and s.has_method("has_observed_clip"):
-			_render_btn.disabled = not bool(s.call("has_observed_clip"))
+			var csv_mode := int(s.call("get_render_load_mode")) == 0
+			_loadmode_btn.text = "📄" if csv_mode else "🧮"
+			_loadmode_btn.tooltip_text = (
+					"Render load source: CSV (observed load — isolates solar/weather error). Click for Modeled."
+					if csv_mode else
+					"Render load source: Modeled (simulates load too). Click for CSV.")
 		if _compare_btn != null:
 			var has_render := false
 			if s.has_method("get_rendered_range_abs"):
@@ -1940,17 +1956,17 @@ func _update_nle_controls() -> void:
 		if _render_progress_lbl != null and s.has_method("get_render_progress"):
 			var parts: PackedStringArray = []
 			if s.has_method("is_rendering") and bool(s.call("is_rendering")):
-				parts.append("Energy %d%%" % int(round(float(s.call("get_render_progress")) * 100.0)))
+				parts.append("E%d%%" % int(round(float(s.call("get_render_progress")) * 100.0)))
 			elif float(s.call("get_render_progress")) >= 1.0:
-				parts.append("Energy ✓")
+				parts.append("E✓")
 			var tl := _get_terrain_loader()
 			if tl != null and tl.has_method("is_climelapse_rendering"):
 				if bool(tl.call("is_climelapse_rendering")):
 					var cp := float(tl.call("get_climelapse_progress"))
-					parts.append("Clim %d%%" % int(round(cp * 100.0)))
+					parts.append("C%d%%" % int(round(cp * 100.0)))
 				elif tl.has_method("get_climelapse_progress") and float(tl.call("get_climelapse_progress")) >= 1.0:
-					parts.append("Clim ✓")
-			_render_progress_lbl.text = " · ".join(parts)
+					parts.append("C✓")
+			_render_progress_lbl.text = " ".join(parts)
 
 	# Snap button enabled only when a video is loaded.
 	if _snap_video_btn != null:
@@ -1962,7 +1978,10 @@ func _update_nle_controls() -> void:
 		var tl2 := _get_terrain_loader()
 		var clim_busy := tl2 != null and tl2.has_method("is_climelapse_rendering") \
 			and bool(tl2.call("is_climelapse_rendering"))
-		_render_btn.disabled = clim_busy
+		var need_clip := true
+		if s != null and s.has_method("has_observed_clip"):
+			need_clip = bool(s.call("has_observed_clip"))
+		_render_btn.disabled = clim_busy or not need_clip
 	if not _clim_signals_connected:
 		var tl4 := _get_terrain_loader()
 		if tl4 != null and tl4.has_signal("climelapse_state_changed"):
@@ -2042,6 +2061,8 @@ func _build_info_row(parent: VBoxContainer) -> void:
 	_info_row.resized.connect(_layout_info_clusters)
 	parent.add_child(_info_row)
 
+	_left_cluster = _build_left_cluster()
+	_info_row.add_child(_left_cluster)
 	_center_time_cluster = _build_center_cluster()
 	_info_row.add_child(_center_time_cluster)
 	_right_cluster = _build_right_cluster()
@@ -2058,12 +2079,14 @@ func _layout_info_clusters() -> void:
 	if row_w <= 1.0:
 		return
 	var usable_h := maxf(1.0, row_h - INFO_ROW_BOTTOM_PAD)
-	for c: Control in [_center_time_cluster, _right_cluster]:
+	for c: Control in [_left_cluster, _center_time_cluster, _right_cluster]:
 		if c == null:
 			continue
 		var cs: Vector2 = c.get_combined_minimum_size()
 		c.size = cs
 		c.position.y = maxf(0.0, (usable_h - cs.y) * 0.5)
+	if _left_cluster != null:
+		_left_cluster.position.x = INFO_ROW_EDGE_PAD
 	if _right_cluster != null:
 		_right_cluster.position.x = row_w - _right_cluster.size.x - INFO_ROW_EDGE_PAD
 	if _center_time_cluster != null:
@@ -2161,32 +2184,53 @@ func _build_center_cluster() -> Control:
 	return master
 
 
-## RIGHT — icon buttons (save / settings / import / records / map). Pinned to
-## the right edge of the info row, mirroring the left cluster.
+## RIGHT — system icons (save / settings / shading / import shortcut / …).
+## Pinned to the right edge; mirrors the left NLE cluster.
 func _build_right_cluster() -> Control:
 	var right := HBoxContainer.new()
 	right.alignment             = BoxContainer.ALIGNMENT_END
 	right.add_theme_constant_override("separation", 4)
 
-	var sl_btn := _mk_icon_btn("💾", _on_save_load_pressed, "Save / Load  (manage save slots)")
+	var sl_btn := _mk_icon_btn("💾", _on_save_load_pressed, "Save / Load — manage game save slots")
 	right.add_child(sl_btn)
 	var gear_btn := _mk_icon_btn("⚙", _on_settings_pressed, "Settings — clouds, sun/moon, stars & planets, location")
 	right.add_child(gear_btn)
-	_shading_btn = _mk_icon_btn("🔆", _on_solar_shading_pressed, "Solar Shading Analysis (Compute year-long shadow heatmap)")
+	_shading_btn = _mk_icon_btn("🔆", _on_solar_shading_pressed, "Solar shading — compute a year-long shadow heatmap")
 	right.add_child(_shading_btn)
-	var csv_btn := _mk_icon_btn("📂", _on_csv_playback_pressed, "Import a datastream CSV as a timeline clip")
+	var csv_btn := _mk_icon_btn("📂", _on_csv_playback_pressed, "Open datastream CSV (same as Import on the left)")
 	right.add_child(csv_btn)
 	_linkagelab_btn = _mk_icon_btn("🎮", _on_linkagelab_import_pressed,
-		"Import a LinkageLab game bundle (.gamebundle.json) into this map")
+		"LinkageLab — import a .gamebundle.json into this map")
 	right.add_child(_linkagelab_btn)
-	var record_btn := _mk_icon_btn("🌡", _on_record_book_pressed, "Climate Record Book — historical records & global trends for this location")
+	var record_btn := _mk_icon_btn("🌡", _on_record_book_pressed, "Climate Record Book — historical records & trends for this location")
 	right.add_child(record_btn)
+	var report_btn := _mk_icon_btn("📊", _on_site_report_pressed, "Site Report — year-round & month-by-month solar/wind/rain/PV analysis for this site")
+	right.add_child(report_btn)
+	var lib_btn := _mk_icon_btn("📦", _on_library_pressed,
+		"Library — buildings, graph nodes, vegetation & structures")
+	right.add_child(lib_btn)
 	var challenge_btn := _mk_icon_btn("🎯", _on_challenge_pressed, "Challenges — structured survival missions")
 	right.add_child(challenge_btn)
-	var map_btn := _mk_icon_btn("🗺", _on_map_select_pressed, "Return to map select")
+	var map_btn := _mk_icon_btn("🗺", _on_map_select_pressed, "Map select — return to the map chooser")
 	right.add_child(map_btn)
 
 	return right
+
+
+func _on_library_pressed() -> void:
+	if _main == null:
+		return
+	if _main.has_method("open_unified_library"):
+		_main.call("open_unified_library")
+		return
+	var loader := _main.get_node_or_null("TerrainLoader")
+	if loader == null:
+		loader = TerrainSurfaceQuery.find_terrain_loader(_main)
+	if loader != null and loader.has_method("open_unified_library"):
+		loader.call("open_unified_library")
+		return
+	if loader != null and loader.has_method("open_building_builder"):
+		loader.call("open_building_builder", -1)
 
 
 func _on_settings_pressed() -> void:
@@ -2294,6 +2338,20 @@ func _on_record_book_pressed() -> void:
 			_record_book_panel.bind_timeline(self)
 	if _record_book_panel.has_method("toggle"):
 		_record_book_panel.toggle()
+
+
+func _on_site_report_pressed() -> void:
+	if _site_report_panel == null:
+		var script := load("res://scenes/ui/site_report_panel.gd") as Script
+		if script == null:
+			push_warning("TimelineUI: could not load site_report_panel.gd")
+			return
+		_site_report_panel = Control.new()
+		_site_report_panel.set_script(script)
+		if _site_report_panel.has_method("bind_timeline"):
+			_site_report_panel.bind_timeline(self)
+	if _site_report_panel.has_method("toggle"):
+		_site_report_panel.toggle()
 
 
 func _on_challenge_pressed() -> void:

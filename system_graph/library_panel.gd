@@ -153,7 +153,9 @@ func _build_custom_creator() -> Control:
 		{"label": "Processor", "id": "processor"},
 		{"label": "Resource Container", "id": "resource"},
 		{"label": "Rain Catchment", "id": "catchment"},
-		{"label": "Circuit Monitor", "id": "shelly4pm"}
+		{"label": "Circuit Monitor", "id": "shelly4pm"},
+		{"label": "Spiderbox", "id": "spiderbox"},
+		{"label": "Breaker Panel", "id": "breaker_panel"},
 	]
 	
 	for i in types.size():
@@ -383,35 +385,41 @@ func _make_item_btn(preset: Dictionary, cat_idx: int) -> Button:
 	var disabled:  bool  = bool(preset.get("disabled", false))
 
 	var btn := Button.new()
-	btn.text       = "%s %s\n    %s" % [icon, lbl, hint]
+	btn.text       = "%s  %s" % [icon, lbl] if hint.is_empty() else "%s  %s\n%s" % [icon, lbl, hint]
 	btn.focus_mode = Control.FOCUS_NONE
 	btn.alignment  = HORIZONTAL_ALIGNMENT_LEFT
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.custom_minimum_size.y = 36.0
 	btn.set_meta("search_label", lbl.to_lower())
 	btn.set_meta("cat_idx", cat_idx)
 
 	var sb_n := StyleBoxFlat.new()
-	sb_n.bg_color              = Color(0.0, 0.0, 0.0, 0.0)
-	sb_n.set_border_width(SIDE_BOTTOM, 1)
-	sb_n.border_color          = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.30)
+	sb_n.bg_color              = Color(C_BG.r, C_BG.g, C_BG.b, 0.35)
+	sb_n.set_corner_radius_all(4)
+	sb_n.set_border_width_all(1)
+	sb_n.border_color          = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.40)
 	sb_n.content_margin_left   = 10.0
 	sb_n.content_margin_right  =  8.0
-	sb_n.content_margin_top    =  6.0
-	sb_n.content_margin_bottom =  6.0
+	sb_n.content_margin_top    =  7.0
+	sb_n.content_margin_bottom =  7.0
 
 	var sb_h := sb_n.duplicate() as StyleBoxFlat
-	sb_h.bg_color     = C_PANEL
-	sb_h.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.45)
-	sb_h.set_border_width(SIDE_LEFT, 2)
+	sb_h.bg_color     = Color(C_PANEL.r, C_PANEL.g, C_PANEL.b, 0.95)
+	sb_h.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.65)
+	sb_h.set_border_width(SIDE_LEFT, 3)
+
+	var sb_p := sb_h.duplicate() as StyleBoxFlat
+	sb_p.bg_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.18)
 
 	btn.add_theme_stylebox_override("normal",  sb_n)
 	btn.add_theme_stylebox_override("hover",   sb_h)
-	btn.add_theme_stylebox_override("pressed", sb_h)
+	btn.add_theme_stylebox_override("pressed", sb_p)
 	btn.add_theme_color_override("font_color", C_TEXT)
-	btn.add_theme_font_size_override("font_size", 11)
+	btn.add_theme_font_size_override("font_size", 12)
 	btn.disabled = disabled
 	if disabled:
 		btn.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btn.modulate = Color(1, 1, 1, 0.45)
 
 	if not disabled:
 		btn.button_down.connect(_on_btn_down.bind(preset))
@@ -568,20 +576,23 @@ func _refresh_header(idx: int) -> void:
 
 func _apply_cat_header_style(btn: Button) -> void:
 	var sb := StyleBoxFlat.new()
-	sb.bg_color              = Color(C_PANEL.r * 0.80, C_PANEL.g * 0.80, C_PANEL.b * 0.80, 1.0)
+	sb.bg_color              = Color(C_SIDEBAR.r, C_SIDEBAR.g, C_SIDEBAR.b, 1.0)
 	sb.set_border_width(SIDE_BOTTOM, 1)
-	sb.border_color          = C_BORDER
-	sb.content_margin_left   = 10.0
-	sb.content_margin_right  =  8.0
-	sb.content_margin_top    =  8.0
-	sb.content_margin_bottom =  8.0
+	sb.set_border_width(SIDE_TOP, 1)
+	sb.border_color          = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.7)
+	sb.content_margin_left   = 12.0
+	sb.content_margin_right  = 10.0
+	sb.content_margin_top    =  9.0
+	sb.content_margin_bottom =  9.0
 	var sb_h := sb.duplicate() as StyleBoxFlat
 	sb_h.bg_color = C_PANEL
+	sb_h.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.35)
 	btn.add_theme_stylebox_override("normal",  sb)
 	btn.add_theme_stylebox_override("hover",   sb_h)
 	btn.add_theme_stylebox_override("pressed", sb_h)
-	btn.add_theme_color_override("font_color",      C_TEXT_S)
-	btn.add_theme_font_size_override("font_size", 11)
+	btn.add_theme_color_override("font_color",      C_PRIMARY)
+	btn.add_theme_font_size_override("font_size", 12)
+	btn.custom_minimum_size.y = 34.0
 
 
 func _fill(ctrl: Control) -> void:

@@ -57,6 +57,7 @@ static func footprint_info(buildings: Array, building_idx: int) -> Dictionary:
 			"depth_m": maxf(max_v.y - min_v.y, 1.0),
 			"height_m": float(d.get("height_m", BuildingBuilder.DEFAULT_HEIGHT_M)),
 			"points": pts,
+			"area_m2": _polygon_area(pts),
 		}
 	return {"valid": false}
 

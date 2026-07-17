@@ -41,9 +41,14 @@ var _save_pending := false
 ## the soi_clip fragment-discard trick used by bark/foliage/grass can't reach
 ## them — instead we toggle each instance's `visible` from script.
 const _HERO_CLIP_POLL_S := 0.2
+const _HERO_CLIP_POLL_LITE_S := 0.75
 const _SAVE_DEBOUNCE_S := 0.35
 var _hero_clip_acc := 0.0
 var _save_acc := 0.0
+## Lite preview: hide dense foliage MultiMeshes while Snowglobe / Site Plan
+## runs so orbit/zoom stay responsive. Terrain, buildings, water stay visible.
+var preview_lite := false
+var _veg_hidden_nodes: Array = []
 
 
 func _ready() -> void:
@@ -56,13 +61,62 @@ func _process(delta: float) -> void:
 		_process_placement_pick()
 	if snowglobe_active or graph_preview_active:
 		_hero_clip_acc += delta
-		if _hero_clip_acc >= _HERO_CLIP_POLL_S:
+		var poll := _HERO_CLIP_POLL_LITE_S if preview_lite else _HERO_CLIP_POLL_S
+		if _hero_clip_acc >= poll:
 			_hero_clip_acc = 0.0
 			_apply_hero_tree_clip()
 	if _save_pending:
 		_save_acc += delta
 		if _save_acc >= _SAVE_DEBOUNCE_S:
 			_flush_pending_save()
+
+
+## Hide AutoVegetation / Vegetation while SoI views are active (perf). Safe to
+## call repeatedly; restores previous visibility on `false`.
+func set_preview_lite(on: bool) -> void:
+	if preview_lite == on:
+		return
+	preview_lite = on
+	if on:
+		_hide_vegetation_for_lite()
+	else:
+		_restore_vegetation_after_lite()
+
+
+## Pitch-based glass opacity for full Snowglobe (0 = kill Fresnel sky bullseye
+## near horizon, 1 = full glass). Preview Elevation already hard-kills glass.
+func set_snowglobe_glass_opacity(opacity: float) -> void:
+	if _subsurface != null and _subsurface.has_method("set_glass_opacity"):
+		_subsurface.call("set_glass_opacity", clampf(opacity, 0.0, 1.0))
+
+
+func _hide_vegetation_for_lite() -> void:
+	_veg_hidden_nodes.clear()
+	var terrain := _terrain_node()
+	if terrain == null:
+		return
+	for nname: String in ["AutoVegetation", "Vegetation"]:
+		var node := terrain.get_node_or_null(nname) as Node3D
+		if node != null and node.visible:
+			_veg_hidden_nodes.append(node)
+			node.visible = false
+	# Leaf Multimesh batches sometimes live as named siblings.
+	for child in terrain.get_children():
+		if not (child is Node3D):
+			continue
+		var nm := str(child.name)
+		if nm.begins_with("Leaf") or nm.begins_with("Foliage") or nm.contains("Canopy"):
+			var c3 := child as Node3D
+			if c3.visible and not _veg_hidden_nodes.has(c3):
+				_veg_hidden_nodes.append(c3)
+				c3.visible = false
+
+
+func _restore_vegetation_after_lite() -> void:
+	for n: Variant in _veg_hidden_nodes:
+		if n is Node3D and is_instance_valid(n):
+			(n as Node3D).visible = true
+	_veg_hidden_nodes.clear()
 
 
 func load_for_site(lat: float, lon: float) -> void:
@@ -158,6 +212,14 @@ func radius_m() -> float:
 	return _config.radius_m
 
 
+## True if world XZ lies inside the current SoI disc (horizontal).
+func contains_xz(x: float, z: float) -> bool:
+	var dx := x - _config.center_x
+	var dz := z - _config.center_z
+	var r := _config.radius_m
+	return dx * dx + dz * dz <= r * r
+
+
 func area_m2() -> float:
 	return PI * _config.radius_m * _config.radius_m
 
@@ -214,9 +276,12 @@ func set_graph_preview_active(on: bool) -> void:
 	if on:
 		if _preview != null:
 			_preview.visible = false
+		set_preview_lite(true)
 		_hero_clip_acc = 999.0
 		_apply_hero_tree_clip()
 	else:
+		if not snowglobe_active:
+			set_preview_lite(false)
 		if _preview != null:
 			_preview.visible = edit_mode
 		_reset_hero_tree_visibility()
@@ -228,6 +293,7 @@ func clear_graph_preview_world_effects() -> void:
 	_sync_process()
 	if snowglobe_active:
 		return
+	set_preview_lite(false)
 	set_clip_enabled(false)
 	if _subsurface != null:
 		_subsurface.visible = false
@@ -285,6 +351,9 @@ func enter_snowglobe() -> void:
 	set_clip_enabled(true)
 	if _subsurface != null:
 		_subsurface.visible = true
+		if _subsurface.has_method("set_glass_enabled"):
+			_subsurface.call("set_glass_enabled", true)
+	set_preview_lite(true)
 	_hero_clip_acc = 999.0
 	_apply_hero_tree_clip()
 	_ensure_snowglobe_hud()
@@ -313,15 +382,20 @@ func _finalize_snowglobe_exit() -> void:
 	if graph_preview_active:
 		set_clip_enabled(true)
 		if _subsurface != null:
-			_subsurface.visible = true
+			_subsurface.visible = _graph_preview_shell_visible
 			if _subsurface.has_method("sync_transform"):
 				_subsurface.sync_transform()
+		# Keep lite while graph Site Plan / bubble is still showing.
+		set_preview_lite(true)
 		_hero_clip_acc = 999.0
 		_apply_hero_tree_clip()
 	else:
+		set_preview_lite(false)
 		set_clip_enabled(false)
 		if _subsurface != null:
 			_subsurface.visible = false
+			if _subsurface.has_method("set_glass_opacity"):
+				_subsurface.call("set_glass_opacity", 1.0)
 		if _preview != null:
 			_preview.visible = edit_mode
 		_reset_hero_tree_visibility()

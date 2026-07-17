@@ -4,8 +4,9 @@ extends RefCounted
 ## Weighted multi-stage load tracker for generated maps. Each stage contributes a
 ## fixed share of [0..1]; in-flight fetches use set_partial() for sub-progress.
 
+## Matches TerrainLoader._run_load_sequence (detail DEM before base imagery).
 const STAGE_ORDER: Array[String] = [
-	"base_dem", "base_img", "walkable", "detail_dem", "detail_img", "osm_map", "osm_veg",
+	"base_dem", "detail_dem", "base_img", "walkable", "detail_img", "osm_map", "osm_veg",
 ]
 
 const STAGE_LABELS: Dictionary = {

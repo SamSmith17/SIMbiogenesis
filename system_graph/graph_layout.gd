@@ -7,7 +7,7 @@ const DEFAULT_PADDING := 24.0
 const DEFAULT_ITERATIONS := 48
 ## Shared with GraphCanvas — wide enough to frame a sprawling graph or a 0.5 m panel.
 const ZOOM_MIN := 0.005
-const ZOOM_MAX := 256.0
+const ZOOM_MAX := 512.0
 
 ## Off-canvas / hidden summary nodes must not expand fit-to-view or push the main cluster.
 const HIDDEN_LAYOUT_IDS: Array[String] = ["virtual_solar_array"]

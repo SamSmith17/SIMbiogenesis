@@ -14,19 +14,111 @@ const SPECS := {
 		"top": Color(0.05, 0.14, 0.06), "bottom": Color(0.07, 0.10, 0.04),
 		"highlight": Color(0.12, 0.24, 0.08),
 		"bark": Color(0.16, 0.11, 0.06)},
+	"spruce": {"width": 0.95, "height": 5.2, "trunk_w": 0.22,
+		"top": Color(0.04, 0.16, 0.08), "bottom": Color(0.06, 0.11, 0.05),
+		"highlight": Color(0.10, 0.22, 0.10),
+		"bark": Color(0.14, 0.10, 0.06)},
+	"cedar": {"width": 1.15, "height": 4.8, "trunk_w": 0.30,
+		"top": Color(0.08, 0.16, 0.09), "bottom": Color(0.10, 0.12, 0.06),
+		"highlight": Color(0.18, 0.28, 0.12),
+		"bark": Color(0.20, 0.12, 0.08)},
+	"fir": {"width": 0.78, "height": 5.5, "trunk_w": 0.20,
+		"top": Color(0.03, 0.12, 0.07), "bottom": Color(0.05, 0.09, 0.04),
+		"highlight": Color(0.09, 0.20, 0.09),
+		"bark": Color(0.15, 0.10, 0.05)},
+	"redwood": {"width": 1.40, "height": 8.0, "trunk_w": 0.55,
+		"top": Color(0.06, 0.18, 0.08), "bottom": Color(0.08, 0.12, 0.05),
+		"highlight": Color(0.14, 0.26, 0.10),
+		"bark": Color(0.28, 0.12, 0.08)},
 	"deciduous": {"width": 11.0, "height": 4.5, "trunk_w": 0.45, "trunk_h": 4.5,
 		"top": Color(0.18, 0.38, 0.10), "bottom": Color(0.24, 0.16, 0.06),
 		"highlight": Color(0.42, 0.52, 0.16),
 		"bark": Color(0.18, 0.12, 0.07)},
+	"chestnut": {"width": 13.0, "height": 5.5, "trunk_w": 0.55, "trunk_h": 5.0,
+		"top": Color(0.16, 0.34, 0.09), "bottom": Color(0.22, 0.14, 0.05),
+		"highlight": Color(0.38, 0.48, 0.14),
+		"bark": Color(0.22, 0.14, 0.08)},
+	"maple": {"width": 12.0, "height": 5.0, "trunk_w": 0.48, "trunk_h": 4.8,
+		"top": Color(0.20, 0.40, 0.10), "bottom": Color(0.28, 0.18, 0.06),
+		"highlight": Color(0.55, 0.35, 0.10),
+		"bark": Color(0.20, 0.14, 0.08)},
+	"cottonwood": {"width": 14.0, "height": 6.0, "trunk_w": 0.60, "trunk_h": 5.5,
+		"top": Color(0.22, 0.42, 0.12), "bottom": Color(0.26, 0.20, 0.08),
+		"highlight": Color(0.45, 0.55, 0.18),
+		"bark": Color(0.24, 0.20, 0.14)},
+	"aspen": {"width": 8.0, "height": 5.5, "trunk_w": 0.28, "trunk_h": 5.2,
+		"top": Color(0.25, 0.45, 0.12), "bottom": Color(0.30, 0.22, 0.08),
+		"highlight": Color(0.55, 0.62, 0.20),
+		"bark": Color(0.85, 0.88, 0.82)},
+	"birch": {"width": 7.5, "height": 5.0, "trunk_w": 0.25, "trunk_h": 5.0,
+		"top": Color(0.20, 0.40, 0.12), "bottom": Color(0.24, 0.18, 0.07),
+		"highlight": Color(0.40, 0.52, 0.18),
+		"bark": Color(0.92, 0.92, 0.90)},
+	"beech": {"width": 12.5, "height": 5.2, "trunk_w": 0.50, "trunk_h": 5.0,
+		"top": Color(0.15, 0.36, 0.10), "bottom": Color(0.22, 0.16, 0.06),
+		"highlight": Color(0.38, 0.50, 0.15),
+		"bark": Color(0.35, 0.30, 0.22)},
+	"apple": {"width": 7.0, "height": 3.8, "trunk_w": 0.32, "trunk_h": 2.8,
+		"top": Color(0.22, 0.42, 0.10), "bottom": Color(0.28, 0.16, 0.06),
+		"highlight": Color(0.55, 0.25, 0.18),
+		"bark": Color(0.22, 0.14, 0.08)},
+	"pear": {"width": 6.5, "height": 4.2, "trunk_w": 0.30, "trunk_h": 3.2,
+		"top": Color(0.20, 0.40, 0.10), "bottom": Color(0.26, 0.15, 0.05),
+		"highlight": Color(0.50, 0.55, 0.18),
+		"bark": Color(0.20, 0.13, 0.07)},
+	"orange": {"width": 6.0, "height": 3.5, "trunk_w": 0.28, "trunk_h": 2.4,
+		"top": Color(0.12, 0.36, 0.10), "bottom": Color(0.18, 0.22, 0.06),
+		"highlight": Color(0.95, 0.55, 0.10),
+		"bark": Color(0.25, 0.16, 0.08)},
+	"avocado": {"width": 9.0, "height": 5.0, "trunk_w": 0.40, "trunk_h": 3.5,
+		"top": Color(0.08, 0.28, 0.10), "bottom": Color(0.12, 0.18, 0.06),
+		"highlight": Color(0.20, 0.40, 0.12),
+		"bark": Color(0.18, 0.12, 0.08)},
 	"shrub": {"width": 1.4, "height": 1.15,
 		"top": Color(0.12, 0.24, 0.08), "bottom": Color(0.16, 0.14, 0.06),
 		"highlight": Color(0.28, 0.38, 0.14)},
+	"cactus": {"width": 0.55, "height": 1.80,
+		"top": Color(0.18, 0.38, 0.16), "bottom": Color(0.14, 0.28, 0.12),
+		"highlight": Color(0.30, 0.48, 0.22)},
+	"joshua_tree": {"width": 1.8, "height": 3.2,
+		"top": Color(0.22, 0.32, 0.12), "bottom": Color(0.28, 0.24, 0.10),
+		"highlight": Color(0.40, 0.42, 0.18)},
 	"grass_lawn": {"width": 0.55, "height": 0.48,
 		"top": Color(0.14, 0.42, 0.12), "bottom": Color(0.10, 0.32, 0.08),
 		"highlight": Color(0.28, 0.58, 0.18)},
 	"grass_field": {"width": 0.70, "height": 0.95,
 		"top": Color(0.38, 0.48, 0.12), "bottom": Color(0.28, 0.36, 0.08),
 		"highlight": Color(0.52, 0.58, 0.20)},
+	"corn": {"width": 0.45, "height": 1.80,
+		"top": Color(0.30, 0.55, 0.12), "bottom": Color(0.45, 0.50, 0.10),
+		"highlight": Color(0.85, 0.75, 0.20)},
+	"wheat": {"width": 0.50, "height": 0.95,
+		"top": Color(0.55, 0.52, 0.18), "bottom": Color(0.45, 0.40, 0.12),
+		"highlight": Color(0.75, 0.68, 0.25)},
+	"barley": {"width": 0.48, "height": 0.85,
+		"top": Color(0.50, 0.48, 0.16), "bottom": Color(0.42, 0.38, 0.12),
+		"highlight": Color(0.70, 0.62, 0.22)},
+	"beans": {"width": 0.55, "height": 0.55,
+		"top": Color(0.20, 0.45, 0.12), "bottom": Color(0.16, 0.32, 0.08),
+		"highlight": Color(0.35, 0.58, 0.18)},
+	"quinoa": {"width": 0.42, "height": 1.10,
+		"top": Color(0.45, 0.40, 0.22), "bottom": Color(0.35, 0.32, 0.14),
+		"highlight": Color(0.70, 0.45, 0.35)},
+	"squash": {"width": 0.90, "height": 0.40,
+		"top": Color(0.25, 0.50, 0.12), "bottom": Color(0.20, 0.38, 0.08),
+		"highlight": Color(0.85, 0.65, 0.15)},
+	"tomatoes": {"width": 0.60, "height": 0.70,
+		"top": Color(0.18, 0.42, 0.10), "bottom": Color(0.14, 0.30, 0.08),
+		"highlight": Color(0.85, 0.20, 0.12)},
+	"potatoes": {"width": 0.65, "height": 0.45,
+		"top": Color(0.22, 0.40, 0.12), "bottom": Color(0.18, 0.30, 0.08),
+		"highlight": Color(0.40, 0.55, 0.18)},
+	"brassicas": {"width": 0.55, "height": 0.50,
+		"top": Color(0.15, 0.38, 0.18), "bottom": Color(0.12, 0.28, 0.12),
+		"highlight": Color(0.30, 0.55, 0.28)},
+	"lettuce": {"width": 0.45, "height": 0.28,
+		"top": Color(0.20, 0.55, 0.18), "bottom": Color(0.15, 0.42, 0.12),
+		"highlight": Color(0.40, 0.70, 0.28)},
 }
 
 
@@ -37,24 +129,32 @@ enum CanopyLodTier { NEAR, FAR }
 const DeciduousLodTier = CanopyLodTier
 
 
+static func mesh_family(species: String) -> String:
+	return VegSpeciesCatalog.mesh_family(species)
+
+
 static func mesh_for_species(species: String, settings: Dictionary = {}) -> ArrayMesh:
-	if species == "deciduous":
-		return mesh_for_deciduous_lod(settings, CanopyLodTier.NEAR)
-	if species == "pine":
-		return mesh_for_pine_lod(settings, CanopyLodTier.NEAR)
-	if species == "shrub":
-		return _build_shrub_mesh(_shrub_spec(settings), settings)
-	if species == "grass_lawn":
-		return _build_grass_mesh(_grass_lawn_spec(settings))
-	if species == "grass_field":
-		return _build_grass_mesh(_grass_field_spec(settings))
+	var family := mesh_family(species)
+	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
+	match family:
+		"deciduous":
+			return mesh_for_deciduous_lod(s, CanopyLodTier.NEAR)
+		"pine":
+			return mesh_for_pine_lod(s, CanopyLodTier.NEAR)
+		"shrub":
+			return _build_shrub_mesh(_shrub_spec(s, species), s)
+		"grass_lawn":
+			return _build_grass_mesh(_grass_lawn_spec(s, species))
+		"grass_field":
+			return _build_grass_mesh(_grass_field_spec(s, species))
 	var spec: Dictionary = SPECS.get(species, SPECS["shrub"])
 	return _build_card_mesh(float(spec["width"]), float(spec["height"]))
 
 
 ## True when mesh carries per-surface materials (trunk + foliage surfaces).
 static func mesh_has_surface_materials(species: String) -> bool:
-	return species == "deciduous" or species == "pine"
+	var family := mesh_family(species)
+	return family == "deciduous" or family == "pine"
 
 
 ## NEAR = procedural leaf shells; FAR = legacy crossed-billboard canopy.
@@ -110,18 +210,21 @@ static func pine_lod_enabled(settings: Dictionary) -> bool:
 
 
 static func canopy_lod_enabled(species: String, settings: Dictionary) -> bool:
-	if species == "deciduous":
+	var family := mesh_family(species)
+	if family == "deciduous":
 		return deciduous_lod_enabled(settings)
-	if species == "pine":
+	if family == "pine":
 		return pine_lod_enabled(settings)
 	return false
 
 
 static func mesh_for_canopy_lod(species: String, settings: Dictionary, tier: CanopyLodTier) -> ArrayMesh:
-	if species == "deciduous":
-		return mesh_for_deciduous_lod(settings, tier)
-	if species == "pine":
-		return mesh_for_pine_lod(settings, tier)
+	var family := mesh_family(species)
+	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
+	if family == "deciduous":
+		return mesh_for_deciduous_lod(s, tier)
+	if family == "pine":
+		return mesh_for_pine_lod(s, tier)
 	return mesh_for_species(species, settings)
 
 
@@ -136,49 +239,54 @@ static func _configure_foliage_cutout_shadow(mat: ShaderMaterial) -> void:
 
 
 static func material_for_species(species: String, settings: Dictionary = {}) -> ShaderMaterial:
-	var spec: Dictionary = SPECS.get(species, SPECS["shrub"])
-	match species:
+	var family := mesh_family(species)
+	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
+	var spec: Dictionary = SPECS.get(species, SPECS.get(family, SPECS["shrub"]))
+	match family:
 		"deciduous":
-			spec = _deciduous_spec(settings)
+			spec = _deciduous_spec(s, species)
 		"pine":
-			spec = _pine_spec(settings)
+			spec = _pine_spec(s, species)
 		"shrub":
-			spec = _shrub_spec(settings)
+			spec = _shrub_spec(s, species)
 		"grass_lawn":
-			spec = _grass_lawn_spec(settings)
+			spec = _grass_lawn_spec(s, species)
 		"grass_field":
-			spec = _grass_field_spec(settings)
+			spec = _grass_field_spec(s, species)
 	var mat := ShaderMaterial.new()
 	mat.shader = FOLIAGE_SHADER
-	if species == "deciduous":
+	if family == "deciduous":
 		mat.set_shader_parameter("albedo_tex", _build_cluster_foliage_texture(spec, "deciduous"))
-	elif species.begins_with("grass_"):
+	elif family.begins_with("grass_"):
 		mat.set_shader_parameter("albedo_tex", _build_grass_blade_texture(spec))
 	else:
-		mat.set_shader_parameter("albedo_tex", _build_cluster_foliage_texture(spec, species))
-	_apply_foliage_uniforms(mat, species, settings)
+		mat.set_shader_parameter("albedo_tex", _build_cluster_foliage_texture(spec, family))
+	_apply_foliage_uniforms(mat, family, s)
 	_configure_foliage_cutout_shadow(mat)
 	return mat
 
 
 static func bark_material_for_species(species: String, settings: Dictionary = {}) -> ShaderMaterial:
+	var family := mesh_family(species)
+	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
 	var spec: Dictionary
-	match species:
+	match family:
 		"deciduous":
-			spec = _deciduous_spec(settings)
+			spec = _deciduous_spec(s, species)
 		"pine":
-			spec = _pine_spec(settings)
+			spec = _pine_spec(s, species)
 		_:
-			spec = SPECS.get(species, SPECS["shrub"])
+			spec = SPECS.get(species, SPECS.get(family, SPECS["shrub"]))
 	var mat := ShaderMaterial.new()
 	mat.shader = BARK_SHADER
 	mat.set_shader_parameter("albedo_tex", _build_bark_texture(spec))
-	_apply_bark_uniforms(mat, settings)
+	_apply_bark_uniforms(mat, s)
 	return mat
 
 
 static func species_bulk_scale(species: String, settings: Dictionary) -> float:
-	match species:
+	var family := mesh_family(species)
+	match family:
 		"pine":
 			return float(settings.get("pine_bulk_scale", 1.0))
 		"deciduous":
@@ -200,7 +308,7 @@ static func clear_foot_cache() -> void:
 
 
 static func foot_local_y(species: String, settings: Dictionary = {}) -> float:
-	if species == "deciduous":
+	if mesh_family(species) == "deciduous":
 		return 0.0
 	var key := "%s:%s" % [species, _foot_settings_key(settings)]
 	if _foot_cache.has(key):
@@ -231,39 +339,39 @@ static func _foot_settings_key(settings: Dictionary) -> String:
 	]
 
 
-static func _deciduous_spec(settings: Dictionary) -> Dictionary:
-	var base: Dictionary = SPECS["deciduous"].duplicate(true)
+static func _deciduous_spec(settings: Dictionary, species: String = "deciduous") -> Dictionary:
+	var base: Dictionary = SPECS.get(species, SPECS["deciduous"]).duplicate(true)
 	base["width"] = float(settings.get("deciduous_canopy_w", base["width"]))
 	base["height"] = float(settings.get("deciduous_canopy_h", base["height"]))
 	base["trunk_w"] = float(settings.get("deciduous_trunk_w", base["trunk_w"]))
-	base["trunk_h"] = float(settings.get("deciduous_trunk_h", base["trunk_h"]))
+	base["trunk_h"] = float(settings.get("deciduous_trunk_h", base.get("trunk_h", 4.5)))
 	return base
 
 
-static func _pine_spec(settings: Dictionary) -> Dictionary:
-	var base: Dictionary = SPECS["pine"].duplicate(true)
+static func _pine_spec(settings: Dictionary, species: String = "pine") -> Dictionary:
+	var base: Dictionary = SPECS.get(species, SPECS["pine"]).duplicate(true)
 	base["width"] = float(settings.get("pine_card_w", base["width"]))
 	base["height"] = float(settings.get("pine_card_h", base["height"]))
 	base["trunk_w"] = float(settings.get("pine_trunk_w", base["trunk_w"]))
 	return base
 
 
-static func _shrub_spec(settings: Dictionary) -> Dictionary:
-	var base: Dictionary = SPECS["shrub"].duplicate(true)
+static func _shrub_spec(settings: Dictionary, species: String = "shrub") -> Dictionary:
+	var base: Dictionary = SPECS.get(species, SPECS["shrub"]).duplicate(true)
 	base["width"] = float(settings.get("shrub_card_w", base["width"]))
 	base["height"] = float(settings.get("shrub_card_h", base["height"]))
 	return base
 
 
-static func _grass_lawn_spec(settings: Dictionary) -> Dictionary:
-	var base: Dictionary = SPECS["grass_lawn"].duplicate(true)
+static func _grass_lawn_spec(settings: Dictionary, species: String = "grass_lawn") -> Dictionary:
+	var base: Dictionary = SPECS.get(species, SPECS["grass_lawn"]).duplicate(true)
 	base["width"] = float(settings.get("grass_lawn_card_w", base["width"]))
 	base["height"] = float(settings.get("grass_lawn_card_h", base["height"]))
 	return base
 
 
-static func _grass_field_spec(settings: Dictionary) -> Dictionary:
-	var base: Dictionary = SPECS["grass_field"].duplicate(true)
+static func _grass_field_spec(settings: Dictionary, species: String = "grass_field") -> Dictionary:
+	var base: Dictionary = SPECS.get(species, SPECS["grass_field"]).duplicate(true)
 	base["width"] = float(settings.get("grass_field_card_w", base["width"]))
 	base["height"] = float(settings.get("grass_field_card_h", base["height"]))
 	return base

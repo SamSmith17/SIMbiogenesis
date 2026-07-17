@@ -15,6 +15,8 @@ var _checks: int = 0
 func _initialize() -> void:
 	_test_scale_curve()
 	_test_instance_scale()
+	_test_lifecycle_senescence()
+	_test_lettuce_90_days()
 	_test_birth_times()
 	_test_reseed_population()
 	_test_reseed_radius()
@@ -240,6 +242,51 @@ func _test_instance_map() -> void:
 	_check("empty map preserves budget", map.apply_scales({}, gy, 100) == 100)
 	map.clear()
 	_check("cleared map empty", map.is_empty())
+
+
+func _test_lifecycle_senescence() -> void:
+	var grow_h := 10.0 * HPY
+	var sen_h := 5.0 * HPY
+	_check("lifecycle seedling",
+		_approx(VegetationGrowth.scale_for_lifecycle(0.0, grow_h, sen_h),
+			VegetationGrowth.SEEDLING_SCALE, 1e-6))
+	_check("lifecycle full at maturity",
+		_approx(VegetationGrowth.scale_for_lifecycle(grow_h, grow_h, sen_h), 1.0, 1e-6))
+	_check("lifecycle senescent floor",
+		_approx(VegetationGrowth.scale_for_lifecycle(grow_h + sen_h, grow_h, sen_h),
+			VegetationGrowth.SENESCENT_SCALE, 1e-6))
+	_check("stage seed", VegetationGrowth.growth_stage(0.0, grow_h, sen_h) == "seed")
+	_check("stage growing", VegetationGrowth.growth_stage(grow_h * 0.5, grow_h, sen_h) == "growing")
+	_check("stage full", VegetationGrowth.growth_stage(grow_h, grow_h, sen_h) == "full")
+	_check("stage senescent",
+		VegetationGrowth.growth_stage(grow_h + sen_h * 0.5, grow_h, sen_h) == "senescent")
+
+
+func _test_lettuce_90_days() -> void:
+	var settings := {
+		"lettuce_growth_days": 90.0,
+		"lettuce_senescence_days": 15.0,
+		"growth_now_h": 90.0 * 24.0,
+	}
+	var grow_h := VegetationGrowth.growth_span_hours("lettuce", settings)
+	_check("lettuce grow span 90 days",
+		_approx(grow_h, 90.0 * 24.0, 1e-4), "got %f" % grow_h)
+	var seedling := {"birth_h": 90.0 * 24.0}
+	_check("lettuce seedling at plant",
+		_approx(VegetationGrowth.instance_scale_mult("lettuce", seedling, settings),
+			VegetationGrowth.SEEDLING_SCALE, 1e-5))
+	var mature := {"birth_h": 0.0}
+	_check("lettuce full at day 90",
+		_approx(VegetationGrowth.instance_scale_mult("lettuce", mature, settings), 1.0, 1e-5))
+	settings["growth_now_h"] = (90.0 + 15.0) * 24.0
+	_check("lettuce senescent after 105 days",
+		_approx(VegetationGrowth.instance_scale_mult("lettuce", mature, settings),
+			VegetationGrowth.SENESCENT_SCALE, 1e-5))
+	# Pure math mirror of GrowBed (no scene tree required).
+	var mid := VegetationGrowth.scale_for_lifecycle(45.0 * 24.0, 90.0 * 24.0, 15.0 * 24.0)
+	_check("lettuce mid-growth between seed and full",
+		mid > VegetationGrowth.SEEDLING_SCALE + 0.05 and mid < 0.99,
+		"mid=%f" % mid)
 
 
 func _test_disabled_species() -> void:

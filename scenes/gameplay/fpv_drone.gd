@@ -229,8 +229,8 @@ func _process(delta: float) -> void:
 	var spin_speed := 20.0
 	if is_mounted:
 		if _is_terrain_edit_ortho():
-			# Terrain sculpt: locked top-down view, no movement.
-			current_pitch = deg_to_rad(-89.0)
+			# Terrain sculpt: locked 45° / 90° ortho view, no movement.
+			current_pitch = deg_to_rad(_terrain_edit_pitch_deg())
 			current_yaw = _terrain_edit_yaw()
 			current_velocity = Vector3.ZERO
 			_update_drone_camera()
@@ -428,6 +428,12 @@ func _terrain_edit_yaw() -> float:
 	if loader != null and loader.has_method("get_sculpt_locked_yaw"):
 		return float(loader.call("get_sculpt_locked_yaw"))
 	return current_yaw
+
+
+func _terrain_edit_pitch_deg() -> float:
+	if has_meta("terrain_edit_pitch_deg"):
+		return float(get_meta("terrain_edit_pitch_deg"))
+	return -45.0
 
 
 func _on_body_entered(body: Node3D) -> void:

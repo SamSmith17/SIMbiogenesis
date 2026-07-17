@@ -48,6 +48,32 @@ static func has_graph_content(model: GraphModel) -> bool:
 	return false
 
 
+## Remove every prior StarShade-seeded node/connection so specs can be re-applied.
+static func clear_starshade_content(model: GraphModel) -> int:
+	if model == null:
+		return 0
+	var stale: Array[String] = []
+	for item: Dictionary in model.items:
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		var iid := str(item.get("id", ""))
+		if str(specs.get("source", "")) == STARSHADE_SOURCE \
+				or str(specs.get("starshade_tag", "")).begins_with("starshade") \
+				or iid.begins_with("starshade_"):
+			stale.append(iid)
+	for sid in stale:
+		model.remove_item(sid)
+	return stale.size()
+
+
+## Clear prior StarShade graph content and seed fresh panels/controller/batteries.
+static func reseed_graph(model: GraphModel, panel_count: int, panel_watts: float,
+		tag: String = STARSHADE_TAG) -> bool:
+	if model == null or panel_count <= 0:
+		return false
+	clear_starshade_content(model)
+	return seed_graph(model, panel_count, panel_watts, tag)
+
+
 static func seed_graph(model: GraphModel, panel_count: int, panel_watts: float,
 		tag: String = STARSHADE_TAG) -> bool:
 	if model == null or panel_count <= 0:

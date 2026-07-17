@@ -1,8 +1,8 @@
 class_name GraphEducationCards
 extends RefCounted
 
-## One-liner education cards for habitat / catchment / waste / import nodes.
-## Shown in the inspector when a matching item is selected.
+## One-liner education cards for habitat / catchment / waste / import / solar nodes.
+## Shown in the inspector when a matching item (or radiant wire) is selected.
 
 ## Returns {title, body} or {} if no card applies.
 static func card_for_item(item: Dictionary) -> Dictionary:
@@ -19,14 +19,46 @@ static func card_for_item(item: Dictionary) -> Dictionary:
 							+ "Wire this node into rain catchments — there is no rate dial; "
 							+ "weather and catchment area set the flow. Not an external import.",
 				}
+			if pk == "sunlight" or pk == "solar":
+				return {
+					"title": "Sunlight (Planetary Basic Income)",
+					"body": "Real irradiance (W/m²) × your Sphere of Influence area = total solar "
+							+ "flux available right now. Cloud cover reduces this shared availability. "
+							+ "Sunlight isn't piped like water — panels and grow beds draw from it "
+							+ "ambiently even with no wire drawn; an optional radiant wire just "
+							+ "visualizes the link. Place receivers on the Site Plan to get per-node "
+							+ "3D shade (buildings/trees) written into each node's sunlight factor. "
+							+ "Not an external import.",
+				}
+			if pk == "wind" or pk == "mechanical" or pk == "atmosphere" or pk == "air":
+				return {
+					"title": "Wind (Planetary Basic Income)",
+					"body": "Atmosphere over your Sphere of Influence: wind speed, temperature, "
+							+ "and relative humidity from live weather. Kinetic flux (½ρAv³ through "
+							+ "an SoI-wide slab) is an educational total — turbines already feel "
+							+ "the wind ambiently; an optional dashed wire only visualizes the link. "
+							+ "Not an external import.",
+				}
 			return {}
+		"panel":
+			return {
+				"title": "Solar panel (ambient light)",
+				"body": "Array output comes from SolarUI physics, then each graph panel's "
+						+ "share is multiplied by its sunlight factor (3D shade). "
+						+ "The optional radiant wire from Sunlight PBI is documentary — "
+						+ "omitting it does not cut power. Place the panel on the Site Plan "
+						+ "for per-node shading.",
+			}
 		"catchment":
+			# Legacy biomass catchments may still exist in old saves; grow beds
+			# are the supported light-driven biomass path.
 			if str(specs.get("catchment_kind", "rain")) == "biomass":
 				return {
-					"title": "SoI Biomass PBI",
-					"body": "Local dry biomass income from your Sphere of Influence "
-							+ "(~1.2 kg/m²/yr, seasonally scaled). Wire output → Biomass Store. "
-							+ "Expand the SoI in Snowglobe to raise daily yield.",
+					"title": "Legacy SoI Biomass Catchment",
+					"body": "Biomass is no longer a Planetary Basic Income — it is a "
+							+ "downstream product of sunlight via Grow Bed nodes. "
+							+ "Prefer a Grow Bed wired to a biomass store. This catchment "
+							+ "remains for older saves only.",
 				}
 			return {
 				"title": "Rain Catchment",
@@ -34,6 +66,16 @@ static func card_for_item(item: Dictionary) -> Dictionary:
 						+ "mm/h × catchment area × runoff (local Planetary Basic Income — "
 						+ "does not count as an external import). When the tank is full, "
 						+ "delivery stops so you are not flooded with overflow warnings.",
+			}
+		"plant":
+			return {
+				"title": "Grow Bed (photosynthesis)",
+				"body": "Monteith light-use efficiency: dry biomass ≈ LUE × PAR × area, "
+						+ "limited by water (required) and nutrients (optional if wired). "
+						+ "Sunlight is ambient — panels and beds work without a radiant wire "
+						+ "from the Solar PBI; drawing one just visualizes the link. "
+						+ "Wire water → grow bed → biomass tank. Place on the Site Plan "
+						+ "for 3D shade on the sunlight factor.",
 			}
 		"processor":
 			if role == "habitat":
@@ -83,7 +125,7 @@ static func card_for_item(item: Dictionary) -> Dictionary:
 				"biomass":
 					return {
 						"title": "Biomass Store",
-						"body": "Receives SoI PBI yield and habitat food scraps. Feed digesters "
+						"body": "Receives grow-bed harvest and habitat food scraps. Feed digesters "
 								+ "or hold as a buffer for organic loops.",
 					}
 				"greywater", "blackwater":
@@ -99,4 +141,28 @@ static func card_for_item(item: Dictionary) -> Dictionary:
 						"body": "Digester output buffer. Connect to the IBC biodigester out ports "
 								+ "or merge tanks by dragging one onto another.",
 					}
+	return {}
+
+
+## Education for a selected connection (radiant sunlight wires, etc.).
+## Returns {title, body} or {}.
+static func card_for_connection(conn: Dictionary) -> Dictionary:
+	if str(conn.get("polarity", "")) != "resource":
+		return {}
+	var kind := ResourceKinds.normalize_kind(str(conn.get("resource_type", "")))
+	if kind == "sunlight":
+		return {
+			"title": "Radiant sunlight wire",
+			"body": "Dashed gold links are ambient documentation, not a pipe. "
+					+ "Panels and grow beds still receive SoI sunlight with no wire drawn. "
+					+ "Dash speed and glow scale with SoI flux (kW); removing the wire "
+					+ "never gates output.",
+		}
+	if kind == "wind":
+		return {
+			"title": "Radiant atmosphere wire",
+			"body": "Dashed teal links document ambient wind/atmosphere. "
+					+ "Turbines already use WeatherService wind without this wire — "
+					+ "drawing it never gates generation.",
+		}
 	return {}

@@ -172,9 +172,17 @@ static func defaults() -> Dictionary:
 		"seasonal_strength": 0.0,
 		"slope_max_deg": 25.0,
 		"auto_density_scale": 1.0,
+		# Hard caps so heavy OSM maps still load (override in Tune look / terrain cfg).
+		"auto_max_tree_instances": 24000,
+		"auto_max_grass_instances": 120000,
+		## Beyond this radius from site centre, tree density is thinned by
+		## auto_distant_density (0 = skip distant, 1 = full density).
+		"auto_detail_radius_m": 800.0,
+		"auto_distant_density": 0.35,
 		"osm_species_map": {},
+		"local_mix": {},
 		# Mixed-woodland composition (Tune Look "Mixed woodland" type) used by any
-		# OSM kind bound to "Mixed pine + deciduous".
+		# OSM kind bound to "Mixed (local blend)".
 		"mix_pine": 0.45,
 		"mix_deciduous": 0.45,
 		"mix_shrub": 0.10,

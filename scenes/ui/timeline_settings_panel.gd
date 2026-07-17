@@ -71,6 +71,10 @@ var _stars_north: HSlider
 var _stars_decl: HSlider
 var _stars_flip_v: CheckBox
 var _stars_flip_h: CheckBox
+var _stars_glow: HSlider
+var _star_trails: CheckBox
+var _star_trail_length: HSlider
+var _lock_sky: CheckBox
 var _planets_master: CheckBox
 var _star_texture_lbl: Label
 var _star_file_dialog: FileDialog = null
@@ -89,6 +93,8 @@ var _dst_status: Label
 var _live_mode: CheckBox
 var _survival: CheckBox
 var _plant_growth: CheckBox
+var _connector_losses: CheckBox
+var _force_rainbow: CheckBox
 var _analemma_drift: HSlider
 var _analemma_noon: HSlider
 var _analemma_thickness: HSlider
@@ -703,6 +709,22 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	_survival        = _add_check(v, "Survival mechanics active", _on_survival)
 	_survival_status = _add_status_label(v, "")
 	_plant_growth    = _add_check(v, "Plant growth (vegetation aging)", _on_plant_growth)
+	_connector_losses = _add_check(v, "Connector losses (wire/pipe loss + burnout)", _on_connector_losses)
+	var loss_hint := Label.new()
+	loss_hint.text = "Simulates I²R voltage-drop losses in wires/cords and friction losses in hoses/pipes based on their routed 3D length. Sustained overload can burn out a connector."
+	loss_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	loss_hint.custom_minimum_size = Vector2(520, 0)
+	loss_hint.add_theme_color_override("font_color", C_TEXT_S)
+	loss_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(loss_hint)
+	_force_rainbow = _add_check(v, "Force rainbow (debug)", _on_force_rainbow)
+	var rainbow_hint := Label.new()
+	rainbow_hint.text = "Shows the antisolar rainbow regardless of rain, for testing. It still only appears when the sun is low (below ~44°) and you look opposite the sun, low above the horizon."
+	rainbow_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rainbow_hint.custom_minimum_size = Vector2(520, 0)
+	rainbow_hint.add_theme_color_override("font_color", C_TEXT_S)
+	rainbow_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(rainbow_hint)
 	var growth_hint := Label.new()
 	growth_hint.text = "Animates trees growing and reseeding over seasons. Turn off for smoother ∞ / analemma mode (skips per-frame scale updates)."
 	growth_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -894,6 +916,10 @@ func _build_stars_planets_tab(tabs: TabContainer) -> void:
 	_stars_decl = _add_slider(v, "Dec offset", -180.0, 180.0, 0.5, _on_stars_decl_offset)
 	_stars_flip_v = _add_check(v, "Flip vertical", _on_stars_flip_vertical)
 	_stars_flip_h = _add_check(v, "Flip horizontal", _on_stars_flip_horizontal)
+	_stars_glow = _add_slider(v, "Star glow (halo)", 0.0, 1.0, 0.05, _on_stars_glow)
+	_star_trails = _add_check(v, "Star trails (long exposure)", _on_star_trails)
+	_star_trail_length = _add_slider(v, "Trail length", 0.0, 1.0, 0.05, _on_star_trail_length)
+	_lock_sky = _add_check(v, "Lock camera to sky (astro still)", _on_lock_camera_to_sky)
 	var tex_row := HBoxContainer.new()
 	tex_row.add_theme_constant_override("separation", 6)
 	var upload_btn := Button.new()
@@ -1158,6 +1184,12 @@ func _sync_gameplay_from_snapshot(snap: Dictionary) -> void:
 		_survival.button_pressed = bool(snap.get("survival_enabled", false))
 	if _plant_growth:
 		_plant_growth.button_pressed = bool(snap.get("plant_growth_enabled", true))
+	if _connector_losses:
+		_connector_losses.button_pressed = SimSettingsController.connector_losses_enabled \
+				if is_instance_valid(SimSettingsController) else false
+	if _force_rainbow:
+		_force_rainbow.button_pressed = SimSettingsController.force_rainbow \
+				if is_instance_valid(SimSettingsController) else false
 	if _analemma_drift:
 		_analemma_drift.value = float(snap.get("analemma_diurnal_offset_min_per_day", 0.0))
 	if _analemma_noon:
@@ -1274,6 +1306,14 @@ func _sync_stars_planets_from_snapshot(snap: Dictionary) -> void:
 		_stars_flip_v.button_pressed = snap.get("stars_flip_vertical", false)
 	if _stars_flip_h:
 		_stars_flip_h.button_pressed = snap.get("stars_flip_horizontal", false)
+	if _stars_glow:
+		_stars_glow.value = snap.get("stars_glow", 0.0)
+	if _star_trails:
+		_star_trails.button_pressed = float(snap.get("star_trails", 0.0)) > 0.5
+	if _star_trail_length:
+		_star_trail_length.value = snap.get("star_trail_length", 0.35)
+	if _lock_sky:
+		_lock_sky.button_pressed = snap.get("lock_camera_to_sky", false)
 	if _planets_master:
 		var all_on := true
 		for pid in _planet_enabled:
@@ -1520,6 +1560,22 @@ func _on_stars_flip_horizontal(on: bool) -> void:
 	if _syncing: return
 	SimSettingsController.apply_star_setting("stars_flip_horizontal", on)
 
+func _on_stars_glow(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("stars_glow", v)
+
+func _on_star_trails(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("star_trails", 1.0 if on else 0.0)
+
+func _on_star_trail_length(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("star_trail_length", v)
+
+func _on_lock_camera_to_sky(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("lock_camera_to_sky", on)
+
 func _on_upload_star_texture() -> void:
 	if _star_file_dialog == null:
 		_star_file_dialog = FileDialog.new()
@@ -1602,6 +1658,14 @@ func _on_plant_growth(on: bool) -> void:
 	if _syncing: return
 	SimSettingsController.apply_plant_growth_enabled(on)
 	_refresh_labels()
+
+func _on_connector_losses(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.set_connector_losses_enabled(on)
+
+func _on_force_rainbow(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.set_force_rainbow(on)
 
 
 func _on_analemma_drift(value: float) -> void:

@@ -1,14 +1,16 @@
 extends Control
 
-## Terrain sculpt toolbar — ortho FPV selection + level/raise/lower on the height grid.
+## Terrain sculpt toolbar — ortho FPV selection + level/raise/lower/berm/hill/swale.
 
 signal edit_applied
 signal mode_changed(active: bool)
 
 const MODAL_NAME := "terrain_edit"
-const TIMELINE_CLEARANCE := 178.0
-const PANEL_HEIGHT := 96.0
+const TIMELINE_CLEARANCE := 162.0
+const PANEL_HEIGHT := 128.0
 const HIGHLIGHT_DEBOUNCE_S := 0.07
+const PITCH_45 := -45.0
+const PITCH_90 := -89.0
 
 @export var toggle_action: String = "terrain_edit"
 
@@ -29,6 +31,8 @@ var _saved_camera_projection := Camera3D.PROJECTION_PERSPECTIVE
 var _saved_camera_size := 500.0
 var _highlight_pending := false
 var _highlight_timer := 0.0
+var _pitch_deg := PITCH_45
+var _pitch_btn: Button = null
 
 
 func _ready() -> void:
@@ -76,16 +80,22 @@ func _build_ui() -> void:
 	col.add_theme_constant_override("separation", 4)
 	_panel.add_child(col)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
+	row.add_theme_constant_override("separation", 6)
 	col.add_child(row)
 	for spec in [
 		["Level", _op_level], ["Raise", _op_raise], ["Lower", _op_lower],
-		["Parcel", _op_parcel], ["Exit", func() -> void: _exit_mode()],
+		["Berm", _op_berm], ["Hill", _op_hill], ["Swale", _op_swale],
+		["Parcel", _op_parcel], ["Add pond", _op_add_pond],
+		["Exit", func() -> void: _exit_mode()],
 	]:
 		var b := Button.new()
 		b.text = spec[0]
 		b.pressed.connect(spec[1])
 		row.add_child(b)
+	_pitch_btn = Button.new()
+	_pitch_btn.text = _pitch_label()
+	_pitch_btn.pressed.connect(_toggle_pitch)
+	row.add_child(_pitch_btn)
 	_status = Label.new()
 	_status.text = "Press T: terrain sculpt (drag to select)"
 	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -128,7 +138,7 @@ func _enter_mode() -> void:
 	visible = true
 	_capture.mouse_filter = Control.MOUSE_FILTER_STOP
 	mode_changed.emit(true)
-	_status.text = "Top-down view — drag on terrain to select (Esc to exit)"
+	_status.text = "%s view — drag on terrain to select (Esc to exit)" % _view_name()
 	CursorController.request_modal(MODAL_NAME, Callable(self, "_exit_mode"))
 	_lock_drone_ortho(true)
 
@@ -150,6 +160,23 @@ func _exit_mode() -> void:
 		_loader.call("clear_selection_highlight")
 	if _loader != null and _loader.has_method("clear_parcel_rect"):
 		_loader.call("clear_parcel_rect")
+
+
+func _pitch_label() -> String:
+	return "View 45°" if absf(_pitch_deg - PITCH_45) < 1.0 else "View 90°"
+
+
+func _view_name() -> String:
+	return "45°" if absf(_pitch_deg - PITCH_45) < 1.0 else "Top-down"
+
+
+func _toggle_pitch() -> void:
+	_pitch_deg = PITCH_90 if absf(_pitch_deg - PITCH_45) < 1.0 else PITCH_45
+	if _pitch_btn != null:
+		_pitch_btn.text = _pitch_label()
+	if _active:
+		_apply_drone_pitch()
+		_status.text = "%s view — drag on terrain to select (Esc to exit)" % _view_name()
 
 
 func _lock_drone_ortho(on: bool) -> void:
@@ -174,7 +201,8 @@ func _lock_drone_ortho(on: bool) -> void:
 				_loader.call("set_sculpt_locked_yaw", _locked_yaw)
 			drone.set_meta("terrain_edit_ortho", true)
 			drone.set_meta("vegetation_edit_ortho", false)
-			drone.current_pitch = deg_to_rad(-89.0)
+			drone.set_meta("terrain_edit_pitch_deg", _pitch_deg)
+			drone.current_pitch = deg_to_rad(_pitch_deg)
 			drone.current_yaw = _locked_yaw
 			var cam := _find_drone_camera(drone)
 			if cam != null:
@@ -185,12 +213,27 @@ func _lock_drone_ortho(on: bool) -> void:
 	else:
 		if drone != null:
 			drone.set_meta("terrain_edit_ortho", false)
+			if drone.has_meta("terrain_edit_pitch_deg"):
+				drone.remove_meta("terrain_edit_pitch_deg")
 			var cam := _find_drone_camera(drone)
 			if cam != null:
 				cam.projection = _saved_camera_projection
 				cam.size = _saved_camera_size
 		if drone != null and drone.is_mounted and player.has_method("_capture_mouse"):
 			player.call("_capture_mouse")
+
+
+func _apply_drone_pitch() -> void:
+	var main: Node = null
+	if _loader != null:
+		main = _loader.get_parent()
+	if main == null:
+		return
+	var drone := main.get_node_or_null("FPVDrone")
+	if drone == null:
+		return
+	drone.set_meta("terrain_edit_pitch_deg", _pitch_deg)
+	drone.current_pitch = deg_to_rad(_pitch_deg)
 
 
 func _find_drone_camera(drone: Node) -> Camera3D:
@@ -310,6 +353,33 @@ func _op_raise() -> void:
 
 func _op_lower() -> void:
 	_apply_op("lower")
+
+
+func _op_berm() -> void:
+	_apply_op("berm")
+
+
+func _op_hill() -> void:
+	_apply_op("hill")
+
+
+func _op_swale() -> void:
+	_apply_op("swale")
+
+
+func _op_add_pond() -> void:
+	if _loader == null or not _loader.has_method("add_sculpted_pond_to_graph"):
+		_status.text = "Pond import unavailable"
+		return
+	var rect := _world_rect_from_screen()
+	if rect.is_empty():
+		_status.text = "Select an area first (drag on terrain)"
+		return
+	if bool(_loader.call("add_sculpted_pond_to_graph", rect["min"], rect["max"])):
+		_status.text = "Added sculpted pond to graph"
+		edit_applied.emit()
+	else:
+		_status.text = "Could not add pond (select a larger area)"
 
 
 func _op_parcel() -> void:

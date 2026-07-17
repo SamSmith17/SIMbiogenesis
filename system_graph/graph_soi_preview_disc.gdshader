@@ -3,7 +3,7 @@ shader_type canvas_item;
 /// Soft circular mask so the SoI SubViewport reads as a disc, not a square.
 /// When `use_pixel_disc` is set, the disc is defined in container pixels so the
 /// preview can cover the canvas while staying locked to the 2D SoI ring at any zoom.
-uniform float edge_softness : hint_range(0.0, 0.08) = 0.02;
+uniform float edge_softness : hint_range(0.0, 0.08) = 0.008;
 uniform int use_pixel_disc = 0;
 uniform vec2 disc_center_px = vec2(0.5, 0.5);
 uniform float disc_radius_px = 1.0;

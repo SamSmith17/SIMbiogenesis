@@ -72,6 +72,7 @@ static func area_info(polygons: Array, area_idx: int) -> Dictionary:
 		"kind_label": kind_label(kind),
 		"points": poly,
 		"centroid": centroid,
+		"area_m2": _polygon_area(poly),
 		# Metre-rounded centroid tag (same scheme as BuildingBuilder.building_tag) so
 		# per-area edits in later phases survive an OSM re-fetch.
 		"tag": "veg_%d_%d" % [roundi(centroid.x), roundi(centroid.y)],

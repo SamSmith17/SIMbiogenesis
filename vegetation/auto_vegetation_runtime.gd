@@ -22,6 +22,11 @@ const SLOT_ALIAS := {
 	"palm": "deciduous",
 	"broadleaf": "deciduous",
 	"scrub": "shrub",
+	# Named sub-species / crops keep their SPECS ids when present; biome aliases
+	# above map to a base family. Extra aliases for common OSM labels:
+	"crop": "wheat",
+	"farmland": "wheat",
+	"orchard_tree": "apple",
 }
 
 ## Auto-veg drives final tree height through each record's `scale` (computed from a
@@ -167,6 +172,8 @@ static func reground(terrain: Node3D, layer: AutoVegetationLayer,
 
 
 static func _resolve_species(slot: String) -> String:
+	if VegetationCardFactory.SPECS.has(slot):
+		return slot
 	if slot in VegetationLayer.ALL_SPECIES:
 		return slot
 	return str(SLOT_ALIAS.get(slot, "deciduous"))
@@ -261,22 +268,26 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 		growth_map: VegetationInstanceMap = null) -> void:
 	if records.is_empty():
 		return
-	if species in VegetationLayer.GRASS_SPECIES:
-		VegetationRuntime._build_grass_bulk_batches(root, species, records, ground_y_at,
-			settings, growth_map)
+	var family := VegetationCardFactory.mesh_family(species)
+	var batch_settings := VegSpeciesCatalog.settings_with_variant(
+		species, settings, VegetationCardFactory.SPECS)
+	if family in VegetationLayer.GRASS_SPECIES or family.begins_with("grass_"):
+		# Grass builder keys on family id (lawn/field); variant dims live in settings.
+		VegetationRuntime._build_grass_bulk_batches(root, family, records, ground_y_at,
+			batch_settings, growth_map)
 		return
-	if species == "deciduous" or species == "pine":
-		VegetationRuntime._build_canopy_lod_bulk_batches(root, species, records, ground_y_at,
-			false, _with_auto_lod_reach(species, settings), VISIBILITY_END, growth_map)
+	if family == "deciduous" or family == "pine":
+		VegetationRuntime._build_canopy_lod_bulk_batches(root, family, records, ground_y_at,
+			false, _with_auto_lod_reach(family, batch_settings), VISIBILITY_END, growth_map)
 		return
-	var mesh := VegetationCardFactory.mesh_for_species(species, settings)
+	var mesh := VegetationCardFactory.mesh_for_species(species, batch_settings)
 	var use_surface_mats := VegetationCardFactory.mesh_has_surface_materials(species)
 	var mat: ShaderMaterial = null
 	if not use_surface_mats:
-		mat = VegetationCardFactory.material_for_species(species, settings)
-	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
-	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
-	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
+		mat = VegetationCardFactory.material_for_species(species, batch_settings)
+	var species_scale := VegetationCardFactory.species_bulk_scale(species, batch_settings)
+	var foot_y := VegetationCardFactory.foot_local_y(species, batch_settings)
+	var vert_off := VegetationLayer.vertical_offset_for(family, batch_settings)
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = mesh

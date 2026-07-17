@@ -241,8 +241,45 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_num_field("V at MPP",           specs.get("vmp",  0.0),   "specs/vmp",  0,  600,  0.1)
 			_num_field("I short-circuit (A)",specs.get("isc",  0.0),   "specs/isc",  0,   50,  0.01)
 			_num_field("I at MPP (A)",       specs.get("imp",  0.0),   "specs/imp",  0,   50,  0.01)
+			_section("Sunlight")
+			_readonly_field("Sunlight factor", "%.0f%%" % (float(specs.get("sunlight_factor", 1.0)) * 100.0))
+			_readonly_field("Live output", "%.0f W" % (float(specs.get("current_output_kw", 0.0)) * 1000.0))
+			_hint_label("Sunlight factor is 3D site shade (1.0 = unshaded). Place the panel on the Site Plan to enable per-node shading.")
 			_section("Cost")
 			_num_field("Unit Cost ($)",      specs.get("cost", 0.0),   "specs/cost", 0, 99999, 1.0)
+
+		"plant":
+			_section("Site / Area")
+			_text_field("Name",              specs.get("name", ""),              "specs/name")
+			if GraphSiteLayout.has_site_coords(item):
+				_num_field("Site X (m east)", float(item.get("site_x_m", 0.0)), "site_x_m", -2000, 2000, 0.1)
+				_num_field("Site Z (m south)", float(item.get("site_z_m", 0.0)), "site_z_m", -2000, 2000, 0.1)
+			_num_field("Area (m²)",          specs.get("area_m2", 10.0),         "specs/area_m2", 0.5, 100000.0, 0.5)
+			_num_field("Map icon scale", float(specs.get("map_display_scale", 1.0)),
+					"specs/map_display_scale", 0.5, 8.0, 0.1)
+			var plant_soi_row := _row_container()
+			var plant_soi_h: HBoxContainer = plant_soi_row.get_child(0) as HBoxContainer
+			plant_soi_h.add_child(_key_label("Use SoI area"))
+			var plant_soi_cb := CheckBox.new()
+			plant_soi_cb.button_pressed = bool(specs.get("use_soi_area", false))
+			plant_soi_cb.focus_mode = Control.FOCUS_NONE
+			plant_soi_cb.toggled.connect(func(on: bool) -> void: _commit_field("specs/use_soi_area", on))
+			plant_soi_h.add_child(plant_soi_cb)
+			_form_vbox.add_child(plant_soi_row)
+			if not str(specs.get("osm_tag", "")).is_empty():
+				_readonly_field("OSM tag", str(specs.get("osm_tag", "")))
+			_section("Light-use efficiency")
+			_num_field("LUE (g/MJ PAR)",     specs.get("lue_g_per_mj", 2.0),     "specs/lue_g_per_mj", 0.1, 5.0, 0.05)
+			_num_field("Water (L/kg DM)",    specs.get("water_l_per_kg", 50.0),  "specs/water_l_per_kg", 1.0, 2000.0, 1.0)
+			_num_field("Nutrients (kg/kg)",  specs.get("nutrient_kg_per_kg", 0.02), "specs/nutrient_kg_per_kg", 0.0, 1.0, 0.001)
+			_section("Live")
+			_readonly_field("PAR", "%.0f W/m²" % float(specs.get("par_wm2", 0.0)))
+			_readonly_field("Sunlight factor", "%.0f%%" % (float(specs.get("sunlight_factor", 1.0)) * 100.0))
+			_readonly_field("Biomass rate", str(specs.get("display_value", "—")))
+			_readonly_field("Water draw", "%.2f L/h" % float(specs.get("water_lph", 0.0)))
+			_hint_label("Sunlight factor is 3D site shade (1.0 = unshaded). Water is required; nutrients only limit growth when wired.")
+			_section("Cost")
+			_num_field("Unit Cost ($)",      specs.get("cost", 0.0),             "specs/cost", 0, 99999, 1.0)
 
 		"wind":
 			_section("Turbine")
@@ -401,9 +438,14 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_num_field("Unit Cost ($)", specs.get("cost", 0.0),     "specs/cost", 0, 99999, 1.0)
 
 		"catchment":
-			_section("Specs")
+			_section("Site / Area")
 			_text_field("Name", specs.get("name", ""), "specs/name")
-			_text_field("Catchment kind", str(specs.get("catchment_kind", "rain")), "specs/catchment_kind")
+			if GraphSiteLayout.has_site_coords(item):
+				_num_field("Site X (m east)", float(item.get("site_x_m", 0.0)), "site_x_m", -2000, 2000, 0.1)
+				_num_field("Site Z (m south)", float(item.get("site_z_m", 0.0)), "site_z_m", -2000, 2000, 0.1)
+			_num_field("Catchment Area (m²)", specs.get("area_m2", 10.0), "specs/area_m2", 0.0, 100000.0, 1.0)
+			_num_field("Map icon scale", float(specs.get("map_display_scale", 1.0)),
+					"specs/map_display_scale", 0.5, 8.0, 0.1)
 			var soi_row := _row_container()
 			var soi_h: HBoxContainer = soi_row.get_child(0) as HBoxContainer
 			soi_h.add_child(_key_label("Use SoI area"))
@@ -413,7 +455,8 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			soi_cb.toggled.connect(func(on: bool) -> void: _commit_field("specs/use_soi_area", on))
 			soi_h.add_child(soi_cb)
 			_form_vbox.add_child(soi_row)
-			_num_field("Catchment Area (m²)", specs.get("area_m2", 10.0), "specs/area_m2", 0.0, 100000.0, 1.0)
+			_section("Specs")
+			_text_field("Catchment kind", str(specs.get("catchment_kind", "rain")), "specs/catchment_kind")
 			if str(specs.get("catchment_kind", "rain")) != "biomass":
 				_num_field("Runoff Coefficient", specs.get("runoff_coeff", 0.85), "specs/runoff_coeff", 0.0, 1.0, 0.01)
 			var live_lph := float(specs.get("live_capture_lph", specs.get("live_capture_rate", 0.0)))
@@ -421,18 +464,43 @@ func _rebuild_for_item(item: Dictionary) -> void:
 				_readonly_field("Live capture", "%.3f kg/h" % live_lph)
 			else:
 				_readonly_field("Live capture", "%.1f L/h" % live_lph)
+			if not str(specs.get("osm_tag", "")).is_empty():
+				_readonly_field("OSM tag", str(specs.get("osm_tag", "")))
 			_section("Cost")
 			_num_field("Unit Cost ($)", specs.get("cost", 0.0), "specs/cost", 0, 99999, 1.0)
 
-		"shelly4pm":
+		"pbi":
 			_section("Specs")
+			_text_field("Name", specs.get("name", ""), "specs/name")
+			var pbi_kind := str(specs.get("resource_kind", ""))
+			_readonly_field("Kind", pbi_kind.capitalize())
+			if pbi_kind == "sunlight" or pbi_kind == "solar":
+				_readonly_field("Irradiance", "%.0f W/m²" % float(specs.get("irradiance_wm2", 0.0)))
+				_readonly_field("SoI Flux", SolarEnergyBudget.format_kw(float(specs.get("flux_kw", 0.0))))
+				_readonly_field("Sun Availability", "%.0f%%" % (float(specs.get("sun_availability", 0.0)) * 100.0))
+				_readonly_field("Cloud cover", "%.0f%%" % (float(specs.get("cloud_frac", 0.0)) * 100.0))
+				_hint_label("Flux = irradiance × SoI area. Optional radiant wires visualize who draws from it; they never gate receivers.")
+			elif pbi_kind == "wind" or pbi_kind == "mechanical" or pbi_kind == "atmosphere" or pbi_kind == "air":
+				_readonly_field("Wind speed", "%.1f m/s" % float(specs.get("wind_ms", 0.0)))
+				_readonly_field("Temperature", "%.1f °C" % float(specs.get("temp_c", 20.0)))
+				_readonly_field("Relative humidity", "%.0f%%" % float(specs.get("humidity_pct", 50.0)))
+				_readonly_field("Cloud cover", "%.0f%%" % (float(specs.get("cloud_frac", 0.0)) * 100.0))
+				_readonly_field("Kinetic flux", SolarEnergyBudget.format_kw(float(specs.get("kinetic_kw", 0.0))))
+				_hint_label("Atmosphere is ambient — turbines already feel the wind. Optional dashed wires only visualize the link.")
+
+		"shelly4pm", "spiderbox", "breaker_panel":
+			_section("AC Passthrough")
+			_hint_label("AC in → switched outlets. OFF channels disconnect attached loads (0 W draw).")
 			_text_field("Name",                specs.get("name", ""),                   "specs/name")
 			_num_field("Max Amps / Circuit",   specs.get("max_amps_per_circuit", 16.0), "specs/max_amps_per_circuit", 1.0, 100.0, 1.0)
+			if itype == "breaker_panel":
+				_num_field("Main amps", float(specs.get("main_amps", 100.0)), "specs/main_amps", 20.0, 400.0, 10.0)
+				_readonly_field("Main breaker", "ON" if bool(specs.get("main_on", true)) else "OFF")
 			_section("Circuit Names")
-			_text_field("Ch 0 Name", specs.get("c0_name", "Circuit 0"), "specs/c0_name")
-			_text_field("Ch 1 Name", specs.get("c1_name", "Circuit 1"), "specs/c1_name")
-			_text_field("Ch 2 Name", specs.get("c2_name", "Circuit 2"), "specs/c2_name")
-			_text_field("Ch 3 Name", specs.get("c3_name", "Circuit 3"), "specs/c3_name")
+			var nchan := int(specs.get("channel_count", 4))
+			for ci in range(clampi(nchan, 1, 8)):
+				_text_field("Ch %d Name" % ci,
+					specs.get("c%d_name" % ci, "Circuit %d" % ci), "specs/c%d_name" % ci)
 
 		_:
 			_section("Specs")
@@ -447,11 +515,11 @@ func _rebuild_for_item(item: Dictionary) -> void:
 	_build_appearance_section(item)
 
 	# 3D embodiment - Place in 3D when a GLB is attached, else prompt to add one.
-	if itype in ["panel", "wind", "hydro", "processor", "resource", "catchment",
+	if itype in ["panel", "plant", "wind", "hydro", "processor", "resource", "catchment",
 			"appliance", "acload", "battery", "smartbattery", "controller"]:
 		_build_scene_link_section(item)
 
-	if itype == "shelly4pm":
+	if itype in ["shelly4pm", "spiderbox", "breaker_panel"]:
 		_build_shelly4pm_controls_section(item)
 	if itype == "compound":
 		_build_compound_section(item)
@@ -459,7 +527,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 	# Optional LIVE twin + calibration - tucked under Advanced so the default
 	# inspector stays focused on simulation gameplay.
 	if itype in ["panel", "battery", "smartbattery", "controller", "shelly4pm",
-			"appliance", "acload"]:
+			"spiderbox", "breaker_panel", "appliance", "acload"]:
 		_build_advanced_ha_twin_section(item)
 	if itype in ["appliance", "acload"]:
 		_build_advanced_calibration_section(item)
@@ -472,12 +540,15 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 	_clear_form()
 
 	var polarity: String = conn.get("polarity", "positive")
-	_title_lbl.text = "  Wire  (%s)" % polarity
+	var rtype: String = str(conn.get("resource_type", ""))
+	var rkind := ResourceKinds.normalize_kind(rtype)
+	var is_radiant: bool = (polarity == "resource" and (rkind == "sunlight" or rkind == "wind"))
+	_title_lbl.text = "  Radiant wire" if is_radiant else ("  Wire  (%s)" % polarity)
 	_title_lbl.add_theme_color_override("font_color", C_TEXT)
+	_append_education_card_dict(_EDU_CARDS_SCRIPT.card_for_connection(conn))
 
 	_section("Properties")
 	_readonly_field("Polarity",   polarity)
-	var rtype: String = str(conn.get("resource_type", ""))
 	if not rtype.is_empty():
 		_readonly_field("Resource kind", ResourceKinds.display_name(rtype))
 	_readonly_field("Source item",  conn.get("source_item_id",   "-"))
@@ -486,16 +557,26 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 	_readonly_field("Target port",  conn.get("target_handle_id", "-"))
 
 	var is_res: bool = (polarity == "resource")
-	if is_res:
+	if is_radiant:
+		_section("Radiant Link")
+		_readonly_field("Delivery", "Ambient (non-blocking)")
+		_readonly_field("Live flux", SolarEnergyBudget.format_kw(float(conn.get("flow_rate", 0.0))))
+		if rkind == "wind":
+			_hint_label("No conduit — atmosphere isn't piped. Turbines work without this wire.")
+		else:
+			_hint_label("No conduit diameter — sunlight isn't piped. Dash speed tracks SoI flux.")
+	elif is_res:
 		_section("Conduit Info")
 		_num_field("Diameter (mm)",    float(conn.get("conduit_diameter",   25.0)), "conduit_diameter",       1, 1000, 1.0)
 		_num_field("Length (m)",       float(conn.get("estimated_length",  1.0)), "estimated_length", 0, 9999, 0.1)
 		_num_field("Max Pressure (PSI)", float(conn.get("max_pressure",     150.0)), "max_pressure",         0,  5000, 1.0)
+		_build_connection_loss_section(conn, false)
 	else:
 		_section("Wire Info")
 		_num_field("Gauge (AWG)",    float(conn.get("wire_gauge",   12.0)), "wire_gauge",       0, 40, 1.0)
 		_num_field("Length (m)",     float(conn.get("estimated_length",  1.0)), "estimated_length", 0, 9999, 0.1)
 		_num_field("Max Amps",       float(conn.get("wire_amps",     20.0)), "wire_amps",         0,  500, 1.0)
+		_build_connection_loss_section(conn, true)
 
 	_section("Style Overrides")
 	_text_field("Color", str(conn.get("color_override", "")), "color_override")
@@ -525,6 +606,82 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 	_updating_form = false
 
 
+## Wave 8: connector-loss telemetry + per-connection simulate override.
+## Electrical wires show I²R loss / voltage drop / amps; fluid conduits show
+## friction pressure drop / flow derate. Overload readout turns red past 1.0×.
+func _build_connection_loss_section(conn: Dictionary, electrical: bool) -> void:
+	_section("Losses")
+	if bool(conn.get("severed", false)):
+		var sev := Label.new()
+		sev.text = "BURNED OUT — no flow. Reset below."
+		sev.add_theme_color_override("font_color", UITheme.C_ERROR)
+		_form_vbox.add_child(sev)
+		var reset_btn := Button.new()
+		reset_btn.text = "Reset connector"
+		reset_btn.pressed.connect(func() -> void:
+			if _model != null and not _item_id.is_empty():
+				_model.update_connection(_item_id, {
+					"severed": false, "overload_s": 0.0, "overload_ratio": 0.0,
+				})
+				var refreshed := _model.get_connection(_item_id)
+				if not refreshed.is_empty():
+					_rebuild_for_connection(refreshed)
+		)
+		_form_vbox.add_child(reset_btn)
+	if electrical:
+		_readonly_field("Conduction loss", "%.1f W" % float(conn.get("loss_w", 0.0)))
+		_readonly_field("Voltage drop", "%.1f %%" % (float(conn.get("drop_pct", 0.0)) * 100.0))
+		_readonly_field("Current", "%.2f A" % float(conn.get("carried_amps", 0.0)))
+	else:
+		_readonly_field("Pressure drop", "%.2f psi" % float(conn.get("pressure_drop_psi", 0.0)))
+		_readonly_field("Flow derate", "%.0f %%" % (float(conn.get("flow_derate", 1.0)) * 100.0))
+	var ratio: float = float(conn.get("overload_ratio", 0.0))
+	var ratio_row := HBoxContainer.new()
+	ratio_row.add_theme_constant_override("separation", 8)
+	var rl := Label.new()
+	rl.text = "Overload"
+	rl.add_theme_color_override("font_color", C_TEXT_S)
+	rl.custom_minimum_size.x = 120.0
+	ratio_row.add_child(rl)
+	var rv := Label.new()
+	rv.text = "%.2f× rating" % ratio
+	rv.add_theme_color_override("font_color",
+		UITheme.C_ERROR if ratio > 1.0 else (UITheme.C_WARN if ratio > 0.8 else C_TEXT))
+	ratio_row.add_child(rv)
+	_form_vbox.add_child(ratio_row)
+	# Tri-state override: follow the global settings toggle, or force per-wire.
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var lbl := Label.new()
+	lbl.text = "Simulate losses"
+	lbl.add_theme_color_override("font_color", C_TEXT_S)
+	lbl.custom_minimum_size.x = 120.0
+	row.add_child(lbl)
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.add_item("Follow global setting", 0)
+	opt.add_item("Always on", 1)
+	opt.add_item("Always off", 2)
+	var sel := 0
+	if conn.has("simulate_losses"):
+		sel = 1 if bool(conn.get("simulate_losses", false)) else 2
+	opt.select(sel)
+	opt.item_selected.connect(func(idx: int) -> void:
+		if _updating_form or _model == null or _item_id.is_empty():
+			return
+		var conn_ref := _model.get_connection(_item_id)
+		if conn_ref.is_empty():
+			return
+		if idx == 0:
+			conn_ref.erase("simulate_losses")
+			_model.update_connection(_item_id, {})
+		else:
+			_model.update_connection(_item_id, {"simulate_losses": idx == 1})
+	)
+	row.add_child(opt)
+	_form_vbox.add_child(row)
+
+
 func _build_connection_2d_route_section(conn: Dictionary) -> void:
 	_section("2D Routing")
 	var wps: Array = conn.get("waypoints", []) as Array
@@ -536,7 +693,7 @@ func _build_connection_2d_route_section(conn: Dictionary) -> void:
 	else:
 		_build_corner_radius_slider(conn)
 	var hint := Label.new()
-	if style == "orthogonal":
+	if style == "orthogonal" or style == "metro":
 		hint.text = "Double-click wire to select · double-click again to add bend · drag segments sideways/up-down · drag handles · RMB/Del to remove"
 	else:
 		hint.text = "Double-click wire to select · double-click again to add bend · drag handles · RMB or Del to remove"
@@ -627,6 +784,7 @@ func _build_line_style_picker(conn: Dictionary) -> void:
 	var options: Array = [
 		{"id": "bezier", "label": "Smooth bezier"},
 		{"id": "orthogonal", "label": "Rounded rectilinear"},
+		{"id": "metro", "label": "Metro (45° chamfer)"},
 	]
 	var current: String = str(conn.get("line_style", "bezier"))
 	var sel := 0
@@ -635,11 +793,16 @@ func _build_line_style_picker(conn: Dictionary) -> void:
 		opt.add_item(str(od.get("label", "")), oi)
 		if str(od.get("id", "")) == current:
 			sel = oi
+	# Unknown / legacy styles still select something sensible.
+	if current != "bezier" and current != "orthogonal" and current != "metro":
+		sel = 0
 	opt.select(sel)
 	opt.item_selected.connect(func(idx: int) -> void:
 		if _updating_form or _model == null or _item_id.is_empty():
 			return
-		_model.update_connection(_item_id, {"line_style": str((options[idx] as Dictionary).get("id", "bezier"))})
+		var style_id := str((options[idx] as Dictionary).get("id", "bezier"))
+		_model.last_line_style = style_id
+		_model.update_connection(_item_id, {"line_style": style_id})
 		var refreshed := _model.get_connection(_item_id)
 		if not refreshed.is_empty():
 			_rebuild_for_connection(refreshed)
@@ -828,7 +991,9 @@ func _build_appearance_section(item: Dictionary) -> void:
 			"specs/footprint_w_m", 0.0, 100.0, 0.1)
 	_num_field("Footprint D (m)", float(specs.get("footprint_d_m", 0.0)),
 			"specs/footprint_d_m", 0.0, 100.0, 0.1)
-	_hint_label("0 = auto from model / type defaults. Used in Site Plan view.")
+	_num_field("Map icon scale", float(specs.get("map_display_scale", 1.0)),
+			"specs/map_display_scale", 0.5, 8.0, 0.1)
+	_hint_label("Footprint 0 = auto from model/type. Map icon scale only affects Site Plan chip size (not sim area).")
 
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 8)
@@ -900,7 +1065,10 @@ func _build_appearance_section(item: Dictionary) -> void:
 
 
 func _append_education_card(item: Dictionary) -> void:
-	var card: Dictionary = _EDU_CARDS_SCRIPT.card_for_item(item)
+	_append_education_card_dict(_EDU_CARDS_SCRIPT.card_for_item(item))
+
+
+func _append_education_card_dict(card: Dictionary) -> void:
 	if card.is_empty():
 		return
 	var pc := PanelContainer.new()
@@ -3202,12 +3370,35 @@ func _build_ha_link_section(item: Dictionary) -> void:
 ## Shows a row per circuit with the live state and a Toggle button that calls
 ## InverterBridge.toggle_shelly_output(i) via the autoload singleton.
 func _build_shelly4pm_controls_section(item: Dictionary) -> void:
-	var bridge: Node = get_node_or_null("/root/InverterBridge")
-	if bridge == null:
-		return
 	_section("Circuit Switch Controls")
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
-	for ci: int in 4:
+	var itype := str(item.get("type", "shelly4pm"))
+	var nchan := clampi(int(specs.get("channel_count", 4)), 1, 8)
+	if itype == "breaker_panel":
+		var main_row := HBoxContainer.new()
+		main_row.add_theme_constant_override("separation", 6)
+		var main_lbl := Label.new()
+		main_lbl.text = "Main breaker"
+		main_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		main_lbl.add_theme_color_override("font_color", C_TEXT_S)
+		main_row.add_child(main_lbl)
+		var main_on := bool(specs.get("main_on", true))
+		var main_state := Label.new()
+		main_state.text = "● ON" if main_on else "○ OFF"
+		main_state.add_theme_color_override("font_color",
+			Color(0.27, 0.9, 0.42) if main_on else C_TEXT_M)
+		main_row.add_child(main_state)
+		var main_btn := Button.new()
+		main_btn.text = "Toggle"
+		main_btn.focus_mode = Control.FOCUS_NONE
+		main_btn.flat = true
+		main_btn.add_theme_color_override("font_color", C_PRIMARY)
+		var capt_id := str(item.get("id", ""))
+		main_btn.pressed.connect(func() -> void:
+			_simulate_passthrough_flag(capt_id, "main_on"))
+		main_row.add_child(main_btn)
+		_form_vbox.add_child(_wrap_margin(main_row, 12, 3))
+	for ci: int in nchan:
 		var ci_name  := specs.get("c%d_name" % ci, "Circuit %d" % ci) as String
 		var ci_on    := bool(specs.get("c%d_on" % ci, false))
 		var ci_power := float(specs.get("c%d_power_w" % ci, 0.0))
@@ -3254,7 +3445,9 @@ func _build_shelly4pm_controls_section(item: Dictionary) -> void:
 		btn.pressed.connect(func() -> void:
 			var sm: Node = get_node_or_null("/root/SimMode")
 			var is_live: bool = sm != null and bool(sm.call("is_live"))
-			if is_live:
+			var it0 := _model.get_item(captured_item_id) if _model != null else {}
+			var ty0 := str(it0.get("type", ""))
+			if is_live and ty0 == "shelly4pm":
 				var br: Node = get_node_or_null("/root/InverterBridge")
 				if br != null and br.has_method("toggle_shelly_output"):
 					br.toggle_shelly_output(circuit_idx)
@@ -3266,17 +3459,20 @@ func _build_shelly4pm_controls_section(item: Dictionary) -> void:
 		_form_vbox.add_child(_wrap_margin(row, 12, 3))
 
 
-## Flip a Shelly 4PM circuit on/off in the graph model only - used when the
-## user clicks Toggle while the game is in SIMULATE mode and HA service calls
-## are suppressed.
+## Flip a Shelly 4PM / Spiderbox / breaker circuit on/off in the graph model —
+## used in SIMULATE (and for non-HA passthrough types), so wired loads shed when
+## the channel is OFF.
 func _simulate_shelly_toggle(item_id: String, circuit_idx: int) -> void:
-	if _model == null or item_id.is_empty():
+	_simulate_passthrough_flag(item_id, "c%d_on" % circuit_idx)
+
+
+func _simulate_passthrough_flag(item_id: String, key: String) -> void:
+	if _model == null or item_id.is_empty() or key.is_empty():
 		return
 	var it := _model.get_item(item_id)
 	if it.is_empty():
 		return
 	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
-	var key: String = "c%d_on" % circuit_idx
 	specs[key] = not bool(specs.get(key, false))
 	_model.update_item(item_id, {"specs": specs})
 	_rebuild_for_item(_model.get_item(item_id))
@@ -3661,6 +3857,7 @@ func _build_compound_section(item: Dictionary) -> void:
 		_readonly_field("Vmp / Voc", "%.1fV / %.1fV" % [float(specs.get("array_equiv_vmp", 0.0)), float(specs.get("array_equiv_voc", 0.0))])
 		_readonly_field("Imp / Isc", "%.1fA / %.1fA" % [float(specs.get("array_equiv_imp", 0.0)), float(specs.get("array_equiv_isc", 0.0))])
 		_readonly_field("Array Power", "%.0fW" % float(specs.get("array_equiv_wmp", 0.0)))
+		_build_array_module_dims_editor(item)
 		_build_array_bulk_panel_editor(item)
 	elif kind == "battery_bank":
 		_readonly_field("Kind", "Battery Bank")
@@ -3723,11 +3920,115 @@ func _build_compound_section(item: Dictionary) -> void:
 	_form_vbox.add_child(row)
 
 
+func _build_array_module_dims_editor(item: Dictionary) -> void:
+	## Leaf OSM-style arrays (no nested panel children) expose module geometry so
+	## the player can re-tile by area. Nested arrays keep the bulk panel editor.
+	var panel_ids := _collect_compound_panel_ids(item)
+	if not panel_ids.is_empty():
+		return
+	_section("Module Dimensions (Auto-tile)")
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var mount_opt := OptionButton.new()
+	mount_opt.focus_mode = Control.FOCUS_NONE
+	var mount_ids: Array[String] = SolarArrayBuilder.MOUNT_STYLES
+	var cur_mount := SolarArrayBuilder.resolve_mount_style(
+		str(specs.get("mount_style", SolarArrayBuilder.MOUNT_ROOF)))
+	var cur_idx := 0
+	for i in mount_ids.size():
+		var mid := mount_ids[i]
+		var label := str(SolarArrayBuilder.mount_defaults(mid).get("label", mid))
+		mount_opt.add_item(label)
+		if mid == cur_mount:
+			cur_idx = i
+	mount_opt.select(cur_idx)
+	var mount_row := _row_container()
+	var mount_hbox: HBoxContainer = mount_row.get_child(0)
+	mount_hbox.add_child(_key_label("Mount style"))
+	mount_opt.size_flags_horizontal = Control.SIZE_SHRINK_END
+	mount_hbox.add_child(mount_opt)
+	_form_vbox.add_child(mount_row)
+	var w_sb := _num_input_row("Panel width (m)", float(specs.get("panel_w_m", SolarArrayBuilder.PANEL_W)), 0.2, 4.0, 0.01)
+	var h_sb := _num_input_row("Panel height (m)", float(specs.get("panel_h_m", SolarArrayBuilder.PANEL_H)), 0.2, 4.0, 0.01)
+	var watts_sb := _num_input_row("Panel watts", float(specs.get("wmp", SolarArrayBuilder.PANEL_WATTS)), 1.0, 1000.0, 1.0)
+	var gap_sb := _num_input_row("Row gap (m)", float(specs.get("row_gap_m", SolarArrayBuilder.ROW_GAP)), 0.0, 2.0, 0.01)
+	var voc_sb := _num_input_row("Panel Voc (V)", float(specs.get("voc", SolarArrayBuilder.PANEL_VOC)), 1.0, 100.0, 0.1)
+	var row := _row_container()
+	var hbox: HBoxContainer = row.get_child(0)
+	var btn := Button.new()
+	btn.text = "Retile from footprint"
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.flat = true
+	btn.add_theme_color_override("font_color", C_PRIMARY)
+	btn.pressed.connect(func():
+		var mstyle := mount_ids[mount_opt.selected] if mount_opt.selected >= 0 else cur_mount
+		_retile_array_from_dims(item, {
+			"panel_w_m": w_sb.value,
+			"panel_h_m": h_sb.value,
+			"panel_watts": watts_sb.value,
+			"row_gap_m": gap_sb.value,
+			"voc": voc_sb.value,
+			"mount_style": mstyle,
+		})
+	)
+	hbox.add_child(btn)
+	_form_vbox.add_child(row)
+
+
+func _retile_array_from_dims(item: Dictionary, dims: Dictionary) -> void:
+	if _model == null or item.is_empty():
+		return
+	var item_id := str(item.get("id", ""))
+	var sp: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var spec := SolarArrayBuilder.resolve_panel_spec(dims)
+	sp["panel_w_m"] = float(spec["panel_w_m"])
+	sp["panel_h_m"] = float(spec["panel_h_m"])
+	sp["row_gap_m"] = float(spec["row_gap_m"])
+	sp["gap_x_m"] = float(spec["gap_x_m"])
+	sp["wmp"] = float(spec["panel_watts"])
+	sp["voc"] = float(spec["voc"])
+	sp["vmp"] = float(spec["vmp"])
+	sp["isc"] = float(spec["isc"])
+	sp["imp"] = float(spec["imp"])
+	if dims.has("mount_style"):
+		var mstyle := SolarArrayBuilder.resolve_mount_style(str(dims["mount_style"]))
+		sp["mount_style"] = mstyle
+		var mdefs := SolarArrayBuilder.mount_defaults(mstyle)
+		sp["tilt_deg"] = float(mdefs["tilt_deg"])
+	var count := int(sp.get("array_panel_units", sp.get("panel_count", 0)))
+	var foot: Variant = sp.get("footprint_xz", [])
+	var poly := PackedVector2Array()
+	if foot is Array:
+		for p in foot as Array:
+			if p is Array and (p as Array).size() >= 2:
+				poly.append(Vector2(float((p as Array)[0]), float((p as Array)[1])))
+	if poly.size() >= 3:
+		var tilt := float(sp.get("tilt_deg", 35.0))
+		count = SolarArrayBuilder.count_panels_for_footprint(poly, tilt, spec)
+	sp["panel_count"] = count
+	sp["array_panel_units"] = count
+	# Generous Voc budget when no controller is bound; wire/picker re-ranks later.
+	var topo := SolarArrayIntelligence.best_series_parallel(count, float(spec["voc"]), 500.0)
+	var equiv := SolarArrayIntelligence.build_array_equiv_specs(
+			count, float(spec["panel_watts"]), float(spec["voc"]),
+			float(spec["vmp"]), float(spec["imp"]), float(spec["isc"]), topo)
+	for k in equiv.keys():
+		sp[k] = equiv[k]
+	sp["summary"] = "%s  •  %.0fW  %.1fV  %.1fA" % [
+		str(equiv.get("array_topology", "Array")),
+		float(equiv.get("array_equiv_wmp", 0.0)),
+		float(equiv.get("array_equiv_vmp", 0.0)),
+		float(equiv.get("array_equiv_imp", 0.0)),
+	]
+	_model.update_item(item_id, {"specs": sp})
+	_toast("Retiled array: %d panels @ %.0f W" % [count, float(spec["panel_watts"])])
+	_rebuild_current_item()
+
+
 func _build_array_bulk_panel_editor(item: Dictionary) -> void:
 	_section("Panel Template (Bulk Edit)")
 	var panel_ids := _collect_compound_panel_ids(item)
 	if panel_ids.is_empty():
-		_readonly_field("Panels Found", "0")
+		_readonly_field("Nested panels", "none (leaf array — use Module Dimensions)")
 		return
 	_readonly_field("Panels Found", str(panel_ids.size()))
 	var first_panel := _model.get_item(panel_ids[0] as String)
@@ -3915,4 +4216,8 @@ func _type_icon(itype: String) -> String:
 		"processor":            return "🌀"
 		"resource":             return "🪣"
 		"shelly4pm":            return "📊"
+		"spiderbox":            return "🕷"
+		"breaker_panel":        return "🔌"
+		"plant":                return "🌱"
+		"catchment":            return "🌧"
 		_:                      return ""

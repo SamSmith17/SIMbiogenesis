@@ -3,9 +3,18 @@ extends RefCounted
 ## Computes total AC load (W) from the system graph: only load/processor nodes
 ## that are reachable from a controller AC output through AC/load wires, and
 ## that are currently ON.
+##
+## AC passthrough nodes (Shelly 4PM / Spiderbox / breaker panels):
+##   controller acOutput → ac_in → switched circuit_N outlets.
+## When a channel is OFF (or the panel main is open), loads wired to that
+## circuit are unreachable and draw 0 W — they do not contribute to the bus.
 
 const LOAD_TYPES: Array[String] = ["appliance", "acload", "processor"]
-const PASS_THROUGH_TYPES: Array[String] = ["shelly4pm", "acbreaker", "acoutlet", "controller"]
+const PASS_THROUGH_TYPES: Array[String] = [
+	"shelly4pm", "spiderbox", "breaker_panel", "acbreaker", "acoutlet", "controller",
+]
+## Types with per-circuit ON flags (c0_on…cN_on) on outgoing circuit_* handles.
+const SWITCHED_CIRCUIT_TYPES: Array[String] = ["shelly4pm", "spiderbox", "breaker_panel"]
 
 
 static func compute_watts(model: GraphModel, tree: SceneTree) -> float:
@@ -26,8 +35,116 @@ static func compute_watts(model: GraphModel, tree: SceneTree) -> float:
 			if str(sp.get("compound_kind", "")) == "load_group":
 				total += sum_load_group_watts(model, item, tree, sim_host)
 				continue
-		total += _item_draw_watts(iid, item, tree, sim_host)
+		total += _item_draw_watts(iid, item, tree, sim_host, model)
+	total += connection_losses_watts(model, tree, sim_host)
 	return maxf(0.0, total)
+
+
+## True when the opt-in connector loss simulation is on (Wave 8). Per-connection
+## override "simulate_losses" (tri-state: missing = follow global) is honored
+## by connection_losses_watts below.
+static func losses_enabled(tree: SceneTree) -> bool:
+	if tree == null or tree.root == null:
+		return false
+	var ctrl := tree.root.get_node_or_null("SimSettingsController")
+	if ctrl == null:
+		return false
+	return bool(ctrl.get("connector_losses_enabled"))
+
+
+## Wave 8: I^2R conduction loss summed over every conducting AC connection,
+## added to the bus draw so long thin cords genuinely cost energy. Writes
+## loss telemetry (loss_w / drop_pct / amps / overload_ratio) straight onto
+## the connection dicts (no update_connection — avoids signal churn, same
+## pattern as resource_flow_engine's flow_rate writeback).
+static func connection_losses_watts(model: GraphModel, tree: SceneTree,
+		sim_host: Node = null) -> float:
+	var global_on := losses_enabled(tree)
+	var total := 0.0
+	for conn: Dictionary in model.connections:
+		if not _is_ac_power_connection(conn):
+			continue
+		var enabled: bool = bool(conn.get("simulate_losses", global_on))
+		var type_id: String = ConduitKinds.derive_type_for_connection(conn)
+		if not ConduitKinds.is_electrical_type(type_id):
+			continue
+		if not enabled or bool(conn.get("severed", false)):
+			conn["loss_w"] = 0.0
+			conn["drop_pct"] = 0.0
+			conn["carried_amps"] = 0.0
+			conn["overload_ratio"] = 0.0
+			continue
+		var delivered: float = _connection_delivered_watts(model, conn, tree, sim_host)
+		var meta: Dictionary = ConduitKinds.type_meta(type_id)
+		var rep := ConduitLoss.electrical_report_for_connection(conn, meta, delivered)
+		conn["loss_w"] = float(rep.get("loss_w", 0.0))
+		conn["drop_pct"] = float(rep.get("drop_pct", 0.0))
+		conn["carried_amps"] = float(rep.get("amps", 0.0))
+		conn["overload_ratio"] = float(rep.get("overload_ratio", 0.0))
+		total += float(rep.get("loss_w", 0.0))
+	return total
+
+
+## Watts delivered THROUGH a connection = summed draw of loads on the side of
+## the cut edge that has no controller (the load side of a tree topology).
+## Loops (controllers on both sides) conservatively use the smaller side.
+static func _connection_delivered_watts(model: GraphModel, conn: Dictionary,
+		tree: SceneTree, sim_host: Node) -> float:
+	var cid := str(conn.get("id", ""))
+	var side_a := _side_summary(model, str(conn.get("source_item_id", "")), cid, tree, sim_host)
+	var side_b := _side_summary(model, str(conn.get("target_item_id", "")), cid, tree, sim_host)
+	var a_has_ctrl: bool = bool(side_a.get("has_controller", false))
+	var b_has_ctrl: bool = bool(side_b.get("has_controller", false))
+	if a_has_ctrl and not b_has_ctrl:
+		return float(side_b.get("watts", 0.0))
+	if b_has_ctrl and not a_has_ctrl:
+		return float(side_a.get("watts", 0.0))
+	if not a_has_ctrl and not b_has_ctrl:
+		return 0.0  # island with no source — nothing actually flows
+	return minf(float(side_a.get("watts", 0.0)), float(side_b.get("watts", 0.0)))
+
+
+## BFS from `start_id` across AC connections, never crossing `cut_conn_id`.
+## Returns {watts, has_controller} for that side of the cut.
+static func _side_summary(model: GraphModel, start_id: String, cut_conn_id: String,
+		tree: SceneTree, sim_host: Node) -> Dictionary:
+	var watts := 0.0
+	var has_controller := false
+	if start_id.is_empty():
+		return {"watts": 0.0, "has_controller": false}
+	var visited: Dictionary = {}
+	var queue: Array[String] = [start_id]
+	while not queue.is_empty():
+		var nid: String = queue.pop_front()
+		if visited.has(nid):
+			continue
+		visited[nid] = true
+		var item: Dictionary = model.get_item(nid)
+		if item.is_empty() or bool(item.get("is_ghost", false)):
+			continue
+		var ty := str(item.get("type", ""))
+		if ty == "controller":
+			has_controller = true
+		if ty == "compound":
+			var sp: Dictionary = item.get("specs", {}) as Dictionary
+			if str(sp.get("compound_kind", "")) == "load_group":
+				watts += sum_load_group_watts(model, item, tree, sim_host)
+		elif ty in LOAD_TYPES:
+			watts += _item_draw_watts(nid, item, tree, sim_host, model)
+		for c: Dictionary in model.connections:
+			if str(c.get("id", "")) == cut_conn_id:
+				continue
+			if not _is_ac_power_connection(c):
+				continue
+			if bool(c.get("severed", false)):
+				continue
+			var sid := str(c.get("source_item_id", ""))
+			var tid := str(c.get("target_item_id", ""))
+			if sid == nid and not visited.has(tid):
+				queue.append(tid)
+			elif tid == nid and not visited.has(sid):
+				queue.append(sid)
+	return {"watts": watts, "has_controller": has_controller}
 
 
 ## Sum live draw of all loads inside a load-group compound.
@@ -48,12 +165,21 @@ static func sum_load_group_watts(
 		if cid.is_empty():
 			continue
 		if str(child.get("type", "")) in LOAD_TYPES:
-			total += _item_draw_watts(cid, child, tree, sim_host)
+			total += _item_draw_watts(cid, child, tree, sim_host, model)
 	return total
 
 
 static func compute_kw(model: GraphModel, tree: SceneTree) -> float:
 	return compute_watts(model, tree) / 1000.0
+
+
+## True when `circuit_idx` on a switched AC passthrough node is currently ON.
+static func is_circuit_on(item: Dictionary, circuit_idx: int) -> bool:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var ty := str(item.get("type", ""))
+	if ty == "breaker_panel" and not bool(specs.get("main_on", true)):
+		return false
+	return bool(specs.get("c%d_on" % circuit_idx, false))
 
 
 static func _reachable_ac_load_ids(model: GraphModel) -> Dictionary:
@@ -66,6 +192,9 @@ static func _reachable_ac_load_ids(model: GraphModel) -> Dictionary:
 			continue
 		var cid := str(item.get("id", ""))
 		if cid.is_empty():
+			continue
+		var csp: Dictionary = item.get("specs", {}) as Dictionary
+		if bool(csp.get("destroyed", false)):
 			continue
 		_enqueue_ac_neighbors(model, cid, queue)
 
@@ -94,15 +223,46 @@ static func _reachable_ac_load_ids(model: GraphModel) -> Dictionary:
 
 
 static func _enqueue_ac_neighbors(model: GraphModel, item_id: String, queue: Array[String]) -> void:
+	var item: Dictionary = model.get_item(item_id)
+	var ty := str(item.get("type", ""))
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	# Whole-panel open: breaker panel main or simple AC breaker.
+	if ty == "breaker_panel" and not bool(specs.get("main_on", true)):
+		return
+	if ty == "acbreaker" and not bool(specs.get("closed", specs.get("on", true))):
+		return
+
 	for conn: Dictionary in model.connections:
 		if not _is_ac_power_connection(conn):
 			continue
+		if bool(conn.get("severed", false)):
+			continue  # burned-out conduit carries nothing (Wave 8)
 		var sid := str(conn.get("source_item_id", ""))
 		var tid := str(conn.get("target_item_id", ""))
+		var other := ""
+		var out_handle := ""
 		if sid == item_id:
-			queue.append(tid)
+			other = tid
+			out_handle = str(conn.get("source_handle_id", ""))
 		elif tid == item_id:
-			queue.append(sid)
+			other = sid
+			out_handle = str(conn.get("target_handle_id", ""))
+		else:
+			continue
+		if other.is_empty():
+			continue
+		# Switched passthrough: only traverse circuit_N when that channel is ON.
+		# Never forward through ac_in (that would walk back upstream).
+		if ty in SWITCHED_CIRCUIT_TYPES:
+			if out_handle == "ac_in" or out_handle == "input":
+				continue
+			if out_handle.begins_with("circuit_"):
+				var parts := out_handle.split("_")
+				if parts.size() >= 2:
+					var cidx := int(parts[1])
+					if not is_circuit_on(item, cidx):
+						continue
+		queue.append(other)
 
 
 static func _is_ac_power_connection(conn: Dictionary) -> bool:
@@ -126,7 +286,8 @@ static func _item_draw_watts(
 		item_id: String,
 		item: Dictionary,
 		tree: SceneTree,
-		sim_host: Node) -> float:
+		sim_host: Node,
+		model: GraphModel = null) -> float:
 		
 	# 1. Global check: If AC output is disabled at the bus, there is no AC load.
 	if tree != null and tree.root != null:
@@ -170,8 +331,28 @@ static func _item_draw_watts(
 			if node.has_method("get_power_consumption"):
 				return maxf(0.0, float(node.call("get_power_consumption")))
 
-	# 5. Fallback for simple loads: use rated wattage.
+	# 5. Wave 8 lights-as-wires: light-string loads scale with the routed 3D
+	# length of their feed wire (watts_per_m × route_length_m). Falls back to
+	# the rated wattage until the wire has a measured run.
+	var wpm := float(specs.get("watts_per_m", 0.0))
+	if wpm > 0.0 and model != null:
+		var run_m := _longest_route_length_m(model, item_id)
+		if run_m > 0.001:
+			return wpm * run_m
+
+	# 6. Fallback for simple loads: use rated wattage.
 	return _rated_watts_from_specs(specs)
+
+
+static func _longest_route_length_m(model: GraphModel, item_id: String) -> float:
+	var best := 0.0
+	for conn: Dictionary in model.connections_for_item(item_id):
+		if not _is_ac_power_connection(conn):
+			continue
+		best = maxf(best, maxf(
+			float(conn.get("route_length_m", 0.0)),
+			float(conn.get("estimated_length", 0.0))))
+	return best
 
 
 static func _item_is_on(item: Dictionary, specs: Dictionary) -> bool:

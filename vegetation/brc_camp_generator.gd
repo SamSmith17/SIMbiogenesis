@@ -54,6 +54,22 @@ const FILL_CLASSES := ["geodesic_dome", "shift_pod", "hexayurt"]
 ## Use generate_candidates with an explicit clip_polygon to bypass this gate.
 const MIN_ROAD_SEGMENTS := 150
 
+## Highway types that seed camp corridors. Access / airport / service roads are
+## excluded so Gate Road, runway spurs, and perimeter service tracks stay empty.
+const CAMP_STREET_HIGHWAY_ALLOW := {
+	"residential": true,
+	"living_street": true,
+	"unclassified": true,
+	"tertiary": true,
+	"tertiary_link": true,
+	"pedestrian": true,
+}
+## Name substrings (lowercase) that mark non-city access even when tagged residential.
+const CAMP_STREET_NAME_DENY := [
+	"gate", "airport", "runway", "highway", "county", "access",
+	"entrance", "exit", "service", "34", "playa road",
+]
+
 ## Component classes the generator can place, with frontage vs interior weights.
 ## class_id matches the camp_profile_*.tres so dimensions/art are reused.
 const CLASS_WEIGHTS := {
@@ -108,59 +124,217 @@ static func count_road_points(roads: Array) -> int:
 	return n
 
 
-## Convex hull of the road network, with outlier filtering so access highways
-## kilometres away don't inflate the polygon into the surrounding desert.
+## True when an OSM road should seed camp blocks (core city streets only).
+## Roads with no highway tag are kept (synthetic / selftest grids).
+static func is_camp_block_street(road: Dictionary) -> bool:
+	var tags: Dictionary = road.get("tags", {}) as Dictionary
+	var hw := str(road.get("highway_type", tags.get("highway", ""))).to_lower().strip_edges()
+	if not hw.is_empty() and not CAMP_STREET_HIGHWAY_ALLOW.get(hw, false):
+		return false
+	var name := str(tags.get("name", "")).to_lower()
+	if name.is_empty():
+		name = str(road.get("name", "")).to_lower()
+	for deny in CAMP_STREET_NAME_DENY:
+		if deny in name:
+			return false
+	# Long, nearly-straight unclassified spurs (Gate Road style) even without a
+	# matching name: drop if length ≫ chord and endpoints sit far from origin.
+	var pts: PackedVector2Array = road.get("points", PackedVector2Array())
+	if pts.size() >= 2 and (hw.is_empty() or hw == "unclassified" or hw == "tertiary"):
+		var path_len := 0.0
+		for i in range(pts.size() - 1):
+			path_len += pts[i].distance_to(pts[i + 1])
+		var chord := pts[0].distance_to(pts[pts.size() - 1])
+		var mid_r := pts[pts.size() / 2].length()
+		if path_len > 900.0 and chord > path_len * 0.85 and mid_r > 1400.0:
+			return false
+	return true
+
+
+## Roads that define campable city blocks (drops Gate / airport / service).
+static func filter_camp_streets(roads: Array) -> Array:
+	var out: Array = []
+	for r in roads:
+		if r is Dictionary and is_camp_block_street(r as Dictionary):
+			out.append(r)
+	return out
+
+
+## Clip polygon for the *city* road network (core streets only).
+##
+## BRC is a C-shaped annulus. A centroid + radial-percentile convex hull cuts the
+## two open tips (they sit far from the mass centroid) and bulges past the outer
+## ring on the closed side. Prefer an angle-binned annular-sector outline around
+## the local origin (Man / map centre); fall back to an unfiltered convex hull.
 ##
 ## Algorithm:
-##   1. Gather all road points.
-##   2. Find their centroid and per-point distance from it.
-##   3. Keep only points within the 90th-percentile distance (drops isolated
-##      highway endpoints that extend far from the BRC ring network).
-##   4. Convex-hull the filtered set and expand by 10 % so the outermost ring
-##      lane is fully inside the clip area.
+##   1. Prefer camp-block streets (filter_camp_streets); fall back to all roads.
+##   2. Try annular-sector polygon (outer arc + return along Esplanade).
+##   3. Else convex-hull all city points and expand 4 %.
 static func compute_city_area(roads: Array) -> PackedVector2Array:
 	if roads.is_empty():
 		return PackedVector2Array()
+	var city := filter_camp_streets(roads)
+	if count_road_points(city) < 40:
+		city = roads
 	var all_pts := PackedVector2Array()
-	for r in roads:
+	for r in city:
 		if r is Dictionary:
 			for p: Vector2 in (r.get("points", PackedVector2Array()) as PackedVector2Array):
 				all_pts.append(p)
 	if all_pts.size() < 3:
 		return PackedVector2Array()
 
-	# Centroid.
-	var centroid := Vector2.ZERO
-	for p in all_pts:
-		centroid += p
-	centroid /= float(all_pts.size())
+	var annular := _annular_city_polygon(all_pts)
+	if annular.size() >= 4:
+		return annular
+	return _expanded_convex_hull(all_pts, 1.04)
 
-	# Sort distances to find the 90th-percentile cutoff.
-	var dists: Array[float] = []
-	for p in all_pts:
-		dists.append(centroid.distance_to(p))
-	dists.sort()
-	var pct90 := dists[int(dists.size() * 0.90)]
 
-	# Keep only points within the cutoff.
-	var filtered := PackedVector2Array()
-	for p in all_pts:
-		if centroid.distance_to(p) <= pct90:
-			filtered.append(p)
-	if filtered.size() < 3:
-		filtered = all_pts
+## Angle-binned annulus / C-sector around the local origin. Empty when the
+## street cloud is not organised as rings around (0,0).
+static func _annular_city_polygon(pts: PackedVector2Array) -> PackedVector2Array:
+	const BINS := 96
+	const MIN_BIN_PTS := 2
+	const MIN_ACTIVE_BINS := 24  # ≥ 90° of city arc
+	const GAP_FILL_BINS := 2    # bridge tiny street gaps
+	# Outer pad so the last ring lane + plot depth stay inside the clip.
+	const OUTER_PAD := 1.10
+	const INNER_PAD := 0.90
 
-	var hull := Geometry2D.convex_hull(filtered)
+	var outer_r := PackedFloat32Array()
+	var inner_r := PackedFloat32Array()
+	var outer_ang := PackedFloat32Array()
+	var inner_ang := PackedFloat32Array()
+	var counts := PackedInt32Array()
+	outer_r.resize(BINS)
+	inner_r.resize(BINS)
+	outer_ang.resize(BINS)
+	inner_ang.resize(BINS)
+	counts.resize(BINS)
+	for i in BINS:
+		outer_r[i] = -1.0
+		inner_r[i] = 1.0e12
+		outer_ang[i] = 0.0
+		inner_ang[i] = 0.0
+		counts[i] = 0
 
-	# Expand the hull ~10 % outward from its centroid so the outermost ring
-	# road lane is fully inside the clip boundary.
+	var near_origin := 0
+	for p in pts:
+		var r := p.length()
+		if r < 30.0:
+			near_origin += 1
+			continue
+		var ang := atan2(p.y, p.x)
+		var bin := int(floor((ang + PI) / TAU * float(BINS)))
+		bin = clampi(bin, 0, BINS - 1)
+		counts[bin] += 1
+		if r >= outer_r[bin]:
+			outer_r[bin] = r
+			outer_ang[bin] = ang
+		if r <= inner_r[bin]:
+			inner_r[bin] = r
+			inner_ang[bin] = ang
+
+	# Streets must surround the map origin (Man); a blob far off-centre is not BRC.
+	if near_origin > pts.size() / 3:
+		return PackedVector2Array()
+
+	var active := PackedByteArray()
+	active.resize(BINS)
+	var active_n := 0
+	for i in BINS:
+		active[i] = 1 if counts[i] >= MIN_BIN_PTS else 0
+		if active[i] != 0:
+			active_n += 1
+	if active_n < MIN_ACTIVE_BINS:
+		return PackedVector2Array()
+
+	# Bridge one-bin gaps so a missing radial doesn't split the city arc.
+	for _pass in GAP_FILL_BINS:
+		var next := active.duplicate()
+		for i in BINS:
+			if active[i] != 0:
+				continue
+			var prev_i := (i - 1 + BINS) % BINS
+			var next_i := (i + 1) % BINS
+			if active[prev_i] != 0 and active[next_i] != 0:
+				next[i] = 1
+				outer_r[i] = 0.5 * (outer_r[prev_i] + outer_r[next_i])
+				inner_r[i] = 0.5 * (inner_r[prev_i] + inner_r[next_i])
+				outer_ang[i] = lerp_angle(outer_ang[prev_i], outer_ang[next_i], 0.5)
+				inner_ang[i] = lerp_angle(inner_ang[prev_i], inner_ang[next_i], 0.5)
+		active = next
+
+	active_n = 0
+	for i in BINS:
+		if active[i] != 0:
+			active_n += 1
+
+	# Longest contiguous active run (handles wrap across ±π).
+	var best_len := 0
+	var best_start := 0
+	if active_n >= BINS:
+		best_len = BINS
+		best_start = 0
+	else:
+		# Start scanning after an inactive bin so wrap-around arcs are one run.
+		var gap := 0
+		while gap < BINS and active[gap] != 0:
+			gap += 1
+		var scanned := 0
+		while scanned < BINS:
+			var idx := (gap + 1 + scanned) % BINS
+			if active[idx] == 0:
+				scanned += 1
+				continue
+			var length := 0
+			while length < BINS and active[(idx + length) % BINS] != 0:
+				length += 1
+			if length > best_len:
+				best_len = length
+				best_start = idx
+			scanned += maxi(length, 1)
+
+	if best_len < MIN_ACTIVE_BINS:
+		return PackedVector2Array()
+
+	# Reject if the "city" is only a thin radial spike (not an annulus sector).
+	var r_min := 1.0e12
+	var r_max := 0.0
+	for k in best_len:
+		var b := (best_start + k) % BINS
+		r_min = minf(r_min, inner_r[b])
+		r_max = maxf(r_max, outer_r[b])
+	if r_max < 80.0 or r_max - r_min < 40.0:
+		return PackedVector2Array()
+
+	var poly := PackedVector2Array()
+	# Outer arc — use the true angle of each bin's farthest street point so tips
+	# aren't cut by chordal bin-centre approximation.
+	for k in best_len:
+		var b := (best_start + k) % BINS
+		var ang := outer_ang[b]
+		poly.append(Vector2(cos(ang), sin(ang)) * outer_r[b] * OUTER_PAD)
+	# Return along the inner (Esplanade) edge so the open mouth stays outside.
+	for k in range(best_len - 1, -1, -1):
+		var b2 := (best_start + k) % BINS
+		var ang2 := inner_ang[b2]
+		poly.append(Vector2(cos(ang2), sin(ang2)) * inner_r[b2] * INNER_PAD)
+	return poly
+
+
+static func _expanded_convex_hull(pts: PackedVector2Array, expand: float) -> PackedVector2Array:
+	var hull := Geometry2D.convex_hull(pts)
+	if hull.size() < 3:
+		return hull
 	var hull_c := Vector2.ZERO
 	for p in hull:
 		hull_c += p
 	hull_c /= float(hull.size())
 	var expanded := PackedVector2Array()
 	for p in hull:
-		expanded.append(hull_c + (p - hull_c) * 1.10)
+		expanded.append(hull_c + (p - hull_c) * expand)
 	return expanded
 
 
@@ -187,11 +361,15 @@ static func build_camps_node(roads: Array, buildings: Array,
 		mix_bias: float = 0.0,
 		scale_min: float = 0.9, scale_max: float = 1.18,
 		light_density: float = 1.0,
-		exclusion_radius_m: float = 0.0) -> Node3D:
+		exclusion_radius_m: float = 0.0,
+		plot_depth_m: float = PLOT_DEPTH_M,
+		scatter_step_m: float = SCATTER_STEP_M,
+		light_lod_m: float = -1.0,
+		max_pool_lights: int = -1) -> Node3D:
 	var candidates := generate_candidates(roads, buildings, footing_grid, mesh_res,
 		extent_m, center_elev, area_half_m, seed,
 		clip_polygon, fill_probability, mix_bias, scale_min, scale_max,
-		light_density, exclusion_radius_m)
+		light_density, exclusion_radius_m, plot_depth_m, scatter_step_m)
 	var classes: Dictionary = candidates.get("classes", {})
 	var glow: Array = candidates.get("glow", [])
 	var stats: Dictionary = candidates.get("stats", {})
@@ -258,6 +436,10 @@ static func build_camps_node(roads: Array, buildings: Array,
 	# Real local illumination near the camera, synced to the glow field/day-night.
 	var pool := CampLightPoolScene.new()
 	pool.name = "CampLightPool"
+	if light_lod_m > 0.0:
+		pool.cull_radius_m = light_lod_m
+	if max_pool_lights > 0:
+		pool.max_lights = max_pool_lights
 	root.add_child(pool)
 	pool.setup(glow, glow_mat, main)
 
@@ -276,7 +458,9 @@ static func generate_candidates(roads: Array, buildings: Array,
 		mix_bias: float = 0.0,
 		scale_min: float = 0.9, scale_max: float = 1.18,
 		light_density: float = 1.0,
-		exclusion_radius_m: float = 0.0) -> Dictionary:
+		exclusion_radius_m: float = 0.0,
+		plot_depth_m: float = PLOT_DEPTH_M,
+		scatter_step_m: float = SCATTER_STEP_M) -> Dictionary:
 
 	var road_pts := count_road_points(roads)
 	var has_clip := clip_polygon.size() >= 3
@@ -366,8 +550,9 @@ static func generate_candidates(roads: Array, buildings: Array,
 	# shuffle the cap would cut off the eastern half of the city because the
 	# column-major scan fills west→east and terminates mid-city.
 	# -----------------------------------------------------------------------
+	var plot_depth := maxf(plot_depth_m, CELL_M)
 	var candidates: Array = []
-	var step := SCATTER_STEP_M
+	var step := maxf(scatter_step_m, 1.0)
 	var gx := -area_half_m + step * 0.5
 	while gx < area_half_m:
 		var gz := -area_half_m + step * 0.5
@@ -388,7 +573,7 @@ static func generate_candidates(roads: Array, buildings: Array,
 			if road[idx] != 0 or block[idx] != 0:
 				continue
 			var d := dist[idx]
-			if d > PLOT_DEPTH_M:
+			if d > plot_depth:
 				continue
 
 			# Street-facing orientation: perpendicular to chamfer distance gradient.
@@ -479,7 +664,7 @@ static func generate_candidates(roads: Array, buildings: Array,
 			var fidx := frw * cols + fcol
 			if road[fidx] != 0 or block[fidx] != 0:
 				continue
-			if dist[fidx] > PLOT_DEPTH_M:
+			if dist[fidx] > plot_depth:
 				continue
 			var fgy := 0.0
 			if not footing_grid.is_empty() and mesh_res > 1:

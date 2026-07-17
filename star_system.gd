@@ -73,6 +73,34 @@ class_name StarSystem
 		stars_horizon_fade = value
 		_push_params()
 
+## Soft glow around star texture samples (0 = sharp Stellarium points).
+@export_range(0.0, 1.0, 0.05) var stars_glow : float = 0.0 :
+	set(value):
+		stars_glow = value
+		_push_params()
+
+## Contrast for sharp star cores (higher cuts soft airglow further).
+@export_range(1.0, 4.0, 0.05) var stars_contrast : float = 2.2 :
+	set(value):
+		stars_contrast = value
+		_push_params()
+
+## Long-exposure star-trail swirl mix (0 = off, 1 = full streak).
+@export_range(0.0, 1.0, 0.05) var star_trails : float = 0.0 :
+	set(value):
+		star_trails = value
+		_push_params()
+
+@export_range(0.0, 1.0, 0.05) var star_trail_length : float = 0.35 :
+	set(value):
+		star_trail_length = value
+		_push_params()
+
+## When true, freeze LST so stars hold still relative to the camera (astro lock).
+## Landscape / sun motion continue; useful for still night photography framing.
+var lock_camera_to_sky : bool = false
+var _locked_lst : float = -1.0
+
 ## Star drift rate relative to moon (0 = locked, 1 = realistic ~13 deg/day).
 @export_range(0.0, 20.0, 0.5) var stars_drift_rate : float = 2.0
 
@@ -178,6 +206,10 @@ func _push_params() -> void:
 	mat.set_shader_parameter("stars_scale", stars_scale)
 	mat.set_shader_parameter("stars_twinkle", stars_twinkle)
 	mat.set_shader_parameter("stars_horizon_fade", stars_horizon_fade)
+	mat.set_shader_parameter("stars_glow", stars_glow)
+	mat.set_shader_parameter("stars_contrast", stars_contrast)
+	mat.set_shader_parameter("star_trails", star_trails)
+	mat.set_shader_parameter("star_trail_length", star_trail_length)
 
 ## Called by main.gd each frame to update time-dependent star parameters.
 func update_stars() -> void:
@@ -195,6 +227,12 @@ func update_stars() -> void:
 		lst += 360.0
 	while lst >= 360.0:
 		lst -= 360.0
+	if lock_camera_to_sky:
+		if _locked_lst < 0.0:
+			_locked_lst = lst
+		lst = _locked_lst
+	else:
+		_locked_lst = -1.0
 	current_lst = lst
 
 	mat.set_shader_parameter("stars_north_offset", stars_north_offset)
@@ -206,10 +244,27 @@ func update_stars() -> void:
 	mat.set_shader_parameter("stars_scale", stars_scale)
 	mat.set_shader_parameter("stars_twinkle", stars_twinkle)
 	mat.set_shader_parameter("stars_horizon_fade", stars_horizon_fade)
+	mat.set_shader_parameter("stars_glow", stars_glow)
+	mat.set_shader_parameter("stars_contrast", stars_contrast)
+	mat.set_shader_parameter("star_trails", star_trails)
+	mat.set_shader_parameter("star_trail_length", star_trail_length)
+	# North celestial pole elevation equals geographic latitude (Polaris altitude).
 	mat.set_shader_parameter("celestial_pole_elevation", main_scene.latitude)
 
 	var star_angle : float = _get_rotation_angle()
 	mat.set_shader_parameter("star_rotation_angle", star_angle)
+
+
+func set_star_trails(enabled: bool, length: float = -1.0) -> void:
+	star_trails = 1.0 if enabled else 0.0
+	if length >= 0.0:
+		star_trail_length = clampf(length, 0.0, 1.0)
+
+
+func set_lock_camera_to_sky(on: bool) -> void:
+	lock_camera_to_sky = on
+	if not on:
+		_locked_lst = -1.0
 
 ## Called by main.gd each frame to update reference star marker positions.
 func update_reference_stars() -> void:
@@ -301,6 +356,11 @@ func _load_calibration() -> void:
 		stars_twinkle = config.get_value("stars", "twinkle", stars_twinkle)
 		stars_horizon_fade = config.get_value("stars", "horizon_fade", stars_horizon_fade)
 		stars_drift_rate = config.get_value("stars", "drift_rate", stars_drift_rate)
+		stars_glow = config.get_value("stars", "glow", stars_glow)
+		stars_contrast = config.get_value("stars", "contrast", stars_contrast)
+		star_trails = config.get_value("stars", "trails", star_trails)
+		star_trail_length = config.get_value("stars", "trail_length", star_trail_length)
+		lock_camera_to_sky = bool(config.get_value("stars", "lock_camera_to_sky", lock_camera_to_sky))
 		var tex_path := str(config.get_value("stars", "texture_path", ""))
 		if not tex_path.is_empty() and FileAccess.file_exists(tex_path):
 			_load_texture_from_file(tex_path)
@@ -320,6 +380,11 @@ func save_calibration() -> void:
 	config.set_value("stars", "twinkle", stars_twinkle)
 	config.set_value("stars", "horizon_fade", stars_horizon_fade)
 	config.set_value("stars", "drift_rate", stars_drift_rate)
+	config.set_value("stars", "glow", stars_glow)
+	config.set_value("stars", "contrast", stars_contrast)
+	config.set_value("stars", "trails", star_trails)
+	config.set_value("stars", "trail_length", star_trail_length)
+	config.set_value("stars", "lock_camera_to_sky", lock_camera_to_sky)
 	var tex_path := _stored_texture_path()
 	if not tex_path.is_empty():
 		config.set_value("stars", "texture_path", tex_path)
@@ -336,6 +401,11 @@ func get_settings() -> Dictionary:
 		"stars_twinkle": stars_twinkle,
 		"stars_horizon_fade": stars_horizon_fade,
 		"stars_drift_rate": stars_drift_rate,
+		"stars_glow": stars_glow,
+		"stars_contrast": stars_contrast,
+		"star_trails": star_trails,
+		"star_trail_length": star_trail_length,
+		"lock_camera_to_sky": lock_camera_to_sky,
 		"texture_path": _stored_texture_path(),
 	}
 
@@ -358,6 +428,16 @@ func apply_settings(settings: Dictionary) -> void:
 		stars_horizon_fade = float(settings["stars_horizon_fade"])
 	if settings.has("stars_drift_rate"):
 		stars_drift_rate = float(settings["stars_drift_rate"])
+	if settings.has("stars_glow"):
+		stars_glow = float(settings["stars_glow"])
+	if settings.has("stars_contrast"):
+		stars_contrast = float(settings["stars_contrast"])
+	if settings.has("star_trails"):
+		star_trails = float(settings["star_trails"])
+	if settings.has("star_trail_length"):
+		star_trail_length = float(settings["star_trail_length"])
+	if settings.has("lock_camera_to_sky"):
+		set_lock_camera_to_sky(bool(settings["lock_camera_to_sky"]))
 
 func set_texture_from_path(source_path: String) -> bool:
 	if source_path.is_empty():

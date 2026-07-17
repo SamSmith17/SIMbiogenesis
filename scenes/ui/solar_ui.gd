@@ -2154,12 +2154,17 @@ func _thunderstorm_intensity() -> float:
 func _compute_rainbow_strength() -> float:
 	if main_node == null or not is_instance_valid(main_node.sun):
 		return 0.0
-	if _precip_kind() != "rain":
+	# Debug/test override: force the bow on regardless of rain. The shader still gates
+	# on geometry (sun low + arc above horizon), so it only shows when angles are right.
+	var force := SimSettingsController != null and SimSettingsController.force_rainbow
+	if not force and _precip_kind() != "rain":
 		return 0.0
 	var sun_dir: Vector3 = main_node.sun.to_global(Vector3(0.0, 0.0, 1.0)).normalized()
 	# Loosen sun angle requirement so it can be seen closer to horizon
 	if sun_dir.y < -0.05:
 		return 0.0
+	if force:
+		return 1.0
 	
 	# Any rain during daytime creates a chance for a rainbow. 
 	# Sun must be peeking through, so we require cloud_cover not to be 1.0 (fully overcast)
@@ -4228,8 +4233,10 @@ func apply_from_graph(data: Dictionary) -> void:
 
 func set_graph_has_solar(has: bool) -> void:
 	if _graph_has_solar == has:
+		visible = has
 		return
 	_graph_has_solar = has
+	visible = has
 	if not has:
 		_expanded = false
 		if _body != null:
@@ -4321,6 +4328,8 @@ func _setup_collapse() -> void:
 	vbox.add_child(_body)
 	_body.visible = _expanded
 	_apply_collapsed_size()
+	# Hidden until the graph reports at least one solar panel.
+	visible = _graph_has_solar
 
 func _on_collapse_toggled() -> void:
 	_expanded = not _expanded

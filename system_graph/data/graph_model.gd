@@ -146,6 +146,7 @@ func add_connection(conn: Dictionary) -> void:
 		conn["id"] = generate_connection_id()
 	if not conn.has("scope_id"):
 		conn["scope_id"] = ROOT_SCOPE_ID
+	_apply_light_conduit_default(conn)
 	connections.append(conn)
 	_conn_index[str(conn.get("id", ""))] = conn
 	_link_handle(
@@ -159,6 +160,23 @@ func add_connection(conn: Dictionary) -> void:
 		conn.get("id", "")
 	)
 	changed.emit("add_connection")
+
+
+## Wave 8 lights-as-wires: wiring a light-string load (specs.light_conduit,
+## e.g. "led_patio") defaults the connection's 3D conduit to that light kind,
+## so the wire renders as the string itself. Explicit overrides win.
+func _apply_light_conduit_default(conn: Dictionary) -> void:
+	if not str(conn.get("conduit_type", "")).is_empty():
+		return
+	for iid: Variant in [conn.get("source_item_id", ""), conn.get("target_item_id", "")]:
+		var item := get_item(str(iid))
+		if item.is_empty():
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		var lc: String = str(specs.get("light_conduit", ""))
+		if not lc.is_empty():
+			conn["conduit_type"] = lc
+			return
 
 
 func remove_connection(conn_id: String) -> void:

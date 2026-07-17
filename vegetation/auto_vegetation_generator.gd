@@ -54,7 +54,12 @@ const KIND_SCATTER_PRIORITY := {
 const NOMINAL_CARD_H := {
 	"deciduous": 6.0, "broadleaf": 6.0, "palm": 6.0,
 	"conifer": 3.2, "pine": 3.2, "taiga": 3.2,
-	"shrub": 0.7, "scrub": 0.7,
+	"spruce": 3.6, "cedar": 3.4, "fir": 3.8, "redwood": 6.0,
+	"chestnut": 6.5, "maple": 6.0, "cottonwood": 7.0, "aspen": 5.5,
+	"birch": 5.0, "beech": 6.0, "apple": 4.0, "pear": 4.2,
+	"orange": 3.5, "avocado": 5.0,
+	"shrub": 0.7, "scrub": 0.7, "cactus": 1.5, "joshua_tree": 2.5,
+	"corn": 1.6, "wheat": 0.9, "lettuce": 0.25,
 }
 
 enum ScatterPhase { POLYS, POINTS, ROWS, HEDGES, GAP_FILL, DONE }
@@ -141,6 +146,7 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 	state.rng = RandomNumberGenerator.new()
 	state.rng.seed = int(ctx.get("seed", 1337))
 	state.style = ctx.get("style", {})
+	state.layer.apply_instance_caps(state.style)
 	state.forest_min_area = float(state.style.get("forest_auto_min_area_m2", 12000.0))
 	state.biome = BiomePalette.for_location(float(ctx.get("latitude", 0.0)))
 	state.polys = _sort_polys_for_budget(
@@ -155,8 +161,10 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 	if bool(state.style.get("open_areas_exclude_trees", true)):
 		ctx["open_areas"] = _build_open_area_index(osm_payload.get("polygons", []))
 	# Wetland shrubs draw from the shared tree budget; cap their cumulative share.
-	ctx["wetland_bulk_max"] = int(AutoVegetationLayer.MAX_TREE_BULK_TOTAL
-		* WETLAND_TREE_BUDGET_SHARE)
+	ctx["wetland_bulk_max"] = int(state.layer.max_tree_bulk * WETLAND_TREE_BUDGET_SHARE)
+	ctx["tree_detail_radius_m"] = float(state.style.get("auto_detail_radius_m", 800.0))
+	ctx["tree_distant_density"] = clampf(float(state.style.get("auto_distant_density", 0.35)),
+		0.0, 1.0)
 	ctx["wetland_bulk_used"] = 0
 	# Grass sub-budget counters. Combined with the near-first poly ordering and
 	# the detail radius, the near meadows/lawns fill densely (matching the Tune
@@ -397,6 +405,13 @@ static func _scatter_polygon(layer: AutoVegetationLayer, rec: Dictionary,
 	for key in ["candidates", "placed", "rej_excluded", "rej_slope", "rej_open",
 			"rej_edge", "rej_budget"]:
 		stats[key] = 0
+	# Player-configured OSM→species override (vegetation modal). Empty = biome/tags.
+	var style_d: Dictionary = ctx.get("style", {})
+	# Default: no 3D grass for OSM meadow/lawn/field (ortho shows landcover).
+	# Opt in via style.scatter_lawn_field (selftests / advanced paint).
+	if not BiomePalette.should_auto_scatter(kind) \
+			and not bool(style_d.get("scatter_lawn_field", false)):
+		return
 	if kind == "grass_lawn" or kind == "grass_field":
 		var bkey := "grass_lawn_used" if kind == "grass_lawn" else "grass_field_used"
 		var budget := GRASS_LAWN_BUDGET if kind == "grass_lawn" else GRASS_FIELD_BUDGET
@@ -408,8 +423,6 @@ static func _scatter_polygon(layer: AutoVegetationLayer, rec: Dictionary,
 			stats, budget - used)
 		ctx[bkey] = used + placed
 		return
-	# Player-configured OSM→species override (vegetation modal). Empty = biome/tags.
-	var style_d: Dictionary = ctx.get("style", {})
 	var osm_map: Dictionary = style_d.get("osm_species_map", {})
 	var override: Dictionary = BiomePalette.species_override_for_kind(osm_map, kind,
 		BiomePalette.mix_weights_from_style(style_d))
@@ -471,7 +484,7 @@ static func _scatter_polygon_poisson(layer: AutoVegetationLayer, poly: PackedVec
 	var area := VegetationPaint.polygon_area(poly)
 	if area < 16.0:
 		return 0
-	if layer.tree_bulk_count() >= AutoVegetationLayer.MAX_TREE_BULK_TOTAL:
+	if layer.tree_bulk_count() >= layer.max_tree_bulk:
 		_stat(stats, "rej_budget")
 		return 0
 	var style: Dictionary = ctx.get("style", {})
@@ -494,6 +507,8 @@ static func _scatter_polygon_poisson(layer: AutoVegetationLayer, poly: PackedVec
 	if extra_cap >= 0:
 		cap = mini(cap, extra_cap)
 	var edge_feather := float(style.get("forest_edge_feather_m", 20.0))
+	var detail_r := float(ctx.get("tree_detail_radius_m", 800.0))
+	var distant_den := float(ctx.get("tree_distant_density", 0.35))
 	var spots := VegetationPaint.poisson_fill(poly, spacing, rng, [] as Array[Vector2], cap)
 	_stat(stats, "candidates", spots.size())
 	var placed := 0
@@ -508,6 +523,13 @@ static func _scatter_polygon_poisson(layer: AutoVegetationLayer, poly: PackedVec
 		if _in_open_area(p, ctx):
 			_stat(stats, "rej_open")
 			continue
+		# Distance LOD: thin instances past the detail radius so heavy OSM maps
+		# keep near-field density while skipping far fill that rarely reads.
+		var dist_xz := p.length()
+		if detail_r > 0.0 and dist_xz > detail_r:
+			if distant_den <= 0.0 or rng.randf() > distant_den:
+				_stat(stats, "rej_distant")
+				continue
 		var edge_w := _edge_spawn_weight(p, poly, edge_feather)
 		if rng.randf() > edge_w:
 			_stat(stats, "rej_edge")
@@ -613,7 +635,7 @@ static func _scatter_park_polygon(layer: AutoVegetationLayer, poly: PackedVector
 		weights: Dictionary, height: float,
 		exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
 		ctx: Dictionary, stats: Dictionary = {}) -> void:
-	_scatter_underlay_lawn(layer, poly, exclusion_index, rng, ctx, stats)
+	# Underlay lawn disabled by default (SKIP_AUTO_SCATTER_KINDS).
 	_scatter_polygon_poisson(layer, poly, weights, height * 0.85, 14.0,
 		exclusion_index, rng, ctx, true, "wood", 999999.0, false, stats)
 
@@ -622,7 +644,6 @@ static func _scatter_cemetery_polygon(layer: AutoVegetationLayer, poly: PackedVe
 		weights: Dictionary, height: float,
 		exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
 		ctx: Dictionary, stats: Dictionary = {}) -> void:
-	_scatter_underlay_lawn(layer, poly, exclusion_index, rng, ctx, stats)
 	_scatter_polygon_poisson(layer, poly, weights, height * 0.7, 12.0,
 		exclusion_index, rng, ctx, true, "wood", 999999.0, false, stats)
 

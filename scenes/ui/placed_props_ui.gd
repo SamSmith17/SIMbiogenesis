@@ -4,7 +4,7 @@ extends Control
 
 signal mode_changed(active: bool)
 
-const TIMELINE_CLEARANCE := 178.0
+const TIMELINE_CLEARANCE := 162.0
 const PANEL_HEIGHT := 200.0
 
 var _loader: Node = null

@@ -81,10 +81,18 @@ group_uniforms stars;
 	//   - South Celestial Pole at BOTTOM CENTER  
 	//   - Right Ascension 0h at horizontal center (or adjust stars_ra_offset)
 	// Generate with Stellarium: File > Save Screenshot > Spherical (equirectangular)
-	uniform sampler2D stars_texture : filter_linear_mipmap, hint_default_black, repeat_enable;
+	// Linear (no mipmap) keeps Stellarium points sharp — mipmaps were blooming a soft glow halo.
+	uniform sampler2D stars_texture : filter_linear, hint_default_black, repeat_enable;
 	uniform float stars_speed : hint_range( 0.0, 20.0, 0.01 ) = 1.0;
 	uniform float stars_scale : hint_range(0.5, 2.0, 0.01) = 1.0;
 	uniform float stars_opacity : hint_range(0.0, 3.0, 0.01) = 1.0;
+	// Soft glow mix around stars (0 = sharp point stars, 1 = max halo from blurred sample).
+	uniform float stars_glow : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
+	// Contrast lift for sharp cores (higher = dim texture noise cut harder).
+	uniform float stars_contrast : hint_range( 1.0, 4.0, 0.05 ) = 2.2;
+	// Classic long-exposure star trails (swirl around celestial pole).
+	uniform float star_trails : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
+	uniform float star_trail_length : hint_range( 0.0, 1.0, 0.01 ) = 0.35;
 	// Manual calibration offset - aligns the HDRI starmap's RA zero point (degrees)
 	// This corrects for when the Stellarium export was made
 	uniform float stars_north_offset : hint_range( -360.0, 360.0, 0.1 ) = 0.0;
@@ -301,6 +309,25 @@ float sphere_intersect( vec3 view_dir, vec3 sphere_pos, float radius )
     float c = dot( -sphere_pos, -sphere_pos ) - pow( radius, 2 );
     float h = pow( b, 2 ) - c;
     return h < 0.0 ? -1.0 : -b - sqrt( h );
+}
+
+// ROYGBIV along bow thickness: t=0 outer/red, t=1 inner/violet (Descartes min-deviation).
+vec3 _rainbow_spectrum( float t )
+{
+	t = clamp( t, 0.0, 1.0 );
+	vec3 _r = vec3( 1.00, 0.18, 0.05 );
+	vec3 _o = vec3( 1.00, 0.48, 0.04 );
+	vec3 _y = vec3( 1.00, 0.90, 0.12 );
+	vec3 _g = vec3( 0.18, 0.82, 0.22 );
+	vec3 _c = vec3( 0.12, 0.72, 0.92 );
+	vec3 _b = vec3( 0.18, 0.38, 0.95 );
+	vec3 _v = vec3( 0.52, 0.14, 0.82 );
+	if( t < 0.17 ) return mix( _r, _o, t / 0.17 );
+	if( t < 0.33 ) return mix( _o, _y, ( t - 0.17 ) / 0.16 );
+	if( t < 0.50 ) return mix( _y, _g, ( t - 0.33 ) / 0.17 );
+	if( t < 0.67 ) return mix( _g, _c, ( t - 0.50 ) / 0.17 );
+	if( t < 0.83 ) return mix( _c, _b, ( t - 0.67 ) / 0.16 );
+	return mix( _b, _v, ( t - 0.83 ) / 0.17 );
 }
 
 void sky()
@@ -569,8 +596,51 @@ void sky()
 		// Apply scale (centered on current view, not on texture center)
 		_stars_uv = ( _stars_uv - 0.5 ) / stars_scale + 0.5;
 		
-		// Stars texture - sample the HDRI
-		vec3 _stars_color = texture( stars_texture, _stars_uv ).rgb;
+		// Stars texture - sample the HDRI (sharp; optional soft glow mix)
+		vec3 _stars_sharp = texture( stars_texture, _stars_uv ).rgb;
+		vec3 _stars_color = _stars_sharp;
+		if( stars_glow > 0.001 )
+		{
+			// Tiny neighbour taps for an optional soft halo (off by default).
+			vec2 _px = vec2( 0.0012, 0.0008 );
+			vec3 _soft = (
+				texture( stars_texture, _stars_uv + vec2( _px.x, 0.0 ) ).rgb +
+				texture( stars_texture, _stars_uv - vec2( _px.x, 0.0 ) ).rgb +
+				texture( stars_texture, _stars_uv + vec2( 0.0, _px.y ) ).rgb +
+				texture( stars_texture, _stars_uv - vec2( 0.0, _px.y ) ).rgb
+			) * 0.25;
+			_stars_color = mix( _stars_sharp, _soft, clamp( stars_glow, 0.0, 1.0 ) );
+		}
+		// Long-exposure trails: blend samples rotated about the celestial pole.
+		if( star_trails > 0.001 )
+		{
+			float _trail_span = radians( 8.0 + star_trail_length * 40.0 );
+			vec3 _trail_accum = _stars_color;
+			const int TRAIL_SAMPLES = 5;
+			for( int _ti = 1; _ti <= TRAIL_SAMPLES; _ti++ )
+			{
+				float _ta = -_trail_span * ( float( _ti ) / float( TRAIL_SAMPLES ) );
+				float _tc = cos( _ta );
+				float _ts = sin( _ta );
+				vec3 _tv = _view_dir * _tc
+					+ cross( _pole_axis, _view_dir ) * _ts
+					+ _pole_axis * dot( _pole_axis, _view_dir ) * ( 1.0 - _tc );
+				// Re-apply the same LST rotation used for the primary sample.
+				vec3 _tr = _tv * _cos_rot
+					+ cross( _pole_axis, _tv ) * _sin_rot
+					+ _pole_axis * dot( _pole_axis, _tv ) * ( 1.0 - _cos_rot );
+				float _tlon = atan( _tr.x, -_tr.z );
+				float _tlat = asin( clamp( _tr.y, -1.0, 1.0 ) ) + _dec_offset_rad;
+				_tlat = clamp( _tlat, -PI * 0.5, PI * 0.5 );
+				float _tu = fract( _tlon / TAU + 0.5 );
+				float _tvv = _tlat / PI + 0.5;
+				if( stars_flip_vertical > 0.5 ) { _tvv = 1.0 - _tvv; }
+				vec2 _tuv = ( vec2( _tu, _tvv ) - 0.5 ) / stars_scale + 0.5;
+				_trail_accum += texture( stars_texture, _tuv ).rgb;
+			}
+			_trail_accum /= float( TRAIL_SAMPLES + 1 );
+			_stars_color = mix( _stars_color, _trail_accum, clamp( star_trails, 0.0, 1.0 ) );
+		}
 		
 		// Mask out Stellarium UI artifacts (toolbar icons at top, status bar at bottom)
 		// that were baked into the texture during screenshot export
@@ -580,11 +650,14 @@ void sky()
 		
 		// Clean faint background: remove dim noise/airglow while keeping the Milky Way
 		float _star_lum = dot( _stars_color, vec3( 0.299, 0.587, 0.114 ) );
-		float _bg_mask = smoothstep( 0.02, 0.06, _star_lum );
+		// Higher threshold + contrast = sharp star cores, no glow-y airglow wash.
+		float _bg_mask = smoothstep( 0.04, 0.12, _star_lum );
 		_stars_color *= _bg_mask;
+		_stars_color = pow( max( _stars_color, vec3( 0.0 ) ), vec3( stars_contrast ) );
 		// Desaturate dim pixels to neutralize any residual color cast;
 		// only bright stars retain full natural color
-		float _color_keep = smoothstep( 0.10, 0.30, _star_lum );
+		_star_lum = dot( _stars_color, vec3( 0.299, 0.587, 0.114 ) );
+		float _color_keep = smoothstep( 0.08, 0.35, _star_lum );
 		_stars_color = mix( vec3( _star_lum * _bg_mask ), _stars_color, _color_keep );
 		
 		// Pole artifact mitigation - fade stars near celestial poles to hide pinching
@@ -731,24 +804,6 @@ void sky()
 		COLOR += _ref_accum * ( 1.0 - _moon_amount );
 	}
 
-	//////////////////// RAINBOW /////////////////////////////////////////////////////////////////
-	// Descartes minimum-deviation arc (~42°) around the antisolar point; needs sun + rain.
-	if( rainbow_strength > 0.01 && LIGHT0_DIRECTION.y > -0.05 && EYEDIR.y > 0.02 )
-	{
-		vec3 _antisun = normalize( -LIGHT0_DIRECTION );
-		float _theta = acos( clamp( dot( EYEDIR, _antisun ), -1.0, 1.0 ) );
-		const float _PRIMARY = 0.733038; // 42 deg
-		const float _SECONDARY = 0.890118; // 51 deg
-		float _prim_band = 1.0 - smoothstep( 0.0, 0.035, abs( _theta - _PRIMARY ) );
-		_prim_band *= smoothstep( 0.02, 0.12, EYEDIR.y );
-		float _spec_t = clamp( ( _theta - 0.68 ) / 0.10, 0.0, 1.0 );
-		vec3 _bow_col = mix( vec3( 1.0, 0.25, 0.08 ), vec3( 0.45, 0.15, 0.95 ), _spec_t );
-		COLOR += _bow_col * _prim_band * rainbow_strength * 0.38;
-		float _sec_band = 1.0 - smoothstep( 0.0, 0.028, abs( _theta - _SECONDARY ) );
-		vec3 _bow2 = mix( vec3( 0.45, 0.15, 0.95 ), vec3( 1.0, 0.25, 0.08 ), _spec_t );
-		COLOR += _bow2 * _sec_band * rainbow_strength * 0.07;
-	}
-
 	//////////////////// CIRRUS //////////////////////////////////////////////////////////////////
 	// High, wispy, streaked clouds rendered independently of the cumulus layer (so they can
 	// appear in otherwise-clear skies).  A single stretched-and-rotated fractal makes the thin
@@ -764,6 +819,9 @@ void sky()
 		// Fade out toward the horizon and at night.
 		_cir *= clamp( ( EYEDIR.y - 0.02 ) / 0.14, 0.0, 1.0 );
 		_cir *= 1.0 - _night_amount * 0.92;
+		// The EYEDIR.xz/sqrt(EYEDIR.y) projection collapses to a point at the zenith,
+		// producing a colored "pinch" swirl straight overhead — fade the top cap to hide it.
+		_cir *= 1.0 - smoothstep( 0.88, 0.995, EYEDIR.y );
 
 		vec3 _cir_col = cirrus_color;
 		if( _sunset_amount > 0.0 )
@@ -803,6 +861,8 @@ void sky()
 		float _clouds_amount = clamp( _noise_top + _noise_middle + _noise_bottom, 0.0, 1.0 );
 		// Fading clouds near the horizon
 		_clouds_amount *= clamp( abs( EYEDIR.y ) / clouds_blur, 0.0, 1.0 );
+		// Hide the zenith projection singularity (same pinch as the cirrus layer).
+		_clouds_amount *= 1.0 - smoothstep( 0.88, 0.995, EYEDIR.y );
 
 		vec3 _clouds_color = mix( vec3( 0.0 ), clouds_top_color, _noise_top );
 		_clouds_color = mix( _clouds_color, clouds_middle_color, _noise_middle );
@@ -848,6 +908,56 @@ void sky()
 		_clouds_color = mix( _clouds_color, storm_cloud_color, clouds_weight * 0.82 );
 		_clouds_color *= 1.0 - clouds_weight * 0.35 * ( 1.0 - _noise_top );
 		COLOR = mix( COLOR, _clouds_color, _clouds_amount );
+	}
+
+	//////////////////// RAINBOW /////////////////////////////////////////////////////////////////
+	// Rendered AFTER the clouds so the bow sits IN FRONT of them (real rainbows are between the
+	// observer and the rain curtain, so they read over/through the cloud deck rather than behind).
+	// Primary + secondary bows opposite the sun (Descartes minimum-deviation ~42° / ~51°).
+	// LIGHT0_DIRECTION points TOWARD the sun (day => .y > 0; stars gate on .y < 0 near line ~536),
+	// so the antisolar point is -LIGHT0_DIRECTION. A real bow only exists when the sun is below
+	// ~42° altitude (otherwise the whole arc is under the horizon) — this gate also removes the
+	// zenith "color pinch" that appears when the 42° band crosses straight up.
+	if( rainbow_strength > 0.01 && LIGHT0_DIRECTION.y > 0.02 && LIGHT0_DIRECTION.y < 0.70 && EYEDIR.y > 0.02 )
+	{
+		vec3 _to_sun = normalize( LIGHT0_DIRECTION );   // up toward the sun during the day
+		vec3 _antisun = -_to_sun;                       // antisolar point (near/below horizon)
+		vec3 _eye_n = normalize( EYEDIR );
+		float _theta = acos( clamp( dot( _eye_n, _antisun ), -1.0, 1.0 ) );
+		const float _PRIMARY = 0.733038;   // 42°
+		const float _SECONDARY = 0.890118; // 51°
+		const float _BAND_SIG = 0.017;     // ~1° core half-width
+		const float _BAND_GLOW = 0.05;     // soft translucent halo
+
+		// Restrict to the principal vertical plane through the sun so the full 360° cone does
+		// not render as a color ring/wheel — keep the upright arc that rises from the horizon.
+		vec3 _plane_n = cross( _to_sun, vec3( 0.0, 1.0, 0.0 ) );
+		float _arc_focus = 1.0;
+		if( length( _plane_n ) > 0.05 )
+		{
+			_plane_n = normalize( _plane_n );
+			float _off_plane = abs( dot( _eye_n, _plane_n ) );
+			_arc_focus = 1.0 - smoothstep( 0.45, 0.72, _off_plane );
+		}
+
+		float _hz_fade = smoothstep( 0.02, 0.22, EYEDIR.y );
+		float _gate = _arc_focus * _hz_fade * rainbow_strength;
+
+		// Primary bow — Gaussian core + wide glow for a bright translucent arc.
+		float _dev_p = abs( _theta - _PRIMARY );
+		float _core_p = exp( -_dev_p * _dev_p / ( _BAND_SIG * _BAND_SIG ) );
+		float _glow_p = exp( -_dev_p * _dev_p / ( _BAND_GLOW * _BAND_GLOW ) ) * 0.4;
+		float _spec_p = clamp( ( _theta - 0.695 ) / 0.052, 0.0, 1.0 );
+		vec3 _col_p = _rainbow_spectrum( _spec_p );
+		COLOR += _col_p * ( _core_p + _glow_p ) * _gate * 0.85;
+
+		// Secondary bow — reversed spectrum, fainter, outside the primary.
+		float _dev_s = abs( _theta - _SECONDARY );
+		float _core_s = exp( -_dev_s * _dev_s / ( _BAND_SIG * _BAND_SIG * 1.1 ) );
+		float _glow_s = exp( -_dev_s * _dev_s / ( _BAND_GLOW * _BAND_GLOW ) ) * 0.25;
+		float _spec_s = clamp( ( _theta - 0.855 ) / 0.048, 0.0, 1.0 );
+		vec3 _col_s = _rainbow_spectrum( 1.0 - _spec_s );
+		COLOR += _col_s * ( _core_s + _glow_s ) * _gate * 0.16;
 	}
 
 }

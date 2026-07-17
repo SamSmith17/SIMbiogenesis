@@ -24,7 +24,10 @@ signal imagery_progress(done: int, total: int)
 
 const TILE_URL := "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/%d/%d/%d"
 const CACHE_DIR := "user://terrain_cache/imagery"
-const CACHE_VERSION := "v1"
+## v3: exact geographic bbox crop (Mercator-linear pixels). Mesh sampling
+## corrects Mercator↔equirect in the terrain shader. v2 centre-bias crops broke
+## OSM registration (shifted buildings south); do not reuse those files.
+const CACHE_VERSION := "v3"
 const TILE_PX := 256
 const ATTRIBUTION := "Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community"
 ## Polite spacing between tiles, and backoff when a tile server throttles us.
@@ -70,9 +73,18 @@ func request_imagery(lat: float, lon: float, half_extent_m: float,
 	var z := GeoMath.pick_zoom(bbox, target_px, max_zoom)
 	var key := _cache_key(lat, lon, half_extent_m, z)
 	var cache_path := "%s/%s.png" % [CACHE_DIR, key]
-	if not force_refetch and TerrainCacheSettings.cache_enabled() and FileAccess.file_exists(cache_path):
+	if not force_refetch and TerrainCacheSettings.cache_enabled():
 		var img := Image.new()
-		if img.load(cache_path) == OK:
+		var loaded := false
+		if FileAccess.file_exists(cache_path) and img.load(cache_path) == OK:
+			loaded = true
+		else:
+			# Pre-v3 exact-bbox crops work with shader Mercator correction.
+			var legacy := cache_path.replace("img_v3_", "img_v1_")
+			if FileAccess.file_exists(legacy) and img.load(legacy) == OK:
+				print("ImageryService: '%s' layer from legacy cache (%s)" % [tag, legacy.get_file()])
+				loaded = true
+		if loaded:
 			print("ImageryService: '%s' layer served from cache (%s, z%d) — no download" % [tag, key, z])
 			imagery_ready.emit.call_deferred(key, _make_drape_texture(img), tag)
 			return
@@ -175,17 +187,13 @@ func _finish() -> void:
 	var stitched: Image = _job["img"]
 	var z := int(_job["z"])
 	var bbox: Dictionary = _job["bbox"]
-	# Crop the tile-aligned mosaic down to the exact bbox so UV 0..1 maps to the
-	# same ground area as the terrain mesh.
-	var f_nw := GeoMath.lonlat_to_tile_f(bbox["west"], bbox["north"], z)
-	var f_se := GeoMath.lonlat_to_tile_f(bbox["east"], bbox["south"], z)
-	var x0 := int(round((f_nw.x - float(_job["min_x"])) * TILE_PX))
-	var y0 := int(round((f_nw.y - float(_job["min_y"])) * TILE_PX))
-	var x1 := int(round((f_se.x - float(_job["min_x"])) * TILE_PX))
-	var y1 := int(round((f_se.y - float(_job["min_y"])) * TILE_PX))
-	var rw := clampi(x1 - x0, 1, stitched.get_width() - x0)
-	var rh := clampi(y1 - y0, 1, stitched.get_height() - y0)
-	var region := stitched.get_region(Rect2i(x0, y0, rw, rh))
+	# Exact geographic bbox crop — UV 0..1 corners match GeoMath.bbox_for.
+	# Mercator nonlinearity vs the tangent-plane mesh is corrected in the
+	# terrain shader (equirect_to_mercator_uv), not by shifting this crop.
+	var crop := mercator_bbox_crop_rect(
+		stitched.get_width(), stitched.get_height(),
+		int(_job["min_x"]), int(_job["min_y"]), z, bbox)
+	var region := stitched.get_region(crop)
 
 	# ESRI returns HTTP-200 "Map data not yet available" placeholder tiles at
 	# zooms it doesn't cover for a region (rural z20+). A mosaic of them is
@@ -209,6 +217,22 @@ func _finish() -> void:
 	_job = {}
 	imagery_ready.emit(key, _make_drape_texture(region), tag)
 	_start_next()
+
+
+## Pixel rect inside a tile mosaic covering `bbox` exactly (no centre shift).
+static func mercator_bbox_crop_rect(stitched_w: int, stitched_h: int,
+		min_x: int, min_y: int, z: int, bbox: Dictionary) -> Rect2i:
+	var f_nw := GeoMath.lonlat_to_tile_f(bbox["west"], bbox["north"], z)
+	var f_se := GeoMath.lonlat_to_tile_f(bbox["east"], bbox["south"], z)
+	var x0 := int(round((f_nw.x - float(min_x)) * TILE_PX))
+	var y0 := int(round((f_nw.y - float(min_y)) * TILE_PX))
+	var x1 := int(round((f_se.x - float(min_x)) * TILE_PX))
+	var y1 := int(round((f_se.y - float(min_y)) * TILE_PX))
+	x0 = clampi(x0, 0, maxi(stitched_w - 1, 0))
+	y0 = clampi(y0, 0, maxi(stitched_h - 1, 0))
+	var rw := clampi(x1 - x0, 1, stitched_w - x0)
+	var rh := clampi(y1 - y0, 1, stitched_h - y0)
+	return Rect2i(x0, y0, rw, rh)
 
 
 ## True when the stitched result is a near-uniform image (ESRI "Map data not

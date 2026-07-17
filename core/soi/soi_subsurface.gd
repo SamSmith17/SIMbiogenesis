@@ -17,6 +17,16 @@ func set_glass_enabled(on: bool) -> void:
 	if mat == null:
 		return
 	mat.set_shader_parameter("glass_enabled", 1.0 if on else 0.0)
+	if on:
+		set_glass_opacity(1.0)
+
+
+## Soft fade for Snowglobe pitch near horizon (0 = discard glass, 1 = full).
+func set_glass_opacity(opacity: float) -> void:
+	var mat := material_override as ShaderMaterial
+	if mat == null:
+		return
+	mat.set_shader_parameter("glass_opacity", clampf(opacity, 0.0, 1.0))
 
 
 func sync_transform() -> void:

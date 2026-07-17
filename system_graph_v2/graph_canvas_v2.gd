@@ -173,6 +173,12 @@ func _render_item(item: Dictionary) -> void:
 	# Hide legacy aggregate panel card in V2; individual virtual panel nodes replace it.
 	if iid == "virtual_solar_array":
 		return
+	# Full-bleed icon/model preview (skip frame + title); keep ports + selection.
+	var specs_early: Dictionary = item.get("specs", {}) as Dictionary
+	if _icon_replaces_frame(specs_early) and str(item.get("type", "")) not in [
+			"battery", "smartbattery", "resource", "panel"]:
+		_render_icon_node_v2(item)
+		return
 	if item.get("type", "") == "panel":
 		_render_panel_item_v2(item)
 		return
@@ -194,6 +200,26 @@ func _render_item(item: Dictionary) -> void:
 		_render_processor_item_v2(item)
 		return
 	super._render_item(item)
+
+
+func _render_icon_node_v2(item: Dictionary) -> void:
+	var center := size * 0.5
+	var tl := _item_screen_tl(item, center)
+	var sz := _item_screen_size(item)
+	var rect := Rect2(tl, sz)
+	var iid := item.get("id", "") as String
+	var is_sel := (iid == selected_item_id) or selected_item_ids.has(iid)
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var accent := NODE_BORDER_COLORS.get(str(item.get("type", "")), C_BORDER) as Color
+	if is_sel:
+		accent = C_SELECTED_BORDER
+	_draw_icon_as_node(rect, specs, accent, is_sel)
+	_draw_item_handles(item, tl, sz)
+	if is_sel:
+		var z := _zoom
+		draw_rect(rect.grow(maxf(1.0, 1.5 * z)), Color(0.13, 0.83, 0.93, 0.16), true)
+		draw_rect(rect.grow(maxf(0.5, 1.0 * z)), Color(0.13, 0.83, 0.93, 0.9), false,
+			maxf(1.0, 1.4 * z))
 
 
 func _render_resource_item_v2(item: Dictionary) -> void:
@@ -499,6 +525,16 @@ func _render_processor_item_v2(item: Dictionary) -> void:
 	# Active-load glow behind the frame.
 	if _load_item_is_active(item):
 		draw_rect(rect.grow(maxf(2.5, 3.0 * z)), C_ACTIVE_LOAD_GLOW, true)
+
+	if _icon_replaces_frame(specs):
+		_draw_icon_as_node(rect, specs,
+			accent if is_sel else Color(accent.r * 0.85, accent.g * 0.85, accent.b * 0.85, 1.0),
+			is_sel)
+		_draw_item_handles(item, tl, sz)
+		if is_sel:
+			draw_rect(rect.grow(1.2 * z), Color(0.13, 0.83, 0.93, 0.16), true)
+			draw_rect(rect.grow(0.8 * z), Color(0.13, 0.83, 0.93, 0.85), false, maxf(1.0, 1.2 * z))
+		return
 
 	_draw_node_frame(rect, accent if is_sel else Color(accent.r * 0.85, accent.g * 0.85, accent.b * 0.85, 1.0))
 	var title_h := _title_band_height(sz.y)
