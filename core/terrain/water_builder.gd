@@ -80,13 +80,16 @@ static func build_water_node(waters: Array, elev: PackedFloat32Array, res: int,
 			flow_vtx = int(flowed["next_vtx"])
 			added += 1
 			continue
+		var level_override := TerrainBuilder.variant_to_float(item.get("level_m", NAN), NAN)
 		var body := _append_water_polygon(still_st, poly, still_vtx, elev, res,
-			extent_m, center_elev, detail_elev, detail_res, detail_extent_m, feather)
+			extent_m, center_elev, detail_elev, detail_res, detail_extent_m, feather,
+			level_override)
 		if body.is_empty():
 			continue
 		still_vtx = int(body["next_vtx"])
 		added += 1
-		if _wants_reflection_probe(poly, kind):
+		var is_user := bool(item.get("user", false))
+		if _wants_reflection_probe(poly, kind, is_user):
 			probe_specs.append(body["probe"])
 	if added == 0:
 		return null
@@ -140,9 +143,13 @@ static func _request_reflection_probe_update(probe: ReflectionProbe) -> void:
 	probe.position += Vector3(step * float(n), 0.0, 0.0)
 
 
-static func _wants_reflection_probe(poly: PackedVector2Array, kind: String) -> bool:
+static func _wants_reflection_probe(poly: PackedVector2Array, kind: String,
+		force_user: bool = false) -> bool:
 	if kind in WATERWAY_KINDS:
 		return false
+	# Player-sculpted ponds always get a probe so they match OSM lake look.
+	if force_user:
+		return BuildingBuilder.footprint_area_m2(poly) >= MIN_AREA_M2
 	if BuildingBuilder.footprint_area_m2(poly) < MIN_PROBE_AREA_M2:
 		return false
 	var aabb := _poly_aabb(poly)
@@ -226,7 +233,8 @@ static func _poly_aabb(poly: PackedVector2Array) -> Dictionary:
 static func _append_water_polygon(st: SurfaceTool, poly: PackedVector2Array,
 		vtx_base: int, elev: PackedFloat32Array, res: int, extent_m: float,
 		center_elev: float, detail_elev: PackedFloat32Array, detail_res: int,
-		detail_extent_m: float, seam_feather_m: float = DEM_SEAM_FEATHER_M) -> Dictionary:
+		detail_extent_m: float, seam_feather_m: float = DEM_SEAM_FEATHER_M,
+		level_override: float = NAN) -> Dictionary:
 	var n := poly.size()
 	if n >= 3 and poly[0].distance_squared_to(poly[n - 1]) < 0.01:
 		poly = poly.slice(0, n - 1)
@@ -236,12 +244,17 @@ static func _append_water_polygon(st: SurfaceTool, poly: PackedVector2Array,
 	var tris := Geometry2D.triangulate_polygon(poly)
 	if tris.is_empty():
 		return {}
-	var bank_heights := PackedFloat32Array()
-	bank_heights.resize(n)
-	for i in n:
-		bank_heights[i] = _ground_y(poly[i].x, poly[i].y, elev, res, extent_m,
-			center_elev, detail_elev, detail_res, detail_extent_m, seam_feather_m)
-	var level := _water_level(bank_heights) + SURFACE_OFFSET_M
+	var level := 0.0
+	if not is_nan(level_override):
+		# Caller-supplied surface level (sculpted ponds tie it to the depth slider).
+		level = level_override + SURFACE_OFFSET_M
+	else:
+		var bank_heights := PackedFloat32Array()
+		bank_heights.resize(n)
+		for i in n:
+			bank_heights[i] = _ground_y(poly[i].x, poly[i].y, elev, res, extent_m,
+				center_elev, detail_elev, detail_res, detail_extent_m, seam_feather_m)
+		level = _water_level(bank_heights) + SURFACE_OFFSET_M
 	for i in n:
 		var p := poly[i]
 		st.set_normal(Vector3.UP)

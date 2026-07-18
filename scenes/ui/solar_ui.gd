@@ -4342,9 +4342,11 @@ func _update_collapse_btn_text() -> void:
 	if _collapse_btn == null:
 		return
 	if not _graph_has_solar:
-		_collapse_btn.text = ("▾ " if _expanded else "▸ ") \
-				+ "No solar on graph — add panels or import OSM array"
-		_collapse_btn.tooltip_text = "Add solar panels on the system graph (G) to enable simulation"
+		# No solar anywhere → the whole scoreboard is meaningless, so hide it
+		# rather than surfacing a "no panels" nag. visible tracks _graph_has_solar
+		# (set_graph_has_solar is the authority); re-assert it here so any stray
+		# path that left the panel showing collapses back to hidden.
+		visible = false
 		return
 	var title := title_label.text if title_label != null else "⚡ POWER SCOREBOARD"
 	_collapse_btn.text = ("▾ " if _expanded else "▸ ") + title

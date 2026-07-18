@@ -147,7 +147,7 @@ static func mesh_for_species(species: String, settings: Dictionary = {}) -> Arra
 			return _build_grass_mesh(_grass_lawn_spec(s, species))
 		"grass_field":
 			return _build_grass_mesh(_grass_field_spec(s, species))
-	var spec: Dictionary = SPECS.get(species, SPECS["shrub"])
+	var spec: Dictionary = SPECS.get(species, SPECS.get(family, SPECS["shrub"]))
 	return _build_card_mesh(float(spec["width"]), float(spec["height"]))
 
 
@@ -161,18 +161,20 @@ static func mesh_has_surface_materials(species: String) -> bool:
 static func mesh_for_deciduous_lod(settings: Dictionary, tier: CanopyLodTier) -> ArrayMesh:
 	var s := settings.duplicate(true)
 	s["deciduous_leaf_shells_enabled"] = tier == CanopyLodTier.NEAR
-	return _build_deciduous_mesh(_deciduous_spec(s), s)
+	var sid := str(s.get("_variant_species", "deciduous"))
+	return _build_deciduous_mesh(_deciduous_spec(s, sid), s)
 
 
 static func mesh_for_pine_lod(settings: Dictionary, tier: CanopyLodTier) -> ArrayMesh:
 	var s := settings.duplicate(true)
 	s["pine_fur_enabled"] = tier == CanopyLodTier.NEAR
-	return _build_pine_mesh(_pine_spec(s), s)
+	var sid := str(s.get("_variant_species", "pine"))
+	return _build_pine_mesh(_pine_spec(s, sid), s)
 
 
 static func canopy_visibility_range_for_tier(species: String, tier: CanopyLodTier,
 		settings: Dictionary, far_end_m: float) -> Vector2:
-	var prefix := "deciduous" if species == "deciduous" else "pine"
+	var prefix := "deciduous" if mesh_family(species) == "deciduous" else "pine"
 	var near_end := float(settings.get("%s_lod_near_m" % prefix,
 		settings.get("deciduous_lod_near_m", 200.0)))
 	var far_begin := float(settings.get("%s_lod_far_begin_m" % prefix,
@@ -585,8 +587,12 @@ static func leaf_canopy_material_for_species(species: String, settings: Dictiona
 static func _apply_leaf_canopy_uniforms(mat: ShaderMaterial, species: String,
 		spec: Dictionary, settings: Dictionary) -> void:
 	var top: Color = spec["top"]
-	var tint: Color = settings.get("%s_albedo_tint" % species, Color.WHITE)
-	var hi: Color = settings.get("%s_highlight_tint" % species, spec.get("highlight", Color(0.42, 0.52, 0.16)))
+	var family := mesh_family(species)
+	var tint: Color = settings.get("%s_albedo_tint" % species,
+		settings.get("%s_albedo_tint" % family, Color.WHITE))
+	var hi: Color = settings.get("%s_highlight_tint" % species,
+		settings.get("%s_highlight_tint" % family,
+			spec.get("highlight", Color(0.42, 0.52, 0.16))))
 	mat.set_shader_parameter("canopy_profile", 0)
 	mat.set_shader_parameter("leaf_color", Vector3(top.r, top.g, top.b))
 	mat.set_shader_parameter("leaf_shadow", Vector3(top.r * 0.32, top.g * 0.34, top.b * 0.30))
@@ -1234,13 +1240,18 @@ static func _build_texture(spec: Dictionary, species: String) -> Texture2D:
 
 static func _apply_foliage_uniforms(mat: ShaderMaterial, species: String, settings: Dictionary) -> void:
 	var known := ["pine", "deciduous", "shrub", "grass_lawn", "grass_field"]
-	var prefix := species if species in known else "deciduous"
-	var spec: Dictionary = SPECS.get(prefix, SPECS["shrub"])
-	var tint: Color = settings.get("%s_albedo_tint" % prefix, Color.WHITE)
+	var prefix := species if species in known else mesh_family(species)
+	if prefix not in known:
+		prefix = "deciduous"
+	var variant := str(settings.get("_variant_species", prefix))
+	var spec: Dictionary = SPECS.get(variant, SPECS.get(prefix, SPECS["shrub"]))
+	var tint: Color = settings.get("%s_albedo_tint" % variant,
+		settings.get("%s_albedo_tint" % prefix, Color.WHITE))
 	if tint == Color.WHITE:
-		tint = spec["top"].lerp(Color.WHITE, 0.0)
+		tint = spec.get("top", Color.WHITE)
 	mat.set_shader_parameter("albedo_tint", Vector3(tint.r, tint.g, tint.b))
-	var hi: Color = settings.get("%s_highlight_tint" % prefix, spec["highlight"])
+	var hi: Color = settings.get("%s_highlight_tint" % variant,
+		settings.get("%s_highlight_tint" % prefix, spec.get("highlight", Color(0.42, 0.52, 0.16))))
 	mat.set_shader_parameter("highlight_tint", Vector3(hi.r, hi.g, hi.b))
 	mat.set_shader_parameter("wind_strength", float(settings.get("wind_strength", 0.03)))
 	mat.set_shader_parameter("sway_frequency", float(settings.get("wind_speed", 0.7)))

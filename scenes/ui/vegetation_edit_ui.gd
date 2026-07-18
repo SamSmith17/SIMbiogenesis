@@ -12,15 +12,16 @@ signal vegetation_applied
 signal mode_changed(active: bool)
 
 enum Tool { PAINT, PLACE, CLEAR, SELECT }
-enum ShapeMode { CIRCLE, RECT, LASSO, POLYGON }
+enum ShapeMode { BRUSH, CIRCLE, RECT, LASSO, POLYGON }
 
 const MODAL_NAME := "vegetation_edit"
 const SliderSpinRowScript := preload("res://scenes/ui/slider_spin_row.gd")
-const PANEL_HEIGHT := 132.0
+const PANEL_HEIGHT := 148.0
 const HIGHLIGHT_DEBOUNCE_S := 0.016
 const RESPECIES_DEBOUNCE_S := 0.35
 const MAX_SELECTION_RADIUS_M := 75.0
 const MAX_SELECTION_AREA_M2 := 17500.0
+const MAX_BRUSH_RADIUS_M := 40.0
 ## A LMB press+release that moves less than this (screen px) in Paint mode is a
 ## "click, not a drag" → drop a single instance instead of scattering a circle.
 const SINGLE_CLICK_PX := 6.0
@@ -32,11 +33,14 @@ var _loader: Node = null
 var _active := false
 var _tool := Tool.PAINT
 var _preset := VegetationPaint.Preset.SHRUB
+var _paint_species := "shrub"
 var _spacing_m := 4.0
 var _density := 1.0
-var _scale_min := 1.0
-var _scale_max := 1.8
+var _size_var := 0.25
+var _scale_min := 0.75
+var _scale_max := 1.25
 var _seed_value := 1337
+var _brush_radius_m := 4.0
 var _brush_min_m := 2.0
 var _mix_pine := 0.3
 var _mix_deciduous := 0.3
@@ -49,12 +53,15 @@ var _hero_scale := 1.0
 ## the global map style). Stamped onto every instance painted while active.
 var _brush_card: Dictionary = {}
 var _brushing := false
+var _stroking := false
+var _brush_undo_pushed := false
+var _last_stamp := Vector2(-1e9, -1e9)
 var _brush_anchor := Vector2.ZERO
 var _brush_poly := PackedVector2Array()
 var _lasso_pts := PackedVector2Array()
 var _lasso_screen_pts := PackedVector2Array()
 var _last_lasso_sample := Vector2.ZERO
-var _shape_mode := ShapeMode.CIRCLE
+var _shape_mode := ShapeMode.BRUSH
 var _shape_mode_buttons: Array[Button] = []
 var _poly_points := PackedVector2Array()
 var _selection_locked := false
@@ -66,6 +73,7 @@ var _undo_btn: Button = null
 var _panel: PanelContainer = null
 var _status: Label = null
 var _hero_section: HBoxContainer = null
+var _subspecies_opt: OptionButton = null
 var _tool_buttons: Array[Button] = []
 var _preset_buttons: Array[Button] = []
 var _progress_bar: ProgressBar = null
@@ -113,6 +121,46 @@ func set_paint_density(value: float) -> void:
 	_spacing_m = _effective_spacing()
 
 
+func get_paint_species() -> String:
+	return _paint_species
+
+
+func set_paint_species(species: String) -> void:
+	if species.is_empty() or not VegSpeciesCatalog.is_paintable(species):
+		return
+	_paint_species = species
+	var fam := VegSpeciesCatalog.mesh_family(species)
+	match fam:
+		"pine":
+			_preset = VegetationPaint.Preset.PINE
+		"deciduous":
+			_preset = VegetationPaint.Preset.DECIDUOUS
+		"shrub":
+			_preset = VegetationPaint.Preset.SHRUB
+		"grass_lawn":
+			_preset = VegetationPaint.Preset.GRASS_LAWN
+		"grass_field":
+			_preset = VegetationPaint.Preset.GRASS_FIELD
+	for i in _preset_buttons.size():
+		_style_tool_button(_preset_buttons[i], i == int(_preset))
+	_refresh_subspecies_dropdown()
+
+
+func get_size_var() -> float:
+	return _size_var
+
+
+func set_size_var(value: float) -> void:
+	_size_var = clampf(value, 0.0, 0.5)
+	_apply_size_var_scales()
+
+
+func _apply_size_var_scales() -> void:
+	var scales := VegetationStyleConfig.scales_from_size_var(_size_var)
+	_scale_min = scales.x
+	_scale_max = scales.y
+
+
 ## Called by the "Tune look…" modal's "Apply to brush": subsequently-painted
 ## vegetation carries this look snapshot (empty dict clears it → paint uses the
 ## global map style, same as "Apply to map").
@@ -137,12 +185,16 @@ func _open_preview_editor() -> void:
 func _process(delta: float) -> void:
 	if not _active:
 		return
-	if _brushing:
+	if _stroking:
+		_brush_stroke_tick()
+	elif _brushing:
 		_update_brush_from_crosshair(true)
 	elif _shape_mode == ShapeMode.POLYGON and _poly_points.size() > 0:
 		_update_polygon_preview(true)
 	elif _shape_mode == ShapeMode.LASSO and _brushing:
 		_update_lasso_preview(true)
+	elif _shape_mode == ShapeMode.BRUSH and (_tool == Tool.PAINT or _tool == Tool.CLEAR):
+		_update_brush_ring_preview()
 	if _highlight_pending:
 		_highlight_timer += delta
 		if _highlight_timer >= HIGHLIGHT_DEBOUNCE_S:
@@ -185,6 +237,10 @@ func _on_capture_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
+		if _stroking:
+			_brush_stroke_tick()
+			get_viewport().set_input_as_handled()
+			return
 		if _brushing and _shape_mode == ShapeMode.LASSO:
 			if mm.position.distance_to(_last_lasso_sample) >= 8.0:
 				_append_lasso_point(mm.position)
@@ -335,7 +391,7 @@ func _build_ui() -> void:
 	tool_row.add_child(exit_btn)
 	_status = Label.new()
 	_style_muted(_status)
-	_status.text = "V — click terrain, drag to select · Ctrl+Z undo · Tune look… to style"
+	_status.text = "Hold LMB to paint · drag shapes to fill areas · Tune look… to style"
 	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_status.autowrap_mode = TextServer.AUTOWRAP_OFF
 	tool_row.add_child(_status)
@@ -356,8 +412,12 @@ func _build_ui() -> void:
 		_style_tool_button(b, i == int(_preset))
 		param_row.add_child(b)
 		_preset_buttons.append(b)
-	_labeled_slider_row(param_row, "Seed", 1.0, 9999.0, float(_seed_value),
-		func(v: float) -> void: _seed_value = int(v), 72, 1.0)
+	_subspecies_opt = OptionButton.new()
+	_subspecies_opt.custom_minimum_size = Vector2(110, 24)
+	_subspecies_opt.tooltip_text = "Subspecies preset for this family"
+	_subspecies_opt.item_selected.connect(_on_subspecies_selected)
+	param_row.add_child(_subspecies_opt)
+	_refresh_subspecies_dropdown()
 
 	var shape_row := HBoxContainer.new()
 	shape_row.add_theme_constant_override("separation", 4)
@@ -367,16 +427,24 @@ func _build_ui() -> void:
 	shape_lbl.custom_minimum_size = Vector2(40, 0)
 	shape_row.add_child(shape_lbl)
 	_shape_mode_buttons.clear()
-	for spec in [["Circle", ShapeMode.CIRCLE], ["Rect", ShapeMode.RECT],
-			["Lasso", ShapeMode.LASSO], ["Polygon", ShapeMode.POLYGON]]:
+	for spec in [["Brush", ShapeMode.BRUSH], ["Circle", ShapeMode.CIRCLE],
+			["Rect", ShapeMode.RECT], ["Lasso", ShapeMode.LASSO], ["Polygon", ShapeMode.POLYGON]]:
 		var sb := Button.new()
 		sb.text = spec[0]
-		sb.custom_minimum_size = Vector2(58, 24)
+		sb.custom_minimum_size = Vector2(52, 24)
 		var mode: ShapeMode = spec[1]
 		sb.pressed.connect(_on_shape_mode_pressed.bind(mode))
 		_style_tool_button(sb, mode == _shape_mode)
 		shape_row.add_child(sb)
 		_shape_mode_buttons.append(sb)
+	_labeled_slider_row(shape_row, "Size m", 1.0, MAX_BRUSH_RADIUS_M, _brush_radius_m,
+		func(v: float) -> void: _brush_radius_m = v, 64)
+	_labeled_slider_row(shape_row, "Size var %", 0.0, 50.0, _size_var * 100.0,
+		func(v: float) -> void:
+			_size_var = clampf(v / 100.0, 0.0, 0.5)
+			_apply_size_var_scales(), 56, 1.0)
+	_labeled_slider_row(shape_row, "Dens", 0.25, 3.0, _density,
+		func(v: float) -> void: set_paint_density(v), 56)
 
 	_progress_bar = ProgressBar.new()
 	_progress_bar.visible = false
@@ -428,7 +496,9 @@ func _enter_mode() -> void:
 	if _loader != null and _loader.has_method("reground_all_vegetation"):
 		_loader.call("reground_all_vegetation")
 	_set_tool(Tool.PAINT)
-	_on_shape_mode_pressed(ShapeMode.CIRCLE)
+	_apply_size_var_scales()
+	_on_shape_mode_pressed(ShapeMode.BRUSH)
+	_refresh_subspecies_dropdown()
 	_layout_panel()
 	_update_crosshair_prompt()
 	set_process(true)
@@ -442,6 +512,8 @@ func _exit_mode() -> void:
 		return
 	_active = false
 	_brushing = false
+	_stroking = false
+	_brush_undo_pushed = false
 	_place_click_armed = false
 	_paint_click_candidate = false
 	_highlight_pending = false
@@ -461,6 +533,9 @@ func _exit_mode() -> void:
 
 
 func _clear_selection_or_exit() -> bool:
+	if _stroking:
+		_end_brush_stroke()
+		return true
 	if _shape_mode == ShapeMode.POLYGON and _poly_points.size() > 0:
 		_poly_points = PackedVector2Array()
 		_brush_poly = PackedVector2Array()
@@ -542,6 +617,12 @@ func _on_lmb_pressed() -> void:
 		_set_status("Click terrain to set selection center")
 		return
 	var p: Vector3 = hit
+	if _shape_mode == ShapeMode.BRUSH:
+		if _tool == Tool.PAINT or _tool == Tool.CLEAR:
+			_begin_brush_stroke(Vector2(p.x, p.z))
+		else:
+			_set_status("Brush paints/clears — switch tool, or use Circle/Rect to select")
+		return
 	if _shape_mode == ShapeMode.POLYGON:
 		var pt := Vector2(p.x, p.z)
 		if _poly_points.size() >= 3 and pt.distance_to(_poly_points[0]) < 3.0:
@@ -575,6 +656,9 @@ func _on_lmb_pressed() -> void:
 func _on_lmb_released() -> void:
 	if _tool == Tool.PLACE:
 		_place_click_armed = false
+		return
+	if _stroking:
+		_end_brush_stroke()
 		return
 	if not _brushing:
 		return
@@ -707,6 +791,98 @@ func _draw_selection_overlay() -> void:
 	col.a = 0.35
 	if _brushing and _shape_mode == ShapeMode.LASSO and _lasso_screen_pts.size() >= 2:
 		_poly_draw.draw_polyline(_lasso_screen_pts, col, 2.0, true)
+	if _shape_mode == ShapeMode.BRUSH and (_tool == Tool.PAINT or _tool == Tool.CLEAR):
+		var hit: Variant = _pick_pointer()
+		if hit is Vector3:
+			var center := Vector2((hit as Vector3).x, (hit as Vector3).z)
+			var ring := VegetationPaint.circle_polygon(center, _brush_radius_m, 40)
+			var pts := _project_poly(ring)
+			if pts.size() >= 3:
+				pts.append(pts[0])
+				_poly_draw.draw_polyline(pts, col, 2.0, true)
+
+
+func _project_poly(poly: PackedVector2Array) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	var cam := get_viewport().get_camera_3d()
+	if cam == null or _loader == null or not _loader.has_method("ground_height_at"):
+		return out
+	for p in poly:
+		var y := float(_loader.call("ground_height_at", p.x, p.y))
+		var wp := Vector3(p.x, y + 0.3, p.y)
+		if cam.is_position_behind(wp):
+			continue
+		out.append(cam.unproject_position(wp))
+	return out
+
+
+func _begin_brush_stroke(world: Vector2) -> void:
+	_stroking = true
+	_brush_undo_pushed = false
+	_last_stamp = Vector2(-1e9, -1e9)
+	_stamp_brush_at(world)
+	_update_brush_ring_preview()
+
+
+func _end_brush_stroke() -> void:
+	_stroking = false
+	_brush_undo_pushed = false
+	_last_stamp = Vector2(-1e9, -1e9)
+	_update_undo_button()
+	if _loader != null and _loader.has_method("clear_vegetation_highlight"):
+		_loader.call("clear_vegetation_highlight")
+	_set_status("Hold LMB to paint · drag shapes to fill areas")
+	if _poly_draw != null:
+		_poly_draw.queue_redraw()
+
+
+func _brush_stroke_tick() -> void:
+	var hit: Variant = _pick_pointer()
+	if not (hit is Vector3):
+		return
+	var p: Vector3 = hit
+	_stamp_brush_at(Vector2(p.x, p.z))
+	_update_brush_ring_preview()
+	if _poly_draw != null:
+		_poly_draw.queue_redraw()
+
+
+func _stamp_brush_at(world: Vector2) -> void:
+	if _loader == null or _busy:
+		return
+	var min_step := maxf(_brush_radius_m * 0.45, _effective_spacing() * 0.85)
+	if _last_stamp.x > -1e8 and world.distance_to(_last_stamp) < min_step:
+		return
+	_last_stamp = world
+	if not _brush_undo_pushed:
+		_push_undo("brush")
+		_brush_undo_pushed = true
+	var poly := VegetationPaint.circle_polygon(world, _brush_radius_m, 24)
+	match _tool:
+		Tool.CLEAR:
+			if _loader.has_method("clear_vegetation_in_polygon"):
+				_loader.call("clear_vegetation_in_polygon", poly)
+			if _loader.has_method("clear_auto_vegetation_in_polygon"):
+				_loader.call("clear_auto_vegetation_in_polygon", poly)
+			vegetation_applied.emit()
+		Tool.PAINT:
+			if _loader.has_method("populate_vegetation"):
+				var n: int = int(_loader.call("populate_vegetation", poly, _scatter_params()))
+				if n > 0:
+					vegetation_applied.emit()
+		_:
+			pass
+
+
+func _update_brush_ring_preview() -> void:
+	var hit: Variant = _pick_pointer()
+	if not (hit is Vector3):
+		return
+	var p: Vector3 = hit
+	_brush_poly = VegetationPaint.circle_polygon(Vector2(p.x, p.z), _brush_radius_m, 28)
+	_queue_highlight_refresh(true)
+	if _poly_draw != null:
+		_poly_draw.queue_redraw()
 
 
 func _do_undo() -> void:
@@ -738,6 +914,8 @@ func _fill_cap_for_preset() -> int:
 
 
 func _preset_label() -> String:
+	if _preset != VegetationPaint.Preset.MIX and not _paint_species.is_empty():
+		return VegSpeciesCatalog.label_for(_paint_species).to_lower()
 	match _preset:
 		VegetationPaint.Preset.PINE:
 			return "pine"
@@ -769,11 +947,14 @@ func _on_shape_mode_pressed(mode: ShapeMode) -> void:
 	_lasso_pts = PackedVector2Array()
 	_lasso_screen_pts = PackedVector2Array()
 	_brushing = false
+	_stroking = false
 	for i in _shape_mode_buttons.size():
 		_style_tool_button(_shape_mode_buttons[i], i == int(mode))
 	_update_shape_prompt()
 	if _loader != null and _loader.has_method("clear_vegetation_highlight"):
 		_loader.call("clear_vegetation_highlight")
+	if _poly_draw != null:
+		_poly_draw.queue_redraw()
 
 
 func _active_highlight_poly() -> PackedVector2Array:
@@ -866,13 +1047,8 @@ func _on_preset_pressed(idx: int) -> void:
 	for i in _preset_buttons.size():
 		_style_tool_button(_preset_buttons[i], i == idx)
 	_spacing_m = _effective_spacing()
-	match _preset:
-		VegetationPaint.Preset.DECIDUOUS:
-			_scale_min = maxf(_scale_min, 1.0)
-			_scale_max = maxf(_scale_max, 1.6)
-		VegetationPaint.Preset.GRASS_LAWN, VegetationPaint.Preset.GRASS_FIELD:
-			_scale_min = 0.75
-			_scale_max = 1.15
+	_apply_size_var_scales()
+	_refresh_subspecies_dropdown()
 	if _selection_locked:
 		_queue_respecies()
 
@@ -893,6 +1069,45 @@ func _preset_to_species() -> String:
 			return ""
 
 
+func _refresh_subspecies_dropdown() -> void:
+	if _subspecies_opt == null:
+		return
+	_subspecies_opt.clear()
+	var fam := _preset_to_species()
+	if fam.is_empty():
+		_subspecies_opt.add_item("— mix —")
+		_subspecies_opt.disabled = true
+		_paint_species = ""
+		return
+	_subspecies_opt.disabled = false
+	var ids := VegSpeciesCatalog.subspecies_for_family(fam)
+	var select_idx := 0
+	for i in ids.size():
+		var sid: String = ids[i]
+		_subspecies_opt.add_item(VegSpeciesCatalog.label_for(sid))
+		_subspecies_opt.set_item_metadata(i, sid)
+		if sid == _paint_species:
+			select_idx = i
+	_subspecies_opt.select(select_idx)
+	_paint_species = str(_subspecies_opt.get_item_metadata(select_idx))
+
+
+func _on_subspecies_selected(idx: int) -> void:
+	if _subspecies_opt == null or _subspecies_opt.disabled:
+		return
+	var sid := str(_subspecies_opt.get_item_metadata(idx))
+	if sid.is_empty() or not VegSpeciesCatalog.is_paintable(sid):
+		return
+	_paint_species = sid
+	# Load saved species default into brush card when present.
+	var defaults := VegetationStyleConfig.load_species_default(sid)
+	if not defaults.is_empty():
+		_brush_card = defaults
+		_set_status("Loaded %s default look — paint to place" % VegSpeciesCatalog.label_for(sid))
+	if _selection_locked:
+		_queue_respecies()
+
+
 func _set_tool(t: Tool) -> void:
 	if _tool == Tool.SELECT and t != Tool.SELECT:
 		_clear_locked_selection()
@@ -910,6 +1125,8 @@ func _update_shape_prompt() -> void:
 	match _tool:
 		Tool.PAINT:
 			match _shape_mode:
+				ShapeMode.BRUSH:
+					_set_status("Hold LMB to paint · drag shapes to fill areas")
 				ShapeMode.POLYGON:
 					_set_status("Paint — click corners, Enter/RMB to finish, then confirm")
 				ShapeMode.LASSO:
@@ -920,12 +1137,16 @@ func _update_shape_prompt() -> void:
 			_set_status("Place — click terrain to drop hero tree")
 		Tool.CLEAR:
 			match _shape_mode:
+				ShapeMode.BRUSH:
+					_set_status("Hold LMB to clear along the brush path")
 				ShapeMode.POLYGON:
 					_set_status("Clear — click corners, Enter/RMB to finish, then confirm")
 				_:
 					_set_status("Clear — click center, drag to size, release to apply")
 		Tool.SELECT:
 			match _shape_mode:
+				ShapeMode.BRUSH:
+					_set_status("Select — use Circle/Rect/Lasso to lock an area, then change Type")
 				ShapeMode.POLYGON:
 					_set_status("Select — use Circle or Rect to lock an area, then change Type")
 				_:
@@ -988,18 +1209,24 @@ func _update_crosshair_prompt() -> void:
 	match _tool:
 		Tool.PAINT, Tool.CLEAR:
 			match _shape_mode:
+				ShapeMode.BRUSH:
+					_set_crosshair_prompt("Hold LMB to paint · Size m sets brush radius")
 				ShapeMode.CIRCLE:
 					_set_crosshair_prompt("Drag LMB — circle preview, release to apply")
 				ShapeMode.RECT:
 					_set_crosshair_prompt("Drag LMB — rectangle preview, release to apply")
 				ShapeMode.POLYGON:
 					_set_crosshair_prompt("Click LMB — add corners; Enter/RMB to finish")
+				ShapeMode.LASSO:
+					_set_crosshair_prompt("Drag LMB — lasso area, release to apply")
 		Tool.PLACE:
 			_set_crosshair_prompt("Click LMB to place hero tree")
 		Tool.SELECT:
 			match _shape_mode:
 				ShapeMode.POLYGON:
 					_set_crosshair_prompt("Click corners; Enter/RMB to lock selection")
+				ShapeMode.BRUSH:
+					_set_crosshair_prompt("Use Circle/Rect to lock a selection")
 				_:
 					_set_crosshair_prompt("Drag LMB — release to lock selection")
 
@@ -1009,6 +1236,7 @@ func _update_crosshair_prompt() -> void:
 # ---------------------------------------------------------------------------
 
 func _scatter_params() -> Dictionary:
+	_apply_size_var_scales()
 	var params := {
 		"preset": _preset,
 		"spacing_m": _effective_spacing(),
@@ -1021,6 +1249,8 @@ func _scatter_params() -> Dictionary:
 		"mix_grass_lawn": _mix_grass_lawn,
 		"mix_grass_field": _mix_grass_field,
 	}
+	if _preset != VegetationPaint.Preset.MIX and VegSpeciesCatalog.is_paintable(_paint_species):
+		params["species"] = _paint_species
 	if not _brush_card.is_empty():
 		params["card_settings"] = _brush_card
 	return params
@@ -1062,8 +1292,10 @@ func _respecies_async() -> void:
 
 
 ## Resolve the concrete species for a single-instance drop. Mix picks one weighted
-## by the mix sliders; grass presets stay grass.
+## by the mix sliders; otherwise use the subspecies dropdown selection.
 func _resolve_single_species() -> String:
+	if _preset != VegetationPaint.Preset.MIX and VegSpeciesCatalog.is_paintable(_paint_species):
+		return _paint_species
 	var s := _preset_to_species()
 	if s != "":
 		return s

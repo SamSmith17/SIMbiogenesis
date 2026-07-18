@@ -208,6 +208,104 @@ static func build_mesh(elev: PackedFloat32Array, res: int, extent_m: float,
 	return st.commit()
 
 
+## ---------------------------------------------------------------------------
+## Fast surface arrays for LIVE sculpting. Unlike build_mesh (SurfaceTool +
+## generate_normals, which re-walks every triangle) these compute per-vertex
+## normals analytically from the heightfield central difference, so a brush stroke
+## can recompute just the touched region each frame without a full re-mesh.
+## ---------------------------------------------------------------------------
+
+## Analytic surface normal at grid cell (c, r) from the heightfield gradient.
+static func surface_normal_at(elev: PackedFloat32Array, res: int, extent_m: float,
+		c: int, r: int) -> Vector3:
+	var spacing := extent_m / float(maxi(res - 1, 1))
+	var cl := maxi(c - 1, 0)
+	var cr := mini(c + 1, res - 1)
+	var ru := maxi(r - 1, 0)
+	var rd := mini(r + 1, res - 1)
+	var hl := elev[r * res + cl]
+	var hr := elev[r * res + cr]
+	var hu := elev[ru * res + c]
+	var hd := elev[rd * res + c]
+	var dx := 2.0 * spacing if cr != cl else spacing
+	var dz := 2.0 * spacing if rd != ru else spacing
+	var n := Vector3(-(hr - hl) / maxf(dx, 1e-4), 1.0, -(hd - hu) / maxf(dz, 1e-4))
+	return n.normalized()
+
+
+## Build the full surface arrays (vertex/normal/uv/index) for an ArrayMesh.
+static func build_surface_arrays(elev: PackedFloat32Array, res: int, extent_m: float,
+		center_elev: float) -> Array:
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var normals := PackedVector3Array()
+	verts.resize(res * res)
+	uvs.resize(res * res)
+	normals.resize(res * res)
+	var half := extent_m * 0.5
+	var inv := 1.0 / float(maxi(res - 1, 1))
+	for r in res:
+		var v := float(r) * inv
+		var z := v * extent_m - half
+		for c in res:
+			var u := float(c) * inv
+			var x := u * extent_m - half
+			var idx := r * res + c
+			verts[idx] = Vector3(x, elev[idx] - center_elev, z)
+			uvs[idx] = Vector2(u, v)
+			normals[idx] = surface_normal_at(elev, res, extent_m, c, r)
+	var indices := PackedInt32Array()
+	indices.resize((res - 1) * (res - 1) * 6)
+	var ii := 0
+	for r in res - 1:
+		for c in res - 1:
+			var i := r * res + c
+			var i_right := i + 1
+			var i_down := i + res
+			var i_diag := i_down + 1
+			indices[ii] = i
+			indices[ii + 1] = i_right
+			indices[ii + 2] = i_down
+			indices[ii + 3] = i_right
+			indices[ii + 4] = i_diag
+			indices[ii + 5] = i_down
+			ii += 6
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	return arrays
+
+
+## Re-sync vertex Y + normals for a cell rectangle after an in-place height edit.
+## Normals are refreshed one ring beyond the edited rect so seams stay smooth.
+static func update_surface_arrays_region(verts: PackedVector3Array, normals: PackedVector3Array,
+		elev: PackedFloat32Array, res: int, extent_m: float, center_elev: float,
+		min_c: int, min_r: int, max_c: int, max_r: int) -> void:
+	if verts.size() != res * res or normals.size() != res * res:
+		return
+	for r in range(maxi(min_r, 0), mini(max_r, res - 1) + 1):
+		for c in range(maxi(min_c, 0), mini(max_c, res - 1) + 1):
+			var idx := r * res + c
+			var p := verts[idx]
+			verts[idx] = Vector3(p.x, elev[idx] - center_elev, p.z)
+	var n0c := maxi(min_c - 1, 0)
+	var n1c := mini(max_c + 1, res - 1)
+	var n0r := maxi(min_r - 1, 0)
+	var n1r := mini(max_r + 1, res - 1)
+	for r in range(n0r, n1r + 1):
+		for c in range(n0c, n1c + 1):
+			normals[r * res + c] = surface_normal_at(elev, res, extent_m, c, r)
+
+
+static func make_array_mesh(arrays: Array) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
 ## HeightMapShape3D for the same grid. Returned shape is unit-spaced; the caller
 ## scales the owning CollisionShape3D by (extent/(res-1), 1, extent/(res-1)) so it
 ## registers with the mesh.

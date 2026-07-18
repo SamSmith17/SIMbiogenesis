@@ -273,6 +273,46 @@ static func _shipped_models() -> Array[Dictionary]:
 			"preserve_scale": true, "category": "structures",
 			"csp_base_node": "Component#452", "csp_concentrator_node": "Component#453",
 			"forced_yaw_deg": 0.0},
+		# Small horizontal-axis wind turbine (HAWT) — modeled after a
+		# Primus-style "Air 30" 500 W-class turbine (see component_presets.gd's
+		# "Small HAWT 500W (3D)" preset for the manufacturer specs this drives).
+		# Authored in SketchUp-style inches baked into the "WIND POWER
+		# GENERATOR..." ancestor node's 0.0254 scale (same convention as
+		# VAWT.glb / single_axis_csp.glb), so preserve_scale + that internal
+		# scale keeps the ~9 m mast true size. "turbine vane assembly" is the
+		# yaw sub-node (nacelle + nosecone + blades; rotates horizontally to
+		# face the wind); its child "Nosecone and Blades" is the sub-node that
+		# spins about the horizontal rotor axis. HawtTracker (attached at
+		# placement) drives both from the live wind model —
+		# see gameplay/hawt_tracker.gd.
+		{"id": "small_hawt", "label": "Small HAWT (Air 30 class)",
+			"path": "res://Imported Models/Wind/small_hawt.glb",
+			"preserve_scale": true, "category": "structures",
+			"hawt_yaw_node": "turbine vane assembly",
+			"hawt_blade_node": "Nosecone and Blades"},
+		# Dual-axis point-focus solar concentrator ("dish" heliostat / solar
+		# furnace). Authored in inches baked into the "Component#1" ancestor's
+		# 0.025 scale (same convention as VAWT.glb / single_axis_csp.glb), so
+		# preserve_scale keeps the ~8 m mast + ~5 m (≈19.4 m²) dish true size —
+		# no reference height needed, and the natural size already matches the
+		# 19.36 m² mirror-area spec (see the "Heliostat" preset in
+		# component_presets.gd). Alt-azimuth mount: "horizontal rotating
+		# assembly" yaws about the vertical bearing (azimuth) and its child
+		# "Vertical Rotating Assembly" tilts about the horizontal bearing
+		# (altitude); "Mirror array" is the concentrating facets and "solar
+		# collector area" is the focal-point box. HeliostatTracker (attached at
+		# placement) points the dish straight at the sun in both axes and lights
+		# the focus — see gameplay/heliostat_tracker.gd. forced_yaw_deg = 0
+		# keeps the model's local frame world-aligned (shared by the ghost +
+		# placed prop so confirming never visibly rotates it).
+		{"id": "heliostat", "label": "Dual-Axis Heliostat (dish)",
+			"path": "res://Imported Models/CSP/heliostat.glb",
+			"preserve_scale": true, "category": "structures", "forced_yaw_deg": 0.0,
+			"helio_base_node": "fixed base",
+			"helio_azimuth_node": "horizontal rotating assembly",
+			"helio_altitude_node": "Vertical Rotating Assembly",
+			"helio_mirror_node": "Mirror array",
+			"helio_focal_node": "solar collector area"},
 	]
 
 

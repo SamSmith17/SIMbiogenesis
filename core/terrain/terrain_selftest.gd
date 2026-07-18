@@ -37,6 +37,8 @@ func _initialize() -> void:
 	_test_cache_settings()
 	_test_load_progress()
 	_test_sculpt_ops()
+	_test_edit_tiles()
+	_test_sculpt_ops_v2()
 	if _failures == 0:
 		print("TERRAIN SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -668,3 +670,353 @@ func _test_sculpt_ops() -> void:
 	_check("sculpt level mid near target",
 		_approx(delta[c.y * res + c.x], 5.0, 0.6),
 		"got %f" % delta[c.y * res + c.x])
+
+	var ci := c.y * res + c.x
+	var ei := edge.y * res + edge.x
+
+	# Brush raise / lower with radial falloff.
+	delta.fill(0.0)
+	var touched := TerrainSculpt.apply_brush(delta, res, extent, Vector2.ZERO, 40.0, 5.0, 0.0, "raise", base, 100.0)
+	_check("brush raise reports touch", touched != TerrainSculpt.NO_TOUCH)
+	_check("brush raise centre positive", delta[ci] > 0.5, "got %f" % delta[ci])
+	_check("brush raise tapers to edge (soft)", delta[ci] > delta[ei], "mid=%f edge=%f" % [delta[ci], delta[ei]])
+	delta.fill(0.0)
+	TerrainSculpt.apply_brush(delta, res, extent, Vector2.ZERO, 40.0, 5.0, 0.5, "lower", base, 100.0)
+	_check("brush lower digs", delta[ci] < -0.5, "got %f" % delta[ci])
+
+	# Smooth relaxes a spike toward its neighbourhood.
+	delta.fill(0.0)
+	delta[ci] = 10.0
+	for _i in 25:
+		TerrainSculpt.apply_brush(delta, res, extent, Vector2.ZERO, 40.0, 1.0, 0.0, "smooth", base, 100.0)
+	_check("brush smooth reduces spike", delta[ci] < 8.0, "got %f" % delta[ci])
+
+	# Flatten converges the surface toward the brush-down target height.
+	delta.fill(0.0)
+	for _i in 40:
+		TerrainSculpt.apply_brush(delta, res, extent, Vector2.ZERO, 40.0, 1.0, 1.0, "flatten", base, 100.0, 5.0)
+	_check("brush flatten converges to target", _approx(delta[ci], 5.0, 0.6), "got %f" % delta[ci])
+
+	# Pond stamp: deeper at centre, additive per click.
+	delta.fill(0.0)
+	TerrainSculpt.apply_pond_stamp(delta, res, extent, Vector2.ZERO, 40.0, 2.0)
+	var d1 := delta[ci]
+	_check("pond stamp digs bowl", d1 < 0.0, "got %f" % d1)
+	_check("pond bowl deeper at centre than rim", delta[ci] < delta[ei], "mid=%f rim=%f" % [delta[ci], delta[ei]])
+	TerrainSculpt.apply_pond_stamp(delta, res, extent, Vector2.ZERO, 40.0, 2.0)
+	_check("pond stamp additive deepens", delta[ci] < d1 - 0.5, "d1=%f d2=%f" % [d1, delta[ci]])
+
+	# Polygon-mask op feathers toward the edge.
+	delta.fill(0.0)
+	var poly := PackedVector2Array([Vector2(-40, -40), Vector2(40, -40), Vector2(40, 40), Vector2(-40, 40)])
+	TerrainSculpt.apply_polygon_op(delta, res, extent, poly, "raise", 5.0, 20.0, base, 100.0)
+	var pe := TerrainSculpt.world_to_cell(38.0, 0.0, res, extent)
+	_check("polygon raise fills centre", delta[ci] > 4.0, "got %f" % delta[ci])
+	_check("polygon feathers at edge", delta[pe.y * res + pe.x] < delta[ci] - 0.5,
+		"centre=%f edge=%f" % [delta[ci], delta[pe.y * res + pe.x]])
+
+	_test_edit_grid_v2()
+	_test_earthworks()
+	_test_depression_fill()
+
+
+func _test_depression_fill() -> void:
+	# Synthetic bowl: flat 10 m rim, 2 m deep pit at the centre. Selection covers
+	# the bowl so gravity fill should return one pond near the spill height.
+	var height_at := func(x: float, z: float) -> float:
+		var r := sqrt(x * x + z * z)
+		if r >= 18.0:
+			return 10.0
+		return 10.0 - 2.0 * (1.0 - r / 18.0) * (1.0 - r / 18.0)
+	var sel := VegetationPaint.circle_polygon(Vector2.ZERO, 30.0, 28)
+	var bodies: Array = Watershed.fill_depressions_in_polygon(
+		sel, height_at, 1.0, 2.0, 0.08, 20.0)
+	_check("depression fill finds a pond", bodies.size() >= 1, "got %d" % bodies.size())
+	if bodies.is_empty():
+		return
+	var b: Dictionary = bodies[0]
+	var level := float(b.get("level_m", 0.0))
+	var poly: PackedVector2Array = b.get("points", PackedVector2Array())
+	_check("depression fill level near spill (~10 m)",
+		level > 9.4 and level < 10.2, "level=%f" % level)
+	_check("depression fill footprint has area",
+		BuildingBuilder.footprint_area_m2(poly) > 20.0,
+		"area=%f" % BuildingBuilder.footprint_area_m2(poly))
+	# Half-full should sit between pit (~8 m) and spill (~10 m).
+	var half: Array = Watershed.fill_depressions_in_polygon(
+		sel, height_at, 0.5, 2.0, 0.08, 20.0)
+	if not half.is_empty():
+		var hl := float((half[0] as Dictionary).get("level_m", 0.0))
+		_check("depression fill 50% between pit and spill",
+			hl > 8.2 and hl < 9.8, "level=%f" % hl)
+	# Flat ground → no closed depression.
+	var flat_at := func(_x: float, _z: float) -> float: return 5.0
+	var none: Array = Watershed.fill_depressions_in_polygon(
+		sel, flat_at, 1.0, 2.0, 0.08, 20.0)
+	_check("depression fill ignores flats", none.is_empty(), "got %d" % none.size())
+
+
+func _test_earthworks() -> void:
+	var poly := PackedVector2Array([
+		Vector2(-20, -10), Vector2(20, -10), Vector2(20, 10), Vector2(-20, 10)])
+	var base_fn := func(x: float, z: float) -> float: return 50.0
+	var sheer := EarthworksBuilder.build_raise(poly, 3.0, 0.0, base_fn)
+	_check("earthworks sheer raise builds mesh", not sheer.is_empty() and sheer.get("mesh") != null)
+	_check("earthworks sheer top_y", _approx(float(sheer.get("top_y", 0.0)), 53.0, 0.05),
+		"got %s" % str(sheer.get("top_y")))
+	var soft := EarthworksBuilder.build_raise(poly, 3.0, 1.0, base_fn)
+	_check("earthworks soft raise builds mesh", not soft.is_empty() and soft.get("mesh") != null)
+	# Soft embankment insets the top — verify offset_poly shrinks.
+	var inset := EarthworksBuilder.offset_poly(poly, 3.0 * EarthworksBuilder.SLOPE_RUN_PER_RISE)
+	var soft_area := BuildingBuilder.footprint_area_m2(inset)
+	var base_area := BuildingBuilder.footprint_area_m2(poly)
+	_check("earthworks soft top smaller than base", soft_area < base_area - 1.0,
+		"soft=%f base=%f" % [soft_area, base_area])
+	var walls := EarthworksBuilder.build_cut_walls(poly, 2.0, 0.0, base_fn)
+	_check("earthworks sheer cut walls", not walls.is_empty())
+	var no_walls := EarthworksBuilder.build_cut_walls(poly, 2.0, 0.95, base_fn)
+	_check("earthworks soft cut skips walls", no_walls.is_empty())
+	var tag1 := EarthworksBuilder.basin_tag_from_poly(poly)
+	var tag2 := EarthworksBuilder.basin_tag_from_poly(poly)
+	_check("earthworks basin tag stable", tag1 == tag2 and tag1.begins_with("sculpt_pond_"))
+	var rec := {"points": poly, "kind": "raise", "top_y": 53.0}
+	_check("earthworks height_at_raise inside",
+		_approx(EarthworksBuilder.height_at_raise(rec, 0.0, 0.0), 53.0, 0.01))
+	_check("earthworks height_at_raise outside",
+		is_nan(EarthworksBuilder.height_at_raise(rec, 100.0, 100.0)))
+
+
+func _test_edit_grid_v2() -> void:
+	var eg := TerrainEditGrid.create_empty(8)
+	eg.ensure_detail(4, 100.0)
+	_check("editgrid detail alloc", eg.detail_delta.size() == 16 and eg.detail_res == 4)
+	eg.detail_delta[5] = 3.0
+	var base4 := PackedFloat32Array()
+	base4.resize(16)
+	base4.fill(50.0)
+	var applied := eg.apply_detail_to(base4, 4, 100.0)
+	_check("editgrid apply_detail adds", _approx(applied[5], 53.0, 1e-4), "got %f" % applied[5])
+	_check("editgrid apply_detail leaves others", _approx(applied[0], 50.0, 1e-4))
+	# Resolution change preserves edits (resampled).
+	eg.ensure_detail(8, 100.0)
+	_check("editgrid detail resized", eg.detail_delta.size() == 64 and eg.detail_res == 8)
+	_check("editgrid detail has_edits after resize", eg.has_detail_edits())
+
+	# Save / load v2 round-trip.
+	var slat := 12.3456
+	var slon := -65.4321
+	eg.delta.fill(0.0)
+	eg.delta[0] = 1.5
+	eg.save(slat, slon)
+	var eg2 := TerrainEditGrid.create_empty(8)
+	_check("editgrid v2 load", eg2.load_for_map(slat, slon))
+	_check("editgrid coarse round-trip", _approx(eg2.delta[0], 1.5, 1e-4), "got %f" % eg2.delta[0])
+	_check("editgrid detail round-trip", eg2.detail_res == 8 and eg2.detail_delta.size() == 64)
+	var sp := eg.save_path_for_map(slat, slon)
+	if FileAccess.file_exists(sp):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(sp))
+
+	# v1 migration: a legacy file (only `delta`) loads with an empty detail layer.
+	var mlat := 9.8765
+	var mlon := 4.3210
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
+	var eg3 := TerrainEditGrid.create_empty(4)
+	var v1delta: Array = []
+	for i in 16:
+		v1delta.append(2.0 if i == 3 else 0.0)
+	var f := FileAccess.open(eg3.save_path_for_map(mlat, mlon), FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify({"version": 1, "res": 4, "delta": v1delta}))
+		f.close()
+	var eg4 := TerrainEditGrid.create_empty(4)
+	_check("editgrid v1 migrate loads", eg4.load_for_map(mlat, mlon))
+	_check("editgrid v1 coarse intact", _approx(eg4.delta[3], 2.0, 1e-4), "got %f" % eg4.delta[3])
+	_check("editgrid v1 has no detail layer", eg4.detail_delta.is_empty())
+	var mp := eg3.save_path_for_map(mlat, mlon)
+	if FileAccess.file_exists(mp):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(mp))
+
+
+func _test_edit_tiles() -> void:
+	var t := TerrainEditTiles.new()
+	_check("edittiles empty on create", t.is_empty())
+	# A single-sample edit allocates exactly the tiles that own it.
+	t.set_delta_sample(10, 10, 5.0)
+	_check("edittiles read back", _approx(t.get_delta_sample(10, 10), 5.0, 1e-5))
+	_check("edittiles zero elsewhere", _approx(t.get_delta_sample(11, 10), 0.0, 1e-5))
+	_check("edittiles not empty after edit", not t.is_empty())
+
+	# Shared-edge write: a sample on a tile boundary is visible from both tiles.
+	var n := TerrainEditTiles.TILE_CELLS
+	t.set_delta_sample(n, n, 7.0)  # boundary of 4 tiles
+	_check("edittiles boundary sample stored", _approx(t.get_delta_sample(n, n), 7.0, 1e-5))
+	# Sample n is the shared corner of tiles (0,0),(1,0),(0,1),(1,1).
+	var owners := 0
+	for key in [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)]:
+		if t.active_tiles().has(key):
+			owners += 1
+	_check("edittiles boundary shared by 4 tiles", owners == 4, "got %d" % owners)
+
+	# Bilinear sampling between two samples.
+	t.clear()
+	t.set_delta_sample(0, 0, 0.0)
+	t.set_delta_sample(1, 0, 2.0)
+	var mid := t.sample_delta(TerrainEditTiles.CELL_M * 0.5, 0.0)
+	_check("edittiles bilinear midpoint", _approx(mid, 1.0, 1e-4), "got %f" % mid)
+
+	# Dirty tracking is consumed once.
+	var dirty := t.consume_dirty()
+	_check("edittiles dirty non-empty", dirty.size() > 0)
+	_check("edittiles dirty cleared", not t.has_dirty())
+
+	# Prune flat tiles: zeroing a tile drops it.
+	t.clear()
+	t.set_delta_sample(200, 200, 3.0)
+	t.set_delta_sample(200, 200, 0.0)
+	t.prune_flat_tiles()
+	_check("edittiles prune flat", t.active_tiles().is_empty())
+
+	# Binary round-trip.
+	t.clear()
+	t.set_delta_sample(5, 5, 4.25)
+	t.set_delta_sample(6, 5, -2.5)
+	var bytes := t.to_bytes()
+	var t2 := TerrainEditTiles.new()
+	_check("edittiles bytes load", t2.from_bytes(bytes))
+	_check("edittiles round-trip a", _approx(t2.get_delta_sample(5, 5), 4.25, 1e-4))
+	_check("edittiles round-trip b", _approx(t2.get_delta_sample(6, 5), -2.5, 1e-4))
+
+	# Migration: bake a legacy delta grid (all +3 over a 100 m patch).
+	var t3 := TerrainEditTiles.new()
+	var res := 8
+	var g := PackedFloat32Array()
+	g.resize(res * res)
+	g.fill(3.0)
+	t3.bake_delta_grid(g, res, 100.0)
+	_check("edittiles bake grid centre", _approx(t3.sample_delta(0.0, 0.0), 3.0, 0.05),
+		"got %f" % t3.sample_delta(0.0, 0.0))
+
+	# Migration via bake_delta_fn (earthworks path): a constant +2 over an AABB.
+	var tf := TerrainEditTiles.new()
+	tf.bake_delta_fn(Rect2(-10, -10, 20, 20), func(_x: float, _z: float) -> float: return 2.0)
+	_check("edittiles bake_fn centre", _approx(tf.sample_delta(0, 0), 2.0, 0.05),
+		"got %f" % tf.sample_delta(0, 0))
+	_check("edittiles bake_fn outside", absf(tf.sample_delta(60, 60)) < 0.05)
+
+	# Tile mesh arrays build with the expected vertex count and finite heights.
+	var t4 := TerrainEditTiles.new()
+	t4.set_delta_sample(2, 2, 6.0)
+	var base_fn := func(_x: float, _z: float) -> float: return 100.0
+	var arrays := t4.build_tile_arrays(Vector2i(0, 0), base_fn, 100.0, 0.001, 0.5)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var e := TerrainEditTiles.TILE_CELLS + 1
+	_check("edittiles mesh vert count", verts.size() == e * e, "got %d" % verts.size())
+	# Delta of +6 at sample (2,2) should lift that vertex ~6 m above center-relative 0.
+	var lifted := verts[2 * e + 2].y
+	_check("edittiles mesh applies delta", _approx(lifted, 6.0, 0.01), "got %f" % lifted)
+	var hm := t4.build_tile_heightmap(Vector2i(0, 0), base_fn, 100.0)
+	_check("edittiles heightmap size", hm.size() == e * e)
+
+	# Region-scoped undo: a session captures only touched tiles; apply_snapshot
+	# restores them and yields a redo snapshot.
+	var t5 := TerrainEditTiles.new()
+	t5.set_delta_sample(3, 3, 1.0)
+	t5.begin_session()
+	t5.set_delta_sample(3, 3, 9.0)
+	t5.set_delta_sample(500, 500, 4.0)  # a brand-new tile
+	var undo_snap := t5.end_session()
+	_check("edittiles session touched two regions", undo_snap.size() >= 2,
+		"got %d" % undo_snap.size())
+	var redo_snap := t5.apply_snapshot(undo_snap)
+	_check("edittiles undo restores value", _approx(t5.get_delta_sample(3, 3), 1.0, 1e-4),
+		"got %f" % t5.get_delta_sample(3, 3))
+	_check("edittiles undo removes new tile", _approx(t5.get_delta_sample(500, 500), 0.0, 1e-4))
+	t5.apply_snapshot(redo_snap)
+	_check("edittiles redo reapplies value", _approx(t5.get_delta_sample(3, 3), 9.0, 1e-4))
+	_check("edittiles redo restores new tile", _approx(t5.get_delta_sample(500, 500), 4.0, 1e-4))
+
+	# Overlay renderer invariant: the tile-mesh skirt must reach BELOW the sunk
+	# DetailGround (60 m headroom in terrain_loader) or the sink chasm shows at
+	# a cut's tile boundary. The loader has no class_name, so its constant is
+	# read off a throwaway instance.
+	var loader_script: GDScript = load("res://core/terrain/terrain_loader.gd")
+	var sink_headroom: float = loader_script.get_script_constant_map().get(
+		"TILE_SINK_HEADROOM_M", 60.0)
+	_check("heightfield skirt seals the sink",
+		TerrainHeightField.SKIRT_DROP_M > sink_headroom,
+		"skirt %.1f vs sink %.1f" % [TerrainHeightField.SKIRT_DROP_M, sink_headroom])
+
+
+func _test_sculpt_ops_v2() -> void:
+	var flat := func(_x: float, _z: float) -> float: return 100.0
+
+	# Falloff: 1 at centre, 0 at/after edge, monotonic.
+	_check("sculptops falloff centre", _approx(TerrainSculptOps.falloff(0.0, 10.0, 0.5), 1.0, 1e-4))
+	_check("sculptops falloff edge", _approx(TerrainSculptOps.falloff(10.0, 10.0, 0.5), 0.0, 1e-4))
+
+	# Raise brush lifts the centre by ~amount and tapers to 0 at the rim.
+	var t := TerrainEditTiles.new()
+	TerrainSculptOps.raise_lower_brush(t, Vector2(0, 0), 12.0, 4.0, 0.5)
+	_check("sculptops raise centre", _approx(t.sample_delta(0, 0), 4.0, 0.2),
+		"got %f" % t.sample_delta(0, 0))
+	_check("sculptops raise outside ~0", absf(t.sample_delta(20, 0)) < 0.05,
+		"got %f" % t.sample_delta(20, 0))
+
+	# Level polygon drives the interior surface to the target Y (delta = target-base).
+	var poly := PackedVector2Array([
+		Vector2(-15, -15), Vector2(15, -15), Vector2(15, 15), Vector2(-15, 15)])
+	var t2 := TerrainEditTiles.new()
+	TerrainSculptOps.level_polygon(t2, poly, 108.0, 6.0, flat)
+	var surf := 100.0 + t2.sample_delta(0, 0)
+	_check("sculptops level interior hits target", _approx(surf, 108.0, 0.05),
+		"got %f" % surf)
+	# Feather: a point ~3 m outside is partway between target and base.
+	var edge := 100.0 + t2.sample_delta(18.0, 0.0)
+	_check("sculptops level feathers out", edge > 100.5 and edge < 107.9,
+		"got %f" % edge)
+	# Well outside the feather is untouched.
+	_check("sculptops level leaves far ground", absf(t2.sample_delta(40.0, 0.0)) < 0.05)
+
+	# Flatten brush eases toward target without overshoot in one pass.
+	var t3 := TerrainEditTiles.new()
+	TerrainSculptOps.flatten_brush(t3, Vector2(0, 0), 10.0, 90.0, 1.0, flat, 0.9)
+	var fs := 100.0 + t3.sample_delta(0, 0)
+	_check("sculptops flatten toward target", fs < 100.0 and fs >= 89.9, "got %f" % fs)
+
+	# Ramp grades from ya to yb along its axis.
+	var t4 := TerrainEditTiles.new()
+	TerrainSculptOps.ramp(t4, Vector2(-20, 0), Vector2(20, 0), 100.0, 120.0, 8.0, flat)
+	var mid := 100.0 + t4.sample_delta(0.0, 0.0)
+	_check("sculptops ramp midpoint", _approx(mid, 110.0, 1.0), "got %f" % mid)
+	var near_end := 100.0 + t4.sample_delta(19.0, 0.0)
+	_check("sculptops ramp rises to end", near_end > 115.0, "got %f" % near_end)
+
+	# Carve basin: flat floor at rim-depth, sloped banks, rim returned for fill.
+	var poly2 := PackedVector2Array([
+		Vector2(-20, -20), Vector2(20, -20), Vector2(20, 20), Vector2(-20, 20)])
+	var t6 := TerrainEditTiles.new()
+	var rim := TerrainSculptOps.carve_basin(t6, poly2, 3.0, 2.0, flat)
+	_check("sculptops basin rim", _approx(rim, 100.0, 0.01), "got %f" % rim)
+	var floor_y := 100.0 + t6.sample_delta(0, 0)
+	_check("sculptops basin floor depth", _approx(floor_y, 97.0, 0.2), "got %f" % floor_y)
+	# A point near the rim is shallower than the floor.
+	var bankpt := 100.0 + t6.sample_delta(18.0, 0.0)
+	_check("sculptops basin bank shallower", bankpt > floor_y + 0.3 and bankpt <= 100.01,
+		"got %f" % bankpt)
+	# Outside the polygon is untouched.
+	_check("sculptops basin leaves exterior", absf(t6.sample_delta(40.0, 0.0)) < 0.05)
+
+	# Volume estimate: a pure raise gives fill>0/cut≈0; a cut gives the reverse.
+	var t7 := TerrainEditTiles.new()
+	TerrainSculptOps.raise_lower_brush(t7, Vector2(0, 0), 20.0, 5.0, 0.5)
+	var vol := t7.volume_estimate()
+	_check("volume fill positive", float(vol.get("fill_m3", 0.0)) > 0.0,
+		"got %f" % float(vol.get("fill_m3", 0.0)))
+	_check("volume cut ~zero on raise", float(vol.get("cut_m3", 0.0)) < 1.0,
+		"got %f" % float(vol.get("cut_m3", 0.0)))
+	var t8 := TerrainEditTiles.new()
+	TerrainSculptOps.raise_lower_brush(t8, Vector2(0, 0), 20.0, -5.0, 0.5)
+	var vol2 := t8.volume_estimate()
+	_check("volume cut positive on lower", float(vol2.get("cut_m3", 0.0)) > 0.0,
+		"got %f" % float(vol2.get("cut_m3", 0.0)))
+	_check("volume net negative on lower", float(vol2.get("net_m3", 0.0)) < 0.0)

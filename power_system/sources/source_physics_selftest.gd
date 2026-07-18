@@ -8,6 +8,10 @@ extends SceneTree
 const ResourceKindsScript := preload("res://system_graph/data/resource_kinds.gd")
 const ResourceEdgeVisScript := preload("res://system_graph/data/resource_edge_vis.gd")
 const CspTroughSourceScript := preload("res://power_system/sources/csp_trough_source.gd")
+const HeliostatSourceScript := preload("res://power_system/sources/heliostat_source.gd")
+const ComponentPresetsScript := preload("res://system_graph/data/component_presets.gd")
+const ModelCatalogScript := preload("res://core/placed_models/model_catalog.gd")
+const WindMathScript := preload("res://core/wind_math.gd")
 
 var _failures: int = 0
 var _checks: int = 0
@@ -15,6 +19,7 @@ var _checks: int = 0
 
 func _initialize() -> void:
 	_test_wind()
+	_test_hawt()
 	_test_hydro()
 	_test_defaults()
 	_test_graph_adapters()
@@ -28,6 +33,7 @@ func _initialize() -> void:
 	_test_season()
 	_test_solar_eclipse()
 	_test_csp()
+	_test_heliostat()
 	if _failures == 0:
 		print("SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -123,6 +129,72 @@ func _test_wind() -> void:
 	w2.free()
 	w3.free()
 	w4.free()
+
+
+## The shipped 3D-linked "Small HAWT 500W (3D)" library preset — Primus-style
+## Air 30 class turbine (see component_presets.gd for the manufacturer-spec
+## derivation) — and the WindMath direction helper its 3D yaw tracker uses.
+func _test_hawt() -> void:
+	var preset := {}
+	for p: Dictionary in ComponentPresetsScript.WIND_TURBINES:
+		if str(p.get("label", "")) == "Small HAWT 500W (3D)":
+			preset = p
+			break
+	_check("hawt preset: found in library", not preset.is_empty())
+	if preset.is_empty():
+		return
+	var specs: Dictionary = preset.get("specs", {}) as Dictionary
+	_check("hawt preset: kind is hawt", str(specs.get("kind", "")) == "hawt")
+	_check("hawt preset: model_id links small_hawt",
+		str(specs.get("model_id", "")) == "small_hawt")
+
+	# Swept area sanity: π·(1.17/2)² ≈ 1.075 m² — matches the datasheet's
+	# stated 1.07 m² within a normal rounding tolerance.
+	var d := float(specs.get("rotor_diameter_m", 0.0))
+	var area := PI * d * d * 0.25
+	_check("hawt preset: swept area ≈ 1.07 m²", _approx(area, 1.05, 1.10),
+		"got %.4f m² from diameter %.3f m" % [area, d])
+
+	# Cut-in / rated / cut-out window matches the datasheet (3.58 / 11-15
+	# midpoint / 22 m/s).
+	_check("hawt preset: cut-in ≈ 3.58 m/s", _approx(float(specs.get("cut_in_ms", 0.0)), 3.5, 3.7))
+	_check("hawt preset: rated within optimal band 11-15 m/s",
+		_approx(float(specs.get("rated_ms", 0.0)), 11.0, 15.0))
+	_check("hawt preset: cut-out ≈ 22 m/s", _approx(float(specs.get("cut_out_ms", 0.0)), 21.0, 23.0))
+
+	# Zero outside the operating window, producing between, nameplate at rated.
+	var below := specs.duplicate(true)
+	below["site_mean_wind_ms"] = 2.0
+	_check("hawt preset: zero below cut-in",
+		WindTurbineSource.power_kw_from_graph_specs(below, 12.0, 2.0) == 0.0)
+	var storm := specs.duplicate(true)
+	storm["site_mean_wind_ms"] = 25.0
+	_check("hawt preset: zero above cut-out",
+		WindTurbineSource.power_kw_from_graph_specs(storm, 12.0, 25.0) == 0.0)
+	var rated_ms := float(specs.get("rated_ms", 13.0))
+	var p_rated := WindTurbineSource.power_kw_from_graph_specs(specs, 12.0, rated_ms)
+	_check("hawt preset: ~nameplate (0.5 kW) at rated speed", _approx(p_rated, 0.45, 0.51),
+		"got %.3f kW at %.1f m/s" % [p_rated, rated_ms])
+	var p_optimal := WindTurbineSource.power_kw_from_graph_specs(specs, 12.0, 12.5)
+	_check("hawt preset: producing within optimal band (11-15 m/s)", p_optimal > 0.2,
+		"got %.3f kW" % p_optimal)
+
+	# Model catalog registration: the GLB + its two independently-driven
+	# yaw/blade-spin sub-node names (see hawt_tracker.gd).
+	var entry := ModelCatalogScript.find("small_hawt")
+	_check("hawt model: registered in ModelCatalog", not entry.is_empty())
+	_check("hawt model: yaw node name", str(entry.get("hawt_yaw_node", "")) == "turbine vane assembly")
+	_check("hawt model: blade node name", str(entry.get("hawt_blade_node", "")) == "Nosecone and Blades")
+
+	# WindMath: the shared FROM-degrees → world-XZ helper the yaw tracker uses
+	# (same convention the vegetation wind driver uses for grass sway).
+	_check("windmath: NAN direction has a deterministic default",
+		WindMathScript.downwind_xz(NAN) == Vector2(0.0, 1.0))
+	var north := WindMathScript.downwind_xz(0.0)   # wind FROM north
+	_check("windmath: unit vector", _approx(north.length(), 0.999, 1.001))
+	var east := WindMathScript.downwind_xz(90.0)   # wind FROM east
+	_check("windmath: from-east has a westward component", east.x < -0.5,
+		"got %s" % str(east))
 
 
 func _test_hydro() -> void:
@@ -1035,3 +1107,99 @@ func _test_csp() -> void:
 		Vector3(1.0, 0.0, 0.0), axis_ew)
 	_check("csp: rest offset = 0 when normal is purely axis-aligned",
 		absf(off_axis_only) < 1e-6, "got %.4f rad" % off_axis_only)
+
+
+## Dual-axis dish heliostat: perfect two-axis tracking (cos≈1 all day),
+## concentration ratio, cavity-receiver stagnation temperature, and useful
+## heat / water→steam output (heliostat_source.gd).
+func _test_heliostat() -> void:
+	# Library preset present, correct kind/role, and links the 3D dish model.
+	var preset := {}
+	for p: Dictionary in ComponentPresetsScript.CSP_CONCENTRATORS:
+		if str(p.get("label", "")) == "Dual-Axis Heliostat":
+			preset = p
+			break
+	_check("heliostat preset: found in Solar Concentrators", not preset.is_empty())
+	if preset.is_empty():
+		return
+	var pspecs: Dictionary = preset.get("specs", {}) as Dictionary
+	_check("heliostat preset: kind is heliostat", str(pspecs.get("kind", "")) == "heliostat")
+	_check("heliostat preset: role is heliostat", str(pspecs.get("role", "")) == "heliostat")
+	_check("heliostat preset: model_id links heliostat",
+		str(pspecs.get("model_id", "")) == "heliostat")
+	_check("heliostat preset: 19.36 m² mirror area (datasheet)",
+		_approx(float(pspecs.get("mirror_area_m2", 0.0)), 19.35, 19.37))
+
+	# Model catalog registration: GLB + the four moving sub-node names the
+	# tracker drives (see heliostat_tracker.gd).
+	var entry := ModelCatalogScript.find("heliostat")
+	_check("heliostat model: registered in ModelCatalog", not entry.is_empty())
+	_check("heliostat model: azimuth node name",
+		str(entry.get("helio_azimuth_node", "")) == "horizontal rotating assembly")
+	_check("heliostat model: altitude node name",
+		str(entry.get("helio_altitude_node", "")) == "Vertical Rotating Assembly")
+	_check("heliostat model: mirror node name",
+		str(entry.get("helio_mirror_node", "")) == "Mirror array")
+
+	var specs := {
+		"mirror_area_m2": 19.36, "focal_box_size_m": 0.5,
+		"optical_efficiency": 0.80, "receiver_absorptivity": 0.95,
+		"receiver_emissivity": 0.90, "conv_coeff_w_m2k": 10.0,
+		"operating_temp_c": 250.0, "thermal_efficiency": 0.85,
+		"feedwater_temp_c": 20.0,
+	}
+	var clear := {"has_real": false, "cloud": 0.0, "temp": 25.0}
+
+	# Perfect dual-axis tracking → normal incidence whenever the sun is up
+	# (cos=1), even for a low sun where the single-axis trough loses badly.
+	var low_sun := HeliostatSourceScript.simulate(specs, 90.0, 10.0, clear)
+	_check("heliostat: cos_incidence = 1 for any up-sun (two-axis)",
+		_approx(float(low_sun.get("cos_incidence", 0.0)), 0.999, 1.001))
+	var trough_low := CspTroughSourceScript.cos_incidence(90.0, 10.0)
+	_check("heliostat: beats single-axis trough at a low east sun",
+		float(low_sun.get("cos_incidence", 0.0)) > trough_low + 0.1,
+		"heliostat=%.3f trough=%.3f" % [low_sun.get("cos_incidence", 0.0), trough_low])
+
+	# Concentration ratio = mirror_area / aperture (0.5 m box → 0.25 m² → 77×).
+	var midday := HeliostatSourceScript.simulate(specs, 180.0, 70.0, clear)
+	_check("heliostat: concentration ≈ 77× (19.36/0.25)",
+		_approx(float(midday.get("concentration_ratio", 0.0)), 76.0, 78.0),
+		"got %.1f×" % float(midday.get("concentration_ratio", 0.0)))
+
+	# Focal stagnation temperature reaches the solar-furnace range and is far
+	# hotter than ambient; positive thermal + mass-conserving water→steam.
+	var focal_c := float(midday.get("focal_temp_c", 0.0))
+	_check("heliostat: focal temp in solar-furnace range (600-1000 °C)",
+		focal_c > 600.0 and focal_c < 1000.0, "got %.0f °C" % focal_c)
+	_check("heliostat: midday thermal output > 0",
+		float(midday.get("thermal_output_kw", 0.0)) > 0.0,
+		"got %.3f kW" % float(midday.get("thermal_output_kw", 0.0)))
+	_check("heliostat: steam/water mass-conserving (density=1)",
+		absf(float(midday.get("steam_kg_h", 0.0)) - float(midday.get("water_lph", 0.0))) < 1e-6)
+
+	# Night → nothing; heavy cloud → cooler focus + less heat than clear sky.
+	var night := HeliostatSourceScript.simulate(specs, 180.0, -5.0, clear)
+	_check("heliostat: night thermal output = 0",
+		float(night.get("thermal_output_kw", 0.0)) == 0.0)
+	_check("heliostat: night focal temp = ambient (no concentration)",
+		_approx(float(night.get("focal_temp_c", 0.0)), 24.0, 26.0),
+		"got %.1f °C" % float(night.get("focal_temp_c", 0.0)))
+	var cloudy := HeliostatSourceScript.simulate(specs, 180.0, 70.0, {"has_real": false, "cloud": 0.9, "temp": 25.0})
+	_check("heliostat: heavy cloud lowers focal temp vs clear sky",
+		float(cloudy.get("focal_temp_c", 0.0)) < focal_c,
+		"cloudy=%.0f clear=%.0f" % [cloudy.get("focal_temp_c", 0.0), focal_c])
+
+	# A bigger dish (more collected beam) reaches a hotter focus at the same box.
+	var big := specs.duplicate(true)
+	big["mirror_area_m2"] = 40.0
+	var big_mid := HeliostatSourceScript.simulate(big, 180.0, 70.0, clear)
+	_check("heliostat: larger mirror area → hotter focus",
+		float(big_mid.get("focal_temp_c", 0.0)) > focal_c,
+		"big=%.0f base=%.0f" % [big_mid.get("focal_temp_c", 0.0), focal_c])
+
+	# stagnation_temp_k is the root of the receiver energy balance: at that T
+	# the losses equal the absorbed power (to within a watt).
+	var t_stag := HeliostatSourceScript.stagnation_temp_k(5000.0, 0.9, 0.25, 10.0, 1.25, 298.15)
+	var loss := HeliostatSourceScript.receiver_loss_w(t_stag, 0.9, 0.25, 10.0, 1.25, 298.15)
+	_check("heliostat: stagnation solves loss(T)=absorbed", absf(loss - 5000.0) < 1.0,
+		"loss=%.2f W at T=%.1f K" % [loss, t_stag])

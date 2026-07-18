@@ -6,6 +6,8 @@ extends RefCounted
 const VERSION := 1
 const SPECIES: Array[String] = ["pine", "deciduous", "shrub"]
 const GRASS_SPECIES: Array[String] = ["grass_lawn", "grass_field"]
+## Base family slots (always present). Subspecies (spruce, fir, …) are created
+## lazily in `bulk` when painted — see ensure_species_key / add_bulk.
 const ALL_SPECIES: Array[String] = ["pine", "deciduous", "shrub", "grass_lawn", "grass_field"]
 const MAX_HERO := 500
 const MAX_BULK_PER_SPECIES := 10000
@@ -94,12 +96,32 @@ var settings: Dictionary = {}
 var growth_zones: Array = []
 
 
+## All species keys currently stored (base families + painted subspecies).
+func species_keys() -> Array[String]:
+	var out: Array[String] = []
+	for k in bulk.keys():
+		out.append(str(k))
+	for sp in ALL_SPECIES:
+		if sp not in out:
+			out.append(sp)
+	return out
+
+
+func ensure_species_key(species: String) -> bool:
+	if species.is_empty() or not VegSpeciesCatalog.is_paintable(species):
+		return false
+	if not bulk.has(species):
+		bulk[species] = []
+	return true
+
+
 func add_bulk(species: String, x: float, z: float, yaw: float, scale: float,
 		card: Dictionary = {}) -> bool:
-	if species not in bulk:
+	if not ensure_species_key(species):
 		return false
 	var arr: Array = bulk[species]
-	if arr.size() >= max_bulk_for_species(species):
+	var fam := VegSpeciesCatalog.mesh_family(species)
+	if arr.size() >= max_bulk_for_species(fam):
 		return false
 	var rec := {"x": x, "z": z, "yaw": yaw, "scale": scale}
 	# Optional per-instance look override ("Apply to brush" snapshot) so these
@@ -141,7 +163,7 @@ func apply_settings(patch: Dictionary) -> void:
 ## map JSON, those trees stay pinned to a stale appearance even across reloads.
 func clear_card_overrides() -> int:
 	var n := 0
-	for species in ALL_SPECIES:
+	for species in species_keys():
 		for item in bulk.get(species, []):
 			if item is Dictionary and (item as Dictionary).has("card_settings"):
 				(item as Dictionary).erase("card_settings")
@@ -152,7 +174,7 @@ func clear_card_overrides() -> int:
 func remove_bulk_in_polygon(poly: PackedVector2Array) -> void:
 	if poly.size() < 3:
 		return
-	for species in ALL_SPECIES:
+	for species in species_keys():
 		var kept: Array = []
 		for item in bulk.get(species, []):
 			if not (item is Dictionary):
@@ -183,7 +205,7 @@ func count_bulk_in_polygon(poly: PackedVector2Array) -> int:
 	if poly.size() < 3:
 		return 0
 	var n := 0
-	for species in ALL_SPECIES:
+	for species in species_keys():
 		for item in bulk.get(species, []):
 			if not (item is Dictionary):
 				continue
@@ -203,7 +225,7 @@ func patch_bulk_in_polygon(poly: PackedVector2Array, params: Dictionary) -> int:
 	var n := 0
 	var scale_mul := float(params.get("scale_mul", 1.0))
 	var target := str(params.get("patch_species", ""))
-	for species in ALL_SPECIES:
+	for species in species_keys():
 		if not target.is_empty() and species != target:
 			continue
 		var card := _card_settings_for_species(params, species)
@@ -231,8 +253,10 @@ func patch_bulk_in_polygon(poly: PackedVector2Array, params: Dictionary) -> int:
 
 
 static func vertical_offset_for(species: String, settings: Dictionary) -> float:
+	var fam := VegSpeciesCatalog.mesh_family(species)
 	return float(settings.get("vertical_offset_m", 0.0)) \
-		+ float(settings.get("%s_vertical_offset_m" % species, 0.0))
+		+ float(settings.get("%s_vertical_offset_m" % species,
+			settings.get("%s_vertical_offset_m" % fam, 0.0)))
 
 
 static func _card_settings_for_species(params: Dictionary, species: String) -> Dictionary:
@@ -301,7 +325,7 @@ func remove_nearest_hero(world_xz: Vector2, radius_m: float = 3.0) -> bool:
 
 func all_bulk_points() -> Array[Vector2]:
 	var out: Array[Vector2] = []
-	for species in ALL_SPECIES:
+	for species in species_keys():
 		for item in bulk.get(species, []):
 			if item is Dictionary:
 				var d: Dictionary = item
@@ -320,7 +344,7 @@ func all_placement_points() -> Array[Vector2]:
 
 func remaining_bulk_capacity() -> int:
 	var used := 0
-	for species in ALL_SPECIES:
+	for species in species_keys():
 		used += bulk.get(species, []).size()
 	return maxi(0, MAX_BULK_PER_SPECIES * SPECIES.size() + MAX_GRASS_PER_SPECIES * GRASS_SPECIES.size() - used)
 
@@ -359,7 +383,7 @@ func add_growth_zone(poly: PackedVector2Array) -> void:
 
 func serialize() -> Dictionary:
 	var bulk_out := {}
-	for species in ALL_SPECIES:
+	for species in species_keys():
 		bulk_out[species] = _records_to_json(bulk.get(species, []))
 	return {
 		"version": VERSION,
@@ -487,6 +511,13 @@ func deserialize(data: Dictionary) -> void:
 	var src: Dictionary = data.get("bulk", {}) as Dictionary
 	for species in ALL_SPECIES:
 		bulk[species] = _records_from_json(src.get(species, []))
+	# Subspecies painted after the earthworks polish (spruce, fir, …).
+	for key in src.keys():
+		var sid := str(key)
+		if sid in ALL_SPECIES:
+			continue
+		if VegSpeciesCatalog.is_paintable(sid):
+			bulk[sid] = _records_from_json(src.get(key, []))
 	hero = []
 	for item in data.get("hero", []):
 		if item is Dictionary:

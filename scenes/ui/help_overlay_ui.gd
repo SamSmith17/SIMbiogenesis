@@ -16,6 +16,11 @@ const _TIPS := [
 	"Needs chips (⚡💧🍎♻) show closure health: ● OK · ▲ warn · ■ critical. Click any chip for System Review.",
 	"Terrain, imagery, and vegetation load automatically for whatever location you pick — the first visit is slower, later visits use the cache.",
 	"Aim your crosshair at an OSM solar array and press Interact to add it to your power grid.",
+	"Vegetation (V): hold LMB with Brush to stamp continuously; pick a subspecies under Type; Tune look… to edit H/W and Save as species default.",
+	"Terrain (T): Pond — lasso the water's edge, set Dig depth, and it carves a bowl and fills to the natural rim in one action.",
+	"Terrain (T): Flatten — draw a selection to level a whole pad to the ground at its centre (feathered at the edges); brushes drive a high-res edit layer.",
+	"Terrain (T): Ramp — click a start then an end to grade a road/path between them; Measure — click two points for distance, elevation drop, and % grade.",
+	"Terrain (T): Top-down shows live elevation contours; the dock reads out cut/fill volume as you sculpt. Ctrl+Z undoes the last edit.",
 ]
 
 ## [action, display_label]

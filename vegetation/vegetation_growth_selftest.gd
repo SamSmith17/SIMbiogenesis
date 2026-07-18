@@ -24,6 +24,8 @@ func _initialize() -> void:
 	_test_seasonal_growth()
 	_test_instance_map()
 	_test_disabled_species()
+	_test_settings_with_variant_non_clobber()
+	_test_size_var_scales()
 	if _failures == 0:
 		print("VEG GROWTH SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -306,3 +308,36 @@ func _test_disabled_species() -> void:
 		{"grass_lawn": [{"x": 0.0, "z": 0.0, "scale": 1.0, "birth_h": -100.0 * HPY}]},
 		0.0, {"grass_lawn_growth_years": 1.0}, rng, caps, add)
 	_check("grass never dies (not a tree)", not changed)
+
+
+func _test_settings_with_variant_non_clobber() -> void:
+	var player := {"pine_card_w": 2.5, "pine_card_h": 9.0}
+	var merged := VegSpeciesCatalog.settings_with_variant(
+		"spruce", player, VegetationCardFactory.SPECS)
+	_check("variant keeps slider W",
+		_approx(float(merged.get("pine_card_w", 0.0)), 2.5, 1e-6),
+		"got %s" % str(merged.get("pine_card_w")))
+	_check("variant keeps slider H",
+		_approx(float(merged.get("pine_card_h", 0.0)), 9.0, 1e-6),
+		"got %s" % str(merged.get("pine_card_h")))
+	_check("variant stamps species id",
+		str(merged.get("_variant_species", "")) == "spruce")
+	var empty := VegSpeciesCatalog.settings_with_variant(
+		"fir", {}, VegetationCardFactory.SPECS)
+	_check("variant fills missing W from SPECS",
+		float(empty.get("pine_card_w", 0.0)) > 0.0)
+
+
+func _test_size_var_scales() -> void:
+	var identical := VegetationStyleConfig.scales_from_size_var(0.0)
+	_check("size var 0 → identical scales",
+		_approx(identical.x, 1.0, 1e-6) and _approx(identical.y, 1.0, 1e-6),
+		"got %s" % identical)
+	var wide := VegetationStyleConfig.scales_from_size_var(0.5)
+	_check("size var 50% → 0.5..1.5",
+		_approx(wide.x, 0.5, 1e-6) and _approx(wide.y, 1.5, 1e-6),
+		"got %s" % wide)
+	var mid := VegetationStyleConfig.scales_from_size_var(0.25)
+	_check("size var 25% → 0.75..1.25",
+		_approx(mid.x, 0.75, 1e-6) and _approx(mid.y, 1.25, 1e-6),
+		"got %s" % mid)

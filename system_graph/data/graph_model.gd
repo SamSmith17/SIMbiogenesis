@@ -89,13 +89,30 @@ func add_item(item: Dictionary) -> void:
 	_ensure_root_scope()
 	if not item.has("id") or (item["id"] as String).is_empty():
 		item["id"] = generate_item_id()
+	var iid: String = str(item.get("id", ""))
+	# Unique-id invariant. The whole get_item/update_item/_item_index system
+	# assumes exactly one dict per id — appending a second entry with an existing
+	# id makes get_records-in-scope render BOTH (so a drag moves only the
+	# last-indexed one and leaves the other behind, which reads as "dragging a
+	# node duplicates it"). Idempotent seeders (StarShade, PBI) also rely on this
+	# guard so a double-seed can't clone fixed-id nodes. Merge new fields into the
+	# existing item instead of appending a duplicate.
+	if _item_index.size() != items.size():
+		_rebuild_item_index()
+	if _item_index.has(iid) and (_item_index[iid] as Dictionary).get("id", "") == iid:
+		var existing: Dictionary = _item_index[iid]
+		push_warning("GraphModel.add_item: id '%s' already exists — merging instead of duplicating" % iid)
+		for key: String in item:
+			existing[key] = item[key]
+		changed.emit("add_item")
+		return
 	if not item.has("scope_id"):
 		item["scope_id"] = ROOT_SCOPE_ID
 	var sid: String = str(item.get("scope_id", ROOT_SCOPE_ID))
 	if not scopes.has(sid):
 		ensure_scope(sid)
 	items.append(item)
-	_item_index[str(item.get("id", ""))] = item
+	_item_index[iid] = item
 	changed.emit("add_item")
 
 
@@ -355,7 +372,20 @@ func deserialize(data: Dictionary) -> void:
 	scopes      = {}
 	_ensure_root_scope()
 	if data.get("items") is Array:
-		items = (data["items"] as Array).duplicate(true)
+		# Drop any duplicate-id rows a buggy/legacy save may carry (keep first).
+		# Two rows sharing an id render as overlapping twins where only one moves
+		# on drag — repair such saves on load rather than propagating the ghost.
+		var seen_ids: Dictionary = {}
+		for raw_item: Variant in (data["items"] as Array):
+			if not (raw_item is Dictionary):
+				continue
+			var iid: String = str((raw_item as Dictionary).get("id", ""))
+			if not iid.is_empty() and seen_ids.has(iid):
+				push_warning("GraphModel.deserialize: dropped duplicate item id '%s'" % iid)
+				continue
+			if not iid.is_empty():
+				seen_ids[iid] = true
+			items.append((raw_item as Dictionary).duplicate(true))
 	if data.get("connections") is Array:
 		connections = (data["connections"] as Array).duplicate(true)
 	# v2+: explicit scope dictionary. v1: infer root-only.

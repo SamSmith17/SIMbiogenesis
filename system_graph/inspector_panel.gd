@@ -378,6 +378,8 @@ func _rebuild_for_item(item: Dictionary) -> void:
 					_readonly_field("Demand status", "STARVED: %s" % ", ".join(parts))
 			elif str(specs.get("role", "")) == "csp_concentrator":
 				_build_csp_concentrator_section(specs)
+			elif str(specs.get("role", "")) == "heliostat":
+				_build_heliostat_section(specs)
 			else:
 				_build_processor_energy_picker(specs)
 				_num_field("Power Draw (W)",     specs.get("watts", 0.0),       "specs/watts",       0, 100000, 10.0)
@@ -2889,6 +2891,31 @@ func _build_csp_concentrator_section(specs: Dictionary) -> void:
 	_readonly_field("Incidence cos(θ)", "%.3f" % float(specs.get("cos_incidence", 0.0)))
 	_readonly_field("DNI", "%.0f W/m²" % float(specs.get("dni_wm2", 0.0)))
 	_readonly_field("End Loss", "%.1f%%" % (float(specs.get("end_loss_frac", 0.0)) * 100.0))
+	_readonly_field("Thermal Output", "%.2f kW" % float(specs.get("thermal_output_kw", 0.0)))
+	_readonly_field("Steam Output", "%.2f kg/h" % float(specs.get("steam_kg_h", 0.0)))
+
+
+func _build_heliostat_section(specs: Dictionary) -> void:
+	_num_field("Mirror Area (m²)",     specs.get("mirror_area_m2", 19.36),   "specs/mirror_area_m2",     1.0, 500.0, 0.1)
+	_num_field("Focal Box Size (m)",   specs.get("focal_box_size_m", 0.5),   "specs/focal_box_size_m",   0.05, 5.0, 0.05)
+	_num_field("Optical Efficiency",   specs.get("optical_efficiency", 0.80),"specs/optical_efficiency", 0.0, 1.0, 0.01)
+	_num_field("Receiver Absorptivity",specs.get("receiver_absorptivity", 0.95),"specs/receiver_absorptivity", 0.0, 1.0, 0.01)
+	_num_field("Receiver Emissivity",  specs.get("receiver_emissivity", 0.90),"specs/receiver_emissivity", 0.01, 1.0, 0.01)
+	_num_field("Convection h (W/m²K)", specs.get("conv_coeff_w_m2k", 10.0),  "specs/conv_coeff_w_m2k",   0.0, 100.0, 1.0)
+	_num_field("Operating Temp (°C)",  specs.get("operating_temp_c", 250.0), "specs/operating_temp_c",   20.0, 2000.0, 5.0)
+	_num_field("Thermal Efficiency",   specs.get("thermal_efficiency", 0.85),"specs/thermal_efficiency", 0.0, 1.0, 0.01)
+	_num_field("Feedwater Temp (°C)",  specs.get("feedwater_temp_c", 20.0),  "specs/feedwater_temp_c",   0.0, 99.0, 1.0)
+	var daily_note := str(specs.get("daily_note", ""))
+	if not daily_note.is_empty():
+		_readonly_field("Daily design", daily_note)
+
+	_section("Live Telemetry")
+	_readonly_field("Incidence cos(θ)", "%.3f" % float(specs.get("cos_incidence", 0.0)))
+	_readonly_field("DNI", "%.0f W/m²" % float(specs.get("dni_wm2", 0.0)))
+	_readonly_field("Concentration", "%.0f×" % float(specs.get("concentration_ratio", 0.0)))
+	_readonly_field("Focal Flux", "%.1f kW/m²" % float(specs.get("focal_flux_kw_m2", 0.0)))
+	_readonly_field("Focal Temp", "%.0f °C" % float(specs.get("focal_temp_c", 0.0)))
+	_readonly_field("Incident Power", "%.2f kW" % float(specs.get("incident_kw", 0.0)))
 	_readonly_field("Thermal Output", "%.2f kW" % float(specs.get("thermal_output_kw", 0.0)))
 	_readonly_field("Steam Output", "%.2f kg/h" % float(specs.get("steam_kg_h", 0.0)))
 

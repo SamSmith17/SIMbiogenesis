@@ -145,6 +145,15 @@ static func attach_ibc_to_imported_canopy(tree: SceneTree, model_id: String,
 static func _apply_graph(tree: SceneTree, graph_state: Dictionary) -> bool:
 	if graph_state.is_empty():
 		return false
+	# CircuitMapper.to_graph_save_state ALWAYS returns a populated wrapper (even
+	# for a StarShade bundle whose circuit.items is empty). Applying that empty
+	# graph would deserialize an items=[] payload — wiping the map's existing
+	# graph, including the fundamental PBI nodes — before the seeder runs. Skip
+	# when the bundle carries no actual circuit items; seeding adds the panels.
+	var graph_d: Dictionary = graph_state.get("graph", {}) as Dictionary
+	var graph_items: Array = graph_d.get("items", []) as Array
+	if graph_items.is_empty():
+		return false
 	var sgv := tree.root.find_child("SystemGraphView", true, false)
 	if sgv == null or not sgv.has_method("apply_save_state"):
 		return false

@@ -2136,6 +2136,18 @@ func _on_lib_place_model_requested(preset: Dictionary) -> void:
 		record_extra["csp_specs"] = specs
 		record_extra["csp_base_node"] = str(specs.get("csp_base_node", "Component#452"))
 		record_extra["csp_concentrator_node"] = str(specs.get("csp_concentrator_node", "Component#453"))
+	if kind == "heliostat":
+		record_extra["helio_specs"] = specs
+		record_extra["helio_base_node"] = str(specs.get("helio_base_node", "fixed base"))
+		record_extra["helio_azimuth_node"] = str(specs.get("helio_azimuth_node", "horizontal rotating assembly"))
+		record_extra["helio_altitude_node"] = str(specs.get("helio_altitude_node", "Vertical Rotating Assembly"))
+		record_extra["helio_mirror_node"] = str(specs.get("helio_mirror_node", "Mirror array"))
+		record_extra["helio_focal_node"] = str(specs.get("helio_focal_node", "solar collector area"))
+	if kind == "hawt":
+		record_extra["hawt_yaw_node"] = str(specs.get("hawt_yaw_node",
+			ModelCatalog.find(model_id).get("hawt_yaw_node", "turbine vane assembly")))
+		record_extra["hawt_blade_node"] = str(specs.get("hawt_blade_node",
+			ModelCatalog.find(model_id).get("hawt_blade_node", "Nosecone and Blades")))
 	var prep := {
 		"ok": true,
 		"model_id": model_id,
@@ -2232,8 +2244,8 @@ func create_bound_generator_node(prop_id: String, graph_link: Dictionary) -> Str
 
 
 ## Called when the current world time changes for a placed generator's bound
-## node — used by WindTurbineSpin to keep the 2D node's output in sync even
-## while the graph is closed. Safe no-op if the node is gone.
+## node — used by WindTurbineSpin/HawtTracker to keep the 2D node's output in
+## sync even while the graph is closed. Safe no-op if the node is gone.
 func refresh_bound_generator_output(item_id: String, kw: float) -> void:
 	if model == null or item_id.is_empty():
 		return
@@ -2241,10 +2253,16 @@ func refresh_bound_generator_output(item_id: String, kw: float) -> void:
 	if it.is_empty():
 		return
 	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
-	if absf(float(specs.get("current_output_kw", 0.0)) - kw) < 0.0005:
-		return
-	specs["current_output_kw"] = kw
-	model.update_item(item_id, {"specs": specs})
+	if absf(float(specs.get("current_output_kw", 0.0)) - kw) >= 0.0005:
+		specs["current_output_kw"] = kw
+		model.update_item(item_id, {"specs": specs})
+	# Also keep the battery/aux balance current while the graph panel is
+	# closed. _process (which normally drives _sync_graph_dc_generation_to_
+	# solar on a timer) early-returns when `not visible`, so without this a
+	# turbine wired to a battery would animate live in 3D (this function's
+	# caller polls regardless of visibility) while SolarUI's "AUX" reading
+	# silently froze at whatever it was the instant the panel was closed.
+	_sync_graph_dc_generation_to_solar()
 
 
 ## Called when the in-progress library drag ends (LMB released).
@@ -2803,19 +2821,8 @@ func add_imported_pond(payload: Dictionary) -> bool:
 	var tag := str(payload.get("osm_water_tag", payload.get("osm_tag", "")))
 	if tag.is_empty():
 		return false
-	# Remove prior catchment + tank sharing this tag.
-	var remove_ids: Array[String] = []
-	for it in model.items:
-		if not (it is Dictionary):
-			continue
-		var specs0: Dictionary = (it as Dictionary).get("specs", {})
-		var ty := str((it as Dictionary).get("type", ""))
-		if str(specs0.get("osm_water_tag", "")) == tag \
-				or (ty == "catchment" and str(specs0.get("osm_tag", "")) == tag):
-			remove_ids.append(str((it as Dictionary).get("id", "")))
-	for rid in remove_ids:
-		if not rid.is_empty():
-			model.remove_item(rid)
+	# Remove prior catchment + tank sharing this tag (idempotent re-import).
+	_remove_pond_items_by_tag(tag)
 	var centroid: Vector2 = payload.get("centroid", Vector2.ZERO) as Vector2
 	var soi := get_node_or_null("/root/SoiService")
 	var site := Vector2.ZERO
@@ -2909,6 +2916,53 @@ func add_imported_pond(payload: Dictionary) -> bool:
 	_flush_graph_autosave()
 	print("SystemGraphView: imported pond tag '%s' (%.0f m², %.0f L)" % [tag, area, capacity_l])
 	return true
+
+
+## Remove the catchment + storage tank (and their connection) for a pond tag.
+## Returns the number of items removed.
+func _remove_pond_items_by_tag(tag: String) -> int:
+	if model == null or tag.is_empty():
+		return 0
+	var remove_ids: Array[String] = []
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var specs0: Dictionary = (it as Dictionary).get("specs", {})
+		var ty := str((it as Dictionary).get("type", ""))
+		if str(specs0.get("osm_water_tag", "")) == tag \
+				or (ty == "catchment" and str(specs0.get("osm_tag", "")) == tag):
+			remove_ids.append(str((it as Dictionary).get("id", "")))
+	for rid in remove_ids:
+		if not rid.is_empty():
+			model.remove_item(rid)
+	return remove_ids.size()
+
+
+## True if a pond (catchment or storage tank) with this tag is on the graph.
+func has_pond_with_tag(tag: String) -> bool:
+	if model == null or tag.is_empty():
+		return false
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var specs0: Dictionary = (it as Dictionary).get("specs", {})
+		if str(specs0.get("osm_water_tag", "")) == tag:
+			return true
+		if str((it as Dictionary).get("type", "")) == "catchment" \
+				and str(specs0.get("osm_tag", "")) == tag:
+			return true
+	return false
+
+
+## Public pond removal (used when a player deletes / clears a sculpted pond).
+func remove_imported_pond(tag: String) -> bool:
+	var n := _remove_pond_items_by_tag(tag)
+	if n > 0:
+		_schedule_graph_autosave()
+		_autosave_pending = true
+		_flush_graph_autosave()
+		print("SystemGraphView: removed pond tag '%s' (%d items)" % [tag, n])
+	return n > 0
 
 
 ## Import an OSM field / orchard / vineyard as a plant bed. Idempotent per tag.
@@ -5100,6 +5154,7 @@ func _process(delta: float) -> void:
 		_bridge.call("tick", delta)
 	_tick_graph_renewables(delta)
 	_tick_graph_csp(delta)
+	_tick_graph_heliostat(delta)
 	_tick_connector_burnout(delta)
 	_tick_graph_pbis(delta)
 	_tick_graph_solar_shading(delta)
@@ -6923,6 +6978,95 @@ func _tick_graph_csp(delta: float) -> void:
 		model.update_item(iid, {"specs": specs})
 
 
+const _HeliostatSource := preload("res://power_system/sources/heliostat_source.gd")
+const _HELIO_POLL_INTERVAL := 0.25
+var _helio_acc: float = _HELIO_POLL_INTERVAL
+
+
+## Recompute live focal temperature + concentration + thermal/steam output for
+## "processor" items with specs.role == "heliostat" (Dual-Axis Heliostat).
+## Physics in power_system/sources/heliostat_source.gd (perfect two-axis sun
+## tracking, real sun position + weather-attenuated DNI, cavity-receiver energy
+## balance). Drives specs.inputs[0].rate (water L/h) / specs.outputs[0].rate
+## (steam kg/h) like the trough, so ResourceFlowEngine moves the right mass.
+func _tick_graph_heliostat(delta: float) -> void:
+	if model == null:
+		return
+	_helio_acc += delta
+	if _helio_acc < _HELIO_POLL_INTERVAL:
+		return
+	_helio_acc = 0.0
+
+	var m := _get_scene_main_node()
+	if m == null:
+		return
+	var clock_obj: Variant = m.get("clock")
+	if clock_obj == null or not (clock_obj as Object).has_method("get_julian_day_utc"):
+		return
+	var lat_v: Variant = m.get("latitude")
+	var lon_v: Variant = m.get("longitude")
+	var lat: float = float(lat_v) if lat_v != null else 33.36
+	var lon: float = float(lon_v) if lon_v != null else -115.74
+	var jd_utc: float = float((clock_obj as Object).call("get_julian_day_utc"))
+	var sp := SolarPosition.get_position(lat, lon, jd_utc)
+	var sun_el: float = float(sp.get("elevation_deg", 0.0))
+	var sun_az: float = float(sp.get("azimuth_deg", 180.0))
+
+	var hour := 12.0
+	var month := 6
+	var day := 15
+	var dt_v: Variant = m.get("day_time")
+	if dt_v != null:
+		hour = float(dt_v)
+	var mo_v: Variant = m.get("month")
+	if mo_v != null:
+		month = clampi(int(mo_v), 1, 12)
+	var dd_v: Variant = m.get("day")
+	if dd_v != null:
+		day = clampi(int(dd_v), 1, 31)
+	var ws := get_node_or_null("/root/WeatherService")
+	var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, ws)
+
+	for item: Dictionary in model.items:
+		if str(item.get("type", "")) != "processor":
+			continue
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		if str(specs.get("role", "")) != "heliostat":
+			continue
+		var iid: String = item.get("id", "") as String
+		var result := _HeliostatSource.simulate(specs, sun_az, sun_el, weather)
+
+		var dirty := absf(float(specs.get("thermal_output_kw", 0.0)) - float(result.get("thermal_output_kw", 0.0))) > 0.001 \
+			or absf(float(specs.get("focal_temp_c", 0.0)) - float(result.get("focal_temp_c", 0.0))) > 0.5
+		if not dirty:
+			continue
+
+		specs["cos_incidence"] = result.get("cos_incidence", 0.0)
+		specs["dni_wm2"] = result.get("dni_wm2", 0.0)
+		specs["incident_kw"] = result.get("incident_kw", 0.0)
+		specs["absorbed_kw"] = result.get("absorbed_kw", 0.0)
+		specs["concentration_ratio"] = result.get("concentration_ratio", 0.0)
+		specs["focal_flux_kw_m2"] = result.get("focal_flux_kw_m2", 0.0)
+		specs["focal_temp_c"] = result.get("focal_temp_c", 0.0)
+		specs["thermal_output_kw"] = result.get("thermal_output_kw", 0.0)
+		specs["steam_kg_h"] = result.get("steam_kg_h", 0.0)
+
+		var inputs: Array = (specs.get("inputs", []) as Array).duplicate(true)
+		if not inputs.is_empty():
+			var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+			inp0["rate"] = result.get("water_lph", 0.0)
+			inputs[0] = inp0
+			specs["inputs"] = inputs
+		var outputs: Array = (specs.get("outputs", []) as Array).duplicate(true)
+		if not outputs.is_empty():
+			var out0: Dictionary = (outputs[0] as Dictionary).duplicate(true)
+			out0["rate"] = result.get("steam_kg_h", 0.0)
+			outputs[0] = out0
+			specs["outputs"] = outputs
+
+		model.update_item(iid, {"specs": specs})
+
+
 ## Phase 5: throttled per-node 3D shade → specs.sunlight_factor.
 ## Site-placed panels/plants get a ray toward the sun; nodes without site
 ## coords keep ambient 1.0. Round-robins so large graphs stay cheap.
@@ -7557,8 +7701,8 @@ func _ensure_pbi_nodes() -> void:
 			"type": "pbi",
 			"x": start_x + i * spacing,
 			"y": -400.0,
-			"w": 128.0,
-			"h": 128.0,
+			"width": 128.0,
+			"height": 128.0,
 			"locked": true,
 			"specs": {
 				"name": p["name"],

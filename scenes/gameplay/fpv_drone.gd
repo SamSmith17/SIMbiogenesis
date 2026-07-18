@@ -7,6 +7,8 @@ class_name FPVDrone
 ## Right trigger / Space = ascend, Left trigger / Shift = descend
 ## Right stick / mouse = look direction (steering)
 ## Drone hovers at current altitude when neither moving nor using altitude inputs
+## While a terrain/veg edit dock is open, altitude moves to the Arrow keys /
+## gamepad triggers so Space stays free for the dock's look/time toggle.
 
 signal mounted(player: CharacterBody3D)
 signal dismounted(player: CharacterBody3D)
@@ -229,10 +231,15 @@ func _process(delta: float) -> void:
 	var spin_speed := 20.0
 	if is_mounted:
 		if _is_terrain_edit_ortho():
-			# Terrain sculpt: locked 45° / 90° ortho view, no movement.
+			# Terrain sculpt top-down: fly to reposition (match veg), keep locked pitch.
+			var speed_ratio := current_velocity.length() / maxf(max_forward_speed, 1.0)
+			spin_speed = lerpf(30.0, 80.0, clampf(speed_ratio, 0.0, 1.0))
+			_handle_flight_input(delta, true)
 			current_pitch = deg_to_rad(_terrain_edit_pitch_deg())
-			current_yaw = _terrain_edit_yaw()
-			current_velocity = Vector3.ZERO
+			visual_tilt = Vector3.ZERO
+			if _mesh_instance:
+				_mesh_instance.rotation = Vector3.ZERO
+			rotation.y = current_yaw
 			_update_drone_camera()
 		elif _is_vegetation_edit_ortho():
 			# Veg paint: fly to reposition, keep ortho top-down camera.
@@ -282,12 +289,21 @@ func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 	var input_forward := -move_input.y
 	var input_strafe := move_input.x
 	
-	# Altitude keys / triggers (Space = up, Shift = down).
+	# Altitude keys / triggers (Space/Up = up, Shift/Down = down).
+	# While terrain/veg edit is open the sim clock is often paused — still allow
+	# altitude so the player can reposition for better sculpt views, BUT do not
+	# grab Space/Shift there: Space must stay free to toggle look/time and Shift
+	# for the UI, so edit-mode altitude comes from the arrow keys / gamepad
+	# triggers only (Space+Shift would otherwise both raise the drone AND toggle
+	# pause on the same press, which reads as "Space just raises the drone").
 	var input_altitude := 0.0
 	var main := get_tree().get_first_node_in_group("main_scene") if get_tree() != null else null
 	var analemma_active := main != null and bool(main.get("analemma_mode"))
 	var sim_paused := main != null and not analemma_active and float(main.get("time_scale") if main.get("time_scale") != null else 1.0) == 0.0
-	if not sim_paused:
+	var edit_allows_altitude := _is_ortho_edit_mode() or _is_terrain_sculpt_session()
+	if edit_allows_altitude:
+		input_altitude = _edit_mode_altitude_input()
+	elif not sim_paused:
 		input_altitude = Input.get_action_strength("drone_ascend") - Input.get_action_strength("drone_descend")
 	
 	# Horizontal movement follows look yaw only (not pitch) — standard FPV behaviour.
@@ -319,6 +335,21 @@ func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 	
 	if not yaw_only_look:
 		_update_visual_tilt(delta)
+
+## Altitude input while a terrain/veg edit dock is open: arrow keys (Up/Down) and
+## gamepad triggers only — deliberately NOT Space/Shift, which the dock reserves
+## for look/time toggle and UI. Returns +1 ascend … -1 descend.
+func _edit_mode_altitude_input() -> float:
+	var v := 0.0
+	if Input.is_physical_key_pressed(KEY_UP):
+		v += 1.0
+	if Input.is_physical_key_pressed(KEY_DOWN):
+		v -= 1.0
+	for dev in Input.get_connected_joypads():
+		v += maxf(Input.get_joy_axis(dev, JOY_AXIS_TRIGGER_RIGHT), 0.0)
+		v -= maxf(Input.get_joy_axis(dev, JOY_AXIS_TRIGGER_LEFT), 0.0)
+	return clampf(v, -1.0, 1.0)
+
 
 func _get_ground_height() -> float:
 	var main := _find_main()
@@ -421,6 +452,11 @@ func _is_ortho_edit_mode() -> bool:
 
 func _is_terrain_edit_mode() -> bool:
 	return _is_terrain_edit_ortho()
+
+
+## True while the terrain sculpt dock is open (even without top-down ortho).
+func _is_terrain_sculpt_session() -> bool:
+	return has_meta("terrain_sculpt_session") and bool(get_meta("terrain_sculpt_session"))
 
 
 func _terrain_edit_yaw() -> float:

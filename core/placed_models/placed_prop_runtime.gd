@@ -102,7 +102,9 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	_apply_transform(prop, model, rec, ground_y_at)
 	prop.setup_collision()
 	_maybe_attach_wind_spin(prop, rec)
+	_maybe_attach_hawt_tracker(prop, rec)
 	_maybe_attach_csp_tracker(prop, rec)
+	_maybe_attach_heliostat_tracker(prop, rec)
 	prop.set_burnable(bool(rec.get("burnable", false)))
 	var prop_id := str(rec.get("id", ""))
 	if PlacedPropService.is_placement_active() and prop_id == PlacedPropService.placement_prop_id():
@@ -126,6 +128,23 @@ static func _maybe_attach_wind_spin(prop: PlacedProp, rec: Dictionary) -> void:
 	prop.add_child(spin)
 
 
+## Attach the dual-axis (yaw + blade spin) controller for a placed small HAWT
+## (record kind == "hawt"). See hawt_tracker.gd for the yaw-to-wind-direction
+## + blade-RPM-from-wind-speed physics.
+static func _maybe_attach_hawt_tracker(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("kind", "")) != "hawt":
+		return
+	var specs: Dictionary = rec.get("wind_specs", {}) as Dictionary
+	if specs.is_empty():
+		return
+	var tracker := HawtTracker.new()
+	tracker.name = "HawtTracker"
+	tracker.configure(specs, str(rec.get("hawt_yaw_node", "turbine vane assembly")),
+		str(rec.get("hawt_blade_node", "Nosecone and Blades")),
+		str(rec.get("graph_item_id", "")))
+	prop.add_child(tracker)
+
+
 ## Attach the sun-tracking controller for a placed parabolic-trough CSP
 ## (record kind == "csp_trough"). Purely visual — the 2D graph node's live
 ## thermal/steam telemetry is computed centrally by
@@ -139,6 +158,25 @@ static func _maybe_attach_csp_tracker(prop: PlacedProp, rec: Dictionary) -> void
 	tracker.name = "CspTroughTracker"
 	tracker.configure(specs, str(rec.get("csp_base_node", "Component#452")),
 		str(rec.get("csp_concentrator_node", "Component#453")))
+	prop.add_child(tracker)
+
+
+## Attach the dual-axis sun-tracking controller for a placed dish heliostat
+## (record kind == "heliostat"). Purely visual — the 2D graph node's live focal
+## temperature / thermal / steam telemetry is computed centrally by
+## SystemGraphView._tick_graph_heliostat. See gameplay/heliostat_tracker.gd.
+static func _maybe_attach_heliostat_tracker(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("kind", "")) != "heliostat":
+		return
+	var specs: Dictionary = rec.get("helio_specs", {}) as Dictionary
+	var tracker := HeliostatTracker.new()
+	tracker.name = "HeliostatTracker"
+	tracker.configure(specs,
+		str(rec.get("helio_base_node", "fixed base")),
+		str(rec.get("helio_azimuth_node", "horizontal rotating assembly")),
+		str(rec.get("helio_altitude_node", "Vertical Rotating Assembly")),
+		str(rec.get("helio_mirror_node", "Mirror array")),
+		str(rec.get("helio_focal_node", "solar collector area")))
 	prop.add_child(tracker)
 
 

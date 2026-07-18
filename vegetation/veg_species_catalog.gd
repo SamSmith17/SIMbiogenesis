@@ -159,45 +159,79 @@ static func label_for(id: String) -> String:
 
 
 ## Overlay variant SPECS dims into family settings keys so builders pick them up.
+## Only fills keys that are ABSENT so Tune Look / brush sliders (H/W, trunk…)
+## and saved species defaults are never clobbered by catalog SPECS.
 static func settings_with_variant(species: String, settings: Dictionary,
 		specs: Dictionary) -> Dictionary:
 	var family := mesh_family(species)
 	var out := settings.duplicate(true)
 	var spec: Dictionary = specs.get(species, specs.get(family, {}))
 	if spec.is_empty():
+		out["_variant_species"] = species
 		return out
 	match family:
 		"pine":
-			if spec.has("width"):
-				out["pine_card_w"] = float(spec["width"])
-			if spec.has("height"):
-				out["pine_card_h"] = float(spec["height"])
-			if spec.has("trunk_w"):
-				out["pine_trunk_w"] = float(spec["trunk_w"])
+			_fill_missing(out, "pine_card_w", spec, "width")
+			_fill_missing(out, "pine_card_h", spec, "height")
+			_fill_missing(out, "pine_trunk_w", spec, "trunk_w")
 		"deciduous":
-			if spec.has("width"):
-				out["deciduous_canopy_w"] = float(spec["width"])
-			if spec.has("height"):
-				out["deciduous_canopy_h"] = float(spec["height"])
-			if spec.has("trunk_w"):
-				out["deciduous_trunk_w"] = float(spec["trunk_w"])
-			if spec.has("trunk_h"):
-				out["deciduous_trunk_h"] = float(spec["trunk_h"])
+			_fill_missing(out, "deciduous_canopy_w", spec, "width")
+			_fill_missing(out, "deciduous_canopy_h", spec, "height")
+			_fill_missing(out, "deciduous_trunk_w", spec, "trunk_w")
+			_fill_missing(out, "deciduous_trunk_h", spec, "trunk_h")
 		"shrub":
-			if spec.has("width"):
-				out["shrub_card_w"] = float(spec["width"])
-			if spec.has("height"):
-				out["shrub_card_h"] = float(spec["height"])
+			_fill_missing(out, "shrub_card_w", spec, "width")
+			_fill_missing(out, "shrub_card_h", spec, "height")
 		"grass_field", "grass_lawn":
-			var prefix := family
-			if spec.has("width"):
-				out["%s_card_w" % prefix] = float(spec["width"])
-			if spec.has("height"):
-				out["%s_card_h" % prefix] = float(spec["height"])
-	# Tint overrides from SPECS colors when player hasn't set custom tints.
-	if spec.has("top") and not out.has("%s_albedo_tint" % family):
+			_fill_missing(out, "%s_card_w" % family, spec, "width")
+			_fill_missing(out, "%s_card_h" % family, spec, "height")
+	# Prefer per-species tint keys, then family; SPECS colors only when neither set.
+	var albedo_key := "%s_albedo_tint" % species
+	var family_albedo := "%s_albedo_tint" % family
+	if spec.has("top") and not out.has(albedo_key) and not out.has(family_albedo):
 		out["%s_spec_top" % family] = spec["top"]
-	if spec.has("highlight") and not out.has("%s_highlight_tint" % family):
+	var hi_key := "%s_highlight_tint" % species
+	var family_hi := "%s_highlight_tint" % family
+	if spec.has("highlight") and not out.has(hi_key) and not out.has(family_hi):
 		out["%s_spec_highlight" % family] = spec["highlight"]
+	# Copy subspecies-specific tints onto family keys for shader uniforms when set.
+	if out.has(albedo_key):
+		out[family_albedo] = out[albedo_key]
+	if out.has(hi_key):
+		out[family_hi] = out[hi_key]
 	out["_variant_species"] = species
 	return out
+
+
+static func _fill_missing(out: Dictionary, out_key: String, spec: Dictionary, spec_key: String) -> void:
+	if out.has(out_key) or not spec.has(spec_key):
+		return
+	out[out_key] = float(spec[spec_key])
+
+
+## Subspecies ids under a paint-dock family button (Pine / Decid / Shrub / grass).
+static func subspecies_for_family(family: String) -> Array[String]:
+	match family:
+		"pine":
+			return CONIFER_IDS.duplicate()
+		"deciduous":
+			var d: Array[String] = DECIDUOUS_IDS.duplicate()
+			d.append("deciduous")
+			return d
+		"shrub":
+			var s: Array[String] = ["shrub"]
+			s.append_array(DESERT_IDS)
+			return s
+		"grass_lawn":
+			return ["grass_lawn"] as Array[String]
+		"grass_field":
+			var g: Array[String] = ["grass_field"]
+			g.append_array(CROP_IDS)
+			return g
+		_:
+			return [family] as Array[String]
+
+
+## True when species can be painted / stored in the manual vegetation layer.
+static func is_paintable(species: String) -> bool:
+	return MESH_FAMILY.has(species) or species in BASE_FAMILIES

@@ -447,14 +447,12 @@ func _update_water_focus(hit_pos: Vector3) -> bool:
 	if _crosshair != null and _crosshair.has_method("set_target_active"):
 		_crosshair.set_target_active(true)
 	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
-		if bool(pick.get("added", false)):
-			_crosshair.set_prompt_text("Pond added to graph (%.0f m²)" % float(pick.get("area_m2", 0.0)))
-		else:
-			var act := "Interact"
-			if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
-				act = _prompt_ui.get_action_label("interact")
-			_crosshair.set_prompt_text("[%s / Click] Add pond to graph — %.0f m²" % [
-				act, float(pick.get("area_m2", 0.0))])
+		var act := "Interact"
+		if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
+			act = _prompt_ui.get_action_label("interact")
+		var suffix := " ✓ on graph" if bool(pick.get("added", false)) else ""
+		_crosshair.set_prompt_text("[%s / Click] Pond settings — %.0f m²%s" % [
+			act, float(pick.get("area_m2", 0.0)), suffix])
 	return true
 
 
@@ -533,14 +531,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		if bool(_loader.call("add_solar_array_to_graph", _solar_focus_idx)):
 			get_viewport().set_input_as_handled()
 		return
-	# Aimed at a still-water body → catchment + storage tank on the system graph.
+	# Aimed at a still-water body → open the pond settings modal (override volume /
+	# fill level, add-to-graph / remove / delete). Ponds are no longer auto-added.
 	if _water_focus_idx >= 0 and _loader != null \
-			and _loader.has_method("add_pond_to_graph"):
-		if _loader.has_method("is_pond_added") \
-				and bool(_loader.call("is_pond_added", _water_focus_idx)):
-			return
-		if bool(_loader.call("add_pond_to_graph", _water_focus_idx)):
-			get_viewport().set_input_as_handled()
+			and _loader.has_method("open_pond_editor"):
+		_loader.call("open_pond_editor", _water_focus_idx)
+		get_viewport().set_input_as_handled()
 		return
 	# Focused OSM building → open the Building Builder modal.
 	if _loader != null and _loader.has_method("get_building_focus_idx") \

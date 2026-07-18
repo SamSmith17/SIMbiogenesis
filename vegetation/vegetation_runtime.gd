@@ -4,8 +4,11 @@ extends RefCounted
 ## Rebuilds MultiMesh bulk layers + hero tree instances under a terrain parent.
 
 const VISIBILITY_BEGIN := 0.0
-const VISIBILITY_END := 900.0
-const GRASS_VISIBILITY_END := 380.0
+## Per-chunk draw distance. Chunks are ~CHUNK_SIZE_M so AABB centers stay near
+## local trees — Godot visibility_range is distance to AABB *center*, not per tree.
+const VISIBILITY_END := 1200.0
+const GRASS_VISIBILITY_END := 600.0
+const CHUNK_SIZE_M := 256.0
 
 
 static func ensure_root(terrain: Node3D) -> Node3D:
@@ -41,12 +44,11 @@ static func _register_growth(map: VegetationInstanceMap, mmi: MultiMeshInstance3
 
 static func _build_grass_bulk_batches(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, settings: Dictionary,
-		growth_map: VegetationInstanceMap = null) -> void:
+		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0) -> void:
 	var species_scale := GrassBuilder.bulk_scale(species, settings)
 	var foot_y := GrassBuilder.foot_local_y()
 	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
-	var grass_far := float(settings.get("grass_visibility_end_m",
-		GrassBuilder.DEFAULT_FAR_VISIBILITY_M))
+	var grass_far := float(settings.get("grass_visibility_end_m", GRASS_VISIBILITY_END))
 	for tier in [GrassBuilder.LodTier.NEAR, GrassBuilder.LodTier.MID, GrassBuilder.LodTier.FAR]:
 		var mesh := GrassBuilder.mesh_for_lod(species, settings, tier)
 		var mat := GrassBuilder.material_for_species(species, settings, tier)
@@ -84,7 +86,7 @@ static func _build_grass_bulk_batches(root: Node3D, species: String, records: Ar
 		if i == 0:
 			continue
 		var mi := MultiMeshInstance3D.new()
-		mi.name = "Bulk_%s_%s" % [species, tier]
+		mi.name = "Bulk_%s_%s_%d_%d" % [species, tier, chunk_x, chunk_z]
 		mi.multimesh = mm
 		mi.material_override = mat
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -106,10 +108,12 @@ static func _build_grass_bulk_batches(root: Node3D, species: String, records: Ar
 
 static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
-		visibility_end_m: float, growth_map: VegetationInstanceMap = null) -> void:
+		visibility_end_m: float, growth_map: VegetationInstanceMap = null,
+		chunk_x: int = 0, chunk_z: int = 0) -> void:
 	if not VegetationCardFactory.canopy_lod_enabled(species, settings):
 		_build_canopy_single_batch(root, species, records, ground_y_at, align_to_surface,
-			settings, visibility_end_m, VegetationCardFactory.CanopyLodTier.NEAR, growth_map)
+			settings, visibility_end_m, VegetationCardFactory.CanopyLodTier.NEAR, growth_map,
+			chunk_x, chunk_z)
 		return
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
 	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
@@ -148,7 +152,7 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 		if i == 0:
 			continue
 		var mi := MultiMeshInstance3D.new()
-		mi.name = "Bulk_%s_%d" % [species, tier]
+		mi.name = "Bulk_%s_%d_%d_%d" % [species, tier, chunk_x, chunk_z]
 		mi.multimesh = mm
 		mi.material_override = null
 		# Both tiers cast shadows so tree outlines read clearly for solar analysis.
@@ -172,7 +176,7 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 static func _build_canopy_single_batch(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
 		visibility_end_m: float, tier: VegetationCardFactory.CanopyLodTier,
-		growth_map: VegetationInstanceMap = null) -> void:
+		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0) -> void:
 	var mesh := VegetationCardFactory.mesh_for_canopy_lod(species, settings, tier)
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
 	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
@@ -206,7 +210,7 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 	if i == 0:
 		return
 	var mi := MultiMeshInstance3D.new()
-	mi.name = "Bulk_%s" % species
+	mi.name = "Bulk_%s_%d_%d" % [species, chunk_x, chunk_z]
 	mi.multimesh = mm
 	mi.material_override = null
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
@@ -246,7 +250,7 @@ static func rebuild(terrain: Node3D, layer: VegetationLayer,
 		s = settings.duplicate(true)
 	var root := ensure_root(terrain)
 	_clear_children(root)
-	for species in VegetationLayer.ALL_SPECIES:
+	for species in layer.species_keys():
 		_build_bulk_layer(root, species, layer.bulk.get(species, []), ground_y_at,
 			align_to_surface, s, growth_map)
 	_build_hero_layer(root, layer.hero, ground_y_at, s)
@@ -284,30 +288,50 @@ static func reregister_existing(terrain: Node3D) -> void:
 
 
 static func _species_for_node(mi: MultiMeshInstance3D) -> String:
-	var n := mi.name
+	return species_from_bulk_name(mi.name)
+
+
+## Recover species/slot from MultiMesh names like Bulk_<id>[_tier][_cx_cz].
+static func species_from_bulk_name(n: String) -> String:
 	if not n.begins_with("Bulk_"):
 		return ""
 	var rest := n.substr(5)
-	for gs in VegetationLayer.GRASS_SPECIES:
-		if rest.begins_with(gs + "_"):
-			return gs
-	if rest.ends_with("_0") or rest.ends_with("_1"):
-		var base := rest.substr(0, rest.length() - 2)
-		if base in VegetationLayer.ALL_SPECIES:
-			return base
-	return rest
+	var known: Array[String] = []
+	for sid in VegSpeciesCatalog.all_selectable_ids():
+		known.append(sid)
+	for sid in VegSpeciesCatalog.BASE_FAMILIES:
+		if sid not in known:
+			known.append(sid)
+	for sid in VegetationLayer.ALL_SPECIES:
+		if sid not in known:
+			known.append(sid)
+	known.sort_custom(func(a: String, b: String) -> bool: return a.length() > b.length())
+	for sid in known:
+		if rest == sid or rest.begins_with(sid + "_"):
+			return sid
+	# Fallback: strip trailing numeric chunk/tier tokens.
+	var parts := rest.split("_")
+	while parts.size() > 1 and str(parts[parts.size() - 1]).is_valid_int():
+		parts.remove_at(parts.size() - 1)
+	return "_".join(parts)
 
 
 static func _visibility_end_for_species(species: String) -> float:
-	if species in VegetationLayer.GRASS_SPECIES:
+	var fam := VegSpeciesCatalog.mesh_family(species)
+	if fam in VegetationLayer.GRASS_SPECIES or fam.begins_with("grass_"):
 		return GRASS_VISIBILITY_END
 	return VISIBILITY_END
 
 
 static func _casts_shadow(species: String) -> int:
-	if species in VegetationLayer.GRASS_SPECIES:
+	var fam := VegSpeciesCatalog.mesh_family(species)
+	if fam in VegetationLayer.GRASS_SPECIES or fam.begins_with("grass_"):
 		return GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+
+
+static func _chunk_key(x: float, z: float) -> Vector2i:
+	return Vector2i(int(floor(x / CHUNK_SIZE_M)), int(floor(z / CHUNK_SIZE_M)))
 
 
 static func _build_bulk_layer(root: Node3D, species: String, records: Array,
@@ -317,8 +341,27 @@ static func _build_bulk_layer(root: Node3D, species: String, records: Array,
 		return
 	var batches := _partition_bulk_batches(records, settings)
 	for batch in batches:
-		_build_bulk_batch(root, species, batch["records"], ground_y_at, align_to_surface,
-			batch["settings"], growth_map)
+		var chunks := _partition_spatial_chunks(batch["records"] as Array)
+		for chunk in chunks:
+			_build_bulk_batch(root, species, chunk["records"], ground_y_at, align_to_surface,
+				batch["settings"], growth_map, chunk["cx"], chunk["cz"])
+
+
+## Split records into ~CHUNK_SIZE_M cells so MultiMesh AABB centers stay local.
+static func _partition_spatial_chunks(records: Array) -> Array:
+	var groups: Dictionary = {}
+	for item in records:
+		if not (item is Dictionary):
+			continue
+		var d: Dictionary = item
+		var ck := _chunk_key(float(d.get("x", 0.0)), float(d.get("z", 0.0)))
+		if ck not in groups:
+			groups[ck] = []
+		(groups[ck] as Array).append(d)
+	var out: Array = []
+	for ck in groups:
+		out.append({"cx": ck.x, "cz": ck.y, "records": groups[ck]})
+	return out
 
 
 static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -> Array:
@@ -345,24 +388,28 @@ static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -
 
 static func _build_bulk_batch(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
-		growth_map: VegetationInstanceMap = null) -> void:
+		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0) -> void:
 	if records.is_empty():
 		return
-	if species in VegetationLayer.GRASS_SPECIES:
-		_build_grass_bulk_batches(root, species, records, ground_y_at, settings, growth_map)
+	var family := VegSpeciesCatalog.mesh_family(species)
+	var batch_settings := VegSpeciesCatalog.settings_with_variant(
+		species, settings, VegetationCardFactory.SPECS)
+	if family in VegetationLayer.GRASS_SPECIES or family.begins_with("grass_"):
+		_build_grass_bulk_batches(root, family, records, ground_y_at, batch_settings, growth_map,
+			chunk_x, chunk_z)
 		return
-	if species == "deciduous" or species == "pine":
+	if family == "deciduous" or family == "pine":
 		_build_canopy_lod_bulk_batches(root, species, records, ground_y_at, align_to_surface,
-			settings, _visibility_end_for_species(species), growth_map)
+			batch_settings, _visibility_end_for_species(species), growth_map, chunk_x, chunk_z)
 		return
-	var mesh := VegetationCardFactory.mesh_for_species(species, settings)
+	var mesh := VegetationCardFactory.mesh_for_species(species, batch_settings)
 	var use_surface := VegetationCardFactory.mesh_has_surface_materials(species)
 	var mat: ShaderMaterial = null
 	if not use_surface:
-		mat = VegetationCardFactory.material_for_species(species, settings)
-	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
-	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
-	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
+		mat = VegetationCardFactory.material_for_species(species, batch_settings)
+	var species_scale := VegetationCardFactory.species_bulk_scale(species, batch_settings)
+	var foot_y := VegetationCardFactory.foot_local_y(species, batch_settings)
+	var vert_off := VegetationLayer.vertical_offset_for(species, batch_settings)
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = mesh
@@ -392,7 +439,7 @@ static func _build_bulk_batch(root: Node3D, species: String, records: Array,
 	if i == 0:
 		return
 	var mi := MultiMeshInstance3D.new()
-	mi.name = "Bulk_%s" % species
+	mi.name = "Bulk_%s_%d_%d" % [species, chunk_x, chunk_z]
 	mi.multimesh = mm
 	if use_surface:
 		mi.material_override = null

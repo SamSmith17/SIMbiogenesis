@@ -152,6 +152,315 @@ static func world_to_cell(analysis: Analysis, x: float, z: float) -> Vector2i:
 	return TerrainSculpt.world_to_cell(x, z, analysis.res, analysis.extent_m)
 
 
+## Gravity-fill closed depressions inside a selection polygon.
+##
+## Samples `height_at(x, z) -> float` (world Y) on a local grid, runs a
+## priority-flood that can spill across the selection boundary, then returns
+## one water body per flooded pit: `{points: PackedVector2Array, level_m: float,
+## area_m2: float, depth_m: float}`.
+##
+## `fill_frac` 0..1 = how full each depression is (0 ≈ puddle at the bottom,
+## 1 = filled to the spill elevation — the natural pour point).
+static func fill_depressions_in_polygon(poly: PackedVector2Array, height_at: Callable,
+		fill_frac: float = 0.85, cell_m: float = 2.0,
+		min_depth_m: float = 0.10, min_area_m2: float = 40.0) -> Array:
+	var out: Array = []
+	if poly.size() < 3 or height_at == null:
+		return out
+	var aabb := _poly_aabb(poly)
+	if aabb.size.x < cell_m or aabb.size.y < cell_m:
+		return out
+	# Pad one cell so boundary seeds have neighbours.
+	var pad := cell_m
+	var origin := Vector2(aabb.position.x - pad, aabb.position.y - pad)
+	var span := aabb.size + Vector2(pad * 2.0, pad * 2.0)
+	var cols := clampi(int(ceil(span.x / cell_m)) + 1, 4, 180)
+	var rows := clampi(int(ceil(span.y / cell_m)) + 1, 4, 180)
+	var n := cols * rows
+	var dem := PackedFloat32Array()
+	var inside := PackedByteArray()
+	dem.resize(n)
+	inside.resize(n)
+	for r in rows:
+		for c in cols:
+			var idx := r * cols + c
+			var x := origin.x + (float(c) + 0.5) * cell_m
+			var z := origin.y + (float(r) + 0.5) * cell_m
+			var inn: bool = Geometry2D.is_point_in_polygon(Vector2(x, z), poly)
+			inside[idx] = 1 if inn else 0
+			dem[idx] = float(height_at.call(x, z)) if inn else 0.0
+	var filled: PackedFloat32Array = dem.duplicate()
+	var resolved := PackedByteArray()
+	resolved.resize(n)
+	# Priority-flood (lowest outlet first). Selection-boundary cells can spill
+	# out of the polygon, so they seed the open list at their DEM height.
+	var open: Array = []
+	for r in rows:
+		for c in cols:
+			var idx := r * cols + c
+			if inside[idx] == 0:
+				continue
+			if _touches_outside(inside, cols, rows, c, r):
+				resolved[idx] = 1
+				filled[idx] = dem[idx]
+				open.append({"h": dem[idx], "i": idx})
+	if open.is_empty():
+		return out
+	while not open.is_empty():
+		# Pop lowest (linear scan — fine for local selection grids).
+		var best_i := 0
+		var best_h := float((open[0] as Dictionary)["h"])
+		for oi in range(1, open.size()):
+			var oh := float((open[oi] as Dictionary)["h"])
+			if oh < best_h:
+				best_h = oh
+				best_i = oi
+		var cur: Dictionary = open[best_i]
+		open.remove_at(best_i)
+		var i: int = int(cur["i"])
+		var h: float = float(cur["h"])
+		if h > filled[i] + 1e-4:
+			continue  # stale
+		var cr := i / cols
+		var cc := i % cols
+		for k in 8:
+			var rr: int = cr + _D8_DR[k]
+			var cc2: int = cc + _D8_DC[k]
+			if rr < 0 or rr >= rows or cc2 < 0 or cc2 >= cols:
+				continue
+			var j := rr * cols + cc2
+			if inside[j] == 0:
+				continue
+			var fh := maxf(dem[j], h)
+			if resolved[j] == 0 or fh < filled[j] - 1e-4:
+				resolved[j] = 1
+				filled[j] = fh
+				open.append({"h": fh, "i": j})
+	# Flooded cells = needed water to drain to the selection edge.
+	var flooded := PackedByteArray()
+	flooded.resize(n)
+	for i in n:
+		flooded[i] = 1 if (inside[i] != 0 and (filled[i] - dem[i]) >= min_depth_m) else 0
+	var components: Array = _connected_components(flooded, cols, rows)
+	var frac := clampf(fill_frac, 0.05, 0.98)
+	for comp_v in components:
+		if not (comp_v is Array):
+			continue
+		var cells: Array = comp_v as Array
+		if cells.is_empty():
+			continue
+		var pit := INF
+		var spill := -INF
+		for idx_v in cells:
+			var idx: int = int(idx_v)
+			pit = minf(pit, dem[idx])
+			spill = maxf(spill, filled[idx])
+		if not is_finite(pit) or not is_finite(spill) or spill - pit < min_depth_m:
+			continue
+		var level := lerpf(pit, spill, frac)
+		# Water footprint = cells in this depression below the waterline.
+		var mask := PackedByteArray()
+		mask.resize(n)
+		var wet := 0
+		for idx_v2 in cells:
+			var idx2: int = int(idx_v2)
+			if dem[idx2] < level - 0.02:
+				mask[idx2] = 1
+				wet += 1
+		var area := float(wet) * cell_m * cell_m
+		if area < min_area_m2:
+			continue
+		var water_poly: PackedVector2Array = _mask_to_polygon(mask, cols, rows, origin, cell_m)
+		if water_poly.size() < 3:
+			continue
+		if BuildingBuilder.footprint_area_m2(water_poly) < min_area_m2:
+			continue
+		out.append({
+			"points": water_poly,
+			"level_m": level,
+			"area_m2": area,
+			"depth_m": level - pit,
+			"spill_m": spill,
+			"pit_m": pit,
+		})
+	return out
+
+
+static func _poly_aabb(poly: PackedVector2Array) -> Rect2:
+	var min_v := poly[0]
+	var max_v := poly[0]
+	for p in poly:
+		min_v.x = minf(min_v.x, p.x)
+		min_v.y = minf(min_v.y, p.y)
+		max_v.x = maxf(max_v.x, p.x)
+		max_v.y = maxf(max_v.y, p.y)
+	return Rect2(min_v, max_v - min_v)
+
+
+static func _touches_outside(inside: PackedByteArray, cols: int, rows: int,
+		c: int, r: int) -> bool:
+	for k in 8:
+		var rr: int = r + _D8_DR[k]
+		var cc: int = c + _D8_DC[k]
+		if rr < 0 or rr >= rows or cc < 0 or cc >= cols:
+			return true
+		if inside[rr * cols + cc] == 0:
+			return true
+	return false
+
+
+static func _connected_components(mask: PackedByteArray, cols: int, rows: int) -> Array:
+	var n := cols * rows
+	var seen := PackedByteArray()
+	seen.resize(n)
+	var comps: Array = []
+	var stack: Array[int] = []
+	for i in n:
+		if mask[i] == 0 or seen[i] != 0:
+			continue
+		var cells: Array = []
+		stack.clear()
+		stack.append(i)
+		seen[i] = 1
+		while not stack.is_empty():
+			var cur: int = stack.pop_back()
+			cells.append(cur)
+			var cr := cur / cols
+			var cc := cur % cols
+			# 4-connected for cleaner footprints.
+			for k in 4:
+				var d4c: int = 0
+				var d4r: int = 0
+				match k:
+					0:
+						d4r = -1
+					1:
+						d4c = 1
+					2:
+						d4r = 1
+					_:
+						d4c = -1
+				var rr: int = cr + d4r
+				var cc2: int = cc + d4c
+				if rr < 0 or rr >= rows or cc2 < 0 or cc2 >= cols:
+					continue
+				var j := rr * cols + cc2
+				if mask[j] == 0 or seen[j] != 0:
+					continue
+				seen[j] = 1
+				stack.append(j)
+		comps.append(cells)
+	return comps
+
+
+## Outline a binary mask as a single polygon (outer ring). Cell squares are
+## merged via boundary-edge chaining — good enough for pond footprints.
+static func _mask_to_polygon(mask: PackedByteArray, cols: int, rows: int,
+		origin: Vector2, cell_m: float) -> PackedVector2Array:
+	# Emit axis-aligned boundary segments, then walk the longest loop.
+	var edges: Dictionary = {}  # "x1,y1>x2,y2" → true (directed)
+	for r in rows:
+		for c in cols:
+			if mask[r * cols + c] == 0:
+				continue
+			var x0 := origin.x + float(c) * cell_m
+			var z0 := origin.y + float(r) * cell_m
+			var x1 := x0 + cell_m
+			var z1 := z0 + cell_m
+			# N, E, S, W — add edge if neighbour empty (CCW around cell).
+			if r == 0 or mask[(r - 1) * cols + c] == 0:
+				_edge_add(edges, Vector2(x0, z0), Vector2(x1, z0))
+			if c == cols - 1 or mask[r * cols + c + 1] == 0:
+				_edge_add(edges, Vector2(x1, z0), Vector2(x1, z1))
+			if r == rows - 1 or mask[(r + 1) * cols + c] == 0:
+				_edge_add(edges, Vector2(x1, z1), Vector2(x0, z1))
+			if c == 0 or mask[r * cols + c - 1] == 0:
+				_edge_add(edges, Vector2(x0, z1), Vector2(x0, z0))
+	if edges.is_empty():
+		return PackedVector2Array()
+	# Build adjacency keyed by string so float Vector2 dict keys stay stable.
+	var adj: Dictionary = {}
+	for key_v in edges:
+		var parts: PackedStringArray = str(key_v).split(">")
+		if parts.size() != 2:
+			continue
+		var a_key: String = str(parts[0])
+		var b_key: String = str(parts[1])
+		if not adj.has(a_key):
+			adj[a_key] = []
+		(adj[a_key] as Array).append(b_key)
+	var best := PackedVector2Array()
+	var used: Dictionary = {}
+	for start_key_v in adj:
+		var start_key: String = str(start_key_v)
+		var ring := PackedVector2Array()
+		var cur_key: String = start_key
+		var guard := 0
+		while guard < edges.size() + 4:
+			guard += 1
+			ring.append(_parse_vz(cur_key))
+			var nexts: Array = adj.get(cur_key, []) as Array
+			var nxt_key: String = ""
+			for cand_v in nexts:
+				var cand_key: String = str(cand_v)
+				var ek: String = "%s>%s" % [cur_key, cand_key]
+				if used.has(ek):
+					continue
+				nxt_key = cand_key
+				used[ek] = true
+				break
+			if nxt_key.is_empty():
+				break
+			cur_key = nxt_key
+			if cur_key == start_key:
+				ring.append(_parse_vz(start_key))
+				break
+		if ring.size() >= 4 and ring.size() > best.size():
+			best = ring
+	if best.size() >= 4 and best[0].distance_squared_to(best[best.size() - 1]) < 1e-6:
+		best.remove_at(best.size() - 1)
+	return _decimate_colinear(best, cell_m * 0.25)
+
+
+static func _edge_add(edges: Dictionary, a: Vector2, b: Vector2) -> void:
+	var k := _edge_key(a, b)
+	var rk := _edge_key(b, a)
+	# Cancel opposite edges (internal).
+	if edges.has(rk):
+		edges.erase(rk)
+		return
+	edges[k] = true
+
+
+static func _edge_key(a: Vector2, b: Vector2) -> String:
+	return "%.3f,%.3f>%.3f,%.3f" % [a.x, a.y, b.x, b.y]
+
+
+static func _parse_vz(s: String) -> Vector2:
+	var parts := s.split(",")
+	if parts.size() < 2:
+		return Vector2.ZERO
+	return Vector2(float(parts[0]), float(parts[1]))
+
+
+static func _decimate_colinear(poly: PackedVector2Array, eps: float) -> PackedVector2Array:
+	if poly.size() < 4:
+		return poly
+	var out := PackedVector2Array()
+	var n := poly.size()
+	for i in n:
+		var prev: Vector2 = poly[(i - 1 + n) % n]
+		var cur: Vector2 = poly[i]
+		var next: Vector2 = poly[(i + 1) % n]
+		var e1 := (cur - prev).normalized()
+		var e2 := (next - cur).normalized()
+		var cross_z := e1.x * e2.y - e1.y * e2.x
+		if e1.dot(e2) > 0.999 and absf(cross_z) < 0.02:
+			continue
+		out.append(cur)
+	return out if out.size() >= 3 else poly
+
+
 static func _argsort_desc(heights: PackedFloat32Array, n: int) -> PackedInt32Array:
 	var order := PackedInt32Array()
 	order.resize(n)

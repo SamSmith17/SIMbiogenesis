@@ -79,6 +79,7 @@ const CAMP_SCATTER_UI_SCRIPT := preload("res://scenes/ui/camp_scatter_ui.gd")
 const PLACED_PROPS_UI_SCRIPT := preload("res://scenes/ui/placed_props_ui.gd")
 const PLACED_PROP_EDIT_UI_SCRIPT: GDScript = preload("res://scenes/ui/placed_prop_edit_ui.gd")
 const BUILDING_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/building_builder_modal.gd")
+const POND_EDIT_MODAL_SCRIPT := preload("res://scenes/ui/pond_edit_ui.gd")
 const STARSHADE_EDIT_MODAL_SCRIPT := preload("res://scenes/ui/starshade_edit_modal.gd")
 const PALLET_RACK_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/pallet_rack_builder_modal.gd")
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
@@ -217,6 +218,7 @@ var _building_style_layer: BuildingStyleLayer = null
 var _custom_buildings_root: Node3D = null
 var _building_builder_ui: Control = null
 var _starshade_edit_ui: Control = null
+var _pond_edit_ui: Control = null
 var _pallet_rack_builder_ui: Control = null
 var _building_highlight: MeshInstance3D = null
 ## OSM solar arrays built in-world but NOT auto-added to the graph. Each record:
@@ -253,6 +255,31 @@ var _last_selection_rect := Rect2(-99999.0, -99999.0, 0.0, 0.0)
 var _last_veg_poly_hash := 0
 var _last_veg_highlight_color_hash := 0
 var _locked_yaw := 0.0
+## Player-designated ponds (sculpted basins filled with water). Each: {points, kind,
+## tag, user}. Merged into _water_data so they drape with the OSM water shader and
+## survive reloads via user://maps/user_water_<lat>_<lon>.json.
+var _user_water_data: Array = []
+## ---------------------------------------------------------------------------
+## Undo snapshots (water bodies + region-scoped tile edits), capped.
+const SCULPT_UNDO_MAX := 16
+var _sculpt_undo_stack: Array = []
+## True while the terrain sculpt dock is open (drives the drone edit-camera meta).
+var _sculpt_session := false
+## Legacy earthworks records, loaded only so _migrate_legacy_edits_to_tiles() can
+## bake them into the high-res tile layer and then clear them. No longer created.
+var _earthworks: Array = []
+var _sculpt_highlight: MeshInstance3D = null
+
+## High-resolution edit layer (ROADMAP terrain-builder reimagining). The tile
+## store is the persistent data + region-scoped undo; TerrainHeightField renders
+## each edited tile as its own hi-res mesh + collider on top of the base terrain,
+## while the DetailGround mesh/collider are SUNK beneath active tiles so cut
+## bowls are neither occluded visually nor bridged by the coarser collider.
+var _edit_tiles: TerrainEditTiles = null
+var _height_field: TerrainHeightField = null
+## Signature of the sink currently baked into the DetailGround mesh/collider —
+## skips the (relatively) heavy detail-patch rebuild when nothing changed.
+var _detail_sink_sig := ""
 
 var _load_overlay: TerrainLoadOverlay = null
 var _load_progress: TerrainLoadProgress = null
@@ -633,7 +660,7 @@ func _rebind_osm_registration(reattach: bool = true) -> void:
 		_osm_vectors = OsmRegistration.offset_payload(
 			_osm_vectors_raw, _osm_offset_east_m, _osm_offset_north_m)
 		_buildings_data = _osm_vectors.get("buildings", []) as Array
-		_water_data = _osm_vectors.get("water", []) as Array
+		_refresh_water_data()
 	if not _auto_veg_data_raw.is_empty():
 		_auto_veg_data = OsmRegistration.offset_payload(
 			_auto_veg_data_raw, _osm_offset_east_m, _osm_offset_north_m)
@@ -1225,31 +1252,31 @@ static func _pond_mean_depth_m(area_m2: float) -> float:
 	return clampf(0.8 + sqrt(maxf(area_m2, 1.0)) / 40.0, 0.8, 3.5)
 
 
-## Import OSM still-water polygon as graph catchment + linked water storage tank.
-func add_pond_to_graph(idx: int) -> bool:
-	if idx < 0 or idx >= _water_data.size():
+## ---------------------------------------------------------------------------
+## Pond query + graph wiring (selection modal is the single control surface)
+## ---------------------------------------------------------------------------
+
+## True if a pond with this tag is currently represented on the system graph.
+func _pond_tag_on_graph(tag: String) -> bool:
+	if tag.is_empty():
 		return false
-	var item: Variant = _water_data[idx]
-	if not (item is Dictionary):
-		return false
-	var kind := str((item as Dictionary).get("kind", "water"))
-	if kind in WaterBuilder.FLOWING_KINDS:
-		_notify_options_status("Flowing waterway — pick a pond/lake body", "warn")
-		return false
-	var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
-	if poly.size() < 3:
-		return false
+	var graph := _find_system_graph_view()
+	if graph != null and graph.has_method("has_pond_with_tag"):
+		return bool(graph.call("has_pond_with_tag", tag))
+	return _added_pond_tags.has(tag)
+
+
+## Build the add_imported_pond payload for a water record, honoring the player's
+## capacity/level overrides. Water depth for capacity = override → mean-depth heuristic.
+func _pond_payload_for(rec: Dictionary) -> Dictionary:
+	var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
 	var area := BuildingBuilder.footprint_area_m2(poly)
-	if area < 1.0:
-		return false
-	var tag := _water_body_tag(poly)
 	var c := SolarArrayBuilder.centroid(poly)
 	var depth := _pond_mean_depth_m(area)
-	var capacity_l := area * depth * 1000.0
-	var graph := _find_system_graph_view()
-	if graph == null or not graph.has_method("add_imported_pond"):
-		_notify_options_status("System graph unavailable for pond import", "warn")
-		return false
+	var capacity_l := float(rec.get("capacity_l", area * depth * 1000.0))
+	# Keep the reported mean depth consistent with an overridden volume.
+	if rec.has("capacity_l") and area > 0.01:
+		depth = maxf(capacity_l / (area * 1000.0), 0.1)
 	var min_v := poly[0]
 	var max_v := poly[0]
 	for p in poly:
@@ -1257,9 +1284,9 @@ func add_pond_to_graph(idx: int) -> bool:
 		min_v.y = minf(min_v.y, p.y)
 		max_v.x = maxf(max_v.x, p.x)
 		max_v.y = maxf(max_v.y, p.y)
-	var ok: bool = bool(graph.call("add_imported_pond", {
-		"osm_water_tag": tag,
-		"label": "Pond (%s)" % kind.capitalize(),
+	return {
+		"osm_water_tag": str(rec.get("tag", _water_body_tag(poly))),
+		"label": str(rec.get("label", "Pond")),
 		"area_m2": area,
 		"mean_depth_m": depth,
 		"capacity_l": capacity_l,
@@ -1268,55 +1295,322 @@ func add_pond_to_graph(idx: int) -> bool:
 		"width_m": maxf(max_v.x - min_v.x, 1.0),
 		"depth_m": maxf(max_v.y - min_v.y, 1.0),
 		"points": poly,
-	}))
-	if ok:
-		_added_pond_tags[tag] = true
-		_notify_options_status(
-				"Added pond: %.0f m² / %.0f L → system graph" % [area, capacity_l], "ok")
-		print("TerrainLoader: added pond '%s' (%.0f m², %.0f L) to the system graph" % [
-			tag, area, capacity_l])
-	return ok
+	}
 
 
-## Sculpt-selection basin → catchment + storage (tag from rect centroid).
-func add_sculpted_pond_to_graph(rect_min: Vector2, rect_max: Vector2) -> bool:
-	var x0 := minf(rect_min.x, rect_max.x)
-	var x1 := maxf(rect_min.x, rect_max.x)
-	var z0 := minf(rect_min.y, rect_max.y)
-	var z1 := maxf(rect_min.y, rect_max.y)
-	var w := x1 - x0
-	var d := z1 - z0
-	if w < 2.0 or d < 2.0:
+## Re-push a pond's graph node from its current record (used after a value edit
+## while the pond is already on the graph). add_imported_pond is idempotent per tag.
+func _sync_pond_graph_node(tag: String) -> void:
+	var rec := _water_rec_for_tag(tag)
+	if rec.is_empty():
+		return
+	var graph := _find_system_graph_view()
+	if graph == null or not graph.has_method("add_imported_pond"):
+		return
+	graph.call("add_imported_pond", _pond_payload_for(rec))
+
+
+## Find the _water_data record (OSM or user) carrying this tag.
+func _water_rec_for_tag(tag: String) -> Dictionary:
+	for item in _water_data:
+		if not (item is Dictionary):
+			continue
+		var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
+		var t := str((item as Dictionary).get("tag", _water_body_tag(poly)))
+		if t == tag:
+			return item
+	return {}
+
+
+## Add the still-water body at _water_data[idx] to the system graph (catchment +
+## storage tank). Uses the record's capacity override when present. Idempotent.
+func add_pond_to_graph(idx: int) -> bool:
+	if idx < 0 or idx >= _water_data.size():
 		return false
-	var poly := PackedVector2Array([
-		Vector2(x0, z0), Vector2(x1, z0), Vector2(x1, z1), Vector2(x0, z1),
-	])
-	var area := w * d
-	var c := Vector2((x0 + x1) * 0.5, (z0 + z1) * 0.5)
-	var tag := "sculpt_pond_%d_%d" % [roundi(c.x), roundi(c.y)]
-	var depth := _pond_mean_depth_m(area)
-	var capacity_l := area * depth * 1000.0
+	var item: Variant = _water_data[idx]
+	if not (item is Dictionary):
+		return false
+	var rec: Dictionary = item
+	var kind := str(rec.get("kind", "water"))
+	if kind in WaterBuilder.FLOWING_KINDS:
+		_notify_options_status("Flowing waterway — pick a pond/lake body", "warn")
+		return false
+	var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
+	if poly.size() < 3:
+		return false
+	# OSM ponds carry no tag/label on their record — synthesize both.
+	if str(rec.get("tag", "")).is_empty():
+		rec["tag"] = _water_body_tag(poly)
+	if str(rec.get("label", "")).is_empty():
+		rec["label"] = "Pond (%s)" % kind.capitalize()
+	var tag := str(rec["tag"])
 	var graph := _find_system_graph_view()
 	if graph == null or not graph.has_method("add_imported_pond"):
 		_notify_options_status("System graph unavailable for pond import", "warn")
 		return false
-	var ok: bool = bool(graph.call("add_imported_pond", {
-		"osm_water_tag": tag,
-		"label": "Sculpted Pond",
-		"area_m2": area,
-		"mean_depth_m": depth,
-		"capacity_l": capacity_l,
-		"runoff_coeff": 1.0,
-		"centroid": c,
-		"width_m": w,
-		"depth_m": d,
-		"points": poly,
-	}))
+	var payload := _pond_payload_for(rec)
+	var ok: bool = bool(graph.call("add_imported_pond", payload))
 	if ok:
 		_added_pond_tags[tag] = true
-		_notify_options_status(
-				"Added sculpted pond: %.0f m² / %.0f L → system graph" % [area, capacity_l], "ok")
+		_notify_options_status("Added pond to graph: %.0f m² / %.0f L" % [
+			float(payload["area_m2"]), float(payload["capacity_l"])], "ok")
 	return ok
+
+
+## Remove the pond at _water_data[idx] from the system graph (leaves the water body).
+func remove_pond_from_graph(idx: int) -> bool:
+	if idx < 0 or idx >= _water_data.size():
+		return false
+	var item: Variant = _water_data[idx]
+	if not (item is Dictionary):
+		return false
+	var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
+	var tag := str((item as Dictionary).get("tag", _water_body_tag(poly)))
+	var graph := _find_system_graph_view()
+	var ok := false
+	if graph != null and graph.has_method("remove_imported_pond"):
+		ok = bool(graph.call("remove_imported_pond", tag))
+	_added_pond_tags.erase(tag)
+	if ok:
+		_notify_options_status("Removed pond from graph", "ok")
+	return ok
+
+
+## Structured pond state for the settings modal.
+func get_pond_info(idx: int) -> Dictionary:
+	if idx < 0 or idx >= _water_data.size():
+		return {"valid": false}
+	var item: Variant = _water_data[idx]
+	if not (item is Dictionary):
+		return {"valid": false}
+	var rec: Dictionary = item
+	var kind := str(rec.get("kind", "water"))
+	if kind in WaterBuilder.FLOWING_KINDS:
+		return {"valid": false}
+	var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
+	if poly.size() < 3:
+		return {"valid": false}
+	var area := BuildingBuilder.footprint_area_m2(poly)
+	var tag := str(rec.get("tag", _water_body_tag(poly)))
+	var rim := pond_rim_height(poly)
+	var floor_y := rim
+	for p in poly:
+		floor_y = minf(floor_y, ground_height_at(p.x, p.y))
+	var depth := _pond_mean_depth_m(area)
+	var capacity_l := float(rec.get("capacity_l", area * depth * 1000.0))
+	var level := TerrainBuilder.variant_to_float(rec.get("level_m", NAN), NAN)
+	if is_nan(level):
+		level = rim - clampf((rim - floor_y) * 0.1, 0.05, 0.5)
+	return {
+		"valid": true,
+		"water_idx": idx,
+		"tag": tag,
+		"kind": kind,
+		"user": bool(rec.get("user", false)),
+		"label": str(rec.get("label", "Pond")),
+		"area_m2": area,
+		"rim_m": rim,
+		"floor_m": floor_y,
+		"level_m": level,
+		"default_capacity_l": area * depth * 1000.0,
+		"capacity_l": capacity_l,
+		"has_capacity_override": rec.has("capacity_l"),
+		"on_graph": _pond_tag_on_graph(tag),
+	}
+
+
+## Override the visible water surface level (world Y). Live-updates the water mesh.
+func set_pond_fill_level(idx: int, level_m: float) -> bool:
+	var rec := _user_rec_at_water_idx(idx)
+	if rec.is_empty():
+		return false
+	rec["level_m"] = level_m
+	_save_user_water()
+	_refresh_water_data()
+	_attach_water()
+	return true
+
+
+## Override the pond's storage volume (litres). Updates the graph tank if present.
+func set_pond_capacity(idx: int, capacity_l: float) -> bool:
+	var rec := _user_rec_at_water_idx(idx)
+	if rec.is_empty():
+		return false
+	rec["capacity_l"] = maxf(capacity_l, 1.0)
+	_save_user_water()
+	_refresh_water_data()
+	if _pond_tag_on_graph(str(rec.get("tag", ""))):
+		_sync_pond_graph_node(str(rec["tag"]))
+	return true
+
+
+## Delete a user pond entirely: water body + any graph node. OSM ponds are only
+## removed from the graph (their water is map data, not player-owned).
+func delete_pond(idx: int) -> bool:
+	if idx < 0 or idx >= _water_data.size():
+		return false
+	var item: Variant = _water_data[idx]
+	if not (item is Dictionary):
+		return false
+	var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
+	var tag := str((item as Dictionary).get("tag", _water_body_tag(poly)))
+	var graph := _find_system_graph_view()
+	if graph != null and graph.has_method("remove_imported_pond"):
+		graph.call("remove_imported_pond", tag)
+	_added_pond_tags.erase(tag)
+	if not bool((item as Dictionary).get("user", false)):
+		_notify_options_status("Removed OSM pond from graph", "ok")
+		set_water_focus_idx(-1)
+		return true
+	# Remove the user water record by tag.
+	for i in range(_user_water_data.size() - 1, -1, -1):
+		var uw: Variant = _user_water_data[i]
+		if uw is Dictionary and str((uw as Dictionary).get("tag", "")) == tag:
+			_user_water_data.remove_at(i)
+	_save_user_water()
+	_refresh_water_data()
+	_attach_water()
+	set_water_focus_idx(-1)
+	_notify_options_status("Pond deleted", "ok")
+	return true
+
+
+## The mutable _user_water_data record backing _water_data[idx], or {} for OSM water.
+func _user_rec_at_water_idx(idx: int) -> Dictionary:
+	if idx < 0 or idx >= _water_data.size():
+		return {}
+	var item: Variant = _water_data[idx]
+	if not (item is Dictionary) or not bool((item as Dictionary).get("user", false)):
+		return {}
+	var tag := str((item as Dictionary).get("tag", ""))
+	for uw in _user_water_data:
+		if uw is Dictionary and str((uw as Dictionary).get("tag", "")) == tag:
+			return uw
+	return {}
+
+
+## Open the pond settings modal for the water body at idx (Ctrl-click target).
+func open_pond_editor(idx: int) -> void:
+	if _pond_edit_ui == null:
+		return
+	var info := get_pond_info(idx)
+	if not bool(info.get("valid", false)):
+		return
+	if _pond_edit_ui.has_method("open_for_pond"):
+		_pond_edit_ui.call("open_for_pond", idx)
+
+
+## Fill a sculpted basin with water. Does NOT touch the system graph — the player
+## adds it to the graph explicitly via the Pond settings modal (Ctrl-click the
+## pond → Add to graph), so cleared/deleted ponds never leave stale graph nodes.
+func designate_sculpted_pond(poly: PackedVector2Array, label: String = "Sculpted Pond",
+		level_m: float = NAN, basin_tag: String = "") -> bool:
+	if poly.size() < 3:
+		return false
+	var area := BuildingBuilder.footprint_area_m2(poly)
+	if area < WaterBuilder.MIN_AREA_M2:
+		_notify_options_status("Pond too small (min ~%.0f m²) — widen the area" % WaterBuilder.MIN_AREA_M2, "warn")
+		return false
+	var tag := basin_tag if not basin_tag.is_empty() else EarthworksBuilder.basin_tag_from_poly(poly)
+	var rec := {"points": poly, "kind": "pond", "tag": tag, "user": true, "label": label}
+	if not is_nan(level_m):
+		rec["level_m"] = level_m
+	# Replace any existing user pond with the same tag (idempotent re-designate),
+	# carrying forward player value overrides + graph state from the old record.
+	var replaced := false
+	for i in _user_water_data.size():
+		var item: Variant = _user_water_data[i]
+		if item is Dictionary and str((item as Dictionary).get("tag", "")) == tag:
+			var prev: Dictionary = item
+			if prev.has("capacity_l"):
+				rec["capacity_l"] = float(prev["capacity_l"])
+			if prev.has("label"):
+				rec["label"] = str(prev["label"])
+			_user_water_data[i] = rec
+			replaced = true
+			break
+	if not replaced:
+		_user_water_data.append(rec)
+	_save_user_water()
+	_refresh_water_data()
+	_attach_water()
+	# If this tag was already on the graph (re-carve of an added pond), keep it in sync.
+	if _pond_tag_on_graph(tag):
+		_sync_pond_graph_node(tag)
+	_notify_options_status("Pond filled with water (%.0f m²)" % area, "ok")
+	return true
+
+
+## _water_data = OSM water (fresh copy) + the player's designated ponds.
+func _refresh_water_data() -> void:
+	var combined: Array = []
+	for item in (_osm_vectors.get("water", []) as Array):
+		combined.append(item)
+	for item in _user_water_data:
+		combined.append(item)
+	_water_data = combined
+
+
+func _user_water_path() -> String:
+	return "user://maps/user_water_%s_%s.json" % [
+		TerrainEditGrid._coord_token(_lat), TerrainEditGrid._coord_token(_lon)]
+
+
+func _load_user_water() -> void:
+	_user_water_data = []
+	var path := _user_water_path()
+	if not FileAccess.file_exists(path):
+		return
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	if not (parsed is Dictionary):
+		return
+	for entry in ((parsed as Dictionary).get("ponds", []) as Array):
+		if not (entry is Dictionary):
+			continue
+		var pts := PackedVector2Array()
+		for pv in ((entry as Dictionary).get("points", []) as Array):
+			if pv is Array and (pv as Array).size() >= 2:
+				pts.append(Vector2(float(pv[0]), float(pv[1])))
+		if pts.size() < 3:
+			continue
+		var rec := {"points": pts, "kind": "pond", "user": true,
+			"tag": str((entry as Dictionary).get("tag", ""))}
+		var lvl := TerrainBuilder.variant_to_float((entry as Dictionary).get("level_m", NAN), NAN)
+		if not is_nan(lvl):
+			rec["level_m"] = lvl
+		var cap := TerrainBuilder.variant_to_float((entry as Dictionary).get("capacity_l", NAN), NAN)
+		if not is_nan(cap):
+			rec["capacity_l"] = cap
+		if (entry as Dictionary).has("label"):
+			rec["label"] = str((entry as Dictionary)["label"])
+		_user_water_data.append(rec)
+
+
+func _save_user_water() -> void:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
+	var ponds: Array = []
+	for rec in _user_water_data:
+		if not (rec is Dictionary):
+			continue
+		var pts: PackedVector2Array = (rec as Dictionary).get("points", PackedVector2Array())
+		var arr: Array = []
+		for p in pts:
+			arr.append([p.x, p.y])
+		var out := {"tag": str((rec as Dictionary).get("tag", "")), "points": arr}
+		if (rec as Dictionary).has("level_m"):
+			out["level_m"] = float((rec as Dictionary)["level_m"])
+		if (rec as Dictionary).has("capacity_l"):
+			out["capacity_l"] = float((rec as Dictionary)["capacity_l"])
+		if (rec as Dictionary).has("label"):
+			out["label"] = str((rec as Dictionary)["label"])
+		ponds.append(out)
+	var f := FileAccess.open(_user_water_path(), FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(JSON.stringify({"version": 1, "ponds": ponds}))
 
 
 func pick_water_at_world(x: float, z: float) -> Dictionary:
@@ -1342,14 +1636,15 @@ func pick_water_at_world(x: float, z: float) -> Dictionary:
 		return {"valid": false}
 	var rec: Dictionary = _water_data[best_idx]
 	var poly2: PackedVector2Array = rec.get("points", PackedVector2Array())
-	var tag := _water_body_tag(poly2)
+	var tag := str(rec.get("tag", _water_body_tag(poly2)))
 	return {
 		"valid": true,
 		"water_idx": best_idx,
 		"kind": str(rec.get("kind", "water")),
 		"area_m2": BuildingBuilder.footprint_area_m2(poly2),
 		"tag": tag,
-		"added": _added_pond_tags.has(tag),
+		"user": bool(rec.get("user", false)),
+		"added": _pond_tag_on_graph(tag),
 	}
 
 
@@ -1374,7 +1669,8 @@ func is_pond_added(idx: int) -> bool:
 	if not (item is Dictionary):
 		return false
 	var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
-	return _added_pond_tags.has(_water_body_tag(poly))
+	var tag := str((item as Dictionary).get("tag", _water_body_tag(poly)))
+	return _pond_tag_on_graph(tag)
 
 
 func _draw_water_highlight(idx: int, tint: Color = Color(0.15, 0.55, 1.0, 0.45)) -> void:
@@ -1868,6 +2164,7 @@ func _on_imagery_ready(_key: String, texture: ImageTexture, tag: String) -> void
 		_log_load_mem("hyper img ready")
 		print("TerrainLoader: hyper roof ortho ready (%.0f m square)" % (HYPER_HALF_EXTENT * 2.0))
 		_apply_building_textures()
+		_apply_hyper_to_terrain()
 		return
 	if tag == "detail":
 		_log_load_mem("detail img ready")
@@ -2003,6 +2300,36 @@ func _stamp_drape_mercator_bboxes(terrain: Node3D = null) -> void:
 			continue
 		TerrainBuilder.apply_drape_bboxes(
 			mi.material_override as ShaderMaterial, base_bb, detail_bb)
+	_apply_hyper_to_terrain(terrain)
+
+
+## Stamp the hyper ortho patch (sharpest ESRI zoom over the central ~1 km) onto
+## the terrain drape shaders so the core high-res area shows the highest-res
+## imagery by default — not just building roofs / berms.
+func _apply_hyper_to_terrain(terrain: Node3D = null) -> void:
+	if _hyper_drape == null:
+		return
+	if terrain == null and _main != null:
+		terrain = _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	var hyper_extent := HYPER_HALF_EXTENT * 2.0
+	var hyper_vec := TerrainBuilder.bbox_to_shader_vec4(
+		GeoMath.bbox_for(_lat, _lon, HYPER_HALF_EXTENT))
+	var hyper_feather_uv := TerrainBuilder.feather_uv_from_metres(
+		_seam_feather_m, hyper_extent)
+	for child_name in ["Ground", "DetailGround"]:
+		var mi := terrain.get_node_or_null(child_name) as MeshInstance3D
+		if mi == null or not (mi.material_override is ShaderMaterial):
+			continue
+		var sm := mi.material_override as ShaderMaterial
+		var span := _detail_extent_m() if child_name == "DetailGround" else _built_extent
+		sm.set_shader_parameter("hyper_tex", _hyper_drape)
+		sm.set_shader_parameter("use_hyper", true)
+		sm.set_shader_parameter("hyper_ratio", span / hyper_extent)
+		sm.set_shader_parameter("hyper_bbox", hyper_vec)
+		sm.set_shader_parameter("correct_hyper_mercator", true)
+		sm.set_shader_parameter("hyper_feather", hyper_feather_uv)
 
 
 ## Swap the Ground material to the high-res-centre shader once the detail patch
@@ -2025,6 +2352,9 @@ func _apply_detail() -> void:
 	TerrainBuilder.sync_coarse_ground_hide(
 		terrain, _drape, _detail_drape, _built_extent, _detail_extent_m(), _seam_feather_m)
 	_stamp_drape_mercator_bboxes(terrain)
+	# Edit-tile meshes shade with DetailGround's material — hand them the new one.
+	if _height_field != null and is_instance_valid(_height_field):
+		_height_field.set_material(_detail_ground_material(terrain))
 	print("TerrainLoader: applied high-res centre drape (%.0f m square)" % (_detail_extent_m()))
 	_apply_building_textures()
 	_queue_auto_veg_generate(_auto_veg_generated)
@@ -2579,6 +2909,10 @@ func _build_terrain() -> void:
 	_built_extent = extent
 	_terrain_edits = TerrainEditGrid.create_empty(MESH_RES)
 	_terrain_edits.load_for_map(_lat, _lon)
+	_load_edit_tiles()
+	_load_user_water()
+	_load_earthworks()
+	_refresh_water_data()
 
 	var grids := _compose_terrain_grids(false)
 	_built_grid = grids["built"]
@@ -2611,6 +2945,10 @@ func _build_terrain() -> void:
 		TerrainBuilder.update_terrain_collision(
 			terrain, _built_collision_grid, MESH_RES, extent, center_elev)
 	_stamp_drape_mercator_bboxes(terrain)
+	_migrate_legacy_edits_to_tiles()
+	_ensure_height_field(terrain)
+	# Saved edits need the DetailGround sunk beneath their tiles from frame one.
+	_refresh_detail_sink()
 
 	# Temp floor stays until _finalize_spawn_actors seats the player on composed ground.
 	_setup_terrain_edit_ui()
@@ -2671,6 +3009,68 @@ func _finalize_spawn_actors() -> void:
 	var player := _main.get_node_or_null("Player")
 	if player != null:
 		_spawn_explore_drone(player.global_position)
+	# Terrain colliders (detail HeightMapShape3D + edit-tile shapes) may not be
+	# registered with the physics server in this frame; the height-math seat above
+	# is correct but the CharacterBody3D can otherwise fall onto the lower coarse
+	# collider before the real surface exists. Wait for the physics server, then
+	# reseat on the true topmost surface via raycast.
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if not _from_resume:
+		_raycast_reseat_player()
+
+
+## Lift the player to just above the true collision surface (topmost raycast hit),
+## guarding against props/buildings by ignoring hits far above the DEM footing.
+func _raycast_reseat_player() -> void:
+	if _main == null:
+		return
+	var player := _main.get_node_or_null("Player") as CharacterBody3D
+	if player == null:
+		return
+	var pos := player.global_position
+	var footing := _ground_height_at(pos.x, pos.z)
+	var ry := _raycast_ground_y(pos.x, pos.z)
+	var surface := footing
+	# Prefer the raycast when it agrees with the DEM footing to within a few
+	# metres (a prop/building hit would sit much higher — fall back to footing).
+	if is_finite(ry) and ry >= footing - 0.5 and ry <= footing + 6.0:
+		surface = maxf(footing, ry)
+	var target_y := surface + TerrainBuilder.PLAYER_SPAWN_CLEARANCE_M
+	if absf(pos.y - target_y) < 0.05:
+		return
+	pos.y = target_y
+	player.global_position = pos
+	player.velocity = Vector3.ZERO
+	if "fall_start_height" in player:
+		player.fall_start_height = pos.y
+		player.highest_point_during_fall = pos.y
+	if "void_reference_y" in player:
+		player.void_reference_y = pos.y
+	_raycast_reseat_drone()
+
+
+## Lift the explore drone onto the true collision surface (same physics-frame race
+## as the player — it is seated before the terrain colliders register).
+func _raycast_reseat_drone() -> void:
+	if _main == null:
+		return
+	var drone := _main.get_node_or_null("FPVDrone") as Node3D
+	if drone == null:
+		return
+	var pos := drone.global_position
+	var footing := _ground_height_at(pos.x, pos.z)
+	var ry := _raycast_ground_y(pos.x, pos.z)
+	var surface := footing
+	if is_finite(ry) and ry >= footing - 0.5 and ry <= footing + 6.0:
+		surface = maxf(footing, ry)
+	var target_y := surface + DRONE_GROUND_CLEARANCE_M
+	if pos.y >= target_y - 0.05:
+		return
+	pos.y = target_y
+	drone.global_position = pos
+	if "drone_spawn_position" in drone:
+		drone.drone_spawn_position = pos
 
 
 ## If the spawn XZ sits inside an OSM building footprint, move the player to the
@@ -2756,8 +3156,297 @@ func _ground_height_at(x: float, z: float) -> float:
 		detail, _detail_elev_cols, _detail_elev_rows, _detail_extent_m(),
 		fallback)
 	if _built_grid.is_empty() and detail.is_empty():
-		return _spawn_ground_y
-	return y
+		return _spawn_ground_y + _edit_tile_delta(x, z)
+	# High-resolution edit layer sits on top of the composed DEM footing (this is
+	# the EXACT edited surface at 1.5 m resolution — the grids stay edit-free).
+	return y + _edit_tile_delta(x, z)
+
+
+func _edit_tile_delta(x: float, z: float) -> float:
+	return 0.0 if _edit_tiles == null else _edit_tiles.sample_delta(x, z)
+
+
+## Public: net player edit (m) at a world XZ — the dock's live cursor readout.
+func terrain_edit_delta_at(x: float, z: float) -> float:
+	return _edit_tile_delta(x, z)
+
+
+## Cut/fill volume estimate for the whole edit layer (m³) for the dock readout.
+func edit_volume_estimate() -> Dictionary:
+	if _edit_tiles == null:
+		return {"cut_m3": 0.0, "fill_m3": 0.0, "net_m3": 0.0}
+	return _edit_tiles.volume_estimate()
+
+
+## True surface Y at (x, z) from a downward physics raycast against the live
+## terrain collision — the topmost hit, so it never reports the lower (sunk)
+## coarse collider that underlies the hi-res detail patch. Returns NAN when the
+## physics space isn't ready or nothing is hit.
+func _raycast_ground_y(x: float, z: float) -> float:
+	if _main == null or not _main.is_inside_tree():
+		return NAN
+	var main3d := _main as Node3D
+	if main3d == null:
+		return NAN
+	var world: World3D = main3d.get_world_3d()
+	if world == null:
+		return NAN
+	var space: PhysicsDirectSpaceState3D = world.direct_space_state
+	if space == null:
+		return NAN
+	var top := _built_center_elev + 4000.0
+	var params := PhysicsRayQueryParameters3D.create(
+		Vector3(x, top, z), Vector3(x, top - 9000.0, z))
+	params.collide_with_areas = false
+	params.collide_with_bodies = true
+	var hit: Dictionary = space.intersect_ray(params)
+	if hit.is_empty():
+		return NAN
+	return (hit.get("position") as Vector3).y
+
+
+# ---------------------------------------------------------------------------
+# High-resolution edit layer (TerrainEditTiles baked into the detail surface)
+# ---------------------------------------------------------------------------
+
+func _edit_tiles_path() -> String:
+	return "user://maps/terrain_tiles_%s_%s.bin" % [
+		TerrainEditGrid._coord_token(_lat), TerrainEditGrid._coord_token(_lon)]
+
+
+func _load_edit_tiles() -> void:
+	_edit_tiles = TerrainEditTiles.new()
+	var path := _edit_tiles_path()
+	if FileAccess.file_exists(path):
+		_edit_tiles.load_from_file(path)
+
+
+## One-time migration of the retired systems (coarse/detail delta grids +
+## earthworks meshes) into the unified tile layer, then clear + persist the old
+## data so nothing is applied twice. Runs during _build_terrain after the base
+## detail surface is composed (edit-free) and before the height field is created.
+## Idempotent: it clears the legacy stores after baking, so a second pass finds
+## nothing to migrate.
+func _migrate_legacy_edits_to_tiles() -> void:
+	if _edit_tiles == null:
+		return
+	var migrated := false
+	# 1) Legacy detail_delta grid (hi-res centre edits).
+	if _terrain_edits != null and _terrain_edits.has_detail_edits():
+		_edit_tiles.bake_delta_grid(_terrain_edits.detail_delta,
+			_terrain_edits.detail_res, _terrain_edits.detail_extent_m)
+		migrated = true
+	# 2) Legacy coarse delta grid.
+	if _terrain_edits != null and not _terrain_edits.delta.is_empty():
+		for v in _terrain_edits.delta:
+			if absf(v) > 1e-4:
+				_edit_tiles.bake_delta_grid(_terrain_edits.delta, MESH_RES, _built_extent)
+				migrated = true
+				break
+	# 3) Earthworks (raise / cut) meshes → delta over their footprint.
+	for rec_v in _earthworks:
+		if not (rec_v is Dictionary):
+			continue
+		var rec: Dictionary = rec_v
+		var pts: PackedVector2Array = (rec as Dictionary).get("points", PackedVector2Array())
+		if pts.size() < 3:
+			continue
+		var kind := str((rec as Dictionary).get("kind", ""))
+		var fn := func(x: float, z: float) -> float:
+			var base := _height_field_base(x, z)
+			if kind == "raise":
+				var hy := EarthworksBuilder.height_at_raise(rec, x, z)
+				return (hy - base) if not is_nan(hy) else 0.0
+			elif kind == "cut":
+				var fy := EarthworksBuilder.height_at_cut(rec, x, z)
+				return (fy - base) if not is_nan(fy) else 0.0
+			return 0.0
+		_edit_tiles.bake_delta_fn(_poly_bounds(pts), fn)
+		migrated = true
+	if not migrated:
+		return
+	if _terrain_edits != null:
+		_terrain_edits.detail_delta = PackedFloat32Array()
+		if not _terrain_edits.delta.is_empty():
+			_terrain_edits.delta.fill(0.0)
+		_terrain_edits.save(_lat, _lon)
+	if not _earthworks.is_empty():
+		_earthworks.clear()
+		_save_earthworks()
+	_save_edit_tiles()
+	print("TerrainLoader: migrated legacy terrain edits into %d tiles" % _edit_tiles.active_tiles().size())
+
+
+func _poly_bounds(poly: PackedVector2Array) -> Rect2:
+	if poly.is_empty():
+		return Rect2()
+	var r := Rect2(poly[0], Vector2.ZERO)
+	for i in range(1, poly.size()):
+		r = r.expand(poly[i])
+	return r
+
+
+func _save_edit_tiles() -> void:
+	if _edit_tiles == null:
+		return
+	_edit_tiles.prune_flat_tiles()
+	_edit_tiles.save_to_file(_edit_tiles_path())
+
+
+## Base (pre-edit-layer) AMSL height the tiles layer over — the composed detail
+## DEM footing WITHOUT earthworks or tiles (so no double counting).
+func _height_field_base(x: float, z: float) -> float:
+	return _dem_height_without_earthworks(x, z)
+
+
+func _detail_ground_material(terrain: Node3D) -> Material:
+	if terrain == null:
+		return null
+	var dg := terrain.get_node_or_null("DetailGround") as MeshInstance3D
+	if dg != null and dg.material_override != null:
+		return dg.material_override
+	var g := terrain.get_node_or_null("Ground") as MeshInstance3D
+	return g.material_override if g != null else null
+
+
+## Create/refresh the HeightField node under Terrain and re-layer all edit tiles
+## onto the current composed base surface. base_fn returns WORLD Y (footing math
+## already mean-centres), so the node is configured without a second centring.
+func _ensure_height_field(terrain: Node3D) -> void:
+	if terrain == null:
+		return
+	if _edit_tiles == null:
+		_edit_tiles = TerrainEditTiles.new()
+	var hf := terrain.get_node_or_null("HeightField") as TerrainHeightField
+	if hf == null:
+		hf = TerrainHeightField.new()
+		hf.name = "HeightField"
+		terrain.add_child(hf)
+	_height_field = hf
+	hf.configure(_edit_tiles, Callable(self, "_height_field_base"),
+		_detail_extent_m(), _detail_ground_material(terrain))
+	hf.rebuild_all_now()
+
+
+## How far the DetailGround surface drops beneath the interior of active edit
+## tiles. Deep on purpose: the coarse grid (~12–47 m/vertex) linearly chords
+## between samples, so a shallow graded sink could still cut above a hi-res pond
+## floor near its banks. A deep drop makes that geometrically impossible, and
+## the chasm is always roofed by the opaque tile meshes.
+const TILE_SINK_HEADROOM_M := 60.0
+
+
+## Signature of the active edited-tile set — the sink only depends on WHICH
+## tiles exist, so an unchanged set skips the detail-patch rebuild.
+func _sink_signature() -> String:
+	if _edit_tiles == null:
+		return ""
+	var keys: Array = []
+	for key in _edit_tiles.active_tiles():
+		var k: Vector2i = key
+		if _edit_tiles.tile_has_edits(k):
+			keys.append(k)
+	keys.sort()
+	var parts := PackedStringArray()
+	for k in keys:
+		parts.append(str(k))
+	return ";".join(parts)
+
+
+## The grid the DetailGround mesh + DetailCollision are actually built from:
+## the edit-free detail surface, pushed DOWN beneath active edit tiles so the
+## hi-res tile meshes/colliders own those areas (cuts stay visible + walkable).
+## Only samples strictly INTERIOR to the tile union get the full headroom sink —
+## samples on the union's boundary ring stay at (or follow the cut just below)
+## the base surface, so no depression trench leaks outside the tile meshes.
+func _detail_mesh_grid_with_sink(grid: PackedFloat32Array, res: int) -> PackedFloat32Array:
+	if _edit_tiles == null or _edit_tiles.is_empty():
+		return grid
+	var rects: Array = []
+	for key in _edit_tiles.active_tiles():
+		var k: Vector2i = key
+		if _edit_tiles.tile_has_edits(k):
+			rects.append(_edit_tiles.tile_world_rect(k))
+	if rects.is_empty():
+		return grid
+	var out := grid.duplicate()
+	var ext := _detail_extent_m()
+	var half := ext * 0.5
+	var cell := ext / float(maxi(res - 1, 1))
+	for r in res:
+		var z := float(r) / float(maxi(res - 1, 1)) * ext - half
+		for c in res:
+			var x := float(c) / float(maxi(res - 1, 1)) * ext - half
+			var p := Vector2(x, z)
+			if not _in_rect_union(rects, p):
+				continue
+			# Boundary-ring samples follow the local cut (delta→0 at the union
+			# edge, so the surface stays continuous with untouched terrain);
+			# fully interior samples (all 8 neighbours covered) drop the whole
+			# headroom so a coarse chord can never bridge above a hi-res cut.
+			var sink := maxf(0.0, -_edit_tiles.sample_delta(x, z))
+			var interior := true
+			for oz in [-1, 0, 1]:
+				for ox in [-1, 0, 1]:
+					if ox == 0 and oz == 0:
+						continue
+					if not _in_rect_union(rects, p + Vector2(float(ox) * cell, float(oz) * cell)):
+						interior = false
+			if interior:
+				sink = TILE_SINK_HEADROOM_M
+			if sink > 0.0:
+				out[r * res + c] -= sink
+	return out
+
+
+static func _in_rect_union(rects: Array, p: Vector2) -> bool:
+	for rect in rects:
+		if (rect as Rect2).has_point(p):
+			return true
+	return false
+
+
+## Rebuild the DetailGround mesh + collider when the set of sunk tiles changed —
+## called after each committed edit / undo / clear.
+func _refresh_detail_sink(force: bool = false) -> void:
+	var sig := _sink_signature()
+	if not force and sig == _detail_sink_sig:
+		return
+	_detail_sink_sig = sig
+	var terrain := _main.get_node_or_null("Terrain") as Node3D if _main != null else null
+	if terrain != null and not _detail_surface_grid.is_empty():
+		_rebuild_detail_patch(terrain)
+		# upsert_detail_patch made a fresh drape material — tiles must follow it.
+		if _height_field != null and is_instance_valid(_height_field):
+			_height_field.set_material(_detail_ground_material(terrain))
+
+
+## After a committed sculpt edit: if the ground under the player/drone was
+## RAISED above them (buried), lift them onto the new surface. Lowered ground is
+## left to gravity — the actor just falls/steps down naturally.
+func _reseat_actors_after_edit() -> void:
+	if _main == null:
+		return
+	var player := _main.get_node_or_null("Player") as CharacterBody3D
+	if player != null:
+		var pos := player.global_position
+		var gy := _ground_height_at(pos.x, pos.z)
+		if pos.y < gy + 0.1:
+			pos.y = gy + TerrainBuilder.PLAYER_SPAWN_CLEARANCE_M
+			player.global_position = pos
+			player.velocity = Vector3.ZERO
+			if "fall_start_height" in player:
+				player.fall_start_height = pos.y
+				player.highest_point_during_fall = pos.y
+			if "void_reference_y" in player:
+				player.void_reference_y = pos.y
+	var drone := _main.get_node_or_null("FPVDrone") as FPVDrone
+	if drone != null:
+		var dpos := drone.global_position
+		var dgy := _ground_height_at(dpos.x, dpos.z)
+		if dpos.y < dgy + 0.25:
+			dpos.y = dgy + DRONE_GROUND_CLEARANCE_M
+			drone.global_position = dpos
 
 
 func _sync_actors_to_ground(force: bool = false) -> void:
@@ -3258,6 +3947,8 @@ func _compose_detail_surface(apply_user_edits: bool = true) -> PackedFloat32Arra
 		return PackedFloat32Array()
 	var res := _detail_elev_cols
 	var extent := _detail_extent_m()
+	if _terrain_edits != null:
+		_terrain_edits.ensure_detail(res, extent)
 	var grid := TerrainBuilder.apply_detail_vertical_offset(
 		_detail_elev_grid.duplicate(), _detail_vertical_offset)
 	var coarse := _compose_base_footing_grid(false)
@@ -3272,6 +3963,7 @@ func _compose_detail_surface(apply_user_edits: bool = true) -> PackedFloat32Arra
 			grid, res, extent, _osm_vectors.get("landuse", []))
 	if apply_user_edits and _terrain_edits != null:
 		grid = _apply_edits_to_detail(grid, res, extent)
+		grid = _terrain_edits.apply_detail_to(grid, res, extent)
 	return grid
 
 
@@ -3348,7 +4040,7 @@ func _apply_edits_to_detail(detail: PackedFloat32Array, res: int, extent_m: floa
 	return out
 
 
-func _rebuild_heightfield(skip_overlays: bool = false) -> void:
+func _rebuild_heightfield(skip_overlays: bool = false, reseat_actors: bool = true) -> void:
 	if not _built or _base_dem_grid.is_empty():
 		return
 	var had_detail := _detail_collision_active
@@ -3359,7 +4051,7 @@ func _rebuild_heightfield(skip_overlays: bool = false) -> void:
 	if not skip_overlays:
 		_attach_buildings()
 		_attach_water()
-	_finish_heightfield_rebuild(had_detail)
+	_finish_heightfield_rebuild(had_detail, reseat_actors)
 	_watershed_analysis = null  # lazy recompute via get_watershed_analysis()
 
 
@@ -3455,6 +4147,10 @@ func _rebuild_detail_patch(terrain: Node3D) -> void:
 		mesh_grid = TerrainBuilder.resample(
 			_detail_surface_grid, _detail_elev_cols, _detail_elev_rows, DETAIL_MESH_RES)
 		mesh_res = DETAIL_MESH_RES
+	# Sink the coarse detail surface under active edit tiles (hi-res tile meshes
+	# own those areas); keeps cut bowls visible and their colliders authoritative.
+	mesh_grid = _detail_mesh_grid_with_sink(mesh_grid, mesh_res)
+	_detail_sink_sig = _sink_signature()
 	TerrainBuilder.upsert_detail_patch(
 		terrain, mesh_grid, mesh_res, _detail_extent_m(),
 		_built_center_elev, _drape, _detail_drape, _built_extent, _seam_feather_m)
@@ -3465,17 +4161,32 @@ func _rebuild_detail_patch(terrain: Node3D) -> void:
 
 
 ## Re-ground dynamic content and re-seat actors after a heightfield change.
-func _finish_heightfield_rebuild(had_detail: bool) -> void:
+func _finish_heightfield_rebuild(had_detail: bool, reseat_actors: bool = true) -> void:
 	_reground_vegetation()
 	_reground_placed_props()
 	if _auto_veg_generated:
 		_reground_auto_vegetation()
+	var terrain_node := _main.get_node_or_null("Terrain") if _main != null else null
+	if terrain_node != null:
+		_ensure_height_field(terrain_node)
 	_detail_collision_active = not _detail_surface_grid.is_empty()
-	if _detail_collision_active and (not had_detail or _actors_off_ground()):
+	if reseat_actors and _detail_collision_active and (not had_detail or _actors_off_ground()):
 		_sync_actors_to_ground(not had_detail)
+		# Detail collider just changed; reseat on the true surface once physics
+		# has registered it (avoids landing on the lower coarse collider).
+		if not had_detail and not _from_resume:
+			_deferred_raycast_reseat()
 	var soi := get_node_or_null("/root/SoiService")
 	if soi != null and soi.has_method("refresh_footing"):
 		soi.refresh_footing()
+
+
+## Reseat the player on the true collision surface after the next couple of
+## physics frames (so freshly-added terrain colliders are live).
+func _deferred_raycast_reseat() -> void:
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	_raycast_reseat_player()
 
 
 ## Seat props (and refresh building footing) on the final composed heightfield
@@ -4698,9 +5409,11 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 	# Optional per-brush look snapshot ("Apply to brush"): stamped onto every new
 	# instance so these trees keep their custom look regardless of later map edits.
 	var brush_card: Dictionary = params.get("card_settings", {}) if params.get("card_settings") is Dictionary else {}
+	var forced_species := str(params.get("species", ""))
+	var use_forced := not forced_species.is_empty() and VegSpeciesCatalog.is_paintable(forced_species)
 	var added := 0
 	for spot in spots:
-		var species := VegetationPaint.pick_species(
+		var species := forced_species if use_forced else VegetationPaint.pick_species(
 			preset_enum,
 			float(params.get("mix_pine", 0.3)),
 			float(params.get("mix_deciduous", 0.3)),
@@ -4731,7 +5444,7 @@ func place_single_vegetation(species: String, x: float, z: float, params: Dictio
 	if _vegetation_layer == null:
 		return false
 	_vegetation_layer.ensure_species_keys()
-	if species.is_empty() or species not in VegetationLayer.ALL_SPECIES:
+	if species.is_empty() or not VegSpeciesCatalog.is_paintable(species):
 		return false
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(params.get("seed", 1337)) ^ int(x * 131.0) ^ int(z * 977.0)
@@ -4987,6 +5700,435 @@ func apply_sculpt_op(op: String, rect_min: Vector2, rect_max: Vector2,
 	update_selection_highlight(rect_min, rect_max)
 
 
+## ---------------------------------------------------------------------------
+## Live brush/shape sculpt (terrain_edit_ui). Precision detail-patch layer.
+## ---------------------------------------------------------------------------
+
+## True when the detail patch exists — sculpting authors the hi-res detail delta.
+func can_sculpt_detail() -> bool:
+	return not _detail_surface_grid.is_empty() and _detail_elev_cols >= 2 \
+		and _terrain_edits != null
+
+
+func sculpt_detail_res() -> int:
+	return _detail_elev_cols
+
+
+## Snapshot the user water bodies for undo (Fill water / designated ponds). The
+## high-res terrain layer has its own region-scoped tile-undo entries.
+func _push_sculpt_undo() -> void:
+	_sculpt_undo_stack.append({"user_water": _user_water_data.duplicate(true)})
+	while _sculpt_undo_stack.size() > SCULPT_UNDO_MAX:
+		_sculpt_undo_stack.pop_front()
+
+
+## Public entry for the terrain dock (Fill water, etc.).
+func push_sculpt_undo() -> void:
+	_push_sculpt_undo()
+
+
+## Begin a high-res tile edit (brush stroke, level, pond carve). Pairs with
+## end_terrain_tile_edit(); everything written to the tile layer in between is one
+## undo step.
+func begin_terrain_tile_edit() -> void:
+	_ensure_edit_tiles()
+	_edit_tiles.begin_session()
+
+
+## Close the current tile edit, push it as a single (region-scoped) undo entry,
+## re-mesh the touched tiles, and autosave.
+func end_terrain_tile_edit() -> void:
+	if _edit_tiles == null:
+		return
+	var snap := _edit_tiles.end_session()
+	if not snap.is_empty():
+		_sculpt_undo_stack.append({"tiles": snap})
+		while _sculpt_undo_stack.size() > SCULPT_UNDO_MAX:
+			_sculpt_undo_stack.pop_front()
+	# Commit: tile meshes + colliders must be live BEFORE the DetailGround
+	# collider sinks beneath them, or an actor in the area has nothing to
+	# stand on for a frame.
+	if _height_field != null:
+		_height_field.reconcile_dirty_now()
+	_refresh_detail_sink()
+	_save_edit_tiles()
+	_reseat_actors_after_edit()
+
+
+# ---------------------------------------------------------------------------
+# High-res sculpt commands (Phase 2 tools call these). Brush stamps run inside a
+# stroke session (UI calls begin/end around the drag); one-shot region ops manage
+# their own session.
+# ---------------------------------------------------------------------------
+
+func _ensure_edit_tiles() -> void:
+	if _edit_tiles == null:
+		_edit_tiles = TerrainEditTiles.new()
+	if _height_field == null or not is_instance_valid(_height_field):
+		var terrain := _main.get_node_or_null("Terrain") as Node3D if _main != null else null
+		if terrain != null:
+			_ensure_height_field(terrain)
+
+
+## One brush stamp (called each stroke frame between begin/end_terrain_tile_edit).
+func brush_stamp(mode: String, world: Vector3, radius: float, amount: float,
+		hardness: float, target_y: float = NAN) -> void:
+	_ensure_edit_tiles()
+	if _edit_tiles == null:
+		return
+	var c := Vector2(world.x, world.z)
+	var base_fn := Callable(self, "_height_field_base")
+	match mode:
+		"raise":
+			TerrainSculptOps.raise_lower_brush(_edit_tiles, c, radius, absf(amount), hardness)
+		"lower":
+			TerrainSculptOps.raise_lower_brush(_edit_tiles, c, radius, -absf(amount), hardness)
+		"smooth":
+			TerrainSculptOps.smooth_brush(_edit_tiles, c, radius, amount, base_fn, hardness)
+		"flatten":
+			var ty := target_y if is_finite(target_y) else _height_field_base(world.x, world.z)
+			TerrainSculptOps.flatten_brush(_edit_tiles, c, radius, ty, amount, base_fn, hardness)
+	# Live feedback: only the touched tiles re-mesh (same frame, bounded budget).
+	if _height_field != null:
+		_height_field.queue_dirty()
+	# When the stroke spills into a NEW tile, sink the DetailGround under it right
+	# away — otherwise a Lower/Pond cut stays hidden under the coarse mesh until
+	# mouse-up. No-op while the tile set is unchanged (signature short-circuit).
+	_refresh_detail_sink()
+
+
+## Level a polygon to an absolute Y (one undo step).
+func level_region_command(poly: PackedVector2Array, target_y: float,
+		feather_m: float) -> void:
+	_ensure_edit_tiles()
+	if _edit_tiles == null or poly.size() < 3:
+		return
+	begin_terrain_tile_edit()
+	TerrainSculptOps.level_polygon(_edit_tiles, poly, target_y, feather_m,
+		Callable(self, "_height_field_base"))
+	end_terrain_tile_edit()
+
+
+## Grade a ramp between two world points (endpoints snap to current surface).
+func ramp_command(a: Vector3, b: Vector3, width_m: float) -> void:
+	_ensure_edit_tiles()
+	if _edit_tiles == null:
+		return
+	var ya := ground_height_at(a.x, a.z)
+	var yb := ground_height_at(b.x, b.z)
+	begin_terrain_tile_edit()
+	TerrainSculptOps.ramp(_edit_tiles, Vector2(a.x, a.z), Vector2(b.x, b.z),
+		ya, yb, width_m, Callable(self, "_height_field_base"))
+	end_terrain_tile_edit()
+
+
+## Lasso a pond: carve a bowl `depth` m deep at high resolution, then fill it with
+## water to just below the lowest rim (a natural gravity level). Returns true on
+## success. Carve is one tile-undo step; the water body is a separate undo entry.
+func pond_command(poly: PackedVector2Array, depth: float,
+		label: String = "Sculpted Pond") -> bool:
+	_ensure_edit_tiles()
+	if _edit_tiles == null or poly.size() < 3:
+		return false
+	# Check the water-body minimum BEFORE carving, so a too-small lasso doesn't
+	# dig a dry hole that then fails to fill.
+	if BuildingBuilder.footprint_area_m2(poly) < WaterBuilder.MIN_AREA_M2:
+		_notify_options_status(
+			"Pond too small (min ~%.0f m²) — draw a larger outline" % WaterBuilder.MIN_AREA_M2,
+			"warn")
+		return false
+	var water_before: Array = _user_water_data.duplicate(true)
+	begin_terrain_tile_edit()
+	var rim := TerrainSculptOps.carve_basin(_edit_tiles, poly, depth, 2.0,
+		Callable(self, "_height_field_base"))
+	end_terrain_tile_edit()
+	if is_nan(rim):
+		return false
+	var freeboard := clampf(depth * 0.1, 0.05, 0.5)
+	var tag := EarthworksBuilder.basin_tag_from_poly(poly)
+	if not designate_sculpted_pond(poly, label, rim - freeboard, tag):
+		return false
+	# Fold the pre-pond water state into the carve's undo entry so ONE Undo
+	# reverts both the bowl and its water.
+	if not _sculpt_undo_stack.is_empty():
+		var last: Variant = _sculpt_undo_stack.back()
+		if last is Dictionary and (last as Dictionary).has("tiles"):
+			(last as Dictionary)["user_water"] = water_before
+	return true
+
+
+func can_undo_terrain_sculpt() -> bool:
+	return not _sculpt_undo_stack.is_empty()
+
+
+func undo_terrain_sculpt() -> bool:
+	if _sculpt_undo_stack.is_empty():
+		return false
+	var snap: Variant = _sculpt_undo_stack.pop_back()
+	var handled := false
+	if snap is Dictionary and (snap as Dictionary).has("tiles"):
+		# Region-scoped tile-layer undo (the high-res editor). Cheap: only the
+		# touched tiles are restored + re-meshed. Reconcile immediately so the
+		# tile colliders match before the DetailGround sink refresh + reseat.
+		if _edit_tiles != null:
+			_edit_tiles.apply_snapshot((snap as Dictionary)["tiles"])
+			_edit_tiles.prune_flat_tiles()
+			if _height_field != null:
+				_height_field.reconcile_dirty_now()
+			_refresh_detail_sink()
+			_save_edit_tiles()
+			_reseat_actors_after_edit()
+		handled = true
+	if snap is Dictionary and (snap as Dictionary).has("user_water"):
+		# Water-body undo (Fill water / pond — may ride the same entry as tiles
+		# so one Undo reverts a pond's carve AND its water together).
+		_user_water_data = ((snap as Dictionary).get("user_water", []) as Array).duplicate(true)
+		_save_user_water()
+		_refresh_water_data()
+		_attach_water()
+		handled = true
+	return handled
+
+
+## Open a sculpt session (drone edit-camera meta on). The high-res tile layer is
+## live and self-persisting; there's no legacy preview to prime anymore.
+func begin_sculpt_session() -> void:
+	_sculpt_session = true
+	_set_drone_sculpt_session_meta(true)
+
+
+## Close the sculpt session: drop the selection highlight and persist the tiles.
+func end_sculpt_session() -> void:
+	_sculpt_session = false
+	_set_drone_sculpt_session_meta(false)
+	clear_sculpt_selection_highlight()
+	_save_edit_tiles()
+
+
+func _set_drone_sculpt_session_meta(on: bool) -> void:
+	if _main == null:
+		return
+	var drone := _main.get_node_or_null("FPVDrone")
+	if drone != null:
+		drone.set_meta("terrain_sculpt_session", on)
+
+
+## ---------------------------------------------------------------------------
+## Selection highlight (used by Level / Pond / Fill water) + clear-all
+## ---------------------------------------------------------------------------
+
+func update_sculpt_selection_highlight(poly: PackedVector2Array) -> void:
+	if _main == null or poly.size() < 3:
+		clear_sculpt_selection_highlight()
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	if _sculpt_highlight == null or not is_instance_valid(_sculpt_highlight):
+		_sculpt_highlight = MeshInstance3D.new()
+		_sculpt_highlight.name = "SculptSelectionHighlight"
+		terrain.add_child(_sculpt_highlight)
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.albedo_color = Color(0.35, 0.85, 1.0, 0.45)
+		_sculpt_highlight.material_override = mat
+	var footing := _highlight_footing_grid(true)
+	_sculpt_highlight.mesh = TerrainBuilder.build_polygon_highlight(
+		poly, footing["grid"], footing["res"], footing["extent"], _built_center_elev)
+	_sculpt_highlight.visible = true
+
+
+func clear_sculpt_selection_highlight() -> void:
+	if _sculpt_highlight != null and is_instance_valid(_sculpt_highlight):
+		_sculpt_highlight.visible = false
+		_sculpt_highlight.mesh = null
+
+
+## Samples the composed DEM footing (base for the high-res tile layer).
+## Composed base surface height (world Y) WITHOUT the high-res tile edits — the
+## surface that tool deltas are measured against (so applying a delta never double
+## counts prior edits).
+func _dem_height_without_earthworks(x: float, z: float) -> float:
+	var detail := _detail_footing_grid()
+	var in_detail := absf(x) <= _detail_half_extent and absf(z) <= _detail_half_extent
+	var fallback := PackedFloat32Array()
+	if in_detail and detail.is_empty() and _detail_elev_resolved:
+		fallback = _compose_base_footing_grid(true)
+	var y := TerrainBuilder.sample_footing_height(
+		x, z, _built_grid, MESH_RES, _built_extent, _built_center_elev,
+		detail, _detail_elev_cols, _detail_elev_rows, _detail_extent_m(),
+		fallback)
+	if _built_grid.is_empty() and detail.is_empty():
+		return _spawn_ground_y
+	return y
+
+
+func _earthworks_path() -> String:
+	return "user://maps/earthworks_%s_%s.json" % [
+		TerrainEditGrid._coord_token(_lat), TerrainEditGrid._coord_token(_lon)]
+
+
+func _load_earthworks() -> void:
+	_earthworks = []
+	var path := _earthworks_path()
+	if not FileAccess.file_exists(path):
+		return
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	if not (parsed is Dictionary):
+		return
+	for entry in ((parsed as Dictionary).get("items", []) as Array):
+		if not (entry is Dictionary):
+			continue
+		var e: Dictionary = entry
+		var pts := PackedVector2Array()
+		for pv in (e.get("points", []) as Array):
+			if pv is Array and (pv as Array).size() >= 2:
+				pts.append(Vector2(float(pv[0]), float(pv[1])))
+		if pts.size() < 3:
+			continue
+		_earthworks.append({
+			"tag": str(e.get("tag", "")),
+			"kind": str(e.get("kind", "raise")),
+			"points": pts,
+			"height_m": float(e.get("height_m", 1.0)),
+			"slope": float(e.get("slope", 0.0)),
+			"round": float(e.get("round", 1.0)),
+			"top_y": float(e.get("top_y", 0.0)),
+			"floor_y": float(e.get("floor_y", 0.0)),
+			"rim_y": float(e.get("rim_y", 0.0)),
+		})
+
+
+func _save_earthworks() -> void:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
+	var items: Array = []
+	for rec_v in _earthworks:
+		if not (rec_v is Dictionary):
+			continue
+		var rec: Dictionary = rec_v
+		var pts: PackedVector2Array = rec.get("points", PackedVector2Array())
+		var arr: Array = []
+		for p in pts:
+			arr.append([p.x, p.y])
+		items.append({
+			"tag": str(rec.get("tag", "")),
+			"kind": str(rec.get("kind", "raise")),
+			"points": arr,
+			"height_m": float(rec.get("height_m", 1.0)),
+			"slope": float(rec.get("slope", 0.0)),
+			"round": float(rec.get("round", 1.0)),
+			"top_y": float(rec.get("top_y", 0.0)),
+			"floor_y": float(rec.get("floor_y", 0.0)),
+			"rim_y": float(rec.get("rim_y", 0.0)),
+		})
+	var f := FileAccess.open(_earthworks_path(), FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(JSON.stringify({"version": 1, "items": items}))
+
+
+## Wipe all user terrain adjustments (high-res tile edits + legacy delta grids +
+## sculpted/gravity ponds).
+func clear_all_terrain_edits() -> void:
+	if _terrain_edits != null:
+		_terrain_edits.delta.fill(0.0)
+		if not _terrain_edits.detail_delta.is_empty():
+			_terrain_edits.detail_delta.fill(0.0)
+		_terrain_edits.save(_lat, _lon)
+	if _edit_tiles != null:
+		_edit_tiles.clear()
+		_save_edit_tiles()
+	if _height_field != null:
+		_height_field.clear_all()
+	_detail_sink_sig = ""
+	_earthworks.clear()
+	_free_all_earthwork_nodes()
+	_save_earthworks()
+	# Remove any pond graph nodes the player added before clearing the water bodies,
+	# so cleared ponds never leave orphaned catchment/tank items behind.
+	var graph := _find_system_graph_view()
+	if graph != null and graph.has_method("remove_imported_pond"):
+		for uw in _user_water_data:
+			if uw is Dictionary:
+				var utag := str((uw as Dictionary).get("tag", ""))
+				if not utag.is_empty():
+					graph.call("remove_imported_pond", utag)
+	_added_pond_tags.clear()
+	_user_water_data.clear()
+	_save_user_water()
+	_refresh_water_data()
+	_sculpt_undo_stack.clear()
+	clear_sculpt_selection_highlight()
+	_rebuild_heightfield(false, false)
+	_notify_options_status("Cleared all terrain edits", "ok")
+
+
+## Free any leftover legacy "Earthworks" node (created by the retired push/pull
+## tool); nothing creates it anymore, but old scenes may still carry one.
+func _free_all_earthwork_nodes() -> void:
+	var terrain := _main.get_node_or_null("Terrain") if _main != null else null
+	if terrain == null:
+		return
+	var root := terrain.get_node_or_null("Earthworks")
+	if root != null:
+		root.queue_free()
+
+
+## Pond rim height (world Y) for fill-level math — max ground at poly verts.
+func pond_rim_height(poly: PackedVector2Array) -> float:
+	if poly.is_empty():
+		return 0.0
+	var rim := -INF
+	for p in poly:
+		rim = maxf(rim, ground_height_at(p.x, p.y))
+	return rim if is_finite(rim) else 0.0
+
+
+## Gravity-fill closed depressions inside a selection polygon (circle/rect/lasso…).
+## Water finds natural spill elevations per pit — like rain ponding in a basin.
+## Returns the number of water bodies created.
+func fill_selection_depressions(poly: PackedVector2Array, fill_frac: float = 0.85) -> int:
+	if poly.size() < 3:
+		return 0
+	var area := BuildingBuilder.footprint_area_m2(poly)
+	if area < 40.0:
+		_notify_options_status("Selection too small to flood — widen the circle", "warn")
+		return 0
+	# Cell size scales with selection so large circles stay interactive.
+	var cell := clampf(sqrt(area) / 48.0, 1.25, 4.0)
+	var height_at := Callable(self, "ground_height_at")
+	var bodies: Array = Watershed.fill_depressions_in_polygon(
+		poly, height_at, fill_frac, cell, 0.10, 40.0)
+	if bodies.is_empty():
+		_notify_options_status(
+			"No closed depressions in selection — dig a basin (Pond) or pick a lower area",
+			"warn")
+		return 0
+	var added := 0
+	for i in bodies.size():
+		var body: Dictionary = bodies[i]
+		var pts: PackedVector2Array = body.get("points", PackedVector2Array())
+		var level := float(body.get("level_m", NAN))
+		var tag := "grav_pond_%d_%d_%d" % [
+			roundi(SolarArrayBuilder.centroid(pts).x),
+			roundi(SolarArrayBuilder.centroid(pts).y),
+			i]
+		var label := "Pond" if bodies.size() == 1 else "Pond %d" % (i + 1)
+		if designate_sculpted_pond(pts, label, level, tag):
+			added += 1
+	if added > 0:
+		_notify_options_status(
+			"Filled %d depression%s (gravity) → system graph" % [
+				added, "" if added == 1 else "s"],
+			"ok")
+	return added
+
+
 func _mean_local_height_in_rect(grid: PackedFloat32Array, rect_min: Vector2,
 		rect_max: Vector2) -> float:
 	var x0 := minf(rect_min.x, rect_max.x)
@@ -5108,6 +6250,7 @@ func _setup_placed_props() -> void:
 	_setup_placed_prop_edit_ui()
 	_setup_building_builder_ui()
 	_setup_starshade_edit_ui()
+	_setup_pond_edit_ui()
 	_setup_pallet_rack_builder_ui()
 	# Unified library lives on Main (all maps); bind this loader when opening.
 	call_deferred("_rebuild_placed_props")
@@ -5165,6 +6308,11 @@ func _attach_imported_ibc(model_id: String, ibc_info: Variant) -> void:
 
 func _apply_imported_graph(graph_state: Dictionary) -> void:
 	if graph_state.is_empty() or _main == null:
+		return
+	# Skip empty circuits — CircuitMapper always returns a populated wrapper, so
+	# an items=[] payload would wipe the map's graph (incl. PBIs) before seeding.
+	var graph_d: Dictionary = graph_state.get("graph", {}) as Dictionary
+	if (graph_d.get("items", []) as Array).is_empty():
 		return
 	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
 	if sgv == null:
@@ -5493,6 +6641,24 @@ func _setup_building_builder_ui() -> void:
 	layer.add_child(ui)
 	ui.bind_loader(self)
 	_building_builder_ui = ui
+
+
+func _setup_pond_edit_ui() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "PondEditLayer"
+	layer.layer = 26
+	ui_layer.add_child(layer)
+	var ui := PanelContainer.new()
+	ui.name = "PondEditModal"
+	ui.set_script(POND_EDIT_MODAL_SCRIPT)
+	layer.add_child(ui)
+	ui.call("bind_loader", self)
+	_pond_edit_ui = ui
 
 
 func _setup_starshade_edit_ui() -> void:

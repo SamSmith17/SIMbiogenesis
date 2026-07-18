@@ -7,6 +7,9 @@ const GLOBAL_PATH := "user://vegetation_style.cfg"
 ## Named per-species look presets the player can quick-load from the Tune look…
 ## modal. One ConfigFile section per species; each key = preset name → value dict.
 const PRESETS_PATH := "user://vegetation_presets.cfg"
+## Player-edited default look per subspecies id (spruce, fir, …). Merged after
+## global style so new maps / sessions start from the saved species looks.
+const SPECIES_DEFAULTS_PATH := "user://vegetation_species_defaults.json"
 
 
 static func defaults() -> Dictionary:
@@ -205,6 +208,7 @@ static func map_path(lat: float, lon: float) -> String:
 static func load_merged(lat: float, lon: float) -> Dictionary:
 	var out := defaults()
 	_load_global_into(out)
+	_merge_species_defaults_into(out)
 	_load_map_into(out, lat, lon)
 	return out
 
@@ -288,6 +292,53 @@ static func delete_preset(species: String, preset_name: String) -> void:
 	if cfg.has_section_key(species, preset_name):
 		cfg.erase_section_key(species, preset_name)
 		cfg.save(PRESETS_PATH)
+
+
+# --- Per-subspecies default looks --------------------------------------------
+
+static func save_species_default(species: String, values: Dictionary) -> void:
+	if species.is_empty() or values.is_empty():
+		return
+	var all := _load_species_defaults_file()
+	all[species] = _color_dict_to_json(values)
+	var f := FileAccess.open(SPECIES_DEFAULTS_PATH, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(JSON.stringify(all))
+
+
+static func load_species_default(species: String) -> Dictionary:
+	var all := _load_species_defaults_file()
+	var raw: Variant = all.get(species, {})
+	if raw is Dictionary:
+		return _json_to_color_dict(raw as Dictionary)
+	return {}
+
+
+static func _load_species_defaults_file() -> Dictionary:
+	if not FileAccess.file_exists(SPECIES_DEFAULTS_PATH):
+		return {}
+	var f := FileAccess.open(SPECIES_DEFAULTS_PATH, FileAccess.READ)
+	if f == null:
+		return {}
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	return parsed as Dictionary if parsed is Dictionary else {}
+
+
+static func _merge_species_defaults_into(out: Dictionary) -> void:
+	var all := _load_species_defaults_file()
+	for species in all:
+		var raw: Variant = all[species]
+		if not (raw is Dictionary):
+			continue
+		var patch := _json_to_color_dict(raw as Dictionary)
+		out.merge(patch, true)
+
+
+## Map a Size-var slider (0 = identical, 0.5 = ±50%) onto scale_min/scale_max.
+static func scales_from_size_var(size_var: float) -> Vector2:
+	var v := clampf(size_var, 0.0, 0.5)
+	return Vector2(1.0 - v, 1.0 + v)
 
 
 static func apply_patch(base: Dictionary, patch: Dictionary) -> Dictionary:

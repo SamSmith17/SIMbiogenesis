@@ -68,7 +68,7 @@ const SPECIES_SHAPE_SLIDERS := {
 	"pine": [
 		{"key": "pine_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
 		{"key": "pine_growth_years", "label": "Growth yrs", "min": 0.0, "max": 80.0},
-		{"key": "pine_card_w", "label": "W", "min": 0.3, "max": 4.0},
+		{"key": "pine_card_w", "label": "W", "min": 0.3, "max": 10.0},
 		{"key": "pine_card_h", "label": "H", "min": 1.5, "max": 20.0},
 		{"key": "pine_trunk_w", "label": "Trunk", "min": 0.08, "max": 1.5},
 		{"key": "pine_whorl_count", "label": "Whorls", "min": 3.0, "max": 14.0},
@@ -172,6 +172,7 @@ var _veg_root: Node3D = null
 var _camera: Camera3D = null
 var _ground: MeshInstance3D = null
 var _species_opt: OptionButton = null
+var _subspecies_opt: OptionButton = null
 var _preset_opt: OptionButton = null
 var _preset_name_edit: LineEdit = null
 var _species_section: VBoxContainer = null
@@ -180,7 +181,11 @@ var _density_slider: HSlider = null
 var _density_spin: SpinBox = null
 var _diameter_slider: HSlider = null
 var _diameter_spin: SpinBox = null
+var _size_var := 0.25
+var _size_var_slider: HSlider = null
+var _size_var_spin: SpinBox = null
 var _shader_sliders: Dictionary = {}
+var _shader_advanced: VBoxContainer = null
 var _rebuild_pending := false
 var _rebuild_timer := 0.0
 var _cam_yaw: float = PI / 4.0
@@ -210,7 +215,15 @@ func open(initial_preset: int = -1) -> void:
 	_load_from_loader()
 	if initial_preset >= 0:
 		_set_species_from_preset(initial_preset)
+	if _dock != null and _dock.has_method("get_paint_species"):
+		var dock_sp := str(_dock.call("get_paint_species"))
+		if VegSpeciesCatalog.is_paintable(dock_sp):
+			_species = dock_sp
+			_last_species = dock_sp
+	if _dock != null and _dock.has_method("get_size_var"):
+		_size_var = float(_dock.call("get_size_var"))
 	_sync_species_dropdown()
+	_refresh_subspecies_dropdown()
 	_rebuild_species_section()
 	_refresh_preset_dropdown()
 	_sync_tint_picker()
@@ -371,6 +384,17 @@ func _build_ui() -> void:
 	_species_opt.item_selected.connect(_on_species_selected)
 	type_row.add_child(_species_opt)
 
+	var sub_row := HBoxContainer.new()
+	sidebar.add_child(sub_row)
+	var sub_lbl := Label.new()
+	_style_section(sub_lbl, "Subsp.")
+	sub_lbl.custom_minimum_size = Vector2(44, 0)
+	sub_row.add_child(sub_lbl)
+	_subspecies_opt = OptionButton.new()
+	_subspecies_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_subspecies_opt.item_selected.connect(_on_subspecies_selected)
+	sub_row.add_child(_subspecies_opt)
+
 	_build_preset_row(sidebar)
 
 	var dens := _labeled_slider(sidebar, "Density", 0.25, 3.0, _density,
@@ -386,6 +410,12 @@ func _build_ui() -> void:
 			_queue_rebuild())
 	_diameter_slider = dia.get("slider")
 	_diameter_spin = dia.get("spin")
+	var svar := _labeled_slider(sidebar, "Size var %", 0.0, 50.0, _size_var * 100.0,
+		func(v: float) -> void:
+			_size_var = clampf(v / 100.0, 0.0, 0.5)
+			_queue_rebuild(), 1.0)
+	_size_var_slider = svar.get("slider")
+	_size_var_spin = svar.get("spin")
 
 	_species_section = VBoxContainer.new()
 	_species_section.add_theme_constant_override("separation", 4)
@@ -402,13 +432,21 @@ func _build_ui() -> void:
 	_tint_picker.color_changed.connect(_on_tint_changed)
 	tint_row.add_child(_tint_picker)
 
-	var shader_hdr := Label.new()
-	_style_section(shader_hdr, "Shader")
-	sidebar.add_child(shader_hdr)
+	var adv_toggle := CheckButton.new()
+	adv_toggle.text = "Advanced shader"
+	adv_toggle.button_pressed = false
+	adv_toggle.toggled.connect(func(on: bool) -> void:
+		if _shader_advanced != null:
+			_shader_advanced.visible = on)
+	sidebar.add_child(adv_toggle)
+	_shader_advanced = VBoxContainer.new()
+	_shader_advanced.visible = false
+	_shader_advanced.add_theme_constant_override("separation", 4)
+	sidebar.add_child(_shader_advanced)
 	for spec in SHADER_SLIDERS:
 		var sd: Dictionary = spec
 		var key := str(sd["key"])
-		var sl := _labeled_slider(sidebar, str(sd["label"]), float(sd["min"]), float(sd["max"]),
+		var sl := _labeled_slider(_shader_advanced, str(sd["label"]), float(sd["min"]), float(sd["max"]),
 			float(_values.get(key, VegetationStyleConfig.defaults().get(key, 0.0))),
 			func(v: float) -> void:
 				_values[key] = v
@@ -432,6 +470,13 @@ func _build_ui() -> void:
 	brush_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
 	brush_btn.pressed.connect(_apply_to_brush)
 	btn_row.add_child(brush_btn)
+	var default_btn := Button.new()
+	default_btn.text = "Save as species default"
+	default_btn.custom_minimum_size = Vector2(150, 30)
+	default_btn.tooltip_text = "Persist this look as the default for this subspecies"
+	default_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	default_btn.pressed.connect(_save_species_default)
+	btn_row.add_child(default_btn)
 	var reset_btn := Button.new()
 	reset_btn.text = "Reset"
 	reset_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
@@ -451,6 +496,12 @@ func _labeled_slider(parent: Control, label: String, min_v: float, max_v: float,
 		72, 120, 64, step)
 
 
+func _shape_family() -> String:
+	if _species == "mix":
+		return "mix"
+	return VegSpeciesCatalog.mesh_family(_species)
+
+
 func _rebuild_species_section() -> void:
 	if _species_section == null:
 		return
@@ -459,11 +510,12 @@ func _rebuild_species_section() -> void:
 	if _species == "mix":
 		_build_mix_section()
 		return
-	var specs: Array = SPECIES_SHAPE_SLIDERS.get(_species, [])
+	var fam := _shape_family()
+	var specs: Array = SPECIES_SHAPE_SLIDERS.get(fam, [])
 	if specs.is_empty():
 		return
 	var hdr := Label.new()
-	_style_section(hdr, SPECIES_LABELS[SPECIES_IDS.find(_species)])
+	_style_section(hdr, VegSpeciesCatalog.label_for(_species))
 	_species_section.add_child(hdr)
 	for spec in specs:
 		var sd: Dictionary = spec
@@ -576,27 +628,40 @@ func _refresh_preset_dropdown() -> void:
 	_preset_opt.select(0)
 
 
-## Shape sliders + tint for the current species — the unit a preset captures.
+## Shape sliders + tint for the current subspecies — the unit a preset captures.
 func _species_preset_values() -> Dictionary:
 	var out := {}
-	for spec in SPECIES_SHAPE_SLIDERS.get(_species, []):
+	for spec in SPECIES_SHAPE_SLIDERS.get(_shape_family(), []):
 		var key := str((spec as Dictionary)["key"])
 		if _values.has(key):
 			out[key] = _values[key]
-	out["%s_albedo_tint" % _species] = _tints.get(_species, Color.WHITE)
+	out["%s_albedo_tint" % _species] = _tints.get(_species,
+		_tints.get(_shape_family(), Color.WHITE))
 	return out
 
 
 func _apply_preset_values(values: Dictionary) -> void:
 	for k in values:
-		if str(k).ends_with("_albedo_tint"):
-			_tints[_species] = values[k]
+		var ks := str(k)
+		if ks.ends_with("_albedo_tint"):
+			var sid := ks.trim_suffix("_albedo_tint")
+			_tints[sid] = values[k]
+			if sid == _species or sid == _shape_family():
+				_tints[_species] = values[k]
 		else:
 			_values[k] = values[k]
 	_rebuild_species_section()
 	_sync_tint_picker()
 	_sync_top_sliders()
 	_queue_rebuild(true)
+
+
+func _save_species_default() -> void:
+	if _species == "mix" or _species.is_empty():
+		return
+	VegetationStyleConfig.save_species_default(_species, _species_preset_values())
+	if _preset_name_edit != null:
+		_preset_name_edit.placeholder_text = "Saved %s default" % VegSpeciesCatalog.label_for(_species)
 
 
 func _on_preset_selected(idx: int) -> void:
@@ -785,7 +850,11 @@ func _on_vp_gui_input(ev: InputEvent) -> void:
 
 func _merged_settings() -> Dictionary:
 	var out := _values.duplicate(true)
-	out["%s_albedo_tint" % _species] = _tints.get(_species, Color.WHITE)
+	var fam := _shape_family()
+	var tint: Color = _tints.get(_species, _tints.get(fam, Color.WHITE))
+	out["%s_albedo_tint" % _species] = tint
+	if fam != _species and fam != "mix":
+		out["%s_albedo_tint" % fam] = tint
 	out["use_drape"] = false
 	return out
 
@@ -863,7 +932,7 @@ func _live_season_uniforms() -> Dictionary:
 
 
 func _base_spacing() -> float:
-	match _species:
+	match _shape_family():
 		"grass_lawn":
 			return 0.75
 		"grass_field":
@@ -889,8 +958,14 @@ func _scatter_spots() -> Array:
 	var poly := VegetationPaint.circle_polygon(Vector2.ZERO, radius, 28)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = PREVIEW_SEED
-	var max_count := 500 if _species.begins_with("grass_") else 64
-	return VegetationPaint.poisson_fill(poly, _effective_spacing(), rng, [], max_count)
+	var fam := _shape_family()
+	var max_count := 500 if fam.begins_with("grass_") else 64
+	var spots := VegetationPaint.poisson_fill(poly, _effective_spacing(), rng, [], max_count)
+	var scales := VegetationStyleConfig.scales_from_size_var(_size_var)
+	for item in spots:
+		if item is Dictionary:
+			(item as Dictionary)["scale"] = lerpf(scales.x, scales.y, rng.randf())
+	return spots
 
 
 func _rebuild_preview() -> void:
@@ -903,7 +978,8 @@ func _rebuild_preview() -> void:
 	var spots: Array = _scatter_spots()
 	if spots.is_empty():
 		return
-	if _species in VegetationLayer.GRASS_SPECIES:
+	var fam := _shape_family()
+	if fam in VegetationLayer.GRASS_SPECIES:
 		_build_grass_preview(spots, settings)
 	elif _species == "mix":
 		_build_mix_preview(spots, settings)
@@ -994,10 +1070,11 @@ func _mix_weight_dict() -> Dictionary:
 
 
 func _build_grass_preview(spots: Array, settings: Dictionary) -> void:
-	var mesh := GrassBuilder.mesh_for_lod(_species, settings, GrassBuilder.LodTier.NEAR)
+	var fam := _shape_family()
+	var mesh := GrassBuilder.mesh_for_lod(fam, settings, GrassBuilder.LodTier.NEAR)
 	var mat := GrassBuilder.material_for_species(_species, settings, GrassBuilder.LodTier.NEAR)
 	_apply_studio(mat, _species)
-	var species_scale := GrassBuilder.bulk_scale(_species, settings)
+	var species_scale := GrassBuilder.bulk_scale(fam, settings)
 	var vert_off := VegetationLayer.vertical_offset_for(_species, settings)
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -1062,6 +1139,17 @@ func _load_from_loader() -> void:
 		"grass_lawn": style.get("grass_lawn_albedo_tint", Color.WHITE),
 		"grass_field": style.get("grass_field_albedo_tint", Color.WHITE),
 	}
+	for sid in VegSpeciesCatalog.all_selectable_ids():
+		var tk := "%s_albedo_tint" % sid
+		if style.has(tk):
+			_tints[sid] = style[tk]
+		var saved := VegetationStyleConfig.load_species_default(sid)
+		if saved.has(tk):
+			_tints[sid] = saved[tk]
+		for k in saved:
+			if not str(k).ends_with("_albedo_tint") and not str(k).ends_with("_highlight_tint"):
+				if typeof(saved[k]) in [TYPE_FLOAT, TYPE_INT, TYPE_BOOL] and not _values.has(k):
+					_values[k] = saved[k]
 	var raw_map: Dictionary = style.get("osm_species_map", {})
 	_osm_species_map = {}
 	for k in raw_map:
@@ -1089,6 +1177,8 @@ func _load_from_loader() -> void:
 func _sync_top_sliders() -> void:
 	SliderSpinRowScript.set_values({"slider": _density_slider, "spin": _density_spin}, _density)
 	SliderSpinRowScript.set_values({"slider": _diameter_slider, "spin": _diameter_spin}, _patch_diameter)
+	if _size_var_slider != null:
+		SliderSpinRowScript.set_values({"slider": _size_var_slider, "spin": _size_var_spin}, _size_var * 100.0)
 	for key in _shader_sliders:
 		if _values.has(key):
 			SliderSpinRowScript.set_values(_shader_sliders[key], float(_values[key]))
@@ -1116,6 +1206,10 @@ func _style_dict() -> Dictionary:
 	for species in SPECIES_IDS:
 		var tk := "%s_albedo_tint" % species
 		out[tk] = _tints.get(species, Color.WHITE)
+	# Persist the active subspecies tint so paint/rebuild can prefer it.
+	if _species != "mix" and not _species.is_empty():
+		out["%s_albedo_tint" % _species] = _tints.get(_species,
+			_tints.get(_shape_family(), Color.WHITE))
 	out["osm_species_map"] = _osm_species_map.duplicate(true)
 	out["local_mix"] = _local_mix.duplicate(true)
 	for key in MIX_KEYS:
@@ -1137,6 +1231,9 @@ func _brush_card() -> Dictionary:
 			out[key] = _values[key]
 	for species in SPECIES_IDS:
 		out["%s_albedo_tint" % species] = _tints.get(species, Color.WHITE)
+	if _species != "mix" and not _species.is_empty():
+		out["%s_albedo_tint" % _species] = _tints.get(_species,
+			_tints.get(_shape_family(), Color.WHITE))
 	return out
 
 
@@ -1162,6 +1259,10 @@ func _apply_to_map() -> void:
 	VegetationStyleConfig.save_global(global_look)
 	if _dock != null and _dock.has_method("set_paint_density"):
 		_dock.call("set_paint_density", _density)
+	if _dock != null and _dock.has_method("set_size_var"):
+		_dock.call("set_size_var", _size_var)
+	if _dock != null and _dock.has_method("set_paint_species") and _species != "mix":
+		_dock.call("set_paint_species", _species)
 	# Apply to map = one authoritative global look. Clear the brush override so
 	# future painting matches the map; the loader also strips per-instance
 	# card_settings from already-placed trees (apply_vegetation_look) so EVERY tree
@@ -1179,6 +1280,10 @@ func _apply_to_brush() -> void:
 		_dock.call("set_brush_style", _brush_card())
 	if _dock != null and _dock.has_method("set_paint_density"):
 		_dock.call("set_paint_density", _density)
+	if _dock != null and _dock.has_method("set_size_var"):
+		_dock.call("set_size_var", _size_var)
+	if _dock != null and _dock.has_method("set_paint_species") and _species != "mix":
+		_dock.call("set_paint_species", _species)
 	close()
 
 
@@ -1198,36 +1303,101 @@ func _reset_values() -> void:
 
 
 func _on_species_selected(idx: int) -> void:
-	var sp: String = SPECIES_IDS[idx]
-	if sp == _species:
+	var fam: String = SPECIES_IDS[idx]
+	if fam == "mix":
+		_species = "mix"
+		_last_species = "mix"
+		_refresh_subspecies_dropdown()
+		_sync_tint_picker()
+		_rebuild_species_section()
+		_refresh_preset_dropdown()
+		_queue_rebuild(true)
 		return
-	_species = sp
-	_last_species = sp
+	# Keep subspecies when still in the same family; otherwise pick family default.
+	if VegSpeciesCatalog.mesh_family(_species) != fam:
+		_species = fam
+	_last_species = _species
+	_refresh_subspecies_dropdown()
 	_sync_tint_picker()
 	_rebuild_species_section()
 	_refresh_preset_dropdown()
 	if _preset_name_edit != null:
 		_preset_name_edit.text = ""
-	_sync_tint_picker()
 	_queue_rebuild(true)
+
+
+func _refresh_subspecies_dropdown() -> void:
+	if _subspecies_opt == null:
+		return
+	_subspecies_opt.clear()
+	if _species == "mix":
+		_subspecies_opt.add_item("—")
+		_subspecies_opt.disabled = true
+		return
+	_subspecies_opt.disabled = false
+	var fam := _shape_family() if _species != "mix" else "pine"
+	# Type dropdown may have just switched family while _species still old — use Type.
+	if _species_opt != null and _species_opt.selected >= 0:
+		var type_fam := SPECIES_IDS[_species_opt.selected]
+		if type_fam != "mix":
+			fam = type_fam
+	var ids := VegSpeciesCatalog.subspecies_for_family(fam)
+	var select_idx := 0
+	for i in ids.size():
+		var sid: String = ids[i]
+		_subspecies_opt.add_item(VegSpeciesCatalog.label_for(sid))
+		_subspecies_opt.set_item_metadata(i, sid)
+		if sid == _species:
+			select_idx = i
+	_subspecies_opt.select(select_idx)
+	_species = str(_subspecies_opt.get_item_metadata(select_idx))
+	_last_species = _species
+
+
+func _on_subspecies_selected(idx: int) -> void:
+	if _subspecies_opt == null or _subspecies_opt.disabled:
+		return
+	var sid := str(_subspecies_opt.get_item_metadata(idx))
+	if sid.is_empty() or sid == _species:
+		return
+	_species = sid
+	_last_species = sid
+	_maybe_apply_species_default(sid)
+	_sync_tint_picker()
+	_rebuild_species_section()
+	_refresh_preset_dropdown()
+	if _preset_name_edit != null:
+		_preset_name_edit.text = ""
+	_queue_rebuild(true)
+
+
+func _maybe_apply_species_default(sid: String) -> void:
+	var saved := VegetationStyleConfig.load_species_default(sid)
+	if saved.is_empty():
+		return
+	_apply_preset_values(saved)
 
 
 func _on_tint_changed(c: Color) -> void:
 	_tints[_species] = c
+	var fam := _shape_family()
+	if fam != _species and fam != "mix":
+		_tints[fam] = c
 	_queue_rebuild()
 
 
 func _sync_species_dropdown() -> void:
 	if _species_opt == null:
 		return
-	var idx := SPECIES_IDS.find(_species)
+	var fam := "mix" if _species == "mix" else VegSpeciesCatalog.mesh_family(_species)
+	var idx := SPECIES_IDS.find(fam)
 	if idx >= 0:
 		_species_opt.select(idx)
 
 
 func _sync_tint_picker() -> void:
 	if _tint_picker != null:
-		_tint_picker.color = _tints.get(_species, Color.WHITE)
+		_tint_picker.color = _tints.get(_species, _tints.get(_shape_family(), Color.WHITE))
 
 
 func _set_species_from_preset(preset: int) -> void:

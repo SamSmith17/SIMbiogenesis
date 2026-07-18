@@ -2262,6 +2262,10 @@ func _polarity_compatible(src: String, tgt: String,
 		return ResourceKinds.connection_allowed(src_kind, tgt_kind)
 	if src == tgt:
 		return true
+	# Series PV / DC strings: panel+ → next panel− (and the reverse drag).
+	if (src == "positive" and tgt == "negative") \
+			or (src == "negative" and tgt == "positive"):
+		return true
 	# load ↔ ac (appliance into outlet)
 	if src in ["load", "ac"] and tgt in ["load", "ac"]:
 		return true

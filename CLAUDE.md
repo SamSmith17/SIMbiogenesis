@@ -47,6 +47,12 @@ Godot.exe.exe --headless --path . --script core/terrain/terrain_fetch_smoketest.
 # by CLI, freeze a daytime clock, hide HUD, shoot drone-orbit + street PNG sets
 # (+ manifest.json) to user://screenshots/<label>/ for agent/visual review:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres> --capture=both --shots-dir=<label> --quit-after-capture
+# Terrain-sculpt smoke test (WINDOWED): runs a real Raise stroke + Level pad +
+# Pond through the TerrainLoader commands, shoots before/after PNG sets (incl.
+# low grazing views where a 3 m mound/bowl actually silhouettes), dumps the
+# HeightField tile-mesh state (AABBs/material — catches invisible-mesh bugs),
+# then UNDOES everything (map save data untouched):
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres> --sculpt-test --shots-dir=<label> --quit-after-capture
 ```
 
 Gotchas: headless runs rename `addons/**/~lib*.dll` → `*.TMP` (restore with
@@ -396,6 +402,50 @@ bug). Per-vertex COLOR encodes local downhill flow (rg = −∇height dir, b = s
 speed); `terrain_river.gdshader` scrolls ripples + foam streaks downstream, faster on
 steeper reaches. `_ground_y` cross-fades the detail↔base DEM heights within
 `DEM_SEAM_FEATHER_M` (40 m) of the hi-res patch edge so ribbons don't step at the seam.
+
+**Terrain sculpting (T dock — the rebuilt terrain builder).** ONE edit substrate:
+`core/terrain/terrain_edit_tiles.gd` (`TerrainEditTiles`) — sparse per-vertex
+height DELTAS at 1.5 m/cell in 64-cell tiles allocated only where edited, with
+region-scoped undo sessions + binary persistence (`user://maps/terrain_tiles_*`).
+Ops in `core/terrain/terrain_sculpt_ops.gd` (raise/lower/smooth/flatten brushes,
+`level_polygon`, `ramp`, `carve_basin`); loader commands `brush_stamp` /
+`level_region_command` / `ramp_command` / `pond_command` (carve + auto water fill,
+water folded into the SAME undo entry as the carve). **Rendering is an overlay,
+NOT a bake**: the detail DEM mesh is far too coarse (~12–47 m/vertex) to show a
+1.5 m edit — `core/terrain/terrain_height_field.gd` (`TerrainHeightField`, node
+"HeightField" under Terrain) renders each edited tile as its own hi-res mesh +
+`HeightMapShape3D` collider (base_fn returns WORLD Y — no second centring), dirty
+tiles re-mesh live during a drag (budgeted; `reconcile_dirty_now()` drains fully on
+commit/undo BEFORE the sink refresh so actors never lose footing). The coarse
+DetailGround mesh+collider are SUNK `TILE_SINK_HEADROOM_M` (60 m) beneath the
+interior of active tiles (`_detail_mesh_grid_with_sink`; boundary ring follows the
+local cut) so cut bowls/ponds are neither occluded nor bridged — tile skirts
+(`SKIRT_DROP_M` 65 m, must exceed the sink; selftest-pinned) seal the chasm at
+cut boundaries. Footing: `_ground_height_at = composed DEM + tile delta`; commits
+call `_reseat_actors_after_edit()` (lift only if buried — lowering lets gravity
+work). Tile meshes share DetailGround's drape material (re-pointed via
+`set_material` whenever imagery lands). Legacy coarse/detail delta grids +
+earthworks migrate one-time into tiles (`_migrate_legacy_edits_to_tiles`).
+Validate with the `--sculpt-test` harness (above) + terrain_selftest.
+
+**Ponds are player-owned, never auto-added to the graph.** `pond_command` carves a
+basin and calls `designate_sculpted_pond` to FILL it with water (persisted per site
+in `user://maps/user_water_*.json` — points + `level_m` + `capacity_l` + label), but
+does NOT touch the system graph. The player Ctrl/Alt-aims a still-water body
+(`interaction_focus._update_water_focus` → `pick_water_at_world`, highlights blue)
+and Interact/clicks to open the **Pond settings modal**
+(`scenes/ui/pond_edit_ui.gd`, drawer pinned above the timeline; loader wires it in
+`_setup_pond_edit_ui` and opens via `open_pond_editor(idx)`). The modal overrides the
+water fill level (`set_pond_fill_level` → live water mesh) and storage volume
+(`set_pond_capacity` L), toggles **Add to graph / Remove from graph**
+(`add_pond_to_graph` / `remove_pond_from_graph` → `SystemGraphView.add_imported_pond`
+/ `remove_imported_pond`, idempotent per `osm_water_tag`), and **Delete pond**
+(`delete_pond` — removes water body + graph node; OSM map water only leaves the graph).
+`get_pond_info(idx)` is the modal's read model. Graph membership is queried live via
+`SystemGraphView.has_pond_with_tag` (authoritative across reloads — `_added_pond_tags`
+is only a fast cache); clearing all terrain edits strips every user pond's graph
+node first, so cleared ponds never orphan catchment/tank items. OSM lakes/ponds use
+the same modal (graph toggle only; their water is map data, not deletable).
 
 `main.gd` (~1,900 lines) owns: environment/sky, shadow quality, collision
 generation, save/load orchestration, vehicle/death-zone/crisis wiring.

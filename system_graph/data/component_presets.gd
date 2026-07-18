@@ -862,6 +862,34 @@ const WIND_TURBINES: Array = [
 			"tip_speed_ratio": 2.6, "rotor_radius_m": 1.0,
 		},
 	},
+	# 3D-linked small HAWT: manufacturer specs for a Primus-style "Air 30"
+	# class turbine (500 W nominal). Swept area 1.07 m² ≈ π·(1.17/2)² checks
+	# out against the datasheet's rotor diameter (1.17 m); rated_ms sits at
+	# the middle of the datasheet's "optimal wind speed range" (11-15 m/s);
+	# cut_out_ms is the top of its "operating wind speed range" (22 m/s);
+	# cut_in_ms is the datasheet cut-in (3.58 m/s / 8 mph). cp_peak=0.40 (a
+	# realistic small-HAWT value) makes the ½ρACp·v³ cubic ramp land on
+	# ~500 W right around rated speed — see WindTurbineSource's docs for the
+	# shared Cp-shape physics. hub_height_m = 10 m per the task's assumed
+	# mounting height. The GLB has two independently-driven sub-nodes:
+	# "turbine vane assembly" yaws horizontally to face the wind direction,
+	# and its child "Nosecone and Blades" spins about the horizontal rotor
+	# axis at a rate set by wind speed (see gameplay/hawt_tracker.gd).
+	{
+		"type": "wind", "label": "Small HAWT 500W (3D)", "icon": "🌬",
+		"width": 124.0, "height": 112.0,
+		"specs": {
+			"name": "Small HAWT 500W", "kind": "hawt",
+			"rated_w": 500.0, "rotor_diameter_m": 1.17, "cp_peak": 0.40,
+			"cut_in_ms": 3.58, "rated_ms": 13.0, "cut_out_ms": 22.0,
+			"hub_height_m": 10.0, "anemometer_height_m": 10.0,
+			"surface_roughness_m": 0.03, "site_altitude_m": 0.0,
+			"site_mean_wind_ms": 6.0, "generator_efficiency": 0.90,
+			"current_output_kw": 0.0, "cost": 800.0,
+			# 3D link: placed via ModelCatalog + HawtTracker (yaw + blade spin).
+			"model_id": "small_hawt", "tip_speed_ratio": 4.0, "rotor_radius_m": 0.585,
+		},
+	},
 ]
 
 # ---------------------------------------------------------------------------
@@ -937,6 +965,38 @@ const CSP_CONCENTRATORS: Array = [
 			# alignment + live sun tracking; see gameplay/csp_trough_tracker.gd).
 			"model_id": "csp_trough",
 			"csp_base_node": "Component#452", "csp_concentrator_node": "Component#453",
+		},
+	},
+	{
+		"type": "processor", "label": "Dual-Axis Heliostat", "icon": "🔆",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Dual-Axis Heliostat", "role": "heliostat",
+			"kind": "heliostat", "cost": 6800.0,
+			"energy_source": "", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			# Optics + receiver. mirror_area_m2 is the manufacturer dish area;
+			# focal_box_size_m is the receiver "concentrator box" edge (≈0.5 m in
+			# the model) → aperture = size², concentration = mirror_area/aperture.
+			"mirror_area_m2": 19.36, "focal_box_size_m": 0.5,
+			"optical_efficiency": 0.80, "receiver_absorptivity": 0.95,
+			"receiver_emissivity": 0.90, "conv_coeff_w_m2k": 10.0,
+			"operating_temp_c": 250.0, "thermal_efficiency": 0.85,
+			"feedwater_temp_c": 20.0,
+			# Live telemetry (recomputed by SystemGraphView._tick_graph_heliostat).
+			"cos_incidence": 0.0, "dni_wm2": 0.0, "incident_kw": 0.0,
+			"absorbed_kw": 0.0, "concentration_ratio": 0.0, "focal_flux_kw_m2": 0.0,
+			"focal_temp_c": 0.0, "thermal_output_kw": 0.0, "steam_kg_h": 0.0,
+			"daily_note": "Two-axis dish tracks the sun perfectly; the whole mirror area concentrates onto the focal box, reaching solar-furnace focal temperatures. Water in -> steam out.",
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h"}],
+			"outputs": [{"kind": "steam", "rate": 0.0, "unit": "kg/h"}],
+			# 3D link: placed via ModelCatalog + HeliostatTracker (perfect
+			# dual-axis sun tracking + focal glow; see gameplay/heliostat_tracker.gd).
+			"model_id": "heliostat",
+			"helio_base_node": "fixed base",
+			"helio_azimuth_node": "horizontal rotating assembly",
+			"helio_altitude_node": "Vertical Rotating Assembly",
+			"helio_mirror_node": "Mirror array",
+			"helio_focal_node": "solar collector area",
 		},
 	},
 ]

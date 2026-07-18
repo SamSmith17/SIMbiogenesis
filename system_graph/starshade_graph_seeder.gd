@@ -230,7 +230,10 @@ static func _wire_panel_array(model: GraphModel, panel_ids: Array[String], ctrl_
 	var series := GraphVirtualIds.ARRAY_SERIES_PER_STRING
 	for g in range(g_count):
 		for s in range(s_count):
-			var base := g * (s_count * series)
+			# Same indexing as SolarBridge: group stride + string offset within group.
+			var base := g * (s_count * series) + s * series
+			if base + series - 1 >= panel_ids.size():
+				continue
 			var p0 := panel_ids[base + 0]
 			var p1 := panel_ids[base + 1]
 			var p2 := panel_ids[base + 2]

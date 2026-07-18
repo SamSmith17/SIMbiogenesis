@@ -23,6 +23,15 @@ uniform bool patch_mesh = false;
 uniform bool use_detail = false;
 uniform bool hide_detail_region = false;
 uniform bool hide_centre_region = false;
+// "Hyper" ortho: a small central patch at much higher ESRI zoom (the same
+// texture that drapes building roofs / berms). Sharpens the core the player
+// actually walks. hyper_ratio = this mesh's span / hyper patch span.
+uniform sampler2D hyper_tex : source_color, filter_linear_mipmap;
+uniform bool use_hyper = false;
+uniform float hyper_ratio = 3.0;
+uniform float hyper_feather = 0.06;
+uniform vec4 hyper_bbox = vec4(-1.0, 1.0, -1.0, 1.0);
+uniform bool correct_hyper_mercator = false;
 // bbox = (west, east, south, north) degrees. z-component unused flags via w.
 uniform vec4 base_bbox = vec4(-1.0, 1.0, -1.0, 1.0);
 uniform vec4 detail_bbox = vec4(-1.0, 1.0, -1.0, 1.0);
@@ -81,6 +90,15 @@ void fragment() {
 		float edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
 		float blend = smoothstep(0.0, feather, edge);
 		col = use_detail ? mix(base, detail, blend) : base;
+		// Overlay the hyper patch (sharpest) in the central hyper square.
+		if (use_hyper) {
+			vec2 huv = (uv - vec2(0.5)) * hyper_ratio + vec2(0.5);
+			if (huv.x > 0.0 && huv.x < 1.0 && huv.y > 0.0 && huv.y < 1.0) {
+				vec3 hyper = sample_drape(hyper_tex, huv, hyper_bbox, correct_hyper_mercator);
+				float hedge = min(min(huv.x, 1.0 - huv.x), min(huv.y, 1.0 - huv.y));
+				col = mix(col, hyper, smoothstep(0.0, hyper_feather, hedge));
+			}
+		}
 	} else {
 		vec2 global_uv = uv;
 		vec3 base = use_base ? sample_drape(base_tex, global_uv, base_bbox, correct_base_mercator) : base_color;
@@ -92,6 +110,16 @@ void fragment() {
 			float edge = min(min(duv.x, 1.0 - duv.x), min(duv.y, 1.0 - duv.y));
 			blend = smoothstep(0.0, feather, edge);
 			col = mix(base, detail, blend);
+		}
+		// Hyper overlay for the coarse mesh (only visible where DetailGround
+		// isn't covering the centre; harmless otherwise).
+		if (use_hyper) {
+			vec2 huv = (uv - vec2(0.5)) * hyper_ratio + vec2(0.5);
+			if (huv.x > 0.0 && huv.x < 1.0 && huv.y > 0.0 && huv.y < 1.0) {
+				vec3 hyper = sample_drape(hyper_tex, huv, hyper_bbox, correct_hyper_mercator);
+				float hedge = min(min(huv.x, 1.0 - huv.x), min(huv.y, 1.0 - huv.y));
+				col = mix(col, hyper, smoothstep(0.0, hyper_feather, hedge));
+			}
 		}
 		// When DetailGround covers the hi-res square, discard coarse fragments there
 		// so the two displaced meshes do not z-fight or double-draw the drape.

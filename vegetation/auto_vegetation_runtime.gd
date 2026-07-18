@@ -10,8 +10,9 @@ extends RefCounted
 
 const ROOT_NAME := "AutoVegetation"
 const VISIBILITY_BEGIN := 0.0
-## Wider than manual veg (900 m) because auto-veg covers ~3 km; cull beyond this.
-const VISIBILITY_END := 2200.0
+## Per-chunk draw distance (batches are spatially chunked ~256 m so AABB centers
+## stay local — a single site-wide MultiMesh was culled while standing in edge trees).
+const VISIBILITY_END := 1200.0
 
 ## Maps biome mesh slots to a card-factory species the factory understands. Slots
 ## already named pine/deciduous/shrub pass through; future biome slots
@@ -79,20 +80,7 @@ static func reregister_existing(terrain: Node3D) -> void:
 
 
 static func _species_for_node(mi: MultiMeshInstance3D) -> String:
-	var n := mi.name
-	if not n.begins_with("Bulk_"):
-		return ""
-	var rest := n.substr(5)
-	# Grass batches are named "Bulk_<species>_<lod_tier_int>" (one MultiMesh
-	# per LOD tier) — strip the numeric tier suffix to recover the species.
-	for gs in VegetationLayer.GRASS_SPECIES:
-		if rest.begins_with(gs + "_"):
-			return gs
-	if rest.ends_with("_0") or rest.ends_with("_1"):
-		var base := rest.substr(0, rest.length() - 2)
-		if base in VegetationLayer.ALL_SPECIES:
-			return base
-	return rest
+	return VegetationRuntime.species_from_bulk_name(mi.name)
 
 
 static func _clear_shader_registrations() -> void:
@@ -194,21 +182,12 @@ static func _with_auto_lod_reach(species: String, settings: Dictionary) -> Dicti
 		settings.get("%s_auto_lod_near_m" % np,
 			settings.get("%s_lod_near_m" % np, 300.0))))
 	var s := settings.duplicate()
-	# DISABLE the two-tier canopy LOD for auto forests. Godot evaluates a
-	# MultiMeshInstance's visibility_range against the WHOLE batch AABB (not per
-	# tree), so for a scattered ~3 km OSM forest the FAR/billboard tier wins and the
-	# leaf-shell NEAR tier never draws — every auto tree renders as a leafless
-	# straight-branch "umbrella". Forcing the single NEAR (leaf/fur) mesh out to the
-	# cull distance makes auto forests actually show foliage. Painted trees keep the
-	# real LOD (they're a small local layer where per-batch AABB LOD behaves).
-	s["deciduous_leaf_lod_enabled"] = false
-	s["pine_fur_lod_enabled"] = false
-	s["pine_needle_lod_enabled"] = false
+	# Spatial chunking (~256 m) keeps each MultiMesh AABB local, so NEAR/FAR
+	# canopy LOD works again for auto forests (site-wide batches used to cull the
+	# leaf tier). Keep auto's longer near-reach so drone views stay leafy.
 	s["%s_lod_near_m" % np] = near
 	s["%s_lod_far_begin_m" % np] = maxf(near - 20.0, 10.0)
-	# Keep the (density-floored) canopy CRISP across the full cull range so the
-	# shader's distance alpha-dither doesn't re-thin it back to a skeleton at range.
-	s["near_crisp_m"] = maxf(VISIBILITY_END, float(settings.get("near_crisp_m", 40.0)))
+	s["near_crisp_m"] = maxf(near, float(settings.get("near_crisp_m", 40.0)))
 	s["far_dither_m"] = VISIBILITY_END + 60.0
 	return s
 
@@ -226,8 +205,10 @@ static func _build_bulk_layer(root: Node3D, slot: String, records: Array,
 	var species := _resolve_species(slot)
 	var batches := _partition_bulk_batches(records, settings)
 	for batch in batches:
-		_build_bulk_batch(root, slot, species, batch["records"], ground_y_at,
-			batch["settings"], growth_map)
+		var chunks := VegetationRuntime._partition_spatial_chunks(batch["records"] as Array)
+		for chunk in chunks:
+			_build_bulk_batch(root, slot, species, chunk["records"], ground_y_at,
+				batch["settings"], growth_map, int(chunk["cx"]), int(chunk["cz"]))
 
 
 static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -> Array:
@@ -265,7 +246,7 @@ static func _batch_settings_key(settings: Dictionary) -> int:
 
 static func _build_bulk_batch(root: Node3D, slot: String, species: String, records: Array,
 		ground_y_at: Callable, settings: Dictionary,
-		growth_map: VegetationInstanceMap = null) -> void:
+		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0) -> void:
 	if records.is_empty():
 		return
 	var family := VegetationCardFactory.mesh_family(species)
@@ -274,11 +255,13 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	if family in VegetationLayer.GRASS_SPECIES or family.begins_with("grass_"):
 		# Grass builder keys on family id (lawn/field); variant dims live in settings.
 		VegetationRuntime._build_grass_bulk_batches(root, family, records, ground_y_at,
-			batch_settings, growth_map)
+			batch_settings, growth_map, chunk_x, chunk_z)
 		return
 	if family == "deciduous" or family == "pine":
-		VegetationRuntime._build_canopy_lod_bulk_batches(root, family, records, ground_y_at,
-			false, _with_auto_lod_reach(family, batch_settings), VISIBILITY_END, growth_map)
+		# Chunked batches have local AABBs — NEAR/FAR canopy LOD is safe again.
+		VegetationRuntime._build_canopy_lod_bulk_batches(root, species, records, ground_y_at,
+			false, _with_auto_lod_reach(family, batch_settings), VISIBILITY_END, growth_map,
+			chunk_x, chunk_z)
 		return
 	var mesh := VegetationCardFactory.mesh_for_species(species, batch_settings)
 	var use_surface_mats := VegetationCardFactory.mesh_has_surface_materials(species)
@@ -317,7 +300,7 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	if i == 0:
 		return
 	var mi := MultiMeshInstance3D.new()
-	mi.name = "Bulk_%s" % slot
+	mi.name = "Bulk_%s_%d_%d" % [slot, chunk_x, chunk_z]
 	mi.multimesh = mm
 	if use_surface_mats:
 		mi.material_override = null

@@ -23,6 +23,11 @@ extends Node
 ##                              round-robin to the N nearest house-sized
 ##                              buildings to spawn, via apply_building_style
 ##                              (same path the modal's Facade tex dropdown uses)
+##   --sculpt-test              terrain-sculpt smoke test: shoots "before" views,
+##                              runs a Raise stroke + Level pad + Pond via the
+##                              real TerrainLoader commands, shoots "after"
+##                              views, prints ground heights, then UNDOES all
+##                              edits (the map's save data is left untouched)
 ##   --quit-after-capture       exit the process once the capture set is written
 ##
 ## F12 saves a single manual screenshot to user://screenshots/ in any windowed run.
@@ -57,6 +62,7 @@ var _shots_label := ""
 var _quit_after := false
 var _capture_hour := 10.0
 var _assign_facades_count := 0
+var _sculpt_test := false
 var _active := false
 
 
@@ -67,7 +73,8 @@ func _ready() -> void:
 	if args.is_empty():
 		return
 	_parse_args(args)
-	var wants_post_load := not _capture_mode.is_empty() or _assign_facades_count > 0
+	var wants_post_load := not _capture_mode.is_empty() or _assign_facades_count > 0 \
+		or _sculpt_test
 	if not is_nan(_launch_lat) and not is_nan(_launch_lon):
 		_active = true
 		_launch_map.call_deferred()
@@ -97,6 +104,8 @@ func _parse_args(args: PackedStringArray) -> void:
 			_capture_hour = clampf(a.get_slice("=", 1).to_float(), 0.0, 24.0)
 		elif a.begins_with("--assign-facades="):
 			_assign_facades_count = a.get_slice("=", 1).to_int()
+		elif a == "--sculpt-test":
+			_sculpt_test = true
 		elif a == "--quit-after-capture":
 			_quit_after = true
 	if not map_file.is_empty():
@@ -137,7 +146,7 @@ func _launch_map() -> void:
 		return
 	ctx.set_pending(_launch_lat, _launch_lon, _launch_label, _launch_half_extent)
 	tree.change_scene_to_file(MapDefinition.GENERATED_SCENE)
-	if not _capture_mode.is_empty() or _assign_facades_count > 0:
+	if not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
 
@@ -153,6 +162,8 @@ func _await_and_run() -> void:
 	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
 	if _assign_facades_count > 0:
 		_assign_hero_facades(loader)
+	if _sculpt_test:
+		await _run_sculpt_test(loader)
 	if not _capture_mode.is_empty():
 		await _wait_for_hyper_drape(loader)
 		_set_capture_conditions()
@@ -372,6 +383,177 @@ func _ground_y(loader: Node, x: float, z: float) -> float:
 	if loader != null and loader.has_method("ground_height_at"):
 		return float(loader.ground_height_at(x, z))
 	return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Terrain-sculpt smoke test (--sculpt-test)
+# ---------------------------------------------------------------------------
+
+const SCULPT_RAISE_AT := Vector2(-160.0, 60.0)
+const SCULPT_LEVEL_AT := Vector2(-115.0, 130.0)
+const SCULPT_POND_AT := Vector2(-205.0, 120.0)
+
+
+func _run_sculpt_test(loader: Node) -> void:
+	var label := _shots_label if not _shots_label.is_empty() else "sculpt_test"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	_set_capture_conditions()
+	var cam := Camera3D.new()
+	cam.name = "SculptTestCam"
+	cam.far = 40000.0
+	get_tree().current_scene.add_child(cam)
+	cam.make_current()
+
+	_print_sculpt_heights(loader, "BEFORE")
+	_print_player_state(loader)
+	await _shoot_sculpt_views(cam, loader, dir, "before")
+
+	# 1) Raise: a real brush stroke (many stamps inside one session).
+	loader.call("begin_terrain_tile_edit")
+	for i in 24:
+		loader.call("brush_stamp", "raise",
+			Vector3(SCULPT_RAISE_AT.x, 0.0, SCULPT_RAISE_AT.y), 14.0, 0.15, 0.5, NAN)
+	loader.call("end_terrain_tile_edit")
+	# 2) Level: a 34 m square pad graded to its centre height.
+	var pad := PackedVector2Array([
+		SCULPT_LEVEL_AT + Vector2(-17, -17), SCULPT_LEVEL_AT + Vector2(17, -17),
+		SCULPT_LEVEL_AT + Vector2(17, 17), SCULPT_LEVEL_AT + Vector2(-17, 17)])
+	var target := float(loader.call("ground_height_at", SCULPT_LEVEL_AT.x, SCULPT_LEVEL_AT.y))
+	loader.call("level_region_command", pad, target, 10.0)
+	# 3) Pond: 18 m-radius lasso, 2.5 m deep, auto-filled.
+	var pond := PackedVector2Array()
+	for i in 24:
+		var a := TAU * float(i) / 24.0
+		pond.append(SCULPT_POND_AT + Vector2(cos(a), sin(a)) * 18.0)
+	var pond_ok: bool = loader.call("pond_command", pond, 2.5, "Sculpt Test Pond")
+	print("SculptTest: pond_command -> %s" % ("ok" if pond_ok else "FAILED"))
+
+	# Let the tile remesh queue drain, then verify.
+	for i in 40:
+		await get_tree().process_frame
+	_dump_height_field_state(loader)
+	_print_sculpt_heights(loader, "AFTER")
+	_print_player_state(loader)
+	await _shoot_sculpt_views(cam, loader, dir, "after")
+
+	# Undo everything so the map's save data is untouched by the test.
+	var undos := 0
+	while undos < 12 and bool(loader.call("undo_terrain_sculpt")):
+		undos += 1
+	for i in 20:
+		await get_tree().process_frame
+	print("SculptTest: undid %d entries" % undos)
+	_print_sculpt_heights(loader, "AFTER-UNDO")
+	cam.queue_free()
+	print("SculptTest: shots in %s" % ProjectSettings.globalize_path(dir))
+
+
+## Diagnostic dump: does the HeightField exist, where are its tile meshes, and
+## what material are they using? Catches "data changed but nothing rendered"
+## regressions that height logs alone cannot (invisible/mis-parented meshes).
+func _dump_height_field_state(loader: Node) -> void:
+	var main := get_tree().current_scene
+	var terrain := main.get_node_or_null("Terrain") if main != null else null
+	if terrain == null:
+		print("SculptTest[dump]: NO Terrain node")
+		return
+	var hf := terrain.get_node_or_null("HeightField")
+	if hf == null:
+		print("SculptTest[dump]: NO HeightField node under Terrain")
+	else:
+		print("SculptTest[dump]: HeightField children=%d global_pos=%s" % [
+			hf.get_child_count(), (hf as Node3D).global_position])
+		for b in hf.get_children():
+			var mi := b.get_node_or_null("Mesh") as MeshInstance3D
+			if mi == null or mi.mesh == null:
+				print("  %s: NO mesh" % b.name)
+				continue
+			var aabb: AABB = mi.global_transform * mi.mesh.get_aabb()
+			var mat := mi.material_override
+			var mat_desc := "null"
+			if mat is ShaderMaterial:
+				var sm := mat as ShaderMaterial
+				mat_desc = "shader patch_mesh=%s hide_centre=%s hide_detail=%s" % [
+					sm.get_shader_parameter("patch_mesh"),
+					sm.get_shader_parameter("hide_centre_region"),
+					sm.get_shader_parameter("hide_detail_region")]
+			elif mat != null:
+				mat_desc = str(mat.get_class())
+			print("  %s: visible=%s aabb_pos=%s aabb_size=%s layers=%d mat=%s" % [
+				b.name, mi.visible, aabb.position, aabb.size,
+				mi.layers, mat_desc])
+	var dg := terrain.get_node_or_null("DetailGround") as MeshInstance3D
+	if dg != null and dg.mesh != null:
+		var daabb: AABB = dg.global_transform * dg.mesh.get_aabb()
+		print("SculptTest[dump]: DetailGround aabb_pos=%s size=%s" % [
+			daabb.position, daabb.size])
+	# Compare base_fn vs ground at the pond centre.
+	var px := SCULPT_POND_AT.x
+	var pz := SCULPT_POND_AT.y
+	print("SculptTest[dump]: pond_centre ground=%.2f delta=%.2f" % [
+		_ground_y(loader, px, pz),
+		float(loader.call("terrain_edit_delta_at", px, pz))])
+
+
+func _print_sculpt_heights(loader: Node, phase: String) -> void:
+	var pts := {
+		"raise_centre": SCULPT_RAISE_AT,
+		"level_centre": SCULPT_LEVEL_AT,
+		"level_corner": SCULPT_LEVEL_AT + Vector2(14.0, 14.0),
+		"pond_centre": SCULPT_POND_AT,
+		"pond_rim": SCULPT_POND_AT + Vector2(17.0, 0.0),
+	}
+	for name in pts.keys():
+		var p: Vector2 = pts[name]
+		print("SculptTest[%s] %s ground=%.2f m" % [
+			phase, name, _ground_y(loader, p.x, p.y)])
+
+
+func _print_player_state(loader: Node) -> void:
+	var main := get_tree().current_scene
+	var player := main.get_node_or_null("Player") as Node3D if main != null else null
+	if player == null:
+		return
+	var pos := player.global_position
+	print("SculptTest: player y=%.2f ground=%.2f at (%.1f, %.1f)" % [
+		pos.y, _ground_y(loader, pos.x, pos.z), pos.x, pos.z])
+
+
+func _shoot_sculpt_views(cam: Camera3D, loader: Node, dir: String, phase: String) -> void:
+	var g0 := _ground_y(loader, 0.0, 0.0)
+	var views := [
+		{"pos": Vector3(0, g0 + 230.0, 1.0), "look": Vector3(0, g0, 0)},
+		{"pos": Vector3(0, g0 + 90.0, 170.0), "look": Vector3(0, g0, 0)},
+	]
+	for pv in [SCULPT_RAISE_AT, SCULPT_LEVEL_AT, SCULPT_POND_AT]:
+		var p: Vector2 = pv
+		var gy := _ground_y(loader, p.x, p.y)
+		views.append({
+			"pos": Vector3(p.x + 28.0, gy + 26.0, p.y + 28.0),
+			"look": Vector3(p.x, gy, p.y)})
+	# Low grazing views: a mound/bowl silhouettes against the background here,
+	# where the high oblique shots can hide a 3–4 m height change entirely.
+	# Camera height uses the ground at the CAMERA's own XZ (the target ground may
+	# have just been carved several metres down).
+	for pv in [SCULPT_RAISE_AT, SCULPT_POND_AT]:
+		var p2: Vector2 = pv
+		var cam_gy := _ground_y(loader, p2.x, p2.y + 55.0)
+		views.append({
+			"pos": Vector3(p2.x, cam_gy + 6.0, p2.y + 55.0),
+			"look": Vector3(p2.x, _ground_y(loader, p2.x, p2.y) + 1.5, p2.y)})
+	for i in views.size():
+		var v: Dictionary = views[i]
+		cam.look_at_from_position(v["pos"], v["look"], Vector3.UP)
+		await RenderingServer.frame_post_draw
+		await RenderingServer.frame_post_draw
+		var img := get_viewport().get_texture().get_image()
+		var path := "%s/%s_%02d.png" % [dir, phase, i]
+		var err := img.save_png(path)
+		if err != OK:
+			print("SculptTest: save_png FAILED err=%d size=%s path=%s" % [
+				err, img.get_size(), path])
+	print("SculptTest: %s set — %d shots" % [phase, views.size()])
 
 
 func _maybe_quit() -> void:
