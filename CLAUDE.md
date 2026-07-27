@@ -4,8 +4,9 @@ Godot 4.7 (Forward+ on desktop; GL Compatibility only as the `.mobile` fallback)
 First-person ISRU / renewable-energy simulator with a real
 Home Assistant digital-twin bridge. **Core gameplay = 2D systems graph** (schematic
 map of resource flows within a Sphere of Influence); **3D world = embodied digital twin**.
-Product vision: `ROADMAP.md` + graph overhaul: `SYSTEMS_GRAPH_VISION.md`. Restructure
-history: `PHASE1_INVENTORY.md` … `PHASE7_PERFORMANCE.md`. Secrets policy:
+Product vision: `ROADMAP.md` + graph overhaul: `SYSTEMS_GRAPH_VISION.md`. Structure
+& module conventions (where new code goes, extension points, cleanup backlog):
+`ARCHITECTURE.md`. Restructure history: `PHASE1_INVENTORY.md` … `PHASE7_PERFORMANCE.md`. Secrets policy:
 `LOCAL_CONFIG.md` (real HA/UISP credentials live under `user://` only — never
 commit URLs or tokens).
 
