@@ -404,7 +404,7 @@ other thing on this list.
 
 # Tier 3 — Wayfinding and Desire Lines
 
-**Status: 3a and 3b built and verified. 3c–3f specified, not built.**
+**Status: 3a, 3b and 3c built and verified. 3d–3f specified, not built.**
 
 Corrections learned while building 3a/3b, kept here because they are the
 non-obvious parts:
@@ -419,6 +419,13 @@ non-obvious parts:
 - Lane jitter must validate the whole polyline, not its vertices: a shifted
   waypoint can be walkable while the segments either side clip a doorjamb. It
   now declines entirely in pinch points and reverts on any failed segment.
+- On a scene with **no TerrainLoader**, `ground_height_at` falls back to a
+  raycast that returns 0.0 on a MISS, so every gap in collision coverage reads
+  as a cliff and islands the grid. The nav grid uses a flat height source
+  there instead; this was causing real path failures.
+- The layer pass must budget **probes**, not cells scanned — skipping a
+  non-structure cell is an array read, and charging it like a raycast made
+  that phase as slow as the whole height pass for no work.
 
 Two deliverables, in order. First **grid A\* pathfinding**, so people walk
 around walls and up ramps instead of gliding through trees. Then, built on the

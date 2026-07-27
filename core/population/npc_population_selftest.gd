@@ -49,6 +49,10 @@ func _init() -> void:
 	_test_astar_cache_and_determinism()
 	_test_path_following()
 	_test_agent_follows_path()
+	_test_building_doors()
+	_test_building_nav_entries()
+	_test_building_grid_integration()
+	_test_nav_layers()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -1266,6 +1270,19 @@ func _walled_grid() -> NpcNavGrid:
 	return g
 
 
+## Does the ROUTE (not merely one of its waypoints) come within `radius` of
+## `point`? Smoothing collapses straight runs, so a doorway the path clearly
+## goes through may have no waypoint on it at all.
+func _path_passes_near(from_xz: Vector2, path: PackedVector2Array, point: Vector2,
+		radius: float) -> bool:
+	var prev := from_xz
+	for p in path:
+		if Geometry2D.get_closest_point_to_segment(point, prev, p).distance_to(point) <= radius:
+			return true
+		prev = p
+	return false
+
+
 func _path_is_walkable(g: NpcNavGrid, from_xz: Vector2, path: PackedVector2Array) -> bool:
 	var prev := from_xz
 	for p in path:
@@ -1580,3 +1597,216 @@ func _test_agent_follows_path() -> void:
 			break
 	_check("a declined plan falls back to straight-line",
 			c.state == NpcAgent.State.DOING)
+
+
+# =============================================================================
+# Tier 3c — buildings, doors, upper levels
+# =============================================================================
+
+## A 12x8 m building, CCW open ring, centred on the origin.
+func _house_poly() -> PackedVector2Array:
+	return PackedVector2Array([
+		Vector2(-6, -4), Vector2(6, -4), Vector2(6, 4), Vector2(-6, 4)])
+
+
+func _test_building_doors() -> void:
+	var poly := _house_poly()
+
+	# A declared door converts to a world point on its wall.
+	var doors := NpcBuildingNav.declared_doors(poly,
+			[{"kind": "door", "edge": 0, "u_m": 6.0, "w_m": 1.0}])
+	_check("declared door resolves", doors.size() == 1)
+	_check("door sits on its edge", absf(doors[0].y + 4.0) < 0.01, str(doors[0]))
+	_check("door sits at u along the edge", absf(doors[0].x) < 0.01, str(doors[0]))
+
+	# Windows are not doors, and out-of-range edges are ignored rather than
+	# crashing on a stale style.
+	_check("windows are not doors", NpcBuildingNav.declared_doors(poly,
+			[{"kind": "window", "edge": 0, "u_m": 3.0}]).is_empty())
+	_check("bogus edge ignored", NpcBuildingNav.declared_doors(poly,
+			[{"kind": "door", "edge": 99, "u_m": 3.0}]).is_empty())
+
+	# Auto-door faces whatever attracts it, and is deterministic.
+	var north := NpcBuildingNav.auto_door(poly, Vector2(0, 40))
+	_check("auto door faces the attractor", absf(north.y - 4.0) < 0.01, str(north))
+	var east := NpcBuildingNav.auto_door(poly, Vector2(40, 0))
+	_check("auto door follows the attractor", absf(east.x - 6.0) < 0.01, str(east))
+	_check("auto door is deterministic",
+			NpcBuildingNav.auto_door(poly, Vector2(0, 40)) == north)
+	_check("auto door lands on the footprint edge",
+			absf(NpcBuildingNav._signed_area(poly)) > 0.0)
+
+	# Nearest road point drives the attractor in the real path.
+	var roads := [{"points": PackedVector2Array([Vector2(-30, 20), Vector2(30, 20)])}]
+	var rp: Variant = NpcBuildingNav.nearest_road_point(roads, Vector2.ZERO)
+	_check("nearest road point found", rp is Vector2 and absf((rp as Vector2).y - 20.0) < 0.01)
+	_check("distant roads are ignored",
+			NpcBuildingNav.nearest_road_point(roads, Vector2(0, 900)) == null)
+
+
+func _test_building_nav_entries() -> void:
+	var poly := _house_poly()
+
+	# A normal building becomes walls + interior + a door.
+	var entry := NpcBuildingNav.nav_entry(poly, [], Vector2(0, 40), true)
+	_check("building uses a wall band", float(entry.get("band_m", 0.0)) > 0.0)
+	_check("building marks its interior", entry.has("interior_flags"))
+	_check("building gets an auto door",
+			(entry.get("doors", PackedVector2Array()) as PackedVector2Array).size() == 1)
+	_check("wall band carries F_WALL",
+			(int(entry.get("flags", 0)) & NpcNavGrid.F_WALL) != 0)
+
+	# A declared door wins over the auto one.
+	var entry2 := NpcBuildingNav.nav_entry(poly,
+			[{"kind": "door", "edge": 2, "u_m": 6.0, "w_m": 1.0}], Vector2(0, 40), true)
+	var d2: PackedVector2Array = entry2.get("doors", PackedVector2Array())
+	_check("declared door replaces the auto door",
+			d2.size() == 1 and absf(d2[0].y - 4.0) < 0.01, str(d2))
+
+	# Auto-doors off + no declared door = a solid block (no way in).
+	var solid := NpcBuildingNav.nav_entry(poly, [], Vector2(0, 40), false)
+	_check("no doors means solid", not solid.has("band_m"))
+	_check("solid block has no interior", not solid.has("interior_flags"))
+
+	# A shed is too small to be worth entering...
+	var shed := PackedVector2Array([
+		Vector2(-1, -1), Vector2(1, -1), Vector2(1, 1), Vector2(-1, 1)])
+	_check("a tiny shed is solid",
+			not NpcBuildingNav.nav_entry(shed, [], Vector2(0, 40), true).has("band_m"))
+	# ...unless the player tagged it as an NPC space, which must always be
+	# enterable however small it is.
+	_check("a tagged shed is forced enterable",
+			NpcBuildingNav.nav_entry(shed, [], Vector2(0, 40), true, true).has("band_m"))
+
+	# Degenerate input is ignored, not fatal.
+	_check("degenerate footprint yields nothing",
+			NpcBuildingNav.nav_entry(PackedVector2Array([Vector2.ZERO]), [],
+					Vector2.ZERO, true).is_empty())
+
+
+func _test_building_grid_integration() -> void:
+	var poly := _house_poly()
+	var g := NpcNavGrid.new()
+	g.configure_region(Vector2.ZERO, 25.0)
+	var entry := NpcBuildingNav.nav_entry(poly, [], Vector2(0, 40), true)
+	g.bake_now(Callable(self, "_flat_h"), [entry])
+
+	# Walls block, the interior is walkable, and the door is open.
+	_check("wall blocks", not g.is_walkable_world(Vector2(-6, 0)))
+	_check("interior is walkable", g.is_walkable_world(Vector2.ZERO))
+	_check("interior is flagged",
+			(g.flags_at(g.cell_of(Vector2.ZERO).x, g.cell_of(Vector2.ZERO).y)
+				& NpcNavGrid.F_INTERIOR) != 0)
+	var door: Vector2 = (entry["doors"] as PackedVector2Array)[0]
+	_check("door is walkable", g.is_walkable_world(door))
+	_check("door is flagged",
+			(g.flags_at(g.cell_of(door).x, g.cell_of(door).y) & NpcNavGrid.F_DOOR) != 0)
+	_check("wall away from the door still blocks",
+			not g.is_walkable_world(Vector2(-4, 4)))
+
+	# THE REQUIREMENT: an agent outside can path to a point inside.
+	var q := NpcNavQuery.new()
+	q.setup(g)
+	var inside := q.find_path(Vector2(0, 18), Vector2.ZERO)
+	_check("agents can path INTO a building", inside.size() > 0)
+	_check("the route through the building is walkable",
+			_path_is_walkable(g, Vector2(0, 18), inside))
+	# Check the LINE, not the waypoints: smoothing legitimately collapses a
+	# straight run through the doorway to its two endpoints.
+	_check("the route uses the door",
+			_path_passes_near(Vector2(0, 18), inside, door, 1.5), str(inside))
+
+	# And straight through, in one side and out the other, once there are two
+	# doors — which is what "pathfind through buildings" means.
+	var two := NpcBuildingNav.nav_entry(poly, [
+		{"kind": "door", "edge": 0, "u_m": 6.0, "w_m": 1.0},
+		{"kind": "door", "edge": 2, "u_m": 6.0, "w_m": 1.0}], Vector2.ZERO, true)
+	var g2 := NpcNavGrid.new()
+	g2.configure_region(Vector2.ZERO, 25.0)
+	g2.bake_now(Callable(self, "_flat_h"), [two])
+	var q2 := NpcNavQuery.new()
+	q2.setup(g2)
+	var through := q2.find_path(Vector2(0, -18), Vector2(0, 18))
+	_check("agents can path THROUGH a building", through.size() > 0)
+	_check("the through-route is walkable",
+			_path_is_walkable(g2, Vector2(0, -18), through))
+	_check("the through-route really goes inside",
+			_path_passes_near(Vector2(0, -18), through, Vector2.ZERO, 4.0), str(through))
+
+	# A solid (door-less) building must be routed AROUND, never through.
+	var g3 := NpcNavGrid.new()
+	g3.configure_region(Vector2.ZERO, 25.0)
+	g3.bake_now(Callable(self, "_flat_h"),
+			[NpcBuildingNav.nav_entry(poly, [], Vector2.ZERO, false)])
+	var q3 := NpcNavQuery.new()
+	q3.setup(g3)
+	var around := q3.find_path(Vector2(0, -18), Vector2(0, 18))
+	_check("a sealed building still yields a route around", around.size() > 0)
+	for p in around:
+		_check("the route never enters a sealed building",
+				not (absf(p.x) < 5.5 and absf(p.y) < 3.5), str(p))
+
+
+func _test_nav_layers() -> void:
+	# Without a surfaces_fn the grid stays single-layer.
+	var flat := NpcNavGrid.new()
+	flat.configure_region(Vector2.ZERO, 10.0)
+	flat.bake_now(Callable(self, "_flat_h"))
+	_check("no surfaces_fn means one layer", flat.layers == 1)
+	_check("no upper surfaces", flat.upper_surface_cells() == 0)
+
+	# A deck 1.0 m above the ground inside a structure footprint. 1.0 m is
+	# within STEP_UP_M, so it should be reachable from the ground.
+	var deck := PackedVector2Array([
+		Vector2(-4, -4), Vector2(4, -4), Vector2(4, 4), Vector2(-4, 4)])
+	var g := NpcNavGrid.new()
+	g.configure_region(Vector2.ZERO, 15.0)
+	g.bake_now(Callable(self, "_flat_h"),
+			[{"poly": deck, "flags": NpcNavGrid.F_STRUCTURE, "interior_flags": NpcNavGrid.F_STRUCTURE}],
+			"",
+			func(x: float, z: float) -> PackedFloat32Array:
+				if absf(x) <= 4.0 and absf(z) <= 4.0:
+					return PackedFloat32Array([1.0])
+				return PackedFloat32Array())
+	_check("surfaces_fn allocates layers", g.layers == NpcNavGrid.MAX_LAYERS)
+	_check("deck cells gained an upper surface", g.upper_surface_cells() > 50,
+			"%d" % g.upper_surface_cells())
+	var dc := g.cell_of(Vector2.ZERO)
+	_check("upper surface is walkable", g.is_walkable(dc.x, dc.y, 1))
+	_check("upper surface carries its height",
+			absf(g.height_at(dc.x, dc.y, 1) - 1.0) < 0.01)
+	# Off the structure there is no second storey to walk on.
+	var oc := g.cell_of(Vector2(10, 10))
+	_check("open ground has no upper layer", not g.is_walkable(oc.x, oc.y, 1))
+
+	# The A* must be able to step up onto it (an inter-layer move is just a
+	# move whose height delta passes the step limit).
+	var q := NpcNavQuery.new()
+	q.setup(g)
+	_check("agents can reach an upper surface",
+			q.find_path(Vector2(-10, 0), Vector2.ZERO).size() > 0)
+
+	# Leniency has a limit. A 4 m deck still registers as a surface, but its
+	# delta from the ground below is beyond STEP_UP_M, so the connection rule
+	# in NpcNavQuery refuses the move. (The gate itself is proven by the
+	# 1.2 m-passes / 1.6 m-refused cases above; asserting it through
+	# find_path would prove nothing, because nearest_walkable simply resolves
+	# the goal to a legal spot outside the footprint.)
+	var high := NpcNavGrid.new()
+	high.configure_region(Vector2.ZERO, 15.0)
+	high.bake_now(Callable(self, "_flat_h"),
+			[{"poly": deck, "flags": NpcNavGrid.F_STRUCTURE,
+				"interior_flags": NpcNavGrid.F_STRUCTURE}],
+			"",
+			func(x: float, z: float) -> PackedFloat32Array:
+				if absf(x) <= 4.0 and absf(z) <= 4.0:
+					return PackedFloat32Array([4.0])
+				return PackedFloat32Array())
+	var hc := high.cell_of(Vector2.ZERO)
+	_check("a 4 m deck still registers as a surface", high.upper_surface_cells() > 50)
+	_check("but it sits beyond the step limit",
+			high.height_at(hc.x, hc.y, 1) - high.height_at(hc.x, hc.y, 0)
+				> NpcNavQuery.STEP_UP_M + NpcNavQuery.STEP_EPS)
+	_check("whereas the 1 m deck is within it",
+			g.height_at(dc.x, dc.y, 1) - g.height_at(dc.x, dc.y, 0)
+				<= NpcNavQuery.STEP_UP_M + NpcNavQuery.STEP_EPS)

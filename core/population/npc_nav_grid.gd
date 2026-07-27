@@ -48,6 +48,9 @@ const MAX_LAYERS := 3
 
 ## Bake budget per call. ~71k cells (a 200 m region) lands in ~35 frames.
 const CELLS_PER_FRAME := 2000
+## The layer pass scans this many cells per probe it is allowed — skipping a
+## non-structure cell costs nothing, so the scan should race ahead.
+const LAYER_SCAN_RATIO := 40
 
 ## A cell whose terrain grade over the baseline exceeds this is a cliff.
 ## NOT a step limit — see the header.
@@ -65,7 +68,7 @@ const F_STRUCTURE := 1 << 4   # prop/building volume — where extra layers live
 const F_WATER := 1 << 5
 const F_STEEP := 1 << 6
 
-enum Phase { IDLE, HEIGHT, SLOPE, OBSTACLES, DONE }
+enum Phase { IDLE, HEIGHT, SLOPE, OBSTACLES, LAYERS, DONE }
 
 var origin := Vector2.ZERO    # world XZ of cell (0,0)'s CORNER
 var cell_m := CELL_M
@@ -81,6 +84,7 @@ var _cursor := 0
 var _height_fn := Callable()
 var _obstacles: Array = []
 var _obstacle_i := 0
+var _surfaces_fn := Callable()
 var _fingerprint := ""
 
 
@@ -154,9 +158,15 @@ func contains_world(world_xz: Vector2) -> bool:
 ## `obstacles`: [{poly: PackedVector2Array, flags: int, band_m: float}].
 ## `band_m` > 0 stamps only a band around the polygon EDGES (walls), leaving
 ## the interior clear; 0 stamps the polygon solid.
-func begin_bake(height_fn: Callable, obstacles: Array = [], fp: String = "") -> void:
+## `surfaces_fn(x, z) -> PackedFloat32Array` returns any walkable surfaces
+## ABOVE the ground at that point (deck levels, upper floors). Supplying it
+## allocates MAX_LAYERS layers; without it the grid is single-layer.
+func begin_bake(height_fn: Callable, obstacles: Array = [], fp: String = "",
+		surfaces_fn: Callable = Callable()) -> void:
 	if nx == 0 or nz == 0:
 		return
+	_surfaces_fn = surfaces_fn
+	layers = MAX_LAYERS if surfaces_fn.is_valid() else 1
 	var n := nx * nz * layers
 	_height = PackedFloat32Array()
 	_height.resize(n)
@@ -164,6 +174,11 @@ func begin_bake(height_fn: Callable, obstacles: Array = [], fp: String = "") -> 
 	_flags.resize(n)
 	_slope = PackedFloat32Array()
 	_slope.resize(nx * nz)
+	# Upper layers start blocked; _step_layers opens the ones that turn out to
+	# have a real surface. Otherwise agents could path through thin air.
+	for l in range(1, layers):
+		for i in range(l * nx * nz, (l + 1) * nx * nz):
+			_flags[i] = F_BLOCKED
 	_height_fn = height_fn
 	_obstacles = obstacles
 	_obstacle_i = 0
@@ -186,13 +201,16 @@ func bake_step(budget: int = CELLS_PER_FRAME) -> bool:
 			_step_slope(budget)
 		Phase.OBSTACLES:
 			_step_obstacles(budget)
+		Phase.LAYERS:
+			_step_layers(budget)
 	return _phase == Phase.DONE
 
 
 ## Run the whole bake immediately. Offline/selftest only — this is precisely
 ## the call that must never appear on a per-frame path.
-func bake_now(height_fn: Callable, obstacles: Array = [], fp: String = "") -> void:
-	begin_bake(height_fn, obstacles, fp)
+func bake_now(height_fn: Callable, obstacles: Array = [], fp: String = "",
+		surfaces_fn: Callable = Callable()) -> void:
+	begin_bake(height_fn, obstacles, fp, surfaces_fn)
 	var guard := 0
 	while not bake_step(1 << 20):
 		guard += 1
@@ -215,7 +233,9 @@ func bake_progress() -> float:
 			return 0.5 * float(_cursor) / maxf(float(nx * nz), 1.0)
 		Phase.SLOPE:
 			return 0.5 + 0.35 * float(_cursor) / maxf(float(nx * nz), 1.0)
-	return 0.85 + 0.15 * float(_obstacle_i) / maxf(float(_obstacles.size()), 1.0)
+		Phase.OBSTACLES:
+			return 0.85 + 0.10 * float(_obstacle_i) / maxf(float(_obstacles.size()), 1.0)
+	return 0.95 + 0.05 * float(_cursor) / maxf(float(nx * nz), 1.0)
 
 
 func _step_height(budget: int) -> void:
@@ -268,12 +288,59 @@ func _step_obstacles(budget: int) -> void:
 		var poly: PackedVector2Array = o.get("poly", PackedVector2Array())
 		var flags := int(o.get("flags", F_BLOCKED))
 		var band := float(o.get("band_m", 0.0))
+		# Order matters: interior first (it must not clear the walls), then
+		# the wall band, then doors punched back through it.
+		if o.has("interior_flags"):
+			spent += stamp_polygon_interior(poly, int(o["interior_flags"]))
 		if band > 0.0:
 			spent += stamp_polygon_edges(poly, band, flags)
 		else:
 			spent += stamp_polygon(poly, flags)
+		var doors: Variant = o.get("doors", null)
+		if doors is PackedVector2Array:
+			var r := float(o.get("door_radius_m", 1.0))
+			for d in doors as PackedVector2Array:
+				clear_flags_in_circle(d, r, F_BLOCKED | F_WALL, F_DOOR)
 		_obstacle_i += 1
 	if _obstacle_i >= _obstacles.size():
+		_cursor = 0
+		_phase = Phase.LAYERS if _surfaces_fn.is_valid() else Phase.DONE
+
+
+## Sample extra walkable surfaces (deck levels, upper floors) — but ONLY in
+## cells flagged STRUCTURE, which is a tiny fraction of the grid. Everywhere
+## else has exactly one surface and probing it would be pure waste.
+##
+## Nothing in the project generates walkable upper floors yet, so this mostly
+## finds nothing today; the mechanism exists so that stairs, decks and ramps
+## connect the moment content produces them (an inter-layer link is just a
+## move whose height delta passes the normal step limit).
+func _step_layers(budget: int) -> void:
+	var total := nx * nz
+	# Budget the EXPENSIVE work (surface probes), not the scan. Skipping a
+	# non-structure cell is an array read; charging it the same as a raycast
+	# made this phase take as long as the whole height pass for nothing.
+	var probes := 0
+	var scanned := 0
+	var scan_cap := budget * LAYER_SCAN_RATIO
+	while _cursor < total and probes < budget and scanned < scan_cap:
+		scanned += 1
+		if (int(_flags[_cursor]) & F_STRUCTURE) == 0:
+			_cursor += 1
+			continue
+		probes += 1
+		var ix := _cursor % nx
+		var iz := _cursor / nx
+		var c := center_of(ix, iz)
+		var extra: Variant = _surfaces_fn.call(c.x, c.y)
+		if extra is PackedFloat32Array:
+			var arr: PackedFloat32Array = extra
+			for k in mini(arr.size(), layers - 1):
+				var i := idx(ix, iz, k + 1)
+				_height[i] = arr[k]
+				_flags[i] = int(_flags[i]) & ~F_BLOCKED
+		_cursor += 1
+	if _cursor >= total:
 		_phase = Phase.DONE
 
 
@@ -436,6 +503,25 @@ func nearest_walkable(world_xz: Vector2, max_radius_m: float = 8.0, layer: int =
 				if is_walkable(cand.x, cand.y, layer):
 					return cand
 	return Vector2i(-1, -1)
+
+
+## Cells carrying a flag on layer 0 — diagnostics for the harness/inspector.
+func count_flag(flag: int) -> int:
+	var n := 0
+	for i in nx * nz:
+		if (int(_flags[i]) & flag) != 0:
+			n += 1
+	return n
+
+
+## Cells that turned out to have a walkable surface above the ground.
+func upper_surface_cells() -> int:
+	var n := 0
+	for l in range(1, layers):
+		for i in range(l * nx * nz, (l + 1) * nx * nz):
+			if (int(_flags[i]) & F_BLOCKED) == 0:
+				n += 1
+	return n
 
 
 func walkable_cell_count(layer: int = 0) -> int:

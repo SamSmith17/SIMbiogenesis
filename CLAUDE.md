@@ -1112,7 +1112,25 @@ agent by ±0.4 m *only in open ground*, which gives desire lines their width;
 in a doorway the jitter declines, and any jittered polyline that fails a
 segment check reverts. `STEP_EPS` exists because heights are float32, so a
 step authored at exactly 1.2 m reads back as 1.20000004768 and would be
-refused by a rounding error. **Engine/coupling:** `NpcPopulationEngine`
+refused by a rounding error.
+**Buildings** (`NpcBuildingNav`): walls become a 0.6 m blocked band, interiors
+stay walkable, and doors punch openings — so people path INTO and THROUGH
+buildings. Player-placed door `elements` resolve via the NORMALIZED ring from
+`BuildingBuilder.resolve_building_params` (open, CCW — the only form `edge`
+indices mean anything in). The **auto-door heuristic is load-bearing, not a
+nicety**: almost every OSM building has no door data, so one is punched at the
+edge midpoint facing the nearest road (else the site centre), derived
+deterministically from the footprint. Buildings tagged as an NPC space are
+forced enterable whatever their size; sheds under 9 m² stay solid.
+**Upper levels**: `surfaces_fn` probes downward rays for decks/floors, but ONLY
+in `F_STRUCTURE` cells, and the layer pass budgets *probes* rather than cells
+scanned. Nothing in the project generates walkable upper floors yet — the
+mechanism exists so stairs/ramps connect automatically when content does (an
+inter-layer link is just a move whose height delta passes the step limit).
+**On scenes with no TerrainLoader the nav grid uses a FLAT height source**:
+`TerrainSurfaceQuery.ground_height_at` falls back to a raycast that returns
+0.0 on a MISS, so every hole in collision coverage would read as a cliff and
+island the grid (this was causing real path failures on the soak map). **Engine/coupling:** `NpcPopulationEngine`
 (roster, substepped tick, scrub-back = freeze, >6 h forward jump = coarse
 catch-up, snapshot/restore) is ticked by `NpcPopulationBridge` from
 `system_graph_view._tick_resource_flow_ambient` BEFORE the flow tick (works

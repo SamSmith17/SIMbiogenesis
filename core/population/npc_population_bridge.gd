@@ -44,6 +44,10 @@ const NAV_CELLS_PER_TICK := 1200
 ## Region centre/extent are snapped to this before hashing, so a space moving
 ## a few centimetres does not throw away a finished bake.
 const NAV_REGION_SNAP_M := 5.0
+## Surface probing (upper levels). Rays start this far above the ground and a
+## hit only counts as another level once it clears the ground by this much.
+const SURFACE_PROBE_TOP_M := 12.0
+const SURFACE_MIN_CLEARANCE_M := 1.6
 ## Departure / collapse events for the view to toast, drained each read.
 var _pending_events: Array = []
 
@@ -167,10 +171,22 @@ func _service_nav(main: Node, registry: SpaceRegistry) -> void:
 			if not _nav_grid.configure_for_points(anchors):
 				_nav_grid = null
 				return
-			_nav_grid.begin_bake(
-					func(x: float, z: float) -> float:
-						return TerrainSurfaceQuery.ground_height_at(main, x, z),
-					_collect_nav_obstacles(main), fp)
+			# Height source. With a TerrainLoader we get a real heightfield
+			# lookup (cheap, and correct everywhere). WITHOUT one — the
+			# hand-built scenes — ground_height_at falls back to a raycast
+			# that returns 0.0 on a MISS, so every hole in collision coverage
+			# would read as a cliff, island the grid, and strand people. A
+			# flat grid is the honest answer there (and skips 78k raycasts).
+			var has_terrain := TerrainSurfaceQuery.find_terrain_loader(main) != null
+			var height_fn := func(x: float, z: float) -> float:
+				return TerrainSurfaceQuery.ground_height_at(main, x, z)
+			if not has_terrain:
+				height_fn = func(_x: float, _z: float) -> float: return 0.0
+			_nav_grid.begin_bake(height_fn,
+					_collect_nav_obstacles(main, registry), fp,
+					func(x: float, z: float) -> PackedFloat32Array:
+						return _probe_surfaces(main, x, z,
+								TerrainSurfaceQuery.ground_height_at(main, x, z)))
 			if _nav_query == null:
 				_nav_query = NpcNavQuery.new()
 		if _nav_grid != null and not _nav_grid.is_ready():
@@ -195,25 +211,77 @@ func _nav_anchor_points(main: Node, registry: SpaceRegistry) -> PackedVector2Arr
 	return out
 
 
-## Buildings and still water block; roads are good walking and are left clear.
-## 3c refines buildings into wall bands with doors — for now they are solid.
-func _collect_nav_obstacles(main: Node) -> Array:
+## Buildings become wall bands with doors (interiors stay walkable); still
+## water blocks; roads are good walking and are left clear.
+func _collect_nav_obstacles(main: Node, registry: SpaceRegistry) -> Array:
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 	if loader == null:
 		return []
 	var out: Array = []
+	var roads: Array = loader.call("get_osm_roads") if loader.has_method("get_osm_roads") else []
+	# Buildings the player tagged as an NPC space MUST be enterable, whatever
+	# their size and whether or not anyone placed a door.
+	var tagged: Dictionary = {}
+	if registry != null:
+		for space in registry.spaces:
+			var t: Dictionary = (space as Dictionary).get("target", {})
+			if str(t.get("kind", "")) == "building":
+				tagged[str(t.get("building_tag", ""))] = true
 	if loader.has_method("get_osm_buildings"):
 		for item in loader.call("get_osm_buildings"):
 			if not (item is Dictionary):
 				continue
-			var pts: Variant = (item as Dictionary).get("points", PackedVector2Array())
-			if pts is PackedVector2Array and (pts as PackedVector2Array).size() >= 3:
-				out.append({"poly": pts,
-					"flags": NpcNavGrid.F_BLOCKED | NpcNavGrid.F_STRUCTURE})
+			var rec: Dictionary = item
+			var idx := int(rec.get("idx", -1))
+			var style: Dictionary = {}
+			if idx >= 0 and loader.has_method("get_building_style"):
+				style = loader.call("get_building_style", idx)
+			# resolve_building_params normalises the ring (open, CCW), which is
+			# the only form facade element `edge` indices are meaningful in.
+			var params: Dictionary = BuildingBuilder.resolve_building_params(rec, style)
+			var poly: PackedVector2Array = params.get("poly", PackedVector2Array())
+			if poly.size() < 3:
+				continue
+			var mid := NpcBuildingNav.centroid(poly)
+			var attract: Variant = NpcBuildingNav.nearest_road_point(roads, mid)
+			var entry := NpcBuildingNav.nav_entry(
+					poly, params.get("elements", []) as Array,
+					attract if attract is Vector2 else Vector2.ZERO,
+					true, tagged.has(BuildingBuilder.building_tag(poly)))
+			if not entry.is_empty():
+				out.append(entry)
 	if loader.has_method("get_still_water_polygons"):
-		for poly in loader.call("get_still_water_polygons"):
-			out.append({"poly": poly,
+		for poly2 in loader.call("get_still_water_polygons"):
+			out.append({"poly": poly2,
 				"flags": NpcNavGrid.F_BLOCKED | NpcNavGrid.F_WATER})
+	return out
+
+
+## Walkable surfaces ABOVE the ground at a point — deck levels, upper floors.
+## Called only in STRUCTURE cells, so the raycast cost is bounded to building
+## and prop volumes rather than the whole grid.
+func _probe_surfaces(main: Node, x: float, z: float, ground_y: float) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	if main == null or not main.is_inside_tree():
+		return out
+	var space: PhysicsDirectSpaceState3D = main.get_world_3d().direct_space_state
+	if space == null:
+		return out
+	var top := ground_y + SURFACE_PROBE_TOP_M
+	var from := Vector3(x, top, z)
+	for i in NpcNavGrid.MAX_LAYERS - 1:
+		var params := PhysicsRayQueryParameters3D.create(from, Vector3(x, ground_y + 0.2, z))
+		params.collision_mask = 1
+		var hit: Dictionary = space.intersect_ray(params)
+		if hit.is_empty():
+			break
+		var y := float((hit["position"] as Vector3).y)
+		# Only surfaces clearly above the ground count as another level.
+		if y - ground_y >= SURFACE_MIN_CLEARANCE_M:
+			out.append(y)
+		from = Vector3(x, y - 0.05, z)
+		if from.y <= ground_y + 0.2:
+			break
 	return out
 
 
@@ -263,6 +331,10 @@ func nav_status() -> Dictionary:
 	}
 	if _nav_query != null:
 		d.merge(_nav_query.stats())
+	d["layers"] = _nav_grid.layers
+	d["doors"] = _nav_grid.count_flag(NpcNavGrid.F_DOOR)
+	d["interior"] = _nav_grid.count_flag(NpcNavGrid.F_INTERIOR)
+	d["upper"] = _nav_grid.upper_surface_cells()
 	return d
 
 
