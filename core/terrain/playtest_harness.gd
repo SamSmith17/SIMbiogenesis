@@ -1509,6 +1509,44 @@ func _run_population_verify() -> void:
 	await get_tree().create_timer(0.8).timeout
 	await _graph_shot(dir, "03_habitat_inspector", manifest)
 
+	# --- phase 2b: navigation ------------------------------------------------
+	# The grid bakes in budgeted slices off the tick, so give it a moment and
+	# then confirm it came up and is actually planning routes.
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.05
+	var nav_ready := false
+	var nav_info: Dictionary = {}
+	for i in 60:
+		await get_tree().create_timer(0.25).timeout
+		nav_info = bridge.call("nav_status")
+		if str(nav_info.get("state", "")) == "ready":
+			nav_ready = true
+			break
+	# Keep running AFTER the bake completes — planning only happens when an
+	# agent starts a new trip, so sampling the instant the grid goes ready
+	# would always read zero.
+	var with_path := 0
+	if nav_ready:
+		for i in 40:
+			await get_tree().create_timer(0.25).timeout
+			var n := 0
+			for a in bridge.call("roster_for", hab_id):
+				if (a as NpcAgent).path.size() > 0:
+					n += 1
+			with_path = maxi(with_path, n)
+		nav_info = bridge.call("nav_status")
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	print("PlaytestHarness: population verify — nav %s (%d cells @ %.2f m, hits=%d misses=%d fails=%d)" % [
+		str(nav_info.get("state", "off")), int(nav_info.get("cells", 0)),
+		float(nav_info.get("cell_m", 0.0)), int(nav_info.get("hits", 0)),
+		int(nav_info.get("misses", 0)), int(nav_info.get("fails", 0))])
+	var planned := int(nav_info.get("hits", 0)) + int(nav_info.get("misses", 0))
+	var ok_nav := nav_ready and int(nav_info.get("cells", 0)) > 0 			and planned > 0 and with_path > 0
+	print("PlaytestHarness: population verify — navigation %s (%d routes planned, %d agents walking one)" % [
+		"PASS" if ok_nav else "FAIL (grid never ready, or nobody routed)",
+		planned, with_path])
+
 	# --- phase 3: 3D silhouette avatars (Phase B) ----------------------------
 	# Runs BEFORE the starvation phases: the cascade below deliberately
 	# empties the camp, and there is nothing to photograph after that.
@@ -1680,7 +1718,7 @@ func _run_population_verify() -> void:
 		if not (model.get_item(str(pid)) as Dictionary).is_empty():
 			model.remove_item(str(pid))
 	print("PlaytestHarness: population verify — %s (%d shots in %s)" % [
-		"PASS" if (ok_flow and ok_move and ok_starve and ok_cascade and ok_3d) else "FAIL",
+		"PASS" if (ok_flow and ok_move and ok_starve and ok_cascade and ok_3d and ok_nav) else "FAIL",
 		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
 

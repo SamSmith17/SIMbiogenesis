@@ -43,6 +43,12 @@ func _init() -> void:
 	_test_nav_grid_slope_vs_steps()
 	_test_nav_grid_obstacles()
 	_test_nav_grid_queries()
+	_test_astar_basic()
+	_test_astar_obstacles()
+	_test_astar_steps_and_slopes()
+	_test_astar_cache_and_determinism()
+	_test_path_following()
+	_test_agent_follows_path()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -1241,3 +1247,336 @@ func _test_nav_grid_queries() -> void:
 	fg.bake_now(Callable(self, "_flat_h"), [], fp)
 	_check("baked grid matches its fingerprint", not fg.needs_rebuild(fp))
 	_check("baked grid rebuilds on a new fingerprint", fg.needs_rebuild(fp + "x"))
+
+
+# =============================================================================
+# Tier 3b — A* and path following
+# =============================================================================
+
+## A grid with a full-height wall at x=0 and one gap at z=0. Getting from the
+## left half to the right half REQUIRES routing through the gap.
+func _walled_grid() -> NpcNavGrid:
+	var g := NpcNavGrid.new()
+	g.configure_region(Vector2.ZERO, 20.0)
+	g.bake_now(Callable(self, "_flat_h"))
+	var wall := PackedVector2Array([
+		Vector2(-0.4, -20), Vector2(0.4, -20), Vector2(0.4, 20), Vector2(-0.4, 20)])
+	g.stamp_polygon(wall, NpcNavGrid.F_BLOCKED)
+	g.clear_flags_in_circle(Vector2(0, 0), 1.5, NpcNavGrid.F_BLOCKED, 0)
+	return g
+
+
+func _path_is_walkable(g: NpcNavGrid, from_xz: Vector2, path: PackedVector2Array) -> bool:
+	var prev := from_xz
+	for p in path:
+		var steps := maxi(int(prev.distance_to(p) / (g.cell_m * 0.5)), 1)
+		for s in range(steps + 1):
+			var q := prev.lerp(p, float(s) / float(steps))
+			if not g.is_walkable_world(q):
+				return false
+		prev = p
+	return true
+
+
+func _test_astar_basic() -> void:
+	var g := NpcNavGrid.new()
+	g.configure_region(Vector2.ZERO, 20.0)
+	g.bake_now(Callable(self, "_flat_h"))
+	var q := NpcNavQuery.new()
+	q.setup(g)
+	_check("query ready on a baked grid", q.is_ready())
+
+	# Open ground: the route is essentially the straight line, and smoothing
+	# should collapse it to a couple of points rather than 40 cell centres.
+	var from_xz := Vector2(-15, -15)
+	var to_xz := Vector2(15, 15)
+	var path := q.find_path(from_xz, to_xz)
+	_check("open path found", path.size() > 0)
+	_check("path ends at the destination", path[path.size() - 1].distance_to(to_xz) < 0.01)
+	_check("open path is smoothed, not a cell staircase", path.size() <= 4,
+			"%d points" % path.size())
+	var len_m := NpcNavQuery.path_length(path, from_xz)
+	var direct := from_xz.distance_to(to_xz)
+	_check("open path is near-direct", len_m < direct * 1.15,
+			"%.1f m vs %.1f m" % [len_m, direct])
+
+	# An unready grid must decline rather than crash or block.
+	var raw := NpcNavGrid.new()
+	raw.configure_region(Vector2.ZERO, 10.0)
+	var q2 := NpcNavQuery.new()
+	q2.setup(raw)
+	_check("unready grid declines", not q2.is_ready())
+	_check("unready query returns empty", q2.find_path(Vector2.ZERO, Vector2(5, 5)).is_empty())
+
+
+func _test_astar_obstacles() -> void:
+	var g := _walled_grid()
+	var q := NpcNavQuery.new()
+	q.setup(g)
+
+	var from_xz := Vector2(-12, -10)
+	var to_xz := Vector2(12, -10)
+	var path := q.find_path(from_xz, to_xz)
+	_check("path around a wall found", path.size() > 0)
+	_check("route never crosses a wall", _path_is_walkable(g, from_xz, path))
+	# It must detour through the gap at z=0, so it is meaningfully longer than
+	# the 24 m straight line that the wall blocks.
+	var len_m := NpcNavQuery.path_length(path, from_xz)
+	_check("route detours through the gap", len_m > from_xz.distance_to(to_xz) * 1.2,
+			"%.1f m vs %.1f m direct" % [len_m, from_xz.distance_to(to_xz)])
+	var passes_gap := false
+	for p in path:
+		if absf(p.x) < 1.0 and absf(p.y) < 2.0:
+			passes_gap = true
+	_check("route goes through the opening", passes_gap)
+
+	# Sealing the gap makes the far side genuinely unreachable: the query must
+	# report failure so the agent falls back, not hang.
+	g.stamp_polygon(PackedVector2Array([
+		Vector2(-0.4, -20), Vector2(0.4, -20), Vector2(0.4, 20), Vector2(-0.4, 20)]),
+		NpcNavGrid.F_BLOCKED)
+	var q3 := NpcNavQuery.new()
+	q3.setup(g)
+	_check("sealed wall makes the far side unreachable",
+			q3.find_path(from_xz, to_xz).is_empty())
+	_check("failure is counted", int(q3.stats().get("fails", 0)) > 0)
+
+
+func _test_astar_steps_and_slopes() -> void:
+	# A 1.2 m step is at the limit and must be traversable.
+	var ok := NpcNavGrid.new()
+	ok.configure_region(Vector2.ZERO, 10.0)
+	ok.bake_now(Callable(self, "_step_h"))
+	var q := NpcNavQuery.new()
+	q.setup(ok)
+	var p := q.find_path(Vector2(-6, 0), Vector2(6, 0))
+	_check("a 1.2 m step is traversable", p.size() > 0)
+
+	# A 1.6 m step exceeds STEP_UP_M and must NOT be climbed.
+	var tall := NpcNavGrid.new()
+	tall.configure_region(Vector2.ZERO, 10.0)
+	tall.bake_now(func(x: float, _z: float) -> float: return 0.0 if x < 0.0 else 1.6)
+	var q2 := NpcNavQuery.new()
+	q2.setup(tall)
+	_check("a 1.6 m step is refused", q2.find_path(Vector2(-6, 0), Vector2(6, 0)).is_empty())
+
+	# Dropping is more permissive than climbing (STEP_DOWN_M > STEP_UP_M): a
+	# 2 m drop is fine downhill but must not be climbable back up.
+	var ledge := NpcNavGrid.new()
+	ledge.configure_region(Vector2.ZERO, 10.0)
+	ledge.bake_now(func(x: float, _z: float) -> float: return 2.0 if x < 0.0 else 0.0)
+	var q3 := NpcNavQuery.new()
+	q3.setup(ledge)
+	_check("a 2 m drop is walkable downhill",
+			q3.find_path(Vector2(-6, 0), Vector2(6, 0)).size() > 0)
+	_check("the same 2 m ledge cannot be climbed",
+			q3.find_path(Vector2(6, 0), Vector2(-6, 0)).is_empty())
+
+	# A real staircase is climbable end to end — the headline requirement.
+	var stairs := NpcNavGrid.new()
+	stairs.configure_region(Vector2(10.0, 0.0), 9.0)
+	stairs.bake_now(Callable(self, "_stairs_h"))
+	var q4 := NpcNavQuery.new()
+	q4.setup(stairs)
+	_check("a staircase is climbable", q4.find_path(Vector2(3, 0), Vector2(17, 0)).size() > 0)
+
+	# Climb is penalised, not forbidden. A conical hill sits between the two
+	# points: going over it is shorter but costs CLIMB_COST_PER_M per metre
+	# climbed, so the route should bulge around the flank instead. (Walking
+	# ALONG a ridge crest would be flat and prove nothing — the hill has to be
+	# in the way.)
+	var hill := NpcNavGrid.new()
+	hill.configure_region(Vector2.ZERO, 20.0)
+	hill.bake_now(func(x: float, z: float) -> float:
+		return maxf(6.0 - Vector2(x, z).length() * 0.5, 0.0))
+	var q5 := NpcNavQuery.new()
+	q5.setup(hill)
+	var over := q5.find_path(Vector2(-15, 0), Vector2(15, 0))
+	_check("a crossable hill still yields a path", over.size() > 0)
+	var peak := 0.0
+	var strays := false
+	for pt in over:
+		peak = maxf(peak, maxf(6.0 - pt.length() * 0.5, 0.0))
+		if absf(pt.y) > 2.0:
+			strays = true
+	_check("climb cost routes around the hill rather than over the summit",
+			strays and peak < 5.0, "detour=%s peak=%.1f m" % [strays, peak])
+
+
+func _test_astar_cache_and_determinism() -> void:
+	var g := _walled_grid()
+	var q := NpcNavQuery.new()
+	q.setup(g)
+	var a := Vector2(-12, -10)
+	var b := Vector2(12, -10)
+
+	# First trip is a miss, the second is a hit.
+	var p1 := q.path_between_spaces("sp_a", "sp_b", a, b, 0)
+	_check("first space-pair query misses", int(q.stats().get("misses", 0)) == 1)
+	var p2 := q.path_between_spaces("sp_a", "sp_b", a, b, 0)
+	_check("second space-pair query hits", int(q.stats().get("hits", 0)) == 1)
+	_check("cached route is identical", p1 == p2)
+	_check("cache holds the route", int(q.stats().get("cached", 0)) == 1)
+
+	# Unkeyed trips (agent mid-walk) bypass the cache but still route.
+	var p3 := q.path_between_spaces("", "", a, b, 0)
+	_check("unkeyed query still routes", p3.size() > 0)
+	_check("unkeyed query does not grow the cache",
+			int(q.stats().get("cached", 0)) == 1)
+
+	# Lane jitter never moves the destination and never leaves walkable ground,
+	# even squeezing through the 1.5 m gap.
+	var lane := q.path_between_spaces("sp_a", "sp_b", a, b, 12345)
+	_check("lane jitter keeps the destination exact",
+			lane[lane.size() - 1].distance_to(b) < 0.01)
+	_check("lane jitter stays walkable", _path_is_walkable(g, a, lane))
+	# ...and it declines to spread people out in a pinch point: the only
+	# interior waypoint here IS the gap, so the route must stay on the
+	# centreline rather than clipping the jamb.
+	var pinched := true
+	for i in range(1, lane.size() - 1):
+		if lane[i].distance_to(p1[i]) > 0.01:
+			pinched = false
+	_check("lane jitter declines in a doorway", pinched)
+
+	# In open ground it DOES spread, which is what gives a desire line width.
+	var open_g := NpcNavGrid.new()
+	open_g.configure_region(Vector2.ZERO, 30.0)
+	open_g.bake_now(Callable(self, "_flat_h"))
+	var oq := NpcNavQuery.new()
+	oq.setup(open_g)
+	var oa := Vector2(-20, -20)
+	var ob := Vector2(20, 20)
+	var base_path := oq.path_between_spaces("sp_x", "sp_y", oa, ob, 0)
+	var offset := 0.0
+	for seed_i in [7717, 4242, 99991]:
+		var lane_p := oq.path_between_spaces("sp_x", "sp_y", oa, ob, seed_i)
+		_check("open-ground lane stays walkable", _path_is_walkable(open_g, oa, lane_p))
+		_check("open-ground lane keeps the destination",
+				lane_p[lane_p.size() - 1].distance_to(ob) < 0.01)
+		for i in range(1, mini(lane_p.size(), base_path.size()) - 1):
+			offset = maxf(offset, lane_p[i].distance_to(base_path[i]))
+	_check("open ground actually spreads people out",
+			offset > 0.05 or base_path.size() < 3,
+			"max offset %.2f m over %d pts" % [offset, base_path.size()])
+
+	# Invalidation clears the cache.
+	q.invalidate()
+	_check("invalidate empties the cache", int(q.stats().get("cached", 0)) == 0)
+
+	# Determinism: a fresh query object on an identically built grid must
+	# produce byte-identical routes, or replays diverge.
+	var g2 := _walled_grid()
+	var qb := NpcNavQuery.new()
+	qb.setup(g2)
+	_check("paths are deterministic across instances",
+			qb.find_path(a, b) == q.find_path(a, b))
+
+
+func _test_path_following() -> void:
+	# advance_path consumes waypoints and reports distance walked.
+	var path := PackedVector2Array([Vector2(10, 0), Vector2(10, 10)])
+	var r := NpcNav.advance_path(Vector2.ZERO, path, 0, NpcNav.hours_for_distance(4.0))
+	_check("walk advances toward the first waypoint",
+			(r[0] as Vector2).distance_to(Vector2(4, 0)) < 0.01, str(r[0]))
+	_check("walk stays on the first leg", int(r[1]) == 0)
+	_check("walk reports distance", absf(float(r[2]) - 4.0) < 0.01)
+
+	# Crossing a waypoint continues along the next leg in the same step.
+	var r2 := NpcNav.advance_path(Vector2.ZERO, path, 0, NpcNav.hours_for_distance(15.0))
+	_check("walk turns the corner", int(r2[1]) == 1)
+	_check("walk position follows the dogleg",
+			(r2[0] as Vector2).distance_to(Vector2(10, 5)) < 0.01, str(r2[0]))
+
+	# TELEPORT DEGRADATION: one huge step swallows the whole route and simply
+	# arrives — the invariant that keeps mass exact at 450x.
+	var r3 := NpcNav.advance_path(Vector2.ZERO, path, 0, 10.0)
+	_check("a huge step arrives at the end",
+			(r3[0] as Vector2).distance_to(Vector2(10, 10)) < 0.01)
+	_check("a huge step consumes the route", int(r3[1]) >= path.size())
+
+	# Remaining distance drives the arrival check.
+	_check("path_remaining_m sums the legs",
+			absf(NpcNav.path_remaining_m(Vector2.ZERO, path, 0) - 20.0) < 0.01)
+	_check("path_remaining_m respects the index",
+			absf(NpcNav.path_remaining_m(Vector2(10, 0), path, 1) - 10.0) < 0.01)
+	_check("path_remaining_m is zero when done",
+			NpcNav.path_remaining_m(Vector2(10, 10), path, 2) == 0.0)
+
+
+func _test_agent_follows_path() -> void:
+	# An agent handed a planner must walk the dogleg rather than the straight
+	# line, and must still arrive.
+	var site := _make_test_site()
+	var g := NpcNavGrid.new()
+	g.configure_region(Vector2.ZERO, 60.0)
+	g.bake_now(Callable(self, "_flat_h"))
+	var q := NpcNavQuery.new()
+	q.setup(g)
+	var planned := [0]
+	var ctx := {
+		"registry": site["registry"], "pos_of": site["pos_of"],
+		"hour_of_day": 12.0, "starved": {},
+		"plan_path": func(from_xz: Vector2, to_xz: Vector2, fk: String, tk: String,
+				seed: int) -> Variant:
+			planned[0] += 1
+			return q.path_between_spaces(fk, tk, from_xz, to_xz, seed),
+	}
+	var a := NpcAgent.make("walker", Vector2.ZERO)
+	a.needs["thirst"] = 1.0
+	for n in ["hunger", "bladder", "sleep", "hygiene"]:
+		a.needs[n] = 0.0
+	a._step_idle(10.0, ctx)
+	_check("agent planned a route", planned[0] > 0)
+	_check("agent is travelling", a.state == NpcAgent.State.TRAVELING)
+	_check("agent holds a path", a.path.size() > 0)
+
+	# Walk it out; the agent must reach the water point and start drinking.
+	var t := 10.0
+	for i in 400:
+		t += 1.0 / 60.0
+		a.step(t, 1.0 / 60.0, ctx)
+		if a.state == NpcAgent.State.DOING:
+			break
+	_check("agent arrived and began the activity", a.state == NpcAgent.State.DOING,
+			"state=%d" % a.state)
+	_check("arrival clears the path", a.path.is_empty())
+	_check("agent reached the water point", a.pos.distance_to(Vector2(0, 40)) < 1.0,
+			str(a.pos))
+
+	# With no planner at all the agent still works (pre-3b straight lines).
+	var b := NpcAgent.make("straight", Vector2.ZERO)
+	b.needs["thirst"] = 1.0
+	for n in ["hunger", "bladder", "sleep", "hygiene"]:
+		b.needs[n] = 0.0
+	var bare := {"registry": site["registry"], "pos_of": site["pos_of"],
+			"hour_of_day": 12.0, "starved": {}}
+	b._step_idle(10.0, bare)
+	_check("no planner still starts the trip", b.state == NpcAgent.State.TRAVELING)
+	_check("no planner means no path", b.path.is_empty())
+	var t2 := 10.0
+	for i in 400:
+		t2 += 1.0 / 60.0
+		b.step(t2, 1.0 / 60.0, bare)
+		if b.state == NpcAgent.State.DOING:
+			break
+	_check("straight-line fallback still arrives", b.state == NpcAgent.State.DOING)
+
+	# A planner that declines (budget spent / not ready) must not strand anyone.
+	var c := NpcAgent.make("declined", Vector2.ZERO)
+	c.needs["thirst"] = 1.0
+	for n in ["hunger", "bladder", "sleep", "hygiene"]:
+		c.needs[n] = 0.0
+	var declining := {"registry": site["registry"], "pos_of": site["pos_of"],
+			"hour_of_day": 12.0, "starved": {},
+			"plan_path": func(_a: Vector2, _b: Vector2, _c: String, _d: String,
+					_e: int) -> Variant: return null}
+	c._step_idle(10.0, declining)
+	var t3 := 10.0
+	for i in 400:
+		t3 += 1.0 / 60.0
+		c.step(t3, 1.0 / 60.0, declining)
+		if c.state == NpcAgent.State.DOING:
+			break
+	_check("a declined plan falls back to straight-line",
+			c.state == NpcAgent.State.DOING)

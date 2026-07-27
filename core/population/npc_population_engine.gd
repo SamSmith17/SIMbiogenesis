@@ -224,10 +224,15 @@ func has_collapsed() -> bool:
 
 
 func _make_ctx(ctx_in: Dictionary) -> Dictionary:
+	# NOTE: this rebuilds the dict rather than mutating the caller's, so every
+	# key the agents need must be forwarded explicitly. Forgetting one fails
+	# silently — `plan_path` was dropped here once and agents just kept
+	# walking straight lines with a perfectly good nav grid sitting idle.
 	return {
 		"registry": ctx_in.get("registry"),
 		"pos_of": ctx_in.get("pos_of", Callable()),
 		"chore_pos_of": ctx_in.get("chore_pos_of", Callable()),
+		"plan_path": ctx_in.get("plan_path", Callable()),
 		"hour_of_day": float(ctx_in.get("hour_of_day", 12.0)),
 		"starved": _starved,
 		"weather": ctx_in.get("weather", _weather),

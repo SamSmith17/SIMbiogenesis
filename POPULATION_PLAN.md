@@ -404,7 +404,21 @@ other thing on this list.
 
 # Tier 3 — Wayfinding and Desire Lines
 
-**Status: specified, not built.**
+**Status: 3a and 3b built and verified. 3c–3f specified, not built.**
+
+Corrections learned while building 3a/3b, kept here because they are the
+non-obvious parts:
+- The slope baseline is a central difference over ±2 cells — a **3 m** span,
+  not 1.5 m. A single 1.2 m step therefore reads 21.8°, not 38.7°.
+- String-pulling must be **cost-aware**. Pure visibility smoothing straightens
+  a deliberate detour back over a hill, silently undoing the climb avoidance
+  A* just paid for.
+- Heights are `float32`, so a step authored at exactly `STEP_UP_M` reads back
+  larger and is refused by a rounding error. `STEP_EPS` makes "at the limit"
+  mean passable.
+- Lane jitter must validate the whole polyline, not its vertices: a shifted
+  waypoint can be walkable while the segments either side clip a doorjamb. It
+  now declines entirely in pinch points and reverts on any failed segment.
 
 Two deliverables, in order. First **grid A\* pathfinding**, so people walk
 around walls and up ramps instead of gliding through trees. Then, built on the

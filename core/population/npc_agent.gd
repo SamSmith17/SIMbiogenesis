@@ -102,6 +102,12 @@ var quit_pressure: float = 0.0
 ## the supply is starved). Blocked needs hurt morale ~2x — broken
 ## infrastructure is what breaks a community, not busy people.
 var blocked: Dictionary = {}
+## Space this agent is currently standing at ("" when out in the open) — the
+## cache key for the next trip.
+var at_space_id: String = ""
+## Planned route to target_pos (empty = walk straight, the pre-3b fallback).
+var path := PackedVector2Array()
+var path_idx := 0
 var chore_id: String = ""          # chore being worked (CHORE_ACTIVITY only)
 var last_exposure: String = NpcWeatherGate.EXPOSURE_INDOOR
 var rng := RandomNumberGenerator.new()
@@ -314,14 +320,15 @@ func _step_chore(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 
 
 func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictionary:
-	var travel_h := NpcNav.travel_hours(pos, target_pos)
+	var travel_h := _remaining_travel_hours()
 	if travel_h >= dt_hours:
-		pos = NpcNav.advance(pos, target_pos, dt_hours)
+		_walk(dt_hours)
 		return {}
 	# Arrived mid-step: begin the activity at the actual arrival instant
 	# (space already claimed at selection time) and bill only the tail of the
 	# step spent doing it.
 	pos = target_pos
+	_clear_path()
 	state = State.DOING
 	var arrive_abs := abs_hours - dt_hours + travel_h
 	if activity == CHORE_ACTIVITY:
@@ -353,6 +360,42 @@ func _consumes_for(act: String) -> Dictionary:
 	if act == "enrichment" and target_space_type == "fire_circle":
 		return {"biomass": FIRE_BIOMASS_KG_H}
 	return base
+
+
+## Sim-hours left to reach target_pos: along the planned route when there is
+## one, else the straight line (grid not ready / unreachable).
+func _remaining_travel_hours() -> float:
+	if path_idx < path.size():
+		return NpcNav.hours_for_distance(NpcNav.path_remaining_m(pos, path, path_idx))
+	return NpcNav.travel_hours(pos, target_pos)
+
+
+func _walk(dt_hours: float) -> void:
+	if path_idx < path.size():
+		var r := NpcNav.advance_path(pos, path, path_idx, dt_hours)
+		pos = r[0]
+		path_idx = r[1]
+		return
+	pos = NpcNav.advance(pos, target_pos, dt_hours)
+
+
+func _clear_path() -> void:
+	path = PackedVector2Array()
+	path_idx = 0
+
+
+## Ask the world for a route to `dest`. `ctx.plan_path` is supplied by the
+## bridge; with no planner (or an unreachable target) the agent keeps the
+## straight-line behaviour rather than refusing to move.
+func _request_path(ctx: Dictionary, dest: Vector2, from_key: String, to_key: String) -> void:
+	_clear_path()
+	var planner: Callable = ctx.get("plan_path", Callable())
+	if not planner.is_valid():
+		return
+	var p: Variant = planner.call(pos, dest, from_key, to_key, hash(id))
+	if p is PackedVector2Array and (p as PackedVector2Array).size() > 0:
+		path = p
+		path_idx = 0
 
 
 static func _scaled(consumes: Dictionary, doing_h: float, dt_hours: float) -> Dictionary:
@@ -415,10 +458,12 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 		return
 	blocked.erase(need)
 	activity = need
+	var from_key := at_space_id
 	target_space_id = sid
 	target_space_type = space_type
 	target_pos = p
 	last_exposure = NpcWeatherGate.EXPOSURE_SHELTERED
+	_request_path(ctx, p, from_key, sid)
 	state = State.TRAVELING
 
 
@@ -498,6 +543,8 @@ func _begin_chore(abs_hours: float, ctx: Dictionary) -> bool:
 		var p: Variant = chore_pos_of.call(chore)
 		if p is Vector2:
 			target_pos = p
+	# Work sites are not tagged spaces, so this never keys the shared cache.
+	_request_path(ctx, target_pos, "", "")
 	state = State.TRAVELING
 	return true
 
@@ -594,10 +641,14 @@ func _finish(ctx: Dictionary, _completed: bool) -> void:
 	if board != null and not chore_id.is_empty():
 		board.release(chore_id, id)
 	chore_id = ""
+	# Remember the space we finished at: the next trip starts there, which is
+	# what lets the space-pair route cache hit.
+	at_space_id = target_space_id
 	activity = ""
 	target_space_id = ""
 	target_space_type = ""
 	last_exposure = NpcWeatherGate.EXPOSURE_INDOOR
+	_clear_path()
 	state = State.IDLE
 
 

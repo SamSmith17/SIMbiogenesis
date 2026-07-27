@@ -57,6 +57,9 @@ Godot.exe.exe --headless --path . --script core/report/site_report_selftest.gd
 # clustering, departure/contagion/collapse cascade + resilience buffer,
 # weather multiplicative gating, chore board windows/claims/credit/serialize,
 # chore-vs-need preemption and productivity scaling;
+# Tier 3: nav-grid region/bake/slope-vs-steps/stamping/fingerprints, and A*
+# mazes, step + drop asymmetry, staircase climbing, climb-cost detours,
+# route cache/lane jitter/determinism, path following + teleport degradation;
 # extend it with every population change):
 Godot.exe.exe --headless --path . --script core/population/npc_population_selftest.gd
 # Nested super-node self-test (offline — portal resolution, flattened connections,
@@ -1088,9 +1091,28 @@ brutal, not merely additive), floored at 0.15; `is_unsafe` skips the chore
 entirely (work backs up); exposure also drains morale. Indoor work is immune;
 sheltered gets `SHELTER_RELIEF`. Weather is sampled per tick from
 `WeatherService` and degrades to "comfortable" when uncovered/offline.
-`NpcNav` = straight-line walk + teleport snap when one tick covers the
-distance (no obstacle avoidance yet — agents walk through trees; coarse-grid
-A* slots in behind `advance()`). **Engine/coupling:** `NpcPopulationEngine`
+**Navigation** (`NpcNavGrid` + `NpcNavQuery`, POPULATION_PLAN.md Tier 3):
+person-scale walkable grid (0.75 m cells) over the bounding box of the tagged
+spaces + habitat, padded — not the whole SoI. The bake is **chunked across
+ticks** (`bake_step`); `ConduitAStar`'s header records that per-cell ground
+fetches caused GPU TDR, so nothing samples terrain inline. Until `is_ready()`
+agents walk straight lines, and a declined plan always falls back to that.
+**Slope vs steps is the load-bearing distinction**: cell slope is a central
+difference over ±2 cells (3 m — a single 1.2 m step reads 22°, walkable; a
+cliff reads 80°+, blocked), while per-move `STEP_UP_M` 1.2 / `STEP_DOWN_M` 2.5
+are enforced at *connection* time in the A*. Measuring slope between adjacent
+cells instead would read a step as 58° and strand people at the bottom of it.
+A* is hand-rolled over the packed arrays (not `AStar3D`: 71k points would cost
+~350k binding calls on every re-bake, and the grid re-bakes when a prop
+moves). Smoothing is **cost-aware string-pulling** — a shortcut is only taken
+when it is no dearer than the run it replaces, or straightening would undo the
+climb avoidance the search just paid for and send everyone over the hill.
+Routes between tagged spaces are cached per (from,to) pair and offset per
+agent by ±0.4 m *only in open ground*, which gives desire lines their width;
+in a doorway the jitter declines, and any jittered polyline that fails a
+segment check reverts. `STEP_EPS` exists because heights are float32, so a
+step authored at exactly 1.2 m reads back as 1.20000004768 and would be
+refused by a rounding error. **Engine/coupling:** `NpcPopulationEngine`
 (roster, substepped tick, scrub-back = freeze, >6 h forward jump = coarse
 catch-up, snapshot/restore) is ticked by `NpcPopulationBridge` from
 `system_graph_view._tick_resource_flow_ambient` BEFORE the flow tick (works

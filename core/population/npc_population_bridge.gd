@@ -25,6 +25,25 @@ var _fallback_registry: SpaceRegistry = null
 var _weather_cache: Dictionary = {}
 var _weather_hour := -999.0
 var _last_abs_h := 0.0
+
+## Navigation (Tier 3). The grid bakes in budgeted slices off the tick; until
+## it is ready agents keep walking straight lines, so nothing ever stalls.
+var _nav_grid: NpcNavGrid = null
+var _nav_query: NpcNavQuery = null
+var _nav_fp := ""
+var _nav_queries_this_tick := 0
+var _model_item_cache: Dictionary = {}   # item_id -> item (for nav anchors)
+var _nav_rev := 0            # bumped by callers when geometry moves
+
+## Cold A* queries allowed per tick. Cache hits are unlimited — a site has ~10
+## tagged spaces, so after the first day almost every trip is a hit.
+const MAX_QUERIES_PER_TICK := 2
+## Terrain sampling is the expensive part of the bake, and on scenes with no
+## TerrainLoader every sample is a raycast. Keep the slice conservative.
+const NAV_CELLS_PER_TICK := 1200
+## Region centre/extent are snapped to this before hashing, so a space moving
+## a few centimetres does not throw away a finished bake.
+const NAV_REGION_SNAP_M := 5.0
 ## Departure / collapse events for the view to toast, drained each read.
 var _pending_events: Array = []
 
@@ -40,6 +59,8 @@ func tick(model, flow_engine, main: Node) -> void:
 	_last_abs_h = abs_h
 	var hour_of_day: float = fposmod(abs_h, 24.0)
 	var registry := _find_registry(main)
+	_nav_queries_this_tick = 0
+	_service_nav(main, registry)
 	var seen: Dictionary = {}
 
 	for item in model.get_items_in_scope("root"):
@@ -51,6 +72,7 @@ func tick(model, flow_engine, main: Node) -> void:
 			continue
 		var iid := str(d.get("id", ""))
 		seen[iid] = true
+		_model_item_cache[iid] = d
 		var engine := _ensure_engine(iid, specs, main)
 		# Last flow tick's verdict drives this tick's blocked activities.
 		engine.set_starved(specs.get("starved_kinds", []) as Array)
@@ -62,6 +84,9 @@ func tick(model, flow_engine, main: Node) -> void:
 				return _chore_position(chore, main, registry),
 			"hour_of_day": hour_of_day,
 			"weather": _sample_weather(main, hour_of_day),
+			"plan_path": func(from_xz: Vector2, to_xz: Vector2, from_key: String,
+					to_key: String, lane_seed: int) -> Variant:
+				return _plan_path(from_xz, to_xz, from_key, to_key, lane_seed),
 		}
 		var demand: Dictionary = engine.tick(abs_h, ctx)
 		flow_engine.set_habitat_demand(iid, demand)
@@ -108,6 +133,141 @@ func space_markers(main: Node) -> Array:
 			"capacity": maxi(int(space.get("capacity", SpaceRegistry.DEFAULT_CAPACITY)), 1),
 		})
 	return out
+
+
+# --- navigation --------------------------------------------------------------
+
+## Keep the nav grid in step with the world: re-derive its region when the
+## tagged spaces move, then feed it ONE budgeted bake slice per tick. Never
+## bakes the whole grid inline — see the NpcNavGrid stall-trap note.
+func _service_nav(main: Node, registry: SpaceRegistry) -> void:
+	if registry == null or main == null:
+		return
+	var anchors := _nav_anchor_points(main, registry)
+	if anchors.size() < 1:
+		return
+	# The fingerprint must depend ONLY on things that sit still. Folding in
+	# live agent positions makes it change every tick, which restarts the bake
+	# forever and the grid never becomes ready.
+	var lo := anchors[0]
+	var hi := anchors[0]
+	for p in anchors:
+		lo.x = minf(lo.x, p.x)
+		lo.y = minf(lo.y, p.y)
+		hi.x = maxf(hi.x, p.x)
+		hi.y = maxf(hi.y, p.y)
+	var center := ((lo + hi) * 0.5).snapped(Vector2(NAV_REGION_SNAP_M, NAV_REGION_SNAP_M))
+	var half := snappedf(maxf(hi.x - lo.x, hi.y - lo.y) * 0.5, NAV_REGION_SNAP_M)
+	var fp := NpcNavGrid.compose_fingerprint(
+			registry.spaces.size(), _prop_revision(main), _nav_rev, 0, center, half)
+	if _nav_grid == null or _nav_grid.needs_rebuild(fp):
+		if _nav_fp != fp:
+			_nav_fp = fp
+			_nav_grid = NpcNavGrid.new()
+			if not _nav_grid.configure_for_points(anchors):
+				_nav_grid = null
+				return
+			_nav_grid.begin_bake(
+					func(x: float, z: float) -> float:
+						return TerrainSurfaceQuery.ground_height_at(main, x, z),
+					_collect_nav_obstacles(main), fp)
+			if _nav_query == null:
+				_nav_query = NpcNavQuery.new()
+		if _nav_grid != null and not _nav_grid.is_ready():
+			PerfMonitor.begin("npc_nav_bake")
+			if _nav_grid.bake_step(NAV_CELLS_PER_TICK):
+				_nav_query.setup(_nav_grid)
+			PerfMonitor.end("npc_nav_bake")
+
+
+## Where the population actually operates: every resolvable tagged space plus
+## each pop-driven habitat's home. STATIC POINTS ONLY — never live agent
+## positions, or the region (and its fingerprint) moves every tick.
+func _nav_anchor_points(main: Node, registry: SpaceRegistry) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for space in registry.spaces:
+		var p: Variant = registry.resolve_position(space, main)
+		if p is Vector2:
+			out.append(p)
+	for iid in _engines:
+		var item: Dictionary = _model_item_cache.get(iid, {})
+		out.append(_home_pos(item.get("specs", {}) as Dictionary, main))
+	return out
+
+
+## Buildings and still water block; roads are good walking and are left clear.
+## 3c refines buildings into wall bands with doors — for now they are solid.
+func _collect_nav_obstacles(main: Node) -> Array:
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader == null:
+		return []
+	var out: Array = []
+	if loader.has_method("get_osm_buildings"):
+		for item in loader.call("get_osm_buildings"):
+			if not (item is Dictionary):
+				continue
+			var pts: Variant = (item as Dictionary).get("points", PackedVector2Array())
+			if pts is PackedVector2Array and (pts as PackedVector2Array).size() >= 3:
+				out.append({"poly": pts,
+					"flags": NpcNavGrid.F_BLOCKED | NpcNavGrid.F_STRUCTURE})
+	if loader.has_method("get_still_water_polygons"):
+		for poly in loader.call("get_still_water_polygons"):
+			out.append({"poly": poly,
+				"flags": NpcNavGrid.F_BLOCKED | NpcNavGrid.F_WATER})
+	return out
+
+
+func _prop_revision(main: Node) -> int:
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader == null:
+		return 0
+	var layer: Variant = loader.get("_placed_prop_layer")
+	if layer != null and layer.get("props") != null:
+		return (layer.get("props") as Array).size()
+	return 0
+
+
+## Bump when world geometry moves so the grid re-bakes (terrain sculpt, prop
+## placement, building style edits).
+func notify_world_changed() -> void:
+	_nav_rev += 1
+
+
+## The agent-facing planner. Returns null when the grid is not ready or the
+## per-tick cold-query budget is spent — agents then walk straight, which is
+## exactly the pre-3b behaviour.
+func _plan_path(from_xz: Vector2, to_xz: Vector2, from_key: String,
+		to_key: String, lane_seed: int) -> Variant:
+	if _nav_query == null or not _nav_query.is_ready():
+		return null
+	var cached := not from_key.is_empty() and not to_key.is_empty()
+	if not cached and _nav_queries_this_tick >= MAX_QUERIES_PER_TICK:
+		return null
+	PerfMonitor.begin("npc_pathfind")
+	var path := _nav_query.path_between_spaces(from_key, to_key, from_xz, to_xz, lane_seed)
+	PerfMonitor.end("npc_pathfind")
+	if not cached:
+		_nav_queries_this_tick += 1
+	return path if path.size() > 0 else null
+
+
+## Navigation state for the inspector / harness.
+func nav_status() -> Dictionary:
+	if _nav_grid == null:
+		return {"state": "off"}
+	var d := {
+		"state": "ready" if _nav_grid.is_ready() else "baking",
+		"progress": _nav_grid.bake_progress(),
+		"cells": _nav_grid.cell_count(),
+		"cell_m": _nav_grid.cell_m,
+	}
+	if _nav_query != null:
+		d.merge(_nav_query.stats())
+	return d
+
+
+func nav_grid() -> NpcNavGrid:
+	return _nav_grid
 
 
 ## Live weather for the productivity/exposure model, cached per tick. Falls
