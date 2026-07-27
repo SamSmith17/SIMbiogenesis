@@ -634,6 +634,12 @@ func _init_from_system_time() -> void :
 	clock.init_from_system_time()
 	_update()
 
+func _enter_tree() -> void:
+	# Register early: a parent's _enter_tree fires before its children's _ready(),
+	# so Services.get_main() resolves for the whole scene from the first frame.
+	Services.register(Services.MAIN, self)
+
+
 func _ready() -> void :
 	# Add to group so planet system can find us
 	add_to_group( "main_scene" )

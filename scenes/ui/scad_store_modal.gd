@@ -789,7 +789,7 @@ func _on_place() -> void:
 
 func _find_main() -> Node:
 	if _loader != null and is_instance_valid(_loader):
-		var m := _loader.get_node_or_null("/root/Main")
+		var m := Services.get_main()
 		if m != null:
 			return m
 	var n: Node = self

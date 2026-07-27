@@ -411,6 +411,10 @@ func _graph_embed_copy_node_visuals(a: Node, b: Node) -> void:
 
 
 func _ready() -> void:
+	# Only the primary SolarUI registers; the graph-embedded mirror does not
+	# clobber the service (it is a secondary read-only instance).
+	if not _is_graph_embed:
+		Services.register(Services.SOLAR_UI, self)
 	if _is_graph_embed:
 		_graph_embed_setup_mirror_mode()
 		return

@@ -114,7 +114,7 @@ func _find_main() -> Node:
 		if n.name == "Main" or (n.has_method("get_absolute_hours") and n.has_node("UILayer")):
 			return n
 		n = n.get_parent()
-	return get_tree().root.get_node_or_null("Main")
+	return Services.get_main()
 
 
 func _find_named(root: Node, want: String) -> Node:

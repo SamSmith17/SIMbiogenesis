@@ -99,9 +99,17 @@ selftests green.
 
 1. **Node-name coupling — 48 files / 75 `get_node("…SolarUI/SystemGraphView/Main…")`
    call sites.** Renaming a scene node silently breaks SimMode/AutomationEngine/UIs.
-   *Fix:* introduce a small `Services` registry autoload (generalize
-   `DeviceRegistry`); core nodes self-register in `_ready()`, consumers read
-   `Services.graph` etc. Non-breaking — migrate a handful of sites per push.
+   *In progress:* the `Services` registry autoload (`core/services.gd`, selftest
+   `core/services_selftest.gd`) has landed. Core nodes self-register — `Main` in
+   `_enter_tree` (so it resolves before any child's `_ready`), plus
+   `SystemGraphView`/`SolarUI`/`TimelineUI`/`TerrainLoader`/`Player`/`HAClient`
+   in `_ready`. Consumers read `Services.get_main()` / `get_graph()` / etc.;
+   unregistered keys return null exactly like the old `get_node_or_null`, so
+   migration is non-breaking. **First batch: all 11 `Main` lookups converted.**
+   Remaining per-push work: convert the `SystemGraphView` (~40), `SolarUI`,
+   `TerrainLoader`, `Player`, and `HAClient` lookup sites to their
+   `Services.get_*()` accessors. Do **not** register autoloads (WeatherService,
+   TimeDirector, …) — reference those directly.
 2. **Monoliths — 8 files hold ~23% of the code.** `system_graph_view.gd` (~13.9k
    lines), `terrain_loader.gd` (~9.2k), `graph_canvas.gd` (~8.9k),
    `inspector_panel.gd` (~5.7k), `solar_ui.gd` (~4.5k), `main.gd` (~3.9k),

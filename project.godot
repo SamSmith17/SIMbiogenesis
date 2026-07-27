@@ -21,6 +21,7 @@ config/icon="res://icon.png"
 
 [autoload]
 
+Services="*res://core/services.gd"
 PerfMonitor="*res://core/perf/perf_monitor.gd"
 DeviceRegistry="*res://power_system/core/device_registry.gd"
 AutomationEngine="*res://power_system/automation/automation_engine.gd"

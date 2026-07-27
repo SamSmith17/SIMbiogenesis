@@ -330,7 +330,7 @@ func _ground_height_callable() -> Callable:
 	var tree := get_tree()
 	if tree == null:
 		return Callable()
-	var main := tree.root.get_node_or_null("Main")
+	var main := Services.get_main()
 	if main == null:
 		return Callable()
 	var loader := main.get_node_or_null("TerrainLoader")

@@ -355,7 +355,7 @@ func _main() -> Node:
 	var tree := get_tree()
 	if tree == null:
 		return null
-	return tree.root.get_node_or_null("Main")
+	return Services.get_main()
 
 
 func _abs_hours(main_node: Node) -> float:

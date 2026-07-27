@@ -25,6 +25,9 @@ Godot.exe.exe --headless --path . --import
 
 # Physics self-test (extend it with every physics change):
 Godot.exe.exe --headless --path . --script power_system/sources/source_physics_selftest.gd
+# Services node-registry self-test (offline — register/get/has, auto-clear on
+# tree exit, freed-node guard; see ARCHITECTURE.md debt #1):
+Godot.exe.exe --headless --path . --script core/services_selftest.gd
 
 # Boot both maps, 120 frames each; compare errors against the known
 # pre-existing set (see Known Issues):

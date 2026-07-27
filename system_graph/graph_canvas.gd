@@ -7755,7 +7755,7 @@ func _terrain_loader_node() -> Node:
 		return null
 	var main := tree.get_first_node_in_group("main_scene")
 	if main == null:
-		main = tree.root.get_node_or_null("Main")
+		main = Services.get_main()
 	if main == null:
 		return null
 	return main.get_node_or_null("TerrainLoader")

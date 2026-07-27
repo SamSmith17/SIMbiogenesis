@@ -350,6 +350,7 @@ var _phase_ok := false
 
 
 func _ready() -> void:
+	Services.register(Services.TERRAIN_LOADER, self)
 	_main = get_parent()
 	# Deferred: Main is still "busy setting up children" during our _ready, so
 	# add_child() on it would fail. By the deferred call Main is fully ready.

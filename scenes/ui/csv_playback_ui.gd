@@ -104,7 +104,7 @@ func _resolve_nodes() -> void:
 	if sc != null and sc.name == "Main":
 		_main_node = sc
 	else:
-		_main_node = tree.root.get_node_or_null("Main")
+		_main_node = Services.get_main()
 	if _player != null and _player.has_method("setup"):
 		var ha_client := tree.root.get_node_or_null("HAClient")
 		if ha_client == null:
