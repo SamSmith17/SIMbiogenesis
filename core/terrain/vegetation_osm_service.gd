@@ -12,11 +12,19 @@ signal vegetation_progress(message: String)
 
 const OVERPASS_URL := "https://overpass-api.de/api/interpreter"
 const CACHE_DIR := "user://terrain_cache/osm_vegetation"
-const CACHE_VERSION := "v6"
+## v8: veg multipolygons keep outer rings only (v6/v7 hole-punch exploded to millions).
+const CACHE_VERSION := "v8"
 const ATTRIBUTION := "© OpenStreetMap contributors"
 const REQUEST_TIMEOUT := 90.0
 const MAX_RETRIES := 3
 const RETRY_BACKOFF := 4.0
+## Soft ceiling after parse/deserialize. Dense sites rarely need more; beyond this
+## scatter already trims to DENSE_POLY_BUDGET (640) and ranking millions of polys
+## stalls the main thread (~hundreds of ms/frame via GrowthZoneIndex rebuild).
+const MAX_POLYGONS_RETAINED := 4000
+const MAX_OPEN_AREA_POLYS := 800
+## Reject on-disk caches larger than this (GB-scale corrupt payloads).
+const MAX_CACHE_BYTES := 32 * 1024 * 1024
 
 var _http: HTTPRequest = null
 var _busy: bool = false
@@ -65,11 +73,17 @@ func _start_veg_job(req: Dictionary) -> void:
 	var cache_path := "%s/%s.json" % [CACHE_DIR, key]
 	if not force_refetch and TerrainCacheSettings.cache_enabled() \
 			and FileAccess.file_exists(cache_path):
-		var parsed: Variant = _load_cache(cache_path)
-		if parsed is Dictionary:
-			var payload := deserialize_payload(parsed as Dictionary)
-			_emit_veg_deferred(key, payload)
-			return
+		if _cache_file_too_large(cache_path):
+			push_warning("VegetationService: rejecting oversized cache %s — refetching"
+				% cache_path.get_file())
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(cache_path))
+		else:
+			var parsed: Variant = _load_cache(cache_path)
+			if parsed is Dictionary:
+				var payload := deserialize_payload(parsed as Dictionary)
+				payload = cap_polygons(payload)
+				_emit_veg_deferred(key, payload)
+				return
 	var bbox := GeoMath.bbox_for(lat, lon, half_extent_m)
 	var s := float(bbox["south"])
 	var w := float(bbox["west"])
@@ -121,8 +135,8 @@ func _on_request_completed(result: int, response_code: int,
 	if not (parsed is Dictionary):
 		_fail("invalid Overpass JSON")
 		return
-	var payload := _parse_overpass(parsed as Dictionary,
-		float(_job["lat"]), float(_job["lon"]))
+	var payload := cap_polygons(_parse_overpass(parsed as Dictionary,
+		float(_job["lat"]), float(_job["lon"])))
 	_save_cache(str(_job["cache_path"]), payload)
 	var key := str(_job["key"])
 	_busy = false
@@ -174,11 +188,78 @@ static func _cache_key(lat: float, lon: float, half_extent_m: float) -> String:
 	return "osmveg_%s_%.4f_%.4f_%d" % [CACHE_VERSION, lat, lon, int(half_extent_m)]
 
 
+static func _cache_file_too_large(path: String) -> bool:
+	var abs_path := ProjectSettings.globalize_path(path)
+	if not FileAccess.file_exists(abs_path) and not FileAccess.file_exists(path):
+		return false
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return false
+	var n := f.get_length()
+	f.close()
+	return n > MAX_CACHE_BYTES
+
+
 static func _load_cache(path: String) -> Variant:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return null
 	return JSON.parse_string(f.get_as_text())
+
+
+## Keep open-area (lawn/meadow) veto polys first, then the largest remaining by
+## footprint area. Mutates a shallow copy of the payload dict.
+static func cap_polygons(payload: Dictionary,
+		max_count: int = MAX_POLYGONS_RETAINED) -> Dictionary:
+	var polys: Array = payload.get("polygons", [])
+	if polys.size() <= max_count:
+		return payload
+	var open: Array = []
+	var ranked: Array = []
+	for rec in polys:
+		if not (rec is Dictionary):
+			continue
+		var d: Dictionary = rec
+		var poly: PackedVector2Array = d.get("points", PackedVector2Array())
+		if poly.size() < 3:
+			continue
+		var kind := str(d.get("kind", ""))
+		if kind == "grass_lawn" or kind == "grass_field":
+			open.append(d)
+		else:
+			ranked.append({"rec": d, "area": _poly_area_m2(poly)})
+	if open.size() > MAX_OPEN_AREA_POLYS:
+		# Prefer larger lawns/meadows when the open-area set itself is huge.
+		var open_ranked: Array = []
+		for d in open:
+			var poly: PackedVector2Array = (d as Dictionary).get("points", PackedVector2Array())
+			open_ranked.append({"rec": d, "area": _poly_area_m2(poly)})
+		open_ranked.sort_custom(func(a, b): return float(a["area"]) > float(b["area"]))
+		open = []
+		for i in mini(open_ranked.size(), MAX_OPEN_AREA_POLYS):
+			open.append(open_ranked[i]["rec"])
+	ranked.sort_custom(func(a, b): return float(a["area"]) > float(b["area"]))
+	var rest_budget := maxi(max_count - open.size(), 0)
+	var out: Array = open.duplicate()
+	for i in mini(ranked.size(), rest_budget):
+		out.append(ranked[i]["rec"])
+	push_warning("VegetationService: capped OSM polygons %d → %d (open=%d)"
+		% [polys.size(), out.size(), open.size()])
+	var capped := payload.duplicate(false)
+	capped["polygons"] = out
+	return capped
+
+
+static func _poly_area_m2(poly: PackedVector2Array) -> float:
+	# Shoelace; abs so winding doesn't matter for ranking.
+	var a := 0.0
+	var n := poly.size()
+	if n < 3:
+		return 0.0
+	for i in n:
+		var j := (i + 1) % n
+		a += poly[i].x * poly[j].y - poly[j].x * poly[i].y
+	return absf(a) * 0.5
 
 
 static func _save_cache(path: String, payload: Dictionary) -> void:
@@ -355,6 +436,21 @@ static func _parse_overpass(doc: Dictionary, center_lat: float, center_lon: floa
 
 	var polygons: Array = []
 	var used_mp_ways: Dictionary = {}
+	# Relations FIRST so member ways are marked used before the tagged-way pass
+	# (otherwise every multipolygon outer is double-counted as way + relation).
+	for rel in relations:
+		var rtags: Dictionary = rel.get("tags", {})
+		if str(rtags.get("type", "")) != "multipolygon":
+			continue
+		if not _is_veg_area_tags(rtags):
+			continue
+		var kind := _veg_kind(rtags)
+		# Outers only — never punch forest holes (combinatorial fragment bomb).
+		for assembled in OsmWaterParser._multipolygon_to_polys(
+				rel, ways_by_id, nodes, center_lat, center_lon, used_mp_ways, false):
+			if assembled.size() >= 3:
+				polygons.append({"points": assembled, "kind": kind, "tags": rtags})
+
 	for way in polygon_ways:
 		var wid := int(way.get("id", -1))
 		if used_mp_ways.has(wid):
@@ -364,19 +460,6 @@ static func _parse_overpass(doc: Dictionary, center_lat: float, center_lon: floa
 			continue
 		var tags: Dictionary = way.get("tags", {})
 		polygons.append({"points": poly, "kind": _veg_kind(tags), "tags": tags})
-
-	# Assemble multipolygon outers into closed rings (shared with water parser).
-	for rel in relations:
-		var rtags: Dictionary = rel.get("tags", {})
-		if str(rtags.get("type", "")) != "multipolygon":
-			continue
-		if not _is_veg_area_tags(rtags):
-			continue
-		var kind := _veg_kind(rtags)
-		for assembled in OsmWaterParser._multipolygon_to_polys(
-				rel, ways_by_id, nodes, center_lat, center_lon, used_mp_ways):
-			if assembled.size() >= 3:
-				polygons.append({"points": assembled, "kind": kind, "tags": rtags})
 
 	var tree_rows: Array = []
 	for way in row_ways:

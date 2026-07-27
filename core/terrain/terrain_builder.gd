@@ -24,6 +24,22 @@ const DETAIL_GROUND_RENDER_PRIORITY := 1
 ## Neutral ground colour when no imagery is available (offline / headless).
 const NEUTRAL_GROUND := Color(0.45, 0.42, 0.38)
 
+## Default near-field ground detail textures (CC0, AmbientCG "Ground049A"). These
+## are blended into the terrain drape only within a few metres of the camera so
+## foot-level ground reads as real dirt/grain + relief, independent of the ESRI
+## ortho's ~0.25 m/px ceiling (see terrain_detail.gdshader). Missing files →
+## shader falls back to the procedural detail path automatically.
+const NEAR_DETAIL_ALBEDO_PATH := "res://core/terrain/textures/ground049a/ground049a_color.jpg"
+const NEAR_DETAIL_NORMAL_PATH := "res://core/terrain/textures/ground049a/ground049a_normal.jpg"
+const NEAR_DETAIL_ROUGH_PATH := "res://core/terrain/textures/ground049a/ground049a_roughness.jpg"
+## Metric repeat of the near-field detail tile (AmbientCG 2K set ≈ 2 m physical).
+const NEAR_DETAIL_TILE_M := 8.0
+## Cached so every terrain material shares one GPU upload of each map.
+static var _near_detail_albedo: Texture2D = null
+static var _near_detail_normal: Texture2D = null
+static var _near_detail_rough: Texture2D = null
+static var _near_detail_loaded := false
+
 ## Seam blending between hi-res detail patch and coarse world terrain.
 const MIN_FEATHER_M := 80.0
 const MAX_FEATHER_M := 800.0
@@ -355,7 +371,34 @@ static func make_terrain_material(base: Texture2D, detail: Texture2D,
 	sm.set_shader_parameter("hide_centre_region", hide_centre_region)
 	sm.set_shader_parameter("feather", feather_uv)
 	apply_drape_bboxes(sm, base_bbox, detail_bbox)
+	apply_near_detail_textures(sm)
 	return sm
+
+
+## Bind the default CC0 near-field ground textures (albedo/normal/roughness) onto a
+## terrain ShaderMaterial and enable the textured near-field path. If the files are
+## absent (e.g. slimmed export), leaves use_detail_textures=false so the shader's
+## procedural detail path takes over. Loaded once and cached across materials.
+static func apply_near_detail_textures(sm: ShaderMaterial) -> void:
+	if sm == null:
+		return
+	if not _near_detail_loaded:
+		_near_detail_loaded = true
+		if ResourceLoader.exists(NEAR_DETAIL_ALBEDO_PATH):
+			_near_detail_albedo = load(NEAR_DETAIL_ALBEDO_PATH) as Texture2D
+		if ResourceLoader.exists(NEAR_DETAIL_NORMAL_PATH):
+			_near_detail_normal = load(NEAR_DETAIL_NORMAL_PATH) as Texture2D
+		if ResourceLoader.exists(NEAR_DETAIL_ROUGH_PATH):
+			_near_detail_rough = load(NEAR_DETAIL_ROUGH_PATH) as Texture2D
+	var have := _near_detail_albedo != null and _near_detail_normal != null
+	if not have:
+		return
+	sm.set_shader_parameter("detail_albedo_tex", _near_detail_albedo)
+	sm.set_shader_parameter("detail_normal_tex", _near_detail_normal)
+	if _near_detail_rough != null:
+		sm.set_shader_parameter("detail_rough_tex", _near_detail_rough)
+	sm.set_shader_parameter("detail_tex_tile_m", NEAR_DETAIL_TILE_M)
+	sm.set_shader_parameter("use_detail_textures", true)
 
 
 ## bbox dict → shader vec4 (west, east, south, north).
@@ -424,9 +467,15 @@ static func build_terrain_node(elev: PackedFloat32Array, res: int, extent_m: flo
 	mi.mesh = build_mesh(elev, res, extent_m, center_elev)
 	mi.material_override = make_terrain_material(drape, detail, extent_m, detail_extent_m)
 	_apply_render_priority(mi.material_override, GROUND_RENDER_PRIORITY)
-	# Large terrain spans well past the default cull margin; keep it from being
-	# frustum-culled when the camera sits low on it.
-	mi.extra_cull_margin = extent_m
+	# Keep Ground from frustum-culling when the camera sits low on it — but do
+	# NOT set margin to the full world half-extent (60 km maps × shadow/depth
+	# passes were submitting ~6M prims every orbit frame). A few km is enough
+	# for low grazing views over a 256² mesh.
+	mi.extra_cull_margin = minf(extent_m, 2500.0)
+	# Base Ground is a 256² plate spanning tens of km — casting it into every
+	# directional shadow cascade dominates RENDER_TOTAL_PRIMITIVES (~6M on
+	# Mt. Vernon). DetailGround keeps contact shadows near the player.
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(mi)
 
 	var body := StaticBody3D.new()
@@ -716,7 +765,11 @@ static func upsert_detail_patch(terrain: Node3D, elev: PackedFloat32Array, res: 
 	ground.material_override = make_terrain_material(
 		base_drape, detail_drape, terrain_extent_m, detail_extent_m, true, false, false, feather_uv)
 	_apply_render_priority(ground.material_override, DETAIL_GROUND_RENDER_PRIORITY)
-	ground.extra_cull_margin = detail_extent_m
+	ground.extra_cull_margin = minf(detail_extent_m, 2500.0)
+	# Large detail patches (4–8 km) still thrash directional cascades; keep
+	# contact shadows from props/buildings instead.
+	if detail_extent_m >= 3000.0:
+		ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	var body := terrain.get_node_or_null("DetailCollision") as StaticBody3D
 	if body == null:

@@ -32,6 +32,16 @@ uniform float hyper_ratio = 3.0;
 uniform float hyper_feather = 0.06;
 uniform vec4 hyper_bbox = vec4(-1.0, 1.0, -1.0, 1.0);
 uniform bool correct_hyper_mercator = false;
+// "AI hero" patch: an even smaller central square around the map origin whose
+// ground has been enhanced by the Gemini image model (beats the ESRI ceiling
+// where the player spawns). Overlaid ON TOP of hyper in the same feathered way.
+// ai_ratio = this mesh's span / AI patch span.
+uniform sampler2D ai_tex : source_color, filter_linear_mipmap;
+uniform bool use_ai = false;
+uniform float ai_ratio = 100.0;
+uniform float ai_feather = 0.08;
+uniform vec4 ai_bbox = vec4(-1.0, 1.0, -1.0, 1.0);
+uniform bool correct_ai_mercator = false;
 // bbox = (west, east, south, north) degrees. z-component unused flags via w.
 uniform vec4 base_bbox = vec4(-1.0, 1.0, -1.0, 1.0);
 uniform vec4 detail_bbox = vec4(-1.0, 1.0, -1.0, 1.0);
@@ -46,6 +56,34 @@ uniform vec3 snow_color : source_color = vec3(0.90, 0.93, 0.98);
 uniform float snow_slope_min : hint_range(0.0, 1.0) = 0.45;
 uniform float snow_slope_max : hint_range(0.0, 1.0) = 0.80;
 
+// -----------------------------------------------------------------------------
+// Near-field ground detail (foot-level realism).
+// The ESRI ortho drape tops out at ~0.25 m/px (z19), so it reads as soft blocks
+// when the camera is a metre or two off the ground. Shipping games solve this
+// with "material/detail blending": keep the satellite photo for macro colour but
+// blend a high-frequency ground detail (albedo grain + a relief NORMAL) into the
+// near field, fading out with camera distance. The normal perturbation is the key
+// cue — it gives the flat photo real surface relief under the sun/moon.
+// This foundation is procedural (asset-free, works offline everywhere). Real
+// tiling PBR ground textures can be layered on later via the *_tex stubs below.
+uniform bool near_detail_enabled = true;
+// Camera-distance fade window (metres): full detail nearer than _start, gone past _end.
+uniform float near_detail_start = 4.0;
+uniform float near_detail_end = 30.0;
+// Repeat length of the coarse grain octave (metres); a finer octave rides on top.
+uniform float near_detail_tile_m = 2.5;
+// How strongly the procedural relief perturbs the surface normal (0 = flat photo).
+uniform float near_detail_bump : hint_range(0.0, 1.0) = 0.55;
+// How strongly the albedo grain darkens/lightens the photo colour up close.
+uniform float near_detail_albedo : hint_range(0.0, 1.0) = 0.35;
+// --- Optional real tiling textures (disabled by default; future upgrade path) ---
+uniform bool use_detail_textures = false;
+uniform sampler2D detail_albedo_tex : source_color, filter_linear_mipmap, hint_default_white;
+uniform sampler2D detail_normal_tex : hint_normal, filter_linear_mipmap;
+uniform sampler2D detail_rough_tex : filter_linear_mipmap, hint_default_white;
+uniform float detail_tex_tile_m = 2.0;
+uniform float detail_tex_normal_strength : hint_range(0.0, 2.0) = 1.0;
+
 #include "res://core/soi/shaders/soi_clip.gdshaderinc"
 
 varying vec3 v_world_normal;
@@ -53,6 +91,35 @@ varying vec3 v_world_pos;
 
 float _asinh(float x) {
 	return log(x + sqrt(x * x + 1.0));
+}
+
+// --- Cheap value noise / fBm for procedural ground grain ---------------------
+float _hash12(vec2 p) {
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
+}
+
+float _vnoise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	float a = _hash12(i);
+	float b = _hash12(i + vec2(1.0, 0.0));
+	float c = _hash12(i + vec2(0.0, 1.0));
+	float d = _hash12(i + vec2(1.0, 1.0));
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+float _fbm(vec2 p) {
+	float s = 0.0;
+	float amp = 0.5;
+	for (int k = 0; k < 4; k++) {
+		s += amp * _vnoise(p);
+		p *= 2.0;
+		amp *= 0.5;
+	}
+	return s;
 }
 
 // Equirectangular UV (lon/lat-linear over bbox) → Mercator UV into the drape.
@@ -99,6 +166,15 @@ void fragment() {
 				col = mix(col, hyper, smoothstep(0.0, hyper_feather, hedge));
 			}
 		}
+		// AI hero patch (sharpest of all) — layered on top of hyper.
+		if (use_ai) {
+			vec2 auv = (uv - vec2(0.5)) * ai_ratio + vec2(0.5);
+			if (auv.x > 0.0 && auv.x < 1.0 && auv.y > 0.0 && auv.y < 1.0) {
+				vec3 ai = sample_drape(ai_tex, auv, ai_bbox, correct_ai_mercator);
+				float aedge = min(min(auv.x, 1.0 - auv.x), min(auv.y, 1.0 - auv.y));
+				col = mix(col, ai, smoothstep(0.0, ai_feather, aedge));
+			}
+		}
 	} else {
 		vec2 global_uv = uv;
 		vec3 base = use_base ? sample_drape(base_tex, global_uv, base_bbox, correct_base_mercator) : base_color;
@@ -121,6 +197,15 @@ void fragment() {
 				col = mix(col, hyper, smoothstep(0.0, hyper_feather, hedge));
 			}
 		}
+		// AI hero patch (sharpest of all) — layered on top of hyper.
+		if (use_ai) {
+			vec2 auv = (uv - vec2(0.5)) * ai_ratio + vec2(0.5);
+			if (auv.x > 0.0 && auv.x < 1.0 && auv.y > 0.0 && auv.y < 1.0) {
+				vec3 ai = sample_drape(ai_tex, auv, ai_bbox, correct_ai_mercator);
+				float aedge = min(min(auv.x, 1.0 - auv.x), min(auv.y, 1.0 - auv.y));
+				col = mix(col, ai, smoothstep(0.0, ai_feather, aedge));
+			}
+		}
 		// When DetailGround covers the hi-res square, discard coarse fragments there
 		// so the two displaced meshes do not z-fight or double-draw the drape.
 		if (hide_centre_region || (hide_detail_region && blend > 0.02)) {
@@ -137,6 +222,62 @@ void fragment() {
 	}
 
 	float rough = 1.0;
+
+	// --- Near-field ground detail (albedo grain + relief normal) --------------
+	// Fades in as the camera approaches so the flat photo reads as real ground at
+	// foot level, without touching the distant look the drone view relies on.
+	vec3 world_n = normalize(v_world_normal);
+	if (near_detail_enabled) {
+		float cam_d = distance(v_world_pos, CAMERA_POSITION_WORLD);
+		float k = 1.0 - smoothstep(near_detail_start, near_detail_end, cam_d);
+		if (k > 0.001) {
+			vec2 wp = v_world_pos.xz;
+			// Build an arbitrary but stable tangent frame around the geometric
+			// normal so relief works on slopes as well as flat ground.
+			vec3 up_ref = abs(world_n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+			vec3 tan_u = normalize(cross(up_ref, world_n));
+			vec3 tan_v = cross(world_n, tan_u);
+			vec3 detail_n;
+
+			if (use_detail_textures) {
+				// Real tiling PBR ground (CC0 AmbientCG set). Pattern-multiply the
+				// albedo so the site's true ortho colour is preserved while the
+				// texture's fine grain + normal + roughness carry the realism.
+				vec2 tuv = wp / max(detail_tex_tile_m, 0.05);
+				vec3 talb = texture(detail_albedo_tex, tuv).rgb;
+				float tl = max(dot(talb, vec3(0.3333)), 0.05);
+				vec3 patt = talb / tl;                       // ~unit-mean grain
+				col *= mix(vec3(1.0), patt, k);
+				float rr = texture(detail_rough_tex, tuv).r;
+				rough = mix(rough, rr, k);
+				vec3 nt = texture(detail_normal_tex, tuv).xyz * 2.0 - 1.0;
+				nt.xy *= detail_tex_normal_strength;
+				detail_n = normalize(world_n + (nt.x * tan_u + nt.y * tan_v));
+			} else {
+				// Procedural fallback (asset-free): gradient of an fBm height
+				// field drives the relief; a finer octave adds crisp micro-grain.
+				float scale = 1.0 / max(near_detail_tile_m, 0.05);
+				float eps = 0.35 * near_detail_tile_m;
+				float h_c = _fbm(wp * scale);
+				float h_x = _fbm((wp + vec2(eps, 0.0)) * scale);
+				float h_z = _fbm((wp + vec2(0.0, eps)) * scale);
+				float f_c = _fbm(wp * scale * 4.0);
+				float f_x = _fbm((wp + vec2(eps * 0.25, 0.0)) * scale * 4.0);
+				float f_z = _fbm((wp + vec2(0.0, eps * 0.25)) * scale * 4.0);
+				vec2 grad = vec2((h_x - h_c) + 0.5 * (f_x - f_c),
+								 (h_z - h_c) + 0.5 * (f_z - f_c)) / eps;
+				detail_n = normalize(world_n
+					- grad.x * tan_u * (near_detail_bump * 8.0)
+					- grad.y * tan_v * (near_detail_bump * 8.0));
+				float grain = mix(h_c, f_c, 0.5);
+				col *= mix(1.0, 0.78 + 0.44 * grain, k * near_detail_albedo);
+				rough = mix(rough, clamp(rough * (0.92 + 0.16 * grain), 0.0, 1.0), k);
+			}
+
+			world_n = normalize(mix(world_n, detail_n, k));
+		}
+	}
+
 	if (snow_amount > 0.001 || snow_depth_m > 0.001) {
 		float depth_t = clamp(snow_depth_m / 1.5, 0.0, 1.0);
 		// Flat ground accumulates; steep faces shed. Small spatial break-up so
@@ -155,4 +296,7 @@ void fragment() {
 	ALBEDO = col;
 	ROUGHNESS = rough;
 	METALLIC = 0.0;
+	// Apply the (optionally perturbed) world normal. Far away world_n == the
+	// geometric normal, so the distant look is untouched; NORMAL is view-space.
+	NORMAL = normalize((VIEW_MATRIX * vec4(world_n, 0.0)).xyz);
 }

@@ -167,9 +167,56 @@ static func mesh_for_deciduous_lod(settings: Dictionary, tier: CanopyLodTier) ->
 
 static func mesh_for_pine_lod(settings: Dictionary, tier: CanopyLodTier) -> ArrayMesh:
 	var s := settings.duplicate(true)
-	s["pine_fur_enabled"] = tier == CanopyLodTier.NEAR
 	var sid := str(s.get("_variant_species", "pine"))
+	# FAR must be a real billboard (~8 tris). The old path only disabled fur and
+	# kept the full whorl mesh — useless for large-map force_far prim budgets.
+	if tier == CanopyLodTier.FAR:
+		return _build_pine_far_billboard(_pine_spec(s, sid), s)
+	s["pine_fur_enabled"] = true
 	return _build_pine_mesh(_pine_spec(s, sid), s)
+
+
+## Minimal crossed-card pine for FAR / large-map force_far (~8 tris).
+static func _build_pine_far_billboard(spec: Dictionary, settings: Dictionary) -> ArrayMesh:
+	var card_w := float(spec["width"])
+	var card_h := float(spec["height"])
+	var trunk_w := float(spec.get("trunk_w", 0.24))
+	var trunk_h := card_h * 0.94
+	var trunk_verts := PackedVector3Array()
+	var trunk_uvs := PackedVector2Array()
+	var trunk_normals := PackedVector3Array()
+	var trunk_indices := PackedInt32Array()
+	for card_i in 2:
+		_add_card(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
+			trunk_w, trunk_h, 0.0, float(card_i) * PI * 0.5, Vector3(0.0, 0.85, 0.0))
+	var mesh := ArrayMesh.new()
+	var trunk_arr: Array = []
+	trunk_arr.resize(Mesh.ARRAY_MAX)
+	trunk_arr[Mesh.ARRAY_VERTEX] = trunk_verts
+	trunk_arr[Mesh.ARRAY_TEX_UV] = trunk_uvs
+	trunk_arr[Mesh.ARRAY_NORMAL] = trunk_normals
+	trunk_arr[Mesh.ARRAY_INDEX] = trunk_indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, trunk_arr)
+	mesh.surface_set_material(0, bark_material_for_species("pine", settings))
+	var foliage_verts := PackedVector3Array()
+	var foliage_uvs := PackedVector2Array()
+	var foliage_normals := PackedVector3Array()
+	var foliage_indices := PackedInt32Array()
+	for card_i in 2:
+		_add_card(foliage_verts, foliage_uvs, foliage_normals, foliage_indices,
+			card_w * 0.95, card_h * 0.72, trunk_h * 0.28,
+			float(card_i) * PI * 0.5, Vector3(0.0, 0.72, 0.0))
+	var foliage_arr: Array = []
+	foliage_arr.resize(Mesh.ARRAY_MAX)
+	foliage_arr[Mesh.ARRAY_VERTEX] = foliage_verts
+	foliage_arr[Mesh.ARRAY_TEX_UV] = foliage_uvs
+	foliage_arr[Mesh.ARRAY_NORMAL] = foliage_normals
+	foliage_arr[Mesh.ARRAY_INDEX] = foliage_indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, foliage_arr)
+	var mat_settings := settings.duplicate(true)
+	mat_settings["pine_fur_strength"] = 0.0
+	mesh.surface_set_material(1, material_for_species("pine", mat_settings))
+	return mesh
 
 
 static func canopy_visibility_range_for_tier(species: String, tier: CanopyLodTier,

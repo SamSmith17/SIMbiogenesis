@@ -155,8 +155,8 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 		mi.name = "Bulk_%s_%d_%d_%d" % [species, tier, chunk_x, chunk_z]
 		mi.multimesh = mm
 		mi.material_override = null
-		# Both tiers cast shadows so tree outlines read clearly for solar analysis.
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		# Shadow casting is globally gated (off by default; on for solar analysis).
+		VegetationShadowPolicy.apply(mi, species)
 		mi.visibility_range_begin = vis.x
 		mi.visibility_range_end = vis.y
 		root.add_child(mi)
@@ -213,7 +213,7 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 	mi.name = "Bulk_%s_%d_%d" % [species, chunk_x, chunk_z]
 	mi.multimesh = mm
 	mi.material_override = null
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	VegetationShadowPolicy.apply(mi, species)
 	mi.visibility_range_begin = VISIBILITY_BEGIN
 	mi.visibility_range_end = visibility_end_m
 	root.add_child(mi)
@@ -399,8 +399,18 @@ static func _build_bulk_batch(root: Node3D, species: String, records: Array,
 			chunk_x, chunk_z)
 		return
 	if family == "deciduous" or family == "pine":
+		var tree_end := float(batch_settings.get("auto_visibility_end_m",
+			_visibility_end_for_species(species)))
+		# Large world maps force FAR billboards only (same flag as AutoVegetation).
+		# Near-spawn manual paint was the Mt. Vernon orbit prim bomb once auto
+		# forests were thinned — leafy NEAR shells × dual MultiMeshes.
+		if bool(batch_settings.get("auto_force_far_canopy", false)):
+			_build_canopy_single_batch(root, species, records, ground_y_at,
+				align_to_surface, batch_settings, tree_end,
+				VegetationCardFactory.CanopyLodTier.FAR, growth_map, chunk_x, chunk_z)
+			return
 		_build_canopy_lod_bulk_batches(root, species, records, ground_y_at, align_to_surface,
-			batch_settings, _visibility_end_for_species(species), growth_map, chunk_x, chunk_z)
+			batch_settings, tree_end, growth_map, chunk_x, chunk_z)
 		return
 	var mesh := VegetationCardFactory.mesh_for_species(species, batch_settings)
 	var use_surface := VegetationCardFactory.mesh_has_surface_materials(species)
@@ -445,7 +455,7 @@ static func _build_bulk_batch(root: Node3D, species: String, records: Array,
 		mi.material_override = null
 	else:
 		mi.material_override = mat
-	mi.cast_shadow = _casts_shadow(species)
+	VegetationShadowPolicy.apply(mi, species)
 	mi.visibility_range_begin = VISIBILITY_BEGIN
 	mi.visibility_range_end = _visibility_end_for_species(species)
 	root.add_child(mi)

@@ -1,10 +1,7 @@
 extends PanelContainer
 
-## Pond settings modal (Ctrl-click a pond → open). Lets the player override the
-## water fill level and storage volume, add the pond to the system graph as a
-## catchment + storage tank (or remove it), and delete the pond entirely. Ponds
-## are NOT auto-added to the graph anymore — this drawer is the single control
-## surface, so cleared/deleted ponds never leave orphaned graph nodes behind.
+## Pond settings modal (Ctrl-click a pond → open). Level scrub, Auto/Manual
+## capacity & fill, graph toggle, delete. Ponds are never auto-added to the graph.
 
 const C_PANEL := Color(0.082, 0.114, 0.208, 1.0)
 const C_BORDER := Color(0.227, 0.290, 0.420, 1.0)
@@ -12,7 +9,7 @@ const C_TEXT := Color(0.886, 0.910, 0.941, 1.0)
 const C_MUTED := Color(0.62, 0.68, 0.78, 1.0)
 const C_ACCENT := Color(0.24, 0.62, 1.0, 1.0)
 
-const DRAWER_HEIGHT := 72.0
+const DRAWER_HEIGHT := 168.0
 
 var _loader: Node = null
 var _idx: int = -1
@@ -20,11 +17,21 @@ var _syncing := false
 
 var _title_lbl: Label
 var _meta_lbl: Label
+var _hint_lbl: Label
 var _level_slider: HSlider
 var _level_lbl: Label
+var _cap_mode_opt: OptionButton
 var _vol_spin: SpinBox
+var _terrain_cap_lbl: Label
+var _recalc_btn: Button
+var _fill_mode_opt: OptionButton
 var _graph_btn: Button
 var _del_btn: Button
+var _ws_lbl: Label
+var _ws_preview_btn: Button
+var _ws_clear_btn: Button
+var _ws_designate_btn: Button
+var _ws_remove_btn: Button
 
 
 func _ready() -> void:
@@ -115,7 +122,7 @@ func _build_ui() -> void:
 	# Fill level -----------------------------------------------------------
 	var level_col := VBoxContainer.new()
 	level_col.add_theme_constant_override("separation", 0)
-	level_col.custom_minimum_size.x = 320.0
+	level_col.custom_minimum_size.x = 280.0
 	row.add_child(level_col)
 	var level_head := HBoxContainer.new()
 	level_col.add_child(level_head)
@@ -128,30 +135,63 @@ func _build_ui() -> void:
 	level_head.add_child(_level_lbl)
 	_level_slider = HSlider.new()
 	_level_slider.step = 0.05
-	_level_slider.custom_minimum_size = Vector2(320, 20)
+	_level_slider.custom_minimum_size = Vector2(280, 20)
 	_level_slider.value_changed.connect(_on_level_changed)
 	level_col.add_child(_level_slider)
+	_hint_lbl = Label.new()
+	_hint_lbl.add_theme_color_override("font_color", C_MUTED)
+	_hint_lbl.add_theme_font_size_override("font_size", 10)
+	_hint_lbl.text = "T → Rain/Drain to scrub level in-world"
+	level_col.add_child(_hint_lbl)
 
-	# Volume ---------------------------------------------------------------
+	# Capacity -------------------------------------------------------------
 	var vol_col := VBoxContainer.new()
-	vol_col.add_theme_constant_override("separation", 0)
+	vol_col.add_theme_constant_override("separation", 2)
 	row.add_child(vol_col)
-	vol_col.add_child(_field_label("Storage volume (L)"))
+	vol_col.add_child(_field_label("Capacity"))
+	var cap_row := HBoxContainer.new()
+	cap_row.add_theme_constant_override("separation", 6)
+	vol_col.add_child(cap_row)
+	_cap_mode_opt = OptionButton.new()
+	_cap_mode_opt.add_item("Auto (terrain)", 0)
+	_cap_mode_opt.add_item("Manual (L)", 1)
+	_cap_mode_opt.custom_minimum_size.x = 120.0
+	_cap_mode_opt.item_selected.connect(_on_cap_mode_selected)
+	cap_row.add_child(_cap_mode_opt)
 	_vol_spin = SpinBox.new()
 	_vol_spin.step = 100.0
 	_vol_spin.min_value = 1.0
 	_vol_spin.max_value = 1.0e9
 	_vol_spin.allow_greater = true
-	_vol_spin.custom_minimum_size.x = 130.0
+	_vol_spin.custom_minimum_size.x = 110.0
 	_vol_spin.value_changed.connect(_on_volume_changed)
-	vol_col.add_child(_vol_spin)
+	cap_row.add_child(_vol_spin)
+	var terr_row := HBoxContainer.new()
+	terr_row.add_theme_constant_override("separation", 6)
+	vol_col.add_child(terr_row)
+	_terrain_cap_lbl = Label.new()
+	_terrain_cap_lbl.add_theme_color_override("font_color", C_MUTED)
+	_terrain_cap_lbl.add_theme_font_size_override("font_size", 10)
+	_terrain_cap_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	terr_row.add_child(_terrain_cap_lbl)
+	_recalc_btn = Button.new()
+	_recalc_btn.text = "Recalculate"
+	_recalc_btn.tooltip_text = "Recompute Auto capacity from terrain bathymetry"
+	_recalc_btn.custom_minimum_size = Vector2(90, 24)
+	_recalc_btn.pressed.connect(_on_recalc)
+	terr_row.add_child(_recalc_btn)
 
-	# Actions --------------------------------------------------------------
+	# Fill mode + actions --------------------------------------------------
 	var act_col := VBoxContainer.new()
 	act_col.add_theme_constant_override("separation", 2)
 	act_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	act_col.alignment = BoxContainer.ALIGNMENT_END
 	row.add_child(act_col)
+	act_col.add_child(_field_label("Fill"))
+	_fill_mode_opt = OptionButton.new()
+	_fill_mode_opt.add_item("Auto (water surface)", 0)
+	_fill_mode_opt.add_item("Manual (%)", 1)
+	_fill_mode_opt.item_selected.connect(_on_fill_mode_selected)
+	act_col.add_child(_fill_mode_opt)
 	var act := HBoxContainer.new()
 	act.add_theme_constant_override("separation", 6)
 	act.alignment = BoxContainer.ALIGNMENT_END
@@ -166,6 +206,40 @@ func _build_ui() -> void:
 	_del_btn.add_theme_color_override("font_color", Color(1.0, 0.62, 0.62, 1.0))
 	_del_btn.pressed.connect(_on_delete)
 	act.add_child(_del_btn)
+
+	# Watershed (hillside → pond rain catchment) --------------------------------
+	var ws_row := HBoxContainer.new()
+	ws_row.add_theme_constant_override("separation", 8)
+	root.add_child(ws_row)
+	ws_row.add_child(_field_label("Watershed"))
+	_ws_lbl = Label.new()
+	_ws_lbl.add_theme_color_override("font_color", C_MUTED)
+	_ws_lbl.add_theme_font_size_override("font_size", 11)
+	_ws_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ws_lbl.text = "Analyze hillside that drains into this pond"
+	ws_row.add_child(_ws_lbl)
+	_ws_preview_btn = Button.new()
+	_ws_preview_btn.text = "Preview"
+	_ws_preview_btn.tooltip_text = "Run local D8 analysis and outline the upstream basin"
+	_ws_preview_btn.custom_minimum_size = Vector2(72, 26)
+	_ws_preview_btn.pressed.connect(_on_ws_preview)
+	ws_row.add_child(_ws_preview_btn)
+	_ws_clear_btn = Button.new()
+	_ws_clear_btn.text = "Clear"
+	_ws_clear_btn.custom_minimum_size = Vector2(56, 26)
+	_ws_clear_btn.pressed.connect(_on_ws_clear)
+	ws_row.add_child(_ws_clear_btn)
+	_ws_designate_btn = Button.new()
+	_ws_designate_btn.text = "Designate"
+	_ws_designate_btn.tooltip_text = "Add graph catchment wired to this pond (adds pond to graph if needed)"
+	_ws_designate_btn.custom_minimum_size = Vector2(88, 26)
+	_ws_designate_btn.pressed.connect(_on_ws_designate)
+	ws_row.add_child(_ws_designate_btn)
+	_ws_remove_btn = Button.new()
+	_ws_remove_btn.text = "Remove WS"
+	_ws_remove_btn.custom_minimum_size = Vector2(88, 26)
+	_ws_remove_btn.pressed.connect(_on_ws_remove)
+	ws_row.add_child(_ws_remove_btn)
 
 
 func _field_label(text: String) -> Label:
@@ -185,33 +259,75 @@ func _load_from_loader() -> bool:
 	_syncing = true
 	var is_user := bool(info.get("user", false))
 	_title_lbl.text = str(info.get("label", "Pond")) if is_user else "Pond (map)"
-	_meta_lbl.text = "%.0f m²   ·   rim %.1f m   ·   floor %.1f m" % [
+	var stock := float(info.get("stock_l", 0.0))
+	var fill_pct := float(info.get("fill_frac", 0.0)) * 100.0
+	_meta_lbl.text = "%.0f m²  ·  rim %.1f m  ·  floor %.1f m  ·  %.0f L (%.0f%%)" % [
 		float(info.get("area_m2", 0.0)), float(info.get("rim_m", 0.0)),
-		float(info.get("floor_m", 0.0))]
+		float(info.get("floor_m", 0.0)), stock, fill_pct]
+	if not is_user:
+		# Map ponds are read-only (all the controls below are disabled); say why so
+		# the greyed-out slider/capacity/fill don't look broken.
+		_meta_lbl.text += "\nMap pond — read-only. Carve a pond with the terrain tool to edit level & capacity."
 
 	var rim := float(info.get("rim_m", 1.0))
 	var floor_y := float(info.get("floor_m", 0.0))
-	if rim <= floor_y:
+	if rim <= floor_y + 0.05:
 		rim = floor_y + 1.0
-	# A little headroom above the rim so the player can raise it into a mound-top pool.
-	_level_slider.min_value = floor_y
-	_level_slider.max_value = rim + 1.0
-	_level_slider.value = clampf(float(info.get("level_m", rim)), floor_y, rim + 1.0)
+	var lo := floor_y + 0.02
+	var hi := rim - 0.05
+	if hi <= lo:
+		hi = lo + 0.5
+	_level_slider.min_value = lo
+	_level_slider.max_value = hi
+	_level_slider.value = clampf(float(info.get("level_m", hi)), lo, hi)
 	_level_slider.editable = is_user
 	_level_lbl.text = "%.2f m" % _level_slider.value
 
+	var cap_mode := str(info.get("capacity_mode", "auto"))
+	_cap_mode_opt.select(1 if cap_mode == "manual" else 0)
+	_cap_mode_opt.disabled = not is_user
 	_vol_spin.value = float(info.get("capacity_l", 1000.0))
-	_vol_spin.editable = is_user
+	_vol_spin.editable = is_user and cap_mode == "manual"
+	var terrain_cap := float(info.get("terrain_capacity_l", info.get("default_capacity_l", 0.0)))
+	_terrain_cap_lbl.text = "Terrain volume ≈ %.0f L (Auto)" % terrain_cap
+	_recalc_btn.disabled = not is_user
+
+	var fill_mode := str(info.get("fill_mode", "auto"))
+	_fill_mode_opt.select(1 if fill_mode == "manual" else 0)
+	_fill_mode_opt.disabled = not is_user
+	_level_slider.editable = is_user and fill_mode != "manual"
 
 	var on_graph := bool(info.get("on_graph", false))
 	_graph_btn.text = "Remove from graph" if on_graph else "Add to graph"
 
-	# Delete removes the water body itself — only sculpted (user) ponds own their
-	# water; OSM map water is deleted upstream, so it only offers the graph toggle.
 	_del_btn.text = "Delete pond"
 	_del_btn.visible = is_user
+	_refresh_watershed_row(info)
 	_syncing = false
 	return true
+
+
+func _refresh_watershed_row(info: Dictionary) -> void:
+	if _ws_lbl == null:
+		return
+	var has_ws := false
+	if _loader != null and _loader.has_method("pond_has_watershed_catchment"):
+		has_ws = bool(_loader.call("pond_has_watershed_catchment", _idx))
+	var preview: Dictionary = {}
+	if _loader != null and _loader.has_method("get_watershed_preview"):
+		preview = _loader.call("get_watershed_preview") as Dictionary
+	var tag := str(info.get("tag", ""))
+	if bool(preview.get("valid", false)) and str(preview.get("pond_tag", "")) == tag:
+		var ha := float(preview.get("area_m2", 0.0)) / 10000.0
+		_ws_lbl.text = "Upstream ~%.2f ha (%d cells)%s" % [
+			ha, int(preview.get("cell_count", 0)),
+			" · on graph" if has_ws else ""]
+	elif has_ws:
+		_ws_lbl.text = "Watershed catchment on graph — Preview to refresh outline"
+	else:
+		_ws_lbl.text = "Analyze hillside that drains into this pond"
+	if _ws_remove_btn != null:
+		_ws_remove_btn.disabled = not has_ws
 
 
 func _on_level_changed(v: float) -> void:
@@ -221,6 +337,7 @@ func _on_level_changed(v: float) -> void:
 		return
 	if _loader.has_method("set_pond_fill_level"):
 		_loader.call("set_pond_fill_level", _idx, v)
+	_load_from_loader()
 
 
 func _on_volume_changed(v: float) -> void:
@@ -228,6 +345,33 @@ func _on_volume_changed(v: float) -> void:
 		return
 	if _loader.has_method("set_pond_capacity"):
 		_loader.call("set_pond_capacity", _idx, v)
+	_load_from_loader()
+
+
+func _on_cap_mode_selected(idx: int) -> void:
+	if _syncing or _loader == null or _idx < 0:
+		return
+	var mode := "manual" if idx == 1 else "auto"
+	if _loader.has_method("set_pond_capacity_mode"):
+		_loader.call("set_pond_capacity_mode", _idx, mode)
+	_load_from_loader()
+
+
+func _on_fill_mode_selected(idx: int) -> void:
+	if _syncing or _loader == null or _idx < 0:
+		return
+	var mode := "manual" if idx == 1 else "auto"
+	if _loader.has_method("set_pond_fill_mode"):
+		_loader.call("set_pond_fill_mode", _idx, mode)
+	_load_from_loader()
+
+
+func _on_recalc() -> void:
+	if _loader == null or _idx < 0:
+		return
+	if _loader.has_method("recompute_pond_volume"):
+		_loader.call("recompute_pond_volume", _idx)
+	_load_from_loader()
 
 
 func _on_graph_toggle() -> void:
@@ -250,3 +394,46 @@ func _on_delete() -> void:
 	if _loader.has_method("delete_pond"):
 		_loader.call("delete_pond", _idx)
 	close()
+
+
+func _on_ws_preview() -> void:
+	if _loader == null or _idx < 0:
+		return
+	var result: Dictionary = {}
+	if _loader.has_method("preview_pond_watershed"):
+		result = _loader.call("preview_pond_watershed", _idx) as Dictionary
+	_load_from_loader()
+	if _ws_lbl != null:
+		if bool(result.get("valid", false)):
+			_ws_lbl.text = "Upstream ~%.2f ha (%d cells) — teal outline on ground + Elev/Site Plan" % [
+				float(result.get("area_m2", 0.0)) / 10000.0,
+				int(result.get("cell_count", 0))]
+		else:
+			_ws_lbl.text = "Watershed failed: %s" % str(result.get("reason", "unknown"))
+
+
+func _on_ws_clear() -> void:
+	if _loader == null:
+		return
+	if _loader.has_method("clear_watershed_preview"):
+		_loader.call("clear_watershed_preview")
+	_load_from_loader()
+
+
+func _on_ws_designate() -> void:
+	if _loader == null or _idx < 0:
+		return
+	var ok := false
+	if _loader.has_method("designate_pond_watershed"):
+		ok = bool(_loader.call("designate_pond_watershed", _idx))
+	_load_from_loader()
+	if _ws_lbl != null and not ok:
+		_ws_lbl.text = "Designate failed — try Preview first / Add to graph"
+
+
+func _on_ws_remove() -> void:
+	if _loader == null or _idx < 0:
+		return
+	if _loader.has_method("remove_pond_watershed"):
+		_loader.call("remove_pond_watershed", _idx)
+	_load_from_loader()

@@ -68,6 +68,12 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	var extras: Dictionary = {}
 	if rec.has("rack_spec"):
 		extras["rack_spec"] = rec.get("rack_spec", {})
+	if rec.has("linkage_spec"):
+		extras["linkage_spec"] = rec.get("linkage_spec", {})
+	if rec.has("box_spec"):
+		extras["box_spec"] = rec.get("box_spec", {})
+	if rec.has("tank_spec"):
+		extras["tank_spec"] = rec.get("tank_spec", {})
 	if model_id == GrowBed.MODEL_ID:
 		var bed_spec: Dictionary = {}
 		if rec.has("grow_bed_spec"):
@@ -77,6 +83,20 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		if rec.has("grow_days"):
 			bed_spec["grow_days"] = rec.get("grow_days")
 		extras["grow_bed_spec"] = bed_spec
+	if model_id == GeodesicDomeBuilder.MODEL_ID:
+		var dome_spec: Dictionary = {}
+		if rec.has("dome_spec"):
+			dome_spec = (rec.get("dome_spec", {}) as Dictionary).duplicate(true)
+		dome_spec["ghost_highlight"] = false
+		if not dome_spec.has("radius_m"):
+			dome_spec["radius_m"] = DomeParts.TARGET_RADIUS_M
+		extras["dome_spec"] = dome_spec
+	if model_id == MudBuildingStructureBuilder.MODEL_ID:
+		var mud_spec: Dictionary = {}
+		if rec.has("mud_spec"):
+			mud_spec = (rec.get("mud_spec", {}) as Dictionary).duplicate(true)
+		mud_spec["ghost_highlight"] = false
+		extras["mud_spec"] = mud_spec
 	var model := ModelCatalog.instantiate(model_id, extras)
 	if model == null:
 		return null
@@ -90,28 +110,75 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	prop.building_idx = int(rec.get("building_idx", -1))
 	if ModelCatalog.is_starshade_model(model_id):
 		prop.prompt = "Edit StarShade (Interact)"
+	elif model_id == LinkageStructureBuilder.MODEL_ID:
+		prop.prompt = "Deploy structure (Interact) / Edit (click)"
 	elif model_id == PalletRackBuilder.MODEL_ID:
-		prop.prompt = "Edit prop / Grab (hold)"
+		prop.prompt = "Edit prop (click) / Move (drag)"
 	elif model_id == GrowBed.MODEL_ID:
-		prop.prompt = "Edit grow bed (click) / Grab (hold)"
+		prop.prompt = "Edit grow bed (click) / Move (drag)"
+	elif model_id == MudBuildingStructureBuilder.MODEL_ID:
+		prop.prompt = "Inspect mud building · Move (drag)"
 	else:
-		prop.prompt = "Edit prop (click) / Grab (hold)"
+		prop.prompt = "Edit prop (click) / Move (drag)"
 	prop.add_child(model)
 	model.name = "ModelRoot"
 	_disable_embedded_physics(model)
 	_apply_transform(prop, model, rec, ground_y_at)
 	prop.setup_collision()
+	# Size-scaled distance culling + shadow policy (Tier 2 perf). setup_collision
+	# has populated the pick AABB, so its diagonal gives the prop's size class.
+	# Use the LOCAL radius — the prop is not in the tree yet (no global_transform).
+	prop.set_meta("shadow_mode", str(rec.get("shadow_mode", "")))
+	PropRenderTuning.apply_to_prop(prop, prop.get_local_pick_radius())
 	_maybe_attach_wind_spin(prop, rec)
 	_maybe_attach_hawt_tracker(prop, rec)
 	_maybe_attach_csp_tracker(prop, rec)
 	_maybe_attach_heliostat_tracker(prop, rec)
+	_maybe_attach_siphon_spin(prop, rec)
+	_maybe_attach_cnc_runtime(prop, rec)
+	_maybe_attach_pp_beam_extruder(prop, rec)
+	_maybe_attach_pp_sheet_press(prop, rec)
+	_maybe_attach_linkage_deploy(prop, rec)
 	prop.set_burnable(bool(rec.get("burnable", false)))
 	var prop_id := str(rec.get("id", ""))
+	# Spawn ConnectionPort markers so ConduitManager can snap conduits to tagged plugs.
+	var ports: Array = rec.get("connection_ports", []) as Array
+	if ports.is_empty():
+		var dims: Dictionary = {}
+		if rec.has("box_spec"):
+			dims = rec.get("box_spec", {}) as Dictionary
+		elif rec.has("tank_spec"):
+			dims = rec.get("tank_spec", {}) as Dictionary
+		ports = ConnectionPortDefs.default_ports_for_model(model_id, dims)
+		if ports.is_empty():
+			ports = ConnectionPortDefs.load_catalog_ports(model_id)
+	if not ports.is_empty():
+		ConnectionPortDefs.sync_port_markers(prop, ports)
 	if PlacedPropService.is_placement_active() and prop_id == PlacedPropService.placement_prop_id():
 		prop.set_collision_enabled(false)
 	elif not bool(rec.get("collision_enabled", true)):
 		prop.set_collision_enabled(false)
+	# "Hide from 3D world": conceptual/placeholder twins the player doesn't want
+	# rendered. Hides the whole prop (mesh + ports) and drops collision, while the
+	# record + bound graph node stay intact (unlike delete). The Site Plan disc
+	# renders this same node, so it disappears there too — matched by the 2D ring
+	# gate in graph_canvas (a hidden twin shows no ring).
+	if bool(rec.get("hidden_3d", false)):
+		prop.visible = false
+		prop.set_collision_enabled(false)
 	return prop
+
+
+## Attach the live fold controller for a placed Linkage Lab structure.
+## Keyed on model_id (not record kind) so every placement path — designer
+## modal, library catalog, save reload — gets a foldable prop.
+static func _maybe_attach_linkage_deploy(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("model_id", "")) != LinkageStructureBuilder.MODEL_ID:
+		return
+	var deploy := LinkageDeployRuntime.new()
+	deploy.name = "LinkageDeployRuntime"
+	deploy.configure(rec)
+	prop.add_child(deploy)
 
 
 ## Attach the rotor-spin controller for a placed VAWT (record kind == "vawt").
@@ -125,6 +192,23 @@ static func _maybe_attach_wind_spin(prop: PlacedProp, rec: Dictionary) -> void:
 	spin.name = "WindTurbineSpin"
 	spin.configure(specs, str(rec.get("turbine_node", "")),
 		str(rec.get("graph_item_id", "")))
+	prop.add_child(spin)
+
+
+## Attach propeller spin for a placed siphon hydroturbine.
+static func _maybe_attach_siphon_spin(prop: PlacedProp, rec: Dictionary) -> void:
+	var kind := str(rec.get("kind", ""))
+	var model_id := str(rec.get("model_id", ""))
+	if kind != "siphon_hydro" and kind != "siphon_hoverboard" \
+			and model_id != "hydroturbine":
+		return
+	if prop.get_node_or_null("SiphonTurbineSpin") != null:
+		return
+	var spin := SiphonTurbineSpin.new()
+	spin.name = "SiphonTurbineSpin"
+	spin.configure(str(rec.get("graph_item_id", "")),
+			str(rec.get("turbine_node",
+				ModelCatalog.find("hydroturbine").get("turbine_node", ""))))
 	prop.add_child(spin)
 
 
@@ -180,6 +264,52 @@ static func _maybe_attach_heliostat_tracker(prop: PlacedProp, rec: Dictionary) -
 	prop.add_child(tracker)
 
 
+## Attach the generalized Cartesian X/Y/Z motion driver for a placed CNC machine
+## (record kind == "cartesian_machine"). Purely visual — the 2D graph node's
+## live job progress / energy / material telemetry is computed centrally by
+## SystemGraphView._tick_graph_tools, and this reads that progress back to trace
+## the toolpath. See gameplay/cnc_machine_runtime.gd.
+static func _maybe_attach_cnc_runtime(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("kind", "")) != "cartesian_machine":
+		return
+	var runtime := CncMachineRuntime.new()
+	runtime.name = "CncMachineRuntime"
+	runtime.configure(str(rec.get("model_id", "")),
+		rec.get("machine_profile", {}) as Dictionary,
+		str(rec.get("graph_item_id", "")))
+	prop.add_child(runtime)
+
+
+## Attach the grow/cut beam animation for a Precious Plastic beam extruder
+## (record kind == "pp_beam_extruder"). Length comes from
+## SystemGraphView._tick_graph_pp_extruder; see gameplay/pp_beam_extruder_runtime.gd.
+static func _maybe_attach_pp_beam_extruder(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("kind", "")) != "pp_beam_extruder" \
+			and str(rec.get("model_id", "")) != "pp_beam_extruder":
+		return
+	var runtime := PpBeamExtruderRuntime.new()
+	runtime.name = "PpBeamExtruderRuntime"
+	# Plastic stick only — mold (`beam#1`) must stay visible at rest.
+	var names := PackedStringArray()
+	names.append(str(rec.get("beam_mesh_name",
+		ModelCatalog.find("pp_beam_extruder").get("beam_mesh_name", "Recycled Plastic Beam"))))
+	runtime.configure(str(rec.get("graph_item_id", "")), names)
+	prop.add_child(runtime)
+
+
+## Attach Z-axis compression + sheet-reveal for a Precious Plastic sheet press.
+static func _maybe_attach_pp_sheet_press(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("kind", "")) != "pp_sheet_press" \
+			and str(rec.get("model_id", "")) != "pp_sheet_press":
+		return
+	var runtime := PpSheetPressRuntime.new()
+	runtime.name = "PpSheetPressRuntime"
+	var stroke := float(rec.get("z_stroke_m",
+		ModelCatalog.find("pp_sheet_press").get("z_stroke_m", 0.12)))
+	runtime.configure(str(rec.get("graph_item_id", "")), stroke)
+	prop.add_child(runtime)
+
+
 static func apply_record_to_prop(prop: PlacedProp, rec: Dictionary,
 		ground_y_at: Callable) -> void:
 	var model := prop.get_node_or_null("ModelRoot") as Node3D
@@ -189,6 +319,12 @@ static func apply_record_to_prop(prop: PlacedProp, rec: Dictionary,
 	prop.setup_collision()
 	prop.set_burnable(bool(rec.get("burnable", false)))
 	if not bool(rec.get("collision_enabled", true)):
+		prop.set_collision_enabled(false)
+	# Hide-from-3D toggle (see _build_prop) — live-apply so the inspector/edit-UI
+	# checkbox takes effect without a full rebuild.
+	var hide := bool(rec.get("hidden_3d", false))
+	prop.visible = not hide
+	if hide:
 		prop.set_collision_enabled(false)
 
 

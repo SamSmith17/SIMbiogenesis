@@ -3,18 +3,18 @@ extends Control
 ## Terrain sculpt dock (T). All tools write the unified high-resolution edit-tile
 ## layer (TerrainEditTiles, rendered live by TerrainHeightField as per-tile hi-res
 ## meshes + colliders): Level a selection to one height, Raise/Lower/Smooth
-## freehand brushes, Ramp a graded path, Measure distance/grade, and Pond
-## (lasso + depth → carved bowl filled to the natural rim). Fill water floods
-## closed depressions by gravity. Top-down shows live contours + cut/fill.
+## freehand brushes, Ramp a graded path, Measure distance/grade, Pond (carve
+## only), and Rain/Drain (hold to modulate water toward spill). Top-down shows
+## live contours + cut/fill.
 
 signal mode_changed(active: bool)
 
-enum Tool { SMOOTH, FLATTEN, POND, BRUSH_RAISE, BRUSH_LOWER, RAMP, MEASURE }
+enum Tool { SMOOTH, FLATTEN, POND, BRUSH_RAISE, BRUSH_LOWER, RAMP, MEASURE, RAIN, DRAIN }
 enum ShapeMode { BRUSH, CIRCLE, RECT, LASSO, POLYGON }
 
 const MODAL_NAME := "terrain_edit"
 const SliderSpinRowScript := preload("res://scenes/ui/slider_spin_row.gd")
-const PANEL_HEIGHT := 128.0
+const PANEL_HEIGHT := 148.0
 const PITCH_90 := -89.0
 const MAX_RADIUS_M := 150.0
 const MAX_AREA_M2 := 90000.0
@@ -30,7 +30,7 @@ var _radius_m := 12.0
 var _strength := 6.0
 var _hardness := 0.5
 var _pond_depth := 1.2
-var _water_fill := 0.85  ## fraction of rim→floor filled with water
+var _rain_rate := 0.15  ## m/s of water-surface rise while Rain/Drain held
 
 # Soft brush stroke.
 var _stroking := false
@@ -82,7 +82,6 @@ var _overlay: Control = null
 var _panel: PanelContainer = null
 var _status: Label = null
 var _undo_btn: Button = null
-var _fill_btn: Button = null
 var _topdown_btn: Button = null
 var _tool_buttons: Array[Button] = []
 ## Parallel to _tool_buttons: the Tool each button selects. The button display
@@ -94,7 +93,15 @@ var _shape_buttons: Array[Button] = []
 var _shape_button_modes: Array = []
 var _brush_row: HBoxContainer = null
 var _pond_row: HBoxContainer = null
+var _rain_row: HBoxContainer = null
+var _basin_lbl: Label = null
 var _height_lbl: Label = null
+
+## Hold-to-modulate Rain/Drain while selection is locked.
+var _water_modulating := false
+var _water_mod_undo_pushed := false
+var _last_fill_rate_lps := 0.0
+var _basin_cache: Dictionary = {}
 
 
 func _ready() -> void:
@@ -212,7 +219,11 @@ func _build_ui() -> void:
 			["Level", Tool.FLATTEN,
 				"Drag a rectangle — releasing grades the pad flat at its centre height"],
 			["Pond", Tool.POND,
-				"Hold LMB and lasso an outline — releasing digs the bowl and fills it with water"],
+				"Hold LMB and lasso an outline — releasing digs a bowl (use Rain to fill)"],
+			["Rain", Tool.RAIN,
+				"Draw over a depression, then hold LMB to raise the water toward the spill"],
+			["Drain", Tool.DRAIN,
+				"Draw over a user pond, then hold LMB to lower / empty the water"],
 			["Raise", Tool.BRUSH_RAISE,
 				"Hold LMB and paint to build the ground up (Size / Strength / Hardness below)"],
 			["Lower", Tool.BRUSH_LOWER,
@@ -225,7 +236,7 @@ func _build_ui() -> void:
 				"Click two points to read distance, elevation change, and grade"]]:
 		var b := Button.new()
 		b.text = spec[0]
-		b.custom_minimum_size = Vector2(62, 28)
+		b.custom_minimum_size = Vector2(54, 28)
 		b.tooltip_text = spec[2]
 		var t: Tool = spec[1]
 		b.pressed.connect(_on_tool_pressed.bind(t))
@@ -233,14 +244,6 @@ func _build_ui() -> void:
 		tool_row.add_child(b)
 		_tool_buttons.append(b)
 		_tool_button_tools.append(t)
-	_fill_btn = Button.new()
-	_fill_btn.text = "Fill water"
-	_fill_btn.custom_minimum_size = Vector2(74, 28)
-	_fill_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	_fill_btn.tooltip_text = "Flood the selected area's closed low spots by gravity.\nSelect an area first (Circle/Rect/Lasso with Smooth, Raise or Lower active)."
-	_fill_btn.pressed.connect(_on_fill_water)
-	_fill_btn.disabled = true
-	tool_row.add_child(_fill_btn)
 	_undo_btn = Button.new()
 	_undo_btn.text = "Undo"
 	_undo_btn.custom_minimum_size = Vector2(48, 28)
@@ -269,7 +272,7 @@ func _build_ui() -> void:
 	_status.add_theme_color_override("font_color", Color(0.65, 0.72, 0.78, 1.0))
 	_status.add_theme_font_size_override("font_size", 11)
 	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_status.text = "Pick a tool: Level drags a pad flat · Pond lassos + fills · Raise/Lower paint"
+	_status.text = "Pick a tool: Level · Pond (carve) · Rain/Drain · Raise/Lower"
 	tool_row.add_child(_status)
 
 	# Shape + params.
@@ -317,8 +320,16 @@ func _build_ui() -> void:
 	param_row.add_child(_pond_row)
 	_labeled_slider(_pond_row, "Dig depth m", 0.1, 8.0, _pond_depth,
 		func(v: float) -> void: _pond_depth = v, 110)
-	_labeled_slider(_pond_row, "Fill %", 0.1, 1.0, _water_fill,
-		func(v: float) -> void: _water_fill = v, 100)
+	_rain_row = HBoxContainer.new()
+	_rain_row.add_theme_constant_override("separation", 4)
+	param_row.add_child(_rain_row)
+	_labeled_slider(_rain_row, "Rate m/s", 0.02, 1.0, _rain_rate,
+		func(v: float) -> void: _rain_rate = v, 100)
+	_basin_lbl = Label.new()
+	_basin_lbl.add_theme_color_override("font_color", Color(0.55, 0.85, 0.95, 1.0))
+	_basin_lbl.add_theme_font_size_override("font_size", 11)
+	_basin_lbl.text = ""
+	_rain_row.add_child(_basin_lbl)
 
 
 func _labeled_slider(parent: Control, label: String, min_v: float, max_v: float,
@@ -342,7 +353,7 @@ func _enter_mode() -> void:
 	if _loader != null and not bool(_loader.call("can_sculpt_detail")):
 		_set_status("Detail terrain still loading — sculpting needs the hi-res patch")
 	else:
-		_set_status("Pick a tool: Level drags a pad flat · Pond lassos + fills · Raise/Lower paint")
+		_set_status("Pick a tool: Level · Pond (carve) · Rain/Drain · Raise/Lower")
 		if _loader != null:
 			_loader.call("begin_sculpt_session")
 	set_process(true)
@@ -397,7 +408,9 @@ func _process(delta: float) -> void:
 	if not _active:
 		return
 	_cursor_hit = _pick_pointer()
-	if _stroking:
+	if _water_modulating:
+		_tick_water_modulate(delta)
+	elif _stroking:
 		_brush_tick(delta)
 	elif _shaping and (_shape_mode == ShapeMode.CIRCLE or _shape_mode == ShapeMode.RECT):
 		_update_shape_from_cursor()
@@ -459,7 +472,8 @@ func _ensure_brush_ring() -> MeshInstance3D:
 
 
 func _update_brush_ring() -> void:
-	var show := _active and _shape_mode == ShapeMode.BRUSH and _tool != Tool.POND \
+	var show := _active and _shape_mode == ShapeMode.BRUSH \
+		and _tool != Tool.POND and _tool != Tool.RAIN and _tool != Tool.DRAIN \
 		and (_cursor_hit is Vector3)
 	var ring := _ensure_brush_ring()
 	if ring == null:
@@ -548,6 +562,13 @@ func _on_lmb_pressed() -> void:
 		_gesture_click(world)
 		return
 
+	# Rain/Drain: hold inside a locked selection to modulate level.
+	if (_tool == Tool.RAIN or _tool == Tool.DRAIN) and _selection_locked \
+			and _selection_poly.size() >= 3 \
+			and Geometry2D.is_point_in_polygon(world, _selection_poly):
+		_begin_water_modulate()
+		return
+
 	# A click outside an existing locked selection starts a new shape.
 	if _selection_locked and _shape_mode != ShapeMode.BRUSH \
 			and not Geometry2D.is_point_in_polygon(world, _selection_poly):
@@ -575,6 +596,9 @@ func _on_lmb_pressed() -> void:
 
 
 func _on_lmb_released() -> void:
+	if _water_modulating:
+		_end_water_modulate()
+		return
 	if _stroking:
 		if _loader != null:
 			_loader.call("end_terrain_tile_edit")
@@ -616,38 +640,53 @@ func _lock_selection(poly: PackedVector2Array) -> void:
 		return
 	_selection_locked = true
 	_selection_poly = poly.duplicate()
-	# Pond tool: carve the bowl to the set depth and flood it to the natural rim
-	# level in one action, then clear the selection so the water is visible.
+	# Pond tool: carve only (+ optional seed puddle); Rain fills afterward.
 	if _tool == Tool.POND:
-		if bool(_loader.call("pond_command", _selection_poly, _pond_depth, "Sculpted Pond")):
-			_set_status("Pond dug %.1f m deep and filled · Undo reverts it" % _pond_depth)
+		if bool(_loader.call("pond_command", _selection_poly, _pond_depth, "Sculpted Pond",
+				0.85, true)):
+			_set_status(
+				"Basin carved %.1f m — switch to Rain to fill · Esc clears" % _pond_depth)
 			_invalidate_contours()
+			_loader.call("update_sculpt_selection_highlight", _selection_poly)
+			_refresh_basin_preview()
 		else:
 			_set_status("Pond needs a larger outline (min ~80 m²) — draw again")
-		_clear_locked_selection()
+			_clear_locked_selection()
 	elif _tool == Tool.FLATTEN:
 		# Level applies immediately on release (SimCity-style: draw → graded).
 		_apply_area_op()
 		_clear_locked_selection()
+	elif _tool == Tool.RAIN or _tool == Tool.DRAIN:
+		_loader.call("update_sculpt_selection_highlight", _selection_poly)
+		_refresh_basin_preview()
+		if bool(_basin_cache.get("valid", false)):
+			_set_status(
+				"Basin locked — hold %s to modulate · Esc clears" % (
+					"Rain" if _tool == Tool.RAIN else "Drain"))
+		else:
+			var msg := "No closed basin"
+			if _loader.has_method("basin_failure_message"):
+				msg = str(_loader.call("basin_failure_message", _basin_cache))
+			_set_status(msg)
 	else:
 		_loader.call("update_sculpt_selection_highlight", _selection_poly)
-		if _fill_btn != null:
-			_fill_btn.disabled = false
-		_set_status("Selection locked (%.0f m²) — press Fill water to flood its low spots · Esc clears" % area)
+		_set_status("Selection locked (%.0f m²) — Esc clears · switch to Rain to fill" % area)
 	_update_param_rows()
 	_update_undo_button()
 	_update_crosshair_prompt()
 
 
 func _clear_locked_selection() -> void:
+	_end_water_modulate()
 	_selection_locked = false
 	_selection_poly = PackedVector2Array()
+	_basin_cache = {}
 	if _loader != null and _loader.has_method("clear_sculpt_selection_highlight"):
 		_loader.call("clear_sculpt_selection_highlight")
 	if _height_lbl != null:
 		_height_lbl.text = ""
-	if _fill_btn != null:
-		_fill_btn.disabled = true
+	if _basin_lbl != null:
+		_basin_lbl.text = ""
 	_update_param_rows()
 	_update_crosshair_prompt()
 
@@ -788,41 +827,122 @@ func _finish_polygon() -> void:
 
 
 # ---------------------------------------------------------------------------
-# Fill water / pond
+# Rain / Drain hold-to-modulate
 # ---------------------------------------------------------------------------
 
-func _on_fill_water() -> void:
-	if _loader == null:
-		return
-	var poly := _active_pond_poly()
-	if poly.size() < 3:
-		_set_status("Circle-select an area (lock selection), then Fill water")
-		return
-	_gravity_fill_selection(poly)
+func _is_water_tool(t: Tool = _tool) -> bool:
+	return t == Tool.POND or t == Tool.RAIN or t == Tool.DRAIN
 
 
-## Flood closed depressions inside the selection by gravity (spill elevation).
-## Fill % = how full each pit is from bottom → pour point.
-func _gravity_fill_selection(poly: PackedVector2Array) -> void:
-	if _loader == null or poly.size() < 3:
+func _refresh_basin_preview() -> void:
+	_basin_cache = {}
+	if _loader == null or not _selection_locked or _selection_poly.size() < 3:
+		if _basin_lbl != null:
+			_basin_lbl.text = ""
 		return
-	if not _loader.has_method("fill_selection_depressions"):
-		_set_status("Water fill unavailable")
+	if not _loader.has_method("analyze_selection_basin"):
 		return
-	_push_sculpt_undo_if_possible()
-	var n: int = int(_loader.call(
-		"fill_selection_depressions", poly, clampf(_water_fill, 0.05, 0.98)))
-	if n > 0:
-		_set_status("Filled %d depression%s at %.0f%% of spill — Esc clears selection" % [
-			n, "" if n == 1 else "s", _water_fill * 100.0])
-	else:
-		_set_status("No closed depressions — dig with Pond, or enlarge the circle")
+	_basin_cache = _loader.call("analyze_selection_basin", _selection_poly)
+	_update_basin_label()
+
+
+func _update_basin_label() -> void:
+	if _basin_lbl == null:
+		return
+	if not bool(_basin_cache.get("valid", false)):
+		var reason := str(_basin_cache.get("reason", ""))
+		_basin_lbl.text = reason if not reason.is_empty() else ""
+		return
+	var rate_txt := ""
+	if _water_modulating and absf(_last_fill_rate_lps) > 0.5:
+		rate_txt = " · %.0f L/s" % _last_fill_rate_lps
+	_basin_lbl.text = "Lvl %.2f / spill %.2f m · %.0f L (%.0f%%)%s" % [
+		float(_basin_cache.get("level_m", 0.0)),
+		float(_basin_cache.get("spill_m", 0.0)),
+		float(_basin_cache.get("stock_l", 0.0)),
+		float(_basin_cache.get("fill_frac", 0.0)) * 100.0,
+		rate_txt,
+	]
+
+
+func _begin_water_modulate() -> void:
+	if _loader == null or not _selection_locked:
+		return
+	_water_modulating = true
+	_water_mod_undo_pushed = false
+	_last_fill_rate_lps = 0.0
+	_refresh_basin_preview()
+	if _tool == Tool.RAIN and not bool(_basin_cache.get("valid", false)):
+		var msg := "No closed basin"
+		if _loader.has_method("basin_failure_message"):
+			msg = str(_loader.call("basin_failure_message", _basin_cache))
+		_set_status(msg)
+		_water_modulating = false
+
+
+func _end_water_modulate() -> void:
+	if not _water_modulating:
+		return
+	_water_modulating = false
+	_last_fill_rate_lps = 0.0
+	_refresh_basin_preview()
 	_update_undo_button()
+	if bool(_basin_cache.get("valid", false)):
+		_set_status("Water at %.2f m · %.0f L (%.0f%%) · hold again to scrub" % [
+			float(_basin_cache.get("level_m", 0.0)),
+			float(_basin_cache.get("stock_l", 0.0)),
+			float(_basin_cache.get("fill_frac", 0.0)) * 100.0])
+	_update_basin_label()
+
+
+func _tick_water_modulate(delta: float) -> void:
+	if _loader == null or not _selection_locked or _selection_poly.size() < 3:
+		_end_water_modulate()
+		return
+	if not _water_mod_undo_pushed:
+		_push_sculpt_undo_if_possible()
+		_water_mod_undo_pushed = true
+	var step := maxf(_rain_rate, 0.01) * clampf(delta, 0.0, 0.05)
+	var result: Dictionary = {}
+	if _tool == Tool.RAIN and _loader.has_method("rain_selection"):
+		result = _loader.call("rain_selection", _selection_poly, step)
+	elif _tool == Tool.DRAIN and _loader.has_method("drain_selection"):
+		result = _loader.call("drain_selection", _selection_poly, step)
+	else:
+		_end_water_modulate()
+		return
+	if not bool(result.get("ok", false)):
+		var msg := str(result.get("reason", "failed"))
+		if _loader.has_method("basin_failure_message"):
+			msg = str(_loader.call("basin_failure_message", result))
+		_set_status(msg)
+		_end_water_modulate()
+		return
+	if bool(result.get("removed", false)):
+		_set_status("Pond drained dry and removed")
+		_basin_cache = result
+		_update_basin_label()
+		_end_water_modulate()
+		return
+	var dstock := float(result.get("delta_stock_l", 0.0))
+	var dt := maxf(delta, 1e-4)
+	_last_fill_rate_lps = dstock / dt
+	_basin_cache = {
+		"valid": true,
+		"level_m": float(result.get("level_m", 0.0)),
+		"spill_m": float(result.get("spill_m", 0.0)),
+		"floor_m": float(result.get("floor_m", 0.0)),
+		"stock_l": float(result.get("stock_l", 0.0)),
+		"capacity_l": float(result.get("capacity_l", 0.0)),
+		"fill_frac": float(result.get("fill_frac", 0.0)),
+	}
+	_update_basin_label()
+	if bool(result.get("at_spill", false)) and _tool == Tool.RAIN:
+		_set_status("At spill — rain stopped rising")
 
 
 func _push_sculpt_undo_if_possible() -> void:
-	# Fill water doesn't always mutate the DEM, but designated ponds should be
-	# undoable together with any prior dig — snapshot when the loader supports it.
+	# Rain/Drain should be undoable as one gesture — snapshot user water once.
 	if _loader != null and _loader.has_method("push_sculpt_undo"):
 		_loader.call("push_sculpt_undo")
 
@@ -1042,6 +1162,9 @@ func _tool_color() -> Color:
 		Tool.BRUSH_LOWER: return Color(0.95, 0.6, 0.3, 0.9)
 		Tool.SMOOTH: return Color(0.6, 0.8, 0.95, 0.9)
 		Tool.FLATTEN: return Color(0.85, 0.85, 0.4, 0.9)
+		Tool.RAIN: return Color(0.35, 0.75, 1.0, 0.9)
+		Tool.DRAIN: return Color(0.55, 0.7, 0.85, 0.9)
+		Tool.POND: return Color(0.3, 0.55, 0.95, 0.9)
 		_: return Color(0.35, 0.65, 1.0, 0.9)
 
 
@@ -1050,9 +1173,15 @@ func _tool_color() -> Color:
 # ---------------------------------------------------------------------------
 
 func _on_tool_pressed(t: Tool) -> void:
+	var prev := _tool
 	_tool = t
 	_gesture_has_a = false
-	_clear_locked_selection()
+	# Keep selection when switching among Pond / Rain / Drain.
+	var keep_sel := _selection_locked and _is_water_tool(prev) and _is_water_tool(t)
+	if not keep_sel:
+		_clear_locked_selection()
+	else:
+		_end_water_modulate()
 	for i in _tool_buttons.size():
 		_style_tool_button(_tool_buttons[i], _tool_button_tools[i] == t)
 	# Each tool picks its natural shape: brushes paint freehand, Pond lassos an
@@ -1062,8 +1191,19 @@ func _on_tool_pressed(t: Tool) -> void:
 			_on_shape_pressed(ShapeMode.BRUSH)
 			_set_status("Hold LMB and paint the ground · Size / Strength / Hardness below")
 		Tool.POND:
-			_on_shape_pressed(ShapeMode.LASSO)
-			_set_status("Pond: hold LMB and lasso the outline — releasing digs %.1f m and fills water" % _pond_depth)
+			if not keep_sel:
+				_on_shape_pressed(ShapeMode.LASSO)
+			_set_status("Pond: lasso outline — releasing digs %.1f m (use Rain to fill)" % _pond_depth)
+		Tool.RAIN, Tool.DRAIN:
+			if _shape_mode == ShapeMode.BRUSH:
+				_on_shape_pressed(ShapeMode.CIRCLE)
+			if keep_sel:
+				_refresh_basin_preview()
+				_set_status("Hold LMB over the selection to %s" % (
+					"raise water" if t == Tool.RAIN else "drain water"))
+			else:
+				_set_status("Draw over a depression, then hold %s" % (
+					"Rain" if t == Tool.RAIN else "Drain"))
 		Tool.FLATTEN:
 			_on_shape_pressed(ShapeMode.RECT)
 			_set_status("Level: drag a rectangle over the site — releasing grades it flat")
@@ -1093,9 +1233,11 @@ func _update_param_rows() -> void:
 			or _tool == Tool.BRUSH_LOWER or _tool == Tool.SMOOTH
 	if _brush_row != null:
 		_brush_row.visible = brushish or _tool == Tool.FLATTEN or _tool == Tool.RAMP
-	# Dig depth + Fill %: Pond tool, or any locked selection ready for Fill water.
 	if _pond_row != null:
-		_pond_row.visible = _tool == Tool.POND or _selection_locked
+		_pond_row.visible = _tool == Tool.POND
+	if _rain_row != null:
+		_rain_row.visible = _tool == Tool.RAIN or _tool == Tool.DRAIN \
+				or (_selection_locked and _is_water_tool())
 
 
 func _cancel_shape_or_exit() -> bool:
@@ -1190,10 +1332,17 @@ func _update_crosshair_prompt() -> void:
 		cross.call("set_prompt_text", "Click start, then end, to grade a ramp")
 	elif _tool == Tool.MEASURE:
 		cross.call("set_prompt_text", "Click two points to measure distance + grade")
+	elif _selection_locked and (_tool == Tool.RAIN or _tool == Tool.DRAIN):
+		cross.call("set_prompt_text", "Hold LMB to %s · Esc clears" % (
+			"raise water" if _tool == Tool.RAIN else "drain"))
 	elif _selection_locked:
-		cross.call("set_prompt_text", "Fill water floods the selection's low spots · Esc clears")
+		cross.call("set_prompt_text", "Selection locked — switch to Rain/Drain · Esc clears")
+	elif _tool == Tool.RAIN:
+		cross.call("set_prompt_text", "Draw area over a depression, then hold Rain")
+	elif _tool == Tool.DRAIN:
+		cross.call("set_prompt_text", "Draw over a user pond, then hold Drain")
 	elif _tool == Tool.POND:
-		cross.call("set_prompt_text", "Lasso the pond outline — release digs + fills it")
+		cross.call("set_prompt_text", "Lasso the pond outline — release digs (Rain fills)")
 	elif _tool == Tool.FLATTEN:
 		cross.call("set_prompt_text", "Drag a rectangle — release levels the pad")
 	elif _shape_mode == ShapeMode.BRUSH:

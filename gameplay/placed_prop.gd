@@ -13,9 +13,17 @@ var burnable: bool = false
 var was_burned: bool = false
 
 var _outline_mesh: MeshInstance3D = null
+## Whole-structure cyan bounding-box shown on graph highlight (Site Plan hover/
+## select). The single-mesh outline only marks one member of a multi-mesh prop
+## (e.g. a pallet rack), so this box makes the entire structure read as selected.
+var _graph_box: MeshInstance3D = null
 var _outline_mat: StandardMaterial3D = null
 var _graph_outline_mat: StandardMaterial3D = null
+var _move_outline_mat: StandardMaterial3D = null
 var _graph_highlight := false
+## True while the prop is being repositioned by a click-drag (GrabController) —
+## keeps a distinct outline on even though crosshair focus is cleared for the drag.
+var _move_highlight := false
 var _body: StaticBody3D = null
 ## Prop-local AABB of the scaled model (for software pick fallback).
 var _pick_aabb_local: AABB = AABB()
@@ -23,7 +31,7 @@ var _pick_aabb_local: AABB = AABB()
 
 func _ready() -> void:
 	super._ready()
-	prompt = "Edit prop (click) / Grab (hold)"
+	prompt = "Edit prop (click) / Move (drag)"
 	max_distance = 12.0
 	_outline_mat = StandardMaterial3D.new()
 	_outline_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -33,6 +41,10 @@ func _ready() -> void:
 	_graph_outline_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_graph_outline_mat.albedo_color = Color(0.1, 0.82, 0.95, 0.9)
 	_graph_outline_mat.cull_mode = BaseMaterial3D.CULL_FRONT
+	_move_outline_mat = StandardMaterial3D.new()
+	_move_outline_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_move_outline_mat.albedo_color = Color(1.0, 0.7, 0.15, 0.95)
+	_move_outline_mat.cull_mode = BaseMaterial3D.CULL_FRONT
 
 
 func set_collision_enabled(enabled: bool) -> void:
@@ -105,6 +117,10 @@ func setup_collision() -> void:
 		var mi := node as MeshInstance3D
 		if mi.mesh == null:
 			continue
+		# Animated / non-solid meshes (e.g. PP extruder plastic stick) opt out so
+		# invisible geometry doesn't block the player.
+		if mi.has_meta("skip_prop_collision") and bool(mi.get_meta("skip_prop_collision")):
+			continue
 		var xf := model.transform * _transform_relative_to(model, mi)
 		var faces := mi.mesh.get_faces()
 		if faces.is_empty():
@@ -113,6 +129,12 @@ func setup_collision() -> void:
 		baked.resize(faces.size())
 		for i in faces.size():
 			baked[i] = xf * faces[i]
+		# Drop NaN/degenerate triangles before set_faces — procedural pipe/linkage
+		# meshes and imported STL parts (hardware store) can produce them, and the
+		# physics server hard-crashes on such input.
+		baked = MeshCollisionUtil.sanitize_faces(baked)
+		if baked.size() < 3:
+			continue
 		var shape := ConcavePolygonShape3D.new()
 		shape.set_faces(baked)
 		var cs := CollisionShape3D.new()
@@ -120,11 +142,28 @@ func setup_collision() -> void:
 		body.add_child(cs)
 		added = true
 	_pick_aabb_local = _mesh_aabb_prop_local(model)
-	# Inflated AABB proxy so aiming at the visual bulk (not just thin mesh faces)
-	# still selects the prop after large scale changes.
-	_setup_pick_proxy(body, _pick_aabb_local)
-	if not added and _pick_aabb_local.size.length_squared() > 0.0001:
+	# NOTE: we deliberately do NOT add a solid AABB proxy box to the physics body.
+	# Doing so made the whole bounding box a physical wall (an invisible "force
+	# field" around open structures like pallet racks). Physical collision now
+	# follows the baked per-mesh trimesh only. Crosshair selection of thin /
+	# open-frame props still works: the physics ray hits the real geometry, and
+	# InteractionFocus._pick_placed_prop_aabb() provides a software ray-vs-AABB
+	# fallback (via get_world_pick_aabb) when the ray slips between members.
+	# Only truly meshless props fall back to a coarse box. Meshes that opted out
+	# via skip_prop_collision (mud prints — walk-through inspect) keep pick AABB
+	# but no physics body at all.
+	var any_skip := false
+	for node2 in model.find_children("*", "MeshInstance3D", true, false):
+		var mi2 := node2 as MeshInstance3D
+		if mi2 != null and mi2.has_meta("skip_prop_collision") \
+				and bool(mi2.get_meta("skip_prop_collision")):
+			any_skip = true
+			break
+	if not added and not any_skip and _pick_aabb_local.size.length_squared() > 0.0001:
 		_setup_box_collision(body, _pick_aabb_local)
+	elif not added:
+		body.queue_free()
+		body = null
 	_body = body
 
 
@@ -140,24 +179,6 @@ func _setup_box_collision(body: StaticBody3D, aabb: AABB) -> void:
 		maxf(aabb.size.z, 0.1))
 	shape.shape = box
 	shape.position = aabb.get_center()
-	body.add_child(shape)
-
-
-func _setup_pick_proxy(body: StaticBody3D, aabb: AABB) -> void:
-	if aabb.size.length_squared() < 0.0001:
-		return
-	# Slight inflate so silhouette edges stay pickable.
-	var pad := maxf(aabb.get_longest_axis_size() * 0.04, 0.35)
-	var expanded := aabb.grow(pad)
-	var shape := CollisionShape3D.new()
-	shape.name = "PickProxy"
-	var box := BoxShape3D.new()
-	box.size = Vector3(
-		maxf(expanded.size.x, 0.2),
-		maxf(expanded.size.y, 0.2),
-		maxf(expanded.size.z, 0.2))
-	shape.shape = box
-	shape.position = expanded.get_center()
 	body.add_child(shape)
 
 
@@ -193,11 +214,59 @@ func on_focus_exit(player: Node) -> void:
 
 func set_graph_highlight(on: bool) -> void:
 	_graph_highlight = on
-	_apply_outline(on or _focus_active)
+	_apply_outline(on or _focus_active or _move_highlight)
+	_apply_graph_box(on)
+
+
+## Show/hide a translucent cyan box around the prop's whole pick AABB — the
+## graph-highlight cue for Site Plan, so multi-mesh structures read as a unit.
+func _apply_graph_box(on: bool) -> void:
+	if not on:
+		if _graph_box != null:
+			_graph_box.visible = false
+		return
+	if _pick_aabb_local.size.length_squared() < 0.0001:
+		var model := get_node_or_null("ModelRoot") as Node3D
+		if model != null:
+			_pick_aabb_local = _mesh_aabb_prop_local(model)
+	if _pick_aabb_local.size.length_squared() < 0.0001:
+		return
+	if _graph_box == null:
+		_graph_box = MeshInstance3D.new()
+		_graph_box.name = "GraphHighlightBox"
+		_graph_box.mesh = BoxMesh.new()
+		_graph_box.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color = Color(0.30, 0.90, 1.0, 0.16)
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_graph_box.material_override = mat
+		add_child(_graph_box)
+	(_graph_box.mesh as BoxMesh).size = _pick_aabb_local.size
+	_graph_box.position = _pick_aabb_local.position + _pick_aabb_local.size * 0.5
+	_graph_box.visible = true
+
+
+## Toggle the amber "being moved" outline (used by GrabController during a
+## click-drag reposition, when normal crosshair focus is intentionally cleared).
+func set_move_highlight(on: bool) -> void:
+	_move_highlight = on
+	_apply_outline(on or _graph_highlight or _focus_active)
 
 
 func is_grabbable() -> bool:
 	return true
+
+
+## Prop-local bounding radius (metres) of the scaled model — safe to read before
+## the node is in the tree (no global_transform). Used for size-scaled perf LOD.
+func get_local_pick_radius() -> float:
+	if _pick_aabb_local.size.length_squared() < 0.0001:
+		var model := get_node_or_null("ModelRoot") as Node3D
+		if model != null:
+			_pick_aabb_local = _mesh_aabb_prop_local(model)
+	return _pick_aabb_local.size.length() * 0.5
 
 
 ## World-space AABB of the scaled model (for software ray pick fallback).
@@ -266,7 +335,11 @@ func _apply_outline(on: bool) -> void:
 			_outline_mesh.name = "OutlinePass"
 			mesh.add_child(_outline_mesh)
 		_outline_mesh.mesh = mesh.mesh
-		var mat := _graph_outline_mat if _graph_highlight else _outline_mat
+		var mat := _outline_mat
+		if _move_highlight:
+			mat = _move_outline_mat
+		elif _graph_highlight:
+			mat = _graph_outline_mat
 		_outline_mesh.material_override = mat
 		_outline_mesh.scale = Vector3(1.03, 1.03, 1.03)
 		_outline_mesh.visible = true

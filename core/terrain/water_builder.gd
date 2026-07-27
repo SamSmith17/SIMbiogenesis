@@ -10,7 +10,12 @@ const RIVER_SHADER := preload("res://core/terrain/terrain_river.gdshader")
 const MIN_AREA_M2 := 80.0
 const MAX_BODIES := 200
 const MIN_PROBE_AREA_M2 := 250.0
-const MAX_REFLECTION_PROBES := 28
+## Each probe renders a live cubemap — expensive, and the engine's reflection
+## atlas only holds 64 total. Keep this well under that ceiling (transient
+## overlaps during a rebuild, plus any non-water probes, must still fit) and
+## reserve the slots for the biggest lakes. 28 was both a crash risk on
+## water-dense sites and a major load-time FPS sink.
+const MAX_REFLECTION_PROBES := 12
 const PROBE_MARGIN_M := 24.0
 const PROBE_HEIGHT_M := 32.0
 const PROBE_MIN_EXTENT_M := 8.0
@@ -166,8 +171,12 @@ static func _attach_reflection_probes(root: Node3D, specs: Array) -> void:
 	var probes_root := Node3D.new()
 	probes_root.name = "WaterProbes"
 	root.add_child(probes_root)
+	# Reserve the limited probe budget for the largest bodies (biggest visual
+	# payoff) rather than whichever happened to come first in OSM order.
+	var ordered := specs.duplicate()
+	ordered.sort_custom(func(a, b) -> bool: return _probe_footprint(a) > _probe_footprint(b))
 	var count := 0
-	for spec_v in specs:
+	for spec_v in ordered:
 		if count >= MAX_REFLECTION_PROBES:
 			break
 		if not (spec_v is Dictionary):
@@ -176,6 +185,14 @@ static func _attach_reflection_probes(root: Node3D, specs: Array) -> void:
 		var probe := _make_reflection_probe(spec)
 		probes_root.add_child(probe)
 		count += 1
+
+
+## Footprint area (m²) of a probe spec, used to rank probes when over budget.
+static func _probe_footprint(spec_v) -> float:
+	if not (spec_v is Dictionary):
+		return 0.0
+	var size: Vector3 = (spec_v as Dictionary).get("size", Vector3.ZERO)
+	return size.x * size.z
 
 
 static func _make_reflection_probe(spec: Dictionary) -> ReflectionProbe:

@@ -39,6 +39,8 @@ func _initialize() -> void:
 	_test_sculpt_ops()
 	_test_edit_tiles()
 	_test_sculpt_ops_v2()
+	_test_pallet_rack()
+	_test_pallet_rack_editor()
 	if _failures == 0:
 		print("TERRAIN SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -98,7 +100,7 @@ func _test_solar_array() -> void:
 		"Ground", panels, 5.0, float(gdefs["tilt_deg"]), {}, SolarArrayBuilder.MOUNT_GROUND)
 	_check("ground mount has posts", gnode.get_node_or_null("RackPosts") != null)
 	gnode.free()
-	var rack := PalletRackBuilder.build_node({"bay_count": 2, "levels": 2})
+	var rack := PalletRackBuilder.build_node({"bay_count": 2, "column_count": 2})
 	_check("pallet rack builds children", rack.get_child_count() > 0)
 	rack.free()
 
@@ -117,6 +119,240 @@ func _test_solar_array() -> void:
 	var de := BuildingServiceScript.deserialize_payload(raw)
 	_check("solar payload round-trips", (de.get("solar", []) as Array).size() == 1,
 		"got %d" % (de.get("solar", []) as Array).size())
+
+
+func _test_pallet_rack() -> void:
+	# Catalog snapping + clamps.
+	var s := PalletRackBuilder.resolve_spec({
+		"upright_depth_in": 40, "upright_height_ft": 15, "beam_span_ft": 13,
+		"lumber_len_ft": 13, "joist_spacing_in": 21, "bay_count": 99, "column_count": 0,
+		"deck_levels": 9,
+	})
+	_check("rack snap depth 40->42", int(s["upright_depth_in"]) == 42)
+	_check("rack snap height 15->16", int(s["upright_height_ft"]) == 16)
+	_check("rack snap beam 13->12", int(s["beam_span_ft"]) == 12)
+	_check("rack snap lumber 13->12", int(s["lumber_len_ft"]) == 12)
+	_check("rack snap joist 21->24", int(s["joist_spacing_in"]) == 24)
+	_check("rack clamp bays", int(s["bay_count"]) == 10)
+	_check("rack clamp columns", int(s["column_count"]) == 1)
+	_check("rack clamp levels", int(s["deck_levels"]) == 3)
+	_check("rack level heights len matches", (s["level_heights_ft"] as Array).size() == 3)
+
+	# Legacy metric spec mapping.
+	var lg := PalletRackBuilder.resolve_spec({"width_m": 3.66, "depth_m": 1.07, "levels": 2})
+	_check("rack legacy maps beam span", int(lg["beam_span_ft"]) == 12)
+	_check("rack legacy maps depth", int(lg["upright_depth_in"]) == 42)
+	_check("rack legacy single column", int(lg["column_count"]) == 1)
+	_check("rack legacy not decked", bool(lg["decked"]) == false)
+
+	# Footprint math.
+	var fp := PalletRackBuilder.footprint_xz({"beam_span_ft": 12, "bay_count": 3,
+		"upright_depth_in": 42, "column_count": 2, "lumber_len_ft": 12})
+	var module_x := 12.0 * PalletRackBuilder.FT + PalletRackBuilder.POST_W
+	_check("rack footprint x", _approx(fp.x, 3.0 * module_x, 0.01), "got %f" % fp.x)
+	_check("rack footprint z positive", fp.y > 0.0)
+
+	# BOM counts for a known config (no variants): rows=cols+1.
+	var b := PalletRackBuilder.bom({"bay_count": 3, "column_count": 2, "deck_levels": 2,
+		"roof_deck": false, "decked": true, "u_shape": false, "stepped_module": 0})
+	_check("rack bom uprights = rows*(bays+1)", int(b["uprights"]) == 3 * 4,
+		"got %d" % int(b["uprights"]))
+	_check("rack bom beams = levels*rows*bays*2", int(b["beams"]) == 2 * 3 * 3 * 2,
+		"got %d" % int(b["beams"]))
+	_check("rack bom has plywood when decked", int(b["plywood"]) > 0)
+	_check("rack bom has lumber when decked", int(b["lumber"]) > 0)
+
+	# Decking off → no plywood/lumber (no roof).
+	var b0 := PalletRackBuilder.bom({"bay_count": 3, "column_count": 2, "deck_levels": 2,
+		"roof_deck": false, "decked": false})
+	_check("rack bom no plywood undecked", int(b0["plywood"]) == 0)
+	_check("rack bom no lumber undecked", int(b0["lumber"]) == 0)
+
+	# Occupancy grid + U-notch carving.
+	var grid := PalletRackBuilder.deck_grid({"bay_count": 4, "column_count": 3,
+		"decked": true, "u_shape": false})
+	_check("rack grid dims", grid.size() == 4 and (grid[0] as Array).size() == 3)
+	var full_decked := 0
+	for row in grid:
+		for cell in row:
+			if bool(cell):
+				full_decked += 1
+	_check("rack grid all decked", full_decked == 12)
+	var ugrid := PalletRackBuilder.deck_grid({"bay_count": 4, "column_count": 3,
+		"decked": true, "u_shape": true, "u_open_bays": 2, "u_open_cols": 2})
+	var u_decked := 0
+	for row in ugrid:
+		for cell in row:
+			if bool(cell):
+				u_decked += 1
+	_check("rack u-notch carves decks", u_decked < full_decked,
+		"full=%d u=%d" % [full_decked, u_decked])
+
+	# U-shape removes interior uprights vs the full rectangle.
+	var bfull := PalletRackBuilder.bom({"bay_count": 4, "column_count": 3, "u_shape": false})
+	var bu := PalletRackBuilder.bom({"bay_count": 4, "column_count": 3, "u_shape": true,
+		"u_open_bays": 2, "u_open_cols": 2})
+	_check("rack u-shape removes uprights", int(bu["uprights"]) < int(bfull["uprights"]),
+		"full=%d u=%d" % [int(bfull["uprights"]), int(bu["uprights"])])
+
+	# Merged mesh: one MeshInstance3D with 1-4 material surfaces.
+	var node := PalletRackBuilder.build_node({"bay_count": 2, "column_count": 2})
+	var mi := node.get_node_or_null("RackMesh") as MeshInstance3D
+	_check("rack single mesh instance", mi != null and mi.mesh != null)
+	if mi != null and mi.mesh != null:
+		var sc := mi.mesh.get_surface_count()
+		_check("rack merged surfaces 1..4", sc >= 1 and sc <= 4, "got %d" % sc)
+		_check("rack mesh has geometry", mi.mesh.get_faces().size() > 0)
+	node.free()
+
+
+func _test_pallet_rack_editor() -> void:
+	# resolve_spec normalizes the override containers even for legacy specs.
+	var legacy := PalletRackBuilder.resolve_spec({"bay_count": 2, "column_count": 1})
+	_check("editor cell_overrides container", legacy.get("cell_overrides") is Dictionary)
+	_check("editor beam_overrides container", legacy.get("beam_overrides") is Dictionary)
+	_check("editor wall_sheet_deleted container", legacy.get("wall_sheet_deleted") is Array)
+
+	# Pick registry: default decked rack yields deck cells, beams, and uprights.
+	var base := {"bay_count": 3, "column_count": 2, "deck_levels": 2, "decked": true,
+		"roof_deck": false, "u_shape": false, "stepped_module": 0}
+	var comps := PalletRackBuilder.pick_components(base)
+	var n_cell := 0
+	var n_beam := 0
+	var n_post := 0
+	for comp in comps:
+		match str(comp["kind"]):
+			"deck", "step": n_cell += 1
+			"beam": n_beam += 1
+			"upright": n_post += 1
+	_check("editor picks deck cells", n_cell == 2 * 2 * 3, "got %d" % n_cell)
+	_check("editor picks beams", n_beam == 2 * 3 * 3 * 2, "got %d" % n_beam)
+	_check("editor picks uprights", n_post == 3 * 4, "got %d" % n_post)
+
+	# Ray-AABB helper: a ray down +Z through the origin hits a box there; an
+	# off-axis ray misses.
+	var box := AABB(Vector3(-1, -1, -1), Vector3(2, 2, 2))
+	_check("ray hits centered box",
+		PalletRackBuilder.ray_hits_aabb(Vector3(0, 0, -10), Vector3(0, 0, 1), box) > 0.0)
+	_check("ray misses offset box",
+		PalletRackBuilder.ray_hits_aabb(Vector3(10, 0, -10), Vector3(0, 0, 1), box) < 0.0)
+
+	# Raising a cell lifts its pick AABB.
+	var cell_id := ""
+	var cell_aabb: AABB
+	for comp in comps:
+		if str(comp["kind"]) == "deck":
+			cell_id = str(comp["id"])
+			cell_aabb = comp["aabb"]
+			break
+	_check("editor has a deck cell id", cell_id.begins_with("cell:"))
+	var key := cell_id.substr(cell_id.find(":") + 1)
+	var raised := base.duplicate(true)
+	raised["cell_overrides"] = {key: {"height_ft": 12.0}}
+	var raised_comp := {}
+	for comp in PalletRackBuilder.pick_components(raised):
+		if str(comp["id"]) == cell_id:
+			raised_comp = comp
+			break
+	_check("editor raise lifts cell aabb",
+		not raised_comp.is_empty()
+		and (raised_comp["aabb"] as AABB).position.y > cell_aabb.position.y + 1.0)
+
+	# Removing a cell (kind none) drops it from the registry and the plywood BOM.
+	var full_bom := PalletRackBuilder.bom(base)
+	var removed := base.duplicate(true)
+	removed["cell_overrides"] = {key: {"kind": "none"}}
+	var removed_bom := PalletRackBuilder.bom(removed)
+	_check("editor remove cell drops plywood",
+		int(removed_bom["plywood"]) < int(full_bom["plywood"]),
+		"full=%d removed=%d" % [int(full_bom["plywood"]), int(removed_bom["plywood"])])
+	var still_there := false
+	for comp in PalletRackBuilder.pick_components(removed):
+		if str(comp["id"]) == cell_id:
+			still_there = true
+	_check("editor removed cell not pickable", not still_there)
+
+	# depth_units shortens a cell's Z extent.
+	var shortened := base.duplicate(true)
+	shortened["cell_overrides"] = {key: {"depth_units": 1}}
+	var short_comp := {}
+	for comp in PalletRackBuilder.pick_components(shortened):
+		if str(comp["id"]) == cell_id:
+			short_comp = comp
+	_check("editor depth_units shortens cell",
+		not short_comp.is_empty()
+		and float(short_comp["z1"]) < float(cell_aabb.position.z + cell_aabb.size.z) - 0.5)
+
+	# Deleting a beam removes it from BOM + registry.
+	var beam_id := ""
+	for comp in comps:
+		if str(comp["kind"]) == "beam":
+			beam_id = str(comp["id"])
+			break
+	var bkey := beam_id.substr(beam_id.find(":") + 1)
+	var beam_del := base.duplicate(true)
+	beam_del["beam_overrides"] = {bkey: {"deleted": true}}
+	_check("editor delete beam drops bom",
+		int(PalletRackBuilder.bom(beam_del)["beams"]) == int(full_bom["beams"]) - 1)
+
+	# Legacy stepped_module migrates to per-cell step overrides.
+	var stepped := PalletRackBuilder.resolve_spec({"bay_count": 2, "column_count": 2,
+		"deck_levels": 2, "decked": true, "roof_deck": true, "stepped_module": 1})
+	var cov: Dictionary = stepped["cell_overrides"]
+	var any_step := false
+	for k in cov.keys():
+		if str((cov[k] as Dictionary).get("kind", "")) == "step":
+			any_step = true
+	_check("editor stepped_module migrates to step cells", any_step,
+		"cov=%s" % str(cov))
+
+	# Wall-sheet deletion cuts a sheet from the plywood BOM.
+	var walled := {"bay_count": 2, "column_count": 1, "decked": false, "roof_deck": false,
+		"walls": {"front": true, "back": false, "left": false, "right": false}}
+	var walled_bom := PalletRackBuilder.bom(walled)
+	var sheet_id := ""
+	for comp in PalletRackBuilder.pick_components(walled):
+		if str(comp["kind"]) == "wall_sheet":
+			sheet_id = str(comp["id"])
+			break
+	_check("editor wall has pickable sheets", sheet_id.begins_with("wall:"))
+	if sheet_id.begins_with("wall:"):
+		var wkey := sheet_id.substr(sheet_id.find(":") + 1)
+		var wall_del := walled.duplicate(true)
+		wall_del["wall_sheet_deleted"] = [wkey]
+		_check("editor wall sheet delete cuts opening",
+			int(PalletRackBuilder.bom(wall_del)["plywood"]) < int(walled_bom["plywood"]))
+
+	# cell_slots enumerates EVERY grid cell (incl. empty) for the step tool, and
+	# a removed/undecked cell still appears as a droppable slot.
+	var undecked := {"bay_count": 2, "column_count": 1, "deck_levels": 1,
+		"decked": false, "roof_deck": false}
+	var slots := PalletRackBuilder.cell_slots(undecked)
+	_check("editor cell_slots covers full grid", slots.size() == 2 * 1 * 1,
+		"got %d" % slots.size())
+	var empty_slot := false
+	for slot in slots:
+		if str(slot["kind"]) == "none":
+			empty_slot = true
+	_check("editor cell_slots exposes empty cells", empty_slot)
+	# Dropping a step there produces a step cell in emission.
+	if not slots.is_empty():
+		var skey := str(slots[0]["id"]).substr(str(slots[0]["id"]).find(":") + 1)
+		var stepped_slot := undecked.duplicate(true)
+		stepped_slot["cell_overrides"] = {skey: {"kind": "step"}}
+		_check("editor step drop adds lumber",
+			int(PalletRackBuilder.bom(stepped_slot)["lumber"]) > 0)
+
+	# Modal script compiles + builds its UI/studio without autoloads at runtime.
+	var ModalScript: GDScript = load("res://scenes/ui/pallet_rack_builder_modal.gd")
+	_check("editor modal script loads", ModalScript != null)
+	if ModalScript != null:
+		var modal: Control = ModalScript.new()
+		get_root().add_child(modal)
+		# _ready is deferred under --script; call it directly to build the UI.
+		modal.call("_ready")
+		_check("editor modal builds ui", modal.get_child_count() > 0)
+		modal.free()
 
 
 func _check(label: String, ok: bool, detail: String = "") -> void:
@@ -718,6 +954,47 @@ func _test_sculpt_ops() -> void:
 	_test_edit_grid_v2()
 	_test_earthworks()
 	_test_depression_fill()
+	_test_pond_bathymetry()
+
+
+func _test_pond_bathymetry() -> void:
+	# Parabolic bowl: floor 8 m at centre, spill ~10 m at r=18.
+	var height_at := func(x: float, z: float) -> float:
+		var r := sqrt(x * x + z * z)
+		if r >= 18.0:
+			return 10.0
+		return 10.0 - 2.0 * (1.0 - r / 18.0) * (1.0 - r / 18.0)
+	var poly := VegetationPaint.circle_polygon(Vector2.ZERO, 18.0, 28)
+	var floor_m := 8.0
+	var spill_m := 10.0
+	var cell := 1.25
+	var empty_v := PondBathymetry.volume_to_level_l(poly, height_at, floor_m, cell, spill_m)
+	_check("bathymetry empty near floor", empty_v < 500.0, "got %f" % empty_v)
+	# Near-spill surface holds most of the litres (bowl flares outward).
+	var mid_v := PondBathymetry.volume_to_level_l(poly, height_at, 9.7, cell, spill_m)
+	var cap_v := PondBathymetry.capacity_l(poly, height_at, spill_m, 0.05, cell)
+	_check("bathymetry mid < capacity", mid_v > empty_v and mid_v < cap_v,
+		"mid=%f cap=%f" % [mid_v, cap_v])
+	_check("bathymetry capacity substantial", cap_v > 5000.0, "cap=%f" % cap_v)
+	var frac := PondBathymetry.fill_frac(mid_v, cap_v)
+	_check("bathymetry fill frac mid", frac > 0.2 and frac < 0.98, "frac=%f" % frac)
+	var lvl := PondBathymetry.level_for_volume_l(
+		poly, height_at, mid_v, floor_m, spill_m, cell)
+	_check("bathymetry inverse ~ mid level", absf(lvl - 9.7) < 0.25, "lvl=%f" % lvl)
+	# Manual capacity must not be confused with terrain integral in callers —
+	# fill_frac uses whatever capacity is passed.
+	_check("bathymetry manual cap fill",
+		PondBathymetry.fill_frac(5000.0, 10000.0) == 0.5)
+	var diag := Watershed.analyze_primary_basin(poly, height_at, 2.0, 0.10, 20.0)
+	_check("analyze_primary_basin valid bowl", bool(diag.get("valid", false)),
+		"reason=%s" % str(diag.get("reason", "")))
+	var flat_at := func(_x: float, _z: float) -> float: return 5.0
+	var flat_diag := Watershed.analyze_primary_basin(
+		VegetationPaint.circle_polygon(Vector2.ZERO, 30.0, 28), flat_at, 2.0, 0.10, 20.0)
+	_check("analyze_primary_basin flat → no_closed_basin",
+		not bool(flat_diag.get("valid", false))
+		and str(flat_diag.get("reason", "")) == "no_closed_basin",
+		"got %s" % str(flat_diag.get("reason", "")))
 
 
 func _test_depression_fill() -> void:

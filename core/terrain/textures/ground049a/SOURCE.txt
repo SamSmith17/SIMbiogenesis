@@ -1,0 +1,7 @@
+Ground049A - AmbientCG (https://ambientcg.com/view?id=Ground049A)
+License: CC0 1.0 Universal (public domain) - no attribution required.
+
+Used as the default near-field ground detail (albedo + NormalGL + roughness)
+blended into the terrain drape within a few metres of the camera by
+core/terrain/terrain_detail.gdshader (see TerrainBuilder.apply_near_detail_textures).
+Only Color, NormalGL, and Roughness are bundled; Displacement/AO/blend/usdc are not needed.

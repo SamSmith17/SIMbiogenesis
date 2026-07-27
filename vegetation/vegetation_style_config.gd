@@ -182,6 +182,8 @@ static func defaults() -> Dictionary:
 		## auto_distant_density (0 = skip distant, 1 = full density).
 		"auto_detail_radius_m": 800.0,
 		"auto_distant_density": 0.35,
+		## Tree MultiMesh visibility_range_end (AutoVegetationRuntime).
+		"auto_visibility_end_m": 1200.0,
 		"osm_species_map": {},
 		"local_mix": {},
 		# Mixed-woodland composition (Tune Look "Mixed woodland" type) used by any
@@ -219,6 +221,15 @@ static func save_map(lat: float, lon: float, settings: Dictionary) -> void:
 	if f == null:
 		return
 	f.store_string(JSON.stringify(_color_dict_to_json(settings)))
+
+
+## JSON-safe Color→array conversion for .esim / file exchange.
+static func to_serializable(settings: Dictionary) -> Dictionary:
+	return _color_dict_to_json(settings)
+
+
+static func from_serializable(settings: Dictionary) -> Dictionary:
+	return _json_to_color_dict(settings)
 
 
 ## Persist the given keys as the GLOBAL default look (defaults ← here ← per-map).

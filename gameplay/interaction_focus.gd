@@ -12,6 +12,8 @@ var _prompt_ui: CanvasLayer = null
 var _loader: Node = null
 var _solar_focus_idx: int = -1
 var _water_focus_idx: int = -1
+var _conduit_focus_id: String = ""
+var _conduit_focus_hang_edit: bool = false
 var _last_graph_sync_key: String = ""
 
 
@@ -51,7 +53,40 @@ func _physics_process(_delta: float) -> void:
 		_clear_water_focus()
 		_clear_building_focus()
 		_clear_veg_focus()
+		# Do NOT clear hang gizmos — ConduitRouteController owns the drag sphere.
+		if not _conduit_focus_id.is_empty():
+			_conduit_focus_id = ""
+			_conduit_focus_hang_edit = false
+			var mgr := _conduit_manager()
+			if mgr != null and mgr.has_method("set_focus_highlight"):
+				mgr.call("set_focus_highlight", "")
 		return
+	if not _can_aim_focus():
+		_clear_focus()
+		_clear_solar_focus()
+		_clear_water_focus()
+		_clear_building_focus()
+		_clear_veg_focus()
+		_clear_conduit_focus()
+		return
+	# Light place mode (J): Ctrl/Alt select is lights-only — never steal focus with
+	# Man Effigy / buildings / solar while aiming a lamp.
+	var light_place := PlacedLightService.is_placement_active()
+	# 3D conduits are thin — hover / hang-edit IK spheres do NOT require Ctrl/Alt.
+	# Prefer a wire under the crosshair before Ctrl-gated prop/OSM picks.
+	if not light_place and _update_conduit_focus():
+		if _focused != null:
+			_focused.on_focus_exit(_player)
+			_focused = null
+		_clear_solar_focus()
+		_clear_water_focus()
+		_clear_building_focus()
+		_clear_veg_focus()
+		_update_ui()
+		_sync_graph_from_conduit_focus()
+		return
+	_clear_conduit_focus()
+	# Props / OSM buildings / solar still require Ctrl or Alt (too easy to highlight).
 	if not _should_update_focus():
 		_clear_focus()
 		_clear_solar_focus()
@@ -59,12 +94,15 @@ func _physics_process(_delta: float) -> void:
 		_clear_building_focus()
 		_clear_veg_focus()
 		return
-	# Light place mode (J): Ctrl/Alt select is lights-only — never steal focus with
-	# Man Effigy / buildings / solar while aiming a lamp.
-	var light_place := PlacedLightService.is_placement_active()
 	var next: Interactable = null
+	# Finished mud prints sit inside the printer hull and may only have an Area3D
+	# pick proxy — check them BEFORE accepting a CNC machine physics hit.
+	if not light_place:
+		var printed_first := _pick_printed_prop_aabb()
+		if printed_first != null:
+			next = printed_first
 	var hit := _raycast_center()
-	if hit.has("collider"):
+	if next == null and hit.has("collider"):
 		next = _find_interactable(hit.collider as Object)
 		if next != null and not next.can_interact(_player):
 			next = null
@@ -77,6 +115,13 @@ func _physics_process(_delta: float) -> void:
 				max_dist = RAY_LENGTH
 			if dist > max_dist:
 				next = null
+		# Physics hit the printer (or its frame) — still prefer a printed prop
+		# under the crosshair when the Area3D/AABB check finds one.
+		if not light_place and next is PlacedProp \
+				and (next as PlacedProp).get_node_or_null("CncMachineRuntime") != null:
+			var printed := _pick_printed_prop_aabb()
+			if printed != null:
+				next = printed
 	if next == null:
 		if light_place:
 			next = _pick_placed_light_aabb()
@@ -172,14 +217,20 @@ func _ground_pick_center() -> Variant:
 	return p if p is Vector3 else null
 
 
-func _should_update_focus() -> bool:
-	if not _is_alt_selection_active():
-		return false
+## Look-capture / pause — enough for thin conduit hover (no Ctrl required).
+func _can_aim_focus() -> bool:
 	if CursorController.should_capture_look():
 		return true
 	if CursorController.is_paused():
 		return true
 	return false
+
+
+## Props / OSM / buildings still require Ctrl or Alt so they don't light up constantly.
+func _should_update_focus() -> bool:
+	if not _is_alt_selection_active():
+		return false
+	return _can_aim_focus()
 
 
 func _is_alt_selection_active() -> bool:
@@ -224,6 +275,39 @@ func _pick_placed_prop_aabb() -> Interactable:
 	return _pick_interactable_aabb(PlacedProp)
 
 
+## Prefer finished mud/clay prints (meta printed_job_id) under the crosshair.
+func _pick_printed_prop_aabb() -> Interactable:
+	if _camera == null or _player == null:
+		return null
+	var vp := get_viewport()
+	if vp == null:
+		return null
+	var center := vp.get_visible_rect().size * 0.5
+	var origin := _camera.project_ray_origin(center)
+	var dir := _camera.project_ray_normal(center)
+	if dir.length_squared() < 1e-10:
+		return null
+	dir = dir.normalized()
+	var best: Interactable = null
+	var best_t := RAY_LENGTH
+	for node in get_tree().get_nodes_in_group("interactables"):
+		if not (node is PlacedProp):
+			continue
+		var pp := node as PlacedProp
+		if not pp.has_meta("printed_job_id") or not pp.can_interact(_player):
+			continue
+		var aabb := pp.get_world_pick_aabb()
+		if aabb.size.length_squared() < 0.0001:
+			continue
+		var t := _ray_aabb_enter(origin, dir, aabb)
+		if t < 0.0 or t > RAY_LENGTH:
+			continue
+		if t < best_t:
+			best_t = t
+			best = pp
+	return best
+
+
 ## Closest PlacedLight under the crosshair (light-place select mode).
 func _pick_placed_light_aabb() -> Interactable:
 	return _pick_interactable_aabb(PlacedLight)
@@ -243,6 +327,7 @@ func _pick_interactable_aabb(type_script: Variant) -> Interactable:
 	dir = dir.normalized()
 	var best: Interactable = null
 	var best_t := RAY_LENGTH
+	var best_score := -INF
 	for node in get_tree().get_nodes_in_group("interactables"):
 		if type_script == PlacedProp and not (node is PlacedProp):
 			continue
@@ -261,10 +346,23 @@ func _pick_interactable_aabb(type_script: Variant) -> Interactable:
 		if aabb.size.length_squared() < 0.0001:
 			continue
 		var t := _ray_aabb_enter(origin, dir, aabb)
-		if t < 0.0 or t > best_t:
+		if t < 0.0 or t > RAY_LENGTH:
 			continue
-		best_t = t
-		best = it
+		# Prefer printed / non-machine props when AABBs overlap the mud printer
+		# gantry (same footprint) so the finished print is independently selectable.
+		var score := -t
+		if it is PlacedProp:
+			var pp := it as PlacedProp
+			if pp.has_meta("printed_job_id"):
+				score += 50.0
+			elif pp.get_node_or_null("CncMachineRuntime") != null:
+				score -= 20.0
+			# Smaller AABB = more specific hit.
+			score += 1.0 / maxf(aabb.size.length(), 0.5)
+		if score > best_score or (is_equal_approx(score, best_score) and t < best_t):
+			best_score = score
+			best_t = t
+			best = it
 	return best
 
 
@@ -294,6 +392,174 @@ func _clear_focus() -> void:
 		_focused = null
 	_update_ui()
 	_last_graph_sync_key = ""
+
+
+func get_conduit_focus_id() -> String:
+	return _conduit_focus_id
+
+
+func _conduit_manager() -> Node:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return null
+	return tree.current_scene.get_node_or_null("ConduitManager")
+
+
+func _update_conduit_focus() -> bool:
+	if _camera == null:
+		return false
+	var mgr := _conduit_manager()
+	if mgr == null or not mgr.has_method("pick_conduit"):
+		return false
+	var vp := get_viewport()
+	if vp == null:
+		return false
+	var center := vp.get_visible_rect().size * 0.5
+	var origin := _camera.project_ray_origin(center)
+	var dir := _camera.project_ray_normal(center)
+	var hit: Dictionary = mgr.call("pick_conduit", origin, dir)
+	var cid := str(hit.get("conn_id", ""))
+	var hit_pt: Vector3 = hit.get("point", Vector3.ZERO) as Vector3
+	# Aiming at an existing hang IK sphere (may miss the thin wire).
+	# Never acquire NEW focus from orphan pins alone — elevated leftover spheres
+	# used to flash full gizmo sets while the camera panned across empty sky.
+	var pin_focus := {}
+	if mgr.has_method("pick_any_hang_pin"):
+		pin_focus = mgr.call("pick_any_hang_pin", origin, dir) as Dictionary
+	var pin_cid := str(pin_focus.get("conn_id", ""))
+	if not pin_cid.is_empty():
+		var pin_d := float(pin_focus.get("distance", INF))
+		var wire_d := float(hit.get("distance", INF))
+		if not cid.is_empty() and pin_cid == cid and pin_d <= wire_d + 0.05:
+			hit_pt = pin_focus.get("position", hit_pt) as Vector3
+		elif cid.is_empty() and pin_cid == _conduit_focus_id:
+			cid = pin_cid
+			hit_pt = pin_focus.get("position", hit_pt) as Vector3
+	if cid.is_empty():
+		return false
+	_conduit_focus_id = cid
+	if mgr.has_method("set_focus_highlight"):
+		mgr.call("set_focus_highlight", cid)
+	var type_id := ""
+	var kind := "Conduit"
+	var len_m := 0.0
+	var pin_edit := false
+	var pipe_pin := false
+	var hang_pin := false
+	var conn := _connection_dict_for_focus(cid)
+	if not conn.is_empty():
+		type_id = ConduitKinds.derive_type_for_connection(conn)
+		var style: Dictionary = conn.get("conduit_style", {}) as Dictionary
+		kind = ConduitKinds.display_name_with_size(type_id, style)
+		len_m = float(conn.get("route_length_m", 0.0))
+		pin_edit = ConduitKinds.supports_pin_edit(type_id)
+		pipe_pin = ConduitKinds.supports_pipe_pin_edit(type_id)
+		hang_pin = ConduitKinds.supports_hang_edit(type_id)
+	# Cached flag: plain LMB left for ConduitRouteController drag (all pin-edit kinds).
+	_conduit_focus_hang_edit = pin_edit
+	# Hover IK sphere at the exact wire pick (hang / kit / PEX / hose / PVC…).
+	if pin_edit and mgr.has_method("update_hang_hover_gizmo") and is_finite(hit_pt.x):
+		var routing := false
+		var crc := _conduit_route_controller()
+		if crc != null and crc.has_method("is_routing"):
+			routing = bool(crc.call("is_routing"))
+		if not routing:
+			mgr.call("update_hang_hover_gizmo", cid, hit_pt, false)
+	elif mgr.has_method("clear_hang_gizmos"):
+		mgr.call("clear_hang_gizmos")
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(true)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		var len_txt := " · %.1f m" % len_m if len_m > 0.05 else ""
+		var on_pin := int(pin_focus.get("index", -1)) >= 0 and pin_cid == cid
+		if pipe_pin:
+			_crosshair.set_prompt_text(
+				"Drag: elbow pin · Shift: axis lock · Double-click: remove · Ctrl+click: style · %s%s" % [kind, len_txt])
+		elif hang_pin:
+			if on_pin:
+				_crosshair.set_prompt_text(
+					"Drag: move pin · Double-click: remove · %s%s" % [kind, len_txt])
+			else:
+				_crosshair.set_prompt_text(
+					"Drag: hang pin · Ctrl+click: style · Double-click pin: remove · %s%s" % [kind, len_txt])
+		elif pin_edit:
+			if on_pin:
+				_crosshair.set_prompt_text(
+					"Drag: move pin · Shift: axis lock · Double-click: remove · %s%s" % [kind, len_txt])
+			else:
+				_crosshair.set_prompt_text(
+					"Drag: route pin · Shift: axis lock · Ctrl+click: style · %s%s" % [kind, len_txt])
+		else:
+			_crosshair.set_prompt_text(
+				"Interact/click: style · %s%s" % [kind, len_txt])
+	return true
+
+
+func _conduit_route_controller() -> Node:
+	# Wired as a child of Player (sibling of InteractionFocus).
+	if _player != null:
+		var local := _player.get_node_or_null("ConduitRouteController")
+		if local != null:
+			return local
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return null
+	return tree.current_scene.find_child("ConduitRouteController", true, false)
+
+
+func _connection_dict_for_focus(cid: String) -> Dictionary:
+	if cid.is_empty():
+		return {}
+	var mgr := _conduit_manager()
+	if mgr != null and mgr.has_method("get_graph_model"):
+		var model: Variant = mgr.call("get_graph_model")
+		if model != null and model.has_method("get_connection"):
+			var c: Dictionary = model.call("get_connection", cid)
+			if not c.is_empty():
+				return c
+	var gv := _graph_view()
+	if gv != null:
+		var model2: Variant = gv.get("model")
+		if model2 != null and model2.has_method("get_connection"):
+			return model2.call("get_connection", cid) as Dictionary
+	return {}
+
+
+func _clear_conduit_focus() -> void:
+	# Always clear IK spheres — focus_id may already be empty (routing start /
+	# look-away race) while pin orbs are still visible from the last hover.
+	var had_focus := not _conduit_focus_id.is_empty()
+	_conduit_focus_id = ""
+	_conduit_focus_hang_edit = false
+	var mgr := _conduit_manager()
+	if had_focus and mgr != null and mgr.has_method("set_focus_highlight"):
+		mgr.call("set_focus_highlight", "")
+	if mgr != null and mgr.has_method("clear_hang_gizmos"):
+		mgr.call("clear_hang_gizmos")
+	if not had_focus:
+		return
+	if _focused != null:
+		return
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(false)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		_crosshair.set_prompt_text("")
+
+
+func _sync_graph_from_conduit_focus() -> void:
+	var gv := _graph_view()
+	if gv == null or not bool(gv.get("visible")):
+		return
+	if _conduit_focus_id.is_empty():
+		return
+	var key := "conduit:%s" % _conduit_focus_id
+	if key == _last_graph_sync_key:
+		return
+	_last_graph_sync_key = key
+	if gv.has_method("select_connection_by_id"):
+		gv.call("select_connection_by_id", _conduit_focus_id)
+	elif gv.has_method("inspect_connection_by_id"):
+		gv.call("inspect_connection_by_id", _conduit_focus_id)
 
 
 func _graph_view() -> Node:
@@ -472,7 +738,14 @@ func _update_ui() -> void:
 			if _focused != null:
 				var lbl := _focused.get_prompt_text()
 				if _focused is PlacedProp:
-					lbl = "Edit prop"
+					var pp := _focused as PlacedProp
+					if pp.has_meta("printed_job_id"):
+						lbl = "Inspect · Move (drag)"
+					elif pp.get_node_or_null("CncMachineRuntime") != null \
+							and _is_fdm_printer_prop(pp):
+						lbl = "Print setup"
+					else:
+						lbl = "Edit prop"
 				if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
 					lbl = "[%s / Click] %s" % [_prompt_ui.get_action_label(_focused.get_action_name()), lbl]
 				_crosshair.set_prompt_text(lbl)
@@ -499,7 +772,24 @@ func _unhandled_input(event: InputEvent) -> void:
 	var is_click: bool = event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed
 	var is_interact := event.is_action_pressed("interact")
 	var is_veg_edit := event.is_action_pressed("vegetation_area_edit")
-	if not is_interact and not is_veg_edit and not (is_click and _is_alt_selection_active()):
+	# Hang-edit wires: plain LMB is owned by ConduitRouteController (drag).
+	# Ctrl/Meta+LMB opens the style modal. Interact always opens style.
+	var conduit_ctrl_click := is_click and not _conduit_focus_id.is_empty() \
+			and event is InputEventMouseButton \
+			and ((event as InputEventMouseButton).ctrl_pressed \
+				or (event as InputEventMouseButton).meta_pressed)
+	var conduit_plain_click := is_click and not _conduit_focus_id.is_empty() \
+			and not conduit_ctrl_click
+	# Cached at focus time (ConduitManager model) — do not depend on graph UI.
+	var hang_focus := _conduit_focus_hang_edit
+	var conduit_style_click := conduit_ctrl_click \
+			or (conduit_plain_click and not hang_focus)
+	# Hang-edit plain LMB: leave unhandled for ConduitRouteController drag.
+	if hang_focus and conduit_plain_click and not is_interact:
+		return
+	if not is_interact and not is_veg_edit \
+			and not (is_click and _is_alt_selection_active()) \
+			and not conduit_style_click:
 		return
 	# NOTE: "vegetation_area_edit" shares the O key with "interact" (see
 	# project.godot), so both fire on the same keypress. A genuinely focused
@@ -522,6 +812,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		_focused.interact(_player)
 		get_viewport().set_input_as_handled()
 		return
+	# Focused 3D conduit → style modal (Interact always; Ctrl+LMB for hang-edit;
+	# plain LMB for non-hang-edit kinds only).
+	if not _conduit_focus_id.is_empty() and (is_interact or conduit_style_click):
+		var gv := _graph_view()
+		if gv != null and gv.has_method("open_conduit_style_modal"):
+			gv.call("open_conduit_style_modal", _conduit_focus_id)
+			get_viewport().set_input_as_handled()
+			return
 	# No interactable under the crosshair — add a targeted OSM solar array to the graph.
 	if _solar_focus_idx >= 0 and _loader != null \
 			and _loader.has_method("add_solar_array_to_graph"):
@@ -565,13 +863,65 @@ func _try_open_veg_area() -> bool:
 func _open_placed_prop_edit(prop: PlacedProp) -> void:
 	if prop == null:
 		return
+	# Linkage Lab structures: Interact = live deploy/stow fold toggle (the
+	# quick-click edit panel — GrabController's path — still reaches
+	# PlacedPropEditUI, which offers "Edit in Linkage Lab").
+	var deploy := prop.get_node_or_null("LinkageDeployRuntime")
+	if deploy != null and deploy.has_method("toggle_deploy"):
+		deploy.call("toggle_deploy")
+		return
+	open_prop_edit_ui(prop)
+
+
+func _is_fdm_printer_prop(prop: PlacedProp) -> bool:
+	if prop == null:
+		return false
+	var mid := str(prop.model_id)
+	if mid == "mud_printer" or mid == "trash_printer":
+		return true
+	var gv := _graph_view()
+	if gv == null or gv.get("model") == null:
+		return false
+	var runtime := prop.get_node_or_null("CncMachineRuntime")
+	if runtime == null:
+		return false
+	var item_id := str(runtime.get("graph_item_id"))
+	if item_id.is_empty():
+		return false
+	var item: Dictionary = gv.model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	return str(specs.get("machine_role", "")) == "fdm_printer"
+
+
+## Opens the proper editor for a placed prop — shared by the Interact key
+## (interaction_focus) and a no-drag click (GrabController), so every selectable
+## model opens the same UI either way. Printed (mud/clay) objects are move-only.
+func open_prop_edit_ui(prop: PlacedProp) -> void:
+	if prop == null:
+		return
+	if prop.has_meta("printed_job_id"):
+		return
 	var tree := get_tree()
 	if tree == null or tree.current_scene == null:
 		return
+	# Any FDM printer: open the shared Print Setup modal (part/STL, slicer,
+	# bed preview, start). Falls through for non-printer machines.
+	if prop.get_node_or_null("CncMachineRuntime") != null:
+		var gv := _graph_view()
+		if gv != null and gv.has_method("open_print_setup_for_prop"):
+			if bool(gv.call("open_print_setup_for_prop", prop.prop_id)):
+				return
 	# StarShade props open the dedicated modal (design swap + graph reseed).
 	if ModelCatalog.is_starshade_model(prop.model_id):
 		if _loader != null and _loader.has_method("open_starshade_editor"):
 			_loader.call("open_starshade_editor", prop.prop_id)
+			return
+	# Pallet racks open the parametric builder bound to this rack for editing.
+	if prop.model_id == PalletRackBuilder.MODEL_ID:
+		if _loader != null and _loader.has_method("open_pallet_rack_builder_for_prop"):
+			_loader.call("open_pallet_rack_builder_for_prop", prop.prop_id)
 			return
 	var edit_ui := tree.current_scene.get_node_or_null("UILayer/PlacedPropEditUI")
 	if edit_ui != null and edit_ui.has_method("open_for_prop"):

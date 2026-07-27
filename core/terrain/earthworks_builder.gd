@@ -331,7 +331,9 @@ static func _build_embankment(base_poly: PackedVector2Array, base_ys: PackedFloa
 			faces.resize(indices.size())
 			for ii in indices.size():
 				faces[ii] = verts[indices[ii]]
-		coll.set_faces(faces)
+		faces = MeshCollisionUtil.sanitize_faces(faces)
+		if faces.size() >= 3:
+			coll.set_faces(faces)
 	return {
 		"mesh": mesh,
 		"collision": coll,

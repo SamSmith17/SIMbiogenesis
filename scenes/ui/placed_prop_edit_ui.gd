@@ -25,10 +25,15 @@ var _pitch: SpinBox
 var _roll: SpinBox
 var _scale: SpinBox
 var _collision_check: CheckBox
+var _show3d_check: CheckBox
 var _burnable_check: CheckBox
+var _shadow_option: OptionButton
 var _restore_btn: Button
 var _del_btn: Button
 var _move_btn: Button
+var _linkage_btn: Button
+var _siphon_btn: Button
+var _ports_btn: Button
 
 
 func _ready() -> void:
@@ -60,6 +65,17 @@ func bind_loader(loader: Node) -> void:
 
 
 func open_for_prop(prop_id: String) -> void:
+	# Additive printers (mud/clay/concrete) redirect to the in-world Print modal
+	# — the single choke point for both click (GrabController) and Interact key,
+	# so aiming at the printer and interacting always opens the slicer modal.
+	var gv := get_parent().get_node_or_null("SystemGraphView") if get_parent() != null else null
+	if gv == null:
+		var scene := get_tree().current_scene if get_tree() != null else null
+		if scene != null:
+			gv = scene.get_node_or_null("UILayer/SystemGraphView")
+	if gv != null and gv.has_method("open_print_setup_for_prop"):
+		if bool(gv.call("open_print_setup_for_prop", prop_id)):
+			return
 	_prop_id = prop_id
 	_refresh_model_list()
 	_load_from_layer()
@@ -142,6 +158,16 @@ func _build_ui() -> void:
 	_collision_check.toggled.connect(_on_collision_toggled)
 	actions.add_child(_collision_check)
 
+	# Hide this prop from the 3D world (and, since Site Plan renders the same world,
+	# from Site Plan too) without deleting the node — for conceptual/placeholder twins.
+	_show3d_check = CheckBox.new()
+	_show3d_check.text = "Show in 3D"
+	_show3d_check.tooltip_text = "Uncheck to hide this model from the 3D world and Site Plan (the graph node stays)"
+	_show3d_check.button_pressed = true
+	_show3d_check.add_theme_color_override("font_color", C_TEXT)
+	_show3d_check.toggled.connect(_on_show3d_toggled)
+	actions.add_child(_show3d_check)
+
 	_burnable_check = CheckBox.new()
 	_burnable_check.text = "Burnable"
 	_burnable_check.tooltip_text = "Include this prop as fire-crisis ignition / spread geometry (F)"
@@ -149,6 +175,18 @@ func _build_ui() -> void:
 	_burnable_check.add_theme_color_override("font_color", C_TEXT)
 	_burnable_check.toggled.connect(_on_burnable_toggled)
 	actions.add_child(_burnable_check)
+
+	# Per-prop shadow override (Tier 2 perf). "Default" follows the global Shadow
+	# detail setting; "All" forces every part to cast (e.g. a hero structure);
+	# "Off" drops this prop from the shadow pass entirely.
+	_shadow_option = OptionButton.new()
+	_shadow_option.tooltip_text = "Shadow casting for this prop (overrides the global Shadow detail setting)"
+	_shadow_option.add_item("Shadows: Default", 0)
+	_shadow_option.add_item("Shadows: All parts", 1)
+	_shadow_option.add_item("Shadows: Off", 2)
+	_shadow_option.add_theme_color_override("font_color", C_TEXT)
+	_shadow_option.item_selected.connect(_on_shadow_mode_selected)
+	actions.add_child(_shadow_option)
 
 	_move_btn = Button.new()
 	_move_btn.text = "Move"
@@ -162,6 +200,26 @@ func _build_ui() -> void:
 	_restore_btn.pressed.connect(_on_restore_burned)
 	_restore_btn.visible = false
 	actions.add_child(_restore_btn)
+
+	_linkage_btn = Button.new()
+	_linkage_btn.text = "Linkage Lab"
+	_linkage_btn.tooltip_text = "Edit this structure's linkage design in place"
+	_linkage_btn.pressed.connect(_on_edit_linkage)
+	_linkage_btn.visible = false
+	actions.add_child(_linkage_btn)
+
+	_siphon_btn = Button.new()
+	_siphon_btn.text = "Hydro Lab"
+	_siphon_btn.tooltip_text = "Turbine kind, geometry, penstock, live RPM / power"
+	_siphon_btn.pressed.connect(_on_edit_siphon)
+	_siphon_btn.visible = false
+	actions.add_child(_siphon_btn)
+
+	_ports_btn = Button.new()
+	_ports_btn.text = "Ports"
+	_ports_btn.tooltip_text = "Tag 3D connection ports (plugs / inlets) on this model"
+	_ports_btn.pressed.connect(_on_edit_ports)
+	actions.add_child(_ports_btn)
 
 	var apply_btn := Button.new()
 	apply_btn.text = "Apply"
@@ -239,7 +297,18 @@ func _load_from_layer() -> void:
 	_roll.value = float(d.get("roll", 0.0))
 	_scale.value = float(d.get("scale", 1.0))
 	_collision_check.button_pressed = bool(d.get("collision_enabled", true))
+	if _show3d_check != null:
+		_show3d_check.button_pressed = not bool(d.get("hidden_3d", false))
 	_burnable_check.button_pressed = bool(d.get("burnable", false))
+	if _shadow_option != null:
+		_shadow_option.selected = _shadow_mode_to_idx(str(d.get("shadow_mode", "")))
+	if _linkage_btn != null:
+		_linkage_btn.visible = str(d.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID
+	if _siphon_btn != null:
+		var mid := str(d.get("model_id", ""))
+		var kind := str(d.get("kind", ""))
+		_siphon_btn.visible = mid == "hydroturbine" or kind == "siphon_hydro" \
+				or kind == "siphon_hoverboard"
 	_refresh_restore_visibility()
 
 	if _del_btn != null:
@@ -270,12 +339,44 @@ func _on_collision_toggled(pressed: bool) -> void:
 		_loader.call("update_prop_record", _prop_id, {"collision_enabled": pressed})
 
 
+func _on_show3d_toggled(pressed: bool) -> void:
+	if _syncing or _loader == null or _prop_id.is_empty():
+		return
+	# hidden_3d is the inverse of "Show in 3D". update_prop_record persists + rebuilds
+	# the prop so PlacedPropRuntime applies ModelRoot.visible immediately.
+	if _loader.has_method("update_prop_record"):
+		_loader.call("update_prop_record", _prop_id, {"hidden_3d": not pressed})
+
+
 func _on_burnable_toggled(pressed: bool) -> void:
 	if _syncing or _loader == null or _prop_id.is_empty():
 		return
 	if _loader.has_method("update_prop_record"):
 		_loader.call("update_prop_record", _prop_id, {"burnable": pressed})
 	FireNode.invalidate_flammable_mesh_cache()
+
+
+const _SHADOW_MODES := ["", "all", "off"]
+
+func _shadow_mode_to_idx(mode: String) -> int:
+	var i := _SHADOW_MODES.find(mode)
+	return i if i >= 0 else 0
+
+func _on_shadow_mode_selected(idx: int) -> void:
+	if _syncing or _loader == null or _prop_id.is_empty():
+		return
+	var mode: String = _SHADOW_MODES[clampi(idx, 0, _SHADOW_MODES.size() - 1)]
+	# Persist on the record so it survives reload…
+	if _loader.has_method("update_prop_record"):
+		_loader.call("update_prop_record", _prop_id, {"shadow_mode": mode})
+	# …and apply to the live node immediately without a full rebuild.
+	var node := _find_prop_node()
+	if node != null:
+		node.set_meta("shadow_mode", mode)
+		var radius := 0.0
+		if node.has_method("get_local_pick_radius"):
+			radius = float(node.call("get_local_pick_radius"))
+		PropRenderTuning.apply_to_prop(node, radius)
 
 
 func _refresh_restore_visibility() -> void:
@@ -345,3 +446,49 @@ func _on_move_pressed() -> void:
 	close()
 	if _loader.has_method("begin_prop_reposition"):
 		_loader.call("begin_prop_reposition", pid)
+
+
+## "Edit in Linkage Lab": reopen the designer bound to this placed structure.
+func _on_edit_linkage() -> void:
+	if _prop_id.is_empty():
+		return
+	var pid := _prop_id
+	close()
+	var main := get_tree().current_scene
+	if main != null and main.has_method("open_linkage_lab_for_prop"):
+		main.call("open_linkage_lab_for_prop", pid)
+
+
+## Open Siphon Lab for the bound graph item (or toast if unbound).
+func _on_edit_siphon() -> void:
+	if _prop_id.is_empty() or _loader == null:
+		return
+	var rec: Variant = _loader.call("get_prop_record", _prop_id) if _loader.has_method("get_prop_record") else {}
+	var graph_id := ""
+	if rec is Dictionary:
+		graph_id = str((rec as Dictionary).get("graph_item_id", ""))
+	close()
+	var gv := get_parent().get_node_or_null("SystemGraphView") if get_parent() != null else null
+	if gv == null:
+		var scene := get_tree().current_scene if get_tree() != null else null
+		if scene != null:
+			gv = scene.get_node_or_null("UILayer/SystemGraphView")
+	if gv != null and gv.has_method("open_siphon_lab") and not graph_id.is_empty():
+		gv.visible = true
+		gv.call("open_siphon_lab", graph_id)
+	elif gv != null and gv.has_method("_show_toast"):
+		gv.call("_show_toast", "Bind this prop to a Siphon Hydroturbine graph node first")
+
+
+func _on_edit_ports() -> void:
+	if _prop_id.is_empty():
+		return
+	var pid := _prop_id
+	close()
+	var gv := get_parent().get_node_or_null("SystemGraphView") if get_parent() != null else null
+	if gv == null:
+		var scene := get_tree().current_scene if get_tree() != null else null
+		if scene != null:
+			gv = scene.get_node_or_null("UILayer/SystemGraphView")
+	if gv != null and gv.has_method("open_connection_ports_for_prop"):
+		gv.call("open_connection_ports_for_prop", pid)

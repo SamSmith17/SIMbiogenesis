@@ -258,9 +258,17 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 			batch_settings, growth_map, chunk_x, chunk_z)
 		return
 	if family == "deciduous" or family == "pine":
-		# Chunked batches have local AABBs — NEAR/FAR canopy LOD is safe again.
+		var tree_end := float(batch_settings.get("auto_visibility_end_m", VISIBILITY_END))
+		var lod_settings := _with_auto_lod_reach(family, batch_settings)
+		# Large world maps: FAR billboards only — leafy NEAR shells × dual
+		# MultiMeshes are the Mt. Vernon 6M-primitive bomb.
+		if bool(batch_settings.get("auto_force_far_canopy", false)):
+			VegetationRuntime._build_canopy_single_batch(root, species, records, ground_y_at,
+				false, lod_settings, tree_end, VegetationCardFactory.CanopyLodTier.FAR,
+				growth_map, chunk_x, chunk_z)
+			return
 		VegetationRuntime._build_canopy_lod_bulk_batches(root, species, records, ground_y_at,
-			false, _with_auto_lod_reach(family, batch_settings), VISIBILITY_END, growth_map,
+			false, lod_settings, tree_end, growth_map,
 			chunk_x, chunk_z)
 		return
 	var mesh := VegetationCardFactory.mesh_for_species(species, batch_settings)
@@ -306,13 +314,14 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 		mi.material_override = null
 	else:
 		mi.material_override = mat
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	# Shadow casting is gated globally (off by default — big GPU win in play,
+	# toggled on for solar analysis). Grass never casts.
+	VegetationShadowPolicy.apply(mi, species)
 	if species in VegetationLayer.GRASS_SPECIES:
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mi.visibility_range_end = float(settings.get("grass_visibility_end_m",
 			VegetationRuntime.GRASS_VISIBILITY_END))
 	else:
-		mi.visibility_range_end = VISIBILITY_END
+		mi.visibility_range_end = float(settings.get("auto_visibility_end_m", VISIBILITY_END))
 	mi.visibility_range_begin = VISIBILITY_BEGIN
 	root.add_child(mi)
 	if growth_map != null:

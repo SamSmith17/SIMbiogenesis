@@ -32,6 +32,8 @@ func _initialize() -> void:
 	_test_exclusion_builder()
 	_test_exclusion_index()
 	_test_performance_caps()
+	_test_osm_polygon_cap()
+	_test_veg_multipolygon_outers_only()
 	_test_batched_scatter()
 	_test_poisson_performance()
 	_test_forest_routing()
@@ -96,10 +98,17 @@ func _test_runtime_render() -> void:
 	var root := terrain.get_node_or_null(AutoVegetationRuntime.ROOT_NAME)
 	_check("AutoVegetation node created", root != null)
 	if root != null:
-		# Pine now renders through the canopy-LOD path (NEAR + FAR tiers), so the
-		# MultiMesh nodes are Bulk_pine_0 / Bulk_pine_1 rather than a single Bulk_pine.
-		_check("pine multimesh built", root.get_node_or_null("Bulk_pine_0") != null)
-		_check("shrub multimesh built", root.get_node_or_null("Bulk_shrub") != null)
+		# Names include LOD tier + spatial chunk: Bulk_pine_0_0_0, Bulk_shrub_0_0, …
+		var has_pine := false
+		var has_shrub := false
+		for c in root.get_children():
+			var nm := str(c.name)
+			if nm.begins_with("Bulk_pine"):
+				has_pine = true
+			if nm.begins_with("Bulk_shrub"):
+				has_shrub = true
+		_check("pine multimesh built", has_pine)
+		_check("shrub multimesh built", has_shrub)
 	# Slot alias resolution falls back to a known card species.
 	_check("conifer -> pine", AutoVegetationRuntime._resolve_species("conifer") == "pine")
 	_check("unknown -> deciduous", AutoVegetationRuntime._resolve_species("zzz") == "deciduous")
@@ -540,6 +549,74 @@ func _test_performance_caps() -> void:
 	var layer := AutoVegetationGenerator.generate(payload, ctx)
 	_check("layer respects bulk cap", layer.total_bulk() <= AutoVegetationLayer.MAX_BULK_TOTAL,
 		"got %d" % layer.total_bulk())
+
+
+func _test_veg_multipolygon_outers_only() -> void:
+	# Nested hole punch must not run for vegetation (water still punches).
+	var clat := 47.6
+	var clon := -122.3
+	var d := 0.002
+	var doc := {"elements": [
+		{"type": "node", "id": 1, "lat": clat - d, "lon": clon - d},
+		{"type": "node", "id": 2, "lat": clat - d, "lon": clon + d},
+		{"type": "node", "id": 3, "lat": clat + d, "lon": clon + d},
+		{"type": "node", "id": 4, "lat": clat + d, "lon": clon - d},
+		{"type": "node", "id": 5, "lat": clat - d * 0.3, "lon": clon - d * 0.3},
+		{"type": "node", "id": 6, "lat": clat - d * 0.3, "lon": clon + d * 0.3},
+		{"type": "node", "id": 7, "lat": clat + d * 0.3, "lon": clon + d * 0.3},
+		{"type": "node", "id": 8, "lat": clat + d * 0.3, "lon": clon - d * 0.3},
+		{"type": "way", "id": 10, "nodes": [1, 2, 3, 4, 1],
+			"tags": {"natural": "wood"}},
+		{"type": "way", "id": 11, "nodes": [5, 6, 7, 8, 5]},
+		{"type": "relation", "id": 20, "tags": {"type": "multipolygon", "natural": "wood"},
+			"members": [
+				{"type": "way", "ref": 10, "role": "outer"},
+				{"type": "way", "ref": 11, "role": "inner"},
+			]},
+	]}
+	var payload: Dictionary = VegService._parse_overpass(doc, clat, clon)
+	var polys: Array = payload.get("polygons", [])
+	# One outer ring only (relation first; member way skipped; no hole fragments).
+	_check("veg mp keeps one outer", polys.size() == 1, "got %d" % polys.size())
+
+
+func _test_osm_polygon_cap() -> void:
+	# Service-level hard cap: keep open-area veto polys + largest woods.
+	var polys: Array = []
+	for i in 50:
+		var s := 10.0 + float(i)  # increasing wood area
+		polys.append({
+			"points": PackedVector2Array([
+				Vector2(0, 0), Vector2(s, 0), Vector2(s, s), Vector2(0, s)]),
+			"kind": "wood", "tags": {},
+		})
+	# Tiny lawn must survive even when many larger woods compete.
+	polys.append({
+		"points": PackedVector2Array([
+			Vector2(1000, 1000), Vector2(1005, 1000),
+			Vector2(1005, 1005), Vector2(1000, 1005)]),
+		"kind": "grass_lawn", "tags": {"landuse": "grass"},
+	})
+	var payload := {"polygons": polys, "tree_points": [], "tree_rows": [], "hedge_rows": []}
+	var capped: Dictionary = VegService.cap_polygons(payload, 20)
+	var out: Array = capped.get("polygons", [])
+	_check("cap_polygons shrinks", out.size() == 20, "got %d" % out.size())
+	var lawn_kept := false
+	var max_wood_side := 0.0
+	for rec in out:
+		var d: Dictionary = rec
+		if str(d.get("kind", "")) == "grass_lawn":
+			lawn_kept = true
+		elif str(d.get("kind", "")) == "wood":
+			var pts: PackedVector2Array = d.get("points", PackedVector2Array())
+			if pts.size() >= 2:
+				max_wood_side = maxf(max_wood_side, pts[1].x - pts[0].x)
+	_check("cap keeps open-area lawn", lawn_kept)
+	_check("cap prefers largest woods", max_wood_side >= 40.0,
+		"max side=%.1f" % max_wood_side)
+	var small: Dictionary = VegService.cap_polygons(payload, 200)
+	_check("cap no-op under budget",
+		(small.get("polygons", []) as Array).size() == polys.size())
 
 
 func _test_batched_scatter() -> void:

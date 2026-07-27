@@ -16,6 +16,9 @@ signal vegetation_operation_progress(message: String, fraction: float)
 ## `load_completed` latches true at the same moment for late subscribers
 ## (PlaytestHarness capture waits on this).
 signal map_load_complete
+## Fired when auto-veg MultiMeshes finish (or veg is disabled). Harness world
+## captures wait on this so progressive large-map loads still get a full plate.
+signal auto_vegetation_ready
 signal climelapse_state_changed
 
 const HALF_EXTENT_DEFAULT := 15000.0   # 30 km square
@@ -46,6 +49,33 @@ const DETAIL_MAX_ZOOM := 19
 const HYPER_HALF_EXTENT := 500.0
 const HYPER_TARGET_PX_DEFAULT := 8192
 const HYPER_MAX_ZOOM := 19
+
+## User-configurable terrain imagery quality tiers (index 0..3). Higher tiers fetch
+## higher-zoom ESRI tiles for the detail drape AND stretch the sharpest "hyper"
+## layer over a larger walkable radius — sharper foot-level terrain (the sculpt
+## tiles walk at 1.5 m/vertex, which exposes the drape's true m/px), at the cost of
+## more VRAM and a longer first download (then PNG-cached). Only imagery changes;
+## the sculpt mesh/collider density is untouched, so sculpt perf is unaffected.
+## Persisted as [terrain] quality_tier in terrain_config.cfg; default = Medium (1),
+## which matches the previous hard-coded 4096 detail / 500 m hyper behaviour.
+const QUALITY_TIER_COUNT := 4
+const QUALITY_TIER_DEFAULT := 1
+const QUALITY_TIER_NAMES := ["Low", "Medium", "High", "Ultra"]
+## Detail-drape stitch target (px) per tier — the real lever on centre sharpness.
+const QUALITY_DETAIL_TARGET_PX := [2048, 4096, 8192, 8192]
+## Hyper (sharpest) layer half-extent (m) per tier — how far the crispest imagery
+## reaches from the site centre across the walkable zone.
+const QUALITY_HYPER_HALF_EXTENT := [500.0, 500.0, 1000.0, 1500.0]
+## Hyper stitch target (px) per tier (an explicit [terrain] hyper_target_px still wins).
+const QUALITY_HYPER_TARGET_PX := [4096, 8192, 8192, 8192]
+
+## AI "hero" patch: an opt-in Gemini-enhanced ground drape over a small square
+## centred on the map origin, overlaid on top of hyper where the player spawns.
+## One 2K image per site, cached, so it is a one-time API cost. Default OFF.
+## Half-extent (m) — 50 m ⇒ 100 m square ⇒ ~0.05 m/px at 2K (≈5× sharper than hyper).
+const AI_HERO_HALF_EXTENT_DEFAULT := 50.0
+const AI_IMAGE_SIZE_DEFAULT := "2K"
+
 const MESH_RES := TerrainBuilder.DEFAULT_MESH_RES
 # The detail DEM is fetched at 512² but its real source resolution is only ~30–90 m
 # (SRTM / Copernicus, or ~10 m USGS), so a 512² visual mesh + 512² HeightMapShape3D
@@ -93,6 +123,9 @@ const SETTLE_FRAMES := 3
 var _main: Node = null
 ## True once the full load sequence has finished at least once (see map_load_complete).
 var load_completed := false
+## True once auto-veg scatter finished (or was skipped). Independent of load_completed
+## on large maps where scatter runs in the background after walkable.
+var auto_veg_ready := false
 var _lat := 0.0
 var _lon := 0.0
 var _map_label := ""
@@ -126,6 +159,10 @@ var _drape: Texture2D = null
 var _img_done := false
 var _detail_drape: Texture2D = null
 var _hyper_drape: Texture2D = null
+## Gemini-enhanced hero patch drape + its geo bbox (null until generated/cached).
+var _ai_drape: Texture2D = null
+var _ai_bbox: Dictionary = {}
+var _ai_request_active := false
 var _built := false
 var _spawn_ground_y := 0.0
 var _built_grid := PackedFloat32Array()
@@ -239,6 +276,10 @@ var _water_highlight: MeshInstance3D = null
 var _added_pond_tags: Dictionary = {}
 ## Cached D8 watershed on the composed walkable heightfield (optional overlay).
 var _watershed_analysis = null
+## Transient Site Plan / Elev preview for pond watershed designate (world XZ poly).
+var _watershed_preview: Dictionary = {}
+## Teal ground outline while watershed preview / designate is active.
+var _watershed_highlight: MeshInstance3D = null
 var _veg_highlight: MeshInstance3D = null
 ## Crosshair-focused OSM vegetation area (index into _auto_veg_data["polygons"]).
 ## Highlighted like buildings; Interact / the O action opens the Tune look modal
@@ -259,6 +300,12 @@ var _locked_yaw := 0.0
 ## tag, user}. Merged into _water_data so they drape with the OSM water shader and
 ## survive reloads via user://maps/user_water_<lat>_<lon>.json.
 var _user_water_data: Array = []
+## Per-map fabricated-part inventory (CNC/printer output) for the crafting
+## mechanic. Persisted via user://maps/inventory_<lat>_<lon>.json.
+var _part_inventory: PartInventory = null
+## Persistent mud/clay/concrete prints that dried in place on the map.
+## Persisted via user://maps/printed_objects_<lat>_<lon>.json.
+var _printed_objects: Array = []
 ## ---------------------------------------------------------------------------
 ## Undo snapshots (water bodies + region-scoped tile edits), capped.
 const SCULPT_UNDO_MAX := 16
@@ -314,11 +361,16 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if Engine.is_editor_hint() or not _built or _main == null:
 		return
+	# Hydro Lab suspends world CPU — skip snow/growth/water uniform storm.
+	if _main.has_method("is_world_suspended_for_lab") \
+			and bool(_main.call("is_world_suspended_for_lab")):
+		return
 	if _reposition_prop != null:
 		_tick_prop_reposition(delta)
+	PerfMonitor.begin("terrain_tick")
 	_advance_growth()
-
 	_apply_water_flow(delta)
+	PerfMonitor.end("terrain_tick")
 	if not _main.has_method("get_snow_amount"):
 		return
 	var snow := clampf(float(_main.call("get_snow_amount")), 0.0, 1.0)
@@ -414,6 +466,12 @@ func _connect_load_services() -> void:
 			img.imagery_failed.connect(_on_imagery_failed)
 		if not img.imagery_progress.is_connected(_on_imagery_progress):
 			img.imagery_progress.connect(_on_imagery_progress)
+	var ai := get_node_or_null("/root/AiImageryService")
+	if ai != null:
+		if not ai.ai_imagery_ready.is_connected(_on_ai_ready):
+			ai.ai_imagery_ready.connect(_on_ai_ready)
+		if not ai.ai_imagery_failed.is_connected(_on_ai_failed):
+			ai.ai_imagery_failed.connect(_on_ai_failed)
 	var bs := get_node_or_null("/root/BuildingService")
 	if bs != null:
 		if not bs.buildings_failed.is_connected(_on_buildings_failed):
@@ -452,6 +510,12 @@ func _exit_tree() -> void:
 			img.imagery_failed.disconnect(_on_imagery_failed)
 		if img.imagery_progress.is_connected(_on_imagery_progress):
 			img.imagery_progress.disconnect(_on_imagery_progress)
+	var ai := get_node_or_null("/root/AiImageryService")
+	if ai != null:
+		if ai.ai_imagery_ready.is_connected(_on_ai_ready):
+			ai.ai_imagery_ready.disconnect(_on_ai_ready)
+		if ai.ai_imagery_failed.is_connected(_on_ai_failed):
+			ai.ai_imagery_failed.disconnect(_on_ai_failed)
 	var bs := get_node_or_null("/root/BuildingService")
 	if bs != null:
 		if bs.buildings_failed.is_connected(_on_buildings_failed):
@@ -768,6 +832,7 @@ func _settle_gpu(frames: int = SETTLE_FRAMES) -> void:
 
 func _run_load_sequence() -> void:
 	_load_sequence_active = true
+	auto_veg_ready = false
 	_detail_img_retry_zoom = -1
 	if _load_progress != null:
 		_load_progress.configure_for_extents(_half_extent, _detail_half_extent)
@@ -826,8 +891,11 @@ func _run_load_sequence() -> void:
 	_build_terrain()
 	await _settle_gpu()
 
-	# 5–9. Detail imagery, OSM overlays, vegetation, camps.
-	await _run_post_terrain_sequence()
+	# 5–7 + camps: seat the player as soon as DEM/buildings land. Vegetation
+	# still runs before map_load_complete (harness waits on that), but the
+	# player can walk while MultiMeshes scatter (compact load overlay already
+	# entered at walkable).
+	await _run_post_terrain_sequence(false)
 
 	# Final seating pass: props/buildings/camps on the composed heightfield
 	# before first-person control (stored ground_y can be stale after mean-elev
@@ -841,6 +909,16 @@ func _run_load_sequence() -> void:
 		_lat, _lon, _half_extent, _detail_half_extent, _osm_half_extent,
 		_osm_offset_east_m, _osm_offset_north_m)
 
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null:
+		soi.load_for_site(_lat, _lon)
+		soi.bind_terrain(self)
+	call_deferred("_try_seed_starshade_graph")
+	call_deferred("_notify_graph_map_ready")
+
+	# 8. Vegetation — large maps background the scatter (see phase helper).
+	await _run_vegetation_load_phase()
+
 	_load_sequence_active = false
 	_check_load_complete()
 	_maybe_opentopo_hint()
@@ -849,13 +927,6 @@ func _run_load_sequence() -> void:
 		mly.request_photo_index(_lat, _lon, _osm_half_extent, "site")
 	load_completed = true
 	map_load_complete.emit()
-
-	var soi := get_node_or_null("/root/SoiService")
-	if soi != null:
-		soi.load_for_site(_lat, _lon)
-		soi.bind_terrain(self)
-	call_deferred("_try_seed_starshade_graph")
-	call_deferred("_notify_graph_map_ready")
 
 
 func _fetch_detail_dem_phase(es: Node) -> void:
@@ -885,7 +956,9 @@ func _fetch_detail_dem_phase(es: Node) -> void:
 		_skip_detail_dem()
 
 
-func _run_post_terrain_sequence() -> void:
+## Post-terrain phases. When `include_vegetation` is false, OSM veg is deferred
+## so the player can walk as soon as DEM + buildings land (large-map progressive).
+func _run_post_terrain_sequence(include_vegetation: bool = true) -> void:
 	# Detail DEM already fetched in _run_load_sequence before terrain build.
 	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
 
@@ -893,7 +966,7 @@ func _run_post_terrain_sequence() -> void:
 	var img := get_node_or_null("/root/ImageryService")
 	if img != null:
 		_phase_begin("img:detail")
-		img.request_imagery(_lat, _lon, _detail_half_extent, DETAIL_TARGET_PX, "detail",
+		img.request_imagery(_lat, _lon, _detail_half_extent, _detail_target_px(), "detail",
 			DETAIL_MAX_ZOOM, bypass)
 		if not await _phase_await(180.0):
 			push_warning("TerrainLoader: detail imagery phase timed out — applying if ready")
@@ -919,25 +992,117 @@ func _run_post_terrain_sequence() -> void:
 		_load_progress_mark_done("osm_map")
 	await _settle_gpu()
 
-	# 8. OSM vegetation fetch + chunked scatter.
-	if _terrain_config().show_auto_vegetation:
-		var vs := get_node_or_null("/root/VegetationService")
-		if vs != null:
-			_phase_begin("osm_veg")
-			vs.request_vegetation(_lat, _lon, _osm_half_extent, bypass)
-			if await _phase_await(180.0):
-				await _auto_veg_scatter_async(false)
-			_load_progress_mark_done("osm_veg")
-		else:
-			_load_progress_mark_done("osm_veg")
-	else:
-		_load_progress_mark_done("osm_veg")
-	await _settle_gpu()
-
-	# 9. Camp generation (deterministic, optional).
+	# 9. Camp generation (deterministic, optional) — before veg so spawn is early.
 	_attach_camps()
 	await _settle_gpu()
 	_refresh_water_reflection_probes()
+
+	if include_vegetation:
+		await _run_vegetation_load_phase()
+		_apply_large_map_veg_runtime_lod()
+
+
+func _run_vegetation_load_phase() -> void:
+	if not _terrain_config().show_auto_vegetation:
+		_load_progress_mark_done("osm_veg")
+		_mark_auto_veg_ready()
+		return
+	var vs := get_node_or_null("/root/VegetationService")
+	if vs == null:
+		_load_progress_mark_done("osm_veg")
+		_mark_auto_veg_ready()
+		return
+	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
+	# World half-extent (not OSM) — Mt. Vernon is 30 km world with a smaller OSM
+	# window, but MultiMesh cost still kills FPS.
+	var large := _is_large_world_map()
+	_phase_begin("osm_veg")
+	_update_load_ui("Vegetation — fetching …" if large else "Vegetation — scattering …")
+	vs.request_vegetation(_lat, _lon, _osm_half_extent, bypass)
+	if not await _phase_await(180.0):
+		_load_progress_mark_done("osm_veg")
+		_mark_auto_veg_ready()
+		return
+	# Large maps: fetch unblocks load; scatter continues in background so the
+	# player can walk sooner. Smaller maps keep the prior await-scatter behavior.
+	if large:
+		_load_progress_mark_done("osm_veg")
+		_queue_auto_veg_generate(false)
+		print("TerrainLoader: large-map progressive — veg scatter backgrounded (world half=%.0f m)" % _half_extent)
+	else:
+		await _auto_veg_scatter_async(false)
+		_load_progress_mark_done("osm_veg")
+		await _settle_gpu()
+		_apply_large_map_veg_runtime_lod()
+		_mark_auto_veg_ready()
+
+
+func _mark_auto_veg_ready() -> void:
+	if auto_veg_ready:
+		return
+	auto_veg_ready = true
+	auto_vegetation_ready.emit()
+
+
+func _is_large_world_map() -> bool:
+	return _half_extent >= 8000.0 or _osm_half_extent >= 8000.0
+
+
+## Tighten MultiMesh cull distances on large maps without a full re-scatter
+## (helps already-built Mt. Vernon MultiMeshes immediately).
+func _apply_large_map_veg_runtime_lod() -> void:
+	if not _is_large_world_map() or _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	_apply_large_map_shadow_budget(terrain)
+	var tree_end := 480.0
+	var grass_end := 260.0
+	var style_end := float(_veg_style.get("auto_visibility_end_m", 1200.0))
+	if style_end < 1199.0:
+		tree_end = minf(tree_end, style_end)
+	var style_grass := float(_veg_style.get("grass_visibility_end_m", 520.0))
+	if style_grass < 519.0:
+		grass_end = minf(grass_end, style_grass)
+	var n := 0
+	for root_name in ["AutoVegetation", "Vegetation"]:
+		var root := terrain.get_node_or_null(root_name)
+		if root == null:
+			continue
+		for child in root.get_children():
+			if not (child is MultiMeshInstance3D):
+				continue
+			var mi := child as MultiMeshInstance3D
+			var nm := str(mi.name).to_lower()
+			var want := grass_end if nm.contains("grass") or nm.contains("lawn") \
+					or nm.contains("field") or nm.contains("wheat") else tree_end
+			if mi.visibility_range_end > want + 1.0:
+				mi.visibility_range_end = want
+				n += 1
+	if n > 0:
+		print("TerrainLoader: large-map veg LOD — tightened %d MultiMesh cull ranges" % n)
+
+
+## 30 km Ground plates in 4-split sun shadows were the Mt. Vernon 6M-prim bomb
+## (mesh audit ~640k tris; render counter ×~10 via cascades). Cap cascade count
+## for the session and ensure terrain plates do not cast.
+func _apply_large_map_shadow_budget(terrain: Node3D) -> void:
+	for plate_name in ["Ground", "DetailGround", "GeneratedTerrain/Ground"]:
+		var plate := terrain.get_node_or_null(plate_name) as MeshInstance3D
+		if plate == null and plate_name.contains("/"):
+			plate = terrain.get_node_or_null(plate_name.get_file()) as MeshInstance3D
+		if plate != null:
+			plate.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var gen := terrain.get_node_or_null("GeneratedTerrain") as Node3D
+	if gen != null:
+		var g := gen.get_node_or_null("Ground") as MeshInstance3D
+		if g != null:
+			g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Soft session override — do not persist below the player's saved preset.
+	if _main != null and int(_main.get("shadow_quality")) >= 2:
+		_main.set("shadow_quality", 1)
+		print("TerrainLoader: large-map shadow budget — quality→1, terrain cast off")
 
 
 func _apply_elevation_fallback(tag: String, reason: String = "") -> void:
@@ -1247,6 +1412,37 @@ func _water_body_tag(poly: PackedVector2Array) -> String:
 	return "osm_water_%d_%d" % [roundi(c.x), roundi(c.y)]
 
 
+## Genuinely stable per-pond identity, assigned ONCE at creation and preserved
+## across re-carves/resizes/reshapes forever — unlike `tag` (osm_water_tag),
+## which is DERIVED from the polygon (centroid + vertex count + bbox, see
+## EarthworksBuilder.basin_tag_from_poly) and therefore changes whenever the
+## player edits an existing pond's shape, silently orphaning the old record +
+## its graph tank (the very fragility `heal_pond_tags_from_map` patches around).
+static func _new_pond_id() -> String:
+	return "pond_%d_%d" % [Time.get_ticks_usec(), randi() % 1000000]
+
+
+## Existing USER pond whose centroid lies within `radius_m` of `poly`'s centroid
+## — "the same basin the player just re-carved", even though re-deriving the tag
+## from the edited polygon would produce a different string. −1 if none.
+func _find_user_pond_index_near_poly(poly: PackedVector2Array, radius_m: float) -> int:
+	var c := SolarArrayBuilder.centroid(poly)
+	var best_i := -1
+	var best_d := radius_m
+	for i in _user_water_data.size():
+		var item: Variant = _user_water_data[i]
+		if not (item is Dictionary):
+			continue
+		var pts: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
+		if pts.size() < 3:
+			continue
+		var d := SolarArrayBuilder.centroid(pts).distance_to(c)
+		if d <= best_d:
+			best_d = d
+			best_i = i
+	return best_i
+
+
 ## Mean pond depth heuristic (m) from surface area — shallow farm ponds → deeper basins.
 static func _pond_mean_depth_m(area_m2: float) -> float:
 	return clampf(0.8 + sqrt(maxf(area_m2, 1.0)) / 40.0, 0.8, 3.5)
@@ -1256,27 +1452,37 @@ static func _pond_mean_depth_m(area_m2: float) -> float:
 ## Pond query + graph wiring (selection modal is the single control surface)
 ## ---------------------------------------------------------------------------
 
-## True if a pond with this tag is currently represented on the system graph.
-func _pond_tag_on_graph(tag: String) -> bool:
-	if tag.is_empty():
+## True if a pond with this tag (or, preferably, this stable pond_id — robust to
+## tag drift from a re-carve) is currently represented on the system graph.
+func _pond_tag_on_graph(tag: String, pond_id: String = "") -> bool:
+	if tag.is_empty() and pond_id.is_empty():
 		return false
 	var graph := _find_system_graph_view()
 	if graph != null and graph.has_method("has_pond_with_tag"):
-		return bool(graph.call("has_pond_with_tag", tag))
+		return bool(graph.call("has_pond_with_tag", tag, pond_id))
 	return _added_pond_tags.has(tag)
 
 
-## Build the add_imported_pond payload for a water record, honoring the player's
-## capacity/level overrides. Water depth for capacity = override → mean-depth heuristic.
+## Build the add_imported_pond payload for a water record, honoring Auto bathymetry
+## or Manual capacity / fill modes.
 func _pond_payload_for(rec: Dictionary) -> Dictionary:
+	_recompute_pond_volume_rec(rec, false)
 	var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
 	var area := BuildingBuilder.footprint_area_m2(poly)
 	var c := SolarArrayBuilder.centroid(poly)
+	var capacity_l := maxf(float(rec.get("capacity_l", 100.0)), 1.0)
 	var depth := _pond_mean_depth_m(area)
-	var capacity_l := float(rec.get("capacity_l", area * depth * 1000.0))
-	# Keep the reported mean depth consistent with an overridden volume.
-	if rec.has("capacity_l") and area > 0.01:
+	if area > 0.01:
 		depth = maxf(capacity_l / (area * 1000.0), 0.1)
+	var rim := float(rec.get("spill_m", sample_pond_basin_elevations(poly).get("rim_m", pond_rim_height(poly))))
+	var floor_y := float(rec.get("floor_m", sample_pond_basin_elevations(poly).get("floor_m", rim - depth)))
+	var level := TerrainBuilder.variant_to_float(rec.get("level_m", NAN), NAN)
+	if is_nan(level):
+		level = rim - clampf((rim - floor_y) * 0.15, 0.05, 0.5)
+	var stock_l := float(rec.get("stock_l", 0.0))
+	var fill_frac := PondBathymetry.fill_frac(stock_l, capacity_l)
+	if str(rec.get("fill_mode", "auto")) == "manual" and rec.has("level"):
+		fill_frac = clampf(float(rec["level"]), 0.0, 1.0)
 	var min_v := poly[0]
 	var max_v := poly[0]
 	for p in poly:
@@ -1286,15 +1492,23 @@ func _pond_payload_for(rec: Dictionary) -> Dictionary:
 		max_v.y = maxf(max_v.y, p.y)
 	return {
 		"osm_water_tag": str(rec.get("tag", _water_body_tag(poly))),
+		"pond_id": str(rec.get("pond_id", "")),
 		"label": str(rec.get("label", "Pond")),
 		"area_m2": area,
 		"mean_depth_m": depth,
 		"capacity_l": capacity_l,
+		"stock_l": stock_l,
+		"capacity_mode": str(rec.get("capacity_mode", "auto")),
+		"fill_mode": str(rec.get("fill_mode", "auto")),
 		"runoff_coeff": 1.0,
 		"centroid": c,
 		"width_m": maxf(max_v.x - min_v.x, 1.0),
 		"depth_m": maxf(max_v.y - min_v.y, 1.0),
 		"points": poly,
+		"rim_m": rim,
+		"floor_m": floor_y,
+		"level_m": level,
+		"level": fill_frac,
 	}
 
 
@@ -1304,10 +1518,36 @@ func _sync_pond_graph_node(tag: String) -> void:
 	var rec := _water_rec_for_tag(tag)
 	if rec.is_empty():
 		return
-	var graph := _find_system_graph_view()
-	if graph == null or not graph.has_method("add_imported_pond"):
+	_sync_pond_graph_from_rec(rec)
+
+
+## Prefer a light mesh→twin sync when the pond is already on the graph; fall back
+## to full re-import when needed.
+func _sync_pond_graph_from_rec(rec: Dictionary) -> void:
+	var tag := str(rec.get("tag", ""))
+	if tag.is_empty():
 		return
-	graph.call("add_imported_pond", _pond_payload_for(rec))
+	var payload := _pond_payload_for(rec)
+	var pond_id := str(payload.get("pond_id", ""))
+	var graph := _find_system_graph_view()
+	if graph == null:
+		return
+	if graph.has_method("sync_pond_level_from_mesh") and _pond_tag_on_graph(tag, pond_id):
+		graph.call("sync_pond_level_from_mesh", tag,
+				float(payload.get("level_m", 0.0)),
+				float(payload.get("rim_m", 0.0)),
+				float(payload.get("floor_m", 0.0)),
+				float(payload.get("capacity_l", 0.0)),
+				{
+					"stock_l": float(payload.get("stock_l", 0.0)),
+					"capacity_mode": str(payload.get("capacity_mode", "auto")),
+					"fill_mode": str(payload.get("fill_mode", "auto")),
+					"level": float(payload.get("level", 0.0)),
+					"pond_id": pond_id,
+				})
+		return
+	if graph.has_method("add_imported_pond"):
+		graph.call("add_imported_pond", payload)
 
 
 ## Find the _water_data record (OSM or user) carrying this tag.
@@ -1342,7 +1582,13 @@ func add_pond_to_graph(idx: int) -> bool:
 	if str(rec.get("tag", "")).is_empty():
 		rec["tag"] = _water_body_tag(poly)
 	if str(rec.get("label", "")).is_empty():
-		rec["label"] = "Pond (%s)" % kind.capitalize()
+		var area_lbl := BuildingBuilder.footprint_area_m2(poly)
+		if bool(rec.get("user", false)):
+			rec["label"] = "Sculpted Pond"
+		elif kind == "pond" or kind == "water" or kind == "lake" or kind == "reservoir":
+			rec["label"] = "Map pond · %.0f m²" % area_lbl
+		else:
+			rec["label"] = "%s · %.0f m²" % [kind.capitalize(), area_lbl]
 	var tag := str(rec["tag"])
 	var graph := _find_system_graph_view()
 	if graph == null or not graph.has_method("add_imported_pond"):
@@ -1392,56 +1638,213 @@ func get_pond_info(idx: int) -> Dictionary:
 		return {"valid": false}
 	var area := BuildingBuilder.footprint_area_m2(poly)
 	var tag := str(rec.get("tag", _water_body_tag(poly)))
-	var rim := pond_rim_height(poly)
-	var floor_y := rim
-	for p in poly:
-		floor_y = minf(floor_y, ground_height_at(p.x, p.y))
+	if bool(rec.get("user", false)):
+		_recompute_pond_volume_rec(rec, false)
+	var bounds := sample_pond_basin_elevations(poly)
+	var rim := float(rec.get("spill_m", bounds.get("rim_m", pond_rim_height(poly))))
+	var floor_y := float(rec.get("floor_m", bounds.get("floor_m", rim)))
 	var depth := _pond_mean_depth_m(area)
-	var capacity_l := float(rec.get("capacity_l", area * depth * 1000.0))
+	var terrain_cap := float(rec.get("terrain_capacity_l", area * depth * 1000.0))
+	var capacity_l := float(rec.get("capacity_l", terrain_cap))
+	var stock_l := float(rec.get("stock_l", 0.0))
 	var level := TerrainBuilder.variant_to_float(rec.get("level_m", NAN), NAN)
 	if is_nan(level):
 		level = rim - clampf((rim - floor_y) * 0.1, 0.05, 0.5)
+	var cap_mode := str(rec.get("capacity_mode", "auto"))
+	var fill_mode := str(rec.get("fill_mode", "auto"))
+	var pond_id := str(rec.get("pond_id", ""))
 	return {
 		"valid": true,
 		"water_idx": idx,
 		"tag": tag,
+		"pond_id": pond_id,
 		"kind": kind,
 		"user": bool(rec.get("user", false)),
 		"label": str(rec.get("label", "Pond")),
 		"area_m2": area,
+		"points": poly,
 		"rim_m": rim,
 		"floor_m": floor_y,
 		"level_m": level,
-		"default_capacity_l": area * depth * 1000.0,
+		"default_capacity_l": terrain_cap,
+		"terrain_capacity_l": terrain_cap,
 		"capacity_l": capacity_l,
-		"has_capacity_override": rec.has("capacity_l"),
-		"on_graph": _pond_tag_on_graph(tag),
+		"stock_l": stock_l,
+		"fill_frac": PondBathymetry.fill_frac(stock_l, capacity_l),
+		"capacity_mode": cap_mode,
+		"fill_mode": fill_mode,
+		"has_capacity_override": cap_mode == "manual",
+		"on_graph": _pond_tag_on_graph(tag, pond_id),
 	}
 
 
-## Override the visible water surface level (world Y). Live-updates the water mesh.
-func set_pond_fill_level(idx: int, level_m: float) -> bool:
+## Override the visible water surface level (world Y). Live-updates the water mesh
+## and mirrors absolute + fractional level onto the graph pond tank twin.
+## `from_graph` skips the mesh→graph mirror (avoids feedback loops).
+func set_pond_fill_level(idx: int, level_m: float, from_graph: bool = false) -> bool:
 	var rec := _user_rec_at_water_idx(idx)
 	if rec.is_empty():
 		return false
 	rec["level_m"] = level_m
-	_save_user_water()
+	if from_graph:
+		# Graph Manual fill pushed an absolute surface — keep fill_mode manual.
+		if str(rec.get("fill_mode", "auto")) != "manual":
+			rec["fill_mode"] = "auto"
+	else:
+		# Modal / Rain / Drain drive the surface → Auto fill from level.
+		rec["fill_mode"] = "auto"
+	_recompute_pond_volume_rec(rec, true)
 	_refresh_water_data()
+	# Graph twin sync can fire many times/sec — never rebuild all water meshes
+	# or rewrite user_water JSON on that path (was Mt. Vernon's ~400 ms/frame).
+	if from_graph:
+		return true
+	_save_user_water()
 	_attach_water()
+	var tag := str(rec.get("tag", ""))
+	if not tag.is_empty() and _pond_tag_on_graph(tag):
+		_sync_pond_graph_from_rec(rec)
 	return true
 
 
-## Override the pond's storage volume (litres). Updates the graph tank if present.
+## Set fill level by pond tag (graph → mesh twin). Returns false if no user pond.
+func set_pond_fill_level_by_tag(tag: String, level_m: float) -> bool:
+	if tag.is_empty():
+		return false
+	for i in _water_data.size():
+		var item: Variant = _water_data[i]
+		if not (item is Dictionary):
+			continue
+		var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
+		var t := str((item as Dictionary).get("tag", _water_body_tag(poly)))
+		if t == tag:
+			return set_pond_fill_level(i, level_m, true)
+	return false
+
+
+## Override the pond's storage volume (litres). Marks capacity Manual and freezes
+## Auto overwrites until Reset to Auto. Updates the graph tank if present.
 func set_pond_capacity(idx: int, capacity_l: float) -> bool:
 	var rec := _user_rec_at_water_idx(idx)
 	if rec.is_empty():
 		return false
 	rec["capacity_l"] = maxf(capacity_l, 1.0)
+	rec["capacity_mode"] = "manual"
+	_recompute_pond_volume_rec(rec, false)
 	_save_user_water()
 	_refresh_water_data()
 	if _pond_tag_on_graph(str(rec.get("tag", ""))):
-		_sync_pond_graph_node(str(rec["tag"]))
+		_sync_pond_graph_from_rec(rec)
 	return true
+
+
+## Capacity mode: "auto" (terrain bathymetry) or "manual" (player litres).
+func set_pond_capacity_mode(idx: int, mode: String) -> bool:
+	var rec := _user_rec_at_water_idx(idx)
+	if rec.is_empty():
+		return false
+	var m := mode.strip_edges().to_lower()
+	if m != "auto" and m != "manual":
+		return false
+	rec["capacity_mode"] = m
+	_recompute_pond_volume_rec(rec, true)
+	_save_user_water()
+	_refresh_water_data()
+	if _pond_tag_on_graph(str(rec.get("tag", ""))):
+		_sync_pond_graph_from_rec(rec)
+	return true
+
+
+## Fill mode: "auto" (from water surface) or "manual" (locked stock/frac).
+func set_pond_fill_mode(idx: int, mode: String) -> bool:
+	var rec := _user_rec_at_water_idx(idx)
+	if rec.is_empty():
+		return false
+	var m := mode.strip_edges().to_lower()
+	if m != "auto" and m != "manual":
+		return false
+	rec["fill_mode"] = m
+	if m == "auto":
+		_recompute_pond_volume_rec(rec, true)
+	_save_user_water()
+	_refresh_water_data()
+	if _pond_tag_on_graph(str(rec.get("tag", ""))):
+		_sync_pond_graph_from_rec(rec)
+	return true
+
+
+## Manual fill: set stock litres (and push mesh level via inverse bathymetry).
+func set_pond_stock_l(idx: int, stock_l: float, from_graph: bool = false) -> bool:
+	var rec := _user_rec_at_water_idx(idx)
+	if rec.is_empty():
+		return false
+	# Manual scrub from UI forces Manual fill; graph Auto twin keeps Auto.
+	if not from_graph:
+		rec["fill_mode"] = "manual"
+	rec["stock_l"] = maxf(stock_l, 0.0)
+	var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
+	var bounds := sample_pond_basin_elevations(poly)
+	var floor_y := float(rec.get("floor_m", bounds.get("floor_m", 0.0)))
+	var spill := float(rec.get("spill_m", bounds.get("rim_m", floor_y + 1.0)))
+	var cell := PondBathymetry.suggested_cell_m(BuildingBuilder.footprint_area_m2(poly))
+	rec["level_m"] = PondBathymetry.level_for_volume_l(
+		poly, Callable(self, "ground_height_at"), float(rec["stock_l"]),
+		floor_y, spill, cell)
+	var cap := maxf(float(rec.get("capacity_l", 1.0)), 1.0)
+	rec["level"] = PondBathymetry.fill_frac(float(rec["stock_l"]), cap)
+	_refresh_water_data()
+	# Ambient graph twin: update records only. Caller rebuilds mesh when the
+	# player needs to see it (Lab drag, teardown, Rain/Drain UI).
+	if from_graph:
+		return true
+	_save_user_water()
+	_attach_water()
+	if _pond_tag_on_graph(str(rec.get("tag", ""))):
+		_sync_pond_graph_from_rec(rec)
+	return true
+
+
+## Rebuild the Water node from current `_water_data` (after twin sync / Lab exit).
+func refresh_pond_water_mesh() -> void:
+	_attach_water()
+
+
+## Graph → mesh: bathymetric stock → surface (Auto fill twin).
+func set_pond_stock_l_by_tag(tag: String, stock_l: float) -> bool:
+	if tag.is_empty():
+		return false
+	var idx := find_pond_idx_by_tag(tag)
+	if idx < 0:
+		return false
+	return set_pond_stock_l(idx, stock_l, true)
+
+
+## Recompute Auto volume fields for a pond by tag or water-data index.
+func recompute_pond_volume(tag_or_idx: Variant) -> Dictionary:
+	var rec := {}
+	if tag_or_idx is int:
+		rec = _user_rec_at_water_idx(int(tag_or_idx))
+	else:
+		var tag := str(tag_or_idx)
+		for uw in _user_water_data:
+			if uw is Dictionary and str((uw as Dictionary).get("tag", "")) == tag:
+				rec = uw
+				break
+	if rec.is_empty():
+		return {"ok": false, "reason": "not_found"}
+	_recompute_pond_volume_rec(rec, true)
+	_save_user_water()
+	_refresh_water_data()
+	if _pond_tag_on_graph(str(rec.get("tag", ""))):
+		_sync_pond_graph_from_rec(rec)
+	return {
+		"ok": true,
+		"capacity_l": float(rec.get("capacity_l", 0.0)),
+		"stock_l": float(rec.get("stock_l", 0.0)),
+		"terrain_capacity_l": float(rec.get("terrain_capacity_l", 0.0)),
+		"capacity_mode": str(rec.get("capacity_mode", "auto")),
+		"fill_mode": str(rec.get("fill_mode", "auto")),
+	}
 
 
 ## Delete a user pond entirely: water body + any graph node. OSM ponds are only
@@ -1512,32 +1915,51 @@ func designate_sculpted_pond(poly: PackedVector2Array, label: String = "Sculpted
 		_notify_options_status("Pond too small (min ~%.0f m²) — widen the area" % WaterBuilder.MIN_AREA_M2, "warn")
 		return false
 	var tag := basin_tag if not basin_tag.is_empty() else EarthworksBuilder.basin_tag_from_poly(poly)
-	var rec := {"points": poly, "kind": "pond", "tag": tag, "user": true, "label": label}
+	var rec := {
+		"points": poly, "kind": "pond", "tag": tag, "user": true, "label": label,
+		"capacity_mode": "auto", "fill_mode": "auto",
+	}
 	if not is_nan(level_m):
 		rec["level_m"] = level_m
-	# Replace any existing user pond with the same tag (idempotent re-designate),
-	# carrying forward player value overrides + graph state from the old record.
-	var replaced := false
+	# Find the existing record for this SAME basin: exact tag match first (fast
+	# path — untouched pond, e.g. a Rain/Drain level nudge), else the nearest
+	# existing user pond within a tight radius (the tag drifted because the
+	# player just resized/reshaped it — still the same pond). Carries forward
+	# player value overrides + the stable pond_id from the old record.
+	var replace_i := -1
 	for i in _user_water_data.size():
 		var item: Variant = _user_water_data[i]
 		if item is Dictionary and str((item as Dictionary).get("tag", "")) == tag:
-			var prev: Dictionary = item
-			if prev.has("capacity_l"):
-				rec["capacity_l"] = float(prev["capacity_l"])
-			if prev.has("label"):
-				rec["label"] = str(prev["label"])
-			_user_water_data[i] = rec
-			replaced = true
+			replace_i = i
 			break
+	if replace_i < 0:
+		replace_i = _find_user_pond_index_near_poly(poly, 15.0)
+	var replaced := false
+	if replace_i >= 0:
+		var prev: Dictionary = _user_water_data[replace_i]
+		if str(prev.get("capacity_mode", "auto")) == "manual" and prev.has("capacity_l"):
+			rec["capacity_l"] = float(prev["capacity_l"])
+			rec["capacity_mode"] = "manual"
+		if prev.has("label"):
+			rec["label"] = str(prev["label"])
+		if prev.has("fill_mode"):
+			rec["fill_mode"] = str(prev["fill_mode"])
+		rec["pond_id"] = str(prev.get("pond_id", _new_pond_id()))
+		_user_water_data[replace_i] = rec
+		replaced = true
 	if not replaced:
+		rec["pond_id"] = _new_pond_id()
 		_user_water_data.append(rec)
+	_recompute_pond_volume_rec(rec)
 	_save_user_water()
 	_refresh_water_data()
 	_attach_water()
-	# If this tag was already on the graph (re-carve of an added pond), keep it in sync.
-	if _pond_tag_on_graph(tag):
-		_sync_pond_graph_node(tag)
-	_notify_options_status("Pond filled with water (%.0f m²)" % area, "ok")
+	# If this pond was already on the graph (re-carve of an added pond, even
+	# under a now-stale tag — pond_id is what actually identifies it), keep it
+	# in sync rather than importing a duplicate twin.
+	if _pond_tag_on_graph(tag, str(rec.get("pond_id", ""))):
+		_sync_pond_graph_from_rec(rec)
+	_notify_options_status("Pond water ready (%.0f m²) — hold Rain to fill" % area, "ok")
 	return true
 
 
@@ -1556,6 +1978,249 @@ func _user_water_path() -> String:
 		TerrainEditGrid._coord_token(_lat), TerrainEditGrid._coord_token(_lon)]
 
 
+func _load_part_inventory() -> void:
+	_part_inventory = PartInventory.create_empty()
+	_part_inventory.load_for_map(_lat, _lon)
+
+
+## The per-map fabricated-part inventory (auto-created if the load sequence
+## hasn't run yet). Consumed by the inventory/crafting UI + machine completion.
+func get_part_inventory() -> PartInventory:
+	if _part_inventory == null:
+		_part_inventory = PartInventory.create_empty()
+	return _part_inventory
+
+
+## Credit a fabricated part to the inventory and persist. Called by
+## SystemGraphView when a machine job completes.
+func credit_part(part_id: String, count: int, meta: Dictionary) -> void:
+	get_part_inventory().add_part(part_id, count, meta)
+	save_part_inventory()
+
+
+func save_part_inventory() -> void:
+	if _part_inventory != null:
+		_part_inventory.save(_lat, _lon)
+
+
+var _chore_ledger: ChoreLedger = null
+
+
+func _load_chore_ledger() -> void:
+	_chore_ledger = ChoreLedger.create_default()
+	_chore_ledger.load_for_map(_lat, _lon)
+
+
+## Per-map chore-hours ledger (hybrid auto-debit / confirm gates for recipes).
+func get_chore_ledger() -> ChoreLedger:
+	if _chore_ledger == null:
+		_chore_ledger = ChoreLedger.create_default()
+	return _chore_ledger
+
+
+func save_chore_ledger() -> void:
+	if _chore_ledger != null:
+		_chore_ledger.save(_lat, _lon)
+
+
+# ---------------------------------------------------------------------------
+# Persistent printed objects (mud/clay/concrete prints). Unlike fabricated
+# parts (which go to the crafting inventory), a completed mud print dries in
+# place and stays on the map. Records store the source STL path + world
+# transform + dry color, keyed by job_id so re-completion/reload never dupes.
+# ---------------------------------------------------------------------------
+func _printed_objects_path() -> String:
+	return "user://maps/printed_objects_%s_%s.json" % [
+		TerrainEditGrid._coord_token(_lat), TerrainEditGrid._coord_token(_lon)]
+
+
+func _load_printed_objects() -> void:
+	_printed_objects = []
+	var path := _printed_objects_path()
+	if FileAccess.file_exists(path):
+		var f := FileAccess.open(path, FileAccess.READ)
+		if f != null:
+			var parsed: Variant = JSON.parse_string(f.get_as_text())
+			if parsed is Array:
+				_printed_objects = parsed as Array
+	for rec in _printed_objects:
+		if rec is Dictionary:
+			_spawn_printed_object(rec as Dictionary)
+
+
+func _save_printed_objects() -> void:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
+	var f := FileAccess.open(_printed_objects_path(), FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(_printed_objects))
+
+
+## Register + spawn a completed mud print. `rec` from CncMachineRuntime carries
+## job_id, mesh_path (user:// STL), xform (Transform3D), dry_color ([r,g,b]),
+## and optionally a live `mesh` (ArrayMesh) so the handoff matches the reveal.
+## Idempotent per job_id so live completion + save reload never double-place it.
+func register_printed_object(rec: Dictionary) -> void:
+	var job_id := str(rec.get("job_id", ""))
+	for existing in _printed_objects:
+		if existing is Dictionary and str((existing as Dictionary).get("job_id", "")) == job_id:
+			return
+	var xf: Transform3D = rec.get("xform", Transform3D.IDENTITY)
+	var b := xf.basis
+	var stored := {
+		"job_id": job_id,
+		"mesh_path": str(rec.get("mesh_path", "")),
+		"dry_color": rec.get("dry_color", [0.68, 0.56, 0.42]),
+		"source": str(rec.get("source", "")),
+		"basis": [b.x.x, b.x.y, b.x.z, b.y.x, b.y.y, b.y.z, b.z.x, b.z.y, b.z.z],
+		"origin": [xf.origin.x, xf.origin.y, xf.origin.z],
+	}
+	_printed_objects.append(stored)
+	_save_printed_objects()
+	var live_mesh: ArrayMesh = null
+	if rec.get("mesh") is ArrayMesh:
+		live_mesh = rec.get("mesh") as ArrayMesh
+	_spawn_printed_object(stored, live_mesh)
+
+
+func _printed_objects_root() -> Node3D:
+	if _main == null:
+		return null
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return null
+	var root := terrain.get_node_or_null("PrintedObjects") as Node3D
+	if root == null:
+		root = Node3D.new()
+		root.name = "PrintedObjects"
+		terrain.add_child(root)
+	return root
+
+
+## Spawn a persisted print as a PlacedProp so it's crosshair-selectable and can
+## be click-dragged to a new spot like any other placed model (GrabController).
+## The stored world transform (rotation + print scale) rides ModelRoot; the
+## translation rides the prop, so grab-move (which nudges only global_position)
+## and the pick AABB / collision all behave.
+func _spawn_printed_object(rec: Dictionary, live_mesh: ArrayMesh = null) -> void:
+	var root := _printed_objects_root()
+	if root == null:
+		return
+	var mesh: ArrayMesh = live_mesh
+	if mesh == null:
+		mesh = StlLoader.build_mesh(str(rec.get("mesh_path", "")))
+	if mesh == null:
+		return
+	var job_id := str(rec.get("job_id", "x"))
+	var mi := MeshInstance3D.new()
+	mi.name = "Mesh"
+	mi.mesh = mesh
+	# No physical wall — inspect layers by walking through; select via pick area.
+	mi.set_meta("skip_prop_collision", true)
+	var dc: Array = rec.get("dry_color", [0.68, 0.56, 0.42]) as Array
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(float(dc[0]), float(dc[1]), float(dc[2]))
+	mat.roughness = 0.92
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	var ba: Array = rec.get("basis", []) as Array
+	var oa: Array = rec.get("origin", [0, 0, 0]) as Array
+	var bas := Basis.IDENTITY
+	if ba.size() >= 9:
+		bas = Basis(
+			Vector3(float(ba[0]), float(ba[1]), float(ba[2])),
+			Vector3(float(ba[3]), float(ba[4]), float(ba[5])),
+			Vector3(float(ba[6]), float(ba[7]), float(ba[8])))
+	var origin := Vector3.ZERO
+	if oa.size() >= 3:
+		origin = Vector3(float(oa[0]), float(oa[1]), float(oa[2]))
+	var model_root := Node3D.new()
+	model_root.name = "ModelRoot"
+	model_root.transform = Transform3D(bas, Vector3.ZERO)
+	model_root.add_child(mi)
+	var prop := PlacedProp.new()
+	prop.name = "Print_%s" % job_id
+	prop.prop_id = "print_%s" % job_id
+	# Distinct from the mud_printer machine so selection / grab treat this as an
+	# independent placed model once the print has dried and handed off.
+	prop.model_id = "mud_print"
+	prop.set_meta("printed_job_id", job_id)
+	prop.set_meta("independent_print", true)
+	prop.add_child(model_root)
+	root.add_child(prop)   # PlacedProp._ready runs here (sets a default prompt)
+	prop.prompt = "Inspect · Move (drag)"
+	prop.max_distance = 40.0
+	prop.global_position = origin
+	# Walk-through inspect: no solid wall, but a pick Area3D so the crosshair
+	# ray hits the print even when nested inside the printer's collision hull.
+	prop.setup_collision()
+	_ensure_printed_pick_area(prop)
+	# Finished prints accumulate as full-density STL meshes; give them the same
+	# size-scaled distance culling + shadow policy as placed props so a yard full
+	# of prints doesn't each render + shadow-cast at full cost from any distance.
+	PropRenderTuning.apply_to_prop(prop, prop.get_local_pick_radius())
+
+
+## Area3D proxy so InteractionFocus's physics ray (collide_with_areas) can hit a
+## finished print that opted out of solid collision. Layer 2 keeps it off the
+## player's walk collision (layer 1) while still ray-selectable.
+func _ensure_printed_pick_area(prop: PlacedProp) -> void:
+	if prop == null:
+		return
+	if prop.get_node_or_null("PrintPickArea") != null:
+		return
+	var aabb := prop.get_world_pick_aabb()
+	if aabb.size.length_squared() < 0.0001:
+		return
+	# Convert world AABB into prop-local box.
+	var inv := prop.global_transform.affine_inverse()
+	var local_aabb := inv * aabb
+	var area := Area3D.new()
+	area.name = "PrintPickArea"
+	area.collision_layer = 2
+	area.collision_mask = 0
+	area.monitorable = true
+	area.monitoring = false
+	var cs := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(
+		maxf(local_aabb.size.x, 0.2),
+		maxf(local_aabb.size.y, 0.2),
+		maxf(local_aabb.size.z, 0.2))
+	cs.shape = box
+	cs.position = local_aabb.get_center()
+	area.add_child(cs)
+	prop.add_child(area)
+
+
+## Rewrite a printed object's stored world transform (after a grab-move commit)
+## and persist. The live node has already moved; this only updates the sidecar so
+## the new spot survives a reload.
+func update_printed_object_transform(job_id: String, xf: Transform3D) -> void:
+	if job_id.is_empty():
+		return
+	for i in _printed_objects.size():
+		var rec: Variant = _printed_objects[i]
+		if rec is Dictionary and str((rec as Dictionary).get("job_id", "")) == job_id:
+			var b := xf.basis
+			(rec as Dictionary)["basis"] = [b.x.x, b.x.y, b.x.z, b.y.x, b.y.y, b.y.z, b.z.x, b.z.y, b.z.z]
+			(rec as Dictionary)["origin"] = [xf.origin.x, xf.origin.y, xf.origin.z]
+			_printed_objects[i] = rec
+			_save_printed_objects()
+			return
+
+
+## Free + respawn every printed object from the sidecar — used to snap a
+## cancelled/invalid grab-move back to its saved transform.
+func reload_printed_objects() -> void:
+	var root := _printed_objects_root()
+	if root != null:
+		for c in root.get_children():
+			c.queue_free()
+	for rec in _printed_objects:
+		if rec is Dictionary:
+			_spawn_printed_object(rec as Dictionary)
+
+
 func _load_user_water() -> void:
 	_user_water_data = []
 	var path := _user_water_path()
@@ -1567,6 +2232,7 @@ func _load_user_water() -> void:
 	var parsed: Variant = JSON.parse_string(f.get_as_text())
 	if not (parsed is Dictionary):
 		return
+	var migrated := false
 	for entry in ((parsed as Dictionary).get("ponds", []) as Array):
 		if not (entry is Dictionary):
 			continue
@@ -1584,9 +2250,26 @@ func _load_user_water() -> void:
 		var cap := TerrainBuilder.variant_to_float((entry as Dictionary).get("capacity_l", NAN), NAN)
 		if not is_nan(cap):
 			rec["capacity_l"] = cap
+		var stock := TerrainBuilder.variant_to_float((entry as Dictionary).get("stock_l", NAN), NAN)
+		if not is_nan(stock):
+			rec["stock_l"] = stock
+		if (entry as Dictionary).has("capacity_mode"):
+			rec["capacity_mode"] = str((entry as Dictionary)["capacity_mode"])
+		if (entry as Dictionary).has("fill_mode"):
+			rec["fill_mode"] = str((entry as Dictionary)["fill_mode"])
 		if (entry as Dictionary).has("label"):
 			rec["label"] = str((entry as Dictionary)["label"])
+		# Auto-migrate: ponds saved before the stable-id feature get one assigned
+		# now (persisted below), so identity stops depending on the shape-derived
+		# tag from this point on.
+		var pid := str((entry as Dictionary).get("pond_id", ""))
+		if pid.is_empty():
+			pid = _new_pond_id()
+			migrated = true
+		rec["pond_id"] = pid
 		_user_water_data.append(rec)
+	if migrated:
+		_save_user_water()
 
 
 func _save_user_water() -> void:
@@ -1599,18 +2282,25 @@ func _save_user_water() -> void:
 		var arr: Array = []
 		for p in pts:
 			arr.append([p.x, p.y])
-		var out := {"tag": str((rec as Dictionary).get("tag", "")), "points": arr}
+		var out := {"tag": str((rec as Dictionary).get("tag", "")), "points": arr,
+			"pond_id": str((rec as Dictionary).get("pond_id", ""))}
 		if (rec as Dictionary).has("level_m"):
 			out["level_m"] = float((rec as Dictionary)["level_m"])
 		if (rec as Dictionary).has("capacity_l"):
 			out["capacity_l"] = float((rec as Dictionary)["capacity_l"])
+		if (rec as Dictionary).has("stock_l"):
+			out["stock_l"] = float((rec as Dictionary)["stock_l"])
+		if (rec as Dictionary).has("capacity_mode"):
+			out["capacity_mode"] = str((rec as Dictionary)["capacity_mode"])
+		if (rec as Dictionary).has("fill_mode"):
+			out["fill_mode"] = str((rec as Dictionary)["fill_mode"])
 		if (rec as Dictionary).has("label"):
 			out["label"] = str((rec as Dictionary)["label"])
 		ponds.append(out)
 	var f := FileAccess.open(_user_water_path(), FileAccess.WRITE)
 	if f == null:
 		return
-	f.store_string(JSON.stringify({"version": 1, "ponds": ponds}))
+	f.store_string(JSON.stringify({"version": 2, "ponds": ponds}))
 
 
 func pick_water_at_world(x: float, z: float) -> Dictionary:
@@ -1727,6 +2417,407 @@ func watershed_upstream_area_m2(x: float, z: float) -> float:
 		return 0.0
 	var cell := Watershed.world_to_cell(a, x, z)
 	return Watershed.upstream_area_m2(a, cell.x, cell.y)
+
+
+## Local-window D8 for the hillside that drains into a pond.
+## `tag_or_idx`: pond tag string, or water_data index (int).
+## Returns `{valid, area_m2, cell_count, pour_xz, poly_world, poly_site, runoff_default,
+## pond_tag, centroid, reason}`.
+func analyze_pond_watershed(tag_or_idx: Variant, half_extent_m: float = 750.0,
+		res: int = 128) -> Dictionary:
+	var empty := {
+		"valid": false, "reason": "not_found",
+		"area_m2": 0.0, "cell_count": 0,
+		"pour_xz": Vector2.ZERO, "poly_world": PackedVector2Array(),
+		"poly_site": [], "runoff_default": 0.35,
+		"pond_tag": "", "centroid": Vector2.ZERO,
+	}
+	var poly := PackedVector2Array()
+	var tag := ""
+	if tag_or_idx is int:
+		var info := get_pond_info(int(tag_or_idx))
+		if not bool(info.get("valid", false)):
+			return empty
+		tag = str(info.get("tag", ""))
+		var item: Variant = _water_data[int(tag_or_idx)] if int(tag_or_idx) < _water_data.size() \
+				else {}
+		if item is Dictionary:
+			poly = (item as Dictionary).get("points", PackedVector2Array()) as PackedVector2Array
+	elif tag_or_idx is String:
+		tag = str(tag_or_idx)
+		for w in _water_data:
+			if not (w is Dictionary):
+				continue
+			var rec: Dictionary = w
+			var t := str(rec.get("tag", ""))
+			if t == tag:
+				poly = rec.get("points", PackedVector2Array()) as PackedVector2Array
+				break
+	if poly.size() < 3 or tag.is_empty():
+		empty["reason"] = "no_pond"
+		return empty
+	var centroid := Vector2.ZERO
+	for p in poly:
+		centroid += p
+	centroid /= float(maxi(poly.size(), 1))
+	var half := clampf(half_extent_m, 80.0, 2000.0)
+	# Prefer detail footprint when the pond sits inside the hi-res patch.
+	if absf(centroid.x) <= _detail_half_extent and absf(centroid.y) <= _detail_half_extent:
+		half = minf(half, maxf(_detail_half_extent * 0.9, 120.0))
+	var height_at := func(x: float, z: float) -> float:
+		return _ground_height_at(x, z)
+	var analysis: Watershed.Analysis = Watershed.analyze_local(
+			height_at, centroid, half, clampi(res, 48, 192))
+	if analysis.res <= 0:
+		empty["reason"] = "no_dem"
+		return empty
+	# Every DEM cell inside the pond is a pour sink (union of their upstream).
+	var seeds := PackedInt32Array()
+	var pour_c := -1
+	var pour_r := -1
+	var best_h := INF
+	for r in analysis.res:
+		for c in analysis.res:
+			var w := Watershed.cell_to_world(analysis, c, r)
+			if not Geometry2D.is_point_in_polygon(w, poly):
+				continue
+			seeds.append(r * analysis.res + c)
+			var h := _ground_height_at(w.x, w.y)
+			if h < best_h:
+				best_h = h
+				pour_c = c
+				pour_r = r
+	if seeds.is_empty():
+		# Pond poly may be smaller than a cell — use centroid cell.
+		var cell := Watershed.world_to_cell(analysis, centroid.x, centroid.y)
+		pour_c = cell.x
+		pour_r = cell.y
+		seeds.append(pour_r * analysis.res + pour_c)
+	var cells := Watershed.upstream_cells_multi(analysis, seeds)
+	if cells.is_empty():
+		empty["reason"] = "no_upstream"
+		empty["pond_tag"] = tag
+		empty["centroid"] = centroid
+		return empty
+	var poly_world := Watershed.upstream_polygon_world(analysis, cells)
+	if poly_world.size() < 3:
+		# Fallback: axis-aligned bbox of upstream cells.
+		var mn := Vector2(INF, INF)
+		var mx := Vector2(-INF, -INF)
+		for idx_v in cells:
+			var idx: int = int(idx_v)
+			var cc: int = idx % analysis.res
+			var rr: int = idx / analysis.res
+			var w2 := Watershed.cell_to_world(analysis, cc, rr)
+			mn.x = minf(mn.x, w2.x)
+			mn.y = minf(mn.y, w2.y)
+			mx.x = maxf(mx.x, w2.x)
+			mx.y = maxf(mx.y, w2.y)
+		poly_world = PackedVector2Array([
+			Vector2(mn.x, mn.y), Vector2(mx.x, mn.y),
+			Vector2(mx.x, mx.y), Vector2(mn.x, mx.y),
+		])
+	var area := float(cells.size()) * analysis.cell_area_m2
+	var pour_xz := Watershed.cell_to_world(analysis, pour_c, pour_r)
+	var poly_site: Array = []
+	for p in poly_world:
+		poly_site.append([p.x - centroid.x, p.y - centroid.y])
+	return {
+		"valid": true,
+		"reason": "",
+		"area_m2": area,
+		"cell_count": cells.size(),
+		"pour_xz": pour_xz,
+		"poly_world": poly_world,
+		"poly_site": poly_site,
+		"runoff_default": 0.35,
+		"pond_tag": tag,
+		"centroid": centroid,
+		"half_extent_m": half,
+		"analysis_res": analysis.res,
+	}
+
+
+func set_watershed_preview(payload: Dictionary) -> void:
+	_watershed_preview = payload.duplicate(true) if not payload.is_empty() else {}
+	_update_watershed_highlight()
+	_queue_graph_watershed_redraw()
+
+
+func clear_watershed_preview() -> void:
+	_watershed_preview.clear()
+	_clear_watershed_highlight()
+	_queue_graph_watershed_redraw()
+
+
+func get_watershed_preview() -> Dictionary:
+	return _watershed_preview
+
+
+func _update_watershed_highlight() -> void:
+	if not bool(_watershed_preview.get("valid", false)):
+		_clear_watershed_highlight()
+		return
+	var poly: PackedVector2Array = _watershed_preview.get("poly_world", PackedVector2Array()) \
+			as PackedVector2Array
+	if poly.size() < 3 or _main == null:
+		_clear_watershed_highlight()
+		return
+	var terrain := _main.get_node_or_null("Terrain")
+	if terrain == null:
+		return
+	if _watershed_highlight == null:
+		_watershed_highlight = MeshInstance3D.new()
+		_watershed_highlight.name = "WatershedPreviewHighlight"
+		terrain.add_child(_watershed_highlight)
+	var mat := _watershed_highlight.material_override as StandardMaterial3D
+	if mat == null:
+		mat = StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_watershed_highlight.material_override = mat
+	mat.albedo_color = Color(0.12, 0.82, 0.72, 0.42)
+	var footing := _highlight_footing_grid(false)
+	_watershed_highlight.mesh = TerrainBuilder.build_polygon_highlight(
+		poly, footing["grid"], footing["res"], footing["extent"], _built_center_elev, 0.45)
+	_watershed_highlight.visible = true
+
+
+func _clear_watershed_highlight() -> void:
+	if _watershed_highlight != null:
+		_watershed_highlight.visible = false
+
+
+func _queue_graph_watershed_redraw() -> void:
+	var graph := _find_system_graph_view()
+	if graph == null:
+		return
+	if graph.has_method("queue_canvas_redraw"):
+		graph.call("queue_canvas_redraw")
+		return
+	var c: Node = graph.get("_graph_canvas") as Node
+	if c != null and c.has_method("queue_redraw"):
+		c.call("queue_redraw")
+
+
+## Analyze + stash preview overlay for a pond (does not touch the graph).
+func preview_pond_watershed(idx: int) -> Dictionary:
+	var result := analyze_pond_watershed(idx)
+	if bool(result.get("valid", false)):
+		set_watershed_preview(result)
+	else:
+		clear_watershed_preview()
+		_notify_options_status("Watershed: %s" % str(result.get("reason", "failed")), "warn")
+	return result
+
+
+## Ensure pond is on the graph, then create/update hillside catchment → tank.
+func designate_pond_watershed(idx: int) -> bool:
+	var info := get_pond_info(idx)
+	if not bool(info.get("valid", false)):
+		return false
+	if not bool(info.get("on_graph", false)):
+		if not add_pond_to_graph(idx):
+			return false
+	var result := analyze_pond_watershed(idx)
+	if not bool(result.get("valid", false)):
+		_notify_options_status("Watershed: %s" % str(result.get("reason", "failed")), "warn")
+		return false
+	result["label"] = "%s Hillslope" % str(info.get("label", "Pond"))
+	var graph := _find_system_graph_view()
+	if graph == null or not graph.has_method("add_imported_watershed_catchment"):
+		_notify_options_status("System graph unavailable for watershed", "warn")
+		return false
+	var ok: bool = bool(graph.call("add_imported_watershed_catchment", result))
+	if ok:
+		set_watershed_preview(result)
+		_notify_options_status("Watershed catchment: %.1f ha" % (
+				float(result.get("area_m2", 0.0)) / 10000.0), "ok")
+	return ok
+
+
+func remove_pond_watershed(idx: int) -> bool:
+	var info := get_pond_info(idx)
+	if not bool(info.get("valid", false)):
+		return false
+	var tag := str(info.get("tag", ""))
+	var graph := _find_system_graph_view()
+	if graph == null or not graph.has_method("remove_imported_watershed_catchment"):
+		return false
+	var ok: bool = bool(graph.call("remove_imported_watershed_catchment", tag))
+	clear_watershed_preview()
+	if ok:
+		_notify_options_status("Removed watershed catchment", "ok")
+	return ok
+
+
+func pond_has_watershed_catchment(idx: int) -> bool:
+	var info := get_pond_info(idx)
+	if not bool(info.get("valid", false)):
+		return false
+	var graph := _find_system_graph_view()
+	if graph == null or not graph.has_method("has_watershed_catchment_for_pond"):
+		return false
+	return bool(graph.call("has_watershed_catchment_for_pond", str(info.get("tag", ""))))
+
+
+## Resolve `_water_data` index for a pond tag (−1 if missing).
+func find_pond_idx_by_tag(tag: String) -> int:
+	if tag.is_empty():
+		return -1
+	for i in _water_data.size():
+		var item: Variant = _water_data[i]
+		if not (item is Dictionary):
+			continue
+		var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
+		var t := str((item as Dictionary).get("tag", _water_body_tag(poly)))
+		if t == tag:
+			return i
+	return -1
+
+
+## Exact match on the stable pond_id — robust to the tag drifting from a
+## re-carve/resize. Prefer this over find_pond_idx_by_tag wherever a caller
+## already knows a pond_id.
+func find_pond_idx_by_id(pond_id: String) -> int:
+	if pond_id.is_empty():
+		return -1
+	for i in _water_data.size():
+		var item: Variant = _water_data[i]
+		if not (item is Dictionary):
+			continue
+		if str((item as Dictionary).get("pond_id", "")) == pond_id:
+			return i
+	return -1
+
+
+## Tags of still-water bodies currently on the map (OSM + sculpted).
+func live_pond_tags() -> PackedStringArray:
+	var out := PackedStringArray()
+	for i in _water_data.size():
+		var item: Variant = _water_data[i]
+		if not (item is Dictionary):
+			continue
+		var rec: Dictionary = item
+		var kind := str(rec.get("kind", "water"))
+		if kind in WaterBuilder.FLOWING_KINDS:
+			continue
+		var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
+		if poly.size() < 3:
+			continue
+		var t := str(rec.get("tag", _water_body_tag(poly)))
+		if not t.is_empty():
+			out.append(t)
+	return out
+
+
+## Nearest still-water body to a world XZ point (within max_m). −1 if none.
+func find_pond_idx_near_world_xz(world_xz: Vector2, max_m: float = 120.0) -> int:
+	var best_i := -1
+	var best_d := max_m
+	for i in _water_data.size():
+		var item: Variant = _water_data[i]
+		if not (item is Dictionary):
+			continue
+		var rec: Dictionary = item
+		var kind := str(rec.get("kind", "water"))
+		if kind in WaterBuilder.FLOWING_KINDS:
+			continue
+		var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
+		if poly.size() < 3:
+			continue
+		var c := SolarArrayBuilder.centroid(poly)
+		var d := c.distance_to(world_xz)
+		# Inside the footprint counts as zero distance.
+		if Geometry2D.is_point_in_polygon(world_xz, poly):
+			d = 0.0
+		if d <= best_d:
+			best_d = d
+			best_i = i
+	return best_i
+
+
+## Resolve a graph pond tank → live `_water_data` index.
+## pond_id match first (exact, robust to any tag drift) — else tag match — else
+## nearest map pond to the tank's site (heals stale tags AND backfills pond_id
+## for legacy tanks that predate it, so the next resolve is the fast exact path).
+## Returns `{idx, tag, pond_id, label, healed, live}` (idx −1 when unresolved).
+func resolve_pond_idx_for_graph_tank(tank: Dictionary) -> Dictionary:
+	var empty := {"idx": -1, "tag": "", "pond_id": "", "label": "", "healed": false, "live": false}
+	if tank.is_empty():
+		return empty
+	var specs: Dictionary = tank.get("specs", {}) as Dictionary
+	var tag := str(specs.get("osm_water_tag", ""))
+	var pond_id := str(specs.get("pond_id", ""))
+	var label := str(specs.get("name", "Pond"))
+	var idx := find_pond_idx_by_id(pond_id)
+	if idx >= 0:
+		var info_id := get_pond_info(idx)
+		var live_tag_id := str(info_id.get("tag", tag))
+		return {
+			"idx": idx,
+			"tag": live_tag_id,
+			"pond_id": pond_id,
+			"label": str(info_id.get("label", label)),
+			"healed": live_tag_id != tag and not tag.is_empty(),
+			"live": true,
+		}
+	idx = find_pond_idx_by_tag(tag)
+	if idx >= 0:
+		var info := get_pond_info(idx)
+		return {
+			"idx": idx,
+			"tag": str(info.get("tag", tag)),
+			"pond_id": str(info.get("pond_id", "")),
+			"label": str(info.get("label", label)),
+			"healed": false,
+			"live": true,
+		}
+	# Fallback: nearest live body to tank site / poly centroid.
+	var world := Vector2.ZERO
+	var have_world := false
+	var soi := get_node_or_null("/root/SoiService")
+	if GraphSiteLayout.has_site_coords(tank) and soi != null and soi.has_method("world_center"):
+		var center: Vector3 = soi.call("world_center") as Vector3
+		world = GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(tank), center)
+		have_world = true
+	if not have_world:
+		# Catchment twin on the same tag may still carry osm_poly_site — skip.
+		return empty
+	idx = find_pond_idx_near_world_xz(world, 150.0)
+	if idx < 0:
+		return empty
+	var info2 := get_pond_info(idx)
+	var live_tag := str(info2.get("tag", ""))
+	return {
+		"idx": idx,
+		"tag": live_tag,
+		"pond_id": str(info2.get("pond_id", "")),
+		"label": str(info2.get("label", label)),
+		"healed": live_tag != tag and not live_tag.is_empty(),
+		"live": true,
+	}
+
+
+## Drop graph pond tanks/catchments whose tags are no longer on the map.
+## Heals stale tags first when a tank still sits on a live water body.
+## Keeps siphon-wired tanks unless `force`.
+func prune_orphan_ponds_from_graph(force: bool = false) -> int:
+	var graph := _find_system_graph_view()
+	if graph == null:
+		return 0
+	if graph.has_method("heal_pond_tags_from_map"):
+		graph.call("heal_pond_tags_from_map", self)
+	if not graph.has_method("prune_orphan_pond_items"):
+		return 0
+	var live: Dictionary = {}
+	for t in live_pond_tags():
+		live[t] = true
+	var n: int = int(graph.call("prune_orphan_pond_items", live, force))
+	if n > 0:
+		_notify_options_status("Removed %d stale pond graph node(s)" % n, "ok")
+	return n
 
 
 ## Import OSM vegetation polygon as a plant/crop bed on the system graph.
@@ -2162,9 +3253,10 @@ func _on_imagery_ready(_key: String, texture: ImageTexture, tag: String) -> void
 	if tag == "hyper":
 		_hyper_drape = texture
 		_log_load_mem("hyper img ready")
-		print("TerrainLoader: hyper roof ortho ready (%.0f m square)" % (HYPER_HALF_EXTENT * 2.0))
+		print("TerrainLoader: hyper roof ortho ready (%.0f m square)" % (_hyper_half_extent() * 2.0))
 		_apply_building_textures()
 		_apply_hyper_to_terrain()
+		_maybe_request_ai_hero()
 		return
 	if tag == "detail":
 		_log_load_mem("detail img ready")
@@ -2193,7 +3285,7 @@ func _on_imagery_ready(_key: String, texture: ImageTexture, tag: String) -> void
 			var img_svc := get_node_or_null("/root/ImageryService")
 			if img_svc != null:
 				img_svc.request_imagery(_lat, _lon, _detail_half_extent,
-					DETAIL_TARGET_PX, "detail", DETAIL_MAX_ZOOM, true)
+					_detail_target_px(), "detail", DETAIL_MAX_ZOOM, true)
 		return
 	_img_done = true
 	_try_build()
@@ -2211,7 +3303,7 @@ func _on_imagery_failed(reason: String, tag: String) -> void:
 				push_warning("TerrainLoader: detail imagery failed (%s) — retrying at z%d" % [
 					reason, _detail_img_retry_zoom])
 				img_retry.request_imagery(_lat, _lon, _detail_half_extent,
-					DETAIL_TARGET_PX, "detail", _detail_img_retry_zoom)
+					_detail_target_px(), "detail", _detail_img_retry_zoom)
 				return
 		push_warning("TerrainLoader: detail imagery failed (%s) — base drape only" % reason)
 		if _load_sequence_active:
@@ -2260,15 +3352,69 @@ func _request_hyper_imagery() -> void:
 	if img == null:
 		return
 	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
-	img.request_imagery(_lat, _lon, HYPER_HALF_EXTENT, _hyper_target_px(),
+	img.request_imagery(_lat, _lon, _hyper_half_extent(), _hyper_target_px(),
 		"hyper", HYPER_MAX_ZOOM, bypass)
 
 
 func _hyper_target_px() -> int:
+	# An explicit manual override (low-VRAM machines) always wins; otherwise the
+	# selected quality tier drives it.
+	var cfg := ConfigFile.new()
+	if cfg.load(CONFIG_PATH) == OK and cfg.has_section_key("terrain", "hyper_target_px"):
+		return int(cfg.get_value("terrain", "hyper_target_px", HYPER_TARGET_PX_DEFAULT))
+	return int(QUALITY_HYPER_TARGET_PX[_quality_tier()])
+
+
+## Current terrain imagery quality tier (0..QUALITY_TIER_COUNT-1), from config.
+func _quality_tier() -> int:
 	var cfg := ConfigFile.new()
 	if cfg.load(CONFIG_PATH) == OK:
-		return int(cfg.get_value("terrain", "hyper_target_px", HYPER_TARGET_PX_DEFAULT))
-	return HYPER_TARGET_PX_DEFAULT
+		return clampi(int(cfg.get_value("terrain", "quality_tier", QUALITY_TIER_DEFAULT)),
+			0, QUALITY_TIER_COUNT - 1)
+	return QUALITY_TIER_DEFAULT
+
+
+## Detail-drape stitch target (px) for the current quality tier.
+func _detail_target_px() -> int:
+	return int(QUALITY_DETAIL_TARGET_PX[_quality_tier()])
+
+
+## Hyper (sharpest) layer half-extent (m) for the current quality tier.
+func _hyper_half_extent() -> float:
+	return float(QUALITY_HYPER_HALF_EXTENT[_quality_tier()])
+
+
+## --- Terrain imagery quality (public API for the settings UI) ---------------
+
+## Current quality tier index (0..QUALITY_TIER_COUNT-1).
+func get_terrain_quality() -> int:
+	return _quality_tier()
+
+
+## Human-readable label + cost hint for a tier (used by the settings slider).
+func terrain_quality_label(tier: int) -> String:
+	var t := clampi(tier, 0, QUALITY_TIER_COUNT - 1)
+	var name: String = QUALITY_TIER_NAMES[t]
+	var detail_px: int = int(QUALITY_DETAIL_TARGET_PX[t])
+	var hyper_m: float = float(QUALITY_HYPER_HALF_EXTENT[t])
+	return "%s — detail %dpx, sharp to %.0f m" % [name, detail_px, hyper_m]
+
+
+## Set the imagery quality tier, persist it, and re-fetch the detail + hyper
+## drapes at the new resolution/coverage (base drape is tier-independent, so it is
+## NOT re-downloaded). No-op if unchanged or if a full load is in progress. Only
+## imagery changes — the sculpt tile mesh/collider density stays the same.
+func set_terrain_quality(tier: int) -> void:
+	var t := clampi(tier, 0, QUALITY_TIER_COUNT - 1)
+	if t == _quality_tier():
+		return
+	_save_terrain_config_value("quality_tier", t)
+	if not _built or _load_sequence_active:
+		return
+	_begin_refresh("imagery")
+	_begin_detail_imagery_refetch()
+	print("TerrainLoader: terrain quality → %s (detail %d px, hyper %.0f m @ %d px) — re-fetching drape …" % [
+		QUALITY_TIER_NAMES[t], _detail_target_px(), _hyper_half_extent(), _hyper_target_px()])
 
 
 ## Scale base drape resolution with world radius so large sites stay readable at distance.
@@ -2301,6 +3447,7 @@ func _stamp_drape_mercator_bboxes(terrain: Node3D = null) -> void:
 		TerrainBuilder.apply_drape_bboxes(
 			mi.material_override as ShaderMaterial, base_bb, detail_bb)
 	_apply_hyper_to_terrain(terrain)
+	_apply_ai_to_terrain(terrain)
 
 
 ## Stamp the hyper ortho patch (sharpest ESRI zoom over the central ~1 km) onto
@@ -2313,9 +3460,9 @@ func _apply_hyper_to_terrain(terrain: Node3D = null) -> void:
 		terrain = _main.get_node_or_null("Terrain") as Node3D
 	if terrain == null:
 		return
-	var hyper_extent := HYPER_HALF_EXTENT * 2.0
+	var hyper_extent := _hyper_half_extent() * 2.0
 	var hyper_vec := TerrainBuilder.bbox_to_shader_vec4(
-		GeoMath.bbox_for(_lat, _lon, HYPER_HALF_EXTENT))
+		GeoMath.bbox_for(_lat, _lon, _hyper_half_extent()))
 	var hyper_feather_uv := TerrainBuilder.feather_uv_from_metres(
 		_seam_feather_m, hyper_extent)
 	for child_name in ["Ground", "DetailGround"]:
@@ -2330,6 +3477,186 @@ func _apply_hyper_to_terrain(terrain: Node3D = null) -> void:
 		sm.set_shader_parameter("hyper_bbox", hyper_vec)
 		sm.set_shader_parameter("correct_hyper_mercator", true)
 		sm.set_shader_parameter("hyper_feather", hyper_feather_uv)
+
+
+## --- AI hero patch (Gemini-enhanced spawn-area ground) ----------------------
+
+## True when the AI hero patch is enabled in config ([gemini] ai_hero_enabled).
+func _ai_hero_enabled() -> bool:
+	var cfg := ConfigFile.new()
+	if cfg.load(CONFIG_PATH) == OK:
+		return bool(cfg.get_value("gemini", "ai_hero_enabled", false))
+	return false
+
+
+## Hero patch half-extent (m), configurable via [gemini] ai_hero_half_extent_m.
+func _ai_hero_half_extent() -> float:
+	var cfg := ConfigFile.new()
+	if cfg.load(CONFIG_PATH) == OK:
+		return maxf(10.0, float(cfg.get_value("gemini", "ai_hero_half_extent_m",
+			AI_HERO_HALF_EXTENT_DEFAULT)))
+	return AI_HERO_HALF_EXTENT_DEFAULT
+
+
+## Requested Gemini image size ("1K" or "2K"), via [gemini] ai_image_size.
+func _ai_image_size() -> String:
+	var cfg := ConfigFile.new()
+	if cfg.load(CONFIG_PATH) == OK:
+		var s := str(cfg.get_value("gemini", "ai_image_size", AI_IMAGE_SIZE_DEFAULT))
+		return "1K" if s == "1K" else "2K"
+	return AI_IMAGE_SIZE_DEFAULT
+
+
+## Stable cache key for this site + hero radius (a radius change regenerates).
+func _ai_cache_key() -> String:
+	return "%s_%s_r%d" % [String.num(_lat, 5), String.num(_lon, 5),
+		int(round(_ai_hero_half_extent()))]
+
+
+## Crop the central hero square out of the hyper drape image. The hyper drape is
+## Mercator-linear across the hyper bbox (row 0 = north), so the sub-window is
+## located via longitude-linear x and Mercator-y interpolation — the same mapping
+## the shader uses. Returns null if the drape isn't available / too small.
+func _crop_hero_from_hyper() -> Image:
+	if _hyper_drape == null:
+		return null
+	var src := _hyper_drape.get_image()
+	if src == null or src.is_empty():
+		return null
+	var hyper_bb := GeoMath.bbox_for(_lat, _lon, _hyper_half_extent())
+	var hero_bb := GeoMath.bbox_for(_lat, _lon, _ai_hero_half_extent())
+	var w := src.get_width()
+	var h := src.get_height()
+	# Longitude is linear in the drape's x axis.
+	var lon_span: float = float(hyper_bb["east"]) - float(hyper_bb["west"])
+	var x0 := int(floor((float(hero_bb["west"]) - float(hyper_bb["west"])) / lon_span * float(w)))
+	var x1 := int(ceil((float(hero_bb["east"]) - float(hyper_bb["west"])) / lon_span * float(w)))
+	# Latitude maps through Mercator-y (asinh(tan)) into the drape's y axis.
+	var my_n := GeoMath.asinh(tan(deg_to_rad(clampf(float(hyper_bb["north"]), -85.05, 85.05))))
+	var my_s := GeoMath.asinh(tan(deg_to_rad(clampf(float(hyper_bb["south"]), -85.05, 85.05))))
+	var my_hero_n := GeoMath.asinh(tan(deg_to_rad(clampf(float(hero_bb["north"]), -85.05, 85.05))))
+	var my_hero_s := GeoMath.asinh(tan(deg_to_rad(clampf(float(hero_bb["south"]), -85.05, 85.05))))
+	var my_span: float = my_n - my_s
+	var y0 := int(floor((my_n - my_hero_n) / my_span * float(h)))
+	var y1 := int(ceil((my_n - my_hero_s) / my_span * float(h)))
+	x0 = clampi(x0, 0, w - 1)
+	x1 = clampi(x1, x0 + 1, w)
+	y0 = clampi(y0, 0, h - 1)
+	y1 = clampi(y1, y0 + 1, h)
+	if (x1 - x0) < 8 or (y1 - y0) < 8:
+		return null
+	var region := Rect2i(x0, y0, x1 - x0, y1 - y0)
+	var crop := src.get_region(region)
+	# The crop is Mercator-linear over the hero bbox — that's what _ai_bbox +
+	# correct_ai_mercator expect, so no reprojection is needed.
+	return crop
+
+
+## Fire the AI hero request after hyper lands, if enabled + keyed + not already
+## in flight. Never gates load (post-hyper, like hyper itself). A cached result
+## returns immediately with no API call.
+func _maybe_request_ai_hero() -> void:
+	if _ai_request_active:
+		return
+	if not _ai_hero_enabled():
+		return
+	var ai := get_node_or_null("/root/AiImageryService")
+	if ai == null or not ai.has_key():
+		return
+	if _hyper_drape == null:
+		return
+	var crop := _crop_hero_from_hyper()
+	if crop == null:
+		push_warning("TerrainLoader: AI hero skipped — could not crop hero square from hyper drape")
+		return
+	var hero_bb := GeoMath.bbox_for(_lat, _lon, _ai_hero_half_extent())
+	_ai_request_active = true
+	_notify_options_status("AI: enhancing spawn-area ground…")
+	ai.enhance(crop, hero_bb, _ai_cache_key(), _ai_image_size(), _force_refetch)
+
+
+func _on_ai_ready(key: String, texture: ImageTexture, bbox: Dictionary) -> void:
+	if key != _ai_cache_key():
+		return  # stale (site/radius changed since the request)
+	_ai_request_active = false
+	_ai_drape = texture
+	_ai_bbox = bbox
+	_log_load_mem("ai hero ready")
+	print("TerrainLoader: AI hero patch ready (%.0f m square)" % (_ai_hero_half_extent() * 2.0))
+	_apply_ai_to_terrain()
+	_notify_options_status("AI: spawn-area ground enhanced")
+
+
+func _on_ai_failed(reason: String) -> void:
+	_ai_request_active = false
+	push_warning("TerrainLoader: AI hero patch failed (%s) — keeping hyper drape" % reason)
+	_notify_options_status("AI enhance failed: %s" % reason, "warn")
+
+
+## Stamp the AI hero patch onto the terrain drape shaders, overlaid on top of the
+## hyper layer within the central hero square. Mirrors _apply_hyper_to_terrain.
+func _apply_ai_to_terrain(terrain: Node3D = null) -> void:
+	if _ai_drape == null:
+		return
+	if terrain == null and _main != null:
+		terrain = _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	var ai_extent := _ai_hero_half_extent() * 2.0
+	var ai_bb: Dictionary = _ai_bbox if not _ai_bbox.is_empty() \
+		else GeoMath.bbox_for(_lat, _lon, _ai_hero_half_extent())
+	var ai_vec := TerrainBuilder.bbox_to_shader_vec4(ai_bb)
+	var ai_feather_uv := TerrainBuilder.feather_uv_from_metres(_seam_feather_m, ai_extent)
+	for child_name in ["Ground", "DetailGround"]:
+		var mi := terrain.get_node_or_null(child_name) as MeshInstance3D
+		if mi == null or not (mi.material_override is ShaderMaterial):
+			continue
+		var sm := mi.material_override as ShaderMaterial
+		var span := _detail_extent_m() if child_name == "DetailGround" else _built_extent
+		sm.set_shader_parameter("ai_tex", _ai_drape)
+		sm.set_shader_parameter("use_ai", true)
+		sm.set_shader_parameter("ai_ratio", span / ai_extent)
+		sm.set_shader_parameter("ai_bbox", ai_vec)
+		sm.set_shader_parameter("correct_ai_mercator", true)
+		sm.set_shader_parameter("ai_feather", ai_feather_uv)
+
+
+## Delete the cached AI hero PNG and re-request (wired to the UI Regenerate
+## button). If disabled, just clears the current AI overlay.
+func refresh_ai_hero() -> void:
+	var ai := get_node_or_null("/root/AiImageryService")
+	if not _ai_hero_enabled():
+		_clear_ai_overlay()
+		_notify_options_status("AI enhance is off")
+		return
+	if ai == null or not ai.has_key():
+		_notify_options_status("No Gemini key — add [gemini] api_key= to terrain_config.cfg", "warn")
+		return
+	# Force a fresh generation regardless of cache.
+	_ai_request_active = false
+	var crop := _crop_hero_from_hyper()
+	if crop == null:
+		_notify_options_status("AI enhance needs the hyper drape — try again after it loads", "warn")
+		return
+	var hero_bb := GeoMath.bbox_for(_lat, _lon, _ai_hero_half_extent())
+	_ai_request_active = true
+	_notify_options_status("AI: regenerating spawn-area ground…")
+	ai.enhance(crop, hero_bb, _ai_cache_key(), _ai_image_size(), true)
+
+
+## Turn off the AI overlay on the terrain materials (leaves hyper untouched).
+func _clear_ai_overlay() -> void:
+	_ai_drape = null
+	_ai_bbox = {}
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	for child_name in ["Ground", "DetailGround"]:
+		var mi := terrain.get_node_or_null(child_name) as MeshInstance3D
+		if mi != null and mi.material_override is ShaderMaterial:
+			(mi.material_override as ShaderMaterial).set_shader_parameter("use_ai", false)
 
 
 ## Swap the Ground material to the high-res-centre shader once the detail patch
@@ -2609,6 +3936,15 @@ func _attach_water() -> void:
 		return
 	var old := terrain.get_node_or_null("Water")
 	if old != null:
+		# Detach synchronously — queue_free() alone is deferred to frame end, so
+		# the old body's ReflectionProbes stay registered in the render scenario.
+		# Water is re-draped once per load layer (10 call sites), and each build
+		# adds its probes before the previous node's are freed, stacking several
+		# nodes' probes into the 64-slot reflection atlas at once → atlas overflow
+		# → null-framebuffer GPU crash (observed while zooming the elevation view).
+		# remove_child() pulls the old probes out of the scenario this frame.
+		old.name = "WaterOld"
+		terrain.remove_child(old)
 		old.queue_free()
 	_water_root = null
 	if not cfg.show_water or _water_data.is_empty():
@@ -2877,12 +4213,12 @@ func _make_world_roof_material() -> Material:
 	sm.set_shader_parameter("use_ortho", true)
 	sm.set_shader_parameter("ortho_tex", ortho)
 	var scale := 1.0
-	var ortho_half := HYPER_HALF_EXTENT
+	var ortho_half := _hyper_half_extent()
 	if _hyper_drape == null:
 		scale = BuildingBuilder.ORTHO_HALF_EXTENT_M / _detail_half_extent
 		ortho_half = _detail_half_extent
 	else:
-		ortho_half = HYPER_HALF_EXTENT
+		ortho_half = _hyper_half_extent()
 	sm.set_shader_parameter("ortho_uv_scale", scale)
 	# Ortho texture covers this half-extent; UV2 is ORTHO_HALF-normalized then
 	# scaled — Mercator-correct samples into that coverage square.
@@ -2911,6 +4247,9 @@ func _build_terrain() -> void:
 	_terrain_edits.load_for_map(_lat, _lon)
 	_load_edit_tiles()
 	_load_user_water()
+	_load_part_inventory()
+	_load_chore_ledger()
+	_load_printed_objects()
 	_load_earthworks()
 	_refresh_water_data()
 
@@ -3775,6 +5114,12 @@ func refresh_all_cached_layers() -> void:
 	_begin_refresh("osm_veg")
 	var n := TerrainCacheSettings.invalidate_osm_vectors(_lat, _lon)
 	n += TerrainCacheSettings.invalidate_osm_vegetation(_lat, _lon)
+	# Invalidate the AI hero cache too so it regenerates from the fresh imagery
+	# (only if enabled — otherwise no cost). The post-hyper hook re-requests it.
+	if _ai_hero_enabled():
+		var ai := get_node_or_null("/root/AiImageryService")
+		if ai != null:
+			ai.clear_cache(_ai_cache_key())
 	_begin_dem_refetch(true)
 	_begin_imagery_refetch(true)
 	_begin_osm_vectors_refetch()
@@ -3908,6 +5253,19 @@ func _begin_imagery_refetch(force: bool = false) -> void:
 		return
 	img.request_imagery(_lat, _lon, _half_extent, _base_imagery_target_px(), "base", 17, force)
 	# Detail imagery is applied after base in _on_imagery_ready refresh path.
+
+
+## Re-fetch ONLY the detail drape (which then chains to hyper via _on_imagery_ready,
+## the same tail as the base-ready refresh path). Used by set_terrain_quality so a
+## tier change doesn't re-download the tier-independent base drape.
+func _begin_detail_imagery_refetch() -> void:
+	_detail_img_retry_zoom = -1
+	var img := get_node_or_null("/root/ImageryService")
+	if img == null:
+		push_warning("TerrainLoader: ImageryService unavailable")
+		return
+	img.request_imagery(_lat, _lon, _detail_half_extent, _detail_target_px(),
+		"detail", DETAIL_MAX_ZOOM, true)
 
 
 func _begin_osm_vectors_refetch() -> void:
@@ -4438,7 +5796,10 @@ func _request_auto_vegetation() -> void:
 
 
 func _on_vegetation_osm_ready(_key: String, payload: Dictionary) -> void:
-	_auto_veg_data_raw = payload
+	# Belt-and-suspenders: VegetationService caps on parse/cache, but callers
+	# (refresh paths) may still hand us an uncapped dict.
+	var vs := get_node_or_null("/root/VegetationService")
+	_auto_veg_data_raw = vs.cap_polygons(payload) if vs != null else payload
 	_auto_veg_data = OsmRegistration.offset_payload(
 		_auto_veg_data_raw, _osm_offset_east_m, _osm_offset_north_m)
 	if _load_sequence_active:
@@ -4503,13 +5864,18 @@ const SCATTER_BATCH_POLYS := 5
 func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 	_auto_veg_generate_queued = false
 	if not _built or _auto_veg_data.is_empty() or not _auto_veg_ground_ready():
+		_mark_auto_veg_ready()
 		return
 	if not _terrain_config().show_auto_vegetation:
+		_mark_auto_veg_ready()
 		return
 	if _auto_veg_generated and not regen_for_exclusions:
+		_apply_large_map_veg_runtime_lod()
+		_mark_auto_veg_ready()
 		return
 	await get_tree().process_frame
 	if not _built:
+		_mark_auto_veg_ready()
 		return
 	print("TerrainLoader: scattering vegetation from OSM (background) …")
 	var ctx := _auto_veg_ctx()
@@ -4526,6 +5892,7 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 			_update_load_ui()
 		await get_tree().process_frame
 		if not _built:
+			_mark_auto_veg_ready()
 			return
 	_auto_veg_layer = state.layer
 	_auto_veg_poly_stats = state.poly_stats
@@ -4536,8 +5903,10 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 	_auto_veg_generated = true
 	await get_tree().process_frame
 	if not _built:
+		_mark_auto_veg_ready()
 		return
 	await _rebuild_auto_vegetation_async()
+	_apply_large_map_veg_runtime_lod()
 	var total := _auto_veg_layer.total_bulk() + _auto_veg_layer.hero.size()
 	var near_200 := _auto_veg_layer.count_within_radius(0.0, 0.0, 200.0)
 	var near_500 := _auto_veg_layer.count_within_radius(0.0, 0.0, 500.0)
@@ -4550,6 +5919,7 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 		near_200, near_500, nearest])
 	if _built:
 		_finish_refresh("osm_veg")
+	_mark_auto_veg_ready()
 
 
 ## Per-polygon scatter diagnostics from the last generator run (see
@@ -4606,9 +5976,12 @@ func _auto_veg_ctx() -> Dictionary:
 		var detail_ext := _detail_extent_m() if _detail_drape != null else 0.0
 		gate = LandcoverImageryGate.from_texture_downsampled(
 			_drape, _built_extent, 512, _detail_drape, detail_ext, 512)
+	# Pass the larger of world/OSM so large-map thinning triggers even when the
+	# OSM fetch window is smaller than the 30 km terrain shell.
+	var thin_half := maxf(_osm_half_extent, _half_extent)
 	return {
 		"latitude": _lat,
-		"half_extent_m": _osm_half_extent,
+		"half_extent_m": thin_half,
 		"seed": int(_lat * 10000.0) ^ int(_lon * 10000.0),
 		"exclusions": _auto_veg_exclusions(),
 		"ground_y_at": Callable(self, "_ground_height_at"),
@@ -4638,6 +6011,10 @@ func _auto_veg_runtime_settings() -> Dictionary:
 	# (VegetationGrowth.instance_scale_mult). Same value for every record in a
 	# rebuild, so it never affects batch partitioning.
 	s["growth_now_h"] = _growth_clock_h
+	if _is_large_world_map():
+		s["auto_force_far_canopy"] = true
+		s["auto_visibility_end_m"] = minf(float(s.get("auto_visibility_end_m", 1200.0)), 480.0)
+		s["grass_visibility_end_m"] = minf(float(s.get("grass_visibility_end_m", 520.0)), 260.0)
 	return s
 
 
@@ -4973,8 +6350,11 @@ func _rebuild_auto_growth_zone_index() -> void:
 	_auto_growth_zone_index = null
 	if _auto_veg_data.is_empty():
 		return
+	# Same trim budget as scatter — never index every OSM wood on a dense site.
+	var trimmed: Array = AutoVegetationGenerator._trim_polygons(
+		_auto_veg_data.get("polygons", []), AutoVegetationGenerator.DENSE_POLY_BUDGET)
 	var polys: Array = []
-	for rec in _auto_veg_data.get("polygons", []):
+	for rec in trimmed:
 		if not (rec is Dictionary):
 			continue
 		var kind := str((rec as Dictionary).get("kind", ""))
@@ -5714,7 +7094,7 @@ func sculpt_detail_res() -> int:
 	return _detail_elev_cols
 
 
-## Snapshot the user water bodies for undo (Fill water / designated ponds). The
+## Snapshot the user water bodies for undo (Rain/Drain / designated ponds). The
 ## high-res terrain layer has its own region-scoped tile-undo entries.
 func _push_sculpt_undo() -> void:
 	_sculpt_undo_stack.append({"user_water": _user_water_data.duplicate(true)})
@@ -5722,7 +7102,7 @@ func _push_sculpt_undo() -> void:
 		_sculpt_undo_stack.pop_front()
 
 
-## Public entry for the terrain dock (Fill water, etc.).
+## Public entry for the terrain dock (Rain/Drain undo, etc.).
 func push_sculpt_undo() -> void:
 	_push_sculpt_undo()
 
@@ -5822,11 +7202,11 @@ func ramp_command(a: Vector3, b: Vector3, width_m: float) -> void:
 	end_terrain_tile_edit()
 
 
-## Lasso a pond: carve a bowl `depth` m deep at high resolution, then fill it with
-## water to just below the lowest rim (a natural gravity level). Returns true on
-## success. Carve is one tile-undo step; the water body is a separate undo entry.
+## Lasso a pond: carve a bowl `depth` m deep. Optionally seeds a thin puddle
+## (`seed_puddle`); use Rain tool to fill. Carve + optional water share one undo.
 func pond_command(poly: PackedVector2Array, depth: float,
-		label: String = "Sculpted Pond") -> bool:
+		label: String = "Sculpted Pond", _fill_frac: float = 0.85,
+		seed_puddle: bool = true) -> bool:
 	_ensure_edit_tiles()
 	if _edit_tiles == null or poly.size() < 3:
 		return false
@@ -5844,10 +7224,13 @@ func pond_command(poly: PackedVector2Array, depth: float,
 	end_terrain_tile_edit()
 	if is_nan(rim):
 		return false
-	var freeboard := clampf(depth * 0.1, 0.05, 0.5)
+	var floor_y := rim - maxf(depth, 0.1)
 	var tag := EarthworksBuilder.basin_tag_from_poly(poly)
-	if not designate_sculpted_pond(poly, label, rim - freeboard, tag):
-		return false
+	if seed_puddle:
+		var level := floor_y + 0.05
+		if not designate_sculpted_pond(poly, label, level, tag):
+			# Carve still succeeded — leave dry basin.
+			pass
 	# Fold the pre-pond water state into the carve's undo entry so ONE Undo
 	# reverts both the bowl and its water.
 	if not _sculpt_undo_stack.is_empty():
@@ -5880,7 +7263,7 @@ func undo_terrain_sculpt() -> bool:
 			_reseat_actors_after_edit()
 		handled = true
 	if snap is Dictionary and (snap as Dictionary).has("user_water"):
-		# Water-body undo (Fill water / pond — may ride the same entry as tiles
+		# Water-body undo (Rain/Drain / pond — may ride the same entry as tiles
 		# so one Undo reverts a pond's carve AND its water together).
 		_user_water_data = ((snap as Dictionary).get("user_water", []) as Array).duplicate(true)
 		_save_user_water()
@@ -5914,7 +7297,7 @@ func _set_drone_sculpt_session_meta(on: bool) -> void:
 
 
 ## ---------------------------------------------------------------------------
-## Selection highlight (used by Level / Pond / Fill water) + clear-all
+## Selection highlight (used by Level / Pond / Rain / Drain) + clear-all
 ## ---------------------------------------------------------------------------
 
 func update_sculpt_selection_highlight(poly: PackedVector2Array) -> void:
@@ -6079,14 +7462,45 @@ func _free_all_earthwork_nodes() -> void:
 		root.queue_free()
 
 
-## Pond rim height (world Y) for fill-level math — max ground at poly verts.
+## Pond spill rim (world Y) — lowest outline elevation (matches carve_basin).
 func pond_rim_height(poly: PackedVector2Array) -> float:
 	if poly.is_empty():
 		return 0.0
-	var rim := -INF
+	var rim := INF
 	for p in poly:
-		rim = maxf(rim, ground_height_at(p.x, p.y))
+		rim = minf(rim, ground_height_at(p.x, p.y))
 	return rim if is_finite(rim) else 0.0
+
+
+## Sample DEM+tiles inside the footprint: floor = min interior, rim = lowest
+## outline (spill). Used by the pond modal so carved bowls aren't clamped wrong.
+func sample_pond_basin_elevations(poly: PackedVector2Array) -> Dictionary:
+	var out := {"rim_m": 0.0, "floor_m": 0.0}
+	if poly.size() < 3:
+		return out
+	var rim := pond_rim_height(poly)
+	var floor_y := rim
+	var aabb := Rect2(poly[0], Vector2.ZERO)
+	for i in range(1, poly.size()):
+		aabb = aabb.expand(poly[i])
+	var cell := clampf(sqrt(maxf(aabb.size.x * aabb.size.y, 1.0)) / 32.0, 1.0, 4.0)
+	var x := aabb.position.x
+	while x <= aabb.end.x + 1e-4:
+		var z := aabb.position.y
+		while z <= aabb.end.y + 1e-4:
+			var p := Vector2(x, z)
+			if Geometry2D.is_point_in_polygon(p, poly):
+				floor_y = minf(floor_y, ground_height_at(p.x, p.y))
+			z += cell
+		x += cell
+	# Also consider outline verts (bank tops / floors near edge).
+	for p in poly:
+		floor_y = minf(floor_y, ground_height_at(p.x, p.y))
+	if floor_y > rim - 0.05:
+		floor_y = rim - 0.05
+	out["rim_m"] = rim
+	out["floor_m"] = floor_y
+	return out
 
 
 ## Gravity-fill closed depressions inside a selection polygon (circle/rect/lasso…).
@@ -6096,14 +7510,16 @@ func fill_selection_depressions(poly: PackedVector2Array, fill_frac: float = 0.8
 	if poly.size() < 3:
 		return 0
 	var area := BuildingBuilder.footprint_area_m2(poly)
-	if area < 40.0:
-		_notify_options_status("Selection too small to flood — widen the circle", "warn")
+	# Same gate as WaterBuilder / designate — avoid "found then fail to mesh".
+	if area < WaterBuilder.MIN_AREA_M2:
+		_notify_options_status(
+			"Selection too small to flood (min ~%.0f m²)" % WaterBuilder.MIN_AREA_M2, "warn")
 		return 0
 	# Cell size scales with selection so large circles stay interactive.
 	var cell := clampf(sqrt(area) / 48.0, 1.25, 4.0)
 	var height_at := Callable(self, "ground_height_at")
 	var bodies: Array = Watershed.fill_depressions_in_polygon(
-		poly, height_at, fill_frac, cell, 0.10, 40.0)
+		poly, height_at, fill_frac, cell, 0.10, WaterBuilder.MIN_AREA_M2)
 	if bodies.is_empty():
 		_notify_options_status(
 			"No closed depressions in selection — dig a basin (Pond) or pick a lower area",
@@ -6123,10 +7539,260 @@ func fill_selection_depressions(poly: PackedVector2Array, fill_frac: float = 0.8
 			added += 1
 	if added > 0:
 		_notify_options_status(
-			"Filled %d depression%s (gravity) → system graph" % [
+			"Filled %d depression%s — Ctrl-click pond → Add to graph" % [
 				added, "" if added == 1 else "s"],
 			"ok")
 	return added
+
+
+## Analyze the primary closed basin under a selection (no mesh mutation).
+## Returns `{valid, reason, floor_m, spill_m, area_m2, capacity_l, stock_l,
+## level_m, fill_frac, tag?, water_idx?, points}`.
+func analyze_selection_basin(poly: PackedVector2Array) -> Dictionary:
+	var out := {
+		"valid": false, "reason": "no_closed_basin",
+		"floor_m": 0.0, "spill_m": 0.0, "area_m2": 0.0,
+		"capacity_l": 0.0, "stock_l": 0.0, "level_m": 0.0, "fill_frac": 0.0,
+		"tag": "", "water_idx": -1, "points": PackedVector2Array(),
+	}
+	if poly.size() < 3:
+		out["reason"] = "too_small"
+		return out
+	var sel_area := BuildingBuilder.footprint_area_m2(poly)
+	if sel_area < WaterBuilder.MIN_AREA_M2:
+		out["reason"] = "too_small"
+		out["area_m2"] = sel_area
+		return out
+	# Prefer an existing user pond whose centroid lies in the selection.
+	var existing := _find_user_pond_in_selection(poly)
+	if not existing.is_empty():
+		var rec: Dictionary = existing["rec"]
+		_recompute_pond_volume_rec(rec, false)
+		var epoly: PackedVector2Array = rec.get("points", PackedVector2Array())
+		out["valid"] = true
+		out["reason"] = ""
+		out["floor_m"] = float(rec.get("floor_m", 0.0))
+		out["spill_m"] = float(rec.get("spill_m", 0.0))
+		out["area_m2"] = BuildingBuilder.footprint_area_m2(epoly)
+		out["capacity_l"] = float(rec.get("capacity_l", 0.0))
+		out["stock_l"] = float(rec.get("stock_l", 0.0))
+		out["level_m"] = float(rec.get("level_m", out["floor_m"]))
+		out["fill_frac"] = PondBathymetry.fill_frac(
+			float(out["stock_l"]), float(out["capacity_l"]))
+		out["tag"] = str(rec.get("tag", ""))
+		out["water_idx"] = int(existing.get("water_idx", -1))
+		out["points"] = epoly
+		return out
+	var cell := PondBathymetry.suggested_cell_m(sel_area)
+	var diag := Watershed.analyze_primary_basin(
+		poly, Callable(self, "ground_height_at"), cell, 0.10, WaterBuilder.MIN_AREA_M2)
+	if not bool(diag.get("valid", false)):
+		out["reason"] = str(diag.get("reason", "no_closed_basin"))
+		out["floor_m"] = float(diag.get("floor_m", 0.0))
+		out["spill_m"] = float(diag.get("spill_m", 0.0))
+		out["area_m2"] = float(diag.get("area_m2", sel_area))
+		out["depth_m"] = float(diag.get("depth_m", 0.0))
+		return out
+	var basin_poly: PackedVector2Array = diag.get("points", PackedVector2Array())
+	if basin_poly.size() < 3:
+		basin_poly = poly
+	var floor_m := float(diag.get("floor_m", 0.0))
+	var spill_m := float(diag.get("spill_m", floor_m))
+	var height_at := Callable(self, "ground_height_at")
+	var cap := PondBathymetry.capacity_l(basin_poly, height_at, spill_m)
+	out["valid"] = true
+	out["reason"] = ""
+	out["floor_m"] = floor_m
+	out["spill_m"] = spill_m
+	out["area_m2"] = float(diag.get("area_m2", BuildingBuilder.footprint_area_m2(basin_poly)))
+	out["capacity_l"] = cap
+	out["stock_l"] = 0.0
+	out["level_m"] = floor_m
+	out["fill_frac"] = 0.0
+	out["points"] = basin_poly
+	out["depth_m"] = spill_m - floor_m
+	return out
+
+
+## Raise water in the primary basin under `poly` by `delta_m` (surface rise).
+## Creates a user pond at floor+ε if none exists. Clamps to spill − freeboard.
+func rain_selection(poly: PackedVector2Array, delta_m: float) -> Dictionary:
+	var analysis := analyze_selection_basin(poly)
+	if not bool(analysis.get("valid", false)):
+		return {"ok": false, "reason": str(analysis.get("reason", "no_closed_basin")),
+			"depth_m": float(analysis.get("depth_m", 0.0)),
+			"area_m2": float(analysis.get("area_m2", 0.0))}
+	var floor_m := float(analysis.get("floor_m", 0.0))
+	var spill_m := float(analysis.get("spill_m", floor_m + 1.0))
+	var freeboard := PondBathymetry.FREEBOARD_DEFAULT_M
+	var max_level := spill_m - freeboard
+	var tag := str(analysis.get("tag", ""))
+	var water_idx := int(analysis.get("water_idx", -1))
+	var basin_poly: PackedVector2Array = analysis.get("points", poly)
+	var level := float(analysis.get("level_m", floor_m))
+	var stock_before := float(analysis.get("stock_l", 0.0))
+	if tag.is_empty() or water_idx < 0:
+		# Seed a thin puddle, then raise by delta.
+		level = floor_m + 0.05
+		tag = "grav_pond_%d_%d" % [
+			roundi(SolarArrayBuilder.centroid(basin_poly).x),
+			roundi(SolarArrayBuilder.centroid(basin_poly).y)]
+		if not designate_sculpted_pond(basin_poly, "Pond", level, tag):
+			return {"ok": false, "reason": "too_small"}
+		_refresh_water_data()
+		water_idx = _water_idx_for_tag(tag)
+		stock_before = 0.0
+	level = clampf(level + maxf(delta_m, 0.0), floor_m + 0.02, max_level)
+	if water_idx < 0:
+		return {"ok": false, "reason": "no_pond"}
+	set_pond_fill_level(water_idx, level, false)
+	var info := get_pond_info(water_idx)
+	return {
+		"ok": true, "reason": "",
+		"level_m": float(info.get("level_m", level)),
+		"spill_m": spill_m, "floor_m": floor_m,
+		"stock_l": float(info.get("stock_l", 0.0)),
+		"capacity_l": float(info.get("capacity_l", 0.0)),
+		"fill_frac": float(info.get("fill_frac", 0.0)),
+		"delta_stock_l": float(info.get("stock_l", 0.0)) - stock_before,
+		"tag": str(info.get("tag", tag)),
+		"at_spill": float(info.get("level_m", level)) >= max_level - 0.01,
+	}
+
+
+## Lower / remove a user pond under the selection. Near floor → delete water body.
+func drain_selection(poly: PackedVector2Array, delta_m: float) -> Dictionary:
+	var existing := _find_user_pond_in_selection(poly)
+	if existing.is_empty():
+		return {"ok": false, "reason": "no_pond"}
+	var rec: Dictionary = existing["rec"]
+	var water_idx := int(existing.get("water_idx", -1))
+	_recompute_pond_volume_rec(rec, false)
+	var floor_m := float(rec.get("floor_m", 0.0))
+	var spill_m := float(rec.get("spill_m", floor_m + 1.0))
+	var level := float(rec.get("level_m", floor_m))
+	var stock_before := float(rec.get("stock_l", 0.0))
+	level = level - maxf(delta_m, 0.0)
+	if level <= floor_m + 0.04:
+		if water_idx >= 0:
+			delete_pond(water_idx)
+		return {
+			"ok": true, "reason": "", "removed": true,
+			"level_m": floor_m, "stock_l": 0.0, "capacity_l": 0.0,
+			"fill_frac": 0.0, "delta_stock_l": -stock_before,
+			"spill_m": spill_m, "floor_m": floor_m,
+		}
+	if water_idx >= 0:
+		set_pond_fill_level(water_idx, level, false)
+	var info := get_pond_info(water_idx) if water_idx >= 0 else {}
+	return {
+		"ok": true, "reason": "", "removed": false,
+		"level_m": float(info.get("level_m", level)),
+		"spill_m": spill_m, "floor_m": floor_m,
+		"stock_l": float(info.get("stock_l", 0.0)),
+		"capacity_l": float(info.get("capacity_l", 0.0)),
+		"fill_frac": float(info.get("fill_frac", 0.0)),
+		"delta_stock_l": float(info.get("stock_l", 0.0)) - stock_before,
+		"tag": str(rec.get("tag", "")),
+	}
+
+
+## Human-readable status for Rain/Drain analyze failures.
+func basin_failure_message(result: Dictionary) -> String:
+	var reason := str(result.get("reason", "no_closed_basin"))
+	match reason:
+		"too_small":
+			return "Selection too small (min ~%.0f m²) — enlarge the area" % WaterBuilder.MIN_AREA_M2
+		"too_shallow":
+			var d := float(result.get("depth_m", 0.0)) * 100.0
+			return "Basin only %.0f cm deep — deepen with Lower/Pond or enlarge selection" % d
+		"open_edge":
+			return "Selection edge is open — expand to enclose the rim, or dig a closed bowl"
+		"no_pond":
+			return "No user pond here — hold Rain first, or select an existing pond"
+		_:
+			return "No closed depression — dig with Pond/Lower, then select over the hole"
+
+
+## Update Auto bathymetry fields on a user-water record. When `overwrite_auto`
+## is true, Auto capacity is rewritten from terrain; Manual capacity is kept.
+func _recompute_pond_volume_rec(rec: Dictionary, overwrite_auto: bool = true) -> void:
+	if rec.is_empty():
+		return
+	var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
+	if poly.size() < 3:
+		return
+	var bounds := sample_pond_basin_elevations(poly)
+	var floor_y := float(bounds.get("floor_m", 0.0))
+	var spill := float(bounds.get("rim_m", floor_y + 1.0))
+	rec["floor_m"] = floor_y
+	rec["spill_m"] = spill
+	var cell := PondBathymetry.suggested_cell_m(BuildingBuilder.footprint_area_m2(poly))
+	var height_at := Callable(self, "ground_height_at")
+	var terrain_cap := PondBathymetry.capacity_l(poly, height_at, spill, PondBathymetry.FREEBOARD_DEFAULT_M, cell)
+	rec["terrain_capacity_l"] = terrain_cap
+	if not rec.has("capacity_mode"):
+		rec["capacity_mode"] = "auto"
+	if not rec.has("fill_mode"):
+		rec["fill_mode"] = "auto"
+	if str(rec.get("capacity_mode", "auto")) == "auto" and overwrite_auto:
+		rec["capacity_l"] = maxf(terrain_cap, 1.0)
+	elif not rec.has("capacity_l"):
+		rec["capacity_l"] = maxf(terrain_cap, 1.0)
+	var level := TerrainBuilder.variant_to_float(rec.get("level_m", NAN), NAN)
+	if is_nan(level):
+		level = floor_y + 0.05
+		rec["level_m"] = level
+	if str(rec.get("fill_mode", "auto")) == "auto" or not rec.has("stock_l"):
+		rec["stock_l"] = PondBathymetry.volume_to_level_l(
+			poly, height_at, level, cell, spill)
+	var cap := maxf(float(rec.get("capacity_l", 1.0)), 1.0)
+	rec["level"] = PondBathymetry.fill_frac(float(rec.get("stock_l", 0.0)), cap)
+
+
+func _find_user_pond_in_selection(poly: PackedVector2Array) -> Dictionary:
+	if poly.size() < 3:
+		return {}
+	var best := {}
+	var best_area := -1.0
+	for i in _water_data.size():
+		var item: Variant = _water_data[i]
+		if not (item is Dictionary):
+			continue
+		var rec: Dictionary = item
+		if not bool(rec.get("user", false)):
+			continue
+		var kind := str(rec.get("kind", "pond"))
+		if kind in WaterBuilder.FLOWING_KINDS:
+			continue
+		var pts: PackedVector2Array = rec.get("points", PackedVector2Array())
+		if pts.size() < 3:
+			continue
+		var c := SolarArrayBuilder.centroid(pts)
+		if not Geometry2D.is_point_in_polygon(c, poly):
+			# Also accept selection centroid inside the pond.
+			var sc := SolarArrayBuilder.centroid(poly)
+			if not Geometry2D.is_point_in_polygon(sc, pts):
+				continue
+		var a := BuildingBuilder.footprint_area_m2(pts)
+		if a > best_area:
+			best_area = a
+			best = {"rec": rec, "water_idx": i, "tag": str(rec.get("tag", ""))}
+	return best
+
+
+func _water_idx_for_tag(tag: String) -> int:
+	if tag.is_empty():
+		return -1
+	for i in _water_data.size():
+		var item: Variant = _water_data[i]
+		if not (item is Dictionary):
+			continue
+		var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
+		var t := str((item as Dictionary).get("tag", _water_body_tag(poly)))
+		if t == tag:
+			return i
+	return -1
 
 
 func _mean_local_height_in_rect(grid: PackedFloat32Array, rect_min: Vector2,
@@ -6709,6 +8375,13 @@ func open_pallet_rack_builder() -> void:
 		_pallet_rack_builder_ui.call("open")
 
 
+## Open the pallet rack builder bound to an already-placed rack for editing
+## (Ctrl-click a placed pallet_rack prop → edit, then "Apply changes").
+func open_pallet_rack_builder_for_prop(prop_id: String) -> void:
+	if _pallet_rack_builder_ui != null and _pallet_rack_builder_ui.has_method("open_for_prop"):
+		_pallet_rack_builder_ui.call("open_for_prop", prop_id)
+
+
 func open_unified_library(tab: String = "") -> void:
 	# Prefer Main's always-available modal (works on soak / mars too).
 	if _main != null and _main.has_method("open_unified_library"):
@@ -6717,12 +8390,12 @@ func open_unified_library(tab: String = "") -> void:
 	push_warning("TerrainLoader: Main.open_unified_library unavailable")
 
 
-func begin_pallet_rack_placement(rack_spec: Dictionary) -> bool:
+func begin_pallet_rack_placement(rack_spec: Dictionary, collision_enabled: bool = true) -> bool:
 	if _main == null:
 		return false
 	var spec := PalletRackBuilder.resolve_spec(rack_spec)
 	var r: Dictionary = PlacedPropService.begin_placement(_main, PalletRackBuilder.MODEL_ID, {
-		"record_extra": {"rack_spec": spec},
+		"record_extra": {"rack_spec": spec, "collision_enabled": collision_enabled},
 	})
 	if not bool(r.get("ok", false)):
 		return false
@@ -6984,8 +8657,20 @@ func delete_nearest_prop(world_xz: Vector2) -> bool:
 func delete_prop_by_id(prop_id: String) -> bool:
 	if _placed_prop_layer == null:
 		return false
+	# A live-foldable linkage structure owns a per-prop graph solar array —
+	# drop it so deleting the structure doesn't orphan its power contribution.
+	var rec := _placed_prop_layer.find_by_id(prop_id)
+	if str(rec.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID and _main != null:
+		PlacedPropService.remove_linkage_graph(_main, prop_id)
 	if not _placed_prop_layer.remove_prop(prop_id):
 		return false
+	# 2D/3D twin consistency: a graph node bound to this prop is the same object
+	# in another view — never leave a dead node behind. No-op for graph-initiated
+	# deletes (the node is already gone when this runs).
+	if _main != null:
+		var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+		if sgv != null and sgv.has_method("remove_items_bound_to_prop"):
+			sgv.call("remove_items_bound_to_prop", prop_id)
 	_placed_prop_layer.save(_lat, _lon)
 	_attach_buildings()
 	_rebuild_placed_props()
@@ -7006,6 +8691,27 @@ func update_prop_record(prop_id: String, patch: Dictionary) -> void:
 	_placed_prop_layer.save(_lat, _lon)
 	_attach_buildings()
 	_rebuild_placed_props()
+
+
+## Bulk hide/show every generic placeholder twin (generic_box / generic_tank) from
+## the 3D world — the "conceptual storage not ready for 3D" case. Returns the count
+## affected. One save + rebuild for the whole batch.
+func set_placeholder_twins_hidden(hidden: bool) -> int:
+	if _placed_prop_layer == null:
+		return 0
+	var n := 0
+	for rec in _placed_prop_layer.props:
+		if not (rec is Dictionary):
+			continue
+		var mid := str((rec as Dictionary).get("model_id", ""))
+		if mid == ModelCatalog.GENERIC_BOX_ID or mid == ModelCatalog.GENERIC_TANK_ID:
+			if _placed_prop_layer.update_prop(str((rec as Dictionary).get("id", "")),
+					{"hidden_3d": hidden}):
+				n += 1
+	if n > 0:
+		_placed_prop_layer.save(_lat, _lon)
+		_rebuild_placed_props()
+	return n
 
 
 func preview_prop(prop_id: String, patch: Dictionary) -> void:
@@ -7031,6 +8737,178 @@ func save_prop_from_node(prop: PlacedProp) -> void:
 	var patch := prop.get_record_patch_from_node(Callable(self, "_ground_height_at"))
 	_placed_prop_layer.update_prop(prop.prop_id, patch)
 	_placed_prop_layer.save(_lat, _lon)
+
+
+# ---------------------------------------------------------------------------
+# .esim site-layer collect / apply (portable design package — Phases 0–1)
+# ---------------------------------------------------------------------------
+
+## Snapshot shareable per-site layers (no DEM/imagery/sculpt binaries).
+func collect_esim_site_layers() -> Dictionary:
+	var soi_blob: Dictionary = {}
+	var soi := get_node_or_null("/root/SoiService")
+	if soi == null:
+		var tree := get_tree()
+		if tree != null:
+			soi = tree.root.get_node_or_null("SoiService")
+	if soi != null and soi.has_method("collect_save_state"):
+		soi_blob = soi.call("collect_save_state")
+
+	var props_blob := {"version": 1, "props": []}
+	if _placed_prop_layer != null:
+		props_blob = _placed_prop_layer.serialize()
+
+	var styles_blob := {"version": 1, "styles": {}}
+	if _building_style_layer != null:
+		styles_blob = _building_style_layer.serialize()
+
+	var veg_blob: Dictionary = {}
+	if _vegetation_layer != null:
+		veg_blob = _vegetation_layer.serialize()
+
+	var veg_style_blob: Dictionary = {}
+	if not _veg_style.is_empty():
+		veg_style_blob = VegetationStyleConfig.to_serializable(_veg_style)
+
+	var auto_edits_blob: Dictionary = {}
+	if _auto_veg_edits != null:
+		auto_edits_blob = _auto_veg_edits.serialize()
+
+	return {
+		"soi": soi_blob,
+		"placed_props": props_blob,
+		"building_styles": styles_blob,
+		"vegetation": veg_blob,
+		"vegetation_style": veg_style_blob,
+		"auto_veg_edits": auto_edits_blob,
+		"user_water": _serialize_user_water(),
+	}
+
+
+## Apply .esim sidecars onto the current map and optionally rebuild world meshes.
+func apply_esim_site_layers(layers: Dictionary, options: Dictionary = {}) -> Dictionary:
+	if layers.is_empty():
+		return {"ok": false, "error": "Empty site layers"}
+	var rebuild := bool(options.get("rebuild", true))
+	var applied: Array = []
+
+	var soi_blob: Dictionary = layers.get("soi", {}) as Dictionary
+	if not soi_blob.is_empty():
+		var soi := get_tree().root.get_node_or_null("SoiService") if get_tree() != null else null
+		if soi != null and soi.has_method("apply_save_state"):
+			soi.call("apply_save_state", soi_blob)
+			applied.append("soi")
+
+	var props_blob: Dictionary = layers.get("placed_props", {}) as Dictionary
+	if not props_blob.is_empty():
+		if _placed_prop_layer == null:
+			_placed_prop_layer = PlacedPropLayer.create_empty()
+		_placed_prop_layer.deserialize(props_blob)
+		_placed_prop_layer.save(_lat, _lon)
+		applied.append("placed_props")
+
+	var styles_blob: Dictionary = layers.get("building_styles", {}) as Dictionary
+	if not styles_blob.is_empty():
+		if _building_style_layer == null:
+			_building_style_layer = BuildingStyleLayer.create_empty()
+		_building_style_layer.deserialize(styles_blob)
+		_building_style_layer.save(_lat, _lon)
+		applied.append("building_styles")
+
+	var veg_blob: Dictionary = layers.get("vegetation", {}) as Dictionary
+	if not veg_blob.is_empty():
+		if _vegetation_layer == null:
+			_vegetation_layer = VegetationLayer.create_empty()
+		_vegetation_layer.deserialize(veg_blob)
+		_vegetation_layer.save(_lat, _lon)
+		applied.append("vegetation")
+
+	var veg_style_blob: Dictionary = layers.get("vegetation_style", {}) as Dictionary
+	if not veg_style_blob.is_empty():
+		var style := VegetationStyleConfig.from_serializable(veg_style_blob)
+		_veg_style = VegetationStyleConfig.apply_patch(
+			VegetationStyleConfig.load_merged(_lat, _lon), style)
+		VegetationStyleConfig.save_map(_lat, _lon, _veg_style)
+		applied.append("vegetation_style")
+
+	var auto_blob: Dictionary = layers.get("auto_veg_edits", {}) as Dictionary
+	if not auto_blob.is_empty():
+		if _auto_veg_edits == null:
+			_auto_veg_edits = AutoVegetationEdits.create_empty()
+		_auto_veg_edits.deserialize(auto_blob)
+		_auto_veg_edits.save(_lat, _lon)
+		applied.append("auto_veg_edits")
+
+	var water_blob: Dictionary = layers.get("user_water", {}) as Dictionary
+	if not water_blob.is_empty():
+		_deserialize_user_water(water_blob)
+		_save_user_water()
+		_refresh_water_data()
+		applied.append("user_water")
+
+	if rebuild and _built:
+		if "building_styles" in applied or "placed_props" in applied:
+			_attach_buildings()
+		if "placed_props" in applied:
+			_rebuild_placed_props()
+		if "vegetation" in applied or "vegetation_style" in applied \
+				or "auto_veg_edits" in applied:
+			call_deferred("_rebuild_vegetation")
+			if _auto_veg_generated:
+				call_deferred("_full_regenerate_auto_vegetation_async")
+		if "user_water" in applied:
+			call_deferred("_attach_water")
+
+	return {"ok": true, "applied": applied}
+
+
+func _serialize_user_water() -> Dictionary:
+	var ponds: Array = []
+	for rec in _user_water_data:
+		if not (rec is Dictionary):
+			continue
+		var pts: PackedVector2Array = (rec as Dictionary).get("points", PackedVector2Array())
+		var arr: Array = []
+		for p in pts:
+			arr.append([p.x, p.y])
+		var out := {"tag": str((rec as Dictionary).get("tag", "")), "points": arr}
+		if (rec as Dictionary).has("level_m"):
+			out["level_m"] = float((rec as Dictionary)["level_m"])
+		if (rec as Dictionary).has("capacity_l"):
+			out["capacity_l"] = float((rec as Dictionary)["capacity_l"])
+		if (rec as Dictionary).has("label"):
+			out["label"] = str((rec as Dictionary)["label"])
+		ponds.append(out)
+	return {"version": 1, "ponds": ponds}
+
+
+func _deserialize_user_water(data: Dictionary) -> void:
+	_user_water_data = []
+	for raw in data.get("ponds", []) as Array:
+		if not (raw is Dictionary):
+			continue
+		var d: Dictionary = raw as Dictionary
+		var pts := PackedVector2Array()
+		for p in d.get("points", []) as Array:
+			if p is Array and (p as Array).size() >= 2:
+				pts.append(Vector2(float(p[0]), float(p[1])))
+			elif p is Vector2:
+				pts.append(p)
+		if pts.size() < 3:
+			continue
+		var rec := {
+			"points": pts,
+			"kind": "pond",
+			"tag": str(d.get("tag", "")),
+			"user": true,
+		}
+		if d.has("level_m"):
+			rec["level_m"] = float(d["level_m"])
+		if d.has("capacity_l"):
+			rec["capacity_l"] = float(d["capacity_l"])
+		if d.has("label"):
+			rec["label"] = str(d["label"])
+		_user_water_data.append(rec)
 
 
 ## Enter click-to-move for a placed prop (edit-UI Move button). The real node
@@ -7135,6 +9013,11 @@ func _confirm_prop_reposition() -> void:
 		return
 	if _reposition_valid:
 		save_prop_from_node(prop)
+		# Keep any bound 2D graph node's site/elevation coords in sync (D).
+		var pid := str(prop.prop_id)
+		var sgv := _find_system_graph_view()
+		if sgv != null and pid != "" and sgv.has_method("sync_site_from_prop"):
+			sgv.call_deferred("sync_site_from_prop", pid)
 	rebuild_placed_props()
 
 

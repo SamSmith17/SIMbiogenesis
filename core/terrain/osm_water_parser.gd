@@ -124,9 +124,14 @@ static func is_waterway_line_tags(tags: Dictionary) -> bool:
 	return ww in ["river", "stream", "canal", "ditch", "drain"]
 
 
+## Assemble multipolygon rings. `punch_holes=true` subtracts inners via
+## Geometry2D.exclude_polygons (correct for water lakes with islands).
+## Vegetation MUST pass punch_holes=false — nested hole punching on large wood
+## relations combinatorially explodes into millions of fragments (Mt. Vernon
+## logged 4.2M "wood" polys from a single Overpass reply).
 static func _multipolygon_to_polys(relation: Dictionary, ways_by_id: Dictionary,
 		nodes: Dictionary, center_lat: float, center_lon: float,
-		used_way_ids: Dictionary) -> Array[PackedVector2Array]:
+		used_way_ids: Dictionary, punch_holes: bool = true) -> Array[PackedVector2Array]:
 	var outers: Array = []
 	var inners: Array = []
 	for member in relation.get("members", []):
@@ -152,6 +157,9 @@ static func _multipolygon_to_polys(relation: Dictionary, ways_by_id: Dictionary,
 	for outer_group in _group_connected_way_ids(outers, ways_by_id, nodes, center_lat, center_lon):
 		var ring := _assemble_ring(outer_group, ways_by_id, nodes, center_lat, center_lon)
 		if ring.size() < 3:
+			continue
+		if not punch_holes or inners.is_empty():
+			result.append(ring)
 			continue
 		var fragments: Array = [ring]
 		for inner_group in _group_connected_way_ids(inners, ways_by_id, nodes, center_lat, center_lon):

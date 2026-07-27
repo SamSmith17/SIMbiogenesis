@@ -145,7 +145,36 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 		return state
 	state.rng = RandomNumberGenerator.new()
 	state.rng.seed = int(ctx.get("seed", 1337))
-	state.style = ctx.get("style", {})
+	var style: Dictionary = (ctx.get("style", {}) as Dictionary).duplicate(true)
+	var half := float(ctx.get("half_extent_m", 1500.0))
+	# Large world maps (Mt. Vernon 30 km) — thin + prefer FAR billboards. The
+	# leafy NEAR canopy LOD is the prim bomb (×2 MultiMeshes of high-poly shells).
+	if half >= 8000.0:
+		if int(style.get("auto_max_tree_instances", 24000)) >= 10000:
+			style["auto_max_tree_instances"] = 4000
+		if int(style.get("auto_max_grass_instances", 120000)) >= 36000:
+			style["auto_max_grass_instances"] = 24000
+		if absf(float(style.get("auto_density_scale", 1.0)) - 1.0) < 0.02 \
+				or float(style.get("auto_density_scale", 1.0)) >= 0.44:
+			style["auto_density_scale"] = 0.35
+		if absf(float(style.get("auto_distant_density", 0.35)) - 0.35) < 0.02 \
+				or float(style.get("auto_distant_density", 0.35)) >= 0.07:
+			style["auto_distant_density"] = 0.05
+		if float(style.get("auto_detail_radius_m", 800.0)) >= 440.0:
+			style["auto_detail_radius_m"] = 350.0
+		if float(style.get("grass_detail_radius_m", 500.0)) >= 270.0:
+			style["grass_detail_radius_m"] = 220.0
+		if float(style.get("grass_visibility_end_m", 520.0)) >= 310.0:
+			style["grass_visibility_end_m"] = 260.0
+		if float(style.get("auto_visibility_end_m", 1200.0)) >= 640.0:
+			style["auto_visibility_end_m"] = 480.0
+		# FAR-only billboards for auto forests on large maps (manual paint keeps
+		# leafy NEAR). Consumed by AutoVegetationRuntime._build_bulk_batch.
+		style["auto_force_far_canopy"] = true
+		if float(style.get("auto_foliage_lod_reach_m", 300.0)) >= 200.0:
+			style["auto_foliage_lod_reach_m"] = 70.0
+	state.style = style
+	ctx["style"] = style
 	state.layer.apply_instance_caps(state.style)
 	state.forest_min_area = float(state.style.get("forest_auto_min_area_m2", 12000.0))
 	state.biome = BiomePalette.for_location(float(ctx.get("latitude", 0.0)))
@@ -153,12 +182,13 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 		_trim_polygons(osm_payload.get("polygons", []), DENSE_POLY_BUDGET))
 	state.dense = state.polys.size() >= DENSE_POLY_SKIP_GAP_FILL
 	var exclusions: Array = ctx.get("exclusions", [])
-	var half := float(ctx.get("half_extent_m", 1500.0))
 	state.exclusion_index = VegExclusionBuilder.build_index(exclusions, half)
 	# Meadow/lawn footprints veto tree scatter from overlapping polygons (a
 	# wood polygon drawn over a mapped meadow must not forest it). Threaded via
 	# ctx so the static scatter helpers can reach it without signature churn.
 	if bool(state.style.get("open_areas_exclude_trees", true)):
+		# Payload is hard-capped at VegetationService.MAX_POLYGONS_RETAINED (open
+		# areas preferred). Do NOT scan uncapped multi-million caches.
 		ctx["open_areas"] = _build_open_area_index(osm_payload.get("polygons", []))
 	# Wetland shrubs draw from the shared tree budget; cap their cumulative share.
 	ctx["wetland_bulk_max"] = int(state.layer.max_tree_bulk * WETLAND_TREE_BUDGET_SHARE)

@@ -7,6 +7,13 @@ const USER_DIR := "user://models/"
 const CATALOG_PATH := "user://models/catalog.json"
 const DEFAULT_TARGET_HEIGHT_M := 3.0
 const MAX_WORLD_SCALE := 50.0
+## Procedural gray-box placeholder for abstract graph nodes (PBIs, monitors,
+## breakers, spiderboxes…) that have no bespoke GLB. Sized from the preset
+## footprint via a `box_spec` extra; falls back to a 1 m cube.
+const GENERIC_BOX_ID := "generic_box"
+## Procedural tank silhouette for resource / catchment site twins (cylinder
+## from `box_spec` / `tank_spec` w_m×d_m×h_m).
+const GENERIC_TANK_ID := "generic_tank"
 ## LinkageLab GLB meshes use inch coordinates (see bundle translations ~40–300).
 const LINKAGELAB_INCHES_TO_M := 0.0254
 
@@ -95,13 +102,106 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	if model_id == PalletRackBuilder.MODEL_ID:
 		var rack_spec: Dictionary = extras.get("rack_spec", extras) as Dictionary
 		return PalletRackBuilder.build_node(rack_spec)
+	if model_id == LinkageStructureBuilder.MODEL_ID:
+		var linkage_spec: Dictionary = extras.get("linkage_spec", extras) as Dictionary
+		return LinkageStructureBuilder.build_node(linkage_spec)
 	if model_id == GrowBed.MODEL_ID:
 		var bed_spec: Dictionary = extras.get("grow_bed_spec", extras) as Dictionary
 		return GrowBed.build_node(bed_spec)
+	if model_id == GeodesicDomeBuilder.MODEL_ID:
+		var dome_spec: Dictionary = extras.get("dome_spec", extras) as Dictionary
+		return GeodesicDomeBuilder.build_node(dome_spec)
+	if model_id == MudBuildingStructureBuilder.MODEL_ID:
+		var mud_spec: Dictionary = extras.get("mud_spec", extras) as Dictionary
+		return MudBuildingStructureBuilder.build_node(mud_spec)
+	if model_id == ScadPartBuilder.MODEL_ID:
+		var scad_spec: Dictionary = extras.get("scad_spec", extras) as Dictionary
+		return ScadPartBuilder.build_node(scad_spec)
+	if model_id == GENERIC_BOX_ID:
+		var box_spec: Dictionary = extras.get("box_spec", extras) as Dictionary
+		return _build_generic_box(box_spec)
+	if model_id == GENERIC_TANK_ID:
+		var tank_spec: Dictionary = extras.get("tank_spec",
+			extras.get("box_spec", extras)) as Dictionary
+		return _build_generic_tank(tank_spec)
 	var ps := load_scene(model_id)
 	if ps == null:
 		return null
 	return ps.instantiate() as Node3D
+
+
+## Build a gray box placeholder Node3D whose BASE sits at local y=0 (so it
+## grounds like any other prop). Dimensions (metres) come from `box_spec`
+## (w_m/d_m/h_m); missing values fall back to a 1 m cube.
+static func _build_generic_box(box_spec: Dictionary) -> Node3D:
+	var w := maxf(float(box_spec.get("w_m", 1.0)), 0.1)
+	var d := maxf(float(box_spec.get("d_m", 1.0)), 0.1)
+	var h := maxf(float(box_spec.get("h_m", 1.0)), 0.1)
+	var root := Node3D.new()
+	root.name = "GenericBox"
+	var mi := MeshInstance3D.new()
+	mi.name = "BoxMesh"
+	var bm := BoxMesh.new()
+	bm.size = Vector3(w, h, d)
+	mi.mesh = bm
+	# Base on the ground: box centre lifted half its height.
+	mi.position = Vector3(0.0, h * 0.5, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.55, 0.58, 0.62)
+	mat.roughness = 0.85
+	mat.metallic = 0.0
+	mi.material_override = mat
+	root.add_child(mi)
+	return root
+
+
+## Vertical cylinder tank; BASE at local y=0. Diameter from max(w_m, d_m).
+static func _build_generic_tank(tank_spec: Dictionary) -> Node3D:
+	var w := maxf(float(tank_spec.get("w_m", 1.2)), 0.2)
+	var d := maxf(float(tank_spec.get("d_m", w)), 0.2)
+	var h := maxf(float(tank_spec.get("h_m", 1.5)), 0.3)
+	var radius := maxf(w, d) * 0.5
+	var root := Node3D.new()
+	root.name = "GenericTank"
+	var mi := MeshInstance3D.new()
+	mi.name = "TankMesh"
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = h
+	cm.radial_segments = 20
+	mi.mesh = cm
+	mi.position = Vector3(0.0, h * 0.5, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.42, 0.52, 0.58)
+	mat.roughness = 0.55
+	mat.metallic = 0.15
+	mi.material_override = mat
+	root.add_child(mi)
+	return root
+
+
+## Default procedural twin model for a site-placed graph item with no model_id.
+static func default_twin_model_id(item: Dictionary) -> String:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var mid := str(specs.get("model_id", ""))
+	if not mid.is_empty():
+		return mid
+	var itype := str(item.get("type", ""))
+	if GraphSiteLayout.is_circular_node(itype):
+		return GENERIC_TANK_ID
+	return GENERIC_BOX_ID
+
+
+## Footprint / height dict for procedural twins (metres).
+static func twin_box_spec_for_item(item: Dictionary) -> Dictionary:
+	var fp := GraphSiteLayout.physical_footprint_m(item)
+	var side := maxf(fp.x, fp.y)
+	var h := clampf(side * 0.85, 0.8, 3.0)
+	var itype := str(item.get("type", ""))
+	if itype == "catchment":
+		h = clampf(side * 0.25, 0.4, 1.2)
+	return {"w_m": maxf(fp.x, 0.5), "d_m": maxf(fp.y, 0.5), "h_m": h}
 
 
 static func register_user(entry: Dictionary) -> void:
@@ -223,6 +323,12 @@ static func scale_to_footprint(model_id: String, width_m: float, depth_m: float,
 
 static func _shipped_models() -> Array[Dictionary]:
 	return [
+		# Procedural gray-box placeholder (no `category` → not listed as a
+		# structure; used only as the default 3D form for abstract graph nodes).
+		{"id": GENERIC_BOX_ID, "label": "Placeholder box", "procedural": true,
+			"preserve_scale": true},
+		{"id": GENERIC_TANK_ID, "label": "Placeholder tank", "procedural": true,
+			"preserve_scale": true},
 		{"id": "shiftpod", "label": "Shiftpod", "path": "res://Imported Models/Soak Terrain/Camps/Camp Components/Shiftpod.glb",
 			"target_height_m": 2.5, "mesh_scale": 1.0, "category": "structures"},
 		{"id": "carport", "label": "Carport", "path": "res://Imported Models/Soak Terrain/Camps/Camp Components/Carport.glb",
@@ -243,6 +349,11 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "pallet_rack", "label": "Pallet Rack (parametric)",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 2.0},
+		# Procedural scissor-linkage structure — designed in the Linkage Lab
+		# modal, built via LinkageStructureBuilder from a v30 linkage_spec.
+		{"id": "linkage_structure", "label": "Linkage Structure (Linkage Lab)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 2.5},
 		# Procedural grow bed — library "Grow Beds" → Place in world.
 		{"id": "grow_bed", "label": "Grow Bed",
 			"procedural": true, "preserve_scale": true, "category": "nature",
@@ -290,6 +401,18 @@ static func _shipped_models() -> Array[Dictionary]:
 			"preserve_scale": true, "category": "structures",
 			"hawt_yaw_node": "turbine vane assembly",
 			"hawt_blade_node": "Nosecone and Blades"},
+		# Siphon micro-hydro (6″ PVC intake + 8″ culvert out, hoverboard motor
+		# ≤250 W DC). Place via library Siphon Hydroturbine preset.
+		# Siphon Lab + SiphonTurbineSpin: spins smallest/prop-named mesh from
+		# graph electrical W (see gameplay/siphon_turbine_spin.gd).
+		# Spin axis = model local +Z (SiphonTurbineSpin). CT camera looks along
+		# −cross; yaw = −section_heading faces the disk into the cut. Bias 0 —
+		# Lab/Elev call _ensure_hydroturbine_section_yaw on open.
+		{"id": "hydroturbine", "label": "Siphon Hydroturbine",
+			"path": "res://Imported Models/Hydro/hydroturbine.glb",
+			"preserve_scale": true, "category": "structures",
+			"forced_yaw_deg": 0.0,
+			"turbine_node": ""},
 		# Dual-axis point-focus solar concentrator ("dish" heliostat / solar
 		# furnace). Authored in inches baked into the "Component#1" ancestor's
 		# 0.025 scale (same convention as VAWT.glb / single_axis_csp.glb), so
@@ -313,6 +436,63 @@ static func _shipped_models() -> Array[Dictionary]:
 			"helio_altitude_node": "Vertical Rotating Assembly",
 			"helio_mirror_node": "Mirror array",
 			"helio_focal_node": "solar collector area"},
+		# HomeBiogas 2.0 household biodigester (210×115×130 cm → 1.3 m tall).
+		# Unit-agnostic height fit (same technique as CNC tool GLBs) so an
+		# inch- or metre-authored export seats at the datasheet height.
+		{"id": "home_biogas_2", "label": "HomeBiogas 2.0",
+			"path": "res://Imported Models/Biogas/home_biogas_2.glb",
+			"preserve_scale": true, "reference_height_m": 1.3,
+			"category": "structures", "forced_yaw_deg": 0.0},
+		# ---- Tools: Cartesian CNC machines (X/Y/Z kinematics) ----
+		# CAD-export GLBs in arbitrary internal units → preserve_scale + a
+		# reference height fits them to real-world size unit-agnostically (same
+		# technique as the StarShade/CSP bundles). The moving axis sub-nodes are
+		# tagged generically via CartesianMachineProfile (baked defaults in
+		# core/machines/cartesian_machine_profile.gd), NOT hardcoded here, so any
+		# imported machine can be axis-tagged by the player. CncMachineRuntime
+		# (attached at placement for kind == "cartesian_machine") animates them.
+		{"id": "cnc_router", "label": "CNC Router (4x5 Gantry)",
+			"path": "res://Imported Models/Tools/cnc_router.glb",
+			"preserve_scale": true, "reference_height_m": 1.3,
+			"category": "tools", "forced_yaw_deg": 0.0},
+		{"id": "trash_printer", "label": "Trash Printer (flake FDM)",
+			"path": "res://Imported Models/Tools/trash_printer.glb",
+			"preserve_scale": true, "reference_height_m": 2.0,
+			"category": "tools", "forced_yaw_deg": 0.0},
+		# Large-format gantry mud/clay/concrete printer. The GLB is authored at
+		# true real-world size (composed AABB ≈ 3.74 m ≈ 12' wide, ~5.5 m tall),
+		# so preserve_scale WITHOUT a reference height keeps its natural metres.
+		# Axis nodes (Z assembly / X Y Assembly / X assembly / Fog Nozzle) are
+		# tagged in cartesian_machine_profile.gd BUILTIN.
+		{"id": "mud_printer", "label": "Mud Printer (gantry FDM)",
+			"path": "res://Imported Models/Tools/mud_printer.glb",
+			"preserve_scale": true,
+			"category": "tools", "forced_yaw_deg": 0.0},
+		# Precious Plastic workshop machines (SketchUp/CAD exports → height fit).
+		{"id": "pp_shredder", "label": "PP Shredder",
+			"path": "res://Imported Models/Tools/pp_shredder.glb",
+			"preserve_scale": true, "reference_height_m": 1.6,
+			"category": "tools", "forced_yaw_deg": 0.0},
+		{"id": "pp_beam_extruder", "label": "PP Beam Extruder",
+			"path": "res://Imported Models/Tools/pp_beam_extruder.glb",
+			"preserve_scale": true, "reference_height_m": 1.8,
+			"category": "tools", "forced_yaw_deg": 0.0,
+			"beam_mesh_name": "Recycled Plastic Beam",
+			"mold_mesh_name": "beam#1"},
+		{"id": "pp_sheet_press", "label": "PP Sheet Press",
+			"path": "res://Imported Models/Tools/pp_sheet_press.glb",
+			"preserve_scale": true, "reference_height_m": 2.0,
+			"category": "tools", "forced_yaw_deg": 0.0,
+			"z_axis_node": "Z axis",
+			"sheet_mesh_name": "Recycled Plastic Sheet"},
+		# Procedural crafting output — placed when a RecipeCatalog dome is
+		# assembled from fabricated parts (see core/machines/recipe_catalog.gd).
+		{"id": "geodesic_dome", "label": "Geodesic Dome (2V recycled plastic)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 2.4},
+		{"id": "mud_building", "label": "Mud Building (designer)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 2.4},
 	]
 
 

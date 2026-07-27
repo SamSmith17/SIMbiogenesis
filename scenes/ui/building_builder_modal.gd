@@ -275,7 +275,7 @@ func _build_ui() -> void:
 	# Match the veg-editor pattern: a real size + always-update so the preview
 	# renders and the click coordinates map cleanly into camera ray space.
 	_viewport.size = Vector2i(590, 550)
-	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
 	_vp_container.add_child(_viewport)
 	_build_studio_world()
 
