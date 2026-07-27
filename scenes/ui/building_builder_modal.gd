@@ -52,6 +52,8 @@ var _tex_h_spin: SpinBox = null
 var _prov_label: Label = null
 var _title_label: Label = null
 var _kind_opt: OptionButton = null
+var _space_opt: OptionButton = null
+var _space_cap_spin: SpinBox = null
 var _elem_list: ItemList = null
 var _elem_spins: Dictionary = {}   # "u_m"/"v_m"/"w_m"/"h_m" -> SpinBox
 var _elem_delete: Button = null
@@ -99,10 +101,67 @@ func open(building_idx: int) -> void:
 	_selected_elem = -1
 	_sync_controls_from_style()
 	_sync_element_list()
+	_sync_space_controls()
 	_activate()
 	_tabs.current_tab = 0
 	_fit_camera()
 	_queue_rebuild(true)
+
+
+func _space_registry() -> SpaceRegistry:
+	if _loader == null:
+		return null
+	var reg: Variant = _loader.get("npc_spaces")
+	return reg as SpaceRegistry if reg is SpaceRegistry else null
+
+
+func _space_target() -> Dictionary:
+	var tag := ""
+	if _loader != null and _building_idx >= 0 and _loader.has_method("get_building_tag"):
+		tag = str(_loader.call("get_building_tag", _building_idx))
+	return {"kind": "building", "building_tag": tag}
+
+
+func _sync_space_controls() -> void:
+	if _space_opt == null:
+		return
+	var reg := _space_registry()
+	var target := _space_target()
+	var usable := reg != null and not str(target.get("building_tag", "")).is_empty()
+	_space_opt.get_parent().visible = usable
+	_space_cap_spin.visible = false
+	if not usable:
+		return
+	var rec := reg.space_for_target(target)
+	var idx := SpaceTypes.TYPES.find(str(rec.get("space_type", ""))) if not rec.is_empty() else -1
+	_space_opt.selected = idx + 1  # 0 = None
+	if idx >= 0:
+		_space_cap_spin.visible = true
+		_space_cap_spin.set_value_no_signal(float(int(rec.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))))
+
+
+func _on_space_type_selected(idx: int) -> void:
+	var reg := _space_registry()
+	if reg == null:
+		return
+	var space_type: String = "" if idx <= 0 else str(SpaceTypes.TYPES[idx - 1])
+	reg.set_space_type(_space_target(), space_type, int(_space_cap_spin.value))
+	if _loader.has_method("save_npc_spaces"):
+		_loader.call("save_npc_spaces")
+	_sync_space_controls()
+
+
+func _on_space_capacity_changed(v: float) -> void:
+	var reg := _space_registry()
+	if reg == null:
+		return
+	var target := _space_target()
+	var rec := reg.space_for_target(target)
+	if rec.is_empty():
+		return
+	reg.set_space_type(target, str(rec.get("space_type", "")), int(v))
+	if _loader.has_method("save_npc_spaces"):
+		_loader.call("save_npc_spaces")
 
 
 ## Open straight to the structure library (B with no building focused).
@@ -301,6 +360,32 @@ func _build_ui() -> void:
 	_prov_label.add_theme_font_size_override("font_size", 12)
 	_prov_label.modulate = Color(0.7, 0.8, 0.9)
 	side.add_child(_prov_label)
+
+	# NPC space tag: writes SpaceRegistry (NOT the style layer — tagging must
+	# not de-merge the building from the merged OSM mesh).
+	var space_row := HBoxContainer.new()
+	side.add_child(space_row)
+	var space_lbl := Label.new()
+	space_lbl.text = "NPC space"
+	space_lbl.custom_minimum_size = Vector2(90, 0)
+	space_row.add_child(space_lbl)
+	_space_opt = OptionButton.new()
+	_space_opt.tooltip_text = "Tag this building as a space people wayfind to (restroom, kitchen, …)"
+	_space_opt.add_item("None", 0)
+	for i in SpaceTypes.TYPES.size():
+		_space_opt.add_item(SpaceTypes.label(SpaceTypes.TYPES[i]), i + 1)
+	_space_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_space_opt.item_selected.connect(_on_space_type_selected)
+	space_row.add_child(_space_opt)
+	_space_cap_spin = SpinBox.new()
+	_space_cap_spin.min_value = 1
+	_space_cap_spin.max_value = 64
+	_space_cap_spin.step = 1
+	_space_cap_spin.custom_minimum_size = Vector2(64, 0)
+	_space_cap_spin.tooltip_text = "How many people can use this space at once"
+	_space_cap_spin.value_changed.connect(_on_space_capacity_changed)
+	_space_cap_spin.visible = false
+	space_row.add_child(_space_cap_spin)
 
 	var shape_row := HBoxContainer.new()
 	side.add_child(shape_row)

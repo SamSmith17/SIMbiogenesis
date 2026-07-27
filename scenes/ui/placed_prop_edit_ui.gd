@@ -29,6 +29,8 @@ var _show3d_check: CheckBox
 var _burnable_check: CheckBox
 var _shadow_option: OptionButton
 var _restore_btn: Button
+var _space_option: OptionButton
+var _space_cap: SpinBox
 var _del_btn: Button
 var _move_btn: Button
 var _linkage_btn: Button
@@ -188,6 +190,25 @@ func _build_ui() -> void:
 	_shadow_option.item_selected.connect(_on_shadow_mode_selected)
 	actions.add_child(_shadow_option)
 
+	# NPC space tag: mark this prop as a restroom / kitchen / sleeping / water
+	# point so population agents wayfind to it (stored in SpaceRegistry, not on
+	# the prop record).
+	_space_option = OptionButton.new()
+	_space_option.tooltip_text = "Tag this prop as an NPC space (restroom, kitchen, …) — people wayfind to it"
+	_space_option.add_item("Space: None", 0)
+	for i in SpaceTypes.TYPES.size():
+		_space_option.add_item("Space: %s" % SpaceTypes.label(SpaceTypes.TYPES[i]), i + 1)
+	_space_option.add_theme_color_override("font_color", C_TEXT)
+	_space_option.item_selected.connect(_on_space_type_selected)
+	actions.add_child(_space_option)
+
+	_space_cap = _spin(1.0, 1.0, 64.0)
+	_space_cap.tooltip_text = "How many people can use this space at once"
+	_space_cap.custom_minimum_size.x = 56.0
+	_space_cap.value_changed.connect(_on_space_capacity_changed)
+	_space_cap.visible = false
+	actions.add_child(_space_cap)
+
 	_move_btn = Button.new()
 	_move_btn.text = "Move"
 	_move_btn.tooltip_text = "Click the world to reposition; camera follows the model"
@@ -310,6 +331,7 @@ func _load_from_layer() -> void:
 		_siphon_btn.visible = mid == "hydroturbine" or kind == "siphon_hydro" \
 				or kind == "siphon_hoverboard"
 	_refresh_restore_visibility()
+	_sync_space_controls()
 
 	if _del_btn != null:
 		var is_osm := str(d.get("type", "")) == "osm"
@@ -354,6 +376,60 @@ func _on_burnable_toggled(pressed: bool) -> void:
 	if _loader.has_method("update_prop_record"):
 		_loader.call("update_prop_record", _prop_id, {"burnable": pressed})
 	FireNode.invalidate_flammable_mesh_cache()
+
+
+func _space_registry() -> SpaceRegistry:
+	if _loader == null:
+		return null
+	var reg: Variant = _loader.get("npc_spaces")
+	return reg as SpaceRegistry if reg is SpaceRegistry else null
+
+
+func _space_target() -> Dictionary:
+	return {"kind": "prop", "prop_id": _prop_id}
+
+
+func _sync_space_controls() -> void:
+	if _space_option == null:
+		return
+	var reg := _space_registry()
+	_space_option.visible = reg != null
+	_space_cap.visible = false
+	if reg == null:
+		return
+	var rec := reg.space_for_target(_space_target())
+	var idx := SpaceTypes.TYPES.find(str(rec.get("space_type", ""))) if not rec.is_empty() else -1
+	_space_option.selected = idx + 1  # 0 = None
+	if idx >= 0:
+		_space_cap.visible = true
+		_space_cap.set_value_no_signal(float(int(rec.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))))
+
+
+func _on_space_type_selected(idx: int) -> void:
+	if _syncing or _prop_id.is_empty():
+		return
+	var reg := _space_registry()
+	if reg == null:
+		return
+	var space_type: String = "" if idx <= 0 else str(SpaceTypes.TYPES[idx - 1])
+	reg.set_space_type(_space_target(), space_type, int(_space_cap.value))
+	if _loader.has_method("save_npc_spaces"):
+		_loader.call("save_npc_spaces")
+	_sync_space_controls()
+
+
+func _on_space_capacity_changed(v: float) -> void:
+	if _syncing or _prop_id.is_empty():
+		return
+	var reg := _space_registry()
+	if reg == null:
+		return
+	var rec := reg.space_for_target(_space_target())
+	if rec.is_empty():
+		return
+	reg.set_space_type(_space_target(), str(rec.get("space_type", "")), int(v))
+	if _loader.has_method("save_npc_spaces"):
+		_loader.call("save_npc_spaces")
 
 
 const _SHADOW_MODES := ["", "all", "off"]

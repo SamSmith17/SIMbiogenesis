@@ -148,6 +148,15 @@ func _physics_process(_delta: float) -> void:
 		else:
 			_sync_graph_from_world_focus()
 		return
+	if _focused == null and _update_npc_focus():
+		# A person standing in front of a building wins over the building.
+		_clear_solar_focus()
+		_clear_water_focus()
+		_clear_building_focus()
+		_clear_veg_focus()
+		_last_graph_sync_key = ""
+		return
+	_clear_npc_focus()
 	if _focused == null:
 		# Long-range ground point under the crosshair → OSM polygon pick. Priority:
 		# solar arrays (panels sit on/next to their host footprints) → buildings →
@@ -728,6 +737,75 @@ func _clear_water_focus() -> void:
 		if _loader.has_method("get_water_focus_idx") \
 				and int(_loader.call("get_water_focus_idx")) >= 0:
 			_loader.call("set_water_focus_idx", -1)
+
+
+## Simulated people under the crosshair. Pure software ray-vs-sphere over the
+## `npc_avatars` group — NpcAvatars deliberately carry NO collider (a moving
+## StaticBody would shove the player around), and 50 dot products per frame is
+## far cheaper than adding a physics layer. Shows the person's name + what
+## they're doing; read-only (no interact action yet).
+const NPC_PICK_RANGE_M := 60.0
+
+var _npc_focus_id: String = ""
+
+
+func _update_npc_focus() -> bool:
+	var tree := get_tree()
+	if tree == null or _camera == null:
+		return false
+	var avatars := tree.get_nodes_in_group("npc_avatars")
+	if avatars.is_empty():
+		return false
+	var origin := _camera.global_position
+	var dir := -_camera.global_transform.basis.z
+	var best: NpcAvatar = null
+	var best_t := INF
+	for node in avatars:
+		var av := node as NpcAvatar
+		if av == null or not is_instance_valid(av) or not av.visible:
+			continue
+		var to_center: Vector3 = av.pick_center() - origin
+		var t := to_center.dot(dir)
+		if t <= 0.0 or t > NPC_PICK_RANGE_M or t >= best_t:
+			continue
+		if (to_center - dir * t).length() > NpcAvatar.PICK_RADIUS_M:
+			continue
+		best_t = t
+		best = av
+	if best == null:
+		return false
+	_npc_focus_id = best.agent_id
+	var host := best.get_parent()
+	if host != null and host.has_method("set_focus_agent"):
+		host.call("set_focus_agent", best.agent_id)
+	if _crosshair != null:
+		if _crosshair.has_method("set_target_active"):
+			_crosshair.set_target_active(true)
+		if _crosshair.has_method("set_prompt_text"):
+			# "Marlo — Over It · heading to Water Point"
+			var parts: PackedStringArray = PackedStringArray([best.display_name])
+			var tail: PackedStringArray = PackedStringArray()
+			if not best.morale_label.is_empty():
+				tail.append(best.morale_label)
+			if not best.status_text.is_empty():
+				tail.append(best.status_text)
+			if not tail.is_empty():
+				parts.append(" · ".join(tail))
+			_crosshair.set_prompt_text(" — ".join(parts))
+	return true
+
+
+func _clear_npc_focus() -> void:
+	if _npc_focus_id.is_empty():
+		return
+	_npc_focus_id = ""
+	var tree := get_tree()
+	if tree != null:
+		for node in tree.get_nodes_in_group("npc_avatars"):
+			var host := (node as Node).get_parent()
+			if host != null and host.has_method("set_focus_agent"):
+				host.call("set_focus_agent", "")
+			break
 
 
 func _update_ui() -> void:

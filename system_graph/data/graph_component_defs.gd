@@ -35,6 +35,8 @@ const INSTANCE_ONLY_SPEC_KEYS: Array[String] = [
 	"destroyed", "node_state", "node_state_reason", "node_state_kinds", "deficit_qty",
 	"live_capture_lph", "live_capture_rate",
 	"sunlight_factor", "source", "site_x_m", "site_z_m",
+	"pop_state", "starved_kinds", "is_starved",
+	"pop_present", "pop_morale", "pop_collapse_risk",
 ]
 
 const _MAX_DEPTH := 32

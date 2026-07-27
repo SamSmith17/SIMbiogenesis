@@ -419,6 +419,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 					for sk: Variant in starved:
 						parts.append(ResourceKinds.display_name(str(sk)))
 					_readonly_field("Demand status", "STARVED: %s" % ", ".join(parts))
+				_build_population_section(specs)
 			elif str(specs.get("role", "")) == "csp_concentrator":
 				_build_csp_concentrator_section(specs)
 			elif str(specs.get("role", "")) == "heliostat":
@@ -3351,6 +3352,94 @@ func _update_pp_extruder_live_labels(specs: Dictionary) -> void:
 ## HomeBiogas 2.0 biodigester: feed mode / daily setpoint plus read-only live
 ## telemetry written each tick by SystemGraphView._tick_graph_biodigester (see
 ## power_system/sources/home_biogas_source.gd for the physics).
+## Habitat: toggle individual-NPC simulation (needs + wayfinding to tagged
+## spaces drive consumption) and show the live roster when running.
+func _build_population_section(specs: Dictionary) -> void:
+	_section("Population Simulation")
+	var on := bool(specs.get("pop_driven", false))
+	var row := _row_container()
+	var h: HBoxContainer = row.get_child(0) as HBoxContainer
+	h.add_child(_key_label("Simulated individuals"))
+	var cb := CheckBox.new()
+	cb.button_pressed = on
+	cb.focus_mode = Control.FOCUS_NONE
+	cb.tooltip_text = "Simulate each occupant as an NPC with needs (hunger, thirst, bladder, sleep) who walks to tagged spaces — consumption emerges from their activity instead of constant rates"
+	cb.toggled.connect(func(v: bool) -> void:
+		_commit_field("specs/pop_driven", v)
+		_rebuild_current_item()
+	)
+	h.add_child(cb)
+	_form_vbox.add_child(row)
+	if not on:
+		_hint_label("Tag props or buildings as Restroom / Kitchen / Sleeping / Water Point (prop editor or Building Builder) so people have places to go.")
+		return
+	var view := _find_owner_graph_view()
+	var summ: Dictionary = view.call("npc_population_summary", _item_id) if view != null else {}
+	if summ.is_empty():
+		_readonly_field("Roster", "starting up…")
+		return
+	var here := int(summ.get("count", 0))
+	var started := int(summ.get("initial_count", here))
+	var gone := int(summ.get("departures", 0))
+	_readonly_field("Roster", "%d of %d present%s" % [here, started,
+			("  (%d left)" % gone) if gone > 0 else ""])
+	# Morale is the headline number — mean band + the spread across bands.
+	_readonly_field("Morale", "%s  (%d%%)" % [
+			str(summ.get("morale_label", "—")),
+			int(float(summ.get("mean_morale", 0.0)) * 100.0)])
+	var bands: Array = summ.get("morale_bands", [])
+	if bands.size() == NpcMorale.BANDS.size():
+		var spread: PackedStringArray = PackedStringArray()
+		for i in bands.size():
+			if int(bands[i]) > 0:
+				spread.append("%s ×%d" % [
+					str((NpcMorale.BANDS[i] as Dictionary)["label"]), int(bands[i])])
+		if not spread.is_empty():
+			_readonly_field("Spread", ", ".join(spread))
+	if bool(summ.get("collapsed", false)):
+		_readonly_field("Status", "COLLAPSED — rebuild and win people back")
+	else:
+		var risk := float(summ.get("collapse_risk", 0.0))
+		if risk >= 0.25:
+			_readonly_field("Collapse risk", "%d%%%s" % [int(risk * 100.0),
+					"  ⚠ unravelling" if risk >= NpcPopulationEngine.COLLAPSE_WARN_RISK else ""])
+	# What is actually hurting them: blocked needs cost double morale.
+	var blocked: Dictionary = summ.get("blocked", {})
+	if not blocked.is_empty():
+		var bparts: PackedStringArray = PackedStringArray()
+		for k in blocked:
+			bparts.append("%s ×%d" % [str(k), int(blocked[k])])
+		_readonly_field("Blocked on", ", ".join(bparts))
+	var avg: Dictionary = summ.get("avg_needs", {})
+	var worst: Dictionary = summ.get("worst_needs", {})
+	for n in NpcAgent.NEEDS:
+		_readonly_field(str(n).capitalize(),
+				"avg %d%%  worst %d%%" % [int(float(avg.get(n, 0.0)) * 100.0), int(float(worst.get(n, 0.0)) * 100.0)])
+	var acts: Dictionary = summ.get("activities", {})
+	var parts: PackedStringArray = PackedStringArray()
+	for k in acts:
+		parts.append("%s ×%d" % [str(k), int(acts[k])])
+	if not parts.is_empty():
+		_readonly_field("Doing", ", ".join(parts))
+	if float(avg.get("enrichment", 1.0)) > 0.5:
+		_hint_label("Nobody is gathering. Tag a Fire Circle / Dance / Quiet / Craft space — morale cannot pass %d%% without enrichment." % int(NpcMorale.BASELINE_CEILING * 100.0))
+	var routines_btn := Button.new()
+	routines_btn.text = "Routines & chores…"
+	routines_btn.pressed.connect(func() -> void:
+		var v := _find_owner_graph_view()
+		if v != null and v.has_method("open_npc_routines"):
+			v.call("open_npc_routines", _item_id)
+	)
+	_form_vbox.add_child(routines_btn)
+
+
+func _find_owner_graph_view() -> Node:
+	var n: Node = get_parent()
+	while n != null and not n.has_method("npc_population_summary"):
+		n = n.get_parent()
+	return n
+
+
 func _build_biodigester_section(specs: Dictionary) -> void:
 	var mode_row := HBoxContainer.new()
 	mode_row.add_theme_constant_override("separation", 8)

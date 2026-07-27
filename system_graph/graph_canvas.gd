@@ -5311,6 +5311,8 @@ func _draw() -> void:
 	# designated watershed stays a freeform graph node, not a default map outline.
 	if view_mode == GraphSiteLayout.VIEW_SITE:
 		_draw_watershed_overlays_site()
+		_draw_npc_spaces_site()   # destinations under…
+		_draw_npc_agents_site()   # …the people walking to them
 		_draw_prop_radial_preview()
 	_draw_destroy_fx()
 	_draw_temp_wire()                # always on top of everything
@@ -7788,6 +7790,100 @@ func _draw_watershed_overlays_site() -> void:
 		draw_colored_polygon(screen, fill)
 		for i in screen.size():
 			draw_line(screen[i], screen[(i + 1) % screen.size()], col, 1.75, true)
+
+
+## Site Plan: live NPC population dots. The view installs a provider Callable
+## returning [{pos: Vector2 world XZ, color: Color, activity: String, state}]
+## (NpcPopulationEngine.agent_dots); the canvas stays dumb about the sim.
+var npc_agents_provider: Callable = Callable()
+## Site Plan: player-tagged NPC spaces — [{pos, space_type, label, occupied,
+## capacity}] from NpcPopulationBridge.space_markers.
+var npc_spaces_provider: Callable = Callable()
+
+
+## Site Plan: where the people are going. A soft disc + ring per tagged space,
+## with its glyph and live occupancy, so the destinations behind the agent
+## dots are legible.
+func _draw_npc_spaces_site() -> void:
+	if not npc_spaces_provider.is_valid():
+		return
+	var marks: Variant = npc_spaces_provider.call()
+	if not (marks is Array) or (marks as Array).is_empty():
+		return
+	var soi_svc := _cached_autoload("/root/SoiService")
+	var center3 := Vector3.ZERO
+	if soi_svc != null and soi_svc.has_method("world_center"):
+		center3 = soi_svc.call("world_center") as Vector3
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var origin := size * 0.5 + _pan
+	var fnt := ThemeDB.fallback_font
+	# Footprint reads as a ~6 m gathering area, floored so it stays visible
+	# when zoomed out to the whole SoI.
+	var r := maxf(9.0, 6.0 * s)
+	for mark_v in marks as Array:
+		if not (mark_v is Dictionary):
+			continue
+		var mark: Dictionary = mark_v
+		var world: Vector2 = mark.get("pos", Vector2.ZERO)
+		var screen := origin + GraphSiteLayout.world_xz_to_site(world, center3) * s
+		if screen.x < -60.0 or screen.y < -60.0 or screen.x > size.x + 60.0 or screen.y > size.y + 60.0:
+			continue
+		var stype := str(mark.get("space_type", ""))
+		var col := SpaceTypes.color(stype)
+		var occupied := int(mark.get("occupied", 0))
+		var capacity := maxi(int(mark.get("capacity", 1)), 1)
+		var full := occupied >= capacity
+		draw_circle(screen, r, Color(col.r, col.g, col.b, 0.13))
+		draw_arc(screen, r, 0.0, TAU, 40, Color(col.r, col.g, col.b, 0.85), 1.8, true)
+		# Occupancy sweep on the ring — a full space reads at a glance.
+		if occupied > 0:
+			var frac := clampf(float(occupied) / float(capacity), 0.0, 1.0)
+			draw_arc(screen, r, -PI * 0.5, -PI * 0.5 + TAU * frac, 40,
+					Color(1.0, 0.45, 0.35, 0.95) if full else col, 3.2, true)
+		if r >= 14.0:
+			var glyph := SpaceTypes.icon(stype)
+			var fs := 11
+			var gw := fnt.get_string_size(glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+			draw_string(fnt, screen - Vector2(gw * 0.5, -4.0), glyph,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col.r, col.g, col.b, 0.95))
+			var occ := "%d/%d" % [occupied, capacity]
+			var ow := fnt.get_string_size(occ, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
+			draw_string(fnt, screen - Vector2(ow * 0.5, -r - 6.0), occ,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.85, 0.89, 0.94, 0.9))
+
+
+func _draw_npc_agents_site() -> void:
+	if not npc_agents_provider.is_valid():
+		return
+	var dots: Variant = npc_agents_provider.call()
+	if not (dots is Array) or (dots as Array).is_empty():
+		return
+	var soi_svc := _cached_autoload("/root/SoiService")
+	var center3 := Vector3.ZERO
+	if soi_svc != null and soi_svc.has_method("world_center"):
+		center3 = soi_svc.call("world_center") as Vector3
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var origin := size * 0.5 + _pan
+	# Person-scale dot: ~0.6 m footprint on the plan, but always readable.
+	var r := maxf(3.5, 0.35 * s)
+	for dot_v in dots as Array:
+		if not (dot_v is Dictionary):
+			continue
+		var dot: Dictionary = dot_v
+		var world: Vector2 = dot.get("pos", Vector2.ZERO)
+		var screen := origin + GraphSiteLayout.world_xz_to_site(world, center3) * s
+		if screen.x < -20.0 or screen.y < -20.0 or screen.x > size.x + 20.0 or screen.y > size.y + 20.0:
+			continue
+		# Body = the person's own pastel (identity); rim = their morale band,
+		# so the camp's mood is readable at a glance across the whole site.
+		var col: Color = dot.get("color", Color.WHITE)
+		var mood: Color = dot.get("morale_color", Color(0.6, 0.6, 0.6))
+		draw_circle(screen, r + 2.0, Color(0.0, 0.0, 0.0, 0.55))
+		draw_circle(screen, r + 1.4, mood)
+		draw_circle(screen, r, col)
+		# Asleep reads as a dimmer dot; traveling gets a heading tick later.
+		if str(dot.get("activity", "")) == "sleep":
+			draw_circle(screen, r * 0.55, Color(0.05, 0.08, 0.16, 0.75))
 
 
 ## Elevation CT: sample the cut plane through watershed polys (outer-ring verts

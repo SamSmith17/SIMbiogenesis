@@ -500,12 +500,19 @@ const HABITATS: Array = [
 		"width": 150.0, "height": 150.0,
 		"specs": {
 			"name": "Population", "role": "habitat", "occupants": 1,
+			# pop_driven: simulate individual NPC agents (needs + wayfinding to
+			# tagged spaces) instead of constant per-occupant rates.
+			"pop_driven": false,
 			"watts": 0.0, "cost": 0.0,
 			"energy_source": "",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"inputs": [
 				{"kind": "water", "rate": 2.083, "unit": "L/h"},
 				{"kind": "food", "rate": 0.0625, "unit": "kg/h"},
+				# Fuel for gathering (fire circles). Rate 0 → inert in the
+				# classic constant-rate model; only the NPC population sim
+				# draws on it, and only when people gather at a fire.
+				{"kind": "biomass", "rate": 0.0, "unit": "kg/h"},
 			],
 			"outputs": [
 				{"kind": "greywater", "rate": 1.666, "unit": "L/h"},

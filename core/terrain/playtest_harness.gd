@@ -135,6 +135,8 @@ func _ready() -> void:
 			_run_site_review.call_deferred()
 		elif _capture_mode == "ambient":
 			_run_ambient_flow_verify.call_deferred()
+		elif _capture_mode == "population":
+			_run_population_verify.call_deferred()
 		elif _capture_mode == "autobind":
 			_run_autobind_verify.call_deferred()
 		elif _capture_mode == "pondid":
@@ -308,6 +310,8 @@ func _launch_map() -> void:
 		_run_site_review()
 	elif _capture_mode == "ambient":
 		_run_ambient_flow_verify()
+	elif _capture_mode == "population":
+		_run_population_verify()
 	elif _capture_mode == "autobind":
 		_run_autobind_verify()
 	elif _capture_mode == "pondid":
@@ -339,6 +343,8 @@ func _launch_scene_direct() -> void:
 		_run_site_review()
 	elif _capture_mode == "ambient":
 		_run_ambient_flow_verify()
+	elif _capture_mode == "population":
+		_run_population_verify()
 	elif _capture_mode == "autobind":
 		_run_autobind_verify()
 	elif _capture_mode == "pondid":
@@ -1315,6 +1321,367 @@ func _run_ambient_flow_verify() -> void:
 		stock1, stock1 - stock0, cum, live_q])
 	print("PlaytestHarness: ambient verify — %s" % ("PASS (water flowed with the graph closed)" if ok \
 			else "FAIL (water did NOT flow while the graph was closed — ambient tick regressed)"))
+	_maybe_quit()
+
+
+## NPC population end-to-end verify + Site Plan dot capture
+## (--capture=population, WINDOWED): seeds four tagged area spaces (kitchen /
+## restroom / water point / sleeping) into the map's SpaceRegistry, adds a
+## pop-driven habitat + supply/waste tanks to the graph, runs the world clock
+## with the graph CLOSED (agents must eat/drink ambiently), asserts tanks
+## moved + agents walked, then opens the Site Plan and shoots dot PNGs.
+## Finally empties the food tank and asserts the starvation loop closes
+## (habitat STARVED, no food consumed, agents' hunger pinned).
+func _run_population_verify() -> void:
+	var sgv := await _find_graph_view()
+	if sgv == null:
+		push_error("PlaytestHarness: SystemGraphView not found — aborting population verify")
+		_maybe_quit()
+		return
+	sgv.visible = false
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+
+	var model: Variant = sgv.get("model")
+	if model == null or not model.has_method("add_item"):
+		push_error("PlaytestHarness: graph model unavailable — aborting population verify")
+		_maybe_quit()
+		return
+	var main := get_tree().current_scene
+
+	# --- graph: pop-driven habitat + tanks -----------------------------------
+	# The soak map's graph autosave persists between runs — drop any leftovers
+	# from a previous population verify so tanks start at known levels.
+	var hab_id := "cap_pop_hab"
+	var pop_ids := [hab_id, "cap_pop_water", "cap_pop_food", "cap_pop_grey",
+			"cap_pop_black", "cap_pop_bio"]
+	for pid in pop_ids:
+		if not (model.get_item(str(pid)) as Dictionary).is_empty():
+			model.remove_item(str(pid))
+	model.add_item({
+		"id": hab_id, "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 150.0,
+		"specs": {
+			"name": "Test Population", "role": "habitat", "occupants": 16,
+			"pop_driven": true, "watts": 0.0, "energy_source": "", "efficiency": 1.0,
+			"inputs": [
+				{"kind": "water", "rate": 2.083, "unit": "L/h"},
+				{"kind": "food", "rate": 0.0625, "unit": "kg/h"},
+			],
+			"outputs": [
+				{"kind": "greywater", "rate": 1.666, "unit": "L/h"},
+				{"kind": "blackwater", "rate": 0.417, "unit": "L/h"},
+				{"kind": "biomass", "rate": 0.0125, "unit": "kg/h"},
+			],
+		},
+	})
+	var tanks := [
+		["cap_pop_water", "water", "L", 2000.0, 1.0],
+		["cap_pop_food", "food", "kg", 100.0, 0.8],
+		["cap_pop_grey", "greywater", "L", 2000.0, 0.0],
+		["cap_pop_black", "blackwater", "L", 500.0, 0.0],
+		["cap_pop_bio", "biomass", "kg", 50.0, 0.0],
+	]
+	for i in tanks.size():
+		var t: Array = tanks[i]
+		model.add_item({
+			"id": str(t[0]), "type": "resource", "x": -220.0 + 120.0 * i, "y": 220.0,
+			"width": 90.0, "height": 100.0,
+			"specs": {
+				"name": str(t[1]).capitalize(), "resource_kind": str(t[1]),
+				"capacity_qty": float(t[3]), "capacity_unit": str(t[2]),
+				"level": float(t[4]),
+			},
+		})
+	for c in [
+		["cap_pop_water", "output", hab_id, "res_in_0", "water"],
+		["cap_pop_food", "output", hab_id, "res_in_1", "food"],
+		[hab_id, "res_out_0", "cap_pop_grey", "input", "greywater"],
+		[hab_id, "res_out_1", "cap_pop_black", "input", "blackwater"],
+		[hab_id, "res_out_2", "cap_pop_bio", "input", "biomass"],
+	]:
+		model.add_connection({
+			"polarity": "resource", "resource_type": str(c[4]),
+			"source_item_id": str(c[0]), "source_handle_id": str(c[1]),
+			"target_item_id": str(c[2]), "target_handle_id": str(c[3]),
+		})
+
+	# Fresh timelines: tanks re-anchor at the specs.level just written (stale
+	# timelines from a previous run share these item ids and would win).
+	var flow0: Variant = sgv.get("_resource_flow")
+	if flow0 != null and flow0.has_method("clear_timelines"):
+		flow0.call("clear_timelines")
+
+	# --- spaces: tagged areas around the world origin ------------------------
+	# One ambient tick must run first so the view creates its population bridge.
+	await get_tree().create_timer(1.0).timeout
+	var bridge: Variant = sgv.get("_npc_population")
+	if bridge == null or not bridge.has_method("registry_for"):
+		push_error("PlaytestHarness: population bridge missing — aborting")
+		_maybe_quit()
+		return
+	var reg: Variant = bridge.call("registry_for", main)
+	var half := 8.0
+	var sites := {
+		"kitchen": Vector2(60, 0), "restroom": Vector2(-60, 30),
+		"water_point": Vector2(0, 70), "sleep": Vector2(0, -80),
+		"shower": Vector2(-45, -45),
+	}
+	for stype in sites:
+		var c: Vector2 = sites[stype]
+		reg.call("set_space_type", {"kind": "area", "poly": [
+			[c.x - half, c.y - half], [c.x + half, c.y - half],
+			[c.x + half, c.y + half], [c.x - half, c.y + half]]}, str(stype), 30)
+	print("PlaytestHarness: population verify — %d spaces seeded, graph CLOSED" % sites.size())
+
+	var lvl := func(id: String) -> float:
+		return float((model.get_item(id).get("specs", {}) as Dictionary).get("level", -1.0))
+	var water0: float = lvl.call("cap_pop_water")
+	var food0: float = lvl.call("cap_pop_food")
+
+	# --- phase 1: ambient day (graph closed), ~10 sim-hours ------------------
+	if main != null and "day_time" in main:
+		main.day_time = 9.0
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.2  # h per real s ≈ 720× realtime
+	var dots0: Array = bridge.call("agent_dots")
+	await get_tree().create_timer(50.0).timeout
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	var dots1: Array = bridge.call("agent_dots")
+	var water1: float = lvl.call("cap_pop_water")
+	var food1: float = lvl.call("cap_pop_food")
+	var black1: float = lvl.call("cap_pop_black")
+	var moved := 0
+	if dots0.size() == dots1.size() and dots0.size() > 0:
+		for i in dots0.size():
+			var p0: Vector2 = (dots0[i] as Dictionary).get("pos", Vector2.ZERO)
+			var p1: Vector2 = (dots1[i] as Dictionary).get("pos", Vector2.ZERO)
+			if (p1 - p0).length() > 1.0:
+				moved += 1
+	print("PlaytestHarness: population verify — water %.4f→%.4f, food %.4f→%.4f, black=%.4f, agents=%d moved=%d" % [
+		water0, water1, food0, food1, black1, dots1.size(), moved])
+	var ok_flow := water1 < water0 - 0.001 and food1 < food0 - 0.0005 and black1 > 0.0001
+	var ok_move := moved >= 3
+	print("PlaytestHarness: population verify — ambient consumption %s, movement %s" % [
+		"PASS" if ok_flow else "FAIL (tanks did not move with the graph closed)",
+		"PASS" if ok_move else "FAIL (agents did not walk between spaces)"])
+
+	# --- phase 2: Site Plan dot capture --------------------------------------
+	var label := _shots_label if not _shots_label.is_empty() else "population_test"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var manifest: Array = []
+	sgv.visible = true
+	if sgv.has_method("_apply_graph_open_mode_from_sim_state"):
+		sgv.call("_apply_graph_open_mode_from_sim_state")
+	if sgv.has_method("_apply_graph_view_mode"):
+		sgv.call("_apply_graph_view_mode", "site")
+	await get_tree().create_timer(1.5).timeout
+	await _graph_shot(dir, "01_site_dots", manifest)
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.05
+	await get_tree().create_timer(6.0).timeout
+	await _graph_shot(dir, "02_site_dots_later", manifest)
+	# Zoomed close-up over the tagged-space cluster so individual dots and
+	# their colors are reviewable (SoI-scale zoom leaves them ~2 px).
+	var canvas: Node = sgv.get("_graph_canvas")
+	if canvas != null and canvas.get("_zoom") != null:
+		var zoom_saved := float(canvas.get("_zoom"))
+		canvas.set("_zoom", zoom_saved * 6.0)
+		canvas.call("queue_redraw")
+		await get_tree().create_timer(1.0).timeout
+		await _graph_shot(dir, "02b_site_dots_zoom", manifest)
+		canvas.set("_zoom", zoom_saved)
+		canvas.call("queue_redraw")
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	# Select the habitat so the inspector Population section is in frame.
+	if sgv.has_method("_apply_graph_view_mode"):
+		sgv.call("_apply_graph_view_mode", "freeform")
+	if canvas != null:
+		canvas.set("selected_item_id", hab_id)
+		if sgv.has_method("_on_canvas_item_selected"):
+			sgv.call("_on_canvas_item_selected", hab_id)
+	await get_tree().create_timer(0.8).timeout
+	await _graph_shot(dir, "03_habitat_inspector", manifest)
+
+	# --- phase 3: 3D silhouette avatars (Phase B) ----------------------------
+	# Runs BEFORE the starvation phases: the cascade below deliberately
+	# empties the camp, and there is nothing to photograph after that.
+	sgv.visible = false
+	var host: Node = main.get_node_or_null("NpcPopulationHost") if main != null else null
+	var avatar_count := host.get_child_count() if host != null else 0
+	print("PlaytestHarness: population verify — 3D host %s (%d avatars)" % [
+		"present" if host != null else "MISSING", avatar_count])
+	# Crosshair-pick contract (InteractionFocus._update_npc_focus): avatars must
+	# be in the group, carry a readable name + status, and expose a pick center
+	# at torso height. No collider is involved by design.
+	var grouped := get_tree().get_nodes_in_group("npc_avatars")
+	var named := 0
+	var statused := 0
+	var pick_ok := 0
+	for node in grouped:
+		var av := node as NpcAvatar
+		if av == null:
+			continue
+		if not av.display_name.is_empty() and av.display_name != av.agent_id:
+			named += 1
+		if not av.status_text.is_empty():
+			statused += 1
+		if absf(av.pick_center().y - av.global_position.y - NpcAvatar.PICK_CENTER_Y) < 0.001:
+			pick_ok += 1
+	var ok_pick := grouped.size() == avatar_count and named == avatar_count \
+			and statused == avatar_count and pick_ok == avatar_count
+	print("PlaytestHarness: population verify — crosshair contract %s (group=%d named=%d status=%d pick=%d)" % [
+		"PASS" if ok_pick else "FAIL", grouped.size(), named, statused, pick_ok])
+	# Tagged spaces must be resolvable as Site Plan markers with occupancy.
+	var marks: Array = bridge.call("space_markers", main)
+	var ok_marks := marks.size() == sites.size()
+	print("PlaytestHarness: population verify — space markers %s (%d of %d resolved)" % [
+		"PASS" if ok_marks else "FAIL", marks.size(), sites.size()])
+	if main != null:
+		var prev_cam := get_viewport().get_camera_3d()
+		var cam := Camera3D.new()
+		main.add_child(cam)
+		# Let the roster settle a touch, FREEZE, then frame ONE agent up close —
+		# a cluster centroid usually lands on empty ground (or inside a tree)
+		# once agents disperse, and at any time scale the subject would walk
+		# out of frame between sampling and the shot.
+		if "time_scale" in main:
+			main.time_scale = 0.02
+		await get_tree().create_timer(1.5).timeout
+		if "time_scale" in main:
+			main.time_scale = 0.0
+		var subject := Vector2.ZERO
+		var cdots: Array = bridge.call("agent_dots")
+		if not cdots.is_empty():
+			subject = (cdots[0] as Dictionary).get("pos", Vector2.ZERO) as Vector2
+		var gy := TerrainSurfaceQuery.ground_height_at(main, subject.x, subject.y)
+		cam.global_position = Vector3(subject.x + 4.5, gy + 2.6, subject.y + 4.5)
+		cam.look_at(Vector3(subject.x, gy + 1.1, subject.y))
+		cam.current = true
+		await get_tree().create_timer(0.5).timeout
+		await _graph_shot(dir, "04_world_avatars", manifest, "world")
+		# Model review shot: real agents often stand under tree canopy (no
+		# obstacle avoidance in v1), so pose three sample silhouettes on a
+		# "sky stage" well above the treeline — standing, walking, lying —
+		# with the camera level in front of them. Clean backdrop, guaranteed.
+		var stage := Vector3(0.0, gy + 80.0, 0.0)
+		cam.global_position = stage + Vector3(0.0, 1.4, 5.5)
+		cam.look_at(stage + Vector3(0.0, 1.0, 0.0))
+		var samples: Array = []
+		for i in 3:
+			var sample := NpcAvatar.new()
+			sample.setup("review_%d" % i, NpcPopulationEngine.color_for_agent("review_%d" % i))
+			main.add_child(sample)
+			sample.apply_state(stage + Vector3(-1.6 + 1.6 * float(i), 0.0, 0.0),
+					PI * 0.2 * float(i), i == 1, "sleep" if i == 2 else "")
+			samples.append(sample)
+		await get_tree().create_timer(0.6).timeout
+		await _graph_shot(dir, "05_avatar_model_review", manifest, "world")
+		for s in samples:
+			(s as Node).queue_free()
+		if prev_cam != null:
+			prev_cam.current = true
+		cam.queue_free()
+	var ok_3d := host != null and avatar_count > 0 and ok_pick and ok_marks
+
+	# --- phase 4: starvation loop --------------------------------------------
+	# Baseline morale from the WELL-SUPPLIED run above, so the cascade below
+	# is measured against a healthy community rather than one already falling.
+	var morale_at_start := float(
+			(bridge.call("summary_for", hab_id) as Dictionary).get("mean_morale", 1.0))
+	var food_item: Dictionary = model.get_item("cap_pop_food")
+	var fspecs: Dictionary = (food_item.get("specs", {}) as Dictionary).duplicate(true)
+	fspecs["level"] = 0.0
+	model.update_item("cap_pop_food", {"specs": fspecs})
+	var flow: Variant = sgv.get("_resource_flow")
+	if flow != null and flow.has_method("clear_timelines"):
+		flow.call("clear_timelines")  # re-anchor tanks at the emptied level
+	# NO forward time jump here: a >6 h skip takes the coarse catch-up path,
+	# which clamps needs and settles morale in one step — the camp empties
+	# before the starved flag can ever be observed. (That path has its own
+	# coverage in npc_population_selftest._test_scrub_and_catchup.)
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.2
+	# Both the starved flag and peak hunger are TRANSIENT: the flag clears
+	# between agents' retry attempts, and once people start leaving the
+	# roster aggregates fall back toward zero. Sample both while it happens.
+	var saw_starved := false
+	var worst_hunger := 0.0
+	for i in 40:
+		await get_tree().create_timer(0.25).timeout
+		var hs: Dictionary = (model.get_item(hab_id).get("specs", {}) as Dictionary)
+		if (hs.get("starved_kinds", []) as Array).has("food"):
+			saw_starved = true
+		var s_now: Dictionary = bridge.call("summary_for", hab_id)
+		worst_hunger = maxf(worst_hunger,
+				float((s_now.get("worst_needs", {}) as Dictionary).get("hunger", 0.0)))
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	var food2: float = lvl.call("cap_pop_food")
+	print("PlaytestHarness: population verify — saw_starved=%s worst_hunger=%.2f food=%.4f" % [
+		str(saw_starved), worst_hunger, food2])
+	# Hunger rises 1/16 per sim-hour, so a ~4 sim-hour outage window climbs it
+	# well past the act-on threshold (0.55) without reaching a full pin; what
+	# matters is that it CLIMBS while the tank is empty instead of being
+	# satisfied. Full pinning is covered in the offline selftest.
+	var ok_starve := saw_starved and worst_hunger > 0.7 and food2 <= 0.0005
+	print("PlaytestHarness: population verify — starvation loop %s" % [
+		"PASS" if ok_starve else "FAIL (empty food tank did not block eating / pin hunger)"])
+
+	# --- phase 5: morale + collapse cascade ----------------------------------
+	# Food is already empty; now cut the water too and let the community
+	# unwind. This is the Tier-2 loop end to end: blocked critical needs →
+	# morale falls → people rage-quit → the roster shrinks → collapse.
+	var wspecs: Dictionary = (model.get_item("cap_pop_water").get("specs", {}) as Dictionary).duplicate(true)
+	wspecs["level"] = 0.0
+	model.update_item("cap_pop_water", {"specs": wspecs})
+	if flow != null and flow.has_method("clear_timelines"):
+		flow.call("clear_timelines")
+	var m_before := morale_at_start
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.8   # ~0.4 sim-h per flow tick: fast, but well under
+		                        # the 6 h coarse-catch-up threshold
+	var saw_warning := false
+	var pop_min := 99
+	for i in 90:
+		await get_tree().create_timer(0.5).timeout
+		var s: Dictionary = bridge.call("summary_for", hab_id)
+		pop_min = mini(pop_min, int(s.get("count", 99)))
+		if float(s.get("collapse_risk", 0.0)) >= NpcPopulationEngine.COLLAPSE_WARN_RISK:
+			saw_warning = true
+		if bool(s.get("collapsed", false)):
+			break
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	var s_end: Dictionary = bridge.call("summary_for", hab_id)
+	var m_after := float(s_end.get("mean_morale", 1.0))
+	var left := int(s_end.get("departures", 0))
+	print("PlaytestHarness: population verify — morale %.2f→%.2f, departures=%d, roster %d→%d, risk=%.2f, collapsed=%s" % [
+		m_before, m_after, left, 16, int(s_end.get("count", 0)),
+		float(s_end.get("collapse_risk", 0.0)), str(s_end.get("collapsed", false))])
+	var ok_cascade := m_after < m_before and left > 0 and saw_warning
+	print("PlaytestHarness: population verify — morale/collapse cascade %s" % [
+		"PASS" if ok_cascade else "FAIL (needs unmet did not drive morale down and people out)"])
+
+	print("PlaytestHarness: population verify — 3D avatars %s" % [
+		"PASS" if ok_3d else "FAIL (host missing or wrong avatar count)"])
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	# Leave the map's autosaved graph the way we found it.
+	for pid in pop_ids:
+		if not (model.get_item(str(pid)) as Dictionary).is_empty():
+			model.remove_item(str(pid))
+	print("PlaytestHarness: population verify — %s (%d shots in %s)" % [
+		"PASS" if (ok_flow and ok_move and ok_starve and ok_cascade and ok_3d) else "FAIL",
+		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
 
 

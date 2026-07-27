@@ -2395,6 +2395,27 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 			_write_node_state(item_id, specs, GraphNodeState.READY)
 
 
+## NPC population demand override (item_id -> {resource kind: qty per sim-hour}).
+## When set for a habitat, its input channels draw at the population engine's
+## live aggregate rates (summed over agents currently eating/drinking/etc.)
+## instead of the constant preset rate × occupants. Everything downstream is
+## unchanged: starvation soft-fail, stoichiometric waste yields, node states.
+## Rates are refreshed every tick by the caller — nothing here needs replay,
+## so scrubbing stays safe.
+var _habitat_demand: Dictionary = {}
+
+
+func set_habitat_demand(item_id: String, rates: Dictionary) -> void:
+	_habitat_demand[item_id] = rates
+
+
+func clear_habitat_demand(item_id: String = "") -> void:
+	if item_id.is_empty():
+		_habitat_demand = {}
+	else:
+		_habitat_demand.erase(item_id)
+
+
 ## Habitat: per-channel demand × occupants; waste = yield × actual consumption.
 ## Does not invent mass when an input tank is empty (soft-fail + starved_kinds).
 func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary,
@@ -2408,10 +2429,16 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 	var water_consumed_lph := 0.0
 	var food_consumed_kgph := 0.0
 
+	var pop_demand: Dictionary = _habitat_demand.get(iid, {})
+	var pop_driven := _habitat_demand.has(iid)
 	for i: int in inputs.size():
 		var inp: Dictionary = inputs[i] as Dictionary
 		var kind: String = ResourceKinds.normalize_kind(str(inp.get("kind", "")))
 		var rate: float = float(inp.get("rate", 0.0)) * occupants
+		if pop_driven:
+			# Population-driven: this channel draws at the live agent-activity
+			# rate (0 while nobody is consuming that kind this tick).
+			rate = maxf(float(pop_demand.get(kind, 0.0)), 0.0)
 		if rate <= 0.0:
 			continue
 		had_demand = true
@@ -2452,8 +2479,11 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 		var kind: String = ResourceKinds.normalize_kind(str(outp.get("kind", "")))
 		var credit: float = float(waste_credits.get(kind, 0.0))
 		# Allow preset rate override only as a cap (never invent above yield).
+		# Pop-driven demand is bursty (one agent flushing = 40 L/h for 9 min),
+		# so the steady-state preset cap would silently drop mass — skip it;
+		# the stoichiometric yields are already mass-conserving.
 		var cap: float = float(outp.get("rate", 0.0)) * occupants
-		if cap > 0.0:
+		if cap > 0.0 and not pop_driven:
 			credit = minf(credit, cap)
 		if credit <= 0.0:
 			continue

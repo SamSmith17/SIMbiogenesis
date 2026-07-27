@@ -28,6 +28,9 @@ func _initialize() -> void:
 	_test_habitat_starvation()
 	_test_habitat_occupants_scale()
 	_test_habitat_scrub_rewind()
+	_test_habitat_pop_demand_override()
+	_test_habitat_pop_starvation()
+	_test_habitat_pop_waste_uncapped()
 	_test_biomass_catchment_manual_area()
 	_test_biodigester_resource_kinds()
 	_test_step_overflow_qty()
@@ -339,6 +342,71 @@ func _test_habitat_scrub_rewind() -> void:
 	_check("scrub rewind restores water", absf(rew - 1.0) < 0.02, "rew=%.3f" % rew)
 	var rew_grey := _tank_level(model, "grey")
 	_check("scrub rewind clears greywater", rew_grey < 0.02, "grey=%.3f" % rew_grey)
+
+
+## NPC population demand override: habitat channels draw at the live agent
+## rates instead of preset rate × occupants; zero demand = zero draw.
+func _test_habitat_pop_demand_override() -> void:
+	var g := _build_habitat_graph(4, 1.0, 0.8)  # occupants deliberately ≠ demand
+	var model = g["model"]
+	var engine = g["engine"]
+	engine.set_habitat_demand("hab", {"water": 10.0, "food": 0.5})
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(2.0, 2.0)
+	# 10 L/h × 2 h = 20 L from 100 L → 0.80 (occupants multiplier must NOT apply)
+	var wl := _tank_level(model, "water")
+	_check("pop override water drain", absf(wl - 0.80) < 0.01, "water=%.3f" % wl)
+	# 0.5 kg/h × 2 h = 1 kg from 40 kg → 39/50 = 0.78
+	var fl := _tank_level(model, "food")
+	_check("pop override food drain", absf(fl - 0.78) < 0.01, "food=%.3f" % fl)
+	# Waste still stoichiometric from ACTUAL pop-driven consumption: 20 L → 16 grey + 4 black
+	var grey_l := _tank_level(model, "grey") * 200.0
+	var black_l := _tank_level(model, "black") * 100.0
+	_check("pop waste grey 80%", absf(grey_l - 16.0) < 0.5, "grey=%.2f" % grey_l)
+	_check("pop waste black 20%", absf(black_l - 4.0) < 0.5, "black=%.2f" % black_l)
+	# Nobody consuming → zero draw (constant preset rates must stay off).
+	engine.set_habitat_demand("hab", {})
+	engine.simulate_step_for_test(4.0, 2.0)
+	_check("pop zero demand zero drain", absf(_tank_level(model, "water") - wl) < 0.001)
+	# clear_habitat_demand → classic constant-rate model returns (4 occupants).
+	engine.clear_habitat_demand("hab")
+	engine.simulate_step_for_test(6.0, 2.0)
+	var wl2 := _tank_level(model, "water")
+	# 4 × 2.083 L/h × 2 h = 16.664 L → −0.1666 level
+	_check("clear override restores preset", absf((wl - wl2) - 0.1666) < 0.01, "Δ=%.4f" % (wl - wl2))
+
+
+func _test_habitat_pop_starvation() -> void:
+	var g := _build_habitat_graph(1, 0.0, 0.8)  # water empty
+	var model = g["model"]
+	var engine = g["engine"]
+	engine.set_habitat_demand("hab", {"water": 7.5})
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var specs: Dictionary = (model.get_item("hab").get("specs", {}) as Dictionary)
+	var starved: Array = specs.get("starved_kinds", []) as Array
+	_check("pop demand vs empty tank → starved", starved.has("water"), "starved=%s" % str(starved))
+	_check("pop starved invents no grey", _tank_level(model, "grey") < 0.001)
+	# The feedback loop closes agent-side: NpcPopulationBridge feeds
+	# starved_kinds back into the engine so the eating/drinking activity aborts
+	# (covered in core/population/npc_population_selftest.gd).
+
+
+## Bursty pop rates must not be clipped by the steady-state preset waste caps
+## (that would silently destroy mass).
+func _test_habitat_pop_waste_uncapped() -> void:
+	var g := _build_habitat_graph(1, 1.0, 0.8)
+	var model = g["model"]
+	var engine = g["engine"]
+	engine.set_habitat_demand("hab", {"water": 40.0})  # one agent flushing
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(0.15, 0.15)
+	# 40 L/h × 0.15 h = 6 L consumed → black 1.2 L (preset cap 0.417 L/h would
+	# have clipped it to ~0.063 L)
+	var black_l := _tank_level(model, "black") * 100.0
+	_check("pop burst black uncapped", absf(black_l - 1.2) < 0.05, "black=%.3f" % black_l)
+	var grey_l := _tank_level(model, "grey") * 200.0
+	_check("pop burst grey uncapped", absf(grey_l - 4.8) < 0.1, "grey=%.3f" % grey_l)
 
 
 func _test_biomass_catchment_manual_area() -> void:

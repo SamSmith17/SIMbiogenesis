@@ -252,6 +252,8 @@ var _building_focus_idx: int = -1
 ## excluded from the merged Buildings mesh and rebuilt as individual children
 ## of the BuildingsCustom node ("B_<tag>").
 var _building_style_layer: BuildingStyleLayer = null
+## Player-tagged NPC spaces (restroom/kitchen/sleep/water point) for this map.
+var npc_spaces: SpaceRegistry = null
 var _custom_buildings_root: Node3D = null
 var _building_builder_ui: Control = null
 var _starshade_edit_ui: Control = null
@@ -7913,6 +7915,9 @@ func _setup_placed_props() -> void:
 	else:
 		_placed_prop_layer.load_for_map(_lat, _lon)
 		_building_style_layer.load_for_map(_lat, _lon)
+	npc_spaces = SpaceRegistry.create_empty()
+	if not _user_overlays_ephemeral:
+		npc_spaces.load_for_map(_lat, _lon)
 	_setup_placed_props_ui()
 	_setup_placed_prop_edit_ui()
 	_setup_building_builder_ui()
@@ -8446,6 +8451,36 @@ func get_building_tag(building_idx: int) -> String:
 	if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 3:
 		return ""
 	return BuildingBuilder.building_tag(pts)
+
+
+## World-XZ footprint centroid of the building carrying `tag`, or null when no
+## loaded building matches (SpaceRegistry uses null to skip dangling targets).
+func building_centroid_by_tag(tag: String) -> Variant:
+	if tag.is_empty():
+		return null
+	for item in _buildings_data:
+		if not (item is Dictionary):
+			continue
+		var pts: Variant = (item as Dictionary).get("points", PackedVector2Array())
+		if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 3:
+			continue
+		var poly: PackedVector2Array = pts
+		if BuildingBuilder.building_tag(poly) != tag:
+			continue
+		var c := Vector2.ZERO
+		for p in poly:
+			c += p
+		return c / float(poly.size())
+	return null
+
+
+## Persist the NPC space registry (lazy-prunes tags whose target vanished).
+func save_npc_spaces() -> void:
+	if npc_spaces == null:
+		return
+	if _built:  # never prune mid-load, before props/buildings have streamed in
+		npc_spaces.prune_dangling(_main)
+	npc_spaces.save(_lat, _lon)
 
 
 ## Building records within radius_m of (x, z) whose footprint area falls in

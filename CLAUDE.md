@@ -48,6 +48,17 @@ Godot.exe.exe --headless --path . --script core/climelapse/climelapse_series_sel
 Godot.exe.exe --headless --path . --script vegetation/vegetation_growth_selftest.gd
 # Site Report metrics/data + UI-compile self-test (offline, deterministic):
 Godot.exe.exe --headless --path . --script core/report/site_report_selftest.gd
+# NPC population self-test (offline, deterministic — SpaceRegistry tagging/
+# queries/occupancy/persistence; agent needs/FSM/nav: identical-run
+# determinism, priority ladder, sleep schedule, starvation block, mass-exact
+# time-averaged demand, teleport threshold, scrub-freeze, snapshot round-trip;
+# Tier 2: morale bands/superlinear+blocked pressure/ceiling, supplied-vs-
+# starved runs, brief-outage recovery, enrichment ceiling lift + social
+# clustering, departure/contagion/collapse cascade + resilience buffer,
+# weather multiplicative gating, chore board windows/claims/credit/serialize,
+# chore-vs-need preemption and productivity scaling;
+# extend it with every population change):
+Godot.exe.exe --headless --path . --script core/population/npc_population_selftest.gd
 # Nested super-node self-test (offline — portal resolution, flattened connections,
 # walk recursion, cascade delete, v6->v7 migration, exposed-port maintenance,
 # nesting-aware PV faulting; run --import first so GraphNesting registers):
@@ -149,6 +160,20 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=loc_48p325
 # simulation regressing back to only running while the 2D graph screen is open
 # (system_graph_view._tick_resource_flow_ambient):
 Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=ambient --quit-after-capture
+# NPC population end-to-end verify + Site Plan/3D capture (WINDOWED): seeds 4
+# tagged area spaces + a pop-driven habitat with supply/waste tanks on the soak
+# graph, runs the clock with the graph CLOSED and asserts ambient consumption
+# (tanks moved) + agent movement, shoots Site Plan dot PNGs (incl. a zoomed
+# close-up), shoots the 3D silhouette avatars + crosshair/space-marker
+# contracts WHILE THE ROSTER IS ALIVE (phases are ordered this way on purpose
+# — the cascade below empties the camp), then empties the food tank and
+# asserts the starvation loop closes (STARVED flash seen, hunger climbing),
+# and finally cuts the water and asserts the whole Tier-2 cascade: morale
+# falls, people rage-quit, the roster shrinks, the colony collapses. Do NOT
+# add a >6 h time jump to the starvation phase — that takes the coarse
+# catch-up path and empties the camp before anything can be observed.
+# Cleans its cap_pop_* graph items off the map autosave:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=population --shots-dir=<label> --quit-after-capture
 # Siphon auto-bind distance-cap guard (WINDOWED, console-only): places a NEAR
 # pond and a FAR pond next to a synthetic siphon and confirms bind_siphon_to_
 # nearest_pond(id, silent, max_dist_m) binds the near one, refuses the far one
@@ -1000,6 +1025,100 @@ bundle carries the v30 `project` block (`DesignBundle.project_from_bundle`), Tim
 offers "Open in Linkage Lab" so the web design becomes live-foldable natively.
 **Deferred:** full BOM/costs/actuator analysis, hardware full-detail assemblies, build
 guide, kinematic RCP continuation solver.
+
+## NPC population simulation (core/population/)
+
+Individual simulated people (10–50) driven by needs, wayfinding to
+player-tagged spaces; consumption emerges from activity and flows through the
+graph, and morale decides whether the community holds together. Design doc:
+`POPULATION_PLAN.md`. **Tagging:** `SpaceTypes`
+(restroom/kitchen/sleep/water_point/shower + enrichment types fire_circle/
+movement/quiet/workshop_social, with `COLORS`/`ICONS` for markers) +
+`SpaceRegistry` (per-map `user://maps/npc_spaces_*.json`; targets = prop id /
+`building_tag` / area polygon [v2-reserved]; runtime occupancy never
+persisted). Tag via the prop edit drawer ("Space:" OptionButton + capacity) or
+Building Builder's "NPC space" row — registry only, NEVER BuildingStyleLayer
+(styling de-merges the building). `TerrainLoader.npc_spaces` owns it on
+generated maps; `NpcPopulationBridge` falls back to a scene-keyed registry on
+built-in maps. **Agents:** `NpcAgent` (pure RefCounted FSM
+IDLE→TRAVELING→DOING; needs 0..1 rise per sim-hour, activity table with
+consumption rates calibrated to the habitat preset's ~50 L water + 1.5 kg
+food/person/day; per-agent RNG reseeded per sim-day → deterministic).
+`step()` returns **time-averaged rates** (rate × fraction of the step spent
+doing) so integrating them over dt bills exact mass at any time scale.
+Needs are hunger/thirst/bladder/sleep/**hygiene**/**enrichment** (shower ~12 L
+→ ~60 L water/person/day total). **Priority ladder** (`_pick` = tiers 1-2,
+`_step_idle` = 3-4): critical need → comfort (hygiene) → chore → enrichment.
+Two livelocks to never reintroduce: comparing raw need levels ACROSS tiers
+(hygiene pinned at 1.0 out-scores thirst at 0.99 → shower/interrupt loop), and
+letting a non-critical need interrupt (`_most_urgent` iterates CRITICAL_NEEDS
+only; `NON_INTERRUPTING` = sleep/hygiene/enrichment). Backoff after a failed
+attempt is **per-tier** (`retry_at` dict) — a single scalar let a failed
+enrichment attempt stop someone re-evaluating whether they were thirsty.
+Agents carry a deterministic `display_name` (`NpcAgent.name_for`) +
+`status_line()`.
+
+**Morale ("Fuck Yes"→"Fuck This")** — `NpcMorale` (pure static): 6 bands;
+pressure from unmet CRITICAL needs is superlinear past `PAIN_THRESHOLD` 0.75
+and **2× when the need is BLOCKED** (no tagged space / starved supply) —
+broken infrastructure is what breaks a community, not busy people. Needs alone
+cap at `BASELINE_CEILING` 0.75; `ceiling(enrichment_need)` lifts it to 1.0 only
+through gathering. Recovery (0.035/h) is far slower than loss. **Departure:**
+quit pressure accrues below 0.12 and decays on rescue; at `QUIT_PRESSURE_H` the
+agent leaves → `agent_departed` → roster + labour shrink, plus a
+`DEPARTURE_SHOCK` contagion hit to everyone else → `collapse_warning` at risk
+0.5 → `colony_collapsed` below 35% of the starting roster (a story beat, NOT a
+game over). `occupants` stays the AUTHORED headcount (editing it rebuilds the
+roster); live counts surface as `specs.pop_present`/`pop_morale`/
+`pop_collapse_risk`.
+
+**Chores** — `NpcChoreBoard` (per engine, rides `pop_state`): label, target,
+`chore_hours`, daily window (may wrap midnight), repeat, exposure class,
+priority, assignment. Progress is credited in EFFECTIVE hours = dt ×
+`NpcMorale.productivity(morale)` (0.55–1.15) × `NpcWeatherGate.productivity` —
+low morale slows the work that would raise it. Credit clamps to what's left
+(mass-exact) and feeds the existing `chore_hours` ledger. UI:
+`scenes/ui/npc_routines_panel.gd` (inspector **Routines & chores…**) — roster
+with morale bands, chore board, and a 24 h **day-plan strip** per person
+(sleep/needs/chores/free, red overflow) so over-scheduling is visible.
+
+**Weather** — `NpcWeatherGate` (static, sources cited: ISO 7243 WBGT, Beaufort,
+met rain classes): per-driver severity MULTIPLIES (a hot windy rainy day is
+brutal, not merely additive), floored at 0.15; `is_unsafe` skips the chore
+entirely (work backs up); exposure also drains morale. Indoor work is immune;
+sheltered gets `SHELTER_RELIEF`. Weather is sampled per tick from
+`WeatherService` and degrades to "comfortable" when uncovered/offline.
+`NpcNav` = straight-line walk + teleport snap when one tick covers the
+distance (no obstacle avoidance yet — agents walk through trees; coarse-grid
+A* slots in behind `advance()`). **Engine/coupling:** `NpcPopulationEngine`
+(roster, substepped tick, scrub-back = freeze, >6 h forward jump = coarse
+catch-up, snapshot/restore) is ticked by `NpcPopulationBridge` from
+`system_graph_view._tick_resource_flow_ambient` BEFORE the flow tick (works
+with the graph closed). It writes aggregate demand into
+`ResourceFlowEngine.set_habitat_demand(item_id, rates)`; `_process_habitat`
+uses that override instead of `rate × occupants` when present (waste caps
+bypassed pop-driven — bursty rates would clip mass), and last tick's
+`specs.starved_kinds` feeds back so blocked activities abort and the need
+pins at 1.0. Enable per habitat: inspector **Population Simulation** →
+`specs.pop_driven` (occupants = roster size; closure metrics unchanged).
+Persistence: change-gated `specs.pop_state` snapshot (≤2×/sim-hour) rides the
+normal graph save; `pop_state` is in both INSTANCE_ONLY_SPEC_KEYS strip
+lists. **Rendering:** Site Plan draws tagged spaces (`npc_spaces_provider` →
+`_draw_npc_spaces_site`: disc + glyph + live occupancy sweep) UNDER the agent
+dots (`npc_agents_provider` → `_draw_npc_agents_site`), redrawn only on
+population ticks while visible; 3D = `NpcPopulationHost` (spawned by the view
+while any engine runs, child of Main) posing `NpcAvatar` silhouette figures
+(head/torso/legs, per-agent pastel, walk bob + leg swing, lies down asleep)
+kinematically snapped to `TerrainSurfaceQuery.ground_height_at` — no
+CharacterBody3D. **LOD:** cull >220 m, quarter-rate pose >90 m, ground height
+cached until the agent moves 0.35 m or 0.5 s lapses (it was a terrain query
+per avatar per frame). **Crosshair:** avatars join group `npc_avatars` and are
+picked by a pure software ray-vs-sphere in
+`interaction_focus._update_npc_focus` (deliberately NO collider — a moving
+StaticBody would shove the player); Ctrl/Alt-aim shows "Name — status" and
+that person's Label3D nametag. Selftest + the `--capture=population` harness
+(which also asserts the crosshair contract + space-marker resolution) are in
+the Validation list.
 
 ## Conventions
 

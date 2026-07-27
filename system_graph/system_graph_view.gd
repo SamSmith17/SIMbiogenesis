@@ -147,6 +147,10 @@ var _sim_load_host: Node = null
 
 ## ResourceFlowEngine — reversible multi-resource tank simulation.
 var _resource_flow: RefCounted = null
+## NPC population host (one engine per pop-driven habitat; ambient-ticked).
+var _npc_population: NpcPopulationBridge = null
+## 3D silhouette avatars for the population (spawned while any engine runs).
+var _npc_host: Node3D = null
 ## Active multi-machine workflow (Phase 2) — empty dict when idle.
 var _active_workflow: Dictionary = {}
 var _workflow_panel: Control = null
@@ -7123,6 +7127,7 @@ const _INSTANCE_ONLY_SPEC_KEYS := [
 	"destroyed", "node_state", "node_state_reason", "node_state_kinds", "deficit_qty",
 	"unlimited_capacity", "allow_negative", "scale_with_fill", "jit_outflow",
 	"live_capture_lph", "live_capture_rate",
+	"pop_state", "pop_present", "pop_morale", "pop_collapse_risk",
 ]
 
 ## Called by the inspector after "Save/Add to Library" writes `preset`. Pushes
@@ -9801,6 +9806,78 @@ func _on_test_mode() -> void:
 ## (see the call site in _process for why). History-suppressed + bulk-coalesced
 ## exactly like the old visible-gated call was, so engine-driven writes never
 ## spam the undo stack while the player is out in the 3D world.
+## Live roster telemetry for a pop-driven habitat (inspector Population
+## section); {} until the ambient tick has spun the engine up.
+func npc_population_summary(item_id: String) -> Dictionary:
+	if _npc_population == null:
+		return {}
+	return _npc_population.summary_for(item_id)
+
+
+const _NPC_ROUTINES_SCRIPT := preload("res://scenes/ui/npc_routines_panel.gd")
+var _npc_routines_panel: Control = null
+
+
+## Routines & chores for one habitat (inspector button). Lazily instantiated
+## the same way the Record Book / Site Report modals are.
+func open_npc_routines(item_id: String) -> void:
+	if _npc_population == null or not _npc_population.has_engine(item_id):
+		_show_toast("Turn on Simulated individuals first — the roster starts on the next tick")
+		return
+	if _npc_routines_panel == null or not is_instance_valid(_npc_routines_panel):
+		_npc_routines_panel = _NPC_ROUTINES_SCRIPT.new()
+		_npc_routines_panel.name = "NpcRoutinesPanel"
+		var parent := get_parent()
+		if parent == null:
+			return
+		parent.add_child(_npc_routines_panel)
+	_npc_routines_panel.call("open", _npc_population, item_id)
+
+
+## Departures and collapse are story beats — surface them even with the graph
+## closed (the toast rides the normal toast channel).
+func _drain_npc_events() -> void:
+	if _npc_population == null:
+		return
+	for e in _npc_population.take_events():
+		var ev: Dictionary = e
+		match str(ev.get("kind", "")):
+			"departed":
+				_show_toast("%s has left the community (%s)" % [
+					str(ev.get("name", "Someone")),
+					_npc_reason_text(str(ev.get("reason", "")))])
+			"collapse_warning":
+				_show_toast("The community is unravelling — people are talking about leaving")
+			"collapsed":
+				_show_toast("COLONY COLLAPSE — too few people remain to keep this place running")
+
+
+static func _npc_reason_text(need: String) -> String:
+	match need:
+		"thirst": return "no water"
+		"hunger": return "no food"
+		"sleep": return "nowhere to sleep"
+		"bladder": return "no sanitation"
+	return "Fuck This"
+
+
+## Spawn/despawn the 3D avatar host to match whether any population engine
+## is running (pop-driven habitat present).
+func _ensure_npc_host() -> void:
+	var wants := _npc_population != null and _npc_population.active()
+	var alive := _npc_host != null and is_instance_valid(_npc_host)
+	if wants and not alive:
+		var main_node := _get_scene_main_node()
+		if main_node == null:
+			return
+		_npc_host = NpcPopulationHost.new()
+		_npc_host.setup(_npc_population, main_node)
+		main_node.add_child(_npc_host)
+	elif not wants and alive:
+		_npc_host.queue_free()
+		_npc_host = null
+
+
 func _tick_resource_flow_ambient(delta: float) -> void:
 	if _resource_flow == null:
 		return
@@ -9816,6 +9893,25 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 	_sim_bulk_update = true
 	if _sim_load_host != null and _sim_load_host.has_method("begin_bulk_sync"):
 		_sim_load_host.call("begin_bulk_sync")
+	# NPC population: step agents + install this tick's habitat demand rates
+	# BEFORE the flow step consumes them (runs ambient, graph open or closed).
+	if _npc_population == null:
+		_npc_population = NpcPopulationBridge.new()
+		if _graph_canvas != null:
+			_graph_canvas.set("npc_agents_provider", Callable(_npc_population, "agent_dots"))
+			var main_for_spaces := _get_scene_main_node()
+			_graph_canvas.set("npc_spaces_provider",
+					func() -> Array: return _npc_population.space_markers(main_for_spaces))
+	PerfMonitor.begin("npc_population")
+	_npc_population.tick(model, _resource_flow, _get_scene_main_node())
+	PerfMonitor.end("npc_population")
+	_ensure_npc_host()
+	_drain_npc_events()
+	# Dots move only on population ticks — redraw the Site Plan then (and only
+	# then; with the graph closed or in other views this costs nothing).
+	if visible and _npc_population.active() and _graph_canvas != null \
+			and _graph_view_mode == GraphSiteLayout.VIEW_SITE:
+		_graph_canvas.queue_redraw()
 	PerfMonitor.begin("flow_engine")
 	_resource_flow.call("tick", delta)
 	PerfMonitor.end("flow_engine")
