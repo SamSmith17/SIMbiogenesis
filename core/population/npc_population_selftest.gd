@@ -37,6 +37,12 @@ func _init() -> void:
 	_test_weather_gate()
 	_test_chore_board()
 	_test_chore_priority()
+	# --- Tier 3 ---
+	_test_nav_grid_region()
+	_test_nav_grid_bake()
+	_test_nav_grid_slope_vs_steps()
+	_test_nav_grid_obstacles()
+	_test_nav_grid_queries()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -942,3 +948,296 @@ func _test_chore_priority() -> void:
 	_check("over-scheduling goes negative", busy.free_hours(20.0) < 0.0)
 	_check("no enrichment without free time",
 			not busy._has_free_time({"assigned_chore_h": 20.0}))
+
+
+# =============================================================================
+# Tier 3a — walkable grid
+# =============================================================================
+
+## Synthetic terrain: flat, a gentle ramp, a cliff, and a staircase.
+static func _flat_h(_x: float, _z: float) -> float:
+	return 0.0
+
+
+static func _ramp_h(x: float, _z: float) -> float:
+	return x * 0.2          # 11.3 deg — a comfortable ramp
+
+
+static func _cliff_h(x: float, _z: float) -> float:
+	return 0.0 if x < 0.0 else 20.0
+
+
+## A REAL staircase: 0.18 m rise per 0.28 m tread = 33 deg. Below the grid's
+## resolution, so it reads as a 33 deg ramp — comfortably walkable, which is
+## the requirement ("climb stairs without getting stuck").
+static func _stairs_h(x: float, _z: float) -> float:
+	return maxf(x, 0.0) * (0.18 / 0.28)
+
+
+## A SINGLE 1.2 m step up onto a plateau — the step-onto-a-deck case. Between
+## adjacent 0.75 m cells that is 58 deg, which would block it if slope were
+## measured per cell pair; over the 3 m central-difference baseline it is
+## 21.8 deg and stays walkable. This is the case the baseline exists for.
+static func _step_h(x: float, _z: float) -> float:
+	return 0.0 if x < 0.0 else 1.2
+
+
+## A sustained ladder grade (1.2 m every 0.75 m = 58 deg). Correctly BLOCKED —
+## widening the baseline cannot rescue this, because it genuinely is a cliff.
+static func _ladder_h(x: float, _z: float) -> float:
+	return floor(maxf(x, 0.0) / 0.75) * 1.2
+
+
+func _test_nav_grid_region() -> void:
+	var g := NpcNavGrid.new()
+	_check("empty points rejected", not g.configure_for_points(PackedVector2Array()))
+
+	var pts := PackedVector2Array([Vector2(-20, -10), Vector2(30, 25)])
+	_check("configure from points", g.configure_for_points(pts))
+	# Span 50 m + 2x30 m pad -> 110 m across, /0.75 -> ~147 cells.
+	_check("region covers the span", g.nx >= int(110.0 / NpcNavGrid.CELL_M) - 1,
+			"nx=%d" % g.nx)
+	_check("region is square", g.nx == g.nz)
+	for p in pts:
+		_check("tagged point %s inside region" % p, g.contains_world(p))
+	_check("pad reaches beyond the points",
+			g.contains_world(Vector2(30.0 + NpcNavGrid.REGION_PAD_M - 2.0, 25.0)))
+
+	# A single point still yields a usable minimum region.
+	var g2 := NpcNavGrid.new()
+	g2.configure_for_points(PackedVector2Array([Vector2(5, 5)]))
+	_check("single point -> min region",
+			g2.nx * g2.cell_m >= NpcNavGrid.MIN_REGION_HALF_M, "%.1f m" % (g2.nx * g2.cell_m))
+
+	# Huge spans clamp rather than exploding the cell count.
+	var g3 := NpcNavGrid.new()
+	g3.configure_for_points(PackedVector2Array([Vector2(-5000, -5000), Vector2(5000, 5000)]))
+	_check("huge span clamps", g3.nx <= NpcNavGrid.MAX_CELLS_AXIS, "nx=%d" % g3.nx)
+
+	# Cell <-> world round-trip.
+	var g4 := NpcNavGrid.new()
+	g4.configure_region(Vector2(10.0, -4.0), 30.0)
+	for probe in [Vector2(10, -4), Vector2(-8, 12), Vector2(33, -30)]:
+		var c := g4.cell_of(probe)
+		if not g4.in_bounds(c.x, c.y):
+			continue
+		var back := g4.center_of(c.x, c.y)
+		_check("cell round-trip %s" % probe,
+				back.distance_to(probe) <= g4.cell_m * 0.75, "%s -> %s" % [probe, back])
+
+
+func _test_nav_grid_bake() -> void:
+	var g := NpcNavGrid.new()
+	g.configure_region(Vector2.ZERO, 20.0)
+	_check("not ready before bake", not g.is_ready())
+	_check("nothing walkable before bake", not g.is_walkable(5, 5))
+
+	# Chunked bake must converge, and must not finish in one call.
+	g.begin_bake(Callable(self, "_flat_h"))
+	var steps := 0
+	var done := false
+	while not done and steps < 10000:
+		done = g.bake_step(64)
+		steps += 1
+	_check("chunked bake converges", done, "steps=%d" % steps)
+	_check("chunked bake really is chunked", steps > 1, "steps=%d" % steps)
+	_check("ready after bake", g.is_ready())
+	_check("progress reaches 1", absf(g.bake_progress() - 1.0) < 0.001)
+
+	# Flat ground: everything walkable, zero slope, zero height.
+	_check("flat is walkable", g.is_walkable(3, 3) and g.is_walkable(g.nx - 2, g.nz - 2))
+	_check("flat slope is zero", absf(g.slope_deg_at(5, 5)) < 0.001)
+	_check("flat height is zero", absf(g.height_at(5, 5)) < 0.001)
+	_check("all cells walkable on flat", g.walkable_cell_count() == g.cell_count(),
+			"%d of %d" % [g.walkable_cell_count(), g.cell_count()])
+
+	# Identical bakes are identical (determinism).
+	var a := NpcNavGrid.new()
+	a.configure_region(Vector2.ZERO, 15.0)
+	a.bake_now(Callable(self, "_ramp_h"))
+	var b := NpcNavGrid.new()
+	b.configure_region(Vector2.ZERO, 15.0)
+	b.bake_now(Callable(self, "_ramp_h"))
+	var same := true
+	for iz in a.nz:
+		for ix in a.nx:
+			if absf(a.height_at(ix, iz) - b.height_at(ix, iz)) > 0.0001 \
+					or a.flags_at(ix, iz) != b.flags_at(ix, iz):
+				same = false
+				break
+	_check("bake is deterministic", same)
+
+	# No height source degrades to a flat, walkable grid rather than failing.
+	var g2 := NpcNavGrid.new()
+	g2.configure_region(Vector2.ZERO, 10.0)
+	g2.bake_now(Callable())
+	_check("missing height_fn still bakes", g2.is_ready() and g2.is_walkable(2, 2))
+
+
+func _test_nav_grid_slope_vs_steps() -> void:
+	# A gentle ramp is fully walkable.
+	var ramp := NpcNavGrid.new()
+	ramp.configure_region(Vector2.ZERO, 20.0)
+	ramp.bake_now(Callable(self, "_ramp_h"))
+	_check("ramp slope ~11 deg", absf(ramp.slope_deg_at(20, 20) - 11.3) < 1.0,
+			"%.1f" % ramp.slope_deg_at(20, 20))
+	_check("ramp fully walkable", ramp.walkable_cell_count() == ramp.cell_count())
+	_check("ramp height climbs", ramp.height_at(30, 10) > ramp.height_at(10, 10))
+
+	# REQUIREMENT: a real staircase (33 deg) must be fully climbable.
+	var stairs := NpcNavGrid.new()
+	stairs.configure_region(Vector2(10.0, 0.0), 8.0)
+	stairs.bake_now(Callable(self, "_stairs_h"))
+	var mid := stairs.nz / 2
+	var blocked_on_stairs := 0
+	for ix in range(2, stairs.nx - 2):
+		if not stairs.is_walkable(ix, mid):
+			blocked_on_stairs += 1
+	_check("a real staircase is fully walkable", blocked_on_stairs == 0,
+			"%d blocked" % blocked_on_stairs)
+	_check("staircase reads ~33 deg",
+			absf(stairs.slope_deg_at(stairs.nx / 2, mid) - 32.7) < 1.5,
+			"%.1f deg" % stairs.slope_deg_at(stairs.nx / 2, mid))
+
+	# THE CASE THE BASELINE EXISTS FOR: a single 1.2 m step onto a deck is
+	# 58 deg between adjacent cells but 38.7 deg over the baseline, so it
+	# stays walkable instead of stranding people at the bottom of it.
+	var step := NpcNavGrid.new()
+	step.configure_region(Vector2.ZERO, 10.0)
+	step.bake_now(Callable(self, "_step_h"))
+	var smid := step.nz / 2
+	var sface := step.cell_of(Vector2(0.0, 0.0)).x
+	_check("a single 1.2 m step is NOT blocked", step.is_walkable(sface, smid),
+			"slope=%.1f deg" % step.slope_deg_at(sface, smid))
+	# atan(1.2 / 3.0) = 21.8 deg — comfortably under the 50 deg cliff limit.
+	_check("the step reads ~22 deg over the 3 m baseline",
+			absf(step.slope_deg_at(sface, smid) - 21.8) < 2.0,
+			"%.1f deg" % step.slope_deg_at(sface, smid))
+	_check("ground either side of the step is walkable",
+			step.is_walkable(sface - 4, smid) and step.is_walkable(sface + 4, smid))
+
+	# A sustained ladder grade is correctly refused — the baseline is not a
+	# licence to climb anything.
+	var ladder := NpcNavGrid.new()
+	ladder.configure_region(Vector2(10.0, 0.0), 8.0)
+	ladder.bake_now(Callable(self, "_ladder_h"))
+	var blocked_on_ladder := 0
+	for ix in range(2, ladder.nx - 2):
+		if not ladder.is_walkable(ix, ladder.nz / 2):
+			blocked_on_ladder += 1
+	_check("a sustained 58 deg ladder IS blocked", blocked_on_ladder > 0,
+			"%d blocked" % blocked_on_ladder)
+
+	# A real cliff DOES block.
+	var cliff := NpcNavGrid.new()
+	cliff.configure_region(Vector2.ZERO, 15.0)
+	cliff.bake_now(Callable(self, "_cliff_h"))
+	var mid_z := cliff.nz / 2
+	var face := cliff.cell_of(Vector2(0.0, 0.0)).x
+	_check("cliff face blocked", not cliff.is_walkable(face, mid_z),
+			"slope=%.1f" % cliff.slope_deg_at(face, mid_z))
+	_check("cliff face flagged steep",
+			(cliff.flags_at(face, mid_z) & NpcNavGrid.F_STEEP) != 0)
+	_check("flat ground away from the cliff is walkable",
+			cliff.is_walkable(2, mid_z) and cliff.is_walkable(cliff.nx - 3, mid_z))
+
+
+func _test_nav_grid_obstacles() -> void:
+	var box := PackedVector2Array([
+		Vector2(-5, -5), Vector2(5, -5), Vector2(5, 5), Vector2(-5, 5)])
+
+	# Solid stamping blocks the interior.
+	var g := NpcNavGrid.new()
+	g.configure_region(Vector2.ZERO, 20.0)
+	g.bake_now(Callable(self, "_flat_h"),
+			[{"poly": box, "flags": NpcNavGrid.F_BLOCKED}])
+	_check("solid obstacle blocks its centre", not g.is_walkable_world(Vector2.ZERO))
+	_check("solid obstacle leaves outside clear", g.is_walkable_world(Vector2(12, 0)))
+	_check("solid obstacle blocked a sane number of cells",
+			g.cell_count() - g.walkable_cell_count() > 100)
+
+	# Wall-band stamping leaves the interior walkable (the 3c building model).
+	var w := NpcNavGrid.new()
+	w.configure_region(Vector2.ZERO, 20.0)
+	w.bake_now(Callable(self, "_flat_h"),
+			[{"poly": box, "flags": NpcNavGrid.F_BLOCKED | NpcNavGrid.F_WALL, "band_m": 0.6}])
+	_check("wall band blocks the edge", not w.is_walkable_world(Vector2(5, 0)))
+	_check("wall band leaves the interior walkable", w.is_walkable_world(Vector2.ZERO))
+	_check("wall band leaves outside walkable", w.is_walkable_world(Vector2(12, 0)))
+	var wc := w.cell_of(Vector2(5, 0))
+	_check("wall cells carry F_WALL", (w.flags_at(wc.x, wc.y) & NpcNavGrid.F_WALL) != 0)
+
+	# Punching a door reopens the wall and flags it.
+	w.clear_flags_in_circle(Vector2(5, 0), 1.2,
+			NpcNavGrid.F_BLOCKED | NpcNavGrid.F_WALL, NpcNavGrid.F_DOOR)
+	_check("door punched through the wall", w.is_walkable_world(Vector2(5, 0)))
+	_check("door cells flagged", (w.flags_at(wc.x, wc.y) & NpcNavGrid.F_DOOR) != 0)
+	_check("wall away from the door still blocks", not w.is_walkable_world(Vector2(5, 4)))
+
+	# Interior marking must not block.
+	var i := NpcNavGrid.new()
+	i.configure_region(Vector2.ZERO, 20.0)
+	i.bake_now(Callable(self, "_flat_h"))
+	i.stamp_polygon_interior(box, NpcNavGrid.F_INTERIOR | NpcNavGrid.F_STRUCTURE)
+	var ic := i.cell_of(Vector2.ZERO)
+	_check("interior flagged", (i.flags_at(ic.x, ic.y) & NpcNavGrid.F_INTERIOR) != 0)
+	_check("interior stays walkable", i.is_walkable_world(Vector2.ZERO))
+
+	# Off-grid / degenerate polygons are a no-op, not a crash.
+	var o := NpcNavGrid.new()
+	o.configure_region(Vector2.ZERO, 10.0)
+	o.bake_now(Callable(self, "_flat_h"))
+	var far := PackedVector2Array([
+		Vector2(900, 900), Vector2(910, 900), Vector2(910, 910), Vector2(900, 910)])
+	_check("off-grid polygon stamps nothing", o.stamp_polygon(far, NpcNavGrid.F_BLOCKED) == 0)
+	_check("degenerate polygon ignored",
+			o.stamp_polygon(PackedVector2Array([Vector2.ZERO, Vector2.ONE]),
+					NpcNavGrid.F_BLOCKED) == 0)
+
+
+func _test_nav_grid_queries() -> void:
+	var g := NpcNavGrid.new()
+	g.configure_region(Vector2.ZERO, 20.0)
+	var box := PackedVector2Array([
+		Vector2(-3, -3), Vector2(3, -3), Vector2(3, 3), Vector2(-3, 3)])
+	g.bake_now(Callable(self, "_ramp_h"), [{"poly": box, "flags": NpcNavGrid.F_BLOCKED}])
+
+	# Out-of-bounds reads are safe and read as blocked.
+	_check("oob is blocked", not g.is_walkable(-1, 0) and not g.is_walkable(g.nx, 0))
+	_check("oob flags read blocked", (g.flags_at(-5, -5) & NpcNavGrid.F_BLOCKED) != 0)
+	_check("oob height safe", g.height_at(-5, -5) == 0.0)
+
+	# A destination inside an obstacle must resolve to a legal spot nearby —
+	# tagged spaces often sit inside the very prop that defines them.
+	var near := g.nearest_walkable(Vector2.ZERO, 10.0)
+	_check("nearest_walkable escapes an obstacle",
+			near.x >= 0 and g.is_walkable(near.x, near.y))
+	var np := g.center_of(near.x, near.y)
+	_check("nearest_walkable stays close", np.length() < 8.0, "%.1f m" % np.length())
+	_check("nearest_walkable is a no-op when already clear",
+			g.nearest_walkable(Vector2(12, 12), 5.0) == g.cell_of(Vector2(12, 12)))
+	_check("nearest_walkable gives up cleanly", g.nearest_walkable(Vector2.ZERO, 0.5).x == -1)
+
+	# World height sampling tracks the ramp.
+	_check("height_at_world follows the ramp",
+			g.height_at_world(Vector2(10, 0)) > g.height_at_world(Vector2(-10, 0)))
+
+	# Fingerprints: stable input -> stable key; any change -> rebuild.
+	var fp := NpcNavGrid.compose_fingerprint(1, 2, 3, 4, Vector2.ZERO, 20.0)
+	_check("fingerprint stable",
+			fp == NpcNavGrid.compose_fingerprint(1, 2, 3, 4, Vector2.ZERO, 20.0))
+	for changed in [
+		NpcNavGrid.compose_fingerprint(2, 2, 3, 4, Vector2.ZERO, 20.0),
+		NpcNavGrid.compose_fingerprint(1, 9, 3, 4, Vector2.ZERO, 20.0),
+		NpcNavGrid.compose_fingerprint(1, 2, 9, 4, Vector2.ZERO, 20.0),
+		NpcNavGrid.compose_fingerprint(1, 2, 3, 9, Vector2.ZERO, 20.0),
+		NpcNavGrid.compose_fingerprint(1, 2, 3, 4, Vector2(5, 0), 20.0),
+		NpcNavGrid.compose_fingerprint(1, 2, 3, 4, Vector2.ZERO, 40.0),
+	]:
+		_check("fingerprint changes on input change", changed != fp)
+	var fg := NpcNavGrid.new()
+	fg.configure_region(Vector2.ZERO, 10.0)
+	_check("unbaked grid needs rebuild", fg.needs_rebuild(fp))
+	fg.bake_now(Callable(self, "_flat_h"), [], fp)
+	_check("baked grid matches its fingerprint", not fg.needs_rebuild(fp))
+	_check("baked grid rebuilds on a new fingerprint", fg.needs_rebuild(fp + "x"))

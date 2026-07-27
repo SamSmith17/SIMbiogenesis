@@ -4083,6 +4083,30 @@ func get_osm_roads() -> Array:
 	return _osm_vectors.get("roads", []) as Array
 
 
+## Loaded building footprints: [{idx, points (world XZ metres), height_m,
+## tags, roof}]. Mirrors get_osm_roads for consumers that need real geometry
+## rather than the idx/tag summaries (NPC navigation obstacle stamping).
+func get_osm_buildings() -> Array:
+	return _buildings_data
+
+
+## Still-water bodies as world-XZ polygons (ponds/lakes — NOT rivers, which
+## are fordable). Used as navigation obstacles.
+func get_still_water_polygons() -> Array:
+	var out: Array = []
+	for item in _water_data:
+		if not (item is Dictionary):
+			continue
+		var d: Dictionary = item
+		# WaterBuilder._is_flowing is private; FLOWING_KINDS is the public form.
+		if str(d.get("kind", "")) in WaterBuilder.FLOWING_KINDS:
+			continue
+		var pts: Variant = d.get("points", PackedVector2Array())
+		if pts is PackedVector2Array and (pts as PackedVector2Array).size() >= 3:
+			out.append(pts)
+	return out
+
+
 ## Convex hull of core city streets — the camp scatter UI's "BRC Auto" area.
 ## For BRC this is an annular-sector outline (not a radial-percentile hull).
 func get_brc_city_area() -> PackedVector2Array:

@@ -462,8 +462,20 @@ frames** (`CELLS_PER_FRAME` ≈ 2000 — the `TerrainHeightField` /
 `NpcNav.advance` — the sim never blocks on the bake, and never samples terrain
 inside a population tick.
 
-Heights come from `TerrainSurfaceQuery.ground_height_at`. Slope is derived from
-the 4-neighbour height delta after the pass, not sampled separately.
+Heights come from `TerrainSurfaceQuery.ground_height_at`. Slope is derived
+after the height pass as a **central difference over ±2 cells (a 3 m span,
+about two strides)**, not from adjacent cells — see the slope-vs-steps note
+below. Nothing is sampled twice.
+
+**Slope is terrain grade, not a step limit.** At 0.75 m cells the delta
+between two *adjacent* cells is a step, not a gradient: a 1.2 m step onto a
+deck reads 58° across one cell and would strand people at the bottom of it.
+Over the 3 m baseline the same step reads 21.8° and stays walkable, while a
+genuine cliff still reads 80°+ and blocks. Widening the baseline cannot
+rescue a *sustained* steep grade — a 58° ladder reads 58° at any baseline and
+is correctly refused. Per-move `STEP_UP_M` / `STEP_DOWN_M` limits belong at
+connection time in 3b, never as a cell flag. Getting this backwards is exactly
+the "NPCs get stuck on stairs" failure this phase exists to avoid.
 
 ### Obstacles
 
