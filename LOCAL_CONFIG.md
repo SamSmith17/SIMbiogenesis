@@ -18,7 +18,7 @@ If you need to share structure with collaborators, use the examples in [`config-
 |------------------------|---------|
 | `ha_connection.cfg` | Home Assistant WebSocket URL, token, subscribed entities (Settings → **Home Assistant** tab; legacy [`ha_connection_ui.gd`](scenes/ui/ha_connection_ui.gd)) |
 | `uisp_settings.cfg` | UISP URL and API token ([`uisp/uisp_connection_ui.gd`](uisp/uisp_connection_ui.gd)) |
-| `terrain_config.cfg` | OpenTopography API key for 30 m DEM ([`core/terrain/elevation_service.gd`](core/terrain/elevation_service.gd)) |
+| `terrain_config.cfg` | OpenTopography API key for 30 m DEM ([`core/terrain/elevation_service.gd`](core/terrain/elevation_service.gd)); Mapillary access token ([`core/terrain/mapillary_service.gd`](core/terrain/mapillary_service.gd)); Gemini image API key for the AI spawn-area "hero patch" — `[gemini] api_key=` / `ai_hero_enabled` / `ai_hero_half_extent_m` / `ai_image_size` (or the `GEMINI_API_KEY` env var), see [`core/terrain/ai_imagery_service.gd`](core/terrain/ai_imagery_service.gd) |
 | `keys_config.cfg` | Copernicus CDS API key ([`core/climate_projection_service.gd`](core/climate_projection_service.gd)) |
 | `weather_gen_engine.cfg` | Weather generation engine prefs ([`core/weather_service.gd`](core/weather_service.gd)) |
 | `sim_settings.cfg` | Timeline settings panel persistence ([`scenes/ui/sim_settings_controller.gd`](scenes/ui/sim_settings_controller.gd)) |

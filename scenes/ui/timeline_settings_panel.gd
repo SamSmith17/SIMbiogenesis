@@ -24,6 +24,13 @@ var _sun_energy: HSlider
 var _shadow_quality: HSlider
 var _shadow_quality_lbl: Label
 var _graphics_quality: OptionButton
+var _terrain_quality: HSlider
+var _terrain_quality_lbl: Label
+var _render_scale: HSlider
+var _prop_draw_dist: HSlider
+var _prop_shadows: CheckBox
+var _prop_shadow_detail: OptionButton
+var _perf_hud: CheckBox
 var _moon_energy: HSlider
 var _moon_phase_lbl: Label
 var _ambient_energy: HSlider
@@ -94,6 +101,8 @@ var _live_mode: CheckBox
 var _survival: CheckBox
 var _plant_growth: CheckBox
 var _connector_losses: CheckBox
+var _conduits_3d_visible: CheckBox
+var _conduit_flow_glow: CheckBox
 var _force_rainbow: CheckBox
 var _analemma_drift: HSlider
 var _analemma_noon: HSlider
@@ -204,6 +213,7 @@ func refresh_from_controller() -> void:
 		_shadow_opacity.value = snap.get("shadow_opacity", 1.0)
 	if _graphics_quality:
 		_graphics_quality.selected = clampi(int(snap.get("graphics_quality", 2)), 0, 2)
+	_sync_terrain_quality()
 	if _moon_energy:
 		_moon_energy.value = snap.get("moon_energy", 0.3)
 	if _latitude:
@@ -717,6 +727,21 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	loss_hint.add_theme_color_override("font_color", C_TEXT_S)
 	loss_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(loss_hint)
+	_conduits_3d_visible = _add_check(v, "Show 3D wires (world)", _on_conduits_3d_visible)
+	_conduit_flow_glow = _add_check(v, "Flow glow on 3D wires", _on_conduit_flow_glow)
+	var flow_hint := Label.new()
+	flow_hint.text = "3D wires are off by default (timeline chip: “3D wires”). Flow glow adds a marching pulse; leave off for a quieter look. Aim a wire → Interact for style, drag to pin a route."
+	flow_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	flow_hint.custom_minimum_size = Vector2(520, 0)
+	flow_hint.add_theme_color_override("font_color", C_TEXT_S)
+	flow_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(flow_hint)
+	var reset_routes := Button.new()
+	reset_routes.text = "Reset all auto-routes"
+	reset_routes.tooltip_text = "Clear locked / stale 3D pins on every connection and re-run metro"
+	reset_routes.focus_mode = Control.FOCUS_NONE
+	reset_routes.pressed.connect(_on_reset_all_autoroutes)
+	v.add_child(reset_routes)
 	_force_rainbow = _add_check(v, "Force rainbow (debug)", _on_force_rainbow)
 	var rainbow_hint := Label.new()
 	rainbow_hint.text = "Shows the antisolar rainbow regardless of rain, for testing. It still only appears when the sun is low (below ~44°) and you look opposite the sun, low above the horizon."
@@ -786,7 +811,7 @@ func _build_drone_tab(tabs: TabContainer) -> void:
 	_add_section_lbl(v, "Camera")
 	_drone_fov = _add_slider(v, "Drone FOV°", 30.0, 120.0, 1.0, _on_drone_fov)
 	var hint := Label.new()
-	hint.text = "Standard FPV controls: WASD / left stick = fly horizontally, Space/Shift or triggers = ascend/descend, mouse / right stick = look direction. Changes apply immediately to any drone in the world."
+	hint.text = "Standard FPV controls: WASD / left stick = fly horizontally, Shift or Up / triggers = ascend, Down = descend (Space stays free for look/time toggle), mouse / right stick = look direction. Changes apply immediately to any drone in the world."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(420, 0)
 	hint.add_theme_color_override("font_color", C_TEXT_S)
@@ -849,6 +874,41 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	gq_hint.add_theme_color_override("font_color", C_TEXT_S)
 	gq_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(gq_hint)
+	v.add_child(HSeparator.new())
+	_build_prop_perf_section(v)
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Terrain detail (imagery resolution)")
+	var tq_row := HBoxContainer.new()
+	tq_row.add_theme_constant_override("separation", 8)
+	var tq_hdr := Label.new()
+	tq_hdr.text = "Quality"
+	tq_hdr.custom_minimum_size = Vector2(110, 0)
+	tq_hdr.add_theme_color_override("font_color", C_TEXT_S)
+	tq_row.add_child(tq_hdr)
+	_terrain_quality = HSlider.new()
+	_terrain_quality.min_value = 0.0
+	_terrain_quality.max_value = 3.0
+	_terrain_quality.step = 1.0
+	_terrain_quality.ticks_on_borders = true
+	_terrain_quality.tick_count = 4
+	_terrain_quality.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_terrain_quality.value_changed.connect(_on_terrain_quality)
+	tq_row.add_child(_terrain_quality)
+	v.add_child(tq_row)
+	_terrain_quality_lbl = Label.new()
+	_terrain_quality_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_terrain_quality_lbl.custom_minimum_size = Vector2(420, 0)
+	_terrain_quality_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	_terrain_quality_lbl.add_theme_font_size_override("font_size", 10)
+	v.add_child(_terrain_quality_lbl)
+	var tq_hint := Label.new()
+	tq_hint.text = "Sharpens close-up (walking) terrain by fetching higher-zoom aerial tiles over a wider area. Higher tiers use more VRAM and a longer first download (then cached); only applies to generated location maps. Sculpting speed is unaffected."
+	tq_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tq_hint.custom_minimum_size = Vector2(420, 0)
+	tq_hint.add_theme_color_override("font_color", C_TEXT_S)
+	tq_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(tq_hint)
+	_sync_terrain_quality()
 	v.add_child(HSeparator.new())
 	_sun_energy         = _add_slider(v, "Sun energy",     0.0, 3.0, 0.05, _on_sun_energy)
 	_shadow_quality     = _add_slider(v, "Shadow quality", 0.0, 3.0, 1.0,  _on_shadow_quality)
@@ -1187,6 +1247,12 @@ func _sync_gameplay_from_snapshot(snap: Dictionary) -> void:
 	if _connector_losses:
 		_connector_losses.button_pressed = SimSettingsController.connector_losses_enabled \
 				if is_instance_valid(SimSettingsController) else false
+	if _conduits_3d_visible:
+		_conduits_3d_visible.button_pressed = SimSettingsController.conduits_3d_visible \
+				if is_instance_valid(SimSettingsController) else true
+	if _conduit_flow_glow:
+		_conduit_flow_glow.button_pressed = SimSettingsController.conduit_flow_glow_enabled \
+				if is_instance_valid(SimSettingsController) else false
 	if _force_rainbow:
 		_force_rainbow.button_pressed = SimSettingsController.force_rainbow \
 				if is_instance_valid(SimSettingsController) else false
@@ -1375,6 +1441,142 @@ func _on_shadow_opacity(v: float) -> void:
 func _on_graphics_quality(idx: int) -> void:
 	if _syncing: return
 	SimSettingsController.apply_graphics_quality(idx)
+
+
+## Placed-prop render tuning (Tier 2 perf) — distance culling + shadow policy for
+## user-placed props, which dominate the frame on prop-heavy sites. See
+## core/perf/prop_render_tuning.gd.
+func _build_prop_perf_section(v: Control) -> void:
+	PropRenderTuning.ensure_loaded()
+	_add_section_lbl(v, "Performance")
+	_render_scale = _add_slider(v, "Render resolution %", 50.0, 100.0, 5.0, _on_render_scale)
+	var rs_hint := Label.new()
+	rs_hint.text = "Renders the 3D world below native resolution and upscales it — the biggest lever for GPU-limited (low-FPS) scenes. UI stays crisp. 100% = native."
+	rs_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rs_hint.custom_minimum_size = Vector2(420, 0)
+	rs_hint.add_theme_color_override("font_color", C_TEXT_S)
+	rs_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(rs_hint)
+	_prop_draw_dist = _add_slider(v, "Prop draw distance", 80.0, 1200.0, 20.0, _on_prop_draw_dist)
+	_prop_shadows = _add_check(v, "Placed props cast shadows", _on_prop_shadows)
+	var sd_row := HBoxContainer.new()
+	sd_row.add_theme_constant_override("separation", 8)
+	var sd_hdr := Label.new()
+	sd_hdr.text = "Shadow detail"
+	sd_hdr.custom_minimum_size = Vector2(110, 0)
+	sd_hdr.add_theme_color_override("font_color", C_TEXT_S)
+	sd_row.add_child(sd_hdr)
+	_prop_shadow_detail = OptionButton.new()
+	_prop_shadow_detail.add_item("Full (every part)", 0)
+	_prop_shadow_detail.add_item("High", 1)
+	_prop_shadow_detail.add_item("Medium (drop fine detail)", 2)
+	_prop_shadow_detail.add_item("Low (main structure only)", 3)
+	_prop_shadow_detail.add_theme_color_override("font_color", C_TEXT)
+	_prop_shadow_detail.item_selected.connect(_on_prop_shadow_detail)
+	sd_row.add_child(_prop_shadow_detail)
+	v.add_child(sd_row)
+	_perf_hud = _add_check(v, "Show performance overlay (F3)", _on_perf_hud)
+	# Seed initial values without firing the apply callbacks (guarded by _syncing).
+	var prev_sync := _syncing
+	_syncing = true
+	var main: Node = SimSettingsController.main_node
+	if main != null and main.has_method("get_render_scale_3d"):
+		_render_scale.value = float(main.call("get_render_scale_3d")) * 100.0
+	else:
+		_render_scale.value = 100.0
+	_prop_draw_dist.value = PropRenderTuning.base_distance_m
+	_prop_shadows.button_pressed = PropRenderTuning.shadows_enabled
+	_prop_shadow_detail.selected = clampi(PropRenderTuning.shadow_detail, 0, 3)
+	_perf_hud.button_pressed = PerfMonitor.is_enabled()
+	_syncing = prev_sync
+	var hint := Label.new()
+	hint.text = "Small props fade out past the draw distance to save GPU; large landmarks (StarShade, domes, racks) stay visible. Turning off prop shadows helps on sites with thousands of props. F3 opens the live frame-cost overlay."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(420, 0)
+	hint.add_theme_color_override("font_color", C_TEXT_S)
+	hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(hint)
+
+func _on_render_scale(pct: float) -> void:
+	if _syncing: return
+	var main: Node = SimSettingsController.main_node
+	if main != null and main.has_method("set_render_scale_3d"):
+		main.call("set_render_scale_3d", clampf(pct / 100.0, 0.5, 1.0))
+
+func _on_prop_draw_dist(val: float) -> void:
+	if _syncing: return
+	PropRenderTuning.base_distance_m = val
+	PropRenderTuning.save()
+	PropRenderTuning.apply_to_all(SimSettingsController.main_node)
+
+func _on_prop_shadows(on: bool) -> void:
+	if _syncing: return
+	PropRenderTuning.shadows_enabled = on
+	PropRenderTuning.save()
+	PropRenderTuning.apply_to_all(SimSettingsController.main_node)
+
+func _on_prop_shadow_detail(idx: int) -> void:
+	if _syncing: return
+	PropRenderTuning.shadow_detail = clampi(idx, 0, 3)
+	PropRenderTuning.save()
+	PropRenderTuning.apply_to_all(SimSettingsController.main_node)
+
+func _on_perf_hud(on: bool) -> void:
+	if _syncing: return
+	PerfMonitor.set_enabled(on)
+
+func _on_terrain_quality(v: float) -> void:
+	var tier := int(round(v))
+	_update_terrain_quality_label(tier)
+	if _syncing: return
+	var loader := _find_terrain_loader()
+	if loader != null and loader.has_method("set_terrain_quality"):
+		loader.call("set_terrain_quality", tier)
+
+## Locate the active generated-map TerrainLoader (built-in maps have none).
+func _find_terrain_loader() -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var scene := tree.get_current_scene()
+	if scene != null:
+		var tl := scene.find_child("TerrainLoader", true, false)
+		if tl != null:
+			return tl
+	var main := tree.get_first_node_in_group("main_scene")
+	if main != null:
+		return main.get_node_or_null("TerrainLoader")
+	return null
+
+## Refresh the terrain-quality slider + label from the active loader (or the saved
+## config for built-in maps that have no loader).
+func _sync_terrain_quality() -> void:
+	if _terrain_quality == null:
+		return
+	var tier := 1
+	var loader := _find_terrain_loader()
+	if loader != null and loader.has_method("get_terrain_quality"):
+		tier = int(loader.call("get_terrain_quality"))
+	else:
+		var cfg := ConfigFile.new()
+		if cfg.load("user://terrain_config.cfg") == OK:
+			tier = int(cfg.get_value("terrain", "quality_tier", 1))
+	tier = clampi(tier, 0, 3)
+	var was_syncing := _syncing
+	_syncing = true
+	_terrain_quality.value = float(tier)
+	_syncing = was_syncing
+	_update_terrain_quality_label(tier)
+
+func _update_terrain_quality_label(tier: int) -> void:
+	if _terrain_quality_lbl == null:
+		return
+	var loader := _find_terrain_loader()
+	if loader != null and loader.has_method("terrain_quality_label"):
+		_terrain_quality_lbl.text = str(loader.call("terrain_quality_label", tier))
+	else:
+		var names := ["Low", "Medium", "High", "Ultra"]
+		_terrain_quality_lbl.text = names[clampi(tier, 0, 3)]
 
 func _on_moon_energy(v: float) -> void:
 	if _syncing: return
@@ -1662,6 +1864,24 @@ func _on_plant_growth(on: bool) -> void:
 func _on_connector_losses(on: bool) -> void:
 	if _syncing: return
 	SimSettingsController.set_connector_losses_enabled(on)
+
+func _on_conduits_3d_visible(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.set_conduits_3d_visible(on)
+
+
+func _on_reset_all_autoroutes() -> void:
+	var main := SimSettingsController.main_node if is_instance_valid(SimSettingsController) else null
+	if main == null:
+		return
+	var mgr := main.get_node_or_null("ConduitManager")
+	if mgr != null and mgr.has_method("reset_all_autoroutes"):
+		mgr.call("reset_all_autoroutes")
+
+
+func _on_conduit_flow_glow(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.set_conduit_flow_glow_enabled(on)
 
 func _on_force_rainbow(on: bool) -> void:
 	if _syncing: return

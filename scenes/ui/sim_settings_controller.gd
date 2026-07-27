@@ -8,6 +8,8 @@ signal simulation_started(initial_battery_soc: float, initial_load_kw: float, in
 signal drone_settings_changed
 signal connector_losses_changed(enabled: bool)
 signal force_rainbow_changed(enabled: bool)
+signal conduits_3d_visible_changed(enabled: bool)
+signal conduit_flow_glow_changed(enabled: bool)
 
 const REALTIME_SCALE: float = 1.0 / 3600.0
 const LIVE_SYNC_INTERVAL: float = 10.0
@@ -32,6 +34,11 @@ var stored_time_scale: float = 0.016667
 ## Wave 8: opt-in connector loss simulation (wire I^2R loss + pipe friction
 ## derate + overload burnout). Default OFF so existing saves are unchanged.
 var connector_losses_enabled: bool = false
+## Show 3D conduit meshes in the world (conceptual / cords / pipes).
+## Default OFF — wires are opt-in via the timeline "3D wires" chip (perf).
+var conduits_3d_visible: bool = false
+## Opt-in flow-glow overlay on conduits (off = quiet static look).
+var conduit_flow_glow_enabled: bool = false
 ## Debug/test: force the antisolar rainbow on regardless of rain. The shader still
 ## only draws it when the geometry is right (sun low, arc above the horizon).
 var force_rainbow: bool = false
@@ -705,6 +712,40 @@ func set_connector_losses_enabled(enabled: bool) -> void:
 	connector_losses_changed.emit(enabled)
 
 
+func set_conduits_3d_visible(enabled: bool) -> void:
+	if conduits_3d_visible == enabled:
+		return
+	conduits_3d_visible = enabled
+	conduits_3d_visible_changed.emit(enabled)
+	_notify_conduit_manager_visibility()
+
+
+func set_conduit_flow_glow_enabled(enabled: bool) -> void:
+	if conduit_flow_glow_enabled == enabled:
+		return
+	conduit_flow_glow_enabled = enabled
+	conduit_flow_glow_changed.emit(enabled)
+	_notify_conduit_manager_flow_glow()
+
+
+func _notify_conduit_manager_visibility() -> void:
+	var main := _valid_main()
+	if main == null:
+		return
+	var mgr := main.get_node_or_null("ConduitManager")
+	if mgr != null and mgr.has_method("set_global_visibility"):
+		mgr.call("set_global_visibility", conduits_3d_visible)
+
+
+func _notify_conduit_manager_flow_glow() -> void:
+	var main := _valid_main()
+	if main == null:
+		return
+	var mgr := main.get_node_or_null("ConduitManager")
+	if mgr != null and mgr.has_method("set_global_flow_glow"):
+		mgr.call("set_global_flow_glow", conduit_flow_glow_enabled)
+
+
 func set_force_rainbow(enabled: bool) -> void:
 	if force_rainbow == enabled:
 		return
@@ -839,6 +880,8 @@ func persist_settings() -> void:
 	cfg.set_value("time", "manual_dst", bool(main_node.get("manual_dst")))
 	cfg.set_value("gameplay", "live_mode", live_mode_enabled)
 	cfg.set_value("gameplay", "connector_losses_enabled", connector_losses_enabled)
+	cfg.set_value("gameplay", "conduits_3d_visible", conduits_3d_visible)
+	cfg.set_value("gameplay", "conduit_flow_glow_enabled", conduit_flow_glow_enabled)
 	cfg.set_value("gameplay", "force_rainbow", force_rainbow)
 	cfg.set_value("gameplay", "survival_active", not bool(main_node.get("gameplay_mechanics_paused")))
 	if main_node.has_method("get_plant_growth_enabled"):
@@ -953,6 +996,10 @@ func _load_persisted_settings() -> void:
 		set_live_mode(true)
 	if cfg.has_section_key("gameplay", "connector_losses_enabled"):
 		set_connector_losses_enabled(bool(cfg.get_value("gameplay", "connector_losses_enabled")))
+	if cfg.has_section_key("gameplay", "conduits_3d_visible"):
+		set_conduits_3d_visible(bool(cfg.get_value("gameplay", "conduits_3d_visible")))
+	if cfg.has_section_key("gameplay", "conduit_flow_glow_enabled"):
+		set_conduit_flow_glow_enabled(bool(cfg.get_value("gameplay", "conduit_flow_glow_enabled")))
 	if cfg.has_section_key("gameplay", "force_rainbow"):
 		set_force_rainbow(bool(cfg.get_value("gameplay", "force_rainbow")))
 	_load_rendering_adv(cfg)

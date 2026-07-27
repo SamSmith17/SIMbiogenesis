@@ -40,8 +40,73 @@ Godot.exe.exe --headless --path . --script core/climelapse/climelapse_series_sel
 Godot.exe.exe --headless --path . --script vegetation/vegetation_growth_selftest.gd
 # Site Report metrics/data + UI-compile self-test (offline, deterministic):
 Godot.exe.exe --headless --path . --script core/report/site_report_selftest.gd
+# Nested super-node self-test (offline — portal resolution, flattened connections,
+# walk recursion, cascade delete, v6->v7 migration, exposed-port maintenance,
+# nesting-aware PV faulting; run --import first so GraphNesting registers):
+Godot.exe.exe --headless --path . --script system_graph/graph_nesting_selftest.gd
+# Graph COMPONENTS self-test (offline — SketchUp-style definitions: realize
+# single + multi-level (StarShade tree), capture round-trip, edit-one-instance-
+# updates-all with per-instance battery SOC preserved, external-wire survival on
+# re-stamp, Make Unique detach, v6->v7 definitions round-trip; --import first):
+Godot.exe.exe --headless --path . --script system_graph/graph_components_selftest.gd
+# Graph electrical self-test (offline — string Voc, controller ranking, Voc across
+# a super-node boundary):
+Godot.exe.exe --headless --path . --script system_graph/graph_electrical_selftest.gd
+# 3D conduits (offline — kinds/conceptual default, mesh/drape/lights, loss,
+# bound-prop routability, connection ports, triangle pick, ortho elbows;
+# run --import first so new class_names register):
+Godot.exe.exe --headless --path . --script core/conduits/conduit_selftest.gd
+# Culvert stage-discharge + Hydro Section calculator (offline — weir/orifice,
+# Manning cap, stepped 3×8″ bank, PE vs HydroSource; --import first):
+Godot.exe.exe --headless --path . --script core/conduits/culvert_hydraulics_selftest.gd
+# Siphon micro-hydro prime/break + power cap (offline; --import first):
+Godot.exe.exe --headless --path . --script core/conduits/siphon_hydraulics_selftest.gd
+# Unified hydro reach: pond→siphon→culvert→outlet ONE stepper — parity vs
+# SiphonHydraulics, prime/break cycle, mass conservation, effective air-break
+# dead pool, overflow (offline, deterministic; --import first). This reach is the
+# single physics source for the flow engine + Siphon Lab (no fallback branch):
+Godot.exe.exe --headless --path . --script core/conduits/hydro_reach_selftest.gd
+# ABS DWV pipe kit (offline — kit JSON/meshes, planner 45/90 BOM; bake once with
+# pipe_kit_extractor.gd if data/*.res missing; --import first):
+Godot.exe.exe --headless --path . --script core/conduits/pipe_kit_selftest.gd
+# Re-bake ABS fittings from Imported Models/PipeFittings/abs_dwv_elbows.glb:
+Godot.exe.exe --headless --path . --script core/conduits/pipe_kit_extractor.gd
+# LinkageLab designer self-test (offline — solver/kinematics pinned to JS
+# reference values, support/panel geometry, structure builder, world-placement
+# runtime, solar/graph handoff, modal compile smoke; extend with every solver
+# change; run --import first so new class_names register):
+Godot.exe.exe --headless --path . --script core/linkage/linkage_selftest.gd
+# Process recipes + chore ledger + workflow runner (offline — normalize/catalog,
+# legacy batch migration, scrub-safe progress, hybrid chore confirm, part credits,
+# workflow step advance; run --import first so class_names register):
+Godot.exe.exe --headless --path . --script core/machines/process_recipe_selftest.gd
+# Portable .esim site package (offline — validate/build, ghost strip/remap,
+# share-code + file round-trip, summary counts; run --import first):
+Godot.exe.exe --headless --path . --script core/esim/esim_selftest.gd
+# Multiplayer helpers (offline — join-code v2 round-trip/expiry, bare ip:port,
+# protocol reject, avatar color, transfer codec, chat sanitize/mute, Phase 6
+# password/allowlist/rate-limit + headless host bind smoke; run --import first):
+Godot.exe.exe --headless --path . --script core/multiplayer/multiplayer_selftest.gd
 # Terrain live-fetch smoke test (NETWORK — elevation + imagery for one site):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_fetch_smoketest.gd
+# Parametric SCAD store (offline — -D/param-set literal formatting, param-set JSON,
+# StlLoader STL->mesh round-trip, ScadProvisioner manifest/plan, ScadParamParser
+# Customizer schema over the seed vase, ScadCatalog deps/category/license triage;
+# run --import first so the new class_names register):
+Godot.exe.exe --headless --path . --script core/scad/scad_selftest.gd
+# SCAD live render smoke (REQUIRES OpenSCAD binary — renders seed vase twice,
+# confirms params change geometry + STL imports to a mesh):
+Godot.exe.exe --headless --path . --script core/scad/scad_render_smoke.gd
+# SCAD library ingest + license triage (needs OpenSCAD for validation renders):
+# walks scad_library/ RECURSIVELY, parses each, validation-renders defaults
+# (bounded by --render-budget=<sec>, default 240), writes scad_library/catalog.json,
+# auto-stubs missing credits into credits/credits.json (--no-render = metadata only):
+Godot.exe.exe --headless --path . --script core/scad/scad_ingest.gd
+# SCAD library import (seed scad_library/ from an external Thingiverse-style folder:
+# copies .scad by dir, classifies LICENSE.txt, extracts README, writes credits):
+Godot.exe.exe --headless --path . --script core/scad/scad_import.gd -- --src="<path>"
+# In-game store: press H in a loaded map (ScadStore + scenes/ui/scad_store_modal.gd;
+# ScadPartBuilder MODEL_ID scad_part places rendered parts via PlacedProp).
 
 # Visual playtest capture (WINDOWED — cannot be --headless): launch a user map
 # by CLI, freeze a daytime clock, hide HUD, shoot drone-orbit + street PNG sets
@@ -53,6 +118,56 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres
 # HeightField tile-mesh state (AABBs/material — catches invisible-mesh bugs),
 # then UNDOES everything (map save data untouched):
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres> --sculpt-test --shots-dir=<label> --quit-after-capture
+# Systems-graph UI capture (WINDOWED): opens the G view on the soak map (the
+# boot scene is the map chooser, so pass --scene) and shoots one PNG per UI
+# state — freeform/arranged/selection+inspector/compound interior/zoom
+# extremes/site plan/elevation — via the REAL view handlers, for visual review:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=graph --shots-dir=<label> --quit-after-capture
+# Siphon Lab capture (WINDOWED): builds a pond + siphon on the graph, binds them,
+# opens the Lab's own 2D cross-section (VIEW_SIPHON), and shoots primed/flowing →
+# time-accelerated drain/broken → test-inflow refill/reprime (drives the pond on
+# the world clock via the unified HydroReach) for visual review of the flow render:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=siphon --shots-dir=<label> --quit-after-capture
+# Site-review (WINDOWED): load a REAL user map as-is (autosaved graph + terrain
+# artifacts), shoot world/ + graph/ (freeform + elevation) + siphon/ Lab, write
+# diagnostics.json + perf/*.json. Alias --user-map=mtvernon resolves Mount Vernon
+# under user://maps/. --perf enables F3 HUD; --no-mutate skips Demo Lab drive:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=loc_48p3252_n122p2469.tres --capture=site-review --perf --shots-dir=mt_vernon_review --quit-after-capture
+# Ambient resource-flow regression guard (WINDOWED — the harness hard no-ops
+# under --headless; no screenshots, console-only): builds a primed pond+siphon+
+# culvert-outlet, keeps SystemGraphView.visible=false the ENTIRE time (graph
+# never opened), speeds up the world clock, and asserts the pond drained + the
+# outlet accumulated volume. Guards against the water/siphon/catchment
+# simulation regressing back to only running while the 2D graph screen is open
+# (system_graph_view._tick_resource_flow_ambient):
+Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=ambient --quit-after-capture
+# Siphon auto-bind distance-cap guard (WINDOWED, console-only): places a NEAR
+# pond and a FAR pond next to a synthetic siphon and confirms bind_siphon_to_
+# nearest_pond(id, silent, max_dist_m) binds the near one, refuses the far one
+# beyond the cap, and an uncapped manual Rebind ignores distance — the
+# guardrail behind auto-bind-on-placement (Phase 3):
+Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=autobind --quit-after-capture
+# Stable pond-id guard (WINDOWED, needs a REAL TerrainLoader — generated
+# location maps only, e.g. a throwaway --map-lat=/--map-lon= test coordinate,
+# NOT the trusted built-in scenes which have no TerrainLoader): carves a pond,
+# adds it to the graph, then re-designates the SAME basin with a reshaped
+# polygon (forcing EarthworksBuilder.basin_tag_from_poly to derive a DIFFERENT
+# tag — exactly what resizing/reshaping an existing pond does). Asserts no
+# duplicate water-body record, pond_id preserved across the tag change, and
+# the graph tank still resolves to the live re-shaped pond with no manual
+# healing. Clean up the throwaway coordinate's files under user:// afterward
+# (maps/, saves/graph_autosave/, terrain_cache/, weather_cache/, scores/ —
+# all suffixed with the test lat/lon token):
+Godot.exe.exe --path . --windowed --resolution 640x480 -- --map-lat=<f> --map-lon=<f> --half-extent=3000 --capture=pondid --quit-after-capture
+# Downhill-culvert-routing guard (WINDOWED, needs a REAL TerrainLoader — a
+# throwaway generated-map test coordinate, NOT the trusted built-in scenes):
+# builds a siphon, calls ensure_siphon_outlet_sink, and confirms the outlet
+# either (a) traced a real downhill route (Watershed.trace_downhill over the
+# actual DEM — route_3d has waypoints, invert is a real terrain elevation, the
+# site moved off the old fixed +12m/-9m chord) or (b) correctly fell back to
+# the fixed +12m offset on flat/no-DEM terrain — either is valid; only "neither"
+# is a regression. Clean up the throwaway coordinate's user:// files afterward:
+Godot.exe.exe --path . --windowed --resolution 640x480 -- --map-lat=<f> --map-lon=<f> --half-extent=3000 --capture=culvert --quit-after-capture
 ```
 
 Gotchas: headless runs rename `addons/**/~lib*.dll` → `*.TMP` (restore with
@@ -159,12 +274,16 @@ eyedropper, right-click = roof.
 
 **Playtest harness (`core/terrain/playtest_harness.gd`, autoload).** Hard no-op
 without CLI user args (after `--`). `--user-map=<user://maps/*.tres>` (or
-`--map-lat/--map-lon`) seeds MapContext + switches to the generated shell;
-`--capture=orbit|street|both` waits for `TerrainLoader.map_load_complete`
-(+ the hyper drape, bounded 420 s), freezes `--time=<hour>` (default 10.0),
-hides CanvasLayers, shoots PNG sets + `manifest.json` (pos/yaw/pitch per shot)
-to `user://screenshots/<--shots-dir>/`; `--quit-after-capture` exits. F12 =
-manual shot any windowed run. Captures need a window (no --headless).
+`--map-lat/--map-lon`, or alias `mtvernon`) seeds MapContext + switches to the
+generated shell; `--capture=orbit|street|hero|both|graph|siphon|site-review`
+waits for `TerrainLoader.map_load_complete` (+ the hyper drape, bounded 420 s
+for world), freezes `--time=<hour>` (default 10.0), shoots PNG sets +
+`manifest.json` to `user://screenshots/<--shots-dir>/`. **`site-review`** is the
+agent-facing composite for a saved site: `world/` + `graph/` (freeform / site
+plan / elevation) + `snowglobe/` + `siphon/` Lab + `diagnostics.json` + optional
+`--perf` → F3 HUD + `perf/*.json`. `--review-sets=world,freeform,site,elevation,snowglobe,siphon,arranged`
+(default omits site/snowglobe); `--no-mutate` skips Lab Demo drive.
+`--quit-after-capture` exits. F12 = manual shot. Windowed only.
 
 **Graph PV electrical + layout (system_graph/).** `PvElectrical` computes string Voc
 (series sum / parallel branch max, cold-temp boost) on PV connections; exceeding
@@ -345,6 +464,23 @@ pattern):**
   z19–23 globally — close-range was low-res only because the base zoom packs all
   30 km into ~2048 px. USGS NAIP (US-only, no key) and Mapbox (key) were evaluated
   as additional sources but not wired (ESRI high-zoom covers it globally, no key).
+- `core/terrain/ai_imagery_service.gd` (`AiImageryService` autoload): **opt-in**
+  AI "hero patch" — after the hyper drape lands, `terrain_loader._maybe_request_ai_hero()`
+  crops the central ~100 m square (`AI_HERO_HALF_EXTENT_DEFAULT` 50 m) out of
+  `_hyper_drape` and sends it to Gemini `gemini-2.5-flash-image` (nano-banana,
+  image-in/image-out) to sharpen + add photoreal fine ground detail beyond the
+  ESRI ~0.24 m/px ceiling where the player spawns. One 2K image per site, cached
+  to `user://terrain_cache/ai_imagery/` (so ~$0.04 one-time), overlaid on top of
+  hyper in `terrain_detail.gdshader` via the feathered `ai_*` uniforms
+  (`_apply_ai_to_terrain`, re-stamped in `_stamp_drape_mercator_bboxes`). Key:
+  `user://terrain_config.cfg [gemini] api_key=` (or `GEMINI_API_KEY` env);
+  `ai_hero_enabled`/`ai_hero_half_extent_m`/`ai_image_size` also live there.
+  Default OFF (no surprise API charge); toggle + **Generate/Regenerate** in the
+  Terrain options UI, `refresh_ai_hero()` deletes the cache and re-requests (also
+  folded into `refresh_all_cached_layers`). Generative — it only recolours ground
+  (buildings/roads/veg are separate meshes) and the prompt pins framing/positions,
+  so drift is cosmetic; output carries an invisible SynthID watermark. No key /
+  offline / disabled → clean no-op, world still loads.
 - `core/terrain/geo_math.gd` (`GeoMath`) + `core/terrain/terrain_builder.gd`
   (`TerrainBuilder`): pure static math (tile/Mercator/extent; ArrayMesh +
   HeightMapShape3D collision). Both covered by `terrain_selftest.gd`.
@@ -409,7 +545,7 @@ height DELTAS at 1.5 m/cell in 64-cell tiles allocated only where edited, with
 region-scoped undo sessions + binary persistence (`user://maps/terrain_tiles_*`).
 Ops in `core/terrain/terrain_sculpt_ops.gd` (raise/lower/smooth/flatten brushes,
 `level_polygon`, `ramp`, `carve_basin`); loader commands `brush_stamp` /
-`level_region_command` / `ramp_command` / `pond_command` (carve + auto water fill,
+`level_region_command` / `ramp_command` / `pond_command` (carve + optional seed puddle;
 water folded into the SAME undo entry as the carve). **Rendering is an overlay,
 NOT a bake**: the detail DEM mesh is far too coarse (~12–47 m/vertex) to show a
 1.5 m edit — `core/terrain/terrain_height_field.gd` (`TerrainHeightField`, node
@@ -429,23 +565,15 @@ earthworks migrate one-time into tiles (`_migrate_legacy_edits_to_tiles`).
 Validate with the `--sculpt-test` harness (above) + terrain_selftest.
 
 **Ponds are player-owned, never auto-added to the graph.** `pond_command` carves a
-basin and calls `designate_sculpted_pond` to FILL it with water (persisted per site
-in `user://maps/user_water_*.json` — points + `level_m` + `capacity_l` + label), but
-does NOT touch the system graph. The player Ctrl/Alt-aims a still-water body
+basin and optionally seeds a thin puddle; **Rain** / **Drain** (T dock) hold-modulate
+`level_m` toward spill with bathymetric `stock_l`/`capacity_l` (Auto). Persisted per
+site in `user://maps/user_water_*.json` (`level_m`, `capacity_mode`/`fill_mode`,
+`capacity_l`, `stock_l`, …). The player Ctrl/Alt-aims a still-water body
 (`interaction_focus._update_water_focus` → `pick_water_at_world`, highlights blue)
 and Interact/clicks to open the **Pond settings modal**
-(`scenes/ui/pond_edit_ui.gd`, drawer pinned above the timeline; loader wires it in
-`_setup_pond_edit_ui` and opens via `open_pond_editor(idx)`). The modal overrides the
-water fill level (`set_pond_fill_level` → live water mesh) and storage volume
-(`set_pond_capacity` L), toggles **Add to graph / Remove from graph**
-(`add_pond_to_graph` / `remove_pond_from_graph` → `SystemGraphView.add_imported_pond`
-/ `remove_imported_pond`, idempotent per `osm_water_tag`), and **Delete pond**
-(`delete_pond` — removes water body + graph node; OSM map water only leaves the graph).
-`get_pond_info(idx)` is the modal's read model. Graph membership is queried live via
-`SystemGraphView.has_pond_with_tag` (authoritative across reloads — `_added_pond_tags`
-is only a fast cache); clearing all terrain edits strips every user pond's graph
-node first, so cleared ponds never orphan catchment/tank items. OSM lakes/ponds use
-the same modal (graph toggle only; their water is map data, not deletable).
+(`scenes/ui/pond_edit_ui.gd`): level, Capacity Auto/Manual, Fill Auto/Manual,
+**Add to graph / Remove**, **Delete**. Graph tank twins Auto bathymetry via
+`sync_pond_level_from_mesh`. Membership via `SystemGraphView.has_pond_with_tag`.
 
 `main.gd` (~1,900 lines) owns: environment/sky, shadow quality, collision
 generation, save/load orchestration, vehicle/death-zone/crisis wiring.
@@ -484,6 +612,8 @@ autoload holds the shared logic; `TimeUI` only forwards signals for backward com
 | WeatherService | core/weather_service.gd | Open-Meteo archive weather, cached per location/year |
 | ElevationService | core/terrain/elevation_service.gd | DEM grid: Open-Meteo (no key) / OpenTopography (key); `elevation_ready/failed/progress` |
 | ImageryService | core/terrain/imagery_service.gd | ESRI World Imagery XYZ drape; `imagery_ready/failed/progress` |
+| AiImageryService | core/terrain/ai_imagery_service.gd | Opt-in Gemini "hero patch" ground enhancement (image in/out); `ai_imagery_ready/failed`; key `[gemini] api_key` / `GEMINI_API_KEY` |
+| MultiplayerSession | core/multiplayer/multiplayer_session.gd | Listen-server co-presence (ENet host/join, avatars, host clock) + Phase 3–4 design share/ghost-merge + live graph/props sync (`Design` child) + Phase 5 session text chat (`Chat` child; Enter compose, proximity bubbles, mute, Discord invite deep-link) + Phase 6 hardening (join-code expiry, optional password, trusted-key allowlist, peer/snapshot caps, rate-limit kicks, local `user://mp_telemetry.log`); lobby via Timeline **Multiplayer** chip |
 | MapContext | core/terrain/map_context.gd | Transient lat/lon hand-off to generated map scene (pre-`change_scene`) |
 | CursorController | scenes/ui/cursor_controller.gd | Mouse capture policy: play/pause/modal stack |
 | SimSettingsController | scenes/ui/sim_settings_controller.gd | Date/location/clouds/lighting/live mode; `live_mode_changed` / `simulation_started` |
@@ -538,6 +668,48 @@ Graph state round-trips via `collect_save_state()`/`apply_save_state()` + per-sc
 autosave JSON. **Overhaul direction:** SoI metadata, PBI catchment nodes, full
 compound promoted ports, ISRU catalog beyond electrical, 3D↔2D node binding,
 observed-vs-sim calibration per resource channel.
+
+**SketchUp-style components (`system_graph/data/graph_component_defs.gd` +
+`GraphModel.definitions`).** A generic super-node can be promoted to a reusable
+**component definition** (inspector **Save as Component** → names it, mints a
+`def_id`, persists to `user://user_presets.json` under the "My Components"
+library category with nested defs). Each placement is an **instance**: a generic
+compound with `specs.definition_id`/`definition_rev`, its child scope a realized
+copy whose children carry `specs.def_local_id` linking them to template slots.
+`GraphComponentDefs` (static): `realize` (recursive, multi-level — nested
+template items reference other defs by id), `capture` (rebuild a def from a live
+instance, strip `INSTANCE_ONLY_SPEC_KEYS` = SOC/telemetry/HA/3D/site/`*_tag`, bump
+rev), `restamp` (reconcile a sibling to the def, matching by `def_local_id` so
+per-instance state + external wires by stable handle id survive), `make_unique`
+(detach). **Live propagation:** a structural edit inside an instance debounces
+(`_component_sync_timer`, 0.15 s) → `_flush_component_sync` captures that
+instance's def and re-stamps every sibling; re-entrancy-guarded by
+`_component_sync_active` + `_history_suppress`. Built-in defs live in
+`ComponentPresets` (`builtin_definition`/`builtin_component_tree`/
+`component_preset_entries`) under the **Super-nodes** category; **StarShade** is a
+3-level tree (array `starshade_solar_array` 3S×6P / hybrid inverter
+`starshade_hybrid_inverter` CC+inverter / battery bank `starshade_battery_bank`)
+that `StarShadeGraphSeeder.seed_graph` now realizes (with `source`/`starshade_tag`
+as instance-only identity so dedupe/clear/HA still work) instead of flat nodes.
+Model v6→v7 adds the `definitions` registry (old saves load empty). Ctrl+G group
+/ Ctrl+Shift+G explode. Zoom drill-in/pop-out is now seamless (child bbox mapped
+onto the collapsed body rect then tweened to fit + a short content fade — see
+`graph_canvas.gd` `begin/finish_enter_transition` + `begin/finish_pop_transition`);
+collapsed compounds draw + hit-test ALL promoted handles. **All super-node ports
+follow the base graph's top-to-bottom flow: inputs across the TOP edge, outputs
+across the BOTTOM edge** (`_distribute_handles` / `_distribute_compound_handle_positions`
+/ `_compound_handle_pos`); when inside a child scope the boundary **portal pills**
+dock along the top (inputs) / bottom (outputs) edges and draw a marching connector
+wire down to the child port each fronts (`_draw_portal_pill_row`). PV Voc grouping
+is now **series-aware** (`PvElectrical.connected_components(..., series_only=true)`:
+only +→− links merge a string, +→+ / −→− are parallel) so the StarShade array's
+**3S×6P** reads as six 3-panel strings (~112 Voc) instead of one 18-panel series
+string (>600 Voc) — the controller no longer over-volts. A super-node may carry
+`node_banner`+`model_id` (+`icon_replaces_frame:false`) to render its 3D subject's
+GLB thumbnail as a 2D banner filling the node body instead of the child-graph
+miniature (`_draw_compound_banner`, same preview path as processor cards) — the
+StarShade definition does this. Self-test: `system_graph/graph_components_selftest.gd`
+(includes a 3S6P no-over-voltage regression check).
 
 ## HA digital twin (working today)
 
@@ -760,6 +932,67 @@ First-draft limits (stated in the panel footnote): single representative year (n
 multi-year/decade or `ClimateProjectionService` scenarios yet), PV uses SolarUI's
 global tilt/azimuth and ignores 3D shading (live-only), no PNG export.
 
+## Linkage Lab (scissor-linkage designer port, `core/linkage/`)
+
+Native Godot port of the LinkageLab three.js web app (parametric folding
+deployable structures via compound scissor mechanisms). **N key** or the unified
+library "Linkage Lab…" entry opens the full-screen designer modal. All solver
+math is **inches internally** (pinned 1:1 against JS reference values), converted
+to metres (×0.0254) only in the mesh builder.
+- `linkage_params.gd` (`LinkageParams`, RefCounted): full parameter model; `to_config`/
+  `from_config` round-trip the web app's v30 config JSON (structure/mode/foldAngle/
+  panels/supportBeams/visibility) so web designs load directly and vice-versa.
+- `linkage_kinematics.gd` (static): closed-form `calculate_joint_positions`,
+  `optimal_closed_angle` (ring-closure scan), `min_fold_angle_v_overlap`. Core math
+  runs in 64-bit scalars before `Vector2` conversion (Godot vectors are 32-bit).
+- `linkage_solver.gd` (static): `solve(params, fold)` — module chaining, zHeight from
+  radial span, cylinder→arch transform, `arrayCount` tunnel dup, simplified brackets/
+  bolts (visual only). Returns beams (8 corners each) + brackets + bolts + stats.
+- `linkage_geometry.gd` (static): canopy area, module frames, radial support (S) beams +
+  simplified static RCP beams, and panel layouts (rectangular/radial/spiral for
+  cylinder, arch wall-face for arch). `solar_panels()` returns panel dicts (center +
+  axes + watts); `total_watts()`.
+- `linkage_structure_builder.gd` (`LinkageStructureBuilder extends Node3D`, MODEL_ID
+  `"linkage_structure"`): renders the solved frame as MultiMeshInstance3D beams/
+  brackets/bolts/supports/panels (cheap per-frame `set_fold_angle` transform rewrites,
+  no mesh rebuild). `build_node(spec, name)` is the ModelCatalog factory;
+  `refresh_collision_mesh()` builds a hidden "CollisionMesh" MeshInstance3D (box
+  geometry from beam/support/panel corners) that PlacedProp consumes for collision +
+  pick AABB. `deployed_panel_summary()` = count/watts/per-panel-watts/avg-normal +
+  electrical specs at the closed angle (the Phase 6 handoff numbers);
+  `orientation_from_normal(n_world)` → tilt + compass azimuth (CelestialClock
+  convention: north −Z, east +X, clockwise).
+- `linkage_selftest.gd`: offline deterministic (349 checks) — in CLAUDE.md validation
+  list; run `--import` first so class_names register.
+
+**World placement + live folding.** ModelCatalog procedural entry delegates to
+`build_node`; the modal's "Place in world" → `PlacedPropService.begin_placement`
+(ghost preview at the current fold). `gameplay/linkage_deploy_runtime.gd`
+(`LinkageDeployRuntime`, attached by `PlacedPropRuntime._maybe_attach_linkage_deploy`,
+node name "LinkageDeployRuntime") owns the in-world fold: **Interact toggles deploy/
+stow** with a 3 s animated fold; fold state persists on the prop record
+(`linkage_fold_deg`/`linkage_deployed`); collision mesh rebuilds only when motion
+settles. Crosshair **click** opens `placed_prop_edit_ui`'s "Edit in Linkage Lab" →
+`main.open_linkage_lab_for_prop(prop_id)` (bound modal; "Apply to structure" rebuilds
+that prop in place).
+
+**Solar/graph handoff (deploy-gated, idempotent per prop).** On placement and on
+"Apply to structure", `PlacedPropService.seed_linkage_graph(main, prop_id)` reads the
+builder's `deployed_panel_summary`, rotates the avg panel normal into world space for
+real tilt/azimuth, and calls `SystemGraphView.add_imported_solar_panels(count,
+watts_per_panel, "Linkage Structure", tag, opts)` where `tag = "linkage_<prop_id>"`
+(re-adding replaces only that structure's array). When the structure folds, the deploy
+runtime calls `SystemGraphView.set_imported_array_stowed(tag, not deployed)` — a stowed
+array keeps its node/wiring but contributes NO capacity to SolarUI
+(`_collect_root_array_aggregate` skips `array_stowed` compounds, summary prefixed
+"STOWED •"). Deleting the prop (`terrain_loader.delete_prop_by_id`) calls
+`remove_linkage_graph` → `SystemGraphView.remove_imported_solar_array(tag)`.
+`.gamebundle.json` import still works unchanged (static GLB); additionally, when a
+bundle carries the v30 `project` block (`DesignBundle.project_from_bundle`), TimelineUI
+offers "Open in Linkage Lab" so the web design becomes live-foldable natively.
+**Deferred:** full BOM/costs/actuator analysis, hardware full-detail assemblies, build
+guide, kinematic RCP continuation solver.
+
 ## Conventions
 
 - Signals are wired in code in `_ready()` (zero editor connections).
@@ -775,6 +1008,20 @@ global tilt/azimuth and ignores 3D shading (live-only), no PNG export.
 - Node-name lookups are load-bearing (e.g. "SystemGraphView", "SolarUI",
   "Main") — renaming scene nodes breaks SimMode/AutomationEngine/UIs.
 - Commit style: imperative subject, body explains what+why, validated-by note.
+
+## gstack
+
+Use the `/browse` skill from gstack for all web browsing. Never use the
+`mcp__claude-in-chrome__*` tools directly.
+
+Available gstack skills: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`,
+`/plan-design-review`, `/design-consultation`, `/design-shotgun`, `/design-html`,
+`/review`, `/ship`, `/land-and-deploy`, `/canary`, `/benchmark`, `/browse`,
+`/connect-chrome`, `/qa`, `/qa-only`, `/design-review`, `/setup-browser-cookies`,
+`/setup-deploy`, `/setup-gbrain`, `/retro`, `/investigate`, `/document-release`,
+`/document-generate`, `/codex`, `/cso`, `/autoplan`, `/plan-devex-review`,
+`/devex-review`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`,
+`/learn`.
 
 ## Known pre-existing runtime errors (not regressions)
 

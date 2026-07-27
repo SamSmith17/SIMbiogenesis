@@ -263,6 +263,16 @@ func _populate() -> void:
 			"detail": "Parametric rack → place as a structure.",
 		},
 		{
+			"kind": "linkage_lab",
+			"label": "Linkage Lab… (N)",
+			"detail": "Design folding scissor-linkage structures (StarShade designer).",
+		},
+		{
+			"kind": "mud_building",
+			"label": "Mud Building Designer…",
+			"detail": "Sketch wall plans → dual-perimeter mud print on the gantry.",
+		},
+		{
 			"kind": "starshade_place",
 			"label": "Place StarShade",
 			"detail": "Ghost-place the default StarShade canopy.",
@@ -275,7 +285,8 @@ func _populate() -> void:
 			"model_id": GrowBed.MODEL_ID,
 		},
 	]
-	var seen: Dictionary = {GrowBed.MODEL_ID: true, "starshade": true}
+	var seen: Dictionary = {GrowBed.MODEL_ID: true, "starshade": true,
+		ModelCatalog.GENERIC_BOX_ID: true}
 	for m in ModelCatalog.all_models():
 		var mid := str(m.get("id", ""))
 		if mid.is_empty() or seen.has(mid):
@@ -406,8 +417,18 @@ func _entry_can_place(e: Dictionary) -> bool:
 	if kind in ["structure", "starshade_place", "pallet_rack"]:
 		return true
 	if kind == "graph_preset":
-		return not str(e.get("model_id", "")).is_empty()
+		# Any non-component graph preset can be placed (a bespoke GLB if it has
+		# one, else a gray-box placeholder — F).
+		return not _preset_is_component(e.get("preset", {}) as Dictionary)
 	return false
+
+
+## True for a compound/super-node preset (spawns a subgraph, not a single prop).
+func _preset_is_component(preset: Dictionary) -> bool:
+	if str(preset.get("type", "")) == "compound":
+		return true
+	return preset.has("component_tree") or preset.has("definition_id") \
+			or preset.has("def_id")
 
 
 func _activate_selected(force_place: bool) -> void:
@@ -438,9 +459,9 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 			_open_building(bidx if bidx >= 0 else -1)
 		"graph_preset":
 			var preset: Dictionary = e.get("preset", {}) as Dictionary
-			var mid := str(e.get("model_id", ""))
-			# Place button, or double-click on a 3D-linked preset → world placement.
-			if force_place or (from_double_click and not mid.is_empty()):
+			# Place button, or double-click on any placeable preset (bespoke GLB
+			# or gray-box placeholder) → world placement.
+			if force_place or (from_double_click and _entry_can_place(e)):
 				_place_graph_preset(preset)
 			else:
 				_spawn_graph_preset(preset)
@@ -454,6 +475,20 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				close()
 			else:
 				_status.text = "Pallet rack builder needs a location map (TerrainLoader)."
+		"linkage_lab":
+			var main_node := get_tree().current_scene if get_tree() != null else null
+			if main_node != null and main_node.has_method("open_linkage_lab"):
+				main_node.call("open_linkage_lab")
+				close()
+			else:
+				_status.text = "Linkage Lab unavailable on this scene."
+		"mud_building":
+			var sgv := get_tree().root.find_child("SystemGraphView", true, false) if get_tree() != null else null
+			if sgv != null and sgv.has_method("open_mud_building_designer"):
+				sgv.call("open_mud_building_designer", "")
+				close()
+			else:
+				_status.text = "Mud Building Designer unavailable on this scene."
 		"starshade_place", "structure":
 			_place_structure(str(e.get("model_id", "")))
 		_:
@@ -542,16 +577,22 @@ func _spawn_graph_preset(preset: Dictionary) -> void:
 func _place_graph_preset(preset: Dictionary) -> void:
 	if preset.is_empty():
 		return
-	var specs: Dictionary = preset.get("specs", {}) as Dictionary
-	if str(specs.get("model_id", "")).is_empty():
+	# Components can't be placed as a single prop — spawn the subgraph instead.
+	if _preset_is_component(preset):
 		_spawn_graph_preset(preset)
 		return
 	var sgv := _find_system_graph()
+	# Route through the graph view (defaults an empty model_id to a gray-box
+	# placeholder + binds the spawned node to the placed prop — F/D).
 	if sgv != null and sgv.has_method("_on_lib_place_model_requested"):
 		sgv.call("_on_lib_place_model_requested", preset)
 		close()
 		return
-	# Fallback: place model only (no graph bind).
+	# Fallback: only a real GLB can be placed without the graph view.
+	var specs: Dictionary = preset.get("specs", {}) as Dictionary
+	if str(specs.get("model_id", "")).is_empty():
+		_spawn_graph_preset(preset)
+		return
 	_place_structure(str(specs.get("model_id", "")))
 
 

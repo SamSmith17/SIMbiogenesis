@@ -4,11 +4,12 @@ class_name FPVDrone
 ## FPV Drone vehicle - player body stays on ground while camera flies with drone
 ## Standard FPV controls:
 ## Left stick / WASD = fly horizontally in look direction
-## Right trigger / Space = ascend, Left trigger / Shift = descend
+## Right trigger / Shift / Up = ascend, Left trigger / Down = descend
 ## Right stick / mouse = look direction (steering)
 ## Drone hovers at current altitude when neither moving nor using altitude inputs
+## Space is reserved for the look/time toggle and never moves the drone.
 ## While a terrain/veg edit dock is open, altitude moves to the Arrow keys /
-## gamepad triggers so Space stays free for the dock's look/time toggle.
+## gamepad triggers so Shift stays free for the dock's UI.
 
 signal mounted(player: CharacterBody3D)
 signal dismounted(player: CharacterBody3D)
@@ -228,6 +229,7 @@ func _setup_interaction_area() -> void:
 	_collision_shape.shape = sphere
 
 func _process(delta: float) -> void:
+	PerfMonitor.begin("drone")
 	var spin_speed := 20.0
 	if is_mounted:
 		if _is_terrain_edit_ortho():
@@ -265,6 +267,7 @@ func _process(delta: float) -> void:
 		var in_select_mode := is_mounted and Input.is_key_pressed(KEY_ALT)
 		# Don't show searchlight in top-down terrain sculpt mode since camera is too high
 		_search_light.visible = in_select_mode and not _is_terrain_edit_ortho()
+	PerfMonitor.end("drone")
 
 func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 	if current_rider == null:
@@ -289,13 +292,12 @@ func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 	var input_forward := -move_input.y
 	var input_strafe := move_input.x
 	
-	# Altitude keys / triggers (Space/Up = up, Shift/Down = down).
+	# Altitude keys / triggers (Shift/Up = up, Down = down). Space is never bound
+	# to drone altitude — it stays free to toggle look/time.
 	# While terrain/veg edit is open the sim clock is often paused — still allow
 	# altitude so the player can reposition for better sculpt views, BUT do not
-	# grab Space/Shift there: Space must stay free to toggle look/time and Shift
-	# for the UI, so edit-mode altitude comes from the arrow keys / gamepad
-	# triggers only (Space+Shift would otherwise both raise the drone AND toggle
-	# pause on the same press, which reads as "Space just raises the drone").
+	# grab Shift there (the dock reserves it), so edit-mode altitude comes from
+	# the arrow keys / gamepad triggers only.
 	var input_altitude := 0.0
 	var main := get_tree().get_first_node_in_group("main_scene") if get_tree() != null else null
 	var analemma_active := main != null and bool(main.get("analemma_mode"))

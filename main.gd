@@ -231,6 +231,48 @@ var weather_light_factor : float = 1.0 :
 ## Managed by TimeUI based on time speed and user toggle.
 var gameplay_mechanics_paused : bool = true   # Off by default; TimeUI toggle can enable
 
+## Hydro Lab open: pause heavy world CPU (terrain snow, veg uniforms, player,
+## conduit follow) while ResourceFlowEngine + Lab UI keep ticking. Root viewport
+## already has disable_3d while the graph is open — this kills the leftover
+## _process storm that kept Lab at ~10 fps on 30 km maps.
+var _world_suspended_for_lab: bool = false
+var _lab_saved_player_process: Node.ProcessMode = Node.PROCESS_MODE_INHERIT
+var _lab_soi_lite_was_on: bool = false
+
+
+func is_world_suspended_for_lab() -> bool:
+	return _world_suspended_for_lab
+
+
+func set_world_suspended_for_lab(on: bool) -> void:
+	if _world_suspended_for_lab == on:
+		return
+	_world_suspended_for_lab = on
+	var soi := get_node_or_null("/root/SoiService")
+	var veg_sync := get_node_or_null("/root/VegetationEnvironmentSync")
+	var veg_wind := get_node_or_null("/root/VegetationWindDriver")
+	if on:
+		_lab_soi_lite_was_on = bool(soi.get("preview_lite")) if soi != null else false
+		if soi != null and soi.has_method("set_preview_lite"):
+			soi.call("set_preview_lite", true)
+		if veg_sync != null:
+			veg_sync.set_process(false)
+		if veg_wind != null:
+			veg_wind.set_process(false)
+		if player != null and is_instance_valid(player):
+			_lab_saved_player_process = player.process_mode
+			player.process_mode = Node.PROCESS_MODE_DISABLED
+	else:
+		if veg_sync != null:
+			veg_sync.set_process(true)
+		if veg_wind != null:
+			veg_wind.set_process(true)
+		if player != null and is_instance_valid(player):
+			player.process_mode = _lab_saved_player_process
+		if soi != null and soi.has_method("set_preview_lite"):
+			# Restore prior lite flag; Elev/Site will re-enable if they need it.
+			soi.call("set_preview_lite", _lab_soi_lite_was_on)
+
 # ==================== FIRE SETTINGS ====================
 
 ## Enable random fires (fires can still be triggered manually with F key when disabled)
@@ -310,6 +352,16 @@ var gameplay_mechanics_paused : bool = true   # Off by default; TimeUI toggle ca
 			sun.set("shadow_opacity", shadow_opacity)
 		if is_instance_valid( moon ) :
 			moon.set("shadow_opacity", shadow_opacity)
+
+## Vegetation shadow casting (trees/shrubs). OFF by default — wide-area vegetation
+## shadows are a heavy GPU cost in normal play and only matter for solar shadow
+## analysis. Toggling this flips already-scattered vegetation live (no regen);
+## grass never casts. See VegetationShadowPolicy.
+@export var vegetation_shadows_enabled : bool = false :
+	set( value ) :
+		vegetation_shadows_enabled = value
+		if is_inside_tree() :
+			VegetationShadowPolicy.set_enabled( value, get_tree() )
 
 ## Global graphics quality preset (distinct from per-light shadow_quality above).
 ## Bundles the heaviest GPU knobs the project formerly hardcoded in project.godot:
@@ -495,6 +547,16 @@ var msaa_level : int = 0 :
 		msaa_level = clampi( value, 0, 3 )
 		_apply_msaa_level()
 
+## 3D render resolution scale (0.5–1.0). Below 1.0 the 3D world renders at a
+## fraction of window resolution and is upscaled — the single biggest GPU lever
+## for fill-bound scenes. UI stays at native resolution. Persisted to
+## user://perf_prefs.cfg so it survives across sessions (hardware pref, not a
+## per-save setting). Applied in _ready after the prefs load.
+var render_scale_3d : float = 1.0 :
+	set( value ) :
+		render_scale_3d = clampf( value, 0.5, 1.0 )
+		_apply_render_scale()
+
 # ==================== CALCULATED SUNRISE/SUNSET ====================
 
 ## Calculated sunrise hour for current date/location (read-only, in clock time)
@@ -532,6 +594,10 @@ var toast_ui : ToastUI = null
 var help_overlay_ui : HelpOverlayUI = null
 var unified_library_ui : Control = null
 const UNIFIED_LIBRARY_MODAL_SCRIPT := preload( "res://scenes/ui/unified_library_modal.gd" )
+var linkage_lab_ui : Control = null
+const LINKAGE_LAB_MODAL_SCRIPT := preload( "res://scenes/ui/linkage_lab_modal.gd" )
+var scad_store_ui : Control = null
+const SCAD_STORE_MODAL_SCRIPT := preload( "res://scenes/ui/scad_store_modal.gd" )
 @onready var location_picker : Control = get_node_or_null( "UILayer/LocationPickerUI" ) as Control
 @onready var projection_canvas : Control = get_node_or_null( "UILayer/ProjectionCanvas" ) as Control
 @onready var pov_warp_overlay : Control = get_node_or_null( "UILayer/POVWarpOverlay" ) as Control
@@ -646,6 +712,8 @@ func _ready() -> void :
 	_apply_advanced_rendering_toggles()
 	_apply_tonemap_settings()
 	_apply_msaa_level()
+	_load_render_scale_pref()
+	_apply_render_scale()
 	_setup_environment_vfx()
 	_update()
 	_setup_save_load_ui()
@@ -953,6 +1021,20 @@ func _unhandled_input( e : InputEvent ) -> void :
 			pov_warp_overlay.call( "toggle_warp_mode" )
 			get_viewport().set_input_as_handled()
 			return
+	# GPU A/B levers on the editor-safe F7 key (F5/F6/F8 are the editor's own
+	# run/stop shortcuts and would kill the game): F7 = toggle veg shadows,
+	# Shift+F7 = hide/show ALL trees (measures the canopy's total GPU share).
+	if key_event.keycode == KEY_F7 or key_event.physical_keycode == KEY_F7 :
+		if key_event.ctrl_pressed :
+			_cycle_render_scale()
+		elif key_event.shift_pressed :
+			_toggle_veg_canopy()
+		else :
+			vegetation_shadows_enabled = not vegetation_shadows_enabled
+			show_toast( "Vegetation shadows: %s" % ( "ON" if vegetation_shadows_enabled else "OFF" ),
+				ToastUI.Level.INFO, 2.5 )
+		get_viewport().set_input_as_handled()
+		return
 	if InputMap.has_action( "toggle_projection_canvas" ) and Input.is_action_just_pressed( "toggle_projection_canvas" ) :
 		if is_instance_valid( projection_canvas ) :
 			projection_canvas.visible = not projection_canvas.visible
@@ -966,6 +1048,20 @@ func _unhandled_input( e : InputEvent ) -> void :
 		var tl := get_node_or_null( "UILayer/TimelineUI" )
 		if tl != null and tl.has_method( "_on_site_report_pressed" ) :
 			tl.call( "_on_site_report_pressed" )
+		get_viewport().set_input_as_handled()
+		return
+	if InputMap.has_action( "toggle_linkage_lab" ) and Input.is_action_just_pressed( "toggle_linkage_lab" ) :
+		open_linkage_lab()
+		get_viewport().set_input_as_handled()
+		return
+	if InputMap.has_action( "toggle_scad_store" ) and Input.is_action_just_pressed( "toggle_scad_store" ) :
+		open_scad_store()
+		get_viewport().set_input_as_handled()
+		return
+	if InputMap.has_action( "toggle_pallet_rack" ) and Input.is_action_just_pressed( "toggle_pallet_rack" ) :
+		var prl := get_node_or_null( "TerrainLoader" )
+		if prl != null and prl.has_method( "open_pallet_rack_builder" ) :
+			prl.call( "open_pallet_rack_builder" )
 		get_viewport().set_input_as_handled()
 
 func _setup_save_load_ui() -> void :
@@ -1535,8 +1631,13 @@ func _apply_advanced_rendering_toggles() -> void :
 	env.sdfgi_enabled = sdfgi_user_enabled
 	# God rays ride on the volumetric fog pass, so enable it when either the plain
 	# volumetric-fog toggle OR the god-rays toggle is on.
-	env.volumetric_fog_enabled = volumetric_fog_user_enabled or god_rays_enabled
-	if god_rays_enabled :
+	# Skip shafts while the graph Elevation CT SubViewport owns the shared world —
+	# volumetric fog was painting a yellow sunstreak through the slice (and the
+	# old per-frame suppress fight contributed to AMD TDRs on G).
+	var soi_ct := _graph_soi_section_preview_active()
+	var want_god_rays := god_rays_enabled and not soi_ct
+	env.volumetric_fog_enabled = volumetric_fog_user_enabled or want_god_rays
+	if want_god_rays :
 		# Thin fog + strong in-scattering length so the sun scatters into visible
 		# shafts without fogging the whole scene into a grey wash.
 		var god_ray_density = 0.002
@@ -1553,7 +1654,7 @@ func _apply_advanced_rendering_toggles() -> void :
 			var ray_energy = 1.5 + (clouds_weight * 2.5)
 			sun.light_volumetric_fog_energy = ray_energy
 	elif is_instance_valid( sun ) :
-		sun.light_volumetric_fog_energy = 1.0
+		sun.light_volumetric_fog_energy = 0.0 if soi_ct else 1.0
 
 func _setup_environment_vfx() -> void :
 	if Engine.is_editor_hint() :
@@ -1592,6 +1693,33 @@ func set_msaa_level( level: int ) -> void :
 
 func get_msaa_level() -> int :
 	return msaa_level
+
+const _PERF_PREFS_CFG : String = "user://perf_prefs.cfg"
+
+func _apply_render_scale() -> void :
+	if Engine.is_editor_hint() :
+		return
+	var vp := get_viewport()
+	if vp != null :
+		vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+		vp.scaling_3d_scale = render_scale_3d
+
+## Load the persisted 3D render scale (shares perf_prefs.cfg with PropRenderTuning's
+## [props] section — ConfigFile preserves the other sections on save).
+func _load_render_scale_pref() -> void :
+	var cfg := ConfigFile.new()
+	if cfg.load( _PERF_PREFS_CFG ) == OK :
+		render_scale_3d = float( cfg.get_value( "render", "scale_3d", render_scale_3d ) )
+
+func set_render_scale_3d( value: float ) -> void :
+	render_scale_3d = value
+	var cfg := ConfigFile.new()
+	cfg.load( _PERF_PREFS_CFG )  # keep [props] and any other sections
+	cfg.set_value( "render", "scale_3d", render_scale_3d )
+	cfg.save( _PERF_PREFS_CFG )
+
+func get_render_scale_3d() -> float :
+	return render_scale_3d
 
 ## Apply the global graphics preset via RenderingServer + the active viewport.
 ## These are global/viewport knobs (not per-light), so they take effect immediately.
@@ -1921,6 +2049,16 @@ func _graph_soi_preview_active() -> bool :
 	if _graph_view_node != null and _graph_view_node.has_method( "is_soi_preview_active" ) :
 		return bool( _graph_view_node.call( "is_soi_preview_active" ) )
 	return false
+
+
+func _graph_soi_section_preview_active() -> bool :
+	if not _graph_view_visible() :
+		return false
+	if _graph_view_node != null and _graph_view_node.has_method( "is_soi_section_preview_active" ) :
+		return bool( _graph_view_node.call( "is_soi_section_preview_active" ) )
+	return false
+
+
 var _vegetation_night_factor : float = 0.0
 var _vegetation_sun_direction : Vector3 = Vector3.UP
 ## Seasonal phenology signals + weather-driven snow cover, cached in
@@ -2076,6 +2214,7 @@ func _process( delta: float ) -> void :
 		# Run env updates when the graph is closed, OR when its live SoI
 		# SubViewport backdrop needs sun/sky to keep ticking.
 		if not graph_visible or _graph_soi_preview_active() :
+			PerfMonitor.begin("world_env")
 			PlacedLightService.process_placement()
 			# Planets are tiny points, so the 20 Hz sky throttle below makes them
 			# visibly jump at high speed while the sun/moon glide. Push them every
@@ -2087,6 +2226,7 @@ func _process( delta: float ) -> void :
 			if _env_update_accum >= _ENV_UPDATE_INTERVAL :
 				_env_update_accum = 0.0
 				_update()
+			PerfMonitor.end("world_env")
 
 func _update() -> void :
 	_solar_eclipse = clock.sample_solar_eclipse()
@@ -2244,8 +2384,11 @@ func _update_moon() -> void :
 	var moon_above_horizon : bool = moon_direction.y > 0.05
 	var bright_enough_for_shadows : bool = phase_brightness >= moon_shadow_threshold
 	var clear_enough_for_shadows : bool = weather_light_factor > 0.5  # Not too cloudy
+	# Moon shadows are invisible once the sun is up, but the cascade still costs a
+	# full extra shadow pass — skip it in daylight (a real GPU saving at noon).
+	var sun_up : bool = clock != null and clock.get_sun_direction().y > 0.0
 
-	if moon_shadows_enabled and moon_above_horizon and bright_enough_for_shadows and clear_enough_for_shadows :
+	if moon_shadows_enabled and moon_above_horizon and bright_enough_for_shadows and clear_enough_for_shadows and not sun_up :
 		moon.shadow_enabled = true
 		# Shadow distance scales with brightness - fuller moon = longer shadows
 		moon.directional_shadow_max_distance = moon_shadow_distance * _moon_shadow_quality_distance_scale * phase_brightness
@@ -3169,6 +3312,44 @@ func show_toast( text: String, level: ToastUI.Level = ToastUI.Level.INFO, durati
 		toast_ui.show_toast( text, level, duration )
 
 
+## Shift+F7 canopy A/B toggle — hide/show all trees to measure their GPU share.
+var _veg_canopy_hidden : bool = false
+
+func _toggle_veg_canopy() -> void :
+	_veg_canopy_hidden = not _veg_canopy_hidden
+	VegetationShadowPolicy.set_canopy_hidden( _veg_canopy_hidden, get_tree() )
+	show_toast( "Trees (canopy): %s" % ( "HIDDEN" if _veg_canopy_hidden else "SHOWN" ),
+		ToastUI.Level.INFO, 2.5 )
+
+
+## Ctrl+F7 3D render-scale A/B cycle. The scene is fragment/overdraw-bound on weak
+## GPUs (foliage), so rendering the 3D at a lower internal resolution + upscaling
+## is the biggest single lever; 2D/UI stays crisp at native resolution.
+const _RENDER_SCALES : Array[ float ] = [ 1.0, 0.85, 0.7, 0.6 ]
+var _render_scale_idx : int = 0
+
+func _cycle_render_scale() -> void :
+	_render_scale_idx = ( _render_scale_idx + 1 ) % _RENDER_SCALES.size()
+	var sc : float = _RENDER_SCALES[ _render_scale_idx ]
+	var vp := get_viewport()
+	if vp != null :
+		vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+		vp.scaling_3d_scale = sc
+	show_toast( "3D render scale: %d%%" % int( round( sc * 100.0 ) ), ToastUI.Level.INFO, 2.5 )
+
+
+## Achievement toast when a fabricated part is credited to inventory (+N UP!).
+func show_part_up( label: String, count: int = 1, duration: float = 5.5 ) -> void :
+	if is_instance_valid( toast_ui ) :
+		toast_ui.show_part_up( label, count, duration )
+
+
+## Hybrid chore confirm toast (process recipe paused for human attention).
+func show_chore_confirm( item_id: String, label: String, chore_hours: float = 0.0 ) -> void :
+	if is_instance_valid( toast_ui ) :
+		toast_ui.show_chore_confirm( item_id, label, chore_hours )
+
+
 ## Instances the F1 controls/tips overlay under UILayer (once per scene tree).
 func _setup_help_overlay_ui() -> void :
 	var ui_layer := get_node_or_null( "UILayer" )
@@ -3202,6 +3383,91 @@ func _setup_unified_library_ui() -> void :
 	ui.set_script( UNIFIED_LIBRARY_MODAL_SCRIPT )
 	layer.add_child( ui )
 	unified_library_ui = ui
+
+
+## Linkage Lab — full-screen scissor-linkage designer (lazy, every map).
+func _setup_linkage_lab_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "LinkageLabLayer" )
+	if existing_layer != null :
+		linkage_lab_ui = existing_layer.get_node_or_null( "LinkageLabModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "LinkageLabLayer"
+	layer.layer = UITheme.LAYER_MODAL
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "LinkageLabModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( LINKAGE_LAB_MODAL_SCRIPT )
+	layer.add_child( ui )
+	linkage_lab_ui = ui
+
+
+## Parametric Hardware Store — full-screen OpenSCAD part store (lazy, every map).
+func _setup_scad_store_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "ScadStoreLayer" )
+	if existing_layer != null :
+		scad_store_ui = existing_layer.get_node_or_null( "ScadStoreModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "ScadStoreLayer"
+	layer.layer = UITheme.LAYER_MODAL
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "ScadStoreModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( SCAD_STORE_MODAL_SCRIPT )
+	layer.add_child( ui )
+	scad_store_ui = ui
+
+
+## Open the Parametric Hardware Store (H key).
+func open_scad_store() -> void :
+	if not is_instance_valid( scad_store_ui ) :
+		_setup_scad_store_ui()
+	if not is_instance_valid( scad_store_ui ) :
+		return
+	if scad_store_ui.has_method( "bind_loader" ) :
+		scad_store_ui.call( "bind_loader", get_node_or_null( "TerrainLoader" ) )
+	if scad_store_ui.has_method( "open" ) :
+		scad_store_ui.call( "open" )
+
+
+## Open the Linkage Lab designer, optionally seeded with a v30 config dict.
+func open_linkage_lab( config: Dictionary = {} ) -> void :
+	if not is_instance_valid( linkage_lab_ui ) :
+		_setup_linkage_lab_ui()
+	if not is_instance_valid( linkage_lab_ui ) :
+		return
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader == null :
+		loader = TerrainSurfaceQuery.find_terrain_loader( self )
+	if linkage_lab_ui.has_method( "bind_loader" ) :
+		linkage_lab_ui.call( "bind_loader", loader )
+	if linkage_lab_ui.has_method( "open" ) :
+		linkage_lab_ui.call( "open", config )
+
+
+## Edit-in-place: open the Linkage Lab bound to a placed linkage structure
+## ("Apply to structure" rebuilds that prop with the edited design).
+func open_linkage_lab_for_prop( prop_id: String ) -> void :
+	if not is_instance_valid( linkage_lab_ui ) :
+		_setup_linkage_lab_ui()
+	if not is_instance_valid( linkage_lab_ui ) :
+		return
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader == null :
+		loader = TerrainSurfaceQuery.find_terrain_loader( self )
+	if linkage_lab_ui.has_method( "bind_loader" ) :
+		linkage_lab_ui.call( "bind_loader", loader )
+	if linkage_lab_ui.has_method( "open_for_prop" ) :
+		linkage_lab_ui.call( "open_for_prop", prop_id )
 
 
 ## Open the unified library browser (Buildings / Graph / Vegetation / Structures).

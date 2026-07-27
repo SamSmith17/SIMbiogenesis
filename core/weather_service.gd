@@ -1667,7 +1667,9 @@ static func _records_cache_path(lat: float, lon: float) -> String:
 
 ## 12 monthly precipitation totals normalized to mean 1.0 — drop-in flow
 ## multipliers for HydroSource/HydroConfig. Empty array when unavailable.
-func monthly_precip_multipliers() -> Array[float]:
+## Total precipitation (mm) summed per calendar month over the cached year, or []
+## when no precipitation series is loaded (offline).
+func monthly_precip_mm() -> Array[float]:
 	var arr: PackedFloat32Array = _series.get("precipitation", PackedFloat32Array())
 	if arr.is_empty():
 		return []
@@ -1682,6 +1684,13 @@ func monthly_precip_multipliers() -> Array[float]:
 			var v := arr[i]
 			if not is_nan(v):
 				sums[m] += v
+	return sums
+
+
+func monthly_precip_multipliers() -> Array[float]:
+	var sums := monthly_precip_mm()
+	if sums.is_empty():
+		return []
 	var total := 0.0
 	for s in sums:
 		total += s

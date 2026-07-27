@@ -126,6 +126,11 @@ var _needs_score_lbl: Label = null
 ## Phase 2 challenge progress chip + picker modal (lazy-init).
 var _challenge_chip: Button = null
 var _challenge_picker_panel: Control = null
+## Multiplayer lobby (listen-server co-presence) + status chip + chat HUD.
+var _mp_chip: Button = null
+var _mp_lobby: Control = null
+var _mp_chat_hud: Control = null
+var _conduits_chip: Button = null
 
 var _solar_analyzer: SolarShadingAnalyzer = null
 var _shading_overlay: PanelContainer = null
@@ -183,6 +188,8 @@ var _snap_video_btn    : Button = null
 var _render_progress_lbl : Label = null
 var _import_dialog     : FileDialog = null
 var _linkagelab_dialog : FileDialog = null
+var _linkagelab_open_confirm : ConfirmationDialog = null
+var _pending_linkage_project : Dictionary = {}
 
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
 ## Selection drag state (shift-drag on the track sets the render in/out range).
@@ -304,11 +311,99 @@ func _request_bar_layout() -> void:
 func _setup_runtime_ui() -> void:
 	_ensure_crosshair_ui()
 	_setup_settings_panel()
+	_setup_mp_lobby()
 	_setup_wx_tooltip()
 	_setup_weather_card()
 	_connect_weather_signals()
+	if is_instance_valid(SimSettingsController) \
+			and not SimSettingsController.conduits_3d_visible_changed.is_connected(
+				_on_conduits_visible_signal):
+		SimSettingsController.conduits_3d_visible_changed.connect(
+			_on_conduits_visible_signal)
+	_refresh_conduits_chip()
 	if is_instance_valid(CursorController):
 		CursorController.set_paused(false)
+
+
+func _setup_mp_lobby() -> void:
+	if _mp_lobby != null:
+		_setup_mp_chat_hud()
+		return
+	var script := load("res://scenes/ui/multiplayer_lobby_ui.gd") as Script
+	if script == null:
+		return
+	_mp_lobby = Control.new()
+	_mp_lobby.name = "MultiplayerLobbyUI"
+	_mp_lobby.set_script(script)
+	UiScreenLayout.pin_fullscreen(_mp_lobby)
+	var ui_layer := get_parent()
+	if ui_layer != null:
+		ui_layer.add_child(_mp_lobby)
+	else:
+		add_child(_mp_lobby)
+	if MultiplayerSession != null:
+		if not MultiplayerSession.session_changed.is_connected(_refresh_mp_chip):
+			MultiplayerSession.session_changed.connect(_refresh_mp_chip)
+		if not MultiplayerSession.peer_list_changed.is_connected(_refresh_mp_chip):
+			MultiplayerSession.peer_list_changed.connect(_refresh_mp_chip)
+	_setup_mp_chat_hud()
+
+
+func _setup_mp_chat_hud() -> void:
+	if _mp_chat_hud != null:
+		return
+	var script := load("res://scenes/ui/multiplayer_chat_hud.gd") as Script
+	if script == null:
+		return
+	_mp_chat_hud = Control.new()
+	_mp_chat_hud.name = "MultiplayerChatHUD"
+	_mp_chat_hud.set_script(script)
+	UiScreenLayout.pin_fullscreen(_mp_chat_hud)
+	var ui_layer := get_parent()
+	if ui_layer != null:
+		ui_layer.add_child(_mp_chat_hud)
+	else:
+		add_child(_mp_chat_hud)
+
+
+func _refresh_mp_chip() -> void:
+	if _mp_chip == null or Engine.is_editor_hint():
+		return
+	if MultiplayerSession == null or not is_instance_valid(MultiplayerSession):
+		return
+	_mp_chip.text = MultiplayerSession.status_label()
+	if MultiplayerSession.is_active():
+		_mp_chip.add_theme_color_override("font_color", UITheme.C_OK)
+	elif MultiplayerSession.is_joining():
+		_mp_chip.add_theme_color_override("font_color", UITheme.C_WARN)
+	else:
+		_mp_chip.add_theme_color_override("font_color", UITheme.C_TEXT)
+
+
+func _on_conduits_chip_pressed() -> void:
+	if not is_instance_valid(SimSettingsController):
+		return
+	SimSettingsController.set_conduits_3d_visible(
+		not bool(SimSettingsController.conduits_3d_visible))
+	_refresh_conduits_chip()
+
+
+func _on_conduits_visible_signal(_enabled: bool) -> void:
+	_refresh_conduits_chip()
+
+
+func _refresh_conduits_chip() -> void:
+	if _conduits_chip == null or Engine.is_editor_hint():
+		return
+	var on := false
+	if is_instance_valid(SimSettingsController):
+		on = bool(SimSettingsController.conduits_3d_visible)
+	_conduits_chip.text = "3D wires ●" if on else "3D wires"
+	_conduits_chip.add_theme_color_override("font_color",
+		UITheme.C_OK if on else UITheme.C_TEXT)
+	_conduits_chip.tooltip_text = (
+		"3D wires ON — click to hide (improves FPS)" if on
+		else "3D wires OFF — click to show graph connections in the world")
 
 
 ## Floating weather card — sibling on the parent UILayer, centered above the
@@ -1685,6 +1780,47 @@ func _on_linkagelab_file_selected(path: String) -> void:
 		var props_ui := ui_layer.get_node_or_null("PlacedPropsUI")
 		if props_ui != null and props_ui.has_method("notify_bundle_imported"):
 			props_ui.call("notify_bundle_imported", result)
+	# If the bundle carries an editable parametric design (v30 project block),
+	# offer to open it natively in Linkage Lab so it becomes live-foldable
+	# instead of a static imported GLB.
+	var project := result.get("linkage_project", {}) as Dictionary
+	if not project.is_empty():
+		_offer_open_in_linkage_lab(project)
+
+
+func _offer_open_in_linkage_lab(project: Dictionary) -> void:
+	if _linkagelab_open_confirm == null:
+		_linkagelab_open_confirm = ConfirmationDialog.new()
+		_linkagelab_open_confirm.title = "Editable design detected"
+		_linkagelab_open_confirm.dialog_text = "This bundle includes the full parametric design. Open it in Linkage Lab to make it live-foldable and editable?"
+		_linkagelab_open_confirm.ok_button_text = "Open in Linkage Lab"
+		_linkagelab_open_confirm.get_cancel_button().text = "Keep imported model"
+		_linkagelab_open_confirm.confirmed.connect(_on_open_in_linkage_lab_confirmed)
+		add_child(_linkagelab_open_confirm)
+	_pending_linkage_project = project.duplicate(true)
+	_linkagelab_open_confirm.popup_centered()
+
+
+func _on_open_in_linkage_lab_confirmed() -> void:
+	if _pending_linkage_project.is_empty():
+		return
+	var main := _find_main_for_linkage()
+	if main != null and main.has_method("open_linkage_lab"):
+		main.call("open_linkage_lab", _pending_linkage_project)
+	_pending_linkage_project = {}
+
+
+func _find_main_for_linkage() -> Node:
+	var tree := get_tree()
+	if tree != null and tree.current_scene != null \
+			and ("day_time" in tree.current_scene) and ("sun" in tree.current_scene):
+		return tree.current_scene
+	var n: Node = self
+	while n != null:
+		if ("day_time" in n) and ("sun" in n):
+			return n
+		n = n.get_parent()
+	return null
 
 
 
@@ -2193,6 +2329,12 @@ func _build_right_cluster() -> Control:
 
 	var sl_btn := _mk_icon_btn("💾", _on_save_load_pressed, "Save / Load — manage game save slots")
 	right.add_child(sl_btn)
+	_mp_chip = _mk_chip_btn("Multiplayer", _on_mp_pressed,
+		"Multiplayer — host or join a private listen-server session (avatars + shared clock)")
+	right.add_child(_mp_chip)
+	_conduits_chip = _mk_chip_btn("3D wires", _on_conduits_chip_pressed,
+		"Toggle 3D graph wires in the world (off by default for performance)")
+	right.add_child(_conduits_chip)
 	var gear_btn := _mk_icon_btn("⚙", _on_settings_pressed, "Settings — clouds, sun/moon, stars & planets, location")
 	right.add_child(gear_btn)
 	_shading_btn = _mk_icon_btn("🔆", _on_solar_shading_pressed, "Solar shading — compute a year-long shadow heatmap")
@@ -2236,6 +2378,12 @@ func _on_library_pressed() -> void:
 func _on_settings_pressed() -> void:
 	if _settings_panel != null and _settings_panel.has_method("toggle"):
 		_settings_panel.toggle()
+
+
+func _on_mp_pressed() -> void:
+	_setup_mp_lobby()
+	if _mp_lobby != null and _mp_lobby.has_method("toggle"):
+		_mp_lobby.call("toggle")
 
 
 func _on_solar_shading_pressed() -> void:

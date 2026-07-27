@@ -1834,8 +1834,11 @@ func _source_link_icon(role: String, has_override: bool) -> String:
 
 const _SIM_UPDATE_INTERVAL : float = 0.1   # 10 Hz for simulation logic
 const _UI_UPDATE_INTERVAL  : float = 0.25  # 4 Hz for display/graph updates
+## Match timeline ~450× — above this, weather lighting lerp runs at UI Hz not every frame.
+const _HIGH_SPEED_TIME_SCALE : float = 0.125
 var _sim_accumulator : float = 0.0
 var _ui_accumulator  : float = 0.0
+var _lighting_accumulator : float = 0.0
 
 # Smooth interpolation targets for weather lighting (computed at 10 Hz, applied every frame)
 var _target_shadow_opacity : float = 1.0
@@ -1899,7 +1902,19 @@ func _process(delta: float) -> void:
 		if _ts != null and float(_ts) > 0.0:
 			_update_inverter_overload(delta)
 
-	_apply_smooth_weather_lighting(delta)
+	# Smooth lighting every frame near realtime; at high speed, UI-rate is enough
+	# (targets still update on the 10 Hz weather tick).
+	_lighting_accumulator += delta
+	var ts_abs := 0.0
+	if main_node != null:
+		var tsv: Variant = main_node.get("time_scale")
+		if tsv != null:
+			ts_abs = absf(float(tsv))
+	var lighting_interval := _UI_UPDATE_INTERVAL if ts_abs >= _HIGH_SPEED_TIME_SCALE else 0.0
+	if lighting_interval <= 0.0 or _lighting_accumulator >= lighting_interval:
+		var light_dt := _lighting_accumulator if lighting_interval > 0.0 else delta
+		_lighting_accumulator = 0.0
+		_apply_smooth_weather_lighting(light_dt)
 
 ## True when real or simulated precipitation should drive rain VFX / status.
 func _is_actively_precipitating() -> bool:

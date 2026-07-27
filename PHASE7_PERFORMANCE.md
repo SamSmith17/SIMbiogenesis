@@ -43,10 +43,15 @@
 
 ---
 
+## Graph high-speed pass (follow-up)
+
+See graph performance work: `GraphSimLoadHost` bulk sync, canvas high-speed LOD,
+`ResourceTimeline` strided fill, RFE ambient cache + 0.5 s poll at ≥450×,
+SolarBridge/PBI change-gates, recipe catalog index, SolarUI lighting at UI Hz
+when `time_scale ≥ 0.125`.
+
 ## Candidates for a future pass (measure only)
 
-- **`solar_ui.gd`** — `_apply_smooth_weather_lighting` every frame; consider tying lerp steps to `_SIM_UPDATE_INTERVAL` if profiler shows cost.
-- **`system_graph_view.gd`** when visible — `graph_canvas.tick` + bridge `tick` per frame; acceptable while graph open.
 - **`ha_websocket_client.gd`** / **`uisp_api_client.gd`** — network pacing; avoid extra polls without network traces.
 
 ---
