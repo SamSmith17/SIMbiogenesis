@@ -1,6 +1,7 @@
 # SIMbiogenesis — Project Memory
 
-Godot 4.7 (GL Compatibility renderer). First-person ISRU / renewable-energy simulator with a real
+Godot 4.7 (Forward+ on desktop; GL Compatibility only as the `.mobile` fallback).
+First-person ISRU / renewable-energy simulator with a real
 Home Assistant digital-twin bridge. **Core gameplay = 2D systems graph** (schematic
 map of resource flows within a Sphere of Influence); **3D world = embodied digital twin**.
 Product vision: `ROADMAP.md` + graph overhaul: `SYSTEMS_GRAPH_VISION.md`. Restructure
