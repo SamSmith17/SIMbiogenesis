@@ -1,6 +1,6 @@
 # SIMbiogenesis — Project Memory
 
-Godot 4.6 (Forward Plus). First-person ISRU / renewable-energy simulator with a real
+Godot 4.7 (GL Compatibility renderer). First-person ISRU / renewable-energy simulator with a real
 Home Assistant digital-twin bridge. **Core gameplay = 2D systems graph** (schematic
 map of resource flows within a Sphere of Influence); **3D world = embodied digital twin**.
 Product vision: `ROADMAP.md` + graph overhaul: `SYSTEMS_GRAPH_VISION.md`. Restructure
@@ -11,8 +11,11 @@ commit URLs or tokens).
 ## Validation (run before every commit)
 
 ```
-# Godot 4.6.2 binary (yes, the double extension is correct):
-C:\Users\notsa\Downloads\Godot\Godot.exe.exe
+# Godot 4.7.1-stable binary (the examples below use "Godot.exe.exe" as a
+# shorthand for whichever current binary you have on PATH):
+C:\Users\notsa\Downloads\Godot_v4.7.1-stable_win64.exe\Godot_v4.7.1-stable_win64_console.exe
+# (The old 4.6.2 binary — double extension correct — still lives at
+#  C:\Users\notsa\Downloads\Godot\Godot.exe.exe for A/B comparison.)
 
 # After adding any new class_name script, import once or headless runs fail
 # with "Could not find type":
