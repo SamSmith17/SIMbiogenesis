@@ -1098,8 +1098,18 @@ func _test_model_catalog() -> void:
 		ids.append(str((m as Dictionary).get("id", "")))
 	_check("catalog: starshade present", "starshade" in ids)
 	for m in structures:
-		var id := str((m as Dictionary).get("id", ""))
-		_check("catalog: %s scene loads" % id, ModelCatalog.load_scene(id) != null)
+		var entry := m as Dictionary
+		var id := str(entry.get("id", ""))
+		# Procedural structures (pallet_rack/linkage/dome/mud_building) carry no
+		# scene path — they build via instantiate()/build_node, so load_scene is
+		# null by design. Verify those construct a node instead.
+		if bool(entry.get("procedural", false)):
+			var node := ModelCatalog.instantiate(id)
+			_check("catalog: %s builds" % id, node != null)
+			if node != null:
+				node.free()
+		else:
+			_check("catalog: %s scene loads" % id, ModelCatalog.load_scene(id) != null)
 	# StarShade real-world size stays sane through the inch-unit fit.
 	var s := ModelCatalog.resolved_scale("starshade", 1.0)
 	var h := float(ModelCatalog.mesh_metrics("starshade").unit_height) * s
