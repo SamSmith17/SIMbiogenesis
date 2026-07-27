@@ -273,6 +273,9 @@ static func _clear_children(root: Node3D) -> void:
 ## AutoVegetationRuntime.reregister_existing() — see that function's comment
 ## for why this is needed (both rebuild paths clear ALL registrations).
 static func reregister_existing(terrain: Node3D) -> void:
+	# NOTE: a FREED terrain can't be guarded here — passing it to this typed
+	# Node3D parameter throws "previously freed" at the call boundary. Callers
+	# that run after an await MUST is_instance_valid(terrain) before calling.
 	if terrain == null:
 		return
 	var root := terrain.get_node_or_null("Vegetation") as Node3D

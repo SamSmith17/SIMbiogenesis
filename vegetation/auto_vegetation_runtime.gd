@@ -69,6 +69,9 @@ static func clear(terrain: Node3D) -> void:
 ## stop receiving seasonal (autumn/winter/snow) and wind uniform updates for
 ## the rest of the session. Call this right after any manual-layer rebuild.
 static func reregister_existing(terrain: Node3D) -> void:
+	# NOTE: a FREED terrain can't be guarded here — passing it to this typed
+	# Node3D parameter throws "previously freed" at the call boundary. Callers
+	# that run after an await MUST is_instance_valid(terrain) before calling.
 	if terrain == null:
 		return
 	var root := terrain.get_node_or_null(ROOT_NAME) as Node3D
@@ -150,6 +153,10 @@ static func rebuild_async(terrain: Node3D, layer: AutoVegetationLayer,
 	if not is_instance_valid(root):
 		return
 	await _build_hero_layer_async(root, layer.hero, ground_y_at, s, tree)
+	# The hero build awaits across frames; the terrain may have been torn down
+	# meanwhile (seasonal reground / rebuild during fast-forwarded plant growth).
+	if not is_instance_valid(terrain) or not is_instance_valid(root):
+		return
 	VegetationRuntime.reregister_existing(terrain)
 
 
