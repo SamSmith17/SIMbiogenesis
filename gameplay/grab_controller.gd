@@ -29,6 +29,11 @@ var _hold_triggered := false      # set once a move has begun (drag detected)
 var _pending_prop: PlacedProp = null
 var _moving_prop: PlacedProp = null
 var _moving_valid := false
+# Relocatable world markers (e.g. the SoI origin pin) that aren't PlacedProps but
+# implement the world_drag_commit()/world_drag_click() contract. Dragged with the
+# same crosshair-follow feel; on release the marker decides what the drop means.
+var _pending_marker: Node3D = null
+var _moving_marker: Node3D = null
 
 
 func setup(player: Node3D, camera: Camera3D, focus: Node, loader: Node) -> void:
@@ -39,7 +44,7 @@ func setup(player: Node3D, camera: Camera3D, focus: Node, loader: Node) -> void:
 
 
 func is_grabbing() -> bool:
-	return _moving_prop != null
+	return _moving_prop != null or _moving_marker != null
 
 
 func blocks_tool_use() -> bool:
@@ -47,7 +52,7 @@ func blocks_tool_use() -> bool:
 		return true
 	if is_grabbing():
 		return true
-	if _lmb_down and _pending_prop != null:
+	if _lmb_down and (_pending_prop != null or _pending_marker != null):
 		return true
 	if _focus != null and _focus.has_method("get_focused"):
 		var focused: Variant = _focus.call("get_focused")
@@ -64,6 +69,8 @@ func get_grabbed_prop() -> PlacedProp:
 func release_prop_refs() -> void:
 	_pending_prop = null
 	_moving_prop = null
+	_pending_marker = null
+	_moving_marker = null
 	_lmb_down = false
 	_drag_accum = 0.0
 	_hold_triggered = false
@@ -74,12 +81,18 @@ func _physics_process(_delta: float) -> void:
 		_pending_prop = null
 	if _moving_prop != null and not is_instance_valid(_moving_prop):
 		_moving_prop = null
+	if _pending_marker != null and not is_instance_valid(_pending_marker):
+		_pending_marker = null
+	if _moving_marker != null and not is_instance_valid(_moving_marker):
+		_moving_marker = null
 	if PlacedPropService.is_placement_active():
 		return
 	if _is_drone_mode():
 		return
 	if _moving_prop != null:
 		_update_move_position()
+	elif _moving_marker != null:
+		_update_marker_position()
 
 
 func _is_drone_mode() -> bool:
@@ -125,18 +138,20 @@ func _unhandled_input(event: InputEvent) -> void:
 	# up. Do NOT consume the motion: the camera still turns (captured-look) so the
 	# prop follows the crosshair, exactly like fresh placement.
 	if event is InputEventMouseMotion:
-		if _lmb_down and _pending_prop != null and not _hold_triggered \
-				and not is_grabbing() and not _is_drone_mode():
+		if _lmb_down and not _hold_triggered and not is_grabbing() and not _is_drone_mode():
 			_drag_accum += (event as InputEventMouseMotion).relative.length()
-			if _drag_accum >= DRAG_START_PX and _within_grab_distance(_pending_prop):
-				_start_move(_pending_prop)
+			if _drag_accum >= DRAG_START_PX:
+				if _pending_prop != null and _within_grab_distance(_pending_prop):
+					_start_move(_pending_prop)
+				elif _pending_marker != null and _within_grab_distance_node(_pending_marker):
+					_start_marker_move(_pending_marker)
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_on_lmb_down()
 		else:
 			_on_lmb_up()
-		if _pending_prop != null or is_grabbing():
+		if _pending_prop != null or _pending_marker != null or is_grabbing():
 			get_viewport().set_input_as_handled()
 		return
 	# Ctrl/Alt + RMB quick-opens the prop editor (Print modal for trash/mud
@@ -165,23 +180,32 @@ func _on_lmb_down() -> void:
 	_drag_accum = 0.0
 	_hold_triggered = false
 	_pending_prop = null
+	_pending_marker = null
 	if _focus == null or not _focus.has_method("get_focused"):
 		return
 	var focused: Variant = _focus.call("get_focused")
 	if focused is Object and is_instance_valid(focused) and focused is PlacedProp:
 		_pending_prop = focused as PlacedProp
+	elif _is_relocatable_marker(focused):
+		_pending_marker = focused as Node3D
 
 
 func _on_lmb_up() -> void:
-	if is_grabbing():
+	if _moving_prop != null:
 		_confirm_move()
+	elif _moving_marker != null:
+		_confirm_marker_move()
 	elif _pending_prop != null and not _hold_triggered:
 		# A click with no drag → open the edit modal.
 		_open_edit_panel(_pending_prop)
+	elif _pending_marker != null and not _hold_triggered:
+		# A click with no drag → the marker's default action (SoI: open Snowglobe).
+		_click_marker(_pending_marker)
 	_lmb_down = false
 	_drag_accum = 0.0
 	_hold_triggered = false
 	_pending_prop = null
+	_pending_marker = null
 
 
 func _start_move(prop: PlacedProp) -> void:
@@ -258,6 +282,17 @@ func _confirm_move() -> void:
 
 
 func _cancel_move() -> void:
+	if _moving_marker != null:
+		var marker := _moving_marker
+		_moving_marker = null
+		_lmb_down = false
+		_drag_accum = 0.0
+		_hold_triggered = false
+		_pending_marker = null
+		# Snap the pin back to the committed centre (drag discarded).
+		if is_instance_valid(marker) and marker.has_method("sync_position"):
+			marker.call("sync_position")
+		return
 	var prop := _moving_prop
 	if prop != null and is_instance_valid(prop) and prop.has_method("set_move_highlight"):
 		prop.set_move_highlight(false)
@@ -298,6 +333,61 @@ func _open_edit_panel(prop: PlacedProp) -> void:
 	var edit_ui := tree.current_scene.get_node_or_null("UILayer/PlacedPropEditUI")
 	if edit_ui != null and edit_ui.has_method("open_for_prop"):
 		edit_ui.call("open_for_prop", prop.prop_id)
+
+
+func _is_relocatable_marker(o: Variant) -> bool:
+	return o is Node3D and is_instance_valid(o) and (o as Object).has_method("world_drag_commit")
+
+
+func _within_grab_distance_node(node: Node3D) -> bool:
+	if _camera == null or node == null or not is_instance_valid(node):
+		return false
+	return _camera.global_position.distance_to(node.global_position) <= MAX_GRAB_DISTANCE
+
+
+func _start_marker_move(marker: Node3D) -> void:
+	if marker == null or is_grabbing():
+		return
+	_hold_triggered = true
+	_moving_marker = marker
+	_moving_valid = false
+	# Drop crosshair focus (and its outline) for the carry, like a picked-up prop.
+	if _focus != null and _focus.has_method("clear_focus"):
+		_focus.call("clear_focus")
+
+
+## Follows the crosshair's terrain hit exactly like the prop drag / placement
+## ghost. The pin's origin sits on the ground (its mesh is built base-at-origin),
+## so the terrain hit is the drop point directly — no foot offset.
+func _update_marker_position() -> void:
+	if _moving_marker == null or _camera == null:
+		return
+	var main := _main_node()
+	if main == null:
+		return
+	var hit := TerrainSurfaceQuery.raycast_ground_at_camera(main, _camera)
+	if hit.is_empty():
+		_moving_valid = false
+		return
+	_moving_marker.global_position = hit["position"] as Vector3
+	_moving_valid = true
+
+
+func _confirm_marker_move() -> void:
+	var marker := _moving_marker
+	_moving_marker = null
+	if marker == null or not is_instance_valid(marker):
+		return
+	if _moving_valid and marker.has_method("world_drag_commit"):
+		# The marker owns what the drop means (SoI pin → new map origin).
+		marker.call("world_drag_commit", marker.global_position)
+	elif marker.has_method("sync_position"):
+		marker.call("sync_position")   # released off valid ground → snap back
+
+
+func _click_marker(marker: Node3D) -> void:
+	if marker != null and is_instance_valid(marker) and marker.has_method("world_drag_click"):
+		marker.call("world_drag_click")
 
 
 func _main_node() -> Node:

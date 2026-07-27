@@ -10,7 +10,7 @@ var _head: MeshInstance3D = null
 
 func _ready() -> void:
 	super._ready()
-	prompt = "View Sphere of Influence (Snowglobe)"
+	prompt = "Snowglobe  ·  drag to move SoI origin"
 	max_distance = 12.0
 	_build_pin()
 	_build_collision()
@@ -25,6 +25,10 @@ func sync_position() -> void:
 
 
 func interact(_player: Node) -> void:
+	_open()
+
+
+func _open() -> void:
 	var svc := get_node_or_null("/root/SoiService")
 	if svc == null:
 		return
@@ -34,6 +38,21 @@ func interact(_player: Node) -> void:
 		svc.enter_snowglobe()
 	else:
 		svc.open_panel()
+
+
+## World-drag contract (see gameplay/grab_controller.gd). The SoI pin can be
+## Ctrl/Alt-dragged like a placed prop; wherever it is dropped becomes the new
+## SoI map origin. GrabController drives the drag and calls these.
+func world_drag_commit(world_pos: Vector3) -> void:
+	var svc := get_node_or_null("/root/SoiService")
+	if svc != null and svc.has_method("set_center_xz"):
+		svc.set_center_xz(world_pos.x, world_pos.z)
+	sync_position()
+
+
+## A no-drag click on the pin keeps its original action: open the Snowglobe.
+func world_drag_click() -> void:
+	_open()
 
 
 func _process(_delta: float) -> void:

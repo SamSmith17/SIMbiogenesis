@@ -809,6 +809,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			_open_placed_prop_edit(_focused as PlacedProp)
 			get_viewport().set_input_as_handled()
 			return
+		# Relocatable markers (the SoI pin) hand a left-click to GrabController, which
+		# tells a quick click (open) from a hold+drag (relocate) — same as a prop.
+		# The interact KEY still falls through to interact() below.
+		if is_click and _focused.has_method("world_drag_commit"):
+			return
 		_focused.interact(_player)
 		get_viewport().set_input_as_handled()
 		return

@@ -50,11 +50,9 @@ func close_panel() -> void:
 	if svc != null:
 		svc.set_edit_mode(false)
 		svc.cancel_placement_mode()
-	_hide_placement_hint()
 
 
 func on_placement_done() -> void:
-	_hide_placement_hint()
 	_refresh_labels()
 
 
@@ -116,10 +114,10 @@ func _build_ui() -> void:
 	vbox.add_child(_area_label)
 
 	_placement_hint = Label.new()
-	_placement_hint.text = "Aim at terrain and click (Interact) to place origin."
-	_placement_hint.visible = false
+	_placement_hint.text = "Move the origin: Ctrl/Alt-drag the red map pin in the world."
+	_placement_hint.visible = true
 	_placement_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_placement_hint.add_theme_color_override("font_color", UITheme.C_AMBER)
+	_placement_hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	vbox.add_child(_placement_hint)
 
 	var snow_btn := Button.new()
@@ -131,11 +129,6 @@ func _build_ui() -> void:
 	row.add_theme_constant_override("separation", 8)
 	vbox.add_child(row)
 
-	var move_btn := Button.new()
-	move_btn.text = "Move origin"
-	move_btn.pressed.connect(_on_move_origin)
-	row.add_child(move_btn)
-
 	var reset_btn := Button.new()
 	reset_btn.text = "Reset to map centre"
 	reset_btn.pressed.connect(_on_reset_center)
@@ -146,7 +139,7 @@ func _build_ui() -> void:
 	close_btn.pressed.connect(close_panel)
 	vbox.add_child(close_btn)
 
-	for btn in [move_btn, reset_btn, snow_btn, close_btn]:
+	for btn in [reset_btn, snow_btn, close_btn]:
 		btn.add_theme_stylebox_override("normal", UITheme.button_style())
 		btn.add_theme_stylebox_override("hover", UITheme.button_style("hover"))
 		btn.add_theme_stylebox_override("pressed", UITheme.button_style("pressed"))
@@ -173,15 +166,6 @@ func _on_radius_changed(v: float) -> void:
 	_refresh_labels()
 
 
-func _on_move_origin() -> void:
-	var svc := get_node_or_null("/root/SoiService")
-	if svc == null:
-		return
-	svc.begin_placement_mode()
-	if _placement_hint != null:
-		_placement_hint.visible = true
-
-
 func _on_reset_center() -> void:
 	var svc := get_node_or_null("/root/SoiService")
 	if svc != null:
@@ -193,11 +177,6 @@ func _on_snowglobe() -> void:
 	var svc := get_node_or_null("/root/SoiService")
 	if svc != null:
 		svc.enter_snowglobe()
-
-
-func _hide_placement_hint() -> void:
-	if _placement_hint != null:
-		_placement_hint.visible = false
 
 
 func _gui_input(event: InputEvent) -> void:
