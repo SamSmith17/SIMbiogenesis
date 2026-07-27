@@ -147,6 +147,55 @@ const _DEFAULT_MONTHLY_MULTIPLIERS: Array = [
 	0.8, 0.9, 1.2, 1.4, 1.3, 1.1, 0.8, 0.6, 0.6, 0.7, 0.8, 0.8,
 ]
 
+## Days per month for the representative-year annual-energy estimate (non-leap;
+## the leap-day difference is negligible for a kWh/yr figure).
+const _DAYS_IN_MONTH: Array = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+## Turbine-kind registry — the single source of truth for turbine metadata across
+## the generalized hydro path (estimator, HydroReach conveyance, inspector,
+## Hydro Lab). Head bands (m) follow ROADMAP.md; default `eta_t` matches the
+## historic per-kind efficiencies (pelton .85 / turgo .80 / else .70). Unknown
+## kinds resolve to a "custom" fallback via kind_meta() so a free-text kind from
+## an old save is never rejected or mangled.
+##   has_penstock  — pressurized penstock with Darcy–Weisbach losses (else the
+##                   siphon's own orifice/weir path drives Q).
+##   pond_drawdown — drains a stored reservoir (else run-of-river streaming).
+const KINDS := {
+	"siphon": {
+		"display": "Siphon (low head)", "eta_t": 0.60,
+		"head_band": [0.5, 5.0], "has_penstock": false, "pond_drawdown": true,
+	},
+	"pelton": {
+		"display": "Pelton", "eta_t": 0.85,
+		"head_band": [30.0, 300.0], "has_penstock": true, "pond_drawdown": true,
+	},
+	"turgo": {
+		"display": "Turgo", "eta_t": 0.80,
+		"head_band": [10.0, 30.0], "has_penstock": true, "pond_drawdown": true,
+	},
+	"run_of_river": {
+		"display": "Run-of-River", "eta_t": 0.70,
+		"head_band": [1.0, 10.0], "has_penstock": true, "pond_drawdown": false,
+	},
+}
+
+
+## Metadata for a turbine kind; unknown → a permissive "custom" entry preserving
+## the historic else→0.70 efficiency (never destroys an old free-text kind).
+static func kind_meta(kind: String) -> Dictionary:
+	var k := kind.strip_edges().to_lower()
+	if KINDS.has(k):
+		return KINDS[k]
+	return {
+		"display": ("Custom (%s)" % kind) if not kind.strip_edges().is_empty() else "Custom",
+		"eta_t": 0.70, "head_band": [1.0, 300.0],
+		"has_penstock": true, "pond_drawdown": true,
+	}
+
+
+static func default_turbine_efficiency(kind: String) -> float:
+	return float(kind_meta(kind).get("eta_t", 0.70))
+
 ## Compute output (kW) from a flat system-graph specs Dictionary, so 2D graph
 ## "hydro" items share the exact physics above. `month` is 1–12.
 ## Recognized keys (defaults model the ~500 W reference Pelton; units chosen
@@ -179,14 +228,38 @@ static func power_kw_from_graph_specs(specs: Dictionary, month: int,
 	if h_net <= 0.0:
 		return 0.0
 
+	# Turbine kind: prefer the unified `turbine_kind` key, fall back to the legacy
+	# `kind` key that type-"hydro" estimator items still carry.
+	var kind_str := str(specs.get("turbine_kind", specs.get("kind", "pelton")))
 	var eta_t := float(specs.get("turbine_efficiency", 0.0))
 	if eta_t <= 0.0:
-		match str(specs.get("kind", "pelton")).to_lower():
-			"pelton":
-				eta_t = 0.85
-			"turgo":
-				eta_t = 0.80
-			_:
-				eta_t = 0.70
+		eta_t = default_turbine_efficiency(kind_str)
 	var eta_g := clampf(float(specs.get("generator_efficiency", 0.85)), 0.0, 1.0)
-	return WATER_DENSITY * STANDARD_GRAVITY * q * h_net * eta_t * eta_g / 1000.0
+	var p_kw := WATER_DENSITY * STANDARD_GRAVITY * q * h_net * eta_t * eta_g / 1000.0
+	# Optional nameplate clamp (absent/0 = uncapped → existing hydro items
+	# unchanged); the generator can't exceed its rating regardless of head/flow.
+	var cap_w := float(specs.get("max_power_w", 0.0))
+	if cap_w > 0.0:
+		p_kw = minf(p_kw, cap_w / 1000.0)
+	return p_kw
+
+
+## Representative-year annual/monthly energy for ONE turbine spec (the closed
+## form the Site Report uses, factored out so the Hydro Lab estimate card and the
+## report share exactly one calculation). Returns
+## `{monthly_kwh: PackedFloat32Array(12), annual_kwh: float, mean_kw: float}`.
+static func annual_energy_kwh_from_specs(specs: Dictionary,
+		weather_multipliers: Array = []) -> Dictionary:
+	var monthly := PackedFloat32Array()
+	monthly.resize(12)
+	var annual := 0.0
+	var kw_sum := 0.0
+	for mo in range(12):
+		var month := mo + 1
+		var kw := power_kw_from_graph_specs(specs, month, weather_multipliers)
+		var hours := float(int(_DAYS_IN_MONTH[mo]) * 24)
+		var kwh := kw * hours
+		monthly[mo] = kwh
+		annual += kwh
+		kw_sum += kw
+	return {"monthly_kwh": monthly, "annual_kwh": annual, "mean_kw": kw_sum / 12.0}

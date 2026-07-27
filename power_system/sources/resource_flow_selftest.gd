@@ -20,6 +20,7 @@ var _checks: int = 0
 func _initialize() -> void:
 	_test_step_level()
 	_test_reversible_timeline()
+	_test_timeline_high_speed_lod()
 	_test_processor_migration()
 	_test_resource_migration()
 	_test_habitat_24h_depletion()
@@ -32,10 +33,13 @@ func _initialize() -> void:
 	_test_step_overflow_qty()
 	_test_tank_overflow_tracking()
 	_test_unlimited_capacity_sink()
+	_test_allow_negative_deficit_supply()
 	_test_rain_catchment_pbi_gate()
 	_test_rain_catchment_full_tank_stops()
 	_test_jit_tank_transfer()
 	_test_processor_power_gating()
+	_test_ac_power_wire_bidirectional()
+	_test_ac_power_through_compound()
 	_test_unconnected_output_flagged()
 	_test_node_state_reasons()
 	_test_habitat_node_state()
@@ -52,6 +56,7 @@ func _initialize() -> void:
 	_test_site_layout_seed_and_clamp()
 	_test_jit_conduit_derate()
 	_test_jit_severed_conduit()
+	_test_lab_sim_inflow_realtime_paused()
 	if _failures == 0:
 		print("RESOURCE SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -85,6 +90,56 @@ func _test_reversible_timeline() -> void:
 	var rew := tl.seek(0.0)
 	_check("timeline rewind to anchor", absf(float(rew.get("level", -1.0)) - 0.5) < 0.02,
 		"rew=%.3f" % float(rew.get("level", -1.0)))
+
+
+func _test_timeline_high_speed_lod() -> void:
+	# Large dt uses strided fill; endpoint + overflow must match closed-form.
+	var cap := 100.0
+	var net := 40.0
+	var start := 0.25
+	var dt_h := 0.5  # 30 sim-minutes → coarse path
+	var expect_lvl := ResourceTimelineScript.step_level(start, net, cap, dt_h)
+	var expect_ov := ResourceTimelineScript.step_overflow_qty(start, net, cap, dt_h)
+	var tl := ResourceTimelineScript.new()
+	tl.configure(cap)
+	tl.init_anchor(0.0, start)
+	tl.record_step(dt_h, net, net, 0.0)
+	_check("coarse timeline endpoint matches closed-form",
+		absf(tl.level_at(dt_h) - expect_lvl) < 0.001,
+		"got=%.4f expect=%.4f" % [tl.level_at(dt_h), expect_lvl])
+	_check("coarse timeline overflow matches closed-form",
+		absf(tl.total_overflow_qty - expect_ov) < 0.05,
+		"got=%.3f expect=%.3f" % [tl.total_overflow_qty, expect_ov])
+	_check("coarse timeline still samples mid-span",
+		tl.level_at(dt_h * 0.5) >= start - 0.001)
+
+	# Overflow-heavy jump near full.
+	var start2 := 0.95
+	var net2 := 200.0
+	var dt2 := 1.0
+	var expect_lvl2 := ResourceTimelineScript.step_level(start2, net2, cap, dt2)
+	var expect_ov2 := ResourceTimelineScript.step_overflow_qty(start2, net2, cap, dt2)
+	var tl2 := ResourceTimelineScript.new()
+	tl2.configure(cap)
+	tl2.init_anchor(10.0, start2)
+	tl2.record_step(10.0 + dt2, net2, net2, 0.0)
+	_check("coarse overflow jump pins full",
+		absf(tl2.level_at(10.0 + dt2) - expect_lvl2) < 0.001)
+	_check("coarse overflow jump qty",
+		absf(tl2.total_overflow_qty - expect_ov2) < 0.05,
+		"got=%.3f expect=%.3f" % [tl2.total_overflow_qty, expect_ov2])
+
+	# Dense path (small gap) matches minute-stepped reference.
+	var tl_dense := ResourceTimelineScript.new()
+	tl_dense.configure(cap)
+	tl_dense.init_anchor(0.0, 0.1)
+	tl_dense.record_step(5.0 / 60.0, 60.0, 60.0, 0.0)  # 5 minutes
+	var ref := 0.1
+	for _i in 5:
+		ref = ResourceTimelineScript.step_level(ref, 60.0, cap, 1.0 / 60.0)
+	_check("dense timeline matches per-minute steps",
+		absf(tl_dense.level_at(5.0 / 60.0) - ref) < 0.001,
+		"got=%.4f ref=%.4f" % [tl_dense.level_at(5.0 / 60.0), ref])
 
 
 func _test_processor_migration() -> void:
@@ -432,6 +487,58 @@ func _test_unlimited_capacity_sink() -> void:
 	_check("migrate jit_outflow default", bool(mig.get("jit_outflow", true)) == false)
 
 
+func _test_allow_negative_deficit_supply() -> void:
+	# Deficit tanks never starve consumers; stock goes negative and stays visible.
+	var model = GraphModelScript.new()
+	model.add_item({
+		"id": "tank", "type": "resource", "x": 0.0, "y": 0.0,
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Water Supply", "resource_kind": "water",
+			"capacity_qty": 100.0, "capacity_unit": "L", "level": 0.0,
+			"allow_negative": true, "unlimited_capacity": false,
+		},
+	})
+	model.add_item({
+		"id": "pump", "type": "processor", "x": 200.0, "y": 0.0,
+		"width": 110.0, "height": 90.0,
+		"specs": {
+			"name": "Pump", "role": "generic", "requested_state": "on",
+			"current_state": "on", "watts": 0.0,
+			"inputs": [{"kind": "water", "rate": 50.0, "unit": "L/h"}],
+			"outputs": [],
+		},
+	})
+	model.add_connection({
+		"id": "c1", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "tank", "source_handle_id": "output",
+		"target_item_id": "pump", "target_handle_id": "res_in_0",
+	})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.power_available_override = 1
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(2.0, 2.0)
+	var tank_specs: Dictionary = model.get_item("tank").get("specs", {}) as Dictionary
+	var stock := ResourceKindsScript.tank_stock_qty(tank_specs)
+	_check("deficit tank stock goes negative", stock < -1.0,
+		"stock=%.3f level=%.4f" % [stock, float(tank_specs.get("level", 0.0))])
+	_check("deficit_qty tracks backorder",
+		float(tank_specs.get("deficit_qty", 0.0)) > 1.0)
+	var proc_specs: Dictionary = model.get_item("pump").get("specs", {}) as Dictionary
+	_check("deficit tank does not starve consumer",
+		str(proc_specs.get("node_state_reason", "")) != "input_starved"
+		and str(proc_specs.get("node_state", "")) != "blocked",
+		"state=%s reason=%s" % [proc_specs.get("node_state", ""),
+			proc_specs.get("node_state_reason", "")])
+	_check("format_tank_stock shows signed qty",
+		ResourceKindsScript.format_tank_stock(tank_specs).begins_with("-"))
+	var mig := {"name": "Tank"}
+	ResourceKindsScript.new().migrate_resource_specs(mig)
+	_check("migrate allow_negative default false",
+		bool(mig.get("allow_negative", true)) == false)
+
+
 func _test_rain_catchment_pbi_gate() -> void:
 	var model = GraphModelScript.new()
 	model.add_item({
@@ -733,6 +840,115 @@ func _test_processor_power_gating() -> void:
 		"dst=%.4f" % _tank_level(g2["model"], "dst"))
 
 
+## AC wires stored load→source (common with top/bottom compound ports) must
+## still power the processor — presence is undirected after flatten.
+func _test_ac_power_wire_bidirectional() -> void:
+	var g := _build_pump_graph(true)
+	# Flip the AC edge so power_in is the SOURCE (reverse drag).
+	g["model"].remove_connection("c_pwr")
+	g["model"].add_connection({
+		"id": "c_pwr_rev", "polarity": "ac",
+		"source_item_id": "pump", "source_handle_id": "power_in",
+		"target_item_id": "ctrl", "target_handle_id": "acOutput",
+	})
+	g["engine"].power_available_override = 1
+	g["engine"].simulate_step_for_test(0.0, 0.0)
+	g["engine"].simulate_step_for_test(24.0, 24.0)
+	var lvl := _tank_level(g["model"], "dst")
+	_check("reverse AC wire: pump still runs", absf(lvl - 0.48) < 0.02, "dst=%.4f" % lvl)
+	var s: Dictionary = g["model"].get_item("pump").get("specs", {}) as Dictionary
+	_check("reverse AC wire: not NO_POWER",
+		str(s.get("node_state_reason", "")) != GraphNodeState.REASON_NO_POWER,
+		"state=%s reason=%s" % [str(s.get("node_state", "")), str(s.get("node_state_reason", ""))])
+
+
+## Compound AC out port → processor power_in (both orientations) after portal flatten.
+func _test_ac_power_through_compound() -> void:
+	var model = GraphModelScript.new()
+	model.add_item({
+		"id": "src", "type": "resource", "scope_id": "root",
+		"specs": {"resource_kind": "water", "capacity_qty": 1000.0, "level": 1.0},
+	})
+	model.add_item({
+		"id": "dst", "type": "resource", "scope_id": "root",
+		"specs": {"resource_kind": "water", "capacity_qty": 500.0, "level": 0.0},
+	})
+	model.add_item({
+		"id": "inv", "type": "controller", "scope_id": "root",
+		"specs": {"name": "Inverter"},
+	})
+	model.add_item({
+		"id": "pump", "type": "processor", "scope_id": "root",
+		"specs": {
+			"name": "Pump", "watts": 500.0, "energy_source": "ac",
+			"current_state": "on", "requested_state": "on",
+			"inputs": [{"kind": "water", "rate": 10.0, "unit": "L/h"}],
+			"outputs": [{"kind": "water", "rate": 10.0, "unit": "L/h"}],
+		},
+	})
+	# Wrap inverter in a transparent compound with promoted ac_out → acOutput.
+	model.add_item({
+		"id": "grp", "type": "compound", "scope_id": "root",
+		"child_scope_id": "scope_grp",
+		"specs": {
+			"compound_kind": "",
+			"exposed_ports": [{
+				"handle_id": "ac_out", "child_item_id": "inv",
+				"child_handle_id": "acOutput", "direction": "out",
+				"polarity": "ac", "kind": "",
+			}],
+		},
+		"handles": [{"id": "ac_out", "polarity": "ac", "direction": "out", "rx": 0.5, "ry": 1.0}],
+	})
+	model.ensure_scope("scope_grp", "root", "grp", "grp")
+	model.update_item("inv", {"scope_id": "scope_grp", "parent_compound_id": "grp"})
+
+	model.add_connection({
+		"id": "c_in", "polarity": "resource", "resource_type": "water", "scope_id": "root",
+		"source_item_id": "src", "source_handle_id": "output",
+		"target_item_id": "pump", "target_handle_id": "res_in_0",
+	})
+	model.add_connection({
+		"id": "c_out", "polarity": "resource", "resource_type": "water", "scope_id": "root",
+		"source_item_id": "pump", "source_handle_id": "res_out_0",
+		"target_item_id": "dst", "target_handle_id": "input",
+	})
+	# Boundary wire: compound.ac_out → pump.power_in
+	model.add_connection({
+		"id": "c_pwr", "polarity": "ac", "scope_id": "root",
+		"source_item_id": "grp", "source_handle_id": "ac_out",
+		"target_item_id": "pump", "target_handle_id": "power_in",
+	})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.power_available_override = 1
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(24.0, 24.0)
+	var lvl := _tank_level(model, "dst")
+	_check("compound AC out → pump runs", absf(lvl - 0.48) < 0.02, "dst=%.4f" % lvl)
+
+	# Reverse orientation through the same portal.
+	model.remove_connection("c_pwr")
+	model.add_connection({
+		"id": "c_pwr_rev", "polarity": "ac", "scope_id": "root",
+		"source_item_id": "pump", "source_handle_id": "power_in",
+		"target_item_id": "grp", "target_handle_id": "ac_out",
+	})
+	# Reset tanks + re-setup so the connection index rebuilds.
+	var sp_src: Dictionary = (model.get_item("src").get("specs", {}) as Dictionary).duplicate(true)
+	sp_src["level"] = 1.0
+	model.update_item("src", {"specs": sp_src})
+	var sp_dst: Dictionary = (model.get_item("dst").get("specs", {}) as Dictionary).duplicate(true)
+	sp_dst["level"] = 0.0
+	model.update_item("dst", {"specs": sp_dst})
+	engine.setup(model, null)
+	engine.power_available_override = 1
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(24.0, 24.0)
+	var lvl2 := _tank_level(model, "dst")
+	_check("compound AC reverse wire → pump runs", absf(lvl2 - 0.48) < 0.02, "dst=%.4f" % lvl2)
+
+
 func _test_unconnected_output_flagged() -> void:
 	var g := _build_pump_graph(false)  # output port unwired
 	g["engine"].power_available_override = 1
@@ -955,11 +1171,17 @@ func _test_biochar_electric_input_fix() -> void:
 func _test_biodigester_resource_kinds() -> void:
 	_check("biogas kind registered", ResourceKindsScript.has_kind("biogas"))
 	_check("liquid_fertilizer kind registered", ResourceKindsScript.has_kind("liquid_fertilizer"))
+	_check("food_waste kind registered", ResourceKindsScript.has_kind("food_waste"))
+	_check("manure kind registered", ResourceKindsScript.has_kind("manure"))
 	_check("biogas wire compat", ResourceKindsScript.kinds_compatible("biogas", "biogas"))
 	_check("liquid fertilizer compat",
 			ResourceKindsScript.kinds_compatible("liquid_fertilizer", "fertilizer_effluent"))
 	_check("biomass/blackwater distinct",
 			not ResourceKindsScript.kinds_compatible("biomass", "blackwater"))
+	_check("food_waste/manure distinct",
+			not ResourceKindsScript.kinds_compatible("food_waste", "manure"))
+	_check("food_waste alias kitchen_waste",
+			ResourceKindsScript.kinds_compatible("food_waste", "kitchen_waste"))
 
 
 ## Woodgas fuel tank → DC generator processor (dc_electricity output, kW
@@ -1373,26 +1595,33 @@ func _test_site_layout_seed_and_clamp() -> void:
 	var fp: Vector2 = GraphSiteLayoutScript.physical_footprint_m(items[0])
 	_check("panel footprint positive", fp.x > 0.1 and fp.y > 0.1, "fp=%s" % str(fp))
 	# Screen size must grow with zoom-in / shrink with zoom-out (map-locked).
+	# Use a large enough footprint that MIN_CHIP_PX doesn't floor both ends.
 	var placed := {
 		"id": "p", "type": "panel",
 		"site_x_m": 0.0, "site_z_m": 0.0,
-		"specs": {"footprint_w_m": 2.0, "footprint_d_m": 1.0},
+		"specs": {"footprint_w_m": 12.0, "footprint_d_m": 8.0},
 	}
-	var sz_out: Vector2 = GraphSiteLayoutScript.site_item_screen_size(placed, 0.25)
+	var sz_out: Vector2 = GraphSiteLayoutScript.site_item_screen_size(placed, 1.0)
 	var sz_in: Vector2 = GraphSiteLayoutScript.site_item_screen_size(placed, 4.0)
 	_check("site screen size grows with zoom-in",
-		sz_in.x > sz_out.x * 8.0 and sz_in.y > sz_out.y * 8.0,
+		sz_in.x > sz_out.x * 3.5 and sz_in.y > sz_out.y * 3.5,
 		"out=%s in=%s" % [str(sz_out), str(sz_in)])
-	var expect_in := 2.0 * GraphSiteLayoutScript.SOI_PX_PER_M * 4.0
+	var expect_in := 12.0 * GraphSiteLayoutScript.SOI_PX_PER_M * 4.0
 	_check("site screen size = metres × 4 px/m × zoom",
 		absf(sz_in.x - expect_in) < 0.01, "sz.x=%.3f expect=%.3f" % [sz_in.x, expect_in])
-	var hit_out: Vector2 = GraphSiteLayoutScript.site_item_hit_size(placed, 0.05)
+	var tiny := {
+		"id": "t", "type": "panel",
+		"site_x_m": 0.0, "site_z_m": 0.0,
+		"specs": {"footprint_w_m": 0.4, "footprint_d_m": 0.2},
+	}
+	var hit_out: Vector2 = GraphSiteLayoutScript.site_item_hit_size(tiny, 0.05)
 	_check("site hit size floors when draw tiny",
 		hit_out.x >= GraphSiteLayoutScript.MIN_SITE_HIT_PX - 0.01,
 		"hit=%s" % str(hit_out))
-	_check("site draw stays below hit floor when tiny",
-		sz_out.x < GraphSiteLayoutScript.MIN_SITE_HIT_PX,
-		"draw=%s" % str(sz_out))
+	var true_tiny: Vector2 = GraphSiteLayoutScript.true_footprint_screen_size(tiny, 0.05)
+	_check("true footprint stays below hit floor when tiny",
+		true_tiny.x < GraphSiteLayoutScript.MIN_SITE_HIT_PX,
+		"true=%s" % str(true_tiny))
 	var arr := {
 		"id": "arr", "type": "compound",
 		"specs": {
@@ -1403,10 +1632,73 @@ func _test_site_layout_seed_and_clamp() -> void:
 	var arr_fp: Vector2 = GraphSiteLayoutScript.physical_footprint_m(arr)
 	_check("array compound footprint scales with panel grid",
 		arr_fp.x > 5.0 and arr_fp.y > 1.5, "fp=%s" % str(arr_fp))
-	_check("array compound uses rectangular plan chip",
+	_check("array compound uses rectangular plan chip (elevation/default)",
 		not GraphSiteLayoutScript.uses_circular_plan_chip(arr))
+	_check("array compound uses circular magnifier in Site Plan",
+		GraphSiteLayoutScript.uses_circular_plan_chip(arr, "site"))
+	_check("resource always circular plan chip",
+		GraphSiteLayoutScript.uses_circular_plan_chip({
+			"type": "resource", "specs": {},
+		}))
 	# Hydro head derivation via elevation delta (pure math check).
 	var intake_e := 120.0
 	var turbine_e := 95.0
 	var head := maxf(intake_e - turbine_e, 0.0)
 	_check("hydro head from elevation delta", absf(head - 25.0) < 0.001, "head=%.2f" % head)
+
+
+## Lab Test Inflow must raise pond stock while the world clock is frozen
+## (Elev noon-lock / pause) — wall seconds × LAB_PAUSE_FILL_SCALE.
+func _test_lab_sim_inflow_realtime_paused() -> void:
+	var model = GraphModelScript.new()
+	model.add_item({
+		"id": "pond", "type": "resource", "x": 0.0, "y": 0.0,
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Pond", "resource_kind": "water", "pond_storage": true,
+			"capacity_qty": 100000.0, "capacity_unit": "L",
+			"level": 0.10, "stock_l": 10000.0,
+			"floor_m": 0.0, "rim_m": 4.0, "level_m": 0.4,
+			"fill_mode": "auto",
+		},
+	})
+	model.add_item({
+		"id": "siphon", "type": "processor", "x": 120.0, "y": 0.0,
+		"width": 140.0, "height": 120.0,
+		"specs": {
+			"role": "siphon_hydro", "turbine_kind": "siphon",
+			"name": "Siphon",
+			"module_elev_m": 0.5, "outlet_invert_m": -8.0,
+			"siphon_start_m": 0.55, "siphon_break_m": 0.15,
+			"intake_diameter_mm": 150.0, "outlet_diameter_mm": 200.0,
+			"barrel_length_m": 40.0, "manning_n": 0.012,
+			"lab_sim_inflow_enabled": true, "lab_sim_inflow_lps": 500.0,
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h"}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+		},
+	})
+	model.add_connection({
+		"id": "c_in", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "pond", "source_handle_id": "output",
+		"target_item_id": "siphon", "target_handle_id": "res_in_0",
+	})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	_check("lab inflow active flag", bool(engine.call("_lab_sim_inflow_active")))
+	# 1 wall-second × 60 scale × 500 L/s = 30_000 L → level 0.10 → 0.40
+	engine.call("_apply_lab_sim_inflow_realtime", 1.0)
+	var pond: Dictionary = model.get_item("pond")
+	var ps: Dictionary = pond.get("specs", {}) as Dictionary
+	var level := float(ps.get("level", -1.0))
+	var stock := float(ps.get("stock_l", -1.0))
+	_check("lab pause fill raises stock ~30 kL",
+			absf(stock - 40000.0) < 500.0, "stock=%.1f" % stock)
+	_check("lab pause fill raises level ~0.40",
+			absf(level - 0.40) < 0.01, "level=%.3f" % level)
+	var level_m := float(ps.get("level_m", NAN))
+	_check("lab pause fill updates level_m",
+			not is_nan(level_m) and absf(level_m - 1.6) < 0.05,
+			"level_m=%.3f" % level_m)

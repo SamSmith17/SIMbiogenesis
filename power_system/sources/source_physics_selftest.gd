@@ -9,9 +9,13 @@ const ResourceKindsScript := preload("res://system_graph/data/resource_kinds.gd"
 const ResourceEdgeVisScript := preload("res://system_graph/data/resource_edge_vis.gd")
 const CspTroughSourceScript := preload("res://power_system/sources/csp_trough_source.gd")
 const HeliostatSourceScript := preload("res://power_system/sources/heliostat_source.gd")
+const HomeBiogasSourceScript := preload("res://power_system/sources/home_biogas_source.gd")
+const PpBeamExtruderSourceScript := preload("res://power_system/sources/pp_beam_extruder_source.gd")
+const PpSheetPressSourceScript := preload("res://power_system/sources/pp_sheet_press_source.gd")
 const ComponentPresetsScript := preload("res://system_graph/data/component_presets.gd")
 const ModelCatalogScript := preload("res://core/placed_models/model_catalog.gd")
 const WindMathScript := preload("res://core/wind_math.gd")
+const CartesianMachineSourceScript := preload("res://power_system/sources/cartesian_machine_source.gd")
 
 var _failures: int = 0
 var _checks: int = 0
@@ -34,12 +38,46 @@ func _initialize() -> void:
 	_test_solar_eclipse()
 	_test_csp()
 	_test_heliostat()
+	_test_home_biogas()
+	_test_pp_extruder()
+	_test_pp_sheet_press()
+	_test_cnc()
+	_test_mesh_collision_util()
 	if _failures == 0:
 		print("SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
 	else:
 		print("SELFTEST FAIL  (%d of %d checks failed)" % [_failures, _checks])
 		quit(1)
+
+
+## Collision-mesh sanitizer: NaN/inf/degenerate triangles must be dropped before
+## they reach ConcavePolygonShape3D.set_faces() (a physics-server hard-crash
+## vector for imported STL parts and procedural pipe/linkage meshes).
+func _test_mesh_collision_util() -> void:
+	# One clean triangle survives untouched.
+	var good := PackedVector3Array([
+		Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, 1)])
+	var s_good := MeshCollisionUtil.sanitize_faces(good)
+	_check("collision util keeps clean tri", s_good.size() == 3, str(s_good.size()))
+	# A NaN vertex kills its triangle but spares the neighbours.
+	var with_nan := PackedVector3Array([
+		Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, 1),
+		Vector3(NAN, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, 1),
+		Vector3(0, 1, 0), Vector3(1, 1, 0), Vector3(0, 1, 1)])
+	var s_nan := MeshCollisionUtil.sanitize_faces(with_nan)
+	_check("collision util drops NaN tri only", s_nan.size() == 6, str(s_nan.size()))
+	# A zero-area (degenerate) triangle is dropped.
+	var degen := PackedVector3Array([
+		Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(2, 0, 0)])
+	_check("collision util drops degenerate tri",
+		MeshCollisionUtil.sanitize_faces(degen).is_empty())
+	# inf and short/empty input are handled without error.
+	_check("collision util handles inf",
+		MeshCollisionUtil.sanitize_faces(PackedVector3Array([
+			Vector3(INF, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, 1)])).is_empty())
+	_check("collision util handles empty",
+		MeshCollisionUtil.sanitize_faces(PackedVector3Array()).is_empty())
 
 
 func _check(label: String, ok: bool, detail: String = "") -> void:
@@ -63,6 +101,36 @@ func _make_hydro() -> HydroSource:
 	var src := HydroSource.new()
 	src.config = load("res://power_system/sources/default_hydro_500w.tres")
 	return src
+
+
+## Cartesian machine (CNC/printer) job time/material/energy + scrub-safe progress.
+func _test_cnc() -> void:
+	var specs := {
+		"machine_role": "fdm_printer", "speed_factor": 1.0, "watts": 900.0,
+		"filament_diameter_mm": 3.0, "flake_density_g_cm3": 0.95,
+		"inputs": [{"kind": "plastic_flake", "rate": 0.0}],
+	}
+	var parse := {"est_time_hr": 2.0, "extrusion_mm": 1000.0,
+		"bounds_min": Vector3.ZERO, "bounds_max": Vector3(50, 50, 50)}
+	var job := CartesianMachineSourceScript.derive_job(parse, specs)
+	_check("cnc duration", _approx(float(job.get("duration_hr", 0.0)), 1.99, 2.01),
+		str(job.get("duration_hr")))
+	_check("cnc energy = W*h", _approx(float(job.get("energy_kwh", 0.0)), 1.79, 1.81),
+		str(job.get("energy_kwh")))
+	# vol = 1000 * pi*1.5^2 mm3 = 7068.6 mm3 -> 7.0686 cm3 * 0.95 = 6.715 g = 0.006715 kg
+	_check("cnc material kg", _approx(float(job.get("material_qty", 0.0)), 0.0060, 0.0075),
+		str(job.get("material_qty")))
+	_check("cnc material kind", str(job.get("material_kind", "")) == "plastic_flake")
+	# Router: subtractive, no feedstock consumed.
+	var rspecs := {"machine_role": "cnc_router", "speed_factor": 1.0, "watts": 1800.0, "inputs": []}
+	var rjob := CartesianMachineSourceScript.derive_job(parse, rspecs)
+	_check("cnc router no material", float(rjob.get("material_qty", 0.0)) == 0.0,
+		str(rjob.get("material_qty")))
+	# Scrub-safe progress is a pure clock function (reversible).
+	var js := {"job_active": true, "job_start_abs_hours": 10.0, "job_duration_hr": 4.0}
+	_check("cnc progress fwd", _approx(CartesianMachineSourceScript.progress_at(js, 12.0), 0.49, 0.51))
+	_check("cnc progress rewind", CartesianMachineSourceScript.progress_at(js, 10.0) == 0.0)
+	_check("cnc progress clamp", CartesianMachineSourceScript.progress_at(js, 99.0) == 1.0)
 
 
 func _test_wind() -> void:
@@ -313,6 +381,49 @@ func _test_graph_adapters() -> void:
 	_check("graph hydro: more head, more power",
 		HydroSource.power_kw_from_graph_specs(tall, 6) >
 		HydroSource.power_kw_from_graph_specs(dflt, 6))
+
+	# KINDS registry parity: kind_meta reproduces the historic per-kind
+	# efficiencies (pelton .85 / turgo .80 / else .70), and an unknown free-text
+	# kind resolves to the custom .70 fallback (never rejected — save-compat).
+	_check("hydro KINDS: pelton η", absf(HydroSource.default_turbine_efficiency("pelton") - 0.85) < 1e-9)
+	_check("hydro KINDS: turgo η", absf(HydroSource.default_turbine_efficiency("turgo") - 0.80) < 1e-9)
+	_check("hydro KINDS: run_of_river η", absf(HydroSource.default_turbine_efficiency("run_of_river") - 0.70) < 1e-9)
+	_check("hydro KINDS: unknown → custom 0.70",
+		absf(HydroSource.default_turbine_efficiency("waterwheel_todo") - 0.70) < 1e-9)
+	_check("hydro KINDS: pelton head band above 30 m",
+		float((HydroSource.kind_meta("pelton").get("head_band", [0, 0]) as Array)[0]) >= 30.0)
+	# turbine_kind key is honored as an alias for the legacy `kind` key.
+	var by_kind := {"gross_head_m": 40.0, "design_flow_lps": 10.0, "kind": "turgo"}
+	var by_turbine := {"gross_head_m": 40.0, "design_flow_lps": 10.0, "turbine_kind": "turgo"}
+	_check("hydro: turbine_kind aliases kind",
+		absf(HydroSource.power_kw_from_graph_specs(by_kind, 6)
+			- HydroSource.power_kw_from_graph_specs(by_turbine, 6)) < 1e-9)
+
+	# Nameplate clamp: max_power_w caps the estimator; absent = uncapped.
+	var big := {"gross_head_m": 200.0, "design_flow_lps": 50.0, "kind": "pelton"}
+	var uncapped := HydroSource.power_kw_from_graph_specs(big, 6)
+	var capped_specs := big.duplicate()
+	capped_specs["max_power_w"] = 500.0
+	var capped := HydroSource.power_kw_from_graph_specs(capped_specs, 6)
+	_check("hydro: big install exceeds 0.5 kW uncapped", uncapped > 0.5, "got %.3f kW" % uncapped)
+	_check("hydro: nameplate clamps to max_power_w", _approx(capped, 0.4999, 0.5001), "got %.4f kW" % capped)
+
+	# Annual energy closed form: monthly kWh sum == annual, and a flat-multiplier
+	# spec matches kW × representative-year hours (8760) by hand.
+	var flat := {"gross_head_m": 40.0, "design_flow_lps": 10.0, "kind": "turgo",
+		"monthly_flow_multipliers": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]}
+	var ann := HydroSource.annual_energy_kwh_from_specs(flat, [])
+	var monthly: PackedFloat32Array = ann["monthly_kwh"]
+	var sum := 0.0
+	for kwh in monthly:
+		sum += kwh
+	var annual_kwh := float(ann["annual_kwh"])
+	# monthly is float32 → allow a few kWh of accumulation slack over the year.
+	_check("hydro annual: monthly sum == annual", absf(sum - annual_kwh) < 5.0,
+		"sum %.1f vs annual %.1f" % [sum, annual_kwh])
+	var kw_flat := HydroSource.power_kw_from_graph_specs(flat, 6)   # flat → every month same
+	_check("hydro annual: flat spec == kW × 8760 h", absf(annual_kwh - kw_flat * 8760.0) < 1.0,
+		"annual %.1f vs %.1f" % [annual_kwh, kw_flat * 8760.0])
 
 
 ## WeatherService parsing/accessors on canned Open-Meteo JSON (no network),
@@ -1203,3 +1314,219 @@ func _test_heliostat() -> void:
 	var loss := HeliostatSourceScript.receiver_loss_w(t_stag, 0.9, 0.25, 10.0, 1.25, 298.15)
 	_check("heliostat: stagnation solves loss(T)=absorbed", absf(loss - 5000.0) < 1.0,
 		"loss=%.2f W at T=%.1f K" % [loss, t_stag])
+
+
+func _test_home_biogas() -> void:
+	# Temperature derate knees (datasheet: best above 17–20 °C).
+	_check("homebiogas: temp_factor = 1 at 20 °C",
+		absf(HomeBiogasSourceScript.temp_factor(20.0) - 1.0) < 1e-6)
+	_check("homebiogas: temp_factor = 1 above full",
+		absf(HomeBiogasSourceScript.temp_factor(25.0) - 1.0) < 1e-6)
+	_check("homebiogas: temp_factor = residual at floor",
+		absf(HomeBiogasSourceScript.temp_factor(10.0) - HomeBiogasSourceScript.TEMP_RESIDUAL) < 1e-6)
+	_check("homebiogas: temp_factor mid-band between residual and 1",
+		HomeBiogasSourceScript.temp_factor(15.0) > HomeBiogasSourceScript.TEMP_RESIDUAL \
+		and HomeBiogasSourceScript.temp_factor(15.0) < 1.0)
+
+	var food_specs := {
+		"feed_mode": "food", "daily_feed_l": 6.0,
+		"max_food_l_day": 6.0, "max_manure_l_day": 15.0,
+		"biogas_m3_day_food_min": 0.30, "biogas_m3_day_food_max": 0.40,
+		"biogas_m3_day_manure_min": 0.56, "biogas_m3_day_manure_max": 0.70,
+		"ch4_fraction": 0.625, "water_l_day_at_max": 6.0,
+	}
+	var food_warm := HomeBiogasSourceScript.simulate(food_specs, 22.0)
+	var food_m3 := float(food_warm.get("biogas_m3_day", 0.0))
+	_check("homebiogas: max food → biogas in 0.3–0.4 m³/day band",
+		food_m3 >= 0.30 - 1e-6 and food_m3 <= 0.40 + 1e-6,
+		"got %.3f m³/day" % food_m3)
+	_check("homebiogas: max food uses food_waste kind",
+		str(food_warm.get("feed_kind", "")) == "food_waste")
+	_check("homebiogas: max food water = 6 L/day",
+		absf(float(food_warm.get("water_l_day", 0.0)) - 6.0) < 1e-6)
+	_check("homebiogas: fertilizer ≈ feed + water − biogas mass",
+		float(food_warm.get("fertilizer_l_day", 0.0)) > 10.0)
+	_check("homebiogas: cooking hours in 2–3 h band at rated food",
+		_approx(float(food_warm.get("cooking_hours_day", 0.0)), 2.0, 3.0),
+		"got %.2f h" % float(food_warm.get("cooking_hours_day", 0.0)))
+
+	var manure_specs := food_specs.duplicate(true)
+	manure_specs["feed_mode"] = "manure"
+	manure_specs["daily_feed_l"] = 15.0
+	var manure_warm := HomeBiogasSourceScript.simulate(manure_specs, 22.0)
+	var manure_m3 := float(manure_warm.get("biogas_m3_day", 0.0))
+	_check("homebiogas: max manure → biogas in 0.56–0.7 m³/day band",
+		manure_m3 >= 0.56 - 1e-6 and manure_m3 <= 0.70 + 1e-6,
+		"got %.3f m³/day" % manure_m3)
+	_check("homebiogas: manure mode uses manure kind",
+		str(manure_warm.get("feed_kind", "")) == "manure")
+	_check("homebiogas: manure yield > food yield at max",
+		manure_m3 > food_m3)
+
+	var half := food_specs.duplicate(true)
+	half["daily_feed_l"] = 3.0
+	var half_warm := HomeBiogasSourceScript.simulate(half, 22.0)
+	_check("homebiogas: half feed → ~half biogas",
+		absf(float(half_warm.get("biogas_m3_day", 0.0)) - food_m3 * 0.5) < 1e-4,
+		"half=%.3f full=%.3f" % [half_warm.get("biogas_m3_day", 0.0), food_m3])
+
+	var zero := food_specs.duplicate(true)
+	zero["daily_feed_l"] = 0.0
+	var zero_r := HomeBiogasSourceScript.simulate(zero, 22.0)
+	_check("homebiogas: zero feed → zero biogas",
+		float(zero_r.get("biogas_m3_day", -1.0)) == 0.0)
+
+	var cold := HomeBiogasSourceScript.simulate(food_specs, 5.0)
+	_check("homebiogas: cold ambient derates biogas vs warm",
+		float(cold.get("biogas_m3_day", 0.0)) < food_m3 * 0.2,
+		"cold=%.3f warm=%.3f" % [cold.get("biogas_m3_day", 0.0), food_m3])
+
+	# Preset + catalog wiring.
+	var found_preset := false
+	for p: Variant in ComponentPresetsScript.PROCESSORS:
+		if p is Dictionary and str((p as Dictionary).get("label", "")) == "HomeBiogas 2.0":
+			found_preset = true
+			var sp: Dictionary = (p as Dictionary).get("specs", {}) as Dictionary
+			_check("homebiogas: preset role=biodigester", str(sp.get("role", "")) == "biodigester")
+			_check("homebiogas: preset io_absolute", bool(sp.get("io_absolute", false)))
+			_check("homebiogas: preset model_id", str(sp.get("model_id", "")) == "home_biogas_2")
+			break
+	_check("homebiogas: preset in PROCESSORS", found_preset)
+	_check("homebiogas: model catalog entry",
+		not ModelCatalogScript.find("home_biogas_2").is_empty())
+	_check("homebiogas: food_waste kind registered", ResourceKindsScript.has_kind("food_waste"))
+	_check("homebiogas: manure kind registered", ResourceKindsScript.has_kind("manure"))
+
+
+func _test_pp_extruder() -> void:
+	# Datasheet: 5 kg/h ÷ 1.17 kg/m ≈ 4.2735 m/h.
+	var specs := {
+		"flake_kg_h": 5.0,
+		"kg_per_m": 1.17,
+		"cut_length_m": 2.0,
+		"extruded_length_m": 0.0,
+		"inputs": [{"kind": "plastic_flake", "rate": 5.0}],
+	}
+	var mph := PpBeamExtruderSourceScript.meters_per_hour(specs)
+	_check("pp extruder: m/h ≈ 5/1.17", absf(mph - (5.0 / 1.17)) < 1e-4, "mph=%.4f" % mph)
+
+	# Half hour at full rate → ~2.137 m; one 2 m cut + remainder ~0.137 m.
+	var half := PpBeamExtruderSourceScript.advance(specs, 0.5, true)
+	_check("pp extruder: half-hour cuts one beam",
+		int(half.get("beams_cut", 0)) == 1, "beams=%d" % int(half.get("beams_cut", 0)))
+	_check("pp extruder: remainder after cut",
+		absf(float(half.get("extruded_length_m", -1.0)) - (mph * 0.5 - 2.0)) < 1e-3,
+		"rem=%.4f" % float(half.get("extruded_length_m", -1.0)))
+	_check("pp extruder: cut mass = 2 × 1.17",
+		absf(float(half.get("cut_mass_kg", 0.0)) - 2.34) < 1e-3)
+
+	# Idle holds length (no inventing cuts).
+	specs["extruded_length_m"] = 1.5
+	var idle := PpBeamExtruderSourceScript.advance(specs, 1.0, false)
+	_check("pp extruder: idle holds stick",
+		absf(float(idle.get("extruded_length_m", 0.0)) - 1.5) < 1e-6)
+	_check("pp extruder: idle cuts none", int(idle.get("beams_cut", -1)) == 0)
+
+	# Exact multi-cut: 1.0 h → ~4.274 m → two 2 m beams + ~0.274 m.
+	specs["extruded_length_m"] = 0.0
+	var hour := PpBeamExtruderSourceScript.advance(specs, 1.0, true)
+	_check("pp extruder: 1 h cuts two beams", int(hour.get("beams_cut", 0)) == 2)
+
+	# Preset + catalog wiring.
+	var found_shred := false
+	var found_ext := false
+	for p: Variant in ComponentPresetsScript.TOOLS:
+		if p is Dictionary:
+			var label := str((p as Dictionary).get("label", ""))
+			if label == "PP Shredder":
+				found_shred = true
+				var sp: Dictionary = (p as Dictionary).get("specs", {}) as Dictionary
+				_check("pp shredder: 600 W", absf(float(sp.get("watts", 0.0)) - 600.0) < 0.1)
+				_check("pp shredder: model_id", str(sp.get("model_id", "")) == "pp_shredder")
+				var outs: Array = sp.get("outputs", []) as Array
+				_check("pp shredder: flake out",
+					not outs.is_empty() and str((outs[0] as Dictionary).get("kind", "")) == "plastic_flake")
+			elif label == "PP Beam Extruder":
+				found_ext = true
+				var sp2: Dictionary = (p as Dictionary).get("specs", {}) as Dictionary
+				_check("pp extruder: role", str(sp2.get("role", "")) == "pp_beam_extruder")
+				_check("pp extruder: model_id", str(sp2.get("model_id", "")) == "pp_beam_extruder")
+				_check("pp extruder: kg/m", absf(float(sp2.get("kg_per_m", 0.0)) - 1.17) < 1e-6)
+				_check("pp extruder: 1200 W", absf(float(sp2.get("watts", 0.0)) - 1200.0) < 0.1)
+	_check("pp shredder: preset in TOOLS", found_shred)
+	_check("pp extruder: preset in TOOLS", found_ext)
+	_check("pp shredder: catalog entry", not ModelCatalogScript.find("pp_shredder").is_empty())
+	_check("pp extruder: catalog entry", not ModelCatalogScript.find("pp_beam_extruder").is_empty())
+	_check("pp: plastic_flake kind registered", ResourceKindsScript.has_kind("plastic_flake"))
+	_check("pp: plastic_waste kind registered", ResourceKindsScript.has_kind("plastic_waste"))
+
+
+func _test_pp_sheet_press() -> void:
+	# Density pin: 8 mm → 7.2 kg, 15 mm → 13.5 kg (1 m² × ρ 900).
+	_check("pp sheet: 8 mm mass",
+		absf(PpSheetPressSourceScript.sheet_mass_kg(8.0) - 7.2) < 1e-6)
+	_check("pp sheet: 15 mm mass",
+		absf(PpSheetPressSourceScript.sheet_mass_kg(15.0) - 13.5) < 1e-6)
+
+	var thin := PpSheetPressSourceScript.cycle_times_hr(6.5)
+	_check("pp sheet: thin total in 50–60 min",
+		float(thin.get("total_hr", 0.0)) * 60.0 >= 50.0 - 0.5
+		and float(thin.get("total_hr", 0.0)) * 60.0 <= 60.0 + 0.5,
+		"total_min=%.1f" % (float(thin.get("total_hr", 0.0)) * 60.0))
+
+	var thick := PpSheetPressSourceScript.cycle_times_hr(16.0)
+	_check("pp sheet: thick total in 90–120 min",
+		float(thick.get("total_hr", 0.0)) * 60.0 >= 90.0 - 0.5
+		and float(thick.get("total_hr", 0.0)) * 60.0 <= 120.0 + 0.5,
+		"total_min=%.1f" % (float(thick.get("total_hr", 0.0)) * 60.0))
+
+	var job8 := PpSheetPressSourceScript.derive_job({"sheet_thickness_mm": 8.0})
+	_check("pp sheet: 8 mm job mass", absf(float(job8.get("material_kg", 0.0)) - 7.2) < 1e-6)
+	_check("pp sheet: avg kWh/h in 3–5",
+		float(job8.get("avg_kwh_per_h", 0.0)) >= 3.0
+		and float(job8.get("avg_kwh_per_h", 0.0)) <= 5.0)
+
+	# Compression: mid-melt rising, cool held at 1.
+	var specs := {
+		"job_active": true,
+		"job_start_abs_hours": 100.0,
+		"job_melt_hr": 0.5,
+		"job_cool_hr": 0.4,
+		"job_duration_hr": 0.9,
+		"sheet_thickness_mm": 8.0,
+		"peak_watts": 5000.0,
+		"job_avg_kwh_per_h": 4.0,
+	}
+	var mid_melt := PpSheetPressSourceScript.compression_at(specs, 100.25)
+	_check("pp sheet: mid-melt compression mid", mid_melt > 0.2 and mid_melt < 0.9, "c=%.3f" % mid_melt)
+	_check("pp sheet: cool compression=1",
+		absf(PpSheetPressSourceScript.compression_at(specs, 100.7) - 1.0) < 1e-6)
+	_check("pp sheet: melt phase", PpSheetPressSourceScript.phase_at(specs, 100.1) == "melt")
+	_check("pp sheet: cool phase", PpSheetPressSourceScript.phase_at(specs, 100.6) == "cool")
+
+	# Warm-up peak then cycling below peak on average.
+	var warm_w := PpSheetPressSourceScript.power_watts_at(specs, 100.01)
+	_check("pp sheet: warm-up at peak", absf(warm_w - 5000.0) < 1.0, "w=%.0f" % warm_w)
+	var samples := 0
+	var sum_w := 0.0
+	var t := 100.1
+	while t < 100.5:
+		sum_w += PpSheetPressSourceScript.power_watts_at(specs, t)
+		samples += 1
+		t += 0.5 / 60.0  # 30 s steps
+	var avg_w := sum_w / float(maxi(samples, 1))
+	_check("pp sheet: melt avg draw in 3–5 kW band",
+		avg_w >= 2500.0 and avg_w <= 5000.0, "avg_w=%.0f" % avg_w)
+
+	var found := false
+	for p: Variant in ComponentPresetsScript.TOOLS:
+		if p is Dictionary and str((p as Dictionary).get("label", "")) == "PP Sheet Press":
+			found = true
+			var sp: Dictionary = (p as Dictionary).get("specs", {}) as Dictionary
+			_check("pp sheet: role", str(sp.get("role", "")) == "pp_sheet_press")
+			_check("pp sheet: model_id", str(sp.get("model_id", "")) == "pp_sheet_press")
+			_check("pp sheet: default 8 mm", absf(float(sp.get("sheet_thickness_mm", 0.0)) - 8.0) < 1e-6)
+			break
+	_check("pp sheet: preset in TOOLS", found)
+	_check("pp sheet: catalog entry", not ModelCatalogScript.find("pp_sheet_press").is_empty())
+	_check("pp sheet: plastic_sheet kind", ResourceKindsScript.has_kind("plastic_sheet"))

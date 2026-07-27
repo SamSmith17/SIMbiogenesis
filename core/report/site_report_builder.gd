@@ -109,7 +109,8 @@ func start(main: Node, solar_ui: Node, model: Object, sim_year: int,
 	_hydro_specs.clear()
 	_wind_rated_kw = 0.0
 	if model != null and model.has_method("get_items_in_scope"):
-		for item: Dictionary in model.get_items_in_scope("root"):
+		# Nesting-aware: count wind/hydro at any depth (inside collapsed groups too).
+		for item: Dictionary in GraphNesting.walk_items(model, "root"):
 			if bool(item.get("is_virtual", false)):
 				continue
 			var ty := str(item.get("type", ""))
@@ -411,7 +412,7 @@ static func signature_for(main: Node, solar_ui: Node, model: Object, sim_year: i
 	var wind_specs: Array = []
 	var hydro_specs: Array = []
 	if model != null and model.has_method("get_items_in_scope"):
-		for item: Dictionary in model.get_items_in_scope("root"):
+		for item: Dictionary in GraphNesting.walk_items(model, "root"):
 			if bool(item.get("is_virtual", false)):
 				continue
 			var ty := str(item.get("type", ""))
