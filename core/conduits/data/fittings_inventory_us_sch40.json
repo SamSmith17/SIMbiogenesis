@@ -1,0 +1,413 @@
+{
+	"active_roles": [
+		"pipe",
+		"elbow_45",
+		"elbow_90"
+	],
+	"catalog": {
+		"elbow_45": {
+			"0.5": {
+				"node_name": "Elbows 45 1-2 inch thick ",
+				"size_in": 0.5,
+				"variant": "thick"
+			},
+			"0.75": {
+				"node_name": "Elbows 45 3-4 inch thick ",
+				"size_in": 0.75,
+				"variant": "thick"
+			},
+			"1.0": {
+				"node_name": "Elbows 45 1 inch thick ",
+				"size_in": 1.0,
+				"variant": "thick"
+			},
+			"1.25": {
+				"node_name": "Elbows 45 1 1-4 inch thick ",
+				"size_in": 1.25,
+				"variant": "thick"
+			},
+			"1.5": {
+				"node_name": "Elbows 45 1 1-2 inch thick ",
+				"size_in": 1.5,
+				"variant": "thick"
+			},
+			"2.0": {
+				"node_name": "Elbows 45 2 inch  ",
+				"size_in": 2.0,
+				"variant": ""
+			},
+			"2.5": {
+				"node_name": "Elbows 45 2 1-2 inch  ",
+				"size_in": 2.5,
+				"variant": ""
+			},
+			"3.0": {
+				"node_name": "Elbows 45 3 inch  ",
+				"size_in": 3.0,
+				"variant": ""
+			},
+			"4.0": {
+				"node_name": "Elbows 45 4 inch  ",
+				"size_in": 4.0,
+				"variant": ""
+			},
+			"5.0": {
+				"node_name": "Elbows 45 5 inch  ",
+				"size_in": 5.0,
+				"variant": ""
+			},
+			"6.0": {
+				"node_name": "Elbows 45 6 inch  ",
+				"size_in": 6.0,
+				"variant": ""
+			},
+			"8.0": {
+				"node_name": "Elbows 45 8 inch  ",
+				"size_in": 8.0,
+				"variant": ""
+			}
+		},
+		"elbow_90": {
+			"0.5": {
+				"node_name": "Elbows 90 1-2 inch thick",
+				"size_in": 0.5,
+				"variant": "thick"
+			},
+			"0.75": {
+				"node_name": "Elbows 90 3-4 inch thick",
+				"size_in": 0.75,
+				"variant": "thick"
+			},
+			"1.0": {
+				"node_name": "Elbows 90 1 inch thick",
+				"size_in": 1.0,
+				"variant": "thick"
+			},
+			"1.25": {
+				"node_name": "Elbows 90 1 1-4 inch thick",
+				"size_in": 1.25,
+				"variant": "thick"
+			},
+			"1.5": {
+				"node_name": "Elbows 90 1 1-2 inch thick",
+				"size_in": 1.5,
+				"variant": "thick"
+			},
+			"2.0": {
+				"node_name": "Elbows 90 2 inch Long",
+				"size_in": 2.0,
+				"variant": "long"
+			},
+			"2.5": {
+				"node_name": "Elbows 90 2 1-2 inch Long",
+				"size_in": 2.5,
+				"variant": "long"
+			},
+			"3.0": {
+				"node_name": "Elbows 90 3 inch Long",
+				"size_in": 3.0,
+				"variant": "long"
+			},
+			"4.0": {
+				"node_name": "Elbows 90 4 inch Long",
+				"size_in": 4.0,
+				"variant": "long"
+			},
+			"5.0": {
+				"node_name": "Elbows 90 5 inch Long",
+				"size_in": 5.0,
+				"variant": "long"
+			},
+			"6.0": {
+				"node_name": "Elbows 90 6 inch Long",
+				"size_in": 6.0,
+				"variant": "long"
+			},
+			"8.0": {
+				"node_name": "Elbows 90 8 inch Short",
+				"size_in": 8.0,
+				"variant": "short"
+			}
+		},
+		"p_trap": {
+			"2.0": {
+				"node_name": "P-TRAP 2 inch",
+				"size_in": 2.0,
+				"variant": ""
+			}
+		},
+		"pipe": {
+			"0.5": {
+				"node_name": "Pipe 1-2 inch",
+				"size_in": 0.5,
+				"variant": ""
+			},
+			"0.75": {
+				"node_name": "Pipe 3-4 inch",
+				"size_in": 0.75,
+				"variant": ""
+			},
+			"1.0": {
+				"node_name": "Pipe 1 inch",
+				"size_in": 1.0,
+				"variant": ""
+			},
+			"1.25": {
+				"node_name": "Pipe 1 1-4 inch",
+				"size_in": 1.25,
+				"variant": ""
+			},
+			"1.5": {
+				"node_name": "Pipe 1 1-2 inch",
+				"size_in": 1.5,
+				"variant": ""
+			},
+			"2.0": {
+				"node_name": "Pipe 2 inch",
+				"size_in": 2.0,
+				"variant": ""
+			},
+			"2.5": {
+				"node_name": "Pipe 2 1-2 inch",
+				"size_in": 2.5,
+				"variant": ""
+			},
+			"3.0": {
+				"node_name": "Pipe 3 inch",
+				"size_in": 3.0,
+				"variant": ""
+			},
+			"4.0": {
+				"node_name": "Pipe 4 inch",
+				"size_in": 4.0,
+				"variant": ""
+			},
+			"5.0": {
+				"node_name": "Pipe 5 inch",
+				"size_in": 5.0,
+				"variant": ""
+			},
+			"6.0": {
+				"node_name": "Pipe 6 inch",
+				"size_in": 6.0,
+				"variant": ""
+			},
+			"8.0": {
+				"node_name": "Pipe 8 inch",
+				"size_in": 8.0,
+				"variant": ""
+			}
+		},
+		"reducing_socket": {
+			"0.75": {
+				"node_name": "REDUCING SOCKET 3-4 inch 1-2 inch thick",
+				"size_in": 0.75,
+				"variant": "thick"
+			},
+			"1.25": {
+				"node_name": "REDUCING SOCKET 1 1-4 inch 3-4 inch thick",
+				"size_in": 1.25,
+				"variant": "thick"
+			},
+			"1.5": {
+				"node_name": "REDUCING SOCKET 1 1-2 inch - 1 1-4 inch thick",
+				"size_in": 1.5,
+				"variant": "thick"
+			},
+			"2.0": {
+				"node_name": "REDUCING SOCKET 2 inch - 1 1-2 inch thick",
+				"size_in": 2.0,
+				"variant": "thick"
+			}
+		},
+		"reducing_tee": {
+			"4.0": {
+				"node_name": "REDUCING TEE 4 inch x 2 inch",
+				"size_in": 4.0,
+				"variant": ""
+			},
+			"6.0": {
+				"node_name": "REDUCING TEE 6 inch x 4 inch",
+				"size_in": 6.0,
+				"variant": ""
+			}
+		},
+		"socket": {
+			"0.5": {
+				"node_name": "Socket 1-2 inch thick",
+				"size_in": 0.5,
+				"variant": "thick"
+			},
+			"0.75": {
+				"node_name": "Socket 3-4 inch thick",
+				"size_in": 0.75,
+				"variant": "thick"
+			},
+			"1.0": {
+				"node_name": "Socket 1 inch thick",
+				"size_in": 1.0,
+				"variant": "thick"
+			},
+			"1.25": {
+				"node_name": "Socket 1 1-4 inch thick",
+				"size_in": 1.25,
+				"variant": "thick"
+			},
+			"1.5": {
+				"node_name": "Socket 1 1-2 inch thick",
+				"size_in": 1.5,
+				"variant": "thick"
+			},
+			"2.0": {
+				"node_name": "Socket 2 inch",
+				"size_in": 2.0,
+				"variant": ""
+			},
+			"2.5": {
+				"node_name": "Socket 2 1-2 inch",
+				"size_in": 2.5,
+				"variant": ""
+			},
+			"3.0": {
+				"node_name": "Socket 3 inch",
+				"size_in": 3.0,
+				"variant": ""
+			},
+			"4.0": {
+				"node_name": "Socket 4 inch",
+				"size_in": 4.0,
+				"variant": ""
+			},
+			"5.0": {
+				"node_name": "Socket 5 inch",
+				"size_in": 5.0,
+				"variant": ""
+			},
+			"6.0": {
+				"node_name": "Socket 6 inch",
+				"size_in": 6.0,
+				"variant": ""
+			}
+		},
+		"tee_90": {
+			"0.5": {
+				"node_name": "Tee-90 1-2 inch thick",
+				"size_in": 0.5,
+				"variant": "thick"
+			},
+			"0.75": {
+				"node_name": "Tee-90 3-4 inch thick",
+				"size_in": 0.75,
+				"variant": "thick"
+			},
+			"1.0": {
+				"node_name": "Tee-90 1 inch thick",
+				"size_in": 1.0,
+				"variant": "thick"
+			},
+			"1.25": {
+				"node_name": "Tee-90 1 1-4 inch thick",
+				"size_in": 1.25,
+				"variant": "thick"
+			},
+			"1.5": {
+				"node_name": "Tee-90 1 1-2 inch thick",
+				"size_in": 1.5,
+				"variant": "thick"
+			},
+			"2.0": {
+				"node_name": "Tee-90 2 inch thick",
+				"size_in": 2.0,
+				"variant": "thick"
+			},
+			"4.0": {
+				"node_name": "Tee-90 4 inch  ",
+				"size_in": 4.0,
+				"variant": ""
+			}
+		},
+		"tee_ty_90": {
+			"2.0": {
+				"node_name": "Tee-TY 90 2 inch",
+				"size_in": 2.0,
+				"variant": ""
+			},
+			"2.5": {
+				"node_name": "Tee-TY 90 2 1-2 inch",
+				"size_in": 2.5,
+				"variant": ""
+			},
+			"3.0": {
+				"node_name": "Tee-TY 90 3 inch",
+				"size_in": 3.0,
+				"variant": ""
+			},
+			"4.0": {
+				"node_name": "Tee-TY 90 4 inch",
+				"size_in": 4.0,
+				"variant": ""
+			},
+			"5.0": {
+				"node_name": "Tee-TY 90 5 inch",
+				"size_in": 5.0,
+				"variant": ""
+			},
+			"6.0": {
+				"node_name": "Tee-TY 90 6 inch",
+				"size_in": 6.0,
+				"variant": ""
+			}
+		},
+		"u_trap": {
+			"2.0": {
+				"node_name": "U-TRAP 2 inch",
+				"size_in": 2.0,
+				"variant": ""
+			}
+		},
+		"wye_45": {
+			"2.0": {
+				"node_name": "Tee-Y 45 2 inch",
+				"size_in": 2.0,
+				"variant": ""
+			},
+			"3.0": {
+				"node_name": "Tee-Y 45 3 inch",
+				"size_in": 3.0,
+				"variant": ""
+			},
+			"4.0": {
+				"node_name": "Tee-Y 45 4 inch",
+				"size_in": 4.0,
+				"variant": ""
+			},
+			"6.0": {
+				"node_name": "Tee-Y 45 6 inch",
+				"size_in": 6.0,
+				"variant": ""
+			},
+			"8.0": {
+				"node_name": "Tee-Y 45 8 inch",
+				"size_in": 8.0,
+				"variant": ""
+			}
+		}
+	},
+	"family": "us_sch40",
+	"revision": 2,
+	"sizes_in": [
+		0.5,
+		0.75,
+		1.0,
+		1.25,
+		1.5,
+		2.0,
+		2.5,
+		3.0,
+		4.0,
+		5.0,
+		6.0,
+		8.0
+	],
+	"source_glb": "res://Imported Models/PipeFittings/us_sch40_fittings.glb"
+}

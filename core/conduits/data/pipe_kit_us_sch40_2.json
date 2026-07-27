@@ -1,0 +1,109 @@
+{
+	"family": "us_sch40",
+	"kit_id": "us_sch40_2",
+	"nominal_od_m": 0.0600000023841858,
+	"parts": {
+		"0": {
+			"bend_deg": 0.0,
+			"centerline_length_m": 0.199999883770943,
+			"centerline_radius_m": 0.0,
+			"mesh_res": "res://core/conduits/data/pipe_kit_us_sch40_2_part_0.res",
+			"node_name": "Pipe 2 inch",
+			"od_m": 0.0600000023841858,
+			"socket_a": {
+				"origin": [
+					0.0,
+					0.0,
+					0.0
+				],
+				"outward": [
+					0.0,
+					0.0,
+					-1.0
+				]
+			},
+			"socket_b": {
+				"origin": [
+					0.0,
+					0.00000000036087044463784,
+					0.199999883770943
+				],
+				"outward": [
+					0.0000000000000184845187929921,
+					0.000000000000221814225515905,
+					1.0
+				]
+			},
+			"takeout_m": 0.0
+		},
+		"45": {
+			"bend_deg": 45.0,
+			"centerline_length_m": 0.0380336508142199,
+			"centerline_radius_m": 0.0484259482473135,
+			"mesh_res": "res://core/conduits/data/pipe_kit_us_sch40_2_part_45.res",
+			"node_name": "Elbows 45 2 inch  ",
+			"od_m": 0.0905771106481552,
+			"socket_a": {
+				"origin": [
+					0.0,
+					0.0,
+					0.0
+				],
+				"outward": [
+					0.0,
+					0.0,
+					-1.0
+				]
+			},
+			"socket_b": {
+				"origin": [
+					0.034241795539856,
+					-0.00000000106717823467051,
+					0.0826684758067131
+				],
+				"outward": [
+					0.707106947898865,
+					0.0,
+					0.707106649875641
+				]
+			},
+			"takeout_m": 0.0484259482473135
+		},
+		"90": {
+			"bend_deg": 90.0,
+			"centerline_length_m": 0.19791878381463,
+			"centerline_radius_m": 0.125999011099339,
+			"mesh_res": "res://core/conduits/data/pipe_kit_us_sch40_2_part_90.res",
+			"node_name": "Elbows 90 2 inch Long",
+			"od_m": 0.158999994397163,
+			"socket_a": {
+				"origin": [
+					0.0,
+					0.0,
+					0.0
+				],
+				"outward": [
+					0.0,
+					0.0,
+					-1.0
+				]
+			},
+			"socket_b": {
+				"origin": [
+					0.125998988747597,
+					0.000000000128070262728208,
+					0.12599903345108
+				],
+				"outward": [
+					1.0,
+					0.0,
+					-0.00000000000000812769956318096
+				]
+			},
+			"takeout_m": 0.125999011099339
+		}
+	},
+	"revision": 2,
+	"size_in": 2.0,
+	"source_glb": "res://Imported Models/PipeFittings/us_sch40_fittings.glb"
+}

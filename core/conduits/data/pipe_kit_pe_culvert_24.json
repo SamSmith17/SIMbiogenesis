@@ -1,0 +1,20 @@
+{
+	"family": "pe_culvert",
+	"kit_id": "pe_culvert_24",
+	"nominal_od_m": 0.720629721879959,
+	"parts": {
+		"ring": {
+			"length_m": 0.187531784176826,
+			"mesh_res": "res://core/conduits/data/pipe_kit_pe_culvert_24_part_ring.res",
+			"od_m": 0.720629721879959,
+			"pitch_m": 0.17107929289341
+		}
+	},
+	"pitch_m": 0.17107929289341,
+	"ref_size_in": 8.0,
+	"revision": 1,
+	"ring_length_m": 0.187531784176826,
+	"ring_mesh_res": "res://core/conduits/data/pipe_kit_pe_culvert_24_part_ring.res",
+	"size_in": 24.0,
+	"source_glb": "res://Imported Models/PipeFittings/culvert_pe_8in.glb"
+}
