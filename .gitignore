@@ -90,3 +90,7 @@ desktop.ini
 /test_gltf.gd
 /dump_props.gd
 /debug_analyzer.gd
+# Accidental LinkageLab glTF exports dropped at the repo root
+/LinkageLab_Export_*.gltf
+# Godot-quarantined unloadable scenes
+**/*.tscn.broken
