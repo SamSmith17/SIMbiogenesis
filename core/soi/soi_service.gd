@@ -408,6 +408,26 @@ func set_clip_enabled(on: bool) -> void:
 	if not _globals_registered:
 		return
 	RenderingServer.global_shader_parameter_set("soi_clip_enabled", 1.0 if on else 0.0)
+	if not on:
+		set_section_cutaway(false, Vector3.ZERO, Vector3.FORWARD)
+
+
+## CT-style half-plane cutaway used by Elevation 3D section preview.
+## `plane_n` should point toward the section camera (that half is discarded).
+func set_section_cutaway(on: bool, plane_origin: Vector3 = Vector3.ZERO,
+		plane_n: Vector3 = Vector3.FORWARD) -> void:
+	if not _globals_registered:
+		return
+	var n := plane_n
+	if n.length_squared() < 1e-8:
+		n = Vector3.FORWARD
+	else:
+		n = n.normalized()
+	RenderingServer.global_shader_parameter_set(
+			"soi_section_plane",
+			Vector4(plane_origin.x, plane_origin.y, plane_origin.z, 1.0 if on else 0.0))
+	RenderingServer.global_shader_parameter_set(
+			"soi_section_normal", Vector4(n.x, n.y, n.z, 0.0))
 
 
 func collect_save_state() -> Dictionary:
@@ -436,9 +456,17 @@ func _register_shader_globals() -> void:
 	if not RenderingServer.global_shader_parameter_get_list().has("soi_water_table_m"):
 		RenderingServer.global_shader_parameter_add(
 			"soi_water_table_m", RenderingServer.GLOBAL_VAR_TYPE_FLOAT, 15.0)
+	if not RenderingServer.global_shader_parameter_get_list().has("soi_section_plane"):
+		RenderingServer.global_shader_parameter_add(
+			"soi_section_plane", RenderingServer.GLOBAL_VAR_TYPE_VEC4, Vector4.ZERO)
+	if not RenderingServer.global_shader_parameter_get_list().has("soi_section_normal"):
+		RenderingServer.global_shader_parameter_add(
+			"soi_section_normal", RenderingServer.GLOBAL_VAR_TYPE_VEC4,
+			Vector4(0.0, 0.0, 1.0, 0.0))
 	_globals_registered = true
 	set_clip_enabled(false)
 	RenderingServer.global_shader_parameter_set("soi_water_table_m", 15.0)
+	set_section_cutaway(false)
 	_push_shader_globals()
 
 

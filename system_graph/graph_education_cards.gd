@@ -77,6 +77,21 @@ static func card_for_item(item: Dictionary) -> Dictionary:
 						+ "Wire water → grow bed → biomass tank. Place on the Site Plan "
 						+ "for 3D shade on the sunlight factor.",
 			}
+		"compound":
+			var def_id := str(specs.get("definition_id", ""))
+			if not def_id.is_empty() or not str(specs.get("starshade_tag", "")).is_empty() \
+					or (bool(specs.get("node_banner", false)) and not str(specs.get("model_id", "")).is_empty()):
+				var title := str(specs.get("name", "Component"))
+				if title.is_empty():
+					title = "Component"
+				return {
+					"title": "%s (expand / collapse)" % title,
+					"body": "Double-click or Expand to open children; Esc / Collapse to return. "
+							+ "That keeps this super-node's identity and 3D world binding. "
+							+ "Do not Ungroup / Explode unless you mean to dissolve the shell — "
+							+ "regrouping afterward creates a generic group without StarShade context.",
+				}
+			return {}
 		"processor":
 			if role == "habitat":
 				var occ := int(specs.get("occupants", 1))
@@ -100,12 +115,22 @@ static func card_for_item(item: Dictionary) -> Dictionary:
 					"body": "Turns greywater back into usable water. Raises waste-channel "
 							+ "closure. Needs power if watts > 0 — keep AC available.",
 				}
+			if role == "biodigester" or "homebiogas" in name_l.replace(" ", "") \
+					or "home_biogas" in name_l:
+				return {
+					"title": "HomeBiogas 2.0",
+					"body": "Household biodigester: food waste (≤6 L/d) or manure (≤15 L/d) + water "
+							+ "→ biogas (60–65% CH₄) and liquid fertilizer. Yield scales with daily "
+							+ "feed and ambient temperature (best above ~17–20 °C). Gas bag 700 L; "
+							+ "wire Food Waste / Manure + Water in, Biogas + Fertilizer out.",
+				}
 			if "digest" in name_l or "compost" in name_l or "biodigest" in name_l:
 				return {
 					"title": "Organic Digester",
 					"body": "Converts blackwater / biomass into nutrients, liquid fertilizer, "
 							+ "or biogas. Wire habitat waste + food-scrap tanks to the inputs; "
-							+ "IBC biodigester ≈ 5 gal/d + 1 kg/d + 300 Wh.",
+							+ "IBC biodigester ≈ 5 gal/d + 1 kg/d + 300 Wh. HomeBiogas 2.0 is the "
+							+ "physics-driven food/manure digester with live temperature derating.",
 				}
 		"resource":
 			var kind := str(specs.get("resource_kind", ""))
@@ -138,8 +163,15 @@ static func card_for_item(item: Dictionary) -> Dictionary:
 				"biogas", "liquid_fertilizer":
 					return {
 						"title": ResourceKinds.display_name(kind) + " Store",
-						"body": "Digester output buffer. Connect to the IBC biodigester out ports "
-								+ "or merge tanks by dragging one onto another.",
+						"body": "Digester output buffer. Connect to HomeBiogas / IBC biodigester "
+								+ "out ports, or merge tanks by dragging one onto another. "
+								+ "HomeBiogas gas bag holds 0.7 m³.",
+					}
+				"food_waste", "manure":
+					return {
+						"title": ResourceKinds.display_name(kind) + " Store",
+						"body": "Digester feedstock. Wire to a HomeBiogas 2.0 feed port "
+								+ "(switch feed type in the inspector for food vs manure).",
 					}
 	return {}
 

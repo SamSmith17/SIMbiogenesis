@@ -39,8 +39,33 @@ static func unit_voc(item: Dictionary) -> float:
 	return 0.0
 
 
+## DC terminal polarity of a handle id ("pos" | "neg" | "" if not a DC terminal).
+static func _terminal_polarity(handle_id: String) -> String:
+	var h := handle_id.to_lower()
+	if h.contains("pos"):
+		return "pos"
+	if h.contains("neg"):
+		return "neg"
+	return ""
+
+
+## True when a wire joins two panels in SERIES (a + terminal to a − terminal).
+## Same-terminal joins (+→+, −→−) are PARALLEL and must NOT merge two strings
+## into one series sum. Non-DC / unknown handles default to connective so we
+## never over-split a legitimate string.
+static func _is_series_link(conn: Dictionary) -> bool:
+	var s := _terminal_polarity(str(conn.get("source_handle_id", "")))
+	var t := _terminal_polarity(str(conn.get("target_handle_id", "")))
+	if s == "" or t == "":
+		return true
+	return s != t
+
+
 ## Connected components among `node_ids` using only edges in `connections`.
-static func connected_components(node_ids: Array, connections: Array) -> Array:
+## When `series_only` is set (PV string grouping), parallel (+→+ / −→−) links are
+## ignored so 3S×6P reads as six 3-panel strings, not one 18-panel series string.
+static func connected_components(node_ids: Array, connections: Array,
+		series_only: bool = false) -> Array:
 	var allowed: Dictionary = {}
 	for nid in node_ids:
 		allowed[str(nid)] = true
@@ -53,6 +78,8 @@ static func connected_components(node_ids: Array, connections: Array) -> Array:
 		var a := str((conn as Dictionary).get("source_item_id", ""))
 		var b := str((conn as Dictionary).get("target_item_id", ""))
 		if allowed.has(a) and allowed.has(b):
+			if series_only and not _is_series_link(conn as Dictionary):
+				continue
 			(adj[a] as Array).append(b)
 			(adj[b] as Array).append(a)
 	var out: Array = []
@@ -130,7 +157,7 @@ static func branch_vocs_for_controller(model: GraphModel, controller_id: String,
 	if sources.is_empty():
 		return []
 	var conns: Array = model.get_connections_in_scope(scope_id)
-	var comps := connected_components(sources, conns)
+	var comps := connected_components(sources, conns, true)
 	var branch_vocs: Array = []
 	for comp in comps:
 		branch_vocs.append(component_string_voc(comp as Array, model, ambient_c))
@@ -214,3 +241,108 @@ static func _array_has_id(arr: Array, needle: String) -> bool:
 		if str(v) == needle:
 			return true
 	return false
+
+
+# ---------------------------------------------------------------------------
+# Nesting-aware (flattened-graph) variants
+# ---------------------------------------------------------------------------
+## These operate on the FLATTENED connection graph (GraphNesting.flat_connections)
+## so a PV string split across super-node (compound) boundaries — panels inside a
+## group wired to a controller outside it, at any nesting depth — is traced and
+## Voc-checked as one circuit. They also scan EVERY scope at once, so a fault
+## deep in a collapsed sub-canvas is caught without drilling in.
+
+static func pv_sources_for_controller_flat(model: GraphModel, controller_id: String,
+		flat_conns: Array) -> Array[String]:
+	var out: Array[String] = []
+	if model == null or controller_id.is_empty():
+		return out
+	var visited: Dictionary = {controller_id: true}
+	var q: Array[String] = [controller_id]
+	while not q.is_empty():
+		var cur: String = q.pop_front()
+		for conn in flat_conns:
+			var c: Dictionary = conn
+			var pol := str(c.get("polarity", ""))
+			if pol not in ["positive", "negative", "pvPositive", "pvNegative"]:
+				continue
+			var other := ""
+			if str(c.get("source_item_id", "")) == cur:
+				other = str(c.get("target_item_id", ""))
+			elif str(c.get("target_item_id", "")) == cur:
+				other = str(c.get("source_item_id", ""))
+			if other.is_empty() or visited.has(other):
+				continue
+			visited[other] = true
+			var it := model.get_item(other)
+			if it.is_empty():
+				continue
+			if is_pv_source_item(it):
+				out.append(other)
+			q.append(other)
+	return out
+
+
+static func branch_vocs_for_controller_flat(model: GraphModel, controller_id: String,
+		flat_conns: Array, ambient_c: float = 25.0) -> Array:
+	var sources := pv_sources_for_controller_flat(model, controller_id, flat_conns)
+	if sources.is_empty():
+		return []
+	var comps := connected_components(sources, flat_conns, true)
+	var branch_vocs: Array = []
+	for comp in comps:
+		branch_vocs.append(component_string_voc(comp as Array, model, ambient_c))
+	return branch_vocs
+
+
+## All over-voltage faults across the WHOLE graph (every scope, nesting-aware).
+static func find_overvoltage_faults_flat(model: GraphModel, ambient_c: float = 25.0) -> Array:
+	var faults: Array = []
+	if model == null:
+		return faults
+	var flat_conns := GraphNesting.flat_connections(model)
+	for item in GraphNesting.walk_items(model, "root"):
+		if not (item is Dictionary):
+			continue
+		if str((item as Dictionary).get("type", "")) != "controller":
+			continue
+		var cid := str((item as Dictionary).get("id", ""))
+		var max_allowed := controller_max_voc(item as Dictionary)
+		for bv in branch_vocs_for_controller_flat(model, cid, flat_conns, ambient_c):
+			if float(bv) > max_allowed + 0.5:
+				faults.append({
+					"controller_id": cid,
+					"string_voc": float(bv),
+					"max_voc": max_allowed,
+				})
+				break
+	return faults
+
+
+## Mark PV connections (real wires, by origin id) whose string exceeds a
+## controller Voc limit — flattened so boundary/nested wires flag correctly.
+static func update_connection_voltage_flags_flat(model: GraphModel, ambient_c: float = 25.0) -> void:
+	if model == null:
+		return
+	var flat_conns := GraphNesting.flat_connections(model)
+	var fault_ctrls: Dictionary = {}
+	for f in find_overvoltage_faults_flat(model, ambient_c):
+		fault_ctrls[str((f as Dictionary).get("controller_id", ""))] = true
+	# Precompute PV-source membership per faulted controller once.
+	var faulted_sources: Dictionary = {}
+	for ctrl_id in fault_ctrls:
+		for sid in pv_sources_for_controller_flat(model, str(ctrl_id), flat_conns):
+			faulted_sources[str(sid)] = true
+	for conn in flat_conns:
+		var c: Dictionary = conn
+		var pol := str(c.get("polarity", ""))
+		if pol not in ["positive", "negative", "pvPositive", "pvNegative"]:
+			continue
+		var sid := str(c.get("source_item_id", ""))
+		var tid := str(c.get("target_item_id", ""))
+		var mismatch := fault_ctrls.has(sid) or fault_ctrls.has(tid) \
+				or faulted_sources.has(sid) or faulted_sources.has(tid)
+		var conn_id := str(c.get("id", ""))
+		var real := model.get_connection(conn_id)
+		if not real.is_empty() and bool(real.get("voltage_mismatch", false)) != mismatch:
+			model.update_connection(conn_id, {"voltage_mismatch": mismatch})

@@ -31,6 +31,13 @@ var items: Array = []        # Array[Dictionary]
 var connections: Array = []  # Array[Dictionary]
 ## scope_id -> {id, parent_scope_id, owner_compound_id, title}
 var scopes: Dictionary = {}
+## Component definitions (SketchUp-style): def_id -> {id, name, icon, rev,
+## subgraph:{items[], connections[], exposed_ports[]}}. A compound INSTANCE item
+## carries specs.definition_id back to one of these; editing any instance's
+## interior recaptures the definition and re-stamps all sibling instances.
+## Document-local (round-trips in the save) so a graph is portable without the
+## user's library. See system_graph/data/graph_component_defs.gd.
+var definitions: Dictionary = {}
 
 var _item_counter: int = 0
 var _connection_counter: int = 0
@@ -46,11 +53,49 @@ var last_line_style: String = "bezier"
 var _item_index: Dictionary = {}
 var _conn_index: Dictionary = {}
 
+## Type bucket index: type(String) -> Array[Dictionary] of item references
+## (all scopes). Rebuilt lazily when `_type_index_dirty`. The per-tick sim passes
+## (`_tick_graph_renewables/csp/heliostat/...`) used to each scan the full item
+## list filtering by type — with N items and ~11 passes that was ~11·N string
+## compares per tick. `items_of_type()` collapses that to one build per structural
+## change, shared by every consumer. Buckets hold the SAME dict references as
+## `items`, so in-place spec mutation stays visible; only add/remove/type-change
+## invalidates the buckets.
+var _type_index: Dictionary = {}
+var _type_index_dirty: bool = true
+var _type_index_count: int = -1
+
 
 func _rebuild_item_index() -> void:
 	_item_index.clear()
 	for item: Dictionary in items:
 		_item_index[str(item.get("id", ""))] = item
+	_type_index_dirty = true
+
+
+## Items of a given type across all scopes. Returns a cached, shared Array — do
+## NOT mutate the returned array (add/remove items via the CRUD methods so the
+## index stays coherent). Safe to read every tick.
+func items_of_type(ty: String) -> Array:
+	# Self-heal against direct `items` array mutation (selftests) via size drift,
+	# same guard the id index uses in get_item().
+	if _type_index_dirty or _type_index_count != items.size():
+		_rebuild_type_index()
+	return _type_index.get(ty, EMPTY_ITEM_ARRAY)
+
+
+const EMPTY_ITEM_ARRAY: Array = []
+
+
+func _rebuild_type_index() -> void:
+	_type_index.clear()
+	for item: Dictionary in items:
+		var ty: String = str(item.get("type", ""))
+		if not _type_index.has(ty):
+			_type_index[ty] = []
+		(_type_index[ty] as Array).append(item)
+	_type_index_dirty = false
+	_type_index_count = items.size()
 
 
 func _rebuild_conn_index() -> void:
@@ -104,6 +149,7 @@ func add_item(item: Dictionary) -> void:
 		push_warning("GraphModel.add_item: id '%s' already exists — merging instead of duplicating" % iid)
 		for key: String in item:
 			existing[key] = item[key]
+		_type_index_dirty = true
 		changed.emit("add_item")
 		return
 	if not item.has("scope_id"):
@@ -113,15 +159,25 @@ func add_item(item: Dictionary) -> void:
 		ensure_scope(sid)
 	items.append(item)
 	_item_index[iid] = item
+	_type_index_dirty = true
 	changed.emit("add_item")
 
 
 func remove_item(item_id: String) -> void:
+	# Cascade into a compound's child scope (nested super-nodes) so deleting a
+	# group never orphans its interior. Collect+delete the whole subtree, then
+	# fall through to remove the compound node + its own boundary wires below.
+	var removed := get_item(item_id)
+	if not removed.is_empty() and str(removed.get("type", "")) == "compound":
+		var child_scope := str(removed.get("child_scope_id", ""))
+		if not child_scope.is_empty():
+			_remove_scope_subtree(child_scope)
 	for i in range(items.size() - 1, -1, -1):
 		if items[i].get("id", "") == item_id:
 			items.remove_at(i)
 			break
 	_item_index.erase(item_id)
+	_type_index_dirty = true
 	# Cascade: remove any connections touching this item
 	for i in range(connections.size() - 1, -1, -1):
 		var c: Dictionary = connections[i]
@@ -129,6 +185,46 @@ func remove_item(item_id: String) -> void:
 			_conn_index.erase(str(c.get("id", "")))
 			connections.remove_at(i)
 	changed.emit("remove_item")
+
+
+## Delete every item + connection in `root_scope` and all descendant scopes,
+## and drop those scope entries. Silent (no per-item signal) — the caller emits
+## once. Used by remove_item's compound cascade.
+func _remove_scope_subtree(root_scope: String) -> void:
+	var scope_ids: Array = []
+	_collect_scope_subtree(root_scope, scope_ids)
+	if scope_ids.is_empty():
+		return
+	var scope_set: Dictionary = {}
+	for s in scope_ids:
+		scope_set[str(s)] = true
+	for i in range(items.size() - 1, -1, -1):
+		var it: Dictionary = items[i]
+		if scope_set.has(str(it.get("scope_id", ""))):
+			_item_index.erase(str(it.get("id", "")))
+			items.remove_at(i)
+	for i in range(connections.size() - 1, -1, -1):
+		var c: Dictionary = connections[i]
+		if scope_set.has(str(c.get("scope_id", ""))):
+			_conn_index.erase(str(c.get("id", "")))
+			connections.remove_at(i)
+	for s in scope_ids:
+		scopes.erase(str(s))
+	_type_index_dirty = true
+
+
+func _collect_scope_subtree(scope_id: String, out: Array) -> void:
+	if scope_id.is_empty() or scope_id == ROOT_SCOPE_ID or out.has(scope_id):
+		return
+	out.append(scope_id)
+	for it: Dictionary in items:
+		if str(it.get("scope_id", "")) != scope_id:
+			continue
+		if str(it.get("type", "")) != "compound":
+			continue
+		var cs := str(it.get("child_scope_id", ""))
+		if not cs.is_empty():
+			_collect_scope_subtree(cs, out)
 
 
 func get_item(item_id: String) -> Dictionary:
@@ -150,6 +246,8 @@ func update_item(item_id: String, updates: Dictionary) -> void:
 		return
 	for key: String in updates:
 		item[key] = updates[key]
+	if updates.has("type"):
+		_type_index_dirty = true
 	changed.emit("update_item")
 
 
@@ -164,6 +262,7 @@ func add_connection(conn: Dictionary) -> void:
 	if not conn.has("scope_id"):
 		conn["scope_id"] = ROOT_SCOPE_ID
 	_apply_light_conduit_default(conn)
+	_apply_direct_intake_default(conn)
 	connections.append(conn)
 	_conn_index[str(conn.get("id", ""))] = conn
 	_link_handle(
@@ -194,6 +293,19 @@ func _apply_light_conduit_default(conn: Dictionary) -> void:
 		if not lc.is_empty():
 			conn["conduit_type"] = lc
 			return
+
+
+## Siphon water-in is a body intake (no hose). Stamp direct_intake + hide 3D
+## unless the caller already set visible_3d explicitly.
+func _apply_direct_intake_default(conn: Dictionary) -> void:
+	if bool(conn.get("direct_intake", false)):
+		if not conn.has("visible_3d") or conn.get("visible_3d") == null:
+			conn["visible_3d"] = false
+		return
+	if ConduitKinds.is_direct_intake_connection(conn, self):
+		conn["direct_intake"] = true
+		if not conn.has("visible_3d") or conn.get("visible_3d") == null:
+			conn["visible_3d"] = false
 
 
 func remove_connection(conn_id: String) -> void:
@@ -245,7 +357,15 @@ func update_connection(conn_id: String, updates: Dictionary) -> void:
 	for conn: Dictionary in connections:
 		if conn.get("id", "") == conn_id:
 			for key: String in updates:
-				conn[key] = updates[key]
+				# null = erase (used by tri-state conduit prefs: Follow global).
+				if updates[key] == null:
+					conn.erase(key)
+				elif key == "conduit_style" and updates[key] is Dictionary:
+					# Keep Colors as Color in memory; serialize() writes raw arrays.
+					conn[key] = ConduitStylePresets.style_dict_from_raw(
+						updates[key] as Dictionary)
+				else:
+					conn[key] = updates[key]
 			changed.emit("update_connection")
 			return
 
@@ -314,6 +434,8 @@ func clear() -> void:
 	connections.clear()
 	_item_index.clear()
 	_conn_index.clear()
+	_type_index.clear()
+	_type_index_dirty = true
 	scopes = {}
 	_ensure_root_scope()
 	changed.emit("clear")
@@ -355,11 +477,22 @@ func total_cost() -> float:
 
 func serialize() -> Dictionary:
 	_ensure_root_scope()
+	# JSON cannot round-trip Godot Color; write conduit_style as raw arrays.
+	var ser_conns: Array = []
+	for c: Variant in connections:
+		if not (c is Dictionary):
+			continue
+		var cd: Dictionary = (c as Dictionary).duplicate(true)
+		if cd.get("conduit_style") is Dictionary:
+			cd["conduit_style"] = ConduitStylePresets.style_to_raw(
+				cd["conduit_style"] as Dictionary)
+		ser_conns.append(cd)
 	return {
-		"version":            5,
+		"version":            7,
 		"items":              items.duplicate(true),
-		"connections":        connections.duplicate(true),
+		"connections":        ser_conns,
 		"scopes":             scopes.duplicate(true),
+		"definitions":        definitions.duplicate(true),
 		"item_counter":       _item_counter,
 		"connection_counter": _connection_counter,
 		"last_line_style":    last_line_style,
@@ -370,7 +503,11 @@ func deserialize(data: Dictionary) -> void:
 	items       = []
 	connections = []
 	scopes      = {}
+	definitions = {}
 	_ensure_root_scope()
+	# v7: component definition registry (older saves simply have none → no-op).
+	if data.get("definitions") is Dictionary:
+		definitions = (data["definitions"] as Dictionary).duplicate(true)
 	if data.get("items") is Array:
 		# Drop any duplicate-id rows a buggy/legacy save may carry (keep first).
 		# Two rows sharing an id render as overlapping twins where only one moves
@@ -447,6 +584,50 @@ func get_scope(scope_id: String) -> Dictionary:
 	return {}
 
 
+# ---------------------------------------------------------------------------
+# Component definitions (SketchUp-style shared templates)
+# ---------------------------------------------------------------------------
+
+func get_definition(def_id: String) -> Dictionary:
+	if def_id.is_empty() or not definitions.has(def_id):
+		return {}
+	return definitions[def_id] as Dictionary
+
+
+## Insert/replace a definition (a deep copy is stored so callers can mutate their
+## own dict). Emits `changed` so any UI keyed on definitions refreshes.
+func put_definition(def: Dictionary) -> void:
+	var did := str(def.get("id", ""))
+	if did.is_empty():
+		return
+	definitions[did] = def.duplicate(true)
+	changed.emit("definition")
+
+
+## Drop a definition when no live instance still references it (prevents an
+## unbounded registry after all instances are deleted / made unique).
+func remove_definition_if_unused(def_id: String) -> void:
+	if def_id.is_empty() or not definitions.has(def_id):
+		return
+	for item: Dictionary in items:
+		if str(item.get("type", "")) == "compound" \
+				and str((item.get("specs", {}) as Dictionary).get("definition_id", "")) == def_id:
+			return
+	definitions.erase(def_id)
+
+
+## Every live compound instance item bound to `def_id`.
+func instances_of_definition(def_id: String) -> Array:
+	var out: Array = []
+	if def_id.is_empty():
+		return out
+	for item: Dictionary in items:
+		if str(item.get("type", "")) == "compound" \
+				and str((item.get("specs", {}) as Dictionary).get("definition_id", "")) == def_id:
+			out.append(item)
+	return out
+
+
 func _ensure_root_scope() -> void:
 	if scopes.has(ROOT_SCOPE_ID):
 		return
@@ -461,6 +642,10 @@ func _ensure_root_scope() -> void:
 func _migrate_item_specs(item: Dictionary) -> void:
 	var ty: String = str(item.get("type", ""))
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	# v6: legacy generic compounds stored promotion metadata in boundary_links;
+	# the nested super-node model uses live exposed_ports. Convert on load.
+	if ty == "compound":
+		GraphNesting.migrate_boundary_links(specs)
 	if ty == "processor":
 		# Capture which res_in_N ports shift when migrate strips auto-inserted
 		# electric power inputs, so saved wires can be remapped (below).
@@ -551,6 +736,9 @@ func _migrate_connection(conn: Dictionary) -> void:
 	if not str(conn.get("resource_type", "")).is_empty():
 		conn["resource_type"] = ResourceKinds.normalize_kind(str(conn.get("resource_type", "")))
 	ConduitKinds.migrate_connection_conduit_fields(conn)
+	if conn.get("conduit_style") is Dictionary:
+		conn["conduit_style"] = ConduitStylePresets.style_dict_from_raw(
+			conn["conduit_style"] as Dictionary)
 	if not conn.has("line_style"):
 		conn["line_style"] = "bezier"
 	if not conn.has("curve_tension"):
@@ -569,21 +757,35 @@ func item_scene_path(item: Dictionary) -> String:
 
 
 ## True when both connection endpoints have a resolvable 3D scene link
-## (scene path, bound prop, or site placement with model).
+## (scene path or bound placed prop). PBIs never route in 3D.
 func connection_is_3d_routable(conn: Dictionary) -> bool:
 	var src := get_item(str(conn.get("source_item_id", "")))
 	var tgt := get_item(str(conn.get("target_item_id", "")))
 	if src.is_empty() or tgt.is_empty():
 		return false
+	if str(src.get("type", "")) == "pbi" or str(tgt.get("type", "")) == "pbi":
+		return false
 	return _item_has_3d_anchor(src) and _item_has_3d_anchor(tgt)
 
 
-func _item_has_3d_anchor(item: Dictionary) -> bool:
+func item_has_3d_anchor(item: Dictionary) -> bool:
+	# PBI catchments stay graph-only — no 3D nodes or conduit endpoints.
+	if str(item.get("type", "")) == "pbi":
+		return false
 	if not item_scene_path(item).is_empty():
 		return true
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	if not str(specs.get("bound_prop_id", "")).is_empty():
 		return true
+	var itype := str(item.get("type", ""))
+	# Resource / catchment: site chip + model_id alone is NOT enough — the
+	# player must place a real world twin (bound_prop) before 3D wires appear.
+	if itype == "resource" or itype == "catchment":
+		return false
 	if GraphSiteLayout.has_site_coords(item) and not str(specs.get("model_id", "")).is_empty():
 		return true
 	return false
+
+
+func _item_has_3d_anchor(item: Dictionary) -> bool:
+	return item_has_3d_anchor(item)

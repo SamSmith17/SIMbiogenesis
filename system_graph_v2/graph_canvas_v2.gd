@@ -1,27 +1,22 @@
 extends "res://system_graph/graph_canvas.gd"
 
 const InteractionController := preload("res://system_graph_v2/interaction_controller.gd")
-const NodeRenderer := preload("res://system_graph_v2/node_renderer.gd")
 const WireRenderer := preload("res://system_graph_v2/wire_renderer.gd")
 
 var _interaction: GraphInteractionControllerV2
-var _node_renderer: GraphNodeRendererV2
 var _wire_renderer: GraphWireRendererV2
 
 var _legend_visible: bool = false
 var _hover_port: Dictionary = {}
 
-const V2_NODE_SHADOW := Color(0.0, 0.0, 0.0, 0.26)
-const V2_TITLE_GLOW := Color(0.13, 0.83, 0.93, 0.14)
-const V2_PORT_RING := Color(0.95, 0.97, 1.0, 0.75)
-
-var _rounded_rect_style: StyleBoxFlat = null
+# V2_NODE_SHADOW / V2_TITLE_GLOW / V2_PORT_RING, _draw_rounded_rect, and the
+# _draw_resource_flow_arrows_* helpers now live in the base graph_canvas.gd (single
+# source of truth) and are inherited here.
 
 
 func _ready() -> void:
 	super._ready()
 	_interaction = InteractionController.new()
-	_node_renderer = NodeRenderer.new()
 	_wire_renderer = WireRenderer.new()
 
 
@@ -44,10 +39,27 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
 		_interaction.update_pointer(mm.position)
-		var hovered := _item_at_screen(mm.position)
-		_interaction.hover_item_id = hovered.get("id", "") as String
-		_hover_port = _port_at_screen(mm.position, "", "", _port_grab_radius())
+		# _port_at_screen is O(items x connections); only redraw the tooltip when the
+		# hovered port identity actually changes (mirrors the base _update_site_hover
+		# guard). The old _item_at_screen hover write was pure waste -- hover_item_id
+		# is never read anywhere.
+		var port := _port_at_screen(mm.position, "", "", _port_grab_radius())
+		var before := _hover_port_identity()
+		_hover_port = port
+		if _hover_port_identity() != before:
+			queue_redraw()
 	super._gui_input(event)
+
+
+## Stable identity of the currently-hovered port ("" when none) so motion events
+## that don't change which port is under the cursor skip the tooltip redraw.
+func _hover_port_identity() -> String:
+	if _hover_port.is_empty():
+		return ""
+	return "%s|%s" % [
+		str(_hover_port.get("item_id", "")),
+		str(_hover_port.get("handle_id", "")),
+	]
 
 
 func _draw() -> void:
@@ -55,7 +67,6 @@ func _draw() -> void:
 	# Reuse the per-draw visible cache (still populated by super._draw) for the
 	# V2 overlay passes below, then release it so input hit-testing recomputes.
 	_draw_cache_active = true
-	_draw_v2_badges()
 	_draw_v2_legend()
 	_draw_v2_connection_feedback()
 	_draw_v2_hover_port_tooltip()
@@ -69,10 +80,6 @@ func set_legend_visible(on: bool) -> void:
 
 func is_legend_visible() -> bool:
 	return _legend_visible
-
-
-func _draw_v2_badges() -> void:
-	pass  # Limit badges (3500W cap, SOC thresholds) live in inspector only.
 
 
 func _draw_v2_legend() -> void:
@@ -134,8 +141,16 @@ func _draw_v2_connection_feedback() -> void:
 	else:
 		txt = "Drag to a port — or drop on a tank body to add a hub port"
 	var p := _interaction.last_pointer_pos + Vector2(14.0, -10.0)
+	var hint := "Alt+drag hub port to rotate · Touch: drag ports/nodes · 2-finger pan"
+	# Background plate so the drag-hint text stays readable over busy graph content
+	# (the hover-port tooltip already does this; the drag feedback didn't).
+	var w1 := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var w2 := fnt.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, fs - 1).x
+	var plate := Rect2(p - Vector2(6.0, 12.0), Vector2(maxf(w1, w2) + 12.0, 32.0))
+	draw_rect(plate, Color(0.05, 0.08, 0.16, 0.85), true)
+	draw_rect(plate, Color(0.26, 0.34, 0.50, 0.7), false, 1.0)
 	draw_string(fnt, p, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
-	draw_string(fnt, p + Vector2(0.0, 14.0), "Alt+drag hub port to rotate · Touch: drag ports/nodes · 2-finger pan", HORIZONTAL_ALIGNMENT_LEFT, -1, fs - 1, Color(0.75, 0.83, 0.95, 0.82))
+	draw_string(fnt, p + Vector2(0.0, 14.0), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, fs - 1, Color(0.75, 0.83, 0.95, 0.82))
 
 
 func _draw_v2_hover_port_tooltip() -> void:
@@ -840,91 +855,6 @@ func _draw_battery_bank_compound_body_v2(rect: Rect2, specs: Dictionary) -> void
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(8.0, rect.size.y - 4.0), "Per-cell bank preview · Enter to expand", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.78, 0.98, 0.86, 0.9))
 
 
-func _draw_battery_body(rect: Rect2, specs: Dictionary) -> void:
-	var fnt := ThemeDB.fallback_font
-	var fsize := _fit_font_size(rect, 3, 10.0, 12.0)
-	var soc := clampf(float(specs.get("soc", 0.5)), 0.0, 1.0)
-	var x := rect.position.x + 8.0
-	var y := rect.position.y + fsize + 4.0
-	var kwh := float(specs.get("kwh", 0.0))
-	draw_string(fnt, Vector2(x, y), "%.0f%%  %.1fkWh" % [soc * 100.0, kwh], HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.94, 0.99, 0.95, 1.0))
-	y += fsize + 4.0
-
-	# Battery silhouette: rounded can + top terminal cap.
-	var body := Rect2(Vector2(x, y), Vector2(rect.size.x - 16.0, rect.size.y - (y - rect.position.y) - 6.0))
-	_draw_rounded_rect(body, Color(0.07, 0.15, 0.12, 0.97), 9, Color(0.35, 0.90, 0.62, 0.52), 1)
-	var cap_w := maxf(14.0, body.size.x * 0.22)
-	var cap_h := 4.0
-	var cap := Rect2(Vector2(body.position.x + (body.size.x - cap_w) * 0.5, body.position.y - cap_h - 1.0), Vector2(cap_w, cap_h))
-	_draw_rounded_rect(cap, Color(0.18, 0.27, 0.22, 0.96), 2, Color(0.52, 0.95, 0.72, 0.35), 1)
-
-	# Full-body reservoir: charge fills entire battery interior from bottom.
-	var reservoir := Rect2(body.position + Vector2(3.0, 3.0), body.size - Vector2(6.0, 6.0))
-	_draw_rounded_rect(reservoir, Color(0.04, 0.08, 0.07, 0.98), 6, Color(0.26, 0.40, 0.33, 0.8), 1)
-	var fill_h := maxf(2.0, (reservoir.size.y - 2.0) * soc)
-	var fill_col := Color(0.25, 0.92, 0.56, 0.96) if soc > 0.28 else Color(0.95, 0.63, 0.22, 0.95)
-	var reservoir_fill := Rect2(
-		Vector2(reservoir.position.x + 1.0, reservoir.position.y + reservoir.size.y - 1.0 - fill_h),
-		Vector2(reservoir.size.x - 2.0, fill_h)
-	)
-	_draw_rounded_rect(reservoir_fill, fill_col, 5)
-	draw_rect(Rect2(Vector2(reservoir_fill.position.x, reservoir_fill.position.y), Vector2(reservoir_fill.size.x, minf(2.0, reservoir_fill.size.y))), Color(0.88, 1.0, 0.92, 0.32), true)
-
-	# Overlay text + optional per-cell bars float above the reservoir fill.
-	var info_x := reservoir.position.x + 7.0
-	var info_y := body.position.y + fsize
-	draw_string(fnt, Vector2(info_x, info_y), "%.0fV  %.0fAh" % [float(specs.get("voltage", 12.0)), float(specs.get("ah", 0.0))], HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 1), Color(0.80, 0.95, 0.87, 0.96))
-	info_y += maxi(9, fsize - 1) + 3.0
-	draw_string(fnt, Vector2(info_x, info_y), "Charge %.0f%%" % (soc * 100.0), HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 1), Color(0.66, 0.93, 0.77, 0.95))
-	info_y += maxi(8, fsize - 2) + 5.0
-
-	var cell_view_mode := bool(specs.get("cell_view_mode", false))
-	var cell_gap := 2.0
-	var cell_cols := 8 if cell_view_mode else 4
-	var cell_area_w := maxf(22.0, reservoir.size.x - 14.0)
-	var cw := (cell_area_w - float(cell_cols - 1) * cell_gap) / float(cell_cols)
-	for i in range(cell_cols):
-		var cp := Vector2(info_x + float(i) * (cw + cell_gap), info_y)
-		var ch := maxf(9.0, reservoir.end.y - cp.y - 4.0)
-		var crect := Rect2(cp, Vector2(cw, ch))
-		_draw_rounded_rect(crect, Color(0.08, 0.21, 0.15, 0.52), 2, Color(0.46, 0.92, 0.69, 0.26), 1)
-		var phase := _flow_phase + float(i) * 0.55
-		var fill := clampf(soc + 0.07 * sin(phase), 0.06, 0.98)
-		var fh := (crect.size.y - 2.0) * fill
-		var cfill := Rect2(Vector2(crect.position.x + 1.0, crect.position.y + crect.size.y - 1.0 - fh), Vector2(crect.size.x - 2.0, fh))
-		_draw_rounded_rect(cfill, Color(0.39, 0.90, 0.62, 0.78), 2)
-	if cell_view_mode:
-		draw_string(fnt, Vector2(info_x, rect.position.y + rect.size.y - 2.0), "Cell detail mode", HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 2), Color(0.76, 0.96, 0.85, 0.92))
-
-
-func _draw_node_frame(rect: Rect2, border_col: Color) -> void:
-	# More sculpted rounded containers in V2.
-	_draw_rounded_rect(Rect2(rect.position + Vector2(2.0, 3.0), rect.size), V2_NODE_SHADOW, 12)
-	_draw_rounded_rect(rect, Color(0.07, 0.10, 0.19, 0.96), 12, Color(border_col.r * 0.55, border_col.g * 0.55, border_col.b * 0.55, 0.75), 1)
-	_draw_rounded_rect(rect.grow(-1.5), Color(0, 0, 0, 0), 10, Color(border_col.r, border_col.g, border_col.b, 0.42), 1)
-
-
-func _draw_title_band(rect: Rect2, band_h: float, title: String, accent: Color) -> void:
-	var band := Rect2(rect.position, Vector2(rect.size.x, band_h))
-	_draw_rounded_rect(band, Color(accent.r, accent.g, accent.b, 0.22), 11)
-	_draw_rounded_rect(Rect2(band.position, Vector2(band.size.x, 2.0)), Color(V2_TITLE_GLOW.r, V2_TITLE_GLOW.g, V2_TITLE_GLOW.b, 0.72), 2)
-	var fsize := _fit_title_font_size(band_h)
-	var cy := rect.position.y + band_h * 0.5 + fsize * 0.38
-	var pad_x := 10.0
-	var max_w := maxf(8.0, rect.size.x - pad_x * 2.0)
-	_draw_fitted_label(Vector2(rect.position.x + pad_x, cy), title, max_w, fsize, Color(0.93, 0.95, 0.99, 1.0))
-
-
-func _draw_rounded_rect(rect: Rect2, fill: Color, radius: int, border_col: Color = Color(0, 0, 0, 0), border_w: int = 0) -> void:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = fill
-	sb.set_corner_radius_all(radius)
-	if border_w > 0 and border_col.a > 0.0:
-		sb.set_border_width_all(border_w)
-		sb.border_color = border_col
-	draw_style_box(sb, rect)
-
-
 func _draw_port_dot(screen_pos: Vector2, polarity: String, resource_kind: String = "") -> void:
 	var col := _wire_color_for_port(polarity, resource_kind)
 	var touch := _touch_input_active() or DisplayServer.is_touchscreen_available()
@@ -945,150 +875,3 @@ func _draw_port_dot(screen_pos: Vector2, polarity: String, resource_kind: String
 	draw_circle(screen_pos, r + 0.4, V2_PORT_RING, false, 1.0)
 	if touch:
 		draw_circle(screen_pos, r + 8.0, Color(col.r, col.g, col.b, 0.10), false, 2.0)
-
-
-func _draw_wire_bezier(from: Vector2, from_tang: Vector2,
-		to: Vector2, to_tang_in: Vector2,
-		col: Color, width: float, flow_active: bool,
-		flow_watts: float, reverse_chase: bool, curve_tension: float = 1.0) -> void:
-	var ctrl := _wire_bezier_controls(from, from_tang, to, to_tang_in, curve_tension)
-	var c1: Vector2 = ctrl["c1"]
-	var c2: Vector2 = ctrl["c2"]
-	var gscale := _wire_glow_scale_from_watts(flow_watts)
-	var body_w := maxf(2.2, width + 0.6 + gscale * 1.3)
-
-	# Base depth stroke
-	_draw_bezier_stroke(from, c1, c2, to, 30, Color(0.01, 0.01, 0.03, 0.32), body_w + 2.4)
-	# Colored glow
-	var glow_alpha := (0.12 + 0.20 * gscale) if flow_active else 0.08
-	_draw_bezier_stroke(from, c1, c2, to, 30, Color(col.r, col.g, col.b, glow_alpha), body_w + 3.0 + 3.2 * gscale)
-	# Main stroke
-	var core := Color(lerpf(col.r, 1.0, 0.20 * gscale), lerpf(col.g, 1.0, 0.18 * gscale), lerpf(col.b, 1.0, 0.12 * gscale), 0.72 + 0.26 * gscale)
-	_draw_bezier_stroke(from, c1, c2, to, 34, core, body_w)
-	# Hot inner line
-	_draw_bezier_stroke(from, c1, c2, to, 34, Color(1.0, 1.0, 1.0, 0.18 + 0.28 * gscale), maxf(1.0, body_w * 0.24))
-
-	if flow_active:
-		# Number of arrows scales with power (1–6) so high-wattage wires feel more alive
-		var gscale_v2 := _wire_glow_scale_from_watts(flow_watts)
-		var arrow_count := 3 + int(gscale_v2 * 3.0)
-		var arrow_gap   := maxf(0.12, 0.22 - gscale_v2 * 0.07)
-		var arrow_t     := fposmod(_flow_phase * 0.27, 1.0)
-		if reverse_chase:
-			arrow_t = 1.0 - arrow_t
-		for i in arrow_count:
-			var t := fposmod(arrow_t + float(i) * arrow_gap, 1.0)
-			ResourceEdgeVis.draw_bezier_flow_arrow(
-					self, from, c1, c2, to, t, col, body_w, reverse_chase, gscale_v2)
-
-
-## V2 resource wires — glow + directional arrows (parity with power wires).
-func _draw_resource_wire_bezier(from: Vector2, from_tang: Vector2,
-		to: Vector2, to_tang_in: Vector2,
-		col: Color, width: float, flow_active: bool,
-		reverse_chase: bool, curve_tension: float = 1.0,
-		flow_rate: float = 0.0, resource_kind: String = "", sankey_scale: bool = true) -> void:
-	var ctrl := _wire_bezier_controls(from, from_tang, to, to_tang_in, curve_tension)
-	var c1: Vector2 = ctrl["c1"]
-	var c2: Vector2 = ctrl["c2"]
-	var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, flow_active)
-	var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
-
-	_draw_bezier_stroke(from, c1, c2, to, 24,
-		Color(col.r, col.g, col.b, col.a * 0.18), maxf(1.4, width * 0.6))
-	_draw_bezier_stroke(from, c1, c2, to, 26, Color(0.01, 0.01, 0.03, 0.28), body_w + 2.0)
-	if flow_active and gscale > 0.01:
-		var glow_a := 0.08 + 0.14 * gscale
-		_draw_bezier_stroke(from, c1, c2, to, 28,
-			Color(col.r, col.g, col.b, glow_a), body_w + 2.4 + 2.6 * gscale)
-	var core := Color(
-		lerpf(col.r, 1.0, 0.16 * gscale),
-		lerpf(col.g, 1.0, 0.14 * gscale),
-		lerpf(col.b, 1.0, 0.10 * gscale),
-		0.68 + 0.28 * gscale if flow_active else col.a)
-	_draw_bezier_stroke(from, c1, c2, to, 32, core, maxf(1.8, body_w))
-	if flow_active and gscale > 0.01:
-		_draw_bezier_stroke(from, c1, c2, to, 32,
-			Color(1.0, 1.0, 1.0, 0.12 + 0.18 * gscale), maxf(1.0, body_w * 0.22))
-		_draw_resource_flow_arrows_bezier(from, c1, c2, to, col, body_w, reverse_chase, gscale)
-
-
-func _draw_resource_wire_path(points: Array, end_tangents: Array,
-		col: Color, width: float, flow_active: bool,
-		reverse_chase: bool, curve_tension: float = 1.0,
-		flow_rate: float = 0.0, resource_kind: String = "", sankey_scale: bool = true) -> void:
-	if points.size() < 2:
-		return
-	for seg: int in range(points.size() - 1):
-		var from: Vector2 = points[seg] as Vector2
-		var to: Vector2 = points[seg + 1] as Vector2
-		var from_t: Vector2
-		var to_t_in: Vector2
-		if seg == 0:
-			from_t = end_tangents[0] as Vector2 if end_tangents.size() > 0 else (to - from).normalized()
-		else:
-			from_t = (to - from).normalized()
-		if seg == points.size() - 2:
-			to_t_in = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
-		else:
-			to_t_in = (from - to).normalized()
-		_draw_resource_wire_bezier(from, from_t, to, to_t_in, col, width, false,
-				reverse_chase, curve_tension, flow_rate, resource_kind, sankey_scale)
-	if flow_active:
-		var sample_fn := func(t: float) -> Vector2:
-			return _sample_wire_path(points, end_tangents, t, curve_tension)
-		var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, true)
-		var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
-		_draw_resource_flow_arrows_on_sample(sample_fn, col, body_w, reverse_chase, gscale)
-
-
-func _draw_resource_wire_orthogonal_path(points: Array, end_tangents: Array,
-		col: Color, width: float, flow_active: bool,
-		reverse_chase: bool, _curve_tension: float = 1.0,
-		flow_rate: float = 0.0, resource_kind: String = "", sankey_scale: bool = true) -> void:
-	if points.size() < 2:
-		return
-	var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, flow_active)
-	var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
-	for i in range(points.size() - 1):
-		var a: Vector2 = points[i] as Vector2
-		var b: Vector2 = points[i + 1] as Vector2
-		draw_line(a, b, Color(col.r, col.g, col.b, col.a * 0.18), maxf(1.4, width * 0.6))
-		if flow_active and gscale > 0.01:
-			var glow_a := 0.08 + 0.14 * gscale
-			draw_line(a, b, Color(col.r, col.g, col.b, glow_a), body_w + 1.8 + 2.0 * gscale)
-		draw_line(a, b, col, maxf(1.8, body_w))
-	if flow_active and points.size() >= 2:
-		var total := 0.0
-		var segs: Array = []
-		for i in range(points.size() - 1):
-			var a: Vector2 = points[i] as Vector2
-			var b: Vector2 = points[i + 1] as Vector2
-			total += a.distance_to(b)
-			segs.append({"a": a, "b": b, "len": total})
-		if total < 1.0:
-			return
-		var sample_fn := func(t: float) -> Vector2:
-			var dist := t * total
-			for seg: Dictionary in segs:
-				if dist <= float(seg.get("len", 0.0)):
-					var seg_a: Vector2 = seg.get("a", Vector2.ZERO)
-					var seg_b: Vector2 = seg.get("b", Vector2.ZERO)
-					var seg_start_len: float = float(seg.get("len", 0.0)) - seg_a.distance_to(seg_b)
-					var seg_len: float = maxf(seg_a.distance_to(seg_b), 0.001)
-					var u: float = (dist - seg_start_len) / seg_len
-					return seg_a.lerp(seg_b, clampf(u, 0.0, 1.0))
-			return points[points.size() - 1] as Vector2
-		_draw_resource_flow_arrows_on_sample(sample_fn, col, body_w, reverse_chase, gscale)
-
-
-func _draw_resource_flow_arrows_bezier(from: Vector2, c1: Vector2, c2: Vector2, to: Vector2,
-		col: Color, body_w: float, reverse: bool, gscale: float) -> void:
-	ResourceEdgeVis.draw_bezier_flow_arrows(
-			self, from, c1, c2, to, col, body_w, _flow_phase, reverse, gscale)
-
-
-func _draw_resource_flow_arrows_on_sample(sample_fn: Callable, col: Color, body_w: float,
-		reverse: bool, gscale: float) -> void:
-	ResourceEdgeVis.draw_sample_flow_arrows(
-			self, sample_fn, col, body_w, _flow_phase, reverse, gscale)

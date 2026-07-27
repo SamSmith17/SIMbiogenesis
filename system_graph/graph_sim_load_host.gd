@@ -15,6 +15,11 @@ var _loads: Dictionary = {}
 ## Reentrancy guard — `_sync_all` mutates the model (device_path / specs),
 ## which in turn fires model.changed. The guard prevents feedback loops.
 var _syncing: bool = false
+## While true (sim bulk tick), telemetry `update_item` storms are coalesced
+## into one `_sync_existing_loads` at end_bulk_sync() instead of a full
+## `_sync_all` per write.
+var _bulk_suppress: bool = false
+var _pending_telemetry_sync: bool = false
 
 
 func setup(model: RefCounted) -> void:
@@ -35,10 +40,28 @@ func teardown() -> void:
 	_model = null
 
 
-func _on_model_changed(_reason: String) -> void:
+func begin_bulk_sync() -> void:
+	_bulk_suppress = true
+
+
+func end_bulk_sync() -> void:
+	_bulk_suppress = false
+	if _pending_telemetry_sync:
+		_pending_telemetry_sync = false
+		_sync_existing_loads()
+
+
+func _on_model_changed(reason: String) -> void:
 	if _syncing:
 		return
-	# Any change may add/remove/rename items — rebuild our mapping.
+	# Telemetry writes dominate sim ticks — coalesce during bulk, and outside
+	# bulk only refresh known proxies (structural add/remove still full sync).
+	if reason == "update_item":
+		if _bulk_suppress:
+			_pending_telemetry_sync = true
+			return
+		_sync_existing_loads()
+		return
 	_sync_all()
 
 
@@ -46,6 +69,27 @@ func _on_model_changed(_reason: String) -> void:
 ## immediately recreate sim-loads for every persisted library item.
 func refresh() -> void:
 	_sync_all()
+
+
+## Cheap path for telemetry ticks: push watts/state into already-tracked
+## proxies without scanning the whole model for new load items.
+func _sync_existing_loads() -> void:
+	if _model == null or not ("items" in _model):
+		return
+	_syncing = true
+	for iid: String in _loads.keys().duplicate():
+		var item: Dictionary = {}
+		if _model.has_method("get_item"):
+			item = _model.call("get_item", iid) as Dictionary
+		if item.is_empty():
+			_remove_load(iid)
+			continue
+		var itype := str(item.get("type", ""))
+		if not LOAD_TYPES.has(itype) or bool(item.get("is_virtual", false)):
+			_remove_load(iid)
+			continue
+		_ensure_load(iid, item)
+	_syncing = false
 
 
 func is_load_on(item_id: String) -> bool:

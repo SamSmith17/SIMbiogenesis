@@ -181,9 +181,22 @@ func _apply_state_to_model() -> void:
 	var it: Dictionary = model_ref.call("get_item", item_id) as Dictionary
 	if it.is_empty():
 		return
-	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
-	specs["current_state"] = "on" if is_on else "off"
-	specs["requested_state"] = "on" if _requested_on else "off"
+	# This runs once per tracked load every sim tick (via the host's bulk-sync).
+	# Writing unconditionally emitted model.changed each time — an update_item
+	# storm that fired the full uncoalesced redraw/telemetry/library-scan cascade
+	# per load per frame (the graph-view stall). Loads almost never flip state, so
+	# read the live specs and skip the deep-copy + write when nothing changed.
+	var cur: Dictionary = it.get("specs", {}) as Dictionary
+	var new_state := "on" if is_on else "off"
+	var new_req := "on" if _requested_on else "off"
+	if str(cur.get("current_state", "")) == new_state \
+			and str(cur.get("requested_state", "")) == new_req \
+			and bool(cur.get("input_valve_open", true)) == input_valve_open \
+			and bool(cur.get("output_valve_open", true)) == output_valve_open:
+		return
+	var specs: Dictionary = cur.duplicate(true)
+	specs["current_state"] = new_state
+	specs["requested_state"] = new_req
 	specs["input_valve_open"] = input_valve_open
 	specs["output_valve_open"] = output_valve_open
 	model_ref.call("update_item", item_id, {"specs": specs})

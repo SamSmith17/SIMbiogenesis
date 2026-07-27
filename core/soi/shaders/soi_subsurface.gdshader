@@ -14,6 +14,8 @@ render_mode blend_mix, depth_draw_always, cull_disabled, diffuse_lambert;
 
 global uniform vec4 soi_center_radius;
 global uniform float soi_clip_enabled;
+global uniform vec4 soi_section_plane;
+global uniform vec4 soi_section_normal;
 global uniform float soi_ground_y;
 global uniform float soi_water_table_m;
 /// When 0, above-ground glass is discarded so sky/clouds show (Elevation section
@@ -37,6 +39,12 @@ float hash2(vec2 p) {
 void fragment() {
 	if (soi_clip_enabled < 0.5) {
 		discard;
+	}
+	if (soi_section_plane.w > 0.5) {
+		vec3 to_p = v_world_pos - soi_section_plane.xyz;
+		if (dot(to_p, soi_section_normal.xyz) > 0.0) {
+			discard;
+		}
 	}
 
 	// Flip the normal for back-facing triangles (the wall we see when the
@@ -74,23 +82,24 @@ void fragment() {
 		RIM = 0.4;
 		RIM_TINT = 0.7;
 	} else {
-		// ---- Below ground: solid dark soil ----
+		// ---- Below ground: opaque soil fill (no hollow “shell” look) ----
 		float depth = surface_y - v_world_pos.y;
-		vec3 soil_near = vec3(0.22, 0.15, 0.09);
-		vec3 soil_far  = vec3(0.14, 0.09, 0.05);
-		float n = hash2(floor(v_world_pos.xz * 3.0)) * 0.6
-				+ hash2(floor(v_world_pos.xz * 0.35)) * 0.4;
+		vec3 soil_near = vec3(0.42, 0.30, 0.18);
+		vec3 soil_far  = vec3(0.28, 0.18, 0.10);
+		float n = hash2(floor(v_world_pos.xz * 3.0)) * 0.55
+				+ hash2(floor(v_world_pos.xz * 0.35)) * 0.45;
+		// Mild grain so the cut face reads as dirt, not a flat plastic fill.
+		float grain = hash2(floor(v_world_pos.xy * 8.0) + floor(v_world_pos.zy * 5.0));
 		vec3 col = mix(soil_near, soil_far, clamp(depth / 20.0, 0.0, 1.0));
-		col = mix(col, col * 1.15, n);
-		// A faint darkening below the water table hints at moisture without
-		// turning the whole bowl grey or blue like the old gravel/water bands.
+		col = mix(col, col * 1.12, n);
+		col = mix(col, col * 0.88, grain * 0.35);
 		if (depth > soi_water_table_m) {
-			col *= 0.75;
+			col *= 0.78;
 		}
 		ALBEDO = col;
-		ROUGHNESS = 0.95;
+		ROUGHNESS = 0.97;
 		METALLIC = 0.0;
-		SPECULAR = 0.05;
+		SPECULAR = 0.02;
 		ALPHA = 1.0;
 	}
 }

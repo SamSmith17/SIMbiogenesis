@@ -1,13 +1,15 @@
 class_name GraphSiteAutoroute
 extends RefCounted
 
-## Auto-generate draped route_3d polylines from site-plan node positions.
+## Site-plan length estimates from node positions + site_waypoints.
+## Does NOT write dense draped route_3d — 3D geometry is owned by
+## ConduitManager / ConduitPathfinder (flat metro). Writing route_3d here
+## used to pollute drag-lock with DEM samples → jagged spaghetti.
 
-const SAMPLE_M := 5.0
 const CLEARANCE_M := 0.15
 
 
-## Refresh auto routes for all unlocked connections with placed endpoints.
+## Refresh length estimates for all unlocked connections with placed endpoints.
 ## Returns number of connections updated.
 static func refresh_all(model: GraphModel, main: Node, soi_center: Vector3) -> int:
 	if model == null or main == null:
@@ -48,41 +50,27 @@ static func _autoroute_connection(model: GraphModel, conn: Dictionary, main: Nod
 		elif wp_v is Vector2:
 			pts_m.append(wp_v)
 	pts_m.append(GraphSiteLayout.site_xz(tgt))
-	var world_pts := _drape_polyline(pts_m, main, soi_center)
-	if world_pts.size() < 2:
+	var length_m := _site_polyline_length_m(pts_m)
+	if length_m < 0.001:
 		return false
-	var route: Array = []
-	for p: Vector3 in world_pts:
-		route.append(ConduitKinds.waypoint_dict(p))
-	var length_m := ConduitKinds.polyline_length_m(
-		PackedVector3Array(world_pts))
-	var ctype := str(conn.get("conduit_type", ""))
-	if ctype.is_empty():
-		ctype = GraphSiteLayout.default_conduit_type(conn)
 	var cid := str(conn.get("id", ""))
-	model.update_connection(cid, {
-		"route_3d": route,
-		"conduit_type": ctype,
+	# Length only — leave route_3d alone (empty for unlocked metro).
+	var patch: Dictionary = {
 		"route_length_m": length_m,
 		"estimated_length": length_m,
-	})
+	}
+	# Clear stale dense site-autoroute samples left by older builds.
+	var existing: Array = conn.get("route_3d", []) as Array
+	if existing.size() >= 5 and not bool(conn.get("route_locked", false)):
+		patch["route_3d"] = []
+	model.update_connection(cid, patch)
 	return true
 
 
-static func _drape_polyline(site_pts: Array, main: Node, soi_center: Vector3) -> Array:
-	var out: Array = []
-	if site_pts.size() < 2:
-		return out
+static func _site_polyline_length_m(site_pts: Array) -> float:
+	var total := 0.0
 	for i in range(site_pts.size() - 1):
 		var a: Vector2 = site_pts[i] as Vector2
 		var b: Vector2 = site_pts[i + 1] as Vector2
-		var seg_len := a.distance_to(b)
-		var steps := maxi(1, int(ceil(seg_len / SAMPLE_M)))
-		var start_j := 0 if i == 0 else 1
-		for j in range(start_j, steps + 1):
-			var t := float(j) / float(steps)
-			var s := a.lerp(b, t)
-			var wxz := GraphSiteLayout.site_to_world_xz(s, soi_center)
-			var gy := TerrainSurfaceQuery.ground_height_at(main, wxz.x, wxz.y)
-			out.append(Vector3(wxz.x, gy + CLEARANCE_M, wxz.y))
-	return out
+		total += a.distance_to(b)
+	return total

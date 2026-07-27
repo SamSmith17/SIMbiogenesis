@@ -22,11 +22,18 @@ const TOPBAR_H    := 60.0
 ## Left dashboard + telemetry column width.
 const SIDEBAR_L_W := 340.0
 const SIDEBAR_R_W := 340.0
+## Siphon Lab params dock — Elevation CT remains the shared viewport.
+const SIPHON_LAB_W := 380.0
+## Cap for the Hydro Lab's fallback auto-bind (a turbine placed before any nearby
+## pond existed). Generous enough for a normal site, small enough that opening the
+## Lab never latches onto a pond across a large map.
+const LAB_AUTOBIND_MAX_M := 300.0
 const TOGGLE_W    := 20.0   # width of the sidebar collapse tabs
 
 const _CANVAS_SCRIPT    := preload("res://system_graph_v2/graph_canvas_v2.gd")
 const _LIB_PANEL_SCRIPT := preload("res://system_graph/library_panel.gd")
 const _INSP_PANEL_SCRIPT := preload("res://system_graph/inspector_panel.gd")
+const _SIPHON_LAB_SCRIPT := preload("res://scenes/ui/siphon_hydro_modal.gd")
 const _BRIDGE_SCRIPT         := preload("res://system_graph/solar_bridge.gd")
 const _HISTORY_PLAYER_SCRIPT := preload("res://system_graph/history_player.gd")
 const _HISTORY_SCRIPT   := preload("res://system_graph/history_manager.gd")
@@ -47,6 +54,13 @@ const _PLACED_PROP_RUNTIME_SCRIPT := preload("res://core/placed_models/placed_pr
 const _DASHBOARD_SCRIPT := preload("res://system_graph/graph_dashboard_panel.gd")
 const _PREVIEW_SERVICE_SCRIPT := preload("res://system_graph/graph_model_preview_service.gd")
 const _DC_POWER_WIRING_SCRIPT := preload("res://system_graph/dc_power_wiring.gd")
+const _ESIM_PACKAGE_SCRIPT := preload("res://core/esim/esim_package.gd")
+const _ESIM_IMPORTER_SCRIPT := preload("res://core/esim/esim_importer.gd")
+const _MudBuildingStructureBuilder := preload(
+	"res://core/machines/mud_building/mud_building_structure_builder.gd")
+const _GeodesicDomeBuilder := preload("res://core/machines/geodesic_dome_builder.gd")
+const _DomeParts := preload("res://core/machines/dome_parts.gd")
+const _CncCutPresets := preload("res://core/machines/cnc_cut_presets.gd")
 const _UI_PREFS_CFG := "user://ui_prefs.cfg"
 const GRAPH_AUTOSAVE_DIR := "user://saves/graph_autosave"
 ## Named graph snapshots the player can copy between maps.
@@ -71,15 +85,32 @@ var _mode := "build"   # "build" | "test"
 
 var _solar_ui: Control = null
 var _graph_dashboard: GraphDashboardPanel = null
-var _legend_btn: Button = null   # legacy (unused since View ▾ menu); kept for safety
 var _view_menu: MenuButton = null
 const VIEW_LEGEND := 100
 const VIEW_HISTORY := 101
 const VIEW_HINTS := 102
+const VIEW_PBI_BAR := 103
+
+## Wire-style control popup ids.
+const WIRE_STYLE_BEZIER := 300
+const WIRE_STYLE_ROUNDED := 301
+const WIRE_STYLE_METRO := 302
+const WIRE_STYLE_APPLY_ALL := 303
+var _wire_style_menu: MenuButton = null
+
+## When true, PBI (Planetary Basic Income) nodes are pinned to a fixed
+## screen-space bar along the top of the canvas instead of floating in graph
+## space. Persisted in the graph save state.
+var _pbi_bar_pinned: bool = true
 var _pan_right_mouse := true
 ## Populated on first deferred init from the map lat/lon (generated) or scene tag.
 var _cached_map_graph_key: String = ""
 var _graph_file_dialog: FileDialog = null
+var _esim_file_dialog: FileDialog = null
+var _esim_paste_dialog: ConfirmationDialog = null
+var _esim_paste_edit: TextEdit = null
+var _esim_ghost_active: bool = false
+var _esim_ghost_package: Dictionary = {}
 var _osm_solar_btn: Button = null
 var _location_wired: bool = false
 
@@ -116,6 +147,9 @@ var _sim_load_host: Node = null
 
 ## ResourceFlowEngine — reversible multi-resource tank simulation.
 var _resource_flow: RefCounted = null
+## Active multi-machine workflow (Phase 2) — empty dict when idle.
+var _active_workflow: Dictionary = {}
+var _workflow_panel: Control = null
 var _closure_refresh_acc: float = 0.0
 const _CLOSURE_REFRESH_INTERVAL := 1.0
 var _conduit_manager: Node3D = null
@@ -139,6 +173,11 @@ var _history_suppress:     bool = false
 var _sim_bulk_update:        bool = false
 var _pending_canvas_redraw:  bool = false
 var _pending_telemetry_refresh: bool = false
+## Throttle dashboard/library rescans during sim bulk (~1 Hz is enough for
+## cost totals; physics already runs on its own pollers).
+var _telemetry_flush_acc: float = 0.0
+const _TELEMETRY_FLUSH_INTERVAL := 1.0
+var _pending_library_populate: bool = false
 ## Becomes true after the first _process() tick so we capture the initial state.
 var _history_initialized:  bool = false
 ## Set once main.gd applies a save snapshot to the graph. Blocks the deferred
@@ -148,26 +187,29 @@ var _external_save_applied: bool = false
 ## Topbar undo/redo buttons — stored so we can update their disabled state.
 var _undo_btn: Button = null
 var _redo_btn: Button = null
-# Combine ▾ dropdown replaces the old Group/Ungroup/Array/Bank/Series/
-# Parallel/Arrange/3D-Ph button row (topbar streamlining).
+# Combine ▾ — grouping / arrays / banks / wiring. Layout ▾ — arrange ops.
 var _combine_menu: MenuButton = null
+var _layout_menu: MenuButton = null
 const COMBINE_GROUP := 0
 const COMBINE_UNGROUP := 1
 const COMBINE_ARRAY := 2
 const COMBINE_BANK := 3
 const COMBINE_SERIES := 4
 const COMBINE_PARALLEL := 5
-const COMBINE_ARRANGE := 6
-const COMBINE_PLACEHOLDER := 7
 const COMBINE_CTRL_PICKER := 8
+const COMBINE_EXPLODE := 7
+const LAYOUT_ARRANGE := 6
+const LAYOUT_PLACEHOLDER := 9
 var _ctrl_picker_dialog: AcceptDialog = null
 var _ctrl_picker_list: ItemList = null
 var _ctrl_picker_array_id: String = ""
 var _ctrl_picker_ranked: Array = []
 var _enter_btn: Button = null
 var _back_btn: Button = null
-var _scope_breadcrumb: Label = null
+var _scope_breadcrumb: HBoxContainer = null
 var _soi_chip: Label = null
+var _explode_confirm: ConfirmationDialog = null
+var _explode_pending_id: String = ""
 
 ## Full-screen background rect (opaque when SoI live preview is off).
 var _bg_rect: ColorRect = null
@@ -181,21 +223,70 @@ var _graph_view_mode: String = GraphSiteLayout.VIEW_FREEFORM
 ## Freeform-only: show orbitable SoI snowglobe behind the abstract graph.
 var _freeform_soi_bubble: bool = false
 ## Elevation-only: full 3D snowglobe cross-section behind the 2D profile.
-var _elevation_3d_section: bool = false
+## Default ON — Elevation is the CT section surface.
+var _elevation_3d_section: bool = true
+var _elev_slice_row: HBoxContainer = null
+var _elev_slice_slider: HSlider = null
+var _elev_slice_lbl: Label = null
+var _hydro_section_lbl: Label = null
 const _SOI_PREVIEW_SCRIPT := preload("res://system_graph/graph_soi_preview_service.gd")
+const _SPATIAL_EDIT_SCRIPT := preload("res://system_graph/graph_spatial_edit.gd")
 const VIEW_MODE_FREEFORM := 100
 const VIEW_MODE_SITE := 101
 const VIEW_MODE_ELEVATION := 102
 const VIEW_MODE_SEED_SITE := 103
+const VIEW_MODE_EMBODY_TWINS := 151
 const VIEW_MODE_EXAG_1X := 104
 const VIEW_MODE_EXAG_5X := 105
 const VIEW_MODE_HEADING_ROTATE := 106
 const VIEW_MODE_SOI_BUBBLE := 107
 const VIEW_MODE_ELEV_3D := 108
 const VIEW_MODE_SNOWGLOBE := 109
+const VIEW_MODE_RESET_SECTION := 110
+const VIEW_MODE_NODE_CARDS := 130
+const VIEW_MODE_PREVIEW_LABELS := 131
+const VIEW_MODE_RADIAL := 132
+const VIEW_MODE_ELEV_DEM := 140
+const VIEW_MODE_ELEV_CHIPS := 141
+const VIEW_MODE_ELEV_PORTS := 142
+const VIEW_MODE_ELEV_SCHEM_WIRES := 143
+const VIEW_MODE_ELEV_PROJ_PIPES := 144
+const VIEW_MODE_SITE_CHIPS := 145
+const VIEW_MODE_SITE_LIVE_LIGHT := 146
+const VIEW_MODE_ELEV_LIVE_LIGHT := 147
+const VIEW_MODE_SITE_WIRE_NONE := 148
+const VIEW_MODE_SITE_WIRE_METRO := 149
+const VIEW_MODE_SITE_WIRE_3D := 150
+const VIEW_MODE_SITE_PORTS := 151
 const DESIGNATE_OFF := 200
 const DESIGNATE_CATCHMENT := 201
 const DESIGNATE_CROP := 202
+## One-shot toast when Elev 3D auto-enables world wires + flow glow.
+var _elev_3d_wires_toast_shown: bool = false
+## Site/Elev: freeze clock at mean solar noon so CT/plan aren't night-black.
+var _elev_noon_active: bool = false
+var _elev_saved_day_time: float = NAN
+var _elev_saved_time_scale: float = NAN
+## When true, Site/Elev keep the live clock (skip noon bake).
+var _site_elev_live_lighting: bool = false
+## Saved conduits_3d_visible when Site Plan forces a wire mode session.
+var _site_saved_conduits_3d: Variant = null
+var _spatial_edit = null
+var _site_tool_row: HBoxContainer = null
+var _site_radial_btn: Button = null
+var _site_array_menu: MenuButton = null
+var _site_radius_slider: HSlider = null
+var _site_radius_lbl: Label = null
+var _elev_hydro_lab_btn: Button = null
+const SITE_ARRAY_LINE := 400
+const SITE_ARRAY_ARC := 401
+const SITE_ARRAY_CIRCLE := 402
+const SITE_ARRAY_CONFIRM := 403
+const SITE_ARRAY_CANCEL := 404
+const SITE_ARRAY_SET_CENTER := 405
+const SITE_ARRAY_CLEAR_CENTER := 406
+const SITE_RADIUS_RESET := 407
+var _awaiting_array_center: bool = false
 
 ## Reasons that should be recorded in the undo history.
 const HISTORY_REASONS: Array[String] = [
@@ -217,6 +308,11 @@ var _right_toggle:     Button  = null
 var _lib_tab_btn:      Button  = null
 var _insp_tab_btn:     Button  = null
 var _inspector_panel   = null
+var _siphon_lab_modal: Control = null
+## Snapshot of 3D conduit prefs before Lab force-on (restored on exit).
+var _lab_saved_conduits_visible: bool = false
+var _lab_saved_flow_glow: bool = false
+var _lab_conduit_prefs_saved: bool = false
 var _selected_item_ids: Array[String] = []
 var _embodiment_prop_id: String = ""
 var _embodiment_solar_tag: String = ""
@@ -236,6 +332,13 @@ var _checking_voltage: bool = false
 var _autosave_timer: Timer = null
 var _autosave_pending: bool = false
 var _timeline_inset_hooked := false
+
+# Component (super-node) live-propagation. Editing inside an instance debounces a
+# capture->restamp-siblings cycle; the guard stops the restamp's own `changed`
+# emissions from re-triggering propagation (see _on_model_changed).
+var _component_sync_timer: Timer = null
+var _component_sync_pending: Dictionary = {}   # instance_id -> true
+var _component_sync_active: bool = false
 
 # Hints overlay
 var _hints_panel:   Control = null
@@ -288,7 +391,10 @@ func _ready() -> void:
 	call_deferred("_init_conduit_manager")
 	call_deferred("_init_placeholder_host")
 	_connect_automation_feedback()
-	set_process(false)
+	# _process stays ENABLED always (ambient resource-flow tick needs to run
+	# even while the graph is closed — see _tick_resource_flow_ambient). The
+	# `if not visible: return` inside _process still gates the heavy UI-only
+	# work, so this costs nothing extra while hidden.
 
 
 ## Flash the bound graph node when one of its automation rules fires.
@@ -337,6 +443,13 @@ func _init_resource_flow() -> void:
 	if _resource_flow != null and _resource_flow.has_signal("processor_blocked") \
 			and not _resource_flow.is_connected("processor_blocked", _on_processor_blocked):
 		_resource_flow.connect("processor_blocked", _on_processor_blocked)
+	if _resource_flow != null and _resource_flow.has_signal("recipe_parts_ready") \
+			and not _resource_flow.is_connected("recipe_parts_ready", _on_recipe_parts_ready):
+		_resource_flow.connect("recipe_parts_ready", _on_recipe_parts_ready)
+	if _resource_flow != null and _resource_flow.has_signal("recipe_chore_waiting") \
+			and not _resource_flow.is_connected("recipe_chore_waiting", _on_recipe_chore_waiting):
+		_resource_flow.connect("recipe_chore_waiting", _on_recipe_chore_waiting)
+	_sync_chore_ledger_to_flow()
 	if _graph_canvas != null:
 		_graph_canvas.set("resource_flow_engine", _resource_flow)
 
@@ -344,6 +457,9 @@ func _init_resource_flow() -> void:
 ## Toast on false→true transitions only (the signal already guarantees edges).
 func _on_tank_overflow_changed(item_id: String, overflowing: bool) -> void:
 	if not overflowing:
+		return
+	# Siphon Lab drives pond levels for CT — don't spam Overflow overlays.
+	if _graph_view_mode == GraphSiteLayout.VIEW_SIPHON:
 		return
 	var item := model.get_item(item_id) if model != null else {}
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
@@ -360,6 +476,309 @@ func _on_processor_blocked(item_id: String, missing_kinds: Array) -> void:
 		k_names.append(ResourceKinds.display_name(str(k)))
 	var k_str := ", ".join(k_names)
 	_show_toast("⚠ %s blocked — waiting for %s" % [p_name, k_str])
+
+
+func _sync_chore_ledger_to_flow() -> void:
+	if _resource_flow == null:
+		return
+	var main := _get_scene_main_node()
+	var loader := _find_terrain_loader(main) if main != null else null
+	if loader != null and loader.has_method("get_chore_ledger"):
+		_resource_flow.chore_ledger = loader.call("get_chore_ledger") as ChoreLedger
+
+
+func _on_recipe_parts_ready(item_id: String, parts: Array) -> void:
+	for p: Variant in parts:
+		if not (p is Dictionary):
+			continue
+		var d: Dictionary = p as Dictionary
+		var pid := str(d.get("part_id", ""))
+		if pid.is_empty():
+			continue
+		var count := maxi(int(d.get("qty", 1)), 1)
+		var src := "recipe"
+		if model != null:
+			var it := model.get_item(item_id)
+			if not it.is_empty():
+				src = str((it.get("specs", {}) as Dictionary).get("name", "recipe"))
+		var meta := {
+			"label": str(d.get("label", pid)),
+			"material_kind": str(d.get("material_kind", "")),
+			"source": src,
+		}
+		var main := _get_scene_main_node()
+		var loader := _find_terrain_loader(main) if main != null else null
+		if loader != null and loader.has_method("credit_part"):
+			loader.call("credit_part", pid, count, meta)
+			_show_part_up_toast(str(meta["label"]), count)
+
+
+func _on_recipe_chore_waiting(item_id: String, request: Dictionary) -> void:
+	var label := str(request.get("label", "Needs attention"))
+	var hours := float(request.get("chore_hours", 0.0))
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("show_chore_confirm"):
+		main.call("show_chore_confirm", item_id, label, hours)
+		return
+	var toast: Variant = main.get("toast_ui") if main != null else null
+	if toast != null and is_instance_valid(toast) and toast.has_method("show_chore_confirm"):
+		toast.call("show_chore_confirm", item_id, label, hours,
+			func(): confirm_recipe_chore(item_id))
+
+
+## Apply a catalog process recipe to a processor (stamps I/O + timing).
+func apply_process_recipe(item_id: String, recipe_id: String) -> bool:
+	if model == null or item_id.is_empty() or recipe_id.is_empty():
+		return false
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var recipe := ProcessRecipeCatalog.find(recipe_id)
+	if recipe.is_empty():
+		return false
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	RecipeRunner.select_recipe(specs, recipe)
+	# Sheet-press bridge: keep dedicated job kinematics, just configure thickness/part.
+	if str(specs.get("role", "")) == "pp_sheet_press":
+		if recipe.has("sheet_thickness_mm"):
+			specs["sheet_thickness_mm"] = float(recipe["sheet_thickness_mm"])
+		if str(recipe.get("job_part_id", "")) != "":
+			specs["job_part_id"] = str(recipe["job_part_id"])
+		if str(recipe.get("job_part_label", "")) != "":
+			specs["job_part_label"] = str(recipe["job_part_label"])
+	model.update_item(item_id, {"specs": specs})
+	return true
+
+
+## Start the selected/active process recipe on a generic batch processor.
+func start_process_recipe(item_id: String) -> bool:
+	if model == null or item_id.is_empty():
+		return false
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var role := str(specs.get("role", ""))
+	if role == "pp_sheet_press":
+		return start_pp_sheet_press_job(item_id)
+	var abs_h := 0.0
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("get_absolute_hours"):
+		abs_h = float(main.call("get_absolute_hours"))
+	var recipe := RecipeRunner.resolve_recipe(specs)
+	if recipe.is_empty():
+		return false
+	# Ensure switched on so RFE will run the batch.
+	specs["switched_on"] = true
+	specs["on"] = true
+	var begin := RecipeRunner.begin_run(specs, abs_h, recipe)
+	model.update_item(item_id, {"specs": specs})
+	if bool(begin.get("waiting_chore", false)):
+		_on_recipe_chore_waiting(item_id, {
+			"step_id": str(specs.get("recipe_waiting_step_id", "")),
+			"label": str(specs.get("recipe_waiting_label", "Needs attention")),
+			"chore_hours": float(specs.get("recipe_waiting_chore_hrs", 0.0)),
+		})
+	return bool(begin.get("ok", false))
+
+
+func cancel_process_recipe(item_id: String) -> void:
+	if model == null or item_id.is_empty():
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	if str(specs.get("role", "")) == "pp_sheet_press":
+		cancel_pp_sheet_press_job(item_id)
+		return
+	RecipeRunner.cancel_run(specs)
+	model.update_item(item_id, {"specs": specs})
+
+
+func confirm_recipe_chore(item_id: String) -> bool:
+	if model == null or item_id.is_empty():
+		return false
+	_sync_chore_ledger_to_flow()
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var abs_h := 0.0
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("get_absolute_hours"):
+		abs_h = float(main.call("get_absolute_hours"))
+	var ledger: ChoreLedger = null
+	if _resource_flow != null:
+		ledger = _resource_flow.chore_ledger
+	# Sheet-press unload chore: debit labor, credit pending part, resume auto-cycle.
+	if str(specs.get("role", "")) == "pp_sheet_press" \
+			and bool(specs.get("sheet_credit_pending", false)):
+		var hours := maxf(float(specs.get("recipe_waiting_chore_hrs", 0.0)), 0.0)
+		if ledger != null and hours > 0.0 and not ledger.try_debit(hours):
+			return false
+		specs["sheet_unload_confirmed"] = true
+		specs["sheet_credit_pending"] = false
+		specs.erase("recipe_waiting_chore")
+		specs.erase("recipe_waiting_step_id")
+		specs.erase("recipe_waiting_label")
+		specs.erase("recipe_waiting_chore_hrs")
+		model.update_item(item_id, {"specs": specs})
+		_credit_fabricated_part(specs)
+		if bool(specs.get("auto_cycle", true)):
+			specs["job_completed"] = false
+			specs.erase("sheet_unload_confirmed")
+			model.update_item(item_id, {"specs": specs})
+		var loader_s := _find_terrain_loader(main) if main != null else null
+		if loader_s != null and loader_s.has_method("save_chore_ledger"):
+			loader_s.call("save_chore_ledger")
+		return true
+	var result := RecipeRunner.confirm_chore(specs, abs_h, ledger)
+	model.update_item(item_id, {"specs": specs})
+	var loader := _find_terrain_loader(main) if main != null else null
+	if loader != null and loader.has_method("save_chore_ledger"):
+		loader.call("save_chore_ledger")
+	return bool(result.get("ok", false))
+
+
+## Open the process-recipe editor modal (create/edit user recipes).
+func open_process_recipe_editor(recipe_id: String = "", role_hint: String = "") -> void:
+	var main := _get_scene_main_node()
+	var ui := main.get_node_or_null("UILayer") if main != null else null
+	var existing: Node = null
+	if ui != null:
+		existing = ui.get_node_or_null("ProcessRecipeEditor")
+	if existing == null:
+		var editor_script: GDScript = load("res://scenes/ui/process_recipe_editor.gd") as GDScript
+		if editor_script == null:
+			return
+		existing = editor_script.new()
+		existing.name = "ProcessRecipeEditor"
+		if ui != null:
+			ui.add_child(existing)
+		else:
+			add_child(existing)
+	if existing.has_method("open"):
+		existing.call("open", recipe_id, role_hint)
+
+
+func open_workflow_panel() -> void:
+	if _workflow_panel == null or not is_instance_valid(_workflow_panel):
+		var script: GDScript = load("res://scenes/ui/workflow_panel.gd") as GDScript
+		if script == null:
+			return
+		_workflow_panel = script.new()
+		_workflow_panel.name = "WorkflowPanel"
+		var main := _get_scene_main_node()
+		var ui := main.get_node_or_null("UILayer") if main != null else null
+		if ui != null:
+			ui.add_child(_workflow_panel)
+		else:
+			add_child(_workflow_panel)
+	_workflow_panel.call("open")
+
+
+func get_active_workflow() -> Dictionary:
+	return _active_workflow.duplicate(true)
+
+
+func start_workflow(workflow_id: String) -> bool:
+	var wf := WorkflowRecipeCatalog.find(workflow_id)
+	if wf.is_empty():
+		return false
+	_active_workflow = WorkflowRunner.create_state(workflow_id, {})
+	var begin := WorkflowRunner.begin(_active_workflow, wf)
+	if not bool(begin.get("ok", false)):
+		_active_workflow = {}
+		return false
+	_tick_active_workflow()
+	return true
+
+
+func cancel_workflow() -> void:
+	if not _active_workflow.is_empty():
+		WorkflowRunner.cancel(_active_workflow)
+	_active_workflow = {}
+
+
+func confirm_workflow_chore() -> bool:
+	if _active_workflow.is_empty():
+		return false
+	var result := WorkflowRunner.confirm_chore(_active_workflow, _workflow_ctx())
+	if bool(result.get("ok", false)):
+		_tick_active_workflow()
+	return bool(result.get("ok", false))
+
+
+func _tick_active_workflow() -> void:
+	if _active_workflow.is_empty():
+		return
+	var status := str(_active_workflow.get("status", ""))
+	if status in ["idle", "done", "failed"]:
+		return
+	var prev_status := status
+	var result := WorkflowRunner.tick(_active_workflow, _workflow_ctx())
+	var new_status := str(result.get("status", status))
+	if new_status == WorkflowRunner.STATE_WAITING_CHORE \
+			and prev_status != WorkflowRunner.STATE_WAITING_CHORE:
+		var waiting: Dictionary = result.get("waiting",
+			_active_workflow.get("waiting", {})) as Dictionary
+		var main := _get_scene_main_node()
+		var toast: Variant = main.get("toast_ui") if main != null else null
+		if toast != null and is_instance_valid(toast) and toast.has_method("show_chore_confirm"):
+			toast.call("show_chore_confirm", "",
+				str(waiting.get("label", "Workflow chore")),
+				float(waiting.get("chore_hours", 0.0)),
+				func(): confirm_workflow_chore())
+	if new_status == WorkflowRunner.STATE_DONE:
+		_show_toast("Workflow complete: %s" % str(_active_workflow.get("workflow_id", "")))
+
+
+func _workflow_ctx() -> Dictionary:
+	return {
+		"find_machine": func(role: String) -> String:
+			if model == null:
+				return ""
+			for item: Dictionary in model.items:
+				if str(item.get("type", "")) != "processor":
+					continue
+				var specs: Dictionary = item.get("specs", {}) as Dictionary
+				if str(specs.get("role", "")) == role:
+					return str(item.get("id", ""))
+			return "",
+		"apply_recipe": func(item_id: String, recipe_id: String) -> bool:
+			return apply_process_recipe(item_id, recipe_id),
+		"start_recipe": func(item_id: String) -> bool:
+			return start_process_recipe(item_id),
+		"machine_busy": func(item_id: String) -> bool:
+			var item := model.get_item(item_id) if model != null else {}
+			var specs: Dictionary = item.get("specs", {}) as Dictionary
+			return bool(specs.get("job_active", false)) or bool(specs.get("recipe_running", false)) \
+					or bool(specs.get("recipe_waiting_chore", false)) \
+					or bool(specs.get("sheet_credit_pending", false)),
+		"machine_done": func(item_id: String) -> bool:
+			var item := model.get_item(item_id) if model != null else {}
+			var specs: Dictionary = item.get("specs", {}) as Dictionary
+			if bool(specs.get("sheet_credit_pending", false)):
+				return false
+			if bool(specs.get("job_completed", false)) and not bool(specs.get("job_active", false)):
+				return true
+			if not bool(specs.get("recipe_running", false)) \
+					and float(specs.get("recipe_progress", 0.0)) >= 1.0:
+				return true
+			return false,
+		"debit_chore": func(hours: float) -> bool:
+			_sync_chore_ledger_to_flow()
+			var ledger: ChoreLedger = _resource_flow.chore_ledger if _resource_flow != null else null
+			if ledger == null:
+				return true
+			var ok := ledger.try_debit(hours)
+			var main := _get_scene_main_node()
+			var loader := _find_terrain_loader(main) if main != null else null
+			if ok and loader != null and loader.has_method("save_chore_ledger"):
+				loader.call("save_chore_ledger")
+			return ok,
+	}
 
 
 ## Live resource/processor state snapshot for the automation context + HUD.
@@ -452,6 +871,12 @@ func _on_model_preview_ready(_cache_key: String, _texture: ImageTexture) -> void
 		_graph_canvas.call("queue_redraw")
 
 
+## Public redraw hook (terrain watershed preview, external overlays).
+func queue_canvas_redraw() -> void:
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+
+
 ## Invalidate + re-queue the card snapshot for one graph item (inspector camera / GLB).
 func _refresh_item_card_preview(item_id: String) -> void:
 	if _model_preview == null or model == null or item_id.is_empty():
@@ -474,7 +899,9 @@ func _notification(what: int) -> void:
 		if vp != null:
 			vp.disable_3d = visible
 		
-		set_process(visible)
+		# NOTE: processing is intentionally NOT gated by visibility (see the
+		# comment at the end of _ready) — the ambient resource-flow tick must
+		# keep running while the graph is closed.
 		mouse_filter = (
 			Control.MOUSE_FILTER_STOP if visible
 			else Control.MOUSE_FILTER_IGNORE
@@ -491,14 +918,21 @@ func _notification(what: int) -> void:
 			call_deferred("_init_placeholder_host")
 			# Re-enable SoI backdrop only once the graph is actually shown —
 			# view prefs may already be restored from autosave while hidden.
-			call_deferred("_apply_graph_view_mode", _graph_view_mode)
+			# Re-read mode at execution time (not queue time) so a same-frame
+			# open_siphon_lab / mode chip isn't clobbered by a stale arg.
+			call_deferred("_reapply_current_graph_view_mode")
 			call_deferred("_refresh_osm_solar_btn")
 			# Late MapContext / terrain load may have landed since _ready.
 			call_deferred("_bind_map_graph", false)
 		else:
 			_flush_graph_autosave()
 			_clear_embodiment_highlight()
+			# Hydro Lab suspends the player + may leave a watershed ghost mesh —
+			# always tear that down when G closes the graph, not only when
+			# switching view modes inside an open graph.
+			_force_teardown_siphon_lab_on_graph_close()
 			_shutdown_soi_preview_world_effects()
+			_elev_end_noon_lock()
 		_apply_mouse_for_graph(visible)
 	elif what == NOTIFICATION_RESIZED:
 		if visible:
@@ -519,6 +953,11 @@ func _init_graph_autosave() -> void:
 	_autosave_timer.wait_time = GRAPH_AUTOSAVE_DEBOUNCE_SEC
 	_autosave_timer.timeout.connect(_flush_graph_autosave)
 	add_child(_autosave_timer)
+	_component_sync_timer = Timer.new()
+	_component_sync_timer.one_shot = true
+	_component_sync_timer.wait_time = 0.15
+	_component_sync_timer.timeout.connect(_flush_component_sync)
+	add_child(_component_sync_timer)
 
 
 ## Stable key for this map's graph autosave.
@@ -741,6 +1180,7 @@ func _build_layout() -> void:
 	add_child(gc)
 	_graph_canvas = gc
 	gc.set("resource_flow_engine", _resource_flow)
+	_init_spatial_edit()
 	# Connect canvas selection signals
 	_connect_canvas_signals(gc)
 
@@ -798,6 +1238,9 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("compound_open_requested"):
 		if not gc.is_connected("compound_open_requested", _on_open_compound_requested):
 			gc.connect("compound_open_requested", _on_open_compound_requested)
+	if gc.has_signal("scope_pop_requested"):
+		if not gc.is_connected("scope_pop_requested", _on_scope_pop_requested):
+			gc.connect("scope_pop_requested", _on_scope_pop_requested)
 	if gc.has_signal("layout_changed"):
 		if not gc.is_connected("layout_changed", _on_canvas_layout_changed):
 			gc.connect("layout_changed", _on_canvas_layout_changed)
@@ -813,6 +1256,11 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("elevation_heading_changed"):
 		if not gc.is_connected("elevation_heading_changed", _on_elevation_heading_changed):
 			gc.connect("elevation_heading_changed", _on_elevation_heading_changed)
+	if gc.has_signal("elevation_section_offset_changed"):
+		if not gc.is_connected("elevation_section_offset_changed",
+				_on_elevation_section_offset_changed):
+			gc.connect("elevation_section_offset_changed",
+					_on_elevation_section_offset_changed)
 
 
 func _on_canvas_layout_changed() -> void:
@@ -829,6 +1277,13 @@ func _on_canvas_layout_changed() -> void:
 
 
 ## After a site-plan drag, move any bound 3D props to match site_x_m/site_z_m.
+## Skips props already within tolerance (move_prop_xz respawns the whole prop
+## layer, so an unconditional per-node move made every drag-end O(props²) and
+## re-grounded props that never moved). A binding whose prop record no longer
+## exists (deleted before twin-delete linking existed, or a different save) is
+## cleared and surfaced instead of failing silently forever.
+const _SITE_SYNC_EPS_M := 0.05
+
 func _sync_bound_props_from_site() -> void:
 	if model == null:
 		return
@@ -837,6 +1292,7 @@ func _sync_bound_props_from_site() -> void:
 	if main == null or soi == null or not soi.has_method("world_center"):
 		return
 	var center: Vector3 = soi.call("world_center")
+	var stale: Array[String] = []
 	for item: Dictionary in model.items:
 		if not GraphSiteLayout.has_site_coords(item):
 			continue
@@ -845,10 +1301,198 @@ func _sync_bound_props_from_site() -> void:
 		if prop_id.is_empty():
 			continue
 		var wxz := GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(item), center)
+		var rec := PlacedPropService.get_prop_record(main, prop_id)
+		if rec.is_empty():
+			stale.append(str(item.get("id", "")))
+			continue
+		if Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))) \
+				.distance_to(wxz) <= _SITE_SYNC_EPS_M:
+			continue
+		# Radial layout: auto-yaw the twin tangential to the circle around the
+		# SoI center (model faces outward, width along the tangent) so radially
+		# planned sites don't need per-model yaw fiddling. Yaw is patched into
+		# the record BEFORE move_prop_xz — its rebuild applies both at once.
+		if _graph_canvas != null and bool(_graph_canvas.get("radial_layout_mode")):
+			var site := GraphSiteLayout.site_xz(item)
+			var c_site := Vector2.ZERO
+			if _spatial_edit != null:
+				c_site = _spatial_edit.radial_center_site()
+			var yaw := _spatial_radial_yaw_deg(site, c_site)
+			PlacedPropService.update_prop_record(main, prop_id, {"yaw": yaw}, false)
 		PlacedPropService.move_prop_xz(main, prop_id, wxz.x, wxz.y)
+	for iid in stale:
+		var it := model.get_item(iid)
+		if it.is_empty():
+			continue
+		var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+		sp.erase("bound_prop_id")
+		model.update_item(iid, {"specs": sp})
+	if not stale.is_empty():
+		_show_toast("Unlinked %d node%s whose 3D twin no longer exists" % [
+			stale.size(), "" if stale.size() == 1 else "s"])
 
 
-## Place (or re-place) a graph node's GLB twin at its site coords (grounded).
+## True when this item should auto-get a visible 3D twin at site coords.
+func _item_wants_site_twin(item: Dictionary) -> bool:
+	if item.is_empty() or not GraphSiteLayout.has_site_coords(item):
+		return false
+	if bool(item.get("is_ghost", false)):
+		return false
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	# Already embodied via scene path — leave alone.
+	if not str(specs.get("scene_device_path", specs.get("device_path", ""))).is_empty():
+		return false
+	# Explicit model_id always wants a twin at site coords.
+	if not str(specs.get("model_id", "")).is_empty():
+		return true
+	var itype := str(item.get("type", ""))
+	# Containers + physical plant that commonly need embodiment on Site Plan.
+	# Nested children (panels inside StarShade, etc.) are filtered by callers
+	# to root scope so we don't stamp a twin per leaf.
+	if itype in [
+		"resource", "catchment", "compound",
+		"habitat", "processor", "wind", "hydro", "heliostat",
+		"biodigester", "cartesian_machine", "pp_beam_extruder",
+	]:
+		return true
+	return false
+
+
+## Ensure a site-placed container/compound has a grounded PlacedProp twin.
+## Uses generic_tank / generic_box when model_id is empty. Returns true on
+## create/move success.
+func ensure_site_twin(item_id: String, quiet: bool = true) -> bool:
+	if model == null or item_id.is_empty():
+		return false
+	var item := model.get_item(item_id)
+	if not _item_wants_site_twin(item):
+		return false
+	var main := _get_scene_main_node()
+	var soi := get_node_or_null("/root/SoiService")
+	if main == null or soi == null or not soi.has_method("world_center"):
+		if not quiet:
+			_show_toast("No map / SoI center available")
+		return false
+	var center: Vector3 = soi.call("world_center")
+	var wxz := GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(item), center)
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var model_id := ModelCatalog.default_twin_model_id(item)
+	var box_spec := ModelCatalog.twin_box_spec_for_item(item)
+	var existing := str(specs.get("bound_prop_id", ""))
+	if not existing.is_empty():
+		var rec := PlacedPropService.get_prop_record(main, existing)
+		if not rec.is_empty():
+			if Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))) \
+					.distance_to(wxz) > _SITE_SYNC_EPS_M:
+				PlacedPropService.move_prop_xz(main, existing, wxz.x, wxz.y)
+			if str(specs.get("model_id", "")).is_empty():
+				specs["model_id"] = model_id
+				model.update_item(item_id, {"specs": specs})
+			return true
+		specs.erase("bound_prop_id")
+	var extra := {
+		"graph_item_id": item_id,
+		"box_spec": box_spec,
+	}
+	if model_id == ModelCatalog.GENERIC_TANK_ID:
+		extra["tank_spec"] = box_spec
+	var ports := ConnectionPortDefs.default_ports_for_model(model_id, box_spec)
+	if not ports.is_empty():
+		extra["connection_ports"] = ports
+	var result := PlacedPropService.place_model_at_xz(main, model_id, wxz.x, wxz.y, extra)
+	if not bool(result.get("ok", false)):
+		if not quiet:
+			_show_toast("Place failed: %s" % str(result.get("error", "?")))
+		return false
+	specs["model_id"] = model_id
+	specs["bound_prop_id"] = str(result.get("prop_id", ""))
+	if float(specs.get("footprint_w_m", 0.0)) <= 0.0 \
+			or float(specs.get("footprint_d_m", 0.0)) <= 0.0:
+		specs["footprint_w_m"] = float(box_spec.get("w_m", 1.0))
+		specs["footprint_d_m"] = float(box_spec.get("d_m", 1.0))
+	model.update_item(item_id, {"specs": specs})
+	return true
+
+
+## Auto-embody every root-scope site-placed item that lacks a twin.
+func ensure_all_site_twins() -> int:
+	if model == null:
+		return 0
+	# Refuse until TerrainLoader owns a prop layer — placing into the
+	# PlacedPropService fallback layer can overwrite the map props file.
+	var main0 := _get_scene_main_node()
+	var loader0 := TerrainSurfaceQuery.find_terrain_loader(main0) if main0 != null else null
+	if loader0 == null or loader0.get("_placed_prop_layer") == null:
+		return 0
+	var n := 0
+	var root_items: Array = model.get_items_in_scope("root") \
+			if model.has_method("get_items_in_scope") else model.items
+	for item_v in root_items:
+		if not (item_v is Dictionary):
+			continue
+		var item: Dictionary = item_v
+		var iid := str(item.get("id", ""))
+		if iid.is_empty():
+			continue
+		if not _item_wants_site_twin(item):
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		var prop_id := str(specs.get("bound_prop_id", ""))
+		var needs := prop_id.is_empty()
+		if not needs:
+			var main := _get_scene_main_node()
+			if main != null and PlacedPropService.get_prop_record(main, prop_id).is_empty():
+				needs = true
+		if needs and ensure_site_twin(iid, true):
+			n += 1
+	return n
+
+
+## Place (or re-place) a graph node's GLB / procedural twin at its site coords.
+## Hide / show a node's bound 3D twin from the world (and Site Plan). Persists on
+## the prop record; a hidden twin also drops out of Site Plan (see graph_canvas
+## _item_has_visible_twin). Reachable from the graph even when the prop is hidden
+## (you can't click an invisible prop in first-person to un-hide it).
+func set_node_3d_hidden(item_id: String, hidden: bool) -> void:
+	var pid := _bound_prop_id_for_item(item_id)
+	if pid.is_empty():
+		return
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader != null and loader.has_method("update_prop_record"):
+		loader.call("update_prop_record", pid, {"hidden_3d": hidden})
+		_graph_canvas.queue_redraw() if _graph_canvas != null else null
+
+
+func is_node_3d_hidden(item_id: String) -> bool:
+	var pid := _bound_prop_id_for_item(item_id)
+	if pid.is_empty():
+		return false
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader != null and loader.has_method("get_prop_record"):
+		return bool((loader.call("get_prop_record", pid) as Dictionary).get("hidden_3d", false))
+	return false
+
+
+## Bulk hide/show all generic placeholder twins (generic_box/tank) from 3D + Site Plan.
+func hide_all_placeholder_twins(hidden: bool) -> void:
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader == null or not loader.has_method("set_placeholder_twins_hidden"):
+		return
+	var n := int(loader.call("set_placeholder_twins_hidden", hidden))
+	_show_toast(("Hid %d placeholder twin(s)" if hidden else "Showed %d placeholder twin(s)") % n)
+	if _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+
+
+func _bound_prop_id_for_item(item_id: String) -> String:
+	if model == null or item_id.is_empty():
+		return ""
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return ""
+	return str((item.get("specs", {}) as Dictionary).get("bound_prop_id", ""))
+
+
 func place_site_twin(item_id: String) -> void:
 	if model == null or item_id.is_empty():
 		return
@@ -858,6 +1502,19 @@ func place_site_twin(item_id: String) -> void:
 	if not GraphSiteLayout.has_site_coords(item):
 		_show_toast("Assign a Site Plan position first (drag onto the SoI disc)")
 		return
+	var had_prop := not str((item.get("specs", {}) as Dictionary) \
+			.get("bound_prop_id", "")).is_empty()
+	# Containers / catchments / compounds: auto procedural twin.
+	if _item_wants_site_twin(item):
+		if not ensure_site_twin(item_id, false):
+			return
+		_refresh_item_elevations()
+		_refresh_site_autoroutes()
+		_schedule_graph_autosave()
+		_show_toast("Moved 3D twin to site position" if had_prop \
+				else "Placed 3D twin at ground level")
+		return
+	# Other types still require an explicit model_id.
 	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 	var model_id := str(specs.get("model_id", ""))
 	if model_id.is_empty():
@@ -897,9 +1554,15 @@ func place_site_twin(item_id: String) -> void:
 	_schedule_graph_autosave()
 
 
-func _on_resource_containers_merged(_target_id: String, _absorbed_id: String, kind: String) -> void:
+func _on_resource_containers_merged(target_id: String, _absorbed_id: String, kind: String) -> void:
 	var label := ResourceKinds.display_name(kind)
 	_show_toast("Merged %s containers" % label)
+	# Keep existing placed twin if any; do not auto-embody a gray-box tank.
+	if not target_id.is_empty():
+		var item := model.get_item(target_id) if model != null else {}
+		var prop_id := str((item.get("specs", {}) as Dictionary).get("bound_prop_id", ""))
+		if not prop_id.is_empty():
+			ensure_site_twin(target_id, true)
 	if _resource_flow != null and _resource_flow.has_method("clear_timelines"):
 		_resource_flow.call("clear_timelines")
 	if _graph_canvas != null:
@@ -909,17 +1572,24 @@ func _on_resource_containers_merged(_target_id: String, _absorbed_id: String, ki
 func _apply_layout() -> void:
 	var left_w  := SIDEBAR_L_W if _sidebar_l_open else 0.0
 	var right_w := SIDEBAR_R_W if _sidebar_r_open else 0.0
+	var siphon_dock := _graph_view_mode == GraphSiteLayout.VIEW_SIPHON
+	# Phase 2 Hydro Lab is a full-bleed overlay — don't reserve SIPHON_LAB_W or
+	# leave the left telemetry dock stealing CT width.
+	if siphon_dock:
+		left_w = 0.0
+		right_w = 0.0
 	var timeline_inset := _timeline_bottom_inset()
 
 	# Left sidebar — stop above the timeline bar so its items are never hidden
 	if _left_sidebar:
-		_left_sidebar.visible = _sidebar_l_open
+		_left_sidebar.visible = _sidebar_l_open and not siphon_dock
 		_anchor(_left_sidebar,
 			0.0, 0.0, 0.0, 1.0,
 			0.0, TOPBAR_H, SIDEBAR_L_W, -timeline_inset)
 
 	# Left collapse tab: immediately right of sidebar's right edge
 	if _left_toggle:
+		_left_toggle.visible = not siphon_dock
 		_anchor(_left_toggle,
 			0.0, 0.5, 0.0, 0.5,
 			left_w, -20.0, left_w + TOGGLE_W, 20.0)
@@ -927,13 +1597,14 @@ func _apply_layout() -> void:
 
 	# Right sidebar — stop above the timeline bar
 	if _right_sidebar:
-		_right_sidebar.visible = _sidebar_r_open
+		_right_sidebar.visible = _sidebar_r_open and not siphon_dock
 		_anchor(_right_sidebar,
 			1.0, 0.0, 1.0, 1.0,
 			-SIDEBAR_R_W, TOPBAR_H, 0.0, -timeline_inset)
 
 	# Right collapse tab: immediately left of sidebar's left edge
 	if _right_toggle:
+		_right_toggle.visible = not siphon_dock
 		_anchor(_right_toggle,
 			1.0, 0.5, 1.0, 0.5,
 			-(right_w + TOGGLE_W), -20.0, -right_w, 20.0)
@@ -952,6 +1623,8 @@ func _apply_layout() -> void:
 		# Keep model reference in sync whenever layout is re-applied
 		_graph_canvas.set("model", model)
 		_graph_canvas.set("active_scope_id", _active_scope_id)
+	if _siphon_lab_modal != null and is_instance_valid(_siphon_lab_modal):
+		_apply_siphon_lab_layout()
 	if _soi_preview != null and _soi_preview.has_method("mark_layout_dirty"):
 		_soi_preview.call("mark_layout_dirty")
 	_layout_history_panel()
@@ -1009,7 +1682,8 @@ func _build_topbar() -> Control:
 	_redo_btn.tooltip_text = "Redo  (Ctrl+Y)"
 	_undo_btn.pressed.connect(_do_undo)
 	_redo_btn.pressed.connect(_do_redo)
-	reset_btn.pressed.connect(_on_reset_graph)
+	reset_btn.pressed.connect(_confirm_reset_graph)
+	reset_btn.tooltip_text = "Reset this map's graph (asks first — not undoable)"
 	sysrev_btn.pressed.connect(_on_system_review)
 	challenge_btn.tooltip_text = "Challenges — structured survival missions"
 	challenge_btn.pressed.connect(_on_challenge_pressed)
@@ -1022,13 +1696,13 @@ func _build_topbar() -> Control:
 	sep1.add_theme_constant_override("separation", 8)
 	left_grp.add_child(sep1)
 
-	# Combine ▾ — grouping / compound / wiring / layout ops in one dropdown
-	# (was 8 equal-weight buttons crowding the bar).
+	# Combine ▾ — grouping / compound / wiring (layout lives in Layout ▾).
 	_combine_menu = _make_topbar_menu_btn("Combine ▾")
-	_combine_menu.tooltip_text = "Group, arrays, banks, series/parallel wiring, arrange"
+	_combine_menu.tooltip_text = "Group, arrays, banks, series/parallel wiring"
 	var cp := _combine_menu.get_popup()
-	cp.add_item("Group loads", COMBINE_GROUP)
-	cp.add_item("Ungroup", COMBINE_UNGROUP)
+	cp.add_item("Group into super-node", COMBINE_GROUP)
+	cp.add_item("Ungroup generic group", COMBINE_UNGROUP)
+	cp.add_item("Explode compound…", COMBINE_EXPLODE)
 	cp.add_separator()
 	cp.add_item("Make Solar Array", COMBINE_ARRAY)
 	cp.add_item("Make Battery Bank", COMBINE_BANK)
@@ -1036,14 +1710,23 @@ func _build_topbar() -> Control:
 	cp.add_item("Wire panels in Series", COMBINE_SERIES)
 	cp.add_item("Wire panels in Parallel", COMBINE_PARALLEL)
 	cp.add_item("Pick controller for array…", COMBINE_CTRL_PICKER)
-	cp.add_separator()
-	cp.add_item("Arrange layout", COMBINE_ARRANGE)
-	cp.add_item("Spawn 3D placeholder", COMBINE_PLACEHOLDER)
 	cp.id_pressed.connect(_on_combine_menu_id)
 	left_grp.add_child(_combine_menu)
 
-	_enter_btn = _make_topbar_btn("▸ Enter")
-	_back_btn  = _make_topbar_btn("◂ Back")
+	_layout_menu = _make_topbar_menu_btn("Layout ▾")
+	_layout_menu.tooltip_text = (
+			"Auto-arrange the active scope (and nested super-nodes) · "
+			+ "spawn a gray-box 3D placeholder for the selection")
+	var lp := _layout_menu.get_popup()
+	lp.add_item("Arrange layout", LAYOUT_ARRANGE)
+	lp.add_item("Spawn 3D placeholder", LAYOUT_PLACEHOLDER)
+	lp.id_pressed.connect(_on_layout_menu_id)
+	left_grp.add_child(_layout_menu)
+
+	_enter_btn = _make_topbar_btn("▸ Expand")
+	_back_btn  = _make_topbar_btn("◂ Collapse")
+	_enter_btn.tooltip_text = "Open the selected super-node (keeps StarShade / component identity + 3D binding)"
+	_back_btn.tooltip_text = "Collapse back to the parent super-node (Esc)"
 	_enter_btn.pressed.connect(_on_enter_selected_compound)
 	_back_btn.pressed.connect(_on_back_scope_pressed)
 	var sep_nav := VSeparator.new()
@@ -1063,12 +1746,11 @@ func _build_topbar() -> Control:
 	right_grp.alignment = BoxContainer.ALIGNMENT_END
 	hbox.add_child(right_grp)
 
-	_scope_breadcrumb = Label.new()
-	_scope_breadcrumb.add_theme_color_override("font_color", C_TEXT_S)
-	_scope_breadcrumb.add_theme_font_size_override("font_size", 13)
-	_scope_breadcrumb.text               = "Root"
-	_scope_breadcrumb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_scope_breadcrumb = HBoxContainer.new()
+	_scope_breadcrumb.add_theme_constant_override("separation", 1)
+	_scope_breadcrumb.alignment = BoxContainer.ALIGNMENT_END
 	right_grp.add_child(_scope_breadcrumb)
+	_update_scope_breadcrumb()
 
 	_soi_chip = Label.new()
 	_soi_chip.add_theme_color_override("font_color", C_PRIMARY)
@@ -1083,7 +1765,7 @@ func _build_topbar() -> Control:
 	sep2.add_theme_constant_override("separation", 8)
 	right_grp.add_child(sep2)
 
-	# ── Graph view mode: Freeform / Site Plan / Elevation ─────────────────
+	# ── Graph view mode: Freeform / Site Plan / Elevation / Siphon Lab ──
 	_mode_chip_row = HBoxContainer.new()
 	_mode_chip_row.add_theme_constant_override("separation", 4)
 	_mode_chip_row.tooltip_text = "Graph / SoI view mode"
@@ -1091,6 +1773,7 @@ func _build_topbar() -> Control:
 		["freeform", "Freeform"],
 		["site", "Site Plan"],
 		["elevation", "Elevation"],
+		["siphon", "Hydro Lab"],
 		["snowglobe", "Snowglobe"],
 	]:
 		var b := _make_mode_chip(str(pair[0]), str(pair[1]))
@@ -1110,42 +1793,182 @@ func _build_topbar() -> Control:
 	dp.set_item_checked(dp.get_item_index(DESIGNATE_OFF), true)
 	right_grp.add_child(_designate_menu)
 
-	_view_mode_menu = _make_topbar_menu_btn("View: Freeform ▾")
+	# Mode SWITCHING lives only in the chip strip above — this menu holds the
+	# per-view extras (duplicating the modes here made three different ways to
+	# say the same thing across the topbar).
+	_view_mode_menu = _make_topbar_menu_btn("View options ▾")
 	_view_mode_menu.tooltip_text = (
-		"Freeform (abstract layout) · Site Plan (meters + 3D place) · Elevation.\n"
+		"Extras for the active view.\n"
 		+ "SoI bubble (freeform): snowglobe behind nodes — Shift+drag orbit, Shift+scroll zoom.\n"
-		+ "Site Plan: scroll zooms 2D+3D together; top-down locked.\n"
-		+ "Elevation: drag nodes X/Y; Shift+drag rotates section; optional 3D snowglobe slice.")
+		+ "Site Plan: starts top-down; Shift+drag orbits (yaw/tilt); scroll zooms 2D+3D.\n"
+		+ "Elevation CT: side-on half-cutaway; Shift+drag rotate/depth; "
+		+ "Shift+wheel zoom cut; Slice depth slider; Reset section.\n"
+		+ "Siphon Lab: hydro detail panel (module height, start/break, RPM) — SoI preview off.")
 	var vmp := _view_mode_menu.get_popup()
-	vmp.add_radio_check_item("Freeform", VIEW_MODE_FREEFORM)
-	vmp.add_radio_check_item("Site Plan (top-down)", VIEW_MODE_SITE)
-	vmp.add_radio_check_item("Elevation (section)", VIEW_MODE_ELEVATION)
-	vmp.add_separator()
 	vmp.add_check_item("SoI bubble (freeform)", VIEW_MODE_SOI_BUBBLE)
 	vmp.add_check_item("3D snowglobe section (elevation)", VIEW_MODE_ELEV_3D)
-	vmp.add_item("Open full Snowglobe…", VIEW_MODE_SNOWGLOBE)
+	vmp.add_separator("Elevation overlays")
+	vmp.add_check_item("DEM / pond 2D overlay", VIEW_MODE_ELEV_DEM)
+	vmp.add_check_item("Chips (labels/bodies)", VIEW_MODE_ELEV_CHIPS)
+	vmp.add_check_item("Ports", VIEW_MODE_ELEV_PORTS)
+	vmp.add_check_item("Schematic 2D wires", VIEW_MODE_ELEV_SCHEM_WIRES)
+	vmp.add_check_item("Projected 2D pipe overlay", VIEW_MODE_ELEV_PROJ_PIPES)
+	vmp.add_separator()
+	vmp.add_check_item("Node cards (no 3D previews)", VIEW_MODE_NODE_CARDS)
+	vmp.add_check_item("Preview node labels", VIEW_MODE_PREVIEW_LABELS)
+	vmp.add_check_item("Radial layout (Site Plan auto-yaw)", VIEW_MODE_RADIAL)
+	vmp.add_check_item("Site magnifier labels", VIEW_MODE_SITE_CHIPS)
+	vmp.add_check_item("Site ports", VIEW_MODE_SITE_PORTS)
+	vmp.add_check_item("Live lighting (Site / Elevation)", VIEW_MODE_SITE_LIVE_LIGHT)
+	vmp.add_separator("Site Plan wires")
+	vmp.add_radio_check_item("Wires: 3D conduits", VIEW_MODE_SITE_WIRE_3D)
+	vmp.add_radio_check_item("Wires: Metro 2D overlay", VIEW_MODE_SITE_WIRE_METRO)
+	vmp.add_radio_check_item("Wires: none (overlay)", VIEW_MODE_SITE_WIRE_NONE)
 	vmp.add_separator()
 	vmp.add_item("Seed site from freeform…", VIEW_MODE_SEED_SITE)
+	vmp.add_item("Embody missing Site twins…", VIEW_MODE_EMBODY_TWINS)
 	vmp.add_separator()
-	vmp.add_radio_check_item("Elevation scale 1×", VIEW_MODE_EXAG_1X)
-	vmp.add_radio_check_item("Elevation scale 5×", VIEW_MODE_EXAG_5X)
+	vmp.add_radio_check_item("Elevation scale 1× (3D section locks to 1×)", VIEW_MODE_EXAG_1X)
+	vmp.add_radio_check_item("Elevation scale 5× (2D-only Elev)", VIEW_MODE_EXAG_5X)
 	vmp.add_item("Rotate section heading +15°", VIEW_MODE_HEADING_ROTATE)
+	vmp.add_item("Reset section (N/S · slice 0 · zoom fit)", VIEW_MODE_RESET_SECTION)
 	vmp.id_pressed.connect(_on_view_mode_menu_id)
-	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_FREEFORM), true)
 	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_EXAG_5X), true)
+	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_3D), _elevation_3d_section)
+	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_DEM), true)
+	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_CHIPS), false)
+	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_PORTS), true)
+	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_SCHEM_WIRES), false)
+	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_PROJ_PIPES), false)
+	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_SITE_PORTS), true)
 	right_grp.add_child(_view_mode_menu)
+
+	_elev_slice_row = HBoxContainer.new()
+	_elev_slice_row.add_theme_constant_override("separation", 6)
+	_elev_slice_row.visible = false
+	var slice_cap := Label.new()
+	slice_cap.text = "Slice"
+	slice_cap.add_theme_font_size_override("font_size", 11)
+	slice_cap.add_theme_color_override("font_color", Color(C_TEXT.r, C_TEXT.g, C_TEXT.b, 0.85))
+	_elev_slice_row.add_child(slice_cap)
+	_elev_slice_slider = HSlider.new()
+	_elev_slice_slider.custom_minimum_size = Vector2(120, 22)
+	_elev_slice_slider.min_value = -150.0
+	_elev_slice_slider.max_value = 150.0
+	_elev_slice_slider.step = 1.0
+	_elev_slice_slider.value = 0.0
+	_elev_slice_slider.tooltip_text = "CT slice depth (−R…+R metres along the cut normal)"
+	_elev_slice_slider.value_changed.connect(_on_elev_slice_slider_changed)
+	_elev_slice_row.add_child(_elev_slice_slider)
+	_elev_slice_lbl = Label.new()
+	_elev_slice_lbl.text = "0 m"
+	_elev_slice_lbl.custom_minimum_size = Vector2(44, 0)
+	_elev_slice_lbl.add_theme_font_size_override("font_size", 11)
+	_elev_slice_row.add_child(_elev_slice_lbl)
+	right_grp.add_child(_elev_slice_row)
+
+	_hydro_section_lbl = Label.new()
+	_hydro_section_lbl.visible = false
+	_hydro_section_lbl.add_theme_font_size_override("font_size", 11)
+	_hydro_section_lbl.add_theme_color_override("font_color",
+			Color(0.75, 0.9, 1.0, 0.95))
+	_hydro_section_lbl.tooltip_text = (
+			"Hydro Section: live stage-discharge ΣQ and PE/generation from "
+			+ "pond level + culvert inverts (Elevation view)")
+	right_grp.add_child(_hydro_section_lbl)
+
+	_elev_hydro_lab_btn = Button.new()
+	_elev_hydro_lab_btn.text = "Hydro Lab…"
+	_elev_hydro_lab_btn.visible = false
+	_elev_hydro_lab_btn.focus_mode = Control.FOCUS_NONE
+	_elev_hydro_lab_btn.tooltip_text = (
+			"Open Hydro Lab deep-dive for the nearest siphon / penstock "
+			+ "(Elevation stays the primary hydro CT).")
+	_apply_topbar_btn_style(_elev_hydro_lab_btn)
+	_elev_hydro_lab_btn.pressed.connect(_on_elev_open_hydro_lab_pressed)
+	right_grp.add_child(_elev_hydro_lab_btn)
+
+	# Site Plan camp tools — Radial / Array / working radius (visible dock).
+	_site_tool_row = HBoxContainer.new()
+	_site_tool_row.add_theme_constant_override("separation", 6)
+	_site_tool_row.visible = false
+	_site_radial_btn = Button.new()
+	_site_radial_btn.text = "Radial"
+	_site_radial_btn.toggle_mode = true
+	_site_radial_btn.focus_mode = Control.FOCUS_NONE
+	_site_radial_btn.tooltip_text = (
+			"Radial camp layout: auto-yaw on move + bold working-radius guide. "
+			+ "Shift+drag a prop to face the tangent (SoI size unchanged).")
+	_apply_topbar_btn_style(_site_radial_btn)
+	_site_radial_btn.toggled.connect(_on_site_radial_toggled)
+	_site_tool_row.add_child(_site_radial_btn)
+	_site_array_menu = _make_topbar_menu_btn("Array ▾")
+	_site_array_menu.tooltip_text = (
+			"Duplicate the selected 3D prop in a Line, Arc, or Circle using "
+			+ "the working radius (default = SoI R).")
+	var ap := _site_array_menu.get_popup()
+	ap.add_item("Array: Line…", SITE_ARRAY_LINE)
+	ap.add_item("Array: Arc…", SITE_ARRAY_ARC)
+	ap.add_item("Array: Circle…", SITE_ARRAY_CIRCLE)
+	ap.add_separator()
+	ap.add_item("Confirm array", SITE_ARRAY_CONFIRM)
+	ap.add_item("Cancel array", SITE_ARRAY_CANCEL)
+	ap.add_separator()
+	ap.add_item("Set array center…", SITE_ARRAY_SET_CENTER)
+	ap.add_item("Clear custom center", SITE_ARRAY_CLEAR_CENTER)
+	ap.add_item("Reset R to SoI", SITE_RADIUS_RESET)
+	ap.id_pressed.connect(_on_site_array_menu_id)
+	_site_tool_row.add_child(_site_array_menu)
+	var r_cap := Label.new()
+	r_cap.text = "R"
+	r_cap.add_theme_font_size_override("font_size", 11)
+	_site_tool_row.add_child(r_cap)
+	_site_radius_slider = HSlider.new()
+	_site_radius_slider.custom_minimum_size = Vector2(100, 22)
+	_site_radius_slider.min_value = 5.0
+	_site_radius_slider.max_value = 200.0
+	_site_radius_slider.step = 1.0
+	_site_radius_slider.value = 50.0
+	_site_radius_slider.tooltip_text = "Working radius (m) — brush-style; does not resize SoI"
+	_site_radius_slider.value_changed.connect(_on_site_working_radius_changed)
+	_site_tool_row.add_child(_site_radius_slider)
+	_site_radius_lbl = Label.new()
+	_site_radius_lbl.text = "50 m"
+	_site_radius_lbl.custom_minimum_size = Vector2(40, 0)
+	_site_radius_lbl.add_theme_font_size_override("font_size", 11)
+	_site_tool_row.add_child(_site_radius_lbl)
+	right_grp.add_child(_site_tool_row)
 
 	var sep3 := VSeparator.new()
 	sep3.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
 	sep3.add_theme_constant_override("separation", 8)
 	right_grp.add_child(sep3)
 
+	# ── Wire style ▾ — global override (Bezier / Rounded / Metro) + Apply to all ─
+	_wire_style_menu = _make_topbar_menu_btn("Wire ▾")
+	_wire_style_menu.tooltip_text = (
+			"Global wire style override for every connection (view-only, "
+			+ "reversible).\n\"Apply to all\" bakes the current style into the "
+			+ "model and clears the override.")
+	var wsp := _wire_style_menu.get_popup()
+	wsp.add_radio_check_item("Bezier (curved)", WIRE_STYLE_BEZIER)
+	wsp.add_radio_check_item("Rounded (orthogonal)", WIRE_STYLE_ROUNDED)
+	wsp.add_radio_check_item("Metro (45°)", WIRE_STYLE_METRO)
+	wsp.add_separator()
+	wsp.add_item("Apply to all connections", WIRE_STYLE_APPLY_ALL)
+	wsp.id_pressed.connect(_on_wire_style_menu_id)
+	right_grp.add_child(_wire_style_menu)
+	_sync_wire_style_menu_checks()
+
 	# View ▾ — Legend / History / Hints consolidated (was three buttons).
 	_view_menu = _make_topbar_menu_btn("View ▾")
-	_view_menu.tooltip_text = "Legend, history playback, hints"
+	_view_menu.tooltip_text = "Legend, history playback, pinned PBI bar, hints"
 	var vp := _view_menu.get_popup()
 	vp.add_check_item("Wire-color legend", VIEW_LEGEND)
 	vp.add_check_item("🕒 History playback", VIEW_HISTORY)
+	vp.add_separator()
+	vp.add_check_item("Show PBI bar (pinned)", VIEW_PBI_BAR)
+	vp.set_item_checked(vp.get_item_index(VIEW_PBI_BAR), _pbi_bar_pinned)
 	vp.add_separator()
 	vp.add_item("Hints & shortcuts", VIEW_HINTS)
 	vp.id_pressed.connect(_on_view_menu_id)
@@ -1171,6 +1994,23 @@ func _build_topbar() -> Control:
 	gp.id_pressed.connect(_on_graph_menu_id)
 	right_grp.add_child(graph_menu)
 
+	var site_menu := _make_topbar_menu_btn("Site ▾")
+	site_menu.tooltip_text = (
+			"Share a portable .esim site package (graph + SoI + props + styles). "
+			+ "Preview a friend’s design as a ghost overlay, then apply or discard.")
+	var sp := site_menu.get_popup()
+	sp.add_item("Export site (.esim)…", 10)
+	sp.add_item("Import site (.esim)…", 11)
+	sp.add_separator()
+	sp.add_item("Preview site as ghost…", 12)
+	sp.add_item("Clear ghost preview", 13)
+	sp.add_item("Apply ghost graph (replace mine)", 14)
+	sp.add_separator()
+	sp.add_item("Copy share code (graph + SoI)", 15)
+	sp.add_item("Paste share code…", 16)
+	sp.id_pressed.connect(_on_site_menu_id)
+	right_grp.add_child(site_menu)
+
 	return bar
 
 
@@ -1178,7 +2018,106 @@ func _on_view_menu_id(id: int) -> void:
 	match id:
 		VIEW_LEGEND:  _on_legend_toggle()
 		VIEW_HISTORY: _on_history_btn_pressed()
+		VIEW_PBI_BAR: _on_toggle_pbi_bar()
 		VIEW_HINTS:   _on_show_hints()
+
+
+## Toggle the pinned PBI bar; propagate the choice to the canvas and persist it.
+func _on_toggle_pbi_bar() -> void:
+	_pbi_bar_pinned = not _pbi_bar_pinned
+	_apply_pbi_bar_pinned()
+	if _view_menu != null:
+		var vp := _view_menu.get_popup()
+		vp.set_item_checked(vp.get_item_index(VIEW_PBI_BAR), _pbi_bar_pinned)
+	_schedule_graph_autosave()
+
+
+func _apply_pbi_bar_pinned() -> void:
+	if _graph_canvas != null:
+		_graph_canvas.set("pbi_bar_pinned", _pbi_bar_pinned)
+		_graph_canvas.call("queue_redraw")
+
+
+# ── Wire-style global override ────────────────────────────────────────────────
+func _on_wire_style_menu_id(id: int) -> void:
+	match id:
+		WIRE_STYLE_BEZIER:    _set_wire_style_override("bezier")
+		WIRE_STYLE_ROUNDED:   _set_wire_style_override("orthogonal")
+		WIRE_STYLE_METRO:     _set_wire_style_override("metro")
+		WIRE_STYLE_APPLY_ALL: _apply_wire_style_to_all()
+
+
+func _set_wire_style_override(style: String) -> void:
+	if _graph_canvas == null:
+		return
+	# Toggle off if re-selecting the active override.
+	if str(_graph_canvas.get("wire_style_override")) == style:
+		_graph_canvas.set("wire_style_override", "")
+	else:
+		_graph_canvas.set("wire_style_override", style)
+	_graph_canvas.call("queue_redraw")
+	_sync_wire_style_menu_checks()
+	_schedule_graph_autosave()
+
+
+## Bake the current effective style into every connection + the model default,
+## then clear the override so per-connection styles are authoritative again.
+func _apply_wire_style_to_all() -> void:
+	if _graph_canvas == null or model == null:
+		return
+	var style: String = str(_graph_canvas.get("wire_style_override"))
+	if style.is_empty():
+		return
+	for conn in model.connections:
+		if conn is Dictionary:
+			conn["line_style"] = style
+	model.last_line_style = style
+	_graph_canvas.set("wire_style_override", "")
+	_graph_canvas.call("queue_redraw")
+	_sync_wire_style_menu_checks()
+	_schedule_graph_autosave()
+
+
+func _sync_wire_style_menu_checks() -> void:
+	if _wire_style_menu == null:
+		return
+	var wsp := _wire_style_menu.get_popup()
+	var ov := ""
+	if _graph_canvas != null:
+		ov = str(_graph_canvas.wire_style_override)
+	wsp.set_item_checked(wsp.get_item_index(WIRE_STYLE_BEZIER), ov == "bezier")
+	wsp.set_item_checked(wsp.get_item_index(WIRE_STYLE_ROUNDED), ov == "orthogonal")
+	wsp.set_item_checked(wsp.get_item_index(WIRE_STYLE_METRO), ov == "metro")
+	if ov.is_empty():
+		_wire_style_menu.text = "Wire ▾"
+	else:
+		var lbl := "Bezier"
+		if ov == "orthogonal":
+			lbl = "Rounded"
+		elif ov == "metro":
+			lbl = "Metro"
+		_wire_style_menu.text = "Wire: %s ▾" % lbl
+
+
+# ── Physical-view (Site/Elevation) orbit camera persistence ──────────────────
+## Snapshot the SoI preview camera's orbit params (yaw/pitch) for Site +
+## Elevation so an orbited view is restored on reload.
+func _collect_phys_cam_state() -> Dictionary:
+	if _soi_preview != null and _soi_preview.has_method("get_phys_cam_state"):
+		var st: Variant = _soi_preview.call("get_phys_cam_state")
+		if st is Dictionary:
+			return st as Dictionary
+	return {}
+
+
+func _apply_phys_cam_state(st: Dictionary) -> void:
+	if st.is_empty():
+		return
+	# Ensure the service exists so the saved orbit is retained even when the
+	# preview isn't active yet (it applies to the camera on next activation).
+	_ensure_soi_preview()
+	if _soi_preview != null and _soi_preview.has_method("apply_phys_cam_state"):
+		_soi_preview.call("apply_phys_cam_state", st)
 
 
 func _make_topbar_btn(label: String) -> Button:
@@ -1258,19 +2197,87 @@ func _on_view_mode_menu_id(id: int) -> void:
 			_schedule_graph_autosave()
 		VIEW_MODE_ELEV_3D:
 			_elevation_3d_section = not _elevation_3d_section
+			if _elevation_3d_section:
+				_maybe_toast_elev_3d_wires_hint()
 			_sync_view_mode_menu_checks()
 			_sync_soi_preview_for_mode()
 			_schedule_graph_autosave()
+		VIEW_MODE_ELEV_DEM, VIEW_MODE_ELEV_CHIPS, VIEW_MODE_ELEV_PORTS, \
+		VIEW_MODE_ELEV_SCHEM_WIRES, VIEW_MODE_ELEV_PROJ_PIPES:
+			_toggle_elev_overlay(id)
 		VIEW_MODE_SNOWGLOBE:
 			_open_full_snowglobe()
+		VIEW_MODE_NODE_CARDS:
+			if _graph_canvas != null:
+				var cur := str(_graph_canvas.get("node_display_mode"))
+				_graph_canvas.set("node_display_mode",
+					"preview" if cur == "card" else "card")
+				_graph_canvas.call("queue_redraw")
+			_sync_view_mode_menu_checks()
+			_schedule_graph_autosave()
+		VIEW_MODE_PREVIEW_LABELS:
+			if _graph_canvas != null:
+				_graph_canvas.set("show_preview_labels",
+					not bool(_graph_canvas.get("show_preview_labels")))
+				_graph_canvas.call("queue_redraw")
+			_sync_view_mode_menu_checks()
+			_schedule_graph_autosave()
+		VIEW_MODE_RADIAL:
+			if _graph_canvas != null:
+				var on := not bool(_graph_canvas.get("radial_layout_mode"))
+				_graph_canvas.set("radial_layout_mode", on)
+				_graph_canvas.call("queue_redraw")
+				if on and _graph_view_mode != GraphSiteLayout.VIEW_SITE:
+					_apply_graph_view_mode(GraphSiteLayout.VIEW_SITE)
+				if _site_radial_btn != null:
+					_site_radial_btn.set_pressed_no_signal(on)
+				_show_toast("Radial layout %s — Shift+drag prop = tangent yaw"
+					% ("ON" if on else "OFF"))
+			_sync_view_mode_menu_checks()
+			_schedule_graph_autosave()
+		VIEW_MODE_SITE_CHIPS:
+			if _graph_canvas != null:
+				_graph_canvas.set("site_show_chips",
+						not bool(_graph_canvas.get("site_show_chips")))
+				_graph_canvas.call("queue_redraw")
+			_sync_view_mode_menu_checks()
+			_schedule_graph_autosave()
+		VIEW_MODE_SITE_PORTS:
+			if _graph_canvas != null:
+				_graph_canvas.set("site_show_ports",
+						not bool(_graph_canvas.get("site_show_ports")))
+				_graph_canvas.call("queue_redraw")
+			_sync_view_mode_menu_checks()
+			_schedule_graph_autosave()
+		VIEW_MODE_SITE_LIVE_LIGHT, VIEW_MODE_ELEV_LIVE_LIGHT:
+			_site_elev_live_lighting = not _site_elev_live_lighting
+			if _site_elev_live_lighting:
+				_elev_end_noon_lock()
+				_show_toast("Live lighting ON — Site/Elev follow the sim clock")
+			elif _graph_view_mode in [GraphSiteLayout.VIEW_SITE, GraphSiteLayout.VIEW_ELEVATION] \
+					and visible:
+				_elev_begin_noon_lock()
+				_show_toast("Daytime bake ON — mean solar noon")
+			_sync_view_mode_menu_checks()
+			_schedule_graph_autosave()
+		VIEW_MODE_SITE_WIRE_3D:
+			set_site_wire_mode("prefer_3d")
+		VIEW_MODE_SITE_WIRE_METRO:
+			set_site_wire_mode("metro")
+		VIEW_MODE_SITE_WIRE_NONE:
+			set_site_wire_mode("none")
 		VIEW_MODE_SEED_SITE:
 			_seed_site_from_freeform()
+		VIEW_MODE_EMBODY_TWINS:
+			_embody_site_twins_manual()
 		VIEW_MODE_EXAG_1X:
 			_set_elevation_exaggeration(1.0)
 		VIEW_MODE_EXAG_5X:
 			_set_elevation_exaggeration(5.0)
 		VIEW_MODE_HEADING_ROTATE:
 			_rotate_elevation_heading(deg_to_rad(15.0))
+		VIEW_MODE_RESET_SECTION:
+			_reset_elevation_section()
 
 
 func _make_mode_chip(mode_id: String, label: String) -> Button:
@@ -1292,6 +2299,8 @@ func _on_mode_chip_pressed(mode_id: String) -> void:
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_SITE)
 		"elevation":
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_ELEVATION)
+		"siphon":
+			_apply_graph_view_mode(GraphSiteLayout.VIEW_SIPHON)
 		"snowglobe":
 			_open_full_snowglobe()
 
@@ -1335,6 +2344,10 @@ func _set_site_designate_mode(mode: String) -> void:
 
 
 func _on_site_background_clicked(screen_pos: Vector2) -> void:
+	if _awaiting_array_center:
+		_awaiting_array_center = false
+		_on_site_array_center_click(screen_pos)
+		return
 	if _site_designate_mode.is_empty() or _graph_canvas == null:
 		return
 	var disc: Dictionary = {}
@@ -1375,22 +2388,469 @@ func _on_site_background_clicked(screen_pos: Vector2) -> void:
 			print("SystemGraphView: Designate crop — no veg area under click")
 
 
-func _apply_graph_view_mode(mode: String) -> void:
+## Deferred visibility hook — always applies the live `_graph_view_mode`.
+func _reapply_current_graph_view_mode() -> void:
+	_apply_graph_view_mode(_graph_view_mode)
+
+
+func _apply_graph_view_mode(mode: String, opts: Dictionary = {}) -> void:
+	var was_elev := _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
+	var was_site := _graph_view_mode == GraphSiteLayout.VIEW_SITE
+	var entering_elev := mode == GraphSiteLayout.VIEW_ELEVATION and not was_elev
 	_graph_view_mode = mode
+	# Fresh entry into Elevation turns CT 3D on (restore / explicit opt skip this).
+	if entering_elev and not bool(opts.get("preserve_elev_3d", false)):
+		_elevation_3d_section = true
+		# Do NOT auto-enable world 3D wires here — remeshing every conduit on
+		# the same frame as the SoI CT SubViewport boots was TDR'ing AMD GPUs.
+		# Soft-focus remeshes only the siphon culvert (below).
+		_maybe_toast_elev_3d_wires_hint()
+	# Site/Elev: bake at mean solar noon unless live lighting is on.
+	var is_phys := mode in [GraphSiteLayout.VIEW_SITE, GraphSiteLayout.VIEW_ELEVATION]
+	if is_phys and visible and not _site_elev_live_lighting:
+		_elev_begin_noon_lock()
+	elif not is_phys:
+		_elev_end_noon_lock()
+		if was_site:
+			_restore_site_conduit_visibility()
 	if _graph_canvas != null:
-		_graph_canvas.set("view_mode", mode)
+		_graph_canvas.visible = true
+		# Phase 2: the Siphon Lab renders its OWN 2D cross-section full-area and no
+		# longer borrows the Elevation CT / SoI section. Park the (covered) canvas
+		# in a cheap freeform mode so it does no hidden elevation/SoI work.
+		if mode == GraphSiteLayout.VIEW_SIPHON:
+			_graph_canvas.set("view_mode", GraphSiteLayout.VIEW_FREEFORM)
+			_graph_canvas.set("siphon_lab_active", false)
+		else:
+			_graph_canvas.set("view_mode", mode)
+			_graph_canvas.set("siphon_lab_active", false)
+		if entering_elev:
+			_graph_canvas.set("_pan", Vector2.ZERO)
 		_graph_canvas.call("queue_redraw")
 	_sync_view_mode_menu_checks()
+	_sync_elev_slice_row()
+	_sync_site_tool_row()
 	_sync_soi_preview_for_mode()
-	if mode == GraphSiteLayout.VIEW_SITE or mode == GraphSiteLayout.VIEW_ELEVATION:
+	_sync_siphon_lab_view(str(opts.get("siphon_item_id", "")))
+	_apply_layout()
+	if mode == GraphSiteLayout.VIEW_SITE or mode == GraphSiteLayout.VIEW_ELEVATION \
+			or mode == GraphSiteLayout.VIEW_SIPHON:
 		_backfill_site_from_world()
 		_refresh_item_elevations()
 		if mode == GraphSiteLayout.VIEW_SITE:
+			# Seat graph nodes that still lack site_* only. Do NOT auto-call
+			# ensure_all_site_twins() here — that place+save path raced map load
+			# when view_mode=site was restored from autosave and overwrote
+			# user://maps/placed_props_*.json with only the new twins (wiping
+			# unbound buildings / pallet racks). Embody is opt-in via View menu.
+			_auto_seed_site_unplaced()
 			_refresh_site_autoroutes()
+			_ensure_site_working_radius()
+			_apply_site_wire_mode_session()
+	# Elev: heal orphan pond twins + soft-focus siphon culvert / frame CT.
+	if entering_elev:
+		heal_duplicate_null_bathymetry_ponds()
+		heal_pond_capacity_sanity()
+	if entering_elev and not bool(opts.get("skip_elev_siphon_focus", false)):
+		call_deferred("_ensure_elev_siphon_ct_ready")
+	# Extreme zoom: crop SoI SubViewport on the next frame before a giant Control
+	# can allocate (Elevation GPU cliff). Siphon Lab uses no SoI preview now.
+	if entering_elev:
+		call_deferred("_force_soi_preview_layout_sync")
 	_schedule_graph_autosave()
 
 
-## Site Plan → top-down. Freeform bubble → orbit. Elevation 3D → section camera.
+## Snap Elev CT lighting to mean solar noon; freeze time_scale until leave/hide.
+func _elev_begin_noon_lock() -> void:
+	var main := _get_scene_main_node()
+	if main == null:
+		return
+	if not _elev_noon_active:
+		_elev_saved_day_time = float(main.get("day_time"))
+		_elev_saved_time_scale = float(main.get("time_scale"))
+		_elev_noon_active = true
+	main.set("time_scale", 0.0)
+	_elev_snap_solar_noon(main)
+	call_deferred("_elev_refresh_ct_after_noon")
+
+
+func _elev_snap_solar_noon(main: Node = null) -> void:
+	if main == null:
+		main = _get_scene_main_node()
+	if main == null:
+		return
+	var clock: Variant = main.get("clock")
+	if clock != null and clock.has_method("mean_solar_time_to_clock_time"):
+		main.set("day_time", clock.call("mean_solar_time_to_clock_time", 12.0))
+	elif main.has_method("solar_time_to_clock_time"):
+		main.set("day_time", main.call("solar_time_to_clock_time", 12.0))
+	else:
+		main.set("day_time", 12.0)
+
+
+func _elev_refresh_ct_after_noon() -> void:
+	if not _elev_noon_active or not visible:
+		return
+	if _soi_preview != null and _soi_preview.has_method("force_layout_sync"):
+		_soi_preview.call("force_layout_sync")
+	elif _soi_preview != null and _soi_preview.has_method("mark_layout_dirty"):
+		_soi_preview.call("mark_layout_dirty")
+
+
+func _elev_end_noon_lock() -> void:
+	if not _elev_noon_active:
+		return
+	_elev_noon_active = false
+	var main := _get_scene_main_node()
+	if main != null:
+		if not is_nan(_elev_saved_day_time):
+			main.set("day_time", _elev_saved_day_time)
+		if not is_nan(_elev_saved_time_scale):
+			main.set("time_scale", _elev_saved_time_scale)
+	_elev_saved_day_time = NAN
+	_elev_saved_time_scale = NAN
+
+
+func _spatial_radial_yaw_deg(site_xz: Vector2, center_site: Vector2 = Vector2.ZERO) -> float:
+	var rel := site_xz - center_site
+	if rel.length() < 0.5:
+		return 0.0
+	var theta := atan2(rel.y, rel.x)
+	return rad_to_deg(-(theta + PI * 0.5))
+
+
+func _init_spatial_edit() -> void:
+	_spatial_edit = _SPATIAL_EDIT_SCRIPT.new()
+	_spatial_edit.get_main = func() -> Node: return _get_scene_main_node()
+	_spatial_edit.get_preview = func() -> Node: return _soi_preview
+	_spatial_edit.get_view_mode = func() -> String: return _graph_view_mode
+	_spatial_edit.get_elev_heading = func() -> float:
+		return float(_graph_canvas.get("elevation_heading_rad")) if _graph_canvas != null else 0.0
+	_spatial_edit.get_conduit_manager = func() -> Node: return _get_conduit_manager()
+	_spatial_edit.sync_graph_from_prop = _spatial_sync_graph_from_prop
+	_spatial_edit.on_highlight = _spatial_highlight_prop
+	_spatial_edit.array_preview_changed.connect(_on_spatial_array_preview_changed)
+	_spatial_edit.working_radius_changed.connect(_on_spatial_working_radius_changed)
+	if _graph_canvas != null:
+		_graph_canvas.set("spatial_edit", _spatial_edit)
+		_graph_canvas.set("site_drag_sync_prop", _site_drag_sync_bound_prop)
+
+
+## Live Site Plan magnifier drag → move the bound 3D twin under the ring.
+## Release path (`_sync_bound_props_from_site`) still heals yaw / elevation.
+func _site_drag_sync_bound_prop(item_id: String, site_xz: Vector2) -> void:
+	if model == null or item_id.is_empty():
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var prop_id := str(specs.get("bound_prop_id", ""))
+	if prop_id.is_empty():
+		return
+	var main := _get_scene_main_node()
+	var soi := get_node_or_null("/root/SoiService")
+	if main == null or soi == null or not soi.has_method("world_center"):
+		return
+	var center: Vector3 = soi.call("world_center")
+	var wxz := GraphSiteLayout.site_to_world_xz(site_xz, center)
+	var rec := PlacedPropService.get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return
+	if Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))) \
+			.distance_to(wxz) <= _SITE_SYNC_EPS_M:
+		return
+	if _graph_canvas != null and bool(_graph_canvas.get("radial_layout_mode")):
+		var c_site := Vector2.ZERO
+		if _spatial_edit != null:
+			c_site = _spatial_edit.radial_center_site()
+		var yaw := _spatial_radial_yaw_deg(site_xz, c_site)
+		PlacedPropService.update_prop_record(main, prop_id, {"yaw": yaw}, false)
+	PlacedPropService.move_prop_xz(main, prop_id, wxz.x, wxz.y)
+
+
+func _spatial_sync_graph_from_prop(prop_id: String, extras: Dictionary = {}) -> void:
+	if model == null or prop_id.is_empty():
+		return
+	var main := _get_scene_main_node()
+	if main == null:
+		return
+	# Prefer existing sync path (finds bound items by prop id).
+	if has_method("sync_site_from_prop"):
+		call("sync_site_from_prop", prop_id)
+	if extras.has("elevation_m"):
+		var elev := float(extras["elevation_m"])
+		for it in model.items:
+			if not (it is Dictionary):
+				continue
+			var specs: Dictionary = ((it as Dictionary).get("specs", {}) as Dictionary) \
+					.duplicate(true)
+			if str(specs.get("bound_prop_id", "")) != prop_id:
+				continue
+			var patch := {"elevation_m": elev}
+			if str(specs.get("role", "")) == "siphon_hydro":
+				specs["module_elev_m"] = elev
+				SiphonHydraulics.apply_resolved_levels(specs, elev)
+				patch["specs"] = specs
+			model.update_item(str((it as Dictionary).get("id", "")), patch)
+			break
+
+
+func _spatial_highlight_prop(prop_id: String) -> void:
+	# Outline the live PlacedProp (Elev / Hydro Lab) + flash the graph chip.
+	var main := _get_scene_main_node()
+	if main != null:
+		var parent := main.get_node_or_null("PlacedProps")
+		if parent == null:
+			parent = main.find_child("PlacedProps", true, false)
+		if parent != null:
+			for child in parent.get_children():
+				if not (child is PlacedProp):
+					continue
+				var pp := child as PlacedProp
+				pp.set_graph_highlight(str(pp.prop_id) == prop_id and not prop_id.is_empty())
+	# Re-capture the disc so the hover/selection outline shows live (fires only when
+	# the highlighted prop actually changes, so idle mouse-move doesn't re-render).
+	if _soi_preview != null and _soi_preview.has_method("request_refresh"):
+		_soi_preview.request_refresh()
+	if prop_id.is_empty() or _graph_canvas == null or model == null:
+		return
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var specs: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if str(specs.get("bound_prop_id", "")) == prop_id:
+			if _graph_canvas.has_method("flash_item"):
+				_graph_canvas.call("flash_item", str((it as Dictionary).get("id", "")))
+			return
+
+
+func _on_spatial_array_preview_changed() -> void:
+	if _graph_canvas == null or _spatial_edit == null:
+		return
+	_graph_canvas.set("site_array_ghosts", _spatial_edit.array_ghosts.duplicate(true))
+	_graph_canvas.call("queue_redraw")
+
+
+func _on_spatial_working_radius_changed(r_m: float) -> void:
+	if _graph_canvas != null:
+		_graph_canvas.set("site_working_radius_m", r_m)
+		_graph_canvas.call("queue_redraw")
+	if _site_radius_slider != null:
+		_site_radius_slider.set_value_no_signal(r_m)
+	if _site_radius_lbl != null:
+		_site_radius_lbl.text = "%.0f m" % r_m
+
+
+func _ensure_site_working_radius() -> void:
+	var r_m := 150.0
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("radius_m"):
+		r_m = float(soi.call("radius_m"))
+	if _spatial_edit != null:
+		var wr := float(_spatial_edit.ensure_working_radius(r_m))
+		_on_spatial_working_radius_changed(wr)
+	if _site_radius_slider != null:
+		_site_radius_slider.max_value = maxf(r_m * 1.5, 50.0)
+
+
+func _sync_site_tool_row() -> void:
+	var on := _graph_view_mode == GraphSiteLayout.VIEW_SITE
+	if _site_tool_row != null:
+		_site_tool_row.visible = on
+	if on:
+		_ensure_site_working_radius()
+		if _site_radial_btn != null and _graph_canvas != null:
+			_site_radial_btn.set_pressed_no_signal(
+					bool(_graph_canvas.get("radial_layout_mode")))
+	if _elev_hydro_lab_btn != null:
+		_elev_hydro_lab_btn.visible = _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
+
+
+func _on_site_radial_toggled(pressed: bool) -> void:
+	if _graph_canvas == null:
+		return
+	_graph_canvas.set("radial_layout_mode", pressed)
+	_graph_canvas.call("queue_redraw")
+	_sync_view_mode_menu_checks()
+	_schedule_graph_autosave()
+	_show_toast("Radial %s — Shift+drag prop = face tangent" % ("ON" if pressed else "OFF"))
+
+
+func _on_site_working_radius_changed(v: float) -> void:
+	var soi_r := 150.0
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("radius_m"):
+		soi_r = float(soi.call("radius_m"))
+	if _spatial_edit != null:
+		_spatial_edit.set_working_radius(v, soi_r)
+
+
+func _on_site_array_menu_id(id: int) -> void:
+	if _spatial_edit == null:
+		return
+	match id:
+		SITE_ARRAY_LINE:
+			_spatial_edit.array_pattern = 0  # LINE
+			if not _spatial_edit.begin_array_from_selection():
+				_show_toast("Select a placed 3D prop first (LMB in Site Plan)")
+			else:
+				_show_toast("Array Line preview — Array ▾ → Confirm")
+		SITE_ARRAY_ARC:
+			_spatial_edit.array_pattern = 1  # ARC
+			if not _spatial_edit.begin_array_from_selection():
+				_show_toast("Select a placed 3D prop first")
+			else:
+				_show_toast("Array Arc preview — Array ▾ → Confirm")
+		SITE_ARRAY_CIRCLE:
+			_spatial_edit.array_pattern = 2  # CIRCLE
+			if not _spatial_edit.begin_array_from_selection():
+				_show_toast("Select a placed 3D prop first")
+			else:
+				_show_toast("Array Circle preview — Array ▾ → Confirm")
+		SITE_ARRAY_CONFIRM:
+			var n := int(_spatial_edit.confirm_array())
+			_show_toast("Placed %d duplicate%s" % [n, "" if n == 1 else "s"])
+			_schedule_graph_autosave()
+		SITE_ARRAY_CANCEL:
+			_spatial_edit.cancel_array()
+			_show_toast("Array cancelled")
+		SITE_ARRAY_SET_CENTER:
+			_awaiting_array_center = true
+			_show_toast("Click the SoI disc to set array center (next click)")
+		SITE_ARRAY_CLEAR_CENTER:
+			_spatial_edit.clear_custom_center()
+			_spatial_edit.rebuild_array_ghosts()
+			_show_toast("Array center = SoI origin")
+		SITE_RADIUS_RESET:
+			var soi_r2 := 150.0
+			var soi2 := get_node_or_null("/root/SoiService")
+			if soi2 != null and soi2.has_method("radius_m"):
+				soi_r2 = float(soi2.call("radius_m"))
+			_spatial_edit.reset_working_radius_to_soi(soi_r2)
+			_show_toast("Working R reset to SoI (%.0f m)" % soi_r2)
+
+
+func _on_site_array_center_click(screen_pos: Vector2) -> void:
+	if _spatial_edit == null or _soi_preview == null:
+		return
+	if _soi_preview.has_method("canvas_to_site_ground"):
+		var s: Variant = _soi_preview.call("canvas_to_site_ground", screen_pos)
+		if s is Vector2:
+			_spatial_edit.custom_center_site = s as Vector2
+			_spatial_edit.rebuild_array_ghosts()
+			_show_toast("Array center set")
+
+
+func _on_elev_open_hydro_lab_pressed() -> void:
+	var sid := ""
+	if model != null:
+		for it in model.items:
+			if not (it is Dictionary):
+				continue
+			var specs: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+			if str(specs.get("role", "")) == "siphon_hydro" \
+					or str(specs.get("model_id", "")) == "hydroturbine":
+				sid = str((it as Dictionary).get("id", ""))
+				break
+	if sid.is_empty():
+		_show_toast("No siphon / penstock on the graph — add one first")
+		return
+	open_siphon_lab(sid)
+
+
+## Public: Site Plan wire overlay mode — none | metro | prefer_3d
+func set_site_wire_mode(mode: String) -> void:
+	var m := mode.strip_edges().to_lower()
+	if m not in ["none", "metro", "prefer_3d"]:
+		m = "prefer_3d"
+	if _graph_canvas != null:
+		_graph_canvas.set("site_wire_mode", m)
+		_graph_canvas.call("queue_redraw")
+	_apply_site_wire_mode_session()
+	_sync_view_mode_menu_checks()
+	_schedule_graph_autosave()
+	_show_toast("Site wires: %s" % m.replace("_", " "))
+
+
+func _apply_site_wire_mode_session() -> void:
+	if _graph_view_mode != GraphSiteLayout.VIEW_SITE or _graph_canvas == null:
+		return
+	var mode := str(_graph_canvas.get("site_wire_mode"))
+	var sc := get_node_or_null("/root/SimSettingsController")
+	if sc == null:
+		return
+	if _site_saved_conduits_3d == null and "conduits_3d_visible" in sc:
+		_site_saved_conduits_3d = bool(sc.get("conduits_3d_visible"))
+	if mode == "prefer_3d":
+		if sc.has_method("set_conduits_3d_visible"):
+			sc.call("set_conduits_3d_visible", true)
+		elif "conduits_3d_visible" in sc:
+			sc.set("conduits_3d_visible", true)
+	elif mode in ["metro", "none"]:
+		if sc.has_method("set_conduits_3d_visible"):
+			sc.call("set_conduits_3d_visible", false)
+		elif "conduits_3d_visible" in sc:
+			sc.set("conduits_3d_visible", false)
+
+
+func _restore_site_conduit_visibility() -> void:
+	if _site_saved_conduits_3d == null:
+		return
+	var sc := get_node_or_null("/root/SimSettingsController")
+	if sc != null:
+		if sc.has_method("set_conduits_3d_visible"):
+			sc.call("set_conduits_3d_visible", bool(_site_saved_conduits_3d))
+		elif "conduits_3d_visible" in sc:
+			sc.set("conduits_3d_visible", bool(_site_saved_conduits_3d))
+	_site_saved_conduits_3d = null
+
+
+func _force_soi_preview_layout_sync() -> void:
+	if _soi_preview != null and _soi_preview.has_method("force_layout_sync"):
+		_soi_preview.call("force_layout_sync")
+	elif _soi_preview != null and _soi_preview.has_method("mark_layout_dirty"):
+		_soi_preview.call("mark_layout_dirty")
+
+
+## Elev enter: show siphon culvert (focus-only) and frame the CT on the pond
+## when the elev window still looks like a fresh/datum view.
+func _ensure_elev_siphon_ct_ready() -> void:
+	if _graph_view_mode != GraphSiteLayout.VIEW_ELEVATION:
+		return
+	var siphon_id := _find_elev_siphon_id()
+	if siphon_id.is_empty():
+		return
+	focus_siphon_conduit_glow(siphon_id, false)
+	var need_frame := true
+	var pond := resolve_siphon_pond(siphon_id)
+	if _graph_canvas != null and not pond.is_empty() \
+			and GraphSiteLayout.has_site_coords(pond):
+		var heading := float(_graph_canvas.get("elevation_heading_rad"))
+		var cross_dir := Vector2(-sin(heading), cos(heading))
+		var pond_slice := GraphSiteLayout.site_xz(pond).dot(cross_dir)
+		var cur_slice := float(_graph_canvas.get("elevation_section_offset_m"))
+		var elev_m := float(_graph_canvas.call("get_elev_anchor_elev_m")) \
+				if _graph_canvas.has_method("get_elev_anchor_elev_m") else NAN
+		var ps: Dictionary = pond.get("specs", {}) as Dictionary
+		var floor_m := float(ps.get("floor_m", NAN))
+		var rim_m := float(ps.get("rim_m", NAN))
+		var level_m := float(ps.get("level_m", NAN))
+		var target := level_m
+		if is_nan(target):
+			target = rim_m if not is_nan(rim_m) else floor_m
+		var elev_ok := not is_nan(target) and not is_nan(elev_m) \
+				and absf(elev_m - target) < 25.0
+		var slice_ok := absf(cur_slice - pond_slice) < 8.0
+		# Already framed near the pond — keep user's pan/zoom.
+		if elev_ok and slice_ok and _graph_canvas.has_method("has_elev_anchor") \
+				and bool(_graph_canvas.call("has_elev_anchor")):
+			need_frame = false
+	if need_frame:
+		frame_elevation_for_siphon(siphon_id)
+
+
+## Site Plan → top-down. Freeform bubble → orbit. Elevation / Hydro Lab → section.
 ## Never latches world clip / SubViewport while the graph is hidden — otherwise
 ## map load + autosave restore drops the player into a clipped snowglobe world.
 func _sync_soi_preview_for_mode() -> void:
@@ -1398,9 +2858,20 @@ func _sync_soi_preview_for_mode() -> void:
 	var want_site := _graph_view_mode == GraphSiteLayout.VIEW_SITE
 	var want_freeform_bubble := (
 			_graph_view_mode == GraphSiteLayout.VIEW_FREEFORM and _freeform_soi_bubble)
+	var want_siphon_lab := _graph_view_mode == GraphSiteLayout.VIEW_SIPHON
 	var want_elev_3d := (
-			_graph_view_mode == GraphSiteLayout.VIEW_ELEVATION and _elevation_3d_section)
+			(_graph_view_mode == GraphSiteLayout.VIEW_ELEVATION and _elevation_3d_section)
+			or want_siphon_lab)
 	var want_preview := visible and (want_site or want_freeform_bubble or want_elev_3d)
+	if _soi_preview != null and _soi_preview.has_method("set_embed_host"):
+		var host: Control = null
+		if want_siphon_lab and _siphon_lab_modal != null \
+				and _siphon_lab_modal.has_method("get_preview_embed_host"):
+			host = _siphon_lab_modal.call("get_preview_embed_host") as Control
+		_soi_preview.call("set_embed_host", host)
+	if _soi_preview != null and _soi_preview.has_method("clear_lab_section_frame") \
+			and not want_siphon_lab:
+		_soi_preview.call("clear_lab_section_frame")
 	if _soi_preview != null and _soi_preview.has_method("set_active"):
 		_soi_preview.call("set_active", want_preview)
 	if want_preview:
@@ -1412,20 +2883,284 @@ func _sync_soi_preview_for_mode() -> void:
 				and _soi_preview != null and _soi_preview.has_method("set_section_heading"):
 			_soi_preview.call("set_section_heading",
 					float(_graph_canvas.get("elevation_heading_rad")))
+		if want_elev_3d and _graph_canvas != null \
+				and _soi_preview != null and _soi_preview.has_method("set_section_offset"):
+			_soi_preview.call("set_section_offset",
+					float(_graph_canvas.get("elevation_section_offset_m")))
+		if want_siphon_lab and _siphon_lab_modal != null \
+				and _siphon_lab_modal.has_method("get_lab_section_frame"):
+			sync_siphon_lab_section_frame(
+					_siphon_lab_modal.call("get_lab_section_frame") as Dictionary)
 	if _bg_rect != null and is_instance_valid(_bg_rect):
 		_bg_rect.color = Color(C_BG.r, C_BG.g, C_BG.b, 1.0)
+
+
+## Push Hydro Lab metre window into the embedded Elevation CT camera.
+func sync_siphon_lab_section_frame(frame: Dictionary) -> void:
+	if _soi_preview == null or frame.is_empty():
+		return
+	if frame.has("heading") and _graph_canvas != null:
+		_graph_canvas.set("elevation_heading_rad", float(frame.get("heading", 0.0)))
+		if _soi_preview.has_method("set_section_heading"):
+			_soi_preview.call("set_section_heading", float(frame.get("heading", 0.0)))
+	if _soi_preview.has_method("set_lab_section_frame"):
+		_soi_preview.call("set_lab_section_frame",
+				float(frame.get("along_m", 0.0)),
+				float(frame.get("elev_m", 0.0)),
+				float(frame.get("ortho_h_m", 8.0)))
+
+
+## Soft-focus siphon outlet/intake conduits so 3D flow glow reads in Elev CT
+## without remeshing every wire on the map (AMD TDR-safe).
+## `force_global_wires`: Lab turns Timeline 3D wires on (restored on teardown).
+## Elev uses false — focus-only remesh shows the culvert without a full-map storm.
+func focus_siphon_conduit_glow(siphon_id: String, force_global_wires: bool = true) -> void:
+	if model == null or siphon_id.is_empty():
+		return
+	ensure_siphon_outlet_sink(siphon_id)
+	var mgr := _get_conduit_manager()
+	var focus_id := ""
+	for conn in model.connections:
+		if not (conn is Dictionary):
+			continue
+		var c: Dictionary = conn
+		var src := str(c.get("source_item_id", ""))
+		var tgt := str(c.get("target_item_id", ""))
+		if src != siphon_id and tgt != siphon_id:
+			continue
+		# Force culvert/outlet visible + glow (intake stays schematic).
+		var type_id := ConduitKinds.derive_type_for_connection(c)
+		var patch := {}
+		if ConduitKinds.uses_culvert_kit(type_id) or str(c.get("conduit_type", "")) == "culvert_pipe":
+			if c.get("visible_3d") != true:
+				patch["visible_3d"] = true
+			if c.get("flow_glow") != true:
+				patch["flow_glow"] = true
+		if not patch.is_empty():
+			var cid0 := str(c.get("id", ""))
+			if not cid0.is_empty():
+				model.update_connection(cid0, patch)
+				c = model.get_connection(cid0)
+				if c.is_empty():
+					c = conn
+		focus_id = str(c.get("id", focus_id))
+		if mgr != null and mgr.has_method("ensure_preview_samples"):
+			mgr.call("ensure_preview_samples", c)
+	if focus_id.is_empty() or mgr == null:
+		if _graph_canvas != null:
+			_graph_canvas.call("queue_redraw")
+		return
+	if force_global_wires:
+		# Lab needs the 3D culvert on the CT cut — turn wires on so remesh isn't skipped.
+		if not _lab_conduit_prefs_saved:
+			_lab_conduit_prefs_saved = true
+			var ssc0 := get_node_or_null("/root/SimSettingsController")
+			_lab_saved_conduits_visible = bool(ssc0.get("conduits_3d_visible")) \
+					if ssc0 != null else false
+			_lab_saved_flow_glow = bool(ssc0.get("conduit_flow_glow_enabled")) \
+					if ssc0 != null else false
+		if mgr.has_method("set_global_visibility"):
+			mgr.call("set_global_visibility", true)
+		if mgr.has_method("set_global_flow_glow"):
+			mgr.call("set_global_flow_glow", true)
+	if mgr.has_method("set_focus_highlight"):
+		mgr.call("set_focus_highlight", focus_id)
+	if mgr.has_method("force_remesh"):
+		mgr.call("force_remesh", focus_id)
+	# Second remesh after CT camera settles (first can race empty anchors).
+	if mgr.has_method("force_remesh"):
+		get_tree().create_timer(0.12).timeout.connect(
+				func() -> void:
+					if mgr != null and is_instance_valid(mgr) and mgr.has_method("force_remesh"):
+						mgr.call("force_remesh", focus_id),
+				CONNECT_ONE_SHOT)
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+
+
+## First siphon on the graph (selection preferred) — Elev soft-focus / frame helper.
+func _find_elev_siphon_id() -> String:
+	if model == null:
+		return ""
+	for sid in _selected_item_ids:
+		var it := model.get_item(sid)
+		if it.is_empty():
+			continue
+		if str((it.get("specs", {}) as Dictionary).get("role", "")) == "siphon_hydro":
+			return sid
+	if _graph_canvas != null:
+		var sel := str(_graph_canvas.get("selected_item_id"))
+		if not sel.is_empty():
+			var it2 := model.get_item(sel)
+			if not it2.is_empty() and str((it2.get("specs", {}) as Dictionary) \
+					.get("role", "")) == "siphon_hydro":
+				return sel
+	for it3 in model.items:
+		if not (it3 is Dictionary):
+			continue
+		if str(((it3 as Dictionary).get("specs", {}) as Dictionary).get("role", "")) \
+				== "siphon_hydro":
+			return str((it3 as Dictionary).get("id", ""))
+	return ""
+
+
+## Restore conduit visibility/glow + clear Lab drive flags when leaving Siphon.
+func teardown_siphon_lab_session(siphon_id: String = "") -> void:
+	# One-shot twin sync after Lab (mesh pushes were skipped while suspended).
+	push_pond_levels_to_mesh(true)
+	var main_unsuspend := _get_scene_main_node()
+	if main_unsuspend != null and main_unsuspend.has_method("set_world_suspended_for_lab"):
+		main_unsuspend.call("set_world_suspended_for_lab", false)
+	var mgr := _get_conduit_manager()
+	if mgr != null:
+		if mgr.has_method("set_focus_highlight"):
+			mgr.call("set_focus_highlight", "")
+		if _lab_conduit_prefs_saved:
+			if mgr.has_method("set_global_flow_glow"):
+				mgr.call("set_global_flow_glow", _lab_saved_flow_glow)
+			if mgr.has_method("set_global_visibility"):
+				mgr.call("set_global_visibility", _lab_saved_conduits_visible)
+		_lab_conduit_prefs_saved = false
+	if model != null and not siphon_id.is_empty():
+		var item := model.get_item(siphon_id)
+		if not item.is_empty():
+			var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+			if bool(specs.get("lab_sim_inflow_enabled", false)):
+				specs["lab_sim_inflow_enabled"] = false
+				model.update_item(siphon_id, {"specs": specs})
+		var tank := resolve_siphon_pond(siphon_id)
+		if not tank.is_empty():
+			var tid := str(tank.get("id", ""))
+			var ts: Dictionary = (tank.get("specs", {}) as Dictionary).duplicate(true)
+			if bool(ts.get("overflowing", false)):
+				# Overflow is now honest (recomputed each engine tick); clear the
+				# stale chip on teardown so leaving the Lab doesn't freeze it.
+				ts["overflowing"] = false
+				if str(ts.get("node_state", "")) == "overflow":
+					ts["node_state"] = ""
+				model.update_item(tid, {"specs": ts})
+	if _soi_preview != null and _soi_preview.has_method("clear_lab_section_frame"):
+		_soi_preview.call("clear_lab_section_frame")
+	# Lab auto-Preview leaves a teal 3D hillside mesh — clear on exit so Elev
+	# SoI doesn't keep the wedge after leaving Hydro Lab.
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader != null and loader.has_method("clear_watershed_preview"):
+		loader.call("clear_watershed_preview")
+
+
+## Frame Elevation CT on the siphon's pond + module (shared with Elev).
+## Locks heading to pond → siphon/outlet side cut and a tight zoom window.
+func frame_elevation_for_siphon(siphon_id: String) -> void:
+	if _graph_canvas == null or siphon_id.is_empty() or model == null:
+		return
+	var item := model.get_item(siphon_id)
+	if item.is_empty():
+		return
+	var pond := resolve_siphon_pond(siphon_id)
+	var pond_site := Vector2.ZERO
+	if not pond.is_empty() and GraphSiteLayout.has_site_coords(pond):
+		pond_site = GraphSiteLayout.site_xz(pond)
+	elif GraphSiteLayout.has_site_coords(item):
+		pond_site = GraphSiteLayout.site_xz(item)
+	# Aim cut along pond → siphon (fallback siphon → outlet sink).
+	var aim := GraphSiteLayout.site_xz(item) if GraphSiteLayout.has_site_coords(item) \
+			else pond_site + Vector2(8.0, 0.0)
+	var outlet := {}
+	if _resource_flow != null and _resource_flow.has_method("_resolve_siphon_outlet_tank"):
+		outlet = _resource_flow.call("_resolve_siphon_outlet_tank", item)
+	if not outlet.is_empty() and GraphSiteLayout.has_site_coords(outlet):
+		aim = GraphSiteLayout.site_xz(outlet)
+	var delta := aim - pond_site
+	if delta.length_squared() < 0.25:
+		delta = Vector2(1.0, 0.0)
+	var heading := atan2(delta.y, delta.x)
+	_graph_canvas.set("elevation_heading_rad", heading)
+	var along_dir := Vector2(cos(heading), sin(heading))
+	var cross_dir := Vector2(-sin(heading), cos(heading))
+	# CT slice = pond's cross-axis offset (not SoI centre 0 — ponds often sit
+	# tens of metres off-axis, e.g. +47 m). Keeps DEM + 3D cut through the basin.
+	var pond_slice := pond_site.dot(cross_dir)
+	_graph_canvas.set("elevation_section_offset_m", pond_slice)
+	_sync_elev_slice_slider_from_canvas(pond_slice)
+	if _graph_canvas.has_signal("elevation_heading_changed"):
+		_graph_canvas.emit_signal("elevation_heading_changed", heading)
+	if _graph_canvas.has_signal("elevation_section_offset_changed"):
+		_graph_canvas.emit_signal("elevation_section_offset_changed", pond_slice)
+	var pond_along := pond_site.dot(along_dir)
+	# Cap footprint so large OSM ponds don't zoom the CT out to a void.
+	var half_w := 4.0
+	if not pond.is_empty():
+		var ps: Dictionary = pond.get("specs", {}) as Dictionary
+		half_w = maxf(float(ps.get("footprint_w_m", 8.0)) * 0.5, 2.0)
+		half_w = maxf(half_w, maxf(float(ps.get("footprint_d_m", 0.0)), 2.0) * 0.5)
+		if _graph_canvas.has_method("_elevation_pond_half_width_m"):
+			half_w = maxf(half_w, float(_graph_canvas.call(
+					"_elevation_pond_half_width_m", pond, ps, along_dir)))
+	half_w = clampf(half_w, 2.0, 10.0)
+	var module_along := 3.5
+	if GraphSiteLayout.has_site_coords(item):
+		module_along = GraphSiteLayout.site_xz(item).dot(along_dir) - pond_along
+		if absf(module_along) < 0.5:
+			module_along = 3.5
+	module_along = clampf(module_along, -12.0, 12.0)
+	var a0 := pond_along - half_w - 1.0
+	var a1 := pond_along + maxf(module_along + 3.0, half_w + 1.5)
+	if module_along < 0.0:
+		a0 = pond_along + minf(module_along - 3.0, -half_w - 1.0)
+		a1 = pond_along + half_w + 1.0
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var module_m := float(specs.get("module_elev_m", NAN))
+	var start_m := float(specs.get("siphon_start_m", module_m))
+	var break_m := float(specs.get("siphon_break_m", module_m))
+	var floor_m := float((pond.get("specs", {}) as Dictionary).get("floor_m", NAN)) \
+			if not pond.is_empty() else NAN
+	var rim_m := float((pond.get("specs", {}) as Dictionary).get("rim_m", NAN)) \
+			if not pond.is_empty() else NAN
+	if is_nan(module_m):
+		module_m = 0.0
+	if is_nan(start_m):
+		start_m = module_m
+	if is_nan(break_m):
+		break_m = module_m
+	if is_nan(floor_m):
+		floor_m = minf(module_m, break_m) - 1.5
+	if is_nan(rim_m):
+		rim_m = maxf(module_m, start_m) + 0.8
+	# Frame pond + prime/break only — outlet invert (~−9 m) blew the CT into void.
+	var y0 := minf(floor_m, minf(break_m, module_m)) - 0.35
+	var y1 := maxf(rim_m, maxf(start_m, module_m)) + 0.45
+	var vp: Vector2 = _graph_canvas.size as Vector2
+	if vp.x < 64.0 or vp.y < 64.0:
+		vp = Vector2(720.0, 480.0)
+	if _graph_canvas.has_method("frame_elevation_window"):
+		_graph_canvas.call("frame_elevation_window", a0, a1, y0, y1, vp, 0.05)
+	# Look-at = turbine (along + elev), not pond midpoint — zoom still fits pond.
+	var turbine_along := pond_along + module_along
+	if _graph_canvas.has_method("set_elev_view_state") \
+			and _graph_canvas.has_method("get_elev_view_state"):
+		var st: Dictionary = _graph_canvas.call("get_elev_view_state") as Dictionary
+		st["along_m"] = turbine_along
+		st["elev_m"] = module_m
+		_graph_canvas.call("set_elev_view_state", st)
+	# Push heading/slice into the SoI section camera (anchors drive look/ortho).
+	if _soi_preview != null:
+		if _soi_preview.has_method("set_section_heading"):
+			_soi_preview.call("set_section_heading", heading)
+		if _soi_preview.has_method("set_section_offset"):
+			_soi_preview.call("set_section_offset", pond_slice)
+		# Elev owns pan/zoom; while Hydro Lab is open, Lab CT frame stays in charge.
+		if _graph_view_mode != GraphSiteLayout.VIEW_SIPHON \
+				and _soi_preview.has_method("clear_lab_section_frame"):
+			_soi_preview.call("clear_lab_section_frame")
+	call_deferred("_force_soi_preview_layout_sync")
 
 
 func _sync_view_mode_menu_checks() -> void:
 	if _view_mode_menu == null:
 		return
 	var vp := _view_mode_menu.get_popup()
-	vp.set_item_checked(vp.get_item_index(VIEW_MODE_FREEFORM),
-			_graph_view_mode == GraphSiteLayout.VIEW_FREEFORM)
-	vp.set_item_checked(vp.get_item_index(VIEW_MODE_SITE),
-			_graph_view_mode == GraphSiteLayout.VIEW_SITE)
-	vp.set_item_checked(vp.get_item_index(VIEW_MODE_ELEVATION),
-			_graph_view_mode == GraphSiteLayout.VIEW_ELEVATION)
+	# Mode radios no longer live in this menu (the chip strip is the single
+	# mode switcher); only the per-view extras need syncing.
 	var bubble_idx := vp.get_item_index(VIEW_MODE_SOI_BUBBLE)
 	if bubble_idx >= 0:
 		vp.set_item_checked(bubble_idx, _freeform_soi_bubble)
@@ -1436,16 +3171,50 @@ func _sync_view_mode_menu_checks() -> void:
 		vp.set_item_checked(elev3d_idx, _elevation_3d_section)
 		vp.set_item_disabled(elev3d_idx,
 				_graph_view_mode != GraphSiteLayout.VIEW_ELEVATION)
-	var label := "View: Freeform ▾"
-	match _graph_view_mode:
-		GraphSiteLayout.VIEW_SITE:
-			label = "View: Site Plan ▾"
-		GraphSiteLayout.VIEW_ELEVATION:
-			label = "View: Elevation · 3D ▾" if _elevation_3d_section \
-					else "View: Elevation ▾"
-	if _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM and _freeform_soi_bubble:
-		label = "View: Freeform · SoI ▾"
-	_view_mode_menu.text = label
+	var elev_in := _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
+	for elev_id in [VIEW_MODE_ELEV_DEM, VIEW_MODE_ELEV_CHIPS, VIEW_MODE_ELEV_PORTS,
+			VIEW_MODE_ELEV_SCHEM_WIRES, VIEW_MODE_ELEV_PROJ_PIPES]:
+		var eidx := vp.get_item_index(elev_id)
+		if eidx >= 0:
+			vp.set_item_disabled(eidx, not elev_in)
+	if _graph_canvas != null:
+		var cards_idx := vp.get_item_index(VIEW_MODE_NODE_CARDS)
+		if cards_idx >= 0:
+			vp.set_item_checked(cards_idx,
+					str(_graph_canvas.get("node_display_mode")) == "card")
+		var lbl_idx := vp.get_item_index(VIEW_MODE_PREVIEW_LABELS)
+		if lbl_idx >= 0:
+			vp.set_item_checked(lbl_idx,
+					bool(_graph_canvas.get("show_preview_labels")))
+		var rad_idx := vp.get_item_index(VIEW_MODE_RADIAL)
+		if rad_idx >= 0:
+			vp.set_item_checked(rad_idx,
+					bool(_graph_canvas.get("radial_layout_mode")))
+		var chips_idx := vp.get_item_index(VIEW_MODE_SITE_CHIPS)
+		if chips_idx >= 0:
+			vp.set_item_checked(chips_idx, bool(_graph_canvas.get("site_show_chips")))
+			vp.set_item_disabled(chips_idx,
+					_graph_view_mode != GraphSiteLayout.VIEW_SITE)
+		var sports_idx := vp.get_item_index(VIEW_MODE_SITE_PORTS)
+		if sports_idx >= 0:
+			vp.set_item_checked(sports_idx, bool(_graph_canvas.get("site_show_ports")))
+			vp.set_item_disabled(sports_idx,
+					_graph_view_mode != GraphSiteLayout.VIEW_SITE)
+		var live_idx := vp.get_item_index(VIEW_MODE_SITE_LIVE_LIGHT)
+		if live_idx >= 0:
+			vp.set_item_checked(live_idx, _site_elev_live_lighting)
+		var sw := str(_graph_canvas.get("site_wire_mode"))
+		for pair in [
+			[VIEW_MODE_SITE_WIRE_3D, "prefer_3d"],
+			[VIEW_MODE_SITE_WIRE_METRO, "metro"],
+			[VIEW_MODE_SITE_WIRE_NONE, "none"],
+		]:
+			var widx := vp.get_item_index(int(pair[0]))
+			if widx >= 0:
+				vp.set_item_checked(widx, sw == str(pair[1]))
+				vp.set_item_disabled(widx,
+						_graph_view_mode != GraphSiteLayout.VIEW_SITE)
+		_sync_elev_overlay_menu_checks(vp)
 	# Mode chip strip mirrors the active view (Snowglobe is modal, not sticky).
 	for mid in _mode_chip_btns:
 		var btn: Button = _mode_chip_btns[mid] as Button
@@ -1459,6 +3228,8 @@ func _sync_view_mode_menu_checks() -> void:
 				on = _graph_view_mode == GraphSiteLayout.VIEW_SITE
 			"elevation":
 				on = _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
+			"siphon":
+				on = _graph_view_mode == GraphSiteLayout.VIEW_SIPHON
 			"snowglobe":
 				on = false
 		btn.set_pressed_no_signal(on)
@@ -1474,6 +3245,68 @@ func _set_elevation_exaggeration(ex: float) -> void:
 		vp.set_item_checked(vp.get_item_index(VIEW_MODE_EXAG_5X), is_equal_approx(ex, 5.0))
 
 
+func _toggle_elev_overlay(id: int) -> void:
+	if _graph_canvas == null:
+		return
+	var key := ""
+	match id:
+		VIEW_MODE_ELEV_DEM:
+			key = "elev_show_dem_overlay"
+		VIEW_MODE_ELEV_CHIPS:
+			key = "elev_show_chips"
+		VIEW_MODE_ELEV_PORTS:
+			key = "elev_show_ports"
+		VIEW_MODE_ELEV_SCHEM_WIRES:
+			key = "elev_show_schematic_wires"
+		VIEW_MODE_ELEV_PROJ_PIPES:
+			key = "elev_show_projected_pipes"
+	if key.is_empty():
+		return
+	_graph_canvas.set(key, not bool(_graph_canvas.get(key)))
+	_graph_canvas.call("queue_redraw")
+	_sync_view_mode_menu_checks()
+	_schedule_graph_autosave()
+
+
+func _sync_elev_overlay_menu_checks(vp: PopupMenu) -> void:
+	if _graph_canvas == null or vp == null:
+		return
+	var pairs := {
+		VIEW_MODE_ELEV_DEM: "elev_show_dem_overlay",
+		VIEW_MODE_ELEV_CHIPS: "elev_show_chips",
+		VIEW_MODE_ELEV_PORTS: "elev_show_ports",
+		VIEW_MODE_ELEV_SCHEM_WIRES: "elev_show_schematic_wires",
+		VIEW_MODE_ELEV_PROJ_PIPES: "elev_show_projected_pipes",
+	}
+	for mid in pairs:
+		var idx := vp.get_item_index(int(mid))
+		if idx >= 0:
+			vp.set_item_checked(idx, bool(_graph_canvas.get(pairs[mid])))
+
+
+## Hint only — never force-enable 3D wires (GPU remesh storm + CT = TDR risk).
+func _maybe_toast_elev_3d_wires_hint() -> void:
+	if _elev_3d_wires_toast_shown:
+		return
+	var ssc := get_node_or_null("/root/SimSettingsController")
+	if ssc != null and bool(ssc.get("conduits_3d_visible")):
+		return
+	_elev_3d_wires_toast_shown = true
+	_show_toast("Elevation CT: enable Timeline “3D wires” for physical pipes (off by default)")
+
+
+## True when the graph's Elevation/Siphon SoI section SubViewport is live.
+## Used by main.gd to skip god-ray fog while CT owns the shared World3D.
+func is_soi_section_preview_active() -> bool:
+	if not visible or _soi_preview == null or not is_instance_valid(_soi_preview):
+		return false
+	if not bool(_soi_preview.get("active")):
+		return false
+	if _soi_preview.has_method("is_section_mode"):
+		return bool(_soi_preview.call("is_section_mode"))
+	return false
+
+
 func _rotate_elevation_heading(delta_rad: float) -> void:
 	if _graph_canvas == null:
 		return
@@ -1483,29 +3316,132 @@ func _rotate_elevation_heading(delta_rad: float) -> void:
 	_on_elevation_heading_changed(h)
 
 
+func _elev_section_preview_active() -> bool:
+	return _elevation_3d_section and (
+			_graph_view_mode == GraphSiteLayout.VIEW_ELEVATION \
+			or _graph_view_mode == GraphSiteLayout.VIEW_SIPHON)
+
+
 func _on_elevation_heading_changed(heading_rad: float) -> void:
 	if _soi_preview != null and _soi_preview.has_method("set_section_heading") \
-			and _elevation_3d_section \
-			and _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION:
+			and _elev_section_preview_active():
 		_soi_preview.call("set_section_heading", heading_rad)
 	_schedule_graph_autosave()
 
 
-func _seed_site_from_freeform() -> void:
-	if model == null:
+func _on_elevation_section_offset_changed(offset_m: float) -> void:
+	_sync_elev_slice_slider_from_canvas(offset_m)
+	if _soi_preview != null and _soi_preview.has_method("set_section_offset") \
+			and _elev_section_preview_active():
+		_soi_preview.call("set_section_offset", offset_m)
+	_schedule_graph_autosave()
+
+
+func _on_elev_slice_slider_changed(v: float) -> void:
+	if _graph_canvas == null:
+		return
+	_graph_canvas.set("elevation_section_offset_m", v)
+	if _elev_slice_lbl != null:
+		_elev_slice_lbl.text = "%+.0f m" % v
+	_graph_canvas.call("queue_redraw")
+	_on_elevation_section_offset_changed(v)
+
+
+func _sync_elev_slice_slider_from_canvas(offset_m: float) -> void:
+	if _elev_slice_slider != null:
+		_elev_slice_slider.set_value_no_signal(offset_m)
+	if _elev_slice_lbl != null:
+		_elev_slice_lbl.text = "%+.0f m" % offset_m
+
+
+func _sync_elev_slice_row() -> void:
+	if _elev_slice_row == null:
+		return
+	var on := _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
+	_elev_slice_row.visible = on
+	if _hydro_section_lbl != null:
+		_hydro_section_lbl.visible = on
+	if _elev_hydro_lab_btn != null:
+		_elev_hydro_lab_btn.visible = on
+	if not on:
 		return
 	var r_m := 150.0
 	var soi := get_node_or_null("/root/SoiService")
 	if soi != null and soi.has_method("radius_m"):
 		r_m = float(soi.call("radius_m"))
-	var n := GraphSiteLayout.seed_site_from_freeform(model.items, r_m)
-	# Persist via model.changed — seed mutated dicts in-place; poke once.
-	if n > 0 and model != null:
-		model.changed.emit("update_item")
+	if _elev_slice_slider != null:
+		_elev_slice_slider.min_value = -r_m
+		_elev_slice_slider.max_value = r_m
+		var cur := 0.0
+		if _graph_canvas != null:
+			cur = float(_graph_canvas.get("elevation_section_offset_m"))
+		_elev_slice_slider.set_value_no_signal(clampf(cur, -r_m, r_m))
+		if _elev_slice_lbl != null:
+			_elev_slice_lbl.text = "%+.0f m" % cur
+	refresh_hydro_section_panel()
+
+
+## Reset CT section: heading ≈ N/S of site (0° = east section → looking north),
+## offset 0, zoom fit SoI.
+func _reset_elevation_section() -> void:
+	if _graph_canvas != null:
+		_graph_canvas.set("elevation_heading_rad", 0.0)
+		_graph_canvas.set("elevation_section_offset_m", 0.0)
+		_graph_canvas.call("queue_redraw")
+	_sync_elev_slice_slider_from_canvas(0.0)
+	if _soi_preview != null and _soi_preview.has_method("reset_section"):
+		_soi_preview.call("reset_section", 0.0)
+	_on_elevation_heading_changed(0.0)
+	_on_elevation_section_offset_changed(0.0)
+	_show_toast("Section reset · heading east · slice 0 · zoom fit")
+
+
+func _seed_site_from_freeform() -> void:
+	var n := _auto_seed_site_unplaced()
 	_show_toast("Seeded site coords for %d nodes" % n)
 	if _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
 	_schedule_graph_autosave()
+
+
+## Opt-in Site Plan embodiment (View options ▾). Refuses until TerrainLoader
+## has a loaded prop layer so we never save twins over an empty in-memory set.
+func _embody_site_twins_manual() -> void:
+	var main := _get_scene_main_node()
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main) if main != null else null
+	if loader == null or loader.get("_placed_prop_layer") == null:
+		_show_toast("Wait for the map to finish loading before embodying twins")
+		return
+	if loader.get("load_completed") == false:
+		_show_toast("Wait for the map to finish loading before embodying twins")
+		return
+	var twins := ensure_all_site_twins()
+	if twins > 0:
+		_show_toast("Embodied %d Site Plan twin%s" % [
+			twins, "" if twins == 1 else "s"])
+	else:
+		_show_toast("All site-placed nodes already have 3D twins")
+	_schedule_graph_autosave()
+
+
+## Quiet seed for root-scope items still missing site_* (Site Plan enter + menu).
+func _auto_seed_site_unplaced() -> int:
+	if model == null:
+		return 0
+	var r_m := 150.0
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("radius_m"):
+		r_m = float(soi.call("radius_m"))
+	# Only root-scope — nested compound children stay schematic-only.
+	var root_items: Array = model.get_items_in_scope("root") \
+			if model.has_method("get_items_in_scope") else model.items
+	var n := GraphSiteLayout.seed_site_from_freeform(root_items, r_m)
+	# Persist via model.changed — seed mutated dicts in-place; poke once.
+	if n > 0 and model != null:
+		model.changed.emit("update_item")
+		if _graph_canvas != null:
+			_graph_canvas.call("queue_redraw")
+	return n
 
 
 func _backfill_site_from_world() -> void:
@@ -1564,6 +3500,74 @@ func _world_xz_for_bound_prop(main: Node, prop_id: String) -> Variant:
 	return null
 
 
+## Full world position (x,y,z) of a placed prop by id, or null. Prefers the live
+## scene node (authoritative during a move) and falls back to the saved record.
+func _world_pos_for_bound_prop(main: Node, prop_id: String) -> Variant:
+	var loader := _find_terrain_loader(main)
+	if loader == null:
+		return null
+	var props_parent := main.find_child("PlacedProps", true, false)
+	if props_parent == null:
+		props_parent = loader.find_child("PlacedProps", true, false)
+	if props_parent != null:
+		for c in props_parent.get_children():
+			if str(c.get("prop_id")) == prop_id or str(c.name) == prop_id:
+				return (c as Node3D).global_position
+	var layer: Variant = loader.get("_placed_prop_layer")
+	if layer != null and layer.has_method("find_by_id"):
+		var rec: Dictionary = layer.call("find_by_id", prop_id)
+		if not rec.is_empty():
+			return Vector3(float(rec.get("x", 0.0)), float(rec.get("y", 0.0)),
+				float(rec.get("z", 0.0)))
+	return null
+
+
+## Write the site_x_m / site_z_m / elevation_m of every graph node bound to
+## `prop_id` from the prop's live 3D world position. Called whenever a placed
+## prop is created or moved (placed_prop_service.confirm_placement / move_prop_xz
+## and terrain_loader._confirm_prop_reposition) so Site/Elevation views track the
+## 3D twin. Safe no-op if the SoI, prop, or node is missing.
+func sync_site_from_prop(prop_id: String) -> void:
+	if model == null or prop_id.is_empty():
+		return
+	var soi := get_node_or_null("/root/SoiService")
+	if soi == null or not soi.has_method("world_center"):
+		return
+	var center: Vector3 = soi.call("world_center")
+	var main := _get_scene_main_node()
+	if main == null:
+		return
+	var pos_v: Variant = _world_pos_for_bound_prop(main, prop_id)
+	if not (pos_v is Vector3):
+		return
+	var world: Vector3 = pos_v as Vector3
+	var site := GraphSiteLayout.world_xz_to_site(Vector2(world.x, world.z), center)
+	var changed_any := false
+	for item: Dictionary in model.items:
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		if str(specs.get("bound_prop_id", "")) != prop_id:
+			continue
+		var patch := {
+			"site_x_m": site.x, "site_z_m": site.y, "elevation_m": world.y}
+		# Siphon start/break track the 3D turbine via offsets → absolutes.
+		if str(specs.get("role", "")) == "siphon_hydro":
+			specs["module_elev_m"] = world.y
+			SiphonHydraulics.apply_resolved_levels(specs, world.y)
+			patch["specs"] = specs
+		model.update_item(str(item.get("id", "")), patch)
+		changed_any = true
+	if changed_any:
+		if _graph_canvas != null:
+			_graph_canvas.call("queue_redraw")
+		_schedule_graph_autosave()
+		# Bound prop moved — rebuild 3D conduits that terminate on it.
+		var mgr := _get_conduit_manager()
+		if mgr != null and mgr.has_method("invalidate_obstacle_cache"):
+			mgr.call("invalidate_obstacle_cache")
+		if mgr != null and mgr.has_method("sync_all"):
+			mgr.call("sync_all")
+
+
 func _world_xz_for_osm_tag(main: Node, tag: String) -> Variant:
 	var loader := _find_terrain_loader(main)
 	if loader == null or not loader.has_method("get_solar_array_centroid"):
@@ -1602,9 +3606,15 @@ func _refresh_site_autoroutes() -> void:
 	var soi := get_node_or_null("/root/SoiService")
 	if main == null or soi == null or not soi.has_method("world_center"):
 		return
+	# Do NOT auto-spawn generic tank/box twins — player places a real model first.
 	var center: Vector3 = soi.call("world_center")
 	var n := GraphSiteAutoroute.refresh_all(model, main, center)
-	if n > 0:
+	if _conduit_manager != null:
+		if _conduit_manager.has_method("invalidate_obstacle_cache"):
+			_conduit_manager.call("invalidate_obstacle_cache")
+		if _conduit_manager.has_method("invalidate_astar"):
+			_conduit_manager.call("invalidate_astar")
+	if n > 0 or _conduit_manager != null:
 		call_deferred("_init_conduit_manager")
 
 
@@ -1632,6 +3642,28 @@ func _ensure_soi_preview() -> void:
 	add_child(_soi_preview)
 	if _soi_preview.has_method("setup"):
 		_soi_preview.call("setup", self, _graph_canvas)
+	# Hand the canvas a reference so it can use the preview camera as the
+	# projection authority for orbited Site/Elevation views (workstream E).
+	if _graph_canvas != null and is_instance_valid(_graph_canvas):
+		_graph_canvas.set("soi_preview_service", _soi_preview)
+
+
+## Called when the graph Control is hidden (G toggle). Ensures Lab session
+## flags/world suspend/watershed preview cannot stick after leaving the UI.
+func _force_teardown_siphon_lab_on_graph_close() -> void:
+	var leave_id := ""
+	if _siphon_lab_modal != null and is_instance_valid(_siphon_lab_modal):
+		leave_id = str(_siphon_lab_modal.get("_item_id"))
+		if _siphon_lab_modal.has_method("exit_view"):
+			_siphon_lab_modal.call("exit_view")
+	teardown_siphon_lab_session(leave_id)
+	# Prefer Elevation over a parked Siphon mode so the next G open isn't Lab.
+	if _graph_view_mode == GraphSiteLayout.VIEW_SIPHON:
+		_graph_view_mode = GraphSiteLayout.VIEW_ELEVATION
+		if _graph_canvas != null:
+			_graph_canvas.set("view_mode", GraphSiteLayout.VIEW_ELEVATION)
+			_graph_canvas.set("siphon_lab_active", false)
+		_sync_view_mode_menu_checks()
 
 
 ## Tear down graph SoI SubViewport and clear autoload clip so FPS world stays open.
@@ -1920,22 +3952,40 @@ func _build_right_sidebar() -> Control:
 		_inspector_panel.call("set_ha_linker", _ha_linker)
 	if _inspector_panel != null and _inspector_panel.has_method("set_compound_callbacks"):
 		_inspector_panel.call("set_compound_callbacks",
-			Callable(self, "_enter_compound"),
+			Callable(self, "_enter_compound_animated"),
 			Callable(self, "_on_ungroup_selected_pressed"),
-			Callable(self, "_on_back_scope_pressed"))
+			Callable(self, "_on_back_scope_pressed"),
+			Callable(self, "_on_explode_selected_pressed"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_component_callbacks"):
+		_inspector_panel.call("set_component_callbacks",
+			Callable(self, "save_compound_as_component"),
+			Callable(self, "make_compound_unique"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_conduit_callbacks"):
 		_inspector_panel.call("set_conduit_callbacks",
 			Callable(self, "_start_conduit_route"),
-			Callable(self, "_clear_conduit_route"))
+			Callable(self, "_clear_conduit_route"),
+			Callable(self, "open_conduit_style_modal"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_placeholder_callback"):
 		_inspector_panel.call("set_placeholder_callback",
 			Callable(self, "_spawn_3d_placeholder_for_item"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_place_model_callback"):
 		_inspector_panel.call("set_place_model_callback",
 			Callable(self, "_place_model_for_item"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_siphon_lab_callback"):
+		_inspector_panel.call("set_siphon_lab_callback",
+			Callable(self, "open_siphon_lab"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_place_site_twin_callback"):
 		_inspector_panel.call("set_place_site_twin_callback",
 			Callable(self, "place_site_twin"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_hide_3d_callbacks"):
+		_inspector_panel.call("set_hide_3d_callbacks",
+			Callable(self, "set_node_3d_hidden"),
+			Callable(self, "is_node_3d_hidden"),
+			Callable(self, "hide_all_placeholder_twins"))
+	_ensure_siphon_lab_modal()
+	if _inspector_panel != null and _inspector_panel.has_method("set_edit_ports_callback"):
+		_inspector_panel.call("set_edit_ports_callback",
+			Callable(self, "open_connection_ports"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_preview_refresh_callback"):
 		_inspector_panel.call("set_preview_refresh_callback",
 			Callable(self, "_refresh_item_card_preview"))
@@ -2100,11 +4150,32 @@ func _on_lib_custom_component_created(preset: Dictionary) -> void:
 ## the graph and starts a ghost placement of the linked GLB. When the player
 ## confirms the spot, PlacedPropService calls create_bound_generator_node() to
 ## spawn this preset's 2D node, bound to the placed prop (see wind_turbine_spin.gd).
-func _on_lib_place_model_requested(preset: Dictionary) -> void:
+##
+## `existing_item_id` (inspector "Place in 3D"): bind the already-on-canvas node
+## instead of minting a duplicate unconnected twin.
+func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String = "") -> void:
 	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
-	var model_id := str(specs.get("model_id", ""))
-	if model_id.is_empty():
+	var ptype_early := str(preset.get("type", "wind"))
+	var model_id_early := str(specs.get("model_id", ""))
+	# Component (super-node) presets spawn subgraphs, not a single 3D prop —
+	# never place a gray box for those. Exception: binding an *existing*
+	# component instance that already carries a model_id (StarShade → Place in 3D).
+	var is_component_preset := ptype_early == "compound" or preset.has("component_tree") \
+			or preset.has("definition_id")
+	var allow_component_bind := not existing_item_id.is_empty() and not model_id_early.is_empty()
+	if is_component_preset and not allow_component_bind:
+		_show_toast("Components can't be placed as a single 3D prop")
 		return
+	var model_id := model_id_early
+	# F: any preset without a bespoke GLB places a procedural gray-box
+	# placeholder sized from its footprint (fallback 1 m cube).
+	var is_placeholder := model_id.is_empty()
+	var box_footprint := Vector2(1.0, 1.0)
+	if is_placeholder:
+		box_footprint = GraphSiteLayout.physical_footprint_m(
+			{"type": ptype_early, "specs": specs})
+		model_id = ModelCatalog.GENERIC_BOX_ID
+		specs["model_id"] = model_id
 	var main := _get_scene_main_node()
 	if main == null:
 		return
@@ -2120,6 +4191,10 @@ func _on_lib_place_model_requested(preset: Dictionary) -> void:
 			kind = "vawt"
 		elif str(specs.get("role", "")) == "habitat":
 			kind = "habitat"
+		elif model_id == "hydroturbine" or str(specs.get("role", "")) == "siphon_hydro":
+			kind = "siphon_hydro"
+	elif model_id == "hydroturbine" or str(specs.get("role", "")) == "siphon_hydro":
+		kind = "siphon_hydro"
 	var plant_abs_h := -1.0
 	if kind == "grow_bed" and main.has_method("get_absolute_hours"):
 		plant_abs_h = float(main.call("get_absolute_hours"))
@@ -2148,17 +4223,39 @@ func _on_lib_place_model_requested(preset: Dictionary) -> void:
 			ModelCatalog.find(model_id).get("hawt_yaw_node", "turbine vane assembly")))
 		record_extra["hawt_blade_node"] = str(specs.get("hawt_blade_node",
 			ModelCatalog.find(model_id).get("hawt_blade_node", "Nosecone and Blades")))
+	if kind == "cartesian_machine":
+		# Pass the current axis-tag profile so the 3D runtime binds even before a
+		# save; the runtime also refreshes from the store on bind.
+		record_extra["machine_profile"] = CartesianMachineProfile.get_profile(model_id).to_dict()
+	if kind == "pp_beam_extruder" or model_id == "pp_beam_extruder":
+		record_extra["kind"] = "pp_beam_extruder"
+		record_extra["beam_mesh_name"] = str(specs.get("beam_mesh_name",
+			ModelCatalog.find("pp_beam_extruder").get("beam_mesh_name", "Recycled Plastic Beam")))
+	if kind == "pp_sheet_press" or model_id == "pp_sheet_press":
+		record_extra["kind"] = "pp_sheet_press"
+		record_extra["z_stroke_m"] = float(specs.get("z_stroke_m", 0.12))
+	if is_placeholder:
+		var bw := maxf(box_footprint.x, 0.3)
+		var bd := maxf(box_footprint.y, 0.3)
+		record_extra["box_spec"] = {
+			"w_m": bw, "d_m": bd, "h_m": maxf(1.0, minf(bw, bd))}
+	var graph_link := {
+		"node_type": ptype,
+		"label": str(preset.get("label", "Wind Turbine")),
+		"icon": str(preset.get("icon", "🌀")),
+		"width": dims.x,
+		"height": dims.y,
+		"specs": specs,
+	}
+	if not existing_item_id.is_empty():
+		graph_link["existing_item_id"] = existing_item_id
+		# Stamp early so runtimes that bind at spawn see the real node id even
+		# before create_bound_generator_node returns.
+		record_extra["graph_item_id"] = existing_item_id
 	var prep := {
 		"ok": true,
 		"model_id": model_id,
-		"graph_link": {
-			"node_type": ptype,
-			"label": str(preset.get("label", "Wind Turbine")),
-			"icon": str(preset.get("icon", "🌀")),
-			"width": dims.x,
-			"height": dims.y,
-			"specs": specs,
-		},
+		"graph_link": graph_link,
 		"record_extra": record_extra,
 	}
 	var r: Dictionary = PlacedPropService.begin_placement(main, model_id, prep)
@@ -2191,14 +4288,111 @@ func _find_terrain_loader(main: Node) -> Node:
 	return main.find_child("TerrainLoader", true, false)
 
 
-## Create a graph node for a placed 3D generator and bind it to the prop. Called
-## by PlacedPropService.confirm_placement() once the player commits a spot.
-## Returns the new node's item id (or "" on failure).
+## Open the Inventory & Crafting panel (fabricated parts + recipe assembly).
+func open_inventory_panel() -> void:
+	if _inventory_panel == null or not is_instance_valid(_inventory_panel):
+		_inventory_panel = _INVENTORY_PANEL.new()
+		var main := _get_scene_main_node()
+		var ui := main.get_node_or_null("UILayer") if main != null else null
+		if ui != null:
+			ui.add_child(_inventory_panel)
+		else:
+			add_child(_inventory_panel)
+	_inventory_panel.call("open")
+
+
+## Ghost-place a mud building design (from Mud Building Designer) without printing.
+func place_mud_building(mud_spec: Dictionary) -> void:
+	if mud_spec.is_empty():
+		return
+	var main := _get_scene_main_node()
+	if main == null:
+		return
+	var stored := mud_spec.duplicate(true)
+	stored["ghost_highlight"] = false
+	var prep := {
+		"ok": true,
+		"model_id": _MudBuildingStructureBuilder.MODEL_ID,
+		"mud_spec": {
+			"mud_spec": mud_spec.duplicate(true),
+			"ghost_highlight": true,
+		},
+		"record_extra": {
+			"mud_spec": stored,
+		},
+	}
+	var r: Dictionary = PlacedPropService.begin_placement(
+		main, _MudBuildingStructureBuilder.MODEL_ID, prep)
+	if not bool(r.get("ok", false)):
+		_show_toast("Could not start mud building placement")
+		return
+	visible = false
+	_apply_mouse_for_graph(false)
+	if main.get("gameplay_mechanics_paused") != null:
+		main.gameplay_mechanics_paused = _gameplay_paused_before_graph
+	var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
+	if gr != null:
+		gr.set_survival_paused(_gameplay_paused_before_graph)
+	var loader := _find_terrain_loader(main)
+	if loader != null and loader.has_method("notify_external_placement_started"):
+		loader.call("notify_external_placement_started", r)
+	else:
+		var ppui := main.get_node_or_null("UILayer/PlacedPropsUI")
+		if ppui != null and ppui.has_method("notify_bundle_imported"):
+			ppui.call("notify_bundle_imported", r)
+	_show_toast("Place your mud building")
+
+
+## Begin ghost placement of a crafted output model (no bound graph node) — the
+## crafting "assemble" action hands off to the same in-world placement loop the
+## library "Place Model" uses.
+func place_crafted_model(model_id: String, label: String) -> void:
+	if model_id.is_empty():
+		return
+	var main := _get_scene_main_node()
+	if main == null:
+		return
+	var prep := {"ok": true, "model_id": model_id}
+	if model_id == _GeodesicDomeBuilder.MODEL_ID:
+		prep["dome_spec"] = {
+			"radius_m": _DomeParts.TARGET_RADIUS_M,
+			"ghost_highlight": true,
+		}
+		prep["record_extra"] = {
+			"dome_spec": {
+				"radius_m": _DomeParts.TARGET_RADIUS_M,
+				"ghost_highlight": false,
+			},
+		}
+	var r: Dictionary = PlacedPropService.begin_placement(main, model_id, prep)
+	if not bool(r.get("ok", false)):
+		_show_toast("Could not start placement")
+		return
+	visible = false
+	_apply_mouse_for_graph(false)
+	if main.get("gameplay_mechanics_paused") != null:
+		main.gameplay_mechanics_paused = _gameplay_paused_before_graph
+	var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
+	if gr != null:
+		gr.set_survival_paused(_gameplay_paused_before_graph)
+	var loader := _find_terrain_loader(main)
+	if loader != null and loader.has_method("notify_external_placement_started"):
+		loader.call("notify_external_placement_started", r)
+	else:
+		var ppui := main.get_node_or_null("UILayer/PlacedPropsUI")
+		if ppui != null and ppui.has_method("notify_bundle_imported"):
+			ppui.call("notify_bundle_imported", r)
+	_show_toast("Place your %s" % label)
+
+
+## Create OR bind a graph node for a placed 3D prop. Called by
+## PlacedPropService.confirm_placement() once the player commits a spot.
+## When `graph_link.existing_item_id` is set (inspector Place in 3D), updates
+## that node in place — never mints a duplicate. Returns the bound item id.
 func create_bound_generator_node(prop_id: String, graph_link: Dictionary) -> String:
 	if model == null or graph_link.is_empty():
 		return ""
 	var specs: Dictionary = (graph_link.get("specs", {}) as Dictionary).duplicate(true)
-	specs["bound_prop_id"] = prop_id
 	var model_id := str(specs.get("model_id", ""))
 	if not model_id.is_empty() and (
 			float(specs.get("footprint_w_m", 0.0)) <= 0.0
@@ -2207,6 +4401,14 @@ func create_bound_generator_node(prop_id: String, graph_link: Dictionary) -> Str
 		if fp.x > 0.0 and fp.y > 0.0:
 			specs["footprint_w_m"] = fp.x
 			specs["footprint_d_m"] = fp.y
+
+	var existing_id := str(graph_link.get("existing_item_id", ""))
+	if not existing_id.is_empty():
+		var existing := model.get_item(existing_id)
+		if not existing.is_empty():
+			return _bind_existing_item_to_prop(existing_id, prop_id, specs, graph_link)
+
+	specs["bound_prop_id"] = prop_id
 	var item_id: String = model.generate_item_id()
 	# Spawn near the canvas centre in graph space so it's visible when reopened.
 	var gc := _graph_canvas as Control
@@ -2216,7 +4418,7 @@ func create_bound_generator_node(prop_id: String, graph_link: Dictionary) -> Str
 		graph_pos = _GRAPH_LAYOUT_SCRIPT.nudge_spawn_position(
 			graph_pos, Vector2(float(graph_link.get("width", 124.0)),
 				float(graph_link.get("height", 112.0))), items)
-	model.add_item({
+	var new_item := {
 		"id": item_id,
 		"type": str(graph_link.get("node_type", "wind")),
 		"x": graph_pos.x,
@@ -2226,11 +4428,78 @@ func create_bound_generator_node(prop_id: String, graph_link: Dictionary) -> Str
 		"scope_id": _active_scope_id,
 		"specs": specs,
 		"is_virtual": false,
-	})
+	}
+	_apply_site_coords_from_prop(new_item, prop_id)
+	model.add_item(new_item)
+	# Placing a siphon next to a pond should just work — auto-bind to the
+	# nearest pond within footprint range (silent: no toast if none is close;
+	# the player can Rebind manually) and auto-route its downhill culvert
+	# outlet, instead of requiring the Bind/Ensure-outlet dev buttons.
+	if str(specs.get("role", "")) == "siphon_hydro":
+		if bind_siphon_to_nearest_pond(item_id, true, 40.0):
+			ensure_siphon_outlet_sink(item_id)
 	_schedule_graph_autosave()
 	_autosave_pending = true
 	_flush_graph_autosave()
-	var link_label := str(graph_link.get("label", "Node"))
+	_toast_bound_prop_link(str(graph_link.get("label", "Node")), specs, graph_link)
+	return item_id
+
+
+## Bind an already-on-canvas graph node to a just-placed 3D prop (Place in 3D).
+## Preserves graph position + wiring + live specs; only stamps the prop link /
+## footprint. Re-place: swaps bound_prop_id then deletes the previous 3D twin
+## (order matters so delete_prop_by_id → remove_items_bound_to_prop does not
+## nuke this node).
+func _bind_existing_item_to_prop(item_id: String, prop_id: String,
+		specs: Dictionary, graph_link: Dictionary) -> String:
+	var existing := model.get_item(item_id)
+	if existing.is_empty():
+		return ""
+	var prev_specs: Dictionary = (existing.get("specs", {}) as Dictionary).duplicate(true)
+	var old_prop_id := str(prev_specs.get("bound_prop_id", ""))
+	prev_specs["bound_prop_id"] = prop_id
+	var mid := str(specs.get("model_id", ""))
+	if not mid.is_empty():
+		prev_specs["model_id"] = mid
+	var fw := float(specs.get("footprint_w_m", 0.0))
+	var fd := float(specs.get("footprint_d_m", 0.0))
+	if fw > 0.0:
+		prev_specs["footprint_w_m"] = fw
+	if fd > 0.0:
+		prev_specs["footprint_d_m"] = fd
+	var patch: Dictionary = {"specs": prev_specs}
+	_apply_site_coords_from_prop(patch, prop_id)
+	model.update_item(item_id, patch)
+	# Drop the previous twin only after the node points at the new prop.
+	if not old_prop_id.is_empty() and old_prop_id != prop_id:
+		var main := _get_scene_main_node()
+		var loader := _find_terrain_loader(main) if main != null else null
+		if loader != null and loader.has_method("delete_prop_by_id"):
+			loader.call("delete_prop_by_id", old_prop_id)
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+	_toast_bound_prop_link(str(graph_link.get("label",
+		str(prev_specs.get("name", "Node")))), prev_specs, graph_link)
+	return item_id
+
+
+func _apply_site_coords_from_prop(item_or_patch: Dictionary, prop_id: String) -> void:
+	var soi := get_node_or_null("/root/SoiService")
+	var main2 := _get_scene_main_node()
+	if soi == null or not soi.has_method("world_center") or main2 == null:
+		return
+	var center: Vector3 = soi.call("world_center")
+	var pos_v: Variant = _world_pos_for_bound_prop(main2, prop_id)
+	if pos_v is Vector3:
+		var world: Vector3 = pos_v as Vector3
+		var site := GraphSiteLayout.world_xz_to_site(Vector2(world.x, world.z), center)
+		item_or_patch["site_x_m"] = site.x
+		item_or_patch["site_z_m"] = site.y
+		item_or_patch["elevation_m"] = world.y
+
+
+func _toast_bound_prop_link(link_label: String, specs: Dictionary, graph_link: Dictionary) -> void:
 	var role := str(specs.get("role", ""))
 	if role == "habitat":
 		_show_toast("%s linked to placed shelter" % link_label)
@@ -2240,7 +4509,6 @@ func create_bound_generator_node(prop_id: String, graph_link: Dictionary) -> Str
 		_show_toast("%s linked to placed grow bed" % link_label)
 	else:
 		_show_toast("%s linked in 3D" % link_label)
-	return item_id
 
 
 ## Called when the current world time changes for a placed generator's bound
@@ -2313,6 +4581,18 @@ func _spawn_from_preset(preset: Dictionary, canvas_local_pos: Vector2) -> void:
 	var center: Vector2 = _graph_canvas.size * 0.5
 	var graph_pos := (canvas_local_pos - center - pan) / zoom
 
+	# Linked component (SketchUp-style): register its definition tree into the
+	# document, then realize an INSTANCE bound to the definition.
+	if str(preset.get("type", "")) == "component":
+		_spawn_component_preset(preset, graph_pos)
+		return
+
+	# Subgraph template (legacy one-off) → instantiate a pre-wired nested
+	# super-node with fresh ids instead of a single leaf node.
+	if preset.has("subgraph"):
+		_spawn_subgraph_preset(preset, graph_pos)
+		return
+
 	var ptype: String = str(preset.get("type", "appliance"))
 	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
 	var item_id: String = model.generate_item_id()
@@ -2369,6 +4649,261 @@ func _spawn_from_preset(preset: Dictionary, canvas_local_pos: Vector2) -> void:
 		_graph_canvas.call("queue_redraw")
 		print("SystemGraphView: spawned '%s' — drop onto SoI disc from Unplaced tray"
 				% str(specs.get("name", ptype)))
+
+
+## Instantiate a subgraph-template preset as a generic super-node: creates the
+## compound shell + child scope, spawns the template's children (fresh ids),
+## wires the internal connections, and builds live exposed_ports/handles. The
+## result is identical to the player having grouped an equivalent selection.
+func _spawn_subgraph_preset(preset: Dictionary, graph_pos: Vector2) -> void:
+	var sub: Dictionary = preset.get("subgraph", {}) as Dictionary
+	var tpl_items: Array = sub.get("items", []) as Array
+	if tpl_items.is_empty():
+		return
+	_history_suppress = true
+	var comp_specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+	comp_specs["compound_kind"] = ""
+	comp_specs["child_count"] = tpl_items.size()
+	var compound_id: String = model.generate_item_id()
+	var comp_item: Dictionary = {
+		"id": compound_id,
+		"type": "compound",
+		"x": graph_pos.x, "y": graph_pos.y,
+		"width": float(preset.get("width", 200.0)),
+		"height": float(preset.get("height", 130.0)),
+		"scope_id": _active_scope_id,
+		"specs": comp_specs,
+		"handles": [],
+		"is_virtual": false,
+	}
+	model.add_item(comp_item)
+	var child_scope := "scope_%s" % compound_id
+	model.ensure_scope(child_scope, _active_scope_id, compound_id, str(comp_specs.get("name", "Super Node")))
+	model.update_item(compound_id, {"child_scope_id": child_scope})
+	# Spawn children with fresh ids (local_id -> real id).
+	var id_map: Dictionary = {}
+	for it_v in tpl_items:
+		var t := it_v as Dictionary
+		var itype := str(t.get("type", "appliance"))
+		var new_id := model.generate_item_id()
+		id_map[str(t.get("local_id", ""))] = new_id
+		var specs: Dictionary = (t.get("specs", {}) as Dictionary).duplicate(true)
+		var dims := ComponentPresets.spawn_dimensions({"type": itype})
+		var idata: Dictionary = {
+			"id": new_id, "type": itype,
+			"x": graph_pos.x + float(t.get("dx", 0.0)),
+			"y": graph_pos.y + float(t.get("dy", 0.0)),
+			"width": dims.x, "height": dims.y,
+			"scope_id": child_scope,
+			"parent_compound_id": compound_id,
+			"specs": specs, "is_virtual": false,
+		}
+		model.add_item(idata)
+		if itype == "processor":
+			ResourceKinds.new().migrate_processor_specs(specs)
+	# Internal wires.
+	for c_v in (sub.get("connections", []) as Array):
+		var c := c_v as Dictionary
+		var s_id := str(id_map.get(str(c.get("source", "")), ""))
+		var t_id := str(id_map.get(str(c.get("target", "")), ""))
+		if s_id.is_empty() or t_id.is_empty():
+			continue
+		model.add_connection({
+			"scope_id": child_scope,
+			"polarity": c.get("polarity", "ac"),
+			"resource_type": c.get("resource_type", ""),
+			"source_item_id": s_id, "source_handle_id": str(c.get("source_handle", "")),
+			"target_item_id": t_id, "target_handle_id": str(c.get("target_handle", "")),
+			"line_style": "bezier", "curve_tension": 1.0, "corner_radius": 28.0,
+		})
+	# Promoted ports + matching handles on the compound shell.
+	var exposed_ports: Array = []
+	var handles: Array = []
+	var in_n := 0
+	var out_n := 0
+	for ep_v in (sub.get("exposed_ports", []) as Array):
+		var ep := ep_v as Dictionary
+		var child_id := str(id_map.get(str(ep.get("child", "")), ""))
+		if child_id.is_empty():
+			continue
+		var hid := str(ep.get("handle_id", ""))
+		var direction := str(ep.get("direction", "in"))
+		var pol := str(ep.get("polarity", "ac"))
+		exposed_ports.append({
+			"handle_id": hid, "child_item_id": child_id,
+			"child_handle_id": str(ep.get("child_handle", "")),
+			"polarity": pol, "kind": str(ep.get("kind", "")),
+			"label": str(ep.get("label", "")), "direction": direction,
+		})
+		# Top-to-bottom flow: inputs across the TOP edge, outputs across the BOTTOM.
+		var t := float(in_n + 1) / 6.0 if direction == "in" else float(out_n + 1) / 6.0
+		handles.append({"id": hid, "polarity": pol, "direction": direction,
+			"ry": 0.0 if direction == "in" else 1.0, "rx": clampf(t, 0.1, 0.9)})
+		if direction == "in":
+			in_n += 1
+		else:
+			out_n += 1
+	var final_specs: Dictionary = (model.get_item(compound_id).get("specs", {}) as Dictionary).duplicate(true)
+	final_specs["exposed_ports"] = exposed_ports
+	final_specs["port_in_count"] = in_n
+	final_specs["port_out_count"] = out_n
+	model.update_item(compound_id, {"specs": final_specs, "handles": handles})
+	_history_suppress = false
+	model.changed.emit("reset")
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+	_show_toast("Placed %s" % str(preset.get("label", "super-node")))
+
+
+## Spawn a LINKED component instance from a library entry: register the entry's
+## definition tree (built-in or user) into the document's registry, then realize
+## an instance bound to it. All instances of the definition live-update together.
+func _spawn_component_preset(preset: Dictionary, graph_pos: Vector2) -> void:
+	if model == null:
+		return
+	var def_id := str(preset.get("def_id", ""))
+	if def_id.is_empty():
+		return
+	var defs: Dictionary = preset.get("defs", {}) as Dictionary
+	if defs.is_empty():
+		defs = ComponentPresets.builtin_component_tree(def_id)
+	if defs.is_empty():
+		_show_toast("Unknown component")
+		return
+	_history_suppress = true
+	# Register every definition in the tree (don't clobber a locally-edited one).
+	for did in defs.keys():
+		if model.get_definition(str(did)).is_empty():
+			model.put_definition(defs[did] as Dictionary)
+	var compound_id := GraphComponentDefs.realize(model, def_id, _active_scope_id, graph_pos)
+	_history_suppress = false
+	if compound_id.is_empty():
+		_show_toast("Could not place component")
+		return
+	model.changed.emit("reset")
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+	_show_toast("Placed %s" % str(preset.get("label", "component")))
+
+
+## Inspector "Save as Component": promote a generic super-node into a reusable,
+## live-linked component definition (minting one on first save), name it, persist
+## it (with any nested defs) to the user library, and push it to all instances.
+func save_compound_as_component(compound_id: String) -> void:
+	if model == null:
+		return
+	var item := model.get_item(compound_id)
+	if item.is_empty() or str(item.get("type", "")) != "compound":
+		return
+	if str((item.get("specs", {}) as Dictionary).get("compound_kind", "")) != "":
+		_show_toast("Only generic super-nodes can be components")
+		return
+	var cur_name := str((item.get("specs", {}) as Dictionary).get("name", "Component"))
+	_prompt_text("Save as Component", "Component name", cur_name,
+		func(entered: String):
+			var nm := entered.strip_edges()
+			if nm.is_empty():
+				nm = cur_name
+			_finish_save_component(compound_id, nm))
+
+
+func _finish_save_component(compound_id: String, comp_name: String) -> void:
+	_history_suppress = true
+	var item := model.get_item(compound_id)
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var def_id := str(specs.get("definition_id", ""))
+	if def_id.is_empty():
+		# First save — mint a definition and bind this compound as its first instance.
+		var def := GraphComponentDefs.make_definition(comp_name)
+		def_id = str(def["id"])
+		model.put_definition(def)
+		specs["definition_id"] = def_id
+		specs["name"] = comp_name
+		model.update_item(compound_id, {"specs": specs})
+	else:
+		specs["name"] = comp_name
+		model.update_item(compound_id, {"specs": specs})
+	# Capture current interior into the definition, then rename the definition.
+	GraphComponentDefs.capture(model, compound_id)
+	var def2 := model.get_definition(def_id)
+	def2["name"] = comp_name
+	model.put_definition(def2)
+	_history_suppress = false
+	# Persist to the user library (with nested defs) and refresh other instances.
+	_persist_component_to_library(def_id, comp_name)
+	for other in model.instances_of_definition(def_id):
+		var oid := str((other as Dictionary).get("id", ""))
+		if oid != compound_id:
+			_history_suppress = true
+			GraphComponentDefs.restamp(model, oid)
+			_history_suppress = false
+	model.changed.emit("reset")
+	_schedule_graph_autosave()
+	_show_toast("Saved component '%s'" % comp_name)
+
+
+## Write a definition (and every definition it references) into the user library
+## so it appears under "My Components" and survives restarts.
+func _persist_component_to_library(def_id: String, comp_name: String) -> void:
+	var tree: Dictionary = {}
+	_gather_model_def_tree(def_id, tree)
+	if tree.is_empty():
+		return
+	var entry := {
+		"type": "component", "label": comp_name, "icon": "🧩",
+		"def_id": def_id, "defs": tree,
+	}
+	ComponentPresets.save_user_preset("my_components", entry)
+
+
+## Recursively collect a model definition plus its nested references.
+func _gather_model_def_tree(def_id: String, out: Dictionary) -> void:
+	if def_id.is_empty() or out.has(def_id):
+		return
+	var def := model.get_definition(def_id)
+	if def.is_empty():
+		return
+	out[def_id] = def.duplicate(true)
+	for it_v in ((def.get("subgraph", {}) as Dictionary).get("items", []) as Array):
+		var nested := str((it_v as Dictionary).get("definition_id", ""))
+		if not nested.is_empty():
+			_gather_model_def_tree(nested, out)
+
+
+## Inspector "Make Unique": detach this instance from its definition (edits no
+## longer sync). Other instances are unaffected.
+func make_compound_unique(compound_id: String) -> void:
+	if model == null:
+		return
+	GraphComponentDefs.make_unique(model, compound_id)
+	model.changed.emit("reset")
+	_schedule_graph_autosave()
+	_show_toast("Detached — now a unique super-node")
+
+
+## Minimal single-line text prompt modal. Runs `on_confirm.call(text)` on OK.
+func _prompt_text(title: String, placeholder: String, default_text: String,
+		on_confirm: Callable) -> void:
+	var dlg := AcceptDialog.new()
+	dlg.title = title
+	dlg.dialog_hide_on_ok = true
+	var le := LineEdit.new()
+	le.placeholder_text = placeholder
+	le.text = default_text
+	le.custom_minimum_size = Vector2(280, 0)
+	le.select_all()
+	dlg.add_child(le)
+	dlg.register_text_enter(le)
+	add_child(dlg)
+	dlg.confirmed.connect(func():
+		if on_confirm.is_valid():
+			on_confirm.call(le.text)
+		dlg.queue_free())
+	dlg.canceled.connect(func(): dlg.queue_free())
+	dlg.popup_centered()
+	le.grab_focus()
 
 
 ## Import an OSM (or other real-world) solar footprint as ONE compound array node
@@ -2530,6 +5065,79 @@ func add_imported_solar_panels(count: int, watts: float, label: String = "OSM So
 		array_id, count, panel_watts, str(equiv.get("array_topology", "")), array_tag])
 	_sync_solar_ui_from_graph()
 	return array_id
+
+
+const _STOWED_PREFIX := "STOWED • "
+
+
+## Deploy gate for a live-foldable structure's imported array (Linkage Lab).
+## A stowed array keeps its node + wiring (the hardware still exists, folded
+## away) but stops contributing capacity to SolarUI until redeployed.
+func set_imported_array_stowed(tag: String, stowed: bool) -> bool:
+	if model == null or tag.is_empty():
+		return false
+	var changed := false
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var specs0: Dictionary = (it as Dictionary).get("specs", {})
+		if not bool(specs0.get("osm_import", false)):
+			continue
+		if str(specs0.get("osm_tag", "")) != tag:
+			continue
+		if bool(specs0.get("array_stowed", false)) == stowed:
+			continue
+		specs0 = specs0.duplicate(true)
+		specs0["array_stowed"] = stowed
+		var summary := str(specs0.get("summary", "")).trim_prefix(_STOWED_PREFIX)
+		specs0["summary"] = (_STOWED_PREFIX + summary) if stowed else summary
+		model.update_item(str((it as Dictionary).get("id", "")), {"specs": specs0})
+		changed = true
+	if changed:
+		_sync_solar_ui_from_graph()
+		_schedule_graph_autosave()
+		if _graph_canvas != null:
+			_graph_canvas.queue_redraw()
+	return changed
+
+
+## True if an imported solar array with this tag is on the graph.
+func has_array_with_tag(tag: String) -> bool:
+	if model == null or tag.is_empty():
+		return false
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var specs0: Dictionary = (it as Dictionary).get("specs", {})
+		if bool(specs0.get("osm_import", false)) and str(specs0.get("osm_tag", "")) == tag:
+			return true
+	return false
+
+
+## Remove an imported solar array by tag (e.g. its placed structure was
+## deleted). Returns true if anything was removed.
+func remove_imported_solar_array(tag: String) -> bool:
+	if model == null or tag.is_empty():
+		return false
+	var remove_ids: Array[String] = []
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var specs0: Dictionary = (it as Dictionary).get("specs", {})
+		if bool(specs0.get("osm_import", false)) and str(specs0.get("osm_tag", "")) == tag:
+			remove_ids.append(str((it as Dictionary).get("id", "")))
+	for rid in remove_ids:
+		if not rid.is_empty():
+			model.remove_item(rid)
+	if remove_ids.is_empty():
+		return false
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+	_sync_solar_ui_from_graph()
+	print("SystemGraphView: removed imported solar array tag '%s' (%d items)" % [
+		tag, remove_ids.size()])
+	return true
 
 
 func _serialize_footprint(raw: Variant) -> Array:
@@ -2821,8 +5429,12 @@ func add_imported_pond(payload: Dictionary) -> bool:
 	var tag := str(payload.get("osm_water_tag", payload.get("osm_tag", "")))
 	if tag.is_empty():
 		return false
-	# Remove prior catchment + tank sharing this tag (idempotent re-import).
+	var pond_id := str(payload.get("pond_id", ""))
+	# Remove prior catchment + tank sharing this tag OR this stable pond_id
+	# (idempotent re-import even if the tag drifted since the last import).
 	_remove_pond_items_by_tag(tag)
+	if not pond_id.is_empty():
+		_remove_pond_items_by_pond_id(pond_id)
 	var centroid: Vector2 = payload.get("centroid", Vector2.ZERO) as Vector2
 	var soi := get_node_or_null("/root/SoiService")
 	var site := Vector2.ZERO
@@ -2839,6 +5451,22 @@ func add_imported_pond(payload: Dictionary) -> bool:
 	var area := maxf(float(payload.get("area_m2", 10.0)), 1.0)
 	var mean_depth := maxf(float(payload.get("mean_depth_m", 1.5)), 0.3)
 	var capacity_l := maxf(float(payload.get("capacity_l", area * mean_depth * 1000.0)), 100.0)
+	var rim_m := float(payload.get("rim_m", elev if not is_nan(elev) else 0.0))
+	var floor_m := float(payload.get("floor_m", rim_m - mean_depth))
+	var level_m := float(payload.get("level_m", NAN))
+	if is_nan(level_m):
+		level_m = rim_m - clampf((rim_m - floor_m) * 0.15, 0.05, 0.5)
+	var span := maxf(rim_m - floor_m, 0.05)
+	var stock_l := float(payload.get("stock_l", NAN))
+	var level_frac := clampf((level_m - floor_m) / span, 0.0, 1.0)
+	if payload.has("level"):
+		level_frac = clampf(float(payload["level"]), 0.0, 1.0)
+	elif not is_nan(stock_l) and capacity_l > 1e-3:
+		level_frac = clampf(stock_l / capacity_l, 0.0, 1.0)
+	var capacity_mode := str(payload.get("capacity_mode", "auto"))
+	var fill_mode := str(payload.get("fill_mode", "auto"))
+	if is_nan(stock_l):
+		stock_l = level_frac * capacity_l
 	var fw := maxf(float(payload.get("width_m", sqrt(area))), 1.0)
 	var fd := maxf(float(payload.get("depth_m", sqrt(area))), 1.0)
 	var label := str(payload.get("label", "Pond"))
@@ -2862,7 +5490,11 @@ func add_imported_pond(payload: Dictionary) -> bool:
 			"osm_import": true,
 			"osm_tag": tag,
 			"osm_water_tag": tag,
+			"pond_id": pond_id,
 			"mean_depth_m": mean_depth,
+			"rim_m": rim_m,
+			"floor_m": floor_m,
+			"level_m": level_m,
 			"footprint_w_m": fw,
 			"footprint_d_m": fd,
 			"map_display_scale": 1.0,
@@ -2872,6 +5504,8 @@ func add_imported_pond(payload: Dictionary) -> bool:
 	}
 	if not is_nan(elev):
 		catch_item["elevation_m"] = elev
+	elif not is_nan(level_m):
+		catch_item["elevation_m"] = level_m
 	model.add_item(catch_item)
 	var tank_item := {
 		"id": tank_id,
@@ -2887,16 +5521,25 @@ func add_imported_pond(payload: Dictionary) -> bool:
 			"capacity": "%.0f L" % capacity_l,
 			"capacity_qty": capacity_l,
 			"capacity_unit": "L",
-			"level": 0.55,
+			"level": level_frac,
+			"level_m": level_m,
+			"rim_m": rim_m,
+			"floor_m": floor_m,
+			"stock_l": stock_l,
+			"capacity_mode": capacity_mode,
+			"fill_mode": fill_mode,
 			"cost": 0.0,
 			"osm_import": true,
 			"osm_water_tag": tag,
+			"pond_id": pond_id,
 			"pond_storage": true,
 		},
 		"is_virtual": false,
 	}
 	if not is_nan(elev):
 		tank_item["elevation_m"] = elev
+	else:
+		tank_item["elevation_m"] = level_m
 	model.add_item(tank_item)
 	model.add_connection({
 		"scope_id": "root",
@@ -2916,6 +5559,1026 @@ func add_imported_pond(payload: Dictionary) -> bool:
 	_flush_graph_autosave()
 	print("SystemGraphView: imported pond tag '%s' (%.0f m², %.0f L)" % [tag, area, capacity_l])
 	return true
+
+
+## Hillside DEM catchment wired into an existing pond storage tank.
+## Idempotent per `watershed_<pond_tag>` osm_tag. Payload from
+## `TerrainLoader.analyze_pond_watershed`.
+func add_imported_watershed_catchment(payload: Dictionary) -> bool:
+	if model == null:
+		return false
+	var pond_tag := str(payload.get("pond_tag", payload.get("osm_water_tag", "")))
+	if pond_tag.is_empty():
+		return false
+	if not has_pond_with_tag(pond_tag):
+		# Need a tank to credit — import pond surface first if caller has payload bits.
+		return false
+	var tank_id := _pond_tank_id_for_tag(pond_tag)
+	if tank_id.is_empty():
+		return false
+	var ws_tag := "watershed_%s" % pond_tag
+	_remove_watershed_catchment_by_tag(ws_tag)
+	var centroid: Vector2 = payload.get("centroid", Vector2.ZERO) as Vector2
+	var soi := get_node_or_null("/root/SoiService")
+	var site := Vector2.ZERO
+	var elev := NAN
+	if soi != null and soi.has_method("world_center"):
+		var center: Vector3 = soi.call("world_center") as Vector3
+		site = GraphSiteLayout.world_xz_to_site(centroid, center)
+		if soi.has_method("ground_y_at"):
+			elev = float(soi.call("ground_y_at", centroid.x, centroid.y))
+	var poly_site: Array = payload.get("poly_site", []) as Array
+	if poly_site.is_empty():
+		var poly_world: PackedVector2Array = payload.get("poly_world", PackedVector2Array()) \
+				as PackedVector2Array
+		for p in poly_world:
+			poly_site.append([p.x - centroid.x, p.y - centroid.y])
+	var area := maxf(float(payload.get("area_m2", 1.0)), 1.0)
+	var runoff := clampf(float(payload.get("runoff_default",
+			payload.get("runoff_coeff", 0.35))), 0.0, 1.0)
+	var label := str(payload.get("label", "Hillside Catchment"))
+	var catch_id := model.generate_item_id()
+	var tank_item := model.get_item(tank_id)
+	var place_x := float(tank_item.get("x", 80.0)) + 150.0
+	var place_y := float(tank_item.get("y", 200.0)) - 20.0
+	var catch_item := {
+		"id": catch_id,
+		"type": "catchment",
+		"x": place_x, "y": place_y,
+		"width": 120.0, "height": 90.0,
+		"scope_id": "root",
+		"site_x_m": site.x,
+		"site_z_m": site.y,
+		"specs": {
+			"name": label,
+			"catchment_kind": "watershed",
+			"use_soi_area": false,
+			"area_m2": area,
+			"runoff_coeff": runoff,
+			"cost": 0.0,
+			"osm_import": true,
+			"osm_tag": ws_tag,
+			"pond_tag": pond_tag,
+			"osm_water_tag": pond_tag,
+			"footprint_w_m": maxf(sqrt(area), 1.0),
+			"footprint_d_m": maxf(sqrt(area), 1.0),
+			"map_display_scale": 1.0,
+			"osm_poly_site": poly_site,
+			"cell_count": int(payload.get("cell_count", 0)),
+		},
+		"is_virtual": false,
+	}
+	if not is_nan(elev):
+		catch_item["elevation_m"] = elev
+	model.add_item(catch_item)
+	if _graph_canvas != null:
+		_graph_canvas.set("selected_item_id", catch_id)
+
+	# Wire catchment → pond tank (water).
+	model.add_connection({
+		"scope_id": "root",
+		"polarity": "resource",
+		"resource_type": "water",
+		"source_item_id": catch_id,
+		"source_handle_id": "output",
+		"target_item_id": tank_id,
+		"target_handle_id": "input",
+		"waypoints": [],
+		"line_style": "bezier",
+		"curve_tension": 1.0,
+		"corner_radius": 28.0,
+	})
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	print("SystemGraphView: watershed catchment for pond '%s' (%.0f m²)" % [pond_tag, area])
+	return true
+
+
+func remove_imported_watershed_catchment(pond_tag: String) -> bool:
+	if pond_tag.is_empty():
+		return false
+	var n := _remove_watershed_catchment_by_tag("watershed_%s" % pond_tag)
+	if n > 0:
+		_schedule_graph_autosave()
+		_autosave_pending = true
+		_flush_graph_autosave()
+		if _graph_canvas != null:
+			_graph_canvas.call("queue_redraw")
+	return n > 0
+
+
+func has_watershed_catchment_for_pond(pond_tag: String) -> bool:
+	if model == null or pond_tag.is_empty():
+		return false
+	var ws_tag := "watershed_%s" % pond_tag
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var specs: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if str((it as Dictionary).get("type", "")) != "catchment":
+			continue
+		if str(specs.get("catchment_kind", "")) == "watershed" \
+				and (str(specs.get("osm_tag", "")) == ws_tag \
+				or str(specs.get("pond_tag", "")) == pond_tag):
+			return true
+	return false
+
+
+func _remove_watershed_catchment_by_tag(ws_tag: String) -> int:
+	if model == null or ws_tag.is_empty():
+		return 0
+	var remove_ids: Array[String] = []
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var specs0: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if str((it as Dictionary).get("type", "")) != "catchment":
+			continue
+		if str(specs0.get("catchment_kind", "")) != "watershed":
+			continue
+		if str(specs0.get("osm_tag", "")) == ws_tag \
+				or str(specs0.get("pond_tag", "")) == ws_tag.trim_prefix("watershed_"):
+			remove_ids.append(str((it as Dictionary).get("id", "")))
+	for rid in remove_ids:
+		if not rid.is_empty():
+			model.remove_item(rid)
+	return remove_ids.size()
+
+
+func _pond_tank_id_for_tag(pond_tag: String) -> String:
+	if model == null or pond_tag.is_empty():
+		return ""
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var item: Dictionary = it
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if str(item.get("type", "")) != "resource":
+			continue
+		if not bool(specs.get("pond_storage", false)):
+			continue
+		if str(specs.get("osm_water_tag", "")) == pond_tag:
+			return str(item.get("id", ""))
+	return ""
+
+
+# ---------------------------------------------------------------------------
+# Siphon Lab (detail modal) + pond bind / ∞ outlet sink
+# ---------------------------------------------------------------------------
+
+func _ensure_siphon_lab_modal() -> void:
+	if _siphon_lab_modal != null and is_instance_valid(_siphon_lab_modal):
+		return
+	# Host inside SystemGraphView so Siphon Lab fills the canvas area as a view.
+	var modal := Control.new()
+	modal.name = "SiphonHydroModal"
+	modal.set_script(_SIPHON_LAB_SCRIPT)
+	modal.visible = false
+	modal.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(modal)
+	# Above canvas, below topbar/sidebars — move just after GraphCanvas.
+	if _graph_canvas != null:
+		move_child(modal, _graph_canvas.get_index() + 1)
+	if modal.has_method("bind_graph_view"):
+		modal.call("bind_graph_view", self)
+	_siphon_lab_modal = modal
+	_apply_siphon_lab_layout()
+
+
+func _apply_siphon_lab_layout() -> void:
+	if _siphon_lab_modal == null or not is_instance_valid(_siphon_lab_modal):
+		return
+	var bottom_offset := _timeline_bottom_inset()
+	if _history_panel != null and is_instance_valid(_history_panel) \
+			and _history_panel.visible:
+		bottom_offset += HISTORY_PANEL_H
+	# Phase 2: own 2D cross-section + params — fill the whole canvas area
+	# (below topbar, above timeline). No longer a right-strip dock over the CT.
+	_anchor(_siphon_lab_modal,
+		0.0, 0.0, 1.0, 1.0,
+		0.0, TOPBAR_H, 0.0, -bottom_offset)
+
+
+func _sync_siphon_lab_view(preferred_item_id: String = "") -> void:
+	_ensure_siphon_lab_modal()
+	if _siphon_lab_modal == null:
+		return
+	_apply_siphon_lab_layout()
+	if _graph_view_mode == GraphSiteLayout.VIEW_SIPHON:
+		if _siphon_lab_modal.has_method("enter_as_view"):
+			_siphon_lab_modal.call("enter_as_view", preferred_item_id)
+		# Modal shell must exist before SoI SubViewport can embed into it.
+		_sync_soi_preview_for_mode()
+	else:
+		var leave_id := ""
+		if _siphon_lab_modal != null and _siphon_lab_modal.get("_item_id") != null:
+			leave_id = str(_siphon_lab_modal.get("_item_id"))
+		teardown_siphon_lab_session(leave_id)
+		if _siphon_lab_modal.has_method("exit_view"):
+			_siphon_lab_modal.call("exit_view")
+
+
+func open_siphon_lab(item_id: String) -> void:
+	if model == null:
+		return
+	if not item_id.is_empty():
+		var item := model.get_item(item_id)
+		if item.is_empty():
+			return
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if str(specs.get("role", "")) != "siphon_hydro":
+			return
+	_apply_graph_view_mode(GraphSiteLayout.VIEW_SIPHON, {"siphon_item_id": item_id})
+
+
+## Throttle Elev redraws while the Siphon Lab is open (~15 Hz).
+var _lab_redraw_acc: float = 0.0
+
+
+## Siphon Lab per-frame sync: push pond twin mesh into the embedded Elev CT.
+## Water stock itself is advanced by ResourceFlowEngine (world clock, or wall
+## time while paused via lab Test Inflow).
+func lab_siphon_tick(siphon_id: String, real_delta: float, _opts: Dictionary = {}) -> void:
+	if model == null or siphon_id.is_empty() or real_delta <= 0.0:
+		return
+	_lab_redraw_acc += real_delta
+	if _lab_redraw_acc < 0.12:
+		return
+	_lab_redraw_acc = 0.0
+	# Force mesh rebuild so the Lab CT pond surface tracks stock while the
+	# ambient throttle skips Elev/Siphon (and world-suspend) remeshes.
+	push_pond_levels_to_mesh(true)
+	queue_canvas_redraw()
+
+
+## Siphon Lab: directly set the bound pond's water level (dragging the water line
+## on the cross-section). Re-anchors the tank timeline so the flow engine then
+## continues fill/drain from here on the world clock instead of clobbering it.
+func lab_set_pond_level(siphon_id: String, level_m: float) -> bool:
+	if model == null or siphon_id.is_empty():
+		return false
+	var tank := resolve_siphon_pond(siphon_id)
+	if tank.is_empty():
+		return false
+	var tid := str(tank.get("id", ""))
+	var specs: Dictionary = (tank.get("specs", {}) as Dictionary).duplicate(true)
+	var floor_y := float(specs.get("floor_m", NAN))
+	var rim := float(specs.get("rim_m", NAN))
+	if is_nan(floor_y) or is_nan(rim) or rim <= floor_y + 0.02:
+		return false
+	level_m = clampf(level_m, floor_y + 0.02, rim - 0.02)
+	var span := maxf(rim - floor_y, 0.05)
+	var frac := clampf((level_m - floor_y) / span, 0.0, 1.0)
+	var cap := maxf(float(specs.get("capacity_qty", 1.0)), 1.0)
+	specs["level_m"] = level_m
+	specs["level"] = frac
+	specs["stock_l"] = frac * cap
+	specs["fill_mode"] = "auto"
+	model.update_item(tid, {"specs": specs, "elevation_m": level_m})
+	if _resource_flow != null and _resource_flow.has_method("reanchor_tank"):
+		_resource_flow.call("reanchor_tank", tid, frac)
+	push_pond_levels_to_mesh(true)
+	return true
+
+
+## True when a pond tank has usable floor/rim bathymetry for Lab/Elev framing.
+static func pond_has_usable_bathymetry(specs: Dictionary) -> bool:
+	var floor_m := float(specs.get("floor_m", NAN))
+	var rim_m := float(specs.get("rim_m", NAN))
+	return not is_nan(floor_m) and not is_nan(rim_m) and rim_m > floor_m + 0.05
+
+
+## Heal tags, prune orphans, ensure outlet, select bound pond (Lab enter).
+func prepare_siphon_lab_session(siphon_id: String) -> void:
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader != null:
+		heal_pond_tags_from_map(loader)
+		if loader.has_method("prune_orphan_ponds_from_graph"):
+			loader.call("prune_orphan_ponds_from_graph", false)
+	heal_duplicate_null_bathymetry_ponds()
+	heal_pond_capacity_sanity()
+	if not siphon_id.is_empty():
+		# Unbound OR bound to a null-bathymetry orphan — prefer a live pond.
+		var bound := resolve_siphon_pond(siphon_id)
+		var need_rebind := bound.is_empty()
+		if not need_rebind:
+			var bs: Dictionary = bound.get("specs", {}) as Dictionary
+			need_rebind = not pond_has_usable_bathymetry(bs)
+		if need_rebind:
+			# Generous but bounded — the placement path already binds within 40 m,
+			# so this fallback only fires when the turbine was placed before a
+			# nearby pond existed. Cap it so opening the Lab can't silently latch
+			# onto a pond on the far side of the map; beyond the cap it stays
+			# unbound (Lab shows "wire a pond") instead of binding nonsense.
+			bind_siphon_to_nearest_pond(siphon_id, true, LAB_AUTOBIND_MAX_M)
+		# Migrate absolute start/break → offsets vs live module elev; heal tank cap.
+		var siphon := model.get_item(siphon_id)
+		if not siphon.is_empty():
+			var ss: Dictionary = (siphon.get("specs", {}) as Dictionary).duplicate(true)
+			var elev := float(siphon.get("elevation_m", NAN))
+			if is_nan(elev):
+				elev = float(ss.get("module_elev_m", NAN))
+			SiphonHydraulics.apply_resolved_levels(ss, elev)
+			var siphon_patch := {"specs": ss}
+			if not is_nan(elev):
+				siphon_patch["elevation_m"] = elev
+			model.update_item(siphon_id, siphon_patch)
+		ensure_siphon_outlet_sink(siphon_id)
+		# Soft-focus culvert glow; Elevation CT (embedded) shows the 3D run.
+		focus_siphon_conduit_glow(siphon_id, false)
+		_relax_legacy_siphon_nameplate(siphon_id)
+		_ensure_hydroturbine_section_yaw(siphon_id)
+		frame_elevation_for_siphon(siphon_id)
+		var tank := resolve_siphon_pond(siphon_id)
+		if not tank.is_empty():
+			heal_pond_terrain_capacity_for_tank(str(tank.get("id", "")))
+			if _graph_canvas != null:
+				var tid := str(tank.get("id", ""))
+				_graph_canvas.set("selected_item_id", tid)
+				if _graph_canvas.has_method("flash_item"):
+					_graph_canvas.call("flash_item", tid)
+	# Lite suspend (veg/player) — keep World3D live for the embedded Elev CT.
+	var main_suspend := _get_scene_main_node()
+	if main_suspend != null and main_suspend.has_method("set_world_suspended_for_lab"):
+		main_suspend.call("set_world_suspended_for_lab", true)
+
+
+## Face the hydroturbine prop into the CT cut: spin axis (model +Z) aligns with
+## the camera look (−cross). At heading 0 look=(0,0,−1); yaw 0 → local +Z =
+## world +Z so the disk is face-on. General: yaw = −heading + catalog bias.
+func _ensure_hydroturbine_section_yaw(siphon_id: String) -> void:
+	if model == null or siphon_id.is_empty():
+		return
+	var item := model.get_item(siphon_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var prop_id := str(specs.get("bound_prop_id", ""))
+	var main := _get_scene_main_node()
+	if main == null:
+		return
+	if prop_id.is_empty():
+		prop_id = _find_hydroturbine_prop_id_for_item(siphon_id, main)
+	if prop_id.is_empty():
+		return
+	var heading := 0.0
+	if _graph_canvas != null:
+		heading = float(_graph_canvas.get("elevation_heading_rad"))
+	# Mesh authoring bias (usually 0 — see ModelCatalog hydroturbine note).
+	var forced := ModelCatalog.forced_yaw_deg("hydroturbine")
+	var want := -rad_to_deg(heading) + forced
+	want = fposmod(want + 180.0, 360.0) - 180.0
+	var cur := PlacedPropService.get_prop_record(main, prop_id)
+	var pitch := float(cur.get("pitch", 0.0)) if not cur.is_empty() else 0.0
+	var roll := float(cur.get("roll", 0.0)) if not cur.is_empty() else 0.0
+	var scl := float(cur.get("scale", 1.0)) if not cur.is_empty() else 1.0
+	if cur.is_empty() or absf(float(cur.get("yaw", 0.0)) - want) >= 0.35:
+		# Persist without free()/respawn (avoids section-clip meta races).
+		PlacedPropService.update_prop_record(main, prop_id, {"yaw": want}, false)
+	# Always live-apply — record may already match while ModelRoot is stale.
+	var parent := main.find_child("PlacedProps", true, false)
+	if parent == null:
+		return
+	for child in parent.get_children():
+		if child is PlacedProp and str((child as PlacedProp).prop_id) == prop_id:
+			(child as PlacedProp).apply_live_transform(
+					(child as PlacedProp).global_position, want, pitch, roll, scl)
+			break
+
+
+## Resolve placed hydroturbine for a siphon graph item (bound id or graph_item_id).
+func _find_hydroturbine_prop_id_for_item(siphon_id: String, main: Node) -> String:
+	if main == null or siphon_id.is_empty():
+		return ""
+	var parent := main.find_child("PlacedProps", true, false)
+	if parent == null:
+		return ""
+	var fallback := ""
+	for child in parent.get_children():
+		if not (child is PlacedProp):
+			continue
+		var pp := child as PlacedProp
+		if str(pp.model_id) != "hydroturbine":
+			continue
+		var rec := PlacedPropService.get_prop_record(main, str(pp.prop_id))
+		var gid := str(rec.get("graph_item_id", ""))
+		if gid == siphon_id:
+			return str(pp.prop_id)
+		if fallback.is_empty():
+			fallback = str(pp.prop_id)
+	return fallback
+
+
+## Old Siphon presets pinned max_power_w=250 (hoverboard nameplate), which froze
+## DC at 250 W while PE was multi‑kW. Treat that exact legacy value as uncapped.
+func _relax_legacy_siphon_nameplate(siphon_id: String) -> void:
+	if model == null or siphon_id.is_empty():
+		return
+	var item := model.get_item(siphon_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	if absf(float(specs.get("max_power_w", 0.0)) - 250.0) > 0.51:
+		return
+	specs["max_power_w"] = 0.0
+	model.update_item(siphon_id, {"specs": specs})
+
+
+## Pond tank currently feeding this siphon (forward or reverse wire).
+func resolve_siphon_pond(siphon_id: String) -> Dictionary:
+	if model == null or siphon_id.is_empty():
+		return {}
+	var item := model.get_item(siphon_id)
+	if item.is_empty():
+		return {}
+	if _resource_flow != null and _resource_flow.has_method("_resolve_siphon_inlet_tank"):
+		return _resource_flow.call("_resolve_siphon_inlet_tank", item)
+	# Fallback without engine: scan connections.
+	for conn: Dictionary in model.connections:
+		var src_id := str(conn.get("source_item_id", ""))
+		var tgt_id := str(conn.get("target_item_id", ""))
+		var other_id := ""
+		if tgt_id == siphon_id:
+			other_id = src_id
+		elif src_id == siphon_id:
+			other_id = tgt_id
+		else:
+			continue
+		var other := model.get_item(other_id)
+		if other.is_empty():
+			continue
+		var os: Dictionary = other.get("specs", {}) as Dictionary
+		if bool(os.get("pond_storage", false)):
+			return other
+	return {}
+
+
+func siphon_outlet_cumulative_l(siphon_id: String) -> float:
+	if model == null or siphon_id.is_empty():
+		return 0.0
+	var item := model.get_item(siphon_id)
+	if item.is_empty():
+		return 0.0
+	var down := {}
+	if _resource_flow != null and _resource_flow.has_method("_resolve_siphon_outlet_tank"):
+		down = _resource_flow.call("_resolve_siphon_outlet_tank", item)
+	if down.is_empty():
+		return 0.0
+	return float((down.get("specs", {}) as Dictionary).get("cumulative_l", 0.0))
+
+
+## Wire siphon to nearest pond_storage, seat at pond site, seed start/break.
+## Prefers tanks whose osm_water_tag still exists on the map (live twin).
+## `silent`: suppress toasts (auto-bind-on-placement/Lab-open — a miss there
+## isn't actionable feedback; the player can still Rebind manually).
+## `max_dist_m`: skip binding to a pond farther than this (auto-bind only wants
+## a pond you obviously placed the turbine next to, not the nearest one on the
+## whole map); NAN/<=0 means no distance cap (manual Rebind stays unrestricted).
+func bind_siphon_to_nearest_pond(siphon_id: String, silent: bool = false,
+		max_dist_m: float = NAN) -> bool:
+	if model == null or siphon_id.is_empty():
+		return false
+	var siphon := model.get_item(siphon_id)
+	if siphon.is_empty():
+		return false
+	var live_tags: Dictionary = {}
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader != null and loader.has_method("live_pond_tags"):
+		for t in loader.call("live_pond_tags") as PackedStringArray:
+			live_tags[str(t)] = true
+	# Drop stale pond nodes first so Bind can't latch onto prototype leftovers.
+	if loader != null and loader.has_method("prune_orphan_ponds_from_graph"):
+		loader.call("prune_orphan_ponds_from_graph", false)
+	var best: Dictionary = {}
+	var best_score := INF
+	var best_dist := INF
+	var siphon_site := Vector2.ZERO
+	if GraphSiteLayout.has_site_coords(siphon):
+		siphon_site = GraphSiteLayout.site_xz(siphon)
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var tank: Dictionary = it
+		var ts: Dictionary = tank.get("specs", {}) as Dictionary
+		if not bool(ts.get("pond_storage", false)):
+			continue
+		var tag := str(ts.get("osm_water_tag", ""))
+		var live := live_tags.is_empty() or (not tag.is_empty() and live_tags.has(tag))
+		var bath := pond_has_usable_bathymetry(ts)
+		var d := 0.0
+		if GraphSiteLayout.has_site_coords(tank) and GraphSiteLayout.has_site_coords(siphon):
+			d = GraphSiteLayout.site_xz(tank).distance_to(siphon_site)
+		elif GraphSiteLayout.has_site_coords(tank):
+			d = 0.0
+		else:
+			d = 1.0e6
+		# Prefer live + bathymetry. Null floor/rim twins sort after good ponds.
+		var score := d \
+				+ (0.0 if live else 1.0e7) \
+				+ (0.0 if bath else 1.0e6)
+		if score < best_score:
+			best_score = score
+			best_dist = d
+			best = tank
+	if best.is_empty():
+		if not silent:
+			_show_toast("No pond on graph — Add to graph from Pond settings first")
+		return false
+	if not is_nan(max_dist_m) and max_dist_m > 0.0 and best_dist > max_dist_m:
+		return false
+	var tank_id := str(best.get("id", ""))
+	var best_tag := str((best.get("specs", {}) as Dictionary).get("osm_water_tag", ""))
+	var best_live := live_tags.is_empty() or live_tags.has(best_tag)
+	if not best_live and not silent:
+		_show_toast("Bound pond has no map body — orphan ponds are healed automatically")
+	# Remove existing water wires to this siphon's water in (avoid duplicates).
+	var to_remove: Array[String] = []
+	for conn: Dictionary in model.connections:
+		var cid := str(conn.get("id", ""))
+		var src := str(conn.get("source_item_id", ""))
+		var tgt := str(conn.get("target_item_id", ""))
+		var sh := str(conn.get("source_handle_id", ""))
+		var th := str(conn.get("target_handle_id", ""))
+		if tgt == siphon_id and (th == "res_in_0" or th == "input"):
+			to_remove.append(cid)
+		elif src == siphon_id and (sh.begins_with("res_in_") or sh == "input") \
+				and tgt == tank_id:
+			to_remove.append(cid)
+	for cid in to_remove:
+		model.remove_connection(cid)
+	# Direct pond→intake: no physical tube (module pierces the bank). Keep the
+	# 2D schematic stub; never spawn a 3D hose even if "Make physical" is used.
+	model.add_connection({
+		"scope_id": str(siphon.get("scope_id", "root")),
+		"polarity": "resource",
+		"resource_type": "water",
+		"source_item_id": tank_id,
+		"source_handle_id": "output",
+		"target_item_id": siphon_id,
+		"target_handle_id": "res_in_0",
+		"waypoints": [],
+		"line_style": model.last_line_style,
+		"curve_tension": 1.0,
+		"corner_radius": 8.0,
+		"visible_3d": false,
+		"direct_intake": true,
+	})
+	# Seat siphon at pond site; seed module + start/break from pond bathymetry.
+	var patch := {}
+	if GraphSiteLayout.has_site_coords(best):
+		var site := GraphSiteLayout.site_xz(best)
+		patch["site_x_m"] = site.x + 1.5
+		patch["site_z_m"] = site.y
+	var ts2: Dictionary = best.get("specs", {}) as Dictionary
+	var rim := float(ts2.get("rim_m", NAN))
+	var floor_y := float(ts2.get("floor_m", NAN))
+	var level_m := float(ts2.get("level_m", NAN))
+	var specs: Dictionary = (siphon.get("specs", {}) as Dictionary).duplicate(true)
+	var mod_e := rim - 0.35 if not is_nan(rim) else float(best.get("elevation_m", 0.0))
+	specs["module_elev_m"] = mod_e
+	var d_in := maxf(float(specs.get("intake_diameter_mm", 150.0)) / 1000.0, 0.05)
+	var break_m := mod_e
+	if not is_nan(floor_y):
+		break_m = maxf(floor_y + 0.15, mod_e - 0.4)
+	var start_m := SiphonHydraulics.crown_from_invert(break_m, d_in)
+	if not is_nan(level_m):
+		start_m = maxf(start_m, level_m - 0.05)
+	if not is_nan(rim):
+		start_m = minf(start_m, rim - 0.02)
+	# Absolutes for save compat + offsets so 3D module moves retarget levels.
+	specs["siphon_start_m"] = start_m
+	specs["siphon_break_m"] = break_m
+	specs["siphon_start_offset_m"] = start_m - mod_e
+	specs["siphon_break_offset_m"] = break_m - mod_e
+	specs["intake_crown_m"] = start_m
+	specs["intake_invert_m"] = break_m
+	SiphonHydraulics.apply_resolved_levels(specs, mod_e)
+	patch["elevation_m"] = mod_e
+	patch["specs"] = specs
+	model.update_item(siphon_id, patch)
+	heal_pond_terrain_capacity_for_tank(tank_id)
+	ensure_siphon_outlet_sink(siphon_id)
+	# Select the bound tank in freeform so it's obvious which of N ponds is live.
+	if _graph_canvas != null:
+		_graph_canvas.set("selected_item_id", tank_id)
+		_graph_canvas.call("queue_redraw")
+	var live_note := "" if best_live else " (no map twin)"
+	_show_toast("Bound to %s%s" % [str(ts2.get("name", "pond")), live_note])
+	_schedule_graph_autosave()
+	return true
+
+
+## Re-link graph pond tanks to live map tags when site still overlaps a water body.
+func heal_pond_tags_from_map(loader: Node) -> int:
+	if model == null or loader == null \
+			or not loader.has_method("resolve_pond_idx_for_graph_tank"):
+		return 0
+	var n := 0
+	var n_retagged := 0
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var tank: Dictionary = it
+		var specs: Dictionary = (tank.get("specs", {}) as Dictionary).duplicate(true)
+		if not bool(specs.get("pond_storage", false)):
+			continue
+		var old_tag := str(specs.get("osm_water_tag", ""))
+		var old_pond_id := str(specs.get("pond_id", ""))
+		var resolved: Dictionary = loader.call("resolve_pond_idx_for_graph_tank", tank)
+		if int(resolved.get("idx", -1)) < 0:
+			continue
+		var live_tag := str(resolved.get("tag", ""))
+		var live_pond_id := str(resolved.get("pond_id", ""))
+		# Backfill pond_id even when the tag itself hasn't drifted yet (legacy
+		# tank predating the stable-id feature) — nothing to retarget in that
+		# case, just stamp the id so future resolves take the fast exact path.
+		var tag_stale := not live_tag.is_empty() and live_tag != old_tag
+		var id_missing := not live_pond_id.is_empty() and live_pond_id != old_pond_id
+		if not tag_stale and not id_missing:
+			continue
+		if tag_stale:
+			specs["osm_water_tag"] = live_tag
+		if not live_pond_id.is_empty():
+			specs["pond_id"] = live_pond_id
+		var live_label := str(resolved.get("label", ""))
+		if tag_stale and not live_label.is_empty():
+			if live_label.ends_with("Storage"):
+				specs["name"] = live_label
+			else:
+				specs["name"] = "%s Storage" % live_label
+		model.update_item(str(tank.get("id", "")), {"specs": specs})
+		# Retarget surface catchment / watershed that still used the old tag.
+		if tag_stale and not old_tag.is_empty():
+			for it2 in model.items:
+				if not (it2 is Dictionary):
+					continue
+				var other: Dictionary = it2
+				var os: Dictionary = (other.get("specs", {}) as Dictionary).duplicate(true)
+				var touched := false
+				if str(os.get("osm_water_tag", "")) == old_tag:
+					os["osm_water_tag"] = live_tag
+					touched = true
+				if str(other.get("type", "")) == "catchment" \
+						and str(os.get("osm_tag", "")) == old_tag:
+					os["osm_tag"] = live_tag
+					touched = true
+				if str(os.get("pond_tag", "")) == old_tag:
+					os["pond_tag"] = live_tag
+					touched = true
+				if str(os.get("catchment_kind", "")) == "watershed" \
+						and str(os.get("osm_tag", "")) == "watershed_%s" % old_tag:
+					os["osm_tag"] = "watershed_%s" % live_tag
+					os["pond_tag"] = live_tag
+					touched = true
+				if touched:
+					model.update_item(str(other.get("id", "")), {"specs": os})
+			n_retagged += 1
+		n += 1
+	if n > 0:
+		_schedule_graph_autosave()
+	if n_retagged > 0:
+		_show_toast("Re-linked %d pond tag%s to map water" % [
+				n_retagged, "" if n_retagged == 1 else "s"])
+	return n
+
+
+## Drop null-bathymetry pond twins when another tank shares the same tag with
+## usable floor/rim (keeps the siphon-bound id if it is the good one).
+func heal_duplicate_null_bathymetry_ponds() -> int:
+	if model == null:
+		return 0
+	var by_tag: Dictionary = {}  # tag -> Array[Dictionary]
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var tank: Dictionary = it
+		var specs: Dictionary = tank.get("specs", {}) as Dictionary
+		if not bool(specs.get("pond_storage", false)):
+			continue
+		if bool(specs.get("outlet_sink", false)):
+			continue
+		var tag := str(specs.get("osm_water_tag", ""))
+		if tag.is_empty():
+			continue
+		if not by_tag.has(tag):
+			by_tag[tag] = []
+		(by_tag[tag] as Array).append(tank)
+	var n := 0
+	var protected: Dictionary = {}
+	for it2 in model.items:
+		if not (it2 is Dictionary):
+			continue
+		if str(((it2 as Dictionary).get("specs", {}) as Dictionary).get("role", "")) \
+				!= "siphon_hydro":
+			continue
+		var bound := resolve_siphon_pond(str((it2 as Dictionary).get("id", "")))
+		if not bound.is_empty() and pond_has_usable_bathymetry(
+				bound.get("specs", {}) as Dictionary):
+			protected[str(bound.get("id", ""))] = true
+	for tag in by_tag.keys():
+		var group: Array = by_tag[tag]
+		if group.size() < 2:
+			continue
+		var has_good := false
+		for g in group:
+			if pond_has_usable_bathymetry((g as Dictionary).get("specs", {}) as Dictionary):
+				has_good = true
+				break
+		if not has_good:
+			continue
+		for g2 in group:
+			var gd: Dictionary = g2
+			var gid := str(gd.get("id", ""))
+			if protected.has(gid):
+				continue
+			if pond_has_usable_bathymetry(gd.get("specs", {}) as Dictionary):
+				continue
+			model.remove_item(gid)
+			n += 1
+	if n > 0:
+		_schedule_graph_autosave()
+		_autosave_pending = true
+		_flush_graph_autosave()
+		if _graph_canvas != null:
+			_graph_canvas.call("queue_redraw")
+		_show_toast("Removed %d null-bathymetry pond duplicate(s)" % n)
+	return n
+
+
+## Prefer DEM terrain_capacity_l for an Auto pond tank (Lab enter / bind).
+func heal_pond_terrain_capacity_for_tank(tank_id: String) -> bool:
+	if model == null or tank_id.is_empty():
+		return false
+	var tank := model.get_item(tank_id)
+	if tank.is_empty():
+		return false
+	var specs: Dictionary = (tank.get("specs", {}) as Dictionary).duplicate(true)
+	if not bool(specs.get("pond_storage", false)):
+		return false
+	if str(specs.get("capacity_mode", "auto")) == "manual":
+		return false
+	if bool(specs.get("outlet_sink", false)) or bool(specs.get("unlimited_capacity", false)):
+		return false
+	var tag := str(specs.get("osm_water_tag", ""))
+	if tag.is_empty():
+		return false
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader == null or not loader.has_method("find_pond_idx_by_tag") \
+			or not loader.has_method("get_pond_info"):
+		return false
+	var idx := int(loader.call("find_pond_idx_by_tag", tag))
+	if idx < 0:
+		return false
+	var info: Dictionary = loader.call("get_pond_info", idx) as Dictionary
+	if not bool(info.get("valid", false)):
+		return false
+	var terrain_cap := maxf(float(info.get("terrain_capacity_l",
+			info.get("capacity_l", 0.0))), 0.0)
+	if terrain_cap < 1.0:
+		return false
+	var cur := maxf(float(specs.get("capacity_qty", 0.0)), 0.0)
+	if terrain_cap <= cur + 1.0:
+		return false
+	var level := clampf(float(specs.get("level", 0.0)), 0.0, 1.0)
+	specs["capacity_qty"] = terrain_cap
+	specs["capacity"] = "%.0f L" % terrain_cap
+	specs["stock_l"] = level * terrain_cap
+	model.update_item(tank_id, {"specs": specs})
+	return true
+
+
+## Full-basin along half-width from live pond poly (metres), else footprint.
+func pond_poly_half_width_m(tank: Dictionary, along_dir: Vector2) -> float:
+	if tank.is_empty():
+		return 4.0
+	var specs: Dictionary = tank.get("specs", {}) as Dictionary
+	if _graph_canvas != null and _graph_canvas.has_method("_elevation_pond_half_width_m"):
+		return float(_graph_canvas.call("_elevation_pond_half_width_m",
+				tank, specs, along_dir))
+	return maxf(float(specs.get("footprint_w_m", 8.0)) * 0.5, 2.0)
+
+
+## Cap runaway pond capacity_qty (e.g. 1e12 mistaken for unlimited sink).
+func heal_pond_capacity_sanity() -> int:
+	if model == null:
+		return 0
+	const ABSURD := 1.0e10
+	var n := 0
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var tank: Dictionary = it
+		var specs: Dictionary = (tank.get("specs", {}) as Dictionary).duplicate(true)
+		if not bool(specs.get("pond_storage", false)):
+			continue
+		if bool(specs.get("outlet_sink", false)) or bool(specs.get("unlimited_capacity", false)):
+			continue
+		var cap := float(specs.get("capacity_qty", 0.0))
+		if is_nan(cap) or cap < ABSURD:
+			continue
+		# Prefer bathymetric volume estimate from footprint × depth.
+		var floor_m := float(specs.get("floor_m", NAN))
+		var rim_m := float(specs.get("rim_m", NAN))
+		var fw := maxf(float(specs.get("footprint_w_m", 8.0)), 2.0)
+		var fd := maxf(float(specs.get("footprint_d_m", fw)), 2.0)
+		var depth := 1.5
+		if not is_nan(floor_m) and not is_nan(rim_m) and rim_m > floor_m:
+			depth = rim_m - floor_m
+		var healed := maxf(fw * fd * depth * 1000.0, 1000.0)  # m³→L approx
+		var level := clampf(float(specs.get("level", 0.5)), 0.0, 1.0)
+		specs["capacity_qty"] = healed
+		specs["stock_l"] = level * healed
+		if not is_nan(floor_m) and not is_nan(rim_m):
+			var level_m := float(specs.get("level_m", NAN))
+			if is_nan(level_m):
+				specs["level_m"] = lerpf(floor_m, rim_m, level)
+		model.update_item(str(tank.get("id", "")), {"specs": specs})
+		n += 1
+	if n > 0:
+		_schedule_graph_autosave()
+		_autosave_pending = true
+		_flush_graph_autosave()
+		if _graph_canvas != null:
+			_graph_canvas.call("queue_redraw")
+	return n
+
+
+## Remove pond tanks + surface catchments whose tags are not in `live_tags`.
+## Skips tanks currently feeding a siphon unless `force`.
+func prune_orphan_pond_items(live_tags: Dictionary, force: bool = false) -> int:
+	if model == null:
+		return 0
+	var protected: Dictionary = {}
+	if not force:
+		for it in model.items:
+			if not (it is Dictionary):
+				continue
+			var item: Dictionary = it
+			if str((item.get("specs", {}) as Dictionary).get("role", "")) != "siphon_hydro":
+				continue
+			var tank := resolve_siphon_pond(str(item.get("id", "")))
+			if tank.is_empty():
+				continue
+			var pt := str((tank.get("specs", {}) as Dictionary).get("osm_water_tag", ""))
+			if not pt.is_empty():
+				protected[pt] = true
+			protected[str(tank.get("id", ""))] = true
+	var remove_tags: Array[String] = []
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var specs: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if not bool(specs.get("pond_storage", false)):
+			continue
+		var tag := str(specs.get("osm_water_tag", ""))
+		if tag.is_empty():
+			# Untagged storage — treat as orphan unless protected by id.
+			if not protected.has(str((it as Dictionary).get("id", ""))):
+				remove_tags.append("__id__:%s" % str((it as Dictionary).get("id", "")))
+			continue
+		if live_tags.has(tag):
+			continue
+		if protected.has(tag) or protected.has(str((it as Dictionary).get("id", ""))):
+			continue
+		remove_tags.append(tag)
+	var n := 0
+	for key in remove_tags:
+		if key.begins_with("__id__:"):
+			var rid := key.substr("__id__:".length())
+			if not rid.is_empty():
+				model.remove_item(rid)
+				n += 1
+			continue
+		n += _remove_pond_items_by_tag(key)
+		# Also drop hillside watershed catchments tied to this pond.
+		n += _remove_watershed_catchment_by_tag("watershed_%s" % key)
+	if n > 0:
+		_schedule_graph_autosave()
+		_autosave_pending = true
+		_flush_graph_autosave()
+		if _graph_canvas != null:
+			_graph_canvas.call("queue_redraw")
+		_show_toast("Removed %d stale pond graph item(s)" % n)
+	return n
+
+
+## Create downhill ∞ outlet sink + culvert_pipe from siphon water out (idempotent).
+func ensure_siphon_outlet_sink(siphon_id: String) -> String:
+	if model == null or siphon_id.is_empty():
+		return ""
+	var siphon := model.get_item(siphon_id)
+	if siphon.is_empty():
+		return ""
+	# Existing water outlet?
+	if _resource_flow != null and _resource_flow.has_method("_resolve_siphon_outlet_tank"):
+		var existing: Dictionary = _resource_flow.call("_resolve_siphon_outlet_tank", siphon)
+		if not existing.is_empty():
+			var es: Dictionary = existing.get("specs", {}) as Dictionary
+			if bool(es.get("outlet_sink", false)) or bool(es.get("unlimited_capacity", false)):
+				return str(existing.get("id", ""))
+	var sink_id := model.generate_item_id()
+	var sx := float(siphon.get("x", 200.0)) + 180.0
+	var sy := float(siphon.get("y", 200.0)) + 40.0
+	var site_x := float(siphon.get("site_x_m", 0.0))
+	var site_z := float(siphon.get("site_z_m", 0.0))
+	var siphon_elev := float(siphon.get("elevation_m",
+			(siphon.get("specs", {}) as Dictionary).get("module_elev_m", 0.0)))
+	var sink_elev := siphon_elev - 9.0
+	var route_3d: Array = []
+	var daylighted := false
+
+	# Trace a REAL downhill path from the siphon (steepest-descent walk over the
+	# actual terrain, Watershed.trace_downhill) so the culvert runs to genuine
+	# low ground instead of an arbitrary +12 m / −9 m straight chord that could
+	# just as easily tunnel straight into a hillside.
+	if GraphSiteLayout.has_site_coords(siphon):
+		# Arbitrary-but-separated fallback (matches the old fixed convention) —
+		# applied unless the downhill trace below finds a real direction to
+		# route in. Guarantees the outlet never lands exactly on top of the
+		# siphon even on flat/no-elevation-data terrain.
+		site_x = float(siphon.get("site_x_m", 0.0)) + 12.0
+		var soi := get_node_or_null("/root/SoiService")
+		var loader := _find_terrain_loader(_get_scene_main_node())
+		if soi != null and soi.has_method("world_center") and loader != null \
+				and loader.has_method("ground_height_at"):
+			var center: Vector3 = soi.call("world_center") as Vector3
+			var start_world_xz := GraphSiteLayout.site_to_world_xz(
+					GraphSiteLayout.site_xz(siphon), center)
+			var height_at := Callable(loader, "ground_height_at")
+			var trace: Dictionary = Watershed.trace_downhill(
+					start_world_xz, height_at, 9.0, 4.0, 60)
+			var pts: PackedVector2Array = trace.get("points", PackedVector2Array())
+			if pts.size() > 1:
+				var end_xz: Vector2 = pts[pts.size() - 1]
+				var end_site := GraphSiteLayout.world_xz_to_site(end_xz, center)
+				site_x = end_site.x
+				site_z = end_site.y
+				sink_elev = float(trace.get("final_elev", sink_elev))
+				daylighted = true
+				# Intermediate points (skip the start — that's the siphon's own
+				# port) become mid-route waypoints, buried just under the real
+				# ground surface, so the 3D culvert visibly follows the terrain
+				# contour downhill instead of a straight tunnel.
+				const BURY_M := 0.35
+				for i in range(1, pts.size() - 1):
+					var p: Vector2 = pts[i]
+					var gy := float(height_at.call(p.x, p.y))
+					route_3d.append(Vector3(p.x, gy - BURY_M, p.y))
+
+	var specs_s := (siphon.get("specs", {}) as Dictionary).duplicate(true)
+	specs_s["outlet_invert_m"] = sink_elev
+	model.update_item(siphon_id, {"specs": specs_s})
+	model.add_item({
+		"id": sink_id,
+		"type": "resource",
+		"x": sx, "y": sy,
+		"width": 72.0, "height": 72.0,
+		"scope_id": str(siphon.get("scope_id", "root")),
+		"site_x_m": site_x,
+		"site_z_m": site_z,
+		"elevation_m": sink_elev,
+		"specs": {
+			"name": "Culvert Outlet",
+			"resource_kind": "water",
+			"capacity": "∞",
+			"capacity_qty": 1.0e12,
+			"capacity_unit": "L",
+			"level": 0.0,
+			"unlimited_capacity": true,
+			"outlet_sink": true,
+			"cumulative_l": 0.0,
+			"live_in_lps": 0.0,
+			"cost": 0.0,
+		},
+		"is_virtual": false,
+	})
+	# Prefer water output handle (res_out_0); fall back to first water out.
+	var out_handle := "res_out_0"
+	model.add_connection({
+		"scope_id": str(siphon.get("scope_id", "root")),
+		"polarity": "resource",
+		"resource_type": "water",
+		"source_item_id": siphon_id,
+		"source_handle_id": out_handle,
+		"target_item_id": sink_id,
+		"target_handle_id": "input",
+		"waypoints": [],
+		"route_3d": route_3d,
+		"conduit_type": "culvert_pipe",
+		"invert_in_m": siphon_elev - 0.2,
+		"invert_out_m": sink_elev,
+		"visible_3d": true,
+		"flow_glow": true,
+		"line_style": model.last_line_style,
+		"curve_tension": 1.0,
+		"corner_radius": 28.0,
+	})
+	_show_toast("Culvert outlet routed downhill" if daylighted else "∞ culvert outlet ready")
+	_schedule_graph_autosave()
+	return sink_id
 
 
 ## Remove the catchment + storage tank (and their connection) for a pond tag.
@@ -2938,14 +6601,36 @@ func _remove_pond_items_by_tag(tag: String) -> int:
 	return remove_ids.size()
 
 
-## True if a pond (catchment or storage tank) with this tag is on the graph.
-func has_pond_with_tag(tag: String) -> bool:
-	if model == null or tag.is_empty():
+## Same idempotent-reimport cleanup as _remove_pond_items_by_tag, keyed by the
+## stable pond_id instead — catches a phantom twin left under a stale tag.
+func _remove_pond_items_by_pond_id(pond_id: String) -> int:
+	if model == null or pond_id.is_empty():
+		return 0
+	var remove_ids2: Array[String] = []
+	for it2 in model.items:
+		if not (it2 is Dictionary):
+			continue
+		var specs2: Dictionary = (it2 as Dictionary).get("specs", {})
+		if str(specs2.get("pond_id", "")) == pond_id:
+			remove_ids2.append(str((it2 as Dictionary).get("id", "")))
+	for rid2 in remove_ids2:
+		if not rid2.is_empty():
+			model.remove_item(rid2)
+	return remove_ids2.size()
+
+
+## True if a pond (catchment or storage tank) with this tag — or, preferably,
+## this stable pond_id (robust to the tag drifting from a re-carve) — is on
+## the graph.
+func has_pond_with_tag(tag: String, pond_id: String = "") -> bool:
+	if model == null or (tag.is_empty() and pond_id.is_empty()):
 		return false
 	for it in model.items:
 		if not (it is Dictionary):
 			continue
 		var specs0: Dictionary = (it as Dictionary).get("specs", {})
+		if not pond_id.is_empty() and str(specs0.get("pond_id", "")) == pond_id:
+			return true
 		if str(specs0.get("osm_water_tag", "")) == tag:
 			return true
 		if str((it as Dictionary).get("type", "")) == "catchment" \
@@ -2963,6 +6648,281 @@ func remove_imported_pond(tag: String) -> bool:
 		_flush_graph_autosave()
 		print("SystemGraphView: removed pond tag '%s' (%d items)" % [tag, n])
 	return n > 0
+
+
+## Mesh → graph twin: update pond tank (+ catchment) absolute/fractional level.
+## Re-entrancy guarded so graph→mesh push doesn't ping-pong.
+var _pond_twin_sync_active: bool = false
+var _pond_twin_push_timer: Timer = null
+## Throttled 3D water rebuild (ambient drain/fill at high time_scale).
+var _pond_mesh_last_real_s: float = -1.0e9
+var _pond_mesh_last_abs_h: float = NAN
+var _pond_mesh_last_levels: Dictionary = {}  # tag → level_m last pushed to mesh
+## Ambient water remesh is expensive (full Water rebuild + ReflectionProbes).
+## At ~0.5 s this caused a rhythmic 1–2 s FPS surge under high time_scale.
+const _POND_MESH_MIN_REAL_S := 3.0
+const _POND_MESH_MIN_SIM_H := 2.0
+const _POND_MESH_LEVEL_EPS_M := 0.10
+
+func sync_pond_level_from_mesh(tag: String, level_m: float, rim_m: float,
+		floor_m: float, capacity_l: float = 0.0, extras: Dictionary = {}) -> void:
+	if model == null or tag.is_empty() or _pond_twin_sync_active:
+		return
+	_pond_twin_sync_active = true
+	var pond_id := str(extras.get("pond_id", ""))
+	var span := maxf(rim_m - floor_m, 0.05)
+	var frac := clampf((level_m - floor_m) / span, 0.0, 1.0)
+	if extras.has("level"):
+		frac = clampf(float(extras["level"]), 0.0, 1.0)
+	elif extras.has("stock_l") and capacity_l > 1e-3:
+		frac = clampf(float(extras["stock_l"]) / capacity_l, 0.0, 1.0)
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var item: Dictionary = it
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		# pond_id match (robust to tag drift) takes priority over the tag match.
+		var by_id := not pond_id.is_empty() and str(specs.get("pond_id", "")) == pond_id
+		if not by_id and str(specs.get("osm_water_tag", "")) != tag \
+				and not (str(item.get("type", "")) == "catchment" \
+				and str(specs.get("osm_tag", "")) == tag):
+			continue
+		# Self-heal a stale tag inline — no separate healing pass needed once a
+		# tank carries a pond_id.
+		if by_id and str(specs.get("osm_water_tag", "")) != tag:
+			specs["osm_water_tag"] = tag
+		if by_id and str(item.get("type", "")) == "catchment" \
+				and str(specs.get("osm_tag", "")) != tag:
+			specs["osm_tag"] = tag
+		if not specs.has("pond_id") and not pond_id.is_empty():
+			specs["pond_id"] = pond_id
+		specs["level_m"] = level_m
+		specs["rim_m"] = rim_m
+		specs["floor_m"] = floor_m
+		if bool(specs.get("pond_storage", false)) \
+				or str(item.get("type", "")) == "resource":
+			if bool(specs.get("pond_storage", false)):
+				# Respect Manual capacity/fill on the tank when mesh syncs.
+				var cap_mode := str(extras.get("capacity_mode",
+						specs.get("capacity_mode", "auto")))
+				var fill_mode := str(extras.get("fill_mode",
+						specs.get("fill_mode", "auto")))
+				specs["capacity_mode"] = cap_mode
+				specs["fill_mode"] = fill_mode
+				if extras.has("stock_l"):
+					specs["stock_l"] = float(extras["stock_l"])
+				if fill_mode != "manual":
+					specs["level"] = frac
+				if capacity_l > 0.0 and cap_mode != "manual":
+					specs["capacity_qty"] = capacity_l
+					specs["capacity"] = "%.0f L" % capacity_l
+		model.update_item(str(item.get("id", "")), {
+			"specs": specs,
+			"elevation_m": level_m,
+		})
+	_pond_twin_sync_active = false
+
+
+## Graph → mesh: push pond_storage tank stock/level to 3D (bathymetric when possible).
+## Ambient sim updates records cheaply; a throttle may rebuild Water when level
+## moved enough. Pass `update_mesh=true` for Lab drag / teardown (immediate).
+## After a stock push, bathymetric `level_m` is written back onto the tank (and
+## surface-catchment twin) so Elev 2D / Lab overlays match the 3D water surface
+## instead of a linear floor→rim fallback that can sit above/below the mesh.
+func push_pond_levels_to_mesh(update_mesh: bool = false) -> void:
+	if model == null or _pond_twin_sync_active:
+		return
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader == null:
+		return
+	_pond_twin_sync_active = true
+	var any := false
+	var levels: Dictionary = {}
+	var writebacks: Array = []  # [{tag, info}] after mesh stock update
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var item: Dictionary = it
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if not bool(specs.get("pond_storage", false)):
+			continue
+		# Auto fill: sim owns stock → mesh. Manual stays until Apply/push.
+		if str(specs.get("fill_mode", "auto")) == "manual" \
+				and not bool(specs.get("_pond_manual_push", false)):
+			continue
+		var tag := str(specs.get("osm_water_tag", ""))
+		if tag.is_empty():
+			continue
+		var stock_l := float(specs.get("stock_l", NAN))
+		if is_nan(stock_l):
+			var cap := maxf(float(specs.get("capacity_qty", 0.0)), 0.0)
+			if cap > 1e-3:
+				stock_l = clampf(float(specs.get("level", 0.0)), 0.0, 1.0) * cap
+		if not is_nan(stock_l) and loader.has_method("set_pond_stock_l_by_tag"):
+			if bool(loader.call("set_pond_stock_l_by_tag", tag, stock_l)):
+				any = true
+			var lm := NAN
+			if loader.has_method("find_pond_idx_by_tag") and loader.has_method("get_pond_info"):
+				var pidx := int(loader.call("find_pond_idx_by_tag", tag))
+				if pidx >= 0:
+					var info: Dictionary = loader.call("get_pond_info", pidx) as Dictionary
+					lm = float(info.get("level_m", NAN))
+					if bool(info.get("valid", false)):
+						writebacks.append({"tag": tag, "info": info})
+			if is_nan(lm):
+				lm = float(specs.get("level_m", NAN))
+			if is_nan(lm):
+				var rim0 := float(specs.get("rim_m", NAN))
+				var floor0 := float(specs.get("floor_m", NAN))
+				if not is_nan(rim0) and not is_nan(floor0):
+					var span0 := maxf(rim0 - floor0, 0.05)
+					lm = floor0 + clampf(float(specs.get("level", 0.0)), 0.0, 1.0) * span0
+			if not is_nan(lm):
+				levels[tag] = lm
+			continue
+		var rim := float(specs.get("rim_m", NAN))
+		var floor_y := float(specs.get("floor_m", NAN))
+		var level_m := float(specs.get("level_m", NAN))
+		if is_nan(level_m) and not is_nan(rim) and not is_nan(floor_y):
+			var span := maxf(rim - floor_y, 0.05)
+			level_m = floor_y + clampf(float(specs.get("level", 0.0)), 0.0, 1.0) * span
+		if is_nan(level_m):
+			continue
+		levels[tag] = level_m
+		if loader.has_method("set_pond_fill_level_by_tag"):
+			if bool(loader.call("set_pond_fill_level_by_tag", tag, level_m)):
+				any = true
+	for wb in writebacks:
+		if wb is Dictionary:
+			_writeback_pond_twins_from_mesh(
+					str((wb as Dictionary).get("tag", "")),
+					(wb as Dictionary).get("info", {}) as Dictionary)
+	var did_mesh := false
+	if update_mesh and any and loader.has_method("refresh_pond_water_mesh"):
+		loader.call("refresh_pond_water_mesh")
+		did_mesh = true
+	elif any and not update_mesh:
+		did_mesh = _try_throttled_pond_mesh_rebuild(loader, levels)
+	if did_mesh:
+		_pond_mesh_remember(levels)
+	_pond_twin_sync_active = false
+	if update_mesh and any:
+		queue_canvas_redraw()
+
+
+## Inside `_pond_twin_sync_active`: stamp mesh bathymetry onto pond_storage + the
+## surface catchment twin so Elev/Lab 2D don't float above/below the 3D bowl.
+func _writeback_pond_twins_from_mesh(tag: String, info: Dictionary) -> void:
+	if model == null or tag.is_empty() or info.is_empty():
+		return
+	var lm := float(info.get("level_m", NAN))
+	if is_nan(lm):
+		return
+	var rim := float(info.get("rim_m", NAN))
+	var floor_y := float(info.get("floor_m", NAN))
+	var stock_l := float(info.get("stock_l", NAN))
+	var capacity_l := float(info.get("capacity_l", NAN))
+	var frac := float(info.get("fill_frac", NAN))
+	if is_nan(frac) and not is_nan(stock_l) and capacity_l > 1e-3:
+		frac = clampf(stock_l / capacity_l, 0.0, 1.0)
+	elif is_nan(frac) and not is_nan(rim) and not is_nan(floor_y):
+		frac = clampf((lm - floor_y) / maxf(rim - floor_y, 0.05), 0.0, 1.0)
+	var pond_id := str(info.get("pond_id", ""))
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var item: Dictionary = it
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var is_tank := bool(specs.get("pond_storage", false))
+		var is_surface := str(item.get("type", "")) == "catchment" \
+				and str(specs.get("catchment_kind", "")) == "pond"
+		if not is_tank and not is_surface:
+			continue
+		var by_id := not pond_id.is_empty() and str(specs.get("pond_id", "")) == pond_id
+		var by_tag := str(specs.get("osm_water_tag", specs.get("osm_tag", ""))) == tag
+		if not by_id and not by_tag:
+			continue
+		specs["level_m"] = lm
+		if not is_nan(rim):
+			specs["rim_m"] = rim
+		if not is_nan(floor_y):
+			specs["floor_m"] = floor_y
+		if is_tank:
+			if not is_nan(stock_l):
+				specs["stock_l"] = stock_l
+			if not is_nan(frac) and str(specs.get("fill_mode", "auto")) != "manual":
+				specs["level"] = frac
+			var terrain_cap := float(info.get("terrain_capacity_l", capacity_l))
+			if terrain_cap > 1e-3 and str(specs.get("capacity_mode", "auto")) != "manual":
+				# Always prefer DEM bathymetry so Lab fill can reach the basin lip.
+				specs["capacity_qty"] = maxf(terrain_cap, capacity_l)
+				specs["capacity"] = "%.0f L" % float(specs["capacity_qty"])
+			elif capacity_l > 1e-3 and str(specs.get("capacity_mode", "auto")) != "manual":
+				specs["capacity_qty"] = capacity_l
+				specs["capacity"] = "%.0f L" % capacity_l
+		model.update_item(str(item.get("id", "")), {
+			"specs": specs,
+			"elevation_m": lm,
+		})
+
+
+func _try_throttled_pond_mesh_rebuild(loader: Node, levels: Dictionary) -> bool:
+	if loader == null or levels.is_empty() or not loader.has_method("refresh_pond_water_mesh"):
+		return false
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("is_world_suspended_for_lab") \
+			and bool(main.call("is_world_suspended_for_lab")):
+		return false
+	# Siphon Lab forces remesh via lab_siphon_tick — skip ambient here.
+	# Elevation CT used to skip entirely (probe hitch); allow throttled remesh
+	# so Test-Inflow / rain still raise the 3D pond while watching the section.
+	if _graph_view_mode == GraphSiteLayout.VIEW_SIPHON:
+		return false
+	var now_s := Time.get_ticks_msec() * 0.001
+	# Hard cap ~1 rebuild / 3 s.
+	if now_s - _pond_mesh_last_real_s < _POND_MESH_MIN_REAL_S:
+		return false
+	var abs_h := NAN
+	if main != null and main.has_method("get_absolute_hours"):
+		abs_h = float(main.call("get_absolute_hours"))
+	var time_ok := (now_s - _pond_mesh_last_real_s) >= _POND_MESH_MIN_REAL_S
+	if not is_nan(abs_h) and not is_nan(_pond_mesh_last_abs_h):
+		time_ok = time_ok or absf(abs_h - _pond_mesh_last_abs_h) >= _POND_MESH_MIN_SIM_H
+	elif is_nan(_pond_mesh_last_abs_h):
+		time_ok = true
+	if not time_ok:
+		return false
+	var max_delta := 0.0
+	for tag in levels.keys():
+		var lm := float(levels[tag])
+		if not _pond_mesh_last_levels.has(tag):
+			max_delta = maxf(max_delta, _POND_MESH_LEVEL_EPS_M + 0.01)
+			continue
+		max_delta = maxf(max_delta, absf(lm - float(_pond_mesh_last_levels[tag])))
+	if max_delta < _POND_MESH_LEVEL_EPS_M:
+		return false
+	loader.call("refresh_pond_water_mesh")
+	return true
+
+
+func _pond_mesh_remember(levels: Dictionary) -> void:
+	_pond_mesh_last_real_s = Time.get_ticks_msec() * 0.001
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("get_absolute_hours"):
+		_pond_mesh_last_abs_h = float(main.call("get_absolute_hours"))
+	_pond_mesh_last_levels = levels.duplicate()
+
+
+func _schedule_pond_twin_push() -> void:
+	if _pond_twin_sync_active:
+		return
+	if _pond_twin_push_timer == null:
+		_pond_twin_push_timer = Timer.new()
+		_pond_twin_push_timer.one_shot = true
+		_pond_twin_push_timer.wait_time = 0.12
+		add_child(_pond_twin_push_timer)
+		_pond_twin_push_timer.timeout.connect(push_pond_levels_to_mesh)
+	_pond_twin_push_timer.start()
 
 
 ## Import an OSM field / orchard / vineyard as a plant bed. Idempotent per tag.
@@ -3038,6 +6998,7 @@ func seed_starshade_system(panel_count: int, panel_watts: float, tag: String = "
 		return false
 	if not StarShadeGraphSeeder.seed_graph(model, panel_count, panel_watts, tag):
 		return false
+	_normalize_battery_bank_display_nodes()
 	_schedule_graph_autosave()
 	_sync_solar_ui_from_graph()
 	return true
@@ -3206,7 +7167,12 @@ func sync_library_instances_from_preset(preset: Dictionary, source_item_id: Stri
 ## Category id ("processors" vs "habitats") ComponentPresets uses to store/
 ## look up a processor-type item's preset, keyed off specs.role.
 func _library_category_for_specs(specs: Dictionary) -> String:
-	return "habitats" if str(specs.get("role", "")) == "habitat" else "processors"
+	var role := str(specs.get("role", ""))
+	if role == "habitat":
+		return "habitats"
+	if role == "cartesian_machine":
+		return "tools"
+	return "processors"
 
 
 ## Called by the inspector's "Save to Library" button. Builds a preset from
@@ -3512,6 +7478,10 @@ func _on_canvas_item_double_tapped(item_id: String) -> void:
 	var item := model.get_item(item_id)
 	if item.is_empty():
 		return
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(specs.get("role", "")) == "siphon_hydro":
+		open_siphon_lab(item_id)
+		return
 	if _mode == "test" and item.has("device_path"):
 		_try_toggle_device(item)
 
@@ -3531,7 +7501,25 @@ func _on_canvas_items_multi_selected(item_ids: Array) -> void:
 
 
 func _on_open_compound_requested(item_id: String) -> void:
+	_enter_compound_animated(item_id)
+
+
+## Seamless drill-in: capture the collapsed body rect, swap scope, then let the
+## canvas grow the child content out of that rect (continuous zoom-through).
+func _enter_compound_animated(item_id: String) -> void:
+	if _graph_canvas != null and _graph_canvas.has_method("begin_enter_transition"):
+		_graph_canvas.call("begin_enter_transition", item_id)
 	_enter_compound(item_id)
+	if _graph_canvas != null and _graph_canvas.has_method("finish_enter_transition"):
+		_graph_canvas.call("finish_enter_transition")
+	elif _graph_canvas != null and _graph_canvas.has_method("fit_scope_to_view"):
+		_graph_canvas.call("fit_scope_to_view")
+
+
+## Zoom-out-past-floor while inside a sub-canvas — pop up to the parent scope and
+## re-center on the super-node we just left (mirror of the drill-in transition).
+func _on_scope_pop_requested() -> void:
+	_collapse_active_scope(true)
 
 
 func _on_canvas_connection_selected(conn_id: String) -> void:
@@ -3551,6 +7539,18 @@ func _on_canvas_connection_selected(conn_id: String) -> void:
 		_inspector_panel.call("inspect_connection", conn, model)
 	_show_right_tab("inspector")
 	_update_make_array_quick_button()
+
+
+## Select a graph connection from world conduit focus (crosshair).
+func select_connection_by_id(conn_id: String) -> void:
+	if conn_id.is_empty() or model == null:
+		return
+	if _graph_canvas != null:
+		_graph_canvas.set("selected_connection_id", conn_id)
+		_graph_canvas.set("selected_item_id", "")
+		if _graph_canvas.has_method("queue_redraw"):
+			_graph_canvas.call("queue_redraw")
+	_on_canvas_connection_selected(conn_id)
 
 
 func _on_left_toggle() -> void:
@@ -3574,11 +7574,315 @@ func _on_graph_menu_id(id: int) -> void:
 		2:
 			_open_graph_file_dialog(false)
 		3:
+			_confirm_reset_graph()
+
+
+## Reset wipes every node/wire with history SUPPRESSED (not undoable) — it
+## must never fire from a single misclick. One shared confirm guards both the
+## topbar Reset button and Graph ▾ → Reset.
+var _reset_confirm: ConfirmationDialog = null
+
+func _confirm_reset_graph() -> void:
+	if _reset_confirm == null:
+		_reset_confirm = ConfirmationDialog.new()
+		_reset_confirm.title = "Reset graph"
+		_reset_confirm.dialog_text = (
+			"Remove every node and wire from this map's graph?\n"
+			+ "Placed 3D objects stay in the world. This cannot be undone.")
+		_reset_confirm.ok_button_text = "Reset graph"
+		_reset_confirm.confirmed.connect(func() -> void:
 			_on_reset_graph()
 			_autosave_pending = true
 			_flush_graph_autosave()
 			_try_seed_starshade_if_empty()
 			_refresh_osm_solar_btn()
+		)
+		add_child(_reset_confirm)
+	_reset_confirm.popup_centered()
+
+
+func _on_site_menu_id(id: int) -> void:
+	match id:
+		10:
+			_open_esim_file_dialog("export")
+		11:
+			_open_esim_file_dialog("import")
+		12:
+			_open_esim_file_dialog("ghost")
+		13:
+			clear_esim_ghost()
+			_show_toast("Ghost preview cleared")
+		14:
+			_apply_esim_ghost_graph()
+		15:
+			_copy_esim_share_code()
+		16:
+			_open_esim_paste_dialog()
+
+
+func _ensure_esim_file_dialog() -> void:
+	if _esim_file_dialog != null and is_instance_valid(_esim_file_dialog):
+		return
+	DirAccess.make_dir_recursive_absolute(
+		ProjectSettings.globalize_path(_ESIM_PACKAGE_SCRIPT.LIBRARY_DIR))
+	var dlg := FileDialog.new()
+	dlg.access = FileDialog.ACCESS_FILESYSTEM
+	dlg.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	dlg.filters = PackedStringArray([
+		"*.esim ; SIMbiogenesis site package",
+		"*.esim.json ; SIMbiogenesis site package (JSON)",
+		"*.json ; JSON",
+	])
+	dlg.use_native_dialog = true
+	dlg.size = Vector2i(780, 520)
+	dlg.file_selected.connect(_on_esim_file_selected)
+	dlg.canceled.connect(func() -> void:
+		CursorController.release_modal("esim_file_dialog"))
+	add_child(dlg)
+	_esim_file_dialog = dlg
+
+
+func _open_esim_file_dialog(mode: String) -> void:
+	_ensure_esim_file_dialog()
+	_esim_file_dialog.set_meta("esim_mode", mode)
+	match mode:
+		"export":
+			_esim_file_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+			_esim_file_dialog.title = "Export site (.esim)"
+			var stamp := Time.get_datetime_string_from_system().replace(":", "-")
+			_esim_file_dialog.current_file = "site_%s.esim" % stamp
+		"import":
+			_esim_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+			_esim_file_dialog.title = "Import site (.esim) — replace mine"
+			_esim_file_dialog.current_file = ""
+		_:
+			_esim_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+			_esim_file_dialog.title = "Preview site as ghost (.esim)"
+			_esim_file_dialog.current_file = ""
+	_esim_file_dialog.popup_centered()
+	CursorController.request_modal("esim_file_dialog", Callable())
+
+
+func _on_esim_file_selected(path: String) -> void:
+	CursorController.release_modal("esim_file_dialog")
+	if _esim_file_dialog == null:
+		return
+	var mode := str(_esim_file_dialog.get_meta("esim_mode", "export"))
+	var full := path
+	if mode == "export":
+		if not full.ends_with(".esim") and not full.ends_with(".esim.json") \
+				and not full.ends_with(".json"):
+			full += ".esim"
+		_export_esim_to_path(full)
+	elif mode == "import":
+		_import_esim_from_path(full, "replace")
+	else:
+		_import_esim_from_path(full, "ghost")
+
+
+func _export_esim_to_path(path: String) -> void:
+	var main_node := _get_scene_main_node()
+	var collected: Dictionary = _ESIM_PACKAGE_SCRIPT.collect_from_main(main_node)
+	if not bool(collected.get("ok", false)):
+		_show_toast("⚠  %s" % str(collected.get("error", "Export failed")))
+		return
+	var pkg: Dictionary = collected.get("package", {}) as Dictionary
+	var saved: Dictionary = _ESIM_PACKAGE_SCRIPT.save_to_path(pkg, path)
+	if not bool(saved.get("ok", false)):
+		_show_toast("⚠  %s" % str(saved.get("error", "Could not write .esim")))
+		return
+	# Also keep a copy under user:// for easy re-share.
+	var lib_name := path.get_file()
+	if lib_name.is_empty():
+		lib_name = "site.esim"
+	_ESIM_PACKAGE_SCRIPT.save_to_path(
+		pkg, "%s/%s" % [_ESIM_PACKAGE_SCRIPT.LIBRARY_DIR, lib_name])
+	var summary: Dictionary = pkg.get("summary", {}) as Dictionary
+	_show_toast("💾  Site exported · %d nodes · %d props" % [
+		int(summary.get("item_count", 0)),
+		int(summary.get("prop_count", 0)),
+	])
+
+
+func _import_esim_from_path(path: String, mode: String) -> void:
+	var result: Dictionary = _ESIM_IMPORTER_SCRIPT.apply_file(get_tree(), path, {"mode": mode})
+	_report_esim_result(result, mode)
+
+
+func _report_esim_result(result: Dictionary, mode: String) -> void:
+	if not bool(result.get("ok", false)):
+		_show_toast("⚠  %s" % str(result.get("error", "Import failed")))
+		return
+	for w in result.get("warnings", []) as Array:
+		_show_toast("⚠  %s" % str(w), 3.5)
+	var summary: Dictionary = result.get("summary", {}) as Dictionary
+	if mode == "ghost":
+		_show_toast("👻  Ghost preview · %d foreign nodes" % int(result.get(
+			"item_count", summary.get("item_count", 0))))
+	else:
+		_show_toast("📂  Site imported · %d nodes · %d props" % [
+			int(summary.get("item_count", 0)),
+			int(summary.get("prop_count", 0)),
+		])
+	_refresh_osm_solar_btn()
+	if _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+
+
+func _copy_esim_share_code() -> void:
+	var main_node := _get_scene_main_node()
+	var collected: Dictionary = _ESIM_PACKAGE_SCRIPT.collect_from_main(main_node)
+	if not bool(collected.get("ok", false)):
+		_show_toast("⚠  %s" % str(collected.get("error", "Collect failed")))
+		return
+	var encoded: Dictionary = _ESIM_PACKAGE_SCRIPT.encode_share_code(
+		collected.get("package", {}) as Dictionary)
+	if not bool(encoded.get("ok", false)):
+		_show_toast("⚠  %s" % str(encoded.get("error", "Encode failed")))
+		return
+	DisplayServer.clipboard_set(str(encoded.get("code", "")))
+	_show_toast("📋  Share code copied (%d chars)" % int(encoded.get("code_chars", 0)))
+
+
+func _open_esim_paste_dialog() -> void:
+	if _esim_paste_dialog == null or not is_instance_valid(_esim_paste_dialog):
+		var dlg := ConfirmationDialog.new()
+		dlg.title = "Paste .esim share code"
+		dlg.ok_button_text = "Preview as ghost"
+		dlg.cancel_button_text = "Cancel"
+		dlg.dialog_hide_on_ok = false
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 8)
+		var hint := Label.new()
+		hint.text = "Paste an ESIM1:… code from a friend. Opens as a ghost overlay first."
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		col.add_child(hint)
+		var edit := TextEdit.new()
+		edit.custom_minimum_size = Vector2(520, 160)
+		edit.placeholder_text = "ESIM1:…"
+		edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+		col.add_child(edit)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		var apply_btn := Button.new()
+		apply_btn.text = "Import (replace mine)"
+		apply_btn.pressed.connect(func() -> void:
+			_finish_esim_paste("replace"))
+		row.add_child(apply_btn)
+		col.add_child(row)
+		dlg.add_child(col)
+		dlg.confirmed.connect(func() -> void:
+			_finish_esim_paste("ghost"))
+		dlg.canceled.connect(func() -> void:
+			CursorController.release_modal("esim_paste_dialog"))
+		add_child(dlg)
+		_esim_paste_dialog = dlg
+		_esim_paste_edit = edit
+	_esim_paste_edit.text = ""
+	var clip := DisplayServer.clipboard_get().strip_edges()
+	if clip.begins_with(_ESIM_PACKAGE_SCRIPT.PASTE_PREFIX):
+		_esim_paste_edit.text = clip
+	_esim_paste_dialog.popup_centered()
+	CursorController.request_modal("esim_paste_dialog", Callable())
+
+
+func _finish_esim_paste(mode: String) -> void:
+	CursorController.release_modal("esim_paste_dialog")
+	if _esim_paste_dialog != null:
+		_esim_paste_dialog.hide()
+	var code := ""
+	if _esim_paste_edit != null:
+		code = _esim_paste_edit.text
+	var result: Dictionary = _ESIM_IMPORTER_SCRIPT.apply_share_code(
+		get_tree(), code, {"mode": mode})
+	_report_esim_result(result, mode)
+
+
+func load_esim_as_ghost(package: Dictionary) -> Dictionary:
+	var v: Dictionary = _ESIM_PACKAGE_SCRIPT.validate(package)
+	if not bool(v.get("ok", false)):
+		return v
+	if model == null:
+		return {"ok": false, "error": "Graph model missing"}
+	clear_esim_ghost()
+	var overlay: Dictionary = _ESIM_PACKAGE_SCRIPT.make_ghost_overlay(
+		package.get("system_graph", {}) as Dictionary)
+	var items: Array = overlay.get("items", []) as Array
+	if items.is_empty():
+		return {"ok": false, "error": "Package graph has no nodes to preview"}
+
+	_history_suppress = true
+	var defs: Dictionary = overlay.get("definitions", {}) as Dictionary
+	for did in defs.keys():
+		var def: Variant = defs[did]
+		if def is Dictionary and model.get_definition(str(did)).is_empty():
+			model.put_definition(def as Dictionary)
+
+	var scopes: Dictionary = overlay.get("scopes", {}) as Dictionary
+	for sid in scopes.keys():
+		var sd: Dictionary = scopes[sid] as Dictionary if scopes[sid] is Dictionary else {}
+		model.ensure_scope(
+			str(sid),
+			str(sd.get("parent_scope_id", "root")),
+			str(sd.get("owner_compound_id", "")),
+			str(sd.get("title", "")))
+
+	for it in items:
+		if it is Dictionary:
+			model.add_item((it as Dictionary).duplicate(true))
+	for c in overlay.get("connections", []) as Array:
+		if c is Dictionary:
+			model.add_connection((c as Dictionary).duplicate(true))
+	_history_suppress = false
+
+	_esim_ghost_active = true
+	_esim_ghost_package = package.duplicate(true)
+	if _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+	return {
+		"ok": true,
+		"item_count": int(overlay.get("item_count", items.size())),
+		"connection_count": int(overlay.get("connection_count", 0)),
+		"summary": _ESIM_PACKAGE_SCRIPT.summary_of(package),
+		"warnings": [],
+	}
+
+
+func clear_esim_ghost() -> void:
+	if model == null:
+		_esim_ghost_active = false
+		_esim_ghost_package = {}
+		return
+	_history_suppress = true
+	var to_remove: Array = []
+	for it in model.items:
+		if it is Dictionary and bool((it as Dictionary).get("esim_ghost", false)):
+			to_remove.append(str((it as Dictionary).get("id", "")))
+	for iid in to_remove:
+		if not str(iid).is_empty():
+			model.remove_item(str(iid))
+	# Drop leftover ghost scopes (compounds may already cascade these).
+	var scope_keys: Array = model.scopes.keys()
+	for sk in scope_keys:
+		var key := str(sk)
+		if key.begins_with(_ESIM_PACKAGE_SCRIPT.ESIM_GHOST_SCOPE_PREFIX):
+			model.remove_scope(key)
+	_history_suppress = false
+	_esim_ghost_active = false
+	_esim_ghost_package = {}
+	if _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+
+
+func _apply_esim_ghost_graph() -> void:
+	if not _esim_ghost_active or _esim_ghost_package.is_empty():
+		_show_toast("⚠  No ghost preview loaded")
+		return
+	var pkg := _esim_ghost_package.duplicate(true)
+	clear_esim_ghost()
+	var result: Dictionary = _ESIM_IMPORTER_SCRIPT.apply_to_scene(
+		get_tree(), pkg, {"mode": "replace", "graph_only": false})
+	_report_esim_result(result, "replace")
 
 
 func _ensure_graph_file_dialog() -> void:
@@ -3730,6 +8034,8 @@ func _on_reset_graph() -> void:
 	_active_scope_id = "root"
 	_scope_trail = ["root"]
 	_selected_item_ids.clear()
+	# Re-seed the fundamental PBI nodes so the pinned bar isn't left empty.
+	_ensure_pbi_nodes()
 	_history_suppress = false
 	model.changed.emit("reset")
 	_apply_scope_to_canvas()
@@ -3892,26 +8198,28 @@ func _on_combine_menu_id(id: int) -> void:
 	match id:
 		COMBINE_GROUP:       _on_group_selected_pressed()
 		COMBINE_UNGROUP:     _on_ungroup_selected_pressed()
+		COMBINE_EXPLODE:     _on_explode_selected_pressed()
 		COMBINE_ARRAY:       _on_make_array_pressed()
 		COMBINE_BANK:        _on_make_battery_bank_pressed()
 		COMBINE_SERIES:      _on_series_wiring_pressed()
 		COMBINE_PARALLEL:    _on_parallel_wiring_pressed()
 		COMBINE_CTRL_PICKER: _on_pick_controller_for_array_pressed()
-		COMBINE_ARRANGE:     _on_arrange_graph_pressed()
-		COMBINE_PLACEHOLDER: _on_spawn_3d_placeholder_pressed()
 
 
-## Enable/disable Combine ▾ items from the current selection (same predicates
-## the old dedicated buttons used).
+func _on_layout_menu_id(id: int) -> void:
+	match id:
+		LAYOUT_ARRANGE:     _on_arrange_graph_pressed()
+		LAYOUT_PLACEHOLDER: _on_spawn_3d_placeholder_pressed()
+
+
+## Enable/disable Combine ▾ / Layout ▾ items from the current selection.
 func _update_special_group_buttons() -> void:
-	if _combine_menu == null:
-		return
-	var popup := _combine_menu.get_popup()
 	var selected := _get_group_candidates(true)
-	var load_selected := _get_load_group_candidates()
 	var can_array := selected.size() >= 2
 	var can_bank := selected.size() >= 2 and _ids_form_connected_component(selected)
-	var can_group_loads := load_selected.size() >= 2
+	# Generic super-node grouping is universal: any 2+ selected nodes in the
+	# active scope can be grouped (load selections still auto-form a load_group).
+	var can_group := selected.size() >= 2
 	if can_array:
 		for sid: String in selected:
 			var it := model.get_item(sid)
@@ -3924,27 +8232,44 @@ func _update_special_group_buttons() -> void:
 				can_bank = false
 				break
 	var can_ungroup := false
+	var can_explode := false
+	var can_expand := false
 	if _selected_item_ids.size() == 1 and model != null:
 		var comp := model.get_item(_selected_item_ids[0])
 		if not comp.is_empty() and str(comp.get("type", "")) == "compound":
-			can_ungroup = true
+			can_explode = true
+			can_expand = not str(comp.get("child_scope_id", "")).is_empty()
+			# Generic groups may ungroup; identity-backed components expand instead.
+			can_ungroup = not _compound_has_persistent_identity(comp)
+	var can_collapse := _scope_trail.size() > 1
 	var can_wire := _count_panel_selection() >= 2
 	var can_ctrl_pick := _selected_array_id_for_picker() != ""
-	var states := {
-		COMBINE_GROUP: can_group_loads,
-		COMBINE_UNGROUP: can_ungroup,
-		COMBINE_ARRAY: can_array,
-		COMBINE_BANK: can_bank,
-		COMBINE_SERIES: can_wire,
-		COMBINE_PARALLEL: can_wire,
-		COMBINE_CTRL_PICKER: can_ctrl_pick,
-		COMBINE_ARRANGE: true,
-		COMBINE_PLACEHOLDER: true,
-	}
-	for id: int in states:
-		var idx := popup.get_item_index(id)
-		if idx >= 0:
-			popup.set_item_disabled(idx, not bool(states[id]))
+	if _combine_menu != null:
+		var popup := _combine_menu.get_popup()
+		var states := {
+			COMBINE_GROUP: can_group,
+			COMBINE_UNGROUP: can_ungroup,
+			COMBINE_EXPLODE: can_explode,
+			COMBINE_ARRAY: can_array,
+			COMBINE_BANK: can_bank,
+			COMBINE_SERIES: can_wire,
+			COMBINE_PARALLEL: can_wire,
+			COMBINE_CTRL_PICKER: can_ctrl_pick,
+		}
+		for id: int in states:
+			var idx := popup.get_item_index(id)
+			if idx >= 0:
+				popup.set_item_disabled(idx, not bool(states[id]))
+	if _enter_btn != null:
+		_enter_btn.disabled = not can_expand
+	if _back_btn != null:
+		_back_btn.disabled = not can_collapse
+	if _layout_menu != null:
+		var lp := _layout_menu.get_popup()
+		for id2: int in [LAYOUT_ARRANGE, LAYOUT_PLACEHOLDER]:
+			var idx2 := lp.get_item_index(id2)
+			if idx2 >= 0:
+				lp.set_item_disabled(idx2, false)
 
 
 func _is_array_candidate(item: Dictionary) -> bool:
@@ -4110,6 +8435,38 @@ func _compute_array_equivalent_from_selection(ids: Array[String]) -> Dictionary:
 	}
 
 
+## True when dissolving this compound would lose SketchUp-style / StarShade
+## identity (definition, 3D twin, banner). Those nodes use Expand/Collapse
+## instead of Ungroup; Explode is the explicit destructive path.
+func _compound_has_persistent_identity(item: Dictionary) -> bool:
+	if item.is_empty() or str(item.get("type", "")) != "compound":
+		return false
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if not str(specs.get("definition_id", "")).is_empty():
+		return true
+	if not str(specs.get("bound_prop_id", "")).is_empty():
+		return true
+	if not str(specs.get("starshade_tag", "")).is_empty():
+		return true
+	if bool(specs.get("node_banner", false)) and not str(specs.get("model_id", "")).is_empty():
+		return true
+	return false
+
+
+func _compound_identity_label(item: Dictionary) -> String:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var name := str(specs.get("name", "")).strip_edges()
+	if not name.is_empty():
+		return name
+	var def_id := str(specs.get("definition_id", ""))
+	if not def_id.is_empty():
+		return def_id
+	return "super-node"
+
+
+## Ungroup / Ctrl+Shift+G: generic groups dissolve; identity-backed compounds
+## (StarShade, library components, 3D-bound shells) Expand instead so context
+## and world position survive. Use Combine ▾ → Explode for the destructive path.
 func _on_ungroup_selected_pressed(item_id: String = "") -> void:
 	if not item_id.is_empty():
 		_selected_item_ids.clear()
@@ -4117,40 +8474,150 @@ func _on_ungroup_selected_pressed(item_id: String = "") -> void:
 		if _graph_canvas != null:
 			_graph_canvas.set("selected_item_ids", _selected_item_ids)
 			_graph_canvas.set("selected_item_id", item_id)
+	if _selected_item_ids.size() != 1 or model == null:
+		_show_toast("Select one compound to ungroup")
+		return
+	var comp := model.get_item(_selected_item_ids[0])
+	if comp.is_empty() or str(comp.get("type", "")) != "compound":
+		_show_toast("Select a compound node")
+		return
+	if _compound_has_persistent_identity(comp):
+		var label := _compound_identity_label(comp)
+		_enter_compound_animated(str(comp.get("id", "")))
+		_show_toast("Expanded %s — Collapse (Esc / ◂ Collapse) keeps identity + 3D binding" % label)
+		return
 	_ungroup_selected_compound()
+
+
+func _on_explode_selected_pressed(item_id: String = "") -> void:
+	if not item_id.is_empty():
+		_selected_item_ids.clear()
+		_selected_item_ids.append(item_id)
+		if _graph_canvas != null:
+			_graph_canvas.set("selected_item_ids", _selected_item_ids)
+			_graph_canvas.set("selected_item_id", item_id)
+	if _selected_item_ids.size() != 1 or model == null:
+		_show_toast("Select one compound to explode")
+		return
+	var comp := model.get_item(_selected_item_ids[0])
+	if comp.is_empty() or str(comp.get("type", "")) != "compound":
+		_show_toast("Select a compound node")
+		return
+	_explode_pending_id = str(comp.get("id", ""))
+	if _explode_confirm == null:
+		_explode_confirm = ConfirmationDialog.new()
+		_explode_confirm.title = "Explode compound"
+		_explode_confirm.ok_button_text = "Explode"
+		_explode_confirm.confirmed.connect(func() -> void:
+			if _explode_pending_id.is_empty():
+				return
+			_selected_item_ids.clear()
+			_selected_item_ids.append(_explode_pending_id)
+			if _graph_canvas != null:
+				_graph_canvas.set("selected_item_ids", _selected_item_ids)
+				_graph_canvas.set("selected_item_id", _explode_pending_id)
+			_explode_pending_id = ""
+			_ungroup_selected_compound()
+		)
+		add_child(_explode_confirm)
+	var label := _compound_identity_label(comp)
+	var identity := _compound_has_persistent_identity(comp)
+	if identity:
+		_explode_confirm.dialog_text = (
+			"Explode \"%s\"?\n\n"
+			+ "This dissolves the super-node shell. Children stay, but StarShade / "
+			+ "component identity, banner, and 3D world binding on the shell are lost.\n\n"
+			+ "Prefer Expand / Collapse to peek inside without breaking the link.") % label
+	else:
+		_explode_confirm.dialog_text = (
+			"Explode \"%s\"?\n\nChildren move into the current scope and the shell is removed.") % label
+	_explode_confirm.popup_centered()
 
 
 func _on_enter_selected_compound() -> void:
 	if _selected_item_ids.size() != 1:
-		_show_toast("Select one compound node")
+		_show_toast("Select one super-node to expand")
 		return
-	_enter_compound(_selected_item_ids[0])
+	_enter_compound_animated(_selected_item_ids[0])
 
 
 func _on_back_scope_pressed() -> void:
+	_collapse_active_scope(true)
+
+
+## Zoom-out / Collapse / Esc — pop one scope and re-select the owner super-node
+## so StarShade (etc.) stays the selected identity with its 3D binding intact.
+func _collapse_active_scope(animated: bool = true) -> void:
 	if _scope_trail.size() <= 1:
 		return
+	var leaving := _active_scope_id
+	var owner := ""
+	if model != null:
+		owner = str(model.get_scope(leaving).get("owner_compound_id", ""))
+	if animated and _graph_canvas != null and _graph_canvas.has_method("begin_pop_transition"):
+		_graph_canvas.call("begin_pop_transition")
 	_scope_trail.pop_back()
 	_active_scope_id = _scope_trail[_scope_trail.size() - 1]
 	_selected_item_ids.clear()
+	if not owner.is_empty():
+		_selected_item_ids.append(owner)
 	_update_special_group_buttons()
 	_apply_scope_to_canvas()
+	if animated and _graph_canvas != null and not owner.is_empty() \
+			and _graph_canvas.has_method("finish_pop_transition"):
+		_graph_canvas.call("finish_pop_transition", owner)
+	elif _graph_canvas != null and not owner.is_empty() and _graph_canvas.has_method("focus_on_item"):
+		_graph_canvas.call("focus_on_item", owner)
+	if not owner.is_empty():
+		if _graph_canvas != null:
+			_graph_canvas.set("selected_item_ids", _selected_item_ids)
+			_graph_canvas.set("selected_item_id", owner)
+		_on_canvas_item_selected(owner)
 
 
 func _update_scope_breadcrumb() -> void:
 	if _scope_breadcrumb == null:
 		return
-	var parts: Array[String] = []
-	for sid: String in _scope_trail:
-		if sid == "root":
-			parts.append("Root")
-		elif model != null and model.has_method("get_scope"):
-			var sc: Dictionary = model.get_scope(sid)
-			var t: String = sc.get("title", sid) as String
-			parts.append(t)
-		else:
-			parts.append(sid)
-	_scope_breadcrumb.text = " / ".join(PackedStringArray(parts))
+	for c in _scope_breadcrumb.get_children():
+		c.queue_free()
+	for i in _scope_trail.size():
+		var sid: String = _scope_trail[i]
+		var title := "Root"
+		if sid != "root" and model != null and model.has_method("get_scope"):
+			title = str(model.get_scope(sid).get("title", sid))
+		if i > 0:
+			var sep := Label.new()
+			sep.text = " › "
+			sep.add_theme_color_override("font_color", C_TEXT_M)
+			sep.add_theme_font_size_override("font_size", 13)
+			sep.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			_scope_breadcrumb.add_child(sep)
+		var is_last := i == _scope_trail.size() - 1
+		var seg := Button.new()
+		seg.text = title
+		seg.flat = true
+		seg.focus_mode = Control.FOCUS_NONE
+		seg.add_theme_font_size_override("font_size", 13)
+		seg.add_theme_color_override("font_color", C_TEXT if is_last else C_TEXT_S)
+		seg.disabled = is_last
+		var idx := i
+		seg.pressed.connect(func(): _jump_to_scope_index(idx))
+		_scope_breadcrumb.add_child(seg)
+
+
+## Breadcrumb click — jump straight to an ancestor scope in the trail.
+func _jump_to_scope_index(index: int) -> void:
+	if index < 0 or index >= _scope_trail.size():
+		return
+	if index == _scope_trail.size() - 1:
+		return
+	_scope_trail.resize(index + 1)
+	_active_scope_id = _scope_trail[index]
+	_selected_item_ids.clear()
+	_update_special_group_buttons()
+	_apply_scope_to_canvas()
+	if _graph_canvas != null and _graph_canvas.has_method("fit_scope_to_view"):
+		_graph_canvas.call("fit_scope_to_view")
 
 
 func _apply_scope_to_canvas() -> void:
@@ -4193,16 +8660,39 @@ func _compound_handle_for_boundary(conn: Dictionary, selected_ids: Dictionary, c
 	}
 
 
+## Evenly redistribute a compound's promoted handles: inputs across the TOP edge,
+## outputs across the BOTTOM edge (top-to-bottom flow, matching base-graph nodes;
+## array compounds keep their bottom-bus layout).
+## Called after all boundary ports are known so spacing is uniform.
+func _distribute_compound_handle_positions(handle_defs: Array) -> void:
+	var ins: Array = []
+	var outs: Array = []
+	for h_v in handle_defs:
+		var h := h_v as Dictionary
+		if str(h.get("direction", "in")) == "out":
+			outs.append(h)
+		else:
+			ins.append(h)
+	for arr_v in [ins, outs]:
+		var arr := arr_v as Array
+		var n := arr.size()
+		for i in n:
+			var h := arr[i] as Dictionary
+			var is_out := str(h.get("direction", "in")) == "out"
+			h["ry"] = 1.0 if is_out else 0.0
+			h["rx"] = clampf(float(i + 1) / float(n + 1), 0.08, 0.92)
+
+
 func _compound_handle_pos(direction: String, idx: int, side_count: int, compound_kind: String = "") -> Vector2:
 	var n := maxi(1, side_count)
 	var t := float(idx) / float(n + 1)
-	# Array compounds default to bottom-facing ports so external wires route
-	# downward from the condensed panel cluster instead of rightward.
+	# Top-to-bottom flow: inputs on the TOP edge, outputs on the BOTTOM edge.
+	# Array compounds keep bottom-facing ports (condensed panel cluster).
 	if compound_kind == "array":
 		return Vector2(t, 1.0)
 	if direction == "in":
-		return Vector2(0.0, t)
-	return Vector2(1.0, t)
+		return Vector2(t, 0.0)
+	return Vector2(t, 1.0)
 
 
 func _group_selected_items(allow_virtual: bool = false, compound_kind: String = "", group_title: String = "Group", extra_specs: Dictionary = {}) -> String:
@@ -4247,6 +8737,32 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 		comp_h = arr_sz.y
 		center_x = (min_x + max_x) * 0.5 - comp_w * 0.5
 		center_y = (min_y + max_y) * 0.5 - comp_h * 0.5
+	elif compound_kind == "battery_bank":
+		# Same tall cell as a leaf battery — collapsed bank draws as one SOC fill.
+		comp_w = 128.0
+		comp_h = 172.0
+		center_x = (min_x + max_x) * 0.5 - comp_w * 0.5
+		center_y = (min_y + max_y) * 0.5 - comp_h * 0.5
+	var group_specs: Dictionary = {
+		"name": group_title,
+		"summary": "Nested graph",
+		"child_count": candidates.size(),
+		"port_in_count": 0,
+		"port_out_count": 0,
+		"exposed_ports": [],
+		"compound_kind": compound_kind,
+	}
+	if compound_kind == "battery_bank":
+		group_specs["display_as_battery"] = true
+		var bank_kwh := 0.0
+		for sid_b: String in candidates:
+			var bit := model.get_item(sid_b)
+			var bsp: Dictionary = bit.get("specs", {}) as Dictionary
+			bank_kwh += float(bsp.get("kwh", 0.0))
+		group_specs["bank_total_kwh"] = bank_kwh
+		group_specs["kwh"] = bank_kwh
+	for k: Variant in extra_specs.keys():
+		group_specs[k] = extra_specs[k]
 	var comp_item: Dictionary = {
 		"type": "compound",
 		"x": center_x,
@@ -4254,15 +8770,7 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 		"width": comp_w,
 		"height": comp_h,
 		"scope_id": _active_scope_id,
-		"specs": {
-			"name": group_title,
-			"summary": "Nested graph",
-			"child_count": candidates.size(),
-			"port_in_count": 0,
-			"port_out_count": 0,
-			"boundary_links": [],
-			"compound_kind": compound_kind,
-		},
+		"specs": group_specs,
 		"handles": [],
 		"is_virtual": false,
 	}
@@ -4281,7 +8789,7 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 			continue
 		model.update_item(sid, {"scope_id": child_scope_id, "parent_compound_id": compound_id})
 
-	var boundary_links: Array = []
+	var exposed_ports: Array = []
 	var handle_defs: Array = []
 	var handle_counters: Dictionary = {}
 	var conns := model.get_connections_in_scope(_active_scope_id)
@@ -4317,17 +8825,20 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 			handle_defs.append({
 				"id": hd.get("id", "") as String,
 				"polarity": hd.get("polarity", "ac") as String,
+				"direction": direction,
 				"rx": pos.x,
 				"ry": pos.y,
 			})
-		boundary_links.append({
-			"compound_handle_id": hd.get("id", "") as String,
-			"polarity": conn.get("polarity", "ac"),
+		# Live promoted port: maps this compound handle to the interior node it
+		# fronts. flat_connections() tunnels through this so sim stays correct.
+		exposed_ports.append({
+			"handle_id": hd.get("id", "") as String,
 			"child_item_id": sid if src_sel else tid,
 			"child_handle_id": conn.get("source_handle_id", "") if src_sel else conn.get("target_handle_id", ""),
-			"external_item_id": tid if src_sel else sid,
-			"external_handle_id": conn.get("target_handle_id", "") if src_sel else conn.get("source_handle_id", ""),
-			"source_was_child": src_sel,
+			"polarity": conn.get("polarity", "ac"),
+			"kind": conn.get("resource_type", ""),
+			"label": "",
+			"direction": direction,
 		})
 		model.remove_connection(conn.get("id", "") as String)
 		var nconn := conn.duplicate(true)
@@ -4346,12 +8857,14 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 			handle_defs.append(h.duplicate(true))
 		side_in_count = 0
 		side_out_count = 2
+	else:
+		_distribute_compound_handle_positions(handle_defs)
 
 	var comp := model.get_item(compound_id)
 	if not comp.is_empty():
 		var specs: Dictionary = (comp.get("specs", {}) as Dictionary).duplicate(true)
 		specs["child_count"] = candidates.size()
-		specs["boundary_links"] = boundary_links
+		specs["exposed_ports"] = exposed_ports
 		specs["port_in_count"] = side_in_count
 		specs["port_out_count"] = side_out_count
 		if compound_kind == "array":
@@ -4366,7 +8879,7 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 					has_ac_in = true
 					break
 			if not has_ac_in:
-				handle_defs.append({"id": "input", "polarity": "load", "rx": 0.0, "ry": 0.5})
+				handle_defs.append({"id": "input", "polarity": "load", "direction": "in", "rx": 0.5, "ry": 0.0})
 				side_in_count = maxi(side_in_count, 1)
 			specs["summary"] = str(specs.get("summary", "%d loads" % candidates.size()))
 		model.update_item(compound_id, {
@@ -4423,6 +8936,39 @@ func _sync_array_compound_layouts() -> void:
 		model.update_item(item_id, updates)
 
 
+## Battery-bank supernodes draw as one tall SOC cell. Legacy StarShade banks
+## were 190×120 (wider than tall); snap those (and any other wide bank) to the
+## leaf-battery size and stamp `display_as_battery` so the V2 chrome kicks in.
+func _normalize_battery_bank_display_nodes() -> void:
+	if model == null:
+		return
+	for item: Dictionary in model.items:
+		if str(item.get("type", "")) != "compound":
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		var is_bank := bool(specs.get("display_as_battery", false)) \
+			or str(specs.get("compound_kind", "")) == "battery_bank" \
+			or str(specs.get("definition_id", "")).to_lower().contains("battery_bank")
+		if not is_bank:
+			continue
+		var iid := str(item.get("id", ""))
+		if iid.is_empty():
+			continue
+		var w := float(item.get("width", 0.0))
+		var h := float(item.get("height", 0.0))
+		var updates: Dictionary = {}
+		if w > h + 1.0:
+			updates["width"] = 128.0
+			updates["height"] = 172.0
+		if not bool(specs.get("display_as_battery", false)):
+			var sp := specs.duplicate(true)
+			sp["display_as_battery"] = true
+			updates["specs"] = sp
+		if updates.is_empty():
+			continue
+		model.update_item(iid, updates)
+
+
 func _ungroup_selected_compound() -> void:
 	if model == null:
 		return
@@ -4440,9 +8986,63 @@ func _ungroup_selected_compound() -> void:
 	if child_scope_id.is_empty():
 		return
 	var specs: Dictionary = comp.get("specs", {}) as Dictionary
-	var boundary_links: Array = specs.get("boundary_links", []) as Array
+	# exposed_ports is the LIVE promoted-port map; boundary_links is only present
+	# on unmigrated legacy saves (migrate_boundary_links normally converts it).
+	var exposed_ports: Array = specs.get("exposed_ports", []) as Array
+	if exposed_ports.is_empty() and specs.has("boundary_links"):
+		var legacy := specs.duplicate(true)
+		GraphNesting.migrate_boundary_links(legacy)
+		exposed_ports = legacy.get("exposed_ports", []) as Array
+	# Snapshot the interior BEFORE moving anything (remove_item cascade-deletes a
+	# child scope, so we relocate children out first, then delete only the shell).
 	_history_suppress = true
-	# Move children and internal connections back to current scope.
+	# Restore each promoted port's boundary wire as a direct child↔external edge.
+	# The external endpoint is read from whatever is CURRENTLY wired to the
+	# compound handle, so ports rewired live after grouping still ungroup right.
+	for ep_v: Variant in exposed_ports:
+		var ep := ep_v as Dictionary
+		var ch: String = str(ep.get("handle_id", ""))
+		var child_item: String = str(ep.get("child_item_id", ""))
+		var child_handle: String = str(ep.get("child_handle_id", ""))
+		var src_is_child: bool = str(ep.get("direction", "in")) == "out"
+		var to_remove: Array[String] = []
+		var restores: Array = []
+		for conn: Dictionary in model.get_connections_in_scope(_active_scope_id):
+			var ext_item := ""
+			var ext_handle := ""
+			if conn.get("source_item_id", "") == compound_id and conn.get("source_handle_id", "") == ch:
+				ext_item = str(conn.get("target_item_id", ""))
+				ext_handle = str(conn.get("target_handle_id", ""))
+			elif conn.get("target_item_id", "") == compound_id and conn.get("target_handle_id", "") == ch:
+				ext_item = str(conn.get("source_item_id", ""))
+				ext_handle = str(conn.get("source_handle_id", ""))
+			else:
+				continue
+			to_remove.append(str(conn.get("id", "")))
+			restores.append({
+				"polarity": conn.get("polarity", ep.get("polarity", "ac")),
+				"resource_type": conn.get("resource_type", ep.get("kind", "")),
+				"ext_item": ext_item, "ext_handle": ext_handle,
+			})
+		for cid: String in to_remove:
+			model.remove_connection(cid)
+		for r_v: Variant in restores:
+			var r := r_v as Dictionary
+			model.add_connection({
+				"scope_id": _active_scope_id,
+				"polarity": r.get("polarity", "ac"),
+				"resource_type": r.get("resource_type", ""),
+				"source_item_id": child_item if src_is_child else r.get("ext_item", ""),
+				"source_handle_id": child_handle if src_is_child else r.get("ext_handle", ""),
+				"target_item_id": r.get("ext_item", "") if src_is_child else child_item,
+				"target_handle_id": r.get("ext_handle", "") if src_is_child else child_handle,
+				"waypoints": [],
+				"line_style": "bezier",
+				"curve_tension": 1.0,
+				"corner_radius": 28.0,
+				"voltage_mismatch": false,
+			})
+	# Move children and internal connections back to the current scope.
 	for item: Dictionary in model.get_items_in_scope(child_scope_id):
 		model.update_item(item.get("id", "") as String, {
 			"scope_id": _active_scope_id,
@@ -4450,29 +9050,7 @@ func _ungroup_selected_compound() -> void:
 		})
 	for conn: Dictionary in model.get_connections_in_scope(child_scope_id):
 		model.update_connection(conn.get("id", "") as String, {"scope_id": _active_scope_id})
-	# Remove parent-side boundary wires and restore original child↔external wires.
-	for link: Dictionary in boundary_links:
-		var ch: String = link.get("compound_handle_id", "") as String
-		var to_remove: Array[String] = []
-		for conn: Dictionary in model.get_connections_in_scope(_active_scope_id):
-			if (conn.get("source_item_id", "") == compound_id and conn.get("source_handle_id", "") == ch) \
-				or (conn.get("target_item_id", "") == compound_id and conn.get("target_handle_id", "") == ch):
-				to_remove.append(conn.get("id", "") as String)
-		for cid: String in to_remove:
-			model.remove_connection(cid)
-		model.add_connection({
-			"scope_id": _active_scope_id,
-			"polarity": link.get("polarity", "ac"),
-			"source_item_id": link.get("child_item_id", "") if bool(link.get("source_was_child", false)) else link.get("external_item_id", ""),
-			"source_handle_id": link.get("child_handle_id", "") if bool(link.get("source_was_child", false)) else link.get("external_handle_id", ""),
-			"target_item_id": link.get("external_item_id", "") if bool(link.get("source_was_child", false)) else link.get("child_item_id", ""),
-			"target_handle_id": link.get("external_handle_id", "") if bool(link.get("source_was_child", false)) else link.get("child_handle_id", ""),
-			"waypoints": [],
-			"line_style": "bezier",
-			"curve_tension": 1.0,
-			"corner_radius": 28.0,
-			"voltage_mismatch": false,
-		})
+	# Child scope is now empty — remove_item's cascade has nothing to orphan.
 	model.remove_item(compound_id)
 	model.remove_scope(child_scope_id)
 	_history_suppress = false
@@ -4483,7 +9061,7 @@ func _ungroup_selected_compound() -> void:
 		_graph_canvas.set("selected_item_id", "")
 		_graph_canvas.call("queue_redraw")
 	_update_special_group_buttons()
-	_show_toast("Ungrouped compound")
+	_show_toast("Exploded compound — shell removed")
 
 func _on_challenge_pressed() -> void:
 	var main_node := get_tree().root.get_node_or_null("Main")
@@ -4579,7 +9157,7 @@ func _build_review_modal() -> Control:
 	var total_cost:     float = 0.0
 	var user_items:     int   = 0
 	if model != null:
-		for item: Dictionary in model.get_items_in_scope("root"):
+		for item: Dictionary in GraphNesting.walk_items(model, "root"):
 			if bool(item.get("is_virtual", false)):
 				continue
 			var sp := item.get("specs", {}) as Dictionary
@@ -4920,6 +9498,7 @@ func _delete_selected() -> void:
 	var sel_conn: String = _graph_canvas.get("selected_connection_id") as String
 	if sel_items.size() > 1:
 		var removed_any := false
+		var doomed_props: Array[String] = []
 		for sid_v in sel_items:
 			var sid: String = str(sid_v)
 			var it := model.get_item(sid)
@@ -4933,11 +9512,15 @@ func _delete_selected() -> void:
 				_inspector_panel.call("unregister_item_automations", it)
 			if bool(it.get("is_virtual", false)):
 				_suppress_virtual(sid)
+			_collect_bound_prop_ids(it, doomed_props)
 			model.remove_item(sid)
 			removed_any = true
 		_selected_item_ids.clear()
 		if not removed_any:
 			_show_toast("Fundamental PBI nodes can't be removed")
+		else:
+			_reconcile_active_scope_owner()
+			_delete_bound_props(doomed_props)
 		return
 	if not sel_item.is_empty():
 		var it := model.get_item(sel_item)
@@ -4948,11 +9531,93 @@ func _delete_selected() -> void:
 			_inspector_panel.call("unregister_item_automations", it)
 		if bool(it.get("is_virtual", false)):
 			_suppress_virtual(sel_item)
+		var doomed_props: Array[String] = []
+		_collect_bound_prop_ids(it, doomed_props)
 		model.remove_item(sel_item)
+		_reconcile_active_scope_owner()
+		_delete_bound_props(doomed_props)
 	elif not sel_conn.is_empty():
 		if sel_conn.begins_with("vconn_"):
 			_suppress_virtual(sel_conn)
 		model.remove_connection(sel_conn)
+
+
+## bound_prop_id of `item` plus every descendant inside a compound's child
+## scope tree — remove_item cascade-deletes those items, so their 3D twins
+## must be collected BEFORE the removal.
+func _collect_bound_prop_ids(item: Dictionary, out: Array[String]) -> void:
+	if item.is_empty():
+		return
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var pid := str(specs.get("bound_prop_id", ""))
+	if not pid.is_empty() and not out.has(pid):
+		out.append(pid)
+	if str(item.get("type", "")) != "compound":
+		return
+	var child_scope := str(item.get("child_scope_id", ""))
+	if child_scope.is_empty() or model == null:
+		return
+	for child in model.get_items_in_scope(child_scope):
+		_collect_bound_prop_ids(child as Dictionary, out)
+
+
+## Delete the 3D placed-prop twins of just-removed graph nodes. A 2D node and
+## its bound prop are ONE object in two views — deleting either side removes
+## both (the reverse direction lives in terrain_loader.delete_prop_by_id).
+func _delete_bound_props(prop_ids: Array[String]) -> void:
+	if prop_ids.is_empty():
+		return
+	var main := _get_scene_main_node()
+	if main == null:
+		return
+	var loader := _find_terrain_loader(main)
+	if loader == null or not loader.has_method("delete_prop_by_id"):
+		return
+	var n := 0
+	for pid in prop_ids:
+		if bool(loader.call("delete_prop_by_id", pid)):
+			n += 1
+	if n > 0:
+		_show_toast("Removed %d 3D twin%s from the world" % [n, "" if n == 1 else "s"])
+
+
+## Remove every graph node (any scope) bound to a deleted 3D prop. Called by
+## terrain_loader.delete_prop_by_id so a prop deleted in the world never
+## leaves a dead node behind on the graph. No-op when the graph side already
+## removed the items (graph-initiated deletes run first).
+func remove_items_bound_to_prop(prop_id: String) -> void:
+	if model == null or prop_id.is_empty():
+		return
+	var doomed: Array[String] = []
+	for item: Dictionary in model.items:
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if str(specs.get("bound_prop_id", "")) == prop_id:
+			doomed.append(str(item.get("id", "")))
+	if doomed.is_empty():
+		return
+	for iid in doomed:
+		var it := model.get_item(iid)
+		if it.is_empty():
+			continue
+		if _inspector_panel != null and _inspector_panel.has_method("unregister_item_automations"):
+			_inspector_panel.call("unregister_item_automations", it)
+		model.remove_item(iid)
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	_schedule_graph_autosave()
+
+
+## After deleting interior nodes, prune any now-dangling promoted ports on the
+## super-node that owns the scope we're editing (live-promotion maintenance).
+func _reconcile_active_scope_owner() -> void:
+	if model == null or _active_scope_id == "root":
+		return
+	var sc: Dictionary = model.get_scope(_active_scope_id)
+	var owner := str(sc.get("owner_compound_id", ""))
+	if owner.is_empty():
+		return
+	if GraphNesting.reconcile_exposed_ports(model, owner):
+		model.changed.emit("reset")
 
 
 ## PBI / fundamental catchment nodes are locked and cannot be user-deleted.
@@ -4993,14 +9658,17 @@ func _show_toast(msg: String, duration: float = 2.5) -> void:
 	_toast_panel.visible = true
 	_toast_timer         = duration
 
-	# Center horizontally just below topbar
+	# Center horizontally near the BOTTOM of the canvas (above the timeline
+	# inset) — the top-center slot sits right on the PBI chip row (Sunlight/
+	# Rain/Wind) and a toast there occludes live nodes.
 	var left_w  := SIDEBAR_L_W if _sidebar_l_open else 0.0
 	var right_w := SIDEBAR_R_W if _sidebar_r_open else 0.0
 	var canvas_w := size.x - left_w - right_w
 	_toast_panel.reset_size()
 	_toast_panel.position = Vector2(
 		left_w + (canvas_w - _toast_panel.size.x) * 0.5,
-		TOPBAR_H + 12.0
+		maxf(TOPBAR_H + 12.0,
+			size.y - _timeline_bottom_inset() - _toast_panel.size.y - 72.0)
 	)
 
 
@@ -5128,8 +9796,53 @@ func _on_test_mode() -> void:
 # Process — drives GraphCanvas.tick()
 # ---------------------------------------------------------------------------
 
+## Ambient resource-flow tick — runs every frame regardless of graph visibility
+## (see the call site in _process for why). History-suppressed + bulk-coalesced
+## exactly like the old visible-gated call was, so engine-driven writes never
+## spam the undo stack while the player is out in the 3D world.
+func _tick_resource_flow_ambient(delta: float) -> void:
+	if _resource_flow == null:
+		return
+	# The engine coalesces on its own 0.25 s / 0.5 s accumulator, so on most frames
+	# tick() just accumulates and early-returns. Only pay the bulk-sync + history-
+	# suppress + PerfMonitor overhead on frames where a step will actually run.
+	if _resource_flow.has_method("would_tick") and not _resource_flow.call("would_tick", delta):
+		_resource_flow.call("tick", delta)  # cheap: accumulate + early-out
+		return
+	var was_suppress := _history_suppress
+	var was_bulk := _sim_bulk_update
+	_history_suppress = true
+	_sim_bulk_update = true
+	if _sim_load_host != null and _sim_load_host.has_method("begin_bulk_sync"):
+		_sim_load_host.call("begin_bulk_sync")
+	PerfMonitor.begin("flow_engine")
+	_resource_flow.call("tick", delta)
+	PerfMonitor.end("flow_engine")
+	if _sim_load_host != null and _sim_load_host.has_method("end_bulk_sync"):
+		_sim_load_host.call("end_bulk_sync")
+	_history_suppress = was_suppress
+	_sim_bulk_update = was_bulk
+
+
 func _process(delta: float) -> void:
+	# Water/catchment/siphon/culvert physics must progress even while the 2D
+	# graph screen is closed — rain fills ponds and the siphon drains them
+	# ambiently, the same way weather/solar keep running with no UI open.
+	# Previously `_resource_flow.tick()` only ran below the `if not visible`
+	# gate, so the whole water system silently froze the instant the player
+	# left the graph (reported as "rain doesn't fill the pond" / "the siphon
+	# never flows" — its specs were a stale snapshot from the last time the
+	# graph happened to be open, not a live simulation).
+	_tick_resource_flow_ambient(delta)
 	if not visible:
+		return
+	# Hydro Lab owns its CT/UI — skip canvas/bridge/renewables storms. Ambient
+	# ResourceFlowEngine (above) still runs so test inflow + siphon drain work.
+	if _graph_view_mode == GraphSiteLayout.VIEW_SIPHON:
+		if _toast_timer > 0.0:
+			_toast_timer -= delta
+			if _toast_timer <= 0.0 and _toast_panel != null:
+				_toast_panel.visible = false
 		return
 	var sim_ts := -1.0
 	var main_node := _get_scene_main_node()
@@ -5143,41 +9856,76 @@ func _process(delta: float) -> void:
 				_on_test_mode()
 			else:
 				_on_build_mode()
+	PerfMonitor.begin("graph_sim")
+	PerfMonitor.begin("gv_canvas")
 	if _graph_canvas != null and _graph_canvas.has_method("tick"):
 		_graph_canvas.call("tick", delta, sim_ts)
+	PerfMonitor.end("gv_canvas")
 	# Bridge tick — suppress history so its model updates are not recorded, and
 	# batch the redraw/telemetry cascade so a tick touching many items (tanks,
 	# virtual nodes) triggers one redraw instead of one per update_item.
 	_history_suppress = true
 	_sim_bulk_update = true
+	if _sim_load_host != null and _sim_load_host.has_method("begin_bulk_sync"):
+		_sim_load_host.call("begin_bulk_sync")
+	PerfMonitor.begin("gv_bridge")
 	if _bridge != null:
 		_bridge.call("tick", delta)
+	PerfMonitor.end("gv_bridge")
+	PerfMonitor.begin("gv_ticks")
 	_tick_graph_renewables(delta)
 	_tick_graph_csp(delta)
 	_tick_graph_heliostat(delta)
+	_tick_graph_biodigester(delta)
+	_tick_graph_tools(delta)
+	_tick_graph_pp_extruder(delta)
+	_tick_graph_pp_sheet_press(delta)
 	_tick_connector_burnout(delta)
 	_tick_graph_pbis(delta)
 	_tick_graph_solar_shading(delta)
+	PerfMonitor.end("gv_ticks")
 	_energy_sync_acc += delta
 	var _do_energy_sync := false
 	if _energy_sync_acc >= _ENERGY_SYNC_INTERVAL:
 		_energy_sync_acc = 0.0
 		_do_energy_sync = true
+		PerfMonitor.begin("gv_energy")
 		_sync_graph_energy_from_solar()
-	if _resource_flow != null:
-		_resource_flow.call("tick", delta)
+		PerfMonitor.end("gv_energy")
+	PerfMonitor.begin("gv_workflow")
+	_tick_active_workflow()
+	PerfMonitor.end("gv_workflow")
 	# Runs after the resource-flow tick (not alongside the sync above) so it
 	# sees this frame's freshly recomputed DC-generator current_output_kw
 	# telemetry, not last frame's.
 	if _do_energy_sync:
+		PerfMonitor.begin("gv_dcsync")
 		_sync_graph_dc_generation_to_solar()
+		PerfMonitor.end("gv_dcsync")
 	_closure_refresh_acc += delta
 	if _closure_refresh_acc >= _CLOSURE_REFRESH_INTERVAL:
 		_closure_refresh_acc = 0.0
+		PerfMonitor.begin("gv_closure")
 		_refresh_closure_telemetry()
+		PerfMonitor.end("gv_closure")
+	# end_bulk_sync flushes the coalesced load-state sync, which may itself write
+	# update_item. Run it BEFORE clearing the bulk/history flags so those writes
+	# stay history-suppressed and coalesced into the single flush below — clearing
+	# first made each load-sync write fire the full uncoalesced redraw/telemetry
+	# cascade (the graph-view stall).
+	if _sim_load_host != null and _sim_load_host.has_method("end_bulk_sync"):
+		PerfMonitor.begin("gv_bulk")
+		_sim_load_host.call("end_bulk_sync")
+		PerfMonitor.end("gv_bulk")
 	_history_suppress = false
 	_sim_bulk_update = false
-	_flush_sim_bulk_update()
+	_telemetry_flush_acc += delta
+	PerfMonitor.begin("gv_flush")
+	_flush_sim_bulk_update(_telemetry_flush_acc >= _TELEMETRY_FLUSH_INTERVAL)
+	PerfMonitor.end("gv_flush")
+	if _telemetry_flush_acc >= _TELEMETRY_FLUSH_INTERVAL:
+		_telemetry_flush_acc = 0.0
+	PerfMonitor.end("graph_sim")
 	# Push the initial snapshot once, after the bridge has seeded virtual nodes
 	if not _history_initialized:
 		_history_initialized = true
@@ -5250,6 +9998,21 @@ func _input(event: InputEvent) -> void:
 					_do_redo()
 					get_viewport().set_input_as_handled()
 					return
+				# Esc collapses one nesting level (keeps StarShade / component identity).
+				if visible and ke.keycode == KEY_ESCAPE and _scope_trail.size() > 1:
+					_collapse_active_scope(true)
+					get_viewport().set_input_as_handled()
+					return
+				# Ctrl+G group / Ctrl+Shift+G ungroup-or-expand (only while the graph is open).
+				# Identity-backed super-nodes Expand instead of dissolving — see
+				# Combine ▾ → Explode for the destructive shell removal.
+				if visible and ke.ctrl_pressed and ke.keycode == KEY_G:
+					if ke.shift_pressed:
+						_on_ungroup_selected_pressed()
+					else:
+						_on_group_selected_pressed()
+					get_viewport().set_input_as_handled()
+					return
 
 	# ---- G toggle ----
 	if not InputMap.has_action("system_graph_toggle"):
@@ -5311,6 +10074,7 @@ func _init_conduit_manager() -> void:
 	var main_node := _get_scene_main_node()
 	if main_node == null or model == null:
 		return
+	# Twins are explicit (Place in 3D / Place 3D twin) — never auto on boot.
 	_conduit_manager = main_node.get_node_or_null("ConduitManager") as Node3D
 	if _conduit_manager == null:
 		_conduit_manager = _CONDUIT_MGR_SCRIPT.new()
@@ -5335,8 +10099,6 @@ func _ensure_conduit_route_ui(main_node: Node) -> void:
 
 
 func _wire_player_conduit_controller(main_node: Node) -> void:
-	if _conduit_route_wired:
-		return
 	var player := main_node.get_node_or_null("Player")
 	if player == null:
 		return
@@ -5344,16 +10106,21 @@ func _wire_player_conduit_controller(main_node: Node) -> void:
 	if ctrl == null:
 		return
 	var ui := main_node.get_node_or_null("UILayer/ConduitRouteUI")
+	# Always (re)bind manager — early wire with a null manager used to latch
+	# `_conduit_route_wired` and leave LMB click/drag dead forever.
 	if ctrl.has_method("setup") and _conduit_manager != null:
 		var cam: Camera3D = player.get("camera") as Camera3D
 		if cam == null:
 			cam = player.get_node_or_null("Camera3D") as Camera3D
 		ctrl.call("setup", player, cam, _conduit_manager, ui)
-	if ctrl.has_signal("route_committed") and not ctrl.is_connected("route_committed", _on_conduit_route_finished):
-		ctrl.connect("route_committed", _on_conduit_route_finished)
-	if ctrl.has_signal("route_cancelled") and not ctrl.is_connected("route_cancelled", _on_conduit_route_finished):
-		ctrl.connect("route_cancelled", _on_conduit_route_finished)
-	_conduit_route_wired = true
+	if not _conduit_route_wired:
+		if ctrl.has_signal("route_committed") \
+				and not ctrl.is_connected("route_committed", _on_conduit_route_finished):
+			ctrl.connect("route_committed", _on_conduit_route_finished)
+		if ctrl.has_signal("route_cancelled") \
+				and not ctrl.is_connected("route_cancelled", _on_conduit_route_finished):
+			ctrl.connect("route_cancelled", _on_conduit_route_finished)
+		_conduit_route_wired = true
 
 
 func _get_conduit_manager() -> Node3D:
@@ -5419,7 +10186,8 @@ func _on_spawn_3d_placeholder_pressed() -> void:
 
 ## "Place in 3D" pressed in the inspector for a model-linked node (e.g. VAWT).
 ## Reconstructs the preset dict from the item's own specs and delegates to the
-## same ghost-placement path used by the library-panel Place button.
+## same ghost-placement path used by the library-panel Place button — but passes
+## `item_id` so confirm binds THIS node instead of spawning a duplicate.
 func _place_model_for_item(item_id: String) -> void:
 	if model == null or item_id.is_empty():
 		_show_toast("Select a graph node first")
@@ -5442,7 +10210,7 @@ func _place_model_for_item(item_id: String) -> void:
 		"height": float(item.get("height", 112.0)),
 		"specs": specs,
 	}
-	_on_lib_place_model_requested(preset)
+	_on_lib_place_model_requested(preset, item_id)
 
 
 func _start_conduit_route(conn_id: String) -> void:
@@ -5461,8 +10229,11 @@ func _start_conduit_route(conn_id: String) -> void:
 	var src := model.get_item(str(conn.get("source_item_id", "")))
 	var tgt := model.get_item(str(conn.get("target_item_id", "")))
 	var tree := get_tree()
-	var anchor_a: Vector3 = ConduitManager.anchor_global_for_item(src, tree)
-	var anchor_b: Vector3 = ConduitManager.anchor_global_for_item(tgt, tree)
+	var main_for_anchor := _get_scene_main_node()
+	var anchor_a: Vector3 = ConduitManager.anchor_global_for_item(
+		src, tree, str(conn.get("source_handle_id", "")), main_for_anchor)
+	var anchor_b: Vector3 = ConduitManager.anchor_global_for_item(
+		tgt, tree, str(conn.get("target_handle_id", "")), main_for_anchor)
 	if not is_finite(anchor_a.x) or not is_finite(anchor_b.x):
 		_show_toast("Could not resolve 3D anchor positions.")
 		return
@@ -5487,7 +10258,10 @@ func _start_conduit_route(conn_id: String) -> void:
 
 func _clear_conduit_route(conn_id: String) -> void:
 	var mgr := _get_conduit_manager()
-	if mgr != null and mgr.has_method("clear_route"):
+	# Prefer autoroute reset (clears locked bends) so conceptual runs re-metro.
+	if mgr != null and mgr.has_method("reset_autoroute"):
+		mgr.call("reset_autoroute", conn_id)
+	elif mgr != null and mgr.has_method("clear_route"):
 		mgr.call("clear_route", conn_id)
 	if model != null:
 		var conn := model.get_connection(conn_id)
@@ -5711,8 +10485,6 @@ func _update_legend_btn() -> void:
 	var on := false
 	if _graph_canvas != null and _graph_canvas.has_method("is_legend_visible"):
 		on = bool(_graph_canvas.call("is_legend_visible"))
-	if _legend_btn != null:
-		_set_mode_btn_style(_legend_btn, on)
 	if _view_menu != null:
 		var popup := _view_menu.get_popup()
 		var idx := popup.get_item_index(VIEW_LEGEND)
@@ -6152,15 +10924,28 @@ func _on_model_changed(reason: String) -> void:
 		# one redraw + one telemetry refresh via _flush_sim_bulk_update().
 		_pending_canvas_redraw = true
 		_pending_telemetry_refresh = true
+		# Pond twin: coalesce mesh push while sim integrates tank levels.
+		_schedule_pond_twin_push()
 	else:
 		if _graph_canvas != null:
 			_graph_canvas.call("queue_redraw")
 		_refresh_telemetry()
+		if reason == "update_item" or reason == "reset":
+			_schedule_pond_twin_push()
 		_sync_solar_ui_from_graph()
 		_sync_graph_controller_ac_fault()
 		call_deferred("_populate_library_scene_devices")
 	if reason in ["add_connection", "remove_connection", "update_connection"]:
 		call_deferred("_check_pv_voltage_faults")
+	# SketchUp-style live component propagation: a structural edit made INSIDE a
+	# component instance (the active scope sits within one) recaptures that
+	# instance's definition and re-stamps its siblings. Skipped while a restamp is
+	# already running, during load/undo, and during sim bulk ticks.
+	if not _component_sync_active and not _history_suppress and not _sim_bulk_update \
+			and reason in _COMPONENT_SYNC_REASONS:
+		var inst := _innermost_instance_for_scope(_active_scope_id)
+		if not inst.is_empty():
+			request_component_sync(inst)
 	# Record structural user changes in the undo history
 	if _history != null and _history_initialized and not _history_suppress:
 		if reason in HISTORY_REASONS:
@@ -6168,23 +10953,109 @@ func _on_model_changed(reason: String) -> void:
 			_update_undo_redo_btns()
 		if GRAPH_AUTOSAVE_REASONS.has(reason):
 			_schedule_graph_autosave()
+	# Phase 4 live multiplayer design sync (debounced on MultiplayerSession).
+	if not Engine.is_editor_hint() and not _history_suppress and not _sim_bulk_update \
+			and MultiplayerSession != null and MultiplayerSession.has_method("notify_graph_edited") \
+			and MultiplayerSession.has_method("is_active") and MultiplayerSession.is_active():
+		MultiplayerSession.notify_graph_edited(reason)
 
 
 ## Runs the redraw/telemetry work _on_model_changed deferred while
 ## _sim_bulk_update was set, exactly once, covering every model.update_item
 ## call made during the tick block. No-op if nothing changed this tick.
-func _flush_sim_bulk_update() -> void:
-	if not _pending_canvas_redraw and not _pending_telemetry_refresh:
+## `force_telemetry` (≈1 Hz) runs the expensive dashboard/library rescans;
+## canvas redraw still flushes every tick when pending (animation owns most
+## redraws via graph_canvas.tick anyway).
+func _flush_sim_bulk_update(force_telemetry: bool = true) -> void:
+	if not _pending_canvas_redraw and not _pending_telemetry_refresh \
+			and not _pending_library_populate:
 		return
 	if _pending_canvas_redraw and _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
-	if _pending_telemetry_refresh:
-		_refresh_telemetry()
-		_sync_solar_ui_from_graph()
-		_sync_graph_controller_ac_fault()
-		call_deferred("_populate_library_scene_devices")
 	_pending_canvas_redraw = false
-	_pending_telemetry_refresh = false
+	if _pending_telemetry_refresh:
+		_pending_library_populate = true
+		if force_telemetry:
+			_refresh_telemetry()
+			_sync_solar_ui_from_graph()
+			_sync_graph_controller_ac_fault()
+			_pending_telemetry_refresh = false
+	if force_telemetry and _pending_library_populate:
+		call_deferred("_populate_library_scene_devices")
+		_pending_library_populate = false
+
+
+# ---------------------------------------------------------------------------
+# Component (super-node) live propagation
+# ---------------------------------------------------------------------------
+
+## Model-change reasons that count as a structural interior edit worth
+## propagating across instances of a component definition.
+const _COMPONENT_SYNC_REASONS := [
+	"add_item", "remove_item", "update_item",
+	"add_connection", "remove_connection", "update_connection",
+]
+
+
+## Walk up from `scope_id` and return the innermost compound INSTANCE (one bound
+## to a definition) that owns an ancestor scope, or "" if the edit is not inside
+## any component instance.
+func _innermost_instance_for_scope(scope_id: String) -> String:
+	if model == null or scope_id.is_empty() or scope_id == "root":
+		return ""
+	var s := scope_id
+	var guard := 0
+	while not s.is_empty() and s != "root" and guard < 64:
+		guard += 1
+		var sc := model.get_scope(s)
+		var owner := str(sc.get("owner_compound_id", ""))
+		if not owner.is_empty():
+			var it := model.get_item(owner)
+			if GraphComponentDefs.is_instance(it):
+				return owner
+		s = str(sc.get("parent_scope_id", ""))
+	return ""
+
+
+## Queue a debounced capture+restamp for `instance_id` (public so authoring/
+## inspector port edits can trigger propagation explicitly).
+func request_component_sync(instance_id: String) -> void:
+	if instance_id.is_empty():
+		return
+	_component_sync_pending[instance_id] = true
+	if _component_sync_timer != null:
+		_component_sync_timer.start()
+
+
+## Run every queued component sync: capture each instance's definition, then
+## re-stamp all OTHER instances of that definition. Loop-safe via the guard.
+func _flush_component_sync() -> void:
+	if model == null or _component_sync_pending.is_empty():
+		return
+	var pending := _component_sync_pending.keys()
+	_component_sync_pending.clear()
+	_component_sync_active = true
+	_history_suppress = true
+	var synced_defs: Dictionary = {}
+	for inst_v in pending:
+		var inst_id := str(inst_v)
+		var it := model.get_item(inst_id)
+		if not GraphComponentDefs.is_instance(it):
+			continue
+		var def_id := GraphComponentDefs.capture(model, inst_id)
+		if def_id.is_empty() or synced_defs.has(def_id):
+			continue
+		synced_defs[def_id] = true
+		for other in model.instances_of_definition(def_id):
+			var oid := str((other as Dictionary).get("id", ""))
+			if oid != inst_id:
+				GraphComponentDefs.restamp(model, oid)
+	_history_suppress = false
+	_component_sync_active = false
+	if not synced_defs.is_empty():
+		if _graph_canvas != null:
+			_graph_canvas.call("queue_redraw")
+		_schedule_graph_autosave()
 
 
 # ---------------------------------------------------------------------------
@@ -6274,7 +11145,7 @@ func _refresh_telemetry() -> void:
 	var cost_batteries:   float = 0.0
 	var cost_components:  float = 0.0
 
-	for item: Dictionary in model.get_items_in_scope("root"):
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype: String    = item.get("type",  "") as String
@@ -6325,7 +11196,7 @@ func _refresh_telemetry() -> void:
 
 	# Battery config: count × voltage (or kWh if voltages differ)
 	var bat_count: int = 0
-	for item: Dictionary in model.get_items_in_scope("root"):
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
 		if item.get("type", "") in ["battery", "smartbattery"]:
@@ -6448,7 +11319,7 @@ func _collect_root_array_aggregate() -> Dictionary:
 	var panel_count: int = 0
 	if model == null:
 		return {"panel_wmp": 0.0, "panel_voc_max": 0.0, "panel_imp": 0.0, "panel_count": 0, "array_config": "—"}
-	for item: Dictionary in model.get_items_in_scope("root"):
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype := str(item.get("type", ""))
@@ -6459,6 +11330,10 @@ func _collect_root_array_aggregate() -> Dictionary:
 			panel_imp += float(specs.get("imp", 0.0))
 			panel_count += int(specs.get("panel_count", 1.0))
 		elif itype == "compound" and str(specs.get("compound_kind", "")) == "array":
+			# Stowed (folded) linkage structures keep their node/wiring but
+			# contribute no capacity until redeployed.
+			if bool(specs.get("array_stowed", false)):
+				continue
 			panel_wmp += float(specs.get("array_equiv_wmp", 0.0))
 			panel_voc_max = maxf(panel_voc_max, float(specs.get("array_equiv_voc", 0.0)))
 			panel_imp += float(specs.get("array_equiv_imp", 0.0))
@@ -6478,7 +11353,7 @@ func _collect_battery_aggregate() -> Dictionary:
 	var bat_count: int = 0
 	if model == null:
 		return {"total_kwh": 0.0, "count": 0}
-	for item: Dictionary in model.get_items_in_scope("root"):
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype := str(item.get("type", ""))
@@ -6499,7 +11374,7 @@ func _average_graph_battery_soc() -> float:
 		return -1.0
 	var weighted := 0.0
 	var total_kwh := 0.0
-	for item: Dictionary in model.get_items_in_scope("root"):
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype := str(item.get("type", ""))
@@ -6538,7 +11413,7 @@ func _sync_graph_energy_from_solar() -> void:
 
 	var panel_items: Array[Dictionary] = []
 	var total_wmp := 0.0
-	for item: Dictionary in model.get_items_in_scope("root"):
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
 		if str(item.get("type", "")) != "panel":
@@ -6569,7 +11444,7 @@ func _sync_graph_energy_from_solar() -> void:
 			specs["sunlight_factor"] = sun_f
 			model.update_item(iid, {"specs": specs})
 
-	for item: Dictionary in model.get_items_in_scope("root"):
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype := str(item.get("type", ""))
@@ -6632,8 +11507,10 @@ func collect_save_state() -> Dictionary:
 		pan  = _graph_canvas.get("_pan") if _graph_canvas.get("_pan") != null else Vector2.ZERO
 		zoom = float(_graph_canvas.get("_zoom")) if _graph_canvas.get("_zoom") != null else 1.0
 
-	return {
-		"graph":               model.serialize() if model != null else {},
+	var graph_blob: Dictionary = model.serialize() if model != null else {}
+	# Never persist foreign .esim ghost overlay into autosave / game saves.
+	var state := {
+		"graph":               graph_blob,
 		"sidebar_l_open":      _sidebar_l_open,
 		"sidebar_r_open":      _sidebar_r_open,
 		"mode":                _mode,
@@ -6646,9 +11523,31 @@ func collect_save_state() -> Dictionary:
 		"freeform_soi_bubble": _freeform_soi_bubble,
 		"elevation_3d_section": _elevation_3d_section,
 		"elevation_heading_rad": float(_graph_canvas.get("elevation_heading_rad")) if _graph_canvas != null else 0.0,
+		"elevation_section_offset_m": float(_graph_canvas.get("elevation_section_offset_m")) if _graph_canvas != null else 0.0,
+		"elev_view": (_graph_canvas.call("get_elev_view_state") as Dictionary) \
+				if _graph_canvas != null and _graph_canvas.has_method("get_elev_view_state") \
+				else {},
 		"elevation_exaggeration": float(_graph_canvas.get("elevation_exaggeration")) if _graph_canvas != null else 5.0,
+		"elev_show_dem_overlay": bool(_graph_canvas.get("elev_show_dem_overlay")) if _graph_canvas != null else true,
+		"elev_show_chips": bool(_graph_canvas.get("elev_show_chips")) if _graph_canvas != null else false,
+		"elev_show_ports": bool(_graph_canvas.get("elev_show_ports")) if _graph_canvas != null else false,
+		"elev_show_schematic_wires": bool(_graph_canvas.get("elev_show_schematic_wires")) if _graph_canvas != null else false,
+		"elev_show_projected_pipes": bool(_graph_canvas.get("elev_show_projected_pipes")) if _graph_canvas != null else false,
 		"suppressed_virtuals": _suppressed_virtuals.duplicate(),
+		"pbi_bar_pinned":      _pbi_bar_pinned,
+		"wire_style_override": str(_graph_canvas.get("wire_style_override")) if _graph_canvas != null else "",
+		"node_display_mode":   str(_graph_canvas.get("node_display_mode")) if _graph_canvas != null else "preview",
+		"show_preview_labels": bool(_graph_canvas.get("show_preview_labels")) if _graph_canvas != null else true,
+		"soi_ring_scale":      float(_graph_canvas.get("soi_ring_scale")) if _graph_canvas != null else 1.0,
+		"radial_layout_mode":  bool(_graph_canvas.get("radial_layout_mode")) if _graph_canvas != null else false,
+		"site_show_chips":     bool(_graph_canvas.get("site_show_chips")) if _graph_canvas != null else true,
+		"site_show_ports":     bool(_graph_canvas.get("site_show_ports")) if _graph_canvas != null else true,
+		"site_wire_mode":      str(_graph_canvas.get("site_wire_mode")) if _graph_canvas != null else "metro",
+		"site_elev_live_lighting": _site_elev_live_lighting,
+		"site_spatial":        _spatial_edit.to_prefs() if _spatial_edit != null else {},
+		"phys_cam":            _collect_phys_cam_state(),
 	}
+	return _ESIM_PACKAGE_SCRIPT.strip_esim_ghosts_from_graph_state(state)
 
 
 func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
@@ -6677,6 +11576,7 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 			model.deserialize(graph_d as Dictionary)
 			legacy_stripped = GraphVirtualIds.strip_legacy_virtual_solar(model)
 	_sync_array_compound_layouts()
+	_normalize_battery_bank_display_nodes()
 	if preserve_positions and not position_backup.is_empty():
 		for iid: String in position_backup.keys():
 			if model.get_item(iid).is_empty():
@@ -6744,16 +11644,58 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 				GraphLayout.ZOOM_MIN, GraphLayout.ZOOM_MAX))
 		_graph_canvas.set("active_scope_id", _active_scope_id)
 		_graph_canvas.set("elevation_heading_rad", float(data.get("elevation_heading_rad", 0.0)))
+		_graph_canvas.set("elevation_section_offset_m",
+				float(data.get("elevation_section_offset_m", 0.0)))
 		_graph_canvas.set("elevation_exaggeration", float(data.get("elevation_exaggeration", 5.0)))
+		_graph_canvas.set("elev_show_dem_overlay", bool(data.get("elev_show_dem_overlay", true)))
+		_graph_canvas.set("elev_show_chips", bool(data.get("elev_show_chips", false)))
+		_graph_canvas.set("elev_show_ports", bool(data.get("elev_show_ports", false)))
+		_graph_canvas.set("elev_show_schematic_wires",
+				bool(data.get("elev_show_schematic_wires", false)))
+		_graph_canvas.set("elev_show_projected_pipes",
+				bool(data.get("elev_show_projected_pipes", false)))
+		_graph_canvas.set("wire_style_override", str(data.get("wire_style_override", "")))
+		var ndm := str(data.get("node_display_mode", "preview"))
+		_graph_canvas.set("node_display_mode",
+				ndm if ndm in ["preview", "card"] else "preview")
+		_graph_canvas.set("show_preview_labels", bool(data.get("show_preview_labels", true)))
+		_graph_canvas.set("soi_ring_scale",
+				clampf(float(data.get("soi_ring_scale", 1.0)), 0.25, 4.0))
+		_graph_canvas.set("radial_layout_mode", bool(data.get("radial_layout_mode", false)))
+		_graph_canvas.set("site_show_chips", bool(data.get("site_show_chips", true)))
+		_graph_canvas.set("site_show_ports", bool(data.get("site_show_ports", true)))
+		var swm := str(data.get("site_wire_mode", "metro"))
+		_graph_canvas.set("site_wire_mode",
+				swm if swm in ["none", "metro", "prefer_3d"] else "metro")
+		var elev_view: Variant = data.get("elev_view", {})
+		if elev_view is Dictionary and not (elev_view as Dictionary).is_empty() \
+				and _graph_canvas.has_method("set_elev_view_state"):
+			_graph_canvas.call("set_elev_view_state", elev_view)
 		_graph_canvas.call("queue_redraw")
+	_site_elev_live_lighting = bool(data.get("site_elev_live_lighting", false))
+	if _spatial_edit != null:
+		var spat: Variant = data.get("site_spatial", {})
+		if spat is Dictionary:
+			_spatial_edit.apply_prefs(spat as Dictionary)
+			_on_spatial_working_radius_changed(
+					float(_spatial_edit.working_radius_m) if not is_nan(_spatial_edit.working_radius_m) else 50.0)
+	_pbi_bar_pinned = bool(data.get("pbi_bar_pinned", true))
+	_apply_pbi_bar_pinned()
+	_sync_wire_style_menu_checks()
+	var pcam: Variant = data.get("phys_cam", {})
+	if pcam is Dictionary:
+		_apply_phys_cam_state(pcam as Dictionary)
 	_freeform_soi_bubble = bool(data.get("freeform_soi_bubble", false))
-	_elevation_3d_section = bool(data.get("elevation_3d_section", false))
+	_elevation_3d_section = bool(data.get("elevation_3d_section", true))
+	_sync_elev_slice_row()
+	_sync_site_tool_row()
 	var restored_view := str(data.get("view_mode", GraphSiteLayout.VIEW_FREEFORM))
 	if restored_view in [GraphSiteLayout.VIEW_FREEFORM, GraphSiteLayout.VIEW_SITE,
-			GraphSiteLayout.VIEW_ELEVATION]:
+			GraphSiteLayout.VIEW_ELEVATION, GraphSiteLayout.VIEW_SIPHON]:
 		# Restore prefs only; `_sync_soi_preview_for_mode` no-ops world clip
-		# while the graph is hidden (first-person map load).
-		call_deferred("_apply_graph_view_mode", restored_view)
+		# while the graph is hidden (first-person map load). Keep saved elev 3D.
+		call_deferred("_apply_graph_view_mode", restored_view,
+				{"preserve_elev_3d": true})
 
 	_refresh_telemetry()
 	_sync_solar_ui_from_graph()
@@ -6847,12 +11789,17 @@ func _tick_graph_renewables(delta: float) -> void:
 			real_wind_10m = float(ws.call("wind_speed_ms", month, day, hour))
 			precip_mults = ws.call("monthly_precip_multipliers") as Array
 
-	for item: Dictionary in model.items:
+	# Only the three generating types — via the model's shared type index instead
+	# of a full-list scan. Shallow spec copies: we only read/write scalar telemetry
+	# and rebuild nested arrays wholesale, so a deep copy per item per tick is waste.
+	var _renewables: Array = []
+	_renewables.append_array(model.items_of_type("wind"))
+	_renewables.append_array(model.items_of_type("hydro"))
+	_renewables.append_array(model.items_of_type("panel"))
+	for item: Dictionary in _renewables:
 		var ty: String = item.get("type", "") as String
-		if ty != "wind" and ty != "hydro" and ty != "panel":
-			continue
 		var iid: String = item.get("id", "") as String
-		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(false)
 		var scene_path: String = str(specs.get("scene_device_path", item.get("device_path", "")))
 		if not scene_path.is_empty():
 			var scene_node: Node = get_tree().root.get_node_or_null(NodePath(scene_path))
@@ -6870,10 +11817,14 @@ func _tick_graph_renewables(delta: float) -> void:
 			kw = WindTurbineSource.power_kw_from_graph_specs(specs, hour, real_wind_10m)
 		else:
 			# Prefer site-plan head / penstock / Q when hydro + intake have elevations.
-			var head_specs := specs.duplicate(true)
+			# Culvert stage-discharge overrides watershed Q when the intake is a pond.
+			var head_specs := specs.duplicate(false)
 			var intake := _hydro_intake_item(item)
+			var culvert_snap := _hydro_section_snapshot_for_intake(intake)
 			var derived := _derived_hydro_head_m(item, intake)
-			if derived >= 0.0:
+			if not culvert_snap.is_empty() and not bool(specs.get("lock_gross_head", false)):
+				derived = float(culvert_snap.get("gross_head_m", derived))
+			if derived >= 0.0 and not bool(specs.get("lock_gross_head", false)):
 				head_specs["gross_head_m"] = derived
 			var pen := _derived_hydro_penstock_m(item, intake)
 			if pen >= 0.0:
@@ -6882,14 +11833,19 @@ func _tick_graph_renewables(delta: float) -> void:
 				if absf(float(specs.get("penstock_length_m", 0.0)) - pen) >= 0.5:
 					specs["penstock_length_m"] = pen
 					specs_dirty = true
-			var q_est := _derived_hydro_flow_lps(item, intake, month, day, hour)
-			if q_est >= 0.0:
+			var q_est := -1.0
+			if not culvert_snap.is_empty() and not bool(specs.get("lock_design_flow", false)):
+				q_est = float(culvert_snap.get("live_q_lps", -1.0))
+			if q_est < 0.0:
+				q_est = _derived_hydro_flow_lps(item, intake, month, day, hour)
+			if q_est >= 0.0 and not bool(specs.get("lock_design_flow", false)):
 				head_specs["design_flow_lps"] = q_est
 			kw = HydroSource.power_kw_from_graph_specs(head_specs, month, precip_mults)
 		if absf(float(specs.get("current_output_kw", 0.0)) - kw) < 0.0005 and not specs_dirty:
 			continue
 		specs["current_output_kw"] = kw
 		model.update_item(iid, {"specs": specs})
+	refresh_hydro_section_panel()
 
 
 const _CspTroughSource := preload("res://power_system/sources/csp_trough_source.gd")
@@ -6941,12 +11897,11 @@ func _tick_graph_csp(delta: float) -> void:
 	var ws := get_node_or_null("/root/WeatherService")
 	var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, ws)
 
-	for item: Dictionary in model.items:
-		if str(item.get("type", "")) != "processor":
+	for item: Dictionary in model.items_of_type("processor"):
+		var specs_ref: Dictionary = item.get("specs", {})
+		if str(specs_ref.get("role", "")) != "csp_concentrator":
 			continue
-		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-		if str(specs.get("role", "")) != "csp_concentrator":
-			continue
+		var specs: Dictionary = specs_ref.duplicate(false)
 		var iid: String = item.get("id", "") as String
 		var result := _CspTroughSource.simulate(specs, sun_az, sun_el, weather)
 
@@ -6974,6 +11929,89 @@ func _tick_graph_csp(delta: float) -> void:
 			out0["rate"] = result.get("steam_kg_h", 0.0)
 			outputs[0] = out0
 			specs["outputs"] = outputs
+
+		model.update_item(iid, {"specs": specs})
+
+
+const _HomeBiogasSource := preload("res://power_system/sources/home_biogas_source.gd")
+const _BIODIGESTER_POLL_INTERVAL := 0.25
+var _biodigester_acc: float = _BIODIGESTER_POLL_INTERVAL
+
+
+## Recompute live biogas + fertilizer output for "processor" items with
+## specs.role == "biodigester" (HomeBiogas 2.0). Physics in
+## power_system/sources/home_biogas_source.gd (feed setpoint × temp derate).
+## Drives input/output rates so ResourceFlowEngine (`io_absolute`) moves the
+## right mass through food-waste/manure + water → biogas + liquid fertilizer.
+func _tick_graph_biodigester(delta: float) -> void:
+	if model == null:
+		return
+	_biodigester_acc += delta
+	if _biodigester_acc < _BIODIGESTER_POLL_INTERVAL:
+		return
+	_biodigester_acc = 0.0
+
+	var ambient_c := _ambient_temp_c_for_voc()
+
+	for item: Dictionary in model.items_of_type("processor"):
+		var specs_ref: Dictionary = item.get("specs", {})
+		if str(specs_ref.get("role", "")) != "biodigester":
+			continue
+		var specs: Dictionary = specs_ref.duplicate(false)
+		var iid: String = item.get("id", "") as String
+		var result := _HomeBiogasSource.simulate(specs, ambient_c)
+
+		var prev_feed_kind := ""
+		var prev_inputs: Array = specs.get("inputs", []) as Array
+		if not prev_inputs.is_empty() and prev_inputs[0] is Dictionary:
+			prev_feed_kind = str((prev_inputs[0] as Dictionary).get("kind", ""))
+		var dirty := absf(float(specs.get("biogas_m3_h", 0.0)) - float(result.get("biogas_m3_h", 0.0))) > 0.00005 \
+			or absf(float(specs.get("temp_factor", 1.0)) - float(result.get("temp_factor", 1.0))) > 0.005 \
+			or absf(float(specs.get("feed_fraction", 0.0)) - float(result.get("feed_fraction", 0.0))) > 0.005 \
+			or absf(float(specs.get("ambient_temp_c", 20.0)) - float(result.get("ambient_temp_c", 20.0))) > 0.25 \
+			or prev_feed_kind != str(result.get("feed_kind", "food_waste"))
+		if not dirty:
+			continue
+
+		specs["ambient_temp_c"] = result.get("ambient_temp_c", ambient_c)
+		specs["temp_factor"] = result.get("temp_factor", 1.0)
+		specs["feed_fraction"] = result.get("feed_fraction", 0.0)
+		specs["biogas_m3_h"] = result.get("biogas_m3_h", 0.0)
+		specs["fertilizer_lph"] = result.get("fertilizer_lph", 0.0)
+		specs["cooking_hours_day"] = result.get("cooking_hours_day", 0.0)
+		specs["biogas_m3_day"] = result.get("biogas_m3_day", 0.0)
+		specs["methane_m3_day"] = result.get("methane_m3_day", 0.0)
+
+		var feed_kind := str(result.get("feed_kind", "food_waste"))
+		var inputs: Array = (specs.get("inputs", []) as Array).duplicate(true)
+		while inputs.size() < 2:
+			inputs.append({"kind": "water", "rate": 0.0, "unit": "L/h"})
+		var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+		inp0["kind"] = feed_kind
+		inp0["rate"] = result.get("feed_lph", 0.0)
+		inp0["unit"] = "L/h"
+		inputs[0] = inp0
+		var inp1: Dictionary = (inputs[1] as Dictionary).duplicate(true)
+		inp1["kind"] = "water"
+		inp1["rate"] = result.get("water_lph", 0.0)
+		inp1["unit"] = "L/h"
+		inputs[1] = inp1
+		specs["inputs"] = inputs
+
+		var outputs: Array = (specs.get("outputs", []) as Array).duplicate(true)
+		while outputs.size() < 2:
+			outputs.append({"kind": "biogas", "rate": 0.0, "unit": "m³/h"})
+		var out0: Dictionary = (outputs[0] as Dictionary).duplicate(true)
+		out0["kind"] = "biogas"
+		out0["rate"] = result.get("biogas_m3_h", 0.0)
+		out0["unit"] = "m³/h"
+		outputs[0] = out0
+		var out1: Dictionary = (outputs[1] as Dictionary).duplicate(true)
+		out1["kind"] = "liquid_fertilizer"
+		out1["rate"] = result.get("fertilizer_lph", 0.0)
+		out1["unit"] = "L/h"
+		outputs[1] = out1
+		specs["outputs"] = outputs
 
 		model.update_item(iid, {"specs": specs})
 
@@ -7027,12 +12065,11 @@ func _tick_graph_heliostat(delta: float) -> void:
 	var ws := get_node_or_null("/root/WeatherService")
 	var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, ws)
 
-	for item: Dictionary in model.items:
-		if str(item.get("type", "")) != "processor":
+	for item: Dictionary in model.items_of_type("processor"):
+		var specs_ref: Dictionary = item.get("specs", {})
+		if str(specs_ref.get("role", "")) != "heliostat":
 			continue
-		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-		if str(specs.get("role", "")) != "heliostat":
-			continue
+		var specs: Dictionary = specs_ref.duplicate(false)
 		var iid: String = item.get("id", "") as String
 		var result := _HeliostatSource.simulate(specs, sun_az, sun_el, weather)
 
@@ -7065,6 +12102,953 @@ func _tick_graph_heliostat(delta: float) -> void:
 			specs["outputs"] = outputs
 
 		model.update_item(iid, {"specs": specs})
+
+
+const _CartesianMachineSource := preload("res://power_system/sources/cartesian_machine_source.gd")
+const _PpBeamExtruderSource := preload("res://power_system/sources/pp_beam_extruder_source.gd")
+const _PpSheetPressSource := preload("res://power_system/sources/pp_sheet_press_source.gd")
+const _MACHINE_SETUP_MODAL := preload("res://scenes/ui/machine_setup_modal.gd")
+const _CONNECTION_PORT_MODAL := preload("res://scenes/ui/connection_port_modal.gd")
+const _CONDUIT_STYLE_MODAL := preload("res://scenes/ui/conduit_style_modal.gd")
+const _INVENTORY_PANEL := preload("res://scenes/ui/inventory_panel.gd")
+const _PRINT_SETUP_MODAL := preload("res://scenes/ui/print_setup_modal.gd")
+const _MUD_BUILDING_DESIGNER := preload("res://scenes/ui/mud_building_designer_modal.gd")
+const _TOOLS_POLL_INTERVAL := 0.2
+var _tools_acc: float = _TOOLS_POLL_INTERVAL
+const _PP_EXTRUDER_POLL_INTERVAL := 0.2
+var _pp_extruder_acc: float = _PP_EXTRUDER_POLL_INTERVAL
+const _PP_SHEET_POLL_INTERVAL := 0.2
+var _pp_sheet_acc: float = _PP_SHEET_POLL_INTERVAL
+var _machine_setup_modal: Control = null
+var _connection_port_modal: Control = null
+var _conduit_style_modal: Control = null
+var _inventory_panel: Control = null
+var _print_setup_modal: Control = null
+var _mud_building_designer: Control = null
+
+
+## Live job scheduler for "processor" items with specs.role == "cartesian_machine"
+## (CNC router / flake 3D printer). The authority for machine job state: it
+## advances a SCRUB-SAFE progress (pure function of the absolute-hours clock, via
+## CartesianMachineSource.progress_at — like the sun trackers), drives the
+## material feed rate (specs.inputs[0].rate so ResourceFlowEngine debits the
+## wired feedstock tank), holds the running power draw (item.batch_active_watts,
+## read by graph_ac_load), and on completion credits the fabricated part to the
+## per-map PartInventory. The 3D CncMachineRuntime reads progress back (via
+## get_cnc_job_state) to trace the toolpath.
+func _tick_graph_tools(delta: float) -> void:
+	if model == null:
+		return
+	_tools_acc += delta
+	if _tools_acc < _TOOLS_POLL_INTERVAL:
+		return
+	_tools_acc = 0.0
+
+	var m := _get_scene_main_node()
+	var abs_hours := 0.0
+	if m != null and m.has_method("get_absolute_hours"):
+		abs_hours = float(m.call("get_absolute_hours"))
+
+	for item: Dictionary in model.items_of_type("processor"):
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary)
+		if str(specs.get("role", "")) != "cartesian_machine":
+			continue
+		var iid: String = item.get("id", "") as String
+		var active := bool(specs.get("job_active", false))
+		var progress := _CartesianMachineSource.progress_at(specs, abs_hours)
+		var running := active and progress < 1.0
+
+		var new_specs: Dictionary = specs.duplicate(true)
+		var mat_rate := _CartesianMachineSource.material_rate_per_hr(specs) if running else 0.0
+		var inputs: Array = (new_specs.get("inputs", []) as Array).duplicate(true)
+		if not inputs.is_empty() and inputs[0] is Dictionary:
+			var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+			inp0["rate"] = mat_rate
+			inputs[0] = inp0
+			new_specs["inputs"] = inputs
+		new_specs["requested_state"] = "on" if running else "off"
+		new_specs["job_progress"] = progress
+		var watts := float(new_specs.get("watts", 0.0)) if running else 0.0
+
+		var completed_now := false
+		if active and progress >= 1.0 and not bool(specs.get("job_completed", false)):
+			new_specs["job_active"] = false
+			new_specs["job_completed"] = true
+			new_specs["requested_state"] = "off"
+			completed_now = true
+
+		var prev_progress := float(specs.get("job_progress", -1.0))
+		var prev_watts := float(item.get("batch_active_watts", -1.0))
+		var dirty := completed_now or absf(prev_progress - progress) > 0.005 \
+			or absf(prev_watts - watts) > 0.5
+		if not dirty:
+			continue
+		model.update_item(iid, {"specs": new_specs, "batch_active_watts": watts})
+		if completed_now:
+			# Cut-preset feedstock was already spent; don't restore on later Cancel.
+			new_specs.erase("job_consume_part_id")
+			new_specs.erase("job_consume_qty")
+			new_specs.erase("job_consume_label")
+			model.update_item(iid, {"specs": new_specs, "batch_active_watts": watts})
+			if bool(new_specs.get("print_persist", false)):
+				# Mud/clay/concrete print: the object dries in place on the map
+				# (persistence handled by the 3D runtime -> terrain loader), so it
+				# is NOT credited to the crafting inventory.
+				_show_toast("%s finished: print dried in place" % str(new_specs.get("name", "Printer")))
+			else:
+				_credit_fabricated_part(new_specs)
+
+
+## Read model for the 3D runtime: current job progress (clock-derived, smooth)
+## and the job path id so CncMachineRuntime can load + trace the toolpath.
+func get_cnc_job_state(item_id: String) -> Dictionary:
+	if model == null or item_id.is_empty():
+		return {}
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return {}
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(specs.get("role", "")) != "cartesian_machine":
+		return {}
+	var m := _get_scene_main_node()
+	var abs_hours := 0.0
+	if m != null and m.has_method("get_absolute_hours"):
+		abs_hours = float(m.call("get_absolute_hours"))
+	var mid := str(specs.get("model_id", ""))
+	var kind := str(specs.get("machine_kind", ""))
+	var bed_lowering := bool(specs.get("bed_lowering",
+		kind == "trash" or mid == "trash_printer"))
+	return {
+		"active": bool(specs.get("job_active", false)),
+		"completed": bool(specs.get("job_completed", false)),
+		"job_id": str(specs.get("job_id", "")),
+		"progress": _CartesianMachineSource.progress_at(specs, abs_hours),
+		"additive": str(specs.get("machine_role", "")) == "fdm_printer",
+		"machine_kind": kind,
+		"print_persist": bool(specs.get("print_persist", false)),
+		"bed_lowering": bed_lowering,
+		"print_mesh_path": str(specs.get("print_mesh_path", "")),
+		"print_offset_x": float(specs.get("print_offset_x", 0.0)),
+		"print_offset_z": float(specs.get("print_offset_z", 0.0)),
+		"print_scale": float(specs.get("print_scale", 1.0)),
+		"wet_color": specs.get("wet_color", [0.36, 0.26, 0.17]),
+		"dry_color": specs.get("dry_color", [0.68, 0.56, 0.42]),
+		"layer_height_mm": float(specs.get("layer_height_mm", 50.0)),
+		"line_width_mm": float(specs.get("line_width_mm",
+			specs.get("nozzle_diameter_mm", 76.2))),
+	}
+
+
+## Schedule a parsed G-code/STL job on a cartesian_machine node. `parse` is the
+## dict from Toolpath/StlLoader. Returns true on success.
+## Optional extra_specs keys: job_consume_part_id / job_consume_qty — inventory
+## already debited by the caller (e.g. CNC cut presets); cancel restores them.
+func start_machine_job(item_id: String, parse: Dictionary, part_id: String,
+		part_label: String, part_count: int, extra_specs: Dictionary = {}) -> bool:
+	if model == null or parse.is_empty() or not bool(parse.get("ok", true)):
+		return false
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	if str(specs.get("role", "")) != "cartesian_machine":
+		return false
+	for k: String in extra_specs.keys():
+		specs[k] = extra_specs[k]
+	var job := _CartesianMachineSource.derive_job(parse, specs)
+	var job_id := MachineJobStore.save(parse)
+	var m := _get_scene_main_node()
+	var abs_hours := 0.0
+	if m != null and m.has_method("get_absolute_hours"):
+		abs_hours = float(m.call("get_absolute_hours"))
+	specs["job_active"] = true
+	specs["job_completed"] = false
+	specs["job_id"] = job_id
+	specs["job_name"] = str(part_label) if not part_label.is_empty() else "Job"
+	specs["job_start_abs_hours"] = abs_hours
+	specs["job_duration_hr"] = float(job.get("duration_hr", 0.0))
+	specs["job_material_kind"] = str(job.get("material_kind", ""))
+	specs["job_material_qty"] = float(job.get("material_qty", 0.0))
+	specs["job_energy_kwh"] = float(job.get("energy_kwh", 0.0))
+	specs["job_progress"] = 0.0
+	specs["job_part_id"] = part_id if not part_id.is_empty() else part_label.to_snake_case()
+	specs["job_part_label"] = part_label if not part_label.is_empty() else part_id
+	specs["job_part_count"] = maxi(part_count, 1)
+	specs["requested_state"] = "on"
+	model.update_item(item_id, {"specs": specs})
+	_schedule_graph_autosave()
+	return true
+
+
+## Start a built-in CNC cut preset: debit one beam from inventory, run the strut
+## STL toolpath, credit the finished A/B strut on completion.
+func start_cnc_cut_preset(item_id: String, preset_id: String) -> Dictionary:
+	var preset: Dictionary = _CncCutPresets.find(preset_id)
+	if preset.is_empty():
+		return {"ok": false, "error": "unknown preset"}
+	if model == null:
+		return {"ok": false, "error": "no graph"}
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return {"ok": false, "error": "missing node"}
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(specs.get("machine_role", "")) != "cnc_router" \
+			and str(specs.get("model_id", "")) != "cnc_router":
+		return {"ok": false, "error": "not a CNC router"}
+	if bool(specs.get("job_active", false)):
+		return {"ok": false, "error": "job already running"}
+	var main := _get_scene_main_node()
+	var loader := _find_terrain_loader(main) if main != null else null
+	if loader == null or not loader.has_method("get_part_inventory"):
+		return {"ok": false, "error": "no inventory"}
+	var inv: PartInventory = loader.call("get_part_inventory") as PartInventory
+	if inv == null:
+		return {"ok": false, "error": "no inventory"}
+	var need := maxi(int(preset.get("consume_qty", 1)), 1)
+	if inv.count_beam_feedstock() < need:
+		return {"ok": false, "error": "need %d recycled plastic beam(s) in inventory" % need}
+	var consumed_id := inv.consume_beam_feedstock(need)
+	if consumed_id.is_empty():
+		return {"ok": false, "error": "could not debit beam feedstock"}
+	if loader.has_method("save_part_inventory"):
+		loader.call("save_part_inventory")
+	var stl_path := str(preset.get("stl_path", ""))
+	var parse := StlLoader.parse_file(stl_path, {
+		"mode": "solid",
+		"layer_height_mm": 2.0,
+		"line_width_mm": 6.0,
+		"print_speed_mm_s": 40.0,
+		"scale": 1.0,
+	})
+	if not bool(parse.get("ok", false)):
+		# Restore feedstock if the toolpath failed to load.
+		inv.add_part(consumed_id, need, {
+			"label": _DomeParts.label_for(_DomeParts.PART_BEAM),
+			"material_kind": "plastic_flake",
+			"source": "cnc_cut_restore",
+		})
+		if loader.has_method("save_part_inventory"):
+			loader.call("save_part_inventory")
+		return {"ok": false, "error": "could not load strut toolpath"}
+	var produce_id := str(preset.get("produce_part_id", ""))
+	var produce_label := str(preset.get("produce_label", produce_id))
+	var ok := start_machine_job(item_id, parse, produce_id, produce_label, 1, {
+		"job_consume_part_id": consumed_id,
+		"job_consume_qty": need,
+		"job_consume_label": _DomeParts.label_for(_DomeParts.PART_BEAM),
+		"job_material_kind": "plastic_flake",
+	})
+	if not ok:
+		inv.add_part(consumed_id, need, {
+			"label": _DomeParts.label_for(_DomeParts.PART_BEAM),
+			"material_kind": "plastic_flake",
+			"source": "cnc_cut_restore",
+		})
+		if loader.has_method("save_part_inventory"):
+			loader.call("save_part_inventory")
+		return {"ok": false, "error": "could not start cut job"}
+	return {"ok": true, "produce": produce_label, "consumed": consumed_id}
+
+
+func cancel_machine_job(item_id: String) -> void:
+	if model == null:
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	# Restore beam feedstock debited for a cut preset that never finished.
+	var consume_id := str(specs.get("job_consume_part_id", ""))
+	var consume_qty := maxi(int(specs.get("job_consume_qty", 0)), 0)
+	if not consume_id.is_empty() and consume_qty > 0 and bool(specs.get("job_active", false)):
+		var main := _get_scene_main_node()
+		var loader := _find_terrain_loader(main) if main != null else null
+		if loader != null and loader.has_method("get_part_inventory"):
+			var inv: PartInventory = loader.call("get_part_inventory") as PartInventory
+			if inv != null:
+				inv.add_part(consume_id, consume_qty, {
+					"label": str(specs.get("job_consume_label", _DomeParts.label_for(_DomeParts.PART_BEAM))),
+					"material_kind": "plastic_flake",
+					"source": "cnc_cut_cancel",
+				})
+				if loader.has_method("save_part_inventory"):
+					loader.call("save_part_inventory")
+	specs.erase("job_consume_part_id")
+	specs.erase("job_consume_qty")
+	specs.erase("job_consume_label")
+	specs["job_active"] = false
+	specs["requested_state"] = "off"
+	var inputs: Array = (specs.get("inputs", []) as Array).duplicate(true)
+	if not inputs.is_empty() and inputs[0] is Dictionary:
+		var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+		inp0["rate"] = 0.0
+		inputs[0] = inp0
+		specs["inputs"] = inputs
+	model.update_item(item_id, {"specs": specs, "batch_active_watts": 0.0})
+
+
+## Credit a completed machine job's output part to the per-map inventory (owned
+## by the terrain loader). Groundwork for the crafting mechanic.
+func _credit_fabricated_part(specs: Dictionary) -> void:
+	var part_id := str(specs.get("job_part_id", ""))
+	if part_id.is_empty():
+		return
+	var count := maxi(int(specs.get("job_part_count", 1)), 1)
+	var label := str(specs.get("job_part_label", part_id))
+	var meta := {
+		"label": label,
+		"material_kind": str(specs.get("job_material_kind", "")),
+		"mass_kg": float(specs.get("job_material_qty", 0.0)),
+		"source": str(specs.get("name", "machine")),
+	}
+	var main := _get_scene_main_node()
+	var loader := _find_terrain_loader(main) if main != null else null
+	if loader != null and loader.has_method("credit_part"):
+		loader.call("credit_part", part_id, count, meta)
+		_show_part_up_toast(label, count)
+
+
+## Green "+N UP!" achievement toast (global ToastUI) with Inventory shortcut.
+func _show_part_up_toast(label: String, count: int) -> void:
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("show_part_up"):
+		main.call("show_part_up", label, count)
+		return
+	var toast: Variant = main.get("toast_ui") if main != null else null
+	if toast != null and is_instance_valid(toast) and toast.has_method("show_part_up"):
+		toast.call("show_part_up", label, count)
+
+
+## Precious Plastic beam extruder: while RUNNING, advance extruded length from
+## flake throughput × sim-hours; cut at cut_length_m and credit inventory parts
+## (same PartInventory path as CNC). 3D PpBeamExtruderRuntime reads state via
+## get_pp_extruder_state.
+func _tick_graph_pp_extruder(delta: float) -> void:
+	if model == null:
+		return
+	_pp_extruder_acc += delta
+	if _pp_extruder_acc < _PP_EXTRUDER_POLL_INTERVAL:
+		return
+	_pp_extruder_acc = 0.0
+
+	var m := _get_scene_main_node()
+	var abs_hours := 0.0
+	if m != null and m.has_method("get_absolute_hours"):
+		abs_hours = float(m.call("get_absolute_hours"))
+
+	for item: Dictionary in model.items_of_type("processor"):
+		var specs_ref: Dictionary = item.get("specs", {})
+		if str(specs_ref.get("role", "")) != "pp_beam_extruder":
+			continue
+		var specs: Dictionary = specs_ref.duplicate(false)
+		var iid: String = item.get("id", "") as String
+		var running := str(specs.get("node_state", "")).to_lower() == GraphNodeState.RUNNING
+		var last_h := float(specs.get("extrude_last_abs_hours", -1.0))
+		var dt_h := 0.0
+		if last_h >= 0.0:
+			dt_h = abs_hours - last_h
+		# Large jumps (load / scrub): don't invent hours of extrusion; just re-anchor.
+		if dt_h < 0.0 or dt_h > 2.0:
+			dt_h = 0.0
+
+		var result := _PpBeamExtruderSource.advance(specs, dt_h, running)
+		var beams := int(result.get("beams_cut", 0))
+
+		specs["extruded_length_m"] = result.get("extruded_length_m", 0.0)
+		specs["meters_per_hour"] = result.get("meters_per_hour", 0.0)
+		specs["extrude_fill_fraction"] = result.get("fill_fraction", 0.0)
+		# Always persist the clock anchor. A dirty-threshold gate previously
+		# skipped tiny 1×-speed steps so last_h never advanced and length
+		# looked frozen in the inspector until a large jump landed.
+		specs["extrude_last_abs_hours"] = abs_hours
+
+		# Demand rate stays at the rated flake_kg_h so ResourceFlowEngine can
+		# transition READY→RUNNING; length only advances while RUNNING.
+		var flake_rate := float(specs.get("flake_kg_h", 5.0))
+		var inputs: Array = (specs.get("inputs", []) as Array).duplicate(true)
+		if not inputs.is_empty() and inputs[0] is Dictionary:
+			var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+			inp0["kind"] = "plastic_flake"
+			inp0["rate"] = flake_rate
+			inp0["unit"] = "kg/h"
+			inputs[0] = inp0
+			specs["inputs"] = inputs
+
+		if beams > 0:
+			var cut_len := float(result.get("cut_length_m", specs.get("cut_length_m", 2.0)))
+			var cut_mass := float(result.get("cut_mass_kg", 0.0)) / float(beams)
+			specs["beams_cut_total"] = int(specs.get("beams_cut_total", 0)) + beams
+			specs["job_part_count"] = beams
+			specs["job_material_kind"] = "plastic_flake"
+			specs["job_material_qty"] = cut_mass
+			# Beams are feedstock — CNC cut presets finish them into A/B struts.
+			specs["job_part_id"] = _DomeParts.PART_BEAM
+			specs["job_part_label"] = "%s (%.2f m)" % [
+				_DomeParts.label_for(_DomeParts.PART_BEAM), cut_len]
+			_credit_fabricated_part(specs)
+
+		model.update_item(iid, {"specs": specs})
+		_refresh_pp_extruder_inspector_if_selected(iid)
+
+
+func _refresh_pp_extruder_inspector_if_selected(item_id: String) -> void:
+	if _inspector_panel == null or not is_instance_valid(_inspector_panel):
+		return
+	if not _inspector_panel.has_method("refresh_pp_extruder_live"):
+		return
+	var sel := ""
+	if _inspector_panel.has_method("current_item_id"):
+		sel = str(_inspector_panel.call("current_item_id"))
+	if sel == item_id:
+		_inspector_panel.call("refresh_pp_extruder_live")
+
+
+## Read model for PpBeamExtruderRuntime (3D grow/cut animation).
+func get_pp_extruder_state(item_id: String) -> Dictionary:
+	if model == null or item_id.is_empty():
+		return {}
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return {}
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(specs.get("role", "")) != "pp_beam_extruder":
+		return {}
+	return {
+		"extruded_length_m": float(specs.get("extruded_length_m", 0.0)),
+		"cut_length_m": float(specs.get("cut_length_m", 2.0)),
+		"meters_per_hour": float(specs.get("meters_per_hour", 0.0)),
+		"fill_fraction": float(specs.get("extrude_fill_fraction", 0.0)),
+		"running": str(specs.get("node_state", "")).to_lower() == GraphNodeState.RUNNING,
+		"beams_cut_total": int(specs.get("beams_cut_total", 0)),
+	}
+
+
+## Precious Plastic sheet press: batch cycle (melt → cool under pressure).
+## Auto-starts when switched on + auto_cycle; pauses the clock while starved /
+## unpowered; credits a 1 m² sheet to PartInventory on complete. Instantaneous
+## heater draw is written to specs.watts so ResourceFlowEngine / AC wires see the
+## warm-up peak + thermostat cycling.
+func _tick_graph_pp_sheet_press(_delta: float) -> void:
+	if model == null:
+		return
+	_pp_sheet_acc += _delta
+	if _pp_sheet_acc < _PP_SHEET_POLL_INTERVAL:
+		return
+	_pp_sheet_acc = 0.0
+
+	var m := _get_scene_main_node()
+	var abs_hours := 0.0
+	if m != null and m.has_method("get_absolute_hours"):
+		abs_hours = float(m.call("get_absolute_hours"))
+
+	for item: Dictionary in model.items_of_type("processor"):
+		var specs_ref: Dictionary = item.get("specs", {})
+		if str(specs_ref.get("role", "")) != "pp_sheet_press":
+			continue
+		var specs: Dictionary = specs_ref.duplicate(false)
+		var iid: String = item.get("id", "") as String
+		var ns := str(specs.get("node_state", "")).to_lower()
+		var running := ns == GraphNodeState.RUNNING
+		var switched_on := str(specs.get("requested_state", "on")).to_lower() != "off"
+		var active := bool(specs.get("job_active", false))
+
+		# Auto-queue the next sheet when idle.
+		if not active and switched_on and bool(specs.get("auto_cycle", true)):
+			if start_pp_sheet_press_job(iid):
+				# Re-read after start.
+				item = model.get_item(iid)
+				specs = (item.get("specs", {}) as Dictionary).duplicate(true)
+				active = bool(specs.get("job_active", false))
+
+		if not active:
+			# Standby: advertise peak so the inspector shows nameplate draw.
+			var peak := float(specs.get("peak_watts", _PpSheetPressSource.PEAK_WATTS))
+			var prev_w := float(specs.get("watts", -1.0))
+			var inputs_idle: Array = (specs.get("inputs", []) as Array).duplicate(true)
+			if not inputs_idle.is_empty() and inputs_idle[0] is Dictionary:
+				var inp_i: Dictionary = (inputs_idle[0] as Dictionary).duplicate(true)
+				if absf(float(inp_i.get("rate", 0.0))) > 1e-6:
+					inp_i["rate"] = 0.0
+					inputs_idle[0] = inp_i
+					specs["inputs"] = inputs_idle
+					model.update_item(iid, {"specs": specs, "batch_active_watts": 0.0})
+				elif absf(prev_w - peak) > 1.0:
+					specs["watts"] = peak
+					model.update_item(iid, {"specs": specs, "batch_active_watts": 0.0})
+			continue
+
+		# Freeze absolute-hour progress while not RUNNING (starved / no power),
+		# but keep flake demand so ResourceFlowEngine can still enter RUNNING.
+		var progress := _PpSheetPressSource.progress_at(specs, abs_hours)
+		if not running:
+			var dur := maxf(float(specs.get("job_duration_hr", 0.0)), _PpSheetPressSource.MIN_JOB_HOURS)
+			specs["job_start_abs_hours"] = abs_hours - progress * dur
+			specs["job_phase"] = _PpSheetPressSource.phase_at(specs, abs_hours)
+			specs["job_progress"] = progress
+			specs["watts"] = float(specs.get("peak_watts", _PpSheetPressSource.PEAK_WATTS))
+			var mat_qty_wait := float(specs.get("job_material_qty", 0.0))
+			var mat_rate_wait := mat_qty_wait / dur if mat_qty_wait > 0.0 else 0.0
+			var inputs_p: Array = (specs.get("inputs", []) as Array).duplicate(true)
+			if not inputs_p.is_empty() and inputs_p[0] is Dictionary:
+				var inp_p: Dictionary = (inputs_p[0] as Dictionary).duplicate(true)
+				inp_p["kind"] = "plastic_flake"
+				inp_p["rate"] = mat_rate_wait
+				inp_p["unit"] = "kg/h"
+				inputs_p[0] = inp_p
+				specs["inputs"] = inputs_p
+			model.update_item(iid, {"specs": specs, "batch_active_watts": 0.0})
+			continue
+
+		progress = _PpSheetPressSource.progress_at(specs, abs_hours)
+		var phase := _PpSheetPressSource.phase_at(specs, abs_hours)
+		var watts := _PpSheetPressSource.power_watts_at(specs, abs_hours)
+		# Spread flake demand over the full cycle so ResourceFlowEngine keeps a
+		# positive I/O rate (cool phase would otherwise look idle).
+		var mat_rate := 0.0
+		var mat_qty := float(specs.get("job_material_qty", 0.0))
+		var dur_h := maxf(float(specs.get("job_duration_hr", 0.0)), _PpSheetPressSource.MIN_JOB_HOURS)
+		if mat_qty > 0.0 and progress < 1.0:
+			mat_rate = mat_qty / dur_h
+
+		var new_specs: Dictionary = specs.duplicate(true)
+		new_specs["job_progress"] = progress
+		new_specs["job_phase"] = phase
+		new_specs["watts"] = watts
+		var inputs: Array = (new_specs.get("inputs", []) as Array).duplicate(true)
+		if not inputs.is_empty() and inputs[0] is Dictionary:
+			var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+			inp0["kind"] = "plastic_flake"
+			inp0["rate"] = mat_rate
+			inp0["unit"] = "kg/h"
+			inputs[0] = inp0
+			new_specs["inputs"] = inputs
+		new_specs["requested_state"] = "on"
+
+		var completed_now := false
+		if progress >= 1.0 and not bool(specs.get("job_completed", false)):
+			new_specs["job_active"] = false
+			new_specs["job_completed"] = true
+			new_specs["job_phase"] = "done"
+			new_specs["watts"] = 0.0
+			if not inputs.is_empty() and inputs[0] is Dictionary:
+				var inp_done: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+				inp_done["rate"] = 0.0
+				inputs[0] = inp_done
+				new_specs["inputs"] = inputs
+			completed_now = true
+
+		var prev_progress := float(specs.get("job_progress", -1.0))
+		var prev_watts := float(item.get("batch_active_watts", -1.0))
+		var dirty := completed_now or absf(prev_progress - progress) > 0.002 \
+			or absf(prev_watts - watts) > 25.0 \
+			or str(specs.get("job_phase", "")) != phase
+		if not dirty:
+			continue
+		model.update_item(iid, {"specs": new_specs, "batch_active_watts": watts})
+		if completed_now:
+			new_specs["sheets_pressed_total"] = int(specs.get("sheets_pressed_total", 0)) + 1
+			new_specs["job_material_kind"] = "plastic_flake"
+			# Hybrid chore: unload step may require confirm before inventory credit.
+			var recipe := ProcessRecipeCatalog.find(str(new_specs.get("selected_recipe_id", "")))
+			var needs_unload_confirm := false
+			var unload_label := "Unload sheet"
+			var unload_hrs := 0.0
+			for s: Variant in ProcessRecipe.end_steps(recipe):
+				if s is Dictionary and bool((s as Dictionary).get("require_confirm", false)):
+					needs_unload_confirm = true
+					unload_label = str((s as Dictionary).get("label", unload_label))
+					unload_hrs = float((s as Dictionary).get("chore_hours", 0.0))
+					break
+			if needs_unload_confirm and not bool(new_specs.get("sheet_unload_confirmed", false)):
+				new_specs["recipe_waiting_chore"] = true
+				new_specs["recipe_waiting_step_id"] = "unload"
+				new_specs["recipe_waiting_label"] = unload_label
+				new_specs["recipe_waiting_chore_hrs"] = unload_hrs
+				new_specs["sheet_credit_pending"] = true
+				model.update_item(iid, {"specs": new_specs})
+				_on_recipe_chore_waiting(iid, {
+					"step_id": "unload",
+					"label": unload_label,
+					"chore_hours": unload_hrs,
+				})
+			else:
+				model.update_item(iid, {"specs": new_specs})
+				_credit_fabricated_part(new_specs)
+				# Allow auto_cycle to queue the next sheet on a later tick.
+				if bool(new_specs.get("auto_cycle", true)):
+					new_specs["job_completed"] = false
+					new_specs.erase("sheet_unload_confirmed")
+					model.update_item(iid, {"specs": new_specs})
+
+
+## Schedule one sheet-press cycle from the current thickness setpoint.
+func start_pp_sheet_press_job(item_id: String) -> bool:
+	if model == null or item_id.is_empty():
+		return false
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	if str(specs.get("role", "")) != "pp_sheet_press":
+		return false
+	if bool(specs.get("job_active", false)):
+		return false
+	var job := _PpSheetPressSource.derive_job(specs)
+	var m := _get_scene_main_node()
+	var abs_hours := 0.0
+	if m != null and m.has_method("get_absolute_hours"):
+		abs_hours = float(m.call("get_absolute_hours"))
+	specs["job_active"] = true
+	specs["job_completed"] = false
+	specs["job_start_abs_hours"] = abs_hours
+	specs["job_duration_hr"] = float(job.get("duration_hr", 0.0))
+	specs["job_melt_hr"] = float(job.get("melt_hr", 0.0))
+	specs["job_cool_hr"] = float(job.get("cool_hr", 0.0))
+	specs["job_material_qty"] = float(job.get("material_kg", 0.0))
+	specs["job_material_kind"] = "plastic_flake"
+	specs["job_avg_kwh_per_h"] = float(job.get("avg_kwh_per_h", 4.0))
+	specs["job_energy_kwh"] = float(job.get("energy_kwh", 0.0))
+	specs["job_progress"] = 0.0
+	specs["job_phase"] = "melt"
+	specs["sheet_thickness_mm"] = float(job.get("thickness_mm", 8.0))
+	specs["job_part_id"] = str(job.get("part_id", "pp_sheet"))
+	specs["job_part_label"] = str(job.get("part_label", "Recycled Plastic Sheet"))
+	specs["job_part_count"] = 1
+	specs["requested_state"] = "on"
+	# Seed a positive flake rate so ResourceFlowEngine can enter RUNNING.
+	var mat_rate := float(job.get("material_kg", 0.0)) / maxf(float(job.get("duration_hr", 1.0)), 0.01)
+	var inputs: Array = (specs.get("inputs", []) as Array).duplicate(true)
+	if inputs.is_empty():
+		inputs = [{"kind": "plastic_flake", "rate": mat_rate, "unit": "kg/h"}]
+	elif inputs[0] is Dictionary:
+		var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+		inp0["kind"] = "plastic_flake"
+		inp0["rate"] = mat_rate
+		inp0["unit"] = "kg/h"
+		inputs[0] = inp0
+	specs["inputs"] = inputs
+	specs["watts"] = float(specs.get("peak_watts", _PpSheetPressSource.PEAK_WATTS))
+	model.update_item(item_id, {"specs": specs})
+	_schedule_graph_autosave()
+	return true
+
+
+func cancel_pp_sheet_press_job(item_id: String) -> void:
+	if model == null:
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	specs["job_active"] = false
+	specs["job_completed"] = false
+	specs["job_phase"] = "idle"
+	specs["job_progress"] = 0.0
+	specs["watts"] = float(specs.get("peak_watts", _PpSheetPressSource.PEAK_WATTS))
+	var inputs: Array = (specs.get("inputs", []) as Array).duplicate(true)
+	if not inputs.is_empty() and inputs[0] is Dictionary:
+		var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+		inp0["rate"] = 0.0
+		inputs[0] = inp0
+		specs["inputs"] = inputs
+	model.update_item(item_id, {"specs": specs, "batch_active_watts": 0.0})
+
+
+## Read model for PpSheetPressRuntime (Z-axis + sheet reveal).
+func get_pp_sheet_press_state(item_id: String) -> Dictionary:
+	if model == null or item_id.is_empty():
+		return {}
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return {}
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(specs.get("role", "")) != "pp_sheet_press":
+		return {}
+	var m := _get_scene_main_node()
+	var abs_hours := 0.0
+	if m != null and m.has_method("get_absolute_hours"):
+		abs_hours = float(m.call("get_absolute_hours"))
+	return {
+		"active": bool(specs.get("job_active", false)),
+		"completed": bool(specs.get("job_completed", false)),
+		"phase": _PpSheetPressSource.phase_at(specs, abs_hours),
+		"progress": _PpSheetPressSource.progress_at(specs, abs_hours),
+		"compression": _PpSheetPressSource.compression_at(specs, abs_hours),
+		"thickness_mm": float(specs.get("sheet_thickness_mm", 8.0)),
+		"z_stroke_m": float(specs.get("z_stroke_m", 0.12)),
+		"watts": float(specs.get("watts", 0.0)),
+		"sheets_pressed_total": int(specs.get("sheets_pressed_total", 0)),
+	}
+
+
+## Open the Machine Setup modal (X/Y/Z axis tagging + jog calibration) for a
+## machine model. Lazily instantiated under the main UILayer.
+func open_machine_setup(model_id: String, item_id: String) -> void:
+	if model_id.is_empty():
+		return
+	if _machine_setup_modal == null or not is_instance_valid(_machine_setup_modal):
+		_machine_setup_modal = _MACHINE_SETUP_MODAL.new()
+		var main := _get_scene_main_node()
+		var ui := main.get_node_or_null("UILayer") if main != null else null
+		if ui != null:
+			ui.add_child(_machine_setup_modal)
+		else:
+			add_child(_machine_setup_modal)
+	_machine_setup_modal.call("open", model_id, item_id)
+
+
+## Open the Connection Port modal — tag plugs/inlets on a GLB for 3D conduits.
+## Live 3D conduit style preview for a focused/selected connection.
+func open_conduit_style_modal(conn_id: String) -> void:
+	if model == null or conn_id.is_empty():
+		return
+	var conn := model.get_connection(conn_id)
+	if conn.is_empty():
+		return
+	# Cancel in-world routing first — its HUD CanvasLayer sat above UILayer and
+	# RouteController._input was eating modal clicks via center-ray wire picks.
+	_cancel_conduit_routing_for_modal()
+	if _conduit_style_modal == null or not is_instance_valid(_conduit_style_modal):
+		_conduit_style_modal = _CONDUIT_STYLE_MODAL.new()
+		_conduit_style_modal.name = "ConduitStyleModal"
+		var main := _get_scene_main_node()
+		var ui := main.get_node_or_null("UILayer") if main != null else null
+		if ui != null:
+			var layer := ui.get_node_or_null("ConduitStyleLayer") as CanvasLayer
+			if layer == null:
+				layer = CanvasLayer.new()
+				layer.name = "ConduitStyleLayer"
+				layer.layer = UITheme.LAYER_MODAL
+				ui.add_child(layer)
+			layer.add_child(_conduit_style_modal)
+		else:
+			add_child(_conduit_style_modal)
+		if _conduit_style_modal.has_signal("style_applied") \
+				and not _conduit_style_modal.is_connected("style_applied", _on_conduit_style_applied):
+			_conduit_style_modal.connect("style_applied", _on_conduit_style_applied)
+	_conduit_style_modal.call("open", conn_id, model, _get_scene_main_node())
+
+
+func _cancel_conduit_routing_for_modal() -> void:
+	var main := _get_scene_main_node()
+	if main == null:
+		return
+	var player := main.get_node_or_null("Player")
+	if player != null:
+		var ctrl := player.get_node_or_null("ConduitRouteController")
+		if ctrl != null and ctrl.has_method("is_routing") and bool(ctrl.call("is_routing")) \
+				and ctrl.has_method("cancel_route"):
+			ctrl.call("cancel_route")
+	var route_ui := main.get_node_or_null("UILayer/ConduitRouteUI")
+	if route_ui != null and route_ui.has_method("hide_route"):
+		route_ui.call("hide_route")
+
+
+func _on_conduit_style_applied(_conn_id: String) -> void:
+	var mgr := _get_conduit_manager()
+	if mgr != null and mgr.has_method("sync_all"):
+		mgr.call("sync_all")
+	_schedule_graph_autosave()
+
+
+func open_connection_ports(item_id: String) -> void:
+	if model == null or item_id.is_empty():
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var model_id := str(specs.get("model_id", ""))
+	if model_id.is_empty():
+		_show_toast("This node has no linked 3D model")
+		return
+	if _connection_port_modal == null or not is_instance_valid(_connection_port_modal):
+		_connection_port_modal = _CONNECTION_PORT_MODAL.new()
+		var main := _get_scene_main_node()
+		var ui := main.get_node_or_null("UILayer") if main != null else null
+		if ui != null:
+			ui.add_child(_connection_port_modal)
+		else:
+			add_child(_connection_port_modal)
+		if _connection_port_modal.has_signal("ports_saved") \
+				and not _connection_port_modal.is_connected("ports_saved", _on_connection_ports_saved):
+			_connection_port_modal.connect("ports_saved", _on_connection_ports_saved)
+	# Pass full 2D handle dicts (id / polarity / direction / label) so the
+	# modal can list IN/OUT · type · name instead of free-form naming.
+	var handle_dicts: Array = []
+	var src_handles: Array = item.get("handles", []) as Array
+	if _graph_canvas != null and _graph_canvas.has_method("_resolved_handles"):
+		src_handles = _graph_canvas.call("_resolved_handles", item) as Array
+	for h2: Variant in src_handles:
+		if h2 is Dictionary:
+			handle_dicts.append((h2 as Dictionary).duplicate(true))
+	_connection_port_modal.call("open", model_id, item_id,
+		str(specs.get("bound_prop_id", "")), handle_dicts, model)
+
+
+func open_connection_ports_for_prop(prop_id: String) -> void:
+	if model == null or prop_id.is_empty():
+		return
+	var item_id := find_item_by_bound_prop_id(prop_id)
+	if item_id.is_empty():
+		# Open against the prop's model with no graph item.
+		var main := _get_scene_main_node()
+		var rec := PlacedPropService.get_prop_record(main, prop_id)
+		var mid := str(rec.get("model_id", ""))
+		if mid.is_empty():
+			return
+		if _connection_port_modal == null or not is_instance_valid(_connection_port_modal):
+			_connection_port_modal = _CONNECTION_PORT_MODAL.new()
+			var ui := main.get_node_or_null("UILayer") if main != null else null
+			if ui != null:
+				ui.add_child(_connection_port_modal)
+			else:
+				add_child(_connection_port_modal)
+			if _connection_port_modal.has_signal("ports_saved") \
+					and not _connection_port_modal.is_connected("ports_saved", _on_connection_ports_saved):
+				_connection_port_modal.connect("ports_saved", _on_connection_ports_saved)
+		_connection_port_modal.call("open", mid, "", prop_id, PackedStringArray())
+		return
+	open_connection_ports(item_id)
+
+
+func _on_connection_ports_saved(_model_id: String, prop_id: String) -> void:
+	if not prop_id.is_empty():
+		var main := _get_scene_main_node()
+		var prop := PlacedPropRuntime.find_by_prop_id(main, prop_id)
+		if prop != null:
+			var ports := ConnectionPortDefs.resolve_ports_for_prop(main, prop_id)
+			ConnectionPortDefs.sync_port_markers(prop, ports)
+	var mgr := _get_conduit_manager()
+	if mgr != null and mgr.has_method("sync_all"):
+		mgr.call("sync_all")
+	_schedule_graph_autosave()
+
+
+## Open the shared FDM Print Setup modal for a placed additive printer (aimed
+## via the crosshair). Returns true if handled — any machine_role=fdm_printer
+## (mud, trash, or future). The modal drives CncMachineRuntime's STL ghost live
+## and starts the job with placement/scale/color/slicer params.
+func open_print_setup_for_prop(prop_id: String) -> bool:
+	if model == null or prop_id.is_empty():
+		return false
+	var main := _get_scene_main_node()
+	if main == null:
+		return false
+	var prop := PlacedPropRuntime.find_by_prop_id(main, prop_id)
+	if prop == null:
+		return false
+	var runtime := prop.get_node_or_null("CncMachineRuntime")
+	if runtime == null:
+		return false
+	var item_id := str(runtime.get("graph_item_id"))
+	var item := model.get_item(item_id) if not item_id.is_empty() else {}
+	var mid := str(prop.model_id)
+	# Self-heal missing graph bind for known FDM printers.
+	if item.is_empty() and (mid == "mud_printer" or mid == "trash_printer"):
+		item_id = _rebind_printer_graph_node(prop_id, mid)
+		if item_id.is_empty():
+			return false
+		item = model.get_item(item_id)
+		runtime.set("graph_item_id", item_id)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	if str(specs.get("machine_role", "")) != "fdm_printer":
+		return false
+	if str(specs.get("model_id", "")).is_empty():
+		specs["model_id"] = mid
+	var kind := str(specs.get("machine_kind", ""))
+	if kind.is_empty():
+		if mid == "trash_printer":
+			specs["machine_kind"] = "trash"
+		elif mid == "mud_printer":
+			specs["machine_kind"] = "mud"
+	if _print_setup_modal == null or not is_instance_valid(_print_setup_modal):
+		_print_setup_modal = _PRINT_SETUP_MODAL.new()
+		var ui := main.get_node_or_null("UILayer")
+		if ui != null:
+			ui.add_child(_print_setup_modal)
+		else:
+			add_child(_print_setup_modal)
+	_print_setup_modal.call("open", runtime, item_id, self, specs)
+	return true
+
+
+## Open the Mud Building Designer. If item_id is empty, binds the first mud
+## printer graph node + its placed CncMachineRuntime (when available).
+func open_mud_building_designer(item_id: String = "") -> bool:
+	var iid := item_id
+	var specs: Dictionary = {}
+	var runtime: CncMachineRuntime = null
+	if iid.is_empty() and model != null:
+		for item: Dictionary in model.items:
+			if str(item.get("type", "")) != "processor":
+				continue
+			var sp: Dictionary = item.get("specs", {}) as Dictionary
+			if str(sp.get("model_id", "")) == "mud_printer" \
+					or str(sp.get("machine_kind", "")) == "mud":
+				iid = str(item.get("id", ""))
+				specs = sp
+				break
+	elif model != null and not iid.is_empty():
+		var item := model.get_item(iid)
+		specs = item.get("specs", {}) as Dictionary if not item.is_empty() else {}
+	if specs.is_empty():
+		specs = {
+			"machine_kind": "mud", "model_id": "mud_printer",
+			"filament_diameter_mm": 76.2,
+			"work_x_mm": 3048.0, "work_y_mm": 3048.0, "work_z_mm": 3048.0,
+			"print_speed_mm_s": 120.0,
+			"wet_color": [0.36, 0.26, 0.17], "dry_color": [0.68, 0.56, 0.42],
+		}
+	var main := _get_scene_main_node()
+	if main != null and not iid.is_empty():
+		# Prefer the runtime bound to this graph node.
+		for n in main.find_children("*", "CncMachineRuntime", true, false):
+			var rt := n as CncMachineRuntime
+			if rt != null and str(rt.get("graph_item_id")) == iid:
+				runtime = rt
+				break
+	if _mud_building_designer == null or not is_instance_valid(_mud_building_designer):
+		_mud_building_designer = _MUD_BUILDING_DESIGNER.new()
+		var ui := main.get_node_or_null("UILayer") if main != null else null
+		if ui != null:
+			ui.add_child(_mud_building_designer)
+		else:
+			add_child(_mud_building_designer)
+	_mud_building_designer.call("open", self, iid, runtime, specs)
+	return true
+
+
+## Recreate a bound processor graph node for a mud/trash printer prop.
+func _rebind_printer_graph_node(prop_id: String, model_id: String) -> String:
+	var preset: Dictionary = {}
+	for p: Dictionary in ComponentPresets.TOOLS:
+		if str((p.get("specs", {}) as Dictionary).get("model_id", "")) == model_id:
+			preset = p
+			break
+	if preset.is_empty():
+		return ""
+	var graph_link := {
+		"node_type": "processor",
+		"label": str(preset.get("label", model_id)),
+		"icon": str(preset.get("icon", "🖨")),
+		"width": float(preset.get("width", 150.0)),
+		"height": float(preset.get("height", 130.0)),
+		"specs": (preset.get("specs", {}) as Dictionary).duplicate(true),
+	}
+	var node_id := create_bound_generator_node(prop_id, graph_link)
+	if node_id.is_empty():
+		return ""
+	var main := _get_scene_main_node()
+	if main != null:
+		PlacedPropService.update_prop_record(main, prop_id, {"graph_item_id": node_id}, false)
+	return node_id
+
+
+func _rebind_mud_printer_graph_node(prop_id: String) -> String:
+	return _rebind_printer_graph_node(prop_id, "mud_printer")
 
 
 ## Phase 5: throttled per-node 3D shade → specs.sunlight_factor.
@@ -7132,6 +13116,85 @@ func _tick_graph_solar_shading(delta: float) -> void:
 		specs["shade_factor"] = factor  # geometric alias for inspector/debug
 		model.update_item(iid, {"specs": specs})
 	_shade_cursor = (_shade_cursor + budget) % n
+
+
+## Pond + culvert Hydro Section snapshot for an intake item (or {}).
+func _hydro_section_snapshot_for_intake(intake: Dictionary) -> Dictionary:
+	if intake.is_empty() or model == null:
+		return {}
+	var specs: Dictionary = intake.get("specs", {}) as Dictionary
+	var tag := str(specs.get("osm_water_tag", specs.get("osm_tag", "")))
+	var tank := intake
+	if str(intake.get("type", "")) == "catchment" or not bool(specs.get("pond_storage", false)):
+		tank = HydroSectionCalculator.find_pond_tank(model, tag)
+	if tank.is_empty() and bool(specs.get("pond_storage", false)):
+		tank = intake
+	if tank.is_empty():
+		return {}
+	var level_m := HydroSectionCalculator.pond_level_m_from_tank(tank)
+	if is_nan(level_m):
+		return {}
+	var culverts := HydroSectionCalculator.culverts_from_model(model, tag)
+	if culverts.is_empty():
+		return {}
+	return HydroSectionCalculator.evaluate(level_m, culverts)
+
+
+## Live Hydro Section readout (Elevation toolbar chip). Refreshed on renewables tick.
+func refresh_hydro_section_panel() -> void:
+	if _hydro_section_lbl == null:
+		return
+	if _graph_view_mode != GraphSiteLayout.VIEW_ELEVATION:
+		_hydro_section_lbl.visible = false
+		return
+	_hydro_section_lbl.visible = true
+	var tank := HydroSectionCalculator.find_pond_tank(model)
+	if tank.is_empty():
+		_hydro_section_lbl.text = "Hydro Section · no pond tank on graph"
+		return
+	var tag := str((tank.get("specs", {}) as Dictionary).get("osm_water_tag", ""))
+	var level_m := HydroSectionCalculator.pond_level_m_from_tank(tank)
+	var culverts := HydroSectionCalculator.culverts_from_model(model, tag)
+	var hydro_specs := {}
+	for h in model.items_of_type("hydro") if model != null else []:
+		if h is Dictionary:
+			hydro_specs = (h as Dictionary).get("specs", {}) as Dictionary
+			break
+	var cur_month := 6
+	var main_for_month := _get_scene_main_node()
+	if main_for_month != null and main_for_month.get("clock") != null:
+		cur_month = int(main_for_month.get("clock").get("month"))
+	var snap := HydroSectionCalculator.evaluate(level_m, culverts, hydro_specs, NAN, cur_month)
+	if is_nan(level_m):
+		_hydro_section_lbl.text = "Hydro · pond level unavailable (bind a live pond)"
+		return
+	var q := float(snap.get("live_q_lps", 0.0))
+	var h := float(snap.get("gross_head_m", 0.0))
+	var pe := float(snap.get("pe_kw", 0.0))
+	var gen := float(snap.get("gen_kw", 0.0))
+	if is_nan(q):
+		q = 0.0
+	if is_nan(h):
+		h = 0.0
+	if is_nan(pe):
+		pe = 0.0
+	if is_nan(gen):
+		gen = 0.0
+	var mode := str(snap.get("mode", "potential"))
+	if mode == "generation":
+		_hydro_section_lbl.text = (
+			"Hydro · Q %.1f L/s · H %.1f m · gen %.2f kW · %d/%d open" % [
+				q, h, gen,
+				int(snap.get("open_count", 0)),
+				int(snap.get("culvert_count", 0)),
+			])
+	else:
+		_hydro_section_lbl.text = (
+			"Hydro · Q %.1f L/s · H %.1f m · PE %.2f kW · %d/%d open" % [
+				q, h, pe,
+				int(snap.get("open_count", 0)),
+				int(snap.get("culvert_count", 0)),
+			])
 
 
 ## Connected water intake (resource tank or catchment) for a hydro node, or {}.
@@ -7323,7 +13386,7 @@ func _panel_selection_ids() -> Array[String]:
 func _any_controller_destroyed() -> bool:
 	if model == null:
 		return false
-	for item in model.get_items_in_scope("root"):
+	for item in GraphNesting.walk_items(model, "root"):
 		if not (item is Dictionary):
 			continue
 		if str((item as Dictionary).get("type", "")) != "controller":
@@ -7346,21 +13409,23 @@ func _check_pv_voltage_faults() -> void:
 		return
 	_checking_voltage = true
 	var temp_c := _ambient_temp_c_for_voc()
-	PvElectrical.update_connection_voltage_flags(model, _active_scope_id, temp_c)
-	for scope_id in _scope_trail:
-		var faults: Array = PvElectrical.find_overvoltage_faults(model, scope_id, temp_c)
-		for f in faults:
-			if not (f is Dictionary):
-				continue
-			var cid := str((f as Dictionary).get("controller_id", ""))
-			var it := model.get_item(cid)
-			if it.is_empty():
-				continue
-			var sp: Dictionary = it.get("specs", {}) as Dictionary
-			if bool(sp.get("destroyed", false)):
-				continue
-			_destroy_controller(cid, float((f as Dictionary).get("string_voc", 0.0)),
-				float((f as Dictionary).get("max_voc", 0.0)))
+	# Nesting-aware: flatten super-node portals and scan EVERY scope at once, so a
+	# PV string split across a compound boundary or buried in a collapsed
+	# sub-canvas still faults correctly.
+	PvElectrical.update_connection_voltage_flags_flat(model, temp_c)
+	var faults: Array = PvElectrical.find_overvoltage_faults_flat(model, temp_c)
+	for f in faults:
+		if not (f is Dictionary):
+			continue
+		var cid := str((f as Dictionary).get("controller_id", ""))
+		var it := model.get_item(cid)
+		if it.is_empty():
+			continue
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		if bool(sp.get("destroyed", false)):
+			continue
+		_destroy_controller(cid, float((f as Dictionary).get("string_voc", 0.0)),
+			float((f as Dictionary).get("max_voc", 0.0)))
 	_sync_graph_controller_ac_fault()
 	if _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
@@ -7543,16 +13608,23 @@ func reset_controller_from_inspector(controller_id: String) -> void:
 	_reset_controller(controller_id)
 
 
-func _apply_graph_auto_layout(fit_view: bool = true) -> void:
+func _apply_graph_auto_layout(fit_view: bool = true, recurse_children: bool = true) -> void:
 	if model == null:
 		return
 	var items: Array = GraphLayout.filter_layout_items(model.get_items_in_scope(_active_scope_id))
-	if items.size() < 2:
+	if items.size() < 2 and not recurse_children:
 		return
 	_history_suppress = true
-	var patches: Dictionary = GraphLayout.resolve_overlaps(items)
-	for iid in patches:
-		model.update_item(str(iid), {"x": (patches[iid] as Vector2).x, "y": (patches[iid] as Vector2).y})
+	if items.size() >= 2:
+		var patches: Dictionary = GraphLayout.resolve_overlaps(items)
+		for iid in patches:
+			model.update_item(str(iid), {"x": (patches[iid] as Vector2).x, "y": (patches[iid] as Vector2).y})
+	# B: tidy the interior of any compound in this scope too, so Arrange fixes a
+	# messy super-node (e.g. a StarShade array) without having to drill in.
+	if recurse_children:
+		for it: Dictionary in model.get_items_in_scope(_active_scope_id):
+			if str(it.get("type", "")) == "compound":
+				_layout_compound_scopes(str(it.get("child_scope_id", "")))
 	_history_suppress = false
 	_push_history()
 	if fit_view and _graph_canvas != null:
@@ -7560,6 +13632,34 @@ func _apply_graph_auto_layout(fit_view: bool = true) -> void:
 	if _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
 	_schedule_graph_autosave()
+
+
+## Recursively lay out a compound's child scope and any nested compounds. Panel-
+## heavy scopes get a clean grid (cols≈√count); everything else gets a light
+## force-directed relaxation, both followed by overlap resolution.
+func _layout_compound_scopes(scope_id: String) -> void:
+	if model == null or scope_id.is_empty():
+		return
+	for sid in GraphNesting.descendant_scopes(model, scope_id):
+		var items: Array = GraphLayout.filter_layout_items(
+			model.get_items_in_scope(str(sid)))
+		if items.size() < 2:
+			continue
+		var panels := 0
+		for it: Dictionary in items:
+			if str(it.get("type", "")) == "panel":
+				panels += 1
+		var patches: Dictionary
+		if panels >= items.size() * 0.6:
+			var cols := maxi(1, int(round(sqrt(float(items.size())))))
+			patches = GraphLayout.layout_grid(items, cols, Vector2(24.0, 24.0))
+		else:
+			var conns: Array = model.get_connections_in_scope(str(sid)) \
+				if model.has_method("get_connections_in_scope") else []
+			patches = GraphLayout.relax_forces(items, conns)
+		for iid_v in patches.keys():
+			var pos: Vector2 = patches[iid_v] as Vector2
+			model.update_item(str(iid_v), {"x": pos.x, "y": pos.y})
 
 
 func _fit_canvas_to_content() -> void:
@@ -7651,9 +13751,7 @@ func _ensure_pbi_nodes() -> void:
 	# Biomass is a downstream consequence of sunlight (grow beds), not a
 	# fundamental PBI — strip legacy biomass-as-PBI nodes from older saves.
 	var legacy_bio: Array = []
-	for item: Dictionary in model.items:
-		if str(item.get("type", "")) != "pbi":
-			continue
+	for item: Dictionary in model.items_of_type("pbi"):
 		var bk: String = str((item.get("specs", {}) as Dictionary).get("resource_kind", ""))
 		if bk == "biomass":
 			legacy_bio.append(str(item.get("id", "")))
@@ -7664,11 +13762,12 @@ func _ensure_pbi_nodes() -> void:
 	var has_sun := false
 	var has_rain := false
 	var has_wind := false
-	for item: Dictionary in model.items:
-		if str(item.get("type", "")) != "pbi":
-			continue
+	for item: Dictionary in model.items_of_type("pbi"):
 		# Stamp locked/fundamental on every PBI already present.
 		item["locked"] = true
+		# PBIs are pinned to the fixed top bar, so exclude them from auto-layout
+		# and overlap resolution (they have no meaningful graph-space position).
+		item["layout_exclude"] = true
 		var specs: Dictionary = item.get("specs", {}) as Dictionary
 		specs["fundamental"] = true
 		specs["locked"] = true
@@ -7704,6 +13803,7 @@ func _ensure_pbi_nodes() -> void:
 			"width": 128.0,
 			"height": 128.0,
 			"locked": true,
+			"layout_exclude": true,
 			"specs": {
 				"name": p["name"],
 				"resource_kind": p["kind"],
@@ -7766,26 +13866,41 @@ func _tick_graph_pbis(delta: float) -> void:
 	var atmo: Dictionary = AtmospherePbi.sample(lat, lon, month, day, hour, ws)
 	var rain_active := rain_mm_h > 0.0
 
-	for item: Dictionary in model.items:
-		if str(item.get("type", "")) != "pbi":
-			continue
+	const PBI_EPS := 0.05
+	for item: Dictionary in model.items_of_type("pbi"):
 		var iid: String = item.get("id", "") as String
-		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var prev: Dictionary = item.get("specs", {}) as Dictionary
+		var specs: Dictionary = prev.duplicate(false)
 		var kind: String = str(specs.get("resource_kind", ""))
 
 		if kind == "sunlight" or kind == "solar":
-			specs["display_value"] = SolarIrradiance.pbi_display_string(ghi_wm2, sun_flux_kw)
-			specs["is_active"] = ghi_wm2 > 1.0
+			var disp := SolarIrradiance.pbi_display_string(ghi_wm2, sun_flux_kw)
+			var active := ghi_wm2 > 1.0
+			var avail := SolarIrradiance.sun_availability(ghi_wm2)
+			var cloud_f := float(weather.get("cloud", 0.0))
+			if str(prev.get("display_value", "")) == disp \
+					and bool(prev.get("is_active", false)) == active \
+					and absf(float(prev.get("irradiance_wm2", 0.0)) - ghi_wm2) <= PBI_EPS \
+					and absf(float(prev.get("flux_kw", 0.0)) - sun_flux_kw) <= PBI_EPS \
+					and absf(float(prev.get("sun_availability", 0.0)) - avail) <= 0.01 \
+					and absf(float(prev.get("cloud_frac", 0.0)) - cloud_f) <= 0.01:
+				continue
+			specs["display_value"] = disp
+			specs["is_active"] = active
 			specs["irradiance_wm2"] = ghi_wm2
 			specs["flux_kw"] = sun_flux_kw
-			specs["sun_availability"] = SolarIrradiance.sun_availability(ghi_wm2)
-			specs["cloud_frac"] = float(weather.get("cloud", 0.0))
+			specs["sun_availability"] = avail
+			specs["cloud_frac"] = cloud_f
 			model.update_item(iid, {"specs": specs})
 			continue
 
 		elif kind == "water" or kind == "rain":
 			var liters_per_hour = area_m2 * rain_mm_h
-			specs["display_value"] = "%.0f L/h" % liters_per_hour if liters_per_hour > 0.0 else "0 L/h"
+			var disp_w := "%.0f L/h" % liters_per_hour if liters_per_hour > 0.0 else "0 L/h"
+			if str(prev.get("display_value", "")) == disp_w \
+					and bool(prev.get("is_active", false)) == rain_active:
+				continue
+			specs["display_value"] = disp_w
 			specs["is_active"] = rain_active
 			model.update_item(iid, {"specs": specs})
 			continue
@@ -7797,14 +13912,27 @@ func _tick_graph_pbis(delta: float) -> void:
 			var cloud: float = float(atmo.get("cloud_frac", 0.0))
 			var rain: float = float(atmo.get("rain_mmh", rain_mm_h))
 			var kinetic_kw: float = AtmospherePbi.kinetic_flux_kw(wind_ms, area_m2)
+			var wclass := AtmospherePbi.weather_visual_class(cloud, rain)
+			var disp_a := AtmospherePbi.pbi_display_string(wind_ms, temp_c, humidity)
+			var active_a := wind_ms > 0.5 or rain > 0.05 or cloud > 0.05
+			if absf(float(prev.get("wind_ms", 0.0)) - wind_ms) <= 0.05 \
+					and absf(float(prev.get("temp_c", 0.0)) - temp_c) <= 0.2 \
+					and absf(float(prev.get("humidity_pct", 0.0)) - humidity) <= 1.0 \
+					and absf(float(prev.get("cloud_frac", 0.0)) - cloud) <= 0.02 \
+					and absf(float(prev.get("rain_mmh", 0.0)) - rain) <= 0.05 \
+					and absf(float(prev.get("kinetic_kw", 0.0)) - kinetic_kw) <= PBI_EPS \
+					and int(prev.get("weather_class", -1)) == wclass \
+					and str(prev.get("display_value", "")) == disp_a \
+					and bool(prev.get("is_active", false)) == active_a:
+				continue
 			specs["wind_ms"] = wind_ms
 			specs["temp_c"] = temp_c
 			specs["humidity_pct"] = humidity
 			specs["cloud_frac"] = cloud
 			specs["rain_mmh"] = rain
 			specs["kinetic_kw"] = kinetic_kw
-			specs["weather_class"] = AtmospherePbi.weather_visual_class(cloud, rain)
-			specs["display_value"] = AtmospherePbi.pbi_display_string(wind_ms, temp_c, humidity)
-			specs["is_active"] = wind_ms > 0.5 or rain > 0.05 or cloud > 0.05
+			specs["weather_class"] = wclass
+			specs["display_value"] = disp_a
+			specs["is_active"] = active_a
 			model.update_item(iid, {"specs": specs})
 			continue

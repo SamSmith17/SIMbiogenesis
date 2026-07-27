@@ -236,14 +236,19 @@ const PROCESSORS: Array = [
 		},
 	},
 	{
-		"type": "processor", "label": "Plastic Shredder", "icon": "✂",
+		# Precious Plastic shredder — waste → flake feedstock for printers/extruders.
+		"type": "processor", "label": "PP Shredder", "icon": "✂",
 		"width": 140.0, "height": 130.0,
 		"specs": {
-			"name": "Plastic Shredder", "watts": 800.0, "cost": 450.0,
+			"name": "PP Shredder", "watts": 600.0, "cost": 450.0,
 			"energy_source": "ac",
-			"efficiency": 0.95, "energy_wh_per_unit": 16.0,
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"kind": "pp_shredder",
+			"requested_state": "on",
+			"daily_note": "Precious Plastic shredder: plastic waste 5 kg/h + 600 W AC → plastic flake 5 kg/h.",
 			"inputs": [{"kind": "plastic_waste", "rate": 5.0, "unit": "kg/h"}],
-			"outputs": [{"kind": "plastic_shred", "rate": 4.8, "unit": "kg/h"}],
+			"outputs": [{"kind": "plastic_flake", "rate": 5.0, "unit": "kg/h"}],
+			"model_id": "pp_shredder",
 		},
 	},
 	{
@@ -351,6 +356,51 @@ const PROCESSORS: Array = [
 				{"kind": "liquid_fertilizer", "rate": 0.7886, "unit": "L/h"},
 				{"kind": "biogas", "rate": 0.04167, "unit": "m³/h"},
 			],
+		},
+	},
+	{
+		# HomeBiogas 2.0 — physics-driven (HomeBiogasSource + _tick_graph_biodigester).
+		# Rates start at 0 and are rewritten each tick from the daily feed setpoint
+		# × temperature derate. io_absolute keeps L/h and m³/h ports numerically
+		# correct (ResourceFlowEngine's default min+proportion path would squash
+		# the small biogas rate against the larger liquid rates).
+		"type": "processor", "label": "HomeBiogas 2.0", "icon": "♻",
+		"width": 170.0, "height": 160.0,
+		"specs": {
+			"name": "HomeBiogas 2.0", "role": "biodigester",
+			"kind": "home_biogas_2",
+			"processor_template": "home_biogas_2",
+			"watts": 0.0, "cost": 1200.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"io_absolute": true,
+			"requested_state": "on",
+			"feed_mode": "food",
+			"daily_feed_l": 6.0,
+			"max_food_l_day": 6.0,
+			"max_manure_l_day": 15.0,
+			"water_l_day_at_max": 6.0,
+			"biogas_m3_day_food_min": 0.30, "biogas_m3_day_food_max": 0.40,
+			"biogas_m3_day_manure_min": 0.56, "biogas_m3_day_manure_max": 0.70,
+			"ch4_fraction": 0.625,
+			"temp_full_c": 20.0, "temp_floor_c": 10.0,
+			"digester_volume_l": 1200.0,
+			"gas_storage_l": 700.0,
+			"nominal_pressure_mbar_min": 10.0, "nominal_pressure_mbar_max": 15.0,
+			"dim_l_cm": 210.0, "dim_w_cm": 115.0, "dim_h_cm": 130.0,
+			# Live telemetry (written by SystemGraphView._tick_graph_biodigester).
+			"ambient_temp_c": 20.0, "temp_factor": 1.0, "feed_fraction": 0.0,
+			"biogas_m3_h": 0.0, "fertilizer_lph": 0.0, "cooking_hours_day": 0.0,
+			"daily_note": "Food 6 L/d + 6 L water → 0.3–0.4 m³ biogas (~2–3 h cooking). Manure 15 L/d → 0.56–0.7 m³. Derates below ~17–20 °C. Gas bag 700 L.",
+			"inputs": [
+				{"kind": "food_waste", "rate": 0.0, "unit": "L/h"},
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+			],
+			"outputs": [
+				{"kind": "biogas", "rate": 0.0, "unit": "m³/h"},
+				{"kind": "liquid_fertilizer", "rate": 0.0, "unit": "L/h"},
+			],
+			"model_id": "home_biogas_2",
 		},
 	},
 	{
@@ -509,6 +559,15 @@ const RESOURCES: Array = [
 		},
 	},
 	{
+		"type": "resource", "label": "Plastic Flake Store", "icon": "♦",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Plastic Flake Store", "resource_kind": "plastic_flake",
+			"capacity": "100 kg", "capacity_qty": 100.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 80.0,
+		},
+	},
+	{
 		"type": "resource", "label": "Biomass Store", "icon": "🌿",
 		"width": 90.0, "height": 100.0,
 		"specs": {
@@ -551,6 +610,21 @@ const RESOURCES: Array = [
 			"name": "Steam Buffer", "resource_kind": "steam",
 			"capacity": "50 kg", "capacity_qty": 50.0, "capacity_unit": "kg",
 			"level": 0.0, "cost": 200.0,
+		},
+	},
+	# Invisible ∞ culvert outlet — credits water without a visible Elevation chip.
+	# Siphon Lab / Bind creates one automatically downhill of the turbine.
+	{
+		"type": "resource", "label": "Culvert Outlet (∞)", "icon": "↘",
+		"width": 72.0, "height": 72.0,
+		"specs": {
+			"name": "Culvert Outlet", "resource_kind": "water",
+			"capacity": "∞", "capacity_qty": 1.0e12, "capacity_unit": "L",
+			"level": 0.0, "cost": 0.0,
+			"unlimited_capacity": true,
+			"outlet_sink": true,
+			"cumulative_l": 0.0,
+			"live_in_lps": 0.0,
 		},
 	},
 	{
@@ -605,6 +679,33 @@ const RESOURCES: Array = [
 			"name": "Biogas Store", "resource_kind": "biogas",
 			"capacity": "10 m³", "capacity_qty": 10.0, "capacity_unit": "m³",
 			"level": 0.0, "cost": 120.0,
+		},
+	},
+	{
+		"type": "resource", "label": "HomeBiogas Gas Bag", "icon": "💨",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "HomeBiogas Gas Bag", "resource_kind": "biogas",
+			"capacity": "0.7 m³", "capacity_qty": 0.7, "capacity_unit": "m³",
+			"level": 0.0, "cost": 0.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Food Waste Bin", "icon": "🗑",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Food Waste Bin", "resource_kind": "food_waste",
+			"capacity": "50 L", "capacity_qty": 50.0, "capacity_unit": "L",
+			"level": 1.0, "cost": 40.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Manure Store", "icon": "🪣",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Manure Store", "resource_kind": "manure",
+			"capacity": "200 L", "capacity_qty": 200.0, "capacity_unit": "L",
+			"level": 1.0, "cost": 60.0,
 		},
 	},
 ]
@@ -899,6 +1000,67 @@ const WIND_TURBINES: Array = [
 # Flow in L/s and pipe sizes in mm for inspector friendliness.
 # ---------------------------------------------------------------------------
 const HYDRO_TURBINES: Array = [
+	# Siphon micro-hydro: processor so water in/out + dc_electricity ports appear.
+	# Primes at siphon_start_m; breaks below siphon_break_m. Tune in Siphon Lab.
+	{
+		"type": "processor", "label": "Siphon Hydroturbine", "icon": "🌀",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Siphon Hydroturbine", "role": "siphon_hydro",
+			"kind": "siphon_hydro", "turbine_kind": "siphon", "cost": 450.0,
+			"energy_source": "", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"intake_diameter_mm": 203.0,
+			"outlet_diameter_mm": 203.0,
+			# Levels unset until placed / Siphon Lab (seed from pond + module elev).
+			"barrel_length_m": 20.0,
+			"manning_n": 0.012,
+			# 0 = uncapped DC (η·PE). Set a nameplate in the inspector to clamp.
+			"max_power_w": 0.0,
+			"hydraulic_efficiency": 0.6,
+			"generator_efficiency": 0.7,
+			"siphon_primed": false,
+			"live_q_lps": 0.0,
+			"live_head_m": 0.0,
+			"live_pe_w": 0.0,
+			"live_rpm": 0.0,
+			"current_output_kw": 0.0,
+			"daily_note": "Open Siphon Lab to set module height + start/break. Bind pond → water in; Ensure ∞ outlet adds downhill culvert_pipe sink. DC +/- → 48V battery.",
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+			"model_id": "hydroturbine",
+		},
+	},
+	# Pond turbine: same pond→turbine→culvert reach as the siphon, but a
+	# pressurized penstock feeds a Pelton runner (higher head → higher power).
+	# Drains a bound pond through HydroReach's penstock conveyance; tune in the
+	# Hydro Lab (turbine-kind selector + Penstock section).
+	{
+		"type": "processor", "label": "Pelton Pond Turbine 500W", "icon": "💧",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Pelton Pond Turbine", "role": "siphon_hydro",
+			"kind": "siphon_hydro", "turbine_kind": "pelton", "cost": 1200.0,
+			"energy_source": "", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"intake_diameter_mm": 90.0,
+			"outlet_diameter_mm": 90.0,
+			"penstock_length_m": 60.0, "penstock_diameter_mm": 63.0,
+			"pipe_roughness_mm": 0.0015, "design_flow_lps": 5.0,
+			"turbine_efficiency": 0.0, "generator_efficiency": 0.85,
+			"max_power_w": 500.0,
+			"siphon_primed": false, "live_q_lps": 0.0, "live_head_m": 0.0,
+			"live_pe_w": 0.0, "live_rpm": 0.0, "current_output_kw": 0.0,
+			"daily_note": "Open Hydro Lab to set the penstock + design flow. Bind pond → water in; the culvert outlet is the turbine tailrace. DC +/- → 48V battery.",
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+			"model_id": "hydroturbine",
+		},
+	},
 	{
 		"type": "hydro", "label": "Pelton 500W", "icon": "💧",
 		"width": 124.0, "height": 112.0,
@@ -1002,10 +1164,574 @@ const CSP_CONCENTRATORS: Array = [
 ]
 
 # ---------------------------------------------------------------------------
+# Tools (type = "processor", specs.role = "cartesian_machine")
+# Cartesian CNC machines (CNC router/mill, flake FDM 3D printer). One generalized
+# X/Y/Z kinematics engine animates each placed model (gameplay/cnc_machine_
+# runtime.gd) via a user-taggable CartesianMachineProfile; the player uploads a
+# real G-code/STL job and the machine simulates it (energy + material + print
+# time in simulated time), then credits fabricated parts to the inventory for the
+# crafting mechanic. `model_id` gives the library a "Place Model" button (same
+# pattern as the CSP/heliostat). Physics/accounting: cartesian_machine_source.gd;
+# job scheduling: SystemGraphView._tick_graph_tools.
+# ---------------------------------------------------------------------------
+const TOOLS: Array = [
+	{
+		"type": "processor", "label": "PP Shredder", "icon": "✂",
+		"width": 140.0, "height": 130.0,
+		"specs": {
+			"name": "PP Shredder", "watts": 600.0, "cost": 450.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"kind": "pp_shredder",
+			"requested_state": "on",
+			"daily_note": "Precious Plastic shredder: plastic waste 5 kg/h + 600 W AC → plastic flake 5 kg/h. Place Model to drop the 3D machine.",
+			"inputs": [{"kind": "plastic_waste", "rate": 5.0, "unit": "kg/h"}],
+			"outputs": [{"kind": "plastic_flake", "rate": 5.0, "unit": "kg/h"}],
+			"model_id": "pp_shredder",
+		},
+	},
+	{
+		# Continuous flake → cut beams. Length grows while RUNNING; each cut
+		# credits a part to PartInventory (see _tick_graph_pp_extruder +
+		# PpBeamExtruderRuntime for the 3D grow/cut animation).
+		"type": "processor", "label": "PP Beam Extruder", "icon": "▬",
+		"width": 160.0, "height": 140.0,
+		"specs": {
+			"name": "PP Beam Extruder",
+			"role": "pp_beam_extruder",
+			"kind": "pp_beam_extruder",
+			"watts": 1200.0, "cost": 2800.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"requested_state": "on",
+			"flake_kg_h": 5.0,
+			"kg_per_m": 1.17,
+			# Default cut long enough for either 2V strut (CNC finishes the profile).
+			"cut_length_m": 1.48,
+			"extruded_length_m": 0.0,
+			"extrude_last_abs_hours": -1.0,
+			"beams_cut_total": 0,
+			"beam_mesh_name": "Recycled Plastic Beam",
+			"job_part_id": "pp_beam",
+			"job_part_label": "Recycled Plastic Beam",
+			"job_part_count": 1,
+			"daily_note": "Precious Plastic extruder: flake → beam feedstock. Cut ~1.48 m (or longer); mill finished A/B dome struts on the CNC router (Cut Dome Strut presets).",
+			"inputs": [{"kind": "plastic_flake", "rate": 5.0, "unit": "kg/h"}],
+			"outputs": [],
+			"model_id": "pp_beam_extruder",
+		},
+	},
+	{
+		# Batch flake → 1 m² recycled sheet. Thickness sets mass (ρ_PP) + melt/cool
+		# cycle; Z-axis compresses during melt; sheet mesh reveals on complete
+		# and credits PartInventory (see _tick_graph_pp_sheet_press).
+		"type": "processor", "label": "PP Sheet Press", "icon": "▭",
+		"width": 160.0, "height": 150.0,
+		"specs": {
+			"name": "PP Sheet Press",
+			"role": "pp_sheet_press",
+			"kind": "pp_sheet_press",
+			"watts": 5000.0, "peak_watts": 5000.0, "cost": 4200.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"requested_state": "on",
+			"sheet_thickness_mm": 8.0,
+			"sheet_area_m2": 1.0,
+			"auto_cycle": true,
+			"job_active": false, "job_completed": false,
+			"job_start_abs_hours": 0.0, "job_duration_hr": 0.0,
+			"job_melt_hr": 0.0, "job_cool_hr": 0.0,
+			"job_material_qty": 0.0, "job_avg_kwh_per_h": 4.0,
+			"job_energy_kwh": 0.0, "job_progress": 0.0,
+			"job_phase": "idle",
+			"job_part_id": "pp_sheet_8mm",
+			"job_part_label": "Recycled Plastic Sheet (1 m² × 8 mm)",
+			"job_part_count": 1,
+			"sheets_pressed_total": 0,
+			"z_stroke_m": 0.12,
+			"daily_note": "Precious Plastic sheet press: flake → 1 m² sheet. 8 mm ≈ 7.2 kg / ~55 min; 15 mm ≈ 13.5 kg / ~1.75 h. Heaters 3–5 kWh/h (peak warm-up, then cycle). Place Model for Z-axis + sheet reveal.",
+			"inputs": [{"kind": "plastic_flake", "rate": 0.0, "unit": "kg/h"}],
+			"outputs": [],
+			"model_id": "pp_sheet_press",
+		},
+	},
+	{
+		"type": "processor", "label": "Trash Printer (flake FDM)", "icon": "🖨",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Trash Printer", "role": "cartesian_machine",
+			"kind": "cartesian_machine", "machine_role": "fdm_printer",
+			"machine_kind": "trash", "print_persist": false,
+			"bed_lowering": true,
+			"cost": 3200.0,
+			"energy_source": "ac", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"watts": 900.0, "speed_factor": 1.0,
+			# 6 mm flake nozzle; practical layer band 0.3–1.5 mm (default 0.8).
+			"filament_diameter_mm": 6.0, "line_width_mm": 6.0,
+			"layer_height_mm": 0.8, "print_speed_mm_s": 40.0,
+			"print_mode": "solid", "flake_density_g_cm3": 0.95,
+			"work_x_mm": 600.0, "work_y_mm": 600.0, "work_z_mm": 600.0,
+			# Plastic "wet/dry" colors for the STL reveal sim.
+			"wet_color": [0.85, 0.55, 0.20], "dry_color": [0.35, 0.55, 0.65],
+			"job_active": false, "job_completed": false, "job_name": "",
+			"job_id": "", "job_start_abs_hours": 0.0, "job_duration_hr": 0.0,
+			"job_material_kind": "plastic_flake", "job_material_qty": 0.0,
+			"job_energy_kwh": 0.0, "job_progress": 0.0,
+			"job_part_id": "", "job_part_label": "", "job_part_count": 1,
+			"print_mesh_path": "", "print_offset_x": 0.0, "print_offset_z": 0.0,
+			"print_scale": 1.0,
+			"daily_note": "Flake FDM (6 mm nozzle, 0.3–1.5 mm layers, lowering Z-bed). Aim + Interact opens Print Setup — pick a dome hub/strut or Load STL, preview on the bed, Start print. Finished parts credit inventory (no G-code export).",
+			"inputs": [{"kind": "plastic_flake", "rate": 0.0, "unit": "kg/h"}],
+			"outputs": [{"kind": "finished_part", "rate": 0.0, "unit": "units/h"}],
+			"model_id": "trash_printer",
+		},
+	},
+	{
+		"type": "processor", "label": "Mud Printer (gantry FDM)", "icon": "🏗",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Mud Printer", "role": "cartesian_machine",
+			"kind": "cartesian_machine", "machine_role": "fdm_printer",
+			"machine_kind": "mud", "print_persist": true,
+			"bed_lowering": false,
+			"cost": 9000.0,
+			"energy_source": "ac", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"watts": 2400.0, "speed_factor": 1.0,
+			# 3" (76.2 mm) nozzle; mud/clay/concrete bulk density ~1.8 g/cm3.
+			"filament_diameter_mm": 76.2, "flake_density_g_cm3": 1.8,
+			# ~10' cube print volume inside a 12'×12' gantry.
+			"work_x_mm": 3048.0, "work_y_mm": 3048.0, "work_z_mm": 3048.0,
+			# Wet/dry colors (RGB 0..1) the reveal shader lerps between; the player
+			# can override per print in the in-world Print modal.
+			"wet_color": [0.36, 0.26, 0.17], "dry_color": [0.68, 0.56, 0.42],
+			# Live job state (owned by _tick_graph_tools; scrub-safe via clock).
+			"job_active": false, "job_completed": false, "job_name": "",
+			"job_id": "", "job_start_abs_hours": 0.0, "job_duration_hr": 0.0,
+			"job_material_kind": "mud", "job_material_qty": 0.0,
+			"job_energy_kwh": 0.0, "job_progress": 0.0,
+			"job_part_id": "", "job_part_label": "", "job_part_count": 1,
+			# Print-object placement/scale (set by the in-world Print modal).
+			"print_mesh_path": "", "print_offset_x": 0.0, "print_offset_z": 0.0,
+			"print_scale": 1.0,
+			"daily_note": "Large-format gantry printer for mud/clay/concrete. Aim + Interact to load an STL, or Design building… for rooms/open walls/bezier (camber, sine/gyroid fill, doorways). Export GRBL… = volumetric-E .gcode; Place in world skips the printer. Prints rise layer-by-layer, then dry in place.",
+			"inputs": [{"kind": "mud", "rate": 0.0, "unit": "L/h"}],
+			"outputs": [],
+			"model_id": "mud_printer",
+		},
+	},
+	{
+		"type": "processor", "label": "CNC Router (4x5 Gantry)", "icon": "🛠",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "CNC Router", "role": "cartesian_machine",
+			"kind": "cartesian_machine", "machine_role": "cnc_router",
+			"cost": 5400.0,
+			"energy_source": "ac", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"watts": 1800.0, "speed_factor": 1.0,
+			"work_x_mm": 1220.0, "work_y_mm": 1524.0, "work_z_mm": 150.0,
+			"job_active": false, "job_completed": false, "job_name": "",
+			"job_id": "", "job_start_abs_hours": 0.0, "job_duration_hr": 0.0,
+			"job_material_kind": "", "job_material_qty": 0.0,
+			"job_energy_kwh": 0.0, "job_progress": 0.0,
+			"job_part_id": "", "job_part_label": "", "job_part_count": 1,
+			"daily_note": "Subtractive router — mills stock into parts. Built-in presets cut recycled-plastic beams into dome A/B struts (rounded ends + bolt holes). Or load your own G-code/STL.",
+			"inputs": [],
+			"outputs": [{"kind": "finished_part", "rate": 0.0, "unit": "units/h"}],
+			"model_id": "cnc_router",
+		},
+	},
+]
+
+# ---------------------------------------------------------------------------
+# Super-nodes (subgraph templates) — spawn a pre-wired nested compound.
+# A preset with a `subgraph` block instantiates a generic compound + child scope
+# with fresh ids (see SystemGraphView._spawn_subgraph_preset). Item positions are
+# child-scope offsets (dx/dy); exposed_ports use local_ids resolved on spawn.
+# ---------------------------------------------------------------------------
+const COMPOUNDS: Array = [
+	{
+		"type": "compound", "label": "Hybrid Inverter", "icon": "🔌",
+		"width": 200.0, "height": 132.0,
+		"specs": {"name": "Hybrid Inverter", "compound_kind": "",
+			"summary": "MPPT charge controller + inverter"},
+		"subgraph": {
+			"items": [
+				{"local_id": "cc", "type": "controller", "dx": -70.0, "dy": -110.0,
+					"specs": {"name": "MPPT Charge Controller", "max_voc": 150.0,
+						"max_charge_amps": 60.0, "system_voltage": 48.0, "cost": 350.0}},
+				{"local_id": "inv", "type": "controller", "dx": -70.0, "dy": 90.0,
+					"specs": {"name": "Inverter", "max_load_amps": 50.0,
+						"system_voltage": 48.0, "cost": 550.0}},
+			],
+			"connections": [
+				{"source": "cc", "source_handle": "batteryPositive",
+					"target": "inv", "target_handle": "batteryPositive", "polarity": "positive"},
+				{"source": "cc", "source_handle": "batteryNegative",
+					"target": "inv", "target_handle": "batteryNegative", "polarity": "negative"},
+			],
+			"exposed_ports": [
+				{"handle_id": "pv_pos", "child": "cc", "child_handle": "pvPositive",
+					"direction": "in", "polarity": "positive", "label": "PV +"},
+				{"handle_id": "pv_neg", "child": "cc", "child_handle": "pvNegative",
+					"direction": "in", "polarity": "negative", "label": "PV −"},
+				{"handle_id": "batt_pos", "child": "cc", "child_handle": "batteryPositive",
+					"direction": "in", "polarity": "positive", "label": "Batt +"},
+				{"handle_id": "batt_neg", "child": "cc", "child_handle": "batteryNegative",
+					"direction": "in", "polarity": "negative", "label": "Batt −"},
+				{"handle_id": "ac_out", "child": "inv", "child_handle": "acOutput",
+					"direction": "out", "polarity": "ac", "label": "AC out"},
+			],
+		},
+	},
+	{
+		"type": "compound", "label": "All-in-one Solar Generator", "icon": "🔋",
+		"width": 210.0, "height": 138.0,
+		"specs": {"name": "Solar Generator", "compound_kind": "",
+			"summary": "Controller + battery + inverter"},
+		"subgraph": {
+			"items": [
+				{"local_id": "cc", "type": "controller", "dx": -70.0, "dy": -160.0,
+					"specs": {"name": "Charge Controller", "max_voc": 150.0,
+						"max_charge_amps": 60.0, "system_voltage": 48.0, "cost": 300.0}},
+				{"local_id": "inv", "type": "controller", "dx": -70.0, "dy": 60.0,
+					"specs": {"name": "Inverter", "max_load_amps": 50.0,
+						"system_voltage": 48.0, "cost": 550.0}},
+				{"local_id": "bat", "type": "battery", "dx": 160.0, "dy": -50.0,
+					"specs": {"name": "48V 100Ah LiFePO4", "voltage": 48.0, "ah": 100.0,
+						"kwh": 4.8, "soc": 0.8, "cost": 1400.0}},
+			],
+			"connections": [
+				{"source": "cc", "source_handle": "batteryPositive",
+					"target": "bat", "target_handle": "positive", "polarity": "positive"},
+				{"source": "cc", "source_handle": "batteryNegative",
+					"target": "bat", "target_handle": "negative", "polarity": "negative"},
+				{"source": "bat", "source_handle": "positive",
+					"target": "inv", "target_handle": "batteryPositive", "polarity": "positive"},
+				{"source": "bat", "source_handle": "negative",
+					"target": "inv", "target_handle": "batteryNegative", "polarity": "negative"},
+			],
+			"exposed_ports": [
+				{"handle_id": "pv_pos", "child": "cc", "child_handle": "pvPositive",
+					"direction": "in", "polarity": "positive", "label": "PV +"},
+				{"handle_id": "pv_neg", "child": "cc", "child_handle": "pvNegative",
+					"direction": "in", "polarity": "negative", "label": "PV −"},
+				{"handle_id": "ac_out", "child": "inv", "child_handle": "acOutput",
+					"direction": "out", "polarity": "ac", "label": "AC out"},
+			],
+		},
+	},
+]
+
+
+# ---------------------------------------------------------------------------
+# Built-in COMPONENT DEFINITIONS (SketchUp-style linked components).
+# Unlike COMPOUNDS (one-off subgraph stamps), these spawn as INSTANCES bound to a
+# shared definition; editing any instance's interior propagates to all siblings.
+# Definitions may reference OTHER definitions by id (arbitrary nesting) — the
+# StarShade below is a 3-level tree (array / hybrid inverter / battery bank ->
+# panels / CC+inverter circuits / batteries). Built at runtime (not const) so the
+# 18-panel array can be generated. See system_graph/data/graph_component_defs.gd.
+# ---------------------------------------------------------------------------
+
+## Return a freshly-built built-in definition by id, or {} if unknown.
+static func builtin_definition(def_id: String) -> Dictionary:
+	match def_id:
+		"hybrid_inverter":          return _def_hybrid_inverter()
+		"solar_generator":          return _def_solar_generator()
+		"starshade_solar_array":    return _def_starshade_solar_array()
+		"starshade_hybrid_inverter":return _def_starshade_hybrid_inverter()
+		"starshade_battery_bank":   return _def_starshade_battery_bank()
+		"starshade":                return _def_starshade()
+		_:                          return {}
+
+
+## Gather a definition plus every definition it (transitively) references, keyed
+## by id — the full tree the model must register before realizing an instance.
+static func builtin_component_tree(def_id: String) -> Dictionary:
+	var out: Dictionary = {}
+	_gather_builtin_tree(def_id, out)
+	return out
+
+
+static func _gather_builtin_tree(def_id: String, out: Dictionary) -> void:
+	if def_id.is_empty() or out.has(def_id):
+		return
+	var def := builtin_definition(def_id)
+	if def.is_empty():
+		return
+	out[def_id] = def
+	for it_v in ((def.get("subgraph", {}) as Dictionary).get("items", []) as Array):
+		var nested := str((it_v as Dictionary).get("definition_id", ""))
+		if not nested.is_empty():
+			_gather_builtin_tree(nested, out)
+
+
+## Library entries (for the Super-nodes category) that spawn LINKED instances.
+static func component_preset_entries() -> Array:
+	var entries: Array = []
+	for spec in [
+		{"def_id": "hybrid_inverter", "label": "Hybrid Inverter", "icon": "🔌"},
+		{"def_id": "solar_generator", "label": "All-in-one Solar Generator", "icon": "🔋"},
+		{"def_id": "starshade", "label": "StarShade", "icon": "✨"},
+	]:
+		entries.append({
+			"type": "component", "label": str(spec["label"]), "icon": str(spec["icon"]),
+			"def_id": str(spec["def_id"]),
+			"defs": builtin_component_tree(str(spec["def_id"])),
+		})
+	return entries
+
+
+static func _def_hybrid_inverter() -> Dictionary:
+	return {
+		"id": "hybrid_inverter", "name": "Hybrid Inverter", "icon": "🔌", "rev": 1,
+		"width": 200.0, "height": 132.0,
+		"subgraph": {
+			"items": [
+				{"local_id": "cc", "type": "controller", "dx": -70.0, "dy": -110.0,
+					"specs": {"name": "MPPT Charge Controller", "max_voc": 150.0,
+						"max_charge_amps": 60.0, "system_voltage": 48.0, "cost": 350.0}},
+				{"local_id": "inv", "type": "controller", "dx": -70.0, "dy": 90.0,
+					"specs": {"name": "Inverter", "max_load_amps": 50.0,
+						"system_voltage": 48.0, "cost": 550.0}},
+			],
+			"connections": [
+				{"source": "cc", "source_handle": "batteryPositive",
+					"target": "inv", "target_handle": "batteryPositive", "polarity": "positive"},
+				{"source": "cc", "source_handle": "batteryNegative",
+					"target": "inv", "target_handle": "batteryNegative", "polarity": "negative"},
+			],
+			"exposed_ports": [
+				{"handle_id": "pv_pos", "child": "cc", "child_handle": "pvPositive",
+					"direction": "in", "polarity": "positive", "label": "PV +"},
+				{"handle_id": "pv_neg", "child": "cc", "child_handle": "pvNegative",
+					"direction": "in", "polarity": "negative", "label": "PV −"},
+				{"handle_id": "batt_pos", "child": "cc", "child_handle": "batteryPositive",
+					"direction": "in", "polarity": "positive", "label": "Batt +"},
+				{"handle_id": "batt_neg", "child": "cc", "child_handle": "batteryNegative",
+					"direction": "in", "polarity": "negative", "label": "Batt −"},
+				{"handle_id": "ac_out", "child": "inv", "child_handle": "acOutput",
+					"direction": "out", "polarity": "ac", "label": "AC out"},
+			],
+		},
+	}
+
+
+static func _def_solar_generator() -> Dictionary:
+	return {
+		"id": "solar_generator", "name": "Solar Generator", "icon": "🔋", "rev": 1,
+		"width": 210.0, "height": 138.0,
+		"subgraph": {
+			"items": [
+				{"local_id": "cc", "type": "controller", "dx": -70.0, "dy": -160.0,
+					"specs": {"name": "Charge Controller", "max_voc": 150.0,
+						"max_charge_amps": 60.0, "system_voltage": 48.0, "cost": 300.0}},
+				{"local_id": "inv", "type": "controller", "dx": -70.0, "dy": 60.0,
+					"specs": {"name": "Inverter", "max_load_amps": 50.0,
+						"system_voltage": 48.0, "cost": 550.0}},
+				{"local_id": "bat", "type": "battery", "dx": 160.0, "dy": -50.0,
+					"specs": {"name": "48V 100Ah LiFePO4", "voltage": 48.0, "ah": 100.0,
+						"kwh": 4.8, "soc": 0.8, "cost": 1400.0}},
+			],
+			"connections": [
+				{"source": "cc", "source_handle": "batteryPositive",
+					"target": "bat", "target_handle": "positive", "polarity": "positive"},
+				{"source": "cc", "source_handle": "batteryNegative",
+					"target": "bat", "target_handle": "negative", "polarity": "negative"},
+				{"source": "bat", "source_handle": "positive",
+					"target": "inv", "target_handle": "batteryPositive", "polarity": "positive"},
+				{"source": "bat", "source_handle": "negative",
+					"target": "inv", "target_handle": "batteryNegative", "polarity": "negative"},
+			],
+			"exposed_ports": [
+				{"handle_id": "pv_pos", "child": "cc", "child_handle": "pvPositive",
+					"direction": "in", "polarity": "positive", "label": "PV +"},
+				{"handle_id": "pv_neg", "child": "cc", "child_handle": "pvNegative",
+					"direction": "in", "polarity": "negative", "label": "PV −"},
+				{"handle_id": "ac_out", "child": "inv", "child_handle": "acOutput",
+					"direction": "out", "polarity": "ac", "label": "AC out"},
+			],
+		},
+	}
+
+
+## StarShade PV array — 18 × 220 W panels wired 3S × 6P (real seeder specs).
+## Strings paralleled onto string 0's ends; that pair is the exposed PV bus. A
+## documentary (non-blocking) sunlight_in is exposed on string 0's top panel.
+static func _def_starshade_solar_array() -> Dictionary:
+	var items: Array = []
+	var conns: Array = []
+	var series := 3
+	var strings := 6
+	# Grid step must clear the panel node size (210×128) so the array reads as a
+	# clean, non-overlapping matrix; centered symmetrically on the origin.
+	var step_x := 212.0
+	var step_y := 140.0
+	var off_x := (float(strings) - 1.0) * 0.5 * step_x
+	var off_y := (float(series) - 1.0) * 0.5 * step_y
+	for s in strings:
+		for r in series:
+			var lid := "p_%d_%d" % [s, r]
+			items.append({"local_id": lid, "type": "panel",
+				"dx": float(s) * step_x - off_x, "dy": float(r) * step_y - off_y,
+				"specs": {"name": "StarShade PV", "wmp": 220.0, "voc": 37.5,
+					"vmp": 30.0, "isc": 8.7, "imp": 220.0 / 30.0, "cost": 150.0}})
+			if r > 0:
+				conns.append({"source": "p_%d_%d" % [s, r - 1], "source_handle": "positive",
+					"target": lid, "target_handle": "negative", "polarity": "positive"})
+		# Parallel this string onto string 0 (shared PV bus at panel terminals).
+		if s > 0:
+			conns.append({"source": "p_%d_%d" % [s, series - 1], "source_handle": "positive",
+				"target": "p_0_%d" % (series - 1), "target_handle": "positive", "polarity": "positive"})
+			conns.append({"source": "p_%d_0" % s, "source_handle": "negative",
+				"target": "p_0_0", "target_handle": "negative", "polarity": "negative"})
+	var eps: Array = [
+		{"handle_id": "pv_pos", "child": "p_0_%d" % (series - 1), "child_handle": "positive",
+			"direction": "out", "polarity": "positive", "label": "PV +"},
+		{"handle_id": "pv_neg", "child": "p_0_0", "child_handle": "negative",
+			"direction": "out", "polarity": "negative", "label": "PV −"},
+		{"handle_id": "sunlight_in", "child": "p_0_0", "child_handle": "sunlight_in",
+			"direction": "in", "polarity": "resource", "kind": "sunlight", "label": "Sunlight"},
+	]
+	return {
+		"id": "starshade_solar_array", "name": "StarShade Solar Array", "icon": "☀", "rev": 1,
+		"width": 200.0, "height": 132.0,
+		"subgraph": {"items": items, "connections": conns, "exposed_ports": eps},
+	}
+
+
+## StarShade hybrid inverter — EcoWorthy SL3500: a charge-controller circuit
+## (DC in / DC out) and an inverter circuit (DC in / AC out) on a shared DC bus.
+static func _def_starshade_hybrid_inverter() -> Dictionary:
+	return {
+		"id": "starshade_hybrid_inverter", "name": "EcoWorthy SL3500 Hybrid", "icon": "🔌", "rev": 1,
+		"width": 200.0, "height": 132.0,
+		"subgraph": {
+			"items": [
+				# Charge controller above the inverter, both centered on x=0 and
+				# vertically aligned (controller node is 190×160).
+				{"local_id": "cc", "type": "controller", "dx": 0.0, "dy": -110.0,
+					"specs": {"name": "SL3500 Charge Controller", "max_voc": 450.0,
+						"max_charge_amps": 80.0, "max_pv_watts": 3500.0,
+						"system_voltage": 48.0, "cost": 900.0}},
+				{"local_id": "inv", "type": "controller", "dx": 0.0, "dy": 110.0,
+					"specs": {"name": "SL3500 Inverter", "max_load_amps": 70.0,
+						"overload_watts": 3500.0, "system_voltage": 48.0, "cost": 0.0}},
+			],
+			"connections": [
+				{"source": "cc", "source_handle": "batteryPositive",
+					"target": "inv", "target_handle": "batteryPositive", "polarity": "positive"},
+				{"source": "cc", "source_handle": "batteryNegative",
+					"target": "inv", "target_handle": "batteryNegative", "polarity": "negative"},
+			],
+			"exposed_ports": [
+				{"handle_id": "pv_pos", "child": "cc", "child_handle": "pvPositive",
+					"direction": "in", "polarity": "positive", "label": "PV +"},
+				{"handle_id": "pv_neg", "child": "cc", "child_handle": "pvNegative",
+					"direction": "in", "polarity": "negative", "label": "PV −"},
+				{"handle_id": "batt_pos", "child": "cc", "child_handle": "batteryPositive",
+					"direction": "in", "polarity": "positive", "label": "Batt +"},
+				{"handle_id": "batt_neg", "child": "cc", "child_handle": "batteryNegative",
+					"direction": "in", "polarity": "negative", "label": "Batt −"},
+				{"handle_id": "ac_out", "child": "inv", "child_handle": "acOutput",
+					"direction": "out", "polarity": "ac", "label": "AC out"},
+			],
+		},
+	}
+
+
+## StarShade battery bank — 2 × 48 V 50 Ah LiFePO4 in parallel (≈51.2 V bus,
+## summed Ah/kWh). Collapsed node draws as one tall battery (SOC fill), not a
+## generic supernode miniature — see graph_canvas_v2 `_compound_displays_as_battery`.
+static func _def_starshade_battery_bank() -> Dictionary:
+	return {
+		"id": "starshade_battery_bank", "name": "48V Battery Bank", "icon": "🔋", "rev": 2,
+		# Match leaf battery NODE_SIZES [128, 172] so the bank reads as one cell.
+		"width": 128.0, "height": 172.0,
+		"specs": {
+			"display_as_battery": true,
+			"compound_kind": "",
+			"summary": "2× 48V 50Ah parallel · 5.12 kWh",
+			"voltage": 51.2, "ah": 100.0, "kwh": 5.12, "soc": 0.8,
+		},
+		"subgraph": {
+			"items": [
+				# Two batteries (128×172) stacked for the expanded interior view.
+				{"local_id": "bat_a", "type": "battery", "dx": 0.0, "dy": -100.0,
+					"specs": {"name": "48V 50Ah LiFePO4", "voltage": 51.2, "ah": 50.0,
+						"kwh": 2.56, "soc": 0.8, "cost": 1400.0}},
+				{"local_id": "bat_b", "type": "battery", "dx": 0.0, "dy": 100.0,
+					"specs": {"name": "48V 50Ah LiFePO4", "voltage": 51.2, "ah": 50.0,
+						"kwh": 2.56, "soc": 0.8, "cost": 1400.0}},
+			],
+			"connections": [
+				# Parallel bus: +→+ and −→− (keeps the bank at 48 V / 51.2 V nominal).
+				{"source": "bat_a", "source_handle": "positive",
+					"target": "bat_b", "target_handle": "positive", "polarity": "positive"},
+				{"source": "bat_a", "source_handle": "negative",
+					"target": "bat_b", "target_handle": "negative", "polarity": "negative"},
+			],
+			"exposed_ports": [
+				{"handle_id": "batt_pos", "child": "bat_a", "child_handle": "positive",
+					"direction": "out", "polarity": "positive", "label": "Batt +"},
+				{"handle_id": "batt_neg", "child": "bat_a", "child_handle": "negative",
+					"direction": "out", "polarity": "negative", "label": "Batt −"},
+			],
+		},
+	}
+
+
+## Top-level StarShade — solar array -> hybrid inverter -> battery bank; the whole
+## structure reads as sunlight in / AC electricity out.
+static func _def_starshade() -> Dictionary:
+	return {
+		"id": "starshade", "name": "StarShade", "icon": "✨", "rev": 1,
+		"width": 220.0, "height": 150.0,
+		# Banner: render the 3D StarShade GLB as the node's 2D image (like a
+		# processor card) instead of the child-graph miniature. `model_id` is an
+		# instance-only spec so it rides on every instance but never captures back.
+		"specs": {"model_id": "starshade", "node_banner": true,
+			"icon_replaces_frame": false,
+			"summary": "Sunlight → AC · self-contained solar node"},
+		"subgraph": {
+			# Symmetric starting layout: the large PV array centered up top, the
+			# inverter + battery bank side by side below it. The seeder re-runs a
+			# layout pass per scope after realizing, so these are just a tidy seed.
+			"items": [
+				{"local_id": "array", "definition_id": "starshade_solar_array",
+					"dx": 0.0, "dy": -360.0},
+				{"local_id": "hinv", "definition_id": "starshade_hybrid_inverter",
+					"dx": -160.0, "dy": 120.0},
+				{"local_id": "bank", "definition_id": "starshade_battery_bank",
+					"dx": 160.0, "dy": 120.0},
+			],
+			"connections": [
+				{"source": "array", "source_handle": "pv_pos",
+					"target": "hinv", "target_handle": "pv_pos", "polarity": "positive"},
+				{"source": "array", "source_handle": "pv_neg",
+					"target": "hinv", "target_handle": "pv_neg", "polarity": "negative"},
+				{"source": "hinv", "source_handle": "batt_pos",
+					"target": "bank", "target_handle": "batt_pos", "polarity": "positive"},
+				{"source": "hinv", "source_handle": "batt_neg",
+					"target": "bank", "target_handle": "batt_neg", "polarity": "negative"},
+			],
+			"exposed_ports": [
+				{"handle_id": "sunlight_in", "child": "array", "child_handle": "sunlight_in",
+					"direction": "in", "polarity": "resource", "kind": "sunlight", "label": "Sunlight"},
+				{"handle_id": "ac_out", "child": "hinv", "child_handle": "ac_out",
+					"direction": "out", "polarity": "ac", "label": "AC out"},
+			],
+		},
+	}
+
+
+# ---------------------------------------------------------------------------
 # Category list consumed by LibraryPanel to build the UI
 # ---------------------------------------------------------------------------
 const CATEGORIES: Array = [
 	{ "id": "pbis",        "label": "Planetary Basic Income", "icon": "🌍", "presets": PBIS },
+	{ "id": "my_components", "label": "My Components",       "icon": "🧩", "presets": [] },
+	{ "id": "supernodes",  "label": "Super-nodes",          "icon": "🧩", "presets": []          },
 	{ "id": "panels",      "label": "Solar Panels",         "icon": "☀",  "presets": PANELS      },
 	{ "id": "wind",        "label": "Wind Turbines",        "icon": "🌬", "presets": WIND_TURBINES },
 	{ "id": "hydro",       "label": "Hydro Turbines",       "icon": "💧", "presets": HYDRO_TURBINES },
@@ -1015,6 +1741,7 @@ const CATEGORIES: Array = [
 	{ "id": "habitats",    "label": "Population",             "icon": "🏠", "presets": HABITATS    },
 	{ "id": "processors",  "label": "Processors",           "icon": "🌀", "presets": PROCESSORS  },
 	{ "id": "csp",         "label": "Solar Concentrators",  "icon": "🛰", "presets": CSP_CONCENTRATORS },
+	{ "id": "tools",       "label": "Tools",                "icon": "🛠", "presets": TOOLS },
 	{ "id": "resources",   "label": "Resource Containers",  "icon": "🪣", "presets": RESOURCES   },
 	{ "id": "catchments",  "label": "Rain Catchment",       "icon": "🌧", "presets": CATCHMENTS  },
 	{ "id": "plants",      "label": "Grow Beds",            "icon": "🌱", "presets": PLANTS      },
@@ -1060,6 +1787,11 @@ static func presets_for_category(cat_id: String) -> Array:
 		if cat.get("id", "") == cat_id:
 			out = (cat.get("presets", []) as Array).duplicate(true)
 			break
+	# Built-in linked components live in the Super-nodes category (generated at
+	# runtime because e.g. the StarShade array is built programmatically).
+	if cat_id == "supernodes":
+		for e in component_preset_entries():
+			out.append(e)
 	var overrides: Array = _user_overrides.get(cat_id, []) as Array
 	for up: Variant in overrides:
 		if not (up is Dictionary):
@@ -1124,6 +1856,33 @@ static func save_user_preset(cat_id: String, preset: Dictionary) -> void:
 		mem_list[mem_idx] = preset
 	else:
 		mem_list.append(preset)
+
+
+## Remove a user preset (by label) from a category — both on disk and in memory.
+static func remove_user_preset(cat_id: String, label: String) -> void:
+	var data := {}
+	if FileAccess.file_exists("user://user_presets.json"):
+		var file := FileAccess.open("user://user_presets.json", FileAccess.READ)
+		if file != null:
+			var text := file.get_as_text()
+			file.close()
+			var json = JSON.new()
+			if json.parse(text) == OK and json.get_data() is Dictionary:
+				data = json.get_data()
+	if data.has(cat_id):
+		var list: Array = data[cat_id] as Array
+		for i in range(list.size() - 1, -1, -1):
+			if (list[i] as Dictionary).get("label", "") == label:
+				list.remove_at(i)
+		var file_w := FileAccess.open("user://user_presets.json", FileAccess.WRITE)
+		if file_w != null:
+			file_w.store_string(JSON.stringify(data, "\t"))
+			file_w.close()
+	if _user_overrides.has(cat_id):
+		var mem: Array = _user_overrides[cat_id] as Array
+		for i in range(mem.size() - 1, -1, -1):
+			if (mem[i] as Dictionary).get("label", "") == label:
+				mem.remove_at(i)
 
 
 static func create_default_preset(itype: String, name_val: String) -> Dictionary:

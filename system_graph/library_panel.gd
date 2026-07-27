@@ -326,9 +326,20 @@ func _build_category(cat: Dictionary, idx: int) -> Control:
 	# ---- Item buttons ---- (built-ins merged with any user-saved overrides —
 	# see ComponentPresets.presets_for_category, since CATEGORIES' own
 	# "presets" arrays are const/read-only and can't carry user edits).
-	var presets: Array = ComponentPresets.presets_for_category(str(cat.get("id", "")))
+	var cat_id_str := str(cat.get("id", ""))
+	var presets: Array = ComponentPresets.presets_for_category(cat_id_str)
 	for p: Dictionary in presets:
-		content_vbox.add_child(_make_item_row(p, idx))
+		if cat_id_str == "my_components":
+			content_vbox.add_child(_make_user_component_row(p, idx))
+		else:
+			content_vbox.add_child(_make_item_row(p, idx))
+	if cat_id_str == "my_components" and presets.is_empty():
+		var hint := Label.new()
+		hint.text = "Group nodes, then Inspector → Save as Component."
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hint.add_theme_font_size_override("font_size", 10)
+		hint.add_theme_color_override("font_color", C_TEXT_M)
+		content_vbox.add_child(hint)
 
 	wrapper.add_child(hdr)
 	wrapper.add_child(content_pc)
@@ -341,15 +352,87 @@ func _build_category(cat: Dictionary, idx: int) -> Control:
 func _make_item_row(preset: Dictionary, cat_idx: int) -> Control:
 	var btn := _make_item_btn(preset, cat_idx)
 	_item_btns.append(btn)
-	var specs: Dictionary = preset.get("specs", {})
-	if str(specs.get("model_id", "")).is_empty():
+	# Component (super-node) presets spawn subgraphs, not a single 3D prop, so
+	# they get no Place button. Every other preset can be placed — those without
+	# a bespoke GLB place a procedural gray-box placeholder (F).
+	if _is_component_preset(preset):
 		return btn
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 2)
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(btn)
-	row.add_child(_make_place_btn(preset))
+	var pb := _make_place_btn(preset)
+	if str((preset.get("specs", {}) as Dictionary).get("model_id", "")).is_empty():
+		pb.tooltip_text = "Place a gray-box placeholder for this node in the world"
+	row.add_child(pb)
 	return row
+
+
+## True for a compound/super-node preset (has a child scope / component tree),
+## which can't be represented as a single placed prop.
+func _is_component_preset(preset: Dictionary) -> bool:
+	if str(preset.get("type", "")) == "compound":
+		return true
+	return preset.has("component_tree") or preset.has("definition_id") \
+			or preset.has("def_id")
+
+
+## A "My Components" row: the spawn button plus compact Rename / Delete actions
+## (user-authored, so editable — built-in components live under Super-nodes).
+func _make_user_component_row(preset: Dictionary, cat_idx: int) -> Control:
+	var btn := _make_item_btn(preset, cat_idx)
+	_item_btns.append(btn)
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
+	row.add_child(btn)
+	var label := str(preset.get("label", ""))
+	var ren := Button.new()
+	ren.text = "✎"
+	ren.tooltip_text = "Rename component"
+	ren.focus_mode = Control.FOCUS_NONE
+	ren.custom_minimum_size = Vector2(30.0, 0.0)
+	ren.pressed.connect(func(): _rename_user_component(label))
+	row.add_child(ren)
+	var del := Button.new()
+	del.text = "🗑"
+	del.tooltip_text = "Delete component"
+	del.focus_mode = Control.FOCUS_NONE
+	del.custom_minimum_size = Vector2(30.0, 0.0)
+	del.pressed.connect(func():
+		ComponentPresets.remove_user_preset("my_components", label)
+		rebuild())
+	row.add_child(del)
+	return row
+
+
+func _rename_user_component(old_label: String) -> void:
+	var dlg := AcceptDialog.new()
+	dlg.title = "Rename Component"
+	var le := LineEdit.new()
+	le.text = old_label
+	le.custom_minimum_size = Vector2(260, 0)
+	le.select_all()
+	dlg.add_child(le)
+	dlg.register_text_enter(le)
+	add_child(dlg)
+	dlg.confirmed.connect(func():
+		var nm := le.text.strip_edges()
+		if not nm.is_empty() and nm != old_label:
+			var entries := ComponentPresets.presets_for_category("my_components")
+			for e_v in entries:
+				var e := e_v as Dictionary
+				if str(e.get("label", "")) == old_label:
+					var ne := e.duplicate(true)
+					ne["label"] = nm
+					ComponentPresets.remove_user_preset("my_components", old_label)
+					ComponentPresets.save_user_preset("my_components", ne)
+					break
+			rebuild()
+		dlg.queue_free())
+	dlg.canceled.connect(func(): dlg.queue_free())
+	dlg.popup_centered()
+	le.grab_focus()
 
 
 func _make_place_btn(preset: Dictionary) -> Button:
@@ -521,6 +604,9 @@ func _spec_hint(preset: Dictionary) -> String:
 					float(specs.get("occupants", 1.0)) * 2.083 * 24.0]
 			if str(specs.get("processor_template", "")) == "ibc_biodigester":
 				return "5 gal/d + 1 kg/d → effluent + biogas"
+			if str(specs.get("processor_template", "")) == "home_biogas_2" \
+					or str(specs.get("role", "")) == "biodigester":
+				return "6 L food/d → 0.3–0.4 m³ biogas"
 			return "%.0f W" % float(specs.get("watts", 0.0))
 		"resource":
 			return ResourceKinds.display_name(str(specs.get("resource_kind", "water")))

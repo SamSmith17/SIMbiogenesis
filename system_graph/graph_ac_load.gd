@@ -20,7 +20,11 @@ const SWITCHED_CIRCUIT_TYPES: Array[String] = ["shelly4pm", "spiderbox", "breake
 static func compute_watts(model: GraphModel, tree: SceneTree) -> float:
 	if model == null or tree == null:
 		return 0.0
-	var reachable := _reachable_ac_load_ids(model)
+	# Flatten super-node (compound) portals once: AC reachability then tunnels
+	# through generic groups at any depth, while opaque load-group compounds stay
+	# nodes (summed via sum_load_group_watts). Computed once, threaded down.
+	var flat := GraphNesting.flat_connections(model)
+	var reachable := _reachable_ac_load_ids(model, flat)
 	if reachable.is_empty():
 		return 0.0
 	var sim_host := _find_sim_load_host(tree)
@@ -36,7 +40,7 @@ static func compute_watts(model: GraphModel, tree: SceneTree) -> float:
 				total += sum_load_group_watts(model, item, tree, sim_host)
 				continue
 		total += _item_draw_watts(iid, item, tree, sim_host, model)
-	total += connection_losses_watts(model, tree, sim_host)
+	total += connection_losses_watts(model, tree, sim_host, flat)
 	return maxf(0.0, total)
 
 
@@ -58,9 +62,13 @@ static func losses_enabled(tree: SceneTree) -> bool:
 ## the connection dicts (no update_connection — avoids signal churn, same
 ## pattern as resource_flow_engine's flow_rate writeback).
 static func connection_losses_watts(model: GraphModel, tree: SceneTree,
-		sim_host: Node = null) -> float:
+		sim_host: Node = null, flat_conns: Array = []) -> float:
 	var global_on := losses_enabled(tree)
+	if flat_conns.is_empty():
+		flat_conns = GraphNesting.flat_connections(model)
 	var total := 0.0
+	# Loss + telemetry stays on the REAL wires the player sees; only the load-side
+	# reachability BFS uses the flattened graph (via _connection_delivered_watts).
 	for conn: Dictionary in model.connections:
 		if not _is_ac_power_connection(conn):
 			continue
@@ -74,7 +82,7 @@ static func connection_losses_watts(model: GraphModel, tree: SceneTree,
 			conn["carried_amps"] = 0.0
 			conn["overload_ratio"] = 0.0
 			continue
-		var delivered: float = _connection_delivered_watts(model, conn, tree, sim_host)
+		var delivered: float = _connection_delivered_watts(model, conn, tree, sim_host, flat_conns)
 		var meta: Dictionary = ConduitKinds.type_meta(type_id)
 		var rep := ConduitLoss.electrical_report_for_connection(conn, meta, delivered)
 		conn["loss_w"] = float(rep.get("loss_w", 0.0))
@@ -89,10 +97,18 @@ static func connection_losses_watts(model: GraphModel, tree: SceneTree,
 ## the cut edge that has no controller (the load side of a tree topology).
 ## Loops (controllers on both sides) conservatively use the smaller side.
 static func _connection_delivered_watts(model: GraphModel, conn: Dictionary,
-		tree: SceneTree, sim_host: Node) -> float:
+		tree: SceneTree, sim_host: Node, flat_conns: Array = []) -> float:
+	if flat_conns.is_empty():
+		flat_conns = GraphNesting.flat_connections(model)
 	var cid := str(conn.get("id", ""))
-	var side_a := _side_summary(model, str(conn.get("source_item_id", "")), cid, tree, sim_host)
-	var side_b := _side_summary(model, str(conn.get("target_item_id", "")), cid, tree, sim_host)
+	# Resolve endpoints through super-node portals so a boundary wire's load side
+	# BFS starts at the real interior leaf, not the (edgeless-in-flat) compound.
+	var src_res := GraphNesting.resolve_port(model, str(conn.get("source_item_id", "")),
+			str(conn.get("source_handle_id", "")))
+	var tgt_res := GraphNesting.resolve_port(model, str(conn.get("target_item_id", "")),
+			str(conn.get("target_handle_id", "")))
+	var side_a := _side_summary(model, str(src_res["item_id"]), cid, tree, sim_host, flat_conns)
+	var side_b := _side_summary(model, str(tgt_res["item_id"]), cid, tree, sim_host, flat_conns)
 	var a_has_ctrl: bool = bool(side_a.get("has_controller", false))
 	var b_has_ctrl: bool = bool(side_b.get("has_controller", false))
 	if a_has_ctrl and not b_has_ctrl:
@@ -107,11 +123,13 @@ static func _connection_delivered_watts(model: GraphModel, conn: Dictionary,
 ## BFS from `start_id` across AC connections, never crossing `cut_conn_id`.
 ## Returns {watts, has_controller} for that side of the cut.
 static func _side_summary(model: GraphModel, start_id: String, cut_conn_id: String,
-		tree: SceneTree, sim_host: Node) -> Dictionary:
+		tree: SceneTree, sim_host: Node, flat_conns: Array = []) -> Dictionary:
 	var watts := 0.0
 	var has_controller := false
 	if start_id.is_empty():
 		return {"watts": 0.0, "has_controller": false}
+	if flat_conns.is_empty():
+		flat_conns = GraphNesting.flat_connections(model)
 	var visited: Dictionary = {}
 	var queue: Array[String] = [start_id]
 	while not queue.is_empty():
@@ -131,7 +149,7 @@ static func _side_summary(model: GraphModel, start_id: String, cut_conn_id: Stri
 				watts += sum_load_group_watts(model, item, tree, sim_host)
 		elif ty in LOAD_TYPES:
 			watts += _item_draw_watts(nid, item, tree, sim_host, model)
-		for c: Dictionary in model.connections:
+		for c: Dictionary in flat_conns:
 			if str(c.get("id", "")) == cut_conn_id:
 				continue
 			if not _is_ac_power_connection(c):
@@ -182,11 +200,15 @@ static func is_circuit_on(item: Dictionary, circuit_idx: int) -> bool:
 	return bool(specs.get("c%d_on" % circuit_idx, false))
 
 
-static func _reachable_ac_load_ids(model: GraphModel) -> Dictionary:
+static func _reachable_ac_load_ids(model: GraphModel, flat_conns: Array = []) -> Dictionary:
 	var loads: Dictionary = {}
 	var visited: Dictionary = {}
 	var queue: Array[String] = []
+	if flat_conns.is_empty():
+		flat_conns = GraphNesting.flat_connections(model)
 
+	# Controllers anywhere in the tree seed reachability (model.items spans every
+	# scope; flat edges tunnel generic super-nodes so interior loads are reached).
 	for item: Dictionary in model.items:
 		if str(item.get("type", "")) != "controller":
 			continue
@@ -196,7 +218,7 @@ static func _reachable_ac_load_ids(model: GraphModel) -> Dictionary:
 		var csp: Dictionary = item.get("specs", {}) as Dictionary
 		if bool(csp.get("destroyed", false)):
 			continue
-		_enqueue_ac_neighbors(model, cid, queue)
+		_enqueue_ac_neighbors(model, cid, queue, flat_conns)
 
 	while not queue.is_empty():
 		var nid: String = queue.pop_front()
@@ -212,17 +234,18 @@ static func _reachable_ac_load_ids(model: GraphModel) -> Dictionary:
 			if str(csp.get("compound_kind", "")) == "load_group":
 				loads[nid] = true
 				continue
-			_enqueue_ac_neighbors(model, nid, queue)
+			_enqueue_ac_neighbors(model, nid, queue, flat_conns)
 			continue
 		if ty in LOAD_TYPES:
 			loads[nid] = true
 		if ty in PASS_THROUGH_TYPES:
-			_enqueue_ac_neighbors(model, nid, queue)
+			_enqueue_ac_neighbors(model, nid, queue, flat_conns)
 
 	return loads
 
 
-static func _enqueue_ac_neighbors(model: GraphModel, item_id: String, queue: Array[String]) -> void:
+static func _enqueue_ac_neighbors(model: GraphModel, item_id: String, queue: Array[String],
+		flat_conns: Array = []) -> void:
 	var item: Dictionary = model.get_item(item_id)
 	var ty := str(item.get("type", ""))
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
@@ -231,8 +254,10 @@ static func _enqueue_ac_neighbors(model: GraphModel, item_id: String, queue: Arr
 		return
 	if ty == "acbreaker" and not bool(specs.get("closed", specs.get("on", true))):
 		return
+	if flat_conns.is_empty():
+		flat_conns = GraphNesting.flat_connections(model)
 
-	for conn: Dictionary in model.connections:
+	for conn: Dictionary in flat_conns:
 		if not _is_ac_power_connection(conn):
 			continue
 		if bool(conn.get("severed", false)):
@@ -280,6 +305,35 @@ static func _find_sim_load_host(tree: SceneTree) -> Node:
 	if sgv == null:
 		return null
 	return sgv.get_node_or_null("GraphSimLoadHost")
+
+
+## Public wrapper for wire Sankey / HUD: actual AC draw of one load item (W).
+## Processors return 0 when not RUNNING (blocked/idle/starved/ready).
+static func item_draw_watts(
+		model: GraphModel,
+		item: Dictionary,
+		tree: SceneTree,
+		sim_host: Node = null) -> float:
+	if item.is_empty():
+		return 0.0
+	var iid := str(item.get("id", ""))
+	if sim_host == null and tree != null:
+		sim_host = _find_sim_load_host(tree)
+	return _item_draw_watts(iid, item, tree, sim_host, model)
+
+
+## Watts delivered through one AC connection (load-side of the cut). Used by
+## the canvas wire estimator so feeder thickness tracks real consumption.
+static func connection_delivered_watts(
+		model: GraphModel,
+		conn: Dictionary,
+		tree: SceneTree,
+		sim_host: Node = null) -> float:
+	if model == null or conn.is_empty():
+		return 0.0
+	if sim_host == null and tree != null:
+		sim_host = _find_sim_load_host(tree)
+	return _connection_delivered_watts(model, conn, tree, sim_host)
 
 
 static func _item_draw_watts(

@@ -42,7 +42,7 @@ static func is_alert(state: String) -> bool:
 	return state == BLOCKED or state == STARVED or state == OVERFLOW or state == FAULT
 
 
-## READY is nominal — it gets a quiet static chip, never a pulse/glow.
+## READY is nominal — no highlight halo (contrast with RUNNING's green ring).
 static func is_ready(state: String) -> bool:
 	return state == READY
 

@@ -271,6 +271,26 @@ func _merge_specs(existing: Dictionary, incoming: Dictionary) -> Dictionary:
 	return merged
 
 
+## True when merged telemetry differs enough from `prev` to justify update_item.
+func _specs_need_write(prev: Dictionary, merged: Dictionary, keys: Array) -> bool:
+	const EPS := 0.0005
+	for k: Variant in keys:
+		var key := str(k)
+		if not merged.has(key):
+			continue
+		var a: Variant = prev.get(key)
+		var b: Variant = merged[key]
+		if a == null and b == null:
+			continue
+		if typeof(a) == TYPE_FLOAT or typeof(a) == TYPE_INT \
+				or typeof(b) == TYPE_FLOAT or typeof(b) == TYPE_INT:
+			if absf(float(a if a != null else 0.0) - float(b if b != null else 0.0)) > EPS:
+				return true
+		elif str(a) != str(b):
+			return true
+	return false
+
+
 func _live_wins_for_key(live: Dictionary, key: String) -> bool:
 	if not _should_use_live_overrides():
 		return false
@@ -313,18 +333,19 @@ func _refresh_panel() -> void:
 	var panel_wattage: float = float(_read("PANEL_WATTAGE",  220.0))
 	var solar_kw:      float = float(_read("current_solar_kw", 0.0))
 	var prev := (_model.get_item(V_PANEL_ID).get("specs", {}) as Dictionary).duplicate(true)
-	_model.update_item(V_PANEL_ID, {
-		"specs": _merge_specs(prev, {
-			"name":              "%d× %.0fW Solar Array" % [panel_count, panel_wattage],
-			"wmp":               panel_count * panel_wattage,
-			"voc":               37.5,
-			"vmp":               30.0,
-			"isc":               8.7,
-			"imp":               panel_wattage / 30.0,
-			"cost":              0.0,
-			"current_output_kw": solar_kw,
-		}),
-	})
+	var patch := {
+		"name":              "%d× %.0fW Solar Array" % [panel_count, panel_wattage],
+		"wmp":               panel_count * panel_wattage,
+		"voc":               37.5,
+		"vmp":               30.0,
+		"isc":               8.7,
+		"imp":               panel_wattage / 30.0,
+		"cost":              0.0,
+		"current_output_kw": solar_kw,
+	}
+	var merged := _merge_specs(prev, patch)
+	if _specs_need_write(prev, merged, ["name", "wmp", "imp", "current_output_kw"]):
+		_model.update_item(V_PANEL_ID, {"specs": merged})
 	_refresh_virtual_panel_cluster(panel_wattage, solar_kw)
 
 
@@ -348,7 +369,8 @@ func _refresh_controller() -> void:
 		merged["destroyed"] = true
 		merged["destroyed_reason"] = prev.get("destroyed_reason", "")
 		merged["fault_voc"] = prev.get("fault_voc", 0.0)
-	_model.update_item(V_CTRL_ID, {"specs": merged})
+	if _specs_need_write(prev, merged, ["max_pv_watts", "current_output_kw", "destroyed", "fault_voc"]):
+		_model.update_item(V_CTRL_ID, {"specs": merged})
 	# Push user-configured overload protection thresholds to solar_ui
 	if is_instance_valid(_solar_ui):
 		var ctrl_specs := (_model.get_item(V_CTRL_ID).get("specs", {}) as Dictionary)
@@ -371,16 +393,16 @@ func _refresh_battery() -> void:
 		bat_cap = float(_read("BATTERY_CAPACITY_KWH", 16.0))
 	var soc: float = bat_kwh / bat_cap if bat_cap > 0.0 else 0.0
 	var prev := (_model.get_item(V_BATTERY_ID).get("specs", {}) as Dictionary).duplicate(true)
-	_model.update_item(V_BATTERY_ID, {
-		"specs": _merge_specs(prev, {
-			"name":    "Battery Bank",
-			"voltage": 48.0,
-			"ah":      bat_cap * 1000.0 / 48.0,
-			"kwh":     bat_cap,
-			"soc":     soc,
-			"cost":    0.0,
-		}),
+	var bat_merged := _merge_specs(prev, {
+		"name":    "Battery Bank",
+		"voltage": 48.0,
+		"ah":      bat_cap * 1000.0 / 48.0,
+		"kwh":     bat_cap,
+		"soc":     soc,
+		"cost":    0.0,
 	})
+	if _specs_need_write(prev, bat_merged, ["ah", "kwh", "soc"]):
+		_model.update_item(V_BATTERY_ID, {"specs": bat_merged})
 	# Push user-configured SOC protection thresholds to solar_ui
 	if is_instance_valid(_solar_ui):
 		var bat_specs := (_model.get_item(V_BATTERY_ID).get("specs", {}) as Dictionary)
@@ -393,14 +415,14 @@ func _refresh_battery() -> void:
 func _refresh_baseline() -> void:
 	var kw: float = float(_read("BASELINE_LOAD_KW", 0.35))
 	var prev := (_model.get_item(V_BASELINE_ID).get("specs", {}) as Dictionary).duplicate(true)
-	_model.update_item(V_BASELINE_ID, {
-		"specs": _merge_specs(prev, {
-			"name":      "Baseline Load (%.0fW)" % (kw * 1000.0),
-			"max_watts": kw * 1000.0,
-			"avg_watts": kw * 1000.0,
-			"cost":      0.0,
-		}),
+	var base_merged := _merge_specs(prev, {
+		"name":      "Baseline Load (%.0fW)" % (kw * 1000.0),
+		"max_watts": kw * 1000.0,
+		"avg_watts": kw * 1000.0,
+		"cost":      0.0,
 	})
+	if _specs_need_write(prev, base_merged, ["name", "max_watts", "avg_watts"]):
+		_model.update_item(V_BASELINE_ID, {"specs": base_merged})
 
 
 func _refresh_consumers() -> void:
@@ -449,7 +471,10 @@ func _refresh_consumers() -> void:
 				"current_state": st,
 				"cost":          0.0,
 			}
-		_model.update_item(graph_id, {"specs": _merge_specs(prev_specs, patch)})
+		var cons_merged := _merge_specs(prev_specs, patch)
+		if _specs_need_write(prev_specs, cons_merged,
+				["name", "max_watts", "avg_watts", "current_state"]):
+			_model.update_item(graph_id, {"specs": cons_merged})
 
 
 func _make_panel_item() -> Dictionary:
@@ -617,17 +642,17 @@ func _refresh_virtual_panel_cluster(panel_wattage: float, solar_kw: float) -> vo
 		if item.is_empty():
 			continue
 		var prev := (item.get("specs", {}) as Dictionary).duplicate(true)
-		_model.update_item(iid, {
-			"specs": _merge_specs(prev, {
-				"name": "PV-%02d" % (i + 1),
-				"wmp": panel_wattage,
-				"voc": 37.5,
-				"vmp": 30.0,
-				"isc": 8.7,
-				"imp": panel_wattage / 30.0,
-				"current_output_kw": each_kw,
-				"array_group": (i / (ARRAY_STRINGS_PER_GROUP * ARRAY_SERIES_PER_STRING)) + 1,
-				"array_string": ((i % (ARRAY_STRINGS_PER_GROUP * ARRAY_SERIES_PER_STRING)) / ARRAY_SERIES_PER_STRING) + 1,
-				"array_series_pos": ((i % ARRAY_SERIES_PER_STRING) + 1),
-			}),
+		var pmerged := _merge_specs(prev, {
+			"name": "PV-%02d" % (i + 1),
+			"wmp": panel_wattage,
+			"voc": 37.5,
+			"vmp": 30.0,
+			"isc": 8.7,
+			"imp": panel_wattage / 30.0,
+			"current_output_kw": each_kw,
+			"array_group": (i / (ARRAY_STRINGS_PER_GROUP * ARRAY_SERIES_PER_STRING)) + 1,
+			"array_string": ((i % (ARRAY_STRINGS_PER_GROUP * ARRAY_SERIES_PER_STRING)) / ARRAY_SERIES_PER_STRING) + 1,
+			"array_series_pos": ((i % ARRAY_SERIES_PER_STRING) + 1),
 		})
+		if _specs_need_write(prev, pmerged, ["wmp", "imp", "current_output_kw"]):
+			_model.update_item(iid, {"specs": pmerged})

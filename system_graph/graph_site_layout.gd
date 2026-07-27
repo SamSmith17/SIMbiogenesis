@@ -23,6 +23,8 @@ const MAP_DISPLAY_SCALE_MAX := 8.0
 const VIEW_FREEFORM := "freeform"
 const VIEW_SITE := "site"
 const VIEW_ELEVATION := "elevation"
+## Siphon Lab — hydro detail panel (not a physical map projection).
+const VIEW_SIPHON := "siphon"
 
 
 static func has_site_coords(item: Dictionary) -> bool:
@@ -123,8 +125,12 @@ static func is_abstract_type(itype: String) -> bool:
 		"breaker", "acbreaker", "shelly4pm", "spiderbox", "breaker_panel"]
 
 
-## True when Site Plan should draw a circle (not a footprint rectangle).
-static func uses_circular_plan_chip(item: Dictionary) -> bool:
+## True when Site Plan / Elevation should draw a circle (not a footprint rectangle).
+## Site Plan always uses circular magnifiers (pass view_mode=VIEW_SITE).
+## Elevation / unset keep rectangular footprints for arrays / battery banks.
+static func uses_circular_plan_chip(item: Dictionary, view_mode: String = "") -> bool:
+	if view_mode == VIEW_SITE:
+		return true
 	var itype := str(item.get("type", ""))
 	if is_circular_node(itype):
 		return true

@@ -66,21 +66,23 @@ static func _desaturate(c: Color, sat: float, alpha: float) -> Color:
 
 
 ## Animated direction cue: scrolling dashes along a cubic bezier (source → target).
+## `steps` defaults to 64; pass ~28 under high-speed / wire LOD.
 static func draw_bezier_flow_cues(
 		canvas: CanvasItem,
 		from: Vector2, c1: Vector2, c2: Vector2, to: Vector2,
-		col: Color, width: float, phase: float, reverse: bool) -> void:
+		col: Color, width: float, phase: float, reverse: bool,
+		steps: int = 64) -> void:
 	if width < 0.5:
 		return
-	const STEPS := 64
+	var step_n := maxi(8, steps)
 	var dash_len: float = 1.0 / float(DASH_COUNT)
 	var scroll: float = fmod(phase * 0.42, dash_len)
 	if reverse:
 		scroll = -scroll
 	var prev: Vector2 = from
 	var prev_on: bool = false
-	for i in range(1, STEPS + 1):
-		var t: float = float(i) / float(STEPS)
+	for i in range(1, step_n + 1):
+		var t: float = float(i) / float(step_n)
 		var p: Vector2 = from.bezier_interpolate(c1, c2, to, t)
 		var u: float = t + scroll
 		var on: bool = fmod(u + 1000.0, dash_len) < dash_len * DASH_ON_FRAC

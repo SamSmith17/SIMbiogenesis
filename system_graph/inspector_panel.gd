@@ -23,6 +23,7 @@ const _EDU_CARDS_SCRIPT  := preload("res://system_graph/graph_education_cards.gd
 const _GRAPH_CANVAS_SCRIPT := preload("res://system_graph/graph_canvas.gd")
 
 const _TOUCH_SCROLL_HANDLER := preload("res://system_graph/touch_scroll_handler.gd")
+const _PpSheetPressSource := preload("res://power_system/sources/pp_sheet_press_source.gd")
 
 # ---------------------------------------------------------------------------
 # State
@@ -36,6 +37,10 @@ var _updating_form: bool       = false   # guard against emit→rebuild loops
 
 var _title_lbl: Label          = null
 var _form_vbox: VBoxContainer  = null
+## Live PP beam-extruder readout labels (updated while the item stays selected).
+var _pp_ext_rate_lbl: Label = null
+var _pp_ext_stick_lbl: Label = null
+var _pp_ext_cuts_lbl: Label = null
 
 ## Optional: parent graph calls set_toast_callback(Callable) for automation messages.
 var _toast_cb: Callable = Callable()
@@ -45,14 +50,23 @@ var _inspect_auto_id: String = ""
 var _ha_linker: Node = null
 var _compound_enter_cb: Callable = Callable()
 var _compound_ungroup_cb: Callable = Callable()
+var _compound_explode_cb: Callable = Callable()
 var _compound_back_cb: Callable = Callable()
+var _component_save_cb: Callable = Callable()
+var _component_make_unique_cb: Callable = Callable()
 var _conduit_route_cb: Callable = Callable()
 var _conduit_clear_cb: Callable = Callable()
+var _conduit_style_cb: Callable = Callable()
 var _placeholder_cb: Callable = Callable()
 var _place_model_cb: Callable = Callable()
 var _place_site_twin_cb: Callable = Callable()
+var _set_hidden3d_cb: Callable = Callable()
+var _is_hidden3d_cb: Callable = Callable()
+var _hide_placeholder_twins_cb: Callable = Callable()
+var _edit_ports_cb: Callable = Callable()
 var _preview_refresh_cb: Callable = Callable()
 var _controller_reset_cb: Callable = Callable()
+var _siphon_lab_cb: Callable = Callable()
 ## Resyncs a processor's dangling/ghost I/O tank containers after a direct
 ## in-place port edit (add/remove/kind change) — SystemGraphView-injected.
 var _ghost_sync_cb: Callable = Callable()
@@ -70,6 +84,10 @@ var _advanced_expanded: Dictionary = {}
 var _auto_id_counter: int = 0
 ## FileDialog for attaching a user GLB to the selected graph node.
 var _glb_file_dialog: FileDialog = null
+## FileDialog + staged parse for a Cartesian-machine G-code/STL job upload.
+var _machine_file_dialog: FileDialog = null
+var _pending_job_parse: Dictionary = {}
+var _pending_job_item_id: String = ""
 
 ## Single shared LoadCalibrator instance.  Live progress is reported through
 ## these widget refs so the panel doesn't need to be rebuilt every tick.
@@ -177,15 +195,24 @@ func set_ha_linker(linker: Node) -> void:
 	_ha_linker = linker
 
 
-func set_compound_callbacks(enter_cb: Callable, ungroup_cb: Callable, back_cb: Callable = Callable()) -> void:
+func set_compound_callbacks(enter_cb: Callable, ungroup_cb: Callable,
+		back_cb: Callable = Callable(), explode_cb: Callable = Callable()) -> void:
 	_compound_enter_cb = enter_cb
 	_compound_ungroup_cb = ungroup_cb
 	_compound_back_cb = back_cb
+	_compound_explode_cb = explode_cb
 
 
-func set_conduit_callbacks(route_cb: Callable, clear_cb: Callable) -> void:
+func set_component_callbacks(save_cb: Callable, make_unique_cb: Callable) -> void:
+	_component_save_cb = save_cb
+	_component_make_unique_cb = make_unique_cb
+
+
+func set_conduit_callbacks(route_cb: Callable, clear_cb: Callable,
+		style_cb: Callable = Callable()) -> void:
 	_conduit_route_cb = route_cb
 	_conduit_clear_cb = clear_cb
+	_conduit_style_cb = style_cb
 
 
 func set_placeholder_callback(cb: Callable) -> void:
@@ -196,8 +223,24 @@ func set_place_model_callback(cb: Callable) -> void:
 	_place_model_cb = cb
 
 
+func set_siphon_lab_callback(cb: Callable) -> void:
+	_siphon_lab_cb = cb
+
+
 func set_place_site_twin_callback(cb: Callable) -> void:
 	_place_site_twin_cb = cb
+
+
+## cb(item_id: String, hidden: bool) -> void ; is_cb(item_id) -> bool ;
+## bulk_cb(hidden: bool) -> void — hide/show a node's 3D twin + a bulk placeholder hide.
+func set_hide_3d_callbacks(set_cb: Callable, is_cb: Callable, bulk_cb: Callable) -> void:
+	_set_hidden3d_cb = set_cb
+	_is_hidden3d_cb = is_cb
+	_hide_placeholder_twins_cb = bulk_cb
+
+
+func set_edit_ports_callback(cb: Callable) -> void:
+	_edit_ports_cb = cb
 
 
 func set_preview_refresh_callback(cb: Callable) -> void:
@@ -304,7 +347,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 		"hydro":
 			_section("Turbine")
 			_text_field("Name",               specs.get("name", ""),              "specs/name")
-			_text_field("Kind (pelton/turgo/run_of_river)", specs.get("kind", "pelton"), "specs/kind")
+			_turbine_kind_field("Turbine kind", str(specs.get("kind", "pelton")), "specs/kind")
 			_num_field("Turbine Eff. (0=auto)", specs.get("turbine_efficiency", 0.0), "specs/turbine_efficiency", 0.0, 0.95, 0.01)
 			_num_field("Generator Eff.",      specs.get("generator_efficiency", 0.85), "specs/generator_efficiency", 0.5, 1.0, 0.01)
 			_section("Site / Placement")
@@ -380,6 +423,16 @@ func _rebuild_for_item(item: Dictionary) -> void:
 				_build_csp_concentrator_section(specs)
 			elif str(specs.get("role", "")) == "heliostat":
 				_build_heliostat_section(specs)
+			elif str(specs.get("role", "")) == "siphon_hydro":
+				_build_siphon_hydro_section(specs)
+			elif str(specs.get("role", "")) == "biodigester":
+				_build_biodigester_section(specs)
+			elif str(specs.get("role", "")) == "pp_beam_extruder":
+				_build_pp_beam_extruder_section(specs)
+			elif str(specs.get("role", "")) == "pp_sheet_press":
+				_build_pp_sheet_press_section(specs)
+			elif str(specs.get("role", "")) == "cartesian_machine":
+				_build_cartesian_machine_section(item, specs)
 			else:
 				_build_processor_energy_picker(specs)
 				_num_field("Power Draw (W)",     specs.get("watts", 0.0),       "specs/watts",       0, 100000, 10.0)
@@ -388,7 +441,12 @@ func _rebuild_for_item(item: Dictionary) -> void:
 				var daily_note := str(specs.get("daily_note", ""))
 				if not daily_note.is_empty():
 					_readonly_field("Daily design", daily_note)
-			_build_processor_batch_editor(specs)
+			var _role := str(specs.get("role", ""))
+			if _role != "cartesian_machine" and _role != "pp_sheet_press" \
+					and _role != "siphon_hydro":
+				_build_process_recipe_section(specs)
+			elif _role == "pp_sheet_press":
+				pass  # recipe picker lives in _build_pp_sheet_press_section
 			_section("Cost")
 			_num_field("Unit Cost ($)",      specs.get("cost", 0.0),        "specs/cost", 0, 99999, 1.0)
 			_build_save_to_library_button(item)
@@ -404,18 +462,49 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			var unlim_cb := CheckBox.new()
 			unlim_cb.button_pressed = unlimited
 			unlim_cb.focus_mode = Control.FOCUS_NONE
+			unlim_cb.tooltip_text = "Conceptual ∞ tank — never fills up. Prefer “Allow deficit” when you want to see stock change."
 			unlim_cb.toggled.connect(func(on: bool) -> void:
 				_commit_field("specs/unlimited_capacity", on)
+				# Anchor at empty so absolute stock (level × 1e12) stays readable.
+				if on and absf(float(specs.get("level", 0.0)) - 0.5) < 0.001:
+					_commit_field("specs/level", 0.0)
 				_rebuild_current_item()
 			)
 			unlim_h.add_child(unlim_cb)
 			_form_vbox.add_child(unlim_row)
-			if unlimited:
+
+			var allow_neg := bool(specs.get("allow_negative", false))
+			var neg_row := _row_container()
+			var neg_h: HBoxContainer = neg_row.get_child(0) as HBoxContainer
+			neg_h.add_child(_key_label("Allow deficit"))
+			var neg_cb := CheckBox.new()
+			neg_cb.button_pressed = allow_neg
+			neg_cb.focus_mode = Control.FOCUS_NONE
+			neg_cb.tooltip_text = "Stock may go negative when downstream pulls. Never blocks consumers or producers — useful for sizing real capacity while watching flow."
+			neg_cb.toggled.connect(func(on: bool) -> void:
+				_commit_field("specs/allow_negative", on)
+				_rebuild_current_item()
+			)
+			neg_h.add_child(neg_cb)
+			_form_vbox.add_child(neg_row)
+
+			if unlimited and not allow_neg:
 				_readonly_field("Capacity", "∞ (conceptual)")
 			else:
-				_num_field("Capacity",      specs.get("capacity_qty", 100.0), "specs/capacity_qty", 0.0, 1e9, 1.0)
+				_num_field("Capacity", specs.get("capacity_qty", 100.0), "specs/capacity_qty", 0.001, 1e9, 1.0)
 			_text_field("Capacity Unit", specs.get("capacity_unit", "L"), "specs/capacity_unit")
-			_readonly_field("Fill Level (sim)", "%.1f%%" % (float(specs.get("level", 0.0)) * 100.0))
+			if bool(specs.get("pond_storage", false)):
+				_build_pond_twin_mode_section(specs)
+			var stock := ResourceKinds.tank_stock_qty(specs)
+			var stock_lbl := ResourceKinds.format_tank_stock(specs)
+			if allow_neg and stock < 0.0:
+				_readonly_field("Stock (sim)", "%s  ⚠ deficit" % stock_lbl)
+			elif unlimited:
+				_readonly_field("Stock (sim)", "%s  (∞ cap)" % stock_lbl)
+			else:
+				_readonly_field("Stock (sim)", stock_lbl)
+			if not unlimited and not allow_neg:
+				_readonly_field("Fill Level (sim)", "%.1f%%" % (clampf(float(specs.get("level", 0.0)), 0.0, 1.0) * 100.0))
 			_num_field("Alert Threshold (%)", specs.get("alert_threshold_pct", 95.0), "specs/alert_threshold_pct", 0.0, 100.0, 1.0)
 			var scale_row := _row_container()
 			var scale_h: HBoxContainer = scale_row.get_child(0) as HBoxContainer
@@ -460,12 +549,20 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_section("Specs")
 			_text_field("Catchment kind", str(specs.get("catchment_kind", "rain")), "specs/catchment_kind")
 			if str(specs.get("catchment_kind", "rain")) != "biomass":
-				_num_field("Runoff Coefficient", specs.get("runoff_coeff", 0.85), "specs/runoff_coeff", 0.0, 1.0, 0.01)
+				var runoff_default := 0.35 if str(specs.get("catchment_kind", "")) == "watershed" \
+						else 0.85
+				_num_field("Runoff Coefficient",
+						specs.get("runoff_coeff", runoff_default), "specs/runoff_coeff", 0.0, 1.0, 0.01)
 			var live_lph := float(specs.get("live_capture_lph", specs.get("live_capture_rate", 0.0)))
 			if str(specs.get("catchment_kind", "rain")) == "biomass":
 				_readonly_field("Live capture", "%.3f kg/h" % live_lph)
 			else:
 				_readonly_field("Live capture", "%.1f L/h" % live_lph)
+			if str(specs.get("catchment_kind", "")) == "watershed":
+				_readonly_field("Pond tag", str(specs.get("pond_tag", "")))
+				if int(specs.get("cell_count", 0)) > 0:
+					_readonly_field("DEM cells", str(int(specs.get("cell_count", 0))))
+				_hint_label("Hillside runoff from DEM watershed → pond tank (no Rain PBI wire). Refresh from Pond settings.")
 			if not str(specs.get("osm_tag", "")).is_empty():
 				_readonly_field("OSM tag", str(specs.get("osm_tag", "")))
 			_section("Cost")
@@ -513,12 +610,21 @@ func _rebuild_for_item(item: Dictionary) -> void:
 	if _item_supports_automation(item):
 		_build_load_automation_section(item)
 
+	# Promote-to-parent: when this node lives inside a super-node, offer to expose
+	# any of its handles as a promoted port on the enclosing compound.
+	if itype != "compound":
+		_build_promote_ports_section(item)
+
 	# Look & layout - editable size + canvas position (after type specs).
 	_build_appearance_section(item)
 
 	# 3D embodiment - Place in 3D when a GLB is attached, else prompt to add one.
+	# Compounds with a model_id (StarShade super-node) also get Place in 3D so
+	# power conduits can anchor to the world mesh.
+	var has_model_id := not str((item.get("specs", {}) as Dictionary).get("model_id", "")).is_empty()
 	if itype in ["panel", "plant", "wind", "hydro", "processor", "resource", "catchment",
-			"appliance", "acload", "battery", "smartbattery", "controller"]:
+			"appliance", "acload", "battery", "smartbattery", "controller"] \
+			or (itype == "compound" and has_model_id):
 		_build_scene_link_section(item)
 
 	if itype in ["shelly4pm", "spiderbox", "breaker_panel"]:
@@ -820,24 +926,84 @@ func _build_connection_3d_route_section(conn: Dictionary) -> void:
 	if _model != null:
 		routable = _model.connection_is_3d_routable(conn)
 		if routable:
-			var wps: Array = conn.get("route_3d", []) as Array
-			status = "Routed (%d waypoint(s))" % wps.size() if wps.size() > 0 else "Auto (direct run)"
+			var global_on := true
+			if is_instance_valid(SimSettingsController):
+				global_on = bool(SimSettingsController.conduits_3d_visible)
+			if not ConduitKinds.resolve_visible_3d(conn, global_on):
+				if conn.has("visible_3d") and conn.get("visible_3d") != null \
+						and not bool(conn.get("visible_3d")):
+					status = "Hidden (forced off)"
+				else:
+					status = "Hidden by global (timeline: 3D wires)"
+			elif bool(conn.get("route_locked", false)):
+				var pins: Array = conn.get("route_3d", []) as Array
+				status = "Locked (%d pin(s))" % pins.size()
+			else:
+				var tid := ConduitKinds.derive_type_for_connection(conn)
+				status = "Auto pipes" if ConduitKinds.is_pipes_type(tid) \
+						else "Auto route"
 		else:
 			var src := _model.get_item(str(conn.get("source_item_id", "")))
 			var tgt := _model.get_item(str(conn.get("target_item_id", "")))
 			var miss: Array = []
-			if _model.item_scene_path(src).is_empty():
+			if not _model.item_has_3d_anchor(src):
 				miss.append("source")
-			if _model.item_scene_path(tgt).is_empty():
+			if not _model.item_has_3d_anchor(tgt):
 				miss.append("target")
 			if not miss.is_empty():
 				status = "Unrouted - missing 3D link on: %s" % ", ".join(miss)
 	_readonly_field("Status", status)
+	_build_tri_state_opt(conn, "visible_3d", "Show in 3D", "Follow global / force on / force off")
 	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
 	_readonly_field("Conduit (derived)", ConduitKinds.display_name(type_id))
+	_build_conduit_type_picker(conn)
+	# Quick: Make physical
+	var phys_row := HBoxContainer.new()
+	phys_row.add_theme_constant_override("separation", 8)
+	var phys_btn := Button.new()
+	phys_btn.text = "Make physical"
+	phys_btn.tooltip_text = "Set conduit to the suggested physical kind (extension cord, hose, pipe…)"
+	phys_btn.focus_mode = Control.FOCUS_NONE
+	phys_btn.add_theme_color_override("font_color", C_PRIMARY)
+	phys_btn.pressed.connect(func() -> void:
+		if _updating_form or _model == null or _item_id.is_empty():
+			return
+		var suggested := ConduitKinds.suggested_physical_type(conn)
+		_model.update_connection(_item_id, {"conduit_type": suggested})
+		inspect_connection(_model.get_connection(_item_id), _model)
+	)
+	phys_row.add_child(phys_btn)
+	var conceptual_btn := Button.new()
+	conceptual_btn.text = "Make conceptual"
+	conceptual_btn.focus_mode = Control.FOCUS_NONE
+	conceptual_btn.pressed.connect(func() -> void:
+		if _updating_form or _model == null or _item_id.is_empty():
+			return
+		_model.update_connection(_item_id, {"conduit_type": ""})
+		inspect_connection(_model.get_connection(_item_id), _model)
+	)
+	phys_row.add_child(conceptual_btn)
+	_form_vbox.add_child(phys_row)
+	_build_tri_state_opt(conn, "flow_glow", "Flow glow", "Conceptual always glows; physical follows global unless forced")
 	var len_m: float = float(conn.get("route_length_m", conn.get("estimated_length", 0.0)))
 	_readonly_field("Run length (m)", "%.2f" % len_m if len_m > 0.001 else "-")
-	_build_conduit_type_picker(conn)
+	var segs := ConduitKinds.segment_count_for_length(type_id, len_m)
+	var max_seg: float = float(ConduitKinds.type_meta(type_id).get("max_segment_m", 0.0))
+	if max_seg > 0.01 and segs > 1:
+		_readonly_field("Stock segments", "%d × %.0f m  (needs coupler)" % [segs, max_seg])
+	if ConduitKinds.uses_culvert_kit(type_id):
+		_build_culvert_hydraulics_section(conn, type_id)
+	_build_site_waypoints_editor(conn)
+	var style_btn := Button.new()
+	style_btn.text = "Preview style…"
+	style_btn.tooltip_text = "Live 3D preview — tune type, glow, thickness, routing; save presets"
+	style_btn.focus_mode = Control.FOCUS_NONE
+	style_btn.add_theme_color_override("font_color", C_PRIMARY)
+	style_btn.pressed.connect(func() -> void:
+		if _conduit_style_cb.is_valid():
+			_conduit_style_cb.call(_item_id)
+	)
+	_form_vbox.add_child(style_btn)
 	if routable:
 		var route_btn := Button.new()
 		route_btn.text = "Route in 3D"
@@ -848,12 +1014,114 @@ func _build_connection_3d_route_section(conn: Dictionary) -> void:
 		)
 		_form_vbox.add_child(route_btn)
 		var clear_btn := Button.new()
-		clear_btn.text = "Clear 3D route"
+		clear_btn.text = "Clear 3D route / reset auto"
 		clear_btn.pressed.connect(func() -> void:
 			if _conduit_clear_cb.is_valid():
 				_conduit_clear_cb.call(_item_id)
 		)
 		_form_vbox.add_child(clear_btn)
+
+
+## Culvert stage-discharge authoring + live Q at the linked pond level.
+func _build_culvert_hydraulics_section(conn: Dictionary, type_id: String) -> void:
+	var hdr := Label.new()
+	hdr.text = "Culvert hydrology"
+	hdr.add_theme_color_override("font_color", C_PRIMARY)
+	hdr.add_theme_font_size_override("font_size", 12)
+	_form_vbox.add_child(hdr)
+	var meta := ConduitKinds.type_meta(type_id)
+	var size_in := float(conn.get("pipe_size_in", meta.get("default_pipe_size_in", 8.0)))
+	_num_field("Pipe size (in)", size_in, "pipe_size_in", 4.0, 24.0, 1.0)
+	_num_field("Invert in (m)", float(conn.get("invert_in_m", 0.0)), "invert_in_m",
+			-500.0, 5000.0, 0.01)
+	_num_field("Invert out (m)", float(conn.get("invert_out_m", 0.0)), "invert_out_m",
+			-500.0, 5000.0, 0.01)
+	_num_field("Manning n", float(conn.get("manning_n", meta.get("manning_n", 0.012))),
+			"manning_n", 0.008, 0.03, 0.001)
+	_text_field("Inlet pond tag", str(conn.get("inlet_pond_tag", "")), "inlet_pond_tag")
+	var q_lps := float(conn.get("live_q_lps", 0.0))
+	var head := float(conn.get("live_head_m", 0.0))
+	var pe := float(conn.get("live_pe_kw", 0.0))
+	var regime := str(conn.get("live_regime", "—"))
+	_readonly_field("Live Q", "%.2f L/s  ·  head %.2f m  ·  %s" % [q_lps, head, regime])
+	_readonly_field("Potential power", "%.3f kW (ρgQH)" % pe)
+
+
+func _build_tri_state_opt(conn: Dictionary, key: String, label: String, tip: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var lbl := Label.new()
+	lbl.text = label
+	lbl.add_theme_color_override("font_color", C_TEXT_S)
+	lbl.custom_minimum_size.x = 120.0
+	lbl.tooltip_text = tip
+	row.add_child(lbl)
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.tooltip_text = tip
+	opt.add_item("Follow global", 0)
+	opt.add_item("On", 1)
+	opt.add_item("Off", 2)
+	var sel := 0
+	if conn.has(key) and conn.get(key) != null:
+		sel = 1 if bool(conn.get(key, true)) else 2
+	opt.select(sel)
+	opt.item_selected.connect(func(idx: int) -> void:
+		if _updating_form or _model == null or _item_id.is_empty():
+			return
+		if idx == 0:
+			_model.update_connection(_item_id, {key: null})
+		else:
+			_model.update_connection(_item_id, {key: (idx == 1)})
+	)
+	row.add_child(opt)
+	_form_vbox.add_child(row)
+
+
+func _build_site_waypoints_editor(conn: Dictionary) -> void:
+	if _model == null:
+		return
+	var src := _model.get_item(str(conn.get("source_item_id", "")))
+	var tgt := _model.get_item(str(conn.get("target_item_id", "")))
+	if not GraphSiteLayout.has_site_coords(src) or not GraphSiteLayout.has_site_coords(tgt):
+		return
+	var wps: Array = conn.get("site_waypoints", []) as Array
+	_readonly_field("Site bends", str(wps.size()))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var add_btn := Button.new()
+	add_btn.text = "Add midpoint bend"
+	add_btn.tooltip_text = "Insert a site-metre bend halfway between endpoints (for ortho pipe/duct runs)"
+	add_btn.focus_mode = Control.FOCUS_NONE
+	add_btn.pressed.connect(func() -> void:
+		if _updating_form or _model == null or _item_id.is_empty():
+			return
+		var a := GraphSiteLayout.site_xz(src)
+		var b := GraphSiteLayout.site_xz(tgt)
+		var mid := (a + b) * 0.5
+		# Offset slightly so the bend is visible / not colinear with a pure diagonal.
+		var perp := Vector2(-(b.y - a.y), b.x - a.x)
+		if perp.length_squared() > 1e-4:
+			perp = perp.normalized() * minf(a.distance_to(b) * 0.15, 4.0)
+		else:
+			perp = Vector2(1.5, 0.0)
+		var next: Array = (conn.get("site_waypoints", []) as Array).duplicate(true)
+		next.append(ConduitKinds.site_waypoint_dict(mid + perp))
+		_model.update_connection(_item_id, {"site_waypoints": next, "route_locked": false})
+		inspect_connection(_model.get_connection(_item_id), _model)
+	)
+	row.add_child(add_btn)
+	var clear_btn := Button.new()
+	clear_btn.text = "Clear bends"
+	clear_btn.focus_mode = Control.FOCUS_NONE
+	clear_btn.pressed.connect(func() -> void:
+		if _updating_form or _model == null or _item_id.is_empty():
+			return
+		_model.update_connection(_item_id, {"site_waypoints": [], "route_locked": false})
+		inspect_connection(_model.get_connection(_item_id), _model)
+	)
+	row.add_child(clear_btn)
+	_form_vbox.add_child(row)
 
 
 func _build_conduit_type_picker(conn: Dictionary) -> void:
@@ -887,6 +1155,9 @@ func _build_conduit_type_picker(conn: Dictionary) -> void:
 
 
 func _clear_form() -> void:
+	_pp_ext_rate_lbl = null
+	_pp_ext_stick_lbl = null
+	_pp_ext_cuts_lbl = null
 	for child in _form_vbox.get_children():
 		_form_vbox.remove_child(child)
 		child.queue_free()
@@ -1120,6 +1391,43 @@ func _text_field(label: String, value: String, path: String) -> void:
 
 	hbox.add_child(edit)
 	_form_vbox.add_child(row)
+
+
+## Turbine-kind dropdown over HydroSource.KINDS (+ a "custom" entry preserving an
+## unknown saved kind so old free-text values are never lost), plus a muted
+## head-band hint. `path` is "specs/kind" (type-"hydro" estimator) or
+## "specs/turbine_kind" (pond turbines). Rebuilds the inspector on change so the
+## hint + per-kind sections refresh.
+func _turbine_kind_field(label: String, current: String, path: String) -> void:
+	var row := _row_container()
+	var hbox: HBoxContainer = row.get_child(0)
+	hbox.add_child(_key_label(label))
+	var opt := OptionButton.new()
+	opt.focus_mode = Control.FOCUS_NONE
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var cur := current.strip_edges().to_lower()
+	var sel_idx := 0
+	var i := 0
+	for k in HydroSource.KINDS.keys():
+		opt.add_item(str((HydroSource.KINDS[k] as Dictionary).get("display", k)), i)
+		opt.set_item_metadata(i, k)
+		if k == cur:
+			sel_idx = i
+		i += 1
+	if not HydroSource.KINDS.has(cur) and not cur.is_empty():
+		opt.add_item("Custom (%s)" % current, i)
+		opt.set_item_metadata(i, current)
+		sel_idx = i
+	opt.select(sel_idx)
+	opt.item_selected.connect(func(idx: int) -> void:
+		_commit_field(path, str(opt.get_item_metadata(idx)))
+		_rebuild_current_item()
+	)
+	hbox.add_child(opt)
+	_form_vbox.add_child(row)
+	var band: Array = HydroSource.kind_meta(current).get("head_band", []) as Array
+	if band.size() == 2:
+		_readonly_field("Best head", "%.0f–%.0f m" % [float(band[0]), float(band[1])])
 
 
 func _num_field(label: String, value: float, path: String,
@@ -2870,6 +3178,298 @@ func _build_processor_energy_picker(specs: Dictionary) -> void:
 	_form_vbox.add_child(row)
 
 
+## Precious Plastic sheet press: thickness setpoint + cycle telemetry
+## (SystemGraphView._tick_graph_pp_sheet_press / PpSheetPressSource).
+func _build_pp_sheet_press_section(specs: Dictionary) -> void:
+	_num_field("Sheet Thickness (mm)", specs.get("sheet_thickness_mm", 8.0),
+			"specs/sheet_thickness_mm", 5.0, 20.0, 0.5)
+	_num_field("Peak Heater Power (W)", specs.get("peak_watts", 5000.0),
+			"specs/peak_watts", 1000.0, 15000.0, 100.0)
+	_num_field("Z Stroke (m)", specs.get("z_stroke_m", 0.12),
+			"specs/z_stroke_m", 0.02, 0.5, 0.01)
+	var auto_row := HBoxContainer.new()
+	auto_row.add_theme_constant_override("separation", 8)
+	var auto_lbl := Label.new()
+	auto_lbl.text = "Auto-cycle"
+	auto_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	auto_lbl.custom_minimum_size.x = 120.0
+	auto_row.add_child(auto_lbl)
+	var auto_cb := CheckButton.new()
+	auto_cb.button_pressed = bool(specs.get("auto_cycle", true))
+	auto_cb.focus_mode = Control.FOCUS_NONE
+	auto_cb.toggled.connect(func(on: bool) -> void:
+		if _updating_form or _model == null or _item_id.is_empty():
+			return
+		var item := _model.get_item(_item_id)
+		var sub: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		sub["auto_cycle"] = on
+		_model.update_item(_item_id, {"specs": sub})
+	)
+	auto_row.add_child(auto_cb)
+	_form_vbox.add_child(auto_row)
+
+	# Preview mass / cycle from the pure physics helper.
+	var thick := float(specs.get("sheet_thickness_mm", 8.0))
+	var job := _PpSheetPressSource.derive_job(specs)
+	_readonly_field("Sheet mass", "%.2f kg (1 m² × %.1f mm)" % [
+		float(job.get("material_kg", 0.0)), thick])
+	_readonly_field("Cycle time", "%.0f min  (melt %.0f + cool %.0f)" % [
+		float(job.get("duration_hr", 0.0)) * 60.0,
+		float(job.get("melt_hr", 0.0)) * 60.0,
+		float(job.get("cool_hr", 0.0)) * 60.0])
+	_readonly_field("Throughput", "%.1f kg/h  ·  ~%.1f kWh/h avg" % [
+		float(job.get("throughput_kg_h", 0.0)),
+		float(job.get("avg_kwh_per_h", 0.0))])
+	var daily_note := str(specs.get("daily_note", ""))
+	if not daily_note.is_empty():
+		_readonly_field("Daily design", daily_note)
+
+	_section("Live Press")
+	var phase := str(specs.get("job_phase", "idle"))
+	var prog := float(specs.get("job_progress", 0.0))
+	_readonly_field("Phase", "%s  (%.0f%%)" % [phase, prog * 100.0])
+	_readonly_field("Live draw", "%.0f W" % float(specs.get("watts", 0.0)))
+	_readonly_field("Sheets pressed", "%d" % int(specs.get("sheets_pressed_total", 0)))
+
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 8)
+	var start_btn := Button.new()
+	start_btn.text = "Press sheet"
+	start_btn.focus_mode = Control.FOCUS_NONE
+	start_btn.disabled = bool(specs.get("job_active", false))
+	start_btn.pressed.connect(func():
+		var v := _machine_view()
+		if v != null and v.has_method("start_pp_sheet_press_job"):
+			v.call("start_pp_sheet_press_job", _item_id)
+			_rebuild_current_item()
+	)
+	btn_row.add_child(start_btn)
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.focus_mode = Control.FOCUS_NONE
+	cancel_btn.disabled = not bool(specs.get("job_active", false))
+	cancel_btn.pressed.connect(func():
+		var v := _machine_view()
+		if v != null and v.has_method("cancel_pp_sheet_press_job"):
+			v.call("cancel_pp_sheet_press_job", _item_id)
+			_rebuild_current_item()
+	)
+	btn_row.add_child(cancel_btn)
+	_form_vbox.add_child(btn_row)
+	var inv_btn := Button.new()
+	inv_btn.text = "Open Inventory…"
+	inv_btn.focus_mode = Control.FOCUS_NONE
+	inv_btn.pressed.connect(func():
+		var v := _machine_view()
+		if v != null and v.has_method("open_inventory_panel"):
+			v.call("open_inventory_panel")
+	)
+	_form_vbox.add_child(inv_btn)
+
+	_build_sheet_recipe_picker(specs)
+
+
+## Precious Plastic beam extruder: cut length + live extrusion telemetry
+## (SystemGraphView._tick_graph_pp_extruder / PpBeamExtruderSource).
+func _build_pp_beam_extruder_section(specs: Dictionary) -> void:
+	_num_field("Power Draw (W)", specs.get("watts", 1200.0), "specs/watts", 0, 20000, 10.0)
+	_num_field("Flake Rate (kg/h)", specs.get("flake_kg_h", 5.0), "specs/flake_kg_h", 0.1, 50.0, 0.1)
+	_num_field("kg per metre", specs.get("kg_per_m", 1.17), "specs/kg_per_m", 0.1, 20.0, 0.01)
+	_num_field("Cut Length (m)", specs.get("cut_length_m", 2.0), "specs/cut_length_m", 0.1, 20.0, 0.05)
+	_text_field("Part id", specs.get("job_part_id", "dome_beam"), "specs/job_part_id")
+	_text_field("Part label", specs.get("job_part_label", "Recycled Plastic Beam"), "specs/job_part_label")
+	var daily_note := str(specs.get("daily_note", ""))
+	if not daily_note.is_empty():
+		_readonly_field("Daily design", daily_note)
+
+	_section("Live Extrusion")
+	_pp_ext_rate_lbl = _live_readonly_field("Extrude rate", "")
+	_pp_ext_stick_lbl = _live_readonly_field("Current stick", "")
+	_pp_ext_cuts_lbl = _live_readonly_field("Beams cut", "")
+	_update_pp_extruder_live_labels(specs)
+	var inv_btn := Button.new()
+	inv_btn.text = "Open Inventory…"
+	inv_btn.focus_mode = Control.FOCUS_NONE
+	inv_btn.pressed.connect(func():
+		var v := _machine_view()
+		if v != null and v.has_method("open_inventory_panel"):
+			v.call("open_inventory_panel")
+	)
+	_form_vbox.add_child(inv_btn)
+
+
+func current_item_id() -> String:
+	return _item_id
+
+
+## Called by SystemGraphView each extruder poll while this node is selected.
+func refresh_pp_extruder_live() -> void:
+	if _model == null or _item_id.is_empty():
+		return
+	var item := _model.get_item(_item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(specs.get("role", "")) != "pp_beam_extruder":
+		return
+	_update_pp_extruder_live_labels(specs)
+
+
+func _live_readonly_field(label: String, initial: String) -> Label:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var key := Label.new()
+	key.text = label
+	key.add_theme_color_override("font_color", C_TEXT_S)
+	key.custom_minimum_size.x = 120.0
+	row.add_child(key)
+	var val := Label.new()
+	val.text = initial
+	val.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	val.add_theme_color_override("font_color", C_TEXT)
+	row.add_child(val)
+	_form_vbox.add_child(row)
+	return val
+
+
+func _update_pp_extruder_live_labels(specs: Dictionary) -> void:
+	var mph := float(specs.get("meters_per_hour", 0.0))
+	if mph <= 0.0:
+		var kg_h := float(specs.get("flake_kg_h", 5.0))
+		var kg_m := maxf(float(specs.get("kg_per_m", 1.17)), 0.001)
+		mph = kg_h / kg_m
+	if _pp_ext_rate_lbl != null and is_instance_valid(_pp_ext_rate_lbl):
+		_pp_ext_rate_lbl.text = "%.2f m/h" % mph
+	if _pp_ext_stick_lbl != null and is_instance_valid(_pp_ext_stick_lbl):
+		_pp_ext_stick_lbl.text = "%.3f m (%.0f%% of cut)" % [
+			float(specs.get("extruded_length_m", 0.0)),
+			float(specs.get("extrude_fill_fraction", 0.0)) * 100.0]
+	if _pp_ext_cuts_lbl != null and is_instance_valid(_pp_ext_cuts_lbl):
+		_pp_ext_cuts_lbl.text = "%d" % int(specs.get("beams_cut_total", 0))
+
+
+## HomeBiogas 2.0 biodigester: feed mode / daily setpoint plus read-only live
+## telemetry written each tick by SystemGraphView._tick_graph_biodigester (see
+## power_system/sources/home_biogas_source.gd for the physics).
+func _build_biodigester_section(specs: Dictionary) -> void:
+	var mode_row := HBoxContainer.new()
+	mode_row.add_theme_constant_override("separation", 8)
+	var mode_lbl := Label.new()
+	mode_lbl.text = "Feed Type"
+	mode_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	mode_lbl.custom_minimum_size.x = 120.0
+	mode_row.add_child(mode_lbl)
+	var mode_opt := OptionButton.new()
+	mode_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mode_opt.add_item("Food waste (max 6 L/day)", 0)
+	mode_opt.add_item("Animal manure (max 15 L/day)", 1)
+	var is_manure := str(specs.get("feed_mode", "food")).to_lower() == "manure"
+	mode_opt.select(1 if is_manure else 0)
+	mode_opt.item_selected.connect(func(idx: int) -> void:
+		if _updating_form or _model == null or _item_id.is_empty():
+			return
+		var item := _model.get_item(_item_id)
+		var sub: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var new_mode := "manure" if idx == 1 else "food"
+		sub["feed_mode"] = new_mode
+		var mode_max := float(sub.get("max_manure_l_day", 15.0)) if new_mode == "manure" \
+				else float(sub.get("max_food_l_day", 6.0))
+		sub["daily_feed_l"] = minf(float(sub.get("daily_feed_l", mode_max)), mode_max)
+		var inputs: Array = (sub.get("inputs", []) as Array).duplicate(true)
+		if not inputs.is_empty():
+			var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+			inp0["kind"] = "manure" if new_mode == "manure" else "food_waste"
+			inputs[0] = inp0
+			sub["inputs"] = inputs
+		_model.update_item(_item_id, {"specs": sub})
+		_rebuild_current_item()
+	)
+	mode_row.add_child(mode_opt)
+	_form_vbox.add_child(mode_row)
+
+	var feed_max := float(specs.get("max_manure_l_day", 15.0)) if is_manure \
+			else float(specs.get("max_food_l_day", 6.0))
+	_num_field("Daily Feed (L)", specs.get("daily_feed_l", feed_max),
+			"specs/daily_feed_l", 0.0, feed_max, 0.1)
+	_num_field("CH₄ Fraction", specs.get("ch4_fraction", 0.625),
+			"specs/ch4_fraction", 0.5, 0.75, 0.01)
+	_readonly_field("Digester Volume", "%.0f L" % float(specs.get("digester_volume_l", 1200.0)))
+	_readonly_field("Gas Storage", "%.0f L (%.2f m³)" % [
+		float(specs.get("gas_storage_l", 700.0)),
+		float(specs.get("gas_storage_l", 700.0)) / 1000.0])
+	_readonly_field("Dimensions", "%.0f × %.0f × %.0f cm" % [
+		float(specs.get("dim_l_cm", 210.0)),
+		float(specs.get("dim_w_cm", 115.0)),
+		float(specs.get("dim_h_cm", 130.0))])
+	var daily_note := str(specs.get("daily_note", ""))
+	if not daily_note.is_empty():
+		_readonly_field("Daily design", daily_note)
+
+	_section("Live Telemetry")
+	_readonly_field("Ambient Temp", "%.1f °C" % float(specs.get("ambient_temp_c", 20.0)))
+	_readonly_field("Temp Factor", "%.0f%%" % (float(specs.get("temp_factor", 1.0)) * 100.0))
+	_readonly_field("Feed Load", "%.0f%% of max" % (float(specs.get("feed_fraction", 0.0)) * 100.0))
+	_readonly_field("Biogas", "%.3f m³/h (%.2f m³/day)" % [
+		float(specs.get("biogas_m3_h", 0.0)),
+		float(specs.get("biogas_m3_day", float(specs.get("biogas_m3_h", 0.0)) * 24.0))])
+	_readonly_field("Methane", "%.2f m³/day" % float(specs.get("methane_m3_day", 0.0)))
+	_readonly_field("Fertilizer", "%.2f L/h" % float(specs.get("fertilizer_lph", 0.0)))
+	_readonly_field("Cooking Gas", "~%.1f h/day (single burner)" % float(specs.get("cooking_hours_day", 0.0)))
+
+
+## Siphon micro-hydro: open Siphon Lab for levels; compact live telemetry here.
+func _build_siphon_hydro_section(specs: Dictionary) -> void:
+	var lab_btn := Button.new()
+	lab_btn.text = "Open Hydro Lab…"
+	lab_btn.tooltip_text = "Turbine kind, geometry, penstock, live RPM / power"
+	lab_btn.pressed.connect(func() -> void:
+		if _siphon_lab_cb.is_valid() and not _item_id.is_empty():
+			_siphon_lab_cb.call(_item_id))
+	_form_vbox.add_child(lab_btn)
+	var kind := str(specs.get("turbine_kind", "siphon"))
+	_turbine_kind_field("Turbine kind", kind, "specs/turbine_kind")
+	var has_penstock := bool(HydroSource.kind_meta(kind).get("has_penstock", false))
+	_num_field("Intake Ø (mm)", specs.get("intake_diameter_mm", 150.0),
+			"specs/intake_diameter_mm", 50.0, 400.0, 5.0)
+	_num_field("Outlet Ø (mm)", specs.get("outlet_diameter_mm", 200.0),
+			"specs/outlet_diameter_mm", 50.0, 600.0, 5.0)
+	if has_penstock:
+		# Penstock turbine (pelton/turgo/run-of-river): pond drains through a
+		# pressurized pipe; Q is set by penstock delivery vs. turbine design flow.
+		_num_field("Penstock length (m)", specs.get("penstock_length_m", 60.0),
+				"specs/penstock_length_m", 1.0, 2000.0, 1.0)
+		_num_field("Penstock Ø (mm)", specs.get("penstock_diameter_mm", 63.0),
+				"specs/penstock_diameter_mm", 20.0, 2000.0, 1.0)
+		_num_field("Roughness ε (mm)", specs.get("pipe_roughness_mm", 0.0015),
+				"specs/pipe_roughness_mm", 0.0005, 1.0, 0.0005)
+		_num_field("Design flow (L/s)", specs.get("design_flow_lps", 5.0),
+				"specs/design_flow_lps", 0.1, 5000.0, 0.1)
+		_num_field("Turbine η (0=auto)", specs.get("turbine_efficiency", 0.0),
+				"specs/turbine_efficiency", 0.0, 0.95, 0.01)
+	else:
+		# Siphon: orifice-limited barrel + hydraulic efficiency.
+		_num_field("Barrel length (m)", specs.get("barrel_length_m", 20.0),
+				"specs/barrel_length_m", 1.0, 500.0, 0.5)
+		_num_field("Hydraulic η", specs.get("hydraulic_efficiency", 0.6),
+				"specs/hydraulic_efficiency", 0.1, 1.0, 0.01)
+	_num_field("Max power (W, 0=uncapped)", specs.get("max_power_w", 0.0),
+			"specs/max_power_w", 0.0, 50000.0, 10.0)
+	_num_field("Generator η", specs.get("generator_efficiency", 0.7),
+			"specs/generator_efficiency", 0.1, 1.0, 0.01)
+	var daily_note := str(specs.get("daily_note", ""))
+	if not daily_note.is_empty():
+		_readonly_field("Wiring", daily_note)
+	_section("Live Telemetry")
+	_readonly_field("Siphon", "PRIMED" if bool(specs.get("siphon_primed", false)) else "broken / dry")
+	_readonly_field("Flow", "%.2f L/s" % float(specs.get("live_q_lps", 0.0)))
+	_readonly_field("Head", "%.2f m" % float(specs.get("live_head_m", 0.0)))
+	_readonly_field("RPM", "%.0f" % float(specs.get("live_rpm", 0.0)))
+	_readonly_field("PE potential", "%.0f W" % float(specs.get("live_pe_w", 0.0)))
+	_readonly_field("DC output", "%.0f W" % (float(specs.get("current_output_kw", 0.0)) * 1000.0))
+	_readonly_field("Regime", str(specs.get("live_regime", "—")))
+	_readonly_field("Hint", "Siphon Lab → Bind pond + ∞ outlet · DC +/- → 48V battery")
+
+
 ## Parabolic-trough CSP fields: geometry/optics inputs plus read-only live
 ## telemetry written each tick by SystemGraphView._tick_graph_csp (see
 ## power_system/sources/csp_trough_source.gd for the physics).
@@ -2893,6 +3493,270 @@ func _build_csp_concentrator_section(specs: Dictionary) -> void:
 	_readonly_field("End Loss", "%.1f%%" % (float(specs.get("end_loss_frac", 0.0)) * 100.0))
 	_readonly_field("Thermal Output", "%.2f kW" % float(specs.get("thermal_output_kw", 0.0)))
 	_readonly_field("Steam Output", "%.2f kg/h" % float(specs.get("steam_kg_h", 0.0)))
+
+
+## Cartesian CNC machine (CNC router / flake 3D printer): editable machine
+## params, a job upload/start/cancel flow, live scrub-safe job telemetry (owned
+## by SystemGraphView._tick_graph_tools), and buttons to load a real G-code/STL
+## file + configure the X/Y/Z axis tagging (Machine Setup modal).
+func _build_cartesian_machine_section(item: Dictionary, specs: Dictionary) -> void:
+	var iid := str(item.get("id", ""))
+	var role := str(specs.get("machine_role", "generic"))
+	_num_field("Power Draw (W)", specs.get("watts", 900.0), "specs/watts", 0, 20000, 10.0)
+	_num_field("Speed Factor", specs.get("speed_factor", 1.0), "specs/speed_factor", 0.05, 100.0, 0.05)
+	if role == "fdm_printer":
+		_num_field("Feedstock Ø (mm)", specs.get("filament_diameter_mm", 3.0), "specs/filament_diameter_mm", 0.1, 20.0, 0.1)
+		_num_field("Flake Density (g/cm³)", specs.get("flake_density_g_cm3", 0.95), "specs/flake_density_g_cm3", 0.1, 3.0, 0.01)
+	_section("Work Volume (mm)")
+	_num_field("X travel", specs.get("work_x_mm", 600.0), "specs/work_x_mm", 10, 100000, 1.0)
+	_num_field("Y travel", specs.get("work_y_mm", 600.0), "specs/work_y_mm", 10, 100000, 1.0)
+	_num_field("Z travel", specs.get("work_z_mm", 600.0), "specs/work_z_mm", 10, 100000, 1.0)
+	var daily_note := str(specs.get("daily_note", ""))
+	if not daily_note.is_empty():
+		_readonly_field("Design", daily_note)
+
+	_section("Job")
+	var active := bool(specs.get("job_active", false))
+	var is_router := role == "cnc_router" or str(specs.get("model_id", "")) == "cnc_router"
+	if active:
+		var progress := clampf(float(specs.get("job_progress", 0.0)), 0.0, 1.0)
+		var dur := float(specs.get("job_duration_hr", 0.0))
+		_readonly_field("Job", str(specs.get("job_name", "Job")))
+		_readonly_field("Progress", "%.0f%%" % (progress * 100.0))
+		_readonly_field("Machine time left", "%.2f h" % (dur * (1.0 - progress)))
+		var mkind := str(specs.get("job_material_kind", ""))
+		if not mkind.is_empty():
+			_readonly_field("Material", "%.3f kg %s" % [
+				float(specs.get("job_material_qty", 0.0)), ResourceKinds.display_name(mkind)])
+		_readonly_field("Energy (job)", "%.2f kWh" % float(specs.get("job_energy_kwh", 0.0)))
+		var cancel_btn := Button.new()
+		cancel_btn.text = "⏹ Cancel job"
+		cancel_btn.pressed.connect(func():
+			var v := _machine_view()
+			if v != null and v.has_method("cancel_machine_job"):
+				v.call("cancel_machine_job", iid)
+			_rebuild_current_item()
+		)
+		_form_vbox.add_child(cancel_btn)
+	else:
+		if bool(specs.get("job_completed", false)):
+			_readonly_field("Last job", "%s ✓ (%d× %s)" % [
+				str(specs.get("job_name", "Job")),
+				int(specs.get("job_part_count", 1)),
+				str(specs.get("job_part_label", "part"))])
+		if is_router:
+			_build_cnc_cut_presets(iid)
+		_text_field("Part name", specs.get("job_part_label", ""), "specs/job_part_label")
+		_text_field("Part id", specs.get("job_part_id", ""), "specs/job_part_id")
+		_num_field("Part count", specs.get("job_part_count", 1), "specs/job_part_count", 1, 1000, 1.0)
+		# Staged file summary + Start, if a file was loaded for THIS node.
+		if _pending_job_item_id == iid and not _pending_job_parse.is_empty():
+			var pj := _pending_job_parse
+			_readonly_field("Loaded", "%s • %d pts" % [
+				str(pj.get("kind", "job")).to_upper(), int(pj.get("point_count", 0))])
+			_readonly_field("Est. time", "%.2f h @ 1×" % float(pj.get("est_time_hr", 0.0)))
+			var bmin: Vector3 = pj.get("bounds_min", Vector3.ZERO)
+			var bmax: Vector3 = pj.get("bounds_max", Vector3.ZERO)
+			var sz := bmax - bmin
+			_readonly_field("Size (mm)", "%.0f × %.0f × %.0f" % [sz.x, sz.y, sz.z])
+			var start_btn := Button.new()
+			start_btn.text = "▶ Start job"
+			start_btn.pressed.connect(func():
+				var it := _model.get_item(iid)
+				var sp: Dictionary = it.get("specs", {}) as Dictionary
+				var v := _machine_view()
+				if v != null and v.has_method("start_machine_job"):
+					v.call("start_machine_job", iid, _pending_job_parse,
+						str(sp.get("job_part_id", "")), str(sp.get("job_part_label", "")),
+						int(sp.get("job_part_count", 1)))
+				_pending_job_parse = {}
+				_pending_job_item_id = ""
+				_rebuild_current_item()
+			)
+			_form_vbox.add_child(start_btn)
+		var load_btn := Button.new()
+		load_btn.text = "📂 Load G-code / STL…"
+		load_btn.pressed.connect(func():
+			_pending_job_item_id = iid
+			_ensure_machine_file_dialog()
+			_machine_file_dialog.popup_centered_ratio(0.6)
+		)
+		_form_vbox.add_child(load_btn)
+
+	_section("3D Machine")
+	var setup_btn := Button.new()
+	setup_btn.text = "🔧 Configure axes…"
+	setup_btn.tooltip_text = "Tag which model sub-node is each X/Y/Z axis and calibrate travel."
+	setup_btn.pressed.connect(func():
+		var v := _machine_view()
+		if v != null and v.has_method("open_machine_setup"):
+			v.call("open_machine_setup", str(specs.get("model_id", "")), iid)
+	)
+	_form_vbox.add_child(setup_btn)
+
+	var inv_btn := Button.new()
+	inv_btn.text = "🧩 Inventory & crafting…"
+	inv_btn.pressed.connect(func():
+		var v := _machine_view()
+		if v != null and v.has_method("open_inventory_panel"):
+			v.call("open_inventory_panel")
+	)
+	_form_vbox.add_child(inv_btn)
+
+
+## Built-in cut ops: debit one recycled-plastic beam → mill A/B dome strut.
+func _build_cnc_cut_presets(item_id: String) -> void:
+	_section("Cut presets (beam → strut)")
+	var inv := _part_inventory()
+	var beams := inv.count_beam_feedstock() if inv != null else 0
+	_readonly_field("Beam stock", "%d recycled plastic beam(s)" % beams)
+	var note := Label.new()
+	note.text = "Mills rounded ends + bolt holes. Alternate path to printing struts on the trash printer."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	note.modulate = Color(0.7, 0.75, 0.82)
+	_form_vbox.add_child(note)
+	for p: Dictionary in CncCutPresets.all():
+		var pid := str(p.get("id", ""))
+		var need := maxi(int(p.get("consume_qty", 1)), 1)
+		var btn := Button.new()
+		btn.text = "✂ %s" % str(p.get("label", pid))
+		btn.tooltip_text = str(p.get("note", ""))
+		btn.disabled = beams < need
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.pressed.connect(_on_cnc_cut_preset_pressed.bind(item_id, pid))
+		_form_vbox.add_child(btn)
+	if beams <= 0:
+		var hint := Label.new()
+		hint.text = "No beam feedstock yet — cut beams on the PP Beam Extruder (or load beams labeled “Recycled Plastic Beam”)."
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hint.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		hint.modulate = Color(0.9, 0.7, 0.55)
+		_form_vbox.add_child(hint)
+		# Legacy: extruder used to auto-tag long cuts as finished struts.
+		if inv != null:
+			var as_n := inv.count("dome_strut_a")
+			var bs_n := inv.count("dome_strut_b")
+			if as_n + bs_n > 0:
+				var conv := Button.new()
+				conv.text = "↩ Reclaim %d strut(s) as beam stock" % (as_n + bs_n)
+				conv.tooltip_text = "If these came from the beam extruder (not the trash printer), convert them back to CNC feedstock."
+				conv.focus_mode = Control.FOCUS_NONE
+				conv.pressed.connect(func():
+					_reclaim_struts_as_beams(inv)
+					_rebuild_current_item()
+				)
+				_form_vbox.add_child(conv)
+
+
+func _on_cnc_cut_preset_pressed(item_id: String, preset_id: String) -> void:
+	var v := _machine_view()
+	if v == null or not v.has_method("start_cnc_cut_preset"):
+		_toast("CNC cut presets unavailable")
+		return
+	var result: Dictionary = v.call("start_cnc_cut_preset", item_id, preset_id)
+	if bool(result.get("ok", false)):
+		_toast("Cutting %s (1 beam)" % str(result.get("produce", "strut")))
+	else:
+		_toast(str(result.get("error", "cut failed")))
+	_rebuild_current_item()
+
+
+func _reclaim_struts_as_beams(inv: PartInventory) -> void:
+	if inv == null:
+		return
+	var n := 0
+	for pid: String in ["dome_strut_a", "dome_strut_b"]:
+		var q := inv.count(pid)
+		if q <= 0:
+			continue
+		if inv.remove_part(pid, q):
+			inv.add_part("pp_beam", q, {
+				"label": DomeParts.label_for(DomeParts.PART_BEAM),
+				"material_kind": "plastic_flake",
+				"source": "reclaim_strut",
+			})
+			n += q
+	if n <= 0:
+		return
+	var tree := get_tree()
+	var main := tree.get_first_node_in_group("main_scene") if tree != null else null
+	if main == null and tree != null:
+		main = tree.root.find_child("Main", true, false)
+	var loader := main.find_child("TerrainLoader", true, false) if main != null else null
+	if loader != null and loader.has_method("save_part_inventory"):
+		loader.call("save_part_inventory")
+	_toast("Reclaimed %d beam(s) for CNC cutting" % n)
+
+
+func _part_inventory() -> PartInventory:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var main := tree.get_first_node_in_group("main_scene")
+	if main == null:
+		main = tree.root.find_child("Main", true, false)
+	if main == null:
+		return null
+	var loader := main.find_child("TerrainLoader", true, false)
+	if loader != null and loader.has_method("get_part_inventory"):
+		return loader.call("get_part_inventory") as PartInventory
+	return null
+
+
+func _ensure_machine_file_dialog() -> void:
+	if _machine_file_dialog != null and is_instance_valid(_machine_file_dialog):
+		return
+	_machine_file_dialog = FileDialog.new()
+	_machine_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_machine_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_machine_file_dialog.filters = PackedStringArray([
+		"*.gcode, *.gco, *.g, *.nc, *.ngc, *.tap ; G-code",
+		"*.stl ; STL mesh"])
+	_machine_file_dialog.title = "Load machine job (G-code / STL)"
+	_machine_file_dialog.file_selected.connect(_on_machine_file_selected)
+	add_child(_machine_file_dialog)
+
+
+func _on_machine_file_selected(path: String) -> void:
+	var ext := path.get_extension().to_lower()
+	var parse: Dictionary
+	if ext == "stl":
+		parse = StlLoader.parse_file(path)
+	else:
+		parse = Toolpath.parse_file(path)
+	if not bool(parse.get("ok", false)):
+		_toast("Could not parse job: %s" % str(parse.get("error", "unknown")))
+		return
+	_pending_job_parse = parse
+	# Default the part name from the filename if the user hasn't set one.
+	if _model != null and not _pending_job_item_id.is_empty():
+		var it := _model.get_item(_pending_job_item_id)
+		if not it.is_empty():
+			var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+			if str(sp.get("job_part_label", "")).is_empty():
+				var base := path.get_file().get_basename()
+				sp["job_part_label"] = base
+				sp["job_part_id"] = base.to_snake_case()
+				_model.update_item(_pending_job_item_id, {"specs": sp})
+	_toast("Loaded job (%d pts) — set part name + Start" % int(parse.get("point_count", 0)))
+	_rebuild_current_item()
+
+
+## Finds the SystemGraphView (owns machine job scheduling + setup modal) by
+## walking up the parent chain, falling back to the known UILayer path.
+func _machine_view() -> Node:
+	var n: Node = self
+	while n != null:
+		if n.has_method("start_machine_job"):
+			return n
+		n = n.get_parent()
+	var tree := get_tree()
+	if tree != null:
+		var m := tree.get_first_node_in_group("main_scene")
+		if m != null:
+			return m.get_node_or_null("UILayer/SystemGraphView")
+	return null
 
 
 func _build_heliostat_section(specs: Dictionary) -> void:
@@ -2936,66 +3800,173 @@ func _build_save_to_library_button(item: Dictionary) -> void:
 	_form_vbox.add_child(btn)
 
 
-func _build_processor_batch_editor(specs: Dictionary) -> void:
+## Process recipes replace Batch Cycle Mode: pick a catalog recipe, run/cancel,
+## edit/create via modal. I/O still editable when a recipe (or legacy batch) is active.
+func _build_process_recipe_section(specs: Dictionary) -> void:
 	ResourceKinds.new().migrate_processor_specs(specs)
-	_section("Input / Output Editor")
-	
-	var batch_mode: bool = bool(specs.get("batch_mode", false))
-	var mode_row := _row_container()
-	var mode_hb := HBoxContainer.new()
-	mode_row.add_child(mode_hb)
-	var mode_lbl := _key_label("Batch Cycle Mode")
-	mode_hb.add_child(mode_lbl)
-	var mode_chk := CheckButton.new()
-	mode_chk.button_pressed = batch_mode
-	mode_chk.toggled.connect(func(v: bool):
-		specs["batch_mode"] = v
-		_commit_field("specs", specs)
-		_rebuild_current_item()
-	)
-	mode_hb.add_child(mode_chk)
-	_form_vbox.add_child(mode_row)
-	
-	if batch_mode:
-		_num_field("Cycle Time (hrs)", float(specs.get("batch_time_hrs", 1.0)), "specs/batch_time_hrs", 0.01, 10000.0, 0.1)
-		var fail_opts := ["pause_and_resume", "restart_with_penalty", "destroy_batch"]
-		var fail_names := ["Pause & Resume", "Restart (Penalty)", "Destroy Batch"]
-		var fail_val := str(specs.get("batch_failure_mode", "pause_and_resume"))
-		
-		var fail_row := _row_container()
-		var fail_hb := HBoxContainer.new()
-		fail_row.add_child(fail_hb)
-		var fail_lbl := _key_label("Failure Mode")
-		fail_hb.add_child(fail_lbl)
-		var fail_opt := OptionButton.new()
-		fail_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var fsel := 0
-		for i in fail_opts.size():
-			fail_opt.add_item(fail_names[i], i)
-			if fail_opts[i] == fail_val:
-				fsel = i
-		fail_opt.select(fsel)
-		fail_opt.item_selected.connect(func(id: int):
-			specs["batch_failure_mode"] = fail_opts[id]
+	_section("Process Recipe")
+	var role := str(specs.get("role", "processor"))
+	var recipes: Array = ProcessRecipeCatalog.recipes_for_role(role)
+	# Also show generic processor recipes when role is specialized-empty.
+	if recipes.is_empty():
+		recipes = ProcessRecipeCatalog.recipes_for_role("processor")
+
+	var selected := str(specs.get("selected_recipe_id", specs.get("active_recipe_id", "")))
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.add_item("(none — continuous)", 0)
+	var ids: Array = [""]
+	var sel_idx := 0
+	for i in recipes.size():
+		var r: Dictionary = recipes[i] as Dictionary
+		var rid := str(r.get("id", ""))
+		opt.add_item(str(r.get("label", rid)), i + 1)
+		ids.append(rid)
+		if rid == selected:
+			sel_idx = i + 1
+	# Legacy batch without a named recipe.
+	if selected.is_empty() and bool(specs.get("batch_mode", false)):
+		opt.add_item("Legacy batch cycle", ids.size())
+		ids.append(ProcessRecipe.EPHEMERAL_ID)
+		sel_idx = ids.size() - 1
+	opt.select(sel_idx)
+	opt.item_selected.connect(func(idx: int):
+		var rid2 := str(ids[idx]) if idx >= 0 and idx < ids.size() else ""
+		if rid2.is_empty():
+			specs["selected_recipe_id"] = ""
+			specs["batch_mode"] = false
+			specs.erase("active_recipe_id")
 			_commit_field("specs", specs)
 			_rebuild_current_item()
+			return
+		if rid2 == ProcessRecipe.EPHEMERAL_ID:
+			specs["batch_mode"] = true
+			specs["selected_recipe_id"] = ProcessRecipe.EPHEMERAL_ID
+			_commit_field("specs", specs)
+			_rebuild_current_item()
+			return
+		var v := _machine_view()
+		if v != null and v.has_method("apply_process_recipe"):
+			v.call("apply_process_recipe", _item_id, rid2)
+		_rebuild_current_item()
+	)
+	_form_vbox.add_child(opt)
+
+	var recipe := ProcessRecipeCatalog.find(selected)
+	if recipe.is_empty() and bool(specs.get("batch_mode", false)):
+		recipe = ProcessRecipe.from_batch_specs(specs)
+	if not recipe.is_empty():
+		_readonly_field("Batch time", "%.2f h" % float(recipe.get("batch_time_hrs", 1.0)))
+		_readonly_field("Chore hours", "%.2f h" % float(recipe.get("chore_hours", 0.0)))
+		var steps: Array = recipe.get("steps", []) as Array
+		if not steps.is_empty():
+			var step_bits: PackedStringArray = PackedStringArray()
+			for s: Variant in steps:
+				if s is Dictionary:
+					step_bits.append(str((s as Dictionary).get("label", "")))
+			_readonly_field("Steps", " → ".join(step_bits))
+		var note := str(recipe.get("note", ""))
+		if not note.is_empty():
+			_readonly_field("Note", note)
+
+	if bool(specs.get("recipe_waiting_chore", false)):
+		var banner := Label.new()
+		banner.text = "Waiting: %s" % str(specs.get("recipe_waiting_label", "chore"))
+		banner.add_theme_color_override("font_color", UITheme.C_WARN)
+		banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_form_vbox.add_child(banner)
+		var conf := Button.new()
+		conf.text = "Confirm chore"
+		conf.focus_mode = Control.FOCUS_NONE
+		conf.pressed.connect(func():
+			var v2 := _machine_view()
+			if v2 != null and v2.has_method("confirm_recipe_chore"):
+				v2.call("confirm_recipe_chore", _item_id)
+			_rebuild_current_item()
 		)
-		fail_hb.add_child(fail_opt)
-		_form_vbox.add_child(fail_row)
-		
-		if fail_val == "restart_with_penalty" or fail_val == "destroy_batch":
-			_num_field("Penalty Qty", float(specs.get("batch_failure_penalty_qty", 0.0)), "specs/batch_failure_penalty_qty", 0.0, 99999.0, 0.1)
-	
+		_form_vbox.add_child(conf)
+
+	var prog := float(specs.get("recipe_progress", 0.0))
+	if bool(specs.get("recipe_running", false)) or prog > 0.0:
+		_readonly_field("Progress", "%.0f%%" % (prog * 100.0))
+
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 8)
+	var start_btn := Button.new()
+	start_btn.text = "Start recipe"
+	start_btn.focus_mode = Control.FOCUS_NONE
+	start_btn.disabled = selected.is_empty() and not bool(specs.get("batch_mode", false))
+	start_btn.pressed.connect(func():
+		var v3 := _machine_view()
+		if v3 != null and v3.has_method("start_process_recipe"):
+			v3.call("start_process_recipe", _item_id)
+		_rebuild_current_item()
+	)
+	btn_row.add_child(start_btn)
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.focus_mode = Control.FOCUS_NONE
+	cancel_btn.disabled = not bool(specs.get("recipe_running", false))
+	cancel_btn.pressed.connect(func():
+		var v4 := _machine_view()
+		if v4 != null and v4.has_method("cancel_process_recipe"):
+			v4.call("cancel_process_recipe", _item_id)
+		_rebuild_current_item()
+	)
+	btn_row.add_child(cancel_btn)
+	_form_vbox.add_child(btn_row)
+
+	var edit_row := HBoxContainer.new()
+	edit_row.add_theme_constant_override("separation", 8)
+	var edit_btn := Button.new()
+	edit_btn.text = "Edit recipe…"
+	edit_btn.focus_mode = Control.FOCUS_NONE
+	edit_btn.disabled = selected.is_empty() or selected == ProcessRecipe.EPHEMERAL_ID
+	edit_btn.pressed.connect(func():
+		var v5 := _machine_view()
+		if v5 != null and v5.has_method("open_process_recipe_editor"):
+			v5.call("open_process_recipe_editor", selected, role)
+	)
+	edit_row.add_child(edit_btn)
+	var new_btn := Button.new()
+	new_btn.text = "New recipe…"
+	new_btn.focus_mode = Control.FOCUS_NONE
+	new_btn.pressed.connect(func():
+		var v6 := _machine_view()
+		if v6 != null and v6.has_method("open_process_recipe_editor"):
+			v6.call("open_process_recipe_editor", "", role)
+	)
+	edit_row.add_child(new_btn)
+	var save_leg := Button.new()
+	save_leg.text = "Save as recipe…"
+	save_leg.focus_mode = Control.FOCUS_NONE
+	save_leg.tooltip_text = "Save the current I/O + cycle time as a named user recipe."
+	save_leg.pressed.connect(func():
+		var ephemeral := ProcessRecipe.from_batch_specs(specs)
+		ephemeral["id"] = ""
+		ephemeral["label"] = str(specs.get("name", "Custom recipe"))
+		ephemeral["compatible_roles"] = [role] if not role.is_empty() else ["processor"]
+		var saved := ProcessRecipeCatalog.save_user_recipe(ephemeral)
+		var v7 := _machine_view()
+		if v7 != null and v7.has_method("apply_process_recipe"):
+			v7.call("apply_process_recipe", _item_id, str(saved.get("id", "")))
+		_rebuild_current_item()
+	)
+	edit_row.add_child(save_leg)
+	_form_vbox.add_child(edit_row)
+
+	# I/O editor (recipe-driven modes when a recipe/batch is selected).
+	var recipe_active := not recipe.is_empty() or bool(specs.get("batch_mode", false)) \
+			or not selected.is_empty()
 	_section("Inputs")
 	var inputs: Array = specs.get("inputs", []) as Array
 	for i in inputs.size():
-		_build_io_row(specs, "inputs", i, batch_mode)
-	
+		_build_io_row(specs, "inputs", i, recipe_active)
 	var add_in_btn := Button.new()
 	add_in_btn.text = "+ Add Input"
 	add_in_btn.pressed.connect(func():
 		var arr: Array = specs.get("inputs", []) as Array
-		arr.append({"kind": "electric", "rate": 1000.0, "mode": "continuous"})
+		arr.append({"kind": "electric", "rate": 1000.0, "qty": 1000.0, "mode": "continuous"})
 		specs["inputs"] = arr
 		_commit_field("specs", specs)
 		_sync_ghost_containers()
@@ -3003,24 +3974,70 @@ func _build_processor_batch_editor(specs: Dictionary) -> void:
 	)
 	_form_vbox.add_child(add_in_btn)
 	_form_vbox.add_child(Control.new())
-	
+
 	_section("Outputs")
 	var outputs: Array = specs.get("outputs", []) as Array
 	for i in outputs.size():
-		_build_io_row(specs, "outputs", i, batch_mode)
-		
+		_build_io_row(specs, "outputs", i, recipe_active)
 	var add_out_btn := Button.new()
 	add_out_btn.text = "+ Add Output"
 	add_out_btn.pressed.connect(func():
-		var arr: Array = specs.get("outputs", []) as Array
-		arr.append({"kind": "water", "rate": 0.0, "mode": "continuous", "delay_hrs": 0.0, "duration_hrs": 1.0})
-		specs["outputs"] = arr
+		var arr2: Array = specs.get("outputs", []) as Array
+		arr2.append({"kind": "water", "rate": 0.0, "qty": 0.0, "mode": "end_batch",
+			"delay_hrs": 0.0, "duration_hrs": 1.0})
+		specs["outputs"] = arr2
 		_commit_field("specs", specs)
 		_sync_ghost_containers()
 		_rebuild_current_item()
 	)
 	_form_vbox.add_child(add_out_btn)
 	_form_vbox.add_child(Control.new())
+
+
+func _build_sheet_recipe_picker(specs: Dictionary) -> void:
+	_section("Process Recipe")
+	var recipes: Array = ProcessRecipeCatalog.recipes_for_role("pp_sheet_press")
+	var selected := str(specs.get("selected_recipe_id", ""))
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.add_item("(manual thickness)", 0)
+	var ids: Array = [""]
+	var sel_idx := 0
+	for i in recipes.size():
+		var r: Dictionary = recipes[i] as Dictionary
+		var rid := str(r.get("id", ""))
+		opt.add_item(str(r.get("label", rid)), i + 1)
+		ids.append(rid)
+		if rid == selected:
+			sel_idx = i + 1
+	opt.select(sel_idx)
+	opt.item_selected.connect(func(idx: int):
+		var rid2 := str(ids[idx]) if idx >= 0 and idx < ids.size() else ""
+		if rid2.is_empty():
+			specs["selected_recipe_id"] = ""
+			_commit_field("specs", specs)
+			_rebuild_current_item()
+			return
+		var v := _machine_view()
+		if v != null and v.has_method("apply_process_recipe"):
+			v.call("apply_process_recipe", _item_id, rid2)
+		_rebuild_current_item()
+	)
+	_form_vbox.add_child(opt)
+	var recipe := ProcessRecipeCatalog.find(selected)
+	if not recipe.is_empty():
+		_readonly_field("Recipe chore", "%.2f h — %s" % [
+			float(recipe.get("chore_hours", 0.0)),
+			str(recipe.get("note", ""))])
+	var edit_btn := Button.new()
+	edit_btn.text = "Edit / New recipe…"
+	edit_btn.focus_mode = Control.FOCUS_NONE
+	edit_btn.pressed.connect(func():
+		var v2 := _machine_view()
+		if v2 != null and v2.has_method("open_process_recipe_editor"):
+			v2.call("open_process_recipe_editor", selected, "pp_sheet_press")
+	)
+	_form_vbox.add_child(edit_btn)
 
 func _build_io_row(specs: Dictionary, arr_name: String, idx: int, batch_mode: bool) -> void:
 	var arr: Array = specs.get(arr_name, []) as Array
@@ -3130,6 +4147,47 @@ func _build_io_row(specs: Dictionary, arr_name: String, idx: int, batch_mode: bo
 			
 	_form_vbox.add_child(row_ctr)
 
+## Pond tank twin: Capacity Auto (terrain bathymetry) / Manual (L) and Fill Auto
+## (water surface) / Manual (%). Mirrors the Pond settings modal.
+func _build_pond_twin_mode_section(specs: Dictionary) -> void:
+	_section("Pond twin")
+	var cap_mode := str(specs.get("capacity_mode", "auto"))
+	var fill_mode := str(specs.get("fill_mode", "auto"))
+	var cap_row := _row_container()
+	var cap_h: HBoxContainer = cap_row.get_child(0) as HBoxContainer
+	cap_h.add_child(_key_label("Capacity mode"))
+	var cap_opt := OptionButton.new()
+	cap_opt.add_item("Auto (terrain)", 0)
+	cap_opt.add_item("Manual (L)", 1)
+	cap_opt.select(1 if cap_mode == "manual" else 0)
+	cap_opt.focus_mode = Control.FOCUS_NONE
+	cap_opt.item_selected.connect(func(idx: int) -> void:
+		_commit_field("specs/capacity_mode", "manual" if idx == 1 else "auto")
+		_rebuild_current_item()
+	)
+	cap_h.add_child(cap_opt)
+	_form_vbox.add_child(cap_row)
+	var fill_row := _row_container()
+	var fill_h: HBoxContainer = fill_row.get_child(0) as HBoxContainer
+	fill_h.add_child(_key_label("Fill mode"))
+	var fill_opt := OptionButton.new()
+	fill_opt.add_item("Auto (water surface)", 0)
+	fill_opt.add_item("Manual (%)", 1)
+	fill_opt.select(1 if fill_mode == "manual" else 0)
+	fill_opt.focus_mode = Control.FOCUS_NONE
+	fill_opt.item_selected.connect(func(idx: int) -> void:
+		_commit_field("specs/fill_mode", "manual" if idx == 1 else "auto")
+		_rebuild_current_item()
+	)
+	fill_h.add_child(fill_opt)
+	_form_vbox.add_child(fill_row)
+	if specs.has("stock_l"):
+		_readonly_field("Stock (terrain)", "%.0f L" % float(specs.get("stock_l", 0.0)))
+	if fill_mode == "manual":
+		_num_field("Fill (0–1)", specs.get("level", 0.0), "specs/level", 0.0, 1.0, 0.01)
+	_readonly_field("Hint", "T → Rain/Drain scrubs level in-world")
+
+
 func _build_resource_kind_picker(specs: Dictionary) -> void:
 	ResourceKinds.new().migrate_resource_specs(specs)
 	var row := HBoxContainer.new()
@@ -3200,6 +4258,34 @@ func _build_scene_link_section(item: Dictionary) -> void:
 		status = "OSM solar array linked"
 	_readonly_field("Status", status)
 
+	# Show/hide this node's 3D twin (works even when the prop is hidden, since you
+	# can't click an invisible prop in the world to un-hide it). Only when embodied.
+	if not bound_id.is_empty() and _set_hidden3d_cb.is_valid():
+		var show_chk := CheckBox.new()
+		show_chk.text = "Show in 3D world"
+		show_chk.tooltip_text = "Uncheck to hide this model from the 3D world and Site Plan (keeps the node)"
+		show_chk.focus_mode = Control.FOCUS_NONE
+		var hidden_now := bool(_is_hidden3d_cb.call(_item_id)) if _is_hidden3d_cb.is_valid() else false
+		show_chk.button_pressed = not hidden_now  # assign before connect → no spurious emit
+		show_chk.toggled.connect(func(pressed: bool) -> void:
+			if not _item_id.is_empty() and _set_hidden3d_cb.is_valid():
+				_set_hidden3d_cb.call(_item_id, not pressed)
+		)
+		_form_vbox.add_child(show_chk)
+
+	# Bulk cleanup for the "conceptual storage not ready for 3D" case.
+	if _hide_placeholder_twins_cb.is_valid():
+		var bulk_btn := Button.new()
+		bulk_btn.text = "Hide all placeholder twins"
+		bulk_btn.tooltip_text = "Hide every generic box/tank placeholder from the 3D world + Site Plan"
+		bulk_btn.flat = true
+		bulk_btn.focus_mode = Control.FOCUS_NONE
+		bulk_btn.pressed.connect(func() -> void:
+			if _hide_placeholder_twins_cb.is_valid():
+				_hide_placeholder_twins_cb.call(true)
+		)
+		_form_vbox.add_child(bulk_btn)
+
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 8)
 
@@ -3226,6 +4312,18 @@ func _build_scene_link_section(item: Dictionary) -> void:
 					_place_site_twin_cb.call(_item_id)
 			)
 			btn_row.add_child(site_btn)
+
+		if _edit_ports_cb.is_valid():
+			var ports_btn := Button.new()
+			ports_btn.text = "Edit 3D ports…"
+			ports_btn.tooltip_text = "Tag plugs / inlets on the model geometry for 3D conduit endpoints"
+			ports_btn.focus_mode = Control.FOCUS_NONE
+			ports_btn.add_theme_color_override("font_color", C_PRIMARY)
+			ports_btn.pressed.connect(func() -> void:
+				if _edit_ports_cb.is_valid() and not _item_id.is_empty():
+					_edit_ports_cb.call(_item_id)
+			)
+			btn_row.add_child(ports_btn)
 
 		var change_btn := Button.new()
 		change_btn.text = "Change GLB..."
@@ -3893,10 +4991,30 @@ func _build_compound_section(item: Dictionary) -> void:
 		_readonly_field("Combined draw", "%.0f W" % float(specs.get("avg_watts", 0.0)))
 		_readonly_field("Rated max", "%.0f W" % float(specs.get("max_watts", 0.0)))
 		_readonly_field("Summary", str(specs.get("summary", "")))
+	# Promoted ports (the super-node's external interface) with live net flow.
+	if kind == "":
+		_build_exposed_ports_editor(item)
+	var def_id := str(specs.get("definition_id", ""))
+	var is_component := not def_id.is_empty()
+	var has_identity := is_component \
+		or not str(specs.get("bound_prop_id", "")).is_empty() \
+		or not str(specs.get("starshade_tag", "")).is_empty() \
+		or (bool(specs.get("node_banner", false)) and not str(specs.get("model_id", "")).is_empty())
+	var enter_label := "Expand"
+	if kind == "array":
+		enter_label = "Expand → Panels"
+	elif kind == "battery_bank" or bool(specs.get("display_as_battery", false)) \
+			or def_id.contains("battery_bank"):
+		enter_label = "Expand → Batteries"
+	elif kind == "load_group":
+		enter_label = "Expand → Loads"
+	elif is_component:
+		enter_label = "Expand (keep identity)"
 	var row := _row_container()
 	var hbox: HBoxContainer = row.get_child(0)
 	var enter_btn := Button.new()
-	enter_btn.text = "Expand"
+	enter_btn.text = enter_label
+	enter_btn.tooltip_text = "Open children inside this super-node. Collapse (Esc) returns without losing identity or 3D binding."
 	enter_btn.focus_mode = Control.FOCUS_NONE
 	enter_btn.flat = true
 	enter_btn.add_theme_color_override("font_color", C_PRIMARY)
@@ -3905,46 +5023,369 @@ func _build_compound_section(item: Dictionary) -> void:
 			_compound_enter_cb.call(item.get("id", "") as String)
 	)
 	hbox.add_child(enter_btn)
-	var toggle_btn := Button.new()
-	toggle_btn.text = "Expand"
-	toggle_btn.focus_mode = Control.FOCUS_NONE
-	toggle_btn.flat = true
-	toggle_btn.add_theme_color_override("font_color", C_PRIMARY)
-	toggle_btn.pressed.connect(func():
-		if _compound_enter_cb.is_valid():
-			_compound_enter_cb.call(item.get("id", "") as String)
-	)
-	hbox.add_child(toggle_btn)
-	var back_btn := Button.new()
-	back_btn.text = "Collapse"
-	back_btn.focus_mode = Control.FOCUS_NONE
-	back_btn.flat = true
-	back_btn.add_theme_color_override("font_color", C_TEXT_S)
-	back_btn.pressed.connect(func():
-		if _compound_back_cb.is_valid():
-			_compound_back_cb.call()
-	)
-	hbox.add_child(back_btn)
-	if kind == "array":
-		enter_btn.text = "Expand to Panels"
-		toggle_btn.text = "Expand to Panels"
-	elif kind == "battery_bank":
-		enter_btn.text = "Expand to Batteries"
-		toggle_btn.text = "Expand to Batteries"
-	elif kind == "load_group":
-		enter_btn.text = "Expand to Loads"
-		toggle_btn.text = "Expand to Loads"
-	var ungroup_btn := Button.new()
-	ungroup_btn.text = "Ungroup"
-	ungroup_btn.focus_mode = Control.FOCUS_NONE
-	ungroup_btn.flat = true
-	ungroup_btn.add_theme_color_override("font_color", C_AMBER)
-	ungroup_btn.pressed.connect(func():
-		if _compound_ungroup_cb.is_valid():
-			_compound_ungroup_cb.call(item.get("id", "") as String)
-	)
-	hbox.add_child(ungroup_btn)
+	if has_identity:
+		var explode_btn := Button.new()
+		explode_btn.text = "Explode…"
+		explode_btn.tooltip_text = "Destructive: dissolves the shell and drops StarShade / 3D binding. Prefer Expand/Collapse."
+		explode_btn.focus_mode = Control.FOCUS_NONE
+		explode_btn.flat = true
+		explode_btn.add_theme_color_override("font_color", C_AMBER)
+		explode_btn.pressed.connect(func():
+			if _compound_explode_cb.is_valid():
+				_compound_explode_cb.call(item.get("id", "") as String)
+			elif _compound_ungroup_cb.is_valid():
+				_compound_ungroup_cb.call(item.get("id", "") as String)
+		)
+		hbox.add_child(explode_btn)
+	else:
+		var ungroup_btn := Button.new()
+		ungroup_btn.text = "Ungroup"
+		ungroup_btn.focus_mode = Control.FOCUS_NONE
+		ungroup_btn.flat = true
+		ungroup_btn.add_theme_color_override("font_color", C_AMBER)
+		ungroup_btn.pressed.connect(func():
+			if _compound_ungroup_cb.is_valid():
+				_compound_ungroup_cb.call(item.get("id", "") as String)
+		)
+		hbox.add_child(ungroup_btn)
+	if kind == "":
+		var cid := str(item.get("id", ""))
+		var is_instance := not str((item.get("specs", {}) as Dictionary).get("definition_id", "")).is_empty()
+		var save_btn := Button.new()
+		save_btn.text = "Save as Component"
+		save_btn.focus_mode = Control.FOCUS_NONE
+		save_btn.flat = true
+		save_btn.add_theme_color_override("font_color", C_PRIMARY)
+		save_btn.pressed.connect(func():
+			if _component_save_cb.is_valid():
+				_component_save_cb.call(cid)
+			else:
+				_save_compound_as_preset(item))
+		hbox.add_child(save_btn)
+		if is_instance:
+			var uniq_btn := Button.new()
+			uniq_btn.text = "Make Unique"
+			uniq_btn.focus_mode = Control.FOCUS_NONE
+			uniq_btn.flat = true
+			uniq_btn.add_theme_color_override("font_color", C_AMBER)
+			uniq_btn.pressed.connect(func():
+				if _component_make_unique_cb.is_valid():
+					_component_make_unique_cb.call(cid))
+			hbox.add_child(uniq_btn)
 	_form_vbox.add_child(row)
+	if kind == "" and not str((item.get("specs", {}) as Dictionary).get("definition_id", "")).is_empty():
+		var lbl := Label.new()
+		lbl.text = "⟳ Linked component — edits sync to all instances"
+		lbl.add_theme_font_size_override("font_size", 11)
+		lbl.add_theme_color_override("font_color", C_TEXT_M)
+		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_form_vbox.add_child(lbl)
+
+
+## Serialize a user super-node's child subgraph into the user library as a
+## reusable subgraph-template preset (mirror of the built-in COMPOUNDS entries).
+func _save_compound_as_preset(item: Dictionary) -> void:
+	if _model == null:
+		return
+	var child_scope := str(item.get("child_scope_id", ""))
+	if child_scope.is_empty():
+		return
+	var kids: Array = _model.get_items_in_scope(child_scope)
+	if kids.is_empty():
+		return
+	for k_v in kids:
+		if str((k_v as Dictionary).get("type", "")) == "compound":
+			if _toast_cb.is_valid():
+				_toast_cb.call("Ungroup nested super-nodes before saving as preset")
+			return
+	var cx := float(item.get("x", 0.0))
+	var cy := float(item.get("y", 0.0))
+	var id_map: Dictionary = {}
+	var tpl_items: Array = []
+	var i := 0
+	for k_v in kids:
+		var k := k_v as Dictionary
+		var lid := "n%d" % i
+		i += 1
+		id_map[str(k.get("id", ""))] = lid
+		tpl_items.append({
+			"local_id": lid, "type": str(k.get("type", "")),
+			"dx": float(k.get("x", 0.0)) - cx, "dy": float(k.get("y", 0.0)) - cy,
+			"specs": (k.get("specs", {}) as Dictionary).duplicate(true),
+		})
+	var tpl_conns: Array = []
+	for c_v in _model.get_connections_in_scope(child_scope):
+		var c := c_v as Dictionary
+		var s := str(id_map.get(str(c.get("source_item_id", "")), ""))
+		var t := str(id_map.get(str(c.get("target_item_id", "")), ""))
+		if s.is_empty() or t.is_empty():
+			continue
+		tpl_conns.append({
+			"source": s, "source_handle": str(c.get("source_handle_id", "")),
+			"target": t, "target_handle": str(c.get("target_handle_id", "")),
+			"polarity": c.get("polarity", "ac"),
+			"resource_type": c.get("resource_type", ""),
+		})
+	var tpl_eps: Array = []
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	for ep_v in (specs.get("exposed_ports", []) as Array):
+		var ep := ep_v as Dictionary
+		var child_local := str(id_map.get(str(ep.get("child_item_id", "")), ""))
+		if child_local.is_empty():
+			continue
+		tpl_eps.append({
+			"handle_id": str(ep.get("handle_id", "")), "child": child_local,
+			"child_handle": str(ep.get("child_handle_id", "")),
+			"direction": str(ep.get("direction", "in")),
+			"polarity": str(ep.get("polarity", "ac")),
+			"kind": str(ep.get("kind", "")), "label": str(ep.get("label", "")),
+		})
+	var name_s := str(specs.get("name", "Super Node"))
+	var preset := {
+		"type": "compound", "label": name_s, "icon": "🧩",
+		"width": float(item.get("width", 200.0)), "height": float(item.get("height", 130.0)),
+		"specs": {"name": name_s, "compound_kind": "",
+			"summary": str(specs.get("summary", "Nested graph"))},
+		"subgraph": {"items": tpl_items, "connections": tpl_conns, "exposed_ports": tpl_eps},
+	}
+	ComponentPresets.save_user_preset("supernodes", preset)
+	if _toast_cb.is_valid():
+		_toast_cb.call("Saved '%s' to Super-nodes library" % name_s)
+
+
+## Lists each promoted port of a generic super-node with its direction, resource
+## kind, live net flow (read off the real boundary wire), an editable label, and
+## a remove button (drops the port + its handle + boundary wire).
+## For a node inside a super-node, list its handles with an Expose/Hide toggle
+## that promotes (or unpromotes) that port on the enclosing compound.
+func _build_promote_ports_section(item: Dictionary) -> void:
+	if _model == null:
+		return
+	var scope_id := str(item.get("scope_id", "root"))
+	if scope_id == "root":
+		return
+	var sc: Dictionary = _model.get_scope(scope_id)
+	var owner := str(sc.get("owner_compound_id", ""))
+	if owner.is_empty():
+		return
+	var comp := _model.get_item(owner)
+	if comp.is_empty() or not GraphNesting.is_transparent_compound(comp):
+		return
+	var handles: Array = item.get("handles", []) as Array
+	if handles.is_empty():
+		return
+	var iid := str(item.get("id", ""))
+	var eps: Array = (comp.get("specs", {}) as Dictionary).get("exposed_ports", []) as Array
+	_section("Promote to Super-node")
+	for h_v in handles:
+		var h := h_v as Dictionary
+		var hid := str(h.get("id", ""))
+		if hid.is_empty():
+			continue
+		var already := ""
+		for ep_v in eps:
+			var ep := ep_v as Dictionary
+			if str(ep.get("child_item_id", "")) == iid and str(ep.get("child_handle_id", "")) == hid:
+				already = str(ep.get("handle_id", ""))
+				break
+		var row := _row_container()
+		var hbox: HBoxContainer = row.get_child(0)
+		hbox.add_child(_key_label(hid))
+		var btn := Button.new()
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.flat = true
+		if already.is_empty():
+			btn.text = "Expose"
+			btn.add_theme_color_override("font_color", C_PRIMARY)
+			btn.pressed.connect(func(): _expose_child_port(owner, iid, h))
+		else:
+			btn.text = "Hide"
+			btn.add_theme_color_override("font_color", C_AMBER)
+			var promoted := already
+			btn.pressed.connect(func(): _remove_exposed_port(owner, promoted))
+		hbox.add_child(btn)
+		_form_vbox.add_child(row)
+
+
+## Infer in/out when promoting a child handle. Controllers' acOutput (and similar
+## AC source ports) have no explicit direction field — defaulting to "in" put
+## them on the top edge and broke supernode AC wiring UX.
+func _infer_expose_direction(handle: Dictionary) -> String:
+	var explicit := str(handle.get("direction", "")).to_lower()
+	if explicit == "in" or explicit == "out":
+		return explicit
+	var hid := str(handle.get("id", "")).to_lower()
+	var pol := str(handle.get("polarity", "")).to_lower()
+	# Known AC / DC source ports.
+	if hid in ["acoutput", "acoutputleft", "acoutputtop", "acoutputbottom",
+			"ac_out", "output", "positive", "negative", "pvpositive", "pvnegative"]:
+		return "out"
+	if hid.begins_with("out_") or hid.begins_with("circuit_"):
+		return "out"
+	if hid in ["power_in", "ac_in", "input", "pv_in"]:
+		return "in"
+	if hid.begins_with("in_") or hid.begins_with("res_in_"):
+		return "in"
+	if hid.begins_with("res_out_"):
+		return "out"
+	# Fall back to geometry: bottom half → out, top half → in.
+	var ry := float(handle.get("ry", 0.0))
+	if ry >= 0.6:
+		return "out"
+	if pol == "ac" and ry >= 0.5:
+		return "out"
+	return "in"
+
+
+## Add a new promoted port on `compound_id` fronting (child_id, handle).
+func _expose_child_port(compound_id: String, child_id: String, handle: Dictionary) -> void:
+	if _model == null:
+		return
+	var comp := _model.get_item(compound_id)
+	if comp.is_empty():
+		return
+	var specs: Dictionary = (comp.get("specs", {}) as Dictionary).duplicate(true)
+	var eps: Array = (specs.get("exposed_ports", []) as Array).duplicate(true)
+	var pol := str(handle.get("polarity", "ac"))
+	var direction := _infer_expose_direction(handle)
+	var base := "%s_%s" % [direction, pol]
+	var idx := 1
+	var new_hid := "%s_%d" % [base, idx]
+	var existing: Dictionary = {}
+	for ep_v in eps:
+		existing[str((ep_v as Dictionary).get("handle_id", ""))] = true
+	while existing.has(new_hid):
+		idx += 1
+		new_hid = "%s_%d" % [base, idx]
+	eps.append({
+		"handle_id": new_hid,
+		"child_item_id": child_id,
+		"child_handle_id": str(handle.get("id", "")),
+		"polarity": pol,
+		"kind": str(handle.get("resource_kind", "")),
+		"label": "",
+		"direction": direction,
+	})
+	specs["exposed_ports"] = eps
+	var handles: Array = (comp.get("handles", []) as Array).duplicate(true)
+	handles.append({
+		"id": new_hid, "polarity": pol, "direction": direction,
+		"rx": 0.5, "ry": 0.0 if direction == "in" else 1.0,
+	})
+	var in_n := 0
+	var out_n := 0
+	for hh in handles:
+		if str((hh as Dictionary).get("direction", "")) == "out":
+			out_n += 1
+		else:
+			in_n += 1
+	specs["port_in_count"] = in_n
+	specs["port_out_count"] = out_n
+	_model.update_item(compound_id, {"specs": specs, "handles": handles})
+	_model.changed.emit("reset")
+
+
+func _build_exposed_ports_editor(item: Dictionary) -> void:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var eps: Array = specs.get("exposed_ports", []) as Array
+	if eps.is_empty():
+		return
+	_section("Promoted Ports")
+	var compound_id := str(item.get("id", ""))
+	var scope_id := str(item.get("scope_id", "root"))
+	for ep_v in eps:
+		var ep := ep_v as Dictionary
+		var hid := str(ep.get("handle_id", ""))
+		var dir := "→ out" if str(ep.get("direction", "in")) == "out" else "in →"
+		var kind_s := str(ep.get("kind", ""))
+		var flow := _exposed_port_flow(compound_id, hid, scope_id)
+		var label := str(ep.get("label", ""))
+		if label.is_empty():
+			label = hid
+		var row := _row_container()
+		var hbox: HBoxContainer = row.get_child(0)
+		hbox.add_child(_key_label("%s %s" % [dir, ("· " + kind_s) if not kind_s.is_empty() else ""]))
+		var name_edit := LineEdit.new()
+		name_edit.text = label
+		name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_edit.text_submitted.connect(func(t: String):
+			_rename_exposed_port(compound_id, hid, t))
+		name_edit.focus_exited.connect(func():
+			_rename_exposed_port(compound_id, hid, name_edit.text))
+		hbox.add_child(name_edit)
+		if flow > 0.001:
+			var flbl := Label.new()
+			flbl.text = "%.1f" % flow
+			flbl.add_theme_color_override("font_color", C_PRIMARY)
+			hbox.add_child(flbl)
+		var rm := Button.new()
+		rm.text = "✕"
+		rm.focus_mode = Control.FOCUS_NONE
+		rm.flat = true
+		rm.add_theme_color_override("font_color", C_AMBER)
+		rm.pressed.connect(func():
+			_remove_exposed_port(compound_id, hid))
+		hbox.add_child(rm)
+		_form_vbox.add_child(row)
+
+
+func _exposed_port_flow(compound_id: String, handle_id: String, scope_id: String) -> float:
+	if _model == null:
+		return 0.0
+	for conn: Dictionary in _model.get_connections_in_scope(scope_id):
+		if (str(conn.get("source_item_id", "")) == compound_id and str(conn.get("source_handle_id", "")) == handle_id) \
+				or (str(conn.get("target_item_id", "")) == compound_id and str(conn.get("target_handle_id", "")) == handle_id):
+			return absf(float(conn.get("flow_rate", 0.0)))
+	return 0.0
+
+
+func _rename_exposed_port(compound_id: String, handle_id: String, new_label: String) -> void:
+	if _model == null:
+		return
+	var it := _model.get_item(compound_id)
+	if it.is_empty():
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	var eps: Array = (specs.get("exposed_ports", []) as Array).duplicate(true)
+	for ep_v in eps:
+		var ep := ep_v as Dictionary
+		if str(ep.get("handle_id", "")) == handle_id:
+			ep["label"] = new_label
+	specs["exposed_ports"] = eps
+	_model.update_item(compound_id, {"specs": specs})
+
+
+func _remove_exposed_port(compound_id: String, handle_id: String) -> void:
+	if _model == null:
+		return
+	var it := _model.get_item(compound_id)
+	if it.is_empty():
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	var eps: Array = []
+	for ep_v in (specs.get("exposed_ports", []) as Array):
+		if str((ep_v as Dictionary).get("handle_id", "")) != handle_id:
+			eps.append(ep_v)
+	specs["exposed_ports"] = eps
+	var handles: Array = []
+	for h_v in (it.get("handles", []) as Array):
+		if str((h_v as Dictionary).get("id", "")) != handle_id:
+			handles.append(h_v)
+	var in_n := 0
+	var out_n := 0
+	for h_v in handles:
+		if str((h_v as Dictionary).get("direction", "")) == "out":
+			out_n += 1
+		else:
+			in_n += 1
+	specs["port_in_count"] = in_n
+	specs["port_out_count"] = out_n
+	_model.update_item(compound_id, {"specs": specs, "handles": handles})
+	for conn: Dictionary in _model.connections_for_item(compound_id):
+		if (str(conn.get("source_item_id", "")) == compound_id and str(conn.get("source_handle_id", "")) == handle_id) \
+				or (str(conn.get("target_item_id", "")) == compound_id and str(conn.get("target_handle_id", "")) == handle_id):
+			_model.remove_connection(str(conn.get("id", "")))
+	_model.changed.emit("reset")
 
 
 func _build_array_module_dims_editor(item: Dictionary) -> void:

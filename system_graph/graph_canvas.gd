@@ -232,6 +232,11 @@ const ZOOM_MIN       := GraphLayout.ZOOM_MIN
 const ZOOM_MAX       := GraphLayout.ZOOM_MAX
 const VALUE_EPS      := 0.0005
 const REDRAW_INTERVAL := 0.05
+## At high sim speeds, full-canvas redraw + chase trails dominate CPU; drop to
+## ~6–8 fps and force wire simplify so 1440×/Max stay interactive.
+const REDRAW_INTERVAL_HIGH_SPEED := 0.15
+## flow_mult units = sim× over realtime (see tick()); ≥300× triggers high-speed LOD.
+const HIGH_SPEED_FLOW_MULT := 300.0
 ## ~1 sim-hour per real-hour; used to scale flow-dot speed with simulation time_scale.
 const REALTIME_SCALE_REF := 1.0 / 3600.0
 
@@ -259,7 +264,34 @@ const WIRE_BASE_W := 3.8
 ## _draw_connections() pass, read by the per-wire draw functions below.
 const WIRE_LOD_HIGH_COUNT := 40
 const WIRE_LOD_ZOOM_CUTOFF := 0.45
+## Also simplify when zoomed WAY in (Elevation megapixel era) — width∝zoom
+## otherwise floods fill-rate even with few wires.
+const WIRE_LOD_ZOOM_HIGH := 4.0
+## Screen-px caps so Elevation strokes/chips don't grow with zoom forever.
+const ELEV_WIRE_MAX_PX := 8.0
+const ELEV_STROKE_MAX_PX := 6.0
+const ELEV_CHIP_MAX_PX := 96.0
+const ELEV_CHIP_MIN_PX := 28.0
+const ELEV_CHIP_MIN_H_PX := 16.0
+## Compact elev pads (chips off): hit floors stay small so ports don't own the disc.
+const ELEV_HIT_MIN_PX := 14.0
+const ELEV_PORT_GRAB_MIN_PX := 5.0
+const ELEV_PORT_GRAB_MAX_PX := 9.0
+## Faster wheel than freeform 1.08 — deep elev detail needs big steps.
+const ELEV_WHEEL_ZOOM := 1.22
+const PHYS_WIRE_CORNER_MAX_PX := 14.0
 var _wire_lod_simplify: bool = false
+## Set each tick when sim speed is high — forces wire simplify + thinner dashes.
+var _high_speed_lod: bool = false
+## Baked DEM section profile (invalidate on heading/offset/SoI/DEM — not pan/zoom).
+var _elev_along: PackedFloat32Array = PackedFloat32Array()
+var _elev_y: PackedFloat32Array = PackedFloat32Array()
+var _elev_bake_key: String = ""
+## Elevation deep-zoom: content is relative to this metre-space focus so
+## `(along - anchor) * s` stays small (no float blow-up / pan discontinuity).
+var _elev_anchor_along_m: float = 0.0
+var _elev_anchor_elev_m: float = NAN
+var _elev_anchor_inited: bool = false
 ## On-screen wire length (px) at which the reference segment counts below
 ## (28/34/24/28/30) apply at full strength; shorter/zoomed-out wires use
 ## proportionally fewer bezier segments down to a legibility floor.
@@ -357,6 +389,12 @@ var _item_drag_ids:         Array[String] = []
 var _item_drag_start_map:   Dictionary = {}
 ## Elevation view: starting elevation_m per dragged item (manual vertical moves).
 var _item_drag_start_elev:  Dictionary = {}
+## Site view (orbited): world-ground site metres under the cursor at drag start,
+## so camera-projected drags keep the per-item offset from the pointer.
+var _item_drag_cursor_site_start: Vector2 = Vector2.ZERO
+## Elevation view (orbited): section-plane hit under the cursor at drag start
+## `{site_x_m, site_z_m, elevation_m}` so tilt-aware drags stay under the pointer.
+var _item_drag_cursor_elev_start: Dictionary = {}
 var _marquee_selecting:     bool = false
 var _marquee_start:         Vector2 = Vector2.ZERO
 var _marquee_end:           Vector2 = Vector2.ZERO
@@ -395,6 +433,8 @@ signal item_double_tapped(item_id: String)
 signal items_multi_selected(item_ids: Array)
 signal connection_selected(conn_id: String)
 signal compound_open_requested(item_id: String)
+## Zoom-out past a floor while inside a sub-canvas — pop up to the parent scope.
+signal scope_pop_requested()
 signal layout_changed()
 signal resource_containers_merged(target_id: String, absorbed_id: String, kind: String)
 signal controller_reset_pressed(item_id: String)
@@ -403,6 +443,10 @@ signal soi_preview_orbit(relative: Vector2)
 signal soi_preview_zoom(zoom_in: bool)
 ## Elevation: Shift+drag rotates the section heading (continuous).
 signal elevation_heading_changed(heading_rad: float)
+## Siphon Lab: Elev chord/water drag updated specs (kind, item_id, elev_m).
+signal lab_level_dragged(kind: String, item_id: String, elev_m: float)
+## Elevation CT: slice depth along the cross-axis (−R…+R metres).
+signal elevation_section_offset_changed(offset_m: float)
 ## Site Plan empty-canvas click (world designate tools).
 signal site_background_clicked(screen_pos: Vector2)
 ## Designate tool mode: "" | "catchment" | "crop" (set by SystemGraphView).
@@ -420,10 +464,99 @@ var current_mode: String     = "build"
 var view_mode: String        = GraphSiteLayout.VIEW_FREEFORM
 ## Cross-section heading for elevation view (radians; 0 = +X / east).
 var elevation_heading_rad: float = 0.0
+## CT slice depth along the cross-axis (−SoI radius…+radius metres).
+var elevation_section_offset_m: float = 0.0
 ## Vertical exaggeration for elevation profile (1 or 5).
+## When Elev 3D section is on, draw/pan use 1× via `_elev_exaggeration_draw()`.
 var elevation_exaggeration: float = 5.0
+## Elevation overlay visibility (View options ▾). Defaults match Elev 3D on.
+var elev_show_dem_overlay: bool = true
+var elev_show_chips: bool = false
+var elev_show_ports: bool = false
+## Site Plan: show node port dots. Off = tidy (wires still draw — separate path).
+var site_show_ports: bool = true
+var elev_show_schematic_wires: bool = false
+var elev_show_projected_pipes: bool = false
+## True while Siphon Lab dock is open (same Elev CT; draws prime/break ticks).
+var siphon_lab_active: bool = false
+## Hit targets for Lab level drag (rebuilt each Elev draw).
+var _lab_level_hits: Array = []
+var _lab_pond_level_hit: Dictionary = {}
+var _lab_level_dragging: bool = false
+var _lab_level_drag_kind: String = ""
+var _lab_level_drag_item_id: String = ""
+var _lab_level_drag_start_y: float = 0.0
+var _lab_level_drag_start_elev: float = 0.0
 ## Current visible graph scope. Root matches historical behavior.
 var active_scope_id: String  = "root"
+
+## Global wire-style override (set by the toolbar "Wire style" control). Empty
+## string = use each connection's own `line_style`; otherwise this value
+## ("bezier" | "orthogonal" | "metro") is drawn for EVERY connection without
+## mutating the model, so the choice is a live, reversible view preference. Use
+## `_effective_line_style(conn)` everywhere a connection's style is read.
+var wire_style_override: String = ""
+
+
+## Resolve the drawn style for a connection: the global override wins when set,
+## otherwise the connection's own persisted `line_style`.
+func _effective_line_style(conn: Dictionary) -> String:
+	# Site Plan metro overlay forces freeform-style metro ribbons.
+	if view_mode == GraphSiteLayout.VIEW_SITE and site_wire_mode == "metro":
+		return "metro"
+	if not wire_style_override.is_empty():
+		return wire_style_override
+	return str(conn.get("line_style", "bezier"))
+
+
+## True when Site Plan should draw 2D schematic wires (metro overlay).
+func _site_draws_schematic_wires() -> bool:
+	return view_mode == GraphSiteLayout.VIEW_SITE and site_wire_mode == "metro"
+
+
+## Node body rendering for model-bearing nodes: "preview" = full-bleed GLB
+## thumbnail (default); "card" = classic framed node card. View options ▾.
+var node_display_mode: String = "preview"
+## Title band on full-bleed preview nodes (View options ▾ toggle).
+var show_preview_labels: bool = true
+## Freeform-only display scale for the SoI reference ring. Shift+scroll (with
+## the SoI bubble preview OFF) resizes just the ring; plain scroll zooms both.
+var soi_ring_scale: float = 1.0
+## Site Plan radial layout: dragging a bound node auto-yaws its 3D twin
+## tangential to the circle around the SoI center (radially planned sites —
+## e.g. Burning Man — without hand-tuning every model's yaw).
+var radial_layout_mode: bool = false
+## Site Plan: show labels on magnifier rings (rings themselves always draw).
+var site_show_chips: bool = true
+## Site Plan wire overlay: none | metro | prefer_3d (default metro → 2D wires to rings).
+var site_wire_mode: String = "metro"
+## Optional: live-sync bound 3D twin while a Site Plan magnifier is dragged.
+## Signature: (item_id: String, site_xz: Vector2) -> void
+var site_drag_sync_prop: Callable = Callable()
+## Hovered graph item id in Site Plan (magnifier glow).
+var _site_hover_item_id: String = ""
+## Working radius (m) for radial guides / array — independent of SoI R.
+var site_working_radius_m: float = NAN
+## Optional GraphSpatialEdit (SystemGraphView) for 3D prop pick/drag in Site/Elev.
+var spatial_edit = null
+## Array ghost previews from spatial_edit (site metres → drawn each frame).
+var site_array_ghosts: Array = []
+
+## When true, PBI (fundamental resource) nodes are drawn as a fixed screen-space
+## bar pinned along the top of the canvas rather than floating in graph space.
+## Set by SystemGraphView from the "Show PBI bar" toggle + save state.
+var pbi_bar_pinned: bool = true
+
+## Screen rects + resolved output-port info of the pinned PBI pills for the
+## current draw, so hit-testing (wire-drop / click-select) works against the bar.
+## item_id -> {rect: Rect2, port: Dictionary(handle info)}
+var _pbi_pill_rects: Dictionary = {}
+
+
+## True when PBI nodes should be pinned to the top bar instead of drawn in the
+## graph. Only meaningful at the root scope (PBIs live at root).
+func _pbi_pinned_active() -> bool:
+	return pbi_bar_pinned and active_scope_id == "root"
 
 var _flow_phase:   float = 0.0
 var _redraw_accum: float = 0.0
@@ -432,6 +565,8 @@ var _redraw_accum: float = 0.0
 # Shared styleboxes
 # ---------------------------------------------------------------------------
 var _sb_node_base: StyleBoxFlat
+## Reused for running/alert state halos (rounded to match node corner radius).
+var _sb_state_highlight: StyleBoxFlat
 
 
 func _ready() -> void:
@@ -446,6 +581,8 @@ func _ready() -> void:
 	_sb_node_base.set_corner_radius_all(12)
 	_sb_node_base.shadow_color = Color(0.0, 0.0, 0.0, 0.28)
 	_sb_node_base.shadow_size = 3
+	_sb_state_highlight = StyleBoxFlat.new()
+	_sb_state_highlight.set_corner_radius_all(12)
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +603,7 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 		else:
 			flow_mult = clampf(sim_time_scale / REALTIME_SCALE_REF, 0.15, 80.0)
 	_sim_flow_mult = flow_mult
+	_high_speed_lod = flow_mult >= HIGH_SPEED_FLOW_MULT
 	if current_mode == "test" and (flow_mult > 0.0 or _ac_shed_active):
 		var vis_speed := 2.5 * clampf(pow(maxf(flow_mult, 0.2), 0.45), 0.15, 5.0)
 		if _ac_shed_active and flow_mult <= 0.0:
@@ -496,7 +634,7 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 	_redraw_accum += delta
 	var interval := 0.25
 	if current_mode == "test" or _needs_continuous_redraw or fx_alive:
-		interval = REDRAW_INTERVAL
+		interval = REDRAW_INTERVAL_HIGH_SPEED if _high_speed_lod else REDRAW_INTERVAL
 	elif _alert_nodes_present:
 		interval = ALERT_REDRAW_INTERVAL
 	if _redraw_accum >= interval:
@@ -516,6 +654,168 @@ func get_view_pan() -> Vector2:
 
 func get_view_zoom() -> float:
 	return _zoom
+
+
+func get_elev_anchor_along_m() -> float:
+	return _elev_anchor_along_m
+
+
+func get_elev_anchor_elev_m() -> float:
+	if is_nan(_elev_anchor_elev_m):
+		return _elevation_datum_m()
+	return _elev_anchor_elev_m
+
+
+func has_elev_anchor() -> bool:
+	return _elev_anchor_inited and not is_nan(_elev_anchor_elev_m)
+
+
+## Keep SoI section camera locked to Elev metre anchors.
+## Dirty-flag only — force_layout_sync every wheel notch re-crops the SubViewport
+## and fights fast deep zoom (stutter + lost cursor focus).
+func _notify_elev_soi_layout() -> void:
+	if soi_preview_service == null or not is_instance_valid(soi_preview_service):
+		return
+	if soi_preview_service.has_method("mark_layout_dirty"):
+		soi_preview_service.call("mark_layout_dirty")
+
+
+## One-shot re-capture of the live 3D disc — used when a spatial-edit prop drag /
+## hover mutates the shared World3D directly, so the change shows immediately
+## instead of only on the next zoom (layout dirty).
+func _refresh_soi_preview() -> void:
+	if soi_preview_service != null and is_instance_valid(soi_preview_service) \
+			and soi_preview_service.has_method("request_refresh"):
+		soi_preview_service.call("request_refresh")
+
+
+## Snapshot / restore Elevation CT pan+zoom (Siphon Lab save/restore).
+func get_elev_view_state() -> Dictionary:
+	_ensure_elev_anchor()
+	return {
+		"zoom": _zoom,
+		"along_m": _elev_anchor_along_m,
+		"elev_m": get_elev_anchor_elev_m(),
+	}
+
+
+func set_elev_view_state(state: Dictionary) -> void:
+	if state.is_empty():
+		return
+	_zoom = clampf(float(state.get("zoom", _zoom)), ZOOM_MIN, ZOOM_MAX)
+	_elev_anchor_along_m = float(state.get("along_m", _elev_anchor_along_m))
+	_elev_anchor_elev_m = float(state.get("elev_m", get_elev_anchor_elev_m()))
+	_elev_anchor_inited = true
+	_pan = Vector2.ZERO
+	queue_redraw()
+	if soi_preview_service != null and is_instance_valid(soi_preview_service) \
+			and soi_preview_service.has_method("mark_layout_dirty"):
+		soi_preview_service.call("mark_layout_dirty")
+
+
+## Fit an along/elev metre window into `viewport_size` (Lab CT slot or canvas).
+func frame_elevation_window(along0: float, along1: float, y0: float, y1: float,
+		viewport_size: Vector2, margin: float = 0.12) -> void:
+	var a0 := minf(along0, along1)
+	var a1 := maxf(along0, along1)
+	var e0 := minf(y0, y1)
+	var e1 := maxf(y0, y1)
+	var along_span := maxf((a1 - a0) * (1.0 + 2.0 * margin), 2.0)
+	var elev_span := maxf((e1 - e0) * (1.0 + 2.0 * margin), 2.0)
+	var vw := maxf(viewport_size.x, 8.0)
+	var vh := maxf(viewport_size.y, 8.0)
+	var s := minf(vw / along_span, vh / elev_span)
+	_zoom = clampf(s / GraphSiteLayout.SOI_PX_PER_M, ZOOM_MIN, ZOOM_MAX)
+	_elev_anchor_along_m = (a0 + a1) * 0.5
+	_elev_anchor_elev_m = (e0 + e1) * 0.5
+	_elev_anchor_inited = true
+	# Elev disc chrome is viewport-centred — leftover freeform pan draws a
+	# second offset SoI ring (the "double circle" on first Elev enter).
+	_pan = Vector2.ZERO
+	queue_redraw()
+	_notify_elev_soi_layout()
+
+
+## Public wrappers so Siphon Lab can pan/zoom the shared Elev CT camera.
+func elev_pan_by_pixels(delta_px: Vector2) -> void:
+	_elev_pan_by_pixels(delta_px)
+	queue_redraw()
+
+
+func elev_zoom_at_screen(factor: float, screen_pos: Vector2,
+		viewport_size: Vector2 = Vector2.ZERO) -> void:
+	if viewport_size.x > 1.0 and viewport_size.y > 1.0:
+		_elev_zoom_at_in_viewport(factor, screen_pos, viewport_size)
+	else:
+		_elev_zoom_at(factor, screen_pos)
+	queue_redraw()
+
+
+func _ensure_elev_anchor() -> void:
+	if _elev_anchor_inited:
+		return
+	_elev_anchor_inited = true
+	if is_nan(_elev_anchor_elev_m):
+		_elev_anchor_elev_m = _elevation_datum_m()
+	# Migrate legacy pixel pan → metre anchor (screen = vc + pan + along*s
+	# matched vc + (along - anchor)*s ⇒ anchor = -pan.x/s for along=0).
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	if s > 1e-6 and _pan.length_squared() > 1.0:
+		_elev_anchor_along_m = -_pan.x / s
+		var ex := _elev_exaggeration_draw()
+		_elev_anchor_elev_m = _elevation_datum_m() + _pan.y / (s * ex)
+		_pan = Vector2.ZERO
+
+
+func _elev_pan_by_pixels(delta_px: Vector2) -> void:
+	_ensure_elev_anchor()
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	if s < 1e-6:
+		return
+	var ex := _elev_exaggeration_draw()
+	_elev_anchor_along_m -= delta_px.x / s
+	_elev_anchor_elev_m += delta_px.y / (s * ex)
+	_notify_elev_soi_layout()
+
+
+func _elev_zoom_at(factor: float, screen_pos: Vector2) -> void:
+	_ensure_elev_anchor()
+	var old_zoom := _zoom
+	_zoom = clampf(_zoom * factor, ZOOM_MIN, ZOOM_MAX)
+	if is_equal_approx(_zoom, old_zoom):
+		return
+	var vc := size * 0.5
+	var s_old := GraphSiteLayout.px_per_m(old_zoom)
+	var s_new := GraphSiteLayout.px_per_m(_zoom)
+	var ex := _elev_exaggeration_draw()
+	# Metre under cursor stays fixed.
+	var along := _elev_anchor_along_m + (screen_pos.x - vc.x) / maxf(s_old, 1e-6)
+	var elev := _elev_anchor_elev_m - (screen_pos.y - vc.y) / maxf(s_old * ex, 1e-6)
+	_elev_anchor_along_m = along - (screen_pos.x - vc.x) / maxf(s_new, 1e-6)
+	_elev_anchor_elev_m = elev + (screen_pos.y - vc.y) / maxf(s_new * ex, 1e-6)
+	_pan = Vector2.ZERO
+	_notify_elev_soi_layout()
+	queue_redraw()
+
+
+## Like `_elev_zoom_at`, but focal maths use an external viewport (Siphon Lab CT).
+func _elev_zoom_at_in_viewport(factor: float, screen_pos: Vector2,
+		viewport_size: Vector2) -> void:
+	_ensure_elev_anchor()
+	var old_zoom := _zoom
+	_zoom = clampf(_zoom * factor, ZOOM_MIN, ZOOM_MAX)
+	if is_equal_approx(_zoom, old_zoom):
+		return
+	var vc := viewport_size * 0.5
+	var s_old := GraphSiteLayout.px_per_m(old_zoom)
+	var s_new := GraphSiteLayout.px_per_m(_zoom)
+	var ex := _elev_exaggeration_draw()
+	var along := _elev_anchor_along_m + (screen_pos.x - vc.x) / maxf(s_old, 1e-6)
+	var elev := _elev_anchor_elev_m - (screen_pos.y - vc.y) / maxf(s_old * ex, 1e-6)
+	_elev_anchor_along_m = along - (screen_pos.x - vc.x) / maxf(s_new, 1e-6)
+	_elev_anchor_elev_m = elev + (screen_pos.y - vc.y) / maxf(s_new * ex, 1e-6)
+	_pan = Vector2.ZERO
+	_notify_elev_soi_layout()
 
 
 ## Returns true when the event was consumed as SoI preview camera control.
@@ -567,11 +867,37 @@ func _handle_soi_preview_camera_input(event: InputEvent) -> bool:
 
 
 const _ELEV_HEADING_SENS := 0.006
+const _ELEV_OFFSET_SENS := 0.35
 
 
 func _handle_elevation_heading_input(event: InputEvent) -> bool:
+	# Siphon Lab: lock side cut — no Shift+drag heading/slice (wheel zoom OK).
+	if siphon_lab_active:
+		if event is InputEventMouseButton:
+			var mb_lab := event as InputEventMouseButton
+			if mb_lab.shift_pressed and soi_live_preview \
+					and (mb_lab.button_index == MOUSE_BUTTON_WHEEL_UP \
+					or mb_lab.button_index == MOUSE_BUTTON_WHEEL_DOWN) \
+					and mb_lab.pressed:
+				soi_preview_zoom.emit(mb_lab.button_index == MOUSE_BUTTON_WHEEL_UP)
+				accept_event()
+				return true
+			if mb_lab.shift_pressed and mb_lab.button_index == MOUSE_BUTTON_LEFT:
+				accept_event()
+				return true
+		if event is InputEventMouseMotion and (event as InputEventMouseMotion).shift_pressed:
+			accept_event()
+			return true
+		return false
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		# Shift+wheel zooms the 3D section ortho into the cut face.
+		if mb.shift_pressed and soi_live_preview \
+				and (mb.button_index == MOUSE_BUTTON_WHEEL_UP \
+				or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN) and mb.pressed:
+			soi_preview_zoom.emit(mb.button_index == MOUSE_BUTTON_WHEEL_UP)
+			accept_event()
+			return true
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP \
 				or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			return false
@@ -596,9 +922,263 @@ func _handle_elevation_heading_input(event: InputEvent) -> bool:
 		elevation_heading_rad = fposmod(
 				elevation_heading_rad - mm.relative.x * _ELEV_HEADING_SENS, TAU)
 		elevation_heading_changed.emit(elevation_heading_rad)
+		# Vertical drag scrubs CT slice depth (−R…+R), not camera pitch.
+		if not is_equal_approx(mm.relative.y, 0.0):
+			var r_m := 150.0
+			var soi_svc := _cached_autoload("/root/SoiService")
+			if soi_svc != null and soi_svc.has_method("radius_m"):
+				r_m = float(soi_svc.call("radius_m"))
+			elevation_section_offset_m = clampf(
+					elevation_section_offset_m - mm.relative.y * _ELEV_OFFSET_SENS,
+					-r_m, r_m)
+			elevation_section_offset_changed.emit(elevation_section_offset_m)
 		queue_redraw()
 		accept_event()
 		return true
+	return false
+
+
+func _handle_lab_level_drag_input(event: InputEvent) -> bool:
+	if model == null:
+		return false
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return false
+		if not mb.pressed:
+			if _lab_level_dragging:
+				# Final sync for dock SpinBoxes.
+				if model != null and not _lab_level_drag_item_id.is_empty():
+					var fin := model.get_item(_lab_level_drag_item_id)
+					var fs: Dictionary = fin.get("specs", {}) as Dictionary
+					var elev := float(fs.get("siphon_start_m" if _lab_level_drag_kind == "prime" \
+							else ("siphon_break_m" if _lab_level_drag_kind == "break" \
+							else "level_m"), NAN))
+					if not is_nan(elev):
+						lab_level_dragged.emit(_lab_level_drag_kind,
+								_lab_level_drag_item_id, elev)
+				_lab_level_dragging = false
+				_lab_level_drag_kind = ""
+				_lab_level_drag_item_id = ""
+				accept_event()
+				return true
+			return false
+		if mb.shift_pressed:
+			return false
+		var hit := _lab_level_hit_at(mb.position)
+		if hit.is_empty():
+			return false
+		_lab_level_dragging = true
+		_lab_level_drag_kind = str(hit.get("kind", ""))
+		_lab_level_drag_item_id = str(hit.get("item_id", ""))
+		_lab_level_drag_start_y = mb.position.y
+		_lab_level_drag_start_elev = float(hit.get("elev_m", 0.0))
+		accept_event()
+		return true
+	if event is InputEventMouseMotion:
+		if not _lab_level_dragging:
+			return false
+		var mm := event as InputEventMouseMotion
+		var s := GraphSiteLayout.px_per_m(_zoom)
+		var ex := _elev_exaggeration_draw()
+		var px_per_m := maxf(s * ex, 1e-6)
+		# Screen Y down → elevation down.
+		var d_elev := -((mm.position.y - _lab_level_drag_start_y) / px_per_m)
+		var new_elev := _lab_level_drag_start_elev + d_elev
+		_apply_lab_level_drag(new_elev)
+		accept_event()
+		return true
+	return false
+
+
+func _lab_level_hit_at(pos: Vector2) -> Dictionary:
+	const PAD := 8.0
+	for h in _lab_level_hits:
+		if not (h is Dictionary):
+			continue
+		var d: Dictionary = h
+		if pos.x < float(d.get("x0", 0.0)) or pos.x > float(d.get("x1", 0.0)):
+			continue
+		if absf(pos.y - float(d.get("y_px", 0.0))) <= PAD:
+			return d
+	if not _lab_pond_level_hit.is_empty():
+		var p := _lab_pond_level_hit
+		if pos.x >= float(p.get("x0", 0.0)) and pos.x <= float(p.get("x1", 0.0)) \
+				and absf(pos.y - float(p.get("y_px", 0.0))) <= PAD:
+			return {
+				"kind": "pond",
+				"item_id": str(p.get("item_id", "")),
+				"elev_m": float(p.get("level_m", 0.0)),
+			}
+	return {}
+
+
+func _apply_lab_level_drag(new_elev: float) -> void:
+	if model == null or _lab_level_drag_item_id.is_empty():
+		return
+	var kind := _lab_level_drag_kind
+	if kind == "prime" or kind == "break":
+		var item := model.get_item(_lab_level_drag_item_id)
+		if item.is_empty():
+			return
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var key := "siphon_start_m" if kind == "prime" else "siphon_break_m"
+		var other_key := "siphon_break_m" if kind == "prime" else "siphon_start_m"
+		var other := float(specs.get(other_key, new_elev))
+		if kind == "prime":
+			new_elev = maxf(new_elev, other + 0.02)
+		else:
+			new_elev = minf(new_elev, other - 0.02)
+		specs[key] = new_elev
+		model.update_item(_lab_level_drag_item_id, {"specs": specs})
+		lab_level_dragged.emit(kind, _lab_level_drag_item_id, new_elev)
+		queue_redraw()
+		return
+	if kind == "pond":
+		var tank := model.get_item(_lab_level_drag_item_id)
+		if tank.is_empty():
+			return
+		var ts: Dictionary = (tank.get("specs", {}) as Dictionary).duplicate(true)
+		var floor_y := float(ts.get("floor_m", NAN))
+		var rim := float(ts.get("rim_m", NAN))
+		if is_nan(floor_y):
+			floor_y = new_elev - 1.0
+		if is_nan(rim):
+			rim = new_elev + 0.5
+		new_elev = clampf(new_elev, floor_y + 0.02, rim - 0.02)
+		var span := maxf(rim - floor_y, 0.05)
+		var frac := clampf((new_elev - floor_y) / span, 0.0, 1.0)
+		var cap := maxf(float(ts.get("capacity_qty", 1.0)), 1.0)
+		ts["level_m"] = new_elev
+		ts["level"] = frac
+		ts["stock_l"] = frac * cap
+		# Dragging the CT water line re-anchors the pond level; the flow engine
+		# then continues fill/drain from here on the world clock (fill_mode auto).
+		ts["fill_mode"] = "auto"
+		ts["overflowing"] = false
+		model.update_item(_lab_level_drag_item_id, {"specs": ts, "elevation_m": new_elev})
+		if resource_flow_engine != null and resource_flow_engine.has_method("reanchor_tank"):
+			resource_flow_engine.call("reanchor_tank", _lab_level_drag_item_id, frac)
+		var host: Node = get_parent()
+		while host != null and not host.has_method("push_pond_levels_to_mesh"):
+			host = host.get_parent()
+		if host != null:
+			host.call("push_pond_levels_to_mesh", true)
+		lab_level_dragged.emit(kind, _lab_level_drag_item_id, new_elev)
+		queue_redraw()
+
+
+## Site/Elev: pick & drag 3D props via GraphSpatialEdit before chip/orbit paths.
+## Site Plan: magnifier rings win over 3D prop pick when a placed item is under
+## the cursor; 3D drag remains the fallback for orphan props / empty space.
+func _handle_spatial_edit_input(event: InputEvent) -> bool:
+	if spatial_edit == null or not _is_physical_view():
+		return false
+	if not spatial_edit.has_method("is_dragging"):
+		return false
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return false
+		if mb.pressed:
+			if view_mode == GraphSiteLayout.VIEW_SITE:
+				var mag := _item_at_screen(mb.position)
+				if not mag.is_empty() and GraphSiteLayout.has_site_coords(mag) \
+						and not _is_watershed_item(mag):
+					return false
+			# Shift+empty = orbit (SoI handler). Prop under cursor = drag (+ Shift yaw).
+			if spatial_edit.has_method("begin_prop_drag") \
+					and bool(spatial_edit.call("begin_prop_drag", mb.position, mb.shift_pressed)):
+				accept_event()
+				queue_redraw()
+				_refresh_soi_preview()
+				return true
+			# 3D conduit under cursor → select the graph connection (no 2D wire hit).
+			if spatial_edit.has_method("pick_at_canvas"):
+				var spat: Dictionary = spatial_edit.call("pick_at_canvas", mb.position) \
+						as Dictionary
+				if str(spat.get("kind", "")) == "conduit":
+					var cid := str(spat.get("id", ""))
+					if not cid.is_empty():
+						_select_connection(cid)
+						accept_event()
+						queue_redraw()
+						return true
+			return false
+		if bool(spatial_edit.call("is_dragging")):
+			if spatial_edit.has_method("end_prop_drag"):
+				spatial_edit.call("end_prop_drag")
+			accept_event()
+			layout_changed.emit()
+			queue_redraw()
+			_refresh_soi_preview()
+			return true
+	elif event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		if bool(spatial_edit.call("is_dragging")):
+			if spatial_edit.has_method("drag_to"):
+				spatial_edit.call("drag_to", mm.position, mm.shift_pressed)
+			accept_event()
+			queue_redraw()
+			# Re-capture the disc so the moved/rotated prop shows live (the move is
+			# already applied to the real 3D node; without this it only appears on zoom).
+			_refresh_soi_preview()
+			return true
+		if view_mode == GraphSiteLayout.VIEW_SITE:
+			_update_site_hover(mm.position)
+		if spatial_edit.has_method("update_hover"):
+			spatial_edit.call("update_hover", mm.position)
+	return false
+
+
+func _update_site_hover(screen_pos: Vector2) -> void:
+	var hit := _item_at_screen(screen_pos)
+	var hid := str(hit.get("id", "")) if not hit.is_empty() \
+			and GraphSiteLayout.has_site_coords(hit) else ""
+	if hid == _site_hover_item_id:
+		return
+	_site_hover_item_id = hid
+	queue_redraw()
+
+
+func _is_watershed_item(item: Dictionary) -> bool:
+	if item.is_empty():
+		return false
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	return str(item.get("type", "")) == "catchment" \
+			and str(specs.get("catchment_kind", "")) == "watershed"
+
+
+## Pond import creates a surface catchment + storage tank (+ optional hillside
+## watershed). In Site/Elev physical views those catchments are twins of the
+## tank — hide them so one pond doesn't draw as two/three outlines.
+func _is_pond_twin_hidden(item: Dictionary) -> bool:
+	if item.is_empty() or model == null or not _is_physical_view():
+		return false
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(item.get("type", "")) != "catchment":
+		return false
+	var kind := str(specs.get("catchment_kind", ""))
+	if kind != "pond" and kind != "watershed":
+		return false
+	var tag := str(specs.get("pond_tag", ""))
+	if tag.is_empty():
+		tag = str(specs.get("osm_water_tag", specs.get("osm_tag", "")))
+	if tag.begins_with("watershed_"):
+		tag = tag.trim_prefix("watershed_")
+	if tag.is_empty():
+		return false
+	var pond_id := str(specs.get("pond_id", ""))
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var os: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if not bool(os.get("pond_storage", false)):
+			continue
+		if str(os.get("osm_water_tag", "")) == tag:
+			return true
+		if not pond_id.is_empty() and str(os.get("pond_id", "")) == pond_id:
+			return true
 	return false
 
 
@@ -618,6 +1198,14 @@ func _gui_input(event: InputEvent) -> void:
 
 	if _should_ignore_emulated_mouse(event):
 		accept_event()
+		return
+
+	# Siphon Lab: drag Prime/Break/pond level on Elev CT (before SoI camera).
+	if siphon_lab_active and _handle_lab_level_drag_input(event):
+		return
+
+	# Site/Elev 3D prop pick/drag (wins over chip hits + Shift+orbit while dragging).
+	if _handle_spatial_edit_input(event):
 		return
 
 	# SoI live preview camera (Shift+drag orbit, Shift+wheel zoom).
@@ -644,11 +1232,23 @@ func _gui_input(event: InputEvent) -> void:
 			_pan_button = -1
 			accept_event()
 			return
-		# Zoom
+		# Zoom. In plain freeform (no SoI bubble preview — that path consumed
+		# Shift+wheel above), Shift+scroll resizes ONLY the SoI reference ring;
+		# plain scroll zooms nodes + ring together.
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			_zoom_at(1.08, mb.position);  accept_event();  return
+			if mb.shift_pressed and view_mode == GraphSiteLayout.VIEW_FREEFORM:
+				soi_ring_scale = clampf(soi_ring_scale * 1.08, 0.25, 4.0)
+				layout_changed.emit()
+				queue_redraw();  accept_event();  return
+			var zf := _wheel_zoom_factor()
+			_zoom_at(zf, mb.position);  accept_event();  return
 		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			_zoom_at(1.0 / 1.08, mb.position);  accept_event();  return
+			if mb.shift_pressed and view_mode == GraphSiteLayout.VIEW_FREEFORM:
+				soi_ring_scale = clampf(soi_ring_scale / 1.08, 0.25, 4.0)
+				layout_changed.emit()
+				queue_redraw();  accept_event();  return
+			var zf2 := _wheel_zoom_factor()
+			_zoom_at(1.0 / zf2, mb.position);  accept_event();  return
 		# Left click — begin possible wire/item drag or selection
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
@@ -772,7 +1372,11 @@ func _handle_screen_drag(sd: InputEventScreenDrag) -> void:
 		# Pan by centroid movement, then pinch-zoom anchored at the centroid so
 		# the two gestures compose naturally (spread the fingers to zoom in while
 		# sliding them to reposition the canvas).
-		_pan += mid - _touch_pan_last_mid
+		var dmid := mid - _touch_pan_last_mid
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+			_elev_pan_by_pixels(dmid)
+		else:
+			_pan += dmid
 		if _touch_pan_last_spread > 4.0 and spread > 4.0:
 			_zoom_at(spread / _touch_pan_last_spread, mid)
 		_touch_pan_last_mid = mid
@@ -855,7 +1459,7 @@ func _on_pointer_move(screen_pos: Vector2) -> void:
 			var wps: Array = _waypoints_graph(conn)
 			if _waypoint_drag_idx < wps.size():
 				var new_gpos := _screen_to_graph(screen_pos)
-				if str(conn.get("line_style", "")) == "metro":
+				if _effective_line_style(conn) == "metro":
 					# Snap the dragged waypoint's angle relative to the previous point
 					# If there is a previous waypoint, use it; otherwise use the source port pos.
 					var prev_gpos: Vector2
@@ -896,8 +1500,12 @@ func _on_pointer_move(screen_pos: Vector2) -> void:
 	if _touch_interaction == "pan" and _touch_pan_active:
 		return
 	if _dragging:
-		_pan += screen_pos - _last_drag_pos
+		var dpan := screen_pos - _last_drag_pos
 		_last_drag_pos = screen_pos
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+			_elev_pan_by_pixels(dpan)
+		else:
+			_pan += dpan
 		queue_redraw()
 	elif _wire_dragging:
 		_on_wire_drag_move(screen_pos)
@@ -906,6 +1514,8 @@ func _on_pointer_move(screen_pos: Vector2) -> void:
 	elif _marquee_selecting:
 		_marquee_end = screen_pos
 		queue_redraw()
+	elif view_mode == GraphSiteLayout.VIEW_SITE:
+		_update_site_hover(screen_pos)
 
 
 func _on_pointer_press(screen_pos: Vector2) -> void:
@@ -945,7 +1555,15 @@ func _reset_tap_tracking() -> void:
 	_last_tap_item_id = ""
 
 
+## Drill-in / pop-out thresholds (fraction of viewport a super-node must cover).
+const ZOOM_DRILL_COVER := 0.82
+const ZOOM_POP_COVER := 0.42
+
+
 func _zoom_at(factor: float, screen_pos: Vector2) -> void:
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		_elev_zoom_at(factor, screen_pos)
+		return
 	var center   := size * 0.5
 	var old_zoom := _zoom
 	_zoom = clampf(_zoom * factor, ZOOM_MIN, ZOOM_MAX)
@@ -957,8 +1575,283 @@ func _zoom_at(factor: float, screen_pos: Vector2) -> void:
 	var world := (screen_pos - center - _pan) / old_zoom
 	_pan = screen_pos - center - world * _zoom
 	queue_redraw()
+	# Seamless TouchDesigner-style scope navigation via zoom.
+	# Site/Elev: zoom scales metres — never drill.
+	# Freeform: always allow drill/pop, even with SoI bubble behind nodes
+	# (soi_live_preview). Shift+wheel already owns 3D bubble orbit/zoom.
+	if view_mode == GraphSiteLayout.VIEW_FREEFORM:
+		if factor > 1.0:
+			_maybe_zoom_drill_in(screen_pos)
+		elif factor < 1.0:
+			_maybe_zoom_pop_out()
 	# SoI preview polls disc radius_px (includes zoom) each frame — do not emit
 	# layout_changed here (that path autosaves + resyncs 3D props).
+
+
+## When a generic super-node under the cursor grows to nearly fill the viewport,
+## enter it (its child canvas replaces the view). The view then fits the scope.
+func _maybe_zoom_drill_in(screen_pos: Vector2) -> void:
+	if model == null:
+		return
+	var hit := _item_at_screen(screen_pos)
+	if hit.is_empty() or str(hit.get("type", "")) != "compound":
+		return
+	if str((hit.get("specs", {}) as Dictionary).get("compound_kind", "")) != "":
+		return
+	if str(hit.get("child_scope_id", "")).is_empty():
+		return
+	var center := size * 0.5
+	var tl := _item_screen_tl(hit, center)
+	var sz := _item_screen_size(hit)
+	if not Rect2(tl, sz).has_point(screen_pos):
+		return
+	if sz.x >= size.x * ZOOM_DRILL_COVER or sz.y >= size.y * ZOOM_DRILL_COVER:
+		compound_open_requested.emit(str(hit.get("id", "")))
+
+
+## Harness/tests: frame a compound to ≥ ZOOM_DRILL_COVER and fire zoom-drill.
+## Returns true when cover threshold was met (emit fired; view enters async).
+func prepare_and_try_zoom_drill(item_id: String) -> bool:
+	if model == null or item_id.is_empty():
+		return false
+	if view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		return false
+	var it := model.get_item(item_id)
+	if it.is_empty() or str(it.get("type", "")) != "compound":
+		return false
+	if str((it.get("specs", {}) as Dictionary).get("compound_kind", "")) != "":
+		return false
+	if str(it.get("child_scope_id", "")).is_empty():
+		return false
+	var gw := maxf(float(it.get("width", 120.0)), 8.0)
+	var gh := maxf(float(it.get("height", 90.0)), 8.0)
+	var gc := Vector2(
+		float(it.get("x", 0.0)) + gw * 0.5,
+		float(it.get("y", 0.0)) + gh * 0.5)
+	# Fill ~90% of the shorter viewport axis so cover clears ZOOM_DRILL_COVER.
+	var cover := 0.90
+	var z := maxf(size.x * cover / gw, size.y * cover / gh)
+	_zoom = clampf(z, ZOOM_MIN, ZOOM_MAX)
+	_pan = -gc * _zoom
+	queue_redraw()
+	var screen_pos := size * 0.5
+	var sz2 := _item_screen_size(it)
+	var covered := sz2.x >= size.x * ZOOM_DRILL_COVER \
+			or sz2.y >= size.y * ZOOM_DRILL_COVER
+	if covered:
+		_maybe_zoom_drill_in(screen_pos)
+	return covered
+
+
+## When the whole active sub-canvas shrinks below a fraction of the viewport,
+## pop up to the parent scope (mirrors drilling back out).
+func _maybe_zoom_pop_out() -> void:
+	if model == null or active_scope_id == "root":
+		return
+	var bbox := _scope_content_screen_bbox(active_scope_id)
+	if bbox.size == Vector2.ZERO:
+		return
+	if bbox.size.x <= size.x * ZOOM_POP_COVER and bbox.size.y <= size.y * ZOOM_POP_COVER:
+		scope_pop_requested.emit()
+
+
+## Screen-space bounding box of every item currently in `scope_id` (empty rect
+## with zero size when the scope has no items).
+func _scope_content_screen_bbox(scope_id: String) -> Rect2:
+	if model == null:
+		return Rect2()
+	var kids: Array = model.get_items_in_scope(scope_id)
+	if kids.is_empty():
+		return Rect2()
+	var center := size * 0.5
+	var min_p := Vector2(1e20, 1e20)
+	var max_p := Vector2(-1e20, -1e20)
+	for k_v in kids:
+		var k := k_v as Dictionary
+		var tl := _item_screen_tl(k, center)
+		var sz := _item_screen_size(k)
+		min_p = min_p.min(tl)
+		max_p = max_p.max(tl + sz)
+	return Rect2(min_p, max_p - min_p)
+
+
+## Graph-coord bounding box (Rect2) of every item in `scope_id`, or a zero-size
+## rect when empty. Uses raw x/y/width/height (freeform-canvas coords).
+func _scope_content_graph_bbox(scope_id: String) -> Rect2:
+	if model == null:
+		return Rect2()
+	var kids: Array = model.get_items_in_scope(scope_id)
+	if kids.is_empty():
+		return Rect2()
+	var min_p := Vector2(1e20, 1e20)
+	var max_p := Vector2(-1e20, -1e20)
+	for k_v in kids:
+		var k := k_v as Dictionary
+		var p := Vector2(float(k.get("x", 0.0)), float(k.get("y", 0.0)))
+		var s := Vector2(float(k.get("width", 120.0)), float(k.get("height", 90.0)))
+		min_p = min_p.min(p)
+		max_p = max_p.max(p + s)
+	return Rect2(min_p, max_p - min_p)
+
+
+## Compute the {zoom, pan} that fits a scope's contents to the viewport with a
+## uniform padding fraction, WITHOUT applying it. Returns {"ok": false} when the
+## scope is empty / degenerate.
+func _scope_fit_view(scope_id: String, pad_frac: float = 0.16) -> Dictionary:
+	var gb := _scope_content_graph_bbox(scope_id)
+	if gb.size.x <= 1.0 or gb.size.y <= 1.0:
+		return {"ok": false}
+	var avail := size * (1.0 - pad_frac * 2.0)
+	var z := clampf(minf(avail.x / gb.size.x, avail.y / gb.size.y), ZOOM_MIN, ZOOM_MAX)
+	var content_center := gb.position + gb.size * 0.5
+	# screen(p) = center + _pan + p*_zoom; put content_center at viewport center.
+	return {"ok": true, "zoom": z, "pan": -content_center * z}
+
+
+## {zoom, pan} that maps a graph-space bbox onto a target SCREEN rect (uniform
+## scale, centered). This is the trick that makes a super-node's child content
+## first appear exactly where the collapsed body was, so drilling in reads as one
+## continuous zoom instead of a hard swap.
+func _view_for_bbox_in_rect(graph_bbox: Rect2, screen_rect: Rect2) -> Dictionary:
+	if graph_bbox.size.x <= 1.0 or graph_bbox.size.y <= 1.0 \
+			or screen_rect.size.x <= 1.0 or screen_rect.size.y <= 1.0:
+		return {"ok": false}
+	var center := size * 0.5
+	var z := clampf(minf(screen_rect.size.x / graph_bbox.size.x,
+			screen_rect.size.y / graph_bbox.size.y), ZOOM_MIN, ZOOM_MAX)
+	var gc := graph_bbox.position + graph_bbox.size * 0.5
+	var rc := screen_rect.position + screen_rect.size * 0.5
+	return {"ok": true, "zoom": z, "pan": rc - center - gc * z}
+
+
+## Fit the active scope's contents to the viewport (used after a scope switch so
+## the drill-in / pop-out lands on a comfortable, centered framing).
+func fit_scope_to_view(pad_frac: float = 0.16) -> void:
+	var fit := _scope_fit_view(active_scope_id, pad_frac)
+	if not bool(fit.get("ok", false)):
+		# Empty scope (e.g. hollow imported array) — neutral centered zoom.
+		_zoom = clampf(1.0, ZOOM_MIN, ZOOM_MAX)
+		_pan = Vector2.ZERO
+		queue_redraw()
+		return
+	_animate_view(float(fit["zoom"]), fit["pan"] as Vector2)
+
+
+## Center the view on one item at a moderate zoom (used popping back out onto the
+## super-node the player just left).
+func focus_on_item(item_id: String, target_zoom: float = 0.7) -> void:
+	if model == null:
+		return
+	var it := model.get_item(item_id)
+	if it.is_empty():
+		return
+	var c := Vector2(float(it.get("x", 0.0)) + float(it.get("width", 120.0)) * 0.5,
+		float(it.get("y", 0.0)) + float(it.get("height", 90.0)) * 0.5)
+	var tz := clampf(target_zoom, ZOOM_MIN, ZOOM_MAX)
+	_animate_view(tz, -c * tz)
+
+
+# ---------------------------------------------------------------------------
+# Seamless scope transitions (continuous zoom-through). The VIEW still owns the
+# scope swap (active_scope_id / _scope_trail); these helpers capture the framing
+# on either side of the swap so the content grows out of / collapses into the
+# super-node body rather than snapping.
+# ---------------------------------------------------------------------------
+var _view_tween: Tween = null
+var _fade_tween: Tween = null
+## Screen rect of the super-node body captured just before an enter swap.
+var _enter_from_rect: Rect2 = Rect2()
+## Screen bbox of the child content captured just before a pop swap.
+var _pop_from_rect: Rect2 = Rect2()
+
+
+## Called by the view BEFORE it swaps into `compound_id`'s child scope: remember
+## where the collapsed body currently sits on screen.
+func begin_enter_transition(compound_id: String) -> void:
+	_enter_from_rect = Rect2()
+	if model == null:
+		return
+	var it := model.get_item(compound_id)
+	if it.is_empty():
+		return
+	var center := size * 0.5
+	_enter_from_rect = Rect2(_item_screen_tl(it, center), _item_screen_size(it))
+
+
+## Called by the view AFTER the swap: start the child content mapped onto the
+## saved body rect, then tween to the comfortable fit. Falls back to a plain fit.
+func finish_enter_transition() -> void:
+	var fit := _scope_fit_view(active_scope_id)
+	if not bool(fit.get("ok", false)):
+		fit_scope_to_view()
+		_play_content_fade()
+		return
+	var gb := _scope_content_graph_bbox(active_scope_id)
+	var start := _view_for_bbox_in_rect(gb, _enter_from_rect)
+	if bool(start.get("ok", false)):
+		_zoom = float(start["zoom"])
+		_pan = start["pan"] as Vector2
+		queue_redraw()
+	_animate_view(float(fit["zoom"]), fit["pan"] as Vector2, 0.26)
+	_play_content_fade()
+
+
+## Called by the view BEFORE it pops out of the active child scope: remember the
+## child content's current on-screen bbox.
+func begin_pop_transition() -> void:
+	_pop_from_rect = _scope_content_screen_bbox(active_scope_id)
+
+
+## Called by the view AFTER popping to the parent scope, with the compound we just
+## left. Start framed so that compound's body fills where the child content was,
+## then tween to a comfortable parent framing.
+func finish_pop_transition(owner_compound_id: String) -> void:
+	var target := _scope_fit_view(active_scope_id)
+	var owner := model.get_item(owner_compound_id) if model != null else {}
+	if not owner.is_empty():
+		var center := size * 0.5
+		# Where would the owner sit at the comfortable target framing? Map its
+		# graph rect through the target transform, then set the START frame so
+		# that rect currently overlaps the child bbox we just left.
+		var tz: float = float(target.get("zoom", _zoom)) if bool(target.get("ok", false)) else _zoom
+		var tp: Vector2 = target.get("pan", _pan) as Vector2 if bool(target.get("ok", false)) else _pan
+		var og := Rect2(Vector2(float(owner.get("x", 0.0)), float(owner.get("y", 0.0))),
+				Vector2(float(owner.get("width", 120.0)), float(owner.get("height", 90.0))))
+		if _pop_from_rect.size.x > 1.0:
+			var start := _view_for_bbox_in_rect(og, _pop_from_rect)
+			if bool(start.get("ok", false)):
+				_zoom = float(start["zoom"])
+				_pan = start["pan"] as Vector2
+				queue_redraw()
+		if bool(target.get("ok", false)):
+			_animate_view(tz, tp, 0.26)
+		else:
+			focus_on_item(owner_compound_id, clampf(_zoom, 0.5, 1.0))
+	elif bool(target.get("ok", false)):
+		_animate_view(float(target["zoom"]), target["pan"] as Vector2, 0.26)
+	_play_content_fade()
+
+
+## Subtle "materialize" fade on the whole canvas so the scope swap doesn't pop.
+func _play_content_fade() -> void:
+	if _fade_tween != null and _fade_tween.is_valid():
+		_fade_tween.kill()
+	modulate.a = 0.55
+	_fade_tween = create_tween()
+	_fade_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_fade_tween.tween_property(self, "modulate:a", 1.0, 0.16)
+
+
+## Smoothly tween _zoom + _pan to the given targets (short, so scope changes feel
+## like a continuous zoom rather than a jump).
+func _animate_view(target_zoom: float, target_pan: Vector2, dur: float = 0.22) -> void:
+	if _view_tween != null and _view_tween.is_valid():
+		_view_tween.kill()
+	_view_tween = create_tween()
+	_view_tween.set_parallel(true)
+	_view_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_view_tween.tween_method(func(z: float): _zoom = z; queue_redraw(), _zoom, target_zoom, dur)
+	_view_tween.tween_method(func(p: Vector2): _pan = p; queue_redraw(), _pan, target_pan, dur)
 
 
 func _scope_of_item(item: Dictionary) -> String:
@@ -977,6 +1870,9 @@ func _scope_of_conn(conn: Dictionary) -> String:
 var _draw_cache_active: bool = false
 var _cached_visible_items: Array = []
 var _cached_visible_connections: Array = []
+## Per-draw memo of bound_prop_id -> hidden_3d, so Site Plan can skip rings for
+## twins hidden from 3D without a loader lookup per item per draw.
+var _twin_hidden_cache: Dictionary = {}
 
 
 func _visible_items() -> Array:
@@ -988,13 +1884,23 @@ func _visible_items() -> Array:
 func _compute_visible_items() -> Array:
 	if model == null:
 		return []
+	var items: Array
 	if model.has_method("get_items_in_scope"):
-		return model.get_items_in_scope(active_scope_id)
-	var out: Array = []
-	for item: Dictionary in model.items:
-		if _scope_of_item(item) == active_scope_id:
-			out.append(item)
-	return out
+		items = model.get_items_in_scope(active_scope_id)
+	else:
+		items = []
+		for item: Dictionary in model.items:
+			if _scope_of_item(item) == active_scope_id:
+				items.append(item)
+	# Pinned PBIs are rendered in the fixed top bar, not in graph space.
+	if _pbi_pinned_active():
+		var filtered: Array = []
+		for it: Dictionary in items:
+			if str(it.get("type", "")) == "pbi":
+				continue
+			filtered.append(it)
+		return filtered
+	return items
 
 
 func _visible_connections() -> Array:
@@ -1081,6 +1987,23 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 		_begin_ortho_segment_drag(ortho_hit, screen_pos)
 		return
 
+	# Pinned PBI bar: near the output dot → wire drag; elsewhere on the pill →
+	# select the PBI (so the inspector shows it). Pills are fixed, never dragged.
+	if _pbi_pinned_active():
+		for iid in _pbi_pill_rects:
+			var pill: Dictionary = _pbi_pill_rects[iid] as Dictionary
+			var prect: Rect2 = pill.get("rect", Rect2()) as Rect2
+			if not prect.has_point(screen_pos):
+				continue
+			var pport: Dictionary = pill.get("port", {}) as Dictionary
+			var dot: Vector2 = pport.get("pos", Vector2.ZERO) as Vector2
+			if screen_pos.distance_to(dot) <= _port_grab_radius():
+				_start_wire_drag(pport)
+				_touch_interaction = "wire"
+			else:
+				_select_item(str(iid))
+			return
+
 	# Resize handle on the currently selected item (BR corner or right edge).
 	var resize_id := _resize_handle_item_at(screen_pos)
 	if not resize_id.is_empty():
@@ -1099,7 +2022,27 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 	# Site / elevation: body wins over ports so tiny physical footprints stay
 	# movable (ports still reachable via Alt+drag on hub, or near rim).
 	if _is_physical_view() and not hit.is_empty():
+		# Watershed catchments: select for inspector only — never drag the basin.
+		if _is_watershed_item(hit):
+			_select_item(str(hit.get("id", "")))
+			return
+		# Site Plan magnifiers are always interactive (drag / wire ports).
+		# Elevation chips-off: don't chip-drag placed items (3D spatial edit owns them).
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION and not elev_show_chips \
+				and GraphSiteLayout.has_site_coords(hit):
+			# Prefer bound 3D prop drag when ray pick missed (section clip / tiny AABB).
+			if _try_elev_bound_prop_drag(hit, screen_pos):
+				return
+			_select_item(str(hit.get("id", "")))
+			return
 		var port_phys := _port_at_screen(screen_pos, "", "", _port_grab_radius())
+		# Elevation: ports are opt-in wiring (Alt) — never steal turbine/prop moves.
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION and not port_phys.is_empty() \
+				and not (Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_META)):
+			if _try_elev_bound_prop_drag(hit, screen_pos):
+				return
+			_begin_item_press(screen_pos, hit)
+			return
 		if not port_phys.is_empty() and bool(port_phys.get("hub", false)) and (
 				Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_META)):
 			_begin_hub_port_drag(port_phys)
@@ -1113,6 +2056,11 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 		return
 
 	var port := _port_at_screen(screen_pos, "", "", _port_grab_radius())
+	if not port.is_empty():
+		# Elevation: Alt = wire / hub rotate; plain click must not own the CT.
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION \
+				and not (Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_META)):
+			port = {}
 	if not port.is_empty():
 		# Alt+drag (or Shift+Alt) on a hub port rotates it around the perimeter.
 		if bool(port.get("hub", false)) and (
@@ -1132,6 +2080,31 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 		return
 
 	_begin_item_press(screen_pos, hit)
+
+
+## Elevation chips-off: start a 3D prop drag from the graph item's bound twin
+## when the section raycast missed (common for small hydroturbine AABBs).
+func _try_elev_bound_prop_drag(item: Dictionary, screen_pos: Vector2) -> bool:
+	if spatial_edit == null or item.is_empty():
+		return false
+	if view_mode != GraphSiteLayout.VIEW_ELEVATION:
+		return false
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var prop_id := str(specs.get("bound_prop_id", ""))
+	if prop_id.is_empty():
+		return false
+	# Must be near the item's elev projection so random clicks don't steal.
+	var pad := _elev_port_pad_rect(item, Vector2.ZERO, Vector2.ZERO)
+	var hit_r := maxf(pad.size.x, pad.size.y) * 0.5 + 28.0
+	if pad.get_center().distance_to(screen_pos) > hit_r:
+		return false
+	if spatial_edit.has_method("begin_prop_drag_id") \
+			and bool(spatial_edit.call("begin_prop_drag_id", prop_id, screen_pos)):
+		_touch_interaction = "spatial"
+		accept_event()
+		queue_redraw()
+		return true
+	return false
 
 
 ## True when the click is closer to the body center than to the rim (ports).
@@ -1238,6 +2211,20 @@ func _begin_item_press(screen_pos: Vector2, hit: Dictionary) -> void:
 		else:
 			_item_drag_start_map[iid] = Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0)))
 	_item_drag_start_pos = _item_drag_start_map.get(hit_id, Vector2(float(hit.get("x", 0.0)), float(hit.get("y", 0.0))))
+	_item_drag_cursor_site_start = Vector2.ZERO
+	_item_drag_cursor_elev_start = {}
+	if _phys_camera_projection_active():
+		if view_mode == GraphSiteLayout.VIEW_SITE \
+				and soi_preview_service.has_method("canvas_to_site_ground"):
+			var w0: Variant = soi_preview_service.call("canvas_to_site_ground", screen_pos)
+			if w0 is Vector2:
+				_item_drag_cursor_site_start = w0 as Vector2
+		elif view_mode == GraphSiteLayout.VIEW_ELEVATION \
+				and soi_preview_service.has_method("canvas_to_elevation_hit"):
+			var e0: Variant = soi_preview_service.call(
+					"canvas_to_elevation_hit", screen_pos, elevation_heading_rad)
+			if e0 is Dictionary:
+				_item_drag_cursor_elev_start = e0 as Dictionary
 	_touch_interaction = "item"
 	_select_item(hit_id)
 
@@ -1364,7 +2351,7 @@ func _on_lmb_release(screen_pos: Vector2) -> void:
 		if not conn.is_empty():
 			_select_connection(conn.get("id", "") as String)
 		else:
-			if view_mode == GraphSiteLayout.VIEW_SITE and not site_designate_mode.is_empty():
+			if view_mode == GraphSiteLayout.VIEW_SITE:
 				site_background_clicked.emit(screen_pos)
 			_select_item("")
 
@@ -1373,7 +2360,11 @@ func _on_lmb_release(screen_pos: Vector2) -> void:
 func _on_item_drag_move(screen_pos: Vector2) -> void:
 	if model == null or _item_drag_id.is_empty():
 		return
-		
+	# Watershed basins are terrain-derived — never move with the chip.
+	if model != null:
+		var drag_it := model.get_item(_item_drag_id)
+		if _is_watershed_item(drag_it):
+			return
 	if not _item_drag_duplicated and (Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_META)):
 		var delta_px := screen_pos - _item_drag_start_px
 		if delta_px.length() >= _effective_drag_threshold():
@@ -1405,42 +2396,98 @@ func _on_site_item_drag_move(screen_pos: Vector2, delta_px: Vector2) -> void:
 	var delta_m := delta_px / s
 	var r_m := _soi_radius_m()
 	var disc_o := _disc_origin_screen()
+	# Orbited Site: convert the pointer to a world point on the SoI ground plane
+	# via the preview camera so nodes drop under the cursor at any tilt.
+	var use_cam: bool = _phys_camera_projection_active() \
+			and soi_preview_service != null \
+			and soi_preview_service.has_method("canvas_to_site_ground")
+	var cursor_site: Vector2 = Vector2.INF
+	if use_cam:
+		var w: Variant = soi_preview_service.call("canvas_to_site_ground", screen_pos)
+		if w is Vector2:
+			cursor_site = w as Vector2
 	for iid: String in _item_drag_ids:
 		var start_pos: Vector2 = _item_drag_start_map.get(iid, Vector2.ZERO) as Vector2
 		var new_xz: Vector2
-		if is_nan(start_pos.x):
+		if use_cam and cursor_site.x != INF:
+			# Camera path: seat the pointer exactly, preserving per-item offset.
+			var off := Vector2.ZERO
+			if not is_nan(start_pos.x):
+				off = start_pos - _item_drag_cursor_site_start
+			new_xz = cursor_site + off
+		elif is_nan(start_pos.x):
 			# Dropping from unplaced tray onto the disc.
 			new_xz = GraphSiteLayout.screen_to_site_m(screen_pos, disc_o, _zoom)
 		else:
 			new_xz = start_pos + delta_m
 		new_xz = GraphSiteLayout.clamp_to_soi(new_xz, r_m)
 		model.update_item(iid, {"site_x_m": new_xz.x, "site_z_m": new_xz.y})
+		# Live-preview the bound 3D twin under the magnifier (release still heals).
+		if site_drag_sync_prop.is_valid():
+			site_drag_sync_prop.call(iid, new_xz)
 	queue_redraw()
 
 
 func _on_elevation_item_drag_move(screen_pos: Vector2, delta_px: Vector2) -> void:
 	# Horizontal → along-section site metres; vertical → elevation_m (screen-up = +Y).
+	# When the physical camera is the projection authority, ray-cast the pointer
+	# onto the vertical section plane so an orbited view still tracks the cursor.
 	var s := GraphSiteLayout.px_per_m(_zoom)
-	var ex := maxf(elevation_exaggeration, 0.001)
+	var ex := _elev_exaggeration_draw()
 	var r_m := _soi_radius_m()
 	var disc_o := _disc_origin_screen()
+	var use_cam: bool = _phys_camera_projection_active() \
+			and soi_preview_service != null \
+			and soi_preview_service.has_method("canvas_to_elevation_hit")
+	var cursor_hit: Dictionary = {}
+	if use_cam:
+		var w: Variant = soi_preview_service.call(
+				"canvas_to_elevation_hit", screen_pos, elevation_heading_rad)
+		if w is Dictionary:
+			cursor_hit = w as Dictionary
 	for iid: String in _item_drag_ids:
 		var start_xz: Vector2 = _item_drag_start_map.get(iid, Vector2.ZERO) as Vector2
-		var along_m: float
-		var cross_m: float
+		var site: Vector2
 		var elev_m: float
-		if is_nan(start_xz.x):
-			# Dropping from unplaced tray — seat under the pointer.
-			along_m = (screen_pos.x - disc_o.x) / s
-			cross_m = 0.0
-			elev_m = _elevation_datum_m() - (screen_pos.y - disc_o.y) / (s * ex)
+		if use_cam and not cursor_hit.is_empty():
+			var cur_site := Vector2(
+					float(cursor_hit.get("site_x_m", 0.0)),
+					float(cursor_hit.get("site_z_m", 0.0)))
+			var cur_elev := float(cursor_hit.get("elevation_m", _elevation_datum_m()))
+			if is_nan(start_xz.x) or _item_drag_cursor_elev_start.is_empty():
+				site = cur_site
+				elev_m = cur_elev
+			else:
+				var start_site0 := Vector2(
+						float(_item_drag_cursor_elev_start.get("site_x_m", 0.0)),
+						float(_item_drag_cursor_elev_start.get("site_z_m", 0.0)))
+				var start_elev0 := float(_item_drag_cursor_elev_start.get(
+						"elevation_m", _elevation_datum_m()))
+				site = start_xz + (cur_site - start_site0)
+				# Preserve the item's cross-section depth (ray hits the center plane).
+				var proj_start := GraphSiteLayout.project_onto_section(
+						start_xz, elevation_heading_rad)
+				var proj_new := GraphSiteLayout.project_onto_section(
+						site, elevation_heading_rad)
+				site = GraphSiteLayout.section_to_site(
+						proj_new.x, proj_start.y, elevation_heading_rad)
+				var start_elev: float = float(
+						_item_drag_start_elev.get(iid, _elevation_datum_m()))
+				elev_m = start_elev + (cur_elev - start_elev0)
+		elif is_nan(start_xz.x):
+			# Dropping from unplaced tray — seat under the pointer (anchored flat).
+			_ensure_elev_anchor()
+			var vc := size * 0.5
+			var along_m := _elev_anchor_along_m + (screen_pos.x - vc.x) / s
+			elev_m = get_elev_anchor_elev_m() - (screen_pos.y - vc.y) / (s * ex)
+			site = GraphSiteLayout.section_to_site(along_m, 0.0, elevation_heading_rad)
 		else:
 			var proj0 := GraphSiteLayout.project_onto_section(start_xz, elevation_heading_rad)
-			along_m = proj0.x + delta_px.x / s
-			cross_m = proj0.y
-			var start_elev: float = float(_item_drag_start_elev.get(iid, _elevation_datum_m()))
-			elev_m = start_elev - delta_px.y / (s * ex)
-		var site := GraphSiteLayout.section_to_site(along_m, cross_m, elevation_heading_rad)
+			var along2 := proj0.x + delta_px.x / s
+			var start_elev2: float = float(
+					_item_drag_start_elev.get(iid, _elevation_datum_m()))
+			elev_m = start_elev2 - delta_px.y / (s * ex)
+			site = GraphSiteLayout.section_to_site(along2, proj0.y, elevation_heading_rad)
 		site = GraphSiteLayout.clamp_to_soi(site, r_m)
 		model.update_item(iid, {
 			"site_x_m": site.x,
@@ -1455,9 +2502,11 @@ func _on_elevation_item_drag_move(screen_pos: Vector2, delta_px: Vector2) -> voi
 # ---------------------------------------------------------------------------
 
 func _item_is_circular(item: Dictionary) -> bool:
-	# Physical plan chips: circular resize for circular symbols only.
+	# Site Plan: all magnifiers are circular. Elevation keeps type-based shapes.
+	if view_mode == GraphSiteLayout.VIEW_SITE:
+		return true
 	if _is_physical_view():
-		return GraphSiteLayout.uses_circular_plan_chip(item)
+		return GraphSiteLayout.uses_circular_plan_chip(item, view_mode)
 	return GraphSiteLayout.is_circular_node(str(item.get("type", "")))
 
 
@@ -1679,8 +2728,10 @@ func _try_merge_resource_containers_on_drop(dragged_id: String, screen_pos: Vect
 	var t_neg := bool(t_specs.get("allow_negative", false))
 	if d_cap <= 0.0 and t_cap <= 0.0 and not d_unlim and not t_unlim:
 		return false
-	var d_lvl := clampf(float(d_specs.get("level", 0.0)), 0.0, 1.0)
-	var t_lvl := clampf(float(t_specs.get("level", 0.0)), 0.0, 1.0)
+	var d_lvl_raw := float(d_specs.get("level", 0.0))
+	var t_lvl_raw := float(t_specs.get("level", 0.0))
+	var d_lvl := clampf(d_lvl_raw, 0.0, 1.0)
+	var t_lvl := clampf(t_lvl_raw, 0.0, 1.0)
 	var new_cap := d_cap + t_cap
 	var new_lvl := (d_cap * d_lvl + t_cap * t_lvl) / new_cap if new_cap > 0.001 else 0.0
 	var target_id := str(target.get("id", ""))
@@ -1689,7 +2740,17 @@ func _try_merge_resource_containers_on_drop(dragged_id: String, screen_pos: Vect
 	# unlimited tank into a finite sum of nominal capacity_qty alone.
 	t_specs["unlimited_capacity"] = d_unlim or t_unlim
 	t_specs["allow_negative"] = d_neg or t_neg
-	if bool(t_specs["unlimited_capacity"]):
+	if bool(t_specs["allow_negative"]):
+		# Preserve absolute stock (may be negative) across the merge; capacity
+		# is only a display/scale unit for deficit tanks.
+		var d_stock := d_lvl_raw * maxf(d_cap, 0.001)
+		var t_stock := t_lvl_raw * maxf(t_cap, 0.001)
+		var scale_cap := maxf(new_cap, 0.001)
+		if bool(t_specs["unlimited_capacity"]):
+			scale_cap = maxf(maxf(d_cap, t_cap), 100.0)
+		t_specs["capacity_qty"] = scale_cap
+		t_specs["level"] = (d_stock + t_stock) / scale_cap
+	elif bool(t_specs["unlimited_capacity"]):
 		# Keep a display nominal; survivor stays conceptual.
 		t_specs["capacity_qty"] = maxf(maxf(d_cap, t_cap), 100.0)
 		t_specs["level"] = clampf(new_lvl, 0.0, 1.0) if new_cap > 0.001 else t_lvl
@@ -1753,10 +2814,15 @@ func _select_item(item_id: String) -> void:
 func _item_at_screen(screen_pos: Vector2) -> Dictionary:
 	if model == null:
 		return {}
+	# Elevation chips-off: skip placed items so picks fall through to 3D spatial
+	# edit / terrain. Site Plan magnifiers are always pickable.
+	var skip_placed := view_mode == GraphSiteLayout.VIEW_ELEVATION and not elev_show_chips
 	# Iterate in reverse so topmost (last drawn) is hit first
 	var vis := _visible_items()
 	for i in range(vis.size() - 1, -1, -1):
 		var item: Dictionary = vis[i]
+		if skip_placed and GraphSiteLayout.has_site_coords(item):
+			continue
 		if _item_hit_rect(item).has_point(screen_pos):
 			return item
 	return {}
@@ -1775,6 +2841,11 @@ func _select_connection(conn_id: String) -> void:
 # ---------------------------------------------------------------------------
 
 func _port_grab_radius() -> float:
+	# Elevation: match drawn port dots (screen-space cap). Uncapped 9×zoom
+	# becomes invisible megapixel grabs that block node/terrain picks.
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		var s := GraphSiteLayout.px_per_m(_zoom)
+		return clampf(0.35 * s, ELEV_PORT_GRAB_MIN_PX, ELEV_PORT_GRAB_MAX_PX)
 	var base := maxf(10.0, 9.0 * _zoom)
 	if _touch_input_active() or DisplayServer.is_touchscreen_available():
 		return maxf(base, TOUCH_PORT_GRAB_MIN)
@@ -1786,10 +2857,18 @@ func _port_hit_radius() -> float:
 
 
 func _wire_snap_radius() -> float:
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		return _port_grab_radius() + 4.0
 	var base := maxf(SNAP_RADIUS_PX, _port_grab_radius() + 6.0)
 	if _touch_input_active() or DisplayServer.is_touchscreen_available():
 		return maxf(base, TOUCH_SNAP_RADIUS_MIN)
 	return base
+
+
+func _wheel_zoom_factor() -> float:
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		return ELEV_WHEEL_ZOOM
+	return 1.08
 
 
 ## Incoming wire tangent at a port (reverse of outgoing handle tangent).
@@ -1868,6 +2947,18 @@ func _conn_curve_tension(conn: Dictionary) -> float:
 
 func _conn_corner_radius_graph(conn: Dictionary) -> float:
 	return clampf(float(conn.get("corner_radius", 28.0)), 4.0, 120.0)
+
+
+## Screen-px corner radius for drawing. Physical views clamp so tiny close chips
+## don't bloom into giant loops (Freeform keeps the full zoomed radius).
+func _conn_corner_radius_px(conn: Dictionary, endpoint_dist_px: float = INF) -> float:
+	var r := _conn_corner_radius_graph(conn) * _zoom
+	if not _is_physical_view():
+		return r
+	var cap := PHYS_WIRE_CORNER_MAX_PX
+	if is_finite(endpoint_dist_px) and endpoint_dist_px > 1.0:
+		cap = minf(cap, endpoint_dist_px * 0.22)
+	return clampf(r, 2.0, maxf(cap, 2.0))
 
 
 func _waypoints_graph(conn: Dictionary) -> Array:
@@ -2097,11 +3188,10 @@ func _resource_port_is_input(handle_id: String) -> bool:
 
 
 ## Releasing a resource wire on empty canvas space spawns a new container
-## node pre-wired to the source port, instead of discarding the drag. Input
-## ports get a supply tank (unlimited + can run into deficit, so it never
-## blocks the consumer); output ports get an unlimited sink (never fills up
-## and blocks the producer) — same defaults as the inspector's "No capacity
-## limit" toggle (see ResourceKinds.migrate_resource_specs).
+## node pre-wired to the source port, instead of discarding the drag.
+## Defaults to allow_negative (deficit-capable) so stock stays visible and
+## downstream/upstream never hard-block — toggle ∞ capacity in the inspector
+## if you want a conceptual unlimited tank instead.
 func _spawn_container_from_port_drag(screen_pos: Vector2) -> void:
 	if model == null or _wire_src_item_id.is_empty():
 		return
@@ -2118,9 +3208,9 @@ func _spawn_container_from_port_drag(screen_pos: Vector2) -> void:
 		"resource_kind": kind,
 		"capacity_qty": 100.0,
 		"capacity_unit": ResourceKinds.default_unit(kind),
-		"level": 0.5 if is_input else 0.0,
-		"unlimited_capacity": true,
-		"allow_negative": is_input,
+		"level": 0.0,
+		"unlimited_capacity": false,
+		"allow_negative": true,
 		"alert_threshold_pct": 95.0,
 		"cost": 0.0,
 	}
@@ -2167,6 +3257,12 @@ func _get_all_handle_infos(item: Dictionary, center: Vector2) -> Array:
 	var result: Array = []
 	var tl    := _item_screen_tl(item, center)
 	var sz    := _item_screen_size(item)
+	# Elev chips-off: hit positions must match compact port pads (drawn path).
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION and not elev_show_chips \
+			and GraphSiteLayout.has_site_coords(item):
+		var pad := _elev_port_pad_rect(item, tl, sz)
+		tl = pad.position
+		sz = pad.size
 	var itype := item.get("type", "generic") as String
 	var iw    := float(item.get("width",  120.0))
 	var ih    := float(item.get("height",  90.0))
@@ -2221,6 +3317,13 @@ func _get_interactive_handle_infos(item: Dictionary, center: Vector2) -> Array:
 	if itype == "compound" \
 			and str((item.get("specs", {}) as Dictionary).get("compound_kind", "")) == "array":
 		return all
+	# Generic super-node: all promoted ports are interactive (their ids like
+	# "in_positive_1" are not in _PRIMARY_HANDLES, so the filter would wrongly
+	# drop them). Mirror the draw path — every own handle is wireable.
+	if itype == "compound" \
+			and str((item.get("specs", {}) as Dictionary).get("compound_kind", "")) == "" \
+			and not (item.get("handles", []) as Array).is_empty():
+		return all
 	var primary: Array = _PRIMARY_HANDLES.get(itype, []) as Array
 	if primary.is_empty():
 		return all
@@ -2238,17 +3341,49 @@ func _port_at_screen(screen_pos: Vector2,
 		skip_item: String, skip_handle: String, radius: float) -> Dictionary:
 	if model == null:
 		return {}
+	# Elevation: ports are opt-in via menu. Site Plan magnifiers always expose
+	# rim ports so metro 2D wires can connect.
+	if _is_physical_view():
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION and not elev_show_ports:
+			return {}
+		if view_mode == GraphSiteLayout.VIEW_SITE and not site_show_ports:
+			return {}
 	var center    := size * 0.5
 	var best_dist := radius
 	var best:       Dictionary = {}
+	var water_drag := _wire_src_polarity == "resource" \
+			and ResourceKinds.normalize_kind(_wire_src_resource_kind) == "water"
 	for item: Dictionary in _visible_items():
 		for h: Dictionary in _get_interactive_handle_infos(item, center):
 			if h["item_id"] == skip_item and h["handle_id"] == skip_handle:
 				continue
 			var d := (h["pos"] as Vector2).distance_to(screen_pos)
+			# Prefer water resource ports over nearby DC +/- when dragging water.
+			if water_drag:
+				var hk := str(h.get("resource_kind", ""))
+				var hp := str(h.get("polarity", ""))
+				if hp == "resource" and (hk.is_empty() or hk == "water"):
+					d *= 0.72
+				elif hp in ["positive", "negative", "smart_battery"]:
+					d += radius * 0.65
 			if d < best_dist:
 				best_dist = d
 				best = h
+	# Pinned PBI pills — their output port is wireable straight off the top bar.
+	if _pbi_pinned_active():
+		for iid in _pbi_pill_rects:
+			var pill: Dictionary = _pbi_pill_rects[iid] as Dictionary
+			var pport: Dictionary = pill.get("port", {}) as Dictionary
+			if str(pport.get("item_id", "")) == skip_item \
+					and str(pport.get("handle_id", "")) == skip_handle:
+				continue
+			var pd := (pport.get("pos", Vector2.ZERO) as Vector2).distance_to(screen_pos)
+			# Grab if near the port dot OR anywhere over the pill rect.
+			if (pill.get("rect", Rect2()) as Rect2).has_point(screen_pos):
+				pd = minf(pd, radius * 0.5)
+			if pd < best_dist:
+				best_dist = pd
+				best = pport
 	return best
 
 
@@ -2338,8 +3473,10 @@ func _draw_temp_wire() -> void:
 			prev = p
 
 	# Source port pulse
-	draw_circle(_wire_src_pos, 9.0 * _zoom,
-		Color(col.r, col.g, col.b, 0.25))
+	var pulse_r := 9.0 * _zoom
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		pulse_r = _port_grab_radius()
+	draw_circle(_wire_src_pos, pulse_r, Color(col.r, col.g, col.b, 0.25))
 
 	# Snap-target highlight
 	if not _wire_snap.is_empty():
@@ -2347,8 +3484,9 @@ func _draw_temp_wire() -> void:
 		var ring_col := C_RED
 		if _wire_snap_valid:
 			ring_col = UITheme.C_WARN if snap_kind_override else C_GREEN
-		draw_circle(snap_pos, 10.0 * _zoom, Color(ring_col.r, ring_col.g, ring_col.b, 0.25))
-		draw_circle(snap_pos, 9.0  * _zoom, ring_col, false)
+		var snap_r := pulse_r
+		draw_circle(snap_pos, snap_r + 1.0, Color(ring_col.r, ring_col.g, ring_col.b, 0.25))
+		draw_circle(snap_pos, snap_r, ring_col, false)
 		if (not _wire_snap_valid or snap_kind_override) and _wire_src_polarity == "resource":
 			var msg := ResourceKinds.mismatch_message(
 				_wire_src_resource_kind, str(_wire_snap.get("resource_kind", "")))
@@ -2391,6 +3529,8 @@ func _find_sim_load_host() -> Node:
 
 
 func _load_item_is_active(it: Dictionary) -> bool:
+	if it.is_empty():
+		return false
 	if _is_load_group_item(it):
 		if _ac_shed_active:
 			return false
@@ -2399,23 +3539,31 @@ func _load_item_is_active(it: Dictionary) -> bool:
 	if _ac_shed_active:
 		if ty in ["appliance", "acload", "processor", "acoutlet", "acbreaker"]:
 			return false
+	# Authority = GraphAcLoad (processors draw only while RUNNING / batch > 0).
+	var tree := get_tree()
+	if tree != null and model != null:
+		return GraphAcLoad.item_draw_watts(model, it, tree, _find_sim_load_host()) > WIRE_DEAD_W
 	var sp: Dictionary = it.get("specs", {}) as Dictionary
-	var st: String     = str(sp.get("current_state", "")).to_lower()
+	if ty == "processor":
+		if it.has("batch_active_watts"):
+			return float(it.get("batch_active_watts", 0.0)) > WIRE_DEAD_W
+		return str(sp.get("node_state", "")) == GraphNodeState.RUNNING
+	var st: String = str(sp.get("current_state", "")).to_lower()
 	var is_on_v: Variant = it.get("is_on", null)
-	# explicit is_on flag (Govee-style)
-	if is_on_v != null:
-		if not bool(is_on_v):
-			return false
-	# current_state=="off" → definitely dead
+	if is_on_v != null and not bool(is_on_v):
+		return false
 	if st == "off":
 		return false
-	# current_state=="on" is the happy path
 	if st == "on":
 		var w: float = float(sp.get("avg_watts", sp.get("watts", sp.get("max_watts", 0.0))))
 		return w > WIRE_DEAD_W
-	# no state field: treat as active only if avg_watts > threshold
-	var w: float = float(sp.get("avg_watts", sp.get("watts", sp.get("max_watts", 0.0))))
-	return w > WIRE_DEAD_W
+	var req := str(sp.get("requested_state", "")).to_lower()
+	if req == "off":
+		return false
+	if req == "on":
+		var w2: float = float(sp.get("avg_watts", sp.get("watts", sp.get("max_watts", 0.0))))
+		return w2 > WIRE_DEAD_W
+	return false
 
 
 func _sum_all_load_w() -> float:
@@ -2517,28 +3665,39 @@ func _estimate_connection_flow(
 		shelly_total = maxf(WIRE_FLOW_FLOOR, shelly_total)
 		return {"watts": shelly_total, "reverse": false, "active": shelly_total > WIRE_DEAD_W}
 
-	# Inverter / AC bus → loads: animate only when that specific load is ON
-	if pol == "ac" or pol == "load" or (st == "controller" and _is_ac_sink_type(tt)):
-		var load_item: Dictionary = {}
-		if _is_ac_sink_type(tt) or _is_load_group_item(titem):
-			load_item = titem
-		elif _is_ac_sink_type(st) or _is_load_group_item(sitem):
-			load_item = sitem
-		if not _load_item_is_active(load_item):
+	# Inverter / AC bus → loads: thickness tracks ACTUAL draw (GraphAcLoad),
+	# not nameplate watts. Blocked / idle / starved / off → floor + inactive.
+	if pol == "ac" or pol == "load" or (st == "controller" and _is_ac_sink_type(tt)) \
+			or (tt == "controller" and _is_ac_sink_type(st)):
+		var tree := get_tree()
+		var actual_w := 0.0
+		if tree != null:
+			actual_w = GraphAcLoad.connection_delivered_watts(
+					model, conn, tree, _find_sim_load_host())
+		# Fallback when delivered-side BFS can't see a controller (island / hostless):
+		# use the sink item's live draw if one endpoint is a load.
+		if actual_w <= WIRE_DEAD_W:
+			var load_item: Dictionary = {}
+			if _is_ac_sink_type(tt) or _is_load_group_item(titem):
+				load_item = titem
+			elif _is_ac_sink_type(st) or _is_load_group_item(sitem):
+				load_item = sitem
+			if not load_item.is_empty():
+				if tree != null:
+					actual_w = GraphAcLoad.item_draw_watts(
+							model, load_item, tree, _find_sim_load_host())
+				elif _is_load_group_item(load_item):
+					actual_w = _load_group_draw_w(load_item)
+				elif load_item.has("batch_active_watts"):
+					actual_w = float(load_item.get("batch_active_watts", 0.0))
+				elif str((load_item.get("specs", {}) as Dictionary).get("node_state", "")) \
+						== GraphNodeState.RUNNING:
+					var lsp: Dictionary = load_item.get("specs", {}) as Dictionary
+					actual_w = float(lsp.get("avg_watts", lsp.get("watts", 0.0)))
+		if actual_w <= WIRE_DEAD_W:
 			return {"watts": WIRE_FLOW_FLOOR, "reverse": false, "active": false}
-		var w: float
-		var batch_w := float(load_item.get("batch_active_watts", 0.0))
-		if batch_w > 0.0:
-			# Real per-phase draw computed by ResourceFlowEngine batch sim.
-			w = maxf(WIRE_FLOW_FLOOR, batch_w)
-		elif _is_load_group_item(load_item):
-			w = maxf(WIRE_FLOW_FLOOR, _load_group_draw_w(load_item))
-		else:
-			var tsp: Dictionary = load_item.get("specs", {}) as Dictionary
-			w = maxf(WIRE_FLOW_FLOOR, float(
-				tsp.get("avg_watts", tsp.get("watts", tsp.get("max_watts", 200.0)))))
 		var reverse_ac: bool = (tt == "controller")
-		return {"watts": w, "reverse": reverse_ac, "active": true}
+		return {"watts": maxf(WIRE_FLOW_FLOOR, actual_w), "reverse": reverse_ac, "active": true}
 
 	# Wind/hydro generator wires: animate from that generator's own output
 	if st == "wind" or st == "hydro" or tt == "wind" or tt == "hydro":
@@ -2639,7 +3798,11 @@ func _draw_connections() -> void:
 	var solar_w: float  = _solar_array_output_w() + _renewable_output_w()
 	var load_w: float   = _sum_all_load_w()
 	var visible := _visible_connections()
-	_wire_lod_simplify = visible.size() > WIRE_LOD_HIGH_COUNT or _zoom < WIRE_LOD_ZOOM_CUTOFF
+	_wire_lod_simplify = visible.size() > WIRE_LOD_HIGH_COUNT \
+			or _zoom < WIRE_LOD_ZOOM_CUTOFF \
+			or _zoom > WIRE_LOD_ZOOM_HIGH \
+			or (view_mode == GraphSiteLayout.VIEW_ELEVATION and visible.size() > 24) \
+			or _high_speed_lod
 	for conn: Dictionary in visible:
 		_render_connection(conn, center, solar_w, load_w)
 
@@ -2661,6 +3824,16 @@ func _render_connection(
 	var sid: String = conn.get("source_item_id", "") as String
 	var tid: String = conn.get("target_item_id", "") as String
 	var pol: String = conn.get("polarity", "positive") as String
+	# Physical views (Site Plan / Elevation): an unplaced endpoint sits in the
+	# tray, so a full wire to it sweeps across the whole map as spaghetti.
+	# Suppress those wires — spatial views show conduit routes between PLACED
+	# gear; logical wiring lives in Freeform.
+	if _is_physical_view():
+		var s_it := model.get_item(sid)
+		var t_it := model.get_item(tid)
+		if (not s_it.is_empty() and not GraphSiteLayout.has_site_coords(s_it)) \
+				or (not t_it.is_empty() and not GraphSiteLayout.has_site_coords(t_it)):
+			return
 	var src := _get_handle_info(
 		sid, conn.get("source_handle_id", "") as String, center, tid, pol)
 	var tgt := _get_handle_info(
@@ -2719,7 +3892,7 @@ func _render_connection(
 
 	var tgt_tang_in := _incoming_tangent(tgt.get("tangent", Vector2.RIGHT) as Vector2)
 	var wps: Array = _waypoints_screen(conn, center)
-	var style: String = str(conn.get("line_style", "bezier"))
+	var style: String = _effective_line_style(conn)
 	var curve_t := _conn_curve_tension(conn)
 	var src_pos: Vector2 = src.get("pos", Vector2.ZERO) as Vector2
 	var tgt_pos: Vector2 = tgt.get("pos", Vector2.ZERO) as Vector2
@@ -2764,6 +3937,20 @@ func _render_connection(
 	var c_thick = float(conn.get("thickness_override", 0.0))
 	if c_thick > 0.1:
 		width = c_thick * _zoom
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		width = minf(width, ELEV_WIRE_MAX_PX)
+	# Physical views: shrink bezier/metro handles so close chips stay near-straight.
+	if _is_physical_view():
+		var link_len := src_pos.distance_to(tgt_pos)
+		var max_tang := clampf(link_len * 0.18, 4.0, 28.0)
+		if src_t.length() * 40.0 * _zoom > max_tang:
+			src_t = src_t.normalized()
+			src["tangent"] = src_t
+		if tgt_tang_in.length() * 40.0 * _zoom > max_tang:
+			tgt_tang_in = tgt_tang_in.normalized()
+		# Stamp a transient draw-only corner clamp used by metro/ortho helpers.
+		conn = conn.duplicate()
+		conn["_draw_corner_px"] = _conn_corner_radius_px(conn, link_len)
 	var sankey_scale = bool(conn.get("sankey_scale", true))
 
 	if is_resource_wire:
@@ -2773,8 +3960,30 @@ func _render_connection(
 		# Ambient radiant links (sunlight / wind) are always dashed/glowing
 		# regardless of line_style — they visualize optional non-blocking
 		# environment links (see atmosphere_pbi.gd / solar_pbi_selftest.gd).
+		# Elevation CT: suppress radiant/schematic resource wires before they
+		# paint gold diagonals across the slice (sunlight PBI looked like a streak).
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION and soi_live_preview \
+				and not elev_show_schematic_wires:
+			if ConduitKinds.is_direct_intake_connection(conn, model):
+				_draw_direct_intake_stub(src_pos, tgt_pos, col, width, flowing, is_sel)
+			elif elev_show_projected_pipes \
+					and _try_draw_elev_conduit_projection(conn, col, width, flowing, res_rate, res_kind):
+				pass
+			return
 		if res_kind == "sunlight" or res_kind == "wind":
-			if wps.is_empty():
+			# Honor the selected wire style (Wire ▾): metro/orthogonal radiant
+			# links route like every other wire; the dashed-glow bezier remains
+			# the bezier-style look (ambient/optional semantics stay in color +
+			# glow, not in a style exemption).
+			if style == "metro":
+				_draw_wire_metro_path([src_pos] + wps + [tgt_pos],
+					[src_t, tgt_tang_in], col, width, flowing, res_rate, false, conn)
+			elif style == "orthogonal":
+				_draw_resource_wire_orthogonal_path(
+					[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_in],
+					col, width, flowing, false, curve_t,
+					res_rate, res_kind, sankey_scale)
+			elif wps.is_empty():
 				_draw_radiant_wire_bezier(
 					src_pos, src_t, tgt_pos, tgt_tang_in, col, width, flowing, curve_t, res_rate, res_kind)
 			else:
@@ -2785,6 +3994,33 @@ func _render_connection(
 			# even in Build mode — radiant links are documentary.
 			if res_rate > ResourceEdgeVis.FLOW_DEAD_RATE and _zoom >= WIRE_LABEL_MIN_ZOOM:
 				_draw_flow_label(src_pos, tgt_pos, wps, res_rate, true, res_kind, col)
+			_draw_connection_waypoint_handles(conn, center)
+			return
+		# Site Plan: prefer_3d / none → rely on world conduits; metro → 2D overlay.
+		if view_mode == GraphSiteLayout.VIEW_SITE and soi_live_preview \
+				and not _site_draws_schematic_wires():
+			return
+		# Elevation 3D: prefer world conduits + flow glow; optional projected
+		# polyline from ConduitManager samples (never freeform waypoints).
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION and soi_live_preview:
+			if ConduitKinds.is_direct_intake_connection(conn, model):
+				_draw_direct_intake_stub(src_pos, tgt_pos, col, width, flowing, is_sel)
+				return
+			if _try_draw_elev_conduit_projection(conn, col, width, flowing, res_rate, res_kind):
+				return
+			if not elev_show_schematic_wires:
+				return
+		# Elevation (2D-only or schematic on): culvert barrels as straight chords.
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION \
+				and ConduitKinds.uses_culvert_kit(
+					ConduitKinds.derive_type_for_connection(conn)):
+			_draw_elevation_culvert_wire_straight(src_pos, tgt_pos, col, width, flowing, res_rate)
+			if flowing and _zoom >= WIRE_LABEL_MIN_ZOOM:
+				_draw_flow_label(src_pos, tgt_pos, [], res_rate, true, res_kind, col)
+			return
+		# Siphon direct intake: short stub at pond edge (no full conduit spaghetti).
+		if ConduitKinds.is_direct_intake_connection(conn, model):
+			_draw_direct_intake_stub(src_pos, tgt_pos, col, width, flowing, is_sel)
 			_draw_connection_waypoint_handles(conn, center)
 			return
 		if style == "metro":
@@ -2807,6 +4043,16 @@ func _render_connection(
 			_draw_flow_label(src_pos, tgt_pos, wps, res_rate, true, res_kind, col)
 		_draw_connection_waypoint_handles(conn, center)
 		return
+	# Site Plan: prefer_3d / none → world conduits only (no schematic overlay).
+	if view_mode == GraphSiteLayout.VIEW_SITE and soi_live_preview \
+			and not _site_draws_schematic_wires():
+		return
+	# Elevation 3D: non-resource wires follow the same 3D / projected authority.
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION and soi_live_preview:
+		if _try_draw_elev_conduit_projection(conn, col, width, flowing, flow_watts, ""):
+			return
+		if not elev_show_schematic_wires:
+			return
 	if style == "metro":
 		var pts: Array = [src_pos] + wps + [tgt_pos]
 		_draw_wire_metro_path(pts, [src_t, tgt_tang_in], col, width, flowing, flow_watts, reverse, conn)
@@ -2888,23 +4134,24 @@ func _draw_resource_wire_bezier(from: Vector2, from_tang: Vector2,
 	var c2: Vector2 = ctrl["c2"]
 	var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, flow_active)
 	var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
-	var pixel_len := from.distance_to(to)
-	# Ghost track (route visible when idle)
-	_draw_bezier_stroke(from, c1, c2, to, _adaptive_segments(pixel_len, 24),
-		Color(col.r, col.g, col.b, col.a * 0.20), maxf(1.4, width * 0.65))
-	if flow_active and gscale > 0.01 and not _wire_lod_simplify:
-		var glow_a := 0.07 + 0.13 * gscale
-		_draw_bezier_stroke(from, c1, c2, to, _adaptive_segments(pixel_len, 28),
-			Color(col.r, col.g, col.b, glow_a), body_w + 2.2 + 2.4 * gscale)
+
+	_draw_bezier_stroke(from, c1, c2, to, 24,
+		Color(col.r, col.g, col.b, col.a * 0.18), maxf(1.4, width * 0.6))
+	_draw_bezier_stroke(from, c1, c2, to, 26, Color(0.01, 0.01, 0.03, 0.28), body_w + 2.0)
+	if flow_active and gscale > 0.01:
+		var glow_a := 0.08 + 0.14 * gscale
+		_draw_bezier_stroke(from, c1, c2, to, 28,
+			Color(col.r, col.g, col.b, glow_a), body_w + 2.4 + 2.6 * gscale)
 	var core := Color(
-		lerpf(col.r, 1.0, 0.14 * gscale),
-		lerpf(col.g, 1.0, 0.12 * gscale),
-		lerpf(col.b, 1.0, 0.08 * gscale),
-		lerpf(col.a, 1.0, 0.12 * gscale))
-	_draw_bezier_stroke(from, c1, c2, to, _adaptive_segments(pixel_len, 30), core, maxf(1.6, body_w))
-	if flow_active:
-		ResourceEdgeVis.draw_bezier_flow_cues(
-			self, from, c1, c2, to, col, body_w, _flow_phase, reverse_chase)
+		lerpf(col.r, 1.0, 0.16 * gscale),
+		lerpf(col.g, 1.0, 0.14 * gscale),
+		lerpf(col.b, 1.0, 0.10 * gscale),
+		0.68 + 0.28 * gscale if flow_active else col.a)
+	_draw_bezier_stroke(from, c1, c2, to, 32, core, maxf(1.8, body_w))
+	if flow_active and gscale > 0.01:
+		_draw_bezier_stroke(from, c1, c2, to, 32,
+			Color(1.0, 1.0, 1.0, 0.12 + 0.18 * gscale), maxf(1.0, body_w * 0.22))
+		_draw_resource_flow_arrows_bezier(from, c1, c2, to, col, body_w, reverse_chase, gscale)
 
 
 ## Radiant (sunlight / wind) wire — always rendered dashed + soft-glowing, never
@@ -2965,8 +4212,6 @@ func _draw_resource_wire_path(points: Array, end_tangents: Array,
 		flow_rate: float = 0.0, resource_kind: String = "", sankey_scale: bool = true) -> void:
 	if points.size() < 2:
 		return
-	var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, flow_active)
-	var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
 	for seg: int in range(points.size() - 1):
 		var from: Vector2 = points[seg] as Vector2
 		var to: Vector2 = points[seg + 1] as Vector2
@@ -2981,12 +4226,13 @@ func _draw_resource_wire_path(points: Array, end_tangents: Array,
 		else:
 			to_t_in = (from - to).normalized()
 		_draw_resource_wire_bezier(from, from_t, to, to_t_in, col, width, false,
-				reverse_chase, curve_tension, flow_rate, resource_kind)
+				reverse_chase, curve_tension, flow_rate, resource_kind, sankey_scale)
 	if flow_active:
 		var sample_fn := func(t: float) -> Vector2:
 			return _sample_wire_path(points, end_tangents, t, curve_tension)
-		var cue_w := ResourceEdgeVis.body_width(width, gscale)
-		ResourceEdgeVis.draw_path_flow_cues(self, sample_fn, col, cue_w, _flow_phase, reverse_chase)
+		var gscale := ResourceEdgeVis.glow_scale(resource_kind, flow_rate, true)
+		var body_w := width if not sankey_scale else ResourceEdgeVis.body_width(width, gscale)
+		_draw_resource_flow_arrows_on_sample(sample_fn, col, body_w, reverse_chase, gscale)
 
 
 func _draw_resource_wire_orthogonal_path(points: Array, end_tangents: Array,
@@ -3000,11 +4246,11 @@ func _draw_resource_wire_orthogonal_path(points: Array, end_tangents: Array,
 	for i in range(points.size() - 1):
 		var a: Vector2 = points[i] as Vector2
 		var b: Vector2 = points[i + 1] as Vector2
-		draw_line(a, b, Color(col.r, col.g, col.b, col.a * 0.20), maxf(1.4, width * 0.65))
+		draw_line(a, b, Color(col.r, col.g, col.b, col.a * 0.18), maxf(1.4, width * 0.6))
 		if flow_active and gscale > 0.01:
-			var glow_a := 0.07 + 0.13 * gscale
+			var glow_a := 0.08 + 0.14 * gscale
 			draw_line(a, b, Color(col.r, col.g, col.b, glow_a), body_w + 1.8 + 2.0 * gscale)
-		draw_line(a, b, col, maxf(1.6, body_w))
+		draw_line(a, b, col, maxf(1.8, body_w))
 	if flow_active and points.size() >= 2:
 		var total := 0.0
 		var segs: Array = []
@@ -3017,7 +4263,6 @@ func _draw_resource_wire_orthogonal_path(points: Array, end_tangents: Array,
 			return
 		var sample_fn := func(t: float) -> Vector2:
 			var dist := t * total
-			var prev := points[0] as Vector2
 			for seg: Dictionary in segs:
 				if dist <= float(seg.get("len", 0.0)):
 					var seg_a: Vector2 = seg.get("a", Vector2.ZERO)
@@ -3026,10 +4271,8 @@ func _draw_resource_wire_orthogonal_path(points: Array, end_tangents: Array,
 					var seg_len: float = maxf(seg_a.distance_to(seg_b), 0.001)
 					var u: float = (dist - seg_start_len) / seg_len
 					return seg_a.lerp(seg_b, clampf(u, 0.0, 1.0))
-				prev = seg.get("b", prev) as Vector2
 			return points[points.size() - 1] as Vector2
-		ResourceEdgeVis.draw_path_flow_cues(self, sample_fn, col,
-				ResourceEdgeVis.body_width(width, gscale), _flow_phase, reverse_chase)
+		_draw_resource_flow_arrows_on_sample(sample_fn, col, body_w, reverse_chase, gscale)
 
 
 ## Glow underlay + main stroke + moving chase (source → target; `reverse` when battery discharges).
@@ -3040,75 +4283,40 @@ func _draw_wire_bezier(from: Vector2, from_tang: Vector2,
 	var ctrl := _wire_bezier_controls(from, from_tang, to, to_tang_in, curve_tension)
 	var c1: Vector2 = ctrl["c1"]
 	var c2: Vector2 = ctrl["c2"]
-	var gscale: float  = _wire_glow_scale_from_watts(flow_watts)
-	var extra: float  = 4.0 + 18.0 * gscale
-	# Body is fully opaque when power is high, but stays visible when idle
-	var body_alpha: float  = 0.60 + 0.40 * gscale
-	var pixel_len := from.distance_to(to)
+	var gscale := _wire_glow_scale_from_watts(flow_watts)
+	var body_w := maxf(2.2, width + 0.6 + gscale * 1.3)
 
-	# 1) Glow halo — concentric passes, innermost brightest. Full lushness (3
-	# passes + a bright inner halo) when few wires are on screen; a single
-	# pass and no inner halo once WIRE_LOD_HIGH_COUNT wires are visible or the
-	# view is zoomed out far enough that the extra passes aren't perceptible.
-	if flow_active and flow_watts > WIRE_FLOW_FLOOR * 0.5:
-		var glow_passes := 1 if _wire_lod_simplify else 3
-		var glow_segs := _adaptive_segments(pixel_len, 28)
-		for p in glow_passes:
-			var layer: float = float(p) / float(maxi(glow_passes - 1, 1))
-			# Outer passes are wider but more transparent; inner close to the wire body
-			var gw: float = width + 1.5 + (extra) * (1.0 - layer * 0.55)
-			var a_g:  float  = (0.15 - layer * 0.025) * gscale
-			_draw_bezier_stroke(from, c1, c2, to, glow_segs, Color(col.r, col.g, col.b, a_g), gw)
-		if not _wire_lod_simplify:
-			# Extra tight inner halo at near-white to create a bright core
-			var inner_w: float = width * 0.9
-			var inner_a: float = 0.22 * gscale
-			_draw_bezier_stroke(from, c1, c2, to, _adaptive_segments(pixel_len, 34),
-				Color(lerpf(col.r, 1.0, 0.5), lerpf(col.g, 1.0, 0.5), lerpf(col.b, 1.0, 0.5), inner_a),
-				inner_w)
+	# Base depth stroke
+	_draw_bezier_stroke(from, c1, c2, to, 30, Color(0.01, 0.01, 0.03, 0.32), body_w + 2.4)
+	# Colored glow
+	var glow_alpha := (0.12 + 0.20 * gscale) if flow_active else 0.08
+	_draw_bezier_stroke(from, c1, c2, to, 30, Color(col.r, col.g, col.b, glow_alpha), body_w + 3.0 + 3.2 * gscale)
+	# Main stroke
+	var core := Color(lerpf(col.r, 1.0, 0.20 * gscale), lerpf(col.g, 1.0, 0.18 * gscale), lerpf(col.b, 1.0, 0.12 * gscale), 0.72 + 0.26 * gscale)
+	_draw_bezier_stroke(from, c1, c2, to, 34, core, body_w)
+	# Hot inner line
+	_draw_bezier_stroke(from, c1, c2, to, 34, Color(1.0, 1.0, 1.0, 0.18 + 0.28 * gscale), maxf(1.0, body_w * 0.24))
 
-	# 2) Main body — slightly whitened core at high power
-	var core := Color(
-		lerpf(col.r, 1.0, 0.18 * gscale),
-		lerpf(col.g, 1.0, 0.15 * gscale),
-		lerpf(col.b, 1.0, 0.12 * gscale),
-		body_alpha)
-	_draw_bezier_stroke(from, c1, c2, to, _adaptive_segments(pixel_len, 34), core, maxf(1.2, width))
-
-	# 3) Chase: bright head + thin trail along the line
-	# Chase count scales with power level and timescale so high-speed sim is still readable.
-	# Simplified LOD keeps only the lead dot (flow direction/activity stays
-	# legible) and drops the fading trail.
 	if flow_active:
-		var chase_count: int
-		if _wire_lod_simplify:
-			chase_count = 1
-		else:
-			var extra_dots := int(gscale * 3.0) + int(clampf(log(_sim_flow_mult + 1.0) * 1.2, 0.0, 4.0))
-			chase_count = WIRE_CHASE_COUNT + extra_dots
-		var spacing     := maxf(0.055, WIRE_CHASE_SPACING - gscale * 0.02)
-		var t_base: float = fmod(_flow_phase * 0.34, 1.0)
-		for s in chase_count:
-			var t : float = t_base - float(s) * spacing
-			if reverse_chase:
-				t = 1.0 - t
-			t = fposmod(t, 1.0)
-			var t1: float   = t
-			var t0: float   = maxf(0.0, t1 - 0.055 - 0.028 * gscale)
-			var p0: Vector2 = _bezier_pos(from, c1, c2, to, t0)
-			var p1: Vector2 = _bezier_pos(from, c1, c2, to, t1)
-			# Fade tail dots so only the first few are fully bright
-			var tail_fade := 1.0 - float(s) / float(chase_count)
-			# Wide soft outer ring
-			var wch_outer := maxf(3.5, width * (1.2 + 1.8 * gscale) + _zoom)
-			draw_line(p0, p1, Color(col.r, col.g, col.b, (0.18 + 0.24 * gscale) * tail_fade), wch_outer)
-			# Bright core
-			var a_ch := (0.60 + 0.40 * gscale) * tail_fade
-			var wch  := maxf(2.0, width * (0.9 + 1.5 * gscale) + 0.5 * _zoom)
-			draw_line(p0, p1, Color(1, 0.99, 0.94, a_ch), wch)
-			# White-hot tip (only on first dot)
-			if s == 0:
-				draw_line(p0, p1, Color(1, 1, 1, a_ch * 0.65), wch * 0.38)
+		# Number of arrows scales with power (1–6) so high-wattage wires feel more alive
+		var gscale_v2 := _wire_glow_scale_from_watts(flow_watts)
+		var arrow_count := 3 + int(gscale_v2 * 3.0)
+		var arrow_gap   := maxf(0.12, 0.22 - gscale_v2 * 0.07)
+		var arrow_t     := fposmod(_flow_phase * 0.27, 1.0)
+		if reverse_chase:
+			arrow_t = 1.0 - arrow_t
+		for i in arrow_count:
+			var t := fposmod(arrow_t + float(i) * arrow_gap, 1.0)
+			ResourceEdgeVis.draw_bezier_flow_arrow(
+					self, from, c1, c2, to, t, col, body_w, reverse_chase, gscale_v2)
+
+
+func _wire_chase_count(gscale: float) -> int:
+	# High-speed / wire LOD: one lead dot. Otherwise power-scale only (no
+	# timescale bonus — that used to *increase* draw cost at Max).
+	if _wire_lod_simplify or _high_speed_lod:
+		return 1
+	return WIRE_CHASE_COUNT + int(gscale * 3.0)
 
 
 ## Multi-segment wire through optional waypoints (each segment is a cubic bezier).
@@ -3153,12 +4361,7 @@ func _draw_bezier_path_chase(points: Array, end_tangents: Array,
 	if total_len < 1.0:
 		return
 	var gscale: float = _wire_glow_scale_from_watts(flow_watts)
-	var chase_count: int
-	if _wire_lod_simplify:
-		chase_count = 1
-	else:
-		var extra_dots := int(gscale * 3.0) + int(clampf(log(_sim_flow_mult + 1.0) * 1.2, 0.0, 4.0))
-		chase_count = WIRE_CHASE_COUNT + extra_dots
+	var chase_count: int = _wire_chase_count(gscale)
 	var spacing := maxf(0.055, WIRE_CHASE_SPACING - gscale * 0.02)
 	var t_base: float = fmod(_flow_phase * 0.34, 1.0)
 	for s in chase_count:
@@ -3272,7 +4475,8 @@ func _draw_wire_orthogonal_path(points: Array, end_tangents: Array,
 		col: Color, width: float, flow_active: bool,
 		flow_watts: float, reverse_chase: bool, conn: Dictionary) -> void:
 	var poly := _build_orthogonal_polyline(points, end_tangents)
-	var radius_px := _conn_corner_radius_graph(conn) * _zoom
+	var radius_px := float(conn.get("_draw_corner_px",
+			_conn_corner_radius_graph(conn) * _zoom))
 	poly = _round_polyline_corners(poly, maxf(6.0, radius_px))
 	var gscale: float = _wire_glow_scale_from_watts(flow_watts)
 	var body_alpha: float = 0.60 + 0.40 * gscale
@@ -3332,7 +4536,7 @@ func _effective_waypoints_screen(conn: Dictionary, center: Vector2) -> Array:
 	var wps := _waypoints_screen(conn, center)
 	if not wps.is_empty():
 		return wps
-	var style := str(conn.get("line_style", ""))
+	var style := _effective_line_style(conn)
 	if style == "metro" or style == "orthogonal":
 		var sid := str(conn.get("source_item_id", ""))
 		var tid := str(conn.get("target_item_id", ""))
@@ -3362,6 +4566,8 @@ func _draw_connection_waypoint_handles(conn: Dictionary, center: Vector2) -> voi
 	var is_default := (_waypoints_screen(conn, center)).is_empty()
 	for wp: Vector2 in wps:
 		var r := maxf(5.0, 6.0 * _zoom)
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+			r = clampf(GraphSiteLayout.px_per_m(_zoom) * 0.22, 3.0, 7.0)
 		if is_default:
 			# Draw default waypoints as white dot handles with subtle glow
 			draw_circle(wp, r + 3.0, Color(1.0, 1.0, 1.0, 0.22))
@@ -3382,7 +4588,9 @@ func _waypoint_hit(screen_pos: Vector2) -> Dictionary:
 	var center := size * 0.5
 	var wps: Array = _effective_waypoints_screen(conn, center)
 	var pick_r := maxf(10.0, 12.0 * _zoom)
-	if _touch_input_active():
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		pick_r = clampf(GraphSiteLayout.px_per_m(_zoom) * 0.35, 8.0, 14.0)
+	elif _touch_input_active():
 		pick_r = maxf(pick_r, TOUCH_SEGMENT_PICK_MIN)
 	for i: int in range(wps.size()):
 		if (wps[i] as Vector2).distance_to(screen_pos) < pick_r:
@@ -3451,7 +4659,9 @@ func _connection_polyline_screen(conn: Dictionary, center: Vector2, apply_roundi
 	var poly := _build_orthogonal_polyline(
 		pts, [src.get("tangent", Vector2.RIGHT) as Vector2, tgt_t_in])
 	if apply_rounding:
-		poly = _round_polyline_corners(poly, maxf(6.0, _conn_corner_radius_graph(conn) * _zoom))
+		var r_px := float(conn.get("_draw_corner_px",
+				_conn_corner_radius_graph(conn) * _zoom))
+		poly = _round_polyline_corners(poly, maxf(6.0, r_px))
 	return poly
 
 
@@ -3476,7 +4686,7 @@ func _connection_intersects_rect(conn: Dictionary, rect: Rect2, center: Vector2)
 		if rect.has_point(wp as Vector2):
 			return true
 			
-	var style: String = str(conn.get("line_style", "bezier"))
+	var style: String = _effective_line_style(conn)
 	if style == "orthogonal":
 		var poly := _connection_polyline_screen(conn, center, true)
 		for i in range(poly.size() - 1):
@@ -3525,7 +4735,7 @@ func _ortho_segment_hit(screen_pos: Vector2) -> Dictionary:
 	var conn := model.get_connection(selected_connection_id)
 	if conn.is_empty():
 		return {}
-	var style := str(conn.get("line_style", "bezier"))
+	var style := _effective_line_style(conn)
 	if style != "orthogonal" and style != "metro":
 		return {}
 	var center := size * 0.5
@@ -3772,6 +4982,17 @@ func _get_handle_info(item_id: String, handle_id: String,
 	if item.is_empty():
 		return {}
 
+	# Pinned PBIs live on the fixed top bar — route their port to the pill tab so
+	# connection wires anchor to the bar instead of a hidden graph-space node.
+	if _pbi_pinned_active() and str(item.get("type", "")) == "pbi":
+		var pill: Dictionary = _pbi_pill_rects.get(item_id, {}) as Dictionary
+		if not pill.is_empty():
+			var pport: Dictionary = pill.get("port", {}) as Dictionary
+			return {
+				"pos":     pport.get("pos", Vector2.ZERO) as Vector2,
+				"tangent": pport.get("tangent", Vector2(0.0, 1.0)) as Vector2,
+			}
+
 	var tl    := _item_screen_tl(item, center)
 	var sz    := _item_screen_size(item)
 	var itype := item.get("type", "generic") as String
@@ -3821,6 +5042,50 @@ func _get_handle_info(item_id: String, handle_id: String,
 	}
 
 
+## Human-readable port hint for hover tooltips: "AC Power OUT", "Water IN",
+## "PV DC + IN" — name + direction only, never raw item/handle ids.
+func port_hover_text(item_id: String, handle_id: String, pol: String,
+		rk: String) -> String:
+	var itype := ""
+	if model != null:
+		itype = str(model.get_item(item_id).get("type", ""))
+	var hid := handle_id.to_lower()
+	var dir := ""
+	if hid.find("out") != -1:
+		dir = "OUT"
+	elif hid.find("in") != -1:
+		dir = "IN"
+	var name := ""
+	match pol:
+		"resource":
+			name = ResourceKinds.display_name(ResourceKinds.normalize_kind(rk)) \
+				if not rk.is_empty() else "Resource"
+		"ac":
+			name = "AC Power"
+			if dir.is_empty():
+				dir = "OUT"
+		"pv":
+			name = "PV String"
+		"positive", "smart_battery":
+			name = "DC +"
+		"negative":
+			name = "DC −"
+		_:
+			name = handle_id.capitalize()
+	# Context: a controller's pv* ports RECEIVE the string; its battery* ports
+	# are the (bidirectional) bank terminals; generator DC terminals produce.
+	if hid.begins_with("pv") and (pol == "positive" or pol == "negative"):
+		name = "PV %s" % name
+		if dir.is_empty():
+			dir = "IN"
+	elif hid.begins_with("battery"):
+		name = "Battery %s" % name
+	elif dir.is_empty() and (pol == "positive" or pol == "negative") \
+			and itype in ["panel", "wind", "hydro", "csp"]:
+		dir = "OUT"
+	return ("%s %s" % [name, dir]).strip_edges()
+
+
 ## Infers the outgoing tangent direction from a handle's fractional position.
 func _tangent_from_rx_ry(rx: float, ry: float) -> Vector2:
 	if rx <= 0.01:   return Vector2(-1.0,  0.0)  # left edge
@@ -3845,6 +5110,14 @@ func _tangent_from_rx_ry(rx: float, ry: float) -> Vector2:
 func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 	if model == null:
 		return {}
+	# Site prefer_3d / none: schematic wires don't steal 3D conduit picks.
+	if view_mode == GraphSiteLayout.VIEW_SITE and site_wire_mode != "metro":
+		return {}
+	# Elevation with live SoI CT: prefer world conduits over 2D bezier hits.
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION and soi_preview_service != null \
+			and is_instance_valid(soi_preview_service) \
+			and bool(soi_preview_service.get("active")):
+		return {}
 	const PICK_DIST := 8.0
 	var center := size * 0.5
 
@@ -3863,7 +5136,7 @@ func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 		var to:    Vector2 = tgt["pos"]
 		var tgt_t_in := _incoming_tangent(tgt.get("tangent", Vector2.RIGHT) as Vector2)
 		var wps: Array = _waypoints_screen(conn, center)
-		var style: String = str(conn.get("line_style", "bezier"))
+		var style: String = _effective_line_style(conn)
 		var curve_t := _conn_curve_tension(conn)
 		var hit := false
 		if style == "orthogonal":
@@ -3930,7 +5203,67 @@ var canvas_bg_alpha: float = 1.0
 ## only draw the ring / elevation guide.
 var soi_live_preview: bool = false
 
+## Set by SystemGraphView after the SoI preview service is created. When the
+## preview camera is orbited (tilted off the default top-down / side-on pose)
+## in Site/Elevation, the camera becomes the projection authority so chips and
+## wires track the orbit; otherwise the proven 2D disc projection is used.
+var soi_preview_service = null
+
+
+## True when the SoI preview camera should drive physical-view projection.
+## Elevation section: always (locks 2D DEM/pond/ports to the CT camera).
+## Site Plan: whenever the live top-down preview is active (orbited or not),
+## so overlays track tilt instead of sticking to flat disc math.
+func _phys_camera_projection_active() -> bool:
+	if not _is_physical_view():
+		return false
+	if soi_preview_service == null or not is_instance_valid(soi_preview_service):
+		return false
+	if not soi_preview_service.has_method("is_projection_authority"):
+		return false
+	if not bool(soi_preview_service.call("is_projection_authority")):
+		return false
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION \
+			and soi_preview_service.has_method("is_section_mode") \
+			and bool(soi_preview_service.call("is_section_mode")):
+		return true
+	if view_mode == GraphSiteLayout.VIEW_SITE and soi_live_preview:
+		return true
+	return bool(soi_preview_service.call("is_phys_orbited"))
+
+
+## Vertical exaggeration used for flat (non-camera) elev mapping.
+## When the 3D section backdrop is live, force 1× so 2D never stretches vs the CT.
+func _elev_exaggeration_draw() -> float:
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION and soi_live_preview:
+		return 1.0
+	return maxf(elevation_exaggeration, 0.001)
+
+
+## World-space centre of a placed physical item (SoI centre + site metres, Y=elevation).
+func _phys_item_world_center(item: Dictionary) -> Vector3:
+	var site := GraphSiteLayout.site_xz(item)
+	var elev := _elevation_m_for_item(item)
+	var c := Vector3.ZERO
+	var soi := _cached_autoload("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		c = soi.call("world_center")
+	return Vector3(c.x + site.x, elev, c.z + site.y)
+
+
+## Project a placed item's centre to canvas-local pixels via the preview camera.
+## Returns Vector2 or null (behind camera / projection unavailable).
+func _phys_project_item_center(item: Dictionary) -> Variant:
+	if not _phys_camera_projection_active():
+		return null
+	return soi_preview_service.call("world_to_canvas", _phys_item_world_center(item))
+
 func _draw() -> void:
+	# Dynamic lookup — autoload globals aren't available while this script is
+	# compiled as a preload dependency of offline selftests (machine_selftest).
+	var pm := get_node_or_null("/root/PerfMonitor")
+	if pm != null:
+		pm.begin("gv_draw")
 	_controller_reset_rects.clear()
 	_alert_seen_this_draw = false
 	# Populate the per-draw visible-items/connections cache for this whole pass
@@ -3938,6 +5271,7 @@ func _draw() -> void:
 	# show up; the model is immutable within a single draw.
 	_cached_visible_items = _compute_visible_items()
 	_cached_visible_connections = _compute_visible_connections()
+	_twin_hidden_cache.clear()
 	_draw_cache_active = true
 	var fill := Color(C_CANVAS_BG.r, C_CANVAS_BG.g, C_CANVAS_BG.b, C_CANVAS_BG.a * canvas_bg_alpha)
 	if soi_live_preview:
@@ -3946,16 +5280,21 @@ func _draw() -> void:
 		draw_rect(Rect2(Vector2.ZERO, size), fill)
 	_draw_dot_grid()
 	_draw_soi_background()
-	_draw_unplaced_tray()
+	if not siphon_lab_active:
+		_draw_unplaced_tray()
 
 	if model != null and _visible_items().size() > 0:
 		_draw_connections()
 		for item: Dictionary in _visible_items():
 			_render_item(item)
-		for item: Dictionary in _visible_items():
-			_draw_item_overlays(item)
-		for item2: Dictionary in _visible_items():
-			_draw_resize_handle(item2)
+		if not siphon_lab_active:
+			for item: Dictionary in _visible_items():
+				_draw_item_overlays(item)
+			for item2: Dictionary in _visible_items():
+				_draw_resize_handle(item2)
+	elif model != null and not siphon_lab_active and not _is_physical_view() \
+			and not soi_live_preview:
+		_draw_empty_state_prompt()
 	# Derive alert presence from what we actually drew, so tick() can pick a
 	# coarse animation cadence without a separate model scan. If the state just
 	# appeared, kick one redraw so the pulse cadence engages immediately.
@@ -3966,12 +5305,205 @@ func _draw() -> void:
 	# extra passes (arrays are still valid — model can't change between passes).
 	_draw_cache_active = false
 
+	_draw_scope_portal_pills()       # promoted-port docks when inside a super-node
+	_draw_pbi_bar()                  # fundamental-resource pills pinned to top edge
+	# Site Plan: only the live Preview ghost (not designated hillside polys) —
+	# designated watershed stays a freeform graph node, not a default map outline.
+	if view_mode == GraphSiteLayout.VIEW_SITE:
+		_draw_watershed_overlays_site()
+		_draw_prop_radial_preview()
 	_draw_destroy_fx()
 	_draw_temp_wire()                # always on top of everything
 	if _marquee_selecting:
 		var rect := Rect2(_marquee_start, _marquee_end - _marquee_start).abs()
 		draw_rect(rect, Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.14), true)
 		draw_rect(rect, Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.65), false, 1.6)
+	if pm != null:
+		pm.end("gv_draw")
+
+
+## Screen rects of the portal pills drawn for the current scope, so hit-testing
+## (wire drops onto a pill) can bind an internal port to a promoted port.
+## handle_id -> {rect: Rect2, direction: String}
+var _portal_pill_rects: Dictionary = {}
+
+
+## When editing inside a super-node's child canvas, dock a pill for each of the
+## owner compound's promoted ports along the viewport edges (inputs across the TOP,
+## outputs across the BOTTOM — matching the graph's top-to-bottom flow) so the
+## external interface is visible and wireable from within.
+func _draw_scope_portal_pills() -> void:
+	_portal_pill_rects.clear()
+	if model == null or active_scope_id == "root" or _is_physical_view():
+		return
+	var sc: Dictionary = model.get_scope(active_scope_id)
+	var owner := str(sc.get("owner_compound_id", ""))
+	if owner.is_empty():
+		return
+	var comp := model.get_item(owner)
+	if comp.is_empty():
+		return
+	var eps: Array = (comp.get("specs", {}) as Dictionary).get("exposed_ports", []) as Array
+	if eps.is_empty():
+		return
+	var ins: Array = []
+	var outs: Array = []
+	for ep_v in eps:
+		var ep := ep_v as Dictionary
+		if str(ep.get("direction", "in")) == "out":
+			outs.append(ep)
+		else:
+			ins.append(ep)
+	_draw_portal_pill_row(ins, true)
+	_draw_portal_pill_row(outs, false)
+
+
+## PBI icon glyphs by resource kind — small, readable at pill scale.
+const _PBI_GLYPHS := {
+	"sunlight": "☀", "solar": "☀",
+	"water": "🌧", "rain": "🌧",
+	"wind": "🌬", "mechanical": "🌬", "atmosphere": "🌬", "air": "🌬",
+}
+
+
+## Draw the fundamental-resource (PBI) nodes as a fixed screen-space bar pinned
+## across the TOP edge of the canvas. Each pill exposes its downward "output"
+## port (tab + dot) so wires drop onto the bar; the pill rect is cached in
+## `_pbi_pill_rects` for hit-testing (wire-drop + click-select). Mirrors the
+## `_draw_portal_pill_row` visual language.
+func _draw_pbi_bar() -> void:
+	_pbi_pill_rects.clear()
+	if not _pbi_pinned_active() or model == null:
+		return
+	# Type-bucket index instead of a full model scan (needs ALL pbi items, which
+	# _visible_items() excludes while pinned — so items_of_type is the right set).
+	var pbis: Array = model.items_of_type("pbi")
+	if pbis.is_empty():
+		return
+
+	var fnt := ThemeDB.fallback_font
+	var pw := 138.0
+	var ph := 30.0
+	var gap := 12.0
+	var total := pbis.size() * pw + (pbis.size() - 1) * gap
+	var x0 := maxf(10.0, (size.x - total) * 0.5)
+	var y := 8.0
+	for i in pbis.size():
+		var item: Dictionary = pbis[i]
+		var iid := str(item.get("id", ""))
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		var kind := str(specs.get("resource_kind", ""))
+		var col := _wire_color_for_port("resource", kind)
+		var is_active := bool(specs.get("active", true))
+		var r := Rect2(Vector2(x0 + i * (pw + gap), y), Vector2(pw, ph))
+		var is_sel := (iid == selected_item_id)
+
+		# Body
+		var body_a := 0.20 if is_active else 0.10
+		draw_rect(r, Color(col.r, col.g, col.b, body_a), true)
+		draw_rect(r, Color(col.r, col.g, col.b, 0.95 if is_active else 0.5),
+			false, 2.0 if is_sel else 1.4)
+		if is_sel:
+			draw_rect(r.grow(2.0), Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.9),
+				false, 1.6)
+
+		# Label: glyph + name + value
+		var glyph := str(_PBI_GLYPHS.get(kind, "◆"))
+		var title := str(specs.get("name", iid))
+		var value := str(specs.get("display_value", ""))
+		draw_string(fnt, r.position + Vector2(8.0, ph * 0.5 + 5.0),
+			"%s %s" % [glyph, title], HORIZONTAL_ALIGNMENT_LEFT,
+			pw - 14.0, 12, C_TEXT)
+		if not value.is_empty():
+			draw_string(fnt, r.position + Vector2(8.0, ph - 4.0),
+				value, HORIZONTAL_ALIGNMENT_LEFT, pw - 14.0, 9,
+				Color(C_TEXT.r, C_TEXT.g, C_TEXT.b, 0.7))
+
+		# Output port tab (points DOWN into the canvas) + connectable dot.
+		var tab_c := Vector2(r.position.x + pw * 0.5, r.end.y)
+		var tab := Rect2(tab_c - Vector2(9.0, 0.0), Vector2(18.0, 4.0))
+		draw_rect(tab, Color(col.r, col.g, col.b, 0.95), true)
+		draw_circle(tab_c, 4.0, Color(col.r, col.g, col.b, 0.95))
+
+		_pbi_pill_rects[iid] = {
+			"rect": r,
+			"port": {
+				"item_id":       iid,
+				"handle_id":     "output",
+				"polarity":      "resource",
+				"resource_kind": kind,
+				"pos":           tab_c,
+				"tangent":       Vector2(0.0, 1.0),
+				"hub":           false,
+			},
+		}
+
+
+func _draw_portal_pill_row(ports: Array, is_input: bool) -> void:
+	if ports.is_empty():
+		return
+	var fnt := ThemeDB.fallback_font
+	var center := size * 0.5
+	var pw := 118.0
+	var ph := 24.0
+	var gap := 12.0
+	var total := ports.size() * pw + (ports.size() - 1) * gap
+	var x0 := (size.x - total) * 0.5
+	var y := 10.0 if is_input else size.y - ph - 10.0
+	for i in ports.size():
+		var ep := ports[i] as Dictionary
+		var r := Rect2(Vector2(x0 + i * (pw + gap), y), Vector2(pw, ph))
+		var col := PORT_COLORS.get(str(ep.get("polarity", "ac")), C_PRIMARY) as Color
+		# A connectable stub tab pointing INTO the canvas (down for inputs on the
+		# top edge, up for outputs on the bottom edge).
+		var tab_c := Vector2(r.position.x + pw * 0.5, r.end.y if is_input else r.position.y)
+		# Draw the connector wire from this portal port to the child node port it
+		# fronts, so the external boundary stays visually linked to the interior.
+		var child_info := _get_handle_info(str(ep.get("child_item_id", "")),
+			str(ep.get("child_handle_id", "")), center)
+		if not child_info.is_empty():
+			var cpos: Vector2 = child_info.get("pos", Vector2.ZERO) as Vector2
+			var from_pt := tab_c
+			var to_pt := cpos
+			if not is_input:
+				from_pt = cpos
+				to_pt = tab_c
+			var wcol := Color(col.r, col.g, col.b, 0.5)
+			# Follow the graph's selected wire style (Wire ▾) so portal
+			# connectors read as part of the same circuit, not a thin overlay.
+			var pstyle := _effective_line_style({})
+			var pw_stroke := maxf(1.5, 2.2 * _zoom)
+			if pstyle == "metro":
+				_draw_wire_metro_path([from_pt, to_pt],
+					[Vector2.DOWN, Vector2.DOWN], wcol, pw_stroke,
+					false, 0.0, false, {"corner_radius": 14.0})
+			elif pstyle == "orthogonal":
+				_draw_wire_orthogonal_path([from_pt, to_pt],
+					[Vector2.DOWN, Vector2.DOWN], wcol, pw_stroke,
+					false, 0.0, false, {})
+			else:
+				var dy := absf(to_pt.y - from_pt.y) * 0.45 + 24.0
+				var c1 := from_pt + Vector2(0.0, dy)
+				var c2 := to_pt - Vector2(0.0, dy)
+				var march := fmod(_flow_phase * 42.0, 16.0)
+				_draw_bezier_stroke_dashed(from_pt, c1, c2, to_pt, 26, wcol,
+					pw_stroke, 7.0, 6.0, march)
+		draw_rect(r, Color(col.r, col.g, col.b, 0.16), true)
+		draw_rect(r, Color(col.r, col.g, col.b, 0.9), false, 1.4)
+		var label := str(ep.get("label", ""))
+		if label.is_empty():
+			label = str(ep.get("handle_id", ""))
+		# Inputs flow down INTO the canvas (▾ leads); outputs flow down OUT (▾ trails).
+		var glyph := "▾ " if is_input else ""
+		var trail := " ▾" if not is_input else ""
+		draw_string(fnt, r.position + Vector2(8.0, ph * 0.5 + 4.0),
+			"%s%s%s" % [glyph, label, trail],
+			HORIZONTAL_ALIGNMENT_LEFT, pw - 12.0, 12, C_TEXT)
+		var tab := Rect2(tab_c - Vector2(9.0, 0.0) - Vector2(0.0, 0.0 if is_input else 4.0),
+			Vector2(18.0, 4.0))
+		draw_rect(tab, Color(col.r, col.g, col.b, 0.95), true)
+		draw_circle(tab_c, maxf(3.0, 3.5 * _zoom), Color(col.r, col.g, col.b, 0.95))
+		_portal_pill_rects[str(ep.get("handle_id", ""))] = {"rect": r, "direction": "in" if is_input else "out"}
 
 
 # ---------------------------------------------------------------------------
@@ -4025,10 +5557,9 @@ func _draw_item_overlays(item: Dictionary) -> void:
 	_draw_node_state_overlay(item, specs, Rect2(tl, sz))
 
 
-## Bold, type-agnostic state overlay driven by specs["node_state"]. Nominal
-## (running / idle / unset) draws nothing here — the RUNNING glow lives in the
-## body pass. Alert states get a pulsing outline + halo, a reason chip, and (for
-## faults) a rising procedural smoke plume that tracks pan/zoom every frame.
+## Bold, type-agnostic state overlay driven by specs["node_state"].
+## RUNNING → green rounded highlight; READY/IDLE → no highlight; alerts →
+## pulsing rounded red/amber halo + reason chip (+ smoke for faults).
 func _draw_node_state_overlay(item: Dictionary, specs: Dictionary, rect: Rect2) -> void:
 	var state := str(specs.get("node_state", ""))
 	# Controllers flag faults via the legacy `destroyed` spec — treat that as
@@ -4036,13 +5567,15 @@ func _draw_node_state_overlay(item: Dictionary, specs: Dictionary, rect: Rect2) 
 	var destroyed := bool(specs.get("destroyed", false))
 	if destroyed and not GraphNodeState.is_alert(state):
 		state = GraphNodeState.FAULT
-	# READY is nominal: a quiet static chip only — no pulse, glow, or animation.
+	# READY: no highlight (quiet — contrast with RUNNING's green halo).
 	if GraphNodeState.is_ready(state):
-		var rc := GraphNodeState.state_color(state)
-		var rchip := (GraphNodeState.state_icon(state) + " "
-				+ GraphNodeState.chip_text(state)).strip_edges()
-		if not rchip.is_empty():
-			_state_badge.draw_badge(self, rect, rchip, rc, _zoom)
+		return
+	if state == GraphNodeState.RUNNING:
+		var gcol := GraphNodeState.C_RUNNING
+		var grow_r := maxf(3.0, 5.0 * _zoom)
+		_draw_rounded_state_highlight(rect.grow(grow_r * 0.55), gcol, 0.18, 0.0, 0)
+		_draw_rounded_state_highlight(rect.grow(grow_r), gcol, 0.0, 0.92,
+			maxf(2.0, 2.8 * _zoom))
 		return
 	if not GraphNodeState.is_alert(state):
 		return
@@ -4053,9 +5586,9 @@ func _draw_node_state_overlay(item: Dictionary, specs: Dictionary, rect: Rect2) 
 	var col := GraphNodeState.state_color(state)
 	var pulse := 0.45 + 0.55 * absf(sin(_alert_phase * TAU))
 	var grow := maxf(3.0, 5.0 * _zoom)
-	draw_rect(rect.grow(grow * 0.6), Color(col.r, col.g, col.b, 0.16 * pulse), true)
-	draw_rect(rect.grow(grow), Color(col.r, col.g, col.b, 0.9 * pulse),
-		false, maxf(2.0, 3.0 * _zoom))
+	_draw_rounded_state_highlight(rect.grow(grow * 0.6), col, 0.16 * pulse, 0.0, 0)
+	_draw_rounded_state_highlight(rect.grow(grow), col, 0.0, 0.9 * pulse,
+		maxf(2.0, 3.0 * _zoom))
 
 	# Bespoke controller-destroy FX already renders its own smoke burst; only
 	# add the procedural plume for other faulted nodes.
@@ -4070,6 +5603,23 @@ func _draw_node_state_overlay(item: Dictionary, specs: Dictionary, rect: Rect2) 
 			+ GraphNodeState.chip_text(state, reason, kinds)).strip_edges()
 	if not chip.is_empty():
 		_state_badge.draw_badge(self, rect, chip, col, _zoom)
+
+
+## Soft rounded halo matching node corner radius (StyleBoxFlat, not sharp draw_rect).
+func _draw_rounded_state_highlight(rect: Rect2, col: Color, fill_a: float,
+		border_a: float, border_w: float) -> void:
+	if _sb_state_highlight == null:
+		_sb_state_highlight = StyleBoxFlat.new()
+	var radius := maxi(6, int(round(12.0 + minf(rect.size.x, rect.size.y) * 0.02)))
+	_sb_state_highlight.set_corner_radius_all(radius)
+	_sb_state_highlight.bg_color = Color(col.r, col.g, col.b, fill_a)
+	if border_w > 0.0 and border_a > 0.0:
+		_sb_state_highlight.set_border_width_all(maxi(1, int(round(border_w))))
+		_sb_state_highlight.border_color = Color(col.r, col.g, col.b, border_a)
+	else:
+		_sb_state_highlight.set_border_width_all(0)
+		_sb_state_highlight.border_color = Color(0, 0, 0, 0)
+	draw_style_box(_sb_state_highlight, rect)
 
 
 ## Continuous rising smoke plume above a faulted node. Purely procedural (no
@@ -4088,6 +5638,11 @@ func _draw_fault_smoke(rect: Rect2) -> void:
 
 
 func _render_item(item: Dictionary) -> void:
+	# Site Plan: a ring is a highlight over a 3D twin. If the node's twin is hidden
+	# from the 3D world (hidden_3d), draw nothing here — there's no model to mark.
+	# (Freeform/Elevation still show it.)
+	if view_mode == GraphSiteLayout.VIEW_SITE and _item_twin_is_hidden(item):
+		return
 	var itype   := item.get("type", "generic") as String
 	var center  := size * 0.5
 	var tl_orig := _item_screen_tl(item, center)
@@ -4101,7 +5656,40 @@ func _render_item(item: Dictionary) -> void:
 	# Site / elevation: always draw map-scaled footprints (never freeform cards —
 	# those ignored physical metres and fought zoom). Unplaced → tray chips.
 	if _is_physical_view():
+		# Invisible ∞ culvert outlet — never drawn in Site/Elevation.
+		if bool(specs.get("outlet_sink", false)):
+			return
+		# Elevation: pond body is the solid blue band — hide storage/catchment
+		# chips (hydropower detail lives in Siphon Lab). Watershed hillside is
+		# a twin of the pond (rain → tank), not a second bowl.
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+			if bool(specs.get("pond_storage", false)) \
+					or (itype == "catchment" \
+						and str(specs.get("catchment_kind", "")) in ["pond", "watershed"]) \
+					or _is_pond_twin_hidden(item):
+				return
+			if not elev_show_chips:
+				# Compact port pad (no inflated chip floors) so dots track metres.
+				var port_rect := _elev_port_pad_rect(item, tl, sz)
+				if is_sel:
+					var border := C_SELECTED_BORDER
+					draw_rect(port_rect, Color(border.r, border.g, border.b, 0.55),
+							false, minf(1.25, ELEV_STROKE_MAX_PX))
+				if elev_show_ports:
+					_draw_item_handles(item, port_rect.position, port_rect.size)
+				return
+		# Pond surface catchment + hillside watershed share identity with the
+		# pond_storage tank — draw only the tank chip (merged twin).
+		if _is_pond_twin_hidden(item):
+			return
+		# Site Plan: circular transparent magnifier over the 3D twin (+ rim ports).
+		if view_mode == GraphSiteLayout.VIEW_SITE:
+			_draw_site_magnifier(item, Rect2(tl, sz), is_sel)
+			_draw_item_handles(item, tl, sz)
+			return
 		_draw_site_plan_chip(item, Rect2(tl, sz), is_sel)
+		if view_mode == GraphSiteLayout.VIEW_ELEVATION and elev_show_ports:
+			_draw_item_handles(item, tl, sz)
 		return
 
 	if itype in ["battery", "smartbattery", "resource"]:
@@ -4130,26 +5718,22 @@ func _render_item(item: Dictionary) -> void:
 					var alpha = (1.0 - wave_phase) * 0.6
 					draw_rect(wave_rect, Color(1.0, 0.2, 0.2, alpha), false, 2.0 * _zoom)
 
-	# Active-load glow / blocked vibration (behind frame), driven by the unified
-	# node state. Blocked-family states jitter the body + red glow; RUNNING gets
-	# the green active glow. (The pulsing outline + chip come from the overlay pass.)
+	# Blocked-family vibration (behind frame). RUNNING / alert outline halos are
+	# drawn in the overlay pass so they stay rounded and consistent across V1/V2.
 	var node_state := str(specs.get("node_state", ""))
 	if GraphNodeState.is_blocked_family(node_state):
 		var offset = Vector2(randf_range(-3.0, 3.0), randf_range(-3.0, 3.0)) * _zoom
 		tl += offset
 		rect.position += offset
-		var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
-		draw_rect(glow, Color(0.9, 0.15, 0.2, 0.35), true)
-	elif node_state == GraphNodeState.RUNNING:
-		var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
-		draw_rect(glow, C_ACTIVE_LOAD_GLOW, true)
-	elif itype in ["appliance", "acload", "processor"]:
-		# Legacy fallback for load nodes not driven by the resource engine.
+		_draw_rounded_state_highlight(rect.grow(maxf(2.5, 3.0 * _zoom)),
+			Color(0.9, 0.15, 0.2), 0.35, 0.0, 0)
+	elif node_state.is_empty() and itype in ["appliance", "acload", "processor"]:
+		# Legacy fallback for load nodes not yet writing node_state.
 		var st := str(specs.get("current_state", "")).to_lower()
 		var avg := float(specs.get("avg_watts", 0.0))
 		if st == "on" or (st.is_empty() and avg > 0.5):
-			var glow := rect.grow(maxf(2.5, 3.0 * _zoom))
-			draw_rect(glow, C_ACTIVE_LOAD_GLOW, true)
+			_draw_rounded_state_highlight(rect.grow(maxf(2.5, 3.0 * _zoom)),
+				GraphNodeState.C_RUNNING, 0.22, 0.0, 0)
 
 	# Node background + border
 	if itype == "pbi":
@@ -4205,7 +5789,7 @@ func _render_item(item: Dictionary) -> void:
 		"controller":
 			_draw_controller_body(body_rect, specs, iid, rect)
 		"compound":
-			_draw_compound_body(body_rect, specs)
+			_draw_compound_body(body_rect, specs, item)
 		"appliance", "acload":
 			_draw_load_body(body_rect, specs)
 		"processor":
@@ -4268,15 +5852,19 @@ func _draw_data_source_badge(rect: Rect2, specs: Dictionary) -> void:
 
 
 func _draw_node_frame(rect: Rect2, border_col: Color) -> void:
-	_sb_node_base.bg_color     = C_PANEL_BG
-	_sb_node_base.border_color = border_col
-	draw_style_box(_sb_node_base, rect)
+	# More sculpted rounded containers in V2.
+	_draw_rounded_rect(Rect2(rect.position + Vector2(2.0, 3.0), rect.size), V2_NODE_SHADOW, 12)
+	_draw_rounded_rect(rect, Color(0.07, 0.10, 0.19, 0.96), 12, Color(border_col.r * 0.55, border_col.g * 0.55, border_col.b * 0.55, 0.75), 1)
+	_draw_rounded_rect(rect.grow(-1.5), Color(0, 0, 0, 0), 10, Color(border_col.r, border_col.g, border_col.b, 0.42), 1)
 
 
-## True when the node should be drawn as a full-bleed icon/preview (no title band).
+## True when the node should be drawn as a full-bleed icon/preview (no frame).
 ## Default ON when a GLB model_id is present; emoji-only nodes opt in via
-## specs.icon_replaces_frame = true.
+## specs.icon_replaces_frame = true. The "card" display mode (View options ▾)
+## forces classic framed cards for every node.
 func _icon_replaces_frame(specs: Dictionary) -> bool:
+	if node_display_mode == "card":
+		return false
 	var has_model := not str(specs.get("model_id", "")).is_empty()
 	var has_icon := not str(specs.get("icon", "")).is_empty()
 	if not has_model and not has_icon:
@@ -4287,17 +5875,23 @@ func _icon_replaces_frame(specs: Dictionary) -> bool:
 
 
 ## Full-node icon or GLB preview; ports + selection still drawn by the caller.
+## The preview floats on the canvas (no dark plate behind it — the thumbnail
+## texture is already alpha-transparent); an optional compact title band names
+## the node (show_preview_labels).
 func _draw_icon_as_node(rect: Rect2, specs: Dictionary, border_col: Color,
 		is_sel: bool) -> void:
 	var z := _zoom
 	var pad := maxf(2.0, 3.0 * z)
-	# Soft shadow + transparent plate (no title band).
-	draw_rect(Rect2(rect.position + Vector2(1.5 * z, 2.0 * z), rect.size),
-		Color(0, 0, 0, 0.35), true)
-	draw_rect(rect, Color(0.04, 0.06, 0.10, 0.55), true)
 	draw_rect(rect, Color(border_col.r, border_col.g, border_col.b,
-		0.85 if is_sel else 0.45), false, maxf(1.0, 1.2 * z))
+		0.85 if is_sel else 0.30), false, maxf(1.0, 1.2 * z))
 	var inner := rect.grow(-pad)
+	if show_preview_labels:
+		var band_h := clampf(15.0 * z, 9.0, 24.0)
+		var title := str(specs.get("name", ""))
+		if not title.is_empty() and rect.size.y > band_h * 2.0:
+			_draw_title_band(rect, band_h, title, border_col)
+			inner = Rect2(inner.position + Vector2(0.0, band_h),
+				inner.size - Vector2(0.0, band_h))
 	if _draw_model_preview_zone(inner, specs, 1.0):
 		return
 	var icon := str(specs.get("icon", ""))
@@ -4313,16 +5907,13 @@ func _draw_icon_as_node(rect: Rect2, specs: Dictionary, border_col: Color,
 func _draw_title_band(rect: Rect2, band_h: float, title: String,
 		accent: Color) -> void:
 	var band := Rect2(rect.position, Vector2(rect.size.x, band_h))
-	draw_rect(band, Color(accent.r, accent.g, accent.b, 0.20))
-	draw_rect(Rect2(band.position, Vector2(band.size.x, 1.5)), Color(accent.r, accent.g, accent.b, 0.55))
-	var fnt   := ThemeDB.fallback_font
+	_draw_rounded_rect(band, Color(accent.r, accent.g, accent.b, 0.22), 11)
+	_draw_rounded_rect(Rect2(band.position, Vector2(band.size.x, 2.0)), Color(V2_TITLE_GLOW.r, V2_TITLE_GLOW.g, V2_TITLE_GLOW.b, 0.72), 2)
 	var fsize := _fit_title_font_size(band_h)
-	var cy    := rect.position.y + band_h * 0.5 + fsize * 0.38
+	var cy := rect.position.y + band_h * 0.5 + fsize * 0.38
 	var pad_x := 10.0
-	var max_w := maxf(8.0, rect.size.x - pad_x * 2.0 - 20.0)
-	_draw_fitted_label(
-		Vector2(rect.position.x + pad_x, cy),
-		title, max_w, fsize, Color(0.92, 0.95, 0.99, 1.0))
+	var max_w := maxf(8.0, rect.size.x - pad_x * 2.0)
+	_draw_fitted_label(Vector2(rect.position.x + pad_x, cy), title, max_w, fsize, Color(0.93, 0.95, 0.99, 1.0))
 
 
 func _draw_wind_body(rect: Rect2, specs: Dictionary) -> void:
@@ -4503,50 +6094,93 @@ func _draw_v_gradient_fill(r: Rect2, c_bot: Color, c_top: Color) -> void:
 		draw_rect(Rect2(Vector2(r.position.x, y0), Vector2(r.size.x, sh)), c, true)
 
 
+# --- V2 draw chrome (promoted from graph_canvas_v2 — single source of truth) ---
+# graph_canvas_v2 is the only canvas instantiated at runtime, so these are the
+# implementations that actually render. Kept here (not in the subclass) so there is
+# one copy to edit. The consts + rounded-rect + flow-arrow helpers are shared by
+# several node/wire draw methods below.
+const V2_NODE_SHADOW := Color(0.0, 0.0, 0.0, 0.26)
+const V2_TITLE_GLOW := Color(0.13, 0.83, 0.93, 0.14)
+const V2_PORT_RING := Color(0.95, 0.97, 1.0, 0.75)
+
+
+func _draw_rounded_rect(rect: Rect2, fill: Color, radius: int, border_col: Color = Color(0, 0, 0, 0), border_w: int = 0) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = fill
+	sb.set_corner_radius_all(radius)
+	if border_w > 0 and border_col.a > 0.0:
+		sb.set_border_width_all(border_w)
+		sb.border_color = border_col
+	draw_style_box(sb, rect)
+
+
+func _draw_resource_flow_arrows_bezier(from: Vector2, c1: Vector2, c2: Vector2, to: Vector2,
+		col: Color, body_w: float, reverse: bool, gscale: float) -> void:
+	ResourceEdgeVis.draw_bezier_flow_arrows(
+			self, from, c1, c2, to, col, body_w, _flow_phase, reverse, gscale)
+
+
+func _draw_resource_flow_arrows_on_sample(sample_fn: Callable, col: Color, body_w: float,
+		reverse: bool, gscale: float) -> void:
+	ResourceEdgeVis.draw_sample_flow_arrows(
+			self, sample_fn, col, body_w, _flow_phase, reverse, gscale)
+
+
 func _draw_battery_body(rect: Rect2, specs: Dictionary) -> void:
-	var fnt:  Font  = ThemeDB.fallback_font
-	var fsize:  int  = _fit_font_size(rect, 3, 10.0, 12.0)
-	var pad: float  = 4.0
-	var inner: Rect2  = rect.grow(-pad)
-	if inner.size.x < 12.0 or inner.size.y < 8.0:
-		return
-	# Wide vertical SOC on the left, text on the right
-	var bar_w:  float  = clampf(inner.size.x * 0.26, 20.0, 44.0)
-	var bar_r:  Rect2  = Rect2(inner.position, Vector2(bar_w, inner.size.y))
-	var track: Color  = Color(0.04, 0.07, 0.1)
-	var soc:  float  = float(specs.get("soc", 0.5))
-	soc  = clampf(soc, 0.0, 1.0)
-	draw_rect(bar_r, track, true)
-	# bevel
-	draw_rect(bar_r, Color(0.12, 0.18, 0.28, 0.5), false)
-	# fill from bottom
-	var h_fill: float  = maxf(1.0, bar_r.size.y * soc)
-	var fill:   Rect2  = Rect2(
-		Vector2(bar_r.position.x, bar_r.end.y - h_fill),
-		Vector2(bar_w, h_fill)
+	var fnt := ThemeDB.fallback_font
+	var fsize := _fit_font_size(rect, 3, 10.0, 12.0)
+	var soc := clampf(float(specs.get("soc", 0.5)), 0.0, 1.0)
+	var x := rect.position.x + 8.0
+	var y := rect.position.y + fsize + 4.0
+	var kwh := float(specs.get("kwh", 0.0))
+	draw_string(fnt, Vector2(x, y), "%.0f%%  %.1fkWh" % [soc * 100.0, kwh], HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.94, 0.99, 0.95, 1.0))
+	y += fsize + 4.0
+
+	# Battery silhouette: rounded can + top terminal cap.
+	var body := Rect2(Vector2(x, y), Vector2(rect.size.x - 16.0, rect.size.y - (y - rect.position.y) - 6.0))
+	_draw_rounded_rect(body, Color(0.07, 0.15, 0.12, 0.97), 9, Color(0.35, 0.90, 0.62, 0.52), 1)
+	var cap_w := maxf(14.0, body.size.x * 0.22)
+	var cap_h := 4.0
+	var cap := Rect2(Vector2(body.position.x + (body.size.x - cap_w) * 0.5, body.position.y - cap_h - 1.0), Vector2(cap_w, cap_h))
+	_draw_rounded_rect(cap, Color(0.18, 0.27, 0.22, 0.96), 2, Color(0.52, 0.95, 0.72, 0.35), 1)
+
+	# Full-body reservoir: charge fills entire battery interior from bottom.
+	var reservoir := Rect2(body.position + Vector2(3.0, 3.0), body.size - Vector2(6.0, 6.0))
+	_draw_rounded_rect(reservoir, Color(0.04, 0.08, 0.07, 0.98), 6, Color(0.26, 0.40, 0.33, 0.8), 1)
+	var fill_h := maxf(2.0, (reservoir.size.y - 2.0) * soc)
+	var fill_col := Color(0.25, 0.92, 0.56, 0.96) if soc > 0.28 else Color(0.95, 0.63, 0.22, 0.95)
+	var reservoir_fill := Rect2(
+		Vector2(reservoir.position.x + 1.0, reservoir.position.y + reservoir.size.y - 1.0 - fill_h),
+		Vector2(reservoir.size.x - 2.0, fill_h)
 	)
-	var c0:  Color  = Color(0.04, 0.42, 0.2)
-	var c1:  Color  = C_GREEN.lerp(Color(0.45, 1.0, 0.65), 0.4)
-	_draw_v_gradient_fill(fill, c0, c1)
-	var sheen_h: float  = minf(2.5, maxf(1.0, fill.size.y * 0.04))
-	if sheen_h > 0.4:
-		draw_rect(
-			Rect2(fill.position, Vector2(fill.size.x, sheen_h)),
-			Color(0.55, 1.0, 0.65, 0.3)
-		)
-	# Text column
-	var tx:  float  = bar_r.end.x + 7.0
-	var y:  float  = inner.position.y + fsize + 2.0
-	var volts:  float  = float(specs.get("voltage", 12.0))
-	var ah:  float  = float(specs.get("ah", 0.0))
-	var kwh:  float  = float(specs.get("kwh", 0.0))
-	draw_string(fnt, Vector2(tx, y), "%.0fV   %.0f Ah" % [volts, ah],
-		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT)
-	y  += fsize + 3.0
-	draw_string(fnt, Vector2(tx, y), "%.2f / %.2f kWh" % [kwh * soc, kwh], HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_GREEN)
-	y  += fsize + 2.0
-	if y < inner.end.y - 1.0:
-		draw_string(fnt, Vector2(tx, y), "SoC %.0f%%" % (soc * 100.0), HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
+	_draw_rounded_rect(reservoir_fill, fill_col, 5)
+	draw_rect(Rect2(Vector2(reservoir_fill.position.x, reservoir_fill.position.y), Vector2(reservoir_fill.size.x, minf(2.0, reservoir_fill.size.y))), Color(0.88, 1.0, 0.92, 0.32), true)
+
+	# Overlay text + optional per-cell bars float above the reservoir fill.
+	var info_x := reservoir.position.x + 7.0
+	var info_y := body.position.y + fsize
+	draw_string(fnt, Vector2(info_x, info_y), "%.0fV  %.0fAh" % [float(specs.get("voltage", 12.0)), float(specs.get("ah", 0.0))], HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 1), Color(0.80, 0.95, 0.87, 0.96))
+	info_y += maxi(9, fsize - 1) + 3.0
+	draw_string(fnt, Vector2(info_x, info_y), "Charge %.0f%%" % (soc * 100.0), HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 1), Color(0.66, 0.93, 0.77, 0.95))
+	info_y += maxi(8, fsize - 2) + 5.0
+
+	var cell_view_mode := bool(specs.get("cell_view_mode", false))
+	var cell_gap := 2.0
+	var cell_cols := 8 if cell_view_mode else 4
+	var cell_area_w := maxf(22.0, reservoir.size.x - 14.0)
+	var cw := (cell_area_w - float(cell_cols - 1) * cell_gap) / float(cell_cols)
+	for i in range(cell_cols):
+		var cp := Vector2(info_x + float(i) * (cw + cell_gap), info_y)
+		var ch := maxf(9.0, reservoir.end.y - cp.y - 4.0)
+		var crect := Rect2(cp, Vector2(cw, ch))
+		_draw_rounded_rect(crect, Color(0.08, 0.21, 0.15, 0.52), 2, Color(0.46, 0.92, 0.69, 0.26), 1)
+		var phase := _flow_phase + float(i) * 0.55
+		var fill := clampf(soc + 0.07 * sin(phase), 0.06, 0.98)
+		var fh := (crect.size.y - 2.0) * fill
+		var cfill := Rect2(Vector2(crect.position.x + 1.0, crect.position.y + crect.size.y - 1.0 - fh), Vector2(crect.size.x - 2.0, fh))
+		_draw_rounded_rect(cfill, Color(0.39, 0.90, 0.62, 0.78), 2)
+	if cell_view_mode:
+		draw_string(fnt, Vector2(info_x, rect.position.y + rect.size.y - 2.0), "Cell detail mode", HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 2), Color(0.76, 0.96, 0.85, 0.92))
 
 
 func _draw_controller_body(body_rect: Rect2, specs: Dictionary, item_id: String = "",
@@ -4638,7 +6272,63 @@ func _draw_generic_body(rect: Rect2, specs: Dictionary) -> void:
 			HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_S)
 
 
-func _draw_compound_body(rect: Rect2, specs: Dictionary) -> void:
+## True when a compound should render like a single battery (tall SOC fill)
+## instead of a generic supernode miniature / bank grid. Covers Combine →
+## Battery Bank (`compound_kind`), opt-in `display_as_battery`, and component
+## defs whose id is a battery bank (e.g. StarShade's `starshade_battery_bank`).
+func _compound_displays_as_battery(specs: Dictionary) -> bool:
+	if bool(specs.get("display_as_battery", false)):
+		return true
+	if str(specs.get("compound_kind", "")) == "battery_bank":
+		return true
+	var def_id := str(specs.get("definition_id", "")).to_lower()
+	return def_id.contains("battery_bank")
+
+
+## Energy-weighted SOC of battery/smartbattery children inside a compound's
+## child scope (parallel or series — energy weighting is correct for both when
+## SolarUI keeps leaf SOCs in lock-step). Falls back to specs.soc when empty.
+func _aggregate_child_battery_soc(compound: Dictionary) -> float:
+	var specs: Dictionary = compound.get("specs", {}) as Dictionary
+	var fallback := clampf(float(specs.get("soc", 0.5)), 0.0, 1.0)
+	if model == null:
+		return fallback
+	var child_scope := str(compound.get("child_scope_id", ""))
+	if child_scope.is_empty():
+		return fallback
+	var weighted := 0.0
+	var total_kwh := 0.0
+	var kids: Array = model.get_items_in_scope(child_scope) if model.has_method("get_items_in_scope") else []
+	for kid_v: Variant in kids:
+		if not (kid_v is Dictionary):
+			continue
+		var kid: Dictionary = kid_v as Dictionary
+		var kt := str(kid.get("type", ""))
+		if kt not in ["battery", "smartbattery"]:
+			continue
+		var ksp: Dictionary = kid.get("specs", {}) as Dictionary
+		var kwh := float(ksp.get("kwh", 0.0))
+		if kwh <= 0.0:
+			kwh = 1.0
+		weighted += kwh * clampf(float(ksp.get("soc", 0.5)), 0.0, 1.0)
+		total_kwh += kwh
+	if total_kwh <= 0.0:
+		return fallback
+	return weighted / total_kwh
+
+
+func _draw_compound_body(rect: Rect2, specs: Dictionary, item: Dictionary = {}) -> void:
+	# Optional banner: a super-node can present a 2D image of its real-world
+	# subject (the StarShade GLB, etc.) in place of the child-graph miniature —
+	# same GLB-thumbnail path processor cards use.
+	if _draw_compound_banner(rect, specs):
+		return
+	# When the super-node is drawn large enough on screen, show a live miniature
+	# of its child canvas (TouchDesigner-style) instead of a plain text summary,
+	# so a collapsed group still reads as "a system inside a node". LOD-gated on
+	# the on-screen rect size so deep graphs stay cheap.
+	if _draw_compound_miniature(rect, specs, item):
+		return
 	var fnt := ThemeDB.fallback_font
 	var fsize := _fit_font_size(rect, 2, 10.0, 11.0)
 	var x := rect.position.x + 8.0
@@ -4655,6 +6345,119 @@ func _draw_compound_body(rect: Rect2, specs: Dictionary) -> void:
 	y += fsize + 3.0
 	draw_string(fnt, Vector2(x, y), "In %d  Out %d" % [port_in, port_out],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_M)
+
+
+## Draw a super-node's 2D banner image (its `model_id` GLB thumbnail) filling the
+## body, with a name header. Returns true when it drew. Opt-in via `node_banner`
+## (or any generic compound that carries a `model_id`); an aerial/photo subject
+## reads as "this node IS a real thing" rather than a graph-in-a-box.
+func _draw_compound_banner(rect: Rect2, specs: Dictionary) -> bool:
+	if not bool(specs.get("node_banner", false)):
+		return false
+	if str(specs.get("model_id", "")).is_empty():
+		return false
+	if rect.size.x < 24.0 or rect.size.y < 24.0:
+		return false
+	# The title band already shows the name — fill the whole body with the image.
+	var img := rect.grow(-3.0)
+	if img.size.x < 8.0 or img.size.y < 8.0:
+		return true
+	# width_frac 1.0 → fill the body zone with the aspect-fit GLB thumbnail.
+	if not _draw_model_preview_zone(img, specs, 1.0):
+		# No cached render yet (request is queued): show a soft placeholder so the
+		# node doesn't fall back to the miniature and flicker when the image lands.
+		draw_rect(img, Color(0.05, 0.08, 0.14, 0.85), true)
+		var fnt := ThemeDB.fallback_font
+		var glyph := str(specs.get("icon", "✨"))
+		var fs := int(clampf(minf(img.size.x, img.size.y) * 0.5, 8.0, 120.0))
+		var gsz := fnt.get_string_size(glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		draw_string(fnt, img.position + Vector2(
+			(img.size.x - gsz.x) * 0.5, (img.size.y + gsz.y * 0.55) * 0.5),
+			glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.6, 0.7, 0.95, 0.5))
+	return true
+
+
+## Minimum on-screen body size (px) before the child-canvas miniature draws.
+const COMPOUND_MINI_MIN_PX := 66.0
+
+
+## Live miniature of a generic super-node's child scope, fitted into `rect`.
+## Returns true when it drew (caller then skips the text summary). Only generic
+## compounds (kind == "") get this — arrays/banks/load-groups have bespoke bodies.
+func _draw_compound_miniature(rect: Rect2, specs: Dictionary, item: Dictionary) -> bool:
+	if str(specs.get("compound_kind", "")) != "":
+		return false
+	# Battery banks render as one tall SOC cell (V2 freeform), not a mini graph.
+	if _compound_displays_as_battery(specs):
+		return false
+	if model == null or item.is_empty():
+		return false
+	if rect.size.x < COMPOUND_MINI_MIN_PX or rect.size.y < COMPOUND_MINI_MIN_PX:
+		return false
+	var child_scope := str(item.get("child_scope_id", ""))
+	if child_scope.is_empty():
+		return false
+	var kids: Array = model.get_items_in_scope(child_scope)
+	if kids.is_empty():
+		return false
+	# Child bounding box in graph coords.
+	var min_x := 1e20
+	var min_y := 1e20
+	var max_x := -1e20
+	var max_y := -1e20
+	for k_v in kids:
+		var k := k_v as Dictionary
+		var kx := float(k.get("x", 0.0))
+		var ky := float(k.get("y", 0.0))
+		var kw := float(k.get("width", 120.0))
+		var kh := float(k.get("height", 90.0))
+		min_x = minf(min_x, kx); min_y = minf(min_y, ky)
+		max_x = maxf(max_x, kx + kw); max_y = maxf(max_y, ky + kh)
+	var span_x := maxf(max_x - min_x, 1.0)
+	var span_y := maxf(max_y - min_y, 1.0)
+	# Header strip for the name, remainder is the preview viewport.
+	var header := clampf(rect.size.y * 0.22, 10.0, 20.0)
+	var pad := 4.0
+	var view := Rect2(rect.position + Vector2(pad, header),
+		rect.size - Vector2(pad * 2.0, header + pad))
+	if view.size.x <= 2.0 or view.size.y <= 2.0:
+		return false
+	var s := minf(view.size.x / span_x, view.size.y / span_y)
+	var off := view.position + (view.size - Vector2(span_x, span_y) * s) * 0.5
+	var to_mini := func(gx: float, gy: float) -> Vector2:
+		return off + Vector2(gx - min_x, gy - min_y) * s
+	# Name header.
+	var fnt := ThemeDB.fallback_font
+	var name_s := str(specs.get("name", "Super Node"))
+	var hf := clampf(header - 4.0, 7.0, 13.0)
+	draw_string(fnt, rect.position + Vector2(6.0, hf), name_s,
+		HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 10.0, int(hf), C_TEXT_S)
+	# Wires first (behind node chips).
+	var centers: Dictionary = {}
+	for k_v in kids:
+		var k := k_v as Dictionary
+		var cx := float(k.get("x", 0.0)) + float(k.get("width", 120.0)) * 0.5
+		var cy := float(k.get("y", 0.0)) + float(k.get("height", 90.0)) * 0.5
+		centers[str(k.get("id", ""))] = to_mini.call(cx, cy)
+	for c_v in model.get_connections_in_scope(child_scope):
+		var c := c_v as Dictionary
+		var a: Variant = centers.get(str(c.get("source_item_id", "")))
+		var b: Variant = centers.get(str(c.get("target_item_id", "")))
+		if a is Vector2 and b is Vector2:
+			var lit := bool(c.get("flow_active", false))
+			draw_line(a, b, Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.7 if lit else 0.35),
+				maxf(1.0, 1.2 * s if s > 0.0 else 1.0))
+	# Node chips.
+	for k_v in kids:
+		var k := k_v as Dictionary
+		var col := NODE_BORDER_COLORS.get(str(k.get("type", "")), C_BORDER) as Color
+		var chip := Rect2(
+			to_mini.call(float(k.get("x", 0.0)), float(k.get("y", 0.0))),
+			Vector2(float(k.get("width", 120.0)), float(k.get("height", 90.0))) * s)
+		chip = chip.grow(-maxf(0.0, 0.5))
+		draw_rect(chip, Color(col.r, col.g, col.b, 0.35), true)
+		draw_rect(chip, Color(col.r, col.g, col.b, 0.9), false, 1.0)
+	return true
 
 
 ## Processor: converts energy + resources into outputs (pump, shredder, reactor…)
@@ -4831,24 +6634,35 @@ func _draw_resource_body(rect: Rect2, specs: Dictionary, item: Dictionary = {}) 
 		name_, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_S if not is_ghost else C_TEXT_M)
 
 	var unlimited: bool = bool(specs.get("unlimited_capacity", false))
-	var pct_str := "⚠" if in_deficit else ("∞" if unlimited else ("%.0f%%" % (level * 100.0)))
+	var is_outlet_sink: bool = bool(specs.get("outlet_sink", false))
+	var stock_str := ResourceKinds.format_tank_stock(specs)
 	var pct_col := UITheme.C_WARN if in_deficit else Color(1, 1, 1, 0.92 if not is_ghost else 0.5)
-	draw_string(fnt, Vector2(bar_pos.x + bar_w * 0.5 - fsize, bar_pos.y + bar_h * 0.5 + fsize * 0.35),
-		pct_str, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize + 1, pct_col)
+	# Prefer live stock over ∞ / % so flow is visible in deficit / unlimited modes.
+	# Culvert ∞ outlet: always show cumulative_l (not empty % / level×1e12).
+	var hub_lbl := stock_str
+	if is_outlet_sink:
+		hub_lbl = stock_str
+	elif in_deficit:
+		hub_lbl = ResourceKinds.format_qty(ResourceKinds.tank_stock_qty(specs))
+	elif not unlimited and not allow_negative:
+		hub_lbl = "%.0f%%" % (level * 100.0)
+	draw_string(fnt, Vector2(bar_pos.x + 2.0, bar_pos.y + bar_h * 0.5 + fsize * 0.35),
+		hub_lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, pct_col)
 
-	var cap_qty: float = float(specs.get("capacity_qty", 0.0))
-	var cap_unit: String = str(specs.get("capacity_unit", ResourceKinds.default_unit(kind)))
+	var mode_lbl := ""
 	if in_deficit:
-		var deficit_str := "Deficit: %.0f %s" % [float(specs.get("deficit_qty", -raw_level * cap_qty)), cap_unit]
-		draw_string(fnt, Vector2(inner.position.x, bar_pos.y - 3.0),
-			deficit_str, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, UITheme.C_WARN)
+		mode_lbl = "Deficit"
+	elif allow_negative:
+		mode_lbl = "Deficit OK"
 	elif unlimited:
+		mode_lbl = "∞ cap"
+	if not mode_lbl.is_empty():
 		draw_string(fnt, Vector2(inner.position.x, bar_pos.y - 3.0),
-			"No capacity limit", HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
-	elif cap_qty > 0.0:
-		var qty_str := "%.0f / %.0f %s" % [level * cap_qty, cap_qty, cap_unit]
+			"%s · %s" % [mode_lbl, stock_str], HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1,
+			UITheme.C_WARN if in_deficit else C_TEXT_M)
+	elif not stock_str.is_empty():
 		draw_string(fnt, Vector2(inner.position.x, bar_pos.y - 3.0),
-			qty_str, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
+			stock_str, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize - 1, C_TEXT_M)
 
 	var infl: float = float(specs.get("inflow_rate", 0.0))
 	var outf: float = float(specs.get("outflow_rate", 0.0))
@@ -4961,6 +6775,10 @@ func _wired_handle_ids(item_id: String) -> Dictionary:
 
 
 func _draw_item_handles(item: Dictionary, tl: Vector2, sz: Vector2) -> void:
+	# Site Plan "Ports" toggle — one gate covers every call site; wires are a
+	# separate path (site_wire_mode) so they still draw.
+	if view_mode == GraphSiteLayout.VIEW_SITE and not site_show_ports:
+		return
 	var itype   := item.get("type", "generic") as String
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var compound_kind := str(specs.get("compound_kind", "")) if itype == "compound" else ""
@@ -4970,6 +6788,22 @@ func _draw_item_handles(item: Dictionary, tl: Vector2, sz: Vector2) -> void:
 	# Solar arrays expose one consolidated +/- pair on the bottom edge.
 	if compound_kind == "array":
 		_draw_array_compound_handles(tl, sz)
+		return
+
+	# Generic super-nodes: every promoted port (from specs.exposed_ports, stored
+	# on item.handles) is a real, wireable interface — show them ALL, always, so
+	# the collapsed node reads as a box with labelled I/O. An empty super-node
+	# (no exposures yet) draws no dots rather than the misleading static defaults.
+	if itype == "compound" and compound_kind == "":
+		var own_handles: Array = item.get("handles", []) as Array
+		if own_handles.is_empty():
+			return
+		for h2: Dictionary in own_handles:
+			var pol2 := str(h2.get("polarity", "positive"))
+			var rk2 := str(h2.get("resource_kind", ""))
+			var rx2 := float(h2.get("rx", 0.0))
+			var ry2 := float(h2.get("ry", 0.5))
+			_draw_port_dot(tl + Vector2(sz.x * rx2, sz.y * ry2), pol2, rk2)
 		return
 
 	# For types that have "extra" symmetry handles, only render a dot for:
@@ -5022,18 +6856,44 @@ func _draw_array_compound_handles(tl: Vector2, sz: Vector2) -> void:
 		_draw_port_dot(sp, str(port.get("polarity", "positive")))
 
 
+# NOTE: graph_canvas_v2 intentionally OVERRIDES this for the freeform/site billboard
+# and calls super() only for the Elevation view — a genuine live polymorphic split
+# (both versions run), unlike the other draw methods whose base copies were dead and
+# have been consolidated. Kept separate on purpose; edit the elevation path here.
 func _draw_port_dot(screen_pos: Vector2, polarity: String, resource_kind: String = "") -> void:
 	var touch := _touch_input_active() or DisplayServer.is_touchscreen_available()
 	var r   := maxf(5.0, 6.0 * _zoom)
-	if touch:
+	# Elevation CT: hard screen-space cap — uncapped 6×zoom becomes billboards
+	# that drown the pond when zoomed in.
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		var s := GraphSiteLayout.px_per_m(_zoom)
+		r = clampf(0.28 * s, 2.0, 5.0)
+		touch = false
+	elif touch:
 		r = maxf(r, 9.0)
 	var col := _wire_color_for_port(polarity, resource_kind)
-	draw_circle(screen_pos, r + (3.5 if touch else 1.5), Color(col.r, col.g, col.b, 0.35))
+	var halo := 1.0 if view_mode == GraphSiteLayout.VIEW_ELEVATION else (3.5 if touch else 1.5)
+	draw_circle(screen_pos, r + halo, Color(col.r, col.g, col.b, 0.35))
 	draw_circle(screen_pos, r,       col)
 	draw_circle(screen_pos, r * 0.45, C_CANVAS_BG)
 	draw_circle(screen_pos, r, Color(col.r * 1.15, col.g * 1.15, col.b * 1.15, 0.9), false)
 	if touch:
 		draw_circle(screen_pos, r + 6.0, Color(col.r, col.g, col.b, 0.12), false, 1.5)
+
+
+## Compact pad for elev ports when chips are hidden (true footprint, no 28px floor).
+func _elev_port_pad_rect(item: Dictionary, fallback_tl: Vector2, fallback_sz: Vector2) -> Rect2:
+	var c := fallback_tl + fallback_sz * 0.5
+	var proj: Variant = _phys_project_item_center(item)
+	if proj is Vector2:
+		c = proj as Vector2
+	var fp := GraphSiteLayout.physical_footprint_m(item)
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	# Keep pads small so they never own the Elevation CT around a turbine.
+	var sz := Vector2(
+			clampf(maxf(fp.x, fp.y) * s, 5.0, 22.0),
+			clampf(maxf(fp.y, 0.6) * s * 0.35, 4.0, 14.0))
+	return Rect2(c - sz * 0.5, sz)
 
 
 # ---------------------------------------------------------------------------
@@ -5062,15 +6922,36 @@ func _draw_dot_grid() -> void:
 			r_m = float(soi_svc.call("radius_m"))
 		var r_px := r_m * GraphSiteLayout.SOI_PX_PER_M * _zoom
 		hole_r2 = r_px * r_px
-		hole_o = size * 0.5 + _pan
+		hole_o = _disc_origin_screen()
+	# Draw each dot as a 2×2 rect, not draw_circle: a radius-1 circle is an
+	# antialiased polygon that breaks the 2D batcher, so ~3000 of them each become
+	# a separate draw call. Same-color rects batch into far fewer calls and skip the
+	# per-dot polygon tessellation — the grid is decorative so the AA loss is nil.
+	var dot_sz := Vector2(2.0, 2.0)
+	var half   := Vector2(1.0, 1.0)
 	var x     := off.x
 	while x < size.x:
 		var y := off.y
 		while y < size.y:
 			if hole_r2 <= 0.0 or Vector2(x, y).distance_squared_to(hole_o) > hole_r2:
-				draw_circle(Vector2(x, y), 1.0, dot_c)
+				draw_rect(Rect2(Vector2(x, y) - half, dot_sz), dot_c)
 			y += step
 		x += step
+
+
+## Friendly first-run hint when the graph scope has no nodes, so an empty canvas
+## doesn't read as broken. Freeform views only (physical/lab/SoI have their own chrome).
+func _draw_empty_state_prompt() -> void:
+	var fnt := ThemeDB.fallback_font
+	var title := "This canvas is empty"
+	var sub := "Open the Library (left panel) and drag a component here to start building your system."
+	var c := Vector2(size.x * 0.5, size.y * 0.5)
+	var tw := fnt.get_string_size(title, HORIZONTAL_ALIGNMENT_CENTER, -1, 20).x
+	var sw := fnt.get_string_size(sub, HORIZONTAL_ALIGNMENT_CENTER, -1, 13).x
+	draw_string(fnt, c - Vector2(tw * 0.5, 6.0), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 20,
+			Color(0.62, 0.70, 0.82, 0.85))
+	draw_string(fnt, c - Vector2(sw * 0.5, -18.0), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 13,
+			Color(0.52, 0.60, 0.72, 0.7))
 
 
 ## Opaque canvas fill everywhere except the SoI disc (live SubViewport shows).
@@ -5080,7 +6961,7 @@ func _draw_canvas_fill_with_soi_hole(fill: Color) -> void:
 	if soi_svc != null and soi_svc.has_method("radius_m"):
 		r_m = float(soi_svc.call("radius_m"))
 	var r_px := r_m * GraphSiteLayout.SOI_PX_PER_M * _zoom
-	var origin := size * 0.5 + _pan
+	var origin := _disc_origin_screen()
 	var left := origin.x - r_px
 	var right := origin.x + r_px
 	var top := origin.y - r_px
@@ -5124,9 +7005,10 @@ func _draw_soi_background() -> void:
 		r_m = soi_svc.radius_m()
 	
 	# Mapping radius in meters to graph coordinates (keep in sync with
-	# GraphSiteLayout.SOI_PX_PER_M).
+	# GraphSiteLayout.SOI_PX_PER_M). Disc chrome origin must match the live
+	# SubViewport (`_disc_origin_screen`) — not size/2+_pan on Elevation.
 	var r_px := r_m * GraphSiteLayout.SOI_PX_PER_M * _zoom
-	var origin := size * 0.5 + _pan
+	var origin := _disc_origin_screen()
 
 	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
 		_draw_elevation_section(origin, r_px, r_m, soi_svc)
@@ -5139,42 +7021,216 @@ func _draw_soi_background() -> void:
 		draw_arc(origin, r_px, 0.0, TAU, 96, ring_col, maxf(2.0, 2.5 * _zoom), true)
 		draw_line(Vector2(origin.x - r_px, origin.y), Vector2(origin.x + r_px, origin.y),
 				Color(1.0, 1.0, 1.0, 0.12), 1.0)
+		if view_mode == GraphSiteLayout.VIEW_SITE:
+			var fnt_site := ThemeDB.fallback_font
+			draw_string(fnt_site, origin + Vector2(-r_px + 6.0, -r_px - 6.0),
+					"Site Plan · Shift+drag orbit · scroll zoom",
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 11,
+					Color(0.65, 0.85, 1.0, 0.85))
+			# Radial guides only while the projection is still planar top-down
+			# (screen-space rings would lie once the 3D orbit takes over).
+			if radial_layout_mode and not _phys_camera_projection_active():
+				_draw_radial_guides(origin, r_px)
 		return
 
-	var ring_col2 := Color(0.2, 0.6, 0.9, 0.15)
-	draw_circle(origin, r_px, Color(0.05, 0.1, 0.15, 0.2))
-	draw_arc(origin, r_px, 0.0, TAU, 64, ring_col2, 4.0 * _zoom, true)
-	
-	# Decorative elevation slice (freeform only) — real profile is elevation view.
-	var line_pts := PackedVector2Array()
-	var segments := 32
-	var width_px := r_px * 2.0
-	for i in range(segments + 1):
-		var t := float(i) / float(segments)
-		var lx := origin.x - r_px + width_px * t
-		var elev_offset := sin(t * PI * 3.0) * 20.0 * _zoom + cos(t * PI * 7.0) * 10.0 * _zoom
-		line_pts.append(Vector2(lx, origin.y - elev_offset))
-	
-	if line_pts.size() > 1:
-		_draw_polyline_stroke(line_pts, Color(0.4, 0.8, 0.5, 0.3), 2.0 * _zoom)
-		draw_line(Vector2(origin.x - r_px, origin.y), Vector2(origin.x + r_px, origin.y), Color(1.0, 1.0, 1.0, 0.1), 1.0)
+	# Freeform: the ring is a reference marker, independently scalable via
+	# Shift+scroll (soi_ring_scale). The old decorative terrain squiggle was a
+	# placeholder superseded by the Elevation view — removed.
+	var rr := r_px * (soi_ring_scale if view_mode == GraphSiteLayout.VIEW_FREEFORM else 1.0)
+	var ring_col2 := Color(0.25, 0.65, 0.95, 0.45)
+	draw_circle(origin, rr, Color(0.05, 0.1, 0.15, 0.2))
+	draw_arc(origin, rr, 0.0, TAU, 96, ring_col2, maxf(3.0, 6.0 * _zoom), true)
+	if view_mode == GraphSiteLayout.VIEW_SITE:
+		var fnt2 := ThemeDB.fallback_font
+		var wr := site_working_radius_m
+		var wr_note := ""
+		if not is_nan(wr) and wr > 1.0:
+			wr_note = " · R=%.0fm" % wr
+		var rad_note := " · Radial" if radial_layout_mode else ""
+		draw_string(fnt2, origin + Vector2(-r_px + 6.0, -r_px - 6.0),
+				"Site Plan · LMB move 3D · Shift+drag orbit / Shift+drag prop=tangent%s%s"
+				% [wr_note, rad_note],
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 11,
+				Color(0.65, 0.85, 1.0, 0.85))
+		if radial_layout_mode or (not is_nan(site_working_radius_m) \
+				and site_working_radius_m > 1.0):
+			_draw_radial_guides(origin, r_px)
+		_draw_site_array_ghosts(origin)
+
+
+## Faint concentric guide rings + bold working-radius ring (independent of SoI).
+func _draw_radial_guides(origin: Vector2, r_px: float) -> void:
+	var gc := Color(0.5, 0.8, 1.0, 0.18)
+	for f: float in [0.25, 0.5, 0.75]:
+		draw_arc(origin, r_px * f, 0.0, TAU, 64, gc, 1.5, true)
+	# Faint SoI rim reminder.
+	draw_arc(origin, r_px, 0.0, TAU, 96, Color(0.4, 0.7, 0.95, 0.22), 1.25, true)
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var wr := site_working_radius_m
+	if is_nan(wr) or wr < 1.0:
+		wr = r_px / maxf(s, 1e-6)
+	var wr_px := wr * s
+	if wr_px > 4.0:
+		draw_arc(origin, wr_px, 0.0, TAU, 96, Color(0.35, 0.95, 1.0, 0.75), 2.5, true)
+	var fnt := ThemeDB.fallback_font
+	var msg := "Radial · R=%.0f m · Shift+drag prop = face tangent (SoI rim unchanged)" % wr
+	if not radial_layout_mode:
+		msg = "Working R=%.0f m · enable Radial for auto-yaw · Shift+drag = tangent" % wr
+	draw_string(fnt, origin + Vector2(-r_px + 6.0, r_px + 16.0),
+			msg, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.55, 0.9, 1.0, 0.85))
+	var iid := _item_drag_id if _item_dragging else selected_item_id
+	if iid.is_empty() or model == null:
+		return
+	var it := model.get_item(iid)
+	if it.is_empty() or not GraphSiteLayout.has_site_coords(it):
+		return
+	var site_it := GraphSiteLayout.site_xz(it)
+	var rad_px := site_it.length() * s
+	if rad_px > 4.0:
+		draw_arc(origin, rad_px, 0.0, TAU, 96, Color(0.55, 0.9, 1.0, 0.45), 1.75, true)
+		# Radius line from the working center to the item (matches the prop preview).
+		draw_line(origin, origin + site_it * s, Color(0.55, 0.9, 1.0, 0.55), 1.5, true)
+
+
+## Live radial-placement feedback while Shift+dragging a 3D prop in Site Plan: a
+## circle centered on the working/radial center through the prop's radius + a radius
+## line to the prop. Site Plan is camera-projected (the flat top-down guides don't
+## apply once the live disc/orbit is active), so every point is projected through the
+## preview camera (world_to_canvas) — the circle correctly reads as an ellipse when
+## the view is tilted.
+func _draw_prop_radial_preview() -> void:
+	if spatial_edit == null or not spatial_edit.has_method("drag_shift_active"):
+		return
+	if not bool(spatial_edit.call("drag_shift_active")):
+		return
+	var soi := _cached_autoload("/root/SoiService")
+	if soi == null or not soi.has_method("world_center"):
+		return
+	var center3: Vector3 = soi.call("world_center")
+	var cen_site: Vector2 = spatial_edit.call("radial_center_site")
+	var prop_site: Vector2 = spatial_edit.call("drag_prop_site")
+	var radius := (prop_site - cen_site).length()
+	if radius < 0.5:
+		return
+	var cen_cv = _radial_project_world(center3 + Vector3(cen_site.x, 0.0, cen_site.y))
+	var prop_cv = _radial_project_world(center3 + Vector3(prop_site.x, 0.0, prop_site.y))
+	if not (cen_cv is Vector2) or not (prop_cv is Vector2):
+		return
+	var col := Color(0.35, 0.95, 1.0, 0.9)
+	# Projected circle (sample world ground points so tilt reads as an ellipse).
+	var pts := PackedVector2Array()
+	for i in range(73):
+		var a := TAU * float(i) / 72.0
+		var w := center3 + Vector3(cen_site.x + cos(a) * radius, 0.0, cen_site.y + sin(a) * radius)
+		var cv = _radial_project_world(w)
+		if cv is Vector2:
+			pts.append(cv)
+	if pts.size() >= 2:
+		draw_polyline(pts, Color(col.r, col.g, col.b, 0.55), 1.75, true)
+	draw_line(cen_cv, prop_cv, col, 2.0, true)
+	draw_circle(prop_cv, 4.0, col)
+	draw_string(ThemeDB.fallback_font, (cen_cv as Vector2) + Vector2(6.0, -6.0),
+			"Radial R=%.0f m · tangent" % radius, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
+
+
+## Project a world point to canvas for the radial overlay: through the preview
+## camera when it's the projection authority (Site Plan live disc / orbit), else the
+## flat top-down mapping.
+func _radial_project_world(world: Vector3) -> Variant:
+	if _phys_camera_projection_active() and soi_preview_service != null \
+			and is_instance_valid(soi_preview_service) \
+			and soi_preview_service.has_method("world_to_canvas"):
+		return soi_preview_service.call("world_to_canvas", world)
+	var soi := _cached_autoload("/root/SoiService")
+	if soi == null or not soi.has_method("world_center"):
+		return null
+	var c3: Vector3 = soi.call("world_center")
+	var site := Vector2(world.x - c3.x, world.z - c3.z)
+	return _disc_origin_screen() + site * GraphSiteLayout.px_per_m(_zoom)
+
+
+func _draw_site_array_ghosts(origin: Vector2) -> void:
+	if site_array_ghosts.is_empty():
+		return
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	for g in site_array_ghosts:
+		if not (g is Dictionary):
+			continue
+		var site := Vector2(float((g as Dictionary).get("site_x_m", 0.0)),
+				float((g as Dictionary).get("site_z_m", 0.0)))
+		var p := origin + site * s
+		var src := bool((g as Dictionary).get("is_source", false))
+		var col := Color(1.0, 0.85, 0.25, 0.9) if src else Color(0.4, 0.95, 1.0, 0.75)
+		draw_circle(p, 6.0 if src else 5.0, Color(col.r, col.g, col.b, 0.25))
+		draw_circle(p, 6.0 if src else 5.0, col, false, 1.5)
+		var yaw := deg_to_rad(float((g as Dictionary).get("yaw_deg", 0.0)))
+		# Tick showing outward/tangent facing.
+		var tip := p + Vector2(cos(yaw), sin(yaw)) * 12.0
+		draw_line(p, tip, col, 1.5)
+
+
+func _elev_stroke_px(base: float = 2.5) -> float:
+	return minf(maxf(2.0, base * _zoom), ELEV_STROKE_MAX_PX)
+
+
+func _ensure_elev_profile_bake(soi_svc: Node, center3: Vector3, r_m: float,
+		r_px: float) -> void:
+	var offset := clampf(elevation_section_offset_m, -r_m, r_m)
+	# Soft TTL picks up terrain sculpt without forcing DEM every frame.
+	var ttl_bucket := int(Time.get_ticks_msec() / 2000)
+	# Siphon Lab: denser bake only over the framed along window (tight CT zoom).
+	if siphon_lab_active:
+		_ensure_elev_anchor()
+		var s := GraphSiteLayout.px_per_m(_zoom)
+		var half_along := maxf(size.x * 0.55 / maxf(s, 1e-6), 6.0)
+		var a0 := _elev_anchor_along_m - half_along
+		var a1 := _elev_anchor_along_m + half_along
+		var n_lab := ElevationProfile.sample_count_for_lab_window(a1 - a0)
+		var key_lab := "lab|%s|%d" % [
+			ElevationProfile.cache_key(elevation_heading_rad, offset, a1 - a0,
+					n_lab, center3.y),
+			ttl_bucket]
+		if key_lab == _elev_bake_key and _elev_along.size() == n_lab + 1:
+			return
+		_elev_bake_key = key_lab
+		ElevationProfile.bake_window(soi_svc, center3, elevation_heading_rad, offset,
+				a0, a1, n_lab, _elev_along, _elev_y)
+		return
+	var n := ElevationProfile.sample_count_for_r_px(r_px)
+	var key := "%s|%d" % [
+		ElevationProfile.cache_key(elevation_heading_rad, offset, r_m, n, center3.y),
+		ttl_bucket]
+	if key == _elev_bake_key and _elev_along.size() == n + 1:
+		return
+	_elev_bake_key = key
+	ElevationProfile.bake(soi_svc, center3, elevation_heading_rad, offset, r_m, n,
+			_elev_along, _elev_y)
 
 
 func _draw_elevation_section(origin: Vector2, r_px: float, r_m: float, soi_svc: Node) -> void:
 	# Contained in the SoI disc. When the 3D section backdrop is live, leave the
-	# fill clear so sky / buildings show through; keep ring + terrain profile.
+	# fill clear so sky / buildings show through. Do NOT draw a canvas ring on
+	# top of the live SubViewport disc — that reads as a concentric double circle.
 	if not soi_live_preview:
 		draw_circle(origin, r_px, Color(0.04, 0.07, 0.12, 0.82))
-	var ring_col := Color(0.2, 0.75, 1.0, 0.55)
-	draw_arc(origin, r_px, 0.0, TAU, 96, ring_col, maxf(2.0, 2.5 * _zoom), true)
+		var ring_col := Color(0.2, 0.75, 1.0, 0.55)
+		draw_arc(origin, r_px, 0.0, TAU, 96, ring_col, _elev_stroke_px(2.5), true)
 
 	var heading_deg := rad_to_deg(elevation_heading_rad)
 	var fnt := ThemeDB.fallback_font
-	var mode_tag := " · 3D" if soi_live_preview else ""
+	var mode_tag := " · 3D CT" if soi_live_preview else ""
+	var ex_label := 1 if (soi_live_preview and _elev_exaggeration_draw() <= 1.001) \
+			else int(elevation_exaggeration)
+	var lock_note := " · 3D locks 1×" if (soi_live_preview and ex_label == 1) else ""
+	var noon_tag := " · solar noon" if soi_live_preview else ""
 	# Label just above the disc so it isn't clipped oddly near the rim.
+	var ctrl_hint := "drag Prime/Break/water · wheel zoom · side view locked" \
+			if siphon_lab_active \
+			else "Shift+drag rotate/depth · Shift+wheel zoom"
 	draw_string(fnt, origin + Vector2(-r_px + 6.0, -r_px - 6.0),
-			"Elevation · heading %.0f° · %d× vert%s  (Shift+drag rotate)" % [
-				heading_deg, int(elevation_exaggeration), mode_tag],
+			"Elevation · %.0f° · slice %+.0fm · %d×%s%s%s  (%s)" % [
+				heading_deg, elevation_section_offset_m, ex_label, mode_tag, lock_note,
+				noon_tag, ctrl_hint],
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.65, 0.85, 1.0, 0.85))
 
 	var center3 := Vector3.ZERO
@@ -5182,44 +7238,883 @@ func _draw_elevation_section(origin: Vector2, r_px: float, r_m: float, soi_svc: 
 		center3 = soi_svc.call("world_center") as Vector3
 	var datum := center3.y
 	var s := GraphSiteLayout.px_per_m(_zoom)
-	var samples := 128
-	var line_pts := PackedVector2Array()
 	var along_dir := Vector2(cos(elevation_heading_rad), sin(elevation_heading_rad))
-	for i in range(samples + 1):
-		var t := float(i) / float(samples)
-		var along := lerpf(-r_m, r_m, t)
-		var site := along_dir * along
-		var world := GraphSiteLayout.site_to_world_xz(site, center3)
-		var gy := datum
-		if soi_svc != null and soi_svc.has_method("ground_y_at"):
-			gy = float(soi_svc.call("ground_y_at", world.x, world.y))
-		var sx := origin.x + along * s
-		var sy := origin.y - (gy - datum) * s * elevation_exaggeration
-		# Keep the profile inside the disc (soft radial clamp to rim chord).
-		var dx := sx - origin.x
-		var max_dy := sqrt(maxf(r_px * r_px - dx * dx, 0.0))
-		sy = clampf(sy, origin.y - max_dy, origin.y + max_dy)
-		line_pts.append(Vector2(sx, sy))
+	var cross_dir := Vector2(-sin(elevation_heading_rad), cos(elevation_heading_rad))
+	var offset := clampf(elevation_section_offset_m, -r_m, r_m)
+	_ensure_elev_anchor()
+	_ensure_elev_profile_bake(soi_svc, center3, r_m, r_px)
+	var line_pts := PackedVector2Array()
+	var n_pts := mini(_elev_along.size(), _elev_y.size())
+	line_pts.resize(n_pts)
+	# When orbited, the pond + nodes are placed by the 3D camera; project the
+	# terrain profile through the same camera so the pond stays coupled to its
+	# depression (otherwise the flat profile drifts off the projected pond).
+	var use_proj := _phys_camera_projection_active()
+	for i in range(n_pts):
+		var along := _elev_along[i]
+		var gy := _elev_y[i]
+		var site_pt := along_dir * along + cross_dir * offset
+		line_pts[i] = _elev_section_to_canvas(site_pt, gy, origin, datum, s,
+				along_dir, center3, r_px, use_proj)
 
-	# Horizontal datum chord across the disc.
-	draw_line(Vector2(origin.x - r_px, origin.y), Vector2(origin.x + r_px, origin.y),
+	# Horizontal datum chord through the anchored view centre.
+	var vc := size * 0.5
+	var a_elev := get_elev_anchor_elev_m()
+	var datum_y := vc.y - (datum - a_elev) * s * _elev_exaggeration_draw()
+	draw_line(Vector2(0.0, datum_y), Vector2(size.x, datum_y),
 			Color(1.0, 1.0, 1.0, 0.18), 1.0)
 
-	if line_pts.size() > 1:
-		if not soi_live_preview:
-			# Fill under the profile, closed along the lower disc rim.
-			var fill := PackedVector2Array()
-			for p in line_pts:
-				fill.append(p)
-			# Walk the lower semicircle from right → left.
-			var rim_segs := 48
-			for i in range(rim_segs + 1):
-				var a := lerpf(0.0, PI, float(i) / float(rim_segs))
-				fill.append(origin + Vector2(cos(a), sin(a)) * r_px)
-			if fill.size() >= 3:
-				draw_colored_polygon(fill, Color(0.18, 0.42, 0.28, 0.55))
-		_draw_polyline_stroke(line_pts, Color(0.45, 0.95, 0.65, 0.95), maxf(2.0, 2.5 * _zoom))
+	# Cut-plane cue only when zoomed out enough that the SoI disc fits — at
+	# deep Elev CT zoom the old plan-space diameter became a full-screen
+	# amber diagonal that looked like a stray PBI/god-ray streak.
+	if not soi_live_preview and r_px * 2.0 <= maxf(size.x, size.y) * 1.05:
+		var cut_a := origin + along_dir * r_px
+		var cut_b := origin - along_dir * r_px
+		var cut_mid := origin + cross_dir * (offset / maxf(r_m, 1.0)) * r_px * 0.35
+		draw_line(cut_a, cut_b, Color(1.0, 0.85, 0.35, 0.55), _elev_stroke_px(2.0))
+		draw_circle(cut_mid, minf(maxf(3.0, 3.5 * _zoom), 8.0),
+				Color(1.0, 0.85, 0.35, 0.75))
 
+	if elev_show_dem_overlay and line_pts.size() > 1:
+		if not soi_live_preview:
+			# Fill under the profile via shared drawer (Siphon Lab uses the same).
+			var bl := origin + Vector2(-r_px, r_px)
+			var br := origin + Vector2(r_px, r_px)
+			ElevationCrossSection.draw_terrain(self, line_pts, bl, br, _elev_stroke_px(2.5))
+		else:
+			_draw_polyline_stroke(line_pts, ElevationCrossSection.C_TERRAIN_LINE,
+					_elev_stroke_px(2.5))
+
+	# Siphon Lab always draws the DEM pond bowl (even if DEM overlay menu is off).
+	if siphon_lab_active:
+		_lab_level_hits.clear()
+		_lab_pond_level_hit.clear()
+	if elev_show_dem_overlay or siphon_lab_active:
+		_draw_elevation_pond_water_lines(origin, r_px, r_m, datum, s, along_dir, cross_dir,
+				offset, soi_svc, center3)
+	# Lab: 3D barrel owns the culvert look — skip 2D invert chords (doubles).
+	if not siphon_lab_active:
+		_draw_elevation_culvert_inverts(origin, r_px, r_m, datum, s, along_dir, cross_dir,
+				offset, center3)
+	if siphon_lab_active:
+		_draw_elevation_siphon_levels(origin, r_px, r_m, datum, s, along_dir, cross_dir,
+				offset, center3)
+		_draw_elevation_siphon_flow_cues(origin, r_px, r_m, datum, s, along_dir, cross_dir,
+				offset, center3)
+	# Elev CT: watershed hill scrape is Site Plan / ground only — the teal wedge
+	# fights the pond DEM fill and culvert read (Mt. Vernon audit).
+	# (Intentionally not drawn here; `_draw_watershed_overlays_site` still runs.)
+
+
+## Solid blue pond body on Elevation: DEM floor under level_m (matches the
+## light-blue terrain contour). Spec floor_m is only a fallback when no bake.
+func _draw_elevation_pond_water_lines(origin: Vector2, r_px: float, r_m: float,
+		datum: float, s: float, along_dir: Vector2, cross_dir: Vector2,
+		slice_offset: float, _soi_svc: Node = null, _center3: Vector3 = Vector3.ZERO) -> void:
+	if model == null:
+		return
+	# Runs inside the _draw cache window (via _draw_soi_background) — _visible_items()
+	# reuses the cached root-scope array instead of a fresh full model scan per redraw.
+	for it in _visible_items():
+		if not (it is Dictionary):
+			continue
+		var item: Dictionary = it
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if not bool(specs.get("pond_storage", false)):
+			continue
+		if not GraphSiteLayout.has_site_coords(item):
+			continue
+		var level_m := float(specs.get("level_m", NAN))
+		var rim_m := float(specs.get("rim_m", NAN))
+		var floor_m := float(specs.get("floor_m", NAN))
+		if is_nan(level_m) and not is_nan(rim_m) and not is_nan(floor_m):
+			var span := maxf(rim_m - floor_m, 0.05)
+			level_m = floor_m + clampf(float(specs.get("level", 0.5)), 0.0, 1.0) * span
+		if is_nan(level_m):
+			continue
+		if is_nan(floor_m):
+			floor_m = level_m - maxf(float(specs.get("depth_m", 1.5)), 0.35)
+		if floor_m >= level_m - 0.02:
+			floor_m = level_m - 0.35
+		var site := GraphSiteLayout.site_xz(item)
+		var cross := site.dot(cross_dir)
+		# Lab: always draw the bound pond (heading lock may sit slightly off-slice).
+		var cross_tol := maxf(r_m * 0.55, 40.0) if siphon_lab_active \
+				else maxf(r_m * 0.35, 8.0)
+		if absf(cross - slice_offset) > cross_tol:
+			continue
+		var half_w := _elevation_pond_half_width_m(item, specs, along_dir)
+		var pond_along := site.dot(along_dir)
+		# Lab: footprint+bank. Free Elev: wider DEM bank search.
+		var bank_pad := 2.0 if siphon_lab_active else 4.0
+		var search := half_w + bank_pad
+		if not siphon_lab_active:
+			search = maxf(half_w * 2.5, 60.0)
+			search = minf(search, maxf(r_m * 0.95, half_w + 4.0))
+		var a0 := pond_along - search
+		var a1 := pond_along + search
+		# Same projection path as the DEM profile so pond + terrain stay coupled
+		# under pan/zoom (camera is synced to elev anchors every pan).
+		var use_proj := _phys_camera_projection_active()
+		var step_m := 0.35 if siphon_lab_active else 0.75
+		var samples := clampi(int(ceili((a1 - a0) / step_m)), 32, 200)
+		var alongs := PackedFloat32Array()
+		var elevs := PackedFloat32Array()
+		alongs.resize(samples + 1)
+		elevs.resize(samples + 1)
+		for i in range(samples + 1):
+			var along := lerpf(a0, a1, float(i) / float(samples))
+			var gy := _elev_profile_y_at(along)
+			if is_nan(gy):
+				gy = floor_m
+			alongs[i] = along
+			elevs[i] = gy
+		# Clamp to the DEM search span (full poly + bank), not footprint half_w —
+		# truncating to ±half_w left half the basin dry on large OSM ponds.
+		var wet := elev_contiguous_wet_interval(alongs, elevs, level_m, pond_along,
+				search)
+		var wet_min := wet.x
+		var wet_max := wet.y
+		if not is_finite(wet_min) or not is_finite(wet_max) or wet_max <= wet_min:
+			wet_min = pond_along - half_w
+			wet_max = pond_along + half_w
+		var floor_pts := PackedVector2Array()
+		var prev_along := NAN
+		var prev_gy := NAN
+		for i in range(samples + 1):
+			var along2: float = alongs[i]
+			if along2 < wet_min - 0.05 or along2 > wet_max + 0.05:
+				prev_along = along2
+				prev_gy = elevs[i]
+				continue
+			var gy2: float = elevs[i]
+			if not is_nan(prev_gy) and ((prev_gy < level_m) != (gy2 < level_m)):
+				var denom := gy2 - prev_gy
+				var t := 0.5 if absf(denom) < 1e-6 \
+						else clampf((level_m - prev_gy) / denom, 0.0, 1.0)
+				var x_along := lerpf(prev_along, along2, t)
+				if x_along >= wet_min - 0.05 and x_along <= wet_max + 0.05:
+					var x_site := along_dir * x_along + cross_dir * slice_offset
+					floor_pts.append(_elev_section_to_canvas(x_site, level_m,
+							origin, datum, s, along_dir, _center3, r_px, use_proj))
+			if gy2 < level_m - 0.005:
+				var site_pt2 := along_dir * along2 + cross_dir * slice_offset
+				floor_pts.append(_elev_section_to_canvas(site_pt2, gy2,
+						origin, datum, s, along_dir, _center3, r_px, use_proj))
+			prev_along = along2
+			prev_gy = gy2
+		# DEM miss / dry profile: still show a bowl from specs floor→level.
+		if floor_pts.size() < 2:
+			floor_pts.clear()
+			var n_syn := 8
+			for i in range(n_syn + 1):
+				var along_s := lerpf(wet_min, wet_max, float(i) / float(n_syn))
+				# Gentle U-bowl so banks meet the surface.
+				var u := absf((along_s - pond_along) / maxf(half_w, 0.5))
+				var gy_s := lerpf(floor_m, level_m - 0.02, clampf(u * u, 0.0, 1.0))
+				var site_s := along_dir * along_s + cross_dir * slice_offset
+				floor_pts.append(_elev_section_to_canvas(site_s, gy_s,
+						origin, datum, s, along_dir, _center3, r_px, use_proj))
+		var surf_l := _elev_section_to_canvas(
+				along_dir * wet_min + cross_dir * slice_offset, level_m,
+				origin, datum, s, along_dir, _center3, r_px, use_proj)
+		var surf_r := _elev_section_to_canvas(
+				along_dir * wet_max + cross_dir * slice_offset, level_m,
+				origin, datum, s, along_dir, _center3, r_px, use_proj)
+		var poly := PackedVector2Array()
+		poly.append(surf_l)
+		poly.append(surf_r)
+		for i in range(floor_pts.size() - 1, -1, -1):
+			poly.append(floor_pts[i])
+		if poly.size() >= 3:
+			draw_colored_polygon(poly, Color(0.22, 0.52, 0.92, 0.55))
+		# Siphon Lab: fill only (surface is the poly top). Free Elev keeps chords.
+		if not siphon_lab_active:
+			draw_line(surf_l, surf_r, Color(0.45, 0.85, 1.0, 0.95), _elev_stroke_px(2.5), true)
+			if not is_nan(rim_m) and rim_m > level_m + 0.05:
+				var rim_pad := maxf(half_w, (wet_max - wet_min) * 0.5) + 2.0
+				var rim_l := _elev_section_to_canvas(
+						along_dir * (pond_along - rim_pad) + cross_dir * slice_offset, rim_m,
+						origin, datum, s, along_dir, _center3, r_px, use_proj)
+				var rim_r := _elev_section_to_canvas(
+						along_dir * (pond_along + rim_pad) + cross_dir * slice_offset, rim_m,
+						origin, datum, s, along_dir, _center3, r_px, use_proj)
+				draw_line(rim_l, rim_r, Color(1.0, 0.75, 0.35, 0.55), _elev_stroke_px(1.5))
+		else:
+			_lab_pond_level_hit = {
+				"item_id": str(item.get("id", "")),
+				"y_px": (surf_l.y + surf_r.y) * 0.5,
+				"x0": minf(surf_l.x, surf_r.x) - 8.0,
+				"x1": maxf(surf_l.x, surf_r.x) + 8.0,
+				"level_m": level_m,
+				"floor_m": floor_m,
+				"rim_m": rim_m,
+			}
+
+
+## Contiguous wet interval containing `pond_along` (dry berms split runs).
+## Returns Vector2(wet_min, wet_max) or (NAN,NAN).
+## `clamp_half` bounds the dry-DEM fallback only — a real wet run is returned
+## untruncated so full-basin poly spans paint both banks.
+static func elev_contiguous_wet_interval(alongs: PackedFloat32Array,
+		elevs: PackedFloat32Array, level_m: float, pond_along: float,
+		clamp_half: float) -> Vector2:
+	var n := mini(alongs.size(), elevs.size())
+	if n < 2:
+		return Vector2(NAN, NAN)
+	var run_lo := NAN
+	var best_lo := NAN
+	var best_hi := NAN
+	for i in n:
+		var wet := elevs[i] < level_m - 0.005
+		if wet:
+			if is_nan(run_lo):
+				run_lo = alongs[i]
+			var run_hi: float = alongs[i]
+			if pond_along >= run_lo - 0.25 and pond_along <= run_hi + 0.25:
+				best_lo = run_lo
+				best_hi = run_hi
+		else:
+			if not is_nan(run_lo):
+				var run_hi2: float = alongs[maxi(i - 1, 0)]
+				if pond_along >= run_lo - 0.25 and pond_along <= run_hi2 + 0.25:
+					best_lo = run_lo
+					best_hi = run_hi2
+			run_lo = NAN
+	if is_nan(best_lo) and not is_nan(run_lo):
+		best_lo = run_lo
+		best_hi = alongs[n - 1]
+	if is_nan(best_lo) or is_nan(best_hi):
+		# Footprint / search-span fallback when DEM never went below the waterline.
+		return Vector2(pond_along - clamp_half, pond_along + clamp_half)
+	if best_hi <= best_lo:
+		return Vector2(pond_along - clamp_half, pond_along + clamp_half)
+	return Vector2(best_lo, best_hi)
+
+
+## Interpolate baked Elevation DEM profile at an along-metres coordinate.
+func _elev_profile_y_at(along_m: float) -> float:
+	var n := mini(_elev_along.size(), _elev_y.size())
+	if n <= 0:
+		return NAN
+	if along_m <= _elev_along[0]:
+		return _elev_y[0]
+	if along_m >= _elev_along[n - 1]:
+		return _elev_y[n - 1]
+	var lo := 0
+	var hi := n - 1
+	while hi - lo > 1:
+		var mid := (lo + hi) >> 1
+		if _elev_along[mid] <= along_m:
+			lo = mid
+		else:
+			hi = mid
+	var a0 := _elev_along[lo]
+	var a1 := _elev_along[hi]
+	var t := 0.0 if is_equal_approx(a1, a0) else (along_m - a0) / (a1 - a0)
+	return lerpf(_elev_y[lo], _elev_y[hi], t)
+
+
+## Siphon Lab: prime (green) + air-break (red) chords on the shared Elev CT.
+func _draw_elevation_siphon_levels(origin: Vector2, r_px: float, r_m: float,
+		datum: float, s: float, along_dir: Vector2, cross_dir: Vector2,
+		slice_offset: float, center3: Vector3) -> void:
+	if model == null:
+		return
+	var use_proj := _phys_camera_projection_active()
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var item: Dictionary = it
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if str(specs.get("role", "")) != "siphon_hydro" \
+				and str(specs.get("model_id", "")) != "hydroturbine":
+			continue
+		if not GraphSiteLayout.has_site_coords(item):
+			continue
+		var site := GraphSiteLayout.site_xz(item)
+		var cross := site.dot(cross_dir)
+		if absf(cross - slice_offset) > maxf(r_m * 0.35, 12.0):
+			continue
+		var module_m := float(specs.get("module_elev_m", NAN))
+		var start_m := float(specs.get("siphon_start_m", module_m))
+		var break_m := float(specs.get("siphon_break_m", module_m))
+		if is_nan(start_m) and is_nan(break_m):
+			continue
+		var half_w := 4.0
+		var pond_along := site.dot(along_dir)
+		var pond_item := _elev_find_siphon_pond(item)
+		if not pond_item.is_empty() and GraphSiteLayout.has_site_coords(pond_item):
+			var ps: Dictionary = pond_item.get("specs", {}) as Dictionary
+			half_w = _elevation_pond_half_width_m(pond_item, ps, along_dir)
+			pond_along = GraphSiteLayout.site_xz(pond_item).dot(along_dir)
+		var sid := str(item.get("id", ""))
+		if not is_nan(start_m):
+			var s0 := _elev_section_to_canvas(
+					along_dir * (pond_along - half_w) + cross_dir * slice_offset, start_m,
+					origin, datum, s, along_dir, center3, r_px, use_proj)
+			var s1 := _elev_section_to_canvas(
+					along_dir * (pond_along + half_w) + cross_dir * slice_offset, start_m,
+					origin, datum, s, along_dir, center3, r_px, use_proj)
+			draw_line(s0, s1, Color(0.35, 0.85, 0.55, 0.85), _elev_stroke_px(2.0), true)
+			draw_string(ThemeDB.fallback_font, s1 + Vector2(4, -2), "Prime",
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.35, 0.85, 0.55, 0.95))
+			_lab_level_hits.append({
+				"kind": "prime", "item_id": sid,
+				"y_px": (s0.y + s1.y) * 0.5,
+				"x0": minf(s0.x, s1.x) - 6.0, "x1": maxf(s0.x, s1.x) + 40.0,
+				"elev_m": start_m,
+			})
+		if not is_nan(break_m):
+			var b0 := _elev_section_to_canvas(
+					along_dir * (pond_along - half_w) + cross_dir * slice_offset, break_m,
+					origin, datum, s, along_dir, center3, r_px, use_proj)
+			var b1 := _elev_section_to_canvas(
+					along_dir * (pond_along + half_w) + cross_dir * slice_offset, break_m,
+					origin, datum, s, along_dir, center3, r_px, use_proj)
+			draw_line(b0, b1, Color(0.95, 0.45, 0.35, 0.85), _elev_stroke_px(2.0), true)
+			draw_string(ThemeDB.fallback_font, b1 + Vector2(4, 12), "Break",
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.95, 0.45, 0.35, 0.95))
+			_lab_level_hits.append({
+				"kind": "break", "item_id": sid,
+				"y_px": (b0.y + b1.y) * 0.5,
+				"x0": minf(b0.x, b1.x) - 6.0, "x1": maxf(b0.x, b1.x) + 40.0,
+				"elev_m": break_m,
+			})
+
+
+func _elev_find_siphon_pond(siphon: Dictionary) -> Dictionary:
+	var sid := str(siphon.get("id", ""))
+	if sid.is_empty() or model == null:
+		return {}
+	for conn in model.connections:
+		if not (conn is Dictionary):
+			continue
+		var c: Dictionary = conn
+		var a := str(c.get("source_item_id", ""))
+		var b := str(c.get("target_item_id", ""))
+		var other := ""
+		if a == sid:
+			other = b
+		elif b == sid:
+			other = a
+		else:
+			continue
+		var tank: Dictionary = model.get_item(other)
+		if tank.is_empty():
+			continue
+		var ts: Dictionary = tank.get("specs", {}) as Dictionary
+		if bool(ts.get("pond_storage", false)):
+			return tank
+	# Nearest pond by site as fallback.
+	if not GraphSiteLayout.has_site_coords(siphon):
+		return {}
+	var sxz := GraphSiteLayout.site_xz(siphon)
+	var best: Dictionary = {}
+	var best_d := INF
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var item: Dictionary = it
+		var ts2: Dictionary = item.get("specs", {}) as Dictionary
+		if not bool(ts2.get("pond_storage", false)):
+			continue
+		if not GraphSiteLayout.has_site_coords(item):
+			continue
+		var d := GraphSiteLayout.site_xz(item).distance_to(sxz)
+		if d < best_d:
+			best_d = d
+			best = item
+	return best
+
+
+## Map a section point (site metres from SoI centre, absolute elevation) to a
+## canvas pixel. Flat path uses metre-space anchors so deep zoom stays precise;
+## orbited preview uses world_to_canvas. `origin`/`r_px` kept for API compat
+## (disc clamp only when zoomed out enough that the full SoI fits).
+func _elev_section_to_canvas(site_pt: Vector2, elev_m: float, origin: Vector2,
+		datum: float, s: float, along_dir: Vector2, center3: Vector3,
+		r_px: float, use_proj: bool) -> Vector2:
+	if use_proj and soi_preview_service != null and is_instance_valid(soi_preview_service):
+		var world := Vector3(center3.x + site_pt.x, elev_m, center3.z + site_pt.y)
+		var proj: Variant = soi_preview_service.call("world_to_canvas", world)
+		if proj is Vector2:
+			return proj as Vector2
+	_ensure_elev_anchor()
+	var along := site_pt.dot(along_dir)
+	var vc := size * 0.5
+	var a_along := _elev_anchor_along_m
+	var a_elev := get_elev_anchor_elev_m()
+	var sx := vc.x + (along - a_along) * s
+	var sy := vc.y - (elev_m - a_elev) * s * _elev_exaggeration_draw()
+	# Soft disc clamp only when the SoI diameter fits on screen (zoomed out).
+	if r_px * 2.0 <= maxf(size.x, size.y) * 1.05 and r_px > 8.0:
+		sx = clampf(sx, origin.x - r_px, origin.x + r_px)
+		sy = clampf(sy, origin.y - r_px, origin.y + r_px)
+	return Vector2(sx, sy)
+
+
+## Half-width along the elevation cut: project pond poly onto `along_dir`.
+func _elevation_pond_half_width_m(tank_item: Dictionary, specs: Dictionary,
+		along_dir: Vector2 = Vector2(1.0, 0.0)) -> float:
+	var tag := str(specs.get("osm_water_tag", ""))
+	var half := maxf(float(specs.get("footprint_w_m", 6.0)), 2.0) * 0.5
+	half = maxf(half, maxf(float(specs.get("footprint_d_m", 0.0)), 2.0) * 0.5)
+	var ad := along_dir
+	if ad.length_squared() < 1e-8:
+		ad = Vector2(1.0, 0.0)
+	else:
+		ad = ad.normalized()
+	# Prefer live map footprint (world XZ → site) when available.
+	var loader := _terrain_loader_node()
+	if loader != null and not tag.is_empty() and loader.has_method("find_pond_idx_by_tag"):
+		var idx: int = int(loader.call("find_pond_idx_by_tag", tag))
+		if idx >= 0 and loader.has_method("get_pond_info"):
+			var info: Dictionary = loader.call("get_pond_info", idx) as Dictionary
+			var world_poly: PackedVector2Array = info.get("points", PackedVector2Array()) \
+					as PackedVector2Array
+			if world_poly.size() >= 3:
+				var soi_svc := _cached_autoload("/root/SoiService")
+				var center3 := Vector3.ZERO
+				if soi_svc != null and soi_svc.has_method("world_center"):
+					center3 = soi_svc.call("world_center") as Vector3
+				var tank_site := GraphSiteLayout.site_xz(tank_item) \
+						if GraphSiteLayout.has_site_coords(tank_item) else Vector2.ZERO
+				var min_a := INF
+				var max_a := -INF
+				for wp in world_poly:
+					var site_p := GraphSiteLayout.world_xz_to_site(wp, center3) - tank_site
+					var a := site_p.dot(ad)
+					min_a = minf(min_a, a)
+					max_a = maxf(max_a, a)
+				if is_finite(min_a) and max_a > min_a:
+					half = maxf((max_a - min_a) * 0.5 + 1.0, half)
+					return half
+	if tag.is_empty() or model == null:
+		return half
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var other: Dictionary = it
+		if str(other.get("type", "")) != "catchment":
+			continue
+		var os: Dictionary = other.get("specs", {}) as Dictionary
+		if str(os.get("osm_water_tag", os.get("osm_tag", ""))) != tag:
+			continue
+		var poly_v: Variant = os.get("osm_poly_site", null)
+		var pts := _osm_poly_site_to_packed(poly_v)
+		if pts.size() < 3:
+			break
+		var min_a2 := INF
+		var max_a2 := -INF
+		for p in pts:
+			var a2 := p.dot(ad)
+			min_a2 = minf(min_a2, a2)
+			max_a2 = maxf(max_a2, a2)
+		if is_finite(min_a2) and max_a2 > min_a2:
+			half = maxf((max_a2 - min_a2) * 0.5 + 1.0, half)
+		break
+	return half
+
+
+func _osm_poly_site_to_packed(poly_v: Variant) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	if poly_v is PackedVector2Array:
+		return poly_v as PackedVector2Array
+	if not (poly_v is Array):
+		return pts
+	for p in poly_v as Array:
+		if p is Vector2:
+			pts.append(p as Vector2)
+		elif p is Array and (p as Array).size() >= 2:
+			pts.append(Vector2(float((p as Array)[0]), float((p as Array)[1])))
+	return pts
+
+
+## True when this item's bound 3D twin exists and is hidden from the 3D world
+## (record hidden_3d). Site Plan uses this to suppress the ring for a hidden twin.
+## Per-draw memoized by bound_prop_id.
+func _item_twin_is_hidden(item: Dictionary) -> bool:
+	var pid := str((item.get("specs", {}) as Dictionary).get("bound_prop_id", ""))
+	if pid.is_empty():
+		return false
+	if _twin_hidden_cache.has(pid):
+		return bool(_twin_hidden_cache[pid])
+	var hidden := false
+	var loader := _terrain_loader_node()
+	if loader != null and loader.has_method("get_prop_record"):
+		var rec: Dictionary = loader.call("get_prop_record", pid) as Dictionary
+		hidden = (not rec.is_empty()) and bool(rec.get("hidden_3d", false))
+	_twin_hidden_cache[pid] = hidden
+	return hidden
+
+
+func _terrain_loader_node() -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var main := tree.get_first_node_in_group("main_scene")
+	if main == null:
+		main = tree.root.get_node_or_null("Main")
+	if main == null:
+		return null
+	return main.get_node_or_null("TerrainLoader")
+
+
+## Site Plan: preview / designated watershed outline (world XZ → disc).
+func _draw_watershed_overlays_site() -> void:
+	var polys: Array = _watershed_overlay_world_polys()
+	if polys.is_empty():
+		return
+	var soi_svc := _cached_autoload("/root/SoiService")
+	var center3 := Vector3.ZERO
+	if soi_svc != null and soi_svc.has_method("world_center"):
+		center3 = soi_svc.call("world_center") as Vector3
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var origin := size * 0.5 + _pan
+	var col := Color(0.20, 0.85, 0.78, 0.90)
+	var fill := Color(0.15, 0.65, 0.60, 0.16)
+	for poly_v in polys:
+		if not (poly_v is PackedVector2Array):
+			continue
+		var poly: PackedVector2Array = poly_v
+		if poly.size() < 3:
+			continue
+		var screen := PackedVector2Array()
+		screen.resize(poly.size())
+		for i in poly.size():
+			var site := GraphSiteLayout.world_xz_to_site(poly[i], center3)
+			screen[i] = origin + site * s
+		draw_colored_polygon(screen, fill)
+		for i in screen.size():
+			draw_line(screen[i], screen[(i + 1) % screen.size()], col, 1.75, true)
+
+
+## Elevation CT: sample the cut plane through watershed polys (outer-ring verts
+## often miss the slice entirely — point-in-poly along the section is reliable).
+func _draw_watershed_overlays_elev(origin: Vector2, r_px: float, r_m: float,
+		datum: float, s: float, along_dir: Vector2, cross_dir: Vector2,
+		slice_offset: float, center3: Vector3) -> void:
+	var polys: Array = _watershed_overlay_world_polys()
+	if polys.is_empty():
+		return
+	var use_proj := _phys_camera_projection_active()
+	var col := Color(0.20, 0.85, 0.78, 0.95)
+	var col_fill := Color(0.12, 0.70, 0.65, 0.28)
+	var soi_svc := _cached_autoload("/root/SoiService")
+	var step := maxf(r_m / 96.0, 1.5)
+	var labeled := false
+	for poly_v in polys:
+		if not (poly_v is PackedVector2Array):
+			continue
+		var poly: PackedVector2Array = poly_v
+		if poly.size() < 3:
+			continue
+		var run: PackedVector2Array = PackedVector2Array()
+		var a := -r_m
+		while a <= r_m + 0.01:
+			var site := along_dir * a + cross_dir * slice_offset
+			var world := GraphSiteLayout.site_to_world_xz(site, center3)
+			var inside := Geometry2D.is_point_in_polygon(world, poly)
+			if inside:
+				var gy := datum
+				if soi_svc != null and soi_svc.has_method("ground_y_at"):
+					gy = float(soi_svc.call("ground_y_at", world.x, world.y))
+				run.append(_elev_section_to_canvas(site, gy, origin, datum, s,
+						along_dir, center3, r_px, use_proj))
+			elif run.size() >= 2:
+				_draw_polyline_stroke(run, col, _elev_stroke_px(2.8))
+				# Soft band under the profile segment.
+				for i in range(run.size() - 1):
+					var mid := (run[i] + run[i + 1]) * 0.5
+					draw_circle(mid, _elev_stroke_px(4.0), col_fill)
+				if not labeled:
+					var fnt := ThemeDB.fallback_font
+					draw_string(fnt, run[0] + Vector2(4.0, -8.0), "Watershed",
+							HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
+					labeled = true
+				run = PackedVector2Array()
+			else:
+				run = PackedVector2Array()
+			a += step
+		if run.size() >= 2:
+			_draw_polyline_stroke(run, col, _elev_stroke_px(2.8))
+			if not labeled:
+				var fnt2 := ThemeDB.fallback_font
+				draw_string(fnt2, run[0] + Vector2(4.0, -8.0), "Watershed",
+						HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
+				labeled = true
+
+
+## Live TerrainLoader preview only. Designated hillside catchments stay on the
+## freeform graph — drawing them here made Site Plan look like a second pond.
+func _watershed_overlay_world_polys() -> Array:
+	var out: Array = []
+	var loader := _terrain_loader_node()
+	if loader != null and loader.has_method("get_watershed_preview"):
+		var prev: Dictionary = loader.call("get_watershed_preview") as Dictionary
+		if bool(prev.get("valid", false)):
+			var pw: Variant = prev.get("poly_world", null)
+			if pw is PackedVector2Array and (pw as PackedVector2Array).size() >= 3:
+				out.append(pw)
+	return out
+
+
+## Straight culvert body in Elevation (replaces sagging resource bezier).
+func _draw_elevation_culvert_wire_straight(from: Vector2, to: Vector2, col: Color,
+		width: float, flowing: bool, rate: float) -> void:
+	var w := maxf(width, 2.0)
+	draw_line(from, to, Color(col.r, col.g, col.b, 0.35), w + 3.0, true)
+	draw_line(from, to, col, w, true)
+	if flowing and rate > 0.01:
+		var mid := (from + to) * 0.5
+		draw_circle(mid, maxf(3.0, w * 0.6), Color(col.r, col.g, col.b, 0.9))
+
+
+## Pond→siphon direct intake: short stub + tick at the pond edge (not a full wire).
+## Elevation CT: project ConduitManager sample points through world_to_canvas.
+## Returns true when the connection was handled (projected or intentionally
+## suppressed because 3D pipes own the look).
+func _try_draw_elev_conduit_projection(conn: Dictionary, col: Color, width: float,
+		flowing: bool, rate: float, res_kind: String) -> bool:
+	var want_proj := elev_show_projected_pipes
+	if not want_proj and not elev_show_schematic_wires:
+		# No schematic + no projected overlay → skip 2D (3D wires if on are
+		# the look; if off, draw nothing — do NOT sample every conduit here,
+		# that was a G-open hitch / TDR contributor).
+		return true
+	if not want_proj:
+		return false
+	var cid := str(conn.get("id", ""))
+	if cid.is_empty():
+		return false
+	var mgr: Node = null
+	var parent_v := get_parent()
+	while parent_v != null:
+		if parent_v.has_method("_get_conduit_manager"):
+			mgr = parent_v.call("_get_conduit_manager") as Node
+			break
+		parent_v = parent_v.get_parent()
+	if mgr == null:
+		var main := get_tree().current_scene if get_tree() != null else null
+		if main != null:
+			mgr = main.get_node_or_null("ConduitManager")
+	if mgr == null:
+		return false
+	var samples: PackedVector3Array = PackedVector3Array()
+	if mgr.has_method("get_sample_points"):
+		samples = mgr.call("get_sample_points", cid) as PackedVector3Array
+	if samples.size() < 2 and mgr.has_method("ensure_preview_samples"):
+		samples = mgr.call("ensure_preview_samples", conn) as PackedVector3Array
+	if samples.size() < 2:
+		return false
+	if soi_preview_service == null or not is_instance_valid(soi_preview_service):
+		return false
+	var screen := PackedVector2Array()
+	for i in samples.size():
+		var proj: Variant = soi_preview_service.call("world_to_canvas", samples[i])
+		if proj is Vector2:
+			screen.append(proj as Vector2)
+	if screen.size() < 2:
+		return false
+	_draw_polyline_stroke(screen, col, minf(width, ELEV_WIRE_MAX_PX))
+	if flowing and rate > 0.01 and _zoom >= WIRE_LABEL_MIN_ZOOM and not res_kind.is_empty():
+		_draw_flow_label(screen[0], screen[screen.size() - 1], [], rate, true, res_kind, col)
+	return true
+
+
+func _draw_direct_intake_stub(pond_pos: Vector2, siphon_pos: Vector2, col: Color,
+		width: float, flowing: bool, is_sel: bool) -> void:
+	var dir := siphon_pos - pond_pos
+	var dist := dir.length()
+	if dist < 1.0:
+		dir = Vector2.RIGHT
+		dist = 1.0
+	else:
+		dir /= dist
+	var stub_len := clampf(dist * 0.22, 10.0, 28.0)
+	var tip := pond_pos + dir * stub_len
+	var w := minf(maxf(width, 2.0), 4.5)
+	var stub_col := col if is_sel else Color(col.r, col.g, col.b, 0.85)
+	# Dashed stub from pond toward module.
+	var segs := 5
+	for i in segs:
+		if i % 2 == 1:
+			continue
+		var a := pond_pos.lerp(tip, float(i) / float(segs))
+		var b := pond_pos.lerp(tip, float(i + 1) / float(segs))
+		draw_line(a, b, stub_col, w, true)
+	# Intake tick perpendicular at the pond edge.
+	var perp := Vector2(-dir.y, dir.x) * maxf(5.0, w * 2.2)
+	draw_line(pond_pos - perp, pond_pos + perp, stub_col, w + 0.5, true)
+	draw_circle(pond_pos, maxf(2.5, w * 0.7), stub_col)
+	if flowing:
+		draw_circle(tip, maxf(2.0, w * 0.55), Color(stub_col.r, stub_col.g, stub_col.b, 0.9))
+	draw_string(ThemeDB.fallback_font, tip + Vector2(4, -3), "intake",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+			Color(stub_col.r, stub_col.g, stub_col.b, 0.75))
+
+
+## Culvert invert markers + barrel chord on the elevation section.
+func _draw_elevation_culvert_inverts(origin: Vector2, r_px: float, r_m: float,
+		datum: float, s: float, along_dir: Vector2, _cross_dir: Vector2,
+		_slice_offset: float, center3: Vector3 = Vector3.ZERO) -> void:
+	if model == null:
+		return
+	# Siphon Lab always shows the outlet barrel; otherwise Elev 3D owns the look.
+	if not siphon_lab_active and soi_live_preview \
+			and not elev_show_schematic_wires and not elev_show_projected_pipes:
+		return
+	var use_proj := _phys_camera_projection_active()
+	# Inside the _draw cache window — reuse the cached visible-connections array.
+	for conn in _visible_connections():
+		if not (conn is Dictionary):
+			continue
+		var c: Dictionary = conn
+		var type_id := ConduitKinds.derive_type_for_connection(c)
+		if not ConduitKinds.uses_culvert_kit(type_id):
+			continue
+		var inv_in := float(c.get("invert_in_m", NAN))
+		var inv_out := float(c.get("invert_out_m", NAN))
+		if is_nan(inv_in) or is_nan(inv_out):
+			continue
+		var src := model.get_item(str(c.get("source_item_id", "")))
+		var tgt := model.get_item(str(c.get("target_item_id", "")))
+		var along0 := 0.0
+		var along1 := r_m * 0.35
+		if GraphSiteLayout.has_site_coords(src):
+			along0 = GraphSiteLayout.site_xz(src).dot(along_dir)
+		if GraphSiteLayout.has_site_coords(tgt):
+			along1 = GraphSiteLayout.site_xz(tgt).dot(along_dir)
+		var p0 := _elev_section_to_canvas(along_dir * along0, inv_in, origin, datum, s,
+				along_dir, center3, r_px, use_proj)
+		var p1 := _elev_section_to_canvas(along_dir * along1, inv_out, origin, datum, s,
+				along_dir, center3, r_px, use_proj)
+		var sel := str(c.get("id", "")) == selected_connection_id
+		var col := Color(0.95, 0.7, 0.25, 0.95) if sel else Color(0.75, 0.55, 0.2, 0.7)
+		draw_line(p0, p1, col, _elev_stroke_px(2.5))
+		var mark_r := minf(maxf(4.0, 4.5 * _zoom), 10.0)
+		draw_circle(p0, mark_r, col)
+		draw_circle(p1, mark_r, col)
+		var q := float(c.get("live_q_lps", 0.0))
+		if q <= 0.01 and siphon_lab_active:
+			# Prefer siphon live Q when the culvert wire hasn't stamped yet.
+			var ss: Dictionary = src.get("specs", {}) as Dictionary
+			if str(ss.get("role", "")) == "siphon_hydro":
+				q = float(ss.get("live_q_lps", 0.0))
+		if q > 0.01:
+			var mid := (p0 + p1) * 0.5
+			draw_string(ThemeDB.fallback_font, mid + Vector2(4, -4),
+					"%.1f L/s" % q, HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+					Color(0.95, 0.85, 0.45, 0.9))
+			_draw_elev_outlet_discharge(p0, p1, q)
+
+
+## Animated chase dashes through the turbine + spray at the culvert outlet.
+func _draw_elevation_siphon_flow_cues(origin: Vector2, r_px: float, r_m: float,
+		datum: float, s: float, along_dir: Vector2, cross_dir: Vector2,
+		slice_offset: float, center3: Vector3) -> void:
+	if model == null:
+		return
+	var use_proj := _phys_camera_projection_active()
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var item: Dictionary = it
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if str(specs.get("role", "")) != "siphon_hydro":
+			continue
+		var q := float(specs.get("live_q_lps", 0.0))
+		if q <= 0.02 and not bool(specs.get("siphon_primed", false)):
+			continue
+		if not GraphSiteLayout.has_site_coords(item):
+			continue
+		var site := GraphSiteLayout.site_xz(item)
+		if absf(site.dot(cross_dir) - slice_offset) > maxf(r_m * 0.4, 14.0):
+			continue
+		var mod_e := float(specs.get("module_elev_m", item.get("elevation_m", datum)))
+		var along := site.dot(along_dir)
+		var p_in := _elev_section_to_canvas(
+				along_dir * (along - 2.5) + cross_dir * slice_offset, mod_e,
+				origin, datum, s, along_dir, center3, r_px, use_proj)
+		var p_out := _elev_section_to_canvas(
+				along_dir * (along + 2.5) + cross_dir * slice_offset, mod_e,
+				origin, datum, s, along_dir, center3, r_px, use_proj)
+		var col := Color(0.35, 0.85, 1.0, 0.95) if q > 0.02 \
+				else Color(0.55, 0.75, 0.85, 0.55)
+		_draw_elev_flow_chase(p_in, p_out, col, q > 0.02)
+		if q > 0.02:
+			draw_string(ThemeDB.fallback_font, (p_in + p_out) * 0.5 + Vector2(0, -10),
+					"turbine %.1f L/s" % q, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
+	# Culvert outlet jets (siphon → ∞ sink).
+	for conn in model.connections:
+		if not (conn is Dictionary):
+			continue
+		var c: Dictionary = conn
+		if not ConduitKinds.uses_culvert_kit(ConduitKinds.derive_type_for_connection(c)):
+			continue
+		var src := model.get_item(str(c.get("source_item_id", "")))
+		var tgt := model.get_item(str(c.get("target_item_id", "")))
+		if src.is_empty() or tgt.is_empty():
+			continue
+		var ss: Dictionary = src.get("specs", {}) as Dictionary
+		if str(ss.get("role", "")) != "siphon_hydro":
+			continue
+		var q2 := maxf(float(c.get("live_q_lps", 0.0)), float(ss.get("live_q_lps", 0.0)))
+		if q2 <= 0.02:
+			continue
+		var inv_in := float(c.get("invert_in_m", NAN))
+		var inv_out := float(c.get("invert_out_m", NAN))
+		if is_nan(inv_in) or is_nan(inv_out):
+			continue
+		var a0 := GraphSiteLayout.site_xz(src).dot(along_dir) \
+				if GraphSiteLayout.has_site_coords(src) else 0.0
+		var a1 := GraphSiteLayout.site_xz(tgt).dot(along_dir) \
+				if GraphSiteLayout.has_site_coords(tgt) else a0 + 12.0
+		var p0 := _elev_section_to_canvas(along_dir * a0, inv_in, origin, datum, s,
+				along_dir, center3, r_px, use_proj)
+		var p1 := _elev_section_to_canvas(along_dir * a1, inv_out, origin, datum, s,
+				along_dir, center3, r_px, use_proj)
+		_draw_elev_flow_chase(p0, p1, Color(0.4, 0.8, 1.0, 0.9), true)
+		_draw_elev_outlet_discharge(p0, p1, q2)
+
+
+func _draw_elev_flow_chase(from: Vector2, to: Vector2, col: Color, flowing: bool) -> void:
+	var w := _elev_stroke_px(2.2)
+	draw_line(from, to, Color(col.r, col.g, col.b, col.a * 0.35), w, true)
+	if not flowing:
+		return
+	var dir := to - from
+	var len := dir.length()
+	if len < 4.0:
+		return
+	dir /= len
+	var phase := fmod(_flow_phase * 28.0, 14.0)
+	var t := phase
+	while t < len:
+		var a := from + dir * t
+		var b := from + dir * minf(t + 6.0, len)
+		draw_line(a, b, col, w + 0.5, true)
+		t += 14.0
+
+
+func _draw_elev_outlet_discharge(p0: Vector2, p1: Vector2, q_lps: float) -> void:
+	var dir := p1 - p0
+	if dir.length_squared() < 1.0:
+		dir = Vector2(12.0, 8.0)
+	else:
+		dir = dir.normalized()
+	# Gravity bias on the jet.
+	var jet := dir * (18.0 + clampf(q_lps * 2.0, 0.0, 24.0)) + Vector2(0.0, 10.0)
+	var tip := p1 + jet
+	var col := Color(0.45, 0.85, 1.0, 0.9)
+	draw_line(p1, tip, col, _elev_stroke_px(2.8), true)
+	# Splash ticks at tip.
+	var n := Vector2(-jet.y, jet.x).normalized() * 6.0
+	draw_line(tip - n, tip + n, col, _elev_stroke_px(1.6), true)
+	draw_circle(tip, 3.5, Color(col.r, col.g, col.b, 0.75))
+	draw_string(ThemeDB.fallback_font, tip + Vector2(6, 4), "outlet",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(col.r, col.g, col.b, 0.8))
 
 
 # ---------------------------------------------------------------------------
@@ -5268,7 +8163,8 @@ func _draw_wire_metro_path(pts: Array, tangents: Array, col: Color, width: float
 			draw_pts.append(p as Vector2)
 	
 	# Apply 45-degree corner break (chamfering) using corner radius
-	var r := float(conn.get("corner_radius", 28.0)) * _zoom
+	var r := float(conn.get("_draw_corner_px",
+			float(conn.get("corner_radius", 28.0)) * _zoom))
 	var final_pts := PackedVector2Array()
 	if draw_pts.size() >= 2:
 		final_pts.append(draw_pts[0])
@@ -5338,6 +8234,9 @@ func _draw_wire_metro_path(pts: Array, tangents: Array, col: Color, width: float
 # ---------------------------------------------------------------------------
 
 func _disc_origin_screen() -> Vector2:
+	# Elevation deep-zoom uses metre anchors; disc chrome stays viewport-centred.
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		return size * 0.5
 	return size * 0.5 + _pan
 
 
@@ -5347,8 +8246,14 @@ func _is_physical_view() -> bool:
 
 
 func _item_screen_tl(item: Dictionary, center: Vector2) -> Vector2:
+	if _is_physical_view() and GraphSiteLayout.has_site_coords(item):
+		var proj: Variant = _phys_project_item_center(item)
+		if proj is Vector2:
+			return (proj as Vector2) - _item_screen_size(item) * 0.5
 	if view_mode == GraphSiteLayout.VIEW_SITE and GraphSiteLayout.has_site_coords(item):
-		return GraphSiteLayout.site_item_screen_tl(item, _disc_origin_screen(), _zoom)
+		var c := GraphSiteLayout.site_item_center_screen(
+				item, _disc_origin_screen(), _zoom)
+		return c - _item_screen_size(item) * 0.5
 	if view_mode == GraphSiteLayout.VIEW_ELEVATION and GraphSiteLayout.has_site_coords(item):
 		return _elevation_item_screen_tl(item)
 	if view_mode != GraphSiteLayout.VIEW_FREEFORM and not GraphSiteLayout.has_site_coords(item):
@@ -5362,15 +8267,20 @@ func _item_screen_tl(item: Dictionary, center: Vector2) -> Vector2:
 
 func _item_screen_size(item: Dictionary) -> Vector2:
 	if view_mode == GraphSiteLayout.VIEW_SITE and GraphSiteLayout.has_site_coords(item):
-		return GraphSiteLayout.site_item_screen_size(item, _zoom)
+		# Magnifiers are circular — square pad from the longer footprint axis.
+		var raw := GraphSiteLayout.site_item_screen_size(item, _zoom)
+		var side := maxf(raw.x, raw.y)
+		return Vector2(side, side)
 	if view_mode == GraphSiteLayout.VIEW_ELEVATION and GraphSiteLayout.has_site_coords(item):
 		var fp := GraphSiteLayout.physical_footprint_m(item)
 		var s := GraphSiteLayout.px_per_m(_zoom)
-		# Depth along the section for width; height from a short elevation band.
-		return Vector2(maxf(maxf(fp.x, fp.y) * s, 0.5), maxf(maxf(fp.y, 1.0) * s * 0.35, 0.5))
+		# Floor keeps chips grabbable; cap avoids megapixel chrome at deep zoom.
+		return Vector2(
+			clampf(maxf(fp.x, fp.y) * s, ELEV_CHIP_MIN_PX, ELEV_CHIP_MAX_PX),
+			clampf(maxf(fp.y, 1.0) * s * 0.35, ELEV_CHIP_MIN_H_PX, ELEV_CHIP_MAX_PX * 0.55))
 	if view_mode != GraphSiteLayout.VIEW_FREEFORM and not GraphSiteLayout.has_site_coords(item):
-		# Tray chips: scale with zoom like the rest of the map (no inverse floor).
-		return Vector2(72.0, 36.0) * maxf(_zoom, 0.15)
+		# Tray is screen-space UI — never scale with graph zoom.
+		return Vector2(72.0, 36.0)
 	return Vector2(float(item.get("width", 120.0)),
 		float(item.get("height", 90.0))) * _zoom
 
@@ -5378,8 +8288,32 @@ func _item_screen_size(item: Dictionary) -> Vector2:
 ## Hit/pick rect — physical views enlarge tiny footprints for usability.
 func _item_hit_rect(item: Dictionary) -> Rect2:
 	var center := size * 0.5
+	# Elev chips-off: compact pad (must run before the generic phys-projection
+	# path, which uses inflated chip floors and steals picks from the terrain).
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION and not elev_show_chips \
+			and GraphSiteLayout.has_site_coords(item):
+		var pad := _elev_port_pad_rect(item, Vector2.ZERO, Vector2.ZERO)
+		var hit_sz := Vector2(
+			maxf(pad.size.x, ELEV_HIT_MIN_PX),
+			maxf(pad.size.y, ELEV_HIT_MIN_PX * 0.6))
+		return Rect2(pad.get_center() - hit_sz * 0.5, hit_sz)
+	if _is_physical_view() and GraphSiteLayout.has_site_coords(item):
+		var proj: Variant = _phys_project_item_center(item)
+		if proj is Vector2:
+			var draw_sz := _item_screen_size(item)
+			var hit_sz := Vector2(
+				maxf(draw_sz.x, GraphSiteLayout.MIN_SITE_HIT_PX),
+				maxf(draw_sz.y, GraphSiteLayout.MIN_SITE_HIT_PX * 0.55))
+			return Rect2((proj as Vector2) - hit_sz * 0.5, hit_sz)
 	if view_mode == GraphSiteLayout.VIEW_SITE and GraphSiteLayout.has_site_coords(item):
-		return GraphSiteLayout.site_item_hit_rect(item, _disc_origin_screen(), _zoom)
+		# Square magnifier hit pad (matches _item_screen_size).
+		var c_site := GraphSiteLayout.site_item_center_screen(
+				item, _disc_origin_screen(), _zoom)
+		var hit_sz := _item_screen_size(item)
+		hit_sz = Vector2(
+			maxf(hit_sz.x, GraphSiteLayout.MIN_SITE_HIT_PX),
+			maxf(hit_sz.y, GraphSiteLayout.MIN_SITE_HIT_PX))
+		return Rect2(c_site - hit_sz * 0.5, hit_sz)
 	if view_mode == GraphSiteLayout.VIEW_ELEVATION and GraphSiteLayout.has_site_coords(item):
 		var tl := _elevation_item_screen_tl(item)
 		var draw_sz := _item_screen_size(item)
@@ -5394,16 +8328,23 @@ func _item_hit_rect(item: Dictionary) -> Rect2:
 
 
 func _elevation_item_screen_tl(item: Dictionary) -> Vector2:
-	var origin := _disc_origin_screen()
+	_ensure_elev_anchor()
 	var s := GraphSiteLayout.px_per_m(_zoom)
 	var site := GraphSiteLayout.site_xz(item)
-	var proj := GraphSiteLayout.project_onto_section(site, elevation_heading_rad)
+	var along_dir := Vector2(cos(elevation_heading_rad), sin(elevation_heading_rad))
 	var elev_m := _elevation_m_for_item(item)
 	var datum := _elevation_datum_m()
+	var origin := _disc_origin_screen()
+	var r_px := _soi_radius_m() * s
+	var center3 := Vector3(0.0, datum, 0.0)
+	var soi := _cached_autoload("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		center3 = soi.call("world_center") as Vector3
+	var use_proj := _phys_camera_projection_active()
+	var c := _elev_section_to_canvas(site, elev_m, origin, datum, s, along_dir,
+			center3, r_px, use_proj)
 	var sz := _item_screen_size(item)
-	var cx := origin.x + proj.x * s
-	var cy := origin.y - (elev_m - datum) * s * elevation_exaggeration
-	return Vector2(cx, cy) - sz * 0.5
+	return c - sz * 0.5
 
 
 func _elevation_datum_m() -> float:
@@ -5457,7 +8398,8 @@ func _draw_unplaced_tray() -> void:
 	draw_rect(tray, Color(0.06, 0.09, 0.16, 0.92), true)
 	draw_rect(tray, Color(0.25, 0.55, 0.85, 0.55), false, 1.5)
 	var fnt := ThemeDB.fallback_font
-	var label := "Unplaced (%d) — drop onto SoI disc" % list.size()
+	var label := "Unplaced (%d) — drop onto SoI disc (wires show once placed)" % list.size() \
+		if list.size() > 0 else "Unplaced (0)"
 	draw_string(fnt, tray.position + Vector2(10.0, -4.0), label,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.7, 0.85, 1.0, 0.85))
 	# Soft glow on the SoI disc when items wait to be placed.
@@ -5468,6 +8410,22 @@ func _draw_unplaced_tray() -> void:
 		if r_px > 8.0:
 			draw_arc(origin, r_px, 0.0, TAU, 64,
 					Color(0.3, 0.7, 1.0, 0.28), 2.0, true)
+		# Empty-site onboarding: nothing placed yet — say what this view is
+		# for, centered on the disc where the eye lands first.
+		var placed := 0
+		for item: Dictionary in _visible_items():
+			if GraphSiteLayout.has_site_coords(item):
+				placed += 1
+		if placed == 0:
+			var hint1 := "Nothing is placed on the site yet"
+			var hint2 := "Drag a chip from the tray below onto the disc — its position maps to the 3D world"
+			var f2 := ThemeDB.fallback_font
+			var w1 := f2.get_string_size(hint1, HORIZONTAL_ALIGNMENT_CENTER, -1, 15).x
+			var w2 := f2.get_string_size(hint2, HORIZONTAL_ALIGNMENT_CENTER, -1, 12).x
+			draw_string(f2, origin + Vector2(-w1 * 0.5, -6.0), hint1,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(0.85, 0.93, 1.0, 0.9))
+			draw_string(f2, origin + Vector2(-w2 * 0.5, 16.0), hint2,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.6, 0.78, 0.95, 0.75))
 
 
 ## Graph-space disc matching `_draw_soi_background` (origin + radius_px).
@@ -5477,34 +8435,100 @@ func get_soi_disc_layout() -> Dictionary:
 	if soi_svc != null and soi_svc.has_method("radius_m"):
 		r_m = float(soi_svc.call("radius_m"))
 	var r_px := r_m * GraphSiteLayout.SOI_PX_PER_M * _zoom
+	var origin := size * 0.5 if view_mode == GraphSiteLayout.VIEW_ELEVATION \
+			else size * 0.5 + _pan
 	return {
-		"origin": size * 0.5 + _pan,
+		"origin": origin,
 		"radius_px": r_px,
 		"radius_m": r_m,
 	}
 
 
+## Site Plan magnifier: transparent circular ring over the 3D twin.
+func _draw_site_magnifier(item: Dictionary, rect: Rect2, is_sel: bool) -> void:
+	var itype := str(item.get("type", ""))
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var iid := str(item.get("id", ""))
+	var is_hover := iid == _site_hover_item_id and not iid.is_empty()
+	var is_drag := _item_dragging and (
+			iid == _item_drag_id or _item_drag_ids.has(iid))
+	var border := NODE_BORDER_COLORS.get(itype, C_BORDER) as Color
+	if is_sel or is_drag:
+		border = C_SELECTED_BORDER
+	elif not str(specs.get("osm_tag", "")).is_empty():
+		if itype == "catchment":
+			if str(specs.get("catchment_kind", "")) == "watershed":
+				border = Color(0.25, 0.82, 0.72, 1.0)
+			else:
+				border = Color(1.0, 0.72, 0.18, 1.0)
+		elif itype == "plant":
+			border = Color(0.35, 0.85, 0.42, 1.0)
+	var c := rect.get_center()
+	# True footprint / OSM poly under the ring (ground truth, not opaque chrome).
+	_draw_true_footprint_outline(item, c, border)
+	_draw_osm_site_poly(item, c, border, is_sel)
+	var side := maxf(minf(rect.size.x, rect.size.y), GraphSiteLayout.MIN_SITE_HIT_PX)
+	var r := maxf(side * 0.5, 0.5)
+	# Keep the open aperture large — thin stroke so the 3D twin reads through.
+	var stroke := clampf(r * 0.08, 1.25, maxf(1.75, 2.25 * _zoom))
+	if is_sel or is_drag:
+		stroke = maxf(stroke, 2.0)
+	# Soft outer halo for hover / selection / drag feedback.
+	if is_sel or is_hover or is_drag:
+		var halo_a := 0.40 if (is_sel or is_drag) else 0.26
+		var halo_r := r + stroke * 2.0
+		draw_arc(c, halo_r, 0.0, TAU, 40,
+				Color(border.r, border.g, border.b, halo_a), maxf(1.25, stroke * 0.9), true)
+	# No opaque fill — aperture stays clear for the SoI 3D model.
+	draw_arc(c, r, 0.0, TAU, 40, border, stroke, true)
+	# Inner lip only when the ring is large enough to keep a clear center.
+	if r >= 18.0:
+		var inner_r := maxf(r - stroke * 1.4, r * 0.82)
+		draw_arc(c, inner_r, 0.0, TAU, 36,
+				Color(border.r, border.g, border.b, 0.30 if is_sel else 0.18),
+				maxf(0.9, stroke * 0.4), true)
+	# Labels: toggle + selected/drag, or large enough to not plug the aperture.
+	if (site_show_chips and r >= 22.0) or is_sel or is_drag:
+		var title := _site_plan_chip_title(item, specs, itype)
+		_draw_site_plan_chip_label(rect, title, is_sel or is_drag)
+
+
 func _draw_site_plan_chip(item: Dictionary, rect: Rect2, is_sel: bool) -> void:
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION and not elev_show_chips:
+		return
 	var itype := str(item.get("type", ""))
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var border := NODE_BORDER_COLORS.get(itype, C_BORDER) as Color
 	if is_sel:
 		border = C_SELECTED_BORDER
 	# OSM imports: amber roof / green field highlight matching world outlines.
+	# Watershed hillside catchments use teal so they read apart from roof rain.
 	if not str(specs.get("osm_tag", "")).is_empty():
 		if itype == "catchment":
-			border = Color(1.0, 0.72, 0.18, 1.0) if not is_sel else C_SELECTED_BORDER
+			if str(specs.get("catchment_kind", "")) == "watershed":
+				border = Color(0.25, 0.82, 0.72, 1.0) if not is_sel else C_SELECTED_BORDER
+			else:
+				border = Color(1.0, 0.72, 0.18, 1.0) if not is_sel else C_SELECTED_BORDER
 		elif itype == "plant":
 			border = Color(0.35, 0.85, 0.42, 1.0) if not is_sel else C_SELECTED_BORDER
+	# Physical-subject (has model_id): transparent chrome so the SoI 3D model shows.
+	var see_through := not str(specs.get("model_id", "")).is_empty() \
+			and GraphSiteLayout.has_site_coords(item)
 	var fill := Color(0.09, 0.14, 0.22, 0.92)
+	if see_through:
+		fill = Color(0.09, 0.14, 0.22, 0.08 if is_sel else 0.0)
 	var min_side := minf(rect.size.x, rect.size.y)
 	# Stroke scales with footprint so a 2 px panel isn't buried under a 4 px border.
 	var stroke := clampf(min_side * 0.12, 0.75, maxf(1.25, 2.0 * _zoom))
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
+		stroke = minf(stroke, ELEV_STROKE_MAX_PX)
 	var c := rect.get_center()
 	# True physical outline (1 px) when chip is scaled up beyond footprint.
 	_draw_true_footprint_outline(item, c, border)
-	# OSM polygon outline chip when local site-poly exists.
-	if _draw_osm_site_poly(item, c, border, is_sel):
+	# OSM polygon is a plan footprint — never draw it in Elevation (confusing
+	# floating outline). Site plan keeps the true poly chip.
+	if view_mode != GraphSiteLayout.VIEW_ELEVATION \
+			and _draw_osm_site_poly(item, c, border, is_sel):
 		var title_osm := _site_plan_chip_title(item, specs, itype)
 		_draw_site_plan_chip_label(rect, title_osm, is_sel)
 		return
@@ -5515,15 +8539,17 @@ func _draw_site_plan_chip(item: Dictionary, rect: Rect2, is_sel: bool) -> void:
 		var loc_a := 0.55 if is_sel else 0.28
 		draw_arc(c, loc_r, 0.0, TAU, 28,
 				Color(border.r, border.g, border.b, loc_a), 1.0, true)
-	if GraphSiteLayout.uses_circular_plan_chip(item):
+	if GraphSiteLayout.uses_circular_plan_chip(item, view_mode):
 		var r := maxf(min_side * 0.5, 0.5)
-		draw_circle(c, r, fill)
+		if fill.a > 0.01:
+			draw_circle(c, r, fill)
 		draw_arc(c, r, 0.0, TAU, 32, border, stroke, true)
 	else:
-		draw_rect(rect, fill, true)
+		if fill.a > 0.01:
+			draw_rect(rect, fill, true)
 		draw_rect(rect, border, false, stroke)
 		# Solar-array packs: light module grid so the footprint reads as panels.
-		if itype == "compound" \
+		if not see_through and itype == "compound" \
 				and str(specs.get("compound_kind", "")) == "array" \
 				and rect.size.x >= 10.0 and rect.size.y >= 8.0:
 			_draw_site_array_grid(rect, specs, border)
@@ -5541,7 +8567,7 @@ func _draw_true_footprint_outline(item: Dictionary, center: Vector2, border: Col
 		return
 	var true_rect := Rect2(center - true_sz * 0.5, true_sz)
 	var col := Color(border.r, border.g, border.b, 0.45 if true_sz.x >= 4.0 else 0.3)
-	if GraphSiteLayout.uses_circular_plan_chip(item):
+	if GraphSiteLayout.uses_circular_plan_chip(item, view_mode):
 		var r := maxf(minf(true_sz.x, true_sz.y) * 0.5, 0.5)
 		draw_arc(center, r, 0.0, TAU, 28, col, 1.0, true)
 	else:

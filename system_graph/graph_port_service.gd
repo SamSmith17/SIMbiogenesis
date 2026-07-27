@@ -78,12 +78,16 @@ static func resolved_handles(item: Dictionary, static_handles: Dictionary) -> Ar
 					"rx": rx + 0.035, "ry": 0.0,
 				})
 			else:
-				handles.append({
+				var hin := {
 					"id": "res_in_%d" % i,
 					"polarity": "resource",
 					"resource_kind": kind_i,
 					"rx": rx, "ry": 0.0,
-				})
+				}
+				# Siphon-style: water enters through the module body (no 3D tube).
+				if bool(inp.get("direct_intake", false)):
+					hin["direct_intake"] = true
+				handles.append(hin)
 			top_idx += 1
 
 		for i: int in outputs.size():

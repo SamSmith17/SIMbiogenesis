@@ -9,7 +9,8 @@ const STARSHADE_TAG := "starshade_site"
 const _SCENE_KEYWORDS := ["starshade", "linkagelab_export"]
 
 
-static func try_seed_from_main(main: Node, terrain_loader: Node = null) -> bool:
+static func try_seed_from_main(main: Node, terrain_loader: Node = null,
+		prop_id: String = "") -> bool:
 	if main == null:
 		return false
 	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
@@ -23,15 +24,77 @@ static func try_seed_from_main(main: Node, terrain_loader: Node = null) -> bool:
 	var info := detect_starshade(main, terrain_loader)
 	if not bool(info.get("found", false)):
 		return false
-	if seed_graph(model, int(info.get("panel_count", DEFAULT_PANEL_COUNT)),
+	var seeded := seed_graph(model, int(info.get("panel_count", DEFAULT_PANEL_COUNT)),
 			float(info.get("panel_watts", DEFAULT_PANEL_WATTS)),
-			str(info.get("tag", STARSHADE_TAG))):
+			str(info.get("tag", STARSHADE_TAG)))
+	# Always attempt prop↔compound bind (covers already-seeded graphs too).
+	var bind_id := prop_id
+	if bind_id.is_empty():
+		bind_id = str(info.get("prop_id", ""))
+	if bind_id.is_empty():
+		bind_id = find_starshade_prop_id(main, terrain_loader)
+	var bound := bind_starshade_prop(model, bind_id)
+	if seeded or bound:
 		if sgv.has_method("_sync_solar_ui_from_graph"):
 			sgv.call("_sync_solar_ui_from_graph")
 		if sgv.has_method("_schedule_graph_autosave"):
 			sgv.call("_schedule_graph_autosave")
+		return seeded or bound
+	return false
+
+
+## Stamp bound_prop_id on the top-level StarShade compound so 3D conduits can
+## anchor. No-op if already bound to this prop; skips compounds bound to another.
+static func bind_starshade_prop(model: GraphModel, prop_id: String) -> bool:
+	if model == null or prop_id.is_empty():
+		return false
+	for item: Dictionary in model.items:
+		if str(item.get("type", "")) != "compound":
+			continue
+		if str(item.get("scope_id", "root")) != "root":
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		var is_ss := str(specs.get("definition_id", "")) == "starshade" \
+				or str(specs.get("source", "")) == STARSHADE_SOURCE \
+				or str(specs.get("starshade_tag", "")).begins_with("starshade") \
+				or str(specs.get("model_id", "")) == "starshade"
+		if not is_ss:
+			continue
+		var existing := str(specs.get("bound_prop_id", ""))
+		if existing == prop_id:
+			return true
+		if not existing.is_empty():
+			continue
+		var patch: Dictionary = specs.duplicate(true)
+		patch["bound_prop_id"] = prop_id
+		if str(patch.get("model_id", "")).is_empty():
+			patch["model_id"] = "starshade"
+		model.update_item(str(item.get("id", "")), {"specs": patch})
 		return true
 	return false
+
+
+static func find_starshade_prop_id(main: Node, terrain_loader: Node = null) -> String:
+	var layer: Variant = null
+	if terrain_loader != null:
+		layer = terrain_loader.get("_placed_prop_layer")
+	if layer == null and main != null:
+		var terrain := main.get_node_or_null("Terrain")
+		if terrain != null:
+			for child in terrain.get_children():
+				if child.has_method("find_by_id") and child.get("props") != null:
+					layer = child
+					break
+	if layer == null or layer.get("props") == null:
+		return ""
+	for item: Variant in (layer.get("props") as Array):
+		if not (item is Dictionary):
+			continue
+		var d := item as Dictionary
+		var mid := str(d.get("model_id", ""))
+		if ModelCatalog.is_starshade_model(mid):
+			return str(d.get("id", ""))
+	return ""
 
 
 static func has_graph_content(model: GraphModel) -> bool:
@@ -80,93 +143,65 @@ static func seed_graph(model: GraphModel, panel_count: int, panel_watts: float,
 		return false
 	if has_graph_content(model):
 		return false
-	var n := mini(panel_count, GraphVirtualIds.ARRAY_PANEL_COUNT)
-	var panel_ids: Array[String] = []
-	for i in range(n):
-		var iid := "starshade_pv_%02d" % (i + 1)
-		panel_ids.append(iid)
-		var pos := GraphVirtualIds.panel_node_position(i)
-		model.add_item({
-			"id": iid,
-			"type": "panel",
-			"x": pos.x,
-			"y": pos.y,
-			"width": 66.0,
-			"height": 112.0,
-			"scope_id": "root",
-			"is_virtual": false,
-			"specs": {
-				"name": "StarShade PV-%02d" % (i + 1),
-				"source": STARSHADE_SOURCE,
-				"starshade_tag": tag,
-				"wmp": panel_watts,
-				"voc": 37.5,
-				"vmp": 30.0,
-				"isc": 8.7,
-				"imp": panel_watts / 30.0,
-				"cost": 300.0,
-				"current_output_kw": 0.0,
-			},
-		})
-	var ctrl_id := "starshade_ctrl"
-	var ctrl_preset: Dictionary = {}
-	for p: Dictionary in ComponentPresets.CONTROLLERS:
-		if str(p.get("label", "")) == "EcoWorthy SL3500":
-			ctrl_preset = p
-			break
-	var ctrl_specs: Dictionary = (ctrl_preset.get("specs", {}) as Dictionary).duplicate(true)
-	ctrl_specs["source"] = STARSHADE_SOURCE
-	ctrl_specs["starshade_tag"] = tag
-	model.add_item({
-		"id": ctrl_id,
-		"type": "controller",
-		"x": 140.0,
-		"y": -120.0,
-		"width": float(ctrl_preset.get("width", 140.0)),
-		"height": float(ctrl_preset.get("height", 120.0)),
-		"scope_id": "root",
-		"is_virtual": false,
-		"specs": ctrl_specs,
-	})
-	var bat_specs := {
-		"name": "48V 50Ah LiFePO4",
-		"voltage": 51.2,
-		"ah": 50.0,
-		"kwh": 2.56,
-		"soc": 0.80,
-		"cost": 650.0,
-		"source": STARSHADE_SOURCE,
-		"starshade_tag": tag,
-	}
-	for j in range(2):
-		var bat_id := "starshade_bat_%c" % char(97 + j)
-		model.add_item({
-			"id": bat_id,
-			"type": "battery",
-			"x": 340.0 + float(j) * 140.0,
-			"y": -100.0,
-			"width": 100.0,
-			"height": 136.0,
-			"scope_id": "root",
-			"is_virtual": false,
-			"specs": bat_specs.duplicate(true),
-		})
-		_wire_battery(model, bat_id, ctrl_id, j)
-	if n == GraphVirtualIds.ARRAY_PANEL_COUNT:
-		_wire_panel_array(model, panel_ids, ctrl_id)
-	else:
-		GraphPvWiring.wire_series(model, panel_ids, ctrl_id)
+	# Realize the multi-level StarShade COMPONENT (solar array / hybrid inverter /
+	# battery bank -> panels / CC+inverter circuits / batteries) instead of flat
+	# nodes. `source`/`starshade_tag` ride as instance-only identity so HA linking,
+	# dedupe (has_graph_content) and clear_starshade_content keep working, and the
+	# structure stays live-editable (edits inside it propagate to any sibling).
+	var defs: Dictionary = ComponentPresets.builtin_component_tree("starshade")
+	for did in defs.keys():
+		if model.get_definition(str(did)).is_empty():
+			model.put_definition(defs[did] as Dictionary)
+	var comp_id := GraphComponentDefs.realize(model, "starshade", "root",
+		Vector2(0.0, -60.0), {"source": STARSHADE_SOURCE, "starshade_tag": tag})
+	if comp_id.is_empty():
+		return false
+	# Tidy each realized child scope so the structure reads cleanly regardless of
+	# the template's seed positions (mirrors PuzzleStarterGraphSeeder._finish_seed).
+	_layout_realized_scopes(model, comp_id)
 	model.changed.emit("starshade_seed")
-	print("StarShadeGraphSeeder: seeded %d panels @ %.0f W + EcoWorthy + 2× battery" % [
-		n, panel_watts])
+	print("StarShadeGraphSeeder: seeded StarShade component (nested array + hybrid inverter + battery bank)")
 	return true
+
+
+## Lay out every realized child scope of a just-stamped component — panel-heavy
+## scopes get a clean grid, everything else a light force-directed relaxation
+## (same path Arrange uses via SystemGraphView._layout_compound_scopes).
+static func _layout_realized_scopes(model: GraphModel, comp_id: String) -> void:
+	if model == null or comp_id.is_empty():
+		return
+	var comp := model.get_item(comp_id)
+	var root_child := str(comp.get("child_scope_id", ""))
+	if root_child.is_empty():
+		return
+	for sid in GraphNesting.descendant_scopes(model, root_child):
+		var items: Array = GraphLayout.filter_layout_items(
+				model.get_items_in_scope(str(sid)))
+		if items.size() < 2:
+			continue
+		var panels := 0
+		for it: Dictionary in items:
+			if str(it.get("type", "")) == "panel":
+				panels += 1
+		var patches: Dictionary
+		if panels >= items.size() * 0.6:
+			var cols := maxi(1, int(round(sqrt(float(items.size())))))
+			patches = GraphLayout.layout_grid(items, cols, Vector2(24.0, 24.0))
+		else:
+			var conns: Array = model.get_connections_in_scope(str(sid)) \
+					if model.has_method("get_connections_in_scope") else []
+			patches = GraphLayout.relax_forces(items, conns)
+		for iid_v in patches.keys():
+			var pos: Vector2 = patches[iid_v] as Vector2
+			model.update_item(str(iid_v), {"x": pos.x, "y": pos.y})
 
 
 static func count_panels(model: GraphModel) -> int:
 	var n := 0
 	if model == null:
 		return 0
-	for item: Dictionary in model.get_items_in_scope("root"):
+	# Walk nested scopes — StarShade panels now live inside the component tree.
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
 		if str(item.get("type", "")) == "panel":
@@ -178,7 +213,7 @@ static func total_battery_kwh(model: GraphModel) -> float:
 	var kwh := 0.0
 	if model == null:
 		return 0.0
-	for item: Dictionary in model.get_items_in_scope("root"):
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype := str(item.get("type", ""))
@@ -193,10 +228,15 @@ static func detect_starshade(main: Node, terrain_loader: Node = null) -> Diction
 		"panel_count": DEFAULT_PANEL_COUNT,
 		"panel_watts": DEFAULT_PANEL_WATTS,
 		"tag": STARSHADE_TAG,
+		"prop_id": "",
 	}
 	if main == null:
 		return out
-	if _placed_has_starshade(main, terrain_loader) or _scene_has_starshade(main):
+	var pid := find_starshade_prop_id(main, terrain_loader)
+	if not pid.is_empty():
+		out["found"] = true
+		out["prop_id"] = pid
+	elif _scene_has_starshade(main):
 		out["found"] = true
 	return out
 

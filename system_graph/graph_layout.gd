@@ -155,6 +155,122 @@ static func compute_fit_view(bounds: Rect2, canvas_size: Vector2,
 	return {"pan_x": pan.x, "pan_y": pan.y, "zoom": zoom}
 
 
+## Arrange `items` into a centered grid of `cols` columns with `spacing`
+## (Vector2, px gap between cell edges). Returns position patches {id: Vector2}
+## with the grid centered on the average of the current positions (so a
+## localized cluster stays roughly where it was). Excluded items are skipped.
+static func layout_grid(items: Array, cols: int, spacing: Vector2) -> Dictionary:
+	var laid := filter_layout_items(items)
+	var patches: Dictionary = {}
+	if laid.is_empty():
+		return patches
+	cols = maxi(1, cols)
+	# Uniform cell = widest x tallest item, so rows/cols align cleanly.
+	var cell_w := 0.0
+	var cell_h := 0.0
+	var center := Vector2.ZERO
+	for it in laid:
+		var d: Dictionary = it
+		cell_w = maxf(cell_w, float(d.get("width", 120.0)))
+		cell_h = maxf(cell_h, float(d.get("height", 90.0)))
+		center += Vector2(float(d.get("x", 0.0)), float(d.get("y", 0.0)))
+	center /= float(laid.size())
+	var step_x := cell_w + spacing.x
+	var step_y := cell_h + spacing.y
+	var rows := int(ceil(float(laid.size()) / float(cols)))
+	var grid_w := (cols - 1) * step_x
+	var grid_h := (rows - 1) * step_y
+	var origin := center - Vector2(grid_w, grid_h) * 0.5
+	for i in laid.size():
+		var d2: Dictionary = laid[i]
+		var iid := str(d2.get("id", ""))
+		if iid.is_empty():
+			continue
+		var r := i / cols
+		var c := i % cols
+		# Cell center, then offset back to top-left corner by this item's size so
+		# uneven-size items stay visually centered in their cell.
+		var cell_center := origin + Vector2(c * step_x, r * step_y)
+		var w := float(d2.get("width", 120.0))
+		var h := float(d2.get("height", 90.0))
+		patches[iid] = cell_center - Vector2((w - cell_w) * 0.5, (h - cell_h) * 0.5)
+	return patches
+
+
+## Light force-directed relaxation: connected items attract (spring toward a
+## rest length), all pairs repel, then overlaps are pushed apart. Cheap and
+## bounded (few iterations) — used to tidy a freshly-realized child scope so
+## nodes don't stack on the template's default positions. Returns {id: Vector2}.
+static func relax_forces(items: Array, connections: Array,
+		iterations: int = 60, rest_len: float = 210.0,
+		repel: float = 42000.0, spring: float = 0.02) -> Dictionary:
+	var laid := filter_layout_items(items)
+	var patches: Dictionary = {}
+	if laid.size() < 2:
+		return patches
+	var pos: Dictionary = {}
+	var sizes: Dictionary = {}
+	for it in laid:
+		var d: Dictionary = it
+		var iid := str(d.get("id", ""))
+		if iid.is_empty():
+			continue
+		pos[iid] = Vector2(float(d.get("x", 0.0)), float(d.get("y", 0.0)))
+		sizes[iid] = Vector2(float(d.get("width", 120.0)), float(d.get("height", 90.0)))
+	var ids: Array = pos.keys()
+	# Build adjacency from connection endpoints (source_item/target_item).
+	var edges: Array = []
+	for conn in connections:
+		if not (conn is Dictionary):
+			continue
+		var a := str((conn as Dictionary).get("source_item_id", ""))
+		var b := str((conn as Dictionary).get("target_item_id", ""))
+		if pos.has(a) and pos.has(b) and a != b:
+			edges.append([a, b])
+	for _iter in iterations:
+		var disp: Dictionary = {}
+		for iid in ids:
+			disp[iid] = Vector2.ZERO
+		# Repulsion (all pairs).
+		for i in ids.size():
+			for j in range(i + 1, ids.size()):
+				var ia := str(ids[i])
+				var ib := str(ids[j])
+				var delta: Vector2 = pos[ia] - pos[ib]
+				var dist := maxf(delta.length(), 1.0)
+				var force := repel / (dist * dist)
+				var dir := delta / dist
+				disp[ia] += dir * force
+				disp[ib] -= dir * force
+		# Spring attraction along edges.
+		for e in edges:
+			var ea := str(e[0])
+			var eb := str(e[1])
+			var d2: Vector2 = pos[eb] - pos[ea]
+			var dist2 := maxf(d2.length(), 1.0)
+			var f := (dist2 - rest_len) * spring
+			var dir2 := d2 / dist2
+			disp[ea] += dir2 * f
+			disp[eb] -= dir2 * f
+		# Integrate with a hard step clamp so it can't explode.
+		for iid in ids:
+			var mv: Vector2 = disp[iid]
+			if mv.length() > 40.0:
+				mv = mv.normalized() * 40.0
+			pos[iid] += mv
+	# Final overlap resolution on the relaxed positions.
+	for it2 in laid:
+		var d3: Dictionary = it2
+		var iid3 := str(d3.get("id", ""))
+		if pos.has(iid3):
+			d3["x"] = pos[iid3].x
+			d3["y"] = pos[iid3].y
+	var ov := resolve_overlaps(laid)
+	for iid4 in pos.keys():
+		patches[iid4] = ov.get(iid4, pos[iid4])
+	return patches
+
+
 ## Nudge `pos` so a new item at `size` does not overlap existing items.
 static func nudge_spawn_position(pos: Vector2, size: Vector2, items: Array,
 		padding: float = DEFAULT_PADDING) -> Vector2:

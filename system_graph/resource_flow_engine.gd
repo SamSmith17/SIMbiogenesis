@@ -27,6 +27,12 @@ signal processor_blocked(item_id: String, resource_kinds: Array)
 ## Fires only on transition; see GraphNodeState for the vocabulary.
 signal node_state_changed(item_id: String, state: String, reason: String, kinds: Array)
 
+## Process-recipe part outputs ready for PartInventory credit.
+signal recipe_parts_ready(item_id: String, parts: Array)
+
+## Process-recipe paused for a hybrid chore confirm / labor gate.
+signal recipe_chore_waiting(item_id: String, request: Dictionary)
+
 ## Potable → greywater / blackwater split (mass-conserving).
 ## Domestic wastewater split is typically ~70–90% grey / ~10–30% black;
 ## 80/20 is a standard first-order CELSS / household bookkeeping split.
@@ -65,6 +71,10 @@ var wind_humidity_override_pct: float = -1.0
 var wind_cloud_override: float = -1.0
 var wind_rain_override_mmh: float = -1.0
 
+## Optional per-map chore-hours ledger (hybrid auto-debit / confirm gates).
+## Set by SystemGraphView from TerrainLoader; null = uncapped auto-debit.
+var chore_ledger: ChoreLedger = null
+
 ## Batch-render context. When active, weather (rain/month) is sampled at
 ## `_render_abs_hours` instead of the live clock so the resource sim becomes a
 ## pure function of absolute time (deterministic, reproducible pre-render + scrub).
@@ -76,12 +86,31 @@ var _render_abs_hours: float = 0.0
 ## tick (previously ResourceKinds.new() at every call site below).
 var _rk := ResourceKinds.new()
 
+## Shared HydroReach — reused across siphons/ticks instead of HydroReach.new()
+## per siphon per tick (it's reconfigured from specs+pond state each use). The
+## single physics authority for pond drain, so the outlet can never be credited
+## more water than the pond actually held above the air-break dead pool.
+var _reach := HydroReach.new()
+
 var _model: GraphModel = null
 var _host: Node = null
 var _timelines: Dictionary = {}   # item_id -> ResourceTimeline
 var _last_abs_hours: float = -1.0
 var _tick_accum: float = 0.0
 const TICK_INTERVAL := 0.25
+## At very high wall time_scale, poll less often; each step still uses full dt_hours.
+const TICK_INTERVAL_HIGH_SPEED := 0.5
+const HIGH_SPEED_TIME_SCALE := 0.125  # ~450× realtime (1/3600 * 450)
+## When the world clock is frozen (Elev noon-lock / pause), Lab Test Inflow still
+## advances pond stock on wall time at this effective scale so the CT responds.
+const LAB_PAUSE_FILL_SCALE := 60.0
+
+## Once-per-_simulate_step ambient snapshot (rain / GHI / atmosphere).
+var _ambient_valid: bool = false
+var _ambient_rain_mmh: float = 0.0
+var _ambient_ghi_wm2: float = 0.0
+var _ambient_cloud_frac: float = 0.0
+var _ambient_atmo: Dictionary = {}
 
 ## conn_id -> {rate, active} cached for wire animation
 var _conn_flow: Dictionary = {}
@@ -120,10 +149,21 @@ func _rebuild_conn_index() -> void:
 	_conn_by_id.clear()
 	if _model == null:
 		return
-	for conn: Dictionary in _model.connections:
-		var cid := str(conn.get("id", ""))
-		if not cid.is_empty():
-			_conn_by_id[cid] = conn
+	# _conn_by_id must reference the REAL connection dicts so _cache_conn_flow's
+	# flow_rate/flow_active writeback animates the actual (possibly boundary)
+	# wire the player sees.
+	for real_conn: Dictionary in _model.connections:
+		var rcid := str(real_conn.get("id", ""))
+		if not rcid.is_empty():
+			_conn_by_id[rcid] = real_conn
+	# Adjacency is built from the FLATTENED graph: every edge's endpoints are
+	# resolved through transparent super-node (compound) portals down to the leaf
+	# item/handle that actually carries the resource. This makes arbitrarily deep
+	# nesting transparent to the flow sim — a tank feeding a processor buried in
+	# nested compounds resolves to a direct tank->processor edge. Each flat edge
+	# keeps its origin conn id, so _cache_conn_flow(edge.id) still hits the real
+	# wire via _conn_by_id above.
+	for conn: Dictionary in GraphNesting.flat_connections(_model):
 		var sid := str(conn.get("source_item_id", ""))
 		var shid := str(conn.get("source_handle_id", ""))
 		var tid := str(conn.get("target_item_id", ""))
@@ -205,12 +245,42 @@ func seek_all_tanks(abs_hours: float) -> void:
 	_last_abs_hours = abs_hours
 
 
+func _wall_tick_interval() -> float:
+	var ts := _host_time_scale()
+	if ts >= HIGH_SPEED_TIME_SCALE:
+		return TICK_INTERVAL_HIGH_SPEED
+	return TICK_INTERVAL
+
+
+func _host_time_scale() -> float:
+	if _host == null:
+		return 0.0
+	var main_node: Node = null
+	if _host.has_method("_get_scene_main_node"):
+		main_node = _host.call("_get_scene_main_node")
+	if main_node == null:
+		return 0.0
+	var ts: Variant = main_node.get("time_scale")
+	return absf(float(ts)) if ts != null else 0.0
+
+
+
+## Cheap, non-mutating predicate: would tick(delta) actually run a step this frame,
+## or just accumulate and early-out? Lets the ambient caller skip its bulk-sync /
+## history-suppress / PerfMonitor overhead on the ~59/60 frames that do nothing.
+func would_tick(delta: float) -> bool:
+	if _model == null or _host == null:
+		return false
+	return (_tick_accum + delta) >= _wall_tick_interval()
+
+
 func tick(delta: float) -> void:
 	if _model == null or _host == null:
 		return
 	_tick_accum += delta
-	if _tick_accum < TICK_INTERVAL:
+	if _tick_accum < _wall_tick_interval():
 		return
+	var wall_dt_s := _tick_accum
 	_tick_accum = 0.0
 
 	var abs_hours := _get_abs_hours()
@@ -229,12 +299,40 @@ func tick(delta: float) -> void:
 
 	if scrubbing_back:
 		_read_all_tanks_at(abs_hours)
+		# Tanks rewound, but siphon RPM/power/prime + culvert flow are written only
+		# on the forward path — re-derive them from the restored pond level so the
+		# hydro readouts rewind with the water instead of freezing.
+		_refresh_hydro_telemetry_readonly()
 	else:
 		if dt_hours > 0.0:
 			_simulate_step(abs_hours, dt_hours)
 		else:
 			_read_all_tanks_at(abs_hours)
+			# Clock frozen (Elev noon-lock / pause) — Test Inflow still fills
+			# on wall time so Hydro Lab CT / overlays respond.
+			if _lab_sim_inflow_active():
+				_apply_lab_sim_inflow_realtime(wall_dt_s)
 
+	_last_abs_hours = abs_hours
+
+
+## Advance the engine to an explicit absolute-hours timestamp (offline / tools /
+## selftests). Same `_simulate_step` primitive that tick() drives, with the time
+## supplied directly so headless callers can integrate without a scene clock.
+## NOT wired into any per-frame game path — production advances only through
+## tick(delta) off the world clock (Phase 1: one clock).
+func step_at(abs_hours: float, dt_hours: float) -> void:
+	if _model == null:
+		return
+	_conn_flow.clear()
+	for conn: Dictionary in _model.connections:
+		conn["flow_active"] = false
+		conn["flow_rate"] = 0.0
+	_ensure_timelines()
+	if dt_hours > 0.0:
+		_simulate_step(abs_hours, dt_hours)
+	else:
+		_read_all_tanks_at(abs_hours)
 	_last_abs_hours = abs_hours
 
 
@@ -256,7 +354,8 @@ func _get_abs_hours() -> float:
 ## for ResourceTimeline integration. Call sites that gate on "full" / overflow
 ## MUST use _tank_is_unlimited / _tank_accepts_inflow — the 1e12 sentinel alone
 ## is not enough (level can eventually hit 0.999 and block processors).
-const UNLIMITED_CAPACITY_QTY := 1.0e12
+## Prefer specs.allow_negative for "never block + visible stock" (deficit tanks).
+const UNLIMITED_CAPACITY_QTY := ResourceKinds.UNLIMITED_CAPACITY_QTY
 
 
 func _effective_capacity_qty(specs: Dictionary) -> float:
@@ -303,21 +402,21 @@ func _ensure_timelines() -> void:
 func _ensure_timelines_at(abs_hours: float) -> void:
 	var live_ids: Dictionary = {}
 	var anchor_h: float = abs_hours if abs_hours >= 0.0 else 0.0
-	for item: Dictionary in _model.items:
-		if str(item.get("type", "")) != "resource":
-			continue
+	for item: Dictionary in _model.items_of_type("resource"):
 		var iid: String = str(item.get("id", ""))
 		if iid.is_empty():
 			continue
 		live_ids[iid] = true
-		if _timelines.has(iid):
-			continue
-		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-		_rk.migrate_resource_specs(specs)
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(false)
+		_migrate_resource_specs_if_needed(specs)
 		# Deficit-capable ("allow_negative") tanks track an unbounded net stock
 		# directly on specs.level instead of a clamped ResourceTimeline — see
-		# the integration branch in _simulate_step.
+		# the integration branch in _simulate_step. Drop any leftover timeline
+		# when the flag is toggled on mid-session.
 		if bool(specs.get("allow_negative", false)):
+			_timelines.erase(iid)
+			continue
+		if _timelines.has(iid):
 			continue
 		var tl := ResourceTimelineScript.new()
 		tl.configure(_effective_capacity_qty(specs))
@@ -330,9 +429,7 @@ func _ensure_timelines_at(abs_hours: float) -> void:
 
 
 func _read_all_tanks_at(abs_hours: float) -> void:
-	for item: Dictionary in _model.items:
-		if str(item.get("type", "")) != "resource":
-			continue
+	for item: Dictionary in _model.items_of_type("resource"):
 		var iid: String = str(item.get("id", ""))
 		if not _timelines.has(iid):
 			continue
@@ -344,10 +441,22 @@ func _read_all_tanks_at(abs_hours: float) -> void:
 func _apply_tank_sample(item: Dictionary, sample: Dictionary,
 		tl: ResourceTimeline = null, abs_hours: float = -1.0) -> void:
 	var orig_specs: Dictionary = item.get("specs", {}) as Dictionary
-	var specs: Dictionary = orig_specs.duplicate(true)
+	var specs: Dictionary = orig_specs.duplicate(false)
 	specs["level"] = float(sample.get("level", specs.get("level", 0.0)))
 	specs["inflow_rate"] = float(sample.get("inflow_rate", 0.0))
 	specs["outflow_rate"] = float(sample.get("outflow_rate", 0.0))
+	# Pond twin: Auto fill keeps stock_l in lockstep with tank level.
+	# Mesh surface uses bathymetric inverse via SystemGraphView.push_pond_levels_to_mesh
+	# → terrain_loader.set_pond_stock_l_by_tag; level_m here is a linear Elev fallback.
+	if bool(specs.get("pond_storage", false)) \
+			and str(specs.get("fill_mode", "auto")) != "manual":
+		var cap := maxf(float(specs.get("capacity_qty", 100.0)), 0.001)
+		specs["stock_l"] = clampf(float(specs["level"]), 0.0, 1.0) * cap
+		var rim := float(specs.get("rim_m", NAN))
+		var floor_y := float(specs.get("floor_m", NAN))
+		if not is_nan(rim) and not is_nan(floor_y):
+			var span := maxf(rim - floor_y, 0.05)
+			specs["level_m"] = floor_y + clampf(float(specs["level"]), 0.0, 1.0) * span
 	var iid := str(item.get("id", ""))
 	var overflow_flip := false
 	var over := false
@@ -362,7 +471,7 @@ func _apply_tank_sample(item: Dictionary, sample: Dictionary,
 			over = tl.is_overflowing_at(abs_hours)
 			overflow_flip = over != bool(specs.get("overflowing", false))
 			specs["overflowing"] = over
-			specs["overflow_qty"] = tl.total_overflow_qty
+			specs["overflow_qty"] = 0.0 if not over else tl.total_overflow_qty
 	# Tanks carry an OVERFLOW node state (drives the shared alert overlay); no
 	# state otherwise (nominal — level fill speaks for itself).
 	var new_state := GraphNodeState.OVERFLOW if over else ""
@@ -397,20 +506,32 @@ func _apply_tank_sample(item: Dictionary, sample: Dictionary,
 ## the canvas) without ever blocking whatever is drawing from it.
 func _integrate_deficit_tank(iid: String, specs: Dictionary,
 		net_rates: Dictionary, dt_hours: float) -> void:
+	var item: Dictionary = _model.get_item(iid) if _model != null else {}
+	var orig: Dictionary = item.get("specs", {}) as Dictionary if not item.is_empty() else {}
 	var cap: float = maxf(float(specs.get("capacity_qty", 100.0)), 0.001)
 	var net: float = float(net_rates.get(iid, 0.0))
 	var level: float = float(specs.get("level", 0.0)) + (net * dt_hours) / cap
+	var infl: float = maxf(net, 0.0)
+	var outf: float = maxf(-net, 0.0)
+	var deficit: float = maxf(-level, 0.0) * cap
 	specs["level"] = level
-	specs["inflow_rate"] = maxf(net, 0.0)
-	specs["outflow_rate"] = maxf(-net, 0.0)
+	specs["inflow_rate"] = infl
+	specs["outflow_rate"] = outf
 	specs["overflowing"] = false
-	specs["deficit_qty"] = maxf(-level, 0.0) * cap
+	specs["deficit_qty"] = deficit
 	specs["node_state"] = ""
-	_model.update_item(iid, {"specs": specs})
+	const EPS := 0.0005
+	if absf(level - float(orig.get("level", 0.0))) > EPS \
+			or absf(infl - float(orig.get("inflow_rate", 0.0))) > EPS \
+			or absf(outf - float(orig.get("outflow_rate", 0.0))) > EPS \
+			or absf(deficit - float(orig.get("deficit_qty", 0.0))) > EPS \
+			or str(orig.get("node_state", "")) != "":
+		_model.update_item(iid, {"specs": specs})
 
 
 func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 	_rebuild_conn_index()
+	_refresh_ambient_cache()
 	# Per-tank net rates (qty/hour in tank's capacity units)
 	var net_rates: Dictionary = {}
 
@@ -425,15 +546,16 @@ func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 		elif ty == "plant":
 			_process_plant(item, net_rates, dt_hours, abs_hours)
 
+	_process_culvert_stage_discharge(net_rates, dt_hours, abs_hours)
+	_process_siphon_hydro(net_rates, dt_hours, abs_hours)
 	_process_jit_transfers(net_rates, dt_hours, abs_hours)
 
 	# Integrate timelines
-	for item: Dictionary in _model.items:
-		if str(item.get("type", "")) != "resource":
-			continue
+	for item: Dictionary in _model.items_of_type("resource"):
 		var iid: String = str(item.get("id", ""))
-		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-		_rk.migrate_resource_specs(specs)
+		# Shallow copy — tank integrate only mutates scalar telemetry keys.
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(false)
+		_migrate_resource_specs_if_needed(specs)
 		if bool(specs.get("allow_negative", false)):
 			_integrate_deficit_tank(iid, specs, net_rates, dt_hours)
 			continue
@@ -708,13 +830,16 @@ func _process_catchment(item: Dictionary, net_rates: Dictionary, dt_hours: float
 	if kind == "biomass":
 		_process_biomass_catchment(item, specs, net_rates, dt_hours, abs_hours)
 		return
+	# Pond surface + DEM watershed catchments rain-feed directly (no Rain-PBI wire).
+	# Culvert stage-discharge outflows are applied separately (Phase 3).
+	var pond_direct := kind == "pond" or kind == "watershed"
 	# Rain catchments require an inbound wire from a Rain PBI node.
-	if not _catchment_has_pbi_feed(item, "water"):
+	if not pond_direct and not _catchment_has_pbi_feed(item, "water"):
 		specs["live_capture_lph"] = 0.0
 		_model.update_item(str(item.get("id", "")), {"specs": specs})
 		return
 	var area_m2: float = _catchment_area_m2(specs)
-	var runoff: float = float(specs.get("runoff_coeff", 0.85))
+	var runoff: float = float(specs.get("runoff_coeff", 0.85 if not pond_direct else 1.0))
 	var rain_mmh := _rain_rate_mmh()
 	# mm/h * m² = L/h (1 mm on 1 m² = 1 L)
 	var capture_lph: float = area_m2 * runoff * maxf(rain_mmh, 0.0)
@@ -726,6 +851,680 @@ func _process_catchment(item: Dictionary, net_rates: Dictionary, dt_hours: float
 	if abs_h < 0.0:
 		abs_h = 0.0
 	_credit_catchment_flow(item, net_rates, capture_lph, "water", dt_hours, abs_h)
+
+
+## Auto pond capacity: prefer TerrainLoader bathymetry over stale import estimate.
+func _pond_fill_capacity_l(ts: Dictionary) -> float:
+	var fallback := maxf(float(ts.get("capacity_qty", 0.0)), 0.001)
+	if str(ts.get("capacity_mode", "auto")) == "manual":
+		return fallback
+	var tag := str(ts.get("osm_water_tag", ""))
+	var pid := str(ts.get("pond_id", ""))
+	if (tag.is_empty() and pid.is_empty()) or _host == null:
+		return fallback
+	var loader: Node = null
+	if _host.has_method("_find_terrain_loader") and _host.has_method("_get_scene_main_node"):
+		loader = _host.call("_find_terrain_loader", _host.call("_get_scene_main_node"))
+	if loader == null or not loader.has_method("get_pond_info"):
+		return fallback
+	# Prefer the stable pond_id (immune to osm_water_tag drift after a re-carve —
+	# the tag is a centroid/bbox hash, so resizing a pond changes it while pond_id
+	# stays put). Fall back to the tag for legacy tanks with no id yet.
+	var idx := -1
+	if not pid.is_empty() and loader.has_method("find_pond_idx_by_id"):
+		idx = int(loader.call("find_pond_idx_by_id", pid))
+	if idx < 0 and not tag.is_empty() and loader.has_method("find_pond_idx_by_tag"):
+		idx = int(loader.call("find_pond_idx_by_tag", tag))
+	if idx < 0:
+		return fallback
+	var info: Dictionary = loader.call("get_pond_info", idx) as Dictionary
+	if not bool(info.get("valid", false)):
+		return fallback
+	var terrain_cap := maxf(float(info.get("terrain_capacity_l",
+			info.get("capacity_l", 0.0))), 0.0)
+	return maxf(terrain_cap, fallback)
+
+
+## Siphon micro-hydro processors: prime/break latch from pond level vs intake
+## crown/invert; debit pond + credit downstream water; set current_output_kw
+## for DcPowerWiring → 48V battery.
+
+## True when any siphon has Lab Test Inflow armed.
+func _lab_sim_inflow_active() -> bool:
+	if _model == null:
+		return false
+	for item: Dictionary in _model.items:
+		if str(item.get("type", "")) != "processor":
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if str(specs.get("role", "")) != "siphon_hydro":
+			continue
+		if bool(specs.get("lab_sim_inflow_enabled", false)) \
+				and float(specs.get("lab_sim_inflow_lps", 0.0)) > 1e-9:
+			return true
+	return false
+
+
+## Credit (or debit via siphon Q) pond tanks while the world clock is frozen.
+## Uses wall seconds × LAB_PAUSE_FILL_SCALE so 500 L/s is visibly responsive
+## under Elev noon-lock / pause without advancing celestial time.
+func _apply_lab_sim_inflow_realtime(wall_dt_s: float) -> void:
+	if _model == null or wall_dt_s <= 1e-6:
+		return
+	var dt_s := wall_dt_s * LAB_PAUSE_FILL_SCALE
+	var abs_hours := _get_abs_hours()
+	for item: Dictionary in _model.items:
+		if str(item.get("type", "")) != "processor":
+			continue
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		if str(specs.get("role", "")) != "siphon_hydro":
+			continue
+		if not bool(specs.get("lab_sim_inflow_enabled", false)):
+			continue
+		var sim_lps := maxf(float(specs.get("lab_sim_inflow_lps", 0.0)), 0.0)
+		if sim_lps <= 1e-9:
+			continue
+		var tank := _resolve_siphon_inlet_tank(item)
+		if tank.is_empty():
+			continue
+		var tid := str(tank.get("id", ""))
+		var ts: Dictionary = (tank.get("specs", {}) as Dictionary).duplicate(true)
+		var floor_y := float(ts.get("floor_m", NAN))
+		var rim := float(ts.get("rim_m", NAN))
+		# Prefer live DEM bathymetric capacity so Test Inflow can fill the
+		# sculpted basin (import area×mean_depth often under-sizes capacity).
+		var cap := _pond_fill_capacity_l(ts)
+		var level_m := float(ts.get("level_m", NAN))
+		if is_nan(level_m) and not is_nan(rim) and not is_nan(floor_y):
+			level_m = floor_y + clampf(float(ts.get("level", 0.0)), 0.0, 1.0) \
+					* maxf(rim - floor_y, 0.05)
+		if is_nan(level_m):
+			continue
+		_ensure_siphon_inverts(item, specs, tank)
+		# Same shared reach + dead-pool clamp as the world-clock path, so both
+		# integrators conserve mass identically (no divergent semantics).
+		var stock := float(ts.get("stock_l", NAN))
+		if is_nan(stock):
+			stock = clampf(float(ts.get("level", 0.0)), 0.0, 1.0) * cap
+		_reach.configure_siphon(specs)
+		_reach.set_pond(floor_y, rim, cap, stock)
+		var r := _reach.evaluate(level_m)
+		var dt_hours := dt_s / 3600.0
+		# Clamp the drain to the stock above the air-break (never suck the pond dry).
+		var q_out := maxf(_reach.drainable_lph(maxf(float(r.get("q_lph", 0.0)), 0.0),
+			maxf(dt_hours, 0.0)), 0.0) / 3600.0
+		var net_lps := sim_lps - q_out
+		stock = clampf(stock + net_lps * dt_s, 0.0, cap)
+		var frac := clampf(stock / cap, 0.0, 1.0)
+		ts["stock_l"] = stock
+		ts["level"] = frac
+		if str(ts.get("capacity_mode", "auto")) != "manual":
+			ts["capacity_qty"] = cap
+			ts["capacity"] = "%.0f L" % cap
+		ts["inflow_rate"] = sim_lps * 3600.0
+		ts["outflow_rate"] = q_out * 3600.0
+		# Linear Elev fallback; push_pond_levels_to_mesh writes bathymetric level_m.
+		if not is_nan(rim) and not is_nan(floor_y):
+			var span := maxf(rim - floor_y, 0.05)
+			ts["level_m"] = floor_y + frac * span
+			level_m = float(ts["level_m"])
+		_model.update_item(tid, {"specs": ts})
+		if _timelines.has(tid):
+			var tl: ResourceTimeline = _timelines[tid] as ResourceTimeline
+			# Re-point the present level without discarding pre-pause history so
+			# scrubbing back over earlier real recording still works (was a
+			# destructive clear()+init_anchor).
+			tl.set_current_level(abs_hours if abs_hours >= 0.0 else 0.0, frac)
+		# Keep Lab readouts live while paused (PE / RPM / prime). Reuse the shared
+		# reach at the post-fill level (no per-tick HydroReach.new()).
+		var proc_id := str(item.get("id", ""))
+		var r2 := _reach.evaluate(level_m)
+		specs["siphon_primed"] = bool(r2.get("primed", false))
+		specs["live_q_lps"] = float(r2.get("q_lps", 0.0))
+		specs["live_head_m"] = float(r2.get("head_m", 0.0))
+		specs["live_pe_w"] = float(r2.get("pe_w", 0.0))
+		specs["live_rpm"] = float(r2.get("rpm", 0.0))
+		specs["live_power_w"] = float(r2.get("power_w", 0.0))
+		specs["current_output_kw"] = float(r2.get("power_kw", 0.0))
+		specs["live_regime"] = str(r2.get("regime", ""))
+		_model.update_item(proc_id, {"specs": specs})
+		# Outlet sink cumulative (wall-time drain) — credit exactly the clamped
+		# drain that left the pond, so the sink can't accrue phantom litres.
+		var q_lph := q_out * 3600.0
+		if q_lph > 1e-6:
+			var down := _resolve_siphon_outlet_tank(item)
+			if not down.is_empty():
+				var oid := str(down.get("id", ""))
+				var ds: Dictionary = (down.get("specs", {}) as Dictionary).duplicate(true)
+				if bool(ds.get("outlet_sink", false)) or bool(ds.get("unlimited_capacity", false)):
+					var add_l := q_lph * (dt_s / 3600.0)
+					ds["cumulative_l"] = float(ds.get("cumulative_l", 0.0)) + add_l
+					ds["live_in_lps"] = q_lph / 3600.0
+					ds["stock_l"] = float(ds["cumulative_l"])
+					_model.update_item(oid, {"specs": ds})
+			_stamp_siphon_outlet_culvert_flow(proc_id, q_lph, q_out)
+
+
+func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
+		_abs_hours: float) -> void:
+	if _model == null:
+		return
+	for item: Dictionary in _model.items:
+		if str(item.get("type", "")) != "processor":
+			continue
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		if str(specs.get("role", "")) != "siphon_hydro":
+			continue
+		var proc_id := str(item.get("id", ""))
+		var tank := _resolve_siphon_inlet_tank(item)
+		if tank.is_empty():
+			var was_q := float(specs.get("live_q_lps", 0.0))
+			var was_kw := float(specs.get("current_output_kw", 0.0))
+			var was_primed := bool(specs.get("siphon_primed", false))
+			specs["live_q_lps"] = 0.0
+			specs["current_output_kw"] = 0.0
+			specs["live_power_w"] = 0.0
+			specs["live_rpm"] = 0.0
+			specs["siphon_primed"] = false
+			# A catchment can't feed a turbine directly — it's a rain-rate source
+			# with no water level for the head/prime math. The player has to store
+			# the runoff in a pond first. Give that specific guidance instead of
+			# the generic "wire pond storage" when a catchment is what's wired.
+			var idle_reason := "Wire pond storage → water in"
+			if _siphon_water_in_is_catchment(proc_id):
+				idle_reason = "Catchment can't feed a turbine directly — wire Catchment → Pond storage → turbine"
+			_write_node_state(proc_id, specs, GraphNodeState.IDLE, idle_reason, [])
+			if was_q > 1e-6 or was_kw > 1e-6 or was_primed \
+					or str(specs.get("node_state", "")) != str(
+						(item.get("specs", {}) as Dictionary).get("node_state", "")):
+				_model.update_item(proc_id, {"specs": specs})
+			continue
+		var tank_specs: Dictionary = tank.get("specs", {}) as Dictionary
+		var tank_id := str(tank.get("id", ""))
+		# Test inflow: optional steady fill into the inlet pond, advanced on the
+		# world clock like everything else (no rain / watershed required). This is
+		# the ONLY manual water driver — L/s → L/h for the tank integrator.
+		if bool(specs.get("lab_sim_inflow_enabled", false)) and not tank_id.is_empty():
+			var sim_lps := maxf(float(specs.get("lab_sim_inflow_lps", 0.0)), 0.0)
+			if sim_lps > 1e-9:
+				# Heal under-sized import capacity so the tank can fill the basin.
+				var heal_cap := _pond_fill_capacity_l(tank_specs)
+				if heal_cap > maxf(float(tank_specs.get("capacity_qty", 0.0)), 0.0) + 1.0 \
+						and str(tank_specs.get("capacity_mode", "auto")) != "manual":
+					var heal_ts: Dictionary = tank_specs.duplicate(true)
+					heal_ts["capacity_qty"] = heal_cap
+					heal_ts["capacity"] = "%.0f L" % heal_cap
+					_model.update_item(tank_id, {"specs": heal_ts})
+					tank_specs = heal_ts
+				net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) + sim_lps * 3600.0
+		var level_m := float(tank_specs.get("level_m", NAN))
+		if is_nan(level_m):
+			var rim := float(tank_specs.get("rim_m", NAN))
+			var floor_y := float(tank_specs.get("floor_m", NAN))
+			if not is_nan(rim) and not is_nan(floor_y):
+				level_m = floor_y + clampf(float(tank_specs.get("level", 0.0)), 0.0, 1.0) \
+						* maxf(rim - floor_y, 0.05)
+		if is_nan(level_m):
+			continue
+		var orig := (item.get("specs", {}) as Dictionary).duplicate(true)
+		_ensure_siphon_inverts(item, specs, tank)
+		# Unified reach physics (single source of truth) — same path the Siphon Lab
+		# reads, incl. the effective air-break override. Pond storage still moves
+		# through net_rates below (the generic tank integrator owns tank stock), but
+		# the DRAIN is clamped through the shared reach so the pond is never pulled
+		# below the air-break dead pool and the outlet is credited exactly what the
+		# pond gave (mass-conserving even on a big-dt tick at high time_scale).
+		_reach.configure_siphon(specs)
+		var pond_cap := _pond_fill_capacity_l(tank_specs)
+		var pond_stock := float(tank_specs.get("stock_l", NAN))
+		if is_nan(pond_stock):
+			pond_stock = clampf(float(tank_specs.get("level", 0.0)), 0.0, 1.0) * pond_cap
+		_reach.set_pond(float(tank_specs.get("floor_m", NAN)),
+			float(tank_specs.get("rim_m", NAN)), pond_cap, pond_stock)
+		var r := _reach.evaluate(level_m)
+		# Mirror resolved start/break back onto specs (keeps modal + hydraulics synced).
+		var start_m := float(r.get("siphon_start_m", NAN))
+		var break_m := float(r.get("siphon_break_m", NAN))
+		if not is_nan(start_m):
+			specs["siphon_start_m"] = start_m
+			specs["intake_crown_m"] = start_m
+		if not is_nan(break_m):
+			specs["siphon_break_m"] = break_m
+			specs["intake_invert_m"] = break_m
+		specs["siphon_primed"] = bool(r.get("primed", false))
+		specs["live_q_lps"] = float(r.get("q_lps", 0.0))
+		specs["live_head_m"] = float(r.get("head_m", 0.0))
+		specs["live_pe_w"] = float(r.get("pe_w", 0.0))
+		specs["live_rpm"] = float(r.get("rpm", 0.0))
+		specs["live_power_w"] = float(r.get("power_w", 0.0))
+		specs["current_output_kw"] = float(r.get("power_kw", 0.0))
+		specs["live_regime"] = str(r.get("regime", ""))
+		# Mass-conserving drain: the hydraulically-evaluated flow clamped to the
+		# stock above the dead pool this step. At steady state drained == q_lph
+		# (no-op); only the crossing tick is clamped. This value — not raw q_lph —
+		# drives every water transfer so the outlet balances the pond exactly.
+		var q_lph := float(r.get("q_lph", 0.0))
+		var drained_lph := _reach.drainable_lph(q_lph, maxf(dt_hours, 0.0))
+		var q_lps := drained_lph / 3600.0
+		# Stamp water I/O rates for port labels (L/h) — the effective moved flow.
+		var inputs: Array = specs.get("inputs", []) as Array
+		var outputs: Array = specs.get("outputs", []) as Array
+		if not inputs.is_empty() and inputs[0] is Dictionary:
+			(inputs[0] as Dictionary)["rate"] = drained_lph
+		for oi in outputs.size():
+			if not (outputs[oi] is Dictionary):
+				continue
+			var od: Dictionary = outputs[oi]
+			if str(od.get("kind", "")) == "water":
+				od["rate"] = drained_lph
+			elif str(od.get("kind", "")) == "dc_electricity":
+				od["rate"] = float(r.get("power_kw", 0.0))
+		specs["inputs"] = inputs
+		specs["outputs"] = outputs
+		var new_state := GraphNodeState.IDLE
+		if drained_lph > 1e-6:
+			new_state = GraphNodeState.RUNNING
+			var src_id := str(tank.get("id", ""))
+			net_rates[src_id] = float(net_rates.get(src_id, 0.0)) - drained_lph
+			var down := _resolve_siphon_outlet_tank(item)
+			if not down.is_empty():
+				var tid := str(down.get("id", ""))
+				if tid != src_id:
+					net_rates[tid] = float(net_rates.get(tid, 0.0)) + drained_lph
+					var ds: Dictionary = (down.get("specs", {}) as Dictionary).duplicate(true)
+					if bool(ds.get("outlet_sink", false)) or bool(ds.get("unlimited_capacity", false)):
+						var prev_cum := float(ds.get("cumulative_l", 0.0))
+						var next_cum := prev_cum + drained_lph * maxf(dt_hours, 0.0)
+						var next_lps := drained_lph / 3600.0
+						# Sink cumulative — write every lab/minute step (was 0.5 L
+						# gate which hid short Lab ticks).
+						if next_cum - prev_cum > 1e-4 \
+								or absf(next_lps - float(ds.get("live_in_lps", 0.0))) > 1e-6:
+							ds["cumulative_l"] = next_cum
+							ds["live_in_lps"] = next_lps
+							# Mirror stock so freeform card isn't stuck at 0.00 L.
+							ds["level"] = 0.0
+							ds["stock_l"] = next_cum
+							_model.update_item(tid, {"specs": ds})
+			_stamp_siphon_outlet_culvert_flow(proc_id, drained_lph, q_lps)
+		else:
+			_stamp_siphon_outlet_culvert_flow(proc_id, 0.0, 0.0)
+			if bool(r.get("primed", false)):
+				new_state = GraphNodeState.READY
+		_write_node_state(proc_id, specs, new_state)
+		const EPS := 0.002
+		var changed := str(specs.get("node_state", "")) != str(orig.get("node_state", "")) \
+			or bool(specs.get("siphon_primed", false)) != bool(orig.get("siphon_primed", false)) \
+			or absf(float(specs.get("live_q_lps", 0.0)) - float(orig.get("live_q_lps", 0.0))) > EPS \
+			or absf(float(specs.get("current_output_kw", 0.0)) - float(orig.get("current_output_kw", 0.0))) > 1e-5 \
+			or absf(float(specs.get("live_head_m", 0.0)) - float(orig.get("live_head_m", 0.0))) > EPS \
+			or absf(float(specs.get("siphon_start_m", 0.0)) - float(orig.get("siphon_start_m", 0.0))) > EPS \
+			or absf(float(specs.get("siphon_break_m", 0.0)) - float(orig.get("siphon_break_m", 0.0))) > EPS \
+			or absf(float(specs.get("live_rpm", 0.0)) - float(orig.get("live_rpm", 0.0))) > 0.5
+		var mod_e := float(specs.get("module_elev_m", NAN))
+		var elev_target := mod_e if not is_nan(mod_e) else break_m
+		var elev_patch := {}
+		if not is_nan(elev_target) \
+				and absf(float(item.get("elevation_m", NAN)) - elev_target) > EPS:
+			elev_patch["elevation_m"] = elev_target
+		if changed:
+			elev_patch["specs"] = specs
+			_model.update_item(proc_id, elev_patch)
+		elif not elev_patch.is_empty():
+			_model.update_item(proc_id, elev_patch)
+
+
+## Re-derive siphon live telemetry (prime / RPM / power / regime) + culvert flow
+## glow from the CURRENT restored pond levels, WITHOUT moving any water. Called on
+## a backward scrub: the tanks are rewound by _read_all_tanks_at, but the live_*
+## telemetry is written only on the forward path, so without this it would freeze
+## at the last forward frame and desync from the scrubbed pond. Telemetry is a pure
+## function of the pond level, so evaluating the shared reach at the restored level
+## reproduces exactly what the forward pass wrote at that level.
+func _refresh_hydro_telemetry_readonly() -> void:
+	if _model == null:
+		return
+	_rebuild_conn_index()  # resolve helpers read the port index; refresh it first
+	for item: Dictionary in _model.items_of_type("processor"):
+		if str((item.get("specs", {}) as Dictionary).get("role", "")) != "siphon_hydro":
+			continue
+		var proc_id := str(item.get("id", ""))
+		var tank := _resolve_siphon_inlet_tank(item)
+		if tank.is_empty():
+			continue
+		var tank_specs: Dictionary = tank.get("specs", {}) as Dictionary
+		var level_m := float(tank_specs.get("level_m", NAN))
+		if is_nan(level_m):
+			var rim := float(tank_specs.get("rim_m", NAN))
+			var floor_y := float(tank_specs.get("floor_m", NAN))
+			if not is_nan(rim) and not is_nan(floor_y):
+				level_m = floor_y + clampf(float(tank_specs.get("level", 0.0)), 0.0, 1.0) \
+						* maxf(rim - floor_y, 0.05)
+		if is_nan(level_m):
+			continue
+		var specs := (item.get("specs", {}) as Dictionary).duplicate(true)
+		_ensure_siphon_inverts(item, specs, tank)
+		_reach.configure_siphon(specs)
+		var r := _reach.evaluate(level_m)
+		specs["siphon_primed"] = bool(r.get("primed", false))
+		specs["live_q_lps"] = float(r.get("q_lps", 0.0))
+		specs["live_head_m"] = float(r.get("head_m", 0.0))
+		specs["live_pe_w"] = float(r.get("pe_w", 0.0))
+		specs["live_rpm"] = float(r.get("rpm", 0.0))
+		specs["live_power_w"] = float(r.get("power_w", 0.0))
+		specs["current_output_kw"] = float(r.get("power_kw", 0.0))
+		specs["live_regime"] = str(r.get("regime", ""))
+		_model.update_item(proc_id, {"specs": specs})
+		var q_lps := float(r.get("q_lps", 0.0))
+		_stamp_siphon_outlet_culvert_flow(proc_id, float(r.get("q_lph", 0.0)), q_lps)
+
+
+## Stamp live Q onto siphon → culvert_pipe outlet wires for Elev/3D glow.
+func _stamp_siphon_outlet_culvert_flow(siphon_id: String, q_lph: float, q_lps: float) -> void:
+	if _model == null or siphon_id.is_empty():
+		return
+	for conn: Dictionary in _model.connections:
+		if str(conn.get("source_item_id", "")) != siphon_id \
+				and str(conn.get("target_item_id", "")) != siphon_id:
+			continue
+		var type_id := ConduitKinds.derive_type_for_connection(conn)
+		if not ConduitKinds.uses_culvert_kit(type_id) \
+				and str(conn.get("conduit_type", "")) != "culvert_pipe":
+			continue
+		# Only outlet side (siphon as source).
+		if str(conn.get("source_item_id", "")) != siphon_id:
+			continue
+		var cid := str(conn.get("id", ""))
+		conn["live_q_lps"] = q_lps
+		conn["live_q_lph"] = q_lph
+		_cache_conn_flow(cid, q_lph, "water")
+
+
+## True when a `catchment` item is wired to this siphon's water-in (either
+## through the input port or a direct inbound water connection) — used only to
+## pick a clearer "insert a pond" idle message. Cheap: scans connections once.
+func _siphon_water_in_is_catchment(proc_id: String) -> bool:
+	if _model == null or proc_id.is_empty():
+		return false
+	# Use the per-tick port adjacency index (built in _rebuild_conn_index) instead
+	# of a full connection scan per idle siphon.
+	for handle in ["res_in_0", "input"]:
+		for conn: Dictionary in _conn_by_target.get(proc_id + "|" + handle, []):
+			var src := _model.get_item(str(conn.get("source_item_id", "")))
+			if not src.is_empty() and str(src.get("type", "")) == "catchment":
+				return true
+	return false
+
+
+func _resolve_siphon_inlet_tank(item: Dictionary) -> Dictionary:
+	if _model == null:
+		return {}
+	var proc_id := str(item.get("id", ""))
+	# Water input port → pond storage tank.
+	var tank_id := _tank_at_port(proc_id, "res_in_0", true)
+	if tank_id.is_empty():
+		tank_id = _tank_at_port(proc_id, "input", true)
+	if not tank_id.is_empty():
+		var t := _model.get_item(tank_id)
+		if not t.is_empty():
+			var ts: Dictionary = t.get("specs", {}) as Dictionary
+			if bool(ts.get("pond_storage", false)) \
+					or str(ts.get("resource_kind", "")) == "water":
+				return t
+	# Inbound water connections (pond → siphon).
+	for conn: Dictionary in _model.connections:
+		if str(conn.get("target_item_id", "")) != proc_id:
+			continue
+		var src := _model.get_item(str(conn.get("source_item_id", "")))
+		if src.is_empty():
+			continue
+		var ss: Dictionary = src.get("specs", {}) as Dictionary
+		if bool(ss.get("pond_storage", false)):
+			return src
+		if str(src.get("type", "")) == "resource" \
+				and str(ss.get("resource_kind", "")) == "water":
+			return src
+		if str(src.get("type", "")) == "catchment":
+			var tag := str(ss.get("osm_water_tag", ss.get("osm_tag", "")))
+			if not tag.is_empty():
+				return _resolve_culvert_inlet_tank({"inlet_pond_tag": tag,
+						"source_item_id": str(src.get("id", ""))}, tag)
+	# Reverse-wire: siphon drawn as source → pond/catchment as target.
+	for conn: Dictionary in _model.connections:
+		if str(conn.get("source_item_id", "")) != proc_id:
+			continue
+		var tgt := _model.get_item(str(conn.get("target_item_id", "")))
+		if tgt.is_empty():
+			continue
+		var ts2: Dictionary = tgt.get("specs", {}) as Dictionary
+		if bool(ts2.get("pond_storage", false)):
+			return tgt
+		if str(tgt.get("type", "")) == "resource" \
+				and str(ts2.get("resource_kind", "")) == "water" \
+				and not bool(ts2.get("outlet_sink", false)):
+			return tgt
+		if str(tgt.get("type", "")) == "catchment":
+			var tag2 := str(ts2.get("osm_water_tag", ts2.get("osm_tag", "")))
+			if not tag2.is_empty():
+				return _resolve_culvert_inlet_tank({"inlet_pond_tag": tag2,
+						"source_item_id": str(tgt.get("id", ""))}, tag2)
+	return {}
+
+
+func _resolve_siphon_outlet_tank(item: Dictionary) -> Dictionary:
+	if _model == null:
+		return {}
+	var proc_id := str(item.get("id", ""))
+	var tank_id := _tank_at_port(proc_id, "res_out_0", false)
+	if tank_id.is_empty():
+		# Water may be output index 0; dc is often index 1.
+		for i in 4:
+			tank_id = _tank_at_port(proc_id, "res_out_%d" % i, false)
+			if not tank_id.is_empty():
+				var cand := _model.get_item(tank_id)
+				if not cand.is_empty() \
+						and str((cand.get("specs", {}) as Dictionary).get(
+							"resource_kind", "")) == "water":
+					return cand
+	elif not tank_id.is_empty():
+		return _model.get_item(tank_id)
+	for conn: Dictionary in _model.connections:
+		if str(conn.get("source_item_id", "")) != proc_id:
+			continue
+		var tgt := _model.get_item(str(conn.get("target_item_id", "")))
+		if tgt.is_empty():
+			continue
+		if str(tgt.get("type", "")) == "resource" \
+				and str((tgt.get("specs", {}) as Dictionary).get(
+					"resource_kind", "")) == "water":
+			return tgt
+	return {}
+
+
+func _ensure_siphon_inverts(item: Dictionary, specs: Dictionary, tank: Dictionary) -> void:
+	var d_in := maxf(float(specs.get("intake_diameter_mm", 150.0)) / 1000.0, 0.05)
+	var ts: Dictionary = tank.get("specs", {}) as Dictionary
+	var rim := float(ts.get("rim_m", ts.get("level_m", NAN)))
+	var floor_y := float(ts.get("floor_m", NAN))
+	var mod_e := float(item.get("elevation_m", NAN))
+	if is_nan(mod_e):
+		mod_e = float(specs.get("module_elev_m", NAN))
+	if is_nan(mod_e):
+		if not is_nan(rim):
+			mod_e = rim - 0.35
+		else:
+			mod_e = 0.0
+	# Resolve start/break from module elev + offsets (migrates legacy absolutes).
+	SiphonHydraulics.apply_resolved_levels(specs, mod_e)
+	var start_m := float(specs.get("siphon_start_m", NAN))
+	var break_m := float(specs.get("siphon_break_m", NAN))
+	if not is_nan(floor_y) and not is_nan(break_m) and break_m < floor_y:
+		break_m = floor_y + 0.05
+		specs["siphon_break_m"] = break_m
+		specs["siphon_break_offset_m"] = break_m - mod_e
+		specs["intake_invert_m"] = break_m
+		if not is_nan(start_m) and start_m < break_m:
+			start_m = SiphonHydraulics.crown_from_invert(break_m, d_in)
+			specs["siphon_start_m"] = start_m
+			specs["siphon_start_offset_m"] = start_m - mod_e
+			specs["intake_crown_m"] = start_m
+	var inv := break_m if not is_nan(break_m) else mod_e
+	var out_inv := float(specs.get("outlet_invert_m", NAN))
+	if is_nan(out_inv):
+		# Prefer outbound culvert_pipe invert_out, else sink elevation, else drop.
+		var proc_id := str(item.get("id", ""))
+		for conn: Dictionary in _model.connections:
+			if str(conn.get("source_item_id", "")) != proc_id:
+				continue
+			var type_id := ConduitKinds.derive_type_for_connection(conn)
+			if ConduitKinds.uses_culvert_kit(type_id):
+				_ensure_culvert_inverts(conn)
+				out_inv = float(conn.get("invert_out_m", NAN))
+				if not is_nan(out_inv):
+					break
+			var tgt := _model.get_item(str(conn.get("target_item_id", "")))
+			if not tgt.is_empty() and tgt.has("elevation_m"):
+				out_inv = float(tgt.get("elevation_m", 0.0))
+				break
+		if is_nan(out_inv):
+			out_inv = inv - 9.0
+		specs["outlet_invert_m"] = out_inv
+	# Sync barrel length from site XY when both ends placed.
+	if GraphSiteLayout.has_site_coords(item):
+		var down := _resolve_siphon_outlet_tank(item)
+		if not down.is_empty() and GraphSiteLayout.has_site_coords(down):
+			var a := GraphSiteLayout.site_xz(item)
+			var b := GraphSiteLayout.site_xz(down)
+			var L := a.distance_to(b)
+			if L > 1.0:
+				specs["barrel_length_m"] = L
+
+
+## Free-surface culvert drains from pond tanks (stage-discharge). Debits the
+## inlet pond tank and credits the target tank when present. Writes live Q onto
+## the connection for Elevation / inspector readouts.
+func _process_culvert_stage_discharge(net_rates: Dictionary, _dt_hours: float,
+		_abs_hours: float) -> void:
+	if _model == null:
+		return
+	for conn: Dictionary in _model.connections:
+		var type_id := ConduitKinds.derive_type_for_connection(conn)
+		if not ConduitKinds.uses_culvert_kit(type_id):
+			continue
+		var meta := ConduitKinds.type_meta(type_id)
+		_ensure_culvert_inverts(conn)
+		var hs := CulvertHydraulics.specs_from_connection(conn, meta)
+		if is_nan(float(hs.get("invert_in_m", NAN))) \
+				or is_nan(float(hs.get("invert_out_m", NAN))):
+			continue
+		var tank := _resolve_culvert_inlet_tank(conn, str(hs.get("inlet_pond_tag", "")))
+		if tank.is_empty():
+			continue
+		var tank_specs: Dictionary = tank.get("specs", {}) as Dictionary
+		var level_m := float(tank_specs.get("level_m", NAN))
+		if is_nan(level_m):
+			var rim := float(tank_specs.get("rim_m", NAN))
+			var floor_y := float(tank_specs.get("floor_m", NAN))
+			if not is_nan(rim) and not is_nan(floor_y):
+				level_m = floor_y + clampf(float(tank_specs.get("level", 0.0)), 0.0, 1.0) \
+						* maxf(rim - floor_y, 0.05)
+		if is_nan(level_m):
+			continue
+		var r := CulvertHydraulics.stage_discharge(
+			level_m,
+			float(hs["invert_in_m"]),
+			float(hs["invert_out_m"]),
+			float(hs["diameter_m"]),
+			float(hs["length_m"]),
+			float(hs.get("manning_n", CulvertHydraulics.DEFAULT_MANNING_N)))
+		var q_lph := float(r.get("q_m3s", 0.0)) * 1000.0 * 3600.0
+		var cid := str(conn.get("id", ""))
+		_model.update_connection(cid, {
+			"live_q_lps": float(r.get("q_lps", 0.0)),
+			"live_q_lph": q_lph,
+			"live_head_m": float(r.get("head_m", 0.0)),
+			"live_pe_kw": float(r.get("pe_kw", 0.0)),
+			"live_regime": str(r.get("regime", "")),
+			"live_velocity_mps": float(r.get("velocity_mps", 0.0)),
+		})
+		if q_lph <= 1e-6:
+			continue
+		var src_id := str(tank.get("id", ""))
+		net_rates[src_id] = float(net_rates.get(src_id, 0.0)) - q_lph
+		var tgt := _model.get_item(str(conn.get("target_item_id", "")))
+		if not tgt.is_empty() and str(tgt.get("type", "")) == "resource":
+			var tid := str(tgt.get("id", ""))
+			if tid != src_id:
+				net_rates[tid] = float(net_rates.get(tid, 0.0)) + q_lph
+
+
+func _resolve_culvert_inlet_tank(conn: Dictionary, pond_tag: String) -> Dictionary:
+	if _model == null:
+		return {}
+	# Prefer explicit pond tag on the connection.
+	if not pond_tag.is_empty():
+		for it in _model.items:
+			if not (it is Dictionary):
+				continue
+			var specs: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+			if bool(specs.get("pond_storage", false)) \
+					and str(specs.get("osm_water_tag", "")) == pond_tag:
+				return it as Dictionary
+	# Else: source item is the pond tank, or a pond catchment → linked tank.
+	var src := _model.get_item(str(conn.get("source_item_id", "")))
+	if src.is_empty():
+		return {}
+	var src_specs: Dictionary = src.get("specs", {}) as Dictionary
+	if bool(src_specs.get("pond_storage", false)):
+		return src
+	if str(src.get("type", "")) == "catchment" \
+			and str(src_specs.get("catchment_kind", "")) == "pond":
+		var tag := str(src_specs.get("osm_water_tag", src_specs.get("osm_tag", "")))
+		if not tag.is_empty():
+			for it2 in _model.items:
+				if not (it2 is Dictionary):
+					continue
+				var sp2: Dictionary = (it2 as Dictionary).get("specs", {}) as Dictionary
+				if bool(sp2.get("pond_storage", false)) \
+						and str(sp2.get("osm_water_tag", "")) == tag:
+					return it2 as Dictionary
+	return {}
+
+
+## Fill missing invert elevations from endpoint item elevation_m (source=in).
+func _ensure_culvert_inverts(conn: Dictionary) -> void:
+	if _model == null:
+		return
+	var need_in := not conn.has("invert_in_m") or is_nan(float(conn.get("invert_in_m", NAN)))
+	var need_out := not conn.has("invert_out_m") or is_nan(float(conn.get("invert_out_m", NAN)))
+	var need_tag := str(conn.get("inlet_pond_tag", "")).is_empty()
+	if not need_in and not need_out and not need_tag:
+		return
+	var src := _model.get_item(str(conn.get("source_item_id", "")))
+	var tgt := _model.get_item(str(conn.get("target_item_id", "")))
+	var patch := {}
+	if need_in and not src.is_empty() and src.has("elevation_m"):
+		patch["invert_in_m"] = float(src.get("elevation_m", 0.0))
+	if need_out and not tgt.is_empty() and tgt.has("elevation_m"):
+		patch["invert_out_m"] = float(tgt.get("elevation_m", 0.0))
+	if need_in and not patch.has("invert_in_m"):
+		var tank := _resolve_culvert_inlet_tank(conn, str(conn.get("inlet_pond_tag", "")))
+		if not tank.is_empty():
+			var ts: Dictionary = tank.get("specs", {}) as Dictionary
+			var rim := float(ts.get("rim_m", ts.get("level_m", NAN)))
+			if not is_nan(rim):
+				patch["invert_in_m"] = rim - 0.15
+	if need_out and not patch.has("invert_out_m") and patch.has("invert_in_m"):
+		# Placeholder ~30 ft drop until the outlet endpoint has elevation_m.
+		patch["invert_out_m"] = float(patch["invert_in_m"]) - 9.0
+	if need_tag:
+		var tank2 := _resolve_culvert_inlet_tank(conn, "")
+		if not tank2.is_empty():
+			var tag := str((tank2.get("specs", {}) as Dictionary).get("osm_water_tag", ""))
+			if not tag.is_empty():
+				patch["inlet_pond_tag"] = tag
+	if not patch.is_empty():
+		_model.update_connection(str(conn.get("id", "")), patch)
 
 
 func _process_biomass_catchment(item: Dictionary, specs: Dictionary,
@@ -968,20 +1767,26 @@ func _process_jit_transfers(net_rates: Dictionary, dt_hours: float,
 func _apply_conduit_derate(conn: Dictionary, rate_qph: float) -> float:
 	if rate_qph <= 0.0:
 		return rate_qph
+	# `conn` may be a FLATTENED edge (portal-resolved duplicate); telemetry must
+	# land on the REAL wire the player sees, so resolve it back by origin id.
+	var real: Dictionary = _conn_by_id.get(str(conn.get("id", "")), conn) as Dictionary
 	var enabled: bool = bool(conn.get("simulate_losses", _connector_losses_enabled()))
-	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
+	# Physics uses the PHYSICAL pipe kind, not the visual default (unstyled
+	# wires render as the conceptual-flow glow, which has no hydraulic
+	# diameter and would silently skip friction loss on every unstyled pipe).
+	var type_id: String = ConduitKinds.physical_type_for_connection(conn)
 	if not enabled or not ConduitKinds.is_fluid_type(type_id):
-		conn["pressure_drop_psi"] = 0.0
-		conn["flow_derate"] = 1.0
-		conn["overload_ratio"] = 0.0
+		real["pressure_drop_psi"] = 0.0
+		real["flow_derate"] = 1.0
+		real["overload_ratio"] = 0.0
 		return rate_qph
 	var meta: Dictionary = ConduitKinds.type_meta(type_id)
 	var flow_lpm: float = rate_qph / 60.0
 	var rep: Dictionary = ConduitLoss.hydraulic_report_for_connection(conn, meta, flow_lpm)
 	var derate: float = clampf(float(rep.get("derate_frac", 1.0)), 0.0, 1.0)
-	conn["pressure_drop_psi"] = float(rep.get("drop_psi", 0.0))
-	conn["flow_derate"] = derate
-	conn["overload_ratio"] = float(rep.get("overload_ratio", 0.0))
+	real["pressure_drop_psi"] = float(rep.get("drop_psi", 0.0))
+	real["flow_derate"] = derate
+	real["overload_ratio"] = float(rep.get("overload_ratio", 0.0))
 	return rate_qph * derate
 
 
@@ -1033,7 +1838,19 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 	if str(specs.get("role", "")) == "habitat":
 		_process_habitat(item, specs, net_rates, abs_h)
 		return
-	if bool(specs.get("batch_mode", false)):
+	# Siphon hydro has its own tick after culverts (_process_siphon_hydro).
+	if str(specs.get("role", "")) == "siphon_hydro":
+		return
+	# Role-specific machines keep dedicated ticks (CNC / sheet / extruder / …);
+	# process-recipe batch cycles are for generic processors (+ legacy batch_mode).
+	var proc_role := str(specs.get("role", ""))
+	var specialized_job := proc_role in [
+		"cartesian_machine", "pp_sheet_press", "pp_beam_extruder",
+		"csp_concentrator", "heliostat", "biodigester", "habitat",
+		"siphon_hydro",
+	]
+	if not specialized_job \
+			and (RecipeRunner.is_recipe_driven(specs) or bool(specs.get("batch_mode", false))):
 		_process_processor_batch(item, specs, net_rates, _dt, abs_h)
 		return
 
@@ -1054,7 +1871,13 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 
 	# Throughput limited by slowest input/output rate and tank availability.
 	# Rates are scaled by occupants (default 1) so multi-unit processors share one path.
+	# io_absolute (HomeBiogas etc.): rates are absolute qty/h per port — the
+	# min+proportion path would incorrectly squash a small biogas m³/h against
+	# larger liquid L/h rates. Absolute mode gates on wired/supplied/accepting
+	# tanks then applies each port's rate directly (see consume/produce below).
+	var io_absolute: bool = bool(specs.get("io_absolute", false))
 	var throughput: float = INF
+	var any_io_rate := false
 	for i: int in inputs.size():
 		var inp: Dictionary = inputs[i] as Dictionary
 		# Electric is a power requirement (watts + power_in handle), not a
@@ -1066,6 +1889,7 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 		var rate: float = float(inp.get("rate", 0.0)) * occupants
 		if rate <= 0.0:
 			continue
+		any_io_rate = true
 		var in_kind := ResourceKinds.normalize_kind(str(inp.get("kind", "")))
 		var tank_id := _tank_at_port(proc_id, "res_in_%d" % i, true)
 		if tank_id.is_empty():
@@ -1085,7 +1909,10 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 			block_kinds = [in_kind] if not in_kind.is_empty() else []
 			throughput = 0.0
 			break
-		throughput = minf(throughput, rate)
+		if io_absolute:
+			throughput = 1.0
+		else:
+			throughput = minf(throughput, rate)
 
 	var unconnected_out: Array = []
 	if throughput > 0.0:
@@ -1098,6 +1925,7 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 			var rate: float = float(outp.get("rate", 0.0)) * occupants
 			if rate <= 0.0:
 				continue
+			any_io_rate = true
 			var out_kind := ResourceKinds.normalize_kind(str(outp.get("kind", "")))
 			var tank_id := _tank_at_port(proc_id, "res_out_%d" % i, false)
 			if tank_id.is_empty():
@@ -1126,7 +1954,16 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 				block_kinds = [out_kind] if not out_kind.is_empty() else []
 				throughput = 0.0
 				break
-			throughput = minf(throughput, rate)
+			if io_absolute:
+				throughput = 1.0
+			else:
+				throughput = minf(throughput, rate)
+	# Absolute mode with no positive rates yet (physics tick hasn't stamped
+	# them) → idle, same as INF in proportional mode.
+	if io_absolute and throughput == INF and not any_io_rate:
+		pass  # falls through to the INF idle branch below
+	elif io_absolute and throughput == INF and any_io_rate:
+		throughput = 1.0
 
 	_write_output_unconnected(proc_id, specs, unconnected_out)
 
@@ -1173,7 +2010,17 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 	var dc_out_kw := 0.0
 	for outp_dc: Dictionary in outputs:
 		if str(outp_dc.get("kind", "")) == "dc_electricity":
-			dc_out_kw = throughput * float(specs.get("energy_wh_per_unit", 0.0)) / 1000.0
+			# Absolute mode: throughput is a 0/1 scale, so multiply by the
+			# fuel input rate for Wh→kW; proportional mode keeps legacy math.
+			if io_absolute:
+				var fuel_rate := 0.0
+				for inp_dc: Dictionary in inputs:
+					if str(inp_dc.get("kind", "")) not in ["electric", "dc_electricity"]:
+						fuel_rate = float(inp_dc.get("rate", 0.0)) * occupants
+						break
+				dc_out_kw = throughput * fuel_rate * float(specs.get("energy_wh_per_unit", 0.0)) / 1000.0
+			else:
+				dc_out_kw = throughput * float(specs.get("energy_wh_per_unit", 0.0)) / 1000.0
 			break
 	if absf(float(specs.get("current_output_kw", 0.0)) - dc_out_kw) > 0.0005:
 		specs["current_output_kw"] = dc_out_kw
@@ -1188,7 +2035,8 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 		var rate: float = float(inp.get("rate", 0.0)) * occupants
 		if rate <= 0.0:
 			continue
-		var portion: float = throughput * (rate / maxf(in_total, 0.001))
+		var portion: float = (rate * throughput) if io_absolute \
+				else throughput * (rate / maxf(in_total, 0.001))
 		var tank_id := _tank_at_port(str(item.get("id", "")), "res_in_%d" % i, true)
 		if tank_id.is_empty():
 			tank_id = _tank_at_port(str(item.get("id", "")), "input", true)
@@ -1206,7 +2054,8 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 		var rate: float = float(outp.get("rate", 0.0)) * occupants
 		if rate <= 0.0:
 			continue
-		var portion: float = throughput * (rate / maxf(out_total, 0.001))
+		var portion: float = (rate * throughput) if io_absolute \
+				else throughput * (rate / maxf(out_total, 0.001))
 		var tank_id := _tank_at_port(str(item.get("id", "")), "res_out_%d" % i, false)
 		if tank_id.is_empty():
 			tank_id = _tank_at_port(str(item.get("id", "")), "output", false)
@@ -1225,7 +2074,8 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 ## predates the name/value split — continuous mode keeps using "rate" as a
 ## qty/hour throughout this file, untouched by this helper.
 func _io_batch_qty(io: Dictionary, occupants: float) -> float:
-	return float(io.get("value", io.get("rate", 0.0))) * occupants
+	# Process recipes use "qty"; legacy batch editor used "value" / "rate".
+	return float(io.get("qty", io.get("value", io.get("rate", 0.0)))) * occupants
 
 
 func _is_active_in_phase(io: Dictionary, elapsed: float, _batch_time: float) -> bool:
@@ -1239,30 +2089,50 @@ func _is_active_in_phase(io: Dictionary, elapsed: float, _batch_time: float) -> 
 	return false
 
 func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Dictionary, dt_hours: float, abs_h: float) -> void:
+	## Process-recipe / legacy batch cycle. Elapsed is scrub-safe via RecipeRunner
+	## (absolute hours + chore pause anchors). Tank I/O modes match the old
+	## Batch Cycle Mode; part outputs credit PartInventory via signal.
 	var item_id := str(item.get("id", ""))
 	if not _processor_states.has(item_id):
 		_processor_states[item_id] = { "state": "idle", "elapsed": 0.0, "penalty_qty": 0.0 }
 	var state: Dictionary = _processor_states[item_id] as Dictionary
-	
-	var batch_time := maxf(float(specs.get("batch_time_hrs", 1.0)), 0.001)
+
+	# Migrate / resolve recipe onto specs (ephemeral from legacy batch_mode).
+	var recipe := RecipeRunner.resolve_recipe(specs)
+	if recipe.is_empty() and bool(specs.get("batch_mode", false)):
+		recipe = ProcessRecipe.from_batch_specs(specs, str(specs.get("name", "")))
+	if not recipe.is_empty() and str(specs.get("selected_recipe_id", "")).is_empty():
+		ProcessRecipe.apply_to_specs(specs, recipe)
+		_model.update_item(item_id, {"specs": specs})
+
+	var batch_time := maxf(float(recipe.get("batch_time_hrs", specs.get("batch_time_hrs", 1.0))), 0.001)
+	specs["batch_time_hrs"] = batch_time
+	specs["batch_failure_mode"] = str(recipe.get("failure_mode",
+		specs.get("batch_failure_mode", "pause_and_resume")))
 	var occupants := maxf(float(specs.get("occupants", 1.0)), 1.0)
 	var inputs := specs.get("inputs", []) as Array
 	var outputs := specs.get("outputs", []) as Array
 	var eff := clampf(float(specs.get("efficiency", 1.0)), 0.0, 1.0)
-	
+
+	# Keep engine-local state aligned with scrub-safe recipe_running flag.
+	if bool(specs.get("recipe_running", false)):
+		state["state"] = "running"
+	elif str(state.get("state", "")) == "running" and not bool(specs.get("recipe_running", false)):
+		state["state"] = "idle"
+		state["elapsed"] = 0.0
+
 	if str(state["state"]) == "idle":
 		var switched_on := _processor_switched_on(specs)
 		var can_start := true
 		var start_block_reason := ""
 		var start_block_kinds: Array = []
 
-		# Start-phase power requirement (elapsed=0), used to check power + load draw.
 		var req_watts := float(specs.get("watts", specs.get("avg_watts", 0.0))) * occupants
 		for inp: Variant in inputs:
 			var inpd := inp as Dictionary
 			if str(inpd.get("kind", "")) == "electric":
 				if _is_active_in_phase(inpd, 0.0, batch_time):
-					req_watts += float(inpd.get("rate", 0.0)) * occupants
+					req_watts += float(inpd.get("qty", inpd.get("rate", 0.0))) * occupants
 
 		if req_watts > 0.0 and not _processor_has_power(item):
 			can_start = false
@@ -1273,12 +2143,15 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 				var inp: Dictionary = inputs[i] as Dictionary
 				var mode := str(inp.get("mode", "continuous"))
 				var kind := str(inp.get("kind", ""))
-				if kind == "electric": continue
+				if kind == "electric" or kind == "part":
+					continue
 				if mode == "frontloaded":
 					var qty := _io_batch_qty(inp, occupants)
-					if qty <= 0.0: continue
+					if qty <= 0.0:
+						continue
 					var tank_id := _tank_at_port(item_id, "res_in_%d" % i, true)
-					if tank_id.is_empty(): tank_id = _tank_at_port(item_id, "input", true)
+					if tank_id.is_empty():
+						tank_id = _tank_at_port(item_id, "input", true)
 					if tank_id.is_empty():
 						can_start = false
 						start_block_reason = GraphNodeState.REASON_EMPTY_INPUT
@@ -1295,8 +2168,6 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 						start_block_kinds = [ResourceKinds.normalize_kind(kind)]
 						break
 
-		# Switched OFF: it isn't trying to run → never blocked. READY if it could
-		# start (powered + frontload available), else IDLE. Draw nothing.
 		if not switched_on:
 			item.erase("batch_active_watts")
 			if can_start:
@@ -1305,98 +2176,126 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 				_write_node_state(item_id, specs, GraphNodeState.IDLE)
 			return
 
-		# Switched ON — publish the start-phase draw for load accounting.
 		item["batch_active_watts"] = req_watts
 
 		if can_start:
 			for i in inputs.size():
-				var inp: Dictionary = inputs[i] as Dictionary
-				var mode := str(inp.get("mode", "continuous"))
-				if mode == "frontloaded" and str(inp.get("kind", "")) != "electric":
-					var qty := _io_batch_qty(inp, occupants)
-					if qty <= 0.0: continue
-					var tank_id := _tank_at_port(item_id, "res_in_%d" % i, true)
-					if tank_id.is_empty(): tank_id = _tank_at_port(item_id, "input", true)
-					net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) - (qty / dt_hours)
+				var inp2: Dictionary = inputs[i] as Dictionary
+				var mode2 := str(inp2.get("mode", "continuous"))
+				if mode2 == "frontloaded" and str(inp2.get("kind", "")) not in ["electric", "part"]:
+					var qty2 := _io_batch_qty(inp2, occupants)
+					if qty2 <= 0.0:
+						continue
+					var tank_id2 := _tank_at_port(item_id, "res_in_%d" % i, true)
+					if tank_id2.is_empty():
+						tank_id2 = _tank_at_port(item_id, "input", true)
+					if not tank_id2.is_empty() and dt_hours > 0.0:
+						net_rates[tank_id2] = float(net_rates.get(tank_id2, 0.0)) - (qty2 / dt_hours)
 
+			var begin := RecipeRunner.begin_run(specs, abs_h, recipe)
 			state["state"] = "running"
 			state["elapsed"] = 0.0
 			state["penalty_qty"] = 0.0
+			_model.update_item(item_id, {"specs": specs})
+			if bool(begin.get("waiting_chore", false)):
+				_write_node_state(item_id, specs, GraphNodeState.IDLE)
+				recipe_chore_waiting.emit(item_id, {
+					"step_id": str(specs.get("recipe_waiting_step_id", "")),
+					"label": str(specs.get("recipe_waiting_label", "Needs attention")),
+					"chore_hours": float(specs.get("recipe_waiting_chore_hrs", 0.0)),
+				})
+				item.erase("batch_active_watts")
+				return
 		else:
 			item.erase("batch_active_watts")
 			item["batch_error"] = "blocked"
 			_write_node_state(item_id, specs, GraphNodeState.BLOCKED,
 					start_block_reason, start_block_kinds)
 			return
-			
+
 	if str(state["state"]) == "running":
-		# Manually switched off mid-batch → pause (hold elapsed), draw nothing.
 		if not _processor_switched_on(specs):
 			item.erase("batch_active_watts")
 			_write_node_state(item_id, specs, GraphNodeState.IDLE)
 			return
 
-		var elapsed: float = float(state["elapsed"])
+		var tick := RecipeRunner.tick_state(specs, abs_h, dt_hours, chore_ledger)
+		_model.update_item(item_id, {"specs": specs})
 
-		var req_watts := 0.0
+		if bool(tick.get("waiting_chore", false)):
+			item.erase("batch_active_watts")
+			_write_node_state(item_id, specs, GraphNodeState.IDLE)
+			recipe_chore_waiting.emit(item_id, tick.get("chore_request", {}) as Dictionary)
+			return
+
+		var elapsed: float = float(tick.get("elapsed", 0.0))
+		state["elapsed"] = elapsed
+
+		var req_watts_r := 0.0
 		var has_electric_input := false
-		for inp: Variant in inputs:
-			var inpd := inp as Dictionary
-			if str(inpd.get("kind", "")) == "electric":
+		for inp3: Variant in inputs:
+			var inpd3 := inp3 as Dictionary
+			if str(inpd3.get("kind", "")) == "electric":
 				has_electric_input = true
-				if _is_active_in_phase(inpd, elapsed, batch_time):
-					req_watts += float(inpd.get("rate", 0.0)) * occupants
-					
+				if _is_active_in_phase(inpd3, elapsed, batch_time):
+					req_watts_r += float(inpd3.get("qty", inpd3.get("rate", 0.0))) * occupants
+
 		if not has_electric_input:
-			req_watts = float(specs.get("watts", 0.0))
-			if req_watts <= 0.0:
-				req_watts = float(specs.get("avg_watts", 0.0))
-			if req_watts <= 0.0:
-				req_watts = float(specs.get("base_watts", 0.0))
-			req_watts *= occupants
-			
-		item["batch_active_watts"] = req_watts
+			req_watts_r = float(specs.get("watts", 0.0))
+			if req_watts_r <= 0.0:
+				req_watts_r = float(specs.get("avg_watts", 0.0))
+			if req_watts_r <= 0.0:
+				req_watts_r = float(specs.get("base_watts", 0.0))
+			req_watts_r *= occupants
+
+		item["batch_active_watts"] = req_watts_r
 		item["batch_error"] = ""
 
 		var powered := true
-		if req_watts > 0.0:
+		if req_watts_r > 0.0:
 			powered = _processor_has_power(item)
-			
+
 		var missing_inputs := false
 		var missing_kind := ""
 		var frame_pulls := {}
 		for i in inputs.size():
-			var inp: Dictionary = inputs[i] as Dictionary
-			var kind := str(inp.get("kind", ""))
-			if kind == "electric": continue
-			if _is_active_in_phase(inp, elapsed, batch_time):
+			var inp4: Dictionary = inputs[i] as Dictionary
+			var kind4 := str(inp4.get("kind", ""))
+			if kind4 == "electric" or kind4 == "part":
+				continue
+			if _is_active_in_phase(inp4, elapsed, batch_time):
 				var qty_per_hr := 0.0
-				var mode := str(inp.get("mode", "continuous"))
-				if mode == "continuous":
-					qty_per_hr = _io_batch_qty(inp, occupants) / batch_time
-				elif mode == "delayed":
-					var dur := maxf(float(inp.get("duration_hrs", 1.0)), 0.001)
-					qty_per_hr = _io_batch_qty(inp, occupants) / dur
-				
+				var mode4 := str(inp4.get("mode", "continuous"))
+				if mode4 == "continuous":
+					qty_per_hr = _io_batch_qty(inp4, occupants) / batch_time
+				elif mode4 == "delayed":
+					var dur := maxf(float(inp4.get("duration_hrs", 1.0)), 0.001)
+					qty_per_hr = _io_batch_qty(inp4, occupants) / dur
+
 				if qty_per_hr > 0.0:
-					var tank_id := _tank_at_port(item_id, "res_in_%d" % i, true)
-					if tank_id.is_empty(): tank_id = _tank_at_port(item_id, "input", true)
-					if tank_id.is_empty():
-						missing_inputs = true; missing_kind = kind; break
-					var tl := _timelines.get(tank_id) as ResourceTimeline
-					var tank_item := _model.get_item(tank_id)
-					var tank_specs: Dictionary = tank_item.get("specs", {}) if not tank_item.is_empty() else {}
-					var out_valve_open: bool = bool(tank_specs.get("output_valve_open", true))
-					var deficit_ok: bool = tl == null and bool(tank_specs.get("allow_negative", false))
-					if (tl == null and not deficit_ok) or (tl != null and tl.level_at(abs_h) < (qty_per_hr * dt_hours)) or not out_valve_open:
-						missing_inputs = true; missing_kind = kind; break
-					frame_pulls[tank_id] = float(frame_pulls.get(tank_id, 0.0)) + qty_per_hr
+					var tank_id4 := _tank_at_port(item_id, "res_in_%d" % i, true)
+					if tank_id4.is_empty():
+						tank_id4 = _tank_at_port(item_id, "input", true)
+					if tank_id4.is_empty():
+						missing_inputs = true
+						missing_kind = kind4
+						break
+					var tl4 := _timelines.get(tank_id4) as ResourceTimeline
+					var tank_item4 := _model.get_item(tank_id4)
+					var tank_specs4: Dictionary = tank_item4.get("specs", {}) if not tank_item4.is_empty() else {}
+					var out_valve_open4: bool = bool(tank_specs4.get("output_valve_open", true))
+					var deficit_ok4: bool = tl4 == null and bool(tank_specs4.get("allow_negative", false))
+					if (tl4 == null and not deficit_ok4) or (tl4 != null and tl4.level_at(abs_h) < (qty_per_hr * dt_hours)) or not out_valve_open4:
+						missing_inputs = true
+						missing_kind = kind4
+						break
+					frame_pulls[tank_id4] = float(frame_pulls.get(tank_id4, 0.0)) + qty_per_hr
 					for conn: Dictionary in _connections_to_handle(item_id, "res_in_%d" % i):
-						_cache_conn_flow(str(conn.get("id", "")), qty_per_hr, kind)
+						_cache_conn_flow(str(conn.get("id", "")), qty_per_hr, kind4)
 					if i == 0 and inputs.size() == 1:
-						for conn: Dictionary in _connections_to_handle(item_id, "input"):
-							_cache_conn_flow(str(conn.get("id", "")), qty_per_hr, kind)
-		
+						for conn2: Dictionary in _connections_to_handle(item_id, "input"):
+							_cache_conn_flow(str(conn2.get("id", "")), qty_per_hr, kind4)
+
 		if not powered or missing_inputs:
 			item["batch_error"] = "missing_inputs" if missing_inputs else "blocked"
 			item.erase("batch_active_watts")
@@ -1407,88 +2306,93 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 			_write_node_state(item_id, specs, GraphNodeState.BLOCKED, blk_reason, blk_kinds)
 			var fail_mode := str(specs.get("batch_failure_mode", "pause_and_resume"))
 			if fail_mode == "restart_with_penalty":
-				# Scrap progress, restart from idle, and waste the configured
-				# penalty quantity from the primary input tank as the retry cost.
+				RecipeRunner.cancel_run(specs)
 				state["state"] = "idle"
 				_apply_batch_penalty(item_id, specs, inputs, net_rates, dt_hours)
+				_model.update_item(item_id, {"specs": specs})
 			elif fail_mode == "destroy_batch":
-				# Whole batch scrapped: progress + any frontloaded inputs lost,
-				# must be re-triggered from idle (no extra tank debit).
+				RecipeRunner.cancel_run(specs)
 				state["state"] = "idle"
-			# pause_and_resume: keep elapsed and wait for inputs to return.
+				_model.update_item(item_id, {"specs": specs})
 			return
 
 		_write_node_state(item_id, specs, GraphNodeState.RUNNING)
 
-		for tank_id: Variant in frame_pulls:
-			net_rates[str(tank_id)] = float(net_rates.get(str(tank_id), 0.0)) - float(frame_pulls[tank_id])
-			
+		for tank_id5: Variant in frame_pulls:
+			net_rates[str(tank_id5)] = float(net_rates.get(str(tank_id5), 0.0)) - float(frame_pulls[tank_id5])
+
 		var frame_pushes := {}
 		for i in outputs.size():
 			var outp: Dictionary = outputs[i] as Dictionary
+			if str(outp.get("kind", "")) == "part":
+				continue
 			if _is_active_in_phase(outp, elapsed, batch_time):
-				var qty_per_hr := 0.0
-				var mode := str(outp.get("mode", "continuous"))
-				if mode == "continuous":
-					qty_per_hr = (_io_batch_qty(outp, occupants) * eff) / batch_time
-				elif mode == "delayed":
-					var dur := maxf(float(outp.get("duration_hrs", 1.0)), 0.001)
-					qty_per_hr = (_io_batch_qty(outp, occupants) * eff) / dur
-				
-				if qty_per_hr > 0.0:
-					var tank_id := _tank_at_port(item_id, "res_out_%d" % i, false)
-					if tank_id.is_empty(): tank_id = _tank_at_port(item_id, "output", false)
-					
+				var qty_per_hr_o := 0.0
+				var mode_o := str(outp.get("mode", "continuous"))
+				if mode_o == "continuous":
+					qty_per_hr_o = (_io_batch_qty(outp, occupants) * eff) / batch_time
+				elif mode_o == "delayed":
+					var dur_o := maxf(float(outp.get("duration_hrs", 1.0)), 0.001)
+					qty_per_hr_o = (_io_batch_qty(outp, occupants) * eff) / dur_o
+
+				if qty_per_hr_o > 0.0:
+					var tank_ido := _tank_at_port(item_id, "res_out_%d" % i, false)
+					if tank_ido.is_empty():
+						tank_ido = _tank_at_port(item_id, "output", false)
 					var push_ok := false
-					if not tank_id.is_empty():
-						var tank_item := _model.get_item(tank_id)
-						var tank_specs: Dictionary = tank_item.get("specs", {}) if not tank_item.is_empty() else {}
-						var in_valve_open: bool = bool(tank_specs.get("input_valve_open", true))
-						if in_valve_open:
+					if not tank_ido.is_empty():
+						var tank_item_o := _model.get_item(tank_ido)
+						var tank_specs_o: Dictionary = tank_item_o.get("specs", {}) if not tank_item_o.is_empty() else {}
+						if bool(tank_specs_o.get("input_valve_open", true)):
 							push_ok = true
-					
 					if push_ok:
-						frame_pushes[tank_id] = float(frame_pushes.get(tank_id, 0.0)) + qty_per_hr
-						for conn: Dictionary in _connections_from_handle(item_id, "res_out_%d" % i):
-							_cache_conn_flow(str(conn.get("id", "")), qty_per_hr, str(outp.get("kind", "")))
+						frame_pushes[tank_ido] = float(frame_pushes.get(tank_ido, 0.0)) + qty_per_hr_o
+						for conn_o: Dictionary in _connections_from_handle(item_id, "res_out_%d" % i):
+							_cache_conn_flow(str(conn_o.get("id", "")), qty_per_hr_o, str(outp.get("kind", "")))
 						if i == 0 and outputs.size() == 1:
-							for conn: Dictionary in _connections_from_handle(item_id, "output"):
-								_cache_conn_flow(str(conn.get("id", "")), qty_per_hr, str(outp.get("kind", "")))
-						
-		for tank_id: Variant in frame_pushes:
-			net_rates[str(tank_id)] = float(net_rates.get(str(tank_id), 0.0)) + float(frame_pushes[tank_id])
-			
-		state["elapsed"] = elapsed + dt_hours
-		
-		if float(state["elapsed"]) >= batch_time:
+							for conn_o2: Dictionary in _connections_from_handle(item_id, "output"):
+								_cache_conn_flow(str(conn_o2.get("id", "")), qty_per_hr_o, str(outp.get("kind", "")))
+
+		for tank_id6: Variant in frame_pushes:
+			net_rates[str(tank_id6)] = float(net_rates.get(str(tank_id6), 0.0)) + float(frame_pushes[tank_id6])
+
+		if bool(tick.get("completed", false)):
 			for i in outputs.size():
-				var outp: Dictionary = outputs[i] as Dictionary
-				var mode := str(outp.get("mode", "continuous"))
-				if mode == "end_batch":
-					var qty := _io_batch_qty(outp, occupants) * eff
-					if qty > 0.0:
-						var tank_id := _tank_at_port(item_id, "res_out_%d" % i, false)
-						if tank_id.is_empty(): tank_id = _tank_at_port(item_id, "output", false)
-						
-						var push_ok := false
-						if not tank_id.is_empty():
-							var tank_item := _model.get_item(tank_id)
-							var tank_specs: Dictionary = tank_item.get("specs", {}) if not tank_item.is_empty() else {}
-							var in_valve_open: bool = bool(tank_specs.get("input_valve_open", true))
-							if in_valve_open:
-								push_ok = true
-						
-						if push_ok:
-							var qty_per_hr := qty / dt_hours
-							net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) + qty_per_hr
-							for conn: Dictionary in _connections_from_handle(item_id, "res_out_%d" % i):
-								_cache_conn_flow(str(conn.get("id", "")), qty_per_hr, str(outp.get("kind", "")))
+				var outp2: Dictionary = outputs[i] as Dictionary
+				if str(outp2.get("kind", "")) == "part":
+					continue
+				var mode_e := str(outp2.get("mode", "continuous"))
+				if mode_e == "end_batch":
+					var qty_e := _io_batch_qty(outp2, occupants) * eff
+					if qty_e > 0.0 and dt_hours > 0.0:
+						var tank_ide := _tank_at_port(item_id, "res_out_%d" % i, false)
+						if tank_ide.is_empty():
+							tank_ide = _tank_at_port(item_id, "output", false)
+						var push_oke := false
+						if not tank_ide.is_empty():
+							var tank_item_e := _model.get_item(tank_ide)
+							var tank_specs_e: Dictionary = tank_item_e.get("specs", {}) if not tank_item_e.is_empty() else {}
+							if bool(tank_specs_e.get("input_valve_open", true)):
+								push_oke = true
+						if push_oke:
+							var qty_per_hr_e := qty_e / dt_hours
+							net_rates[tank_ide] = float(net_rates.get(tank_ide, 0.0)) + qty_per_hr_e
+							for conn_e: Dictionary in _connections_from_handle(item_id, "res_out_%d" % i):
+								_cache_conn_flow(str(conn_e.get("id", "")), qty_per_hr_e, str(outp2.get("kind", "")))
 							if i == 0 and outputs.size() == 1:
-								for conn: Dictionary in _connections_from_handle(item_id, "output"):
-									_cache_conn_flow(str(conn.get("id", "")), qty_per_hr, str(outp.get("kind", "")))
-			
+								for conn_e2: Dictionary in _connections_from_handle(item_id, "output"):
+									_cache_conn_flow(str(conn_e2.get("id", "")), qty_per_hr_e, str(outp2.get("kind", "")))
+
+			var credits: Array = tick.get("part_credits", []) as Array
+			if credits.is_empty():
+				credits = RecipeRunner.take_pending_credits(specs)
+			if not credits.is_empty():
+				recipe_parts_ready.emit(item_id, credits)
+			item.erase("batch_active_watts")
 			state["state"] = "idle"
 			state["elapsed"] = 0.0
+			_model.update_item(item_id, {"specs": specs})
+			_write_node_state(item_id, specs, GraphNodeState.READY)
 
 
 ## Habitat: per-channel demand × occupants; waste = yield × actual consumption.
@@ -1700,10 +2604,22 @@ func _processor_has_power(item: Dictionary) -> bool:
 	if es == "ac":
 		if not _ac_output_available():
 			return false
-		return _has_incoming_connection(iid, "power_in")
+		return _has_ac_power_wire(iid)
 	# Passive (no power needed) or future "dc" (powered via a tanked electric
 	# resource input, which is handled by the resource-flow "fed" check, not here).
 	return true
+
+
+## True when any flattened AC edge touches this item's `power_in` as source OR
+## target — same undirected presence check GraphAcLoad uses for reachability.
+func _has_ac_power_wire(item_id: String) -> bool:
+	if item_id.is_empty():
+		return false
+	if _has_incoming_connection(item_id, "power_in"):
+		return true
+	if not _connections_from_handle(item_id, "power_in").is_empty():
+		return true
+	return false
 
 
 ## The manual/automation run switch: requested_state wins, else legacy
@@ -1774,7 +2690,51 @@ func _has_incoming_connection(item_id: String, handle_id: String) -> bool:
 	return not _connections_to_handle(item_id, handle_id).is_empty()
 
 
+func _migrate_resource_specs_if_needed(specs: Dictionary) -> void:
+	# Load/create paths already migrate; skip the key-fill walk when present.
+	if specs.has("capacity_qty") and specs.has("resource_kind") and specs.has("level"):
+		if not specs.has("unlimited_capacity"):
+			specs["unlimited_capacity"] = false
+		if not specs.has("allow_negative"):
+			specs["allow_negative"] = false
+		return
+	_rk.migrate_resource_specs(specs)
+
+
+func _refresh_ambient_cache() -> void:
+	_ambient_valid = false
+	_ambient_rain_mmh = _compute_rain_rate_mmh()
+	_ambient_ghi_wm2 = _compute_sun_ghi_wm2()
+	_ambient_cloud_frac = _compute_sun_cloud_frac()
+	_ambient_atmo = _compute_atmosphere_sample()
+	_ambient_valid = true
+
+
 func _rain_rate_mmh() -> float:
+	if _ambient_valid:
+		return _ambient_rain_mmh
+	return _compute_rain_rate_mmh()
+
+
+func _sun_ghi_wm2() -> float:
+	if _ambient_valid:
+		return _ambient_ghi_wm2
+	return _compute_sun_ghi_wm2()
+
+
+func _sun_cloud_frac() -> float:
+	if _ambient_valid:
+		return _ambient_cloud_frac
+	return _compute_sun_cloud_frac()
+
+
+func _atmosphere_sample() -> Dictionary:
+	if _ambient_valid:
+		return _ambient_atmo
+	return _compute_atmosphere_sample()
+
+
+func _compute_rain_rate_mmh() -> float:
 	if rain_rate_override_mmh >= 0.0:
 		return rain_rate_override_mmh
 	var main_node: Node = null
@@ -1811,7 +2771,7 @@ func _rain_rate_mmh() -> float:
 ## instant during a batch render). Real sun position (Meeus SPA via
 ## SolarIrradiance) + measured WeatherService GHI when covered, else the
 ## shared clear-sky model — never zero just because weather is unavailable.
-func _sun_ghi_wm2() -> float:
+func _compute_sun_ghi_wm2() -> float:
 	if sun_ghi_override_wm2 >= 0.0:
 		return sun_ghi_override_wm2
 	var main_node: Node = null
@@ -1843,7 +2803,7 @@ func _sun_ghi_wm2() -> float:
 ## Cloud cover fraction (0–1) at the live/render instant — folded into GHI via
 ## SolarIrradiance and published on the sunlight PBI as specs.cloud_frac so
 ## overcast reduces shared availability even without per-node 3D geometry.
-func _sun_cloud_frac() -> float:
+func _compute_sun_cloud_frac() -> float:
 	if sun_cloud_override >= 0.0:
 		return clampf(sun_cloud_override, 0.0, 1.0)
 	var main_node: Node = null
@@ -1873,7 +2833,7 @@ func _sun_cloud_frac() -> float:
 
 
 ## Atmosphere sample for Wind PBI (honors selftest overrides).
-func _atmosphere_sample() -> Dictionary:
+func _compute_atmosphere_sample() -> Dictionary:
 	var out := {
 		"wind_ms": 0.0, "temp_c": 20.0, "humidity_pct": 50.0,
 		"cloud_frac": 0.0, "rain_mmh": 0.0, "has_real": false,

@@ -16,11 +16,52 @@ func _initialize() -> void:
 	fails += _test_array_topology()
 	fails += _test_array_wire_and_voc()
 	fails += _test_controller_ranking()
+	fails += _test_voc_across_supernode()
 	if fails == 0:
-		print("GRAPH ELECTRICAL SELFTEST PASS  (9 checks)")
+		print("GRAPH ELECTRICAL SELFTEST PASS  (10 checks)")
 	else:
 		print("GRAPH ELECTRICAL SELFTEST FAIL  (%d failed)" % fails)
 	quit()
+
+
+## Nesting-aware Voc: a PV string whose panels live inside a super-node wired to
+## a controller in the parent scope must still fault (find_overvoltage_faults_flat
+## flattens the portals and scans every scope).
+func _test_voc_across_supernode() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	for i in 4:
+		_add_panel(model, "sp%d" % i, 48.0)
+	_add_controller(model, "ctrl", 150.0)
+	# Series-chain panels inside the child scope.
+	for i in 3:
+		model.add_connection({"scope_id": "scope_grp", "polarity": "positive",
+			"source_item_id": "sp%d" % i, "source_handle_id": "positive",
+			"target_item_id": "sp%d" % (i + 1), "target_handle_id": "negative"})
+	# Group them; expose the string ends.
+	model.add_item({"id": "grp", "type": "compound", "x": 0, "y": 0,
+		"width": 180, "height": 120, "scope_id": "root", "child_scope_id": "scope_grp",
+		"handles": [
+			{"id": "pv+", "polarity": "positive", "direction": "out", "rx": 1.0, "ry": 0.4},
+			{"id": "pv-", "polarity": "negative", "direction": "out", "rx": 1.0, "ry": 0.6}],
+		"specs": {"compound_kind": "", "exposed_ports": [
+			{"handle_id": "pv+", "child_item_id": "sp3", "child_handle_id": "positive",
+				"direction": "out", "polarity": "positive"},
+			{"handle_id": "pv-", "child_item_id": "sp0", "child_handle_id": "negative",
+				"direction": "out", "polarity": "negative"}]}})
+	model.ensure_scope("scope_grp", "root", "grp", "grp")
+	for i in 4:
+		model.update_item("sp%d" % i, {"scope_id": "scope_grp", "parent_compound_id": "grp"})
+	model.add_connection({"scope_id": "root", "polarity": "positive",
+		"source_item_id": "grp", "source_handle_id": "pv+",
+		"target_item_id": "ctrl", "target_handle_id": "pvPositive"})
+	model.add_connection({"scope_id": "root", "polarity": "negative",
+		"source_item_id": "grp", "source_handle_id": "pv-",
+		"target_item_id": "ctrl", "target_handle_id": "pvNegative"})
+	var faults := PvElectrical.find_overvoltage_faults_flat(model, 25.0)
+	if faults.size() != 1:
+		push_error("expected 1 over-voltage fault across super-node, got %d" % faults.size())
+		return 1
+	return 0
 
 
 func _test_voc_series() -> int:

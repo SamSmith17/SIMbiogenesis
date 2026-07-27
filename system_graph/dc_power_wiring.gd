@@ -22,14 +22,19 @@ const MAX_HOPS := 8
 ## scoped in system_graph_view.gd). Returns the battery item id, or "" if
 ## unwired or dead-ended.
 static func find_battery_for_dc_port(model: GraphModel, item_id: String,
-		handle_id: String, visited: Dictionary = {}, hops: int = 0) -> String:
+		handle_id: String, visited: Dictionary = {}, hops: int = 0,
+		flat_conns: Array = []) -> String:
 	if model == null or hops > MAX_HOPS:
 		return ""
 	var key := item_id + "|" + handle_id
 	if visited.has(key):
 		return ""
 	visited[key] = true
-	for conn: Dictionary in model.connections:
+	# Trace over the FLATTENED graph so a battery/controller wired across a
+	# super-node (compound) boundary at any depth is still reached.
+	if flat_conns.is_empty():
+		flat_conns = GraphNesting.flat_connections(model)
+	for conn: Dictionary in flat_conns:
 		var other_id := ""
 		var other_handle := ""
 		if str(conn.get("source_item_id", "")) == item_id and str(conn.get("source_handle_id", "")) == handle_id:
@@ -48,7 +53,7 @@ static func find_battery_for_dc_port(model: GraphModel, item_id: String,
 			return other_id
 		if ot == "controller" and other_handle in ["pvPositive", "pvNegative"]:
 			var next_handle := "batteryPositive" if other_handle == "pvPositive" else "batteryNegative"
-			var found := find_battery_for_dc_port(model, other_id, next_handle, visited, hops + 1)
+			var found := find_battery_for_dc_port(model, other_id, next_handle, visited, hops + 1, flat_conns)
 			if not found.is_empty():
 				return found
 			continue
@@ -56,7 +61,7 @@ static func find_battery_for_dc_port(model: GraphModel, item_id: String,
 			var ospecs: Dictionary = other.get("specs", {}) as Dictionary
 			if str(ospecs.get("resource_kind", "")) == "dc_electricity" and other_handle in ["positive", "negative"]:
 				var other_port := "negative" if other_handle == "positive" else "positive"
-				var found2 := find_battery_for_dc_port(model, other_id, other_port, visited, hops + 1)
+				var found2 := find_battery_for_dc_port(model, other_id, other_port, visited, hops + 1, flat_conns)
 				if not found2.is_empty():
 					return found2
 	return ""
@@ -73,7 +78,10 @@ static func sum_graph_dc_generation_kw(model: GraphModel) -> float:
 	if model == null:
 		return 0.0
 	var total := 0.0
-	for item: Dictionary in model.get_items_in_scope("root"):
+	var flat_conns := GraphNesting.flat_connections(model)
+	# Nesting-aware: count DC generators anywhere in the tree (including inside
+	# collapsed super-nodes), wired to a battery across any boundary.
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype := str(item.get("type", ""))
@@ -87,13 +95,13 @@ static func sum_graph_dc_generation_kw(model: GraphModel) -> float:
 			for i: int in outputs.size():
 				if str((outputs[i] as Dictionary).get("kind", "")) != "dc_electricity":
 					continue
-				if not find_battery_for_dc_port(model, iid, "res_out_%d_pos" % i, {}, 0).is_empty():
+				if not find_battery_for_dc_port(model, iid, "res_out_%d_pos" % i, {}, 0, flat_conns).is_empty():
 					total += kw
 				break
 		elif itype == "wind" or itype == "hydro":
 			var scene_path := str(specs.get("scene_device_path", item.get("device_path", "")))
 			if not scene_path.is_empty():
 				continue  # already counted via SolarUI's real energy_sources group
-			if not find_battery_for_dc_port(model, iid, "positive", {}, 0).is_empty():
+			if not find_battery_for_dc_port(model, iid, "positive", {}, 0, flat_conns).is_empty():
 				total += kw
 	return total

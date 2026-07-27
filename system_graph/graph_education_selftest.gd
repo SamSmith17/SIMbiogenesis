@@ -15,6 +15,10 @@ func _initialize() -> void:
 	fails += _expect_title({"type": "pbi", "specs": {"resource_kind": "wind"}}, "Wind")
 	fails += _expect_title({"type": "panel", "specs": {"name": "PV"}}, "Solar panel")
 	fails += _expect_title({"type": "plant", "specs": {"name": "Bed"}}, "Grow Bed")
+	fails += _expect_title({
+		"type": "compound",
+		"specs": {"name": "StarShade", "definition_id": "starshade", "node_banner": true, "model_id": "starshade"},
+	}, "expand")
 	fails += _expect_conn_title({
 		"polarity": "resource", "resource_type": "sunlight",
 	}, "Radiant")
@@ -23,7 +27,7 @@ func _initialize() -> void:
 	}, "atmosphere")
 	fails += _expect_conn_empty({"polarity": "positive"})
 	if fails == 0:
-		print("GRAPH EDUCATION SELFTEST PASS  (11 checks)")
+		print("GRAPH EDUCATION SELFTEST PASS  (12 checks)")
 		quit(0)
 	else:
 		print("GRAPH EDUCATION SELFTEST FAIL  (%d failed)" % fails)

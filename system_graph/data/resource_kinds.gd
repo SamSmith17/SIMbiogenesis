@@ -51,6 +51,24 @@ const BUILTIN: Dictionary = {
 		"abbrev": "ðŸŒ¿",
 		"flow_ref_rate": 25.0,
 	},
+	"food_waste": {
+		# Kitchen / food scraps for digesters (HomeBiogas datasheet is in liters;
+		# wet scraps ≈ 1 kg/L so volume and mass rates are interchangeable here).
+		"display": "Food Waste",
+		"color": Color(0.620, 0.480, 0.220, 1.0),
+		"unit": "L",
+		"abbrev": "FW",
+		"flow_ref_rate": 6.0,
+		"aliases": ["kitchen_waste", "organic_waste", "food_scraps"],
+	},
+	"manure": {
+		"display": "Animal Manure",
+		"color": Color(0.480, 0.360, 0.200, 1.0),
+		"unit": "L",
+		"abbrev": "MN",
+		"flow_ref_rate": 15.0,
+		"aliases": ["animal_manure", "dung"],
+	},
 	"plastic_waste": {
 		"display": "Plastic Waste",
 		"color": Color(0.580, 0.639, 0.722, 1.0),
@@ -64,6 +82,34 @@ const BUILTIN: Dictionary = {
 		"unit": "kg",
 		"abbrev": "âœ‚",
 		"flow_ref_rate": 15.0,
+	},
+	"plastic_flake": {
+		"display": "Plastic Flake",
+		"color": Color(0.298, 0.788, 0.741, 1.0),
+		"unit": "kg",
+		"abbrev": "🫧",
+		"flow_ref_rate": 10.0,
+	},
+	"plastic_sheet": {
+		"display": "Recycled Plastic Sheet",
+		"color": Color(0.450, 0.720, 0.820, 1.0),
+		"unit": "sheets",
+		"abbrev": "▭",
+		"flow_ref_rate": 2.0,
+	},
+	"finished_part": {
+		"display": "Finished Parts",
+		"color": Color(0.741, 0.678, 0.949, 1.0),
+		"unit": "units",
+		"abbrev": "🧩",
+		"flow_ref_rate": 5.0,
+	},
+	"mud": {
+		"display": "Mud / Clay / Concrete",
+		"color": Color(0.545, 0.435, 0.302, 1.0),
+		"unit": "L",
+		"abbrev": "🪣",
+		"flow_ref_rate": 50.0,
 	},
 	"biochar": {
 		"display": "Biochar",
@@ -479,6 +525,8 @@ static func infer_kind_from_name(name: String) -> String:
 		return "thermal"
 	if "ev" in n or "battery" in n:
 		return "electric"
+	if "plastic" in n and "flake" in n:
+		return "plastic_flake"
 	if "plastic" in n and "shred" in n:
 		return "plastic_shred"
 	if "plastic" in n:
@@ -487,6 +535,10 @@ static func infer_kind_from_name(name: String) -> String:
 		return "biochar"
 	if "biomass" in n:
 		return "biomass"
+	if "manure" in n or "dung" in n:
+		return "manure"
+	if ("food" in n and ("waste" in n or "scrap" in n)) or "kitchen" in n:
+		return "food_waste"
 	if "food" in n:
 		return "food"
 	if "money" in n or "cash" in n:
@@ -623,3 +675,63 @@ func migrate_resource_specs(specs: Dictionary) -> void:
 		specs["scale_with_fill"] = true
 	if not specs.has("jit_outflow"):
 		specs["jit_outflow"] = false
+
+
+## Absolute stock in capacity_unit. Deficit tanks use level × capacity_qty
+## (level may be < 0 or > 1). Unlimited timeline tanks use level × 1e12.
+const UNLIMITED_CAPACITY_QTY := 1.0e12
+
+
+static func tank_stock_qty(specs: Dictionary) -> float:
+	# Culvert ∞ outlet: cumulative discharge is the meaningful stock.
+	if bool(specs.get("outlet_sink", false)):
+		return maxf(float(specs.get("cumulative_l", specs.get("stock_l", 0.0))), 0.0)
+	var level := float(specs.get("level", 0.0))
+	if bool(specs.get("allow_negative", false)):
+		return level * maxf(float(specs.get("capacity_qty", 100.0)), 0.001)
+	if bool(specs.get("unlimited_capacity", false)):
+		return level * UNLIMITED_CAPACITY_QTY
+	return clampf(level, 0.0, 1.0) * maxf(float(specs.get("capacity_qty", 100.0)), 0.0)
+
+
+static func format_tank_stock(specs: Dictionary) -> String:
+	var unit := str(specs.get("capacity_unit",
+		default_unit(str(specs.get("resource_kind", "water")))))
+	if bool(specs.get("outlet_sink", false)):
+		var cum := maxf(float(specs.get("cumulative_l", specs.get("stock_l", 0.0))), 0.0)
+		var lps := float(specs.get("live_in_lps", 0.0))
+		if lps > 1e-4:
+			return "%s %s · %.1f L/s" % [format_qty(cum), unit, lps]
+		return "%s %s out" % [format_qty(cum), unit]
+	# Pond twin with runaway capacity (legacy 1e12) — don't show scientific junk.
+	var cap_raw := float(specs.get("capacity_qty", 100.0))
+	if bool(specs.get("pond_storage", false)) and not bool(specs.get("unlimited_capacity", false)) \
+			and (is_nan(cap_raw) or cap_raw >= 1.0e10):
+		var level := clampf(float(specs.get("level", 0.0)), 0.0, 1.0)
+		return "level %.0f%% (capacity pending heal)" % [level * 100.0]
+	var stock := tank_stock_qty(specs)
+	var qty := format_qty(stock)
+	if bool(specs.get("allow_negative", false)) \
+			or bool(specs.get("unlimited_capacity", false)):
+		return "%s %s" % [qty, unit]
+	var cap := maxf(cap_raw, 0.0)
+	return "%s / %s %s" % [format_qty(stock), format_qty(cap), unit]
+
+
+static func format_qty(q: float) -> String:
+	var a := absf(q)
+	if a >= 1.0e7:
+		# Godot's String.sprintf has NO `%e`/`%g` conversion — using it threw
+		# "unsupported format character" once per drawn tank ≥10M. Build the
+		# scientific form by hand from mantissa + exponent instead.
+		var expo := int(floor(log(a) / log(10.0)))
+		var mant := q / pow(10.0, expo)
+		if absf(mant) >= 9.995:  # rounding 9.999→10.00 rolls into the next decade
+			mant /= 10.0
+			expo += 1
+		return "%.2fe%d" % [mant, expo]
+	if a >= 100.0:
+		return "%.0f" % q
+	if a >= 10.0:
+		return "%.1f" % q
+	return "%.2f" % q
