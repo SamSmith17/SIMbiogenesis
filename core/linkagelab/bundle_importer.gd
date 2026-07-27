@@ -33,6 +33,7 @@ static func prepare_bundle(path: String) -> Dictionary:
 		"solar": DesignBundleScript.solar_from_bundle(bundle),
 		"ibc": DesignBundleScript.ibc_from_bundle(bundle),
 		"location": DesignBundleScript.location_from_bundle(bundle),
+		"linkage_project": DesignBundleScript.project_from_bundle(bundle),
 		"path": path,
 	}
 
@@ -88,6 +89,7 @@ static func apply_to_scene(tree: SceneTree, prep: Dictionary) -> Dictionary:
 		"solar_applied": solar_applied,
 		"ibc_attached": ibc_attached,
 		"model_id": model_id,
+		"linkage_project": prep.get("linkage_project", {}),
 	}
 
 

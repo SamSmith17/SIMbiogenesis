@@ -1,0 +1,203 @@
+{
+	"animationStopAngle": 134.9,
+	"cameraState": {
+		"structureRotation": 0.0
+	},
+	"foldAngle": 134.9,
+	"minFoldAngle": 5.8,
+	"mode": {
+		"arrayCount": 1,
+		"capUprights": true,
+		"flipVertical": false,
+		"rotation": 0.0,
+		"type": "cylinder",
+		"useFixedBeams": false
+	},
+	"name": "StarShade Compact - 8-mod Cylinder, 12 Panels",
+	"panels": {
+		"enabled": true,
+		"enabledFaces": [
+			false,
+			false,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true
+		],
+		"gridRotation": 0.0,
+		"layoutMode": "spiral",
+		"positioning": {
+			"lift": -3.0,
+			"separation": -4.5,
+			"slide": 37.0
+		},
+		"radial": {
+			"count": 4,
+			"lateralOffset": 59.0,
+			"offset": 72.0,
+			"pinwheelAngle": 0.0,
+			"rotation": -22.5
+		},
+		"sidePanels": {
+			"electrical": {
+				"imp": 9.65,
+				"isc": 10.2,
+				"ratedWatts": 180.0,
+				"vmp": 41.5,
+				"voc": 49.5,
+				"weight": 45.0
+			},
+			"enabled": false,
+			"grid": {
+				"cols": 1,
+				"rows": 1
+			},
+			"lift": 0.0,
+			"padding": {
+				"x": 0.0,
+				"y": -0.5
+			},
+			"size": {
+				"length": 96.0,
+				"thickness": 0.5,
+				"width": 48.0
+			}
+		},
+		"spiral": {
+			"armCount": 3,
+			"armLateralStep": 0.0,
+			"armPinwheelStep": 0.0,
+			"armRadialStep": -39.0,
+			"armRotationStep": 0.0,
+			"secondaryEnabled": true,
+			"secondaryLateralOffset": 0.0,
+			"secondaryPinwheel": -2.0,
+			"secondaryRadialOffset": -39.0,
+			"secondaryRotation": 2.0
+		},
+		"topPanels": {
+			"electrical": {
+				"imp": 8.1,
+				"isc": 8.8,
+				"ratedWatts": 250.0,
+				"vmp": 31.5,
+				"voc": 37.5,
+				"weight": 45.0
+			},
+			"enabled": true,
+			"grid": {
+				"cols": 3,
+				"rows": 5
+			},
+			"lift": 0.2,
+			"padding": {
+				"x": 0.0,
+				"y": 0.0
+			},
+			"size": {
+				"length": 39.1,
+				"thickness": 1.6,
+				"width": 65.0
+			}
+		}
+	},
+	"panelsVisibleAngle": null,
+	"radialVisibleAngle": 40.0,
+	"rcpVisibleAngle": 90.0,
+	"structure": {
+		"beamDimensions": {
+			"horizontalThickness": 1.5,
+			"horizontalWidth": 2.5,
+			"verticalDimensionsLinked": false,
+			"verticalInnerThickness": 2.5,
+			"verticalInnerWidth": 1.5,
+			"verticalOuterThickness": 2.5,
+			"verticalOuterWidth": 0.8,
+			"verticalThickness": 2.5,
+			"verticalWidth": 1.5
+		},
+		"beamLengths": {
+			"horizontal": 8.0,
+			"vertical": 8.0
+		},
+		"bolts": {
+			"diameter": 0.5,
+			"hPivotBoltAuto": false,
+			"hPivotBoltLength": 3.0,
+			"hStackAuto": false,
+			"hStackLength": 4.0,
+			"vStackAuto": false,
+			"vStackLength": 5.0
+		},
+		"bracketDimensions": {
+			"depth": 2.0,
+			"height": 2.0,
+			"holeDistance": 2.69,
+			"innerWidth": 1.75,
+			"wallThickness": 0.25,
+			"width": 2.0
+		},
+		"brackets": {
+			"depth": 2.0,
+			"height": 2.0,
+			"holeDiameter": 0.625,
+			"innerWidth": 1.75,
+			"wallThickness": 0.25,
+			"width": 2.0,
+			"zRotation": 0.0
+		},
+		"hobermanAngle": 0.0,
+		"modules": 8,
+		"offsets": {
+			"bottom": 4.5,
+			"hStackGap": 0.0,
+			"top": 1.3,
+			"vStackGap": 0.0,
+			"vertEnd": 1.3
+		},
+		"pivotAngle": 0.0,
+		"pivotPercent": 41.4,
+		"stackCounts": {
+			"horizontal": 2,
+			"vertical": 3
+		},
+		"vStackReverse": true
+	},
+	"supportBeams": {
+		"anchorDist": 8.5,
+		"enabled": true,
+		"foldAngle": 0.0,
+		"length": 96.0,
+		"offsetH": 2.5,
+		"offsetV": -9.0,
+		"parallelEnabled": true,
+		"parallelFoldAngle": 0.0,
+		"parallelLength": 96.0,
+		"parallelOffsetV": -3.0,
+		"parallelSwingAngle": 90.0,
+		"parallelThickness": 1.5,
+		"parallelVOffset": -1.66,
+		"parallelWidth": 2.5,
+		"rcpEndOffset": 1.25,
+		"rotation": 0.0,
+		"showRadial": true,
+		"thickness": 3.5,
+		"width": 1.5
+	},
+	"version": "v30",
+	"visibility": {
+		"bolts": true,
+		"brackets": true,
+		"solarPanels": true
+	}
+}

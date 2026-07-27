@@ -63,3 +63,26 @@ static func ibc_from_bundle(bundle: Dictionary) -> Dictionary:
 
 static func location_from_bundle(bundle: Dictionary) -> Dictionary:
 	return bundle.get("location", {}) as Dictionary
+
+
+## The full v30 unified project block, if the bundle carries one. This is the
+## parametric linkage design (structure/mode/foldAngle/panels/supportBeams) —
+## LinkageParams.from_config() consumes it directly, making a web design
+## natively live-foldable rather than a static GLB.
+static func project_from_bundle(bundle: Dictionary) -> Dictionary:
+	var proj: Dictionary = bundle.get("project", {}) as Dictionary
+	if proj.is_empty():
+		return {}
+	# Older exports nest the linkage slice under `linkage`; newer ones put
+	# `structure` at the top level. from_config detects `structure` itself.
+	if proj.has("structure"):
+		return proj
+	var linkage: Dictionary = proj.get("linkage", {}) as Dictionary
+	if linkage.has("structure"):
+		return linkage
+	return {}
+
+
+## True if the bundle carries an editable parametric linkage design.
+static func has_project(bundle: Dictionary) -> bool:
+	return not project_from_bundle(bundle).is_empty()
