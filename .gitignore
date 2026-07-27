@@ -77,3 +77,16 @@ desktop.ini
 /Starshade Pretty Version*.jpg
 /Starshade Pretty Version*.png
 /Bombay Beach*.jpg
+
+# -----------------------------------------------------------------------------
+# Local debug artifacts (throwaway working files — never commit)
+# -----------------------------------------------------------------------------
+/debug_log.txt
+**/*.import*.tmp
+/*.patch
+/*.diff
+# Root-level one-off debug/diagnostic scripts
+/test_script.gd
+/test_gltf.gd
+/dump_props.gd
+/debug_analyzer.gd
