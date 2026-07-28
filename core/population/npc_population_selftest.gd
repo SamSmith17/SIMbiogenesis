@@ -53,6 +53,9 @@ func _init() -> void:
 	_test_building_nav_entries()
 	_test_building_grid_integration()
 	_test_nav_layers()
+	_test_metabolism_model()
+	_test_walk_accounting()
+	_test_walk_aggregates()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -1810,3 +1813,192 @@ func _test_nav_layers() -> void:
 	_check("whereas the 1 m deck is within it",
 			g.height_at(dc.x, dc.y, 1) - g.height_at(dc.x, dc.y, 0)
 				<= NpcNavQuery.STEP_UP_M + NpcNavQuery.STEP_EPS)
+
+
+# =============================================================================
+# Tier 3d — distance, climb and calories
+# =============================================================================
+
+func _test_metabolism_model() -> void:
+	# THE PINNED WORKED EXAMPLE. ACSM at the project's walking speed:
+	# S = 1.3 m/s = 78 m/min, flat, 70 kg.
+	#   VO2      = 3.5 + 0.1*78            = 11.3 mL/kg/min
+	#   kcal/min = 11.3 * 70 / 1000 * 5    = 3.955
+	#   1 km     = 1000/78 = 12.82 min     -> ~50.7 kcal
+	# which matches the accepted ~50-60 kcal/km for a 70 kg adult.
+	var speed := NpcNav.WALK_SPEED_MPS
+	_check("ACSM flat VO2", absf(NpcMetabolism.vo2(78.0, 0.0) - 11.3) < 0.05,
+			"%.2f" % NpcMetabolism.vo2(78.0, 0.0))
+	_check("ACSM flat kcal/min",
+			absf(NpcMetabolism.kcal_per_min(78.0, 0.0) - 3.955) < 0.02,
+			"%.3f" % NpcMetabolism.kcal_per_min(78.0, 0.0))
+	var km := NpcMetabolism.walk_kcal(1000.0, 0.0, speed)
+	_check("~51 kcal per flat km at 70 kg", absf(km - 50.7) < 1.5, "%.1f kcal" % km)
+
+	# The grade term. 10% grade at 78 m/min adds 1.8*78*0.1 = 14.04 to VO2,
+	# more than doubling the flat cost.
+	var uphill := NpcMetabolism.walk_kcal(1000.0, 100.0, speed)
+	_check("climbing costs more", uphill > km * 1.9, "%.1f vs %.1f" % [uphill, km])
+	_check("grade term matches ACSM",
+			absf(NpcMetabolism.vo2(78.0, 0.1) - (11.3 + 14.04)) < 0.05,
+			"%.2f" % NpcMetabolism.vo2(78.0, 0.1))
+
+	# Descending is never cheaper than flat — the equation has no valid
+	# negative-grade term, so it is clamped at zero.
+	_check("downhill clamps to flat",
+			absf(NpcMetabolism.walk_kcal(1000.0, -100.0, speed) - km) < 0.01)
+	_check("negative grade clamps in vo2",
+			absf(NpcMetabolism.vo2(78.0, -0.5) - NpcMetabolism.vo2(78.0, 0.0)) < 0.001)
+
+	# Heavier people spend more; mass scales linearly.
+	_check("mass scales linearly",
+			absf(NpcMetabolism.walk_kcal(1000.0, 0.0, speed, 140.0) - km * 2.0) < 0.05)
+
+	# Net cost strips the resting term and is strictly smaller but positive.
+	var net := NpcMetabolism.net_walk_kcal(1000.0, 0.0, speed)
+	_check("net cost is below gross", net < km and net > 0.0, "%.1f vs %.1f" % [net, km])
+	_check("resting kcal is the difference",
+			absf(km - net - NpcMetabolism.resting_kcal(1000.0 / (speed * 60.0))) < 0.01)
+
+	# Degenerate inputs are zero, not NaN.
+	_check("zero distance costs nothing", NpcMetabolism.walk_kcal(0.0, 0.0, speed) == 0.0)
+	_check("zero speed costs nothing", NpcMetabolism.walk_kcal(100.0, 0.0, 0.0) == 0.0)
+
+	# Overhead + labels: the spatial-efficiency headline.
+	_check("overhead is a fraction of the day",
+			absf(NpcMetabolism.overhead_fraction(200.0) - 0.1) < 0.001)
+	_check("overhead clamps", NpcMetabolism.overhead_fraction(1e9) == 1.0)
+	_check("a compact site reads Compact",
+			NpcMetabolism.efficiency_label(20.0) == "Compact")
+	_check("a sprawling site reads Punishing",
+			NpcMetabolism.efficiency_label(400.0) == "Punishing")
+	var prev := ""
+	for kcal in [10.0, 40.0, 70.0, 120.0, 300.0]:
+		var lbl := NpcMetabolism.efficiency_label(kcal)
+		_check("efficiency labels are ordered", lbl != prev, lbl)
+		prev = lbl
+
+
+func _test_walk_accounting() -> void:
+	var site := _make_test_site()
+	var ctx := {
+		"registry": site["registry"], "pos_of": site["pos_of"],
+		"hour_of_day": 12.0, "starved": {},
+	}
+	var a := NpcAgent.make("ledger", Vector2.ZERO)
+	_check("ledger starts empty", a.distance_m == 0.0 and a.walk_kcal == 0.0)
+
+	# Walking accrues distance and calories in step.
+	a.target_pos = Vector2(100, 0)
+	a.state = NpcAgent.State.TRAVELING
+	a._walk(NpcNav.hours_for_distance(40.0), ctx)
+	_check("distance accrues", absf(a.distance_m - 40.0) < 0.1, "%.2f" % a.distance_m)
+	_check("calories accrue", a.walk_kcal > 0.0)
+	_check("calories track the model",
+			absf(a.walk_kcal - NpcMetabolism.walk_kcal(40.0, 0.0, NpcNav.WALK_SPEED_MPS)) < 0.01)
+	_check("no climb on flat ground", a.climb_m == 0.0)
+
+	# Climb is counted from the height callable, ascent only.
+	var b := NpcAgent.make("climber", Vector2.ZERO)
+	var hilly := ctx.duplicate()
+	hilly["height_at"] = func(p: Vector2) -> float: return p.x * 0.1
+	b.target_pos = Vector2(100, 0)
+	b.state = NpcAgent.State.TRAVELING
+	b._walk(NpcNav.hours_for_distance(50.0), hilly)
+	_check("climb accrues going up", absf(b.climb_m - 5.0) < 0.2, "%.2f" % b.climb_m)
+	_check("climbing costs more than flat",
+			b.walk_kcal > NpcMetabolism.walk_kcal(50.0, 0.0, NpcNav.WALK_SPEED_MPS))
+	var c := NpcAgent.make("descender", Vector2(100, 0))
+	c.target_pos = Vector2.ZERO
+	c.state = NpcAgent.State.TRAVELING
+	c._walk(NpcNav.hours_for_distance(50.0), hilly)
+	_check("descending records no climb", c.climb_m == 0.0)
+
+	# Per-need attribution: a completed trip is banked against the need that
+	# drove it, which is what makes "how far for water" answerable.
+	var d := NpcAgent.make("tripper", Vector2.ZERO)
+	d.needs["thirst"] = 1.0
+	for n in ["hunger", "bladder", "sleep", "hygiene"]:
+		d.needs[n] = 0.0
+	d._step_idle(10.0, ctx)
+	_check("trip started", d.state == NpcAgent.State.TRAVELING)
+	var t := 10.0
+	for i in 400:
+		t += 1.0 / 60.0
+		d.step(t, 1.0 / 60.0, ctx)
+		if d.state == NpcAgent.State.DOING:
+			break
+	_check("arrival banks the trip", int(d.need_trips.get("thirst", 0)) == 1)
+	# The water point sits 40 m from the origin.
+	_check("banked distance is the real walk",
+			absf(float(d.need_distance.get("thirst", 0.0)) - 40.0) < 3.0,
+			"%.1f m" % float(d.need_distance.get("thirst", 0.0)))
+	_check("trip counter resets", d.trip_distance_m == 0.0)
+
+	# Day rollover banks yesterday and starts clean.
+	d.distance_m = 500.0
+	d.walk_kcal = 25.0
+	d._reseed_for_day(10.0 + 24.0)
+	_check("rollover clears today", d.distance_m == 0.0 and d.walk_kcal == 0.0)
+	_check("rollover keeps yesterday",
+			absf(float(d.prev_day.get("distance_m", 0.0)) - 500.0) < 0.01)
+	_check("rollover keeps yesterday's trips",
+			(d.prev_day.get("need_trips", {}) as Dictionary).has("thirst"))
+
+	# The ledger survives save/load.
+	d.distance_m = 321.0
+	d.walk_kcal = 17.0
+	d.climb_m = 4.0
+	var restored := NpcAgent.from_snapshot(
+			JSON.parse_string(JSON.stringify(d.snapshot())) as Dictionary)
+	_check("distance round-trips", absf(restored.distance_m - 321.0) < 1.01)
+	_check("kcal round-trips", absf(restored.walk_kcal - 17.0) < 1.01)
+	_check("climb round-trips", absf(restored.climb_m - 4.0) < 0.51)
+
+
+func _test_walk_aggregates() -> void:
+	var site := _make_test_site()
+	var engine := NpcPopulationEngine.new()
+	engine.configure(6, "walkers", Vector2.ZERO)
+	_run_sim(engine, site, 8.0, 24.0, 1.0 / 60.0)
+	var s := engine.summary()
+	_check("aggregate distance reported", float(s.get("walk_distance_m", 0.0)) > 0.0,
+			"%.1f m" % float(s.get("walk_distance_m", 0.0)))
+	_check("aggregate calories reported", float(s.get("walk_kcal", 0.0)) > 0.0)
+	_check("overhead is a sane share",
+			float(s.get("walk_overhead", -1.0)) >= 0.0
+				and float(s.get("walk_overhead", 1.0)) < 0.5,
+			"%.3f" % float(s.get("walk_overhead", -1.0)))
+	_check("efficiency label present", not str(s.get("walk_label", "")).is_empty())
+	# Per-need means only appear for needs that completed a trip.
+	var per_need: Dictionary = s.get("need_mean_m", {})
+	_check("per-need distances reported", not per_need.is_empty())
+	for k in per_need:
+		_check("per-need mean is positive %s" % k, float(per_need[k]) > 0.0)
+
+	# A SPREAD-OUT site must cost measurably more than a compact one — this is
+	# the whole point of the metric.
+	var far_reg := SpaceRegistry.create_empty()
+	var far_pos := {
+		"kitchen": Vector2(220, 0), "restroom": Vector2(-220, 60),
+		"water": Vector2(0, 240), "beds": Vector2(0, -260), "showers": Vector2(-180, -180),
+	}
+	var far_kinds := {
+		"kitchen": "kitchen", "restroom": "restroom", "water": "water_point",
+		"beds": "sleep", "showers": "shower",
+	}
+	for pid in far_pos:
+		far_reg.set_space_type({"kind": "prop", "prop_id": pid},
+				str(far_kinds[pid]), 60)
+	var far_site := {"registry": far_reg, "pos_of": func(space: Dictionary) -> Variant:
+		return far_pos.get(str((space.get("target", {}) as Dictionary).get("prop_id", "")))}
+	var spread := NpcPopulationEngine.new()
+	spread.configure(6, "walkers", Vector2.ZERO)
+	_run_sim(spread, far_site, 8.0, 24.0, 1.0 / 60.0)
+	var s2 := spread.summary()
+	_check("a spread-out layout costs more walking",
+			float(s2.get("walk_distance_m", 0.0)) > float(s.get("walk_distance_m", 0.0)) * 1.5,
+			"%.0f m vs %.0f m" % [float(s2.get("walk_distance_m", 0.0)),
+				float(s.get("walk_distance_m", 0.0))])
+	_check("and more calories",
+			float(s2.get("walk_kcal", 0.0)) > float(s.get("walk_kcal", 0.0)))

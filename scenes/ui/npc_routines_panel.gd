@@ -30,6 +30,7 @@ var _dim: ColorRect = null
 var _panel: PanelContainer = null
 var _title: Label = null
 var _weather_lbl: Label = null
+var _walk_lbl: Label = null
 var _roster_box: VBoxContainer = null
 var _chore_box: VBoxContainer = null
 var _new_label: LineEdit = null
@@ -143,6 +144,11 @@ func _build_ui() -> void:
 	close_btn.text = "Close"
 	close_btn.pressed.connect(close)
 	header.add_child(close_btn)
+
+	_walk_lbl = Label.new()
+	_walk_lbl.add_theme_font_size_override("font_size", 12)
+	_walk_lbl.add_theme_color_override("font_color", C_TEXT_DIM)
+	root.add_child(_walk_lbl)
 
 	var split := HSplitContainer.new()
 	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -296,6 +302,16 @@ func _refresh() -> void:
 	_title.text = "Routines & Chores — %d of %d present · %s" % [
 		int(summ.get("count", 0)), int(summ.get("initial_count", 0)),
 		str(summ.get("morale_label", "—"))]
+	# Walking cost is a scheduling input, not trivia: time spent getting
+	# somewhere is time not available for chores.
+	var walk_m := float(summ.get("walk_distance_m", 0.0))
+	if walk_m > 1.0 and _walk_lbl != null:
+		_walk_lbl.text = "Walking today: %.0f m/person · %.0f kcal · %.1f%% of the day — %s" % [
+			walk_m, float(summ.get("walk_kcal", 0.0)),
+			float(summ.get("walk_overhead", 0.0)) * 100.0,
+			str(summ.get("walk_label", ""))]
+	elif _walk_lbl != null:
+		_walk_lbl.text = ""
 	_refresh_weather()
 	_refresh_roster()
 	_refresh_chores()

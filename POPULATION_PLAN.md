@@ -404,7 +404,7 @@ other thing on this list.
 
 # Tier 3 — Wayfinding and Desire Lines
 
-**Status: 3a, 3b and 3c built and verified. 3d–3f specified, not built.**
+**Status: 3a–3d built and verified. 3e–3f specified, not built.**
 
 Corrections learned while building 3a/3b, kept here because they are the
 non-obvious parts:
@@ -423,6 +423,9 @@ non-obvious parts:
   raycast that returns 0.0 on a MISS, so every gap in collision coverage reads
   as a cliff and islands the grid. The nav grid uses a flat height source
   there instead; this was causing real path failures.
+- Walk accounting must cover the ARRIVAL leg, not just per-step movement: a
+  trip that completes inside one step never calls the walk path, and at high
+  time scale that is every trip — the whole metric reads zero.
 - The layer pass must budget **probes**, not cells scanned — skipping a
   non-structure cell is an array read, and charging it like a raycast made
   that phase as slow as the whole height pass for no work.

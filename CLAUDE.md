@@ -1127,6 +1127,17 @@ in `F_STRUCTURE` cells, and the layer pass budgets *probes* rather than cells
 scanned. Nothing in the project generates walkable upper floors yet — the
 mechanism exists so stairs/ramps connect automatically when content does (an
 inter-layer link is just a move whose height delta passes the step limit).
+**Walking cost** (`NpcMetabolism`, Tier 3d): per-agent daily `distance_m` /
+`climb_m` / `walk_kcal` with per-need trip attribution, rolled at the sim-day
+boundary (yesterday kept in `prev_day`). Model is the **ACSM walking
+equation** (cited; ~51 kcal/km at 70 kg, pinned in the selftest); grade is
+clamped at zero downhill because the equation has no valid negative term.
+Aggregates surface as `walk_overhead` (share of a 2000 kcal day) plus an
+`efficiency_label` Compact→Punishing, and mean metres per trip SPLIT BY NEED —
+the diagnostic that says *which* space is misplaced. Climb reads the baked nav
+grid, never a terrain query (hot path). Note the arrival branch must account
+for its final leg: a trip that finishes inside one step never calls `_walk`,
+and at high time scale that is every trip, which would zero the whole metric.
 **On scenes with no TerrainLoader the nav grid uses a FLAT height source**:
 `TerrainSurfaceQuery.ground_height_at` falls back to a raycast that returns
 0.0 on a MISS, so every hole in collision coverage would read as a cliff and

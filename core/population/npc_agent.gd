@@ -108,6 +108,15 @@ var at_space_id: String = ""
 ## Planned route to target_pos (empty = walk straight, the pre-3b fallback).
 var path := PackedVector2Array()
 var path_idx := 0
+## Walking ledger for the current sim-day (Tier 3d). Rolled into
+## `prev_day` at the day boundary so yesterday stays comparable.
+var distance_m := 0.0
+var climb_m := 0.0
+var walk_kcal := 0.0
+var trip_distance_m := 0.0          # since the current trip started
+var need_distance: Dictionary = {}  # need -> metres walked to satisfy it
+var need_trips: Dictionary = {}     # need -> completed trips
+var prev_day: Dictionary = {}
 var chore_id: String = ""          # chore being worked (CHORE_ACTIVITY only)
 var last_exposure: String = NpcWeatherGate.EXPOSURE_INDOOR
 var rng := RandomNumberGenerator.new()
@@ -233,8 +242,26 @@ func current_consumption(ctx: Dictionary) -> Dictionary:
 func _reseed_for_day(abs_hours: float) -> void:
 	var day := int(floor(abs_hours / 24.0))
 	if day != _rng_day:
+		if _rng_day != -0x7fffffff:
+			_roll_day()
 		_rng_day = day
 		rng.seed = hash(id) ^ day
+
+
+## Bank today's walking ledger and start a fresh one.
+func _roll_day() -> void:
+	prev_day = {
+		"distance_m": distance_m,
+		"climb_m": climb_m,
+		"walk_kcal": walk_kcal,
+		"need_distance": need_distance.duplicate(),
+		"need_trips": need_trips.duplicate(),
+	}
+	distance_m = 0.0
+	climb_m = 0.0
+	walk_kcal = 0.0
+	need_distance = {}
+	need_trips = {}
 
 
 func _decay(dt_hours: float) -> void:
@@ -322,11 +349,21 @@ func _step_chore(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictionary:
 	var travel_h := _remaining_travel_hours()
 	if travel_h >= dt_hours:
-		_walk(dt_hours)
+		_walk(dt_hours, ctx)
 		return {}
 	# Arrived mid-step: begin the activity at the actual arrival instant
 	# (space already claimed at selection time) and bill only the tail of the
 	# step spent doing it.
+	# Account for the last leg BEFORE teleporting to the target, or a trip
+	# that completes inside one step contributes nothing.
+	var final_leg := NpcNav.path_remaining_m(pos, path, path_idx) 			if path_idx < path.size() else pos.distance_to(target_pos)
+	_account_walk(final_leg, pos, target_pos, ctx)
+	# Arrived: bank the walk against whatever need drove it, so "how far do
+	# people have to go for water" is answerable per need.
+	var leg := activity if not activity.is_empty() else CHORE_ACTIVITY
+	need_distance[leg] = float(need_distance.get(leg, 0.0)) + trip_distance_m
+	need_trips[leg] = int(need_trips.get(leg, 0)) + 1
+	trip_distance_m = 0.0
 	pos = target_pos
 	_clear_path()
 	state = State.DOING
@@ -370,13 +407,37 @@ func _remaining_travel_hours() -> float:
 	return NpcNav.travel_hours(pos, target_pos)
 
 
-func _walk(dt_hours: float) -> void:
+func _walk(dt_hours: float, ctx: Dictionary = {}) -> void:
+	var before := pos
+	var walked := 0.0
 	if path_idx < path.size():
 		var r := NpcNav.advance_path(pos, path, path_idx, dt_hours)
 		pos = r[0]
 		path_idx = r[1]
+		walked = float(r[2])
+	else:
+		pos = NpcNav.advance(pos, target_pos, dt_hours)
+		walked = before.distance_to(pos)
+	_account_walk(walked, before, pos, ctx)
+
+
+## Bank a walked segment into the daily ledger. Shared by the per-step walk
+## and by the ARRIVAL branch — a trip short enough to finish inside one step
+## never calls _walk at all, and at high time scale that is every trip, so
+## missing this makes the whole walking metric read zero.
+func _account_walk(walked: float, from_pos: Vector2, to_pos: Vector2,
+		ctx: Dictionary) -> void:
+	if walked <= 0.0:
 		return
-	pos = NpcNav.advance(pos, target_pos, dt_hours)
+	# Ascent only — the ACSM equation has no valid negative-grade term.
+	var gain := 0.0
+	var height_at: Callable = ctx.get("height_at", Callable())
+	if height_at.is_valid():
+		gain = maxf(float(height_at.call(to_pos)) - float(height_at.call(from_pos)), 0.0)
+	distance_m += walked
+	climb_m += gain
+	trip_distance_m += walked
+	walk_kcal += NpcMetabolism.walk_kcal(walked, gain, NpcNav.WALK_SPEED_MPS)
 
 
 func _clear_path() -> void:
@@ -457,6 +518,7 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 		retry_at[need] = abs_hours + RETRY_BACKOFF_H
 		return
 	blocked.erase(need)
+	trip_distance_m = 0.0
 	activity = need
 	var from_key := at_space_id
 	target_space_id = sid
@@ -530,6 +592,7 @@ func _begin_chore(abs_hours: float, ctx: Dictionary) -> bool:
 	var cid := str(chore.get("id", ""))
 	if not board.claim(cid, id):
 		return false
+	trip_distance_m = 0.0
 	chore_id = cid
 	activity = CHORE_ACTIVITY
 	target_space_id = ""
@@ -743,6 +806,9 @@ func snapshot() -> Dictionary:
 		"activity": activity,
 		"morale": snappedf(morale, 0.01),
 		"quit_pressure": snappedf(quit_pressure, 0.01),
+		"distance_m": snappedf(distance_m, 1.0),
+		"climb_m": snappedf(climb_m, 0.5),
+		"walk_kcal": snappedf(walk_kcal, 1.0),
 	}
 
 
@@ -755,6 +821,9 @@ static func from_snapshot(snap: Dictionary) -> NpcAgent:
 			a.needs[n] = clampf(float(saved[n]), 0.0, 1.0)
 	a.morale = clampf(float(snap.get("morale", NpcMorale.START_MORALE)), 0.0, 1.0)
 	a.quit_pressure = maxf(float(snap.get("quit_pressure", 0.0)), 0.0)
+	a.distance_m = maxf(float(snap.get("distance_m", 0.0)), 0.0)
+	a.climb_m = maxf(float(snap.get("climb_m", 0.0)), 0.0)
+	a.walk_kcal = maxf(float(snap.get("walk_kcal", 0.0)), 0.0)
 	# Activities don't survive save/load (spaces are re-claimed on demand);
 	# the agent re-plans from IDLE on the first tick.
 	return a

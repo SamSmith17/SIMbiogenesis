@@ -1547,6 +1547,20 @@ func _run_population_verify() -> void:
 	print("PlaytestHarness: population verify — buildings: %d door cells, %d interior cells, %d upper-surface cells" % [
 		int(nav_info.get("doors", 0)), int(nav_info.get("interior", 0)),
 		int(nav_info.get("upper", 0))])
+	var wsum: Dictionary = bridge.call("summary_for", hab_id)
+	print("PlaytestHarness: population verify — walking: %.0f m/person/day, +%.0f m climb, %.0f kcal (%.1f%% of the day) — %s" % [
+		float(wsum.get("walk_distance_m", 0.0)), float(wsum.get("walk_climb_m", 0.0)),
+		float(wsum.get("walk_kcal", 0.0)),
+		float(wsum.get("walk_overhead", 0.0)) * 100.0, str(wsum.get("walk_label", ""))])
+	var per_need: Dictionary = wsum.get("need_mean_m", {})
+	var need_parts: PackedStringArray = PackedStringArray()
+	for k in per_need:
+		need_parts.append("%s %.0f m" % [str(k), float(per_need[k])])
+	print("PlaytestHarness: population verify — mean trip per need: %s" % [
+		", ".join(need_parts) if not need_parts.is_empty() else "(none yet)"])
+	var ok_walk := float(wsum.get("walk_distance_m", 0.0)) > 1.0 			and float(wsum.get("walk_kcal", 0.0)) > 0.0 and not per_need.is_empty()
+	print("PlaytestHarness: population verify — walking metrics %s" % [
+		"PASS" if ok_walk else "FAIL (no distance/calorie accounting)"])
 	var planned := int(nav_info.get("hits", 0)) + int(nav_info.get("misses", 0))
 	var ok_nav := nav_ready and int(nav_info.get("cells", 0)) > 0 			and planned > 0 and with_path > 0
 	print("PlaytestHarness: population verify — navigation %s (%d routes planned, %d agents walking one)" % [
@@ -1727,7 +1741,7 @@ func _run_population_verify() -> void:
 		if not (model.get_item(str(pid)) as Dictionary).is_empty():
 			model.remove_item(str(pid))
 	print("PlaytestHarness: population verify — %s (%d shots in %s)" % [
-		"PASS" if (ok_flow and ok_move and ok_starve and ok_cascade and ok_3d and ok_nav) else "FAIL",
+		"PASS" if (ok_flow and ok_move and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk) else "FAIL",
 		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
 

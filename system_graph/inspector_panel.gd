@@ -3421,6 +3421,29 @@ func _build_population_section(specs: Dictionary) -> void:
 		parts.append("%s ×%d" % [str(k), int(acts[k])])
 	if not parts.is_empty():
 		_readonly_field("Doing", ", ".join(parts))
+	# Spatial efficiency — what this layout costs the people living in it.
+	var walk_m := float(summ.get("walk_distance_m", 0.0))
+	if walk_m > 1.0:
+		_section("Walking (today, per person)")
+		_readonly_field("Distance", "%.0f m  (+%.0f m climb)" % [
+				walk_m, float(summ.get("walk_climb_m", 0.0))])
+		_readonly_field("Energy", "%.0f kcal — %s" % [
+				float(summ.get("walk_kcal", 0.0)), str(summ.get("walk_label", ""))])
+		_readonly_field("Day budget", "%.1f%% spent walking" % [
+				float(summ.get("walk_overhead", 0.0)) * 100.0])
+		# Which space is misplaced, rather than just "the layout is bad".
+		var per_need: Dictionary = summ.get("need_mean_m", {})
+		var worst_need := ""
+		var worst_m := 0.0
+		for k in per_need:
+			if float(per_need[k]) > worst_m:
+				worst_m = float(per_need[k])
+				worst_need = str(k)
+		if not worst_need.is_empty():
+			_readonly_field("Furthest trip", "%s — %.0f m each way" % [
+					worst_need.capitalize(), worst_m])
+			_hint_label("Move the %s closer to cut that." %
+					SpaceTypes.label(str(SpaceTypes.NEED_TO_SPACE.get(worst_need, worst_need))))
 	if float(avg.get("enrichment", 1.0)) > 0.5:
 		_hint_label("Nobody is gathering. Tag a Fire Circle / Dance / Quiet / Craft space — morale cannot pass %d%% without enrichment." % int(NpcMorale.BASELINE_CEILING * 100.0))
 	var routines_btn := Button.new()

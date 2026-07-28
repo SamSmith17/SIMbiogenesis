@@ -91,6 +91,14 @@ func tick(model, flow_engine, main: Node) -> void:
 			"plan_path": func(from_xz: Vector2, to_xz: Vector2, from_key: String,
 					to_key: String, lane_seed: int) -> Variant:
 				return _plan_path(from_xz, to_xz, from_key, to_key, lane_seed),
+			# Climb accounting reads the BAKED GRID, never a terrain query —
+			# this sits on the per-agent hot path and must stay an array
+			# lookup. Returns 0 until the grid is ready, so early walking
+			# simply records no ascent.
+			"height_at": func(p2: Vector2) -> float:
+				if _nav_grid == null or not _nav_grid.is_ready():
+					return 0.0
+				return _nav_grid.height_at_world(p2),
 		}
 		var demand: Dictionary = engine.tick(abs_h, ctx)
 		flow_engine.set_habitat_demand(iid, demand)

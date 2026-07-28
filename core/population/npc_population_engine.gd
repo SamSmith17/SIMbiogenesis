@@ -233,6 +233,7 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"pos_of": ctx_in.get("pos_of", Callable()),
 		"chore_pos_of": ctx_in.get("chore_pos_of", Callable()),
 		"plan_path": ctx_in.get("plan_path", Callable()),
+		"height_at": ctx_in.get("height_at", Callable()),
 		"hour_of_day": float(ctx_in.get("hour_of_day", 12.0)),
 		"starved": _starved,
 		"weather": ctx_in.get("weather", _weather),
@@ -313,8 +314,37 @@ func summary() -> Dictionary:
 	if not agents.is_empty():
 		for n in NpcAgent.NEEDS:
 			avg[n] = avg[n] / float(agents.size())
+	# Walking ledger: what this layout costs the people living in it.
+	var dist := 0.0
+	var climb := 0.0
+	var kcal := 0.0
+	var per_need: Dictionary = {}
+	var per_need_trips: Dictionary = {}
+	for item2 in agents:
+		var a2: NpcAgent = item2
+		dist += a2.distance_m
+		climb += a2.climb_m
+		kcal += a2.walk_kcal
+		for k in a2.need_distance:
+			per_need[k] = float(per_need.get(k, 0.0)) + float(a2.need_distance[k])
+			per_need_trips[k] = int(per_need_trips.get(k, 0)) 					+ int(a2.need_trips.get(k, 0))
+	var n := maxf(float(agents.size()), 1.0)
+	# Mean metres walked per COMPLETED trip, split by need — the diagnostic
+	# that points at which space is misplaced rather than just saying the
+	# layout is bad.
+	var need_mean: Dictionary = {}
+	for k in per_need:
+		var trips := int(per_need_trips.get(k, 0))
+		if trips > 0:
+			need_mean[k] = float(per_need[k]) / float(trips)
 	var mean_m := mean_morale()
 	return {
+		"walk_distance_m": dist / n,
+		"walk_climb_m": climb / n,
+		"walk_kcal": kcal / n,
+		"walk_overhead": NpcMetabolism.overhead_fraction(kcal / n),
+		"walk_label": NpcMetabolism.efficiency_label(kcal / n),
+		"need_mean_m": need_mean,
 		"count": agents.size(),
 		"initial_count": _initial_roster,
 		"avg_needs": avg, "worst_needs": worst, "activities": acts,
