@@ -1178,7 +1178,30 @@ pins at 1.0. Enable per habitat: inspector **Population Simulation** →
 `specs.pop_driven` (occupants = roster size; closure metrics unchanged).
 Persistence: change-gated `specs.pop_state` snapshot (≤2×/sim-hour) rides the
 normal graph save; `pop_state` is in both INSTANCE_ONLY_SPEC_KEYS strip
-lists. **Area spaces (Tier 4b).** `target.kind == "area"` was always in the schema;
+lists. **Daily routines (`core/population/npc_routine.gd`).** People follow a schedule
+of blocks that tile 24 h and may wrap midnight; `NpcAgent._step_idle` consults
+it at tier 2.5 (needs still outrank it, and the routine is what they return
+to). This exists because a purely need-driven model has a visible failure: a
+finished activity left the agent IDLE where it stood, and nearest-space
+selection then kept picking the same place, so everyone pooled at the
+restrooms. Activities are clamped to the end of the block that asked for them,
+or a "5-minute" visit is only 5 minutes if the schedule can reclaim the
+person. Per-agent phase offsets (`offset_for`) come from an AVALANCHED hash —
+Godot's string hash over `hab_npc_0..23` is nearly sequential, and `% 1001`
+put 24 people in 4 buckets, still lockstep. Bathroom = 3 scheduled visits x 5
+min x one 6 L flush (18 L/person/day, replacing ~40 L of threshold-driven
+phantom flushes). **The schedule only holds because the bladder was
+recalibrated**: at rise 1/4 per hour + a 0.12 drink kick the need re-fired
+every ~2.4 h and dragged people back (restroom share only fell 40%->23%);
+1/12 with threshold 0.75 makes 3 visits sufficient and leaves the need as a
+backstop for a MISSED visit. Editing lives in the Routines panel's **Daily
+routine** tab, staged in a draft until Apply and persisted to
+`specs.pop_routine` — deliberately NOT part of `pop_state`, so Reset
+population keeps the authored day. Note a scheduled camp is materially more
+resilient (morale starts ~0.81 vs 0.60), which is why the harness collapse
+window had to widen 90->220 iterations.
+
+**Area spaces (Tier 4b).** `target.kind == "area"` was always in the schema;
 what it lacked was geometry and a way to create one. `SpaceEditUI`
 (`scenes/ui/space_edit_ui.gd`, **Y**, wired in `terrain_loader._unhandled_input`
 alongside the C camp dock — raw keycode, no new input action) draws a polygon

@@ -1917,6 +1917,37 @@ func _run_population_verify() -> void:
 		"PASS" if ok_reset else "FAIL", before_reset, after_reset,
 		float(s_reset.get("mean_morale", 0.0)), str(s_reset.get("collapsed", false))])
 
+	# Routine editing (the Routines panel's Apply button). Exercised through the
+	# same bridge calls the panel makes, plus the panel script itself, because
+	# the panel needs the CursorController autoload and so cannot be built in an
+	# offline selftest at all.
+	var routine_ok := false
+	var routine_note := "no routine"
+	var live_routine = sgv.call("npc_routine_for", hab_id)
+	if live_routine != null:
+		var before_visits := int(live_routine.toilet_visits_per_day())
+		# Author a deliberately different day: a 4th bathroom block, which must
+		# read back as a 4th flush rather than a rescaled third.
+		var edited: Array = live_routine.to_array()
+		edited.append({"start_h": 16.0, "end_h": 16.0 + NpcRoutine.BATHROOM_HOURS,
+			"kind": NpcRoutine.BATHROOM})
+		var applied := bool(sgv.call("npc_set_routine", hab_id, edited))
+		var after = sgv.call("npc_routine_for", hab_id)
+		var after_visits := int(after.toilet_visits_per_day()) if after != null else -1
+		# It must also PERSIST into the item's specs, or the edit is lost on the
+		# next engine rebuild (reset, occupant change, save/load).
+		var saved: Array = (model.get_item(hab_id).get("specs", {}) as Dictionary).get(
+			"pop_routine", []) as Array
+		routine_ok = applied and after_visits == before_visits + 1 and saved.size() == edited.size()
+		routine_note = "%d -> %d visits, %d blocks persisted" % [
+			before_visits, after_visits, saved.size()]
+		# Put the authored day back so the map is left as it was found.
+		sgv.call("npc_set_routine", hab_id, live_routine.to_array())
+	var panel_script: GDScript = load("res://scenes/ui/npc_routines_panel.gd")
+	var panel_ok: bool = panel_script != null and panel_script.can_instantiate()
+	print("PlaytestHarness: population verify — routine editing %s (%s, panel compiles=%s)" % [
+		"PASS" if (routine_ok and panel_ok) else "FAIL", routine_note, str(panel_ok)])
+
 	print("PlaytestHarness: population verify — 3D avatars %s" % [
 		"PASS" if ok_3d else "FAIL (host missing or wrong avatar count)"])
 	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)

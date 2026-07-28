@@ -9915,6 +9915,15 @@ func npc_population_summary(item_id: String) -> Dictionary:
 	return _npc_population.summary_for(item_id)
 
 
+## The habitat's daily schedule, and replacing it (Routines panel editor).
+func npc_routine_for(item_id: String) -> NpcRoutine:
+	return _npc_population.routine_for(item_id) if _npc_population != null else null
+
+
+func npc_set_routine(item_id: String, blocks: Array) -> bool:
+	return _npc_population.set_routine(item_id, blocks) if _npc_population != null else false
+
+
 ## Start a habitat's community over (inspector button). An emptied roster has
 ## no way back on its own — see NpcPopulationBridge.reset_population.
 func npc_reset_population(item_id: String) -> bool:

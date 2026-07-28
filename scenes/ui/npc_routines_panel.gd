@@ -41,6 +41,14 @@ var _new_exposure: OptionButton = null
 var _new_assign: OptionButton = null
 var _refresh_accum := 0.0
 
+# --- routine editor ---------------------------------------------------------
+var _routine_strip: Control = null
+var _routine_rows: VBoxContainer = null
+var _routine_status: Label = null
+## Working copy. Edits are staged here and only reach the sim on Apply, so a
+## half-finished day (a gap mid-edit, an overlap) never drives behaviour.
+var _draft: Array = []
+
 
 func _ready() -> void:
 	visible = false
@@ -63,6 +71,7 @@ func open(bridge, item_id: String) -> void:
 	set_process(true)
 	move_to_front()
 	_refresh_assign_options()
+	_load_routine_draft()
 	_refresh()
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
 
@@ -173,10 +182,17 @@ func _build_ui() -> void:
 	_roster_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	roster_scroll.add_child(_roster_box)
 
-	# Right: the chore board + authoring row.
+	# Right: tabs — the chore board, and the daily schedule everyone follows.
+	# Tabbed rather than stacked because the routine editor needs real room:
+	# it is a list of blocks covering the whole 24 h, not a couple of fields.
+	var tabs := TabContainer.new()
+	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	split.add_child(tabs)
+
 	var right := VBoxContainer.new()
+	right.name = "Chores"
 	right.add_theme_constant_override("separation", 4)
-	split.add_child(right)
+	tabs.add_child(right)
 	right.add_child(_section_label("Chore board"))
 	var chore_scroll := ScrollContainer.new()
 	chore_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -187,6 +203,12 @@ func _build_ui() -> void:
 	chore_scroll.add_child(_chore_box)
 	right.add_child(HSeparator.new())
 	right.add_child(_build_new_chore_row())
+
+	var routine_tab := VBoxContainer.new()
+	routine_tab.name = "Daily routine"
+	routine_tab.add_theme_constant_override("separation", 4)
+	tabs.add_child(routine_tab)
+	_build_routine_tab(routine_tab)
 
 
 func _section_label(text: String) -> Label:
@@ -488,3 +510,241 @@ func _on_add_chore() -> void:
 	})
 	_new_label.text = ""
 	_refresh()
+
+
+# ---------------------------------------------------------------------------
+# Daily routine editor
+# ---------------------------------------------------------------------------
+
+## Colour per block kind, shared by the strip and the row swatches so the two
+## readings of the same day agree at a glance.
+static func _kind_color(kind: String) -> Color:
+	match kind:
+		NpcRoutine.SLEEP: return C_SLEEP
+		NpcRoutine.BATHROOM: return Color(0.36, 0.72, 0.86)
+		NpcRoutine.EAT: return Color(0.90, 0.66, 0.32)
+		NpcRoutine.WASH: return Color(0.42, 0.78, 0.74)
+		NpcRoutine.ENRICHMENT: return Color(0.78, 0.46, 0.84)
+		NpcRoutine.WORK: return C_CHORE
+	return C_FREE
+
+
+func _build_routine_tab(parent: VBoxContainer) -> void:
+	parent.add_child(_section_label("The day everyone follows"))
+	var hint := Label.new()
+	hint.text = "Each person is shifted up to 30 min either way, so the camp does not move in lockstep. Needs still interrupt: someone desperately thirsty leaves a work block and comes back to it."
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", C_TEXT_DIM)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	parent.add_child(hint)
+
+	_routine_strip = Control.new()
+	_routine_strip.custom_minimum_size.y = 34
+	_routine_strip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_routine_strip.draw.connect(_draw_routine_strip)
+	parent.add_child(_routine_strip)
+
+	_routine_status = Label.new()
+	_routine_status.add_theme_font_size_override("font_size", 11)
+	_routine_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	parent.add_child(_routine_status)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	parent.add_child(scroll)
+	_routine_rows = VBoxContainer.new()
+	_routine_rows.add_theme_constant_override("separation", 2)
+	_routine_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_routine_rows)
+
+	var btns := HBoxContainer.new()
+	btns.add_theme_constant_override("separation", 6)
+	parent.add_child(btns)
+	var add := Button.new()
+	add.text = "Add block"
+	add.pressed.connect(_on_routine_add)
+	btns.add_child(add)
+	var reset := Button.new()
+	reset.text = "Reset to default day"
+	reset.pressed.connect(func() -> void:
+		_draft = NpcRoutine.default_day().to_array()
+		_refresh_routine())
+	btns.add_child(reset)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btns.add_child(spacer)
+	var apply := Button.new()
+	apply.text = "Apply"
+	apply.tooltip_text = "Everyone picks the new day up at their next idle moment. The roster is not restarted."
+	apply.pressed.connect(_on_routine_apply)
+	btns.add_child(apply)
+
+
+## Pull the live schedule into the draft, so the editor always opens showing
+## what people are actually doing rather than a template.
+func _load_routine_draft() -> void:
+	var r: NpcRoutine = null
+	if _bridge != null and _bridge.has_method("routine_for"):
+		r = _bridge.call("routine_for", _item_id)
+	if r == null:
+		r = NpcRoutine.default_day()
+	_draft = r.to_array()
+	_refresh_routine()
+
+
+func _refresh_routine() -> void:
+	if _routine_rows == null:
+		return
+	for c in _routine_rows.get_children():
+		c.queue_free()
+	for i in range(_draft.size()):
+		_routine_rows.add_child(_routine_row(i))
+	_update_routine_status()
+	if _routine_strip != null:
+		_routine_strip.queue_redraw()
+
+
+func _routine_row(idx: int) -> HBoxContainer:
+	var b: Dictionary = _draft[idx]
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 5)
+
+	var swatch := ColorRect.new()
+	swatch.color = _kind_color(str(b.get("kind", NpcRoutine.FREE)))
+	swatch.custom_minimum_size = Vector2(10, 20)
+	row.add_child(swatch)
+
+	var kind_opt := OptionButton.new()
+	for k in NpcRoutine.KINDS:
+		kind_opt.add_item(str(NpcRoutine.LABELS.get(k, k)))
+	kind_opt.selected = maxi(NpcRoutine.KINDS.find(str(b.get("kind", NpcRoutine.FREE))), 0)
+	kind_opt.custom_minimum_size.x = 118
+	kind_opt.item_selected.connect(func(sel: int) -> void:
+		(_draft[idx] as Dictionary)["kind"] = str(NpcRoutine.KINDS[sel])
+		_refresh_routine())
+	row.add_child(kind_opt)
+
+	# Times are edited in MINUTES past midnight: a 5-minute bathroom block is
+	# unreachable on an hours spinner.
+	row.add_child(_time_spin(idx, "start_h"))
+	var arrow := Label.new()
+	arrow.text = "to"
+	arrow.add_theme_color_override("font_color", C_TEXT_DIM)
+	row.add_child(arrow)
+	row.add_child(_time_spin(idx, "end_h"))
+
+	var dur := Label.new()
+	var d := float(b.get("end_h", 0.0)) - float(b.get("start_h", 0.0))
+	if d < 0.0:
+		d += 24.0
+	dur.text = ("%d min" % int(round(d * 60.0))) if d < 1.0 else ("%.2f h" % d)
+	dur.add_theme_font_size_override("font_size", 11)
+	dur.add_theme_color_override("font_color", C_TEXT_DIM)
+	dur.custom_minimum_size.x = 56
+	row.add_child(dur)
+
+	var del := Button.new()
+	del.text = "X"
+	del.tooltip_text = "Remove this block"
+	del.pressed.connect(func() -> void:
+		_draft.remove_at(idx)
+		_refresh_routine())
+	row.add_child(del)
+	return row
+
+
+func _time_spin(idx: int, key: String) -> SpinBox:
+	var sp := SpinBox.new()
+	sp.min_value = 0
+	sp.max_value = 24 * 60 - 1
+	sp.step = 5
+	sp.value = round(float((_draft[idx] as Dictionary).get(key, 0.0)) * 60.0)
+	sp.custom_minimum_size.x = 84
+	sp.prefix = ""
+	sp.tooltip_text = "Minutes past midnight (currently %s)" % NpcRoutine.format_hour(
+			float((_draft[idx] as Dictionary).get(key, 0.0)))
+	sp.value_changed.connect(func(v: float) -> void:
+		(_draft[idx] as Dictionary)[key] = v / 60.0
+		_refresh_routine())
+	return sp
+
+
+## Whether the draft is a usable day. An untiled routine is not an ERROR —
+## uncovered hours fall back to need-driven behaviour, which is exactly what
+## the sim did before routines existed — but it is worth surfacing, because a
+## gap is usually a typo rather than an intention.
+func _update_routine_status() -> void:
+	if _routine_status == null:
+		return
+	var r := NpcRoutine.from_array(_draft)
+	var covered := 0
+	var overlaps := 0
+	for i in range(24 * 12):
+		var h := float(i) / 12.0
+		var hits := 0
+		for b_v in _draft:
+			if NpcRoutine._covers(b_v as Dictionary, h):
+				hits += 1
+		if hits > 0:
+			covered += 1
+		if hits > 1:
+			overlaps += 1
+	var gap_h := (1.0 - float(covered) / float(24 * 12)) * 24.0
+	var visits := r.toilet_visits_per_day()
+	var parts: PackedStringArray = PackedStringArray()
+	parts.append("%d bathroom visits, %.0f L flush water per person per day" % [
+		visits, r.water_per_visit_l() * float(visits)])
+	parts.append("sleep %.1f h, work %.1f h" % [
+		r.hours_of(NpcRoutine.SLEEP), r.hours_of(NpcRoutine.WORK)])
+	var col := UITheme.C_OK
+	if overlaps > 0:
+		parts.append("blocks overlap - the first listed wins")
+		col = UITheme.C_WARN
+	if gap_h > 0.05:
+		parts.append("%.1f h unscheduled - needs decide then" % gap_h)
+		col = UITheme.C_WARN
+	_routine_status.text = "   ".join(parts)
+	_routine_status.add_theme_color_override("font_color", col)
+
+
+func _draw_routine_strip() -> void:
+	if _routine_strip == null or _draft.is_empty():
+		return
+	var w := _routine_strip.size.x
+	var h := _routine_strip.size.y
+	if w <= 1.0:
+		return
+	_routine_strip.draw_rect(Rect2(0, 0, w, h), Color(0.10, 0.13, 0.20, 1.0))
+	for b_v in _draft:
+		var b: Dictionary = b_v
+		var s0 := float(b.get("start_h", 0.0))
+		var e0 := float(b.get("end_h", 0.0))
+		var col := _kind_color(str(b.get("kind", NpcRoutine.FREE)))
+		# A block that wraps midnight draws as two pieces, which is also how it
+		# reads on a clock.
+		if e0 >= s0:
+			_routine_strip.draw_rect(Rect2(w * s0 / 24.0, 0, w * (e0 - s0) / 24.0, h), col)
+		else:
+			_routine_strip.draw_rect(Rect2(w * s0 / 24.0, 0, w * (24.0 - s0) / 24.0, h), col)
+			_routine_strip.draw_rect(Rect2(0, 0, w * e0 / 24.0, h), col)
+	var fnt := ThemeDB.fallback_font
+	for hh in range(25):
+		var x := w * float(hh) / 24.0
+		var tall := hh % 6 == 0
+		_routine_strip.draw_line(Vector2(x, h - (10.0 if tall else 5.0)), Vector2(x, h),
+				Color(1, 1, 1, 0.45 if tall else 0.2), 1.0)
+		if tall and hh < 24:
+			_routine_strip.draw_string(fnt, Vector2(x + 3, 12), "%02d:00" % hh,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.55))
+
+
+func _on_routine_add() -> void:
+	_draft.append({"start_h": 12.0, "end_h": 13.0, "kind": NpcRoutine.WORK})
+	_refresh_routine()
+
+
+func _on_routine_apply() -> void:
+	if _bridge == null or not _bridge.has_method("set_routine"):
+		return
+	if _bridge.call("set_routine", _item_id, _draft):
+		_load_routine_draft()   # read back whatever the sim actually accepted

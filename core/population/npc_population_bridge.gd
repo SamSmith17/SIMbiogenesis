@@ -16,6 +16,7 @@ extends RefCounted
 const PERSIST_INTERVAL_H := 0.5   # snapshot into specs.pop_state at most 2x/sim-hour
 
 var _engines: Dictionary = {}          # item_id -> NpcPopulationEngine
+var _model = null                      # last GraphModel seen by tick()
 var _configured_count: Dictionary = {} # item_id -> int (reconfigure on change)
 var _last_persist_h: Dictionary = {}   # item_id -> float abs-hours
 var _last_persist_blob: Dictionary = {}  # item_id -> String (change gate)
@@ -71,6 +72,9 @@ func tick(model, flow_engine, main: Node) -> void:
 		return
 	var abs_h: float = float(main.call("get_absolute_hours"))
 	_last_abs_h = abs_h
+	# Kept so the Routines panel can persist an edited schedule without being
+	# handed the model separately.
+	_model = model
 	var hour_of_day: float = fposmod(abs_h, 24.0)
 	var registry := _find_registry(main)
 	_nav_queries_this_tick = 0
@@ -550,6 +554,30 @@ func reset_population(item_id: String, model, main: Node) -> bool:
 	return true
 
 
+## The daily schedule a habitat's people follow.
+func routine_for(item_id: String) -> NpcRoutine:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	return engine.routine if engine != null else null
+
+
+## Replace a habitat's schedule and persist it. Applies live — everyone picks
+## the new day up at their next idle moment, without restarting the roster.
+func set_routine(item_id: String, blocks: Array) -> bool:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	if engine == null:
+		return false
+	engine.routine = NpcRoutine.from_array(blocks)
+	if _model == null:
+		return true   # applied live; persistence waits for the next tick
+	var item: Dictionary = _model.get_item(item_id)
+	if item.is_empty():
+		return true
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	specs["pop_routine"] = engine.routine.to_array()
+	_model.update_item(item_id, {"specs": specs})
+	return true
+
+
 ## Every pop-driven habitat id currently simulated.
 func habitat_ids() -> Array:
 	return _engines.keys()
@@ -630,6 +658,11 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 		engine.restore(snap)
 	else:
 		engine.configure(count, iid, _home_pos(specs, main))
+	# An authored routine is CONFIG, not simulation state: it lives in
+	# specs.pop_routine and survives independently of the roster snapshot, so
+	# resetting the population keeps the schedule the player wrote.
+	var routine_arr: Array = specs.get("pop_routine", []) as Array
+	engine.routine = NpcRoutine.from_array(routine_arr) if not routine_arr.is_empty() 		else NpcRoutine.default_day()
 	# Departures and collapse are narrative events — surface them to the UI.
 	engine.agent_departed.connect(
 		func(_aid: String, who: String, reason: String) -> void:

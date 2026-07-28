@@ -546,7 +546,7 @@ enrichment: **Fire Circle · Dance/Movement · Quiet · Making/Craft**.
 | 3D world | Silhouette figures walk, sleep, work, dance. Ctrl/Alt-aim one → name, morale band, what they are doing |
 | **G** → Site Plan | Space markers (glyph + live occupancy) and morale-tinted dots with trails |
 | Inspector → Population Simulation | Roster, morale bands, collapse risk, blocked needs, walking distance / kcal / furthest trip |
-| **Routines & chores…** button | Roster with 24 h day-plan strips, chore board, weather |
+| **Routines & chores…** button | Roster with 24 h day-plan strips, chore board, weather, and the **Daily routine** tab |
 
 ### D) Desire lines (View options ▾, Site Plan)
 
@@ -575,6 +575,11 @@ Traffic has to accumulate — give it a few sim-hours at speed before the patter
   people have left"* and why. Fix the cause first, then press **Reset
   population** (habitat inspector); resetting alone just brings in a group who
   will leave the same way.
+- People follow a **daily schedule** (sleep, bathroom, eat, yoga, work, wash),
+  edit it in **Routines & chores… → Daily routine**. Each person is shifted up
+  to ±30 min so the camp does not move in lockstep; needs still interrupt and
+  the schedule is what they return to. Times are in minutes past midnight, and
+  edits only take effect on **Apply**.
 - Morale caps at **75%** on needs alone — the rest is earned at enrichment spaces.
 - People are **dark silhouettes with a coloured edge**, and the colour is that
   person's identity — the same one their Site Plan dot uses. Up close (within
