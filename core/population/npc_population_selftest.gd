@@ -2248,6 +2248,22 @@ func _test_rig_assets() -> void:
 			is_equal_approx(NpcRig.clip_ground_offset(NpcRig.CLIP_WALK), 0.0)
 			and is_equal_approx(NpcRig.clip_ground_offset(NpcRig.CLIP_IDLE), 0.0))
 
+	# The idle is retargeted from a DIFFERENTLY SCALED rig (the player
+	# character's hips sit at 2.04 m against this pack's 0.87 m). Rotations
+	# retarget scale-free, but the hips' position track does not — uncorrected,
+	# every idling figure hovers over a metre off the ground.
+	if NpcRig.available():
+		var fig2 := NpcRig.build_figure()
+		if fig2 != null:
+			var ap2 := NpcRig.find_anim_player(fig2)
+			if ap2 != null and ap2.has_animation(NpcRig.CLIP_IDLE) 					and ap2.has_animation(NpcRig.CLIP_WALK):
+				var idle_y := _hips_rest_y(ap2.get_animation(NpcRig.CLIP_IDLE))
+				var walk_y := _hips_rest_y(ap2.get_animation(NpcRig.CLIP_WALK))
+				_check("retargeted idle stands at native hip height",
+						absf(idle_y - walk_y) < 0.05,
+						"idle %.3f vs walk %.3f" % [idle_y, walk_y])
+			fig2.free()
+
 	# Facing is derived from the clip, and this pack measures +Z forward, so
 	# the offset must actually turn the model around.
 	var off := NpcRig.model_yaw_offset()
@@ -2309,4 +2325,18 @@ func _hips_xz_span(anim: Animation) -> float:
 			lo = lo.min(Vector2(v.x, v.z))
 			hi = hi.max(Vector2(v.x, v.z))
 		return (hi - lo).length()
+	return 0.0
+
+
+func _hips_rest_y(anim: Animation) -> float:
+	for t in range(anim.get_track_count()):
+		if anim.track_get_type(t) != Animation.TYPE_POSITION_3D:
+			continue
+		if not str(anim.track_get_path(t)).to_lower().ends_with("hips"):
+			continue
+		var lo := INF
+		for k in range(anim.track_get_key_count(t)):
+			var v: Vector3 = anim.track_get_key_value(t, k)
+			lo = minf(lo, v.y)
+		return lo
 	return 0.0

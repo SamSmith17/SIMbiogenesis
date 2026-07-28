@@ -78,6 +78,9 @@ static var _character: PackedScene = null
 static var _walk_cycle_m := 0.0
 static var _walk_forward := Vector2.ZERO
 static var _ground_offsets: Dictionary = {}   # clip -> metres to shift the figure
+## Resting hip height of this pack's own standing clips, in metres. Used to
+## rebase retargeted clips that came from a differently-scaled rig.
+static var _native_stand_hips_y := 0.0
 static var _loaded := false
 static var _load_error := ""
 
@@ -220,6 +223,7 @@ static func _ensure_loaded() -> void:
 		if clip_name == CLIP_WALK:
 			_walk_cycle_m = _hip_travel_xz(anim)
 			_walk_forward = _hip_travel_dir_xz(anim)
+			_native_stand_hips_y = _hip_rest_y(anim)
 		_flatten_root_motion(anim)
 		if TARGET_HIPS_Y.has(clip_name):
 			_ground_offsets[clip_name] = \
@@ -353,8 +357,31 @@ static func _retarget_idle(bones: Dictionary) -> Animation:
 			% [bound, total])
 		return null
 	_flatten_root_motion(anim)
+	# Bone ROTATIONS are scale-free and retarget cleanly, but the hips carry the
+	# one POSITION track — in the source rig's units. The player character is
+	# authored at a different scale (its hips sit at 2.04 m against this pack's
+	# 0.87 m), so an uncorrected retarget leaves the figure hovering over a
+	# metre off the ground. Rebase the track onto the native standing height,
+	# preserving the clip's own small motion (a breathing idle moves ~1 cm).
+	_rebase_hip_height(anim, _native_stand_hips_y)
 	anim.loop_mode = Animation.LOOP_LINEAR
 	return anim
+
+
+## Shift a clip's hip-position track so its resting height becomes
+## `target_rest_y`, keeping the relative motion within the clip intact.
+static func _rebase_hip_height(anim: Animation, target_rest_y: float) -> void:
+	if target_rest_y <= 0.0:
+		return
+	var t := _hip_position_track(anim)
+	if t < 0:
+		return
+	var shift := target_rest_y - _hip_rest_y(anim)
+	if absf(shift) < 0.001:
+		return
+	for k in range(anim.track_get_key_count(t)):
+		var v: Vector3 = anim.track_get_key_value(t, k)
+		anim.track_set_key_value(t, k, Vector3(v.x, v.y + shift, v.z))
 
 
 static func _bone_names(skel: Skeleton3D) -> Dictionary:
