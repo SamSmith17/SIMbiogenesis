@@ -801,3 +801,258 @@ view that makes an unwalkable layout obvious from inside the world.
    recomputed, never replayed).
 4. The sim core stays pure — the grid reaches agents through `ctx`, exactly as
    `pos_of` and the chore board already do.
+
+---
+
+# Tier 4 — Embodiment, areas, and personal space
+
+Four asks, two of which are regressions from the Tier 1 tagging work and are
+therefore sequenced first.
+
+| # | Phase | Ask |
+|---|-------|-----|
+| 4a | Drawer layout + universal tagging | "the place UI is cut off to the right"; "cannot tag starshades or pallet racks" |
+| 4b | Space **area** tool | draw-a-region tagging (the deferred `target.kind=="area"`) |
+| 4c | Personal space | "sims avoid stacking over each other" |
+| 4d | Mixamo rig + silhouette shading | mannequin, black/blurred, indistinct |
+| 4e | Activity animation set | walking, sleeping, hammering/working, cooking |
+
+Invariant across the whole tier: **nothing here may change consumption.**
+Slot offsets, separation, and animation are cosmetic/positional only. The mass
+balance, morale, and chore ledger must produce identical selftest results
+before and after 4c–4e.
+
+---
+
+## 4a — Prop drawer layout + tagging that works on every prop
+
+### The layout bug (mine)
+
+`placed_prop_edit_ui._build_ui` builds ONE `HBoxContainer`: a 160 px left
+column, seven 72 px transform fields, then an actions row of fourteen controls
+ending in **Apply / Delete / Close**. Adding `Space:` + capacity pushed the row
+past the viewport, and because Apply sits near the end, it is the first thing
+to fall off. There is no scroll and no wrap, so it is simply unreachable.
+
+Fix — restructure into two rows inside a `VBoxContainer`:
+
+- **Row 1 (edit):** model dropdown / X Y Z Yaw Pitch Roll Scale / Space + capacity
+- **Row 2 (actions):** toggles (collision, show-in-3D, burnable, shadow) /
+  contextual buttons (Move, Restore, Linkage, Siphon, Ports) / spacer /
+  **Apply, Delete, Close** pinned right
+
+The contextual buttons already hide themselves when inapplicable, so row 2 is
+short in practice. Add a horizontal `ScrollContainer` as a backstop so a narrow
+window degrades to scrolling rather than clipping, and set a sane
+`custom_minimum_size` so nothing collapses. Tighten `_compact_field` spacing
+(72 px to 64 px) and shorten the Space item text ("Space: Kitchen/Eating" to
+the label alone, with the dropdown captioned).
+
+### The interception bug (also mine)
+
+`interaction_focus.open_prop_edit_ui` (`gameplay/interaction_focus.gd:984`)
+routes by model before it ever reaches the drawer:
+
+```
+CNC/printer   -> open_print_setup_for_prop         -> return
+StarShade     -> open_starshade_editor             -> return
+Pallet rack   -> open_pallet_rack_builder_for_prop -> return
+otherwise     -> the drawer (the only place Space: lives)
+```
+
+So exactly the props with rich modals are the ones that can never be tagged.
+Patching a Space row into all three modals is duplicative and would need a
+fourth copy for the next specialised modal.
+
+Fix structurally instead: **space tagging stops depending on the prop drawer.**
+The 4b Spaces dock owns a *tag-by-click* mode that hit-tests props, buildings,
+and areas through the existing focus code and writes straight to
+`SpaceRegistry`, bypassing modal routing entirely. The drawer keeps its Space
+row as a convenience for ordinary props; the dock is the complete path.
+
+---
+
+## 4b — Space areas (`target.kind == "area"`)
+
+The schema already reserves it and `SpaceRegistry.resolve_position` already
+handles the area branch (`space_registry.gd:229`), so this is UI plus drawing.
+
+**New dock** `scenes/ui/space_edit_ui.gd`, shaped like `vegetation_edit_ui`
+(bottom dock, `CursorController` aware). Proposed hotkey **Y** — `E F Q Y Z`
+scan as unbound; confirm against `project.godot` at implementation, since **M**
+is the location picker despite not matching the scan.
+
+Contents:
+
+- Space **type** picker (5 need types + 4 enrichment) and **capacity**
+- **Tag by click** — crosshair-aim any prop or OSM building, click to tag.
+  Reuses `interaction_focus`'s existing prop/building focus resolution but
+  routes to the registry, not to `open_prop_edit_ui`. This is the starshade /
+  pallet-rack fix.
+- **Draw area** — polygon input lifted from `terrain_edit_ui`
+  (`_poly_points` / `_finish_polygon`, lines 46, 591, 823): click to drop
+  vertices, click near the first point or Enter/RMB to close, Esc to cancel.
+- **Space list** — every tagged space with type, capacity, live occupancy;
+  select to highlight in-world, delete, or re-type.
+
+**Position resolution for areas.** Centroid is wrong for concave polygons (it
+can land outside). `resolve_position` should return the centroid when it is
+inside the polygon and walkable, else the nearest walkable interior point via
+`NpcNavGrid.nearest_walkable` constrained to the polygon. Areas are also the
+natural place to add a small nav *preference* later (cheaper cells inside a
+plaza), but not in this phase.
+
+**Rendering.** In-world: reuse `TerrainBuilder.build_polygon_highlight` (the
+OSM solar-array highlight path) tinted by `SpaceTypes.COLORS`. Site Plan:
+extend `_draw_npc_spaces_site` to stroke the polygon and put the existing glyph
+and occupancy marker at the resolved point.
+
+**Persistence** rides the existing per-map JSON with no version bump —
+`_target_matches` already compares `poly`.
+
+---
+
+## 4c — Personal space
+
+Two distinct problems that want two distinct mechanisms.
+
+### Standing slots (the real fix)
+
+Everyone walking to a space targets the same resolved point, so a capacity-4
+kitchen renders as one person with three inside them. `SpaceRegistry` already
+tracks occupancy as an ordered array, so the slot index is free:
+
+```
+slot_index_for(space_id, agent_id) -> int     # position in the occupancy array
+slot_offset(index, capacity) -> Vector2       # deterministic ring/spiral
+```
+
+Ring packing at `PERSONAL_SPACE_M := 0.9` spacing: index 0 at the centre, the
+rest on rings of radius `0.9 * ceil(i/6)` at golden-angle bearings, so the
+arrangement is stable, deterministic, and looks unforced. The agent's
+destination becomes `resolve_position + slot_offset`, snapped through
+`nearest_walkable` so a slot can never land inside a wall. Claim ordering
+already comes from `claim()`, so the mapping is stable for the duration of a
+visit.
+
+### Separation while moving
+
+Corridor convergence still stacks people mid-walk. A cheap post-step pass in
+`NpcPopulationEngine`, after `advance` and before poses are published:
+
+- bucket agents into a 2 m spatial hash (50 agents is trivial)
+- for pairs closer than `PERSONAL_SPACE_M`, push apart along the separating
+  axis, biased perpendicular to travel so people slide past rather than stop
+- clamp total displacement per step (<= 0.25 m) and reject any push whose
+  destination cell is not walkable — separation must never squeeze someone
+  through a wall
+- iterate the roster in **id order** so the result is deterministic
+- **skip entirely when the step teleported** (one tick >= remaining distance).
+  At 450x everyone arrives within a tick and separation would be noise on top
+  of an already-cosmetic position.
+
+Displacement is deliberately **not** banked into the walking/kcal ledger: it is
+a rendering correction, not travel, and folding it in would make the spatial
+efficiency numbers depend on crowd density.
+
+Selftests: slot determinism, no two agents within `PERSONAL_SPACE_M` after a
+step at a capacity-6 space, separation never lands on a blocked cell, and a
+regression check that per-kind consumption over a 3-day run is **identical**
+with separation on and off.
+
+---
+
+## 4d — Mixamo rig + silhouette shading
+
+`NpcAvatar.apply_state(pos, yaw, moving, activity)` (`npc_avatar.gd:61`) is
+already the right seam — the host calls nothing else — so the swap is internal
+to that class and the population sim does not change at all.
+
+- Keep the current primitive figure as the **far LOD** and the no-asset
+  fallback; the feature must still work if the FBX files are absent.
+- Near LOD instantiates the rig once and shares clips via an
+  `AnimationLibrary`, with `AnimationPlayer` callback mode set so distant or
+  culled agents stop stepping the tree.
+
+**Silhouette look.** Flat and indistinct, not a lit character:
+
+- unlit shader, near-black albedo
+- a soft fresnel rim tinted with the agent's existing per-id pastel, so people
+  stay distinguishable and the morale tinting already wired into the dots
+  carries over to 3D
+- an "indistinct" edge via a slightly scaled additive shell rather than an
+  actual blur — screen-space blur on 50 agents is not worth the bandwidth, and
+  the shell reads correctly at the distances these are seen from
+
+**Perf is the real risk here**: 50 skinned meshes with 50 animation trees is a
+different cost class from 50 primitive figures. Budget with the F3 HUD before
+and after, and keep the LOD distance tunable. If it does not hold, the fallback
+is skinned-near / primitive-far with a low crossover.
+
+---
+
+## 4e — Activity animation set
+
+`NpcAgent` already carries the activity string, so `apply_state` just needs a
+clip map:
+
+| Activity | Clip | Notes |
+|---|---|---|
+| travelling | Walking (in place) | position is driven by the sim, never root motion |
+| idle / waiting | Breathing Idle | already in the repo |
+| sleep | Sleeping Idle | lying; replaces the current "lies down" primitive pose |
+| chores / repair / work | Hammering | stands in for all maintenance |
+| eat / cook @ kitchen | a standing work loop | see download notes |
+| enrichment (fire, dance, quiet) | Idle for now | dedicated clips are a later polish |
+
+Blend with a short cross-fade (~0.2 s) on activity change. Because position is
+kinematic, **every locomotion clip must be "In Place"** — root motion would
+fight the sim and desync from the desire-line ledger.
+
+Sleep needs care: the clip is authored lying at the origin, so the avatar's
+ground snap has to switch from feet-on-ground to body-on-ground for that state,
+or people sink. The existing primitive code already special-cases lying down.
+
+### Mixamo download list
+
+All Mixamo rigs share the `mixamorig:` bone naming and hierarchy, so clips
+retarget between characters for free. Download **from the same character** so
+proportions match.
+
+Character (once, **with** skin):
+
+- **Y Bot** — the featureless grey mannequin. X Bot works identically if
+  preferred. Format **FBX Binary (.fbx)**, T-pose.
+
+Animations (**Without Skin**, FBX Binary, 30 fps, keyframe reduction **none**):
+
+| Need | Search | Settings |
+|---|---|---|
+| walk | `Walking` | **In Place checked** |
+| idle | `Breathing Idle` | — (repo already has it; re-grab on Y Bot for proportions) |
+| sleep | `Sleeping Idle` — fallbacks `Laying`, `Laying Down` | — |
+| work | `Hammering` — fallbacks `Using A Power Drill`, `Kneeling`, `Digging` | — |
+| cook | see note | — |
+
+Cooking is the weak spot: Mixamo's library is combat- and locomotion-heavy and
+has no clean cooking loop. Grab whichever standing hand-work clip looks closest
+(`Stirring`, `Chopping`, or a generic standing idle with arm motion). At
+silhouette fidelity the read is coarse — a standing figure with moving hands
+reads as "cooking" once it is at a kitchen space — so this does not need to be
+exact.
+
+Optional later polish, only if convenient: `Sitting`, `Talking`, `Dancing`
+(fire circle / enrichment), `Idle` variants for crowd variety.
+
+Drop everything in `Imported Models/NPC/`; the loader follows the existing
+`Player Character/` pattern (`player.gd:232 _load_animation_from_fbx`).
+
+---
+
+## Sequencing
+
+4a first — it is blocking, small, and both halves are my regressions. 4b next
+because it completes the tagging story and its dock is where the click-tagging
+fix lives. 4c is independent and can land any time after. 4d/4e last and
+together, gated on the Mixamo assets, and behind a graceful fallback so the sim
+never depends on them.
