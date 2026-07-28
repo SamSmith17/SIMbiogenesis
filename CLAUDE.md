@@ -1178,7 +1178,24 @@ pins at 1.0. Enable per habitat: inspector **Population Simulation** →
 `specs.pop_driven` (occupants = roster size; closure metrics unchanged).
 Persistence: change-gated `specs.pop_state` snapshot (≤2×/sim-hour) rides the
 normal graph save; `pop_state` is in both INSTANCE_ONLY_SPEC_KEYS strip
-lists. **Personal space (Tier 4c) is cosmetic by contract.** Two mechanisms, because
+lists. **Desertion is a dead end the sim cannot leave on its own.** Departures are
+permanent, so a barren site eventually empties the roster COMPLETELY (past
+`colony_collapsed`, which fires at 35% and still leaves people). At zero agents
+`tick()` returns `{}` immediately: nothing moves, nothing is consumed, no
+further events fire — the world just goes quiet, which reads as a bug.
+`colony_deserted(cause)` is emitted separately from `colony_collapsed` for that
+moment, the inspector replaces the whole Population readout with an EMPTY
+banner + the dominant departure cause (`departure_cause()` tallies the
+`_departures` log), and **Reset population**
+(`SystemGraphView.npc_reset_population` → `NpcPopulationBridge.reset_population`)
+rebuilds the roster. Reset MUST erase `specs.pop_state`, or the next
+`_ensure_engine` restores the roster that just walked out. `_ensure_engine`
+only rebuilds when the AUTHORED `occupants` count changes, so before this the
+sole recovery was toggling `pop_driven` off and on — undiscoverable. Reset
+deliberately does not fix the underlying cause; a fresh group walks out the
+same way, which the selftest asserts.
+
+**Personal space (Tier 4c) is cosmetic by contract.** Two mechanisms, because
 the problems differ: **standing slots** for people who have ARRIVED (a Vogel
 sunflower spiral, `r = PERSONAL_SPACE_M*sqrt(n)` at the golden angle, indexed
 by position in `SpaceRegistry`'s occupancy array — claim order IS slot order,

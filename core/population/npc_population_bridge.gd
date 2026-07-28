@@ -515,6 +515,37 @@ func chore_board_for(item_id: String) -> NpcChoreBoard:
 	return engine.chore_board if engine != null else null
 
 
+## Start a habitat's community over with a fresh roster.
+##
+## Needed because an emptied roster cannot restart itself: departures are
+## permanent, `_ensure_engine` only rebuilds when the AUTHORED occupant count
+## changes, and a zero-agent engine ticks to nothing forever. Without this the
+## only recovery was to toggle `pop_driven` off and on, which is not something
+## anyone would guess.
+##
+## Clears the persisted snapshot too, or the next `_ensure_engine` would
+## restore the very roster that just walked out.
+func reset_population(item_id: String, model, main: Node) -> bool:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	if engine == null or model == null:
+		return false
+	var item: Dictionary = model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var count := clampi(int(float(specs.get("occupants", 10.0))), 1, 200)
+	engine.reset_roster(count, item_id, _home_pos(specs, main))
+	specs.erase("pop_state")
+	specs["pop_present"] = count
+	specs["pop_morale"] = snappedf(engine.mean_morale(), 0.01)
+	specs["pop_collapse_risk"] = 0.0
+	model.update_item(item_id, {"specs": specs})
+	_configured_count[item_id] = count
+	_last_persist_h.erase(item_id)
+	_last_persist_blob.erase(item_id)
+	return true
+
+
 ## Every pop-driven habitat id currently simulated.
 func habitat_ids() -> Array:
 	return _engines.keys()
@@ -607,6 +638,11 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	engine.colony_collapsed.connect(
 		func() -> void:
 			_pending_events.append({"kind": "collapsed", "item_id": iid}))
+	engine.colony_deserted.connect(
+		func(cause: String) -> void:
+			_pending_events.append({
+				"kind": "deserted", "item_id": iid, "reason": cause,
+			}))
 	_engines[iid] = engine
 	_configured_count[iid] = count
 	return engine

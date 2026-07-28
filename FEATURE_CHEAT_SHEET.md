@@ -568,6 +568,12 @@ Traffic has to accumulate — give it a few sim-hours at speed before the patter
   enterable.
 - Occupants is the **authored** headcount; the live count (after anyone quits)
   shows as *"12 of 16 present"*.
+- **If everyone vanishes, they rage-quit.** People leave permanently when a
+  critical need stays blocked, and once the last one goes the world falls
+  silent — nothing moves or consumes. The inspector then shows *"EMPTY — all N
+  people have left"* and why. Fix the cause first, then press **Reset
+  population** (habitat inspector); resetting alone just brings in a group who
+  will leave the same way.
 - Morale caps at **75%** on needs alone — the rest is earned at enrichment spaces.
 - People are **dark silhouettes with a coloured edge**, and the colour is that
   person's identity — the same one their Site Plan dot uses. Up close (within

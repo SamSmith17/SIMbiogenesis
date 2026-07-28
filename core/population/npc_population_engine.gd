@@ -20,6 +20,11 @@ extends RefCounted
 signal agent_departed(agent_id: String, display_name: String, reason: String)
 signal collapse_warning(risk: float)
 signal colony_collapsed()
+## The roster hit zero. Separate from `colony_collapsed` (which fires while
+## people remain) because it is the point where the sim stops producing any
+## feedback at all — nothing moves, nothing consumes — and the player needs to
+## be told rather than left wondering where everyone went.
+signal colony_deserted(cause: String)
 
 ## Separation is skipped above this tick length — see _separate.
 const SEPARATION_MAX_DT_H := 0.1
@@ -72,6 +77,39 @@ func configure(count: int, seed_key: String, home: Vector2) -> void:
 	_collapsed = false
 	if chore_board == null:
 		chore_board = NpcChoreBoard.create_empty()
+
+
+## Start this community over: a fresh roster at full morale, no departure
+## history, no collapse. The one recovery path once everyone has walked out —
+## an emptied roster CANNOT restart itself, because departures are permanent
+## by design and there is no one left to have needs.
+##
+## Deliberately does not touch whatever drove them out. If the water tank is
+## still empty the new arrivals will leave too, which is the correct outcome
+## and the reason the UI names the cause next to the button.
+func reset_roster(count: int, seed_key: String, home: Vector2) -> void:
+	configure(count, seed_key, home)
+
+
+## Has this community emptied out completely? Distinct from `collapsed`, which
+## fires at COLLAPSE_FLOOR_FRAC and still leaves people on site.
+func is_deserted() -> bool:
+	return _initial_roster > 0 and agents.is_empty()
+
+
+## The need that drove the most people away — what to fix before resetting.
+func departure_cause() -> String:
+	var tally: Dictionary = {}
+	for d in _departures:
+		var r := str((d as Dictionary).get("reason", ""))
+		tally[r] = int(tally.get(r, 0)) + 1
+	var best := ""
+	var best_n := 0
+	for k in tally:
+		if int(tally[k]) > best_n:
+			best_n = int(tally[k])
+			best = str(k)
+	return best
 
 
 func set_starved(kinds: Array) -> void:
@@ -167,6 +205,11 @@ func _process_departures(abs_hours: float, ctx: Dictionary) -> void:
 		var rest: NpcAgent = a
 		rest.morale = clampf(rest.morale - shock, 0.0, 1.0)
 	_check_collapse()
+	# The last person leaving is the moment the sim goes silent — no movement,
+	# no consumption, no further events. Announce it explicitly rather than
+	# letting the world quietly empty.
+	if agents.is_empty():
+		colony_deserted.emit(departure_cause())
 
 
 ## What finally drove them out — the worst blocked critical need, else the
@@ -475,6 +518,8 @@ func summary() -> Dictionary:
 		"blocked_share": blocked_share(),
 		"collapse_risk": collapse_risk(),
 		"collapsed": _collapsed,
+		"deserted": is_deserted(),
+		"departure_cause": departure_cause(),
 		"departures": _departures.size(),
 		"catchups": _catchups,
 		"max_dt": _max_dt,

@@ -1881,6 +1881,23 @@ func _run_population_verify() -> void:
 	print("PlaytestHarness: population verify — morale/collapse cascade %s" % [
 		"PASS" if ok_cascade else "FAIL (needs unmet did not drive morale down and people out)"])
 
+	# Recovery. A roster that empties out cannot restart itself — departures
+	# are permanent and a zero-agent engine ticks to nothing — so "Reset
+	# population" in the habitat inspector is the ONLY way back, and it has to
+	# work through the real view method the button calls.
+	var before_reset := int((bridge.call("summary_for", hab_id) as Dictionary).get("count", 0))
+	var reset_ok := bool(sgv.call("npc_reset_population", hab_id))
+	await get_tree().process_frame
+	var s_reset: Dictionary = bridge.call("summary_for", hab_id)
+	var after_reset := int(s_reset.get("count", 0))
+	var ok_reset := reset_ok and after_reset > before_reset \
+		and not bool(s_reset.get("deserted", false)) \
+		and not bool(s_reset.get("collapsed", false)) \
+		and int(s_reset.get("departures", 0)) == 0
+	print("PlaytestHarness: population verify — reset population %s (roster %d→%d, morale %.2f, collapsed=%s)" % [
+		"PASS" if ok_reset else "FAIL", before_reset, after_reset,
+		float(s_reset.get("mean_morale", 0.0)), str(s_reset.get("collapsed", false))])
+
 	print("PlaytestHarness: population verify — 3D avatars %s" % [
 		"PASS" if ok_3d else "FAIL (host missing or wrong avatar count)"])
 	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)

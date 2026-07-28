@@ -3394,6 +3394,17 @@ func _build_population_section(specs: Dictionary) -> void:
 	var here := int(summ.get("count", 0))
 	var started := int(summ.get("initial_count", here))
 	var gone := int(summ.get("departures", 0))
+	# Everyone gone is a dead end the sim cannot recover from on its own, and
+	# with nobody left there is no morale, no needs and no movement to read —
+	# so say what happened, why, and how to restart, before anything else.
+	if bool(summ.get("deserted", false)):
+		_readonly_field("Roster", "EMPTY — all %d people have left" % started)
+		var cause := str(summ.get("departure_cause", ""))
+		if not cause.is_empty():
+			_readonly_field("They left because", _npc_cause_text(cause))
+		_hint_label("Fix the cause first — a new group will walk out the same way. Then press Reset population.")
+		_npc_reset_button()
+		return
 	_readonly_field("Roster", "%d of %d present%s" % [here, started,
 			("  (%d left)" % gone) if gone > 0 else ""])
 	# Morale is the headline number — mean band + the spread across bands.
@@ -3459,6 +3470,7 @@ func _build_population_section(specs: Dictionary) -> void:
 					SpaceTypes.label(str(SpaceTypes.NEED_TO_SPACE.get(worst_need, worst_need))))
 	if float(avg.get("enrichment", 1.0)) > 0.5:
 		_hint_label("Nobody is gathering. Tag a Fire Circle / Dance / Quiet / Craft space — morale cannot pass %d%% without enrichment." % int(NpcMorale.BASELINE_CEILING * 100.0))
+	_npc_reset_button()
 	var routines_btn := Button.new()
 	routines_btn.text = "Routines & chores…"
 	routines_btn.pressed.connect(func() -> void:
@@ -3467,6 +3479,31 @@ func _build_population_section(specs: Dictionary) -> void:
 			v.call("open_npc_routines", _item_id)
 	)
 	_form_vbox.add_child(routines_btn)
+
+
+## Plain-language cause, matching the wording the departure toast uses.
+static func _npc_cause_text(need: String) -> String:
+	match need:
+		"thirst": return "no water"
+		"hunger": return "no food"
+		"sleep": return "nowhere to sleep"
+		"bladder": return "no sanitation"
+	return "conditions here"
+
+
+## Rebuild the roster. The only way back once everyone has walked out, since
+## departures are permanent and a zero-agent engine ticks to nothing.
+func _npc_reset_button() -> void:
+	var btn := Button.new()
+	btn.text = "Reset population"
+	btn.tooltip_text = "Bring in a fresh group at full morale. Does not fix whatever drove the last one away."
+	btn.pressed.connect(func() -> void:
+		var v := _find_owner_graph_view()
+		if v != null and v.has_method("npc_reset_population"):
+			v.call("npc_reset_population", _item_id)
+			_rebuild_current_item()
+	)
+	_form_vbox.add_child(btn)
 
 
 func _find_owner_graph_view() -> Node:

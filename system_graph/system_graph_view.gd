@@ -9915,6 +9915,18 @@ func npc_population_summary(item_id: String) -> Dictionary:
 	return _npc_population.summary_for(item_id)
 
 
+## Start a habitat's community over (inspector button). An emptied roster has
+## no way back on its own — see NpcPopulationBridge.reset_population.
+func npc_reset_population(item_id: String) -> bool:
+	if _npc_population == null:
+		return false
+	if not _npc_population.reset_population(item_id, model, _get_scene_main_node()):
+		return false
+	_show_toast("New people have arrived — %d moving in" % int(
+		float((model.get_item(item_id).get("specs", {}) as Dictionary).get("occupants", 0))))
+	return true
+
+
 const _NPC_ROUTINES_SCRIPT := preload("res://scenes/ui/npc_routines_panel.gd")
 var _npc_routines_panel: Control = null
 
@@ -9951,6 +9963,11 @@ func _drain_npc_events() -> void:
 				_show_toast("The community is unravelling — people are talking about leaving")
 			"collapsed":
 				_show_toast("COLONY COLLAPSE — too few people remain to keep this place running")
+			"deserted":
+				# The world goes silent at this point, so say so plainly and
+				# name both the cause and the way back.
+				_show_toast("EVERYONE HAS LEFT — %s. Fix it, then Reset population in the habitat inspector." % [
+					_npc_reason_text(str(ev.get("reason", "")))])
 
 
 static func _npc_reason_text(need: String) -> String:

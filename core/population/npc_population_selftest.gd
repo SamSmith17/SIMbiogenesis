@@ -67,6 +67,7 @@ func _init() -> void:
 	_test_standing_slots()
 	_test_separation()
 	_test_separation_changes_no_consumption()
+	_test_desertion_and_reset()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -2562,3 +2563,58 @@ func _consumption_over_a_day(separated: bool) -> Dictionary:
 		for kind in demand:
 			total[kind] = float(total.get(kind, 0.0)) + float(demand[kind]) * step
 	return total
+
+
+## What the player actually hit: people leave one by one until the roster is
+## EMPTY, at which point the world goes silent — nothing moves, nothing is
+## consumed, no further events fire. An emptied roster cannot restart itself
+## (departures are permanent and a zero-agent engine ticks to nothing), so the
+## reset path is the only way back and has to work.
+func _test_desertion_and_reset() -> void:
+	var barren := {"registry": SpaceRegistry.create_empty(),
+			"pos_of": func(_s: Dictionary) -> Variant: return null}
+	var engine := NpcPopulationEngine.new()
+	engine.configure(8, "desert", Vector2.ZERO)
+	var deserted := [""]
+	var fired := [0]
+	engine.colony_deserted.connect(func(cause: String) -> void:
+		deserted[0] = cause
+		fired[0] += 1)
+	# Long enough for EVERY agent to run out of patience, not just enough to
+	# cross the collapse floor.
+	_run_sim(engine, barren, 8.0, 24.0 * 40.0, 1.0 / 12.0)
+	_check("a barren site empties completely", engine.agents.is_empty(),
+			"%d left" % engine.agents.size())
+	_check("desertion is reported", engine.is_deserted())
+	_check("desertion fires exactly once", fired[0] == 1, "%d times" % fired[0])
+	_check("desertion names a cause", deserted[0] in NpcAgent.CRITICAL_NEEDS,
+			deserted[0])
+	_check("the cause is queryable after the fact",
+			engine.departure_cause() == deserted[0])
+	_check("summary reports desertion",
+			bool(engine.summary().get("deserted", false)))
+
+	# The silence: an empty roster consumes nothing, which is exactly why the
+	# player sees no feedback at all and needs to be told.
+	var demand := engine.tick(8.0 + 24.0 * 41.0, barren)
+	_check("an empty roster consumes nothing", demand.is_empty())
+
+	# It must NOT recover on its own — that would make departures meaningless.
+	_run_sim(engine, barren, 8.0 + 24.0 * 41.0, 24.0 * 5.0, 1.0 / 12.0)
+	_check("an empty roster stays empty", engine.agents.is_empty())
+
+	# Reset is the way back: full roster, full morale, clean history.
+	engine.reset_roster(8, "desert", Vector2.ZERO)
+	_check("reset restores the roster", engine.agents.size() == 8)
+	_check("reset clears desertion", not engine.is_deserted())
+	_check("reset clears collapse", not engine.has_collapsed())
+	_check("reset clears the departure log", engine.departures().is_empty())
+	_check("reset returns people at full morale", engine.mean_morale() > 0.5,
+			"%.2f" % engine.mean_morale())
+	_check("reset clears collapse risk", engine.collapse_risk() < 0.2,
+			"%.2f" % engine.collapse_risk())
+
+	# ...and the new group leaves too if nothing was fixed, which is correct:
+	# resetting is not a cure, and the UI says so next to the button.
+	_run_sim(engine, barren, 8.0 + 24.0 * 46.0, 24.0 * 40.0, 1.0 / 12.0)
+	_check("a reset into the same conditions empties again", engine.agents.is_empty())
