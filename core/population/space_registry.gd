@@ -227,15 +227,121 @@ func resolve_position(space: Dictionary, main: Node) -> Variant:
 				return null
 			return loader.call("building_centroid_by_tag", str(target.get("building_tag", "")))
 		"area":
-			var poly: Array = target.get("poly", [])
-			if poly.is_empty():
-				return null
-			var c := Vector2.ZERO
-			for p in poly:
-				if p is Array and (p as Array).size() >= 2:
-					c += Vector2(float((p as Array)[0]), float((p as Array)[1]))
-			return c / float(poly.size())
+			return area_interior_point(target.get("poly", []) as Array)
 	return null
+
+
+# --- area geometry ----------------------------------------------------------
+
+## Polygon as world-XZ points.
+static func poly_points(poly: Array) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for p in poly:
+		if p is Array and (p as Array).size() >= 2:
+			out.append(Vector2(float((p as Array)[0]), float((p as Array)[1])))
+		elif p is Vector2:
+			out.append(p)
+	return out
+
+
+## True area centroid (shoelace), NOT the average of the vertices — the vertex
+## average is pulled toward wherever the outline happens to be finely divided,
+## so a shape with one detailed edge biases badly.
+static func polygon_centroid(poly: Array) -> Vector2:
+	var pts := poly_points(poly)
+	if pts.is_empty():
+		return Vector2.ZERO
+	if pts.size() < 3:
+		var s := Vector2.ZERO
+		for p in pts:
+			s += p
+		return s / float(pts.size())
+	var a := 0.0
+	var c := Vector2.ZERO
+	for i in range(pts.size()):
+		var p0 := pts[i]
+		var p1 := pts[(i + 1) % pts.size()]
+		var cross := p0.x * p1.y - p1.x * p0.y
+		a += cross
+		c += (p0 + p1) * cross
+	if absf(a) < 0.0001:
+		# Degenerate (collinear) — fall back to the vertex mean.
+		var s2 := Vector2.ZERO
+		for p in pts:
+			s2 += p
+		return s2 / float(pts.size())
+	return c / (3.0 * a)
+
+
+static func polygon_contains(poly: Array, pt: Vector2) -> bool:
+	var pts := poly_points(poly)
+	if pts.size() < 3:
+		return false
+	return Geometry2D.is_point_in_polygon(pt, pts)
+
+
+static func polygon_area_m2(poly: Array) -> float:
+	var pts := poly_points(poly)
+	if pts.size() < 3:
+		return 0.0
+	var a := 0.0
+	for i in range(pts.size()):
+		var p0 := pts[i]
+		var p1 := pts[(i + 1) % pts.size()]
+		a += p0.x * p1.y - p1.x * p0.y
+	return absf(a) * 0.5
+
+
+## A point people can actually gather on.
+##
+## The centroid is the natural answer and is right for convex shapes, but for a
+## concave one — an L-shaped yard, a courtyard wrapping a building — it can sit
+## OUTSIDE the polygon entirely, which would send everyone to a spot that is
+## not part of the space. When that happens, fall back to the interior sample
+## furthest from any edge, which is the roomiest place to stand and is stable
+## against small edits to the outline.
+static func area_interior_point(poly: Array) -> Variant:
+	var pts := poly_points(poly)
+	if pts.is_empty():
+		return null
+	if pts.size() < 3:
+		return polygon_centroid(poly)
+	var c := polygon_centroid(poly)
+	if Geometry2D.is_point_in_polygon(c, pts):
+		return c
+	# Grid-sample the bounding box and keep the deepest interior point. The
+	# resolution is bounded so a huge area costs the same as a small one.
+	var lo := pts[0]
+	var hi := pts[0]
+	for p in pts:
+		lo = lo.min(p)
+		hi = hi.max(p)
+	var steps := 24
+	var best := Vector2.ZERO
+	var best_d := -1.0
+	for iy in range(steps + 1):
+		for ix in range(steps + 1):
+			var s := Vector2(
+				lerpf(lo.x, hi.x, float(ix) / float(steps)),
+				lerpf(lo.y, hi.y, float(iy) / float(steps)))
+			if not Geometry2D.is_point_in_polygon(s, pts):
+				continue
+			var d := _distance_to_edges(pts, s)
+			if d > best_d:
+				best_d = d
+				best = s
+	if best_d < 0.0:
+		return c   # nothing sampled inside (a sliver) — centroid is all we have
+	return best
+
+
+static func _distance_to_edges(pts: PackedVector2Array, p: Vector2) -> float:
+	var best := INF
+	for i in range(pts.size()):
+		var a := pts[i]
+		var b := pts[(i + 1) % pts.size()]
+		best = minf(best, p.distance_to(Geometry2D.get_closest_point_to_segment(p, a, b)))
+	return best
 
 
 ## Drop records whose target no longer resolves (call before save).

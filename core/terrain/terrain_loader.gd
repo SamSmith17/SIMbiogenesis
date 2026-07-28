@@ -106,6 +106,7 @@ const TERRAIN_OPTIONS_UI_SCRIPT := preload("res://scenes/ui/terrain_options_ui.g
 const VEGETATION_EDIT_UI_SCRIPT := preload("res://scenes/ui/vegetation_edit_ui.gd")
 const VEGETATION_PREVIEW_EDITOR_SCRIPT := preload("res://scenes/ui/vegetation_preview_editor.gd")
 const CAMP_SCATTER_UI_SCRIPT := preload("res://scenes/ui/camp_scatter_ui.gd")
+const SPACE_EDIT_UI_SCRIPT := preload("res://scenes/ui/space_edit_ui.gd")
 const PLACED_PROPS_UI_SCRIPT := preload("res://scenes/ui/placed_props_ui.gd")
 const PLACED_PROP_EDIT_UI_SCRIPT: GDScript = preload("res://scenes/ui/placed_prop_edit_ui.gd")
 const BUILDING_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/building_builder_modal.gd")
@@ -191,6 +192,7 @@ var _detail_elev_resolved := false
 var _osm_vectors: Dictionary = {}
 var _terrain_edits: TerrainEditGrid = null
 var _terrain_edit_ui: Control = null
+var _space_edit_ui: Control = null
 var _terrain_options_ui: Control = null
 var _vegetation_layer: VegetationLayer = null
 var _vegetation_edit_ui: Control = null
@@ -561,6 +563,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _camp_scatter_ui != null and _camp_scatter_ui.visible:
 			_camp_scatter_ui.call("_exit_mode")
 		_vegetation_edit_ui.toggle_mode()
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and (event as InputEventKey).keycode == KEY_Y \
+			and (event as InputEventKey).pressed and not (event as InputEventKey).echo \
+			and _space_edit_ui != null:
+		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
+			_terrain_edit_ui.call("_exit_mode")
+		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
+			_vegetation_edit_ui.call("_exit_mode")
+		if _camp_scatter_ui != null and _camp_scatter_ui.visible:
+			_camp_scatter_ui.call("_exit_mode")
+		_space_edit_ui.call("toggle_mode")
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and (event as InputEventKey).keycode == KEY_C \
@@ -5680,6 +5694,15 @@ func _setup_camp_scatter_ui() -> void:
 	layer.add_child(ui)
 	ui.bind_loader(self)
 	_camp_scatter_ui = ui
+	# NPC Spaces dock (Y): areas are the one space target with no object to
+	# open, so they need a place of their own to be drawn.
+	var space_ui := Control.new()
+	space_ui.name = "SpaceEditUI"
+	space_ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	space_ui.set_script(SPACE_EDIT_UI_SCRIPT)
+	layer.add_child(space_ui)
+	space_ui.bind_loader(self)
+	_space_edit_ui = space_ui
 
 
 func _setup_vegetation() -> void:

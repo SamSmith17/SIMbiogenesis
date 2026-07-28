@@ -1435,7 +1435,19 @@ func _run_population_verify() -> void:
 		reg.call("set_space_type", {"kind": "area", "poly": [
 			[c.x - half, c.y - half], [c.x + half, c.y - half],
 			[c.x + half, c.y + half], [c.x - half, c.y + half]]}, str(stype), 30)
-	print("PlaytestHarness: population verify — %d spaces seeded, graph CLOSED" % sites.size())
+	# One deliberately CONCAVE area (a U, like a courtyard wrapping a building).
+	# Its centroid lands in the opening, outside the space, so this exercises
+	# SpaceRegistry.area_interior_point's fallback against a real registry and
+	# real agents rather than only in the offline geometry test.
+	var u_poly: Array = [[40, 40], [70, 40], [70, 70], [61, 70], [61, 49],
+			[49, 49], [49, 70], [40, 70]]
+	reg.call("set_space_type", {"kind": "area", "poly": u_poly}, "fire_circle", 12)
+	var u_pt: Variant = SpaceRegistry.area_interior_point(u_poly)
+	var u_centroid := SpaceRegistry.polygon_centroid(u_poly)
+	var ok_concave := u_pt is Vector2 		and SpaceRegistry.polygon_contains(u_poly, u_pt as Vector2) 		and not SpaceRegistry.polygon_contains(u_poly, u_centroid)
+	print("PlaytestHarness: population verify — concave area %s (centroid %s is outside, gathering point %s is inside)" % [
+		"PASS" if ok_concave else "FAIL", str(u_centroid.round()), str((u_pt as Vector2).round())])
+	print("PlaytestHarness: population verify — %d spaces seeded, graph CLOSED" % (sites.size() + 1))
 
 	var lvl := func(id: String) -> float:
 		return float((model.get_item(id).get("specs", {}) as Dictionary).get("level", -1.0))
@@ -1695,9 +1707,9 @@ func _run_population_verify() -> void:
 
 	# Tagged spaces must be resolvable as Site Plan markers with occupancy.
 	var marks: Array = bridge.call("space_markers", main)
-	var ok_marks := marks.size() == sites.size()
+	var ok_marks := marks.size() == sites.size() + 1   # +1 = the concave area
 	print("PlaytestHarness: population verify — space markers %s (%d of %d resolved)" % [
-		"PASS" if ok_marks else "FAIL", marks.size(), sites.size()])
+		"PASS" if ok_marks else "FAIL", marks.size(), sites.size() + 1])
 	var ok_drape := false
 	if main != null:
 		var prev_cam := get_viewport().get_camera_3d()

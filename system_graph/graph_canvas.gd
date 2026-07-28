@@ -7901,6 +7901,17 @@ func _draw_npc_spaces_site() -> void:
 		var occupied := int(mark.get("occupied", 0))
 		var capacity := maxi(int(mark.get("capacity", 1)), 1)
 		var full := occupied >= capacity
+		# An AREA space is a region, not a point — draw the outline the player
+		# actually drew, with the marker at its interior point. Without this a
+		# 40 m plaza and a single portaloo look identical on the plan.
+		var poly: PackedVector2Array = mark.get("poly", PackedVector2Array())
+		if poly.size() >= 3:
+			var ring := PackedVector2Array()
+			for wp in poly:
+				ring.append(origin + GraphSiteLayout.world_xz_to_site(wp, center3) * s)
+			draw_colored_polygon(ring, Color(col.r, col.g, col.b, 0.10))
+			ring.append(ring[0])
+			draw_polyline(ring, Color(col.r, col.g, col.b, 0.7), 1.6, true)
 		draw_circle(screen, r, Color(col.r, col.g, col.b, 0.13))
 		draw_arc(screen, r, 0.0, TAU, 40, Color(col.r, col.g, col.b, 0.85), 1.8, true)
 		# Occupancy sweep on the ring — a full space reads at a glance.

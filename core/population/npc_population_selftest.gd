@@ -68,6 +68,7 @@ func _init() -> void:
 	_test_separation()
 	_test_separation_changes_no_consumption()
 	_test_desertion_and_reset()
+	_test_area_spaces()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -2618,3 +2619,91 @@ func _test_desertion_and_reset() -> void:
 	# resetting is not a cure, and the UI says so next to the button.
 	_run_sim(engine, barren, 8.0 + 24.0 * 46.0, 24.0 * 40.0, 1.0 / 12.0)
 	_check("a reset into the same conditions empties again", engine.agents.is_empty())
+
+
+## Area spaces (Tier 4b). The schema always reserved `kind == "area"`; what it
+## lacked was geometry that survives the shapes people actually draw.
+func _test_area_spaces() -> void:
+	# Square: centroid is the obvious answer and must be exact. The old code
+	# averaged VERTICES, which is only right when they are evenly spread.
+	var square: Array = [[0, 0], [10, 0], [10, 10], [0, 10]]
+	var c := SpaceRegistry.polygon_centroid(square)
+	_check("square centroid is its middle", c.is_equal_approx(Vector2(5, 5)),
+			str(c))
+	_check("square area is right",
+			absf(SpaceRegistry.polygon_area_m2(square) - 100.0) < 0.01,
+			"%.2f" % SpaceRegistry.polygon_area_m2(square))
+
+	# A vertex average is dragged toward whichever edge is finely subdivided;
+	# the shoelace centroid is not. This is the case that motivated the change.
+	var lopsided: Array = [[0, 0], [10, 0], [10, 10], [7.5, 10], [5, 10],
+			[2.5, 10], [0, 10]]
+	var c2 := SpaceRegistry.polygon_centroid(lopsided)
+	_check("extra vertices do not shift the centroid",
+			c2.is_equal_approx(Vector2(5, 5)), str(c2))
+
+	# The load-bearing case: a U-shaped yard — a courtyard wrapping a building,
+	# say — whose centroid falls in the OPENING, outside the space entirely.
+	# (An L-shape does not demonstrate this: its centroid stays inside the
+	# thick corner, which is why it is the wrong fixture for this test.)
+	var l_shape: Array = [[0, 0], [10, 0], [10, 10], [7, 10], [7, 3], [3, 3],
+			[3, 10], [0, 10]]
+	var lc := SpaceRegistry.polygon_centroid(l_shape)
+	_check("the L-shape centroid really is outside it",
+			not SpaceRegistry.polygon_contains(l_shape, lc), str(lc))
+	var interior: Variant = SpaceRegistry.area_interior_point(l_shape)
+	_check("an interior point is found anyway", interior is Vector2)
+	_check("the interior point is inside the area",
+			SpaceRegistry.polygon_contains(l_shape, interior as Vector2),
+			str(interior))
+
+	# It should be roomy, not hugging a wall — people gather there.
+	var pts := SpaceRegistry.poly_points(l_shape)
+	var edge_d := INF
+	for i in range(pts.size()):
+		var a := pts[i]
+		var b := pts[(i + 1) % pts.size()]
+		edge_d = minf(edge_d, (interior as Vector2).distance_to(
+				Geometry2D.get_closest_point_to_segment(interior as Vector2, a, b)))
+	_check("the interior point has room around it", edge_d > 1.0,
+			"%.2f m from the nearest edge" % edge_d)
+
+	_check("containment rejects an outside point",
+			not SpaceRegistry.polygon_contains(square, Vector2(20, 20)))
+	_check("degenerate polys do not crash",
+			SpaceRegistry.area_interior_point([]) == null)
+	_check("a two-point 'area' still yields a point",
+			SpaceRegistry.area_interior_point([[0, 0], [4, 0]]) is Vector2)
+
+	# End to end through the registry: tag an area, resolve it, claim slots.
+	var reg := SpaceRegistry.create_empty()
+	var sid := reg.set_space_type({"kind": "area", "poly": l_shape}, "fire_circle", 8)
+	_check("an area can be tagged", not sid.is_empty())
+	var rec := reg.find_by_id(sid)
+	_check("the area keeps its type", str(rec.get("space_type", "")) == "fire_circle")
+	var resolved: Variant = reg.resolve_position(rec, null)
+	_check("an area resolves without a scene", resolved is Vector2)
+	_check("the resolved point is inside the area",
+			SpaceRegistry.polygon_contains(l_shape, resolved as Vector2))
+	_check("areas hold their stated capacity",
+			reg.claim(sid, "x") and reg.claim(sid, "y") and reg.has_free_capacity(sid))
+	_check("area occupants get their own standing slots",
+			reg.slot_offset(sid, "x") != reg.slot_offset(sid, "y"))
+
+	# Persistence: areas must survive a save/load round trip like any target.
+	var blob := reg.serialize()
+	var reg2 := SpaceRegistry.create_empty()
+	reg2.deserialize(blob)
+	var rec2 := reg2.find_by_id(sid)
+	_check("areas survive serialization", not rec2.is_empty())
+	var poly2: Array = (rec2.get("target", {}) as Dictionary).get("poly", [])
+	_check("the outline round-trips", poly2.size() == l_shape.size())
+	_check("the round-tripped area resolves the same",
+			(reg2.resolve_position(rec2, null) as Vector2).is_equal_approx(
+				resolved as Vector2))
+
+	# Re-tagging the SAME outline must update in place, not pile up duplicates.
+	var sid_again := reg2.set_space_type({"kind": "area", "poly": poly2}, "kitchen", 4)
+	_check("re-tagging an area updates it", sid_again == sid)
+	_check("no duplicate area record", reg2.spaces.size() == 1)
+	_check("the new type took", str(reg2.find_by_id(sid).get("space_type", "")) == "kitchen")

@@ -1051,6 +1051,8 @@ Drop everything in `Imported Models/NPC/`; the loader follows the existing
 
 ## Sequencing
 
+**STATUS: 4a, 4b, 4c, 4d, 4e all shipped.**
+
 4a first — it is blocking, small, and both halves are my regressions. 4b next
 because it completes the tagging story and its dock is where the click-tagging
 fix lives. 4c is independent and can land any time after. 4d/4e last and

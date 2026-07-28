@@ -1178,7 +1178,23 @@ pins at 1.0. Enable per habitat: inspector **Population Simulation** →
 `specs.pop_driven` (occupants = roster size; closure metrics unchanged).
 Persistence: change-gated `specs.pop_state` snapshot (≤2×/sim-hour) rides the
 normal graph save; `pop_state` is in both INSTANCE_ONLY_SPEC_KEYS strip
-lists. **Desertion is a dead end the sim cannot leave on its own.** Departures are
+lists. **Area spaces (Tier 4b).** `target.kind == "area"` was always in the schema;
+what it lacked was geometry and a way to create one. `SpaceEditUI`
+(`scenes/ui/space_edit_ui.gd`, **Y**, wired in `terrain_loader._unhandled_input`
+alongside the C camp dock — raw keycode, no new input action) draws a polygon
+on the ground via `terrain_pick_ray`, closing on a click near the first corner
+or RMB. Props and buildings are still tagged in place through `NpcSpaceTagRow`;
+areas get a dock because there is no object to open. **Position resolution is
+the subtle part**: `polygon_centroid` is a shoelace centroid, NOT a vertex
+average (a vertex average drifts toward whichever edge is finely subdivided),
+and for a concave outline — a courtyard wrapping a building — the centroid can
+land OUTSIDE the polygon, so `area_interior_point` falls back to the bounded
+grid sample furthest from any edge, which is both inside and the roomiest place
+to stand. Site Plan draws the real outline plus the marker at that point
+(`space_markers` carries `poly`), so a 40 m plaza no longer looks identical to a
+single portaloo.
+
+**Desertion is a dead end the sim cannot leave on its own.** Departures are
 permanent, so a barren site eventually empties the roster COMPLETELY (past
 `colony_collapsed`, which fires at 35% and still leaves people). At zero agents
 `tick()` returns `{}` immediately: nothing moves, nothing is consumed, no

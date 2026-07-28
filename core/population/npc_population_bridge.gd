@@ -163,12 +163,16 @@ func space_markers(main: Node) -> Array:
 		if not (p is Vector2):
 			continue
 		var sid := str(space.get("id", ""))
+		var target: Dictionary = space.get("target", {})
 		out.append({
 			"pos": p,
 			"space_type": str(space.get("space_type", "")),
 			"label": str(space.get("label", "")),
 			"occupied": reg.occupant_count(sid),
 			"capacity": maxi(int(space.get("capacity", SpaceRegistry.DEFAULT_CAPACITY)), 1),
+			# Area spaces carry their outline so Site Plan can show the REGION
+			# rather than a marker floating at its interior point.
+			"poly": SpaceRegistry.poly_points(target.get("poly", []) as Array) 				if str(target.get("kind", "")) == "area" else PackedVector2Array(),
 		})
 	return out
 
