@@ -220,7 +220,17 @@ asset pack — see [`ASSETS.md`](ASSETS.md). Record each third-party model/textu
 origin + license here as it's added (PBR sets `Wood034_1K-JPG/`,
 `Metal051C_1K-JPG/`, imported GLBs, StarShade FBX, etc.).
 
-- _(entries to be filled — start with the PBR texture sets and any downloaded GLBs)_
+- **Mixamo character + animation clips** (Adobe) — `Imported Models/NPC/`
+  (`Ch36_nonPBR.fbx` + Walking / Laying Sleeping / Overhead Squat / Sitting Idle /
+  Arms Hip Hop Dance) and `Player Character/` (Remy + Breathing Idle / Walking /
+  Jogging). Used as the NPC population's rigged silhouette figures and the player
+  character. Royalty-free for use **within** a project under the Adobe/Mixamo
+  general terms; requires a (free) Adobe account to download. **Gotcha:** the
+  characters and clips may not be redistributed as standalone assets — shipping
+  them inside a game is fine, re-publishing the FBX files as an asset pack is
+  not. No attribution is contractually required; recorded here because the
+  ledger tracks every third-party asset.
+- _(remaining entries to be filled — PBR texture sets and other downloaded GLBs)_
 
 ## Fonts
 

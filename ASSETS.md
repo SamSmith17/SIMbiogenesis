@@ -26,6 +26,34 @@ The simulator still runs:
 - **Launch hub** boots by default (`project.godot` → unified energy-zone map + saved worlds list).
 - **Create map here** builds any site via `generated_location.tscn` + terrain fetch.
 - SOAK / Mars entries appear in **Your maps** only when you add the local scene files and MapDefinition resources (see below).
+- **NPC population** simulates and renders normally; people just show as the
+  simple primitive figures instead of the rigged Mixamo silhouettes (see below).
+
+## NPC character pack (`Imported Models/NPC/`)
+
+Optional. Without it `NpcRig.available()` is false and `NpcAvatar` falls back to
+its head/torso/legs figure — the sim itself never depends on these files.
+
+Download from [mixamo.com](https://www.mixamo.com/) (free Adobe account) into
+`Imported Models/NPC/`, then run `--headless --path . --import`:
+
+| File | Mixamo item | Download settings |
+|---|---|---|
+| `Ch36_nonPBR.fbx` | character "Ch36" | **With** skin, FBX Binary, T-pose |
+| `Walking.fbx` | Walking | Without Skin, FBX Binary, 30 fps, no keyframe reduction |
+| `Laying Sleeping.fbx` | Laying Sleeping | as above |
+| `Overhead Squat.fbx` | Overhead Squat | as above |
+| `Sitting Idle.fbx` | Sitting Idle | as above |
+| `Arms Hip Hop Dance.fbx` | Arms Hip Hop Dance | as above |
+
+The standing idle is **not** in this list — it is retargeted at load from
+`Player Character/Breathing Idle (no skin).fbx`.
+
+"In Place" does **not** need to be ticked: `NpcRig` flattens horizontal root
+motion at load, because the simulation owns each agent's position. Any Mixamo
+character works as a substitute — the clips bind by bone name, and the loader
+measures facing, walk-cycle length and per-clip ground offset from the files
+themselves rather than assuming this pack's numbers.
 
 ## Local custom maps (SOAK / Mars)
 

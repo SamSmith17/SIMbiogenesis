@@ -541,7 +541,7 @@ enrichment: **Fire Circle · Dance/Movement · Quiet · Making/Craft**.
 
 | View | What |
 |------|------|
-| 3D world | Silhouette figures walk, sleep, gather. Ctrl/Alt-aim one → name, morale band, what they are doing |
+| 3D world | Silhouette figures walk, sleep, work, dance. Ctrl/Alt-aim one → name, morale band, what they are doing |
 | **G** → Site Plan | Space markers (glyph + live occupancy) and morale-tinted dots with trails |
 | Inspector → Population Simulation | Roster, morale bands, collapse risk, blocked needs, walking distance / kcal / furthest trip |
 | **Routines & chores…** button | Roster with 24 h day-plan strips, chore board, weather |
@@ -568,6 +568,13 @@ Traffic has to accumulate — give it a few sim-hours at speed before the patter
 - Occupants is the **authored** headcount; the live count (after anyone quits)
   shows as *"12 of 16 present"*.
 - Morale caps at **75%** on needs alone — the rest is earned at enrichment spaces.
+- People are **dark silhouettes with a coloured edge**, and the colour is that
+  person's identity — the same one their Site Plan dot uses. Up close (within
+  45 m, nearest 12) they are a real animated figure that walks, sits to eat,
+  works, dances and lies down to sleep; further away they switch to a simpler
+  shape. If everyone looks like a simple capsule figure at ALL distances, the
+  optional Mixamo character pack is not installed — see `ASSETS.md`. Nothing
+  else changes; the simulation is identical either way.
 
 **Source:** `core/population/` (+ `POPULATION_PLAN.md` for the design and invariants).
 

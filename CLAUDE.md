@@ -1178,7 +1178,40 @@ pins at 1.0. Enable per habitat: inspector **Population Simulation** →
 `specs.pop_driven` (occupants = roster size; closure metrics unchanged).
 Persistence: change-gated `specs.pop_state` snapshot (≤2×/sim-hour) rides the
 normal graph save; `pop_state` is in both INSTANCE_ONLY_SPEC_KEYS strip
-lists. **Rendering:** Site Plan draws tagged spaces (`npc_spaces_provider` →
+lists. **3D figures (`NpcRig` + `npc_silhouette.gdshader`):** `NpcAvatar` carries TWO
+bodies behind one API — the rigged Mixamo character up close, the original
+head/torso/legs primitive far away and whenever the FBX assets are missing
+(`Imported Models/NPC/` is **gitignored**, so the fallback is the normal state
+on a fresh clone; see ASSETS.md). `NpcPopulationHost` hands the rig to the
+`MAX_RIGGED` (12) nearest agents within `RIG_DIST_M` (45 m), with hysteresis so
+walking the boundary doesn't thrash the swap. Everything the Mixamo exporter
+gets wrong for this use is corrected in `NpcRig` at load, and each correction is
+**measured from the files, not hardcoded**, so a re-export keeps working:
+every clip is named `mixamo_com` (renamed by role into one shared
+`AnimationLibrary`); three clips carry root motion (horizontal hip translation
+is flattened — vertical is kept, since for a squat that IS the animation);
+nothing loops; the model faces **+Z** while the avatar's forward is −Z
+(`model_yaw_offset` derives the half-turn from the direction the hips travel in
+the walk clip); the walk clip covers 1.69 m/cycle at 1.64 m/s vs the sim's
+1.3 m/s (`walk_speed_scale` rate-matches it or the feet skate). **Clips are
+authored around their own origin, not the ground, and they disagree** —
+"Laying Sleeping" puts the hips at 1.018 m, *higher* than a standing walk, so
+an uncorrected figure lies down a metre in the air; `TARGET_HIPS_Y` expresses
+the fix as a target height and `clip_ground_offset` derives the shift.
+There is **no standing idle in the pack** (the character's bundled `Take 001`
+is a static bind pose held 9 s — measured 0.0° of rotation), so the player
+character's Breathing Idle is retargeted by rewriting `mixamorig_` →
+`mixamorig1_`; Godot drops unbound tracks SILENTLY (a bad retarget looks like a
+T-pose, not an error), so `_retarget_idle` verifies the bind ratio and rejects
+the clip rather than trusting it. Shading is deliberately `unshaded` near-black
+with a fresnel rim in the agent's pastel: a lit character reads as a *person*,
+a flat dark mass reads as *someone*. Note a human is mostly limbs, and cylinders
+show grazing angles across most of their visible surface, so a rim exponent
+that edges a sphere floods a whole body — `rim_power` is 6.5 for that reason.
+Skinned meshes cull against their REST AABB, so `extra_cull_margin` is set or
+lying/arms-overhead figures pop out at the screen edge.
+
+**Rendering:** Site Plan draws tagged spaces (`npc_spaces_provider` →
 `_draw_npc_spaces_site`: disc + glyph + live occupancy sweep) UNDER the agent
 dots (`npc_agents_provider` → `_draw_npc_agents_site`), redrawn only on
 population ticks while visible; 3D = `NpcPopulationHost` (spawned by the view

@@ -1188,6 +1188,21 @@
       "share_alike": false,
       "source": null,
       "status": "pending-verification"
+    },
+    {
+      "added": "2026-07-28",
+      "attribution_required": false,
+      "author": "Adobe (Mixamo)",
+      "category": "art",
+      "commercial_ok": true,
+      "id": "mixamo",
+      "license": "Mixamo / Adobe General Terms of Use",
+      "name": "Mixamo character + animation clips",
+      "notes": "Imported Models/NPC/ (Ch36 character; Walking, Laying Sleeping, Overhead Squat, Sitting Idle, Arms Hip Hop Dance) and Player Character/ (Remy; Breathing Idle, Walking, Jogging). Royalty-free for use WITHIN a project; free Adobe account required to download. May NOT be redistributed as standalone assets - shipping inside a game is fine, republishing the FBX files as an asset pack is not. No attribution contractually required.",
+      "role": "NPC population silhouette rig + player character",
+      "share_alike": false,
+      "source": "https://www.mixamo.com/",
+      "status": "verified"
     }
   ],
   "field_guide": {

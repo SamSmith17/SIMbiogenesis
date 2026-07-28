@@ -1624,6 +1624,56 @@ func _run_population_verify() -> void:
 			and statused == avatar_count and pick_ok == avatar_count
 	print("PlaytestHarness: population verify — crosshair contract %s (group=%d named=%d status=%d pick=%d)" % [
 		"PASS" if ok_pick else "FAIL", grouped.size(), named, statused, pick_ok])
+	# Rigged-body LOD contract: the host must hand the Mixamo figure to the
+	# nearest agents and the primitive to the rest. Proving the rig RENDERS
+	# (the staged review shot below) is not the same as proving the host ever
+	# asks for it — the two paths are independent, and the staged one bypasses
+	# the budget entirely.
+	if NpcRig.available():
+		var player := main.get_node_or_null("Player") as Node3D
+		# Agents wander, and on a big site they are usually tens of metres off,
+		# which would make this check pass without ever exercising the swap.
+		# Walk the player over to the nearest one first so the assertion is
+		# real; position is restored afterwards.
+		var closest: NpcAvatar = null
+		var closest_d := INF
+		var home := player.global_position if player != null else Vector3.ZERO
+		for node in grouped:
+			var av0 := node as NpcAvatar
+			if av0 == null:
+				continue
+			var d0 := av0.global_position.distance_to(home)
+			if d0 < closest_d:
+				closest_d = d0
+				closest = av0
+		if player != null and closest != null:
+			player.global_position = closest.global_position + Vector3(0.0, 0.0, 6.0)
+			await get_tree().process_frame
+			await get_tree().process_frame
+		var eye := Vector2(player.global_position.x, player.global_position.z) \
+			if player != null else Vector2.ZERO
+		var rigged_n := 0
+		var within := 0
+		var nearest := INF
+		for node in grouped:
+			var av := node as NpcAvatar
+			if av == null:
+				continue
+			var d := Vector2(av.global_position.x, av.global_position.z).distance_to(eye)
+			nearest = minf(nearest, d)
+			if d <= NpcPopulationHost.RIG_DIST_M:
+				within += 1
+			if av.is_rigged():
+				rigged_n += 1
+		# Someone in range MUST get the rigged body, and the budget must hold.
+		var ok_rig := rigged_n <= NpcPopulationHost.MAX_RIGGED \
+			and within > 0 and rigged_n > 0
+		print("PlaytestHarness: population verify — rigged LOD %s (%d rigged, %d within %.0f m, nearest %.0f m, cap %d)" % [
+			"PASS" if ok_rig else "FAIL", rigged_n, within,
+			NpcPopulationHost.RIG_DIST_M, nearest, NpcPopulationHost.MAX_RIGGED])
+		if player != null:
+			player.global_position = home
+
 	# Tagged spaces must be resolvable as Site Plan markers with occupancy.
 	var marks: Array = bridge.call("space_markers", main)
 	var ok_marks := marks.size() == sites.size()
@@ -1691,18 +1741,35 @@ func _run_population_verify() -> void:
 		# obstacle avoidance in v1), so pose three sample silhouettes on a
 		# "sky stage" well above the treeline — standing, walking, lying —
 		# with the camera level in front of them. Clean backdrop, guaranteed.
+		# One figure per clip so the shot reviews the whole animation set, not
+		# just a standing pose. These are staged directly rather than through
+		# NpcPopulationHost, so they must opt into the rigged body themselves —
+		# the host's distance/budget LOD never sees them.
 		var stage := Vector3(0.0, gy + 80.0, 0.0)
-		cam.global_position = stage + Vector3(0.0, 1.4, 5.5)
-		cam.look_at(stage + Vector3(0.0, 1.0, 0.0))
+		var poses := [
+			{"moving": false, "activity": ""},          # idle
+			{"moving": true, "activity": ""},           # walk
+			{"moving": false, "activity": "chore"},     # work
+			{"moving": false, "activity": "enrichment"},# dance
+			{"moving": false, "activity": "sleep"},     # sleep (lying)
+		]
+		cam.global_position = stage + Vector3(0.0, 1.3, 5.6)
+		cam.look_at(stage + Vector3(0.0, 0.85, 0.0))
 		var samples: Array = []
-		for i in 3:
+		for i in poses.size():
+			var pose: Dictionary = poses[i]
 			var sample := NpcAvatar.new()
 			sample.setup("review_%d" % i, NpcPopulationEngine.color_for_agent("review_%d" % i))
 			main.add_child(sample)
-			sample.apply_state(stage + Vector3(-1.6 + 1.6 * float(i), 0.0, 0.0),
-					PI * 0.2 * float(i), i == 1, "sleep" if i == 2 else "")
+			sample.set_detail(true)
+			sample.apply_state(stage + Vector3(-2.8 + 1.4 * float(i), 0.0, 0.0),
+					PI, bool(pose["moving"]), str(pose["activity"]))
 			samples.append(sample)
-		await get_tree().create_timer(0.6).timeout
+		print("PlaytestHarness: population verify — rig %s (%s)"
+			% ["available" if NpcRig.available() else "ABSENT (primitive figures)",
+				", ".join(NpcRig.clip_names()) if NpcRig.available() else NpcRig.load_error()])
+		# Long enough for the animation tree to leave its bind pose.
+		await get_tree().create_timer(1.2).timeout
 		await _graph_shot(dir, "05_avatar_model_review", manifest, "world")
 		for s in samples:
 			(s as Node).queue_free()

@@ -60,6 +60,9 @@ func _init() -> void:
 	_test_desire_map_retention()
 	_test_desire_map_render()
 	_test_desire_from_walking()
+	# --- Tier 4 ---
+	_test_rig_assets()
+	_test_rig_clip_map()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -2176,3 +2179,134 @@ func _test_desire_from_walking() -> void:
 			"%d" % a0.trail.size())
 	var dots := engine.agent_dots()
 	_check("dots expose the trail", (dots[0] as Dictionary).has("trail"))
+
+
+# --- Tier 4: Mixamo rig ------------------------------------------------------
+
+## The rig is an OPTIONAL asset layer. These checks assert the corrections the
+## loader makes to the imported files, and that its absence degrades cleanly
+## rather than breaking the sim.
+func _test_rig_assets() -> void:
+	if not NpcRig.available():
+		# No assets installed is a legitimate state: assert the graceful path
+		# and skip the rest rather than failing the suite.
+		_check("no rig degrades cleanly", NpcRig.build_figure() == null,
+				"build_figure must return null without assets")
+		return
+
+	print("  rig: clips=[%s] cycle=%.2fm yaw_off=%.2frad note=%s"
+		% [", ".join(NpcRig.clip_names()), NpcRig.walk_cycle_distance_m(),
+			NpcRig.model_yaw_offset(), NpcRig.load_error()])
+	var clips := NpcRig.clip_names()
+	for want in [NpcRig.CLIP_WALK, NpcRig.CLIP_IDLE, NpcRig.CLIP_SLEEP,
+			NpcRig.CLIP_WORK, NpcRig.CLIP_SIT, NpcRig.CLIP_DANCE]:
+		_check("clip present: %s" % want, clips.has(want), ", ".join(clips))
+
+	# Mixamo names every take "mixamo_com"; if the rename failed the library
+	# would hold one clip under that name instead of six under role names.
+	_check("mixamo take name is gone", not clips.has(NpcRig.TAKE_NAME))
+
+	# Root motion must be flattened: the sim owns position, so a clip that
+	# travels would slide the figure off its own feet.
+	var fig := NpcRig.build_figure()
+	_check("a figure is built", fig != null)
+	if fig != null:
+		var ap := NpcRig.find_anim_player(fig)
+		_check("figure carries the shared library", ap != null and ap.has_animation(NpcRig.CLIP_WALK))
+		if ap != null:
+			for c in [NpcRig.CLIP_WALK, NpcRig.CLIP_WORK, NpcRig.CLIP_DANCE]:
+				if not ap.has_animation(c):
+					continue
+				var anim := ap.get_animation(c)
+				var span := _hips_xz_span(anim)
+				_check("root motion flattened: %s" % c, span < 0.01,
+						"%.3f m of horizontal hip travel remains" % span)
+				_check("clip loops: %s" % c, anim.loop_mode != Animation.LOOP_NONE)
+		var skel := NpcRig.find_skeleton(fig)
+		_check("figure has a skeleton", skel != null and skel.get_bone_count() > 30)
+		var mesh := NpcRig.find_mesh(fig)
+		_check("figure has a skinned mesh", mesh != null and mesh.skin != null)
+		fig.free()
+
+	# The walk cycle distance is what rate-matches the feet to the ground.
+	var cyc := NpcRig.walk_cycle_distance_m()
+	_check("walk cycle measured", cyc > 0.5 and cyc < 5.0, "%.2f m" % cyc)
+	var scale := NpcRig.walk_speed_scale(NpcAvatar.WALK_SPEED_MPS)
+	_check("walk rate-matched, not unity", absf(scale - 1.0) > 0.01, "%.3f" % scale)
+	_check("walk rate stays sane", scale > 0.25 and scale < 4.0, "%.3f" % scale)
+
+	# Mixamo authors each clip around its own origin, and they disagree:
+	# "Laying Sleeping" puts the hips at 1.02 m — HIGHER than a standing walk —
+	# so without a correction the figure lies down a metre off the ground.
+	var sleep_off := NpcRig.clip_ground_offset(NpcRig.CLIP_SLEEP)
+	_check("lying clip is pulled down to the ground", sleep_off < -0.5,
+			"%.3f m" % sleep_off)
+	var sit_off := NpcRig.clip_ground_offset(NpcRig.CLIP_SIT)
+	_check("seated clip is pulled down to the ground", sit_off < -0.1,
+			"%.3f m" % sit_off)
+	_check("standing clips are not shifted",
+			is_equal_approx(NpcRig.clip_ground_offset(NpcRig.CLIP_WALK), 0.0)
+			and is_equal_approx(NpcRig.clip_ground_offset(NpcRig.CLIP_IDLE), 0.0))
+
+	# Facing is derived from the clip, and this pack measures +Z forward, so
+	# the offset must actually turn the model around.
+	var off := NpcRig.model_yaw_offset()
+	_check("model yaw offset is a half turn", absf(absf(off) - PI) < 0.2,
+			"%.3f rad" % off)
+
+
+## Activity -> clip routing, independent of whether assets are installed:
+## travelling must win over intent, and an unknown activity must fall back to
+## the idle clip rather than to an empty string.
+func _test_rig_clip_map() -> void:
+	var av := NpcAvatar.new()
+	av.setup("agent_rig_test", Color(0.5, 0.7, 0.9), "Tester")
+
+	_check("sleep maps to the sleep clip",
+			str(NpcAvatar.ACTIVITY_CLIPS.get("sleep", "")) == NpcRig.CLIP_SLEEP)
+	_check("chores map to the work clip",
+			str(NpcAvatar.ACTIVITY_CLIPS.get("chore", "")) == NpcRig.CLIP_WORK)
+	_check("eating maps to the seated clip",
+			str(NpcAvatar.ACTIVITY_CLIPS.get("hunger", "")) == NpcRig.CLIP_SIT)
+	_check("enrichment maps to the dance clip",
+			str(NpcAvatar.ACTIVITY_CLIPS.get("enrichment", "")) == NpcRig.CLIP_DANCE)
+	# Every mapped activity must name a clip the rig actually ships.
+	if NpcRig.available():
+		var clips := NpcRig.clip_names()
+		for a in NpcAvatar.ACTIVITY_CLIPS.keys():
+			_check("mapped clip exists: %s" % a,
+					clips.has(str(NpcAvatar.ACTIVITY_CLIPS[a])))
+
+	# Travelling overrides intent — someone walking to bed walks, not sleeps.
+	av.set_motion_state(true, "sleep")
+	_check("travelling overrides activity", av._pick_clip() == NpcRig.CLIP_WALK)
+	av.set_motion_state(false, "sleep")
+	_check("stopped uses the activity clip", av._pick_clip() == NpcRig.CLIP_SLEEP)
+	av.set_motion_state(false, "thirst")
+	_check("unmapped activity falls back to idle", av._pick_clip() == NpcRig.CLIP_IDLE)
+	av.set_motion_state(false, "")
+	_check("no activity falls back to idle", av._pick_clip() == NpcRig.CLIP_IDLE)
+
+	# Requesting detail without assets must not crash or claim it succeeded.
+	av.set_detail(true)
+	_check("detail request matches asset availability",
+			av.is_rigged() == NpcRig.available())
+	av.set_detail(false)
+	_check("detail can be dropped again", not av.is_rigged())
+	av.free()
+
+
+func _hips_xz_span(anim: Animation) -> float:
+	for t in range(anim.get_track_count()):
+		if anim.track_get_type(t) != Animation.TYPE_POSITION_3D:
+			continue
+		if not str(anim.track_get_path(t)).to_lower().ends_with("hips"):
+			continue
+		var lo := Vector2(INF, INF)
+		var hi := Vector2(-INF, -INF)
+		for k in range(anim.track_get_key_count(t)):
+			var v: Vector3 = anim.track_get_key_value(t, k)
+			lo = lo.min(Vector2(v.x, v.z))
+			hi = hi.max(Vector2(v.x, v.z))
+		return (hi - lo).length()
+	return 0.0

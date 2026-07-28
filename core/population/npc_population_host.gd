@@ -26,6 +26,17 @@ const FAR_POSE_INTERVAL_S := 0.25
 const GROUND_REFRESH_S := 0.5
 const GROUND_MOVE_EPS_M := 0.35
 
+## Rigged-figure budget. A skinned 16k-vertex mesh with its own skeleton and
+## animation tree is a different cost class from the primitive figure, and a
+## 50-person camp would pay it 50 times over — so only the nearest few get the
+## real body and everyone else keeps the cheap one. Both read as the same
+## silhouette at distance, which is what makes the swap invisible.
+const RIG_DIST_M := 45.0
+const MAX_RIGGED := 12
+## Hysteresis on the distance test so someone hovering at the boundary does not
+## rebuild/rebind their rig every frame.
+const RIG_DIST_HYSTERESIS_M := 6.0
+
 var _bridge = null                 # NpcPopulationBridge (RefCounted)
 var _main: Node = null
 var _avatars: Dictionary = {}      # agent_id -> NpcAvatar
@@ -46,6 +57,7 @@ func _process(delta: float) -> void:
 		return
 	var dots: Array = _bridge.agent_dots()
 	var seen: Dictionary = {}
+	var near: Array = []   # [dist, agent_id] candidates for the rigged body
 	var eye := _viewer_xz()
 	for dot_v in dots:
 		if not (dot_v is Dictionary):
@@ -74,6 +86,13 @@ func _process(delta: float) -> void:
 		if not av.visible:
 			av.visible = true
 			av.set_process(true)
+		# Already-rigged figures keep their body a little past the threshold so
+		# walking the boundary does not thrash the swap.
+		var rig_reach := RIG_DIST_M + (RIG_DIST_HYSTERESIS_M if av.is_rigged() else 0.0)
+		if dist <= rig_reach:
+			near.append([dist, aid])
+		else:
+			av.set_detail(false)
 		if dist > FAR_DIST_M:
 			# Distant figures don't need per-frame smoothing; batch their pose.
 			var acc := float(_far_accum.get(aid, 0.0)) + delta
@@ -85,6 +104,7 @@ func _process(delta: float) -> void:
 		else:
 			_pose_avatar(av, aid, dot, delta)
 		av.set_tag_visible(aid == _focus_id)
+	_apply_rig_budget(near)
 	# Despawn agents that left the roster (count change / pop_driven off).
 	for aid in _avatars.keys():
 		if not seen.has(aid):
@@ -95,6 +115,21 @@ func _process(delta: float) -> void:
 			_last_pos.erase(aid)
 			_ground.erase(aid)
 			_far_accum.erase(aid)
+
+
+## Give the rigged body to the MAX_RIGGED nearest candidates and the primitive
+## to everyone else. Nearest-first rather than first-come so the detailed
+## figures are always the ones actually being looked at; ties break on agent id
+## so the choice is stable frame to frame.
+func _apply_rig_budget(near: Array) -> void:
+	near.sort_custom(func(a, b):
+		if is_equal_approx(float(a[0]), float(b[0])):
+			return str(a[1]) < str(b[1])
+		return float(a[0]) < float(b[0]))
+	for i in range(near.size()):
+		var av: NpcAvatar = _avatars.get(str(near[i][1]))
+		if av != null and is_instance_valid(av):
+			av.set_detail(i < MAX_RIGGED)
 
 
 ## Highlight one agent's nametag (called by InteractionFocus on crosshair hit;
