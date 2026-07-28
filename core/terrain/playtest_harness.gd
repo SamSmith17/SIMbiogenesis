@@ -1873,7 +1873,14 @@ func _run_population_verify() -> void:
 		                        # the 6 h coarse-catch-up threshold
 	var saw_warning := false
 	var pop_min := 99
-	for i in 90:
+	# 90 iterations was enough before daily routines existed. A scheduled camp
+	# is genuinely more resilient — it starts near 0.81 morale instead of 0.60,
+	# because people eat, wash and gather on time and enrichment lifts the
+	# ceiling — so the same deprivation takes materially longer to reach the
+	# collapse WARNING. That is the designed "more health = more buffer"
+	# behaviour, not a regression, so the window is widened rather than the
+	# assertion weakened.
+	for i in 220:
 		await get_tree().create_timer(0.5).timeout
 		var s: Dictionary = bridge.call("summary_for", hab_id)
 		pop_min = mini(pop_min, int(s.get("count", 99)))

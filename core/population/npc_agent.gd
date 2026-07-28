@@ -13,9 +13,11 @@ extends RefCounted
 ## intake; the habitat preset's ~50 L / 1.5 kg is the no-shower floor):
 ##   eat    3x/day x 0.5 h  x (food 1.0 kg/h + water 8 L/h)  = 1.5 kg + 12 L
 ##   drink  ~8x/day x 0.1 h x water 7.5 L/h                  = ~6 L
-##   toilet ~5x/day x 0.15 h x water 40 L/h (flush/wash)     = ~30 L
+##   toilet  3x/day x 5 min  x water 72 L/h (one 6 L flush)   = 18 L
 ##   shower ~1x/day x 0.2 h  x water 60 L/h (navy shower)    = ~12 L
-## Totals ~60 L water, 1.5 kg food/day.
+## Totals ~48 L water, 1.5 kg food/day. Toilet use is SCHEDULED (NpcRoutine),
+## not threshold-driven, which is what fixed both the ~40 L/day of phantom
+## flushes and everyone pooling at the restrooms between trips.
 
 enum State { IDLE, TRAVELING, DOING }
 
@@ -29,7 +31,12 @@ const CRITICAL_NEEDS: Array = ["hunger", "thirst", "bladder", "sleep"]
 const RISE_PER_H: Dictionary = {
 	"hunger": 1.0 / 16.0,   # 3 meals over a 16 h waking day
 	"thirst": 1.0 / 5.0,
-	"bladder": 1.0 / 4.0,
+	# Slow enough that the routine's 3 scheduled visits actually SUFFICE. The
+	# longest waking gap in the default day is ~5.1 h (09:05 -> 13:55), and at
+	# the old 1/4 per hour the need crossed its threshold every ~2.4 h, so it
+	# fired constantly and dragged people back to the toilets between blocks —
+	# which is what kept them pooled there even after the schedule landed.
+	"bladder": 1.0 / 12.0,
 	"sleep": 1.0 / 16.0,
 	"hygiene": 1.0 / 20.0,  # ~1 wash per waking day
 	"enrichment": 1.0 / 30.0,
@@ -39,7 +46,10 @@ const RISE_PER_H: Dictionary = {
 const THRESHOLD: Dictionary = {
 	"hunger": 0.55,
 	"thirst": 0.5,
-	"bladder": 0.6,
+	# Raised alongside the slower rise so a scheduled day never trips it; the
+	# need now escalates only when a visit is MISSED (blocked space, starved
+	# supply, an overrunning chore), which is the honest use of a threshold.
+	"bladder": 0.75,
 	"sleep": 0.9,   # normally schedule-gated; 0.9 forces a nap anywhere in the day
 	"hygiene": 0.7, # least urgent — skipped happily when water is short
 	"enrichment": 0.3,  # low bar, but gated on free time + quiet critical needs
@@ -51,7 +61,12 @@ const THRESHOLD: Dictionary = {
 const ACTIVITIES: Dictionary = {
 	"hunger": {"space": "kitchen", "duration_h": 0.5, "consumes": {"food": 1.0, "water": 8.0}},
 	"thirst": {"space": "water_point", "duration_h": 0.1, "consumes": {"water": 7.5}},
-	"bladder": {"space": "restroom", "duration_h": 0.15, "consumes": {"water": 40.0}},
+	# 5 minutes and one 6 L flush. The rate is per sim-hour, so
+	# 72 L/h x (5/60) h = 6.0 L per visit — see NpcRoutine.WATER_PER_VISIT_L
+	# for the source of the 6 L figure. Scheduled routines give 3 visits/day
+	# (~18 L); adding a bathroom block adds a flush, which is the honest model.
+	"bladder": {"space": "restroom", "duration_h": NpcRoutine.BATHROOM_HOURS,
+		"consumes": {"water": NpcRoutine.WATER_PER_VISIT_L / NpcRoutine.BATHROOM_HOURS}},
 	"sleep": {"space": "sleep", "duration_h": -1.0, "consumes": {}},  # -1 = until wake hour
 	"hygiene": {"space": "shower", "duration_h": 0.2, "consumes": {"water": 60.0}},
 	# Enrichment resolves to whichever enrichment space wins the social/
@@ -77,7 +92,10 @@ const SLEEP_END_H := 6.0           # wake target (plus per-agent jitter)
 const SLEEP_RECOVER_PER_H := 1.0 / 8.0
 const URGENT := 0.95               # a need this high interrupts the current plan
 const RETRY_BACKOFF_H := 0.25      # blocked (no space / starved) -> retry after
-const DRINK_BLADDER_KICK := 0.12   # drinking nudges the bladder
+## Drinking still nudges the bladder, but at ~8 drinks/day the old 0.12 added
+## ~1.0 of need per day on its own — more than the rise itself — which alone
+## forced extra unscheduled trips.
+const DRINK_BLADDER_KICK := 0.06
 ## Below this much room in the day, nobody has the appetite for enrichment.
 const ENRICHMENT_MIN_FREE_H := 1.5
 ## Live trail: how many recent points to keep, and how far apart to sample.
@@ -124,6 +142,11 @@ var prev_day: Dictionary = {}
 ## persisted, and bounded so 50 people cost nothing.
 var trail := PackedVector2Array()
 var chore_id: String = ""          # chore being worked (CHORE_ACTIVITY only)
+## Deterministic shift applied to this person's whole daily schedule so a camp
+## does not stand up and walk to the toilets in one column (NpcRoutine).
+var routine_offset_h: float = 0.0
+## Block kind this agent is currently fulfilling ("" = acting on a need).
+var routine_kind: String = ""
 var last_exposure: String = NpcWeatherGate.EXPOSURE_INDOOR
 var rng := RandomNumberGenerator.new()
 var _rng_day: int = -0x7fffffff
@@ -154,6 +177,9 @@ static func make(agent_id: String, spawn: Vector2) -> NpcAgent:
 	a.id = agent_id
 	a.display_name = name_for(agent_id)
 	a.pos = spawn
+	# Everyone's whole day is shifted a little, so a camp does not stand up at
+	# 09:00 and walk to the toilets in one column.
+	a.routine_offset_h = NpcRoutine.offset_for(agent_id)
 	# Stagger initial needs deterministically so 50 agents don't all eat at
 	# the same instant on day one.
 	var r := RandomNumberGenerator.new()
@@ -380,6 +406,14 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 	var dur := float((ACTIVITIES.get(activity, {}) as Dictionary).get("duration_h", 0.25))
 	if dur > 0.0:
 		activity_ends_h = arrive_abs + dur * rng.randf_range(0.85, 1.25)
+		# Never run past the end of the scheduled block that asked for this.
+		# The 5-minute bathroom visit is only 5 minutes if the schedule can
+		# actually reclaim the person afterwards.
+		var routine: NpcRoutine = ctx.get("routine")
+		if routine != null and not routine_kind.is_empty():
+			var left := routine.hours_left_in_block(_hour(ctx), routine_offset_h)
+			if left > 0.0:
+				activity_ends_h = minf(activity_ends_h, abs_hours + left)
 	if activity == "sleep":
 		return {}
 	var consumes: Dictionary = _consumes_for(activity)
@@ -493,12 +527,31 @@ static func _scaled(consumes: Dictionary, doing_h: float, dt_hours: float) -> Di
 ## exactly where the morale damage comes from.
 func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 	# Tiers 1-2: needs. Retried on their OWN backoff — never suppressed by an
-	# unrelated tier having failed.
+	# unrelated tier having failed. Needs still outrank the schedule: a
+	# desperately thirsty person leaves their work block.
 	var need := _pick(ctx)
 	if not need.is_empty():
 		if abs_hours >= float(retry_at.get(need, 0.0)):
 			_begin_need(need, abs_hours, ctx)
 		return
+	# Tier 2.5: the daily routine. This is what stops people idling wherever
+	# they last finished — without somewhere to be next, and with space
+	# selection preferring the NEAREST match, everyone pooled at the restroom.
+	var routine: NpcRoutine = ctx.get("routine")
+	if routine != null:
+		var kind := str(routine.block_at(_hour(ctx), routine_offset_h).get("kind", NpcRoutine.FREE))
+		var scheduled := NpcRoutine.activity_for(kind)
+		if not scheduled.is_empty() and abs_hours >= float(retry_at.get(scheduled, 0.0)):
+			routine_kind = kind
+			_begin_need(scheduled, abs_hours, ctx)
+			return
+		if kind == NpcRoutine.WORK:
+			routine_kind = kind
+			if abs_hours >= float(retry_at.get(CHORE_ACTIVITY, 0.0)) 					and _begin_chore(abs_hours, ctx):
+				return
+			# Nothing on the board during a work block — fall through to
+			# gathering rather than standing still.
+		routine_kind = kind
 	# Tier 3: work the board.
 	if abs_hours >= float(retry_at.get(CHORE_ACTIVITY, 0.0)) and _begin_chore(abs_hours, ctx):
 		return

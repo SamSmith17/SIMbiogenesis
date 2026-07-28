@@ -69,6 +69,8 @@ func _init() -> void:
 	_test_separation_changes_no_consumption()
 	_test_desertion_and_reset()
 	_test_area_spaces()
+	_test_routine_schedule()
+	_test_routine_behaviour()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -2707,3 +2709,133 @@ func _test_area_spaces() -> void:
 	_check("re-tagging an area updates it", sid_again == sid)
 	_check("no duplicate area record", reg2.spaces.size() == 1)
 	_check("the new type took", str(reg2.find_by_id(sid).get("space_type", "")) == "kitchen")
+
+
+# --- Tier 5: daily routines --------------------------------------------------
+
+func _test_routine_schedule() -> void:
+	var r := NpcRoutine.default_day()
+	_check("the day tiles to 24 h", absf(r.total_hours() - 24.0) < 0.001,
+			"%.3f h" % r.total_hours())
+	_check("exactly 3 bathroom visits", r.toilet_visits_per_day() == 3,
+			"%d" % r.toilet_visits_per_day())
+
+	# Every hour must land in exactly one block — gaps would leave people with
+	# nowhere to be, which is the behaviour this whole system replaces.
+	for i in range(24 * 12):
+		var h := float(i) / 12.0
+		var b := r.block_at(h)
+		_check("hour %s is scheduled" % NpcRoutine.format_hour(h),
+				not b.is_empty() and str(b.get("kind", "")) != "" , "%.2f" % h)
+
+	# The schedule the player asked for, spot-checked at its boundaries.
+	_check("asleep at 02:00", str(r.block_at(2.0).get("kind", "")) == NpcRoutine.SLEEP)
+	_check("asleep at 23:45", str(r.block_at(23.75).get("kind", "")) == NpcRoutine.SLEEP)
+	_check("bathroom at 09:02", str(r.block_at(9.03).get("kind", "")) == NpcRoutine.BATHROOM)
+	_check("eating at 09:30", str(r.block_at(9.5).get("kind", "")) == NpcRoutine.EAT)
+	_check("enrichment at 10:30", str(r.block_at(10.5).get("kind", "")) == NpcRoutine.ENRICHMENT)
+	_check("working at 12:00", str(r.block_at(12.0).get("kind", "")) == NpcRoutine.WORK)
+	_check("eating at 13:30", str(r.block_at(13.5).get("kind", "")) == NpcRoutine.EAT)
+	_check("bathroom at 13:58", str(r.block_at(13.97).get("kind", "")) == NpcRoutine.BATHROOM)
+	_check("working at 16:00", str(r.block_at(16.0).get("kind", "")) == NpcRoutine.WORK)
+	_check("eating at 18:30", str(r.block_at(18.5).get("kind", "")) == NpcRoutine.EAT)
+	_check("bathroom at 19:02", str(r.block_at(19.03).get("kind", "")) == NpcRoutine.BATHROOM)
+	_check("enrichment at 21:00", str(r.block_at(21.0).get("kind", "")) == NpcRoutine.ENRICHMENT)
+
+	# A bathroom block really is ~5 minutes.
+	var visit := r.hours_of(NpcRoutine.BATHROOM) / 3.0
+	_check("a bathroom visit is 5 minutes",
+			absf(visit - 5.0 / 60.0) < 0.0005, "%.1f min" % (visit * 60.0))
+
+	# Waste split: the day's flush water divided evenly across the visits.
+	_check("each visit carries one third of the day",
+			absf(r.water_per_visit_l() - NpcRoutine.WATER_PER_VISIT_L) < 0.001,
+			"%.2f L" % r.water_per_visit_l())
+	var daily := r.water_per_visit_l() * float(r.toilet_visits_per_day())
+	_check("the day totals 18 L of flush water", absf(daily - 18.0) < 0.01,
+			"%.1f L" % daily)
+	# And the activity table actually delivers that per visit.
+	var act: Dictionary = NpcAgent.ACTIVITIES["bladder"]
+	var per_visit := float((act["consumes"] as Dictionary)["water"]) * float(act["duration_h"])
+	_check("a visit draws exactly one flush",
+			absf(per_visit - NpcRoutine.WATER_PER_VISIT_L) < 0.001,
+			"%.2f L" % per_visit)
+
+	# Variation: people must NOT move in lockstep, but must be reproducible.
+	var offsets: Dictionary = {}
+	for i in range(24):
+		var off := NpcRoutine.offset_for("hab_npc_%d" % i)
+		_check("offset is bounded",
+				absf(off) <= NpcRoutine.MAX_PHASE_OFFSET_H + 0.0001, "%.3f" % off)
+		offsets[snappedf(off, 0.01)] = true
+	_check("the camp does not move in lockstep", offsets.size() >= 12,
+			"%d distinct offsets across 24 people" % offsets.size())
+	_check("offsets are deterministic",
+			NpcRoutine.offset_for("hab_npc_3") == NpcRoutine.offset_for("hab_npc_3"))
+
+	# Editing round-trip, so the UI can persist a custom day.
+	var arr := r.to_array()
+	var r2 := NpcRoutine.from_array(arr)
+	_check("a routine round-trips", r2.blocks.size() == r.blocks.size())
+	_check("the round-tripped day still tiles",
+			absf(r2.total_hours() - 24.0) < 0.001)
+	_check("a junk routine falls back to the default day",
+			NpcRoutine.from_array([]).toilet_visits_per_day() == 3)
+
+	# An edited routine with a different visit count stays mass-honest: each
+	# visit is one flush, so four blocks is four flushes, not a rescaled third.
+	var four := NpcRoutine.from_array(arr + [{"start_h": 16.0, "end_h": 16.08,
+			"kind": NpcRoutine.BATHROOM}])
+	_check("adding a block adds a visit", four.toilet_visits_per_day() == 4)
+
+
+## The behaviour the player actually reported: people arriving at the restroom
+## and STAYING there, because a finished activity left them idling wherever
+## they stood and nearest-space selection then kept picking the same place.
+func _test_routine_behaviour() -> void:
+	var site := _make_test_site()
+	var engine := NpcPopulationEngine.new()
+	engine.configure(10, "routine_hab", Vector2.ZERO)
+	_check("an engine has a routine by default", engine.routine != null)
+
+	var restroom_pos: Variant = null
+	var reg: SpaceRegistry = site["registry"]
+	for sp in reg.spaces_of_type("restroom"):
+		restroom_pos = (site["pos_of"] as Callable).call(sp)
+		break
+	_check("the test site has a restroom", restroom_pos is Vector2)
+
+	# Run a full day and sample where people are, minute by minute.
+	var at_restroom := 0
+	var samples := 0
+	var kinds_seen: Dictionary = {}
+	var t := 8.0
+	while t < 32.0:
+		t += 1.0 / 60.0
+		engine.tick(t, {
+			"registry": reg, "pos_of": site["pos_of"],
+			"hour_of_day": fposmod(t, 24.0),
+		})
+		for a in engine.agents:
+			var agent: NpcAgent = a
+			samples += 1
+			if (restroom_pos as Vector2).distance_to(agent.pos) < 4.0:
+				at_restroom += 1
+			if not agent.routine_kind.is_empty():
+				kinds_seen[agent.routine_kind] = true
+	var share := float(at_restroom) / maxf(float(samples), 1.0)
+	# 3 five-minute visits is 15 min of a 24 h day = ~1%. Allowing 12% leaves
+	# room for walking there and for need-driven interruptions, while still
+	# failing hard on the old behaviour, where people simply lived there.
+	_check("nobody lives at the restroom", share < 0.12,
+			"%.1f%% of person-samples were at the toilets" % (share * 100.0))
+	_check("the routine drives several kinds of block", kinds_seen.size() >= 3,
+			", ".join(kinds_seen.keys()))
+
+	# People must still be fed and watered under a schedule — the routine
+	# replaces WHERE they idle, not whether their needs get met.
+	var worst_hunger := 0.0
+	for a in engine.agents:
+		worst_hunger = maxf(worst_hunger, float((a as NpcAgent).needs.get("hunger", 0.0)))
+	_check("a scheduled day still feeds people", worst_hunger < 0.95,
+			"worst hunger %.2f" % worst_hunger)

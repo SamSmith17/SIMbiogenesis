@@ -49,6 +49,9 @@ const CATCHUP_MORALE_DRIFT := 0.12
 
 var agents: Array = []            # of NpcAgent
 var chore_board: NpcChoreBoard = null
+## The daily schedule everyone follows (per-agent phase offsets vary it).
+## Editable by the player; defaults to NpcRoutine.default_day().
+var routine: NpcRoutine = null
 var _last_abs_h := NAN
 var _starved: Dictionary = {}     # resource kind -> true (from last flow tick)
 var _initial_roster := 0
@@ -77,6 +80,8 @@ func configure(count: int, seed_key: String, home: Vector2) -> void:
 	_collapsed = false
 	if chore_board == null:
 		chore_board = NpcChoreBoard.create_empty()
+	if routine == null:
+		routine = NpcRoutine.default_day()
 
 
 ## Start this community over: a fresh roster at full morale, no departure
@@ -293,6 +298,7 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"plan_path": ctx_in.get("plan_path", Callable()),
 		"height_at": ctx_in.get("height_at", Callable()),
 		"walkable": ctx_in.get("walkable", Callable()),
+		"routine": routine,
 		"trace": ctx_in.get("trace", Callable()),
 		"hour_of_day": float(ctx_in.get("hour_of_day", 12.0)),
 		"starved": _starved,
@@ -592,5 +598,7 @@ func restore(snap: Dictionary) -> void:
 	_collapse_warned = _collapsed
 	if chore_board == null:
 		chore_board = NpcChoreBoard.create_empty()
+	if routine == null:
+		routine = NpcRoutine.default_day()
 	if snap.has("chores"):
 		chore_board.deserialize(snap.get("chores", {}) as Dictionary)
