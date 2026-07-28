@@ -31,6 +31,8 @@ const SPAWN_RING_M := 12.0
 ## keeps running and can be rebuilt.
 const COLLAPSE_FLOOR_FRAC := 0.35
 const COLLAPSE_WARN_RISK := 0.5
+## Most morale a single coarse catch-up may move, in either direction.
+const CATCHUP_MORALE_DRIFT := 0.12
 
 var agents: Array = []            # of NpcAgent
 var chore_board: NpcChoreBoard = null
@@ -41,6 +43,8 @@ var _departures: Array = []       # [{id, name, reason, abs_h}]
 var _collapse_warned := false
 var _collapsed := false
 var _weather: Dictionary = {}
+var _catchups := 0
+var _max_dt := 0.0
 
 
 ## Deterministic roster: `seed_key` (e.g. the habitat item id) + index name
@@ -87,8 +91,10 @@ func tick(abs_hours: float, ctx_in: Dictionary) -> Dictionary:
 		return {}
 	if dt == 0.0:
 		return _sum_demand(_make_ctx(ctx_in))
+	_max_dt = maxf(_max_dt, dt)
 	var ctx := _make_ctx(ctx_in)
 	if dt > CATCHUP_JUMP_H:
+		_catchups += 1
 		_catch_up(abs_hours, dt, ctx)
 		_last_abs_h = abs_hours
 		return _sum_demand(ctx)
@@ -234,6 +240,7 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"chore_pos_of": ctx_in.get("chore_pos_of", Callable()),
 		"plan_path": ctx_in.get("plan_path", Callable()),
 		"height_at": ctx_in.get("height_at", Callable()),
+		"trace": ctx_in.get("trace", Callable()),
 		"hour_of_day": float(ctx_in.get("hour_of_day", 12.0)),
 		"starved": _starved,
 		"weather": ctx_in.get("weather", _weather),
@@ -252,9 +259,28 @@ func _sum_demand(ctx: Dictionary) -> Dictionary:
 	return out
 
 
-## Coarse catch-up across a big forward jump: abort in-flight activities,
-## settle needs analytically (rise clamped at 1.0; sleeping pressure resolved
-## if the gap crossed a night), and let agents re-plan from IDLE.
+## Does satisfying `need` depend on a resource that is currently starved?
+func _need_is_starved(need: String) -> bool:
+	var act: Dictionary = NpcAgent.ACTIVITIES.get(need, {})
+	for kind in (act.get("consumes", {}) as Dictionary):
+		if _starved.get(kind, false):
+			return true
+	return false
+
+
+## Coarse catch-up across a big forward jump (a timeline scrub, or a frame
+## hitch). Abort in-flight activities and resume from a PLAUSIBLE state.
+##
+## The model matters: a skipped span is time the community LIVED THROUGH but
+## the sim did not simulate, so it is assumed to have been coped with —
+## needs land at ordinary mid-day levels rather than pinned, morale drifts
+## gently, and quit pressure bleeds off. Treating the gap as total neglect
+## instead (needs clamped to 1.0, morale integrated over the whole span)
+## meant a single 12.8 h jump emptied a perfectly healthy camp — morale 0.75,
+## nothing blocked — in one tick.
+##
+## This hides nothing real: if supply is genuinely broken, the very next
+## simulated ticks block the activities and the cascade starts properly.
 func _catch_up(abs_hours: float, dt: float, ctx: Dictionary) -> void:
 	var registry: SpaceRegistry = ctx.get("registry")
 	for item in agents:
@@ -265,17 +291,31 @@ func _catch_up(abs_hours: float, dt: float, ctx: Dictionary) -> void:
 		a.activity = ""
 		a.target_space_id = ""
 		a.retry_at = {}
+		a._clear_path()
 		for n in NpcAgent.NEEDS:
-			var rise := float(NpcAgent.RISE_PER_H[n]) * dt
-			a.needs[n] = clampf(float(a.needs.get(n, 0.0)) + rise, 0.0, 1.0)
-		if dt >= 16.0:
-			# The gap contained a night: assume they slept.
+			# "Coped" means coped WITH WHAT WAS THERE. A need whose supply is
+			# currently starved cannot have been met during the skipped span,
+			# so it keeps rising — otherwise a jump would quietly feed a camp
+			# whose food tank is empty.
+			if _need_is_starved(str(n)):
+				a.needs[n] = clampf(float(a.needs.get(n, 0.0))
+						+ float(NpcAgent.RISE_PER_H[n]) * dt, 0.0, 1.0)
+			else:
+				a.needs[n] = a.rng.randf_range(0.15, 0.55)
+		if dt >= 16.0 and not _need_is_starved("sleep"):
 			a.needs["sleep"] = a.rng.randf_range(0.05, 0.2)
-		# Morale settles analytically over the gap (same pure function as the
-		# per-step path), so a scrub forward can still produce departures.
-		a.morale = NpcMorale.step(a.morale, dt, a.needs, a.blocked,
+		# Enrichment is not "coped with" — it is earned by gathering, and no
+		# gathering was simulated.
+		a.needs["enrichment"] = clampf(
+				float(a.needs.get("enrichment", 1.0))
+					+ float(NpcAgent.RISE_PER_H["enrichment"]) * dt, 0.0, 1.0)
+		# Morale eases toward whatever the (now moderate) needs support,
+		# capped so a long skip neither rescues nor destroys a community.
+		var settled := NpcMorale.step(a.morale, minf(dt, 2.0), a.needs, {},
 				float(a.needs.get("enrichment", 1.0)))
-		a.quit_pressure = NpcMorale.step_quit_pressure(a.quit_pressure, a.morale, dt)
+		a.morale = clampf(settled, a.morale - CATCHUP_MORALE_DRIFT,
+				a.morale + CATCHUP_MORALE_DRIFT)
+		a.quit_pressure = maxf(a.quit_pressure - NpcMorale.QUIT_DECAY_PER_H * dt, 0.0)
 	if chore_board != null:
 		for a2 in agents:
 			chore_board.release_all_for_agent((a2 as NpcAgent).id)
@@ -357,6 +397,8 @@ func summary() -> Dictionary:
 		"collapse_risk": collapse_risk(),
 		"collapsed": _collapsed,
 		"departures": _departures.size(),
+		"catchups": _catchups,
+		"max_dt": _max_dt,
 	}
 
 
@@ -376,6 +418,7 @@ func agent_dots() -> Array:
 			"activity": a.activity,
 			"state": a.state,
 			"status": a.status_line(),
+			"trail": a.trail,
 		})
 	return out
 

@@ -156,10 +156,17 @@ func _ensure_load(iid: String, item: Dictionary) -> void:
 		var req_s: String = str(specs.get("requested_state", specs.get("current_state", "off"))).to_lower()
 		target_on = (req_s == "on")
 
-	var node: Node = _loads.get(iid, null)
-	if node != null and not is_instance_valid(node):
+	# Read as Variant and validate BEFORE the typed assignment: assigning a
+	# freed instance to a `Node`-typed var throws "Trying to assign invalid
+	# previously freed instance" on the assignment itself, so the guard that
+	# used to sit on the next line was unreachable for exactly the case it
+	# existed to handle.
+	var node: Node = null
+	var node_v: Variant = _loads.get(iid, null)
+	if node_v != null and is_instance_valid(node_v):
+		node = node_v as Node
+	else:
 		_loads.erase(iid)
-		node = null
 
 	# Side-by-side V1/V2 parity: if another host in the scene already owns a
 	# sim-load for this item id, defer to it (prevents double-counting the

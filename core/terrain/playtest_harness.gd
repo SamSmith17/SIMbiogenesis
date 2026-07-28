@@ -1448,7 +1448,10 @@ func _run_population_verify() -> void:
 	if main != null and "time_scale" in main:
 		main.time_scale = 0.2  # h per real s ≈ 720× realtime
 	var dots0: Array = bridge.call("agent_dots")
-	await get_tree().create_timer(50.0).timeout
+	# Long enough for a MEAL to complete, not just a drink. Eating is a 0.5 h
+	# activity behind a 0.55 hunger threshold, and now that agents walk real
+	# routes instead of gliding, the first round of meals lands later.
+	await get_tree().create_timer(75.0).timeout
 	if main != null and "time_scale" in main:
 		main.time_scale = 0.0
 	var dots1: Array = bridge.call("agent_dots")
@@ -1469,6 +1472,7 @@ func _run_population_verify() -> void:
 	print("PlaytestHarness: population verify — ambient consumption %s, movement %s" % [
 		"PASS" if ok_flow else "FAIL (tanks did not move with the graph closed)",
 		"PASS" if ok_move else "FAIL (agents did not walk between spaces)"])
+
 
 	# --- phase 2: Site Plan dot capture --------------------------------------
 	var label := _shots_label if not _shots_label.is_empty() else "population_test"
@@ -1497,6 +1501,29 @@ func _run_population_verify() -> void:
 		await _graph_shot(dir, "02b_site_dots_zoom", manifest)
 		canvas.set("_zoom", zoom_saved)
 		canvas.call("queue_redraw")
+	# Desire lines: turn the view on and shoot the worn-in paths.
+	sgv.set("_desire_lines_on", true)
+	sgv.call("_sync_view_mode_menu_checks")
+	if canvas != null:
+		canvas.call("queue_redraw")
+	await get_tree().create_timer(1.0).timeout
+	await _graph_shot(dir, "02c_desire_lines", manifest)
+	if canvas != null and canvas.get("_zoom") != null:
+		var dz := float(canvas.get("_zoom"))
+		canvas.set("_zoom", dz * 4.0)
+		canvas.call("queue_redraw")
+		await get_tree().create_timer(0.8).timeout
+		await _graph_shot(dir, "02d_desire_lines_zoom", manifest)
+		canvas.set("_zoom", dz)
+	var dmap: Variant = bridge.call("desire_map")
+	var hot := int(dmap.call("hot_cells", 2.0)) if dmap != null else 0
+	var worn := float(dmap.call("total_metres")) if dmap != null else 0.0
+	print("PlaytestHarness: population verify — desire lines: %.0f m traced, %d hot cells, peak %.1f m" % [
+		worn, hot, float(dmap.call("peak")) if dmap != null else 0.0])
+	var ok_desire := worn > 50.0 and hot > 3
+	print("PlaytestHarness: population verify — desire lines %s" % [
+		"PASS" if ok_desire else "FAIL (no worn paths accumulated)"])
+	sgv.set("_desire_lines_on", false)
 	if main != null and "time_scale" in main:
 		main.time_scale = 0.0
 	# Select the habitat so the inspector Population section is in frame.
@@ -1566,6 +1593,7 @@ func _run_population_verify() -> void:
 	print("PlaytestHarness: population verify — navigation %s (%d routes planned, %d agents walking one)" % [
 		"PASS" if ok_nav else "FAIL (grid never ready, or nobody routed)",
 		planned, with_path])
+
 
 	# --- phase 3: 3D silhouette avatars (Phase B) ----------------------------
 	# Runs BEFORE the starvation phases: the cascade below deliberately
@@ -1741,7 +1769,7 @@ func _run_population_verify() -> void:
 		if not (model.get_item(str(pid)) as Dictionary).is_empty():
 			model.remove_item(str(pid))
 	print("PlaytestHarness: population verify — %s (%d shots in %s)" % [
-		"PASS" if (ok_flow and ok_move and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk) else "FAIL",
+		"PASS" if (ok_flow and ok_move and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire) else "FAIL",
 		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
 

@@ -262,6 +262,12 @@ const VIEW_MODE_SITE_WIRE_NONE := 148
 const VIEW_MODE_SITE_WIRE_METRO := 149
 const VIEW_MODE_SITE_WIRE_3D := 150
 const VIEW_MODE_SITE_PORTS := 151
+## Desire lines (Tier 3e). NOTE 151 is already used TWICE
+## (VIEW_MODE_EMBODY_TWINS and VIEW_MODE_SITE_PORTS) — start at 152.
+const VIEW_MODE_DESIRE_LINES := 152
+const VIEW_MODE_DESIRE_TRAILS := 153
+const VIEW_MODE_DESIRE_CHANNEL := 154
+const VIEW_MODE_DESIRE_WINDOW := 155
 const DESIGNATE_OFF := 200
 const DESIGNATE_CATCHMENT := 201
 const DESIGNATE_CROP := 202
@@ -1825,6 +1831,11 @@ func _build_topbar() -> Control:
 	vmp.add_check_item("Site magnifier labels", VIEW_MODE_SITE_CHIPS)
 	vmp.add_check_item("Site ports", VIEW_MODE_SITE_PORTS)
 	vmp.add_check_item("Live lighting (Site / Elevation)", VIEW_MODE_SITE_LIVE_LIGHT)
+	vmp.add_separator("Desire lines (Site Plan)")
+	vmp.add_check_item("Show worn paths", VIEW_MODE_DESIRE_LINES)
+	vmp.add_check_item("Show live trails", VIEW_MODE_DESIRE_TRAILS)
+	vmp.add_item("Filter: all traffic", VIEW_MODE_DESIRE_CHANNEL)
+	vmp.add_item("Remember: past week", VIEW_MODE_DESIRE_WINDOW)
 	vmp.add_separator("Site Plan wires")
 	vmp.add_radio_check_item("Wires: 3D conduits", VIEW_MODE_SITE_WIRE_3D)
 	vmp.add_radio_check_item("Wires: Metro 2D overlay", VIEW_MODE_SITE_WIRE_METRO)
@@ -2021,6 +2032,33 @@ func _build_topbar() -> Control:
 
 func _on_view_menu_id(id: int) -> void:
 	match id:
+		VIEW_MODE_DESIRE_LINES:
+			_desire_lines_on = not _desire_lines_on
+			if _graph_canvas != null:
+				_graph_canvas.call("queue_redraw")
+			_sync_view_mode_menu_checks()
+			return
+		VIEW_MODE_DESIRE_TRAILS:
+			if _graph_canvas != null:
+				_graph_canvas.set("npc_trails_enabled",
+						not bool(_graph_canvas.get("npc_trails_enabled")))
+				_graph_canvas.call("queue_redraw")
+			_sync_view_mode_menu_checks()
+			return
+		VIEW_MODE_DESIRE_CHANNEL:
+			_cycle_desire_channel()
+			if _npc_population != null:
+				_npc_population.set_desire_channel(_desire_channel)
+			if _graph_canvas != null:
+				_graph_canvas.call("queue_redraw")
+			_sync_view_mode_menu_checks()
+			return
+		VIEW_MODE_DESIRE_WINDOW:
+			_desire_window = (_desire_window + 1) % 3
+			if _npc_population != null:
+				_npc_population.set_desire_window(_desire_window)
+			_sync_view_mode_menu_checks()
+			return
 		VIEW_LEGEND:  _on_legend_toggle()
 		VIEW_HISTORY: _on_history_btn_pressed()
 		VIEW_PBI_BAR: _on_toggle_pbi_bar()
@@ -2185,6 +2223,27 @@ func _restyle_btn_amber(b: Button) -> void:
 	b.add_theme_stylebox_override("pressed", sb_h)
 	b.add_theme_color_override("font_color", C_BG)
 	b.add_theme_font_size_override("font_size", 13)
+
+
+## Desire-line view state (Site Plan only).
+var _desire_lines_on := false
+var _desire_channel := ""          # "" = all traffic
+var _desire_window: int = 1        # NpcDesireMap.Window.WEEK
+
+
+func _cycle_desire_channel() -> void:
+	var opts: Array = [""]
+	opts.append_array(NpcDesireMap.CHANNELS)
+	var i := opts.find(_desire_channel)
+	_desire_channel = str(opts[(i + 1) % opts.size()])
+
+
+func _desire_channel_label() -> String:
+	if _desire_channel.is_empty():
+		return "all traffic"
+	if _desire_channel == "chore":
+		return "work trips"
+	return SpaceTypes.label(str(SpaceTypes.NEED_TO_SPACE.get(_desire_channel, _desire_channel)))
 
 
 func _on_view_mode_menu_id(id: int) -> void:
@@ -3160,10 +3219,33 @@ func frame_elevation_for_siphon(siphon_id: String) -> void:
 	call_deferred("_force_soi_preview_layout_sync")
 
 
+func _sync_desire_menu_labels(vp: PopupMenu) -> void:
+	var site_only := _graph_view_mode == GraphSiteLayout.VIEW_SITE
+	for id in [VIEW_MODE_DESIRE_LINES, VIEW_MODE_DESIRE_TRAILS,
+			VIEW_MODE_DESIRE_CHANNEL, VIEW_MODE_DESIRE_WINDOW]:
+		var i := vp.get_item_index(id)
+		if i >= 0:
+			vp.set_item_disabled(i, not site_only)
+	var li := vp.get_item_index(VIEW_MODE_DESIRE_LINES)
+	if li >= 0:
+		vp.set_item_checked(li, _desire_lines_on)
+	var ti := vp.get_item_index(VIEW_MODE_DESIRE_TRAILS)
+	if ti >= 0 and _graph_canvas != null:
+		vp.set_item_checked(ti, bool(_graph_canvas.get("npc_trails_enabled")))
+	var ci := vp.get_item_index(VIEW_MODE_DESIRE_CHANNEL)
+	if ci >= 0:
+		vp.set_item_text(ci, "Filter: %s" % _desire_channel_label())
+	var wi := vp.get_item_index(VIEW_MODE_DESIRE_WINDOW)
+	if wi >= 0:
+		vp.set_item_text(wi, "Remember: %s" %
+				NpcDesireMap.retention_label(_desire_window).to_lower())
+
+
 func _sync_view_mode_menu_checks() -> void:
 	if _view_mode_menu == null:
 		return
 	var vp := _view_mode_menu.get_popup()
+	_sync_desire_menu_labels(vp)
 	# Mode radios no longer live in this menu (the chip strip is the single
 	# mode switcher); only the per-view extras need syncing.
 	var bubble_idx := vp.get_item_index(VIEW_MODE_SOI_BUBBLE)
@@ -9902,6 +9984,10 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 			var main_for_spaces := _get_scene_main_node()
 			_graph_canvas.set("npc_spaces_provider",
 					func() -> Array: return _npc_population.space_markers(main_for_spaces))
+			_graph_canvas.set("npc_desire_provider", func() -> Dictionary:
+				if not _desire_lines_on:
+					return {}
+				return _npc_population.desire_payload(_desire_channel))
 	PerfMonitor.begin("npc_population")
 	_npc_population.tick(model, _resource_flow, _get_scene_main_node())
 	PerfMonitor.end("npc_population")

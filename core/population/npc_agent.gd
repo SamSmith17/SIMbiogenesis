@@ -80,6 +80,9 @@ const RETRY_BACKOFF_H := 0.25      # blocked (no space / starved) -> retry after
 const DRINK_BLADDER_KICK := 0.12   # drinking nudges the bladder
 ## Below this much room in the day, nobody has the appetite for enrichment.
 const ENRICHMENT_MIN_FREE_H := 1.5
+## Live trail: how many recent points to keep, and how far apart to sample.
+const TRAIL_MAX := 48
+const TRAIL_STEP_M := 1.5
 
 var id: String = ""
 var display_name: String = ""
@@ -117,6 +120,9 @@ var trip_distance_m := 0.0          # since the current trip started
 var need_distance: Dictionary = {}  # need -> metres walked to satisfy it
 var need_trips: Dictionary = {}     # need -> completed trips
 var prev_day: Dictionary = {}
+## Recent positions for the live trail render. Runtime only — never
+## persisted, and bounded so 50 people cost nothing.
+var trail := PackedVector2Array()
 var chore_id: String = ""          # chore being worked (CHORE_ACTIVITY only)
 var last_exposure: String = NpcWeatherGate.EXPOSURE_INDOOR
 var rng := RandomNumberGenerator.new()
@@ -438,6 +444,16 @@ func _account_walk(walked: float, from_pos: Vector2, to_pos: Vector2,
 	climb_m += gain
 	trip_distance_m += walked
 	walk_kcal += NpcMetabolism.walk_kcal(walked, gain, NpcNav.WALK_SPEED_MPS)
+	# Desire lines: report the segment against whatever need drove this trip,
+	# so the map can be filtered by need later.
+	var trace: Callable = ctx.get("trace", Callable())
+	if trace.is_valid():
+		trace.call(from_pos, to_pos,
+				activity if not activity.is_empty() else CHORE_ACTIVITY, walked)
+	if trail.is_empty() or trail[trail.size() - 1].distance_to(to_pos) >= TRAIL_STEP_M:
+		trail.append(to_pos)
+		if trail.size() > TRAIL_MAX:
+			trail = trail.slice(trail.size() - TRAIL_MAX)
 
 
 func _clear_path() -> void:

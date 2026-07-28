@@ -1138,6 +1138,23 @@ the diagnostic that says *which* space is misplaced. Climb reads the baked nav
 grid, never a terrain query (hot path). Note the arrival branch must account
 for its final leg: a trip that finishes inside one step never calls `_walk`,
 and at high time scale that is every trip, which would zero the whole metric.
+**Desire lines** (`NpcDesireMap`, Tier 3e): metres walked rasterised into a
+2 m heat grid with per-need channels, log-scaled (foot traffic is heavy-
+tailed) and drawn as ONE `draw_texture_rect` under the Site Plan overlays;
+per-agent fading trails on top. Retention is Today / Past week / All time,
+rolled at the sim-day boundary. **Build the ImageTexture on the TICK, never
+inside `_draw()`** — allocating a GPU resource mid-draw yields undefined
+contents (it rendered as a solid white block over the whole site). Toggles
+live in **View options ▾** at ids ≥152 (151 is already double-booked by
+`VIEW_MODE_EMBODY_TWINS` and `VIEW_MODE_SITE_PORTS`).
+**Coarse catch-up models COPING, not neglect.** A >6 h jump is the player
+scrubbing or a frame hitch — time the community lived through but the sim did
+not simulate. Needs land at ordinary mid-cycle levels, morale drifts at most
+`CATCHUP_MORALE_DRIFT`, and quit pressure only DECAYS. Integrating the whole
+gap as deprivation emptied a healthy camp (morale 0.75, nothing blocked) in a
+single 12.8 h tick. Crucially, a need whose supply is currently STARVED is
+exempt and keeps rising — otherwise a jump silently feeds a camp whose food
+tank is empty.
 **On scenes with no TerrainLoader the nav grid uses a FLAT height source**:
 `TerrainSurfaceQuery.ground_height_at` falls back to a raycast that returns
 0.0 on a MISS, so every hole in collision coverage would read as a cliff and

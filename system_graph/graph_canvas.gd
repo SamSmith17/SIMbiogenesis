@@ -5310,9 +5310,10 @@ func _draw() -> void:
 	# Site Plan: only the live Preview ghost (not designated hillside polys) —
 	# designated watershed stays a freeform graph node, not a default map outline.
 	if view_mode == GraphSiteLayout.VIEW_SITE:
+		_draw_npc_desire_site()   # worn-in paths beneath everything…
 		_draw_watershed_overlays_site()
-		_draw_npc_spaces_site()   # destinations under…
-		_draw_npc_agents_site()   # …the people walking to them
+		_draw_npc_spaces_site()   # …destinations above them…
+		_draw_npc_agents_site()   # …and the people walking between them
 		_draw_prop_radial_preview()
 	_draw_destroy_fx()
 	_draw_temp_wire()                # always on top of everything
@@ -7801,6 +7802,44 @@ var npc_agents_provider: Callable = Callable()
 var npc_spaces_provider: Callable = Callable()
 
 
+## Site Plan: the population's desire lines — a heat raster of where feet
+## actually wear paths in. The view installs a provider returning
+## {texture: ImageTexture, rect: Rect2 (world XZ), peak, window}.
+## ONE draw call: the raster is ~16k cells and per-cell draw_rect would be
+## unusable.
+var npc_desire_provider: Callable = Callable()
+var npc_trails_enabled := true
+
+
+func _draw_npc_desire_site() -> void:
+	if not npc_desire_provider.is_valid():
+		return
+	var payload: Variant = npc_desire_provider.call()
+	if not (payload is Dictionary) or (payload as Dictionary).is_empty():
+		return
+	var d: Dictionary = payload
+	var tex: Texture2D = d.get("texture")
+	if tex == null:
+		return
+	var world: Rect2 = d.get("rect", Rect2())
+	if world.size.x <= 0.0 or world.size.y <= 0.0:
+		return
+	var soi_svc := _cached_autoload("/root/SoiService")
+	var center3 := Vector3.ZERO
+	if soi_svc != null and soi_svc.has_method("world_center"):
+		center3 = soi_svc.call("world_center") as Vector3
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var origin := size * 0.5 + _pan
+	# The site transform is a uniform scale + offset, so two opposite corners
+	# define the screen rect.
+	var a := origin + GraphSiteLayout.world_xz_to_site(world.position, center3) * s
+	var b := origin + GraphSiteLayout.world_xz_to_site(world.end, center3) * s
+	var rect := Rect2(a, b - a).abs()
+	if rect.size.x < 1.0 or rect.size.y < 1.0:
+		return
+	draw_texture_rect(tex, rect, false)
+
+
 ## Site Plan: where the people are going. A soft disc + ring per tagged space,
 ## with its glyph and live occupancy, so the destinations behind the agent
 ## dots are legible.
@@ -7874,6 +7913,20 @@ func _draw_npc_agents_site() -> void:
 		var screen := origin + GraphSiteLayout.world_xz_to_site(world, center3) * s
 		if screen.x < -20.0 or screen.y < -20.0 or screen.x > size.x + 20.0 or screen.y > size.y + 20.0:
 			continue
+		# Recent trail behind the dot — the aggregate heat map is statistical;
+		# this is what makes the view feel alive.
+		if npc_trails_enabled:
+			var trail: Variant = dot.get("trail", null)
+			if trail is PackedVector2Array and (trail as PackedVector2Array).size() >= 2:
+				var pts: PackedVector2Array = trail
+				var n := pts.size()
+				for i in range(1, n):
+					var p0 := origin + GraphSiteLayout.world_xz_to_site(pts[i - 1], center3) * s
+					var p1 := origin + GraphSiteLayout.world_xz_to_site(pts[i], center3) * s
+					var fade := float(i) / float(n)
+					var tc: Color = dot.get("color", Color.WHITE)
+					tc.a = fade * 0.5
+					draw_line(p0, p1, tc, maxf(1.0, r * 0.4), true)
 		# Body = the person's own pastel (identity); rim = their morale band,
 		# so the camp's mood is readable at a glance across the whole site.
 		var col: Color = dot.get("color", Color.WHITE)

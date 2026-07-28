@@ -34,6 +34,16 @@ var _nav_fp := ""
 var _nav_queries_this_tick := 0
 var _model_item_cache: Dictionary = {}   # item_id -> item (for nav anchors)
 var _nav_rev := 0            # bumped by callers when geometry moves
+## Desire lines (Tier 3e): where feet actually wear paths in.
+var _desire: NpcDesireMap = null
+var _desire_day := -0x7fffffff
+## The heat texture is built HERE, on the tick — never inside the canvas
+## _draw(). Allocating a GPU resource mid-draw yields undefined contents (it
+## rendered as a solid white block over the whole site).
+var _desire_tex: ImageTexture = null
+var _desire_tex_channel := ""
+var _desire_tex_at := -1.0e9
+const DESIRE_TEX_INTERVAL_S := 0.5
 
 ## Cold A* queries allowed per tick. Cache hits are unlimited — a site has ~10
 ## tagged spaces, so after the first day almost every trip is a hit.
@@ -64,7 +74,11 @@ func tick(model, flow_engine, main: Node) -> void:
 	var hour_of_day: float = fposmod(abs_h, 24.0)
 	var registry := _find_registry(main)
 	_nav_queries_this_tick = 0
-	_service_nav(main, registry)
+	var region := _population_region(main, registry)
+	_service_nav(main, registry, region)
+	# Deliberately NOT gated on the nav grid: tracing must start on the first
+	# tick, or the desire map misses everything walked during the bake.
+	_service_desire(abs_h, region)
 	var seen: Dictionary = {}
 
 	for item in model.get_items_in_scope("root"):
@@ -99,6 +113,9 @@ func tick(model, flow_engine, main: Node) -> void:
 				if _nav_grid == null or not _nav_grid.is_ready():
 					return 0.0
 				return _nav_grid.height_at_world(p2),
+			"trace": func(a: Vector2, b: Vector2, channel: String, m: float) -> void:
+				if _desire != null:
+					_desire.add_segment(a, b, channel, m),
 		}
 		var demand: Dictionary = engine.tick(abs_h, ctx)
 		flow_engine.set_habitat_demand(iid, demand)
@@ -152,15 +169,14 @@ func space_markers(main: Node) -> Array:
 ## Keep the nav grid in step with the world: re-derive its region when the
 ## tagged spaces move, then feed it ONE budgeted bake slice per tick. Never
 ## bakes the whole grid inline — see the NpcNavGrid stall-trap note.
-func _service_nav(main: Node, registry: SpaceRegistry) -> void:
+## The area the population operates in, snapped so tiny movements do not
+## invalidate a finished bake. STATIC anchors only — see _nav_anchor_points.
+func _population_region(main: Node, registry: SpaceRegistry) -> Dictionary:
 	if registry == null or main == null:
-		return
+		return {}
 	var anchors := _nav_anchor_points(main, registry)
 	if anchors.size() < 1:
-		return
-	# The fingerprint must depend ONLY on things that sit still. Folding in
-	# live agent positions makes it change every tick, which restarts the bake
-	# forever and the grid never becomes ready.
+		return {}
 	var lo := anchors[0]
 	var hi := anchors[0]
 	for p in anchors:
@@ -168,8 +184,22 @@ func _service_nav(main: Node, registry: SpaceRegistry) -> void:
 		lo.y = minf(lo.y, p.y)
 		hi.x = maxf(hi.x, p.x)
 		hi.y = maxf(hi.y, p.y)
-	var center := ((lo + hi) * 0.5).snapped(Vector2(NAV_REGION_SNAP_M, NAV_REGION_SNAP_M))
-	var half := snappedf(maxf(hi.x - lo.x, hi.y - lo.y) * 0.5, NAV_REGION_SNAP_M)
+	return {
+		"anchors": anchors,
+		"center": ((lo + hi) * 0.5).snapped(Vector2(NAV_REGION_SNAP_M, NAV_REGION_SNAP_M)),
+		"half": snappedf(maxf(hi.x - lo.x, hi.y - lo.y) * 0.5, NAV_REGION_SNAP_M),
+	}
+
+
+func _service_nav(main: Node, registry: SpaceRegistry, region: Dictionary) -> void:
+	if registry == null or main == null or region.is_empty():
+		return
+	var anchors: PackedVector2Array = region["anchors"]
+	# The fingerprint must depend ONLY on things that sit still. Folding in
+	# live agent positions makes it change every tick, which restarts the bake
+	# forever and the grid never becomes ready.
+	var center: Vector2 = region["center"]
+	var half: float = region["half"]
 	var fp := NpcNavGrid.compose_fingerprint(
 			registry.spaces.size(), _prop_revision(main), _nav_rev, 0, center, half)
 	if _nav_grid == null or _nav_grid.needs_rebuild(fp):
@@ -202,6 +232,77 @@ func _service_nav(main: Node, registry: SpaceRegistry) -> void:
 			if _nav_grid.bake_step(NAV_CELLS_PER_TICK):
 				_nav_query.setup(_nav_grid)
 			PerfMonitor.end("npc_nav_bake")
+
+
+# --- desire lines --------------------------------------------------------------
+
+## Keep the desire map sized to the nav region and apply its retention policy
+## once per sim-day.
+func _service_desire(abs_h: float, region: Dictionary) -> void:
+	if region.is_empty():
+		return
+	if _desire == null or not _desire.is_configured():
+		_desire = NpcDesireMap.new()
+		# Pad beyond the anchors so trips that stray past a space still land
+		# on the map rather than being clipped away.
+		_desire.configure(region["center"] as Vector2,
+				float(region["half"]) + NpcNavGrid.REGION_PAD_M)
+		_desire_day = int(floor(abs_h / 24.0))
+		return
+	var day := int(floor(abs_h / 24.0))
+	if day != _desire_day:
+		# Only forward: scrubbing back must not decay history.
+		if day > _desire_day:
+			for _i in mini(day - _desire_day, 14):
+				_desire.roll_day()
+		_desire_day = day
+	_refresh_desire_texture()
+
+
+## Rebuild the heat texture at most twice a second, and only when the map has
+## actually changed or the channel filter moved.
+func _refresh_desire_texture(force: bool = false) -> void:
+	if _desire == null or not _desire.is_configured():
+		return
+	var now := float(Time.get_ticks_msec()) * 0.001
+	var stale := now - _desire_tex_at >= DESIRE_TEX_INTERVAL_S
+	var changed := _desire.take_dirty()
+	if not force and not (stale and changed):
+		return
+	_desire_tex_at = now
+	_desire_tex = _desire.texture(_desire_tex_channel)
+
+
+## Which channel the heat texture is built for ("" = all traffic).
+func set_desire_channel(channel: String) -> void:
+	if channel == _desire_tex_channel:
+		return
+	_desire_tex_channel = channel
+	_refresh_desire_texture(true)
+
+
+## Heat payload for the Site Plan renderer, or {} when there is nothing to
+## show. `channel` "" means all traffic.
+## Read-only: returns the CACHED texture built on the tick. Never builds one
+## here — this is called from inside the canvas _draw().
+func desire_payload(_channel: String = "") -> Dictionary:
+	if _desire == null or not _desire.is_configured() or _desire_tex == null:
+		return {}
+	return {
+		"texture": _desire_tex,
+		"rect": _desire.world_rect(),
+		"peak": _desire.peak(),
+		"window": NpcDesireMap.retention_label(_desire.retention),
+	}
+
+
+func desire_map() -> NpcDesireMap:
+	return _desire
+
+
+func set_desire_window(w: int) -> void:
+	if _desire != null:
+		_desire.set_retention(w)
 
 
 ## Where the population actually operates: every resolvable tagged space plus

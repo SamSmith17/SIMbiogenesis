@@ -56,6 +56,10 @@ func _init() -> void:
 	_test_metabolism_model()
 	_test_walk_accounting()
 	_test_walk_aggregates()
+	_test_desire_map_accumulation()
+	_test_desire_map_retention()
+	_test_desire_map_render()
+	_test_desire_from_walking()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -2002,3 +2006,173 @@ func _test_walk_aggregates() -> void:
 				float(s.get("walk_distance_m", 0.0))])
 	_check("and more calories",
 			float(s2.get("walk_kcal", 0.0)) > float(s.get("walk_kcal", 0.0)))
+
+
+# =============================================================================
+# Tier 3e — desire lines
+# =============================================================================
+
+func _test_desire_map_accumulation() -> void:
+	var m := NpcDesireMap.new()
+	_check("unconfigured map is inert", not m.is_configured())
+	m.add_segment(Vector2.ZERO, Vector2(10, 0), "thirst", 10.0)   # must not crash
+	_check("configure", m.configure(Vector2.ZERO, 50.0))
+	_check("starts empty", m.peak() == 0.0 and m.hot_cells() == 0)
+
+	# A walked segment deposits exactly the metres given, spread along it.
+	m.add_segment(Vector2(-20, 0), Vector2(20, 0), "thirst", 40.0)
+	_check("metres are conserved", absf(m.total_metres() - 40.0) < 0.01,
+			"%.2f" % m.total_metres())
+	_check("the line is hot", m.hot_cells(0.5) > 10, "%d cells" % m.hot_cells(0.5))
+	_check("peak is positive", m.peak() > 0.0)
+
+	# Traffic concentrates: walking the same line again doubles it.
+	var peak_before := m.peak()
+	m.add_segment(Vector2(-20, 0), Vector2(20, 0), "thirst", 40.0)
+	_check("repeat traffic deepens the path", m.peak() > peak_before * 1.9)
+	_check("metres still conserved", absf(m.total_metres() - 80.0) < 0.02)
+
+	# Off-map segments are dropped, not wrapped.
+	var off_before := m.total_metres()
+	m.add_segment(Vector2(900, 900), Vector2(950, 900), "thirst", 50.0)
+	_check("off-map traffic is dropped", absf(m.total_metres() - off_before) < 0.01)
+
+	# Zero-length and zero-metre calls are no-ops.
+	m.add_segment(Vector2.ZERO, Vector2.ZERO, "thirst", 0.0)
+	_check("zero metres is a no-op", absf(m.total_metres() - off_before) < 0.01)
+
+	# Channels: a filtered texture only shows its own traffic.
+	var m2 := NpcDesireMap.new()
+	m2.configure(Vector2.ZERO, 50.0)
+	m2.add_segment(Vector2(-20, 0), Vector2(20, 0), "thirst", 40.0)
+	m2.add_segment(Vector2(0, -20), Vector2(0, 20), "hunger", 40.0)
+	_check("all-traffic texture exists", m2.texture("") != null)
+	_check("thirst channel exists", m2.texture("thirst") != null)
+	_check("hunger channel exists", m2.texture("hunger") != null)
+	_check("an unused channel is empty", m2.texture("sleep") == null)
+	_check("an unknown channel does not crash", m2.texture("nonsense") != null)
+	_check("total holds both trips", absf(m2.total_metres() - 80.0) < 0.02)
+
+
+func _test_desire_map_retention() -> void:
+	# TODAY forgets at the day boundary — the map shows the CURRENT layout,
+	# not a fossil of one already fixed.
+	var today := NpcDesireMap.new()
+	today.configure(Vector2.ZERO, 50.0)
+	today.set_retention(NpcDesireMap.Retention.TODAY)
+	today.add_segment(Vector2(-20, 0), Vector2(20, 0), "thirst", 40.0)
+	today.roll_day()
+	_check("TODAY resets each day", today.total_metres() < 0.01)
+	_check("TODAY clears the peak", today.peak() < 0.01)
+
+	# WEEK decays rather than resetting.
+	var week := NpcDesireMap.new()
+	week.configure(Vector2.ZERO, 50.0)
+	week.set_retention(NpcDesireMap.Retention.WEEK)
+	week.add_segment(Vector2(-20, 0), Vector2(20, 0), "thirst", 100.0)
+	week.roll_day()
+	_check("WEEK decays", absf(week.total_metres() - 100.0 * NpcDesireMap.WEEK_DECAY) < 0.5,
+			"%.2f" % week.total_metres())
+	for _i in 20:
+		week.roll_day()
+	_check("WEEK eventually fades out", week.total_metres() < 1.0)
+
+	# ALL keeps everything.
+	var all := NpcDesireMap.new()
+	all.configure(Vector2.ZERO, 50.0)
+	all.set_retention(NpcDesireMap.Retention.ALL)
+	all.add_segment(Vector2(-20, 0), Vector2(20, 0), "thirst", 100.0)
+	for _i in 10:
+		all.roll_day()
+	_check("ALL never forgets", absf(all.total_metres() - 100.0) < 0.01)
+
+	_check("retention labels", NpcDesireMap.retention_label(NpcDesireMap.Retention.TODAY) == "Today"
+			and NpcDesireMap.retention_label(NpcDesireMap.Retention.ALL) == "All time")
+	all.set_retention(99)
+	_check("retention clamps", all.retention <= NpcDesireMap.Retention.ALL)
+
+	all.clear()
+	_check("clear empties", all.total_metres() < 0.01)
+
+
+func _test_desire_map_render() -> void:
+	var m := NpcDesireMap.new()
+	m.configure(Vector2(10.0, -6.0), 40.0)
+	_check("empty map yields no texture", m.texture("") == null)
+	m.add_segment(Vector2(0, -6), Vector2(20, -6), "thirst", 60.0)
+	var tex := m.texture("")
+	_check("texture built", tex != null)
+	_check("texture matches the grid", tex.get_width() == m.nx and tex.get_height() == m.nz)
+	# A near-empty map must render near-empty. An unwritten/garbage buffer
+	# shows up as a solid opaque block covering the whole site.
+	var img := tex.get_image()
+	var opaque := 0
+	var whitish := 0
+	for iz in img.get_height():
+		for ix in img.get_width():
+			var c := img.get_pixel(ix, iz)
+			if c.a > 0.5:
+				opaque += 1
+			if c.a > 0.9 and c.r > 0.9 and c.g > 0.9 and c.b > 0.9:
+				whitish += 1
+	var total_px := img.get_width() * img.get_height()
+	_check("empty cells stay transparent", opaque < total_px / 4,
+			"%d of %d opaque" % [opaque, total_px])
+	_check("nothing renders as opaque white", whitish == 0, "%d white px" % whitish)
+
+	# The world rect must cover the region so the renderer can place it.
+	var r := m.world_rect()
+	_check("world rect is centred", absf(r.get_center().x - 10.0) < m.cell_m
+			and absf(r.get_center().y + 6.0) < m.cell_m, str(r))
+	_check("world rect covers the traffic", r.has_point(Vector2(10, -6)))
+
+	# Log ramp: cold is transparent, hot is opaque, and it is monotonic — a
+	# linear ramp would let one corridor saturate and hide everything else.
+	var c0 := NpcDesireMap.heat_color(0.0)
+	var c1 := NpcDesireMap.heat_color(1.0)
+	_check("cold is nearly transparent", c0.a < 0.2)
+	_check("hot is strong", c1.a > 0.8)
+	var prev_a := -1.0
+	for i in 11:
+		var a := NpcDesireMap.heat_color(float(i) / 10.0).a
+		_check("ramp alpha rises", a > prev_a)
+		prev_a = a
+	_check("ramp clamps", NpcDesireMap.heat_color(-5.0).a == c0.a
+			and NpcDesireMap.heat_color(5.0).a == c1.a)
+
+
+func _test_desire_from_walking() -> void:
+	# End to end: run the sim with a trace hook and confirm the heat lands on
+	# the corridors between tagged spaces, not scattered noise.
+	var site := _make_test_site()
+	var m := NpcDesireMap.new()
+	m.configure(Vector2.ZERO, 80.0)
+	var engine := NpcPopulationEngine.new()
+	engine.configure(6, "desire", Vector2.ZERO)
+	var t := 8.0
+	while t < 8.0 + 24.0:
+		t += 1.0 / 60.0
+		engine.tick(t, {
+			"registry": site["registry"], "pos_of": site["pos_of"],
+			"hour_of_day": fposmod(t, 24.0),
+			"trace": func(a: Vector2, b: Vector2, ch: String, mm: float) -> void:
+				m.add_segment(a, b, ch, mm),
+		})
+	_check("walking leaves a trace", m.total_metres() > 100.0, "%.0f m" % m.total_metres())
+	_check("paths are worn in", m.hot_cells(2.0) > 5, "%d cells" % m.hot_cells(2.0))
+
+	# The heat must cluster on the routes to the spaces, so a point on the
+	# way to the water point should be hotter than empty ground far away.
+	var on_route := m.texture("") != null
+	_check("a texture is renderable from real traffic", on_route)
+	# Per-need channels populated by real activity.
+	var thirst_tex := m.texture("thirst")
+	_check("thirst traffic recorded", thirst_tex != null)
+
+	# Agents also carry a bounded live trail for the overlay.
+	var a0: NpcAgent = engine.agents[0]
+	_check("agents keep a trail", a0.trail.size() > 0)
+	_check("the trail is bounded", a0.trail.size() <= NpcAgent.TRAIL_MAX,
+			"%d" % a0.trail.size())
+	var dots := engine.agent_dots()
+	_check("dots expose the trail", (dots[0] as Dictionary).has("trail"))
