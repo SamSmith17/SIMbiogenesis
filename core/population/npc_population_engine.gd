@@ -21,6 +21,14 @@ signal agent_departed(agent_id: String, display_name: String, reason: String)
 signal collapse_warning(risk: float)
 signal colony_collapsed()
 
+## Separation is skipped above this tick length — see _separate.
+const SEPARATION_MAX_DT_H := 0.1
+## Cap on how far one tick of crowding may move anyone.
+const MAX_PUSH_M := 0.25
+## How much of a travelling agent's push is redirected sideways rather than
+## along their route — 1.0 would be purely sideways.
+const PERP_BIAS := 0.85
+
 const CATCHUP_JUMP_H := 6.0
 const MAX_SUBSTEP_H := 0.1        # FSM/decay granularity within one coarse tick
 const MAX_SUBSTEPS := 24          # cap work per tick; beyond -> catch-up path
@@ -119,6 +127,7 @@ func tick(abs_hours: float, ctx_in: Dictionary) -> Dictionary:
 			var c: Dictionary = agent.step(t, sub, ctx)
 			for kind in c:
 				demand[kind] = float(demand.get(kind, 0.0)) + float(c[kind]) * w
+	_separate(dt, ctx)
 	_process_departures(abs_hours, ctx)
 	_last_abs_h = abs_hours
 	return demand
@@ -240,6 +249,7 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"chore_pos_of": ctx_in.get("chore_pos_of", Callable()),
 		"plan_path": ctx_in.get("plan_path", Callable()),
 		"height_at": ctx_in.get("height_at", Callable()),
+		"walkable": ctx_in.get("walkable", Callable()),
 		"trace": ctx_in.get("trace", Callable()),
 		"hour_of_day": float(ctx_in.get("hour_of_day", 12.0)),
 		"starved": _starved,
@@ -247,6 +257,75 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"board": chore_board,
 		"assigned_chore_h": 0.0,
 	}
+
+
+## Push apart anyone standing inside someone else. Standing slots
+## (SpaceRegistry.slot_offset) handle people who have ARRIVED somewhere; this
+## handles the rest — corridors converging, two routes crossing, a queue
+## forming outside a full space.
+##
+## Strictly cosmetic: it moves positions only, never state, and the displacement
+## is deliberately NOT banked into the walking/kcal ledger. Folding it in would
+## make the spatial-efficiency numbers depend on how crowded the site is, which
+## defeats the point of measuring layouts.
+func _separate(dt: float, ctx: Dictionary) -> void:
+	# Above this the agents teleport (one tick covers the whole remaining
+	# distance), so their exact position is already an approximation and
+	# nudging it is noise on top of noise.
+	if dt > SEPARATION_MAX_DT_H or agents.size() < 2:
+		return
+	var walkable: Callable = ctx.get("walkable", Callable())
+	var gap := SpaceRegistry.PERSONAL_SPACE_M
+	# O(n^2) on purpose: the roster caps at 64, so this is at most ~2k pairs of
+	# vector math per tick. A spatial hash would be faster in principle and
+	# would also introduce bucket-ordering questions that the determinism
+	# guarantee then has to answer.
+	var push: Array[Vector2] = []
+	push.resize(agents.size())
+	push.fill(Vector2.ZERO)
+	for i in range(agents.size()):
+		var a: NpcAgent = agents[i]
+		for j in range(i + 1, agents.size()):
+			var b: NpcAgent = agents[j]
+			var d := b.pos - a.pos
+			var dist := d.length()
+			if dist >= gap:
+				continue
+			var n: Vector2
+			if dist > 0.0001:
+				n = d / dist
+			else:
+				# Exactly coincident (a fresh roster spawns everyone on one
+				# point). Derive a direction from the ids so the split is
+				# deterministic instead of arbitrary.
+				var ang := float(hash(a.id + b.id) % 3600) * 0.1
+				n = Vector2(cos(deg_to_rad(ang)), sin(deg_to_rad(ang)))
+				dist = 0.0
+			var half := (gap - dist) * 0.5
+			push[i] -= n * half
+			push[j] += n * half
+	for i in range(agents.size()):
+		var p := push[i]
+		if p == Vector2.ZERO:
+			continue
+		var agent: NpcAgent = agents[i]
+		# Bias the push SIDEWAYS for anyone under way. Shoving someone straight
+		# back down their own route reads as barging and, worse, feeds back into
+		# arrival time; sliding them past each other is both what people do and
+		# nearly free of any effect on when they get there.
+		if agent.state == NpcAgent.State.TRAVELING:
+			var travel := agent.target_pos - agent.pos
+			if travel.length() > 0.001:
+				var fwd := travel.normalized()
+				var perp := p - fwd * p.dot(fwd)
+				p = p.lerp(perp, PERP_BIAS)
+		if p.length() > MAX_PUSH_M:
+			p = p.normalized() * MAX_PUSH_M
+		var dest := agent.pos + p
+		# Never let crowding squeeze someone through a wall or off a ledge.
+		if walkable.is_valid() and not bool(walkable.call(dest)):
+			continue
+		agent.pos = dest
 
 
 ## Sum of every agent's current consumption rates.

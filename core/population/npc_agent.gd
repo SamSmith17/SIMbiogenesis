@@ -539,7 +539,10 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	var from_key := at_space_id
 	target_space_id = sid
 	target_space_type = space_type
-	target_pos = p
+	# Stand in this agent's own slot rather than on the space's centre point,
+	# or every occupant converges on one spot. Purely positional — the space is
+	# already claimed, so this changes nobody's consumption.
+	target_pos = _standing_spot(registry, sid, p, ctx)
 	last_exposure = NpcWeatherGate.EXPOSURE_SHELTERED
 	_request_path(ctx, p, from_key, sid)
 	state = State.TRAVELING
@@ -590,7 +593,7 @@ func _begin_enrichment(abs_hours: float, ctx: Dictionary) -> void:
 	activity = "enrichment"
 	target_space_id = sid2
 	target_space_type = best_type
-	target_pos = best_pos
+	target_pos = _standing_spot(registry, sid2, best_pos, ctx)
 	last_exposure = NpcWeatherGate.EXPOSURE_OUTDOOR if best_type == "fire_circle" \
 			else NpcWeatherGate.EXPOSURE_SHELTERED
 	state = State.TRAVELING
@@ -729,6 +732,23 @@ func _finish(ctx: Dictionary, _completed: bool) -> void:
 	last_exposure = NpcWeatherGate.EXPOSURE_INDOOR
 	_clear_path()
 	state = State.IDLE
+
+
+## The point this agent actually walks to inside a claimed space: the space's
+## resolved centre plus its own packing slot, nudged back onto walkable ground
+## if the slot lands in a wall or off a ledge.
+##
+## The A* planner already snaps an unreachable GOAL to the nearest walkable
+## cell, so this only matters for the straight-line fallback before the nav
+## grid has finished baking — but that is also the window where the site looks
+## worst, so it is worth the one query.
+func _standing_spot(registry, space_id: String, centre: Vector2,
+		ctx: Dictionary) -> Vector2:
+	var spot: Vector2 = centre + (registry.slot_offset(space_id, id) as Vector2)
+	var walkable: Callable = ctx.get("walkable", Callable())
+	if walkable.is_valid() and not bool(walkable.call(spot)):
+		return centre
+	return spot
 
 
 ## Drop every claim this person holds (departure / roster rebuild).

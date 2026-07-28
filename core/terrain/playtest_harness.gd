@@ -1624,6 +1624,25 @@ func _run_population_verify() -> void:
 			and statused == avatar_count and pick_ok == avatar_count
 	print("PlaytestHarness: population verify — crosshair contract %s (group=%d named=%d status=%d pick=%d)" % [
 		"PASS" if ok_pick else "FAIL", grouped.size(), named, statused, pick_ok])
+	# Personal space (Tier 4c). Standing slots keep people who have ARRIVED
+	# apart; the separation pass handles everyone in transit. The failure this
+	# guards is the one that is obvious on screen and invisible in the numbers:
+	# a whole roster stacked on one point, rendering as a single person.
+	var closest_pair := INF
+	var stacked := 0
+	var agent_dots: Array = bridge.call("agent_dots")
+	for i in range(agent_dots.size()):
+		var pa: Vector2 = (agent_dots[i] as Dictionary).get("pos", Vector2.ZERO)
+		for j in range(i + 1, agent_dots.size()):
+			var pb: Vector2 = (agent_dots[j] as Dictionary).get("pos", Vector2.ZERO)
+			var dd := pa.distance_to(pb)
+			closest_pair = minf(closest_pair, dd)
+			if dd < 0.1:
+				stacked += 1
+	var ok_space := stacked == 0
+	print("PlaytestHarness: population verify — personal space %s (%d people, closest pair %.2f m, %d stacked)" % [
+		"PASS" if ok_space else "FAIL", agent_dots.size(), closest_pair, stacked])
+
 	# Rigged-body LOD contract: the host must hand the Mixamo figure to the
 	# nearest agents and the primitive to the rest. Proving the rig RENDERS
 	# (the staged review shot below) is not the same as proving the host ever

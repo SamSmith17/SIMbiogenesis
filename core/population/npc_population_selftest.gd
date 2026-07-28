@@ -64,6 +64,9 @@ func _init() -> void:
 	_test_rig_assets()
 	_test_rig_clip_map()
 	_test_space_tag_row()
+	_test_standing_slots()
+	_test_separation()
+	_test_separation_changes_no_consumption()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -2395,3 +2398,167 @@ class _TagHost extends Node:
 	var saved := 0
 	func save_npc_spaces() -> void:
 		saved += 1
+
+
+# --- Tier 4c: personal space -------------------------------------------------
+
+## Standing slots. Without them every occupant of a space walks to the exact
+## same resolved point, so a capacity-4 kitchen renders as one person with
+## three others inside them.
+func _test_standing_slots() -> void:
+	_check("slot 0 sits on the centre",
+			SpaceRegistry.slot_offset_for_index(0) == Vector2.ZERO)
+
+	# The packing must actually keep people apart, for every count up to a
+	# generous capacity — this is the whole point of the feature.
+	var pts: Array[Vector2] = []
+	for i in range(24):
+		pts.append(SpaceRegistry.slot_offset_for_index(i))
+	var worst := INF
+	for i in range(pts.size()):
+		for j in range(i + 1, pts.size()):
+			worst = minf(worst, pts[i].distance_to(pts[j]))
+	_check("no two slots are closer than personal space",
+			worst >= SpaceRegistry.PERSONAL_SPACE_M * 0.95,
+			"closest pair %.2f m" % worst)
+
+	# It must stay compact — people gather AT a space, they do not sprawl
+	# across the site. 24 people should still fit inside a few metres.
+	var far := 0.0
+	for p in pts:
+		far = maxf(far, p.length())
+	_check("slots stay compact", far < 5.0, "furthest %.2f m" % far)
+
+	# Deterministic: same index, same offset, every call.
+	_check("slot offsets are deterministic",
+			SpaceRegistry.slot_offset_for_index(7)
+			== SpaceRegistry.slot_offset_for_index(7))
+
+	# Claim order IS slot order, so an arrangement is stable for a whole visit.
+	var reg := SpaceRegistry.create_empty()
+	var sid := reg.set_space_type({"kind": "prop", "prop_id": "pp_k"}, "kitchen", 6)
+	_check("first claimer takes the centre",
+			reg.claim(sid, "a") and reg.slot_index_for(sid, "a") == 0)
+	reg.claim(sid, "b")
+	reg.claim(sid, "c")
+	_check("later claimers get their own slots",
+			reg.slot_index_for(sid, "b") == 1 and reg.slot_index_for(sid, "c") == 2)
+	_check("occupants stand apart",
+			reg.slot_offset(sid, "b").distance_to(reg.slot_offset(sid, "c"))
+			>= SpaceRegistry.PERSONAL_SPACE_M * 0.95)
+	_check("a non-occupant has no slot", reg.slot_index_for(sid, "zz") == -1)
+	_check("a non-occupant gets no offset", reg.slot_offset(sid, "zz") == Vector2.ZERO)
+
+
+## In-transit separation: corridors converging, routes crossing, queues.
+func _test_separation() -> void:
+	var site := _make_test_site()
+	var engine := NpcPopulationEngine.new()
+	engine.configure(6, "test_hab", Vector2.ZERO)
+	# A fresh roster spawns everyone on the habitat point, which is the worst
+	# case: exactly coincident, so the push direction cannot come from the
+	# separation vector and has to be derived deterministically from the ids.
+	for a in engine.agents:
+		(a as NpcAgent).pos = Vector2.ZERO
+	for i in 40:
+		engine.tick(8.0 + float(i) / 60.0, {
+			"registry": site["registry"], "pos_of": site["pos_of"],
+			"hour_of_day": 8.0,
+		})
+	var closest := INF
+	for i in range(engine.agents.size()):
+		for j in range(i + 1, engine.agents.size()):
+			closest = minf(closest,
+					(engine.agents[i] as NpcAgent).pos.distance_to(
+						(engine.agents[j] as NpcAgent).pos))
+	_check("coincident agents push apart", closest > 0.15,
+			"closest pair %.3f m" % closest)
+
+	# Separation must never shove anyone through a wall: with everything
+	# unwalkable, no push may be applied at all.
+	var engine2 := NpcPopulationEngine.new()
+	engine2.configure(4, "test_hab", Vector2.ZERO)
+	for a in engine2.agents:
+		(a as NpcAgent).pos = Vector2.ZERO
+	engine2.tick(8.0 + 1.0 / 60.0, {
+		"registry": site["registry"], "pos_of": site["pos_of"],
+		"hour_of_day": 8.0,
+		"walkable": func(_p: Vector2) -> bool: return false,
+	})
+	var moved := false
+	for a in engine2.agents:
+		if (a as NpcAgent).pos != Vector2.ZERO:
+			moved = true
+	_check("separation never pushes onto unwalkable ground", not moved)
+
+	# Determinism: identical runs must land in identical positions.
+	var a_run := _separation_run(site)
+	var b_run := _separation_run(site)
+	_check("separation is deterministic", a_run == b_run)
+
+
+func _separation_run(site: Dictionary) -> PackedFloat32Array:
+	var engine := NpcPopulationEngine.new()
+	engine.configure(6, "test_hab", Vector2.ZERO)
+	for a in engine.agents:
+		(a as NpcAgent).pos = Vector2.ZERO
+	for i in 20:
+		engine.tick(8.0 + float(i) / 60.0, {
+			"registry": site["registry"], "pos_of": site["pos_of"],
+			"hour_of_day": 8.0,
+		})
+	var out := PackedFloat32Array()
+	for a in engine.agents:
+		out.append(snappedf((a as NpcAgent).pos.x, 0.001))
+		out.append(snappedf((a as NpcAgent).pos.y, 0.001))
+	return out
+
+
+## The load-bearing invariant of the whole phase: personal space is COSMETIC.
+## If crowding could change what people consume, the spatial-efficiency and
+## mass-balance numbers would start depending on how packed the site is.
+##
+## The bound is relative rather than exact, because exact equality is not
+## achievable and demanding it would be dishonest: position feeds travel time,
+## travel time feeds when an activity starts, so a sideways nudge can leave
+## someone a fraction of a second further into a drink at the moment the
+## measurement window closes. Measured drift is ~4 parts per MILLION over a
+## simulated day; the 0.1% bound leaves room for that while still catching any
+## systematic bias (e.g. separation being banked as travel, or crowding
+## starving people).
+const SEPARATION_CONSUMPTION_TOLERANCE := 0.001
+
+func _test_separation_changes_no_consumption() -> void:
+	var with_sep := _consumption_over_a_day(true)
+	var without := _consumption_over_a_day(false)
+	for kind in without:
+		var a := float(with_sep.get(kind, 0.0))
+		var b := float(without[kind])
+		var rel := absf(a - b) / maxf(absf(b), 0.0001)
+		_check("separation does not meaningfully change %s consumed" % kind,
+				rel < SEPARATION_CONSUMPTION_TOLERANCE,
+				"%.4f vs %.4f (%.6f%% drift)" % [a, b, rel * 100.0])
+	_check("both runs consumed something", without.size() > 0)
+
+
+## `separated` false pins the walkable test to "nothing is walkable", which is
+## the one switch that disables every push without touching anything else.
+func _consumption_over_a_day(separated: bool) -> Dictionary:
+	var site := _make_test_site()
+	var engine := NpcPopulationEngine.new()
+	engine.configure(6, "test_hab", Vector2.ZERO)
+	var total: Dictionary = {}
+	var t := 8.0
+	var step := 1.0 / 60.0
+	while t < 32.0:
+		t += step
+		var ctx := {
+			"registry": site["registry"], "pos_of": site["pos_of"],
+			"hour_of_day": fposmod(t, 24.0),
+		}
+		if not separated:
+			ctx["walkable"] = func(_p: Vector2) -> bool: return false
+		var demand: Dictionary = engine.tick(t, ctx)
+		for kind in demand:
+			total[kind] = float(total.get(kind, 0.0)) + float(demand[kind]) * step
+	return total

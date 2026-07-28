@@ -113,6 +113,15 @@ func tick(model, flow_engine, main: Node) -> void:
 				if _nav_grid == null or not _nav_grid.is_ready():
 					return 0.0
 				return _nav_grid.height_at_world(p2),
+			# Used by standing slots and the separation pass to refuse a spot
+			# that is not on walkable ground. Answers TRUE while the grid is
+			# still baking: an unbaked grid knows nothing, and refusing
+			# everything would pin the whole camp to their space centres for
+			# the ~30 s it takes to map the site.
+			"walkable": func(p2: Vector2) -> bool:
+				if _nav_grid == null or not _nav_grid.is_ready():
+					return true
+				return _nav_grid.is_walkable_world(p2),
 			"trace": func(a: Vector2, b: Vector2, channel: String, m: float) -> void:
 				if _desire != null:
 					_desire.add_segment(a, b, channel, m),

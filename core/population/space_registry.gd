@@ -251,8 +251,43 @@ func prune_dangling(main: Node) -> int:
 
 # --- runtime occupancy (never serialized) -----------------------------------
 
+## How much room one person occupies. Also the minimum gap the in-transit
+## separation pass in NpcPopulationEngine tries to keep, so a group that packs
+## into a space and a group that walks past each other agree on personal space.
+const PERSONAL_SPACE_M := 0.9
+
+## Vogel (sunflower) spiral: r = c*sqrt(n) at the golden angle. Nearest-
+## neighbour spacing settles at ~c for every n, so a space fills outward
+## evenly without anyone landing on top of anyone, and it does not look like
+## a lattice the way concentric rings do.
+const GOLDEN_ANGLE := 2.399963229728653
+
+
 func occupant_count(space_id: String) -> int:
 	return (_occupancy.get(space_id, []) as Array).size()
+
+
+## Where in a space's occupancy this agent sits; -1 when not an occupant.
+## Claim order IS the slot order, so the arrangement is stable for the whole
+## visit and reproducible from the same claim sequence.
+func slot_index_for(space_id: String, agent_id: String) -> int:
+	return (_occupancy.get(space_id, []) as Array).find(agent_id)
+
+
+## Offset from a space's resolved centre for the person holding `slot`.
+## Without this every occupant of a space walks to the exact same point, so a
+## capacity-4 kitchen renders as one person with three others inside them.
+static func slot_offset_for_index(slot: int) -> Vector2:
+	if slot <= 0:
+		return Vector2.ZERO
+	var r := PERSONAL_SPACE_M * sqrt(float(slot))
+	var a := float(slot) * GOLDEN_ANGLE
+	return Vector2(cos(a), sin(a)) * r
+
+
+## Convenience: the standing offset for this agent at this space.
+func slot_offset(space_id: String, agent_id: String) -> Vector2:
+	return slot_offset_for_index(slot_index_for(space_id, agent_id))
 
 
 func has_free_capacity(space_id: String) -> bool:

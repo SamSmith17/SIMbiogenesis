@@ -1178,7 +1178,29 @@ pins at 1.0. Enable per habitat: inspector **Population Simulation** →
 `specs.pop_driven` (occupants = roster size; closure metrics unchanged).
 Persistence: change-gated `specs.pop_state` snapshot (≤2×/sim-hour) rides the
 normal graph save; `pop_state` is in both INSTANCE_ONLY_SPEC_KEYS strip
-lists. **3D figures (`NpcRig` + `npc_silhouette.gdshader`):** `NpcAvatar` carries TWO
+lists. **Personal space (Tier 4c) is cosmetic by contract.** Two mechanisms, because
+the problems differ: **standing slots** for people who have ARRIVED (a Vogel
+sunflower spiral, `r = PERSONAL_SPACE_M*sqrt(n)` at the golden angle, indexed
+by position in `SpaceRegistry`'s occupancy array — claim order IS slot order,
+so an arrangement is stable for a whole visit; nearest-neighbour spacing
+settles at ~0.9 m for every n without looking like a lattice), and a
+**separation pass** in `NpcPopulationEngine._separate` for everyone in transit.
+Separation is O(n²) ON PURPOSE — the roster caps at 64, so it is ~2k pairs of
+vector math, and a spatial hash would add bucket-ordering questions that the
+determinism guarantee then has to answer. Pushes are biased 85% SIDEWAYS for
+travelling agents (`PERP_BIAS`): shoving someone back down their own route
+reads as barging and feeds back into arrival time. It is skipped above
+`SEPARATION_MAX_DT_H` (agents teleport at high time scale, so nudging is noise
+on noise), refuses any push onto unwalkable ground, and derives a deterministic
+direction from the id pair when two agents are exactly coincident (which is
+what a fresh roster is). **Displacement is deliberately NOT banked into the
+walking/kcal ledger** — folding it in would make spatial-efficiency numbers
+depend on crowd density. The selftest asserts consumption is unchanged to a
+RELATIVE 0.1% rather than exactly: position feeds travel time feeds activity
+scheduling, so a sideways nudge shifts what someone is mid-way through at the
+measurement boundary (measured drift ~4 ppm over a simulated day).
+
+**3D figures (`NpcRig` + `npc_silhouette.gdshader`):** `NpcAvatar` carries TWO
 bodies behind one API — the rigged Mixamo character up close, the original
 head/torso/legs primitive far away and whenever the FBX assets are missing
 (`Imported Models/NPC/` is **gitignored**, so the fallback is the normal state
