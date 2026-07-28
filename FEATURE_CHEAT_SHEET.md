@@ -505,7 +505,75 @@ Timeline **Multiplayer** chip → lobby:
 
 ---
 
-## 22. Incomplete / partial / outdated (summary)
+## 22. NPC population & desire lines ✅ (opt-in — nothing appears until you switch it on)
+
+Individual simulated people (10–50) with needs, morale, chores and real
+pathfinding. **Two things must both be true before anyone exists**, which is why
+a freshly loaded map looks unchanged:
+
+1. you have **tagged at least one space** for each critical need, and
+2. a **Population node** on the graph has **Simulated individuals** ticked.
+
+### A) Tag the spaces people walk to
+
+| Target | How |
+|--------|-----|
+| Placed prop | Hold **Ctrl** or **Alt**, aim at it → **O** (or click) → bottom drawer → **Space: …** dropdown + capacity |
+| OSM building | Hold **Ctrl**/**Alt**, aim at it → **O** or **B** → Building Builder → **NPC space** row (Customize tab) |
+
+Types: **Restroom · Kitchen/Eating · Sleeping · Water Point · Shower/Wash**, plus
+enrichment: **Fire Circle · Dance/Movement · Quiet · Making/Craft**.
+
+> Tag at least a **kitchen, water point, restroom and sleeping** space. A need with
+> no tagged space counts as *blocked*, which costs **double** morale — that is the
+> fastest way to watch a camp fall apart.
+
+### B) Add the people
+
+1. **G** → Library → **Population** category → place the **Population** node.
+2. **Wire its inputs**: a water tank → water input, a food tank → food input.
+   (3rd input, biomass, is optional fuel for fire circles.) Outputs go to
+   greywater / blackwater / biomass tanks. Unwired inputs read as starved.
+3. Select the node → Inspector → **Occupants** (1–64) → tick **Simulated individuals**.
+4. Press **Space** / play so the clock runs. The sim ticks **with the graph closed**.
+
+### C) Where to see them
+
+| View | What |
+|------|------|
+| 3D world | Silhouette figures walk, sleep, gather. Ctrl/Alt-aim one → name, morale band, what they are doing |
+| **G** → Site Plan | Space markers (glyph + live occupancy) and morale-tinted dots with trails |
+| Inspector → Population Simulation | Roster, morale bands, collapse risk, blocked needs, walking distance / kcal / furthest trip |
+| **Routines & chores…** button | Roster with 24 h day-plan strips, chore board, weather |
+
+### D) Desire lines (View options ▾, Site Plan)
+
+| Item | Effect |
+|------|--------|
+| **Show worn paths** | Heat map of where feet actually wear routes in (legend bottom-left) |
+| **Show live trails** | Fading trail behind each person |
+| **Filter: …** | Cycle all traffic → water → food → restroom → sleep → wash → gather → work |
+| **Remember: …** | Today / Past week / All time |
+| **Drape worn paths in the 3D world** | Same heat map painted on the terrain (works outside Site Plan) |
+
+Traffic has to accumulate — give it a few sim-hours at speed before the pattern reads.
+
+### Gotchas
+
+- **Wayfinding takes ~30 s of real time to map the site.** Until then people walk
+  straight lines through obstacles. The inspector shows *"mapping the site… 62%"*.
+- People path **into and through buildings**; a building with no door gets one
+  auto-placed facing the nearest road. Buildings you tag as a space are always
+  enterable.
+- Occupants is the **authored** headcount; the live count (after anyone quits)
+  shows as *"12 of 16 present"*.
+- Morale caps at **75%** on needs alone — the rest is earned at enrichment spaces.
+
+**Source:** `core/population/` (+ `POPULATION_PLAN.md` for the design and invariants).
+
+---
+
+## 23. Incomplete / partial / outdated (summary)
 
 | Item | Status | Notes |
 |------|--------|-------|
@@ -518,10 +586,12 @@ Timeline **Multiplayer** chip → lobby:
 | Full ISRU catalog / PBI vision | ⚠️ | Partial vs SYSTEMS_GRAPH_VISION |
 | SSAO/SSIL etc. | ⚠️ | Depends on renderer; see UX notes |
 | ToolManager under Player | ❌ | Known missing runtime error |
+| NPC stairs / upper floors | ⚠️ | Nav supports layers; nothing GENERATES stairs or upper floors yet |
+| Draw-an-area NPC space tagging | ❌ | Props + buildings only; area polygons reserved in the schema |
 
 ---
 
-## 23. Suggested “first play” smoke path
+## 24. Suggested “first play” smoke path
 
 1. Create or open a user map → wait for terrain load.  
 2. **O** on SoI pin → set radius.  
@@ -531,7 +601,8 @@ Timeline **Multiplayer** chip → lobby:
 6. Add Hydro + high intake on Site Plan → watch head / penstock / flow.  
 7. **V** paint + Tune look; **U** library browse; **N** Linkage Lab place + deploy.  
 8. **J** light; **K** Site Report; ⚙ Live mode / HA if configured.  
-9. **F1** whenever stuck.
+9. Tag a kitchen / water point / restroom / sleeping space (**O** on a prop or **B** on a building), place a **Population** node, wire water + food tanks, tick **Simulated individuals**, then play — watch people walk, then **View options ▾ → Show worn paths**.  
+10. **F1** whenever stuck.
 
 ---
 
