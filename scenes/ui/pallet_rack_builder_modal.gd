@@ -58,6 +58,7 @@ var _delete_btn: Button = null
 
 ## Non-empty while editing a placed rack in place ("Apply changes" rebuilds it).
 var _bound_prop_id := ""
+var _space_row: NpcSpaceTagRow
 
 var _rebuild_pending := false
 var _rebuild_timer := 0.0
@@ -125,6 +126,9 @@ func open() -> void:
 		return
 	_bound_prop_id = ""
 	_spec = PalletRackBuilder.default_spec()
+	# Nothing placed yet, so there is no target to tag.
+	if _space_row != null:
+		_space_row.bind_prop(_loader, "")
 	_sync_controls()
 	_apply_edit_mode_ui()
 	_activate()
@@ -141,6 +145,8 @@ func open_for_prop(prop_id: String) -> void:
 		spec = (rec.get("record_extra", {}) as Dictionary).get("rack_spec", {}) as Dictionary
 	_bound_prop_id = prop_id
 	_spec = PalletRackBuilder.resolve_spec(spec)
+	if _space_row != null:
+		_space_row.bind_prop(_loader, prop_id)
 	_sync_controls()
 	_apply_edit_mode_ui()
 	_activate()
@@ -355,6 +361,12 @@ func _build_topbar() -> Control:
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(hint)
+
+	# Pallet racks route here rather than to the generic prop drawer, so the tag
+	# control has to live in this modal too (see npc_space_tag_row.gd). Only
+	# meaningful when editing a placed rack, so it hides itself for a fresh one.
+	_space_row = NpcSpaceTagRow.new()
+	row.add_child(_space_row)
 
 	_steps_btn = Button.new()
 	_steps_btn.text = "Add steps"

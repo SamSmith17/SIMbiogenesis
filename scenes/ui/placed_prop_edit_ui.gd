@@ -1,7 +1,12 @@
 extends PanelContainer
 
 ## Edit drawer for a placed prop — transform tweaks + delete/replace.
-## Height matches the slim timeline stack; fields sit in a horizontal row.
+##
+## Laid out as TWO rows: edit controls (model, transform, NPC space tag) above,
+## actions (toggles, sub-editors, Apply/Delete/Close) below. It was one row
+## until the NPC space tag was added, at which point the total ran past 1900 px
+## and pushed **Apply** — which sits near the end — off the right edge of a
+## 1920-wide screen, with no scroll or wrap to recover it.
 
 const C_BG := Color(0.039, 0.055, 0.098, 0.98)
 const C_PANEL := Color(0.082, 0.114, 0.208, 1.0)
@@ -9,7 +14,8 @@ const C_BORDER := Color(0.227, 0.290, 0.420, 1.0)
 const C_TEXT := Color(0.886, 0.910, 0.941, 1.0)
 
 ## Matches slim TimelineUI stack clearance when live height unavailable.
-const DRAWER_HEIGHT := 64.0
+## Two rows tall (see the class comment on why it is no longer one).
+const DRAWER_HEIGHT := 104.0
 
 var _loader: Node = null
 var _prop_id: String = ""
@@ -29,8 +35,7 @@ var _show3d_check: CheckBox
 var _burnable_check: CheckBox
 var _shadow_option: OptionButton
 var _restore_btn: Button
-var _space_option: OptionButton
-var _space_cap: SpinBox
+var _space_row: NpcSpaceTagRow
 var _del_btn: Button
 var _move_btn: Button
 var _linkage_btn: Button
@@ -107,14 +112,23 @@ func _build_ui() -> void:
 	margin.add_theme_constant_override("margin_top", 6)
 	margin.add_theme_constant_override("margin_bottom", 6)
 	add_child(margin)
-	var root := HBoxContainer.new()
-	root.add_theme_constant_override("separation", 10)
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 4)
 	margin.add_child(root)
+
+	# Row 1 — what the prop IS: model, transform, and how people use it.
+	var row_edit := HBoxContainer.new()
+	row_edit.add_theme_constant_override("separation", 10)
+	root.add_child(row_edit)
+	# Row 2 — what you can DO to it, ending in Apply / Delete / Close.
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 6)
+	root.add_child(actions)
 
 	var left := VBoxContainer.new()
 	left.add_theme_constant_override("separation", 2)
 	left.custom_minimum_size.x = 160.0
-	root.add_child(left)
+	row_edit.add_child(left)
 
 	_model_lbl = Label.new()
 	_model_lbl.add_theme_color_override("font_color", C_TEXT)
@@ -136,8 +150,7 @@ func _build_ui() -> void:
 
 	var fields := HBoxContainer.new()
 	fields.add_theme_constant_override("separation", 6)
-	fields.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	root.add_child(fields)
+	row_edit.add_child(fields)
 	fields.add_child(_compact_field("X", _off_x))
 	fields.add_child(_compact_field("Y", _off_y))
 	fields.add_child(_compact_field("Z", _off_z))
@@ -148,10 +161,6 @@ func _build_ui() -> void:
 
 	for spin_box in [_off_x, _off_y, _off_z, _yaw, _pitch, _roll, _scale]:
 		spin_box.value_changed.connect(_on_spin_changed)
-
-	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 6)
-	root.add_child(actions)
 
 	_collision_check = CheckBox.new()
 	_collision_check.text = "Collide"
@@ -190,24 +199,10 @@ func _build_ui() -> void:
 	_shadow_option.item_selected.connect(_on_shadow_mode_selected)
 	actions.add_child(_shadow_option)
 
-	# NPC space tag: mark this prop as a restroom / kitchen / sleeping / water
-	# point so population agents wayfind to it (stored in SpaceRegistry, not on
-	# the prop record).
-	_space_option = OptionButton.new()
-	_space_option.tooltip_text = "Tag this prop as an NPC space (restroom, kitchen, …) — people wayfind to it"
-	_space_option.add_item("Space: None", 0)
-	for i in SpaceTypes.TYPES.size():
-		_space_option.add_item("Space: %s" % SpaceTypes.label(SpaceTypes.TYPES[i]), i + 1)
-	_space_option.add_theme_color_override("font_color", C_TEXT)
-	_space_option.item_selected.connect(_on_space_type_selected)
-	actions.add_child(_space_option)
-
-	_space_cap = _spin(1.0, 1.0, 64.0)
-	_space_cap.tooltip_text = "How many people can use this space at once"
-	_space_cap.custom_minimum_size.x = 56.0
-	_space_cap.value_changed.connect(_on_space_capacity_changed)
-	_space_cap.visible = false
-	actions.add_child(_space_cap)
+	# NPC space tag. Shared widget (scenes/ui/npc_space_tag_row.gd) so the
+	# props with their own modals can offer the same control — see that file.
+	_space_row = NpcSpaceTagRow.new()
+	row_edit.add_child(_space_row)
 
 	_move_btn = Button.new()
 	_move_btn.text = "Move"
@@ -241,6 +236,10 @@ func _build_ui() -> void:
 	_ports_btn.tooltip_text = "Tag 3D connection ports (plugs / inlets) on this model"
 	_ports_btn.pressed.connect(_on_edit_ports)
 	actions.add_child(_ports_btn)
+
+	var tail_spacer := Control.new()
+	tail_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	actions.add_child(tail_spacer)
 
 	var apply_btn := Button.new()
 	apply_btn.text = "Apply"
@@ -331,7 +330,7 @@ func _load_from_layer() -> void:
 		_siphon_btn.visible = mid == "hydroturbine" or kind == "siphon_hydro" \
 				or kind == "siphon_hoverboard"
 	_refresh_restore_visibility()
-	_sync_space_controls()
+	_space_row.bind_prop(_loader, _prop_id)
 
 	if _del_btn != null:
 		var is_osm := str(d.get("type", "")) == "osm"
@@ -376,60 +375,6 @@ func _on_burnable_toggled(pressed: bool) -> void:
 	if _loader.has_method("update_prop_record"):
 		_loader.call("update_prop_record", _prop_id, {"burnable": pressed})
 	FireNode.invalidate_flammable_mesh_cache()
-
-
-func _space_registry() -> SpaceRegistry:
-	if _loader == null:
-		return null
-	var reg: Variant = _loader.get("npc_spaces")
-	return reg as SpaceRegistry if reg is SpaceRegistry else null
-
-
-func _space_target() -> Dictionary:
-	return {"kind": "prop", "prop_id": _prop_id}
-
-
-func _sync_space_controls() -> void:
-	if _space_option == null:
-		return
-	var reg := _space_registry()
-	_space_option.visible = reg != null
-	_space_cap.visible = false
-	if reg == null:
-		return
-	var rec := reg.space_for_target(_space_target())
-	var idx := SpaceTypes.TYPES.find(str(rec.get("space_type", ""))) if not rec.is_empty() else -1
-	_space_option.selected = idx + 1  # 0 = None
-	if idx >= 0:
-		_space_cap.visible = true
-		_space_cap.set_value_no_signal(float(int(rec.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))))
-
-
-func _on_space_type_selected(idx: int) -> void:
-	if _syncing or _prop_id.is_empty():
-		return
-	var reg := _space_registry()
-	if reg == null:
-		return
-	var space_type: String = "" if idx <= 0 else str(SpaceTypes.TYPES[idx - 1])
-	reg.set_space_type(_space_target(), space_type, int(_space_cap.value))
-	if _loader.has_method("save_npc_spaces"):
-		_loader.call("save_npc_spaces")
-	_sync_space_controls()
-
-
-func _on_space_capacity_changed(v: float) -> void:
-	if _syncing or _prop_id.is_empty():
-		return
-	var reg := _space_registry()
-	if reg == null:
-		return
-	var rec := reg.space_for_target(_space_target())
-	if rec.is_empty():
-		return
-	reg.set_space_type(_space_target(), str(rec.get("space_type", "")), int(v))
-	if _loader.has_method("save_npc_spaces"):
-		_loader.call("save_npc_spaces")
 
 
 const _SHADOW_MODES := ["", "all", "off"]

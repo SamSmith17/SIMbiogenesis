@@ -518,7 +518,8 @@ a freshly loaded map looks unchanged:
 
 | Target | How |
 |--------|-----|
-| Placed prop | Hold **Ctrl** or **Alt**, aim at it → **O** (or click) → bottom drawer → **Space: …** dropdown + capacity |
+| Placed prop | Hold **Ctrl** or **Alt**, aim at it → **O** (or click) → bottom drawer → **NPC space** dropdown + capacity |
+| StarShade / pallet rack | Same, but these open their own editor — the **NPC space** row is in that modal |
 | OSM building | Hold **Ctrl**/**Alt**, aim at it → **O** or **B** → Building Builder → **NPC space** row (Customize tab) |
 
 Types: **Restroom · Kitchen/Eating · Sleeping · Water Point · Shower/Wash**, plus
@@ -595,6 +596,7 @@ Traffic has to accumulate — give it a few sim-hours at speed before the patter
 | ToolManager under Player | ❌ | Known missing runtime error |
 | NPC stairs / upper floors | ⚠️ | Nav supports layers; nothing GENERATES stairs or upper floors yet |
 | Draw-an-area NPC space tagging | ❌ | Props + buildings only; area polygons reserved in the schema |
+| Tagging a 3D printer as a space | ❌ | Print Setup modal has no tag row yet (it is keyed by graph item, not prop) |
 
 ---
 

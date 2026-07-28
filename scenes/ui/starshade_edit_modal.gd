@@ -14,6 +14,7 @@ const C_TEXT_S := Color(0.580, 0.639, 0.722, 1.0)
 
 var _loader: Node = null
 var _prop_id: String = ""
+var _space_row: NpcSpaceTagRow
 var _active := false
 var _dim: ColorRect = null
 var _panel: PanelContainer = null
@@ -41,6 +42,8 @@ func open_for_prop(prop_id: String) -> void:
 	_prop_id = prop_id
 	_refresh_designs()
 	_load_from_prop()
+	if _space_row != null:
+		_space_row.bind_prop(_loader, prop_id)
 	_activate()
 
 
@@ -133,6 +136,12 @@ func _build_ui() -> void:
 	_status.add_theme_font_size_override("font_size", 11)
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(_status)
+
+	# StarShades route here instead of the generic prop drawer, so without this
+	# row they would be the one kind of prop that can never be tagged as an NPC
+	# space (see npc_space_tag_row.gd).
+	_space_row = NpcSpaceTagRow.new()
+	v.add_child(_space_row)
 
 	var btns := HBoxContainer.new()
 	btns.add_theme_constant_override("separation", 8)

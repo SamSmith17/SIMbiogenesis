@@ -63,6 +63,7 @@ func _init() -> void:
 	# --- Tier 4 ---
 	_test_rig_assets()
 	_test_rig_clip_map()
+	_test_space_tag_row()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -2340,3 +2341,57 @@ func _hips_rest_y(anim: Animation) -> float:
 			lo = minf(lo, v.y)
 		return lo
 	return 0.0
+
+
+## The shared NPC space tag row (scenes/ui/npc_space_tag_row.gd) is what lets
+## props with their own modals — StarShades, pallet racks — be tagged at all,
+## since InteractionFocus routes them away from the generic drawer before it is
+## ever reached. Covered here rather than the drawer itself because the drawer
+## references the CursorController autoload, which does not exist under
+## --script, so its script cannot even be loaded offline.
+func _test_space_tag_row() -> void:
+	var row := NpcSpaceTagRow.new()
+	# Unbound: nothing to tag, so it must not offer a control.
+	row.bind_target(null, {})
+	_check("tag row hides with no target", not row.visible)
+	_check("tag row reports no type when unbound", row.current_type() == "")
+
+	# A loader-less host (a scene with no TerrainLoader) has no registry, so the
+	# row must hide rather than silently drop the player's tag on the floor.
+	row.bind_prop(null, "pp_1")
+	_check("tag row hides without a registry", not row.visible)
+
+	var host := _TagHost.new()
+	host.npc_spaces = SpaceRegistry.create_empty()
+	row.bind_prop(host, "pp_7")
+	_check("tag row shows for a real prop + registry", row.visible)
+	_check("a fresh prop starts untagged", row.current_type() == "")
+
+	# Tagging round-trips through the registry, and the row reads it back.
+	host.npc_spaces.set_space_type({"kind": "prop", "prop_id": "pp_7"}, "kitchen", 4)
+	row.bind_prop(host, "pp_7")
+	_check("tag row reflects an existing tag", row.current_type() == "kitchen",
+			row.current_type())
+
+	# It must work for buildings and areas too — the widget only ever handles
+	# the target dict it is handed, which is what makes it reusable for 4b.
+	host.npc_spaces.set_space_type({"kind": "building", "building_tag": "b_12"}, "sleep", 6)
+	row.bind_building(host, "b_12")
+	_check("tag row works for buildings", row.current_type() == "sleep")
+	row.bind_target(host, {"kind": "area", "poly": [[0, 0], [4, 0], [4, 4]]})
+	_check("tag row accepts an area target", row.visible)
+
+	# Every taggable type must be offered, enrichment included.
+	_check("all space types are offered", SpaceTypes.TYPES.size() == 9,
+			"%d types" % SpaceTypes.TYPES.size())
+	for t in SpaceTypes.TYPES:
+		_check("type is valid: %s" % t, SpaceTypes.is_valid(str(t)))
+	row.free()
+	host.free()
+
+
+class _TagHost extends Node:
+	var npc_spaces: SpaceRegistry = null
+	var saved := 0
+	func save_npc_spaces() -> void:
+		saved += 1
