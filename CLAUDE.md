@@ -1147,6 +1147,13 @@ inside `_draw()`** — allocating a GPU resource mid-draw yields undefined
 contents (it rendered as a solid white block over the whole site). Toggles
 live in **View options ▾** at ids ≥152 (151 is already double-booked by
 `VIEW_MODE_EMBODY_TWINS` and `VIEW_MODE_SITE_PORTS`).
+3D drape (`NpcDesireOverlay` + `npc_desire_drape.gdshader`): one
+terrain-following mesh over the map's rect with world-XZ UVs baked into the
+vertices — the mesh IS the registration, so there is no bbox uniform to keep
+in sync. Additive, unshaded, no depth write; built lazily on first enable and
+freed on disable. Grid-tessellated rather than reusing
+`build_polygon_highlight`, which samples only a polygon's corners and floats
+over rolling ground.
 **Coarse catch-up models COPING, not neglect.** A >6 h jump is the player
 scrubbing or a frame hitch — time the community lived through but the sim did
 not simulate. Needs land at ordinary mid-cycle levels, morale drifts at most

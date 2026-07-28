@@ -3378,6 +3378,19 @@ func _build_population_section(specs: Dictionary) -> void:
 	if summ.is_empty():
 		_readonly_field("Roster", "starting up…")
 		return
+	# Wayfinding state, so "why is everyone walking through that building" has
+	# a visible answer while the grid is still baking.
+	var nav: Dictionary = view.call("npc_nav_status") if view != null else {}
+	match str(nav.get("state", "")):
+		"baking":
+			_readonly_field("Wayfinding", "mapping the site… %d%%" % [
+					int(float(nav.get("progress", 0.0)) * 100.0)])
+			_hint_label("People walk straight lines until the map is ready.")
+		"ready":
+			var doors := int(nav.get("doors", 0))
+			_readonly_field("Wayfinding", "ready — %d m grid%s" % [
+					int(float(nav.get("cell_m", 0.0)) * 100.0) / 100,
+					("  ·  %d doorways" % doors) if doors > 0 else ""])
 	var here := int(summ.get("count", 0))
 	var started := int(summ.get("initial_count", here))
 	var gone := int(summ.get("departures", 0))

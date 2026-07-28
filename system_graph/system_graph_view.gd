@@ -268,6 +268,7 @@ const VIEW_MODE_DESIRE_LINES := 152
 const VIEW_MODE_DESIRE_TRAILS := 153
 const VIEW_MODE_DESIRE_CHANNEL := 154
 const VIEW_MODE_DESIRE_WINDOW := 155
+const VIEW_MODE_DESIRE_3D := 156
 const DESIGNATE_OFF := 200
 const DESIGNATE_CATCHMENT := 201
 const DESIGNATE_CROP := 202
@@ -1836,6 +1837,7 @@ func _build_topbar() -> Control:
 	vmp.add_check_item("Show live trails", VIEW_MODE_DESIRE_TRAILS)
 	vmp.add_item("Filter: all traffic", VIEW_MODE_DESIRE_CHANNEL)
 	vmp.add_item("Remember: past week", VIEW_MODE_DESIRE_WINDOW)
+	vmp.add_check_item("Drape worn paths in the 3D world", VIEW_MODE_DESIRE_3D)
 	vmp.add_separator("Site Plan wires")
 	vmp.add_radio_check_item("Wires: 3D conduits", VIEW_MODE_SITE_WIRE_3D)
 	vmp.add_radio_check_item("Wires: Metro 2D overlay", VIEW_MODE_SITE_WIRE_METRO)
@@ -2053,6 +2055,11 @@ func _on_view_menu_id(id: int) -> void:
 				_graph_canvas.call("queue_redraw")
 			_sync_view_mode_menu_checks()
 			return
+		VIEW_MODE_DESIRE_3D:
+			_desire_3d_on = not _desire_3d_on
+			_ensure_desire_overlay()
+			_sync_view_mode_menu_checks()
+			return
 		VIEW_MODE_DESIRE_WINDOW:
 			_desire_window = (_desire_window + 1) % 3
 			if _npc_population != null:
@@ -2228,7 +2235,9 @@ func _restyle_btn_amber(b: Button) -> void:
 ## Desire-line view state (Site Plan only).
 var _desire_lines_on := false
 var _desire_channel := ""          # "" = all traffic
-var _desire_window: int = 1        # NpcDesireMap.Window.WEEK
+var _desire_window: int = 1        # NpcDesireMap.Retention.WEEK
+var _desire_3d_on := false
+var _desire_overlay: Node3D = null
 
 
 func _cycle_desire_channel() -> void:
@@ -3221,11 +3230,15 @@ func frame_elevation_for_siphon(siphon_id: String) -> void:
 
 func _sync_desire_menu_labels(vp: PopupMenu) -> void:
 	var site_only := _graph_view_mode == GraphSiteLayout.VIEW_SITE
-	for id in [VIEW_MODE_DESIRE_LINES, VIEW_MODE_DESIRE_TRAILS,
-			VIEW_MODE_DESIRE_CHANNEL, VIEW_MODE_DESIRE_WINDOW]:
+	for id in [VIEW_MODE_DESIRE_LINES, VIEW_MODE_DESIRE_TRAILS]:
 		var i := vp.get_item_index(id)
 		if i >= 0:
 			vp.set_item_disabled(i, not site_only)
+	# The channel/retention filters and the 3D drape apply in the world too,
+	# so they stay live outside Site Plan.
+	var d3 := vp.get_item_index(VIEW_MODE_DESIRE_3D)
+	if d3 >= 0:
+		vp.set_item_checked(d3, _desire_3d_on)
 	var li := vp.get_item_index(VIEW_MODE_DESIRE_LINES)
 	if li >= 0:
 		vp.set_item_checked(li, _desire_lines_on)
@@ -9890,6 +9903,12 @@ func _on_test_mode() -> void:
 ## spam the undo stack while the player is out in the 3D world.
 ## Live roster telemetry for a pop-driven habitat (inspector Population
 ## section); {} until the ambient tick has spun the engine up.
+## Navigation state for the inspector, so "why is everyone walking through
+## that tree" has a visible answer while the grid is still baking.
+func npc_nav_status() -> Dictionary:
+	return _npc_population.nav_status() if _npc_population != null else {}
+
+
 func npc_population_summary(item_id: String) -> Dictionary:
 	if _npc_population == null:
 		return {}
@@ -9960,6 +9979,26 @@ func _ensure_npc_host() -> void:
 		_npc_host = null
 
 
+## Build or tear down the 3D desire drape. Lazily created on first enable, so
+## a player who never turns it on pays nothing.
+func _ensure_desire_overlay() -> void:
+	var main_node := _get_scene_main_node()
+	if not _desire_3d_on or _npc_population == null or main_node == null:
+		if _desire_overlay != null and is_instance_valid(_desire_overlay):
+			_desire_overlay.queue_free()
+		_desire_overlay = null
+		return
+	var payload: Dictionary = _npc_population.desire_payload(_desire_channel)
+	if payload.is_empty():
+		return
+	if _desire_overlay == null or not is_instance_valid(_desire_overlay):
+		_desire_overlay = NpcDesireOverlay.new()
+		var parent: Node = main_node.get_node_or_null("Terrain")
+		(parent if parent != null else main_node).add_child(_desire_overlay)
+	_desire_overlay.call("rebuild", main_node, payload.get("rect", Rect2()))
+	_desire_overlay.call("set_heat", payload.get("texture"))
+
+
 func _tick_resource_flow_ambient(delta: float) -> void:
 	if _resource_flow == null:
 		return
@@ -9987,11 +10026,16 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 			_graph_canvas.set("npc_desire_provider", func() -> Dictionary:
 				if not _desire_lines_on:
 					return {}
-				return _npc_population.desire_payload(_desire_channel))
+				var p: Dictionary = _npc_population.desire_payload(_desire_channel)
+				if not p.is_empty():
+					p["channel_label"] = _desire_channel_label()
+				return p)
 	PerfMonitor.begin("npc_population")
 	_npc_population.tick(model, _resource_flow, _get_scene_main_node())
 	PerfMonitor.end("npc_population")
 	_ensure_npc_host()
+	if _desire_3d_on:
+		_ensure_desire_overlay()
 	_drain_npc_events()
 	# Dots move only on population ticks — redraw the Site Plan then (and only
 	# then; with the graph closed or in other views this costs nothing).

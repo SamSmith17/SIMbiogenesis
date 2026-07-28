@@ -1629,6 +1629,7 @@ func _run_population_verify() -> void:
 	var ok_marks := marks.size() == sites.size()
 	print("PlaytestHarness: population verify — space markers %s (%d of %d resolved)" % [
 		"PASS" if ok_marks else "FAIL", marks.size(), sites.size()])
+	var ok_drape := false
 	if main != null:
 		var prev_cam := get_viewport().get_camera_3d()
 		var cam := Camera3D.new()
@@ -1642,6 +1643,40 @@ func _run_population_verify() -> void:
 		await get_tree().create_timer(1.5).timeout
 		if "time_scale" in main:
 			main.time_scale = 0.0
+		# 3D desire drape: turn it on and photograph the worn paths on the
+		# ground, from above, before framing a person.
+		sgv.set("_desire_3d_on", true)
+		sgv.call("_ensure_desire_overlay")
+		await get_tree().create_timer(1.0).timeout
+		var dov: Node = null
+		var terr: Node = main.get_node_or_null("Terrain")
+		if terr != null:
+			dov = terr.get_node_or_null("NpcDesireOverlay")
+		if dov == null:
+			dov = main.get_node_or_null("NpcDesireOverlay")
+		ok_drape = dov != null and dov.get("mesh") != null
+		print("PlaytestHarness: population verify — 3D desire drape %s" % [
+			"PASS" if ok_drape else "FAIL (overlay mesh not built)"])
+		if ok_drape:
+			# Frame the whole drape from above, in DAYLIGHT — phase 1 ends
+			# around midnight and an additive overlay on black terrain shows
+			# the glow but none of the ground it is painted on.
+			if main != null and "day_time" in main:
+				main.day_time = 12.0
+			var dmap2: Variant = bridge.call("desire_map")
+			var drect: Rect2 = dmap2.call("world_rect") if dmap2 != null else Rect2()
+			var dc := drect.get_center()
+			var span := maxf(maxf(drect.size.x, drect.size.y), 40.0)
+			var dgy := TerrainSurfaceQuery.ground_height_at(main, dc.x, dc.y)
+			cam.global_position = Vector3(dc.x + span * 0.55, dgy + span * 0.95,
+					dc.y + span * 0.55)
+			cam.look_at(Vector3(dc.x, dgy, dc.y))
+			cam.current = true
+			await get_tree().create_timer(1.2).timeout
+			await _graph_shot(dir, "06_desire_drape_3d", manifest, "world")
+		sgv.set("_desire_3d_on", false)
+		sgv.call("_ensure_desire_overlay")
+
 		var subject := Vector2.ZERO
 		var cdots: Array = bridge.call("agent_dots")
 		if not cdots.is_empty():
@@ -1699,7 +1734,9 @@ func _run_population_verify() -> void:
 	# roster aggregates fall back toward zero. Sample both while it happens.
 	var saw_starved := false
 	var worst_hunger := 0.0
-	for i in 40:
+	# Long enough for hunger to climb clear of the act-on threshold even when
+	# a preceding clock jump has just reset needs to mid-cycle.
+	for i in 80:
 		await get_tree().create_timer(0.25).timeout
 		var hs: Dictionary = (model.get_item(hab_id).get("specs", {}) as Dictionary)
 		if (hs.get("starved_kinds", []) as Array).has("food"):
@@ -1769,7 +1806,7 @@ func _run_population_verify() -> void:
 		if not (model.get_item(str(pid)) as Dictionary).is_empty():
 			model.remove_item(str(pid))
 	print("PlaytestHarness: population verify — %s (%d shots in %s)" % [
-		"PASS" if (ok_flow and ok_move and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire) else "FAIL",
+		"PASS" if (ok_flow and ok_move and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire and ok_drape) else "FAIL",
 		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
 

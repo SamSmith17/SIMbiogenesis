@@ -404,7 +404,7 @@ other thing on this list.
 
 # Tier 3 — Wayfinding and Desire Lines
 
-**Status: 3a–3e built and verified. 3f (3D drape) specified, not built.**
+**Status: COMPLETE — 3a–3f all built and verified.**
 
 Corrections learned while building 3a/3b, kept here because they are the
 non-obvious parts:

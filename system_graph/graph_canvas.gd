@@ -7838,6 +7838,35 @@ func _draw_npc_desire_site() -> void:
 	if rect.size.x < 1.0 or rect.size.y < 1.0:
 		return
 	draw_texture_rect(tex, rect, false)
+	_draw_npc_desire_legend(d)
+
+
+## Key for the heat ramp. Without it the colours are just pretty — this says
+## what "hot" means, which channel is showing, and how far back it remembers.
+func _draw_npc_desire_legend(d: Dictionary) -> void:
+	var fnt := ThemeDB.fallback_font
+	var pad := 10.0
+	var bar_w := 132.0
+	var bar_h := 9.0
+	# Sits clear of the Unplaced tray along the bottom edge.
+	var box := Rect2(pad, size.y - 142.0, bar_w + pad * 2.0, 52.0)
+	draw_rect(box, Color(0.04, 0.06, 0.10, 0.82), true)
+	draw_rect(box, Color(0.30, 0.38, 0.52, 0.75), false, 1.0)
+	var title := "Desire lines · %s" % str(d.get("channel_label", "all traffic"))
+	draw_string(fnt, Vector2(box.position.x + pad, box.position.y + 15.0), title,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.88, 0.91, 0.94, 0.95))
+	# The ramp itself, sampled the same way the raster is coloured.
+	var bx := box.position.x + pad
+	var by := box.position.y + 23.0
+	var steps := 44
+	for i in steps:
+		var t := float(i) / float(steps - 1)
+		draw_rect(Rect2(bx + bar_w * t, by, bar_w / float(steps) + 1.0, bar_h),
+				NpcDesireMap.heat_color(t), true)
+	var foot := "quiet → worn %d m · %s" % [
+			int(round(float(d.get("peak", 0.0)))), str(d.get("window", ""))]
+	draw_string(fnt, Vector2(bx, by + bar_h + 13.0), foot,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.62, 0.70, 0.80, 0.92))
 
 
 ## Site Plan: where the people are going. A soft disc + ring per tagged space,
