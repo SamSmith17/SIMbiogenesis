@@ -57,7 +57,20 @@ func teardown() -> void:
 	_solar_ui = null
 
 
+## Hard-disabled while the tutorial sandbox owns the graph — the bridge would
+## otherwise re-create virtual consumer/solar nodes inside level content.
+var _enabled: bool = true
+
+
+func set_enabled(on: bool) -> void:
+	_enabled = on
+	if on:
+		_poll_acc = POLL_INTERVAL  # refresh promptly on re-enable
+
+
 func tick(delta: float) -> void:
+	if not _enabled:
+		return
 	if _model == null or not is_instance_valid(_solar_ui):
 		return
 	_poll_acc += delta

@@ -46,6 +46,13 @@ const PANELS: Array = [
 		"width": 120.0, "height": 100.0,
 		"specs": { "name": "BougeRV CIGS 200W",    "wmp": 200.0, "voc": 34.0, "vmp": 28.0, "isc": 7.50, "imp": 7.14, "cost": 280.0 },
 	},
+	# Solar Bootcamp trainer panel — 40 Voc / 300 W so the curriculum's numbers
+	# land exactly (4S = 160 V > a 150 V controller; 3S2P of six = 120 Voc).
+	{
+		"type": "panel", "label": "Trainer 300W", "icon": "🎓",
+		"width": 120.0, "height": 100.0,
+		"specs": { "name": "Trainer 300W (40 Voc)", "wmp": 300.0, "voc": 40.0, "vmp": 32.0, "isc": 9.90, "imp": 9.40, "cost": 200.0 },
+	},
 ]
 
 # ---------------------------------------------------------------------------
@@ -136,6 +143,20 @@ const CONTROLLERS: Array = [
 		"type": "controller", "label": "EG4 6000XP", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
 		"specs": { "name": "EG4 6000XP Hybrid",         "max_voc": 500.0, "max_charge_amps":120.0, "max_pv_watts": 8000.0, "cost":1450.0 },
+	},
+	# Solar Bootcamp trainer controllers. The PWM's 50 V ceiling takes ONE 40 Voc
+	# trainer panel but faults on any series pair; 10 A × 12 V bus = the 120 W
+	# lesson. The MPPT 150/30 is the curriculum's "30 A, 150 V" reference unit
+	# (360 / 720 / 1200 W as the bank climbs 12 → 24 → 48 V).
+	{
+		"type": "controller", "label": "Trainer PWM 10A", "icon": "🎓",
+		"width": 140.0, "height": 120.0,
+		"specs": { "name": "Trainer PWM 12V 10A",       "max_voc":  50.0, "max_charge_amps": 10.0, "max_pv_watts":  300.0, "cost":  30.0 },
+	},
+	{
+		"type": "controller", "label": "Trainer MPPT 150/30", "icon": "🎓",
+		"width": 140.0, "height": 120.0,
+		"specs": { "name": "Trainer MPPT 150V 30A",     "max_voc": 150.0, "max_charge_amps": 30.0, "max_pv_watts": 2000.0, "cost": 180.0 },
 	},
 ]
 

@@ -8,6 +8,11 @@ extends Control
 ## director listens; nothing else needs to.
 signal electrical_fault_observed(reason: String, item_id: String)
 
+## Fired when an external graph load (game load, .esim import) lands while the
+## tutorial sandbox is active — the incoming state wins, the sandbox is dropped
+## WITHOUT restore, and the tutorial director must reset its UI.
+signal sandbox_interrupted
+
 # ---------------------------------------------------------------------------
 # Mission-control color palette — redirected to UITheme (single source of
 # truth); local const names kept so existing call sites are unchanged.
@@ -340,6 +345,14 @@ var _toast_panel: PanelContainer = null
 var _toast_label: Label          = null
 var _toast_timer: float          = 0.0
 var _fault_card_modal: GraphFaultCardModal = null
+# Tutorial sandbox (Solar Bootcamp): while active, the player's REAL graph
+# state lives in _sandbox_pre_state and everything on the canvas is throwaway
+# level content. collect_save_state() returns the pre-state so neither the
+# per-map autosave nor a game save can ever capture sandbox content.
+var _sandbox_active: bool = false
+var _sandbox_pre_state: Dictionary = {}
+var _autosave_suspended: bool = false
+var _tutorial_director: Node = null
 var _first_load_layout_done: bool = false
 var _fit_deferred_pending: bool = false
 var _checking_voltage: bool = false
@@ -411,6 +424,9 @@ func _ready() -> void:
 	call_deferred("_init_conduit_manager")
 	call_deferred("_init_placeholder_host")
 	_connect_automation_feedback()
+	# Solar Bootcamp first-load offer (new players only; no-op headless/harness).
+	get_tree().create_timer(3.0).timeout.connect(
+		_maybe_show_tutorial_prompt, CONNECT_ONE_SHOT)
 	# _process stays ENABLED always (ambient resource-flow tick needs to run
 	# even while the graph is closed — see _tick_resource_flow_ambient). The
 	# `if not visible: return` inside _process still gates the heavy UI-only
@@ -1140,7 +1156,7 @@ func has_user_graph_layout() -> bool:
 
 
 func _schedule_graph_autosave() -> void:
-	if Engine.is_editor_hint():
+	if Engine.is_editor_hint() or _autosave_suspended:
 		return
 	if _autosave_timer == null:
 		return
@@ -1149,7 +1165,7 @@ func _schedule_graph_autosave() -> void:
 
 
 func _flush_graph_autosave() -> void:
-	if Engine.is_editor_hint() or not _autosave_pending:
+	if Engine.is_editor_hint() or not _autosave_pending or _autosave_suspended:
 		return
 	if _cached_map_graph_key.is_empty():
 		_cache_map_graph_key()
@@ -1177,6 +1193,194 @@ func _try_restore_graph_autosave() -> void:
 	var parsed: Variant = JSON.parse_string(txt)
 	if parsed is Dictionary and not (parsed as Dictionary).is_empty():
 		apply_save_state(parsed as Dictionary)
+
+
+# ---------------------------------------------------------------------------
+# Tutorial sandbox (Solar Bootcamp) — see gameplay/tutorial_director.gd
+# ---------------------------------------------------------------------------
+
+## Snapshot the player's real graph, suspend autosave, silence the solar
+## bridge's virtual nodes, and clear the canvas for level content. Returns
+## false when already active.
+func begin_tutorial_sandbox() -> bool:
+	if _sandbox_active:
+		return false
+	_sandbox_pre_state = collect_save_state()
+	_sandbox_active = true
+	_autosave_suspended = true
+	if _bridge != null and _bridge.has_method("set_enabled"):
+		_bridge.call("set_enabled", false)
+	tutorial_clear_graph()
+	return true
+
+
+## Restore the pre-tutorial graph exactly as it was. `_schedule` refreshes the
+## autosave from the restored (identical) state, which is harmless.
+func end_tutorial_sandbox() -> void:
+	if not _sandbox_active:
+		return
+	_sandbox_active = false
+	var pre := _sandbox_pre_state
+	_sandbox_pre_state = {}
+	if _bridge != null and _bridge.has_method("set_enabled"):
+		_bridge.call("set_enabled", true)
+	if not pre.is_empty():
+		apply_save_state(pre)
+	_autosave_suspended = false
+	_schedule_graph_autosave()
+
+
+func is_sandbox_active() -> bool:
+	return _sandbox_active
+
+
+## Reset the canvas to an empty graph (sandbox only — levels re-seed on top).
+func tutorial_clear_graph() -> void:
+	apply_save_state({"graph": {"items": [], "connections": [], "scopes": {},
+		"definitions": {}}}, {"sandbox": true})
+	_dc_analysis = {}
+
+
+## Spawn one level's seed items (+ optional pre-wires) into the sandbox graph.
+## Returns the spawned item ids in seed order.
+func tutorial_seed_level(seed: Array, seed_wires: Array = []) -> Array:
+	var ids: Array = []
+	if model == null:
+		return ids
+	for entry in seed:
+		if not (entry is Dictionary):
+			continue
+		var e: Dictionary = entry
+		var preset := TutorialCatalog.find_preset(str(e.get("preset_label", "")))
+		if preset.is_empty():
+			push_warning("tutorial_seed_level: unknown preset '%s'" % str(e.get("preset_label", "")))
+			ids.append("")
+			continue
+		var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+		var dims := ComponentPresets.spawn_dimensions(preset)
+		var item_id: String = model.generate_item_id()
+		model.add_item({
+			"id": item_id,
+			"type": str(preset.get("type", "appliance")),
+			"x": float(e.get("x", 0.0)), "y": float(e.get("y", 0.0)),
+			"width": dims.x, "height": dims.y,
+			"scope_id": "root",
+			"specs": specs,
+			"is_virtual": false,
+		})
+		ids.append(item_id)
+	for w in seed_wires:
+		if not (w is Dictionary):
+			continue
+		var wd: Dictionary = w
+		var a := int(wd.get("from", -1))
+		var b := int(wd.get("to", -1))
+		if a < 0 or b < 0 or a >= ids.size() or b >= ids.size() \
+				or str(ids[a]).is_empty() or str(ids[b]).is_empty():
+			continue
+		var from_handle := str(wd.get("from_handle", "positive"))
+		var pol := "negative" if from_handle.to_lower().contains("neg") else "positive"
+		model.add_connection({"scope_id": "root", "polarity": pol,
+			"source_item_id": str(ids[a]), "source_handle_id": from_handle,
+			"target_item_id": str(ids[b]), "target_handle_id": str(wd.get("to_handle", "negative"))})
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	call_deferred("_check_electrical_faults")
+	return ids
+
+
+## Restrict the Library to the level's allowed presets (labels). Empty array =
+## empty library for this level; call clear_tutorial_palette to lift.
+func set_tutorial_palette(labels: Array) -> void:
+	if _lib_panel == null:
+		return
+	var allowed: Dictionary = {}
+	for l in labels:
+		allowed[str(l)] = true
+	_lib_panel.set("tutorial_preset_filter",
+		func(preset: Dictionary) -> bool:
+			return allowed.has(str(preset.get("label", ""))))
+	if _lib_panel.has_method("refresh_gating"):
+		_lib_panel.call("refresh_gating")
+
+
+func clear_tutorial_palette() -> void:
+	if _lib_panel == null:
+		return
+	_lib_panel.set("tutorial_preset_filter", Callable())
+	if _lib_panel.has_method("refresh_gating"):
+		_lib_panel.call("refresh_gating")
+
+
+## Refresh library gating after a ProgressStore grant (unlocks).
+func refresh_library_gating() -> void:
+	if _lib_panel != null and _lib_panel.has_method("refresh_gating"):
+		_lib_panel.call("refresh_gating")
+
+
+## Present a tutorial brief/debrief through the shared fault-card modal.
+func show_tutorial_card(card: Dictionary) -> void:
+	if card.is_empty():
+		return
+	_ensure_fault_card_modal()
+	_fault_card_modal.show_card(card)
+
+
+func _ensure_tutorial_director() -> Node:
+	if _tutorial_director != null and is_instance_valid(_tutorial_director):
+		return _tutorial_director
+	var script := load("res://gameplay/tutorial_director.gd") as GDScript
+	if script == null:
+		return null
+	_tutorial_director = script.new()
+	_tutorial_director.name = "TutorialDirector"
+	add_child(_tutorial_director)
+	if _tutorial_director.has_method("bind_graph_view"):
+		_tutorial_director.call("bind_graph_view", self)
+	return _tutorial_director
+
+
+func _on_bootcamp_pressed() -> void:
+	var director := _ensure_tutorial_director()
+	if director != null and director.has_method("toggle"):
+		director.call("toggle")
+
+
+## First-load query: offer the bootcamp to brand-new players. Runs from the
+## view's _ready (deferred poll) so no scene-shell (main.gd) wiring is needed;
+## hard no-op headless, under CLI harness runs, and once answered.
+func _maybe_show_tutorial_prompt(attempts_left: int = 120) -> void:
+	if Engine.is_editor_hint() or DisplayServer.get_name() == "headless":
+		return
+	if not OS.get_cmdline_user_args().is_empty():
+		return  # playtest-harness / capture run — never pop UI
+	if not ProgressStore.is_new_player():
+		return
+	# Wait out the terrain-load overlay and the F1 first-run help.
+	var ui_layer := get_parent()
+	var loading := ui_layer != null and ui_layer.get_node_or_null("TerrainLoadOverlay") != null
+	var help := ui_layer.get_node_or_null("HelpOverlayUI") if ui_layer != null else null
+	var help_open := help != null and help is CanvasItem and (help as CanvasItem).visible
+	if (loading or help_open) and attempts_left > 0:
+		get_tree().create_timer(1.0).timeout.connect(
+			_maybe_show_tutorial_prompt.bind(attempts_left - 1), CONNECT_ONE_SHOT)
+		return
+	var modal := TutorialIntroModal.new()
+	modal.name = "TutorialIntroModal"
+	if ui_layer != null:
+		ui_layer.add_child(modal)
+	else:
+		add_child(modal)
+	modal.start_requested.connect(func() -> void:
+		refresh_library_gating()
+		var director := _ensure_tutorial_director()
+		if director != null and director.has_method("start"):
+			director.call("start")
+	)
+	modal.skip_requested.connect(func() -> void:
+		refresh_library_gating()
+	)
+	modal.open()
 
 
 
@@ -1707,7 +1911,10 @@ func _build_topbar() -> Control:
 	sysrev_btn.pressed.connect(_on_system_review)
 	challenge_btn.tooltip_text = "Challenges — structured survival missions"
 	challenge_btn.pressed.connect(_on_challenge_pressed)
-	for b: Button in [_undo_btn, _redo_btn, reset_btn, sysrev_btn, challenge_btn]:
+	var bootcamp_btn := _make_topbar_btn("🎓")
+	bootcamp_btn.tooltip_text = "Solar Bootcamp — learn the graph from the battery up"
+	bootcamp_btn.pressed.connect(_on_bootcamp_pressed)
+	for b: Button in [_undo_btn, _redo_btn, reset_btn, sysrev_btn, challenge_btn, bootcamp_btn]:
 		left_grp.add_child(b)
 	_update_undo_redo_btns()
 
@@ -10296,31 +10503,48 @@ func _input(event: InputEvent) -> void:
 		if sl != null and sl.has_method("is_panel_visible") and sl.is_panel_visible():
 			return
 
-	visible = not visible
 	if visible:
-		_apply_graph_open_mode_from_sim_state()
-		# Pause survival mechanics while graph is open
-		var m := _get_scene_main_node()
-		if m != null and m.get("gameplay_mechanics_paused") != null:
-			_gameplay_paused_before_graph = bool(m.gameplay_mechanics_paused)
-			m.gameplay_mechanics_paused = true
-		var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
-		if gr != null:
-			gr.set_survival_paused(true)
-		# Re-sync load automations so rules fire even if the graph was
-		# closed and the engine was cleared since last inspect
-		if _inspector_panel != null and _inspector_panel.has_method("sync_all_load_automations"):
-			_inspector_panel.call("sync_all_load_automations", model)
+		_apply_graph_close_side_effects()
 	else:
-		# Restore survival state from before the graph was opened
-		var m := _get_scene_main_node()
-		if m != null and m.get("gameplay_mechanics_paused") != null:
-			m.gameplay_mechanics_paused = _gameplay_paused_before_graph
-		var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
-		if gr != null:
-			gr.set_survival_paused(_gameplay_paused_before_graph)
+		_apply_graph_open_side_effects()
 	_update_make_array_quick_button()
 	get_viewport().set_input_as_handled()
+
+
+## Programmatic open (tutorial director) — same side effects as the G toggle.
+func open_graph_view() -> void:
+	if visible:
+		return
+	_apply_graph_open_side_effects()
+	_update_make_array_quick_button()
+
+
+func _apply_graph_open_side_effects() -> void:
+	visible = true
+	_apply_graph_open_mode_from_sim_state()
+	# Pause survival mechanics while graph is open
+	var m := _get_scene_main_node()
+	if m != null and m.get("gameplay_mechanics_paused") != null:
+		_gameplay_paused_before_graph = bool(m.gameplay_mechanics_paused)
+		m.gameplay_mechanics_paused = true
+	var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
+	if gr != null:
+		gr.set_survival_paused(true)
+	# Re-sync load automations so rules fire even if the graph was
+	# closed and the engine was cleared since last inspect
+	if _inspector_panel != null and _inspector_panel.has_method("sync_all_load_automations"):
+		_inspector_panel.call("sync_all_load_automations", model)
+
+
+func _apply_graph_close_side_effects() -> void:
+	visible = false
+	# Restore survival state from before the graph was opened
+	var m := _get_scene_main_node()
+	if m != null and m.get("gameplay_mechanics_paused") != null:
+		m.gameplay_mechanics_paused = _gameplay_paused_before_graph
+	var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
+	if gr != null:
+		gr.set_survival_paused(_gameplay_paused_before_graph)
 
 
 # ---------------------------------------------------------------------------
@@ -11771,6 +11995,11 @@ func _sync_solar_ui_from_graph() -> void:
 # ---------------------------------------------------------------------------
 
 func collect_save_state() -> Dictionary:
+	# Sandbox safety: while the tutorial owns the canvas, the authoritative
+	# player state is the snapshot taken on entry — game saves and autosaves
+	# must capture THAT, never the throwaway level content.
+	if _sandbox_active and not _sandbox_pre_state.is_empty():
+		return _sandbox_pre_state.duplicate(true)
 	var pan  := Vector2.ZERO
 	var zoom := 1.0
 	if _graph_canvas != null:
@@ -11823,6 +12052,16 @@ func collect_save_state() -> Dictionary:
 func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 	if data.is_empty():
 		return
+	# An external load (game load, import) while the tutorial sandbox is up:
+	# the incoming state wins. Drop the sandbox WITHOUT restoring the pre-state
+	# and tell the director to stand down.
+	if _sandbox_active and not bool(options.get("sandbox", false)):
+		_sandbox_active = false
+		_sandbox_pre_state = {}
+		_autosave_suspended = false
+		if _bridge != null and _bridge.has_method("set_enabled"):
+			_bridge.call("set_enabled", true)
+		sandbox_interrupted.emit()
 	# Game snapshot must latch so deferred per-map autosave restore cannot
 	# clobber it. Graph import / autosave restore leave the flag alone.
 	if bool(options.get("from_game_save", false)):

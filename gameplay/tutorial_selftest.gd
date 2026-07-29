@@ -1,11 +1,13 @@
 extends SceneTree
 
 ## Offline self-test for the Solar Bootcamp tutorial framework.
-## Part 1 (Phase B): ProgressStore — grandfathering, unlock grants, level
-## completion, disk round-trip. Extended by later phases with the level
-## catalog + goal predicates.
+## Part 1: ProgressStore — grandfathering, unlock grants, level completion,
+## disk round-trip. Part 2: level catalog integrity (every seed/unlock/palette
+## entry resolves to a real preset), def round-trip, and TutorialGoals
+## predicates over synthetic graphs reproducing each level's win state.
 
 const SCRATCH_PATH := "user://selftest_progress.json"
+const GraphModelScript := preload("res://system_graph/data/graph_model.gd")
 
 
 func _initialize() -> void:
@@ -16,9 +18,15 @@ func _initialize() -> void:
 	fails += _test_levels()
 	fails += _test_disk_round_trip()
 	fails += _test_unlock_all()
+	fails += _test_catalog_integrity()
+	fails += _test_level_def_round_trip()
+	fails += _test_goal_fault_observed()
+	fails += _test_goal_build_pwm()
+	fails += _test_goal_build_bus_and_watts()
+	fails += _test_goal_array_config()
 	_cleanup()
 	if fails == 0:
-		print("TUTORIAL SELFTEST PASS  (6 checks)")
+		print("TUTORIAL SELFTEST PASS  (12 checks)")
 		quit(0)
 	else:
 		print("TUTORIAL SELFTEST FAIL  (%d failed)" % fails)
@@ -143,3 +151,213 @@ func _test_unlock_all() -> int:
 		push_error("unlock_all should open everything")
 		return 1
 	return 0
+
+
+# ---------------------------------------------------------------------------
+# Part 2 — catalog + goals
+# ---------------------------------------------------------------------------
+
+## Every level id unique + ordered; every seed label, allowed preset, and
+## "preset:*" unlock resolves to a real library preset; "cat:*" unlocks name
+## real categories; every non-run goal has a known kind.
+func _test_catalog_integrity() -> int:
+	var levels := TutorialCatalog.all_levels()
+	if levels.size() < 7:
+		push_error("expected at least 7 bootcamp levels, got %d" % levels.size())
+		return 1
+	var seen_ids: Dictionary = {}
+	var cat_ids: Dictionary = {}
+	for cat in ComponentPresets.CATEGORIES:
+		cat_ids[str((cat as Dictionary).get("id", ""))] = true
+	var prev_index := 0
+	for lvl_v in levels:
+		var lvl: TutorialLevelDef = lvl_v
+		if lvl.id.is_empty() or seen_ids.has(lvl.id):
+			push_error("duplicate/empty level id '%s'" % lvl.id)
+			return 1
+		seen_ids[lvl.id] = true
+		if lvl.index <= prev_index:
+			push_error("level indexes must ascend (%s)" % lvl.id)
+			return 1
+		prev_index = lvl.index
+		for e in lvl.seed:
+			var label := str((e as Dictionary).get("preset_label", ""))
+			if TutorialCatalog.find_preset(label).is_empty():
+				push_error("%s: seed preset '%s' does not resolve" % [lvl.id, label])
+				return 1
+		for w in lvl.seed_wires:
+			var a := int((w as Dictionary).get("from", -1))
+			var b := int((w as Dictionary).get("to", -1))
+			if a < 0 or b < 0 or a >= lvl.seed.size() or b >= lvl.seed.size():
+				push_error("%s: seed wire indexes out of range" % lvl.id)
+				return 1
+		for label_v in lvl.allowed_presets:
+			if TutorialCatalog.find_preset(str(label_v)).is_empty():
+				push_error("%s: allowed preset '%s' does not resolve" % [lvl.id, str(label_v)])
+				return 1
+		for u in lvl.unlocks:
+			var s := str(u)
+			if s.begins_with("cat:"):
+				if not cat_ids.has(s.trim_prefix("cat:")):
+					push_error("%s: unlock category '%s' does not exist" % [lvl.id, s])
+					return 1
+			elif s.begins_with("preset:"):
+				if TutorialCatalog.find_preset(s.trim_prefix("preset:")).is_empty():
+					push_error("%s: unlock preset '%s' does not resolve" % [lvl.id, s])
+					return 1
+			else:
+				push_error("%s: unlock entry '%s' has no cat:/preset: prefix" % [lvl.id, s])
+				return 1
+		if not lvl.is_run_level() \
+				and str(lvl.goal.get("kind", "")) not in ["fault_observed", "build"]:
+			push_error("%s: unknown goal kind '%s'" % [lvl.id, str(lvl.goal.get("kind", ""))])
+			return 1
+	if TutorialCatalog.next_after(str(levels[0].id)) != str(levels[1].id):
+		push_error("next_after should walk the catalog order")
+		return 1
+	return 0
+
+
+func _test_level_def_round_trip() -> int:
+	var src := TutorialCatalog.by_id("bootcamp_07_3s2p")
+	if src == null:
+		push_error("level 7 missing from catalog")
+		return 1
+	var back := TutorialLevelDef.from_dict(src.to_dict())
+	if back.id != src.id or back.index != src.index \
+			or back.seed.size() != src.seed.size() \
+			or back.seed_wires.size() != src.seed_wires.size() \
+			or back.goal != src.goal or back.unlocks != src.unlocks:
+		push_error("TutorialLevelDef did not round-trip")
+		return 1
+	return 0
+
+
+func _test_goal_fault_observed() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	var ctx := TutorialGoals.build_ctx(model, {})
+	if bool(TutorialGoals.evaluate({"kind": "fault_observed", "reason": "short_circuit"}, ctx).get("met", true)):
+		push_error("fault goal met with no fault seen")
+		return 1
+	ctx = TutorialGoals.build_ctx(model, {"short_circuit": true})
+	if not bool(TutorialGoals.evaluate({"kind": "fault_observed", "reason": "short_circuit"}, ctx).get("met", false)):
+		push_error("fault goal should be met once observed")
+		return 1
+	return 0
+
+
+## Level 3 shape: battery + 300 W panel + 10 A PWM → deliverable 120 W.
+func _test_goal_build_pwm() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	_add_battery(model, "bat", 12.0)
+	_add_panel(model, "p1", 300.0, 40.0)
+	_add_controller(model, "ctrl", 50.0, 10.0)
+	# Unwired: goal must not pass.
+	var ctx := TutorialGoals.build_ctx(model, {})
+	var goal := {"kind": "build", "min_deliverable_w": 100.0}
+	if bool(TutorialGoals.evaluate(goal, ctx).get("met", true)):
+		push_error("unwired system should not meet the build goal")
+		return 1
+	_wire(model, "p1", "positive", "ctrl", "pvPositive")
+	_wire(model, "p1", "negative", "ctrl", "pvNegative")
+	_wire(model, "ctrl", "batteryPositive", "bat", "positive")
+	_wire(model, "ctrl", "batteryNegative", "bat", "negative")
+	ctx = TutorialGoals.build_ctx(model, {})
+	var res := TutorialGoals.evaluate(goal, ctx)
+	if not bool(res.get("met", false)):
+		push_error("wired PWM system should meet build goal: %s" % str(res))
+		return 1
+	var deliv := TutorialGoals.deliverable(model, ctx["flat_conns"], ctx["analysis"])
+	if absf(float(deliv.get("deliverable_w", 0.0)) - 120.0) > 0.5:
+		push_error("PWM deliverable expected 120 W got %s" % str(deliv))
+		return 1
+	# A destroyed node anywhere blocks build goals.
+	var sp: Dictionary = (model.get_item("bat").get("specs", {}) as Dictionary).duplicate(true)
+	sp["destroyed"] = true
+	model.update_item("bat", {"specs": sp})
+	ctx = TutorialGoals.build_ctx(model, {})
+	if bool(TutorialGoals.evaluate(goal, ctx).get("met", true)):
+		push_error("destroyed battery should block the build goal")
+		return 1
+	return 0
+
+
+## Level 5 shape: 2S bank (24 V) + 4 panels parallel + 30 A MPPT → 720 W.
+func _test_goal_build_bus_and_watts() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	_add_battery(model, "a", 12.0)
+	_add_battery(model, "b", 12.0)
+	_add_controller(model, "ctrl", 150.0, 30.0)
+	_wire(model, "a", "positive", "b", "negative")
+	for i in 4:
+		_add_panel(model, "p%d" % i, 300.0, 40.0)
+		_wire(model, "p%d" % i, "positive", "ctrl", "pvPositive")
+		_wire(model, "p%d" % i, "negative", "ctrl", "pvNegative")
+	_wire(model, "ctrl", "batteryPositive", "b", "positive")
+	_wire(model, "ctrl", "batteryNegative", "a", "negative")
+	var ctx := TutorialGoals.build_ctx(model, {})
+	var goal := {"kind": "build", "min_bus_v": 24.0, "min_deliverable_w": 700.0}
+	var res := TutorialGoals.evaluate(goal, ctx)
+	if not bool(res.get("met", false)):
+		push_error("24 V bank + 4-panel parallel array should meet L5 goal: %s" % str(res))
+		return 1
+	var deliv := TutorialGoals.deliverable(model, ctx["flat_conns"], ctx["analysis"])
+	if absf(float(deliv.get("deliverable_w", 0.0)) - 720.0) > 0.5:
+		push_error("24 V × 30 A deliverable expected 720 W got %s" % str(deliv))
+		return 1
+	return 0
+
+
+## Level 7 shape: 6 panels as 3S2P matches (3,2); all-series does not.
+func _test_goal_array_config() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	_add_battery(model, "bat", 12.0)
+	_add_controller(model, "ctrl", 150.0, 30.0)
+	for i in 6:
+		_add_panel(model, "p%d" % i, 300.0, 40.0)
+	# String A: p0→p1→p2 in series; String B: p3→p4→p5.
+	_wire(model, "p0", "positive", "p1", "negative")
+	_wire(model, "p1", "positive", "p2", "negative")
+	_wire(model, "p3", "positive", "p4", "negative")
+	_wire(model, "p4", "positive", "p5", "negative")
+	# Both strings parallel into the controller.
+	_wire(model, "p2", "positive", "ctrl", "pvPositive")
+	_wire(model, "p5", "positive", "ctrl", "pvPositive")
+	_wire(model, "p0", "negative", "ctrl", "pvNegative")
+	_wire(model, "p3", "negative", "ctrl", "pvNegative")
+	_wire(model, "ctrl", "batteryPositive", "bat", "positive")
+	_wire(model, "ctrl", "batteryNegative", "bat", "negative")
+	var flat := GraphNesting.flat_connections(model)
+	if not TutorialGoals.array_config_matches(model, flat, 3, 2):
+		push_error("3S2P wiring should match (3,2)")
+		return 1
+	if TutorialGoals.array_config_matches(model, flat, 6, 1):
+		push_error("3S2P wiring must not match (6,1)")
+		return 1
+	return 0
+
+
+func _add_battery(model: GraphModel, id: String, voltage: float) -> void:
+	model.add_item({"id": id, "type": "battery", "x": 0.0, "y": 200.0,
+		"width": 110.0, "height": 80.0, "scope_id": "root",
+		"specs": {"voltage": voltage, "ah": 100.0, "kwh": 1.2, "soc": 0.8}})
+
+
+func _add_panel(model: GraphModel, id: String, wmp: float, voc: float) -> void:
+	model.add_item({"id": id, "type": "panel", "x": 0.0, "y": -200.0,
+		"width": 120.0, "height": 100.0, "scope_id": "root",
+		"specs": {"wmp": wmp, "voc": voc, "vmp": voc * 0.8, "isc": 9.9, "imp": 9.4}})
+
+
+func _add_controller(model: GraphModel, id: String, max_voc: float, amps: float) -> void:
+	model.add_item({"id": id, "type": "controller", "x": 0.0, "y": 0.0,
+		"width": 140.0, "height": 120.0, "scope_id": "root",
+		"specs": {"max_voc": max_voc, "max_charge_amps": amps}})
+
+
+func _wire(model: GraphModel, src: String, src_handle: String,
+		tgt: String, tgt_handle: String) -> void:
+	var pol := "negative" if src_handle.to_lower().contains("neg") else "positive"
+	model.add_connection({"scope_id": "root", "polarity": pol,
+		"source_item_id": src, "source_handle_id": src_handle,
+		"target_item_id": tgt, "target_handle_id": tgt_handle})
