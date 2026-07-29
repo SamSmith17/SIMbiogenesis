@@ -87,6 +87,12 @@ Today's seams a new feature attaches to, in rough order of decoupling:
   simulated components.
 - **Component definitions** — SketchUp-style reusable super-nodes persisted to
   `user://user_presets.json`; pure data, no code. Best for user/mod content.
+- **Tutorial levels & challenge missions** — pure data additions: Solar
+  Bootcamp levels in `gameplay/tutorial_catalog.gd` (seed items/wires, goal
+  spec, palette, unlock grants; predicates live in `tutorial_goals.gd`),
+  challenge missions in `gameplay/challenge_catalog.gd` (a def with
+  `run_mode: "prebake"` gets the whole bake→playback→breakpoint→replay loop
+  for free). Best for curriculum and mission content.
 
 When you find yourself needing to edit a core monolith to add a feature, prefer
 adding a **registration hook** there once, then having the feature register into

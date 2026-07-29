@@ -72,8 +72,23 @@ Godot.exe.exe --headless --path . --script system_graph/graph_nesting_selftest.g
 # re-stamp, Make Unique detach, v6->v7 definitions round-trip; --import first):
 Godot.exe.exe --headless --path . --script system_graph/graph_components_selftest.gd
 # Graph electrical self-test (offline — string Voc, controller ranking, Voc across
-# a super-node boundary):
+# a super-node boundary; DC side: battery-bank bus topology (4S/2S2P/mismatch),
+# short-circuit detection (direct + closed series loop, parallel banks clean),
+# unregulated-PV battery overcharge, and the controller current-throttle
+# wattages 120/360/720/1200 W pinned; extend with every electrical change):
 Godot.exe.exe --headless --path . --script system_graph/graph_electrical_selftest.gd
+# Solar Bootcamp tutorial (offline — ProgressStore grandfathering/grants/levels,
+# 12-level catalog integrity incl. every seed/unlock/palette entry resolving,
+# TutorialGoals predicates: deliverable-watts/bus-V/string-config over synthetic
+# graphs, AC-load wiring, compound-containing, run verdicts; extend with every
+# tutorial change):
+Godot.exe.exe --headless --path . --script gameplay/tutorial_selftest.gd
+# Challenge pre-bake loop (offline — span step policy vs the 20160-sample
+# timeline caps, prebake ChallengeDef round-trip + legacy default, catalog
+# prebake entries, power-failure accumulator edges, two-run bake determinism):
+Godot.exe.exe --headless --path . --script gameplay/challenge_bake_selftest.gd
+# Challenge defs/catalog/runner rules (offline):
+Godot.exe.exe --headless --path . --script gameplay/challenge_selftest.gd
 # 3D conduits (offline — kinds/conceptual default, mesh/drape/lights, loss,
 # bound-prop routability, connection ports, triangle pick, ortho elbows;
 # run --import first so new class_names register):
@@ -1305,6 +1320,73 @@ StaticBody would shove the player); Ctrl/Alt-aim shows "Name — status" and
 that person's Label3D nametag. Selftest + the `--capture=population` harness
 (which also asserts the crosshair contract + space-marker resolution) are in
 the Validation list.
+
+## Solar Bootcamp tutorial + pre-baked challenges
+
+**DC electrical layer (`system_graph/graph_dc_electrical.gd`, sibling of
+PvElectrical, both over `GraphNesting.flat_connections`).** Battery-bank
+topology via a weighted union-find over conductive nets (KVL
+potential-consistency: an inconsistent constraint IS a closed loop with net
+EMF = a **short circuit**; equal-voltage parallel banks are consistent and
+clean). Derives bus voltage (series sums), capacity, S×P counts, chain
+mismatch. `find_battery_overvoltage` = PV reachable with no live controller
+in the path and string Voc > 1.217×nominal charge ceiling.
+`controller_throttle` = P ≈ V_bus × max_charge_amps (Victron PWM/MPPT paper)
+— the previously dead preset amp specs made live.
+`system_graph_view._check_electrical_faults` (renamed from
+`_check_pv_voltage_faults`) trips all three fault families; shorts sever the
+loop's wires (reuses conduit burnout severing); batteries share the
+controller's DESTROYED/RESET canvas contract; cards live in
+`GraphEducationCards.card_for_fault` keyed by `GraphNodeState` reason and
+present through `GraphFaultCardModal` (queued; replaced the hand-rolled
+overlay whose `%`-precedence format bug is now selftest-guarded).
+`_tick_dc_throttle` runs AMBIENT (graph closed too) and pushes the summed
+delivery cap into `SolarUI.set_graph_dc_limit_w` (−1 = no cap; PV not routed
+through a real controller+bank passes uncapped so freeplay is untouched).
+
+**Tutorial (`gameplay/tutorial_*` + `scenes/ui/tutorial_hud.gd`).** 12
+data-driven levels (`TutorialCatalog`): short circuit (failure IS the win) →
+overcharge → PWM 120 W → array scaling 360 W → 24 V/720 W → 48 V/1200 W →
+3S2P string sizing → 24 h runs with loads/utilization → Ctrl+G power-station
+merge → unlock_all. Goals (`TutorialGoals`) are pure TOPOLOGY predicates
+("deliverable watts" = min(array W, bus×amps)) so they read the same at
+midnight and selftest offline; run-levels are judged from bake results
+(`evaluate_run`). `TutorialDirector` (lazy SystemGraphView child, 🎓 toolbar
+button) owns flow + the **sandbox**: `begin/end_tutorial_sandbox` snapshot
+and restore the player's real graph, `collect_save_state()` RETURNS THE
+PRE-STATE while sandboxed (autosave also flag-suspended), an external
+apply_save_state drops the sandbox (incoming wins, `sandbox_interrupted`),
+solar_bridge is `set_enabled(false)`d, and the director snapshots clock +
+battery SOC so tutorial runs can't leak time into the real world. Unlocks
+persist in `ProgressStore` (`user://progress.json`) — **no file = everything
+unlocked** (grandfathering for existing installs); the first-load prompt
+(new players, headless/harness no-op) offers bootcamp vs skip-unlock-all;
+`library_panel` gates categories/presets by unlock (keyed by preset LABEL)
+with a per-level `tutorial_preset_filter` override. Trainer presets (300 W /
+40 Voc panel, PWM 10 A, MPPT 150/30) make the curriculum numbers exact.
+
+**Pre-baked challenges (`gameplay/challenge_bake_engine.gd`).** `run_mode:
+"prebake"` ChallengeDefs (span day/month/year → 1/4/38-min sample steps,
+sized to the 20160-sample timeline caps) compute the WHOLE span in seconds:
+energy via SolarUI's `_sim_series` (reused so the timeline's SIM clip lane
+draws the bake for free), resources via `ResourceFlowEngine.render_step`
+(AC availability injected from the co-baked SOC), population via
+`NpcPopulationBridge.tick_at` at ≤0.1 h substeps (never the stochastic >6 h
+catch-up). Failure = power failure (SOC PINNED at the floor while net<0,
+sustained 0.25 h — the clamp means SOC never reads below the floor),
+colony collapse, or stockouts; playback sweeps the playhead ~20 s reading
+baked buffers (battery read-through, `seek_all_tanks`), parks at the
+breakpoint, and **retry replays the SAME segment** against the player's
+edits (specs/NPC/battery snapshots restore; wiring changes survive).
+Ownership discipline mirrors the video exporter: time_scale 0 + the view's
+`set_ambient_flow_suspended` (the ambient tick would otherwise rewind tank
+specs mid-bake via its frozen-clock scrub path); every exit through
+`_release_world()`. ChallengeRunner maps engine signals onto the classic
+challenge_started/failed/won wiring (main.gd/timeline/picker unchanged;
+realtime challenges byte-identical; runner refuses to start over an active
+tutorial sandbox and vice versa). "Useful utilization" = (loads served +
+charge banked)/potential — the generated-solar channel reads ~100% even
+while the battery-full clamp wastes sun, so it is the wrong teaching number.
 
 ## Conventions
 
