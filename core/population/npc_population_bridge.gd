@@ -70,7 +70,14 @@ func tick(model, flow_engine, main: Node) -> void:
 		return
 	if not main.has_method("get_absolute_hours"):
 		return
-	var abs_h: float = float(main.call("get_absolute_hours"))
+	tick_at(model, flow_engine, main, float(main.call("get_absolute_hours")))
+
+
+## Same step at an EXPLICIT timestamp — the challenge bake engine advances the
+## population along its own fixed-step cursor while the world clock is frozen.
+func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
+	if model == null or flow_engine == null or main == null:
+		return
 	_last_abs_h = abs_h
 	# Kept so the Routines panel can persist an edited schedule without being
 	# handed the model separately.
@@ -690,6 +697,25 @@ func take_events() -> Array:
 	var out := _pending_events
 	_pending_events = []
 	return out
+
+
+## Challenge replay: snapshot / restore every live engine so a retry replays
+## the SAME segment from identical population state.
+func snapshot_all(abs_h: float) -> Dictionary:
+	var out: Dictionary = {}
+	for iid in _engines:
+		out[str(iid)] = (_engines[iid] as NpcPopulationEngine).snapshot(abs_h)
+	return out
+
+
+func restore_all(snaps: Dictionary) -> void:
+	for iid in snaps:
+		if _engines.has(str(iid)) and snaps[iid] is Dictionary:
+			(_engines[str(iid)] as NpcPopulationEngine).restore(snaps[iid] as Dictionary)
+
+
+func has_pop_driven() -> bool:
+	return not _engines.is_empty()
 
 
 ## Where the population anchors in world XZ: the habitat's 3D twin when one

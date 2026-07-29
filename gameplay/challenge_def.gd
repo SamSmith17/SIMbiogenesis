@@ -26,6 +26,33 @@ var max_ac_down_hours: float = -1.0
 var min_mean_closure_pct: float = 0.0
 var min_water_closure_pct: float = 0.0
 var min_autonomy_days: float = 0.0
+## "realtime" (default — the classic 1 Hz live run) or "prebake" (the
+## ChallengeBakeEngine computes the whole span in seconds, plays it back, and
+## replays the SAME segment on retry).
+var run_mode: String = "realtime"
+## Prebake span preset: "" (use duration_hours) | "day" | "month" | "year".
+var span: String = ""
+## Prebake fail conditions.
+var fail_on_power_failure: bool = false
+var fail_on_collapse: bool = false
+## Win threshold on PV utilization (∫delivered / ∫potential solar), 0 = ignore.
+var min_pv_utilization_pct: float = 0.0
+
+
+func is_prebake() -> bool:
+	return run_mode == "prebake"
+
+
+## duration_hours with the span preset applied.
+func resolved_duration_hours() -> float:
+	match span:
+		"day":
+			return 24.0
+		"month":
+			return 720.0
+		"year":
+			return 8760.0
+	return duration_hours
 
 
 static func from_dict(d: Dictionary) -> ChallengeDef:
@@ -47,6 +74,11 @@ static func from_dict(d: Dictionary) -> ChallengeDef:
 	c.min_mean_closure_pct = float(d.get("min_mean_closure_pct", 0.0))
 	c.min_water_closure_pct = float(d.get("min_water_closure_pct", 0.0))
 	c.min_autonomy_days = float(d.get("min_autonomy_days", 0.0))
+	c.run_mode = str(d.get("run_mode", "realtime"))
+	c.span = str(d.get("span", ""))
+	c.fail_on_power_failure = bool(d.get("fail_on_power_failure", false))
+	c.fail_on_collapse = bool(d.get("fail_on_collapse", false))
+	c.min_pv_utilization_pct = float(d.get("min_pv_utilization_pct", 0.0))
 	return c
 
 
@@ -54,6 +86,12 @@ static func reason_label(reason: String) -> String:
 	match reason:
 		"starvation":
 			return "A habitat need was not met in time."
+		"power_failure":
+			return "Total power failure — the battery hit its floor with loads unserved."
+		"colony_collapsed":
+			return "The colony collapsed — too many people gave up and left."
+		"pv_utilization_low":
+			return "Too much solar potential went unharvested."
 		"ac_down":
 			return "AC power was unavailable for too long."
 		"closure_low":
@@ -89,4 +127,9 @@ func to_dict() -> Dictionary:
 		"min_mean_closure_pct": min_mean_closure_pct,
 		"min_water_closure_pct": min_water_closure_pct,
 		"min_autonomy_days": min_autonomy_days,
+		"run_mode": run_mode,
+		"span": span,
+		"fail_on_power_failure": fail_on_power_failure,
+		"fail_on_collapse": fail_on_collapse,
+		"min_pv_utilization_pct": min_pv_utilization_pct,
 	}

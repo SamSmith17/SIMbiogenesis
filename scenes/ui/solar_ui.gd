@@ -308,6 +308,8 @@ var _graph_controller_destroyed: bool = false
 ## Delivered-power cap (W) from graph DC wiring; −1 = no cap. See
 ## set_graph_dc_limit_w / SystemGraphView._tick_dc_throttle.
 var _graph_dc_limit_w: float = -1.0
+## Challenge playback: battery reads the baked _sim_series at the playhead.
+var _playback_series_active: bool = false
 var _ha_daily_solar_override: float = -1.0  # -1 = not overridden (kWh)
 var _ha_connected: bool = false
 
@@ -3158,6 +3160,78 @@ func make_render_evaluator() -> Callable:
 	return Callable(self, "evaluate_inputs_at")
 
 
+# ==================== CHALLENGE PRE-BAKE / PLAYBACK ====================
+# ChallengeBakeEngine drives _sim_series directly (its own frame budget, not
+# BatchRenderer) — reusing the SIM clip lane the timeline already draws.
+
+## Battery SOC floor in kWh (the hard clamp; "power failure" is SOC pinned
+## here while net < 0 — SOC itself never reads below it).
+func min_battery_kwh() -> float:
+	return BATTERY_CAPACITY_KWH * MIN_BATTERY_PERCENT / 100.0
+
+
+## Configure + anchor the sim series for a challenge bake at `start_abs` with
+## a span-appropriate sample step (coarser than 1 min for month/year spans so
+## the whole run fits MAX_SAMPLES). Anchors at the LIVE battery SOC. Returns
+## the series for the engine to step.
+func prepare_challenge_series(start_abs: float, step_h: float) -> EnergyTimeline:
+	_sim_series.configure(BATTERY_CAPACITY_KWH, CHARGE_EFFICIENCY,
+		DISCHARGE_EFFICIENCY, min_battery_kwh())
+	_sim_series.set_evaluator(make_render_evaluator())
+	_sim_series.clear()
+	_sim_series.step_hours = maxf(step_h, 1.0 / 60.0)  # only ever set on a CLEARED buffer
+	var inp := evaluate_inputs_at(start_abs)
+	_sim_series.init_anchor(start_abs, battery_kwh_stored,
+		float(inp.get("solar_kw", 0.0)), float(inp.get("aux_kw", 0.0)),
+		float(inp.get("load_kw", 0.0)))
+	_sim_render_start_abs = start_abs
+	_sim_render_end_abs = start_abs
+	_sim_series_ready = false
+	render_state_changed.emit()
+	return _sim_series
+
+
+## Mark the baked span complete so the timeline's SIM clip lane draws it.
+func finish_challenge_series(end_abs: float) -> void:
+	_sim_render_end_abs = end_abs
+	_sim_series_ready = true
+	render_state_changed.emit()
+
+
+## Release the challenge bake's series (restores the default 1-min step for
+## the observed-vs-sim render feature).
+func release_challenge_series() -> void:
+	set_playback_series_active(false)
+	_sim_series.clear()
+	_sim_series.step_hours = 1.0 / 60.0
+	_sim_series_ready = false
+	render_state_changed.emit()
+
+
+## While ON, the battery HUD/SOC reads the baked _sim_series at the playhead
+## instead of integrating live — challenge playback scrubs the baked run
+## without polluting the live EnergyTimeline history.
+func set_playback_series_active(on: bool) -> void:
+	_playback_series_active = on
+
+
+## Re-anchor the live battery after a challenge run commits (win) or aborts:
+## sets the SOC and clears the live timeline so it re-anchors next tick.
+func reanchor_live_battery(soc_kwh: float) -> void:
+	battery_kwh_stored = clampf(soc_kwh, 0.0, BATTERY_CAPACITY_KWH)
+	energy_timeline.clear()
+
+
+## Potential (pre-throttle) solar at an instant — the PV-utilization metric's
+## denominator: what the sky offered, ignoring the graph DC current cap.
+func evaluate_potential_solar_at(abs_hours: float) -> float:
+	var saved := _graph_dc_limit_w
+	_graph_dc_limit_w = -1.0
+	var kw := evaluate_solar_at(abs_hours)
+	_graph_dc_limit_w = saved
+	return kw
+
+
 ## Battery inputs at an arbitrary absolute-hours instant.
 func evaluate_inputs_at(abs_hours: float) -> Dictionary:
 	var solar : float = evaluate_solar_at(abs_hours)
@@ -3443,6 +3517,17 @@ func _update_battery(_delta: float) -> void:
 	# SOC. Forward motion integrates and appends new samples; backward motion
 	# reads the cached curve, so the battery "uncharges" exactly as it charged.
 	var abs_h : float = float(main_node.call("get_absolute_hours")) if main_node.has_method("get_absolute_hours") else 0.0
+	# Challenge playback: the baked run owns SOC at the playhead. The live
+	# timeline is NOT advanced (the playhead sweep would otherwise integrate a
+	# whole span of bogus live samples into real history).
+	if _playback_series_active and not bool(_sim_series.is_empty()):
+		var ps := _sim_series.sample_at(abs_h)
+		battery_kwh_stored = clampf(float(ps.get("soc_kwh", battery_kwh_stored)),
+			0.0, BATTERY_CAPACITY_KWH)
+		var pb_pct : float = (battery_kwh_stored / BATTERY_CAPACITY_KWH) * 100.0
+		_apply_soc_hysteresis(pb_pct)
+		_sync_power_available(pb_pct)
+		return
 	var min_kwh : float = BATTERY_CAPACITY_KWH * MIN_BATTERY_PERCENT / 100.0
 	energy_timeline.configure(BATTERY_CAPACITY_KWH, CHARGE_EFFICIENCY, DISCHARGE_EFFICIENCY, min_kwh)
 	if energy_timeline.is_empty():

@@ -28,6 +28,10 @@ var _ac_down_hours: float = 0.0
 var _last_eval_abs: float = -1.0
 var _last_metrics: Dictionary = {}
 var _last_status: String = "idle"
+## Prebake path (run_mode == "prebake"): the bake engine owns the whole
+## bake → playback → breakpoint → retry loop; this runner just maps its
+## signals onto the classic challenge_started/failed/won wiring.
+var _bake_engine: ChallengeBakeEngine = null
 
 
 func _ready() -> void:
@@ -70,6 +74,18 @@ func start_challenge_id(challenge_id: String) -> bool:
 func start_challenge(def: ChallengeDef) -> bool:
 	if def == null or def.id.is_empty():
 		return false
+	# Prebake retry loop: re-starting the SAME prebake challenge while its
+	# engine is parked at a breakpoint replays the segment (with the player's
+	# graph edits) instead of tearing everything down.
+	if _active and _def != null and _def.id == def.id and def.is_prebake() \
+			and _bake_engine != null \
+			and _bake_engine.phase() == ChallengeBakeEngine.Phase.AWAIT_RETRY:
+		if _bake_engine.retry():
+			_last_status = "running"
+			challenge_toast.emit("Retrying: %s (attempt %d)" % [
+				def.title, _bake_engine.attempts()], TOAST_INFO)
+			challenge_started.emit(def.id, def)
+			return true
 	if _active:
 		abort_challenge()
 	_def = def
@@ -93,15 +109,110 @@ func start_challenge(def: ChallengeDef) -> bool:
 	if td != null and td.has_method("set_explicit_mode"):
 		td.call("set_explicit_mode", 2)
 
-	set_process(true)
+	set_process(not def.is_prebake())
 	challenge_started.emit(def.id, def)
 	challenge_toast.emit("Challenge started: %s" % def.title, TOAST_INFO)
 	var gv := _graph_view()
 	if gv != null and gv.has_method("try_seed_puzzle_starter"):
-		var power_only := def.id == "keep_lights_on"
+		var power_only := def.id.begins_with("keep_lights_on")
 		gv.call("try_seed_puzzle_starter", def.occupants, power_only)
+	if def.is_prebake():
+		_ensure_bake_engine()
+		var su := _solar_ui_node()
+		if gv == null or su == null \
+				or not _bake_engine.start(main_node, gv, su, def, _start_abs):
+			_fail_internal("no_main")
+			return false
+		challenge_toast.emit("Pre-computing %.0f h — watch the timeline…" %
+			def.resolved_duration_hours(), TOAST_INFO)
+		return true
 	_evaluate(true)
 	return true
+
+
+func _ensure_bake_engine() -> void:
+	if _bake_engine != null and is_instance_valid(_bake_engine):
+		return
+	_bake_engine = ChallengeBakeEngine.new()
+	_bake_engine.name = "ChallengeBakeEngine"
+	add_child(_bake_engine)
+	_bake_engine.bake_failed_at.connect(_on_bake_failed_at)
+	_bake_engine.retry_ready.connect(_on_bake_retry_ready)
+	_bake_engine.run_succeeded.connect(_on_bake_succeeded)
+
+
+func bake_engine() -> ChallengeBakeEngine:
+	return _bake_engine
+
+
+func _on_bake_failed_at(abs_h: float, reason: String) -> void:
+	challenge_toast.emit("System failed %.1f h in — %s. Watching the run…" % [
+		maxf(abs_h - _start_abs, 0.0), ChallengeDef.reason_label(reason)], TOAST_WARN)
+
+
+## Playback parked at the breakpoint: surface the classic failed result (the
+## picker's Retry button re-calls start_challenge, which becomes a segment
+## replay), but keep the session alive for that retry.
+func _on_bake_retry_ready(_abs_h: float, reason: String, _attempts_n: int) -> void:
+	if _def == null:
+		return
+	_last_status = "failed"
+	challenge_failed.emit(_def.id, reason)
+
+
+func _on_bake_succeeded(bake_result: Dictionary) -> void:
+	if _def == null:
+		return
+	var metrics := _closure_metrics()
+	_last_metrics = metrics
+	var result := {
+		"status": "won",
+		"elapsed_h": float(bake_result.get("elapsed_h", 0.0)),
+		"metrics": metrics,
+		"reason": "",
+	}
+	# PV-utilization win gate (0 = ignore).
+	var util := float(bake_result.get("utilization_pct", 100.0))
+	if _def.min_pv_utilization_pct > 0.0 and util + 1e-6 < _def.min_pv_utilization_pct:
+		_fail_result(result, "pv_utilization_low")
+		return
+	var score := float(metrics.get("score", 0.0))
+	# Utilization-focused prebakes may run scoreless closure metrics (pure
+	# power puzzles) — fall back to a utilization-driven score so a clean run
+	# always records something.
+	if score <= 0.0:
+		score = util * 10.0 + float(bake_result.get("solar_kwh", 0.0))
+	var lat_lon := _lat_lon()
+	# Prebake ids already encode their span (keep_lights_on_day/_month), so the
+	# high-score key is just the id — never compared across different rules.
+	var best := HighScoreStoreScript.record_if_best(
+			float(lat_lon.get("lat", 0.0)), float(lat_lon.get("lon", 0.0)),
+			_def.id, score, {
+				"mean_closure_pct": float(metrics.get("mean_closure_pct", 0.0)),
+				"autonomy_person_days": float(metrics.get("autonomy_person_days", 0.0)),
+				"elapsed_h": float(bake_result.get("elapsed_h", 0.0)),
+				"utilization_pct": util,
+				"attempts": int(bake_result.get("attempts", 1)),
+			})
+	result["score"] = score
+	result["new_best"] = best > 0.0
+	result["utilization_pct"] = util
+	result["attempts"] = int(bake_result.get("attempts", 1))
+	_last_status = "won"
+	_active = false
+	challenge_won.emit(_def.id, result)
+	challenge_toast.emit("Challenge complete: %s (score %.0f, %.0f%% PV used, attempt %d)" % [
+		_def.title, score, util, int(bake_result.get("attempts", 1))], TOAST_OK)
+
+
+func _solar_ui_node() -> Node:
+	var main_node := _main()
+	if main_node == null:
+		return null
+	var su: Node = main_node.get_node_or_null("UILayer/SolarUI")
+	if su == null:
+		su = main_node.find_child("SolarUI", true, false)
+	return su
 
 
 func abort_challenge() -> void:
@@ -111,6 +222,8 @@ func abort_challenge() -> void:
 	_active = false
 	_last_status = "aborted"
 	set_process(false)
+	if _bake_engine != null and _bake_engine.is_active():
+		_bake_engine.abort()
 	challenge_aborted.emit(cid)
 	challenge_toast.emit("Challenge aborted", TOAST_WARN)
 	_def = null

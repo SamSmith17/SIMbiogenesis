@@ -297,11 +297,14 @@ func _make_card(def: ChallengeDef, lat_lon: Dictionary, active_id: String) -> Pa
 	col.add_child(desc)
 
 	var meta := Label.new()
-	meta.text = "%s · %d occupant(s) · %s" % [
-			_format_duration(def.duration_hours),
+	var meta_txt := "%s · %d occupant(s) · %s" % [
+			_format_duration(def.resolved_duration_hours()),
 			def.occupants,
 			_win_hint(def),
 	]
+	if def.is_prebake():
+		meta_txt += " · pre-computed, replay on failure"
+	meta.text = meta_txt
 	meta.add_theme_color_override("font_color", C_TEXT_M)
 	meta.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	col.add_child(meta)
@@ -350,11 +353,21 @@ func _build_result_content(challenge_id: String, won: bool, payload: Dictionary)
 		lines.append("")
 		lines.append("Mean closure: [b]%.0f%%[/b]" % (float(metrics.get("mean_closure_pct", 0.0)) * 100.0))
 		lines.append("Autonomy: [b]%.1f[/b] person-days" % float(metrics.get("autonomy_person_days", 0.0)))
+		if payload.has("utilization_pct"):
+			lines.append("PV utilization: [b]%.0f%%[/b] of what the sky offered" %
+				float(payload.get("utilization_pct", 0.0)))
+		if int(payload.get("attempts", 0)) > 1:
+			lines.append("Cleared on attempt [b]%d[/b]" % int(payload.get("attempts", 1)))
 	else:
 		var reason := str(payload.get("reason", ""))
 		lines.append(ChallengeDefScript.reason_label(reason))
 		if metrics.has("mean_closure_pct"):
 			lines.append("Closure at fail: %.0f%%" % (float(metrics.get("mean_closure_pct", 0.0)) * 100.0))
+		if def != null and def.is_prebake():
+			lines.append("")
+			lines.append("[color=#94a3b8]The timeline is parked at the breakpoint. " +
+				"Fix your system in the graph, then Try again to replay the same " +
+				"stretch of time.[/color]")
 
 	_result_body.text = "\n".join(lines)
 	_result_retry_btn.visible = true

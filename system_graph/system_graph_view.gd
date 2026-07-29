@@ -353,6 +353,8 @@ var _sandbox_active: bool = false
 var _sandbox_pre_state: Dictionary = {}
 var _autosave_suspended: bool = false
 var _tutorial_director: Node = null
+## Set by ChallengeBakeEngine while it owns the flow engine (bake/playback).
+var _ambient_flow_suspended: bool = false
 var _first_load_layout_done: bool = false
 var _fit_deferred_pending: bool = false
 var _checking_voltage: bool = false
@@ -10171,6 +10173,21 @@ func open_npc_routines(item_id: String) -> void:
 	_npc_routines_panel.call("open", _npc_population, item_id)
 
 
+## ChallengeBakeEngine handshake: while suspended, the engine steps the flow
+## sim + population itself (render_step / seek_all_tanks) and the ambient
+## tick stands down entirely.
+func set_ambient_flow_suspended(on: bool) -> void:
+	_ambient_flow_suspended = on
+
+
+func resource_flow_engine() -> RefCounted:
+	return _resource_flow
+
+
+func npc_population_bridge() -> NpcPopulationBridge:
+	return _npc_population
+
+
 ## Departures and collapse are story beats — surface them even with the graph
 ## closed (the toast rides the normal toast channel).
 func _drain_npc_events() -> void:
@@ -10242,6 +10259,11 @@ func _ensure_desire_overlay() -> void:
 
 func _tick_resource_flow_ambient(delta: float) -> void:
 	if _resource_flow == null:
+		return
+	# Challenge bake/playback: the ChallengeBakeEngine owns the flow engine —
+	# the ambient tick would either rewind tank specs mid-bake (frozen clock →
+	# scrub-read) or double-step them during playback.
+	if _ambient_flow_suspended:
 		return
 	# The engine coalesces on its own 0.25 s / 0.5 s accumulator, so on most frames
 	# tick() just accumulates and early-returns. Only pay the bulk-sync + history-

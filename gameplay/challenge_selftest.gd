@@ -37,7 +37,7 @@ func _check(label: String, ok: bool, detail: String = "") -> void:
 
 func _test_catalog() -> void:
 	var all: Array = ChallengeCatalogScript.all_challenges()
-	_check("catalog has 3 challenges", all.size() == 3, "n=%d" % all.size())
+	_check("catalog has 6 challenges", all.size() == 6, "n=%d" % all.size())
 	var ids: Array = []
 	for d: ChallengeDef in all:
 		ids.append(d.id)
