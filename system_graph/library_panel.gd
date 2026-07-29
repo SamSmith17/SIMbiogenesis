@@ -56,10 +56,43 @@ func _ready() -> void:
 func rebuild() -> void:
 	for child in get_children():
 		child.queue_free()
+	_item_btns.clear()  # buttons live under the freed tree — drop the refs
 	_cat_expanded.clear()
 	_cat_contents.clear()
 	_cat_headers.clear()
 	_build()
+
+
+## While a tutorial level restricts the palette, the director installs a
+## Callable(preset: Dictionary) -> bool here; it overrides the global
+## ProgressStore unlocks (a level may hand out a preset whose category the
+## player hasn't earned yet). Invalid Callable = inactive.
+var tutorial_preset_filter: Callable = Callable()
+
+
+## Re-apply unlock gating (after a ProgressStore grant / skip-tutorial /
+## tutorial filter change). Full rebuild — the panel is cheap.
+func refresh_gating() -> void:
+	rebuild()
+	call_deferred("_refresh_scroll_content_height")
+
+
+func _is_category_unlocked(cat_id: String) -> bool:
+	return ProgressStore.is_unlocked("category", cat_id)
+
+
+## Presets of a category that survive gating: the tutorial filter when active,
+## else the player's global unlocks.
+func _visible_presets_for(cat_id: String) -> Array:
+	var out: Array = []
+	for p: Dictionary in ComponentPresets.presets_for_category(cat_id):
+		if tutorial_preset_filter.is_valid():
+			if not bool(tutorial_preset_filter.call(p)):
+				continue
+		elif not ProgressStore.is_unlocked("preset", str(p.get("label", ""))):
+			continue
+		out.append(p)
+	return out
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -268,21 +301,37 @@ func _build_categories() -> Control:
 	scroll.add_child(vbox)
 	_categories_vbox = vbox
 
+	# Unlock gating (Solar Bootcamp): locked categories are skipped entirely;
+	# with no progress file everything is unlocked (grandfathering) and this
+	# loop builds exactly what it always built. `built` (not the CATEGORIES
+	# index) keys the parallel _cat_* arrays so skipped entries can't skew them.
+	var filter_active := tutorial_preset_filter.is_valid()
+	var built: int = 0
 	for i: int in ComponentPresets.CATEGORIES.size():
 		var cat: Dictionary = ComponentPresets.CATEGORIES[i]
-		var expanded := i <= 1  # Solar + Wind open; rest collapsed
+		var cat_id := str(cat.get("id", ""))
+		if not filter_active and not _is_category_unlocked(cat_id):
+			continue
+		var presets := _visible_presets_for(cat_id)
+		if presets.is_empty() and cat_id != "my_components":
+			# Fully filtered out (tutorial palette or per-preset locks) — an
+			# empty header row is just noise.
+			if filter_active or ComponentPresets.presets_for_category(cat_id).size() > 0:
+				continue
+		var expanded := built <= 1  # first two open; rest collapsed
 		_cat_expanded.append(expanded)
-		vbox.add_child(_build_category(cat, i))
-		_cat_contents[i].visible = expanded
-		_cat_headers[i].text = "%s  %s  %s" % [
+		vbox.add_child(_build_category(cat, built, presets))
+		_cat_contents[built].visible = expanded
+		_cat_headers[built].text = "%s  %s  %s" % [
 			cat.get("icon", ""), cat.get("label", ""), "▼" if expanded else "▶"
 		]
+		built += 1
 
 	scroll.follow_focus = true
 	return scroll
 
 
-func _build_category(cat: Dictionary, idx: int) -> Control:
+func _build_category(cat: Dictionary, idx: int, presets_override: Variant = null) -> Control:
 	var wrapper := VBoxContainer.new()
 	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	wrapper.add_theme_constant_override("separation", 0)
@@ -327,7 +376,8 @@ func _build_category(cat: Dictionary, idx: int) -> Control:
 	# see ComponentPresets.presets_for_category, since CATEGORIES' own
 	# "presets" arrays are const/read-only and can't carry user edits).
 	var cat_id_str := str(cat.get("id", ""))
-	var presets: Array = ComponentPresets.presets_for_category(cat_id_str)
+	var presets: Array = presets_override if presets_override is Array \
+			else ComponentPresets.presets_for_category(cat_id_str)
 	for p: Dictionary in presets:
 		if cat_id_str == "my_components":
 			content_vbox.add_child(_make_user_component_row(p, idx))
