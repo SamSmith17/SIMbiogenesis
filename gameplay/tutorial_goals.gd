@@ -33,7 +33,99 @@ static func evaluate(goal: Dictionary, ctx: Dictionary) -> Dictionary:
 			}
 		"build":
 			return _evaluate_build(goal, ctx)
+		"run_clean":
+			# Run-level goals are decided by the DIRECTOR from bake results
+			# (evaluate_run below); topology evaluation just prompts the run.
+			return {"met": false, "progress": "Press ▶ Run 24 h when you're ready"}
+		"ac_load_wired":
+			var model: GraphModel = ctx.get("model")
+			var ok := ac_load_wired(model, ctx.get("flat_conns", []) as Array) \
+					and not any_destroyed(model)
+			return {
+				"met": ok,
+				"progress": "Appliance powered ✓" if ok
+						else "Wire an appliance to the controller's AC output",
+			}
+		"compound_containing":
+			var m2: GraphModel = ctx.get("model")
+			var types: Array = goal.get("types", []) as Array
+			var ok2 := compound_containing(m2, types)
+			return {
+				"met": ok2,
+				"progress": "Combined ✓" if ok2
+						else "Select the parts and press Ctrl+G to combine them",
+			}
 	return {"met": false, "progress": ""}
+
+
+## True when an appliance/acload draws from a controller's AC output (the
+## controller doubles as the inverter in this graph), directly or via
+## breaker-panel style AC distribution (one pass-through hop).
+static func ac_load_wired(model: GraphModel, flat: Array) -> bool:
+	if model == null:
+		return false
+	var ac_fed: Dictionary = {}  # item_id fed from a controller AC handle
+	for conn in flat:
+		if not (conn is Dictionary):
+			continue
+		var c: Dictionary = conn
+		for side in [["source_item_id", "source_handle_id", "target_item_id"],
+				["target_item_id", "target_handle_id", "source_item_id"]]:
+			var from_item := model.get_item(str(c.get(side[0], "")))
+			if from_item.is_empty():
+				continue
+			if str(from_item.get("type", "")) == "controller" \
+					and str(c.get(side[1], "")).begins_with("acOutput") \
+					and not bool(from_item.get("is_virtual", false)):
+				ac_fed[str(c.get(side[2], ""))] = true
+	if ac_fed.is_empty():
+		return false
+	# Direct hit, or one distribution hop (breaker panel / spiderbox / outlet).
+	for iid in ac_fed:
+		var it := model.get_item(str(iid))
+		var ty := str(it.get("type", ""))
+		if ty == "appliance" or ty == "acload":
+			return true
+	for conn in flat:
+		if not (conn is Dictionary):
+			continue
+		var c2: Dictionary = conn
+		var a := str(c2.get("source_item_id", ""))
+		var b := str(c2.get("target_item_id", ""))
+		for pair in [[a, b], [b, a]]:
+			if ac_fed.has(str(pair[0])):
+				var tgt := model.get_item(str(pair[1]))
+				var tt := str(tgt.get("type", ""))
+				if tt == "appliance" or tt == "acload":
+					return true
+	return false
+
+
+## True when some compound's child scope contains at least one item of every
+## required type (the "merge into one box" lesson).
+static func compound_containing(model: GraphModel, types: Array) -> bool:
+	if model == null or types.is_empty():
+		return false
+	for item in GraphNesting.walk_items(model, "root"):
+		if not (item is Dictionary):
+			continue
+		var it: Dictionary = item
+		if str(it.get("type", "")) != "compound":
+			continue
+		var scope := str(it.get("child_scope_id", ""))
+		if scope.is_empty():
+			continue
+		var have: Dictionary = {}
+		for child in model.get_items_in_scope(scope):
+			have[str((child as Dictionary).get("type", ""))] = true
+		var all := true
+		for t in types:
+			if not have.has(str(t)):
+				all = false
+				break
+		if all:
+			return true
+	return false
 
 
 static func _evaluate_build(goal: Dictionary, ctx: Dictionary) -> Dictionary:
@@ -71,6 +163,19 @@ static func _evaluate_build(goal: Dictionary, ctx: Dictionary) -> Dictionary:
 			met = false
 
 	return {"met": met, "progress": "  ·  ".join(parts)}
+
+
+## Run-level verdict from a ChallengeBakeEngine run_succeeded payload.
+## Reaching this at all means the run finished with no failure; the optional
+## threshold is on USEFUL utilization (loads served + charge banked vs what
+## the sky offered — see the bake engine).
+static func evaluate_run(goal: Dictionary, bake_result: Dictionary) -> Dictionary:
+	var min_util := float(goal.get("min_useful_utilization_pct", 0.0))
+	var util := float(bake_result.get("useful_utilization_pct", 0.0))
+	if min_util > 0.0 and util + 1e-6 < min_util:
+		return {"met": false,
+			"progress": "Clean run, but only %.0f%% of the sun did work (need %.0f%%) — add or automate loads and run again" % [util, min_util]}
+	return {"met": true, "progress": "Clean run — %.0f%% of the sun put to work" % util}
 
 
 static func any_destroyed(model: GraphModel) -> bool:

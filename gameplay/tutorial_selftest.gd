@@ -24,9 +24,12 @@ func _initialize() -> void:
 	fails += _test_goal_build_pwm()
 	fails += _test_goal_build_bus_and_watts()
 	fails += _test_goal_array_config()
+	fails += _test_goal_ac_load_wired()
+	fails += _test_goal_compound_containing()
+	fails += _test_run_verdict()
 	_cleanup()
 	if fails == 0:
-		print("TUTORIAL SELFTEST PASS  (12 checks)")
+		print("TUTORIAL SELFTEST PASS  (15 checks)")
 		quit(0)
 	else:
 		print("TUTORIAL SELFTEST FAIL  (%d failed)" % fails)
@@ -205,12 +208,15 @@ func _test_catalog_integrity() -> int:
 				if TutorialCatalog.find_preset(s.trim_prefix("preset:")).is_empty():
 					push_error("%s: unlock preset '%s' does not resolve" % [lvl.id, s])
 					return 1
-			else:
+			elif s != "unlock_all":
 				push_error("%s: unlock entry '%s' has no cat:/preset: prefix" % [lvl.id, s])
 				return 1
-		if not lvl.is_run_level() \
-				and str(lvl.goal.get("kind", "")) not in ["fault_observed", "build"]:
+		if str(lvl.goal.get("kind", "")) not in ["fault_observed", "build",
+				"run_clean", "ac_load_wired", "compound_containing"]:
 			push_error("%s: unknown goal kind '%s'" % [lvl.id, str(lvl.goal.get("kind", ""))])
+			return 1
+		if lvl.carry_graph and lvl.index <= 1:
+			push_error("%s: the first level cannot carry a previous graph" % lvl.id)
 			return 1
 	if TutorialCatalog.next_after(str(levels[0].id)) != str(levels[1].id):
 		push_error("next_after should walk the catalog order")
@@ -333,6 +339,72 @@ func _test_goal_array_config() -> int:
 		return 1
 	if TutorialGoals.array_config_matches(model, flat, 6, 1):
 		push_error("3S2P wiring must not match (6,1)")
+		return 1
+	return 0
+
+
+## Level 9 shape: appliance on the controller's AC output (direct or via one
+## distribution hop); DC-only wiring must not count.
+func _test_goal_ac_load_wired() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	_add_battery(model, "bat", 48.0)
+	_add_controller(model, "ctrl", 150.0, 30.0)
+	model.add_item({"id": "lamp", "type": "appliance", "x": 200.0, "y": 100.0,
+		"width": 160.0, "height": 104.0, "scope_id": "root",
+		"specs": {"max_watts": 100.0, "avg_watts": 50.0}})
+	_wire(model, "ctrl", "batteryPositive", "bat", "positive")
+	_wire(model, "ctrl", "batteryNegative", "bat", "negative")
+	var flat := GraphNesting.flat_connections(model)
+	if TutorialGoals.ac_load_wired(model, flat):
+		push_error("no AC wire yet — must not count as wired")
+		return 1
+	model.add_connection({"scope_id": "root", "polarity": "ac",
+		"source_item_id": "ctrl", "source_handle_id": "acOutput",
+		"target_item_id": "lamp", "target_handle_id": "input"})
+	flat = GraphNesting.flat_connections(model)
+	if not TutorialGoals.ac_load_wired(model, flat):
+		push_error("appliance on controller acOutput should count as wired")
+		return 1
+	return 0
+
+
+## Level 12 shape: a compound whose child scope holds a controller + battery.
+func _test_goal_compound_containing() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	_add_battery(model, "bat", 48.0)
+	_add_controller(model, "ctrl", 150.0, 30.0)
+	if TutorialGoals.compound_containing(model, ["controller", "battery"]):
+		push_error("flat items must not read as combined")
+		return 1
+	model.add_item({"id": "box", "type": "compound", "x": 0.0, "y": 0.0,
+		"width": 180.0, "height": 120.0, "scope_id": "root",
+		"child_scope_id": "scope_box", "specs": {"compound_kind": ""}})
+	model.ensure_scope("scope_box", "root", "box", "box")
+	model.update_item("bat", {"scope_id": "scope_box", "parent_compound_id": "box"})
+	model.update_item("ctrl", {"scope_id": "scope_box", "parent_compound_id": "box"})
+	if not TutorialGoals.compound_containing(model, ["controller", "battery"]):
+		push_error("compound holding controller+battery should match")
+		return 1
+	if TutorialGoals.compound_containing(model, ["controller", "battery", "panel"]):
+		push_error("missing panel type must not match")
+		return 1
+	return 0
+
+
+## Run-level verdicts from bake results (utilization threshold).
+func _test_run_verdict() -> int:
+	var goal := {"kind": "run_clean", "min_useful_utilization_pct": 60.0}
+	var low := TutorialGoals.evaluate_run(goal, {"useful_utilization_pct": 35.0})
+	if bool(low.get("met", true)):
+		push_error("35%% utilization must not pass a 60%% bar")
+		return 1
+	var high := TutorialGoals.evaluate_run(goal, {"useful_utilization_pct": 71.0})
+	if not bool(high.get("met", false)):
+		push_error("71%% utilization should pass a 60%% bar")
+		return 1
+	var no_bar := TutorialGoals.evaluate_run({"kind": "run_clean"}, {"useful_utilization_pct": 5.0})
+	if not bool(no_bar.get("met", false)):
+		push_error("run_clean with no bar should pass any completed run")
 		return 1
 	return 0
 

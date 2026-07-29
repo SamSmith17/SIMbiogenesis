@@ -20,6 +20,12 @@ var _state: int = State.INACTIVE
 var _level: TutorialLevelDef = null
 var _faults_seen: Dictionary = {}
 var _eval_acc: float = 0.0
+## Run-levels: the director's own bake engine (separate from ChallengeRunner's).
+var _run_engine: ChallengeBakeEngine = null
+## World state to hand back on exit — tutorial runs advance the clock and
+## battery inside the sandbox; none of it may leak to the player's world.
+var _pre_clock_abs := NAN
+var _pre_battery_kwh := NAN
 
 
 func bind_graph_view(gv: Control) -> void:
@@ -53,13 +59,18 @@ func start(level_id: String = "") -> void:
 	if lid.is_empty():
 		lid = str(TutorialCatalog.ordered_ids()[0])  # all done — replay from 1
 	var def := TutorialCatalog.by_id(lid)
-	if def == null or def.is_run_level():
-		# Run-levels arrive with the bake engine; never strand the player.
+	if def == null:
 		def = TutorialCatalog.by_id(str(TutorialCatalog.ordered_ids()[0]))
 		if def == null:
 			return
 	if not bool(_gv.call("begin_tutorial_sandbox")):
 		return
+	# Snapshot the world the sandbox will perturb (runs advance the clock,
+	# bake commits move the battery) so exit hands everything back.
+	var m := _main_node()
+	_pre_clock_abs = float(m.call("get_absolute_hours")) if m != null else NAN
+	var su := _solar_ui()
+	_pre_battery_kwh = float(su.call("get_battery_kwh_stored")) if su != null else NAN
 	_gv.call("open_graph_view")
 	_ensure_hud()
 	_load_level(def)
@@ -71,11 +82,23 @@ func exit_tutorial() -> void:
 	_state = State.INACTIVE
 	_level = null
 	_faults_seen.clear()
+	if _run_engine != null and _run_engine.is_active():
+		_run_engine.abort()
 	if _hud != null:
 		_hud.call("hide_hud")
 	if _gv != null:
 		_gv.call("clear_tutorial_palette")
 		_gv.call("end_tutorial_sandbox")
+	# Hand the world back exactly as we found it.
+	var m := _main_node()
+	if m != null and not is_nan(_pre_clock_abs):
+		m.call("set_absolute_hours", _pre_clock_abs)
+	var su := _solar_ui()
+	if su != null and not is_nan(_pre_battery_kwh) \
+			and su.has_method("reanchor_live_battery"):
+		su.call("reanchor_live_battery", _pre_battery_kwh)
+	_pre_clock_abs = NAN
+	_pre_battery_kwh = NAN
 
 
 func _on_sandbox_interrupted() -> void:
@@ -93,11 +116,15 @@ func _load_level(def: TutorialLevelDef) -> void:
 	_level = def
 	_faults_seen.clear()
 	_eval_acc = 0.0
-	_gv.call("tutorial_clear_graph")
-	_gv.call("tutorial_seed_level", def.seed, def.seed_wires)
+	if _run_engine != null and _run_engine.is_active():
+		_run_engine.abort()  # a parked breakpoint never outlives its level
+	if not def.carry_graph:
+		_gv.call("tutorial_clear_graph")
+		_gv.call("tutorial_seed_level", def.seed, def.seed_wires)
 	_gv.call("set_tutorial_palette", def.allowed_presets)
 	if _hud != null:
-		_hud.call("show_level", def.index, def.title, _objective_line(def))
+		_hud.call("show_level", def.index, def.title, _objective_line(def),
+			def.is_run_level())
 	_state = State.BRIEF
 	_show_brief()
 
@@ -106,6 +133,15 @@ func _objective_line(def: TutorialLevelDef) -> String:
 	match str(def.goal.get("kind", "")):
 		"fault_observed":
 			return "Follow the briefing — failure is the objective."
+		"run_clean":
+			var min_util := float(def.goal.get("min_useful_utilization_pct", 0.0))
+			if min_util > 0.0:
+				return "Run 24 h cleanly with ≥ %.0f%% of the sun put to work." % min_util
+			return "Run a full 24 h without a power failure."
+		"ac_load_wired":
+			return "Power an appliance from the controller's AC output."
+		"compound_containing":
+			return "Combine the controller + battery into one super-node (Ctrl+G)."
 		"build":
 			var bits: Array[String] = []
 			if float(def.goal.get("min_deliverable_w", 0.0)) > 0.0:
@@ -146,6 +182,10 @@ func _on_fault_observed(reason: String, _item_id: String) -> void:
 func _process(delta: float) -> void:
 	if _state != State.BUILD and _state != State.BRIEF:
 		return
+	# While a run is baking / playing back, the engine narrates progress.
+	if _run_engine != null and _run_engine.is_active() \
+			and _run_engine.phase() != ChallengeBakeEngine.Phase.AWAIT_RETRY:
+		return
 	_eval_acc += delta
 	if _eval_acc < EVAL_INTERVAL_S:
 		return
@@ -163,26 +203,118 @@ func _process(delta: float) -> void:
 		_complete_level()
 
 
-func _complete_level() -> void:
+# ---- Run-levels (▶ Run 24 h → bake → playback → verdict) -------------------
+
+func _on_run_requested() -> void:
+	if _level == null or not _level.is_run_level() or _state != State.BUILD:
+		return
+	# Never fight the challenge runner's engine for the world.
+	var m := _main_node()
+	var runner: Node = m.get_node_or_null("ChallengeRunner") if m != null else null
+	if runner != null and bool(runner.call("is_active")):
+		_gv.call("show_tutorial_card", {"title": "Challenge in progress",
+			"body": "Finish or abort the active 🎯 challenge first.",
+			"title_color": UITheme.C_AMBER})
+		return
+	_ensure_run_engine()
+	if _run_engine.phase() == ChallengeBakeEngine.Phase.AWAIT_RETRY:
+		if _run_engine.retry():
+			if _hud != null:
+				_hud.call("set_run_busy", true)
+				_hud.call("set_progress", "Re-running the same day…")
+		return
+	var su := _solar_ui()
+	if m == null or su == null:
+		return
+	var def := ChallengeDef.from_dict({
+		"id": "bootcamp_run_%s" % _level.id,
+		"title": _level.title,
+		"run_mode": "prebake",
+		"span": str(_level.run.get("span", "day")),
+		"fail_on_power_failure": bool(_level.run.get("fail_on_power_failure", true)),
+		"fail_on_starvation": false,
+		"require_no_starvation": false,
+	})
+	var start_abs := float(m.call("get_absolute_hours"))
+	if _run_engine.start(m, _gv, su, def, start_abs):
+		if _hud != null:
+			_hud.call("set_run_busy", true)
+			_hud.call("set_progress", "Computing the day…")
+
+
+func _ensure_run_engine() -> void:
+	if _run_engine != null and is_instance_valid(_run_engine):
+		return
+	_run_engine = ChallengeBakeEngine.new()
+	_run_engine.name = "TutorialRunEngine"
+	add_child(_run_engine)
+	_run_engine.bake_progress.connect(func(frac: float, _cursor: float) -> void:
+		if _hud != null and frac < 1.0:
+			_hud.call("set_progress", "Computing… %d%%" % int(frac * 100.0)))
+	_run_engine.bake_failed_at.connect(func(_abs_h: float, _reason: String) -> void:
+		if _hud != null:
+			_hud.call("set_progress", "It didn't make it — watching the day…"))
+	_run_engine.retry_ready.connect(_on_run_retry_ready)
+	_run_engine.run_succeeded.connect(_on_run_succeeded)
+
+
+func _on_run_retry_ready(abs_h: float, reason: String, _attempts_n: int) -> void:
+	if _hud != null:
+		_hud.call("set_run_busy", false)
+		_hud.call("set_progress", "Failed %.1f h in — fix it, then ▶ Run again" %
+			maxf(abs_h - float(_run_engine.get("_start_abs")), 0.0))
+	_gv.call("show_tutorial_card", {
+		"title": "Power failure",
+		"body": ("The system went dark: [b]%s[/b]\n\nThe timeline is parked at the " +
+			"moment it failed. Fix the system — more storage, more panels, fewer " +
+			"loads at night — then press [b]▶ Run[/b] to replay the SAME day.")
+			% ChallengeDef.reason_label(reason),
+	})
+
+
+func _on_run_succeeded(bake_result: Dictionary) -> void:
+	if _hud != null:
+		_hud.call("set_run_busy", false)
+	if _level == null:
+		return
+	var verdict := TutorialGoals.evaluate_run(_level.goal, bake_result)
+	if _hud != null:
+		_hud.call("set_progress", str(verdict.get("progress", "")))
+	if bool(verdict.get("met", false)):
+		_complete_level({
+			"useful_utilization_pct": float(bake_result.get("useful_utilization_pct", 0.0)),
+			"attempts": int(bake_result.get("attempts", 1)),
+		})
+	else:
+		# Clean run but under the utilization bar: explain, invite another run.
+		_gv.call("show_tutorial_card", {
+			"title": "Survived — now optimize",
+			"title_color": UITheme.C_AMBER,
+			"body": ("The day completed, but only [b]%.0f%%[/b] of the available sun " +
+				"did useful work (loads served + charge banked). Target: [b]%.0f%%[/b].\n\n" +
+				"Add loads, size them up, or automate them to soak up the midday " +
+				"surplus — then ▶ Run the same day again.") % [
+					float(bake_result.get("useful_utilization_pct", 0.0)),
+					float(_level.goal.get("min_useful_utilization_pct", 0.0))],
+		})
+
+
+func _complete_level(stats: Dictionary = {}) -> void:
 	_state = State.DEBRIEF
-	ProgressStore.mark_level_complete(_level.id)
+	ProgressStore.mark_level_complete(_level.id, stats)
 	if not _level.unlocks.is_empty():
 		ProgressStore.grant(_level.unlocks)
 	# New unlocks appear once the per-level palette lifts (level advance/exit).
 	var next_id := TutorialCatalog.next_after(_level.id)
 	var next_def := TutorialCatalog.by_id(next_id) if not next_id.is_empty() else null
 	var actions: Array = []
-	if next_def != null and not next_def.is_run_level():
+	if next_def != null:
 		actions.append({"label": "Next level", "callback": Callable(self, "_on_next_level")})
 	actions.append({"label": "Exit bootcamp", "callback": Callable(self, "exit_tutorial")})
-	var body := _level.debrief_bbcode
-	if next_def == null or next_def.is_run_level():
-		body += "\n\n[color=#8899aa]That's the bootcamp for now — the 24-hour " \
-				+ "run levels are on their way. Your unlocks are saved.[/color]"
 	_gv.call("show_tutorial_card", {
 		"title": "✓ Level %d complete" % _level.index,
 		"title_color": UITheme.C_GREEN,
-		"body": body,
+		"body": _level.debrief_bbcode,
 		"actions": actions,
 	})
 
@@ -190,10 +322,27 @@ func _complete_level() -> void:
 func _on_next_level() -> void:
 	var next_id := TutorialCatalog.next_after(_level.id)
 	var def := TutorialCatalog.by_id(next_id) if not next_id.is_empty() else null
-	if def == null or def.is_run_level():
+	if def == null:
 		exit_tutorial()
 		return
 	_load_level(def)
+
+
+func _main_node() -> Node:
+	if _gv == null:
+		return null
+	var ul := _gv.get_parent()
+	return ul.get_parent() if ul != null else null
+
+
+func _solar_ui() -> Node:
+	var m := _main_node()
+	if m == null:
+		return null
+	var su: Node = m.get_node_or_null("UILayer/SolarUI")
+	if su == null:
+		su = m.find_child("SolarUI", true, false)
+	return su
 
 
 func _ensure_hud() -> void:
@@ -206,3 +355,4 @@ func _ensure_hud() -> void:
 		if _level != null:
 			_show_brief())
 	_hud.connect("exit_requested", exit_tutorial)
+	_hud.connect("run_requested", _on_run_requested)

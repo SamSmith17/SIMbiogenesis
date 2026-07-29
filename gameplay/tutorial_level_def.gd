@@ -23,8 +23,12 @@ var allowed_presets: Array = []
 var goal: Dictionary = {}
 ## ProgressStore grant entries ("cat:*" / "preset:*") awarded on completion.
 var unlocks: Array = []
-## Non-empty for run-levels (phase E): {span, duration_hours, ...}.
+## Non-empty for run-levels: {span, fail_on_power_failure, ...} mapped onto a
+## synthetic prebake ChallengeDef the director hands the bake engine.
 var run: Dictionary = {}
+## Keep the previous level's graph instead of clearing + reseeding (levels
+## that iterate on the system the player just built).
+var carry_graph: bool = false
 
 
 static func from_dict(d: Dictionary) -> TutorialLevelDef:
@@ -40,6 +44,7 @@ static func from_dict(d: Dictionary) -> TutorialLevelDef:
 	def.goal = (d.get("goal", {}) as Dictionary).duplicate(true)
 	def.unlocks = (d.get("unlocks", []) as Array).duplicate()
 	def.run = (d.get("run", {}) as Dictionary).duplicate(true)
+	def.carry_graph = bool(d.get("carry_graph", false))
 	return def
 
 
@@ -50,7 +55,7 @@ func to_dict() -> Dictionary:
 		"seed": seed.duplicate(true), "seed_wires": seed_wires.duplicate(true),
 		"allowed_presets": allowed_presets.duplicate(),
 		"goal": goal.duplicate(true), "unlocks": unlocks.duplicate(),
-		"run": run.duplicate(true),
+		"run": run.duplicate(true), "carry_graph": carry_graph,
 	}
 
 

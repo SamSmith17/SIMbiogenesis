@@ -7,6 +7,7 @@ extends RefCounted
 ## engine phase and slot in here as plain content additions.
 
 const BATTERY := "12V 100Ah AGM"
+const BATTERY_48V := "48V 100Ah LiFePO4"
 const PANEL := "Trainer 300W"
 const PWM := "Trainer PWM 10A"
 const MPPT := "Trainer MPPT 150/30"
@@ -221,5 +222,145 @@ const _LEVELS: Array = [
 		"allowed_presets": [PANEL, PWM, MPPT, BATTERY],
 		"goal": {"kind": "build", "series": 3, "parallel": 2, "min_deliverable_w": 1400.0},
 		"unlocks": ["preset:48V 100Ah LiFePO4", "preset:48V 50Ah LiFePO4"],
+	},
+	{
+		"id": "bootcamp_08_first_run", "index": 8, "title": "First Light",
+		"brief_bbcode": "Your system, upgraded: [b]one 48 V battery[/b] replaces the four-pack " +
+			"(same voltage, one box, one BMS), pre-wired to your 3S2P array.\n\n" +
+			"Time to actually RUN it. Press [b]▶ Run 24 h[/b] in the objective bar — the sim " +
+			"computes a full day in seconds and plays it back on the timeline. Watch the " +
+			"battery charge as the sun crosses the sky.",
+		"debrief_bbcode": "A full day, no failures — but look at the [b]sun you wasted[/b]. " +
+			"Once the battery filled, every extra watt had nowhere to go and was thrown " +
+			"away at the panel. A battery-only system is 'optimized' only until it's full.\n\n" +
+			"Generation without CONSUMPTION is only half a system.\n\n" +
+			"[color=#22d3ee]Unlocked: appliances & loads.[/color]",
+		"seed": [
+			{"preset_label": BATTERY_48V, "x": -70.0, "y": 280.0},
+			{"preset_label": PANEL, "x": -510.0, "y": -260.0},
+			{"preset_label": PANEL, "x": -320.0, "y": -260.0},
+			{"preset_label": PANEL, "x": -130.0, "y": -260.0},
+			{"preset_label": PANEL, "x": 60.0, "y": -260.0},
+			{"preset_label": PANEL, "x": 250.0, "y": -260.0},
+			{"preset_label": PANEL, "x": 440.0, "y": -260.0},
+			{"preset_label": MPPT, "x": -70.0, "y": 20.0},
+		],
+		"seed_wires": [
+			{"from": 1, "from_handle": "positive", "to": 2, "to_handle": "negative"},
+			{"from": 2, "from_handle": "positive", "to": 3, "to_handle": "negative"},
+			{"from": 4, "from_handle": "positive", "to": 5, "to_handle": "negative"},
+			{"from": 5, "from_handle": "positive", "to": 6, "to_handle": "negative"},
+			{"from": 3, "from_handle": "positive", "to": 7, "to_handle": "pvPositive"},
+			{"from": 6, "from_handle": "positive", "to": 7, "to_handle": "pvPositive"},
+			{"from": 1, "from_handle": "negative", "to": 7, "to_handle": "pvNegative"},
+			{"from": 4, "from_handle": "negative", "to": 7, "to_handle": "pvNegative"},
+			{"from": 7, "from_handle": "batteryPositive", "to": 0, "to_handle": "positive"},
+			{"from": 7, "from_handle": "batteryNegative", "to": 0, "to_handle": "negative"},
+		],
+		"allowed_presets": [PANEL, MPPT, BATTERY, BATTERY_48V],
+		"goal": {"kind": "run_clean"},
+		"run": {"span": "day", "fail_on_power_failure": true},
+		"unlocks": ["cat:appliances", "preset:Custom Load"],
+	},
+	{
+		"id": "bootcamp_09_loads", "index": 9, "title": "Something to Power",
+		"brief_bbcode": "Batteries store DC, but your kettle, fridge, and laptop chargers all " +
+			"want [b]AC[/b] — that conversion is an [b]inverter[/b]'s job. Your MPPT unit is a " +
+			"hybrid: charge controller and inverter in one box, with an [b]AC output[/b] on " +
+			"its lower edge.\n\n" +
+			"Grab an appliance from the Library and wire it to the controller's AC output.",
+		"debrief_bbcode": "Powered! The inverter draws DC from the battery bus and serves AC " +
+			"to the load — day or night, sun or not, as long as the battery holds out.\n\n" +
+			"Standalone inverters exist too (battery → inverter → loads); hybrids just save " +
+			"a box and some wiring. Either way, [i]every[/i] AC watt still comes out of your " +
+			"battery.\n\n[color=#22d3ee]Unlocked: the appliance catalog.[/color]",
+		"seed": [
+			{"preset_label": BATTERY_48V, "x": -70.0, "y": 280.0},
+			{"preset_label": PANEL, "x": -510.0, "y": -260.0},
+			{"preset_label": PANEL, "x": -320.0, "y": -260.0},
+			{"preset_label": PANEL, "x": -130.0, "y": -260.0},
+			{"preset_label": PANEL, "x": 60.0, "y": -260.0},
+			{"preset_label": PANEL, "x": 250.0, "y": -260.0},
+			{"preset_label": PANEL, "x": 440.0, "y": -260.0},
+			{"preset_label": MPPT, "x": -70.0, "y": 20.0},
+		],
+		"seed_wires": [
+			{"from": 1, "from_handle": "positive", "to": 2, "to_handle": "negative"},
+			{"from": 2, "from_handle": "positive", "to": 3, "to_handle": "negative"},
+			{"from": 4, "from_handle": "positive", "to": 5, "to_handle": "negative"},
+			{"from": 5, "from_handle": "positive", "to": 6, "to_handle": "negative"},
+			{"from": 3, "from_handle": "positive", "to": 7, "to_handle": "pvPositive"},
+			{"from": 6, "from_handle": "positive", "to": 7, "to_handle": "pvPositive"},
+			{"from": 1, "from_handle": "negative", "to": 7, "to_handle": "pvNegative"},
+			{"from": 4, "from_handle": "negative", "to": 7, "to_handle": "pvNegative"},
+			{"from": 7, "from_handle": "batteryPositive", "to": 0, "to_handle": "positive"},
+			{"from": 7, "from_handle": "batteryNegative", "to": 0, "to_handle": "negative"},
+		],
+		"allowed_presets": [PANEL, MPPT, BATTERY_48V, "Custom Load", "LED Light",
+			"Laptop", "Patio String Lights"],
+		"goal": {"kind": "ac_load_wired"},
+		"unlocks": ["cat:breakers", "cat:spiderbox", "cat:monitors"],
+	},
+	{
+		"id": "bootcamp_10_score", "index": 10, "title": "Run the Numbers",
+		"brief_bbcode": "Same system, now with loads attached. [b]▶ Run 24 h[/b] again — this " +
+			"time you get a [b]score[/b]: how much of the energy the sky offered actually did " +
+			"something (loads served + charge banked).\n\n" +
+			"If your loads are too hungry the battery dies overnight; too timid and the sun " +
+			"goes to waste. Run it and see where you land.",
+		"debrief_bbcode": "That percentage is THE off-grid design number. Raise it with " +
+			"[b]dump loads[/b] — things that switch on only when there's surplus (water " +
+			"heating, pumping, charging the e-bike) — and [b]automations[/b] that shed load " +
+			"before the battery empties.\n\n" +
+			"Click a load and look for its automation section in the inspector: rules like " +
+			"'ON above 80% battery, OFF below 40%' turn wasted noon sun into useful work.\n\n" +
+			"[color=#22d3ee]Next: push that score.[/color]",
+		"seed": [],
+		"carry_graph": true,
+		"allowed_presets": [PANEL, MPPT, BATTERY_48V, "Custom Load", "LED Light",
+			"Laptop", "Patio String Lights"],
+		"goal": {"kind": "run_clean"},
+		"run": {"span": "day", "fail_on_power_failure": true},
+		"unlocks": [],
+	},
+	{
+		"id": "bootcamp_11_optimize", "index": 11, "title": "Soak Up the Sun",
+		"brief_bbcode": "The replay loop is the whole game now: [b]run the day, read the " +
+			"score, tune, run again[/b]. Add loads, size them, automate them.\n\n" +
+			"Target: [b]60% useful utilization[/b] with no overnight power failure. The " +
+			"same day replays every attempt — pure cause and effect.",
+		"debrief_bbcode": "That's a tuned system: most of the available sun became work, and " +
+			"the battery never hit the floor. This bake–replay loop is exactly how the full " +
+			"challenge mode works (🎯 in the toolbar) — a day, a month, or a year, " +
+			"pre-computed and replayed until your design survives.\n\n" +
+			"[color=#22d3ee]Unlocked: hybrid inverters and big-system hardware.[/color]",
+		"seed": [],
+		"carry_graph": true,
+		"allowed_presets": [PANEL, MPPT, BATTERY_48V, "Custom Load", "LED Light",
+			"Laptop", "Patio String Lights"],
+		"goal": {"kind": "run_clean", "min_useful_utilization_pct": 60.0},
+		"run": {"span": "day", "fail_on_power_failure": true},
+		"unlocks": ["preset:EcoWorthy SL3500", "preset:PowMR 5000W Hybrid", "preset:EG4 6000XP"],
+	},
+	{
+		"id": "bootcamp_12_hybrid", "index": 12, "title": "One Box to Rule Them",
+		"brief_bbcode": "Real installs don't leave parts strewn across the bench. Your " +
+			"controller-inverter and battery want to be [b]one unit[/b] — a power station.\n\n" +
+			"Drag a box-select around the [b]controller and battery[/b] (or Ctrl-click " +
+			"both), then press [b]Ctrl+G[/b] to combine them into a super-node. " +
+			"Double-click it to look inside; Esc backs out.",
+		"debrief_bbcode": "You just built an [b]all-in-one[/b] — functionally an EcoFlow-style " +
+			"power station: charge controller + inverter + battery in one box, one warranty, " +
+			"three wires. Cheaper per part to build yourself; simpler to buy.\n\n" +
+			"Super-nodes are how big systems stay readable: group a subsystem, name it, " +
+			"drill in when you care. The whole component Library — hybrid inverters, " +
+			"all-in-ones, everything — is now yours.\n\n" +
+			"[b][color=#26e577]🎓 Solar Bootcamp complete![/color][/b]",
+		"seed": [],
+		"carry_graph": true,
+		"allowed_presets": [PANEL, MPPT, BATTERY_48V, "Custom Load", "LED Light",
+			"Laptop", "Patio String Lights"],
+		"goal": {"kind": "compound_containing", "types": ["controller", "battery"]},
+		"unlocks": ["unlock_all"],
 	},
 ]

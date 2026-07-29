@@ -6,11 +6,13 @@ extends Control
 
 signal briefing_requested
 signal exit_requested
+signal run_requested
 
 var _panel: PanelContainer = null
 var _title_lbl: Label = null
 var _objective_lbl: Label = null
 var _progress_lbl: Label = null
+var _run_btn: Button = null
 
 
 func _ready() -> void:
@@ -22,11 +24,19 @@ func _ready() -> void:
 	_build_ui()
 
 
-func show_level(index: int, title: String, objective: String) -> void:
+func show_level(index: int, title: String, objective: String,
+		is_run_level: bool = false) -> void:
 	_title_lbl.text = "🎓  Level %d — %s" % [index, title]
 	_objective_lbl.text = objective
 	_progress_lbl.text = ""
+	_run_btn.visible = is_run_level
+	_run_btn.disabled = false
 	visible = true
+
+
+func set_run_busy(busy: bool) -> void:
+	if _run_btn != null:
+		_run_btn.disabled = busy
 
 
 func set_progress(text: String) -> void:
@@ -75,6 +85,15 @@ func _build_ui() -> void:
 	_progress_lbl.add_theme_color_override("font_color", UITheme.C_AMBER)
 	_progress_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	col.add_child(_progress_lbl)
+
+	_run_btn = Button.new()
+	_run_btn.text = "▶ Run 24 h"
+	_run_btn.tooltip_text = "Pre-compute a full day and play it back"
+	UITheme.style_button(_run_btn)
+	_run_btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
+	_run_btn.visible = false
+	_run_btn.pressed.connect(func() -> void: run_requested.emit())
+	row.add_child(_run_btn)
 
 	var brief_btn := Button.new()
 	brief_btn.text = "Briefing"

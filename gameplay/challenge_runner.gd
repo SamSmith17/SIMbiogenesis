@@ -86,6 +86,13 @@ func start_challenge(def: ChallengeDef) -> bool:
 				def.title, _bake_engine.attempts()], TOAST_INFO)
 			challenge_started.emit(def.id, def)
 			return true
+	# The tutorial sandbox owns the graph while active — a challenge started
+	# on top would seed into (and score) throwaway level content.
+	var gv_pre := _graph_view()
+	if gv_pre != null and gv_pre.has_method("is_sandbox_active") \
+			and bool(gv_pre.call("is_sandbox_active")):
+		challenge_toast.emit("Exit the Solar Bootcamp before starting a challenge", TOAST_WARN)
+		return false
 	if _active:
 		abort_challenge()
 	_def = def

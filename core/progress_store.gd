@@ -112,6 +112,8 @@ static func grant(ids: Array) -> void:
 			_append_unique(unlocked, "categories", s.trim_prefix("cat:"))
 		elif s.begins_with("preset:"):
 			_append_unique(unlocked, "presets", s.trim_prefix("preset:"))
+		elif s == "unlock_all":
+			d["unlock_all"] = true
 	_save()
 
 

@@ -298,14 +298,27 @@ func _playback_step(delta: float) -> void:
 
 func _finish_success() -> void:
 	var delivered_kwh := 0.0
+	var load_kwh := 0.0
+	var start_soc := _battery_soc_kwh
+	var end_soc := _battery_soc_kwh
 	if _series != null:
 		delivered_kwh = float(_series.integrate_channel(_start_abs, _end_abs, "solar"))
+		load_kwh = float(_series.integrate_channel(_start_abs, _end_abs, "load"))
+		start_soc = float(_series.sample_at(_start_abs).get("soc_kwh", start_soc))
+		end_soc = float(_series.sample_at(_end_abs).get("soc_kwh", end_soc))
 	var util := 100.0
 	if _pot_solar_kwh > 1e-6:
 		util = clampf(delivered_kwh / _pot_solar_kwh * 100.0, 0.0, 100.0)
-	var end_soc := _battery_soc_kwh
-	if _series != null:
-		end_soc = float(_series.sample_at(_end_abs).get("soc_kwh", end_soc))
+	# "Useful" utilization — the tutorial's real lesson. The solar channel
+	# records what the array GENERATED, but a full battery silently drops the
+	# charge at the clamp, so generated/potential reads high even when the sun
+	# is wasted. Energy that actually did something = loads served + net
+	# charge banked; against the sky's offer, that is the number dump loads
+	# and automation raise.
+	var useful_kwh := load_kwh + maxf(end_soc - start_soc, 0.0)
+	var useful_util := 100.0
+	if _pot_solar_kwh > 1e-6:
+		useful_util = clampf(useful_kwh / _pot_solar_kwh * 100.0, 0.0, 100.0)
 	# Commit the run: the world continues from the segment end.
 	if _solar_ui.has_method("reanchor_live_battery"):
 		_solar_ui.call("reanchor_live_battery", end_soc)
@@ -314,8 +327,13 @@ func _finish_success() -> void:
 	set_process(false)
 	run_succeeded.emit({
 		"utilization_pct": util,
+		"useful_utilization_pct": useful_util,
+		"useful_kwh": useful_kwh,
 		"solar_kwh": delivered_kwh,
+		"load_kwh": load_kwh,
 		"potential_kwh": _pot_solar_kwh,
+		"start_soc_kwh": start_soc,
+		"end_soc_kwh": end_soc,
 		"attempts": _attempts,
 		"elapsed_h": _end_abs - _start_abs,
 		"span": _def.span,
