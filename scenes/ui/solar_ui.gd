@@ -305,6 +305,9 @@ var _ha_load_override: float = -1.0  # -1 = not overridden
 var _ha_solar_override: float = -1.0  # -1 = not overridden
 ## Set by SystemGraphView when a controller node is destroyed by over-voltage fault.
 var _graph_controller_destroyed: bool = false
+## Delivered-power cap (W) from graph DC wiring; −1 = no cap. See
+## set_graph_dc_limit_w / SystemGraphView._tick_dc_throttle.
+var _graph_dc_limit_w: float = -1.0
 var _ha_daily_solar_override: float = -1.0  # -1 = not overridden (kWh)
 var _ha_connected: bool = false
 
@@ -1883,6 +1886,10 @@ func _process(delta: float) -> void:
 		_apply_soc_protection_before_load()
 		_calculate_load_power()
 		_apply_battery_full_throttle()
+		# Graph DC current-limit throttle (charge controllers × battery bus V) —
+		# applied last so neither solar path nor the battery-full lerp can
+		# raise delivery back above the wiring's real cap.
+		_apply_graph_dc_limit()
 		_update_battery(sim_step)
 
 	if _ui_accumulator >= _UI_UPDATE_INTERVAL:
@@ -3192,8 +3199,13 @@ func evaluate_solar_at(abs_hours: float) -> float:
 	if el < -2.0:
 		return 0.0
 	var wx := _weather_at_abs(abs_hours)
-	return _compute_solar_kw(el, az, bool(wx["has_real"]), float(wx["ghi"]),
+	var kw := _compute_solar_kw(el, az, bool(wx["has_real"]), float(wx["ghi"]),
 		float(wx["cloud"]), float(wx["temp"]))
+	# Mirror the live graph DC current-limit cap (held constant across a render,
+	# like aux — v1 shortcut) so the baked series matches what the wiring allows.
+	if _graph_dc_limit_w >= 0.0:
+		kw = minf(kw, _graph_dc_limit_w / 1000.0)
+	return kw
 
 
 ## Weather inputs at an arbitrary instant: {ghi, cloud, temp, has_real}.
@@ -3816,6 +3828,24 @@ func set_graph_controller_destroyed(active: bool) -> void:
 		return
 	_graph_controller_destroyed = active
 	_publish_ac_power_bus(true)
+
+
+## Delivered-power cap from the graph's DC wiring (SystemGraphView._tick_dc_
+## throttle: Σ per-controller bus_V × max_charge_amps over the PV share routed
+## through real controllers; see GraphDcElectrical). −1 = no cap (freeplay
+## with no player-built controller+bank chain — behavior unchanged).
+func set_graph_dc_limit_w(watts: float) -> void:
+	_graph_dc_limit_w = watts
+
+
+func get_graph_dc_limit_w() -> float:
+	return _graph_dc_limit_w
+
+
+func _apply_graph_dc_limit() -> void:
+	if _graph_dc_limit_w < 0.0:
+		return
+	current_solar_kw = minf(current_solar_kw, maxf(_graph_dc_limit_w, 0.0) / 1000.0)
 
 
 func is_soc_protect_active() -> bool:

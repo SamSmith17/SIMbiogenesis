@@ -5755,7 +5755,7 @@ func _render_item(item: Dictionary) -> void:
 		border_col = Color(border_col.r, border_col.g, border_col.b, 0.45)
 	if is_sel:
 		border_col = C_SELECTED_BORDER
-	if itype == "controller" and bool(specs.get("destroyed", false)):
+	if itype in ["controller", "battery", "smartbattery"] and bool(specs.get("destroyed", false)):
 		border_col = Color(0.95, 0.25, 0.25, 1.0)
 
 	# Icon / GLB preview replaces the frame + title when requested (default on
@@ -5788,7 +5788,7 @@ func _render_item(item: Dictionary) -> void:
 		"hydro":
 			_draw_hydro_body(body_rect, specs)
 		"battery", "smartbattery":
-			_draw_battery_body(body_rect, specs)
+			_draw_battery_body(body_rect, specs, iid, rect)
 		"controller":
 			_draw_controller_body(body_rect, specs, iid, rect)
 		"compound":
@@ -6129,9 +6129,33 @@ func _draw_resource_flow_arrows_on_sample(sample_fn: Callable, col: Color, body_
 			self, sample_fn, col, body_w, _flow_phase, reverse, gscale)
 
 
-func _draw_battery_body(rect: Rect2, specs: Dictionary) -> void:
+func _draw_battery_body(rect: Rect2, specs: Dictionary, item_id: String = "",
+		full_rect: Rect2 = Rect2()) -> void:
 	var fnt := ThemeDB.fallback_font
 	var fsize := _fit_font_size(rect, 3, 10.0, 12.0)
+	# Destroyed (short circuit / overcharge): banner + reason + RESET button —
+	# same contract as controllers; the press loop in _on_lmb_press is generic
+	# over _controller_reset_rects, so registering here is all it takes.
+	if bool(specs.get("destroyed", false)):
+		var x0 := rect.position.x + 8.0
+		var y0 := rect.position.y + fsize + 4.0
+		draw_string(fnt, Vector2(x0, y0), "DESTROYED",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(1.0, 0.35, 0.35))
+		y0 += fsize + 4.0
+		draw_string(fnt, Vector2(x0, y0), str(specs.get("destroyed_reason", "Electrical fault")),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 2), C_TEXT_M)
+		var btn_w := minf(full_rect.size.x - 20.0, 88.0)
+		var btn_h := 22.0
+		var btn_rect := Rect2(
+			full_rect.position.x + (full_rect.size.x - btn_w) * 0.5,
+			full_rect.end.y - btn_h - 8.0, btn_w, btn_h)
+		draw_rect(btn_rect, Color(0.15, 0.45, 0.22, 0.95), true)
+		draw_rect(btn_rect, Color(0.35, 0.85, 0.45, 0.9), false, 1.5)
+		draw_string(fnt, Vector2(btn_rect.position.x + 14.0, btn_rect.end.y - 6.0), "RESET",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(9, fsize), Color(0.9, 1.0, 0.92))
+		if not item_id.is_empty():
+			_controller_reset_rects[item_id] = btn_rect
+		return
 	var soc := clampf(float(specs.get("soc", 0.5)), 0.0, 1.0)
 	var x := rect.position.x + 8.0
 	var y := rect.position.y + fsize + 4.0
@@ -6198,6 +6222,15 @@ func _draw_controller_body(body_rect: Rect2, specs: Dictionary, item_id: String 
 		name_ = "DESTROYED"
 	draw_string(fnt, Vector2(x, y), name_,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(1.0, 0.35, 0.35) if destroyed else C_TEXT)
+	# Live current-limit readout (GraphDcElectrical throttle telemetry): amber
+	# when the controller is clipping the array — the tutorial's core feedback.
+	if not destroyed and bool(specs.get("dc_clipped", false)):
+		y += fsize + 3.0
+		draw_string(fnt, Vector2(x, y), "⚡ %.0f W (%.0f V × %.0f A cap)" % [
+				float(specs.get("dc_delivered_w", 0.0)),
+				float(specs.get("dc_bus_v", 0.0)),
+				float(specs.get("max_charge_amps", 0.0))],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 2), Color(0.95, 0.72, 0.20))
 	if destroyed:
 		var reason := str(specs.get("destroyed_reason", "Over-voltage fault"))
 		y += fsize + 4.0

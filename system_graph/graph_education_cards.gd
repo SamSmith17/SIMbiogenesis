@@ -176,6 +176,53 @@ static func card_for_item(item: Dictionary) -> Dictionary:
 	return {}
 
 
+## Education card for an electrical fault, keyed by GraphNodeState reason code.
+## `params` supplies the fault's live numbers. Returns {title, body} or {}.
+## NOTE: each body is built with a SINGLE `%` over one parenthesized literal —
+## `%` binds tighter than `+`, so formatting a concatenation chain applies only
+## to the last literal (the bug the old hardcoded controller card shipped with).
+static func card_for_fault(reason: String, params: Dictionary = {}) -> Dictionary:
+	match reason:
+		GraphNodeState.REASON_SHORT_CIRCUIT:
+			return {
+				"title": "Short circuit!",
+				"body": ("You connected a battery's + terminal straight back to its − "
+						+ "terminal. With nothing in the loop but wire, Kirchhoff's "
+						+ "voltage law leaves the full %.0f V across a few milliohms of "
+						+ "copper — hundreds of amps, far past what the wire can carry. "
+						+ "The wire ignites, then the battery.\n\n"
+						+ "Real systems put a FUSE on every battery so this melts a 50¢ "
+						+ "part instead. Press RESET on the battery, and reset the burned "
+						+ "wire, then put a charge controller or load in the circuit.")
+						% [maxf(float(params.get("loop_emf_v", 12.0)), 1.0)],
+			}
+		GraphNodeState.REASON_BATTERY_OVERVOLTAGE:
+			return {
+				"title": "Battery overcharged",
+				"body": ("The panel's open-circuit voltage (Voc) is %.0f V, but this "
+						+ "battery bank must never be charged above ~%.0f V. Wired "
+						+ "directly, the panel drives the cells past their charge ceiling "
+						+ "— electrolyte boils, cells swell, and the battery is ruined.\n\n"
+						+ "Panels are never wired straight to batteries: a CHARGE "
+						+ "CONTROLLER regulates the panel's voltage down to what the "
+						+ "battery can accept. Press RESET, then put a controller "
+						+ "between the panel and the battery.")
+						% [float(params.get("string_voc", 40.0)), float(params.get("safe_v", 14.6))],
+			}
+		GraphNodeState.REASON_OVERVOLTAGE:
+			return {
+				"title": "Controller destroyed",
+				"body": ("The PV string open-circuit voltage (Voc) reached %.0f V, "
+						+ "exceeding this controller's maximum input rating of %.0f V.\n\n"
+						+ "Panels in SERIES add their voltages; panels in PARALLEL add "
+						+ "current instead. Cold weather pushes Voc even higher. Fix the "
+						+ "wiring (fewer panels in series, or a higher-voltage "
+						+ "controller), then press RESET on the controller node.")
+						% [float(params.get("string_voc", 0.0)), float(params.get("max_voc", 150.0))],
+			}
+	return {}
+
+
 ## Education for a selected connection (radiant sunlight wires, etc.).
 ## Returns {title, body} or {}.
 static func card_for_connection(conn: Dictionary) -> Dictionary:

@@ -3,6 +3,11 @@ extends Control
 ## Phases: 1=layout shell, 4=node renderer, 7=library, 11=solar bridge.
 ## Toggle: input action `system_graph_toggle` (default G).
 
+## Fired when an electrical fault trips (short circuit, battery/controller
+## over-voltage). `reason` is a GraphNodeState.REASON_* code. The tutorial
+## director listens; nothing else needs to.
+signal electrical_fault_observed(reason: String, item_id: String)
+
 # ---------------------------------------------------------------------------
 # Mission-control color palette — redirected to UITheme (single source of
 # truth); local const names kept so existing call sites are unchanged.
@@ -334,12 +339,15 @@ var _scope_trail: Array[String] = ["root"]
 var _toast_panel: PanelContainer = null
 var _toast_label: Label          = null
 var _toast_timer: float          = 0.0
-var _edu_overlay: PanelContainer = null
-var _edu_title: Label = null
-var _edu_body: Label = null
+var _fault_card_modal: GraphFaultCardModal = null
 var _first_load_layout_done: bool = false
 var _fit_deferred_pending: bool = false
 var _checking_voltage: bool = false
+# DC-side topology cache (banks/shorts) refreshed by _check_electrical_faults;
+# _tick_dc_throttle reads it at 0.25 s cadence without re-flattening the graph.
+var _dc_analysis: Dictionary = {}
+var _dc_flat_conns: Array = []
+var _dc_throttle_acc: float = 0.0
 var _autosave_timer: Timer = null
 var _autosave_pending: bool = false
 var _timeline_inset_hooked := false
@@ -5425,7 +5433,7 @@ func _apply_array_controller_choice(array_id: String, controller_id: String,
 	SolarArrayIntelligence.wire_array_to_controller(model, array_id, ctrl_id, _active_scope_id)
 	_history_suppress = false
 	_push_history()
-	call_deferred("_check_pv_voltage_faults")
+	call_deferred("_check_electrical_faults")
 	_schedule_graph_autosave()
 	_show_toast("Wired array → %s (%s)" % [
 		str((cit.get("specs", {}) as Dictionary).get("name", ctrl_id)),
@@ -10087,6 +10095,9 @@ func _process(delta: float) -> void:
 	# never flows" — its specs were a stale snapshot from the last time the
 	# graph happened to be open, not a live simulation).
 	_tick_resource_flow_ambient(delta)
+	# DC current-limit throttle must stay live with the graph closed — it caps
+	# the battery charge rate SolarUI integrates every frame.
+	_tick_dc_throttle(delta)
 	if not visible:
 		return
 	# Hydro Lab owns its CT/UI — skip canvas/bridge/renewables storms. Ambient
@@ -11189,7 +11200,13 @@ func _on_model_changed(reason: String) -> void:
 		_sync_graph_controller_ac_fault()
 		call_deferred("_populate_library_scene_devices")
 	if reason in ["add_connection", "remove_connection", "update_connection"]:
-		call_deferred("_check_pv_voltage_faults")
+		call_deferred("_check_electrical_faults")
+	elif not _sim_bulk_update and reason in ["add_item", "remove_item", "update_item", "reset"]:
+		# Item-level edits (battery voltage in the inspector, deletions, loads)
+		# can change bank topology without touching a connection — drop the DC
+		# cache so the next throttle tick rebuilds it. Sim-tick telemetry writes
+		# run under _sim_bulk_update and never invalidate.
+		_dc_analysis = {}
 	# SketchUp-style live component propagation: a structural edit made INSIDE a
 	# component instance (the active scope sits within one) recaptures that
 	# instance's definition and re-stamps its siblings. Skipped while a restamp is
@@ -12099,6 +12116,112 @@ func _tick_graph_renewables(delta: float) -> void:
 		specs["current_output_kw"] = kw
 		model.update_item(iid, {"specs": specs})
 	refresh_hydro_section_panel()
+
+
+const _DC_THROTTLE_INTERVAL := 0.25
+
+
+## Live controller current-limit throttle (GraphDcElectrical): each real
+## (player-built) controller charging a battery bank delivers at most
+## bus_V × max_charge_amps watts of the PV share wired to it. The summed cap is
+## pushed into SolarUI (set_graph_dc_limit_w) so the battery charge rate the
+## whole sim integrates reflects the wiring — the levers behind tutorial
+## levels 3–7 (120 W / 360 W / 720 W / 1200 W all emerge from this math).
+## Runs ambient (graph open or closed); telemetry writes are change-gated and
+## wrapped in history/bulk suppression so they never pollute undo or autosave.
+func _tick_dc_throttle(delta: float) -> void:
+	if model == null:
+		return
+	_dc_throttle_acc += delta
+	if _dc_throttle_acc < _DC_THROTTLE_INTERVAL:
+		return
+	_dc_throttle_acc = 0.0
+	if _dc_analysis.is_empty():
+		# Fresh load — _check_electrical_faults hasn't run yet (it refreshes the
+		# cache on wiring changes). Build the topology once here.
+		_dc_flat_conns = GraphNesting.flat_connections(model)
+		_dc_analysis = GraphDcElectrical.analyze(model, _dc_flat_conns)
+	var raw_kw := 0.0
+	if is_instance_valid(_solar_ui):
+		var raw_v: Variant = _solar_ui.get("_raw_solar_kw")
+		if raw_v != null:
+			raw_kw = maxf(float(raw_v), 0.0)
+	# Eligible = real controllers wired to both a PV source and a battery bank.
+	var entries: Array = []
+	var total_wmp := 0.0
+	var routed_wmp := 0.0
+	for item in GraphNesting.walk_items(model, "root"):
+		if not (item is Dictionary):
+			continue
+		var it: Dictionary = item
+		if bool(it.get("is_virtual", false)):
+			continue
+		if PvElectrical.is_pv_source_item(it):
+			total_wmp += _pv_item_wmp(it)
+			continue
+		if str(it.get("type", "")) != "controller":
+			continue
+		var bank := GraphDcElectrical.bank_for_controller(
+			model, str(it.get("id", "")), _dc_flat_conns, _dc_analysis)
+		if bank.is_empty():
+			continue
+		var sources := PvElectrical.pv_sources_for_controller_flat(
+			model, str(it.get("id", "")), _dc_flat_conns)
+		if sources.is_empty():
+			continue
+		var wmp := 0.0
+		for sid in sources:
+			wmp += _pv_item_wmp(model.get_item(str(sid)))
+		routed_wmp += wmp
+		entries.append({"item": it, "bank": bank, "wmp": wmp})
+	if entries.is_empty() or total_wmp <= 0.0:
+		if is_instance_valid(_solar_ui) and _solar_ui.has_method("set_graph_dc_limit_w"):
+			_solar_ui.call("set_graph_dc_limit_w", -1.0)
+		return
+	var was_suppress := _history_suppress
+	var was_bulk := _sim_bulk_update
+	_history_suppress = true
+	_sim_bulk_update = true
+	var delivered_total_w := 0.0
+	for e in entries:
+		var it2: Dictionary = (e as Dictionary).get("item", {}) as Dictionary
+		var share_w := raw_kw * 1000.0 * float((e as Dictionary).get("wmp", 0.0)) / total_wmp
+		var sp: Dictionary = (it2.get("specs", {}) as Dictionary).duplicate(false)
+		var th := {"delivered_w": 0.0, "bus_voltage": 0.0, "limit_w": 0.0, "clipped": false}
+		if not bool(sp.get("destroyed", false)):
+			th = GraphDcElectrical.controller_throttle(
+				it2, (e as Dictionary).get("bank", {}) as Dictionary, share_w)
+			delivered_total_w += float(th.get("delivered_w", 0.0))
+		var limit_w: float = float(th.get("limit_w", 0.0))
+		if not is_finite(limit_w):
+			limit_w = 0.0  # no current limit modeled → no cap to display
+		if absf(float(sp.get("dc_delivered_w", -1.0)) - float(th.get("delivered_w", 0.0))) >= 1.0 \
+				or bool(sp.get("dc_clipped", false)) != bool(th.get("clipped", false)) \
+				or absf(float(sp.get("dc_bus_v", -1.0)) - float(th.get("bus_voltage", 0.0))) >= 0.5:
+			sp["dc_delivered_w"] = float(th.get("delivered_w", 0.0))
+			sp["dc_bus_v"] = float(th.get("bus_voltage", 0.0))
+			sp["dc_limit_w"] = limit_w
+			sp["dc_clipped"] = bool(th.get("clipped", false))
+			model.update_item(str(it2.get("id", "")), {"specs": sp})
+	_history_suppress = was_suppress
+	_sim_bulk_update = was_bulk
+	# PV wattage not routed through any eligible controller passes uncapped —
+	# freeplay arrays mirrored via the virtual chain keep working untouched.
+	var unrouted_w: float = raw_kw * 1000.0 * maxf(1.0 - routed_wmp / total_wmp, 0.0)
+	if is_instance_valid(_solar_ui) and _solar_ui.has_method("set_graph_dc_limit_w"):
+		_solar_ui.call("set_graph_dc_limit_w", delivered_total_w + unrouted_w)
+
+
+static func _pv_item_wmp(item: Dictionary) -> float:
+	if item.is_empty():
+		return 0.0
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	if str(item.get("type", "")) == "compound":
+		var units := float(sp.get("array_panel_units", 0.0))
+		var per := float(sp.get("array_panel_wmp", sp.get("wmp", 0.0)))
+		if units > 0.0 and per > 0.0:
+			return units * per
+	return float(sp.get("wmp", 0.0))
 
 
 const _CspTroughSource := preload("res://power_system/sources/csp_trough_source.gd")
@@ -13657,7 +13780,7 @@ func _sync_graph_controller_ac_fault() -> void:
 		_solar_ui.call("set_graph_controller_destroyed", _any_controller_destroyed())
 
 
-func _check_pv_voltage_faults() -> void:
+func _check_electrical_faults() -> void:
 	if model == null or _checking_voltage:
 		return
 	_checking_voltage = true
@@ -13666,6 +13789,33 @@ func _check_pv_voltage_faults() -> void:
 	# PV string split across a compound boundary or buried in a collapsed
 	# sub-canvas still faults correctly.
 	PvElectrical.update_connection_voltage_flags_flat(model, temp_c)
+	# DC-side topology (battery banks, shorts) — cached for _tick_dc_throttle.
+	_dc_flat_conns = GraphNesting.flat_connections(model)
+	_dc_analysis = GraphDcElectrical.analyze(model, _dc_flat_conns)
+	# 1) Battery short circuits: burn the loop's wires, destroy the battery.
+	for s in _dc_analysis.get("shorts", []) as Array:
+		if not (s is Dictionary):
+			continue
+		var sd: Dictionary = s
+		_burn_short_wires(sd.get("conn_ids", []) as Array)
+		_destroy_battery(str(sd.get("battery_id", "")),
+			GraphNodeState.REASON_SHORT_CIRCUIT,
+			"Short circuit — %.0f V across bare wire" % float(sd.get("loop_emf_v", 12.0)),
+			{"loop_emf_v": float(sd.get("loop_emf_v", 12.0))})
+	# 2) Unregulated PV overcharging a bank (no controller in the path).
+	for f_ov in GraphDcElectrical.find_battery_overvoltage(
+			model, _dc_flat_conns, _dc_analysis, temp_c) as Array:
+		if not (f_ov is Dictionary):
+			continue
+		var fd: Dictionary = f_ov
+		var params := {"string_voc": float(fd.get("string_voc", 0.0)),
+			"safe_v": float(fd.get("safe_v", 14.6))}
+		for bid in fd.get("battery_ids", []) as Array:
+			_destroy_battery(str(bid), GraphNodeState.REASON_BATTERY_OVERVOLTAGE,
+				"PV Voc %.0f V > charge limit %.0f V" % [
+					float(fd.get("string_voc", 0.0)), float(fd.get("safe_v", 14.6))],
+				params)
+	# 3) PV string Voc over a controller's input rating (existing fault).
 	var faults: Array = PvElectrical.find_overvoltage_faults_flat(model, temp_c)
 	for f in faults:
 		if not (f is Dictionary):
@@ -13761,12 +13911,51 @@ func _destroy_controller(controller_id: String, string_voc: float, max_voc: floa
 	sp["destroyed"] = true
 	sp["fault_voc"] = string_voc
 	sp["destroyed_reason"] = "Voc %.0f V > max %.0f V" % [string_voc, max_voc]
+	sp["node_state_reason"] = GraphNodeState.REASON_OVERVOLTAGE
 	model.update_item(controller_id, {"specs": sp})
-	_play_controller_destroy_fx(controller_id)
-	_show_controller_education_card(string_voc, max_voc)
+	_play_destroy_fx(controller_id)
+	_show_fault_card(GraphNodeState.REASON_OVERVOLTAGE,
+		{"string_voc": string_voc, "max_voc": max_voc})
 	_sync_graph_controller_ac_fault()
+	electrical_fault_observed.emit(GraphNodeState.REASON_OVERVOLTAGE, controller_id)
 	print("SystemGraphView: controller '%s' destroyed (Voc %.1f V > max %.1f V)" % [
 		controller_id, string_voc, max_voc])
+
+
+## Battery destroyed by a short circuit or unregulated PV overcharge. Same
+## specs contract as controllers (destroyed / destroyed_reason / node_state_
+## reason), so the canvas FAULT halo + DESTROYED banner + RESET come for free.
+func _destroy_battery(battery_id: String, reason: String, detail: String,
+		card_params: Dictionary = {}) -> void:
+	if model == null or battery_id.is_empty():
+		return
+	var it := model.get_item(battery_id)
+	if it.is_empty():
+		return
+	var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	if bool(sp.get("destroyed", false)):
+		return
+	sp["destroyed"] = true
+	sp["destroyed_reason"] = detail
+	sp["node_state_reason"] = reason
+	model.update_item(battery_id, {"specs": sp})
+	_play_destroy_fx(battery_id)
+	_show_fault_card(reason, card_params)
+	electrical_fault_observed.emit(reason, battery_id)
+	print("SystemGraphView: battery '%s' destroyed (%s)" % [battery_id, detail])
+
+
+## Sever every conductor on a shorted loop — they carried the fault current.
+## Reuses the burnout severing (scorched wire, reset in the wire inspector);
+## skipped wires that are already severed stay severed.
+func _burn_short_wires(conn_ids: Array) -> void:
+	if model == null:
+		return
+	for cid in conn_ids:
+		var conn := model.get_connection(str(cid))
+		if conn.is_empty() or bool(conn.get("severed", false)):
+			continue
+		_sever_connection(conn)
 
 
 func _reset_controller(controller_id: String) -> void:
@@ -13775,14 +13964,19 @@ func _reset_controller(controller_id: String) -> void:
 	var it := model.get_item(controller_id)
 	if it.is_empty():
 		return
+	var ty := str(it.get("type", ""))
 	var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
 	sp["destroyed"] = false
 	sp.erase("destroyed_reason")
 	sp.erase("fault_voc")
+	sp.erase("node_state_reason")
 	model.update_item(controller_id, {"specs": sp})
 	_sync_graph_controller_ac_fault()
-	call_deferred("_check_pv_voltage_faults")
-	_show_toast("Controller reset — check wiring before re-energizing", 3.0)
+	call_deferred("_check_electrical_faults")
+	if ty == "battery" or ty == "smartbattery":
+		_show_toast("Battery reset — fix the wiring before it burns again", 3.0)
+	else:
+		_show_toast("Controller reset — check wiring before re-energizing", 3.0)
 	if _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
 
@@ -13791,10 +13985,10 @@ func _on_controller_reset_pressed(controller_id: String) -> void:
 	_reset_controller(controller_id)
 
 
-func _play_controller_destroy_fx(controller_id: String) -> void:
+func _play_destroy_fx(item_id: String) -> void:
 	if _graph_canvas == null or not _graph_canvas.has_method("play_controller_destroy_fx"):
 		return
-	var it := model.get_item(controller_id)
+	var it := model.get_item(item_id)
 	if it.is_empty():
 		return
 	var c := _graph_canvas as Control
@@ -13804,57 +13998,25 @@ func _play_controller_destroy_fx(controller_id: String) -> void:
 	var tl := center + pan + Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0))) * zoom
 	var sz := Vector2(float(it.get("width", 120.0)), float(it.get("height", 90.0))) * zoom
 	var screen_center := tl + sz * 0.5
-	_graph_canvas.call("play_controller_destroy_fx", controller_id, screen_center)
+	_graph_canvas.call("play_controller_destroy_fx", item_id, screen_center)
 
 
-func _ensure_education_overlay() -> void:
-	if _edu_overlay != null:
+func _ensure_fault_card_modal() -> void:
+	if _fault_card_modal != null and is_instance_valid(_fault_card_modal):
 		return
-	_edu_overlay = PanelContainer.new()
-	_edu_overlay.name = "ControllerEduOverlay"
-	_edu_overlay.visible = false
-	_edu_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 20)
-	margin.add_theme_constant_override("margin_right", 20)
-	margin.add_theme_constant_override("margin_top", 16)
-	margin.add_theme_constant_override("margin_bottom", 16)
-	_edu_overlay.add_child(margin)
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 10)
-	margin.add_child(vbox)
-	_edu_title = Label.new()
-	_edu_title.add_theme_font_size_override("font_size", 20)
-	_edu_title.add_theme_color_override("font_color", Color(1.0, 0.45, 0.4))
-	vbox.add_child(_edu_title)
-	_edu_body = Label.new()
-	_edu_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_edu_body.custom_minimum_size = Vector2(420, 0)
-	_edu_body.add_theme_color_override("font_color", C_TEXT)
-	vbox.add_child(_edu_body)
-	var dismiss := Button.new()
-	dismiss.text = "Got it"
-	dismiss.pressed.connect(func() -> void:
-		if _edu_overlay != null:
-			_edu_overlay.visible = false
-	)
-	vbox.add_child(dismiss)
-	add_child(_edu_overlay)
-	_anchor(_edu_overlay, 0.5, 0.5, 0.5, 0.5, -240.0, -120.0, 240.0, 120.0)
+	_fault_card_modal = GraphFaultCardModal.new()
+	_fault_card_modal.name = "FaultCardModal"
+	add_child(_fault_card_modal)
 
 
-func _show_controller_education_card(string_voc: float, max_voc: float) -> void:
-	_ensure_education_overlay()
-	_edu_title.text = "Controller destroyed"
-	_edu_body.text = (
-		"The PV string open-circuit voltage (Voc) reached %.0f V, exceeding this "
-		+ "controller's maximum input rating of %.0f V.\n\n"
-		+ "Cold weather increases Voc. Fix the wiring (fewer panels in series or a "
-		+ "higher-voltage controller), then press RESET on the controller node."
-		% [string_voc, max_voc]
-	)
-	_edu_overlay.visible = true
-	_edu_overlay.move_to_front()
+## Present the education card for a tripped fault (GraphEducationCards registry
+## keyed by GraphNodeState reason). Queued by the modal if one is already up.
+func _show_fault_card(reason: String, params: Dictionary = {}) -> void:
+	var card := GraphEducationCards.card_for_fault(reason, params)
+	if card.is_empty():
+		return
+	_ensure_fault_card_modal()
+	_fault_card_modal.show_card(card)
 
 
 func reset_controller_from_inspector(controller_id: String) -> void:
@@ -13994,7 +14156,7 @@ func _wire_selected_panels(series: bool) -> void:
 		GraphPvWiring.wire_parallel(model, ids, ctrl_id, _active_scope_id)
 	_history_suppress = false
 	_push_history()
-	call_deferred("_check_pv_voltage_faults")
+	call_deferred("_check_electrical_faults")
 	_show_toast("Wired %d panel(s) %s → controller" % [
 		ids.size(), "in series" if series else "in parallel"])
 	_update_special_group_buttons()

@@ -29,6 +29,8 @@ const REASON_OUTPUT_FULL := "output_full"
 const REASON_OUTPUT_UNWIRED := "output_unwired"
 const REASON_TANK_FULL := "tank_full"
 const REASON_OVERVOLTAGE := "overvoltage"
+const REASON_SHORT_CIRCUIT := "short_circuit"
+const REASON_BATTERY_OVERVOLTAGE := "battery_overvoltage"
 
 const C_RUNNING := Color(0.27, 0.90, 0.42)
 const C_ALERT := Color(0.92, 0.30, 0.28)
@@ -101,6 +103,10 @@ static func chip_text(state: String, reason: String = "", kinds: Array = []) -> 
 		FAULT:
 			if reason == REASON_OVERVOLTAGE:
 				return "Over-voltage"
+			if reason == REASON_SHORT_CIRCUIT:
+				return "Short circuit!"
+			if reason == REASON_BATTERY_OVERVOLTAGE:
+				return "Overcharged"
 			return "Fault"
 		OVERFLOW:
 			return "Overflow"
