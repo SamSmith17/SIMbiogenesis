@@ -365,6 +365,10 @@ var _dc_flat_conns: Array = []
 var _dc_throttle_acc: float = 0.0
 var _autosave_timer: Timer = null
 var _autosave_pending: bool = false
+## Debounced persistence for the tutorial sandbox graph — separate from
+## _autosave_timer, which is deliberately suppressed while sandboxed (see
+## _schedule_graph_autosave).
+var _tutorial_sandbox_timer: Timer = null
 var _timeline_inset_hooked := false
 
 # Component (super-node) live-propagation. Editing inside an instance debounces a
@@ -996,6 +1000,11 @@ func _init_graph_autosave() -> void:
 	_component_sync_timer.wait_time = 0.15
 	_component_sync_timer.timeout.connect(_flush_component_sync)
 	add_child(_component_sync_timer)
+	_tutorial_sandbox_timer = Timer.new()
+	_tutorial_sandbox_timer.one_shot = true
+	_tutorial_sandbox_timer.wait_time = GRAPH_AUTOSAVE_DEBOUNCE_SEC
+	_tutorial_sandbox_timer.timeout.connect(_flush_tutorial_sandbox_save)
+	add_child(_tutorial_sandbox_timer)
 
 
 ## Stable key for this map's graph autosave.
@@ -1158,7 +1167,16 @@ func has_user_graph_layout() -> bool:
 
 
 func _schedule_graph_autosave() -> void:
-	if Engine.is_editor_hint() or _autosave_suspended:
+	if Engine.is_editor_hint():
+		return
+	if _autosave_suspended:
+		# The sandbox graph itself is never part of the player's autosave (see
+		# begin_tutorial_sandbox), but the carry_graph curriculum (levels 10-12)
+		# needs the graph to survive a session close, or resuming one lands on
+		# a blank, unbuildable canvas. Persist it on its own debounced timer —
+		# every one of this function's ~60 call sites doubles as the hook.
+		if _sandbox_active and _tutorial_sandbox_timer != null:
+			_tutorial_sandbox_timer.start()
 		return
 	if _autosave_timer == null:
 		return
@@ -1214,6 +1232,35 @@ func begin_tutorial_sandbox() -> bool:
 		_bridge.call("set_enabled", false)
 	tutorial_clear_graph()
 	return true
+
+
+## Debounced write of the live sandbox graph to ProgressStore — the only thing
+## that lets a carry_graph level (10-12) resume with content after a session
+## close instead of the blank canvas begin_tutorial_sandbox always starts from.
+func _flush_tutorial_sandbox_save() -> void:
+	if not _sandbox_active or model == null:
+		return
+	var level_id := ""
+	if _tutorial_director != null and is_instance_valid(_tutorial_director):
+		var lvl: TutorialLevelDef = _tutorial_director.get("_level")
+		if lvl != null:
+			level_id = lvl.id
+	ProgressStore.save_sandbox_snapshot(level_id, model.serialize())
+
+
+## Apply the last-persisted sandbox graph on top of the (currently empty)
+## sandbox. Called by TutorialDirector.start() when entering a carry_graph
+## level. Returns false when nothing was persisted (first-ever visit).
+func restore_tutorial_sandbox_snapshot() -> bool:
+	var blob: Dictionary = ProgressStore.load_sandbox_snapshot().get("graph", {}) as Dictionary
+	if blob.is_empty():
+		return false
+	apply_save_state({"graph": blob}, {"sandbox": true})
+	return true
+
+
+func clear_tutorial_sandbox_snapshot() -> void:
+	ProgressStore.clear_sandbox_snapshot()
 
 
 ## Restore the pre-tutorial graph exactly as it was. `_schedule` refreshes the
@@ -11830,7 +11877,6 @@ func _set_score_color(key: String, color: Color) -> void:
 
 func _collect_root_array_aggregate() -> Dictionary:
 	var panel_wmp: float = 0.0
-	var panel_voc_max: float = 0.0
 	var panel_imp: float = 0.0
 	var panel_count: int = 0
 	if model == null:
@@ -11842,7 +11888,6 @@ func _collect_root_array_aggregate() -> Dictionary:
 		var specs: Dictionary = item.get("specs", {}) as Dictionary
 		if itype == "panel":
 			panel_wmp += float(specs.get("wmp", 0.0))
-			panel_voc_max = maxf(panel_voc_max, float(specs.get("voc", 0.0)))
 			panel_imp += float(specs.get("imp", 0.0))
 			panel_count += int(specs.get("panel_count", 1.0))
 		elif itype == "compound" and str(specs.get("compound_kind", "")) == "array":
@@ -11851,9 +11896,25 @@ func _collect_root_array_aggregate() -> Dictionary:
 			if bool(specs.get("array_stowed", false)):
 				continue
 			panel_wmp += float(specs.get("array_equiv_wmp", 0.0))
-			panel_voc_max = maxf(panel_voc_max, float(specs.get("array_equiv_voc", 0.0)))
 			panel_imp += float(specs.get("array_equiv_imp", 0.0))
 			panel_count += int(specs.get("array_panel_units", specs.get("child_count", 0)))
+	# Voc is NOT additive across the whole design the way Wmp/Imp/count are —
+	# it's a per-STRING figure that depends entirely on series vs. parallel
+	# wiring. Reporting each panel's own rated Voc here (as this used to) reads
+	# a fixed 40 V for four identical panels regardless of how they're wired —
+	# exactly the confusion a series-vs-parallel curriculum exists to resolve.
+	# So this walks the same wired-topology math the controller fault check
+	# uses (PvElectrical.branch_vocs_for_controller_flat): the worst branch Voc
+	# actually feeding any controller right now — i.e. the number that would
+	# blow one up.
+	var panel_voc_max: float = 0.0
+	var flat_conns := GraphNesting.flat_connections(model)
+	for ctrl_item: Dictionary in GraphNesting.walk_items(model, "root"):
+		if str(ctrl_item.get("type", "")) != "controller":
+			continue
+		var cid := str(ctrl_item.get("id", ""))
+		for bv in PvElectrical.branch_vocs_for_controller_flat(model, cid, flat_conns, 25.0):
+			panel_voc_max = maxf(panel_voc_max, float(bv))
 	var cfg := "%d panel%s" % [panel_count, "s" if panel_count != 1 else ""] if panel_count > 0 else "—"
 	return {
 		"panel_wmp": panel_wmp,
@@ -14232,6 +14293,8 @@ func _reset_controller(controller_id: String) -> void:
 	sp.erase("fault_voc")
 	sp.erase("node_state_reason")
 	model.update_item(controller_id, {"specs": sp})
+	# A reset while the blast is still playing must not pop a stale card.
+	_cancel_pending_fault_card()
 	_sync_graph_controller_ac_fault()
 	call_deferred("_check_electrical_faults")
 	if ty == "battery" or ty == "smartbattery":
@@ -14270,14 +14333,53 @@ func _ensure_fault_card_modal() -> void:
 	add_child(_fault_card_modal)
 
 
+## Seconds the blast plays before the education card appears. Showing the card
+## in the same frame as the FX buried the very explosion it explains — and per
+## playtest feedback, the card was still arriving too soon to actually watch
+## the (much bigger, two-hit) blast and sit with the mistake before the lesson
+## interrupts. Comfortably outlasts graph_canvas.gd's FX_LIFETIME (4.2 s).
+const FAULT_CARD_DELAY := 3.2
+
+var _pending_fault_card: Dictionary = {}
+var _fault_card_token: int = 0
+
+
 ## Present the education card for a tripped fault (GraphEducationCards registry
-## keyed by GraphNodeState reason). Queued by the modal if one is already up.
+## keyed by GraphNodeState reason), after the destroy FX has had its moment.
+## Queued by the modal if one is already up.
 func _show_fault_card(reason: String, params: Dictionary = {}) -> void:
 	var card := GraphEducationCards.card_for_fault(reason, params)
 	if card.is_empty():
 		return
+	card["placement"] = "corner"
+	_pending_fault_card = card
+	_fault_card_token += 1
+	var token := _fault_card_token
+	var tree := get_tree()
+	if tree == null:
+		_flush_fault_card(token)
+		return
+	tree.create_timer(FAULT_CARD_DELAY).timeout.connect(
+		func() -> void: _flush_fault_card(token))
+
+
+## Show the queued card unless it was superseded by a later fault or cancelled
+## (reset / left the view) while the blast was still playing.
+func _flush_fault_card(token: int) -> void:
+	if token != _fault_card_token or _pending_fault_card.is_empty():
+		return
+	if not is_inside_tree() or not visible:
+		_pending_fault_card = {}
+		return
+	var card := _pending_fault_card
+	_pending_fault_card = {}
 	_ensure_fault_card_modal()
 	_fault_card_modal.show_card(card)
+
+
+func _cancel_pending_fault_card() -> void:
+	_fault_card_token += 1
+	_pending_fault_card = {}
 
 
 func reset_controller_from_inspector(controller_id: String) -> void:

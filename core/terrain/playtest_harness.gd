@@ -1566,16 +1566,56 @@ func _run_population_verify() -> void:
 	# Keep running AFTER the bake completes — planning only happens when an
 	# agent starts a new trip, so sampling the instant the grid goes ready
 	# would always read zero.
+	# Park the clock just before 09:00. Routines mean people travel at BLOCK
+	# BOUNDARIES and sit still in between, so a window landing mid-block sees
+	# nobody move at all — which is what made this read as "nobody routed".
+	# 09:00 is the wake / bathroom / breakfast run, so travel is guaranteed
+	# rather than hoped for.
+	var prev_day_time := float(main.day_time) if main != null and "day_time" in main else -1.0
+	if prev_day_time >= 0.0:
+		main.day_time = 8.85
+		await get_tree().process_frame
 	var with_path := 0
+	var max_travelling := 0
+	var pose_violations := 0
+	var travel_samples := 0
 	if nav_ready:
-		for i in 40:
+		for i in 120:
 			await get_tree().create_timer(0.25).timeout
 			var n := 0
+			var trav := 0
 			for a in bridge.call("roster_for", hab_id):
-				if (a as NpcAgent).path.size() > 0:
+				var ag := a as NpcAgent
+				if ag.path.size() > 0:
 					n += 1
+				if ag.state == NpcAgent.State.TRAVELING:
+					trav += 1
 			with_path = maxi(with_path, n)
+			max_travelling = maxi(max_travelling, trav)
+			# Sample the reported bug across the SAME window rather than once:
+			# nobody may hold a lying or seated pose while the sim says they are
+			# on their way somewhere. A single sample lands on a quiet instant
+			# and passes without ever observing a traveller.
+			for node in get_tree().get_nodes_in_group("npc_avatars"):
+				var av3 := node as NpcAvatar
+				if av3 == null or not av3.is_posed_down():
+					continue
+				for a2 in bridge.call("roster_for", hab_id):
+					var ag2 := a2 as NpcAgent
+					if ag2.id == av3.agent_id and ag2.state == NpcAgent.State.TRAVELING:
+						pose_violations += 1
+			travel_samples += trav
 		nav_info = bridge.call("nav_status")
+	# Put the clock back: every later phase (starvation, the collapse cascade)
+	# is written against the schedule it started on, and leaving the day shifted
+	# under them made the starvation loop stop firing.
+	if prev_day_time >= 0.0:
+		main.day_time = prev_day_time
+		await get_tree().process_frame
+	print("PlaytestHarness: population verify — travel poses %s (%d traveller-samples, %d lying/seated while travelling)" % [
+		"PASS" if (pose_violations == 0 and travel_samples > 0) else
+		("FAIL (never saw a traveller)" if travel_samples == 0 else "FAIL"),
+		travel_samples, pose_violations])
 	if main != null and "time_scale" in main:
 		main.time_scale = 0.0
 	print("PlaytestHarness: population verify — nav %s (%d cells @ %.2f m, %d layers; hits=%d misses=%d fails=%d)" % [

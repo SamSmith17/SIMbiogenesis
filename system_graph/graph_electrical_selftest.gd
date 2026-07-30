@@ -3,6 +3,7 @@ extends SceneTree
 ## Offline self-test for PV electrical math, graph layout, and wiring helpers.
 
 const GraphModelScript := preload("res://system_graph/data/graph_model.gd")
+const GraphCanvasScript := preload("res://system_graph/graph_canvas.gd")
 
 
 func _initialize() -> void:
@@ -23,8 +24,11 @@ func _initialize() -> void:
 	fails += _test_bus_voltage_topology()
 	fails += _test_battery_overvoltage()
 	fails += _test_controller_clip_values()
+	fails += _test_open_circuit_needs_return_leg()
+	fails += _test_destroy_fx_envelope()
+	fails += _test_fault_card_placement()
 	if fails == 0:
-		print("GRAPH ELECTRICAL SELFTEST PASS  (16 checks)")
+		print("GRAPH ELECTRICAL SELFTEST PASS  (19 checks)")
 	else:
 		print("GRAPH ELECTRICAL SELFTEST FAIL  (%d failed)" % fails)
 	quit()
@@ -234,6 +238,187 @@ func _test_controller_clip_values() -> int:
 		{"type": "controller", "specs": {}}, bank2, 5000.0)
 	if absf(float(free.get("delivered_w", 0.0)) - 5000.0) > 0.5:
 		push_error("no-amp-limit controller must not clip, got %s" % str(free))
+		return 1
+	return 0
+
+
+## Destroy-FX envelope. The visuals need a viewport, but the timing/easing/audio
+## are pure functions and are pinned here: stages open and close where they
+## should, the shake decays to EXACTLY zero (a residual offset would leave the
+## canvas permanently nudged), and the synthesized boom is real audio.
+func _test_destroy_fx_envelope() -> int:
+	# Stage envelope: clamped at both ends, monotonic across the window.
+	if GraphCanvasScript.fx_stage(0.0, 0.1, 0.5) != 0.0 \
+			or GraphCanvasScript.fx_stage(0.05, 0.1, 0.5) != 0.0:
+		push_error("fx_stage should read 0 before the stage opens")
+		return 1
+	if GraphCanvasScript.fx_stage(0.5, 0.1, 0.5) != 1.0 \
+			or GraphCanvasScript.fx_stage(9.0, 0.1, 0.5) != 1.0:
+		push_error("fx_stage should read 1 once the stage has closed")
+		return 1
+	var prev := -1.0
+	for i in 12:
+		var v: float = GraphCanvasScript.fx_stage(0.1 + float(i) * 0.03, 0.1, 0.5)
+		if v < prev:
+			push_error("fx_stage must not go backwards inside the window")
+			return 1
+		prev = v
+
+	# Shake: strongest at t=0, decaying, and exactly zero once the window closes.
+	var early: Vector2 = GraphCanvasScript.fx_shake_offset(0.02)
+	var late: Vector2 = GraphCanvasScript.fx_shake_offset(0.30)
+	if early.length() <= 0.0:
+		push_error("shake should be non-zero at the start of the blast")
+		return 1
+	if late.length() >= early.length():
+		push_error("shake should decay: %f then %f" % [early.length(), late.length()])
+		return 1
+	if GraphCanvasScript.fx_shake_offset(GraphCanvasScript.FX_SHAKE_S) != Vector2.ZERO \
+			or GraphCanvasScript.fx_shake_offset(5.0) != Vector2.ZERO:
+		push_error("shake must settle to exactly zero or the canvas stays nudged")
+		return 1
+
+	# The second arc-flash's own shake pulse: silent in the gap after the
+	# primary shake ends, non-zero during its own window, and settled again
+	# once IT closes — two independent decays, not one long tail.
+	var gap_t := (GraphCanvasScript.FX_SHAKE_S + GraphCanvasScript.FX_CRACK_AT) * 0.5
+	if gap_t < GraphCanvasScript.FX_CRACK_AT \
+			and GraphCanvasScript.fx_shake_offset(gap_t) != Vector2.ZERO:
+		push_error("shake should be silent in the gap before the crack pulse")
+		return 1
+	if GraphCanvasScript.fx_shake_offset(GraphCanvasScript.FX_CRACK_AT + 0.02).length() <= 0.0:
+		push_error("crack pulse should shake the canvas when it fires")
+		return 1
+	# Past the window, not exactly on its edge — FX_CRACK_AT + FX_CRACK_SHAKE_S
+	# is a sum of two floats and can land a hair inside or outside the open
+	# interval depending on rounding, which isn't the thing being tested.
+	if GraphCanvasScript.fx_shake_offset(
+			GraphCanvasScript.FX_CRACK_AT + GraphCanvasScript.FX_CRACK_SHAKE_S + 0.05) != Vector2.ZERO:
+		push_error("crack pulse shake must also settle to exactly zero")
+		return 1
+
+	# Fire ramp: white-hot at the start, cooled to smoke by the end.
+	var hot: Color = GraphCanvasScript.fx_fire_color(0.0)
+	var cold: Color = GraphCanvasScript.fx_fire_color(1.0)
+	if hot.r + hot.g + hot.b <= cold.r + cold.g + cold.b:
+		push_error("fire ramp should cool, not heat up")
+		return 1
+
+	# Synthesized boom: right length/format, real signal, and it decays.
+	var stream: AudioStreamWAV = GraphCanvasScript.build_boom_stream()
+	var want_bytes := int(GraphCanvasScript.BOOM_SAMPLE_RATE
+		* GraphCanvasScript.BOOM_SECONDS) * 2
+	if stream.data.size() != want_bytes:
+		push_error("boom expected %d bytes got %d" % [want_bytes, stream.data.size()])
+		return 1
+	if stream.format != AudioStreamWAV.FORMAT_16_BITS or stream.stereo:
+		push_error("boom should be 16-bit mono")
+		return 1
+	var head_peak := 0
+	var tail_peak := 0
+	var total := stream.data.size() / 2
+	for i in total:
+		var v: int = absi(stream.data.decode_s16(i * 2))
+		if i < total / 8:
+			head_peak = maxi(head_peak, v)
+		elif i > total * 7 / 8:
+			tail_peak = maxi(tail_peak, v)
+	if head_peak < 8000:
+		push_error("boom is near-silent at the attack (peak %d)" % head_peak)
+		return 1
+	if tail_peak >= head_peak:
+		push_error("boom should decay: head %d tail %d" % [head_peak, tail_peak])
+		return 1
+	return 0
+
+
+## The fault card must stay fully on screen in its corner dock and clear of the
+## timeline stack. Headless has no viewport, so UiScreenLayout falls back to its
+## documented 1280×720 — the oversized case proves the clamp actually engages.
+func _test_fault_card_placement() -> int:
+	var screen := Vector2(1280.0, 720.0)
+	var max_h := screen.y - UiScreenLayout.timeline_stack_height()
+	for desired in [Vector2(520.0, 340.0), Vector2(4000.0, 4000.0)]:
+		var panel := Control.new()
+		UiScreenLayout.clamped_corner_card(panel, desired)
+		var w: float = panel.custom_minimum_size.x
+		var h: float = panel.custom_minimum_size.y
+		if w <= 0.0 or h <= 0.0:
+			push_error("corner card got a degenerate size for desired %s" % str(desired))
+			panel.free()
+			return 1
+		if w > screen.x or h > max_h:
+			push_error("corner card %.0fx%.0f overflows the usable area (%.0fx%.0f)"
+				% [w, h, screen.x, max_h])
+			panel.free()
+			return 1
+		# Anchored bottom-right: offsets inset back from that corner, and the
+		# bottom edge must sit above the timeline stack.
+		if panel.offset_right > 0.0 or panel.offset_left >= panel.offset_right:
+			push_error("corner card should inset from the right edge")
+			panel.free()
+			return 1
+		if panel.offset_bottom > -UiScreenLayout.timeline_stack_height() + 0.01:
+			push_error("corner card should clear the timeline stack, got %f"
+				% panel.offset_bottom)
+			panel.free()
+			return 1
+		panel.free()
+	return 0
+
+
+## One wire is not a circuit. Until the return leg lands there is no current
+## path, so: no bank for the controller, no PV sources, and no overcharge fault.
+## Each leg is then completed in turn to prove the flip is the second wire.
+func _test_open_circuit_needs_return_leg() -> int:
+	# --- battery leg: controller + → battery + only ---------------------------
+	var model: GraphModel = GraphModelScript.new()
+	_add_battery(model, "bat", 12.0, 1.2)
+	_add_controller(model, "ctrl", 150.0)
+	_dc_wire(model, "ctrl", "batteryPositive", "bat", "positive")
+	var flat := GraphNesting.flat_connections(model)
+	var an := GraphDcElectrical.analyze(model, flat)
+	if not GraphDcElectrical.bank_for_controller(model, "ctrl", flat, an).is_empty():
+		push_error("one battery wire is an open circuit — bank_for_controller must be empty")
+		return 1
+	_dc_wire(model, "ctrl", "batteryNegative", "bat", "negative")
+	flat = GraphNesting.flat_connections(model)
+	an = GraphDcElectrical.analyze(model, flat)
+	var bank := GraphDcElectrical.bank_for_controller(model, "ctrl", flat, an)
+	if bank.is_empty() or absf(float(bank.get("bus_voltage", 0.0)) - 12.0) > 0.5:
+		push_error("both battery legs wired should resolve a 12 V bank, got %s" % str(bank))
+		return 1
+
+	# --- PV leg: panel + → controller pv+ only --------------------------------
+	var m2: GraphModel = GraphModelScript.new()
+	_add_panel(m2, "p1", 48.0)
+	_add_controller(m2, "ctrl", 150.0)
+	_dc_wire(m2, "p1", "positive", "ctrl", "pvPositive")
+	var flat2 := GraphNesting.flat_connections(m2)
+	if not PvElectrical.pv_sources_for_controller_flat(m2, "ctrl", flat2).is_empty():
+		push_error("one PV wire is an open circuit — no PV sources should be reported")
+		return 1
+	_dc_wire(m2, "p1", "negative", "ctrl", "pvNegative")
+	flat2 = GraphNesting.flat_connections(m2)
+	if PvElectrical.pv_sources_for_controller_flat(m2, "ctrl", flat2).size() != 1:
+		push_error("both PV legs wired should report the panel as a source")
+		return 1
+
+	# --- overcharge: a half-wired panel cannot overcharge a bank --------------
+	var m3: GraphModel = GraphModelScript.new()
+	_add_battery(m3, "bat", 12.0, 1.2)
+	_add_panel(m3, "p1", 40.0)
+	_dc_wire(m3, "p1", "positive", "bat", "positive")
+	var flat3 := GraphNesting.flat_connections(m3)
+	var an3 := GraphDcElectrical.analyze(m3, flat3)
+	if not GraphDcElectrical.find_battery_overvoltage(m3, flat3, an3, 25.0).is_empty():
+		push_error("a panel wired on one leg cannot overcharge the bank")
+		return 1
+	_dc_wire(m3, "p1", "negative", "bat", "negative")
+	flat3 = GraphNesting.flat_connections(m3)
+	an3 = GraphDcElectrical.analyze(m3, flat3)
+	if GraphDcElectrical.find_battery_overvoltage(m3, flat3, an3, 25.0).size() != 1:
+		push_error("closing the return leg should overcharge the 12 V bank")
 		return 1
 	return 0
 

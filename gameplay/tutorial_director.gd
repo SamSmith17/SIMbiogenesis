@@ -65,6 +65,12 @@ func start(level_id: String = "") -> void:
 			return
 	if not bool(_gv.call("begin_tutorial_sandbox")):
 		return
+	# Levels 10-12 iterate on the graph the player built in the level before —
+	# begin_tutorial_sandbox always starts from an empty canvas, so resuming
+	# into one of these (a new session, or straight from the level picker)
+	# needs that graph restored, or there is nothing left to build on.
+	if def.carry_graph:
+		_gv.call("restore_tutorial_sandbox_snapshot")
 	# Snapshot the world the sandbox will perturb (runs advance the clock,
 	# bake commits move the battery) so exit hands everything back.
 	var m := _main_node()
@@ -161,13 +167,30 @@ func _show_brief() -> void:
 		"title": "Level %d — %s" % [_level.index, _level.title],
 		"title_color": UITheme.C_PRIMARY,
 		"body": _level.brief_bbcode,
-		"actions": [{"label": "Let's go", "callback": Callable(self, "_on_brief_done")}],
+		"actions": [
+			{"label": "↺ Start Over", "callback": Callable(self, "_on_start_over")},
+			{"label": "Let's go", "callback": Callable(self, "_on_brief_done")},
+		],
 	})
 
 
 func _on_brief_done() -> void:
 	if _state == State.BRIEF:
 		_state = State.BUILD
+
+
+## TEMPORARY testing affordance (per playtest request): jump back to level 1
+## without hunting for a way to un-stick a resumed-blank carry_graph level.
+## Remove this action once the resume-persistence fix above is confirmed —
+## it bypasses no unlock gating (allowed_presets still gates each level's
+## Library while it's active), but it IS a one-click, no-confirmation reset of
+## curriculum progress that has no place in a shipped build.
+func _on_start_over() -> void:
+	if _gv == null:
+		return
+	ProgressStore.reset_tutorial_progress()
+	exit_tutorial()
+	start(str(TutorialCatalog.ordered_ids()[0]))
 
 
 func _on_fault_observed(reason: String, _item_id: String) -> void:
@@ -239,7 +262,7 @@ func _on_run_requested() -> void:
 	if _run_engine.start(m, _gv, su, def, start_abs):
 		if _hud != null:
 			_hud.call("set_run_busy", true)
-			_hud.call("set_progress", "Computing the day…")
+			_hud.call("set_progress", "Running the day…")
 
 
 func _ensure_run_engine() -> void:
@@ -248,9 +271,11 @@ func _ensure_run_engine() -> void:
 	_run_engine = ChallengeBakeEngine.new()
 	_run_engine.name = "TutorialRunEngine"
 	add_child(_run_engine)
+	# Playback streams behind the bake, so this reads as run progress rather
+	# than a loading bar the player is stuck behind.
 	_run_engine.bake_progress.connect(func(frac: float, _cursor: float) -> void:
 		if _hud != null and frac < 1.0:
-			_hud.call("set_progress", "Computing… %d%%" % int(frac * 100.0)))
+			_hud.call("set_progress", "Running the day… %d%%" % int(frac * 100.0)))
 	_run_engine.bake_failed_at.connect(func(_abs_h: float, _reason: String) -> void:
 		if _hud != null:
 			_hud.call("set_progress", "It didn't make it — watching the day…"))
@@ -356,3 +381,9 @@ func _ensure_hud() -> void:
 			_show_brief())
 	_hud.connect("exit_requested", exit_tutorial)
 	_hud.connect("run_requested", _on_run_requested)
+	_hud.connect("run_speed_requested", func(mult: float) -> void:
+		if _run_engine != null and is_instance_valid(_run_engine):
+			_run_engine.set_play_speed(mult))
+	_hud.connect("run_skip_requested", func() -> void:
+		if _run_engine != null and is_instance_valid(_run_engine):
+			_run_engine.skip_to_result())

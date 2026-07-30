@@ -60,8 +60,15 @@ var _rig_mat: ShaderMaterial = null
 var _rigged := false                # is the rigged body the active one?
 var _tint := Color(0.6, 0.65, 0.8)
 var _activity := ""
+var _space_type := ""
 var _clip := ""
 var _rig_y_target := 0.0
+var _backwards := false
+var _machine: NpcPoseMachine = null
+## Set when the AnimationPlayer reports a one-shot ended. The machine treats
+## this as an accelerator only — its own timer is authoritative, because this
+## signal is missed whenever the figure is culled or speed_scale changes.
+var _anim_finished := false
 
 
 func setup(p_agent_id: String, color: Color, p_name: String = "") -> void:
@@ -69,6 +76,9 @@ func setup(p_agent_id: String, color: Color, p_name: String = "") -> void:
 	display_name = p_name if not p_name.is_empty() else p_agent_id
 	name = "Npc_%s" % p_agent_id.validate_node_name()
 	_tint = color
+	_machine = NpcPoseMachine.new()
+	_machine.set_catalog(NpcRig.catalog())
+	_machine.set_walk_variant(NpcRig.walk_variant_for(p_agent_id))
 	_ensure_visuals()
 	_mat.albedo_color = Color(color.r * 0.55, color.g * 0.55, color.b * 0.55)
 	if _rig_mat != null:
@@ -96,7 +106,13 @@ func set_detail(rigged: bool) -> void:
 		_root.visible = not want
 	if want:
 		_clip = ""  # force a re-pick so the new body starts on the right clip
-		_apply_clip(_pick_clip(), true)
+		# Snap to the settled look rather than resuming a transition: acquiring
+		# a figure mid lie-down would pop a half-lying body into view.
+		if _machine != null:
+			_machine.snap_to_settled(_activity, _space_type, _moving)
+			_apply_clip(_machine.clip(), _machine.backwards(), 0.0, true)
+		else:
+			_apply_clip(_pick_clip(), false, 0.0, true)
 
 
 func is_rigged() -> bool:
@@ -117,9 +133,15 @@ func set_tag_visible(on: bool) -> void:
 
 ## pos = ground point (feet); yaw = facing; moving/activity drive animation.
 func apply_state(pos: Vector3, yaw: float, moving: bool, activity: String) -> void:
+	apply_pose(pos, yaw, {"in_transit": moving, "activity": activity})
+
+
+## Full per-frame drive. `inp` is passed through to NpcPoseMachine — see its
+## `step()` for the accepted keys.
+func apply_pose(pos: Vector3, yaw: float, inp: Dictionary) -> void:
 	global_position = pos
 	rotation = Vector3(0.0, yaw, 0.0)
-	set_motion_state(moving, activity)
+	_drive(float(inp.get("dt", 1.0 / 60.0)), inp)
 
 
 ## What the figure is doing, independent of where it is. Split out from
@@ -127,11 +149,36 @@ func apply_state(pos: Vector3, yaw: float, moving: bool, activity: String) -> vo
 ## posing needs a tree while clip selection does not, which is what lets the
 ## offline selftest cover the activity→clip routing at all.
 func set_motion_state(moving: bool, activity: String) -> void:
-	_moving = moving
-	_activity = activity
-	_lying = activity == "sleep"
-	if _rigged:
-		_apply_clip(_pick_clip(), false)
+	_drive(1.0 / 60.0, {"in_transit": moving, "activity": activity})
+
+
+func _drive(dt: float, inp: Dictionary) -> void:
+	_moving = bool(inp.get("in_transit", false))
+	_activity = str(inp.get("activity", ""))
+	_space_type = str(inp.get("space_type", ""))
+	if _machine == null:
+		_lying = _activity == "sleep"
+		return
+	var step_inp := inp.duplicate()
+	step_inp["finished"] = _anim_finished
+	_anim_finished = false
+	_machine.step(dt, step_inp)
+	# The primitive far-LOD figure reads the SAME machine, which is what stops
+	# it lying down for the whole walk to bed the way it used to.
+	_lying = _machine.is_lying()
+	if _rigged and _machine.changed():
+		_apply_clip(_machine.clip(), _machine.backwards(), _machine.blend_s(), false)
+
+
+## Is this figure currently lying down or seated? Used by the harness to assert
+## that nobody is holding a settled pose while the sim says they are walking.
+func is_posed_down() -> bool:
+	return _machine != null and (_machine.is_lying() or _machine.is_seated())
+
+
+## Whether the figure should hold position this frame (mid stand-up).
+func wants_anchor(lag_m: float) -> bool:
+	return _machine != null and _machine.anchor(lag_m)
 
 
 func _ready() -> void:
@@ -139,40 +186,58 @@ func _ready() -> void:
 	add_to_group("npc_avatars")
 
 
-## Travelling wins over intent, then the activity table, then standing idle.
+## The clip this figure settles on for its current situation, ignoring
+## transitions. Retained as the simple question it always answered — travelling
+## wins over intent, then the activity table — and still used by the selftest.
 func _pick_clip() -> String:
 	if _moving:
 		return NpcRig.CLIP_WALK
 	return str(ACTIVITY_CLIPS.get(_activity, NpcRig.CLIP_IDLE))
 
 
-func _apply_clip(clip: String, immediate: bool) -> void:
-	if _rig_ap == null or clip == _clip:
+## Play a clip, forwards or backwards.
+##
+## The guard keys on (clip, DIRECTION), not the clip alone. Sitting down is
+## `sit_exit` reversed, so a clip-only guard would make sit-down -> stand-up a
+## no-op and freeze the figure half-seated — a wedge, not a cosmetic glitch.
+func _apply_clip(clip: String, backwards: bool, blend: float, immediate: bool) -> void:
+	if _rig_ap == null:
 		return
-	if not _rig_ap.has_animation(clip):
+	if clip == _clip and backwards == _backwards:
+		return
+	var file_clip := NpcPoseMachine._clip_file_for(clip)
+	if not _rig_ap.has_animation(file_clip):
 		return
 	_clip = clip
-	# Rate-match only the walk: every other clip is authored at its own pace and
-	# has no ground speed to agree with.
-	_rig_ap.speed_scale = NpcRig.walk_speed_scale(WALK_SPEED_MPS) \
-		if clip == NpcRig.CLIP_WALK else 1.0
-	# Lying and seated clips are authored floating; ride them down to the
-	# ground over the same window the pose blends across, so the figure does
-	# not visibly drop after it has already lain down.
-	_rig_y_target = NpcRig.clip_ground_offset(clip)
-	if immediate:
-		_rig_ap.play(clip)
+	_backwards = backwards
+	# Rate-match the gait so the feet grip; per variant, because the alternate
+	# walks were authored ~1.02 m/s against the primary's 1.64.
+	_rig_ap.speed_scale = NpcRig.walk_speed_scale_for(file_clip, WALK_SPEED_MPS) \
+		if _is_gait(file_clip) else 1.0
+	_rig_y_target = NpcRig.clip_ground_offset_at(file_clip, 1.0 if backwards else 0.0)
+	if immediate or blend <= 0.0:
+		if backwards:
+			_rig_ap.play_backwards(file_clip)
+		else:
+			_rig_ap.play(file_clip)
+		# Snap, never lerp, on a hard cut: an aborted lie-down would otherwise
+		# leave the body most of a metre underground while the offset caught up.
 		if _rig != null:
 			_rig.position.y = _rig_y_target
+	elif backwards:
+		_rig_ap.play_backwards(file_clip, blend)
 	else:
-		_rig_ap.play(clip, CLIP_BLEND_S)
+		_rig_ap.play(file_clip, blend)
+
+
+static func _is_gait(clip: String) -> bool:
+	return clip == NpcRig.CLIP_WALK or clip == NpcRig.CLIP_WALK_ALT \
+		or clip == NpcRig.CLIP_WALK_ALT2 or clip == NpcRig.CLIP_WALK_SAD
 
 
 func _process(delta: float) -> void:
 	if _rigged:
-		if _rig != null and not is_equal_approx(_rig.position.y, _rig_y_target):
-			_rig.position.y = lerpf(_rig.position.y, _rig_y_target,
-					minf(delta / CLIP_BLEND_S, 1.0))
+		_follow_ground_offset(delta)
 		return
 	if _root == null:
 		return
@@ -195,6 +260,25 @@ func _process(delta: float) -> void:
 			_leg_l.rotation.x = lerpf(_leg_l.rotation.x, 0.0, minf(delta * 8.0, 1.0))
 		if _leg_r != null:
 			_leg_r.rotation.x = lerpf(_leg_r.rotation.x, 0.0, minf(delta * 8.0, 1.0))
+
+
+## Track the ground offset for where the CURRENT clip actually is, rather than
+## lerping toward one number per clip on a timer.
+##
+## A lie-down spans standing to lying, so a single offset is wrong at one end or
+## the other; the curve is indexed by the clip\'s own descent, so the body meets
+## the ground exactly when the animation puts it there. A small follow remains
+## only to absorb cuts.
+func _follow_ground_offset(delta: float) -> void:
+	if _rig == null or _rig_ap == null:
+		return
+	var length := _rig_ap.current_animation_length
+	if length > 0.0:
+		var u := clampf(_rig_ap.current_animation_position / length, 0.0, 1.0)
+		_rig_y_target = NpcRig.clip_ground_offset_at(_rig_ap.current_animation, u)
+	if not is_equal_approx(_rig.position.y, _rig_y_target):
+		_rig.position.y = lerpf(_rig.position.y, _rig_y_target,
+				minf(delta * 20.0, 1.0))
 
 
 ## Builds the rigged body once, under the silhouette shader. Kept out of
@@ -230,6 +314,8 @@ func _build_rig() -> void:
 	_rig_ap = NpcRig.find_anim_player(fig)
 	if _rig_ap != null:
 		_rig_ap.playback_default_blend_time = CLIP_BLEND_S
+		_rig_ap.animation_finished.connect(func(_n: StringName) -> void:
+			_anim_finished = true)
 
 
 func _ensure_visuals() -> void:

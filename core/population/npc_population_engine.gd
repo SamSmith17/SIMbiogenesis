@@ -547,6 +547,14 @@ func agent_dots() -> Array:
 			"morale_label": NpcMorale.label(a.morale),
 			"activity": a.activity,
 			"state": a.state,
+			# Which enrichment space they went to, so the 3D layer can tell a
+			# yoga block from a fire circle. Already tracked per agent; it was
+			# simply never exposed.
+			"space_type": a.target_space_type,
+			# When the current activity ends, in absolute sim-hours. The 3D
+			# layer converts to wall-clock with the live time scale to decide
+			# whether there is time to animate sitting down at all.
+			"ends_h": a.activity_ends_h,
 			"status": a.status_line(),
 			"trail": a.trail,
 		})

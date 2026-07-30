@@ -619,13 +619,16 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 		_needs_continuous_redraw = true
 	# Smoke / destroy FX decay
 	var fx_alive := false
+	var fx_hot := false
 	for i in range(_destroy_fx.size() - 1, -1, -1):
 		var fx: Dictionary = _destroy_fx[i]
 		fx["age"] = float(fx.get("age", 0.0)) + delta
-		if float(fx["age"]) > 2.5:
+		if float(fx["age"]) > FX_LIFETIME:
 			_destroy_fx.remove_at(i)
 		else:
 			fx_alive = true
+			if float(fx["age"]) < FX_FULL_RATE_S:
+				fx_hot = true
 	# Alert pulse advances independently of test-mode flow so faulted/starved
 	# nodes still breathe while paused — but only drives a coarse ~10 fps redraw,
 	# not the 20 fps interactive loop.
@@ -633,7 +636,10 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 		_alert_phase = fmod(_alert_phase + delta * 1.6, TAU)
 	_redraw_accum += delta
 	var interval := 0.25
-	if current_mode == "test" or _needs_continuous_redraw or fx_alive:
+	if fx_hot:
+		# An explosion at the normal 20 fps cadence reads as a slideshow.
+		interval = 0.0
+	elif current_mode == "test" or _needs_continuous_redraw or fx_alive:
 		interval = REDRAW_INTERVAL_HIGH_SPEED if _high_speed_lod else REDRAW_INTERVAL
 	elif _alert_nodes_present:
 		interval = ALERT_REDRAW_INTERVAL
@@ -1936,10 +1942,137 @@ func _cached_autoload(abs_path: String) -> Node:
 	return n
 
 
+# --- Destroy FX ------------------------------------------------------------
+# A destroyed controller/battery is the tutorial's most teachable moment, so the
+# blast is staged rather than a single puff: flash → fireball → shockwave →
+# embers/debris → smoke, with a short camera shake. All timing/easing lives in
+# static helpers so the selftest can pin the envelope without a viewport.
+
+## Total lifetime of one burst (smoke outlasts the fire).
+const FX_LIFETIME := 4.2
+## While a burst is younger than this, the canvas redraws EVERY frame. The
+## normal cadence is 20 fps (REDRAW_INTERVAL) — an explosion at 20 fps reads as
+## a slideshow no matter how good the particle math is.
+const FX_FULL_RATE_S := 2.2
+const FX_SHAKE_S := 0.5
+const FX_SHAKE_PX := 20.0
+const FX_EMBERS := 36
+const FX_DEBRIS := 12
+## A second, tighter arc-flash a beat after the main blast — real electrical
+## faults re-strike as trapped energy discharges a second time; it also just
+## reads as "more" without stretching the whole sequence out.
+const FX_CRACK_AT := 0.55
+const FX_CRACK_S := 0.18
+const FX_CRACK_SHAKE_S := 0.22
+const FX_CRACK_SHAKE_PX := 10.0
+
+
+## Normalized progress through a stage that runs [t0, t1], eased out. 0 before
+## the stage opens, 1 once it has closed.
+static func fx_stage(age: float, t0: float, t1: float) -> float:
+	if age <= t0:
+		return 0.0
+	if age >= t1:
+		return 1.0
+	return (age - t0) / maxf(t1 - t0, 1e-6)
+
+
+## Decaying multi-frequency shake offset (same technique as the vehicle camera
+## shake in player.gd). Returns Vector2.ZERO once the shake window has passed.
+## Sums the primary blast shake with a smaller pulse timed to the second
+## arc-flash (FX_CRACK_AT) — two distinct hits read as a bigger event than one
+## long decay, and the crack pulse is a separate window so it still lands even
+## though it starts after the primary shake has finished.
+static func fx_shake_offset(age: float) -> Vector2:
+	var out := Vector2.ZERO
+	if age >= 0.0 and age < FX_SHAKE_S:
+		var decay := 1.0 - age / FX_SHAKE_S
+		var amp := FX_SHAKE_PX * decay * decay
+		out += Vector2(
+			sin(age * 97.0) * 0.6 + sin(age * 43.0) * 0.4,
+			sin(age * 71.0) * 0.6 + sin(age * 31.0) * 0.4) * amp
+	var cage := age - FX_CRACK_AT
+	if cage >= 0.0 and cage < FX_CRACK_SHAKE_S:
+		var cdecay := 1.0 - cage / FX_CRACK_SHAKE_S
+		var camp := FX_CRACK_SHAKE_PX * cdecay * cdecay
+		out += Vector2(
+			sin(cage * 131.0) * 0.6 + sin(cage * 59.0) * 0.4,
+			sin(cage * 89.0) * 0.6 + sin(cage * 47.0) * 0.4) * camp
+	return out
+
+
+## Fireball color ramp: white-hot core cooling through gold and amber to a deep
+## ember red, then to smoke.
+static func fx_fire_color(t: float) -> Color:
+	var u := clampf(t, 0.0, 1.0)
+	if u < 0.25:
+		return Color(1.0, 1.0, 0.95).lerp(UITheme.C_GOLD, u / 0.25)
+	if u < 0.55:
+		return UITheme.C_GOLD.lerp(UITheme.C_AMBER, (u - 0.25) / 0.30)
+	if u < 0.80:
+		return UITheme.C_AMBER.lerp(UITheme.C_ERROR, (u - 0.55) / 0.25)
+	return UITheme.C_ERROR.lerp(Color(0.22, 0.20, 0.21), (u - 0.80) / 0.20)
+
+
 func play_controller_destroy_fx(item_id: String, screen_center: Vector2) -> void:
-	_destroy_fx.append({"item_id": item_id, "center": screen_center, "age": 0.0})
+	_destroy_fx.append({
+		"item_id": item_id,
+		"center": screen_center,
+		"age": 0.0,
+		# Per-burst seed so particle angles/speeds stay stable across redraws
+		# (the canvas redraws on an interval, not every frame).
+		"seed": int(abs(hash(item_id))) % 100003,
+	})
 	_needs_continuous_redraw = true
+	_play_destroy_boom()
 	queue_redraw()
+
+
+const BOOM_SAMPLE_RATE := 22050
+const BOOM_SECONDS := 1.2
+
+var _boom_player: AudioStreamPlayer = null
+
+
+## Explosion SFX synthesized at runtime rather than shipped as an asset: a body
+## whose pitch sweeps 90→40 Hz as the shock expands, plus a broadband crack with
+## a very fast attack. No binary in the repo and nothing to add to the credits
+## ledger. Deterministic (fixed seed) so it sounds the same every time.
+static func build_boom_stream() -> AudioStreamWAV:
+	var n := int(BOOM_SAMPLE_RATE * BOOM_SECONDS)
+	var data := PackedByteArray()
+	data.resize(n * 2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20260729
+	var phase := 0.0
+	for i in n:
+		var t := float(i) / float(BOOM_SAMPLE_RATE)
+		var u := t / BOOM_SECONDS
+		phase += TAU * lerpf(90.0, 40.0, sqrt(u)) / float(BOOM_SAMPLE_RATE)
+		var body := sin(phase) * exp(-3.0 * u)
+		var crack := rng.randf_range(-1.0, 1.0) * exp(-18.0 * u)
+		var attack := clampf(t / 0.004, 0.0, 1.0)
+		var sample := clampf((body * 0.8 + crack * 0.5) * attack, -1.0, 1.0)
+		data.encode_s16(i * 2, int(sample * 32767.0))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = BOOM_SAMPLE_RATE
+	stream.stereo = false
+	stream.data = data
+	return stream
+
+
+func _play_destroy_boom() -> void:
+	# Offline selftests preload this script with no SceneTree / audio server.
+	if not is_inside_tree():
+		return
+	if _boom_player == null or not is_instance_valid(_boom_player):
+		_boom_player = AudioStreamPlayer.new()
+		_boom_player.name = "DestroyBoom"
+		_boom_player.stream = build_boom_stream()
+		_boom_player.volume_db = -6.0
+		add_child(_boom_player)
+	_boom_player.play()
 
 
 func request_continuous_redraw() -> void:
@@ -5266,6 +5399,12 @@ func _draw() -> void:
 		pm.begin("gv_draw")
 	_controller_reset_rects.clear()
 	_alert_seen_this_draw = false
+	# Destroy-FX camera shake. Purely visual — one canvas-item transform for the
+	# whole pass (including the V2 subclass's additions); hit-testing works off
+	# _pan/_zoom and is deliberately untouched, so input never desyncs.
+	var _fx_shake := _fx_shake_now()
+	if _fx_shake != Vector2.ZERO:
+		draw_set_transform(_fx_shake, 0.0, Vector2.ONE)
 	# Populate the per-draw visible-items/connections cache for this whole pass
 	# (base + any V2 super._draw extension). Refreshed every draw so moves/adds
 	# show up; the model is immutable within a single draw.
@@ -5593,9 +5732,10 @@ func _draw_node_state_overlay(item: Dictionary, specs: Dictionary, rect: Rect2) 
 	_draw_rounded_state_highlight(rect.grow(grow), col, 0.0, 0.9 * pulse,
 		maxf(2.0, 3.0 * _zoom))
 
-	# Bespoke controller-destroy FX already renders its own smoke burst; only
-	# add the procedural plume for other faulted nodes.
-	if state == GraphNodeState.FAULT and not destroyed:
+	# The destroy burst renders its own smoke for a few seconds; once it has
+	# aged out, a wreck keeps smouldering until RESET so the damage stays
+	# legible long after the blast (and behind the education card).
+	if state == GraphNodeState.FAULT and (not destroyed or not _has_live_destroy_fx()):
 		_draw_fault_smoke(rect)
 
 	var reason := str(specs.get("node_state_reason", ""))
@@ -6249,23 +6389,123 @@ func _draw_controller_body(body_rect: Rect2, specs: Dictionary, item_id: String 
 			_controller_reset_rects[item_id] = btn_rect
 
 
+## Deterministic per-particle noise in [0,1) — the canvas redraws on an interval
+## rather than every frame, so particle angles/speeds must not be re-rolled.
+static func _fx_rand(seed_v: int, idx: int, salt: int) -> float:
+	var h: int = absi((seed_v * 73856093) ^ (idx * 19349663) ^ (salt * 83492791))
+	return float(h % 1000003) / 1000003.0
+
+
+## Ballistic particle position: radial launch with linear drag, plus gravity.
+static func _fx_particle_pos(c: Vector2, ang: float, spd: float, t: float,
+		scale_px: float) -> Vector2:
+	var dist := spd * (1.0 - exp(-2.6 * t)) / 2.6
+	return c + Vector2(cos(ang), sin(ang)) * dist \
+		+ Vector2(0.0, 340.0 * scale_px * t * t * 0.5)
+
+
 func _draw_destroy_fx() -> void:
-	var fnt := ThemeDB.fallback_font
-	for fx in _destroy_fx:
-		if not (fx is Dictionary):
+	for fx_v in _destroy_fx:
+		if not (fx_v is Dictionary):
 			continue
-		var age := float((fx as Dictionary).get("age", 0.0))
-		var c: Vector2 = (fx as Dictionary).get("center", Vector2.ZERO)
-		var n := 8 + int(age * 6.0)
-		for i in n:
-			var t := float(i) / float(maxi(n - 1, 1))
-			var ang := t * TAU + age * 2.3
-			var rad := 8.0 + age * 28.0 + sin(t * 5.0 + age * 3.0) * 6.0
-			var p := c + Vector2(cos(ang), sin(ang)) * rad
-			var alpha := clampf(1.0 - age / 2.5, 0.0, 0.75) * (1.0 - t * 0.6)
-			draw_circle(p, 3.0 + t * 4.0, Color(0.45, 0.45, 0.48, alpha))
-		draw_string(fnt, c + Vector2(-36.0, -18.0 - age * 8.0), "💥",
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(1, 1, 1, clampf(1.0 - age / 2.0, 0.0, 1.0)))
+		var fx: Dictionary = fx_v
+		var age := float(fx.get("age", 0.0))
+		var c: Vector2 = fx.get("center", Vector2.ZERO)
+		var sd := int(fx.get("seed", 0))
+		var s := maxf(_zoom, 0.35)
+
+		# 1) Flash — the whole canvas blows out white for a couple of frames.
+		var fl := fx_stage(age, 0.0, 0.08)
+		if fl < 1.0:
+			draw_rect(Rect2(Vector2.ZERO, size),
+				Color(1.0, 0.96, 0.88, (1.0 - fl) * 0.55))
+
+		# 1b) Second arc-flash a beat later — a re-strike, tighter and bluer
+		# than the main blast, plus its own small shockwave so the burst reads
+		# as two distinct hits rather than one long fade.
+		var crack := fx_stage(age, FX_CRACK_AT, FX_CRACK_AT + FX_CRACK_S)
+		if crack > 0.0 and crack < 1.0:
+			draw_rect(Rect2(Vector2.ZERO, size),
+				Color(0.85, 0.92, 1.0, (1.0 - crack) * 0.30))
+			draw_circle(c, (10.0 + 46.0 * crack) * s,
+				Color(0.80, 0.90, 1.0, (1.0 - crack) * 0.55))
+			draw_arc(c, (16.0 + 90.0 * crack) * s, 0.0, TAU, 40,
+				Color(0.85, 0.94, 1.0, (1.0 - crack) * 0.6),
+				maxf(2.5 * (1.0 - crack), 0.6) * s, true)
+
+		# 2) Fireball — nested shells cooling along the ember ramp.
+		var fb := fx_stage(age, 0.0, 0.35)
+		if fb < 1.0:
+			var r := (14.0 + 62.0 * (1.0 - pow(1.0 - fb, 3.0))) * s
+			for k in 5:
+				var kt := float(k) / 4.0
+				var col := fx_fire_color(kt * 0.7 + fb * 0.3)
+				col.a = (1.0 - fb) * (1.0 - kt * 0.55)
+				draw_circle(c, r * (1.0 - kt * 0.62), col)
+
+		# 3) Shockwave rings.
+		for w in 2:
+			var w0 := 0.05 + float(w) * 0.12
+			var sw := fx_stage(age, w0, w0 + 0.75)
+			if sw > 0.0 and sw < 1.0:
+				draw_arc(c, (10.0 + 150.0 * sw) * s, 0.0, TAU, 48,
+					Color(1.0, 0.86, 0.62, (1.0 - sw) * 0.5),
+					maxf(3.0 * (1.0 - sw), 0.6) * s, true)
+
+		# 4) Embers — drawn as short motion streaks, not static dots.
+		for i in FX_EMBERS:
+			var life := 0.7 + _fx_rand(sd, i, 3) * 0.9
+			if age > life:
+				continue
+			var ang := _fx_rand(sd, i, 1) * TAU
+			var spd := (140.0 + _fx_rand(sd, i, 2) * 320.0) * s
+			var u := age / life
+			var col := fx_fire_color(u)
+			col.a = (1.0 - u) * 0.95
+			draw_line(_fx_particle_pos(c, ang, spd, maxf(age - 0.045, 0.0), s),
+				_fx_particle_pos(c, ang, spd, age, s),
+				col, maxf(2.4 * (1.0 - u), 0.7) * s, true)
+
+		# 5) Debris — tumbling dark chunks.
+		for i in FX_DEBRIS:
+			var life := 0.8 + _fx_rand(sd, i, 13) * 0.6
+			if age > life:
+				continue
+			var p := _fx_particle_pos(c, _fx_rand(sd, i, 11) * TAU,
+				(90.0 + _fx_rand(sd, i, 12) * 190.0) * s, age, s)
+			var spin := (_fx_rand(sd, i, 14) - 0.5) * 18.0 * age
+			var half := (2.5 + _fx_rand(sd, i, 15) * 3.5) * s
+			var quad := PackedVector2Array()
+			for k in 4:
+				var a2 := spin + float(k) * TAU * 0.25 + PI * 0.25
+				quad.append(p + Vector2(cos(a2), sin(a2)) * half)
+			draw_colored_polygon(quad,
+				Color(0.16, 0.14, 0.15, clampf(1.0 - age / life, 0.0, 1.0)))
+
+		# 6) Smoke — rises and spreads, outlasting the fire.
+		var sm := fx_stage(age, 0.25, FX_LIFETIME)
+		if sm > 0.0 and sm < 1.0:
+			for i in 9:
+				var p := c + Vector2(cos(_fx_rand(sd, i, 21) * TAU),
+						sin(_fx_rand(sd, i, 21) * TAU)) \
+						* (8.0 + _fx_rand(sd, i, 22) * 34.0) * s * (0.5 + sm) \
+					- Vector2(0.0, (30.0 + _fx_rand(sd, i, 23) * 70.0) * s * sm)
+				draw_circle(p,
+					(7.0 + _fx_rand(sd, i, 24) * 9.0) * s * (0.6 + sm * 1.4),
+					Color(0.30, 0.29, 0.31, (1.0 - sm) * 0.34))
+
+
+func _has_live_destroy_fx() -> bool:
+	return not _destroy_fx.is_empty()
+
+
+## Summed shake offset from every live burst (zero once they age out).
+func _fx_shake_now() -> Vector2:
+	var out := Vector2.ZERO
+	for fx_v in _destroy_fx:
+		if fx_v is Dictionary:
+			out += fx_shake_offset(float((fx_v as Dictionary).get("age", 0.0)))
+	return out
 
 
 func _draw_load_body(rect: Rect2, specs: Dictionary) -> void:
@@ -7791,7 +8031,11 @@ func _terrain_loader_node() -> Node:
 		return null
 	var main := tree.get_first_node_in_group("main_scene")
 	if main == null:
-		main = Services.get_main()
+		# Resolve by path, not the bare autoload identifier — headless --script
+		# selftests run without autoloads and must still compile this file.
+		var services := _cached_autoload("/root/Services")
+		if services != null:
+			main = services.call("get_main") as Node
 	if main == null:
 		return null
 	return main.get_node_or_null("TerrainLoader")

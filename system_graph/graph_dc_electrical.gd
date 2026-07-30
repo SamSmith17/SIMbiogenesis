@@ -252,38 +252,129 @@ static func analyze(model: GraphModel, flat_conns: Array) -> Dictionary:
 	return out
 
 
+## Net roots reached from one polarity leg of `item_id`'s `handle_prefix`
+## terminals. Junctions merged into a bank share its root, so one net-key hop
+## suffices.
+static func _leg_roots(model: GraphModel, item_id: String, flat_conns: Array,
+		net_roots: Dictionary, handle_prefix: String, pol: String) -> Dictionary:
+	var out: Dictionary = {}
+	for conn in flat_conns:
+		if not (conn is Dictionary) or not _is_dc_conn(conn as Dictionary):
+			continue
+		var c: Dictionary = conn
+		var local := ""
+		var other_id := ""
+		var other_handle := ""
+		if str(c.get("source_item_id", "")) == item_id:
+			local = str(c.get("source_handle_id", ""))
+			other_id = str(c.get("target_item_id", ""))
+			other_handle = str(c.get("target_handle_id", ""))
+		elif str(c.get("target_item_id", "")) == item_id:
+			local = str(c.get("target_handle_id", ""))
+			other_id = str(c.get("source_item_id", ""))
+			other_handle = str(c.get("source_handle_id", ""))
+		if other_id.is_empty() or not local.begins_with(handle_prefix):
+			continue
+		if PvElectrical._terminal_polarity(local) != pol:
+			continue
+		var key := _net_key(model, other_id, other_handle)
+		if key.is_empty() or not net_roots.has(key):
+			continue
+		out[str(net_roots[key])] = true
+	return out
+
+
 ## The bank a controller's battery-side terminals land on, or {} when none.
-## Junctions merged into a bank share its root, so one net-key hop suffices.
+##
+## BOTH terminals must land on the same bank. A single wire is an open circuit:
+## no current flows through one conductor, so the controller charges nothing
+## until the return leg exists. (A correctly wired pair always shares one root —
+## `analyze` unions a bank's pos/neg nets across the battery EMF edge.)
 static func bank_for_controller(model: GraphModel, controller_id: String,
 		flat_conns: Array, analysis: Dictionary) -> Dictionary:
 	var banks: Array = analysis.get("banks", []) as Array
 	var net_roots: Dictionary = analysis.get("net_roots", {}) as Dictionary
 	if banks.is_empty():
 		return {}
+	var pos_roots := _leg_roots(model, controller_id, flat_conns, net_roots, "battery", "pos")
+	if pos_roots.is_empty():
+		return {}
+	var neg_roots := _leg_roots(model, controller_id, flat_conns, net_roots, "battery", "neg")
+	if neg_roots.is_empty():
+		return {}
+	for bank in banks:
+		var root := str((bank as Dictionary).get("root", ""))
+		if pos_roots.has(root) and neg_roots.has(root):
+			return bank
+	return {}
+
+
+## Items wired directly to `item_id`'s `pol` ("pos" | "neg") terminal over a
+## live DC wire. Uses _is_dc_conn (not PvElectrical's PV polarity set) so
+## smart-battery terminals and severed wires are handled by DC rules.
+static func _dc_leg_neighbors(item_id: String, flat_conns: Array,
+		pol: String) -> Array[String]:
+	var out: Array[String] = []
 	for conn in flat_conns:
 		if not (conn is Dictionary) or not _is_dc_conn(conn as Dictionary):
 			continue
 		var c: Dictionary = conn
-		var other_id := ""
-		var other_handle := ""
-		if str(c.get("source_item_id", "")) == controller_id \
-				and str(c.get("source_handle_id", "")).begins_with("battery"):
-			other_id = str(c.get("target_item_id", ""))
-			other_handle = str(c.get("target_handle_id", ""))
-		elif str(c.get("target_item_id", "")) == controller_id \
-				and str(c.get("target_handle_id", "")).begins_with("battery"):
-			other_id = str(c.get("source_item_id", ""))
-			other_handle = str(c.get("source_handle_id", ""))
-		if other_id.is_empty():
+		var local := ""
+		var other := ""
+		if str(c.get("source_item_id", "")) == item_id:
+			local = str(c.get("source_handle_id", ""))
+			other = str(c.get("target_item_id", ""))
+		elif str(c.get("target_item_id", "")) == item_id:
+			local = str(c.get("target_handle_id", ""))
+			other = str(c.get("source_item_id", ""))
+		if other.is_empty() or PvElectrical._terminal_polarity(local) != pol:
 			continue
-		var key := _net_key(model, other_id, other_handle)
-		if key.is_empty() or not net_roots.has(key):
+		out.append(other)
+	return out
+
+
+## PV sources reachable from `seeds` over live DC wires, conducting onward only
+## through PV sources, junctions and batteries, and stopping at a live
+## controller (which regulates) or any load. `blocked` ids start out visited.
+static func _pv_hits_from(model: GraphModel, seeds: Array, flat_conns: Array,
+		blocked: Dictionary) -> Dictionary:
+	var pv_hits: Dictionary = {}
+	var visited: Dictionary = blocked.duplicate()
+	var q: Array[String] = []
+	for sid_v in seeds:
+		var sid := str(sid_v)
+		if visited.has(sid):
 			continue
-		var root := str(net_roots[key])
-		for bank in banks:
-			if str((bank as Dictionary).get("root", "")) == root:
-				return bank
-	return {}
+		visited[sid] = true
+		q.append(sid)
+	while not q.is_empty():
+		var cur: String = q.pop_front()
+		var it := model.get_item(cur)
+		if it.is_empty():
+			continue
+		var ty := str(it.get("type", ""))
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		if ty == "controller" and not bool(sp.get("destroyed", false)):
+			continue  # a live controller regulates — stop here
+		var is_pv := PvElectrical.is_pv_source_item(it)
+		if is_pv:
+			pv_hits[cur] = true
+		if not (is_pv or ty in JUNCTION_TYPES or is_battery_item(it)):
+			continue
+		for conn in flat_conns:
+			if not (conn is Dictionary) or not _is_dc_conn(conn as Dictionary):
+				continue
+			var c: Dictionary = conn
+			var other := ""
+			if str(c.get("source_item_id", "")) == cur:
+				other = str(c.get("target_item_id", ""))
+			elif str(c.get("target_item_id", "")) == cur:
+				other = str(c.get("source_item_id", ""))
+			if other.is_empty() or visited.has(other):
+				continue
+			visited[other] = true
+			q.append(other)
+	return pv_hits
 
 
 ## PV strings reachable from a bank battery WITHOUT crossing a (live) charge
@@ -299,41 +390,29 @@ static func find_battery_overvoltage(model: GraphModel, flat_conns: Array,
 		var bank: Dictionary = bank_v
 		if bool(bank.get("shorted", false)):
 			continue  # the short fault already owns this bank
+		# A string only pushes its Voc onto the bank when it is wired across
+		# BOTH sides. Walk each polarity leg separately (with the bank's own
+		# batteries blocked, so a walk cannot cross through them to the far
+		# terminal) and keep only the sources common to both.
+		var batt_ids: Array = bank.get("battery_ids", []) as Array
+		var blocked: Dictionary = {}
+		for bid in batt_ids:
+			blocked[str(bid)] = true
+		var pos_seeds: Array[String] = []
+		var neg_seeds: Array[String] = []
+		for bid in batt_ids:
+			pos_seeds.append_array(_dc_leg_neighbors(str(bid), flat_conns, "pos"))
+			neg_seeds.append_array(_dc_leg_neighbors(str(bid), flat_conns, "neg"))
+		if pos_seeds.is_empty() or neg_seeds.is_empty():
+			continue
+		var via_pos := _pv_hits_from(model, pos_seeds, flat_conns, blocked)
+		if via_pos.is_empty():
+			continue
+		var via_neg := _pv_hits_from(model, neg_seeds, flat_conns, blocked)
 		var pv_hits: Dictionary = {}
-		# BFS outward from every bank battery over DC wires, passing through
-		# panels/junctions/other batteries, terminating at controllers & loads.
-		var visited: Dictionary = {}
-		var q: Array[String] = []
-		for bid in bank.get("battery_ids", []) as Array:
-			visited[str(bid)] = true
-			q.append(str(bid))
-		while not q.is_empty():
-			var cur: String = q.pop_front()
-			for conn in flat_conns:
-				if not (conn is Dictionary) or not _is_dc_conn(conn as Dictionary):
-					continue
-				var c: Dictionary = conn
-				var other := ""
-				if str(c.get("source_item_id", "")) == cur:
-					other = str(c.get("target_item_id", ""))
-				elif str(c.get("target_item_id", "")) == cur:
-					other = str(c.get("source_item_id", ""))
-				if other.is_empty() or visited.has(other):
-					continue
-				visited[other] = true
-				var it := model.get_item(other)
-				if it.is_empty():
-					continue
-				var ty := str(it.get("type", ""))
-				var sp: Dictionary = it.get("specs", {}) as Dictionary
-				if ty == "controller" and not bool(sp.get("destroyed", false)):
-					continue  # a live controller regulates — stop here
-				if PvElectrical.is_pv_source_item(it):
-					pv_hits[other] = true
-				# Conduct onward through panels, junctions, and batteries only.
-				if PvElectrical.is_pv_source_item(it) or ty in JUNCTION_TYPES \
-						or is_battery_item(it):
-					q.append(other)
+		for sid in via_pos:
+			if via_neg.has(sid):
+				pv_hits[sid] = true
 		if pv_hits.is_empty():
 			continue
 		var comps := PvElectrical.connected_components(pv_hits.keys(), flat_conns, true)

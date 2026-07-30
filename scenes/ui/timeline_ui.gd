@@ -63,6 +63,16 @@ const SPEED_STEPS : Array = [
 	["∞",     INF],       # Analemma view: 1 calendar day per frame.
 ]
 
+# ---------------------------------------------------------------------------
+# Climelapse MP4 export
+# ---------------------------------------------------------------------------
+## Output frame rate of the exported video. The sim advances
+## (selected speed / CLIM_EXPORT_FPS) sim-hours per rendered frame, so the video
+## plays back at exactly the speed shown on the bar.
+const CLIM_EXPORT_FPS := 30
+## Above this many frames the export asks for confirmation first (≈1 min video).
+const CLIM_CONFIRM_FRAMES := 1800
+
 const MOON_EMOJIS  : Array = ["🌑","🌒","🌓","🌔","🌕","🌖","🌗","🌘"]
 const MONTH_NAMES  : Array = ["Jan","Feb","Mar","Apr","May","Jun",
 							   "Jul","Aug","Sep","Oct","Nov","Dec"]
@@ -203,9 +213,12 @@ var _clim_progress_bar : ProgressBar = null
 var _clim_progress_lbl : Label = null
 var _clim_cancel_btn : Button = null
 var _clim_export_dialog : FileDialog = null
+var _clim_confirm_dialog : ConfirmationDialog = null
 var _pending_clim_export_start := NAN
 var _pending_clim_export_end := NAN
-var _clim_pending_auto_play := false
+var _pending_clim_export_path := ""
+## Guards the one-shot completion toast (state_changed fires repeatedly).
+var _clim_last_reported_result := ""
 var _sunrise_lbl  : Label
 var _sunset_lbl   : Label
 var _moon_lbl     : Label
@@ -1656,7 +1669,8 @@ func _build_left_cluster() -> Control:
 	left.add_child(_render_btn)
 
 	_export_mp4_btn = _mk_icon_btn("🎬", _on_export_clim_mp4_pressed,
-			"Export MP4 — write a climelapse video of the Ctrl-drag selection (needs ffmpeg)")
+			"Export MP4 — render the Ctrl-drag selection to video at 30 fps, "
+			+ "one frame at a time, at the playback speed set on this bar (needs ffmpeg)")
 	_export_mp4_btn.add_theme_color_override("font_color", Color(0.45, 0.75, 1.0))
 	left.add_child(_export_mp4_btn)
 
@@ -1732,6 +1746,28 @@ func _get_projection_canvas() -> Node:
 	if get_tree() != null:
 		return get_tree().root.find_child("ProjectionCanvas", true, false)
 	return null
+
+
+## Same lookup, but instances the canvas when the map didn't ship one (mars +
+## every generated location map). Only the video buttons call this — the polling
+## `_get_projection_canvas()` must stay lookup-only or the always-on SubViewport
+## would be created on every UI refresh whether the player wants it or not.
+func _ensure_projection_canvas() -> Node:
+	var pc := _get_projection_canvas()
+	if pc != null:
+		return pc
+	if _main != null and _main.has_method("ensure_projection_canvas"):
+		return _main.call("ensure_projection_canvas")
+	return null
+
+
+## User-visible feedback for the NLE buttons. push_warning() only reaches the
+## console, which is why these paths read as "the button does nothing".
+func _notify(msg: String, level: int = 2) -> void:
+	if _main != null and _main.has_method("show_toast"):
+		_main.call("show_toast", msg, level, 4.0)
+	else:
+		push_warning(msg)
 
 
 func _on_import_pressed() -> void:
@@ -1847,28 +1883,30 @@ func _default_clim_mp4_name(start_abs: float) -> String:
 func _on_clim_path_add_pressed() -> void:
 	var tl := _get_terrain_loader()
 	if tl == null or not tl.has_method("add_climelapse_path_waypoint"):
-		push_warning("Drone path waypoints require a user map with TerrainLoader.")
+		_notify("Drone path needs a location map (this one has no TerrainLoader).")
 		return
 	if bool(tl.call("add_climelapse_path_waypoint")):
 		var n := int(tl.call("get_climelapse_path_count")) if tl.has_method("get_climelapse_path_count") else 0
-		print("Climelapse path: %d waypoint(s)" % n)
+		_notify("Drone path: %d waypoint(s)." % n, 1)
 
 
 func _on_clim_path_clear_pressed() -> void:
 	var tl := _get_terrain_loader()
 	if tl != null and tl.has_method("clear_climelapse_path"):
 		tl.call("clear_climelapse_path")
-		print("Climelapse path cleared.")
+		_notify("Drone path cleared.", 1)
+	else:
+		_notify("Drone path needs a location map (this one has no TerrainLoader).")
 
 
 func _on_export_clim_mp4_pressed() -> void:
 	var tl := _get_terrain_loader()
 	if tl == null or not tl.has_method("start_climelapse_export"):
-		push_warning("Climelapse MP4 export requires a user map with TerrainLoader.")
+		_notify("MP4 export needs a location map (this one has no TerrainLoader).")
 		return
 	var sel := _climelapse_selection_range()
 	if is_nan(sel.x):
-		push_warning("Ctrl-drag a range on the timeline before exporting climelapse MP4.")
+		_notify("Ctrl-drag a time range on the timeline first, then press 🎬.")
 		return
 	_pending_clim_export_start = sel.x
 	_pending_clim_export_end = sel.y
@@ -1885,6 +1923,17 @@ func _on_export_clim_mp4_pressed() -> void:
 	_clim_export_dialog.popup_centered_ratio(0.6)
 
 
+## Sim-hours per real second the export should walk: whatever speed the player
+## has selected on the bar. The ∞ analemma presets have no finite rate, so they
+## fall back to their documented meaning (1 or 2 calendar days per frame at 30 fps).
+func _clim_export_time_scale() -> float:
+	var time_scale := float(SPEED_STEPS[_speed_idx][1])
+	if is_inf(time_scale):
+		var is_x2 := str(SPEED_STEPS[_speed_idx][0]) == "∞×2"
+		time_scale = (48.0 if is_x2 else 24.0) * float(CLIM_EXPORT_FPS)
+	return time_scale
+
+
 func _on_clim_export_path_selected(path: String) -> void:
 	var tl := _get_terrain_loader()
 	if tl == null or not tl.has_method("start_climelapse_export"):
@@ -1892,28 +1941,103 @@ func _on_clim_export_path_selected(path: String) -> void:
 	var out := path
 	if not out.to_lower().ends_with(".mp4"):
 		out += ".mp4"
-	if _main != null:
-		if _main.has_method("set_absolute_hours"):
-			_main.call("set_absolute_hours", _pending_clim_export_start)
-		if "analemma_mode" in _main:
-			_main.set("analemma_mode", true)
-	_clim_pending_auto_play = true
-	var time_scale := float(SPEED_STEPS[_speed_idx][1])
-	if is_inf(time_scale):
-		var is_x2 := str(SPEED_STEPS[_speed_idx][0]) == "∞×2"
-		time_scale = (48.0 if is_x2 else 24.0) * 30.0 # 1 or 2 days per frame at 30fps
+	_pending_clim_export_path = out
 
-	if tl.call("start_climelapse_export", _pending_clim_export_start, _pending_clim_export_end, time_scale, out):
-		_update_clim_progress_dialog()
+	var frames := ClimelapseCapture.frames_for(_pending_clim_export_start,
+		_pending_clim_export_end, _clim_export_time_scale(), CLIM_EXPORT_FPS)
+	if frames <= 0:
+		_notify("Nothing to export — the selected range is empty.")
+		return
+	# Frame count is set by the player's speed, so a slow speed over a long range
+	# is a very long export. Show the cost and let them decide before it starts.
+	if frames > CLIM_CONFIRM_FRAMES:
+		_ensure_clim_confirm_dialog()
+		_clim_confirm_dialog.dialog_text = (
+			"Exporting %s at %s renders %s frames — %s of video at %d fps.\n\n"
+			+ "The world stays frozen and steps one frame at a time until it's done.\n\nContinue?"
+		) % [
+			_clim_span_label(_pending_clim_export_end - _pending_clim_export_start),
+			str(SPEED_STEPS[_speed_idx][0]),
+			_clim_thousands(frames),
+			_clim_duration_label(frames),
+			CLIM_EXPORT_FPS,
+		]
+		_clim_confirm_dialog.popup_centered()
+		return
+	_begin_clim_export()
+
+
+## Kick off the capture with the world clock parked where the export starts.
+func _begin_clim_export() -> void:
+	var tl := _get_terrain_loader()
+	if tl == null or _pending_clim_export_path.is_empty():
+		return
+	# Stop the world: the capture places every frame's instant itself. Leaving
+	# playback (or the analemma stepper) running is what made an export look like
+	# it was "just playing" instead of rendering.
+	_sim_paused_by_bar = true
+	_pause_motion()
+	CursorController.set_paused(true)
+	if _main != null and _main.has_method("set_absolute_hours"):
+		_main.call("set_absolute_hours", _pending_clim_export_start)
+
+	# Dialog first, so there is visible feedback even if the start call refuses.
+	_clim_last_reported_result = ""
+	_ensure_clim_progress_dialog()
+	_clim_progress_bar.value = 0.0
+	_clim_cancel_btn.text = "Cancel"
+	_clim_progress_lbl.text = "Preparing export…"
+	if not _clim_progress_dialog.visible:
+		_clim_progress_dialog.popup_centered()
+
+	tl.call("start_climelapse_export", _pending_clim_export_start,
+		_pending_clim_export_end, _clim_export_time_scale(),
+		_pending_clim_export_path, CLIM_EXPORT_FPS)
+	_update_clim_progress_dialog()
 	_update_nle_controls()
+
+
+func _ensure_clim_confirm_dialog() -> void:
+	if _clim_confirm_dialog != null:
+		return
+	_clim_confirm_dialog = ConfirmationDialog.new()
+	_clim_confirm_dialog.title = "Export video"
+	_clim_confirm_dialog.ok_button_text = "Export"
+	_clim_confirm_dialog.confirmed.connect(_begin_clim_export)
+	add_child(_clim_confirm_dialog)
+
+
+func _clim_span_label(hours: float) -> String:
+	if hours < 48.0:
+		return "%.1f h" % hours
+	return "%.1f days" % (hours / 24.0)
+
+
+func _clim_duration_label(frames: int) -> String:
+	var secs := int(round(float(frames) / float(CLIM_EXPORT_FPS)))
+	if secs < 60:
+		return "%ds" % secs
+	return "%dm %02ds" % [secs / 60, secs % 60]
+
+
+func _clim_thousands(n: int) -> String:
+	var s := str(n)
+	var out := ""
+	var c := 0
+	for i in range(s.length() - 1, -1, -1):
+		out = s[i] + out
+		c += 1
+		if c % 3 == 0 and i > 0:
+			out = "," + out
+	return out
 
 
 func _ensure_clim_progress_dialog() -> void:
 	if _clim_progress_dialog != null:
 		return
 	_clim_progress_dialog = Window.new()
-	_clim_progress_dialog.title = "Climelapse render (MP4 export uses ffmpeg)"
-	_clim_progress_dialog.size = Vector2i(420, 130)
+	_clim_progress_dialog.title = "Exporting video (MP4 encode uses ffmpeg)"
+	_clim_progress_dialog.size = Vector2i(460, 140)
 	_clim_progress_dialog.unresizable = true
 	_clim_progress_dialog.close_requested.connect(func() -> void:
 		_clim_progress_dialog.hide())
@@ -1927,7 +2051,7 @@ func _ensure_clim_progress_dialog() -> void:
 	_clim_progress_dialog.add_child(vb)
 	_clim_progress_lbl = Label.new()
 	_clim_progress_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_clim_progress_lbl.text = "Baking calendar keyframes and tree scales…"
+	_clim_progress_lbl.text = "Preparing export…"
 	vb.add_child(_clim_progress_lbl)
 	_clim_progress_bar = ProgressBar.new()
 	_clim_progress_bar.custom_minimum_size = Vector2(0, 22)
@@ -1942,10 +2066,9 @@ func _ensure_clim_progress_dialog() -> void:
 
 func _on_clim_cancel_pressed() -> void:
 	var tl := _get_terrain_loader()
-	if tl != null and tl.has_method("is_climelapse_rendering") \
-			and bool(tl.call("is_climelapse_rendering")):
+	if tl != null and tl.has_method("is_climelapse_exporting") \
+			and bool(tl.call("is_climelapse_exporting")):
 		tl.call("cancel_climelapse_render")
-		_clim_pending_auto_play = false
 	elif _clim_progress_dialog != null:
 		_clim_progress_dialog.hide()
 	if _clim_cancel_btn != null:
@@ -1953,49 +2076,44 @@ func _on_clim_cancel_pressed() -> void:
 	_update_nle_controls()
 
 
+## Drives the export progress window: frame counter while the sim steps, then
+## the ffmpeg encode, then the final result (which stays on screen until the
+## player closes it — an export that failed must not vanish silently).
 func _update_clim_progress_dialog() -> void:
 	var tl := _get_terrain_loader()
-	if tl == null:
+	if tl == null or not tl.has_method("get_climelapse_export_stats"):
 		return
-	# Bake phase shows progress.
-	var exporting := tl.has_method("is_climelapse_exporting") \
-		and bool(tl.call("is_climelapse_exporting"))
-	var busy := (tl.has_method("is_climelapse_rendering") and bool(tl.call("is_climelapse_rendering"))) or exporting
-	if busy:
+	var st: Dictionary = tl.call("get_climelapse_export_stats")
+	if bool(st.get("active", false)):
 		_ensure_clim_progress_dialog()
-		if _clim_cancel_btn != null:
-			_clim_cancel_btn.text = "Cancel"
-		var prog := clampf(float(tl.call("get_climelapse_progress")), 0.0, 1.0)
-		if _clim_progress_bar != null:
-			_clim_progress_bar.value = prog * 100.0
-		if _clim_progress_lbl != null:
-			var stats: Dictionary = tl.call("get_climelapse_bake_stats") if tl.has_method("get_climelapse_bake_stats") else {}
-			var kf := int(stats.get("keyframes", 0))
-			var trees := int(stats.get("auto_entries", 0)) + int(stats.get("manual_entries", 0))
-			var phase := "Baking"
-			_clim_progress_lbl.text = "%s — %d keyframes × %d trees (%d%%)" % [
-				phase, kf, trees, int(round(prog * 100.0))]
-		if _clim_progress_dialog != null and not _clim_progress_dialog.visible:
-			_clim_progress_dialog.popup_centered()
-	elif _clim_progress_dialog != null and _clim_progress_dialog.visible:
-		var ready := tl.has_method("get_climelapse_progress") \
-			and float(tl.call("get_climelapse_progress")) >= 1.0
-		if ready:
-			var msg := ""
-			if tl.has_method("get_climelapse_export_message"):
-				msg = str(tl.call("get_climelapse_export_message"))
-			if _clim_progress_lbl != null:
-				if not msg.is_empty():
-					_clim_progress_lbl.text = msg
-				else:
-					_clim_progress_lbl.text = "Climelapse ready — playing from In point…"
-			if _clim_progress_bar != null:
-				_clim_progress_bar.value = 100.0
-			if _clim_cancel_btn != null:
-				_clim_cancel_btn.text = "Close"
-			_maybe_auto_play_climelapse()
+		_clim_cancel_btn.text = "Cancel"
+		var prog := clampf(float(st.get("progress", 0.0)), 0.0, 1.0)
+		_clim_progress_bar.value = prog * 100.0
+		var done := int(st.get("done", 0))
+		var total := int(st.get("total", 0))
+		if str(st.get("phase", "")) == "encode":
+			_clim_progress_lbl.text = "Encoding %s frames to MP4 with ffmpeg…" % _clim_thousands(total)
 		else:
-			_clim_progress_dialog.hide()
+			_clim_progress_lbl.text = "Exporting — frame %s / %s (%d%%) · %s of video" % [
+				_clim_thousands(done), _clim_thousands(total),
+				int(round(prog * 100.0)), _clim_duration_label(total)]
+		if not _clim_progress_dialog.visible:
+			_clim_progress_dialog.popup_centered()
+		return
+
+	# Finished (or refused) — show the outcome on whichever dialog is open.
+	var result := str(st.get("result", ""))
+	if result.is_empty() or _clim_progress_dialog == null or not _clim_progress_dialog.visible:
+		return
+	var msg := str(st.get("message", ""))
+	_clim_progress_bar.value = 100.0 if result == "ok" else 0.0
+	_clim_progress_lbl.text = msg if not msg.is_empty() else (
+		"Export finished." if result == "ok" else "Export failed.")
+	_clim_cancel_btn.text = "Close"
+	if result != _clim_last_reported_result:
+		_clim_last_reported_result = result
+		_notify(("Video exported — %s" % msg) if result == "ok" else ("Export failed — %s" % msg),
+			1 if result == "ok" else 3)
 
 
 func _on_render_pressed() -> void:
@@ -2005,21 +2123,10 @@ func _on_render_pressed() -> void:
 		_update_nle_controls()
 
 
-func _on_render_clim_pressed() -> void:
-	var tl := _get_terrain_loader()
-	if tl == null or not tl.has_method("start_climelapse_render"):
-		push_warning("Climelapse render requires a user map with TerrainLoader.")
-		return
-	var sel := _climelapse_selection_range()
-	if is_nan(sel.x):
-		push_warning("Ctrl-drag a range on the timeline before rendering climelapse.")
-		return
-	if _main != null and _main.has_method("set_absolute_hours"):
-		_main.call("set_absolute_hours", sel.x)
-	_clim_pending_auto_play = true
-	if tl.call("start_climelapse_render", sel.x, sel.y, ""):
-		_update_clim_progress_dialog()
-	_update_nle_controls()
+# NOTE: the old `_on_render_clim_pressed` keyframe-bake handler was removed — it
+# was wired to no button and called `start_climelapse_render`, which TerrainLoader
+# no longer implements (the bake folded into `start_climelapse_export`). 🎬 is the
+# whole climelapse path now.
 
 
 
@@ -2044,15 +2151,19 @@ func _on_compare_pressed() -> void:
 
 
 func _on_load_video_pressed() -> void:
-	var pc := _get_projection_canvas()
+	var pc := _ensure_projection_canvas()
 	if pc != null and pc.has_method("open_load_video_dialog"):
 		pc.call("open_load_video_dialog")
+	else:
+		_notify("Load video: no projection canvas on this map.")
 
 
 func _on_live_feed_pressed() -> void:
-	var pc := _get_projection_canvas()
+	var pc := _ensure_projection_canvas()
 	if pc != null and pc.has_method("open_live_feed_dialog"):
 		pc.call("open_live_feed_dialog")
+	else:
+		_notify("Live feed: no projection canvas on this map.")
 
 
 func _on_snap_video_pressed() -> void:
@@ -2137,54 +2248,14 @@ func _on_climelapse_changed() -> void:
 		_track.queue_redraw()
 	_update_clim_progress_dialog()
 	_update_nle_controls()
-	_maybe_auto_play_climelapse()
 
 
-func _analemma_speed_idx() -> int:
-	for i in range(SPEED_STEPS.size()):
-		if str(SPEED_STEPS[i][0]) == "∞":
-			return i
-	return SPEED_STEPS.size() - 1
-
-
-func _maybe_auto_play_climelapse() -> void:
-	if not _clim_pending_auto_play or _main == null or not is_instance_valid(_main):
-		return
-	var tl := _get_terrain_loader()
-	if tl == null:
-		return
-	if tl.has_method("is_climelapse_rendering") and bool(tl.call("is_climelapse_rendering")):
-		return
-	if not tl.has_method("get_climelapse_progress") or float(tl.call("get_climelapse_progress")) < 1.0:
-		return
-	var rng: Vector2 = tl.call("get_climelapse_range_abs")
-	if is_nan(rng.x) or rng.y <= rng.x:
-		_clim_pending_auto_play = false
-		return
-	_clim_pending_auto_play = false
-	_start_climelapse_playback_after_render(rng)
-
-
-func _start_climelapse_playback_after_render(rng: Vector2) -> void:
-	var tl := _get_terrain_loader()
-	if tl == null or _main == null:
-		return
-	_main.call("set_absolute_hours", rng.x)
-	var span_h := clampf(rng.y - rng.x, TimelineViewScript.MIN_SPAN_HOURS,
-		TimelineViewScript.MAX_SPAN_HOURS)
-	_track_view.start = rng.x
-	_track_view.span = span_h
-	_track_view.follow_playhead = true
-	if tl.has_method("set_climelapse_playback"):
-		tl.call("set_climelapse_playback", true)
-	_speed_idx = _analemma_speed_idx()
-	_sim_paused_by_bar = false
-	CursorController.set_paused(false)
-	_resume_forward()
-	if _track != null:
-		_track.queue_redraw()
-	_update_track_edge_labels()
-	_update_display()
+# NOTE: the old auto-play-after-render pair (`_maybe_auto_play_climelapse` /
+# `_start_climelapse_playback_after_render`) was removed. It forced the sim into
+# the ∞ analemma stepper when an export finished — while the speed label still
+# read whatever the player had picked — which is what made a finished (or
+# instantly-refused) export look like "the game just started flying". An export
+# now leaves the clock parked and paused where the player left it.
 
 
 func _build_info_row(parent: VBoxContainer) -> void:

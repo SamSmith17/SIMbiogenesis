@@ -1042,8 +1042,9 @@ func _unhandled_input( e : InputEvent ) -> void :
 		get_viewport().set_input_as_handled()
 		return
 	if InputMap.has_action( "toggle_projection_canvas" ) and Input.is_action_just_pressed( "toggle_projection_canvas" ) :
-		if is_instance_valid( projection_canvas ) :
-			projection_canvas.visible = not projection_canvas.visible
+		var pc := ensure_projection_canvas()
+		if is_instance_valid( pc ) :
+			pc.visible = not pc.visible
 			get_viewport().set_input_as_handled()
 			return
 	if InputMap.has_action( "toggle_location_picker" ) and Input.is_action_just_pressed( "toggle_location_picker" ) :
@@ -3310,6 +3311,44 @@ func _setup_toast_ui() -> void :
 	toast_ui = ToastUI.new()
 	toast_ui.name = "ToastUI"
 	ui_layer.add_child( toast_ui )
+
+
+## Returns the ProjectionCanvas, instancing it under UILayer on maps that don't
+## ship one (mars_aerial + every generated location map — only soak_festival and
+## the legacy main.tscn have the node authored in the scene). Without this the
+## timeline's video/live-feed buttons and the "I" toggle silently no-op there.
+## Deliberately LAZY: the canvas owns an always-updating SubViewport, so it is
+## only paid for once the player asks for it.
+func ensure_projection_canvas() -> Control :
+	if is_instance_valid( projection_canvas ) :
+		return projection_canvas
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return null
+	var existing := ui_layer.get_node_or_null( "ProjectionCanvas" ) as Control
+	if existing != null :
+		projection_canvas = existing
+		return projection_canvas
+	var packed := load( "res://godot/StarShadeConsole/scenes/ProjectionCanvas.tscn" ) as PackedScene
+	if packed == null :
+		push_warning( "Main: could not load ProjectionCanvas.tscn" )
+		return null
+	var pc := packed.instantiate() as Control
+	if pc == null :
+		return null
+	pc.name = "ProjectionCanvas"
+	pc.visible = false
+	# Match the authored soak/main.tscn instances: warp off, HA + source camera
+	# bound by the same relative paths the scene files use.
+	if "warp_enabled" in pc :
+		pc.set( "warp_enabled", false )
+	if get_node_or_null( "HAClient" ) != null and "ha_client_path" in pc :
+		pc.set( "ha_client_path", NodePath( "../../HAClient" ) )
+	if get_node_or_null( "Player/CameraArm/Camera3D" ) != null and "source_camera_path" in pc :
+		pc.set( "source_camera_path", NodePath( "../../Player/CameraArm/Camera3D" ) )
+	ui_layer.add_child( pc )
+	projection_canvas = pc
+	return projection_canvas
 
 
 ## Shows a HUD toast. level: ToastUI.Level (INFO/OK/WARN/ERROR).

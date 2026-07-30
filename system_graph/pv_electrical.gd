@@ -115,23 +115,65 @@ static func component_string_voc(comp: Array, model: GraphModel, ambient_c: floa
 	return total
 
 
-## All PV-source nodes reachable from `controller_id` via DC/PV connections.
-static func pv_sources_for_controller(model: GraphModel, controller_id: String,
-		scope_id: String = "root") -> Array[String]:
+## Wire polarities that carry a DC/PV circuit.
+const PV_WALK_POLARITIES: Array[String] = ["positive", "negative", "pvPositive", "pvNegative"]
+
+
+## Items wired directly to `item_id` through one of its own terminals whose
+## handle starts with `handle_prefix` and reads as `pol` ("pos" | "neg").
+## `handle_prefix` separates a controller's PV inputs ("pv") from its battery
+## outputs ("battery"); pass "" for two-terminal devices like panels/batteries.
+static func leg_neighbors(item_id: String, conns: Array, handle_prefix: String,
+		pol: String) -> Array[String]:
 	var out: Array[String] = []
-	if model == null or controller_id.is_empty():
-		return out
-	var conns: Array = model.get_connections_in_scope(scope_id)
-	var visited: Dictionary = {controller_id: true}
-	var q: Array[String] = [controller_id]
+	for conn in conns:
+		if not (conn is Dictionary):
+			continue
+		var c: Dictionary = conn
+		if str(c.get("polarity", "")) not in PV_WALK_POLARITIES:
+			continue
+		var local := ""
+		var other := ""
+		if str(c.get("source_item_id", "")) == item_id:
+			local = str(c.get("source_handle_id", ""))
+			other = str(c.get("target_item_id", ""))
+		elif str(c.get("target_item_id", "")) == item_id:
+			local = str(c.get("target_handle_id", ""))
+			other = str(c.get("source_item_id", ""))
+		if other.is_empty() or not local.begins_with(handle_prefix):
+			continue
+		if _terminal_polarity(local) != pol:
+			continue
+		out.append(other)
+	return out
+
+
+## PV sources reachable from `seeds` over PV/DC wires, with `blocked` item ids
+## treated as already-visited (so a walk out one leg cannot loop back through
+## the device it started from and arrive at the other leg).
+static func _pv_sources_reachable(model: GraphModel, seeds: Array, conns: Array,
+		blocked: Dictionary) -> Dictionary:
+	var found: Dictionary = {}
+	var visited: Dictionary = blocked.duplicate()
+	var q: Array[String] = []
+	for sid_v in seeds:
+		var sid := str(sid_v)
+		if visited.has(sid):
+			continue
+		visited[sid] = true
+		q.append(sid)
 	while not q.is_empty():
 		var cur: String = q.pop_front()
+		var cur_it := model.get_item(cur)
+		if cur_it.is_empty():
+			continue
+		if is_pv_source_item(cur_it):
+			found[cur] = true
 		for conn in conns:
 			if not (conn is Dictionary):
 				continue
 			var c: Dictionary = conn
-			var pol := str(c.get("polarity", ""))
-			if pol not in ["positive", "negative", "pvPositive", "pvNegative"]:
+			if str(c.get("polarity", "")) not in PV_WALK_POLARITIES:
 				continue
 			var other := ""
 			if str(c.get("source_item_id", "")) == cur:
@@ -141,13 +183,46 @@ static func pv_sources_for_controller(model: GraphModel, controller_id: String,
 			if other.is_empty() or visited.has(other):
 				continue
 			visited[other] = true
-			var it := model.get_item(other)
-			if it.is_empty():
-				continue
-			if is_pv_source_item(it):
-				out.append(other)
 			q.append(other)
+	return found
+
+
+## PV sources feeding `controller_id` over `conns`.
+##
+## A PV string only presents voltage or current to a controller when BOTH of its
+## input terminals are wired — one leg is an open circuit, not a source. So each
+## leg is walked separately and only the sources common to both count. Without
+## this, a single positive wire reads as a working array (and satisfied the
+## tutorial's build goal before the return wire existed).
+static func _pv_sources_over(model: GraphModel, controller_id: String,
+		conns: Array) -> Array[String]:
+	var out: Array[String] = []
+	if model == null or controller_id.is_empty():
+		return out
+	var pos_seeds := leg_neighbors(controller_id, conns, "pv", "pos")
+	if pos_seeds.is_empty():
+		return out
+	var neg_seeds := leg_neighbors(controller_id, conns, "pv", "neg")
+	if neg_seeds.is_empty():
+		return out
+	var blocked: Dictionary = {controller_id: true}
+	var via_pos := _pv_sources_reachable(model, pos_seeds, conns, blocked)
+	if via_pos.is_empty():
+		return out
+	var via_neg := _pv_sources_reachable(model, neg_seeds, conns, blocked)
+	for sid in via_pos:
+		if via_neg.has(sid):
+			out.append(str(sid))
+	out.sort()
 	return out
+
+
+## All PV-source nodes feeding `controller_id` within one scope.
+static func pv_sources_for_controller(model: GraphModel, controller_id: String,
+		scope_id: String = "root") -> Array[String]:
+	if model == null:
+		return [] as Array[String]
+	return _pv_sources_over(model, controller_id, model.get_connections_in_scope(scope_id))
 
 
 ## Per parallel branch Voc feeding a controller. Returns Array of branch Voc values.
@@ -254,33 +329,7 @@ static func _array_has_id(arr: Array, needle: String) -> bool:
 
 static func pv_sources_for_controller_flat(model: GraphModel, controller_id: String,
 		flat_conns: Array) -> Array[String]:
-	var out: Array[String] = []
-	if model == null or controller_id.is_empty():
-		return out
-	var visited: Dictionary = {controller_id: true}
-	var q: Array[String] = [controller_id]
-	while not q.is_empty():
-		var cur: String = q.pop_front()
-		for conn in flat_conns:
-			var c: Dictionary = conn
-			var pol := str(c.get("polarity", ""))
-			if pol not in ["positive", "negative", "pvPositive", "pvNegative"]:
-				continue
-			var other := ""
-			if str(c.get("source_item_id", "")) == cur:
-				other = str(c.get("target_item_id", ""))
-			elif str(c.get("target_item_id", "")) == cur:
-				other = str(c.get("source_item_id", ""))
-			if other.is_empty() or visited.has(other):
-				continue
-			visited[other] = true
-			var it := model.get_item(other)
-			if it.is_empty():
-				continue
-			if is_pv_source_item(it):
-				out.append(other)
-			q.append(other)
-	return out
+	return _pv_sources_over(model, controller_id, flat_conns)
 
 
 static func branch_vocs_for_controller_flat(model: GraphModel, controller_id: String,

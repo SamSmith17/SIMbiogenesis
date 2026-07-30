@@ -34,14 +34,75 @@ const CLIP_WORK := "work"
 const CLIP_SIT := "sit"
 const CLIP_DANCE := "dance"
 
+## Locomotion ends. One-shots: a walk that starts and stops instead of snapping
+## into a gait is most of what makes a figure look like it decided to go.
+const CLIP_WALK_START := "walk_start"
+const CLIP_WALK_STOP := "walk_stop"
+
+## Posture transitions, all one-shots.
+##
+## Sleep has a genuine matched PAIR — "Idle To Situp" measured as a descend
+## (hips 0.940 -> 0.123) and "Sleep To Idle" as the ascend back. The filename
+## suggested a sit-up exercise; the measurement says lie-down, which is why
+## roles are classified and not read off the filename.
+##
+## Sitting has only the ascend ("Sit To Stand"), so sitting DOWN is that clip
+## played backwards. Safe here because the FBX import bakes dense linear keys
+## (animation/fps=30, trimming on) with no ease curve to invert, and sitting is
+## quasi-static -- no ballistic phase, no foot-plant that must land on a beat.
+const CLIP_SLEEP_ENTER := "sleep_enter"
+const CLIP_SLEEP_EXIT := "sleep_exit"
+const CLIP_SIT_EXIT := "sit_exit"
+## Not a file: CLIP_SIT_EXIT played backwards. Named so the pose machine and
+## the avatar can talk about it, and so `_apply_clip` keys on (clip, backwards).
+const CLIP_SIT_ENTER := "sit_enter"
+
+## Mood. Swapped in below NpcMorale's "Over It" band so a community in trouble
+## reads as such from across the map, before anyone actually quits.
+const CLIP_IDLE_SAD := "idle_sad"
+const CLIP_WALK_SAD := "walk_sad"
+
+## Enrichment, resolved by which enrichment SPACE the agent went to.
+const CLIP_EXERCISE := "exercise"      # movement / yoga block
+const CLIP_CLAP := "clap"              # workshop / social
+const CLIP_CLAP_SIT := "clap_sit"      # fire circle, seated
+
+## Gait variants, picked per agent so a group walking together is not a chorus
+## line. Measured at ~1.02 m/s against the primary walk's 1.64 m/s, so playback
+## is rate-matched per clip rather than globally.
+const CLIP_WALK_ALT := "walk_alt"
+const CLIP_WALK_ALT2 := "walk_alt2"
+const WALK_VARIANTS: Array = [CLIP_WALK, CLIP_WALK_ALT, CLIP_WALK_ALT2]
+
 ## file (under DIR) -> [clip name, should_loop]. The mapping from *activity* to
 ## clip lives in NpcAvatar; this is only "what is in the box".
+## file -> [clip name, should_loop, expected role].
+##
+## The role is an ASSERTION, not documentation: the loader measures each clip
+## and refuses to install one whose measured role disagrees, the same way
+## `_retarget_idle` refuses a bad bind ratio. That is what catches a swapped
+## Start/Stop export, which looks perfect by filename and walks backwards.
+##
+## Transitions must NOT loop, or `animation_finished` never fires and a
+## lie-down repeats forever.
 const SOURCES := {
-	"Walking.fbx": [CLIP_WALK, true],
-	"Laying Sleeping.fbx": [CLIP_SLEEP, true],
-	"Overhead Squat.fbx": [CLIP_WORK, true],
-	"Sitting Idle.fbx": [CLIP_SIT, true],
-	"Arms Hip Hop Dance.fbx": [CLIP_DANCE, true],
+	"Walking.fbx": [CLIP_WALK, true, ROLE_LOCOMOTION],
+	"Walking (1).fbx": [CLIP_WALK_ALT, true, ROLE_LOCOMOTION],
+	"Walking (2).fbx": [CLIP_WALK_ALT2, true, ROLE_LOCOMOTION],
+	"Sad Walk.fbx": [CLIP_WALK_SAD, true, ROLE_LOCOMOTION],
+	"Start Walking.fbx": [CLIP_WALK_START, false, ROLE_LOCO_START],
+	"Stop Walking.fbx": [CLIP_WALK_STOP, false, ROLE_LOCO_STOP],
+	"Laying Sleeping.fbx": [CLIP_SLEEP, true, ROLE_STATIC],
+	"Idle To Situp.fbx": [CLIP_SLEEP_ENTER, false, ROLE_DESCEND],
+	"Sleep To Idle.fbx": [CLIP_SLEEP_EXIT, false, ROLE_ASCEND],
+	"Sitting Idle.fbx": [CLIP_SIT, true, ROLE_STATIC],
+	"Sit To Stand.fbx": [CLIP_SIT_EXIT, false, ROLE_ASCEND],
+	"Sad Idle.fbx": [CLIP_IDLE_SAD, true, ROLE_STATIC],
+	"Overhead Squat.fbx": [CLIP_WORK, true, ROLE_CYCLIC],
+	"Back Squat.fbx": [CLIP_EXERCISE, true, ROLE_CYCLIC],
+	"Standing Clap.fbx": [CLIP_CLAP, true, ROLE_CYCLIC],
+	"Sitting Clap.fbx": [CLIP_CLAP_SIT, true, ROLE_STATIC],
+	"Arms Hip Hop Dance.fbx": [CLIP_DANCE, true, ROLE_CYCLIC],
 }
 
 ## Mixamo's own take name, identical in every file.
@@ -81,6 +142,20 @@ static var _ground_offsets: Dictionary = {}   # clip -> metres to shift the figu
 ## Resting hip height of this pack's own standing clips, in metres. Used to
 ## rebase retargeted clips that came from a differently-scaled rig.
 static var _native_stand_hips_y := 0.0
+## clip -> metres of ground covered per cycle, for per-variant rate matching.
+static var _clip_cycle_m: Dictionary = {}
+## clip -> PackedFloat32Array of ground offsets sampled across the clip.
+static var _offset_curves: Dictionary = {}
+## clip -> measurement dictionary, for diagnostics and the selftest.
+static var _measurements: Dictionary = {}
+## clip -> seconds.
+static var _clip_len: Dictionary = {}
+
+## Hip height below which the low end of a transition is LYING rather than
+## SEATED. Sits between the measured seated hip (0.539) and lying hip (0.123).
+const LYING_HIP_MAX := 0.35
+## Samples per offset curve. Cheap to store, and read by array index per frame.
+const OFFSET_CURVE_SAMPLES := 24
 static var _loaded := false
 static var _load_error := ""
 
@@ -213,6 +288,7 @@ static func _ensure_loaded() -> void:
 		return
 
 	_lib = AnimationLibrary.new()
+	var _pending_curves: Dictionary = {}
 	for file in SOURCES.keys():
 		var spec: Array = SOURCES[file]
 		var anim := _extract(DIR + String(file))
@@ -220,6 +296,19 @@ static func _ensure_loaded() -> void:
 			push_warning("NpcRig: missing clip source %s" % file)
 			continue
 		var clip_name := String(spec[0])
+		# Measure BEFORE flattening: horizontal travel is the whole signal for
+		# the locomotion roles, and flattening destroys it.
+		var m := measure(anim)
+		var measured_role := classify(m)
+		var expected_role := String(spec[2]) if spec.size() > 2 else ""
+		if not expected_role.is_empty() and measured_role != expected_role:
+			push_warning("NpcRig: %s measured as '%s' but SOURCES expects '%s' — skipped"
+				% [file, measured_role, expected_role])
+			continue
+		m["role"] = measured_role
+		_measurements[clip_name] = m
+		_clip_len[clip_name] = anim.length
+		_clip_cycle_m[clip_name] = float(m["hip_xz_travel_m"])
 		if clip_name == CLIP_WALK:
 			_walk_cycle_m = _hip_travel_xz(anim)
 			_walk_forward = _hip_travel_dir_xz(anim)
@@ -230,7 +319,17 @@ static func _ensure_loaded() -> void:
 				float(TARGET_HIPS_Y[clip_name]) - _hip_rest_y(anim)
 		if bool(spec[1]):
 			anim.loop_mode = Animation.LOOP_LINEAR
+		else:
+			anim.loop_mode = Animation.LOOP_NONE
 		_lib.add_animation(clip_name, anim)
+		_pending_curves[clip_name] = anim
+
+	# Offset curves need the standing hip height, which is measured from the
+	# walk clip inside the loop above, so they are built in a second pass.
+	for clip_name in _pending_curves:
+		_offset_curves[clip_name] = _build_offset_curve(
+			_pending_curves[clip_name] as Animation, String(clip_name))
+	_pending_curves.clear()
 
 	var idle := _retarget_idle(bones)
 	if idle != null:
@@ -241,6 +340,293 @@ static func _ensure_loaded() -> void:
 		_load_error = "no standing idle; falling back to seated"
 		_lib.add_animation(CLIP_IDLE, _lib.get_animation(CLIP_SIT).duplicate(true))
 
+
+
+# --- clip measurement + role classification ---------------------------------
+#
+# Filenames are a claim, not evidence. Everything else about these assets is
+# already derived from the files themselves (facing from hip travel, ground
+# offsets from hip height, walk rate from cycle length), and roles are treated
+# the same way: measured, then checked against what SOURCES expected.
+#
+# This catches the failure a filename map never can — a swapped Start/Stop
+# export looks perfect by name and walks backwards in game.
+
+const ROLE_LOCOMOTION := "locomotion"
+const ROLE_LOCO_START := "loco_start"
+const ROLE_LOCO_STOP := "loco_stop"
+const ROLE_DESCEND := "descend"     # standing -> seated/lying
+const ROLE_ASCEND := "ascend"       # seated/lying -> standing
+const ROLE_CYCLIC := "cyclic"       # a repeating in-place motion
+const ROLE_STATIC := "static"       # a held pose
+const ROLE_UNKNOWN := "unknown"
+
+## Vertical movement below this reads as noise rather than a real rise or fall.
+const Y_NOISE_M := 0.03
+## Hip travel above this means the clip actually goes somewhere.
+const XZ_LOCOMOTION_M := 0.5
+const XZ_TRANSITION_M := 0.2
+## End-to-end hip height change that distinguishes a transition from a loop.
+const Y_LEVEL_CHANGE_M := 0.25
+## Total end-to-start rotation across the skeleton, in radians, above which the
+## clip finishes in a materially different pose than it started.
+const POSE_DELTA_LARGE := 3.0
+
+
+## Everything worth knowing about one clip, in one pass over its tracks.
+## Call BEFORE _flatten_root_motion — horizontal travel is the whole signal for
+## locomotion roles and flattening destroys it.
+static func measure(anim: Animation) -> Dictionary:
+	var t := _hip_position_track(anim)
+	var out := {
+		"len_s": anim.length,
+		"hip_xz_travel_m": 0.0,
+		"hip_y_start": 0.0, "hip_y_end": 0.0,
+		"hip_y_min": 0.0, "hip_y_max": 0.0, "hip_y_swing": 0.0,
+		"y_cycles": 0,
+		"pose_delta": _pose_delta(anim),
+		"speed_first_third": 0.0, "speed_last_third": 0.0,
+	}
+	if t < 0:
+		return out
+	var n := anim.track_get_key_count(t)
+	if n < 2:
+		return out
+	var first: Vector3 = anim.track_get_key_value(t, 0)
+	var last: Vector3 = anim.track_get_key_value(t, n - 1)
+	out["hip_xz_travel_m"] = Vector2(last.x - first.x, last.z - first.z).length()
+	out["hip_y_start"] = first.y
+	out["hip_y_end"] = last.y
+
+	var lo := INF
+	var hi := -INF
+	for k in range(n):
+		var v: Vector3 = anim.track_get_key_value(t, k)
+		lo = minf(lo, v.y)
+		hi = maxf(hi, v.y)
+	out["hip_y_min"] = lo
+	out["hip_y_max"] = hi
+	out["hip_y_swing"] = hi - lo
+
+	# Count direction reversals in hip height. A walk bobs twice per cycle; a
+	# transition rises or falls once. Only reversals that clear the noise floor
+	# count, or float jitter would read as a gallop.
+	var cycles := 0
+	var dir := 0
+	var anchor := first.y
+	for k in range(1, n):
+		var y: float = (anim.track_get_key_value(t, k) as Vector3).y
+		var d := y - anchor
+		if absf(d) < Y_NOISE_M:
+			continue
+		var nd := 1 if d > 0.0 else -1
+		if dir != 0 and nd != dir:
+			cycles += 1
+		dir = nd
+		anchor = y
+	out["y_cycles"] = cycles
+
+	# Horizontal speed early vs late. This is what tells a start from a stop:
+	# both travel and both change pose, but one accelerates and one decelerates.
+	out["speed_first_third"] = _xz_speed_over(anim, t, 0.0, 1.0 / 3.0)
+	out["speed_last_third"] = _xz_speed_over(anim, t, 2.0 / 3.0, 1.0)
+	return out
+
+
+static func _xz_speed_over(anim: Animation, t: int, u0: float, u1: float) -> float:
+	var n := anim.track_get_key_count(t)
+	if n < 2 or anim.length <= 0.0:
+		return 0.0
+	var i0 := clampi(int(floor(float(n - 1) * u0)), 0, n - 1)
+	var i1 := clampi(int(floor(float(n - 1) * u1)), 0, n - 1)
+	if i1 <= i0:
+		return 0.0
+	var a: Vector3 = anim.track_get_key_value(t, i0)
+	var b: Vector3 = anim.track_get_key_value(t, i1)
+	var span := anim.length * (u1 - u0)
+	if span <= 0.0:
+		return 0.0
+	return Vector2(b.x - a.x, b.z - a.z).length() / span
+
+
+## Total rotation between the clip's first and last pose, summed over every
+## rotation track. Small = it ends where it started (a loop); large = it ends
+## somewhere else (a transition).
+static func _pose_delta(anim: Animation) -> float:
+	var total := 0.0
+	for t in range(anim.get_track_count()):
+		if anim.track_get_type(t) != Animation.TYPE_ROTATION_3D:
+			continue
+		var n := anim.track_get_key_count(t)
+		if n < 2:
+			continue
+		var a: Quaternion = anim.track_get_key_value(t, 0)
+		var b: Quaternion = anim.track_get_key_value(t, n - 1)
+		total += absf(a.angle_to(b))
+	return total
+
+
+## Role from measurements alone. Pure and side-effect free so the selftest can
+## drive it with synthetic dictionaries and no assets installed.
+static func classify(m: Dictionary) -> String:
+	var xz := float(m.get("hip_xz_travel_m", 0.0))
+	var pose := float(m.get("pose_delta", 0.0))
+	var cycles := int(m.get("y_cycles", 0))
+	var swing := float(m.get("hip_y_swing", 0.0))
+	var dy := float(m.get("hip_y_end", 0.0)) - float(m.get("hip_y_start", 0.0))
+	var s0 := float(m.get("speed_first_third", 0.0))
+	var s1 := float(m.get("speed_last_third", 0.0))
+
+	# Level changes first: a lie-down that happens to drift is still a lie-down.
+	if dy < -Y_LEVEL_CHANGE_M:
+		return ROLE_DESCEND
+	if dy > Y_LEVEL_CHANGE_M:
+		return ROLE_ASCEND
+	# Travel plus an unchanged end pose is a locomotion loop. Deliberately NOT
+	# gated on hip bob: "Sad Walk" trudges with only 3.8 cm of rise, which is
+	# under the noise floor, and it is still unmistakably a walk.
+	if xz > XZ_LOCOMOTION_M and pose < POSE_DELTA_LARGE:
+		return ROLE_LOCOMOTION
+	if xz > XZ_TRANSITION_M and pose >= POSE_DELTA_LARGE:
+		if s1 > s0 * 1.5:
+			return ROLE_LOCO_START
+		if s0 > s1 * 1.5:
+			return ROLE_LOCO_STOP
+		return ROLE_LOCOMOTION
+	# Returns to its starting pose having moved: a repeatable in-place motion.
+	# ONE reversal is enough — a squat and a clap are a single down-and-up, not
+	# a gait, and requiring two classified both as unknown.
+	if pose < POSE_DELTA_LARGE and (cycles >= 1 or swing >= Y_NOISE_M):
+		return ROLE_CYCLIC
+	if xz < 0.1:
+		return ROLE_STATIC
+	return ROLE_UNKNOWN
+
+
+## Measure a clip straight from its FBX, without installing it. Used by the
+## diagnostic and by the selftest's asset-gated role checks.
+static func measure_file(file_name: String) -> Dictionary:
+	var anim := _extract(DIR + file_name)
+	if anim == null:
+		return {}
+	var m := measure(anim)
+	m["role"] = classify(m)
+	return m
+
+
+## Ground offset sampled across a clip, rather than one number for the whole
+## thing.
+##
+## A constant is right for a held pose and wrong twice for a transition: a
+## stand-to-lie clip needs ~0 at the standing end and ~-0.86 m at the lying
+## end, and `_hip_rest_y` (a minimum) only ever describes the lying one.
+##
+## The curve is parameterised on the clip's OWN hip descent rather than on
+## time, so the figure meets the ground exactly when the animation puts it
+## there — and a re-export with different pacing stays correct for free.
+static func _build_offset_curve(anim: Animation, clip_name: String) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	var m: Dictionary = _measurements.get(clip_name, {})
+	var role := String(m.get("role", ""))
+	var settled := float(_ground_offsets.get(clip_name, 0.0))
+	# Only genuine level changes get a curve. A squat swings the hips 0.55 m
+	# without going anywhere; treating that as a transition would try to land
+	# the bottom of the rep at seated height.
+	if role != ROLE_DESCEND and role != ROLE_ASCEND:
+		out.resize(OFFSET_CURVE_SAMPLES)
+		out.fill(settled)
+		return out
+	var t := _hip_position_track(anim)
+	var y_min := float(m.get("hip_y_min", 0.0))
+	var y_max := float(m.get("hip_y_max", 0.0))
+	var span := y_max - y_min
+	if t < 0 or span < 0.01:
+		out.resize(OFFSET_CURVE_SAMPLES)
+		out.fill(settled)
+		return out
+	# Whichever pose sits at the LOW end: seated or lying, decided by height.
+	var target_low: float = float(TARGET_HIPS_Y.get(CLIP_SLEEP, 0.16)) if y_min < LYING_HIP_MAX \
+		else float(TARGET_HIPS_Y.get(CLIP_SIT, 0.26))
+	var target_high := _native_stand_hips_y
+	for i in range(OFFSET_CURVE_SAMPLES):
+		var u := float(i) / float(OFFSET_CURVE_SAMPLES - 1)
+		var y := _hip_y_at(anim, t, u)
+		var frac := clampf((y - y_min) / span, 0.0, 1.0)
+		out.append(lerpf(target_low, target_high, frac) - y)
+	return out
+
+
+static func _hip_y_at(anim: Animation, track: int, u: float) -> float:
+	var n := anim.track_get_key_count(track)
+	if n <= 0:
+		return 0.0
+	var i := clampi(int(round(u * float(n - 1))), 0, n - 1)
+	return (anim.track_get_key_value(track, i) as Vector3).y
+
+
+## Ground offset at normalized clip position `u`. `play_backwards` sweeps u
+## from 1 to 0, so reversed playback reads the same curve with no special case.
+static func clip_ground_offset_at(clip: String, u: float) -> float:
+	_ensure_loaded()
+	var curve: PackedFloat32Array = _offset_curves.get(clip, PackedFloat32Array())
+	if curve.is_empty():
+		return clip_ground_offset(clip)
+	var i := clampi(int(round(clampf(u, 0.0, 1.0) * float(curve.size() - 1))),
+		0, curve.size() - 1)
+	return curve[i]
+
+
+## clip -> {"len", "loops"} for every installed clip. Handed to NpcPoseMachine
+## so the pose logic knows how long each transition takes without reaching into
+## the rig — which is what lets the machine be driven with a synthetic catalog
+## in tests that run with no art installed.
+static func catalog() -> Dictionary:
+	_ensure_loaded()
+	var out: Dictionary = {}
+	if _lib == null:
+		return out
+	for n in _lib.get_animation_list():
+		var a := _lib.get_animation(n)
+		out[String(n)] = {
+			"len": a.length,
+			"loops": a.loop_mode != Animation.LOOP_NONE,
+		}
+	return out
+
+
+static func clip_length(clip: String) -> float:
+	_ensure_loaded()
+	return float(_clip_len.get(clip, 0.0))
+
+
+static func clip_measurement(clip: String) -> Dictionary:
+	_ensure_loaded()
+	return _measurements.get(clip, {})
+
+
+## Playback rate that matches a specific gait clip to the sim's ground speed.
+## Per-clip because the variants were authored at ~1.02 m/s against the primary
+## walk's 1.64 m/s — one global scale would make two of the three skate.
+static func walk_speed_scale_for(clip: String, ground_speed_mps: float) -> float:
+	_ensure_loaded()
+	var len_s := float(_clip_len.get(clip, 0.0))
+	var cycle_m := float(_clip_cycle_m.get(clip, 0.0))
+	if len_s <= 0.0 or cycle_m <= 0.01:
+		return 1.0
+	return clampf(ground_speed_mps / (cycle_m / len_s), 0.25, 4.0)
+
+
+## Deterministic gait for one agent, so a group walking together is not a
+## chorus line. Falls back to the primary walk when variants are absent.
+static func walk_variant_for(agent_id: String) -> String:
+	_ensure_loaded()
+	var avail: Array = []
+	for c in WALK_VARIANTS:
+		if _lib != null and _lib.has_animation(String(c)):
+			avail.append(String(c))
+	if avail.is_empty():
+		return CLIP_WALK
+	return String(avail[absi(hash(agent_id)) % avail.size()])
 
 static func _extract(path: String) -> Animation:
 	if not ResourceLoader.exists(path):

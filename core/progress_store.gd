@@ -159,6 +159,45 @@ static func first_incomplete_level(ordered_level_ids: Array) -> String:
 	return ""
 
 
+## Solar Bootcamp sandbox graph (levels 10-12 build on whatever the player
+## wired in the level before — "carry_graph"). Only the level INDEX persists
+## via mark_level_complete; without this, resuming a carry_graph level in a new
+## session lands on the blank sandbox begin_tutorial_sandbox always starts
+## from, with nothing to build on. Captured on every sandbox edit (see
+## SystemGraphView._flush_tutorial_sandbox_save); restored when a carry_graph
+## level starts (see TutorialDirector.start()).
+static func save_sandbox_snapshot(level_id: String, graph_blob: Dictionary) -> void:
+	var d := _load()
+	d["tutorial_sandbox"] = {"level_id": level_id, "graph": graph_blob}
+	_save()
+
+
+static func load_sandbox_snapshot() -> Dictionary:
+	var e: Variant = _load().get("tutorial_sandbox", {})
+	return e if e is Dictionary else {}
+
+
+static func clear_sandbox_snapshot() -> void:
+	var d := _load()
+	if d.has("tutorial_sandbox"):
+		d.erase("tutorial_sandbox")
+		_save()
+
+
+## Player/tester-requested reset: walk the curriculum again from level 1.
+## Deliberately leaves unlock_all and individually granted categories/presets
+## alone — a level's own allowed_presets still gates the Library while it is
+## active, so this cannot be used to "re-earn" anything; it only resets which
+## level you land on and drops the carried sandbox graph so level 1 starts
+## from its own clean seed rather than whatever was last built.
+static func reset_tutorial_progress() -> void:
+	var d := _load()
+	d.erase("completed_levels")
+	d.erase("level_stats")
+	d.erase("tutorial_sandbox")
+	_save()
+
+
 static func _has_id(arr: Array, needle: String) -> bool:
 	for v in arr:
 		if str(v) == needle:

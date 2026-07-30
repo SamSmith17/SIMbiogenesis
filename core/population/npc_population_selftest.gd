@@ -63,6 +63,8 @@ func _init() -> void:
 	# --- Tier 4 ---
 	_test_rig_assets()
 	_test_rig_clip_map()
+	_test_clip_classifier()
+	_test_pose_machine()
 	_test_space_tag_row()
 	_test_standing_slots()
 	_test_separation()
@@ -2839,3 +2841,314 @@ func _test_routine_behaviour() -> void:
 		worst_hunger = maxf(worst_hunger, float((a as NpcAgent).needs.get("hunger", 0.0)))
 	_check("a scheduled day still feeds people", worst_hunger < 0.95,
 			"worst hunger %.2f" % worst_hunger)
+
+
+# --- Tier 5: clip roles + pose machine ---------------------------------------
+
+## Roles are MEASURED, never read off the filename. Driven with synthetic
+## measurements so it runs with no art installed.
+func _test_clip_classifier() -> void:
+	# A walk: goes somewhere, ends in the pose it started.
+	_check("travel with an unchanged pose is locomotion",
+			NpcRig.classify({"hip_xz_travel_m": 1.69, "pose_delta": 0.0,
+				"y_cycles": 3, "hip_y_swing": 0.07}) == NpcRig.ROLE_LOCOMOTION)
+	# "Sad Walk" trudges with only 3.8 cm of hip rise — under the noise floor,
+	# so a bob-count requirement would misclassify it. It is still a walk.
+	_check("a walk with almost no bob is still locomotion",
+			NpcRig.classify({"hip_xz_travel_m": 1.08, "pose_delta": 0.0,
+				"y_cycles": 0, "hip_y_swing": 0.038}) == NpcRig.ROLE_LOCOMOTION)
+	# Start vs stop differ ONLY by which end is faster. This is the check a
+	# filename map cannot do, and a swapped export is exactly what it catches.
+	var start := {"hip_xz_travel_m": 1.82, "pose_delta": 9.5, "y_cycles": 0,
+			"hip_y_swing": 0.055, "speed_first_third": 0.15, "speed_last_third": 0.96}
+	var stop := {"hip_xz_travel_m": 1.10, "pose_delta": 9.5, "y_cycles": 0,
+			"hip_y_swing": 0.049, "speed_first_third": 0.82, "speed_last_third": 0.03}
+	_check("accelerating travel is a walk start",
+			NpcRig.classify(start) == NpcRig.ROLE_LOCO_START)
+	_check("decelerating travel is a walk stop",
+			NpcRig.classify(stop) == NpcRig.ROLE_LOCO_STOP)
+	_check("swapping the speed profile swaps the role",
+			NpcRig.classify(stop) != NpcRig.classify(start))
+	# Level changes.
+	_check("ending lower is a descend",
+			NpcRig.classify({"hip_y_start": 0.94, "hip_y_end": 0.12,
+				"pose_delta": 17.9}) == NpcRig.ROLE_DESCEND)
+	_check("ending higher is an ascend",
+			NpcRig.classify({"hip_y_start": 0.12, "hip_y_end": 0.94,
+				"pose_delta": 17.9}) == NpcRig.ROLE_ASCEND)
+	# A single squat rep returns to its start pose having moved a lot: one
+	# reversal, not a gait. Requiring two classified squats and claps as junk.
+	_check("a single-rep squat is cyclic",
+			NpcRig.classify({"hip_xz_travel_m": 0.0, "pose_delta": 0.0,
+				"y_cycles": 1, "hip_y_swing": 0.55}) == NpcRig.ROLE_CYCLIC)
+	_check("a held pose is static",
+			NpcRig.classify({"hip_xz_travel_m": 0.0, "pose_delta": 0.1,
+				"y_cycles": 0, "hip_y_swing": 0.001}) == NpcRig.ROLE_STATIC)
+
+	if not NpcRig.available():
+		return
+	# Asset-gated: what the real files measured as. The pair that matters is
+	# sleep -- "Idle To Situp" is the LIE-DOWN despite its name.
+	for pair in [[NpcRig.CLIP_SLEEP_ENTER, NpcRig.ROLE_DESCEND],
+			[NpcRig.CLIP_SLEEP_EXIT, NpcRig.ROLE_ASCEND],
+			[NpcRig.CLIP_SIT_EXIT, NpcRig.ROLE_ASCEND],
+			[NpcRig.CLIP_WALK_START, NpcRig.ROLE_LOCO_START],
+			[NpcRig.CLIP_WALK_STOP, NpcRig.ROLE_LOCO_STOP],
+			[NpcRig.CLIP_WALK_SAD, NpcRig.ROLE_LOCOMOTION]]:
+		var m := NpcRig.clip_measurement(str(pair[0]))
+		_check("measured role: %s" % str(pair[0]),
+				str(m.get("role", "")) == str(pair[1]),
+				"%s vs %s" % [str(m.get("role", "?")), str(pair[1])])
+	# Transitions must not loop or animation_finished never fires.
+	for c in [NpcRig.CLIP_SLEEP_ENTER, NpcRig.CLIP_SLEEP_EXIT,
+			NpcRig.CLIP_SIT_EXIT, NpcRig.CLIP_WALK_START, NpcRig.CLIP_WALK_STOP]:
+		_check("transition does not loop: %s" % c, NpcRig.clip_length(c) > 0.0)
+
+	# The seam test: a transition must leave the body at the same WORLD hip
+	# height the pose it lands in expects, or the figure pops vertically.
+	var en := NpcRig.clip_measurement(NpcRig.CLIP_SLEEP_ENTER)
+	var sl := NpcRig.clip_measurement(NpcRig.CLIP_SLEEP)
+	if not en.is_empty() and not sl.is_empty():
+		var a := float(en["hip_y_end"]) + NpcRig.clip_ground_offset_at(NpcRig.CLIP_SLEEP_ENTER, 1.0)
+		var b := float(sl["hip_y_min"]) + NpcRig.clip_ground_offset(NpcRig.CLIP_SLEEP)
+		_check("lie-down lands where the sleep pose sits", absf(a - b) < 0.05,
+				"%.3f vs %.3f m" % [a, b])
+	# And it must START at standing height, or the figure sinks as it lies down.
+	if not en.is_empty():
+		var st := float(en["hip_y_start"]) + NpcRig.clip_ground_offset_at(NpcRig.CLIP_SLEEP_ENTER, 0.0)
+		_check("lie-down starts standing", absf(st - 0.94) < 0.08, "%.3f m" % st)
+	# A squat swings the hips 0.55 m without changing level; treating it as a
+	# transition would sink the figure at the bottom of every rep.
+	_check("an in-place squat gets no descent curve",
+			is_equal_approx(NpcRig.clip_ground_offset_at(NpcRig.CLIP_WORK, 0.0),
+				NpcRig.clip_ground_offset_at(NpcRig.CLIP_WORK, 1.0)))
+
+
+## Synthetic catalog so every sequence test runs with no art installed.
+func _pose_catalog() -> Dictionary:
+	return {
+		NpcRig.CLIP_IDLE: {"len": 2.0, "loops": true},
+		NpcRig.CLIP_IDLE_SAD: {"len": 2.8, "loops": true},
+		NpcRig.CLIP_WALK: {"len": 1.0, "loops": true},
+		NpcRig.CLIP_WALK_SAD: {"len": 1.5, "loops": true},
+		NpcRig.CLIP_WALK_START: {"len": 0.9, "loops": false},
+		NpcRig.CLIP_WALK_STOP: {"len": 0.9, "loops": false},
+		NpcRig.CLIP_SLEEP: {"len": 1.7, "loops": true},
+		NpcRig.CLIP_SLEEP_ENTER: {"len": 1.2, "loops": false},
+		NpcRig.CLIP_SLEEP_EXIT: {"len": 1.2, "loops": false},
+		NpcRig.CLIP_SIT: {"len": 4.3, "loops": true},
+		NpcRig.CLIP_SIT_EXIT: {"len": 1.1, "loops": false},
+		NpcRig.CLIP_WORK: {"len": 1.9, "loops": true},
+		NpcRig.CLIP_EXERCISE: {"len": 2.3, "loops": true},
+		NpcRig.CLIP_DANCE: {"len": 22.0, "loops": true},
+		NpcRig.CLIP_CLAP: {"len": 4.8, "loops": true},
+		NpcRig.CLIP_CLAP_SIT: {"len": 6.5, "loops": true},
+	}
+
+
+func _pose_run(m: NpcPoseMachine, secs: float, inp: Dictionary,
+		out: Array = []) -> Array:
+	var steps := int(secs * 60.0)
+	for i in steps:
+		m.step(1.0 / 60.0, inp)
+		if out.is_empty() or str(out[out.size() - 1]) != m.clip():
+			out.append(m.clip())
+	return out
+
+
+func _test_pose_machine() -> void:
+	var cat := _pose_catalog()
+
+	# 1. Walking to bed must NOT lie down on the way. This is the reported bug:
+	#    activity is the INTENT for the whole trip, so choosing on intent alone
+	#    made people lie down and slide across the site.
+	var m := NpcPoseMachine.new()
+	m.set_catalog(cat)
+	var seen: Array = []
+	var travelling := {"in_transit": true, "activity": "sleep", "morale": 0.8,
+			"dwell_left_s": 3600.0}
+	_pose_run(m, 4.0, travelling, seen)
+	_check("nobody lies down while walking to bed",
+			not seen.has(NpcRig.CLIP_SLEEP), ", ".join(PackedStringArray(seen)))
+	_check("walking to bed actually walks",
+			seen.has(NpcRig.CLIP_WALK) or seen.has(NpcRig.CLIP_WALK_START),
+			", ".join(PackedStringArray(seen)))
+
+	# 2. Arriving: stop, lie down, sleep — in that order.
+	var arrived := {"in_transit": false, "activity": "sleep", "morale": 0.8,
+			"dwell_left_s": 3600.0}
+	var seq: Array = []
+	_pose_run(m, 6.0, arrived, seq)
+	var i_enter := seq.find(NpcRig.CLIP_SLEEP_ENTER)
+	var i_sleep := seq.find(NpcRig.CLIP_SLEEP)
+	_check("arriving plays the lie-down", i_enter >= 0, ", ".join(PackedStringArray(seq)))
+	_check("the lie-down precedes sleeping", i_enter >= 0 and i_sleep > i_enter)
+	_check("it ends up asleep", m.clip() == NpcRig.CLIP_SLEEP and m.is_lying())
+
+	# 3. Waking: stand up BEFORE walking off.
+	var wake: Array = []
+	_pose_run(m, 6.0, {"in_transit": true, "activity": "", "morale": 0.8,
+			"dwell_left_s": 0.0}, wake)
+	var i_exit := wake.find(NpcRig.CLIP_SLEEP_EXIT)
+	var i_walk := wake.find(NpcRig.CLIP_WALK)
+	_check("waking plays the get-up", i_exit >= 0, ", ".join(PackedStringArray(wake)))
+	_check("the get-up precedes walking", i_exit >= 0 and i_walk > i_exit)
+
+	# 4. The bathroom, at BOTH time scales. A 5-minute visit is 0.67 real
+	#    seconds at 450x — shorter than one sit-down — so transitions have to
+	#    disappear at speed rather than be started and aborted.
+	var m2 := NpcPoseMachine.new()
+	m2.set_catalog(cat)
+	var slow: Array = []
+	_pose_run(m2, 8.0, {"in_transit": false, "activity": "bladder",
+			"morale": 0.8, "dwell_left_s": 300.0}, slow)
+	_check("the bathroom is used sitting down", slow.has(NpcRig.CLIP_SIT),
+			", ".join(PackedStringArray(slow)))
+	_check("sitting down is animated at 1x", slow.has(NpcRig.CLIP_SIT_ENTER),
+			", ".join(PackedStringArray(slow)))
+
+	var m3 := NpcPoseMachine.new()
+	m3.set_catalog(cat)
+	var fast: Array = []
+	_pose_run(m3, 4.0, {"in_transit": false, "activity": "bladder",
+			"morale": 0.8, "dwell_left_s": 0.67}, fast)
+	_check("a 0.67 s visit skips the sit-down entirely",
+			not fast.has(NpcRig.CLIP_SIT_ENTER), ", ".join(PackedStringArray(fast)))
+	_check("a 0.67 s visit still sits", fast.has(NpcRig.CLIP_SIT))
+
+	# 5. Interruption: something starts moving mid-sit-down.
+	var m4 := NpcPoseMachine.new()
+	m4.set_catalog(cat)
+	for i in 20:
+		m4.step(1.0 / 60.0, {"in_transit": false, "activity": "bladder",
+				"morale": 0.8, "dwell_left_s": 300.0})
+	m4.step(1.0 / 60.0, {"in_transit": true, "activity": "bladder",
+			"morale": 0.8, "dwell_left_s": 0.0})
+	for i in 10:
+		m4.step(1.0 / 60.0, {"in_transit": true, "activity": "bladder",
+				"morale": 0.8, "dwell_left_s": 0.0})
+	_check("an interrupted sit-down abandons the seat", not m4.is_seated())
+
+	# 6. Teleport: hard cut, no blend. At high time scale the body relocates
+	#    across the map and blending into that would smear.
+	var m5 := NpcPoseMachine.new()
+	m5.set_catalog(cat)
+	m5.step(1.0 / 60.0, {"in_transit": false, "activity": "sleep",
+			"morale": 0.8, "dwell_left_s": 3600.0, "teleported": true})
+	_check("a teleport cuts with zero blend", is_equal_approx(m5.blend_s(), 0.0))
+	_check("a teleport lands on the settled pose", m5.clip() == NpcRig.CLIP_SLEEP)
+
+	# 7. THE ORIGINAL BUG, by name. The sim advances every 15th frame; feeding
+	#    that through as an edge is what made the clip alternate. Assert the
+	#    machine is stable when in_transit is held as a LEVEL.
+	var m6 := NpcPoseMachine.new()
+	m6.set_catalog(cat)
+	var flips := 0
+	var last := ""
+	for i in 900:
+		m6.step(1.0 / 60.0, {"in_transit": true, "activity": "sleep",
+				"morale": 0.8, "dwell_left_s": 3600.0})
+		if m6.clip() != last:
+			flips += 1
+			last = m6.clip()
+	_check("a held transit signal does not thrash the clip", flips <= 3,
+			"%d clip changes in 15 s of walking" % flips)
+
+	# 8. Mood, with hysteresis so a morale sitting on the boundary does not
+	#    flicker gaits.
+	var m7 := NpcPoseMachine.new()
+	m7.set_catalog(cat)
+	var down := 0
+	var prev := ""
+	for i in 100:
+		var mo := 1.0 - float(i) / 100.0
+		m7.step(1.0 / 60.0, {"in_transit": true, "activity": "", "morale": mo,
+				"dwell_left_s": 0.0})
+		if m7.clip() != prev and prev != "":
+			if m7.clip() == NpcRig.CLIP_WALK_SAD:
+				down += 1
+		prev = m7.clip()
+	_check("low morale switches to the dejected walk exactly once", down == 1,
+			"%d switches" % down)
+	_check("the dejected walk is what is playing at rock bottom",
+			m7.clip() == NpcRig.CLIP_WALK_SAD)
+
+	# 9. Enrichment resolves by SPACE, so the yoga block does squats and the
+	#    fire circle sits and claps.
+	var m8 := NpcPoseMachine.new()
+	m8.set_catalog(cat)
+	_pose_run(m8, 5.0, {"in_transit": false, "activity": "enrichment",
+			"space_type": "movement", "morale": 0.9, "dwell_left_s": 3600.0})
+	_check("the yoga block works out", m8.clip() == NpcRig.CLIP_EXERCISE, m8.clip())
+	var m9 := NpcPoseMachine.new()
+	m9.set_catalog(cat)
+	_pose_run(m9, 6.0, {"in_transit": false, "activity": "enrichment",
+			"space_type": "fire_circle", "morale": 0.9, "dwell_left_s": 3600.0})
+	_check("the fire circle is seated", m9.clip() == NpcRig.CLIP_CLAP_SIT, m9.clip())
+
+	# 10. FUZZ — the no-wedge guarantee. This is the whole reason the machine is
+	#     pure logic rather than an AnimationTree: an AnimationTree cannot be
+	#     stepped headless, so this could never be proven.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 12345
+	var fz := NpcPoseMachine.new()
+	fz.set_catalog(cat)
+	var acts: Array = ["", "sleep", "bladder", "hunger", "chore", "enrichment", "thirst"]
+	var spaces: Array = ["", "movement", "fire_circle", "quiet", "workshop_social"]
+	var bad_clip := 0
+	var stuck := 0
+	var same_run := 0
+	var prev_clip := ""
+	for i in 200000:
+		# dt up to 0.5 s: far-LOD poses at 0.25 s intervals and passes the
+		# accumulator as delta, so nothing may assume a 60 Hz step.
+		var dt := rng.randf_range(0.001, 0.5)
+		fz.step(dt, {
+			"in_transit": rng.randf() < 0.5,
+			"activity": str(acts[rng.randi() % acts.size()]),
+			"space_type": str(spaces[rng.randi() % spaces.size()]),
+			"morale": rng.randf(),
+			"dwell_left_s": rng.randf_range(0.0, 600.0),
+			"teleported": rng.randf() < 0.02,
+			"finished": rng.randf() < 0.1,
+		})
+		var c := fz.clip()
+		if c.is_empty() or not cat.has(NpcPoseMachine._clip_file_for(c)):
+			bad_clip += 1
+		if c == prev_clip:
+			same_run += 1
+			if same_run > 4000:
+				stuck += 1
+		else:
+			same_run = 0
+			prev_clip = c
+	_check("fuzz: the clip is always a real clip", bad_clip == 0,
+			"%d bad steps" % bad_clip)
+	_check("fuzz: a figure can never wedge", stuck == 0, "%d stuck windows" % stuck)
+
+	# 11. Determinism — same inputs, same timeline. Guards against anyone
+	#     reaching for an unseeded randf() inside the machine.
+	_check("the machine is deterministic",
+			_pose_fingerprint(cat) == _pose_fingerprint(cat))
+
+	# 12. Every clip the machine can emit must exist in the real rig.
+	if NpcRig.available():
+		var names := NpcRig.clip_names()
+		for c in cat.keys():
+			_check("catalog clip ships: %s" % c, names.has(str(c)), str(c))
+
+
+func _pose_fingerprint(cat: Dictionary) -> String:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 99
+	var m := NpcPoseMachine.new()
+	m.set_catalog(cat)
+	var acc := ""
+	for i in 400:
+		m.step(0.02, {
+			"in_transit": rng.randf() < 0.5,
+			"activity": ["", "sleep", "bladder", "chore"][rng.randi() % 4],
+			"morale": rng.randf(), "dwell_left_s": rng.randf_range(0.0, 100.0),
+		})
+		acc += m.clip() + ","
+	return acc

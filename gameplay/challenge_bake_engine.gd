@@ -32,8 +32,16 @@ signal state_changed
 enum Phase { IDLE, BAKING, PLAYBACK, AWAIT_RETRY, DONE }
 
 const STEPS_PER_FRAME := 120
-## Real seconds a full-span playback takes (scrub-able; parks at the end).
+## Real seconds a full-span playback takes at 1× (scrub-able; parks at the end).
 const PLAYBACK_REAL_S := 20.0
+## Playback STREAMS: it starts as soon as this much of the span is baked, and
+## the bake then paces itself to stay roughly this far ahead of the playhead.
+## The player watches from the first moment instead of waiting out the bake, and
+## if the bake can't keep up the sweep visibly slows rather than freezing on a
+## progress label. Keeping the lead small also keeps the live model's tank state
+## close to what is on screen.
+const LEAD_FRACTION := 0.02
+const LEAD_MIN_STEPS := 8
 ## Power failure = SOC pinned at the hard floor while net < 0, sustained.
 const POWER_FAIL_SUSTAIN_H := 0.25
 ## Population substeps must stay well under the engine's 6 h stochastic
@@ -61,6 +69,17 @@ var _pot_solar_kwh := 0.0
 var _play_from := 0.0
 var _play_to := 0.0
 var _play_t := 0.0
+var _playing := false
+var _play_speed := 1.0
+var _lead_h := 0.0
+
+# Bake cost instrumentation (printed once per attempt) — "too long" should be a
+# number before any constant gets tuned.
+var _t_bake_us: int = 0
+var _t_solar_us: int = 0
+var _t_pop_us: int = 0
+var _t_flow_us: int = 0
+var _bake_steps: int = 0
 
 # Retry snapshots (taken once at start; restored on every retry).
 var _specs_snapshot: Dictionary = {}
@@ -158,6 +177,17 @@ func _begin_attempt() -> void:
 	_power_fail_h = 0.0
 	_pot_solar_kwh = 0.0
 	_cursor = _start_abs
+	_playing = false
+	_play_t = _start_abs
+	_play_from = _start_abs
+	_play_to = _end_abs
+	_lead_h = maxf(_step_h * float(LEAD_MIN_STEPS),
+		(_end_abs - _start_abs) * LEAD_FRACTION)
+	_t_bake_us = 0
+	_t_solar_us = 0
+	_t_pop_us = 0
+	_t_flow_us = 0
+	_bake_steps = 0
 	if _main != null:
 		_main.call("set_absolute_hours", _start_abs)
 	if _solar_ui.has_method("set_playback_series_active"):
@@ -173,14 +203,81 @@ func _begin_attempt() -> void:
 func _process(delta: float) -> void:
 	match _phase:
 		Phase.BAKING:
-			_bake_chunk()
+			_stream_frame(delta)
 		Phase.PLAYBACK:
 			_playback_step(delta)
 		_:
 			pass
 
 
+## One frame of overlapped bake + playback.
+##
+## Ordering matters. ResourceFlowEngine.render_step writes tank state onto the
+## LIVE GraphModel at the bake cursor, while playback's seek_all_tanks rewinds
+## those same specs to the playhead. That interleaving is safe only because the
+## per-tank ResourceTimeline (not the specs) is authoritative — but parts of the
+## flow engine read stock back off specs when computing rates, so the bake must
+## never be fed playhead-rewound values. Hence: restore to the cursor, bake,
+## then scrub to the playhead for display.
+##
+## (Tanks with `allow_negative` have no timeline and are skipped by
+## seek_all_tanks entirely, so they are never rewound — they simply read up to
+## one lead-window ahead of the playhead. Cosmetic, not a correctness issue.)
+func _stream_frame(delta: float) -> void:
+	if not _playing or _cursor < _play_t + _lead_h:
+		if _playing and _flow.has_method("seek_all_tanks"):
+			_flow.call("seek_all_tanks", _cursor)
+		_bake_chunk()
+	if not _playing and _phase == Phase.BAKING \
+			and _cursor - _start_abs >= minf(_lead_h, _end_abs - _start_abs):
+		_start_stream_playback()
+	if _playing and _phase == Phase.BAKING:
+		_playback_step(delta)
+
+
+func _start_stream_playback() -> void:
+	if _playing:
+		return
+	_playing = true
+	_play_from = _start_abs
+	_solar_ui.call("set_playback_series_active", true)
+	state_changed.emit()
+
+
+## Real seconds for a full-span sweep at the current speed multiplier.
+func playback_real_seconds() -> float:
+	return PLAYBACK_REAL_S / maxf(_play_speed, 0.01)
+
+
+func play_speed() -> float:
+	return _play_speed
+
+
+func set_play_speed(mult: float) -> void:
+	_play_speed = clampf(mult, 0.25, 8.0)
+	state_changed.emit()
+
+
+## Finish the bake now and jump straight to the result. Deliberately routes
+## through the same park path as a normal sweep so scoring, battery re-anchoring
+## and world release stay on ONE code path.
+func skip_to_result() -> bool:
+	if _phase != Phase.BAKING and _phase != Phase.PLAYBACK:
+		return false
+	while _phase == Phase.BAKING:
+		if _flow.has_method("seek_all_tanks"):
+			_flow.call("seek_all_tanks", _cursor)
+		_bake_chunk()
+	_play_t = _play_to
+	_main.call("set_absolute_hours", _play_t)
+	if _flow.has_method("seek_all_tanks"):
+		_flow.call("seek_all_tanks", _play_t)
+	_park()
+	return true
+
+
 func _bake_chunk() -> void:
+	var chunk_t0 := Time.get_ticks_usec()
 	var budget := STEPS_PER_FRAME
 	var model: GraphModel = _gv.get("model")
 	# Every render/population step writes item specs — run the whole chunk
@@ -192,6 +289,8 @@ func _bake_chunk() -> void:
 	_gv.set("_sim_bulk_update", true)
 	while budget > 0 and _cursor < _end_abs - 1e-9 and _failure.is_empty():
 		_cursor = minf(_cursor + _step_h, _end_abs)
+		_bake_steps += 1
+		var t_solar0 := Time.get_ticks_usec()
 		# 1) Energy: fill the sim series up to the cursor.
 		_series.fill_forward_chunk(_series.step_of(_cursor), 1 << 30)
 		var s := _series.sample_at(_cursor)
@@ -202,7 +301,9 @@ func _bake_chunk() -> void:
 		var ac := soc > floor_kwh + 1e-4
 		# PV-utilization denominator: what the sky offered, unclipped.
 		_pot_solar_kwh += float(_solar_ui.call("evaluate_potential_solar_at", _cursor)) * _step_h
+		_t_solar_us += Time.get_ticks_usec() - t_solar0
 		# 2) Population (before flow, mirroring the ambient tick's order).
+		var t_pop0 := Time.get_ticks_usec()
 		if _bridge != null and bool(_bridge.call("has_pop_driven")):
 			var t := _cursor - _step_h
 			while t < _cursor - 1e-9:
@@ -213,8 +314,11 @@ func _bake_chunk() -> void:
 				var kind := str((e as Dictionary).get("kind", ""))
 				if _def.fail_on_collapse and (kind == "collapsed" or kind == "deserted"):
 					_failure = {"abs_h": _cursor, "reason": "colony_collapsed"}
+		_t_pop_us += Time.get_ticks_usec() - t_pop0
 		# 3) Resources (deterministic render step with injected AC).
+		var t_flow0 := Time.get_ticks_usec()
 		_flow.call("render_step", _cursor, _step_h, ac)
+		_t_flow_us += Time.get_ticks_usec() - t_flow0
 		# 4) Failure predicates.
 		if _failure.is_empty():
 			_failure = _detect_failure(soc, net, floor_kwh, model)
@@ -223,6 +327,7 @@ func _bake_chunk() -> void:
 	_gv.set("_sim_bulk_update", was_bulk)
 	if _gv.has_method("_flush_sim_bulk_update"):
 		_gv.call("_flush_sim_bulk_update")
+	_t_bake_us += Time.get_ticks_usec() - chunk_t0
 	var span := maxf(_end_abs - _start_abs, 1e-6)
 	bake_progress.emit(clampf((_cursor - _start_abs) / span, 0.0, 1.0), _cursor)
 	if not _failure.is_empty():
@@ -268,24 +373,50 @@ func _detect_failure(soc: float, net: float, floor_kwh: float,
 	return {}
 
 
+## The bake finished (or hit a breakpoint): hand the rest of the sweep to
+## PLAYBACK. Streaming playback is usually already running, so the playhead
+## keeps its position rather than restarting.
 func _begin_playback(to_abs: float) -> void:
 	_phase = Phase.PLAYBACK
 	_play_from = _start_abs
 	_play_to = maxf(to_abs, _start_abs + 1e-6)
-	_play_t = _start_abs
-	_solar_ui.call("set_playback_series_active", true)
+	if not _playing:
+		_play_t = _start_abs
+		_start_stream_playback()
+	_report_bake_cost()
 	state_changed.emit()
 
 
+## Advance the playhead one frame, clamped so it never shows time that has not
+## been simulated yet. When the bake outruns the sweep the cursor clamp does
+## nothing; when it can't keep up, the sweep throttles to the bake rate instead
+## of running past it. Pure static so the selftest can drive it directly.
+static func advance_playhead(play_t: float, delta: float, span: float,
+		real_seconds: float, cursor: float, play_to: float,
+		still_baking: bool) -> float:
+	var target := play_t + span * delta / maxf(real_seconds, 0.01)
+	if still_baking:
+		target = minf(target, cursor)
+	return minf(target, play_to)
+
+
 func _playback_step(delta: float) -> void:
-	var span := _end_abs - _start_abs
-	_play_t = minf(_play_t + span * delta / PLAYBACK_REAL_S, _play_to)
+	var target := advance_playhead(_play_t, delta, _end_abs - _start_abs,
+		playback_real_seconds(), _cursor, _play_to, _phase == Phase.BAKING)
+	_play_t = clampf(target, _start_abs, _play_to)
 	_main.call("set_absolute_hours", _play_t)
 	if _flow.has_method("seek_all_tanks"):
 		_flow.call("seek_all_tanks", _play_t)
 	if _play_t < _play_to - 1e-9:
 		return
-	# Parked.
+	# Reached the end of what we're playing — but only park once the bake has
+	# actually got there too (mid-stream this just means we caught up).
+	if _phase == Phase.BAKING:
+		return
+	_park()
+
+
+func _park() -> void:
 	if _failure.is_empty():
 		_finish_success()
 	else:
@@ -294,6 +425,16 @@ func _playback_step(delta: float) -> void:
 		retry_ready.emit(float(_failure.get("abs_h", _play_to)),
 			str(_failure.get("reason", "")), _attempts)
 		state_changed.emit()
+
+
+## One line per attempt so bake cost is measured, not guessed.
+func _report_bake_cost() -> void:
+	if _bake_steps <= 0:
+		return
+	print(("ChallengeBakeEngine: baked %d steps over %.1f h in %.0f ms "
+		+ "(solar %.0f, population %.0f, resources %.0f)") % [
+		_bake_steps, _end_abs - _start_abs, _t_bake_us / 1000.0,
+		_t_solar_us / 1000.0, _t_pop_us / 1000.0, _t_flow_us / 1000.0])
 
 
 func _finish_success() -> void:

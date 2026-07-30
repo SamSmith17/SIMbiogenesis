@@ -43,7 +43,10 @@ Godot.exe.exe --headless --path . --script core/terrain/terrain_seam_diag_run.gd
 Godot.exe.exe --headless --path . --script core/terrain/building_builder_selftest.gd
 # Climelapse keyframe + scale-bake round-trip (offline):
 Godot.exe.exe --headless --path . --script core/climelapse/climelapse_series_selftest.gd
-# Climelapse MP4 export (in-game): Render ▾ → Climelapse → export MP4… — requires ffmpeg in PATH
+# Video export (in-game): Ctrl-drag a range on the timeline → 🎬 → save path. Steps
+# the world one frame at a time (paused clock, `speed / 30` sim-hours per frame) and
+# encodes 30 fps MP4 — requires ffmpeg in PATH. The export owns the clock: it forces
+# time_scale 0 + analemma_mode off and restores both on every exit path.
 # Vegetation growth seasonal gate + instance map (offline):
 Godot.exe.exe --headless --path . --script vegetation/vegetation_growth_selftest.gd
 # Site Report metrics/data + UI-compile self-test (offline, deterministic):
@@ -1270,6 +1273,41 @@ depend on crowd density. The selftest asserts consumption is unchanged to a
 RELATIVE 0.1% rather than exactly: position feeds travel time feeds activity
 scheduling, so a sideways nudge shifts what someone is mid-way through at the
 measurement boundary (measured drift ~4 ppm over a simulated day).
+
+**Animation is driven by `NpcPoseMachine`, a pure FSM** (`core/population/
+npc_pose_machine.gd`; states IDLE/WALK_START/WALK/WALK_STOP/ENTER/POSE/EXIT).
+It exists because clip choice used to be a function of `moving` and `activity`
+only — and `NpcAgent` sets `activity` to the INTENT when travel begins, so
+someone walking to bed reported `activity == "sleep"` for the whole trip and
+played the lying-down clip while sliding. **The deeper bug was the `moving`
+flag itself**: `_pose_avatar` compared THIS frame's sim position to LAST
+frame's, but the sim advances every 0.25 s while the host poses every frame, so
+it read true ~1 frame in 15 — false for exactly the window the body is gliding.
+No epsilon fixes aliasing a stepped signal. `in_transit` now comes from
+`dot["state"] == TRAVELING` (a LEVEL, immune to the sampling mismatch; it was
+already in the payload and simply unread) OR'd with "the RENDERED body has not
+arrived yet" (`gap > ARRIVE_EPS_M`, bounded by `ARRIVE_MAX_S` because the lerp
+is asymptotic and never literally lands). Pure logic over an AnimationTree
+**so the no-wedge guarantee can be fuzzed headless** — 200k steps with dt up to
+0.5 s (far-LOD passes its accumulator as delta, so nothing may assume 60 Hz).
+Getting OUT of a pose keys off `_current_pose`, NOT `_activity`: by the time an
+abort runs `_activity` already holds the next intent, and looking the exit up
+from it made waking skip the get-up entirely. **Clip roles are MEASURED, never
+read off the filename** (`NpcRig.measure`/`classify`): "Idle To Situp" measured
+as the LIE-DOWN (hips 0.940→0.123), giving sleep a real matched pair, and
+Start/Stop Walking are told apart by which THIRD of the clip is faster — the
+check a filename map cannot do. The loader refuses a clip whose measured role
+contradicts `SOURCES`. Sitting down is `sit_exit` played BACKWARDS, so
+`_apply_clip` keys on `(clip, direction)` — a clip-only guard makes
+sit-down→stand-up a no-op and freezes the figure half-seated. Ground offset is
+now a **phase curve** (`clip_ground_offset_at`) parameterised on the clip's own
+hip descent, because one scalar is wrong at one end of a stand→lie clip;
+verified continuous at the seams (sleep 9 mm, sit 29 mm). Transitions are
+**budget-gated**: a 5-min bathroom visit is 0.67 REAL seconds at 450×, shorter
+than one sit-down, so at speed everyone cuts straight to the pose. Harness
+note: routines mean people travel at BLOCK BOUNDARIES, so the nav/pose window
+anchors the clock at 08:85 and **restores it afterwards** — leaving it shifted
+broke the later starvation phase.
 
 **3D figures (`NpcRig` + `npc_silhouette.gdshader`):** `NpcAvatar` carries TWO
 bodies behind one API — the rigged Mixamo character up close, the original

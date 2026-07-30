@@ -14,8 +14,10 @@ func _initialize() -> void:
 	fails += _test_catalog_prebake_entries()
 	fails += _test_power_fail_accumulator()
 	fails += _test_series_fill_determinism()
+	fails += _test_streaming_playhead_clamp()
+	fails += _test_streaming_reads_do_not_perturb_bake()
 	if fails == 0:
-		print("CHALLENGE BAKE SELFTEST PASS  (5 checks)")
+		print("CHALLENGE BAKE SELFTEST PASS  (7 checks)")
 		quit(0)
 	else:
 		print("CHALLENGE BAKE SELFTEST FAIL  (%d failed)" % fails)
@@ -120,6 +122,81 @@ func _test_power_fail_accumulator() -> int:
 	if acc != 0.0:
 		push_error("positive net must reset the accumulator")
 		return 1
+	return 0
+
+
+## Streaming playback trails the bake. The playhead must never show time that
+## has not been simulated, must still reach the end once the bake is done, and
+## must honour the speed multiplier.
+func _test_streaming_playhead_clamp() -> int:
+	var span := 24.0
+	var real_s := ChallengeBakeEngine.PLAYBACK_REAL_S
+	# Bake head only 2 h in: a big frame must stop at the cursor, not sail past.
+	var p := ChallengeBakeEngine.advance_playhead(
+		0.0, 5.0, span, real_s, 2.0, span, true)
+	if p > 2.0 + 1e-9:
+		push_error("playhead ran past the bake cursor: %f" % p)
+		return 1
+	# Same frame with the bake finished: the cursor clamp no longer applies.
+	var q := ChallengeBakeEngine.advance_playhead(
+		0.0, 5.0, span, real_s, 2.0, span, false)
+	if q <= 2.0:
+		push_error("finished bake should let the playhead advance freely, got %f" % q)
+		return 1
+	# Never past the segment end.
+	var e := ChallengeBakeEngine.advance_playhead(
+		span - 0.01, 100.0, span, real_s, span, span, false)
+	if e > span + 1e-9:
+		push_error("playhead overshot the segment end: %f" % e)
+		return 1
+	# 2× speed covers twice the sim-time in the same frame.
+	var slow := ChallengeBakeEngine.advance_playhead(
+		0.0, 0.1, span, real_s, span, span, false)
+	var fast := ChallengeBakeEngine.advance_playhead(
+		0.0, 0.1, span, real_s / 2.0, span, span, false)
+	if absf(fast - slow * 2.0) > 1e-6:
+		push_error("2x speed should double the advance: %f vs %f" % [fast, slow])
+		return 1
+	return 0
+
+
+## The streaming loop interleaves display reads (seek/sample at a trailing
+## playhead) with forward fills. Those reads must not perturb the simulation:
+## a chunked fill with reads between chunks must match a straight fill exactly.
+func _test_streaming_reads_do_not_perturb_bake() -> int:
+	var curves: Array = []
+	for run in 2:
+		var tl := EnergyTimeline.new()
+		tl.configure(16.0, 0.95, 0.95, 1.6)
+		tl.step_hours = 3.0 / 60.0
+		tl.set_evaluator(func(abs_h: float) -> Dictionary:
+			var hod := fposmod(abs_h, 24.0)
+			var solar := maxf(0.0, sin((hod - 6.0) / 12.0 * PI)) * 2.0
+			return {"solar_kw": solar, "aux_kw": 0.0, "load_kw": 0.6})
+		var start := 1000000.0
+		tl.init_anchor(start, 8.0, 0.0, 0.0, 0.6)
+		var target := tl.step_of(start + 240.0)
+		var playhead := start
+		while tl.last_step() < target:
+			tl.fill_forward_chunk(target, 120)
+			if run == 1:
+				# Simulate the display trailing the bake head by a lead window.
+				playhead = maxf(start, tl.time_of_step(tl.last_step()) - 4.0)
+				tl.sample_at(playhead)
+		var sig := PackedFloat32Array()
+		for h in range(0, 240, 3):
+			sig.append(float(tl.sample_at(start + float(h)).get("soc_kwh", -1.0)))
+		curves.append(sig)
+	var straight: PackedFloat32Array = curves[0]
+	var streamed: PackedFloat32Array = curves[1]
+	if straight.size() != streamed.size():
+		push_error("streaming: sample counts differ")
+		return 1
+	for i in straight.size():
+		if straight[i] != streamed[i]:
+			push_error("streaming reads perturbed the bake at index %d (%f vs %f)"
+				% [i, straight[i], streamed[i]])
+			return 1
 	return 0
 
 

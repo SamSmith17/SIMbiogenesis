@@ -64,6 +64,28 @@ static func pin_over_timeline(panel: Control, height: float,
 	panel.custom_minimum_size = Vector2(0.0, height)
 
 
+## Card docked to the lower-right, clear of the timeline stack. For fault /
+## education cards, which must not sit on top of the thing they are explaining —
+## a centered card buried the destroy FX it was describing.
+static func clamped_corner_card(panel: Control, desired: Vector2,
+		stack_clearance: float = timeline_stack_height()) -> void:
+	if panel == null:
+		return
+	var screen := _viewport_size(panel)
+	var w := minf(desired.x, screen.x * 0.92)
+	var h := minf(desired.y, maxf(screen.y - stack_clearance - SIDE_MARGIN * 2.0, 120.0))
+	panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	panel.anchor_left = 1.0
+	panel.anchor_top = 1.0
+	panel.anchor_right = 1.0
+	panel.anchor_bottom = 1.0
+	panel.offset_left = -(w + SIDE_MARGIN)
+	panel.offset_right = -SIDE_MARGIN
+	panel.offset_bottom = -stack_clearance
+	panel.offset_top = -(stack_clearance + h)
+	panel.custom_minimum_size = Vector2(w, h)
+
+
 static func clamped_center(panel: Control, desired: Vector2) -> void:
 	if panel == null:
 		return

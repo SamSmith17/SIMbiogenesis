@@ -16,6 +16,7 @@ func _initialize() -> void:
 	fails += _test_prompt_and_gating()
 	fails += _test_grants()
 	fails += _test_levels()
+	fails += _test_sandbox_snapshot()
 	fails += _test_disk_round_trip()
 	fails += _test_unlock_all()
 	fails += _test_catalog_integrity()
@@ -29,7 +30,7 @@ func _initialize() -> void:
 	fails += _test_run_verdict()
 	_cleanup()
 	if fails == 0:
-		print("TUTORIAL SELFTEST PASS  (15 checks)")
+		print("TUTORIAL SELFTEST PASS  (16 checks)")
 		quit(0)
 	else:
 		print("TUTORIAL SELFTEST FAIL  (%d failed)" % fails)
@@ -120,6 +121,49 @@ func _test_levels() -> int:
 		ProgressStore.mark_level_complete(lid)
 	if ProgressStore.first_incomplete_level(order) != "":
 		push_error("all-complete should return empty id")
+		return 1
+	return 0
+
+
+## The carry_graph curriculum (levels 10-12) needs the sandbox graph to survive
+## a session close, or resuming lands on the blank canvas begin_tutorial_sandbox
+## always starts from. Snapshot round-trips, survives a cache drop (new
+## session), and reset_tutorial_progress (the "Start Over" affordance) drops it
+## while leaving unrelated unlock state untouched.
+func _test_sandbox_snapshot() -> int:
+	_fresh()
+	if not ProgressStore.load_sandbox_snapshot().is_empty():
+		push_error("fresh store should have no sandbox snapshot")
+		return 1
+	var blob := {"items": [{"id": "bat", "type": "battery"}], "connections": []}
+	ProgressStore.save_sandbox_snapshot("bootcamp_11_optimize", blob)
+	var snap := ProgressStore.load_sandbox_snapshot()
+	if str(snap.get("level_id", "")) != "bootcamp_11_optimize":
+		push_error("sandbox snapshot level_id did not round-trip: %s" % str(snap))
+		return 1
+	if not (snap.get("graph", {}) as Dictionary).get("items", []).size() == 1:
+		push_error("sandbox snapshot graph did not round-trip: %s" % str(snap))
+		return 1
+	# Survives a cache drop the way the rest of the file does.
+	ProgressStore.reset_cache()
+	if (ProgressStore.load_sandbox_snapshot().get("graph", {}) as Dictionary).is_empty():
+		push_error("sandbox snapshot did not survive a cache drop")
+		return 1
+	# reset_tutorial_progress clears completion + the snapshot, but must not
+	# touch unrelated unlock grants (the per-level palette, not global unlocks,
+	# is what actually gates content while a level is active).
+	ProgressStore.mark_prompt_seen()
+	ProgressStore.grant(["cat:controllers"])
+	ProgressStore.mark_level_complete("bootcamp_10_score")
+	ProgressStore.reset_tutorial_progress()
+	if not ProgressStore.load_sandbox_snapshot().is_empty():
+		push_error("reset_tutorial_progress should drop the sandbox snapshot")
+		return 1
+	if ProgressStore.is_level_complete("bootcamp_10_score"):
+		push_error("reset_tutorial_progress should clear level completion")
+		return 1
+	if not ProgressStore.is_unlocked("category", "controllers"):
+		push_error("reset_tutorial_progress must not revoke unrelated unlocks")
 		return 1
 	return 0
 
@@ -264,9 +308,24 @@ func _test_goal_build_pwm() -> int:
 	if bool(TutorialGoals.evaluate(goal, ctx).get("met", true)):
 		push_error("unwired system should not meet the build goal")
 		return 1
+	# Half-wired must NOT pass. A circuit needs a return path: until the second
+	# leg lands, no current flows and nothing is delivered. This is the bug the
+	# level-3 playtest hit — the goal fired on the first positive wire.
 	_wire(model, "p1", "positive", "ctrl", "pvPositive")
+	ctx = TutorialGoals.build_ctx(model, {})
+	if bool(TutorialGoals.evaluate(goal, ctx).get("met", true)):
+		push_error("PV wired on the positive leg only should not meet the build goal")
+		return 1
 	_wire(model, "p1", "negative", "ctrl", "pvNegative")
 	_wire(model, "ctrl", "batteryPositive", "bat", "positive")
+	ctx = TutorialGoals.build_ctx(model, {})
+	if bool(TutorialGoals.evaluate(goal, ctx).get("met", true)):
+		push_error("battery wired on the positive leg only should not meet the build goal")
+		return 1
+	if float(TutorialGoals.deliverable(model, ctx["flat_conns"],
+			ctx["analysis"]).get("deliverable_w", -1.0)) != 0.0:
+		push_error("an open battery return leg must deliver 0 W")
+		return 1
 	_wire(model, "ctrl", "batteryNegative", "bat", "negative")
 	ctx = TutorialGoals.build_ctx(model, {})
 	var res := TutorialGoals.evaluate(goal, ctx)

@@ -130,7 +130,9 @@ func start_challenge(def: ChallengeDef) -> bool:
 				or not _bake_engine.start(main_node, gv, su, def, _start_abs):
 			_fail_internal("no_main")
 			return false
-		challenge_toast.emit("Pre-computing %.0f h — watch the timeline…" %
+		# Playback streams behind the bake now — it starts almost immediately
+		# rather than after the whole span has been computed.
+		challenge_toast.emit("Running %.0f h — watch the timeline…" %
 			def.resolved_duration_hours(), TOAST_INFO)
 		return true
 	_evaluate(true)
@@ -475,7 +477,12 @@ func _main() -> Node:
 	var tree := get_tree()
 	if tree == null:
 		return null
-	return Services.get_main()
+	# Resolve by path, not the bare autoload identifier — headless --script
+	# selftests run without autoloads and must still compile this file.
+	var services := get_node_or_null("/root/Services")
+	if services == null:
+		return null
+	return services.call("get_main") as Node
 
 
 func _abs_hours(main_node: Node) -> float:

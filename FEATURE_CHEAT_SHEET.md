@@ -176,14 +176,28 @@ Bottom bar owns the clock.
 |------|--------|
 | 📥 | Import HA CSV as observed clip |
 | 📈 | Render energy batch for Ctrl-drag selection |
-| 🎬 | Export climelapse **MP4** (needs `ffmpeg` in PATH) |
+| 🎬 | Export selection to **MP4** at 30 fps, at the bar's playback speed (needs `ffmpeg`) |
 | 📍 / 🧹 | Add / clear climelapse drone path waypoints |
 | 📄/🧮 | Render load: CSV vs Modeled |
 | ⧉ | Compare observed vs sim → projection canvas (**I**) |
 | 🎚 | Tracks menu (waveform lanes) |
 | 📹 📷 ⏲ | Load video / live camera / snap video to playhead |
 
-**Climelapse bake** ⚠️ — `start_climelapse_render` / `_on_render_clim_pressed` exist in code but are **not wired** to a timeline button. Use **🎬** for MP4 export; keyframe bake path is effectively orphaned until reconnected.
+**🎬 video export** — needs a **location map** (TerrainLoader) *and* a Ctrl-drag range
+on the track; both refusals raise a HUD toast. Flow: pick a save path → (if the render
+is longer than ~1 min of video) a confirmation showing frame count + video length →
+the world **pauses** and the capture steps it by `speed / 30` sim-hours per rendered
+frame, so the video plays back at the speed shown on the bar. A progress window
+reports `frame N / M`, then the ffmpeg encode, then the result (it stays up until
+closed). Cancel is safe; the clock's speed/analemma state is restored on every exit
+path. The old handler forced `analemma_mode` on before starting and auto-played at ∞
+afterwards — which is why an export looked like "the game just starts flying" — and
+the orphaned `_on_render_clim_pressed` bake handler was removed.
+
+**📹 📷 ⏲ / projection canvas (I)** — only `soak_festival_2026.tscn` and the legacy
+`main.tscn` author a `UILayer/ProjectionCanvas`, so on Mars and every generated
+location map these silently did nothing. `main.ensure_projection_canvas()` now
+instances it on demand (lazily — it owns an always-updating SubViewport).
 
 ---
 

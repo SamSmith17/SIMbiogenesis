@@ -54,6 +54,14 @@ func is_showing() -> bool:
 
 func _present(card: Dictionary) -> void:
 	_showing = true
+	# Fault cards dock to a corner with a light backdrop so the wreck they are
+	# explaining stays visible; briefs/debriefs keep the centered treatment.
+	if str(card.get("placement", "center")) == "corner":
+		UiScreenLayout.clamped_corner_card(_panel, PANEL_SIZE)
+		_backdrop.color = Color(0.0, 0.0, 0.0, 0.25)
+	else:
+		UiScreenLayout.clamped_center(_panel, PANEL_SIZE)
+		_backdrop.color = Color(0.0, 0.0, 0.0, 0.55)
 	_title_lbl.text = str(card.get("title", ""))
 	var tcol: Variant = card.get("title_color")
 	_title_lbl.add_theme_color_override("font_color",

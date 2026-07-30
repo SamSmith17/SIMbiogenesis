@@ -6210,18 +6210,18 @@ func _ensure_climelapse_capture() -> void:
 ## When climelapse drone path has ≥2 waypoints, camera interpolates along it
 ## (moving hyperlapse); otherwise the view stays locked at the current pose.
 func start_climelapse_export(start_abs: float, end_abs: float, time_scale: float, output_mp4: String, fps: int = 30) -> bool:
+	# Every refusal records a message + emits, so the timeline's progress dialog
+	# can SHOW why nothing happened instead of silently closing.
 	if output_mp4.is_empty():
-		return false
+		return _refuse_export("No output path chosen.")
 	if end_abs <= start_abs:
-		push_warning("Climelapse export: end time must be after start time.")
-		return false
+		return _refuse_export("Export range is empty — the end time must be after the start.")
 	var tree := get_tree()
 	if tree == null:
-		return false
+		return _refuse_export("No scene tree.")
 	var rig := ClimelapseCameraRig.snapshot_from_tree(tree)
 	if not rig.is_valid():
-		push_warning("Climelapse export: no active Camera3D — switch to player or drone view.")
-		return false
+		return _refuse_export("No active 3D camera — switch to player or drone view first.")
 	if _climelapse_drone_path.size() >= 2:
 		rig.path = _climelapse_drone_path.duplicate(true)
 		rig.mode = "path"
@@ -6237,6 +6237,7 @@ func start_climelapse_export(start_abs: float, end_abs: float, time_scale: float
 	_export_fps = maxi(1, fps)
 	_export_pending = true
 	_export_status_message = ""
+	_export_last_result = ""
 
 	if _main != null and _main.has_method("set_absolute_hours"):
 		_main.call("set_absolute_hours", start_abs)
@@ -6245,6 +6246,15 @@ func start_climelapse_export(start_abs: float, end_abs: float, time_scale: float
 	_climelapse_capture.start_capture(self, start_abs, end_abs, time_scale, output_mp4, rig, fps)
 	climelapse_state_changed.emit()
 	return true
+
+
+func _refuse_export(reason: String) -> bool:
+	_export_pending = false
+	_export_status_message = reason
+	_export_last_result = "fail"
+	push_warning("Climelapse export: %s" % reason)
+	climelapse_state_changed.emit()
+	return false
 
 
 func add_climelapse_path_waypoint() -> bool:
@@ -6289,6 +6299,23 @@ func get_climelapse_export_message() -> String:
 
 var _export_status_message := ""
 var _export_cull_saved: Array = []
+## Result of the LAST finished export: "" while none has run, else "ok"/"fail".
+var _export_last_result := ""
+
+
+## Live export state for the timeline's progress dialog:
+## {active, phase ("capture"/"encode"), done, total, progress, message, result}.
+func get_climelapse_export_stats() -> Dictionary:
+	var active := is_climelapse_exporting()
+	return {
+		"active": active,
+		"phase": _climelapse_capture.get_phase() if active else "",
+		"done": _climelapse_capture.get_frames_done() if _climelapse_capture != null else 0,
+		"total": _climelapse_capture.get_frames_total() if _climelapse_capture != null else 0,
+		"progress": _climelapse_capture.get_progress() if active else -1.0,
+		"message": _export_status_message,
+		"result": _export_last_result,
+	}
 
 
 func is_climelapse_rendering() -> bool:
@@ -6314,6 +6341,7 @@ func _on_climelapse_capture_complete(success: bool, path: String, message: Strin
 	_export_mp4_path = ""
 	_export_camera = null
 	_export_status_message = message
+	_export_last_result = "ok" if success else "fail"
 	if success:
 		print("Climelapse export: %s" % message)
 	else:
