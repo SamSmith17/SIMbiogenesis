@@ -263,9 +263,17 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	# time_scale 0 is paused; negative is a backward scrub, during which the
 	# population engine freezes too, so the figures should hold either way.
 	var scale: float = float(_main.get("time_scale")) if "time_scale" in _main else 1.0
+	# What the body is ACTUALLY covering on screen this frame, which is what a
+	# gait has to agree with. Derived from the rendered step rather than the
+	# sim's nominal speed, so smoothing and catch-up are already in it.
+	var apparent := (cur.distance_to(next) / maxf(delta, 0.0001)) if cur != Vector3.ZERO else 0.0
 	av.apply_pose(next, yaw, {
 		"dt": delta,
 		"paused": scale <= 0.0,
+		"apparent_speed_mps": apparent,
+		# time_scale is sim-HOURS per real second; x3600 gives sim seconds per
+		# real second, i.e. the multiplier the world is running at.
+		"time_mult": absf(scale) * 3600.0,
 		"anim_map": dot.get("anim_map", {}),
 		"in_transit": in_transit,
 		"activity": str(dot.get("activity", "")),

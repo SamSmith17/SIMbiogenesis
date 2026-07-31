@@ -156,6 +156,9 @@ static var _clip_len: Dictionary = {}
 const LYING_HIP_MAX := 0.35
 ## Samples per offset curve. Cheap to store, and read by array index per frame.
 const OFFSET_CURVE_SAMPLES := 24
+## Fastest any clip may play. Beyond this the motion is indistinguishable, so
+## the extra rate buys nothing and only costs sampling.
+const MAX_PLAYBACK_RATE := 12.0
 static var _loaded := false
 static var _load_error := ""
 
@@ -613,7 +616,10 @@ static func walk_speed_scale_for(clip: String, ground_speed_mps: float) -> float
 	var cycle_m := float(_clip_cycle_m.get(clip, 0.0))
 	if len_s <= 0.0 or cycle_m <= 0.01:
 		return 1.0
-	return clampf(ground_speed_mps / (cycle_m / len_s), 0.25, 4.0)
+	# Ceiling is generous because this now tracks APPARENT speed: at 60x the
+	# body crosses ground 60x faster, and a gait pinned near 1x is exactly the
+	# skating the timelapse looked wrong for. Past ~12x it is a blur either way.
+	return clampf(ground_speed_mps / (cycle_m / len_s), 0.25, MAX_PLAYBACK_RATE)
 
 
 ## Deterministic gait for one agent, so a group walking together is not a

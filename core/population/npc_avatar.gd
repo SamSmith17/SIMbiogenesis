@@ -74,6 +74,12 @@ var _anim_finished := false
 ## without remembering the intended value it would resume at zero.
 var _speed_scale := 1.0
 var _frozen := false
+## Metres per REAL second the body is covering on screen. At 60x that is ~60x
+## the sim's walking speed, and matching the gait to it is what removes the
+## skating; the sim's own 1.3 m/s is only correct at 1x.
+var _apparent_speed := WALK_SPEED_MPS
+## Sim seconds per real second, so loops keep pace with the clock.
+var _time_mult := 1.0
 
 
 func setup(p_agent_id: String, color: Color, p_name: String = "") -> void:
@@ -171,12 +177,15 @@ func _drive(dt: float, inp: Dictionary) -> void:
 	_moving = bool(inp.get("in_transit", false))
 	_activity = str(inp.get("activity", ""))
 	_space_type = str(inp.get("space_type", ""))
+	_apparent_speed = float(inp.get("apparent_speed_mps", WALK_SPEED_MPS))
+	_time_mult = clampf(float(inp.get("time_mult", 1.0)), 0.05, NpcRig.MAX_PLAYBACK_RATE)
 	if _machine == null:
 		_lying = _activity == "sleep"
 		return
 	if inp.has("anim_map"):
 		_machine.set_anim_overrides(inp["anim_map"] as Dictionary)
 	var step_inp := inp.duplicate()
+	step_inp["playback_rate"] = _speed_scale
 	step_inp["finished"] = _anim_finished
 	_anim_finished = false
 	_machine.step(dt, step_inp)
@@ -185,6 +194,10 @@ func _drive(dt: float, inp: Dictionary) -> void:
 	_lying = _machine.is_lying()
 	if _rigged and _machine.changed():
 		_apply_clip(_machine.clip(), _machine.backwards(), _machine.blend_s(), false)
+	elif _rigged:
+		# Rate is refreshed every frame, not only on a clip change: apparent
+		# speed varies continuously and the time scale can be changed mid-stride.
+		_refresh_speed_scale()
 
 
 ## Playhead position within the current clip, so a test can prove the figure
@@ -262,6 +275,23 @@ func _apply_clip(clip: String, backwards: bool, blend: float, immediate: bool) -
 		_rig_ap.play_backwards(file_clip, blend)
 	else:
 		_rig_ap.play(file_clip, blend)
+
+
+## A gait matches the ground it is covering; everything else keeps pace with
+## the clock, so a work or dance loop reads as time-lapse rather than as
+## somebody calmly pottering while the day races past.
+func _refresh_speed_scale(file_clip: String = "") -> void:
+	if _rig_ap == null:
+		return
+	if file_clip.is_empty():
+		file_clip = NpcPoseMachine._clip_file_for(_clip)
+	if file_clip.is_empty():
+		return
+	var want := NpcRig.walk_speed_scale_for(file_clip, _apparent_speed) 		if _is_gait(file_clip) else clampf(_time_mult, 0.25, NpcRig.MAX_PLAYBACK_RATE)
+	if is_equal_approx(want, _speed_scale) and not _frozen:
+		return
+	_speed_scale = want
+	_rig_ap.speed_scale = 0.0 if _frozen else _speed_scale
 
 
 static func _is_gait(clip: String) -> bool:

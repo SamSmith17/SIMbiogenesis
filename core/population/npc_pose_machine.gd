@@ -92,6 +92,10 @@ var _catalog: Dictionary = {}
 ## Slots are activity names, plus the enrichment SPACE types, so "what happens
 ## at the fire" is answerable separately from "what happens at the workshop".
 var _anim_overrides: Dictionary = {}
+## How fast clips are actually playing. A one-shot at 3x finishes in a third of
+## its authored length, so the state timer has to divide by this or the machine
+## holds a transition long after the animation ended.
+var _playback_rate := 1.0
 
 
 func set_anim_overrides(overrides: Dictionary) -> void:
@@ -184,6 +188,7 @@ func step(dt: float, inp: Dictionary) -> void:
 	var teleported := bool(inp.get("teleported", false))
 	var dwell := float(inp.get("dwell_left_s", 0.0))
 	_update_mood(float(inp.get("morale", 1.0)))
+	_playback_rate = maxf(float(inp.get("playback_rate", 1.0)), 0.05)
 
 	var activity_changed := activity != _activity or space_type != _space_type
 	_activity = activity
@@ -384,7 +389,7 @@ func _go(new_state: int) -> void:
 
 func _begin_oneshot(new_state: int, clip: String, blend: float) -> void:
 	_go(new_state)
-	_shot_left = minf(maxf(_len_of(clip), 0.05), MAX_ONESHOT_S)
+	_shot_left = minf(maxf(_len_of(clip) / _playback_rate, 0.05), MAX_ONESHOT_S)
 	_want(clip, _is_reversed(clip), blend)
 
 

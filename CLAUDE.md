@@ -1285,6 +1285,23 @@ RELATIVE 0.1% rather than exactly: position feeds travel time feeds activity
 scheduling, so a sideways nudge shifts what someone is mid-way through at the
 measurement boundary (measured drift ~4 ppm over a simulated day).
 
+**Playback is time-scaled.** A gait is rate-matched to the body's APPARENT
+speed — metres per REAL second measured off the rendered step, not the sim's
+nominal 1.3 m/s, which is only correct at 1x. At 60x the body covers ground
+60x faster and a gait pinned near 1x is exactly the skating that made speed-up
+look wrong. Measuring the rendered step means smoothing, catch-up and time
+scale are already in the number, with nothing to keep in sync. Other loops
+(work, dance, exercise, clap) scale by `time_scale * 3600` so a chore at speed
+reads as time-lapse. Capped at `MAX_PLAYBACK_RATE` 12x — past that it is a blur
+either way. Rate refreshes EVERY FRAME, not on clip change, since apparent
+speed varies continuously and the clock can change mid-stride. Consequence to
+respect: the pose machine's one-shot timer must divide by the playback rate, or
+a transition played at 6x is held five-sixths longer than the animation it
+represents. Figures freeze entirely at `time_scale <= 0` (pause AND backward
+scrub, where the population engine already freezes) — and because freezing is
+`speed_scale = 0`, the INTENDED rate is stored separately or unpausing resumes
+at zero forever.
+
 **Animation is driven by `NpcPoseMachine`, a pure FSM** (`core/population/
 npc_pose_machine.gd`; states IDLE/WALK_START/WALK/WALK_STOP/ENTER/POSE/EXIT).
 It exists because clip choice used to be a function of `moving` and `activity`

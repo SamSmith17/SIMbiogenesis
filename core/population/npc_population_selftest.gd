@@ -2244,6 +2244,29 @@ func _test_rig_assets() -> void:
 	var scale := NpcRig.walk_speed_scale(NpcAvatar.WALK_SPEED_MPS)
 	_check("walk rate-matched, not unity", absf(scale - 1.0) > 0.01, "%.3f" % scale)
 	_check("walk rate stays sane", scale > 0.25 and scale < 4.0, "%.3f" % scale)
+	# Timelapse: at 60x the body covers ground ~60x faster, so the gait has to
+	# speed up with it or the feet skate. Rate tracks APPARENT speed, capped
+	# because past ~12x the motion is a blur either way.
+	var fast := NpcRig.walk_speed_scale_for(NpcRig.CLIP_WALK, NpcAvatar.WALK_SPEED_MPS * 60.0)
+	_check("a 60x world speeds the gait up", fast > scale * 4.0, "%.2f vs %.2f" % [fast, scale])
+	_check("the gait rate is capped", fast <= NpcRig.MAX_PLAYBACK_RATE + 0.001, "%.2f" % fast)
+	var crawl := NpcRig.walk_speed_scale_for(NpcRig.CLIP_WALK, 0.01)
+	_check("a near-stationary body does not stall the gait", crawl >= 0.25, "%.3f" % crawl)
+
+	# A one-shot played at 3x finishes in a third of its length, so the pose
+	# machine's state timer must divide by the rate or it holds a transition
+	# long after the animation ended.
+	var pm := NpcPoseMachine.new()
+	pm.set_catalog({NpcRig.CLIP_SIT: {"len": 4.0}, NpcRig.CLIP_SIT_EXIT: {"len": 3.0},
+			NpcRig.CLIP_IDLE: {"len": 2.0}, NpcRig.CLIP_WALK: {"len": 1.0}})
+	var t_seen := 0
+	for i in 200:
+		pm.step(1.0 / 60.0, {"in_transit": false, "activity": "bladder",
+				"morale": 0.9, "dwell_left_s": 300.0, "playback_rate": 6.0})
+		if pm.clip() == NpcRig.CLIP_SIT_ENTER:
+			t_seen += 1
+	_check("a fast one-shot ends early, not late", t_seen > 0 and t_seen < 60,
+			"%d frames in sit_enter at 6x (authored 3 s = 180 frames at 1x)" % t_seen)
 
 	# Mixamo authors each clip around its own origin, and they disagree:
 	# "Laying Sleeping" puts the hips at 1.02 m — HIGHER than a standing walk —
