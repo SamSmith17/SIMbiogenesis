@@ -10,6 +10,7 @@ extends Node
 ## engine phase lands.
 
 const _HUD_SCRIPT := preload("res://scenes/ui/tutorial_hud.gd")
+const _UI_SFX := preload("res://core/ui_sfx.gd")
 const EVAL_INTERVAL_S := 0.5
 
 enum State { INACTIVE, BRIEF, BUILD, DEBRIEF }
@@ -437,10 +438,10 @@ func _celebrate_unlocks(earned: Array, delay_s: float = 0.0) -> void:
 		return
 	if earned.is_empty():
 		if sfx != null:
-			sfx.call("play_ui", UiSfx.SUCCESS)
+			sfx.call("play_ui", _UI_SFX.SUCCESS)
 		return
 	if sfx != null:
-		sfx.call("play_ui", UiSfx.FANFARE)
+		sfx.call("play_ui", _UI_SFX.FANFARE)
 	if m == null or not m.has_method("show_part_up"):
 		return
 	# Stagger so several unlocks read as a run of rewards, not one clump.

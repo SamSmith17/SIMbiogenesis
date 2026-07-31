@@ -54,6 +54,7 @@ const _CLOSURE_METRICS_SCRIPT := preload("res://system_graph/closure_metrics.gd"
 const _HIGH_SCORE_STORE_SCRIPT := preload("res://core/high_score_store.gd")
 const _CONDUIT_MGR_SCRIPT := preload("res://core/conduits/conduit_manager.gd")
 const _PLACEHOLDER_HOST_SCRIPT := preload("res://system_graph/graph_placeholder_host.gd")
+const _UI_SFX := preload("res://core/ui_sfx.gd")
 ## Global `class_name` is not always resolved here during parse; preload gives a stable entry point.
 const _GAMEPLAY_RULES_SCRIPT := preload("res://gameplay/gameplay_rules.gd")
 const _PV_ELECTRICAL_SCRIPT := preload("res://system_graph/pv_electrical.gd")
@@ -10057,11 +10058,11 @@ func _play_toast_sfx(level: int) -> void:
 		return
 	match level:
 		ToastUI.Level.OK:
-			sfx.call("play_ui", UiSfx.SUCCESS, 120)
+			sfx.call("play_ui", _UI_SFX.SUCCESS, 120)
 		ToastUI.Level.WARN:
-			sfx.call("play_ui", UiSfx.WARN, 250)
+			sfx.call("play_ui", _UI_SFX.WARN, 250)
 		ToastUI.Level.ERROR:
-			sfx.call("play_ui", UiSfx.DANGER, 250)
+			sfx.call("play_ui", _UI_SFX.DANGER, 250)
 
 
 func _build_toast_panel() -> PanelContainer:

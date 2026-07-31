@@ -20,6 +20,7 @@ extends CanvasLayer
 
 enum Level { INFO, OK, WARN, ERROR }
 
+const _UI_SFX := preload("res://core/ui_sfx.gd")
 const MAX_TOASTS := 3
 const DEFAULT_DURATION := 3.0
 const PART_UP_DURATION := 2.2
@@ -64,12 +65,12 @@ func _play_level_sfx(level: Level, allow_danger: bool = true) -> void:
 		return
 	match level:
 		Level.OK:
-			sfx.call("play_ui", UiSfx.SUCCESS, 120)
+			sfx.call("play_ui", _UI_SFX.SUCCESS, 120)
 		Level.WARN:
-			sfx.call("play_ui", UiSfx.WARN, 250)
+			sfx.call("play_ui", _UI_SFX.WARN, 250)
 		Level.ERROR:
 			if allow_danger:
-				sfx.call("play_ui", UiSfx.DANGER, 250)
+				sfx.call("play_ui", _UI_SFX.DANGER, 250)
 
 
 ## Compact +N UP chip when a fabricated part lands in inventory.
