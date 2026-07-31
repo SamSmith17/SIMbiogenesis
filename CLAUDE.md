@@ -1294,6 +1294,26 @@ RELATIVE 0.1% rather than exactly: position feeds travel time feeds activity
 scheduling, so a sideways nudge shifts what someone is mid-way through at the
 measurement boundary (measured drift ~4 ppm over a simulated day).
 
+**Two body styles, one behaviour.** `NpcSimpleFigure`
+(`core/population/npc_simple_figure.gd`) is an articulated stick figure — head,
+torso, shoulder→upper-arm→ELBOW→forearm, hip→thigh→KNEE→shin, all capsules
+under the silhouette shader — posed procedurally. It exists because the Mixamo
+body is photoreal enough that any imperfection in how it is driven reads as
+uncanny, while a stylised figure has no such contract and the same approximate
+motion reads as deliberate. **It is posed from the SAME `NpcPoseMachine`** as
+the rigged body, so behaviour cannot drift between styles: people walk the whole
+route, lie down on arrival, sit for the bathroom, dance at the fire. Gait
+cadence multiplies by the same playback rate, so it time-lapses identically.
+Two details make it read as a body: the knee bends only on the RECOVERY leg
+(the stance leg stays near-straight — the one asymmetry separating walking from
+scissoring), and every pose is an eased TARGET rather than a jump, since this
+body has no cross-fade to hide a cut. Style lives in `NpcDisplayPrefs`
+(`user://npc_display.cfg`, global — a taste about the game, not a property of a
+site), exposed as **Settings → NPCs → Body style**. Keep
+`NpcDisplayPrefs.wants_simple()` (a CHOICE, survives installing the art)
+distinct from `NpcRig.available()` (a missing-asset condition): both draw the
+same figure, but only the second is worth warning about.
+
 **Playback is time-scaled.** A gait is rate-matched to the body's APPARENT
 speed — metres per REAL second measured off the rendered step, not the sim's
 nominal 1.3 m/s, which is only correct at 1x. At 60x the body covers ground

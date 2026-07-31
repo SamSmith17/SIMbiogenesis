@@ -1822,24 +1822,30 @@ func _run_population_verify() -> void:
 		# the host's distance/budget LOD never sees them.
 		var stage := Vector3(0.0, gy + 80.0, 0.0)
 		var poses := [
-			{"moving": false, "activity": ""},          # idle
-			{"moving": true, "activity": ""},           # walk
-			{"moving": false, "activity": "chore"},     # work
-			{"moving": false, "activity": "enrichment"},# dance
-			{"moving": false, "activity": "sleep"},     # sleep (lying)
+			{"moving": false, "activity": ""},          # idle   (humanoid)
+			{"moving": true, "activity": ""},           # walk   (humanoid)
+			{"moving": false, "activity": "sleep"},     # sleep  (humanoid)
+			{"moving": false, "activity": ""},          # idle   (simplified)
+			{"moving": true, "activity": ""},           # walk   (simplified)
+			{"moving": false, "activity": "enrichment"},# dance  (simplified)
 		]
 		cam.global_position = stage + Vector3(0.0, 1.3, 5.6)
 		cam.look_at(stage + Vector3(0.0, 0.85, 0.0))
 		var samples: Array = []
 		for i in poses.size():
 			var pose: Dictionary = poses[i]
+			# Half the review line in each body style, so a single shot shows both
+			# and they can be compared directly.
+			NpcDisplayPrefs.set_style(NpcDisplayPrefs.STYLE_SIMPLE if i >= 3
+				else NpcDisplayPrefs.STYLE_HUMANOID)
 			var sample := NpcAvatar.new()
 			sample.setup("review_%d" % i, NpcPopulationEngine.color_for_agent("review_%d" % i))
 			main.add_child(sample)
 			sample.set_detail(true)
-			sample.apply_state(stage + Vector3(-2.8 + 1.4 * float(i), 0.0, 0.0),
+			sample.apply_state(stage + Vector3(-3.5 + 1.4 * float(i), 0.0, 0.0),
 					PI, bool(pose["moving"]), str(pose["activity"]))
 			samples.append(sample)
+		NpcDisplayPrefs.set_style(NpcDisplayPrefs.STYLE_HUMANOID)
 		print("PlaytestHarness: population verify — rig %s (%s)"
 			% ["available" if NpcRig.available() else "ABSENT (primitive figures)",
 				", ".join(NpcRig.clip_names()) if NpcRig.available() else NpcRig.load_error()])

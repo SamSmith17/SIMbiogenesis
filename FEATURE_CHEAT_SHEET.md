@@ -595,6 +595,9 @@ Traffic has to accumulate — give it a few sim-hours at speed before the patter
   the schedule is what they return to. Times are in minutes past midnight, and
   edits only take effect on **Apply**.
 - Morale caps at **75%** on needs alone — the rest is earned at enrichment spaces.
+- **Settings → NPCs → Body style** switches between *Humanoid* (rigged
+  character) and *Simplified* (articulated stick figures with elbows and
+  knees). Behaviour is identical either way — only the look changes.
 - People are **dark silhouettes with a coloured edge**, and the colour is that
   person's identity — the same one their Site Plan dot uses. Up close (within
   45 m, nearest 12) they are a real animated figure that walks, sits to eat,

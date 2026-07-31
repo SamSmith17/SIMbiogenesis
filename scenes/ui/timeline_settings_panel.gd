@@ -876,6 +876,7 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	v.add_child(gq_hint)
 	v.add_child(HSeparator.new())
 	_build_prop_perf_section(v)
+	_build_npc_section(v)
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Terrain detail (imagery resolution)")
 	var tq_row := HBoxContainer.new()
@@ -2033,3 +2034,46 @@ func _on_open_location_picker() -> void:
 	var picker := ui_layer.get_node_or_null("LocationPickerUI")
 	if picker != null and picker.has_method("show_picker"):
 		picker.show_picker()
+
+
+## How simulated people are drawn. A style choice, not a quality setting: the
+## rigged body is photoreal enough that any imperfection in how it is driven
+## reads as uncanny, while a stylised figure has no such contract with the
+## viewer and the same approximate motion reads as deliberate.
+##
+## Both styles are posed from the SAME NpcPoseMachine, so behaviour is
+## identical either way — people still walk the whole route, lie down on
+## arrival and sit for the bathroom. Only the rendering differs.
+func _build_npc_section(v: Control) -> void:
+	_add_section_lbl(v, "NPCs")
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var hdr := Label.new()
+	hdr.text = "Body style"
+	hdr.custom_minimum_size = Vector2(110, 0)
+	hdr.add_theme_color_override("font_color", C_TEXT_S)
+	row.add_child(hdr)
+	var opt := OptionButton.new()
+	opt.add_item("Humanoid (rigged)", 0)
+	opt.add_item("Simplified (stylised)", 1)
+	opt.selected = 1 if NpcDisplayPrefs.wants_simple() else 0
+	opt.item_selected.connect(func(idx: int) -> void:
+		NpcDisplayPrefs.set_style(NpcDisplayPrefs.STYLE_SIMPLE if idx == 1
+			else NpcDisplayPrefs.STYLE_HUMANOID))
+	row.add_child(opt)
+	v.add_child(row)
+	var hint := Label.new()
+	hint.text = "Simplified draws articulated stick figures with elbows and knees. Behaviour is identical — only the look changes. Takes effect as people come back into view."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(420, 0)
+	hint.add_theme_color_override("font_color", C_TEXT_S)
+	hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(hint)
+	if not NpcRig.available():
+		var miss := Label.new()
+		miss.text = "The humanoid character pack is not installed (see ASSETS.md) — simplified is in use regardless."
+		miss.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		miss.custom_minimum_size = Vector2(420, 0)
+		miss.add_theme_color_override("font_color", UITheme.C_WARN)
+		miss.add_theme_font_size_override("font_size", 10)
+		v.add_child(miss)

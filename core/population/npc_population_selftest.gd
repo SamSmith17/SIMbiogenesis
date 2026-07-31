@@ -65,6 +65,7 @@ func _init() -> void:
 	_test_rig_clip_map()
 	_test_clip_classifier()
 	_test_pose_machine()
+	_test_simple_figure()
 	_test_space_tag_row()
 	_test_standing_slots()
 	_test_separation()
@@ -3211,3 +3212,68 @@ func _pose_fingerprint(cat: Dictionary) -> String:
 		})
 		acc += m.clip() + ","
 	return acc
+
+
+## The stylised body is a STYLE, not a fallback: it must be posed from the same
+## machine as the rigged one, and choosing it must survive the art being
+## installed.
+func _test_simple_figure() -> void:
+	var prev := NpcDisplayPrefs.style()
+	NpcDisplayPrefs.set_style(NpcDisplayPrefs.STYLE_SIMPLE)
+	_check("the simple style persists", NpcDisplayPrefs.wants_simple())
+	NpcDisplayPrefs.set_style(NpcDisplayPrefs.STYLE_HUMANOID)
+	_check("the humanoid style persists", not NpcDisplayPrefs.wants_simple())
+	_check("an unknown style falls back to humanoid",
+			NpcDisplayPrefs.style() == NpcDisplayPrefs.STYLE_HUMANOID)
+
+	var fig := NpcSimpleFigure.new()
+	fig.setup("agent_x", Color(0.5, 0.7, 0.9))
+	# Every clip the machine can emit must pose without erroring, including the
+	# reversed sit-down, which is not a file and would otherwise fall through.
+	for c in [NpcRig.CLIP_IDLE, NpcRig.CLIP_IDLE_SAD, NpcRig.CLIP_WALK,
+			NpcRig.CLIP_WALK_SAD, NpcRig.CLIP_WALK_START, NpcRig.CLIP_WALK_STOP,
+			NpcRig.CLIP_SIT, NpcRig.CLIP_SIT_ENTER, NpcRig.CLIP_SIT_EXIT,
+			NpcRig.CLIP_SLEEP, NpcRig.CLIP_SLEEP_ENTER, NpcRig.CLIP_SLEEP_EXIT,
+			NpcRig.CLIP_WORK, NpcRig.CLIP_EXERCISE, NpcRig.CLIP_DANCE,
+			NpcRig.CLIP_CLAP, NpcRig.CLIP_CLAP_SIT]:
+		for i in 12:
+			fig.pose(c, 1.0, 1.0 / 60.0)
+	_check("every clip poses the simple figure", true)
+
+	# Gaits must differ from a held pose, or the figure reads as a statue that
+	# slides. Sample a joint across a walk and assert it actually moves.
+	var walk_spread := _limb_spread(fig, NpcRig.CLIP_WALK)
+	var idle_spread := _limb_spread(fig, NpcRig.CLIP_SLEEP)
+	_check("walking articulates the limbs", walk_spread > 0.15,
+			"%.3f rad of knee travel" % walk_spread)
+	_check("a held pose does not flail", idle_spread < walk_spread,
+			"%.3f vs %.3f" % [idle_spread, walk_spread])
+
+	# Deterministic per-agent gait phase, so a crowd is not a chorus line but
+	# a replay is still identical.
+	var a := NpcSimpleFigure.new()
+	a.setup("agent_a", Color.WHITE)
+	var b := NpcSimpleFigure.new()
+	b.setup("agent_a", Color.WHITE)
+	_check("the same agent gets the same gait phase",
+			is_equal_approx(_limb_spread(a, NpcRig.CLIP_WALK),
+				_limb_spread(b, NpcRig.CLIP_WALK)))
+	a.free()
+	b.free()
+	fig.free()
+	NpcDisplayPrefs.set_style(prev)
+
+
+## Range of knee rotation observed over a second of posing — the cheapest proxy
+## for "is this body actually articulating".
+func _limb_spread(fig: NpcSimpleFigure, clip: String) -> float:
+	var lo := INF
+	var hi := -INF
+	for i in 60:
+		fig.pose(clip, 1.0, 1.0 / 60.0)
+		var knee := fig.get_node_or_null("Body/Hip0/Knee0") as Node3D
+		if knee == null:
+			return 0.0
+		lo = minf(lo, knee.rotation.x)
+		hi = maxf(hi, knee.rotation.x)
+	return hi - lo

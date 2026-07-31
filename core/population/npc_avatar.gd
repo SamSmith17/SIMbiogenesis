@@ -54,6 +54,7 @@ var _phase := 0.0
 var _moving := false
 var _lying := false
 
+var _simple: NpcSimpleFigure = null # articulated stick figure (the other style)
 var _rig: Node3D = null             # rigged body (built lazily)
 var _rig_ap: AnimationPlayer = null
 var _rig_mat: ShaderMaterial = null
@@ -99,11 +100,32 @@ func setup(p_agent_id: String, color: Color, p_name: String = "") -> void:
 		_tag.text = display_name
 
 
+func _build_nametag() -> void:
+	if _tag != null:
+		return
+	_tag = Label3D.new()
+	_tag.name = "NameTag"
+	_tag.text = display_name
+	_tag.font_size = 40
+	_tag.pixel_size = 0.0075
+	_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_tag.position = Vector3(0.0, HEIGHT_M + 0.28, 0.0)
+	_tag.modulate = Color(1, 1, 1, 0.97)
+	_tag.outline_modulate = Color(0.02, 0.04, 0.09, 0.9)
+	_tag.outline_size = 8
+	_tag.no_depth_test = true
+	_tag.visible = false  # only for the person the crosshair is on
+	add_child(_tag)
+
+
 ## Host-driven LOD: `true` swaps in the rigged body, `false` the primitive.
 ## A request for the rig when no assets are installed is a silent no-op, which
 ## is why the primitive figure is never discarded.
 func set_detail(rigged: bool) -> void:
-	var want := rigged and NpcRig.available()
+	# Two different reasons to draw the stylised body, kept distinct: the
+	# player chose it (a style, survives installing the art), or the rig is not
+	# installed (a missing-asset condition). Only the second is a fallback.
+	var want := rigged and NpcRig.available() and not NpcDisplayPrefs.wants_simple()
 	if want == _rigged:
 		return
 	if want and _rig == null:
@@ -305,6 +327,11 @@ func _process(delta: float) -> void:
 	if _rigged:
 		_follow_ground_offset(delta)
 		return
+	if _simple != null and _machine != null:
+		# Same machine, same decisions — only the rendering differs, so the two
+		# styles can never disagree about what somebody is doing.
+		_simple.pose(_machine.clip(), _speed_scale, delta)
+		return
 	if _root == null:
 		return
 	if _lying:
@@ -385,6 +412,21 @@ func _build_rig() -> void:
 
 
 func _ensure_visuals() -> void:
+	if _root != null:
+		return
+	_root = Node3D.new()
+	_root.name = "Figure"
+	add_child(_root)
+	_simple = NpcSimpleFigure.new()
+	_simple.setup(agent_id, _tint)
+	_root.add_child(_simple)
+	_build_nametag()
+	return
+
+
+## Retained only so the old primitive constants still describe something real;
+## the body itself is NpcSimpleFigure now.
+func _ensure_visuals_legacy() -> void:
 	if _root != null:
 		return
 	_root = Node3D.new()
