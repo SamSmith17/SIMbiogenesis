@@ -3023,6 +3023,54 @@ func _incoming_tangent(travel_dir: Vector2) -> Vector2:
 	return -travel_dir
 
 
+## True when a DC wire belongs to a COMPLETE circuit — a controller with both
+## PV legs wired and a battery bank attached. `hint` is live_power_hint, filled
+## by SystemGraphView._publish_live_circuits from the throttle tick's existing
+## work, so this costs a dictionary lookup rather than a graph traversal.
+##
+## The old test was "is either endpoint a panel, and is the ARRAY producing?" —
+## with array output computed from insolation, entirely independent of wiring.
+## A single wire dangling off an unconnected panel therefore animated and
+## reported the whole array's wattage. `legacy_ok` keeps the virtual
+## solar_bridge chain (which has no real controller) animating as before.
+static func dc_circuit_live(hint: Dictionary, src_id: String, tgt_id: String,
+		legacy_ok: bool = false) -> bool:
+	var circuits: Dictionary = hint.get("circuits", {}) as Dictionary
+	if circuits.is_empty():
+		# Nothing published yet (no real controller in the graph, or the first
+		# frames after a load): fall back to the old permissive behaviour so
+		# freeplay and the virtual chain are unchanged.
+		return true
+	if circuits.has(src_id) or circuits.has(tgt_id):
+		return true
+	var member_of: Dictionary = hint.get("circuit_of", {}) as Dictionary
+	if member_of.has(src_id) or member_of.has(tgt_id):
+		return true
+	return legacy_ok
+
+
+## Live voltage on a DC wire: the array's string Voc on the PV side of a
+## controller, the bank's bus voltage on the battery side. 0 when unknown.
+static func dc_circuit_volts(hint: Dictionary, src_id: String, tgt_id: String,
+		pv_side: bool) -> float:
+	var circuits: Dictionary = hint.get("circuits", {}) as Dictionary
+	if circuits.is_empty():
+		return 0.0
+	var member_of: Dictionary = hint.get("circuit_of", {}) as Dictionary
+	var cid := ""
+	for candidate in [src_id, tgt_id]:
+		if circuits.has(candidate):
+			cid = str(candidate)
+			break
+		if member_of.has(candidate):
+			cid = str(member_of[candidate])
+			break
+	if cid.is_empty() or not circuits.has(cid):
+		return 0.0
+	var c: Dictionary = circuits[cid]
+	return float(c.get("array_voc", 0.0)) if pv_side else float(c.get("bus_v", 0.0))
+
+
 func _wire_spread(from: Vector2, to: Vector2) -> float:
 	var dist := from.distance_to(to)
 	return clampf(dist * 0.48, 48.0 * _zoom, 200.0 * _zoom)
@@ -3905,12 +3953,17 @@ func _estimate_connection_flow(
 			return {"watts": maxf(gw2, 5.0), "reverse": false, "active": gw2 > WIRE_DEAD_W}
 
 	# PV string → controller: only animate when panels are actually producing
+	# AND this wire belongs to a completed circuit.
 	if sid == "virtual_solar_array" or tid == "virtual_solar_array" or st == "panel" or tt == "panel":
-		var producing: bool = solar_w > WIRE_DEAD_W
+		var producing: bool = solar_w > WIRE_DEAD_W and dc_circuit_live(
+			live_power_hint, sid, tid, sid == "virtual_solar_array" or tid == "virtual_solar_array")
 		var w_pv: float = maxf(solar_w, 5.0)
 		if w_pv < 20.0:
 			w_pv = 5.0 + solar_w * 0.15
-		return {"watts": w_pv, "reverse": false, "active": producing}
+		if not producing:
+			w_pv = 0.0
+		return {"watts": w_pv, "reverse": false, "active": producing,
+			"volts": dc_circuit_volts(live_power_hint, sid, tid, true)}
 
 	# Controller ↔ battery (virtual or real StarShade / LinkageLab nodes)
 	var bat_ctrl := (_is_battery_type(st) and tt == "controller") \
@@ -3925,8 +3978,13 @@ func _estimate_connection_flow(
 			bat_w = float(live_power_hint.get("battery_w", net))
 		var w_b: float  = minf(12000.0, maxf(WIRE_FLOW_FLOOR, absf(bat_w)))
 		var rev:  bool  = (bat_w < 0.0) # discharge: power runs battery → controller
-		var active_b: bool = (w_b > WIRE_DEAD_W * 2.0) or solar_w > WIRE_DEAD_W
-		return {"watts": w_b, "reverse": rev, "active": active_b}
+		var virtual_pair := sid.begins_with("virtual_") or tid.begins_with("virtual_")
+		var active_b: bool = ((w_b > WIRE_DEAD_W * 2.0) or solar_w > WIRE_DEAD_W) \
+			and dc_circuit_live(live_power_hint, sid, tid, virtual_pair)
+		if not active_b:
+			w_b = 0.0
+		return {"watts": w_b, "reverse": rev, "active": active_b,
+			"volts": dc_circuit_volts(live_power_hint, sid, tid, false)}
 
 	# Resource flow wires — Sankey width from ResourceFlowEngine throughput
 	if pol == "resource":
@@ -4251,7 +4309,8 @@ func _render_connection(
 			[src_t, tgt_tang_out],
 			col, width, flowing, flow_watts, reverse, curve_t)
 	if flowing and _zoom >= WIRE_LABEL_MIN_ZOOM:
-		_draw_flow_label(src_pos, tgt_pos, wps, flow_watts, false, "", col)
+		_draw_flow_label(src_pos, tgt_pos, wps, flow_watts, false, "", col,
+			float(flow_est.get("volts", 0.0)))
 	_draw_connection_waypoint_handles(conn, center)
 
 
@@ -4262,7 +4321,8 @@ const WIRE_LABEL_FONT_PX := 10.0   # graph-space design size (× _zoom on draw)
 ## Small readout pill at the wire midpoint: "512 W" / "1.20 kW" for electrical,
 ## "6.3 L/h" for typed resources.
 func _draw_flow_label(src_pos: Vector2, tgt_pos: Vector2, wps: Array,
-		value: float, is_resource: bool, kind: String, wire_col: Color) -> void:
+		value: float, is_resource: bool, kind: String, wire_col: Color,
+		volts: float = 0.0) -> void:
 	var txt: String
 	if is_resource:
 		if value <= ResourceEdgeVis.FLOW_DEAD_RATE:
@@ -4277,6 +4337,11 @@ func _draw_flow_label(src_pos: Vector2, tgt_pos: Vector2, wps: Array,
 		if value < WIRE_DEAD_W:
 			return
 		txt = ("%.2f kW" % (value / 1000.0)) if value >= 1000.0 else ("%d W" % int(round(value)))
+		# Volts alongside watts: on a DC wire the voltage is the thing that
+		# changes with series/parallel wiring, and it is what decides whether a
+		# controller or battery can accept the string at all.
+		if volts > 0.5:
+			txt += "  ·  %.0f V" % volts
 
 	# Midpoint of the middle segment of the (src + waypoints + tgt) polyline —
 	# robust for bezier and orthogonal styles without resampling the curve.

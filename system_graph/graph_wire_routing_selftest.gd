@@ -21,9 +21,10 @@ func _initialize() -> void:
 	fails += _test_ambient_doc_handles()
 	fails += _test_dc_port_styling()
 	fails += _test_dc_terminal_side_convention()
+	fails += _test_circuit_gating()
 	_canvas.free()
 	if fails == 0:
-		print("GRAPH WIRE ROUTING SELFTEST PASS  (6 checks)")
+		print("GRAPH WIRE ROUTING SELFTEST PASS  (7 checks)")
 		quit(0)
 	else:
 		print("GRAPH WIRE ROUTING SELFTEST FAIL  (%d failed)" % fails)
@@ -124,6 +125,56 @@ func _test_ambient_doc_handles() -> int:
 			push_error("ambient classification wrong for %s.%s (got %s)" % [c[0], c[1], str(got)])
 			return 1
 	return 0
+
+
+## A wire only animates when it belongs to a COMPLETE circuit. The old test was
+## "is an endpoint a panel, and is the array producing?", where array output is
+## computed from insolation with no reference to wiring — so a single wire
+## dangling off an unconnected panel animated and reported the whole array's
+## watts. That is the regression this pins.
+func _test_circuit_gating() -> int:
+	var GC := GraphCanvasScript
+	# A published circuit: controller "ctrl" fed by panel "p1", bank "b1".
+	var hint := {
+		"circuits": {"ctrl": {"bus_v": 48.0, "delivered_w": 900.0, "array_voc": 120.0}},
+		"circuit_of": {"p1": "ctrl", "b1": "ctrl"},
+	}
+	# Wires that touch the circuit are live...
+	if not GC.dc_circuit_live(hint, "p1", "ctrl"):
+		panic_msg("panel on a complete circuit should be live")
+		return 1
+	if not GC.dc_circuit_live(hint, "ctrl", "b1"):
+		panic_msg("battery on a complete circuit should be live")
+		return 1
+	# ...and a stray panel wired to nothing is NOT, even though the array is
+	# producing (that is the whole bug).
+	if GC.dc_circuit_live(hint, "p_stray", "p_other"):
+		panic_msg("wire off a panel outside any circuit must not animate")
+		return 1
+	# The virtual solar_bridge chain has no real controller — keep it working.
+	if not GC.dc_circuit_live(hint, "virtual_solar_array", "virtual_controller", true):
+		panic_msg("legacy virtual chain should stay permissive")
+		return 1
+	# Nothing published yet (fresh load / no real controller) → permissive, so
+	# freeplay graphs are unchanged.
+	if not GC.dc_circuit_live({}, "anything", "at_all"):
+		panic_msg("with no published circuits the old behaviour must be kept")
+		return 1
+	# Voltage: PV side reports string Voc, battery side the bank bus.
+	if absf(GC.dc_circuit_volts(hint, "p1", "ctrl", true) - 120.0) > 0.01:
+		panic_msg("PV-side wire should report the array string Voc")
+		return 1
+	if absf(GC.dc_circuit_volts(hint, "ctrl", "b1", false) - 48.0) > 0.01:
+		panic_msg("battery-side wire should report the bank bus voltage")
+		return 1
+	if absf(GC.dc_circuit_volts(hint, "p_stray", "p_other", true)) > 0.01:
+		panic_msg("a wire outside any circuit has no known voltage")
+		return 1
+	return 0
+
+
+func panic_msg(msg: String) -> void:
+	push_error(msg)
 
 
 ## Every node type carrying a +/− pair on ONE edge must put positive on the

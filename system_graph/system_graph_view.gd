@@ -12528,8 +12528,10 @@ func _tick_dc_throttle(delta: float) -> void:
 		for sid in sources:
 			wmp += _pv_item_wmp(model.get_item(str(sid)))
 		routed_wmp += wmp
-		entries.append({"item": it, "bank": bank, "wmp": wmp})
+		entries.append({"item": it, "bank": bank, "wmp": wmp,
+			"sources": sources.duplicate()})
 	if entries.is_empty() or total_wmp <= 0.0:
+		_publish_live_circuits([])
 		if is_instance_valid(_solar_ui) and _solar_ui.has_method("set_graph_dc_limit_w"):
 			_solar_ui.call("set_graph_dc_limit_w", -1.0)
 		return
@@ -12560,11 +12562,46 @@ func _tick_dc_throttle(delta: float) -> void:
 			model.update_item(str(it2.get("id", "")), {"specs": sp})
 	_history_suppress = was_suppress
 	_sim_bulk_update = was_bulk
+	_publish_live_circuits(entries)
 	# PV wattage not routed through any eligible controller passes uncapped —
 	# freeplay arrays mirrored via the virtual chain keep working untouched.
 	var unrouted_w: float = raw_kw * 1000.0 * maxf(1.0 - routed_wmp / total_wmp, 0.0)
 	if is_instance_valid(_solar_ui) and _solar_ui.has_method("set_graph_dc_limit_w"):
 		_solar_ui.call("set_graph_dc_limit_w", delivered_total_w + unrouted_w)
+
+
+## Tell the canvas which controllers sit on a COMPLETE circuit (both PV legs
+## wired and a battery bank attached) and at what bus voltage, so wire drawing
+## can stop animating dead wires and can label them with a real voltage. The
+## set is exactly `entries`, already computed here for the throttle — the
+## canvas would otherwise have to re-traverse the graph every redraw.
+func _publish_live_circuits(entries: Array) -> void:
+	if _graph_canvas == null:
+		return
+	var live: Dictionary = {}
+	var members: Dictionary = {}   # item_id → controller_id (panels + batteries)
+	for e in entries:
+		var ed: Dictionary = e
+		var it: Dictionary = ed.get("item", {}) as Dictionary
+		var cid := str(it.get("id", ""))
+		if cid.is_empty():
+			continue
+		var bank: Dictionary = ed.get("bank", {}) as Dictionary
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		live[cid] = {
+			"bus_v": float(bank.get("bus_voltage", 0.0)),
+			"delivered_w": float(sp.get("dc_delivered_w", 0.0)),
+			"array_voc": PvElectrical.max_string_voc_for_controller_flat(
+				model, cid, _dc_flat_conns, _ambient_temp_c_for_voc()),
+		}
+		for sid in (ed.get("sources", []) as Array):
+			members[str(sid)] = cid
+		for bid in (bank.get("battery_ids", []) as Array):
+			members[str(bid)] = cid
+	var hint: Dictionary = (_graph_canvas.get("live_power_hint") as Dictionary).duplicate()
+	hint["circuits"] = live
+	hint["circuit_of"] = members
+	_graph_canvas.set("live_power_hint", hint)
 
 
 static func _pv_item_wmp(item: Dictionary) -> float:

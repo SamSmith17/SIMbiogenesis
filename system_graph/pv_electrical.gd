@@ -344,6 +344,17 @@ static func branch_vocs_for_controller_flat(model: GraphModel, controller_id: St
 	return branch_vocs
 
 
+## Highest branch Voc feeding a controller (flattened / nesting-aware). This is
+## the voltage the array actually presents at the controller's PV terminals —
+## used for the wire label as well as the fault check.
+static func max_string_voc_for_controller_flat(model: GraphModel, controller_id: String,
+		flat_conns: Array, ambient_c: float = 25.0) -> float:
+	var max_v := 0.0
+	for v in branch_vocs_for_controller_flat(model, controller_id, flat_conns, ambient_c):
+		max_v = maxf(max_v, float(v))
+	return max_v
+
+
 ## All over-voltage faults across the WHOLE graph (every scope, nesting-aware).
 static func find_overvoltage_faults_flat(model: GraphModel, ambient_c: float = 25.0) -> Array:
 	var faults: Array = []
