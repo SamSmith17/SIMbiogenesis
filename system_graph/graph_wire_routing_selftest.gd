@@ -20,9 +20,10 @@ func _initialize() -> void:
 	fails += _test_direction_fallback_pulls_back()
 	fails += _test_ambient_doc_handles()
 	fails += _test_dc_port_styling()
+	fails += _test_dc_terminal_side_convention()
 	_canvas.free()
 	if fails == 0:
-		print("GRAPH WIRE ROUTING SELFTEST PASS  (5 checks)")
+		print("GRAPH WIRE ROUTING SELFTEST PASS  (6 checks)")
 		quit(0)
 	else:
 		print("GRAPH WIRE ROUTING SELFTEST FAIL  (%d failed)" % fails)
@@ -122,6 +123,39 @@ func _test_ambient_doc_handles() -> int:
 		if got != bool(c[2]):
 			push_error("ambient classification wrong for %s.%s (got %s)" % [c[0], c[1], str(got)])
 			return 1
+	return 0
+
+
+## Every node type carrying a +/− pair on ONE edge must put positive on the
+## left. Generators used to be mirrored against batteries/controllers, so the
+## two wires of a panel→controller link crossed — the commonest link in the
+## game. This pins the convention across all types at once, including any added
+## later.
+func _test_dc_terminal_side_convention() -> int:
+	var checked := 0
+	for type_id in GraphCanvasScript.HANDLES:
+		var pos: Dictionary = {}
+		var neg: Dictionary = {}
+		for h_v in (GraphCanvasScript.HANDLES[type_id] as Array):
+			var h: Dictionary = h_v
+			match str(h.get("id", "")):
+				"positive":
+					pos = h
+				"negative":
+					neg = h
+		if pos.is_empty() or neg.is_empty():
+			continue
+		# Only meaningful when the pair shares an edge (same ry).
+		if absf(float(pos.get("ry", -1.0)) - float(neg.get("ry", -2.0))) > 0.001:
+			continue
+		checked += 1
+		if float(pos.get("rx", 1.0)) >= float(neg.get("rx", 0.0)):
+			push_error("'%s': positive (rx %.2f) must sit LEFT of negative (rx %.2f)" % [
+				str(type_id), float(pos.get("rx", -1.0)), float(neg.get("rx", -1.0))])
+			return 1
+	if checked < 4:
+		push_error("expected at least 4 types with a same-edge +/− pair, saw %d" % checked)
+		return 1
 	return 0
 
 

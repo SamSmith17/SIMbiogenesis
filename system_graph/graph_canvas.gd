@@ -93,10 +93,15 @@ const NODE_SIZE_DEFAULT := [158, 118]
 
 # Handle definitions by type: Array of {id, polarity, rx, ry}
 # rx/ry are fractional positions (0-1) relative to node width/height
+# DC terminal convention: on every type that carries a +/− pair, POSITIVE sits
+# on the LEFT (rx 0.25) and NEGATIVE on the right (0.75). Batteries and
+# controllers were already laid out that way; generators used to be mirrored,
+# which crossed both wires on the commonest link in the game (panel →
+# controller). Pinned by graph_wire_routing_selftest.
 const HANDLES := {
 	"panel": [
-		{"id": "positive", "polarity": "positive", "rx": 0.67, "ry": 1.0},
-		{"id": "negative", "polarity": "negative", "rx": 0.33, "ry": 1.0},
+		{"id": "positive", "polarity": "positive", "rx": 0.25, "ry": 1.0},
+		{"id": "negative", "polarity": "negative", "rx": 0.75, "ry": 1.0},
 		# Optional, non-blocking — sunlight reaches every panel in the SoI
 		# ambiently (mirrors real life: nothing "pipes" sunlight). Drawing
 		# this wire from the sun PBI is purely visual/documentary and is
@@ -106,15 +111,15 @@ const HANDLES := {
 	# Wind/hydro generators wire like panels: DC out the bottom into a
 	# controller PV input or a combiner.
 	"wind": [
-		{"id": "positive", "polarity": "positive", "rx": 0.67, "ry": 1.0},
-		{"id": "negative", "polarity": "negative", "rx": 0.33, "ry": 1.0},
+		{"id": "positive", "polarity": "positive", "rx": 0.25, "ry": 1.0},
+		{"id": "negative", "polarity": "negative", "rx": 0.75, "ry": 1.0},
 		# Optional ambient atmosphere link from Wind PBI — turbines already
 		# read WeatherService; this wire is documentary only.
 		{"id": "wind_in", "polarity": "resource", "resource_kind": "wind", "rx": 0.5, "ry": 0.0},
 	],
 	"hydro": [
-		{"id": "positive", "polarity": "positive", "rx": 0.67, "ry": 1.0},
-		{"id": "negative", "polarity": "negative", "rx": 0.33, "ry": 1.0},
+		{"id": "positive", "polarity": "positive", "rx": 0.25, "ry": 1.0},
+		{"id": "negative", "polarity": "negative", "rx": 0.75, "ry": 1.0},
 	],
 	"battery": [
 		{"id": "positive", "polarity": "positive", "rx": 0.25, "ry": 0.0},
