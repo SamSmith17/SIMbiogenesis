@@ -173,6 +173,7 @@ func _show_brief() -> void:
 		"title": "Level %d — %s" % [_level.index, _level.title],
 		"title_color": UITheme.C_PRIMARY,
 		"body": _level.brief_bbcode,
+		"override_key": "tutorial:%s:brief" % _level.id,
 		"actions": [
 			{"label": "↺ Start Over", "callback": Callable(self, "_on_start_over")},
 			{"label": "Let's go", "callback": Callable(self, "_on_brief_done")},
@@ -376,9 +377,12 @@ func _complete_level(stats: Dictionary = {}) -> void:
 	# without this the player is told "level complete" and never learns which
 	# components just appeared in their Library.
 	var earned := unlock_labels(_level.unlocks)
-	var body := _level.debrief_bbcode
+	# The unlock line rides as body_suffix (not concatenated into body) so the
+	# dev text editor edits/saves the authored debrief alone — a saved override
+	# must never bake one occurrence's unlock list into the default copy.
+	var suffix := ""
 	if not earned.is_empty():
-		body += "\n\n[color=#26e577]★ Unlocked:[/color] [b]%s[/b]" % "  ·  ".join(earned)
+		suffix = "[color=#26e577]★ Unlocked:[/color] [b]%s[/b]" % "  ·  ".join(earned)
 	# Success-via-fault levels complete on the same frame as the destroy boom —
 	# give the bang two seconds to land before the reward sounds.
 	var sfx_delay := 2.0 if str(_level.goal.get("kind", "")) == "fault_observed" else 0.0
@@ -386,7 +390,9 @@ func _complete_level(stats: Dictionary = {}) -> void:
 	_gv.call("show_tutorial_card", {
 		"title": "✓ Level %d complete" % _level.index,
 		"title_color": UITheme.C_GREEN,
-		"body": body,
+		"body": _level.debrief_bbcode,
+		"body_suffix": suffix,
+		"override_key": "tutorial:%s:debrief" % _level.id,
 		"actions": actions,
 	})
 

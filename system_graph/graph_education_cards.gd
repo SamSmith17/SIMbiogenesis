@@ -182,6 +182,20 @@ static func card_for_item(item: Dictionary) -> Dictionary:
 ## `%` binds tighter than `+`, so formatting a concatenation chain applies only
 ## to the last literal (the bug the old hardcoded controller card shipped with).
 static func card_for_fault(reason: String, params: Dictionary = {}) -> Dictionary:
+	var card := _card_for_fault_raw(reason, params)
+	if card.is_empty():
+		return card
+	# Stable identity for the dev copy-editing overrides (EducationCardOverrides)
+	# — kind-qualified where one reason has genuinely different copy per kind.
+	var key := "fault:%s" % reason
+	var kind := str(params.get("kind", ""))
+	if not kind.is_empty():
+		key += ":%s" % kind
+	card["override_key"] = key
+	return card
+
+
+static func _card_for_fault_raw(reason: String, params: Dictionary = {}) -> Dictionary:
 	match reason:
 		GraphNodeState.REASON_SHORT_CIRCUIT:
 			return {
