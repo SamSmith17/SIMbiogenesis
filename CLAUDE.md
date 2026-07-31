@@ -80,6 +80,10 @@ Godot.exe.exe --headless --path . --script system_graph/graph_components_selftes
 # unregulated-PV battery overcharge, and the controller current-throttle
 # wattages 120/360/720/1200 W pinned; extend with every electrical change):
 Godot.exe.exe --headless --path . --script system_graph/graph_electrical_selftest.gd
+# Wire routing + port presentation (offline geometry — bezier control points for
+# same-edge ports (the U loop), facing ports, direction-fallback endpoints;
+# ambient-port classification; DC solid-fill/glyph styling rules):
+Godot.exe.exe --headless --path . --script system_graph/graph_wire_routing_selftest.gd
 # Solar Bootcamp tutorial (offline — ProgressStore grandfathering/grants/levels,
 # 12-level catalog integrity incl. every seed/unlock/palette entry resolving,
 # TutorialGoals predicates: deliverable-watts/bus-V/string-config over synthetic

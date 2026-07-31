@@ -400,6 +400,9 @@ var _marquee_start:         Vector2 = Vector2.ZERO
 var _marquee_end:           Vector2 = Vector2.ZERO
 ## Screen-space hit rects for destroyed-controller Reset buttons (cleared each draw).
 var _controller_reset_rects: Dictionary = {}
+## "<item_id>|<handle_id>" set of ambient documentary ports that carry a wire —
+## see _refresh_ambient_wired_ports / is_ambient_doc_handle.
+var _ambient_wired_ports: Dictionary = {}
 ## Short-lived smoke puffs when a controller is destroyed: {item_id, center, age}.
 var _destroy_fx: Array = []
 var _needs_continuous_redraw: bool = false
@@ -3004,9 +3007,13 @@ func _wheel_zoom_factor() -> float:
 	return 1.08
 
 
-## Incoming wire tangent at a port (reverse of outgoing handle tangent).
-func _incoming_tangent(outgoing: Vector2) -> Vector2:
-	return -outgoing
+## Flip a travel direction into the target endpoint's OUTWARD control tangent
+## (the convention `_wire_bezier_controls` wants — see its header). Only for
+## endpoints with no real port: a wire heading `dir` should have its far
+## control point pulled back along `-dir`, toward the source. Real ports pass
+## their own outward normal straight through and must NOT be routed here.
+func _incoming_tangent(travel_dir: Vector2) -> Vector2:
+	return -travel_dir
 
 
 func _wire_spread(from: Vector2, to: Vector2) -> float:
@@ -3047,22 +3054,38 @@ func _draw_fitted_label(pos: Vector2, text: String, max_w: float, fsize: int, co
 	draw_string(fnt, pos, shown, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, color)
 
 
+## Cubic control points for a wire. BOTH tangents are "the direction from that
+## endpoint toward its own control point", i.e. the port's OUTWARD normal —
+## the wire then leaves and arrives through open canvas instead of cutting
+## across the node body.
+##
+## `to_tang_out` used to be handed the port's INWARD normal (via
+## `_incoming_tangent`), which parked c2 inside the target node: two ports on
+## the same edge (series-wiring two panels side by side) drew a flat "~" that
+## disappeared behind the nodes instead of the expected U looping below them.
+## Direction-derived callers (no real port) pass `-(to - from).normalized()`,
+## which is already outward-from-the-target in that sense.
 func _wire_bezier_controls(from: Vector2, from_tang: Vector2,
-		to: Vector2, to_tang_in: Vector2, curve_tension: float = 1.0) -> Dictionary:
+		to: Vector2, to_tang_out: Vector2, curve_tension: float = 1.0) -> Dictionary:
 	if from.is_equal_approx(to):
 		return {"c1": from, "c2": to}
-		
+
 	var spread := _wire_spread(from, to) * curve_tension
-	
+
+	# The blend only nudges a control point back toward the far endpoint when the
+	# port faces away from it, so a backwards layout eases instead of looping
+	# wildly. Ports that already face each other (the common vertical case) are
+	# left exactly as authored, and same-edge pairs keep most of their outward
+	# throw — that throw IS the U.
 	var dir1 := from.direction_to(to)
 	var t1 := from_tang
 	var dot1 := t1.dot(dir1)
 	if dot1 < 0.3:
 		var blend := clampf((0.3 - dot1) / 1.3, 0.0, 1.0)
 		t1 = t1.lerp(dir1, blend).normalized()
-		
+
 	var dir2 := to.direction_to(from)
-	var t2 := to_tang_in
+	var t2 := to_tang_out
 	var dot2 := t2.dot(dir2)
 	if dot2 < 0.3:
 		var blend := clampf((0.3 - dot2) / 1.3, 0.0, 1.0)
@@ -3444,6 +3467,16 @@ func _get_all_handle_infos(item: Dictionary, center: Vector2) -> Array:
 func _get_interactive_handle_infos(item: Dictionary, center: Vector2) -> Array:
 	var all := _get_all_handle_infos(item, center)
 	var itype := item.get("type", "generic") as String
+	# Hidden ambient documentary ports are not grabbable either — otherwise an
+	# invisible dot in the middle of a panel's top edge hijacks the drag that
+	# was meant to move the node.
+	var visible_all: Array = []
+	for h0: Dictionary in all:
+		var hid0 := str(h0.get("handle_id", ""))
+		if is_ambient_doc_handle(itype, hid0) and not _ambient_doc_handle_shown(item, hid0):
+			continue
+		visible_all.append(h0)
+	all = visible_all
 	# Array compounds expose exactly the two bus ports from _resolved_handles;
 	# they must all stay interactive (the generic "compound" primary filter would
 	# otherwise drop them since their ids are "positive"/"negative").
@@ -3481,6 +3514,9 @@ func _port_at_screen(screen_pos: Vector2,
 			return {}
 		if view_mode == GraphSiteLayout.VIEW_SITE and not site_show_ports:
 			return {}
+	# Ambient-port visibility gates grabbability too — refresh once per query,
+	# not once per node (see _refresh_ambient_wired_ports).
+	_refresh_ambient_wired_ports()
 	var center    := size * 0.5
 	var best_dist := radius
 	var best:       Dictionary = {}
@@ -3576,16 +3612,18 @@ func _draw_temp_wire() -> void:
 		preview_width = 2.0
 
 	var to_pos:  Vector2
-	var to_tang_in: Vector2
+	var to_tang_out: Vector2
 
 	if not _wire_snap.is_empty():
+		# Outward normal of the snapped port — the preview must curve in the way
+		# the committed wire will (see _wire_bezier_controls).
+		to_tang_out = _wire_snap.get("tangent", Vector2.RIGHT) as Vector2
 		to_pos = _wire_snap.get("pos", Vector2.ZERO) as Vector2
-		to_tang_in = _incoming_tangent(_wire_snap.get("tangent", Vector2.RIGHT) as Vector2)
 	else:
 		to_pos = _wire_cursor_pos
-		to_tang_in = (_wire_src_pos - _wire_cursor_pos).normalized()
+		to_tang_out = (_wire_src_pos - _wire_cursor_pos).normalized()
 
-	var ctrl := _wire_bezier_controls(_wire_src_pos, _wire_src_tangent, to_pos, to_tang_in)
+	var ctrl := _wire_bezier_controls(_wire_src_pos, _wire_src_tangent, to_pos, to_tang_out)
 	var c1: Vector2 = ctrl["c1"]
 	var c2: Vector2 = ctrl["c2"]
 
@@ -4023,7 +4061,7 @@ func _render_connection(
 	# In Test mode wires animate if power is actually flowing; Build mode is always static
 	var flowing: bool = (current_mode == "test") and flow_active
 
-	var tgt_tang_in := _incoming_tangent(tgt.get("tangent", Vector2.RIGHT) as Vector2)
+	var tgt_tang_out := (tgt.get("tangent", Vector2.RIGHT) as Vector2)
 	var wps: Array = _waypoints_screen(conn, center)
 	var style: String = _effective_line_style(conn)
 	var curve_t := _conn_curve_tension(conn)
@@ -4061,7 +4099,7 @@ func _render_connection(
 		tgt["pos"] = tgt_pos
 
 	var src_t: Vector2 = src.get("tangent", Vector2.RIGHT) as Vector2
-	tgt_tang_in = _incoming_tangent(tgt.get("tangent", Vector2.RIGHT) as Vector2)
+	tgt_tang_out = (tgt.get("tangent", Vector2.RIGHT) as Vector2)
 
 	# Connection style overrides
 	var c_color = str(conn.get("color_override", ""))
@@ -4079,8 +4117,8 @@ func _render_connection(
 		if src_t.length() * 40.0 * _zoom > max_tang:
 			src_t = src_t.normalized()
 			src["tangent"] = src_t
-		if tgt_tang_in.length() * 40.0 * _zoom > max_tang:
-			tgt_tang_in = tgt_tang_in.normalized()
+		if tgt_tang_out.length() * 40.0 * _zoom > max_tang:
+			tgt_tang_out = tgt_tang_out.normalized()
 		# Stamp a transient draw-only corner clamp used by metro/ortho helpers.
 		conn = conn.duplicate()
 		conn["_draw_corner_px"] = _conn_corner_radius_px(conn, link_len)
@@ -4110,18 +4148,18 @@ func _render_connection(
 			# glow, not in a style exemption).
 			if style == "metro":
 				_draw_wire_metro_path([src_pos] + wps + [tgt_pos],
-					[src_t, tgt_tang_in], col, width, flowing, res_rate, false, conn)
+					[src_t, tgt_tang_out], col, width, flowing, res_rate, false, conn)
 			elif style == "orthogonal":
 				_draw_resource_wire_orthogonal_path(
-					[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_in],
+					[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_out],
 					col, width, flowing, false, curve_t,
 					res_rate, res_kind, sankey_scale)
 			elif wps.is_empty():
 				_draw_radiant_wire_bezier(
-					src_pos, src_t, tgt_pos, tgt_tang_in, col, width, flowing, curve_t, res_rate, res_kind)
+					src_pos, src_t, tgt_pos, tgt_tang_out, col, width, flowing, curve_t, res_rate, res_kind)
 			else:
 				_draw_radiant_wire_path(
-					[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_in],
+					[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_out],
 					col, width, flowing, curve_t, res_rate, res_kind)
 			# Always show the flux label when there's meaningful flux (educational),
 			# even in Build mode — radiant links are documentary.
@@ -4158,19 +4196,19 @@ func _render_connection(
 			return
 		if style == "metro":
 			var pts_r: Array = [src_pos] + wps + [tgt_pos]
-			_draw_wire_metro_path(pts_r, [src_t, tgt_tang_in], col, width, flowing, res_rate, reverse, conn)
+			_draw_wire_metro_path(pts_r, [src_t, tgt_tang_out], col, width, flowing, res_rate, reverse, conn)
 		elif style == "orthogonal":
 			var pts_r: Array = [src_pos] + wps + [tgt_pos]
 			_draw_resource_wire_orthogonal_path(
-				pts_r, [src_t, tgt_tang_in], col, width, flowing, reverse, curve_t,
+				pts_r, [src_t, tgt_tang_out], col, width, flowing, reverse, curve_t,
 				res_rate, res_kind, sankey_scale)
 		elif wps.is_empty():
 			_draw_resource_wire_bezier(
-				src_pos, src_t, tgt_pos, tgt_tang_in, col, width, flowing, reverse, curve_t,
+				src_pos, src_t, tgt_pos, tgt_tang_out, col, width, flowing, reverse, curve_t,
 				res_rate, res_kind, sankey_scale)
 		else:
 			_draw_resource_wire_path(
-				[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_in],
+				[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_out],
 				col, width, flowing, reverse, curve_t, res_rate, res_kind, sankey_scale)
 		if flowing and _zoom >= WIRE_LABEL_MIN_ZOOM:
 			_draw_flow_label(src_pos, tgt_pos, wps, res_rate, true, res_kind, col)
@@ -4188,18 +4226,18 @@ func _render_connection(
 			return
 	if style == "metro":
 		var pts: Array = [src_pos] + wps + [tgt_pos]
-		_draw_wire_metro_path(pts, [src_t, tgt_tang_in], col, width, flowing, flow_watts, reverse, conn)
+		_draw_wire_metro_path(pts, [src_t, tgt_tang_out], col, width, flowing, flow_watts, reverse, conn)
 	elif style == "orthogonal":
 		var pts: Array = [src_pos] + wps + [tgt_pos]
 		_draw_wire_orthogonal_path(
-			pts, [src_t, tgt_tang_in], col, width, flowing, flow_watts, reverse, conn)
+			pts, [src_t, tgt_tang_out], col, width, flowing, flow_watts, reverse, conn)
 	elif wps.is_empty():
-		_draw_wire_bezier(src_pos, src_t, tgt_pos, tgt_tang_in,
+		_draw_wire_bezier(src_pos, src_t, tgt_pos, tgt_tang_out,
 			col, width, flowing, flow_watts, reverse, curve_t)
 	else:
 		_draw_wire_path(
 			[src_pos] + wps + [tgt_pos],
-			[src_t, tgt_tang_in],
+			[src_t, tgt_tang_out],
 			col, width, flowing, flow_watts, reverse, curve_t)
 	if flowing and _zoom >= WIRE_LABEL_MIN_ZOOM:
 		_draw_flow_label(src_pos, tgt_pos, wps, flow_watts, false, "", col)
@@ -4327,16 +4365,16 @@ func _draw_radiant_wire_path(points: Array, end_tangents: Array,
 		var from: Vector2 = points[seg] as Vector2
 		var to: Vector2 = points[seg + 1] as Vector2
 		var from_t: Vector2
-		var to_t_in: Vector2
+		var to_t_out: Vector2
 		if seg == 0:
 			from_t = end_tangents[0] as Vector2 if end_tangents.size() > 0 else (to - from).normalized()
 		else:
 			from_t = (to - from).normalized()
 		if seg == points.size() - 2:
-			to_t_in = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
+			to_t_out = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
 		else:
-			to_t_in = (from - to).normalized()
-		_draw_radiant_wire_bezier(from, from_t, to, to_t_in, col, width, flow_active, curve_tension, flow_rate, res_kind)
+			to_t_out = (from - to).normalized()
+		_draw_radiant_wire_bezier(from, from_t, to, to_t_out, col, width, flow_active, curve_tension, flow_rate, res_kind)
 
 
 func _draw_resource_wire_path(points: Array, end_tangents: Array,
@@ -4349,16 +4387,16 @@ func _draw_resource_wire_path(points: Array, end_tangents: Array,
 		var from: Vector2 = points[seg] as Vector2
 		var to: Vector2 = points[seg + 1] as Vector2
 		var from_t: Vector2
-		var to_t_in: Vector2
+		var to_t_out: Vector2
 		if seg == 0:
 			from_t = end_tangents[0] as Vector2 if end_tangents.size() > 0 else (to - from).normalized()
 		else:
 			from_t = (to - from).normalized()
 		if seg == points.size() - 2:
-			to_t_in = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
+			to_t_out = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
 		else:
-			to_t_in = (from - to).normalized()
-		_draw_resource_wire_bezier(from, from_t, to, to_t_in, col, width, false,
+			to_t_out = (from - to).normalized()
+		_draw_resource_wire_bezier(from, from_t, to, to_t_out, col, width, false,
 				reverse_chase, curve_tension, flow_rate, resource_kind, sankey_scale)
 	if flow_active:
 		var sample_fn := func(t: float) -> Vector2:
@@ -4462,16 +4500,16 @@ func _draw_wire_path(points: Array, end_tangents: Array,
 		var from: Vector2 = points[seg] as Vector2
 		var to: Vector2 = points[seg + 1] as Vector2
 		var from_t: Vector2
-		var to_t_in: Vector2
+		var to_t_out: Vector2
 		if seg == 0:
 			from_t = end_tangents[0] as Vector2 if end_tangents.size() > 0 else (to - from).normalized()
 		else:
 			from_t = (to - from).normalized()
 		if seg == points.size() - 2:
-			to_t_in = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
+			to_t_out = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
 		else:
-			to_t_in = (from - to).normalized()
-		_draw_wire_bezier(from, from_t, to, to_t_in, col, width, false, flow_watts, reverse_chase, curve_tension)
+			to_t_out = (from - to).normalized()
+		_draw_wire_bezier(from, from_t, to, to_t_out, col, width, false, flow_watts, reverse_chase, curve_tension)
 	if flow_active:
 		_draw_bezier_path_chase(points, end_tangents, col, width, flow_watts, reverse_chase, curve_tension)
 
@@ -4771,9 +4809,9 @@ func _connection_polyline_graph(conn: Dictionary) -> PackedVector2Array:
 	for wp: Variant in wps:
 		pts.append(wp as Vector2)
 	pts.append(_screen_to_graph(tgt.get("pos", Vector2.ZERO) as Vector2))
-	var tgt_t_in := _incoming_tangent(tgt.get("tangent", Vector2.RIGHT) as Vector2)
+	var tgt_t_out := (tgt.get("tangent", Vector2.RIGHT) as Vector2)
 	return _build_orthogonal_polyline(
-		pts, [src.get("tangent", Vector2.RIGHT) as Vector2, tgt_t_in])
+		pts, [src.get("tangent", Vector2.RIGHT) as Vector2, tgt_t_out])
 
 
 func _connection_polyline_screen(conn: Dictionary, center: Vector2, apply_rounding: bool) -> PackedVector2Array:
@@ -4788,9 +4826,9 @@ func _connection_polyline_screen(conn: Dictionary, center: Vector2, apply_roundi
 		return PackedVector2Array()
 	var wps: Array = _waypoints_screen(conn, center)
 	var pts: Array = [src.get("pos", Vector2.ZERO)] + wps + [tgt.get("pos", Vector2.ZERO)]
-	var tgt_t_in := _incoming_tangent(tgt.get("tangent", Vector2.RIGHT) as Vector2)
+	var tgt_t_out := (tgt.get("tangent", Vector2.RIGHT) as Vector2)
 	var poly := _build_orthogonal_polyline(
-		pts, [src.get("tangent", Vector2.RIGHT) as Vector2, tgt_t_in])
+		pts, [src.get("tangent", Vector2.RIGHT) as Vector2, tgt_t_out])
 	if apply_rounding:
 		var r_px := float(conn.get("_draw_corner_px",
 				_conn_corner_radius_graph(conn) * _zoom))
@@ -4960,16 +4998,16 @@ func _sample_wire_path(points: Array, end_tangents: Array, t_global: float,
 	var from: Vector2 = points[seg] as Vector2
 	var to: Vector2 = points[seg + 1] as Vector2
 	var from_t: Vector2
-	var to_t_in: Vector2
+	var to_t_out: Vector2
 	if seg == 0:
 		from_t = end_tangents[0] as Vector2 if end_tangents.size() > 0 else (to - from).normalized()
 	else:
 		from_t = (to - from).normalized()
 	if seg == segs - 1:
-		to_t_in = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
+		to_t_out = end_tangents[1] as Vector2 if end_tangents.size() > 1 else _incoming_tangent((to - from).normalized())
 	else:
-		to_t_in = (from - to).normalized()
-	var ctrl := _wire_bezier_controls(from, from_t, to, to_t_in, curve_tension)
+		to_t_out = (from - to).normalized()
+	var ctrl := _wire_bezier_controls(from, from_t, to, to_t_out, curve_tension)
 	return from.bezier_interpolate(ctrl["c1"], ctrl["c2"], to, local_t)
 
 
@@ -5220,6 +5258,51 @@ func port_hover_text(item_id: String, handle_id: String, pol: String,
 
 
 ## Infers the outgoing tangent direction from a handle's fractional position.
+## Ambient "documentary" inputs: sunlight into a panel / grow bed, wind into a
+## turbine. The sim NEVER requires these wires — the resource is ambient across
+## the whole Sphere of Influence and reaches every receiver regardless (see
+## solar_pbi_selftest) — so an always-on dot is pure clutter competing with the
+## DC ports that DO carry the circuit. Hidden by default; revealed when the
+## node is selected (so the wire stays drawable) or already wired.
+static func is_ambient_doc_handle(itype: String, handle_id: String) -> bool:
+	match itype:
+		"panel", "plant":
+			return handle_id == "sunlight_in"
+		"wind":
+			return handle_id == "wind_in"
+	return false
+
+
+## One pass over the connections instead of a per-node wired scan (that would
+## be O(nodes x connections) every frame / every mouse move). Rebuilt at the
+## top of _draw() and of _port_at_screen, so it is never more than one frame
+## stale for either the visual or the hit-test path.
+func _refresh_ambient_wired_ports() -> void:
+	_ambient_wired_ports.clear()
+	if model == null:
+		return
+	for conn: Dictionary in model.connections:
+		if str(conn.get("polarity", "")) != "resource":
+			continue
+		var kind := ResourceKinds.normalize_kind(str(conn.get("resource_type", "")))
+		if kind != "sunlight" and kind != "wind":
+			continue
+		_ambient_wired_ports["%s|%s" % [
+			str(conn.get("source_item_id", "")), str(conn.get("source_handle_id", ""))]] = true
+		_ambient_wired_ports["%s|%s" % [
+			str(conn.get("target_item_id", "")), str(conn.get("target_handle_id", ""))]] = true
+
+
+## True when an ambient documentary port should be drawn AND grabbable. The two
+## must agree: an invisible-but-live port would silently steal the drag that was
+## meant to move the node.
+func _ambient_doc_handle_shown(item: Dictionary, handle_id: String) -> bool:
+	var iid := str(item.get("id", ""))
+	if iid == selected_item_id or selected_item_ids.has(iid):
+		return true
+	return _ambient_wired_ports.has("%s|%s" % [iid, handle_id])
+
+
 func _tangent_from_rx_ry(rx: float, ry: float) -> Vector2:
 	if rx <= 0.01:   return Vector2(-1.0,  0.0)  # left edge
 	if rx >= 0.99:   return Vector2( 1.0,  0.0)  # right edge
@@ -5267,7 +5350,7 @@ func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 
 		var from:  Vector2 = src["pos"]
 		var to:    Vector2 = tgt["pos"]
-		var tgt_t_in := _incoming_tangent(tgt.get("tangent", Vector2.RIGHT) as Vector2)
+		var tgt_t_out := (tgt.get("tangent", Vector2.RIGHT) as Vector2)
 		var wps: Array = _waypoints_screen(conn, center)
 		var style: String = _effective_line_style(conn)
 		var curve_t := _conn_curve_tension(conn)
@@ -5307,7 +5390,7 @@ func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 					break
 		elif wps.is_empty():
 			var ctrl := _wire_bezier_controls(
-				from, src.get("tangent", Vector2.RIGHT) as Vector2, to, tgt_t_in, curve_t)
+				from, src.get("tangent", Vector2.RIGHT) as Vector2, to, tgt_t_out, curve_t)
 			for i in range(17):
 				var t := float(i) / 16.0
 				if from.bezier_interpolate(ctrl["c1"], ctrl["c2"], to, t).distance_to(screen_pos) < PICK_DIST:
@@ -5317,7 +5400,7 @@ func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 			var pts: Array = [from] + wps + [to]
 			for i in range(33):
 				var t := float(i) / 32.0
-				if _sample_wire_path(pts, [src.get("tangent", Vector2.RIGHT), tgt_t_in], t, curve_t).distance_to(screen_pos) < PICK_DIST:
+				if _sample_wire_path(pts, [src.get("tangent", Vector2.RIGHT), tgt_t_out], t, curve_t).distance_to(screen_pos) < PICK_DIST:
 					hit = true
 					break
 		if hit:
@@ -5398,6 +5481,7 @@ func _draw() -> void:
 	if pm != null:
 		pm.begin("gv_draw")
 	_controller_reset_rects.clear()
+	_refresh_ambient_wired_ports()
 	_alert_seen_this_draw = false
 	# Destroy-FX camera shake. Purely visual — one canvas-item transform for the
 	# whole pass (including the V2 subclass's additions); hit-testing works off
@@ -7101,6 +7185,10 @@ func _draw_item_handles(item: Dictionary, tl: Vector2, sz: Vector2) -> void:
 
 	for h: Dictionary in handles:
 		var hid := h.get("id", "") as String
+		# Ambient sunlight/wind inputs are documentary — keep them out of the way
+		# unless wired or the node is selected (mirrored in the interactive set).
+		if is_ambient_doc_handle(itype, hid) and not _ambient_doc_handle_shown(item, hid):
+			continue
 		if filter_extras and not primary.has(hid) and not wired.has(hid):
 			if not (hid.begins_with("res_in_") or hid.begins_with("res_out_")):
 				continue
@@ -7149,12 +7237,50 @@ func _draw_port_dot(screen_pos: Vector2, polarity: String, resource_kind: String
 		r = maxf(r, 9.0)
 	var col := _wire_color_for_port(polarity, resource_kind)
 	var halo := 1.0 if view_mode == GraphSiteLayout.VIEW_ELEVATION else (3.5 if touch else 1.5)
+	var dc := is_dc_polarity(polarity)
 	draw_circle(screen_pos, r + halo, Color(col.r, col.g, col.b, 0.35))
-	draw_circle(screen_pos, r,       col)
-	draw_circle(screen_pos, r * 0.45, C_CANVAS_BG)
+	draw_circle(screen_pos, r, dc_port_fill(col, polarity) if dc else col)
+	# DC ports read as SOLID discs carrying a + / − glyph; every other port keeps
+	# the donut. Punching a background hole through a red and a near-black disc
+	# left two thin rings that were hard to tell apart at low zoom.
+	if not dc:
+		draw_circle(screen_pos, r * 0.45, C_CANVAS_BG)
 	draw_circle(screen_pos, r, Color(col.r * 1.15, col.g * 1.15, col.b * 1.15, 0.9), false)
+	if dc:
+		_draw_polarity_glyph(screen_pos, r, polarity)
 	if touch:
 		draw_circle(screen_pos, r + 6.0, Color(col.r, col.g, col.b, 0.12), false, 1.5)
+
+
+static func is_dc_polarity(polarity: String) -> bool:
+	return polarity == "positive" or polarity == "negative"
+
+
+## Disc fill for a DC port. DC− is authored near-black for the WIRE (correct on
+## a schematic), but as a filled dot on the dark canvas it vanished and read as
+## the same muddy circle as DC+; lift it just enough to separate from the
+## background while staying obviously "the black one".
+static func dc_port_fill(col: Color, polarity: String) -> Color:
+	if polarity == "negative":
+		return col.lightened(0.22)
+	return col
+
+
+## The + / − mark inside a DC port dot. Drawn as bars rather than glyphs from a
+## font so it stays crisp and centred at every zoom; skipped when the dot is too
+## small for the mark to read (Elevation chips).
+func _draw_polarity_glyph(center: Vector2, r: float, polarity: String) -> void:
+	if r < 4.5:
+		return
+	var fill := dc_port_fill(_wire_color_for_port(polarity), polarity)
+	# Contrast against the disc, not against the canvas.
+	var lum := fill.r * 0.299 + fill.g * 0.587 + fill.b * 0.114
+	var ink := Color(0.05, 0.06, 0.09, 0.96) if lum > 0.55 else Color(1.0, 1.0, 1.0, 0.94)
+	var arm := r * 0.52
+	var w := maxf(1.6, r * 0.26)
+	draw_line(center - Vector2(arm, 0.0), center + Vector2(arm, 0.0), ink, w)
+	if polarity == "positive":
+		draw_line(center - Vector2(0.0, arm), center + Vector2(0.0, arm), ink, w)
 
 
 ## Compact pad for elev ports when chips are hidden (true footprint, no 28px floor).
@@ -8599,13 +8725,13 @@ func _draw_wire_metro_path(pts: Array, tangents: Array, col: Color, width: float
 		# ports. src tangent points outward from the source port; tgt tangent is
 		# the incoming travel direction at the target port.
 		var src_t := Vector2(0.0, 1.0)
-		var tgt_t_in := Vector2(0.0, 1.0)
+		var tgt_t_out := Vector2(0.0, 1.0)
 		if tangents.size() > 0:
 			src_t = tangents[0] as Vector2
 		if tangents.size() > 1:
-			tgt_t_in = tangents[1] as Vector2
+			tgt_t_out = tangents[1] as Vector2
 		var src_horiz := absf(src_t.x) >= absf(src_t.y)
-		var tgt_horiz := absf(tgt_t_in.x) >= absf(tgt_t_in.y)
+		var tgt_horiz := absf(tgt_t_out.x) >= absf(tgt_t_out.y)
 		var mid_x := (src_p.x + tgt_p.x) * 0.5
 		var mid_y := (src_p.y + tgt_p.y) * 0.5
 		draw_pts.append(src_p)

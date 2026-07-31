@@ -868,10 +868,17 @@ func _draw_port_dot(screen_pos: Vector2, polarity: String, resource_kind: String
 		r = maxf(r, 10.5)
 	if hover_hit:
 		r *= 1.18
+	var dc := is_dc_polarity(polarity)
 	draw_circle(screen_pos, r + (6.0 if touch else 4.0), Color(col.r, col.g, col.b, 0.18))
 	draw_circle(screen_pos, r + 1.8, Color(col.r, col.g, col.b, 0.34))
-	draw_circle(screen_pos, r, col)
-	draw_circle(screen_pos, r * 0.56, Color(0.06, 0.09, 0.17, 0.95))
+	draw_circle(screen_pos, r, dc_port_fill(col, polarity) if dc else col)
+	# DC ports: solid disc + polarity glyph. The old 56%-radius background hole
+	# left only a thin rim of colour, so at wide zoom the red + and the near-
+	# black − were nearly the same dot. Other port kinds keep the donut.
+	if not dc:
+		draw_circle(screen_pos, r * 0.56, Color(0.06, 0.09, 0.17, 0.95))
 	draw_circle(screen_pos, r + 0.4, V2_PORT_RING, false, 1.0)
+	if dc:
+		_draw_polarity_glyph(screen_pos, r, polarity)
 	if touch:
 		draw_circle(screen_pos, r + 8.0, Color(col.r, col.g, col.b, 0.10), false, 2.0)
