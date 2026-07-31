@@ -31,6 +31,10 @@ const REASON_TANK_FULL := "tank_full"
 const REASON_OVERVOLTAGE := "overvoltage"
 const REASON_SHORT_CIRCUIT := "short_circuit"
 const REASON_BATTERY_OVERVOLTAGE := "battery_overvoltage"
+const REASON_REVERSE_POLARITY := "reverse_polarity"
+## Advisory only — the system runs, just badly (e.g. a bank paralleled where
+## series would double delivery). Never destroys anything.
+const REASON_SUBOPTIMAL_BANK := "suboptimal_bank"
 
 const C_RUNNING := Color(0.27, 0.90, 0.42)
 const C_ALERT := Color(0.92, 0.30, 0.28)
@@ -107,6 +111,8 @@ static func chip_text(state: String, reason: String = "", kinds: Array = []) -> 
 				return "Short circuit!"
 			if reason == REASON_BATTERY_OVERVOLTAGE:
 				return "Overcharged"
+			if reason == REASON_REVERSE_POLARITY:
+				return "Reversed!"
 			return "Fault"
 		OVERFLOW:
 			return "Overflow"

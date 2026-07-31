@@ -203,6 +203,11 @@ static func deliverable(model: GraphModel, flat: Array, analysis: Dictionary) ->
 		var bank := GraphDcElectrical.bank_for_controller(model, cid, flat, analysis)
 		if bank.is_empty():
 			continue
+		# Backwards PV leads deliver nothing, so a level's watt goal must not be
+		# satisfiable by a crossed pair (it used to be: the Voc math is a
+		# magnitude sum and both legs still resolved).
+		if GraphDcElectrical.controller_pv_reversed(model, cid, flat):
+			continue
 		var wmp := 0.0
 		for sid in PvElectrical.pv_sources_for_controller_flat(model, cid, flat):
 			var src := model.get_item(str(sid))

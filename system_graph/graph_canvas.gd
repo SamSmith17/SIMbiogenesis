@@ -4096,6 +4096,10 @@ func _render_connection(
 		base_col = ResourceKinds.wire_color(ResourceKinds.normalize_kind(rk))
 	if bool(conn.get("voltage_mismatch", false)):
 		base_col = Color(1.0, 0.15, 0.15, 0.95)
+	if bool(conn.get("reverse_polarity", false)):
+		# Backwards + to −: red, and never animated (it carries nothing).
+		base_col = Color(1.0, 0.20, 0.20, 0.95)
+		flow_active = false
 	if bool(conn.get("needs_pump", false)):
 		base_col = Color(1.0, 0.55, 0.12, 0.95)
 	if bool(conn.get("severed", false)):

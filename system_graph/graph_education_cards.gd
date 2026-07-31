@@ -209,6 +209,46 @@ static func card_for_fault(reason: String, params: Dictionary = {}) -> Dictionar
 						+ "between the panel and the battery.")
 						% [float(params.get("string_voc", 40.0)), float(params.get("safe_v", 14.6))],
 			}
+		GraphNodeState.REASON_REVERSE_POLARITY:
+			if str(params.get("kind", "pv")) == "battery":
+				return {
+					"title": "Battery wired backwards",
+					"body": ("You connected the battery's [color=#e05555]+[/color] to the "
+							+ "controller's [color=#55aaff]−[/color] (or the other way round). "
+							+ "Reversed, the controller's input sits across the pack with no "
+							+ "regulation at all — the surge runs until something gives, which "
+							+ "is why this is the one wiring mistake that kills hardware "
+							+ "instantly.\n\n"
+							+ "Real controllers fuse the battery lead and many will not survive "
+							+ "it either. Press RESET on the battery, then match the colours: "
+							+ "+ to +, − to −."),
+				}
+			return {
+				"title": "Panels wired backwards",
+				"body": ("The array's [color=#e05555]+[/color] is going into the controller's "
+						+ "[color=#55aaff]PV −[/color]. Nothing is damaged — a solar panel is a "
+						+ "current source and the controller simply refuses to see a reversed "
+						+ "string — but you are generating [b]nothing[/b].\n\n"
+						+ "Swap the two PV leads so + meets + and − meets −. Wires this way "
+						+ "round are drawn red until you fix them."),
+			}
+		GraphNodeState.REASON_SUBOPTIMAL_BANK:
+			return {
+				"title": "It works — but it's leaving power on the table",
+				"body": ("Your batteries are wired in [b]parallel[/b]: %d packs at "
+						+ "%.0f V, so the bank is still %.0f V. Storage doubled, but the "
+						+ "charge controller can only deliver bus volts × its current "
+						+ "rating — so you are capped at about [b]%.0f W[/b].\n\n"
+						+ "Wire them in [b]series[/b] instead (+ of one to − of the next) and "
+						+ "the same batteries make a %.0f V bank, roughly [b]%.0f W[/b] through "
+						+ "the same controller. Same hardware, double the power.")
+						% [int(params.get("parallel_count", 2)),
+							float(params.get("bus_v", 12.0)),
+							float(params.get("bus_v", 12.0)),
+							float(params.get("delivered_w", 360.0)),
+							float(params.get("series_v", 24.0)),
+							float(params.get("series_w", 720.0))],
+			}
 		GraphNodeState.REASON_OVERVOLTAGE:
 			return {
 				"title": "Controller destroyed",

@@ -363,6 +363,10 @@ var _checking_voltage: bool = false
 var _dc_analysis: Dictionary = {}
 var _dc_flat_conns: Array = []
 var _dc_throttle_acc: float = 0.0
+## Latches so the non-destructive advisories fire once per occurrence rather
+## than on every fault pass / throttle tick.
+var _pv_reverse_notified: bool = false
+var _bank_advice_notified: bool = false
 var _autosave_timer: Timer = null
 var _autosave_pending: bool = false
 ## Debounced persistence for the tutorial sandbox graph — separate from
@@ -12524,6 +12528,11 @@ func _tick_dc_throttle(delta: float) -> void:
 			model, str(it.get("id", "")), _dc_flat_conns)
 		if sources.is_empty():
 			continue
+		# A backwards PV pair presents no usable voltage — the array delivers
+		# nothing until the leads are swapped.
+		if GraphDcElectrical.controller_pv_reversed(
+				model, str(it.get("id", "")), _dc_flat_conns):
+			continue
 		var wmp := 0.0
 		for sid in sources:
 			wmp += _pv_item_wmp(model.get_item(str(sid)))
@@ -12563,11 +12572,49 @@ func _tick_dc_throttle(delta: float) -> void:
 	_history_suppress = was_suppress
 	_sim_bulk_update = was_bulk
 	_publish_live_circuits(entries)
+	_check_bank_advice(entries)
 	# PV wattage not routed through any eligible controller passes uncapped —
 	# freeplay arrays mirrored via the virtual chain keep working untouched.
 	var unrouted_w: float = raw_kw * 1000.0 * maxf(1.0 - routed_wmp / total_wmp, 0.0)
 	if is_instance_valid(_solar_ui) and _solar_ui.has_method("set_graph_dc_limit_w"):
 		_solar_ui.call("set_graph_dc_limit_w", delivered_total_w + unrouted_w)
+
+
+## Non-destructive coaching: a bank paralleled where series would move twice
+## the power still WORKS, so it never faults — but nothing in the sim told the
+## player they were leaving half their array unused. Fires once per occurrence
+## and only when series would genuinely help (the controller is clipping, and
+## there is more array than the current bus can take).
+func _check_bank_advice(entries: Array) -> void:
+	var advise: Dictionary = {}
+	for e in entries:
+		var ed: Dictionary = e
+		var bank: Dictionary = ed.get("bank", {}) as Dictionary
+		var it: Dictionary = ed.get("item", {}) as Dictionary
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		if int(bank.get("parallel_count", 1)) < 2 or int(bank.get("series_count", 1)) > 1:
+			continue
+		if not bool(sp.get("dc_clipped", false)):
+			continue  # not the bottleneck — nothing to gain
+		var bus_v := float(bank.get("bus_voltage", 12.0))
+		var amps := float(sp.get("max_charge_amps", 0.0))
+		var n := int(bank.get("parallel_count", 2))
+		advise = {
+			"parallel_count": n,
+			"bus_v": bus_v,
+			"delivered_w": bus_v * amps,
+			"series_v": bus_v * float(n),
+			"series_w": bus_v * float(n) * amps,
+		}
+		break
+	if advise.is_empty():
+		_bank_advice_notified = false
+		return
+	if _bank_advice_notified:
+		return
+	_bank_advice_notified = true
+	_show_toast("⚠ Batteries in parallel — series would nearly double your charging", 4.5)
+	_show_fault_card(GraphNodeState.REASON_SUBOPTIMAL_BANK, advise)
 
 
 ## Tell the canvas which controllers sit on a COMPLETE circuit (both PV legs
@@ -14151,6 +14198,42 @@ func _panel_selection_ids() -> Array[String]:
 	return out
 
 
+## Flag reversed wires and punish them by kind. Flags ride on the connection
+## itself (precedent: `voltage_mismatch`) so drawing and hit-testing need no
+## extra traversal, and are cleared when the player fixes the wiring.
+func _apply_reverse_polarity() -> void:
+	var reversed := GraphDcElectrical.find_reverse_polarity(model, _dc_flat_conns)
+	var flagged: Dictionary = {}
+	var pv_case: Dictionary = {}
+	for r in reversed:
+		var rd: Dictionary = r
+		flagged[str(rd.get("conn_id", ""))] = true
+		if str(rd.get("kind", "")) == "battery":
+			_destroy_battery(str(rd.get("other_id", "")),
+				GraphNodeState.REASON_REVERSE_POLARITY,
+				"Reversed polarity — + wired to −",
+				{"kind": "battery"})
+		elif pv_case.is_empty():
+			pv_case = rd
+	# Sync the flag on every DC wire (set AND clear) so fixing the wiring
+	# clears the red without needing a reset.
+	for conn: Dictionary in model.connections:
+		var cid := str(conn.get("id", ""))
+		var want := flagged.has(cid)
+		if bool(conn.get("reverse_polarity", false)) != want:
+			model.update_connection(cid, {"reverse_polarity": want})
+	# One advisory per fresh PV reversal — non-destructive, so a toast + card
+	# rather than a blast. Latched so it doesn't re-fire every fault pass.
+	if pv_case.is_empty():
+		_pv_reverse_notified = false
+	elif not _pv_reverse_notified:
+		_pv_reverse_notified = true
+		_show_toast("⚠ Panels are wired backwards — the array is delivering nothing", 4.0)
+		_show_fault_card(GraphNodeState.REASON_REVERSE_POLARITY, {"kind": "pv"})
+		electrical_fault_observed.emit(GraphNodeState.REASON_REVERSE_POLARITY,
+			str(pv_case.get("controller_id", "")))
+
+
 func _any_controller_destroyed() -> bool:
 	if model == null:
 		return false
@@ -14184,6 +14267,11 @@ func _check_electrical_faults() -> void:
 	# DC-side topology (battery banks, shorts) — cached for _tick_dc_throttle.
 	_dc_flat_conns = GraphNesting.flat_connections(model)
 	_dc_analysis = GraphDcElectrical.analyze(model, _dc_flat_conns)
+	# 0) Reverse polarity. Checked BEFORE the destructive families so a crossed
+	# battery lead is reported as what it is rather than as a downstream
+	# symptom. PV reversal is non-destructive (a panel is a current source and
+	# simply delivers nothing); a reversed battery lead kills the pack.
+	_apply_reverse_polarity()
 	# 1) Battery short circuits: burn the loop's wires, destroy the battery.
 	for s in _dc_analysis.get("shorts", []) as Array:
 		if not (s is Dictionary):

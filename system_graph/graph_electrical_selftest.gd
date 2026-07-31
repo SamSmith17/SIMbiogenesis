@@ -25,11 +25,12 @@ func _initialize() -> void:
 	fails += _test_battery_overvoltage()
 	fails += _test_controller_clip_values()
 	fails += _test_battery_chemistry()
+	fails += _test_reverse_polarity()
 	fails += _test_open_circuit_needs_return_leg()
 	fails += _test_destroy_fx_envelope()
 	fails += _test_fault_card_placement()
 	if fails == 0:
-		print("GRAPH ELECTRICAL SELFTEST PASS  (20 checks)")
+		print("GRAPH ELECTRICAL SELFTEST PASS  (21 checks)")
 	else:
 		print("GRAPH ELECTRICAL SELFTEST FAIL  (%d failed)" % fails)
 	quit()
@@ -640,6 +641,94 @@ func _test_controller_ranking() -> int:
 	var max_voc := float((rec.get("specs", {}) as Dictionary).get("max_voc", 0.0))
 	if max_voc < 144.0:
 		push_error("recommended preset max_voc too low: %f" % max_voc)
+		return 1
+	return 0
+
+
+## Reverse polarity is judged ONLY on controller↔device links. Series strings
+## (+ to − between two panels, or two batteries) are legitimate wiring and must
+## never be flagged — a blanket "+ must meet +" rule would break them, and
+## graph_seed_selftest asserts they stay connectable.
+func _test_reverse_polarity() -> int:
+	# Correctly wired reference system: nothing flagged.
+	var ok: GraphModel = GraphModelScript.new()
+	_add_battery(ok, "bat", 12.0, 1.2)
+	_add_panel(ok, "p1", 40.0)
+	_add_controller(ok, "ctrl", 150.0)
+	_dc_wire(ok, "p1", "positive", "ctrl", "pvPositive")
+	_dc_wire(ok, "p1", "negative", "ctrl", "pvNegative")
+	_dc_wire(ok, "ctrl", "batteryPositive", "bat", "positive")
+	_dc_wire(ok, "ctrl", "batteryNegative", "bat", "negative")
+	var flat_ok := GraphNesting.flat_connections(ok)
+	if not GraphDcElectrical.find_reverse_polarity(ok, flat_ok).is_empty():
+		push_error("correctly wired system must not report reverse polarity")
+		return 1
+	if GraphDcElectrical.controller_pv_reversed(ok, "ctrl", flat_ok):
+		push_error("correctly wired PV must not read as reversed")
+		return 1
+
+	# Crossed PV pair: flagged as a non-destructive "pv" reversal.
+	var pv: GraphModel = GraphModelScript.new()
+	_add_battery(pv, "bat", 12.0, 1.2)
+	_add_panel(pv, "p1", 40.0)
+	_add_controller(pv, "ctrl", 150.0)
+	_dc_wire(pv, "p1", "positive", "ctrl", "pvNegative")
+	_dc_wire(pv, "p1", "negative", "ctrl", "pvPositive")
+	_dc_wire(pv, "ctrl", "batteryPositive", "bat", "positive")
+	_dc_wire(pv, "ctrl", "batteryNegative", "bat", "negative")
+	var flat_pv := GraphNesting.flat_connections(pv)
+	var rev_pv := GraphDcElectrical.find_reverse_polarity(pv, flat_pv)
+	if rev_pv.size() != 2:
+		push_error("crossed PV pair should flag both wires, got %d" % rev_pv.size())
+		return 1
+	for r in rev_pv:
+		if str((r as Dictionary).get("kind", "")) != "pv":
+			push_error("PV reversal should be kind 'pv', got %s" % str(r))
+			return 1
+	if not GraphDcElectrical.controller_pv_reversed(pv, "ctrl", flat_pv):
+		push_error("controller_pv_reversed should see the crossed pair")
+		return 1
+	# ...and the tutorial's watt goal must therefore be unsatisfiable.
+	var deliv := TutorialGoals.deliverable(pv, flat_pv,
+		GraphDcElectrical.analyze(pv, flat_pv))
+	if float(deliv.get("deliverable_w", -1.0)) != 0.0:
+		push_error("a reversed array must deliver 0 W, got %s" % str(deliv))
+		return 1
+
+	# Crossed battery lead: flagged as the destructive "battery" kind. This is
+	# the case the union-find was blind to (controller-side wires never entered
+	# it, and either leg resolved to the same bank root).
+	var bt: GraphModel = GraphModelScript.new()
+	_add_battery(bt, "bat", 12.0, 1.2)
+	_add_panel(bt, "p1", 40.0)
+	_add_controller(bt, "ctrl", 150.0)
+	_dc_wire(bt, "p1", "positive", "ctrl", "pvPositive")
+	_dc_wire(bt, "p1", "negative", "ctrl", "pvNegative")
+	_dc_wire(bt, "ctrl", "batteryPositive", "bat", "negative")
+	_dc_wire(bt, "ctrl", "batteryNegative", "bat", "positive")
+	var rev_bt := GraphDcElectrical.find_reverse_polarity(bt, GraphNesting.flat_connections(bt))
+	if rev_bt.size() != 2:
+		push_error("crossed battery leads should flag both wires, got %d" % rev_bt.size())
+		return 1
+	for r2 in rev_bt:
+		if str((r2 as Dictionary).get("kind", "")) != "battery":
+			push_error("battery reversal should be kind 'battery', got %s" % str(r2))
+			return 1
+		if str((r2 as Dictionary).get("other_id", "")) != "bat":
+			push_error("battery reversal should name the battery")
+			return 1
+
+	# Series chaining stays legal: panel + → panel −, battery + → battery −.
+	var ser: GraphModel = GraphModelScript.new()
+	_add_panel(ser, "a", 40.0)
+	_add_panel(ser, "b", 40.0)
+	_add_battery(ser, "b1", 12.0, 1.2)
+	_add_battery(ser, "b2", 12.0, 1.2)
+	_dc_wire(ser, "a", "positive", "b", "negative")
+	_dc_wire(ser, "b1", "positive", "b2", "negative")
+	if not GraphDcElectrical.find_reverse_polarity(
+			ser, GraphNesting.flat_connections(ser)).is_empty():
+		push_error("series strings must never be flagged as reversed")
 		return 1
 	return 0
 

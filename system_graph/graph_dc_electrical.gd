@@ -316,6 +316,88 @@ static func _leg_roots(model: GraphModel, item_id: String, flat_conns: Array,
 	return out
 
 
+## Item types whose +/− terminals carry a fixed, meaningful polarity role, so a
+## crossed wire to a controller is unambiguously backwards. Junctions
+## (breaker/combiner) are excluded: their handles are all declared "positive",
+## so nothing can be inferred from them.
+static func _has_polarity_role(item: Dictionary) -> bool:
+	if item.is_empty() or bool(item.get("is_virtual", false)):
+		return false
+	var ty := str(item.get("type", ""))
+	return ty in ["panel", "wind", "hydro", "battery", "smartbattery"] \
+			or PvElectrical.is_pv_source_item(item)
+
+
+## Wires that connect a controller terminal to a device terminal of the OPPOSITE
+## polarity — panel + into the controller's PV −, or a battery + into the
+## controller's battery −.
+##
+## Deliberately narrow: only controller↔device links are judged. Panel + to
+## panel − is a legitimate series string, and battery + to battery − is a
+## legitimate series bank, so a blanket "+ must meet +" rule would be wrong (and
+## graph_seed_selftest asserts those stay connectable). The connect-time check
+## in _polarity_compatible is likewise left alone — the wire is allowed to
+## exist, it just doesn't work, which is what makes it teachable.
+##
+## Returns [{conn_id, controller_id, other_id, kind: "pv"|"battery",
+##           ctrl_terminal, device_terminal}].
+static func find_reverse_polarity(model: GraphModel, flat_conns: Array) -> Array:
+	var out: Array = []
+	if model == null:
+		return out
+	for conn in flat_conns:
+		if not (conn is Dictionary) or not _is_dc_conn(conn as Dictionary):
+			continue
+		var c: Dictionary = conn
+		var sid := str(c.get("source_item_id", ""))
+		var tid := str(c.get("target_item_id", ""))
+		var s_item := model.get_item(sid)
+		var t_item := model.get_item(tid)
+		if s_item.is_empty() or t_item.is_empty():
+			continue
+		# Exactly one end must be a (real) controller.
+		var s_ctrl := str(s_item.get("type", "")) == "controller" \
+				and not bool(s_item.get("is_virtual", false))
+		var t_ctrl := str(t_item.get("type", "")) == "controller" \
+				and not bool(t_item.get("is_virtual", false))
+		if s_ctrl == t_ctrl:
+			continue
+		var ctrl_id := sid if s_ctrl else tid
+		var dev_id := tid if s_ctrl else sid
+		var ctrl_handle := str(c.get("source_handle_id", "")) if s_ctrl \
+				else str(c.get("target_handle_id", ""))
+		var dev_handle := str(c.get("target_handle_id", "")) if s_ctrl \
+				else str(c.get("source_handle_id", ""))
+		if not _has_polarity_role(model.get_item(dev_id)):
+			continue
+		var ctrl_pol := PvElectrical._terminal_polarity(ctrl_handle)
+		var dev_pol := PvElectrical._terminal_polarity(dev_handle)
+		if ctrl_pol.is_empty() or dev_pol.is_empty() or ctrl_pol == dev_pol:
+			continue
+		var kind := "battery" if ctrl_handle.begins_with("battery") else "pv"
+		out.append({
+			"conn_id": str(c.get("id", "")),
+			"controller_id": ctrl_id,
+			"other_id": dev_id,
+			"kind": kind,
+			"ctrl_terminal": ctrl_handle,
+			"device_terminal": dev_handle,
+		})
+	return out
+
+
+## True when any PV wire into this controller is backwards. Such an array
+## presents no usable voltage, so callers must treat its delivery as zero
+## rather than letting a crossed pair read as a working string.
+static func controller_pv_reversed(model: GraphModel, controller_id: String,
+		flat_conns: Array) -> bool:
+	for r in find_reverse_polarity(model, flat_conns):
+		var rd: Dictionary = r
+		if str(rd.get("controller_id", "")) == controller_id and str(rd.get("kind", "")) == "pv":
+			return true
+	return false
+
+
 ## The bank a controller's battery-side terminals land on, or {} when none.
 ##
 ## BOTH terminals must land on the same bank. A single wire is an open circuit:
