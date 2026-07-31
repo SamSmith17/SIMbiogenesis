@@ -28,9 +28,10 @@ func _initialize() -> void:
 	fails += _test_goal_ac_load_wired()
 	fails += _test_goal_compound_containing()
 	fails += _test_run_verdict()
+	fails += _test_unlock_labels()
 	_cleanup()
 	if fails == 0:
-		print("TUTORIAL SELFTEST PASS  (16 checks)")
+		print("TUTORIAL SELFTEST PASS  (17 checks)")
 		quit(0)
 	else:
 		print("TUTORIAL SELFTEST FAIL  (%d failed)" % fails)
@@ -465,6 +466,46 @@ func _test_run_verdict() -> int:
 	if not bool(no_bar.get("met", false)):
 		push_error("run_clean with no bar should pass any completed run")
 		return 1
+	return 0
+
+
+## Unlocks are granted by a silent static write, so the only thing telling the
+## player what they earned is this label resolution. Every grant entry in the
+## whole catalog must produce a non-empty, human-readable name.
+func _test_unlock_labels() -> int:
+	var TutorialDirectorScript := load("res://gameplay/tutorial_director.gd") as GDScript
+	if TutorialDirectorScript == null:
+		push_error("could not load tutorial_director.gd")
+		return 1
+	var got: Array = TutorialDirectorScript.unlock_labels(
+		["cat:controllers", "preset:Trainer 300W", "unlock_all"])
+	if got.size() != 3:
+		push_error("expected 3 labels, got %s" % str(got))
+		return 1
+	if str(got[0]) == "controllers":
+		push_error("category should resolve to its display label, not its id")
+		return 1
+	if str(got[1]) != "Trainer 300W":
+		push_error("preset should resolve to its label, got %s" % str(got[1]))
+		return 1
+	for lbl in got:
+		if str(lbl).strip_edges().is_empty():
+			push_error("unlock produced an empty label")
+			return 1
+	# Every unlock the shipped catalog can hand out must name something.
+	for lvl_v in TutorialCatalog.all_levels():
+		var lvl: TutorialLevelDef = lvl_v
+		if lvl.unlocks.is_empty():
+			continue
+		var labels: Array = TutorialDirectorScript.unlock_labels(lvl.unlocks)
+		if labels.size() != lvl.unlocks.size():
+			push_error("%s: %d unlocks produced %d labels" % [
+				lvl.id, lvl.unlocks.size(), labels.size()])
+			return 1
+		for lbl2 in labels:
+			if str(lbl2).strip_edges().is_empty():
+				push_error("%s: produced an empty unlock label" % lvl.id)
+				return 1
 	return 0
 
 

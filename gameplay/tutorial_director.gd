@@ -336,12 +336,69 @@ func _complete_level(stats: Dictionary = {}) -> void:
 	if next_def != null:
 		actions.append({"label": "Next level", "callback": Callable(self, "_on_next_level")})
 	actions.append({"label": "Exit bootcamp", "callback": Callable(self, "exit_tutorial")})
+	# Name what was earned. ProgressStore.grant() is a silent static write, so
+	# without this the player is told "level complete" and never learns which
+	# components just appeared in their Library.
+	var earned := unlock_labels(_level.unlocks)
+	var body := _level.debrief_bbcode
+	if not earned.is_empty():
+		body += "\n\n[color=#26e577]★ Unlocked:[/color] [b]%s[/b]" % "  ·  ".join(earned)
+	_celebrate_unlocks(earned)
 	_gv.call("show_tutorial_card", {
 		"title": "✓ Level %d complete" % _level.index,
 		"title_color": UITheme.C_GREEN,
-		"body": _level.debrief_bbcode,
+		"body": body,
 		"actions": actions,
 	})
+
+
+## Human-readable names for "cat:<id>" / "preset:<label>" / "unlock_all" grant
+## entries, so the reward can be shown rather than silently applied.
+static func unlock_labels(unlocks: Array) -> Array:
+	var out: Array = []
+	for raw in unlocks:
+		var s := str(raw)
+		if s == "unlock_all":
+			out.append("the full component library")
+		elif s.begins_with("preset:"):
+			out.append(s.trim_prefix("preset:"))
+		elif s.begins_with("cat:"):
+			var cid := s.trim_prefix("cat:")
+			var label := cid.capitalize()
+			for cat in ComponentPresets.CATEGORIES:
+				if str((cat as Dictionary).get("id", "")) == cid:
+					label = str((cat as Dictionary).get("label", label))
+					break
+			out.append(label)
+	return out
+
+
+## Fanfare + a chip per unlock. Chips ride the existing "+N UP" celebration
+## path in ToastUI (already used when a fabricated part lands), so unlocks look
+## like the game's other rewards rather than a bespoke popup.
+func _celebrate_unlocks(earned: Array) -> void:
+	var m := _main_node()
+	var sfx := m.get_node_or_null("/root/UiSound") if m != null else null
+	if earned.is_empty():
+		if sfx != null:
+			sfx.call("play_ui", UiSfx.SUCCESS)
+		return
+	if sfx != null:
+		sfx.call("play_ui", UiSfx.FANFARE)
+	if m == null or not m.has_method("show_part_up"):
+		return
+	# Stagger so several unlocks read as a run of rewards, not one clump.
+	var delay := 0.0
+	for label in earned:
+		var txt := str(label)
+		if delay <= 0.0:
+			m.call("show_part_up", txt, 1)
+		else:
+			var t := get_tree().create_timer(delay)
+			t.timeout.connect(func() -> void:
+				if is_instance_valid(m):
+					m.call("show_part_up", txt, 1), CONNECT_ONE_SHOT)
+		delay += 0.45
 
 
 func _on_next_level() -> void:
