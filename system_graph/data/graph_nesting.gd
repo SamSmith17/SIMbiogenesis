@@ -188,6 +188,95 @@ static func reconcile_exposed_ports(model: GraphModel, compound_id: String) -> b
 	return true
 
 
+## Faces a promoted port can be pinned to. Stored per port on its
+## exposed_ports entry ("face"); absent = the classic top-to-bottom flow
+## (inputs top, outputs bottom).
+const PORT_FACES: Array[String] = ["top", "bottom", "left", "right"]
+
+
+static func default_face_for_direction(direction: String) -> String:
+	return "bottom" if direction == "out" else "top"
+
+
+static func face_for_port(ep: Dictionary) -> String:
+	var f := str(ep.get("face", ""))
+	if f in PORT_FACES:
+		return f
+	return default_face_for_direction(str(ep.get("direction", "in")))
+
+
+## Recompute every exposed handle's rx/ry from its port's face, spreading the
+## ports sharing a face evenly along that edge (same 0.08–0.92 margins the
+## group-time distribution uses). Returns a NEW handles array; the caller
+## writes it back via model.update_item. Handles without a matching
+## exposed_ports entry (legacy/static) are left where they are.
+static func layout_exposed_handles(item: Dictionary) -> Array:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var eps: Array = specs.get("exposed_ports", []) as Array
+	var face_of: Dictionary = {}
+	for ep_v in eps:
+		var ep := ep_v as Dictionary
+		face_of[str(ep.get("handle_id", ""))] = face_for_port(ep)
+	var handles: Array = (item.get("handles", []) as Array).duplicate(true)
+	# Group by face, preserving handle order so ports don't shuffle on relayout.
+	var groups: Dictionary = {}
+	for h_v in handles:
+		var h := h_v as Dictionary
+		var hid := str(h.get("id", ""))
+		if not face_of.has(hid):
+			continue
+		var face := str(face_of[hid])
+		if not groups.has(face):
+			groups[face] = []
+		(groups[face] as Array).append(h)
+	for face in groups:
+		var arr: Array = groups[face]
+		var n := arr.size()
+		for i in n:
+			var h2 := arr[i] as Dictionary
+			var t := clampf(float(i + 1) / float(n + 1), 0.08, 0.92)
+			match str(face):
+				"top":
+					h2["rx"] = t
+					h2["ry"] = 0.0
+				"bottom":
+					h2["rx"] = t
+					h2["ry"] = 1.0
+				"left":
+					h2["rx"] = 0.0
+					h2["ry"] = t
+				"right":
+					h2["rx"] = 1.0
+					h2["ry"] = t
+	return handles
+
+
+## Pin one promoted port to a face and relayout the compound's handles.
+static func set_exposed_port_face(model: GraphModel, compound_id: String,
+		handle_id: String, face: String) -> void:
+	if model == null or face not in PORT_FACES:
+		return
+	var item := model.get_item(compound_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var eps: Array = (specs.get("exposed_ports", []) as Array).duplicate(true)
+	var found := false
+	for ep_v in eps:
+		var ep := ep_v as Dictionary
+		if str(ep.get("handle_id", "")) == handle_id:
+			ep["face"] = face
+			found = true
+			break
+	if not found:
+		return
+	specs["exposed_ports"] = eps
+	var patched := item.duplicate(true)
+	patched["specs"] = specs
+	model.update_item(compound_id, {"specs": specs,
+		"handles": layout_exposed_handles(patched)})
+
+
 static func _recount_ports(specs: Dictionary, handles: Array) -> void:
 	var in_n := 0
 	var out_n := 0

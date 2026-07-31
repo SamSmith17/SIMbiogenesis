@@ -22,11 +22,65 @@ func _initialize() -> void:
 	fails += _test_reconcile_on_child_delete()
 	fails += _test_pv_fault_across_boundary()
 	fails += _test_flat_mass_path()
+	fails += _test_port_face_layout()
 	if fails == 0:
 		print("GRAPH NESTING SELFTEST PASS  (%d checks)" % _checks)
 	else:
 		print("GRAPH NESTING SELFTEST FAIL  (%d of %d checks failed)" % [fails, _checks])
 	quit()
+
+
+## Promoted-port faces: default flow is inputs-top / outputs-bottom; pinning a
+## port to a side edge moves its handle there, same-face ports spread evenly,
+## and unknown faces are refused. Pure layout math over one synthetic compound.
+func _test_port_face_layout() -> int:
+	var fails := 0
+	var comp := {
+		"id": "box", "type": "compound", "specs": {"exposed_ports": [
+			{"handle_id": "in_ac_1", "direction": "in"},
+			{"handle_id": "in_ac_2", "direction": "in"},
+			{"handle_id": "out_dc_1", "direction": "out"},
+			{"handle_id": "out_dc_2", "direction": "out", "face": "right"},
+		]},
+		"handles": [
+			{"id": "in_ac_1", "direction": "in", "rx": 0.5, "ry": 0.0},
+			{"id": "in_ac_2", "direction": "in", "rx": 0.5, "ry": 0.0},
+			{"id": "out_dc_1", "direction": "out", "rx": 0.5, "ry": 1.0},
+			{"id": "out_dc_2", "direction": "out", "rx": 0.5, "ry": 1.0},
+			{"id": "legacy_static", "rx": 0.13, "ry": 0.37},
+		],
+	}
+	var out := GraphNesting.layout_exposed_handles(comp)
+	var by_id: Dictionary = {}
+	for h_v in out:
+		by_id[str((h_v as Dictionary).get("id", ""))] = h_v
+	# Two inputs share the top edge, spread evenly.
+	var a: Dictionary = by_id["in_ac_1"]
+	var b: Dictionary = by_id["in_ac_2"]
+	fails += _check(absf(float(a.get("ry", -1.0))) < 0.001
+		and absf(float(b.get("ry", -1.0))) < 0.001, "inputs stay on the top edge")
+	fails += _check(absf(float(a.get("rx", 0.0)) - 1.0 / 3.0) < 0.01
+		and absf(float(b.get("rx", 0.0)) - 2.0 / 3.0) < 0.01,
+		"same-face ports spread evenly along the edge")
+	# out_dc_2 was pinned to the RIGHT face; out_dc_1 stays bottom (alone → centered).
+	var p: Dictionary = by_id["out_dc_2"]
+	fails += _check(absf(float(p.get("rx", 0.0)) - 1.0) < 0.001
+		and absf(float(p.get("ry", 0.0)) - 0.5) < 0.01, "pinned port sits on the right edge")
+	var q: Dictionary = by_id["out_dc_1"]
+	fails += _check(absf(float(q.get("ry", 0.0)) - 1.0) < 0.001
+		and absf(float(q.get("rx", 0.0)) - 0.5) < 0.01,
+		"remaining bottom port re-centers alone")
+	# Handles with no exposed_ports entry are untouched.
+	var lg: Dictionary = by_id["legacy_static"]
+	fails += _check(absf(float(lg.get("rx", 0.0)) - 0.13) < 0.001
+		and absf(float(lg.get("ry", 0.0)) - 0.37) < 0.001,
+		"legacy/static handles are left where they are")
+	# Face default derives from direction; garbage faces fall back the same way.
+	fails += _check(GraphNesting.face_for_port({"direction": "out"}) == "bottom"
+		and GraphNesting.face_for_port({"direction": "in"}) == "top"
+		and GraphNesting.face_for_port({"direction": "out", "face": "diagonal"}) == "bottom",
+		"face defaults follow direction and reject unknown faces")
+	return fails
 
 
 func _check(cond: bool, label: String) -> int:

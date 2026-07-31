@@ -5153,9 +5153,12 @@ func _build_compound_section(item: Dictionary) -> void:
 		_readonly_field("Combined draw", "%.0f W" % float(specs.get("avg_watts", 0.0)))
 		_readonly_field("Rated max", "%.0f W" % float(specs.get("max_watts", 0.0)))
 		_readonly_field("Summary", str(specs.get("summary", "")))
-	# Promoted ports (the super-node's external interface) with live net flow.
+	# Promoted ports (the super-node's external interface) with live net flow,
+	# then the full sub-port toggle list (shown even when nothing is promoted
+	# yet — that empty state is exactly when you need the toggles).
 	if kind == "":
 		_build_exposed_ports_editor(item)
+		_build_subport_toggle_list(item)
 	var def_id := str(specs.get("definition_id", ""))
 	var is_component := not def_id.is_empty()
 	var has_identity := is_component \
@@ -5427,6 +5430,7 @@ func _expose_child_port(compound_id: String, child_id: String, handle: Dictionar
 		"kind": str(handle.get("resource_kind", "")),
 		"label": "",
 		"direction": direction,
+		"face": GraphNesting.default_face_for_direction(direction),
 	})
 	specs["exposed_ports"] = eps
 	var handles: Array = (comp.get("handles", []) as Array).duplicate(true)
@@ -5443,7 +5447,13 @@ func _expose_child_port(compound_id: String, child_id: String, handle: Dictionar
 			in_n += 1
 	specs["port_in_count"] = in_n
 	specs["port_out_count"] = out_n
-	_model.update_item(compound_id, {"specs": specs, "handles": handles})
+	# Face-aware distribution so the new port and its edge-mates spread evenly
+	# (and any user-pinned faces on siblings are respected).
+	var patched := comp.duplicate(true)
+	patched["specs"] = specs
+	patched["handles"] = handles
+	_model.update_item(compound_id, {"specs": specs,
+		"handles": GraphNesting.layout_exposed_handles(patched)})
 	_model.changed.emit("reset")
 
 
@@ -5480,6 +5490,19 @@ func _build_exposed_ports_editor(item: Dictionary) -> void:
 			flbl.text = "%.1f" % flow
 			flbl.add_theme_color_override("font_color", C_PRIMARY)
 			hbox.add_child(flbl)
+		# Face selector: pin this port to an edge of the collapsed node. The
+		# default top-in/bottom-out flow stays until the user chooses; same-face
+		# ports auto-distribute along that edge (GraphNesting.layout_exposed_handles).
+		var face_opt := OptionButton.new()
+		face_opt.focus_mode = Control.FOCUS_NONE
+		for f in GraphNesting.PORT_FACES:
+			face_opt.add_item(str(f).capitalize())
+		face_opt.selected = GraphNesting.PORT_FACES.find(GraphNesting.face_for_port(ep))
+		face_opt.item_selected.connect(func(idx: int):
+			GraphNesting.set_exposed_port_face(_model, compound_id, hid,
+				str(GraphNesting.PORT_FACES[idx]))
+			_model.changed.emit("reset"))
+		hbox.add_child(face_opt)
 		var rm := Button.new()
 		rm.text = "✕"
 		rm.focus_mode = Control.FOCUS_NONE
@@ -5489,6 +5512,58 @@ func _build_exposed_ports_editor(item: Dictionary) -> void:
 			_remove_exposed_port(compound_id, hid))
 		hbox.add_child(rm)
 		_form_vbox.add_child(row)
+
+
+## Every sub-port of the super-node's children in one list, each with a
+## promote/demote toggle — so reconfiguring the boundary no longer requires
+## drilling into the scope and selecting each child in turn. Demoting a wired
+## port drops its boundary wire (same behaviour as the ✕ on the promoted row).
+func _build_subport_toggle_list(item: Dictionary) -> void:
+	if _model == null:
+		return
+	var compound_id := str(item.get("id", ""))
+	var child_scope := str(item.get("child_scope_id", ""))
+	if child_scope.is_empty():
+		return
+	var eps: Array = (item.get("specs", {}) as Dictionary).get("exposed_ports", []) as Array
+	var promoted_of: Dictionary = {}   # "child|handle" → promoted handle_id
+	for ep_v in eps:
+		var ep := ep_v as Dictionary
+		promoted_of["%s|%s" % [str(ep.get("child_item_id", "")),
+			str(ep.get("child_handle_id", ""))]] = str(ep.get("handle_id", ""))
+	_section("Sub-ports")
+	for child_v in _model.get_items_in_scope(child_scope):
+		var child := child_v as Dictionary
+		var cid := str(child.get("id", ""))
+		var handles: Array = child.get("handles", []) as Array
+		if handles.is_empty():
+			continue
+		var name_lbl := Label.new()
+		name_lbl.text = str((child.get("specs", {}) as Dictionary).get("name",
+			child.get("type", "node")))
+		name_lbl.add_theme_font_size_override("font_size", 10)
+		name_lbl.add_theme_color_override("font_color", C_TEXT_M)
+		_form_vbox.add_child(name_lbl)
+		for h_v in handles:
+			var h := h_v as Dictionary
+			var hid2 := str(h.get("id", ""))
+			if hid2.is_empty():
+				continue
+			var row := _row_container()
+			var hbox: HBoxContainer = row.get_child(0)
+			hbox.add_child(_key_label("  " + hid2))
+			var chk := CheckButton.new()
+			chk.focus_mode = Control.FOCUS_NONE
+			var key := "%s|%s" % [cid, hid2]
+			chk.button_pressed = promoted_of.has(key)
+			var handle_copy := h.duplicate(true)
+			chk.toggled.connect(func(on: bool):
+				if on:
+					_expose_child_port(compound_id, cid, handle_copy)
+				elif promoted_of.has(key):
+					_remove_exposed_port(compound_id, str(promoted_of[key])))
+			hbox.add_child(chk)
+			_form_vbox.add_child(row)
 
 
 func _exposed_port_flow(compound_id: String, handle_id: String, scope_id: String) -> float:
@@ -5542,7 +5617,12 @@ func _remove_exposed_port(compound_id: String, handle_id: String) -> void:
 			in_n += 1
 	specs["port_in_count"] = in_n
 	specs["port_out_count"] = out_n
-	_model.update_item(compound_id, {"specs": specs, "handles": handles})
+	# Redistribute the survivors along their faces so removal leaves no gap.
+	var patched := it.duplicate(true)
+	patched["specs"] = specs
+	patched["handles"] = handles
+	_model.update_item(compound_id, {"specs": specs,
+		"handles": GraphNesting.layout_exposed_handles(patched)})
 	for conn: Dictionary in _model.connections_for_item(compound_id):
 		if (str(conn.get("source_item_id", "")) == compound_id and str(conn.get("source_handle_id", "")) == handle_id) \
 				or (str(conn.get("target_item_id", "")) == compound_id and str(conn.get("target_handle_id", "")) == handle_id):
