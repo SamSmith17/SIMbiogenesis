@@ -10257,6 +10257,23 @@ func open_npc_routines(item_id: String) -> void:
 	_npc_routines_panel.call("open", _npc_population, item_id)
 
 
+## Light up the in-graph 3D site preview so the world renders LIVE behind the
+## canvas — used while a tutorial run plays back, so the player watches the sun
+## cross the site while the battery fills. The preview SubViewport shares the
+## root World3D and is exempt from the `disable_3d` the graph sets on the root
+## viewport, which is why the run doesn't have to hide the graph to show a sky.
+##
+## MUST be turned back off on every run-exit path: the service documents the
+## live re-render as the view's dominant cost.
+func set_live_world_preview(on: bool) -> void:
+	if _soi_preview == null:
+		return
+	if on and _soi_preview.has_method("set_active"):
+		_soi_preview.call("set_active", true)
+	if _soi_preview.has_method("set_preview_live"):
+		_soi_preview.call("set_preview_live", on)
+
+
 ## ChallengeBakeEngine handshake: while suspended, the engine steps the flow
 ## sim + population itself (render_step / seek_all_tanks) and the ambient
 ## tick stands down entirely.

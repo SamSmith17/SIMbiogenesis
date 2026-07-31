@@ -82,8 +82,13 @@ Godot.exe.exe --headless --path . --script system_graph/graph_components_selftes
 Godot.exe.exe --headless --path . --script system_graph/graph_electrical_selftest.gd
 # Wire routing + port presentation (offline geometry — bezier control points for
 # same-edge ports (the U loop), facing ports, direction-fallback endpoints;
-# ambient-port classification; DC solid-fill/glyph styling rules):
+# ambient-port classification; DC solid-fill/glyph styling rules; the "+ is
+# always on the left" terminal convention; complete-circuit flow gating):
 Godot.exe.exe --headless --path . --script system_graph/graph_wire_routing_selftest.gd
+# Tiered UI feedback sounds (offline — every tier well-formed/deterministic,
+# the success chime rises, the womp-womp descends with a gap between notes,
+# the per-wire click stays short + quiet, DANGER == the graph destroy boom):
+Godot.exe.exe --headless --path . --script core/ui_sfx_selftest.gd
 # Solar Bootcamp tutorial (offline — ProgressStore grandfathering/grants/levels,
 # 12-level catalog integrity incl. every seed/unlock/palette entry resolving,
 # TutorialGoals predicates: deliverable-watts/bus-V/string-config over synthetic

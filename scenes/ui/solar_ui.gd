@@ -310,6 +310,8 @@ var _graph_controller_destroyed: bool = false
 var _graph_dc_limit_w: float = -1.0
 ## Challenge playback: battery reads the baked _sim_series at the playhead.
 var _playback_series_active: bool = false
+## Tutorial runs: force a cloudless day (see _weather_at_abs).
+var _clear_sky_override: bool = false
 var _ha_daily_solar_override: float = -1.0  # -1 = not overridden (kWh)
 var _ha_connected: bool = false
 
@@ -2570,6 +2572,12 @@ func _try_apply_open_meteo_weather() -> bool:
 	_generated_weather_active = false
 	if main_node == null:
 		return false
+	# Keep the VISIBLE sky in step with the baked numbers during a clear-sky
+	# run; otherwise the world could be overcast while the graph charges as if
+	# it were not, which is precisely the link the run is meant to teach.
+	if _clear_sky_override:
+		cloud_cover = 0.0
+		return false
 	var ws := get_node_or_null("/root/WeatherService")
 	if ws == null or not ws.has_method("covers"):
 		return false
@@ -3215,6 +3223,17 @@ func set_playback_series_active(on: bool) -> void:
 	_playback_series_active = on
 
 
+## Force a perfectly clear day for the duration of a tutorial run. Affects both
+## the baked physics (_weather_at_abs) and the visible sky
+## (_try_apply_open_meteo_weather) so the two can't disagree.
+func set_clear_sky_override(on: bool) -> void:
+	_clear_sky_override = on
+
+
+func is_clear_sky_override() -> bool:
+	return _clear_sky_override
+
+
 ## Re-anchor the live battery after a challenge run commits (win) or aborts:
 ## sets the SOC and clears the live timeline so it re-anchors next tick.
 func reanchor_live_battery(soc_kwh: float) -> void:
@@ -3288,6 +3307,13 @@ func evaluate_solar_at(abs_hours: float) -> float:
 func _weather_at_abs(abs_hours: float) -> Dictionary:
 	var out := {"ghi": 0.0, "cloud": 0.0, "temp": 25.0, "has_real": false}
 	if main_node == null:
+		return out
+	# Tutorial runs force a cloudless day so "sun up = battery charging" is
+	# never muddied by a cloudy sim date. has_real=false + cloud=0 is exactly
+	# the geometric clear-sky branch _compute_solar_kw already takes, so this
+	# needs no separate model.
+	if _clear_sky_override:
+		out["temp"] = _synthetic_temp_at(fposmod(abs_hours, 24.0))
 		return out
 	var clock_obj = main_node.get("clock")
 	if clock_obj == null or not clock_obj.has_method("abs_hours_to_date"):

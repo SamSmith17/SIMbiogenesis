@@ -85,6 +85,7 @@ func start(level_id: String = "") -> void:
 func exit_tutorial() -> void:
 	if not is_active():
 		return
+	_end_run_presentation()
 	_state = State.INACTIVE
 	_level = null
 	_faults_seen.clear()
@@ -108,6 +109,7 @@ func exit_tutorial() -> void:
 
 
 func _on_sandbox_interrupted() -> void:
+	_end_run_presentation()
 	# External load won the canvas — stand down without touching graph state.
 	_state = State.INACTIVE
 	_level = null
@@ -242,6 +244,7 @@ func _on_run_requested() -> void:
 	_ensure_run_engine()
 	if _run_engine.phase() == ChallengeBakeEngine.Phase.AWAIT_RETRY:
 		if _run_engine.retry():
+			_begin_run_presentation()
 			if _hud != null:
 				_hud.call("set_run_busy", true)
 				_hud.call("set_progress", "Re-running the same day…")
@@ -260,9 +263,36 @@ func _on_run_requested() -> void:
 	})
 	var start_abs := float(m.call("get_absolute_hours"))
 	if _run_engine.start(m, _gv, su, def, start_abs):
+		_begin_run_presentation()
 		if _hud != null:
 			_hud.call("set_run_busy", true)
 			_hud.call("set_progress", "Running the day…")
+
+
+## A 24-hour run used to be a static 2D screen: the graph is up, which sets
+## disable_3d on the root viewport, so there was no sun and no world — the one
+## thing that makes "daylight charges the battery" legible. The in-graph SoI
+## preview renders into its own SubViewport sharing the root World3D and is NOT
+## covered by that block, so switching it to live re-render shows the site with
+## the sun tracking the playhead, behind the graph the player is reading.
+func _begin_run_presentation() -> void:
+	if _gv != null and _gv.has_method("set_live_world_preview"):
+		_gv.call("set_live_world_preview", true)
+	var su := _solar_ui()
+	if su != null and su.has_method("set_clear_sky_override"):
+		su.call("set_clear_sky_override", true)
+
+
+## Must run on EVERY path out of a run — success, failure-parked, level change
+## and bootcamp exit — or the graph keeps paying for a live 3D re-render (the
+## preview service calls it the view's dominant cost) and the world stays stuck
+## on a forced clear sky.
+func _end_run_presentation() -> void:
+	if _gv != null and _gv.has_method("set_live_world_preview"):
+		_gv.call("set_live_world_preview", false)
+	var su := _solar_ui()
+	if su != null and su.has_method("set_clear_sky_override"):
+		su.call("set_clear_sky_override", false)
 
 
 func _ensure_run_engine() -> void:
@@ -284,6 +314,7 @@ func _ensure_run_engine() -> void:
 
 
 func _on_run_retry_ready(abs_h: float, reason: String, _attempts_n: int) -> void:
+	_end_run_presentation()
 	if _hud != null:
 		_hud.call("set_run_busy", false)
 		_hud.call("set_progress", "Failed %.1f h in — fix it, then ▶ Run again" %
@@ -298,6 +329,7 @@ func _on_run_retry_ready(abs_h: float, reason: String, _attempts_n: int) -> void
 
 
 func _on_run_succeeded(bake_result: Dictionary) -> void:
+	_end_run_presentation()
 	if _hud != null:
 		_hud.call("set_run_busy", false)
 	if _level == null:
