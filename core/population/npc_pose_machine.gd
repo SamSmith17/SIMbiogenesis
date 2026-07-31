@@ -88,6 +88,30 @@ var _current_pose: String = ""
 ## in tests with a synthetic catalog and no art installed.
 var _catalog: Dictionary = {}
 
+## Player-authored slot -> clip overrides (Routines panel, Animations tab).
+## Slots are activity names, plus the enrichment SPACE types, so "what happens
+## at the fire" is answerable separately from "what happens at the workshop".
+var _anim_overrides: Dictionary = {}
+
+
+func set_anim_overrides(overrides: Dictionary) -> void:
+	_anim_overrides = overrides
+
+
+## The slot name this person's current situation looks up. Enrichment resolves
+## by space, everything else by activity.
+func pose_slot() -> String:
+	if _activity == "enrichment":
+		return _space_type if not _space_type.is_empty() else "enrichment"
+	return _activity if not _activity.is_empty() else "idle"
+
+
+## Every slot the UI can bind a clip to, in the order it should be listed.
+const SLOTS: Array = [
+	"sleep", "hunger", "bladder", "hygiene", "thirst", "chore", "idle",
+	"fire_circle", "movement", "quiet", "workshop_social",
+]
+
 
 func set_catalog(catalog: Dictionary) -> void:
 	_catalog = catalog
@@ -259,6 +283,14 @@ func _walk_clip() -> String:
 
 ## What this person does once they have arrived and settled.
 func _pose_clip() -> String:
+	# A player-authored choice wins over the built-in default, provided the clip
+	# is actually installed — an override naming a missing clip must degrade to
+	# the default rather than freezing the figure on nothing.
+	var slot := pose_slot()
+	if _anim_overrides.has(slot):
+		var want := str(_anim_overrides[slot])
+		if not want.is_empty() and _has(want):
+			return want
 	match _activity:
 		"sleep":
 			return NpcRig.CLIP_SLEEP
@@ -273,7 +305,10 @@ func _pose_clip() -> String:
 				"movement":
 					return NpcRig.CLIP_EXERCISE
 				"fire_circle":
-					return NpcRig.CLIP_CLAP_SIT
+					# Dancing round the fire, not sitting clapping at it — the
+					# gathering is the point, and the seated version read as a
+					# much duller camp.
+					return NpcRig.CLIP_DANCE
 				"workshop_social":
 					return NpcRig.CLIP_CLAP
 				"quiet":

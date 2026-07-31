@@ -3124,6 +3124,30 @@ func _run_npc_anim_verify() -> void:
 		if i % 26 == 12 and manifest.size() < 6:
 			await _graph_shot(dir, "%02d_people" % manifest.size(), manifest, "world")
 
+	# Pause must actually freeze the figures. A clip still advancing while the
+	# clock is stopped reads as the sim still running.
+	var frozen_ok := true
+	if "time_scale" in main:
+		main.time_scale = 0.0
+		await get_tree().create_timer(0.4).timeout
+		var before: Dictionary = {}
+		for node in get_tree().get_nodes_in_group("npc_avatars"):
+			var av2 := node as NpcAvatar
+			if av2 != null and av2.is_rigged():
+				before[av2.agent_id] = av2.clip_position()
+		await get_tree().create_timer(1.0).timeout
+		var moved := 0
+		for node in get_tree().get_nodes_in_group("npc_avatars"):
+			var av3 := node as NpcAvatar
+			if av3 == null or not av3.is_rigged() or not before.has(av3.agent_id):
+				continue
+			if absf(av3.clip_position() - float(before[av3.agent_id])) > 0.01:
+				moved += 1
+		frozen_ok = before.size() > 0 and moved == 0
+		print("PlaytestHarness: npc-anim — paused freeze %s (%d rigged watched, %d still animating)" % [
+			"PASS" if frozen_ok else ("FAIL (nobody rigged to watch)" if before.is_empty() else "FAIL"),
+			before.size(), moved])
+
 	if prev_day_time >= 0.0:
 		main.day_time = prev_day_time
 		await get_tree().process_frame

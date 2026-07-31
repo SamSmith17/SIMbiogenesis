@@ -585,6 +585,30 @@ func set_routine(item_id: String, blocks: Array) -> bool:
 	return true
 
 
+## Which clip plays in each slot for this habitat (Routines panel).
+func anim_overrides_for(item_id: String) -> Dictionary:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	return engine.anim_overrides if engine != null else {}
+
+
+## Bind clips to slots and persist. Applies live: the map rides on every dot,
+## so the next frame already uses it.
+func set_anim_overrides(item_id: String, overrides: Dictionary) -> bool:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	if engine == null:
+		return false
+	engine.anim_overrides = overrides.duplicate()
+	if _model == null:
+		return true
+	var item: Dictionary = _model.get_item(item_id)
+	if item.is_empty():
+		return true
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	specs["pop_anim_map"] = engine.anim_overrides
+	_model.update_item(item_id, {"specs": specs})
+	return true
+
+
 ## Every pop-driven habitat id currently simulated.
 func habitat_ids() -> Array:
 	return _engines.keys()
@@ -670,6 +694,7 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	# resetting the population keeps the schedule the player wrote.
 	var routine_arr: Array = specs.get("pop_routine", []) as Array
 	engine.routine = NpcRoutine.from_array(routine_arr) if not routine_arr.is_empty() 		else NpcRoutine.default_day()
+	engine.anim_overrides = (specs.get("pop_anim_map", {}) as Dictionary).duplicate()
 	# Departures and collapse are narrative events — surface them to the UI.
 	engine.agent_departed.connect(
 		func(_aid: String, who: String, reason: String) -> void:

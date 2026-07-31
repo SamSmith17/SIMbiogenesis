@@ -3084,7 +3084,43 @@ func _test_pose_machine() -> void:
 	m9.set_catalog(cat)
 	_pose_run(m9, 6.0, {"in_transit": false, "activity": "enrichment",
 			"space_type": "fire_circle", "morale": 0.9, "dwell_left_s": 3600.0})
-	_check("the fire circle is seated", m9.clip() == NpcRig.CLIP_CLAP_SIT, m9.clip())
+	_check("the fire circle dances", m9.clip() == NpcRig.CLIP_DANCE, m9.clip())
+
+	# 9b. Per-slot overrides: the player can rebind what happens in any space.
+	var m10 := NpcPoseMachine.new()
+	m10.set_catalog(cat)
+	m10.set_anim_overrides({"fire_circle": NpcRig.CLIP_CLAP_SIT})
+	_pose_run(m10, 6.0, {"in_transit": false, "activity": "enrichment",
+			"space_type": "fire_circle", "morale": 0.9, "dwell_left_s": 3600.0})
+	_check("an override rebinds a space", m10.clip() == NpcRig.CLIP_CLAP_SIT, m10.clip())
+	# An override naming a clip that is not installed must fall back, not freeze
+	# the figure on a clip that cannot play.
+	var m11 := NpcPoseMachine.new()
+	m11.set_catalog(cat)
+	m11.set_anim_overrides({"fire_circle": "no_such_clip"})
+	_pose_run(m11, 6.0, {"in_transit": false, "activity": "enrichment",
+			"space_type": "fire_circle", "morale": 0.9, "dwell_left_s": 3600.0})
+	_check("a missing override falls back to the default",
+			m11.clip() == NpcRig.CLIP_DANCE, m11.clip())
+	# Slots must cover every activity the agent can report, or a slot would be
+	# unbindable from the UI.
+	for act in NpcAgent.NEEDS:
+		if act == "enrichment":
+			continue
+		_check("slot exists for activity: %s" % act,
+				NpcPoseMachine.SLOTS.has(str(act)), str(act))
+	for et in SpaceTypes.ENRICHMENT_TYPES:
+		_check("slot exists for enrichment space: %s" % et,
+				NpcPoseMachine.SLOTS.has(str(et)), str(et))
+	var m12 := NpcPoseMachine.new()
+	m12.set_catalog(cat)
+	m12.step(0.02, {"in_transit": false, "activity": "enrichment",
+			"space_type": "movement", "morale": 0.9, "dwell_left_s": 3600.0})
+	_check("the slot for an enrichment space is the space", m12.pose_slot() == "movement")
+	m12.step(0.02, {"in_transit": false, "activity": "sleep", "morale": 0.9,
+			"dwell_left_s": 3600.0})
+	_check("the slot for an ordinary activity is the activity",
+			m12.pose_slot() == "sleep")
 
 	# 10. FUZZ — the no-wedge guarantee. This is the whole reason the machine is
 	#     pure logic rather than an AnimationTree: an AnimationTree cannot be

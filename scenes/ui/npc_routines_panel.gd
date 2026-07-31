@@ -49,6 +49,10 @@ var _routine_status: Label = null
 ## half-finished day (a gap mid-edit, an overlap) never drives behaviour.
 var _draft: Array = []
 
+# --- animation bindings -----------------------------------------------------
+var _anim_rows: VBoxContainer = null
+var _anim_draft: Dictionary = {}
+
 
 func _ready() -> void:
 	visible = false
@@ -72,6 +76,7 @@ func open(bridge, item_id: String) -> void:
 	move_to_front()
 	_refresh_assign_options()
 	_load_routine_draft()
+	_load_anim_draft()
 	_refresh()
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
 
@@ -203,6 +208,12 @@ func _build_ui() -> void:
 	chore_scroll.add_child(_chore_box)
 	right.add_child(HSeparator.new())
 	right.add_child(_build_new_chore_row())
+
+	var anim_tab := VBoxContainer.new()
+	anim_tab.name = "Animations"
+	anim_tab.add_theme_constant_override("separation", 4)
+	tabs.add_child(anim_tab)
+	_build_anim_tab(anim_tab)
 
 	var routine_tab := VBoxContainer.new()
 	routine_tab.name = "Daily routine"
@@ -748,3 +759,127 @@ func _on_routine_apply() -> void:
 		return
 	if _bridge.call("set_routine", _item_id, _draft):
 		_load_routine_draft()   # read back whatever the sim actually accepted
+
+
+# ---------------------------------------------------------------------------
+# Animations tab — what people DO in each space
+# ---------------------------------------------------------------------------
+
+## Human labels for the slots the pose machine can bind.
+const SLOT_LABELS: Dictionary = {
+	"sleep": "Sleeping", "hunger": "Eating", "bladder": "Bathroom",
+	"hygiene": "Washing", "thirst": "Drinking", "chore": "Working",
+	"idle": "Standing around", "fire_circle": "Fire circle",
+	"movement": "Movement / yoga", "quiet": "Quiet space",
+	"workshop_social": "Workshop / social",
+}
+
+
+## Clips worth offering: held poses and in-place motions. Gaits and the
+## one-shot transitions are excluded — binding "sleeping" to a walk cycle or to
+## half a stand-up is never what anyone means, and the machine owns transitions
+## anyway.
+func _anim_choices() -> PackedStringArray:
+	var out := PackedStringArray(["(default)"])
+	for c in [NpcRig.CLIP_IDLE, NpcRig.CLIP_IDLE_SAD, NpcRig.CLIP_SIT,
+			NpcRig.CLIP_SLEEP, NpcRig.CLIP_WORK, NpcRig.CLIP_EXERCISE,
+			NpcRig.CLIP_DANCE, NpcRig.CLIP_CLAP, NpcRig.CLIP_CLAP_SIT]:
+		if not NpcRig.available() or NpcRig.clip_names().has(c):
+			out.append(c)
+	return out
+
+
+## Readable clip names, so the picker does not make the player learn the
+## internal vocabulary.
+const CLIP_LABELS: Dictionary = {
+	"idle": "Stand", "idle_sad": "Stand (dejected)", "sit": "Sit",
+	"sleep": "Lie down", "work": "Work (overhead squat)",
+	"exercise": "Exercise (back squat)", "dance": "Dance",
+	"clap": "Clap (standing)", "clap_sit": "Clap (seated)",
+}
+
+
+func _build_anim_tab(parent: VBoxContainer) -> void:
+	parent.add_child(_section_label("What people do in each space"))
+	var hint := Label.new()
+	hint.text = "Getting there, sitting down and standing up are handled automatically. This is what plays once someone has settled in."
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", C_TEXT_DIM)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	parent.add_child(hint)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	parent.add_child(scroll)
+	_anim_rows = VBoxContainer.new()
+	_anim_rows.add_theme_constant_override("separation", 2)
+	_anim_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_anim_rows)
+
+	var btns := HBoxContainer.new()
+	btns.add_theme_constant_override("separation", 6)
+	parent.add_child(btns)
+	var reset := Button.new()
+	reset.text = "Reset to defaults"
+	reset.pressed.connect(func() -> void:
+		_anim_draft = {}
+		_refresh_anim())
+	btns.add_child(reset)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btns.add_child(spacer)
+	var apply := Button.new()
+	apply.text = "Apply"
+	apply.tooltip_text = "Takes effect immediately for everyone already in that space."
+	apply.pressed.connect(_on_anim_apply)
+	btns.add_child(apply)
+
+
+func _load_anim_draft() -> void:
+	_anim_draft = {}
+	if _bridge != null and _bridge.has_method("anim_overrides_for"):
+		_anim_draft = (_bridge.call("anim_overrides_for", _item_id) as Dictionary).duplicate()
+	_refresh_anim()
+
+
+func _refresh_anim() -> void:
+	if _anim_rows == null:
+		return
+	for c in _anim_rows.get_children():
+		c.queue_free()
+	var choices := _anim_choices()
+	for slot in NpcPoseMachine.SLOTS:
+		var key := str(slot)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		var lbl := Label.new()
+		lbl.text = str(SLOT_LABELS.get(key, key.capitalize()))
+		lbl.add_theme_color_override("font_color", C_TEXT)
+		lbl.custom_minimum_size.x = 150
+		row.add_child(lbl)
+		var opt := OptionButton.new()
+		for i in choices.size():
+			var c := String(choices[i])
+			opt.add_item(str(CLIP_LABELS.get(c, c)) if i > 0 else c)
+		var cur := str(_anim_draft.get(key, ""))
+		var sel := 0
+		for i in choices.size():
+			if String(choices[i]) == cur:
+				sel = i
+				break
+		opt.selected = sel
+		opt.item_selected.connect(func(idx: int) -> void:
+			if idx <= 0:
+				_anim_draft.erase(key)
+			else:
+				_anim_draft[key] = String(choices[idx])
+			_refresh_anim())
+		row.add_child(opt)
+		_anim_rows.add_child(row)
+
+
+func _on_anim_apply() -> void:
+	if _bridge == null or not _bridge.has_method("set_anim_overrides"):
+		return
+	if _bridge.call("set_anim_overrides", _item_id, _anim_draft):
+		_load_anim_draft()

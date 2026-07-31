@@ -52,6 +52,9 @@ var chore_board: NpcChoreBoard = null
 ## The daily schedule everyone follows (per-agent phase offsets vary it).
 ## Editable by the player; defaults to NpcRoutine.default_day().
 var routine: NpcRoutine = null
+## Slot -> clip overrides authored in the Routines panel. Passed by REFERENCE
+## on every dot, so 50 agents share one dictionary rather than 50 copies.
+var anim_overrides: Dictionary = {}
 var _last_abs_h := NAN
 var _starved: Dictionary = {}     # resource kind -> true (from last flow tick)
 var _initial_roster := 0
@@ -551,6 +554,7 @@ func agent_dots() -> Array:
 			# yoga block from a fire circle. Already tracked per agent; it was
 			# simply never exposed.
 			"space_type": a.target_space_type,
+			"anim_map": anim_overrides,
 			# When the current activity ends, in absolute sim-hours. The 3D
 			# layer converts to wall-clock with the live time scale to decide
 			# whether there is time to animate sitting down at all.

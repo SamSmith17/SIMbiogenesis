@@ -260,8 +260,13 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 		# which is also what makes the start/stop walk clips legible.
 		yaw = lerp_angle(yaw, atan2(-dir.x, -dir.y), minf(delta * YAW_RATE, 1.0))
 
+	# time_scale 0 is paused; negative is a backward scrub, during which the
+	# population engine freezes too, so the figures should hold either way.
+	var scale: float = float(_main.get("time_scale")) if "time_scale" in _main else 1.0
 	av.apply_pose(next, yaw, {
 		"dt": delta,
+		"paused": scale <= 0.0,
+		"anim_map": dot.get("anim_map", {}),
 		"in_transit": in_transit,
 		"activity": str(dot.get("activity", "")),
 		"space_type": str(dot.get("space_type", "")),

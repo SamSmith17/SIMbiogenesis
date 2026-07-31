@@ -10188,6 +10188,16 @@ func npc_set_routine(item_id: String, blocks: Array) -> bool:
 	return _npc_population.set_routine(item_id, blocks) if _npc_population != null else false
 
 
+## Which clip plays in each activity/space slot, and rebinding them.
+func npc_anim_overrides(item_id: String) -> Dictionary:
+	return _npc_population.anim_overrides_for(item_id) if _npc_population != null else {}
+
+
+func npc_set_anim_overrides(item_id: String, overrides: Dictionary) -> bool:
+	return _npc_population.set_anim_overrides(item_id, overrides) \
+		if _npc_population != null else false
+
+
 ## Start a habitat's community over (inspector button). An emptied roster has
 ## no way back on its own — see NpcPopulationBridge.reset_population.
 func npc_reset_population(item_id: String) -> bool:

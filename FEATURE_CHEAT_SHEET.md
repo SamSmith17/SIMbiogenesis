@@ -560,7 +560,7 @@ enrichment: **Fire Circle · Dance/Movement · Quiet · Making/Craft**.
 | 3D world | Silhouette figures walk, sleep, work, dance. Ctrl/Alt-aim one → name, morale band, what they are doing |
 | **G** → Site Plan | Space markers (glyph + live occupancy) and morale-tinted dots with trails |
 | Inspector → Population Simulation | Roster, morale bands, collapse risk, blocked needs, walking distance / kcal / furthest trip |
-| **Routines & chores…** button | Roster with 24 h day-plan strips, chore board, weather, and the **Daily routine** tab |
+| **Routines & chores…** button | Roster + day-plan strips, chore board, weather, the **Daily routine** tab, and the **Animations** tab (bind a clip to each space) |
 
 ### D) Desire lines (View options ▾, Site Plan)
 

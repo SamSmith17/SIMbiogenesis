@@ -69,6 +69,11 @@ var _machine: NpcPoseMachine = null
 ## this as an accelerator only — its own timer is authoritative, because this
 ## signal is missed whenever the figure is culled or speed_scale changes.
 var _anim_finished := false
+## Playback rate the current clip WANTS, kept separately so unpausing restores
+## it. Setting AnimationPlayer.speed_scale to 0 is what freezes a figure, and
+## without remembering the intended value it would resume at zero.
+var _speed_scale := 1.0
+var _frozen := false
 
 
 func setup(p_agent_id: String, color: Color, p_name: String = "") -> void:
@@ -153,12 +158,24 @@ func set_motion_state(moving: bool, activity: String) -> void:
 
 
 func _drive(dt: float, inp: Dictionary) -> void:
+	# Time paused (or scrubbing backwards, where the population engine freezes
+	# anyway): hold the pose. A figure jogging on the spot while the clock is
+	# stopped reads as the sim still running.
+	var frozen := bool(inp.get("paused", false))
+	if frozen != _frozen:
+		_frozen = frozen
+		if _rig_ap != null:
+			_rig_ap.speed_scale = 0.0 if frozen else _speed_scale
+	if frozen:
+		return
 	_moving = bool(inp.get("in_transit", false))
 	_activity = str(inp.get("activity", ""))
 	_space_type = str(inp.get("space_type", ""))
 	if _machine == null:
 		_lying = _activity == "sleep"
 		return
+	if inp.has("anim_map"):
+		_machine.set_anim_overrides(inp["anim_map"] as Dictionary)
 	var step_inp := inp.duplicate()
 	step_inp["finished"] = _anim_finished
 	_anim_finished = false
@@ -168,6 +185,12 @@ func _drive(dt: float, inp: Dictionary) -> void:
 	_lying = _machine.is_lying()
 	if _rigged and _machine.changed():
 		_apply_clip(_machine.clip(), _machine.backwards(), _machine.blend_s(), false)
+
+
+## Playhead position within the current clip, so a test can prove the figure
+## is genuinely frozen rather than merely looking still.
+func clip_position() -> float:
+	return _rig_ap.current_animation_position if _rig_ap != null else 0.0
 
 
 ## The clip actually playing, for diagnostics.
@@ -222,8 +245,9 @@ func _apply_clip(clip: String, backwards: bool, blend: float, immediate: bool) -
 	_backwards = backwards
 	# Rate-match the gait so the feet grip; per variant, because the alternate
 	# walks were authored ~1.02 m/s against the primary's 1.64.
-	_rig_ap.speed_scale = NpcRig.walk_speed_scale_for(file_clip, WALK_SPEED_MPS) \
+	_speed_scale = NpcRig.walk_speed_scale_for(file_clip, WALK_SPEED_MPS) \
 		if _is_gait(file_clip) else 1.0
+	_rig_ap.speed_scale = 0.0 if _frozen else _speed_scale
 	_rig_y_target = NpcRig.clip_ground_offset_at(file_clip, 1.0 if backwards else 0.0)
 	if immediate or blend <= 0.0:
 		if backwards:
@@ -246,6 +270,8 @@ static func _is_gait(clip: String) -> bool:
 
 
 func _process(delta: float) -> void:
+	if _frozen:
+		return
 	if _rigged:
 		_follow_ground_offset(delta)
 		return
