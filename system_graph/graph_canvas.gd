@@ -7,6 +7,11 @@ extends Control
 
 # ResourceKinds — global class_name from system_graph/data/resource_kinds.gd
 
+## Preloaded rather than reached through its global class name: this script is
+## itself preloaded by offline selftests, where global class registration is not
+## guaranteed to have happened yet (the "Identifier not found" trap).
+const _UI_SFX := preload("res://core/ui_sfx.gd")
+
 # ---------------------------------------------------------------------------
 # Color constants. Chrome (bg/border/text) redirected to UITheme, single
 # source of truth. C_AMBER/C_GREEN/C_RED/C_WIRE_DC are NOT chrome — they are
@@ -2042,37 +2047,24 @@ const BOOM_SECONDS := 1.2
 var _boom_player: AudioStreamPlayer = null
 
 
-## Explosion SFX synthesized at runtime rather than shipped as an asset: a body
-## whose pitch sweeps 90→40 Hz as the shock expands, plus a broadband crack with
-## a very fast attack. No binary in the repo and nothing to add to the credits
-## ledger. Deterministic (fixed seed) so it sounds the same every time.
+## Explosion SFX, synthesized rather than shipped as an asset (no binary in the
+## repo, nothing for the credits ledger). The DSP now lives in UiSfx so the
+## destroy FX and the DANGER feedback tier are literally the same sound; this
+## stays as the named entry point the FX envelope selftest pins.
 static func build_boom_stream() -> AudioStreamWAV:
-	var n := int(BOOM_SAMPLE_RATE * BOOM_SECONDS)
-	var data := PackedByteArray()
-	data.resize(n * 2)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 20260729
-	var phase := 0.0
-	for i in n:
-		var t := float(i) / float(BOOM_SAMPLE_RATE)
-		var u := t / BOOM_SECONDS
-		phase += TAU * lerpf(90.0, 40.0, sqrt(u)) / float(BOOM_SAMPLE_RATE)
-		var body := sin(phase) * exp(-3.0 * u)
-		var crack := rng.randf_range(-1.0, 1.0) * exp(-18.0 * u)
-		var attack := clampf(t / 0.004, 0.0, 1.0)
-		var sample := clampf((body * 0.8 + crack * 0.5) * attack, -1.0, 1.0)
-		data.encode_s16(i * 2, int(sample * 32767.0))
-	var stream := AudioStreamWAV.new()
-	stream.format = AudioStreamWAV.FORMAT_16_BITS
-	stream.mix_rate = BOOM_SAMPLE_RATE
-	stream.stereo = false
-	stream.data = data
-	return stream
+	return _UI_SFX.build_danger_stream(BOOM_SAMPLE_RATE, BOOM_SECONDS)
 
 
 func _play_destroy_boom() -> void:
 	# Offline selftests preload this script with no SceneTree / audio server.
 	if not is_inside_tree():
+		return
+	# Prefer the shared voice pool so a warn chirp landing on top of a blast
+	# doesn't cut it off; fall back to a local player if the autoload is absent
+	# (harness scenes, tool runs).
+	var sfx := _cached_autoload("/root/UiSound")
+	if sfx != null:
+		sfx.call("play_ui", _UI_SFX.DANGER)
 		return
 	if _boom_player == null or not is_instance_valid(_boom_player):
 		_boom_player = AudioStreamPlayer.new()
@@ -2081,6 +2073,16 @@ func _play_destroy_boom() -> void:
 		_boom_player.volume_db = -6.0
 		add_child(_boom_player)
 	_boom_player.play()
+
+
+## Tiered UI feedback from the canvas (see UiSfx). Resolved defensively — a
+## bare autoload identifier would break offline selftests that preload this.
+func _play_ui_sfx(kind: String, min_gap_ms: int = 0) -> void:
+	if not is_inside_tree():
+		return
+	var sfx := _cached_autoload("/root/UiSound")
+	if sfx != null:
+		sfx.call("play_ui", kind, min_gap_ms)
 
 
 func request_continuous_redraw() -> void:
@@ -3298,6 +3300,10 @@ func _finalize_connection() -> void:
 		"voltage_mismatch": false,
 		"type_mismatch":    type_mismatch,
 	})
+	# Per-action confirmation that the wire landed. Quiet + rate-limited so a
+	# fast wiring session doesn't machine-gun; a mismatched-kind drop gets the
+	# warn tier instead, since it connected but won't carry anything.
+	_play_ui_sfx(_UI_SFX.WARN if type_mismatch else _UI_SFX.CONNECT, 90)
 
 
 func _finalize_hub_drop_connection() -> void:

@@ -53,6 +53,7 @@ MapillaryService="*res://core/terrain/mapillary_service.gd"
 AiImageryService="*res://core/terrain/ai_imagery_service.gd"
 SoiService="*res://core/soi/soi_service.gd"
 MultiplayerSession="*res://core/multiplayer/multiplayer_session.gd"
+UiSound="*res://core/ui_sfx.gd"
 
 [display]
 

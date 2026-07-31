@@ -44,6 +44,7 @@ func _ready() -> void:
 func show_toast(text: String, level: Level = Level.INFO, duration: float = DEFAULT_DURATION) -> void:
 	if _stack == null:
 		return
+	_play_level_sfx(level)
 	if _entries.size() >= MAX_TOASTS:
 		_remove_entry(_entries[0])
 	var entry := _make_entry(text, level)
@@ -51,6 +52,24 @@ func show_toast(text: String, level: Level = Level.INFO, duration: float = DEFAU
 	_entries.append(entry)
 	var timer := get_tree().create_timer(duration)
 	timer.timeout.connect(_fade_and_remove.bind(entry), CONNECT_ONE_SHOT)
+
+
+## One hook covers every toast in the game: the severity the caller already
+## passes picks the feedback tier. INFO stays silent — most toasts are status
+## chatter, and a sound on all of them would train the player to ignore it.
+## `danger` is skipped when a destroy FX is already booming (it plays its own).
+func _play_level_sfx(level: Level, allow_danger: bool = true) -> void:
+	var sfx := get_node_or_null("/root/UiSound")
+	if sfx == null:
+		return
+	match level:
+		Level.OK:
+			sfx.call("play_ui", UiSfx.SUCCESS, 120)
+		Level.WARN:
+			sfx.call("play_ui", UiSfx.WARN, 250)
+		Level.ERROR:
+			if allow_danger:
+				sfx.call("play_ui", UiSfx.DANGER, 250)
 
 
 ## Compact +N UP chip when a fabricated part lands in inventory.

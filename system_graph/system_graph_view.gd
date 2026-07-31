@@ -10014,10 +10014,20 @@ func _suppress_virtual(id: String) -> void:
 # Toast notification  (Phase 9)
 # ---------------------------------------------------------------------------
 
-func _show_toast(msg: String, duration: float = 2.5) -> void:
+## `level` is a ToastUI.Level. It defaults to INFO (silent) so the ~120 existing
+## call sites keep working untouched; pass OK/WARN/ERROR to add the matching
+## feedback tier. Messages already prefixed "⚠" are auto-classified WARN, which
+## covers the existing "allowed, but wrong" cases without editing each one.
+func _show_toast(msg: String, duration: float = 2.5,
+		level: int = ToastUI.Level.INFO) -> void:
 	if _toast_panel == null:
 		_toast_panel = _build_toast_panel()
 		add_child(_toast_panel)   # on top
+
+	var lvl := level
+	if lvl == ToastUI.Level.INFO and msg.begins_with("⚠"):
+		lvl = ToastUI.Level.WARN
+	_play_toast_sfx(lvl)
 
 	_toast_label.text    = msg
 	_toast_panel.visible = true
@@ -10035,6 +10045,19 @@ func _show_toast(msg: String, duration: float = 2.5) -> void:
 		maxf(TOPBAR_H + 12.0,
 			size.y - _timeline_bottom_inset() - _toast_panel.size.y - 72.0)
 	)
+
+
+func _play_toast_sfx(level: int) -> void:
+	var sfx := get_node_or_null("/root/UiSound")
+	if sfx == null:
+		return
+	match level:
+		ToastUI.Level.OK:
+			sfx.call("play_ui", UiSfx.SUCCESS, 120)
+		ToastUI.Level.WARN:
+			sfx.call("play_ui", UiSfx.WARN, 250)
+		ToastUI.Level.ERROR:
+			sfx.call("play_ui", UiSfx.DANGER, 250)
 
 
 func _build_toast_panel() -> PanelContainer:
