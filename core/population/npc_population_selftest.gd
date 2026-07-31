@@ -3226,6 +3226,17 @@ func _test_simple_figure() -> void:
 	_check("an unknown style falls back to humanoid",
 			NpcDisplayPrefs.style() == NpcDisplayPrefs.STYLE_HUMANOID)
 
+	# setup() must leave a usable body behind. This is asserted on OBSERVABLE
+	# state rather than trusted to run clean, because a Godot runtime error
+	# (assigning through a null reference, say) prints and keeps going — the
+	# suite still reports PASS. Exactly that hid a crash on every map load: the
+	# avatar kept tinting a `_mat` that the articulated body no longer builds.
+	var av2 := NpcAvatar.new()
+	av2.setup("agent_setup", Color(0.4, 0.8, 0.6), "Tester")
+	_check("setup builds a body", av2.has_body())
+	_check("setup names the figure", av2.display_name == "Tester")
+	av2.free()
+
 	var fig := NpcSimpleFigure.new()
 	fig.setup("agent_x", Color(0.5, 0.7, 0.9))
 	# Every clip the machine can emit must pose without erroring, including the

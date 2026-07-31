@@ -1294,6 +1294,13 @@ RELATIVE 0.1% rather than exactly: position feeds travel time feeds activity
 scheduling, so a sideways nudge shifts what someone is mid-way through at the
 measurement boundary (measured drift ~4 ppm over a simulated day).
 
+**Selftest gotcha:** a Godot runtime error (assigning through a null
+reference, say) PRINTS and execution continues, so `npc_population_selftest`
+still reports PASS. A crash on every map load hid behind that for a whole
+commit. Assert on OBSERVABLE state after construction (`NpcAvatar.has_body()`),
+and when a change swaps a body/material out, grep the selftest output for
+`base object of type '"Nil"'` rather than trusting the PASS line.
+
 **Two body styles, one behaviour.** `NpcSimpleFigure`
 (`core/population/npc_simple_figure.gd`) is an articulated stick figure — head,
 torso, shoulder→upper-arm→ELBOW→forearm, hip→thigh→KNEE→shin, all capsules
