@@ -170,6 +170,16 @@ func _drive(dt: float, inp: Dictionary) -> void:
 		_apply_clip(_machine.clip(), _machine.backwards(), _machine.blend_s(), false)
 
 
+## The clip actually playing, for diagnostics.
+func current_clip() -> String:
+	return _clip
+
+
+## Is this figure playing a gait?
+func is_walking() -> bool:
+	return _is_gait(NpcPoseMachine._clip_file_for(_clip))
+
+
 ## Is this figure currently lying down or seated? Used by the harness to assert
 ## that nobody is holding a settled pose while the sim says they are walking.
 func is_posed_down() -> bool:

@@ -195,6 +195,17 @@ Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/m
 # catch-up path and empties the camp before anything can be observed.
 # Cleans its cap_pop_* graph items off the map autosave:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=population --shots-dir=<label> --quit-after-capture
+# NPC animation observation on a REAL saved map (WINDOWED, READ-ONLY): unlike
+# --capture=population (which SEEDS its own spaces/tanks/habitat and would
+# overwrite a curated site), this finds whatever pop-driven habitat is already
+# saved, stands the camera in the middle of the roster (the rigged body is
+# handed out by distance from the VIEWER — observing from spawn means nobody is
+# ever rigged and no clip ever plays), anchors the clock at 08:85 because
+# routines make people travel only at BLOCK BOUNDARIES, drops time_scale to
+# 0.02 so the transition budget gate can open at all (a 5-min bathroom visit is
+# 1.7 s at 0.05 and 4.2 s at 0.02, against a ~2.6 s requirement), and asserts
+# nobody holds a lying/seated pose while the sim says they are travelling:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres> --capture=npc-anim --shots-dir=<label> --quit-after-capture
 # Siphon auto-bind distance-cap guard (WINDOWED, console-only): places a NEAR
 # pond and a FAR pond next to a synthetic siphon and confirms bind_siphon_to_
 # nearest_pond(id, silent, max_dist_m) binds the near one, refuses the far one

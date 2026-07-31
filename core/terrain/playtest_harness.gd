@@ -137,6 +137,8 @@ func _ready() -> void:
 			_run_ambient_flow_verify.call_deferred()
 		elif _capture_mode == "population":
 			_run_population_verify.call_deferred()
+		elif _capture_mode == "npc-anim":
+			_run_npc_anim_verify.call_deferred()
 		elif _capture_mode == "autobind":
 			_run_autobind_verify.call_deferred()
 		elif _capture_mode == "pondid":
@@ -312,6 +314,8 @@ func _launch_map() -> void:
 		_run_ambient_flow_verify()
 	elif _capture_mode == "population":
 		_run_population_verify()
+	elif _capture_mode == "npc-anim":
+		_run_npc_anim_verify()
 	elif _capture_mode == "autobind":
 		_run_autobind_verify()
 	elif _capture_mode == "pondid":
@@ -2981,3 +2985,179 @@ func _manual_screenshot() -> void:
 	var img := get_viewport().get_texture().get_image()
 	img.save_png(path)
 	print("PlaytestHarness: screenshot saved to %s" % ProjectSettings.globalize_path(path))
+
+## Observe NPC animation on a REAL saved map, changing nothing.
+##
+## `--capture=population` seeds its own spaces, tanks and habitat so it can run
+## anywhere; pointing that at somebody's actual site would overwrite the setup
+## they built. This mode is strictly read-only: it finds whatever pop-driven
+## habitat is already there, watches it, and asserts the contract that matters —
+## nobody holds a lying or seated pose while the sim says they are travelling.
+##
+##   Godot.exe.exe --path . --windowed --resolution 1280x720 -- \
+##     --user-map=<file.tres> --capture=npc-anim --shots-dir=<label> \
+##     --quit-after-capture
+func _run_npc_anim_verify() -> void:
+	# AFTER the await: on a user map the scene is still swapping when this
+	# starts, so grabbing current_scene first yields null — which silently made
+	# registry_for() return an empty registry and reported a fully tagged site
+	# as having no spaces at all.
+	var sgv := await _find_graph_view()
+	var main := get_tree().current_scene
+	if sgv == null or main == null:
+		push_error("PlaytestHarness: no SystemGraphView / scene — aborting")
+		_maybe_quit()
+		return
+	var label := _shots_label if not _shots_label.is_empty() else "npc_anim"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var manifest: Array = []
+
+	# Let the sim spin up so the bridge builds engines for whatever is saved.
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.05
+	await get_tree().create_timer(2.0).timeout
+	var bridge: Variant = sgv.get("_npc_population")
+	if bridge == null:
+		push_error("PlaytestHarness: population bridge missing — aborting")
+		_maybe_quit()
+		return
+	var habs: Array = bridge.call("habitat_ids")
+	print("PlaytestHarness: npc-anim — %d pop-driven habitat(s) on this map: %s" % [
+		habs.size(), ", ".join(PackedStringArray(habs))])
+	if habs.is_empty():
+		print("PlaytestHarness: npc-anim — FAIL (no pop-driven habitat; nothing to observe)")
+		_maybe_quit()
+		return
+	var hab_id := str(habs[0])
+	var summ: Dictionary = bridge.call("summary_for", hab_id)
+	print("PlaytestHarness: npc-anim — roster %d of %d, morale %.2f (%s)" % [
+		int(summ.get("count", 0)), int(summ.get("initial_count", 0)),
+		float(summ.get("mean_morale", 0.0)), str(summ.get("morale_label", ""))])
+
+	# Which spaces this site actually has decides which poses can appear at all.
+	var reg: Variant = bridge.call("registry_for", main)
+	var kinds: Dictionary = {}
+	if reg != null:
+		for sp in reg.get("spaces"):
+			kinds[str((sp as Dictionary).get("space_type", ""))] = true
+	print("PlaytestHarness: npc-anim — tagged spaces: %s" % [
+		", ".join(PackedStringArray(kinds.keys()))])
+
+	print("PlaytestHarness: npc-anim — rig %s" % [
+		"available" if NpcRig.available() else "ABSENT (primitive figures only)"])
+
+	# Routines make people travel at BLOCK BOUNDARIES and sit still between
+	# them, so a window landing mid-block observes nobody moving at all. Anchor
+	# just before the 09:00 wake, then put the clock back.
+	var prev_day_time := float(main.day_time) if "day_time" in main else -1.0
+	if prev_day_time >= 0.0:
+		main.day_time = 8.85
+		await get_tree().process_frame
+
+	# Stand the camera in the middle of the roster BEFORE sampling. The rigged
+	# body is handed out by distance from the VIEWER, so observing from spawn
+	# means nobody is ever rigged and no clip is ever played.
+	var centre := Vector2.ZERO
+	var n_pos := 0
+	for a in bridge.call("roster_for", hab_id):
+		var ag0 := a as NpcAgent
+		if ag0 != null:
+			centre += ag0.pos
+			n_pos += 1
+	if n_pos > 0:
+		centre /= float(n_pos)
+	var cam := Camera3D.new()
+	main.add_child(cam)
+	var prev_cam := get_viewport().get_camera_3d()
+	var cam_y := TerrainSurfaceQuery.ground_height_at(main, centre.x, centre.y)
+	cam.global_position = Vector3(centre.x, cam_y + 12.0, centre.y) + Vector3(22.0, 0.0, 22.0)
+	cam.look_at(Vector3(centre.x, cam_y + 1.0, centre.y))
+	cam.current = true
+	# Slow enough that the transition budget gate actually opens: a 5-minute
+	# bathroom visit needs > ~2.6 real seconds to be worth sitting down for,
+	# which at 0.02 sim-h/s it is (4.2 s) and at 0.05 it is not (1.7 s).
+	if "time_scale" in main:
+		main.time_scale = 0.02
+	await get_tree().create_timer(1.0).timeout
+
+	var clips: Dictionary = {}
+	var violations := 0
+	var traveller_samples := 0
+	var walking_samples := 0
+	var posed_samples := 0
+	var busiest := 0
+	var busiest_at := Vector2.ZERO
+	for i in 160:
+		await get_tree().create_timer(0.25).timeout
+		var roster: Array = bridge.call("roster_for", hab_id)
+		var travelling: Dictionary = {}
+		var moving_now := 0
+		for a in roster:
+			var ag := a as NpcAgent
+			if ag == null:
+				continue
+			if ag.state == NpcAgent.State.TRAVELING:
+				travelling[ag.id] = true
+				moving_now += 1
+		traveller_samples += moving_now
+		if moving_now > busiest:
+			busiest = moving_now
+			for a in roster:
+				var ag2 := a as NpcAgent
+				if ag2 != null and ag2.state == NpcAgent.State.TRAVELING:
+					busiest_at = ag2.pos
+					break
+		for node in get_tree().get_nodes_in_group("npc_avatars"):
+			var av := node as NpcAvatar
+			if av == null or not av.is_rigged():
+				continue
+			var c := av.current_clip()
+			if not c.is_empty():
+				clips[c] = int(clips.get(c, 0)) + 1
+			if av.is_posed_down():
+				posed_samples += 1
+				if travelling.has(av.agent_id):
+					violations += 1
+			elif av.is_walking():
+				walking_samples += 1
+		if i % 26 == 12 and manifest.size() < 6:
+			await _graph_shot(dir, "%02d_people" % manifest.size(), manifest, "world")
+
+	if prev_day_time >= 0.0:
+		main.day_time = prev_day_time
+		await get_tree().process_frame
+
+	var parts: PackedStringArray = PackedStringArray()
+	var keys: Array = clips.keys()
+	keys.sort()
+	for k in keys:
+		parts.append("%s x%d" % [str(k), int(clips[k])])
+	print("PlaytestHarness: npc-anim — clips observed: %s" % [
+		", ".join(parts) if not parts.is_empty() else "(none — nobody was rigged/near)"])
+	print("PlaytestHarness: npc-anim — %d traveller-samples, %d walking, %d lying/seated" % [
+		traveller_samples, walking_samples, posed_samples])
+	var ok := violations == 0 and traveller_samples > 0
+	print("PlaytestHarness: npc-anim — travel poses %s (%d lying/seated while travelling)" % [
+		"PASS" if ok else ("FAIL (never saw a traveller)" if traveller_samples == 0 else "FAIL"),
+		violations])
+	# Transitions only appear at 1x-ish speeds; say so rather than silently
+	# passing a run in which they could never have been reached.
+	var saw_transition := clips.has(NpcRig.CLIP_SLEEP_ENTER) or clips.has(NpcRig.CLIP_SLEEP_EXIT) \
+		or clips.has(NpcRig.CLIP_SIT_ENTER) or clips.has(NpcRig.CLIP_SIT_EXIT) \
+		or clips.has(NpcRig.CLIP_WALK_START) or clips.has(NpcRig.CLIP_WALK_STOP)
+	print("PlaytestHarness: npc-anim — transition clips %s" % [
+		"seen" if saw_transition else "NOT seen (expected at high time scale)"])
+
+	if prev_cam != null:
+		prev_cam.current = true
+	cam.queue_free()
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	print("PlaytestHarness: npc-anim — %s (%d shots in %s)" % [
+		"PASS" if ok else "FAIL", manifest.size(), dir])
+	_maybe_quit()
