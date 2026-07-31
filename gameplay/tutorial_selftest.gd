@@ -65,21 +65,26 @@ func _test_grandfathering() -> int:
 	return 0
 
 
-## Answering the prompt creates the file; gating then applies with baselines.
+## Gating is DISABLED: the public predicate must always answer true (full
+## Library for everyone), while the preserved _would_be_unlocked rule keeps the
+## original semantics alive for a possible re-enable.
 func _test_prompt_and_gating() -> int:
 	_fresh()
 	ProgressStore.mark_prompt_seen()
 	if ProgressStore.is_new_player():
 		push_error("prompt seen should clear new-player state")
 		return 1
-	if ProgressStore.is_unlocked("category", "controllers"):
-		push_error("un-granted category should be locked once the file exists")
+	if not ProgressStore.is_unlocked("category", "controllers") 			or not ProgressStore.is_unlocked("preset", "Victron 100/20"):
+		push_error("gating is disabled — everything must read unlocked")
 		return 1
-	if not ProgressStore.is_unlocked("category", "batteries"):
-		push_error("baseline 'batteries' category must always be unlocked")
+	if ProgressStore._would_be_unlocked("category", "controllers"):
+		push_error("preserved rule: un-granted category would be locked")
 		return 1
-	if ProgressStore.is_unlocked("preset", "Victron 100/20"):
-		push_error("un-granted preset should be locked once the file exists")
+	if not ProgressStore._would_be_unlocked("category", "batteries"):
+		push_error("preserved rule: baseline batteries would stay unlocked")
+		return 1
+	if ProgressStore._would_be_unlocked("preset", "Victron 100/20"):
+		push_error("preserved rule: un-granted preset would be locked")
 		return 1
 	return 0
 
@@ -89,14 +94,14 @@ func _test_grants() -> int:
 	ProgressStore.mark_prompt_seen()
 	ProgressStore.grant(["cat:controllers", "preset:Victron 100/20"])
 	ProgressStore.grant(["cat:controllers"])  # duplicate — must not double
-	if not ProgressStore.is_unlocked("category", "controllers"):
-		push_error("granted category should unlock")
+	if not ProgressStore._would_be_unlocked("category", "controllers"):
+		push_error("granted category should record")
 		return 1
-	if not ProgressStore.is_unlocked("preset", "Victron 100/20"):
-		push_error("granted preset should unlock")
+	if not ProgressStore._would_be_unlocked("preset", "Victron 100/20"):
+		push_error("granted preset should record")
 		return 1
-	if ProgressStore.is_unlocked("category", "processors"):
-		push_error("ungranted category leaked open after grants")
+	if ProgressStore._would_be_unlocked("category", "processors"):
+		push_error("ungranted category leaked into the preserved rule")
 		return 1
 	return 0
 
@@ -163,7 +168,7 @@ func _test_sandbox_snapshot() -> int:
 	if ProgressStore.is_level_complete("bootcamp_10_score"):
 		push_error("reset_tutorial_progress should clear level completion")
 		return 1
-	if not ProgressStore.is_unlocked("category", "controllers"):
+	if not ProgressStore._would_be_unlocked("category", "controllers"):
 		push_error("reset_tutorial_progress must not revoke unrelated unlocks")
 		return 1
 	return 0
@@ -179,7 +184,7 @@ func _test_disk_round_trip() -> int:
 	if ProgressStore.is_new_player():
 		push_error("prompt state lost across reload")
 		return 1
-	if not ProgressStore.is_unlocked("category", "controllers"):
+	if not ProgressStore._would_be_unlocked("category", "controllers"):
 		push_error("grant lost across reload")
 		return 1
 	if not ProgressStore.is_level_complete("bootcamp_01"):

@@ -83,7 +83,20 @@ static func mark_tutorial_skipped() -> void:
 ## kind: "category" | "preset". Preset ids are the preset's `label` string
 ## (presets carry no explicit id; labels are the stable human-readable key the
 ## search bar already uses).
-static func is_unlocked(kind: String, id: String) -> bool:
+##
+## GATING IS DISABLED (design decision 2026-07-30): every player gets the full
+## Library from the start — the bootcamp still GRANTS unlocks so completing a
+## level announces its rewards, but nothing is ever actually withheld.
+## `_would_be_unlocked` below preserves the real predicate should progression
+## gating be wanted again; the grant bookkeeping, library predicates, and
+## selftests all still exercise it through that name.
+static func is_unlocked(_kind: String, _id: String) -> bool:
+	return true
+
+
+## The gating rule as it would apply if enabled — kept alive (and selftested)
+## so re-enabling is a one-line change in is_unlocked.
+static func _would_be_unlocked(kind: String, id: String) -> bool:
 	if not has_file():
 		return true  # grandfathering — see file header
 	var d := _load()

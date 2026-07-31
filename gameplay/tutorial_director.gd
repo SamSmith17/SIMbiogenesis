@@ -129,7 +129,11 @@ func _load_level(def: TutorialLevelDef) -> void:
 	if not def.carry_graph:
 		_gv.call("tutorial_clear_graph")
 		_gv.call("tutorial_seed_level", def.seed, def.seed_wires)
-	_gv.call("set_tutorial_palette", def.allowed_presets)
+	# Full Library everywhere (design decision 2026-07-30): levels no longer
+	# restrict the palette — allowed_presets is retained in the defs as
+	# curriculum metadata but not enforced. Clearing (rather than skipping)
+	# also lifts any filter a previous session left behind.
+	_gv.call("clear_tutorial_palette")
 	if _hud != null:
 		_hud.call("show_level", def.index, def.title, _objective_line(def),
 			def.is_run_level())
@@ -375,7 +379,10 @@ func _complete_level(stats: Dictionary = {}) -> void:
 	var body := _level.debrief_bbcode
 	if not earned.is_empty():
 		body += "\n\n[color=#26e577]★ Unlocked:[/color] [b]%s[/b]" % "  ·  ".join(earned)
-	_celebrate_unlocks(earned)
+	# Success-via-fault levels complete on the same frame as the destroy boom —
+	# give the bang two seconds to land before the reward sounds.
+	var sfx_delay := 2.0 if str(_level.goal.get("kind", "")) == "fault_observed" else 0.0
+	_celebrate_unlocks(earned, sfx_delay)
 	_gv.call("show_tutorial_card", {
 		"title": "✓ Level %d complete" % _level.index,
 		"title_color": UITheme.C_GREEN,
@@ -408,9 +415,20 @@ static func unlock_labels(unlocks: Array) -> Array:
 ## Fanfare + a chip per unlock. Chips ride the existing "+N UP" celebration
 ## path in ToastUI (already used when a fabricated part lands), so unlocks look
 ## like the game's other rewards rather than a bespoke popup.
-func _celebrate_unlocks(earned: Array) -> void:
+##
+## `delay_s`: hold the celebration back. Levels whose WIN is an explosion
+## (success_via_fault — level 1's short circuit) complete on the same frame as
+## the destroy boom, and chime-on-top-of-blast read as one confusing noise.
+## Two seconds lets the bang land as a bang before the reward says "…and that
+## was the right thing to do."
+func _celebrate_unlocks(earned: Array, delay_s: float = 0.0) -> void:
 	var m := _main_node()
 	var sfx := m.get_node_or_null("/root/UiSound") if m != null else null
+	if delay_s > 0.0:
+		var hold := get_tree().create_timer(delay_s)
+		hold.timeout.connect(func() -> void:
+			_celebrate_unlocks(earned, 0.0), CONNECT_ONE_SHOT)
+		return
 	if earned.is_empty():
 		if sfx != null:
 			sfx.call("play_ui", UiSfx.SUCCESS)
