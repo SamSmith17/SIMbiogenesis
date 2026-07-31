@@ -62,37 +62,37 @@ const BATTERIES: Array = [
 	{
 		"type": "battery", "label": "12V 100Ah LiFePO4", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "12V 100Ah LiFePO4",      "voltage": 12.8, "ah": 100.0, "kwh": 1.28, "soc": 0.80, "cost":  400.0 },
+		"specs": { "name": "12V 100Ah LiFePO4", "chemistry": "LFP",      "voltage": 12.8, "ah": 100.0, "kwh": 1.28, "soc": 0.80, "cost":  400.0 },
 	},
 	{
 		"type": "battery", "label": "12V 200Ah LiFePO4", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "12V 200Ah LiFePO4",      "voltage": 12.8, "ah": 200.0, "kwh": 2.56, "soc": 0.80, "cost":  700.0 },
+		"specs": { "name": "12V 200Ah LiFePO4", "chemistry": "LFP",      "voltage": 12.8, "ah": 200.0, "kwh": 2.56, "soc": 0.80, "cost":  700.0 },
 	},
 	{
 		"type": "battery", "label": "12V 100Ah AGM", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "12V 100Ah AGM",           "voltage": 12.0, "ah": 100.0, "kwh": 1.20, "soc": 0.50, "cost":  200.0 },
+		"specs": { "name": "12V 100Ah AGM", "chemistry": "SLA",           "voltage": 12.0, "ah": 100.0, "kwh": 1.20, "soc": 0.50, "cost":  200.0 },
 	},
 	{
 		"type": "battery", "label": "48V 50Ah LiFePO4", "icon": "🔋",
 		"width": 100.0, "height": 136.0,
-		"specs": { "name": "48V 50Ah LiFePO4",       "voltage": 51.2, "ah": 50.0, "kwh": 2.56, "soc": 0.80, "cost": 650.0 },
+		"specs": { "name": "48V 50Ah LiFePO4", "chemistry": "LFP",       "voltage": 51.2, "ah": 50.0, "kwh": 2.56, "soc": 0.80, "cost": 650.0 },
 	},
 	{
 		"type": "battery", "label": "48V 100Ah LiFePO4", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "48V 100Ah LiFePO4",      "voltage": 51.2, "ah": 100.0, "kwh": 5.12, "soc": 0.80, "cost": 1500.0 },
+		"specs": { "name": "48V 100Ah LiFePO4", "chemistry": "LFP",      "voltage": 51.2, "ah": 100.0, "kwh": 5.12, "soc": 0.80, "cost": 1500.0 },
 	},
 	{
 		"type": "battery", "label": "EG4 48V 200Ah", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "EG4 48V 200Ah LiFePO4",  "voltage": 51.2, "ah": 200.0, "kwh":10.24, "soc": 0.80, "cost": 2600.0 },
+		"specs": { "name": "EG4 48V 200Ah LiFePO4", "chemistry": "LFP",  "voltage": 51.2, "ah": 200.0, "kwh":10.24, "soc": 0.80, "cost": 2600.0 },
 	},
 	{
 		"type": "battery", "label": "Server Rack 48V 100Ah", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "Server Rack 48V 100Ah",  "voltage": 51.2, "ah": 100.0, "kwh": 5.12, "soc": 0.80, "cost": 1200.0 },
+		"specs": { "name": "Server Rack 48V 100Ah", "chemistry": "LFP",  "voltage": 51.2, "ah": 100.0, "kwh": 5.12, "soc": 0.80, "cost": 1200.0 },
 	},
 ]
 

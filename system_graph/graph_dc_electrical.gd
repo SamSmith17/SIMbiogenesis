@@ -43,8 +43,40 @@ static func battery_nominal_v(item: Dictionary) -> float:
 
 
 ## Max safe charging voltage for a bank at `bus_v` nominal.
-static func charge_ceiling_v(bus_v: float) -> float:
-	return bus_v * CHARGE_CEILING_RATIO
+##
+## Now chemistry-aware. The old single 1.217 ratio was justified as a
+## coincidence fit across AGM and LiFePO4, but it only holds for lead-acid:
+## a 4S LiFePO4 pack is 12.8 V nominal and 14.6 V full (ratio 1.14), so the
+## blanket ratio allowed it to be driven to ~15.6 V before faulting. Falls back
+## to the old ratio when the chemistry can't be identified.
+static func charge_ceiling_v(bus_v: float, chem: String = "") -> float:
+	if chem.is_empty():
+		return bus_v * CHARGE_CEILING_RATIO
+	return BatteryChemistry.charge_ceiling_v(bus_v, chem)
+
+
+## Chemistry of a bank, taken from its member batteries. A mixed bank reports
+## the most conservative (lowest ceiling per nominal volt) — you must charge to
+## the weakest chemistry present.
+static func bank_chemistry(model: GraphModel, battery_ids: Array) -> String:
+	var best := ""
+	var best_ratio := INF
+	for bid in battery_ids:
+		var it := model.get_item(str(bid))
+		if it.is_empty():
+			continue
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		var chem := BatteryChemistry.infer(sp)
+		if chem.is_empty():
+			continue
+		var nom := float(sp.get("voltage", 0.0))
+		if nom <= 0.0:
+			continue
+		var ratio := BatteryChemistry.charge_ceiling_v(nom, chem) / nom
+		if ratio < best_ratio:
+			best_ratio = ratio
+			best = chem
+	return best
 
 
 static func _is_dc_conn(conn: Dictionary) -> bool:
@@ -419,13 +451,15 @@ static func find_battery_overvoltage(model: GraphModel, flat_conns: Array,
 		var worst := 0.0
 		for comp in comps:
 			worst = maxf(worst, PvElectrical.component_string_voc(comp as Array, model, ambient_c))
-		var safe := charge_ceiling_v(float(bank.get("bus_voltage", 12.0)))
+		var chem := bank_chemistry(model, bank.get("battery_ids", []) as Array)
+		var safe := charge_ceiling_v(float(bank.get("bus_voltage", 12.0)), chem)
 		if worst > safe + 0.5:
 			faults.append({
 				"bank": bank,
 				"battery_ids": (bank.get("battery_ids", []) as Array).duplicate(),
 				"string_voc": worst,
 				"safe_v": safe,
+				"chemistry": chem,
 			})
 	return faults
 

@@ -6421,7 +6421,11 @@ func _draw_battery_body(rect: Rect2, specs: Dictionary, item_id: String = "",
 	# Overlay text + optional per-cell bars float above the reservoir fill.
 	var info_x := reservoir.position.x + 7.0
 	var info_y := body.position.y + fsize
-	draw_string(fnt, Vector2(info_x, info_y), "%.0fV  %.0fAh" % [float(specs.get("voltage", 12.0)), float(specs.get("ah", 0.0))], HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 1), Color(0.80, 0.95, 0.87, 0.96))
+	var _chem_tag := BatteryChemistry.label(BatteryChemistry.infer(specs))
+	var _v_line := "%.0fV  %.0fAh" % [float(specs.get("voltage", 12.0)), float(specs.get("ah", 0.0))]
+	if not _chem_tag.is_empty():
+		_v_line += "  " + _chem_tag
+	draw_string(fnt, Vector2(info_x, info_y), _v_line, HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 1), Color(0.80, 0.95, 0.87, 0.96))
 	info_y += maxi(9, fsize - 1) + 3.0
 	draw_string(fnt, Vector2(info_x, info_y), "Charge %.0f%%" % (soc * 100.0), HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(8, fsize - 1), Color(0.66, 0.93, 0.77, 0.95))
 	info_y += maxi(8, fsize - 2) + 5.0

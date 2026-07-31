@@ -24,11 +24,12 @@ func _initialize() -> void:
 	fails += _test_bus_voltage_topology()
 	fails += _test_battery_overvoltage()
 	fails += _test_controller_clip_values()
+	fails += _test_battery_chemistry()
 	fails += _test_open_circuit_needs_return_leg()
 	fails += _test_destroy_fx_envelope()
 	fails += _test_fault_card_placement()
 	if fails == 0:
-		print("GRAPH ELECTRICAL SELFTEST PASS  (19 checks)")
+		print("GRAPH ELECTRICAL SELFTEST PASS  (20 checks)")
 	else:
 		print("GRAPH ELECTRICAL SELFTEST FAIL  (%d failed)" % fails)
 	quit()
@@ -178,8 +179,11 @@ func _test_battery_overvoltage() -> int:
 		push_error("expected 1 battery-overvoltage fault, got %d" % faults.size())
 		return 1
 	var f: Dictionary = faults[0]
-	if absf(float(f.get("safe_v", 0.0)) - 12.0 * GraphDcElectrical.CHARGE_CEILING_RATIO) > 0.1:
-		push_error("safe_v expected 14.6 got %s" % str(f.get("safe_v")))
+	# 12.0 V nominal is 6 lead-acid cells, so the absorb ceiling is 6 × 2.40 V.
+	# (Chemistry-aware since batteries carry a chemistry: the old blanket 1.217
+	# ratio would have allowed a 12.8 V LFP pack up to ~15.6 V.)
+	if absf(float(f.get("safe_v", 0.0)) - 14.4) > 0.1:
+		push_error("safe_v expected 14.4 (6S lead-acid) got %s" % str(f.get("safe_v")))
 		return 1
 	# Behind a controller: no fault.
 	var m2: GraphModel = GraphModelScript.new()
@@ -637,6 +641,69 @@ func _test_controller_ranking() -> int:
 	if max_voc < 144.0:
 		push_error("recommended preset max_voc too low: %f" % max_voc)
 		return 1
+	return 0
+
+
+## Chemistry identification and what it implies. The voltage discriminator is
+## the load-bearing rule: it classifies packs whose names carry no chemistry
+## token, plus every legacy save and user-authored preset written before the
+## field existed.
+func _test_battery_chemistry() -> int:
+	var cases := [
+		# explicit spec wins
+		[{"chemistry": "LFP", "voltage": 12.0, "name": "12V 100Ah AGM"}, BatteryChemistry.LFP],
+		# name when there is no explicit field
+		[{"voltage": 0.0, "name": "12V 100Ah LiFePO4"}, BatteryChemistry.LFP],
+		[{"voltage": 0.0, "name": "12V 100Ah AGM"}, BatteryChemistry.LEAD],
+		# voltage discriminator — whole cells only divide one way
+		[{"voltage": 12.8, "name": "Server Rack"}, BatteryChemistry.LFP],
+		[{"voltage": 51.2, "name": "Server Rack 48V 100Ah"}, BatteryChemistry.LFP],
+		[{"voltage": 12.0, "name": "Unlabelled"}, BatteryChemistry.LEAD],
+		[{"voltage": 24.0, "name": "Unlabelled"}, BatteryChemistry.LEAD],
+	]
+	for c_v in cases:
+		var c: Array = c_v
+		var got := BatteryChemistry.infer(c[0] as Dictionary)
+		if got != str(c[1]):
+			push_error("chemistry for %s expected '%s' got '%s'" % [str(c[0]), str(c[1]), got])
+			return 1
+	# Ceilings follow whole cells, not a blanket ratio.
+	if absf(BatteryChemistry.charge_ceiling_v(12.8, BatteryChemistry.LFP) - 14.6) > 0.05:
+		push_error("4S LFP should charge to 14.6 V")
+		return 1
+	if absf(BatteryChemistry.charge_ceiling_v(12.0, BatteryChemistry.LEAD) - 14.4) > 0.05:
+		push_error("6S lead-acid should charge to 14.4 V")
+		return 1
+	if absf(BatteryChemistry.charge_ceiling_v(51.2, BatteryChemistry.LFP) - 58.4) > 0.05:
+		push_error("16S LFP should charge to 58.4 V")
+		return 1
+	# Lead-acid can only be cycled about half as deep as LFP.
+	if BatteryChemistry.usable_fraction(BatteryChemistry.LEAD) \
+			>= BatteryChemistry.usable_fraction(BatteryChemistry.LFP):
+		push_error("lead-acid usable depth must be shallower than LFP")
+		return 1
+	# Resting voltage rises with SOC for both, but LFP stays far flatter across
+	# the mid range — which is exactly why voltage is a poor LFP fuel gauge.
+	for chem in [BatteryChemistry.LFP, BatteryChemistry.LEAD]:
+		var lo := BatteryChemistry.voltage_at_soc(12.8, str(chem), 0.05)
+		var hi := BatteryChemistry.voltage_at_soc(12.8, str(chem), 0.95)
+		if hi <= lo:
+			push_error("'%s' resting voltage must rise with SOC" % str(chem))
+			return 1
+	var lfp_mid := absf(BatteryChemistry.voltage_at_soc(12.8, BatteryChemistry.LFP, 0.7)
+			- BatteryChemistry.voltage_at_soc(12.8, BatteryChemistry.LFP, 0.3))
+	var pb_mid := absf(BatteryChemistry.voltage_at_soc(12.0, BatteryChemistry.LEAD, 0.7)
+			- BatteryChemistry.voltage_at_soc(12.0, BatteryChemistry.LEAD, 0.3))
+	if lfp_mid >= pb_mid:
+		push_error("LFP mid-range voltage should be flatter than lead-acid (%.3f vs %.3f)" % [
+			lfp_mid, pb_mid])
+		return 1
+	# Every shipped battery preset must resolve to a known chemistry.
+	for p in ComponentPresets.presets_for_category("batteries"):
+		var sp: Dictionary = (p as Dictionary).get("specs", {}) as Dictionary
+		if BatteryChemistry.infer(sp).is_empty():
+			push_error("preset '%s' has no resolvable chemistry" % str((p as Dictionary).get("label", "")))
+			return 1
 	return 0
 
 

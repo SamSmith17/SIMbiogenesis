@@ -433,6 +433,39 @@ func _render_battery_item_v2(item: Dictionary) -> void:
 			draw_string(fnt, tp + Vector2(ox, oy), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.02, 0.06, 0.04, 0.85))
 	draw_string(fnt, tp, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.98, 1.0, 0.95, 1.0))
 
+	# Chemistry badge (top) + voltage/capacity (bottom). The big SOC number said
+	# nothing about WHAT the pack is, and chemistry decides how deep you may
+	# cycle it and what its terminal voltage means. Hidden when zoomed out far
+	# enough that the text would be unreadable anyway.
+	if _zoom >= 0.55:
+		var small := maxi(8, int(round(9.0 * _zoom)))
+		var chem := BatteryChemistry.infer(specs)
+		var chem_tag := BatteryChemistry.label(chem)
+		if not chem_tag.is_empty():
+			draw_string(fnt, rect.position + Vector2(7.0, small + 5.0), chem_tag,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, small, Color(0.72, 0.96, 0.82, 0.92))
+		var nominal_v := float(specs.get("voltage", 0.0))
+		# Optional: show the modelled resting terminal voltage instead of the
+		# nameplate. Off by default — nominal is what a spec sheet quotes.
+		var shown_v := nominal_v
+		var v_suffix := "V"
+		if bool(specs.get("show_real_voltage", false)) and nominal_v > 0.0:
+			shown_v = BatteryChemistry.voltage_at_soc(nominal_v, chem, soc)
+			v_suffix = "V≡"  # marks a simulated, not nameplate, reading
+		var foot := ""
+		if nominal_v > 0.0:
+			foot = "%.1f%s" % [shown_v, v_suffix]
+		var ah := float(specs.get("ah", 0.0))
+		if ah > 0.0:
+			foot += "  %.0fAh" % ah
+		elif float(specs.get("kwh", 0.0)) > 0.0:
+			foot += "  %.1fkWh" % float(specs.get("kwh", 0.0))
+		if not foot.is_empty():
+			var fw := fnt.get_string_size(foot, HORIZONTAL_ALIGNMENT_LEFT, -1, small)
+			draw_string(fnt, rect.position + Vector2((rect.size.x - fw.x) * 0.5,
+					rect.size.y - 6.0), foot,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, small, Color(0.80, 0.98, 0.88, 0.95))
+
 	# Handles
 	_draw_item_handles(item, tl, sz)
 
