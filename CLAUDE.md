@@ -28,10 +28,30 @@ Godot.exe.exe --headless --path . --script power_system/sources/source_physics_s
 # Services node-registry self-test (offline — register/get/has, auto-clear on
 # tree exit, freed-node guard; see ARCHITECTURE.md debt #1):
 Godot.exe.exe --headless --path . --script core/services_selftest.gd
+# InputMap self-test (offline — parses project.godot's [input] section, NOT
+# InputMap.get_actions() which also carries Godot's built-in ui_* defaults):
+# fails on a key bound to two actions (whitelist intentional pairs in
+# ALLOWED_OVERLAPS with the file:line that disambiguates them), on an action
+# with no events at all (a dead action orphans every handler keyed to it), and
+# on a key event bound via `keycode` instead of `physical_keycode` (which drifts
+# on AZERTY/Dvorak). Run it after ANY project.godot [input] edit:
+Godot.exe.exe --headless --path . --script core/input_map_selftest.gd
+# UI compile smoke + duck-typing contract guard (offline — sweeps scenes/ui/,
+# crisis_events/ and location_picker/; these scripts mostly have NO class_name,
+# so Godot never parses them at import and a GDScript error surfaces only when
+# a player opens that panel). Also asserts the method surface other subsystems
+# call BY STRING still exists — terrain_loader.gd calls `_exit_mode` at ~10
+# sites with no has_method() guard, so a rename there is a hard runtime error.
+# Catches parse/identifier/preload/autoload errors, NOT node-path misses or
+# layout — those still need the windowed --capture harnesses:
+Godot.exe.exe --headless --path . --script scenes/ui/ui_compile_selftest.gd
 
 # Boot both maps, 120 frames each; compare errors against the known
-# pre-existing set (see Known Issues):
+# pre-existing set (see Known Issues). NOTE the default main scene is the map
+# CHOOSER, so the bare form below boots almost nothing — pass a map explicitly
+# to actually exercise one:
 Godot.exe.exe --headless --path . --quit-after 120
+Godot.exe.exe --headless --path . --quit-after 120 res://scenes/maps/soak_festival_2026.tscn
 Godot.exe.exe --headless --path . --quit-after 120 res://scenes/maps/mars_aerial.tscn
 
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder):
