@@ -41,9 +41,19 @@ Think: *Factorio* meets *Google Earth* meets *PVsyst* meets *TouchDesigner* — 
 
 ## Core Pillars
 
+> **Status legend.** ✅ shipped · ⚠️ partial · 🔀 diverged (goal met a different way)
+> · ❌ not started or dead. Marked **2026-08-01** against `CLAUDE.md` and
+> `FEATURE_CHEAT_SHEET.md`, which are the living record — this file is the
+> *vision*, and where they disagree they win. The Pillar/Phase prose below was
+> written as a forward-looking spec and is deliberately left in the future tense;
+> read the Status line, not the tense.
+
+
 ---
 
 ### Pillar 1: Location → Playable World in Under 10 Seconds
+
+> **Status: ✅ SHIPPED** — DEM + OSM + imagery pipeline, launch hub, `generated_location.tscn`, terrain sculpting, vegetation.
 
 The first experience: user enters an address or drops a pin, and within 10 seconds they are standing in a 3D reconstruction of that real place, ready to start designing.
 
@@ -78,6 +88,8 @@ The Solar Position Algorithm is a set of polynomial corrections to ecliptic long
 ---
 
 ### Pillar 2: Physics Engine — Real Numbers, Real Behavior
+
+> **Status: ✅ SHIPPED** — Solar (Meeus SPA + NOCT + Erbs), wind, hydro, CSP trough, reversible battery. `source_physics_selftest.gd` = 301 checks.
 
 Every formula cited in code comments. No faked curves. Scientists and engineers in the audience will check the math.
 
@@ -123,6 +135,8 @@ Every formula cited in code comments. No faked curves. Scientists and engineers 
 
 ### Pillar 3: First-Person Gameplay Layer
 
+> **Status: ✅ SHIPPED** — First-person + vehicles + crisis events. "Tutorial as missions" landed as **Solar Bootcamp** (12 levels) + pre-baked challenges.
+
 The simulation must feel like a game, not a dashboard. The depth is invisible until the player wants it.
 
 **Core game loop:**
@@ -162,6 +176,8 @@ The simulation must feel like a game, not a dashboard. The depth is invisible un
 ---
 
 ### Pillar 4: Community Layer — Nostr-Native, Git-Spirited
+
+> **Status: 🔀 DIVERGED** — Went LAN/join-code multiplayer + portable `.esim` packages instead of Nostr. The *goal* (share a site, remix someone's build) is met; the transport is not.
 
 **Installation as a portable file:**
 Every installation is a structured JSON document — call it an `.esim` file (energy simulation):
@@ -207,6 +223,8 @@ The game client queries a Nostr relay for published installations matching a fil
 ---
 
 ### Pillar 5: Digital Twin — Closed Loop with Home Assistant
+
+> **Status: ⚠️ PARTIAL** — HA WebSocket client + entity linker + CSV replay + automation push all work. The **HACS-integration migration is still an open decision** — do not rebuild the bridge without an explicit call.
 
 This is the feature that makes the game uniquely yours and your audience's.
 
@@ -293,6 +311,8 @@ Using tomorrow's Open-Meteo forecast + the calibrated model + current real SoC, 
 
 ### Pillar 6: Historical and Future Scenario Modes
 
+> **Status: ⚠️ PARTIAL** — Open-Meteo archive + forecast + `ClimateProjectionService` + stochastic weather generator exist. The five curated historical events do not.
+
 **Historical mode — what actually happened:**
 Open-Meteo's archive API provides hourly data back to 1940 for most global locations. Variables available: `shortwave_radiation`, `windspeed_10m`, `winddirection_10m`, `precipitation`, `temperature_2m`, `cloud_cover`, `et0_fao_evapotranspiration`, and more.
 
@@ -322,6 +342,8 @@ These are real, quantified changes from published climate science — not invent
 
 ### Pillar 7: NEC Compliance Checker
 
+> **Status: ❌ NOT STARTED** — No implementation. Nothing in the graph checks conductor sizing, OCPD, or the 120% rule.
+
 A rules engine encoded once by Fable, then running deterministically forever. Not gameplay — an optional "Design Review" mode that checks the installation against relevant NEC 2023 articles before export.
 
 Key rules to implement (representative, not exhaustive):
@@ -345,6 +367,8 @@ Output: a punch list of violations with NEC article citations and suggested fixe
 ---
 
 ### Pillar 8: Satellite Terrain Auto-Population
+
+> **Status: ❌ DEAD** — Deferred permanently — Godot has no JP2 decoder, so raw Sentinel-2 NDVI is off the table. Vegetation comes from OSM landcover instead.
 
 **Without AI at runtime — pure GIS pipeline:**
 
@@ -375,6 +399,8 @@ The Sentinel-2 tile for a 2km × 2km area is approximately 15MB compressed — c
 ---
 
 ### Pillar 9: Sphere of Influence & Systems Graph *(core gameplay — see SYSTEMS_GRAPH_VISION.md)*
+
+> **Status: ⚠️ PARTIAL** — the graph IS the core surface and is heavily built (nested super-nodes, SketchUp-style components, DC electrical faults, resource flow, PBI catchments, Site Plan / Elevation views, NPC population). The **full ISRU catalog and the PBI vision are not complete** — see the gap table in `SYSTEMS_GRAPH_VISION.md`.
 
 The 2D graph is the game's **conceptual map** of the 3D digital twin. Everything else (terrain, first-person placement, HA bridge) exists to ground this schematic in reality.
 
@@ -435,13 +461,13 @@ Categories beyond today's electrical focus: water recovery, waste sorting/shredd
 
 ## Roadmap Phases
 
-### Phase 0 — Architecture Sprint *(in progress with Fable now)*
+### Phase 0 — Architecture Sprint ✅ **DONE**
 - Scene tree, autoloads, signal bus, data bus
 - Save/load system with versioned schema
 - Basic first-person controller
 - `CLAUDE.md` project memory file established
 
-### Phase 1 — Location → World *(3–4 Fable sessions)*
+### Phase 1 — Location → World ✅ **DONE**
 - Nominatim geocoding
 - SRTM elevation + terrain mesh
 - Open-Meteo integration (historical + forecast)
@@ -452,7 +478,7 @@ Categories beyond today's electrical focus: water recovery, waste sorting/shredd
 
 **Milestone:** Enter any address, stand in a recognizable 3D place in under 10 seconds.
 
-### Phase 2 — Physics Engine *(4–5 Fable sessions)*
+### Phase 2 — Physics Engine ✅ **DONE**
 - Solar: Perez irradiance + single-diode panel model
 - Wind: full power curve + wind shear
 - Hydro: Pelton/run-of-river + pipe losses
@@ -462,7 +488,7 @@ Categories beyond today's electrical focus: water recovery, waste sorting/shredd
 
 **Milestone:** Place a solar + battery system and watch it respond accurately to real historical weather.
 
-### Phase 3 — Data Layer *(2–3 Fable sessions)*
+### Phase 3 — Data Layer ✅ **DONE**
 - TimeController (game-time ↔ real timestamps)
 - Historical weather playback (Open-Meteo archive)
 - 3D↔2D graph linkage (DataBus + GraphPanel scenes)
@@ -470,7 +496,7 @@ Categories beyond today's electrical focus: water recovery, waste sorting/shredd
 
 **Milestone:** Replay the 2021 Pacific Northwest heat dome on your installation.
 
-### Phase 4 — Game Layer *(3–4 Fable sessions)*
+### Phase 4 — Game Layer ✅ **DONE**
 - Component placement + wiring (catenary cable + flow shader)
 - UI theme system (dark theme, consistent type, animations)
 - Tutorial mission framework (5 launch missions)
@@ -479,7 +505,7 @@ Categories beyond today's electrical focus: water recovery, waste sorting/shredd
 
 **Milestone:** A non-technical player can sit down, complete Mission 1, and understand why batteries matter.
 
-### Phase 5 — Community *(3–4 Fable sessions)*
+### Phase 5 — Community 🔀 **DIVERGED** (LAN/join-code + .esim, not Nostr)
 - `.esim` installation file format (versioned JSON schema)
 - Nostr publish/fetch/fork/compare
 - Leaderboard (local computation, relay-aggregated)
@@ -487,7 +513,7 @@ Categories beyond today's electrical focus: water recovery, waste sorting/shredd
 
 **Milestone:** Publish an installation to Nostr. Pull someone else's design and run it at your location.
 
-### Phase 6 — Digital Twin *(3–4 Fable sessions)*
+### Phase 6 — Digital Twin ⚠️ **PARTIAL** (bridge works; HACS migration undecided)
 - HACS HA integration (Python, separate repo)
 - Game WebSocket client for real sensor data
 - Real vs. simulated divergence panel
@@ -498,7 +524,7 @@ Categories beyond today's electrical focus: water recovery, waste sorting/shredd
 
 **Milestone:** Real HA system feeds live data into the game. Game exports valid ESPHome config for an SRNE hybrid inverter.
 
-### Phase 7 — Advanced *(ongoing)*
+### Phase 7 — Advanced ⏳ **ONGOING**
 - Satellite imagery NDVI autopop (Copernicus Sentinel-2)
 - Future climate scenarios (CMIP6 delta method)
 - NEC compliance checker (rules engine)
@@ -507,7 +533,7 @@ Categories beyond today's electrical focus: water recovery, waste sorting/shredd
 - Battery dispatch optimizer (dynamic programming on TOU schedule)
 - Shared installation API alternative (self-hostable REST backend for orgs)
 
-### Phase 8 — Systems Graph Overhaul *(4–6 Fable sessions — Pillar 9)*
+### Phase 8 — Systems Graph Overhaul ⚠️ **IN PROGRESS**
 
 Priority order (each milestone independently shippable):
 

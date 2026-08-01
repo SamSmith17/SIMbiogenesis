@@ -1,5 +1,12 @@
 # Phase 1 — Inventory and release target
 
+> **SUPERSEDED — historical archive (April 2026).** This documents a completed
+> repo-hygiene / beta-readiness effort and is kept for provenance only. Its
+> figures describe a 107-file, 7-autoload project with no `addons/`; the project
+> is now ~540 `.gd` files and 33 autoloads. For current guidance see
+> [`ARCHITECTURE.md`](ARCHITECTURE.md) (structure + debt backlog) and
+> [`CLAUDE.md`](CLAUDE.md) (features + validation), which win on any conflict.
+
 **Date:** 2026-04-29  
 **Workspace:** `godot-simulator-4-18-25` (post-backup)
 

@@ -28,6 +28,13 @@ Godot.exe.exe --headless --path . --script power_system/sources/source_physics_s
 # Services node-registry self-test (offline — register/get/has, auto-clear on
 # tree exit, freed-node guard; see ARCHITECTURE.md debt #1):
 Godot.exe.exe --headless --path . --script core/services_selftest.gd
+# Render presets self-test (offline — the graphics/shadow quality tables pulled
+# out of main.gd into core/env/render_profile.gd; pins every value AND that the
+# presets are ordered as advertised. Worth having because project.godot carries
+# only the HIGH baseline and main.gd overrides atlas size, soft-shadow quality
+# and TAA at runtime, so project.godot alone does NOT tell you what the game
+# renders with):
+Godot.exe.exe --headless --path . --script core/env/render_profile_selftest.gd
 # Clock-claim stack self-test (offline — the ordered claim stack that replaced
 # nine private `_saved_time_scale` fields; covers re-claim-does-not-stack,
 # order-independent release, exclusive refusal, partial-claim fall-through, and

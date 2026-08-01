@@ -1,5 +1,12 @@
 # Phase 4 design — Module boundaries and scenario config
 
+> **SUPERSEDED — historical archive (April 2026).** This documents a completed
+> repo-hygiene / beta-readiness effort and is kept for provenance only. Its
+> figures describe a 107-file, 7-autoload project with no `addons/`; the project
+> is now ~540 `.gd` files and 33 autoloads. For current guidance see
+> [`ARCHITECTURE.md`](ARCHITECTURE.md) (structure + debt backlog) and
+> [`CLAUDE.md`](CLAUDE.md) (features + validation), which win on any conflict.
+
 **Status:** implemented — see `gameplay/gameplay_rules.gd`, `scenarios/scenario_config.gd`, and `GameplayRules` autoload in `project.godot`.
 
 Phase 4 should separate three concerns without rewriting the simulator:

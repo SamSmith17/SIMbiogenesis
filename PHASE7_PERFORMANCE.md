@@ -1,5 +1,12 @@
 # Phase 7 — Profiler-led performance and stability
 
+> **SUPERSEDED — historical archive (April 2026).** This documents a completed
+> repo-hygiene / beta-readiness effort and is kept for provenance only. Its
+> figures describe a 107-file, 7-autoload project with no `addons/`; the project
+> is now ~540 `.gd` files and 33 autoloads. For current guidance see
+> [`ARCHITECTURE.md`](ARCHITECTURE.md) (structure + debt backlog) and
+> [`CLAUDE.md`](CLAUDE.md) (features + validation), which win on any conflict.
+
 **Status:** first code pass + maintainer guide. Treat hotspot changes as **measure → change → re-measure** in your build.
 
 ---

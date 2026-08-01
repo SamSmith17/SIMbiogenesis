@@ -1,5 +1,12 @@
 # Phase 6 — Patreon beta, exports, and stability
 
+> **SUPERSEDED — historical archive (April 2026).** This documents a completed
+> repo-hygiene / beta-readiness effort and is kept for provenance only. Its
+> figures describe a 107-file, 7-autoload project with no `addons/`; the project
+> is now ~540 `.gd` files and 33 autoloads. For current guidance see
+> [`ARCHITECTURE.md`](ARCHITECTURE.md) (structure + debt backlog) and
+> [`CLAUDE.md`](CLAUDE.md) (features + validation), which win on any conflict.
+
 **Status:** implementation log for private beta / WIP patron builds.  
 **Depends on:** Phase 5 (map select, `scene_path` in saves, return-to-menu).
 

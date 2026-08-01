@@ -1,5 +1,12 @@
 # Phase 3 — Asset packaging (lite repo vs full Patreon build)
 
+> **SUPERSEDED — historical archive (April 2026).** This documents a completed
+> repo-hygiene / beta-readiness effort and is kept for provenance only. Its
+> figures describe a 107-file, 7-autoload project with no `addons/`; the project
+> is now ~540 `.gd` files and 33 autoloads. For current guidance see
+> [`ARCHITECTURE.md`](ARCHITECTURE.md) (structure + debt backlog) and
+> [`CLAUDE.md`](CLAUDE.md) (features + validation), which win on any conflict.
+
 **Goal:** Share **essential code** on GitHub (small clone) while Patreon / private testers get **playable builds** or a **single asset archive** that drops into the same folder layout.
 
 This project is **not** yet set up to open `scenes/maps/mars_aerial.tscn` with zero art: maps reference `res://` models and textures. A **lite clone** expects either (a) you add the asset pack to the project root, or (b) future work adds stub maps (Phase 4–5).

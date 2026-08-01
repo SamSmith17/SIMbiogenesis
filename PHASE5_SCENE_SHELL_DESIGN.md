@@ -1,5 +1,12 @@
 # Phase 5 design — Scene shell, map flow, and UI consistency
 
+> **SUPERSEDED — historical archive (April 2026).** This documents a completed
+> repo-hygiene / beta-readiness effort and is kept for provenance only. Its
+> figures describe a 107-file, 7-autoload project with no `addons/`; the project
+> is now ~540 `.gd` files and 33 autoloads. For current guidance see
+> [`ARCHITECTURE.md`](ARCHITECTURE.md) (structure + debt backlog) and
+> [`CLAUDE.md`](CLAUDE.md) (features + validation), which win on any conflict.
+
 **Status:** design/risk handoff. **Update (restructure):** the Mars play map is **`scenes/maps/mars_aerial.tscn`** (formerly root `main.tscn`); SOAK is **`scenes/maps/soak_festival_2026.tscn`**. `project.godot` runs **`map_select`**, not a map directly. Body text below may still say `main.tscn` where behavior is unchanged.
 
 One tactical fix is already applied: the Mars map includes `TimelineUI` under `UILayer`, matching `main- maybe unstable.tscn` / SOAK.

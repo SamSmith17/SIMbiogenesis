@@ -188,18 +188,23 @@ Presets today live in `component_presets.gd` (mostly electrical). The overhaul *
 
 ## Relationship to Existing Code
 
+*Gap column re-measured **2026-08-01**. Several rows closed since the original
+2026-07-08 pass — SoI metadata, promoted ports, PBI/watershed catchments and
+closure metrics all shipped, so the honest remaining gap is narrower and more
+specific than this table used to imply.*
+
 | Existing | Vision alignment | Gap |
 |----------|------------------|-----|
-| `system_graph_view.gd` + V2 canvas | Shell, library, inspector, Build/Test | SoI metadata, flow UX polish |
-| `GraphModel` + scope/compound | Nested canvases | Promoted ports, full TD navigation |
-| `ResourceFlowEngine` + `ResourceTimeline` | Multi-resource sim, scrub-safe tanks | Catchment/PBI injectors, closure metrics |
-| `ResourceKinds` | Typed water/biomass/plastic/… | Air moisture, O₂, soil, fuel kinds |
-| `component_presets.gd` | Real product names (partial) | Full ISRU catalog with efficiency specs |
-| `solar_bridge.gd` | Live PV mirror | Generalize to all HA-linked processors |
-| `ha_entity_linker.gd` | Entity binding | Per-port binding, calibration loop |
-| `AutomationEngine` | Rule export | Graph-native automation authoring |
-| Observed vs sim compare (SolarUI/NLE) | Calibration pattern | Extend to all resource channels |
-| 3D terrain + weather | PBI data source | SoI area → catchment math |
+| `system_graph_view.gd` + V2 canvas | Shell, library, inspector, Build/Test | ✅ SoI metadata + Site Plan / Elevation / Snowglobe views shipped. Remaining: flow UX polish, and the **v1/v2 canvas split is still live** (ARCHITECTURE.md debt #4) |
+| `GraphModel` + scope/compound | Nested canvases | ✅ Promoted ports, portal pills, seamless zoom drill-in and SketchUp-style reusable component definitions all shipped. Remaining: deeper TD-style navigation |
+| `ResourceFlowEngine` + `ResourceTimeline` | Multi-resource sim, scrub-safe tanks | ✅ PBI + watershed catchment injectors and closure metrics shipped (`closure_metrics_selftest.gd`, `solar_pbi_selftest.gd`, `wind_pbi_selftest.gd`, `pbi_biomass_selftest.gd`) |
+| `ResourceKinds` | Typed water/biomass/plastic/… | Steam added for CSP. Still missing: air moisture, O₂, soil, fuel |
+| `component_presets.gd` | Real product names (partial) | **The biggest remaining gap.** Still mostly electrical + a few processors; the full ISRU catalog with efficiency curves is not built |
+| `solar_bridge.gd` | Live PV mirror | Not generalized — still PV-specific |
+| `ha_entity_linker.gd` | Entity binding | Per-port binding and the calibration loop are still per-entity only |
+| `AutomationEngine` | Rule export | Graph-native automation authoring not started |
+| Observed vs sim compare (SolarUI/NLE) | Calibration pattern | Still energy-only; not extended to water/biomass/waste channels |
+| 3D terrain + weather | PBI data source | ✅ SoI area → catchment math shipped (`Watershed`, pond designation, `core/soi/`) |
 
 ---
 

@@ -1,40 +1,16 @@
-# SIMbiogenesis — renewable energy simulator (Godot 4.6)
+# SIMbiogenesis — renewable energy simulator (Godot 4.7)
 
 First-person ISRU simulator with real weather, terrain from GPS, solar/wind/hydro
 physics, multi-resource systems graph, and Home Assistant digital-twin bridge.
-**Godot 4.6**, Forward Plus. Product vision: [`ROADMAP.md`](ROADMAP.md) · Graph design:
+**Godot 4.7.1**, Forward+. Product vision: [`ROADMAP.md`](ROADMAP.md) · Graph design:
 [`SYSTEMS_GRAPH_VISION.md`](SYSTEMS_GRAPH_VISION.md).
 
 **GitHub lite clone:** bespoke SOAK/Mars art is not in Git — see [ASSETS.md](ASSETS.md). Generated location maps work without the asset pack.
 
----
-
-A simple Godot 4 project with day-night and season systems, a procedurally moving sun and moon, and a stylized sky shader.
-
-Features:
-
-- Extremely simplified day-night system with support for seasons based on latitude and earth axial tilt
-	- Calculated position of the sun and drawing it through the sky shader
-	- Shorter days in winter and longer in summer
-	- Changing position of the sun depends of the day of the year
-- Calculated position of the moon and drawing it through the sky shader
-	- Include the inclination of the orbit and the period of time to cover it
-- Sky shader
-	- Clouds based on noise function (without repeating texture)
-	- Phases of the moon depending on the position of the sun
-
-![screen1](readme/screen1.webp)
-![screen2](readme/screen2.webp)
-![screen3](readme/screen3.webp)
-
-Shader effect on YouTube:
-
-[![Watch the video](https://img.youtube.com/vi/-O-uw8KEHXA/hqdefault.jpg)](https://youtu.be/-O-uw8KEHXA)
-
 ## Map flow (launch hub)
 
 - **Play** from the project opens the **Launch hub** (`scenes/ui/map_select/map_select.tscn`): energy-zone world map, scrollable **Your maps** list, **Create map here**, **Start**, and **Continue** (latest autosave or newest manual slot).
-- **While in-game:** **M** opens the location picker overlay (Set location); bottom **Timeline** — **💾** save/load; **🗺** autosaves and returns to the launch hub.
+- **While in-game:** **L** opens the location picker overlay (Set location); bottom **Timeline** — **💾** save/load; **🗺** autosaves and returns to the launch hub.
 - **Direct map testing (editor):** open `scenes/maps/generated_location.tscn` or your local SOAK/Mars scenes (if present) and run the **current** scene (F6). Old saves referencing legacy paths are rewritten when you Continue / Load.
 
 ## Save / load
@@ -64,12 +40,31 @@ Templates with placeholders: [`config-templates/`](config-templates/README.md). 
 
 Maps depend on large `res://` art (see **[`PHASE3_ASSET_PACK.md`](PHASE3_ASSET_PACK.md)**): use a **Patreon/private asset zip** merged at the project root, or commit everything / Git LFS. The project does **not** yet open `scenes/maps/mars_aerial.tscn` with zero art installed.
 
-## Cleanup roadmap
+## Where things live
 
-- Autoload scripts and save helpers live under **`core/`** (Phase 0–2 restructure). Map scenes: **`scenes/maps/mars_aerial.tscn`**, **`scenes/maps/soak_festival_2026.tscn`**. Shared HUD and world prefabs: **`scenes/ui/`**, **`scenes/gameplay/`** (Phase 4 restructure).
-- [`PHASE1_INVENTORY.md`](PHASE1_INVENTORY.md) — inventory, repo hygiene notes, completed Phase 2/3 log.
-- [`PHASE3_ASSET_PACK.md`](PHASE3_ASSET_PACK.md) — lite repo vs Patreon/private asset pack workflow.
-- [`PHASE4_MODULE_DESIGN.md`](PHASE4_MODULE_DESIGN.md) — module boundaries; `GameplayRules` + `ScenarioConfig` are implemented (see `gameplay/`, `scenarios/`).
-- [`PHASE5_SCENE_SHELL_DESIGN.md`](PHASE5_SCENE_SHELL_DESIGN.md) — scene-shell/map-select design and risk review.
-- [`PHASE6_BETA_READINESS.md`](PHASE6_BETA_READINESS.md) — Patreon beta / exports checklist; Phase 7 perf preview.
-- [`PHASE7_PERFORMANCE.md`](PHASE7_PERFORMANCE.md) — profiler workflow, soak matrix, Phase 7 code pass notes.
+- **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — module conventions, where a new file
+  goes, extension points, and the live architectural-debt backlog. **Read this
+  before adding a feature.**
+- **[`CLAUDE.md`](CLAUDE.md)** — the feature map and the full validation suite
+  (every offline selftest + windowed capture harness). Authoritative when it
+  disagrees with anything else here.
+- **[`FEATURE_CHEAT_SHEET.md`](FEATURE_CHEAT_SHEET.md)** — player-facing hotkeys,
+  docks, and an honest ✅/⚠️/❌ status table.
+- Autoloads and save helpers live under **`core/`**; map scenes under
+  **`scenes/maps/`**; HUD and world prefabs under **`scenes/ui/`** and
+  **`scenes/gameplay/`**.
+
+### Historical archive (April 2026 — superseded)
+
+The `PHASE*.md` series documents a completed repo-hygiene and beta-readiness
+effort. It is kept for provenance and is **no longer current guidance** — it
+describes a 107-file / 7-autoload project with no `addons/`, against today's
+~540 files and 33 autoloads. Where it disagrees with `ARCHITECTURE.md` or
+`CLAUDE.md`, those win.
+
+[`PHASE1_INVENTORY.md`](PHASE1_INVENTORY.md) ·
+[`PHASE3_ASSET_PACK.md`](PHASE3_ASSET_PACK.md) ·
+[`PHASE4_MODULE_DESIGN.md`](PHASE4_MODULE_DESIGN.md) ·
+[`PHASE5_SCENE_SHELL_DESIGN.md`](PHASE5_SCENE_SHELL_DESIGN.md) ·
+[`PHASE6_BETA_READINESS.md`](PHASE6_BETA_READINESS.md) ·
+[`PHASE7_PERFORMANCE.md`](PHASE7_PERFORMANCE.md)
