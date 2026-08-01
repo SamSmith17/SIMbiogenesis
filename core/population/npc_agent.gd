@@ -888,7 +888,7 @@ func snapshot() -> Dictionary:
 	var rounded_needs := {}
 	for n in NEEDS:
 		rounded_needs[n] = snappedf(float(needs.get(n, 0.0)), 0.01)
-	return {
+	var out := {
 		"id": id,
 		"x": snappedf(pos.x, 0.5), "z": snappedf(pos.y, 0.5),
 		"needs": rounded_needs,
@@ -899,6 +899,12 @@ func snapshot() -> Dictionary:
 		"climb_m": snappedf(climb_m, 0.5),
 		"walk_kcal": snappedf(walk_kcal, 1.0),
 	}
+	# Only stored when it differs from the deterministic default — a renamed
+	# agent needs to survive save/load, but the common case (everyone still
+	# has their generated name) shouldn't bloat every snapshot with it.
+	if display_name != name_for(id):
+		out["display_name"] = display_name
+	return out
 
 
 static func from_snapshot(snap: Dictionary) -> NpcAgent:
@@ -913,6 +919,8 @@ static func from_snapshot(snap: Dictionary) -> NpcAgent:
 	a.distance_m = maxf(float(snap.get("distance_m", 0.0)), 0.0)
 	a.climb_m = maxf(float(snap.get("climb_m", 0.0)), 0.0)
 	a.walk_kcal = maxf(float(snap.get("walk_kcal", 0.0)), 0.0)
+	if snap.has("display_name"):
+		a.display_name = str(snap["display_name"])
 	# Activities don't survive save/load (spaces are re-claimed on demand);
 	# the agent re-plans from IDLE on the first tick.
 	return a

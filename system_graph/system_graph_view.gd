@@ -10290,6 +10290,13 @@ func npc_population_bridge() -> NpcPopulationBridge:
 	return _npc_population
 
 
+## The live 3D host (null until at least one pop-driven habitat has spawned
+## it) — for settings-driven live refreshes like re-tinting on a display-pref
+## change, which need to reach already-built NpcAvatars directly.
+func npc_population_host() -> Node3D:
+	return _npc_host
+
+
 ## Departures and collapse are story beats — surface them even with the graph
 ## closed (the toast rides the normal toast channel).
 func _drain_npc_events() -> void:

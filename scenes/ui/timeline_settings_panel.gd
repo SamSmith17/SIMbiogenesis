@@ -326,6 +326,7 @@ func _build_ui() -> void:
 	_build_drone_tab(tabs)
 	_build_environment_tab(tabs)
 	_build_lighting_tab(tabs)
+	_build_npc_tab(tabs)
 	_build_stars_planets_tab(tabs)
 	_build_solar_tab(tabs)
 	_build_ha_tab(tabs)
@@ -876,7 +877,6 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	v.add_child(gq_hint)
 	v.add_child(HSeparator.new())
 	_build_prop_perf_section(v)
-	_build_npc_section(v)
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Terrain detail (imagery resolution)")
 	var tq_row := HBoxContainer.new()
@@ -2036,16 +2036,18 @@ func _on_open_location_picker() -> void:
 		picker.show_picker()
 
 
-## How simulated people are drawn. A style choice, not a quality setting: the
-## rigged body is photoreal enough that any imperfection in how it is driven
-## reads as uncanny, while a stylised figure has no such contract with the
-## viewer and the same approximate motion reads as deliberate.
+## How simulated people are drawn and controlled. A style choice, not a
+## quality setting: the rigged body is photoreal enough that any imperfection
+## in how it is driven reads as uncanny, while a stylised figure has no such
+## contract with the viewer and the same approximate motion reads as
+## deliberate.
 ##
 ## Both styles are posed from the SAME NpcPoseMachine, so behaviour is
 ## identical either way — people still walk the whole route, lie down on
 ## arrival and sit for the bathroom. Only the rendering differs.
-func _build_npc_section(v: Control) -> void:
-	_add_section_lbl(v, "NPCs")
+func _build_npc_tab(tabs: TabContainer) -> void:
+	var v := _make_tab(tabs, "NPC")
+	_add_section_lbl(v, "Body style")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	var hdr := Label.new()
@@ -2077,3 +2079,61 @@ func _build_npc_section(v: Control) -> void:
 		miss.add_theme_color_override("font_color", UITheme.C_WARN)
 		miss.add_theme_font_size_override("font_size", 10)
 		v.add_child(miss)
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Appearance")
+	var colors_check := _add_check(v, "Show NPC tint colors",
+		func(on: bool) -> void: _on_npc_colors_toggled(on))
+	colors_check.button_pressed = NpcDisplayPrefs.colors_enabled()
+	var colors_hint := Label.new()
+	colors_hint.text = "Each person gets a distinct pastel outline by default. Turn off to render everyone in plain black — no individual colors."
+	colors_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	colors_hint.custom_minimum_size = Vector2(420, 0)
+	colors_hint.add_theme_color_override("font_color", C_TEXT_S)
+	colors_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(colors_hint)
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Routines")
+	var routines_btn := Button.new()
+	routines_btn.text = "Routines & chores…"
+	routines_btn.pressed.connect(_on_open_npc_routines)
+	v.add_child(routines_btn)
+	var routines_hint := Label.new()
+	routines_hint.text = "Opens the roster, schedules, and chore board for the nearest active habitat. Also available from that habitat's inspector panel in the graph."
+	routines_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	routines_hint.custom_minimum_size = Vector2(420, 0)
+	routines_hint.add_theme_color_override("font_color", C_TEXT_S)
+	routines_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(routines_hint)
+
+
+## "Colors off" is a live-render toggle, not a body-style choice — flip it and
+## already-spawned avatars re-tint immediately (unlike body style, which only
+## takes effect as people come back into view) since it is a much cheaper,
+## purely cosmetic change to apply.
+func _on_npc_colors_toggled(on: bool) -> void:
+	NpcDisplayPrefs.set_colors_enabled(on)
+	var graph := Services.get_graph()
+	if graph == null or not graph.has_method("npc_population_host"):
+		return
+	var host: Node = graph.call("npc_population_host")
+	if host != null and host.has_method("refresh_tints"):
+		host.call("refresh_tints")
+
+
+## Opens Routines & chores for the first active pop-driven habitat (same modal
+## the per-habitat inspector button opens). With none active yet, this still
+## opens the modal so its own "turn on Simulated individuals" guidance shows.
+func _on_open_npc_routines() -> void:
+	var graph := Services.get_graph()
+	if graph == null or not graph.has_method("open_npc_routines"):
+		return
+	var item_id := ""
+	if graph.has_method("npc_population_bridge"):
+		var bridge: NpcPopulationBridge = graph.call("npc_population_bridge")
+		if bridge != null:
+			var ids: Array = bridge.habitat_ids()
+			if not ids.is_empty():
+				item_id = str(ids[0])
+	graph.call("open_npc_routines", item_id)

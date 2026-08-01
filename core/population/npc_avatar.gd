@@ -40,13 +40,24 @@ const ACTIVITY_CLIPS := {
 const PICK_RADIUS_M := 0.55
 const PICK_CENTER_Y := 1.0
 
+## Overhead status readout (name + morale bar) geometry, in the same local
+## billboard frame as the nametag — see _build_status_bar().
+const STATUS_BAR_WIDTH := 0.46
+const STATUS_BAR_HEIGHT := 0.055
+const STATUS_BAR_Y := HEIGHT_M + 0.12   # below the nametag (HEIGHT_M + 0.28)
+
 var agent_id: String = ""
 var display_name: String = ""
 var status_text: String = ""
 var morale_label: String = ""
+var morale: float = 0.0
 
 var _root: Node3D = null            # animated sub-root (bob/lie-down)
 var _tag: Label3D = null
+var _status_root: Node3D = null     # holds the morale bar + its labels
+var _bar_fill: MeshInstance3D = null
+var _bar_fill_mat: StandardMaterial3D = null
+var _bar_pct_lbl: Label3D = null
 var _moving := false
 var _lying := false
 
@@ -83,7 +94,6 @@ func setup(p_agent_id: String, color: Color, p_name: String = "") -> void:
 	agent_id = p_agent_id
 	display_name = p_name if not p_name.is_empty() else p_agent_id
 	name = "Npc_%s" % p_agent_id.validate_node_name()
-	_tint = color
 	_machine = NpcPoseMachine.new()
 	_machine.set_catalog(NpcRig.catalog())
 	_machine.set_walk_variant(NpcRig.walk_variant_for(p_agent_id))
@@ -92,10 +102,30 @@ func setup(p_agent_id: String, color: Color, p_name: String = "") -> void:
 	# body had a shared StandardMaterial3D tinted here; when that body was
 	# replaced this line kept assigning to a `_mat` nothing builds any more,
 	# which crashed every map load with a pop-driven habitat.
+	set_tint(color)
+	if _tag != null:
+		_tag.text = display_name
+
+
+## Re-tint live without touching body/visual state — for when a display pref
+## (colors on/off) changes mid-session, as opposed to `setup()` which also
+## (re)builds visuals and is only meant to run once per avatar.
+func set_tint(color: Color) -> void:
+	_tint = color
 	if _simple != null:
 		_simple.set_tint(color)
 	if _rig_mat != null:
 		_rig_mat.set_shader_parameter("rim_color", color)
+
+
+## Live-refresh the display name (and nametag text). `setup()` only names an
+## avatar once at creation; a rename in the Routines panel edits the live
+## NpcAgent, and the host calls this every tick from agent_dots() so a rename
+## shows up immediately instead of only on the avatar's next despawn/respawn.
+func set_display_name(new_name: String) -> void:
+	if new_name.is_empty() or new_name == display_name:
+		return
+	display_name = new_name
 	if _tag != null:
 		_tag.text = display_name
 
@@ -116,6 +146,108 @@ func _build_nametag() -> void:
 	_tag.no_depth_test = true
 	_tag.visible = false  # only for the person the crosshair is on
 	add_child(_tag)
+
+
+## Live-refresh morale (and the bar, when visible). Called every tick from
+## the host like set_display_name — cheap even when not visible, since the
+## bar mesh/label only get touched while _status_root is actually shown.
+func set_morale(value: float) -> void:
+	morale = clampf(value, 0.0, 1.0)
+	if _status_root != null and _status_root.visible:
+		_update_status_bar()
+
+
+## Name + morale bar, below the nametag, in the same billboard frame — shown
+## together for whoever the crosshair is on (see set_tag_visible). The bar
+## fills left-to-right from a fixed "Fuck This!" origin to "Fuck Yes!", the
+## same 0..1 morale scale NpcMorale already bands into labels/colors
+## elsewhere (Routines panel roster, Site Plan dots) — reused here via
+## NpcMorale.color() rather than inventing a second color mapping.
+func _build_status_bar() -> void:
+	if _status_root != null:
+		return
+	_status_root = Node3D.new()
+	_status_root.name = "StatusBar"
+	_status_root.visible = false  # only for the person the crosshair is on
+	add_child(_status_root)
+
+	# Track (the empty/background part of the bar) — static, never rescaled.
+	var track := _make_bar_quad(Color(0.07, 0.08, 0.11, 0.85))
+	track.position = Vector3(0.0, STATUS_BAR_Y, 0.0)
+	(track.get_surface_override_material(0) as StandardMaterial3D).render_priority = 0
+	_status_root.add_child(track)
+
+	# Fill — scaled by morale fraction, left edge pinned to the track's left
+	# edge (see _update_status_bar: a scaled-down quad shrinks toward its own
+	# centre, so the X position is re-derived every refresh to compensate).
+	_bar_fill = _make_bar_quad(Color.WHITE)
+	_bar_fill.position = Vector3(-STATUS_BAR_WIDTH * 0.5, STATUS_BAR_Y, 0.001)
+	_bar_fill_mat = _bar_fill.get_surface_override_material(0) as StandardMaterial3D
+	_bar_fill_mat.render_priority = 1
+	_status_root.add_child(_bar_fill)
+
+	_bar_pct_lbl = _make_status_label("", 26, Vector3(0.0, STATUS_BAR_Y, 0.002))
+	_bar_pct_lbl.render_priority = 2
+	_status_root.add_child(_bar_pct_lbl)
+
+	var left_lbl := _make_status_label("Fuck This!", 22,
+		Vector3(-STATUS_BAR_WIDTH * 0.5 - 0.20, STATUS_BAR_Y, 0.0))
+	left_lbl.modulate = Color(0.85, 0.4, 0.4, 0.95)
+	_status_root.add_child(left_lbl)
+
+	var right_lbl := _make_status_label("Fuck Yes!", 22,
+		Vector3(STATUS_BAR_WIDTH * 0.5 + 0.20, STATUS_BAR_Y, 0.0))
+	right_lbl.modulate = Color(0.5, 0.85, 0.55, 0.95)
+	_status_root.add_child(right_lbl)
+
+	_update_status_bar()
+
+
+func _make_bar_quad(color: Color) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var quad := QuadMesh.new()
+	quad.size = Vector2(STATUS_BAR_WIDTH, STATUS_BAR_HEIGHT)
+	mi.mesh = quad
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.no_depth_test = true
+	mat.albedo_color = color
+	mi.set_surface_override_material(0, mat)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	return mi
+
+
+func _make_status_label(text: String, font_size: int, pos: Vector3) -> Label3D:
+	var lbl := Label3D.new()
+	lbl.text = text
+	lbl.font_size = font_size
+	lbl.pixel_size = 0.0075
+	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lbl.position = pos
+	lbl.modulate = Color(1, 1, 1, 0.97)
+	lbl.outline_modulate = Color(0.02, 0.04, 0.09, 0.9)
+	lbl.outline_size = 7
+	lbl.no_depth_test = true
+	return lbl
+
+
+func _update_status_bar() -> void:
+	if _bar_fill == null:
+		return
+	var frac := clampf(morale, 0.0, 1.0)
+	_bar_fill.scale.x = maxf(frac, 0.001)  # 0 scale degenerates the quad's AABB
+	# A scaled quad shrinks toward its own centre, not its left edge — shift
+	# the fill's position back out so the visible left edge stays pinned to
+	# the track's left edge regardless of fraction (the standard scale-based
+	# progress-bar trick).
+	_bar_fill.position.x = -STATUS_BAR_WIDTH * 0.5 * (1.0 - frac)
+	if _bar_fill_mat != null:
+		_bar_fill_mat.albedo_color = NpcMorale.color(morale)
+	if _bar_pct_lbl != null:
+		_bar_pct_lbl.text = "%d%%" % roundi(frac * 100.0)
 
 
 ## Host-driven LOD: `true` swaps in the rigged body, `false` the primitive.
@@ -163,11 +295,17 @@ func pick_center() -> Vector3:
 	return global_position + Vector3(0.0, PICK_CENTER_Y, 0.0)
 
 
-## Nametag is off by default (50 floating labels is noise) — the crosshair
-## turns it on for whoever the player is looking at.
+## Nametag + morale bar are off by default (50 floating labels is noise) —
+## the crosshair turns them on for whoever the player is looking at.
 func set_tag_visible(on: bool) -> void:
 	if _tag != null:
 		_tag.visible = on
+	if _status_root != null:
+		_status_root.visible = on
+		if on:
+			# Morale may have drifted while this avatar wasn't focused (set_morale
+			# skips the refresh while hidden) — catch it up right as it shows.
+			_update_status_bar()
 
 
 ## pos = ground point (feet); yaw = facing; moving/activity drive animation.
@@ -407,4 +545,5 @@ func _ensure_visuals() -> void:
 	_simple.setup(agent_id, _tint)
 	_root.add_child(_simple)
 	_build_nametag()
+	_build_status_bar()
 	return

@@ -96,6 +96,8 @@ func _process(delta: float) -> void:
 			_avatars[aid] = av
 		av.status_text = str(dot.get("status", ""))
 		av.morale_label = str(dot.get("morale_label", ""))
+		av.set_display_name(str(dot.get("name", "")))
+		av.set_morale(float(dot.get("morale", 0.0)))
 		var sim_pos: Vector2 = dot.get("pos", Vector2.ZERO)
 		var dist := (sim_pos - eye).length()
 		if dist > CULL_DIST_M:
@@ -154,6 +156,17 @@ func _apply_rig_budget(near: Array) -> void:
 		var av: NpcAvatar = _avatars.get(str(near[i][1]))
 		if av != null and is_instance_valid(av):
 			av.set_detail(i < MAX_RIGGED)
+
+
+## Re-tint every already-spawned avatar from NpcDisplayPrefs — called when the
+## player flips "show NPC tint colors" mid-session, since new avatars already
+## pick up the current pref via color_for_agent() but existing ones don't
+## otherwise get revisited (setup() only tints once, on first creation).
+func refresh_tints() -> void:
+	for aid in _avatars:
+		var av: NpcAvatar = _avatars[aid]
+		if av != null and is_instance_valid(av):
+			av.set_tint(NpcPopulationEngine.color_for_agent(str(aid)))
 
 
 ## Highlight one agent's nametag (called by InteractionFocus on crosshair hit;

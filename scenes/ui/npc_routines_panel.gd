@@ -373,10 +373,22 @@ func _refresh_roster() -> void:
 
 		var name_lbl := Label.new()
 		name_lbl.text = agent.display_name
-		name_lbl.custom_minimum_size.x = 90
+		name_lbl.custom_minimum_size.x = 78
+		name_lbl.clip_text = true
 		name_lbl.add_theme_font_size_override("font_size", 12)
 		name_lbl.add_theme_color_override("font_color", C_TEXT)
 		row.add_child(name_lbl)
+
+		var rename_btn := Button.new()
+		rename_btn.text = "✎"
+		rename_btn.flat = true
+		rename_btn.custom_minimum_size = Vector2(20, 0)
+		rename_btn.tooltip_text = "Rename"
+		rename_btn.add_theme_color_override("font_color", C_TEXT_DIM)
+		# `agent` is captured by reference (NpcAgent is RefCounted) — the dialog
+		# always edits whichever object is live when it's opened, not a stale copy.
+		rename_btn.pressed.connect(func() -> void: _open_rename_dialog(agent))
+		row.add_child(rename_btn)
 
 		var mood := Label.new()
 		mood.text = agent.morale_band_label()
@@ -396,6 +408,45 @@ func _refresh_roster() -> void:
 		status.add_theme_font_size_override("font_size", 10)
 		status.add_theme_color_override("font_color", C_TEXT_DIM)
 		row.add_child(status)
+
+
+## A standalone popup, not a child of `_roster_box` — the roster rebuilds
+## every 0.5 s (`_refresh_roster`), which would yank focus/cursor out from
+## under an inline-editable field mid-keystroke. A separate dialog sidesteps
+## that entirely: it lives outside the box that gets torn down.
+func _open_rename_dialog(agent: NpcAgent) -> void:
+	var dlg := ConfirmationDialog.new()
+	dlg.title = "Rename %s" % agent.display_name
+	dlg.ok_button_text = "Rename"
+	# AcceptDialog has no "margin_*" theme constants of its own (those belong
+	# to MarginContainer) — a bare LineEdit child would hug the window edges,
+	# so wrap it in a real MarginContainer for breathing room.
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_right", 16)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	dlg.add_child(margin)
+	var edit := LineEdit.new()
+	edit.text = agent.display_name
+	edit.custom_minimum_size = Vector2(240, 0)
+	edit.max_length = 40
+	margin.add_child(edit)
+	add_child(dlg)
+
+	var commit := func() -> void:
+		var new_name := edit.text.strip_edges()
+		if not new_name.is_empty():
+			agent.display_name = new_name
+			_refresh_roster()
+		dlg.queue_free()
+	dlg.confirmed.connect(commit)
+	edit.text_submitted.connect(func(_t: String) -> void: commit.call())
+	dlg.canceled.connect(func() -> void: dlg.queue_free())
+
+	dlg.popup_centered(Vector2(320, 120))
+	edit.grab_focus()
+	edit.select_all()
 
 
 ## The affordance that makes over-scheduling visible: sleep / needs / chores /

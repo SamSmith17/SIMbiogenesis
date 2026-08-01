@@ -566,8 +566,13 @@ func agent_dots() -> Array:
 
 
 ## Golden-ratio hue spread -> stable distinct pastel per agent id (the
-## RemotePlayerAvatar.color_for_peer idiom).
+## RemotePlayerAvatar.color_for_peer idiom). The single choke-point both the
+## 2D Site Plan dots and the 3D avatars read tint from (via agent_dots()), so
+## gating the "show tint colors" player pref here — instead of in each
+## renderer — covers both for free.
 static func color_for_agent(agent_id: String) -> Color:
+	if not NpcDisplayPrefs.colors_enabled():
+		return Color.BLACK
 	var h := fposmod(float(hash(agent_id) % 1000) * 0.618033988749895, 1.0)
 	return Color.from_hsv(h, 0.45, 0.95)
 

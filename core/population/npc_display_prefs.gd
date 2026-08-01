@@ -18,6 +18,10 @@ const CFG_PATH := "user://npc_display.cfg"
 const SECTION := "npc"
 
 static var _style := ""
+## Tri-state: -1 means "not loaded yet", so a real `false` from disk is never
+## confused with the unloaded default (mirrors the `_style.is_empty()` check
+## above, just for a bool instead of a string).
+static var _colors_on := -1
 
 
 static func style() -> String:
@@ -42,3 +46,24 @@ static func set_style(s: String) -> void:
 ## question as "is the rigged body available" — see the class comment.
 static func wants_simple() -> bool:
 	return style() == STYLE_SIMPLE
+
+
+## True when each person should render with their own distinct pastel tint
+## (the default). False renders everyone in plain black — no way to tell
+## individuals apart by color, only by name/nametag.
+static func colors_enabled() -> bool:
+	if _colors_on < 0:
+		var cfg := ConfigFile.new()
+		var on := true
+		if cfg.load(CFG_PATH) == OK:
+			on = bool(cfg.get_value(SECTION, "colors_on", true))
+		_colors_on = 1 if on else 0
+	return _colors_on == 1
+
+
+static func set_colors_enabled(on: bool) -> void:
+	_colors_on = 1 if on else 0
+	var cfg := ConfigFile.new()
+	cfg.load(CFG_PATH)
+	cfg.set_value(SECTION, "colors_on", on)
+	cfg.save(CFG_PATH)
