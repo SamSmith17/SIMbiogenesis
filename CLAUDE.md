@@ -28,6 +28,12 @@ Godot.exe.exe --headless --path . --script power_system/sources/source_physics_s
 # Services node-registry self-test (offline — register/get/has, auto-clear on
 # tree exit, freed-node guard; see ARCHITECTURE.md debt #1):
 Godot.exe.exe --headless --path . --script core/services_selftest.gd
+# Clock-claim stack self-test (offline — the ordered claim stack that replaced
+# nine private `_saved_time_scale` fields; covers re-claim-does-not-stack,
+# order-independent release, exclusive refusal, partial-claim fall-through, and
+# a direct reproduction of the snowglobe-over-CSV-playback bug where the clock
+# ended up stuck paused. Extend it with every new clock owner):
+Godot.exe.exe --headless --path . --script core/clock_claims_selftest.gd
 # InputMap self-test (offline — parses project.godot's [input] section, NOT
 # InputMap.get_actions() which also carries Godot's built-in ui_* defaults):
 # fails on a key bound to two actions (whitelist intentional pairs in

@@ -288,7 +288,7 @@ var _elev_3d_wires_toast_shown: bool = false
 ## Site/Elev: freeze clock at mean solar noon so CT/plan aren't night-black.
 var _elev_noon_active: bool = false
 var _elev_saved_day_time: float = NAN
-var _elev_saved_time_scale: float = NAN
+const ELEV_CLOCK_OWNER := "graph_elevation_noon"
 ## When true, Site/Elev keep the live clock (skip noon bake).
 var _site_elev_live_lighting: bool = false
 ## Saved conduits_3d_visible when Site Plan forces a wire mode session.
@@ -2809,9 +2809,12 @@ func _elev_begin_noon_lock() -> void:
 		return
 	if not _elev_noon_active:
 		_elev_saved_day_time = float(main.get("day_time"))
-		_elev_saved_time_scale = float(main.get("time_scale"))
 		_elev_noon_active = true
-	main.set("time_scale", 0.0)
+	# Claim rather than save/restore: the elevation view can be opened over CSV
+	# playback or the snowglobe, and the old _elev_saved_time_scale snapshotted
+	# THEIR temporary 0.0 and restored that. See core/clock_claims.gd.
+	if main.has_method("push_clock_claim"):
+		main.call("push_clock_claim", ELEV_CLOCK_OWNER, {"time_scale": 0.0})
 	_elev_snap_solar_noon(main)
 	call_deferred("_elev_refresh_ct_after_noon")
 
@@ -2847,10 +2850,9 @@ func _elev_end_noon_lock() -> void:
 	if main != null:
 		if not is_nan(_elev_saved_day_time):
 			main.set("day_time", _elev_saved_day_time)
-		if not is_nan(_elev_saved_time_scale):
-			main.set("time_scale", _elev_saved_time_scale)
+		if main.has_method("pop_clock_claim"):
+			main.call("pop_clock_claim", ELEV_CLOCK_OWNER)
 	_elev_saved_day_time = NAN
-	_elev_saved_time_scale = NAN
 
 
 func _spatial_radial_yaw_deg(site_xz: Vector2, center_site: Vector2 = Vector2.ZERO) -> float:

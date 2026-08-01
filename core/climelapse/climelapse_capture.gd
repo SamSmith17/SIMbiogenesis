@@ -8,6 +8,8 @@ signal capture_started()
 signal capture_progress(frac: float)
 signal capture_complete(success: bool, output_path: String, message: String)
 
+## Name this export holds the world clock under (see core/clock_claims.gd).
+const CLOCK_OWNER := "climelapse_export"
 const DEFAULT_FPS := 30
 const FRAMES_SUBDIR := "_clim_frames"
 
@@ -109,12 +111,24 @@ func _run_capture(loader: Node, start_abs: float, end_abs: float, time_scale: fl
 	# instant by hand, so BOTH continuous playback (time_scale) and the analemma
 	# stepper (a calendar day per rendered frame) have to be off. Leaving
 	# analemma_mode on is what used to make an export "just play at ∞ speed".
-	var prev_scale: Variant = main.get("time_scale") if "time_scale" in main else null
-	var prev_analemma: Variant = main.get("analemma_mode") if "analemma_mode" in main else null
-	if prev_scale != null:
-		main.set("time_scale", 0.0)
-	if prev_analemma != null:
-		main.set("analemma_mode", false)
+	# One EXCLUSIVE claim carrying BOTH values — they are a pair here, and a
+	# claim cannot half-restore the way two private "prev_" fields could. While
+	# it is held, a UI speed change or another subsystem's claim is a logged
+	# no-op. Released on every exit path via _restore_world().
+	var claimed := false
+	if main.has_method("push_clock_claim"):
+		claimed = bool(main.call("push_clock_claim", CLOCK_OWNER,
+			{"time_scale": 0.0, "analemma_mode": false}, true))
+	var prev_scale: Variant = null
+	var prev_analemma: Variant = null
+	if not claimed:
+		# Fallback for a Main without the claim API (older save/scene shells).
+		prev_scale = main.get("time_scale") if "time_scale" in main else null
+		prev_analemma = main.get("analemma_mode") if "analemma_mode" in main else null
+		if prev_scale != null:
+			main.set("time_scale", 0.0)
+		if prev_analemma != null:
+			main.set("analemma_mode", false)
 
 	var h_per_frame := hours_per_frame(time_scale, fps)
 	var total := maxi(1, _frames_total if _frames_total > 0 else frames_for(start_abs, end_abs, time_scale, fps))
@@ -244,6 +258,9 @@ func _run_capture(loader: Node, start_abs: float, end_abs: float, time_scale: fl
 ## stepper) and release the cursor. Every exit path goes through here.
 func _restore_world(main: Node, cursor: Node, prev_scale: Variant, prev_analemma: Variant) -> void:
 	if main != null and is_instance_valid(main):
+		# Idempotent, so running twice (or after the fallback path) is harmless.
+		if main.has_method("pop_clock_claim"):
+			main.call("pop_clock_claim", CLOCK_OWNER)
 		if prev_analemma != null:
 			main.set("analemma_mode", prev_analemma)
 		if prev_scale != null:

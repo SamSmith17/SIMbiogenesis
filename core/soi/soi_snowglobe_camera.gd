@@ -3,6 +3,7 @@ extends Node
 ## Dedicated orbit camera for Snowglobe SoI visualization.
 
 const MODAL_NAME := "soi_snowglobe"
+const CLOCK_OWNER := "soi_snowglobe"
 const ORBIT_DIST_MULT := 2.2
 # Low enough to fly through the glass shell and orbit close to the SOI
 # center from inside the globe (see _update_camera_transform's absolute-
@@ -40,7 +41,6 @@ var _orbit_pitch := 0.35
 var _orbit_mult := ORBIT_DIST_MULT
 var _orbit_mult_target := ORBIT_DIST_MULT
 var _dragging := false
-var _saved_time_scale := 1.0
 var _active := false
 var _sun_gizmo: MeshInstance3D = null
 var _world_sun: DirectionalLight3D = null
@@ -64,8 +64,11 @@ func enter(svc: Node, loader: Node) -> void:
 		return
 	var main := tree.current_scene
 	if main != null:
-		_saved_time_scale = float(main.get("time_scale"))
-		main.set("time_scale", 0.0)
+		# A claim, not a save/restore: opening the globe over CSV playback used
+		# to snapshot playback's 0.0 as "the previous value" and restore that,
+		# leaving the clock stuck paused. See core/clock_claims.gd.
+		if main.has_method("push_clock_claim"):
+			main.call("push_clock_claim", CLOCK_OWNER, {"time_scale": 0.0})
 		# Long shadows while the globe is up: the default directional shadow
 		# range is tuned for first-person distances, so buildings/props at
 		# globe-viewing distance lost their shadows entirely and the scene
@@ -133,8 +136,8 @@ func exit() -> void:
 	var tree := get_tree()
 	if tree != null:
 		var main := tree.current_scene
-		if main != null:
-			main.set("time_scale", _saved_time_scale)
+		if main != null and main.has_method("pop_clock_claim"):
+			main.call("pop_clock_claim", CLOCK_OWNER)
 	CursorController.release_modal(MODAL_NAME)
 	if _svc != null and _svc.has_method("_finalize_snowglobe_exit"):
 		_svc._finalize_snowglobe_exit()

@@ -69,8 +69,26 @@ var day_of_year : int :
 	get:
 		return _calculate_day_of_year( month, day, year )
 
-## Time multiplier. 0 = paused, 1.0 = 1 hour per second, 0.01 = 1x real-time
-var time_scale : float = 0.01
+## Temporary claims on clock state (see core/clock_claims.gd). Subsystems that
+## need to commandeer the clock — video export, challenge bake, the SoI
+## snowglobe, CSV playback — take a named claim and release it, instead of each
+## stashing its own "previous" value. Nine of them did the latter, and they did
+## not nest: a claim taken while another was active snapshotted the OTHER one's
+## temporary value and restored that, leaving the clock stuck.
+var claims := ClockClaims.new()
+
+## The USER's intended time multiplier — what the timeline, save/load and the
+## multiplayer clock RPC read and write. Plain assignments to `time_scale` land
+## here, so all of those keep working untouched.
+var base_time_scale : float = 0.01
+
+## Effective time multiplier: the top-most claim's value if any subsystem holds
+## one, else the user's. 0 = paused, 1.0 = 1 hour per second, 0.01 = 1x real-time
+var time_scale : float :
+	set( value ) :
+		base_time_scale = value
+	get :
+		return float( claims.value_or( "time_scale", base_time_scale ) )
 
 # ==================== LOCATION ====================
 
@@ -121,9 +139,27 @@ func set_from_unix( t_unix: int ) -> void :
 	var second : int = int( dt.get( "second", 0 ) )
 	day_time = float( hour ) + float( minute ) / 60.0 + float( second ) / 3600.0
 
-## Advance the clock by a frame delta (scaled by time_scale).
+## Advance the clock by a frame delta (scaled by the EFFECTIVE time_scale, so a
+## claimed pause actually stops the world).
 func advance( delta: float ) -> void :
 	day_time += delta * time_scale
+
+
+## Take or update a named claim on clock state. `exclusive` expresses the "this
+## system owns the clock" contract (video export, challenge bake): competing
+## claims become logged no-ops until it is released. Returns false if refused.
+func claim_clock( owner: String, values: Dictionary, exclusive: bool = false ) -> bool :
+	return claims.claim( owner, values, exclusive )
+
+
+## Release a named claim. Idempotent — safe on every exit path, including twice.
+func release_clock( owner: String ) -> void :
+	claims.release( owner )
+
+
+## Owner of the current exclusive claim, or "" when none.
+func clock_owner() -> String :
+	return claims.exclusive_owner()
 
 # ==================== DST ====================
 

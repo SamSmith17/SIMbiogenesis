@@ -218,12 +218,58 @@ var weather_light_factor : float = 1.0 :
 		use_day_time_for_shader = value
 		_update_shader()
 
-## Time multiplier. 0 = paused, 1.0 = 1 hour per second, 0.01 = 1x real-time
+## Time multiplier. 0 = paused, 1.0 = 1 hour per second, 0.01 = 1x real-time.
+## Writing this sets the USER's intent (`clock.base_time_scale`); reading it
+## returns the EFFECTIVE value, which a subsystem holding a clock claim may be
+## overriding. See push_clock_claim below.
 @export_range( 0.0, 10.0, 0.0001 ) var time_scale : float = 0.01 :
 	set( value ) :
 		clock.time_scale = value
 	get :
 		return clock.time_scale
+
+
+## Take a named, temporary claim on clock state — the supported way for a
+## subsystem to commandeer the clock. `values` may carry "time_scale" and
+## "analemma_mode". Pass exclusive=true for the "this system owns the clock"
+## contract (video export, challenge bake): competing claims then become logged
+## no-ops. Returns false if refused.
+##
+## This replaces nine private `_saved_time_scale` fields that each stashed and
+## restored the value by hand. They did not nest — a claim taken while another
+## was live snapshotted the OTHER one's temporary value and restored that, so
+## e.g. opening the SoI snowglobe during CSV playback left the clock stuck
+## paused with nothing able to unpause it. See core/clock_claims.gd.
+func push_clock_claim( owner: String, values: Dictionary, exclusive: bool = false ) -> bool :
+	var ok : bool = clock.claim_clock( owner, values, exclusive )
+	if ok :
+		_apply_clock_claim_values()
+	return ok
+
+
+## Release a named claim. Idempotent, so it is safe on every exit path.
+func pop_clock_claim( owner: String ) -> void :
+	clock.release_clock( owner )
+	_apply_clock_claim_values()
+
+
+## True while some subsystem holds the clock exclusively (UI should disable its
+## speed controls rather than let the user press a button that a logged no-op
+## will silently swallow).
+func clock_is_owned() -> bool :
+	return not clock.clock_owner().is_empty()
+
+
+## `analemma_mode` lives here, not on the clock, and its setter has side
+## effects — so the claim stack carries the value and Main applies it. Absent
+## from every live claim means "whatever the user last chose", which is what
+## `_analemma_user_intent` remembers.
+func _apply_clock_claim_values() -> void :
+	var want : bool = bool( clock.claims.value_or( "analemma_mode", _analemma_user_intent ) )
+	if analemma_mode != want :
+		_analemma_applying_claim = true
+		analemma_mode = want
+		_analemma_applying_claim = false
 
 # ==================== GAMEPLAY MECHANICS ====================
 
@@ -2092,10 +2138,20 @@ var analemma_mode : bool = false :
 	set( value ) :
 		var was : bool = analemma_mode
 		analemma_mode = value
+		# A write that did NOT come from _apply_clock_claim_values is the user
+		# (or a UI) expressing intent, so remember it as what to fall back to
+		# when a claim that overrode analemma is released.
+		if not _analemma_applying_claim :
+			_analemma_user_intent = value
 		if value != was :
 			_on_analemma_mode_changed( value )
 		if not value :
 			analemma_days_per_frame = 1
+
+## The user's own analemma choice, preserved across claims that override it.
+var _analemma_user_intent : bool = false
+## Guard so a claim-driven write to analemma_mode is not mistaken for intent.
+var _analemma_applying_claim : bool = false
 
 ## Calendar days advanced per frame while analemma_mode is active (1 = ∞, 2 = ∞×2).
 var analemma_days_per_frame : int = 1 :

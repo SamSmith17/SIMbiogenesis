@@ -44,7 +44,6 @@ var _file: FileAccess = null
 var _parse_rows_done: int = 0
 var _parse_file_size: int = 0
 var _parse_header_skipped: bool = false
-var _saved_time_scale: float = -1.0
 var _last_graph_day_key: String = ""
 ## Clip mode: parse only, no world-clock takeover, no auto-play. Used to load a
 ## datastream as a comparison "clip" on the NLE timeline rather than replay it.
@@ -396,20 +395,25 @@ func _sync_world_time_from_cursor() -> void:
 	_maybe_refresh_solar_ui_day_graph()
 
 
+const CLOCK_OWNER := "csv_playback"
+
+
+# Claim rather than save/restore: another subsystem (the SoI snowglobe, the
+# elevation view) can open on top of playback, and the old private
+# _saved_time_scale made each of them snapshot the other's temporary 0.0 and
+# restore that. See core/clock_claims.gd.
 func _suspend_world_clock() -> void:
 	if _main_node == null:
 		return
-	if _main_node.get("time_scale") != null:
-		_saved_time_scale = float(_main_node.time_scale)
-		_main_node.time_scale = 0.0
+	if _main_node.has_method("push_clock_claim"):
+		_main_node.call("push_clock_claim", CLOCK_OWNER, {"time_scale": 0.0})
 
 
 func _restore_world_clock() -> void:
 	if _main_node == null:
 		return
-	if _saved_time_scale >= 0.0 and _main_node.get("time_scale") != null:
-		_main_node.time_scale = _saved_time_scale
-	_saved_time_scale = -1.0
+	if _main_node.has_method("pop_clock_claim"):
+		_main_node.call("pop_clock_claim", CLOCK_OWNER)
 
 
 func _resolve_runtime_nodes() -> void:

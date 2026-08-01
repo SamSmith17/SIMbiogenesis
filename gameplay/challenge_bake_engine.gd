@@ -85,7 +85,7 @@ var _bake_steps: int = 0
 var _specs_snapshot: Dictionary = {}
 var _npc_snapshot: Dictionary = {}
 var _battery_soc_kwh := 0.0
-var _saved_time_scale := 0.0
+const CLOCK_OWNER := "challenge_bake"
 
 
 func _ready() -> void:
@@ -134,8 +134,11 @@ func start(main_node: Node, graph_view: Node, solar_ui: Node,
 
 	# Own the world: freeze the clock at the segment start, stand the ambient
 	# tick down, pin the playhead.
-	_saved_time_scale = float(_main.get("time_scale")) if _main.get("time_scale") != null else 0.0
-	_main.set("time_scale", 0.0)
+	# EXCLUSIVE claim: the bake owns the clock for the whole segment, so a UI
+	# speed change or another subsystem's claim arriving mid-bake becomes a
+	# logged no-op instead of corrupting the run. Released on every exit path
+	# via _release_world(). See core/clock_claims.gd.
+	_main.call("push_clock_claim", CLOCK_OWNER, {"time_scale": 0.0}, true)
 	_main.call("set_absolute_hours", _start_abs)
 	_gv.call("set_ambient_flow_suspended", true)
 
@@ -529,5 +532,5 @@ func _release_world() -> void:
 			_solar_ui.call("release_challenge_series")
 	if _gv != null and _gv.has_method("set_ambient_flow_suspended"):
 		_gv.call("set_ambient_flow_suspended", false)
-	if _main != null:
-		_main.set("time_scale", _saved_time_scale)
+	if _main != null and _main.has_method("pop_clock_claim"):
+		_main.call("pop_clock_claim", CLOCK_OWNER)
