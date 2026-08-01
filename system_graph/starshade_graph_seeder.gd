@@ -6,7 +6,24 @@ const DEFAULT_PANEL_WATTS := 220.0
 const STARSHADE_SOURCE := "starshade"
 const STARSHADE_TAG := "starshade_site"
 
+const ARRAY_DEF_ID := "starshade_solar_array"
+
 const _SCENE_KEYWORDS := ["starshade", "linkagelab_export"]
+
+
+## True when a registered PV-array definition already has exactly `panel_count`
+## panels at `panel_watts` each (compare the fields we actually vary — Dictionary
+## `==` identity is not a reliable deep compare here).
+static func _array_def_matches(def: Dictionary, panel_count: int, panel_watts: float) -> bool:
+	var items: Array = (def.get("subgraph", {}) as Dictionary).get("items", []) as Array
+	if items.size() != maxi(1, panel_count):
+		return false
+	var want_w := maxf(1.0, panel_watts)
+	for it_v: Variant in items:
+		var sp: Dictionary = (it_v as Dictionary).get("specs", {}) as Dictionary
+		if absf(float(sp.get("wmp", 0.0)) - want_w) > 0.01:
+			return false
+	return true
 
 
 static func try_seed_from_main(main: Node, terrain_loader: Node = null,
@@ -148,10 +165,20 @@ static func seed_graph(model: GraphModel, panel_count: int, panel_watts: float,
 	# nodes. `source`/`starshade_tag` ride as instance-only identity so HA linking,
 	# dedupe (has_graph_content) and clear_starshade_content keep working, and the
 	# structure stays live-editable (edits inside it propagate to any sibling).
-	var defs: Dictionary = ComponentPresets.builtin_component_tree("starshade")
+	# The PV array definition is sized to the REQUESTED panel count/watts — those
+	# are player-facing (StarShade edit modal spinboxes, imported LinkageLab
+	# `solar.panelCount`/`panelWatts`), so a fixed 18×220 W template would make
+	# Re-seed a no-op.
+	var defs: Dictionary = ComponentPresets.starshade_component_tree(panel_count, panel_watts)
 	for did in defs.keys():
-		if model.get_definition(str(did)).is_empty():
-			model.put_definition(defs[did] as Dictionary)
+		var want: Dictionary = defs[did] as Dictionary
+		var have: Dictionary = model.get_definition(str(did))
+		# Re-register the array whenever the stored template no longer matches the
+		# request: reseed_graph clears the INSTANCE, but the definition survives,
+		# so a size change would otherwise re-realize the previous array.
+		if have.is_empty() or (str(did) == ARRAY_DEF_ID \
+				and not _array_def_matches(have, panel_count, panel_watts)):
+			model.put_definition(want)
 	var comp_id := GraphComponentDefs.realize(model, "starshade", "root",
 		Vector2(0.0, -60.0), {"source": STARSHADE_SOURCE, "starshade_tag": tag})
 	if comp_id.is_empty():

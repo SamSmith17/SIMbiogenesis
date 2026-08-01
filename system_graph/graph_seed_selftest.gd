@@ -13,13 +13,14 @@ func _initialize() -> void:
 	fails += _test_bridge_no_autoseed()
 	fails += _test_starshade_idempotent()
 	fails += _test_starshade_full_wiring()
+	fails += _test_starshade_reseed_resizes()
 	fails += _test_dc_series_polarity()
 	fails += _test_aggregate_sync()
 	fails += _test_puzzle_starter_idempotent()
 	fails += _test_unique_item_ids()
 	fails += _test_deserialize_dedup()
 	if fails == 0:
-		print("GRAPH SEED SELFTEST PASS  (9 checks)")
+		print("GRAPH SEED SELFTEST PASS  (10 checks)")
 	else:
 		print("GRAPH SEED SELFTEST FAIL  (%d failed)" % fails)
 	quit()
@@ -115,13 +116,20 @@ func _test_starshade_idempotent() -> int:
 
 ## Full 18-panel StarShade seed must wire every panel into a 3S×6P topology
 ## (regression: missing `+ s * series` left only 9 panels connected).
+##
+## The seeder now realizes the StarShade COMPONENT tree instead of seeding flat
+## nodes, so the topology lives one level down: panels sit in the PV-array
+## instance's child scope (walk the nesting tree, not the root scope), the six
+## 3-panel strings parallel onto string 0's terminals rather than each running
+## its own pair into a controller, and the array's exposed PV bus is what feeds
+## the hybrid inverter's charge controller.
 func _test_starshade_full_wiring() -> int:
 	var model: GraphModel = GraphModelScript.new()
 	if not StarShadeGraphSeeder.seed_graph(model, 18, 220.0, "wire_tag"):
 		push_error("starshade wiring: seed failed")
 		return 1
 	var panel_ids: Dictionary = {}
-	for item: Dictionary in model.get_items_in_scope("root"):
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if str(item.get("type", "")) == "panel":
 			panel_ids[str(item.get("id", ""))] = true
 	if panel_ids.size() != 18:
@@ -129,25 +137,25 @@ func _test_starshade_full_wiring() -> int:
 		return 1
 	var wired: Dictionary = {}
 	var series_links := 0
-	var to_ctrl_pos := 0
-	var to_ctrl_neg := 0
+	var parallel_pos := 0
+	var parallel_neg := 0
 	for conn: Dictionary in model.connections:
 		var a := str(conn.get("source_item_id", ""))
 		var b := str(conn.get("target_item_id", ""))
+		if not (panel_ids.has(a) and panel_ids.has(b)):
+			continue
+		wired[a] = true
+		wired[b] = true
 		var ah := str(conn.get("source_handle_id", ""))
 		var bh := str(conn.get("target_handle_id", ""))
-		if panel_ids.has(a):
-			wired[a] = true
-		if panel_ids.has(b):
-			wired[b] = true
 		# Series string links: panel+ → panel−
-		if panel_ids.has(a) and panel_ids.has(b) \
-				and ah == "positive" and bh == "negative":
+		if ah == "positive" and bh == "negative":
 			series_links += 1
-		if panel_ids.has(a) and b == "starshade_ctrl" and bh == "pvPositive":
-			to_ctrl_pos += 1
-		if panel_ids.has(a) and b == "starshade_ctrl" and bh == "pvNegative":
-			to_ctrl_neg += 1
+		# Parallel bus: another string's end tied onto string 0's matching end.
+		elif ah == "positive" and bh == "positive":
+			parallel_pos += 1
+		elif ah == "negative" and bh == "negative":
+			parallel_neg += 1
 	if wired.size() != 18:
 		push_error("starshade wiring: only %d/18 panels have PV connections" % wired.size())
 		return 1
@@ -155,11 +163,89 @@ func _test_starshade_full_wiring() -> int:
 	if series_links != 12:
 		push_error("starshade wiring: expected 12 series links got %d" % series_links)
 		return 1
-	# 6 parallel strings into the controller
-	if to_ctrl_pos != 6 or to_ctrl_neg != 6:
-		push_error("starshade wiring: expected 6+ / 6− to controller got %d+ / %d−" % [
-			to_ctrl_pos, to_ctrl_neg])
+	# Strings 1..5 parallel onto string 0 — 5 links per polarity. (A 6th pair
+	# would mean string 0 shorted onto itself; fewer means a dangling string.)
+	if parallel_pos != 5 or parallel_neg != 5:
+		push_error("starshade wiring: expected 5+ / 5− parallel bus links got %d+ / %d−" % [
+			parallel_pos, parallel_neg])
 		return 1
+	if not _starshade_array_feeds_inverter(model):
+		push_error("starshade wiring: array PV bus does not reach the hybrid inverter")
+		return 1
+	return 0
+
+
+## True when the realized PV-array instance's exposed pv_pos/pv_neg ports are
+## both wired to the realized hybrid-inverter instance.
+func _starshade_array_feeds_inverter(model: GraphModel) -> bool:
+	var array_id := ""
+	var hinv_id := ""
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
+		var did := str((item.get("specs", {}) as Dictionary).get("definition_id", ""))
+		if did == "starshade_solar_array":
+			array_id = str(item.get("id", ""))
+		elif did == "starshade_hybrid_inverter":
+			hinv_id = str(item.get("id", ""))
+	if array_id.is_empty() or hinv_id.is_empty():
+		return false
+	var pos := false
+	var neg := false
+	for conn: Dictionary in model.connections:
+		if str(conn.get("source_item_id", "")) != array_id:
+			continue
+		if str(conn.get("target_item_id", "")) != hinv_id:
+			continue
+		match str(conn.get("source_handle_id", "")):
+			"pv_pos": pos = true
+			"pv_neg": neg = true
+	return pos and neg
+
+
+## panel_count / panel_watts are player-facing — the StarShade edit modal's
+## spinboxes and an imported LinkageLab bundle's solar.panelCount/panelWatts both
+## reach reseed_graph. Regression: realizing a FIXED 18 × 220 W component template
+## ignored both, so Re-seed silently did nothing (and reseed_graph only clears the
+## instance, so the stale array definition had to be re-registered too).
+func _test_starshade_reseed_resizes() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	if not StarShadeGraphSeeder.seed_graph(model, 24, 400.0, "resize_tag"):
+		push_error("starshade resize: first seed failed")
+		return 1
+	if _check_seeded_panels(model, 24, 400.0, "first seed") != 0:
+		return 1
+	if not StarShadeGraphSeeder.reseed_graph(model, 9, 100.0, "resize_tag"):
+		push_error("starshade resize: reseed failed")
+		return 1
+	if _check_seeded_panels(model, 9, 100.0, "reseed") != 0:
+		return 1
+	# A count that is not a multiple of the 3-panel string still yields exactly
+	# that many panel nodes (the trailing partial string is laid out, not dropped).
+	if not StarShadeGraphSeeder.reseed_graph(model, 20, 220.0, "resize_tag"):
+		push_error("starshade resize: partial-string reseed failed")
+		return 1
+	if _check_seeded_panels(model, 20, 220.0, "partial string") != 0:
+		return 1
+	return 0
+
+
+## Every seeded panel (across the component's nested scopes) must be present in
+## the requested quantity and at the requested watts. A leftover instance from a
+## previous seed shows up here as an inflated count.
+func _check_seeded_panels(model: GraphModel, want_count: int, want_watts: float,
+		label: String) -> int:
+	var got := StarShadeGraphSeeder.count_panels(model)
+	if got != want_count:
+		push_error("starshade resize (%s): expected %d panels got %d" % [
+			label, want_count, got])
+		return 1
+	for item: Dictionary in GraphNesting.walk_items(model, "root"):
+		if str(item.get("type", "")) != "panel":
+			continue
+		var wmp := float((item.get("specs", {}) as Dictionary).get("wmp", 0.0))
+		if absf(wmp - want_watts) > 0.01:
+			push_error("starshade resize (%s): expected %.0f W panels got %.0f W" % [
+				label, want_watts, wmp])
+			return 1
 	return 0
 
 

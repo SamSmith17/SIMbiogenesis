@@ -1481,6 +1481,16 @@ static func builtin_component_tree(def_id: String) -> Dictionary:
 	return out
 
 
+## The StarShade tree with its PV array resized to `panel_count` × `panel_watts`.
+## Same shape as builtin_component_tree("starshade"); only the array definition
+## differs, so a caller can register the whole tree and realize an instance whose
+## array matches what the player/import asked for (see StarShadeGraphSeeder).
+static func starshade_component_tree(panel_count: int, panel_watts: float) -> Dictionary:
+	var tree := builtin_component_tree("starshade")
+	tree["starshade_solar_array"] = _def_starshade_solar_array(panel_count, panel_watts)
+	return tree
+
+
 static func _gather_builtin_tree(def_id: String, out: Dictionary) -> void:
 	if def_id.is_empty() or out.has(def_id):
 		return
@@ -1583,38 +1593,63 @@ static func _def_solar_generator() -> Dictionary:
 	}
 
 
-## StarShade PV array — 18 × 220 W panels wired 3S × 6P (real seeder specs).
-## Strings paralleled onto string 0's ends; that pair is the exposed PV bus. A
-## documentary (non-blocking) sunlight_in is exposed on string 0's top panel.
-static func _def_starshade_solar_array() -> Dictionary:
+## StarShade PV array — `panel_count` × `panel_watts` panels wired into
+## 3-panel series strings, every FULL string paralleled onto string 0's ends;
+## that pair is the exposed PV bus. A documentary (non-blocking) sunlight_in is
+## exposed on string 0's bottom panel. Defaults are the real StarShade build:
+## 18 × 220 W = 3S × 6P (byte-identical to the original hardcoded definition).
+##
+## The array is parameterised because panel count/watts are player-facing: the
+## StarShade edit modal's spinboxes (scenes/ui/starshade_edit_modal.gd) and an
+## imported LinkageLab bundle's `solar.panelCount` / `solar.panelWatts` both feed
+## StarShadeGraphSeeder.reseed_graph. A trailing PARTIAL string (panel_count not
+## a multiple of 3) is laid out but deliberately left off the parallel bus — a
+## short string sits at a lower Voc than the 3S strings it would parallel onto,
+## which is exactly what the legacy flat seeder's `_wire_panel_array` did when it
+## skipped incomplete strings.
+static func _def_starshade_solar_array(
+		panel_count := GraphVirtualIds.ARRAY_PANEL_COUNT,
+		panel_watts := 220.0) -> Dictionary:
 	var items: Array = []
 	var conns: Array = []
-	var series := 3
-	var strings := 6
+	var series := GraphVirtualIds.ARRAY_SERIES_PER_STRING
+	var count := maxi(1, panel_count)
+	var watts := maxf(1.0, panel_watts)
+	var strings := int(ceil(float(count) / float(series)))
+	# Panel electricals scale off the reference 220 W cell: same silicon (Voc/Vmp
+	# unchanged), more/less current. At the 220 W default this reproduces the
+	# original literals exactly (isc 8.7, imp 220/30).
+	var vmp := 30.0
+	var isc := 8.7 * (watts / 220.0)
 	# Grid step must clear the panel node size (210×128) so the array reads as a
 	# clean, non-overlapping matrix; centered symmetrically on the origin.
 	var step_x := 212.0
 	var step_y := 140.0
 	var off_x := (float(strings) - 1.0) * 0.5 * step_x
 	var off_y := (float(series) - 1.0) * 0.5 * step_y
+	# Panels present in string 0 (the bus string) — a sub-3-panel array has only
+	# a partial string 0, and its ends are still the bus.
+	var s0_len := mini(series, count)
 	for s in strings:
-		for r in series:
+		var s_len := mini(series, count - s * series)
+		for r in s_len:
 			var lid := "p_%d_%d" % [s, r]
 			items.append({"local_id": lid, "type": "panel",
 				"dx": float(s) * step_x - off_x, "dy": float(r) * step_y - off_y,
-				"specs": {"name": "StarShade PV", "wmp": 220.0, "voc": 37.5,
-					"vmp": 30.0, "isc": 8.7, "imp": 220.0 / 30.0, "cost": 150.0}})
+				"specs": {"name": "StarShade PV", "wmp": watts, "voc": 37.5,
+					"vmp": vmp, "isc": isc, "imp": watts / vmp, "cost": 150.0}})
 			if r > 0:
 				conns.append({"source": "p_%d_%d" % [s, r - 1], "source_handle": "positive",
 					"target": lid, "target_handle": "negative", "polarity": "positive"})
 		# Parallel this string onto string 0 (shared PV bus at panel terminals).
-		if s > 0:
+		# Full strings only — see the partial-string note above.
+		if s > 0 and s_len == series and s0_len == series:
 			conns.append({"source": "p_%d_%d" % [s, series - 1], "source_handle": "positive",
 				"target": "p_0_%d" % (series - 1), "target_handle": "positive", "polarity": "positive"})
 			conns.append({"source": "p_%d_0" % s, "source_handle": "negative",
 				"target": "p_0_0", "target_handle": "negative", "polarity": "negative"})
 	var eps: Array = [
-		{"handle_id": "pv_pos", "child": "p_0_%d" % (series - 1), "child_handle": "positive",
+		{"handle_id": "pv_pos", "child": "p_0_%d" % (s0_len - 1), "child_handle": "positive",
 			"direction": "out", "polarity": "positive", "label": "PV +"},
 		{"handle_id": "pv_neg", "child": "p_0_0", "child_handle": "negative",
 			"direction": "out", "polarity": "negative", "label": "PV −"},
