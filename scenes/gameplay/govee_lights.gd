@@ -914,11 +914,17 @@ func _hide_interaction_prompt() -> void:
 func _input(event: InputEvent) -> void:
 	if Engine.is_editor_hint():
 		return
-	
+
 	# Only handle input when player is in range
 	if _player_in_range == null:
 		return
-	
+
+	# Standing near a light is not a reason to steal keystrokes: both branches
+	# below call set_input_as_handled(), so typing "o" or "p" into a text field
+	# used to toggle the light and swallow the character.
+	if InputGuard.blocked(get_viewport()):
+		return
+
 	# Check for toggle action (O key)
 	if event.is_action_pressed("interact"):
 		toggle()

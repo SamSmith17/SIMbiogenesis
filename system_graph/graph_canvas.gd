@@ -1303,7 +1303,13 @@ func _gui_input(event: InputEvent) -> void:
 				return
 
 	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode in [KEY_DELETE, KEY_BACKSPACE] and not selected_connection_id.is_empty():
+		# BACKSPACE only, deliberately. Delete on a selected wire deletes the
+		# WIRE: system_graph_view.gd handles KEY_DELETE in _input(), which runs
+		# before _gui_input, so a KEY_DELETE branch here was unreachable dead
+		# code that made the two keys silently do different things on the same
+		# selection. Backspace = pop the last waypoint is the surviving,
+		# intentional behaviour.
+		if event.keycode == KEY_BACKSPACE and not selected_connection_id.is_empty():
 			var conn := model.get_connection(selected_connection_id) if model != null else {}
 			if not conn.is_empty():
 				var wps: Array = _waypoints_graph(conn)

@@ -90,19 +90,23 @@ Godot.exe.exe --headless --path . --script core/terrain/watershed_selftest.gd
 | **Space** | Pause / resume sim | `sim_pause_toggle` |
 | **O** | Interact | Also bound to `vegetation_area_edit` — interactables win; bare ground veg tune is fallback |
 | **X** | Dismount / stop charge | |
-| **C** | Charge EUC **and** Camp scatter dock | Same key: charge when near charger; **C** also toggles camp UI via TerrainLoader |
+| **C** | Charge EUC **and** Camp scatter dock | `charge` + `camp_scatter`. Known unresolved conflict — see [Key conflicts](#key-conflicts--gotchas) |
 | **R** | Repair shorted EUC | |
 | **1 / 0** | Equip / unequip tool | |
 | **G** | System graph | Core gameplay surface |
 | **U** | Unified Library | Also timeline 📦 |
 | **L** | Location picker | Older docs sometimes say **M** — InputMap is **L** |
 | **T** | Terrain sculpt dock | |
-| **V** | Vegetation paint dock | Also `toggle_camera` — veg dock usually wins on maps with TerrainLoader |
+| **V** | Vegetation paint dock | Sole owner — the dead `toggle_camera` action was removed |
 | **B** | Building Builder (aimed building) | Or Interact on amber-highlighted building |
 | **J** | Light place mode | LMB place, RMB / J exit; Ctrl/Alt+click existing light to edit |
 | **N** | Linkage Lab | |
 | **K** | Site Report | Also timeline 📊 |
-| **P** | Several bindings collide | See [Key conflicts](#key-conflicts--gotchas) |
+| **M** | Placed Props edit dock | `placed_props_edit` |
+| **Y** | NPC space edit dock | `space_edit` |
+| **Z** | POV warp overlay | `toggle_pov_warp` (StarShade projector) |
+| **Home** | Star calibration | `toggle_star_calibration` |
+| **P** | Light menu / pallet rack | Contextual — see [Key conflicts](#key-conflicts--gotchas) |
 | **I** | Projection canvas | NLE / compare panels |
 | **F1** | Help overlay | |
 | **Enter** | Multiplayer chat compose | `mp_chat` |
@@ -112,14 +116,25 @@ Controller labels for common actions live in `interaction_prompt_ui.gd` (A = int
 
 ### Key conflicts / gotchas
 
+`core/input_map_selftest.gd` enforces this table — it fails on any key bound to
+two actions that is not listed in its `ALLOWED_OVERLAPS` (resolved) or
+`KNOWN_CONFLICTS` (real, tracked) const. Run it after any `[input]` edit.
+
 | Collision | Reality |
 |-----------|---------|
-| **O** = Interact + veg-area edit | Focusing a prop/SoI/solar/pond/building wins; veg area modal only if nothing else is focused |
-| **C** = Charge + Camp dock | Near a charger, charge prompt; otherwise **C** opens camp scatter |
-| **V** = Vegetation + camera toggle | On generated maps, TerrainLoader usually eats **V** for the veg dock |
-| **P** | Hardcoded **POV warp** in `main.gd`; InputMap also has `toggle_light_menu` (**P**) and `toggle_pallet_rack` (**P**). **Pallet rack** may win via unhandled path; light menu label is stale |
-| `placed_props_edit` | **No key bound** in `project.godot` (empty events). Open props via Library **Place Model**, Interact on a prop, or rebind the action |
-| README / Wave walkthrough | Some keys (**M** location, Berm/Hill/Swale) are outdated vs current UI |
+| **O** = Interact + veg-area edit | Resolved. Focusing a prop/SoI/solar/pond/building wins; veg area modal only if nothing else is focused (`interaction_focus.gd:872-878`) |
+| **Shift** = Sprint + drone ascend | Resolved. Mode-exclusive — `sprint` is polled only in `player.gd`, `drone_ascend` only in `fpv_drone.gd`, and the two are never active together |
+| **Enter** = `mp_chat` + `ui_accept` | Resolved. Chat is handled in `_unhandled_input`, so a focused Control takes Enter as `ui_accept` first |
+| **P** = Light menu + pallet rack | Resolved. `govee_lights.gd` only claims **P** while you are in range of a light and consumes it; elsewhere **P** opens the pallet rack |
+| **C** = Charge + Camp dock | ⚠️ **Known, unresolved.** At a charging station **C** does BOTH: the camp dock consumes the event, but `charge` is read by *polling* in `player.gd:1017`, and polling ignores `set_input_as_handled()`. Fix = make `charge` event-driven |
+| README / Wave walkthrough | Some keys (**M** location, Berm/Hill/Swale) are outdated vs current UI. Note **M** is now Placed Props edit |
+
+**Resolved since the last pass:** `toggle_camera` (**V**) was deleted — it had
+zero handlers anywhere (the game is first-person only) yet the help overlay
+advertised it to players as "Toggle camera view". `placed_props_edit` was
+unbound, which made the Placed Props panel unreachable from both of its keyboard
+openers; it is **M** now. POV warp moved off its hardcoded, unguarded `KEY_P` in
+`main.gd` to the `toggle_pov_warp` action on **Z**.
 
 ---
 
@@ -502,7 +517,7 @@ Timeline **Multiplayer** chip → lobby:
 | Feature | Key / UI |
 |---------|----------|
 | Projection canvas | **I** — BL/BR panels, compare mode |
-| POV warp | **P** (hardcoded) — calibration-related |
+| POV warp | **Z** (`toggle_pov_warp`) — calibration-related |
 | Warp / calibration actions | InputMap `toggle_projection_warp` / `_calibration` / `reset_projection_warp` (special keys) |
 | Video / OBS feed | Timeline 📹 📷 |
 

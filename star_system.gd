@@ -139,7 +139,6 @@ var reference_star_directions : Dictionary = {}
 var current_lst : float = 0.0
 
 var _calibration_ui : CanvasLayer = null
-var _toggle_cooldown : float = 0.0
 
 func _ready() -> void:
 	main_scene_ready = false
@@ -159,13 +158,22 @@ func _find_main_scene() -> void:
 						break
 	main_scene_ready = main_scene != null
 
-func _process(delta: float) -> void:
+# Star calibration used to be a raw Input.is_key_pressed(KEY_HOME) poll in
+# _process behind a 0.5 s cooldown: it ran every frame, ignored keyboard focus
+# (so pressing Home to jump to the start of a line in any text field toggled
+# calibration), and could not be rebound. It is an InputMap action handled as
+# an event now -- no per-frame polling, no cooldown hack, and focus-guarded.
+func _unhandled_input(event: InputEvent) -> void:
 	if Engine.is_editor_hint():
 		return
-	_toggle_cooldown -= delta
-	if Input.is_key_pressed(KEY_HOME) and _toggle_cooldown <= 0.0:
-		toggle_calibration()
-		_toggle_cooldown = 0.5
+	if not InputMap.has_action("toggle_star_calibration"):
+		return
+	if not event.is_action_pressed("toggle_star_calibration"):
+		return
+	if InputGuard.blocked(get_viewport()):
+		return
+	toggle_calibration()
+	get_viewport().set_input_as_handled()
 
 # ==================== SHADER UPDATES ====================
 

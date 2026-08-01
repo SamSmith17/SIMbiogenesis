@@ -965,23 +965,14 @@ func _toggle_location_picker() -> void :
 		location_picker.call( "show_picker" )
 		_location_picker_open = true
 
-func _input( e : InputEvent ) -> void :
-	if Engine.is_editor_hint() :
-		return
-	if e is not InputEventKey :
-		return
-	var key_event : InputEventKey = e as InputEventKey
-	if not key_event.pressed or key_event.echo :
-		return
-	if key_event.keycode == KEY_P or key_event.physical_keycode == KEY_P :
-		if is_instance_valid( pov_warp_overlay ) and pov_warp_overlay.has_method( "toggle_warp_mode" ) :
-			pov_warp_overlay.call( "toggle_warp_mode" )
-			get_viewport().set_input_as_handled()
-			return
-
 func _unhandled_input( e : InputEvent ) -> void :
 	if Engine.is_editor_hint() :
 		return
+	# Every branch below uses e.is_action_pressed(), NOT
+	# Input.is_action_just_pressed(). The latter is frame-scoped rather than
+	# event-scoped: it stays true for every event delivered in the same frame,
+	# so pressing two shortcut keys within one frame made the second event
+	# re-run the first branch and toggle that panel straight back shut.
 	if InputMap.has_action( "toggle_solar_ui" ) and e.is_action_pressed( "toggle_solar_ui" ) :
 		var solar_node := get_node_or_null( "UILayer/SolarUI" )
 		if solar_node != null :
@@ -1007,13 +998,18 @@ func _unhandled_input( e : InputEvent ) -> void :
 			return
 	if e is not InputEventKey or not ( e as InputEventKey ).pressed or ( e as InputEventKey ).echo :
 		return
-	if InputMap.has_action( "placed_props_edit" ) and Input.is_action_just_pressed( "placed_props_edit" ) :
+	# Nothing below may fire while a text field has focus or a blocking modal is
+	# up: these handlers call set_input_as_handled(), so an unguarded one both
+	# triggers its panel AND swallows the character being typed.
+	if InputGuard.blocked( get_viewport() ) :
+		return
+	if InputMap.has_action( "placed_props_edit" ) and e.is_action_pressed( "placed_props_edit" ) :
 		_ensure_placed_props_ui()
 		if _placed_props_ui != null and _placed_props_ui.has_method( "toggle_mode" ) :
 			_placed_props_ui.call( "toggle_mode" )
 		get_viewport().set_input_as_handled()
 		return
-	if InputMap.has_action( "place_light" ) and Input.is_action_just_pressed( "place_light" ) :
+	if InputMap.has_action( "place_light" ) and e.is_action_pressed( "place_light" ) :
 		_ensure_placed_light_modal()
 		if PlacedLightService.is_placement_active():
 			PlacedLightService.cancel_placement()
@@ -1022,7 +1018,7 @@ func _unhandled_input( e : InputEvent ) -> void :
 		get_viewport().set_input_as_handled()
 		return
 	var key_event : InputEventKey = e as InputEventKey
-	if key_event.keycode == KEY_P or key_event.physical_keycode == KEY_P :
+	if InputMap.has_action( "toggle_pov_warp" ) and e.is_action_pressed( "toggle_pov_warp" ) :
 		if is_instance_valid( pov_warp_overlay ) and pov_warp_overlay.has_method( "toggle_warp_mode" ) :
 			pov_warp_overlay.call( "toggle_warp_mode" )
 			get_viewport().set_input_as_handled()
@@ -1030,7 +1026,10 @@ func _unhandled_input( e : InputEvent ) -> void :
 	# GPU A/B levers on the editor-safe F7 key (F5/F6/F8 are the editor's own
 	# run/stop shortcuts and would kill the game): F7 = toggle veg shadows,
 	# Shift+F7 = hide/show ALL trees (measures the canopy's total GPU share).
-	if key_event.keycode == KEY_F7 or key_event.physical_keycode == KEY_F7 :
+	# Left as a raw key rather than an InputMap action because the three
+	# modifier variants would need three actions on one key -- exactly the
+	# double-binding shape core/input_map_selftest.gd exists to reject.
+	if InputGuard.key_pressed( key_event, KEY_F7 ) :
 		if key_event.ctrl_pressed :
 			_cycle_render_scale()
 		elif key_event.shift_pressed :
@@ -1041,31 +1040,31 @@ func _unhandled_input( e : InputEvent ) -> void :
 				ToastUI.Level.INFO, 2.5 )
 		get_viewport().set_input_as_handled()
 		return
-	if InputMap.has_action( "toggle_projection_canvas" ) and Input.is_action_just_pressed( "toggle_projection_canvas" ) :
+	if InputMap.has_action( "toggle_projection_canvas" ) and e.is_action_pressed( "toggle_projection_canvas" ) :
 		var pc := ensure_projection_canvas()
 		if is_instance_valid( pc ) :
 			pc.visible = not pc.visible
 			get_viewport().set_input_as_handled()
 			return
-	if InputMap.has_action( "toggle_location_picker" ) and Input.is_action_just_pressed( "toggle_location_picker" ) :
+	if InputMap.has_action( "toggle_location_picker" ) and e.is_action_pressed( "toggle_location_picker" ) :
 		_toggle_location_picker()
 		get_viewport().set_input_as_handled()
 		return
-	if InputMap.has_action( "toggle_site_report" ) and Input.is_action_just_pressed( "toggle_site_report" ) :
+	if InputMap.has_action( "toggle_site_report" ) and e.is_action_pressed( "toggle_site_report" ) :
 		var tl := get_node_or_null( "UILayer/TimelineUI" )
 		if tl != null and tl.has_method( "_on_site_report_pressed" ) :
 			tl.call( "_on_site_report_pressed" )
 		get_viewport().set_input_as_handled()
 		return
-	if InputMap.has_action( "toggle_linkage_lab" ) and Input.is_action_just_pressed( "toggle_linkage_lab" ) :
+	if InputMap.has_action( "toggle_linkage_lab" ) and e.is_action_pressed( "toggle_linkage_lab" ) :
 		open_linkage_lab()
 		get_viewport().set_input_as_handled()
 		return
-	if InputMap.has_action( "toggle_scad_store" ) and Input.is_action_just_pressed( "toggle_scad_store" ) :
+	if InputMap.has_action( "toggle_scad_store" ) and e.is_action_pressed( "toggle_scad_store" ) :
 		open_scad_store()
 		get_viewport().set_input_as_handled()
 		return
-	if InputMap.has_action( "toggle_pallet_rack" ) and Input.is_action_just_pressed( "toggle_pallet_rack" ) :
+	if InputMap.has_action( "toggle_pallet_rack" ) and e.is_action_pressed( "toggle_pallet_rack" ) :
 		var prl := get_node_or_null( "TerrainLoader" )
 		if prl != null and prl.has_method( "open_pallet_rack_builder" ) :
 			prl.call( "open_pallet_rack_builder" )

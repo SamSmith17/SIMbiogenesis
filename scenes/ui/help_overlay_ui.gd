@@ -31,7 +31,6 @@ const _GROUPS := [
 		["move_left", "Strafe left"],
 		["move_right", "Strafe right"],
 		["sprint", "Sprint"],
-		["toggle_camera", "Toggle camera view"],
 	]],
 	["Interaction", [
 		["interact", "Interact / pick up / use"],

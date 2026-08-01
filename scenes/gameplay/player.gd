@@ -429,7 +429,11 @@ func _input(event: InputEvent) -> void:
 		if event.keycode == KEY_X and is_riding:
 			_dismount_vehicle()
 			return
-		if event.keycode == KEY_F or (event.unicode == 102 or event.unicode == 70):
+		# Debug-only: F spawns a fire crisis event. Gated on a debug build so it
+		# cannot fire in an exported game. The old condition also matched on
+		# `unicode == 'f'/'F'`, which triggered from ANY key event producing that
+		# character regardless of layout or modifiers -- physical_keycode only.
+		if OS.is_debug_build() and event.physical_keycode == KEY_F:
 			_trigger_fire_event_debug()
 			return
 

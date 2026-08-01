@@ -17,7 +17,7 @@
 |--------|-------------|
 | Look (free look) | Mouse movement |
 | Invert Y Axis | **Enabled by default** |
-| Toggle Camera Mode | V |
+| _(Toggle Camera Mode removed — the game is first-person only)_ | — |
 
 ### Interaction & Tools
 | Action | Key / Button |
@@ -46,7 +46,7 @@
 | Toggle System Graph V2 | Alt + G |
 | Toggle Location Picker | L |
 | Toggle Projection Canvas | I |
-| Toggle POV Warp | P (after projection canvas open) |
+| Toggle POV Warp | Z (after projection canvas open) |
 | Toggle Projection Warp | F2 |
 | Toggle Projection Calibration | F3 |
 | Reset Projection Warp | F1 |
@@ -78,7 +78,7 @@
 | Look Left / Right | Right Joystick (Axis 2) |
 | Look Up / Down | Right Joystick (Axis 3) |
 | Invert Y Axis | **Enabled by default** (up-stick = look down) |
-| Toggle Camera Mode | R3 (Right Stick Click) |
+| _(Toggle Camera Mode removed — the game is first-person only)_ | — |
 
 ### Interaction & Tools
 | Action | Button / Axis |

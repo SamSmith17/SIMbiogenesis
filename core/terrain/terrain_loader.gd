@@ -542,6 +542,12 @@ func _exit_tree() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _built:
 		return
+	# The dock shortcuts below (V / Y / C / M / B / T) are plain letters, and
+	# every branch calls set_input_as_handled() -- so without this guard, typing
+	# a coordinate or a site name into any LineEdit opened an edit dock and ate
+	# the character. Mouse events still pass through for prop repositioning.
+	if event is InputEventKey and InputGuard.blocked(get_viewport()):
+		return
 	if _reposition_prop != null:
 		if event.is_action_pressed("ui_cancel"):
 			_cancel_prop_reposition()
@@ -565,9 +571,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_vegetation_edit_ui.toggle_mode()
 		get_viewport().set_input_as_handled()
 		return
-	if event is InputEventKey and (event as InputEventKey).keycode == KEY_Y \
-			and (event as InputEventKey).pressed and not (event as InputEventKey).echo \
-			and _space_edit_ui != null:
+	if event.is_action_pressed("space_edit") and _space_edit_ui != null:
 		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
 			_terrain_edit_ui.call("_exit_mode")
 		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
@@ -577,9 +581,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_space_edit_ui.call("toggle_mode")
 		get_viewport().set_input_as_handled()
 		return
-	if event is InputEventKey and (event as InputEventKey).keycode == KEY_C \
-			and (event as InputEventKey).pressed and not (event as InputEventKey).echo \
-			and _camp_scatter_ui != null:
+	if event.is_action_pressed("camp_scatter") and _camp_scatter_ui != null:
 		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
 			_terrain_edit_ui.call("_exit_mode")
 		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
