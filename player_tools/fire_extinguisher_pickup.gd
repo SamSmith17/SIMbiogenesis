@@ -45,33 +45,35 @@ func _create_detection_area() -> void:
 	add_child(detection_area)
 
 func _setup_visual() -> void:
-	# Try to find existing mesh child or load the extinguisher model
-	visual_mesh = get_node_or_null("ExtinguisherModel")
-	
-	if visual_mesh == null:
-		# Try to load the GLB model
-		var model_scene := load("res://Imported Models/Fire Extinguisher/FireExtinguisher.glb") as PackedScene
+	visual_mesh = build_extinguisher_visual("ExtinguisherModel", Vector3(0.8, 0.8, 0.8))
+	add_child(visual_mesh)
+
+
+## Shared by this pickup and the held tool (fire_extinguisher.gd) so the two
+## visuals can never drift out of sync. The GLB itself is optional — gitignored
+## on the public repo, see ASSETS.md — so this always checks ResourceLoader.exists()
+## before load()ing it (avoids a console parse-error on a fresh clone, not just
+## recovering from one), falling back to a plain red capsule placeholder.
+static func build_extinguisher_visual(node_name: String, model_scale: Vector3) -> Node3D:
+	const MODEL_PATH := "res://Imported Models/Fire Extinguisher/FireExtinguisher.glb"
+	if ResourceLoader.exists(MODEL_PATH):
+		var model_scene := load(MODEL_PATH) as PackedScene
 		if model_scene != null:
-			visual_mesh = model_scene.instantiate()
-			visual_mesh.name = "ExtinguisherModel"
-			visual_mesh.scale = Vector3(0.8, 0.8, 0.8)  # Slightly smaller than handheld
-			add_child(visual_mesh)
-		else:
-			# Fallback: create a simple cylinder
-			var mesh_instance := MeshInstance3D.new()
-			mesh_instance.name = "ExtinguisherModel"
-			var cylinder := CylinderMesh.new()
-			cylinder.top_radius = 0.1
-			cylinder.bottom_radius = 0.1
-			cylinder.height = 0.5
-			mesh_instance.mesh = cylinder
-			
-			var mat := StandardMaterial3D.new()
-			mat.albedo_color = Color(0.8, 0.1, 0.1)  # Red
-			mesh_instance.material_override = mat
-			
-			add_child(mesh_instance)
-			visual_mesh = mesh_instance
+			var inst := model_scene.instantiate()
+			inst.name = node_name
+			inst.scale = model_scale
+			return inst
+	# Placeholder: a plain red capsule stand-in.
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = node_name
+	var capsule := CapsuleMesh.new()
+	capsule.radius = 0.1
+	capsule.height = 0.5
+	mesh_instance.mesh = capsule
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.8, 0.1, 0.1)  # Red
+	mesh_instance.material_override = mat
+	return mesh_instance
 
 func _on_body_entered(body: Node3D) -> void:
 	if is_grabbed:

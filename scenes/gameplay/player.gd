@@ -60,6 +60,21 @@ var anim_jog_name : String = ""
 const IDLE_ANIM_PATH := "res://Player Character/Breathing Idle (no skin).fbx"
 const JOG_ANIM_PATH := "res://Player Character/Jogging (no skin).fbx"
 
+# Rigged body mesh (optional — see ASSETS.md, gitignored on the public repo).
+const CHARACTER_FBX_PATH := "res://Player Character/Walking (in place).fbx"
+const CHARACTER_FBX_TRANSFORM := Transform3D(
+	Basis(Vector3(-0.5, 0.0, 0.0), Vector3(0.0, 0.5, 0.0), Vector3(0.0, 0.0, -0.5)),
+	Vector3(0.0, 0.0, 0.25))
+
+## Procedural stand-in body (core/population/npc_simple_figure.gd), always built
+## under CharacterModel as the base — the rigged FBX layers on top of it when the
+## asset pack is present (mirrors core/population/npc_avatar.gd's rigged-vs-simple
+## pattern for NPCs). Without this, a fresh clone with no asset pack leaves
+## CharacterModel empty and every animation lookup silently inert. Player's own
+## body is otherwise only ever seen externally (FPV drone view, other multiplayer
+## clients via the fully independent RemotePlayerAvatar capsule).
+var _simple_figure : NpcSimpleFigure = null
+
 # Animation transition settings
 const WALK_SPEED_THRESHOLD := 0.5   # Speed to start walking
 const JOG_SPEED_THRESHOLD := 6.0    # Speed to start jogging
@@ -185,17 +200,24 @@ func _setup_grab_controller() -> void:
 			var loader := get_tree().current_scene.get_node_or_null("TerrainLoader")
 			grab.call("setup", self, camera, _interaction_focus, loader)
 
-## Setup character animation system
+## Build the visible body, then wire up its animation system if a rigged FBX
+## body loaded. CharacterModel is empty at scene-load time (see player.tscn) —
+## this is the one place a body ever gets added to it.
 func _setup_character_animation() -> void:
 	if character_model == null:
 		return
-	
+	_ensure_simple_figure()
+	if not _try_load_character_fbx():
+		return  # No asset pack: the simple figure stays as the visible body.
+
 	# Find AnimationPlayer in the character model hierarchy
 	character_anim_player = _find_animation_player_recursive(character_model)
-	
+
 	if character_anim_player == null:
 		return
-	
+	# Real rigged body loaded and has an AnimationPlayer — it wins.
+	_simple_figure.visible = false
+
 	# Get walk animation from the main model
 	var anims := character_anim_player.get_animation_list()
 	
@@ -227,6 +249,35 @@ func _setup_character_animation() -> void:
 	elif not anim_walk_name.is_empty():
 		character_anim_player.play(anim_walk_name)
 		current_anim_state = "walk"
+
+
+## The procedural stand-in body — always present under CharacterModel as the
+## base, regardless of whether the rigged FBX pack is installed.
+func _ensure_simple_figure() -> void:
+	if _simple_figure != null:
+		return
+	_simple_figure = NpcSimpleFigure.new()
+	_simple_figure.name = "SimpleFigureBody"
+	_simple_figure.setup("player", Color(0.55, 0.62, 0.78))
+	character_model.add_child(_simple_figure)
+
+
+## Loads and instances the rigged Mixamo body if the (gitignored, optional)
+## asset pack is present. Returns false — leaving the simple figure as the
+## only visible body — when it isn't, mirroring NpcRig.available()'s
+## exists-before-load guard for the same folder.
+func _try_load_character_fbx() -> bool:
+	if not ResourceLoader.exists(CHARACTER_FBX_PATH):
+		return false
+	var packed := load(CHARACTER_FBX_PATH) as PackedScene
+	if packed == null:
+		return false
+	var remy := packed.instantiate()
+	remy.name = "Remy"
+	remy.transform = CHARACTER_FBX_TRANSFORM
+	character_model.add_child(remy)
+	return true
+
 
 ## Load an animation from a separate FBX file and add it to our AnimationPlayer
 func _load_animation_from_fbx(fbx_path: String, anim_type: String) -> void:
@@ -523,32 +574,37 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 	_check_void_fall_respawn()
-	
+
 	# Update character animation based on movement
-	_update_character_animation()
+	_update_character_animation(delta)
+
+## Drives whichever body is actually present — the rigged AnimationPlayer when
+## the FBX pack loaded, else the procedural NpcSimpleFigure fallback.
+func _update_character_animation(delta: float) -> void:
+	if character_anim_player != null:
+		_update_character_animation_rig()
+	elif _simple_figure != null:
+		_update_character_animation_simple(delta)
 
 ## Update character animation based on movement speed with smooth transitions
-func _update_character_animation() -> void:
-	if character_anim_player == null:
-		return
-	
+func _update_character_animation_rig() -> void:
 	# Don't animate when riding a vehicle - show idle
 	if is_riding:
 		if current_anim_state != "idle" and not anim_idle_name.is_empty():
 			character_anim_player.play(anim_idle_name, ANIM_BLEND_TIME)
 			current_anim_state = "idle"
 		return
-	
+
 	# Calculate horizontal movement speed
 	var speed := Vector2(velocity.x, velocity.z).length()
-	
+
 	# Determine target state based on speed
 	var target_state := "idle"
 	if speed >= JOG_SPEED_THRESHOLD:
 		target_state = "jog"
 	elif speed >= WALK_SPEED_THRESHOLD:
 		target_state = "walk"
-	
+
 	# Switch animation if state changed
 	if target_state != current_anim_state:
 		var target_anim := ""
@@ -559,11 +615,11 @@ func _update_character_animation() -> void:
 				target_anim = anim_walk_name
 			"jog":
 				target_anim = anim_jog_name if not anim_jog_name.is_empty() else anim_walk_name
-		
+
 		if not target_anim.is_empty():
 			character_anim_player.play(target_anim, ANIM_BLEND_TIME)
 			current_anim_state = target_state
-	
+
 	# Adjust animation speed based on movement
 	match current_anim_state:
 		"idle":
@@ -576,6 +632,28 @@ func _update_character_animation() -> void:
 			# Scale jog speed: 6.0-12.0 movement → 1.0-1.5x animation
 			var jog_factor := (speed - JOG_SPEED_THRESHOLD) / 6.0
 			character_anim_player.speed_scale = lerpf(1.0, 1.5, clampf(jog_factor, 0.0, 1.0))
+
+## Same idle/walk/jog read as the rig branch above, but driven through
+## NpcSimpleFigure.pose() — jog folds into a faster walk `rate` rather than a
+## distinct pose, since the figure has no separate jog clip.
+func _update_character_animation_simple(delta: float) -> void:
+	if is_riding:
+		_simple_figure.pose(NpcRig.CLIP_IDLE, 1.0, delta)
+		return
+
+	var speed := Vector2(velocity.x, velocity.z).length()
+	if speed < WALK_SPEED_THRESHOLD:
+		_simple_figure.pose(NpcRig.CLIP_IDLE, 1.0, delta)
+		return
+
+	var rate := 1.0
+	if speed >= JOG_SPEED_THRESHOLD:
+		var jog_factor := (speed - JOG_SPEED_THRESHOLD) / 6.0
+		rate = lerpf(1.2, 1.8, clampf(jog_factor, 0.0, 1.0))
+	else:
+		var walk_factor := (speed - WALK_SPEED_THRESHOLD) / (JOG_SPEED_THRESHOLD - WALK_SPEED_THRESHOLD)
+		rate = lerpf(0.8, 1.2, clampf(walk_factor, 0.0, 1.0))
+	_simple_figure.pose(NpcRig.CLIP_WALK, rate, delta)
 
 func _handle_mouse_look(mouse_delta: Vector2) -> void:
 	# Rotate player (yaw) on Y axis

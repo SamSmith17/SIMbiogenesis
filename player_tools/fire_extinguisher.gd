@@ -57,12 +57,19 @@ var _nearby_fire_candidates: Array[Node3D] = []
 var _fire_candidate_refresh_timer: float = 0.0
 const _FIRE_CANDIDATE_REFRESH_INTERVAL: float = 0.2
 
+## Visual model / placeholder — see FireExtinguisherPickup.build_extinguisher_visual,
+## shared so this and the world pickup never drift out of sync.
+var visual_mesh: Node3D = null
+
 func _ready() -> void:
 	# Get node references
 	mist_particles = get_node_or_null("MistParticles")
 	spray_area = get_node_or_null("SprayArea")
 	audio_player = get_node_or_null("AudioStreamPlayer3D")
-	
+
+	visual_mesh = FireExtinguisherPickup.build_extinguisher_visual("ExtinguisherModel", Vector3.ONE)
+	add_child(visual_mesh)
+
 	# Calculate max pressure based on multiplier
 	_update_max_pressure()
 	

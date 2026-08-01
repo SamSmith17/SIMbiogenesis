@@ -1,11 +1,7 @@
-[gd_scene load_steps=3 format=3 uid="uid://dqxk8extinguisher_pickup"]
+[gd_scene load_steps=2 format=3 uid="uid://dqxk8extinguisher_pickup"]
 
 [ext_resource type="Script" path="res://player_tools/fire_extinguisher_pickup.gd" id="1_pickup"]
-[ext_resource type="PackedScene" uid="uid://daqku0y7r23o2" path="res://Imported Models/Fire Extinguisher/FireExtinguisher.glb" id="2_model"]
 
 [node name="FireExtinguisherPickup" type="Node3D"]
 script = ExtResource("1_pickup")
-
-[node name="ExtinguisherModel" parent="." instance=ExtResource("2_model")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
 

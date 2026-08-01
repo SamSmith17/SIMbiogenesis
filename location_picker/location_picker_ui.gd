@@ -1066,12 +1066,22 @@ func _save_game() -> SaveGameService:
 	return st.root.get_node_or_null("SaveSystem") as SaveGameService
 
 
+## A trusted scene path can still be an unplayable OFFER — e.g. a partially
+## restored local copy where the outer .tscn is present (see ASSETS.md's
+## restore workflow) but the asset pack behind it isn't. Checked in addition to
+## (not instead of) is_trusted_scene_path(), which stays a cheap allow-list
+## check used elsewhere for save-routing trust.
+func _is_offerable(scene_path: String) -> bool:
+	return MapDefinition.is_trusted_scene_path(scene_path) \
+		and MapDefinition.is_scene_fully_available(MapDefinition.normalize_scene_path(scene_path))
+
+
 func _resolve_maps() -> void:
 	_maps_resolved.clear()
 	_maps_file_paths.clear()
 	if not maps.is_empty():
 		for m in maps:
-			if m is MapDefinition and MapDefinition.is_trusted_scene_path(m.scene_path):
+			if m is MapDefinition and _is_offerable(m.scene_path):
 				_maps_resolved.append(m)
 				_maps_file_paths.append("")
 		_sort_maps_by_recency()
@@ -1080,7 +1090,7 @@ func _resolve_maps() -> void:
 		var r := load(p)
 		if r is MapDefinition:
 			var md := r as MapDefinition
-			if MapDefinition.is_trusted_scene_path(md.scene_path):
+			if _is_offerable(md.scene_path):
 				_maps_resolved.append(md)
 				_maps_file_paths.append("")
 	_resolve_user_maps()
@@ -1098,7 +1108,7 @@ func _resolve_user_maps() -> void:
 		var r := load(path)
 		if r is MapDefinition:
 			var md := r as MapDefinition
-			if MapDefinition.is_trusted_scene_path(md.scene_path):
+			if _is_offerable(md.scene_path):
 				# Heal maps corrupted by CheckBox toggled(false) on list rebuild
 				# (force-refetch every Start → load screen stuck at 0%).
 				if not md.load_from_cache:

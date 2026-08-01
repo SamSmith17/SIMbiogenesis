@@ -64,6 +64,11 @@ desktop.ini
 /Wood034_1K-JPG/
 /Metal051C_1K-JPG/
 
+# Scriptless leaf scene whose root node instances a gitignored GLB directly —
+# nothing in the tracked codebase currently loads it (only bespoke, already-
+# gitignored map scenes do), so there's no script to attach a fallback to.
+/scenes/gameplay/Tree.tscn
+
 # Root-level map blobs (Mars / SOAK bespoke scenes)
 /SoakSim.exe
 /10m_*.obj

@@ -23,8 +23,6 @@ var _exclusion_r_spin: SpinBox = null
 var _auto_veg_cb: CheckBox = null
 var _auto_veg_density_spin: SpinBox = null
 var _cache_cb: CheckBox = null
-var _ai_hero_cb: CheckBox = null
-var _ai_regen_btn: Button = null
 var _status_lbl: Label = null
 
 const CONFIG_PATH := "user://terrain_config.cfg"
@@ -184,27 +182,11 @@ func _build_ui() -> void:
 		+ "Does not control cache loading — use map-select “Load from cache” for that.",
 		_on_cache_toggled)
 
-	# AI spawn-area enhancement (opt-in; needs a Gemini key in terrain_config.cfg).
-	var ai_sep := HSeparator.new()
-	_body.add_child(ai_sep)
-	var ai_lbl := Label.new()
-	ai_lbl.text = "AI spawn-area detail"
-	ai_lbl.tooltip_text = "Use the Gemini image model to enhance the ground right around the spawn point beyond the satellite resolution. One cached image per site."
-	ai_lbl.add_theme_font_size_override("font_size", 12)
-	ai_lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 0.82))
-	_body.add_child(ai_lbl)
-	_ai_hero_cb = _add_toggle(_body, "AI-enhance spawn area",
-		"Sharpen + add photoreal fine detail to the ground around where you spawn "
-		+ "(Gemini nano-banana; ~$0.04, cached). Needs [gemini] api_key in terrain_config.cfg.",
-		_on_ai_hero_toggled)
-	var ai_row := HBoxContainer.new()
-	_body.add_child(ai_row)
-	_ai_regen_btn = Button.new()
-	_ai_regen_btn.text = "✨ Generate / Regenerate"
-	_ai_regen_btn.tooltip_text = "Generate (or re-generate) the AI hero patch for this site now"
-	_ai_regen_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_ai_regen_btn.pressed.connect(_on_ai_regen_pressed)
-	ai_row.add_child(_ai_regen_btn)
+	# AI spawn-area enhancement: UI intentionally not exposed yet (not verified
+	# working/secure enough to recommend patrons wire up a Gemini key). The
+	# backend (AiImageryService, terrain_loader.gd's _ai_hero_enabled()/
+	# refresh_ai_hero()) is untouched and still reachable by hand-editing
+	# terrain_config.cfg — see LOCAL_CONFIG.md.
 
 	var align_sep := HSeparator.new()
 	_body.add_child(align_sep)
@@ -333,25 +315,7 @@ func _sync_from_loader() -> void:
 		_auto_veg_density_spin.value = float(style.get("auto_density_scale", 1.0))
 		_auto_veg_density_spin.set_block_signals(false)
 	_set_cb(_cache_cb, bool(opts.get("cached_geometry_visible", true)))
-	_sync_ai_hero()
 	_sync_osm_offset_lbl(opts)
-
-
-## Reflect the persisted [gemini] ai_hero_enabled flag + key availability.
-func _sync_ai_hero() -> void:
-	if _ai_hero_cb == null:
-		return
-	var enabled := false
-	var cfg := ConfigFile.new()
-	if cfg.load(CONFIG_PATH) == OK:
-		enabled = bool(cfg.get_value("gemini", "ai_hero_enabled", false))
-	_set_cb(_ai_hero_cb, enabled)
-	var ai := get_node_or_null("/root/AiImageryService")
-	var has_key: bool = ai != null and ai.has_key()
-	if _ai_regen_btn != null:
-		_ai_regen_btn.disabled = not (enabled and has_key)
-	if not has_key:
-		_ai_hero_cb.tooltip_text = "Add [gemini] api_key= to terrain_config.cfg (or set GEMINI_API_KEY) to enable AI enhancement."
 
 
 func _sync_osm_offset_lbl(opts: Dictionary = {}) -> void:
@@ -478,37 +442,6 @@ func _on_auto_veg_density_changed(val: float) -> void:
 func _on_cache_toggled(on: bool) -> void:
 	if _loader != null and _loader.has_method("set_cached_geometry_visible"):
 		_loader.call("set_cached_geometry_visible", on)
-
-
-func _on_ai_hero_toggled(on: bool) -> void:
-	var cfg := ConfigFile.new()
-	cfg.load(CONFIG_PATH)
-	cfg.set_value("gemini", "ai_hero_enabled", on)
-	cfg.save(CONFIG_PATH)
-	var ai := get_node_or_null("/root/AiImageryService")
-	var has_key: bool = ai != null and ai.has_key()
-	if _ai_regen_btn != null:
-		_ai_regen_btn.disabled = not (on and has_key)
-	if on and not has_key:
-		set_status("No Gemini key — add [gemini] api_key= to terrain_config.cfg", "error")
-		return
-	if on:
-		# Generate immediately (uses the cached PNG if one already exists).
-		if _loader != null and _loader.has_method("refresh_ai_hero"):
-			_loader.call("refresh_ai_hero")
-	else:
-		if _loader != null and _loader.has_method("_clear_ai_overlay"):
-			_loader.call("_clear_ai_overlay")
-		set_status("AI enhance off", "info")
-
-
-func _on_ai_regen_pressed() -> void:
-	if _loader == null or not _loader.has_method("refresh_ai_hero"):
-		set_status("Terrain not ready", "error")
-		return
-	_loader.call("refresh_ai_hero")
-	if not _expanded:
-		_set_expanded(true)
 
 
 func _on_refresh_dem() -> void:

@@ -1,7 +1,6 @@
-[gd_scene load_steps=6 format=3 uid="uid://b3ce6ohyhwaxy"]
+[gd_scene load_steps=5 format=3 uid="uid://b3ce6ohyhwaxy"]
 
 [ext_resource type="Script" uid="uid://d4jgr32jcrde0" path="res://player_tools/fire_extinguisher.gd" id="1_ext"]
-[ext_resource type="PackedScene" uid="uid://daqku0y7r23o2" path="res://Imported Models/Fire Extinguisher/FireExtinguisher.glb" id="2_model"]
 
 [sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_1"]
 emission_shape = 1
@@ -24,9 +23,6 @@ radius = 5.0
 
 [node name="FireExtinguisher" type="Node3D"]
 script = ExtResource("1_ext")
-
-[node name="ExtinguisherModel" parent="." instance=ExtResource("2_model")]
-transform = Transform3D(-0.011438595, 0, -1.129942, 0, 1.1300001, 0, 1.129942, 0, -0.011438595, 0, -0.5582509, 0)
 
 [node name="MistParticles" type="GPUParticles3D" parent="."]
 emitting = false

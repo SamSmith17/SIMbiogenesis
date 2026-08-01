@@ -82,6 +82,42 @@ static func is_trusted_scene_path(path: String) -> bool:
 	return false
 
 
+## Recursively verifies every dependency of `path` actually resolves on disk —
+## not just `path` itself. `ResourceLoader.get_dependencies()` is NOT recursive
+## (confirmed empirically: it lists only a scene's own direct ext_resources), so
+## a bespoke map that nests a sub-scene like `Tree.tscn` would otherwise read as
+## fully available just because `Tree.tscn` itself is present, while `Tree.tscn`'s
+## own gitignored GLB dependency is silently missing underneath it. This is
+## separate from `is_trusted_scene_path()` (which stays a cheap existence +
+## allow-list check used for save-routing trust) — this is the stricter "is this
+## map's art actually complete" question, used only when deciding whether to
+## OFFER a map as playable (see location_picker_ui.gd). Guards against cycles
+## via `_visited`; callers should not pass it themselves.
+static func is_scene_fully_available(path: String, _visited: Dictionary = {}) -> bool:
+	if path.is_empty() or _visited.has(path):
+		return true
+	_visited[path] = true
+	if not ResourceLoader.exists(path):
+		return false
+	for dep in ResourceLoader.get_dependencies(path):
+		var dep_path := _dependency_res_path(dep)
+		if dep_path.is_empty() or not ResourceLoader.exists(dep_path):
+			return false
+		if dep_path.ends_with(".tscn") or dep_path.ends_with(".tres"):
+			if not is_scene_fully_available(dep_path, _visited):
+				return false
+	return true
+
+
+## get_dependencies() entries are formatted "uid::type::res://path" — the
+## res:// path is always the last segment, regardless of how many "::" precede
+## it (the type segment can be empty), so anchor on the last "res://" rather
+## than a fixed split index.
+static func _dependency_res_path(raw: String) -> String:
+	var idx := raw.rfind("res://")
+	return raw.substr(idx) if idx != -1 else ""
+
+
 ## Real `.tscn` path for `change_scene_to_file` after a slim export (only one soak/Mars variant packed).
 static func resolve_playable_scene_path(normalized_path: String) -> String:
 	var p := normalized_path.strip_edges()
