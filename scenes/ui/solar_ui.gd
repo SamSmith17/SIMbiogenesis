@@ -4560,10 +4560,6 @@ func _apply_setting(key: String, val: float) -> void:
 		"shadow_raycast":
 			_shadow_raycast_enabled = val > 0.5
 
-func _show_export_feedback(_message: String, _color: Color) -> void:
-	pass
-
-
 # ==================== SAVE / LOAD (game state snapshot) ====================
 
 func collect_save_state() -> Dictionary:

@@ -5048,12 +5048,6 @@ func set_show_water(on: bool) -> void:
 	_attach_water()
 
 
-## @deprecated Cache load is owned by map-select. Kept as a no-op redirect so
-## older UI hooks don't write a conflicting global cache flag mid-session.
-func set_cache_enabled(_on: bool) -> void:
-	pass
-
-
 ## Show/hide DEM + OSM world geometry (Ground, buildings, water, camps, veg).
 ## Does not affect placed props/lights or whether the next load uses disk cache.
 func set_cached_geometry_visible(on: bool) -> void:

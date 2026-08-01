@@ -1524,6 +1524,11 @@ Available gstack skills: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`
 
 Missing `ToolManager` under Player; missing
 `res://vegetation/baked/camp_scatter_bake.tres`; duplicate device id
-`ibc_glow_lights` (two Starshade IBCGlow instances); HAConnectionUI/UISP
+`ibc_glow_lights` (two Starshade IBCGlow instances); HAConnectionUI
 button node-path misses; 4× `!is_inside_tree()` from fire-extinguisher spawn;
 "target vector can't be zero" from road/camp scatter.
+
+**Re-verify this list before trusting it** — it is hand-maintained and drifts.
+The former "UISP button node-path misses" entry was stale: nothing outside
+`uisp/` ever referenced UISP, and that subsystem is now under `parked/uisp/`
+(see `parked/README.md`).
