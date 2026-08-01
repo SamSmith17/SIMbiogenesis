@@ -1860,6 +1860,13 @@ var _current_shadow_blur : float = 0.0
 var _current_light_attenuation : float = 1.0
 const _LIGHTING_LERP_SPEED : float = 8.0
 
+# Moon shadow opacity is owned exclusively here (not by main.gd:_update_moon,
+# which only controls shadow_enabled/max_distance) so there is a single writer —
+# folds lunar phase brightness into the same smoothed cloud target the sun uses.
+# Full moon + clear sky ≈ 0.6 opacity (softer than sun), same ceiling main.gd used.
+var _current_moon_shadow_opacity : float = 0.3
+const _MOON_SHADOW_OPACITY_PEAK : float = 0.6
+
 func _process(delta: float) -> void:
 	if _is_graph_embed:
 		if is_instance_valid(_graph_embed_mirror_from):
@@ -2117,7 +2124,19 @@ func _apply_smooth_weather_lighting(delta: float) -> void:
 		main_node.weather_light_factor = _current_light_attenuation
 	
 	if moon:
-		moon.shadow_opacity = _current_shadow_opacity
+		# Sole owner of moon.shadow_opacity (main.gd:_update_moon only toggles
+		# shadow_enabled/max_distance) — folds lunar phase brightness into the
+		# same smoothed cloud target the sun uses, so opacity glides instead of
+		# fighting a second writer on a different clock.
+		var moon_phase_brightness := 0.0
+		if main_node.has_method("get_lunar_phase_brightness"):
+			moon_phase_brightness = float(main_node.call("get_lunar_phase_brightness"))
+		var target_moon_opacity := clampf(
+			moon_phase_brightness * _current_light_attenuation * _MOON_SHADOW_OPACITY_PEAK, 0.1, _MOON_SHADOW_OPACITY_PEAK)
+		if not is_finite(target_moon_opacity):
+			target_moon_opacity = 0.1
+		_current_moon_shadow_opacity = lerpf(_current_moon_shadow_opacity, target_moon_opacity, t)
+		moon.shadow_opacity = _current_moon_shadow_opacity
 		moon.shadow_blur = _current_shadow_blur
 
 # ==================== RAIN SYSTEM ====================

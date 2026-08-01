@@ -2399,10 +2399,15 @@ func _update_moon() -> void :
 		moon.shadow_enabled = true
 		# Shadow distance scales with brightness - fuller moon = longer shadows
 		moon.directional_shadow_max_distance = moon_shadow_distance * _moon_shadow_quality_distance_scale * phase_brightness
-		# Shadow opacity varies with brightness and weather
-		# Full moon on clear night = ~0.6 opacity, dimmer = softer shadows
-		var shadow_strength : float = phase_brightness * weather_light_factor * 0.6
-		moon.shadow_opacity = clampf( shadow_strength, 0.1, 0.6 )
+		# NOTE: shadow_opacity is intentionally NOT set here. SolarUI's
+		# _apply_smooth_weather_lighting() owns it exclusively (per-frame smoothed,
+		# folding in this same phase_brightness via get_lunar_phase_brightness()).
+		# This function used to hard-reset it every _ENV_UPDATE_INTERVAL (20 Hz)
+		# while SolarUI's continuous lerp fought to pull it back toward its own
+		# cloud-only target — the two competing writers sawtoothed the moon's
+		# shadow darkness on a visible rhythm. The sun has no such fight (only
+		# SolarUI ever touches sun.shadow_opacity), which is why only moon shadows
+		# used to pulse.
 	else :
 		moon.shadow_enabled = false
 
