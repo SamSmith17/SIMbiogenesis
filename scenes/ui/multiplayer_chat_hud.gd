@@ -8,7 +8,8 @@ const VISIBLE_LINES := 8
 
 var _built := false
 var _log: RichTextLabel = null
-var _input: LineEdit = null
+## Named to avoid colliding with the engine's _input(event) virtual callback.
+var _compose_edit: LineEdit = null
 var _panel: PanelContainer = null
 var _composing := false
 
@@ -17,6 +18,7 @@ func _ready() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process_unhandled_input(true)
+	set_process_input(true)
 	if MultiplayerSession != null and is_instance_valid(MultiplayerSession):
 		if not MultiplayerSession.session_changed.is_connected(_on_session_changed):
 			MultiplayerSession.session_changed.connect(_on_session_changed)
@@ -94,15 +96,44 @@ func _build_ui() -> void:
 	_log.mouse_filter = Control.MOUSE_FILTER_PASS
 	col.add_child(_log)
 
-	_input = LineEdit.new()
-	_input.placeholder_text = "Message… (Enter send · Esc cancel)"
-	_input.max_length = 280
-	_input.visible = false
-	_input.text_submitted.connect(_on_submit)
-	_input.focus_exited.connect(func() -> void:
+	_compose_edit = LineEdit.new()
+	_compose_edit.placeholder_text = "Message… (Enter send · Esc cancel)"
+	_compose_edit.max_length = 280
+	_compose_edit.visible = false
+	_compose_edit.text_submitted.connect(_on_submit)
+	_compose_edit.focus_exited.connect(func() -> void:
 		# Delay so clicking Send-equivalent paths can finish.
 		call_deferred("_maybe_stop_compose_on_focus_loss"))
-	col.add_child(_input)
+	col.add_child(_compose_edit)
+
+
+## Escape-while-composing and click-outside-the-panel are handled here, not in
+## _unhandled_input(), because a focused LineEdit sits in front of GUI-input
+## dispatch and can otherwise swallow those events before they ever reach an
+## _unhandled_input handler — which was the actual bug: once the compose box
+## had focus, neither Esc nor clicking into the 3D world reliably got back to
+## CursorController, so the modal (and mouse capture) stayed stuck. _input()
+## fires before that dispatch for every node regardless of focus, so this is
+## the one place that's guaranteed to see the event.
+func _input(event: InputEvent) -> void:
+	if not _composing:
+		return
+	if event is InputEventKey and event.pressed and not event.echo \
+			and (event as InputEventKey).keycode == KEY_ESCAPE:
+		_stop_compose()
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton and event.pressed \
+			and not _point_in_panel(event.position):
+		# Click landed outside the chat panel (e.g. the 3D world) — close
+		# compose so it releases GUI focus and the CursorController modal,
+		# instead of leaving the LineEdit silently focused forever. Don't
+		# consume the event: the click should still reach the game below.
+		_stop_compose()
+
+
+func _point_in_panel(global_pos: Vector2) -> bool:
+	return _panel != null and _panel.get_global_rect().has_point(global_pos)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -119,10 +150,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		_start_compose()
 		get_viewport().set_input_as_handled()
-	elif event is InputEventKey and event.pressed and not event.echo \
-			and (event as InputEventKey).keycode == KEY_ESCAPE and _composing:
-		_stop_compose()
-		get_viewport().set_input_as_handled()
 
 
 func _start_compose() -> void:
@@ -130,22 +157,24 @@ func _start_compose() -> void:
 		_build_ui()
 		_built = true
 	_composing = true
-	_input.visible = true
-	_input.grab_focus()
+	_compose_edit.visible = true
+	_compose_edit.grab_focus()
 	CursorController.request_modal(MODAL_NAME, Callable(self, "_stop_compose"))
 
 
 func _stop_compose() -> void:
+	if not _composing:
+		return
 	_composing = false
-	if _input != null:
-		_input.text = ""
-		_input.visible = false
-		_input.release_focus()
+	if _compose_edit != null:
+		_compose_edit.text = ""
+		_compose_edit.visible = false
+		_compose_edit.release_focus()
 	CursorController.release_modal(MODAL_NAME)
 
 
 func _maybe_stop_compose_on_focus_loss() -> void:
-	if _composing and _input != null and not _input.has_focus():
+	if _composing and _compose_edit != null and not _compose_edit.has_focus():
 		_stop_compose()
 
 
