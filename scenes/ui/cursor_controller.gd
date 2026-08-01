@@ -4,10 +4,17 @@ extends Node
 
 signal capture_state_changed
 
+## How often the diagnostic reconcile samples Input.mouse_mode. Matches the
+## accumulator shape used by scenes/ui/weather_card_ui.gd.
+const RECONCILE_INTERVAL := 0.25
+
 var _paused: bool = false
 var _modal_stack: Array[String] = []
 var _modal_close: Dictionary = {}
 var _capture_apply_pending: bool = false
+var _reconcile_accum: float = 0.0
+## Mismatches already reported, so a persistent desync warns once, not 4×/second.
+var _reported_desyncs: Dictionary = {}
 
 
 func set_paused(v: bool) -> void:
@@ -98,6 +105,72 @@ func _apply_capture_deferred() -> void:
 		Input.set_mouse_mode(want_mode)
 	if player != null:
 		player.is_mouse_captured = want_capture
+	# Whatever we just applied is by definition not a desync.
+	_reported_desyncs.clear()
+
+
+## Mouse mode this controller believes is correct, or -1 when it cannot tell
+## (no player yet). Single source of the rule, shared with the reconcile.
+func _wanted_mode() -> int:
+	var player := _find_player()
+	if player == null:
+		return -1
+	return int(Input.MOUSE_MODE_CAPTURED if should_capture_look() else Input.MOUSE_MODE_VISIBLE)
+
+
+## DIAGNOSTIC ONLY — reports, does not correct.
+##
+## This file calls itself the single authority for mouse capture, but eight
+## other files still call Input.set_mouse_mode() directly, and this controller
+## only reconciles on a deferred _request_apply_capture() — never continuously —
+## so a direct write leaves Input.mouse_mode and player.is_mouse_captured
+## disagreeing until something unrelated happens to trigger a re-apply.
+##
+## It deliberately does NOT correct the mode. Four of those callers (the CSV
+## picker and its mapping window, timeline_ui, game_over_ui, location_picker_ui)
+## set MOUSE_MODE_VISIBLE without registering a modal, so a correcting reconcile
+## would grab the mouse back out from under them within a quarter second and
+## break each one. Warning instead surfaces exactly which caller desyncs, in
+## real use, which is the information needed to migrate them — and it cannot
+## regress anything in the meantime. Once every caller registers a modal, this
+## can start correcting.
+func _process(delta: float) -> void:
+	_reconcile_accum += delta
+	if _reconcile_accum < RECONCILE_INTERVAL:
+		return
+	_reconcile_accum = 0.0
+	if not is_inside_tree() or _capture_apply_pending:
+		return
+	# Headless has no display server, so a CAPTURED request never takes and
+	# Input.mouse_mode reads VISIBLE forever — every --quit-after boot and every
+	# selftest would report a desync that does not exist. Likewise an unfocused
+	# window: the OS releases the pointer and that is correct, not a bug.
+	if DisplayServer.get_name() == "headless":
+		return
+	if not DisplayServer.window_is_focused():
+		return
+	var want := _wanted_mode()
+	if want < 0 or Input.mouse_mode == want:
+		return
+	var key := "%d->%d|%s" % [Input.mouse_mode, want, ",".join(_modal_stack)]
+	if _reported_desyncs.has(key):
+		return
+	_reported_desyncs[key] = true
+	push_warning(("CursorController: mouse mode is %s but should be %s "
+		+ "(paused=%s, modals=[%s]). Something called Input.set_mouse_mode() "
+		+ "directly instead of request_modal()/release_modal().") % [
+			_mode_name(Input.mouse_mode), _mode_name(want),
+			str(_paused), ",".join(_modal_stack)])
+
+
+func _mode_name(mode: int) -> String:
+	match mode:
+		Input.MOUSE_MODE_VISIBLE: return "VISIBLE"
+		Input.MOUSE_MODE_CAPTURED: return "CAPTURED"
+		Input.MOUSE_MODE_HIDDEN: return "HIDDEN"
+		Input.MOUSE_MODE_CONFINED: return "CONFINED"
+		Input.MOUSE_MODE_CONFINED_HIDDEN: return "CONFINED_HIDDEN"
+	return str(mode)
 
 
 func _apply_capture() -> void:

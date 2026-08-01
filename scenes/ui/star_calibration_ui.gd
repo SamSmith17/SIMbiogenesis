@@ -1,6 +1,8 @@
 extends CanvasLayer
 class_name StarCalibrationUI
 
+const MOUSE_MODAL_NAME := "star_calibration"
+
 ## In-game UI for calibrating star field alignment
 ## Shows when reference stars are enabled (HOME key)
 ## Settings are automatically saved to user://star_calibration.cfg
@@ -70,13 +72,14 @@ func show_ui() -> void:
 		flip_vertical.set_pressed_no_signal(_star_system.stars_flip_vertical)
 		flip_horizontal.set_pressed_no_signal(_star_system.stars_flip_horizontal)
 	_update_labels()
-	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	# Modal registration rather than a direct mouse-mode write, so closing this
+	# panel cannot capture the mouse out from under another open modal.
+	CursorController.request_modal(MOUSE_MODAL_NAME, Callable(self, "hide_ui"))
 
 func hide_ui() -> void:
 	is_visible = false
 	panel.visible = false
-	# Re-capture mouse for game
-	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	CursorController.release_modal(MOUSE_MODAL_NAME)
 
 func toggle_ui() -> void:
 	if is_visible:

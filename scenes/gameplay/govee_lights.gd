@@ -1,6 +1,8 @@
 @tool
 extends Node3D
 
+const MOUSE_MODAL_NAME := "govee_color_menu"
+
 ## Govee-style String Lights with Catenary Wire Physics
 ## 
 ## USAGE:
@@ -951,25 +953,28 @@ func _input(event: InputEvent) -> void:
 func _open_color_menu() -> void:
 	if _menu_visible:
 		return
-	
+
 	_menu_visible = true
 	_create_color_menu()
-	
-	# Release mouse for menu interaction
-	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+
+	# Register a modal instead of setting the mouse mode directly: closing this
+	# menu used to CAPTURE the mouse unconditionally, which stole it back even
+	# when a blocking modal was still open underneath. CursorController now
+	# decides the mode from the whole stack, and passing the close callable also
+	# wires up Escape-to-close for free.
+	CursorController.request_modal(MOUSE_MODAL_NAME, Callable(self, "_close_color_menu"))
 
 func _close_color_menu() -> void:
 	if not _menu_visible:
 		return
-	
+
 	_menu_visible = false
-	
+
 	if _color_menu != null:
 		_color_menu.queue_free()
 		_color_menu = null
-	
-	# Recapture mouse for gameplay
-	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+	CursorController.release_modal(MOUSE_MODAL_NAME)
 
 func _create_color_menu() -> void:
 	"""Create a simple color/brightness control panel"""
