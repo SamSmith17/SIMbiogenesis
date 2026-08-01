@@ -240,7 +240,7 @@ func _on_reseed() -> void:
 	if main == null:
 		_status.text = "No main scene"
 		return
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = main.find_child("SystemGraphView", true, false)
 	if sgv == null:

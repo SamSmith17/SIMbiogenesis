@@ -117,7 +117,7 @@ func _settle() -> void:
 		})
 		# Deploy-gate the structure's graph array: stowed = folded away, no
 		# capacity until redeployed (mirrors how destroyed controllers shed AC).
-		var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+		var sgv := ServiceLocator.graph()
 		if sgv == null:
 			sgv = main.find_child("SystemGraphView", true, false)
 		if sgv != null and sgv.has_method("set_imported_array_stowed"):

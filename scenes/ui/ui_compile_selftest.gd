@@ -35,10 +35,19 @@ const CONTRACTS: Dictionary = {
 	"res://scenes/ui/placed_props_ui.gd": ["toggle_mode", "_exit_mode", "is_panel_open"],
 }
 
-## Directories to sweep. crisis_events/ and location_picker/ ride along because
-## they have the same "no class_name, never parsed at import" exposure.
+## Directories to sweep. All of these share the same exposure: their scripts
+## mostly have NO class_name, so Godot does not parse them at import and
+## `--import` reports nothing — a parse error surfaces only when the scene
+## actually loads.
+##
+## scenes/gameplay/ and gameplay/ were added after a bad automated edit left
+## `tree.ServiceLocator.graph()` in conduit_route_controller.gd: `--import` was
+## silent, this selftest did not cover that directory, and the failure only
+## appeared as "Failed to load script … Parse error" when booting a map.
 const SCAN_DIRS: Array[String] = [
 	"res://scenes/ui",
+	"res://scenes/gameplay",
+	"res://gameplay",
 	"res://crisis_events",
 	"res://location_picker",
 ]

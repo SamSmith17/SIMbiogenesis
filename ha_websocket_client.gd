@@ -24,7 +24,7 @@ signal initial_states_received()
 signal history_statistics_received(statistic_id: String, statistics: Array)
 
 func _ready():
-	Services.register(Services.HA_CLIENT, self)
+	ServiceLocator.provide(ServiceLocator.HA_CLIENT, self)
 	# Don't auto-connect - wait for user to configure and connect
 	pass
 

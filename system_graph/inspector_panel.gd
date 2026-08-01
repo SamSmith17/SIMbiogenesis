@@ -3917,7 +3917,7 @@ func _machine_view() -> Node:
 	if tree != null:
 		var m := tree.get_first_node_in_group("main_scene")
 		if m != null:
-			return m.get_node_or_null("UILayer/SystemGraphView")
+			return ServiceLocator.graph()
 	return null
 
 

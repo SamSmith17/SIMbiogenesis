@@ -263,7 +263,7 @@ func _resolve_nodes() -> void:
 		if sc != null and str(sc.name) == "Main":
 			_main_node = sc
 		else:
-			var m := Services.get_main()
+			var m := ServiceLocator.main()
 			if m != null and is_instance_valid(m):
 				_main_node = m
 

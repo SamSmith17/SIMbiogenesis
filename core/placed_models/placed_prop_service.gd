@@ -312,7 +312,7 @@ static func _create_bound_graph_node(main: Node, prop_id: String,
 		graph_link: Dictionary) -> String:
 	if main == null or graph_link.is_empty():
 		return ""
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = main.find_child("SystemGraphView", true, false)
 	if sgv == null or not sgv.has_method("create_bound_generator_node"):
@@ -400,7 +400,7 @@ static func remove_linkage_graph(main: Node, prop_id: String) -> void:
 
 
 static func _system_graph_view(main: Node) -> Node:
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = main.find_child("SystemGraphView", true, false)
 	return sgv
@@ -442,7 +442,7 @@ static func _trigger_starshade_graph_seed(main: Node, prep: Dictionary = {},
 	var panel_count := int(solar.get("panelCount", 0))
 	if panel_count <= 0:
 		return
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = main.find_child("SystemGraphView", true, false)
 	if sgv == null or not sgv.has_method("seed_starshade_system"):
@@ -467,7 +467,7 @@ static func _stamp_starshade_graph_item_on_prop(main: Node, prop_id: String) -> 
 	var layer := _layer_for_main(main)
 	if layer == null:
 		return
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = main.find_child("SystemGraphView", true, false)
 	if sgv == null:

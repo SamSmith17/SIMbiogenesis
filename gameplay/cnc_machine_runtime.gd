@@ -1132,7 +1132,7 @@ func _system_graph_view() -> Node:
 	var m := _main_node()
 	if m == null:
 		return null
-	return m.get_node_or_null("UILayer/SystemGraphView")
+	return ServiceLocator.graph()
 
 
 func _main_node() -> Node:

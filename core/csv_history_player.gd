@@ -433,7 +433,7 @@ func _resolve_runtime_nodes() -> void:
 		if sc != null and ("day_time" in sc or sc.name == "Main"):
 			_main_node = sc
 		else:
-			_main_node = Services.get_main()
+			_main_node = ServiceLocator.main()
 	if not is_instance_valid(_solar_ui):
 		for p: String in ["Main/UILayer/SolarUI", "UILayer/SolarUI"]:
 			var n := tree.root.get_node_or_null(p)

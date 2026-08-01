@@ -1435,7 +1435,7 @@ func _on_save() -> void:
 		if prop != null:
 			ConnectionPortDefs.sync_port_markers(prop, _ports)
 	if not _item_id.is_empty() and main != null:
-		var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+		var sgv := ServiceLocator.graph()
 		if sgv != null:
 			var mdl: GraphModel = sgv.get("model") as GraphModel
 			if mdl != null:

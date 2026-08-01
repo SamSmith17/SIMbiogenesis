@@ -440,7 +440,7 @@ func _find_main() -> Node:
 	var tree := get_tree()
 	if tree == null or tree.root == null:
 		return null
-	_main = Services.get_main()
+	_main = ServiceLocator.main()
 	if _main == null:
 		for child in tree.root.get_children():
 			if child.name == "Main" or child.has_method("get_absolute_hours"):

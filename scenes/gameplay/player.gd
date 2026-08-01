@@ -146,7 +146,7 @@ var extinguisher_count : int = 0  # Number of extinguishers collected (multiplie
 var _interaction_focus : Node = null
 
 func _ready() -> void:
-	Services.register(Services.PLAYER, self)
+	ServiceLocator.provide(ServiceLocator.PLAYER, self)
 	add_to_group("player")
 	call_deferred("_setup_character_animation")
 	call_deferred("_init_first_person_camera")

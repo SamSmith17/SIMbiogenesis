@@ -30,7 +30,7 @@ static func try_seed_from_main(main: Node, terrain_loader: Node = null,
 		prop_id: String = "") -> bool:
 	if main == null:
 		return false
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = main.find_child("SystemGraphView", true, false)
 	if sgv == null:

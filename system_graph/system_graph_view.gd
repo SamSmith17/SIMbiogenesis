@@ -410,7 +410,7 @@ const LIB_DRAG_THRESHOLD := 6.0
 # ---------------------------------------------------------------------------
 
 func _ready() -> void:
-	Services.register(Services.GRAPH, self)
+	ServiceLocator.provide(ServiceLocator.GRAPH, self)
 	focus_mode = Control.FOCUS_ALL
 	model = GraphModel.new()
 	model.changed.connect(_on_model_changed)

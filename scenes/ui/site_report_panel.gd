@@ -644,7 +644,7 @@ func _resolve_refs() -> Dictionary:
 	var sgv: Node = null
 	if main != null:
 		solar_ui = main.get_node_or_null("UILayer/SolarUI")
-		sgv = main.get_node_or_null("UILayer/SystemGraphView")
+		sgv = ServiceLocator.graph()
 	var model: Object = null
 	if sgv != null and "model" in sgv:
 		model = sgv.get("model")

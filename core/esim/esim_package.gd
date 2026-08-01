@@ -405,7 +405,7 @@ static func _read_location_label(main: Node) -> String:
 
 
 static func _find_system_graph_view(main: Node) -> Node:
-	var n := main.get_node_or_null("UILayer/SystemGraphView")
+	var n := ServiceLocator.graph()
 	if n != null:
 		return n
 	return main.find_child("SystemGraphView", true, false)

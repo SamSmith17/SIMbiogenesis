@@ -177,7 +177,7 @@ func _main_node() -> Node:
 func _system_graph_view(main: Node) -> Node:
 	if main == null:
 		return null
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = main.find_child("SystemGraphView", true, false)
 	return sgv

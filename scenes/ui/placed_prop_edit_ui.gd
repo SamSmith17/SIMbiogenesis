@@ -79,7 +79,7 @@ func open_for_prop(prop_id: String) -> void:
 	if gv == null:
 		var scene := get_tree().current_scene if get_tree() != null else null
 		if scene != null:
-			gv = scene.get_node_or_null("UILayer/SystemGraphView")
+			gv = ServiceLocator.graph()
 	if gv != null and gv.has_method("open_print_setup_for_prop"):
 		if bool(gv.call("open_print_setup_for_prop", prop_id)):
 			return
@@ -493,7 +493,7 @@ func _on_edit_siphon() -> void:
 	if gv == null:
 		var scene := get_tree().current_scene if get_tree() != null else null
 		if scene != null:
-			gv = scene.get_node_or_null("UILayer/SystemGraphView")
+			gv = ServiceLocator.graph()
 	if gv != null and gv.has_method("open_siphon_lab") and not graph_id.is_empty():
 		gv.visible = true
 		gv.call("open_siphon_lab", graph_id)
@@ -510,6 +510,6 @@ func _on_edit_ports() -> void:
 	if gv == null:
 		var scene := get_tree().current_scene if get_tree() != null else null
 		if scene != null:
-			gv = scene.get_node_or_null("UILayer/SystemGraphView")
+			gv = ServiceLocator.graph()
 	if gv != null and gv.has_method("open_connection_ports_for_prop"):
 		gv.call("open_connection_ports_for_prop", pid)

@@ -600,7 +600,7 @@ func _find_system_graph() -> Node:
 	var main := get_tree().current_scene if get_tree() != null else null
 	if main == null:
 		return null
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = main.find_child("SystemGraphView", true, false)
 	return sgv

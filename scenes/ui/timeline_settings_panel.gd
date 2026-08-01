@@ -2114,7 +2114,7 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 ## purely cosmetic change to apply.
 func _on_npc_colors_toggled(on: bool) -> void:
 	NpcDisplayPrefs.set_colors_enabled(on)
-	var graph := Services.get_graph()
+	var graph := ServiceLocator.graph()
 	if graph == null or not graph.has_method("npc_population_host"):
 		return
 	var host: Node = graph.call("npc_population_host")
@@ -2126,7 +2126,7 @@ func _on_npc_colors_toggled(on: bool) -> void:
 ## the per-habitat inspector button opens). With none active yet, this still
 ## opens the modal so its own "turn on Simulated individuals" guidance shows.
 func _on_open_npc_routines() -> void:
-	var graph := Services.get_graph()
+	var graph := ServiceLocator.graph()
 	if graph == null or not graph.has_method("open_npc_routines"):
 		return
 	var item_id := ""

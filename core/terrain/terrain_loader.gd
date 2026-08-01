@@ -354,7 +354,7 @@ var _phase_ok := false
 
 
 func _ready() -> void:
-	Services.register(Services.TERRAIN_LOADER, self)
+	ServiceLocator.provide(ServiceLocator.TERRAIN_LOADER, self)
 	_main = get_parent()
 	# Deferred: Main is still "busy setting up children" during our _ready, so
 	# add_child() on it would fail. By the deferred call Main is fully ready.
@@ -1343,7 +1343,7 @@ func _feed_solar_graph(panel_count: int, watts: float, label: String = "OSM Sola
 		array_tag: String = "", opts: Dictionary = {}) -> void:
 	if _main == null:
 		return
-	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = get_tree().root.find_child("SystemGraphView", true, false)
 	if sgv != null and sgv.has_method("add_imported_solar_panels"):
@@ -2929,7 +2929,7 @@ func clear_graph_osm_area_highlight() -> void:
 func _find_system_graph_view() -> Node:
 	if _main == null:
 		return null
-	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = get_tree().root.find_child("SystemGraphView", true, false)
 	return sgv
@@ -8026,7 +8026,7 @@ func _consume_design_context() -> void:
 func _seed_starshade_after_import(model_id: String, design: Dictionary) -> void:
 	if _main == null or not ModelCatalog.is_starshade_model(model_id):
 		return
-	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv != null and sgv.has_method("has_starshade_graph_content"):
 		if bool(sgv.call("has_starshade_graph_content")):
 			return
@@ -8057,7 +8057,7 @@ func _apply_imported_graph(graph_state: Dictionary) -> void:
 	var graph_d: Dictionary = graph_state.get("graph", {}) as Dictionary
 	if (graph_d.get("items", []) as Array).is_empty():
 		return
-	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = get_tree().root.find_child("SystemGraphView", true, false)
 	if sgv == null or not sgv.has_method("apply_save_state"):
@@ -8146,7 +8146,7 @@ func _try_seed_starshade_graph() -> void:
 func _notify_graph_map_ready() -> void:
 	if _main == null:
 		return
-	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		sgv = get_tree().root.find_child("SystemGraphView", true, false)
 	if sgv == null:
@@ -8775,7 +8775,7 @@ func delete_prop_by_id(prop_id: String) -> bool:
 	# in another view — never leave a dead node behind. No-op for graph-initiated
 	# deletes (the node is already gone when this runs).
 	if _main != null:
-		var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+		var sgv := ServiceLocator.graph()
 		if sgv != null and sgv.has_method("remove_items_bound_to_prop"):
 			sgv.call("remove_items_bound_to_prop", prop_id)
 	_placed_prop_layer.save(_lat, _lon)

@@ -100,7 +100,7 @@ func _read_graph_state() -> Dictionary:
 	var main := _find_main()
 	if main == null:
 		return {}
-	var view := main.get_node_or_null("UILayer/SystemGraphView")
+	var view := ServiceLocator.graph()
 	if view == null:
 		view = main.find_child("SystemGraphView", true, false)
 	if view != null and view.has_method("get_pp_sheet_press_state"):
@@ -114,7 +114,7 @@ func _find_main() -> Node:
 		if n.name == "Main" or (n.has_method("get_absolute_hours") and n.has_node("UILayer")):
 			return n
 		n = n.get_parent()
-	return Services.get_main()
+	return ServiceLocator.main()
 
 
 func _find_named(root: Node, want: String) -> Node:

@@ -269,7 +269,7 @@ var _tip_stn_lbl:  Label = null
 # ---------------------------------------------------------------------------
 
 func _ready() -> void:
-	Services.register(Services.TIMELINE_UI, self)
+	ServiceLocator.provide(ServiceLocator.TIMELINE_UI, self)
 	_track_layout.reset_defaults()
 	_build_bar()
 	if Engine.is_editor_hint():

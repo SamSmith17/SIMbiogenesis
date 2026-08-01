@@ -682,8 +682,8 @@ func _init_from_system_time() -> void :
 
 func _enter_tree() -> void:
 	# Register early: a parent's _enter_tree fires before its children's _ready(),
-	# so Services.get_main() resolves for the whole scene from the first frame.
-	Services.register(Services.MAIN, self)
+	# so ServiceLocator.main() resolves for the whole scene from the first frame.
+	ServiceLocator.provide(ServiceLocator.MAIN, self)
 
 
 func _ready() -> void :
@@ -1225,7 +1225,7 @@ func build_save_snapshot() -> Dictionary :
 	if mcc != null and mcc.has_method( "collect_save_state" ) :
 		mars_credits_state = mcc.collect_save_state()
 	var system_graph_state : Dictionary = {}
-	var sg_view : Node = get_node_or_null( "UILayer/SystemGraphView" )
+	var sg_view : Node = ServiceLocator.graph()
 	if sg_view != null and sg_view.has_method( "collect_save_state" ) :
 		system_graph_state = sg_view.collect_save_state()
 	var soi_state : Dictionary = {}
@@ -1296,7 +1296,7 @@ func _apply_save_snapshot( data: Dictionary ) -> bool :
 	if mcc != null and mcc_d is Dictionary and mcc.has_method( "apply_save_state" ) :
 		mcc.apply_save_state( mcc_d )
 	var sg_d: Variant = data.get( "system_graph", {} )
-	var sg_view : Node = get_node_or_null( "UILayer/SystemGraphView" )
+	var sg_view : Node = ServiceLocator.graph()
 	if sg_view != null and sg_d is Dictionary and sg_view.has_method( "apply_save_state" ) :
 		sg_view.apply_save_state( sg_d, {"from_game_save": true} )
 	var soi_d: Variant = data.get( "soi", {} )
@@ -1405,15 +1405,7 @@ func get_shadow_opacity() -> float :
 	return shadow_opacity
 
 func get_graphics_quality_name() -> String :
-	match graphics_quality :
-		0 :
-			return "Low"
-		1 :
-			return "Medium"
-		2 :
-			return "High"
-		_ :
-			return "High"
+	return RenderProfile.quality_name( graphics_quality )
 
 func set_graphics_quality_level( level: int ) -> void :
 	graphics_quality = clampi( level, 0, 2 )
@@ -1746,7 +1738,9 @@ func set_msaa_level( level: int ) -> void :
 func get_msaa_level() -> int :
 	return msaa_level
 
-const _PERF_PREFS_CFG : String = "user://perf_prefs.cfg"
+## Path now lives with the rest of the render settings (RenderProfile);
+## re-exported here because other code reads main's constant.
+const _PERF_PREFS_CFG : String = RenderProfile.PERF_PREFS_CFG
 
 func _apply_render_scale() -> void :
 	if Engine.is_editor_hint() :
@@ -1759,16 +1753,11 @@ func _apply_render_scale() -> void :
 ## Load the persisted 3D render scale (shares perf_prefs.cfg with PropRenderTuning's
 ## [props] section — ConfigFile preserves the other sections on save).
 func _load_render_scale_pref() -> void :
-	var cfg := ConfigFile.new()
-	if cfg.load( _PERF_PREFS_CFG ) == OK :
-		render_scale_3d = float( cfg.get_value( "render", "scale_3d", render_scale_3d ) )
+	render_scale_3d = RenderProfile.load_render_scale( render_scale_3d )
 
 func set_render_scale_3d( value: float ) -> void :
 	render_scale_3d = value
-	var cfg := ConfigFile.new()
-	cfg.load( _PERF_PREFS_CFG )  # keep [props] and any other sections
-	cfg.set_value( "render", "scale_3d", render_scale_3d )
-	cfg.save( _PERF_PREFS_CFG )
+	RenderProfile.save_render_scale( render_scale_3d )
 
 func get_render_scale_3d() -> float :
 	return render_scale_3d
@@ -1778,85 +1767,16 @@ func get_render_scale_3d() -> float :
 func _apply_graphics_quality() -> void :
 	if Engine.is_editor_hint() :
 		return
-	var atlas_size : int = 2048
-	var soft_quality : int = RenderingServer.SHADOW_QUALITY_SOFT_HIGH
-	var taa : bool = true
-	match graphics_quality :
-		0 :  # Low
-			atlas_size = 1024
-			soft_quality = RenderingServer.SHADOW_QUALITY_SOFT_LOW
-			taa = false
-		1 :  # Medium
-			atlas_size = 1536
-			soft_quality = RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM
-			taa = true
-		2 :  # High (matches project.godot baseline)
-			atlas_size = 2048
-			soft_quality = RenderingServer.SHADOW_QUALITY_SOFT_HIGH
-			taa = true
-	RenderingServer.directional_shadow_atlas_set_size( atlas_size, true )
-	RenderingServer.directional_soft_shadow_filter_set_quality( soft_quality )
-	RenderingServer.positional_soft_shadow_filter_set_quality( soft_quality )
+	var p : Dictionary = RenderProfile.graphics_profile( graphics_quality )
+	RenderingServer.directional_shadow_atlas_set_size( int( p[ "atlas_size" ] ), true )
+	RenderingServer.directional_soft_shadow_filter_set_quality( int( p[ "soft_quality" ] ) )
+	RenderingServer.positional_soft_shadow_filter_set_quality( int( p[ "soft_quality" ] ) )
 	var vp := get_viewport()
 	if vp != null :
-		vp.use_taa = taa
+		vp.use_taa = bool( p[ "taa" ] )
 
 func _get_shadow_profile() -> Dictionary :
-	match shadow_quality :
-		0 :
-			return {
-				"mode": DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS,
-				"max_distance": 90.0,
-				"blur": 2.0,
-				"bias": 0.085,
-				"normal_bias": 3.4,
-				"split_1": 0.15,
-				"split_2": 0.4,
-				"split_3": 0.7,
-				"pancake": 24.0,
-				"moon_distance_scale": 0.7
-			}
-		1 :
-			return {
-				"mode": DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS,
-				"max_distance": 150.0,
-				"blur": 1.2,
-				"bias": 0.055,
-				"normal_bias": 2.2,
-				"split_1": 0.12,
-				"split_2": 0.38,
-				"split_3": 0.68,
-				"pancake": 30.0,
-				"moon_distance_scale": 0.9
-			}
-		2 :
-			return {
-				"mode": DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS,
-				"max_distance": 230.0,
-				"blur": 0.55,
-				"bias": 0.03,
-				"normal_bias": 1.0,
-				"split_1": 0.08,
-				"split_2": 0.25,
-				"split_3": 0.58,
-				"pancake": 40.0,
-				"moon_distance_scale": 1.0
-			}
-		3 :
-			return {
-				"mode": DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS,
-				"max_distance": 320.0,
-				"blur": 0.22,
-				"bias": 0.018,
-				"normal_bias": 0.55,
-				"split_1": 0.06,
-				"split_2": 0.2,
-				"split_3": 0.52,
-				"pancake": 50.0,
-				"moon_distance_scale": 1.15
-			}
-		_ :
-			return {}
+	return RenderProfile.shadow_profile( shadow_quality )
 
 func _apply_shadow_quality() -> void :
 	var profile := _get_shadow_profile()
@@ -2091,7 +2011,7 @@ var _graph_view_was_visible : bool = false
 
 func _graph_view_visible() -> bool :
 	if _graph_view_node == null or not is_instance_valid( _graph_view_node ) :
-		_graph_view_node = get_node_or_null( "UILayer/SystemGraphView" )
+		_graph_view_node = ServiceLocator.graph()
 	return _graph_view_node != null and bool( _graph_view_node.get( "visible" ) )
 
 

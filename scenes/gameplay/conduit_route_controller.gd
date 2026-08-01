@@ -1128,7 +1128,7 @@ func _open_style_modal(conn_id: String) -> void:
 	var tree := get_tree()
 	if tree == null or tree.current_scene == null:
 		return
-	var gv := tree.current_scene.get_node_or_null("UILayer/SystemGraphView")
+	var gv := ServiceLocator.graph()
 	if gv == null:
 		gv = tree.root.find_child("SystemGraphView", true, false)
 	if gv != null and gv.has_method("open_conduit_style_modal"):

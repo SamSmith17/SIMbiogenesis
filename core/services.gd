@@ -1,5 +1,16 @@
+class_name ServiceLocator
 extends Node
 ## Services — lightweight node/service registry (autoload "Services").
+##
+## The class is named ServiceLocator rather than Services because Godot refuses
+## a `class_name` that shadows an autoload singleton of the same name. Having a
+## class_name at all is what makes the STATIC accessors at the bottom of this
+## file usable from anywhere: they resolve at parse time, whereas the bare
+## autoload identifier `Services` does not exist when a script is loaded by
+## `--headless --script`. That is not hypothetical — it is why
+## gameplay/pp_beam_extruder_runtime.gd's `Services.get_main()` broke the whole
+## npc_population_selftest dependency chain with "Identifier not found:
+## Services". Prefer `ServiceLocator.graph()` over `Services.get_graph()`.
 ##
 ## Core scene nodes self-register here in their _ready() under a stable key;
 ## consumers look them up by key instead of hardcoded scene paths like
@@ -69,3 +80,48 @@ func get_ui_layer() -> Node: return get_service(UI_LAYER)
 func get_terrain_loader() -> Node: return get_service(TERRAIN_LOADER)
 func get_player() -> Node: return get_service(PLAYER)
 func get_ha_client() -> Node: return get_service(HA_CLIENT)
+
+
+# --- Static accessors (THE ONES TO USE) ---------------------------------------
+#
+# Resolve the autoload by PATH through the main loop rather than by the bare
+# `Services` identifier, so a script using these still compiles under
+# `--headless --script`, where no autoloads are registered. Every one returns
+# null when the registry or the key is absent — the same contract as the
+# get_node_or_null() calls they replace, so a migrated call site needs no extra
+# guarding.
+#
+# Named without the `get_` prefix because GDScript cannot have a static and an
+# instance method sharing a name.
+
+static func registry() -> Node:
+	var ml := Engine.get_main_loop()
+	if ml is SceneTree:
+		var root := (ml as SceneTree).root
+		if root != null:
+			return root.get_node_or_null("Services")
+	return null
+
+
+static func service(key: StringName) -> Node:
+	var r := registry()
+	return r.get_service(key) if r != null else null
+
+
+## Self-registration entry point. A no-op when there is no registry (headless
+## --script runs), which is what makes it safe to call unconditionally from
+## _ready() in a script that a selftest also loads.
+static func provide(key: StringName, node: Node) -> void:
+	var r := registry()
+	if r != null:
+		r.register(key, node)
+
+
+static func main() -> Node: return service(MAIN)
+static func graph() -> Node: return service(GRAPH)
+static func solar_ui() -> Node: return service(SOLAR_UI)
+static func timeline_ui() -> Node: return service(TIMELINE_UI)
+static func ui_layer() -> Node: return service(UI_LAYER)
+static func terrain_loader() -> Node: return service(TERRAIN_LOADER)
+static func player() -> Node: return service(PLAYER)
+static func ha_client() -> Node: return service(HA_CLIENT)
