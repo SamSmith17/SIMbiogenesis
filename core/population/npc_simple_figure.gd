@@ -39,6 +39,15 @@ const LEG_R := 0.066
 const SHOULDER_X := 0.19
 const HIP_X := 0.10
 
+## Capsules deliberately overshoot their joint pivots and overlap their
+## neighbour so a joint reads as one contiguous limb rather than two capsules
+## floating end-to-end. Each pivot node stays exactly where it was (the pose
+## rotates about the real anatomical joint) — only the mesh geometry extends
+## past it.
+const HIP_OVERLAP := 0.05     # torso extends down / thigh extends up
+const KNEE_OVERLAP := 0.05    # thigh extends down / shin extends up
+const ELBOW_OVERLAP := 0.04   # upper arm extends down / forearm extends up
+
 ## Gait cadence at the sim's nominal walking speed. Scaled by the playback rate
 ## the avatar passes in, so the simplified body time-lapses with the clock
 ## exactly as the rigged one does.
@@ -158,7 +167,10 @@ func _pose_sitting(clapping: bool, dt: float) -> void:
 ## Flat on the ground. The body pitches a quarter turn and the whole figure
 ## drops to lie ON the terrain rather than pivoting about a standing hip.
 func _pose_lying(dt: float) -> void:
-	_place_body(0.16, -PI * 0.5, dt)
+	# Rest height for the body origin while flat (pitch -90deg): torso radius
+	# clears the ground, plus a touch more since the hip/knee bend below pulls
+	# the shin's resting point slightly lower than a perfectly straight lie.
+	_place_body(0.22, -PI * 0.5, dt)
 	_settle(_torso, Vector3(0.0, 0.0, 0.0), dt)
 	_ease(_head, Vector3(-0.15, 0.0, 0.0), dt)
 	for i in 2:
@@ -231,8 +243,16 @@ func _settle(n: Node3D, target: Vector3, dt: float) -> void:
 
 func _place_body(y: float, pitch: float, dt: float) -> void:
 	var k := minf(dt * 7.0, 1.0)
-	_body.position.y = lerpf(_body.position.y, y - HIP_Y, k)
+	# HIP_Y is the hip's vertical offset from the body origin while standing
+	# (pitch 0). As the body pitches toward horizontal (lying down), that
+	# offset rotates out of the vertical axis too, so it must scale by
+	# cos(pitch) — otherwise `y` stops meaning "target body-origin height" at
+	# any pitch other than 0. Without this, lying (pitch -PI/2, cos ~= 0)
+	# unconditionally subtracted the full standing HIP_Y (0.86 m) and drove
+	# the whole figure that far into the ground. Rotation is eased first so
+	# the Y target tracks the CURRENT lean every frame, not just the final one.
 	_body.rotation.x = lerp_angle(_body.rotation.x, pitch, k)
+	_body.position.y = lerpf(_body.position.y, y - HIP_Y * cos(_body.rotation.x), k)
 
 
 # --- construction -----------------------------------------------------------
@@ -252,7 +272,9 @@ func _build() -> void:
 	_torso.name = "Torso"
 	_torso.position = Vector3(0.0, HIP_Y, 0.0)
 	_body.add_child(_torso)
-	_limb(_torso, TORSO_R, TORSO_H, Vector3(0.0, TORSO_H * 0.5, 0.0))
+	# Bottom edge overshoots the hip pivot (y=0 in torso-local space) by
+	# HIP_OVERLAP so it overlaps the thigh capsules below.
+	_limb(_torso, TORSO_R, TORSO_H, -HIP_OVERLAP)
 
 	_head = Node3D.new()
 	_head.name = "Head"
@@ -274,12 +296,16 @@ func _build() -> void:
 		sh.name = "Shoulder%d" % i
 		sh.position = Vector3(SHOULDER_X * side, SHOULDER_Y - HIP_Y, 0.0)
 		_torso.add_child(sh)
-		_limb(sh, ARM_R, UPPER_ARM, Vector3(0.0, -UPPER_ARM * 0.5, 0.0))
+		# Top edge stays right at the shoulder pivot (floats relative to the
+		# torso, unchanged); bottom edge overshoots the elbow by ELBOW_OVERLAP.
+		_limb(sh, ARM_R, 0.0, -(UPPER_ARM + ELBOW_OVERLAP))
 		var el := Node3D.new()
 		el.name = "Elbow%d" % i
 		el.position = Vector3(0.0, -UPPER_ARM, 0.0)
 		sh.add_child(el)
-		_limb(el, ARM_R * 0.92, FOREARM, Vector3(0.0, -FOREARM * 0.5, 0.0))
+		# Top edge overshoots the elbow pivot upward to meet the upper arm;
+		# bottom edge (wrist) is unchanged.
+		_limb(el, ARM_R * 0.92, ELBOW_OVERLAP, -FOREARM)
 		_shoulder.append(sh)
 		_elbow.append(el)
 
@@ -289,22 +315,30 @@ func _build() -> void:
 		hp.name = "Hip%d" % i
 		hp.position = Vector3(HIP_X * side, HIP_Y, 0.0)
 		_body.add_child(hp)
-		_limb(hp, LEG_R, THIGH, Vector3(0.0, -THIGH * 0.5, 0.0))
+		# Top edge overshoots the hip pivot upward to meet the torso; bottom
+		# edge overshoots the knee downward to meet the shin.
+		_limb(hp, LEG_R, HIP_OVERLAP, -(THIGH + KNEE_OVERLAP))
 		var kn := Node3D.new()
 		kn.name = "Knee%d" % i
 		kn.position = Vector3(0.0, -THIGH, 0.0)
 		hp.add_child(kn)
-		_limb(kn, LEG_R * 0.9, SHIN, Vector3(0.0, -SHIN * 0.5, 0.0))
+		# Top edge overshoots the knee pivot upward to meet the thigh; bottom
+		# edge (ankle) is unchanged.
+		_limb(kn, LEG_R * 0.9, KNEE_OVERLAP, -SHIN)
 		_hip.append(hp)
 		_knee.append(kn)
 
 
-func _limb(parent: Node3D, radius: float, length: float, offset: Vector3) -> void:
+## `top_y`/`bottom_y` are the capsule's two end-cap centres in parent-local Y
+## (top_y > bottom_y). Neither has to land on the parent's own origin (0) —
+## that's how a limb overshoots its pivot to overlap its neighbour.
+func _limb(parent: Node3D, radius: float, top_y: float, bottom_y: float) -> void:
 	var mi := MeshInstance3D.new()
 	var cap := CapsuleMesh.new()
 	cap.radius = radius
+	var length := top_y - bottom_y
 	cap.height = maxf(length, radius * 2.05)
 	mi.mesh = cap
-	mi.position = offset
+	mi.position = Vector3(0.0, (top_y + bottom_y) * 0.5, 0.0)
 	mi.material_override = _mat
 	parent.add_child(mi)
