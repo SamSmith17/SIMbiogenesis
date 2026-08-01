@@ -1561,6 +1561,14 @@ Missing `ToolManager` under Player; missing
 button node-path misses; 4× `!is_inside_tree()` from fire-extinguisher spawn;
 "target vector can't be zero" from road/camp scatter.
 
+**`core/terrain/site_boot_selftest.gd` currently FAILS 2 of 7** — "player above
+ground gap -93.75 m" and "auto-veg generated got 0" at Mount St. Helens. It is a
+live-NETWORK full-scene boot test (it fetches a z16 detail imagery layer that
+never lands: `'detail' layer not cached — fetching z16 tiles …`), it is **not**
+in the Validation list above, and it fails identically on d38417a — i.e. this
+predates the 2026-08-01 stabilisation pass and is not a regression from it.
+Diagnose the imagery fetch before trusting the grounding/vegetation assertions.
+
 **Re-verify this list before trusting it** — it is hand-maintained and drifts.
 The former "UISP button node-path misses" entry was stale: nothing outside
 `uisp/` ever referenced UISP, and that subsystem is now under `parked/uisp/`
