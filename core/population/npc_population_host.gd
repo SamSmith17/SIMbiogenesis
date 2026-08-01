@@ -129,6 +129,12 @@ func _process(delta: float) -> void:
 		av.set_tag_visible(aid == _focus_id)
 	_apply_rig_budget(near)
 	# Despawn agents that left the roster (count change / pop_driven off).
+	# .keys() allocates a fresh Array every call, and the roster is unchanged on
+	# the overwhelming majority of frames — if every avatar was seen this frame
+	# there is nothing to despawn, and the size comparison settles that without
+	# building the array at all.
+	if _avatars.size() == seen.size():
+		return
 	for aid in _avatars.keys():
 		if not seen.has(aid):
 			var av2: NpcAvatar = _avatars[aid]

@@ -2338,9 +2338,14 @@ func _test_rig_clip_map() -> void:
 	_check("no activity falls back to idle", av._pick_clip() == NpcRig.CLIP_IDLE)
 
 	# Requesting detail without assets must not crash or claim it succeeded.
+	# The two reasons to draw the stylised body are deliberately distinct (see
+	# NpcAvatar.set_detail): the rig may be MISSING, or the player may have
+	# CHOSEN it. This assertion used to check availability alone, so it failed
+	# for anyone whose user://npc_display.cfg says style="simple" — a real
+	# setting, reachable from Settings → NPCs → Body style.
 	av.set_detail(true)
-	_check("detail request matches asset availability",
-			av.is_rigged() == NpcRig.available())
+	_check("detail request matches asset availability and style choice",
+			av.is_rigged() == (NpcRig.available() and not NpcDisplayPrefs.wants_simple()))
 	av.set_detail(false)
 	_check("detail can be dropped again", not av.is_rigged())
 	av.free()

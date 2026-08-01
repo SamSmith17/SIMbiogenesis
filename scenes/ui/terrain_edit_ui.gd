@@ -404,9 +404,23 @@ func _clear_stale_ortho_meta() -> void:
 # Process
 # ---------------------------------------------------------------------------
 
+## Last pointer position the dock reacted to, so an idle mouse costs nothing.
+var _last_pointer_px: Vector2 = Vector2(-1.0e9, -1.0e9)
+
+
 func _process(delta: float) -> void:
 	if not _active:
 		return
+	# _pick_pointer() is a ray into the world and the overlay redraw below is a
+	# full canvas pass; both ran every frame while the dock was merely OPEN,
+	# with no stroke in progress and the mouse sitting still. Gate on "the
+	# pointer moved, or something is actively being dragged" — the shape
+	# scenes/ui/space_edit_ui.gd already uses.
+	var mouse := get_viewport().get_mouse_position() if get_viewport() != null else Vector2.ZERO
+	var busy := _water_modulating or _stroking or _shaping
+	if not busy and mouse.is_equal_approx(_last_pointer_px):
+		return
+	_last_pointer_px = mouse
 	_cursor_hit = _pick_pointer()
 	if _water_modulating:
 		_tick_water_modulate(delta)

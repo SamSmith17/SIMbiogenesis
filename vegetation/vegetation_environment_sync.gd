@@ -74,10 +74,12 @@ func register_material(mat: Material, species: String = "") -> void:
 	if path == GRASS_SHADER:
 		if not (sm in _grass_materials):
 			_grass_materials.append(sm)
+			_force_push = true
 		return
 	if path == BARK_SHADER:
 		if not (sm in _bark_materials):
 			_bark_materials.append(sm)
+			_force_push = true
 		return
 	# leaf_canopy shares the full foliage seasonal uniform set (deciduousness,
 	# autumn, leaf_coverage, spring_bud, winter, snow_amount, sun, night).
@@ -89,6 +91,11 @@ func register_material(mat: Material, species: String = "") -> void:
 			_material_deciduousness[sm] = _deciduousness_for(species)
 		return
 	_materials.append(sm)
+	# A material registered mid-session has never been written to, so the next
+	# frame must push even if the season has settled and nothing changed —
+	# otherwise a tree scattered at runtime renders with default uniforms until
+	# the weather next moves.
+	_force_push = true
 	if not species.is_empty():
 		_material_species[sm] = species
 		_material_deciduousness[sm] = _deciduousness_for(species)
@@ -169,12 +176,25 @@ func _process(delta: float) -> void:
 		_snow_depth = lerpf(_snow_depth, _t_snow_depth, k)
 		_grass_growth = lerpf(_grass_growth, _t_grass_growth, k)
 	_accum += delta
-	if _accum < UPDATE_INTERVAL:
+	var due := _accum >= UPDATE_INTERVAL
+	if due:
+		_accum = 0.0
+		_poll_main()
+		# The freed-material sweep is deliberately kept on THIS branch rather
+		# than inside _push_uniforms(): the push is now skipped on most frames,
+		# and a sweep that only ran when the push ran would stop reaping freed
+		# materials as soon as the season settled — a slow leak.
+		_sweep_freed()
+	# _push_uniforms() used to run EVERY frame on both branches, issuing ~10
+	# set_shader_parameter() calls per foliage material, ~8 per grass material
+	# and 2 per bark material — thousands of RenderingServer calls per frame for
+	# values that had stopped moving. The lerp above is asymptotic and never
+	# lands exactly on its target, so "did it change?" has to be an epsilon
+	# test, not equality. It is self-tuning: at ordinary speed the season
+	# converges within a second and the push stops; at a high time scale the
+	# targets keep moving and it pushes every frame, which is correct.
+	if due or _uniforms_dirty():
 		_push_uniforms()
-		return
-	_accum = 0.0
-	_poll_main()
-	_push_uniforms()
 
 
 func _poll_main() -> void:
@@ -204,8 +224,71 @@ func _poll_main() -> void:
 		_t_snow_depth = clampf(float(main.call("get_snow_depth_m")), 0.0, SeasonModel.SNOW_DEPTH_MAX_M)
 
 
+## Values last written to the shaders, so a frame that changed nothing can skip
+## the whole push. Seeded to NAN so the first frame always pushes.
+var _pushed: Dictionary = {}
+## Below this, a change is invisible on screen — every one of these uniforms is
+## a 0..1 season blend or a normalised direction.
+const UNIFORM_EPS := 1.0e-4
+## Set when a material is registered mid-session: it has never been written to,
+## so it needs one push regardless of whether the season moved.
+var _force_push := true
+
+
+func _uniforms_dirty() -> bool:
+	if _force_push:
+		_force_push = false
+		return true
+	if _pushed.is_empty():
+		return true
+	if absf(float(_pushed.get("night", 1e9)) - _night_factor) > UNIFORM_EPS: return true
+	if absf(float(_pushed.get("autumn", 1e9)) - _autumn) > UNIFORM_EPS: return true
+	if absf(float(_pushed.get("leaf", 1e9)) - _leaf_coverage) > UNIFORM_EPS: return true
+	if absf(float(_pushed.get("bud", 1e9)) - _bud) > UNIFORM_EPS: return true
+	if absf(float(_pushed.get("winter", 1e9)) - _winter) > UNIFORM_EPS: return true
+	if absf(float(_pushed.get("summer", 1e9)) - _summer) > UNIFORM_EPS: return true
+	if absf(float(_pushed.get("snow", 1e9)) - _snow) > UNIFORM_EPS: return true
+	if absf(float(_pushed.get("depth", 1e9)) - _snow_depth) > UNIFORM_EPS: return true
+	if absf(float(_pushed.get("growth", 1e9)) - _grass_growth) > UNIFORM_EPS: return true
+	# The sun sweeps continuously, so this is usually what keeps the push alive
+	# during the day — and correctly so, since the foliage lighting follows it.
+	var last_sun: Vector3 = _pushed.get("sun", Vector3(1e9, 0.0, 0.0))
+	return last_sun.distance_squared_to(_sun_direction) > UNIFORM_EPS * UNIFORM_EPS
+
+
+## Reap materials whose owning mesh has been freed. Split out of _push_uniforms
+## so it keeps running on the 0.2 s cadence even when the push is skipped.
+func _sweep_freed() -> void:
+	var i := 0
+	while i < _materials.size():
+		var sm := _materials[i]
+		if not is_instance_valid(sm):
+			_materials.remove_at(i)
+			_material_species.erase(sm)
+			_material_deciduousness.erase(sm)
+			continue
+		i += 1
+	i = 0
+	while i < _grass_materials.size():
+		if not is_instance_valid(_grass_materials[i]):
+			_grass_materials.remove_at(i)
+			continue
+		i += 1
+	i = 0
+	while i < _bark_materials.size():
+		if not is_instance_valid(_bark_materials[i]):
+			_bark_materials.remove_at(i)
+			continue
+		i += 1
+
+
 func _push_uniforms() -> void:
 	var sun := Vector3(_sun_direction.x, _sun_direction.y, _sun_direction.z)
+	_pushed = {
+		"night": _night_factor, "autumn": _autumn, "leaf": _leaf_coverage,
+		"bud": _bud, "winter": _winter, "summer": _summer, "snow": _snow,
+		"depth": _snow_depth, "growth": _grass_growth, "sun": _sun_direction,
+	}
 	var i := 0
 	while i < _materials.size():
 		var sm := _materials[i]

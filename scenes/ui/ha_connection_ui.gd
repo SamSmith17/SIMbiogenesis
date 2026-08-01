@@ -187,8 +187,19 @@ func _update_visibility() -> void:
 		# Default to hidden if we can't determine TimeUI state
 		panel.visible = false
 
-func _process(_delta: float) -> void:
+## Visibility mirror of TimeUI. Throttled rather than run every frame: this is
+## a panel show/hide, nothing here is animated, and the fallback branch did a
+## get_node_or_null() per frame. Same accumulator shape as
+## scenes/ui/weather_card_ui.gd.
+const _VIS_POLL_INTERVAL := 0.25
+var _vis_poll_accum: float = 0.0
+
+func _process(delta: float) -> void:
 	"""Update visibility based on TimeUI state"""
+	_vis_poll_accum += delta
+	if _vis_poll_accum < _VIS_POLL_INTERVAL:
+		return
+	_vis_poll_accum = 0.0
 	if time_ui:
 		if "ui_visible" in time_ui:
 			panel.visible = time_ui.ui_visible

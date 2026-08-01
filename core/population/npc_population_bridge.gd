@@ -62,6 +62,20 @@ const SURFACE_MIN_CLEARANCE_M := 1.6
 ## Departure / collapse events for the view to toast, drained each read.
 var _pending_events: Array = []
 
+## Cached agent_dots() payload. NpcPopulationHost calls agent_dots() every
+## RENDER frame, and the Site Plan provider calls it again, but the simulation
+## only steps on a 0.25–0.5 s accumulator — so the payload was identical between
+## steps while being rebuilt from scratch: a fresh 15-key Dictionary per agent
+## per frame, including NpcMorale.color(), NpcMorale.label() and
+## status_line()'s string building. At 24 agents and 60 fps that is ~1,440
+## dictionaries and ~2,900 transient strings per second, all discarded.
+var _dots_cache: Array = []
+var _dots_cache_valid := false
+## Display prefs are statics with no signal (see NpcDisplayPrefs.generation);
+## color_for_agent reads colors_enabled(), so a mid-session tint toggle has to
+## invalidate the cache or it keeps serving the old colors.
+var _dots_cache_gen := -1
+
 
 ## Step every pop-driven habitat and install demand overrides. Call before
 ## flow_engine.tick() inside the ambient tick's suppress window.
@@ -79,6 +93,8 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	if model == null or flow_engine == null or main == null:
 		return
 	_last_abs_h = abs_h
+	# Agent state is about to move, so last frame's dot payload is stale.
+	_invalidate_dots()
 	# Kept so the Routines panel can persist an edited schedule without being
 	# handed the model separately.
 	_model = model
@@ -154,10 +170,22 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 
 ## Site Plan dot payload across all engines (Phase 4 renderer input).
 func agent_dots() -> Array:
+	var gen := NpcDisplayPrefs.generation()
+	if _dots_cache_valid and gen == _dots_cache_gen:
+		return _dots_cache
 	var out: Array = []
 	for iid in _engines:
 		out.append_array((_engines[iid] as NpcPopulationEngine).agent_dots())
+	_dots_cache = out
+	_dots_cache_valid = true
+	_dots_cache_gen = gen
 	return out
+
+
+## Drop the cached dot payload. Called from every path that can change what a
+## dot would say: a sim step, a roster rebuild, a snapshot restore.
+func _invalidate_dots() -> void:
+	_dots_cache_valid = false
 
 
 ## Tagged spaces with resolved world positions + live occupancy, for the Site
@@ -550,6 +578,7 @@ func reset_population(item_id: String, model, main: Node) -> bool:
 	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 	var count := clampi(int(float(specs.get("occupants", 10.0))), 1, 200)
 	engine.reset_roster(count, item_id, _home_pos(specs, main))
+	_invalidate_dots()
 	specs.erase("pop_state")
 	specs["pop_present"] = count
 	specs["pop_morale"] = snappedf(engine.mean_morale(), 0.01)
@@ -687,6 +716,7 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	var snap: Dictionary = specs.get("pop_state", {}) as Dictionary
 	if not snap.is_empty() and (snap.get("agents", []) as Array).size() == count:
 		engine.restore(snap)
+		_invalidate_dots()
 	else:
 		engine.configure(count, iid, _home_pos(specs, main))
 	# An authored routine is CONFIG, not simulation state: it lives in
@@ -737,6 +767,7 @@ func restore_all(snaps: Dictionary) -> void:
 	for iid in snaps:
 		if _engines.has(str(iid)) and snaps[iid] is Dictionary:
 			(_engines[str(iid)] as NpcPopulationEngine).restore(snaps[iid] as Dictionary)
+	_invalidate_dots()
 
 
 func has_pop_driven() -> bool:

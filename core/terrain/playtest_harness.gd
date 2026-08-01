@@ -1740,12 +1740,20 @@ func _run_population_verify() -> void:
 				within += 1
 			if av.is_rigged():
 				rigged_n += 1
-		# Someone in range MUST get the rigged body, and the budget must hold.
+		# Someone in range MUST get the rigged body, and the budget must hold —
+		# but ONLY when a rigged body is what should be drawn at all. Two
+		# separate reasons it should not be (see NpcAvatar.set_detail): the
+		# Mixamo pack is not installed, or the player CHOSE the stylised figure
+		# in Settings → NPCs → Body style. This check ignored the second, so it
+		# failed outright for anyone whose user://npc_display.cfg says
+		# style="simple" — a supported setting, not a broken LOD.
+		var want_rigged := NpcRig.available() and not NpcDisplayPrefs.wants_simple()
 		var ok_rig := rigged_n <= NpcPopulationHost.MAX_RIGGED \
-			and within > 0 and rigged_n > 0
-		print("PlaytestHarness: population verify — rigged LOD %s (%d rigged, %d within %.0f m, nearest %.0f m, cap %d)" % [
+			and within > 0 and (rigged_n > 0 if want_rigged else rigged_n == 0)
+		print("PlaytestHarness: population verify — rigged LOD %s (%d rigged, %d within %.0f m, nearest %.0f m, cap %d, style=%s, rig_assets=%s)" % [
 			"PASS" if ok_rig else "FAIL", rigged_n, within,
-			NpcPopulationHost.RIG_DIST_M, nearest, NpcPopulationHost.MAX_RIGGED])
+			NpcPopulationHost.RIG_DIST_M, nearest, NpcPopulationHost.MAX_RIGGED,
+			NpcDisplayPrefs.style(), "yes" if NpcRig.available() else "no"])
 		if player != null:
 			player.global_position = home
 
@@ -1832,6 +1840,13 @@ func _run_population_verify() -> void:
 		cam.global_position = stage + Vector3(0.0, 1.3, 5.6)
 		cam.look_at(stage + Vector3(0.0, 0.85, 0.0))
 		var samples: Array = []
+		# Body style is a GLOBAL, PERSISTED player preference (user://npc_display.cfg,
+		# Settings → NPCs → Body style), and the loop below flips it to shoot both
+		# figures side by side. Snapshot it first: this used to leave the setting on
+		# whatever the last sample needed, silently overwriting the player's choice
+		# every time the harness ran — and then the rigged-LOD check above would
+		# "pass" only because the harness itself had just changed the answer.
+		var prev_style := NpcDisplayPrefs.style()
 		for i in poses.size():
 			var pose: Dictionary = poses[i]
 			# Half the review line in each body style, so a single shot shows both
@@ -1845,7 +1860,7 @@ func _run_population_verify() -> void:
 			sample.apply_state(stage + Vector3(-3.5 + 1.4 * float(i), 0.0, 0.0),
 					PI, bool(pose["moving"]), str(pose["activity"]))
 			samples.append(sample)
-		NpcDisplayPrefs.set_style(NpcDisplayPrefs.STYLE_HUMANOID)
+		NpcDisplayPrefs.set_style(prev_style)
 		print("PlaytestHarness: population verify — rig %s (%s)"
 			% ["available" if NpcRig.available() else "ABSENT (primitive figures)",
 				", ".join(NpcRig.clip_names()) if NpcRig.available() else NpcRig.load_error()])

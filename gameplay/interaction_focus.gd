@@ -31,6 +31,25 @@ func _find_loader() -> void:
 	_loader = tree.current_scene.get_node_or_null("TerrainLoader")
 
 
+## Cached like _loader/_crosshair. This was resolved by NAME every physics tick,
+## which is a subtree lookup 60×/second for a node that never moves.
+var _route_ctrl: Node = null
+var _route_ctrl_looked_up := false
+
+
+func _get_route_controller() -> Node:
+	if _route_ctrl != null and is_instance_valid(_route_ctrl):
+		return _route_ctrl
+	# Re-look-up only after the cached node dies, not every miss: on a scene with
+	# no ConduitRouteController the answer is permanently null, and retrying each
+	# tick would reinstate the per-frame cost this cache exists to remove.
+	if _route_ctrl_looked_up and _route_ctrl == null:
+		return null
+	_route_ctrl_looked_up = true
+	_route_ctrl = _player.get_node_or_null("ConduitRouteController") if _player != null else null
+	return _route_ctrl
+
+
 func get_focused() -> Interactable:
 	return _focused
 
@@ -45,7 +64,7 @@ func _physics_process(_delta: float) -> void:
 		_update_ui()
 	if _player == null or _camera == null:
 		return
-	var route_ctrl: Node = _player.get_node_or_null("ConduitRouteController")
+	var route_ctrl: Node = _get_route_controller()
 	if route_ctrl != null and route_ctrl.has_method("is_routing") \
 			and bool(route_ctrl.call("is_routing")):
 		_clear_focus()

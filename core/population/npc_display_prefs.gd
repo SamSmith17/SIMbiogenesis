@@ -22,6 +22,16 @@ static var _style := ""
 ## confused with the unloaded default (mirrors the `_style.is_empty()` check
 ## above, just for a bool instead of a string).
 static var _colors_on := -1
+## Bumped by every setter here. These are statics with no signal to connect to,
+## so anything caching a value derived from them (the agent-dot cache in
+## NpcPopulationBridge) compares this instead — otherwise toggling the tint
+## mid-session would keep serving stale colors until the next roster change.
+static var _generation := 0
+
+
+## Monotonic counter of display-pref changes. Cheap to poll; see _generation.
+static func generation() -> int:
+	return _generation
 
 
 static func style() -> String:
@@ -36,6 +46,7 @@ static func style() -> String:
 
 static func set_style(s: String) -> void:
 	_style = STYLE_SIMPLE if s == STYLE_SIMPLE else STYLE_HUMANOID
+	_generation += 1
 	var cfg := ConfigFile.new()
 	cfg.load(CFG_PATH)
 	cfg.set_value(SECTION, "style", _style)
@@ -63,6 +74,7 @@ static func colors_enabled() -> bool:
 
 static func set_colors_enabled(on: bool) -> void:
 	_colors_on = 1 if on else 0
+	_generation += 1
 	var cfg := ConfigFile.new()
 	cfg.load(CFG_PATH)
 	cfg.set_value(SECTION, "colors_on", on)
