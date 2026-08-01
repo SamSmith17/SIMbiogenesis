@@ -583,6 +583,13 @@ func snapshot(saved_h: float) -> Dictionary:
 	var arr: Array = []
 	for a in agents:
 		arr.append((a as NpcAgent).snapshot())
+	# `saved_h` is written but deliberately NOT read back by restore(), which is
+	# why restore() sets _last_abs_h = NAN instead. Using it to derive "how much
+	# sim time passed while this was saved" and integrating that gap is exactly
+	# the behaviour the design forbids — a restored roster must not be billed
+	# for time it did not live through (see the coarse-catch-up rules in
+	# POPULATION_PLAN.md). It is kept purely as provenance: when a save behaves
+	# oddly, knowing WHEN the snapshot was taken is the first thing you want.
 	var out := {
 		"agents": arr,
 		"saved_h": snappedf(saved_h, 1.0 / 60.0),

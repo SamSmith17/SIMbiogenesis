@@ -103,19 +103,31 @@ it — so the *next* feature doesn't need the edit.
 Measured 2026-07-26. Tackle one slice per push; keep public surfaces stable and
 selftests green.
 
-1. **Node-name coupling — 48 files / 75 `get_node("…SolarUI/SystemGraphView/Main…")`
-   call sites.** Renaming a scene node silently breaks SimMode/AutomationEngine/UIs.
-   *In progress:* the `Services` registry autoload (`core/services.gd`, selftest
-   `core/services_selftest.gd`) has landed. Core nodes self-register — `Main` in
-   `_enter_tree` (so it resolves before any child's `_ready`), plus
+1. **Node-name coupling.** Renaming a scene node silently breaks
+   SimMode/AutomationEngine/UIs. *In progress:* the registry autoload
+   (`core/services.gd`, selftest `core/services_selftest.gd`) has landed. Core
+   nodes self-register — `Main` in `_enter_tree` (so it resolves before any
+   child's `_ready`), plus
    `SystemGraphView`/`SolarUI`/`TimelineUI`/`TerrainLoader`/`Player`/`HAClient`
-   in `_ready`. Consumers read `Services.get_main()` / `get_graph()` / etc.;
-   unregistered keys return null exactly like the old `get_node_or_null`, so
-   migration is non-breaking. **First batch: all 11 `Main` lookups converted.**
-   Remaining per-push work: convert the `SystemGraphView` (~40), `SolarUI`,
-   `TerrainLoader`, `Player`, and `HAClient` lookup sites to their
-   `Services.get_*()` accessors. Do **not** register autoloads (WeatherService,
-   TimeDirector, …) — reference those directly.
+   in `_ready`.
+
+   **Use the STATIC accessors: `ServiceLocator.graph()`, `.main()`, `.player()`,
+   … and `ServiceLocator.provide(key, self)` to register.** The script is
+   `class_name ServiceLocator` (it cannot be named `Services` — Godot refuses a
+   `class_name` that shadows an autoload). The bare autoload identifier
+   `Services` still works at runtime but **must not be used**: it does not exist
+   under `--headless --script`, so any file referencing it fails to *compile*,
+   which silently broke the whole `npc_population_selftest` dependency chain.
+   The statics resolve the registry by path and return null when absent —
+   the same contract as the `get_node_or_null()` calls they replace.
+
+   *Done (2026-08-01):* all 12 bare `Services.get_*()` calls, all 7
+   self-registrations, and 35 hardcoded `"UILayer/SystemGraphView"` lookups
+   across 23 files. There are now **zero bare `Services` identifiers** outside
+   `services.gd`. *Remaining:* the `SolarUI` / `TerrainLoader` / `Player` /
+   `HAClient` path lookups, and ~280 other `"UILayer/…"` / `"/root/…"` strings.
+   Do **not** register autoloads (WeatherService, TimeDirector, …) — reference
+   those directly.
 2. **Monoliths — 8 files hold ~23% of the code.** `system_graph_view.gd` (~13.9k
    lines), `terrain_loader.gd` (~9.2k), `graph_canvas.gd` (~8.9k),
    `inspector_panel.gd` (~5.7k), `solar_ui.gd` (~4.5k), `main.gd` (~3.9k),
@@ -132,9 +144,14 @@ selftests green.
 4. **Stalled v1/v2 split** — `system_graph_v2/graph_canvas_v2.gd extends
    system_graph/graph_canvas.gd`. Decide: finish the migration or fold v2 back.
 5. **Compat shims / dead ends** — `SimMode`→`TimeDirector`, the hidden `TimeUI`
-   shim, `legacy/`. Mark with deprecation headers; remove once the `Services`
-   registry lands. Fix the known duplicate `ibc_glow_lights` device id (two
-   `IBCGlow` instances — a real registry collision).
+   shim, `legacy/`. Mark with deprecation headers; remove once the registry
+   migration (debt #1) is far enough along.
+   *Resolved:* the duplicate `ibc_glow_lights` device id is **already fixed** —
+   `soak_festival_2026.tscn` carries `ibc_glow_lights` and `ibc_glow_lights_2`,
+   and neither map logs a registry collision on boot. Five dead scripts, two
+   pass-only stubs and the no-op root `inverter_bridge.gd` shim were deleted
+   2026-08-01, and the unreachable `uisp/` subsystem moved to `parked/uisp/`
+   behind a `.gdignore` (see `parked/README.md`).
 6. **Autoload count (31).** High, but it's the current service API — do not churn
    it until debt #1 gives a cleaner indirection. Then the shims become removable.
 

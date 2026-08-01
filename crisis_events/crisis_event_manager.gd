@@ -52,10 +52,11 @@ var _crisis_rules_poll_left: float = 0.0
 var _crisis_system_enabled_cached: bool = false
 
 func _ready() -> void:
-	# Register available event types
-	_register_event_types()
-	
-	# Find main node for context
+	# No event types are registered here. This manager is created at RUNTIME by
+	# main.gd (_setup_crisis_events), which instantiates it, adds it to the
+	# "crisis_event_manager" group and registers FireEvent itself — no .tscn in
+	# the project contains a CrisisEventManager node. There used to be an empty
+	# _register_event_types() here whose only content was a comment saying so.
 	call_deferred("_find_main_node")
 
 func _process(delta: float) -> void:
@@ -96,11 +97,6 @@ func _process(delta: float) -> void:
 	if check_timer >= check_interval:
 		check_timer = 0.0
 		_try_trigger_event()
-
-func _register_event_types() -> void:
-	# Fire event (will be registered when FireEvent is created)
-	# Registration happens in main.gd after scene loads
-	pass
 
 func _find_main_node() -> void:
 	var tree := get_tree()
