@@ -158,55 +158,81 @@ static func label_for(id: String) -> String:
 	return str(LABELS.get(id, id.capitalize()))
 
 
-## Overlay variant SPECS dims into family settings keys so builders pick them up.
-## Only fills keys that are ABSENT so Tune Look / brush sliders (H/W, trunk…)
-## and saved species defaults are never clobbered by catalog SPECS.
+## Flat dim key per family the SPECS geometry maps onto.
+const _FAMILY_DIM_KEYS := {
+	"pine": {"card_w": "width", "card_h": "height", "trunk_w": "trunk_w"},
+	"deciduous": {"canopy_w": "width", "canopy_h": "height",
+		"trunk_w": "trunk_w", "trunk_h": "trunk_h"},
+	"shrub": {"card_w": "width", "card_h": "height"},
+	"grass_lawn": {"card_w": "width", "card_h": "height"},
+	"grass_field": {"card_w": "width", "card_h": "height"},
+}
+
+
+## Resolve the FLAT settings dict a builder sees for one species, with the
+## Phase 2 precedence: per-species user override > user family edit > catalog
+## SPECS variant > family default. The old version only filled ABSENT family
+## keys — and the merged style always carries every family key, so a variant's
+## SPECS dims/colors NEVER applied: spruce == cedar == fir, every deciduous
+## variant byte-identical ("all subspecies are placeholders").
+##
+## User-edit provenance comes from the VegStyleStore side channels riding the
+## settings dict: _user_family_keys (flat family keys the player explicitly
+## set) and _species_overrides (unprefixed per-species values).
 static func settings_with_variant(species: String, settings: Dictionary,
 		specs: Dictionary) -> Dictionary:
 	var family := mesh_family(species)
 	var out := settings.duplicate(true)
 	var spec: Dictionary = specs.get(species, specs.get(family, {}))
-	if spec.is_empty():
-		out["_variant_species"] = species
-		return out
-	match family:
-		"pine":
-			_fill_missing(out, "pine_card_w", spec, "width")
-			_fill_missing(out, "pine_card_h", spec, "height")
-			_fill_missing(out, "pine_trunk_w", spec, "trunk_w")
-		"deciduous":
-			_fill_missing(out, "deciduous_canopy_w", spec, "width")
-			_fill_missing(out, "deciduous_canopy_h", spec, "height")
-			_fill_missing(out, "deciduous_trunk_w", spec, "trunk_w")
-			_fill_missing(out, "deciduous_trunk_h", spec, "trunk_h")
-		"shrub":
-			_fill_missing(out, "shrub_card_w", spec, "width")
-			_fill_missing(out, "shrub_card_h", spec, "height")
-		"grass_field", "grass_lawn":
-			_fill_missing(out, "%s_card_w" % family, spec, "width")
-			_fill_missing(out, "%s_card_h" % family, spec, "height")
-	# Prefer per-species tint keys, then family; SPECS colors only when neither set.
-	var albedo_key := "%s_albedo_tint" % species
-	var family_albedo := "%s_albedo_tint" % family
-	if spec.has("top") and not out.has(albedo_key) and not out.has(family_albedo):
-		out["%s_spec_top" % family] = spec["top"]
-	var hi_key := "%s_highlight_tint" % species
-	var family_hi := "%s_highlight_tint" % family
-	if spec.has("highlight") and not out.has(hi_key) and not out.has(family_hi):
-		out["%s_spec_highlight" % family] = spec["highlight"]
-	# Copy subspecies-specific tints onto family keys for shader uniforms when set.
-	if out.has(albedo_key):
-		out[family_albedo] = out[albedo_key]
-	if out.has(hi_key):
-		out[family_hi] = out[hi_key]
 	out["_variant_species"] = species
+	if spec.is_empty():
+		return out
+	var user_family: Array = settings.get(VegStyleStore.KEY_USER_FAMILY, [])
+	var overrides_all: Dictionary = settings.get(VegStyleStore.KEY_SPECIES_OVERRIDES, {})
+	var over: Dictionary = overrides_all.get(species, {}) if overrides_all.get(species) is Dictionary else {}
+	var named_variant := species != family and specs.has(species)
+	# Geometry dims.
+	var dims: Dictionary = _FAMILY_DIM_KEYS.get(family, {})
+	for dim in dims:
+		var flat_key := "%s_%s" % [family, dim]
+		var spec_key := str(dims[dim])
+		if over.has(dim):
+			out[flat_key] = float(over[dim])
+		elif named_variant and spec.has(spec_key) and flat_key not in user_family:
+			out[flat_key] = float(spec[spec_key])
+		# else: keep the flat value (user family edit, or family default for
+		# the generic family species itself).
+	# Non-dim per-species overrides (cluster counts, whorl counts, offsets, …)
+	# apply onto the family keys directly.
+	for k in over:
+		var key := str(k)
+		if dims.has(key) or key == "albedo_tint" or key == "highlight_tint":
+			continue
+		out["%s_%s" % [family, key]] = over[k]
+	# Colors: same ladder. SPECS carry real per-variant palettes (birch/aspen
+	# white bark, maple's orange highlight) that were previously unreachable.
+	var family_albedo := "%s_albedo_tint" % family
+	var family_hi := "%s_highlight_tint" % family
+	var albedo_key := "%s_albedo_tint" % species
+	var hi_key := "%s_highlight_tint" % species
+	if over.has("albedo_tint"):
+		out[family_albedo] = over["albedo_tint"]
+	elif out.has(albedo_key) and species != family:
+		out[family_albedo] = out[albedo_key]
+	elif named_variant and spec.has("top") and family_albedo not in user_family:
+		out[family_albedo] = spec["top"]
+	if over.has("highlight_tint"):
+		out[family_hi] = over["highlight_tint"]
+	elif out.has(hi_key) and species != family:
+		out[family_hi] = out[hi_key]
+	elif named_variant and spec.has("highlight") and family_hi not in user_family:
+		out[family_hi] = spec["highlight"]
+	# Bark color (birch/aspen white trunks). bark_albedo_tint is not in
+	# defaults(), so its presence means an explicit user/global choice — only
+	# fill from SPECS when unset.
+	if named_variant and spec.has("bark") and not out.has("bark_albedo_tint"):
+		out["bark_albedo_tint"] = spec["bark"]
 	return out
-
-
-static func _fill_missing(out: Dictionary, out_key: String, spec: Dictionary, spec_key: String) -> void:
-	if out.has(out_key) or not spec.has(spec_key):
-		return
-	out[out_key] = float(spec[spec_key])
 
 
 ## Subspecies ids under a paint-dock family button (Pine / Decid / Shrub / grass).

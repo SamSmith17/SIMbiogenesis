@@ -5706,13 +5706,10 @@ func _setup_camp_scatter_ui() -> void:
 
 func _setup_vegetation() -> void:
 	_vegetation_layer = VegetationLayer.create_empty()
-	# Seed shape defaults from the merged global tune-look style BEFORE loading the
-	# per-map layer file, so fresh maps inherit the player's last-tuned look. The
-	# render path (_auto_veg_runtime_settings) lets layer shape win over style
-	# shape, so without this a fresh layer's hardcoded defaults would mask the
-	# global tune-look. load_for_map() overrides these when a per-map file exists.
-	_vegetation_layer.apply_settings(
-		VegetationStyleConfig.shape_subset(VegetationStyleConfig.load_merged(_lat, _lon)))
+	# Phase 2: no global-shape seeding. The layer only carries SPARSE user
+	# deltas now (VegetationLayer v2) and the render path merges those over the
+	# style store — seeding would turn global style values into per-map layer
+	# deltas that shadow later global tunes.
 	_vegetation_layer.load_for_map(_lat, _lon)
 	_growth_init_manual()
 	_setup_vegetation_edit_ui()
@@ -5766,10 +5763,13 @@ func undo_vegetation() -> bool:
 	return true
 
 
+## Phase 2: returns the layer's SPARSE user deltas (matches what the render
+## path now merges over the style store). Callers wanting the full fallback
+## dict should read the style store via get_vegetation_style().
 func get_vegetation_settings() -> Dictionary:
 	if _vegetation_layer == null:
-		return VegetationLayer.default_settings()
-	return _vegetation_layer.get_settings()
+		return {}
+	return _vegetation_layer.user_settings()
 
 
 func get_map_vegetation_bounds() -> PackedVector2Array:
@@ -5782,7 +5782,9 @@ func get_map_vegetation_bounds() -> PackedVector2Array:
 func set_vegetation_settings(patch: Dictionary, rebuild: bool = true, persist: bool = true) -> void:
 	if _vegetation_layer == null:
 		return
-	_vegetation_layer.apply_settings(patch)
+	# Phase 2: shape lives in the style store; the layer keeps only deltas the
+	# player has NOT re-expressed at style level (see apply_vegetation_look).
+	_vegetation_layer.erase_settings_keys(patch.keys())
 	_veg_style.merge(patch, true)
 	if persist:
 		_vegetation_layer.save(_lat, _lon)
@@ -6086,7 +6088,10 @@ func _auto_veg_runtime_settings() -> Dictionary:
 			_drape, _built_extent, 512, _detail_drape, detail_ext, 512)
 		if gate != null and gate.is_valid():
 			s["haze_color"] = gate.compute_haze_color()
-	s.merge(_vegetation_layer.get_settings() if _vegetation_layer != null else {}, true)
+	# Phase 2: merge only the layer's SPARSE user deltas — get_settings()
+	# (defaults + deltas) is a complete dict and shadowed every style-store
+	# value ("Tune-look doesn't apply" cause #3).
+	s.merge(_vegetation_layer.user_settings() if _vegetation_layer != null else {}, true)
 	# Current growth-clock time so the runtime can scale each instance by its age
 	# (VegetationGrowth.instance_scale_mult). Same value for every record in a
 	# rebuild, so it never affects batch partitioning.
@@ -6667,7 +6672,11 @@ func apply_vegetation_look(shape: Dictionary, style: Dictionary) -> void:
 	_vegetation_layer.clear_card_overrides()
 	if _auto_veg_layer != null:
 		_auto_veg_layer.clear_card_overrides()
-	_vegetation_layer.apply_settings(shape)
+	# Phase 2: the style store is the ONE authority for shape — do not write
+	# shape into the layer (that created "user deltas" out of unchanged values
+	# which then shadowed every later style tune). Erase any stale layer
+	# deltas for the keys this apply covers so the new style actually lands.
+	_vegetation_layer.erase_settings_keys(shape.keys())
 	_veg_style.merge(shape, true)
 	_veg_style = VegetationStyleConfig.apply_patch(_veg_style, style)
 	_vegetation_layer.save(_lat, _lon)

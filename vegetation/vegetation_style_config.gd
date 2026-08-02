@@ -213,20 +213,15 @@ static func map_path(lat: float, lon: float) -> String:
 	return "user://maps/vegetation_style_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
 
 
+## Phase 2: resolution + persistence live in VegStyleStore (layered v2 schema,
+## precedence species > family > global > SPECS). These entry points remain the
+## facade every consumer calls; v1 files are migrated one-way on first read.
 static func load_merged(lat: float, lon: float) -> Dictionary:
-	var out := defaults()
-	_load_global_into(out)
-	_merge_species_defaults_into(out)
-	_load_map_into(out, lat, lon)
-	return out
+	return VegStyleStore.flat_merged(lat, lon)
 
 
 static func save_map(lat: float, lon: float, settings: Dictionary) -> void:
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
-	var f := FileAccess.open(map_path(lat, lon), FileAccess.WRITE)
-	if f == null:
-		return
-	f.store_string(JSON.stringify(_color_dict_to_json(settings)))
+	VegStyleStore.save_map_style(lat, lon, settings)
 
 
 ## JSON-safe Color→array conversion for .esim / file exchange.
@@ -243,17 +238,16 @@ static func from_serializable(settings: Dictionary) -> Dictionary:
 ## default for every future map until re-tuned (a per-map save still overrides).
 ## Existing keys are merged, not clobbered, so partial saves keep prior defaults.
 static func save_global(settings: Dictionary) -> void:
-	var cfg := ConfigFile.new()
-	if FileAccess.file_exists(GLOBAL_PATH):
-		cfg.load(GLOBAL_PATH)
-	for k in settings:
-		cfg.set_value("style", str(k), settings[k])
-	cfg.save(GLOBAL_PATH)
+	VegStyleStore.save_global_patch(settings)
 
 
 static func clear_global() -> void:
 	if FileAccess.file_exists(GLOBAL_PATH):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(GLOBAL_PATH))
+	var v2 := VegStyleStore.global_v2_path()
+	if FileAccess.file_exists(v2):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(v2))
+	VegStyleStore.invalidate_cache()
 
 
 ## Shape-only subset of a style dict (keys the VegetationLayer owns). Used to seed
@@ -313,23 +307,44 @@ static func delete_preset(species: String, preset_name: String) -> void:
 
 # --- Per-subspecies default looks --------------------------------------------
 
+## Values arrive family-prefixed from the Tune-look sliders ("pine_card_w" while
+## editing Spruce). Strip the prefix so they land as REAL per-species overrides
+## in the store's species layer — the v1 file stored them family-prefixed under
+## the subspecies name, which is exactly why saving Spruce retuned every conifer.
 static func save_species_default(species: String, values: Dictionary) -> void:
 	if species.is_empty() or values.is_empty():
 		return
-	var all := _load_species_defaults_file()
-	all[species] = _color_dict_to_json(values)
-	var f := FileAccess.open(SPECIES_DEFAULTS_PATH, FileAccess.WRITE)
-	if f == null:
-		return
-	f.store_string(JSON.stringify(all))
+	var family := VegSpeciesCatalog.mesh_family(species)
+	var unpref := {}
+	for k in values:
+		var key := str(k)
+		if key.begins_with("_"):
+			continue
+		if key.begins_with(species + "_"):
+			unpref[key.substr(species.length() + 1)] = values[k]
+		elif key.begins_with(family + "_"):
+			unpref[key.substr(family.length() + 1)] = values[k]
+		else:
+			unpref[key] = values[k]
+	VegStyleStore.save_species_override(species, unpref)
 
 
+## Returns the stored per-species overrides RE-PREFIXED with the family keys
+## (plus "<species>_albedo_tint"/"_highlight_tint") — the flat form the
+## Tune-look modal's slider table expects.
 static func load_species_default(species: String) -> Dictionary:
-	var all := _load_species_defaults_file()
-	var raw: Variant = all.get(species, {})
-	if raw is Dictionary:
-		return _json_to_color_dict(raw as Dictionary)
-	return {}
+	var over := VegStyleStore.species_override(species)
+	if over.is_empty():
+		return {}
+	var family := VegSpeciesCatalog.mesh_family(species)
+	var out := {}
+	for k in over:
+		var key := str(k)
+		if key == "albedo_tint" or key == "highlight_tint":
+			out["%s_%s" % [species, key]] = over[k]
+		else:
+			out["%s_%s" % [family, key]] = over[k]
+	return out
 
 
 static func _load_species_defaults_file() -> Dictionary:

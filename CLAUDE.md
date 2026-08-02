@@ -82,6 +82,11 @@ Godot.exe.exe --headless --path . --script core/climelapse/climelapse_series_sel
 # time_scale 0 + analemma_mode off and restores both on every exit path.
 # Vegetation growth seasonal gate + instance map (offline):
 Godot.exe.exe --headless --path . --script vegetation/vegetation_growth_selftest.gd
+# Veg style store (offline — Phase 2 layered persistence: precedence matrix
+# species>family>SPECS>defaults, v1→v2 migrations incl. the defaults-dump
+# purge, subspecies mesh divergence, VegetationLayer sparse-delta round-trip;
+# run --import first so VegStyleStore registers):
+Godot.exe.exe --headless --path . --script vegetation/veg_style_store_selftest.gd
 # Site Report metrics/data + UI-compile self-test (offline, deterministic):
 Godot.exe.exe --headless --path . --script core/report/site_report_selftest.gd
 # NPC population self-test (offline, deterministic — SpaceRegistry tagging/
@@ -614,7 +619,27 @@ to a flat grid / neutral drape so the world still loads.
  late replies that outlive the loader's 180 s phase budget still queue the scatter.
 
 **Veg overhaul (in progress — plan + full audit:
-`~/.claude/plans/i-want-to-overhaul-scalable-biscuit.md`; Phases 0–1 landed).**
+`~/.claude/plans/i-want-to-overhaul-scalable-biscuit.md`; Phases 0–2 landed).**
+**Phase 2 style architecture:** `vegetation/veg_style_store.gd` (`VegStyleStore`)
+is the ONE authority for user veg-style persistence — layered v2 JSON
+(`{global, family:{pine…}, species:{spruce…}}`, files
+`user://vegetation_style_v2.json` + `user://maps/vegetation_style_v2_*.json`),
+holding ONLY explicit user edits; v1 files (flat cfg / species-defaults JSON /
+per-map JSON) migrate one-way on first read, dropping values equal to
+defaults(). Resolution precedence: **species override > user family edit >
+catalog SPECS variant > defaults()**, enforced in
+`VegSpeciesCatalog.settings_with_variant` via two side-channel keys the store
+embeds in the flat merged dict (`_user_family_keys`, `_species_overrides`) —
+this is what makes subspecies REAL (spruce/fir/birch dims + colors + white
+bark from `VegetationCardFactory.SPECS` finally render; they were dead for
+years because family keys always existed). `VegetationStyleConfig` remains the
+facade (load_merged/save_global/save_map/save_species_default all delegate).
+`VegetationLayer` v2 persists SPARSE settings deltas only (`user_settings()`);
+the render path merges those over the store — never merge `get_settings()`
+(complete dict) over the style, that is the shadowing bug Phase 2 removed.
+`--headless --import` after touching these (VegStyleStore is a class_name).
+Selftest: `vegetation/veg_style_store_selftest.gd` (precedence matrix,
+migrations, layer sparse round-trip).
 Invariants to preserve: `AutoVegetationRuntime.neutralized_settings` — the
 per-species `*_bulk_scale` keys are FORCED neutral on the auto path (the
 generator bakes height into each record's scale; letting the style's 1.6 win

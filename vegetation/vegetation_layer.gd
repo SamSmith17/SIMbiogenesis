@@ -3,7 +3,11 @@ extends RefCounted
 
 ## Per-map user vegetation: bulk MultiMesh instances + hero tree placements.
 
-const VERSION := 1
+## v2: `settings` persists SPARSE user deltas only. v1 files stored the
+## COMPLETE settings dict (defaults included), and because the render path
+## merges layer settings over the style, every stale copy of a default
+## permanently shadowed the style store ("Tune-look doesn't apply" cause #3).
+const VERSION := 2
 const SPECIES: Array[String] = ["pine", "deciduous", "shrub"]
 const GRASS_SPECIES: Array[String] = ["grass_lawn", "grass_field"]
 ## Base family slots (always present). Subspecies (spruce, fir, …) are created
@@ -61,7 +65,9 @@ static func default_settings() -> Dictionary:
 		"shrub_cluster_size": 1.0,
 		"shrub_growth_years": 5.0,
 		"grass_lawn_bulk_scale": 1.0,
-		"grass_lawn_card_w": 0.45,
+		# Must mirror VegetationStyleConfig.defaults() (was 0.45, a drift that
+		# permanently pinned lawn mat width because the layer used to win).
+		"grass_lawn_card_w": 0.8,
 		"grass_lawn_card_h": 0.12,
 		"grass_lawn_vertical_offset_m": 0.0,
 		"grass_lawn_growth_years": 0.0,
@@ -150,8 +156,22 @@ func get_settings() -> Dictionary:
 	return out
 
 
+## SPARSE user deltas only — what the render path merges over the style store.
+## get_settings() (defaults + deltas) remains for internal per-key fallbacks,
+## but merging IT over the style is exactly the shadowing bug v2 removes.
+func user_settings() -> Dictionary:
+	return settings.duplicate(true)
+
+
 func apply_settings(patch: Dictionary) -> void:
 	settings.merge(patch, true)
+
+
+## Drop specific delta keys — called when the same keys are (re)expressed at
+## style-store level, which is now the canonical home for shape (Phase 2).
+func erase_settings_keys(keys: Array) -> void:
+	for k in keys:
+		settings.erase(str(k))
 
 
 ## Strip per-instance card_settings ("Apply to brush" snapshots) from every bulk
@@ -389,7 +409,8 @@ func serialize() -> Dictionary:
 		"version": VERSION,
 		"bulk": bulk_out,
 		"hero": hero.duplicate(true),
-		"settings": get_settings(),
+		# v2: sparse deltas only — never persist the defaults back to disk.
+		"settings": settings.duplicate(true),
 		"growth_zones": _zones_to_json(growth_zones),
 	}
 
@@ -523,7 +544,18 @@ func deserialize(data: Dictionary) -> void:
 		if item is Dictionary:
 			hero.append(item)
 	growth_zones = _zones_from_json(data.get("growth_zones", []))
-	settings = default_settings()
+	var loaded: Dictionary = {}
 	if data.get("settings") is Dictionary:
-		settings.merge(data["settings"], true)
+		loaded = data["settings"]
+	if int(data.get("version", 1)) >= 2:
+		settings = loaded.duplicate(true)
+	else:
+		# v1 persisted the complete dict. Keep only true user deltas so the
+		# style store stops being shadowed by stale copies of old defaults.
+		settings = {}
+		var defs := default_settings()
+		for k in loaded:
+			if defs.has(k) and VegStyleStore.values_equal(defs[k], loaded[k]):
+				continue
+			settings[k] = loaded[k]
 

@@ -1113,19 +1113,17 @@ func _build_grass_preview(spots: Array, settings: Dictionary) -> void:
 # ---------------------------------------------------------------------------
 
 func _load_from_loader() -> void:
-	var shape := VegetationLayer.default_settings()
+	var shape := {}
 	var style := VegetationStyleConfig.defaults()
 	if _loader != null:
 		if _loader.has_method("get_vegetation_settings"):
 			shape = _loader.call("get_vegetation_settings")
 		if _loader.has_method("get_vegetation_style"):
 			style = _loader.call("get_vegetation_style")
-	# Precedence MUST match the render path: terrain_loader._auto_veg_runtime_settings
-	# builds settings from the style, then merges layer.get_settings() ON TOP — so
-	# for shape keys present in both stores, the LAYER value is what actually renders.
-	# Load style scalars first, then let the layer (shape) win, otherwise the editor
-	# shows style defaults that don't match the trees on the map (and "Apply to map"
-	# would then overwrite the map's real values with those wrong defaults).
+	# Precedence MUST match the render path (Phase 2): the style store is the
+	# authority and the layer contributes only SPARSE user deltas
+	# (user_settings()), merged on top. get_vegetation_settings() returns
+	# exactly those deltas now — an empty dict on an untouched map.
 	_values = {}
 	for k in style:
 		if k.ends_with("_albedo_tint") or k.ends_with("_highlight_tint"):
