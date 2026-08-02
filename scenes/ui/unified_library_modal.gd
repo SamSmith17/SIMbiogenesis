@@ -516,7 +516,9 @@ func _open_veg_paint() -> void:
 
 func _open_veg_tune(species_hint: String) -> void:
 	if _loader != null and _loader.has_method("open_vegetation_preview_editor"):
-		_loader.call("open_vegetation_preview_editor", -1)
+		# Pass the species through so the modal opens ON that species — every
+		# "Species: X" row used to open on whatever was last selected.
+		_loader.call("open_vegetation_preview_editor", -1, species_hint)
 		if not species_hint.is_empty():
 			_status.text = "Opened Tune look (%s)" % species_hint
 		close()

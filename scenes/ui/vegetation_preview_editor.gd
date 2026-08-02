@@ -208,7 +208,7 @@ func bind_loader(loader: Node, dock: Control = null) -> void:
 	_dock = dock
 
 
-func open(initial_preset: int = -1) -> void:
+func open(initial_preset: int = -1, species_id: String = "") -> void:
 	if _active:
 		return
 	_species = _last_species
@@ -220,6 +220,11 @@ func open(initial_preset: int = -1) -> void:
 		if VegSpeciesCatalog.is_paintable(dock_sp):
 			_species = dock_sp
 			_last_species = dock_sp
+	# Explicit species id (library "Species: X" rows, veg-area modal) wins over
+	# both the preset and the dock's current brush.
+	if not species_id.is_empty() and VegSpeciesCatalog.is_paintable(species_id):
+		_species = species_id
+		_last_species = species_id
 	if _dock != null and _dock.has_method("get_size_var"):
 		_size_var = float(_dock.call("get_size_var"))
 	_sync_species_dropdown()

@@ -195,8 +195,10 @@ func _physics_process(_delta: float) -> void:
 				_clear_solar_focus()
 				_clear_water_focus()
 				_clear_veg_focus()
-			elif _is_vegetation_edit_active():
-				_update_veg_focus(ground as Vector3)
+			elif _update_veg_focus(ground as Vector3):
+				_clear_solar_focus()
+				_clear_water_focus()
+				_clear_building_focus()
 			else:
 				_clear_water_focus()
 				_clear_veg_focus()
@@ -220,10 +222,13 @@ func _is_drone_mode() -> bool:
 	return bool(v) if v != null else false
 
 
-## Only show/interact with the OSM-vegetation crosshair highlight while the
-## vegetation paint dock (V) is already open — otherwise it lights up every
-## patch of OSM-tagged vegetation the player merely walks past, which reads as
-## distracting noise during normal play.
+## Historical gate for the OSM-vegetation focus. The "only while the V dock is
+## open" condition was INVERTED in practice: the dock requests a CursorController
+## modal, which makes _can_aim_focus() bail long before this ran — so the
+## dock-open branch was unreachable, and the feature only ever worked through
+## the Ctrl/Alt path with the dock CLOSED. The veg focus now rides the same
+## Ctrl/Alt gate as buildings/solar (_should_update_focus), which already
+## prevents walk-past highlight noise. Kept for any external callers.
 func _is_vegetation_edit_active() -> bool:
 	if _is_alt_selection_active():
 		return true

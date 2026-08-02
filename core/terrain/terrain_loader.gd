@@ -5668,9 +5668,9 @@ func _setup_vegetation_edit_ui() -> void:
 	_vegetation_preview_ui = preview_ui
 
 
-func open_vegetation_preview_editor(initial_preset: int = -1) -> void:
+func open_vegetation_preview_editor(initial_preset: int = -1, species_id: String = "") -> void:
 	if _vegetation_preview_ui != null and _vegetation_preview_ui.has_method("open"):
-		_vegetation_preview_ui.call("open", initial_preset)
+		_vegetation_preview_ui.call("open", initial_preset, species_id)
 
 
 func _setup_camp_scatter_ui() -> void:
@@ -5806,7 +5806,8 @@ func _reground_vegetation() -> void:
 	var terrain := _main.get_node_or_null("Terrain") as Node3D
 	if terrain == null:
 		return
-	VegetationRuntime.reground(terrain, _vegetation_layer, Callable(self, "_ground_height_at"))
+	VegetationRuntime.reground(terrain, _vegetation_layer, Callable(self, "_ground_height_at"),
+		_auto_veg_runtime_settings(), _manual_growth_map)
 
 
 ## ---------------------------------------------------------------------------
@@ -5841,16 +5842,29 @@ func _request_auto_vegetation() -> void:
 	vs.request_vegetation(_lat, _lon, _osm_half_extent)
 
 
-func _on_vegetation_osm_ready(_key: String, payload: Dictionary) -> void:
+func _on_vegetation_osm_ready(key: String, payload: Dictionary) -> void:
+	var vs := get_node_or_null("/root/VegetationService")
+	# The service runs one job with a single-slot pending queue and delivers
+	# whatever finished — the key is the only thing saying WHICH site it was
+	# for. Without this check a site switch mid-flight applied the previous
+	# site's forests to this map.
+	if vs != null and key != "" and not vs.matches_site(key, _lat, _lon, _osm_half_extent):
+		push_warning("TerrainLoader: dropped OSM vegetation for stale request %s" % key)
+		return
 	# Belt-and-suspenders: VegetationService caps on parse/cache, but callers
 	# (refresh paths) may still hand us an uncapped dict.
-	var vs := get_node_or_null("/root/VegetationService")
 	_auto_veg_data_raw = vs.cap_polygons(payload) if vs != null else payload
 	_auto_veg_data = OsmRegistration.offset_payload(
 		_auto_veg_data_raw, _osm_offset_east_m, _osm_offset_north_m)
-	if _load_sequence_active:
+	if _load_sequence_active and _phase_key == "osm_veg" and _phase_waiting:
 		_phase_resolve("osm_veg", true)
 		return
+	# Late arrival: Overpass retries (up to ~384 s worst case) can outlast the
+	# 180 s phase budget, so the reply may land after the phase timed out or the
+	# whole sequence finished. Still record + queue the scatter — the old
+	# unconditional early-return while _load_sequence_active stored the payload
+	# and never scattered it. _queue_auto_veg_generate self-defers while the
+	# load UI is up (flushed on load complete via _auto_veg_scatter_pending).
 	_finish_osm_veg_fetch_stage()
 	_queue_auto_veg_generate(false)
 
@@ -5989,26 +6003,39 @@ func _print_auto_veg_diag(state: AutoVegetationGenerator.GeneratorState) -> void
 		if kind not in by_kind:
 			by_kind[kind] = {"polys": 0, "area": 0.0, "candidates": 0, "placed": 0,
 				"rej_excluded": 0, "rej_slope": 0, "rej_open": 0, "rej_edge": 0,
-				"rej_budget": 0, "empty": 0}
+				"rej_budget": 0, "rej_distant": 0, "empty": 0}
 		var agg: Dictionary = by_kind[kind]
 		agg["polys"] += 1
 		agg["area"] += float(s.get("area_m2", 0.0))
 		for key in ["candidates", "placed", "rej_excluded", "rej_slope", "rej_open",
-				"rej_edge", "rej_budget"]:
+				"rej_edge", "rej_budget", "rej_distant"]:
 			agg[key] += int(s.get(key, 0))
 		if int(s.get("placed", 0)) == 0:
 			agg["empty"] += 1
-	print("TerrainLoader: OSM veg scatter by kind (polys/empty · area · placed | rejected: excl/slope/open/edge/budget)")
+	print("TerrainLoader: OSM veg scatter by kind (polys/empty · area · placed | rejected: excl/slope/open/edge/budget/distant)")
 	for kind in by_kind:
 		var a: Dictionary = by_kind[kind]
-		print("  %-12s %3d/%-3d · %7.1f ha · %6d | %d/%d/%d/%d/%d" % [
+		print("  %-12s %3d/%-3d · %7.1f ha · %6d | %d/%d/%d/%d/%d/%d" % [
 			kind, a["polys"], a["empty"], float(a["area"]) / 10000.0, a["placed"],
-			a["rej_excluded"], a["rej_slope"], a["rej_open"], a["rej_edge"], a["rej_budget"]])
+			a["rej_excluded"], a["rej_slope"], a["rej_open"], a["rej_edge"],
+			a["rej_budget"], a["rej_distant"]])
+	var fs: Dictionary = state.feature_stats
+	if not fs.is_empty():
+		print("  mapped features: %d tree points, %d row trees, %d hedge shrubs (budget-rejected: %d/%d/%d)" % [
+			int(fs.get("points_placed", 0)), int(fs.get("rows_placed", 0)),
+			int(fs.get("hedges_placed", 0)), int(fs.get("points_rej_budget", 0)),
+			int(fs.get("rows_rej_budget", 0)), int(fs.get("hedges_rej_budget", 0))])
+	# Report against the layer's LIVE caps (apply_instance_caps / large-map
+	# thinning), not the class constants — printing 4000/24000 as if 20k of
+	# headroom remained hid the large-map clamp entirely.
 	print("  budgets: trees %d/%d, grass %d/%d, heroes %d/%d%s" % [
-		state.layer.tree_bulk_count(), AutoVegetationLayer.MAX_TREE_BULK_TOTAL,
-		state.layer.grass_bulk_count(), AutoVegetationLayer.MAX_GRASS_BULK_TOTAL,
+		state.layer.tree_bulk_count(), state.layer.max_tree_bulk,
+		state.layer.grass_bulk_count(), state.layer.max_grass_bulk,
 		state.layer.hero.size(), AutoVegetationLayer.MAX_HERO,
 		" · DENSE site (per-poly cap %d, gap fill off)" % AutoVegetationGenerator.DENSE_POLY_SCATTER_CAP if state.dense else ""])
+	if state.layer.max_tree_bulk < AutoVegetationLayer.MAX_TREE_BULK_TOTAL:
+		print("  NOTE: large-map thinning active — tree cap %d (of %d), see auto_max_tree_instances" % [
+			state.layer.max_tree_bulk, AutoVegetationLayer.MAX_TREE_BULK_TOTAL])
 
 
 ## True once stage-2 detail elevation has succeeded or failed (never while pending).
@@ -6463,6 +6490,12 @@ func _growth_init_manual() -> void:
 func _growth_init_auto() -> void:
 	if _auto_veg_layer == null:
 		return
+	# Same gate as _growth_after_manual_edit: with growth disabled (survival
+	# toggle off) birth times must NOT be stamped — instance_scale_mult would
+	# still apply them while _advance_growth never runs, freezing every auto
+	# tree at a random seeded age instead of full mature size.
+	if not _growth_any_enabled():
+		return
 	VegetationGrowth.ensure_birth_times(_auto_veg_layer.bulk, _growth_clock_h,
 		_growth_style(), _growth_rng, true)
 	_growth_caps_auto = VegetationGrowth.capture_caps(_auto_veg_layer.bulk)
@@ -6705,20 +6738,48 @@ func _exclusion_buffers_changed(prev: Dictionary, next: Dictionary) -> bool:
 	return false
 
 
+## Every style key the GENERATOR reads at scatter time. A key listed here forces
+## a full re-scatter when it changes; a key the generator reads but NOT listed
+## here silently persists without visible effect ("Tune-look doesn't apply").
+## Keep in sync with AutoVegetationGenerator.prepare_context/_scatter_* readers.
+const _GENERATOR_FLOAT_KEYS: Array[String] = [
+	"forest_auto_min_area_m2", "forest_trunk_spacing_m", "forest_canopy_height_m",
+	"auto_density_scale", "auto_detail_radius_m", "auto_distant_density",
+	"auto_max_tree_instances", "auto_max_grass_instances",
+	"forest_edge_feather_m", "slope_max_deg",
+	"grass_detail_radius_m", "grass_lawn_card_w",
+	"grass_lawn_bulk_scale", "grass_field_bulk_scale",
+	"mix_pine", "mix_deciduous", "mix_shrub",
+]
+const _GENERATOR_BOOL_KEYS: Array[String] = [
+	"open_areas_exclude_trees", "scatter_lawn_field",
+]
+
+
 func _forest_params_changed(prev: Dictionary, next: Dictionary) -> bool:
-	for key in ["forest_auto_min_area_m2", "forest_trunk_spacing_m", "forest_canopy_height_m"]:
+	for key in _GENERATOR_FLOAT_KEYS:
 		if absf(float(next.get(key, 0.0)) - float(prev.get(key, 0.0))) > 0.01:
 			return true
-	if absf(float(next.get("auto_density_scale", 1.0)) - float(prev.get("auto_density_scale", 1.0))) > 0.01:
-		return true
-	for key in ["grass_lawn_card_w", "grass_lawn_bulk_scale", "grass_field_bulk_scale"]:
-		if absf(float(next.get(key, 0.0)) - float(prev.get(key, 0.0))) > 0.01:
+	for key in _GENERATOR_BOOL_KEYS:
+		if bool(next.get(key, true)) != bool(prev.get(key, true)):
 			return true
-	if bool(next.get("open_areas_exclude_trees", true)) \
-			!= bool(prev.get("open_areas_exclude_trees", true)):
+	if _local_mix_changed(prev, next):
 		return true
 	if _osm_species_map_changed(prev, next):
 		return true
+	return false
+
+
+## local_mix (per-species weights for the "mixed" fill) is read at scatter time
+## via BiomePalette.mix_weights_from_style — same contract as osm_species_map.
+func _local_mix_changed(prev: Dictionary, next: Dictionary) -> bool:
+	var a: Dictionary = prev.get("local_mix", {})
+	var b: Dictionary = next.get("local_mix", {})
+	if a.size() != b.size():
+		return true
+	for k in b:
+		if absf(float(a.get(k, 0.0)) - float(b.get(k, 0.0))) > 0.001:
+			return true
 	return false
 
 

@@ -311,7 +311,13 @@ func _sync_from_loader() -> void:
 	_set_cb(_auto_veg_cb, bool(opts.get("show_auto_vegetation", true)))
 	if _auto_veg_density_spin != null:
 		_auto_veg_density_spin.set_block_signals(true)
-		var style: Dictionary = VegetationStyleConfig.defaults()
+		# Show the MAP'S live density, not defaults() (which always displayed 1.0
+		# regardless of what the map actually uses).
+		var style: Dictionary = {}
+		if _loader != null and _loader.has_method("get_vegetation_style"):
+			style = _loader.call("get_vegetation_style")
+		if style.is_empty():
+			style = VegetationStyleConfig.defaults()
 		_auto_veg_density_spin.value = float(style.get("auto_density_scale", 1.0))
 		_auto_veg_density_spin.set_block_signals(false)
 	_set_cb(_cache_cb, bool(opts.get("cached_geometry_visible", true)))
@@ -427,16 +433,17 @@ func _on_auto_veg_toggled(on: bool) -> void:
 
 
 func _on_auto_veg_density_changed(val: float) -> void:
-	var style: Dictionary = VegetationStyleConfig.defaults()
-	style["auto_density_scale"] = val
-	VegetationStyleConfig.save_global(style)
-	# Trigger a regen if veg is on
-	if _auto_veg_cb != null and _auto_veg_cb.button_pressed:
+	# Persist ONLY this key. Writing a whole defaults() dict here used to reset
+	# every tuned global style value back to defaults (save_global merges
+	# key-by-key into the cfg, so a one-key dict touches nothing else).
+	VegetationStyleConfig.save_global({"auto_density_scale": val})
+	# Route the live map through set_vegetation_style: persists per-map AND
+	# _forest_params_changed covers auto_density_scale → full re-scatter.
+	if _loader != null and _loader.has_method("set_vegetation_style"):
+		_loader.call("set_vegetation_style", {"auto_density_scale": val})
+	elif _auto_veg_cb != null and _auto_veg_cb.button_pressed:
 		if _loader != null and _loader.has_method("request_auto_vegetation_regen"):
 			_loader.call("request_auto_vegetation_regen")
-		elif _loader != null and _loader.has_method("set_show_auto_vegetation"):
-			# Hacky fallback to trigger regen via the toggle
-			_loader.call("set_show_auto_vegetation", true)
 
 
 func _on_cache_toggled(on: bool) -> void:

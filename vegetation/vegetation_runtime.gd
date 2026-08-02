@@ -514,6 +514,14 @@ static func _build_hero_layer(root: Node3D, records: Array,
 		idx += 1
 
 
+## Re-sample ground Y under each instance (after a heightfield edit). MUST thread
+## the caller's live settings + growth map: regrounding with `{}` rebuilt the
+## manual layer with no style at all — no tints/drape/seasonal uniforms, every
+## growth multiplier back to 1.0 (full-size), and the default 200 m NEAR canopy
+## reach where the load-time build used FAR billboards. That was the "pressing V
+## suddenly shows full-detail trees" bug, and the skipped growth-map rebuild left
+## `_manual_growth_map` pointing at freed MultiMeshes (manual growth died).
 static func reground(terrain: Node3D, layer: VegetationLayer,
-		ground_y_at: Callable) -> void:
-	rebuild(terrain, layer, ground_y_at, false)
+		ground_y_at: Callable, settings: Dictionary = {},
+		growth_map: VegetationInstanceMap = null) -> void:
+	rebuild(terrain, layer, ground_y_at, false, settings, growth_map)

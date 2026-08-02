@@ -76,7 +76,19 @@ class GeneratorState:
 	var point_idx := 0
 	var row_idx := 0
 	var hedge_idx := 0
-	var phase := ScatterPhase.POLYS
+	## Explicitly-mapped features (natural=tree points, tree_rows, hedges) scatter
+	## FIRST: they are individually surveyed data and must not silently vanish
+	## because the polygon scatter already spent the shared tree budget (they
+	## used to run last and ignore the add_bulk return).
+	var phase := ScatterPhase.POINTS
+	## Aggregate placed/rej_budget counters for points/rows/hedges (the poly_stats
+	## table only covers polygons); consumed by the loader's post-scatter diag.
+	## Pre-seeded because _stat() treats an EMPTY dict as "stats not requested".
+	var feature_stats: Dictionary = {
+		"points_placed": 0, "points_rej_budget": 0,
+		"rows_placed": 0, "rows_rej_budget": 0,
+		"hedges_placed": 0, "hedges_rej_budget": 0,
+	}
 	var rng: RandomNumberGenerator
 	var biome: Dictionary = {}
 	var forest_min_area := 12000.0
@@ -226,7 +238,7 @@ static func scatter_batch(state: GeneratorState, batch_size: int = SCATTER_BATCH
 						state.poly_stats.append(stat)
 			state.poly_idx += n
 			if state.poly_idx >= state.polys.size():
-				state.phase = ScatterPhase.POINTS
+				state.phase = ScatterPhase.GAP_FILL if not state.dense else ScatterPhase.DONE
 			return state.phase != ScatterPhase.DONE
 		ScatterPhase.POINTS:
 			var points: Array = state.osm_payload.get("tree_points", [])
@@ -235,7 +247,7 @@ static func scatter_batch(state: GeneratorState, batch_size: int = SCATTER_BATCH
 				state.point_idx += 1
 				if tp is Dictionary:
 					_place_tree_point(state.layer, tp as Dictionary, state.biome,
-						state.exclusion_index, state.rng, state.ctx)
+						state.exclusion_index, state.rng, state.ctx, state.feature_stats)
 			state.phase = ScatterPhase.ROWS
 			return true
 		ScatterPhase.ROWS:
@@ -245,7 +257,7 @@ static func scatter_batch(state: GeneratorState, batch_size: int = SCATTER_BATCH
 				state.row_idx += 1
 				if tree_row is Dictionary:
 					_place_tree_row(state.layer, tree_row as Dictionary, state.biome,
-						state.exclusion_index, state.rng, state.ctx)
+						state.exclusion_index, state.rng, state.ctx, state.feature_stats)
 			state.phase = ScatterPhase.HEDGES
 			return true
 		ScatterPhase.HEDGES:
@@ -255,9 +267,9 @@ static func scatter_batch(state: GeneratorState, batch_size: int = SCATTER_BATCH
 				state.hedge_idx += 1
 				if hedge is Dictionary:
 					_place_hedge_row(state.layer, hedge as Dictionary,
-						state.exclusion_index, state.rng, state.ctx)
-			state.phase = ScatterPhase.GAP_FILL if not state.dense else ScatterPhase.DONE
-			return state.phase != ScatterPhase.DONE
+						state.exclusion_index, state.rng, state.ctx, state.feature_stats)
+			state.phase = ScatterPhase.POLYS
+			return true
 		ScatterPhase.GAP_FILL:
 			var gate: Object = state.ctx.get("gate")
 			if gate != null and gate.is_valid():
@@ -288,6 +300,14 @@ static func _trim_polygons(raw: Array, max_count: int) -> Array:
 
 const GAP_FILL_SPACING_M := 11.0
 const GAP_FILL_MAX := 2500
+## Bounds for the gap-fill scan itself. GAP_FILL_MAX only capped PLACEMENTS —
+## the grid walk still visited every 11 m cell of the whole site square, with a
+## linear point-in-polygon test per sample: ~7.4M samples on a 15 km half-extent,
+## synchronously inside one scatter_batch call (a hard frame freeze on any large
+## map sparse enough to skip the dense-site bypass). Clamp the scanned square to
+## the site core and hard-cap total samples.
+const GAP_FILL_SCAN_HALF_MAX_M := 1750.0
+const GAP_FILL_MAX_SAMPLES := 200000
 
 
 static func _fill_imagery_gaps(layer: AutoVegetationLayer, osm_payload: Dictionary,
@@ -296,6 +316,7 @@ static func _fill_imagery_gaps(layer: AutoVegetationLayer, osm_payload: Dictiona
 	var half := float(ctx.get("half_extent_m", 1500.0))
 	if half <= 0.0:
 		return
+	half = minf(half, GAP_FILL_SCAN_HALF_MAX_M)
 	var weights: Dictionary = biome.get("weights", {"deciduous": 1.0})
 	var base_height := float(biome.get("default_height_m", 12.0))
 	var osm_polys: Array = []
@@ -306,11 +327,15 @@ static func _fill_imagery_gaps(layer: AutoVegetationLayer, osm_payload: Dictiona
 				osm_polys.append(pts)
 	var jitter := GAP_FILL_SPACING_M * 0.4
 	var added := 0
+	var samples := 0
 	var z := -half
 	while z <= half:
 		var x := -half
 		while x <= half:
 			x += GAP_FILL_SPACING_M
+			samples += 1
+			if samples > GAP_FILL_MAX_SAMPLES:
+				return
 			var jx := x + rng.randf_range(-jitter, jitter)
 			var jz := z + rng.randf_range(-jitter, jitter)
 			if not gate.is_vegetated(jx, jz):
@@ -433,7 +458,7 @@ static func _scatter_polygon(layer: AutoVegetationLayer, rec: Dictionary,
 	stats["tag"] = _primary_tag(tags, kind)
 	stats["area_m2"] = VegetationPaint.polygon_area(poly)
 	for key in ["candidates", "placed", "rej_excluded", "rej_slope", "rej_open",
-			"rej_edge", "rej_budget"]:
+			"rej_edge", "rej_budget", "rej_distant"]:
 		stats[key] = 0
 	# Player-configured OSM→species override (vegetation modal). Empty = biome/tags.
 	var style_d: Dictionary = ctx.get("style", {})
@@ -741,7 +766,7 @@ static func _poly_bounds(poly: PackedVector2Array) -> Dictionary:
 
 static func _place_hedge_row(layer: AutoVegetationLayer, hedge: Dictionary,
 		exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
-		ctx: Dictionary) -> void:
+		ctx: Dictionary, stats: Dictionary = {}) -> void:
 	var pts: PackedVector2Array = hedge.get("points", PackedVector2Array())
 	if pts.size() < 2:
 		return
@@ -758,8 +783,11 @@ static func _place_hedge_row(layer: AutoVegetationLayer, hedge: Dictionary,
 		while d < seg_len:
 			var p := a + dir * d
 			if not _excluded(p, exclusion_index) and not _slope_too_steep(p.x, p.y, ctx):
-				layer.add_bulk("shrub", p.x, p.y, rng.randf() * TAU,
-					rng.randf_range(0.9, 1.3), 1.2)
+				if layer.add_bulk("shrub", p.x, p.y, rng.randf() * TAU,
+						rng.randf_range(0.9, 1.3), 1.2):
+					_stat(stats, "hedges_placed")
+				else:
+					_stat(stats, "hedges_rej_budget")
 			d += HEDGE_ROW_SPACING_M
 		carry = d - seg_len
 
@@ -806,7 +834,7 @@ static func _slope_too_steep(x: float, z: float, ctx: Dictionary) -> bool:
 
 static func _place_tree_point(layer: AutoVegetationLayer, tp: Dictionary,
 		biome: Dictionary, exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
-		ctx: Dictionary) -> void:
+		ctx: Dictionary, stats: Dictionary = {}) -> void:
 	var p: Vector2 = tp.get("pos", Vector2.ZERO)
 	if _excluded(p, exclusion_index) or _slope_too_steep(p.x, p.y, ctx):
 		return
@@ -827,12 +855,15 @@ static func _place_tree_point(layer: AutoVegetationLayer, tp: Dictionary,
 	# mapped point, forest scatter, or brush — shares the one tuned look. Explicit
 	# trees pick a TREE species only (deciduous/pine), never shrub.
 	var species := BiomePalette.pick_species(_tree_only_weights(biome), rng)
-	layer.add_bulk(species, p.x, p.y, rng.randf() * TAU, _scale_for(species, h, rng), h)
+	if layer.add_bulk(species, p.x, p.y, rng.randf() * TAU, _scale_for(species, h, rng), h):
+		_stat(stats, "points_placed")
+	else:
+		_stat(stats, "points_rej_budget")
 
 
 static func _place_tree_row(layer: AutoVegetationLayer, tree_row: Dictionary,
 		biome: Dictionary, exclusion_index: VegExclusionBuilder.ExclusionIndex, rng: RandomNumberGenerator,
-		ctx: Dictionary) -> void:
+		ctx: Dictionary, stats: Dictionary = {}) -> void:
 	var pts: PackedVector2Array = tree_row.get("points", PackedVector2Array())
 	if pts.size() < 2:
 		return
@@ -852,8 +883,11 @@ static func _place_tree_row(layer: AutoVegetationLayer, tree_row: Dictionary,
 			var p := a + dir * d
 			if not _excluded(p, exclusion_index) and not _slope_too_steep(p.x, p.y, ctx):
 				var species := BiomePalette.pick_species(weights, rng)
-				layer.add_bulk(species, p.x, p.y, rng.randf() * TAU,
-					_scale_for(species, height, rng), height)
+				if layer.add_bulk(species, p.x, p.y, rng.randf() * TAU,
+						_scale_for(species, height, rng), height):
+					_stat(stats, "rows_placed")
+				else:
+					_stat(stats, "rows_rej_budget")
 			d += TREE_ROW_SPACING_M
 		carry = d - seg_len
 

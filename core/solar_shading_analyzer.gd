@@ -19,6 +19,9 @@ var _bounds: Rect2
 
 var _temp_bodies: Array[RID] = []
 var _temp_shapes: Array[Resource] = []
+## Shared SphereShape3D per snapped radius so per-instance canopy sizing doesn't
+## allocate one physics shape per tree.
+var _veg_shape_cache: Dictionary = {}
 
 func _exit_tree() -> void:
 	_is_running = false
@@ -191,6 +194,7 @@ func _cleanup_temp_colliders() -> void:
 		PhysicsServer3D.free_rid(body)
 	_temp_bodies.clear()
 	_temp_shapes.clear()
+	_veg_shape_cache.clear()
 
 func _create_temp_colliders() -> void:
 	var space = _main.get_world_3d().space
@@ -205,10 +209,14 @@ func _create_temp_colliders() -> void:
 	if bc_root:
 		_process_mesh_instances(bc_root, space)
 		
+	# One shared seen-set across both roots: every tree lives in BOTH the NEAR
+	# and FAR LOD MultiMeshes at the same origin, so without position dedupe
+	# each plant got two coincident spheres (double shape count, zero accuracy).
+	var seen_positions := {}
 	for v_name in ["Vegetation", "AutoVegetation"]:
 		var v_root = terrain.get_node_or_null(v_name)
 		if v_root:
-			_process_veg(v_root, space)
+			_process_veg(v_root, space, seen_positions)
 
 func _process_mesh_instances(node: Node, space: RID) -> void:
 	if node is MeshInstance3D and node.mesh:
@@ -225,31 +233,53 @@ func _process_mesh_instances(node: Node, space: RID) -> void:
 	for child in node.get_children():
 		_process_mesh_instances(child, space)
 
-func _process_veg(node: Node, space: RID) -> void:
+func _process_veg(node: Node, space: RID, seen: Dictionary) -> void:
 	if node is MultiMeshInstance3D and node.multimesh:
 		var n_lower = node.name.to_lower()
 		if n_lower.contains("grass") or n_lower.contains("field") or n_lower.contains("lawn"):
 			pass # Skip grass and fields
 		else:
 			var mm = node.multimesh
-			var shape = SphereShape3D.new()
-			shape.radius = 3.0 # Approximate radius for a tree canopy
-			var shape_rid = shape.get_rid()
-			_temp_shapes.append(shape)
-			
+			var is_shrub = n_lower.contains("shrub") or n_lower.contains("scrub") \
+				or n_lower.contains("hedge")
 			var body_rid = PhysicsServer3D.body_create()
 			PhysicsServer3D.body_set_mode(body_rid, PhysicsServer3D.BODY_MODE_STATIC)
 			PhysicsServer3D.body_set_space(body_rid, space)
 			var gt = node.global_transform
+			var shapes_added = 0
 			for i in range(mm.instance_count):
 				var t = mm.get_instance_transform(i)
-				t.origin += t.basis.y * 3.5 # Move sphere up into the canopy
-				PhysicsServer3D.body_add_shape(body_rid, shape_rid, t)
-			PhysicsServer3D.body_set_state(body_rid, PhysicsServer3D.BODY_STATE_TRANSFORM, gt)
-			_temp_bodies.append(body_rid)
-			
+				# One occluder per PLANT (see _create_temp_colliders).
+				var pkey = "%d_%d" % [roundi(t.origin.x * 8.0), roundi(t.origin.z * 8.0)]
+				if seen.has(pkey):
+					continue
+				seen[pkey] = true
+				# Canopy sphere follows the instance's real scale (basis Y length):
+				# the old fixed 3 m sphere gave a 1 m shrub and a 25 m tree the
+				# same shadow footprint. Radii snap to 0.5 m buckets so shapes
+				# are shared, not one per tree.
+				var s: float = t.basis.y.length()
+				var radius = clampf((1.0 if is_shrub else 1.8) * s, 0.6, 9.0)
+				var rkey = snappedf(radius, 0.5)
+				var shape: SphereShape3D = _veg_shape_cache.get(rkey)
+				if shape == null:
+					shape = SphereShape3D.new()
+					shape.radius = rkey
+					_veg_shape_cache[rkey] = shape
+					_temp_shapes.append(shape)
+				# Move sphere up into the canopy (basis.y is scale-length, so the
+				# lift follows tree size; shrubs sit low).
+				t.origin += t.basis.y * (0.6 if is_shrub else 3.5)
+				PhysicsServer3D.body_add_shape(body_rid, shape.get_rid(), t)
+				shapes_added += 1
+			if shapes_added == 0:
+				PhysicsServer3D.free_rid(body_rid)
+			else:
+				PhysicsServer3D.body_set_state(body_rid, PhysicsServer3D.BODY_STATE_TRANSFORM, gt)
+				_temp_bodies.append(body_rid)
+
 	for child in node.get_children():
-		_process_veg(child, space)
+		_process_veg(child, space, seen)
 
 func _color_for_ratio(r: float) -> Color:
 	if r < 0.25:

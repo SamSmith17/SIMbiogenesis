@@ -131,6 +131,12 @@ static func defaults() -> Dictionary:
 		# NEAR tier (see *_auto_lod_* above). Higher = leaves persist farther (nicer
 		# from the drone) at more vertex cost; lower = billboards sooner (cheaper).
 		"auto_foliage_lod_reach_m": 300.0,
+		# Whole-forest size multiplier for OSM auto-scattered trees (pine/deciduous/
+		# shrub). Auto trees derive their height from OSM data via each record's
+		# scale; the per-species *_bulk_scale keys are neutralised on that path
+		# (AutoVegetationRuntime.NEUTRAL_BULK), so this is the one honest knob.
+		# Applied at rebuild time — changing it does not re-scatter.
+		"auto_tree_scale": 1.0,
 		"wind_strength": 0.03,
 		"wind_speed": 0.7,
 		"dither_strength": 1.0,

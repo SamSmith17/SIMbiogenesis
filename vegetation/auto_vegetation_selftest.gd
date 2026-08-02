@@ -54,6 +54,12 @@ func _initialize() -> void:
 	_test_budget_priority()
 	_test_grass_detail_radius()
 	_test_poly_stats()
+	_test_neutral_bulk_wins()
+	_test_feature_scatter_order()
+	_test_gap_fill_bounded()
+	_test_reground_threads_growth()
+	_test_osm_key_match()
+	_test_forest_params_coverage()
 	if _failures == 0:
 		print("AUTO-VEG SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -994,3 +1000,161 @@ func _test_pick_species_grass() -> void:
 			mix_counts[s] += 1
 	_check("mix includes grass lawn", mix_counts["grass_lawn"] > 20)
 	_check("mix includes grass field", mix_counts["grass_field"] > 20)
+
+
+## --- Phase 0 veg-overhaul regression guards -------------------------------
+
+
+## NEUTRAL_BULK must WIN over the style dict (the defeated merge rendered every
+## auto deciduous tree x1.6 its OSM-derived height), and auto_tree_scale is the
+## one honest whole-forest size knob routed through the tree bulk keys.
+func _test_neutral_bulk_wins() -> void:
+	var s := AutoVegetationRuntime.neutralized_settings({
+		"deciduous_bulk_scale": 1.6, "pine_bulk_scale": 1.3,
+		"shrub_bulk_scale": 0.8, "grass_field_bulk_scale": 1.25,
+		"unrelated_key": 42,
+	})
+	for key in AutoVegetationRuntime.NEUTRAL_BULK:
+		_check("neutralized %s == 1.0" % key, is_equal_approx(float(s[key]), 1.0),
+			"got %s" % str(s[key]))
+	_check("non-bulk keys pass through", int(s.get("unrelated_key", 0)) == 42)
+	_check("factory sees neutral deciduous scale",
+		is_equal_approx(VegetationCardFactory.species_bulk_scale("deciduous", s), 1.0))
+	var s2 := AutoVegetationRuntime.neutralized_settings({
+		"deciduous_bulk_scale": 1.6, "auto_tree_scale": 1.4,
+	})
+	_check("auto_tree_scale drives deciduous", is_equal_approx(
+		float(s2["deciduous_bulk_scale"]), 1.4), "got %s" % str(s2["deciduous_bulk_scale"]))
+	_check("auto_tree_scale drives pine", is_equal_approx(float(s2["pine_bulk_scale"]), 1.4))
+	_check("auto_tree_scale never touches grass_field",
+		is_equal_approx(float(s2["grass_field_bulk_scale"]), 1.0))
+	var s3 := AutoVegetationRuntime.neutralized_settings({"auto_tree_scale": 99.0})
+	_check("auto_tree_scale clamped to 3.0",
+		is_equal_approx(float(s3["deciduous_bulk_scale"]), 3.0),
+		"got %s" % str(s3["deciduous_bulk_scale"]))
+
+
+## Explicitly-mapped features (points/rows/hedges) scatter BEFORE polygons so a
+## spent tree budget can no longer silently erase them, and their outcomes are
+## counted in feature_stats.
+func _test_feature_scatter_order() -> void:
+	var payload := {
+		"polygons": [{"points": PackedVector2Array([
+			Vector2(-220, -220), Vector2(220, -220), Vector2(220, 220), Vector2(-220, 220)]),
+			"kind": "wood", "tags": {"natural": "wood"}}],
+		"tree_points": [
+			{"pos": Vector2(400, 400), "height_m": 14.0},
+			{"pos": Vector2(410, 400), "height_m": 9.0},
+			{"pos": Vector2(420, 400), "height_m": 20.0},
+		],
+		"tree_rows": [], "hedge_rows": [],
+	}
+	var state := AutoVegetationGenerator.prepare_context(payload, {
+		"latitude": 47.6, "seed": 7, "exclusions": [],
+		"style": {"auto_max_tree_instances": 1000},
+	})
+	_check("fresh state scatters mapped features first",
+		state.phase == AutoVegetationGenerator.ScatterPhase.POINTS)
+	while AutoVegetationGenerator.scatter_batch(state, 999999):
+		pass
+	_check("tree budget exhausted by wood poly",
+		state.layer.tree_bulk_count() >= 1000,
+		"got %d" % state.layer.tree_bulk_count())
+	_check("all mapped tree points survived the budget",
+		int(state.feature_stats.get("points_placed", 0)) == 3,
+		"stats=%s" % str(state.feature_stats))
+	_check("no budget-rejected points",
+		int(state.feature_stats.get("points_rej_budget", 0)) == 0)
+
+
+class _GateStub:
+	extends RefCounted
+	var samples := 0
+	func is_valid() -> bool:
+		return true
+	func is_vegetated(_x: float, _z: float) -> bool:
+		samples += 1
+		return false
+	func canopy_factor(_x: float, _z: float) -> float:
+		return 0.5
+
+
+## The gap-fill scan is bounded: the scanned square is clamped and the sample
+## cap covers it with headroom, so a 15 km sparse map can no longer freeze a
+## frame on ~7.4M synchronous point-in-polygon tests.
+func _test_gap_fill_bounded() -> void:
+	var side := 2.0 * AutoVegetationGenerator.GAP_FILL_SCAN_HALF_MAX_M \
+		/ AutoVegetationGenerator.GAP_FILL_SPACING_M
+	_check("sample cap covers the clamped scan square",
+		side * side <= float(AutoVegetationGenerator.GAP_FILL_MAX_SAMPLES),
+		"square=%d cap=%d" % [int(side * side), AutoVegetationGenerator.GAP_FILL_MAX_SAMPLES])
+	var layer := AutoVegetationLayer.create_empty()
+	var gate := _GateStub.new()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	var t0 := Time.get_ticks_msec()
+	AutoVegetationGenerator._fill_imagery_gaps(layer, {"polygons": []}, gate,
+		{"weights": {"deciduous": 1.0}, "default_height_m": 12.0}, null,
+		{"half_extent_m": 15000.0}, rng)
+	var elapsed := Time.get_ticks_msec() - t0
+	_check("gap-fill scan bounded on 15 km ctx",
+		gate.samples <= AutoVegetationGenerator.GAP_FILL_MAX_SAMPLES + 1,
+		"samples=%d" % gate.samples)
+	_check("gap-fill returns promptly (got %d ms)" % elapsed, elapsed < 5000)
+
+
+## reground() must thread settings + growth map: the bare rebuild it used to do
+## rebuilt the manual layer style-less at full size (the "V pops full detail"
+## bug) and left the growth map pointing at freed MultiMeshes.
+func _test_reground_threads_growth() -> void:
+	var terrain := Node3D.new()
+	get_root().add_child(terrain)
+	var layer := VegetationLayer.create_empty()
+	layer.add_bulk("pine", 0.0, 0.0, 0.0, 1.0)
+	var ground := func(_x: float, _z: float) -> float: return 0.0
+	var map := VegetationInstanceMap.new()
+	var settings := {"pine_growth_years": 5.0, "growth_now_h": 1000.0}
+	VegetationRuntime.reground(terrain, layer, ground, settings, map)
+	_check("reground repopulates the growth map", not map.is_empty())
+	terrain.queue_free()
+
+
+## Stale-payload guard: the ready-signal key must identify the site.
+func _test_osm_key_match() -> void:
+	var key := VegService._cache_key(48.3252, -122.2469, 3000.0)
+	_check("key matches its own site",
+		VegService.matches_site(key, 48.3252, -122.2469, 3000.0))
+	_check("key rejects another site",
+		not VegService.matches_site(key, 47.0, -122.2469, 3000.0))
+	_check("key rejects another extent",
+		not VegService.matches_site(key, 48.3252, -122.2469, 6000.0))
+
+
+## _forest_params_changed must cover every generator-read key (a key it misses
+## persists in the style but never re-scatters — "Tune-look doesn't apply").
+func _test_forest_params_coverage() -> void:
+	var tl_script: GDScript = load("res://core/terrain/terrain_loader.gd")
+	var tl: Node = tl_script.new()
+	var base := {"slope_max_deg": 25.0, "auto_detail_radius_m": 800.0,
+		"auto_distant_density": 0.35, "scatter_lawn_field": false,
+		"local_mix": {"birch": 0.5}}
+	for key_val in [["slope_max_deg", 10.0], ["auto_detail_radius_m", 300.0],
+			["auto_distant_density", 0.1], ["auto_max_tree_instances", 5000.0],
+			["forest_edge_feather_m", 40.0], ["grass_detail_radius_m", 90.0],
+			["mix_pine", 0.8]]:
+		var next := base.duplicate(true)
+		next[key_val[0]] = key_val[1]
+		_check("generator key %s triggers re-scatter" % key_val[0],
+			bool(tl._forest_params_changed(base, next)))
+	var flipped := base.duplicate(true)
+	flipped["scatter_lawn_field"] = true
+	_check("scatter_lawn_field triggers re-scatter",
+		bool(tl._forest_params_changed(base, flipped)))
+	var mixed := base.duplicate(true)
+	mixed["local_mix"] = {"birch": 0.2}
+	_check("local_mix change triggers re-scatter",
+		bool(tl._forest_params_changed(base, mixed)))
+	var same := base.duplicate(true)
+	_check("unchanged style does NOT re-scatter",
+		not bool(tl._forest_params_changed(base, same)))
+	tl.free()

@@ -103,6 +103,18 @@ func bind_loader(loader: Node) -> void:
 			_loader.connect("vegetation_operation_progress", cb)
 
 
+## Drives the tool-row progress bar from the loader's async re-scatter
+## (respecies / regen). bind_loader connected this by name since the feature
+## shipped, but the method itself was never written — a connect error at bind
+## time and a progress bar that only ever flashed on synchronous paints.
+func _on_veg_operation_progress(message: String, fraction: float) -> void:
+	if _progress_bar != null:
+		_progress_bar.visible = fraction < 1.0
+		_progress_bar.value = clampf(fraction, 0.0, 1.0)
+	if _status != null and message != "":
+		_status.text = message
+
+
 func toggle_mode() -> void:
 	if _active:
 		_exit_mode()
@@ -1173,11 +1185,21 @@ func _update_process_enabled() -> void:
 # Crosshair UI
 # ---------------------------------------------------------------------------
 
+var _crosshair_cache: Node = null
+
+
 func _crosshair_ui() -> Node:
-	var parent := get_parent()
-	if parent == null:
-		return null
-	return parent.get_node_or_null("CrosshairUI")
+	# The dock lives on its own CanvasLayer (VegetationEditLayer), NOT under
+	# UILayer — the old get_parent() lookup always returned null, so every
+	# crosshair prompt/aim update in this file was a silent no-op. Resolve via
+	# the Main scene (group "main_scene", same pattern as the preview editor).
+	if _crosshair_cache != null and is_instance_valid(_crosshair_cache):
+		return _crosshair_cache
+	_crosshair_cache = null
+	var main := get_tree().get_first_node_in_group("main_scene")
+	if main != null:
+		_crosshair_cache = main.get_node_or_null("UILayer/CrosshairUI")
+	return _crosshair_cache
 
 
 func _set_crosshair_prompt(text: String) -> void:

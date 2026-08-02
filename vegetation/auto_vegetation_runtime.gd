@@ -33,11 +33,34 @@ const SLOT_ALIAS := {
 ## Auto-veg drives final tree height through each record's `scale` (computed from a
 ## target canopy height in AutoVegetationGenerator._scale_for). The card factory's
 ## per-species bulk multipliers would double-apply, so they're neutralised to 1.0.
+## The neutral values must WIN over the style dict — merging the other way let the
+## style's deciduous_bulk_scale 1.6 overwrite the 1.0 and every auto deciduous tree
+## rendered ×1.6 its OSM-derived height ("trees look wrong on first load").
+## grass_field is neutralised for the same reason: the generator already bakes
+## grass_field_bulk_scale into each record's scale (_scatter_grass_polygon), so the
+## runtime multiplying it again squared the factor (×1.5625). grass_lawn is exempt —
+## _build_grass_bulk_batches never applies the runtime multiplier to lawn.
+## auto_tree_scale is the user-facing whole-forest size knob that replaces the old
+## accidental oversizing (rebuild-only — no re-scatter needed to change it).
 const NEUTRAL_BULK := {
 	"pine_bulk_scale": 1.0,
 	"deciduous_bulk_scale": 1.0,
 	"shrub_bulk_scale": 1.0,
+	"grass_field_bulk_scale": 1.0,
 }
+
+
+## Style dict with the per-species bulk multipliers forced neutral (see NEUTRAL_BULK)
+## and the auto_tree_scale knob routed through the tree bulk keys the builders read.
+static func neutralized_settings(settings: Dictionary) -> Dictionary:
+	var s := settings.duplicate()
+	s.merge(NEUTRAL_BULK, true)
+	var tree_scale := clampf(float(settings.get("auto_tree_scale", 1.0)), 0.2, 3.0)
+	if not is_equal_approx(tree_scale, 1.0):
+		s["pine_bulk_scale"] = tree_scale
+		s["deciduous_bulk_scale"] = tree_scale
+		s["shrub_bulk_scale"] = tree_scale
+	return s
 
 static func ensure_root(terrain: Node3D) -> Node3D:
 	var root := terrain.get_node_or_null(ROOT_NAME) as Node3D
@@ -112,8 +135,7 @@ static func rebuild(terrain: Node3D, layer: AutoVegetationLayer,
 	if growth_map != null:
 		growth_map.clear()
 	_clear_shader_registrations()
-	var s := NEUTRAL_BULK.duplicate()
-	s.merge(settings, true)
+	var s := neutralized_settings(settings)
 	var root := ensure_root(terrain)
 	_clear_children(root)
 	for slot in layer.slots():
@@ -141,8 +163,7 @@ static func rebuild_async(terrain: Node3D, layer: AutoVegetationLayer,
 	if growth_map != null:
 		growth_map.clear()
 	_clear_shader_registrations()
-	var s := NEUTRAL_BULK.duplicate()
-	s.merge(settings, true)
+	var s := neutralized_settings(settings)
 	var root := ensure_root(terrain)
 	_clear_children(root)
 	for slot in layer.slots():
@@ -161,9 +182,12 @@ static func rebuild_async(terrain: Node3D, layer: AutoVegetationLayer,
 
 
 ## Re-sample ground Y under each instance (called after a heightfield rebuild).
+## Thread the live settings AND growth map — see VegetationRuntime.reground()'s
+## comment for the bug a bare rebuild causes.
 static func reground(terrain: Node3D, layer: AutoVegetationLayer,
-		ground_y_at: Callable, settings: Dictionary = {}) -> void:
-	rebuild(terrain, layer, ground_y_at, settings)
+		ground_y_at: Callable, settings: Dictionary = {},
+		growth_map: VegetationInstanceMap = null) -> void:
+	rebuild(terrain, layer, ground_y_at, settings, [], growth_map)
 
 
 static func _resolve_species(slot: String) -> String:

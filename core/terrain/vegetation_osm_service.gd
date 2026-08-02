@@ -188,6 +188,14 @@ static func _cache_key(lat: float, lon: float, half_extent_m: float) -> String:
 	return "osmveg_%s_%.4f_%.4f_%d" % [CACHE_VERSION, lat, lon, int(half_extent_m)]
 
 
+## True when `key` (as delivered by vegetation_osm_ready) belongs to the given
+## site request. The service runs one job at a time with a single-slot pending
+## queue, so a listener that changed sites mid-flight can otherwise receive —
+## and must be able to reject — the PREVIOUS site's payload.
+static func matches_site(key: String, lat: float, lon: float, half_extent_m: float) -> bool:
+	return key == _cache_key(lat, lon, half_extent_m)
+
+
 static func _cache_file_too_large(path: String) -> bool:
 	var abs_path := ProjectSettings.globalize_path(path)
 	if not FileAccess.file_exists(abs_path) and not FileAccess.file_exists(path):
