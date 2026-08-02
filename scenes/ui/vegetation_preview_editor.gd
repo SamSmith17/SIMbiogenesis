@@ -185,6 +185,15 @@ var _size_var := 0.25
 var _size_var_slider: HSlider = null
 var _size_var_spin: SpinBox = null
 var _shader_sliders: Dictionary = {}
+## key -> {pair, label, revert, text} for every slider bound to a `_values` key
+## (species shape, mix ratios, advanced shader). Rebuilt with the species
+## section, so it is cleared there rather than accumulating freed rows.
+var _keyed_sliders: Dictionary = {}
+## True once this session has pushed a look to the map: the revert tooltip then
+## reads "the last applied value", which is what the baseline actually is.
+var _applied_once := false
+var _apply_status: Label = null
+var _apply_btn: Button = null
 var _shader_advanced: VBoxContainer = null
 var _rebuild_pending := false
 var _rebuild_timer := 0.0
@@ -451,11 +460,9 @@ func _build_ui() -> void:
 	for spec in SHADER_SLIDERS:
 		var sd: Dictionary = spec
 		var key := str(sd["key"])
-		var sl := _labeled_slider(_shader_advanced, str(sd["label"]), float(sd["min"]), float(sd["max"]),
-			float(_values.get(key, VegetationStyleConfig.defaults().get(key, 0.0))),
-			func(v: float) -> void:
-				_values[key] = v
-				_queue_rebuild())
+		var sl := _keyed_slider(_shader_advanced, key, str(sd["label"]), float(sd["min"]),
+			float(sd["max"]),
+			float(_values.get(key, VegetationStyleConfig.defaults().get(key, 0.0))))
 		_shader_sliders[key] = sl
 
 	_build_osm_section(sidebar)
@@ -463,11 +470,12 @@ func _build_ui() -> void:
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 8)
 	sidebar.add_child(btn_row)
-	var apply_btn := Button.new()
-	apply_btn.text = "Apply to map"
-	apply_btn.custom_minimum_size = Vector2(104, 30)
-	apply_btn.pressed.connect(_apply_to_map)
-	btn_row.add_child(apply_btn)
+	_apply_btn = Button.new()
+	_apply_btn.text = "Apply to map"
+	_apply_btn.custom_minimum_size = Vector2(104, 30)
+	_apply_btn.tooltip_text = "Push this look to the map — the editor stays open so you can keep iterating"
+	_apply_btn.pressed.connect(_apply_to_map)
+	btn_row.add_child(_apply_btn)
 	var brush_btn := Button.new()
 	brush_btn.text = "Apply to brush"
 	brush_btn.custom_minimum_size = Vector2(108, 30)
@@ -492,6 +500,12 @@ func _build_ui() -> void:
 	close_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
 	close_btn.pressed.connect(close)
 	btn_row.add_child(close_btn)
+	_apply_status = Label.new()
+	_apply_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_apply_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_apply_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sidebar.add_child(_apply_status)
+	_refresh_apply_state()
 
 
 func _labeled_slider(parent: Control, label: String, min_v: float, max_v: float,
@@ -499,6 +513,97 @@ func _labeled_slider(parent: Control, label: String, min_v: float, max_v: float,
 	return SliderSpinRowScript.add(parent, label, min_v, max_v, start, handler,
 		func(lbl: Label, txt: String) -> void: _style_section(lbl, txt),
 		72, 120, 64, step)
+
+
+## A slider bound to a `_values` KEY: same row, plus a per-slider revert button
+## and a label that goes amber while the value differs from the baseline.
+##
+## Phase 8: the modal dumps ~32 sliders per species with no way to tell which
+## ones you have actually moved, and "Reset" was all-or-nothing — so a single
+## bad experiment cost the whole session's tuning.
+func _keyed_slider(parent: Control, key: String, label: String, min_v: float,
+		max_v: float, start: float, step: float = -1.0) -> Dictionary:
+	var pair := SliderSpinRowScript.add(parent, label, min_v, max_v, start,
+		func(v: float) -> void:
+			_values[key] = v
+			_refresh_slider_diff(key)
+			_refresh_apply_state()
+			_queue_rebuild(),
+		func(lbl: Label, txt: String) -> void: _style_section(lbl, txt),
+		72, 108, 60, step)
+	var row: HBoxContainer = pair.get("row")
+	var revert := Button.new()
+	revert.text = "↺"
+	revert.tooltip_text = "Revert this one slider to %s" % (
+		"the last applied value" if _applied_once else "the map's current value")
+	revert.custom_minimum_size = Vector2(24, 20)
+	revert.focus_mode = Control.FOCUS_NONE
+	revert.add_theme_font_size_override("font_size", 10)
+	revert.pressed.connect(_revert_key.bind(key))
+	if row != null:
+		row.add_child(revert)
+	_keyed_sliders[key] = {
+		"pair": pair,
+		"label": row.get_child(0) if row != null and row.get_child_count() > 0 else null,
+		"revert": revert,
+		"text": label,
+	}
+	_refresh_slider_diff(key)
+	return pair
+
+
+func _revert_key(key: String) -> void:
+	if not _baseline.has(key):
+		return
+	_values[key] = _baseline[key]
+	var entry: Dictionary = _keyed_sliders.get(key, {})
+	if not entry.is_empty():
+		SliderSpinRowScript.set_values(entry.get("pair", {}), float(_baseline[key]))
+	_refresh_slider_diff(key)
+	_refresh_apply_state()
+	_queue_rebuild(true)
+
+
+## Amber label + a live revert button while this key differs from the baseline.
+func _refresh_slider_diff(key: String) -> void:
+	var entry: Dictionary = _keyed_sliders.get(key, {})
+	if entry.is_empty():
+		return
+	var changed := _key_differs(key)
+	var lbl: Label = entry.get("label")
+	if lbl != null:
+		lbl.add_theme_color_override("font_color",
+			UITheme.C_AMBER if changed else UITheme.C_TEXT_S)
+		lbl.text = ("• " + str(entry.get("text", ""))) if changed else str(entry.get("text", ""))
+	var revert: Button = entry.get("revert")
+	if revert != null:
+		revert.disabled = not changed
+		revert.modulate = Color(1, 1, 1, 1.0 if changed else 0.35)
+
+
+func _key_differs(key: String) -> bool:
+	if not _baseline.has(key) or not _values.has(key):
+		return false
+	var a: Variant = _values[key]
+	var b: Variant = _baseline[key]
+	if a is float or a is int:
+		return absf(float(a) - float(b)) > 1.0e-4
+	return a != b
+
+
+func _refresh_all_slider_diffs() -> void:
+	for key in _keyed_sliders.keys():
+		_refresh_slider_diff(str(key))
+
+
+## How many keys the player has moved since the last apply — drives the
+## Apply button's affordance so "did that take?" is answerable at a glance.
+func pending_change_count() -> int:
+	var n := 0
+	for key in _keyed_sliders.keys():
+		if _key_differs(str(key)):
+			n += 1
+	return n
 
 
 func _shape_family() -> String:
@@ -511,7 +616,12 @@ func _rebuild_species_section() -> void:
 	if _species_section == null:
 		return
 	for child in _species_section.get_children():
+		# The rows own the keyed-slider entries; drop them together or the diff
+		# refresh walks freed Labels.
 		child.queue_free()
+	for key in _keyed_sliders.keys():
+		if not _shader_sliders.has(key):
+			_keyed_sliders.erase(key)
 	if _species == "mix":
 		_build_mix_section()
 		return
@@ -525,11 +635,8 @@ func _rebuild_species_section() -> void:
 	for spec in specs:
 		var sd: Dictionary = spec
 		var key := str(sd["key"])
-		_labeled_slider(_species_section, str(sd["label"]), float(sd["min"]), float(sd["max"]),
-			float(_values.get(key, 0.0)),
-			func(v: float) -> void:
-				_values[key] = v
-				_queue_rebuild())
+		_keyed_slider(_species_section, key, str(sd["label"]), float(sd["min"]),
+			float(sd["max"]), float(_values.get(key, 0.0)))
 
 
 ## Mixed-woodland ratio sliders. Per-species SHAPE (canopy size, etc.) is edited
@@ -540,11 +647,8 @@ func _build_mix_section() -> void:
 	_species_section.add_child(hdr)
 	for i in MIX_KEYS.size():
 		var key := MIX_KEYS[i]
-		_labeled_slider(_species_section, MIX_LABELS[i], 0.0, 1.0,
-			float(_values.get(key, 0.0)),
-			func(v: float) -> void:
-				_values[key] = v
-				_queue_rebuild())
+		_keyed_slider(_species_section, key, MIX_LABELS[i], 0.0, 1.0,
+			float(_values.get(key, 0.0)))
 	var local_hdr := Label.new()
 	_style_section(local_hdr, "Local-mix species")
 	_species_section.add_child(local_hdr)
@@ -1273,7 +1377,19 @@ func _apply_to_map() -> void:
 	if _dock != null and _dock.has_method("set_brush_style"):
 		_dock.call("set_brush_style", {})
 	applied.emit()
-	close()
+	# Phase 8: the editor STAYS OPEN. Closing on apply made tuning a look a
+	# guess-and-reopen loop — you could never see your change on the real map
+	# next to the sliders that made it. The baseline moves to what the map now
+	# has, so the per-slider revert buttons mean "undo this since the last
+	# apply" rather than "since the modal opened".
+	_baseline = _values.duplicate(true)
+	for species in SPECIES_IDS:
+		_baseline["%s_albedo_tint" % species] = _tints[species]
+	_baseline["osm_species_map"] = _osm_species_map.duplicate(true)
+	_baseline["local_mix"] = _local_mix.duplicate(true)
+	_applied_once = true
+	_refresh_all_slider_diffs()
+	_refresh_apply_state("Applied to the map — keep tuning, or Close when it looks right")
 
 
 ## Push the current look to the paint brush only — future painted trees carry it
@@ -1290,6 +1406,28 @@ func _apply_to_brush() -> void:
 	close()
 
 
+## Footer line + Apply emphasis. With no pending edits the Apply button is a
+## normal button; with edits it says how many sliders are waiting.
+func _refresh_apply_state(message: String = "") -> void:
+	var pending := pending_change_count()
+	if _apply_btn != null:
+		_apply_btn.text = "Apply to map (%d)" % pending if pending > 0 else "Apply to map"
+	if _apply_status == null:
+		return
+	if not message.is_empty():
+		_apply_status.text = message
+		_apply_status.add_theme_color_override("font_color", UITheme.C_OK)
+		return
+	_apply_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	if pending > 0:
+		_apply_status.text = "%d slider%s changed since the last apply" % [
+			pending, "" if pending == 1 else "s"]
+	elif _applied_once:
+		_apply_status.text = "Map matches this preview"
+	else:
+		_apply_status.text = "Preview only — nothing on the map has changed yet"
+
+
 func _reset_values() -> void:
 	_values = _baseline.duplicate(true)
 	for species in SPECIES_IDS:
@@ -1302,6 +1440,8 @@ func _reset_values() -> void:
 	_sync_tint_picker()
 	_sync_top_sliders()
 	_sync_osm_opts()
+	_refresh_all_slider_diffs()
+	_refresh_apply_state()
 	_queue_rebuild(true)
 
 

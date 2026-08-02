@@ -149,6 +149,8 @@ func _ready() -> void:
 			_run_veg_capture.call_deferred()
 		elif _capture_mode == "areafill":
 			_run_area_fill_verify.call_deferred()
+		elif _capture_mode == "vegdock":
+			_run_veg_dock_capture.call_deferred()
 		else:
 			_await_and_run.call_deferred()
 
@@ -330,6 +332,8 @@ func _launch_map() -> void:
 		_run_veg_capture()
 	elif _capture_mode == "areafill":
 		_run_area_fill_verify()
+	elif _capture_mode == "vegdock":
+		_run_veg_dock_capture()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -365,6 +369,8 @@ func _launch_scene_direct() -> void:
 		_run_veg_capture()
 	elif _capture_mode == "areafill":
 		_run_area_fill_verify()
+	elif _capture_mode == "vegdock":
+		_run_veg_dock_capture()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -3612,3 +3618,76 @@ func _area_fill_waypoints(loader: Node, centroid: Vector2) -> Array:
 			"look": Vector3(centroid.x, gy, centroid.y),
 		},
 	]
+
+
+# ==================== VEG DOCK CAPTURE (--capture=vegdock) ====================
+# Veg overhaul Phase 8: shoot the redesigned paint dock and the Tune-look modal
+# through their REAL entry points, so a layout/theme regression is visible
+# rather than merely compiling. Read-only: it opens panels, changes tool/shape
+# selection, and closes them again — nothing is painted or persisted.
+
+func _run_veg_dock_capture() -> void:
+	var loader := await _find_terrain_loader()
+	if loader == null:
+		push_error("PlaytestHarness: vegdock needs a TerrainLoader map")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	_set_capture_conditions()
+	var label := _shots_label if not _shots_label.is_empty() else "veg_dock"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+
+	var dock: Node = loader.get("_vegetation_edit_ui")
+	if dock == null:
+		print("PlaytestHarness: vegdock FAIL — the map has no vegetation dock")
+		_maybe_quit()
+		return
+	dock.call("toggle_mode")
+	await get_tree().create_timer(1.0).timeout
+	print("PlaytestHarness: vegdock — dock open=%s, chips=%d" % [
+		str(dock.get("_active")), (dock.call("chip_specs") as Array).size()])
+	await _shoot_ui(dir, "dock_paint")
+
+	# Each tool/shape combination re-lays the chip row; a clipped or overflowing
+	# row shows up here and nowhere else.
+	dock.call("set_paint_density", 2.4)
+	dock.call("set_brush_style", {"deciduous_canopy_w": 3.0})
+	await get_tree().create_timer(0.4).timeout
+	await _shoot_ui(dir, "dock_custom_brush")
+	dock.call("set_brush_style", {})
+	dock.call("_set_tool", 3)  # Select
+	await get_tree().create_timer(0.4).timeout
+	await _shoot_ui(dir, "dock_select")
+	dock.call("_set_tool", 1)  # Place (hero row visible)
+	await get_tree().create_timer(0.4).timeout
+	await _shoot_ui(dir, "dock_place")
+	dock.call("_set_tool", 0)
+
+	# Tune look: it must now STAY OPEN after Apply (Phase 8b).
+	if loader.has_method("open_vegetation_preview_editor"):
+		loader.call("open_vegetation_preview_editor", 0)
+		await get_tree().create_timer(1.5).timeout
+		await _shoot_ui(dir, "tune_look")
+		var modal: Node = loader.get("_vegetation_preview_ui")
+		if modal != null:
+			var before := bool(modal.get("visible"))
+			modal.call("_apply_to_map")
+			await get_tree().create_timer(1.5).timeout
+			var after := bool(modal.get("visible"))
+			print("PlaytestHarness: vegdock %s — Tune look stays open after Apply (was %s, now %s)"
+				% ["PASS" if (before and after) else "FAIL", str(before), str(after)])
+			await _shoot_ui(dir, "tune_look_after_apply")
+			modal.call("close")
+	await get_tree().create_timer(0.5).timeout
+	dock.call("_exit_mode")
+	print("PlaytestHarness: vegdock — shots in %s" % ProjectSettings.globalize_path(dir))
+	_maybe_quit()
+
+
+func _shoot_ui(dir: String, name: String) -> void:
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	img.save_png("%s/%s.png" % [dir, name])

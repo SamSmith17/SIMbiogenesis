@@ -288,7 +288,11 @@ func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 		current_pitch = clamp(current_pitch, deg_to_rad(-85), deg_to_rad(85))
 	
 	# Left stick / WASD for movement. input_forward > 0 means flying in the look direction.
-	var move_input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	# ...unless a text field owns keyboard focus: the terrain/veg docks put
+	# SpinBoxes on screen WHILE the player is mounted, and typing a brush radius
+	# used to fly the drone across the map one keystroke at a time.
+	var typing := _keyboard_captured_by_ui()
+	var move_input := Vector2.ZERO if typing 		else Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var input_forward := -move_input.y
 	var input_strafe := move_input.x
 	
@@ -303,7 +307,9 @@ func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 	var analemma_active := main != null and bool(main.get("analemma_mode"))
 	var sim_paused := main != null and not analemma_active and float(main.get("time_scale") if main.get("time_scale") != null else 1.0) == 0.0
 	var edit_allows_altitude := _is_ortho_edit_mode() or _is_terrain_sculpt_session()
-	if edit_allows_altitude:
+	if typing:
+		input_altitude = 0.0
+	elif edit_allows_altitude:
 		input_altitude = _edit_mode_altitude_input()
 	elif not sim_paused:
 		input_altitude = Input.get_action_strength("drone_ascend") - Input.get_action_strength("drone_descend")
@@ -434,6 +440,19 @@ func _input(event: InputEvent) -> void:
 		current_yaw -= mouse_event.relative.x * 0.002 * steering_sensitivity
 		current_pitch -= mouse_event.relative.y * 0.002 * steering_sensitivity
 		current_pitch = clamp(current_pitch, deg_to_rad(-85), deg_to_rad(85))
+
+
+## A LineEdit/SpinBox/TextEdit with keyboard focus is TYPING, not flying. The
+## drone stays mounted while the edit docks are open, so this is the difference
+## between entering "12" in a brush field and lurching forward twice.
+func _keyboard_captured_by_ui() -> bool:
+	var vp := get_viewport()
+	if vp == null:
+		return false
+	var f := vp.gui_get_focus_owner()
+	if f == null:
+		return false
+	return f is LineEdit or f is TextEdit or f is SpinBox
 
 
 func _is_terrain_edit_ortho() -> bool:

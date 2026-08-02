@@ -353,6 +353,88 @@ func all_bulk_points() -> Array[Vector2]:
 	return out
 
 
+## Nearest single plant to a world point, bulk or hero (veg overhaul Phase 8's
+## per-tree Select). Returns {} when nothing is inside `radius_m`, else
+## {kind: "bulk"|"hero", species, index, x, z, scale, dist_m}. Bulk instances
+## are plain dicts in a MultiMesh with no ids, so the (species, index) pair IS
+## the handle — callers must not hold it across an edit that reorders the array.
+func nearest_plant(world_xz: Vector2, radius_m: float = 6.0) -> Dictionary:
+	var best := {}
+	var best_d := radius_m * radius_m
+	for species in species_keys():
+		var records: Variant = bulk.get(species, [])
+		if not (records is Array):
+			continue
+		var arr: Array = records
+		for i in arr.size():
+			if not (arr[i] is Dictionary):
+				continue
+			var d: Dictionary = arr[i]
+			var pt := Vector2(float(d.get("x", 0.0)), float(d.get("z", 0.0)))
+			var dist := pt.distance_squared_to(world_xz)
+			if dist < best_d:
+				best_d = dist
+				best = {
+					"kind": "bulk", "species": species, "index": i,
+					"x": pt.x, "z": pt.y, "scale": float(d.get("scale", 1.0)),
+					"dist_m": sqrt(dist),
+				}
+	for i in hero.size():
+		if not (hero[i] is Dictionary):
+			continue
+		var h: Dictionary = hero[i]
+		var hp := Vector2(float(h.get("x", 0.0)), float(h.get("z", 0.0)))
+		var hd := hp.distance_squared_to(world_xz)
+		if hd < best_d:
+			best_d = hd
+			best = {
+				"kind": "hero", "species": str(h.get("preset", "")), "index": i,
+				"x": hp.x, "z": hp.y, "scale": float(h.get("scale", 1.0)),
+				"dist_m": sqrt(hd),
+			}
+	return best
+
+
+## Delete the plant a nearest_plant() result points at. Takes the descriptor
+## rather than a position so the caller can show what it is about to remove and
+## then remove exactly that.
+func remove_plant(desc: Dictionary) -> bool:
+	if desc.is_empty():
+		return false
+	var idx := int(desc.get("index", -1))
+	if str(desc.get("kind", "")) == "hero":
+		if idx < 0 or idx >= hero.size():
+			return false
+		hero.remove_at(idx)
+		return true
+	var species := str(desc.get("species", ""))
+	var records: Variant = bulk.get(species, [])
+	if not (records is Array) or idx < 0 or idx >= (records as Array).size():
+		return false
+	(records as Array).remove_at(idx)
+	return true
+
+
+## Multiply one plant's scale (Select tool's resize). Clamped to the same range
+## the paint scatter uses so a resized tree can't become a skyscraper.
+func scale_plant(desc: Dictionary, factor: float) -> bool:
+	if desc.is_empty() or factor <= 0.0:
+		return false
+	var idx := int(desc.get("index", -1))
+	var target: Dictionary = {}
+	if str(desc.get("kind", "")) == "hero":
+		if idx < 0 or idx >= hero.size():
+			return false
+		target = hero[idx]
+	else:
+		var records: Variant = bulk.get(str(desc.get("species", "")), [])
+		if not (records is Array) or idx < 0 or idx >= (records as Array).size():
+			return false
+		target = (records as Array)[idx]
+	target["scale"] = clampf(float(target.get("scale", 1.0)) * factor, 0.15, 4.0)
+	return true
+
+
 func all_placement_points() -> Array[Vector2]:
 	var out := all_bulk_points()
 	for item in hero:

@@ -287,6 +287,9 @@ var _watershed_preview: Dictionary = {}
 ## Teal ground outline while watershed preview / designate is active.
 var _watershed_highlight: MeshInstance3D = null
 var _veg_highlight: MeshInstance3D = null
+## Separate mesh for the crosshair-focused OSM area outline (Phase 8) — it and
+## the paint selection used to fight over one node.
+var _veg_area_highlight: MeshInstance3D = null
 ## Crosshair-focused OSM vegetation area (index into _auto_veg_data["polygons"]).
 ## Highlighted like buildings; Interact / the O action opens the Tune look modal
 ## seeded to that area's veg type (see pick_veg_area_at_world / open_veg_area_modal).
@@ -5719,9 +5722,12 @@ func _setup_vegetation_edit_ui() -> void:
 	var ui_layer := _main.get_node_or_null("UILayer")
 	if ui_layer == null:
 		return
+	# Phase 8: the dock and the Tune-look modal used to SHARE one ad-hoc layer
+	# (25), so which one drew on top came down to sibling order. They are
+	# different bands — a dock and a modal — and now say so via UITheme.
 	var layer := CanvasLayer.new()
 	layer.name = "VegetationEditLayer"
-	layer.layer = 25
+	layer.layer = UITheme.LAYER_PANEL
 	ui_layer.add_child(layer)
 	var edit_ui := Control.new()
 	edit_ui.name = "VegetationEditUI"
@@ -5730,11 +5736,15 @@ func _setup_vegetation_edit_ui() -> void:
 	layer.add_child(edit_ui)
 	edit_ui.bind_loader(self)
 	_vegetation_edit_ui = edit_ui
+	var modal_layer := CanvasLayer.new()
+	modal_layer.name = "VegetationPreviewLayer"
+	modal_layer.layer = UITheme.LAYER_MODAL
+	ui_layer.add_child(modal_layer)
 	var preview_ui := Control.new()
 	preview_ui.name = "VegetationPreviewEditor"
 	preview_ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	preview_ui.set_script(VEGETATION_PREVIEW_EDITOR_SCRIPT)
-	layer.add_child(preview_ui)
+	modal_layer.add_child(preview_ui)
 	preview_ui.bind_loader(self, edit_ui)
 	_vegetation_preview_ui = preview_ui
 
@@ -7429,6 +7439,42 @@ func place_hero_tree(preset: String, x: float, z: float, scale: float,
 	return true
 
 
+## ---------------------------------------------------------------------------
+## Per-tree Select (veg overhaul Phase 8)
+## ---------------------------------------------------------------------------
+
+## Describe the single plant nearest a world point, for the Select tool's
+## readout. {} when nothing is close enough. Manual layer only — auto-scattered
+## OSM vegetation is regenerated every load, so a per-instance edit there would
+## not survive (clear/fill are the tools for that).
+func pick_plant_at(world_xz: Vector2, radius_m: float = 6.0) -> Dictionary:
+	if _vegetation_layer == null:
+		return {}
+	return _vegetation_layer.nearest_plant(world_xz, radius_m)
+
+
+func delete_plant_at(world_xz: Vector2, radius_m: float = 6.0) -> Dictionary:
+	if _vegetation_layer == null:
+		return {}
+	var desc := _vegetation_layer.nearest_plant(world_xz, radius_m)
+	if desc.is_empty() or not _vegetation_layer.remove_plant(desc):
+		return {}
+	_vegetation_layer.save(_lat, _lon)
+	_rebuild_vegetation()
+	return desc
+
+
+func scale_plant_at(world_xz: Vector2, factor: float, radius_m: float = 6.0) -> Dictionary:
+	if _vegetation_layer == null:
+		return {}
+	var desc := _vegetation_layer.nearest_plant(world_xz, radius_m)
+	if desc.is_empty() or not _vegetation_layer.scale_plant(desc, factor):
+		return {}
+	_vegetation_layer.save(_lat, _lon)
+	_rebuild_vegetation()
+	return desc
+
+
 func delete_nearest_hero(world_xz: Vector2) -> bool:
 	if _vegetation_layer == null:
 		return false
@@ -7457,21 +7503,56 @@ func update_vegetation_highlight(poly: PackedVector2Array,
 	if terrain == null:
 		return
 	if _veg_highlight == null:
-		_veg_highlight = MeshInstance3D.new()
-		_veg_highlight.name = "VegetationSelectionHighlight"
-		terrain.add_child(_veg_highlight)
-	if _veg_highlight.material_override == null or not (_veg_highlight.material_override is StandardMaterial3D):
-		var mat := StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		_veg_highlight.material_override = mat
-	var hl_mat := _veg_highlight.material_override as StandardMaterial3D
-	hl_mat.albedo_color = color
+		_veg_highlight = _make_highlight_mesh(terrain, "VegetationSelectionHighlight")
+	_draw_highlight_mesh(_veg_highlight, poly, color, fast_preview)
+
+
+## Shared drape-and-draw for the ground outline meshes. Both the paint
+## selection and the OSM area focus use it, but they own SEPARATE meshes —
+## sharing one was a live bug: aiming at an area cleared the paint highlight
+## mid-drag, and painting erased the focus outline the prompt was referring to.
+func _make_highlight_mesh(terrain: Node, node_name: String) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	terrain.add_child(mi)
+	return mi
+
+
+func _draw_highlight_mesh(mi: MeshInstance3D, poly: PackedVector2Array,
+		color: Color, fast_preview: bool) -> void:
+	if mi == null:
+		return
+	var hl_mat := mi.material_override as StandardMaterial3D
+	if hl_mat != null:
+		hl_mat.albedo_color = color
 	var footing := _highlight_footing_grid(fast_preview)
-	_veg_highlight.mesh = TerrainBuilder.build_polygon_highlight(
+	mi.mesh = TerrainBuilder.build_polygon_highlight(
 		poly, footing["grid"], footing["res"], footing["extent"], _built_center_elev)
-	_veg_highlight.visible = true
+	mi.visible = true
+
+
+## Crosshair-focused OSM vegetation area outline — its own mesh, independent of
+## the paint selection highlight (see _make_highlight_mesh).
+func update_veg_area_outline(poly: PackedVector2Array, color: Color) -> void:
+	if _main == null or poly.size() < 3:
+		clear_veg_area_outline()
+		return
+	var terrain := _main.get_node_or_null("Terrain")
+	if terrain == null:
+		return
+	if _veg_area_highlight == null or not is_instance_valid(_veg_area_highlight):
+		_veg_area_highlight = _make_highlight_mesh(terrain, "VegetationAreaFocusHighlight")
+	_draw_highlight_mesh(_veg_area_highlight, poly, color, false)
+
+
+func clear_veg_area_outline() -> void:
+	if _veg_area_highlight != null and is_instance_valid(_veg_area_highlight):
+		_veg_area_highlight.visible = false
 
 
 ## Cached detail-surface grid for fast highlight draping (no per-tick recompose).
@@ -8719,18 +8800,18 @@ func set_veg_focus_idx(idx: int) -> void:
 	_veg_focus_idx = idx
 	if idx < 0:
 		_veg_focus_area = {}
-		clear_vegetation_highlight()
+		clear_veg_area_outline()
 		return
 	var polys: Variant = _auto_veg_data.get("polygons", [])
 	if not (polys is Array):
 		return
 	var info := VegAreaPicker.area_info(polys as Array, idx)
 	if not bool(info.get("valid", false)):
-		clear_vegetation_highlight()
+		clear_veg_area_outline()
 		return
 	_veg_focus_area = info
 	var poly: PackedVector2Array = info.get("points", PackedVector2Array())
-	update_vegetation_highlight(poly, Color(1.0, 0.75, 0.15, 0.4), true)
+	update_veg_area_outline(poly, Color(1.0, 0.75, 0.15, 0.4))
 
 
 ## Interact / O on a focused veg area → the per-area Fill drawer (Phase 7). It

@@ -16,7 +16,9 @@ enum ShapeMode { BRUSH, CIRCLE, RECT, LASSO, POLYGON }
 
 const MODAL_NAME := "vegetation_edit"
 const SliderSpinRowScript := preload("res://scenes/ui/slider_spin_row.gd")
-const PANEL_HEIGHT := 148.0
+## Grew with the Phase 8 chip row (the row above the tools that shows what the
+## brush will actually do).
+const PANEL_HEIGHT := 176.0
 const HIGHLIGHT_DEBOUNCE_S := 0.016
 const RESPECIES_DEBOUNCE_S := 0.35
 const MAX_SELECTION_RADIUS_M := 75.0
@@ -28,6 +30,19 @@ const SINGLE_CLICK_PX := 6.0
 const HIGHLIGHT_CLEAR := Color(0.95, 0.25, 0.2, 0.42)
 const HIGHLIGHT_PAINT := Color(0.2, 0.9, 0.4, 0.42)
 const HIGHLIGHT_SELECT := Color(0.35, 0.75, 0.95, 0.42)
+
+## Chip swatch per mesh family — the dock's only job is WHERE and WHICH, so the
+## species chip is the one piece of state that must always be readable at a
+## glance. Values are recognisably "that kind of plant", not the render tint.
+const FAMILY_CHIP_COLORS := {
+	"pine": Color(0.30, 0.55, 0.38),
+	"deciduous": Color(0.42, 0.72, 0.32),
+	"shrub": Color(0.55, 0.62, 0.28),
+	"palm": Color(0.36, 0.68, 0.52),
+	"cactus": Color(0.48, 0.62, 0.40),
+	"grass_lawn": Color(0.52, 0.80, 0.44),
+	"grass_field": Color(0.72, 0.72, 0.36),
+}
 
 var _loader: Node = null
 var _active := false
@@ -69,6 +84,22 @@ var _selection_poly := PackedVector2Array()
 
 var _capture: ColorRect = null
 var _poly_draw: Control = null
+var _chip_row: HBoxContainer = null
+var _topdown_btn: Button = null
+## The dock's own slider rows, kept so a value pushed from ELSEWHERE (the
+## Tune-look modal's "Apply to brush"/"Apply to map" both push density and size
+## variance) moves the widget too. Without this the chip row and the slider
+## disagreed, and the next drag snapped the value back.
+var _density_row: Dictionary = {}
+var _size_var_row: Dictionary = {}
+## Ortho top-down paint (Phase 8). The drone has read a
+## `vegetation_edit_ortho` meta since the feature was written; nothing ever set
+## it, so the veg dock's top-down mode was dead code while terrain sculpt had
+## the equivalent button. Mirrors terrain_edit_ui._lock_drone_ortho.
+var _topdown := false
+var _we_mounted_drone := false
+var _saved_camera_projection := Camera3D.PROJECTION_PERSPECTIVE
+var _saved_camera_size := 70.0
 var _undo_btn: Button = null
 var _panel: PanelContainer = null
 var _status: Label = null
@@ -131,6 +162,8 @@ func set_paint_density(value: float) -> void:
 	# so a modal density isn't silently capped when pushed to the brush.
 	_density = clampf(value, 0.25, 3.0)
 	_spacing_m = _effective_spacing()
+	SliderSpinRowScript.set_values(_density_row, _density)
+	_refresh_chips()
 
 
 func get_paint_species() -> String:
@@ -156,6 +189,7 @@ func set_paint_species(species: String) -> void:
 	for i in _preset_buttons.size():
 		_style_tool_button(_preset_buttons[i], i == int(_preset))
 	_refresh_subspecies_dropdown()
+	_refresh_chips()
 
 
 func get_size_var() -> float:
@@ -165,6 +199,8 @@ func get_size_var() -> float:
 func set_size_var(value: float) -> void:
 	_size_var = clampf(value, 0.0, 0.5)
 	_apply_size_var_scales()
+	SliderSpinRowScript.set_values(_size_var_row, _size_var * 100.0)
+	_refresh_chips()
 
 
 func _apply_size_var_scales() -> void:
@@ -182,6 +218,7 @@ func set_brush_style(card: Dictionary) -> void:
 		_set_status("Brush look cleared — painting uses the map style")
 	else:
 		_set_status("Custom brush look set — paint to place trees with this look")
+	_refresh_chips()
 
 
 func has_brush_style() -> bool:
@@ -240,6 +277,21 @@ func _unhandled_input(event: InputEvent) -> void:
 				_finish_polygon(_poly_points)
 				get_viewport().set_input_as_handled()
 			return
+		# Per-tree Select actions. Guarded on a live pick so Delete never
+		# silently removes something the player can't see they had selected.
+		if not _picked_plant.is_empty():
+			if key.keycode == KEY_DELETE or key.keycode == KEY_BACKSPACE:
+				_delete_picked_plant()
+				get_viewport().set_input_as_handled()
+				return
+			if key.keycode == KEY_BRACKETLEFT:
+				_resize_picked_plant(0.85)
+				get_viewport().set_input_as_handled()
+				return
+			if key.keycode == KEY_BRACKETRIGHT:
+				_resize_picked_plant(1.18)
+				get_viewport().set_input_as_handled()
+				return
 
 
 func _on_capture_input(event: InputEvent) -> void:
@@ -281,57 +333,57 @@ func _on_capture_input(event: InputEvent) -> void:
 # ---------------------------------------------------------------------------
 
 func _panel_style() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.08, 0.1, 0.14, 0.96)
-	sb.set_corner_radius_all(8)
+	var sb := UITheme.panel_style(0.96)
 	sb.set_border_width_all(2)
-	sb.border_color = Color(0.2, 0.4, 0.6, 0.85)
 	sb.shadow_color = Color(0, 0, 0, 0.45)
 	sb.shadow_size = 6
 	return sb
 
 
 func _secondary_btn_style() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.12, 0.16, 0.22, 1.0)
-	sb.border_color = Color(0.25, 0.4, 0.55, 0.7)
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(4)
-	return sb
+	return UITheme.button_style("normal")
 
 
-func _toggle_btn_style(on: bool) -> StyleBoxFlat:
+## Toggle (tool / preset / shape) button faces. The OFF+hover face is the point:
+## every one of these 15 buttons used to render its hover state identically to
+## normal, so the dock gave no feedback at all about what was clickable.
+func _toggle_btn_style(on: bool, hover: bool = false) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
-	sb.set_corner_radius_all(4)
+	sb.set_corner_radius_all(UITheme.CORNER_RADIUS)
 	sb.set_border_width_all(1)
 	if on:
-		sb.bg_color = Color(0.15, 0.35, 0.22, 1.0)
-		sb.border_color = Color(0.3, 0.85, 0.45, 0.9)
+		sb.bg_color = Color(UITheme.C_PRIMARY, 0.30 if hover else 0.22)
+		sb.border_color = UITheme.C_PRIMARY
+	elif hover:
+		sb.bg_color = UITheme.C_PANEL_RAISED
+		sb.border_color = Color(UITheme.C_PRIMARY, 0.75)
 	else:
-		sb.bg_color = Color(0.1, 0.13, 0.18, 1.0)
-		sb.border_color = Color(0.22, 0.32, 0.45, 0.6)
+		sb.bg_color = UITheme.C_PANEL
+		sb.border_color = UITheme.C_BORDER
 	return sb
 
 
 func _style_section(lbl: Label, text: String) -> void:
 	lbl.text = text
-	lbl.add_theme_color_override("font_color", Color(0.5, 0.65, 0.8, 1.0))
-	lbl.add_theme_font_size_override("font_size", 11)
+	lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 
 
 func _style_muted(lbl: Label) -> void:
-	lbl.add_theme_color_override("font_color", Color(0.65, 0.72, 0.78, 1.0))
-	lbl.add_theme_font_size_override("font_size", 11)
+	lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 
 
 func _style_tool_button(btn: Button, on: bool) -> void:
 	btn.toggle_mode = true
 	btn.button_pressed = on
 	btn.add_theme_stylebox_override("normal", _toggle_btn_style(on))
-	btn.add_theme_stylebox_override("pressed", _toggle_btn_style(true))
-	btn.add_theme_stylebox_override("hover", _toggle_btn_style(on))
-	btn.add_theme_color_override("font_color", Color(0.85, 0.92, 0.95) if on else Color(0.6, 0.68, 0.75))
-	btn.add_theme_font_size_override("font_size", 12)
+	btn.add_theme_stylebox_override("pressed", _toggle_btn_style(true, true))
+	btn.add_theme_stylebox_override("hover", _toggle_btn_style(on, true))
+	btn.add_theme_stylebox_override("hover_pressed", _toggle_btn_style(true, true))
+	btn.add_theme_color_override("font_color", UITheme.C_TEXT if on else UITheme.C_TEXT_S)
+	btn.add_theme_color_override("font_hover_color", UITheme.C_TEXT)
+	btn.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +423,15 @@ func _build_ui() -> void:
 	col.add_theme_constant_override("separation", 4)
 	margin.add_child(col)
 
+	# Persistent state chips. Everything the brush will actually DO lives here —
+	# before this, active species/density/radius/brush-override were only ever
+	# implied by which buttons looked pressed, or buried in a status line that
+	# clipped (AUTOWRAP_OFF in an expanding row) and was overwritten by the next
+	# transient message.
+	_chip_row = HBoxContainer.new()
+	_chip_row.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	col.add_child(_chip_row)
+
 	var tool_row := HBoxContainer.new()
 	tool_row.add_theme_constant_override("separation", 6)
 	col.add_child(tool_row)
@@ -395,6 +456,13 @@ func _build_ui() -> void:
 	tune_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
 	tune_btn.pressed.connect(_open_preview_editor)
 	tool_row.add_child(tune_btn)
+	_topdown_btn = Button.new()
+	_topdown_btn.text = "Top-down"
+	_topdown_btn.tooltip_text = "Mount the survey drone and paint from a locked orthographic top-down view"
+	_topdown_btn.custom_minimum_size = Vector2(80, 28)
+	_topdown_btn.pressed.connect(func() -> void: _set_topdown(not _topdown))
+	_style_tool_button(_topdown_btn, false)
+	tool_row.add_child(_topdown_btn)
 	var exit_btn := Button.new()
 	exit_btn.text = "Exit"
 	exit_btn.custom_minimum_size = Vector2(52, 28)
@@ -450,12 +518,15 @@ func _build_ui() -> void:
 		shape_row.add_child(sb)
 		_shape_mode_buttons.append(sb)
 	_labeled_slider_row(shape_row, "Size m", 1.0, MAX_BRUSH_RADIUS_M, _brush_radius_m,
-		func(v: float) -> void: _brush_radius_m = v, 64)
-	_labeled_slider_row(shape_row, "Size var %", 0.0, 50.0, _size_var * 100.0,
+		func(v: float) -> void:
+			_brush_radius_m = v
+			_refresh_chips(), 64)
+	_size_var_row = _labeled_slider_pair(shape_row, "Size var %", 0.0, 50.0, _size_var * 100.0,
 		func(v: float) -> void:
 			_size_var = clampf(v / 100.0, 0.0, 0.5)
-			_apply_size_var_scales(), 56, 1.0)
-	_labeled_slider_row(shape_row, "Dens", 0.25, 3.0, _density,
+			_apply_size_var_scales()
+			_refresh_chips(), 56, 1.0)
+	_density_row = _labeled_slider_pair(shape_row, "Dens", 0.25, 3.0, _density,
 		func(v: float) -> void: set_paint_density(v), 56)
 
 	_progress_bar = ProgressBar.new()
@@ -483,10 +554,18 @@ func _build_ui() -> void:
 
 func _labeled_slider_row(parent: Control, label: String, min_v: float, max_v: float,
 		start: float, handler: Callable, slider_min_w: int = 80, step: float = -1.0) -> HBoxContainer:
-	var pair := SliderSpinRowScript.add(parent, label, min_v, max_v, start, handler,
+	return _labeled_slider_pair(parent, label, min_v, max_v, start, handler,
+		slider_min_w, step).get("row")
+
+
+## Same row, but returns the {row, slider, spin} triple so the caller can push
+## values back into the widget later (SliderSpinRow.set_values).
+func _labeled_slider_pair(parent: Control, label: String, min_v: float, max_v: float,
+		start: float, handler: Callable, slider_min_w: int = 80,
+		step: float = -1.0) -> Dictionary:
+	return SliderSpinRowScript.add(parent, label, min_v, max_v, start, handler,
 		func(lbl: Label, txt: String) -> void: _style_section(lbl, txt),
 		36, slider_min_w, 58, step)
-	return pair.get("row")
 
 
 func _layout_panel() -> void:
@@ -512,6 +591,7 @@ func _enter_mode() -> void:
 	_on_shape_mode_pressed(ShapeMode.BRUSH)
 	_refresh_subspecies_dropdown()
 	_layout_panel()
+	_refresh_chips()
 	_update_crosshair_prompt()
 	set_process(true)
 	move_to_front()
@@ -535,6 +615,10 @@ func _exit_mode() -> void:
 		_poly_draw.queue_redraw()
 	set_process(false)
 	visible = false
+	# Leaving the dock must also release the drone — otherwise the player is
+	# stranded in a locked top-down ortho view with no dock to turn it off.
+	if _topdown:
+		_set_topdown(false)
 	mode_changed.emit(false)
 	_clear_locked_selection()
 	_clear_crosshair_prompt()
@@ -579,6 +663,7 @@ func _clear_locked_selection() -> void:
 		_loader.call("clear_vegetation_highlight")
 	if _poly_draw != null:
 		_poly_draw.queue_redraw()
+	_refresh_chips()
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +717,11 @@ func _on_lmb_pressed() -> void:
 	if _shape_mode == ShapeMode.BRUSH:
 		if _tool == Tool.PAINT or _tool == Tool.CLEAR:
 			_begin_brush_stroke(Vector2(p.x, p.z))
+		elif _tool == Tool.SELECT:
+			# Select + Brush is the per-tree tool (Phase 8): the area shapes
+			# already cover "re-scatter this region", and there was previously
+			# no way at all to touch ONE plant.
+			_pick_single_plant(Vector2(p.x, p.z))
 		else:
 			_set_status("Brush paints/clears — switch tool, or use Circle/Rect to select")
 		return
@@ -963,6 +1053,7 @@ func _on_shape_mode_pressed(mode: ShapeMode) -> void:
 	for i in _shape_mode_buttons.size():
 		_style_tool_button(_shape_mode_buttons[i], i == int(mode))
 	_update_shape_prompt()
+	_refresh_chips()
 	if _loader != null and _loader.has_method("clear_vegetation_highlight"):
 		_loader.call("clear_vegetation_highlight")
 	if _poly_draw != null:
@@ -1044,6 +1135,7 @@ func _lock_selection(poly: PackedVector2Array) -> void:
 	if _loader != null and _loader.has_method("count_manual_bulk_in_polygon"):
 		manual_n = int(_loader.call("count_manual_bulk_in_polygon", poly))
 	_set_status("Selected area — change Type to re-scatter %d+ bulk (heroes untouched)" % manual_n)
+	_refresh_chips()
 
 
 # ---------------------------------------------------------------------------
@@ -1061,6 +1153,7 @@ func _on_preset_pressed(idx: int) -> void:
 	_spacing_m = _effective_spacing()
 	_apply_size_var_scales()
 	_refresh_subspecies_dropdown()
+	_refresh_chips()
 	if _selection_locked:
 		_queue_respecies()
 
@@ -1116,6 +1209,7 @@ func _on_subspecies_selected(idx: int) -> void:
 	if not defaults.is_empty():
 		_brush_card = defaults
 		_set_status("Loaded %s default look — paint to place" % VegSpeciesCatalog.label_for(sid))
+	_refresh_chips()
 	if _selection_locked:
 		_queue_respecies()
 
@@ -1123,6 +1217,7 @@ func _on_subspecies_selected(idx: int) -> void:
 func _set_tool(t: Tool) -> void:
 	if _tool == Tool.SELECT and t != Tool.SELECT:
 		_clear_locked_selection()
+		_picked_plant = {}
 	_tool = t
 	if _loader != null and _loader.has_method("reset_vegetation_highlight_cache"):
 		_loader.call("reset_vegetation_highlight_cache")
@@ -1131,6 +1226,7 @@ func _set_tool(t: Tool) -> void:
 	if _hero_section != null:
 		_hero_section.visible = t == Tool.PLACE
 	_update_shape_prompt()
+	_refresh_chips()
 
 
 func _update_shape_prompt() -> void:
@@ -1158,7 +1254,7 @@ func _update_shape_prompt() -> void:
 		Tool.SELECT:
 			match _shape_mode:
 				ShapeMode.BRUSH:
-					_set_status("Select — use Circle/Rect/Lasso to lock an area, then change Type")
+					_set_status("Select — click ONE plant to pick it (Del deletes, [ / ] resize); Circle/Rect/Lasso locks an area")
 				ShapeMode.POLYGON:
 					_set_status("Select — use Circle or Rect to lock an area, then change Type")
 				_:
@@ -1169,6 +1265,192 @@ func _update_shape_prompt() -> void:
 func _set_status(msg: String) -> void:
 	if _status != null:
 		_status.text = msg
+
+
+# ---------------------------------------------------------------------------
+# Top-down ortho paint (survey drone)
+# ---------------------------------------------------------------------------
+
+func _set_topdown(on: bool) -> void:
+	_topdown = on
+	if _topdown_btn != null:
+		_style_tool_button(_topdown_btn, on)
+	_lock_drone_ortho(on)
+	if _topdown:
+		_set_status("Top-down paint — WASD repositions · paint with LMB as usual")
+	else:
+		_update_shape_prompt()
+
+
+## Mount the survey drone (if the player isn't already on it), lock it to a
+## top-down orthographic view, and set the meta the drone reads. Exactly the
+## terrain-sculpt flow (terrain_edit_ui._lock_drone_ortho) against the veg meta.
+func _lock_drone_ortho(on: bool) -> void:
+	var main := get_tree().get_first_node_in_group("main_scene") if is_inside_tree() else null
+	var player := main.get_node_or_null("Player") as CharacterBody3D if main != null else null
+	var drone := main.get_node_or_null("FPVDrone") if main != null else null
+	# No scene / no drone are the same outcome: the toggle must fall back OFF.
+	# Returning early on a null main left `_topdown` true with nothing locked,
+	# so the button read "on" while the camera never moved.
+	if player == null or drone == null:
+		_topdown = false
+		if _topdown_btn != null:
+			_style_tool_button(_topdown_btn, false)
+		if on:
+			_set_status("Top-down needs the survey drone")
+		return
+	if on:
+		if player.has_method("_release_mouse"):
+			player.call("_release_mouse")
+		_we_mounted_drone = false
+		if not drone.is_mounted and player.has_method("_mount_vehicle"):
+			player.call("_mount_vehicle", drone)
+			_we_mounted_drone = true
+		drone.set_meta("vegetation_edit_ortho", true)
+		var cam := _find_drone_camera(drone)
+		if cam != null:
+			_saved_camera_projection = cam.projection
+			_saved_camera_size = cam.size
+			cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+			cam.size = maxf(_brush_radius_m * 8.0, 120.0)
+	else:
+		drone.set_meta("vegetation_edit_ortho", false)
+		var cam2 := _find_drone_camera(drone)
+		if cam2 != null:
+			cam2.projection = _saved_camera_projection
+			cam2.size = _saved_camera_size
+		if _we_mounted_drone and drone.is_mounted and player.has_method("_dismount_vehicle"):
+			player.call("_dismount_vehicle")
+		_we_mounted_drone = false
+
+
+func _find_drone_camera(drone: Node) -> Camera3D:
+	for child in drone.get_children():
+		if child is Camera3D:
+			return child as Camera3D
+		for sub in child.get_children():
+			if sub is Camera3D:
+				return sub as Camera3D
+	return null
+
+
+# ---------------------------------------------------------------------------
+# State chips
+# ---------------------------------------------------------------------------
+
+## The chip row's content as pure data — [{text, color}] — so the dock's
+## visible state can be asserted offline without building a single Control
+## (see vegetation/veg_dock_state_selftest.gd).
+func chip_specs() -> Array:
+	var chips: Array = []
+	chips.append({
+		"text": "%s: %s" % [_tool_name(_tool), _species_chip_label()],
+		"color": species_chip_color(_paint_species, _preset),
+	})
+	chips.append({"text": "×%.2f dens" % _density, "color": UITheme.C_PRIMARY})
+	if _shape_mode == ShapeMode.BRUSH:
+		chips.append({"text": "r %.1f m" % _brush_radius_m, "color": UITheme.C_TEXT_S})
+	else:
+		chips.append({"text": _shape_name(_shape_mode), "color": UITheme.C_TEXT_S})
+	if _size_var > 0.005:
+		chips.append({"text": "±%.0f%% size" % (_size_var * 100.0), "color": UITheme.C_TEXT_S})
+	if has_brush_style():
+		# The single most surprising piece of hidden state: painting carries a
+		# per-instance look override that nothing else on screen hints at.
+		chips.append({"text": "custom look", "color": UITheme.C_AMBER})
+	if _selection_locked:
+		var area := VegetationPaint.polygon_area(_selection_poly)
+		chips.append({
+			"text": "selection %s" % _area_chip_text(area),
+			"color": UITheme.C_INFO,
+		})
+	if not _picked_plant.is_empty():
+		chips.append({
+			"text": "picked %s ×%.2f" % [
+				VegSpeciesCatalog.label_for(str(_picked_plant.get("species", ""))),
+				float(_picked_plant.get("scale", 1.0))],
+			"color": UITheme.C_INFO,
+		})
+	return chips
+
+
+static func _tool_name(t: Tool) -> String:
+	match t:
+		Tool.PLACE:
+			return "Place"
+		Tool.CLEAR:
+			return "Clear"
+		Tool.SELECT:
+			return "Select"
+		_:
+			return "Paint"
+
+
+static func _shape_name(m: ShapeMode) -> String:
+	match m:
+		ShapeMode.CIRCLE:
+			return "circle"
+		ShapeMode.RECT:
+			return "rect"
+		ShapeMode.LASSO:
+			return "lasso"
+		ShapeMode.POLYGON:
+			return "polygon"
+		_:
+			return "brush"
+
+
+static func _area_chip_text(area_m2: float) -> String:
+	if area_m2 >= 10000.0:
+		return "%.2f ha" % (area_m2 / 10000.0)
+	return "%.0f m²" % area_m2
+
+
+## Swatch for the active species. Falls back to the preset when the subspecies
+## dropdown is on "— mix —" (no single species selected).
+static func species_chip_color(species: String, preset: int) -> Color:
+	if not species.is_empty():
+		var fam := VegSpeciesCatalog.mesh_family(species)
+		if FAMILY_CHIP_COLORS.has(fam):
+			return FAMILY_CHIP_COLORS[fam]
+	match preset:
+		VegetationPaint.Preset.PINE:
+			return FAMILY_CHIP_COLORS["pine"]
+		VegetationPaint.Preset.DECIDUOUS:
+			return FAMILY_CHIP_COLORS["deciduous"]
+		VegetationPaint.Preset.SHRUB:
+			return FAMILY_CHIP_COLORS["shrub"]
+		VegetationPaint.Preset.GRASS_LAWN:
+			return FAMILY_CHIP_COLORS["grass_lawn"]
+		VegetationPaint.Preset.GRASS_FIELD:
+			return FAMILY_CHIP_COLORS["grass_field"]
+	return UITheme.C_LAVENDER
+
+
+func _species_chip_label() -> String:
+	if _tool == Tool.PLACE:
+		var hero := HeroTreeCatalog.find(_hero_preset)
+		return str(hero.get("label", _hero_preset)) if not hero.is_empty() else _hero_preset
+	if not _paint_species.is_empty():
+		return VegSpeciesCatalog.label_for(_paint_species)
+	return _preset_label()
+
+
+func _refresh_chips() -> void:
+	if _chip_row == null:
+		return
+	for child in _chip_row.get_children():
+		child.queue_free()
+	for spec in chip_specs():
+		var color: Color = spec.get("color", UITheme.C_TEXT_S)
+		var pill := PanelContainer.new()
+		pill.add_theme_stylebox_override("panel", UITheme.chip_style(color))
+		var lbl := Label.new()
+		lbl.text = str(spec.get("text", ""))
+		lbl.add_theme_color_override("font_color", color.lightened(0.35))
+		lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		pill.add_child(lbl)
+		_chip_row.add_child(pill)
 
 
 func _set_busy(on: bool) -> void:
@@ -1196,6 +1478,13 @@ func _crosshair_ui() -> Node:
 	if _crosshair_cache != null and is_instance_valid(_crosshair_cache):
 		return _crosshair_cache
 	_crosshair_cache = null
+	# _set_tool / _update_shape_prompt reach here, and the loader can call those
+	# before this dock is inside the tree (as the offline dock selftest does).
+	# is_inside_tree(), NOT get_tree() == null: calling get_tree() off-tree
+	# PRINTS an engine error before returning null, so the guard would be the
+	# thing generating the noise it exists to avoid.
+	if not is_inside_tree():
+		return null
 	var main := get_tree().get_first_node_in_group("main_scene")
 	if main != null:
 		_crosshair_cache = main.get_node_or_null("UILayer/CrosshairUI")
@@ -1248,7 +1537,7 @@ func _update_crosshair_prompt() -> void:
 				ShapeMode.POLYGON:
 					_set_crosshair_prompt("Click corners; Enter/RMB to lock selection")
 				ShapeMode.BRUSH:
-					_set_crosshair_prompt("Use Circle/Rect to lock a selection")
+					_set_crosshair_prompt("Click a plant to pick it — Del deletes, [ / ] resize")
 				_:
 					_set_crosshair_prompt("Drag LMB — release to lock selection")
 
@@ -1355,8 +1644,79 @@ func _place_hero_at_crosshair() -> void:
 		_set_status("Click terrain to place hero tree")
 		return
 	var p: Vector3 = hit
+	# Hero placement is the one paint action that never pushed an undo entry —
+	# a misplaced 20 m tree could only be removed by hunting for it.
+	_push_undo("place hero")
 	if bool(_loader.call("place_hero_tree", _hero_preset, p.x, p.z, _hero_scale, p.y)):
 		vegetation_applied.emit()
-		_set_status("Placed hero tree")
+		_set_status("Placed hero tree — Undo removes it")
 	else:
 		_set_status("Could not place hero (limit reached?)")
+
+
+# ---------------------------------------------------------------------------
+# Per-tree Select
+# ---------------------------------------------------------------------------
+
+## The plant last picked with Select+Brush: {kind, species, index, x, z, scale}.
+## Held only to render the readout — the (species, index) handle is re-resolved
+## from the world position on every action, because any edit reorders the array
+## the index points into.
+var _picked_plant: Dictionary = {}
+const PICK_RADIUS_M := 6.0
+
+
+func _pick_single_plant(world_xz: Vector2) -> void:
+	if _loader == null or not _loader.has_method("pick_plant_at"):
+		return
+	var desc: Dictionary = _loader.call("pick_plant_at", world_xz, PICK_RADIUS_M)
+	if desc.is_empty():
+		_picked_plant = {}
+		_set_status("No painted plant within %.0f m — Select+Brush picks ONE plant (auto-scattered OSM trees aren't editable individually)" % PICK_RADIUS_M)
+		_refresh_chips()
+		return
+	_picked_plant = desc
+	_set_status("%s · Del deletes · [ / ] resize · click elsewhere to pick another"
+		% _picked_label(desc))
+	_refresh_chips()
+
+
+static func _picked_label(desc: Dictionary) -> String:
+	var species := str(desc.get("species", ""))
+	var name := VegSpeciesCatalog.label_for(species) if not species.is_empty() else "plant"
+	if str(desc.get("kind", "")) == "hero":
+		name = "%s (hero)" % name
+	return "%s ×%.2f, %.1f m away" % [name, float(desc.get("scale", 1.0)),
+		float(desc.get("dist_m", 0.0))]
+
+
+func _delete_picked_plant() -> void:
+	if _picked_plant.is_empty() or _loader == null \
+			or not _loader.has_method("delete_plant_at"):
+		return
+	_push_undo("delete plant")
+	var at := Vector2(float(_picked_plant.get("x", 0.0)), float(_picked_plant.get("z", 0.0)))
+	var gone: Dictionary = _loader.call("delete_plant_at", at, PICK_RADIUS_M)
+	if gone.is_empty():
+		_set_status("Nothing deleted — pick a plant first")
+		return
+	vegetation_applied.emit()
+	_picked_plant = {}
+	_set_status("Deleted %s — Undo restores it" % _picked_label(gone))
+	_refresh_chips()
+
+
+func _resize_picked_plant(factor: float) -> void:
+	if _picked_plant.is_empty() or _loader == null \
+			or not _loader.has_method("scale_plant_at"):
+		return
+	_push_undo("resize plant")
+	var at := Vector2(float(_picked_plant.get("x", 0.0)), float(_picked_plant.get("z", 0.0)))
+	var changed: Dictionary = _loader.call("scale_plant_at", at, factor, PICK_RADIUS_M)
+	if changed.is_empty():
+		return
+	# Re-read the record so the readout shows the NEW scale, not the old one.
+	_picked_plant = _loader.call("pick_plant_at", at, PICK_RADIUS_M)
+	vegetation_applied.emit()
+	_set_status("Resized %s" % _picked_label(_picked_plant))
+	_refresh_chips()

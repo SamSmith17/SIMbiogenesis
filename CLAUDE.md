@@ -111,6 +111,15 @@ Godot.exe.exe --headless --path . --script vegetation/veg_species_registry_selft
 # VegLeafFall's drop window vs spring leaf-out, and the VegLitterMask
 # sizing/conifer-exclusion/seasonal-strength rules):
 Godot.exe.exe --headless --path . --script vegetation/veg_phenology_selftest.gd
+# Veg paint dock state (offline — Phase 8: the chip row's pure data model, the
+# tool/shape/species state machine over a REAL instantiated dock, and the
+# per-tree Select primitives on VegetationLayer. Two traps this file exists to
+# close: the dock references CursorController at parse time, so it must be
+# load()ed inside _initialize (a const preload silently fails and every
+# dock.call() no-ops while the suite still says PASS); and the suite runs on the
+# first PROCESS frame because the SceneTree root is not inside the tree during
+# _initialize, so an added child never gets _ready() and no Controls exist):
+Godot.exe.exe --headless --path . --script vegetation/veg_dock_state_selftest.gd
 # Veg tier rings + impostor offline checks (Phase 3: ring math incl.
 # closest-corner boundary rule, build-time tier assignment over both runtimes,
 # force_far NEAR-ring exemption, impostor bake-key stability/quad geometry/
@@ -267,6 +276,12 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # a regression run never mutates the player's site (verify after: the file is
 # back at its original version/cleared/patch counts with 0 fills):
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=areafill --shots-dir=<label> --quit-after-capture
+# Veg paint dock + Tune-look visual check (WINDOWED — veg overhaul Phase 8):
+# opens the V dock through its real entry point and shoots the chip row in four
+# tool states, then opens Tune look…, calls Apply, and asserts the modal STAYS
+# OPEN (Phase 8 made applying iterative instead of close-on-apply). Read-only —
+# it never paints or persists:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=vegdock --shots-dir=<label> --quit-after-capture
 # Ambient resource-flow regression guard (WINDOWED — the harness hard no-ops
 # under --headless; no screenshots, console-only): builds a primed pond+siphon+
 # culvert-outlet, keeps SystemGraphView.visible=false the ENTIRE time (graph
@@ -762,6 +777,29 @@ Loader API: `apply_area_fill(idx, {species, density, height_m, replace})`,
 `_test_area_fill_*` checks in `auto_vegetation_selftest.gd`. NOT yet done:
 incremental per-chunk rebuild — a fill currently triggers the normal full
 auto-veg rebuild.
+
+**Veg UI (Phase 8).** The V dock is on `UITheme` (panel/button/chip styles,
+`LAYER_PANEL`; the Tune-look modal moved to its OWN CanvasLayer at
+`LAYER_MODAL` — the two shared layer 25, so which drew on top came down to
+sibling order). Every toggle button now has a real hover face; before this all
+15 rendered hover identically to normal. A persistent **chip row** carries the
+state that used to be implied or buried in a clipping status label: tool +
+species (family-coloured swatch), density, brush radius or shape, size
+variance, a **custom look** badge for the invisible per-brush override, the
+locked selection's area, and the picked plant. `chip_specs()` is pure data so
+the dock's visible state is assertable offline. **Tune look… no longer closes
+on Apply** — it re-baselines and stays open, each `_values`-keyed slider gets a
+per-slider revert (↺) plus an amber "changed since last apply" label, and the
+Apply button counts pending edits. **Select + Brush is the per-tree tool**:
+click picks ONE plant (`VegetationLayer.nearest_plant` → loader
+`pick_plant_at`/`delete_plant_at`/`scale_plant_at`), Del deletes, `[`/`]`
+resize; heroes are pickable too and hero placement finally pushes an undo
+entry. **Top-down** mounts the survey drone and locks it to an ortho view via
+the `vegetation_edit_ortho` meta the drone had always read but nothing ever
+set; leaving the dock releases it. Drone WASD is gated while a LineEdit/SpinBox
+holds focus (typing a brush radius used to fly the drone). The crosshair area
+focus and the paint selection now own SEPARATE highlight meshes. Selftest:
+`vegetation/veg_dock_state_selftest.gd`.
 
 **Vegetation paint + live preview (`scenes/ui/vegetation_edit_ui.gd`,
 `scenes/ui/vegetation_preview_editor.gd`).** V toggles the bottom paint dock
