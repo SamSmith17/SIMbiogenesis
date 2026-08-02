@@ -33,43 +33,53 @@ const SPECS := {
 	"deciduous": {"width": 11.0, "height": 4.5, "trunk_w": 0.45, "trunk_h": 4.5,
 		"top": Color(0.18, 0.38, 0.10), "bottom": Color(0.24, 0.16, 0.06),
 		"highlight": Color(0.42, 0.52, 0.16),
-		"bark": Color(0.18, 0.12, 0.07)},
+		"bark": Color(0.18, 0.12, 0.07),
+		"crown_base": 0.42, "tilt_low": 75.0, "tilt_high": 26.0, "lateral": 0.45},
 	"chestnut": {"width": 13.0, "height": 5.5, "trunk_w": 0.55, "trunk_h": 5.0,
 		"top": Color(0.16, 0.34, 0.09), "bottom": Color(0.22, 0.14, 0.05),
 		"highlight": Color(0.38, 0.48, 0.14),
-		"bark": Color(0.22, 0.14, 0.08)},
+		"bark": Color(0.22, 0.14, 0.08),
+		"crown_base": 0.3, "tilt_low": 80.0, "tilt_high": 34.0, "lateral": 0.55},
 	"maple": {"width": 12.0, "height": 5.0, "trunk_w": 0.48, "trunk_h": 4.8,
 		"top": Color(0.20, 0.40, 0.10), "bottom": Color(0.28, 0.18, 0.06),
 		"highlight": Color(0.55, 0.35, 0.10),
-		"bark": Color(0.20, 0.14, 0.08)},
+		"bark": Color(0.20, 0.14, 0.08),
+		"crown_base": 0.4, "tilt_low": 70.0, "tilt_high": 22.0, "lateral": 0.55},
 	"cottonwood": {"width": 14.0, "height": 6.0, "trunk_w": 0.60, "trunk_h": 5.5,
 		"top": Color(0.22, 0.42, 0.12), "bottom": Color(0.26, 0.20, 0.08),
 		"highlight": Color(0.45, 0.55, 0.18),
-		"bark": Color(0.24, 0.20, 0.14)},
+		"bark": Color(0.24, 0.20, 0.14),
+		"crown_base": 0.38, "tilt_low": 72.0, "tilt_high": 24.0, "lateral": 0.5},
 	"aspen": {"width": 8.0, "height": 5.5, "trunk_w": 0.28, "trunk_h": 5.2,
 		"top": Color(0.25, 0.45, 0.12), "bottom": Color(0.30, 0.22, 0.08),
 		"highlight": Color(0.55, 0.62, 0.20),
-		"bark": Color(0.85, 0.88, 0.82)},
+		"bark": Color(0.85, 0.88, 0.82),
+		"crown_base": 0.58, "tilt_low": 44.0, "tilt_high": 14.0, "lateral": 0.6},
 	"birch": {"width": 7.5, "height": 5.0, "trunk_w": 0.25, "trunk_h": 5.0,
 		"top": Color(0.20, 0.40, 0.12), "bottom": Color(0.24, 0.18, 0.07),
 		"highlight": Color(0.40, 0.52, 0.18),
-		"bark": Color(0.92, 0.92, 0.90)},
+		"bark": Color(0.92, 0.92, 0.90),
+		"crown_base": 0.55, "tilt_low": 48.0, "tilt_high": 16.0, "lateral": 0.65},
 	"beech": {"width": 12.5, "height": 5.2, "trunk_w": 0.50, "trunk_h": 5.0,
 		"top": Color(0.15, 0.36, 0.10), "bottom": Color(0.22, 0.16, 0.06),
 		"highlight": Color(0.38, 0.50, 0.15),
-		"bark": Color(0.35, 0.30, 0.22)},
+		"bark": Color(0.35, 0.30, 0.22),
+		"crown_base": 0.34, "tilt_low": 74.0, "tilt_high": 26.0, "lateral": 0.6},
 	"apple": {"width": 7.0, "height": 3.8, "trunk_w": 0.32, "trunk_h": 2.8,
 		"top": Color(0.22, 0.42, 0.10), "bottom": Color(0.28, 0.16, 0.06),
 		"highlight": Color(0.55, 0.25, 0.18),
-		"bark": Color(0.22, 0.14, 0.08)},
+		"bark": Color(0.22, 0.14, 0.08),
+		"crown_base": 0.28, "tilt_low": 72.0, "tilt_high": 34.0, "lateral": 0.45},
 	"pear": {"width": 6.5, "height": 4.2, "trunk_w": 0.30, "trunk_h": 3.2,
 		"top": Color(0.20, 0.40, 0.10), "bottom": Color(0.26, 0.15, 0.05),
 		"highlight": Color(0.50, 0.55, 0.18),
-		"bark": Color(0.20, 0.13, 0.07)},
+		"bark": Color(0.20, 0.13, 0.07),
+		"crown_base": 0.32, "tilt_low": 64.0, "tilt_high": 24.0, "lateral": 0.45},
 	"orange": {"width": 6.0, "height": 3.5, "trunk_w": 0.28, "trunk_h": 2.4,
 		"top": Color(0.12, 0.36, 0.10), "bottom": Color(0.18, 0.22, 0.06),
 		"highlight": Color(0.95, 0.55, 0.10),
-		"bark": Color(0.25, 0.16, 0.08)},
+		"bark": Color(0.25, 0.16, 0.08),
+		"crown_base": 0.26, "tilt_low": 74.0, "tilt_high": 36.0, "lateral": 0.5},
 	"avocado": {"width": 9.0, "height": 5.0, "trunk_w": 0.40, "trunk_h": 3.5,
 		"top": Color(0.08, 0.28, 0.10), "bottom": Color(0.12, 0.18, 0.06),
 		"highlight": Color(0.20, 0.40, 0.12),
@@ -147,15 +157,18 @@ const SPECS := {
 	"walnut": {"width": 12.0, "height": 5.5, "trunk_w": 0.55, "trunk_h": 5.0,
 		"top": Color(0.17, 0.36, 0.10), "bottom": Color(0.22, 0.16, 0.06),
 		"highlight": Color(0.40, 0.50, 0.16),
-		"bark": Color(0.24, 0.18, 0.12)},
+		"bark": Color(0.24, 0.18, 0.12),
+		"crown_base": 0.36, "tilt_low": 76.0, "tilt_high": 28.0, "lateral": 0.55},
 	"olive": {"width": 6.5, "height": 3.6, "trunk_w": 0.45, "trunk_h": 2.2,
 		"top": Color(0.28, 0.38, 0.22), "bottom": Color(0.22, 0.28, 0.16),
 		"highlight": Color(0.55, 0.60, 0.38),
-		"bark": Color(0.32, 0.28, 0.22)},
+		"bark": Color(0.32, 0.28, 0.22),
+		"crown_base": 0.24, "tilt_low": 80.0, "tilt_high": 40.0, "lateral": 0.55},
 	"mango": {"width": 10.0, "height": 5.5, "trunk_w": 0.50, "trunk_h": 3.0,
 		"top": Color(0.10, 0.30, 0.09), "bottom": Color(0.14, 0.20, 0.07),
 		"highlight": Color(0.30, 0.46, 0.14),
-		"bark": Color(0.22, 0.16, 0.10)},
+		"bark": Color(0.22, 0.16, 0.10),
+		"crown_base": 0.3, "tilt_low": 78.0, "tilt_high": 30.0, "lateral": 0.6},
 	"banana": {"width": 4.0, "height": 3.5, "trunk_w": 0.30, "trunk_h": 2.0,
 		"top": Color(0.20, 0.46, 0.14), "bottom": Color(0.16, 0.36, 0.10),
 		"highlight": Color(0.45, 0.65, 0.22),
@@ -167,7 +180,8 @@ const SPECS := {
 	"acacia": {"width": 12.0, "height": 4.0, "trunk_w": 0.40, "trunk_h": 3.5,
 		"top": Color(0.22, 0.36, 0.12), "bottom": Color(0.26, 0.24, 0.10),
 		"highlight": Color(0.48, 0.54, 0.20),
-		"bark": Color(0.26, 0.20, 0.14)},
+		"bark": Color(0.26, 0.20, 0.14),
+		"crown_base": 0.52, "tilt_low": 84.0, "tilt_high": 52.0, "lateral": 0.5},
 }
 
 
@@ -565,29 +579,40 @@ static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> Arr
 			trunk_w * 1.35, collar_h, collar_base, angle, Vector3(0.0, 0.75, 0.0),
 			_trunk_taper_top(settings, "deciduous"), Vector3.ZERO, trunk_w * 0.72)
 
-	var clusters := _deciduous_cluster_layout(crown_w, crown_h, trunk_h, settings)
-
 	var is_near_lod := bool(settings.get("deciduous_leaf_shells_enabled", true))
-	if is_near_lod:
-		# Fractal bough skeleton: self-similar forks fill the crown so the tree reads
-		# as a real branching structure once the leaf shells drop in winter.
-		_build_fractal_branches(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
-			trunk_w, trunk_h, crown_w, crown_h, settings)
-	else:
+	# The skeleton decides where foliage goes at BOTH tiers. FAR builds it with
+	# emit=false (tips only, no bark geometry) so its cards land on the same
+	# anchors the NEAR shells use — the impostor atlas is baked from the NEAR
+	# mesh, so a FAR silhouette that disagrees shows up as a pop at the ring
+	# boundary.
+	var tips := _build_fractal_branches(trunk_verts, trunk_uvs, trunk_normals,
+		trunk_indices, trunk_w, trunk_h, crown_w, crown_h, settings, is_near_lod)
+	var clusters := _clusters_from_tips(tips, crown_w, crown_h, trunk_h, settings)
+
+	if not is_near_lod:
 		var branch_max := clampi(int(round(float(settings.get("deciduous_branch_count", 4)))), 0, 12)
 		var branch_thick := float(settings.get("deciduous_branch_thickness", 1.0))
 		var branch_reach := float(settings.get("deciduous_branch_reach", 1.0))
-		var branch_base_y := float(settings.get("deciduous_branch_base", 0.82))
+		var crown_base_far := clampf(float(settings.get("deciduous_crown_base",
+			settings.get("deciduous_branch_base", 0.45))), 0.05, 0.92)
 		var branches_added := 0
 		for i in clusters.size():
 			var c: Dictionary = clusters[i]
 			var pos: Vector3 = c["pos"]
-			if i > 0 and branches_added < branch_max:
-				_add_branch_card(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
-					Vector3(0.0, trunk_h * branch_base_y, 0.0),
-					pos + Vector3(0.0, -float(c["h"]) * 0.25 * branch_reach, 0.0),
-					trunk_w * 0.32 * branch_thick)
-				branches_added += 1
+			if branches_added >= branch_max:
+				break
+			# Attach each card at the height its own cluster sits at, clamped into
+			# the crown-bearing trunk. Fanning every card from ONE point looked
+			# acceptable when the clusters were a tidy ring; against real branch
+			# tips it would splay from a single knot.
+			var attach_t := clampf(
+				inverse_lerp(trunk_h * crown_base_far, trunk_h * 1.05, pos.y), 0.0, 1.0)
+			var attach_y := lerpf(trunk_h * crown_base_far, trunk_h * 0.98, attach_t)
+			_add_branch_card(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
+				Vector3(0.0, attach_y, 0.0),
+				pos + Vector3(0.0, -float(c["h"]) * 0.25 * branch_reach, 0.0),
+				trunk_w * 0.32 * branch_thick)
+			branches_added += 1
 
 	var mesh := ArrayMesh.new()
 	var trunk_arr: Array = []
@@ -621,7 +646,7 @@ static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> Arr
 			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, proxy_arr)
 			var proxy_mat := _deciduous_shadow_proxy_material(settings)
 			mesh.surface_set_material(1, proxy_mat)
-		var shell_arr := _build_leaf_shell_canopy(crown_w, crown_h, trunk_h, settings)
+		var shell_arr := _build_leaf_shell_canopy(crown_w, crown_h, trunk_h, settings, clusters)
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, shell_arr)
 		var leaf_mat := leaf_canopy_material_for_species("deciduous", settings)
 		leaf_mat.render_priority = 1
@@ -655,18 +680,26 @@ static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> Arr
 ## grid), COLOR.r = shell depth (0 inner .. 1 outer), COLOR.g = normalized tree
 ## height (for wind). Stacked shells + per-shell leaf gaps read as a volumetric
 ## canopy of discrete leaves (see leaf_canopy.gdshader).
+## `clusters` comes from the branch skeleton (_clusters_from_tips); empty falls
+## back to the abstract ring layout.
 static func _build_leaf_shell_canopy(crown_w: float, crown_h: float, trunk_h: float,
-		settings: Dictionary) -> Array:
-	# Floor the shell count too (legacy maps saved ~5) so stacked shells fill the
-	# crown volume — pairs with the leaf-grid density floor in _apply_leaf_canopy_uniforms.
-	var shells := clampi(maxi(int(round(float(settings.get("deciduous_leaf_shell_count", 4)))), 7), 2, 10)
+		settings: Dictionary, clusters_in: Array = []) -> Array:
+	# NO shell-count floor. The old `maxi(..., 7)` silently promoted the LOW (3)
+	# and MEDIUM (5) graphics tiers to 7 shells, so the headline deciduous
+	# quality knob was inert below High while still costing shells × clusters ×
+	# 64 tris. Foliage now sits on real branch tips, which breaks the volume up
+	# on its own, so fewer shells still read as a dense canopy.
+	var shells := clampi(int(round(float(settings.get("deciduous_leaf_shell_count", 5)))), 2, 10)
 	var lump := clampf(float(settings.get("deciduous_leaf_lump", 0.18)), 0.0, 0.6)
 	var rings := 4
 	var segs := 8
-	# Fill more of the crown core so the stacked shells read as a solid leafy
-	# volume instead of a thin speckled rind (the "sparse canopy" bug). Independent
-	# of the saved shape params, so existing maps get denser trees without re-tuning.
-	var inner_frac := 0.42
+	# How deep the shell stack reaches into the cluster. With MANY shells they can
+	# start deep (0.42) and still overlap into a solid volume; with FEW they must
+	# hug the surface or the outer shell's leaf gaps have nothing behind them and
+	# the canopy reads as wireframe. This is what makes a low shell count a
+	# cheaper tree rather than a broken one — it matters now that the quality
+	# tiers actually reach the builder.
+	var inner_frac := lerpf(0.74, 0.42, clampf((float(shells) - 2.0) / 8.0, 0.0, 1.0))
 	var total_h := maxf(trunk_h + crown_h, 0.001)
 
 	var verts := PackedVector3Array()
@@ -676,7 +709,9 @@ static func _build_leaf_shell_canopy(crown_w: float, crown_h: float, trunk_h: fl
 	var indices := PackedInt32Array()
 	var row_stride := segs + 1
 
-	var clusters := _deciduous_cluster_layout(crown_w, crown_h, trunk_h, settings)
+	var clusters := clusters_in
+	if clusters.is_empty():
+		clusters = _deciduous_cluster_layout(crown_w, crown_h, trunk_h, settings)
 
 	for cluster in clusters:
 		var center: Vector3 = cluster["pos"]
@@ -952,41 +987,108 @@ const _BRANCH_SEED := 0x2f9a37
 ## Cost is bounded by levels + children: e.g. 5 primaries × Σ children^k over
 ## `levels` levels. Defaults stay well under ~250 segments (a few hundred quads on
 ## the shared mesh), so per-instance cost is unchanged (MultiMesh reuses one mesh).
+## `emit` false collects TIPS ONLY (no bark geometry) — the FAR tier needs the
+## same anchor points so its cards share the NEAR silhouette, without paying for
+## a skeleton it never draws.
 static func _build_fractal_branches(verts: PackedVector3Array, uvs: PackedVector2Array,
 		normals: PackedVector3Array, indices: PackedInt32Array,
 		trunk_w: float, trunk_h: float, crown_w: float, crown_h: float,
-		settings: Dictionary) -> Array:
+		settings: Dictionary, emit: bool = true) -> Array:
 	var levels := clampi(int(round(float(settings.get("deciduous_branch_levels", 4)))), 1, 5)
 	var primaries := clampi(int(round(float(settings.get("deciduous_branch_count", 5)))), 2, 12)
 	var children := clampi(int(round(float(settings.get("deciduous_branch_split", 3)))), 2, 4)
 	var thick := maxf(float(settings.get("deciduous_branch_thickness", 1.0)), 0.05)
 	var reach := maxf(float(settings.get("deciduous_branch_reach", 1.0)), 0.2)
-	var base_frac := clampf(float(settings.get("deciduous_branch_base", 0.82)), 0.2, 1.0)
 	var fork_deg := clampf(float(settings.get("deciduous_branch_angle", 38.0)), 8.0, 75.0)
 	var len_ratio := clampf(float(settings.get("deciduous_branch_length_ratio", 0.72)), 0.45, 0.92)
 	var droop := clampf(float(settings.get("deciduous_branch_droop", 0.12)), -0.6, 0.6)
 	var gnarl := clampf(float(settings.get("deciduous_branch_gnarl", 0.22)), 0.0, 1.0)
-
+	var lateral := clampf(float(settings.get("deciduous_branch_lateral", 0.45)), 0.0, 1.0)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _BRANCH_SEED
 	var tips: Array = []
-	var start_y := trunk_h * base_frac
 	var primary_len := crown_h * 0.55 * reach
 	var primary_w := trunk_w * 0.60 * thick
-	for i in primaries:
-		var t := float(i) / maxf(float(primaries), 1.0)
-		# Bases march up the upper trunk; lower forks tilt outward, higher ones
-		# reach up — the classic vase/oak crown spread.
-		var by := lerpf(start_y, trunk_h * 1.03, t)
-		var az := float(i) * TAU * 0.618034 + rng.randf() * 0.6
-		var out_tilt := deg_to_rad(lerpf(58.0, 28.0, t))
-		var dir := Vector3(cos(az) * sin(out_tilt), cos(out_tilt), sin(az) * sin(out_tilt)).normalized()
-		var plen := primary_len * lerpf(1.0, 0.68, t)
+	for place in deciduous_primary_placements(trunk_w, trunk_h, settings, rng):
+		var pl: Dictionary = place
+		var t := float(pl["t"])
+		# Lowest limbs are the LONGEST — that is what gives a broadleaf its wide
+		# skirt and carries foliage down to the crown base instead of leaving a
+		# bare pole under a tuft.
+		var plen := primary_len * lerpf(1.2, 0.68, t)
 		var pw := primary_w * lerpf(1.0, 0.72, t)
 		_grow_branch(verts, uvs, normals, indices, tips,
-			Vector3(0.0, by, 0.0), dir, plen, pw, 1, levels, children,
-			fork_deg, len_ratio, droop, gnarl, rng)
+			pl["origin"], pl["dir"], plen, pw, 1, levels, children,
+			fork_deg, len_ratio, droop, gnarl, lateral, rng, emit)
+	# Apex leader: without a limb continuing the trunk the crown has no top, and
+	# the foliage stack closed over a hollow — the notch visible on every
+	# mid-distance broadleaf.
+	_grow_branch(verts, uvs, normals, indices, tips,
+		Vector3(0.0, trunk_h * PRIMARY_BAND_TOP, 0.0),
+		Vector3.UP, primary_len * 0.62, primary_w * 0.7,
+		1, levels, children, fork_deg * 0.75, len_ratio, droop, gnarl, lateral, rng, emit)
 	return tips
+
+
+## Highest primary attachment as a fraction of trunk height (the apex leader
+## starts here too).
+const PRIMARY_BAND_TOP := 0.95
+
+
+## Where each primary limb leaves the trunk, as pure data: [{t, origin, dir,
+## height, azimuth}]. Split out of _build_fractal_branches so the distribution
+## invariants (attachment spread, azimuth separation, emergence off the trunk
+## SURFACE) can be asserted offline without a test re-deriving the math — which
+## would pass happily against a broken generator.
+##
+## Pass an rng to share the generator's stream; omit it for a standalone sample.
+static func deciduous_primary_placements(trunk_w: float, trunk_h: float,
+		settings: Dictionary, rng: RandomNumberGenerator = null) -> Array:
+	if rng == null:
+		rng = RandomNumberGenerator.new()
+		rng.seed = _BRANCH_SEED
+	var primaries := clampi(int(round(float(settings.get("deciduous_branch_count", 5)))), 2, 12)
+	# NOT inherited from the legacy `deciduous_branch_base`. That key's saved
+	# values (Mt Vernon has 0.62 on a 6 m trunk) were tuned when it meant "the
+	# bottom of a narrow band containing EVERY limb" — reusing them here
+	# reproduces the exact lollipop this rebuild exists to fix, on every map that
+	# already has a tuned style. The key still exists and still feeds the FAR
+	# card attach height; it just no longer decides where the crown starts.
+	var crown_base := clampf(float(settings.get("deciduous_crown_base", 0.42)), 0.05, 0.92)
+	# 75 deg is nearly horizontal. The lowest limbs of a broadleaf reach OUT, not
+	# up; at 58-62 deg every limb still climbed, so even a low attachment put its
+	# foliage high and the crown floated above a bare pole.
+	var tilt_low := clampf(float(settings.get("deciduous_branch_tilt_low", 75.0)), 15.0, 89.0)
+	var tilt_high := clampf(float(settings.get("deciduous_branch_tilt_high", 26.0)), 5.0, 80.0)
+	var taper := _trunk_taper_top(settings, "deciduous")
+	var spacing := (PRIMARY_BAND_TOP - crown_base) / maxf(float(primaries - 1), 1.0)
+	# Golden-angle spacing keeps azimuths even; the jitter must stay well INSIDE
+	# the resulting gap or pairs of primaries land on top of each other (the old
+	# jitter was 0..34° one-sided against a 21.8° gap, and never subtracted).
+	var az_jitter := (TAU / float(primaries)) * 0.35
+	var out: Array = []
+	for i in primaries:
+		var t := float(i) / maxf(float(primaries - 1), 1.0)
+		# Bases spread over the whole crown-bearing trunk, with a jitter of about
+		# half the spacing so the march never reads as a regular ladder.
+		var band := lerpf(crown_base, PRIMARY_BAND_TOP, t) \
+			+ (rng.randf() * 2.0 - 1.0) * spacing * 0.45
+		var by := trunk_h * clampf(band, 0.04, 1.0)
+		var az := float(i) * TAU * 0.618034 + (rng.randf() * 2.0 - 1.0) * az_jitter
+		# Low limbs splay out, high limbs reach up — the classic broadleaf spread.
+		var out_tilt := deg_to_rad(lerpf(tilt_low, tilt_high, t))
+		var dir := Vector3(cos(az) * sin(out_tilt), cos(out_tilt),
+			sin(az) * sin(out_tilt)).normalized()
+		# Emerge from the trunk SURFACE, not its centre line: with a 1.31 m trunk
+		# the first ~0.65 m of every limb used to be buried inside the trunk card,
+		# concentrating the visible emergence points even further.
+		var radius := trunk_w * 0.5 * lerpf(1.0, taper,
+			clampf(by / maxf(trunk_h, 0.01), 0.0, 1.0))
+		out.append({
+			"t": t, "height": by, "azimuth": fposmod(az, TAU), "radius": radius,
+			"origin": Vector3(cos(az) * radius, by, sin(az) * radius), "dir": dir,
+		})
+	return out
 
 
 ## Grow one bough (a gently curved, tapering limb) then recursively fork children
@@ -995,12 +1097,16 @@ static func _grow_branch(verts: PackedVector3Array, uvs: PackedVector2Array,
 		normals: PackedVector3Array, indices: PackedInt32Array, tips: Array,
 		base: Vector3, dir: Vector3, length: float, width: float,
 		level: int, max_level: int, children: int, fork_deg: float,
-		len_ratio: float, droop: float, gnarl: float, rng: RandomNumberGenerator) -> void:
+		len_ratio: float, droop: float, gnarl: float, lateral: float,
+		rng: RandomNumberGenerator, emit: bool = true) -> void:
 	# Subdivide the limb into curved sub-segments so gnarl/droop bend it smoothly.
 	var sub := 3 if level <= 2 else 2
 	var p := base
 	var d := dir
 	var seg_len := length / float(sub)
+	# Mid-limb laterals are collected and grown AFTER this limb finishes, so the
+	# recursion stays depth-first on the parent and the RNG stream is stable.
+	var lateral_spawns: Array = []
 	for k in sub:
 		# Random gnarl wobble + gravitropism (droop>0 lifts toward sky, <0 sags).
 		var axis := Vector3(rng.randf() * 2.0 - 1.0, rng.randf() * 2.0 - 1.0,
@@ -1011,11 +1117,28 @@ static func _grow_branch(verts: PackedVector3Array, uvs: PackedVector2Array,
 		var np := p + d * seg_len
 		var w0 := width * (1.0 - float(k) / float(sub) * 0.35)
 		var w1 := width * (1.0 - float(k + 1) / float(sub) * 0.35)
-		_add_branch_segment(verts, uvs, normals, indices, p, np, maxf(w0, 0.02), maxf(w1, 0.015))
+		if emit:
+			_add_branch_segment(verts, uvs, normals, indices, p, np, maxf(w0, 0.02), maxf(w1, 0.015))
+		# A real broadleaf carries side shoots ALONG each limb, not only a fork at
+		# the very end. Without them limbs read as bare sticks with a tuft on the
+		# tip, and the crown needs far more primaries to look full.
+		if level < max_level and k < sub - 1 and lateral > 0.0 and rng.randf() < lateral:
+			var lat_axis := d.cross(Vector3.UP)
+			if lat_axis.length_squared() < 1e-6:
+				lat_axis = d.cross(Vector3.RIGHT)
+			var lat_dir := d.rotated(lat_axis.normalized(),
+				deg_to_rad(fork_deg * lerpf(0.9, 1.4, rng.randf())))
+			lat_dir = lat_dir.rotated(d, rng.randf() * TAU)
+			lateral_spawns.append({"p": np, "dir": lat_dir.normalized(), "w": w1})
 		p = np
 	if level >= max_level:
 		tips.append(p)
 		return
+	for spawn in lateral_spawns:
+		_grow_branch(verts, uvs, normals, indices, tips, spawn["p"],
+			spawn["dir"], length * len_ratio * 0.62, float(spawn["w"]) * len_ratio * 0.8,
+			level + 1, max_level, children, fork_deg, len_ratio, droop, gnarl,
+			lateral * 0.5, rng, emit)
 	# Fork: rotate the parent dir out by fork_deg to form a cone, then spin each
 	# child around the parent axis (golden-ish spacing + jitter). A child count of
 	# 2 gives a Y-fork; 3–4 gives a bushier crown.
@@ -1030,7 +1153,7 @@ static func _grow_branch(verts: PackedVector3Array, uvs: PackedVector2Array,
 		var child := d.rotated(perp, spread).rotated(d, az)
 		_grow_branch(verts, uvs, normals, indices, tips, p, child.normalized(),
 			length * len_ratio, width * len_ratio, level + 1, max_level, children,
-			fork_deg, len_ratio, droop, gnarl, rng)
+			fork_deg, len_ratio, droop, gnarl, lateral, rng, emit)
 
 
 ## A limb segment as two perpendicular tapered quads (a cheap "tube") so a bough
@@ -1063,6 +1186,61 @@ static func _add_branch_quad(verts: PackedVector3Array, uvs: PackedVector2Array,
 	for _j in 4:
 		normals.append(nrm)
 	indices.append_array([idx, idx + 1, idx + 2, idx, idx + 2, idx + 3])
+
+
+## Foliage clusters anchored on REAL branch tips (veg overhaul: deciduous
+## rebuild). The skeleton already computes where every limb ends and then threw
+## the list away, so the canopy was an ellipsoid ball bolted to the trunk top
+## with no relation to the branches under it — the "blob on a stick" silhouette,
+## and the reason the crown had a hollow apex.
+##
+## Returns the same {pos, w, h} records `_deciduous_cluster_layout` produces, so
+## every consumer (leaf shells, shadow proxy, FAR cards) is unchanged. Falls
+## back to the abstract layout when there are no tips.
+static func _clusters_from_tips(tips: Array, crown_w: float, crown_h: float,
+		trunk_h: float, settings: Dictionary) -> Array:
+	if tips.is_empty():
+		return _deciduous_cluster_layout(crown_w, crown_h, trunk_h, settings)
+	var target := clampi(int(round(float(settings.get("deciduous_cluster_count", 8)))), 3, 16)
+	var size_mul := float(settings.get("deciduous_cluster_size", 1.0))
+	# Take an evenly-strided subset when the skeleton has more tips than the
+	# cluster budget: tips are appended depth-first, so a stride samples across
+	# the whole crown rather than one side of it.
+	var picked: Array = []
+	if tips.size() <= target:
+		picked = tips.duplicate()
+	else:
+		var stride := float(tips.size()) / float(target)
+		for i in target:
+			picked.append(tips[mini(int(floor(float(i) * stride)), tips.size() - 1)])
+	# Hold total foliage VOLUME roughly constant as the cluster count changes:
+	# volume per cluster goes as w²h, so the radius scales with count^(-1/3).
+	# Without this, more clusters means a fatter tree rather than a better-shaped
+	# one of the same size.
+	var vol_fix := pow(8.0 / maxf(float(picked.size()), 1.0), 1.0 / 3.0)
+	# Near-spherical clumps. The abstract layout derived width from crown_w and
+	# height from crown_h, which on a 12 m wide / 4.3 m tall crown produced
+	# ellipsoids nearly 4 m across and 1.7 m tall — foliage read as stacked
+	# plates. A leaf mass on a branch end is a rough ball, so height follows the
+	# WIDTH here, not the crown's own aspect.
+	var cw := crown_w * 0.26 * size_mul * vol_fix
+	var ch := cw * 0.85
+	# Foliage must not reach below the trunk base. `foot_local_y` short-circuits
+	# to 0.0 for the whole deciduous family WITHOUT building a mesh, so a cluster
+	# hanging under y=0 would sink every instance on the map by the overshoot
+	# (and the FAR tier's billboard_y_offset pushes cards lower still).
+	var floor_y := ch * 0.62 + maxf(-float(settings.get("deciduous_billboard_y_offset", 0.0)), 0.0)
+	var out: Array = []
+	for tip in picked:
+		var p: Vector3 = tip
+		# Clusters sit slightly beyond the tip along the limb's outward lean, so
+		# foliage caps the branch instead of swallowing it.
+		var radial := Vector3(p.x, 0.0, p.z)
+		var lean := radial.normalized() * 0.12 if radial.length_squared() > 1e-6 else Vector3.ZERO
+		var pos := p + lean
+		pos.y = maxf(pos.y, floor_y)
+		out.append({"pos": pos, "w": cw, "h": ch})
+	return out
 
 
 static func _deciduous_cluster_layout(crown_w: float, crown_h: float, trunk_h: float,

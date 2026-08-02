@@ -165,7 +165,7 @@ func _test_veg_profiles() -> void:
 	var hs: Dictionary = hi["style"]
 	var defaults := VegetationStyleConfig.defaults()
 	for pair in [["veg_near_ring_m", 250.0], ["veg_mid_ring_m", 700.0],
-			["deciduous_leaf_shell_count", 7.0], ["grass_detail_radius_m", 500.0],
+			["deciduous_leaf_shell_count", 5.0], ["grass_detail_radius_m", 500.0],
 			["grass_visibility_end_m", 520.0], ["auto_visibility_end_m", 1200.0]]:
 		_check("HIGH veg %s pinned" % pair[0],
 			is_equal_approx(float(hs[pair[0]]), float(pair[1])))

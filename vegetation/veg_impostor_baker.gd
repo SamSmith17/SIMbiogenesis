@@ -15,7 +15,12 @@ extends Node
 
 signal bake_completed(key: String)
 
-const BAKE_VERSION := 1
+## Bumped whenever the NEAR mesh GEOMETRY changes. The bake key hashes settings
+## only — never the generator code — so without a bump every cached
+## user://veg_impostors/<key>.res keeps serving the OLD silhouette while the
+## NEAR and MID rings show the new one. v2 = the deciduous skeleton rebuild
+## (branches distributed over the crown, foliage on real branch tips).
+const BAKE_VERSION := 2
 const CACHE_DIR := "user://veg_impostors"
 const ATLAS_PX := 1024
 const GRID := 3

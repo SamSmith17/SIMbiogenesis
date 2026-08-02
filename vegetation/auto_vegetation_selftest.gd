@@ -64,6 +64,7 @@ func _initialize() -> void:
 	_test_area_fill_edits()
 	_test_area_fill_scatter()
 	_test_incremental_chunk_rebuild()
+	_test_deciduous_branch_distribution()
 	if _failures == 0:
 		print("AUTO-VEG SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -476,9 +477,27 @@ func _test_deciduous_split_mesh() -> void:
 	var canopy_base := INF
 	for v in canopy_arrays[Mesh.ARRAY_VERTEX]:
 		canopy_base = minf(canopy_base, (v as Vector3).y)
+	var canopy_top := -INF
+	for v in canopy_arrays[Mesh.ARRAY_VERTEX]:
+		canopy_top = maxf(canopy_top, (v as Vector3).y)
 	var nominal_trunk_h := float(VegetationCardFactory.SPECS["deciduous"]["trunk_h"])
-	_check("canopy meets trunk top", canopy_base >= nominal_trunk_h - 0.65 and canopy_base <= nominal_trunk_h + 0.05,
-		"nominal_trunk=%.2f canopy_base=%.2f trunk_draw_top=%.2f" % [nominal_trunk_h, canopy_base, trunk_top])
+	# This used to assert the canopy STARTED at the trunk top (within 0.65 m),
+	# which is precisely the lollipop the deciduous rebuild removed: foliage
+	# now hangs on branch tips spread over the crown-bearing trunk, so it
+	# legitimately reaches well below the trunk top. The invariants that
+	# actually matter are kept and tightened:
+	var crown_base := float(VegetationCardFactory.SPECS["deciduous"]["crown_base"])
+	_check("canopy starts no higher than the crown base",
+		canopy_base <= nominal_trunk_h * crown_base + 0.5,
+		"crown_base=%.2f canopy_base=%.2f" % [nominal_trunk_h * crown_base, canopy_base])
+	# ...and never dips below the trunk base, or every instance sinks: the
+	# deciduous foot is hardcoded 0.0 without ever measuring the mesh.
+	_check("canopy stays above the foot", canopy_base >= 0.0,
+		"canopy_base=%.2f" % canopy_base)
+	# ...and still covers the top of the trunk (the apex leader), or the crown
+	# has the hollow notch that made every distant broadleaf a heart shape.
+	_check("canopy covers the trunk top", canopy_top >= trunk_top - 0.5,
+		"canopy_top=%.2f trunk_draw_top=%.2f" % [canopy_top, trunk_top])
 	_check("deciduous foot at origin", VegetationCardFactory.foot_local_y("deciduous", {}) == 0.0)
 	var bark := VegetationCardFactory.bark_material_for_species("deciduous", {})
 	var bark_tex := bark.get_shader_parameter("albedo_tex") as Texture2D
@@ -1463,3 +1482,104 @@ func _batch_instance_total(terrain: Node3D) -> int:
 			if mm != null:
 				n += mm.instance_count
 	return n
+
+
+## --- Deciduous branch distribution (the "bunched at the trunk" rebuild) ------
+
+## Asserted against VegetationCardFactory.deciduous_primary_placements, which is
+## the SAME function the mesh builder consumes. A test that re-derived the
+## placement maths here would pass happily against a broken generator.
+func _test_deciduous_branch_distribution() -> void:
+	var st := VegetationStyleConfig.defaults()
+	var trunk_h := float(st["deciduous_trunk_h"])
+	var trunk_w := float(st["deciduous_trunk_w"])
+	var places := VegetationCardFactory.deciduous_primary_placements(trunk_w, trunk_h, st)
+	var n := clampi(int(round(float(st["deciduous_branch_count"]))), 2, 12)
+	_check("one placement per primary", places.size() == n, "got %d" % places.size())
+
+	# 1. Attachment heights must SPREAD over the crown-bearing trunk. The old
+	# generator packed every primary into the top ~30% with zero jitter.
+	var lo := INF
+	var hi := -INF
+	for p in places:
+		var y := float((p as Dictionary)["height"])
+		lo = minf(lo, y)
+		hi = maxf(hi, y)
+	var span := (hi - lo) / maxf(trunk_h, 0.01)
+	_check("attachment span covers >=40% of the trunk", span >= 0.40,
+		"span %.0f%% (%.2f..%.2f of %.2f)" % [span * 100.0, lo, hi, trunk_h])
+	_check("lowest limb sits near the crown base",
+		lo <= trunk_h * float(st["deciduous_crown_base"]) + trunk_h * 0.12,
+		"lowest %.2f, crown base %.2f" % [lo, trunk_h * float(st["deciduous_crown_base"])])
+	_check("highest limb stays on the trunk", hi <= trunk_h * 1.001,
+		"highest %.2f of %.2f" % [hi, trunk_h])
+
+	# 2. No two primaries may share an azimuth. The old jitter was 0..34 deg
+	# ONE-SIDED against a 21.8 deg golden gap, so pairs landed on top of each
+	# other — the visible bunching.
+	var azs: Array = []
+	for p in places:
+		azs.append(float((p as Dictionary)["azimuth"]))
+	azs.sort()
+	var min_gap := TAU
+	for i in azs.size():
+		var a: float = azs[i]
+		var b: float = azs[(i + 1) % azs.size()]
+		min_gap = minf(min_gap, fposmod(b - a, TAU))
+	_check("primaries never collide in azimuth", rad_to_deg(min_gap) > 8.0,
+		"min gap %.1f deg over %d primaries" % [rad_to_deg(min_gap), n])
+
+	# 3. Limbs emerge from the trunk SURFACE, not the centre line — the first
+	# ~0.65 m of every limb used to be buried inside the trunk card.
+	var on_axis := 0
+	for p in places:
+		var o: Vector3 = (p as Dictionary)["origin"]
+		if Vector2(o.x, o.z).length() < 1e-4:
+			on_axis += 1
+	_check("no primary starts on the trunk axis", on_axis == 0, "%d on axis" % on_axis)
+
+	# 4. Low limbs reach OUT, high limbs reach UP: that gradient is what stops
+	# the crown floating on a bare pole.
+	var first: Dictionary = places[0]
+	var last: Dictionary = places[places.size() - 1]
+	_check("lowest limb is flatter than the highest",
+		(first["dir"] as Vector3).y < (last["dir"] as Vector3).y,
+		"low y=%.2f high y=%.2f" % [(first["dir"] as Vector3).y, (last["dir"] as Vector3).y])
+
+	# 5. Species archetypes actually reach the builder (they resolve through
+	# _FAMILY_DIM_KEYS -> deciduous_crown_base etc).
+	var birch := VegSpeciesCatalog.settings_with_variant("birch", st, VegetationCardFactory.SPECS)
+	var chestnut := VegSpeciesCatalog.settings_with_variant("chestnut", st, VegetationCardFactory.SPECS)
+	_check("birch is more columnar than chestnut",
+		float(birch["deciduous_crown_base"]) > float(chestnut["deciduous_crown_base"]),
+		"birch %.2f vs chestnut %.2f" % [float(birch["deciduous_crown_base"]),
+			float(chestnut["deciduous_crown_base"])])
+	_check("chestnut limbs splay wider than birch",
+		float(chestnut["deciduous_branch_tilt_low"]) > float(birch["deciduous_branch_tilt_low"]))
+	# ...and produce genuinely different trees, not just different numbers.
+	var b_mesh := VegetationCardFactory.mesh_for_canopy_lod("birch", st,
+		VegetationCardFactory.CanopyLodTier.NEAR)
+	var c_mesh := VegetationCardFactory.mesh_for_canopy_lod("chestnut", st,
+		VegetationCardFactory.CanopyLodTier.NEAR)
+	_check("archetypes yield different geometry",
+		b_mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size()
+			!= c_mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size()
+		or not is_equal_approx(b_mesh.get_aabb().size.x, c_mesh.get_aabb().size.x),
+		"birch w %.2f chestnut w %.2f" % [b_mesh.get_aabb().size.x, c_mesh.get_aabb().size.x])
+
+	# 6. The NEAR tree must stay inside the triangle budget it had before the
+	# rebuild (5,028 tris at the shipping defaults).
+	var near := VegetationCardFactory.mesh_for_canopy_lod("deciduous", st,
+		VegetationCardFactory.CanopyLodTier.NEAR)
+	var tris := 0
+	for si in near.get_surface_count():
+		tris += (near.surface_get_arrays(si)[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
+	_check("NEAR deciduous stays within the old tri budget", tris <= 5028,
+		"%d tris" % tris)
+	_check("NEAR deciduous still has geometry", tris > 1500, "%d tris" % tris)
+	# Nothing may dip below the foot at either tier (foot_local_y is hardcoded 0).
+	for tier in [VegetationCardFactory.CanopyLodTier.NEAR,
+			VegetationCardFactory.CanopyLodTier.FAR]:
+		var m := VegetationCardFactory.mesh_for_canopy_lod("maple", st, tier)
+		_check("maple tier %d foot at origin" % tier, m.get_aabb().position.y >= -0.001,
+			"foot %.3f" % m.get_aabb().position.y)

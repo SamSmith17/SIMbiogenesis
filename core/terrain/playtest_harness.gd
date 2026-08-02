@@ -153,6 +153,8 @@ func _ready() -> void:
 			_run_veg_dock_capture.call_deferred()
 		elif _capture_mode == "foodforest":
 			_run_food_forest_verify.call_deferred()
+		elif _capture_mode == "tree":
+			_run_tree_portrait_capture.call_deferred()
 		else:
 			_await_and_run.call_deferred()
 
@@ -338,6 +340,8 @@ func _launch_map() -> void:
 		_run_veg_dock_capture()
 	elif _capture_mode == "foodforest":
 		_run_food_forest_verify()
+	elif _capture_mode == "tree":
+		_run_tree_portrait_capture()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -377,6 +381,8 @@ func _launch_scene_direct() -> void:
 		_run_veg_dock_capture()
 	elif _capture_mode == "foodforest":
 		_run_food_forest_verify()
+	elif _capture_mode == "tree":
+		_run_tree_portrait_capture()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -3814,3 +3820,101 @@ func _spec_float(model: Variant, item_id: String, key: String) -> float:
 	if it.is_empty():
 		return 0.0
 	return float((it.get("specs", {}) as Dictionary).get(key, 0.0))
+
+
+# ==================== TREE PORTRAIT (--capture=tree) ====================
+# Shape work on the procedural trees is unreviewable from forest shots: a
+# silhouette defect reads as "the forest looks off". This stands ONE tree of
+# each species on empty ground against sky and shoots it at all three LOD
+# tiers, which is where a NEAR/FAR/impostor disagreement becomes obvious.
+#
+# Builds its own MultiMesh nodes from VegetationCardFactory directly — it does
+# not touch the map's vegetation layers, so it is safe on a real saved site.
+
+const TREE_PORTRAIT_SPECIES: Array = [
+	"deciduous", "birch", "maple", "beech", "chestnut", "aspen", "pine",
+]
+
+
+func _run_tree_portrait_capture() -> void:
+	var loader := await _find_terrain_loader()
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	_set_capture_conditions()
+	var label := _shots_label if not _shots_label.is_empty() else "tree_portrait"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+
+	var scene := get_tree().current_scene
+	var root := Node3D.new()
+	root.name = "TreePortrait"
+	scene.add_child(root)
+	var cam := Camera3D.new()
+	cam.name = "PortraitCam"
+	cam.far = 4000.0
+	scene.add_child(cam)
+	cam.make_current()
+
+	# Stand the subject well above the terrain so nothing intrudes on the
+	# silhouette; the camera looks slightly up at it against open sky.
+	var base := Vector3(0.0, 4000.0, 0.0)
+	# The MAP's live render settings, not library defaults: a portrait is only
+	# useful if it shows what this site actually renders (quality tier, per-map
+	# style edits and species variants all ride this dict). Falls back to the
+	# defaults on a scene with no loader.
+	var style := VegetationStyleConfig.defaults()
+	if loader != null and loader.has_method("_auto_veg_runtime_settings"):
+		var live: Variant = loader.call("_auto_veg_runtime_settings")
+		if live is Dictionary and not (live as Dictionary).is_empty():
+			style = live
+	print("PlaytestHarness: tree — style source: %s"
+		% ("map" if style.has("_variant_species") or loader != null else "defaults"))
+	var manifest: Array = []
+	for species in TREE_PORTRAIT_SPECIES:
+		var sid := str(species)
+		for tier_spec in [["near", VegetationCardFactory.CanopyLodTier.NEAR],
+				["far", VegetationCardFactory.CanopyLodTier.FAR]]:
+			var tier_name := str(tier_spec[0])
+			var tier: int = tier_spec[1]
+			var mesh := VegetationCardFactory.mesh_for_canopy_lod(sid, style, tier)
+			if mesh == null:
+				continue
+			var mi := MeshInstance3D.new()
+			mi.mesh = mesh
+			mi.position = base
+			root.add_child(mi)
+			var aabb := mesh.get_aabb()
+			var h := maxf(aabb.size.y, 1.0)
+			var w := maxf(maxf(aabb.size.x, aabb.size.z), 1.0)
+			# Frame the whole tree with a little headroom, from slightly below
+			# mid-height so the trunk/crown proportion reads honestly.
+			var dist := maxf(h, w * 0.85) * 1.15
+			cam.position = base + Vector3(dist * 0.72, h * 0.45, dist * 0.72)
+			cam.look_at(base + Vector3(0.0, h * 0.50, 0.0), Vector3.UP)
+			await RenderingServer.frame_post_draw
+			await get_tree().create_timer(0.15).timeout
+			await RenderingServer.frame_post_draw
+			var shot := "%s_%s" % [sid, tier_name]
+			get_viewport().get_texture().get_image().save_png("%s/%s.png" % [dir, shot])
+			var tris := 0
+			for si in mesh.get_surface_count():
+				var idx: PackedInt32Array = mesh.surface_get_arrays(si)[Mesh.ARRAY_INDEX]
+				tris += idx.size() / 3
+			manifest.append({
+				"shot": shot, "species": sid, "tier": tier_name,
+				"surfaces": mesh.get_surface_count(), "tris": tris,
+				"aabb_h": aabb.size.y, "aabb_w": aabb.size.x, "foot_y": aabb.position.y,
+			})
+			print("PlaytestHarness: tree — %-10s %-4s %d surf, %5d tris, %.2f m tall, foot y %.3f"
+				% [sid, tier_name, mesh.get_surface_count(), tris, aabb.size.y, aabb.position.y])
+			mi.queue_free()
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "	"))
+		f.close()
+	cam.queue_free()
+	root.queue_free()
+	print("PlaytestHarness: tree portraits — %d shots in %s"
+		% [manifest.size(), ProjectSettings.globalize_path(dir)])
+	_maybe_quit()

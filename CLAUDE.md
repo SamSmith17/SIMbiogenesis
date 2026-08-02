@@ -282,6 +282,14 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # a regression run never mutates the player's site (verify after: the file is
 # back at its original version/cleared/patch counts with 0 fills):
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=areafill --shots-dir=<label> --quit-after-capture
+# Tree portraits (WINDOWED, console + PNGs): stands ONE tree of each species in
+# empty air against sky and shoots it at NEAR and FAR, with per-shot surface/
+# tri/AABB/foot numbers. Shape work is unreviewable from forest shots — a
+# silhouette defect just reads as "the forest looks off". It builds meshes
+# straight from VegetationCardFactory and never touches the map's veg layers,
+# but it DOES read the map's live style, so run it on a real site (mtvernon),
+# not the soak map, or you are reviewing library defaults nobody renders:
+Godot.exe.exe --path . --windowed --resolution 900x900 -- --user-map=mtvernon --capture=tree --shots-dir=<label> --quit-after-capture
 # Veg paint dock + Tune-look visual check (WINDOWED — veg overhaul Phase 8):
 # opens the V dock through its real entry point and shoots the chip row in four
 # tool states, then opens Tune look…, calls Apply, and asserts the modal STAYS
@@ -828,6 +836,37 @@ set; leaving the dock releases it. Drone WASD is gated while a LineEdit/SpinBox
 holds focus (typing a brush radius used to fly the drone). The crosshair area
 focus and the paint selection now own SEPARATE highlight meshes. Selftest:
 `vegetation/veg_dock_state_selftest.gd`.
+
+**Procedural deciduous rebuild.** The broadleaf generator's three defects had
+one root: the canopy ignored the skeleton. `_build_fractal_branches` returned a
+`tips` list that the call site DISCARDED, and `_build_leaf_shell_canopy` built
+an abstract golden-angle ring of ellipsoids on the trunk top instead — a blob
+on a stick with a hollow apex (the "heart" notch on every distant broadleaf).
+Foliage now hangs on the real tips (`_clusters_from_tips`), at BOTH tiers: the
+FAR path runs the skeleton with `emit=false` (tips only, no bark geometry) so
+its cards share the NEAR silhouette, which matters because the impostor atlas
+is baked FROM the NEAR mesh. Branch placement moved into
+`deciduous_primary_placements` — pure data, so the selftest asserts the real
+generator rather than re-deriving its maths — and fixes three things: limbs
+spread over a real crown-bearing band (`deciduous_crown_base`, default 0.42)
+with height jitter instead of packing into the top ~30% of the trunk; azimuth
+jitter is SYMMETRIC and bounded to ±35% of the golden gap (it was 0–34°
+one-sided against a 21.8° gap, so pairs collided — the reported "bunching");
+and limbs emerge from the trunk SURFACE, not the centre line, where the first
+~0.65 m used to be buried. Plus mid-limb laterals (`deciduous_branch_lateral`)
+and an apex leader that closes the notch. **`deciduous_crown_base` deliberately
+does NOT inherit the legacy `deciduous_branch_base`** — those saved values were
+tuned when the key meant something else and reproduce the exact lollipop on
+every already-tuned map. Species archetypes ride `_FAMILY_DIM_KEYS`, which now
+carries crown_base/tilt_low/tilt_high/lateral for deciduous, so a columnar
+birch and a spreading chestnut differ in TOPOLOGY, not just size and tint.
+Cost: the `maxi(..., 7)` shell floor is gone (it silently promoted the LOW/
+MEDIUM quality tiers to 7 shells, making the headline deciduous knob inert),
+and `inner_frac` now adapts so a low shell count hugs the surface instead of
+reading as wireframe. Mt Vernon: 771,679 → 342,500 primitives, 106 → 34 draw
+calls. **Bump `VegImpostorBaker.BAKE_VERSION` on ANY change to this geometry**
+or cached impostors serve the old silhouette forever. Verify with
+`--capture=tree` (below) and `--capture=veg`.
 
 **Growth (Phase 9).** `VegetationInstanceMap` holds ONE entry per PLANT with a
 list of MultiMesh slots, not one entry per slot: a NEAR-ring tree lives in two

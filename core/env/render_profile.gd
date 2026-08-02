@@ -196,7 +196,7 @@ static func veg_profile(quality: int) -> Dictionary:
 				"style": {
 					"veg_near_ring_m": 150.0,
 					"veg_mid_ring_m": 450.0,
-					"deciduous_leaf_shell_count": 5.0,
+					"deciduous_leaf_shell_count": 4.0,
 					"auto_max_tree_instances": 16000,
 					"auto_max_grass_instances": 80000,
 					"grass_detail_radius_m": 300.0,
@@ -222,7 +222,7 @@ static func veg_profile(quality: int) -> Dictionary:
 				"style": {
 					"veg_near_ring_m": 400.0,
 					"veg_mid_ring_m": 1100.0,
-					"deciduous_leaf_shell_count": 9.0,
+					"deciduous_leaf_shell_count": 7.0,
 					"auto_max_tree_instances": 24000,
 					"auto_max_grass_instances": 120000,
 					"grass_detail_radius_m": 700.0,
@@ -249,7 +249,10 @@ static func veg_profile(quality: int) -> Dictionary:
 		"style": {
 			"veg_near_ring_m": 250.0,
 			"veg_mid_ring_m": 700.0,
-			"deciduous_leaf_shell_count": 7.0,
+			# Retuned with the skeleton-driven canopy: foliage sits on real branch
+			# tips now, so 5 shells over 12 clusters reads denser than the old 7
+			# over 10 AND costs fewer triangles.
+			"deciduous_leaf_shell_count": 5.0,
 			"auto_max_tree_instances": 24000,
 			"auto_max_grass_instances": 120000,
 			"grass_detail_radius_m": 500.0,

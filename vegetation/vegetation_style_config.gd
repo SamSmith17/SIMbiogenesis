@@ -57,14 +57,25 @@ static func defaults() -> Dictionary:
 		"deciduous_trunk_w": 1.31,
 		"deciduous_trunk_h": 4.25,
 		"deciduous_vertical_offset_m": -2.0,
-		"deciduous_cluster_count": 10.05,
+		"deciduous_cluster_count": 12.0,
 		"deciduous_cluster_spread": 0.67,
 		"deciduous_cluster_size": 1.0,
 		"deciduous_cluster_tightness": 1.12,
 		"deciduous_branch_count": 9.55,
 		"deciduous_branch_thickness": 0.64,
 		"deciduous_branch_reach": 0.89,
+		# Legacy alias for deciduous_crown_base (kept so saved styles migrate).
 		"deciduous_branch_base": 0.71,
+		# Where the LOWEST limb leaves the trunk. 0.71 packed every primary into
+		# the top third of the trunk; 0.42 gives a real crown-bearing length.
+		"deciduous_crown_base": 0.42,
+		# Splay of the lowest vs highest limb, degrees from vertical.
+		"deciduous_branch_tilt_low": 75.0,
+		"deciduous_branch_tilt_high": 26.0,
+		# Fraction of limb segments that carry a side shoot. Side branching is
+		# what fills a broadleaf crown; without it limbs are bare sticks with a
+		# tuft on the end and the crown needs far more primaries to look full.
+		"deciduous_branch_lateral": 0.45,
 		"deciduous_branch_levels": 2.15,
 		"deciduous_branch_split": 2.65,
 		"deciduous_branch_angle": 38.0,
@@ -82,9 +93,10 @@ static func defaults() -> Dictionary:
 		"deciduous_auto_lod_near_m": 300.0,
 		"deciduous_auto_lod_far_begin_m": 280.0,
 		"deciduous_billboard_y_offset": -1.11,
-		# Denser default canopy: fewer but BIGGER leaves with minimal gaps + more
-		# shells read as solid foliage instead of the old speckled/see-through rind.
-		"deciduous_leaf_shell_count": 7.0,
+		# Foliage now hangs on real branch tips, which breaks the crown volume up
+		# on its own, so fewer shells still read as solid: 5 shells x 12 clusters
+		# is 3,840 tris against the old 7 x 10 = 4,480, for a better shape.
+		"deciduous_leaf_shell_count": 5.0,
 		"deciduous_leaf_density": 15.0,
 		"deciduous_leaf_size": 0.95,
 		"deciduous_leaf_aspect": 1.5,

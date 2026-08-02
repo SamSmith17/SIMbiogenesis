@@ -197,8 +197,14 @@ static func label_for(id: String) -> String:
 ## Flat dim key per family the SPECS geometry maps onto.
 const _FAMILY_DIM_KEYS := {
 	"pine": {"card_w": "width", "card_h": "height", "trunk_w": "trunk_w"},
+	# Deciduous also carries CROWN ARCHETYPE keys, not just dims: without them
+	# birch, maple, beech and chestnut shared one topology and differed only in
+	# overall size and tint. crown_base / tilt_low / tilt_high / lateral are what
+	# separate a columnar birch from a spreading chestnut.
 	"deciduous": {"canopy_w": "width", "canopy_h": "height",
-		"trunk_w": "trunk_w", "trunk_h": "trunk_h"},
+		"trunk_w": "trunk_w", "trunk_h": "trunk_h",
+		"crown_base": "crown_base", "branch_tilt_low": "tilt_low",
+		"branch_tilt_high": "tilt_high", "branch_lateral": "lateral"},
 	"shrub": {"card_w": "width", "card_h": "height"},
 	"palm": {"card_w": "width", "card_h": "height", "trunk_w": "trunk_w"},
 	"cactus": {"card_w": "width", "card_h": "height"},
