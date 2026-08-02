@@ -243,8 +243,43 @@ static func instance_scale_mult(species: String, d: Dictionary, settings: Dictio
 ## reset=true every record is re-seeded (used on load). Ages are skewed toward
 ## mature so an established forest reads as full canopy with a scatter of younger
 ## trees rather than a field of seedlings.
+## Forest age profiles (veg overhaul Phase 9) — how a freshly seeded forest's
+## ages are distributed across the growth span. The exponent shapes `randf()`:
+## >1 clusters near 0 (young), 1 is a flat spread, and the MATURE profile
+## mirrors it (1 − r^k) to cluster near full size.
+##
+## MATURE is the default and reproduces the pre-Phase-9 behaviour exactly, so an
+## untouched map keeps the forest it had.
+const FOREST_AGE_MATURE := "mature"
+const FOREST_AGE_MIXED := "mixed"
+const FOREST_AGE_YOUNG := "young"
+const FOREST_AGE_SKEW := 1.6
+
+
+## 0..1 age fraction of the growth span for one freshly seeded plant.
+static func age_fraction(profile: String, r: float) -> float:
+	var u := clampf(r, 0.0, 1.0)
+	match profile:
+		FOREST_AGE_YOUNG:
+			# Regrowth / plantation: mostly saplings, a few older survivors.
+			return pow(u, FOREST_AGE_SKEW)
+		FOREST_AGE_MIXED:
+			# An uneven-aged stand: every age equally likely.
+			return u
+		_:
+			return 1.0 - pow(u, FOREST_AGE_SKEW)
+
+
+static func forest_age_profile(settings: Dictionary) -> String:
+	var p := str(settings.get("forest_age", FOREST_AGE_MATURE)).to_lower()
+	if p == FOREST_AGE_YOUNG or p == FOREST_AGE_MIXED:
+		return p
+	return FOREST_AGE_MATURE
+
+
 static func ensure_birth_times(bulk_dict: Dictionary, now_h: float,
 		settings: Dictionary, rng: RandomNumberGenerator, reset: bool = false) -> void:
+	var profile := forest_age_profile(settings)
 	for slot in bulk_dict.keys():
 		var species := str(slot)
 		var grow_h := growth_span_hours(species, settings)
@@ -259,9 +294,7 @@ static func ensure_birth_times(bulk_dict: Dictionary, now_h: float,
 			var d: Dictionary = item
 			if not reset and d.has("birth_h"):
 				continue
-			# age_frac skews high (mature): 1 − rand^1.6 clusters near 1.0.
-			var age_frac := 1.0 - pow(rng.randf(), 1.6)
-			d["birth_h"] = now_h - age_frac * grow_h
+			d["birth_h"] = now_h - age_fraction(profile, rng.randf()) * grow_h
 
 
 ## Per-slot record counts — the population caps captured when growth starts so

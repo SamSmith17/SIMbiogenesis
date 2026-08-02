@@ -6361,7 +6361,12 @@ func _current_abs_h() -> float:
 
 ## Light settings dict for the growth math: growth_years per species + the clock.
 func _growth_style() -> Dictionary:
-	var s := {"growth_now_h": _growth_clock_h}
+	var s := {
+		"growth_now_h": _growth_clock_h,
+		# Phase 9: the forest-age profile a fresh seeding draws its ages from.
+		"forest_age": str(_veg_style.get("forest_age",
+			VegetationGrowth.FOREST_AGE_MATURE)),
+	}
 	for sp in VegetationLayer.ALL_SPECIES:
 		s["%s_growth_years" % sp] = float(_veg_style.get("%s_growth_years" % sp, 0.0))
 	return s

@@ -23,6 +23,7 @@ func _initialize() -> void:
 	_test_reseed_zone()
 	_test_seasonal_growth()
 	_test_instance_map()
+	_test_forest_age_profiles()
 	_test_disabled_species()
 	_test_settings_with_variant_non_clobber()
 	_test_size_var_scales()
@@ -244,6 +245,174 @@ func _test_instance_map() -> void:
 	_check("empty map preserves budget", map.apply_scales({}, gy, 100) == 100)
 	map.clear()
 	_check("cleared map empty", map.is_empty())
+	_test_instance_map_dedupe()
+
+
+## Phase 9: ONE entry per plant, N slots. A NEAR-ring tree lives in two
+## MultiMeshes, so the map used to hold two entries for it and a growth pass
+## re-ran the terrain query and the growth curve once per SLOT.
+func _test_instance_map_dedupe() -> void:
+	var map := VegetationInstanceMap.new()
+	var near_mmi := _stub_mmi(3)
+	var far_mmi := _stub_mmi(3)
+	var records: Array = []
+	for i in 3:
+		records.append({"x": float(i) * 10.0, "z": 0.0, "scale": 1.0, "birth_h": 0.0})
+	# Register the same three plants twice — once per LOD tier, exactly as
+	# _build_canopy_lod_bulk_batches does.
+	for tier_mmi in [near_mmi, far_mmi]:
+		for i in records.size():
+			var d: Dictionary = records[i]
+			map.add(tier_mmi, i, d, "pine", 1.0, 0.0, 0.0, false,
+				float(d["x"]), float(d["z"]), 0.0, 0.0)
+	_check("one entry per plant, not per slot", map.entry_count() == 3,
+		"got %d" % map.entry_count())
+	_check("both tiers registered as slots", map.slot_count() == 6,
+		"got %d" % map.slot_count())
+
+	# The ground query now runs once per PLANT. Counting the calls is the whole
+	# point of the change, so count them.
+	var calls := {"n": 0}
+	var counting_gy := func(_x: float, _z: float) -> float:
+		calls.n += 1
+		return 0.0
+	var st := {"pine_growth_years": 10.0, "growth_now_h": 5.0 * HPY}
+	map.apply_scales(st, counting_gy, -1)
+	_check("one ground query per plant", int(calls.n) == 3, "got %d" % int(calls.n))
+
+	# NOTE: the transform WRITE itself cannot be observed here — under the
+	# headless dummy renderer MultiMesh.set_instance_transform does not
+	# round-trip through get_instance_transform (the buffer lives in the
+	# RenderingServer, which is a stub). What is checkable offline is the value
+	# the map derives per entry; the visual result is covered by --capture=veg.
+	var expect := VegetationGrowth.instance_scale_mult("pine", records[1], st)
+	_check("entry scale matches the growth curve",
+		is_equal_approx(map.scale_mult_at(1, st), expect),
+		"%.4f vs %.4f" % [map.scale_mult_at(1, st), expect])
+	_check("growth actually moved the scale", expect < 0.99 and expect > 0.1,
+		"%.4f" % expect)
+
+	# Budget counts plants, so a budget of 2 leaves exactly one plant pending.
+	map.reset_cursor()
+	calls.n = 0
+	var rem := map.apply_scales(st, counting_gy, 2)
+	_check("budget counts plants", rem == 0 and int(calls.n) == 2,
+		"rem=%d calls=%d" % [rem, int(calls.n)])
+
+	# Scale-only (impostor) slots never re-sample terrain.
+	var imp := VegetationInstanceMap.new()
+	var imp_mmi := _stub_mmi(2)
+	for i in 2:
+		var d := {"x": float(i), "z": 0.0, "scale": 1.0, "birth_h": 0.0}
+		imp.add(imp_mmi, i, d, "pine", 1.0, 0.0, 0.0, false, float(i), 0.0, 0.0, 0.0, false)
+	calls.n = 0
+	imp.apply_scales(st, counting_gy, -1)
+	_check("impostor slots are scale-only", int(calls.n) == 0, "got %d" % int(calls.n))
+
+	# A freed tier drops its slot without losing the plant (rebuilds free MMIs
+	# while the growth map outlives them).
+	far_mmi.free()
+	map.reset_cursor()
+	map.apply_scales(st, gy_zero(), -1)
+	_check("freed tier drops only its slot",
+		map.entry_count() == 3 and map.slot_count() == 3,
+		"entries=%d slots=%d" % [map.entry_count(), map.slot_count()])
+	near_mmi.free()
+
+
+func gy_zero() -> Callable:
+	return func(_x: float, _z: float) -> float: return 0.0
+
+
+func _stub_mmi(count: int) -> MultiMeshInstance3D:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = BoxMesh.new()
+	mm.instance_count = count
+	var mi := MultiMeshInstance3D.new()
+	mi.multimesh = mm
+	return mi
+
+
+## Phase 9: the forest-age profile decides where in the growth span a freshly
+## seeded stand starts. MATURE must stay the default and keep the old behaviour.
+func _test_forest_age_profiles() -> void:
+	_check("default profile is mature",
+		VegetationGrowth.forest_age_profile({}) == VegetationGrowth.FOREST_AGE_MATURE)
+	_check("unknown profile falls back to mature",
+		VegetationGrowth.forest_age_profile({"forest_age": "nonsense"})
+			== VegetationGrowth.FOREST_AGE_MATURE)
+	_check("profile is case-insensitive",
+		VegetationGrowth.forest_age_profile({"forest_age": "YOUNG"})
+			== VegetationGrowth.FOREST_AGE_YOUNG)
+
+	# Every profile stays inside the span, and the endpoints are shared.
+	for profile in [VegetationGrowth.FOREST_AGE_MATURE, VegetationGrowth.FOREST_AGE_MIXED,
+			VegetationGrowth.FOREST_AGE_YOUNG]:
+		for r in [0.0, 0.25, 0.5, 0.75, 1.0]:
+			var f := VegetationGrowth.age_fraction(profile, r)
+			_check("%s age fraction in range at r=%.2f" % [profile, r],
+				f >= 0.0 and f <= 1.0, "%.4f" % f)
+
+	# Mean age ordering is the whole feature: young < mixed < mature.
+	var means := {}
+	for profile in [VegetationGrowth.FOREST_AGE_MATURE, VegetationGrowth.FOREST_AGE_MIXED,
+			VegetationGrowth.FOREST_AGE_YOUNG]:
+		var total := 0.0
+		var n := 400
+		for i in n:
+			total += VegetationGrowth.age_fraction(profile, float(i) / float(n - 1))
+		means[profile] = total / float(n)
+	_check("young stand is younger than mixed",
+		float(means[VegetationGrowth.FOREST_AGE_YOUNG])
+			< float(means[VegetationGrowth.FOREST_AGE_MIXED]),
+		str(means))
+	_check("mixed is younger than mature",
+		float(means[VegetationGrowth.FOREST_AGE_MIXED])
+			< float(means[VegetationGrowth.FOREST_AGE_MATURE]),
+		str(means))
+	_check("mixed averages mid-span",
+		absf(float(means[VegetationGrowth.FOREST_AGE_MIXED]) - 0.5) < 0.01,
+		str(means[VegetationGrowth.FOREST_AGE_MIXED]))
+
+	# ensure_birth_times honours it: a young stand is visibly smaller.
+	var st := {"pine_growth_years": 20.0, "growth_now_h": 0.0}
+	var sizes := {}
+	for profile in [VegetationGrowth.FOREST_AGE_MATURE, VegetationGrowth.FOREST_AGE_YOUNG]:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 4242
+		var bulk := {"pine": []}
+		for i in 200:
+			(bulk["pine"] as Array).append({"x": float(i), "z": 0.0, "scale": 1.0})
+		var s2 := st.duplicate()
+		s2["forest_age"] = profile
+		VegetationGrowth.ensure_birth_times(bulk, 0.0, s2, rng, true)
+		var total := 0.0
+		for item in bulk["pine"]:
+			total += VegetationGrowth.instance_scale_mult("pine", item, s2)
+		sizes[profile] = total / 200.0
+	_check("young stand renders smaller than a mature one",
+		float(sizes[VegetationGrowth.FOREST_AGE_YOUNG])
+			< float(sizes[VegetationGrowth.FOREST_AGE_MATURE]) - 0.05,
+		str(sizes))
+	# The default path must be byte-identical to "mature" — an untouched map
+	# keeps exactly the forest it had before this key existed.
+	var rng_a := RandomNumberGenerator.new()
+	rng_a.seed = 77
+	var bulk_a := {"pine": [{"x": 0.0, "z": 0.0, "scale": 1.0}]}
+	VegetationGrowth.ensure_birth_times(bulk_a, 100.0, st, rng_a, true)
+	var rng_b := RandomNumberGenerator.new()
+	rng_b.seed = 77
+	var bulk_b := {"pine": [{"x": 0.0, "z": 0.0, "scale": 1.0}]}
+	var st_mature := st.duplicate()
+	st_mature["forest_age"] = VegetationGrowth.FOREST_AGE_MATURE
+	VegetationGrowth.ensure_birth_times(bulk_b, 100.0, st_mature, rng_b, true)
+	_check("default == mature",
+		is_equal_approx(float((bulk_a["pine"][0] as Dictionary)["birth_h"]),
+			float((bulk_b["pine"][0] as Dictionary)["birth_h"])))
+	_check("forest_age is a style default",
+		str(VegetationStyleConfig.defaults().get("forest_age", ""))
+			== VegetationGrowth.FOREST_AGE_MATURE)
 
 
 func _test_lifecycle_senescence() -> void:

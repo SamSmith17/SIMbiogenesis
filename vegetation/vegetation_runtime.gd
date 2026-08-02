@@ -33,13 +33,16 @@ static func _clear_shader_registrations() -> void:
 		wind.clear_registered_materials()
 
 
+## `reground` false = this slot's transform can reuse the ground height sampled
+## at registration (the OUTER-ring impostor tier — see VegetationInstanceMap).
 static func _register_growth(map: VegetationInstanceMap, mmi: MultiMeshInstance3D,
 		idx: int, record: Dictionary, species: String, base_scale: float,
 		vert_off: float, foot_y: float, align_to_surface: bool,
-		x: float, z: float, yaw: float, ground_y: float = NAN) -> void:
+		x: float, z: float, yaw: float, ground_y: float = NAN,
+		reground: bool = true) -> void:
 	if map != null:
 		map.add(mmi, idx, record, species, base_scale, vert_off, foot_y,
-			align_to_surface, x, z, yaw, ground_y)
+			align_to_surface, x, z, yaw, ground_y, reground)
 
 
 ## Dither-fade band on every visibility-range edge. Godot's DEFAULT fade mode
@@ -273,9 +276,12 @@ static func _build_impostor_batch(root: Node3D, species: String, records: Array,
 	if growth_map != null:
 		for j in pending.size():
 			var p: Dictionary = pending[j]
+			# Impostors are scale-only: a camera-facing card at 700 m+ gains
+			# nothing from re-sampling terrain height every growth pass.
 			_register_growth(growth_map, mi, j, p["record"], species,
 				float(p["base_scale"]), float(p["vert_off"]), 0.0, align_to_surface,
-				float(p["x"]), float(p["z"]), float(p["yaw"]), float(p["ground_y"]))
+				float(p["x"]), float(p["z"]), float(p["yaw"]), float(p["ground_y"]),
+				false)
 	var tree := Engine.get_main_loop()
 	if tree is SceneTree:
 		var env := (tree as SceneTree).root.get_node_or_null("VegetationEnvironmentSync")

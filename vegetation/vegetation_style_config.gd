@@ -137,6 +137,12 @@ static func defaults() -> Dictionary:
 		# (AutoVegetationRuntime.NEUTRAL_BULK), so this is the one honest knob.
 		# Applied at rebuild time — changing it does not re-scatter.
 		"auto_tree_scale": 1.0,
+		# Forest age profile (Phase 9): how a freshly seeded stand's ages spread
+		# across the growth span — "mature" (the long-standing behaviour and the
+		# default), "mixed" (an even spread, uneven-aged stand) or "young"
+		# (regrowth: mostly saplings). Consumed by
+		# VegetationGrowth.ensure_birth_times; takes effect on the next reseed.
+		"forest_age": "mature",
 		# Static SoI-centred detail rings (VegTierRings, Phase 3): the leaf-shell
 		# NEAR tier only exists in chunks within veg_near_ring_m of the SoI
 		# centre; veg_mid_ring_m bounds the FAR-card ring; beyond is the cheapest

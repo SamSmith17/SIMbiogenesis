@@ -801,6 +801,25 @@ holds focus (typing a brush radius used to fly the drone). The crosshair area
 focus and the paint selection now own SEPARATE highlight meshes. Selftest:
 `vegetation/veg_dock_state_selftest.gd`.
 
+**Growth (Phase 9).** `VegetationInstanceMap` holds ONE entry per PLANT with a
+list of MultiMesh slots, not one entry per slot: a NEAR-ring tree lives in two
+MultiMeshes, so a full growth pass used to re-run the terrain height query and
+the growth curve once per SLOT (~408k `ground_y_at` calls where ~150k plants
+exist). The query and the scale are now computed once and only the transform
+write repeats; the budget counts plants, and OUTER-ring impostor slots are
+registered scale-only (`reground=false`) so a 700 m card never re-samples
+terrain. Slots holding a freed MMI are dropped individually — read the slot
+UNTYPED first, because assigning a freed instance to a typed variable throws
+before any `is_instance_valid()` guard runs. `forest_age` (style key:
+`mature`/`mixed`/`young`, default mature = the long-standing behaviour) shapes
+where in the growth span `ensure_birth_times` seeds a fresh stand; the
+Tune-look modal exposes it and its "Growth yrs" sliders are now "Maturity age
+(yr)". **Headless caveat pinned in the selftest:** under the dummy renderer
+`MultiMesh.set_instance_transform` does NOT round-trip through
+`get_instance_transform` (the buffer lives in the RenderingServer stub), so the
+offline test asserts the derived scale and the ground-query COUNT rather than
+reading transforms back.
+
 **Vegetation paint + live preview (`scenes/ui/vegetation_edit_ui.gd`,
 `scenes/ui/vegetation_preview_editor.gd`).** V toggles the bottom paint dock
 (paint/place/clear/select, density, shape tools, Advanced per-species sliders).

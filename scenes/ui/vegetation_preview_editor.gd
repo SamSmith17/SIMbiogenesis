@@ -38,7 +38,7 @@ const SPECIES_SHAPE_SLIDERS := {
 		{"key": "deciduous_trunk_h", "label": "Tr H", "min": 2.0, "max": 18.0},
 		{"key": "deciduous_trunk_taper", "label": "Trunk taper", "min": 0.12, "max": 1.0},
 		{"key": "deciduous_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
-		{"key": "deciduous_growth_years", "label": "Growth yrs", "min": 0.0, "max": 80.0},
+		{"key": "deciduous_growth_years", "label": "Maturity age (yr)", "min": 0.0, "max": 80.0},
 		{"key": "deciduous_cluster_count", "label": "Clusters", "min": 3.0, "max": 64.0},
 		{"key": "deciduous_cluster_spread", "label": "Spread", "min": 0.3, "max": 1.5},
 		{"key": "deciduous_cluster_size", "label": "Clump sz", "min": 0.5, "max": 3.0},
@@ -67,7 +67,7 @@ const SPECIES_SHAPE_SLIDERS := {
 	],
 	"pine": [
 		{"key": "pine_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
-		{"key": "pine_growth_years", "label": "Growth yrs", "min": 0.0, "max": 80.0},
+		{"key": "pine_growth_years", "label": "Maturity age (yr)", "min": 0.0, "max": 80.0},
 		{"key": "pine_card_w", "label": "W", "min": 0.3, "max": 10.0},
 		{"key": "pine_card_h", "label": "H", "min": 1.5, "max": 20.0},
 		{"key": "pine_trunk_w", "label": "Trunk", "min": 0.08, "max": 1.5},
@@ -87,7 +87,7 @@ const SPECIES_SHAPE_SLIDERS := {
 	],
 	"shrub": [
 		{"key": "shrub_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
-		{"key": "shrub_growth_years", "label": "Growth yrs", "min": 0.0, "max": 40.0},
+		{"key": "shrub_growth_years", "label": "Maturity age (yr)", "min": 0.0, "max": 40.0},
 		{"key": "shrub_card_w", "label": "W", "min": 0.4, "max": 5.0},
 		{"key": "shrub_card_h", "label": "H", "min": 0.4, "max": 5.0},
 		{"key": "shrub_cluster_count", "label": "Clumps", "min": 3.0, "max": 10.0},
@@ -97,7 +97,7 @@ const SPECIES_SHAPE_SLIDERS := {
 	],
 	"grass_lawn": [
 		{"key": "grass_lawn_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 3.0},
-		{"key": "grass_lawn_growth_years", "label": "Growth yrs", "min": 0.0, "max": 10.0},
+		{"key": "grass_lawn_growth_years", "label": "Maturity age (yr)", "min": 0.0, "max": 10.0},
 		{"key": "grass_lawn_card_w", "label": "Mat width", "min": 0.2, "max": 1.0},
 		{"key": "grass_lawn_card_h", "label": "Height", "min": 0.05, "max": 0.30},
 		{"key": "grass_lawn_vertical_offset_m", "label": "Raise", "min": -8.0, "max": 8.0},
@@ -109,7 +109,7 @@ const SPECIES_SHAPE_SLIDERS := {
 	],
 	"grass_field": [
 		{"key": "grass_field_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 3.0},
-		{"key": "grass_field_growth_years", "label": "Growth yrs", "min": 0.0, "max": 10.0},
+		{"key": "grass_field_growth_years", "label": "Maturity age (yr)", "min": 0.0, "max": 10.0},
 		{"key": "grass_field_card_w", "label": "Mat width", "min": 0.25, "max": 1.2},
 		{"key": "grass_field_card_h", "label": "Height", "min": 0.3, "max": 1.5},
 		{"key": "grass_field_vertical_offset_m", "label": "Raise", "min": -8.0, "max": 8.0},
@@ -185,6 +185,13 @@ var _size_var := 0.25
 var _size_var_slider: HSlider = null
 var _size_var_spin: SpinBox = null
 var _shader_sliders: Dictionary = {}
+## Forest age profile choices (Phase 9) — id, label.
+const FOREST_AGE_OPTIONS: Array = [
+	["mature", "Mature stand"],
+	["mixed", "Mixed ages"],
+	["young", "Young regrowth"],
+]
+var _forest_age_opt: OptionButton = null
 ## key -> {pair, label, revert, text} for every slider bound to a `_values` key
 ## (species shape, mix ratios, advanced shader). Rebuilt with the species
 ## section, so it is cleared there rather than accumulating freed rows.
@@ -465,6 +472,7 @@ func _build_ui() -> void:
 			float(_values.get(key, VegetationStyleConfig.defaults().get(key, 0.0))))
 		_shader_sliders[key] = sl
 
+	_build_forest_age_section(sidebar)
 	_build_osm_section(sidebar)
 
 	var btn_row := HBoxContainer.new()
@@ -816,6 +824,51 @@ func _on_preset_delete() -> void:
 # ---------------------------------------------------------------------------
 # OSM → species picker
 # ---------------------------------------------------------------------------
+
+## Forest age profile (veg overhaul Phase 9). The maturity-age sliders above say
+## how LONG a plant takes to grow; this says where in that span a freshly seeded
+## stand starts — the difference between dropping a mature forest and dropping a
+## clear-cut that grows back while you watch.
+func _build_forest_age_section(sidebar: VBoxContainer) -> void:
+	var hdr := Label.new()
+	_style_section(hdr, "Forest age")
+	sidebar.add_child(hdr)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	sidebar.add_child(row)
+	_forest_age_opt = OptionButton.new()
+	_forest_age_opt.custom_minimum_size.x = 150.0
+	for spec in FOREST_AGE_OPTIONS:
+		_forest_age_opt.add_item(str(spec[1]))
+		_forest_age_opt.set_item_metadata(_forest_age_opt.item_count - 1, str(spec[0]))
+	_forest_age_opt.item_selected.connect(_on_forest_age_selected)
+	row.add_child(_forest_age_opt)
+	var hint := Label.new()
+	hint.text = "Applies on the next reseed"
+	hint.add_theme_font_size_override("font_size", 10)
+	hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(hint)
+	_sync_forest_age_opt()
+
+
+func _sync_forest_age_opt() -> void:
+	if _forest_age_opt == null:
+		return
+	var cur := str(_values.get("forest_age", VegetationGrowth.FOREST_AGE_MATURE))
+	for i in _forest_age_opt.item_count:
+		if str(_forest_age_opt.get_item_metadata(i)) == cur:
+			_forest_age_opt.select(i)
+			return
+	_forest_age_opt.select(0)
+
+
+func _on_forest_age_selected(idx: int) -> void:
+	if _forest_age_opt == null:
+		return
+	_values["forest_age"] = str(_forest_age_opt.get_item_metadata(idx))
+	_refresh_apply_state()
+
 
 func _build_osm_section(sidebar: VBoxContainer) -> void:
 	var hdr := Label.new()
@@ -1324,6 +1377,7 @@ func _style_dict() -> Dictionary:
 			out[key] = _values[key]
 	# Density drives the auto (OSM) forest scatter density on Apply to map.
 	out["auto_density_scale"] = _density
+	out["forest_age"] = str(_values.get("forest_age", VegetationGrowth.FOREST_AGE_MATURE))
 	return out
 
 
@@ -1440,6 +1494,7 @@ func _reset_values() -> void:
 	_sync_tint_picker()
 	_sync_top_sliders()
 	_sync_osm_opts()
+	_sync_forest_age_opt()
 	_refresh_all_slider_diffs()
 	_refresh_apply_state()
 	_queue_rebuild(true)
