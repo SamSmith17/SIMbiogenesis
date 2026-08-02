@@ -195,10 +195,15 @@ static func _build_mesh_for_species(species: String, settings: Dictionary) -> Ar
 	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
 	# Phase 5 photocard upgrade: a PNG dropped at
 	# assets/vegetation/photocards/<id>.png (or user://veg_photocards/) swaps
-	# the species to textured crossed cards, no code change.
-	var photo := VegSpeciesRegistry.photocard_texture(species)
-	if photo != null:
-		return _build_photocard_mesh(species, s, photo)
+	# the species to textured crossed cards, no code change. Canopy families
+	# (pine/deciduous) are EXEMPT here — their photocard rides the FAR tier
+	# only (see mesh_for_canopy_lod): a flat card 10 m from the camera reads
+	# worse than the procedural leaf shells, but it beats the crossed-puff
+	# FAR cards hands down.
+	if family != "pine" and family != "deciduous":
+		var photo := VegSpeciesRegistry.photocard_texture(species)
+		if photo != null:
+			return _build_photocard_mesh(species, s, photo)
 	match family:
 		"deciduous":
 			return mesh_for_deciduous_lod(s, CanopyLodTier.NEAR)
@@ -345,6 +350,12 @@ static func mesh_for_canopy_lod(species: String, settings: Dictionary, tier: Can
 	var family := mesh_family(species)
 	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
 	var mesh: ArrayMesh
+	# Photocard upgrade for the FAR tier: a real cutout beats the crossed-puff
+	# cards at distance, while NEAR keeps the full procedural leaf shells.
+	if tier == CanopyLodTier.FAR and (family == "pine" or family == "deciduous"):
+		var photo := VegSpeciesRegistry.photocard_texture(species)
+		if photo != null:
+			return VegAssetCache.store(key, _build_photocard_mesh(species, s, photo))
 	if family == "deciduous":
 		mesh = mesh_for_deciduous_lod(s, tier)
 	elif family == "pine":

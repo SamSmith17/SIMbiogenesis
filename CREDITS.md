@@ -230,7 +230,27 @@ origin + license here as it's added (PBR sets `Wood034_1K-JPG/`,
   them inside a game is fine, re-publishing the FBX files as an asset pack is
   not. No attribution is contractually required; recorded here because the
   ledger tracks every third-party asset.
-- _(remaining entries to be filled — PBR texture sets and other downloaded GLBs)_
+- **high-res tree textures** — photoreal conifer cutouts used as vegetation
+  photocards (`assets/vegetation/photocards/spruce|fir|pine|cedar.png`,
+  split/trimmed/downscaled from `trees_1K.zip` via
+  `vegetation/tools/photocard_ingest.gd`).
+  - Author: rubberduck
+  - Source: https://opengameart.org/content/high-res-tree-textures
+  - License: CC0-1.0  ·  Added: 2026-08-01
+  - Attribution required: no  ·  Share-alike: no  ·  Commercial OK: yes
+  - Notes: 4 of 7 trees kept (one crop from a touching triple); normal maps
+    not used. Attribution voluntary (CC0) — credited anyway per ledger policy.
+  - Status: verified
+- **Oasis Palm Trees** — rendered palm cutouts used as vegetation photocards
+  (`assets/vegetation/photocards/coconut_palm|date_palm|fan_palm.png`, first
+  wind frame of each tree extracted from the sprite zip, trimmed/downscaled).
+  - Author: City Building Game Art (CityBuildingKit.com)
+  - Source: https://opengameart.org/content/oasis-palm-trees
+  - License: CC0-1.0  ·  Added: 2026-08-01
+  - Attribution required: no  ·  Share-alike: no  ·  Commercial OK: yes
+  - Notes: Blender source + animation frames discarded; creator suggests
+    (optional) credit to CityBuildingKit.com — given here.
+  - Status: verified
 
 ## Fonts
 

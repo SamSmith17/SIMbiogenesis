@@ -144,9 +144,15 @@ func _test_food_data() -> void:
 
 func _test_exotic_meshes() -> void:
 	VegAssetCache.clear()
-	var palm := VegetationCardFactory.mesh_for_species("coconut_palm", {})
-	_check("palm mesh has bark + frond surfaces", palm.get_surface_count() == 2)
-	var aabb := palm.get_aabb()
+	# Generic "palm" has NO shipped photocard, so it exercises the procedural
+	# frond builder; coconut/date/fan ship photocards (full swap, 1 surface).
+	var palm := VegetationCardFactory.mesh_for_species("palm", {})
+	_check("procedural palm has bark + frond surfaces", palm.get_surface_count() == 2)
+	_check("procedural palm is tall (%.1f m)" % palm.get_aabb().size.y,
+		palm.get_aabb().size.y > 8.0)
+	var coco := VegetationCardFactory.mesh_for_species("coconut_palm", {})
+	_check("shipped coconut photocard swaps in (1 surface)", coco.get_surface_count() == 1)
+	var aabb := coco.get_aabb()
 	_check("coconut palm is tall (%.1f m)" % aabb.size.y, aabb.size.y > 10.0)
 	var saguaro := VegetationCardFactory.mesh_for_species("saguaro", {})
 	_check("saguaro single surface", saguaro.get_surface_count() == 1)
@@ -167,18 +173,34 @@ func _test_photocard_hook() -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var img := Image.create(8, 8, false, Image.FORMAT_RGBA8)
 	img.fill(Color(1, 0, 0, 1))
-	var path := "%s/maple.png" % dir
-	img.save_png(path)
+	var maple_path := "%s/maple.png" % dir
+	var saguaro_path := "%s/saguaro.png" % dir
+	img.save_png(maple_path)
+	img.save_png(saguaro_path)
 	VegSpeciesRegistry.reset()
 	VegAssetCache.clear()
-	var tex := VegSpeciesRegistry.photocard_texture("maple")
-	_check("photocard texture found", tex != null)
-	var mesh := VegetationCardFactory.mesh_for_species("maple", {})
-	_check("photocard mesh is crossed cards (1 surface)", mesh.get_surface_count() == 1)
-	_check("photocard mesh carries its material",
-		VegetationCardFactory.mesh_has_surface_materials("maple"))
-	DirAccess.remove_absolute(path)
+	_check("photocard texture found", VegSpeciesRegistry.photocard_texture("maple") != null)
+	# Canopy families: NEAR keeps the procedural leaf shells (a flat card at
+	# 10 m is worse); the photocard rides the FAR tier only.
+	var near := VegetationCardFactory.mesh_for_canopy_lod("maple", {},
+		VegetationCardFactory.CanopyLodTier.NEAR)
+	_check("canopy NEAR stays procedural (3 surfaces)", near.get_surface_count() == 3,
+		"got %d" % near.get_surface_count())
+	var far := VegetationCardFactory.mesh_for_canopy_lod("maple", {},
+		VegetationCardFactory.CanopyLodTier.FAR)
+	_check("canopy FAR becomes the photocard (1 surface)", far.get_surface_count() == 1,
+		"got %d" % far.get_surface_count())
+	# Non-canopy families swap the whole species mesh.
+	var cactus := VegetationCardFactory.mesh_for_species("saguaro", {})
+	_check("non-canopy photocard full swap (1 surface)", cactus.get_surface_count() == 1)
+	_check("photocard species carries its material",
+		VegetationCardFactory.mesh_has_surface_materials("saguaro"))
+	DirAccess.remove_absolute(maple_path)
+	DirAccess.remove_absolute(saguaro_path)
 	VegSpeciesRegistry.reset()
 	VegAssetCache.clear()
-	_check("removal restores procedural (3 surfaces)",
-		VegetationCardFactory.mesh_for_species("maple", {}).get_surface_count() == 3)
+	_check("removal restores procedural FAR (2 surfaces)",
+		VegetationCardFactory.mesh_for_canopy_lod("maple", {},
+			VegetationCardFactory.CanopyLodTier.FAR).get_surface_count() == 2)
+	_check("removal restores procedural cactus (no embedded material)",
+		not VegetationCardFactory.mesh_has_surface_materials("saguaro"))
