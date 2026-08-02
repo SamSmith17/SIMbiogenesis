@@ -654,6 +654,85 @@ func _process_wind_pbi(item: Dictionary, specs: Dictionary) -> void:
 		_cache_conn_flow(str(conn.get("id", "")), kinetic_kw, "wind")
 
 
+## Food forest (veg overhaul Phase 10): the trees standing inside an OSM
+## vegetation area, summarised by VegFoodYield into one bed node.
+##
+## Deliberately NOT the annual-crop model above. These are established
+## perennials: rain-fed (an unwired water port is normal, not a fault), and
+## their whole year of yield is delivered across the harvest window rather than
+## trickled hour by hour — which is what makes a food forest read as a season
+## rather than a pipe. Outside the window the node is idle and says when the
+## next harvest is.
+##
+## Runs on the same ambient tick as everything else here, so a food forest
+## harvests with the graph screen closed.
+func _process_food_forest(item: Dictionary, specs: Dictionary,
+		net_rates: Dictionary, dt_hours: float, abs_h: float) -> void:
+	var iid := str(item.get("id", ""))
+	var kg_year := maxf(float(specs.get("food_kg_per_year", 0.0)), 0.0)
+	var start_doy := int(specs.get("harvest_start_doy", 1))
+	var end_doy := int(specs.get("harvest_end_doy", 365))
+	var doy := _sim_doy()
+	specs["food_in_season"] = VegFoodYield.in_window(doy, start_doy, end_doy)
+
+	var bio_id := _tank_at_port(iid, "biomass_out", false)
+	if bio_id.is_empty():
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "unwired out"
+		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
+				GraphNodeState.REASON_OUTPUT_UNWIRED, ["biomass"])
+		_model.update_item(iid, {"specs": specs})
+		return
+	if not bool(specs["food_in_season"]) or kg_year <= 0.0:
+		var wait := VegFoodYield.days_until_harvest(doy, start_doy, end_doy)
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "harvest in %d d" % wait if kg_year > 0.0 else "no yield"
+		_write_node_state(iid, specs, GraphNodeState.IDLE)
+		_model.update_item(iid, {"specs": specs})
+		return
+
+	var bio_item := _model.get_item(bio_id)
+	var bio_specs: Dictionary = (bio_item.get("specs", {}) as Dictionary).duplicate(true)
+	_rk.migrate_resource_specs(bio_specs)
+	var bio_tl: ResourceTimeline = _timelines.get(bio_id) as ResourceTimeline
+	if not bool(bio_specs.get("input_valve_open", true)):
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "out closed"
+		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
+				GraphNodeState.REASON_OUTPUT_UNWIRED, ["biomass"])
+		_model.update_item(iid, {"specs": specs})
+		return
+	if not _tank_accepts_inflow(bio_specs, bio_tl, abs_h):
+		# A full store during harvest is the interesting failure — the crop is
+		# ready and there is nowhere to put it.
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "store full"
+		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
+				GraphNodeState.REASON_OUTPUT_FULL, ["biomass"])
+		_model.update_item(iid, {"specs": specs})
+		return
+
+	var rate := VegFoodYield.harvest_rate_kg_per_hour(kg_year, start_doy, end_doy)
+	if not _tank_is_unlimited(bio_specs) and dt_hours > 0.001:
+		var lvl: float = bio_tl.level_at(abs_h) if bio_tl != null else float(bio_specs.get("level", 0.0))
+		var cap: float = maxf(_effective_capacity_qty(bio_specs), 0.001)
+		var headroom: float = maxf(0.998 - lvl, 0.0) * cap
+		rate = minf(rate, headroom / dt_hours)
+	if rate <= 0.0:
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "store full"
+		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
+				GraphNodeState.REASON_OUTPUT_FULL, ["biomass"])
+		_model.update_item(iid, {"specs": specs})
+		return
+
+	net_rates[bio_id] = float(net_rates.get(bio_id, 0.0)) + rate
+	specs["biomass_kg_h"] = rate
+	specs["display_value"] = "%.1f kg/h harvest" % rate
+	_write_node_state(iid, specs, GraphNodeState.RUNNING)
+	_model.update_item(iid, {"specs": specs})
+
+
 ## Grow-bed / plant node: Monteith LUE biomass from ambient PAR (non-blocking
 ## sunlight — same SoI GHI whether or not a radiant wire is drawn), gated by
 ## wired water (required) and optional nutrients. Credits a biomass tank.
@@ -665,6 +744,13 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 	var abs_h: float = abs_hours if abs_hours >= 0.0 else _get_abs_hours()
 	if abs_h < 0.0:
 		abs_h = 0.0
+
+	# Phase 10: a food forest is not an annual crop. Its trees are rain-fed
+	# perennials whose whole year of yield lands inside a harvest window, so it
+	# takes its own branch instead of the LUE/water-gated growth model.
+	if bool(specs.get("food_forest", false)):
+		_process_food_forest(item, specs, net_rates, dt_hours, abs_h)
+		return
 
 	var ghi := _sun_ghi_wm2()
 	var par := SolarIrradiance.par_wm2_from_ghi(ghi)
@@ -1580,6 +1666,38 @@ func _soi_area_m2() -> float:
 	if soi != null and soi.has_method("area_m2"):
 		return float(soi.call("area_m2"))
 	return 0.0
+
+
+## Day of year for the harvest-window test (Phase 10 food forests). Mirrors
+## _sim_month: the render context wins during a bake so a pre-baked challenge
+## harvests on the same days the live sim would.
+func _sim_doy() -> int:
+	var month := 6
+	var day := 15
+	if _render_ctx_active:
+		var d := _date_at_render()
+		if not d.is_empty():
+			month = int(d.get("month", month))
+			day = int(d.get("day", day))
+			return _doy_from(month, day)
+	var main_node: Node = null
+	if _host != null and _host.has_method("_get_scene_main_node"):
+		main_node = _host.call("_get_scene_main_node")
+	if main_node != null:
+		if main_node.get("day_of_year") != null:
+			return int(main_node.get("day_of_year"))
+		if main_node.get("month") != null:
+			month = int(main_node.get("month"))
+		if main_node.get("day") != null:
+			day = int(main_node.get("day"))
+	return _doy_from(month, day)
+
+
+const _DAYS_BEFORE_MONTH := [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+
+
+static func _doy_from(month: int, day: int) -> int:
+	return int(_DAYS_BEFORE_MONTH[clampi(month, 1, 12) - 1]) + clampi(day, 1, 31)
 
 
 func _sim_month() -> int:

@@ -111,6 +111,12 @@ Godot.exe.exe --headless --path . --script vegetation/veg_species_registry_selft
 # VegLeafFall's drop window vs spring leaf-out, and the VegLitterMask
 # sizing/conifer-exclusion/seasonal-strength rules):
 Godot.exe.exe --headless --path . --script vegetation/veg_phenology_selftest.gd
+# Food forest yield (offline — Phase 10: VegFoodYield's per-polygon summary
+# over the layer records + species registry, the maturity ramp (nothing below
+# half size), harvest windows INCLUDING the ones that wrap the new year, and
+# the property the flow engine leans on — integrating the harvest rate over the
+# window returns exactly the annual yield):
+Godot.exe.exe --headless --path . --script vegetation/veg_food_selftest.gd
 # Veg paint dock state (offline — Phase 8: the chip row's pure data model, the
 # tool/shape/species state machine over a REAL instantiated dock, and the
 # per-tree Select primitives on VegetationLayer. Two traps this file exists to
@@ -282,6 +288,13 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # OPEN (Phase 8 made applying iterative instead of close-on-apply). Read-only —
 # it never paints or persists:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=vegdock --shots-dir=<label> --quit-after-capture
+# Food-forest harvest guard (WINDOWED, console-only — veg overhaul Phase 10):
+# seeds a food-forest bed + biomass store on the graph, keeps the graph screen
+# CLOSED, and asserts the harvest is credited on the ambient tick INSIDE the
+# window and nothing is credited outside it. Keep the test time_scale low (20
+# h/s): at 400 h/s a 4 s run advances 66 sim-days and leaves the 61-day harvest
+# window before the assertion reads it. Removes its seeded nodes afterward:
+Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=foodforest --quit-after-capture
 # Ambient resource-flow regression guard (WINDOWED — the harness hard no-ops
 # under --headless; no screenshots, console-only): builds a primed pond+siphon+
 # culvert-outlet, keeps SystemGraphView.visible=false the ENTIRE time (graph
@@ -819,6 +832,21 @@ Tune-look modal exposes it and its "Growth yrs" sliders are now "Maturity age
 `get_instance_transform` (the buffer lives in the RenderingServer stub), so the
 offline test asserts the derived scale and the ground-query COUNT rather than
 reading transforms back.
+
+**Food forest → graph (Phase 10).** Adding an OSM vegetation area to the graph
+(`terrain_loader.add_veg_area_plant_to_graph` → `add_imported_plant`) now
+summarises the food-bearing trees ACTUALLY standing in that outline —
+`VegFoodYield.summarize` over both veg layers, per-tree registry yields ×
+maturity — and the bed becomes a `food_forest` plant node instead of the
+generic annual-crop one. `ResourceFlowEngine._process_food_forest` takes its
+own branch: rain-fed (an unwired water port is normal, not a fault), and a
+whole year's yield delivered across the harvest window rather than trickled
+hourly, so a food forest reads as a season. Outside the window the node idles
+with "harvest in N d". Windows may WRAP the new year (an orange is doy 335→90),
+which is why `in_window`/`window_days` exist rather than a `start <= doy <= end`
+test. Maturity gates yield: nothing below half apparent size, ramping to full —
+a freshly planted fill must not read as a working orchard. Verify with
+`--capture=foodforest` (above) + `vegetation/veg_food_selftest.gd`.
 
 **Vegetation paint + live preview (`scenes/ui/vegetation_edit_ui.gd`,
 `scenes/ui/vegetation_preview_editor.gd`).** V toggles the bottom paint dock

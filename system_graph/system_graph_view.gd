@@ -7325,6 +7325,38 @@ func add_imported_plant(payload: Dictionary) -> bool:
 	var fw := maxf(float(payload.get("width_m", sqrt(area))), 1.0)
 	var fd := maxf(float(payload.get("depth_m", sqrt(area))), 1.0)
 	var label := str(payload.get("label", "OSM Field"))
+	var specs := {
+		"name": label,
+		"area_m2": area,
+		"use_soi_area": false,
+		"lue_g_per_mj": 2.0,
+		"water_l_per_kg": 50.0,
+		"nutrient_kg_per_kg": 0.02,
+		"sunlight_factor": 1.0,
+		"cost": 0.0,
+		"osm_import": true,
+		"osm_tag": tag,
+		"veg_kind": str(payload.get("veg_kind", "")),
+		"footprint_w_m": fw,
+		"footprint_d_m": fd,
+		"map_display_scale": 1.0,
+		"osm_poly_site": poly_site,
+	}
+	# Phase 10 food forest: perennials that yield inside a harvest window rather
+	# than photosynthesising a crop hour by hour. ResourceFlowEngine._process_plant
+	# takes a different branch when food_forest is set.
+	var food: Variant = payload.get("food", {})
+	if food is Dictionary and float((food as Dictionary).get("kg_per_year", 0.0)) > 0.0:
+		var fsum: Dictionary = food
+		specs["food_forest"] = true
+		specs["food_trees"] = int(fsum.get("trees", 0))
+		specs["food_kg_per_year"] = float(fsum.get("kg_per_year", 0.0))
+		specs["food_kcal_per_kg"] = float(fsum.get("kcal_per_kg", 0.0))
+		specs["food_kcal_per_year"] = float(fsum.get("kcal_per_year", 0.0))
+		specs["harvest_start_doy"] = int(fsum.get("harvest_start_doy", 1))
+		specs["harvest_end_doy"] = int(fsum.get("harvest_end_doy", 365))
+		specs["food_dominant"] = str(fsum.get("dominant", ""))
+		specs["food_species"] = (fsum.get("species_counts", {}) as Dictionary).duplicate()
 	model.add_item({
 		"id": model.generate_item_id(),
 		"type": "plant",
@@ -7333,23 +7365,7 @@ func add_imported_plant(payload: Dictionary) -> bool:
 		"scope_id": "root",
 		"site_x_m": site.x,
 		"site_z_m": site.y,
-		"specs": {
-			"name": label,
-			"area_m2": area,
-			"use_soi_area": false,
-			"lue_g_per_mj": 2.0,
-			"water_l_per_kg": 50.0,
-			"nutrient_kg_per_kg": 0.02,
-			"sunlight_factor": 1.0,
-			"cost": 0.0,
-			"osm_import": true,
-			"osm_tag": tag,
-			"veg_kind": str(payload.get("veg_kind", "")),
-			"footprint_w_m": fw,
-			"footprint_d_m": fd,
-			"map_display_scale": 1.0,
-			"osm_poly_site": poly_site,
-		},
+		"specs": specs,
 		"is_virtual": false,
 	})
 	_schedule_graph_autosave()

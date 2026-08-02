@@ -151,6 +151,8 @@ func _ready() -> void:
 			_run_area_fill_verify.call_deferred()
 		elif _capture_mode == "vegdock":
 			_run_veg_dock_capture.call_deferred()
+		elif _capture_mode == "foodforest":
+			_run_food_forest_verify.call_deferred()
 		else:
 			_await_and_run.call_deferred()
 
@@ -334,6 +336,8 @@ func _launch_map() -> void:
 		_run_area_fill_verify()
 	elif _capture_mode == "vegdock":
 		_run_veg_dock_capture()
+	elif _capture_mode == "foodforest":
+		_run_food_forest_verify()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -371,6 +375,8 @@ func _launch_scene_direct() -> void:
 		_run_area_fill_verify()
 	elif _capture_mode == "vegdock":
 		_run_veg_dock_capture()
+	elif _capture_mode == "foodforest":
+		_run_food_forest_verify()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -3691,3 +3697,120 @@ func _shoot_ui(dir: String, name: String) -> void:
 	await RenderingServer.frame_post_draw
 	var img := get_viewport().get_texture().get_image()
 	img.save_png("%s/%s.png" % [dir, name])
+
+
+# ==================== FOOD FOREST VERIFY (--capture=foodforest) ====================
+# Veg overhaul Phase 10, console-only. Seeds a food-forest bed node + a biomass
+# store on the graph, keeps the graph screen CLOSED the whole time, and asserts
+# the harvest lands on the ambient tick INSIDE the window and stops outside it.
+# The seeded items are removed again so the soak map's autosave is unchanged.
+
+func _run_food_forest_verify() -> void:
+	var sgv := await _find_graph_view()
+	if sgv == null:
+		push_error("PlaytestHarness: SystemGraphView not found — aborting food forest verify")
+		_maybe_quit()
+		return
+	sgv.visible = false
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var model: Variant = sgv.get("model")
+	if model == null or not model.has_method("add_item"):
+		push_error("PlaytestHarness: graph model unavailable — aborting food forest verify")
+		_maybe_quit()
+		return
+
+	var bed_id := "cap_food_bed"
+	var store_id := "cap_food_store"
+	for pid in [bed_id, store_id]:
+		if not (model.get_item(pid) as Dictionary).is_empty():
+			model.remove_item(pid)
+	# 100 mature apple trees: 80 kg/yr each, harvested doy 244–304.
+	model.add_item({
+		"id": bed_id, "type": "plant", "x": 0.0, "y": 0.0,
+		"width": 160.0, "height": 130.0,
+		"specs": {
+			"name": "Test Food Forest", "food_forest": true,
+			"food_trees": 100, "food_kg_per_year": 8000.0,
+			"food_kcal_per_kg": 520.0, "food_kcal_per_year": 4160000.0,
+			"harvest_start_doy": 244, "harvest_end_doy": 304,
+			"food_dominant": "apple", "area_m2": 4000.0,
+		},
+	})
+	model.add_item({
+		"id": store_id, "type": "resource", "x": 320.0, "y": 0.0,
+		"width": 72.0, "height": 72.0,
+		"specs": {
+			"name": "Test Harvest Store", "resource_kind": "biomass",
+			"capacity_qty": 100000.0, "capacity_unit": "kg", "level": 0.0,
+		},
+	})
+	model.add_connection({
+		"polarity": "resource", "resource_type": "biomass",
+		"source_item_id": bed_id, "source_handle_id": "biomass_out",
+		"target_item_id": store_id, "target_handle_id": "input",
+	})
+
+	var main := get_tree().current_scene
+	# --- in season (mid-September) ---
+	_set_capture_date(main, 9, 15)
+	var lvl0 := _spec_float(model, store_id, "level")
+	# 20 h/s over 4 s is ~3.3 sim-days: enough mass to measure, little enough
+	# that the clock stays INSIDE the 61-day window. (At 400 h/s the run
+	# advanced 66 days and left the harvest season before the assertion.)
+	if main != null and "time_scale" in main:
+		main.time_scale = 20.0
+	await get_tree().create_timer(4.0).timeout
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	var lvl1 := _spec_float(model, store_id, "level")
+	var bed1: Dictionary = model.get_item(bed_id).get("specs", {}) as Dictionary
+	var in_season := bool(bed1.get("food_in_season", false))
+	var harvested := lvl1 > lvl0 + 1.0e-6
+	print("PlaytestHarness: foodforest — in-season display='%s' rate=%.3f kg/h, store %.6f -> %.6f" % [
+		str(bed1.get("display_value", "")), float(bed1.get("biomass_kg_h", 0.0)), lvl0, lvl1])
+	print("PlaytestHarness: foodforest %s — harvest credited with the graph CLOSED (visible=%s)"
+		% ["PASS" if (in_season and harvested) else "FAIL", str(sgv.visible)])
+
+	# --- out of season (mid-January) ---
+	_set_capture_date(main, 1, 15)
+	await get_tree().create_timer(1.0).timeout
+	var lvl2 := _spec_float(model, store_id, "level")
+	if main != null and "time_scale" in main:
+		main.time_scale = 20.0
+	await get_tree().create_timer(3.0).timeout
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	var lvl3 := _spec_float(model, store_id, "level")
+	var bed2: Dictionary = model.get_item(bed_id).get("specs", {}) as Dictionary
+	var idle := not bool(bed2.get("food_in_season", true))
+	var quiet := absf(lvl3 - lvl2) < 1.0e-6
+	print("PlaytestHarness: foodforest — off-season display='%s', store %.6f -> %.6f" % [
+		str(bed2.get("display_value", "")), lvl2, lvl3])
+	print("PlaytestHarness: foodforest %s — nothing harvested out of season"
+		% ["PASS" if (idle and quiet) else "FAIL"])
+
+	for pid in [bed_id, store_id]:
+		if not (model.get_item(pid) as Dictionary).is_empty():
+			model.remove_item(pid)
+	print("PlaytestHarness: foodforest — removed the seeded test nodes")
+	_maybe_quit()
+
+
+func _set_capture_date(main: Node, month: int, day: int) -> void:
+	if main == null:
+		return
+	if "month" in main:
+		main.month = month
+	if "day" in main:
+		main.day = day
+
+
+func _spec_float(model: Variant, item_id: String, key: String) -> float:
+	var it: Dictionary = model.get_item(item_id)
+	if it.is_empty():
+		return 0.0
+	return float((it.get("specs", {}) as Dictionary).get(key, 0.0))

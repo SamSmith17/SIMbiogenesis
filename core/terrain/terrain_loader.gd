@@ -2947,7 +2947,11 @@ func add_veg_area_plant_to_graph(idx: int) -> bool:
 		_notify_options_status("System graph unavailable for plant import", "warn")
 		return false
 	var label := "OSM %s" % str(info.get("kind_label", "field")).capitalize()
-	var ok: bool = bool(graph.call("add_imported_plant", {
+	# Phase 10: if the trees standing in this outline are food species, the bed
+	# becomes a FOOD FOREST node — a rain-fed perennial crop delivered in a
+	# harvest window — instead of the generic annual-crop plant model.
+	var food := _area_food_summary(poly)
+	var payload := {
 		"osm_tag": tag,
 		"label": label,
 		"area_m2": maxf(area, 1.0),
@@ -2956,12 +2960,56 @@ func add_veg_area_plant_to_graph(idx: int) -> bool:
 		"depth_m": maxf(max_v.y - min_v.y, 1.0),
 		"points": poly,
 		"veg_kind": kind,
-	}))
+	}
+	if float(food.get("kg_per_year", 0.0)) > 0.0:
+		payload["food"] = food
+		payload["label"] = "%s Food Forest" % str(info.get("kind_label", "area")).capitalize()
+	var ok: bool = bool(graph.call("add_imported_plant", payload))
 	if ok:
-		_notify_options_status(
-				"Added crop area: %.0f m² (%s) → system graph" % [area, kind], "ok")
-		print("TerrainLoader: added OSM veg plant '%s' (%.0f m², %s) to the system graph" % [tag, area, kind])
+		if payload.has("food"):
+			_notify_options_status("Added food forest: %d trees, %.0f kg/yr → system graph"
+				% [int(food.get("trees", 0)), float(food.get("kg_per_year", 0.0))], "ok")
+			print("TerrainLoader: added food forest '%s' — %d trees, %.0f kg/yr (%.0f kcal/yr), harvest doy %d–%d" % [
+				tag, int(food.get("trees", 0)), float(food.get("kg_per_year", 0.0)),
+				float(food.get("kcal_per_year", 0.0)),
+				int(food.get("harvest_start_doy", 1)), int(food.get("harvest_end_doy", 365))])
+		else:
+			_notify_options_status(
+					"Added crop area: %.0f m² (%s) → system graph" % [area, kind], "ok")
+			print("TerrainLoader: added OSM veg plant '%s' (%.0f m², %s) to the system graph" % [tag, area, kind])
 	return ok
+
+
+## Food yield of every food-bearing plant inside a polygon, across BOTH veg
+## layers — an area fill lands in the auto layer, hand-painted trees in the
+## manual one, and the player sees one orchard either way.
+func _area_food_summary(poly: PackedVector2Array) -> Dictionary:
+	var st := _growth_style()
+	var total := VegFoodYield.summarize(
+		_auto_veg_layer.bulk if _auto_veg_layer != null else {}, poly, st)
+	if _vegetation_layer == null:
+		return total
+	var manual := VegFoodYield.summarize(_vegetation_layer.bulk, poly, st)
+	if int(manual.get("trees", 0)) <= 0:
+		return total
+	if int(total.get("trees", 0)) <= 0:
+		return manual
+	# Merge: masses add, the dominant species (and so the harvest window) is
+	# whichever layer contributes more.
+	var merged := total.duplicate(true)
+	merged["trees"] = int(total["trees"]) + int(manual["trees"])
+	merged["kg_per_year"] = float(total["kg_per_year"]) + float(manual["kg_per_year"])
+	merged["kcal_per_year"] = float(total["kcal_per_year"]) + float(manual["kcal_per_year"])
+	merged["kcal_per_kg"] = float(merged["kcal_per_year"]) / maxf(float(merged["kg_per_year"]), 0.001)
+	var counts: Dictionary = (total.get("species_counts", {}) as Dictionary).duplicate()
+	for k in (manual.get("species_counts", {}) as Dictionary):
+		counts[k] = int(counts.get(k, 0)) + int((manual["species_counts"] as Dictionary)[k])
+	merged["species_counts"] = counts
+	if float(manual.get("kg_per_year", 0.0)) > float(total.get("kg_per_year", 0.0)):
+		merged["dominant"] = manual.get("dominant", "")
+		merged["harvest_start_doy"] = manual.get("harvest_start_doy", 1)
+		merged["harvest_end_doy"] = manual.get("harvest_end_doy", 365)
+	return merged
 
 
 ## Highlight roof / veg by osm_tag for graph ↔ world selection sync.
