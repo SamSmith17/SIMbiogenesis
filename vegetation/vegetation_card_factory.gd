@@ -119,6 +119,55 @@ const SPECS := {
 	"lettuce": {"width": 0.45, "height": 0.28,
 		"top": Color(0.20, 0.55, 0.18), "bottom": Color(0.15, 0.42, 0.12),
 		"highlight": Color(0.40, 0.70, 0.28)},
+	# --- Phase 5: palms (palm builder; width = frond spread, height = trunk) ---
+	"palm": {"width": 5.5, "height": 9.0, "trunk_w": 0.35,
+		"top": Color(0.13, 0.34, 0.10), "bottom": Color(0.10, 0.24, 0.07),
+		"highlight": Color(0.35, 0.52, 0.16),
+		"bark": Color(0.42, 0.34, 0.24)},
+	"coconut_palm": {"width": 6.5, "height": 14.0, "trunk_w": 0.35,
+		"top": Color(0.14, 0.36, 0.11), "bottom": Color(0.10, 0.26, 0.08),
+		"highlight": Color(0.40, 0.56, 0.18),
+		"bark": Color(0.48, 0.40, 0.30)},
+	"date_palm": {"width": 6.0, "height": 12.0, "trunk_w": 0.55,
+		"top": Color(0.16, 0.32, 0.12), "bottom": Color(0.12, 0.24, 0.09),
+		"highlight": Color(0.42, 0.50, 0.20),
+		"bark": Color(0.40, 0.30, 0.20)},
+	"fan_palm": {"width": 4.5, "height": 8.0, "trunk_w": 0.45,
+		"top": Color(0.15, 0.35, 0.13), "bottom": Color(0.11, 0.26, 0.09),
+		"highlight": Color(0.38, 0.52, 0.20),
+		"bark": Color(0.38, 0.30, 0.22)},
+	# --- Phase 5: cacti (cactus builder; width = body/arm spread) ---
+	"saguaro": {"width": 2.6, "height": 6.0,
+		"top": Color(0.16, 0.34, 0.15), "bottom": Color(0.12, 0.26, 0.11),
+		"highlight": Color(0.30, 0.46, 0.22)},
+	"prickly_pear": {"width": 1.6, "height": 1.2,
+		"top": Color(0.19, 0.38, 0.16), "bottom": Color(0.14, 0.28, 0.12),
+		"highlight": Color(0.36, 0.52, 0.24)},
+	# --- Phase 5: tropical / food broadleaf variants (deciduous builder) ---
+	"walnut": {"width": 12.0, "height": 5.5, "trunk_w": 0.55, "trunk_h": 5.0,
+		"top": Color(0.17, 0.36, 0.10), "bottom": Color(0.22, 0.16, 0.06),
+		"highlight": Color(0.40, 0.50, 0.16),
+		"bark": Color(0.24, 0.18, 0.12)},
+	"olive": {"width": 6.5, "height": 3.6, "trunk_w": 0.45, "trunk_h": 2.2,
+		"top": Color(0.28, 0.38, 0.22), "bottom": Color(0.22, 0.28, 0.16),
+		"highlight": Color(0.55, 0.60, 0.38),
+		"bark": Color(0.32, 0.28, 0.22)},
+	"mango": {"width": 10.0, "height": 5.5, "trunk_w": 0.50, "trunk_h": 3.0,
+		"top": Color(0.10, 0.30, 0.09), "bottom": Color(0.14, 0.20, 0.07),
+		"highlight": Color(0.30, 0.46, 0.14),
+		"bark": Color(0.22, 0.16, 0.10)},
+	"banana": {"width": 4.0, "height": 3.5, "trunk_w": 0.30, "trunk_h": 2.0,
+		"top": Color(0.20, 0.46, 0.14), "bottom": Color(0.16, 0.36, 0.10),
+		"highlight": Color(0.45, 0.65, 0.22),
+		"bark": Color(0.30, 0.36, 0.18)},
+	"ficus": {"width": 13.0, "height": 6.0, "trunk_w": 0.80, "trunk_h": 3.5,
+		"top": Color(0.10, 0.28, 0.09), "bottom": Color(0.14, 0.20, 0.08),
+		"highlight": Color(0.26, 0.42, 0.14),
+		"bark": Color(0.36, 0.32, 0.26)},
+	"acacia": {"width": 12.0, "height": 4.0, "trunk_w": 0.40, "trunk_h": 3.5,
+		"top": Color(0.22, 0.36, 0.12), "bottom": Color(0.26, 0.24, 0.10),
+		"highlight": Color(0.48, 0.54, 0.20),
+		"bark": Color(0.26, 0.20, 0.14)},
 }
 
 
@@ -144,6 +193,12 @@ static func mesh_for_species(species: String, settings: Dictionary = {}) -> Arra
 static func _build_mesh_for_species(species: String, settings: Dictionary) -> ArrayMesh:
 	var family := mesh_family(species)
 	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
+	# Phase 5 photocard upgrade: a PNG dropped at
+	# assets/vegetation/photocards/<id>.png (or user://veg_photocards/) swaps
+	# the species to textured crossed cards, no code change.
+	var photo := VegSpeciesRegistry.photocard_texture(species)
+	if photo != null:
+		return _build_photocard_mesh(species, s, photo)
 	match family:
 		"deciduous":
 			return mesh_for_deciduous_lod(s, CanopyLodTier.NEAR)
@@ -151,6 +206,10 @@ static func _build_mesh_for_species(species: String, settings: Dictionary) -> Ar
 			return mesh_for_pine_lod(s, CanopyLodTier.NEAR)
 		"shrub":
 			return _build_shrub_mesh(_shrub_spec(s, species), s)
+		"palm":
+			return _build_palm_mesh(_palm_spec(s, species), s)
+		"cactus":
+			return _build_cactus_mesh(_cactus_spec(s, species), s, species)
 		"grass_lawn":
 			return _build_grass_mesh(_grass_lawn_spec(s, species))
 		"grass_field":
@@ -160,9 +219,12 @@ static func _build_mesh_for_species(species: String, settings: Dictionary) -> Ar
 
 
 ## True when mesh carries per-surface materials (trunk + foliage surfaces).
+## Photocard meshes and palms embed their materials too.
 static func mesh_has_surface_materials(species: String) -> bool:
+	if VegSpeciesRegistry.photocard_texture(species) != null:
+		return true
 	var family := mesh_family(species)
-	return family == "deciduous" or family == "pine"
+	return family == "deciduous" or family == "pine" or family == "palm"
 
 
 ## NEAR = procedural leaf shells; FAR = legacy crossed-billboard canopy.
@@ -321,6 +383,10 @@ static func _build_material_for_species(species: String, settings: Dictionary) -
 			spec = _pine_spec(s, species)
 		"shrub":
 			spec = _shrub_spec(s, species)
+		"palm":
+			spec = _palm_spec(s, species)
+		"cactus":
+			spec = _cactus_spec(s, species)
 		"grass_lawn":
 			spec = _grass_lawn_spec(s, species)
 		"grass_field":
@@ -329,6 +395,10 @@ static func _build_material_for_species(species: String, settings: Dictionary) -
 	mat.shader = FOLIAGE_SHADER
 	if family == "deciduous":
 		mat.set_shader_parameter("albedo_tex", _build_cluster_foliage_texture(spec, "deciduous"))
+	elif family == "palm":
+		mat.set_shader_parameter("albedo_tex", _build_palm_frond_texture(spec))
+	elif family == "cactus":
+		mat.set_shader_parameter("albedo_tex", _build_cactus_texture(spec, species))
 	elif family.begins_with("grass_"):
 		mat.set_shader_parameter("albedo_tex", _build_grass_blade_texture(spec))
 	else:
@@ -1431,3 +1501,248 @@ static func _apply_bark_uniforms(mat: ShaderMaterial, settings: Dictionary) -> v
 	if settings.has("bark_albedo_tint"):
 		var c: Color = settings["bark_albedo_tint"]
 		mat.set_shader_parameter("albedo_tint", Vector3(c.r, c.g, c.b))
+
+
+# ==================== PHASE 5: PALM / CACTUS / PHOTOCARD ====================
+
+
+static func _palm_spec(settings: Dictionary, species: String = "palm") -> Dictionary:
+	var base: Dictionary = SPECS.get(species, SPECS["palm"]).duplicate(true)
+	base["width"] = float(settings.get("palm_card_w", base["width"]))
+	base["height"] = float(settings.get("palm_card_h", base["height"]))
+	base["trunk_w"] = float(settings.get("palm_trunk_w", base.get("trunk_w", 0.35)))
+	return base
+
+
+static func _cactus_spec(settings: Dictionary, species: String = "cactus") -> Dictionary:
+	var base: Dictionary = SPECS.get(species, SPECS["cactus"]).duplicate(true)
+	base["width"] = float(settings.get("cactus_card_w", base["width"]))
+	base["height"] = float(settings.get("cactus_card_h", base["height"]))
+	return base
+
+
+## Oriented tapered quad from `origin` along `dir` — the palm frond primitive.
+## UV v runs 0 (base) -> 1 (tip) so the frond texture's rachis points outward.
+static func _add_frond_quad(verts: PackedVector3Array, uvs: PackedVector2Array,
+		normals: PackedVector3Array, indices: PackedInt32Array,
+		origin: Vector3, dir: Vector3, length: float, base_w: float, tip_w: float) -> void:
+	var base := verts.size()
+	var d := dir.normalized()
+	var side := d.cross(Vector3.UP)
+	if side.length() < 0.01:
+		side = Vector3.RIGHT
+	side = side.normalized()
+	var tip := origin + d * length
+	verts.append_array([
+		origin - side * base_w * 0.5, origin + side * base_w * 0.5,
+		tip + side * tip_w * 0.5, tip - side * tip_w * 0.5,
+	])
+	uvs.append_array([
+		Vector2(0.0, 0.0), Vector2(1.0, 0.0), Vector2(1.0, 1.0), Vector2(0.0, 1.0),
+	])
+	var n := side.cross(d).normalized()
+	if n.y < 0.0:
+		n = -n
+	for _j in 4:
+		normals.append(n)
+	indices.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
+
+
+## Palm: 2 crossed tapered trunk cards (bark surface 0) + a radial crown of
+## arched fronds (foliage surface 1). ~2 + N*2 quads per tree (N=9 default) —
+## between pine (23) and shrub (18) in cost. Frond droop and count are
+## deterministic per species so the shared mesh is stable across rebuilds.
+static func _build_palm_mesh(spec: Dictionary, settings: Dictionary) -> ArrayMesh:
+	var trunk_h := float(spec["height"])
+	var trunk_w := float(spec.get("trunk_w", 0.35))
+	var spread := float(spec["width"])
+	var species := str(settings.get("_variant_species", "palm"))
+	var trunk_verts := PackedVector3Array()
+	var trunk_uvs := PackedVector2Array()
+	var trunk_normals := PackedVector3Array()
+	var trunk_indices := PackedInt32Array()
+	for card_i in 2:
+		_add_card(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
+			trunk_w, trunk_h, 0.0, float(card_i) * PI * 0.5, Vector3(0.0, 0.85, 0.0))
+	var mesh := ArrayMesh.new()
+	var trunk_arr: Array = []
+	trunk_arr.resize(Mesh.ARRAY_MAX)
+	trunk_arr[Mesh.ARRAY_VERTEX] = trunk_verts
+	trunk_arr[Mesh.ARRAY_TEX_UV] = trunk_uvs
+	trunk_arr[Mesh.ARRAY_NORMAL] = trunk_normals
+	trunk_arr[Mesh.ARRAY_INDEX] = trunk_indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, trunk_arr)
+	mesh.surface_set_material(0, bark_material_for_species(species, settings))
+
+	var fv := PackedVector3Array()
+	var fu := PackedVector2Array()
+	var fn := PackedVector3Array()
+	var fi := PackedInt32Array()
+	var frond_n := clampi(int(round(float(settings.get("palm_frond_count", 9.0)))), 5, 14)
+	var frond_len := spread * 0.52
+	var frond_w := frond_len * 0.34
+	var crown := Vector3(0.0, trunk_h, 0.0)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = species.hash()
+	# Upper arcing ring + a lower drooping ring — the two-tier crown that
+	# makes a palm silhouette read at a glance.
+	for i in frond_n:
+		var az := TAU * float(i) / float(frond_n) + rng.randf_range(-0.12, 0.12)
+		var pitch := deg_to_rad(rng.randf_range(8.0, 26.0))
+		var dir := Vector3(cos(az) * cos(pitch), sin(pitch), sin(az) * cos(pitch))
+		_add_frond_quad(fv, fu, fn, fi, crown, dir, frond_len, frond_w * 0.5, frond_w)
+	for i in frond_n:
+		var az2 := TAU * (float(i) + 0.5) / float(frond_n) + rng.randf_range(-0.12, 0.12)
+		var pitch2 := deg_to_rad(rng.randf_range(-34.0, -14.0))
+		var dir2 := Vector3(cos(az2) * cos(pitch2), sin(pitch2), sin(az2) * cos(pitch2))
+		_add_frond_quad(fv, fu, fn, fi, crown, dir2, frond_len * 1.08, frond_w * 0.5, frond_w)
+	var f_arr: Array = []
+	f_arr.resize(Mesh.ARRAY_MAX)
+	f_arr[Mesh.ARRAY_VERTEX] = fv
+	f_arr[Mesh.ARRAY_TEX_UV] = fu
+	f_arr[Mesh.ARRAY_NORMAL] = fn
+	f_arr[Mesh.ARRAY_INDEX] = fi
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, f_arr)
+	mesh.surface_set_material(1, material_for_species(species, settings))
+	return mesh
+
+
+## Cactus: columnar body as crossed cards; saguaro-style species get side-arm
+## cards, prickly pear gets a pad cluster. Single foliage-family surface (the
+## runtime applies material_for_species as an override, like shrubs).
+static func _build_cactus_mesh(spec: Dictionary, settings: Dictionary,
+		species: String = "cactus") -> ArrayMesh:
+	var w := float(spec["width"])
+	var h := float(spec["height"])
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var normals := PackedVector3Array()
+	var indices := PackedInt32Array()
+	if species == "prickly_pear":
+		# A low cluster of oval pads.
+		_add_cluster_cards(verts, uvs, normals, indices,
+			Vector3(0.0, h * 0.45, 0.0), w * 0.8, h * 0.9, Vector3(0.0, 0.5, 0.0), 0.0, 4)
+		_add_cluster_cards(verts, uvs, normals, indices,
+			Vector3(w * 0.28, h * 0.3, w * 0.15), w * 0.55, h * 0.6,
+			Vector3(0.0, 0.5, 0.0), 0.7, 3)
+		return _arrays_to_mesh(verts, uvs, normals, indices)
+	# Columnar body.
+	var body_w := w if species != "saguaro" else w * 0.34
+	for card_i in 2:
+		_add_card(verts, uvs, normals, indices, body_w, h, 0.0,
+			float(card_i) * PI * 0.5, Vector3(0.0, 0.35, 0.0))
+	if species == "saguaro" or species == "joshua_tree":
+		# Two asymmetric arms: vertical cards offset from the trunk, starting
+		# mid-height — the classic silhouette.
+		var arm_w := body_w * 0.72
+		var arm_h := h * 0.45
+		for arm in [[-w * 0.32, h * 0.42, 0.35], [w * 0.30, h * 0.55, -0.5]]:
+			for card_i in 2:
+				_add_card(verts, uvs, normals, indices, arm_w, arm_h, float(arm[1]),
+					float(card_i) * PI * 0.5 + float(arm[2]), Vector3(0.0, 0.35, 0.0),
+					Vector3(float(arm[0]), 0.0, float(arm[0]) * 0.4))
+	return _arrays_to_mesh(verts, uvs, normals, indices)
+
+
+## Feathered palm-frond texture: dark central rachis, angled leaflet stripes
+## whose alpha gaps give the classic serrated silhouette. v runs base->tip.
+static func _build_palm_frond_texture(spec: Dictionary) -> Texture2D:
+	var w := 96
+	var h := 160
+	var img := Image.create(w, h, true, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var top: Color = spec["top"]
+	var bottom: Color = spec["bottom"]
+	var highlight: Color = spec["highlight"]
+	for y in h:
+		var v := float(y) / float(h)
+		# Frond narrows toward the tip.
+		var half_w := (0.46 - v * 0.30) * 0.5
+		for x in w:
+			var u := (float(x) + 0.5) / float(w) - 0.5
+			var au := absf(u)
+			if au > half_w:
+				continue
+			# Central rachis strip.
+			if au < 0.022:
+				var rc := bottom.darkened(0.35)
+				rc.a = 1.0
+				img.set_pixel(x, y, rc)
+				continue
+			# Leaflets: stripes angled away from the rachis; the sin gap makes
+			# the serration. Leaflet phase follows distance along the frond.
+			var leaflet := sin((v * 30.0 + au * 26.0) * PI)
+			if leaflet < -0.15:
+				continue
+			var lit := bottom.lerp(top, clampf(v * 1.2, 0.0, 1.0))
+			lit = lit.lerp(highlight, clampf(leaflet, 0.0, 1.0) * 0.35)
+			lit.a = smoothstep(half_w, half_w * 0.85, au)
+			img.set_pixel(x, y, lit)
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
+
+## Ribbed columnar cactus texture (vertical ridge shading, rounded top alpha).
+static func _build_cactus_texture(spec: Dictionary, species: String) -> Texture2D:
+	var w := 64
+	var h := 128
+	var img := Image.create(w, h, true, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var top: Color = spec["top"]
+	var bottom: Color = spec["bottom"]
+	var highlight: Color = spec["highlight"]
+	var pear := species == "prickly_pear"
+	for y in h:
+		var v := float(y) / float(h)
+		for x in w:
+			var u := (float(x) + 0.5) / float(w) - 0.5
+			var au := absf(u)
+			var half_w := 0.42
+			# Rounded top (and rounded pad shape for prickly pear).
+			if pear:
+				var dy := (v - 0.5) * 1.15
+				if u * u + dy * dy > 0.42 * 0.42:
+					continue
+			else:
+				if v > 0.86:
+					var cap := sqrt(maxf(0.0, 1.0 - pow((v - 0.86) / 0.14, 2.0)))
+					half_w = 0.42 * cap
+				if au > half_w:
+					continue
+			# Vertical ribs.
+			var rib := 0.5 + 0.5 * sin(u * TAU * (5.0 if pear else 7.0))
+			var c := bottom.lerp(top, v * 0.8 + 0.1)
+			c = c.lerp(highlight, rib * 0.28)
+			c = c.darkened((1.0 - rib) * 0.22)
+			c.a = 1.0
+			img.set_pixel(x, y, c)
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
+
+## Photocard: 3 crossed cards carrying a REAL photo/render texture, sized from
+## the species SPECS. Rides foliage.gdshader so wind + seasonal uniforms apply
+## (the texture's own colors carry realism; autumn ramp still recolors).
+static func _build_photocard_mesh(species: String, settings: Dictionary,
+		photo: Texture2D) -> ArrayMesh:
+	var family := mesh_family(species)
+	var spec: Dictionary = SPECS.get(species, SPECS.get(family, SPECS["shrub"]))
+	var w := float(spec.get("width", 8.0))
+	var h := float(spec.get("height", 8.0))
+	# Photocards frame the WHOLE tree, so the card height covers trunk+crown.
+	var full_h := h + float(spec.get("trunk_h", 0.0))
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var normals := PackedVector3Array()
+	var indices := PackedInt32Array()
+	for card_i in 3:
+		_add_card(verts, uvs, normals, indices, w, maxf(full_h, h), 0.0,
+			float(card_i) * PI / 3.0, Vector3(0.0, 0.55, 0.0))
+	var mesh := _arrays_to_mesh(verts, uvs, normals, indices)
+	var mat := ShaderMaterial.new()
+	mat.shader = FOLIAGE_SHADER
+	mat.set_shader_parameter("albedo_tex", photo)
+	_apply_foliage_uniforms(mat, family, settings)
+	_configure_foliage_cutout_shadow(mat)
+	mesh.surface_set_material(0, mat)
+	return mesh

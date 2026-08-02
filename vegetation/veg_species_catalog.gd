@@ -5,11 +5,19 @@ extends RefCounted
 ## and local-mix weights. Each id maps to a mesh family (procedural builder) so
 ## players can select distinct species without unique artwork per variant.
 
+## Phase 5: "palm" and "cactus" are REAL builder families now (dedicated
+## procedural meshes in VegetationCardFactory), no longer aliased onto
+## deciduous/shrub. BASE_FAMILIES stays the VegetationLayer slot list.
 const BASE_FAMILIES: Array[String] = [
 	"pine", "deciduous", "shrub", "grass_lawn", "grass_field",
 ]
+const MESH_FAMILIES: Array[String] = [
+	"pine", "deciduous", "shrub", "palm", "cactus", "grass_lawn", "grass_field",
+]
 
 ## species_id → mesh family used by VegetationCardFactory builders.
+## New ids belong in vegetation/species/species_catalog.json (the registry) —
+## mesh_family() consults it before this legacy table.
 const MESH_FAMILY := {
 	# Conifers (pine builder)
 	"spruce": "pine",
@@ -26,16 +34,29 @@ const MESH_FAMILY := {
 	"aspen": "deciduous",
 	"birch": "deciduous",
 	"beech": "deciduous",
+	"walnut": "deciduous",
 	"apple": "deciduous",
 	"pear": "deciduous",
 	"orange": "deciduous",
 	"avocado": "deciduous",
-	"palm": "deciduous",
+	"olive": "deciduous",
+	"mango": "deciduous",
+	"banana": "deciduous",
+	"ficus": "deciduous",
+	"acacia": "deciduous",
 	"broadleaf": "deciduous",
 	"deciduous": "deciduous",
-	# Desert / shrub
-	"cactus": "shrub",
-	"joshua_tree": "shrub",
+	# Palms (palm builder — Phase 5)
+	"palm": "palm",
+	"coconut_palm": "palm",
+	"date_palm": "palm",
+	"fan_palm": "palm",
+	# Desert (cactus builder — Phase 5)
+	"cactus": "cactus",
+	"saguaro": "cactus",
+	"prickly_pear": "cactus",
+	"joshua_tree": "cactus",
+	# Shrub
 	"scrub": "shrub",
 	"shrub": "shrub",
 	# Crops (field-grass builder — tall herbaceous stands)
@@ -55,10 +76,12 @@ const MESH_FAMILY := {
 
 const CONIFER_IDS: Array[String] = ["spruce", "cedar", "pine", "fir", "redwood"]
 const DECIDUOUS_IDS: Array[String] = [
-	"chestnut", "maple", "cottonwood", "aspen", "birch", "beech",
-	"apple", "pear", "orange", "avocado",
+	"chestnut", "maple", "cottonwood", "aspen", "birch", "beech", "walnut",
+	"apple", "pear", "orange", "avocado", "olive",
+	"mango", "banana", "ficus", "acacia",
 ]
-const DESERT_IDS: Array[String] = ["cactus", "joshua_tree"]
+const PALM_IDS: Array[String] = ["palm", "coconut_palm", "date_palm", "fan_palm"]
+const DESERT_IDS: Array[String] = ["cactus", "saguaro", "prickly_pear", "joshua_tree"]
 const CROP_IDS: Array[String] = [
 	"corn", "wheat", "barley", "beans", "quinoa", "squash",
 	"tomatoes", "potatoes", "brassicas", "lettuce",
@@ -133,6 +156,10 @@ static func mesh_family(species: String) -> String:
 		return str(MESH_FAMILY[species])
 	if species in BASE_FAMILIES:
 		return species
+	# Registry-defined species (Phase 5): family comes from the JSON catalog.
+	var reg_fam := VegSpeciesRegistry.family(species)
+	if not reg_fam.is_empty() and reg_fam in MESH_FAMILIES:
+		return reg_fam
 	return "deciduous"
 
 
@@ -149,13 +176,22 @@ static func all_selectable_ids() -> Array[String]:
 	var out: Array[String] = []
 	out.append_array(CONIFER_IDS)
 	out.append_array(DECIDUOUS_IDS)
+	out.append_array(PALM_IDS)
 	out.append_array(DESERT_IDS)
 	out.append_array(CROP_IDS)
+	# Any registry-only species (added via JSON without touching this file).
+	for id in VegSpeciesRegistry.all_ids():
+		if id not in out and id not in BASE_FAMILIES:
+			out.append(id)
 	return out
 
 
 static func label_for(id: String) -> String:
-	return str(LABELS.get(id, id.capitalize()))
+	if LABELS.has(id):
+		return str(LABELS[id])
+	if VegSpeciesRegistry.has_species(id):
+		return VegSpeciesRegistry.label(id)
+	return id.capitalize()
 
 
 ## Flat dim key per family the SPECS geometry maps onto.
@@ -164,6 +200,8 @@ const _FAMILY_DIM_KEYS := {
 	"deciduous": {"canopy_w": "width", "canopy_h": "height",
 		"trunk_w": "trunk_w", "trunk_h": "trunk_h"},
 	"shrub": {"card_w": "width", "card_h": "height"},
+	"palm": {"card_w": "width", "card_h": "height", "trunk_w": "trunk_w"},
+	"cactus": {"card_w": "width", "card_h": "height"},
 	"grass_lawn": {"card_w": "width", "card_h": "height"},
 	"grass_field": {"card_w": "width", "card_h": "height"},
 }
@@ -236,6 +274,8 @@ static func settings_with_variant(species: String, settings: Dictionary,
 
 
 ## Subspecies ids under a paint-dock family button (Pine / Decid / Shrub / grass).
+## Palms ride the Decid button and cacti the Shrub button until the Phase 8
+## dock redesign gives exotics their own picker.
 static func subspecies_for_family(family: String) -> Array[String]:
 	match family:
 		"pine":
@@ -243,7 +283,12 @@ static func subspecies_for_family(family: String) -> Array[String]:
 		"deciduous":
 			var d: Array[String] = DECIDUOUS_IDS.duplicate()
 			d.append("deciduous")
+			d.append_array(PALM_IDS)
 			return d
+		"palm":
+			return PALM_IDS.duplicate()
+		"cactus":
+			return DESERT_IDS.duplicate()
 		"shrub":
 			var s: Array[String] = ["shrub"]
 			s.append_array(DESERT_IDS)
@@ -260,4 +305,5 @@ static func subspecies_for_family(family: String) -> Array[String]:
 
 ## True when species can be painted / stored in the manual vegetation layer.
 static func is_paintable(species: String) -> bool:
-	return MESH_FAMILY.has(species) or species in BASE_FAMILIES
+	return MESH_FAMILY.has(species) or species in BASE_FAMILIES \
+		or VegSpeciesRegistry.has_species(species)

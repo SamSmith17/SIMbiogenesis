@@ -14,13 +14,12 @@ const VISIBILITY_BEGIN := 0.0
 ## stay local — a single site-wide MultiMesh was culled while standing in edge trees).
 const VISIBILITY_END := 1200.0
 
-## Maps biome mesh slots to a card-factory species the factory understands. Slots
-## already named pine/deciduous/shrub pass through; future biome slots
-## (palm/conifer/taiga, added in Phase 3) fall back here until real meshes land.
+## Maps biome mesh slots to a card-factory species the factory understands.
+## Slots with real SPECS entries (incl. Phase 5's palm/cactus families) pass
+## through _resolve_species before this table is consulted.
 const SLOT_ALIAS := {
 	"conifer": "pine",
 	"taiga": "pine",
-	"palm": "deciduous",
 	"broadleaf": "deciduous",
 	"scrub": "shrub",
 	# Named sub-species / crops keep their SPECS ids when present; biome aliases

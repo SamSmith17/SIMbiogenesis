@@ -52,13 +52,18 @@ const KIND_SCATTER_PRIORITY := {
 }
 
 const NOMINAL_CARD_H := {
-	"deciduous": 6.0, "broadleaf": 6.0, "palm": 6.0,
+	"deciduous": 6.0, "broadleaf": 6.0, "palm": 9.0,
 	"conifer": 3.2, "pine": 3.2, "taiga": 3.2,
 	"spruce": 3.6, "cedar": 3.4, "fir": 3.8, "redwood": 6.0,
 	"chestnut": 6.5, "maple": 6.0, "cottonwood": 7.0, "aspen": 5.5,
 	"birch": 5.0, "beech": 6.0, "apple": 4.0, "pear": 4.2,
 	"orange": 3.5, "avocado": 5.0,
-	"shrub": 0.7, "scrub": 0.7, "cactus": 1.5, "joshua_tree": 2.5,
+	# Phase 5 registry species (palm heights are TRUNK height in SPECS).
+	"coconut_palm": 14.0, "date_palm": 12.0, "fan_palm": 8.0,
+	"saguaro": 6.0, "prickly_pear": 1.2,
+	"walnut": 5.5, "olive": 3.6, "mango": 5.5, "banana": 3.5,
+	"ficus": 6.0, "acacia": 4.0,
+	"shrub": 0.7, "scrub": 0.7, "cactus": 2.2, "joshua_tree": 3.2,
 	"corn": 1.6, "wheat": 0.9, "lettuce": 0.25,
 }
 
@@ -195,6 +200,15 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 	state.layer.apply_instance_caps(state.style)
 	state.forest_min_area = float(state.style.get("forest_auto_min_area_m2", 12000.0))
 	state.biome = BiomePalette.for_location(float(ctx.get("latitude", 0.0)))
+	# Phase 5: climate-envelope gate. Species outside their registry latitude
+	# range are dropped from the AUTO mix and the remainder renormalized (a
+	# coconut palm never auto-scatters at 48°N; a spruce never in the tropics).
+	# Player OVERRIDES are deliberately not gated — painting/binding a species
+	# out of envelope is an explicit choice.
+	var bw: Variant = state.biome.get("weights", {})
+	if bw is Dictionary:
+		state.biome["weights"] = VegSpeciesRegistry.filter_weights_by_climate(
+			bw as Dictionary, float(ctx.get("latitude", 0.0)))
 	state.polys = _sort_polys_for_budget(
 		_trim_polygons(osm_payload.get("polygons", []), DENSE_POLY_BUDGET))
 	state.dense = state.polys.size() >= DENSE_POLY_SKIP_GAP_FILL

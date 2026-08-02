@@ -96,6 +96,13 @@ Godot.exe.exe --headless --path . --script vegetation/vegetation_growth_selftest
 # purge, subspecies mesh divergence, VegetationLayer sparse-delta round-trip;
 # run --import first so VegStyleStore registers):
 Godot.exe.exe --headless --path . --script vegetation/veg_style_store_selftest.gd
+# Veg species registry (offline — Phase 5: vegetation/species/species_catalog.json
+# schema + facade parity, palm/cactus builder meshes, phenology profiles
+# (tropical evergreens KEEP leaves — palms used to carry deciduousness 1.0 and
+# dropped fronds every winter), climate-envelope lat gates + generator weight
+# filtering, food yields/harvest windows (Phase 10 feed), photocard drop-in
+# hook (assets/vegetation/photocards/<id>.png or user://veg_photocards/):
+Godot.exe.exe --headless --path . --script vegetation/veg_species_registry_selftest.gd
 # Veg tier rings + impostor offline checks (Phase 3: ring math incl.
 # closest-corner boundary rule, build-time tier assignment over both runtimes,
 # force_far NEAR-ring exemption, impostor bake-key stability/quad geometry/

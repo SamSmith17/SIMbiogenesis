@@ -54,10 +54,16 @@ func clear_registered_materials() -> void:
 
 
 static func _deciduousness_for(species: String) -> float:
+	# Phase 5: the species registry's phenology profile is authoritative —
+	# this is what makes tropical evergreens ACTUALLY evergreen (a palm used
+	# to carry deciduousness 1.0 and dropped its fronds every winter).
+	var reg := VegSpeciesRegistry.deciduousness(species)
+	if reg >= 0.0:
+		return reg
 	var s := species.to_lower()
 	if s.begins_with("pine") or s == "conifer" or s == "taiga" or s == "spruce" or s == "fir":
 		return 0.0
-	if s.begins_with("deciduous") or s == "broadleaf" or s == "palm" or s == "oak" or s == "maple":
+	if s.begins_with("deciduous") or s == "broadleaf" or s == "oak" or s == "maple":
 		return 1.0
 	if s.begins_with("shrub"):
 		return 0.55
