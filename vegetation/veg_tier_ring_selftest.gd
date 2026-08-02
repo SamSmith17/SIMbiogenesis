@@ -16,6 +16,9 @@ func _initialize() -> void:
 	_test_ring_settings_gate()
 	_test_runtime_tier_assignment()
 	_test_force_far_near_ring_exempt()
+	_test_impostor_bake_key()
+	_test_impostor_quad()
+	_test_impostor_headless_fallback()
 	if _failures == 0:
 		print("VEG TIER RING SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -149,3 +152,59 @@ func _test_force_far_near_ring_exempt() -> void:
 	_check("force_far flattens outer chunks to one MM", far_mms == 1,
 		"got %d MMs" % far_mms)
 	terrain.queue_free()
+
+
+## --- Phase 3b offline checks (the bake itself verifies windowed) -----------
+
+
+func _test_impostor_bake_key() -> void:
+	var s := {"deciduous_canopy_w": 12.0, "drape_tex": null, "growth_now_h": 999.0}
+	var k1 := VegImpostorBaker.bake_key("deciduous", s)
+	var k2 := VegImpostorBaker.bake_key("deciduous", s.duplicate(true))
+	_check("bake key deterministic", k1 == k2)
+	var s3 := s.duplicate(true)
+	s3["growth_now_h"] = 123.0
+	s3["deciduous_lod_near_m"] = 555.0
+	_check("volatile keys excluded from bake key",
+		VegImpostorBaker.bake_key("deciduous", s3) == k1)
+	var s4 := s.duplicate(true)
+	s4["deciduous_canopy_w"] = 9.0
+	_check("shape change forks bake key",
+		VegImpostorBaker.bake_key("deciduous", s4) != k1)
+	_check("species forks bake key",
+		VegImpostorBaker.bake_key("maple", s) != k1)
+
+
+func _test_impostor_quad() -> void:
+	var iset := VegImpostorSet.new()
+	iset.key = "selftest_quad"
+	iset.world_w = 8.0
+	iset.world_h = 12.0
+	iset.foot_y = -1.0
+	iset.atlas = ImageTexture.create_from_image(
+		Image.create(4, 4, false, Image.FORMAT_RGBA8))
+	iset.mask = iset.atlas
+	var mesh := VegImpostorBaker.quad_mesh_for(iset)
+	_check("quad has one surface", mesh.get_surface_count() == 1)
+	var aabb := mesh.get_aabb()
+	_check("quad spans foot..foot+h",
+		is_equal_approx(aabb.position.y, -1.0) and is_equal_approx(aabb.size.y, 12.0),
+		"aabb=%s" % str(aabb))
+	_check("quad width matches world_w", is_equal_approx(aabb.size.x, 8.0))
+	var mat := mesh.surface_get_material(0)
+	_check("quad material is the impostor shader",
+		mat is ShaderMaterial and (mat as ShaderMaterial).shader != null \
+		and (mat as ShaderMaterial).shader.resource_path.ends_with("veg_impostor.gdshader"))
+	var mesh2 := VegImpostorBaker.quad_mesh_for(iset)
+	_check("quad memoized per set", mesh == mesh2)
+
+
+func _test_impostor_headless_fallback() -> void:
+	# cached_set never invents a set headless, and request_async is a no-op —
+	# OUTER rings therefore deterministically build FAR cards under selftests
+	# (already asserted structurally in _test_runtime_tier_assignment).
+	var s := {"deciduous_canopy_w": 12.0}
+	_check("no cached impostor in headless run",
+		VegImpostorBaker.cached_set("deciduous", s) == null)
+	VegImpostorBaker.request_async("deciduous", s)
+	_check("request_async no-ops without a baker node", true)

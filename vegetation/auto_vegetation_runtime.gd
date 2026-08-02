@@ -291,19 +291,11 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	if family == "deciduous" or family == "pine":
 		var tree_end := float(batch_settings.get("auto_visibility_end_m", VISIBILITY_END))
 		var lod_settings := _with_auto_lod_reach(family, batch_settings)
-		# Large world maps: FAR billboards only — leafy NEAR shells × dual
-		# MultiMeshes are the Mt. Vernon 6M-primitive bomb. Phase 3a: the SoI
-		# NEAR ring is EXEMPT — the whole point of the static detail ring is a
-		# bounded high-cost core around the site even on a 30 km map (a few
-		# chunks, structurally capped), so force_far only flattens chunks
-		# OUTSIDE it.
-		if bool(batch_settings.get("auto_force_far_canopy", false)) \
-				and VegTierRings.ring_for_chunk_settings(chunk_x, chunk_z,
-					VegetationRuntime.CHUNK_SIZE_M, lod_settings) != VegTierRings.RING_NEAR:
-			VegetationRuntime._build_canopy_single_batch(root, species, records, ground_y_at,
-				false, lod_settings, tree_end, VegetationCardFactory.CanopyLodTier.FAR,
-				growth_map, chunk_x, chunk_z)
-			return
+		# Ring dispatch (Phase 3) lives inside _build_canopy_lod_bulk_batches:
+		# NEAR ring = leaf pair (EXEMPT from force_far — the bounded high-cost
+		# core is the point of the static ring, even on a 30 km map), MID =
+		# FAR cards, OUTER = impostor quad. auto_force_far_canopy demotes MID
+		# to OUTER there ("impostor-only mode") instead of flattening the map.
 		VegetationRuntime._build_canopy_lod_bulk_batches(root, species, records, ground_y_at,
 			false, lod_settings, tree_end, growth_map,
 			chunk_x, chunk_z)

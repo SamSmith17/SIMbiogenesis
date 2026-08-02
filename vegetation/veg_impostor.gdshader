@@ -1,0 +1,144 @@
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_prepass_alpha;
+
+// Distant-tree impostor (veg overhaul Phase 3b): ONE camera-facing quad per
+// tree sampling a 3x3 baked atlas (8 yaw views + 1 top view) of the real
+// parametric NEAR mesh. Cylindrical billboard + view-frame selection are done
+// manually in this shader (spatial shaders have no billboard render_mode —
+// same technique as vegetation/camp_glow.gdshader). The mask atlas marks
+// foliage vs bark pixels so the SAME seasonal uniforms the leaf shaders use
+// (autumn / leaf_coverage / winter, pushed by VegetationEnvironmentSync — the
+// names must match foliage.gdshader) recolor and thin leaves while trunks
+// stay, keeping the impostor tier season-consistent with the near tiers.
+// Octahedral-impostor math reference: wojtekpil/Godot-Octahedral-Impostors
+// (MIT); this is a simpler yaw-ring variant written for this project.
+
+#include "res://core/soi/shaders/soi_clip.gdshaderinc"
+
+uniform sampler2D atlas_tex : source_color, filter_linear_mipmap, repeat_disable;
+uniform sampler2D mask_tex : filter_linear, repeat_disable, hint_default_black;
+uniform float frames_x = 3.0;
+uniform float frames_y = 3.0;
+uniform float yaw_frames = 8.0;
+uniform float has_top = 1.0;
+
+// Seasonal set — names mirror foliage.gdshader so env-sync pushes apply.
+uniform float autumn : hint_range(0.0, 1.0) = 0.0;
+uniform float leaf_coverage : hint_range(0.0, 1.0) = 1.0;
+uniform float spring_bud : hint_range(0.0, 1.0) = 0.0;
+uniform float winter : hint_range(0.0, 1.0) = 0.0;
+uniform float snow_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float snow_depth_m = 0.0;
+uniform float summer : hint_range(0.0, 1.0) = 1.0;
+uniform float deciduousness : hint_range(0.0, 1.0) = 0.8;
+uniform float night_factor : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 sun_direction = vec3(0.0, 1.0, 0.0);
+uniform vec3 autumn_warm : source_color = vec3(0.96, 0.78, 0.12);
+uniform vec3 autumn_orange : source_color = vec3(0.93, 0.45, 0.06);
+uniform vec3 autumn_hot : source_color = vec3(0.80, 0.13, 0.04);
+// Gentle sway so distant forests don't read as frozen cardboard.
+uniform float wind_strength = 0.02;
+uniform float wind_speed = 0.7;
+
+varying vec3 v_origin;
+varying float v_rel_yaw;
+varying float v_elev;
+
+float hash21(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void vertex() {
+	vec3 origin = MODEL_MATRIX[3].xyz;
+	v_origin = origin;
+	// Instance yaw + scale straight from the instance basis (rotation about Y
+	// by t gives basis.x = (cos t, 0, -sin t)).
+	float sx = length(MODEL_MATRIX[0].xyz);
+	float sy = length(MODEL_MATRIX[1].xyz);
+	float yaw = atan(-MODEL_MATRIX[0].z, MODEL_MATRIX[0].x);
+	vec3 to_cam = CAMERA_POSITION_WORLD - origin;
+	float az = atan(to_cam.x, to_cam.z);
+	v_rel_yaw = az - yaw;
+	v_elev = atan(to_cam.y, max(length(to_cam.xz), 0.001));
+	// Cylindrical billboard: quad local X spans width, Y spans height.
+	vec2 fwd = normalize(to_cam.xz + vec2(0.0001));
+	vec3 right = vec3(fwd.y, 0.0, -fwd.x);
+	// A vertical card viewed from high above degenerates to an edge-on sliver
+	// (reads as a dark plank from the drone). Tilt the card's vertical axis
+	// toward the camera in step with the top-view texture blend so overhead
+	// views see a flat, top-textured card instead.
+	vec3 up_axis = vec3(0.0, 1.0, 0.0);
+	if (has_top > 0.5) {
+		float t_top = smoothstep(0.85, 1.25, atan(to_cam.y, max(length(to_cam.xz), 0.001)));
+		if (t_top > 0.001) {
+			vec3 flat_axis = cross(right, normalize(to_cam));
+			if (length(flat_axis) > 0.001) {
+				up_axis = normalize(mix(up_axis, normalize(flat_axis), t_top));
+			}
+		}
+	}
+	// Distant sway: whole-tree lean, stronger at the top of the quad.
+	float phase = origin.x * 0.37 + origin.z * 0.53;
+	float sway = sin(TIME * wind_speed + phase) * wind_strength * VERTEX.y;
+	vec3 wp = origin + right * (VERTEX.x * sx) + up_axis * (VERTEX.y * sy)
+		+ right * sway;
+	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(wp, 1.0);
+}
+
+vec2 cell_uv(vec2 uv, float frame) {
+	float col = mod(frame, frames_x);
+	float row = floor(frame / frames_x);
+	return (clamp(uv, 0.001, 0.999) + vec2(col, row)) / vec2(frames_x, frames_y);
+}
+
+void fragment() {
+	soi_clip_fragment(v_origin);
+	// Nearest yaw frame; the ring wraps.
+	float step_rad = TAU / yaw_frames;
+	float f = round(v_rel_yaw / step_rad);
+	float frame = mod(mod(f, yaw_frames) + yaw_frames, yaw_frames);
+	vec2 uv = UV;
+	vec4 col = texture(atlas_tex, cell_uv(uv, frame));
+	float m = texture(mask_tex, cell_uv(uv, frame)).r;
+	// Steep look-down blends toward the baked top view.
+	if (has_top > 0.5) {
+		float t = smoothstep(0.85, 1.25, v_elev);
+		if (t > 0.001) {
+			vec4 top = texture(atlas_tex, cell_uv(uv, yaw_frames));
+			float tm = texture(mask_tex, cell_uv(uv, yaw_frames)).r;
+			col = mix(col, top, t);
+			m = mix(m, tm, t);
+		}
+	}
+	// Seasonal response on FOLIAGE pixels only (mask ≈ 1); bark unaffected.
+	float leafy = smoothstep(0.35, 0.65, m) * deciduousness;
+	// Leaf fall: dither-discard a coverage-proportional share of leaf pixels
+	// (same idea as foliage.gdshader's leaf_loss discard).
+	float leaf_loss = (1.0 - leaf_coverage) * leafy;
+	float dith = hash21(floor(uv * 96.0) + floor(v_origin.xz));
+	if (col.a < 0.5 || (leaf_loss > 0.0 && dith < leaf_loss)) {
+		discard;
+	}
+	vec3 albedo = col.rgb;
+	if (autumn > 0.001 && leafy > 0.001) {
+		float pick = hash21(floor(v_origin.xz / 24.0));
+		vec3 warm = pick < 0.34 ? autumn_warm : (pick < 0.67 ? autumn_orange : autumn_hot);
+		albedo = mix(albedo, warm * max(dot(albedo, vec3(1.0)) * 0.5, 0.35), autumn * leafy);
+	}
+	if (spring_bud > 0.001 && leafy > 0.001) {
+		albedo = mix(albedo, albedo * vec3(0.85, 1.1, 0.6), spring_bud * leafy * 0.5);
+	}
+	if (winter > 0.001) {
+		float g = dot(albedo, vec3(0.333));
+		albedo = mix(albedo, vec3(g) * vec3(0.9, 0.95, 1.0), winter * 0.35);
+	}
+	if (snow_amount > 0.001 && leafy > 0.001) {
+		albedo = mix(albedo, vec3(0.92, 0.94, 0.97), snow_amount * leafy * 0.55 * clamp(UV.y + 0.35, 0.0, 1.0));
+	}
+	// Unshaded card: the atlas is baked evenly lit, so day/night comes from
+	// the same uniforms the env sync already pushes (no light pass on
+	// thousands of distant quads — this tier must stay cheap).
+	float sun_up = clamp(sun_direction.y * 2.0 + 0.35, 0.0, 1.0);
+	float light_mul = mix(0.10, mix(0.55, 1.0, sun_up), 1.0 - night_factor);
+	ALBEDO = albedo * light_mul;
+}

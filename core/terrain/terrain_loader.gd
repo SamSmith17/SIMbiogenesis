@@ -348,6 +348,10 @@ var _manual_veg_pending := false
 ## debounce flag for re-ringing after the player relocates the pin.
 var _veg_ring_built_center := Vector2.ZERO
 var _veg_ring_rebuild_pending := false
+## Phase 3b: in-process impostor baker (windowed only) + rebuild debounce so
+## a burst of bake completions triggers ONE veg rebuild.
+var _impostor_baker: VegImpostorBaker = null
+var _impostor_rebuild_pending := false
 
 ## True while _run_load_sequence() owns the pipeline (callbacks must not kick off
 ## parallel fetches or GPU-heavy side effects).
@@ -5720,6 +5724,14 @@ func _setup_vegetation() -> void:
 	# style store — seeding would turn global style values into per-map layer
 	# deltas that shadow later global tunes.
 	_vegetation_layer.load_for_map(_lat, _lon)
+	# Phase 3b: impostor baker (windowed only — headless stays deterministic
+	# on the FAR-card fallback). Bakes come in bursts on first load of a look;
+	# debounce them into one rebuild.
+	if DisplayServer.get_name() != "headless" and _impostor_baker == null:
+		_impostor_baker = VegImpostorBaker.new()
+		_impostor_baker.name = "VegImpostorBaker"
+		add_child(_impostor_baker)
+		_impostor_baker.bake_completed.connect(_on_impostor_bake_completed)
 	_growth_init_manual()
 	_setup_vegetation_edit_ui()
 	_setup_camp_scatter_ui()
@@ -5807,6 +5819,21 @@ func _rebuild_all_vegetation() -> void:
 	_rebuild_vegetation()
 	if _auto_veg_generated:
 		_rebuild_auto_vegetation_async()
+
+
+## One debounced rebuild after a burst of impostor bakes completes, so OUTER
+## rings swap from the FAR-card fallback to the fresh impostor quads.
+func _on_impostor_bake_completed(_key: String) -> void:
+	if not _built or _impostor_rebuild_pending:
+		return
+	_impostor_rebuild_pending = true
+	var t := get_tree().create_timer(1.5)
+	t.timeout.connect(func() -> void:
+		_impostor_rebuild_pending = false
+		if not _built:
+			return
+		_rebuild_all_vegetation()
+	, CONNECT_ONE_SHOT)
 
 
 ## Re-ring vegetation (debounced) after the SoI pin moves: soi_changed fires

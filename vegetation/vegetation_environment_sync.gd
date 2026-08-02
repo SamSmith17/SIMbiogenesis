@@ -9,6 +9,9 @@ const FOLIAGE_SHADER := "res://vegetation/foliage.gdshader"
 const LEAF_CANOPY_SHADER := "res://vegetation/leaf_canopy.gdshader"
 const GRASS_SHADER := "res://vegetation/grass.gdshader"
 const BARK_SHADER := "res://vegetation/bark.gdshader"
+## Phase 3b impostors share the full foliage seasonal uniform set (the shader
+## masks its own bark pixels internally).
+const IMPOSTOR_SHADER := "res://vegetation/veg_impostor.gdshader"
 
 # Foliage materials (full seasonal response). Parallel arrays keep a per-material
 # deciduousness so evergreens vs broadleaves react differently.
@@ -81,9 +84,10 @@ func register_material(mat: Material, species: String = "") -> void:
 			_bark_materials.append(sm)
 			_force_push = true
 		return
-	# leaf_canopy shares the full foliage seasonal uniform set (deciduousness,
-	# autumn, leaf_coverage, spring_bud, winter, snow_amount, sun, night).
-	if path != FOLIAGE_SHADER and path != LEAF_CANOPY_SHADER:
+	# leaf_canopy + the Phase 3b impostor share the full foliage seasonal
+	# uniform set (deciduousness, autumn, leaf_coverage, spring_bud, winter,
+	# snow_amount, sun, night).
+	if path != FOLIAGE_SHADER and path != LEAF_CANOPY_SHADER and path != IMPOSTOR_SHADER:
 		return
 	if sm in _materials:
 		if not species.is_empty():
