@@ -14,6 +14,7 @@ render_mode unshaded, cull_disabled, depth_prepass_alpha;
 // (MIT); this is a simpler yaw-ring variant written for this project.
 
 #include "res://core/soi/shaders/soi_clip.gdshaderinc"
+#include "res://vegetation/leaf_phenology.gdshaderinc"
 
 uniform sampler2D atlas_tex : source_color, filter_linear_mipmap, repeat_disable;
 uniform sampler2D mask_tex : filter_linear, repeat_disable, hint_default_black;
@@ -111,29 +112,31 @@ void fragment() {
 		}
 	}
 	// Seasonal response on FOLIAGE pixels only (mask ≈ 1); bark unaffected.
-	float leafy = smoothstep(0.35, 0.65, m) * deciduousness;
-	// Leaf fall: dither-discard a coverage-proportional share of leaf pixels
-	// (same idea as foliage.gdshader's leaf_loss discard).
-	float leaf_loss = (1.0 - leaf_coverage) * leafy;
-	float dith = hash21(floor(uv * 96.0) + floor(v_origin.xz));
-	if (col.a < 0.5 || (leaf_loss > 0.0 && dith < leaf_loss)) {
+	// `foliage` is the mask alone — winter dormancy greys an evergreen's needles
+	// too, exactly as it does in the near tiers — while leaf fall and autumn
+	// colour additionally require deciduousness.
+	float foliage = smoothstep(0.35, 0.65, m);
+	float leafy = foliage * deciduousness;
+	// Leaf fall: drop a coverage-proportional share of leaf pixels, keyed on the
+	// atlas UV + a per-tree seed so the thinning holds still (shared law with
+	// the card and leaf-shell tiers).
+	float inst_seed = hash21(floor(v_origin.xz * 0.5) + 0.5);
+	vec2 leaf_key = floor(uv * 96.0) + vec2(inst_seed * 19.3, inst_seed * 7.7);
+	if (col.a < 0.5 || veg_leaf_fallen(leaf_key, leaf_coverage, leafy)) {
 		discard;
 	}
 	vec3 albedo = col.rgb;
-	if (autumn > 0.001 && leafy > 0.001) {
-		float pick = hash21(floor(v_origin.xz / 24.0));
-		vec3 warm = pick < 0.34 ? autumn_warm : (pick < 0.67 ? autumn_orange : autumn_hot);
-		albedo = mix(albedo, warm * max(dot(albedo, vec3(1.0)) * 0.5, 0.35), autumn * leafy);
-	}
-	if (spring_bud > 0.001 && leafy > 0.001) {
-		albedo = mix(albedo, albedo * vec3(0.85, 1.1, 0.6), spring_bud * leafy * 0.5);
-	}
-	if (winter > 0.001) {
-		float g = dot(albedo, vec3(0.333));
-		albedo = mix(albedo, vec3(g) * vec3(0.9, 0.95, 1.0), winter * 0.35);
-	}
-	if (snow_amount > 0.001 && leafy > 0.001) {
-		albedo = mix(albedo, vec3(0.92, 0.94, 0.97), snow_amount * leafy * 0.55 * clamp(UV.y + 0.35, 0.0, 1.0));
+	float svar = veg_phenology_hash(vec2(inst_seed * 73.1, inst_seed * 11.7));
+	albedo = veg_apply_bud(albedo, spring_bud * leafy, vec3(0.55, 0.78, 0.24));
+	albedo = veg_apply_autumn(albedo, autumn * leafy, svar,
+		autumn_warm, autumn_orange, autumn_hot);
+	albedo = veg_apply_winter(albedo, winter * foliage);
+	if (snow_amount > 0.001 && foliage > 0.001) {
+		// Evergreens hold more snow than bare deciduous branches — the same
+		// `hold` weighting the near-tier canopy shaders use.
+		float hold = mix(0.6, 1.0, 1.0 - deciduousness);
+		albedo = mix(albedo, vec3(0.92, 0.94, 0.97),
+			snow_amount * foliage * hold * 0.55 * clamp(UV.y + 0.35, 0.0, 1.0));
 	}
 	// Unshaded card: the atlas is baked evenly lit, so day/night comes from
 	// the same uniforms the env sync already pushes (no light pass on

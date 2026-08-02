@@ -393,11 +393,22 @@ func _process(delta: float) -> void:
 	var terrain := _main.get_node_or_null("Terrain") as Node3D
 	if terrain == null:
 		return
+	var litter := 0.0
+	if _litter_tex != null and _main.has_method("get_season_signals"):
+		var sig: Variant = _main.call("get_season_signals")
+		if sig is Dictionary:
+			litter = VegLitterMask.strength_for_season(sig as Dictionary, snow)
+	# Litter moves only with the season, so a settled date pushes nothing.
+	var litter_due := absf(litter - _litter_pushed) > 0.001
+	if litter_due:
+		_litter_pushed = litter
 	for node_name in ["Ground", "DetailGround"]:
 		var mi := terrain.get_node_or_null(node_name) as MeshInstance3D
 		if mi == null:
 			continue
 		_push_snow_to_mesh(mi, snow, depth_m)
+		if litter_due:
+			_push_litter_to_mesh(mi, litter)
 	_apply_snow_to_buildings(terrain, snow, depth_m)
 
 
@@ -436,6 +447,47 @@ func _push_snow_to_mesh(mi: MeshInstance3D, snow: float, depth_m: float) -> void
 			continue
 		sm.set_shader_parameter("snow_amount", snow)
 		sm.set_shader_parameter("snow_depth_m", depth_m)
+
+
+## Phase 6 leaf litter: the coverage mask (built once per scatter) plus the live
+## seasonal strength. Only the terrain shader carries these uniforms.
+var _litter_tex: ImageTexture = null
+var _litter_extent_m := 0.0
+## The strength last written, so a settled season skips the per-frame push (the
+## same "did it move?" discipline VegetationEnvironmentSync uses).
+var _litter_pushed := -1.0
+
+
+func _push_litter_to_mesh(mi: MeshInstance3D, strength: float) -> void:
+	if mi == null:
+		return
+	var sm := mi.material_override as ShaderMaterial
+	if sm == null or sm.shader == null:
+		return
+	if not sm.shader.resource_path.ends_with("terrain_detail.gdshader"):
+		return
+	if _litter_tex == null:
+		sm.set_shader_parameter("litter_extent_m", 0.0)
+		return
+	sm.set_shader_parameter("litter_tex", _litter_tex)
+	sm.set_shader_parameter("litter_extent_m", _litter_extent_m)
+	sm.set_shader_parameter("litter_strength", strength)
+
+
+## Rasterise the deciduous instances into the ground litter mask. Called once
+## per scatter; null (no broadleaf trees on this map) disables the layer.
+func _rebuild_litter_mask() -> void:
+	_litter_tex = null
+	_litter_extent_m = 0.0
+	_litter_pushed = -1.0
+	if _auto_veg_layer == null:
+		return
+	var extent := maxf(_built_extent, _half_extent * 2.0)
+	if extent <= 0.0:
+		return
+	_litter_tex = VegLitterMask.build(_auto_veg_layer.bulk, extent)
+	if _litter_tex != null:
+		_litter_extent_m = extent
 
 
 func _apply_snow_to_buildings(terrain: Node3D, snow: float, depth_m: float) -> void:
@@ -958,6 +1010,7 @@ func _run_load_sequence() -> void:
 	if mly != null and bool(mly.is_configured()):
 		mly.request_photo_index(_lat, _lon, _osm_half_extent, "site")
 	load_completed = true
+	_ensure_leaf_fall()
 	map_load_complete.emit()
 
 
@@ -5819,6 +5872,32 @@ func _rebuild_all_vegetation() -> void:
 	_rebuild_vegetation()
 	if _auto_veg_generated:
 		_rebuild_auto_vegetation_async()
+	_ensure_leaf_fall()
+
+
+## Phase 6: the falling-leaf emitter host. One node per map, created after the
+## first load and kept across veg rebuilds (it scans the built batches rather
+## than living inside them — see VegLeafFall's header). Enable state follows the
+## graphics preset's veg tier, so re-selecting a quality level turns it on/off
+## without a rebuild.
+var _leaf_fall: VegLeafFall = null
+
+
+func _ensure_leaf_fall() -> void:
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	if _leaf_fall == null or not is_instance_valid(_leaf_fall):
+		_leaf_fall = VegLeafFall.new()
+		_leaf_fall.name = "VegLeafFall"
+		terrain.add_child(_leaf_fall)
+	_leaf_fall.bind_terrain(terrain)
+	var vq := RenderProfile.QUALITY_HIGH
+	if _main.get("graphics_quality") != null:
+		vq = int(_main.get("graphics_quality"))
+	_leaf_fall.set_enabled(bool(RenderProfile.veg_profile(vq).get("leaf_fall", false)))
 
 
 ## Phase 4: graphics preset changed. Re-scatter when the tier moved a
@@ -5843,6 +5922,7 @@ func on_graphics_quality_changed(level: int) -> void:
 	_veg_quality_prev_eff = new_eff
 	_toast("Vegetation tier: %s" % RenderProfile.quality_name(level), ToastUI.Level.INFO)
 	VegetationCardFactory.clear_foot_cache()
+	_ensure_leaf_fall()
 	if _auto_veg_generated and scatter_changed:
 		call_deferred("_rebuild_vegetation")
 		call_deferred("_full_regenerate_auto_vegetation_async")
@@ -6059,6 +6139,7 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 	_auto_veg_poly_stats = state.poly_stats
 	_print_auto_veg_diag(state)
 	_apply_auto_veg_edits()
+	_rebuild_litter_mask()
 	_rebuild_auto_growth_zone_index()
 	_growth_init_auto()
 	_auto_veg_generated = true
@@ -6156,6 +6237,7 @@ func _auto_veg_ctx() -> Dictionary:
 	return {
 		"latitude": _lat,
 		"half_extent_m": thin_half,
+		"winter_min_c": _site_winter_min_c(),
 		"seed": int(_lat * 10000.0) ^ int(_lon * 10000.0),
 		"exclusions": _auto_veg_exclusions(),
 		"ground_y_at": Callable(self, "_ground_height_at"),
@@ -6164,6 +6246,28 @@ func _auto_veg_ctx() -> Dictionary:
 		# runtimes, so scatter caps/density and render rings always agree.
 		"style": _veg_style_with_quality(),
 	}
+
+
+## Phase 6: the site's estimated winter minimum temperature, feeding the
+## species climate envelope's cold-hardiness gate. NAN whenever the weather
+## service has nothing for this location (offline, uncovered, still fetching) —
+## the gate then falls back to latitude alone rather than guessing.
+## Cached because a scatter can re-run several times per load and the estimate
+## only moves when the site does; `_veg_winter_min_site` records which.
+var _veg_winter_min_c := NAN
+var _veg_winter_min_site := Vector2(NAN, NAN)
+
+
+func _site_winter_min_c() -> float:
+	var site := Vector2(_lat, _lon)
+	if is_finite(_veg_winter_min_c) and _veg_winter_min_site.is_equal_approx(site):
+		return _veg_winter_min_c
+	var ws := get_node_or_null("/root/WeatherService")
+	if ws == null or not ws.has_method("covers") or not bool(ws.call("covers", _lat, _lon)):
+		return NAN
+	_veg_winter_min_c = SeasonModel.estimate_winter_min_c(ws, _lat)
+	_veg_winter_min_site = site
+	return _veg_winter_min_c
 
 
 ## Phase 4: _veg_style + the RenderProfile veg tier baseline. The graphics
@@ -6779,6 +6883,7 @@ func _full_regenerate_auto_vegetation_async() -> void:
 	_auto_veg_poly_stats = state.poly_stats
 	_print_auto_veg_diag(state)
 	_apply_auto_veg_edits()
+	_rebuild_litter_mask()
 	_growth_init_auto()
 	await _rebuild_auto_vegetation_async()
 
@@ -6957,6 +7062,7 @@ func _full_regenerate_auto_vegetation() -> void:
 	_auto_veg_poly_stats = state.poly_stats
 	_print_auto_veg_diag(state)
 	_apply_auto_veg_edits()
+	_rebuild_litter_mask()
 	_growth_init_auto()
 	_rebuild_auto_vegetation()
 

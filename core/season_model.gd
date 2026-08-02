@@ -38,6 +38,16 @@ const GRASS_GROW_FULL := 160.0    # ~Jun 9 — full summer height
 const GRASS_FADE_START := 280.0   # ~Oct 7 — growth slows, blades lay down
 const GRASS_FADE_END := 330.0     # ~Nov 26 — dormant winter height
 
+## Latitude seasonality damping (veg overhaul Phase 6). Photoperiod-driven
+## phenology (autumn colour, deciduous leaf drop, winter dormancy) requires a
+## real day-length swing: within the tropics (|lat| < ~15°) day length barely
+## varies and broadleaf forests are evergreen — a mango at 5°N must never turn
+## red in October. Ramp spans the subtropics, reaching full temperate
+## seasonality by ~35° (roughly the poleward edge of tropical/subtropical
+## evergreen forest biomes; Köppen A→C transition).
+const SEASONALITY_LAT_MIN := 15.0  # below this: no autumn/leaf-drop/dormancy
+const SEASONALITY_LAT_FULL := 35.0 # above this: full temperate seasonality
+
 const _DAYS_BEFORE_MONTH := [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
 const _DAYS_IN_MONTH := [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
@@ -65,12 +75,21 @@ static func to_nh_doy(day_of_year: int, latitude: float) -> float:
 	return doy
 
 
+## How strongly a site expresses temperate seasonality, 0..1 by latitude.
+## 0 in the deep tropics (evergreen year-round), 1 from the mid-latitudes out.
+static func seasonality_strength(latitude: float) -> float:
+	return clampf(
+		smoothstep(SEASONALITY_LAT_MIN, SEASONALITY_LAT_FULL, absf(latitude)),
+		0.0, 1.0)
+
+
 ## All phenology signals for a date. Values are 0..1 unless noted.
 ##  leaf_coverage : 1 = full canopy, 0 = bare (drives deciduous leaf-loss)
 ##  autumn        : warm-colour blend strength (yellow/orange/red)
 ##  bud           : spring fresh-growth tint strength
 ##  summer        : warm-season lushness
 ##  winter        : cold-season dormancy (grass browning, general desaturation)
+##  seasonality   : the latitude damping factor applied to the four above
 static func season_signals(day_of_year: int, latitude: float) -> Dictionary:
 	var doy := to_nh_doy(day_of_year, latitude)
 
@@ -94,6 +113,18 @@ static func season_signals(day_of_year: int, latitude: float) -> Dictionary:
 		- smoothstep(GRASS_FADE_START, GRASS_FADE_END, doy),
 		0.0, 1.0)
 
+	# Latitude damping: blend every seasonal signal toward its evergreen,
+	# always-growing tropical value. Applied here rather than in the shaders so
+	# growth, particles and the shaders all agree on one number.
+	var season := seasonality_strength(latitude)
+	if season < 1.0:
+		leaf = lerpf(1.0, leaf, season)
+		autumn = lerpf(0.0, autumn, season)
+		bud = lerpf(0.0, bud, season)
+		winter = lerpf(0.0, winter, season)
+		summer = lerpf(1.0, summer, season)
+		grass_growth = lerpf(1.0, grass_growth, season)
+
 	return {
 		"leaf_coverage": leaf,
 		"autumn": autumn,
@@ -101,6 +132,7 @@ static func season_signals(day_of_year: int, latitude: float) -> Dictionary:
 		"summer": summer,
 		"winter": winter,
 		"grass_growth": grass_growth,
+		"seasonality": season,
 	}
 
 
@@ -152,6 +184,39 @@ static func estimate_snow_depth_m(ws: Object, month: int, day: int, hour: float,
 
 	var depth_m := swe * DEPTH_PER_SWE_MM
 	return clampf(depth_m, 0.0, SNOW_DEPTH_MAX_M)
+
+
+## Coldest-season sampling window for the winter-minimum estimate (Phase 6):
+## mid-December through mid-February in the northern hemisphere, flipped south.
+const WINTER_MIN_CENTER_DOY := 15.0   # ~Jan 15
+const WINTER_MIN_HALF_WINDOW := 30    # ±30 days
+const WINTER_MIN_STRIDE_DAYS := 3
+const WINTER_MIN_HOUR := 5.0          # near the pre-dawn daily minimum
+
+
+## Estimate a site's typical winter minimum temperature in °C from the weather
+## service's hourly series, or NAN when no usable data exists (offline, or a
+## location the archive doesn't cover). Species climate envelopes compare their
+## cold-hardiness against this; NAN means "no opinion" and the caller falls
+## back to the latitude gate alone, so an offline session never loses its
+## forests. Duck-typed on `ws` exactly like estimate_snow_depth_m.
+static func estimate_winter_min_c(ws: Object, latitude: float) -> float:
+	if ws == null or not ws.has_method("temperature_c"):
+		return NAN
+	# The southern-hemisphere flip is the same half-year shift the phenology
+	# calendar uses, so July reads as "winter" at a Patagonian site.
+	var center := WINTER_MIN_CENTER_DOY
+	if latitude < 0.0:
+		center = fmod(center + YEAR_LEN * 0.5, YEAR_LEN)
+	var coldest := INF
+	var d := int(center) - WINTER_MIN_HALF_WINDOW
+	while d <= int(center) + WINTER_MIN_HALF_WINDOW:
+		var md := _doy_to_month_day(d)
+		var t := float(ws.call("temperature_c", md.x, md.y, WINTER_MIN_HOUR))
+		if is_finite(t):
+			coldest = minf(coldest, t)
+		d += WINTER_MIN_STRIDE_DAYS
+	return coldest if is_finite(coldest) else NAN
 
 
 ## Ground snow cover tint strength 0..1 from pack depth.

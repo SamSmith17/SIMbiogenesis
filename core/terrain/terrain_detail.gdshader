@@ -56,6 +56,18 @@ uniform vec3 snow_color : source_color = vec3(0.90, 0.93, 0.98);
 uniform float snow_slope_min : hint_range(0.0, 1.0) = 0.45;
 uniform float snow_slope_max : hint_range(0.0, 1.0) = 0.80;
 
+// Seasonal leaf litter (veg overhaul Phase 6): where the deciduous canopy shed,
+// the ground under it goes brown. `litter_tex` is a coverage mask rasterised
+// from the scattered deciduous instances (VegLitterMask), addressed in the same
+// centred world-XZ frame the drape uses; extent 0 disables the whole layer, so
+// a map with no deciduous forest pays nothing. Strength is pushed live by
+// TerrainLoader from the phenology signals — it rises as the canopy empties and
+// fades away under snow and at spring leaf-out.
+uniform sampler2D litter_tex : source_color, filter_linear, repeat_disable;
+uniform float litter_extent_m = 0.0;
+uniform float litter_strength : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 litter_color : source_color = vec3(0.40, 0.25, 0.11);
+
 // -----------------------------------------------------------------------------
 // Near-field ground detail (foot-level realism).
 // The ESRI ortho drape tops out at ~0.25 m/px (z19), so it reads as soft blocks
@@ -275,6 +287,25 @@ void fragment() {
 			}
 
 			world_n = normalize(mix(world_n, detail_n, k));
+		}
+	}
+
+	// Leaf litter goes down BEFORE snow, so a winter pack covers it.
+	if (litter_extent_m > 0.0 && litter_strength > 0.001) {
+		vec2 luv = (v_world_pos.xz + litter_extent_m * 0.5) / litter_extent_m;
+		if (luv.x >= 0.0 && luv.x <= 1.0 && luv.y >= 0.0 && luv.y <= 1.0) {
+			float cover = texture(litter_tex, luv).r * litter_strength;
+			if (cover > 0.001) {
+				// Break the mask up so the drift edge isn't a smooth blob.
+				vec2 lcell = floor(v_world_pos.xz / 1.7);
+				float ln = fract(sin(dot(lcell, vec2(29.7, 83.3))) * 43758.5453);
+				// Tint, don't repaint: the drape photo still has to read through
+				// a leaf layer, and a full replace turned whole hillsides flat
+				// brown.
+				float amt = clamp(cover * (0.65 + 0.7 * ln), 0.0, 1.0) * 0.75;
+				col = mix(col, col * 0.72 + litter_color * 0.45, amt);
+				rough = mix(rough, 0.95, amt * 0.5);
+			}
 		}
 	}
 

@@ -156,6 +156,9 @@ static func shadow_profile(shadow_quality: int) -> Dictionary:
 ##   veg_shadows  whether canopy shadow casting is enabled with this preset
 ##                (VegetationShadowPolicy; ULTRA only — leaf shadows are the
 ##                single most expensive veg toggle).
+##   leaf_fall    whether falling-leaf particles run during the autumn drop
+##                (Phase 6; High/Ultra — one emitter per NEAR-ring deciduous
+##                chunk, and only while the canopy is actually shedding).
 ##
 ## Ring radii are the static SoI detail rings (VegTierRings): the leaf-shell
 ## tier exists only within veg_near_ring_m of the SoI centre, FAR cards to
@@ -186,6 +189,7 @@ static func veg_profile(quality: int) -> Dictionary:
 					"grass_detail_radius_m": 150.0,
 				},
 				"veg_shadows": false,
+				"leaf_fall": false,
 			}
 		QUALITY_MEDIUM:
 			return {
@@ -211,6 +215,7 @@ static func veg_profile(quality: int) -> Dictionary:
 					"grass_detail_radius_m": 220.0,
 				},
 				"veg_shadows": false,
+				"leaf_fall": false,
 			}
 		QUALITY_ULTRA:
 			return {
@@ -236,6 +241,7 @@ static func veg_profile(quality: int) -> Dictionary:
 					"grass_detail_radius_m": 400.0,
 				},
 				"veg_shadows": true,
+				"leaf_fall": true,
 			}
 	# HIGH, and the fallback: matches the pre-Phase-4 defaults exactly, so an
 	# untouched install renders identically to before quality wiring existed.
@@ -262,6 +268,7 @@ static func veg_profile(quality: int) -> Dictionary:
 			"grass_detail_radius_m": 220.0,
 		},
 		"veg_shadows": false,
+		"leaf_fall": true,
 	}
 
 

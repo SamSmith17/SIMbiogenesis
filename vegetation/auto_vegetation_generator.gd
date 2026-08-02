@@ -205,10 +205,14 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 	# coconut palm never auto-scatters at 48°N; a spruce never in the tropics).
 	# Player OVERRIDES are deliberately not gated — painting/binding a species
 	# out of envelope is an explicit choice.
+	# Phase 6: when the caller measured the site's winter minimum from real
+	# weather it also gates cold-hardiness, so a mild-winter 45°N site can carry
+	# species a continental 45°N site would kill. Absent (NAN) = latitude only.
 	var bw: Variant = state.biome.get("weights", {})
 	if bw is Dictionary:
 		state.biome["weights"] = VegSpeciesRegistry.filter_weights_by_climate(
-			bw as Dictionary, float(ctx.get("latitude", 0.0)))
+			bw as Dictionary, float(ctx.get("latitude", 0.0)),
+			float(ctx.get("winter_min_c", NAN)))
 	state.polys = _sort_polys_for_budget(
 		_trim_polygons(osm_payload.get("polygons", []), DENSE_POLY_BUDGET))
 	state.dense = state.polys.size() >= DENSE_POLY_SKIP_GAP_FILL

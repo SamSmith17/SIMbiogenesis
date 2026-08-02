@@ -110,26 +110,45 @@ static func climate(id: String) -> Dictionary:
 	return raw as Dictionary if raw is Dictionary else {}
 
 
-## Latitude gate for auto-scatter. Species without an envelope are allowed
+## Cold-hardiness slack, °C. A site a couple of degrees below a species' listed
+## winter minimum is a marginal planting, not an impossible one — the envelope
+## numbers are literature round figures, and the site estimate is one modelled
+## year sampled pre-dawn, so both carry more error than this.
+const WINTER_MIN_TOLERANCE_C := 3.0
+
+
+## Climate gate for auto-scatter. Species without an envelope are allowed
 ## everywhere (painting is never gated — the player can always plant anything;
 ## this only shapes what the AUTO generator picks).
-static func species_allowed_at(id: String, latitude: float) -> bool:
+##
+## `winter_min_c` is the site's estimated winter minimum temperature
+## (SeasonModel.estimate_winter_min_c). Pass NAN — the default — when it is
+## unknown and only the latitude range is checked: latitude alone can't tell a
+## maritime 48°N from a continental one, but a wrong guess must never be
+## preferred to no guess.
+static func species_allowed_at(id: String, latitude: float, winter_min_c: float = NAN) -> bool:
 	var c := climate(id)
 	if c.is_empty():
 		return true
 	var lat := absf(latitude)
-	return lat >= float(c.get("abs_lat_min", 0.0)) - 0.001 \
-		and lat <= float(c.get("abs_lat_max", 90.0)) + 0.001
+	if lat < float(c.get("abs_lat_min", 0.0)) - 0.001 \
+			or lat > float(c.get("abs_lat_max", 90.0)) + 0.001:
+		return false
+	if is_finite(winter_min_c) and c.has("min_winter_c"):
+		if winter_min_c < float(c["min_winter_c"]) - WINTER_MIN_TOLERANCE_C:
+			return false
+	return true
 
 
 ## Drop climate-disallowed species from an auto weight dict and renormalize.
 ## Returns the original when everything is allowed or NOTHING would remain
 ## (never empty a forest because the data is too strict — that failure mode
 ## reads as "auto-veg broken").
-static func filter_weights_by_climate(weights: Dictionary, latitude: float) -> Dictionary:
+static func filter_weights_by_climate(weights: Dictionary, latitude: float,
+		winter_min_c: float = NAN) -> Dictionary:
 	var out := {}
 	for k in weights:
-		if species_allowed_at(str(k), latitude):
+		if species_allowed_at(str(k), latitude, winter_min_c):
 			out[k] = weights[k]
 	if out.is_empty():
 		return weights.duplicate(true)

@@ -3,6 +3,7 @@ shader_type spatial;
 render_mode cull_disabled, depth_prepass_alpha;
 
 #include "res://vegetation/wind_vertex.gdshaderinc"
+#include "res://vegetation/leaf_phenology.gdshaderinc"
 
 #include "res://core/soi/shaders/soi_clip.gdshaderinc"
 
@@ -173,10 +174,14 @@ void fragment() {
 		discard;
 	}
 
-	// Deciduous leaf loss: thin the canopy by randomly discarding a fraction of
-	// foliage fragments as leaf_coverage drops in late autumn / winter.
-	float leaf_loss = clamp((1.0 - leaf_coverage) * deciduousness, 0.0, 1.0);
-	if (leaf_loss > 0.001 && dither < leaf_loss) {
+	// Deciduous leaf loss: thin the card by discarding clumps of its foliage as
+	// leaf_coverage drops in late autumn / winter. The key is the card's own UV
+	// grid plus a per-instance seed, so a gap stays put on the tree — this used
+	// to reuse `dither` (screen space) and crawled across the canopy whenever
+	// the camera moved.
+	float leaf_inst_seed = hash21(floor(v_inst_pos.xz * 0.5) + 0.5);
+	vec2 leaf_key = floor(UV * 13.0) + vec2(leaf_inst_seed * 19.3, leaf_inst_seed * 7.7);
+	if (veg_leaf_fallen(leaf_key, leaf_coverage, deciduousness)) {
 		discard;
 	}
 
@@ -219,30 +224,15 @@ void fragment() {
 		albedo = mix(albedo, albedo * seasonal_tint, seasonal_strength);
 	}
 
-	// Per-cell hue variety so neighbouring trees turn at slightly different rates.
-	vec2 scell = floor(v_world_pos.xz / 4.0);
-	float svar = fract(sin(dot(scell, vec2(73.1, 11.7))) * 43758.5453);
-
-	// Spring bud: fresh light-green/yellow flush on deciduous leaf-out.
-	float bud_amt = spring_bud * deciduousness;
-	albedo = mix(albedo, albedo * 0.5 + bud_color * 0.5, bud_amt * 0.6);
-
-	// Autumn: shift remaining leaves toward vivid yellow/orange/red. svar picks a
-	// hue along the 3-stop ramp so neighbouring trees turn to different colours,
-	// and the blend goes nearly full so foliage clearly changes colour before
-	// leaf-loss thins it out (rather than just fading away).
-	vec3 autumn_col = svar < 0.5
-		? mix(autumn_warm, autumn_orange, svar * 2.0)
-		: mix(autumn_orange, autumn_hot, (svar - 0.5) * 2.0);
-	float luma = dot(albedo, vec3(0.299, 0.587, 0.114));
-	vec3 autumn_albedo = autumn_col * (0.72 + luma * 0.5);
-	float autumn_amt = clamp(autumn * deciduousness, 0.0, 1.0);
-	albedo = mix(albedo, autumn_albedo, autumn_amt * 0.92);
-
-	// Winter dormancy: gentle desaturation/darkening of whatever foliage remains
-	// (mostly evergreens, which keep their needles).
-	float wgray = dot(albedo, vec3(0.299, 0.587, 0.114));
-	albedo = mix(albedo, mix(albedo, vec3(wgray), 0.30) * 0.85, winter * 0.6);
+	// Seasonal response — shared with the leaf-shell and impostor tiers via
+	// leaf_phenology.gdshaderinc, so a tree looks the same season on both sides
+	// of a ring boundary. Hue variety is keyed PER TREE (the instance seed), not
+	// per world cell, so a single crown turns as one.
+	float svar = veg_phenology_hash(vec2(leaf_inst_seed * 73.1, leaf_inst_seed * 11.7));
+	albedo = veg_apply_bud(albedo, spring_bud * deciduousness, bud_color);
+	albedo = veg_apply_autumn(albedo, autumn * deciduousness, svar,
+		autumn_warm, autumn_orange, autumn_hot);
+	albedo = veg_apply_winter(albedo, winter);
 
 	if (use_drape && drape_match_strength > 0.0 && drape_extent_m > 0.0) {
 		vec2 duv = (v_world_pos.xz + drape_extent_m * 0.5) / drape_extent_m;
