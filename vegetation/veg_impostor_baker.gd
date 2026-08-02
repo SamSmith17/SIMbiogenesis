@@ -20,7 +20,10 @@ signal bake_completed(key: String)
 ## user://veg_impostors/<key>.res keeps serving the OLD silhouette while the
 ## NEAR and MID rings show the new one. v2 = the deciduous skeleton rebuild
 ## (branches distributed over the crown, foliage on real branch tips).
-const BAKE_VERSION := 2
+## v3: space-colonization deciduous skeleton + polygonal trunk (any change to
+## the NEAR deciduous geometry must bump this or cached impostors serve the old
+## silhouette forever).
+const BAKE_VERSION := 3
 const CACHE_DIR := "user://veg_impostors"
 const ATLAS_PX := 1024
 const GRID := 3

@@ -3842,6 +3842,13 @@ func _run_tree_portrait_capture() -> void:
 		await loader.map_load_complete
 	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
 	_set_capture_conditions()
+	# Pin the shoot to mid-summer: portraits inherit the map's SAVED sim date,
+	# and a site saved in April renders half-bare spring-bud trees — shape
+	# defects then hide behind (or get invented by) the seasonal thinning.
+	var main := get_tree().get_first_node_in_group("main_scene")
+	if main != null:
+		_set_capture_date(main, 7, 15)
+		await get_tree().process_frame
 	var label := _shots_label if not _shots_label.is_empty() else "tree_portrait"
 	var dir := "%s/%s" % [SHOTS_ROOT, label]
 	DirAccess.make_dir_recursive_absolute(dir)

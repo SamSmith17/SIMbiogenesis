@@ -86,6 +86,21 @@ func _test_global_patch_routing() -> void:
 	VegetationStyleConfig.save_global({"wind_strength": 0.09})
 	flat = VegStyleStore.flat_merged(T_LAT, T_LON)
 	_check("second save keeps first keys", is_equal_approx(float(flat["pine_card_w"]), 1.30))
+	# Values equal to defaults() are PRUNED, never stored: the Tune-look Apply
+	# sends every slider key, and storing untouched ones as user family edits
+	# would shadow every SPECS subspecies variant forever.
+	var defaults: Dictionary = VegetationStyleConfig.defaults()
+	VegetationStyleConfig.save_global({"deciduous_canopy_w": float(defaults["deciduous_canopy_w"])})
+	flat = VegStyleStore.flat_merged(T_LAT, T_LON)
+	_check("defaults-equal value never becomes a user family key",
+		"deciduous_canopy_w" not in (flat[VegStyleStore.KEY_USER_FAMILY] as Array))
+	# ...and a key moved away then moved BACK to default is erased again.
+	VegetationStyleConfig.save_global({"pine_card_w": float(defaults["pine_card_w"])})
+	flat = VegStyleStore.flat_merged(T_LAT, T_LON)
+	_check("reverting a key to its default prunes the stored edit",
+		"pine_card_w" not in (flat[VegStyleStore.KEY_USER_FAMILY] as Array))
+	_check("pruned key reads back the default",
+		is_equal_approx(float(flat["pine_card_w"]), float(defaults["pine_card_w"])))
 
 
 func _test_species_override_roundtrip() -> void:

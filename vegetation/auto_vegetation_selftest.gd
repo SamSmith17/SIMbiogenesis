@@ -1567,14 +1567,16 @@ func _test_deciduous_branch_distribution() -> void:
 		or not is_equal_approx(b_mesh.get_aabb().size.x, c_mesh.get_aabb().size.x),
 		"birch w %.2f chestnut w %.2f" % [b_mesh.get_aabb().size.x, c_mesh.get_aabb().size.x])
 
-	# 6. The NEAR tree must stay inside the triangle budget it had before the
-	# rebuild (5,028 tris at the shipping defaults).
+	# 6. The NEAR tree must stay inside its triangle budget at the shipping
+	# defaults. 6,200 covers the space-colonization skeleton + polygonal trunk
+	# + 5×10 shell spheres (the pre-SC ceiling was 5,028); NEAR only exists in
+	# the ring-bounded SoI core, so the per-tree cost is structurally capped.
 	var near := VegetationCardFactory.mesh_for_canopy_lod("deciduous", st,
 		VegetationCardFactory.CanopyLodTier.NEAR)
 	var tris := 0
 	for si in near.get_surface_count():
 		tris += (near.surface_get_arrays(si)[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
-	_check("NEAR deciduous stays within the old tri budget", tris <= 5028,
+	_check("NEAR deciduous stays within the tri budget", tris <= 6200,
 		"%d tris" % tris)
 	_check("NEAR deciduous still has geometry", tris > 1500, "%d tris" % tris)
 	# Nothing may dip below the foot at either tier (foot_local_y is hardcoded 0).
@@ -1583,3 +1585,27 @@ func _test_deciduous_branch_distribution() -> void:
 		var m := VegetationCardFactory.mesh_for_canopy_lod("maple", st, tier)
 		_check("maple tier %d foot at origin" % tier, m.get_aabb().position.y >= -0.001,
 			"foot %.3f" % m.get_aabb().position.y)
+
+	# 7. Space colonization must FILL the crown envelope, not huddle at the
+	# trunk (the first cut of the generator used a kill radius half the crown
+	# radius and grew a tree ~60% of its styled width).
+	var aabb := near.get_aabb()
+	var want_w := float(st["deciduous_canopy_w"]) \
+		* clampf(float(st["deciduous_branch_reach"]), 0.4, 1.6)
+	_check("SC crown fills its envelope", aabb.size.x >= want_w * 0.70,
+		"built %.2f m wide of %.2f m styled" % [aabb.size.x, want_w])
+
+	# 8. Limbs are seeded INSIDE the trunk tube (45% of the surface radius), so
+	# bark geometry must exist near the trunk axis at limb heights — the
+	# attachment contract that kills the old floating-branch defect.
+	var trunk_w2 := float(st["deciduous_trunk_w"])
+	var bark_verts: PackedVector3Array = near.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var y_lo := trunk_h * float(st["deciduous_crown_base"]) + 0.2
+	var embedded := 0
+	for v in bark_verts:
+		var p3 := v as Vector3
+		if p3.y > y_lo and p3.y < trunk_h * 0.95 \
+				and Vector2(p3.x, p3.z).length() < trunk_w2 * 0.5 * 0.7:
+			embedded += 1
+	_check("limb geometry reaches inside the trunk", embedded > 0,
+		"0 bark verts within %.2f m of the axis in the crown band" % (trunk_w2 * 0.5 * 0.7))

@@ -83,6 +83,8 @@ static func load_global_store() -> Dictionary:
 			_write_store(global_v2_path(), store)
 	if store.is_empty():
 		store = empty_store()
+	if _sanitize_inert_leaf_keys(store):
+		_write_store(global_v2_path(), store)
 	_global_cache = store.duplicate(true)
 	_global_cache_valid = true
 	return store
@@ -96,7 +98,56 @@ static func load_map_store(lat: float, lon: float) -> Dictionary:
 			_write_store(map_v2_path(lat, lon), store)
 	if store.is_empty():
 		store = empty_store()
+	if _sanitize_inert_leaf_keys(store):
+		_write_store(map_v2_path(lat, lon), store)
 	return store
+
+
+## One-time cleanup of stored deciduous leaf values the renderer used to CLAMP
+## into inertness (leaf_size floored at 0.92, leaf_gap capped at 0.12). Those
+## stored numbers rendered identically to the clamp for years — the player
+## never saw them — but once the clamps were removed to give the sliders their
+## full travel, they resurrected the legacy speckled sparse-leaf look on every
+## old map. Dropping them preserves the look the player actually SAW while
+## keeping the sliders live. Idempotent; runs on every store read and writes
+## back only when something changed.
+static func _sanitize_inert_leaf_keys(store: Dictionary) -> bool:
+	var changed := false
+	var fams: Dictionary = store.get("family", {})
+	var dec: Dictionary = fams.get("deciduous", {})
+	if dec.has("leaf_size") and float(dec["leaf_size"]) < 0.9199:
+		dec.erase("leaf_size")
+		changed = true
+	if dec.has("leaf_gap") and float(dec["leaf_gap"]) > 0.1201:
+		dec.erase("leaf_gap")
+		changed = true
+	if changed:
+		if dec.is_empty():
+			fams.erase("deciduous")
+		else:
+			fams["deciduous"] = dec
+		store["family"] = fams
+	var sps: Dictionary = store.get("species", {})
+	for sid in sps.keys():
+		if VegSpeciesCatalog.mesh_family(str(sid)) != "deciduous":
+			continue
+		var sd: Dictionary = sps[sid]
+		var sp_changed := false
+		if sd.has("leaf_size") and float(sd["leaf_size"]) < 0.9199:
+			sd.erase("leaf_size")
+			sp_changed = true
+		if sd.has("leaf_gap") and float(sd["leaf_gap"]) > 0.1201:
+			sd.erase("leaf_gap")
+			sp_changed = true
+		if sp_changed:
+			changed = true
+			if sd.is_empty():
+				sps.erase(sid)
+			else:
+				sps[sid] = sd
+	if changed:
+		store["species"] = sps
+	return changed
 
 
 ## The flat settings dict every existing consumer understands: defaults() +
@@ -144,11 +195,62 @@ static func _apply_store_into(store: Dictionary, out: Dictionary,
 ## Persist a FLAT patch of user edits at global scope: family-prefixed keys go
 ## to the family layer, everything else to the global layer. Merge, not
 ## clobber (matches old save_global semantics).
+##
+## Values equal to defaults() are PRUNED, not stored: the layers hold only
+## explicit user edits (the Phase 2 invariant). The Tune-look modal's "Apply to
+## map" sends every slider key, and storing the untouched ones as user family
+## edits would shadow every SPECS subspecies variant forever — the exact
+## "all subspecies are placeholders" bug the v2 store exists to fix. Pruning
+## (rather than skipping) also erases a key the player moved and later moved
+## BACK to its default, and cleans residue from earlier polluting applies.
 static func save_global_patch(patch: Dictionary) -> void:
 	var store := load_global_store()
-	_split_flat_into(patch, store)
+	var defaults: Dictionary = VegetationStyleConfig.defaults()
+	var sets := {}
+	var prunes: Array[String] = []
+	for k in patch:
+		var key := str(k)
+		if key.begins_with("_"):
+			continue
+		if defaults.has(key) and values_equal(defaults[key], patch[k]):
+			prunes.append(key)
+		else:
+			sets[key] = patch[k]
+	_split_flat_into(sets, store)
+	_prune_flat_keys(prunes, store)
 	_write_store(global_v2_path(), store)
 	invalidate_cache()
+
+
+## Remove flat keys from whichever layer they live in (global / family /
+## subspecies-tint species layer).
+static func _prune_flat_keys(keys: Array[String], store: Dictionary) -> void:
+	var g: Dictionary = store.get("global", {})
+	var fams: Dictionary = store.get("family", {})
+	var sps: Dictionary = store.get("species", {})
+	for key in keys:
+		var sub_split := _split_subspecies_tint(key)
+		if not sub_split.is_empty():
+			var cur: Dictionary = sps.get(sub_split[0], {})
+			cur.erase(sub_split[1])
+			if cur.is_empty():
+				sps.erase(sub_split[0])
+			else:
+				sps[sub_split[0]] = cur
+			continue
+		var parts := split_flat_key(key)
+		if str(parts[0]).is_empty():
+			g.erase(key)
+		else:
+			var fd: Dictionary = fams.get(parts[0], {})
+			fd.erase(str(parts[1]))
+			if fd.is_empty():
+				fams.erase(parts[0])
+			else:
+				fams[str(parts[0])] = fd
+	store["global"] = g
+	store["family"] = fams
+	store["species"] = sps
 
 
 ## Persist a full flat style for one map. Sparse: only values differing from

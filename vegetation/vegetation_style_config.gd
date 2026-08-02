@@ -58,9 +58,13 @@ static func defaults() -> Dictionary:
 		"deciduous_trunk_h": 4.25,
 		"deciduous_vertical_offset_m": -2.0,
 		"deciduous_cluster_count": 12.0,
+		# Legacy pair (abstract-ring layout only — the tip-anchored crown reads
+		# deciduous_clump_spread instead; see _clusters_from_tips).
 		"deciduous_cluster_spread": 0.67,
 		"deciduous_cluster_size": 1.0,
 		"deciduous_cluster_tightness": 1.12,
+		# Radial push/huddle of the foliage clumps on their branch tips.
+		"deciduous_clump_spread": 1.0,
 		"deciduous_branch_count": 9.55,
 		"deciduous_branch_thickness": 0.64,
 		"deciduous_branch_reach": 0.89,
@@ -93,10 +97,10 @@ static func defaults() -> Dictionary:
 		"deciduous_auto_lod_near_m": 300.0,
 		"deciduous_auto_lod_far_begin_m": 280.0,
 		"deciduous_billboard_y_offset": -1.11,
-		# Foliage now hangs on real branch tips, which breaks the crown volume up
-		# on its own, so fewer shells still read as solid: 5 shells x 12 clusters
-		# is 3,840 tris against the old 7 x 10 = 4,480, for a better shape.
-		"deciduous_leaf_shell_count": 5.0,
+		# Foliage hangs on real branch tips and the leaf grid stamps TWO
+		# interleaved layers per shell, so 4 shells read solid; the saved tri
+		# budget pays for the rounder 5×10 shell spheres (hex-box silhouettes).
+		"deciduous_leaf_shell_count": 4.0,
 		"deciduous_leaf_density": 15.0,
 		"deciduous_leaf_size": 0.95,
 		"deciduous_leaf_aspect": 1.5,

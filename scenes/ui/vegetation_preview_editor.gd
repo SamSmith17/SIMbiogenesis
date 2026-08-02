@@ -39,20 +39,22 @@ const SPECIES_SHAPE_SLIDERS := {
 		{"key": "deciduous_trunk_taper", "label": "Trunk taper", "min": 0.12, "max": 1.0},
 		{"key": "deciduous_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
 		{"key": "deciduous_growth_years", "label": "Maturity age (yr)", "min": 0.0, "max": 80.0},
-		{"key": "deciduous_cluster_count", "label": "Clusters", "min": 3.0, "max": 64.0},
-		{"key": "deciduous_cluster_spread", "label": "Spread", "min": 0.3, "max": 1.5},
+		{"key": "deciduous_crown_base", "label": "Crown base", "min": 0.05, "max": 0.9},
+		{"key": "deciduous_cluster_count", "label": "Clumps", "min": 3.0, "max": 24.0},
+		{"key": "deciduous_clump_spread", "label": "Clump spread", "min": 0.6, "max": 1.5},
 		{"key": "deciduous_cluster_size", "label": "Clump sz", "min": 0.5, "max": 3.0},
-		{"key": "deciduous_cluster_tightness", "label": "Tightness", "min": 0.1, "max": 2.5},
-		{"key": "deciduous_branch_count", "label": "Primaries", "min": 3.0, "max": 12.0},
-		{"key": "deciduous_branch_levels", "label": "Fork levels", "min": 1.0, "max": 5.0},
-		{"key": "deciduous_branch_split", "label": "Fork count", "min": 2.0, "max": 4.0},
-		{"key": "deciduous_branch_angle", "label": "Fork angle", "min": 8.0, "max": 75.0},
-		{"key": "deciduous_branch_length_ratio", "label": "Taper len", "min": 0.45, "max": 0.92},
+		{"key": "deciduous_branch_count", "label": "Primaries", "min": 2.0, "max": 12.0},
+		{"key": "deciduous_branch_tilt_low", "label": "Low limb splay", "min": 15.0, "max": 89.0},
+		{"key": "deciduous_branch_tilt_high", "label": "Top limb splay", "min": 5.0, "max": 80.0},
+		{"key": "deciduous_branch_lateral", "label": "Skirt fill", "min": 0.0, "max": 1.0},
+		{"key": "deciduous_branch_levels", "label": "Twig detail", "min": 1.0, "max": 5.0},
+		{"key": "deciduous_branch_split", "label": "Fork limit", "min": 2.0, "max": 4.0},
+		{"key": "deciduous_branch_angle", "label": "Spread angle", "min": 8.0, "max": 75.0},
+		{"key": "deciduous_branch_length_ratio", "label": "Twig taper", "min": 0.45, "max": 0.92},
 		{"key": "deciduous_branch_droop", "label": "Droop/lift", "min": -0.6, "max": 0.6},
 		{"key": "deciduous_branch_gnarl", "label": "Gnarl", "min": 0.0, "max": 1.0},
-		{"key": "deciduous_branch_thickness", "label": "Br thick", "min": 0.3, "max": 2.0},
-		{"key": "deciduous_branch_reach", "label": "Br reach", "min": 0.4, "max": 1.6},
-		{"key": "deciduous_branch_base", "label": "Br base", "min": 0.5, "max": 0.95},
+		{"key": "deciduous_branch_thickness", "label": "Limb thickness", "min": 0.05, "max": 2.5},
+		{"key": "deciduous_branch_reach", "label": "Reach", "min": 0.4, "max": 1.6},
 		{"key": "deciduous_vertical_offset_m", "label": "Raise", "min": -8.0, "max": 8.0},
 		{"key": "deciduous_leaf_shell_count", "label": "Leaf shells", "min": 2.0, "max": 12.0},
 		{"key": "deciduous_leaf_density", "label": "Leaf density", "min": 6.0, "max": 48.0},
@@ -153,6 +155,24 @@ var _patch_diameter := 10.0
 var _values: Dictionary = {}
 var _baseline: Dictionary = {}
 var _tints: Dictionary = {}
+## Per-subspecies edits made this session (sid -> {family-flat key: value}).
+## Editing a NAMED subspecies (Maple, Birch…) routes here instead of _values so
+## Apply writes a per-species override — the old behaviour silently retuned the
+## whole family, while the preview (which resolved SPECS variants) showed no
+## change at all: the single worst preview-vs-apply gap.
+var _species_edits: Dictionary = {}
+## Store-backed per-species overrides at open (the loader style's
+## _species_overrides side channel). Merged with _species_edits at preview time
+## so the studio resolves settings EXACTLY like the map render path.
+var _store_species_overrides: Dictionary = {}
+## Baseline RESOLVED values per subspecies (diff/revert reference while a named
+## subspecies is selected). Computed lazily on first visit, reset on Apply.
+var _species_baselines: Dictionary = {}
+## Quality-tier veg style overlay from the loader (RenderProfile). The map
+## render path merges this wherever the player left a key at defaults
+## (_veg_style_with_quality); the preview applies the identical rule.
+var _quality_style: Dictionary = {}
+var _height_label: Label = null
 ## Live seasonal uniforms snapshotted per rebuild (see _live_season_uniforms).
 var _season_uniforms: Dictionary = {}
 
@@ -380,6 +400,12 @@ func _build_ui() -> void:
 	vp_container.add_child(_viewport)
 	_build_studio_world()
 
+	_height_label = Label.new()
+	_height_label.add_theme_font_size_override("font_size", 11)
+	_height_label.add_theme_color_override("font_color", Color(0.55, 0.62, 0.70))
+	_height_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	preview_col.add_child(_height_label)
+
 	# Right: controls
 	_scroll_container = ScrollContainer.new()
 	_scroll_container.custom_minimum_size = Vector2(360, 520)
@@ -533,7 +559,7 @@ func _keyed_slider(parent: Control, key: String, label: String, min_v: float,
 		max_v: float, start: float, step: float = -1.0) -> Dictionary:
 	var pair := SliderSpinRowScript.add(parent, label, min_v, max_v, start,
 		func(v: float) -> void:
-			_values[key] = v
+			_record_slider_edit(key, v)
 			_refresh_slider_diff(key)
 			_refresh_apply_state()
 			_queue_rebuild(),
@@ -560,7 +586,29 @@ func _keyed_slider(parent: Control, key: String, label: String, min_v: float,
 	return pair
 
 
+## Family-prefixed edits on a NAMED subspecies scope to that species (Apply
+## writes a per-species override); everything else edits the family/global look.
+func _record_slider_edit(key: String, v: float) -> void:
+	if _is_named_variant() and _family_prefixed(key):
+		var d: Dictionary = _species_edits.get(_species, {})
+		d[key] = v
+		_species_edits[_species] = d
+	else:
+		_values[key] = v
+
+
 func _revert_key(key: String) -> void:
+	if _is_named_variant() and _family_prefixed(key):
+		var edits: Dictionary = _species_edits.get(_species, {})
+		edits.erase(key)
+		var base: Dictionary = _species_baselines.get(_species, {})
+		var entry_s: Dictionary = _keyed_sliders.get(key, {})
+		if not entry_s.is_empty() and base.has(key):
+			SliderSpinRowScript.set_values(entry_s.get("pair", {}), float(base[key]))
+		_refresh_slider_diff(key)
+		_refresh_apply_state()
+		_queue_rebuild(true)
+		return
 	if not _baseline.has(key):
 		return
 	_values[key] = _baseline[key]
@@ -590,6 +638,14 @@ func _refresh_slider_diff(key: String) -> void:
 
 
 func _key_differs(key: String) -> bool:
+	if _is_named_variant() and _family_prefixed(key):
+		var edits: Dictionary = _species_edits.get(_species, {})
+		if not edits.has(key):
+			return false
+		var base: Dictionary = _species_baselines.get(_species, {})
+		if not base.has(key):
+			return true
+		return absf(float(edits[key]) - float(base[key])) > 1.0e-4
 	if not _baseline.has(key) or not _values.has(key):
 		return false
 	var a: Variant = _values[key]
@@ -640,6 +696,20 @@ func _rebuild_species_section() -> void:
 	var hdr := Label.new()
 	_style_section(hdr, VegSpeciesCatalog.label_for(_species))
 	_species_section.add_child(hdr)
+	if _is_named_variant():
+		_ensure_species_baseline()
+		var scope_hint := Label.new()
+		scope_hint.text = "Edits apply to %s only (pick the family type to restyle all)" \
+			% VegSpeciesCatalog.label_for(_species)
+		scope_hint.add_theme_font_size_override("font_size", 9)
+		scope_hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
+		scope_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_species_section.add_child(scope_hint)
+	# Sliders display the RESOLVED value for the active species — selecting
+	# Birch shows Birch's real dims (SPECS variant / species override), not the
+	# family numbers it doesn't render with.
+	var resolved := _resolved_active()
+	var session_edits: Dictionary = _species_edits.get(_species, {})
 	# Grouped, not a flat dump: a deciduous tree has ~32 shape sliders and
 	# finding "leaf size" among them meant reading every label. Sections are
 	# derived from the key so a new slider files itself.
@@ -657,8 +727,11 @@ func _rebuild_species_section() -> void:
 		for spec2 in grouped[sect]:
 			var sd2: Dictionary = spec2
 			var key := str(sd2["key"])
+			var start := float(resolved.get(key, _values.get(key, 0.0)))
+			if _is_named_variant() and session_edits.has(key):
+				start = float(session_edits[key])
 			_keyed_slider(body, key, str(sd2["label"]), float(sd2["min"]),
-				float(sd2["max"]), float(_values.get(key, 0.0)))
+				float(sd2["max"]), start)
 
 
 ## Mixed-woodland ratio sliders. Per-species SHAPE (canopy size, etc.) is edited
@@ -760,11 +833,19 @@ func _refresh_preset_dropdown() -> void:
 
 
 ## Shape sliders + tint for the current subspecies — the unit a preset captures.
+## Uses the RESOLVED values (what the active species actually renders with),
+## not the family numbers, so a Birch preset saves Birch.
 func _species_preset_values() -> Dictionary:
 	var out := {}
+	var resolved := _resolved_active()
+	var session_edits: Dictionary = _species_edits.get(_species, {})
 	for spec in SPECIES_SHAPE_SLIDERS.get(_shape_family(), []):
 		var key := str((spec as Dictionary)["key"])
-		if _values.has(key):
+		if session_edits.has(key):
+			out[key] = session_edits[key]
+		elif resolved.has(key):
+			out[key] = resolved[key]
+		elif _values.has(key):
 			out[key] = _values[key]
 	out["%s_albedo_tint" % _species] = _tints.get(_species,
 		_tints.get(_shape_family(), Color.WHITE))
@@ -869,7 +950,7 @@ static func slider_section(key: String) -> String:
 			"hue_jitter"]:
 		if frag in key:
 			return SECTION_FOLIAGE
-	for frag in ["_branch", "_cluster"]:
+	for frag in ["_branch", "_cluster", "_clump", "crown_base"]:
 		if frag in key:
 			return SECTION_BRANCHES
 	return SECTION_SIZE
@@ -1083,8 +1164,34 @@ func _on_vp_gui_input(ev: InputEvent) -> void:
 # Preview scatter + rebuild
 # ---------------------------------------------------------------------------
 
+## The flat settings dict the RENDER path would see after Apply: user family
+## keys diffed against defaults (exactly what the stores persist), per-species
+## overrides (stored + this session's subspecies edits), and the quality-tier
+## overlay under the same only-fills-defaults rule as _veg_style_with_quality.
+## This single source is what makes the preview WYSIWYG — it used to drop the
+## VegStyleStore side channels entirely, so subspecies resolved differently in
+## the studio than on the map.
 func _merged_settings() -> Dictionary:
 	var out := _values.duplicate(true)
+	var defaults: Dictionary = VegetationStyleConfig.defaults()
+	# User family keys BEFORE the tier overlay (tier values are not user edits).
+	var fam_keys: Array = []
+	for k in out:
+		var ks := str(k)
+		if ks.begins_with("_"):
+			continue
+		if str(VegStyleStore.split_flat_key(ks)[0]).is_empty():
+			continue
+		if not defaults.has(ks) or not VegStyleStore.values_equal(out[ks], defaults[ks]):
+			fam_keys.append(ks)
+	fam_keys.sort()
+	for k in _quality_style:
+		if not out.has(k):
+			out[k] = _quality_style[k]
+		elif defaults.has(k) and VegStyleStore.values_equal(out[k], defaults[k]):
+			out[k] = _quality_style[k]
+	out[VegStyleStore.KEY_USER_FAMILY] = fam_keys
+	out[VegStyleStore.KEY_SPECIES_OVERRIDES] = _overrides_with_edits()
 	var fam := _shape_family()
 	var tint: Color = _tints.get(_species, _tints.get(fam, Color.WHITE))
 	out["%s_albedo_tint" % _species] = tint
@@ -1092,6 +1199,55 @@ func _merged_settings() -> Dictionary:
 		out["%s_albedo_tint" % fam] = tint
 	out["use_drape"] = false
 	return out
+
+
+## Stored per-species overrides + this session's not-yet-applied subspecies
+## edits, in the unprefixed form settings_with_variant consumes.
+func _overrides_with_edits() -> Dictionary:
+	var out := _store_species_overrides.duplicate(true)
+	for sid in _species_edits:
+		var fam := VegSpeciesCatalog.mesh_family(str(sid))
+		var cur: Dictionary = out.get(sid, {}) if out.get(sid) is Dictionary else {}
+		var edits: Dictionary = _species_edits[sid]
+		for k in edits:
+			var key := str(k)
+			var unpref := key.substr(fam.length() + 1) if key.begins_with(fam + "_") else key
+			cur[unpref] = edits[k]
+		out[sid] = cur
+	return out
+
+
+## True while the active selection is a NAMED subspecies (Maple, Spruce…) rather
+## than the generic family — the case where edits scope per-species.
+func _is_named_variant() -> bool:
+	return _species != "mix" and _species != _shape_family()
+
+
+func _family_prefixed(key: String) -> bool:
+	return key.begins_with(_shape_family() + "_")
+
+
+## The fully resolved flat dict for the ACTIVE species — what its mesh builder
+## sees. Sliders display these values, so selecting Birch shows Birch's real
+## dims instead of the family numbers it doesn't use.
+func _resolved_active() -> Dictionary:
+	if _species == "mix":
+		return _values
+	return VegSpeciesCatalog.settings_with_variant(_species, _merged_settings(),
+		VegetationCardFactory.SPECS)
+
+
+## Snapshot the resolved per-species state before any session edits — the
+## reference the per-slider diff/revert compares against for a named variant.
+func _ensure_species_baseline() -> void:
+	if _species == "mix" or _species_baselines.has(_species):
+		return
+	var stash: Variant = _species_edits.get(_species)
+	_species_edits.erase(_species)
+	_species_baselines[_species] = VegSpeciesCatalog.settings_with_variant(
+		_species, _merged_settings(), VegetationCardFactory.SPECS)
+	if stash is Dictionary:
+		_species_edits[_species] = stash
 
 
 func _apply_studio(mat: ShaderMaterial, species: String = "") -> void:
@@ -1208,6 +1364,8 @@ func _rebuild_preview() -> void:
 		return
 	for child in _veg_root.get_children():
 		child.queue_free()
+	if _height_label != null:
+		_height_label.text = ""
 	_season_uniforms = _live_season_uniforms()
 	var settings := _merged_settings()
 	var spots: Array = _scatter_spots()
@@ -1294,6 +1452,13 @@ func _build_species_cards(species: String, spots: Array, settings: Dictionary) -
 		mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	_veg_root.add_child(mi)
+	# Height gauge for the ACTIVE species: painted trees render at exactly this
+	# size; auto-scattered forests scale every tree to its own OSM/species
+	# target height instead — the honest explanation for why the two differ.
+	if species == _species and _height_label != null and mesh != null:
+		var h := mesh.get_aabb().size.y * species_scale
+		_height_label.text = ("Painted %s ≈ %.1f m tall · auto forests scale each " +
+			"tree to its OSM/species height") % [VegSpeciesCatalog.label_for(species), h]
 
 
 ## Current mix ratios as a species-weight dict (drops zero weights).
@@ -1362,6 +1527,19 @@ func _load_from_loader() -> void:
 			_values[k] = style[k]
 	for k in shape:
 		_values[k] = shape[k]
+	# WYSIWYG side channels: per-species overrides ride the style dict as
+	# VegStyleStore's _species_overrides (a Dictionary, so the typed copy above
+	# skipped it — and with it, every subspecies resolved differently in the
+	# studio than on the map). The quality-tier overlay lives on the loader.
+	_store_species_overrides = {}
+	var raw_over: Variant = style.get(VegStyleStore.KEY_SPECIES_OVERRIDES, {})
+	if raw_over is Dictionary:
+		_store_species_overrides = (raw_over as Dictionary).duplicate(true)
+	_quality_style = {}
+	if _loader != null and _loader.has_method("veg_quality_tier_style"):
+		_quality_style = _loader.call("veg_quality_tier_style")
+	_species_edits = {}
+	_species_baselines = {}
 	_tints = {
 		"pine": style.get("pine_albedo_tint", Color.WHITE),
 		"deciduous": style.get("deciduous_albedo_tint", Color.WHITE),
@@ -1459,6 +1637,13 @@ func _style_dict() -> Dictionary:
 ## look independent of later "Apply to map" changes.
 func _brush_card() -> Dictionary:
 	var out := _shape_dict()
+	# A named subspecies paints with ITS resolved look, not the family's.
+	if _is_named_variant():
+		var resolved := _resolved_active()
+		for spec in SPECIES_SHAPE_SLIDERS.get(_shape_family(), []):
+			var key := str((spec as Dictionary)["key"])
+			if resolved.has(key):
+				out[key] = resolved[key]
 	for spec in SHADER_SLIDERS:
 		var key := str((spec as Dictionary)["key"])
 		if _values.has(key):
@@ -1474,8 +1659,22 @@ func _brush_card() -> Dictionary:
 func _apply_to_map() -> void:
 	if _loader == null:
 		return
+	# Subspecies edits land as per-species overrides FIRST, so the loader's
+	# post-apply side-channel refresh (apply_vegetation_look re-reads the store)
+	# picks them up in the same rebuild.
+	for sid in _species_edits:
+		var edits: Dictionary = _species_edits[sid]
+		if not edits.is_empty():
+			VegetationStyleConfig.save_species_default(str(sid), edits)
 	var shape := _shape_dict()
 	var style := _style_dict()
+	# Persist this look as the GLOBAL default so future maps inherit it (per-map
+	# saves still override) — BEFORE the loader apply, whose side-channel
+	# refresh re-reads the stores. The store prunes values equal to defaults()
+	# so untouched sliders never become "user edits" that shadow SPECS variants.
+	var global_look := shape.duplicate(true)
+	global_look.merge(style, true)
+	VegetationStyleConfig.save_global(global_look)
 	# One coalesced apply (shape + style together, single rebuild) avoids the old
 	# set_vegetation_settings + set_vegetation_style double-cascade of rebuilds.
 	if _loader.has_method("apply_vegetation_look"):
@@ -1485,12 +1684,6 @@ func _apply_to_map() -> void:
 			_loader.call("set_vegetation_settings", shape, true, true)
 		if _loader.has_method("set_vegetation_style"):
 			_loader.call("set_vegetation_style", style, true, true)
-	# Persist this look as the GLOBAL default so future maps inherit it (per-map
-	# saves still override). This is what makes tune-look changes "stick" between
-	# maps and reloads instead of resetting to hardcoded defaults every time.
-	var global_look := shape.duplicate(true)
-	global_look.merge(style, true)
-	VegetationStyleConfig.save_global(global_look)
 	if _dock != null and _dock.has_method("set_paint_density"):
 		_dock.call("set_paint_density", _density)
 	if _dock != null and _dock.has_method("set_size_var"):
@@ -1514,6 +1707,12 @@ func _apply_to_map() -> void:
 		_baseline["%s_albedo_tint" % species] = _tints[species]
 	_baseline["osm_species_map"] = _osm_species_map.duplicate(true)
 	_baseline["local_mix"] = _local_mix.duplicate(true)
+	# Session subspecies edits are persisted now — fold them into the stored
+	# overrides so the preview keeps resolving them, and re-baseline so the
+	# per-slider diffs read "since the last apply".
+	_store_species_overrides = _overrides_with_edits()
+	_species_edits = {}
+	_species_baselines = {}
 	_applied_once = true
 	_refresh_all_slider_diffs()
 	_refresh_apply_state("Applied to the map — keep tuning, or Close when it looks right")
@@ -1557,6 +1756,7 @@ func _refresh_apply_state(message: String = "") -> void:
 
 func _reset_values() -> void:
 	_values = _baseline.duplicate(true)
+	_species_edits = {}
 	for species in SPECIES_IDS:
 		var tk := "%s_albedo_tint" % species
 		if _baseline.has(tk):
@@ -1633,20 +1833,16 @@ func _on_subspecies_selected(idx: int) -> void:
 		return
 	_species = sid
 	_last_species = sid
-	_maybe_apply_species_default(sid)
+	# No _maybe_apply_species_default here: saved per-species overrides now
+	# arrive through the store side channel and resolve in _merged_settings —
+	# copying them into the FAMILY _values was exactly how one subspecies'
+	# saved look leaked onto every tree of the family.
 	_sync_tint_picker()
 	_rebuild_species_section()
 	_refresh_preset_dropdown()
 	if _preset_name_edit != null:
 		_preset_name_edit.text = ""
 	_queue_rebuild(true)
-
-
-func _maybe_apply_species_default(sid: String) -> void:
-	var saved := VegetationStyleConfig.load_species_default(sid)
-	if saved.is_empty():
-		return
-	_apply_preset_values(saved)
 
 
 func _on_tint_changed(c: Color) -> void:

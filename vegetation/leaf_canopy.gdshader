@@ -84,6 +84,42 @@ float hash21(vec2 p) {
 	return fract(p.x * p.y);
 }
 
+// One broadleaf leaf stamped in its grid cell (rotated lanceolate mask with a
+// lobed edge), with the per-shell gap + seasonal whole-leaf loss folded in.
+// Split into a function so the fragment can stack a SECOND half-cell-offset
+// layer: a single leaf per cell reads as a regular dot lattice at the crown
+// silhouette, while two interleaved layers overlap into a believable canopy.
+float broadleaf_cell_mask(vec2 cf, vec2 seed2, float eff_size, float leaf_loss, float shell_t) {
+	vec2 cell = floor(cf);
+	vec2 local = fract(cf) - 0.5;
+	float gap = hash21(cell + vec2(shell_t * 37.0, shell_t * 23.0) + seed2);
+	if (gap < shell_gap + leaf_loss * (1.0 - shell_gap)) {
+		return 0.0;
+	}
+	float ang = hash21(cell + seed2 + 4.1) * 6.2831;
+	float ca = cos(ang);
+	float sa = sin(ang);
+	vec2 p = vec2(local.x * ca - local.y * sa, local.x * sa + local.y * ca);
+	// Per-cell size jitter: two near-full uniform grids leave their unfilled
+	// cell borders aligned, which reads as dark crosshatch netting over the
+	// whole clump.
+	float es = eff_size * (0.78 + 0.42 * hash21(cell + seed2 + 12.7));
+	float half_w = max(0.5 * es / leaf_aspect, 0.02);
+	float half_l = max(0.5 * es, 0.04);
+	float ex = p.x / half_w;
+	float ey = p.y / half_l;
+	float leaf_angle = atan(ex, ey);
+	// Lobed edge for realistic broadleaf look (e.g. oak/maple)
+	float lobes = 1.0 + 0.25 * sin(leaf_angle * 5.0) * sin(leaf_angle * 3.0);
+	// Lanceolate taper: leaf narrows toward its tip (|ey| -> 1). Keep a wide
+	// solid plateau and only feather the rim — the old 0.70 falloff plus a 65%
+	// taper shaved the ellipse to ~40% of its area and canopies read as dot
+	// grids even at leaf_size 0.95.
+	float taper = 1.0 - smoothstep(0.0, 1.0, abs(ey)) * 0.45;
+	float d = (ex * ex) + (ey * ey);
+	return 1.0 - smoothstep(0.82, 1.0, d / max(taper * taper * lobes * lobes, 0.05));
+}
+
 void vertex() {
 	float shell_t = COLOR.r;
 	float top_mask = COLOR.g;
@@ -133,7 +169,8 @@ void fragment() {
 	// crossed a ring boundary.
 	float size_mul = veg_leaf_size_mul(leaf_coverage, deciduousness);
 	float eff_size = max(leaf_size * size_mul, 0.001);
-	
+	float leaf_loss = veg_leaf_loss(leaf_coverage, deciduousness);
+
 	if (canopy_profile > 0) {
 		// Conifer needles: thin elongated streaks (same technique as grass blades).
 		float lean = hash21(cell + seed2 + 9.3) * 0.35;
@@ -142,27 +179,22 @@ void fragment() {
 		float radius = max(eff_size * 0.5 / max(leaf_aspect, 1.0), 0.015);
 		mask = (1.0 - smoothstep(radius * 0.55, radius, abs(blade_local.x)));
 		mask *= 1.0 - smoothstep(0.38, 0.52, abs(blade_local.y));
+		// Per-shell empty cells (the parallax gaps that make stacked shells
+		// read as a volume) and seasonal leaf loss share one hash: leaf fall
+		// widens the gap threshold over surviving cells, so the canopy thins
+		// by losing WHOLE leaves and reaches bare exactly at leaf_coverage 0.
+		float gap = hash21(cell + vec2(v_shell_t * 37.0, v_shell_t * 23.0) + seed2);
+		if (gap < shell_gap + leaf_loss * (1.0 - shell_gap)) {
+			mask = 0.0;
+		}
 	} else {
-		float half_w = max(0.5 * eff_size / leaf_aspect, 0.02);
-		float half_l = max(0.5 * eff_size, 0.04);
-		float ex = p.x / half_w;
-		float ey = p.y / half_l;
-		float leaf_angle = atan(ex, ey);
-		// Lobed edge for realistic broadleaf look (e.g. oak/maple)
-		float lobes = 1.0 + 0.25 * sin(leaf_angle * 5.0) * sin(leaf_angle * 3.0);
-		// Lanceolate taper: leaf narrows toward its tip (|ey| -> 1).
-		float taper = 1.0 - smoothstep(0.0, 1.0, abs(ey)) * 0.65;
-		float d = (ex * ex) + (ey * ey);
-		mask = 1.0 - smoothstep(0.70, 1.0, d / max(taper * taper * lobes * lobes, 0.05));
-	}
-	// Per-shell empty cells (the parallax gaps that make stacked shells read as
-	// a volume) and seasonal leaf loss share one hash: leaf fall simply widens
-	// the gap threshold over the cells that survived it, so the canopy thins by
-	// losing WHOLE leaves and reaches bare exactly at leaf_coverage 0.
-	float gap = hash21(cell + vec2(v_shell_t * 37.0, v_shell_t * 23.0) + seed2);
-	float leaf_loss = veg_leaf_loss(leaf_coverage, deciduousness);
-	if (gap < shell_gap + leaf_loss * (1.0 - shell_gap)) {
-		mask = 0.0;
+		// Two interleaved leaf layers (second offset half a cell, own random
+		// rotations + gap hash): one leaf per cell reads as a regular dot
+		// lattice at the crown silhouette. Gap + seasonal loss live inside
+		// broadleaf_cell_mask, per layer.
+		mask = broadleaf_cell_mask(cell_f, seed2, eff_size, leaf_loss, v_shell_t);
+		mask = max(mask, 0.92 * broadleaf_cell_mask(cell_f + vec2(0.5, 0.5),
+			seed2 + 7.3, eff_size, leaf_loss, v_shell_t));
 	}
 
 	ALPHA = mask;
@@ -187,6 +219,12 @@ void fragment() {
 	} else if (mask < eff_thresh) {
 		discard;
 	}
+	// Surviving leaves are SOLID. Passing the soft mask straight to ALPHA
+	// blended every leaf 35–100% transparent, which stacked into a see-through
+	// dotted-ball canopy near and a checkerboard mess in the dither band (the
+	// per-pixel dither discard ALREADY thins coverage — semi-transparency on
+	// top double-counted it). A leaf is opaque; only its rim feathers.
+	ALPHA = clamp(mask * 2.2, 0.0, 1.0);
 
 	// ---- Lighting normal (double-sided) ----
 	float face_factor = 1.0;

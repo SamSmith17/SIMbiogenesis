@@ -326,6 +326,37 @@ static func _batch_settings_key(settings: Dictionary) -> int:
 	return hash(settings)
 
 
+## Rebuild-time height truth for auto-scattered records. The generator bakes
+## scale = height_m / NOMINAL_CARD_H[species] at scatter, but the ACTUAL mesh
+## height is whatever the current style builds — deciduous measured ~9.7 m
+## against a nominal of 6.0, so every auto broadleaf rendered ~60% taller than
+## its OSM/species target, drifting further whenever the style changed dims
+## (the "drastic size differences" on tuned maps). Multiplying by
+## nominal/actual re-lands every tree on its target height at REBUILD time, so
+## stale scales in already-saved layers heal without a re-scatter.
+## Shrub/scrub records never encoded a nominal (plain RNG scale) and pass
+## through unscaled; the manual painted layer never routes through here.
+static func height_norm_factor(species: String, settings: Dictionary) -> float:
+	if species == "shrub" or species == "scrub":
+		return 1.0
+	var family := VegetationCardFactory.mesh_family(species)
+	if family.begins_with("grass_"):
+		return 1.0
+	var nominal := float(AutoVegetationGenerator.NOMINAL_CARD_H.get(species, 8.0))
+	var mesh: ArrayMesh
+	if family == "deciduous" or family == "pine":
+		mesh = VegetationCardFactory.mesh_for_canopy_lod(species, settings,
+			VegetationCardFactory.CanopyLodTier.NEAR)
+	else:
+		mesh = VegetationCardFactory.mesh_for_species(species, settings)
+	if mesh == null:
+		return 1.0
+	var actual := mesh.get_aabb().size.y
+	if actual <= 0.05:
+		return 1.0
+	return nominal / actual
+
+
 static func _build_bulk_batch(root: Node3D, slot: String, species: String, records: Array,
 		ground_y_at: Callable, settings: Dictionary,
 		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0) -> void:
@@ -342,6 +373,13 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	if family == "deciduous" or family == "pine":
 		var tree_end := float(batch_settings.get("auto_visibility_end_m", VISIBILITY_END))
 		var lod_settings := _with_auto_lod_reach(family, batch_settings)
+		# Height normalization rides the family bulk key so every downstream
+		# tier (NEAR/FAR/impostor) picks it up through species_bulk_scale.
+		var fix := height_norm_factor(species, lod_settings)
+		if not is_equal_approx(fix, 1.0):
+			lod_settings = lod_settings.duplicate()
+			var bulk_key := "%s_bulk_scale" % family
+			lod_settings[bulk_key] = float(lod_settings.get(bulk_key, 1.0)) * fix
 		# Ring dispatch (Phase 3) lives inside _build_canopy_lod_bulk_batches:
 		# NEAR ring = leaf pair (EXEMPT from force_far — the bounded high-cost
 		# core is the point of the static ring, even on a 30 km map), MID =
@@ -356,7 +394,10 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	var mat: ShaderMaterial = null
 	if not use_surface_mats:
 		mat = VegetationCardFactory.material_for_species(species, batch_settings)
-	var species_scale := VegetationCardFactory.species_bulk_scale(species, batch_settings)
+	# species_bulk_scale ignores palm/cactus families, so the height fix
+	# multiplies the effective scale directly on this generic path.
+	var species_scale := VegetationCardFactory.species_bulk_scale(species, batch_settings) \
+		* height_norm_factor(species, batch_settings)
 	var foot_y := VegetationCardFactory.foot_local_y(species, batch_settings)
 	var vert_off := VegetationLayer.vertical_offset_for(family, batch_settings)
 	var mm := MultiMesh.new()

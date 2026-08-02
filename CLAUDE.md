@@ -837,36 +837,72 @@ holds focus (typing a brush radius used to fly the drone). The crosshair area
 focus and the paint selection now own SEPARATE highlight meshes. Selftest:
 `vegetation/veg_dock_state_selftest.gd`.
 
-**Procedural deciduous rebuild.** The broadleaf generator's three defects had
-one root: the canopy ignored the skeleton. `_build_fractal_branches` returned a
-`tips` list that the call site DISCARDED, and `_build_leaf_shell_canopy` built
-an abstract golden-angle ring of ellipsoids on the trunk top instead — a blob
-on a stick with a hollow apex (the "heart" notch on every distant broadleaf).
-Foliage now hangs on the real tips (`_clusters_from_tips`), at BOTH tiers: the
-FAR path runs the skeleton with `emit=false` (tips only, no bark geometry) so
-its cards share the NEAR silhouette, which matters because the impostor atlas
-is baked FROM the NEAR mesh. Branch placement moved into
-`deciduous_primary_placements` — pure data, so the selftest asserts the real
-generator rather than re-deriving its maths — and fixes three things: limbs
-spread over a real crown-bearing band (`deciduous_crown_base`, default 0.42)
-with height jitter instead of packing into the top ~30% of the trunk; azimuth
-jitter is SYMMETRIC and bounded to ±35% of the golden gap (it was 0–34°
-one-sided against a 21.8° gap, so pairs collided — the reported "bunching");
-and limbs emerge from the trunk SURFACE, not the centre line, where the first
-~0.65 m used to be buried. Plus mid-limb laterals (`deciduous_branch_lateral`)
-and an apex leader that closes the notch. **`deciduous_crown_base` deliberately
-does NOT inherit the legacy `deciduous_branch_base`** — those saved values were
-tuned when the key meant something else and reproduce the exact lollipop on
-every already-tuned map. Species archetypes ride `_FAMILY_DIM_KEYS`, which now
-carries crown_base/tilt_low/tilt_high/lateral for deciduous, so a columnar
-birch and a spreading chestnut differ in TOPOLOGY, not just size and tint.
-Cost: the `maxi(..., 7)` shell floor is gone (it silently promoted the LOW/
-MEDIUM quality tiers to 7 shells, making the headline deciduous knob inert),
-and `inner_frac` now adapts so a low shell count hugs the surface instead of
-reading as wireframe. Mt Vernon: 771,679 → 342,500 primitives, 106 → 34 draw
-calls. **Bump `VegImpostorBaker.BAKE_VERSION` on ANY change to this geometry**
-or cached impostors serve the old silhouette forever. Verify with
-`--capture=tree` (below) and `--capture=veg`.
+**Procedural deciduous tree (space colonization).** The broadleaf skeleton is
+grown by space colonization (Runions et al. 2007, `_build_branch_skeleton` in
+vegetation_card_factory.gd): a deterministic attractor cloud fills the crown
+envelope (`_sc_attractors` — shape from the species archetype keys: tilt_low =
+base fullness, lateral = bottom-heavy skirt bias), limbs seeded at
+`deciduous_primary_placements` (pure data, selftest-asserted: spread over the
+crown band from `deciduous_crown_base`, symmetric bounded azimuth jitter, off
+the trunk SURFACE) grow step-by-step toward their nearest attractors and fork
+where the field diverges. Node budget bounds cost (`deciduous_branch_levels`
+scales it ~140..400); pipe-model radii (da Vinci r^n, `deciduous_branch_
+thickness` shapes the exponent) capped under the trunk-top radius. SC tuning
+traps pinned by `auto_vegetation_selftest`: step ≪ crown radius or the kill
+radius (1.45×step) wipes crown regions before growth visits them (envelope
+fill ≥70% asserted); saturated nodes are SKIPPED in the nearest search or
+their attractors starve and the loop stalls. NEAR trunk is a 7-sided tapered
+tube (basal flare, up-tilted card-style normals or it renders black, UVs
+ping-pong inside the bark texture's opaque CENTRE band — the margins are
+transparent card silhouette and a full 0..1 wrap renders a cutout slab) at
+radius **0.28×trunk_w** — card-tuned trunk_w values describe the card's ~45%
+opaque visual width, honouring the full width renders a barrel. Limb seeds
+start INSIDE the tube (attachment contract, selftest-asserted). Foliage clumps
+cap the real tips (`_clusters_from_tips`) at BOTH tiers (FAR runs the skeleton
+`emit=false`; the impostor atlas bakes FROM the NEAR mesh); clump radius tiles
+the ENVELOPE volume share (any cluster count overlaps into one canopy) and
+`deciduous_clump_spread` is deliberately a FRESH key — the legacy
+cluster_spread/tightness pair was tuned against the old ring layout and would
+shrink every tip-anchored crown. Same trap: **`deciduous_crown_base` does NOT
+inherit legacy `deciduous_branch_base`**. leaf_canopy.gdshader stamps TWO
+interleaved per-cell leaf layers with size jitter (one layer reads as a dot
+lattice at the silhouette; aligned borders read as crosshatch netting) and
+keeps surviving leaves near-OPAQUE (blending the soft mask as ALPHA stacked
+into a see-through dotted ball near + checkerboard in the dither band); the
+old leaf_size/leaf_gap render clamps are GONE (sliders own their range) and
+`VegStyleStore._sanitize_inert_leaf_keys` drops stored values those clamps had
+made inert (the player never saw them; keeping them resurrects the legacy
+speckled look). NEAR tri budget at defaults ≤6,200 (selftest). **Bump
+`VegImpostorBaker.BAKE_VERSION` on ANY change to this geometry** (now v3) or
+cached impostors serve the old silhouette forever. Verify with
+`--capture=tree` (pinned to July 15 so seasonal thinning can't fake or hide a
+shape defect) and `--capture=veg`.
+
+**Auto-veg height truth.** Auto records bake `scale = height_m /
+NOMINAL_CARD_H[species]` at scatter, but the ACTUAL mesh height is whatever
+the style builds (deciduous measured ~9.7 m vs nominal 6.0 → every broadleaf
+~60% oversized; Mt Vernon's pine card_h 19.5 × target/3.2 gave ~70 m
+monsters — the "drastic size differences").
+`AutoVegetationRuntime.height_norm_factor` multiplies nominal/actual into the
+family bulk key per species batch at REBUILD time, so every auto tree lands on
+its OSM/species target height and stale saved layers heal without re-scatter.
+Consequence: style dims shape auto trees' PROPORTIONS, not their height —
+`auto_tree_scale` stays the whole-forest size knob; painted trees still render
+at dims × bulk (the Tune-look height gauge states both).
+
+**Tune-look WYSIWYG contract.** The preview builds from the SAME resolution
+the render path uses: `_merged_settings` re-derives the VegStyleStore side
+channels (user family keys = diff vs defaults(), exactly what the stores
+persist; species overrides = stored + session edits) and applies the loader's
+`veg_quality_tier_style()` overlay under the same only-fills-defaults rule.
+Editing a NAMED subspecies routes sliders to per-species overrides
+(`_species_edits` → save_species_default on Apply) instead of silently
+retuning the whole family, and sliders DISPLAY the resolved per-species
+values. `VegStyleStore.save_global_patch` PRUNES values equal to defaults()
+(storing untouched sliders as user family edits shadowed every SPECS variant);
+`apply_vegetation_look` re-reads `flat_merged` after persisting so in-session
+side channels match — without that, fresh edits only won over SPECS variants
+after a restart.
 
 **Growth (Phase 9).** `VegetationInstanceMap` holds ONE entry per PLANT with a
 list of MultiMesh slots, not one entry per slot: a NEAR-ring tree lives in two

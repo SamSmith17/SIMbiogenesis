@@ -6341,7 +6341,10 @@ func _site_winter_min_c() -> float:
 ## provenance rule the style store uses) always wins over the tier. Both the
 ## scatter ctx and the render settings build on this, so generator and
 ## runtimes never disagree.
-func _veg_style_with_quality() -> Dictionary:
+## The RenderProfile veg-tier style overlay for the current quality level,
+## exposed publicly so the Tune-look preview can apply the SAME
+## only-fills-defaults rule the render path uses below (WYSIWYG).
+func veg_quality_tier_style() -> Dictionary:
 	var vq := RenderProfile.QUALITY_HIGH
 	if _main != null and _main.get("graphics_quality") != null:
 		vq = int(_main.get("graphics_quality"))
@@ -6349,6 +6352,11 @@ func _veg_style_with_quality() -> Dictionary:
 	var tier_style: Dictionary = (prof["style"] as Dictionary).duplicate()
 	if _is_large_world_map():
 		tier_style.merge(prof["style_large"] as Dictionary, true)
+	return tier_style
+
+
+func _veg_style_with_quality() -> Dictionary:
+	var tier_style := veg_quality_tier_style()
 	var out := _veg_style.duplicate(true)
 	var veg_defaults: Dictionary = VegetationStyleConfig.defaults()
 	for k in tier_style:
@@ -7108,6 +7116,13 @@ func apply_vegetation_look(shape: Dictionary, style: Dictionary) -> void:
 	_veg_style = VegetationStyleConfig.apply_patch(_veg_style, style)
 	_vegetation_layer.save(_lat, _lon)
 	VegetationStyleConfig.save_map(_lat, _lon, _veg_style)
+	# Re-read the store so the side channels (_user_family_keys /
+	# _species_overrides) match what was just persisted. Without this the
+	# in-session render path kept the side channels from load time: a key
+	# freshly edited away from defaults wasn't flagged as a user family edit,
+	# so SPECS variants kept shadowing it until the NEXT session — "the map
+	# only matches the preview after I restart".
+	_veg_style.merge(VegStyleStore.flat_merged(_lat, _lon), true)
 	VegetationCardFactory.clear_foot_cache()
 	call_deferred("_rebuild_vegetation")
 	if _auto_veg_generated and (_forest_params_changed(prev, _veg_style) \
