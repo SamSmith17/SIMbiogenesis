@@ -21,6 +21,10 @@ extends RefCounted
 const QUALITY_LOW := 0
 const QUALITY_MEDIUM := 1
 const QUALITY_HIGH := 2
+## Appended for the veg overhaul (Phase 4): HIGH stays the default experience;
+## ULTRA buys bigger detail rings, more leaf shells, veg shadows and a 4K
+## shadow atlas for strong GPUs.
+const QUALITY_ULTRA := 3
 
 ## Shared with PropRenderTuning's [props] section; ConfigFile preserves other
 ## sections on save.
@@ -32,6 +36,7 @@ static func quality_name(quality: int) -> String:
 		QUALITY_LOW: return "Low"
 		QUALITY_MEDIUM: return "Medium"
 		QUALITY_HIGH: return "High"
+		QUALITY_ULTRA: return "Ultra"
 	return "High"
 
 
@@ -55,6 +60,12 @@ static func graphics_profile(quality: int) -> Dictionary:
 			return {
 				"atlas_size": 1536,
 				"soft_quality": RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM,
+				"taa": true,
+			}
+		QUALITY_ULTRA:
+			return {
+				"atlas_size": 4096,
+				"soft_quality": RenderingServer.SHADOW_QUALITY_SOFT_ULTRA,
 				"taa": true,
 			}
 	# HIGH, and the fallback: matches the project.godot baseline.
@@ -130,6 +141,128 @@ static func shadow_profile(shadow_quality: int) -> Dictionary:
 				"moon_distance_scale": 1.15,
 			}
 	return {}
+
+
+## Vegetation quality knobs per graphics preset (veg overhaul Phase 4) —
+## pinned pure data like the tables above, applied by
+## terrain_loader._auto_veg_runtime_settings on every veg rebuild.
+##
+##   style        style-key overrides applied as the TIER BASELINE. A key the
+##                player explicitly tuned (its merged value differs from
+##                VegetationStyleConfig.defaults()) always wins over the tier.
+##   style_large  extra overrides merged on top for ≥8 km world maps — this
+##                REPLACES the old silent hardcoded thinning with a visible,
+##                selectable tier (the scatter diag prints the live caps).
+##   veg_shadows  whether canopy shadow casting is enabled with this preset
+##                (VegetationShadowPolicy; ULTRA only — leaf shadows are the
+##                single most expensive veg toggle).
+##
+## Ring radii are the static SoI detail rings (VegTierRings): the leaf-shell
+## tier exists only within veg_near_ring_m of the SoI centre, FAR cards to
+## veg_mid_ring_m, impostor quads beyond. Unknown levels fall back to HIGH.
+static func veg_profile(quality: int) -> Dictionary:
+	match quality:
+		QUALITY_LOW:
+			return {
+				"style": {
+					"veg_near_ring_m": 80.0,
+					"veg_mid_ring_m": 250.0,
+					"deciduous_leaf_shell_count": 3.0,
+					"auto_max_tree_instances": 8000,
+					"auto_max_grass_instances": 40000,
+					"grass_detail_radius_m": 150.0,
+					"grass_visibility_end_m": 260.0,
+					"auto_visibility_end_m": 700.0,
+				},
+				"style_large": {
+					"auto_force_far_canopy": true,
+					"auto_max_tree_instances": 2000,
+					"auto_max_grass_instances": 12000,
+					"auto_visibility_end_m": 480.0,
+					"grass_visibility_end_m": 200.0,
+					"auto_density_scale": 0.25,
+					"auto_distant_density": 0.03,
+					"auto_detail_radius_m": 250.0,
+					"grass_detail_radius_m": 150.0,
+				},
+				"veg_shadows": false,
+			}
+		QUALITY_MEDIUM:
+			return {
+				"style": {
+					"veg_near_ring_m": 150.0,
+					"veg_mid_ring_m": 450.0,
+					"deciduous_leaf_shell_count": 5.0,
+					"auto_max_tree_instances": 16000,
+					"auto_max_grass_instances": 80000,
+					"grass_detail_radius_m": 300.0,
+					"grass_visibility_end_m": 400.0,
+					"auto_visibility_end_m": 1000.0,
+				},
+				"style_large": {
+					"auto_force_far_canopy": true,
+					"auto_max_tree_instances": 4000,
+					"auto_max_grass_instances": 24000,
+					"auto_visibility_end_m": 480.0,
+					"grass_visibility_end_m": 260.0,
+					"auto_density_scale": 0.35,
+					"auto_distant_density": 0.05,
+					"auto_detail_radius_m": 350.0,
+					"grass_detail_radius_m": 220.0,
+				},
+				"veg_shadows": false,
+			}
+		QUALITY_ULTRA:
+			return {
+				"style": {
+					"veg_near_ring_m": 400.0,
+					"veg_mid_ring_m": 1100.0,
+					"deciduous_leaf_shell_count": 9.0,
+					"auto_max_tree_instances": 24000,
+					"auto_max_grass_instances": 120000,
+					"grass_detail_radius_m": 700.0,
+					"grass_visibility_end_m": 700.0,
+					"auto_visibility_end_m": 1800.0,
+				},
+				"style_large": {
+					"auto_force_far_canopy": false,
+					"auto_max_tree_instances": 12000,
+					"auto_max_grass_instances": 48000,
+					"auto_visibility_end_m": 1200.0,
+					"grass_visibility_end_m": 520.0,
+					"auto_density_scale": 0.6,
+					"auto_distant_density": 0.15,
+					"auto_detail_radius_m": 600.0,
+					"grass_detail_radius_m": 400.0,
+				},
+				"veg_shadows": true,
+			}
+	# HIGH, and the fallback: matches the pre-Phase-4 defaults exactly, so an
+	# untouched install renders identically to before quality wiring existed.
+	return {
+		"style": {
+			"veg_near_ring_m": 250.0,
+			"veg_mid_ring_m": 700.0,
+			"deciduous_leaf_shell_count": 7.0,
+			"auto_max_tree_instances": 24000,
+			"auto_max_grass_instances": 120000,
+			"grass_detail_radius_m": 500.0,
+			"grass_visibility_end_m": 520.0,
+			"auto_visibility_end_m": 1200.0,
+		},
+		"style_large": {
+			"auto_force_far_canopy": true,
+			"auto_max_tree_instances": 4000,
+			"auto_max_grass_instances": 24000,
+			"auto_visibility_end_m": 480.0,
+			"grass_visibility_end_m": 260.0,
+			"auto_density_scale": 0.35,
+			"auto_distant_density": 0.05,
+			"auto_detail_radius_m": 350.0,
+			"grass_detail_radius_m": 220.0,
+		},
+		"veg_shadows": false,
+	}
 
 
 ## Persisted 3D render scale. Kept here with the other render settings so there

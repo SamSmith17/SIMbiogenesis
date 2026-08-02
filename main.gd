@@ -412,10 +412,12 @@ func set_world_suspended_for_lab(on: bool) -> void:
 ## Global graphics quality preset (distinct from per-light shadow_quality above).
 ## Bundles the heaviest GPU knobs the project formerly hardcoded in project.godot:
 ## directional shadow atlas size, soft-shadow filter quality, and TAA.
-## 0 = Low, 1 = Medium, 2 = High. Default (High) reproduces the project baseline.
-@export_range( 0, 2, 1 ) var graphics_quality : int = 2 :
+## 0 = Low, 1 = Medium, 2 = High, 3 = Ultra (Phase 4: also drives the
+## vegetation tier — detail rings, leaf shells, instance caps, veg shadows).
+## Default (High) reproduces the project baseline.
+@export_range( 0, 3, 1 ) var graphics_quality : int = 2 :
 	set( value ) :
-		graphics_quality = clampi( value, 0, 2 )
+		graphics_quality = clampi( value, 0, 3 )
 		_apply_graphics_quality()
 
 ## Moon apparent size in the sky
@@ -1408,7 +1410,7 @@ func get_graphics_quality_name() -> String :
 	return RenderProfile.quality_name( graphics_quality )
 
 func set_graphics_quality_level( level: int ) -> void :
-	graphics_quality = clampi( level, 0, 2 )
+	graphics_quality = clampi( level, 0, 3 )
 	_apply_graphics_quality()
 
 func get_graphics_quality_level() -> int :
@@ -1774,6 +1776,14 @@ func _apply_graphics_quality() -> void :
 	var vp := get_viewport()
 	if vp != null :
 		vp.use_taa = bool( p[ "taa" ] )
+	# Veg overhaul Phase 4: the preset also carries the vegetation tier —
+	# canopy shadow casting here, ring radii/shell counts/instance caps via
+	# the terrain loader (which re-scatters or rebuilds as needed).
+	var veg : Dictionary = RenderProfile.veg_profile( graphics_quality )
+	vegetation_shadows_enabled = bool( veg.get( "veg_shadows", false ) )
+	var tl : Node = ServiceLocator.terrain_loader()
+	if tl != null and tl.has_method( "on_graphics_quality_changed" ) :
+		tl.call( "on_graphics_quality_changed", graphics_quality )
 
 func _get_shadow_profile() -> Dictionary :
 	return RenderProfile.shadow_profile( shadow_quality )

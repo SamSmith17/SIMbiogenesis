@@ -212,7 +212,7 @@ func refresh_from_controller() -> void:
 	if _shadow_opacity:
 		_shadow_opacity.value = snap.get("shadow_opacity", 1.0)
 	if _graphics_quality:
-		_graphics_quality.selected = clampi(int(snap.get("graphics_quality", 2)), 0, 2)
+		_graphics_quality.selected = clampi(int(snap.get("graphics_quality", 2)), 0, 3)
 	_sync_terrain_quality()
 	if _moon_energy:
 		_moon_energy.value = snap.get("moon_energy", 0.3)
@@ -865,11 +865,12 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	_graphics_quality.add_item("Low (fastest)",  0)
 	_graphics_quality.add_item("Medium",          1)
 	_graphics_quality.add_item("High (default)",  2)
+	_graphics_quality.add_item("Ultra (strong GPUs)", 3)
 	_graphics_quality.add_theme_color_override("font_color", C_TEXT)
 	_graphics_quality.item_selected.connect(_on_graphics_quality)
 	v.add_child(_graphics_quality)
 	var gq_hint := Label.new()
-	gq_hint.text = "Lower presets reduce shadow-map size, soft-shadow filtering, and disable TAA for higher FPS on weaker GPUs."
+	gq_hint.text = "Presets scale shadow-map size, soft-shadow filtering, TAA, and the vegetation tier (detail-ring size, leaf density, tree budgets). Ultra adds tree shadows and bigger detail rings."
 	gq_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	gq_hint.custom_minimum_size = Vector2(420, 0)
 	gq_hint.add_theme_color_override("font_color", C_TEXT_S)

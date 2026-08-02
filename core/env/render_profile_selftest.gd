@@ -28,6 +28,8 @@ func _initialize() -> void:
 	_test_shadow_profiles()
 	_test_shadow_monotonic()
 	_test_render_scale_roundtrip()
+	_test_veg_profiles()
+	_test_veg_monotonic()
 	if _fails == 0:
 		print("RENDER PROFILE SELFTEST PASS  (%d checks)" % _checks)
 	else:
@@ -147,3 +149,75 @@ func _test_render_scale_roundtrip() -> void:
 	_check("original render scale restored",
 		is_equal_approx(RenderProfile.load_render_scale(1.0),
 			1.0 if is_equal_approx(original, sentinel) else original))
+
+
+## Veg overhaul Phase 4: every veg tier value pinned. HIGH must equal the
+## pre-Phase-4 defaults exactly (an untouched install renders identically),
+## and HIGH's large-map overrides must equal the old hardcoded thinning.
+func _test_veg_profiles() -> void:
+	_check("ultra name", RenderProfile.quality_name(RenderProfile.QUALITY_ULTRA) == "Ultra")
+	var ug := RenderProfile.graphics_profile(RenderProfile.QUALITY_ULTRA)
+	_check("ultra atlas", int(ug["atlas_size"]) == 4096)
+	_check("ultra soft", int(ug["soft_quality"]) == RenderingServer.SHADOW_QUALITY_SOFT_ULTRA)
+	_check("ultra enables TAA", bool(ug["taa"]))
+
+	var hi := RenderProfile.veg_profile(RenderProfile.QUALITY_HIGH)
+	var hs: Dictionary = hi["style"]
+	var defaults := VegetationStyleConfig.defaults()
+	for pair in [["veg_near_ring_m", 250.0], ["veg_mid_ring_m", 700.0],
+			["deciduous_leaf_shell_count", 7.0], ["grass_detail_radius_m", 500.0],
+			["grass_visibility_end_m", 520.0], ["auto_visibility_end_m", 1200.0]]:
+		_check("HIGH veg %s pinned" % pair[0],
+			is_equal_approx(float(hs[pair[0]]), float(pair[1])))
+		_check("HIGH veg %s == style defaults (behaviour-preserving)" % pair[0],
+			is_equal_approx(float(hs[pair[0]]), float(defaults[pair[0]])))
+	_check("HIGH tree cap pinned", int(hs["auto_max_tree_instances"]) == 24000)
+	_check("HIGH grass cap pinned", int(hs["auto_max_grass_instances"]) == 120000)
+	var hl: Dictionary = hi["style_large"]
+	_check("HIGH large force_far (old hardcode)", bool(hl["auto_force_far_canopy"]))
+	_check("HIGH large tree cap == old hardcode", int(hl["auto_max_tree_instances"]) == 4000)
+	_check("HIGH large grass cap == old hardcode", int(hl["auto_max_grass_instances"]) == 24000)
+	_check("HIGH large vis == old hardcode", is_equal_approx(float(hl["auto_visibility_end_m"]), 480.0))
+	_check("HIGH large density == old hardcode", is_equal_approx(float(hl["auto_density_scale"]), 0.35))
+	_check("HIGH no veg shadows", not bool(hi["veg_shadows"]))
+
+	var ultra := RenderProfile.veg_profile(RenderProfile.QUALITY_ULTRA)
+	_check("ULTRA veg shadows on", bool(ultra["veg_shadows"]))
+	_check("ULTRA large map keeps leaf tiers",
+		not bool((ultra["style_large"] as Dictionary)["auto_force_far_canopy"]))
+	var lo := RenderProfile.veg_profile(RenderProfile.QUALITY_LOW)
+	_check("LOW shells pinned", is_equal_approx(float((lo["style"] as Dictionary)["deciduous_leaf_shell_count"]), 3.0))
+	_check("LOW large force_far", bool((lo["style_large"] as Dictionary)["auto_force_far_canopy"]))
+
+	_check("unknown veg level falls back to HIGH",
+		RenderProfile.veg_profile(99) == hi)
+	_check("negative veg level falls back to HIGH",
+		RenderProfile.veg_profile(-1) == hi)
+
+
+## Every scaling knob must be non-decreasing Low -> Medium -> High -> Ultra,
+## and each tier's large-map budget must never exceed its normal budget.
+func _test_veg_monotonic() -> void:
+	var order := [RenderProfile.QUALITY_LOW, RenderProfile.QUALITY_MEDIUM,
+		RenderProfile.QUALITY_HIGH, RenderProfile.QUALITY_ULTRA]
+	var keys := ["veg_near_ring_m", "veg_mid_ring_m", "deciduous_leaf_shell_count",
+		"auto_max_tree_instances", "auto_max_grass_instances",
+		"grass_detail_radius_m", "grass_visibility_end_m", "auto_visibility_end_m"]
+	for i in range(1, order.size()):
+		var prev: Dictionary = RenderProfile.veg_profile(order[i - 1])["style"]
+		var cur: Dictionary = RenderProfile.veg_profile(order[i])["style"]
+		for k in keys:
+			_check("%s non-decreasing at tier %d" % [k, i],
+				float(cur[k]) >= float(prev[k]),
+				"%s -> %s" % [str(prev[k]), str(cur[k])])
+	for q in order:
+		var p := RenderProfile.veg_profile(q)
+		var s: Dictionary = p["style"]
+		var l: Dictionary = p["style_large"]
+		for k in ["auto_max_tree_instances", "auto_max_grass_instances",
+				"auto_visibility_end_m", "grass_visibility_end_m"]:
+			_check("large-map %s <= normal at q%d" % [k, q],
+				float(l[k]) <= float(s[k]),
+				"%s > %s" % [str(l[k]), str(s[k])])
+		_check("rings ordered at q%d" % q,
+			float(s["veg_mid_ring_m"]) >= float(s["veg_near_ring_m"]))

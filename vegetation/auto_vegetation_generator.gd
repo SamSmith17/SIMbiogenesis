@@ -161,7 +161,12 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 	var half := float(ctx.get("half_extent_m", 1500.0))
 	# Large world maps (Mt. Vernon 30 km) — thin + prefer FAR billboards. The
 	# leafy NEAR canopy LOD is the prim bomb (×2 MultiMeshes of high-poly shells).
-	if half >= 8000.0:
+	# Phase 4: when the loader applied a RenderProfile veg tier
+	# (veg_quality_managed), its caps/rings/cull distances are authoritative
+	# and this legacy fallback must not fight them (it used to silently clamp
+	# even an ULTRA budget back to 4000 trees). The fallback still protects
+	# direct generate() callers (selftests, tools) on huge extents.
+	if half >= 8000.0 and not bool(style.get("veg_quality_managed", false)):
 		if int(style.get("auto_max_tree_instances", 24000)) >= 10000:
 			style["auto_max_tree_instances"] = 4000
 		if int(style.get("auto_max_grass_instances", 120000)) >= 36000:

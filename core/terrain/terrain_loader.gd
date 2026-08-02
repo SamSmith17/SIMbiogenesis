@@ -5821,6 +5821,35 @@ func _rebuild_all_vegetation() -> void:
 		_rebuild_auto_vegetation_async()
 
 
+## Phase 4: graphics preset changed. Re-scatter when the tier moved a
+## generator-read key (density, caps — _forest_params_changed decides), else
+## just rebuild so ring radii / shells / cull distances re-apply. No-ops on a
+## re-select of the current level.
+var _veg_quality_applied := -999
+var _veg_quality_prev_eff: Dictionary = {}
+
+
+func on_graphics_quality_changed(level: int) -> void:
+	if not _built:
+		_veg_quality_applied = level
+		return
+	if level == _veg_quality_applied:
+		return
+	_veg_quality_applied = level
+	var new_eff := _veg_style_with_quality()
+	var scatter_changed := true
+	if not _veg_quality_prev_eff.is_empty():
+		scatter_changed = _forest_params_changed(_veg_quality_prev_eff, new_eff)
+	_veg_quality_prev_eff = new_eff
+	_toast("Vegetation tier: %s" % RenderProfile.quality_name(level), ToastUI.Level.INFO)
+	VegetationCardFactory.clear_foot_cache()
+	if _auto_veg_generated and scatter_changed:
+		call_deferred("_rebuild_vegetation")
+		call_deferred("_full_regenerate_auto_vegetation_async")
+	else:
+		call_deferred("_rebuild_all_vegetation")
+
+
 ## One debounced rebuild after a burst of impostor bakes completes, so OUTER
 ## rings swap from the FAR-card fallback to the fresh impostor quads.
 func _on_impostor_bake_completed(_key: String) -> void:
@@ -5883,6 +5912,11 @@ func _setup_auto_vegetation() -> void:
 	_auto_veg_edits = AutoVegetationEdits.create_empty()
 	_auto_veg_edits.load_for_map(_lat, _lon)
 	_veg_style = VegetationStyleConfig.load_merged(_lat, _lon)
+	# Phase 4: seed the quality-change tracker with the level this load builds
+	# at, so the first preset switch compares against the right baseline.
+	if _main != null and _main.get("graphics_quality") != null:
+		_veg_quality_applied = int(_main.get("graphics_quality"))
+	_veg_quality_prev_eff = _veg_style_with_quality()
 	if not _terrain_config().show_auto_vegetation:
 		_load_progress_mark_done("osm_veg")
 		if not _load_sequence_active:
@@ -6126,8 +6160,40 @@ func _auto_veg_ctx() -> Dictionary:
 		"exclusions": _auto_veg_exclusions(),
 		"ground_y_at": Callable(self, "_ground_height_at"),
 		"gate": gate,
-		"style": _veg_style,
+		# Phase 4: the generator sees the SAME quality-tier baseline as the
+		# runtimes, so scatter caps/density and render rings always agree.
+		"style": _veg_style_with_quality(),
 	}
+
+
+## Phase 4: _veg_style + the RenderProfile veg tier baseline. The graphics
+## preset supplies ring radii, leaf-shell count, instance caps, cull distances
+## and (large maps) scatter density — replacing the old silent hardcoded
+## thinning with a visible, selectable tier. A key the player explicitly tuned
+## (merged value differs from VegetationStyleConfig.defaults(), the same
+## provenance rule the style store uses) always wins over the tier. Both the
+## scatter ctx and the render settings build on this, so generator and
+## runtimes never disagree.
+func _veg_style_with_quality() -> Dictionary:
+	var vq := RenderProfile.QUALITY_HIGH
+	if _main != null and _main.get("graphics_quality") != null:
+		vq = int(_main.get("graphics_quality"))
+	var prof := RenderProfile.veg_profile(vq)
+	var tier_style: Dictionary = (prof["style"] as Dictionary).duplicate()
+	if _is_large_world_map():
+		tier_style.merge(prof["style_large"] as Dictionary, true)
+	var out := _veg_style.duplicate(true)
+	var veg_defaults: Dictionary = VegetationStyleConfig.defaults()
+	for k in tier_style:
+		if not out.has(k):
+			out[k] = tier_style[k]
+		elif veg_defaults.has(k) and VegStyleStore.values_equal(out[k], veg_defaults[k]):
+			out[k] = tier_style[k]
+		# else: explicit player/style value — the tier never overrides it.
+	# Tells AutoVegetationGenerator.prepare_context its legacy large-map
+	# fallback rewrite is superseded (the tier values are authoritative).
+	out["veg_quality_managed"] = true
+	return out
 
 
 func _auto_veg_runtime_settings() -> Dictionary:
@@ -6136,7 +6202,8 @@ func _auto_veg_runtime_settings() -> Dictionary:
 		var month := int(_main.get("month")) if _main.get("month") != null else 6
 		var autumn_t := clampf(absf(float(month) - 10.0) / 3.0, 0.0, 1.0)
 		seasonal = Color(1.0, 0.92 - autumn_t * 0.2, 0.75 - autumn_t * 0.15)
-	var s := VegetationStyleConfig.runtime_settings(_veg_style, _drape, _built_extent, seasonal)
+	var s := VegetationStyleConfig.runtime_settings(
+		_veg_style_with_quality(), _drape, _built_extent, seasonal)
 	if _veg_style.get("haze_sync", true) and _drape != null:
 		# Haze colour is just an average tint — decode a 512 px downsample, not the
 		# full 2048² drape (a full-res Image decode every rebuild is a needless RAM
@@ -6162,10 +6229,6 @@ func _auto_veg_runtime_settings() -> Dictionary:
 		s["veg_ring_center_x"] = c.x
 		s["veg_ring_center_z"] = c.z
 		_veg_ring_built_center = Vector2(c.x, c.z)
-	if _is_large_world_map():
-		s["auto_force_far_canopy"] = true
-		s["auto_visibility_end_m"] = minf(float(s.get("auto_visibility_end_m", 1200.0)), 480.0)
-		s["grass_visibility_end_m"] = minf(float(s.get("grass_visibility_end_m", 520.0)), 260.0)
 	return s
 
 
@@ -9388,6 +9451,56 @@ func _check_load_complete() -> void:
 			call_deferred("_run_auto_veg_generate", regen)
 		if _manual_veg_pending:
 			call_deferred("_start_manual_veg_rebuild")
+		call_deferred("_maybe_schedule_fps_autodrop")
+
+
+## Phase 4: one-shot performance safety net. If the settled post-load frame
+## rate averages under 45 fps, drop the graphics preset ONE level and remember
+## having done so (perf_prefs.cfg) — never fight the player more than once.
+## Skipped headless and under the playtest harness (frozen-clock captures
+## would give meaningless readings and mutate the player's preset).
+const _VEG_AUTODROP_FLAG := "veg_auto_dropped"
+const _VEG_AUTODROP_MIN_FPS := 45.0
+
+
+func _maybe_schedule_fps_autodrop() -> void:
+	if DisplayServer.get_name() == "headless" or _main == null:
+		return
+	var ph := get_node_or_null("/root/PlaytestHarness")
+	if ph != null and bool(ph.get("_active")):
+		return
+	var cfg := ConfigFile.new()
+	cfg.load(RenderProfile.PERF_PREFS_CFG)
+	if bool(cfg.get_value("render", _VEG_AUTODROP_FLAG, false)):
+		return
+	var q := 2
+	if _main.get("graphics_quality") != null:
+		q = int(_main.get("graphics_quality"))
+	if q <= RenderProfile.QUALITY_LOW:
+		return
+	# Let the load burst settle, then average real frames for 5 s.
+	await get_tree().create_timer(20.0).timeout
+	if not _built:
+		return
+	var sum := 0.0
+	var n := 0
+	for _i in 5:
+		await get_tree().create_timer(1.0).timeout
+		if not _built:
+			return
+		sum += Performance.get_monitor(Performance.TIME_FPS)
+		n += 1
+	if n == 0 or sum / float(n) >= _VEG_AUTODROP_MIN_FPS:
+		return
+	var new_q := q - 1
+	if _main.has_method("set_graphics_quality_level"):
+		_main.call("set_graphics_quality_level", new_q)
+	cfg.set_value("render", _VEG_AUTODROP_FLAG, true)
+	cfg.save(RenderProfile.PERF_PREFS_CFG)
+	_toast("Frame rate under %d fps — graphics preset lowered to %s (Settings → Lighting to change back)." % [
+		int(_VEG_AUTODROP_MIN_FPS), RenderProfile.quality_name(new_q)], ToastUI.Level.WARN)
+	print("TerrainLoader: FPS auto-drop -> %s (avg %.0f fps)" % [
+		RenderProfile.quality_name(new_q), sum / float(n)])
 
 
 func _add_temp_floor() -> void:

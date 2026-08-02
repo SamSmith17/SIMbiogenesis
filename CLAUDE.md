@@ -33,7 +33,16 @@ Godot.exe.exe --headless --path . --script core/services_selftest.gd
 # presets are ordered as advertised. Worth having because project.godot carries
 # only the HIGH baseline and main.gd overrides atlas size, soft-shadow quality
 # and TAA at runtime, so project.godot alone does NOT tell you what the game
-# renders with):
+# renders with. Phase 4 added QUALITY_ULTRA (3, appended — indices persist) and
+# veg_profile(quality): the veg tier baseline — SoI ring radii, leaf shells,
+# instance caps, cull distances, large-map scatter density, veg shadows —
+# applied by terrain_loader._veg_style_with_quality (player-tuned keys, i.e.
+# values differing from VegetationStyleConfig.defaults(), always win; the
+# generator sees the SAME dict via _auto_veg_ctx so scatter and render agree;
+# veg_quality_managed supersedes prepare_context's legacy large-map rewrite).
+# HIGH is pinned == pre-Phase-4 defaults, HIGH-large == the old hardcoded
+# thinning. One-shot <45 fps auto-drop after load persists veg_auto_dropped
+# in perf_prefs.cfg [render]):
 Godot.exe.exe --headless --path . --script core/env/render_profile_selftest.gd
 # Clock-claim stack self-test (offline — the ordered claim stack that replaced
 # nine private `_saved_time_scale` fields; covers re-claim-does-not-stack,
