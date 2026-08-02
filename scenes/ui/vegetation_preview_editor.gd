@@ -640,11 +640,25 @@ func _rebuild_species_section() -> void:
 	var hdr := Label.new()
 	_style_section(hdr, VegSpeciesCatalog.label_for(_species))
 	_species_section.add_child(hdr)
+	# Grouped, not a flat dump: a deciduous tree has ~32 shape sliders and
+	# finding "leaf size" among them meant reading every label. Sections are
+	# derived from the key so a new slider files itself.
+	var grouped := {}
 	for spec in specs:
 		var sd: Dictionary = spec
-		var key := str(sd["key"])
-		_keyed_slider(_species_section, key, str(sd["label"]), float(sd["min"]),
-			float(sd["max"]), float(_values.get(key, 0.0)))
+		var sect := slider_section(str(sd["key"]))
+		if not grouped.has(sect):
+			grouped[sect] = []
+		(grouped[sect] as Array).append(sd)
+	for sect in SECTION_ORDER:
+		if not grouped.has(sect):
+			continue
+		var body := _add_collapsible_section(_species_section, str(sect))
+		for spec2 in grouped[sect]:
+			var sd2: Dictionary = spec2
+			var key := str(sd2["key"])
+			_keyed_slider(body, key, str(sd2["label"]), float(sd2["min"]),
+				float(sd2["max"]), float(_values.get(key, 0.0)))
 
 
 ## Mixed-woodland ratio sliders. Per-species SHAPE (canopy size, etc.) is edited
@@ -824,6 +838,65 @@ func _on_preset_delete() -> void:
 # ---------------------------------------------------------------------------
 # OSM → species picker
 # ---------------------------------------------------------------------------
+
+## Slider sections, in the order they are shown. "Size & form" first because it
+## is what a player reaches for; "Detail & LOD" last and collapsed because it is
+## tuning, not design.
+const SECTION_SIZE := "Size & form"
+const SECTION_BRANCHES := "Branches & clumps"
+const SECTION_FOLIAGE := "Foliage"
+const SECTION_GROWTH := "Growth"
+const SECTION_DETAIL := "Detail & LOD"
+const SECTION_ORDER: Array = [SECTION_SIZE, SECTION_BRANCHES, SECTION_FOLIAGE,
+	SECTION_GROWTH, SECTION_DETAIL]
+## Sections that start collapsed (per session; the toggle state is remembered in
+## _section_open while the modal lives).
+const SECTIONS_COLLAPSED_BY_DEFAULT: Array = [SECTION_DETAIL]
+
+var _section_open: Dictionary = {}
+
+
+## Which section a shape-slider key belongs to. Derived from the key so adding a
+## slider to SPECIES_SHAPE_SLIDERS files it automatically — a per-entry
+## "section" field on ~90 specs would drift the first time someone forgot one.
+static func slider_section(key: String) -> String:
+	if key.ends_with("_growth_years") or key.ends_with("_senescence_years"):
+		return SECTION_GROWTH
+	for frag in ["_lod_", "billboard", "shadow_proxy"]:
+		if frag in key:
+			return SECTION_DETAIL
+	for frag in ["_leaf", "_fur", "_whorl", "_bough", "cells_per_side", "blade",
+			"hue_jitter"]:
+		if frag in key:
+			return SECTION_FOLIAGE
+	for frag in ["_branch", "_cluster"]:
+		if frag in key:
+			return SECTION_BRANCHES
+	return SECTION_SIZE
+
+
+## Header button + body container. The header shows a caret and toggles the body.
+func _add_collapsible_section(parent: Control, title: String) -> VBoxContainer:
+	var open := bool(_section_open.get(title,
+		not SECTIONS_COLLAPSED_BY_DEFAULT.has(title)))
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 2)
+	var head := Button.new()
+	head.toggle_mode = true
+	head.button_pressed = open
+	head.focus_mode = Control.FOCUS_NONE
+	head.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	head.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	head.text = ("▾ " if open else "▸ ") + title
+	head.toggled.connect(func(on: bool) -> void:
+		_section_open[title] = on
+		body.visible = on
+		head.text = ("▾ " if on else "▸ ") + title)
+	parent.add_child(head)
+	parent.add_child(body)
+	body.visible = open
+	return body
+
 
 ## Forest age profile (veg overhaul Phase 9). The maturity-age sliders above say
 ## how LONG a plant takes to grow; this says where in that span a freshly seeded

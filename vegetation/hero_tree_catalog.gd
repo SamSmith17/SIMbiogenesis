@@ -118,6 +118,22 @@ static func user_scale_for_target_height(preset_id: String, desired_height_m: fl
 
 
 ## Map OSM natural=tree tags to a hero GLB preset id.
+## Hero GLB that best stands in for a painted card species — used by the V
+## dock's "convert to hero" (Select tool), so a promoted pine becomes a pine
+## model rather than whatever preset the dock happened to be showing.
+static func preset_for_species(species: String) -> String:
+	var fam := VegSpeciesCatalog.mesh_family(species)
+	match fam:
+		"pine":
+			return "pine_1"
+		"shrub", "cactus":
+			return "shrub_pack"
+		"grass_lawn", "grass_field":
+			return "shrub_pack"
+		_:
+			return "deciduous_low"
+
+
 static func preset_for_osm_tree_tags(tags: Dictionary) -> String:
 	var blob := " ".join([
 		str(tags.get("species", "")),

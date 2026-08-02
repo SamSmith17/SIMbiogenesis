@@ -6912,8 +6912,34 @@ func apply_area_fill(area_idx: int, params: Dictionary) -> Dictionary:
 	out["removed"] = int(res.get("removed", 0))
 	out["ok"] = true
 	_rebuild_litter_mask()
-	_rebuild_auto_vegetation()
+	# Incremental: a fill touches a handful of 256 m chunks, so only those are
+	# re-meshed. The full rebuild is kept as the fallback for the paths that
+	# genuinely change everything (style/quality/ring changes).
+	if not _rebuild_auto_vegetation_chunks(poly):
+		_rebuild_auto_vegetation()
 	return out
+
+
+## Re-mesh only the chunks a polygon touches. False when the incremental path
+## isn't usable (no terrain / auto veg not built / auto veg hidden), so the
+## caller can fall back to the whole-layer rebuild.
+func _rebuild_auto_vegetation_chunks(poly: PackedVector2Array) -> bool:
+	if not _built or _auto_veg_layer == null or _main == null or poly.size() < 3:
+		return false
+	if not _auto_veg_generated or not _terrain_config().show_auto_vegetation:
+		return false
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return false
+	var keys := VegetationRuntime.chunk_keys_for_polygon(poly)
+	if keys.is_empty():
+		return false
+	var n := AutoVegetationRuntime.rebuild_chunks(terrain, _auto_veg_layer,
+		Callable(self, "_ground_height_at"), _auto_veg_runtime_settings(), keys,
+		_auto_growth_map)
+	print("TerrainLoader: incremental veg rebuild — %d chunk batches over %d chunks"
+		% [n, keys.size()])
+	return true
 
 
 ## Drop an area's fill record. The trees it placed stay until the next full
@@ -6936,7 +6962,11 @@ func clear_area_fill(area_idx: int, clear_now: bool = true) -> bool:
 	_auto_veg_edits.save(_lat, _lon)
 	if _auto_veg_layer != null and _auto_veg_generated:
 		_rebuild_litter_mask()
-		_rebuild_auto_vegetation()
+		# Clearing an area is the same shape of edit as filling it, so it takes
+		# the same incremental path.
+		var cleared_poly: PackedVector2Array = info.get("points", PackedVector2Array())
+		if not clear_now or not _rebuild_auto_vegetation_chunks(cleared_poly):
+			_rebuild_auto_vegetation()
 	return had or clear_now
 
 
@@ -7526,6 +7556,43 @@ func scale_plant_at(world_xz: Vector2, factor: float, radius_m: float = 6.0) -> 
 	_vegetation_layer.save(_lat, _lon)
 	_rebuild_vegetation()
 	return desc
+
+
+## Promote the picked bulk plant to a hero GLB tree at the same spot, sized to
+## match the card it replaces. The card species picks the model, so a pine
+## becomes a pine — the dock's currently-selected hero preset is irrelevant to
+## a plant that is already standing there.
+##
+## Returns {} when nothing was picked or the plant is already a hero.
+func convert_plant_to_hero_at(world_xz: Vector2, radius_m: float = 6.0) -> Dictionary:
+	if _vegetation_layer == null:
+		return {}
+	var desc := _vegetation_layer.nearest_plant(world_xz, radius_m)
+	if desc.is_empty() or str(desc.get("kind", "")) == "hero":
+		return {}
+	var species := str(desc.get("species", ""))
+	var preset := HeroTreeCatalog.preset_for_species(species)
+	# Match the apparent height of the card being replaced: its draw scale times
+	# the species' nominal card height (the same table the generator sizes
+	# scattered trees with), expressed as a hero user-scale.
+	var card_h := float(AutoVegetationGenerator.NOMINAL_CARD_H.get(species, 8.0))
+	var target_h := maxf(card_h * float(desc.get("scale", 1.0)), 0.5)
+	var hero_scale := HeroTreeCatalog.user_scale_for_target_height(preset, target_h)
+	var x := float(desc.get("x", 0.0))
+	var z := float(desc.get("z", 0.0))
+	var gy := _ground_height_at(x, z)
+	var rng := RandomNumberGenerator.new()
+	if not _vegetation_layer.add_hero(preset, x, z, rng.randf() * TAU, hero_scale, gy):
+		return {}
+	# Only remove the card AFTER the hero is placed, so a hero-cap refusal
+	# leaves the plant standing rather than deleting it into nothing.
+	_vegetation_layer.remove_plant(desc)
+	_vegetation_layer.save(_lat, _lon)
+	_rebuild_vegetation()
+	return {
+		"species": species, "preset": preset, "height_m": target_h,
+		"x": x, "z": z,
+	}
 
 
 func delete_nearest_hero(world_xz: Vector2) -> bool:

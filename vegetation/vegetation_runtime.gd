@@ -452,6 +452,53 @@ static func _chunk_key(x: float, z: float) -> Vector2i:
 	return Vector2i(int(floor(x / CHUNK_SIZE_M)), int(floor(z / CHUNK_SIZE_M)))
 
 
+## Public form of the chunk key — the unit an incremental rebuild works in.
+static func chunk_key_at(x: float, z: float) -> Vector2i:
+	return _chunk_key(x, z)
+
+
+## Every 256 m chunk a polygon can touch, as a Vector2i→true set. Computed from
+## the polygon's AABB, so it is a SUPERSET for concave outlines: rebuilding a
+## chunk the fill never reached costs a little time and changes nothing, while
+## missing one would leave stale trees on screen.
+##
+## The saving scales with how local the edit is — an orchard covers one or two
+## chunks out of hundreds. A very large outline (a 1,700 ha forest) legitimately
+## spans most of the map and approaches a full rebuild, which is the honest cost
+## of that edit rather than a failure of this path.
+static func chunk_keys_for_polygon(poly: PackedVector2Array) -> Dictionary:
+	var out := {}
+	if poly.size() < 3:
+		return out
+	var mn := poly[0]
+	var mx := poly[0]
+	for p in poly:
+		mn.x = minf(mn.x, p.x)
+		mn.y = minf(mn.y, p.y)
+		mx.x = maxf(mx.x, p.x)
+		mx.y = maxf(mx.y, p.y)
+	var c0 := _chunk_key(mn.x, mn.y)
+	var c1 := _chunk_key(mx.x, mx.y)
+	for cz in range(c0.y, c1.y + 1):
+		for cx in range(c0.x, c1.x + 1):
+			out[Vector2i(cx, cz)] = true
+	return out
+
+
+## Chunk a batch node's name encodes, or null when it carries none. Names are
+## built as Bulk_<slot>[_<tier>|_imp]_<cx>_<cz> across the three builders, so the
+## chunk is always the last two underscore-separated integers.
+static func chunk_of_batch_node(node_name: String) -> Variant:
+	var parts := node_name.split("_")
+	if parts.size() < 3:
+		return null
+	var cz_tok := str(parts[parts.size() - 1])
+	var cx_tok := str(parts[parts.size() - 2])
+	if not cz_tok.is_valid_int() or not cx_tok.is_valid_int():
+		return null
+	return Vector2i(cx_tok.to_int(), cz_tok.to_int())
+
+
 static func _build_bulk_layer(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
 		growth_map: VegetationInstanceMap = null) -> void:

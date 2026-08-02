@@ -63,6 +63,7 @@ func _initialize() -> void:
 	_test_asset_cache_and_fade()
 	_test_area_fill_edits()
 	_test_area_fill_scatter()
+	_test_incremental_chunk_rebuild()
 	if _failures == 0:
 		print("AUTO-VEG SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -1347,3 +1348,118 @@ func _test_area_fill_scatter() -> void:
 	var single := AutoVegetationGenerator.fill_weights("spruce", biome, {})
 	_check("named species fill is that species alone",
 		single.size() == 1 and single.has("spruce"))
+
+
+## --- Incremental chunk rebuild ----------------------------------------------
+
+## An area fill touches a few 256 m chunks; rebuilding those must leave the map
+## in the SAME state a whole-layer rebuild would, and must not disturb chunks
+## outside the polygon.
+func _test_incremental_chunk_rebuild() -> void:
+	# Chunk-key helpers first — the rebuild is only as good as its chunk set.
+	var cs := VegetationRuntime.CHUNK_SIZE_M
+	_check("origin maps to chunk 0,0",
+		VegetationRuntime.chunk_key_at(1.0, 1.0) == Vector2i(0, 0))
+	_check("negative coords floor, not truncate",
+		VegetationRuntime.chunk_key_at(-1.0, -1.0) == Vector2i(-1, -1))
+	var small := VegetationPaint.rect_to_polygon(Vector2(10.0, 10.0), Vector2(50.0, 50.0))
+	var keys_small := VegetationRuntime.chunk_keys_for_polygon(small)
+	_check("a small polygon touches one chunk", keys_small.size() == 1, str(keys_small))
+	var wide := VegetationPaint.rect_to_polygon(
+		Vector2(-cs * 1.5, -cs * 0.5), Vector2(cs * 1.5, cs * 0.5))
+	var keys_wide := VegetationRuntime.chunk_keys_for_polygon(wide)
+	_check("a wide polygon spans several chunks", keys_wide.size() >= 4, str(keys_wide.size()))
+	_check("degenerate polygon touches nothing",
+		VegetationRuntime.chunk_keys_for_polygon(PackedVector2Array()).is_empty())
+
+	# Batch node names carry their chunk, which is how the rebuild knows what to
+	# free. All three builders name differently; all three must parse.
+	_check("plain batch name parses",
+		VegetationRuntime.chunk_of_batch_node("Bulk_pine_3_-2") == Vector2i(3, -2))
+	_check("tiered batch name parses",
+		VegetationRuntime.chunk_of_batch_node("Bulk_deciduous_0_5_7") == Vector2i(5, 7))
+	_check("impostor batch name parses",
+		VegetationRuntime.chunk_of_batch_node("Bulk_pine_imp_-1_4") == Vector2i(-1, 4))
+	_check("a non-batch node has no chunk",
+		VegetationRuntime.chunk_of_batch_node("VegLeafFall") == null)
+
+	# Full rebuild vs incremental, over the same layer.
+	var ground := func(_x: float, _z: float) -> float: return 0.0
+	var settings := {"auto_visibility_end_m": 800.0}
+	var layer := AutoVegetationLayer.create_empty()
+	# Three chunks' worth of trees: one inside the edit, two outside.
+	for i in 8:
+		layer.add_bulk("pine", 20.0 + float(i), 20.0, 0.0, 1.0, 10.0)          # chunk 0,0
+		layer.add_bulk("pine", cs * 2.0 + float(i), 20.0, 0.0, 1.0, 10.0)      # chunk 2,0
+		layer.add_bulk("pine", 20.0, cs * 3.0 + float(i), 0.0, 1.0, 10.0)      # chunk 0,3
+	var full_terrain := Node3D.new()
+	get_root().add_child(full_terrain)
+	AutoVegetationRuntime.rebuild(full_terrain, layer, ground, settings)
+	var full_names := _batch_name_set(full_terrain)
+	_check("full rebuild produced batches", full_names.size() > 0)
+
+	var inc_terrain := Node3D.new()
+	get_root().add_child(inc_terrain)
+	AutoVegetationRuntime.rebuild(inc_terrain, layer, ground, settings)
+	# Now edit chunk 0,0 only: drop its trees and rebuild just that chunk.
+	var edit_poly := VegetationPaint.rect_to_polygon(Vector2(0.0, 0.0), Vector2(60.0, 60.0))
+	var edit_keys := VegetationRuntime.chunk_keys_for_polygon(edit_poly)
+	var removed := layer.remove_in_polygon(edit_poly)
+	_check("edit removed the chunk's trees", removed == 8, "got %d" % removed)
+	var rebuilt := AutoVegetationRuntime.rebuild_chunks(
+		inc_terrain, layer, ground, settings, edit_keys)
+	_check("incremental freed the edited chunk's batches", rebuilt > 0, "got %d" % rebuilt)
+
+	# The authority: a full rebuild of the SAME edited layer must produce the
+	# same set of batch nodes the incremental path left behind.
+	var ref_terrain := Node3D.new()
+	get_root().add_child(ref_terrain)
+	AutoVegetationRuntime.rebuild(ref_terrain, layer, ground, settings)
+	var inc_names := _batch_name_set(inc_terrain)
+	var ref_names := _batch_name_set(ref_terrain)
+	_check("incremental == full rebuild after the edit", inc_names == ref_names,
+		"inc=%s ref=%s" % [str(inc_names), str(ref_names)])
+	_check("the edited chunk is gone from both",
+		not inc_names.has("Bulk_pine_0_0") and not ref_names.has("Bulk_pine_0_0"),
+		str(inc_names))
+	_check("untouched chunks survived", inc_names.size() >= 2, str(inc_names))
+	_check("incremental kept the same instance total",
+		_batch_instance_total(inc_terrain) == _batch_instance_total(ref_terrain),
+		"%d vs %d" % [_batch_instance_total(inc_terrain), _batch_instance_total(ref_terrain)])
+
+	# A chunk set that matches nothing is a no-op, not a wipe.
+	var before := _batch_name_set(inc_terrain).size()
+	AutoVegetationRuntime.rebuild_chunks(inc_terrain, layer, ground, settings,
+		{Vector2i(99, 99): true})
+	_check("rebuilding an empty chunk changes nothing",
+		_batch_name_set(inc_terrain).size() == before)
+	_check("an empty chunk set is refused",
+		AutoVegetationRuntime.rebuild_chunks(inc_terrain, layer, ground, settings, {}) == 0)
+
+	full_terrain.queue_free()
+	inc_terrain.queue_free()
+	ref_terrain.queue_free()
+
+
+func _batch_name_set(terrain: Node3D) -> Dictionary:
+	var out := {}
+	var root := terrain.get_node_or_null(AutoVegetationRuntime.ROOT_NAME)
+	if root == null:
+		return out
+	for child in root.get_children():
+		if child is MultiMeshInstance3D and not child.is_queued_for_deletion():
+			out[str(child.name)] = true
+	return out
+
+
+func _batch_instance_total(terrain: Node3D) -> int:
+	var n := 0
+	var root := terrain.get_node_or_null(AutoVegetationRuntime.ROOT_NAME)
+	if root == null:
+		return 0
+	for child in root.get_children():
+		if child is MultiMeshInstance3D and not child.is_queued_for_deletion():
+			var mm: MultiMesh = (child as MultiMeshInstance3D).multimesh
+			if mm != null:
+				n += mm.instance_count
+	return n

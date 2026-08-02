@@ -292,6 +292,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				_resize_picked_plant(1.18)
 				get_viewport().set_input_as_handled()
 				return
+			if key.keycode == KEY_H:
+				_convert_picked_to_hero()
+				get_viewport().set_input_as_handled()
+				return
 
 
 func _on_capture_input(event: InputEvent) -> void:
@@ -1254,7 +1258,7 @@ func _update_shape_prompt() -> void:
 		Tool.SELECT:
 			match _shape_mode:
 				ShapeMode.BRUSH:
-					_set_status("Select — click ONE plant to pick it (Del deletes, [ / ] resize); Circle/Rect/Lasso locks an area")
+					_set_status("Select — click ONE plant to pick it (Del deletes, [ / ] resize, H makes it a hero tree); Circle/Rect/Lasso locks an area")
 				ShapeMode.POLYGON:
 					_set_status("Select — use Circle or Rect to lock an area, then change Type")
 				_:
@@ -1537,7 +1541,7 @@ func _update_crosshair_prompt() -> void:
 				ShapeMode.POLYGON:
 					_set_crosshair_prompt("Click corners; Enter/RMB to lock selection")
 				ShapeMode.BRUSH:
-					_set_crosshair_prompt("Click a plant to pick it — Del deletes, [ / ] resize")
+					_set_crosshair_prompt("Click a plant to pick it — Del deletes, [ / ] resize, H → hero")
 				_:
 					_set_crosshair_prompt("Drag LMB — release to lock selection")
 
@@ -1676,7 +1680,7 @@ func _pick_single_plant(world_xz: Vector2) -> void:
 		_refresh_chips()
 		return
 	_picked_plant = desc
-	_set_status("%s · Del deletes · [ / ] resize · click elsewhere to pick another"
+	_set_status("%s · Del deletes · [ / ] resize · H → hero tree · click elsewhere to pick another"
 		% _picked_label(desc))
 	_refresh_chips()
 
@@ -1703,6 +1707,28 @@ func _delete_picked_plant() -> void:
 	vegetation_applied.emit()
 	_picked_plant = {}
 	_set_status("Deleted %s — Undo restores it" % _picked_label(gone))
+	_refresh_chips()
+
+
+## Promote the picked card plant to a hero GLB at the same spot and apparent
+## size. The species chooses the model — a pine becomes a pine, whatever hero
+## preset the Place tool happens to be showing.
+func _convert_picked_to_hero() -> void:
+	if _picked_plant.is_empty() or _loader == null 			or not _loader.has_method("convert_plant_to_hero_at"):
+		return
+	if str(_picked_plant.get("kind", "")) == "hero":
+		_set_status("Already a hero tree")
+		return
+	_push_undo("convert to hero")
+	var at := Vector2(float(_picked_plant.get("x", 0.0)), float(_picked_plant.get("z", 0.0)))
+	var res: Dictionary = _loader.call("convert_plant_to_hero_at", at, PICK_RADIUS_M)
+	if res.is_empty():
+		_set_status("Could not convert (hero limit reached?)")
+		return
+	vegetation_applied.emit()
+	_picked_plant = _loader.call("pick_plant_at", at, PICK_RADIUS_M)
+	_set_status("Converted to hero %s at %.1f m — Undo restores the card tree"
+		% [str(res.get("preset", "")), float(res.get("height_m", 0.0))])
 	_refresh_chips()
 
 

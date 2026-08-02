@@ -786,10 +786,19 @@ there) and by `terrain_loader.apply_area_fill` for the live edit, so a fill
 looks identical before and after a reload. Density scales SPACING, not a count.
 Loader API: `apply_area_fill(idx, {species, density, height_m, replace})`,
 `area_fill_params(idx)`, `clear_area_fill(idx, clear_now)`,
-`get_veg_area_info(idx)`. Verify with `--capture=areafill` (above) plus the
-`_test_area_fill_*` checks in `auto_vegetation_selftest.gd`. NOT yet done:
-incremental per-chunk rebuild — a fill currently triggers the normal full
-auto-veg rebuild.
+`get_veg_area_info(idx)`. Fill AND clear re-mesh only the 256 m chunks the
+outline touches (`AutoVegetationRuntime.rebuild_chunks` +
+`VegetationRuntime.chunk_keys_for_polygon`, falling back to the whole-layer
+rebuild when the incremental path can't apply). That path deliberately does NOT
+clear shader registrations or the growth map: surviving chunks keep theirs, new
+batches register themselves, and growth slots pointing at freed MultiMeshes are
+dropped lazily on the next pass (the Phase 9 dedupe keys entries on species +
+position, so re-registering a rebuilt chunk re-attaches to the same plants). The
+chunk set comes from the polygon's AABB — a superset, since missing a chunk
+would leave stale trees on screen, while a spare one costs only time. Verify
+with `--capture=areafill` (above) plus the `_test_area_fill_*` and
+`_test_incremental_chunk_rebuild` checks in `auto_vegetation_selftest.gd` (the
+latter pins incremental == full-regen).
 
 **Veg UI (Phase 8).** The V dock is on `UITheme` (panel/button/chip styles,
 `LAYER_PANEL`; the Tune-look modal moved to its OWN CanvasLayer at
@@ -806,8 +815,14 @@ per-slider revert (↺) plus an amber "changed since last apply" label, and the
 Apply button counts pending edits. **Select + Brush is the per-tree tool**:
 click picks ONE plant (`VegetationLayer.nearest_plant` → loader
 `pick_plant_at`/`delete_plant_at`/`scale_plant_at`), Del deletes, `[`/`]`
-resize; heroes are pickable too and hero placement finally pushes an undo
-entry. **Top-down** mounts the survey drone and locks it to an ortho view via
+resize, H promotes it to a hero GLB (the SPECIES picks the model and the card's
+apparent height sets its scale, so a pine becomes a pine — placed before the
+card is removed, so a hero-cap refusal leaves the plant standing); heroes are
+pickable too and hero placement finally pushes an undo entry. The Tune-look
+modal's ~32 per-species shape sliders are grouped into collapsible sections
+(Size & form / Branches & clumps / Foliage / Growth / Detail & LOD) by a rule
+derived from the KEY (`slider_section`), so a new slider files itself and the
+selftest can assert every real key lands in a known section. **Top-down** mounts the survey drone and locks it to an ortho view via
 the `vegetation_edit_ortho` meta the drone had always read but nothing ever
 set; leaving the dock releases it. Drone WASD is gated while a LineEdit/SpinBox
 holds focus (typing a brush radius used to fly the drone). The crosshair area

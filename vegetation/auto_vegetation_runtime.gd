@@ -145,6 +145,58 @@ static func rebuild(terrain: Node3D, layer: AutoVegetationLayer,
 	VegetationRuntime.reregister_existing(terrain)
 
 
+## Rebuild ONLY the given 256 m chunks (veg overhaul deferral: incremental area
+## fill). A fill touches a few chunks out of hundreds; rebuilding the whole
+## layer for it re-uploaded every MultiMesh on the map.
+##
+## Differences from rebuild() that matter:
+##  * shader registrations are NOT cleared — the surviving chunks keep theirs,
+##    and each newly built batch registers itself. The env sync reaps the freed
+##    materials on its own sweep.
+##  * the growth map is NOT cleared. New slots attach to the SAME plant entries
+##    (the Phase 9 dedupe keys on species + position), and slots pointing at the
+##    freed MultiMeshes are dropped lazily on the next growth pass.
+##  * heroes are untouched: they are not chunked and a fill never places one.
+##
+## Returns the number of chunk nodes rebuilt.
+static func rebuild_chunks(terrain: Node3D, layer: AutoVegetationLayer,
+		ground_y_at: Callable, settings: Dictionary, chunk_keys: Dictionary,
+		growth_map: VegetationInstanceMap = null) -> int:
+	if terrain == null or layer == null or chunk_keys.is_empty():
+		return 0
+	var root := ensure_root(terrain)
+	var freed := 0
+	for child in root.get_children():
+		if not (child is MultiMeshInstance3D):
+			continue
+		var ck: Variant = VegetationRuntime.chunk_of_batch_node(child.name)
+		if ck == null or not chunk_keys.has(ck):
+			continue
+		root.remove_child(child)
+		child.queue_free()
+		freed += 1
+	var s := neutralized_settings(settings)
+	for slot in layer.slots():
+		var records: Variant = layer.bulk.get(slot, [])
+		if not (records is Array):
+			continue
+		var subset: Array = []
+		for item in records as Array:
+			if not (item is Dictionary):
+				continue
+			var d: Dictionary = item
+			if chunk_keys.has(VegetationRuntime.chunk_key_at(
+					float(d.get("x", 0.0)), float(d.get("z", 0.0)))):
+				subset.append(d)
+		if subset.is_empty():
+			continue
+		# Filtering BEFORE partitioning is what makes this equivalent to a full
+		# rebuild for these chunks: batches are grouped by per-record settings,
+		# so the same records always land in the same batch either way.
+		_build_bulk_layer(root, str(slot), subset, ground_y_at, s, growth_map)
+	return freed
+
+
 ## Same as rebuild() but spreads the multimesh builds and hero-scene instantiation
 ## across separate idle frames. Used during the initial load so
 ## the whole vegetation layer doesn't upload to the GPU on one frame (a spike that

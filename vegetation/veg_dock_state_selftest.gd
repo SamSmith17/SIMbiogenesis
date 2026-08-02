@@ -60,6 +60,7 @@ func _run() -> void:
 	_test_tool_state()
 	_test_nearest_plant()
 	_test_plant_edit_ops()
+	_test_slider_sections()
 	if _failures == 0:
 		print("VEG DOCK STATE SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -266,3 +267,101 @@ func _test_plant_edit_ops() -> void:
 	layer.add_hero("pine_1", 50.0, 50.0, 0.0, 1.0, 0.0)
 	var h := layer.nearest_plant(Vector2(50.0, 50.0), 3.0)
 	_check("hero delete works", layer.remove_plant(h) and layer.hero.is_empty())
+	_test_hero_promotion()
+
+
+## Convert-to-hero picks its model from the SPECIES, not from whatever preset
+## the Place tool is showing, and sizes it to the card it replaces.
+func _test_hero_promotion() -> void:
+	_check("conifers promote to a pine model",
+		HeroTreeCatalog.preset_for_species("spruce").begins_with("pine"))
+	_check("broadleaves promote to a deciduous model",
+		HeroTreeCatalog.preset_for_species("birch").begins_with("deciduous"))
+	_check("shrubs promote to the shrub pack",
+		HeroTreeCatalog.preset_for_species("shrub") == "shrub_pack")
+	_check("every promotion target is a real preset",
+		not HeroTreeCatalog.find(HeroTreeCatalog.preset_for_species("mango")).is_empty())
+	# Sizing: a double-scale card asks for a double-height hero.
+	var nominal := float(AutoVegetationGenerator.NOMINAL_CARD_H.get("pine", 8.0))
+	var one := HeroTreeCatalog.user_scale_for_target_height("pine_1", nominal)
+	var two := HeroTreeCatalog.user_scale_for_target_height("pine_1", nominal * 2.0)
+	_check("hero scale tracks the card it replaces",
+		is_equal_approx(two, one * 2.0), "%.3f vs %.3f" % [two, one * 2.0])
+	# The layer-level promotion is add-then-remove, so a hero-cap refusal must
+	# leave the card standing rather than deleting it into nothing.
+	var layer := VegetationLayer.new()
+	layer.add_bulk("pine", 0.0, 0.0, 0.0, 1.0)
+	var desc := layer.nearest_plant(Vector2.ZERO, 3.0)
+	_check("promotion source is a bulk plant", str(desc.get("kind", "")) == "bulk")
+	_check("promotion removes the card once the hero lands",
+		layer.add_hero("pine_1", 0.0, 0.0, 0.0, 1.0, 0.0)
+			and layer.remove_plant(desc)
+			and (layer.bulk.get("pine", []) as Array).is_empty()
+			and layer.hero.size() == 1)
+
+
+## --- Tune-look slider sections ----------------------------------------------
+
+## The ~32 per-species shape sliders are grouped by a rule derived from the KEY,
+## so a slider added to SPECIES_SHAPE_SLIDERS files itself. This pins the rule
+## and, more usefully, asserts EVERY real slider lands in a known section — a
+## key that matched nothing would silently vanish from the modal.
+func _test_slider_sections() -> void:
+	var modal := load("res://scenes/ui/vegetation_preview_editor.gd") as GDScript
+	if modal == null:
+		_check("preview editor script loads", false)
+		return
+	var consts := modal.get_script_constant_map()
+	var order: Array = consts.get("SECTION_ORDER", [])
+	var specs: Dictionary = consts.get("SPECIES_SHAPE_SLIDERS", {})
+	_check("section order defined", order.size() >= 4, str(order))
+	_check("shape slider table found", not specs.is_empty())
+
+	var seen := {}
+	var total := 0
+	for family in specs:
+		for spec in (specs[family] as Array):
+			var key := str((spec as Dictionary)["key"])
+			var sect := str(modal.call("slider_section", key))
+			total += 1
+			seen[sect] = int(seen.get(sect, 0)) + 1
+			_check("%s lands in a known section" % key, order.has(sect),
+				"got '%s'" % sect)
+	_check("every family's sliders were classified", total > 60, "got %d" % total)
+
+	# The rule itself: the four interesting buckets.
+	_check("maturity age is Growth",
+		str(modal.call("slider_section", "deciduous_growth_years"))
+			== str(consts["SECTION_GROWTH"]))
+	_check("LOD distance is Detail",
+		str(modal.call("slider_section", "deciduous_lod_near_m"))
+			== str(consts["SECTION_DETAIL"]))
+	_check("billboard offset is Detail",
+		str(modal.call("slider_section", "deciduous_billboard_y_offset"))
+			== str(consts["SECTION_DETAIL"]))
+	_check("leaf size is Foliage",
+		str(modal.call("slider_section", "deciduous_leaf_size"))
+			== str(consts["SECTION_FOLIAGE"]))
+	_check("pine fur is Foliage",
+		str(modal.call("slider_section", "pine_fur_gap"))
+			== str(consts["SECTION_FOLIAGE"]))
+	_check("grass blades are Foliage",
+		str(modal.call("slider_section", "grass_lawn_blade_lean"))
+			== str(consts["SECTION_FOLIAGE"]))
+	_check("branch angle is Branches",
+		str(modal.call("slider_section", "deciduous_branch_angle"))
+			== str(consts["SECTION_BRANCHES"]))
+	_check("clusters are Branches",
+		str(modal.call("slider_section", "shrub_cluster_spread"))
+			== str(consts["SECTION_BRANCHES"]))
+	_check("canopy width is Size",
+		str(modal.call("slider_section", "deciduous_canopy_w"))
+			== str(consts["SECTION_SIZE"]))
+	_check("an unknown key falls back to Size",
+		str(modal.call("slider_section", "something_new"))
+			== str(consts["SECTION_SIZE"]))
+	# Every section that exists in the order must actually be used by at least
+	# one slider, or the modal grows an empty header.
+	for sect in order:
+		_check("section '%s' has sliders" % str(sect), int(seen.get(str(sect), 0)) > 0,
+			str(seen))
