@@ -440,9 +440,16 @@ func _build_ui() -> void:
 	tool_row.add_theme_constant_override("separation", 6)
 	col.add_child(tool_row)
 	_tool_buttons.clear()
+	var tool_tips := [
+		"Scatter plants of the active type (hold LMB, or drag a shape to fill it)",
+		"Place ONE hero tree (full 3D model) where you click",
+		"Erase painted plants under the brush / inside a dragged shape",
+		"Pick a single plant: Del deletes, [ ] resize, H promotes it to a hero model",
+	]
 	for i in ["Paint", "Place", "Clear", "Select"]:
 		var b := Button.new()
 		b.text = i
+		b.tooltip_text = str(tool_tips[_tool_buttons.size()])
 		b.custom_minimum_size = Vector2(64, 28)
 		b.pressed.connect(_on_tool_pressed.bind(_tool_buttons.size()))
 		_style_tool_button(b, _tool_buttons.size() == int(_tool))
@@ -450,12 +457,14 @@ func _build_ui() -> void:
 		_tool_buttons.append(b)
 	_undo_btn = Button.new()
 	_undo_btn.text = "Undo"
+	_undo_btn.tooltip_text = "Undo the last paint / clear / place stroke"
 	_undo_btn.custom_minimum_size = Vector2(52, 28)
 	_undo_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
 	_undo_btn.pressed.connect(_do_undo)
 	tool_row.add_child(_undo_btn)
 	var tune_btn := Button.new()
 	tune_btn.text = "Tune look…"
+	tune_btn.tooltip_text = "Open the live studio editor: shape, colours, leaves, presets — then Apply to map or brush"
 	tune_btn.custom_minimum_size = Vector2(92, 28)
 	tune_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
 	tune_btn.pressed.connect(_open_preview_editor)
@@ -487,10 +496,16 @@ func _build_ui() -> void:
 	_style_section(type_lbl, "Type")
 	type_lbl.custom_minimum_size = Vector2(34, 0)
 	param_row.add_child(type_lbl)
+	var type_tips := [
+		"Conifers (pine, spruce, fir…)", "Broadleaf trees (maple, birch, oak…)",
+		"Shrubs + desert plants", "Mixed woodland blend (tune ratios in Tune look…)",
+		"Short mowed grass", "Tall meadow grass + crops",
+	]
 	for i in 6:
 		var names := ["Pine", "Decid", "Shrub", "Mix", "Lawn", "Field"]
 		var b := Button.new()
 		b.text = names[i]
+		b.tooltip_text = str(type_tips[i])
 		b.custom_minimum_size = Vector2(46, 24)
 		b.pressed.connect(_on_preset_pressed.bind(i))
 		_style_tool_button(b, i == int(_preset))
@@ -511,10 +526,14 @@ func _build_ui() -> void:
 	shape_lbl.custom_minimum_size = Vector2(40, 0)
 	shape_row.add_child(shape_lbl)
 	_shape_mode_buttons.clear()
-	for spec in [["Brush", ShapeMode.BRUSH], ["Circle", ShapeMode.CIRCLE],
-			["Rect", ShapeMode.RECT], ["Lasso", ShapeMode.LASSO], ["Polygon", ShapeMode.POLYGON]]:
+	for spec in [["Brush", ShapeMode.BRUSH, "Freehand: hold LMB and sweep"],
+			["Circle", ShapeMode.CIRCLE, "Drag centre → edge to fill a circle"],
+			["Rect", ShapeMode.RECT, "Drag corner → corner to fill a rectangle"],
+			["Lasso", ShapeMode.LASSO, "Draw a freehand outline; release to fill it"],
+			["Polygon", ShapeMode.POLYGON, "Click corners; click the first corner (or RMB) to close and fill"]]:
 		var sb := Button.new()
 		sb.text = spec[0]
+		sb.tooltip_text = str(spec[2])
 		sb.custom_minimum_size = Vector2(52, 24)
 		var mode: ShapeMode = spec[1]
 		sb.pressed.connect(_on_shape_mode_pressed.bind(mode))

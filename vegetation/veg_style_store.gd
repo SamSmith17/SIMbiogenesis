@@ -278,6 +278,14 @@ static func save_map_style(lat: float, lon: float, flat_style: Dictionary) -> vo
 ## Persist per-subspecies overrides (unprefixed keys: card_w, albedo_tint, …)
 ## at GLOBAL scope. Values equal to the family flat key are still stored —
 ## an explicit species save is an explicit user choice.
+##
+## An entry saved for a GENERIC family id ("Save as species default" while
+## plain Deciduous was selected) stays in the species layer, but resolution
+## treats it as the WEAKEST user layer: settings_with_variant only applies it
+## where no user family edit exists, so a map's own tuning (or a later
+## family-wide Apply) always wins — it used to outrank per-map family edits
+## and "my per-map tuning does nothing" was the visible symptom. It also never
+## touches named subspecies, so their SPECS dims survive.
 static func save_species_override(species: String, values: Dictionary) -> void:
 	if species.is_empty() or values.is_empty():
 		return

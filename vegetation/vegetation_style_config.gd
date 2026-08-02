@@ -65,6 +65,8 @@ static func defaults() -> Dictionary:
 		"deciduous_cluster_tightness": 1.12,
 		# Radial push/huddle of the foliage clumps on their branch tips.
 		"deciduous_clump_spread": 1.0,
+		# Deterministic skeleton variant (0-9): same dims, different tree.
+		"deciduous_skeleton_seed": 0.0,
 		"deciduous_branch_count": 9.55,
 		"deciduous_branch_thickness": 0.64,
 		"deciduous_branch_reach": 0.89,

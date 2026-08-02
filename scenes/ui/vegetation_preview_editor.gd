@@ -40,6 +40,7 @@ const SPECIES_SHAPE_SLIDERS := {
 		{"key": "deciduous_bulk_scale", "label": "Bulk×", "min": 0.5, "max": 6.0},
 		{"key": "deciduous_growth_years", "label": "Maturity age (yr)", "min": 0.0, "max": 80.0},
 		{"key": "deciduous_crown_base", "label": "Crown base", "min": 0.05, "max": 0.9},
+		{"key": "deciduous_skeleton_seed", "label": "Variant", "min": 0.0, "max": 9.0},
 		{"key": "deciduous_cluster_count", "label": "Clumps", "min": 3.0, "max": 24.0},
 		{"key": "deciduous_clump_spread", "label": "Clump spread", "min": 0.6, "max": 1.5},
 		{"key": "deciduous_cluster_size", "label": "Clump sz", "min": 0.5, "max": 3.0},
@@ -123,6 +124,77 @@ const SPECIES_SHAPE_SLIDERS := {
 	],
 }
 
+## Hover help per settings key — labels are terse to fit the row, so the
+## tooltip carries the actual meaning. Keys without an entry get no tooltip.
+const SLIDER_TIPS := {
+	"deciduous_canopy_w": "Crown width in metres",
+	"deciduous_canopy_h": "Crown height above the trunk in metres",
+	"deciduous_trunk_w": "Trunk thickness in metres",
+	"deciduous_trunk_h": "Trunk height to the crown top in metres",
+	"deciduous_trunk_taper": "How much the trunk narrows toward the top (1 = cylinder)",
+	"deciduous_bulk_scale": "Whole-tree size multiplier for PAINTED trees (auto forests use their OSM height)",
+	"deciduous_growth_years": "Years a sapling takes to reach full size",
+	"deciduous_crown_base": "Where the lowest limb leaves the trunk (0 = ground, 1 = trunk top)",
+	"deciduous_skeleton_seed": "Pick one of 10 branch-structure variants — same shape settings, different tree",
+	"deciduous_cluster_count": "Number of foliage clumps (more = finer, costlier canopy)",
+	"deciduous_clump_spread": "Push foliage clumps outward (>1) or huddle them inward (<1)",
+	"deciduous_cluster_size": "Foliage clump size multiplier",
+	"deciduous_branch_count": "Primary limbs leaving the trunk",
+	"deciduous_branch_tilt_low": "Splay of the LOWEST limbs from vertical (90 = horizontal)",
+	"deciduous_branch_tilt_high": "Splay of the TOP limbs from vertical",
+	"deciduous_branch_lateral": "Fills the lower crown — high = spreading skirt, low = bare lower limbs",
+	"deciduous_branch_levels": "Twig fineness: higher grows more, shorter segments",
+	"deciduous_branch_split": "Max forks per branch point",
+	"deciduous_branch_angle": "How hard limbs chase open space — low = straight poplar, high = crooked oak",
+	"deciduous_branch_length_ratio": "How much twigs shorten toward the crown edge",
+	"deciduous_branch_droop": "Limb gravity: negative sags (willow), positive lifts",
+	"deciduous_branch_gnarl": "Random kink per branch segment",
+	"deciduous_branch_thickness": "Limb chunkiness (tip radius + taper)",
+	"deciduous_branch_reach": "Crown envelope size relative to the canopy width",
+	"deciduous_vertical_offset_m": "Sink (-) or raise (+) every tree relative to the ground",
+	"deciduous_leaf_shell_count": "Foliage shell layers per clump (depth of the canopy volume)",
+	"deciduous_leaf_density": "Leaves per clump surface (grid cells per side)",
+	"deciduous_leaf_size": "Individual leaf size within its cell",
+	"deciduous_leaf_aspect": "Leaf length ÷ width (1 = round, 3 = willow blade)",
+	"deciduous_leaf_gap": "Fraction of missing leaves per shell (airier canopy)",
+	"deciduous_leaf_lump": "Clump surface bumpiness",
+	"deciduous_shadow_proxy_visibility": "Darkness of the cheap whole-crown shadow card",
+	"deciduous_lod_near_m": "Distance where full leaf detail ends (painted trees)",
+	"deciduous_lod_far_begin_m": "Distance where flat billboards begin (painted trees)",
+	"deciduous_billboard_y_offset": "Vertical nudge of the distant billboard canopy",
+	"pine_card_w": "Bough width in metres",
+	"pine_card_h": "Tree height in metres",
+	"pine_trunk_w": "Trunk thickness in metres",
+	"pine_whorl_count": "Bough whorls stacked up the trunk",
+	"pine_bough_scale": "Bough size multiplier",
+	"pine_whorl_spacing": "Vertical spacing curve of the whorls",
+	"pine_whorl_jitter": "Random per-whorl wobble",
+	"pine_whorl_variation": "Per-whorl colour/shape variation (shader)",
+	"pine_trunk_taper": "How much the trunk narrows toward the top",
+	"pine_fur_strength": "Needle fuzz intensity near the camera",
+	"pine_fur_cells": "Needle fuzz density",
+	"pine_fur_tuft_size": "Needle tuft size",
+	"pine_fur_gap": "Gaps in the needle fuzz",
+	"pine_bulk_scale": "Whole-tree size multiplier for PAINTED pines",
+	"pine_growth_years": "Years a sapling takes to reach full size",
+	"translucency_strength": "Sunlight glowing through leaves from behind",
+	"canopy_roundness": "Fake ambient occlusion rounding of the canopy",
+	"color_variation": "Per-tree colour differences across a forest",
+	"foliage_roughness": "Leaf surface roughness (lower = glossier)",
+	"ao_strength": "Self-shadowing inside the canopy",
+	"subsurface_strength": "Soft light scattering through foliage",
+	"bark_roughness": "Bark surface roughness",
+	"bark_ao_strength": "Shadowing in bark crevices",
+	"bark_color_jitter": "Per-tree bark colour variation",
+	"wind_strength": "How far foliage sways",
+	"wind_speed": "How fast foliage sways",
+	"hue_jitter": "Random hue shift per plant",
+	"auto_foliage_lod_reach_m": "How far OSM forests keep full leaf detail (higher = prettier drone views, more GPU)",
+	"auto_max_tree_instances": "Hard cap on auto-scattered trees for the whole map",
+	"auto_detail_radius_m": "Radius around the site centre kept at full tree density",
+	"auto_distant_density": "Tree density beyond the detail radius (0 = none)",
+}
+
 const SHADER_SLIDERS := [
 	{"key": "translucency_strength", "label": "Translucency", "min": 0.0, "max": 1.0},
 	{"key": "canopy_roundness", "label": "Roundness", "min": 0.0, "max": 1.0},
@@ -197,6 +269,14 @@ var _preset_opt: OptionButton = null
 var _preset_name_edit: LineEdit = null
 var _species_section: VBoxContainer = null
 var _tint_picker: ColorPickerButton = null
+## Per-species highlight + bark tints (exact species keys only — a pick on
+## Maple never silently restyles the family). Bark rides <family>_bark_tint /
+## the species "bark_tint" override; highlight rides <sid>_highlight_tint.
+var _hi_tints: Dictionary = {}
+var _bark_tints: Dictionary = {}
+var _hi_picker: ColorPickerButton = null
+var _bark_picker: ColorPickerButton = null
+var _bark_lbl: Label = null
 var _density_slider: HSlider = null
 var _density_spin: SpinBox = null
 var _diameter_slider: HSlider = null
@@ -469,6 +549,7 @@ func _build_ui() -> void:
 	sidebar.add_child(_species_section)
 
 	var tint_row := HBoxContainer.new()
+	tint_row.add_theme_constant_override("separation", 6)
 	sidebar.add_child(tint_row)
 	var tint_lbl := Label.new()
 	_style_section(tint_lbl, "Tint")
@@ -476,8 +557,29 @@ func _build_ui() -> void:
 	tint_row.add_child(tint_lbl)
 	_tint_picker = ColorPickerButton.new()
 	_tint_picker.custom_minimum_size = Vector2(52, 24)
+	_tint_picker.tooltip_text = "Overall foliage colour for this species"
 	_tint_picker.color_changed.connect(_on_tint_changed)
 	tint_row.add_child(_tint_picker)
+	var hi_lbl := Label.new()
+	_style_section(hi_lbl, "Highlight")
+	tint_row.add_child(hi_lbl)
+	_hi_picker = ColorPickerButton.new()
+	_hi_picker.custom_minimum_size = Vector2(52, 24)
+	_hi_picker.tooltip_text = "Sun-lit leaf accent colour (maple's orange, olive's silver…)"
+	_hi_picker.color_changed.connect(func(c: Color) -> void:
+		_hi_tints[_species] = c
+		_queue_rebuild())
+	tint_row.add_child(_hi_picker)
+	_bark_lbl = Label.new()
+	_style_section(_bark_lbl, "Bark")
+	tint_row.add_child(_bark_lbl)
+	_bark_picker = ColorPickerButton.new()
+	_bark_picker.custom_minimum_size = Vector2(52, 24)
+	_bark_picker.tooltip_text = "Trunk + limb bark colour (birch white, redwood rust…)"
+	_bark_picker.color_changed.connect(func(c: Color) -> void:
+		_bark_tints[_species] = c
+		_queue_rebuild())
+	tint_row.add_child(_bark_picker)
 
 	var adv_toggle := CheckButton.new()
 	adv_toggle.text = "Advanced shader"
@@ -566,6 +668,14 @@ func _keyed_slider(parent: Control, key: String, label: String, min_v: float,
 		func(lbl: Label, txt: String) -> void: _style_section(lbl, txt),
 		72, 108, 60, step)
 	var row: HBoxContainer = pair.get("row")
+	# Hover help: the terse row label can't explain itself. Labels ignore the
+	# mouse by default, so opt the whole row in.
+	if SLIDER_TIPS.has(key) and row != null:
+		row.tooltip_text = str(SLIDER_TIPS[key])
+		row.mouse_filter = Control.MOUSE_FILTER_PASS
+		if row.get_child_count() > 0 and row.get_child(0) is Label:
+			(row.get_child(0) as Label).mouse_filter = Control.MOUSE_FILTER_STOP
+			(row.get_child(0) as Label).tooltip_text = str(SLIDER_TIPS[key])
 	var revert := Button.new()
 	revert.text = "↺"
 	revert.tooltip_text = "Revert this one slider to %s" % (
@@ -1197,6 +1307,29 @@ func _merged_settings() -> Dictionary:
 	out["%s_albedo_tint" % _species] = tint
 	if fam != _species and fam != "mix":
 		out["%s_albedo_tint" % fam] = tint
+	var hi: Variant = _hi_tints.get(_species)
+	if hi is Color:
+		out["%s_highlight_tint" % _species] = hi
+		if fam != _species and fam != "mix":
+			out["%s_highlight_tint" % fam] = hi
+	elif _hi_tints.get(fam) is Color and fam != "mix":
+		out["%s_highlight_tint" % fam] = _hi_tints[fam]
+	var bark: Variant = _bark_tints.get(_species)
+	if not (bark is Color) and fam != "mix":
+		bark = _bark_tints.get(fam)
+		if bark is Color:
+			out["%s_bark_tint" % fam] = bark
+			bark = null
+	if bark is Color:
+		if _is_named_variant():
+			# Species-scoped: ride the override channel as the unprefixed
+			# "bark_tint" key, exactly how Apply persists it.
+			var ov: Dictionary = out[VegStyleStore.KEY_SPECIES_OVERRIDES]
+			var d: Dictionary = ov.get(_species, {}) if ov.get(_species) is Dictionary else {}
+			d["bark_tint"] = bark
+			ov[_species] = d
+		else:
+			out["%s_bark_tint" % fam] = bark
 	out["use_drape"] = false
 	return out
 
@@ -1540,6 +1673,23 @@ func _load_from_loader() -> void:
 		_quality_style = _loader.call("veg_quality_tier_style")
 	_species_edits = {}
 	_species_baselines = {}
+	# Seed highlight/bark from the map's stored FAMILY-level colours: they are
+	# Colors, so the typed float copy above drops them, and without seeding the
+	# preview would render family defaults while the map keeps the stored look
+	# (species-level entries need no seeding — they resolve through the
+	# override side channel). Session picks then overwrite these entries.
+	_hi_tints = {}
+	_bark_tints = {}
+	for k in style:
+		var ks := str(k)
+		if ks.ends_with("_highlight_tint") and style[k] is Color:
+			var sid := ks.trim_suffix("_highlight_tint")
+			if sid in VegSpeciesCatalog.BASE_FAMILIES:
+				_hi_tints[sid] = style[k]
+		elif ks.ends_with("_bark_tint") and style[k] is Color:
+			var sidb := ks.trim_suffix("_bark_tint")
+			if sidb in VegSpeciesCatalog.BASE_FAMILIES:
+				_bark_tints[sidb] = style[k]
 	_tints = {
 		"pine": style.get("pine_albedo_tint", Color.WHITE),
 		"deciduous": style.get("deciduous_albedo_tint", Color.WHITE),
@@ -1621,6 +1771,15 @@ func _style_dict() -> Dictionary:
 	if _species != "mix" and not _species.is_empty():
 		out["%s_albedo_tint" % _species] = _tints.get(_species,
 			_tints.get(_shape_family(), Color.WHITE))
+	# Highlight tints: the store routes named-subspecies keys to the species
+	# layer and family keys to the family layer on its own.
+	for sid in _hi_tints:
+		out["%s_highlight_tint" % sid] = _hi_tints[sid]
+	# Bark: family-level entries only — named-subspecies bark is persisted as a
+	# species override in _apply_to_map.
+	for sid in _bark_tints:
+		if str(sid) == VegSpeciesCatalog.mesh_family(str(sid)):
+			out["%s_bark_tint" % sid] = _bark_tints[sid]
 	out["osm_species_map"] = _osm_species_map.duplicate(true)
 	out["local_mix"] = _local_mix.duplicate(true)
 	for key in MIX_KEYS:
@@ -1644,6 +1803,11 @@ func _brush_card() -> Dictionary:
 			var key := str((spec as Dictionary)["key"])
 			if resolved.has(key):
 				out[key] = resolved[key]
+	for sid in _hi_tints:
+		out["%s_highlight_tint" % sid] = _hi_tints[sid]
+	var brush_bark: Variant = _bark_tints.get(_species, _bark_tints.get(_shape_family()))
+	if brush_bark is Color:
+		out["%s_bark_tint" % _shape_family()] = brush_bark
 	for spec in SHADER_SLIDERS:
 		var key := str((spec as Dictionary)["key"])
 		if _values.has(key):
@@ -1666,6 +1830,11 @@ func _apply_to_map() -> void:
 		var edits: Dictionary = _species_edits[sid]
 		if not edits.is_empty():
 			VegetationStyleConfig.save_species_default(str(sid), edits)
+	# Named-subspecies bark picks are species overrides too (unprefixed key).
+	for sid in _bark_tints:
+		if str(sid) != VegSpeciesCatalog.mesh_family(str(sid)):
+			VegetationStyleConfig.save_species_default(str(sid),
+				{"bark_tint": _bark_tints[sid]})
 	var shape := _shape_dict()
 	var style := _style_dict()
 	# Persist this look as the GLOBAL default so future maps inherit it (per-map
@@ -1757,6 +1926,8 @@ func _refresh_apply_state(message: String = "") -> void:
 func _reset_values() -> void:
 	_values = _baseline.duplicate(true)
 	_species_edits = {}
+	_hi_tints = {}
+	_bark_tints = {}
 	for species in SPECIES_IDS:
 		var tk := "%s_albedo_tint" % species
 		if _baseline.has(tk):
@@ -1865,6 +2036,29 @@ func _sync_species_dropdown() -> void:
 func _sync_tint_picker() -> void:
 	if _tint_picker != null:
 		_tint_picker.color = _tints.get(_species, _tints.get(_shape_family(), Color.WHITE))
+	# Highlight + bark display the RESOLVED colour for the active species
+	# (species override > user family edit > SPECS variant), so picking Birch
+	# shows its white bark rather than the family brown.
+	var fam := _shape_family()
+	var is_tree := fam in ["pine", "deciduous", "palm"]
+	if _bark_picker != null:
+		_bark_picker.visible = is_tree
+		if _bark_lbl != null:
+			_bark_lbl.visible = is_tree
+	if _species == "mix":
+		return
+	var resolved := _resolved_active()
+	if _hi_picker != null:
+		var hi: Variant = resolved.get("%s_highlight_tint" % fam)
+		_hi_picker.color = hi if hi is Color else Color(0.42, 0.52, 0.16)
+	if _bark_picker != null and is_tree:
+		var bark: Variant = resolved.get("%s_bark_tint" % fam,
+			resolved.get("bark_albedo_tint"))
+		if not (bark is Color):
+			var spec: Dictionary = VegetationCardFactory.SPECS.get(_species,
+				VegetationCardFactory.SPECS.get(fam, {}))
+			bark = spec.get("bark", Color(0.18, 0.12, 0.07))
+		_bark_picker.color = bark
 
 
 func _set_species_from_preset(preset: int) -> void:

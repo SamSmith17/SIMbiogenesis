@@ -101,6 +101,30 @@ func _test_global_patch_routing() -> void:
 		"pine_card_w" not in (flat[VegStyleStore.KEY_USER_FAMILY] as Array))
 	_check("pruned key reads back the default",
 		is_equal_approx(float(flat["pine_card_w"]), float(defaults["pine_card_w"])))
+	# A species-layer entry for a GENERIC family id ("Save as species default"
+	# on plain Deciduous) is the WEAKEST user layer: applies when nothing else
+	# is tuned, yields to any user family edit, never leaks onto subspecies.
+	# Un-gated it outranked per-map family edits forever — "my per-map tuning
+	# does nothing".
+	VegStyleStore.save_species_override("deciduous", {"trunk_h": 9.0})
+	flat = VegStyleStore.flat_merged(T_LAT, T_LON)
+	var generic := VegSpeciesCatalog.settings_with_variant("deciduous", flat,
+		VegetationCardFactory.SPECS)
+	_check("generic default applies with no family edit",
+		is_equal_approx(float(generic["deciduous_trunk_h"]), 9.0))
+	var birch := VegSpeciesCatalog.settings_with_variant("birch", flat,
+		VegetationCardFactory.SPECS)
+	_check("generic default never leaks onto subspecies",
+		is_equal_approx(float(birch["deciduous_trunk_h"]),
+			float(VegetationCardFactory.SPECS["birch"]["trunk_h"])),
+		"birch trunk_h %.2f" % float(birch["deciduous_trunk_h"]))
+	VegetationStyleConfig.save_global({"deciduous_trunk_h": 5.5})
+	flat = VegStyleStore.flat_merged(T_LAT, T_LON)
+	generic = VegSpeciesCatalog.settings_with_variant("deciduous", flat,
+		VegetationCardFactory.SPECS)
+	_check("family edit beats the generic species default",
+		is_equal_approx(float(generic["deciduous_trunk_h"]), 5.5),
+		"got %.2f" % float(generic["deciduous_trunk_h"]))
 
 
 func _test_species_override_roundtrip() -> void:
@@ -143,19 +167,30 @@ func _test_variant_precedence() -> void:
 	# 2) Generic family species keeps the flat/default values.
 	var pine := VegSpeciesCatalog.settings_with_variant("pine", flat, specs)
 	_check("generic pine keeps family default", is_equal_approx(float(pine["pine_card_w"]), 0.85))
-	# 3) A USER family edit beats SPECS for every variant.
+	# 3) A USER family edit SCALES every variant's SPECS dim (ratio over the
+	# family default) instead of replacing it — replacement turned birch,
+	# beech and chestnut into byte-identical clones on any fully-tuned map.
 	VegetationStyleConfig.save_global({"pine_card_w": 1.5})
 	flat = VegStyleStore.flat_merged(T_LAT, T_LON)
 	spruce = VegSpeciesCatalog.settings_with_variant("spruce", flat, specs)
-	_check("user family edit beats SPECS", is_equal_approx(float(spruce["pine_card_w"]), 1.5))
+	var want := 0.95 * (1.5 / 0.85)  # SPECS spruce × user/default ratio
+	_check("user family edit scales SPECS dims",
+		absf(float(spruce["pine_card_w"]) - want) < 0.01,
+		"got %.3f want %.3f" % [float(spruce["pine_card_w"]), want])
 	_check("un-edited dim still from SPECS", is_equal_approx(float(spruce["pine_card_h"]), 5.2))
+	var fir2 := VegSpeciesCatalog.settings_with_variant("fir", flat, specs)
+	_check("variants stay distinct under a family edit",
+		absf(float(spruce["pine_card_w"]) - float(fir2["pine_card_w"])) > 0.05)
 	# 4) A species override beats both.
 	VegetationStyleConfig.save_species_default("spruce", {"pine_card_w": 0.5})
 	flat = VegStyleStore.flat_merged(T_LAT, T_LON)
 	spruce = VegSpeciesCatalog.settings_with_variant("spruce", flat, specs)
 	_check("species override beats family edit", is_equal_approx(float(spruce["pine_card_w"]), 0.5))
 	var cedar := VegSpeciesCatalog.settings_with_variant("cedar", flat, specs)
-	_check("cedar unaffected by spruce override", is_equal_approx(float(cedar["pine_card_w"]), 1.5))
+	var cedar_want := 1.15 * (1.5 / 0.85)
+	_check("cedar unaffected by spruce override (scaled SPECS)",
+		absf(float(cedar["pine_card_w"]) - cedar_want) < 0.01,
+		"got %.3f want %.3f" % [float(cedar["pine_card_w"]), cedar_want])
 
 
 func _test_variant_meshes_differ() -> void:

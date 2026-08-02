@@ -455,6 +455,13 @@ static func _build_bark_material_for_species(species: String, settings: Dictiona
 	var mat := ShaderMaterial.new()
 	mat.shader = BARK_SHADER
 	mat.set_shader_parameter("albedo_tex", _build_bark_texture(spec))
+	# Player bark tint: family key (species overrides land on it re-prefixed),
+	# beating the SPECS variant fill riding bark_albedo_tint — same user-edit >
+	# SPECS ladder as every other key.
+	var fam_bark := "%s_bark_tint" % family
+	if s.get(fam_bark) is Color:
+		s = s.duplicate()
+		s["bark_albedo_tint"] = s[fam_bark]
 	_apply_bark_uniforms(mat, s)
 	return mat
 
@@ -1025,7 +1032,10 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 	var crown_base := clampf(float(settings.get("deciduous_crown_base", 0.42)), 0.05, 0.92)
 	var tilt_low := clampf(float(settings.get("deciduous_branch_tilt_low", 75.0)), 15.0, 89.0)
 	var rng := RandomNumberGenerator.new()
-	rng.seed = _BRANCH_SEED
+	# Variant knob: same species + dims, a different skeleton. Deterministic —
+	# variant N always grows the same tree.
+	rng.seed = _BRANCH_SEED + 7919 * clampi(
+		int(round(float(settings.get("deciduous_skeleton_seed", 0)))), 0, 9)
 
 	# Crown envelope the attractors fill.
 	var y0 := trunk_h * crown_base
@@ -1075,7 +1085,11 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 	# centroid on iteration one; saturated nodes (at the fork cap) are skipped in
 	# the nearest search or their attractors starve forever and the loop stalls.
 	var d_attract := step * 5.0
-	var d_kill := step * 1.45
+	# 1.15×step: at 1.45 each new node cleared so much space that ~190
+	# attractors died to ~50 nodes and the skeleton stayed twig-poor (a bare
+	# winter tree with a dozen tips; 1.15 grows ~75 nodes / ~23 tips). Still
+	# ≥ step so growth can never oscillate without consuming space.
+	var d_kill := step * 1.15
 	var floor_y := y0 * 0.72
 	for _iter in 90:
 		if attractors.is_empty() or n_pos.size() >= node_budget:
@@ -1115,6 +1129,18 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 			var seg := step * (1.0 - (1.0 - len_ratio) * 0.55 * minf(float(n_depth[i]), 4.0) / 4.0)
 			var np := n_pos[i] + dir * seg
 			np.y = maxf(np.y, floor_y)
+			# Hard envelope ceiling + radial fence. Momentum (1-pull) lets a
+			# shoot ratchet PAST the last attractors it consumed — a low
+			# spread-angle style measured a skeleton 4.4 m taller than its
+			# authored trunk+crown, so "12 m tall" quietly meant 15. Authored
+			# dims are a contract; growth may overshoot ~6%, no more.
+			np.y = minf(np.y, y1 + env_h * 0.06)
+			var rad := Vector2(np.x, np.z)
+			var rad_max := env_r * 1.10
+			if rad.length_squared() > rad_max * rad_max:
+				rad = rad.normalized() * rad_max
+				np.x = rad.x
+				np.z = rad.y
 			n_pos.append(np)
 			n_dir.append(dir)
 			n_parent.append(i)
@@ -1136,6 +1162,12 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 				kept.append(a)
 		attractors = kept
 
+	if OS.get_environment("VEG_SC_DEBUG") == "1":
+		var dbg_max := 0.0
+		for i in n_pos.size():
+			dbg_max = maxf(dbg_max, n_pos[i].y)
+		print("SC_DEBUG y1=%.2f ceil=%.2f max_node_y=%.2f nodes=%d" % [
+			y1, y1 + env_h * 0.06, dbg_max, n_pos.size()])
 	# --- pipe-model radii (da Vinci: r_parent^n = Σ r_child^n) -----------------
 	var tipw := PackedFloat32Array()
 	tipw.resize(n_pos.size())
@@ -1153,7 +1185,9 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 	# Thickness slider shapes the taper exponent (chunky limbs vs wispy twigs)
 	# and the tip radius; the root radius is capped to sit inside the trunk top.
 	var n_exp := lerpf(2.9, 1.9, clampf(thick / 2.5, 0.0, 1.0))
-	var r_tip := 0.020 + 0.022 * thick
+	# Slimmer than before the band-UV fix: quads now render their FULL
+	# geometric width (they used to show only the texture's opaque 44%).
+	var r_tip := 0.014 + 0.016 * thick
 	var radii := PackedFloat32Array()
 	radii.resize(n_pos.size())
 	var max_r := 0.001
@@ -1377,7 +1411,11 @@ static func _add_branch_quad(verts: PackedVector3Array, uvs: PackedVector2Array,
 	var s1 := side * (w1 * 0.5)
 	var idx := verts.size()
 	verts.append_array([a - s0, a + s0, b + s1, b - s1])
-	uvs.append_array([Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vector2(0.0, 0.0)])
+	# Sample the bark texture's opaque CENTRE band, not the full card width:
+	# the margins are transparent silhouette feather, so a full 0..1 quad
+	# rendered only ~44% of its geometric width — every twig looked thread-thin
+	# and alpha-fringed regardless of the thickness slider.
+	uvs.append_array([Vector2(0.40, 1.0), Vector2(0.60, 1.0), Vector2(0.60, 0.0), Vector2(0.40, 0.0)])
 	var nrm := side.cross(b - a).normalized()
 	for _j in 4:
 		normals.append(nrm)
@@ -1406,9 +1444,12 @@ static func _clusters_from_tips(tips: Array, crown_w: float, crown_h: float,
 	# which would shrink every tip-anchored crown to 60%) — reusing those saved
 	# values reproduces the exact defect on every already-tuned map.
 	var radial_mul := clampf(float(settings.get("deciduous_clump_spread", 1.0)), 0.55, 1.6)
-	# Take an evenly-strided subset when the skeleton has more tips than the
-	# cluster budget: tips are appended depth-first, so a stride samples across
-	# the whole crown rather than one side of it.
+	# Cluster centres stay ON stride-picked tips (tips are appended in creation
+	# order, so a stride samples across the whole crown) — clumps must CAP
+	# limbs. A Lloyd-recentring experiment here averaged centres toward the
+	# crown interior and rebuilt the exact floating-lollipop silhouette this
+	# system exists to avoid. Unpicked tips instead grow their nearest clump
+	# (bounded, below) so no twig arc pokes out naked.
 	var picked: Array = []
 	if tips.size() <= target:
 		picked = tips.duplicate()
@@ -1416,6 +1457,22 @@ static func _clusters_from_tips(tips: Array, crown_w: float, crown_h: float,
 		var stride := float(tips.size()) / float(target)
 		for i in target:
 			picked.append(tips[mini(int(floor(float(i) * stride)), tips.size() - 1)])
+	# Per-clump reach: how far the farthest assigned unpicked tip sits from its
+	# nearest clump centre.
+	var reach: Array = []
+	for _i in picked.size():
+		reach.append(0.0)
+	if tips.size() > picked.size():
+		for tip in tips:
+			var t3r := tip as Vector3
+			var best_r := 0
+			var best_dr := INF
+			for c in picked.size():
+				var d := t3r.distance_squared_to(picked[c])
+				if d < best_dr:
+					best_dr = d
+					best_r = c
+			reach[best_r] = maxf(float(reach[best_r]), sqrt(best_dr))
 	# Tile the crown envelope: each clump claims an equal share of the crown
 	# volume, sized ~30% over its exact share so neighbours overlap into one
 	# continuous canopy at ANY cluster count. The old crown_w-only formula was
@@ -1438,8 +1495,8 @@ static func _clusters_from_tips(tips: Array, crown_w: float, crown_h: float,
 	# (and the FAR tier's billboard_y_offset pushes cards lower still).
 	var floor_y := ch * 0.62 + maxf(-float(settings.get("deciduous_billboard_y_offset", 0.0)), 0.0)
 	var out: Array = []
-	for tip in picked:
-		var p: Vector3 = tip
+	for ci in picked.size():
+		var p: Vector3 = picked[ci]
 		# Clusters sit slightly beyond the tip along the limb's outward lean, so
 		# foliage caps the branch instead of swallowing it.
 		var radial := Vector3(p.x, 0.0, p.z)
@@ -1448,7 +1505,10 @@ static func _clusters_from_tips(tips: Array, crown_w: float, crown_h: float,
 		pos.x *= radial_mul
 		pos.z *= radial_mul
 		pos.y = maxf(pos.y, floor_y)
-		out.append({"pos": pos, "w": cw, "h": ch})
+		# Grow (bounded ×1.35) to cover this clump's farthest assigned twig tip.
+		var need_w := float(reach[ci]) * 0.75 / 0.62 if ci < reach.size() else 0.0
+		var cwc := clampf(maxf(cw, need_w), cw, cw * 1.35)
+		out.append({"pos": pos, "w": cwc, "h": cwc * 0.85})
 	return out
 
 
@@ -1671,10 +1731,15 @@ static func _build_bark_texture(spec: Dictionary) -> Texture2D:
 	var img := Image.create(size, size, true, Image.FORMAT_RGBA8)
 	img.fill(Color(0, 0, 0, 0))
 	var bark: Color = spec.get("bark", Color(0.18, 0.12, 0.07))
-	var shadow := Color(0.02, 0.02, 0.015)
+	var shadow := Color(0.03, 0.025, 0.02)
 	var n := FastNoiseLite.new()
 	n.seed = "bark".hash()
 	n.frequency = 0.12
+	# Elongated vertical structures — real bark breaks into ridges and furrows
+	# along the trunk, not isotropic blotches.
+	var n_ridge := FastNoiseLite.new()
+	n_ridge.seed = "bark_ridge".hash()
+	n_ridge.frequency = 0.05
 	var half := float(size) * 0.5
 	for y in size:
 		for x in size:
@@ -1683,7 +1748,13 @@ static func _build_bark_texture(spec: Dictionary) -> Texture2D:
 			if nx > 0.22:
 				continue
 			var ncol := (n.get_noise_2d(float(x), float(y)) + 1.0) * 0.5
-			var c := bark.lerp(shadow, v * 0.4 + ncol * 0.15)
+			# Ridges: high x-frequency, low y-frequency = vertical furrows.
+			var ridge := (n_ridge.get_noise_2d(float(x) * 5.5, float(y) * 0.7) + 1.0) * 0.5
+			var furrow := smoothstep(0.30, 0.62, ridge)
+			# Gentler vertical gradient than the old v*0.4 (which crushed the
+			# lower trunk to near-black) + a faint warm lift on ridge crests.
+			var c := bark.lerp(shadow, v * 0.16 + ncol * 0.12 + (1.0 - furrow) * 0.30)
+			c = c.lerp(Color(bark.r * 1.35, bark.g * 1.28, bark.b * 1.15), furrow * 0.22)
 			c.a = 1.0 if nx < 0.18 else smoothstep(0.22, 0.18, nx)
 			if c.a > 0.05:
 				img.set_pixel(x, y, c)

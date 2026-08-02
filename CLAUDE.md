@@ -902,7 +902,32 @@ values. `VegStyleStore.save_global_patch` PRUNES values equal to defaults()
 (storing untouched sliders as user family edits shadowed every SPECS variant);
 `apply_vegetation_look` re-reads `flat_merged` after persisting so in-session
 side channels match — without that, fresh edits only won over SPECS variants
-after a restart.
+after a restart. Colour rows: Tint / Highlight / Bark pickers (bark rides
+`<family>_bark_tint`, species-scoped as the unprefixed "bark_tint" override;
+`_build_bark_material_for_species` maps it over the SPECS `bark_albedo_tint`
+fill). Every shape slider carries hover help from `SLIDER_TIPS`.
+
+**Resolution ladder (amended).** species override > user family edit >
+SPECS variant > defaults still holds, with two refinements: (1) a user FAMILY
+edit applies to named variants as a RATIO over the family default
+(`settings_with_variant` dims loop) — "make deciduous taller" resizes birch/
+beech/chestnut proportionally; flat replacement turned every subspecies into
+byte-identical clones on any fully-tuned map ("all subspecies are
+placeholders" back through the per-map door). (2) A species-layer entry for a
+GENERIC family id ("Save as species default" on plain Deciduous) is the
+WEAKEST user layer: it yields to any user family edit (per-map tuning or a
+family-wide Apply). Un-gated it outranked per-map family edits forever —
+Mt Vernon's map tuned trunk_h 6.0 while a stale generic save forced 11.0, and
+the SC skeleton (momentum can ratchet shoots past consumed attractors, now
+hard-clamped to the envelope +6% / ×1.10 radius) amplified it to a 17 m tree.
+Selftests: veg_style_store (scaling + generic-weakest), vegetation_growth
+(`_test_settings_with_variant_non_clobber` asserts the ratio contract).
+
+**Harness write-discipline.** `--capture=vegdock` exercises the modal's Apply,
+which persists global + per-map style — the harness snapshots the style files
+(global/map v2 stores, layer JSON, species defaults, presets) and byte-restores
+them after (`_snapshot_files`/`_restore_files`, same discipline as areafill).
+Before this every vegdock run silently rewrote the player's saved looks.
 
 **Growth (Phase 9).** `VegetationInstanceMap` holds ONE entry per PLANT with a
 list of MultiMesh slots, not one entry per slot: a NEAR-ring tree lives in two

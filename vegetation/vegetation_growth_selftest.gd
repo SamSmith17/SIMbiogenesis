@@ -480,20 +480,23 @@ func _test_disabled_species() -> void:
 
 
 func _test_settings_with_variant_non_clobber() -> void:
-	# Phase 2 contract: a USER family edit (declared via the style store's
-	# _user_family_keys provenance channel) beats the variant's SPECS dims; a
-	# bare family value with NO provenance is just a default and loses to
-	# SPECS — that absent-provenance case is precisely the fix that makes
-	# subspecies real (the old absent-KEY test froze the placeholder bug).
+	# Contract: a USER family edit (declared via the style store's
+	# _user_family_keys provenance channel) SCALES the variant's SPECS dims —
+	# ratio over the family default — so a family-wide tune resizes every
+	# subspecies proportionally instead of flattening them into clones. A bare
+	# family value with NO provenance is just a default and loses to SPECS —
+	# that absent-provenance case is precisely the fix that makes subspecies
+	# real (the old absent-KEY test froze the placeholder bug).
 	var player := {"pine_card_w": 2.5, "pine_card_h": 9.0,
 		VegStyleStore.KEY_USER_FAMILY: ["pine_card_w", "pine_card_h"]}
 	var merged := VegSpeciesCatalog.settings_with_variant(
 		"spruce", player, VegetationCardFactory.SPECS)
-	_check("variant keeps USER slider W",
-		_approx(float(merged.get("pine_card_w", 0.0)), 2.5, 1e-6),
+	# SPECS spruce 0.95 × (user 2.5 / family default 0.85); 5.2 × (9.0 / 4.5).
+	_check("variant scales by the USER slider W ratio",
+		_approx(float(merged.get("pine_card_w", 0.0)), 0.95 * 2.5 / 0.85, 1e-4),
 		"got %s" % str(merged.get("pine_card_w")))
-	_check("variant keeps USER slider H",
-		_approx(float(merged.get("pine_card_h", 0.0)), 9.0, 1e-6),
+	_check("variant scales by the USER slider H ratio",
+		_approx(float(merged.get("pine_card_h", 0.0)), 5.2 * 9.0 / 4.5, 1e-4),
 		"got %s" % str(merged.get("pine_card_h")))
 	_check("variant stamps species id",
 		str(merged.get("_variant_species", "")) == "spruce")

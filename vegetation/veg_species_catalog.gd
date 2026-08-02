@@ -235,15 +235,37 @@ static func settings_with_variant(species: String, settings: Dictionary,
 	var overrides_all: Dictionary = settings.get(VegStyleStore.KEY_SPECIES_OVERRIDES, {})
 	var over: Dictionary = overrides_all.get(species, {}) if overrides_all.get(species) is Dictionary else {}
 	var named_variant := species != family and specs.has(species)
+	# A species-layer entry for the GENERIC family id ("Save as species default"
+	# on plain Deciduous) is the WEAKEST user layer: it yields to any user
+	# family edit — per-map tuning or a family-wide Apply. Un-gated it outranked
+	# per-map family values forever ("my per-map tuning does nothing").
+	var generic_self := species == family
 	# Geometry dims.
 	var dims: Dictionary = _FAMILY_DIM_KEYS.get(family, {})
+	var fam_defaults: Dictionary = VegetationStyleConfig.defaults()
 	for dim in dims:
 		var flat_key := "%s_%s" % [family, dim]
 		var spec_key := str(dims[dim])
-		if over.has(dim):
+		if over.has(dim) and not (generic_self and flat_key in user_family):
 			out[flat_key] = float(over[dim])
-		elif named_variant and spec.has(spec_key) and flat_key not in user_family:
-			out[flat_key] = float(spec[spec_key])
+		elif named_variant and spec.has(spec_key):
+			var specs_val := float(spec[spec_key])
+			if flat_key in user_family:
+				# A user family edit SCALES every subspecies dim instead of
+				# replacing it: "make deciduous trees taller" must not turn
+				# birch, beech and chestnut into byte-identical clones — which
+				# is exactly what any fully-tuned map did when family edits
+				# flat-out beat SPECS ("all subspecies are placeholders" back
+				# through the per-map door). Ratio over the family DEFAULT,
+				# bounded so an extreme tune can't explode a variant.
+				var base_val := float(fam_defaults.get(flat_key, 0.0))
+				if absf(base_val) > 0.0001:
+					var ratio := clampf(float(out.get(flat_key, base_val)) / base_val,
+						0.25, 4.0)
+					out[flat_key] = specs_val * ratio
+				# else: keep the user's absolute value (no meaningful baseline).
+			else:
+				out[flat_key] = specs_val
 		# else: keep the flat value (user family edit, or family default for
 		# the generic family species itself).
 	# Non-dim per-species overrides (cluster counts, whorl counts, offsets, …)
@@ -252,20 +274,23 @@ static func settings_with_variant(species: String, settings: Dictionary,
 		var key := str(k)
 		if dims.has(key) or key == "albedo_tint" or key == "highlight_tint":
 			continue
-		out["%s_%s" % [family, key]] = over[k]
+		var flat_over := "%s_%s" % [family, key]
+		if generic_self and flat_over in user_family:
+			continue
+		out[flat_over] = over[k]
 	# Colors: same ladder. SPECS carry real per-variant palettes (birch/aspen
 	# white bark, maple's orange highlight) that were previously unreachable.
 	var family_albedo := "%s_albedo_tint" % family
 	var family_hi := "%s_highlight_tint" % family
 	var albedo_key := "%s_albedo_tint" % species
 	var hi_key := "%s_highlight_tint" % species
-	if over.has("albedo_tint"):
+	if over.has("albedo_tint") and not (generic_self and family_albedo in user_family):
 		out[family_albedo] = over["albedo_tint"]
 	elif out.has(albedo_key) and species != family:
 		out[family_albedo] = out[albedo_key]
 	elif named_variant and spec.has("top") and family_albedo not in user_family:
 		out[family_albedo] = spec["top"]
-	if over.has("highlight_tint"):
+	if over.has("highlight_tint") and not (generic_self and family_hi in user_family):
 		out[family_hi] = over["highlight_tint"]
 	elif out.has(hi_key) and species != family:
 		out[family_hi] = out[hi_key]

@@ -3635,8 +3635,36 @@ func _area_fill_waypoints(loader: Node, centroid: Vector2) -> Array:
 # ==================== VEG DOCK CAPTURE (--capture=vegdock) ====================
 # Veg overhaul Phase 8: shoot the redesigned paint dock and the Tune-look modal
 # through their REAL entry points, so a layout/theme regression is visible
-# rather than merely compiling. Read-only: it opens panels, changes tool/shape
-# selection, and closes them again — nothing is painted or persisted.
+# rather than merely compiling. Read-only BY RESTORE: the modal's Apply — which
+# this harness exercises on purpose — persists global + per-map style, so the
+# style files are snapshotted before the run and byte-restored after (the same
+# discipline --capture=areafill applies to auto_veg_edits). Without this every
+# vegdock run silently rewrote the player's saved looks.
+
+## path -> PackedByteArray (missing files stored as null → deleted on restore).
+func _snapshot_files(paths: Array) -> Dictionary:
+	var out := {}
+	for p in paths:
+		var path := str(p)
+		if FileAccess.file_exists(path):
+			out[path] = FileAccess.get_file_as_bytes(path)
+		else:
+			out[path] = null
+	return out
+
+
+func _restore_files(snap: Dictionary) -> void:
+	for p in snap:
+		var path := str(p)
+		if snap[p] == null:
+			if FileAccess.file_exists(path):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+			continue
+		var f := FileAccess.open(path, FileAccess.WRITE)
+		if f != null:
+			f.store_buffer(snap[p])
+			f.close()
+
 
 func _run_veg_dock_capture() -> void:
 	var loader := await _find_terrain_loader()
@@ -3657,6 +3685,15 @@ func _run_veg_dock_capture() -> void:
 		print("PlaytestHarness: vegdock FAIL — the map has no vegetation dock")
 		_maybe_quit()
 		return
+	var lat := float(loader.get("_lat"))
+	var lon := float(loader.get("_lon"))
+	var style_snap := _snapshot_files([
+		VegStyleStore.global_v2_path(),
+		VegStyleStore.map_v2_path(lat, lon),
+		"user://maps/vegetation_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)],
+		VegetationStyleConfig.SPECIES_DEFAULTS_PATH,
+		VegetationStyleConfig.PRESETS_PATH,
+	])
 	dock.call("toggle_mode")
 	await get_tree().create_timer(1.0).timeout
 	print("PlaytestHarness: vegdock — dock open=%s, chips=%d" % [
@@ -3695,7 +3732,10 @@ func _run_veg_dock_capture() -> void:
 			modal.call("close")
 	await get_tree().create_timer(0.5).timeout
 	dock.call("_exit_mode")
-	print("PlaytestHarness: vegdock — shots in %s" % ProjectSettings.globalize_path(dir))
+	_restore_files(style_snap)
+	VegStyleStore.invalidate_cache()
+	print("PlaytestHarness: vegdock — style files restored, shots in %s"
+		% ProjectSettings.globalize_path(dir))
 	_maybe_quit()
 
 
