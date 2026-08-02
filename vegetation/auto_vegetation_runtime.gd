@@ -348,12 +348,10 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	# Shadow casting is gated globally (off by default — big GPU win in play,
 	# toggled on for solar analysis). Grass never casts.
 	VegetationShadowPolicy.apply(mi, species)
-	if species in VegetationLayer.GRASS_SPECIES:
-		mi.visibility_range_end = float(settings.get("grass_visibility_end_m",
-			VegetationRuntime.GRASS_VISIBILITY_END))
-	else:
-		mi.visibility_range_end = float(settings.get("auto_visibility_end_m", VISIBILITY_END))
-	mi.visibility_range_begin = VISIBILITY_BEGIN
+	var vis_end := float(settings.get("grass_visibility_end_m",
+		VegetationRuntime.GRASS_VISIBILITY_END)) if species in VegetationLayer.GRASS_SPECIES \
+		else float(settings.get("auto_visibility_end_m", VISIBILITY_END))
+	VegetationRuntime.apply_visibility_range(mi, VISIBILITY_BEGIN, vis_end)
 	root.add_child(mi)
 	if growth_map != null:
 		for j in pending.size():

@@ -55,6 +55,14 @@ static func foot_local_y() -> float:
 
 
 static func mesh_for_lod(species: String, settings: Dictionary, tier: LodTier) -> ArrayMesh:
+	var key := "grassmesh|%s|%d|%d" % [species, tier, hash(settings)]
+	var cached: Variant = VegAssetCache.fetch(key)
+	if cached is ArrayMesh:
+		return cached
+	return VegAssetCache.store(key, _build_mesh_for_lod(species, settings, tier))
+
+
+static func _build_mesh_for_lod(species: String, settings: Dictionary, tier: LodTier) -> ArrayMesh:
 	var spec := spec_for_species(species, settings)
 	var use_hex := false
 	match tier:
@@ -72,6 +80,15 @@ static func mesh_for_lod(species: String, settings: Dictionary, tier: LodTier) -
 
 static func material_for_species(species: String, settings: Dictionary,
 		tier: LodTier = LodTier.NEAR) -> ShaderMaterial:
+	var key := "grassmat|%s|%d|%d" % [species, tier, hash(settings)]
+	var cached: Variant = VegAssetCache.fetch(key)
+	if cached is ShaderMaterial:
+		return cached
+	return VegAssetCache.store(key, _build_material_for_species(species, settings, tier))
+
+
+static func _build_material_for_species(species: String, settings: Dictionary,
+		tier: LodTier) -> ShaderMaterial:
 	var spec := spec_for_species(species, settings)
 	var prefix := species if species in SPECS else "grass_lawn"
 	var mat := ShaderMaterial.new()

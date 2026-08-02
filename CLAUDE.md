@@ -215,6 +215,14 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/
 # diagnostics.json + perf/*.json. Alias --user-map=mtvernon resolves Mount Vernon
 # under user://maps/. --perf enables F3 HUD; --no-mutate skips Demo Lab drive:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=loc_48p3252_n122p2469.tres --capture=site-review --perf --shots-dir=mt_vernon_review --quit-after-capture
+# Vegetation regression capture (WINDOWED — veg overhaul Phase 1 baseline): waits
+# for the auto-veg scatter, then shoots forest-anchored sets (veg_00 close canopy,
+# veg_01 the NEAR→FAR LOD boundary, veg_02 distant, veg_03 aerial) + orbit + a
+# 4-date seasonal series (winter/spring/summer/autumn from one fixed waypoint),
+# and writes veg_diagnostics.json (per-batch instances/visibility/fade-mode/
+# surfaces, VegAssetCache stats, primitives/draw-call counters, key style knobs).
+# Run before/after ANY veg rendering change and diff the JSON + boundary shots:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=veg --shots-dir=<label> --quit-after-capture
 # Ambient resource-flow regression guard (WINDOWED — the harness hard no-ops
 # under --headless; no screenshots, console-only): builds a primed pond+siphon+
 # culvert-outlet, keeps SystemGraphView.visible=false the ENTIRE time (graph
@@ -596,11 +604,30 @@ to a flat grid / neutral drape so the world still loads.
 - `core/terrain/vegetation_osm_service.gd` (`VegetationService`): one Overpass
  request per site → polygons (wood/forest/scrub/orchard/grass…), `tree_row` lines,
  `barrier=hedge` lines, and `natural=tree` points; feeds AutoVegetationGenerator's
- scatter phases. Cache `user://terrain_cache/osm_vegetation/`. **Cache serializer
- must include `hedge_rows`** — it previously omitted them, so cached reloads
- silently dropped every hedge (fresh fetch had them, cache didn't); fixed +
- CACHE_VERSION bumped v4→v5. Any new payload key needs matching
- `_serialize_payload`/`deserialize_payload` entries or it vanishes on reload.
+ scatter phases. Cache `user://terrain_cache/osm_vegetation/` (CACHE_VERSION now v8).
+ **Cache serializer must include every payload key** — `hedge_rows` was once omitted,
+ so cached reloads silently dropped every hedge (fresh fetch had them, cache didn't);
+ any new payload key needs matching `_serialize_payload`/`deserialize_payload`
+ entries or it vanishes on reload. **Ready-payloads are key-matched to the site**
+ (`matches_site`) — the service runs one job with a single-slot pending queue, so a
+ listener that changed sites mid-flight must reject the previous site's payload;
+ late replies that outlive the loader's 180 s phase budget still queue the scatter.
+
+**Veg overhaul (in progress — plan + full audit:
+`~/.claude/plans/i-want-to-overhaul-scalable-biscuit.md`; Phases 0–1 landed).**
+Invariants to preserve: `AutoVegetationRuntime.neutralized_settings` — the
+per-species `*_bulk_scale` keys are FORCED neutral on the auto path (the
+generator bakes height into each record's scale; letting the style's 1.6 win
+oversized every auto tree) and `auto_tree_scale` (style key, clamp 0.2–3.0,
+rebuild-only) is the one whole-forest size knob. `VegetationRuntime.reground`
+MUST receive live settings + growth map (a bare rebuild was the "V pops full
+detail" bug). All veg MMIs get `visibility_range_fade_mode = FADE_SELF` + a
+24 m margin via `VegetationRuntime.apply_visibility_range` at BUILD time only
+(AMD Vulkan hard-crashes on live visibility_range sweeps). Built meshes/
+materials memoize in `VegAssetCache` keyed `kind|species|tier|hash(settings)`
+(matches batch partitioning; `clear_foot_cache()` clears it too). Generator
+scatter order is POINTS→ROWS→HEDGES→POLYS→GAP_FILL — explicitly mapped
+features must never lose the budget race to polygon fill.
 
 **Vegetation paint + live preview (`scenes/ui/vegetation_edit_ui.gd`,
 `scenes/ui/vegetation_preview_editor.gd`).** V toggles the bottom paint dock

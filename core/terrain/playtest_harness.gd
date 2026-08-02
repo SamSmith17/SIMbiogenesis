@@ -145,6 +145,8 @@ func _ready() -> void:
 			_run_pond_id_verify.call_deferred()
 		elif _capture_mode == "culvert":
 			_run_culvert_downhill_verify.call_deferred()
+		elif _capture_mode == "veg":
+			_run_veg_capture.call_deferred()
 		else:
 			_await_and_run.call_deferred()
 
@@ -322,6 +324,8 @@ func _launch_map() -> void:
 		_run_pond_id_verify()
 	elif _capture_mode == "culvert":
 		_run_culvert_downhill_verify()
+	elif _capture_mode == "veg":
+		_run_veg_capture()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -353,6 +357,8 @@ func _launch_scene_direct() -> void:
 		_run_autobind_verify()
 	elif _capture_mode == "pondid":
 		_run_pond_id_verify()
+	elif _capture_mode == "veg":
+		_run_veg_capture()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -3206,3 +3212,224 @@ func _run_npc_anim_verify() -> void:
 	print("PlaytestHarness: npc-anim — %s (%d shots in %s)" % [
 		"PASS" if ok else "FAIL", manifest.size(), dir])
 	_maybe_quit()
+
+
+# ==================== VEG CAPTURE (--capture=veg) ====================
+# Vegetation regression baseline (veg overhaul Phase 1): forest-anchored shot
+# sets (close canopy, the NEAR->FAR LOD boundary band, distant, aerial), a
+# 4-date seasonal series from one fixed waypoint, and veg_diagnostics.json
+# with per-batch instance/visibility/fade data + asset-cache stats + render
+# counters. Later phases (tier rings, impostors, quality tiers, phenology)
+# compare their runs against this output.
+
+const VEG_SCATTER_WAIT_MAX_S := 240.0
+const VEG_SEASON_SETTLE_S := 3.5
+## month, day, set label — winter bare / spring bud / summer full / autumn ramp.
+const VEG_SEASON_DATES: Array = [
+	[1, 15, "season_winter"], [4, 20, "season_spring"],
+	[7, 15, "season_summer"], [10, 20, "season_autumn"],
+]
+
+
+func _run_veg_capture() -> void:
+	var loader := await _find_terrain_loader()
+	if loader == null:
+		push_error("PlaytestHarness: veg capture needs a TerrainLoader map")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	var auto_on := true
+	if loader.has_method("get_terrain_options"):
+		var opts: Dictionary = loader.call("get_terrain_options")
+		auto_on = bool(opts.get("show_auto_vegetation", true))
+	if not auto_on:
+		# The single most confusing veg failure mode: the toggle lives in
+		# terrain_config.cfg and OFF means no fetch, no scatter, no forest,
+		# with zero console evidence. Say so loudly.
+		print("PlaytestHarness: veg — NOTE: show_auto_vegetation=false (Terrain options) — capture reflects the MANUAL layer only")
+	else:
+		print("PlaytestHarness: veg — map loaded, waiting for auto-veg scatter")
+		var waited := 0.0
+		while loader.get("_auto_veg_generated") != true and waited < VEG_SCATTER_WAIT_MAX_S:
+			await get_tree().create_timer(2.0).timeout
+			waited += 2.0
+		if loader.get("_auto_veg_generated") != true:
+			print("PlaytestHarness: veg — scatter still pending after %.0f s, shooting anyway" % waited)
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	_set_capture_conditions()
+
+	var label := _shots_label if not _shots_label.is_empty() else "veg_capture"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var cam := Camera3D.new()
+	cam.name = "PlaytestCam"
+	cam.far = 40000.0
+	get_tree().current_scene.add_child(cam)
+	cam.make_current()
+	var manifest: Array = []
+
+	var anchor := _veg_forest_anchor(loader)
+	print("PlaytestHarness: veg — forest anchor (%.0f, %.0f)" % [anchor.x, anchor.y])
+	await _capture_set(cam, _veg_waypoints(loader, anchor), "veg", dir, manifest)
+	await _capture_set(cam, _orbit_waypoints(loader), "orbit", dir, manifest)
+
+	# Seasonal series: same boundary waypoint, four calendar dates. The env
+	# sync lerps uniforms on REAL time (k = delta*2.5), so give it a beat.
+	var main := get_tree().current_scene
+	var season_wp := _veg_boundary_waypoint(loader, anchor)
+	for date in VEG_SEASON_DATES:
+		if "month" in main:
+			main.month = int(date[0])
+		if "day" in main:
+			main.day = int(date[1])
+		await get_tree().create_timer(VEG_SEASON_SETTLE_S).timeout
+		await _capture_set(cam, [season_wp], str(date[2]), dir, manifest)
+
+	_write_veg_diagnostics(loader, dir)
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	cam.queue_free()
+	print("PlaytestHarness: veg capture — %d shots in %s" % [
+		manifest.size(), ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
+## Densest tree stand: the record nearest the centroid of the largest non-grass
+## slot (auto layer first, manual fallback) — guaranteed inside real forest.
+func _veg_forest_anchor(loader: Node) -> Vector2:
+	for layer_prop in ["_auto_veg_layer", "_vegetation_layer"]:
+		var layer: Object = loader.get(layer_prop)
+		if layer == null:
+			continue
+		var bulk: Variant = layer.get("bulk")
+		if not (bulk is Dictionary):
+			continue
+		var best_slot := ""
+		var best_n := 0
+		for slot in bulk:
+			if str(slot).begins_with("grass"):
+				continue
+			var n := ((bulk as Dictionary)[slot] as Array).size()
+			if n > best_n:
+				best_n = n
+				best_slot = str(slot)
+		if best_n == 0:
+			continue
+		var recs: Array = (bulk as Dictionary)[best_slot]
+		var cx := 0.0
+		var cz := 0.0
+		for r in recs:
+			cx += float(r["x"])
+			cz += float(r["z"])
+		cx /= float(best_n)
+		cz /= float(best_n)
+		var best_d := INF
+		var ax := cx
+		var az := cz
+		for r in recs:
+			var dx := float(r["x"]) - cx
+			var dz := float(r["z"]) - cz
+			var d := dx * dx + dz * dz
+			if d < best_d:
+				best_d = d
+				ax = float(r["x"])
+				az = float(r["z"])
+		return Vector2(ax, az)
+	return Vector2.ZERO
+
+
+func _veg_boundary_waypoint(loader: Node, anchor: Vector2) -> Dictionary:
+	var reach := 300.0
+	if loader.has_method("get_vegetation_style"):
+		var style: Dictionary = loader.call("get_vegetation_style")
+		reach = float(style.get("auto_foliage_lod_reach_m", 300.0))
+	var eye := _ground_y(loader, anchor.x - reach, anchor.y) + 4.0
+	return {
+		"pos": Vector3(anchor.x - reach, eye, anchor.y),
+		"look": Vector3(anchor.x, _ground_y(loader, anchor.x, anchor.y) + 8.0, anchor.y),
+	}
+
+
+func _veg_waypoints(loader: Node, anchor: Vector2) -> Array:
+	var ax := anchor.x
+	var az := anchor.y
+	var canopy := Vector3(ax, _ground_y(loader, ax, az) + 8.0, az)
+	var pts: Array = []
+	# Close: inside the stand at eye level (near-tier detail + bark).
+	pts.append({
+		"pos": Vector3(ax + 25.0, _ground_y(loader, ax + 25.0, az) + 2.0, az),
+		"look": canopy,
+	})
+	# Boundary: standing AT the NEAR->FAR reach looking across it — the shot
+	# where LOD popping / renderer-identity seams show.
+	pts.append(_veg_boundary_waypoint(loader, anchor))
+	# Distant: 500 m out, slightly lifted (FAR tier / future impostor band).
+	pts.append({
+		"pos": Vector3(ax + 500.0, _ground_y(loader, ax + 500.0, az) + 30.0, az),
+		"look": canopy,
+	})
+	# Aerial: drone-style 45 deg down from 180 m (site-plan realism check).
+	pts.append({
+		"pos": Vector3(ax + 180.0, _ground_y(loader, ax, az) + 180.0, az),
+		"look": canopy,
+	})
+	return pts
+
+
+func _write_veg_diagnostics(loader: Node, dir: String) -> void:
+	var main := get_tree().current_scene
+	var terrain: Node = main.get_node_or_null("Terrain") if main != null else null
+	var batches: Array = []
+	var totals := {"instances": 0, "batches": 0, "hero": 0}
+	if terrain != null:
+		for root_name in ["Vegetation", "AutoVegetation"]:
+			var root := terrain.get_node_or_null(root_name)
+			if root == null:
+				continue
+			for child in root.get_children():
+				if child is MultiMeshInstance3D:
+					var mi := child as MultiMeshInstance3D
+					var n := mi.multimesh.instance_count if mi.multimesh != null else 0
+					var surfaces := 0
+					if mi.multimesh != null and mi.multimesh.mesh != null:
+						surfaces = mi.multimesh.mesh.get_surface_count()
+					batches.append({
+						"layer": root_name,
+						"name": String(mi.name),
+						"instances": n,
+						"vis_begin": mi.visibility_range_begin,
+						"vis_end": mi.visibility_range_end,
+						"fade_mode": int(mi.visibility_range_fade_mode),
+						"surfaces": surfaces,
+					})
+					totals["instances"] = int(totals["instances"]) + n
+					totals["batches"] = int(totals["batches"]) + 1
+				elif String(child.name) == "HeroTrees":
+					totals["hero"] = int(totals["hero"]) + child.get_child_count()
+	var diag := {
+		"totals": totals,
+		"asset_cache": VegAssetCache.stats(),
+		"style": {},
+		"perf": {
+			"primitives": Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME),
+			"draw_calls": Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
+			"video_mem_bytes": Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED),
+		},
+		"batches": batches,
+	}
+	if loader.has_method("get_vegetation_style"):
+		var style: Dictionary = loader.call("get_vegetation_style")
+		for k in ["auto_force_far_canopy", "auto_foliage_lod_reach_m",
+				"auto_visibility_end_m", "grass_visibility_end_m", "auto_density_scale",
+				"auto_tree_scale", "auto_max_tree_instances", "auto_max_grass_instances"]:
+			if style.has(k):
+				diag["style"][k] = style[k]
+	var f := FileAccess.open("%s/veg_diagnostics.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(diag, "\t"))
+		f.close()
+	print("PlaytestHarness: wrote veg_diagnostics.json (%d batches, %d instances)" % [
+		int(totals["batches"]), int(totals["instances"])])

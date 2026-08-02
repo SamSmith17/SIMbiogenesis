@@ -42,6 +42,27 @@ static func _register_growth(map: VegetationInstanceMap, mmi: MultiMeshInstance3
 			align_to_surface, x, z, yaw, ground_y)
 
 
+## Dither-fade band on every visibility-range edge. Godot's DEFAULT fade mode
+## is DISABLED — a hard binary on/off, which is why whole 256 m chunks of
+## forest used to pop in and out at the LOD boundary. FADE_SELF dither-fades
+## each MultiMesh over the margin band instead (the legacy vegetation_scatter
+## and prop_render_tuning paths already did this; the modern runtime never did).
+const LOD_FADE_MARGIN_M := 24.0
+
+
+## Set visibility range + dithered self-fade ON A FRESHLY BUILT node only.
+## NEVER sweep visibility_range over live nodes at runtime — mass-mutating it
+## hard-crashed the AMD Vulkan driver (see vegetation_shadow_policy.gd).
+static func apply_visibility_range(mi: GeometryInstance3D, begin_m: float, end_m: float,
+		margin_m: float = LOD_FADE_MARGIN_M) -> void:
+	mi.visibility_range_begin = begin_m
+	mi.visibility_range_end = end_m
+	# A margin on a disabled edge (0.0 = no limit) would re-enable it.
+	mi.visibility_range_begin_margin = margin_m if begin_m > 0.0 else 0.0
+	mi.visibility_range_end_margin = margin_m if end_m > 0.0 else 0.0
+	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+
+
 static func _build_grass_bulk_batches(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, settings: Dictionary,
 		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0) -> void:
@@ -90,8 +111,7 @@ static func _build_grass_bulk_batches(root: Node3D, species: String, records: Ar
 		mi.multimesh = mm
 		mi.material_override = mat
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		mi.visibility_range_begin = vis.x
-		mi.visibility_range_end = vis.y
+		apply_visibility_range(mi, vis.x, vis.y)
 		root.add_child(mi)
 		if growth_map != null:
 			for j in pending.size():
@@ -157,8 +177,7 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 		mi.material_override = null
 		# Shadow casting is globally gated (off by default; on for solar analysis).
 		VegetationShadowPolicy.apply(mi, species)
-		mi.visibility_range_begin = vis.x
-		mi.visibility_range_end = vis.y
+		apply_visibility_range(mi, vis.x, vis.y)
 		root.add_child(mi)
 		if growth_map != null:
 			for j in pending.size():
@@ -214,8 +233,7 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 	mi.multimesh = mm
 	mi.material_override = null
 	VegetationShadowPolicy.apply(mi, species)
-	mi.visibility_range_begin = VISIBILITY_BEGIN
-	mi.visibility_range_end = visibility_end_m
+	apply_visibility_range(mi, VISIBILITY_BEGIN, visibility_end_m)
 	root.add_child(mi)
 	if growth_map != null:
 		for j in pending.size():
@@ -459,8 +477,7 @@ static func _build_bulk_batch(root: Node3D, species: String, records: Array,
 	else:
 		mi.material_override = mat
 	VegetationShadowPolicy.apply(mi, species)
-	mi.visibility_range_begin = VISIBILITY_BEGIN
-	mi.visibility_range_end = _visibility_end_for_species(species)
+	apply_visibility_range(mi, VISIBILITY_BEGIN, _visibility_end_for_species(species))
 	root.add_child(mi)
 	if growth_map != null:
 		for j in pending.size():

@@ -134,6 +134,14 @@ static func mesh_family(species: String) -> String:
 
 
 static func mesh_for_species(species: String, settings: Dictionary = {}) -> ArrayMesh:
+	var key := "mesh|%s|-1|%d" % [species, hash(settings)]
+	var cached: Variant = VegAssetCache.fetch(key)
+	if cached is ArrayMesh:
+		return cached
+	return VegAssetCache.store(key, _build_mesh_for_species(species, settings))
+
+
+static func _build_mesh_for_species(species: String, settings: Dictionary) -> ArrayMesh:
 	var family := mesh_family(species)
 	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
 	match family:
@@ -268,13 +276,20 @@ static func canopy_lod_enabled(species: String, settings: Dictionary) -> bool:
 
 
 static func mesh_for_canopy_lod(species: String, settings: Dictionary, tier: CanopyLodTier) -> ArrayMesh:
+	var key := "mesh|%s|%d|%d" % [species, tier, hash(settings)]
+	var cached: Variant = VegAssetCache.fetch(key)
+	if cached is ArrayMesh:
+		return cached
 	var family := mesh_family(species)
 	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
+	var mesh: ArrayMesh
 	if family == "deciduous":
-		return mesh_for_deciduous_lod(s, tier)
-	if family == "pine":
-		return mesh_for_pine_lod(s, tier)
-	return mesh_for_species(species, settings)
+		mesh = mesh_for_deciduous_lod(s, tier)
+	elif family == "pine":
+		mesh = mesh_for_pine_lod(s, tier)
+	else:
+		mesh = mesh_for_species(species, settings)
+	return VegAssetCache.store(key, mesh)
 
 
 static func _configure_cutout_shadow(_mat: ShaderMaterial, _threshold: float = 0.35) -> void:
@@ -288,6 +303,14 @@ static func _configure_foliage_cutout_shadow(mat: ShaderMaterial) -> void:
 
 
 static func material_for_species(species: String, settings: Dictionary = {}) -> ShaderMaterial:
+	var key := "mat|%s|%d" % [species, hash(settings)]
+	var cached: Variant = VegAssetCache.fetch(key)
+	if cached is ShaderMaterial:
+		return cached
+	return VegAssetCache.store(key, _build_material_for_species(species, settings))
+
+
+static func _build_material_for_species(species: String, settings: Dictionary) -> ShaderMaterial:
 	var family := mesh_family(species)
 	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
 	var spec: Dictionary = SPECS.get(species, SPECS.get(family, SPECS["shrub"]))
@@ -316,6 +339,14 @@ static func material_for_species(species: String, settings: Dictionary = {}) -> 
 
 
 static func bark_material_for_species(species: String, settings: Dictionary = {}) -> ShaderMaterial:
+	var key := "bark|%s|%d" % [species, hash(settings)]
+	var cached: Variant = VegAssetCache.fetch(key)
+	if cached is ShaderMaterial:
+		return cached
+	return VegAssetCache.store(key, _build_bark_material_for_species(species, settings))
+
+
+static func _build_bark_material_for_species(species: String, settings: Dictionary) -> ShaderMaterial:
 	var family := mesh_family(species)
 	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
 	var spec: Dictionary
@@ -354,6 +385,9 @@ static var _foot_cache: Dictionary = {}
 
 static func clear_foot_cache() -> void:
 	_foot_cache.clear()
+	# Every style-change site that invalidates foot heights invalidates built
+	# meshes/materials for the same reason — keep the two caches in lockstep.
+	VegAssetCache.clear()
 
 
 static func foot_local_y(species: String, settings: Dictionary = {}) -> float:

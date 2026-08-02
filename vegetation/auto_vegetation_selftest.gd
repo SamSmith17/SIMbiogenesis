@@ -60,6 +60,7 @@ func _initialize() -> void:
 	_test_reground_threads_growth()
 	_test_osm_key_match()
 	_test_forest_params_coverage()
+	_test_asset_cache_and_fade()
 	if _failures == 0:
 		print("AUTO-VEG SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -1158,3 +1159,52 @@ func _test_forest_params_coverage() -> void:
 	_check("unchanged style does NOT re-scatter",
 		not bool(tl._forest_params_changed(base, same)))
 	tl.free()
+
+
+## Phase 1: built assets are shared per (species, tier, settings-hash) — the
+## old path rebuilt an identical mesh + procedural texture per 256 m chunk per
+## LOD tier — and every veg MultiMesh gets a dithered FADE_SELF band instead of
+## Godot's default hard on/off visibility pop.
+func _test_asset_cache_and_fade() -> void:
+	VegAssetCache.clear()
+	var s := {"deciduous_canopy_w": 11.0}
+	var m1 := VegetationCardFactory.mesh_for_canopy_lod("deciduous", s,
+		VegetationCardFactory.CanopyLodTier.NEAR)
+	var m2 := VegetationCardFactory.mesh_for_canopy_lod("deciduous", s.duplicate(),
+		VegetationCardFactory.CanopyLodTier.NEAR)
+	_check("identical settings share one mesh", m1 == m2)
+	var m3 := VegetationCardFactory.mesh_for_canopy_lod("deciduous", s,
+		VegetationCardFactory.CanopyLodTier.FAR)
+	_check("tiers fork meshes", m1 != m3)
+	var m4 := VegetationCardFactory.mesh_for_canopy_lod("deciduous",
+		{"deciduous_canopy_w": 9.0}, VegetationCardFactory.CanopyLodTier.NEAR)
+	_check("different settings fork meshes", m1 != m4)
+	var mat1 := VegetationCardFactory.material_for_species("shrub", s)
+	var mat2 := VegetationCardFactory.material_for_species("shrub", s.duplicate())
+	_check("identical settings share one material", mat1 == mat2)
+	VegAssetCache.clear()
+	var m5 := VegetationCardFactory.mesh_for_canopy_lod("deciduous", s,
+		VegetationCardFactory.CanopyLodTier.NEAR)
+	_check("clear() forks a fresh mesh", m5 != m1)
+
+	var terrain := Node3D.new()
+	get_root().add_child(terrain)
+	var layer := AutoVegetationLayer.create_empty()
+	layer.add_bulk("deciduous", 0.0, 0.0, 0.0, 1.0, 10.0)
+	layer.add_bulk("grass_field", 5.0, 5.0, 0.0, 1.0, 0.0)
+	var ground := func(_x: float, _z: float) -> float: return 0.0
+	AutoVegetationRuntime.rebuild(terrain, layer, ground)
+	var root := terrain.get_node_or_null(AutoVegetationRuntime.ROOT_NAME)
+	var checked := 0
+	if root != null:
+		for child in root.get_children():
+			if child is MultiMeshInstance3D:
+				var gi := child as MultiMeshInstance3D
+				_check("%s uses FADE_SELF" % gi.name,
+					gi.visibility_range_fade_mode == GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF)
+				if gi.visibility_range_end > 0.0:
+					_check("%s has an end fade margin" % gi.name,
+						gi.visibility_range_end_margin > 0.0)
+				checked += 1
+	_check("fade check covered batches", checked >= 2, "got %d" % checked)
+	terrain.queue_free()

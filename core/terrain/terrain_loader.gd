@@ -1023,6 +1023,9 @@ func _run_post_terrain_sequence(include_vegetation: bool = true) -> void:
 
 func _run_vegetation_load_phase() -> void:
 	if not _terrain_config().show_auto_vegetation:
+		# Same explicit feedback as _request_auto_vegetation: a silently skipped
+		# fetch on a forested site reads as "auto-veg is broken".
+		_toast("Auto vegetation is OFF (Terrain options → Auto vegetation).", ToastUI.Level.INFO)
 		_load_progress_mark_done("osm_veg")
 		_mark_auto_veg_ready()
 		return
@@ -5831,6 +5834,10 @@ func _setup_auto_vegetation() -> void:
 ## VegetationService HTTPRequest, independent of the buildings request.
 func _request_auto_vegetation() -> void:
 	if not _terrain_config().show_auto_vegetation:
+		# Disabled is a valid choice, but a SILENT one reads as "auto-veg is
+		# broken" on a forested site — say why the forest is missing and where
+		# the switch lives.
+		_toast("Auto vegetation is OFF (Terrain options → Auto vegetation).", ToastUI.Level.INFO)
 		_clear_auto_vegetation()
 		return
 	var vs := get_node_or_null("/root/VegetationService")
