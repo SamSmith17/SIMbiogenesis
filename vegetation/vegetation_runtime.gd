@@ -135,6 +135,17 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 			settings, visibility_end_m, VegetationCardFactory.CanopyLodTier.NEAR, growth_map,
 			chunk_x, chunk_z)
 		return
+	# Phase 3a: static SoI-centred detail rings. Only chunks in the NEAR ring
+	# carry the expensive leaf-shell tier (+ its far pair); MID/OUTER chunks
+	# build the cheap FAR card mesh only, full-range. Tier is a property of
+	# the CHUNK's distance to the site core, not the camera — the high-detail
+	# region does not move with the player.
+	var ring := VegTierRings.ring_for_chunk_settings(chunk_x, chunk_z, CHUNK_SIZE_M, settings)
+	if ring != VegTierRings.RING_NEAR:
+		_build_canopy_single_batch(root, species, records, ground_y_at, align_to_surface,
+			settings, visibility_end_m, VegetationCardFactory.CanopyLodTier.FAR, growth_map,
+			chunk_x, chunk_z)
+		return
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
 	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
 	var vert_off := VegetationLayer.vertical_offset_for(species, settings)

@@ -344,6 +344,10 @@ var _auto_veg_generate_queued := false
 var _auto_veg_scatter_pending := false
 var _auto_veg_scatter_regen := false
 var _manual_veg_pending := false
+## Phase 3a: SoI centre the veg detail rings were last built around, and the
+## debounce flag for re-ringing after the player relocates the pin.
+var _veg_ring_built_center := Vector2.ZERO
+var _veg_ring_rebuild_pending := false
 
 ## True while _run_load_sequence() owns the pipeline (callbacks must not kick off
 ## parallel fetches or GPU-heavy side effects).
@@ -932,6 +936,11 @@ func _run_load_sequence() -> void:
 	if soi != null:
 		soi.load_for_site(_lat, _lon)
 		soi.bind_terrain(self)
+		# Phase 3a: veg detail rings are anchored on the SoI centre — re-ring
+		# (debounced) when the player relocates the pin.
+		var ring_cb := Callable(self, "_on_soi_changed_for_veg")
+		if soi.has_signal("soi_changed") and not soi.is_connected("soi_changed", ring_cb):
+			soi.connect("soi_changed", ring_cb)
 	call_deferred("_try_seed_starshade_graph")
 	call_deferred("_notify_graph_map_ready")
 
@@ -5800,6 +5809,28 @@ func _rebuild_all_vegetation() -> void:
 		_rebuild_auto_vegetation_async()
 
 
+## Re-ring vegetation (debounced) after the SoI pin moves: soi_changed fires
+## per drag step, and a full veg rebuild per step would stutter — wait for the
+## pin to settle, then rebuild once if it actually moved meaningfully.
+func _on_soi_changed_for_veg() -> void:
+	if not _built or _veg_ring_rebuild_pending:
+		return
+	var soi := get_node_or_null("/root/SoiService")
+	if soi == null or not soi.has_method("world_center"):
+		return
+	var c: Vector3 = soi.world_center()
+	if Vector2(c.x, c.z).distance_to(_veg_ring_built_center) < 64.0:
+		return
+	_veg_ring_rebuild_pending = true
+	var t := get_tree().create_timer(2.0)
+	t.timeout.connect(func() -> void:
+		_veg_ring_rebuild_pending = false
+		if not _built:
+			return
+		_rebuild_all_vegetation()
+	, CONNECT_ONE_SHOT)
+
+
 func _reground_vegetation() -> void:
 	if _vegetation_layer == null or _main == null:
 		return
@@ -6096,6 +6127,14 @@ func _auto_veg_runtime_settings() -> Dictionary:
 	# (VegetationGrowth.instance_scale_mult). Same value for every record in a
 	# rebuild, so it never affects batch partitioning.
 	s["growth_now_h"] = _growth_clock_h
+	# Phase 3a: static detail rings are anchored on the LIVE SoI centre. Moving
+	# the pin re-rings on the next rebuild (_on_soi_changed_for_veg debounces one).
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		var c: Vector3 = soi.world_center()
+		s["veg_ring_center_x"] = c.x
+		s["veg_ring_center_z"] = c.z
+		_veg_ring_built_center = Vector2(c.x, c.z)
 	if _is_large_world_map():
 		s["auto_force_far_canopy"] = true
 		s["auto_visibility_end_m"] = minf(float(s.get("auto_visibility_end_m", 1200.0)), 480.0)

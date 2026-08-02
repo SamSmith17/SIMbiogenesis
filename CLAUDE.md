@@ -87,6 +87,10 @@ Godot.exe.exe --headless --path . --script vegetation/vegetation_growth_selftest
 # purge, subspecies mesh divergence, VegetationLayer sparse-delta round-trip;
 # run --import first so VegStyleStore registers):
 Godot.exe.exe --headless --path . --script vegetation/veg_style_store_selftest.gd
+# Veg tier rings (offline — Phase 3a static SoI-centred detail rings: ring
+# math incl. closest-corner boundary rule, build-time tier assignment over
+# both runtimes, force_far NEAR-ring exemption; --import first):
+Godot.exe.exe --headless --path . --script vegetation/veg_tier_ring_selftest.gd
 # Site Report metrics/data + UI-compile self-test (offline, deterministic):
 Godot.exe.exe --headless --path . --script core/report/site_report_selftest.gd
 # NPC population self-test (offline, deterministic — SpaceRegistry tagging/
@@ -653,6 +657,15 @@ materials memoize in `VegAssetCache` keyed `kind|species|tier|hash(settings)`
 (matches batch partitioning; `clear_foot_cache()` clears it too). Generator
 scatter order is POINTS→ROWS→HEDGES→POLYS→GAP_FILL — explicitly mapped
 features must never lose the budget race to polygon fill.
+**Static SoI detail rings (Phase 3a, `vegetation/veg_tier_rings.gd`):** canopy
+tier is a property of each 256 m CHUNK's distance to the SoI centre (closest
+corner, so boundaries err toward detail), not the camera — NEAR ring
+(veg_near_ring_m 250) = leaf-shell pair, MID/OUTER = single FAR-card MM.
+`auto_force_far_canopy` (large maps) EXEMPTS the NEAR ring: the site core keeps
+full detail even on 30 km maps, structurally bounded. Ring centre keys
+(veg_ring_center_x/z) are injected live from `SoiService.world_center()` by
+`_auto_veg_runtime_settings`; moving the pin re-rings via a debounced rebuild
+(`_on_soi_changed_for_veg`). Selftest: `vegetation/veg_tier_ring_selftest.gd`.
 
 **Vegetation paint + live preview (`scenes/ui/vegetation_edit_ui.gd`,
 `scenes/ui/vegetation_preview_editor.gd`).** V toggles the bottom paint dock

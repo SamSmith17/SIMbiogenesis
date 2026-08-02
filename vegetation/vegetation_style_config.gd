@@ -137,6 +137,15 @@ static func defaults() -> Dictionary:
 		# (AutoVegetationRuntime.NEUTRAL_BULK), so this is the one honest knob.
 		# Applied at rebuild time — changing it does not re-scatter.
 		"auto_tree_scale": 1.0,
+		# Static SoI-centred detail rings (VegTierRings, Phase 3): the leaf-shell
+		# NEAR tier only exists in chunks within veg_near_ring_m of the SoI
+		# centre; veg_mid_ring_m bounds the FAR-card ring; beyond is the cheapest
+		# representation. Centre keys are injected live from SoiService at
+		# rebuild (veg_ring_center_x/z). Radii become quality-tier knobs in
+		# Phase 4.
+		"veg_tier_rings_enabled": true,
+		"veg_near_ring_m": 250.0,
+		"veg_mid_ring_m": 700.0,
 		"wind_strength": 0.03,
 		"wind_speed": 0.7,
 		"dither_strength": 1.0,
