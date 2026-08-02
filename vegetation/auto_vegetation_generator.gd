@@ -67,7 +67,10 @@ const NOMINAL_CARD_H := {
 	"corn": 1.6, "wheat": 0.9, "lettuce": 0.25,
 }
 
-enum ScatterPhase { POLYS, POINTS, ROWS, HEDGES, GAP_FILL, DONE }
+## FILLS (Phase 7) runs LAST: a player-authored per-area fill is the most
+## explicit instruction on the map, so it gets whatever budget the OSM scatter
+## left AND it is allowed to replace what the generator already put there.
+enum ScatterPhase { POLYS, POINTS, ROWS, HEDGES, GAP_FILL, FILLS, DONE }
 
 
 class GeneratorState:
@@ -104,6 +107,11 @@ class GeneratorState:
 	## rej_excluded, rej_slope, rej_open, rej_edge, rej_budget}. Consumed by the
 	## loader's post-scatter summary and (later) the veg-area inspector UI.
 	var poly_stats: Array = []
+	## Player per-area fills (AutoVegetationEdits.fills), replayed by the FILLS
+	## phase. Per-fill {tag, placed} lands in fill_stats for the loader's toast.
+	var fills: Array = []
+	var fill_idx := 0
+	var fill_stats: Array = []
 
 
 	func progress_ratio() -> float:
@@ -120,6 +128,8 @@ class GeneratorState:
 		if not dense and phase >= ScatterPhase.GAP_FILL:
 			done += 1.0
 		total += 1.0
+		total += maxf(float(fills.size()), 0.0)
+		done += float(mini(fill_idx, fills.size()))
 		return clampf(done / total, 0.0, 1.0)
 
 
@@ -213,6 +223,9 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 		state.biome["weights"] = VegSpeciesRegistry.filter_weights_by_climate(
 			bw as Dictionary, float(ctx.get("latitude", 0.0)),
 			float(ctx.get("winter_min_c", NAN)))
+	# Phase 7: player per-area fills, replayed as the last scatter phase.
+	var raw_fills: Variant = ctx.get("fills", [])
+	state.fills = (raw_fills as Array).duplicate() if raw_fills is Array else []
 	state.polys = _sort_polys_for_budget(
 		_trim_polygons(osm_payload.get("polygons", []), DENSE_POLY_BUDGET))
 	state.dense = state.polys.size() >= DENSE_POLY_SKIP_GAP_FILL
@@ -261,7 +274,7 @@ static func scatter_batch(state: GeneratorState, batch_size: int = SCATTER_BATCH
 						state.poly_stats.append(stat)
 			state.poly_idx += n
 			if state.poly_idx >= state.polys.size():
-				state.phase = ScatterPhase.GAP_FILL if not state.dense else ScatterPhase.DONE
+				state.phase = ScatterPhase.GAP_FILL if not state.dense else ScatterPhase.FILLS
 			return state.phase != ScatterPhase.DONE
 		ScatterPhase.POINTS:
 			var points: Array = state.osm_payload.get("tree_points", [])
@@ -298,9 +311,86 @@ static func scatter_batch(state: GeneratorState, batch_size: int = SCATTER_BATCH
 			if gate != null and gate.is_valid():
 				_fill_imagery_gaps(state.layer, state.osm_payload, gate, state.biome,
 					state.exclusion_index, state.ctx, state.rng)
-			state.phase = ScatterPhase.DONE
-			return false
+			state.phase = ScatterPhase.FILLS
+			return true
+		ScatterPhase.FILLS:
+			var n_fills := mini(maxi(batch_size / 8, 1), state.fills.size() - state.fill_idx)
+			for i in n_fills:
+				var fl: Variant = state.fills[state.fill_idx + i]
+				if fl is Dictionary:
+					state.fill_stats.append(
+						apply_fill(state.layer, fl as Dictionary, state.biome,
+							state.exclusion_index, state.ctx))
+			state.fill_idx += n_fills
+			if state.fill_idx >= state.fills.size():
+				state.phase = ScatterPhase.DONE
+				return false
+			return true
 	return false
+
+
+## Scatter ONE player-authored area fill. Shared by the generator's FILLS phase
+## and the loader's incremental "fill this area now" path, so a fill applied
+## live and the same fill replayed on the next load produce the same forest:
+## the RNG is seeded per fill, not from the run.
+##
+## Returns {tag, placed, removed} for the caller's toast/diagnostics.
+static func apply_fill(layer: AutoVegetationLayer, fill: Dictionary,
+		biome: Dictionary, exclusion_index: VegExclusionBuilder.ExclusionIndex,
+		ctx: Dictionary) -> Dictionary:
+	var tag := str(fill.get("tag", ""))
+	var poly: PackedVector2Array = fill.get("polygon", PackedVector2Array())
+	var out := {"tag": tag, "placed": 0, "removed": 0}
+	if layer == null or poly.size() < 3:
+		return out
+	if bool(fill.get("replace", true)):
+		out["removed"] = layer.remove_in_polygon(poly)
+	var species := str(fill.get("species", "deciduous"))
+	var style_d: Dictionary = ctx.get("style", {})
+	var weights := fill_weights(species, biome, style_d)
+	if weights.is_empty():
+		return out
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(fill.get("seed", 1337))
+	var height := float(fill.get("height_m", 0.0))
+	if height <= 0.0:
+		height = float(biome.get("default_height_m", 12.0))
+	# Density scales SPACING, not a count: the poisson scatter is what decides
+	# how many trees an area can hold, and the player is asking for a denser or
+	# thinner stand of the same forest.
+	var density := clampf(float(fill.get("density", 1.0)), 0.05, 4.0)
+	var spacing := maxf(float(biome.get("spacing_m", 6.0)) / sqrt(density), 1.5)
+	if _is_shrub_only(weights):
+		spacing = maxf(spacing * 0.85, 2.0)
+		if float(fill.get("height_m", 0.0)) <= 0.0:
+			height = 1.5
+	var stats := {}
+	# forest_min_area 999999 disables the "big woods thin out" rule: the player
+	# drew this outline deliberately, whatever its size.
+	out["placed"] = _scatter_polygon_poisson(layer, poly, weights, height, spacing,
+		exclusion_index, rng, ctx, true, "fill", 999999.0, false, stats)
+	return out
+
+
+## The species-weight dict a fill choice resolves to. "auto" keeps the biome mix
+## (climate-gated in prepare_context), "mixed" honours the player's tuned
+## mixed-woodland composition, and anything else is that one species.
+static func fill_weights(species: String, biome: Dictionary, style: Dictionary) -> Dictionary:
+	match species:
+		"", "auto":
+			var bw: Variant = biome.get("weights", {"deciduous": 1.0})
+			return (bw as Dictionary).duplicate(true) if bw is Dictionary else {"deciduous": 1.0}
+		"mixed":
+			var mix := BiomePalette.mix_weights_from_style(style)
+			return mix if not mix.is_empty() else {"pine": 0.5, "deciduous": 0.5}
+	return {species: 1.0}
+
+
+static func _is_shrub_only(weights: Dictionary) -> bool:
+	for k in weights:
+		if VegSpeciesCatalog.mesh_family(str(k)) != "shrub":
+			return false
+	return not weights.is_empty()
 
 
 static func _trim_polygons(raw: Array, max_count: int) -> Array:

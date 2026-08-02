@@ -679,7 +679,9 @@ func _update_veg_focus(hit_pos: Vector3) -> bool:
 		var act := "Interact"
 		if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
 			act = _prompt_ui.get_action_label("interact")
-		_crosshair.set_prompt_text("[%s / Click] Tune %s look" % [act, str(pick.get("kind_label", "vegetation"))])
+		# Phase 7: this opens the per-area Fill drawer (which still carries a
+		# "Tune look…" button through to the all-of-type edit).
+		_crosshair.set_prompt_text("[%s / Click] Fill %s" % [act, str(pick.get("kind_label", "vegetation"))])
 	return true
 
 
@@ -951,7 +953,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_loader.call("open_building_builder", bidx)
 			get_viewport().set_input_as_handled()
 			return
-	# Otherwise a focused OSM veg area → open its Tune look modal.
+	# Otherwise a focused OSM veg area → open its per-area Fill drawer.
 	_try_open_veg_area()
 
 

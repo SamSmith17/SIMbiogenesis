@@ -111,6 +111,7 @@ const PLACED_PROPS_UI_SCRIPT := preload("res://scenes/ui/placed_props_ui.gd")
 const PLACED_PROP_EDIT_UI_SCRIPT: GDScript = preload("res://scenes/ui/placed_prop_edit_ui.gd")
 const BUILDING_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/building_builder_modal.gd")
 const POND_EDIT_MODAL_SCRIPT := preload("res://scenes/ui/pond_edit_ui.gd")
+const VEG_AREA_FILL_UI_SCRIPT := preload("res://scenes/ui/veg_area_fill_ui.gd")
 const STARSHADE_EDIT_MODAL_SCRIPT := preload("res://scenes/ui/starshade_edit_modal.gd")
 const PALLET_RACK_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/pallet_rack_builder_modal.gd")
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
@@ -260,6 +261,7 @@ var _custom_buildings_root: Node3D = null
 var _building_builder_ui: Control = null
 var _starshade_edit_ui: Control = null
 var _pond_edit_ui: Control = null
+var _veg_area_fill_ui: Control = null
 var _pallet_rack_builder_ui: Control = null
 var _building_highlight: MeshInstance3D = null
 ## OSM solar arrays built in-world but NOT auto-added to the graph. Each record:
@@ -6238,6 +6240,9 @@ func _auto_veg_ctx() -> Dictionary:
 		"latitude": _lat,
 		"half_extent_m": thin_half,
 		"winter_min_c": _site_winter_min_c(),
+		# Phase 7: player per-area fills scatter inside the generator (FILLS
+		# phase) so they obey the same budgets/exclusions as OSM polygons.
+		"fills": _auto_veg_edits.fills.duplicate(true) if _auto_veg_edits != null else [],
 		"seed": int(_lat * 10000.0) ^ int(_lon * 10000.0),
 		"exclusions": _auto_veg_exclusions(),
 		"ground_y_at": Callable(self, "_ground_height_at"),
@@ -6802,6 +6807,101 @@ func apply_auto_vegetation_patch(poly: PackedVector2Array, params: Dictionary,
 		n = _auto_veg_layer.apply_patch_in_polygon(poly, params, bulk_only)
 		_rebuild_auto_vegetation()
 	return n
+
+
+## ---------------------------------------------------------------------------
+## Per-area fill (veg overhaul Phase 7)
+## ---------------------------------------------------------------------------
+
+## Fill one OSM vegetation area with a chosen species. Records the fill (keyed by
+## the area's stable centroid tag, so it survives an OSM re-fetch), applies it to
+## the LIVE layer immediately, and rebuilds. The same fill replays through the
+## generator's FILLS phase on the next load and produces the identical forest —
+## AutoVegetationGenerator.apply_fill is the one implementation, seeded per fill
+## rather than from the run.
+##
+## `params`: {species, density, height_m, replace}. Returns {placed, removed}.
+func apply_area_fill(area_idx: int, params: Dictionary) -> Dictionary:
+	var out := {"placed": 0, "removed": 0, "ok": false}
+	var polys: Variant = _auto_veg_data.get("polygons", [])
+	if not (polys is Array):
+		return out
+	var info := VegAreaPicker.area_info(polys as Array, area_idx)
+	if not bool(info.get("valid", false)):
+		return out
+	var poly: PackedVector2Array = info.get("points", PackedVector2Array())
+	var tag := str(info.get("tag", ""))
+	if _auto_veg_edits == null:
+		_auto_veg_edits = AutoVegetationEdits.create_empty()
+	_auto_veg_edits.add_fill(tag, poly, params)
+	_auto_veg_edits.save(_lat, _lon)
+	if _auto_veg_layer == null or not _auto_veg_generated:
+		# Nothing scattered yet (fill drawn mid-load): the record is saved and the
+		# generator's FILLS phase will place it.
+		out["ok"] = true
+		return out
+	var at := _auto_veg_edits.fill_index_for_tag(tag)
+	var fill: Dictionary = _auto_veg_edits.fills[at]
+	var res := AutoVegetationGenerator.apply_fill(_auto_veg_layer, fill,
+		_auto_veg_biome(), VegExclusionBuilder.build_index(_auto_veg_exclusions(),
+			maxf(_osm_half_extent, _half_extent)), _auto_veg_ctx())
+	out["placed"] = int(res.get("placed", 0))
+	out["removed"] = int(res.get("removed", 0))
+	out["ok"] = true
+	_rebuild_litter_mask()
+	_rebuild_auto_vegetation()
+	return out
+
+
+## Drop an area's fill record. The trees it placed stay until the next full
+## re-scatter (they are ordinary layer instances by then) unless `clear_now`,
+## which strips everything inside the outline — the honest "undo the fill".
+func clear_area_fill(area_idx: int, clear_now: bool = true) -> bool:
+	var polys: Variant = _auto_veg_data.get("polygons", [])
+	if not (polys is Array):
+		return false
+	var info := VegAreaPicker.area_info(polys as Array, area_idx)
+	if not bool(info.get("valid", false)) or _auto_veg_edits == null:
+		return false
+	var tag := str(info.get("tag", ""))
+	var had := _auto_veg_edits.remove_fill_for_tag(tag)
+	if clear_now:
+		var poly: PackedVector2Array = info.get("points", PackedVector2Array())
+		_auto_veg_edits.add_cleared_polygon(poly)
+		if _auto_veg_layer != null:
+			_auto_veg_layer.remove_in_polygon(poly)
+	_auto_veg_edits.save(_lat, _lon)
+	if _auto_veg_layer != null and _auto_veg_generated:
+		_rebuild_litter_mask()
+		_rebuild_auto_vegetation()
+	return had or clear_now
+
+
+## The fill recorded for an area, or {} — lets the UI open showing what is
+## already there instead of defaults.
+func area_fill_params(area_idx: int) -> Dictionary:
+	var polys: Variant = _auto_veg_data.get("polygons", [])
+	if not (polys is Array) or _auto_veg_edits == null:
+		return {}
+	var info := VegAreaPicker.area_info(polys as Array, area_idx)
+	if not bool(info.get("valid", false)):
+		return {}
+	var at := _auto_veg_edits.fill_index_for_tag(str(info.get("tag", "")))
+	if at < 0:
+		return {}
+	return (_auto_veg_edits.fills[at] as Dictionary).duplicate(true)
+
+
+## The biome table the generator would use for this site, climate-gated the same
+## way prepare_context gates it — so a live fill can't offer species the next
+## re-scatter would refuse.
+func _auto_veg_biome() -> Dictionary:
+	var biome := BiomePalette.for_location(_lat)
+	var bw: Variant = biome.get("weights", {})
+	if bw is Dictionary:
+		biome["weights"] = VegSpeciesRegistry.filter_weights_by_climate(
+			bw as Dictionary, _lat, _site_winter_min_c())
+	return biome
 
 
 ## Patch bulk (non-hero) vegetation inside a locked selection — manual + auto layers.
@@ -8633,10 +8733,25 @@ func set_veg_focus_idx(idx: int) -> void:
 	update_vegetation_highlight(poly, Color(1.0, 0.75, 0.15, 0.4), true)
 
 
-## Interact / O on a focused veg area → open the Tune look modal seeded to that
-## area's veg type. (Per-area vs all-of-type apply lands in a later phase; for now
-## the modal opens on the right species so edits target the correct look.)
+## Interact / O on a focused veg area → the per-area Fill drawer (Phase 7). It
+## carries a "Tune look…" button through to open_veg_area_tune for the
+## all-of-type edit, which is what this used to do on its own.
 func open_veg_area_modal(area_idx: int) -> void:
+	var polys: Variant = _auto_veg_data.get("polygons", [])
+	if not (polys is Array) or area_idx < 0 or area_idx >= (polys as Array).size():
+		return
+	if _veg_area_fill_ui == null or not is_instance_valid(_veg_area_fill_ui):
+		_setup_veg_area_fill_ui()
+	if _veg_area_fill_ui != null and _veg_area_fill_ui.has_method("open_for_area"):
+		_veg_area_fill_ui.call("open_for_area", area_idx)
+		return
+	open_veg_area_tune(area_idx)
+
+
+## Open the Tune look modal seeded to this area's veg type — an ALL-OF-TYPE
+## edit (how every wood on the map looks), as distinct from filling this one
+## outline.
+func open_veg_area_tune(area_idx: int) -> void:
 	var polys: Variant = _auto_veg_data.get("polygons", [])
 	if not (polys is Array) or area_idx < 0 or area_idx >= (polys as Array).size():
 		return
@@ -8645,6 +8760,14 @@ func open_veg_area_modal(area_idx: int) -> void:
 		return
 	var kind := str((d as Dictionary).get("kind", "grass_field"))
 	open_vegetation_preview_editor(_preset_for_veg_kind(kind))
+
+
+## Area header for the Fill drawer (kind label, size, stable tag).
+func get_veg_area_info(area_idx: int) -> Dictionary:
+	var polys: Variant = _auto_veg_data.get("polygons", [])
+	if not (polys is Array):
+		return {"valid": false}
+	return VegAreaPicker.area_info(polys as Array, area_idx)
 
 
 ## OSM area kind → VegetationPaint.Preset for seeding the modal. Honors an explicit
@@ -8696,6 +8819,26 @@ func _setup_building_builder_ui() -> void:
 	layer.add_child(ui)
 	ui.bind_loader(self)
 	_building_builder_ui = ui
+
+
+## Per-area vegetation Fill drawer (Phase 7). Created lazily on first use — an
+## area fill is an occasional action, and the drawer costs nothing until then.
+func _setup_veg_area_fill_ui() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "VegAreaFillLayer"
+	layer.layer = 26
+	ui_layer.add_child(layer)
+	var ui := PanelContainer.new()
+	ui.name = "VegAreaFillModal"
+	ui.set_script(VEG_AREA_FILL_UI_SCRIPT)
+	layer.add_child(ui)
+	ui.call("bind_loader", self)
+	_veg_area_fill_ui = ui
 
 
 func _setup_pond_edit_ui() -> void:

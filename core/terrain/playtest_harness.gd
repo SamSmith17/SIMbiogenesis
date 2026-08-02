@@ -147,6 +147,8 @@ func _ready() -> void:
 			_run_culvert_downhill_verify.call_deferred()
 		elif _capture_mode == "veg":
 			_run_veg_capture.call_deferred()
+		elif _capture_mode == "areafill":
+			_run_area_fill_verify.call_deferred()
 		else:
 			_await_and_run.call_deferred()
 
@@ -326,6 +328,8 @@ func _launch_map() -> void:
 		_run_culvert_downhill_verify()
 	elif _capture_mode == "veg":
 		_run_veg_capture()
+	elif _capture_mode == "areafill":
+		_run_area_fill_verify()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -359,6 +363,8 @@ func _launch_scene_direct() -> void:
 		_run_pond_id_verify()
 	elif _capture_mode == "veg":
 		_run_veg_capture()
+	elif _capture_mode == "areafill":
+		_run_area_fill_verify()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -3433,3 +3439,176 @@ func _write_veg_diagnostics(loader: Node, dir: String) -> void:
 		f.close()
 	print("PlaytestHarness: wrote veg_diagnostics.json (%d batches, %d instances)" % [
 		int(totals["batches"]), int(totals["instances"])])
+
+
+# ==================== AREA FILL VERIFY (--capture=areafill) ====================
+# Veg overhaul Phase 7. Drives the REAL loader API on a real saved map: pick the
+# largest OSM vegetation area, fill it with a chosen species, assert the layer
+# actually changed and the fill persisted, shoot before/after PNGs of that
+# outline, then RESTORE the map's auto_veg_edits file byte-for-byte so a
+# regression run never mutates the player's site.
+
+const AREA_FILL_SPECIES := "pine"
+const AREA_FILL_DENSITY := 1.4
+
+
+func _run_area_fill_verify() -> void:
+	var loader := await _find_terrain_loader()
+	if loader == null:
+		push_error("PlaytestHarness: areafill needs a TerrainLoader map")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	var waited := 0.0
+	while loader.get("_auto_veg_generated") != true and waited < VEG_SCATTER_WAIT_MAX_S:
+		await get_tree().create_timer(2.0).timeout
+		waited += 2.0
+	if loader.get("_auto_veg_generated") != true:
+		print("PlaytestHarness: areafill FAIL — no auto-veg scatter after %.0f s" % waited)
+		_maybe_quit()
+		return
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	_set_capture_conditions()
+
+	# Snapshot the persisted edits so the run leaves no trace.
+	var edits_path: String = AutoVegetationEdits.save_path_for_map(
+		float(loader.get("_lat")), float(loader.get("_lon")))
+	var had_edits := FileAccess.file_exists(edits_path)
+	var edits_before := ""
+	if had_edits:
+		var rf := FileAccess.open(edits_path, FileAccess.READ)
+		if rf != null:
+			edits_before = rf.get_as_text()
+
+	var pick := _largest_veg_area(loader)
+	var idx := int(pick.get("area_idx", -1))
+	if idx < 0:
+		print("PlaytestHarness: areafill FAIL — map has no OSM vegetation areas")
+		_maybe_quit()
+		return
+	var centroid: Vector2 = pick.get("centroid", Vector2.ZERO)
+	print("PlaytestHarness: areafill — area #%d %s %.1f ha at (%.0f, %.0f)" % [
+		idx, str(pick.get("kind_label", "?")), float(pick.get("area_m2", 0.0)) / 10000.0,
+		centroid.x, centroid.y])
+
+	var label := _shots_label if not _shots_label.is_empty() else "area_fill"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var cam := Camera3D.new()
+	cam.name = "PlaytestCam"
+	cam.far = 40000.0
+	get_tree().current_scene.add_child(cam)
+	cam.make_current()
+	var manifest: Array = []
+	var wps := _area_fill_waypoints(loader, centroid)
+	await _capture_set(cam, wps, "before", dir, manifest)
+
+	var before_total := _auto_bulk_total(loader)
+	var res: Dictionary = loader.call("apply_area_fill", idx, {
+		"species": AREA_FILL_SPECIES,
+		"density": AREA_FILL_DENSITY,
+		"height_m": 0.0,
+		"replace": true,
+	})
+	await get_tree().create_timer(2.5).timeout
+	var placed := int(res.get("placed", 0))
+	var removed := int(res.get("removed", 0))
+	var after_total := _auto_bulk_total(loader)
+	print("PlaytestHarness: areafill — placed %d, removed %d (layer %d -> %d)" % [
+		placed, removed, before_total, after_total])
+	var ok := placed > 0
+	print("PlaytestHarness: areafill %s — fill placed instances" % ["PASS" if ok else "FAIL"])
+
+	# The fill has to be the SPECIES asked for, not just "some trees".
+	var species_ok := _auto_species_count(loader, AREA_FILL_SPECIES) > 0
+	print("PlaytestHarness: areafill %s — chosen species present in the layer"
+		% ["PASS" if species_ok else "FAIL"])
+
+	# ...and it has to persist, or it vanishes on the next load.
+	var saved: Dictionary = loader.call("area_fill_params", idx)
+	var persisted := str(saved.get("species", "")) == AREA_FILL_SPECIES
+	print("PlaytestHarness: areafill %s — fill recorded for the area (species=%s)" % [
+		"PASS" if persisted else "FAIL", str(saved.get("species", "<none>"))])
+	var on_disk := FileAccess.file_exists(edits_path)
+	print("PlaytestHarness: areafill %s — edits written to disk" % ["PASS" if on_disk else "FAIL"])
+
+	await _capture_set(cam, wps, "after", dir, manifest)
+
+	# Clear, and confirm the area empties.
+	var cleared_ok := bool(loader.call("clear_area_fill", idx, true))
+	await get_tree().create_timer(2.0).timeout
+	print("PlaytestHarness: areafill %s — clear removed the fill record"
+		% ["PASS" if cleared_ok else "FAIL"])
+	await _capture_set(cam, wps, "cleared", dir, manifest)
+
+	# Restore the map's saved edits exactly as they were.
+	if had_edits:
+		var wf := FileAccess.open(edits_path, FileAccess.WRITE)
+		if wf != null:
+			wf.store_string(edits_before)
+	elif FileAccess.file_exists(edits_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(edits_path))
+	print("PlaytestHarness: areafill — restored %s" % (
+		"the map's original edits" if had_edits else "a clean (no edits) map"))
+
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	cam.queue_free()
+	print("PlaytestHarness: areafill — %d shots in %s" % [
+		manifest.size(), ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
+## Biggest OSM veg polygon on the map — the one whose fill is most visible.
+func _largest_veg_area(loader: Node) -> Dictionary:
+	var data: Variant = loader.get("_auto_veg_data")
+	if not (data is Dictionary):
+		return {"area_idx": -1}
+	var polys: Variant = (data as Dictionary).get("polygons", [])
+	if not (polys is Array):
+		return {"area_idx": -1}
+	var best := {"area_idx": -1}
+	var best_area := 0.0
+	for i in (polys as Array).size():
+		var info := VegAreaPicker.area_info(polys as Array, i)
+		if not bool(info.get("valid", false)):
+			continue
+		var a := float(info.get("area_m2", 0.0))
+		if a > best_area:
+			best_area = a
+			best = info
+	return best
+
+
+func _auto_bulk_total(loader: Node) -> int:
+	var layer: Variant = loader.get("_auto_veg_layer")
+	if layer == null or not (layer is AutoVegetationLayer):
+		return 0
+	return (layer as AutoVegetationLayer).total_bulk()
+
+
+func _auto_species_count(loader: Node, species: String) -> int:
+	var layer: Variant = loader.get("_auto_veg_layer")
+	if layer == null or not (layer is AutoVegetationLayer):
+		return 0
+	var recs: Variant = (layer as AutoVegetationLayer).bulk.get(species, [])
+	return (recs as Array).size() if recs is Array else 0
+
+
+## Two views of the filled outline: a low oblique that shows the trees against
+## the sky, and an overhead that shows the outline's shape.
+func _area_fill_waypoints(loader: Node, centroid: Vector2) -> Array:
+	var gy := _ground_y(loader, centroid.x, centroid.y)
+	return [
+		{
+			"pos": Vector3(centroid.x - 150.0, gy + 45.0, centroid.y - 150.0),
+			"look": Vector3(centroid.x, gy + 8.0, centroid.y),
+		},
+		{
+			"pos": Vector3(centroid.x, gy + 260.0, centroid.y + 40.0),
+			"look": Vector3(centroid.x, gy, centroid.y),
+		},
+	]

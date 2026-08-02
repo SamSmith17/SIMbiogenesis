@@ -2,14 +2,24 @@ class_name AutoVegetationEdits
 extends RefCounted
 
 ## Per-map persisted edits to auto-populated vegetation (cleared zones, patches,
-## user-painted forest zones). The generated AutoVegetationLayer is rebuilt from
-## OSM on each load; these edits are replayed after generation.
+## per-area fills, user-painted forest zones). The generated AutoVegetationLayer
+## is rebuilt from OSM on each load; these edits are replayed after generation.
+##
+## `cleared` and `patches` are SUBTRACTIVE/modifying: they are replayed over the
+## finished layer. `fills` (VERSION 4) are ADDITIVE and instead run inside the
+## generator as its last scatter phase, so a filled area is subject to the same
+## budgets, exclusions and slope rules as any OSM polygon — and a clear drawn
+## later still wins, because the subtractive pass runs after all scatter.
 
-const VERSION := 3
+const VERSION := 4
 
 var cleared: Array = []  # Array[PackedVector2Array]
 var patches: Array = []  # Array[Dictionary]
 var forests: Array = []  # Array[Dictionary] user-painted forest zones
+## Array[Dictionary] — see add_fill(). Keyed by `tag` (the area's metre-rounded
+## centroid, VegAreaPicker.area_info) so a fill survives an OSM re-fetch that
+## renumbers the polygon list.
+var fills: Array = []
 
 
 static func create_empty() -> AutoVegetationEdits:
@@ -17,6 +27,7 @@ static func create_empty() -> AutoVegetationEdits:
 	edits.cleared = []
 	edits.patches = []
 	edits.forests = []
+	edits.fills = []
 	return edits
 
 
@@ -74,6 +85,71 @@ func add_forest_zone(poly: PackedVector2Array, params: Dictionary) -> void:
 	})
 
 
+## Record (or replace) a per-area fill. One fill per `tag` — re-filling an area
+## overwrites its previous settings rather than stacking a second forest into
+## the same polygon.
+func add_fill(tag: String, poly: PackedVector2Array, params: Dictionary) -> void:
+	if tag.is_empty() or poly.size() < 3:
+		return
+	var entry := {
+		"tag": tag,
+		"polygon": poly.duplicate(),
+		"species": str(params.get("species", "deciduous")),
+		"density": clampf(float(params.get("density", 1.0)), 0.05, 4.0),
+		"height_m": maxf(float(params.get("height_m", 0.0)), 0.0),
+		"replace": bool(params.get("replace", true)),
+		# Deterministic per fill, so a replay reproduces the same forest.
+		"seed": int(params.get("seed", _poly_seed(poly))),
+	}
+	var at := fill_index_for_tag(tag)
+	if at >= 0:
+		fills[at] = entry
+	else:
+		fills.append(entry)
+	# Filling an area that was previously cleared has to LIFT that clear: the
+	# subtractive pass runs after all scatter, so an old clear over the same
+	# outline would silently erase the forest the player just planted.
+	_drop_cleared_matching(poly)
+
+
+## Metre-rounded centroid id for a polygon — the same scheme
+## VegAreaPicker.area_info uses, so a fill and a clear drawn over the same OSM
+## area agree on identity across an OSM re-fetch.
+static func centroid_tag(poly: PackedVector2Array) -> String:
+	if poly.is_empty():
+		return ""
+	var c := Vector2.ZERO
+	for p in poly:
+		c += p
+	c /= float(poly.size())
+	return "veg_%d_%d" % [roundi(c.x), roundi(c.y)]
+
+
+func _drop_cleared_matching(poly: PackedVector2Array) -> void:
+	var tag := centroid_tag(poly)
+	var i := cleared.size() - 1
+	while i >= 0:
+		if cleared[i] is PackedVector2Array \
+				and centroid_tag(cleared[i] as PackedVector2Array) == tag:
+			cleared.remove_at(i)
+		i -= 1
+
+
+func fill_index_for_tag(tag: String) -> int:
+	for i in fills.size():
+		if fills[i] is Dictionary and str((fills[i] as Dictionary).get("tag", "")) == tag:
+			return i
+	return -1
+
+
+func remove_fill_for_tag(tag: String) -> bool:
+	var at := fill_index_for_tag(tag)
+	if at < 0:
+		return false
+	fills.remove_at(at)
+	return true
+
+
 func remove_forest_at_index(idx: int) -> void:
 	if idx >= 0 and idx < forests.size():
 		forests.remove_at(idx)
@@ -123,13 +199,51 @@ func serialize() -> Dictionary:
 					"seed": int(d.get("seed", 0)),
 					"source": str(d.get("source", "paint")),
 				})
-	return {"version": VERSION, "cleared": polys, "patches": patch_arr, "forests": forest_arr}
+	# Every payload key needs a matching entry here AND in deserialize(): the
+	# VegetationService cache once shipped `hedge_rows` in one direction only and
+	# silently dropped every hedge on reload.
+	var fill_arr: Array = []
+	for fl in fills:
+		if fl is Dictionary:
+			var d: Dictionary = fl
+			var poly: PackedVector2Array = d.get("polygon", PackedVector2Array())
+			if poly.size() >= 3 and not str(d.get("tag", "")).is_empty():
+				fill_arr.append({
+					"tag": str(d.get("tag", "")),
+					"polygon": _ser_points(poly),
+					"species": str(d.get("species", "deciduous")),
+					"density": float(d.get("density", 1.0)),
+					"height_m": float(d.get("height_m", 0.0)),
+					"replace": bool(d.get("replace", true)),
+					"seed": int(d.get("seed", 0)),
+				})
+	return {"version": VERSION, "cleared": polys, "patches": patch_arr,
+		"forests": forest_arr, "fills": fill_arr}
 
 
 func deserialize(data: Dictionary) -> void:
 	cleared = []
 	patches = []
 	forests = []
+	# A v3 file simply has no `fills` key — nothing to migrate, the map just
+	# opens with no per-area fills, which is what it had.
+	fills = []
+	for raw in data.get("fills", []):
+		if not (raw is Dictionary):
+			continue
+		var fd: Dictionary = raw
+		var fpts := _deser_points(fd.get("polygon", []))
+		var tag := str(fd.get("tag", ""))
+		if fpts.size() >= 3 and not tag.is_empty():
+			fills.append({
+				"tag": tag,
+				"polygon": fpts,
+				"species": str(fd.get("species", "deciduous")),
+				"density": clampf(float(fd.get("density", 1.0)), 0.05, 4.0),
+				"height_m": maxf(float(fd.get("height_m", 0.0)), 0.0),
+				"replace": bool(fd.get("replace", true)),
+				"seed": int(fd.get("seed", _poly_seed(fpts))),
+			})
 	for raw in data.get("cleared", []):
 		var pts := _deser_points(raw)
 		if pts.size() >= 3:

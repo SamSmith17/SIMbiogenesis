@@ -103,6 +103,14 @@ Godot.exe.exe --headless --path . --script vegetation/veg_style_store_selftest.g
 # filtering, food yields/harvest windows (Phase 10 feed), photocard drop-in
 # hook (assets/vegetation/photocards/<id>.png or user://veg_photocards/):
 Godot.exe.exe --headless --path . --script vegetation/veg_species_registry_selftest.gd
+# Veg phenology (offline — Phase 6: latitude damping of the seasonal signals
+# (no autumn/leaf-drop/dormancy below ~15° abs lat, full by ~35°, hemisphere
+# flip still at full strength), SeasonModel.estimate_winter_min_c incl. the
+# southern-hemisphere half-year window, the species cold-hardiness gate
+# (min_winter_c + tolerance; NAN = latitude only, so offline keeps its forest),
+# VegLeafFall's drop window vs spring leaf-out, and the VegLitterMask
+# sizing/conifer-exclusion/seasonal-strength rules):
+Godot.exe.exe --headless --path . --script vegetation/veg_phenology_selftest.gd
 # Veg tier rings + impostor offline checks (Phase 3: ring math incl.
 # closest-corner boundary rule, build-time tier assignment over both runtimes,
 # force_far NEAR-ring exemption, impostor bake-key stability/quad geometry/
@@ -250,6 +258,15 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=loc_48p325
 # surfaces, VegAssetCache stats, primitives/draw-call counters, key style knobs).
 # Run before/after ANY veg rendering change and diff the JSON + boundary shots:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=veg --shots-dir=<label> --quit-after-capture
+# Per-area fill end-to-end (WINDOWED — veg overhaul Phase 7): on a REAL saved
+# map, picks the largest OSM vegetation area, drives the loader's own
+# apply_area_fill / area_fill_params / clear_area_fill, and asserts the fill
+# placed instances, planted the CHOSEN species, persisted to the map's
+# auto_veg_edits file, and cleared again; shoots before/after/cleared PNG pairs
+# of the outline. It SNAPSHOTS and RESTORES auto_veg_edits_<lat>_<lon>.json, so
+# a regression run never mutates the player's site (verify after: the file is
+# back at its original version/cleared/patch counts with 0 fills):
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=areafill --shots-dir=<label> --quit-after-capture
 # Ambient resource-flow regression guard (WINDOWED — the harness hard no-ops
 # under --headless; no screenshots, console-only): builds a primed pond+siphon+
 # culvert-outlet, keeps SystemGraphView.visible=false the ENTIRE time (graph
@@ -697,6 +714,54 @@ keys (veg_ring_center_x/z) injected live from `SoiService.world_center()`;
 moving the pin re-rings via a debounced rebuild (`_on_soi_changed_for_veg`).
 Selftest: `vegetation/veg_tier_ring_selftest.gd` (incl. bake-key stability,
 quad geometry, headless fallback).
+
+**Seasonal phenology (Phase 6).** `SeasonModel.season_signals` now damps every
+signal by ABSOLUTE latitude (`seasonality_strength`: 0 below ~15°, 1 by ~35°,
+returned in the dict as `seasonality`) — inside the tropics day length barely
+varies, so a mango at 5°N must never turn red; the SH half-year flip still runs
+at full strength. `SeasonModel.estimate_winter_min_c(ws, lat)` samples the
+coldest ~60 days (flipped south) off WeatherService and feeds
+`VegSpeciesRegistry.species_allowed_at(id, lat, winter_min_c)` — cold-hardiness
+now gates the auto mix alongside the latitude range, with NAN = "unknown, use
+latitude only" so an offline session keeps its forest.
+`vegetation/leaf_phenology.gdshaderinc` is the ONE leaf law shared by all three
+canopy tiers (leaf shells / FAR cards / impostor): whole-leaf removal on a
+WORLD-stable key at `(1-leaf_coverage)*deciduousness` (the cards used a
+SCREEN-space dither that crawled with the camera; the shells shrank leaves to
+nothing instead of dropping them), one per-tree autumn ramp, and winter
+dormancy through the FOLIAGE MASK rather than deciduousness — so evergreen
+needles grey off in the impostor tier the way they already did up close.
+`VegLeafFall` (`vegetation/veg_leaf_fall.gd`, High/Ultra via
+`RenderProfile.veg_profile()["leaf_fall"]`) hangs ≤6 GPUParticles3D emitters
+over the nearest NEAR-ring deciduous chunks during the drop window; it SCANS
+the built batch nodes on a 0.75 s tick rather than living inside them, so it
+survives every veg rebuild. `VegLitterMask` rasterises the deciduous instances
+into a coverage mask (resolution from the map extent — a fixed 256² over 30 km
+is 117 m/texel and one street tree browned a 350 m circle) consumed by
+`terrain_detail.gdshader`'s `litter_*` uniforms, pushed by terrain_loader with
+the snow uniforms and change-gated. Selftest:
+`vegetation/veg_phenology_selftest.gd`.
+
+**Per-area fill (Phase 7).** Aim the crosshair at an OSM vegetation area and
+Interact → the Fill drawer (`scenes/ui/veg_area_fill_ui.gd`, opened by
+`terrain_loader.open_veg_area_modal`; its "Tune look…" button still reaches the
+all-of-type edit via `open_veg_area_tune`). Fills are ADDITIVE edits stored in
+`AutoVegetationEdits.fills` (VERSION 4) keyed by the area's metre-rounded
+centroid tag, so they survive an OSM re-fetch that renumbers the polygon list;
+`cleared`/`patches` stay subtractive and are still replayed after all scatter,
+which is why `add_fill` LIFTS any clear over the same outline (otherwise the
+clear would erase the forest just planted). One implementation does the work —
+`AutoVegetationGenerator.apply_fill`, seeded PER FILL — called both by the
+generator's new FILLS phase (last, after GAP_FILL: a player-authored fill is
+the most explicit instruction on the map and may replace what scatter put
+there) and by `terrain_loader.apply_area_fill` for the live edit, so a fill
+looks identical before and after a reload. Density scales SPACING, not a count.
+Loader API: `apply_area_fill(idx, {species, density, height_m, replace})`,
+`area_fill_params(idx)`, `clear_area_fill(idx, clear_now)`,
+`get_veg_area_info(idx)`. Verify with `--capture=areafill` (above) plus the
+`_test_area_fill_*` checks in `auto_vegetation_selftest.gd`. NOT yet done:
+incremental per-chunk rebuild — a fill currently triggers the normal full
+auto-veg rebuild.
 
 **Vegetation paint + live preview (`scenes/ui/vegetation_edit_ui.gd`,
 `scenes/ui/vegetation_preview_editor.gd`).** V toggles the bottom paint dock

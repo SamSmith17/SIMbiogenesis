@@ -61,6 +61,8 @@ func _initialize() -> void:
 	_test_osm_key_match()
 	_test_forest_params_coverage()
 	_test_asset_cache_and_fade()
+	_test_area_fill_edits()
+	_test_area_fill_scatter()
 	if _failures == 0:
 		print("AUTO-VEG SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -1208,3 +1210,140 @@ func _test_asset_cache_and_fade() -> void:
 				checked += 1
 	_check("fade check covered batches", checked >= 2, "got %d" % checked)
 	terrain.queue_free()
+
+
+## --- Per-area fill (veg overhaul Phase 7) -----------------------------------
+
+func _fill_area_poly() -> PackedVector2Array:
+	return PackedVector2Array([
+		Vector2(-60, -60), Vector2(60, -60), Vector2(60, 60), Vector2(-60, 60)])
+
+
+## Persistence: v4 fills round-trip, are keyed by tag (one per area), and a v3
+## file still loads — the schema bump must not orphan an existing map.
+func _test_area_fill_edits() -> void:
+	var poly := _fill_area_poly()
+	var edits := AutoVegetationEdits.create_empty()
+	var tag := AutoVegetationEdits.centroid_tag(poly)
+	edits.add_fill(tag, poly, {"species": "pine", "density": 1.5, "height_m": 9.0})
+	_check("fill recorded", edits.fills.size() == 1)
+	# Re-filling the same area REPLACES rather than stacking a second forest.
+	edits.add_fill(tag, poly, {"species": "shrub", "density": 0.5})
+	_check("re-fill replaces by tag", edits.fills.size() == 1)
+	_check("re-fill kept the new species",
+		str((edits.fills[0] as Dictionary).get("species", "")) == "shrub")
+
+	var round_trip := AutoVegetationEdits.create_empty()
+	round_trip.deserialize(edits.serialize())
+	_check("fills survive serialize/deserialize", round_trip.fills.size() == 1)
+	var f: Dictionary = round_trip.fills[0]
+	_check("fill tag round-trips", str(f.get("tag", "")) == tag)
+	_check("fill species round-trips", str(f.get("species", "")) == "shrub")
+	_check("fill density round-trips", is_equal_approx(float(f.get("density", 0.0)), 0.5))
+	_check("fill polygon round-trips",
+		(f.get("polygon", PackedVector2Array()) as PackedVector2Array).size() == 4)
+	_check("fill seed round-trips",
+		int(f.get("seed", -1)) == int((edits.fills[0] as Dictionary).get("seed", -2)))
+	_check("serialize declares v4", int(edits.serialize().get("version", 0)) == 4)
+
+	# A v3 payload (no `fills` key at all) loads with an empty fill list rather
+	# than failing — an existing map just has no per-area fills yet.
+	var legacy := AutoVegetationEdits.create_empty()
+	legacy.deserialize({"version": 3, "cleared": [], "patches": [], "forests": []})
+	_check("v3 file loads with no fills", legacy.fills.is_empty())
+
+	# Filling an area that was cleared earlier must LIFT that clear: the
+	# subtractive pass runs after all scatter and would otherwise erase the
+	# forest the player just planted.
+	var mixed := AutoVegetationEdits.create_empty()
+	mixed.add_cleared_polygon(poly)
+	_check("clear recorded", mixed.cleared.size() == 1)
+	mixed.add_fill(tag, poly, {"species": "pine"})
+	_check("filling lifts the area's clear", mixed.cleared.is_empty())
+	_check("removing a fill reports whether it existed",
+		mixed.remove_fill_for_tag(tag) and not mixed.remove_fill_for_tag(tag))
+
+
+## Scatter: a fill plants the chosen species inside its outline, `replace`
+## clears first, density moves the count, and a live apply matches the
+## generator's replay exactly (same seed => same forest).
+func _test_area_fill_scatter() -> void:
+	var poly := _fill_area_poly()
+	var payload := {
+		"polygons": [{"points": poly, "kind": "wood", "tags": {}}],
+		"tree_points": [], "tree_rows": [],
+	}
+	var base_ctx := {"latitude": 47.6, "seed": 7, "exclusions": [], "half_extent_m": 500.0}
+	var no_fill := AutoVegetationGenerator.generate(payload, base_ctx.duplicate(true))
+
+	var tag := AutoVegetationEdits.centroid_tag(poly)
+	var edits := AutoVegetationEdits.create_empty()
+	edits.add_fill(tag, poly, {"species": "pine", "density": 1.0, "replace": true})
+	var fill: Dictionary = edits.fills[0]
+
+	var fill_ctx := base_ctx.duplicate(true)
+	fill_ctx["fills"] = [fill]
+	var filled := AutoVegetationGenerator.generate(payload, fill_ctx)
+	_check("filled area produced trees", filled.total_bulk() > 10,
+		"got %d" % filled.total_bulk())
+	# The OSM wood would have scattered a temperate mix; the fill replaces it
+	# with pine only. This is the whole point of the feature.
+	var slots: Array = filled.slots()
+	_check("fill planted the chosen species", slots.has("pine"))
+	var pine_n := (filled.bulk.get("pine", []) as Array).size()
+	_check("fill dominates the outline", pine_n > int(float(filled.total_bulk()) * 0.9),
+		"pine=%d total=%d" % [pine_n, filled.total_bulk()])
+	_check("baseline had trees to replace", no_fill.total_bulk() > 0)
+
+	# Live apply (loader path) == generator replay (load path): one function,
+	# seeded per fill, so a filled area does not change shape on reload.
+	var live := AutoVegetationGenerator.generate(payload, base_ctx.duplicate(true))
+	var biome := BiomePalette.for_location(47.6)
+	var res := AutoVegetationGenerator.apply_fill(live, fill, biome, null,
+		base_ctx.duplicate(true))
+	_check("live apply placed trees", int(res.get("placed", 0)) > 10,
+		"got %d" % int(res.get("placed", 0)))
+	_check("live apply cleared the old trees", int(res.get("removed", 0)) > 0)
+	_check("live apply matches generator replay",
+		live.total_bulk() == filled.total_bulk(),
+		"live=%d replay=%d" % [live.total_bulk(), filled.total_bulk()])
+
+	# Two replays of the same fill are identical — the RNG is seeded from the
+	# fill, not the run.
+	var again := AutoVegetationGenerator.generate(payload, fill_ctx.duplicate(true))
+	_check("fill replay is deterministic", again.total_bulk() == filled.total_bulk(),
+		"%d vs %d" % [again.total_bulk(), filled.total_bulk()])
+
+	# Density scales spacing, so a denser fill plants more in the same outline.
+	var dense_edits := AutoVegetationEdits.create_empty()
+	dense_edits.add_fill(tag, poly, {"species": "pine", "density": 2.5, "replace": true})
+	var dense_ctx := base_ctx.duplicate(true)
+	dense_ctx["fills"] = [dense_edits.fills[0]]
+	var dense := AutoVegetationGenerator.generate(payload, dense_ctx)
+	_check("higher density plants more", dense.total_bulk() > filled.total_bulk(),
+		"dense=%d normal=%d" % [dense.total_bulk(), filled.total_bulk()])
+
+	# replace=false keeps whatever was already inside the outline.
+	var add_edits := AutoVegetationEdits.create_empty()
+	add_edits.add_fill(tag, poly, {"species": "pine", "density": 1.0, "replace": false})
+	var add_layer := AutoVegetationGenerator.generate(payload, base_ctx.duplicate(true))
+	var before := add_layer.total_bulk()
+	var add_res := AutoVegetationGenerator.apply_fill(add_layer, add_edits.fills[0],
+		biome, null, base_ctx.duplicate(true))
+	_check("replace=false removes nothing", int(add_res.get("removed", 0)) == 0)
+	_check("replace=false adds on top", add_layer.total_bulk() > before,
+		"%d -> %d" % [before, add_layer.total_bulk()])
+
+	# Species resolution: auto keeps the biome mix, mixed honours the tuned
+	# composition, a named species is that species alone.
+	_check("auto fill keeps the biome weights",
+		AutoVegetationGenerator.fill_weights("auto", biome, {}).size()
+			== (biome["weights"] as Dictionary).size())
+	var mix := AutoVegetationGenerator.fill_weights("mixed", biome,
+		{"mix_pine": 3.0, "mix_deciduous": 1.0})
+	_check("mixed fill uses the tuned mix",
+		is_equal_approx(float(mix.get("pine", 0.0)), 3.0)
+			and is_equal_approx(float(mix.get("deciduous", 0.0)), 1.0))
+	var single := AutoVegetationGenerator.fill_weights("spruce", biome, {})
+	_check("named species fill is that species alone",
+		single.size() == 1 and single.has("spruce"))
