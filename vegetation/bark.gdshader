@@ -15,6 +15,11 @@ uniform float alpha_scissor : hint_range(0.0, 1.0) = 0.45;
 uniform float snow_amount : hint_range(0.0, 1.0) = 0.0;
 uniform float snow_depth_m = 0.0;
 uniform vec3  snow_color : source_color = vec3(0.92, 0.94, 0.98);
+// Night darkening (pushed by VegetationEnvironmentSync). Bark used to get NO
+// night uniform while foliage crashed to 18% albedo — lit trunks poking out
+// of black canopies at dusk.
+uniform float night_factor : hint_range(0.0, 1.0) = 0.0;
+uniform float night_darkness : hint_range(0.0, 1.0) = 0.72;
 
 varying vec3 v_inst_pos;
 
@@ -52,6 +57,7 @@ void fragment() {
 		albedo = mix(albedo, snow_color, snow_mask);
 		bark_rough = mix(roughness_value, 0.6, snow_mask);
 	}
+	albedo *= 1.0 - night_factor * night_darkness;
 	ALBEDO = albedo;
 	ROUGHNESS = bark_rough;
 	METALLIC = 0.0;

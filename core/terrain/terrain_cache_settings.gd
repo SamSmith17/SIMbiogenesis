@@ -91,14 +91,23 @@ static func invalidate_all(lat: float, lon: float) -> int:
 
 
 ## Delete user-painted vegetation + style sidecars for one map site.
+##
+## Filenames use CoordToken.token() PER COMPONENT ("48p3252"/"n122p2469") —
+## this function used to build them from the combined "%.4f_%.4f" cache token,
+## so it matched NOTHING and "Reset site" silently deleted zero veg files (the
+## reason clearing/redrawing never fixed stale styles). It also now covers the
+## v3 style store plus the retired v2/v1 style files.
 static func invalidate_user_vegetation_edits(lat: float, lon: float) -> int:
-	var token := coord_token(lat, lon)
+	var lat_t := CoordToken.token(lat)
+	var lon_t := CoordToken.token(lon)
 	var removed := 0
-	for path in [
-		"user://maps/vegetation_%s_%s.json" % [token, token],
-		"user://maps/auto_veg_edits_%s_%s.json" % [token, token],
-		"user://maps/vegetation_style_%s_%s.json" % [token, token],
-	]:
+	var paths: Array[String] = [
+		"user://maps/vegetation_%s_%s.json" % [lat_t, lon_t],
+		"user://maps/auto_veg_edits_%s_%s.json" % [lat_t, lon_t],
+		VegStyleStore.map_v2_path(lat, lon),
+	]
+	paths.append_array(VegStyleStore.legacy_style_paths(lat, lon))
+	for path in paths:
 		if FileAccess.file_exists(path):
 			if DirAccess.remove_absolute(ProjectSettings.globalize_path(path)) == OK:
 				removed += 1

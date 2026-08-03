@@ -52,7 +52,7 @@ uniform vec3 sun_direction = vec3(0.0, 1.0, 0.0);
 // How dark foliage goes at full night. Multiplies ALBEDO by (1 - night*this) so
 // the moon's directional light can't make leaves glow; dim ambient still tints
 // them as moonlit. 0 = no change (previous behaviour).
-uniform float night_darkness : hint_range(0.0, 1.0) = 0.82;
+uniform float night_darkness : hint_range(0.0, 1.0) = 0.65;
 // --- Seasonal phenology + snow (driven live by VegetationEnvironmentSync) ---
 // deciduousness: 0 = evergreen conifer, 1 = deciduous broadleaf (per-material).
 uniform float deciduousness : hint_range(0.0, 1.0) = 1.0;

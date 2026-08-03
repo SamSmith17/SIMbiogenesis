@@ -52,6 +52,9 @@ var _paint_species := "shrub"
 var _spacing_m := 4.0
 var _density := 1.0
 var _size_var := 0.25
+## Overhaul v2: painted plants appear MATURE (exactly as previewed) unless the
+## player opts into watching seedlings grow.
+var _plant_young := false
 var _scale_min := 0.75
 var _scale_max := 1.25
 var _seed_value := 1337
@@ -551,6 +554,14 @@ func _build_ui() -> void:
 			_refresh_chips(), 56, 1.0)
 	_density_row = _labeled_slider_pair(shape_row, "Dens", 0.25, 3.0, _density,
 		func(v: float) -> void: set_paint_density(v), 56)
+	var young_cb := CheckBox.new()
+	young_cb.text = "Plant young"
+	young_cb.tooltip_text = "Plant seedlings that grow over the years instead of full-size trees"
+	young_cb.button_pressed = _plant_young
+	young_cb.toggled.connect(func(on: bool) -> void:
+		_plant_young = on
+		_refresh_chips())
+	shape_row.add_child(young_cb)
 
 	_progress_bar = ProgressBar.new()
 	_progress_bar.visible = false
@@ -1227,11 +1238,11 @@ func _on_subspecies_selected(idx: int) -> void:
 	if sid.is_empty() or not VegSpeciesCatalog.is_paintable(sid):
 		return
 	_paint_species = sid
-	# Load saved species default into brush card when present.
-	var defaults := VegetationStyleConfig.load_species_default(sid)
-	if not defaults.is_empty():
-		_brush_card = defaults
-		_set_status("Loaded %s default look — paint to place" % VegSpeciesCatalog.label_for(sid))
+	# Overhaul v2: NO hidden per-record snapshot here. Saved species defaults
+	# flow through the style store's species layer at render time, so painting
+	# Spruce just paints spruce — the old auto-loaded card_settings silently
+	# pinned every painted tree to a stale look that later style edits could
+	# never touch ("Tune look does nothing to my painted trees").
 	_refresh_chips()
 	if _selection_locked:
 		_queue_respecies()
@@ -1587,6 +1598,7 @@ func _scatter_params() -> Dictionary:
 		params["species"] = _paint_species
 	if not _brush_card.is_empty():
 		params["card_settings"] = _brush_card
+	params["plant_young"] = _plant_young
 	return params
 
 

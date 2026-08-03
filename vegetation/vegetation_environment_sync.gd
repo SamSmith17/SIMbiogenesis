@@ -343,4 +343,7 @@ func _push_uniforms() -> void:
 			continue
 		bm.set_shader_parameter("snow_amount", _snow)
 		bm.set_shader_parameter("snow_depth_m", _snow_depth)
+		# Bark darkens with the canopy at dusk (it received no night uniform
+		# before — lit trunks poked out of near-black foliage).
+		bm.set_shader_parameter("night_factor", _night_factor)
 		i += 1

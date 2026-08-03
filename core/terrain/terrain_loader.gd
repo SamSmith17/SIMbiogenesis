@@ -7122,6 +7122,37 @@ func apply_vegetation_look(shape: Dictionary, style: Dictionary) -> void:
 		call_deferred("_rebuild_auto_vegetation_async")
 
 
+## Overhaul v2: a reset that actually works. Deletes THIS map's veg style
+## store (+ retired v2/v1 sidecars), drops the layer's settings deltas and
+## every per-record card snapshot, reloads the merged style (global + defaults
+## remain) and rebuilds. Painted tree positions survive.
+func reset_map_veg_style() -> void:
+	for path in [VegStyleStore.map_v2_path(_lat, _lon)]:
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	for path in VegStyleStore.legacy_style_paths(_lat, _lon):
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	if _vegetation_layer != null:
+		_vegetation_layer.settings = {}
+		_vegetation_layer.clear_card_overrides()
+		_vegetation_layer.save(_lat, _lon)
+	VegStyleStore.invalidate_cache()
+	_veg_style = VegetationStyleConfig.load_merged(_lat, _lon)
+	VegetationCardFactory.clear_foot_cache()
+	call_deferred("_rebuild_all_vegetation")
+	_toast("Map vegetation style reset", ToastUI.Level.INFO)
+
+
+## Nukes the GLOBAL veg style store too (every map falls back to shipped
+## defaults unless it has its own per-map store). Destructive: confirmed by
+## the Terrain-options dialog before calling.
+func reset_all_veg_styles() -> void:
+	VegetationStyleConfig.clear_global()
+	reset_map_veg_style()
+	_toast("ALL vegetation styles reset to defaults", ToastUI.Level.WARN)
+
+
 func get_vegetation_style() -> Dictionary:
 	return _veg_style.duplicate(true)
 
@@ -7377,6 +7408,12 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 	var brush_card: Dictionary = params.get("card_settings", {}) if params.get("card_settings") is Dictionary else {}
 	var forced_species := str(params.get("species", ""))
 	var use_forced := not forced_species.is_empty() and VegSpeciesCatalog.is_paintable(forced_species)
+	# Overhaul v2: painted plants appear MATURE, exactly as previewed (birth
+	# stamped one full growth span ago). "Plant young" opts into watching them
+	# grow from seedlings. Records carrying birth_h are never re-randomized by
+	# ensure_birth_times, so paint scale is deterministic — the random
+	# "near-mature age" jitter was a hidden source of inconsistent tree sizes.
+	var plant_young := bool(params.get("plant_young", false))
 	var added := 0
 	for spot in spots:
 		var species := forced_species if use_forced else VegetationPaint.pick_species(
@@ -7392,6 +7429,10 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 			else lerpf(scale_min, scale_max, rng.randf())
 		if _vegetation_layer.add_bulk(species, float(spot["x"]), float(spot["z"]), yaw, scale, brush_card):
 			added += 1
+			if _growth_any_enabled():
+				var rec: Dictionary = (_vegetation_layer.bulk[species] as Array).back()
+				rec["birth_h"] = _growth_clock_h if plant_young \
+					else _growth_clock_h - VegetationGrowth.growth_span_hours(species, _growth_style())
 	if added > 0:
 		if preset_enum != VegetationPaint.Preset.GRASS_LAWN \
 				and preset_enum != VegetationPaint.Preset.GRASS_FIELD:
@@ -7422,11 +7463,14 @@ func place_single_vegetation(species: String, x: float, z: float, params: Dictio
 	var brush_card: Dictionary = params.get("card_settings", {}) if params.get("card_settings") is Dictionary else {}
 	if not _vegetation_layer.add_bulk(species, x, z, yaw, scale, brush_card):
 		return false
-	# A single deliberate drop is planted as a seedling (birth = now) so the player
-	# can watch this one grow from scratch, rather than the established age mix a
-	# paint scatter gets. Cap refresh keeps reseeding density honest.
+	# Overhaul v2: single drops match the preview too — mature by default.
+	# "Plant young" (dock toggle) plants a seedling to watch grow. The old
+	# always-seedling single click (a 0.14× sprout) read as "my tree shrank".
 	if _growth_any_enabled():
-		(_vegetation_layer.bulk[species] as Array).back()["birth_h"] = _growth_clock_h
+		var plant_young := bool(params.get("plant_young", false))
+		(_vegetation_layer.bulk[species] as Array).back()["birth_h"] = \
+			_growth_clock_h if plant_young \
+			else _growth_clock_h - VegetationGrowth.growth_span_hours(species, _growth_style())
 		_growth_caps_manual = VegetationGrowth.capture_caps(_vegetation_layer.bulk)
 	_vegetation_layer.save(_lat, _lon)
 	_rebuild_vegetation()

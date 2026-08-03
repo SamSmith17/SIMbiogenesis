@@ -28,6 +28,7 @@ var _status_lbl: Label = null
 const CONFIG_PATH := "user://terrain_config.cfg"
 var _refresh_btns: Array[Button] = []
 var _reset_confirm: ConfirmationDialog = null
+var _veg_style_confirm: ConfirmationDialog = null
 var _osm_offset_lbl: Label = null
 
 
@@ -250,6 +251,35 @@ func _build_ui() -> void:
 	all_btn.pressed.connect(_on_refresh_all)
 	all_row.add_child(all_btn)
 	_refresh_btns.append(all_btn)
+
+	# Overhaul v2: veg style resets that actually work (the old reset-site path
+	# built wrong filenames and deleted nothing).
+	var style_row := HBoxContainer.new()
+	_body.add_child(style_row)
+	var map_style_btn := Button.new()
+	map_style_btn.text = "Reset map veg style"
+	map_style_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_style_btn.tooltip_text = "Forget this map's vegetation styling (trees stay planted; global defaults apply again)"
+	map_style_btn.pressed.connect(func() -> void:
+		if _loader != null and _loader.has_method("reset_map_veg_style"):
+			_loader.call("reset_map_veg_style"))
+	style_row.add_child(map_style_btn)
+	var all_style_btn := Button.new()
+	all_style_btn.text = "Reset ALL veg styles"
+	all_style_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	all_style_btn.tooltip_text = "Forget every saved vegetation style (all maps back to shipped defaults)"
+	all_style_btn.pressed.connect(func() -> void:
+		if _veg_style_confirm != null:
+			_veg_style_confirm.popup_centered())
+	style_row.add_child(all_style_btn)
+	_veg_style_confirm = ConfirmationDialog.new()
+	_veg_style_confirm.title = "Reset ALL vegetation styles?"
+	_veg_style_confirm.dialog_text = "Every saved vegetation look (global + this map) returns to shipped defaults. Painted trees stay planted."
+	_veg_style_confirm.ok_button_text = "Reset styles"
+	_veg_style_confirm.confirmed.connect(func() -> void:
+		if _loader != null and _loader.has_method("reset_all_veg_styles"):
+			_loader.call("reset_all_veg_styles"))
+	add_child(_veg_style_confirm)
 
 	var reset_row := HBoxContainer.new()
 	_body.add_child(reset_row)

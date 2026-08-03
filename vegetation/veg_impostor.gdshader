@@ -142,6 +142,6 @@ void fragment() {
 	// the same uniforms the env sync already pushes (no light pass on
 	// thousands of distant quads — this tier must stay cheap).
 	float sun_up = clamp(sun_direction.y * 2.0 + 0.35, 0.0, 1.0);
-	float light_mul = mix(0.10, mix(0.55, 1.0, sun_up), 1.0 - night_factor);
+	float light_mul = mix(0.30, mix(0.55, 1.0, sun_up), 1.0 - night_factor);
 	ALBEDO = albedo * light_mul;
 }

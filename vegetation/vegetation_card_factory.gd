@@ -603,6 +603,10 @@ static func _deciduous_adapter_settings(spec: Dictionary, settings: Dictionary) 
 		0.05, 0.92)
 	s["deciduous_trunk_taper"] = _derived_or_user(settings, "deciduous_trunk_taper",
 		float(spec.get("sc_taper", 0.55)))
+	# Raw archetype envelope params, consumed directly by the SC growth.
+	for sck in ["sc_attractors", "sc_env_bottom", "sc_env_mid"]:
+		if spec.has(sck):
+			s[sck] = spec[sck]
 	s["deciduous_branch_reach"] = 1.0
 	s["deciduous_clump_spread"] = 1.0
 	s["deciduous_cluster_size"] = float(spec.get("cluster_size_mul", 1.0))
@@ -1180,7 +1184,16 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 	var step := clampf(env_span * lerpf(0.16, 0.075, (detail - 1.0) / 4.0), 0.18, 2.2)
 	var node_budget := int(110.0 + detail * 58.0)
 
-	var attractors := _sc_attractors(env_r, y0, env_h, primaries, lateral, tilt_low, rng)
+	# Envelope profile straight from the archetype table when present (the v3
+	# adapter injects sc_* keys); tilt-derived fallback keeps old callers alive.
+	var attr_count := clampi(int(settings.get("sc_attractors",
+		30.0 + float(primaries) * 16.0 + lateral * 30.0)), 40, 420)
+	var env_bottom := clampf(float(settings.get("sc_env_bottom",
+		remap(tilt_low, 15.0, 89.0, 0.15, 0.85))), 0.05, 1.0)
+	var env_mid := clampf(float(settings.get("sc_env_mid",
+		lerpf(0.52, 0.36, lateral))), 0.05, 0.95)
+	var attractors := _sc_attractors(env_r, y0, env_h, attr_count, env_bottom,
+		env_mid, lateral, rng)
 
 	# Node soup (parallel arrays; children always index AFTER their parent, which
 	# the pipe-model radius pass depends on). parent -1 = seed anchored in the
@@ -1216,11 +1229,11 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 	# centroid on iteration one; saturated nodes (at the fork cap) are skipped in
 	# the nearest search or their attractors starve forever and the loop stalls.
 	var d_attract := step * 5.0
-	# 1.15×step: at 1.45 each new node cleared so much space that ~190
-	# attractors died to ~50 nodes and the skeleton stayed twig-poor (a bare
-	# winter tree with a dozen tips; 1.15 grows ~75 nodes / ~23 tips). Still
+	# 1.05×step: barely above the step so each new node consumes only its own
+	# neighbourhood — denser twigging for the same envelope (at 1.45 the whole
+	# cloud died to ~50 nodes and winter trees had a dozen bare tips). Still
 	# ≥ step so growth can never oscillate without consuming space.
-	var d_kill := step * 1.15
+	var d_kill := step * 1.05
 	var floor_y := y0 * 0.72
 	for _iter in 90:
 		if attractors.is_empty() or n_pos.size() >= node_budget:
@@ -1299,6 +1312,27 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 			dbg_max = maxf(dbg_max, n_pos[i].y)
 		print("SC_DEBUG y1=%.2f ceil=%.2f max_node_y=%.2f nodes=%d" % [
 			y1, y1 + env_h * 0.06, dbg_max, n_pos.size()])
+
+	# --- chain smoothing -------------------------------------------------------
+	# Per-step jitter + discrete attractor pulls leave visible KINKS along limb
+	# runs. Two Laplacian passes over pure chain links (exactly one child) round
+	# them into natural curves; forks, seeds and TIPS stay pinned, so topology,
+	# foliage anchors and the envelope clamps are untouched.
+	for _pass in 2:
+		var smoothed := n_pos.duplicate()
+		for i in n_pos.size():
+			if n_children[i] != 1 or n_parent[i] < 0:
+				continue
+			var child := -1
+			for j in range(i + 1, n_pos.size()):
+				if n_parent[j] == i:
+					child = j
+					break
+			if child < 0:
+				continue
+			smoothed[i] = n_pos[i] * 0.5 + (n_pos[n_parent[i]] + n_pos[child]) * 0.25
+		n_pos = smoothed
+
 	# --- pipe-model radii (da Vinci: r_parent^n = Σ r_child^n) -----------------
 	var tipw := PackedFloat32Array()
 	tipw.resize(n_pos.size())
@@ -1346,17 +1380,15 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 
 
 ## Deterministic attractor cloud for the space-colonization growth. The envelope
-## is a crown-shaped solid of revolution: radius peaks mid-crown, narrows to a
-## rounded top, and its base fullness follows the species archetype (tilt_low —
-## a spreading chestnut keeps width right down to the crown base, a columnar
-## birch pinches in). `lateral` skews the vertical density toward the lower
-## crown (the spreading skirt). Points bias toward the rim (pow 0.38) because
-## foliage — and therefore branch structure — concentrates on the crown shell.
+## is a crown-shaped solid of revolution: radius peaks at env_mid, narrows to a
+## rounded top, and its base fullness (bottom_frac) follows the species
+## archetype — a spreading chestnut keeps width right down to the crown base, a
+## columnar birch pinches in. `lateral` skews the vertical density toward the
+## lower crown (the spreading skirt). Points bias toward the rim (pow 0.38)
+## because foliage — and therefore branch structure — concentrates on the shell.
 static func _sc_attractors(env_r: float, y0: float, env_h: float,
-		primaries: int, lateral: float, tilt_low: float, rng: RandomNumberGenerator) -> Array:
-	var count := clampi(int(30.0 + float(primaries) * 16.0 + lateral * 30.0), 40, 240)
-	var bottom_frac := remap(tilt_low, 15.0, 89.0, 0.15, 0.85)
-	var t_mid := lerpf(0.52, 0.36, lateral)
+		count: int, bottom_frac: float, t_mid: float, lateral: float,
+		rng: RandomNumberGenerator) -> Array:
 	var out: Array = []
 	for _i in count:
 		var t := pow(rng.randf(), lerpf(0.85, 1.55, lateral))

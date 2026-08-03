@@ -55,7 +55,7 @@ uniform float haze_end : hint_range(0.0, 2000.0) = 700.0;
 uniform float haze_strength : hint_range(0.0, 1.0) = 0.65;
 
 uniform float night_factor : hint_range(0.0, 1.0) = 0.0;
-uniform float night_darkness : hint_range(0.0, 1.0) = 0.82;
+uniform float night_darkness : hint_range(0.0, 1.0) = 0.65;
 uniform vec3 sun_direction = vec3(0.0, 1.0, 0.0);
 
 // --- Seasonal phenology + snow (driven live by VegetationEnvironmentSync) ---

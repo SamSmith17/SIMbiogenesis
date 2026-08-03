@@ -106,6 +106,7 @@ static func builder_params(archetype: String, branchiness: float,
 		"sc_env_bottom": float(a["env_bottom"]),
 		"sc_env_mid": float(a["env_mid"]),
 		"sc_taper": float(a["taper"]),
+		"sc_attractors": int(lerpf(160.0, 420.0, b)),
 		"sc_seed": clampi(variant_seed, 0, 9),
 	}
 

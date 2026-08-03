@@ -26,6 +26,7 @@ func _initialize() -> void:
 	_test_fresh_start_ignores_legacy()
 	_test_stale_version_ignored()
 	_test_layer_sparse()
+	_test_reset_invalidation()
 	_cleanup_files()
 	VegStyleStore.path_suffix = ""
 	VegStyleStore.invalidate_cache()
@@ -277,3 +278,32 @@ func _test_layer_sparse() -> void:
 	# get_settings() still returns the full fallback dict for legacy readers.
 	_check("get_settings stays complete",
 		layer4.get_settings().has("pine_height_m"))
+
+
+## Reset-site must delete the files that actually exist. The old
+## invalidate_user_vegetation_edits built names from the combined "%.4f_%.4f"
+## cache token instead of CoordToken per-component tokens, so it matched
+## NOTHING and every "reset" silently kept the stale styling — this is the
+## test that would have caught it.
+func _test_reset_invalidation() -> void:
+	_cleanup_files()
+	var lat_t := CoordToken.token(T_LAT)
+	var lon_t := CoordToken.token(T_LON)
+	var files: Array[String] = [
+		"user://maps/vegetation_%s_%s.json" % [lat_t, lon_t],
+		"user://maps/auto_veg_edits_%s_%s.json" % [lat_t, lon_t],
+		VegStyleStore.map_v2_path(T_LAT, T_LON),
+	]
+	files.append_array(VegStyleStore.legacy_style_paths(T_LAT, T_LON))
+	for p in files:
+		var f := FileAccess.open(p, FileAccess.WRITE)
+		f.store_string("{}")
+		f.close()
+	var removed := TerrainCacheSettings.invalidate_user_vegetation_edits(T_LAT, T_LON)
+	_check("reset deletes every veg sidecar", removed == files.size(),
+		"removed %d of %d" % [removed, files.size()])
+	for p in files:
+		_check("reset removed %s" % str(p).get_file(), not FileAccess.file_exists(p))
+	# Idempotent second run.
+	_check("second reset is a clean no-op",
+		TerrainCacheSettings.invalidate_user_vegetation_edits(T_LAT, T_LON) == 0)
