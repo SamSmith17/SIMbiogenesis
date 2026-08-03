@@ -329,15 +329,15 @@ func _test_slider_sections() -> void:
 				"got '%s'" % sect)
 	_check("every family's sliders were classified", total > 60, "got %d" % total)
 
-	# The rule itself: the four interesting buckets.
+	# The rule itself: the interesting v3 buckets.
 	_check("maturity age is Growth",
 		str(modal.call("slider_section", "deciduous_growth_years"))
 			== str(consts["SECTION_GROWTH"]))
-	_check("LOD distance is Detail",
-		str(modal.call("slider_section", "deciduous_lod_near_m"))
+	_check("detail distance is Advanced",
+		str(modal.call("slider_section", "tree_detail_distance_m"))
 			== str(consts["SECTION_DETAIL"]))
-	_check("billboard offset is Detail",
-		str(modal.call("slider_section", "deciduous_billboard_y_offset"))
+	_check("vertical offset is Advanced",
+		str(modal.call("slider_section", "deciduous_vertical_offset_m"))
 			== str(consts["SECTION_DETAIL"]))
 	_check("leaf size is Foliage",
 		str(modal.call("slider_section", "deciduous_leaf_size"))
@@ -348,14 +348,17 @@ func _test_slider_sections() -> void:
 	_check("grass blades are Foliage",
 		str(modal.call("slider_section", "grass_lawn_blade_lean"))
 			== str(consts["SECTION_FOLIAGE"]))
-	_check("branch angle is Branches",
-		str(modal.call("slider_section", "deciduous_branch_angle"))
-			== str(consts["SECTION_BRANCHES"]))
-	_check("clusters are Branches",
+	_check("branchiness macro is Character",
+		str(modal.call("slider_section", "deciduous_branchiness"))
+			== str(consts["SECTION_CHARACTER"]))
+	_check("crookedness macro is Character",
+		str(modal.call("slider_section", "pine_crookedness"))
+			== str(consts["SECTION_CHARACTER"]))
+	_check("shrub clusters are Foliage",
 		str(modal.call("slider_section", "shrub_cluster_spread"))
-			== str(consts["SECTION_BRANCHES"]))
-	_check("canopy width is Size",
-		str(modal.call("slider_section", "deciduous_canopy_w"))
+			== str(consts["SECTION_FOLIAGE"]))
+	_check("crown width is Size",
+		str(modal.call("slider_section", "deciduous_crown_width_m"))
 			== str(consts["SECTION_SIZE"]))
 	_check("an unknown key falls back to Size",
 		str(modal.call("slider_section", "something_new"))

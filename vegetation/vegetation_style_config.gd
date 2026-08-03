@@ -55,7 +55,7 @@ static func defaults() -> Dictionary:
 		"deciduous_height_m": 14.0,
 		"deciduous_crown_width_m": 11.0,
 		"deciduous_trunk_diameter_cm": 55.0,
-		"deciduous_crown_base_pct": 25.0,
+		"deciduous_crown_base_pct": 32.0,
 		"deciduous_archetype": "round",
 		"deciduous_variant_seed": 0.0,
 		"deciduous_branchiness": 0.55,

@@ -126,12 +126,11 @@ Godot.exe.exe --headless --path . --script vegetation/veg_food_selftest.gd
 # first PROCESS frame because the SceneTree root is not inside the tree during
 # _initialize, so an added child never gets _ready() and no Controls exist):
 Godot.exe.exe --headless --path . --script vegetation/veg_dock_state_selftest.gd
-# Veg tier rings + impostor offline checks (Phase 3: ring math incl.
-# closest-corner boundary rule, build-time tier assignment over both runtimes,
-# force_far NEAR-ring exemption, impostor bake-key stability/quad geometry/
-# headless FAR fallback; the bake itself verifies windowed via --capture=veg;
-# --import first):
-Godot.exe.exe --headless --path . --script vegetation/veg_tier_ring_selftest.gd
+# Veg LOD policy (offline — Overhaul v2: budget-aware tree detail distance
+# replacing the old SoI rings + large-map force_far flattening; sparse maps
+# keep the requested range, dense maps shrink until the worst-case near-set
+# fits the tier budget, 60 m floor, grass/shrub never counted; --import first):
+Godot.exe.exe --headless --path . --script vegetation/veg_lod_policy_selftest.gd
 # Site Report metrics/data + UI-compile self-test (offline, deterministic):
 Godot.exe.exe --headless --path . --script core/report/site_report_selftest.gd
 # NPC population self-test (offline, deterministic — SpaceRegistry tagging/
@@ -728,28 +727,31 @@ materials memoize in `VegAssetCache` keyed `kind|species|tier|hash(settings)`
 (matches batch partitioning; `clear_foot_cache()` clears it too). Generator
 scatter order is POINTS→ROWS→HEDGES→POLYS→GAP_FILL — explicitly mapped
 features must never lose the budget race to polygon fill.
-**Static SoI detail rings + impostors (Phase 3, `vegetation/veg_tier_rings.gd`
-+ `veg_impostor_baker.gd`/`veg_impostor_set.gd`/`veg_impostor.gdshader`):**
-canopy tier is a property of each 256 m CHUNK's distance to the SoI centre
-(closest corner, so boundaries err toward detail), not the camera — NEAR ring
-(veg_near_ring_m 250) = leaf-shell pair, MID (veg_mid_ring_m 700) = FAR cards,
-OUTER = baked impostor quad (2 tris/tree). `auto_force_far_canopy` (large maps)
-= impostor-only mode: demotes MID→OUTER but EXEMPTS the NEAR ring, so the site
-core keeps full detail even on 30 km maps, structurally bounded. Impostors are
-baked IN-PROCESS (no GLBs exist — meshes are procedural): 8 yaw + 1 top view
-into a 1024² 3×3 atlas + a foliage-vs-bark mask atlas, neutral-season
-materials, keyed by a STABLE content hash (`bake_key` — excludes drape/growth/
-LOD keys so it survives sessions), cached `user://veg_impostors/<key>.res`,
-BAKE_VERSION-gated. Headless/selftests never bake: `cached_set` misses fall
-back to FAR cards deterministically; windowed bakes debounce ONE rebuild via
-`_on_impostor_bake_completed`. The impostor shader is unshaded (day/night from
-the env-sync uniforms), billboards manually in vertex (spatial shaders have no
-billboard render_mode), and seasonally recolors/thins ONLY mask-flagged
-foliage pixels — env sync buckets it with foliage by shader path. Ring centre
-keys (veg_ring_center_x/z) injected live from `SoiService.world_center()`;
-moving the pin re-rings via a debounced rebuild (`_on_soi_changed_for_veg`).
-Selftest: `vegetation/veg_tier_ring_selftest.gd` (incl. bake-key stability,
-quad geometry, headless fallback).
+**Tree LOD (Overhaul v2 — `vegetation/veg_lod_policy.gd` +
+`veg_impostor_baker.gd`/`veg_impostor_set.gd`/`veg_impostor.gdshader`):**
+every tree chunk builds exactly TWO batches: the real 3D mesh inside a
+CAMERA-based detail range (`tree_detail_distance_m`, per-quality-tier default
+120/160/220/400 m, user slider in Tune-look Advanced) and the baked impostor
+beyond it. The old SoI ring system and the large-map `auto_force_far_canopy`
+flattening are GONE — force_far was why a 30 km map never rendered a real 3D
+tree at ANY distance. Its prim-guard duty moved to `VegLodPolicy`: the loader
+computes a budget-shrunk `tree_detail_eff_m` per rebuild (worst-case near-set
+tree count over 256 m chunk neighbourhoods vs the tier's `tree_near_budget`
+400/800/1500/4000, 60 m floor) and injects it via
+`_auto_veg_runtime_settings`. Visibility ranges are BUILD-time only (AMD
+Vulkan hard-crashes on live sweeps); the slider triggers the debounced
+rebuild. Impostors are baked IN-PROCESS (no GLBs exist — meshes are
+procedural): 8 yaw + 1 top view into a 1024² 3×3 atlas + a foliage-vs-bark
+mask atlas, neutral-season materials, keyed by a STABLE content hash
+(`bake_key` — excludes drape/growth/LOD keys, INCLUDES String values so an
+archetype switch re-bakes), cached `user://veg_impostors/<key>.res`,
+BAKE_VERSION-gated (now v4). Headless/selftests never bake: `cached_set`
+misses fall back to the simplified crossed-card stand-in deterministically
+(the flat branch-card fan is deleted); windowed bakes debounce ONE rebuild
+via `_on_impostor_bake_completed`. The impostor shader is unshaded (day/night
+from the env-sync uniforms), billboards manually in vertex (spatial shaders
+have no billboard render_mode), and seasonally recolors/thins ONLY
+mask-flagged foliage pixels. Selftest: `vegetation/veg_lod_policy_selftest.gd`.
 
 **Seasonal phenology (Phase 6).** `SeasonModel.season_signals` now damps every
 signal by ABSOLUTE latitude (`seasonality_strength`: 0 below ~15°, 1 by ~35°,
@@ -840,88 +842,86 @@ focus and the paint selection now own SEPARATE highlight meshes. Selftest:
 **Procedural deciduous tree (space colonization).** The broadleaf skeleton is
 grown by space colonization (Runions et al. 2007, `_build_branch_skeleton` in
 vegetation_card_factory.gd): a deterministic attractor cloud fills the crown
-envelope (`_sc_attractors` — shape from the species archetype keys: tilt_low =
-base fullness, lateral = bottom-heavy skirt bias), limbs seeded at
-`deciduous_primary_placements` (pure data, selftest-asserted: spread over the
-crown band from `deciduous_crown_base`, symmetric bounded azimuth jitter, off
-the trunk SURFACE) grow step-by-step toward their nearest attractors and fork
-where the field diverges. Node budget bounds cost (`deciduous_branch_levels`
-scales it ~140..400); pipe-model radii (da Vinci r^n, `deciduous_branch_
-thickness` shapes the exponent) capped under the trunk-top radius. SC tuning
-traps pinned by `auto_vegetation_selftest`: step ≪ crown radius or the kill
-radius (1.45×step) wipes crown regions before growth visits them (envelope
-fill ≥70% asserted); saturated nodes are SKIPPED in the nearest search or
-their attractors starve and the loop stalls. NEAR trunk is a 7-sided tapered
-tube (basal flare, up-tilted card-style normals or it renders black, UVs
+envelope (`_sc_attractors` — profile from the ARCHETYPE table), limbs seeded
+at `deciduous_primary_placements` (pure data, selftest-asserted) grow
+step-by-step toward their nearest attractors and fork where the field
+diverges; two Laplacian passes over pure chain links round the per-step kinks
+(forks/seeds/tips pinned). SC tuning traps pinned by
+`auto_vegetation_selftest`: step ≪ crown radius or the kill radius (1.05×step)
+wipes crown regions before growth visits them; saturated nodes are SKIPPED in
+the nearest search or their attractors starve and the loop stalls; momentum
+can ratchet shoots past consumed attractors — hard-clamped to the envelope
+(+6% ceiling / ×1.05 radial fence). NEAR trunk is a 7-sided tapered tube (UVs
 ping-pong inside the bark texture's opaque CENTRE band — the margins are
-transparent card silhouette and a full 0..1 wrap renders a cutout slab) at
-radius **0.28×trunk_w** — card-tuned trunk_w values describe the card's ~45%
-opaque visual width, honouring the full width renders a barrel. Limb seeds
-start INSIDE the tube (attachment contract, selftest-asserted). Foliage clumps
-cap the real tips (`_clusters_from_tips`) at BOTH tiers (FAR runs the skeleton
-`emit=false`; the impostor atlas bakes FROM the NEAR mesh); clump radius tiles
-the ENVELOPE volume share (any cluster count overlaps into one canopy) and
-`deciduous_clump_spread` is deliberately a FRESH key — the legacy
-cluster_spread/tightness pair was tuned against the old ring layout and would
-shrink every tip-anchored crown. Same trap: **`deciduous_crown_base` does NOT
-inherit legacy `deciduous_branch_base`**. leaf_canopy.gdshader stamps TWO
-interleaved per-cell leaf layers with size jitter (one layer reads as a dot
-lattice at the silhouette; aligned borders read as crosshatch netting) and
-keeps surviving leaves near-OPAQUE (blending the soft mask as ALPHA stacked
-into a see-through dotted ball near + checkerboard in the dither band); the
-old leaf_size/leaf_gap render clamps are GONE (sliders own their range) and
-`VegStyleStore._sanitize_inert_leaf_keys` drops stored values those clamps had
-made inert (the player never saw them; keeping them resurrects the legacy
-speckled look). NEAR tri budget at defaults ≤6,200 (selftest). **Bump
-`VegImpostorBaker.BAKE_VERSION` on ANY change to this geometry** (now v3) or
+transparent card silhouette and a full 0..1 wrap renders a cutout slab).
+Foliage clumps cap the real tips (`_clusters_from_tips`) at BOTH tiers (the
+stand-in runs the skeleton `emit=false`; the impostor atlas bakes FROM the
+NEAR mesh); clump radius tiles the ENVELOPE volume share, clump centres
+pre-fit inside the authored crown width, and the clump FLOOR is the authored
+crown base (floored at 0 the canopy swallowed the trunk — bush balls).
+leaf_canopy.gdshader stamps TWO interleaved size-jittered per-cell leaf
+layers and keeps surviving leaves near-OPAQUE. **Bump
+`VegImpostorBaker.BAKE_VERSION` on ANY change to this geometry** (now v4) or
 cached impostors serve the old silhouette forever. Verify with
 `--capture=tree` (pinned to July 15 so seasonal thinning can't fake or hide a
 shape defect) and `--capture=veg`.
 
-**Auto-veg height truth.** Auto records bake `scale = height_m /
-NOMINAL_CARD_H[species]` at scatter, but the ACTUAL mesh height is whatever
-the style builds (deciduous measured ~9.7 m vs nominal 6.0 → every broadleaf
-~60% oversized; Mt Vernon's pine card_h 19.5 × target/3.2 gave ~70 m
-monsters — the "drastic size differences").
-`AutoVegetationRuntime.height_norm_factor` multiplies nominal/actual into the
-family bulk key per species batch at REBUILD time, so every auto tree lands on
-its OSM/species target height and stale saved layers heal without re-scatter.
-Consequence: style dims shape auto trees' PROPORTIONS, not their height —
-`auto_tree_scale` stays the whole-forest size knob; painted trees still render
-at dims × bulk (the Tune-look height gauge states both).
+**v3 parameter model (Overhaul v2 — REAL UNITS + ARCHETYPES).** Tree families
+are authored as: `<fam>_height_m` (total, EXACT — `_normalize_tree_surfaces`
+rescales every surface so the built mesh hits it to the centimetre),
+`<fam>_crown_width_m` (radial, pre-fit + normalized), `<fam>_trunk_diameter_cm`
+(tube radius = cm/200, honest), `<fam>_crown_base_pct`, `<fam>_archetype`
+(round/spreading/columnar/vase/weeping/conical), `<fam>_variant_seed` (0–9)
+and four 0..1 character macros (branchiness/crookedness/droop/
+foliage_density). `vegetation/veg_tree_archetypes.gd` maps archetype+macros
+onto the SC builder's internal knobs at ONE choke point
+(`_deciduous_adapter_settings`); the internal keys are derived, never
+persisted. Advanced fine keys (leaf_*, whorl_*, fur_*) derive from the macros
+unless the player explicitly sets them (`_derived_or_user` reads the store
+provenance side channel, which `settings_with_variant` extends with
+species-override keys). **One scale rule:** `species_bulk_scale` is hard 1.0
+for trees; painted trees render at exactly the previewed size × paint jitter
+(and plant MATURE — the dock "Plant young" toggle opts into seedlings); auto
+records bake `scale = osm_height / resolved_height` at scatter (so
+`deciduous_height_m`/`pine_height_m` changes are in `_GENERATOR_FLOAT_KEYS`
+and trigger a re-scatter). `foot_local_y` is a constant 0 for trees.
+
+**Fresh start (v3 stores).** `VegStyleStore` VERSION 3 lives in NEW files
+(`vegetation_style_v3*.json`); legacy v1/v2 style files are never read
+(in-place backup, deleted by the reset tooling), migrations gone.
+`VegetationLayer` VERSION 3 keeps painted records/heroes/zones from ≤v2 files
+but drops settings deltas and per-record card_settings; `create_empty()`
+starts with EMPTY settings (it used to seed the full defaults dump as "user
+deltas" — every fresh map then froze its defaults against later style edits).
+Picking a subspecies in the dock no longer auto-attaches a card_settings
+snapshot; `card_settings` is written ONLY by explicit "Apply to brush".
+**Resets that work:** `invalidate_user_vegetation_edits` (was building
+filenames from the combined "%.4f_%.4f" cache token — matched NOTHING) now
+uses per-component `CoordToken.token()` and covers the v3 store + retired
+sidecars; Terrain options gained "Reset map veg style" and "Reset ALL veg
+styles" (loader `reset_map_veg_style`/`reset_all_veg_styles`).
 
 **Tune-look WYSIWYG contract.** The preview builds from the SAME resolution
 the render path uses: `_merged_settings` re-derives the VegStyleStore side
-channels (user family keys = diff vs defaults(), exactly what the stores
-persist; species overrides = stored + session edits) and applies the loader's
-`veg_quality_tier_style()` overlay under the same only-fills-defaults rule.
-Editing a NAMED subspecies routes sliders to per-species overrides
-(`_species_edits` → save_species_default on Apply) instead of silently
-retuning the whole family, and sliders DISPLAY the resolved per-species
-values. `VegStyleStore.save_global_patch` PRUNES values equal to defaults()
-(storing untouched sliders as user family edits shadowed every SPECS variant);
-`apply_vegetation_look` re-reads `flat_merged` after persisting so in-session
-side channels match — without that, fresh edits only won over SPECS variants
-after a restart. Colour rows: Tint / Highlight / Bark pickers (bark rides
-`<family>_bark_tint`, species-scoped as the unprefixed "bark_tint" override;
-`_build_bark_material_for_species` maps it over the SPECS `bark_albedo_tint`
-fill). Every shape slider carries hover help from `SLIDER_TIPS`.
+channels and applies the loader's `veg_quality_tier_style()` overlay under
+the same only-fills-defaults rule; a headless PARITY selftest
+(`_test_preview_parity` in auto_vegetation_selftest) builds the preview-path
+and render-path meshes from one store state and asserts identical geometry.
+Editing a NAMED subspecies routes edits (sliders AND the archetype dropdown)
+to per-species overrides; sliders DISPLAY resolved per-species values.
+`save_global_patch` PRUNES values equal to defaults();
+`apply_vegetation_look` re-reads `flat_merged` after persisting. Modal
+sections: Size (real-unit knobs + archetype dropdown + variant) / Character
+(4 macros) / Foliage detail / Growth / Advanced (incl. the Detail distance
+slider); colour rows Tint / Highlight / Bark; hover help via `SLIDER_TIPS`.
 
-**Resolution ladder (amended).** species override > user family edit >
-SPECS variant > defaults still holds, with two refinements: (1) a user FAMILY
-edit applies to named variants as a RATIO over the family default
-(`settings_with_variant` dims loop) — "make deciduous taller" resizes birch/
-beech/chestnut proportionally; flat replacement turned every subspecies into
-byte-identical clones on any fully-tuned map ("all subspecies are
-placeholders" back through the per-map door). (2) A species-layer entry for a
-GENERIC family id ("Save as species default" on plain Deciduous) is the
-WEAKEST user layer: it yields to any user family edit (per-map tuning or a
-family-wide Apply). Un-gated it outranked per-map family edits forever —
-Mt Vernon's map tuned trunk_h 6.0 while a stale generic save forced 11.0, and
-the SC skeleton (momentum can ratchet shoots past consumed attractors, now
-hard-clamped to the envelope +6% / ×1.10 radius) amplified it to a 17 m tree.
-Selftests: veg_style_store (scaling + generic-weakest), vegetation_growth
-(`_test_settings_with_variant_non_clobber` asserts the ratio contract).
+**Resolution ladder.** species override > user family edit > SPECS variant >
+defaults, with: (1) a user FAMILY edit applies to named variants' numeric
+dims as a RATIO over the family default (clamp 0.15–8; flat replacement made
+every subspecies a clone on any tuned map) — the archetype string applies
+directly; (2) a species-layer entry for a GENERIC family id is the WEAKEST
+user layer (yields to any family edit). Selftests: veg_style_store,
+vegetation_growth (`_test_settings_with_variant_non_clobber`).
 
 **Harness write-discipline.** `--capture=vegdock` exercises the modal's Apply,
 which persists global + per-map style — the harness snapshots the style files

@@ -65,6 +65,7 @@ func _initialize() -> void:
 	_test_area_fill_scatter()
 	_test_incremental_chunk_rebuild()
 	_test_deciduous_branch_distribution()
+	_test_preview_parity()
 	if _failures == 0:
 		print("AUTO-VEG SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -470,7 +471,9 @@ func _test_deciduous_split_mesh() -> void:
 	_check("deciduous has 3 surfaces", mesh.get_surface_count() == 3,
 		"got %d" % mesh.get_surface_count())
 	var trunk_arrays := mesh.surface_get_arrays(0)
-	var canopy_arrays := mesh.surface_get_arrays(1)
+	# The leaf-shell surface (last) is the VISIBLE canopy; the shadow-proxy
+	# cards (surface 1) sit inside it and start higher.
+	var canopy_arrays := mesh.surface_get_arrays(mesh.get_surface_count() - 1)
 	var trunk_top := 0.0
 	for v in trunk_arrays[Mesh.ARRAY_VERTEX]:
 		trunk_top = maxf(trunk_top, (v as Vector3).y)
@@ -480,11 +483,16 @@ func _test_deciduous_split_mesh() -> void:
 	var canopy_top := -INF
 	for v in canopy_arrays[Mesh.ARRAY_VERTEX]:
 		canopy_top = maxf(canopy_top, (v as Vector3).y)
-	# v3 frame: crown starts at height_m × crown_base_pct.
+	# v3 frame: crown starts at height_m × crown_base_pct — the clump floor
+	# keeps foliage ABOVE it (a visible trunk is the "crown base %" promise)
+	# and within about a clump radius of it.
 	var d_spec: Dictionary = VegetationCardFactory.SPECS["deciduous"]
 	var crown_bottom := float(d_spec["height_m"]) * float(d_spec["crown_base_pct"]) / 100.0
-	_check("canopy starts no higher than the crown base",
-		canopy_base <= crown_bottom + 0.8,
+	_check("canopy stays above the crown base (visible trunk)",
+		canopy_base >= crown_bottom - 0.6,
+		"crown_bottom=%.2f canopy_base=%.2f" % [crown_bottom, canopy_base])
+	_check("canopy still starts NEAR the crown base",
+		canopy_base <= crown_bottom + 2.5,
 		"crown_bottom=%.2f canopy_base=%.2f" % [crown_bottom, canopy_base])
 	# ...and never dips below the trunk base, or every instance sinks: the
 	# deciduous foot is hardcoded 0.0 without ever measuring the mesh.
@@ -1473,6 +1481,62 @@ func _batch_instance_total(terrain: Node3D) -> int:
 			if mm != null:
 				n += mm.instance_count
 	return n
+
+
+## --- WYSIWYG parity: preview settings == render settings -------------------
+
+## The Tune-look studio and the map render path must resolve the SAME store
+## state to the IDENTICAL mesh — every "preview looks different from my
+## painted trees" bug traced back to these two paths diverging.
+func _test_preview_parity() -> void:
+	VegStyleStore.path_suffix = ".paritytest"
+	VegStyleStore.invalidate_cache()
+	for p in [VegStyleStore.global_v2_path(), VegStyleStore.map_v2_path(0.0, 0.0)]:
+		if FileAccess.file_exists(p):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+	VegStyleStore.invalidate_cache()
+	# A family edit + a species override + an archetype switch in the store.
+	VegetationStyleConfig.save_global({"deciduous_height_m": 19.0,
+		"deciduous_archetype": "spreading"})
+	VegetationStyleConfig.save_species_default("maple", {"deciduous_crown_width_m": 9.0})
+	var flat := VegStyleStore.flat_merged(0.0, 0.0)
+	VegAssetCache.clear()
+	# RENDER path: what a painted/auto maple batch builds from the flat style.
+	var render_mesh := VegetationCardFactory.mesh_for_canopy_lod("maple", flat,
+		VegetationCardFactory.CanopyLodTier.NEAR)
+	# PREVIEW path: the modal's own merged settings over the same state.
+	var editor_script: GDScript = load("res://scenes/ui/vegetation_preview_editor.gd")
+	var editor: Control = editor_script.new()
+	editor._species = "maple"
+	editor._load_from_state({}, flat)
+	var merged: Dictionary = editor._merged_settings()
+	VegAssetCache.clear()
+	var preview_mesh := VegetationCardFactory.mesh_for_canopy_lod("maple", merged,
+		VegetationCardFactory.CanopyLodTier.NEAR)
+	_check("parity: same surface count",
+		render_mesh.get_surface_count() == preview_mesh.get_surface_count())
+	for si in mini(render_mesh.get_surface_count(), preview_mesh.get_surface_count()):
+		var va: PackedVector3Array = render_mesh.surface_get_arrays(si)[Mesh.ARRAY_VERTEX]
+		var vb: PackedVector3Array = preview_mesh.surface_get_arrays(si)[Mesh.ARRAY_VERTEX]
+		_check("parity: surface %d vert count" % si, va.size() == vb.size(),
+			"%d vs %d" % [va.size(), vb.size()])
+	var ra := render_mesh.get_aabb()
+	var rb := preview_mesh.get_aabb()
+	_check("parity: identical AABB", ra.size.is_equal_approx(rb.size),
+		"render %s vs preview %s" % [str(ra.size), str(rb.size)])
+	# maple SPECS height 16 × family ratio (user 19 / default 14) = 21.71 —
+	# proves the store edits actually resolved rather than both paths agreeing
+	# on stale defaults.
+	_check("parity: the store edits actually resolved",
+		absf(ra.size.y - 16.0 * 19.0 / 14.0) < 0.05,
+		"got %.2f" % ra.size.y)
+	editor.free()
+	for p in [VegStyleStore.global_v2_path(), VegStyleStore.map_v2_path(0.0, 0.0)]:
+		if FileAccess.file_exists(p):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+	VegStyleStore.path_suffix = ""
+	VegStyleStore.invalidate_cache()
+	VegAssetCache.clear()
 
 
 ## --- Deciduous branch distribution (the "bunched at the trunk" rebuild) ------

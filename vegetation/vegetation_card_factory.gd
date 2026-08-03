@@ -41,42 +41,42 @@ const SPECS := {
 		"highlight": Color(0.14, 0.26, 0.10),
 		"bark": Color(0.28, 0.12, 0.08)},
 	"deciduous": {"height_m": 14.0, "crown_m": 11.0, "trunk_cm": 55.0,
-		"crown_base_pct": 25.0, "archetype": "round",
+		"crown_base_pct": 32.0, "archetype": "round",
 		"top": Color(0.18, 0.38, 0.10), "bottom": Color(0.24, 0.16, 0.06),
 		"highlight": Color(0.42, 0.52, 0.16),
 		"bark": Color(0.18, 0.12, 0.07)},
 	"chestnut": {"height_m": 20.0, "crown_m": 16.0, "trunk_cm": 85.0,
-		"crown_base_pct": 18.0, "archetype": "spreading",
+		"crown_base_pct": 30.0, "archetype": "spreading",
 		"top": Color(0.16, 0.34, 0.09), "bottom": Color(0.22, 0.14, 0.05),
 		"highlight": Color(0.38, 0.48, 0.14),
 		"bark": Color(0.22, 0.14, 0.08)},
 	"maple": {"height_m": 16.0, "crown_m": 12.0, "trunk_cm": 60.0,
-		"crown_base_pct": 22.0, "archetype": "round",
+		"crown_base_pct": 32.0, "archetype": "round",
 		"top": Color(0.20, 0.40, 0.10), "bottom": Color(0.28, 0.18, 0.06),
 		"highlight": Color(0.55, 0.35, 0.10),
 		"bark": Color(0.20, 0.14, 0.08)},
 	"cottonwood": {"height_m": 24.0, "crown_m": 14.0, "trunk_cm": 95.0,
-		"crown_base_pct": 25.0, "archetype": "vase",
+		"crown_base_pct": 35.0, "archetype": "vase",
 		"top": Color(0.22, 0.42, 0.12), "bottom": Color(0.26, 0.20, 0.08),
 		"highlight": Color(0.45, 0.55, 0.18),
 		"bark": Color(0.24, 0.20, 0.14)},
 	"aspen": {"height_m": 15.0, "crown_m": 5.0, "trunk_cm": 25.0,
-		"crown_base_pct": 40.0, "archetype": "columnar",
+		"crown_base_pct": 45.0, "archetype": "columnar",
 		"top": Color(0.25, 0.45, 0.12), "bottom": Color(0.30, 0.22, 0.08),
 		"highlight": Color(0.55, 0.62, 0.20),
 		"bark": Color(0.85, 0.88, 0.82)},
 	"birch": {"height_m": 14.0, "crown_m": 6.0, "trunk_cm": 28.0,
-		"crown_base_pct": 35.0, "archetype": "columnar",
+		"crown_base_pct": 42.0, "archetype": "columnar",
 		"top": Color(0.20, 0.40, 0.12), "bottom": Color(0.24, 0.18, 0.07),
 		"highlight": Color(0.40, 0.52, 0.18),
 		"bark": Color(0.92, 0.92, 0.90)},
 	"beech": {"height_m": 19.0, "crown_m": 14.0, "trunk_cm": 75.0,
-		"crown_base_pct": 20.0, "archetype": "spreading",
+		"crown_base_pct": 30.0, "archetype": "spreading",
 		"top": Color(0.15, 0.36, 0.10), "bottom": Color(0.22, 0.16, 0.06),
 		"highlight": Color(0.38, 0.50, 0.15),
 		"bark": Color(0.35, 0.30, 0.22)},
 	"apple": {"height_m": 6.0, "crown_m": 6.5, "trunk_cm": 35.0,
-		"crown_base_pct": 20.0, "archetype": "round",
+		"crown_base_pct": 25.0, "archetype": "round",
 		"top": Color(0.22, 0.42, 0.10), "bottom": Color(0.28, 0.16, 0.06),
 		"highlight": Color(0.55, 0.25, 0.18),
 		"bark": Color(0.22, 0.14, 0.08)},
@@ -86,12 +86,12 @@ const SPECS := {
 		"highlight": Color(0.50, 0.55, 0.18),
 		"bark": Color(0.20, 0.13, 0.07)},
 	"orange": {"height_m": 5.0, "crown_m": 4.5, "trunk_cm": 25.0,
-		"crown_base_pct": 18.0, "archetype": "round",
+		"crown_base_pct": 25.0, "archetype": "round",
 		"top": Color(0.12, 0.36, 0.10), "bottom": Color(0.18, 0.22, 0.06),
 		"highlight": Color(0.95, 0.55, 0.10),
 		"bark": Color(0.25, 0.16, 0.08)},
 	"avocado": {"height_m": 9.0, "crown_m": 8.0, "trunk_cm": 45.0,
-		"crown_base_pct": 20.0, "archetype": "round",
+		"crown_base_pct": 28.0, "archetype": "round",
 		"top": Color(0.08, 0.28, 0.10), "bottom": Color(0.12, 0.18, 0.06),
 		"highlight": Color(0.20, 0.40, 0.12),
 		"bark": Color(0.18, 0.12, 0.08)},
@@ -166,17 +166,17 @@ const SPECS := {
 		"highlight": Color(0.36, 0.52, 0.24)},
 	# --- Phase 5: tropical / food broadleaf variants (deciduous builder) ---
 	"walnut": {"height_m": 18.0, "crown_m": 14.0, "trunk_cm": 80.0,
-		"crown_base_pct": 22.0, "archetype": "spreading",
+		"crown_base_pct": 32.0, "archetype": "spreading",
 		"top": Color(0.17, 0.36, 0.10), "bottom": Color(0.22, 0.16, 0.06),
 		"highlight": Color(0.40, 0.50, 0.16),
 		"bark": Color(0.24, 0.18, 0.12)},
 	"olive": {"height_m": 6.0, "crown_m": 6.0, "trunk_cm": 50.0,
-		"crown_base_pct": 18.0, "archetype": "round",
+		"crown_base_pct": 26.0, "archetype": "round",
 		"top": Color(0.28, 0.38, 0.22), "bottom": Color(0.22, 0.28, 0.16),
 		"highlight": Color(0.55, 0.60, 0.38),
 		"bark": Color(0.32, 0.28, 0.22)},
 	"mango": {"height_m": 12.0, "crown_m": 10.0, "trunk_cm": 55.0,
-		"crown_base_pct": 18.0, "archetype": "round",
+		"crown_base_pct": 28.0, "archetype": "round",
 		"top": Color(0.10, 0.30, 0.09), "bottom": Color(0.14, 0.20, 0.07),
 		"highlight": Color(0.30, 0.46, 0.14),
 		"bark": Color(0.22, 0.16, 0.10)},
@@ -186,7 +186,7 @@ const SPECS := {
 		"highlight": Color(0.45, 0.65, 0.22),
 		"bark": Color(0.30, 0.36, 0.18)},
 	"ficus": {"height_m": 15.0, "crown_m": 14.0, "trunk_cm": 90.0,
-		"crown_base_pct": 16.0, "archetype": "spreading",
+		"crown_base_pct": 26.0, "archetype": "spreading",
 		"top": Color(0.10, 0.28, 0.09), "bottom": Color(0.14, 0.20, 0.08),
 		"highlight": Color(0.26, 0.42, 0.14),
 		"bark": Color(0.36, 0.32, 0.26)},
@@ -1652,11 +1652,13 @@ static func _clusters_from_tips(tips: Array, crown_w: float, crown_h: float,
 		* 3.0 / (4.0 * PI), 1.0 / 3.0)
 	var cw := clump_r / 0.62 * size_mul  # rx below is cw * 0.62
 	var ch := cw * 0.85
-	# Foliage must not reach below the trunk base: foot_local_y is hardcoded 0
-	# for trees, so a shell dipping under y=0 would sink every instance by the
-	# overshoot. The per-cluster floor below keeps each clump's BOTTOM
-	# (centre − ry, ry ≈ h·0.55 ×1.2 lump headroom) above ground.
-	var floor_base := 0.0
+	# Foliage floor = the authored CROWN BASE, not the ground: a clump centred
+	# on a low tip extends a full shell radius below its centre, and floored at
+	# 0 the canopy swallowed the trunk — every tree read as a bush ball sitting
+	# on the grass. Each clump's BOTTOM (centre − ry·(1+lump)) stays above the
+	# crown base, which is what "crown base %" promises the player.
+	var floor_base := trunk_h * clampf(
+		float(settings.get("deciduous_crown_base", 0.42)), 0.05, 0.92)
 	var out: Array = []
 	for ci in picked.size():
 		var p: Vector3 = picked[ci]

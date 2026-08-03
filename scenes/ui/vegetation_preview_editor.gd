@@ -795,6 +795,38 @@ func _rebuild_species_section() -> void:
 		scope_hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
 		scope_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_species_section.add_child(scope_hint)
+	# Shape archetype dropdown (tree families): the single strongest shape
+	# choice, above every slider.
+	if fam == "pine" or fam == "deciduous":
+		var arch_row := HBoxContainer.new()
+		arch_row.add_theme_constant_override("separation", 6)
+		_species_section.add_child(arch_row)
+		var arch_lbl := Label.new()
+		_style_section(arch_lbl, "Shape")
+		arch_lbl.custom_minimum_size = Vector2(44, 0)
+		arch_row.add_child(arch_lbl)
+		var arch_opt := OptionButton.new()
+		arch_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		arch_opt.tooltip_text = "Overall growth habit — round oak, spreading chestnut, columnar poplar, vase elm, weeping willow, conical fir"
+		var arch_key := "%s_archetype" % fam
+		var current := str(_resolved_active().get(arch_key, "round"))
+		for i in VegTreeArchetypes.IDS.size():
+			var aid: String = VegTreeArchetypes.IDS[i]
+			arch_opt.add_item(VegTreeArchetypes.label_for(aid), i)
+			arch_opt.set_item_metadata(i, aid)
+			if aid == current:
+				arch_opt.select(i)
+		arch_opt.item_selected.connect(func(idx: int) -> void:
+			var aid := str(arch_opt.get_item_metadata(idx))
+			if _is_named_variant():
+				var d: Dictionary = _species_edits.get(_species, {})
+				d[arch_key] = aid
+				_species_edits[_species] = d
+			else:
+				_values[arch_key] = aid
+			_refresh_apply_state()
+			_queue_rebuild())
+		arch_row.add_child(arch_opt)
 	# Sliders display the RESOLVED value for the active species — selecting
 	# Birch shows Birch's real dims (SPECS variant / species override), not the
 	# family numbers it doesn't render with.
@@ -1010,39 +1042,40 @@ func _on_preset_delete() -> void:
 # OSM → species picker
 # ---------------------------------------------------------------------------
 
-## Slider sections, in the order they are shown. "Size & form" first because it
-## is what a player reaches for; "Detail & LOD" last and collapsed because it is
-## tuning, not design.
-const SECTION_SIZE := "Size & form"
-const SECTION_BRANCHES := "Branches & clumps"
-const SECTION_FOLIAGE := "Foliage"
+## Slider sections, in the order they are shown (Overhaul v2): the real-unit
+## primary knobs first, the four character macros next, everything finer
+## collapsed under Foliage detail / Advanced.
+const SECTION_SIZE := "Size"
+const SECTION_CHARACTER := "Character"
+const SECTION_FOLIAGE := "Foliage detail"
 const SECTION_GROWTH := "Growth"
-const SECTION_DETAIL := "Detail & LOD"
-const SECTION_ORDER: Array = [SECTION_SIZE, SECTION_BRANCHES, SECTION_FOLIAGE,
+const SECTION_DETAIL := "Advanced"
+const SECTION_ORDER: Array = [SECTION_SIZE, SECTION_CHARACTER, SECTION_FOLIAGE,
 	SECTION_GROWTH, SECTION_DETAIL]
 ## Sections that start collapsed (per session; the toggle state is remembered in
 ## _section_open while the modal lives).
-const SECTIONS_COLLAPSED_BY_DEFAULT: Array = [SECTION_DETAIL]
+const SECTIONS_COLLAPSED_BY_DEFAULT: Array = [SECTION_FOLIAGE, SECTION_DETAIL]
 
 var _section_open: Dictionary = {}
 
 
 ## Which section a shape-slider key belongs to. Derived from the key so adding a
 ## slider to SPECIES_SHAPE_SLIDERS files it automatically — a per-entry
-## "section" field on ~90 specs would drift the first time someone forgot one.
+## "section" field on ~60 specs would drift the first time someone forgot one.
 static func slider_section(key: String) -> String:
+	for frag in ["branchiness", "crookedness", "_droop", "foliage_density"]:
+		if frag in key:
+			return SECTION_CHARACTER
 	if key.ends_with("_growth_years") or key.ends_with("_senescence_years"):
 		return SECTION_GROWTH
-	for frag in ["_lod_", "billboard", "shadow_proxy"]:
+	for frag in ["_lod_", "billboard", "shadow_proxy", "vertical_offset",
+			"trunk_taper", "tree_detail"]:
 		if frag in key:
 			return SECTION_DETAIL
 	for frag in ["_leaf", "_fur", "_whorl", "_bough", "cells_per_side", "blade",
-			"hue_jitter"]:
+			"hue_jitter", "_cluster", "_clump"]:
 		if frag in key:
 			return SECTION_FOLIAGE
-	for frag in ["_branch", "_cluster", "_clump", "crown_base"]:
-		if frag in key:
-			return SECTION_BRANCHES
 	return SECTION_SIZE
 
 
@@ -1628,6 +1661,13 @@ func _load_from_loader() -> void:
 			shape = _loader.call("get_vegetation_settings")
 		if _loader.has_method("get_vegetation_style"):
 			style = _loader.call("get_vegetation_style")
+	_load_from_state(shape, style)
+
+
+## Pure-data state load, split from the loader fetch so the WYSIWYG parity
+## selftest can feed the modal the exact style dict the render path uses and
+## assert both resolve to the identical mesh.
+func _load_from_state(shape: Dictionary, style: Dictionary) -> void:
 	# Precedence MUST match the render path (Phase 2): the style store is the
 	# authority and the layer contributes only SPARSE user deltas
 	# (user_settings()), merged on top. get_vegetation_settings() returns
@@ -1637,6 +1677,9 @@ func _load_from_loader() -> void:
 		if k.ends_with("_albedo_tint") or k.ends_with("_highlight_tint"):
 			continue
 		if typeof(style[k]) in [TYPE_FLOAT, TYPE_INT, TYPE_BOOL]:
+			_values[k] = style[k]
+		elif str(k).ends_with("_archetype") and style[k] is String:
+			# v3 shape archetype (string enum) rides the value model too.
 			_values[k] = style[k]
 	for k in shape:
 		_values[k] = shape[k]
@@ -1732,6 +1775,9 @@ func _shape_dict() -> Dictionary:
 		for spec in SPECIES_SHAPE_SLIDERS.get(species, []):
 			shape_keys.append(str((spec as Dictionary)["key"]))
 	shape_keys.append("vertical_offset_m")
+	# v3 archetype enums (dropdown, not a slider).
+	shape_keys.append("deciduous_archetype")
+	shape_keys.append("pine_archetype")
 	for k in shape_keys:
 		if _values.has(k):
 			out[k] = _values[k]
