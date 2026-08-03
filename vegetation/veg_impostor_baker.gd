@@ -20,10 +20,10 @@ signal bake_completed(key: String)
 ## user://veg_impostors/<key>.res keeps serving the OLD silhouette while the
 ## NEAR and MID rings show the new one. v2 = the deciduous skeleton rebuild
 ## (branches distributed over the crown, foliage on real branch tips).
-## v3: space-colonization deciduous skeleton + polygonal trunk (any change to
-## the NEAR deciduous geometry must bump this or cached impostors serve the old
+## v4: Overhaul v2 — exact-size real-unit meshes + archetype model (any change
+## to the NEAR tree geometry must bump this or cached impostors serve the old
 ## silhouette forever).
-const BAKE_VERSION := 3
+const BAKE_VERSION := 4
 const CACHE_DIR := "user://veg_impostors"
 const ATLAS_PX := 1024
 const GRID := 3
@@ -91,6 +91,9 @@ static func bake_key(species: String, settings: Dictionary) -> String:
 			parts.append("%s=%.3f" % [k, float(v)])
 		elif v is bool:
 			parts.append("%s=%s" % [k, "1" if v else "0"])
+		elif v is String:
+			# v3 archetype id — a shape change MUST re-bake.
+			parts.append("%s=%s" % [k, v])
 	if resolved.has("bark_albedo_tint") and resolved["bark_albedo_tint"] is Color:
 		var b: Color = resolved["bark_albedo_tint"]
 		parts.append("bark=%.3f,%.3f,%.3f" % [b.r, b.g, b.b])

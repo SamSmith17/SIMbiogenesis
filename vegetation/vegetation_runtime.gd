@@ -129,100 +129,47 @@ static func _build_grass_bulk_batches(root: Node3D, species: String, records: Ar
 				env.register_multimesh_instance(mi, species)
 
 
+## Vegetation Overhaul v2 LOD: every tree chunk builds exactly TWO batches —
+## the real 3D mesh inside the camera-based detail range, and the baked
+## impostor beyond it. The impostor is rendered FROM the NEAR mesh, so a
+## distant tree matches the tuned look; the crossed-card tier survives only as
+## the bake-pending stand-in (and permanently under --headless, where the
+## baker never runs — deterministic selftests). The SoI ring system and the
+## large-map force_far flattening are GONE: force_far was why a 30 km map
+## (Mt Vernon) never showed a real 3D tree at ANY distance.
+##
+## Ranges are set at BUILD time only (AMD Vulkan hard-crashes on live
+## visibility_range sweeps); the detail-distance slider triggers the normal
+## debounced rebuild. `tree_detail_eff_m` is the loader's budget-shrunk value
+## (VegLodPolicy); the raw user slider is the fallback.
 static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
 		visibility_end_m: float, growth_map: VegetationInstanceMap = null,
 		chunk_x: int = 0, chunk_z: int = 0) -> void:
+	var detail_m := clampf(float(settings.get("tree_detail_eff_m",
+		settings.get("tree_detail_distance_m", 220.0))), 40.0, 4000.0)
 	if not VegetationCardFactory.canopy_lod_enabled(species, settings):
-		# LOD disabled by style: one full-detail batch — EXCEPT under the
-		# large-map force_far budget, which must still win or a style toggle
-		# could re-arm the 30 km leaf-shell prim bomb.
-		var solo_tier := VegetationCardFactory.CanopyLodTier.FAR \
-			if bool(settings.get("auto_force_far_canopy", false)) \
-			else VegetationCardFactory.CanopyLodTier.NEAR
+		# Style opted out of the impostor handoff: full mesh at every distance
+		# (an explicit, costly choice — the budget shrink still applies).
+		detail_m = visibility_end_m
+	if detail_m >= visibility_end_m - 1.0:
 		_build_canopy_single_batch(root, species, records, ground_y_at, align_to_surface,
-			settings, visibility_end_m, solo_tier, growth_map,
-			chunk_x, chunk_z)
+			settings, visibility_end_m, VegetationCardFactory.CanopyLodTier.NEAR,
+			growth_map, chunk_x, chunk_z)
 		return
-	# Phase 3a: static SoI-centred detail rings. Only chunks in the NEAR ring
-	# carry the expensive leaf-shell tier (+ its far pair); MID chunks build
-	# the cheap FAR card mesh full-range; OUTER chunks use the baked impostor
-	# quad (2 tris/tree) when a bake exists, else FAR cards while the bake
-	# runs (or forever under --headless — deterministic selftests). Tier is a
-	# property of the CHUNK's distance to the site core, not the camera — the
-	# high-detail region does not move with the player.
-	var ring := VegTierRings.ring_for_chunk_settings(chunk_x, chunk_z, CHUNK_SIZE_M, settings)
-	# Large-map impostor-only mode: force_far demotes the MID ring to OUTER
-	# (impostor when baked, FAR cards otherwise). The NEAR ring stays exempt.
-	if ring == VegTierRings.RING_MID and bool(settings.get("auto_force_far_canopy", false)):
-		ring = VegTierRings.RING_OUTER
-	if ring == VegTierRings.RING_OUTER:
-		var iset := VegImpostorBaker.cached_set(species, settings)
-		if iset != null and iset.is_usable():
-			_build_impostor_batch(root, species, records, ground_y_at, align_to_surface,
-				settings, visibility_end_m, iset, growth_map, chunk_x, chunk_z)
-			return
-		VegImpostorBaker.request_async(species, settings)
-	if ring != VegTierRings.RING_NEAR:
-		_build_canopy_single_batch(root, species, records, ground_y_at, align_to_surface,
-			settings, visibility_end_m, VegetationCardFactory.CanopyLodTier.FAR, growth_map,
-			chunk_x, chunk_z)
+	_build_canopy_single_batch(root, species, records, ground_y_at, align_to_surface,
+		settings, detail_m, VegetationCardFactory.CanopyLodTier.NEAR,
+		growth_map, chunk_x, chunk_z)
+	var far_begin := maxf(detail_m - LOD_FADE_MARGIN_M, 0.0)
+	var iset := VegImpostorBaker.cached_set(species, settings)
+	if iset != null and iset.is_usable():
+		_build_impostor_batch(root, species, records, ground_y_at, align_to_surface,
+			settings, visibility_end_m, iset, growth_map, chunk_x, chunk_z, far_begin)
 		return
-	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
-	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
-	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
-	for tier in [VegetationCardFactory.CanopyLodTier.NEAR,
-			VegetationCardFactory.CanopyLodTier.FAR]:
-		var mesh := VegetationCardFactory.mesh_for_canopy_lod(species, settings, tier)
-		var vis := VegetationCardFactory.canopy_visibility_range_for_tier(
-			species, tier, settings, visibility_end_m)
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.mesh = mesh
-		mm.instance_count = records.size()
-		var pending: Array = []
-		var i := 0
-		for item in records:
-			if not (item is Dictionary):
-				continue
-			var d: Dictionary = item
-			var x := float(d.get("x", 0.0))
-			var z := float(d.get("z", 0.0))
-			var yaw := float(d.get("yaw", 0.0))
-			var base_scale := float(d.get("scale", 1.0)) * species_scale
-			var scale := base_scale * VegetationGrowth.instance_scale_mult(species, d, settings)
-			var record_vert := float(d.get("vert_off", vert_off))
-			var gy: float = float(ground_y_at.call(x, z))
-			mm.set_instance_transform(i, VegetationPaint.build_transform(
-				x, gy, z, yaw, scale, align_to_surface, Vector3.UP, record_vert, foot_y))
-			if growth_map != null:
-				pending.append({
-					"record": d, "base_scale": base_scale, "vert_off": record_vert,
-					"x": x, "z": z, "yaw": yaw, "ground_y": gy,
-				})
-			i += 1
-		mm.instance_count = i
-		if i == 0:
-			continue
-		var mi := MultiMeshInstance3D.new()
-		mi.name = "Bulk_%s_%d_%d_%d" % [species, tier, chunk_x, chunk_z]
-		mi.multimesh = mm
-		mi.material_override = null
-		# Shadow casting is globally gated (off by default; on for solar analysis).
-		VegetationShadowPolicy.apply(mi, species)
-		apply_visibility_range(mi, vis.x, vis.y)
-		root.add_child(mi)
-		if growth_map != null:
-			for j in pending.size():
-				var p: Dictionary = pending[j]
-				_register_growth(growth_map, mi, j, p["record"], species,
-					float(p["base_scale"]), float(p["vert_off"]), foot_y, align_to_surface,
-					float(p["x"]), float(p["z"]), float(p["yaw"]), float(p["ground_y"]))
-		var tree := Engine.get_main_loop()
-		if tree is SceneTree:
-			var env := (tree as SceneTree).root.get_node_or_null("VegetationEnvironmentSync")
-			if env != null and env.has_method("register_multimesh_instance"):
-				env.register_multimesh_instance(mi, species)
+	VegImpostorBaker.request_async(species, settings)
+	_build_canopy_single_batch(root, species, records, ground_y_at, align_to_surface,
+		settings, visibility_end_m, VegetationCardFactory.CanopyLodTier.FAR,
+		growth_map, chunk_x, chunk_z, far_begin)
 
 
 ## OUTER-ring impostor batch: one camera-facing baked quad per tree (2 tris vs
@@ -233,7 +180,8 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 static func _build_impostor_batch(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
 		visibility_end_m: float, iset: VegImpostorSet,
-		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0) -> void:
+		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0,
+		range_begin: float = -1.0) -> void:
 	var mesh := VegImpostorBaker.quad_mesh_for(iset)
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
 	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
@@ -271,7 +219,8 @@ static func _build_impostor_batch(root: Node3D, species: String, records: Array,
 	mi.material_override = null
 	# A 2-tri billboard casts a plank shadow — never cast from impostors.
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	apply_visibility_range(mi, VISIBILITY_BEGIN, visibility_end_m)
+	apply_visibility_range(mi,
+		range_begin if range_begin >= 0.0 else VISIBILITY_BEGIN, visibility_end_m)
 	root.add_child(mi)
 	if growth_map != null:
 		for j in pending.size():
@@ -292,7 +241,8 @@ static func _build_impostor_batch(root: Node3D, species: String, records: Array,
 static func _build_canopy_single_batch(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
 		visibility_end_m: float, tier: VegetationCardFactory.CanopyLodTier,
-		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0) -> void:
+		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0,
+		range_begin: float = -1.0) -> void:
 	var mesh := VegetationCardFactory.mesh_for_canopy_lod(species, settings, tier)
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
 	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
@@ -326,11 +276,12 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 	if i == 0:
 		return
 	var mi := MultiMeshInstance3D.new()
-	mi.name = "Bulk_%s_%d_%d" % [species, chunk_x, chunk_z]
+	mi.name = "Bulk_%s_%d_%d_%d" % [species, tier, chunk_x, chunk_z]
 	mi.multimesh = mm
 	mi.material_override = null
 	VegetationShadowPolicy.apply(mi, species)
-	apply_visibility_range(mi, VISIBILITY_BEGIN, visibility_end_m)
+	apply_visibility_range(mi,
+		range_begin if range_begin >= 0.0 else VISIBILITY_BEGIN, visibility_end_m)
 	root.add_child(mi)
 	if growth_map != null:
 		for j in pending.size():
@@ -566,14 +517,9 @@ static func _build_bulk_batch(root: Node3D, species: String, records: Array,
 	if family == "deciduous" or family == "pine":
 		var tree_end := float(batch_settings.get("auto_visibility_end_m",
 			_visibility_end_for_species(species)))
-		# Large world maps force FAR billboards only (same flag as AutoVegetation).
-		# Near-spawn manual paint was the Mt. Vernon orbit prim bomb once auto
-		# forests were thinned — leafy NEAR shells × dual MultiMeshes.
-		if bool(batch_settings.get("auto_force_far_canopy", false)):
-			_build_canopy_single_batch(root, species, records, ground_y_at,
-				align_to_surface, batch_settings, tree_end,
-				VegetationCardFactory.CanopyLodTier.FAR, growth_map, chunk_x, chunk_z)
-			return
+		# Overhaul v2: force_far is GONE — painted trees always get the real 3D
+		# mesh inside the (budget-shrunk) detail range, impostors beyond. On
+		# large maps the budget shrink in VegLodPolicy is the prim guard.
 		_build_canopy_lod_bulk_batches(root, species, records, ground_y_at, align_to_surface,
 			batch_settings, tree_end, growth_map, chunk_x, chunk_z)
 		return

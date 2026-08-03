@@ -234,11 +234,6 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 			style["grass_visibility_end_m"] = 260.0
 		if float(style.get("auto_visibility_end_m", 1200.0)) >= 640.0:
 			style["auto_visibility_end_m"] = 480.0
-		# FAR-only billboards for auto forests on large maps (manual paint keeps
-		# leafy NEAR). Consumed by AutoVegetationRuntime._build_bulk_batch.
-		style["auto_force_far_canopy"] = true
-		if float(style.get("auto_foliage_lod_reach_m", 300.0)) >= 200.0:
-			style["auto_foliage_lod_reach_m"] = 70.0
 	state.style = style
 	ctx["style"] = style
 	_set_run_style(style)

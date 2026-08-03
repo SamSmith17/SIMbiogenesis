@@ -164,20 +164,25 @@ func _test_veg_profiles() -> void:
 	var hi := RenderProfile.veg_profile(RenderProfile.QUALITY_HIGH)
 	var hs: Dictionary = hi["style"]
 	var defaults := VegetationStyleConfig.defaults()
-	for pair in [["veg_near_ring_m", 250.0], ["veg_mid_ring_m", 700.0],
-			["deciduous_leaf_shell_count", 5.0], ["grass_detail_radius_m", 500.0],
+	for pair in [["tree_detail_distance_m", 220.0], ["tree_near_budget", 1500.0],
+			["deciduous_leaf_shell_count", 4.0], ["grass_detail_radius_m", 500.0],
 			["grass_visibility_end_m", 520.0], ["auto_visibility_end_m", 1200.0]]:
 		_check("HIGH veg %s pinned" % pair[0],
 			is_equal_approx(float(hs[pair[0]]), float(pair[1])))
-		# Ring keys were retired from defaults() in the v3 overhaul; the pinned
-		# value doubles as the reference until the P4 LOD tables land.
+		# Where a key exists in defaults() the HIGH tier must match it exactly
+		# (an untouched install renders the shipped default look).
 		_check("HIGH veg %s == style defaults (behaviour-preserving)" % pair[0],
 			is_equal_approx(float(hs[pair[0]]),
 				float(defaults.get(pair[0], pair[1]))))
 	_check("HIGH tree cap pinned", int(hs["auto_max_tree_instances"]) == 24000)
 	_check("HIGH grass cap pinned", int(hs["auto_max_grass_instances"]) == 120000)
 	var hl: Dictionary = hi["style_large"]
-	_check("HIGH large force_far (old hardcode)", bool(hl["auto_force_far_canopy"]))
+	# Overhaul v2: force_far is GONE — large maps get a shorter detail distance
+	# plus the VegLodPolicy budget shrink, never a card-only forest.
+	_check("force_far is retired (no tier sets it)",
+		not hl.has("auto_force_far_canopy"))
+	_check("HIGH large detail distance shortened",
+		is_equal_approx(float(hl["tree_detail_distance_m"]), 180.0))
 	_check("HIGH large tree cap == old hardcode", int(hl["auto_max_tree_instances"]) == 4000)
 	_check("HIGH large grass cap == old hardcode", int(hl["auto_max_grass_instances"]) == 24000)
 	_check("HIGH large vis == old hardcode", is_equal_approx(float(hl["auto_visibility_end_m"]), 480.0))
@@ -186,11 +191,12 @@ func _test_veg_profiles() -> void:
 
 	var ultra := RenderProfile.veg_profile(RenderProfile.QUALITY_ULTRA)
 	_check("ULTRA veg shadows on", bool(ultra["veg_shadows"]))
-	_check("ULTRA large map keeps leaf tiers",
-		not bool((ultra["style_large"] as Dictionary)["auto_force_far_canopy"]))
+	_check("ULTRA large detail reach",
+		is_equal_approx(float((ultra["style_large"] as Dictionary)["tree_detail_distance_m"]), 300.0))
 	var lo := RenderProfile.veg_profile(RenderProfile.QUALITY_LOW)
 	_check("LOW shells pinned", is_equal_approx(float((lo["style"] as Dictionary)["deciduous_leaf_shell_count"]), 3.0))
-	_check("LOW large force_far", bool((lo["style_large"] as Dictionary)["auto_force_far_canopy"]))
+	_check("LOW large detail shortened",
+		is_equal_approx(float((lo["style_large"] as Dictionary)["tree_detail_distance_m"]), 100.0))
 
 	_check("unknown veg level falls back to HIGH",
 		RenderProfile.veg_profile(99) == hi)
@@ -203,7 +209,8 @@ func _test_veg_profiles() -> void:
 func _test_veg_monotonic() -> void:
 	var order := [RenderProfile.QUALITY_LOW, RenderProfile.QUALITY_MEDIUM,
 		RenderProfile.QUALITY_HIGH, RenderProfile.QUALITY_ULTRA]
-	var keys := ["veg_near_ring_m", "veg_mid_ring_m", "deciduous_leaf_shell_count",
+	var keys := ["tree_detail_distance_m", "tree_near_budget",
+		"deciduous_leaf_shell_count",
 		"auto_max_tree_instances", "auto_max_grass_instances",
 		"grass_detail_radius_m", "grass_visibility_end_m", "auto_visibility_end_m"]
 	for i in range(1, order.size()):
@@ -218,9 +225,8 @@ func _test_veg_monotonic() -> void:
 		var s: Dictionary = p["style"]
 		var l: Dictionary = p["style_large"]
 		for k in ["auto_max_tree_instances", "auto_max_grass_instances",
-				"auto_visibility_end_m", "grass_visibility_end_m"]:
+				"auto_visibility_end_m", "grass_visibility_end_m",
+				"tree_detail_distance_m"]:
 			_check("large-map %s <= normal at q%d" % [k, q],
 				float(l[k]) <= float(s[k]),
 				"%s > %s" % [str(l[k]), str(s[k])])
-		_check("rings ordered at q%d" % q,
-			float(s["veg_mid_ring_m"]) >= float(s["veg_near_ring_m"]))

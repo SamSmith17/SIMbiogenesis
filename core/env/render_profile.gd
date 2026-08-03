@@ -160,16 +160,18 @@ static func shadow_profile(shadow_quality: int) -> Dictionary:
 ##                (Phase 6; High/Ultra — one emitter per NEAR-ring deciduous
 ##                chunk, and only while the canopy is actually shedding).
 ##
-## Ring radii are the static SoI detail rings (VegTierRings): the leaf-shell
-## tier exists only within veg_near_ring_m of the SoI centre, FAR cards to
-## veg_mid_ring_m, impostor quads beyond. Unknown levels fall back to HIGH.
+## Overhaul v2 LOD keys: tree_detail_distance_m = how far the real 3D tree
+## mesh renders before handing off to the baked impostor (camera-based);
+## tree_near_budget caps the worst-case full-mesh tree count around any
+## viewpoint (VegLodPolicy shrinks the effective distance on dense maps —
+## the old force_far flattening is gone). Unknown levels fall back to HIGH.
 static func veg_profile(quality: int) -> Dictionary:
 	match quality:
 		QUALITY_LOW:
 			return {
 				"style": {
-					"veg_near_ring_m": 80.0,
-					"veg_mid_ring_m": 250.0,
+					"tree_detail_distance_m": 120.0,
+					"tree_near_budget": 400,
 					"deciduous_leaf_shell_count": 3.0,
 					"auto_max_tree_instances": 8000,
 					"auto_max_grass_instances": 40000,
@@ -178,7 +180,7 @@ static func veg_profile(quality: int) -> Dictionary:
 					"auto_visibility_end_m": 700.0,
 				},
 				"style_large": {
-					"auto_force_far_canopy": true,
+					"tree_detail_distance_m": 100.0,
 					"auto_max_tree_instances": 2000,
 					"auto_max_grass_instances": 12000,
 					"auto_visibility_end_m": 480.0,
@@ -194,8 +196,8 @@ static func veg_profile(quality: int) -> Dictionary:
 		QUALITY_MEDIUM:
 			return {
 				"style": {
-					"veg_near_ring_m": 150.0,
-					"veg_mid_ring_m": 450.0,
+					"tree_detail_distance_m": 160.0,
+					"tree_near_budget": 800,
 					"deciduous_leaf_shell_count": 4.0,
 					"auto_max_tree_instances": 16000,
 					"auto_max_grass_instances": 80000,
@@ -204,7 +206,7 @@ static func veg_profile(quality: int) -> Dictionary:
 					"auto_visibility_end_m": 1000.0,
 				},
 				"style_large": {
-					"auto_force_far_canopy": true,
+					"tree_detail_distance_m": 140.0,
 					"auto_max_tree_instances": 4000,
 					"auto_max_grass_instances": 24000,
 					"auto_visibility_end_m": 480.0,
@@ -220,9 +222,9 @@ static func veg_profile(quality: int) -> Dictionary:
 		QUALITY_ULTRA:
 			return {
 				"style": {
-					"veg_near_ring_m": 400.0,
-					"veg_mid_ring_m": 1100.0,
-					"deciduous_leaf_shell_count": 7.0,
+					"tree_detail_distance_m": 400.0,
+					"tree_near_budget": 4000,
+					"deciduous_leaf_shell_count": 6.0,
 					"auto_max_tree_instances": 24000,
 					"auto_max_grass_instances": 120000,
 					"grass_detail_radius_m": 700.0,
@@ -230,7 +232,7 @@ static func veg_profile(quality: int) -> Dictionary:
 					"auto_visibility_end_m": 1800.0,
 				},
 				"style_large": {
-					"auto_force_far_canopy": false,
+					"tree_detail_distance_m": 300.0,
 					"auto_max_tree_instances": 12000,
 					"auto_max_grass_instances": 48000,
 					"auto_visibility_end_m": 1200.0,
@@ -247,12 +249,9 @@ static func veg_profile(quality: int) -> Dictionary:
 	# untouched install renders identically to before quality wiring existed.
 	return {
 		"style": {
-			"veg_near_ring_m": 250.0,
-			"veg_mid_ring_m": 700.0,
-			# Retuned with the skeleton-driven canopy: foliage sits on real branch
-			# tips now, so 5 shells over 12 clusters reads denser than the old 7
-			# over 10 AND costs fewer triangles.
-			"deciduous_leaf_shell_count": 5.0,
+			"tree_detail_distance_m": 220.0,
+			"tree_near_budget": 1500,
+			"deciduous_leaf_shell_count": 4.0,
 			"auto_max_tree_instances": 24000,
 			"auto_max_grass_instances": 120000,
 			"grass_detail_radius_m": 500.0,
@@ -260,7 +259,7 @@ static func veg_profile(quality: int) -> Dictionary:
 			"auto_visibility_end_m": 1200.0,
 		},
 		"style_large": {
-			"auto_force_far_canopy": true,
+			"tree_detail_distance_m": 180.0,
 			"auto_max_tree_instances": 4000,
 			"auto_max_grass_instances": 24000,
 			"auto_visibility_end_m": 480.0,

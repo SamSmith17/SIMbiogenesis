@@ -327,35 +327,6 @@ static func _build_pine_far_billboard(spec: Dictionary, settings: Dictionary) ->
 	return mesh
 
 
-static func canopy_visibility_range_for_tier(species: String, tier: CanopyLodTier,
-		settings: Dictionary, far_end_m: float) -> Vector2:
-	var prefix := "deciduous" if mesh_family(species) == "deciduous" else "pine"
-	var near_end := float(settings.get("%s_lod_near_m" % prefix,
-		settings.get("deciduous_lod_near_m", 200.0)))
-	var far_begin := float(settings.get("%s_lod_far_begin_m" % prefix,
-		settings.get("deciduous_lod_far_begin_m", 190.0)))
-	# Keep the near (leaf/fur) and far (billboard) tiers overlapping: if the two
-	# independent sliders cross so far_begin > near_end, there is a dead band where
-	# neither tier draws (trees pop to a bare/billboard look mid-range). Clamp the
-	# billboard start to just inside the leaf end so the crossfade is continuous.
-	far_begin = minf(far_begin, near_end)
-	match tier:
-		CanopyLodTier.NEAR:
-			return Vector2(0.0, near_end)
-		_:
-			return Vector2(far_begin, maxf(far_end_m, near_end))
-
-
-static func deciduous_visibility_range_for_tier(tier: CanopyLodTier,
-		settings: Dictionary, far_end_m: float) -> Vector2:
-	return canopy_visibility_range_for_tier("deciduous", tier, settings, far_end_m)
-
-
-static func pine_visibility_range_for_tier(tier: CanopyLodTier,
-		settings: Dictionary, far_end_m: float) -> Vector2:
-	return canopy_visibility_range_for_tier("pine", tier, settings, far_end_m)
-
-
 static func deciduous_lod_enabled(settings: Dictionary) -> bool:
 	return bool(settings.get("deciduous_leaf_lod_enabled", true))
 

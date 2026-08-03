@@ -351,8 +351,6 @@ var _auto_veg_scatter_regen := false
 var _manual_veg_pending := false
 ## Phase 3a: SoI centre the veg detail rings were last built around, and the
 ## debounce flag for re-ringing after the player relocates the pin.
-var _veg_ring_built_center := Vector2.ZERO
-var _veg_ring_rebuild_pending := false
 ## Phase 3b: in-process impostor baker (windowed only) + rebuild debounce so
 ## a burst of bake completions triggers ONE veg rebuild.
 var _impostor_baker: VegImpostorBaker = null
@@ -6005,26 +6003,11 @@ func _on_impostor_bake_completed(_key: String) -> void:
 	, CONNECT_ONE_SHOT)
 
 
-## Re-ring vegetation (debounced) after the SoI pin moves: soi_changed fires
-## per drag step, and a full veg rebuild per step would stutter — wait for the
-## pin to settle, then rebuild once if it actually moved meaningfully.
+## Overhaul v2: tree LOD is camera-distance based, so moving the SoI pin no
+## longer changes which trees are detailed — nothing to re-ring. Kept as a
+## no-op because the SoiService callback registration predates map load.
 func _on_soi_changed_for_veg() -> void:
-	if not _built or _veg_ring_rebuild_pending:
-		return
-	var soi := get_node_or_null("/root/SoiService")
-	if soi == null or not soi.has_method("world_center"):
-		return
-	var c: Vector3 = soi.world_center()
-	if Vector2(c.x, c.z).distance_to(_veg_ring_built_center) < 64.0:
-		return
-	_veg_ring_rebuild_pending = true
-	var t := get_tree().create_timer(2.0)
-	t.timeout.connect(func() -> void:
-		_veg_ring_rebuild_pending = false
-		if not _built:
-			return
-		_rebuild_all_vegetation()
-	, CONNECT_ONE_SHOT)
+	pass
 
 
 func _reground_vegetation() -> void:
@@ -6396,14 +6379,19 @@ func _auto_veg_runtime_settings() -> Dictionary:
 	# (VegetationGrowth.instance_scale_mult). Same value for every record in a
 	# rebuild, so it never affects batch partitioning.
 	s["growth_now_h"] = _growth_clock_h
-	# Phase 3a: static detail rings are anchored on the LIVE SoI centre. Moving
-	# the pin re-rings on the next rebuild (_on_soi_changed_for_veg debounces one).
-	var soi := get_node_or_null("/root/SoiService")
-	if soi != null and soi.has_method("world_center"):
-		var c: Vector3 = soi.world_center()
-		s["veg_ring_center_x"] = c.x
-		s["veg_ring_center_z"] = c.z
-		_veg_ring_built_center = Vector2(c.x, c.z)
+	# Overhaul v2 LOD: budget-shrunk effective tree detail distance. The user's
+	# tree_detail_distance_m is honoured wherever affordable; on dense maps the
+	# worst-case near-set of full 3D trees is capped by the quality tier's
+	# budget (VegLodPolicy shrinks the range, never flattens the forest).
+	var bulks: Array = []
+	if _vegetation_layer != null:
+		bulks.append(_vegetation_layer.bulk)
+	if _auto_veg_layer != null:
+		bulks.append(_auto_veg_layer.bulk)
+	var requested := float(s.get("tree_detail_distance_m", 220.0))
+	var budget := int(s.get("tree_near_budget", 1500))
+	s["tree_detail_eff_m"] = VegLodPolicy.effective_detail_distance(
+		VegLodPolicy.chunk_tree_counts(bulks), requested, budget)
 	return s
 
 
@@ -7208,6 +7196,10 @@ const _GENERATOR_FLOAT_KEYS: Array[String] = [
 	"grass_detail_radius_m", "grass_lawn_card_w",
 	"grass_lawn_bulk_scale", "grass_field_bulk_scale",
 	"mix_pine", "mix_deciduous", "mix_shrub",
+	# v3: auto records bake scale = osm_height / resolved_height at SCATTER, so
+	# an authored-height change must re-scatter or every stored scale encodes
+	# the old resolved height.
+	"deciduous_height_m", "pine_height_m",
 ]
 const _GENERATOR_BOOL_KEYS: Array[String] = [
 	"open_areas_exclude_trees", "scatter_lawn_field",

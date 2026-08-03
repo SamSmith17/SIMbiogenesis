@@ -3366,10 +3366,10 @@ func _veg_forest_anchor(loader: Node) -> Vector2:
 
 
 func _veg_boundary_waypoint(loader: Node, anchor: Vector2) -> Dictionary:
-	var reach := 300.0
+	var reach := 220.0
 	if loader.has_method("get_vegetation_style"):
 		var style: Dictionary = loader.call("get_vegetation_style")
-		reach = float(style.get("auto_foliage_lod_reach_m", 300.0))
+		reach = float(style.get("tree_detail_distance_m", 220.0))
 	var eye := _ground_y(loader, anchor.x - reach, anchor.y) + 4.0
 	return {
 		"pos": Vector3(anchor.x - reach, eye, anchor.y),
@@ -3446,9 +3446,9 @@ func _write_veg_diagnostics(loader: Node, dir: String) -> void:
 	}
 	if loader.has_method("get_vegetation_style"):
 		var style: Dictionary = loader.call("get_vegetation_style")
-		for k in ["auto_force_far_canopy", "auto_foliage_lod_reach_m",
+		for k in ["tree_detail_distance_m", "tree_detail_eff_m", "tree_near_budget",
 				"auto_visibility_end_m", "grass_visibility_end_m", "auto_density_scale",
-				"auto_tree_scale", "auto_max_tree_instances", "auto_max_grass_instances"]:
+				"auto_max_tree_instances", "auto_max_grass_instances"]:
 			if style.has(k):
 				diag["style"][k] = style[k]
 	var f := FileAccess.open("%s/veg_diagnostics.json" % dir, FileAccess.WRITE)
