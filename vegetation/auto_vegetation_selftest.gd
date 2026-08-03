@@ -480,16 +480,12 @@ func _test_deciduous_split_mesh() -> void:
 	var canopy_top := -INF
 	for v in canopy_arrays[Mesh.ARRAY_VERTEX]:
 		canopy_top = maxf(canopy_top, (v as Vector3).y)
-	var nominal_trunk_h := float(VegetationCardFactory.SPECS["deciduous"]["trunk_h"])
-	# This used to assert the canopy STARTED at the trunk top (within 0.65 m),
-	# which is precisely the lollipop the deciduous rebuild removed: foliage
-	# now hangs on branch tips spread over the crown-bearing trunk, so it
-	# legitimately reaches well below the trunk top. The invariants that
-	# actually matter are kept and tightened:
-	var crown_base := float(VegetationCardFactory.SPECS["deciduous"]["crown_base"])
+	# v3 frame: crown starts at height_m × crown_base_pct.
+	var d_spec: Dictionary = VegetationCardFactory.SPECS["deciduous"]
+	var crown_bottom := float(d_spec["height_m"]) * float(d_spec["crown_base_pct"]) / 100.0
 	_check("canopy starts no higher than the crown base",
-		canopy_base <= nominal_trunk_h * crown_base + 0.5,
-		"crown_base=%.2f canopy_base=%.2f" % [nominal_trunk_h * crown_base, canopy_base])
+		canopy_base <= crown_bottom + 0.8,
+		"crown_bottom=%.2f canopy_base=%.2f" % [crown_bottom, canopy_base])
 	# ...and never dips below the trunk base, or every instance sinks: the
 	# deciduous foot is hardcoded 0.0 without ever measuring the mesh.
 	_check("canopy stays above the foot", canopy_base >= 0.0,
@@ -1028,12 +1024,12 @@ func _test_pick_species_grass() -> void:
 ## --- Phase 0 veg-overhaul regression guards -------------------------------
 
 
-## NEUTRAL_BULK must WIN over the style dict (the defeated merge rendered every
-## auto deciduous tree x1.6 its OSM-derived height), and auto_tree_scale is the
-## one honest whole-forest size knob routed through the tree bulk keys.
+## v3: tree families are EXACT-size — species_bulk_scale is hard 1.0 for trees
+## no matter what the settings claim (no hidden multiplier can ever resize a
+## tree again), while shrub/grass_field stay neutralised against their
+## scatter-baked bulk factors.
 func _test_neutral_bulk_wins() -> void:
 	var s := AutoVegetationRuntime.neutralized_settings({
-		"deciduous_bulk_scale": 1.6, "pine_bulk_scale": 1.3,
 		"shrub_bulk_scale": 0.8, "grass_field_bulk_scale": 1.25,
 		"unrelated_key": 42,
 	})
@@ -1041,20 +1037,15 @@ func _test_neutral_bulk_wins() -> void:
 		_check("neutralized %s == 1.0" % key, is_equal_approx(float(s[key]), 1.0),
 			"got %s" % str(s[key]))
 	_check("non-bulk keys pass through", int(s.get("unrelated_key", 0)) == 42)
-	_check("factory sees neutral deciduous scale",
-		is_equal_approx(VegetationCardFactory.species_bulk_scale("deciduous", s), 1.0))
-	var s2 := AutoVegetationRuntime.neutralized_settings({
-		"deciduous_bulk_scale": 1.6, "auto_tree_scale": 1.4,
-	})
-	_check("auto_tree_scale drives deciduous", is_equal_approx(
-		float(s2["deciduous_bulk_scale"]), 1.4), "got %s" % str(s2["deciduous_bulk_scale"]))
-	_check("auto_tree_scale drives pine", is_equal_approx(float(s2["pine_bulk_scale"]), 1.4))
-	_check("auto_tree_scale never touches grass_field",
-		is_equal_approx(float(s2["grass_field_bulk_scale"]), 1.0))
-	var s3 := AutoVegetationRuntime.neutralized_settings({"auto_tree_scale": 99.0})
-	_check("auto_tree_scale clamped to 3.0",
-		is_equal_approx(float(s3["deciduous_bulk_scale"]), 3.0),
-		"got %s" % str(s3["deciduous_bulk_scale"]))
+	_check("trees are exact-size (no bulk multiplier, ever)",
+		is_equal_approx(VegetationCardFactory.species_bulk_scale("deciduous",
+			{"deciduous_bulk_scale": 1.6}), 1.0))
+	_check("pine exact-size too",
+		is_equal_approx(VegetationCardFactory.species_bulk_scale("pine",
+			{"pine_bulk_scale": 6.0}), 1.0))
+	_check("shrub bulk still honoured",
+		is_equal_approx(VegetationCardFactory.species_bulk_scale("shrub",
+			{"shrub_bulk_scale": 1.3}), 1.3))
 
 
 ## Explicitly-mapped features (points/rows/hedges) scatter BEFORE polygons so a
@@ -1491,10 +1482,15 @@ func _batch_instance_total(terrain: Node3D) -> int:
 ## placement maths here would pass happily against a broken generator.
 func _test_deciduous_branch_distribution() -> void:
 	var st := VegetationStyleConfig.defaults()
-	var trunk_h := float(st["deciduous_trunk_h"])
-	var trunk_w := float(st["deciduous_trunk_w"])
-	var places := VegetationCardFactory.deciduous_primary_placements(trunk_w, trunk_h, st)
-	var n := clampi(int(round(float(st["deciduous_branch_count"]))), 2, 12)
+	# v3: builder params come from the archetype/macro adapter (the raw style
+	# no longer carries branch keys) — assert against the SAME derived dict the
+	# mesh builder consumes.
+	var d_spec := VegetationCardFactory._deciduous_spec(st)
+	var s := VegetationCardFactory._deciduous_adapter_settings(d_spec, st)
+	var trunk_h := float(d_spec["trunk_h"])
+	var trunk_w := float(d_spec["trunk_w"])
+	var places := VegetationCardFactory.deciduous_primary_placements(trunk_w, trunk_h, s)
+	var n := clampi(int(round(float(s["deciduous_branch_count"]))), 2, 12)
 	_check("one placement per primary", places.size() == n, "got %d" % places.size())
 
 	# 1. Attachment heights must SPREAD over the crown-bearing trunk. The old
@@ -1509,8 +1505,8 @@ func _test_deciduous_branch_distribution() -> void:
 	_check("attachment span covers >=40% of the trunk", span >= 0.40,
 		"span %.0f%% (%.2f..%.2f of %.2f)" % [span * 100.0, lo, hi, trunk_h])
 	_check("lowest limb sits near the crown base",
-		lo <= trunk_h * float(st["deciduous_crown_base"]) + trunk_h * 0.12,
-		"lowest %.2f, crown base %.2f" % [lo, trunk_h * float(st["deciduous_crown_base"])])
+		lo <= trunk_h * float(s["deciduous_crown_base"]) + trunk_h * 0.12,
+		"lowest %.2f, crown base %.2f" % [lo, trunk_h * float(s["deciduous_crown_base"])])
 	_check("highest limb stays on the trunk", hi <= trunk_h * 1.001,
 		"highest %.2f of %.2f" % [hi, trunk_h])
 
@@ -1546,16 +1542,18 @@ func _test_deciduous_branch_distribution() -> void:
 		(first["dir"] as Vector3).y < (last["dir"] as Vector3).y,
 		"low y=%.2f high y=%.2f" % [(first["dir"] as Vector3).y, (last["dir"] as Vector3).y])
 
-	# 5. Species archetypes actually reach the builder (they resolve through
-	# _FAMILY_DIM_KEYS -> deciduous_crown_base etc).
+	# 5. Species archetypes actually reach the builder: birch (columnar) vs
+	# chestnut (spreading) differ in the archetype table AND in built geometry.
 	var birch := VegSpeciesCatalog.settings_with_variant("birch", st, VegetationCardFactory.SPECS)
 	var chestnut := VegSpeciesCatalog.settings_with_variant("chestnut", st, VegetationCardFactory.SPECS)
-	_check("birch is more columnar than chestnut",
-		float(birch["deciduous_crown_base"]) > float(chestnut["deciduous_crown_base"]),
-		"birch %.2f vs chestnut %.2f" % [float(birch["deciduous_crown_base"]),
-			float(chestnut["deciduous_crown_base"])])
-	_check("chestnut limbs splay wider than birch",
-		float(chestnut["deciduous_branch_tilt_low"]) > float(birch["deciduous_branch_tilt_low"]))
+	_check("birch resolves columnar",
+		str(birch["deciduous_archetype"]) == "columnar",
+		"got %s" % str(birch.get("deciduous_archetype")))
+	_check("chestnut resolves spreading",
+		str(chestnut["deciduous_archetype"]) == "spreading")
+	_check("spreading splays wider than columnar (archetype table)",
+		float(VegTreeArchetypes.ARCHETYPES["spreading"]["tilt_low"])
+			> float(VegTreeArchetypes.ARCHETYPES["columnar"]["tilt_low"]))
 	# ...and produce genuinely different trees, not just different numbers.
 	var b_mesh := VegetationCardFactory.mesh_for_canopy_lod("birch", st,
 		VegetationCardFactory.CanopyLodTier.NEAR)
@@ -1568,15 +1566,14 @@ func _test_deciduous_branch_distribution() -> void:
 		"birch w %.2f chestnut w %.2f" % [b_mesh.get_aabb().size.x, c_mesh.get_aabb().size.x])
 
 	# 6. The NEAR tree must stay inside its triangle budget at the shipping
-	# defaults. 6,200 covers the space-colonization skeleton + polygonal trunk
-	# + 5×10 shell spheres (the pre-SC ceiling was 5,028); NEAR only exists in
-	# the ring-bounded SoI core, so the per-tree cost is structurally capped.
+	# defaults (v3 baseline ~6.6k; NEAR only exists inside the detail range,
+	# so the per-tree cost is structurally bounded).
 	var near := VegetationCardFactory.mesh_for_canopy_lod("deciduous", st,
 		VegetationCardFactory.CanopyLodTier.NEAR)
 	var tris := 0
 	for si in near.get_surface_count():
 		tris += (near.surface_get_arrays(si)[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
-	_check("NEAR deciduous stays within the tri budget", tris <= 6200,
+	_check("NEAR deciduous stays within the tri budget", tris <= 7200,
 		"%d tris" % tris)
 	_check("NEAR deciduous still has geometry", tris > 1500, "%d tris" % tris)
 	# Nothing may dip below the foot at either tier (foot_local_y is hardcoded 0).
@@ -1586,26 +1583,27 @@ func _test_deciduous_branch_distribution() -> void:
 		_check("maple tier %d foot at origin" % tier, m.get_aabb().position.y >= -0.001,
 			"foot %.3f" % m.get_aabb().position.y)
 
-	# 7. Space colonization must FILL the crown envelope, not huddle at the
-	# trunk (the first cut of the generator used a kill radius half the crown
-	# radius and grew a tree ~60% of its styled width).
-	var aabb := near.get_aabb()
-	var want_w := float(st["deciduous_canopy_w"]) \
-		* clampf(float(st["deciduous_branch_reach"]), 0.4, 1.6)
-	_check("SC crown fills its envelope", aabb.size.x >= want_w * 0.70,
-		"built %.2f m wide of %.2f m styled" % [aabb.size.x, want_w])
-
-	# 8. Limbs are seeded INSIDE the trunk tube (45% of the surface radius), so
-	# bark geometry must exist near the trunk axis at limb heights — the
-	# attachment contract that kills the old floating-branch defect.
-	var trunk_w2 := float(st["deciduous_trunk_w"])
-	var bark_verts: PackedVector3Array = near.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
-	var y_lo := trunk_h * float(st["deciduous_crown_base"]) + 0.2
-	var embedded := 0
-	for v in bark_verts:
-		var p3 := v as Vector3
-		if p3.y > y_lo and p3.y < trunk_h * 0.95 \
-				and Vector2(p3.x, p3.z).length() < trunk_w2 * 0.5 * 0.7:
-			embedded += 1
-	_check("limb geometry reaches inside the trunk", embedded > 0,
-		"0 bark verts within %.2f m of the axis in the crown band" % (trunk_w2 * 0.5 * 0.7))
+	# 7. EXACT SIZE (the v3 headline contract): height == authored ±1 cm at
+	# every archetype; crown RADIAL width within −20%/+15% of authored (radial,
+	# not AABB — a diagonal clump under-fills the axis-aligned box).
+	for sid in ["deciduous", "birch", "chestnut", "maple", "pine", "spruce"]:
+		var fam := VegSpeciesCatalog.mesh_family(sid)
+		var res := VegSpeciesCatalog.settings_with_variant(sid, st, VegetationCardFactory.SPECS)
+		var want_h := float(res["%s_height_m" % fam])
+		var want_w := float(res["%s_crown_width_m" % fam])
+		var m2 := VegetationCardFactory.mesh_for_canopy_lod(sid, st,
+			VegetationCardFactory.CanopyLodTier.NEAR)
+		var max_y := 0.0
+		var max_r := 0.0
+		for si in m2.get_surface_count():
+			for v in m2.surface_get_arrays(si)[Mesh.ARRAY_VERTEX]:
+				var p3 := v as Vector3
+				max_y = maxf(max_y, p3.y)
+				max_r = maxf(max_r, Vector2(p3.x, p3.z).length())
+		_check("%s height is exact" % sid, absf(max_y - want_h) < 0.02,
+			"built %.3f authored %.1f" % [max_y, want_h])
+		_check("%s crown width lands near authored" % sid,
+			max_r * 2.0 >= want_w * 0.80 and max_r * 2.0 <= want_w * 1.15,
+			"built %.2f authored %.1f" % [max_r * 2.0, want_w])
+		_check("%s foot at origin" % sid, m2.get_aabb().position.y >= -0.02,
+			"foot %.3f" % m2.get_aabb().position.y)

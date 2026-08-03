@@ -194,17 +194,16 @@ static func label_for(id: String) -> String:
 	return id.capitalize()
 
 
-## Flat dim key per family the SPECS geometry maps onto.
+## Flat dim key per family the SPECS geometry maps onto. Tree families use the
+## v3 real-world dims (Vegetation Overhaul v2); the archetype id rides along as
+## a non-numeric dim (ratio scaling below skips non-floats).
 const _FAMILY_DIM_KEYS := {
-	"pine": {"card_w": "width", "card_h": "height", "trunk_w": "trunk_w"},
-	# Deciduous also carries CROWN ARCHETYPE keys, not just dims: without them
-	# birch, maple, beech and chestnut shared one topology and differed only in
-	# overall size and tint. crown_base / tilt_low / tilt_high / lateral are what
-	# separate a columnar birch from a spreading chestnut.
-	"deciduous": {"canopy_w": "width", "canopy_h": "height",
-		"trunk_w": "trunk_w", "trunk_h": "trunk_h",
-		"crown_base": "crown_base", "branch_tilt_low": "tilt_low",
-		"branch_tilt_high": "tilt_high", "branch_lateral": "lateral"},
+	"pine": {"height_m": "height_m", "crown_width_m": "crown_m",
+		"trunk_diameter_cm": "trunk_cm", "crown_base_pct": "crown_base_pct",
+		"archetype": "archetype"},
+	"deciduous": {"height_m": "height_m", "crown_width_m": "crown_m",
+		"trunk_diameter_cm": "trunk_cm", "crown_base_pct": "crown_base_pct",
+		"archetype": "archetype"},
 	"shrub": {"card_w": "width", "card_h": "height"},
 	"palm": {"card_w": "width", "card_h": "height", "trunk_w": "trunk_w"},
 	"cactus": {"card_w": "width", "card_h": "height"},
@@ -240,35 +239,51 @@ static func settings_with_variant(species: String, settings: Dictionary,
 	# family edit — per-map tuning or a family-wide Apply. Un-gated it outranked
 	# per-map family values forever ("my per-map tuning does nothing").
 	var generic_self := species == family
+	# Provenance out-channel: species-override values count as EXPLICIT user
+	# edits downstream (the v3 macro system derives Advanced values unless the
+	# player explicitly set them — see VegetationCardFactory._derived_or_user).
+	var explicit_out: Array = (user_family as Array).duplicate()
 	# Geometry dims.
 	var dims: Dictionary = _FAMILY_DIM_KEYS.get(family, {})
 	var fam_defaults: Dictionary = VegetationStyleConfig.defaults()
 	for dim in dims:
 		var flat_key := "%s_%s" % [family, dim]
 		var spec_key := str(dims[dim])
+		var is_string_dim: bool = spec.get(spec_key) is String \
+			or over.get(dim) is String or out.get(flat_key) is String
 		if over.has(dim) and not (generic_self and flat_key in user_family):
-			out[flat_key] = float(over[dim])
+			out[flat_key] = over[dim] if is_string_dim else float(over[dim])
+			if flat_key not in explicit_out:
+				explicit_out.append(flat_key)
 		elif named_variant and spec.has(spec_key):
-			var specs_val := float(spec[spec_key])
-			if flat_key in user_family:
-				# A user family edit SCALES every subspecies dim instead of
-				# replacing it: "make deciduous trees taller" must not turn
-				# birch, beech and chestnut into byte-identical clones — which
-				# is exactly what any fully-tuned map did when family edits
-				# flat-out beat SPECS ("all subspecies are placeholders" back
-				# through the per-map door). Ratio over the family DEFAULT,
-				# bounded so an extreme tune can't explode a variant.
-				var base_val := float(fam_defaults.get(flat_key, 0.0))
-				if absf(base_val) > 0.0001:
-					var ratio := clampf(float(out.get(flat_key, base_val)) / base_val,
-						0.25, 4.0)
-					out[flat_key] = specs_val * ratio
-				# else: keep the user's absolute value (no meaningful baseline).
+			if is_string_dim:
+				# Categorical dim (archetype): SPECS applies unless the player
+				# picked one family-wide (no ratio concept for enums).
+				if flat_key not in user_family:
+					out[flat_key] = spec[spec_key]
 			else:
-				out[flat_key] = specs_val
+				var specs_val := float(spec[spec_key])
+				if flat_key in user_family:
+					# A user family edit SCALES every subspecies dim instead of
+					# replacing it: "make deciduous trees taller" must not turn
+					# birch, beech and chestnut into byte-identical clones —
+					# which is exactly what any fully-tuned map did when family
+					# edits flat-out beat SPECS ("all subspecies are
+					# placeholders" back through the per-map door). Ratio over
+					# the family DEFAULT, bounded so an extreme tune can't
+					# explode a variant (0.15–8 also lifts the old 4× cap that
+					# stopped players growing big subspecies pines).
+					var base_val := float(fam_defaults.get(flat_key, 0.0))
+					if absf(base_val) > 0.0001:
+						var ratio := clampf(float(out.get(flat_key, base_val)) / base_val,
+							0.15, 8.0)
+						out[flat_key] = specs_val * ratio
+					# else: keep the user's absolute value (no baseline).
+				else:
+					out[flat_key] = specs_val
 		# else: keep the flat value (user family edit, or family default for
 		# the generic family species itself).
-	# Non-dim per-species overrides (cluster counts, whorl counts, offsets, …)
+	# Non-dim per-species overrides (fur/whorl fine keys, offsets, bark_tint …)
 	# apply onto the family keys directly.
 	for k in over:
 		var key := str(k)
@@ -278,6 +293,9 @@ static func settings_with_variant(species: String, settings: Dictionary,
 		if generic_self and flat_over in user_family:
 			continue
 		out[flat_over] = over[k]
+		if flat_over not in explicit_out:
+			explicit_out.append(flat_over)
+	out[VegStyleStore.KEY_USER_FAMILY] = explicit_out
 	# Colors: same ladder. SPECS carry real per-variant palettes (birch/aspen
 	# white bark, maple's orange highlight) that were previously unreachable.
 	var family_albedo := "%s_albedo_tint" % family

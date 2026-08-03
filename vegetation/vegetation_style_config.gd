@@ -14,94 +14,62 @@ const SPECIES_DEFAULTS_PATH := "user://vegetation_species_defaults.json"
 
 static func defaults() -> Dictionary:
 	return {
+		# ---- v3 tree model (Vegetation Overhaul v2): real-world units + shape
+		# archetype + four 0..1 character macros. The space-colonization
+		# builder's internal knobs are DERIVED from these via VegTreeArchetypes
+		# and are not style keys. Height/width are EXACT (mesh AABB-normalized
+		# after build) — a 14 m tree is 14 m, painted or auto-scattered.
 		"pine_albedo_tint": Color(1.0, 1.0, 1.0),
 		"pine_highlight_tint": Color(0.10, 0.20, 0.07),
-		"pine_bulk_scale": 1.0,
-		"pine_card_w": 0.85,
-		"pine_card_h": 4.5,
-		"pine_trunk_w": 0.24,
+		"pine_height_m": 17.0,
+		"pine_crown_width_m": 7.0,
+		"pine_trunk_diameter_cm": 45.0,
+		"pine_crown_base_pct": 8.0,
+		"pine_archetype": "conical",
+		"pine_variant_seed": 0.0,
+		"pine_branchiness": 0.5,
+		"pine_crookedness": 0.2,
+		"pine_droop": 0.12,
+		"pine_foliage_density": 0.6,
 		"pine_vertical_offset_m": 0.0,
-		"pine_whorl_count": 7,
-		"pine_bough_scale": 1.0,
-		"pine_whorl_spacing": 1.0,
 		"pine_growth_years": 20.0,
 		"pine_trunk_taper": 0.38,
 		"pine_fur_enabled": true,
 		"pine_fur_lod_enabled": true,
-		"pine_lod_near_m": 200.0,
-		"pine_lod_far_begin_m": 190.0,
-		# Auto (OSM-scattered) forests are viewed from the drone across ~3 km, so the
-		# short manual near/far reach above drops them to the leafless FAR billboard
-		# tier at typical altitudes. These auto-only overrides keep the leaf/fur NEAR
-		# tier alive much farther out; the manual painted-tree reach is untouched.
-		"pine_auto_lod_near_m": 300.0,
-		"pine_auto_lod_far_begin_m": 280.0,
 		"pine_fur_strength": 0.38,
 		"pine_fur_cells": 20.0,
 		"pine_fur_tuft_size": 0.58,
 		"pine_fur_gap": 0.24,
+		# Pine fine-shape keys (Advanced; whorl count/spacing derive from the
+		# branchiness macro unless the user explicitly sets them).
+		"pine_whorl_count": 7,
+		"pine_bough_scale": 1.0,
+		"pine_whorl_spacing": 1.0,
 		"pine_whorl_jitter": 0.08,
 		"pine_whorl_variation": 0.32,
 		"pine_whorl_band_h": 0.62,
 		"pine_cone_sharpness": 0.42,
 		"pine_canopy_roundness": 0.52,
-		# Deciduous defaults = the player's tuned "2" preset (see also
-		# VegetationLayer.default_settings, which must mirror the shape keys). This is
-		# the default deciduous tree every fresh map inherits.
-		"deciduous_trunk_taper": 0.7,
 		"deciduous_albedo_tint": Color(0.0435791, 0.19921875, 0.075193405),
 		"deciduous_highlight_tint": Color(0.42, 0.52, 0.16),
-		"deciduous_bulk_scale": 1.6,
-		"deciduous_canopy_w": 12.05,
-		"deciduous_canopy_h": 4.35,
-		"deciduous_trunk_w": 1.31,
-		"deciduous_trunk_h": 4.25,
-		"deciduous_vertical_offset_m": -2.0,
-		"deciduous_cluster_count": 12.0,
-		# Legacy pair (abstract-ring layout only — the tip-anchored crown reads
-		# deciduous_clump_spread instead; see _clusters_from_tips).
-		"deciduous_cluster_spread": 0.67,
-		"deciduous_cluster_size": 1.0,
-		"deciduous_cluster_tightness": 1.12,
-		# Radial push/huddle of the foliage clumps on their branch tips.
-		"deciduous_clump_spread": 1.0,
-		# Deterministic skeleton variant (0-9): same dims, different tree.
-		"deciduous_skeleton_seed": 0.0,
-		"deciduous_branch_count": 9.55,
-		"deciduous_branch_thickness": 0.64,
-		"deciduous_branch_reach": 0.89,
-		# Legacy alias for deciduous_crown_base (kept so saved styles migrate).
-		"deciduous_branch_base": 0.71,
-		# Where the LOWEST limb leaves the trunk. 0.71 packed every primary into
-		# the top third of the trunk; 0.42 gives a real crown-bearing length.
-		"deciduous_crown_base": 0.42,
-		# Splay of the lowest vs highest limb, degrees from vertical.
-		"deciduous_branch_tilt_low": 75.0,
-		"deciduous_branch_tilt_high": 26.0,
-		# Fraction of limb segments that carry a side shoot. Side branching is
-		# what fills a broadleaf crown; without it limbs are bare sticks with a
-		# tuft on the end and the crown needs far more primaries to look full.
-		"deciduous_branch_lateral": 0.45,
-		"deciduous_branch_levels": 2.15,
-		"deciduous_branch_split": 2.65,
-		"deciduous_branch_angle": 38.0,
-		"deciduous_branch_length_ratio": 0.62,
-		"deciduous_branch_droop": 0.12,
-		"deciduous_branch_gnarl": 0.21,
+		"deciduous_height_m": 14.0,
+		"deciduous_crown_width_m": 11.0,
+		"deciduous_trunk_diameter_cm": 55.0,
+		"deciduous_crown_base_pct": 25.0,
+		"deciduous_archetype": "round",
+		"deciduous_variant_seed": 0.0,
+		"deciduous_branchiness": 0.55,
+		"deciduous_crookedness": 0.45,
+		"deciduous_droop": 0.15,
+		"deciduous_foliage_density": 0.65,
+		"deciduous_trunk_taper": 0.55,
+		"deciduous_vertical_offset_m": 0.0,
 		"deciduous_growth_years": 9.85,
 		"deciduous_leaf_shells_enabled": true,
 		"deciduous_leaf_lod_enabled": true,
-		"deciduous_lod_near_m": 99.7,
-		"deciduous_lod_far_begin_m": 92.15,
-		# Auto-only leaf-shell reach (see pine_auto_lod_* above for the rationale):
-		# keeps OSM-scattered deciduous forests in the leaf-shell NEAR tier at drone
-		# distances instead of the leafless FAR billboard. Manual reach stays at 99.7.
-		"deciduous_auto_lod_near_m": 300.0,
-		"deciduous_auto_lod_far_begin_m": 280.0,
-		"deciduous_billboard_y_offset": -1.11,
-		# Foliage hangs on real branch tips and the leaf grid stamps TWO
-		# interleaved layers per shell, so 4 shells read solid; the saved tri
-		# budget pays for the rounder 5×10 shell spheres (hex-box silhouettes).
+		# Foliage fine keys (Advanced; leaf_density/leaf_gap/cluster size derive
+		# from the foliage_density macro unless explicitly set).
+		"deciduous_cluster_count": 12.0,
 		"deciduous_leaf_shell_count": 4.0,
 		"deciduous_leaf_density": 15.0,
 		"deciduous_leaf_size": 0.95,
@@ -111,6 +79,10 @@ static func defaults() -> Dictionary:
 		"deciduous_shadow_proxy_enabled": true,
 		"deciduous_shadow_proxy_scale": 1.06,
 		"deciduous_shadow_proxy_visibility": 0.04,
+		# Camera-based full-detail range for tree families (Overhaul v2 LOD:
+		# real 3D mesh inside this range, baked impostor beyond; quality tiers
+		# override the default and a per-chunk budget may shrink it).
+		"tree_detail_distance_m": 220.0,
 		"shrub_albedo_tint": Color(1.0, 1.0, 1.0),
 		"shrub_highlight_tint": Color(0.26, 0.34, 0.12),
 		"shrub_bulk_scale": 1.0,
@@ -145,31 +117,12 @@ static func defaults() -> Dictionary:
 		"grass_field_blade_lean": 0.22,
 		"grass_field_hue_jitter": 0.06,
 		"grass_field_growth_years": 0.0,
-		# Single Tune-look knob for how far OSM-scattered forests keep their leaf/fur
-		# NEAR tier (see *_auto_lod_* above). Higher = leaves persist farther (nicer
-		# from the drone) at more vertex cost; lower = billboards sooner (cheaper).
-		"auto_foliage_lod_reach_m": 300.0,
-		# Whole-forest size multiplier for OSM auto-scattered trees (pine/deciduous/
-		# shrub). Auto trees derive their height from OSM data via each record's
-		# scale; the per-species *_bulk_scale keys are neutralised on that path
-		# (AutoVegetationRuntime.NEUTRAL_BULK), so this is the one honest knob.
-		# Applied at rebuild time — changing it does not re-scatter.
-		"auto_tree_scale": 1.0,
 		# Forest age profile (Phase 9): how a freshly seeded stand's ages spread
 		# across the growth span — "mature" (the long-standing behaviour and the
 		# default), "mixed" (an even spread, uneven-aged stand) or "young"
 		# (regrowth: mostly saplings). Consumed by
 		# VegetationGrowth.ensure_birth_times; takes effect on the next reseed.
 		"forest_age": "mature",
-		# Static SoI-centred detail rings (VegTierRings, Phase 3): the leaf-shell
-		# NEAR tier only exists in chunks within veg_near_ring_m of the SoI
-		# centre; veg_mid_ring_m bounds the FAR-card ring; beyond is the cheapest
-		# representation. Centre keys are injected live from SoiService at
-		# rebuild (veg_ring_center_x/z). Radii become quality-tier knobs in
-		# Phase 4.
-		"veg_tier_rings_enabled": true,
-		"veg_near_ring_m": 250.0,
-		"veg_mid_ring_m": 700.0,
 		"wind_strength": 0.03,
 		"wind_speed": 0.7,
 		"dither_strength": 1.0,

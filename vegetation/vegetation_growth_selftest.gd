@@ -487,28 +487,28 @@ func _test_settings_with_variant_non_clobber() -> void:
 	# family value with NO provenance is just a default and loses to SPECS —
 	# that absent-provenance case is precisely the fix that makes subspecies
 	# real (the old absent-KEY test froze the placeholder bug).
-	var player := {"pine_card_w": 2.5, "pine_card_h": 9.0,
-		VegStyleStore.KEY_USER_FAMILY: ["pine_card_w", "pine_card_h"]}
+	var player := {"pine_height_m": 25.0, "pine_crown_width_m": 10.0,
+		VegStyleStore.KEY_USER_FAMILY: ["pine_height_m", "pine_crown_width_m"]}
 	var merged := VegSpeciesCatalog.settings_with_variant(
 		"spruce", player, VegetationCardFactory.SPECS)
-	# SPECS spruce 0.95 × (user 2.5 / family default 0.85); 5.2 × (9.0 / 4.5).
-	_check("variant scales by the USER slider W ratio",
-		_approx(float(merged.get("pine_card_w", 0.0)), 0.95 * 2.5 / 0.85, 1e-4),
-		"got %s" % str(merged.get("pine_card_w")))
-	_check("variant scales by the USER slider H ratio",
-		_approx(float(merged.get("pine_card_h", 0.0)), 5.2 * 9.0 / 4.5, 1e-4),
-		"got %s" % str(merged.get("pine_card_h")))
+	# SPECS spruce 21 × (user 25 / family default 17); 6 × (10 / 7).
+	_check("variant scales by the USER height ratio",
+		_approx(float(merged.get("pine_height_m", 0.0)), 21.0 * 25.0 / 17.0, 1e-3),
+		"got %s" % str(merged.get("pine_height_m")))
+	_check("variant scales by the USER crown ratio",
+		_approx(float(merged.get("pine_crown_width_m", 0.0)), 6.0 * 10.0 / 7.0, 1e-3),
+		"got %s" % str(merged.get("pine_crown_width_m")))
 	_check("variant stamps species id",
 		str(merged.get("_variant_species", "")) == "spruce")
 	var bare := VegSpeciesCatalog.settings_with_variant(
-		"spruce", {"pine_card_w": 2.5}, VegetationCardFactory.SPECS)
+		"spruce", {"pine_height_m": 25.0}, VegetationCardFactory.SPECS)
 	_check("no provenance -> SPECS wins",
-		_approx(float(bare.get("pine_card_w", 0.0)), 0.95, 1e-6),
-		"got %s" % str(bare.get("pine_card_w")))
+		_approx(float(bare.get("pine_height_m", 0.0)), 21.0, 1e-6),
+		"got %s" % str(bare.get("pine_height_m")))
 	var empty := VegSpeciesCatalog.settings_with_variant(
 		"fir", {}, VegetationCardFactory.SPECS)
-	_check("variant fills missing W from SPECS",
-		float(empty.get("pine_card_w", 0.0)) > 0.0)
+	_check("variant fills missing height from SPECS",
+		float(empty.get("pine_height_m", 0.0)) > 0.0)
 
 
 func _test_size_var_scales() -> void:

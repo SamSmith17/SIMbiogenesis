@@ -10,77 +10,88 @@ const BAKED_SHRUB_MESH := "res://vegetation/baked/shrub_mesh.tres"
 const BAKED_SHRUB_MAT := "res://vegetation/baked/shrub_material.tres"
 
 const SPECS := {
-	"pine": {"width": 0.85, "height": 4.5, "trunk_w": 0.24,
+	# Tree families carry v3 REAL-WORLD dims: height_m (total, exact),
+	# crown_m (crown width, exact), trunk_cm (diameter), crown_base_pct
+	# (where the crown starts as % of height) and a shape archetype id
+	# (VegTreeArchetypes). Colors are unchanged. Non-tree families (shrub /
+	# palm / cactus / grass / crops) keep the legacy width/height card dims.
+	"pine": {"height_m": 17.0, "crown_m": 7.0, "trunk_cm": 45.0,
+		"crown_base_pct": 8.0, "archetype": "conical",
 		"top": Color(0.05, 0.14, 0.06), "bottom": Color(0.07, 0.10, 0.04),
 		"highlight": Color(0.12, 0.24, 0.08),
 		"bark": Color(0.16, 0.11, 0.06)},
-	"spruce": {"width": 0.95, "height": 5.2, "trunk_w": 0.22,
+	"spruce": {"height_m": 21.0, "crown_m": 6.0, "trunk_cm": 50.0,
+		"crown_base_pct": 5.0, "archetype": "conical",
 		"top": Color(0.04, 0.16, 0.08), "bottom": Color(0.06, 0.11, 0.05),
 		"highlight": Color(0.10, 0.22, 0.10),
 		"bark": Color(0.14, 0.10, 0.06)},
-	"cedar": {"width": 1.15, "height": 4.8, "trunk_w": 0.30,
+	"cedar": {"height_m": 15.0, "crown_m": 8.5, "trunk_cm": 65.0,
+		"crown_base_pct": 10.0, "archetype": "conical",
 		"top": Color(0.08, 0.16, 0.09), "bottom": Color(0.10, 0.12, 0.06),
 		"highlight": Color(0.18, 0.28, 0.12),
 		"bark": Color(0.20, 0.12, 0.08)},
-	"fir": {"width": 0.78, "height": 5.5, "trunk_w": 0.20,
+	"fir": {"height_m": 23.0, "crown_m": 6.0, "trunk_cm": 55.0,
+		"crown_base_pct": 5.0, "archetype": "conical",
 		"top": Color(0.03, 0.12, 0.07), "bottom": Color(0.05, 0.09, 0.04),
 		"highlight": Color(0.09, 0.20, 0.09),
 		"bark": Color(0.15, 0.10, 0.05)},
-	"redwood": {"width": 1.40, "height": 8.0, "trunk_w": 0.55,
+	"redwood": {"height_m": 45.0, "crown_m": 9.0, "trunk_cm": 200.0,
+		"crown_base_pct": 15.0, "archetype": "conical",
 		"top": Color(0.06, 0.18, 0.08), "bottom": Color(0.08, 0.12, 0.05),
 		"highlight": Color(0.14, 0.26, 0.10),
 		"bark": Color(0.28, 0.12, 0.08)},
-	"deciduous": {"width": 11.0, "height": 4.5, "trunk_w": 0.45, "trunk_h": 4.5,
+	"deciduous": {"height_m": 14.0, "crown_m": 11.0, "trunk_cm": 55.0,
+		"crown_base_pct": 25.0, "archetype": "round",
 		"top": Color(0.18, 0.38, 0.10), "bottom": Color(0.24, 0.16, 0.06),
 		"highlight": Color(0.42, 0.52, 0.16),
-		"bark": Color(0.18, 0.12, 0.07),
-		"crown_base": 0.42, "tilt_low": 75.0, "tilt_high": 26.0, "lateral": 0.45},
-	"chestnut": {"width": 13.0, "height": 5.5, "trunk_w": 0.55, "trunk_h": 5.0,
+		"bark": Color(0.18, 0.12, 0.07)},
+	"chestnut": {"height_m": 20.0, "crown_m": 16.0, "trunk_cm": 85.0,
+		"crown_base_pct": 18.0, "archetype": "spreading",
 		"top": Color(0.16, 0.34, 0.09), "bottom": Color(0.22, 0.14, 0.05),
 		"highlight": Color(0.38, 0.48, 0.14),
-		"bark": Color(0.22, 0.14, 0.08),
-		"crown_base": 0.3, "tilt_low": 80.0, "tilt_high": 34.0, "lateral": 0.55},
-	"maple": {"width": 12.0, "height": 5.0, "trunk_w": 0.48, "trunk_h": 4.8,
+		"bark": Color(0.22, 0.14, 0.08)},
+	"maple": {"height_m": 16.0, "crown_m": 12.0, "trunk_cm": 60.0,
+		"crown_base_pct": 22.0, "archetype": "round",
 		"top": Color(0.20, 0.40, 0.10), "bottom": Color(0.28, 0.18, 0.06),
 		"highlight": Color(0.55, 0.35, 0.10),
-		"bark": Color(0.20, 0.14, 0.08),
-		"crown_base": 0.4, "tilt_low": 70.0, "tilt_high": 22.0, "lateral": 0.55},
-	"cottonwood": {"width": 14.0, "height": 6.0, "trunk_w": 0.60, "trunk_h": 5.5,
+		"bark": Color(0.20, 0.14, 0.08)},
+	"cottonwood": {"height_m": 24.0, "crown_m": 14.0, "trunk_cm": 95.0,
+		"crown_base_pct": 25.0, "archetype": "vase",
 		"top": Color(0.22, 0.42, 0.12), "bottom": Color(0.26, 0.20, 0.08),
 		"highlight": Color(0.45, 0.55, 0.18),
-		"bark": Color(0.24, 0.20, 0.14),
-		"crown_base": 0.38, "tilt_low": 72.0, "tilt_high": 24.0, "lateral": 0.5},
-	"aspen": {"width": 8.0, "height": 5.5, "trunk_w": 0.28, "trunk_h": 5.2,
+		"bark": Color(0.24, 0.20, 0.14)},
+	"aspen": {"height_m": 15.0, "crown_m": 5.0, "trunk_cm": 25.0,
+		"crown_base_pct": 40.0, "archetype": "columnar",
 		"top": Color(0.25, 0.45, 0.12), "bottom": Color(0.30, 0.22, 0.08),
 		"highlight": Color(0.55, 0.62, 0.20),
-		"bark": Color(0.85, 0.88, 0.82),
-		"crown_base": 0.58, "tilt_low": 44.0, "tilt_high": 14.0, "lateral": 0.6},
-	"birch": {"width": 7.5, "height": 5.0, "trunk_w": 0.25, "trunk_h": 5.0,
+		"bark": Color(0.85, 0.88, 0.82)},
+	"birch": {"height_m": 14.0, "crown_m": 6.0, "trunk_cm": 28.0,
+		"crown_base_pct": 35.0, "archetype": "columnar",
 		"top": Color(0.20, 0.40, 0.12), "bottom": Color(0.24, 0.18, 0.07),
 		"highlight": Color(0.40, 0.52, 0.18),
-		"bark": Color(0.92, 0.92, 0.90),
-		"crown_base": 0.55, "tilt_low": 48.0, "tilt_high": 16.0, "lateral": 0.65},
-	"beech": {"width": 12.5, "height": 5.2, "trunk_w": 0.50, "trunk_h": 5.0,
+		"bark": Color(0.92, 0.92, 0.90)},
+	"beech": {"height_m": 19.0, "crown_m": 14.0, "trunk_cm": 75.0,
+		"crown_base_pct": 20.0, "archetype": "spreading",
 		"top": Color(0.15, 0.36, 0.10), "bottom": Color(0.22, 0.16, 0.06),
 		"highlight": Color(0.38, 0.50, 0.15),
-		"bark": Color(0.35, 0.30, 0.22),
-		"crown_base": 0.34, "tilt_low": 74.0, "tilt_high": 26.0, "lateral": 0.6},
-	"apple": {"width": 7.0, "height": 3.8, "trunk_w": 0.32, "trunk_h": 2.8,
+		"bark": Color(0.35, 0.30, 0.22)},
+	"apple": {"height_m": 6.0, "crown_m": 6.5, "trunk_cm": 35.0,
+		"crown_base_pct": 20.0, "archetype": "round",
 		"top": Color(0.22, 0.42, 0.10), "bottom": Color(0.28, 0.16, 0.06),
 		"highlight": Color(0.55, 0.25, 0.18),
-		"bark": Color(0.22, 0.14, 0.08),
-		"crown_base": 0.28, "tilt_low": 72.0, "tilt_high": 34.0, "lateral": 0.45},
-	"pear": {"width": 6.5, "height": 4.2, "trunk_w": 0.30, "trunk_h": 3.2,
+		"bark": Color(0.22, 0.14, 0.08)},
+	"pear": {"height_m": 8.0, "crown_m": 5.5, "trunk_cm": 32.0,
+		"crown_base_pct": 22.0, "archetype": "vase",
 		"top": Color(0.20, 0.40, 0.10), "bottom": Color(0.26, 0.15, 0.05),
 		"highlight": Color(0.50, 0.55, 0.18),
-		"bark": Color(0.20, 0.13, 0.07),
-		"crown_base": 0.32, "tilt_low": 64.0, "tilt_high": 24.0, "lateral": 0.45},
-	"orange": {"width": 6.0, "height": 3.5, "trunk_w": 0.28, "trunk_h": 2.4,
+		"bark": Color(0.20, 0.13, 0.07)},
+	"orange": {"height_m": 5.0, "crown_m": 4.5, "trunk_cm": 25.0,
+		"crown_base_pct": 18.0, "archetype": "round",
 		"top": Color(0.12, 0.36, 0.10), "bottom": Color(0.18, 0.22, 0.06),
 		"highlight": Color(0.95, 0.55, 0.10),
-		"bark": Color(0.25, 0.16, 0.08),
-		"crown_base": 0.26, "tilt_low": 74.0, "tilt_high": 36.0, "lateral": 0.5},
-	"avocado": {"width": 9.0, "height": 5.0, "trunk_w": 0.40, "trunk_h": 3.5,
+		"bark": Color(0.25, 0.16, 0.08)},
+	"avocado": {"height_m": 9.0, "crown_m": 8.0, "trunk_cm": 45.0,
+		"crown_base_pct": 20.0, "archetype": "round",
 		"top": Color(0.08, 0.28, 0.10), "bottom": Color(0.12, 0.18, 0.06),
 		"highlight": Color(0.20, 0.40, 0.12),
 		"bark": Color(0.18, 0.12, 0.08)},
@@ -154,34 +165,36 @@ const SPECS := {
 		"top": Color(0.19, 0.38, 0.16), "bottom": Color(0.14, 0.28, 0.12),
 		"highlight": Color(0.36, 0.52, 0.24)},
 	# --- Phase 5: tropical / food broadleaf variants (deciduous builder) ---
-	"walnut": {"width": 12.0, "height": 5.5, "trunk_w": 0.55, "trunk_h": 5.0,
+	"walnut": {"height_m": 18.0, "crown_m": 14.0, "trunk_cm": 80.0,
+		"crown_base_pct": 22.0, "archetype": "spreading",
 		"top": Color(0.17, 0.36, 0.10), "bottom": Color(0.22, 0.16, 0.06),
 		"highlight": Color(0.40, 0.50, 0.16),
-		"bark": Color(0.24, 0.18, 0.12),
-		"crown_base": 0.36, "tilt_low": 76.0, "tilt_high": 28.0, "lateral": 0.55},
-	"olive": {"width": 6.5, "height": 3.6, "trunk_w": 0.45, "trunk_h": 2.2,
+		"bark": Color(0.24, 0.18, 0.12)},
+	"olive": {"height_m": 6.0, "crown_m": 6.0, "trunk_cm": 50.0,
+		"crown_base_pct": 18.0, "archetype": "round",
 		"top": Color(0.28, 0.38, 0.22), "bottom": Color(0.22, 0.28, 0.16),
 		"highlight": Color(0.55, 0.60, 0.38),
-		"bark": Color(0.32, 0.28, 0.22),
-		"crown_base": 0.24, "tilt_low": 80.0, "tilt_high": 40.0, "lateral": 0.55},
-	"mango": {"width": 10.0, "height": 5.5, "trunk_w": 0.50, "trunk_h": 3.0,
+		"bark": Color(0.32, 0.28, 0.22)},
+	"mango": {"height_m": 12.0, "crown_m": 10.0, "trunk_cm": 55.0,
+		"crown_base_pct": 18.0, "archetype": "round",
 		"top": Color(0.10, 0.30, 0.09), "bottom": Color(0.14, 0.20, 0.07),
 		"highlight": Color(0.30, 0.46, 0.14),
-		"bark": Color(0.22, 0.16, 0.10),
-		"crown_base": 0.3, "tilt_low": 78.0, "tilt_high": 30.0, "lateral": 0.6},
-	"banana": {"width": 4.0, "height": 3.5, "trunk_w": 0.30, "trunk_h": 2.0,
+		"bark": Color(0.22, 0.16, 0.10)},
+	"banana": {"height_m": 5.0, "crown_m": 4.0, "trunk_cm": 30.0,
+		"crown_base_pct": 45.0, "archetype": "vase",
 		"top": Color(0.20, 0.46, 0.14), "bottom": Color(0.16, 0.36, 0.10),
 		"highlight": Color(0.45, 0.65, 0.22),
 		"bark": Color(0.30, 0.36, 0.18)},
-	"ficus": {"width": 13.0, "height": 6.0, "trunk_w": 0.80, "trunk_h": 3.5,
+	"ficus": {"height_m": 15.0, "crown_m": 14.0, "trunk_cm": 90.0,
+		"crown_base_pct": 16.0, "archetype": "spreading",
 		"top": Color(0.10, 0.28, 0.09), "bottom": Color(0.14, 0.20, 0.08),
 		"highlight": Color(0.26, 0.42, 0.14),
 		"bark": Color(0.36, 0.32, 0.26)},
-	"acacia": {"width": 12.0, "height": 4.0, "trunk_w": 0.40, "trunk_h": 3.5,
+	"acacia": {"height_m": 8.0, "crown_m": 12.0, "trunk_cm": 45.0,
+		"crown_base_pct": 45.0, "archetype": "vase",
 		"top": Color(0.22, 0.36, 0.12), "bottom": Color(0.26, 0.24, 0.10),
 		"highlight": Color(0.48, 0.54, 0.20),
-		"bark": Color(0.26, 0.20, 0.14),
-		"crown_base": 0.52, "tilt_low": 84.0, "tilt_high": 52.0, "lateral": 0.5},
+		"bark": Color(0.26, 0.20, 0.14)},
 }
 
 
@@ -265,7 +278,7 @@ static func mesh_for_pine_lod(settings: Dictionary, tier: CanopyLodTier) -> Arra
 	return _build_pine_mesh(_pine_spec(s, sid), s)
 
 
-## Minimal crossed-card pine for FAR / large-map force_far (~8 tris).
+## Minimal crossed-card pine — the bake-pending stand-in tier (~8 tris).
 static func _build_pine_far_billboard(spec: Dictionary, settings: Dictionary) -> ArrayMesh:
 	var card_w := float(spec["width"])
 	var card_h := float(spec["height"])
@@ -278,6 +291,20 @@ static func _build_pine_far_billboard(spec: Dictionary, settings: Dictionary) ->
 	for card_i in 2:
 		_add_card(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
 			trunk_w, trunk_h, 0.0, float(card_i) * PI * 0.5, Vector3(0.0, 0.85, 0.0))
+	var foliage_verts := PackedVector3Array()
+	var foliage_uvs := PackedVector2Array()
+	var foliage_normals := PackedVector3Array()
+	var foliage_indices := PackedInt32Array()
+	for card_i in 2:
+		_add_card(foliage_verts, foliage_uvs, foliage_normals, foliage_indices,
+			card_w * 0.95, card_h * 0.72, trunk_h * 0.28,
+			float(card_i) * PI * 0.5, Vector3(0.0, 0.72, 0.0))
+	# Exact-size pass (matches the NEAR mesh so the LOD swap doesn't pop).
+	var norm_arrays: Array = [trunk_verts, foliage_verts]
+	_normalize_tree_surfaces(norm_arrays, float(spec.get("height_m", card_h)),
+		float(spec.get("crown_m", card_w)))
+	trunk_verts = norm_arrays[0]
+	foliage_verts = norm_arrays[1]
 	var mesh := ArrayMesh.new()
 	var trunk_arr: Array = []
 	trunk_arr.resize(Mesh.ARRAY_MAX)
@@ -287,14 +314,6 @@ static func _build_pine_far_billboard(spec: Dictionary, settings: Dictionary) ->
 	trunk_arr[Mesh.ARRAY_INDEX] = trunk_indices
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, trunk_arr)
 	mesh.surface_set_material(0, bark_material_for_species("pine", settings))
-	var foliage_verts := PackedVector3Array()
-	var foliage_uvs := PackedVector2Array()
-	var foliage_normals := PackedVector3Array()
-	var foliage_indices := PackedInt32Array()
-	for card_i in 2:
-		_add_card(foliage_verts, foliage_uvs, foliage_normals, foliage_indices,
-			card_w * 0.95, card_h * 0.72, trunk_h * 0.28,
-			float(card_i) * PI * 0.5, Vector3(0.0, 0.72, 0.0))
 	var foliage_arr: Array = []
 	foliage_arr.resize(Mesh.ARRAY_MAX)
 	foliage_arr[Mesh.ARRAY_VERTEX] = foliage_verts
@@ -469,10 +488,10 @@ static func _build_bark_material_for_species(species: String, settings: Dictiona
 static func species_bulk_scale(species: String, settings: Dictionary) -> float:
 	var family := mesh_family(species)
 	match family:
-		"pine":
-			return float(settings.get("pine_bulk_scale", 1.0))
-		"deciduous":
-			return float(settings.get("deciduous_bulk_scale", 1.35))
+		# Tree families are EXACT-size (v3: height_m is normalized into the
+		# mesh) — no hidden multiplier, painted == previewed == authored.
+		"pine", "deciduous":
+			return 1.0
 		"shrub":
 			return float(settings.get("shrub_bulk_scale", 1.0))
 		"grass_lawn":
@@ -493,7 +512,10 @@ static func clear_foot_cache() -> void:
 
 
 static func foot_local_y(species: String, settings: Dictionary = {}) -> float:
-	if mesh_family(species) == "deciduous":
+	# Tree families always build from y=0 (v3 normalized meshes) — never pay a
+	# mesh build for a constant.
+	var fam := mesh_family(species)
+	if fam == "deciduous" or fam == "pine":
 		return 0.0
 	var key := "%s:%s" % [species, _foot_settings_key(settings)]
 	if _foot_cache.has(key):
@@ -507,38 +529,149 @@ static func foot_local_y(species: String, settings: Dictionary = {}) -> float:
 static func _foot_settings_key(settings: Dictionary) -> String:
 	if settings.is_empty():
 		return "default"
-	return "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f" % [
-		float(settings.get("deciduous_canopy_w", 11.0)),
-		float(settings.get("deciduous_canopy_h", 4.5)),
-		float(settings.get("deciduous_trunk_w", 0.45)),
-		float(settings.get("deciduous_trunk_h", 4.5)),
-		float(settings.get("pine_card_w", 0.85)),
-		float(settings.get("pine_card_h", 4.5)),
-		float(settings.get("pine_trunk_w", 0.24)),
-		float(settings.get("shrub_card_w", 1.4)),
-		float(settings.get("shrub_card_h", 1.15)),
-		float(settings.get("grass_lawn_card_w", 0.55)),
-		float(settings.get("grass_lawn_card_h", 0.48)),
-		float(settings.get("grass_field_card_w", 0.70)),
-		float(settings.get("grass_field_card_h", 0.95)),
-	]
+	# Whole-dict hash: the old hand-listed 13-float key silently went stale
+	# whenever a shape key was added or renamed.
+	return str(hash(settings))
 
 
+## True when the player explicitly set `key` (family edit or species override,
+## via the VegStyleStore provenance side channel) — derived macro values yield
+## to explicit Advanced-slider edits.
+static func _user_set(settings: Dictionary, key: String) -> bool:
+	var user: Variant = settings.get(VegStyleStore.KEY_USER_FAMILY, [])
+	return user is Array and key in (user as Array)
+
+
+static func _derived_or_user(settings: Dictionary, key: String, derived: float) -> float:
+	if _user_set(settings, key):
+		return float(settings.get(key, derived))
+	return derived
+
+
+## v3 spec (Vegetation Overhaul v2): real-world dims + archetype-derived SC
+## params. The spec carries BOTH the honest values (height_m / crown_m /
+## trunk_r / crown_base) and the legacy internal fields the builders consume
+## (width / height / trunk_w / trunk_h), mapped so the trunk TUBE radius equals
+## exactly trunk_r. The adapter keys (adapter_settings) translate the archetype
+## + macros into the builder's internal knob namespace at this one choke point.
 static func _deciduous_spec(settings: Dictionary, species: String = "deciduous") -> Dictionary:
 	var base: Dictionary = SPECS.get(species, SPECS["deciduous"]).duplicate(true)
-	base["width"] = float(settings.get("deciduous_canopy_w", base["width"]))
-	base["height"] = float(settings.get("deciduous_canopy_h", base["height"]))
-	base["trunk_w"] = float(settings.get("deciduous_trunk_w", base["trunk_w"]))
-	base["trunk_h"] = float(settings.get("deciduous_trunk_h", base.get("trunk_h", 4.5)))
-	return base
+	var out := {
+		"top": base.get("top", Color(0.18, 0.38, 0.10)),
+		"bottom": base.get("bottom", Color(0.24, 0.16, 0.06)),
+		"highlight": base.get("highlight", Color(0.42, 0.52, 0.16)),
+		"bark": base.get("bark", Color(0.18, 0.12, 0.07)),
+	}
+	var height := clampf(float(settings.get("deciduous_height_m",
+		base.get("height_m", 14.0))), 1.5, 90.0)
+	var crown_w := clampf(float(settings.get("deciduous_crown_width_m",
+		base.get("crown_m", 11.0))), 1.0, 60.0)
+	var trunk_cm := clampf(float(settings.get("deciduous_trunk_diameter_cm",
+		base.get("trunk_cm", 55.0))), 4.0, 400.0)
+	var crown_base := clampf(float(settings.get("deciduous_crown_base_pct",
+		base.get("crown_base_pct", 25.0))) / 100.0, 0.0, 0.9)
+	var archetype := str(settings.get("deciduous_archetype", base.get("archetype", "round")))
+	if not VegTreeArchetypes.is_valid(archetype):
+		archetype = str(base.get("archetype", "round"))
+	out["height_m"] = height
+	out["crown_m"] = crown_w
+	out["trunk_r"] = trunk_cm / 200.0
+	out["crown_base"] = crown_base
+	out["archetype"] = archetype
+	var sc := VegTreeArchetypes.builder_params(archetype,
+		float(settings.get("deciduous_branchiness", 0.55)),
+		float(settings.get("deciduous_crookedness", 0.45)),
+		float(settings.get("deciduous_droop", 0.15)),
+		int(round(float(settings.get("deciduous_variant_seed", 0)))))
+	out.merge(sc, true)
+	var fol := VegTreeArchetypes.foliage_params(
+		float(settings.get("deciduous_foliage_density", 0.65)))
+	out["leaf_density"] = _derived_or_user(settings, "deciduous_leaf_density",
+		float(fol["leaf_density"]))
+	out["leaf_gap"] = _derived_or_user(settings, "deciduous_leaf_gap",
+		float(fol["leaf_gap"]))
+	out["cluster_size_mul"] = float(fol["cluster_size"])
+	out["shell_delta"] = int(fol["shell_delta"])
+	# Internal frame: the trunk spine ends mid-crown; the crown envelope runs
+	# crown_bottom → just under the exact height (normalization trues it up).
+	var crown_bottom := height * crown_base
+	var spine_top := lerpf(crown_bottom, height, 0.45)
+	out["trunk_h"] = spine_top
+	out["height"] = height * 0.98 - spine_top  # legacy crown_h field
+	# Legacy trunk_w drove the tube at 0.28×trunk_w — invert so the tube radius
+	# comes out at exactly trunk_r and every internal ratio keeps working.
+	out["trunk_w"] = out["trunk_r"] / 0.28
+	# Envelope width at the authored crown; the exact-size pass trues up the
+	# small residual from clump overhang / the radial growth fence.
+	out["width"] = crown_w
+	return out
+
+
+## Internal-settings adapter: injects the archetype/macro-derived values into
+## the builder's legacy key namespace. These keys are DERIVED — they are not
+## style keys, never persisted, and exist only inside this duplicated dict.
+static func _deciduous_adapter_settings(spec: Dictionary, settings: Dictionary) -> Dictionary:
+	var s := settings.duplicate()
+	s["deciduous_branch_count"] = float(spec.get("sc_primaries", 6))
+	s["deciduous_branch_tilt_low"] = float(spec.get("sc_tilt_low", 68.0))
+	s["deciduous_branch_tilt_high"] = float(spec.get("sc_tilt_high", 24.0))
+	s["deciduous_branch_lateral"] = float(spec.get("sc_lateral", 0.5))
+	s["deciduous_branch_gnarl"] = float(spec.get("sc_gnarl", 0.25))
+	s["deciduous_branch_droop"] = float(spec.get("sc_droop", 0.12))
+	# pull → the legacy spread-angle scale (remap inverse of the builder's).
+	s["deciduous_branch_angle"] = remap(clampf(float(spec.get("sc_pull", 0.55)),
+		0.30, 0.88), 0.30, 0.88, 8.0, 75.0)
+	# node budget → the legacy detail scale (budget = 110 + 58·detail).
+	s["deciduous_branch_levels"] = clampf(
+		(float(spec.get("sc_node_budget", 235)) - 110.0) / 58.0, 1.0, 5.0)
+	s["deciduous_skeleton_seed"] = float(spec.get("sc_seed", 0))
+	# crown_base in the legacy frame = fraction of the trunk spine height.
+	var spine_top := maxf(float(spec.get("trunk_h", 5.0)), 0.01)
+	s["deciduous_crown_base"] = clampf(
+		float(spec.get("height_m", 14.0)) * float(spec.get("crown_base", 0.25)) / spine_top,
+		0.05, 0.92)
+	s["deciduous_trunk_taper"] = _derived_or_user(settings, "deciduous_trunk_taper",
+		float(spec.get("sc_taper", 0.55)))
+	s["deciduous_branch_reach"] = 1.0
+	s["deciduous_clump_spread"] = 1.0
+	s["deciduous_cluster_size"] = float(spec.get("cluster_size_mul", 1.0))
+	s["deciduous_leaf_density"] = float(spec.get("leaf_density", 15.0))
+	s["deciduous_leaf_gap"] = float(spec.get("leaf_gap", 0.08))
+	s["deciduous_leaf_shell_count"] = clampf(
+		float(settings.get("deciduous_leaf_shell_count", 4.0))
+		+ float(spec.get("shell_delta", 0)), 2.0, 10.0)
+	return s
 
 
 static func _pine_spec(settings: Dictionary, species: String = "pine") -> Dictionary:
 	var base: Dictionary = SPECS.get(species, SPECS["pine"]).duplicate(true)
-	base["width"] = float(settings.get("pine_card_w", base["width"]))
-	base["height"] = float(settings.get("pine_card_h", base["height"]))
-	base["trunk_w"] = float(settings.get("pine_trunk_w", base["trunk_w"]))
-	return base
+	var out := {
+		"top": base.get("top", Color(0.05, 0.14, 0.06)),
+		"bottom": base.get("bottom", Color(0.07, 0.10, 0.04)),
+		"highlight": base.get("highlight", Color(0.12, 0.24, 0.08)),
+		"bark": base.get("bark", Color(0.16, 0.11, 0.06)),
+	}
+	var height := clampf(float(settings.get("pine_height_m",
+		base.get("height_m", 17.0))), 1.5, 90.0)
+	var crown_w := clampf(float(settings.get("pine_crown_width_m",
+		base.get("crown_m", 7.0))), 0.8, 40.0)
+	var trunk_cm := clampf(float(settings.get("pine_trunk_diameter_cm",
+		base.get("trunk_cm", 45.0))), 4.0, 400.0)
+	out["height_m"] = height
+	out["crown_m"] = crown_w
+	out["trunk_r"] = trunk_cm / 200.0
+	# Legacy fields the whorl builder consumes: card_w ≈ bottom bough full
+	# width, card_h ≈ tree height, trunk card sized so its ~44%-opaque band
+	# reads as the authored diameter.
+	out["width"] = crown_w
+	out["height"] = height
+	out["trunk_w"] = out["trunk_r"] * 2.0 / 0.44
+	# Whorl count/spacing derive from branchiness unless explicitly set.
+	var b := clampf(float(settings.get("pine_branchiness", 0.5)), 0.0, 1.0)
+	out["whorl_count"] = _derived_or_user(settings, "pine_whorl_count",
+		round(lerpf(5.0, 12.0, b)))
+	out["bough_scale"] = _derived_or_user(settings, "pine_bough_scale", 1.0)
+	return out
 
 
 static func _shrub_spec(settings: Dictionary, species: String = "shrub") -> Dictionary:
@@ -562,7 +695,38 @@ static func _grass_field_spec(settings: Dictionary, species: String = "grass_fie
 	return base
 
 
-static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> ArrayMesh:
+## Uniformly rescale every surface so the built tree's height is EXACTLY
+## height_m and its widest XZ extent lands on crown_m. Real-world sliders mean
+## what they say — SC growth drift, clump overhang and legacy internal ratios
+## all wash out here. XZ correction is bounded so the trunk diameter can't be
+## visibly distorted by an unusual crown.
+static func _normalize_tree_surfaces(vert_arrays: Array, height_m: float,
+		crown_m: float) -> void:
+	var max_y := 0.001
+	var max_r2 := 0.000001
+	for arr in vert_arrays:
+		var verts: PackedVector3Array = arr
+		for v in verts:
+			max_y = maxf(max_y, v.y)
+			max_r2 = maxf(max_r2, v.x * v.x + v.z * v.z)
+	var sy := height_m / max_y
+	# Clusters pre-fit their centres to the authored crown, so this correction
+	# is small; the tight clamp bounds trunk-diameter distortion to ~±15%.
+	var sxz := clampf(crown_m / (2.0 * sqrt(max_r2)), 0.85, 1.18)
+	if absf(sy - 1.0) < 0.002 and absf(sxz - 1.0) < 0.002:
+		return
+	for i in vert_arrays.size():
+		var verts: PackedVector3Array = vert_arrays[i]
+		for j in verts.size():
+			var v := verts[j]
+			verts[j] = Vector3(v.x * sxz, v.y * sy, v.z * sxz)
+		vert_arrays[i] = verts
+
+
+static func _build_deciduous_mesh(spec: Dictionary, settings_in: Dictionary) -> ArrayMesh:
+	# All internal knobs come from the archetype/macro adapter — the raw style
+	# dict no longer carries builder keys (Vegetation Overhaul v2).
+	var settings := _deciduous_adapter_settings(spec, settings_in)
 	var trunk_w := float(spec["trunk_w"])
 	var trunk_h := float(spec["trunk_h"])
 	var crown_w := float(spec["width"])
@@ -578,79 +742,63 @@ static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> Arr
 		# in two planes, so a limb emerging at any other azimuth visibly floated
 		# beside the trunk instead of attaching to it — the "branches don't attach"
 		# defect. A 7-sided tapered tube with a basal flare occupies the full
-		# radius at every azimuth, and limb seeds start INSIDE it.
-		# Radius is 0.28×trunk_w, NOT 0.5: the card texture is opaque only over
-		# the middle ~45% of the card, so a trunk_w tuned against cards (Mt
-		# Vernon saved 2.0 m) describes a VISUAL trunk about half that wide — a
-		# tube honouring the full width renders a barrel.
+		# radius at every azimuth, and limb seeds start INSIDE it. Tube radius ==
+		# spec.trunk_r (the authored trunk diameter, honest).
 		_add_trunk_tube(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
 			trunk_w * 0.28, trunk_h, _trunk_taper_top(settings, "deciduous"))
 	else:
-		# FAR: keep the two crossed cards — at billboard distances the flat trunk
-		# silhouette is indistinguishable and costs 4 tris instead of ~60.
+		# Bake-pending stand-in tier: two crossed cards, sized so the card's
+		# ~44%-opaque texture band reads as the authored trunk diameter.
 		for card_i in 2:
 			var angle := float(card_i) * PI * 0.5
 			_add_tapered_trunk_card(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
-				trunk_w, trunk_h, 0.0, angle, Vector3(0.0, 0.85, 0.0),
-				_trunk_taper_top(settings, "deciduous"))
+				float(spec.get("trunk_r", 0.28)) * 2.0 / 0.44, trunk_h, 0.0, angle,
+				Vector3(0.0, 0.85, 0.0), _trunk_taper_top(settings, "deciduous"))
 
-	# The skeleton decides where foliage goes at BOTH tiers. FAR builds it with
-	# emit=false (tips only, no bark geometry) so its cards land on the same
-	# anchors the NEAR shells use — the impostor atlas is baked from the NEAR
-	# mesh, so a FAR silhouette that disagrees shows up as a pop at the ring
-	# boundary.
+	# The skeleton decides where foliage goes at BOTH tiers. The stand-in tier
+	# builds it with emit=false (tips only, no bark geometry) so its puffs land
+	# on the same anchors the NEAR shells use — the impostor atlas is baked
+	# from the NEAR mesh, so a disagreeing silhouette would pop at the LOD
+	# boundary. (The old flat branch-card fan is GONE — it was the "weird thin
+	# curving branches" the billboard tier showed at every distance.)
 	var tips := _build_branch_skeleton(trunk_verts, trunk_uvs, trunk_normals,
 		trunk_indices, trunk_w, trunk_h, crown_w, crown_h, settings, is_near_lod)
 	var clusters := _clusters_from_tips(tips, crown_w, crown_h, trunk_h, settings)
 
-	if not is_near_lod:
-		var branch_max := clampi(int(round(float(settings.get("deciduous_branch_count", 4)))), 0, 12)
-		var branch_thick := float(settings.get("deciduous_branch_thickness", 1.0))
-		var branch_reach := float(settings.get("deciduous_branch_reach", 1.0))
-		var crown_base_far := clampf(float(settings.get("deciduous_crown_base",
-			settings.get("deciduous_branch_base", 0.45))), 0.05, 0.92)
-		var branches_added := 0
-		for i in clusters.size():
-			var c: Dictionary = clusters[i]
-			var pos: Vector3 = c["pos"]
-			if branches_added >= branch_max:
-				break
-			# Attach each card at the height its own cluster sits at, clamped into
-			# the crown-bearing trunk. Fanning every card from ONE point looked
-			# acceptable when the clusters were a tidy ring; against real branch
-			# tips it would splay from a single knot.
-			var attach_t := clampf(
-				inverse_lerp(trunk_h * crown_base_far, trunk_h * 1.05, pos.y), 0.0, 1.0)
-			var attach_y := lerpf(trunk_h * crown_base_far, trunk_h * 0.98, attach_t)
-			_add_branch_card(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
-				Vector3(0.0, attach_y, 0.0),
-				pos + Vector3(0.0, -float(c["h"]) * 0.25 * branch_reach, 0.0),
-				trunk_w * 0.32 * branch_thick)
-			branches_added += 1
-
+	var height_m := float(spec.get("height_m", trunk_h + crown_h))
+	var crown_m := float(spec.get("crown_m", crown_w))
 	var mesh := ArrayMesh.new()
-	var trunk_arr: Array = []
-	trunk_arr.resize(Mesh.ARRAY_MAX)
-	trunk_arr[Mesh.ARRAY_VERTEX] = trunk_verts
-	trunk_arr[Mesh.ARRAY_TEX_UV] = trunk_uvs
-	trunk_arr[Mesh.ARRAY_NORMAL] = trunk_normals
-	trunk_arr[Mesh.ARRAY_INDEX] = trunk_indices
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, trunk_arr)
-	mesh.surface_set_material(0, bark_material_for_species("deciduous", settings))
 
-	# Canopy: optional billboard shadow proxy (casts crown silhouette) + leaf shells on top.
-	if bool(settings.get("deciduous_leaf_shells_enabled", true)):
-		if bool(settings.get("deciduous_shadow_proxy_enabled", true)):
+	if is_near_lod:
+		var proxy_verts := PackedVector3Array()
+		var proxy_uvs := PackedVector2Array()
+		var proxy_normals := PackedVector3Array()
+		var proxy_indices := PackedInt32Array()
+		var use_proxy := bool(settings.get("deciduous_shadow_proxy_enabled", true))
+		if use_proxy:
 			var proxy_scale := float(settings.get("deciduous_shadow_proxy_scale", 1.06))
-			var proxy_verts := PackedVector3Array()
-			var proxy_uvs := PackedVector2Array()
-			var proxy_normals := PackedVector3Array()
-			var proxy_indices := PackedInt32Array()
 			for c in clusters:
 				var pos: Vector3 = c["pos"]
 				_add_cluster_cards(proxy_verts, proxy_uvs, proxy_normals, proxy_indices,
 					pos, float(c["w"]) * proxy_scale, float(c["h"]) * proxy_scale,
 					Vector3(0.0, 0.55, 0.0))
+		var shell_arr := _build_leaf_shell_canopy(crown_w, crown_h, trunk_h, settings, clusters)
+		# Exact-size pass over every surface TOGETHER (same factors everywhere).
+		var shell_verts: PackedVector3Array = shell_arr[Mesh.ARRAY_VERTEX]
+		var norm_arrays: Array = [trunk_verts, proxy_verts, shell_verts]
+		_normalize_tree_surfaces(norm_arrays, height_m, crown_m)
+		trunk_verts = norm_arrays[0]
+		proxy_verts = norm_arrays[1]
+		shell_arr[Mesh.ARRAY_VERTEX] = norm_arrays[2]
+		var trunk_arr: Array = []
+		trunk_arr.resize(Mesh.ARRAY_MAX)
+		trunk_arr[Mesh.ARRAY_VERTEX] = trunk_verts
+		trunk_arr[Mesh.ARRAY_TEX_UV] = trunk_uvs
+		trunk_arr[Mesh.ARRAY_NORMAL] = trunk_normals
+		trunk_arr[Mesh.ARRAY_INDEX] = trunk_indices
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, trunk_arr)
+		mesh.surface_set_material(0, bark_material_for_species("deciduous", settings))
+		if use_proxy:
 			var proxy_arr: Array = []
 			proxy_arr.resize(Mesh.ARRAY_MAX)
 			proxy_arr[Mesh.ARRAY_VERTEX] = proxy_verts
@@ -658,9 +806,7 @@ static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> Arr
 			proxy_arr[Mesh.ARRAY_NORMAL] = proxy_normals
 			proxy_arr[Mesh.ARRAY_INDEX] = proxy_indices
 			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, proxy_arr)
-			var proxy_mat := _deciduous_shadow_proxy_material(settings)
-			mesh.surface_set_material(1, proxy_mat)
-		var shell_arr := _build_leaf_shell_canopy(crown_w, crown_h, trunk_h, settings, clusters)
+			mesh.surface_set_material(1, _deciduous_shadow_proxy_material(settings))
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, shell_arr)
 		var leaf_mat := leaf_canopy_material_for_species("deciduous", settings)
 		leaf_mat.render_priority = 1
@@ -671,12 +817,23 @@ static func _build_deciduous_mesh(spec: Dictionary, settings: Dictionary) -> Arr
 	var canopy_uvs := PackedVector2Array()
 	var canopy_normals := PackedVector3Array()
 	var canopy_indices := PackedInt32Array()
-	var billboard_offset := float(settings.get("deciduous_billboard_y_offset", -0.4))
 	for c in clusters:
 		var pos: Vector3 = c["pos"]
 		_add_cluster_cards(canopy_verts, canopy_uvs, canopy_normals, canopy_indices,
 			pos, float(c["w"]), float(c["h"]), Vector3(0.0, 0.55, 0.0),
-			0.0, 3, billboard_offset)
+			0.0, 3, 0.0)
+	var far_arrays: Array = [trunk_verts, canopy_verts]
+	_normalize_tree_surfaces(far_arrays, height_m, crown_m)
+	trunk_verts = far_arrays[0]
+	canopy_verts = far_arrays[1]
+	var trunk_arr_far: Array = []
+	trunk_arr_far.resize(Mesh.ARRAY_MAX)
+	trunk_arr_far[Mesh.ARRAY_VERTEX] = trunk_verts
+	trunk_arr_far[Mesh.ARRAY_TEX_UV] = trunk_uvs
+	trunk_arr_far[Mesh.ARRAY_NORMAL] = trunk_normals
+	trunk_arr_far[Mesh.ARRAY_INDEX] = trunk_indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, trunk_arr_far)
+	mesh.surface_set_material(0, bark_material_for_species("deciduous", settings))
 
 	var canopy_arr: Array = []
 	canopy_arr.resize(Mesh.ARRAY_MAX)
@@ -1041,7 +1198,10 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 	var y0 := trunk_h * crown_base
 	var y1 := trunk_h + crown_h
 	var env_h := maxf(y1 - y0, 0.5)
-	var env_r := maxf(crown_w * 0.5 * reach, 0.5)
+	# Envelope sits INSIDE the authored crown: growth may overshoot to the
+	# radial fence (×1.05 below), which must still land under crown_w/2 or the
+	# exact-size XZ pass squeezes the whole tree (0.92 × 1.05 ≈ 0.97).
+	var env_r := maxf(crown_w * 0.5 * 0.92 * reach, 0.5)
 	# Step ≪ crown radius or the kill radius (1.45×step) wipes whole crown
 	# regions before growth ever visits them — the first cut of this generator
 	# used step ≈ 0.25×crown height and the tree filled barely half its envelope.
@@ -1136,7 +1296,7 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 			# dims are a contract; growth may overshoot ~6%, no more.
 			np.y = minf(np.y, y1 + env_h * 0.06)
 			var rad := Vector2(np.x, np.z)
-			var rad_max := env_r * 1.10
+			var rad_max := env_r * 1.05
 			if rad.length_squared() > rad_max * rad_max:
 				rad = rad.normalized() * rad_max
 				np.x = rad.x
@@ -1489,11 +1649,11 @@ static func _clusters_from_tips(tips: Array, crown_w: float, crown_h: float,
 		* 3.0 / (4.0 * PI), 1.0 / 3.0)
 	var cw := clump_r / 0.62 * size_mul  # rx below is cw * 0.62
 	var ch := cw * 0.85
-	# Foliage must not reach below the trunk base. `foot_local_y` short-circuits
-	# to 0.0 for the whole deciduous family WITHOUT building a mesh, so a cluster
-	# hanging under y=0 would sink every instance on the map by the overshoot
-	# (and the FAR tier's billboard_y_offset pushes cards lower still).
-	var floor_y := ch * 0.62 + maxf(-float(settings.get("deciduous_billboard_y_offset", 0.0)), 0.0)
+	# Foliage must not reach below the trunk base: foot_local_y is hardcoded 0
+	# for trees, so a shell dipping under y=0 would sink every instance by the
+	# overshoot. The per-cluster floor below keeps each clump's BOTTOM
+	# (centre − ry, ry ≈ h·0.55 ×1.2 lump headroom) above ground.
+	var floor_base := 0.0
 	var out: Array = []
 	for ci in picked.size():
 		var p: Vector3 = picked[ci]
@@ -1504,11 +1664,35 @@ static func _clusters_from_tips(tips: Array, crown_w: float, crown_h: float,
 		var pos := p + lean
 		pos.x *= radial_mul
 		pos.z *= radial_mul
-		pos.y = maxf(pos.y, floor_y)
 		# Grow (bounded ×1.35) to cover this clump's farthest assigned twig tip.
 		var need_w := float(reach[ci]) * 0.75 / 0.62 if ci < reach.size() else 0.0
 		var cwc := clampf(maxf(cw, need_w), cw, cw * 1.35)
-		out.append({"pos": pos, "w": cwc, "h": cwc * 0.85})
+		var chc := cwc * 0.85
+		# Shell radius ry = h·0.55, inflated up to ×(1+lump) by the surface bump.
+		var lump_c := clampf(float(settings.get("deciduous_leaf_lump", 0.39)), 0.0, 0.6)
+		pos.y = maxf(pos.y, floor_base + chc * 0.55 * (1.0 + lump_c) + 0.02)
+		out.append({"pos": pos, "w": cwc, "h": chc})
+	# Fit the crown to its authored width: clump centres + their shell radii
+	# must not overhang crown_w/2, or the exact-size XZ pass has to squeeze the
+	# whole tree (trunk included) to compensate. Radial squeeze of the CENTRES
+	# only — clump sizes stay, so foliage keeps its volume.
+	var half_w := crown_w * 0.5
+	var max_ext := 0.0
+	for c in out:
+		var cp: Vector3 = c["pos"]
+		max_ext = maxf(max_ext,
+			Vector2(cp.x, cp.z).length() + float(c["w"]) * 0.62)
+	if max_ext > half_w and max_ext > 0.01:
+		for c in out:
+			var cp: Vector3 = c["pos"]
+			var r := Vector2(cp.x, cp.z).length()
+			if r < 0.01:
+				continue
+			# Solve per-cluster: new_r + rx = half_w where new_r = r·k.
+			var k := clampf((half_w - float(c["w"]) * 0.62) / r, 0.25, 1.0)
+			cp.x *= k
+			cp.z *= k
+			c["pos"] = cp
 	return out
 
 
@@ -1606,6 +1790,30 @@ static func _build_pine_mesh(spec: Dictionary, settings: Dictionary) -> ArrayMes
 		_add_card(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
 			trunk_w, trunk_h, 0.0, angle, Vector3(0.0, 0.85, 0.0))
 
+	# Whorl layout reads the archetype/macro-derived whorl keys (v3): inject
+	# them over a settings copy so the layout function stays unchanged.
+	var lay_settings := settings.duplicate()
+	if spec.has("whorl_count"):
+		lay_settings["pine_whorl_count"] = float(spec["whorl_count"])
+	if spec.has("bough_scale"):
+		lay_settings["pine_bough_scale"] = float(spec["bough_scale"])
+	var foliage_verts := PackedVector3Array()
+	var foliage_uvs := PackedVector2Array()
+	var foliage_normals := PackedVector3Array()
+	var foliage_indices := PackedInt32Array()
+	for c in _pine_cluster_layout(card_w, card_h, lay_settings):
+		var pos: Vector3 = c["pos"]
+		_add_cluster_cards(foliage_verts, foliage_uvs, foliage_normals, foliage_indices,
+			pos, float(c["w"]), float(c["h"]), Vector3(0.0, 0.72, 0.0),
+			float(c.get("yaw", 0.0)), int(c.get("cards", 3)))
+
+	# Exact-size pass: height/crown in real metres (Vegetation Overhaul v2).
+	var norm_arrays: Array = [trunk_verts, foliage_verts]
+	_normalize_tree_surfaces(norm_arrays, float(spec.get("height_m", card_h)),
+		float(spec.get("crown_m", card_w)))
+	trunk_verts = norm_arrays[0]
+	foliage_verts = norm_arrays[1]
+
 	var mesh := ArrayMesh.new()
 	var trunk_arr: Array = []
 	trunk_arr.resize(Mesh.ARRAY_MAX)
@@ -1615,16 +1823,6 @@ static func _build_pine_mesh(spec: Dictionary, settings: Dictionary) -> ArrayMes
 	trunk_arr[Mesh.ARRAY_INDEX] = trunk_indices
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, trunk_arr)
 	mesh.surface_set_material(0, bark_material_for_species("pine", settings))
-
-	var foliage_verts := PackedVector3Array()
-	var foliage_uvs := PackedVector2Array()
-	var foliage_normals := PackedVector3Array()
-	var foliage_indices := PackedInt32Array()
-	for c in _pine_cluster_layout(card_w, card_h, settings):
-		var pos: Vector3 = c["pos"]
-		_add_cluster_cards(foliage_verts, foliage_uvs, foliage_normals, foliage_indices,
-			pos, float(c["w"]), float(c["h"]), Vector3(0.0, 0.72, 0.0),
-			float(c.get("yaw", 0.0)), int(c.get("cards", 3)))
 
 	var foliage_arr: Array = []
 	foliage_arr.resize(Mesh.ARRAY_MAX)
@@ -2196,16 +2394,27 @@ static func _build_photocard_mesh(species: String, settings: Dictionary,
 		photo: Texture2D) -> ArrayMesh:
 	var family := mesh_family(species)
 	var spec: Dictionary = SPECS.get(species, SPECS.get(family, SPECS["shrub"]))
-	var w := float(spec.get("width", 8.0))
-	var h := float(spec.get("height", 8.0))
-	# Photocards frame the WHOLE tree, so the card height covers trunk+crown.
-	var full_h := h + float(spec.get("trunk_h", 0.0))
+	# Tree families are v3 real-unit (the photocard frames the WHOLE tree at
+	# exactly its authored height); other families keep the legacy card dims.
+	var w: float
+	var full_h: float
+	if family == "deciduous":
+		var d := _deciduous_spec(settings, species)
+		w = float(d["crown_m"])
+		full_h = float(d["height_m"])
+	elif family == "pine":
+		var p := _pine_spec(settings, species)
+		w = float(p["crown_m"])
+		full_h = float(p["height_m"])
+	else:
+		w = float(spec.get("width", 8.0))
+		full_h = float(spec.get("height", 8.0)) + float(spec.get("trunk_h", 0.0))
 	var verts := PackedVector3Array()
 	var uvs := PackedVector2Array()
 	var normals := PackedVector3Array()
 	var indices := PackedInt32Array()
 	for card_i in 3:
-		_add_card(verts, uvs, normals, indices, w, maxf(full_h, h), 0.0,
+		_add_card(verts, uvs, normals, indices, w, full_h, 0.0,
 			float(card_i) * PI / 3.0, Vector3(0.0, 0.55, 0.0))
 	var mesh := _arrays_to_mesh(verts, uvs, normals, indices)
 	var mat := ShaderMaterial.new()

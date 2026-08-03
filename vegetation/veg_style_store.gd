@@ -26,8 +26,13 @@ extends RefCounted
 ## Migration is one-way and non-destructive: v1 files are read once when no
 ## v2 file exists, and left on disk untouched.
 
-const GLOBAL_V2_PATH := "user://vegetation_style_v2.json"
-const VERSION := 2
+## v3 (Vegetation Overhaul v2): FRESH START. The v3 model retired the entire
+## legacy tree-shape key set (real-world units + archetypes replaced it), so
+## old stores are not migrated — v3 lives in NEW files and the old
+## vegetation_style_v2*/v1 files simply stay on disk, unread (the de-facto
+## backup). Painted tree POSITIONS live in the vegetation layer and survive.
+const GLOBAL_V2_PATH := "user://vegetation_style_v3.json"
+const VERSION := 3
 
 ## Family prefixes for flat-key splitting, longest first so grass_lawn_card_w
 ## never mis-splits as family "grass".
@@ -53,8 +58,18 @@ static func global_v2_path() -> String:
 
 
 static func map_v2_path(lat: float, lon: float) -> String:
-	return "user://maps/vegetation_style_v2_%s_%s.json%s" % [
+	return "user://maps/vegetation_style_v3_%s_%s.json%s" % [
 		CoordToken.token(lat), CoordToken.token(lon), path_suffix]
+
+
+## The RETIRED v2/v1 style files for this map (kept on disk, never read; the
+## reset tooling deletes them so "Reset site" really is fresh).
+static func legacy_style_paths(lat: float, lon: float) -> Array[String]:
+	return [
+		"user://maps/vegetation_style_v2_%s_%s.json%s" % [
+			CoordToken.token(lat), CoordToken.token(lon), path_suffix],
+		legacy_map_path(lat, lon),
+	]
 
 
 static func legacy_map_path(lat: float, lon: float) -> String:
@@ -78,13 +93,7 @@ static func load_global_store() -> Dictionary:
 		return _global_cache.duplicate(true)
 	var store := _read_store(global_v2_path())
 	if store.is_empty():
-		store = _migrate_global_v1()
-		if not _store_is_empty(store):
-			_write_store(global_v2_path(), store)
-	if store.is_empty():
 		store = empty_store()
-	if _sanitize_inert_leaf_keys(store):
-		_write_store(global_v2_path(), store)
 	_global_cache = store.duplicate(true)
 	_global_cache_valid = true
 	return store
@@ -93,61 +102,8 @@ static func load_global_store() -> Dictionary:
 static func load_map_store(lat: float, lon: float) -> Dictionary:
 	var store := _read_store(map_v2_path(lat, lon))
 	if store.is_empty():
-		store = _migrate_map_v1(lat, lon)
-		if not _store_is_empty(store):
-			_write_store(map_v2_path(lat, lon), store)
-	if store.is_empty():
 		store = empty_store()
-	if _sanitize_inert_leaf_keys(store):
-		_write_store(map_v2_path(lat, lon), store)
 	return store
-
-
-## One-time cleanup of stored deciduous leaf values the renderer used to CLAMP
-## into inertness (leaf_size floored at 0.92, leaf_gap capped at 0.12). Those
-## stored numbers rendered identically to the clamp for years — the player
-## never saw them — but once the clamps were removed to give the sliders their
-## full travel, they resurrected the legacy speckled sparse-leaf look on every
-## old map. Dropping them preserves the look the player actually SAW while
-## keeping the sliders live. Idempotent; runs on every store read and writes
-## back only when something changed.
-static func _sanitize_inert_leaf_keys(store: Dictionary) -> bool:
-	var changed := false
-	var fams: Dictionary = store.get("family", {})
-	var dec: Dictionary = fams.get("deciduous", {})
-	if dec.has("leaf_size") and float(dec["leaf_size"]) < 0.9199:
-		dec.erase("leaf_size")
-		changed = true
-	if dec.has("leaf_gap") and float(dec["leaf_gap"]) > 0.1201:
-		dec.erase("leaf_gap")
-		changed = true
-	if changed:
-		if dec.is_empty():
-			fams.erase("deciduous")
-		else:
-			fams["deciduous"] = dec
-		store["family"] = fams
-	var sps: Dictionary = store.get("species", {})
-	for sid in sps.keys():
-		if VegSpeciesCatalog.mesh_family(str(sid)) != "deciduous":
-			continue
-		var sd: Dictionary = sps[sid]
-		var sp_changed := false
-		if sd.has("leaf_size") and float(sd["leaf_size"]) < 0.9199:
-			sd.erase("leaf_size")
-			sp_changed = true
-		if sd.has("leaf_gap") and float(sd["leaf_gap"]) > 0.1201:
-			sd.erase("leaf_gap")
-			sp_changed = true
-		if sp_changed:
-			changed = true
-			if sd.is_empty():
-				sps.erase(sid)
-			else:
-				sps[sid] = sd
-	if changed:
-		store["species"] = sps
-	return changed
 
 
 ## The flat settings dict every existing consumer understands: defaults() +
@@ -370,78 +326,6 @@ static func _split_subspecies_tint(key: String) -> Array:
 
 
 # --- v1 migration -------------------------------------------------------------
-
-
-static func _migrate_global_v1() -> Dictionary:
-	var store := empty_store()
-	var defaults: Dictionary = VegetationStyleConfig.defaults()
-	# 1) flat global cfg ([style] section) — keep only true user deltas: the
-	#    old terrain-options bug saved a COMPLETE defaults dump here, and
-	#    migrating that as "user-set" would shadow every SPECS variant forever.
-	var cfg_path := VegetationStyleConfig.GLOBAL_PATH + path_suffix
-	if FileAccess.file_exists(cfg_path):
-		var cfg := ConfigFile.new()
-		if cfg.load(cfg_path) == OK and cfg.has_section("style"):
-			var patch := {}
-			for key in cfg.get_section_keys("style"):
-				var v: Variant = cfg.get_value("style", key)
-				if defaults.has(key) and values_equal(defaults[key], v):
-					continue
-				patch[key] = v
-			_split_flat_into(patch, store)
-	# 2) species-defaults JSON: entries were saved under subspecies names but
-	#    carried FAMILY-prefixed keys (the last-writer-wins clobber bug) —
-	#    strip the family prefix so they become real per-species overrides.
-	var sd_path := VegetationStyleConfig.SPECIES_DEFAULTS_PATH + path_suffix
-	if FileAccess.file_exists(sd_path):
-		var f := FileAccess.open(sd_path, FileAccess.READ)
-		if f != null:
-			var parsed: Variant = JSON.parse_string(f.get_as_text())
-			if parsed is Dictionary:
-				var sps: Dictionary = store.get("species", {})
-				for sid in (parsed as Dictionary):
-					var raw: Variant = (parsed as Dictionary)[sid]
-					if not (raw is Dictionary):
-						continue
-					var vals := VegetationStyleConfig.from_serializable(raw as Dictionary)
-					var cur: Dictionary = sps.get(str(sid), {})
-					for k in vals:
-						var key := str(k)
-						if defaults.has(key) and values_equal(defaults[key], vals[k]):
-							continue
-						var parts := split_flat_key(key)
-						var unpref := str(parts[1]) if not str(parts[0]).is_empty() else key
-						# "<sid>_albedo_tint" saved inside sid's own entry.
-						if unpref.begins_with(str(sid) + "_"):
-							unpref = unpref.substr(str(sid).length() + 1)
-						cur[unpref] = vals[k]
-					if not cur.is_empty():
-						sps[str(sid)] = cur
-				store["species"] = sps
-	return store
-
-
-static func _migrate_map_v1(lat: float, lon: float) -> Dictionary:
-	var store := empty_store()
-	var path := legacy_map_path(lat, lon)
-	if not FileAccess.file_exists(path):
-		return store
-	var f := FileAccess.open(path, FileAccess.READ)
-	if f == null:
-		return store
-	var parsed: Variant = JSON.parse_string(f.get_as_text())
-	if not (parsed is Dictionary):
-		return store
-	var vals := VegetationStyleConfig.from_serializable(parsed as Dictionary)
-	var defaults: Dictionary = VegetationStyleConfig.defaults()
-	var patch := {}
-	for k in vals:
-		var key := str(k)
-		if defaults.has(key) and values_equal(defaults[key], vals[k]):
-			continue
-		patch[key] = vals[k]
-	_split_flat_into(patch, store)
-	return store
 
 
 # --- helpers -------------------------------------------------------------------

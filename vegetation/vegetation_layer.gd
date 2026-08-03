@@ -7,7 +7,12 @@ extends RefCounted
 ## COMPLETE settings dict (defaults included), and because the render path
 ## merges layer settings over the style, every stale copy of a default
 ## permanently shadowed the style store ("Tune-look doesn't apply" cause #3).
-const VERSION := 2
+## v3 (Vegetation Overhaul v2, FRESH START): the tree-shape key set was
+## retired for the real-unit/archetype model, so loading a ≤v2 file keeps only
+## the painted RECORDS (positions/species/yaw/scale) + heroes + growth zones —
+## settings deltas and per-record card_settings snapshots are dropped (they
+## carry retired keys that would shadow the new model forever).
+const VERSION := 3
 const SPECIES: Array[String] = ["pine", "deciduous", "shrub"]
 const GRASS_SPECIES: Array[String] = ["grass_lawn", "grass_field"]
 ## Base family slots (always present). Subspecies (spruce, fir, …) are created
@@ -19,64 +24,19 @@ const MAX_GRASS_PER_SPECIES := 15000
 
 
 static func default_settings() -> Dictionary:
-	return {
-		"vertical_offset_m": 0.0,
-		# Deciduous defaults = the player's tuned "2" preset (the desired default
-		# tree). Shape keys the layer owns MUST match VegetationStyleConfig.defaults()
-		# because the render path merges layer settings ON TOP of the style, so a
-		# stale layer default here would override the style and auto (OSM) trees
-		# would render with the old shape instead of the tuned one.
-		"deciduous_canopy_w": 12.05,
-		"deciduous_canopy_h": 4.35,
-		"deciduous_trunk_w": 1.31,
-		"deciduous_trunk_h": 4.25,
-		"deciduous_bulk_scale": 1.6,
-		"deciduous_vertical_offset_m": -2.0,
-		"deciduous_cluster_count": 10.05,
-		"deciduous_cluster_spread": 0.67,
-		"deciduous_cluster_size": 1.0,
-		"deciduous_cluster_tightness": 1.12,
-		"deciduous_branch_count": 9.55,
-		"deciduous_branch_thickness": 0.64,
-		"deciduous_branch_reach": 0.89,
-		"deciduous_branch_base": 0.71,
-		"deciduous_branch_levels": 2.15,
-		"deciduous_branch_split": 2.65,
-		"deciduous_branch_angle": 38.0,
-		"deciduous_branch_length_ratio": 0.62,
-		"deciduous_branch_droop": 0.12,
-		"deciduous_branch_gnarl": 0.21,
-		"deciduous_growth_years": 9.85,
-		"pine_bulk_scale": 1.0,
-		"pine_card_w": 0.85,
-		"pine_card_h": 4.5,
-		"pine_trunk_w": 0.24,
-		"pine_vertical_offset_m": 0.0,
-		"pine_whorl_count": 7,
-		"pine_bough_scale": 1.0,
-		"pine_whorl_spacing": 1.0,
-		"pine_growth_years": 20.0,
-		"shrub_bulk_scale": 1.0,
-		"shrub_card_w": 1.4,
-		"shrub_card_h": 1.15,
-		"shrub_vertical_offset_m": 0.0,
-		"shrub_cluster_count": 6,
-		"shrub_cluster_spread": 1.0,
-		"shrub_cluster_size": 1.0,
-		"shrub_growth_years": 5.0,
-		"grass_lawn_bulk_scale": 1.0,
-		# Must mirror VegetationStyleConfig.defaults() (was 0.45, a drift that
-		# permanently pinned lawn mat width because the layer used to win).
-		"grass_lawn_card_w": 0.8,
-		"grass_lawn_card_h": 0.12,
-		"grass_lawn_vertical_offset_m": 0.0,
-		"grass_lawn_growth_years": 0.0,
-		"grass_field_bulk_scale": 1.25,
-		"grass_field_card_w": 0.55,
-		"grass_field_card_h": 0.88,
-		"grass_field_vertical_offset_m": 0.0,
-		"grass_field_growth_years": 0.0,
-	}
+	# v3: the layer's fallback dict is a SUBSET pulled straight from the ONE
+	# authority (VegetationStyleConfig.defaults()), so it can never drift into
+	# shadowing the style store again. Only keys the layer's own internal
+	# fallbacks read need to exist here.
+	var defs := VegetationStyleConfig.defaults()
+	var out := {"vertical_offset_m": 0.0}
+	for k in defs:
+		var ks := str(k)
+		for fam in ALL_SPECIES:
+			if ks.begins_with(fam + "_"):
+				out[ks] = defs[k]
+				break
+	return out
 
 
 static func max_bulk_for_species(species: String) -> int:
@@ -90,7 +50,12 @@ static func create_empty() -> VegetationLayer:
 	for species in ALL_SPECIES:
 		layer.bulk[species] = []
 	layer.hero = []
-	layer.settings = default_settings()
+	# SPARSE from birth: `settings` holds only explicit user deltas. Seeding it
+	# with default_settings() meant every fresh map SERIALIZED the full
+	# defaults dump as "user edits", which then permanently shadowed the style
+	# store (the recurring stale-styling bug class this overhaul retires).
+	# get_settings() still merges defaults over for per-key fallbacks.
+	layer.settings = {}
 	layer.growth_zones = []
 	return layer
 
@@ -629,15 +594,16 @@ func deserialize(data: Dictionary) -> void:
 	var loaded: Dictionary = {}
 	if data.get("settings") is Dictionary:
 		loaded = data["settings"]
-	if int(data.get("version", 1)) >= 2:
+	if int(data.get("version", 1)) >= 3:
 		settings = loaded.duplicate(true)
 	else:
-		# v1 persisted the complete dict. Keep only true user deltas so the
-		# style store stops being shadowed by stale copies of old defaults.
+		# FRESH START (v3): ≤v2 settings deltas and per-record card_settings
+		# carry the RETIRED tree-shape keys — keeping them would shadow the new
+		# real-unit model on every old map, exactly the class of stale-state bug
+		# the overhaul exists to kill. Positions/species/yaw/scale survive.
 		settings = {}
-		var defs := default_settings()
-		for k in loaded:
-			if defs.has(k) and VegStyleStore.values_equal(defs[k], loaded[k]):
-				continue
-			settings[k] = loaded[k]
+		for species in bulk.keys():
+			for item in bulk.get(species, []):
+				if item is Dictionary and (item as Dictionary).has("card_settings"):
+					(item as Dictionary).erase("card_settings")
 

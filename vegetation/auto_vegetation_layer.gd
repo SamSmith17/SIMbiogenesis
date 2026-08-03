@@ -322,9 +322,14 @@ func _patch_hero_in_polygon(poly: PackedVector2Array, params: Dictionary) -> int
 static func _card_settings_from_params(params: Dictionary) -> Dictionary:
 	var out := {}
 	for key in [
-		"deciduous_trunk_w", "deciduous_trunk_h",
-		"deciduous_canopy_w", "deciduous_canopy_h", "deciduous_bulk_scale",
-		"pine_card_w", "pine_card_h", "pine_bulk_scale",
+		# v3 tree model keys (real-world units + archetype + macros).
+		"deciduous_height_m", "deciduous_crown_width_m",
+		"deciduous_trunk_diameter_cm", "deciduous_crown_base_pct",
+		"deciduous_archetype", "deciduous_branchiness", "deciduous_crookedness",
+		"deciduous_droop", "deciduous_foliage_density",
+		"pine_height_m", "pine_crown_width_m", "pine_trunk_diameter_cm",
+		"pine_crown_base_pct", "pine_archetype", "pine_branchiness",
+		"pine_crookedness", "pine_droop", "pine_foliage_density",
 		"shrub_card_w", "shrub_card_h", "shrub_bulk_scale",
 		"grass_lawn_card_w", "grass_lawn_card_h", "grass_lawn_bulk_scale",
 		"grass_field_card_w", "grass_field_card_h", "grass_field_bulk_scale",

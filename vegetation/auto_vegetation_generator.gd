@@ -148,9 +148,43 @@ static func _tree_only_weights(biome: Dictionary) -> Dictionary:
 	return out
 
 
+## Per-run resolved tree heights (species id → metres). v3 tree meshes are
+## exact-size (AABB-normalized to <fam>_height_m), so a record's scale is
+## simply osm_target / resolved_height — set once per generator run in
+## prepare_context/apply_fill from the run's style. Non-tree species keep the
+## NOMINAL_CARD_H convention (their builders are not exact-size).
+static var _run_height_cache: Dictionary = {}
+static var _run_style: Dictionary = {}
+
+
+static func _set_run_style(style: Dictionary) -> void:
+	_run_style = style
+	_run_height_cache = {}
+
+
+static func _resolved_tree_height(species: String) -> float:
+	if _run_height_cache.has(species):
+		return float(_run_height_cache[species])
+	var fam := VegSpeciesCatalog.mesh_family(species)
+	var resolved := VegSpeciesCatalog.settings_with_variant(species, _run_style,
+		VegetationCardFactory.SPECS)
+	var h := float(resolved.get("%s_height_m" % fam,
+		17.0 if fam == "pine" else 14.0))
+	_run_height_cache[species] = h
+	return h
+
+
 static func _scale_for(species: String, target_h: float, rng: RandomNumberGenerator) -> float:
 	if species == "shrub" or species == "scrub":
 		return rng.randf_range(0.8, 1.6)
+	var fam := VegSpeciesCatalog.mesh_family(species)
+	if fam == "deciduous" or fam == "pine":
+		# Exact-size meshes: scale IS target/authored. No target (0) = render at
+		# the species' authored height.
+		if target_h <= 0.05:
+			return rng.randf_range(0.9, 1.15)
+		return (target_h / maxf(_resolved_tree_height(species), 0.5)) \
+			* rng.randf_range(0.9, 1.15)
 	var nominal := float(NOMINAL_CARD_H.get(species, 8.0))
 	return (target_h / maxf(nominal, 0.1)) * rng.randf_range(0.9, 1.15)
 
@@ -207,6 +241,7 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 			style["auto_foliage_lod_reach_m"] = 70.0
 	state.style = style
 	ctx["style"] = style
+	_set_run_style(style)
 	state.layer.apply_instance_caps(state.style)
 	state.forest_min_area = float(state.style.get("forest_auto_min_area_m2", 12000.0))
 	state.biome = BiomePalette.for_location(float(ctx.get("latitude", 0.0)))
@@ -338,6 +373,7 @@ static func scatter_batch(state: GeneratorState, batch_size: int = SCATTER_BATCH
 static func apply_fill(layer: AutoVegetationLayer, fill: Dictionary,
 		biome: Dictionary, exclusion_index: VegExclusionBuilder.ExclusionIndex,
 		ctx: Dictionary) -> Dictionary:
+	_set_run_style(ctx.get("style", {}) as Dictionary)
 	var tag := str(fill.get("tag", ""))
 	var poly: PackedVector2Array = fill.get("polygon", PackedVector2Array())
 	var out := {"tag": tag, "placed": 0, "removed": 0}

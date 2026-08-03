@@ -29,36 +29,24 @@ const SLOT_ALIAS := {
 	"orchard_tree": "apple",
 }
 
-## Auto-veg drives final tree height through each record's `scale` (computed from a
-## target canopy height in AutoVegetationGenerator._scale_for). The card factory's
-## per-species bulk multipliers would double-apply, so they're neutralised to 1.0.
-## The neutral values must WIN over the style dict — merging the other way let the
-## style's deciduous_bulk_scale 1.6 overwrite the 1.0 and every auto deciduous tree
-## rendered ×1.6 its OSM-derived height ("trees look wrong on first load").
-## grass_field is neutralised for the same reason: the generator already bakes
-## grass_field_bulk_scale into each record's scale (_scatter_grass_polygon), so the
-## runtime multiplying it again squared the factor (×1.5625). grass_lawn is exempt —
-## _build_grass_bulk_batches never applies the runtime multiplier to lawn.
-## auto_tree_scale is the user-facing whole-forest size knob that replaces the old
-## accidental oversizing (rebuild-only — no re-scatter needed to change it).
+## v3 (Vegetation Overhaul v2): tree families are EXACT-size — the mesh is
+## AABB-normalized to <fam>_height_m and species_bulk_scale returns 1.0 for
+## trees, so auto records only carry `scale = osm_height / resolved_height`
+## and there is nothing to neutralise for trees anymore. Shrub/grass_field
+## keep their neutralisation: their generators bake the bulk multiplier into
+## each record's scale, so the runtime multiplying it again squared the factor
+## (grass_field ×1.5625). grass_lawn is exempt — _build_grass_bulk_batches
+## never applies the runtime multiplier to lawn.
 const NEUTRAL_BULK := {
-	"pine_bulk_scale": 1.0,
-	"deciduous_bulk_scale": 1.0,
 	"shrub_bulk_scale": 1.0,
 	"grass_field_bulk_scale": 1.0,
 }
 
 
-## Style dict with the per-species bulk multipliers forced neutral (see NEUTRAL_BULK)
-## and the auto_tree_scale knob routed through the tree bulk keys the builders read.
+## Style dict with the per-species bulk multipliers forced neutral (see NEUTRAL_BULK).
 static func neutralized_settings(settings: Dictionary) -> Dictionary:
 	var s := settings.duplicate()
 	s.merge(NEUTRAL_BULK, true)
-	var tree_scale := clampf(float(settings.get("auto_tree_scale", 1.0)), 0.2, 3.0)
-	if not is_equal_approx(tree_scale, 1.0):
-		s["pine_bulk_scale"] = tree_scale
-		s["deciduous_bulk_scale"] = tree_scale
-		s["shrub_bulk_scale"] = tree_scale
 	return s
 
 static func ensure_root(terrain: Node3D) -> Node3D:
@@ -249,31 +237,6 @@ static func _resolve_species(slot: String) -> String:
 	return str(SLOT_ALIAS.get(slot, "deciduous"))
 
 
-## Auto (OSM) forests span ~3 km and are viewed from the drone, so the manual
-## leaf/fur NEAR reach (deciduous ~100 m) drops them to the leafless FAR billboard
-## tier at typical altitudes — the "auto trees have no leaves / wrong branches" bug.
-## Copy the batch settings with the canopy LOD near/far distances remapped to the
-## auto-only overrides so the leaf-shell NEAR tier stays alive much farther out.
-## The manual (painted) render path never calls this, so its close-up reach is
-## unchanged. Falls back to the manual keys, then hardcoded generous defaults.
-static func _with_auto_lod_reach(species: String, settings: Dictionary) -> Dictionary:
-	var np := "deciduous" if species == "deciduous" else "pine"
-	# Precedence: the single Tune-look slider (auto_foliage_lod_reach_m) → a
-	# per-species auto override → the manual near reach → a generous fallback.
-	var near := float(settings.get("auto_foliage_lod_reach_m",
-		settings.get("%s_auto_lod_near_m" % np,
-			settings.get("%s_lod_near_m" % np, 300.0))))
-	var s := settings.duplicate()
-	# Spatial chunking (~256 m) keeps each MultiMesh AABB local, so NEAR/FAR
-	# canopy LOD works again for auto forests (site-wide batches used to cull the
-	# leaf tier). Keep auto's longer near-reach so drone views stay leafy.
-	s["%s_lod_near_m" % np] = near
-	s["%s_lod_far_begin_m" % np] = maxf(near - 20.0, 10.0)
-	s["near_crisp_m"] = maxf(near, float(settings.get("near_crisp_m", 40.0)))
-	s["far_dither_m"] = VISIBILITY_END + 60.0
-	return s
-
-
 static func _clear_children(root: Node3D) -> void:
 	for child in root.get_children():
 		child.queue_free()
@@ -326,29 +289,20 @@ static func _batch_settings_key(settings: Dictionary) -> int:
 	return hash(settings)
 
 
-## Rebuild-time height truth for auto-scattered records. The generator bakes
-## scale = height_m / NOMINAL_CARD_H[species] at scatter, but the ACTUAL mesh
-## height is whatever the current style builds — deciduous measured ~9.7 m
-## against a nominal of 6.0, so every auto broadleaf rendered ~60% taller than
-## its OSM/species target, drifting further whenever the style changed dims
-## (the "drastic size differences" on tuned maps). Multiplying by
-## nominal/actual re-lands every tree on its target height at REBUILD time, so
-## stale scales in already-saved layers heal without a re-scatter.
-## Shrub/scrub records never encoded a nominal (plain RNG scale) and pass
-## through unscaled; the manual painted layer never routes through here.
+## Rebuild-time height truth for NOMINAL-table species (palm/cactus — their
+## scatter still bakes scale = height_m / NOMINAL_CARD_H and their builders
+## are not exact-size). Tree families return 1.0: v3 meshes are AABB-normalized
+## to <fam>_height_m and the scatter bakes osm_height / resolved_height, so
+## there is no drift left to correct. Shrub/scrub records never encoded a
+## nominal (plain RNG scale); the manual painted layer never routes here.
 static func height_norm_factor(species: String, settings: Dictionary) -> float:
 	if species == "shrub" or species == "scrub":
 		return 1.0
 	var family := VegetationCardFactory.mesh_family(species)
-	if family.begins_with("grass_"):
+	if family.begins_with("grass_") or family == "deciduous" or family == "pine":
 		return 1.0
 	var nominal := float(AutoVegetationGenerator.NOMINAL_CARD_H.get(species, 8.0))
-	var mesh: ArrayMesh
-	if family == "deciduous" or family == "pine":
-		mesh = VegetationCardFactory.mesh_for_canopy_lod(species, settings,
-			VegetationCardFactory.CanopyLodTier.NEAR)
-	else:
-		mesh = VegetationCardFactory.mesh_for_species(species, settings)
+	var mesh := VegetationCardFactory.mesh_for_species(species, settings)
 	if mesh == null:
 		return 1.0
 	var actual := mesh.get_aabb().size.y
@@ -372,21 +326,11 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 		return
 	if family == "deciduous" or family == "pine":
 		var tree_end := float(batch_settings.get("auto_visibility_end_m", VISIBILITY_END))
-		var lod_settings := _with_auto_lod_reach(family, batch_settings)
-		# Height normalization rides the family bulk key so every downstream
-		# tier (NEAR/FAR/impostor) picks it up through species_bulk_scale.
-		var fix := height_norm_factor(species, lod_settings)
-		if not is_equal_approx(fix, 1.0):
-			lod_settings = lod_settings.duplicate()
-			var bulk_key := "%s_bulk_scale" % family
-			lod_settings[bulk_key] = float(lod_settings.get(bulk_key, 1.0)) * fix
-		# Ring dispatch (Phase 3) lives inside _build_canopy_lod_bulk_batches:
-		# NEAR ring = leaf pair (EXEMPT from force_far — the bounded high-cost
-		# core is the point of the static ring, even on a 30 km map), MID =
-		# FAR cards, OUTER = impostor quad. auto_force_far_canopy demotes MID
-		# to OUTER there ("impostor-only mode") instead of flattening the map.
+		# v3: meshes are exact-size; records carry osm_height/resolved_height.
+		# LOD dispatch (NEAR mesh within the detail range, impostor beyond)
+		# lives inside _build_canopy_lod_bulk_batches.
 		VegetationRuntime._build_canopy_lod_bulk_batches(root, species, records, ground_y_at,
-			false, lod_settings, tree_end, growth_map,
+			false, batch_settings, tree_end, growth_map,
 			chunk_x, chunk_z)
 		return
 	var mesh := VegetationCardFactory.mesh_for_species(species, batch_settings)
