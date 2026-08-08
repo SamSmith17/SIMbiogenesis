@@ -137,6 +137,14 @@ func _ready() -> void:
 			_run_ambient_flow_verify.call_deferred()
 		elif _capture_mode == "population":
 			_run_population_verify.call_deferred()
+		elif _capture_mode == "project":
+			_run_project_verify.call_deferred()
+		elif _capture_mode == "settlement":
+			_run_settlement_capture.call_deferred()
+		elif _capture_mode == "labour":
+			_run_labour_capture.call_deferred()
+		elif _capture_mode == "npcpose":
+			_run_npc_pose_capture.call_deferred()
 		elif _capture_mode == "npc-anim":
 			_run_npc_anim_verify.call_deferred()
 		elif _capture_mode == "autobind":
@@ -155,6 +163,8 @@ func _ready() -> void:
 			_run_food_forest_verify.call_deferred()
 		elif _capture_mode == "tree":
 			_run_tree_portrait_capture.call_deferred()
+		elif _capture_mode == "weather":
+			_run_extreme_weather_capture.call_deferred()
 		else:
 			_await_and_run.call_deferred()
 
@@ -324,6 +334,14 @@ func _launch_map() -> void:
 		_run_ambient_flow_verify()
 	elif _capture_mode == "population":
 		_run_population_verify()
+	elif _capture_mode == "project":
+		_run_project_verify()
+	elif _capture_mode == "settlement":
+		_run_settlement_capture()
+	elif _capture_mode == "labour":
+		_run_labour_capture()
+	elif _capture_mode == "npcpose":
+		_run_npc_pose_capture()
 	elif _capture_mode == "npc-anim":
 		_run_npc_anim_verify()
 	elif _capture_mode == "autobind":
@@ -342,6 +360,12 @@ func _launch_map() -> void:
 		_run_food_forest_verify()
 	elif _capture_mode == "tree":
 		_run_tree_portrait_capture()
+	elif _capture_mode == "packing":
+		_run_packing_capture()
+	elif _capture_mode == "hardware":
+		_run_hardware_capture()
+	elif _capture_mode == "weather":
+		_run_extreme_weather_capture()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -369,6 +393,14 @@ func _launch_scene_direct() -> void:
 		_run_ambient_flow_verify()
 	elif _capture_mode == "population":
 		_run_population_verify()
+	elif _capture_mode == "project":
+		_run_project_verify()
+	elif _capture_mode == "settlement":
+		_run_settlement_capture()
+	elif _capture_mode == "labour":
+		_run_labour_capture()
+	elif _capture_mode == "npcpose":
+		_run_npc_pose_capture()
 	elif _capture_mode == "autobind":
 		_run_autobind_verify()
 	elif _capture_mode == "pondid":
@@ -383,6 +415,12 @@ func _launch_scene_direct() -> void:
 		_run_food_forest_verify()
 	elif _capture_mode == "tree":
 		_run_tree_portrait_capture()
+	elif _capture_mode == "packing":
+		_run_packing_capture()
+	elif _capture_mode == "hardware":
+		_run_hardware_capture()
+	elif _capture_mode == "weather":
+		_run_extreme_weather_capture()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -794,6 +832,452 @@ func _shoot_sculpt_views(cam: Camera3D, loader: Node, dir: String, phase: String
 
 
 # ---------------------------------------------------------------------------
+# Packing Lab capture (--capture=packing) — PACKING_PLAN.md Phase 4
+# ---------------------------------------------------------------------------
+
+## Opens the Packing Lab through its real entry data (the same graph+prop
+## sweep the Site Report card runs), auto-packs the site cargo into two
+## trucks, orbits, then loads the builtin StarShade kit — one PNG per state
+## for visual review. Read-only: nothing is persisted.
+func _run_packing_capture() -> void:
+	var sgv := await _find_graph_view()
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		print("PlaytestHarness: packing capture — waiting for map load")
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var main := get_tree().current_scene
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+
+	var label := _shots_label if not _shots_label.is_empty() else "packing_test"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var manifest: Array = []
+
+	# The same sweep the Site Report packing card runs.
+	var lines: Array = []
+	var model: Variant = sgv.get("model") if sgv != null else null
+	if model != null and model.has_method("get_items_in_scope"):
+		lines.append_array(CampManifest.from_graph_items(
+			GraphNesting.walk_items(model, "root")))
+	if loader != null and loader.has_method("placed_prop_records"):
+		lines.append_array(CampManifest.from_prop_records(
+			loader.call("placed_prop_records")))
+	var units: Array = CampManifest.expand_for_solver(CampManifest.merge(lines))
+	if units.is_empty():
+		# Bare scene — review the modal against the builtin kit instead.
+		units = PackTree.flatten(PackDefs.realize("starshade_kit"))["items"]
+
+	# Write discipline (vegdock pattern): the Lab now persists hand layouts
+	# on every placement/autopack — snapshot the store and byte-restore it
+	# after, so a capture run never rewrites the player's saved packs.
+	var layouts_path := "user://maps/packing_layouts.json"
+	var layouts_existed := FileAccess.file_exists(layouts_path)
+	var layouts_before := FileAccess.get_file_as_string(layouts_path) \
+		if layouts_existed else ""
+
+	var modal: CanvasLayer = load("res://scenes/ui/packing_lab_modal.gd").new()
+	get_tree().root.add_child(modal)
+	modal.call("open_with_units", units, "Site cargo (%d units)" % units.size(),
+		"uhaul_15")
+	await get_tree().create_timer(0.6).timeout
+	await _graph_shot(dir, "01_open_empty", manifest, "packing")
+
+	modal.call("autopack")
+	await get_tree().create_timer(0.4).timeout
+	await _graph_shot(dir, "02_uhaul15_autopacked", manifest, "packing")
+
+	modal.call("_set_container", "uhaul_26")
+	modal.call("autopack")
+	await get_tree().create_timer(0.4).timeout
+	await _graph_shot(dir, "03_uhaul26_autopacked", manifest, "packing")
+
+	modal.set("_yaw", 2.2)
+	modal.call("_update_camera")
+	await get_tree().create_timer(0.3).timeout
+	await _graph_shot(dir, "04_orbit_far_side", manifest, "packing")
+
+	var kit_units: Array = PackTree.flatten(PackDefs.realize("starshade_kit"))["items"]
+	modal.call("open_with_units", kit_units, "StarShade Kit", "container_20")
+	modal.call("autopack")
+	await get_tree().create_timer(0.4).timeout
+	await _graph_shot(dir, "05_starshade_kit_in_20ft", manifest, "packing")
+
+	modal.call("close")
+	modal.queue_free()
+
+	if layouts_existed:
+		var lf := FileAccess.open(layouts_path, FileAccess.WRITE)
+		if lf != null:
+			lf.store_string(layouts_before)
+	else:
+		DirAccess.remove_absolute(layouts_path)
+
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	print("PlaytestHarness: packing capture — %d shots in %s" % [
+		manifest.size(), ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
+# ---------------------------------------------------------------------------
+# Hardware Detail capture (--capture=hardware)
+# ---------------------------------------------------------------------------
+
+## One PNG per hardware-editor state, plus a console dump of where every joint
+## actually landed.
+##
+## This exists because joint placement is unreviewable from a description: the
+## port spent a release anchored on the wrong pivot with no flipStackAxis and a
+## 90-degree-yawed H-centre frame, and all three RENDERED — they simply put the
+## hardware in the wrong place. `linkage_selftest` now pins the numbers; this is
+## how a human checks that the numbers describe the right picture.
+##
+## Read-only: it builds its own LinkageParams and never touches a saved design.
+func _run_hardware_capture() -> void:
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var main := get_tree().current_scene
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+
+	var label := _shots_label if not _shots_label.is_empty() else "hardware_test"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var manifest: Array = []
+
+	var p := LinkageParams.new()
+	p.hardware_assemblies = LinkageHardware.ensure(p.hardware_assemblies)
+	# Full detail ON: this is the configuration whose geometry was wrong, and
+	# the one a player opening the editor is looking at.
+	p.show_hardware_full_detail = true
+
+	# Through the REAL entry point, so the modal lands on its own CanvasLayer
+	# above the game HUD. Adding it straight to the root gives it no layer at
+	# all, and the scoreboard and timeline draw over the top of it.
+	if main == null or not main.has_method("open_linkage_hardware_editor"):
+		push_error("PlaytestHarness: no Main.open_linkage_hardware_editor")
+		_maybe_quit()
+		return
+	var modal: Control = main.call("open_linkage_hardware_editor", p)
+	if modal == null:
+		push_error("PlaytestHarness: hardware editor did not open")
+		_maybe_quit()
+		return
+	await get_tree().create_timer(0.8).timeout
+
+	for asm_id in ["outerVBeam", "innerVBeam", "hCenter", "vCenter"]:
+		modal.call("_on_tab_pressed", asm_id)
+		await get_tree().create_timer(0.5).timeout
+		await _graph_shot(dir, "%s_seated" % asm_id, manifest, "hardware")
+
+	# Pulled back to the whole ring. This is the shot that shows whether EVERY
+	# joint is dressed at its own pivot: the clones are children of an
+	# already-seated node, so a missing inverse composes the seats and scatters
+	# joints 1..n while joint 0 stays perfectly correct — which up close reads
+	# as "the focused one is right and the rest are wrong".
+	modal.call("_on_tab_pressed", "outerVBeam")
+	modal.set("_target", modal.get("_ring_center"))
+	modal.set("_dist", 11.0)
+	modal.set("_pitch", 0.30)
+	modal.call("_update_camera")
+	await get_tree().create_timer(0.5).timeout
+	await _graph_shot(dir, "whole_ring_all_joints", manifest, "hardware")
+	modal.call("_frame_assembly")
+	await get_tree().create_timer(0.4).timeout
+
+	# Exploded, to read the stack ORDER — and to confirm the context joints fan
+	# out with it rather than staying shut.
+	modal.call("_on_tab_pressed", "outerVBeam")
+	modal.call("_on_explode_changed", 1.0)
+	await get_tree().create_timer(0.5).timeout
+	await _graph_shot(dir, "outerVBeam_exploded", manifest, "hardware")
+	modal.call("_on_explode_changed", 0.0)
+
+	# Standalone studio: the joint alone, no frame, for shape review.
+	modal.call("_on_context_toggled", false)
+	await get_tree().create_timer(0.5).timeout
+	await _graph_shot(dir, "outerVBeam_standalone", manifest, "hardware")
+	modal.call("_on_context_toggled", true)
+	await get_tree().create_timer(0.4).timeout
+
+	# Selection: the tint plus the drag-axis indicator.
+	var asm := LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")
+	for part in asm.get("parts", []):
+		var d := part as Dictionary
+		if str(d.get("type", "")) == "bracket":
+			continue
+		modal.call("_select", str(d.get("id", "")), 0)
+		break
+	await get_tree().create_timer(0.4).timeout
+	await _graph_shot(dir, "outerVBeam_selected_axis", manifest, "hardware")
+
+	# Arch mode — the other structure orientation, where the bracket frame
+	# tilts in full 3D instead of yawing.
+	var pa := LinkageParams.new()
+	pa.hardware_assemblies = LinkageHardware.ensure(pa.hardware_assemblies)
+	pa.show_hardware_full_detail = true
+	pa.orientation = "vertical"
+	pa.arch_cap_uprights = true
+	pa.modules = 6
+	modal.call("open", pa)
+	await get_tree().create_timer(0.8).timeout
+	await _graph_shot(dir, "arch_outerVBeam_seated", manifest, "hardware")
+
+	# Back to cylinder for the interaction test.
+	modal.call("open", p)
+	await get_tree().create_timer(0.8).timeout
+	await _verify_hardware_drag(modal, p, dir, manifest)
+
+	# …and again through the route a player actually takes: the Linkage Lab is
+	# still open UNDERNEATH (LAYER_MODAL) with the hardware editor stacked over
+	# it (LAYER_MODAL + 1). Opening the editor standalone does not test whether
+	# the Lab's own full-rect Control swallows the pointer first.
+	modal.call("close")
+	if main.has_method("open_linkage_lab"):
+		main.call("open_linkage_lab", p.to_config())
+		await get_tree().create_timer(0.8).timeout
+		var lab: Node = main.get("linkage_lab_ui")
+		if lab != null and lab.has_method("_on_hardware_detail_pressed"):
+			lab.call("_on_hardware_detail_pressed")
+			await get_tree().create_timer(0.9).timeout
+			var lab_params: LinkageParams = lab.get("params")
+			print("PlaytestHarness: --- drag test via the Lab entry point ---")
+			await _verify_hardware_drag(modal, lab_params, dir, manifest)
+			modal.call("close")
+		if lab != null and lab.has_method("close"):
+			lab.call("close")
+		await get_tree().create_timer(0.3).timeout
+
+	_dump_hardware_placements(p, "cylinder")
+	_dump_hardware_placements(pa, "arch")
+
+	modal.call("close")
+
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	print("PlaytestHarness: hardware capture — %d shots in %s" % [
+		manifest.size(), ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
+## Drive a REAL pointer drag through the modal and report whether the part
+## moved.
+##
+## Synthesised InputEvents pushed at the window, not direct handler calls: the
+## question "can the player drag a part" includes whether the viewport even
+## delivers the events, which calling `_drag_to` by hand would not answer. Each
+## stage prints, so a failure says WHICH link broke rather than just "no".
+func _verify_hardware_drag(modal: Control, p: LinkageParams, dir: String,
+		manifest: Array) -> void:
+	var builder = modal.get("_builder")
+	var camera := modal.get("_camera") as Camera3D
+	var vpc := modal.get("_vpc") as SubViewportContainer
+	if builder == null or camera == null or vpc == null:
+		print("PlaytestHarness: DRAG FAIL — modal has no builder/camera/viewport")
+		return
+
+	# Two subjects: a stack part (drags posAssembled along its axis) and the
+	# BRACKET (drags its own local nudge). The bracket is the biggest thing on
+	# screen and therefore the one a player grabs first — it used to refuse in
+	# silence, which is indistinguishable from the drag being broken.
+	var asm := LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")
+	var target := {}
+	for part in asm.get("parts", []):
+		var d := part as Dictionary
+		if str(d.get("type", "")) in ["bushing", "washer", "lockWasher"]:
+			target = d
+			break
+	if target.is_empty():
+		print("PlaytestHarness: DRAG FAIL — no draggable part in outerVBeam")
+		return
+	var pid := str(target["id"])
+	var node := builder.part_node(pid, 0) as Node3D
+	if node == null:
+		print("PlaytestHarness: DRAG FAIL — part %s has no node" % pid)
+		return
+
+	# Where the part is on screen. The SubViewportContainer stretches 1:1, so a
+	# viewport-space point is the container's own local space.
+	var world: Vector3 = node.global_transform.origin
+	if camera.is_position_behind(world):
+		print("PlaytestHarness: DRAG FAIL — part is behind the camera")
+		return
+	var local := camera.unproject_position(world)
+	var screen := vpc.get_global_rect().position + local
+	print("PlaytestHarness: drag target %s at world %s -> screen %s"
+		% [pid, str(world), str(screen)])
+
+	var before := float(target.get("posAssembled", 0.0))
+	var vp := modal.get_viewport()
+
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = screen
+	down.global_position = screen
+	vp.push_input(down)
+	await get_tree().process_frame
+	await get_tree().physics_frame
+
+	print("PlaytestHarness: after press — selected=%s dragging=%s"
+		% [str(modal.get("_selected")), str(modal.get("_dragging"))])
+
+	# Walk the pointer across the screen in steps, as a hand would.
+	var last := screen
+	for i in range(1, 9):
+		var to := screen + Vector2(14.0 * i, 0.0)
+		var mm := InputEventMouseMotion.new()
+		mm.position = to
+		mm.global_position = to
+		mm.relative = to - last
+		mm.button_mask = MOUSE_BUTTON_MASK_LEFT
+		last = to
+		vp.push_input(mm)
+		await get_tree().process_frame
+
+	var after_drag := float(LinkageHardware.find_part(
+		LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam"), pid)
+		.get("posAssembled", 0.0))
+	await _graph_shot(dir, "drag_midway", manifest, "hardware")
+
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = last
+	up.global_position = last
+	vp.push_input(up)
+	await get_tree().process_frame
+
+	var moved := absf(after_drag - before)
+	print("PlaytestHarness: DRAG %s — %s posAssembled %.4f -> %.4f (moved %.4f in)"
+		% ["OK" if moved > 0.01 else "FAIL", pid, before, after_drag, moved])
+
+	# --- the bracket ---------------------------------------------------------
+	var bracket := LinkageHardware.bracket_part(asm)
+	if bracket.is_empty():
+		return
+	var bid := str(bracket.get("id", ""))
+	var bnode := builder.part_node(bid, 0) as Node3D
+	if bnode == null:
+		print("PlaytestHarness: BRACKET DRAG FAIL — no node for %s" % bid)
+		return
+	var bworld: Vector3 = bnode.global_transform.origin
+	if camera.is_position_behind(bworld):
+		print("PlaytestHarness: BRACKET DRAG skipped — behind the camera")
+		return
+	var bscreen := vpc.get_global_rect().position + camera.unproject_position(bworld)
+	var bpr: Dictionary = bracket.get("params", {})
+	var bbefore := float(bpr.get("posX", 0.0))
+
+	var bdown := InputEventMouseButton.new()
+	bdown.button_index = MOUSE_BUTTON_LEFT
+	bdown.pressed = true
+	bdown.position = bscreen
+	bdown.global_position = bscreen
+	vp.push_input(bdown)
+	await get_tree().process_frame
+	await get_tree().physics_frame
+	print("PlaytestHarness: bracket press — selected=%s dragging=%s"
+		% [str(modal.get("_selected")), str(modal.get("_dragging"))])
+
+	var blast := bscreen
+	for i in range(1, 7):
+		var bto := bscreen + Vector2(9.0 * i, 0.0)
+		var bmm := InputEventMouseMotion.new()
+		bmm.position = bto
+		bmm.global_position = bto
+		bmm.relative = bto - blast
+		bmm.button_mask = MOUSE_BUTTON_MASK_LEFT
+		blast = bto
+		vp.push_input(bmm)
+		await get_tree().process_frame
+
+	var bup := InputEventMouseButton.new()
+	bup.button_index = MOUSE_BUTTON_LEFT
+	bup.pressed = false
+	bup.position = blast
+	bup.global_position = blast
+	vp.push_input(bup)
+	await get_tree().process_frame
+
+	var bafter := float((LinkageHardware.bracket_part(LinkageHardware.assembly(
+		p.hardware_assemblies, "outerVBeam")).get("params", {}) as Dictionary)
+		.get("posX", 0.0))
+	var bmoved := absf(bafter - bbefore)
+	print("PlaytestHarness: BRACKET DRAG %s — posX %.4f -> %.4f (moved %.4f in)"
+		% ["OK" if bmoved > 0.01 else "FAIL", bbefore, bafter, bmoved])
+
+
+## Console summary of every joint: which assembly, which pivot role, whether it
+## flipped, and how far its seat sits from the V-stack pivot it clamps. That
+## last number is the one that was wrong — it should be exactly the bracket's
+## hole height, and it was the H-ring offset instead.
+func _dump_hardware_placements(p: LinkageParams, tag: String) -> void:
+	var pp := p.duplicate_params()
+	pp.show_brackets = true
+	pp.show_bolts = true
+	var frame := LinkageSolver.solve(pp, LinkageKinematics.optimal_closed_angle(pp))
+	var all := LinkageHwPlacement.placements(pp, frame)
+	var by_id: Dictionary = {}
+	var flips := 0
+	for entry in all:
+		var e := entry as Dictionary
+		var aid := str(e["assembly_id"])
+		by_id[aid] = int(by_id.get(aid, 0)) + 1
+		if bool(e.get("flip_stack_axis", false)):
+			flips += 1
+	print("PlaytestHarness: hardware placements (%s): %d total %s, %d flipped"
+		% [tag, all.size(), str(by_id), flips])
+
+	var asm := LinkageHardware.assembly(pp.hardware_assemblies, "outerVBeam")
+	var bpart := LinkageHardware.bracket_part(asm)
+	var hole := LinkageHwLayout.bracket_hole_y(bpart)
+	# The bracket's local nudge is part of the seat, so it has to come back out
+	# of the identity too — otherwise nudging the bracket (which the drag test
+	# above does) reports itself as an anchoring error.
+	var bp: Dictionary = bpart.get("params", {})
+	var nudge := Vector3(float(bp.get("posX", 0.0)), float(bp.get("posY", 0.0)),
+		float(bp.get("posZ", 0.0)))
+	var worst := 0.0
+	for entry in all:
+		var e := entry as Dictionary
+		if str(e["assembly_id"]) != "outerVBeam":
+			continue
+		var xf: Transform3D = e["transform"]
+		var back: Vector3 = xf.origin + xf.basis * Vector3(0.0, hole, 0.0) \
+			- xf.basis * nudge
+		# NEAREST matching bracket, not the first. With cap uprights a module
+		# carries two outer-bottom brackets, so a role+ring+module key alone
+		# picks the wrong one and reports a hundred-inch "error" that is really
+		# the distance to the other end of the arch.
+		var best := INF
+		for bracket in frame["brackets"]:
+			var br := bracket as Dictionary
+			if str(br.get("pivot_role", "")) != "outer":
+				continue
+			if bool(br.get("is_bottom", false)) != bool(e["is_bottom"]):
+				continue
+			if int(br.get("module_index", -1)) != int(e["module_index"]):
+				continue
+			best = minf(best, back.distance_to(br["v_bolt_pivot"] as Vector3))
+		if is_finite(best):
+			worst = maxf(worst, best)
+	print("PlaytestHarness: hardware anchor error (%s): worst %.6f in "
+		% [tag, worst] + "(hole height %.4f in — 0 means every seat is exact)"
+		% hole)
+
+
+# ---------------------------------------------------------------------------
 # Systems-graph UI capture (--capture=graph)
 # ---------------------------------------------------------------------------
 
@@ -880,6 +1364,42 @@ func _run_graph_capture() -> void:
 		sgv.call("_apply_graph_view_mode", "site")
 		await get_tree().create_timer(1.5).timeout
 		await _graph_shot(dir, "07_site_plan", manifest)
+		# Desire-line toggles must flip THROUGH THE REAL MENU HANDLER — the
+		# items were once wired to the wrong popup's handler, so every click
+		# was a silent no-op (worn paths could never turn on, trails never
+		# off). Also orbit the live disc: the NPC layers used flat disc math
+		# and stayed put while the node chips turned, so the orbited shot is
+		# the visual proof they now ride the camera projection.
+		var vm_consts: Dictionary = (sgv.get_script() as Script).get_script_constant_map()
+		var id_lines := int(vm_consts.get("VIEW_MODE_DESIRE_LINES", 152))
+		var id_trails := int(vm_consts.get("VIEW_MODE_DESIRE_TRAILS", 153))
+		var lines_before := bool(sgv.get("_desire_lines_on"))
+		var trails_before := true if canvas == null \
+				else bool(canvas.get("npc_trails_enabled"))
+		sgv.call("_on_view_mode_menu_id", id_lines)
+		sgv.call("_on_view_mode_menu_id", id_trails)
+		var lines_after := bool(sgv.get("_desire_lines_on"))
+		var trails_after := true if canvas == null \
+				else bool(canvas.get("npc_trails_enabled"))
+		if lines_after == lines_before or trails_after == trails_before:
+			push_error("PlaytestHarness: desire menu handler did NOT flip state "
+					+ "— the View options wiring regressed")
+		else:
+			print("PlaytestHarness: desire toggles flip through the real handler "
+					+ "(lines %s->%s, trails %s->%s)" % [lines_before, lines_after,
+					trails_before, trails_after])
+		var orbit_svc: Variant = null if canvas == null \
+				else canvas.get("soi_preview_service")
+		if orbit_svc != null and (orbit_svc as Object).has_method("apply_orbit_delta"):
+			orbit_svc.call("apply_orbit_delta", Vector2(140.0, 90.0))
+			await get_tree().create_timer(0.8).timeout
+			await _graph_shot(dir, "07b_site_plan_orbited_desire", manifest)
+			if (orbit_svc as Object).has_method("reset_phys_orbit"):
+				orbit_svc.call("reset_phys_orbit")
+		# Restore the stock view state for the later phases.
+		sgv.call("_on_view_mode_menu_id", id_lines)
+		sgv.call("_on_view_mode_menu_id", id_trails)
+		await get_tree().create_timer(0.3).timeout
 		sgv.call("_apply_graph_view_mode", "elevation")
 		await get_tree().create_timer(1.5).timeout
 		await _graph_shot(dir, "08_elevation", manifest)
@@ -1483,6 +2003,20 @@ func _run_population_verify() -> void:
 		"PASS" if ok_concave else "FAIL", str(u_centroid.round()), str((u_pt as Vector2).round())])
 	print("PlaytestHarness: population verify — %d spaces seeded, graph CLOSED" % (sites.size() + 1))
 
+	# A plain scheduled chore, seeded here so the ambient day below has to
+	# actually FINISH it. Movement and consumption were already asserted; work
+	# reaching completion was the gap — and it is the gap the whole stall bug
+	# lived in, one level up from the same hole in the selftest.
+	var board: Variant = bridge.call("chore_board_for", "cap_pop_hab")
+	var chore_id := ""
+	if board != null:
+		chore_id = str(board.call("add_chore", "Sweep the yard", 0.5, {
+			"repeat": "daily", "priority": 0,
+			"exposure": NpcWeatherGate.EXPOSURE_OUTDOOR,
+			"window": {"start_h": 0.0, "end_h": 24.0},
+			"target": {"kind": "pos", "x": 12.0, "z": -12.0},
+		}))
+
 	var lvl := func(id: String) -> float:
 		return float((model.get_item(id).get("specs", {}) as Dictionary).get("level", -1.0))
 	var water0: float = lvl.call("cap_pop_water")
@@ -1518,6 +2052,17 @@ func _run_population_verify() -> void:
 	print("PlaytestHarness: population verify — ambient consumption %s, movement %s" % [
 		"PASS" if ok_flow else "FAIL (tanks did not move with the graph closed)",
 		"PASS" if ok_move else "FAIL (agents did not walk between spaces)"])
+	var ok_chore := false
+	if board != null and not chore_id.is_empty():
+		var ch: Dictionary = board.call("find", chore_id) as Dictionary
+		# `done_day >= 0` is the board's own record that the work was FINISHED,
+		# not merely picked up — the distinction the stall bug hid behind.
+		ok_chore = int(ch.get("done_day", -1)) >= 0
+		print("PlaytestHarness: population verify — scheduled chore completed %s (done_day=%d, %.2f of %.2f h left)" % [
+			"PASS" if ok_chore else "FAIL (nobody finished a 0.5 h chore in ~15 sim-hours)",
+			int(ch.get("done_day", -1)),
+			maxf(float(ch.get("chore_hours", 0.0)) - float(ch.get("progress_h", 0.0)), 0.0),
+			float(ch.get("chore_hours", 0.0))])
 
 
 	# --- phase 2: Site Plan dot capture --------------------------------------
@@ -1686,7 +2231,14 @@ func _run_population_verify() -> void:
 	# empties the camp, and there is nothing to photograph after that.
 	sgv.visible = false
 	var host: Node = main.get_node_or_null("NpcPopulationHost") if main != null else null
-	var avatar_count := host.get_child_count() if host != null else 0
+	# Count AVATARS, not children: the host also parents the pooled
+	# CrewSiteMarker nodes, so a child count reads one high the moment any crew
+	# work is on the board — which since the labour merge is most of the time.
+	var avatar_count := 0
+	if host != null:
+		for c in host.get_children():
+			if c is NpcAvatar:
+				avatar_count += 1
 	print("PlaytestHarness: population verify — 3D host %s (%d avatars)" % [
 		"present" if host != null else "MISSING", avatar_count])
 	# Crosshair-pick contract (InteractionFocus._update_npc_focus): avatars must
@@ -1710,6 +2262,29 @@ func _run_population_verify() -> void:
 			and statused == avatar_count and pick_ok == avatar_count
 	print("PlaytestHarness: population verify — crosshair contract %s (group=%d named=%d status=%d pick=%d)" % [
 		"PASS" if ok_pick else "FAIL", grouped.size(), named, statused, pick_ok])
+	# Facing, END TO END through the real dot -> host -> avatar path. The
+	# offline selftest asserts the RULE; this asserts that the rule survives
+	# every layer between the engine and a rendered transform. The failure it
+	# guards is the reported one: yaw latched on the approach heading, so a
+	# camp that walked in from one direction all points one way. Circular
+	# concentration R: 1.0 = perfectly aligned.
+	var yaws: Array = []
+	for node in grouped:
+		var av2 := node as NpcAvatar
+		if av2 != null:
+			yaws.append(av2.rotation.y)
+	var r_all := 1.0
+	if yaws.size() >= 3:
+		var sx := 0.0
+		var sy := 0.0
+		for y in yaws:
+			sx += cos(float(y))
+			sy += sin(float(y))
+		r_all = Vector2(sx, sy).length() / float(yaws.size())
+	var ok_face := yaws.size() >= 3 and r_all < 0.85
+	print("PlaytestHarness: population verify — facing spread %s (R=%.3f over %d avatars)" % [
+		"PASS" if ok_face else "FAIL (the roster is all pointing one way)",
+		r_all, yaws.size()])
 	# Personal space (Tier 4c). Standing slots keep people who have ARRIVED
 	# apart; the separation pass handles everyone in transit. The failure this
 	# guards is the one that is obvious on screen and invisible in the numbers:
@@ -2054,7 +2629,7 @@ func _run_population_verify() -> void:
 		if not (model.get_item(str(pid)) as Dictionary).is_empty():
 			model.remove_item(str(pid))
 	print("PlaytestHarness: population verify — %s (%d shots in %s)" % [
-		"PASS" if (ok_flow and ok_move and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire and ok_drape) else "FAIL",
+		"PASS" if (ok_flow and ok_move and ok_chore and ok_face and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire and ok_drape) else "FAIL",
 		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
 
@@ -3017,6 +3592,265 @@ func _graph_shot(dir: String, state: String, manifest: Array,
 	print("PlaytestHarness: graph shot %s" % entry["file"])
 
 
+## --- Extreme weather capture -------------------------------------------------
+## Atmosphere is unreviewable from a description: a wrong fog density renders as
+## "looks a bit off", never as an error. So this mode shoots a clear baseline
+## plus a severity ramp per hazard from ONE fixed viewpoint (with distant
+## geometry in frame, so visibility is actually measurable), and DUMPS the
+## resolved numbers to the console so the picture can be checked against them.
+##
+## Write discipline: forcing a hazard and toggling opt-ins touches
+## user://extreme_weather.cfg, so it is snapshotted and byte-restored — a
+## capture run must never rewrite the player's settings (the vegdock/areafill
+## precedent).
+const XW_PREFS_PATH := "user://extreme_weather.cfg"
+const XW_SEVERITIES: Array[float] = [0.35, 0.7, 1.0]
+
+
+func _run_extreme_weather_capture() -> void:
+	var tree := get_tree()
+	# Works on any map: a TerrainLoader gives real terrain to look through, but
+	# the soak map (which has none) still exercises the full atmosphere path.
+	var loader := tree.current_scene.find_child("TerrainLoader", true, false) \
+		if tree.current_scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw == null:
+		push_error("PlaytestHarness: ExtremeWeather autoload missing — aborting weather capture")
+		_maybe_quit()
+		return
+
+	var prefs_existed := FileAccess.file_exists(XW_PREFS_PATH)
+	var prefs_backup := FileAccess.get_file_as_string(XW_PREFS_PATH) if prefs_existed else ""
+
+	var label := _shots_label if not _shots_label.is_empty() else "extreme_weather"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var manifest: Array = []
+
+	# --- 0. the property the whole design rests on ---------------------------
+	_xw_assert_pure_function(xw)
+
+	# --- 1. the settings tab, through its REAL entry point -------------------
+	await _xw_shoot_settings_tab(dir, manifest)
+
+	# --- 2. world: baseline, then a severity ramp per hazard -----------------
+	var gr := GameplayRulesImpl.from_node(self)
+	if gr != null:
+		gr.extreme_weather_enabled = true
+	xw.call("clear_forced")
+	_set_capture_conditions()
+
+	var cam := Camera3D.new()
+	cam.name = "PlaytestCam"
+	cam.far = 40000.0
+	tree.current_scene.add_child(cam)
+	cam.make_current()
+	_xw_aim_camera(cam, loader)
+
+	print("\n=== EXTREME WEATHER CAPTURE ===")
+	print("hour %.1f   hazards: %s" % [_capture_hour, str(HazardCatalog.simulated_ids())])
+	await _xw_world_shot(xw, cam, dir, manifest, "", 0.0, "00_clear")
+
+	var shot_i := 1
+	for id: String in HazardCatalog.simulated_ids():
+		for sev: float in XW_SEVERITIES:
+			var state := "%02d_%s_%03d" % [shot_i, id, int(sev * 100.0)]
+			await _xw_world_shot(xw, cam, dir, manifest, id, sev, state)
+			shot_i += 1
+
+	# Night: smoke changes the night sky as much as the day, and this is where
+	# a daylight-ungated sky tint would show up as a brown, starless night.
+	var main := _find_main()
+	if main != null:
+		main.set("day_time", 22.0)
+		await tree.process_frame
+		await _xw_world_shot(xw, cam, dir, manifest, "wildfire_smoke", 0.7, "%02d_smoke_070_night" % shot_i)
+		shot_i += 1
+		main.set("day_time", _capture_hour)
+
+	cam.queue_free()
+	xw.call("clear_forced")
+
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+
+	# Restore the player's prefs byte-for-byte.
+	if prefs_existed:
+		var pf := FileAccess.open(XW_PREFS_PATH, FileAccess.WRITE)
+		if pf != null:
+			pf.store_string(prefs_backup)
+			pf.close()
+	elif FileAccess.file_exists(XW_PREFS_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(XW_PREFS_PATH))
+
+	print("PlaytestHarness: weather capture — %d shots in %s" % [
+		manifest.size(), ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
+## Extreme-weather severity must be a PURE FUNCTION of absolute hours — that is
+## the entire reason this subsystem is not a CrisisEvent, and it is what lets the
+## timeline scrub backwards through a smoke event and lets prebaked challenges
+## agree with live play. It cannot be asserted in the offline selftest because
+## resolve_at needs the live autoloads and a resolved Main, so it is checked
+## here, against whatever real data this site actually has.
+func _xw_assert_pure_function(xw: Node) -> void:
+	var main := _find_main()
+	if main == null:
+		print("PlaytestHarness: no Main — skipping purity assertions")
+		return
+	var clk: Variant = main.get("clock")
+	if clk == null or not clk.has_method("get_absolute_hours"):
+		return
+	var now := float(clk.call("get_absolute_hours"))
+
+	# Sample a week forward, then the SAME instants in reverse. A stateful
+	# implementation drifts here; a pure one cannot.
+	var forward: Array[float] = []
+	var instants: Array[float] = []
+	for i in 48:
+		var t := now + float(i) * 3.5
+		instants.append(t)
+		forward.append(float((xw.call("resolve_at", t) as Dictionary).get("severity", 0.0)))
+	var mismatches := 0
+	var worst := 0.0
+	for i in range(instants.size() - 1, -1, -1):
+		var again := float(
+			(xw.call("resolve_at", instants[i]) as Dictionary).get("severity", 0.0))
+		var d := absf(again - forward[i])
+		if d > 0.000001:
+			mismatches += 1
+			worst = maxf(worst, d)
+	if mismatches == 0:
+		print("PlaytestHarness: purity OK — 48 instants identical forward and reversed")
+	else:
+		push_error(
+			"PlaytestHarness: EXTREME WEATHER IS NOT A PURE FUNCTION OF TIME — %d/%d instants differed on reverse traversal (worst %.6f). Scrubbing will desync."
+			% [mismatches, instants.size(), worst])
+
+	# And identical when asked twice in a row.
+	var a := float((xw.call("resolve_at", now) as Dictionary).get("severity", 0.0))
+	var b := float((xw.call("resolve_at", now) as Dictionary).get("severity", 0.0))
+	if absf(a - b) > 0.000001:
+		push_error("PlaytestHarness: resolve_at is not deterministic (%.6f vs %.6f)" % [a, b])
+
+
+func _xw_shoot_settings_tab(dir: String, manifest: Array) -> void:
+	var tree := get_tree()
+	if tree.current_scene == null:
+		return
+	var timeline := tree.current_scene.find_child("TimelineUI", true, false)
+	if timeline == null or not timeline.has_method("_on_settings_pressed"):
+		print("PlaytestHarness: TimelineUI not found — skipping settings-tab shot")
+		return
+	timeline.call("_on_settings_pressed")
+	await tree.process_frame
+	await tree.process_frame
+	var panel: Variant = timeline.get("_settings_panel")
+	if panel is Control:
+		var tabs := _xw_find_tab_container(panel as Control)
+		if tabs != null:
+			for i in tabs.get_tab_count():
+				if tabs.get_tab_title(i).begins_with("Extreme"):
+					tabs.current_tab = i
+					break
+		# The risk profile is fetched asynchronously; give it a moment so the
+		# shot shows real rows rather than "Loading...".
+		if (panel as Control).has_method("_refresh_extreme_weather_tab"):
+			await tree.create_timer(2.0).timeout
+			(panel as Control).call("_refresh_extreme_weather_tab")
+		await tree.process_frame
+	await _graph_shot(dir, "ui_settings_tab", manifest, "weather")
+	if panel is Control and (panel as Control).has_method("close"):
+		(panel as Control).call("close")
+	await tree.process_frame
+
+
+func _xw_find_tab_container(root: Node) -> TabContainer:
+	if root is TabContainer:
+		return root as TabContainer
+	for c in root.get_children():
+		var hit := _xw_find_tab_container(c)
+		if hit != null:
+			return hit
+	return null
+
+
+func _xw_world_shot(xw: Node, cam: Camera3D, dir: String, manifest: Array,
+		id: String, sev: float, state: String) -> void:
+	if id.is_empty():
+		xw.call("clear_forced")
+	else:
+		xw.call("force_hazard", id, sev, 24.0)
+	# Let the applier's easing settle — targets are pure, but the applied values
+	# lerp over real time on purpose.
+	for _i in 30:
+		await get_tree().process_frame
+	_xw_dump_state(xw, state)
+	await _graph_shot(dir, state, manifest, "weather")
+
+
+## The numbers behind the picture. A PNG cannot tell you whether the fog is
+## 900 m or 9 km, and that difference is the whole feature.
+func _xw_dump_state(xw: Node, state: String) -> void:
+	var s: Dictionary = xw.call("current")
+	var vis := float(s.get("visibility_m", 0.0))
+	print("shot %s:" % state)
+	print("  id=%s  severity=%.3f  source=%s" % [
+		str(s.get("id", "-")), float(s.get("severity", 0.0)), str(s.get("source", "-"))])
+	print("  aod=%.3f  visibility=%.0f m  fog_density=%.6f  pm2.5=%.0f  aqi=%.0f (%s)" % [
+		float(s.get("aod", 0.0)), vis,
+		HazardState.fog_density_for_visibility(vis),
+		float(s.get("pm25_ugm3", 0.0)), float(s.get("aqi", 0.0)),
+		HazardEvaluators.aqi_category(float(s.get("aqi", 0.0)))])
+	var st: Color = s.get("sun_tint", Color.WHITE)
+	var hc: Color = s.get("haze_color", Color.WHITE)
+	print("  sun_tint=(%.2f,%.2f,%.2f) x%.2f   haze=(%.2f,%.2f,%.2f) str=%.2f sky=%.2f" % [
+		st.r, st.g, st.b, float(s.get("sun_energy_mult", 1.0)),
+		hc.r, hc.g, hc.b, float(s.get("haze_strength", 0.0)),
+		float(s.get("sky_tint_strength", 0.0))])
+	print("  dni=%.0f%%  ghi=%.0f%%  dhi_boost=%.2f  wind x%.2f  particles=%s %.2f" % [
+		float(s.get("dni_factor", 1.0)) * 100.0, float(s.get("ghi_factor", 1.0)) * 100.0,
+		float(s.get("dhi_boost", 0.0)), float(s.get("wind_mult", 1.0)),
+		str(s.get("particle_kind", "-")), float(s.get("particle_density", 0.0))])
+	# Canopy wind actually being PUSHED to the vegetation shaders — sway is
+	# unreviewable from a still PNG, so the numbers are the review artifact.
+	var wd := get_node_or_null("/root/VegetationWindDriver")
+	if wd != null:
+		print("  canopy wind: pushed speed=%.1f m/s gust=%.2f  (hazard x%.2f/x%.2f turb %.2f)" % [
+			float(wd.get("_current_speed")), float(wd.get("_current_gust")),
+			float(s.get("wind_mult", 1.0)), float(s.get("gust_mult", 1.0)),
+			float(s.get("turbulence", 0.0))])
+
+
+## Stand back from the site with distant geometry in frame — visibility is only
+## reviewable against something far away to lose.
+func _xw_aim_camera(cam: Camera3D, loader: Node) -> void:
+	var eye := Vector3(0.0, 40.0, 220.0)
+	if loader != null and loader.has_method("ground_height_at"):
+		var g := float(loader.call("ground_height_at", eye.x, eye.z))
+		if is_finite(g):
+			eye.y = g + 12.0
+	cam.global_position = eye
+	cam.look_at(Vector3(0.0, eye.y - 6.0, -600.0), Vector3.UP)
+
+
+func _find_main() -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	for child in tree.root.get_children():
+		if "day_time" in child and "sun" in child:
+			return child
+	return null
+
+
 func _maybe_quit() -> void:
 	if _quit_after:
 		print("PlaytestHarness: capture complete — quitting")
@@ -3309,6 +4143,23 @@ func _run_veg_capture() -> void:
 			main.day = int(date[1])
 		await get_tree().create_timer(VEG_SEASON_SETTLE_S).timeout
 		await _capture_set(cam, [season_wp], str(date[2]), dir, manifest)
+
+	# One NIGHT shot of the distant forest from the same waypoint: the
+	# unshaded impostor tier's brightness floor now tracks the live scene
+	# ambient — the old hard-coded 0.30 floor read as trees glowing in the
+	# dark, and only a night frame with far forest in view can show it.
+	if "month" in main:
+		main.month = 7
+	if "day" in main:
+		main.day = 15
+	var day_time_saved := float(main.get("day_time")) if "day_time" in main else 12.0
+	if "day_time" in main:
+		main.set("day_time", 1.0)   # 01:00 — deep night, no twilight ambiguity
+	await get_tree().create_timer(VEG_SEASON_SETTLE_S).timeout
+	await _capture_set(cam, [season_wp], "night_glow", dir, manifest)
+	if "day_time" in main:
+		main.set("day_time", day_time_saved)
+	await get_tree().create_timer(0.4).timeout
 
 	_write_veg_diagnostics(loader, dir)
 	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
@@ -3876,6 +4727,203 @@ const TREE_PORTRAIT_SPECIES: Array = [
 ]
 
 
+# ==================== NPC POSE PORTRAIT (--capture=npcpose) ====================
+## Pose work is unreviewable from settlement or population shots — a broken
+## `work_overhead` just reads as "the crowd looks a bit off". This stands ONE
+## figure per pose family in empty air against sky and shoots it close, which
+## is where a family that does not read becomes obvious.
+##
+## `--capture=npc-anim` cannot do this job and never will: it observes only
+## `is_rigged()` avatars, and the rigged Mixamo body aliases all seven families
+## onto its single `work` clip. The families exist on the STICK FIGURE, so this
+## harness forces that body style (and puts the player's preference back).
+##
+## Read-only. It builds its own avatars from NpcAvatar directly and never
+## touches the map's population, so it is safe on a real saved site.
+const NPCPOSE_SUBJECTS: Array = [
+	# [seed_key, logical clip, carrying]
+	["pose_lift", "work_lift", false],
+	["pose_dig", "work_dig", false],
+	["pose_overhead", "work_overhead", false],
+	["pose_drill", "work_drill", false],
+	["pose_bench", "work_bench", false],
+	["pose_inspect", "work_inspect", false],
+	# haul_hold renders through a DIFFERENT branch (_pose_carry_idle, with the
+	# carry box shown), and `carrying` is the only thing that reaches it.
+	["pose_haul", "haul_hold", true],
+	["pose_enter", "work_enter", false],
+	["pose_exit", "work_exit", false],
+	# Baselines, so a family can be judged against what the body does at rest.
+	["pose_idle", "", false],
+	["pose_walk", "walk", false],
+]
+
+## Real seconds to let the joints settle before shooting. The figure eases
+## toward its pose at ~9/s, so a shot taken on the frame the clip changes is a
+## picture of the PREVIOUS pose.
+const NPCPOSE_SETTLE_S := 1.1
+
+
+func _run_npc_pose_capture() -> void:
+	var loader := await _find_terrain_loader()
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	_set_capture_conditions()
+	var main := get_tree().get_first_node_in_group("main_scene")
+	if main != null:
+		_set_capture_date(main, 7, 15)
+		await get_tree().process_frame
+	var label := _shots_label if not _shots_label.is_empty() else "npc_pose"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+
+	# ⚠ Body style is a GLOBAL, PERSISTED player preference
+	# (user://npc_display.cfg). Forcing it is necessary — the work families only
+	# draw on the stick figure — so it must be restored on EVERY exit path, or
+	# running the harness silently rewrites the player's choice.
+	var prev_style := NpcDisplayPrefs.style()
+	NpcDisplayPrefs.set_style(NpcDisplayPrefs.STYLE_SIMPLE)
+
+	var scene := get_tree().current_scene
+	var cam := Camera3D.new()
+	cam.name = "PosePortraitCam"
+	cam.far = 4000.0
+	scene.add_child(cam)
+	var prev_cam := get_viewport().get_camera_3d()
+	cam.make_current()
+
+	# Well above the terrain, so nothing intrudes on the silhouette.
+	var base := Vector3(0.0, 4000.0, 0.0)
+	var manifest: Array = []
+	for spec in NPCPOSE_SUBJECTS:
+		var s: Array = spec
+		var seed_key := str(s[0])
+		var family := str(s[1])
+		var carrying := bool(s[2])
+
+		# NpcAvatar.setup is the ONLY place NpcWorkPose.merge_catalog is
+		# applied; a hand-rolled NpcPoseMachine has no procedural families and
+		# every _has() guard would silently fall back to the generic squat.
+		var av := NpcAvatar.new()
+		av.setup(seed_key, Color(0.62, 0.68, 0.82), seed_key)
+		# MUST be in the tree: _simple.pose() only runs from _process.
+		scene.add_child(av)
+		av.set_detail(false)
+
+		# Two framings per subject. The near one reviews the pose; the far one
+		# is the claim the families are designed against — "differ in
+		# SILHOUETTE at ~60 m" — and is the only way to check it.
+		for framing in [["near", 2.5], ["far", 13.0]]:
+			var fname := str((framing as Array)[0])
+			var dist := float((framing as Array)[1])
+			# Camera BELOW the figure's waist, looking up. That puts the whole
+			# body against open sky — a horizon line crossing the subject is
+			# the one thing that makes a silhouette unreadable, and a level
+			# camera at this height puts it right through the hips.
+			cam.position = base + Vector3(dist * 0.80, -dist * 0.16, dist * 0.60)
+			cam.look_at(base + Vector3(0.0, 0.95, 0.0), Vector3.UP)
+			# Let the figure reach the pose. Driven by hand rather than by the
+			# host: this avatar has no bridge, no dot and no ground query.
+			var elapsed := 0.0
+			while elapsed < NPCPOSE_SETTLE_S:
+				await get_tree().process_frame
+				var dt := get_process_delta_time()
+				elapsed += dt
+				av.apply_pose(base, PI * 0.85, _npcpose_input(dt, family, carrying))
+			await RenderingServer.frame_post_draw
+			await get_tree().create_timer(0.15).timeout
+			await RenderingServer.frame_post_draw
+			var shot := "%s_%s" % [seed_key, fname]
+			get_viewport().get_texture().get_image().save_png("%s/%s.png" % [dir, shot])
+			# The numbers a PNG cannot give you. `machine_clip` is the load
+			# bearing one: it turns "this looks wrong" into "the machine picked
+			# the wrong clip", which are different bugs in different files.
+			var machine_clip := str(av.call("pose_clip")) if av.has_method("pose_clip") else ""
+			manifest.append({
+				"shot": shot, "family": family, "framing": fname,
+				"carrying": carrying, "machine_clip": machine_clip,
+				"seed": seed_key,
+			})
+			print("PlaytestHarness: npcpose — %-14s %-4s want=%-14s machine=%s" % [
+				seed_key, fname, family if not family.is_empty() else "(idle)",
+				machine_clip if not machine_clip.is_empty() else "?"])
+		av.queue_free()
+		await get_tree().process_frame
+
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	# Every exit path restores the preference and the camera.
+	NpcDisplayPrefs.set_style(prev_style)
+	if prev_cam != null and is_instance_valid(prev_cam):
+		prev_cam.current = true
+	cam.queue_free()
+	print("PlaytestHarness: npcpose — %d shots in %s (body style restored to %s)" % [
+		manifest.size(), ProjectSettings.globalize_path(dir), prev_style])
+	_maybe_quit()
+
+
+## The pose-machine input for one portrait frame.
+##
+## Four values here are load-bearing and each was verified the hard way:
+##   paused        — MUST be false. _set_capture_conditions freezes time_scale,
+##                   and NpcAvatar._drive early-returns on `paused`, so copying
+##                   the host's `scale <= 0.0` would render eleven T-poses.
+##   dwell_left_s  — INF, or _budget_allows' ~0.96 s enter+exit gate refuses the
+##                   transition and the work_enter/work_exit subjects shoot the
+##                   settled pose instead of the thing being reviewed.
+##   carrying      — OVERRIDES the family in _pose_clip, so it is true for the
+##                   haul_hold subject only.
+##   work_pose     — the family id; the machine maps it to a logical clip.
+static func _npcpose_input(dt: float, family: String, carrying: bool) -> Dictionary:
+	# The transitions and the baselines are not families — they are reached by
+	# driving the machine into the state that plays them.
+	var activity := "chore"
+	var in_transit := false
+	var fam := family
+	match family:
+		"":
+			activity = ""
+		"walk":
+			activity = ""
+			in_transit = true
+		"work_enter", "work_exit":
+			fam = NpcWorkPose.DIG
+		"haul_hold":
+			fam = NpcWorkPose.HAUL_HOLD
+		_:
+			# The FAMILY id, not the clip name — clip_for does that mapping.
+			for f in NpcWorkPose.FAMILIES:
+				if NpcWorkPose.clip_for(str(f)) == family:
+					fam = str(f)
+					break
+	# A transition is a ONE-SHOT: the machine plays it for ~0.35 s and moves on,
+	# so it is not reachable as a steady state and a still frame would catch
+	# whatever came after. `anim_map` is the existing player-binding override
+	# (pose_slot -> clip), and pinning it holds the figure on the transition's
+	# target shape indefinitely — which is exactly what a portrait should show.
+	var anim_map: Dictionary = {}
+	if family == "work_enter" or family == "work_exit":
+		anim_map = {"chore": family}
+	return {
+		"dt": dt,
+		"paused": false,
+		"in_transit": in_transit,
+		"activity": activity,
+		"anim_map": anim_map,
+		"space_type": "",
+		"morale": 0.9,
+		"dwell_left_s": INF,
+		"teleported": false,
+		"carrying": carrying,
+		"work_pose": fam,
+		"apparent_speed_mps": 1.3 if in_transit else 0.0,
+		"time_mult": 1.0,
+	}
+
+
 func _run_tree_portrait_capture() -> void:
 	var loader := await _find_terrain_loader()
 	if loader != null and not (loader.get("load_completed") == true):
@@ -3964,4 +5012,756 @@ func _run_tree_portrait_capture() -> void:
 	root.queue_free()
 	print("PlaytestHarness: tree portraits — %d shots in %s"
 		% [manifest.size(), ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
+## Periodic diagnostic during the project polls: which phase is live, how many
+## are done, who is on it — so a FAIL names its stalled phase instead of just
+## timing out silently.
+func _print_project_rollup(bridge: Variant, board: Variant, project_id: String,
+		tag: String) -> void:
+	for prow in (bridge.call("all_site_projects") as Array):
+		var pd := (prow as Dictionary)["project"] as Dictionary
+		if str(pd.get("id", "")) != project_id:
+			continue
+		var rl: Dictionary = SiteProject.rollup(pd, board)
+		var pend := ""
+		for t in pd.get("tasks", []):
+			var task: Dictionary = t
+			if str(task.get("status", "")) == "pending":
+				var ch: Dictionary = board.find(str(task.get("chore_id", "")))
+				pend = "%s (%d workers, %.2f/%.2f h)" % [str(task.get("label", "")),
+					(ch.get("workers", []) as Array).size(),
+					float(ch.get("progress_h", 0.0)), float(ch.get("chore_hours", 0.0))]
+				break
+		print("PlaytestHarness: project verify [%s] — %d/%d done (%.0f%%), next: %s" % [
+			tag, int(rl["done"]), int(rl["total"]),
+			float(rl["progress"]) * 100.0, pend if not pend.is_empty() else "—"])
+		return
+
+
+# ==================== SITE PROJECT VERIFY (--capture=project) ====================
+## End-to-end camp-lifecycle verify (WINDOWED — needs a REAL TerrainLoader
+## map, e.g. --user-map=mtvernon): seeds a pop-driven habitat + supply tanks
+## + tagged spaces, then walks the WHOLE unified mechanic with console
+## asserts and a PNG per stage:
+##   DELIVER   starshade_kit — crates carry delivery identity + staging
+##             slots, the unload lands as a Site Project on the board
+##   UNLOAD    a carrying dot is observed and the crate record MOVES to its
+##             staging slot via the chore's completion effect (never before)
+##   BUILD     a linkage build project drives the ghost structure's beam
+##             visible_instance_count strictly UP as real labour lands
+##   RAISE     the erect phase's unpack effect deploys the structure
+##             (packed:false, linkage_deployed:true, build_state cleared)
+##   BREAKDOWN the reverse project folds it back to packed: true
+## The board runs night_shift so chore windows never stall the verify; the
+## clock is stepped by time_scale, never jumped (the >6 h coarse catch-up
+## path would reroll the roster). Seeded cap_prj_* graph items are removed
+## from the map autosave afterwards.
+func _run_project_verify() -> void:
+	var sgv := await _find_graph_view()
+	if sgv == null:
+		push_error("PlaytestHarness: SystemGraphView not found — aborting project verify")
+		_maybe_quit()
+		return
+	sgv.visible = false
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader == null or not loader.has_method("deliver_packed_kit"):
+		push_error("PlaytestHarness: project verify needs a TerrainLoader map (use --user-map=…)")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var main := get_tree().current_scene
+	var model: Variant = sgv.get("model")
+	if model == null:
+		push_error("PlaytestHarness: graph model unavailable — aborting project verify")
+		_maybe_quit()
+		return
+
+	# --- seed: pop-driven habitat + tanks (cap_prj_*) -------------------------
+	var hab_id := "cap_prj_hab"
+	var prj_ids := [hab_id, "cap_prj_water", "cap_prj_food"]
+	for pid in prj_ids:
+		if not (model.get_item(str(pid)) as Dictionary).is_empty():
+			model.remove_item(str(pid))
+	model.add_item({
+		"id": hab_id, "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 150.0,
+		"specs": {
+			"name": "Project Crew", "role": "habitat", "occupants": 12,
+			"pop_driven": true, "watts": 0.0, "energy_source": "", "efficiency": 1.0,
+			"inputs": [
+				{"kind": "water", "rate": 2.0, "unit": "L/h"},
+				{"kind": "food", "rate": 0.06, "unit": "kg/h"},
+			],
+			"outputs": [],
+		},
+	})
+	for t in [["cap_prj_water", "water", "L", 4000.0, 1.0],
+			["cap_prj_food", "food", "kg", 200.0, 1.0]]:
+		model.add_item({
+			"id": str(t[0]), "type": "resource", "x": -200.0, "y": 220.0,
+			"width": 90.0, "height": 100.0,
+			"specs": {"name": str(t[1]).capitalize(), "resource_kind": str(t[1]),
+				"capacity_qty": float(t[3]), "capacity_unit": str(t[2]),
+				"level": float(t[4])},
+		})
+	for c in [["cap_prj_water", "output", hab_id, "res_in_0", "water"],
+			["cap_prj_food", "output", hab_id, "res_in_1", "food"]]:
+		model.add_connection({
+			"polarity": "resource", "resource_type": str(c[4]),
+			"source_item_id": str(c[0]), "source_handle_id": str(c[1]),
+			"target_item_id": str(c[2]), "target_handle_id": str(c[3])})
+
+	# One ambient tick so the view creates its bridge + engine.
+	if main != null and "day_time" in main:
+		main.day_time = 8.0
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.01
+	await get_tree().create_timer(1.5).timeout
+	var bridge: Variant = sgv.get("_npc_population")
+	if bridge == null:
+		push_error("PlaytestHarness: population bridge missing — aborting")
+		_maybe_quit()
+		return
+	# Tagged sleep/water/kitchen spaces so needs resolve near the site.
+	var reg: Variant = bridge.call("registry_for", main)
+	# A shower is NOT optional set dressing: hygiene rises forever and only a
+	# completed shower lowers it, so a camp without one used to freeze its
+	# whole crew within half a day. Comfort needs no longer block work, but a
+	# harness camp should still be a camp people can actually live in.
+	for pair in [["sleep", Vector2(-40, -30)], ["kitchen", Vector2(-40, 30)],
+			["water_point", Vector2(-55, 0)], ["restroom", Vector2(-70, 20)],
+			["shower", Vector2(-70, -20)]]:
+		var cpt: Vector2 = pair[1]
+		reg.call("set_space_type", {"kind": "area", "poly": [
+			[cpt.x - 8, cpt.y - 8], [cpt.x + 8, cpt.y - 8],
+			[cpt.x + 8, cpt.y + 8], [cpt.x - 8, cpt.y + 8]]}, str(pair[0]), 30)
+	var board: Variant = bridge.call("chore_board_for", hab_id)
+	if board == null:
+		await get_tree().create_timer(2.0).timeout
+		board = bridge.call("chore_board_for", hab_id)
+	if board == null:
+		push_error("PlaytestHarness: chore board never appeared — aborting")
+		_maybe_quit()
+		return
+	board.rules["night_shift"] = true
+
+	var label := _shots_label if not _shots_label.is_empty() else "project_test"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var cam := Camera3D.new()
+	scene.add_child(cam)
+	cam.current = true
+	var site_g := _ground_y(loader, 30.0, 20.0)
+	cam.global_position = Vector3(30.0, site_g + 26.0, 20.0 + 38.0)
+	cam.look_at(Vector3(30.0, site_g, 20.0))
+
+	# --- stage 1: DELIVER ------------------------------------------------------
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	var res: Variant = loader.call("deliver_packed_kit", "starshade_kit", 30.0, 20.0, 0.0)
+	var crate_ids: Array = (res as Dictionary).get("crate_ids", []) if res is Dictionary else []
+	var ok_deliver := not crate_ids.is_empty()
+	var crate_id := str(crate_ids[0]) if ok_deliver else ""
+	var crec: Dictionary = PlacedPropService.get_prop_record(main, crate_id)
+	var staging: Dictionary = crec.get("staging", {})
+	var ok_identity: bool = str(crec.get("delivery_id", "")) == str((res as Dictionary).get("container_prop_id", "")) \
+		and staging.has("x")
+	var projects0: Array = bridge.call("all_site_projects")
+	var ok_project := false
+	for row in projects0:
+		if str(((row as Dictionary)["project"] as Dictionary).get("kind", "")) == "delivery_unload":
+			ok_project = true
+	print("PlaytestHarness: project verify — deliver %s, crate identity %s, unload project %s" % [
+		"PASS" if ok_deliver else "FAIL", "PASS" if ok_identity else "FAIL",
+		"PASS" if ok_project else "FAIL"])
+	# Round 3: the kit rides INSIDE the container. Assert the world records
+	# agree with the stow plan — inside the footprint, at the solved height.
+	var stow_ok := true
+	var stowed_n := 0
+	var plan_iv: Dictionary = UnpackScenario.stow_plan("starshade_kit").get("interior", {})
+	for pid_s in crate_ids:
+		var rs: Dictionary = PlacedPropService.get_prop_record(main, str(pid_s))
+		if str(rs.get("stowed_in", "")).is_empty():
+			continue
+		stowed_n += 1
+		var dv := Vector2(float(rs["x"]) - 30.0, float(rs["z"]) - 20.0)
+		if absf(dv.y) > float(plan_iv.get("l_m", 0.0)) * 0.5 + 0.01 \
+				or absf(dv.x) > float(plan_iv.get("w_m", 0.0)) * 0.5 + 0.01 \
+				or float(rs.get("y_offset", 0.0)) < -0.001:
+			stow_ok = false
+	print("PlaytestHarness: project verify — %d crate(s) stowed in the container %s" % [
+		stowed_n, "PASS" if (stow_ok and stowed_n > 0) else "FAIL"])
+	await get_tree().create_timer(0.5).timeout
+	await _shoot_ui(dir, "01_delivered")
+
+	# --- stage 2: UNLOAD (carry observed + crate moved by the effect) ----------
+	# The carry leg is SECONDS of sim time, so at 720× the whole walk is
+	# sub-frame and a 0.5 s poll never catches carrying=true (learned live:
+	# the crate moved while the flag was never sampled on). Sample at a crawl
+	# (~7×) with per-frame polls until the carry is seen, THEN speed up to
+	# finish the unload.
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.002
+	var saw_carrying := false
+	var crate_moved := false
+	var stage_pt := Vector2(float(staging.get("x", 0.0)), float(staging.get("z", 0.0)))
+	var carry_t0 := Time.get_ticks_msec()
+	while not saw_carrying and Time.get_ticks_msec() - carry_t0 < 90000:
+		await get_tree().process_frame
+		for d in (bridge.call("agent_dots") as Array):
+			if bool((d as Dictionary).get("carrying", false)):
+				saw_carrying = true
+		var slow_rec: Dictionary = PlacedPropService.get_prop_record(main, crate_id)
+		if Vector2(float(slow_rec.get("x", 0.0)), float(slow_rec.get("z", 0.0))) 				.distance_to(stage_pt) < 1.5:
+			crate_moved = true   # completed before the flag was seen — done
+			break
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.2
+	for _i in 240:
+		if crate_moved:
+			break
+		await get_tree().create_timer(0.5).timeout
+		if not saw_carrying:
+			for d in (bridge.call("agent_dots") as Array):
+				if bool((d as Dictionary).get("carrying", false)):
+					saw_carrying = true
+		var now_rec: Dictionary = PlacedPropService.get_prop_record(main, crate_id)
+		var at := Vector2(float(now_rec.get("x", 0.0)), float(now_rec.get("z", 0.0)))
+		if at.distance_to(stage_pt) < 1.5:
+			crate_moved = true
+			break
+	print("PlaytestHarness: project verify — carrying dot %s, crate moved to staging %s" % [
+		"PASS" if saw_carrying else "FAIL", "PASS" if crate_moved else "FAIL"])
+	# A set-down must land the crate ON THE GROUND and un-stow it. The XZ
+	# checks above pass either way, so a crate left floating at stack height
+	# would otherwise ship invisible.
+	var landed: Dictionary = PlacedPropService.get_prop_record(main, crate_id)
+	var ok_landed: bool = absf(float(landed.get("y_offset", 0.0))) < 0.01 \
+		and str(landed.get("stowed_in", "")).is_empty()
+	print("PlaytestHarness: project verify — hauled crate set down on the ground %s (y_offset %.3f)" % [
+		"PASS" if ok_landed else "FAIL", float(landed.get("y_offset", 0.0))])
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	await _shoot_ui(dir, "02_unloaded")
+
+	# --- stage 2b: BRIGADE unload (starter camp, 7 crates, roster 12) ----------
+	# With this crew density NpcHaulModel flips to the bucket brigade: ONE crew
+	# chore whose stage effects move the crates one by one while the line
+	# works. Whichever strategy it picks, every crate must reach its staging.
+	var res2: Variant = loader.call("deliver_packed_kit", "starter_camp", -30.0, 45.0, 0.0)
+	var crate_ids2: Array = (res2 as Dictionary).get("crate_ids", []) if res2 is Dictionary else []
+	var brigade_strategy := ""
+	for prow2 in (bridge.call("all_site_projects") as Array):
+		var pd2 := (prow2 as Dictionary)["project"] as Dictionary
+		if str(pd2.get("prop_id", "")) == str((res2 as Dictionary).get("container_prop_id", "")):
+			brigade_strategy = str(pd2.get("label", ""))
+	print("PlaytestHarness: project verify — second delivery: %d crates, project '%s'" % [
+		crate_ids2.size(), brigade_strategy])
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.25
+	var all_staged := false
+	for _b in 360:
+		await get_tree().create_timer(0.5).timeout
+		var staged := 0
+		for pid2 in crate_ids2:
+			var r2: Dictionary = PlacedPropService.get_prop_record(main, str(pid2))
+			var st2: Dictionary = r2.get("staging", {})
+			var at2 := Vector2(float(r2.get("x", 0.0)), float(r2.get("z", 0.0)))
+			if at2.distance_to(Vector2(float(st2.get("x", 0.0)),
+					float(st2.get("z", 0.0)))) < 1.5:
+				staged += 1
+		if staged == crate_ids2.size() and not crate_ids2.is_empty():
+			all_staged = true
+			break
+		if _b % 60 == 59:
+			print("PlaytestHarness: project verify [unload2] — %d/%d crates staged" % [
+				staged, crate_ids2.size()])
+	print("PlaytestHarness: project verify — second delivery fully unloaded %s" % [
+		"PASS" if all_staged else "FAIL"])
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	await _shoot_ui(dir, "02b_second_delivery")
+
+	# --- stage 3: BUILD project (ghost grows with real labour) -----------------
+	var p := LinkageParams.new()
+	p.from_config(crec.get("linkage_spec", {}) as Dictionary)
+	var counts := LinkageBom.fab_counts(LinkageBom.compute(p), {})
+	counts.erase("assembly_steps")   # keep the plan at its 8 canonical phases
+	var tasks: Array = NpcCrewPlan.linkage_fab_tasks(counts)
+	var sched: Dictionary = NpcCrewPlan.schedule(tasks, 12)
+	var overrides: Dictionary = {}
+	for t2 in tasks:
+		var tid := str((t2 as Dictionary).get("id", ""))
+		match tid:
+			"erect":
+				overrides[tid] = {"effect": {"op": "unpack_prop", "prop_id": crate_id}}
+			"panels":
+				overrides[tid] = {"effect": {"op": "seed_graph", "prop_id": crate_id}}
+			_:
+				overrides[tid] = {"effect": {"op": "set_build_phase",
+					"prop_id": crate_id, "phase": tid}}
+	PlacedPropService.update_prop_record(main, crate_id,
+		{"build_state": {"phase": "", "ghost": 0.12}}, true)
+	var proj_id := str(bridge.call("create_site_project", hab_id,
+		"linkage_build", "Harness build", crate_id, stage_pt,
+		NpcCrewPlan.chore_specs(tasks, sched, overrides),
+		{"start_h": 0.0, "end_h": 24.0}, {"kind": "prop", "id": crate_id},
+		# fab_counts so the experiment lab can rebuild the task graph and
+		# report a real PLANNED lower bound beside each simulated makespan.
+		{"crew": 12, "makespan_s": float(sched.get("makespan_s", 0.0)),
+			"fab_counts": counts}))
+	var ok_build_proj := not proj_id.is_empty()
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.35
+	var beam_seen_max := -1
+	var beam_grew := false
+	var deployed := false
+	for _j in 600:
+		await get_tree().create_timer(0.5).timeout
+		if _j % 60 == 59:
+			_print_project_rollup(bridge, board, proj_id, "build")
+		var rec_now: Dictionary = PlacedPropService.get_prop_record(main, crate_id)
+		if not bool(rec_now.get("packed", true)) and bool(rec_now.get("linkage_deployed", false)):
+			deployed = true
+			break
+		# Ghost growth: read the construction builder's beam MultiMesh.
+		var root := main.find_child("PlacedProps", true, false)
+		if root != null:
+			for child in root.get_children():
+				if child is PlacedProp and str((child as PlacedProp).prop_id) == crate_id:
+					var mr := child.get_node_or_null("ModelRoot")
+					if mr != null and mr.has_method("set_build_progress"):
+						var beams := mr.get_node_or_null("Beams") as MultiMeshInstance3D
+						if beams != null and beams.multimesh != null:
+							var vis := beams.multimesh.visible_instance_count
+							if vis > beam_seen_max and beam_seen_max >= 0:
+								beam_grew = true
+							beam_seen_max = maxi(beam_seen_max, vis)
+	if beam_seen_max > 0 and not beam_grew:
+		beam_grew = true   # grew from the pre-poll zero to a positive count
+	var rec_final: Dictionary = PlacedPropService.get_prop_record(main, crate_id)
+	var ok_cleared: bool = not (rec_final.get("build_state") is Dictionary) \
+		or (rec_final.get("build_state") as Dictionary).is_empty()
+	print("PlaytestHarness: project verify — build project %s, ghost grew %s (max %d beams), raised+deployed %s, build_state cleared %s" % [
+		"PASS" if ok_build_proj else "FAIL", "PASS" if beam_grew else "FAIL",
+		beam_seen_max, "PASS" if deployed else "FAIL",
+		"PASS" if ok_cleared else "FAIL"])
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	await get_tree().create_timer(1.0).timeout
+	await _shoot_ui(dir, "03_raised")
+
+	# --- stage 3b: EXPERIMENT LAB (sim-backed variant comparison) -------------
+	# Console-only by design: a PNG cannot tell you whether a makespan is 6 h
+	# or 60 h, and that difference is the whole feature.
+	var lab_ok := false
+	var lab_setup: Dictionary = bridge.call("experiment_setup", hab_id, proj_id, main) \
+		if bridge.has_method("experiment_setup") else {}
+	if lab_setup.is_empty():
+		print("PlaytestHarness: project verify — experiment setup FAIL (empty)")
+	else:
+		var lab := NpcExperimentLab.new()
+		add_child(lab)
+		var lres: Dictionary = lab.run_blocking(lab_setup)
+		var lrows: Array = lres.get("rows", [])
+		var done_rows := 0
+		print("PlaytestHarness: experiment — %-26s %8s %8s %8s  %s" % [
+			"variant", "sim", "plan", "drag", "status"])
+		for lr in lrows:
+			var ld := lr as Dictionary
+			if str(ld.get("status", "")) == "done":
+				done_rows += 1
+			var dh := float(ld.get("drag_h", -1.0))
+			print("PlaytestHarness: experiment — %-26s %7.1fh %7.1fh %8s  %s %s" % [
+				str(ld.get("label", "")), float(ld.get("makespan_h", 0.0)),
+				float(ld.get("plan_h", 0.0)),
+				("%.1fh" % dh) if dh >= 0.0 else "—",
+				str(ld.get("status", "")), str(ld.get("dnf_reason", ""))])
+		var summ: Dictionary = lres.get("summary", {})
+		print("PlaytestHarness: experiment — fastest '%s' (%.1fh); baseline %s; %d ticks" % [
+			str(summ.get("best_label", "")), float(summ.get("best_h", -1.0)),
+			("%.1fh" % float(summ.get("baseline_h", 0.0))) \
+				if bool(summ.get("baseline_done", false)) else "DID NOT FINISH",
+			int(lres.get("ticks", 0))])
+		lab_ok = not lrows.is_empty() and done_rows > 0
+		lab.queue_free()
+	print("PlaytestHarness: project verify — experiment lab %s" % [
+		"PASS" if lab_ok else "FAIL"])
+	await _shoot_ui(dir, "06_experiment")
+
+	# --- stage 4: BREAKDOWN (reverse project folds it back to a crate) --------
+	var bd_rows: Array = SiteProject.breakdown_spec_rows(counts, crate_id, {})
+	var bd_id := str(bridge.call("create_site_project", hab_id,
+		"linkage_breakdown", "Harness breakdown", crate_id, stage_pt, bd_rows,
+		{"start_h": 0.0, "end_h": 24.0}, {"kind": "prop", "id": crate_id}, {}))
+	var ok_bd_proj := not bd_id.is_empty()
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.35
+	var repacked := false
+	# Ghost-down: the hardware must visibly leave WHILE the beams stand — the
+	# fold sweep is the beams' own visual, so dissolving them early would
+	# animate a fold on nothing. Sampled live off the builder's own getter.
+	var saw_stripping := false
+	var beams_held := true
+	var stripped_shot := false
+	for _k in 600:
+		await get_tree().create_timer(0.5).timeout
+		if _k % 60 == 59:
+			_print_project_rollup(bridge, board, bd_id, "breakdown")
+		var bprop := PlacedPropRuntime.find_by_prop_id(main, crate_id)
+		var bmr: Node = bprop.get_node_or_null("ModelRoot") if bprop != null else null
+		if bmr != null and bmr.has_method("build_progress"):
+			var bp_now: Dictionary = bmr.call("build_progress")
+			if not bp_now.is_empty():
+				var b_beams := float(bp_now.get("beams", 1.0))
+				var b_bolts := float(bp_now.get("bolts", 1.0))
+				if b_bolts < 0.999 or float(bp_now.get("panels", 1.0)) < 0.999:
+					saw_stripping = true
+					if b_beams < 0.999:
+						beams_held = false
+					if not stripped_shot and b_bolts < 0.9:
+						stripped_shot = true
+						await _shoot_ui(dir, "05a_stripping")
+		var rec_bd: Dictionary = PlacedPropService.get_prop_record(main, crate_id)
+		if bool(rec_bd.get("packed", false)):
+			repacked = true
+			break
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	print("PlaytestHarness: project verify — breakdown project %s, folded back to packed %s" % [
+		"PASS" if ok_bd_proj else "FAIL", "PASS" if repacked else "FAIL"])
+	print("PlaytestHarness: project verify — teardown stripped hardware %s, beams stood through it %s" % [
+		"PASS" if saw_stripping else "FAIL", "PASS" if beams_held else "FAIL"])
+	await get_tree().create_timer(1.0).timeout
+	await _shoot_ui(dir, "04_repacked")
+
+	# --- cleanup: seeded graph items + delivered test props off the map --------
+	for pid in prj_ids:
+		if not (model.get_item(str(pid)) as Dictionary).is_empty():
+			model.remove_item(str(pid))
+	var doomed: Array = []
+	doomed.append_array(crate_ids)
+	doomed.append_array(crate_ids2)
+	if res is Dictionary:
+		doomed.append((res as Dictionary).get("container_prop_id", ""))
+	if res2 is Dictionary:
+		doomed.append((res2 as Dictionary).get("container_prop_id", ""))
+	for dpid in doomed:
+		if not str(dpid).is_empty() and loader.has_method("delete_prop_by_id"):
+			loader.call("delete_prop_by_id", str(dpid))
+	print("PlaytestHarness: project verify — removed %d test props from the map" % doomed.size())
+	var all_ok := ok_deliver and ok_identity and ok_project and saw_carrying \
+		and crate_moved and all_staged and ok_build_proj and beam_grew \
+		and deployed and ok_cleared and ok_bd_proj and repacked \
+		and saw_stripping and beams_held and stow_ok and ok_landed and lab_ok
+	print("PlaytestHarness: project verify — %s (shots in %s)" % [
+		"PASS" if all_ok else "FAIL", ProjectSettings.globalize_path(dir)])
+	cam.queue_free()
+	_maybe_quit()
+
+
+# ==================== SETTLEMENT VIEW (--capture=settlement) ====================
+## Opens the settlement view through Main's REAL entry point and shoots it at
+## five zoom stops, dumping the numbers a PNG cannot show (height, pitch,
+## near/far, visible avatars, cull reach). Then drives SiteTargetPicker at a
+## known agent's screen position at each stop — the angular-pick-radius
+## property end to end — follows someone, drops in, and finally asserts the
+## PLAYER CAMERA IS BACK and the clock never moved. That last pair is the
+## anti-snowglobe assertion: this view must never freeze the sim, and must
+## never strand the viewport on its own camera.
+func _run_settlement_capture() -> void:
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var main := get_tree().current_scene
+	if main == null or not main.has_method("open_settlement_view"):
+		push_error("PlaytestHarness: Main has no settlement view — aborting")
+		_maybe_quit()
+		return
+
+	var label := _shots_label if not _shots_label.is_empty() else "settlement"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+
+	# Seed a crew, or there is nobody to click and the picking assertions —
+	# the point of the whole capture — would silently report 0 of 0.
+	var sgv0 := await _find_graph_view()
+	var seeded := false
+	if sgv0 != null:
+		var model: Variant = sgv0.get("model")
+		if model != null and (model.get_item("cap_set_hab") as Dictionary).is_empty():
+			model.add_item({
+				"id": "cap_set_hab", "type": "processor", "x": 0.0, "y": 0.0,
+				"width": 150.0, "height": 150.0,
+				"specs": {"name": "Settlement Crew", "role": "habitat",
+					"occupants": 8, "pop_driven": true, "watts": 0.0,
+					"energy_source": "", "efficiency": 1.0,
+					"inputs": [], "outputs": []},
+			})
+			seeded = true
+		var reg0: Variant = null
+		var br0: Variant = sgv0.get("_npc_population")
+		await get_tree().create_timer(1.5).timeout
+		br0 = sgv0.get("_npc_population")
+		if br0 != null and br0.has_method("registry_for"):
+			reg0 = br0.call("registry_for", main)
+		if reg0 != null:
+			for pair in [["kitchen", Vector2(20, 0)], ["water_point", Vector2(-20, 0)],
+					["sleep", Vector2(0, 24)], ["restroom", Vector2(0, -24)],
+					["shower", Vector2(24, 24)]]:
+				var c: Vector2 = pair[1]
+				reg0.call("set_space_type", {"kind": "area", "poly": [
+					[c.x - 6, c.y - 6], [c.x + 6, c.y - 6],
+					[c.x + 6, c.y + 6], [c.x - 6, c.y + 6]]}, str(pair[0]), 30)
+		if main != null and "time_scale" in main:
+			main.time_scale = 0.05
+		await get_tree().create_timer(3.0).timeout
+		if main != null and "time_scale" in main:
+			main.time_scale = 0.01
+
+	# Park the clock at the review hour BEFORE opening. The view must not touch
+	# the clock (that is the anti-snowglobe assertion below), but the harness
+	# may — otherwise a run that happens to land after sunset ships five shots
+	# of a dark field and nothing about the camera ladder is reviewable.
+	if "day_time" in main:
+		main.day_time = _capture_hour
+		await get_tree().process_frame
+	var clock_before := float(main.get("time_scale")) if "time_scale" in main else 0.0
+	var cam_before := get_viewport().get_camera_3d()
+
+	main.call("open_settlement_view")
+	await get_tree().create_timer(1.0).timeout
+	var view: Variant = main.get("settlement_view")
+	var ok_open := view != null and bool(view.call("is_open"))
+	print("PlaytestHarness: settlement — opened %s" % ["PASS" if ok_open else "FAIL"])
+	if not ok_open:
+		_maybe_quit()
+		return
+	var cam: Variant = view.call("camera")
+
+	# The clock must still be running — this is the difference from the
+	# snowglobe, which freezes it.
+	var clock_live := absf(float(main.get("time_scale")) - clock_before) < 1e-9
+	print("PlaytestHarness: settlement — clock untouched on entry %s (%.6f)" % [
+		"PASS" if clock_live else "FAIL", float(main.get("time_scale"))])
+
+	var stops := [["eye", 1.7], ["street", 12.0], ["block", 60.0],
+		["camp", 300.0], ["site", 1200.0]]
+	var picks_ok := 0
+	var picks_tried := 0
+	for i in stops.size():
+		var s: Array = stops[i]
+		cam.set("_h_target", float(s[1]))
+		cam.set("_h", float(s[1]))
+		await get_tree().create_timer(0.6).timeout
+		var vp := get_viewport()
+		print("PlaytestHarness: settlement — %-7s h=%7.1f pitch=%6.1f° near=%.2f far=%6.0f scale='%s' cull=%.0f" % [
+			str(s[0]), float(cam.call("height")),
+			rad_to_deg(SettlementCamera._pitch_for(float(s[1]))),
+			(cam as Camera3D).near, (cam as Camera3D).far,
+			str(cam.call("scale_label")), PropRenderTuning.scale_override_m])
+		# Pick a known agent by projecting them to screen and resolving back.
+		var bridge: Variant = null
+		var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+		if sgv != null and sgv.has_method("npc_population_bridge"):
+			bridge = sgv.call("npc_population_bridge")
+		if bridge != null:
+			var dots: Array = bridge.call("agent_dots")
+			if not dots.is_empty():
+				var d0: Dictionary = dots[0]
+				var wp: Vector2 = d0.get("pos", Vector2.ZERO)
+				var gy := TerrainSurfaceQuery.ground_height_at(main, wp.x, wp.y)
+				var world := Vector3(wp.x, gy + NpcAvatar.PICK_CENTER_Y, wp.y)
+				var c3 := cam as Camera3D
+				if not c3.is_position_behind(world):
+					var sp := c3.unproject_position(world)
+					picks_tried += 1
+					var hit := SiteTargetPicker.resolve(main,
+						c3.project_ray_origin(sp), c3.project_ray_normal(sp),
+						{"want": PackedStringArray(["npc"]),
+							"max_dist_m": maxf(float(cam.call("height")) * 6.0, 250.0)})
+					# What must hold at EVERY zoom is that clicking a person
+					# selects A PERSON. Demanding the exact individual is only
+					# fair while the pick radius is tighter than the spacing
+					# between them: at 1200 m the radius is ~12.6 m, so a whole
+					# cluster shares one target and the nearest-along-ray wins.
+					# No player has sub-pixel aim there either.
+					var r_m := SiteTargetPicker.pick_radius_at(float(s[1]))
+					var exact_expected := r_m < 4.0
+					if str(hit.get("kind", "")) != "npc":
+						print("PlaytestHarness: settlement —   pick MISS at %s (nobody): %s" % [
+							str(s[0]), str(hit)])
+					elif exact_expected and str(hit.get("agent_id", "")) != str(d0.get("id", "")):
+						print("PlaytestHarness: settlement —   pick WRONG PERSON at %s: %s" % [
+							str(s[0]), str(hit.get("agent_id", ""))])
+					else:
+						picks_ok += 1
+						if not exact_expected and str(hit.get("agent_id", "")) != str(d0.get("id", "")):
+							print("PlaytestHarness: settlement —   %s: picked a neighbour (radius %.1f m) — expected at this range" % [
+								str(s[0]), r_m])
+		await _shoot_ui(dir, "0%d_%s" % [i + 1, str(s[0])])
+	print("PlaytestHarness: settlement — picked the right person at %d of %d zoom stops %s" % [
+		picks_ok, picks_tried, "PASS" if (picks_tried > 0 and picks_ok == picks_tried) else "FAIL"])
+
+	# Exit and assert the world is exactly as we found it.
+	view.call("close")
+	await get_tree().create_timer(0.5).timeout
+	var cam_after := get_viewport().get_camera_3d()
+	var ok_restore := cam_after == cam_before and cam_after != null
+	var ok_clock := absf(float(main.get("time_scale")) - clock_before) < 1e-9
+	print("PlaytestHarness: settlement — player camera restored %s, clock never moved %s" % [
+		"PASS" if ok_restore else "FAIL", "PASS" if ok_clock else "FAIL"])
+	print("PlaytestHarness: settlement — cull override cleared %s (%.1f)" % [
+		"PASS" if is_equal_approx(PropRenderTuning.scale_override_m, 0.0) else "FAIL",
+		PropRenderTuning.scale_override_m])
+	# Leave the map as we found it.
+	if seeded and sgv0 != null:
+		var m2: Variant = sgv0.get("model")
+		if m2 != null and not (m2.get_item("cap_set_hab") as Dictionary).is_empty():
+			m2.remove_item("cap_set_hab")
+	var all_ok := ok_open and clock_live and ok_restore and ok_clock \
+		and picks_tried > 0 and picks_ok == picks_tried \
+		and is_equal_approx(PropRenderTuning.scale_override_m, 0.0)
+	print("PlaytestHarness: settlement — %s (shots in %s)" % [
+		"PASS" if all_ok else "FAIL", ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
+## --capture=labour — the labour merge, end to end, console only.
+##
+## No screenshots on purpose: the whole contract is an EQUALITY (the ledger
+## moves by exactly the step's hours) plus a chore appearing AT the machine's
+## prop rather than in the abstract. Neither is visible in a PNG.
+func _run_labour_capture() -> void:
+	# Poll for the view FIRST — this can be called the same frame the scene
+	# switch is requested, before the map scene exists at all.
+	var sgv := await _find_graph_view()
+	if sgv == null:
+		push_error("PlaytestHarness: labour — no graph view; aborting")
+		_maybe_quit()
+		return
+	sgv.visible = false
+	var scene := get_tree().current_scene
+	var loader0: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader0 != null and not (loader0.get("load_completed") == true):
+		await loader0.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var main := get_tree().current_scene
+	var model: Variant = sgv.get("model")
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if model == null or loader == null:
+		push_error("PlaytestHarness: labour — needs a real TerrainLoader map; aborting")
+		_maybe_quit()
+		return
+
+	# A crew to do the work, and somewhere for them to meet their own needs —
+	# a camp with no kitchen stalls on tier 1 and never reaches a chore.
+	model.add_item({
+		"id": "cap_lab_hab", "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 150.0,
+		"specs": {"name": "Labour Crew", "role": "habitat", "occupants": 6,
+			"pop_driven": true, "watts": 0.0, "energy_source": "",
+			"efficiency": 1.0, "inputs": [], "outputs": []},
+	})
+	await get_tree().create_timer(1.5).timeout
+	var bridge: Variant = sgv.get("_npc_population")
+	if bridge == null:
+		push_error("PlaytestHarness: labour — bridge never came up; aborting")
+		_maybe_quit()
+		return
+	var reg: Variant = bridge.call("registry_for", main)
+	if reg != null:
+		for pair in [["kitchen", Vector2(18, 0)], ["water_point", Vector2(-18, 0)],
+				["sleep", Vector2(0, 20)], ["restroom", Vector2(0, -20)],
+				["shower", Vector2(20, 20)]]:
+			var c: Vector2 = pair[1]
+			reg.call("set_space_type", {"kind": "area", "poly": [
+				[c.x - 6, c.y - 6], [c.x + 6, c.y - 6],
+				[c.x + 6, c.y + 6], [c.x - 6, c.y + 6]]}, str(pair[0]), 30)
+
+	# The machine: a processor parked on a labour step, standing at a known
+	# spot 42 m from camp so "did anyone walk there" is answerable.
+	var mach_xz := Vector2(30.0, 30.0)
+	var prop_id := ""
+	var layer: Variant = loader.get("_placed_prop_layer")
+	if layer != null:
+		var gy := TerrainSurfaceQuery.ground_height_at(main, mach_xz.x, mach_xz.y)
+		prop_id = str(layer.call("add_free_prop", "pallet_rack",
+			mach_xz.x, 0.0, mach_xz.y, 0.0, 0.0, 0.0, 1.0, gy))
+		loader.call_deferred("_rebuild_placed_props")
+	model.add_item({"id": "cap_lab_mill", "type": "processor",
+		"x": 300.0, "y": 0.0, "width": 150.0, "height": 150.0,
+		"specs": {"name": "Test Mill", "role": "processor", "watts": 0.0,
+			"energy_source": "", "efficiency": 1.0, "inputs": [], "outputs": [],
+			"bound_prop_id": prop_id}})
+	var ledger: Variant = loader.call("get_chore_ledger")
+	if ledger != null:
+		ledger.set("infinite_labor", false)
+		ledger.set("chore_hours_available", 0.0)
+	var recipe := {
+		"id": "cap_labour", "batch_time_hrs": 1.0,
+		"steps": [{"id": "tend", "at_frac": 0.2, "chore_hours": 0.5,
+			"label": "Tend the mill"}],
+	}
+	var lspecs: Dictionary = (model.get_item("cap_lab_mill") as Dictionary).get("specs", {})
+	var h0 := float(main.get_absolute_hours())
+	RecipeRunner.begin_run(lspecs, h0, recipe)
+	RecipeRunner.tick_state(lspecs, h0 + 0.4, 0.1, ledger)   # onto the labour step
+	var waiting := bool(lspecs.get("recipe_waiting_chore", false)) \
+		and str(lspecs.get("recipe_waiting_kind", "")) == "crew"
+	print("PlaytestHarness: labour — the step waits for HANDS %s (kind=%s)" % [
+		"PASS" if waiting else "FAIL", str(lspecs.get("recipe_waiting_kind", ""))])
+	var before := float(ledger.get("chore_hours_consumed_total")) if ledger != null else 0.0
+
+	# Run the world until the crew has walked over and done it.
+	if "time_scale" in main:
+		main.time_scale = 0.08
+	var minted := false
+	var at_machine := false
+	var resumed := false
+	for _i in 320:
+		await get_tree().create_timer(0.25).timeout
+		var cboard: Variant = bridge.call("chore_board_for", "cap_lab_hab")
+		if cboard != null:
+			var ch: Dictionary = cboard.call(
+				"find_by_key", "mach|cap_lab_mill|tend") as Dictionary
+			if not ch.is_empty():
+				minted = true
+				var tgt: Dictionary = ch.get("target", {})
+				# The whole point of routing through the board: the work has a
+				# PLACE, and it is the machine's place.
+				if str(tgt.get("kind", "")) == "prop" \
+						and str(tgt.get("id", "")) == prop_id and not prop_id.is_empty():
+					at_machine = true
+		var now: Dictionary = (model.get_item("cap_lab_mill") as Dictionary).get("specs", {})
+		if minted and not bool(now.get("recipe_waiting_chore", false)):
+			resumed = true
+			break
+	if "time_scale" in main:
+		main.time_scale = 0.01
+	print("PlaytestHarness: labour — a chore was minted AT the machine %s (minted=%s at_prop=%s)" % [
+		"PASS" if (minted and at_machine) else "FAIL", str(minted), str(at_machine)])
+	print("PlaytestHarness: labour — the crew finished it and the step resumed %s" % [
+		"PASS" if resumed else "FAIL"])
+	var moved := (float(ledger.get("chore_hours_consumed_total")) - before) if ledger != null else -1.0
+	# THE contract. Not "roughly" — a second accounting path shows up here as a
+	# doubling, and nothing else in the game would notice.
+	var ok_ledger := absf(moved - 0.5) < 0.01
+	print("PlaytestHarness: labour — the ledger moved by EXACTLY the step's hours %s (%.4f h, want 0.5)" % [
+		"PASS" if ok_ledger else "FAIL", moved])
+
+	# Leave the map as we found it.
+	model.remove_item("cap_lab_mill")
+	model.remove_item("cap_lab_hab")
+	if not prop_id.is_empty() and loader.has_method("delete_prop_by_id"):
+		loader.call("delete_prop_by_id", prop_id)
+	print("PlaytestHarness: labour — %s" % [
+		"PASS" if (waiting and minted and at_machine and resumed and ok_ledger) else "FAIL"])
 	_maybe_quit()
