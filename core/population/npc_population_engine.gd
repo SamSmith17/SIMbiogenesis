@@ -25,6 +25,10 @@ signal colony_collapsed()
 ## feedback at all — nothing moves, nothing consumes — and the player needs to
 ## be told rather than left wondering where everyone went.
 signal colony_deserted(cause: String)
+## Someone died of a critical shortage (the PERISH consequence only). A
+## SEPARATE signal from agent_departed on purpose: challenge and bake code
+## keys off departures, and a death must never be reported as a walk-out.
+signal agent_lost(agent_id: String, display_name: String, reason: String)
 
 ## Separation is skipped above this tick length — see _separate.
 const SEPARATION_MAX_DT_H := 0.1
@@ -58,7 +62,11 @@ var anim_overrides: Dictionary = {}
 var _last_abs_h := NAN
 var _starved: Dictionary = {}     # resource kind -> true (from last flow tick)
 var _initial_roster := 0
-var _departures: Array = []       # [{id, name, reason, abs_h}]
+var _departures: Array = []       # [{id, name, reason, kind, abs_h}]
+var _losses := 0                  # how many died (PERISH policy)
+## What running out of a critical resource does to people. Player's choice,
+## per habitat; see NpcConsequence. Default STRIKE == the shipped behaviour.
+var consequence: String = NpcConsequence.DEFAULT
 var _collapse_warned := false
 var _collapsed := false
 var _weather: Dictionary = {}
@@ -174,6 +182,7 @@ func tick(abs_hours: float, ctx_in: Dictionary) -> Dictionary:
 			for kind in c:
 				demand[kind] = float(demand.get(kind, 0.0)) + float(c[kind]) * w
 	_separate(dt, ctx)
+	_process_consequences(abs_hours, ctx)
 	_process_departures(abs_hours, ctx)
 	_last_abs_h = abs_hours
 	return demand
@@ -190,34 +199,93 @@ func _assigned_hours_for(agent_id: String, abs_h: float) -> float:
 ## pool AND demoralise everyone still here — that second-order term is what
 ## turns a bad week into a collapse rather than a soft landing.
 func _process_departures(abs_hours: float, ctx: Dictionary) -> void:
+	# Under PERISH the shortage kills people before it drives them away, and
+	# the ordinary morale exit fires at ~24 h against a 72 h thirst window —
+	# so leaving BOTH paths live would mean the policy the player chose could
+	# never actually fire. Choosing "perish" is choosing this instead.
+	if NpcConsequence.normalize(consequence) == NpcConsequence.PERISH:
+		return
 	var leaving: Array = []
 	for a in agents:
+		# Someone a player is currently inhabiting cannot rage-quit — the body
+		# would vanish mid-step and the possession binding would dangle. Their
+		# quit pressure keeps accruing, so they leave the moment they are
+		# released, which keeps the consequence rather than cancelling it.
+		if (a as NpcAgent).controlled_by_peer != 0:
+			continue
 		if NpcMorale.wants_to_leave((a as NpcAgent).quit_pressure):
 			leaving.append(a)
 	if leaving.is_empty():
 		return
-	for a in leaving:
+	_remove_agents(leaving, "left", abs_hours, ctx)
+
+
+## Take people off the roster, for whatever reason, and apply everything that
+## follows from it. Factored out of _process_departures so LOSSES (the PERISH
+## consequence) reuse the ENTIRE cascade — record, signal, contagion, collapse
+## check, desertion — rather than growing a parallel path that would drift
+## from it. `kind` is "left" or "lost"; they emit DIFFERENT signals because
+## challenge code keys off departures and must not read a death as a walk-out.
+func _remove_agents(gone: Array, kind: String, abs_hours: float,
+		ctx: Dictionary, reason_override: String = "") -> void:
+	if gone.is_empty():
+		return
+	for a in gone:
 		var agent: NpcAgent = a
 		agent.release_claims(ctx)
 		agents.erase(agent)
+		var why := reason_override if not reason_override.is_empty() 			else _departure_reason(agent)
 		_departures.append({
 			"id": agent.id, "name": agent.display_name,
-			"reason": _departure_reason(agent), "abs_h": abs_hours,
+			"reason": why, "kind": kind, "abs_h": abs_hours,
 		})
-		agent_departed.emit(agent.id, agent.display_name, _departure_reason(agent))
-	# Contagion: watching people leave is demoralising, scaled by how big a
-	# share of the community just walked out.
-	var share := float(leaving.size()) / maxf(float(agents.size() + leaving.size()), 1.0)
-	var shock := NpcMorale.DEPARTURE_SHOCK * share * float(leaving.size())
+		if kind == "lost":
+			_losses += 1
+			agent_lost.emit(agent.id, agent.display_name, why)
+		else:
+			agent_departed.emit(agent.id, agent.display_name, why)
+	# Contagion: watching people go is demoralising, scaled by how big a
+	# share of the community just went.
+	var share := float(gone.size()) / maxf(float(agents.size() + gone.size()), 1.0)
+	var shock := NpcMorale.DEPARTURE_SHOCK * share * float(gone.size())
 	for a in agents:
 		var rest: NpcAgent = a
 		rest.morale = clampf(rest.morale - shock, 0.0, 1.0)
 	_check_collapse()
-	# The last person leaving is the moment the sim goes silent — no movement,
+	# The last person going is the moment the sim goes silent — no movement,
 	# no consumption, no further events. Announce it explicitly rather than
 	# letting the world quietly empty.
 	if agents.is_empty():
 		colony_deserted.emit(departure_cause())
+
+
+## The player's chosen consequence for running out of a critical resource.
+## STRIKE (the default, and what already shipped) needs no code here at all:
+## the absorbing tier-1 wait IS the strike.
+func _process_consequences(abs_hours: float, ctx: Dictionary) -> void:
+	var policy := NpcConsequence.normalize(consequence)
+	if policy == NpcConsequence.STRIKE:
+		return
+	var gone: Array = []
+	var why := ""
+	for a in agents:
+		var agent: NpcAgent = a
+		if agent.controlled_by_peer != 0:
+			continue   # same rule as departures: a possessed body cannot vanish
+		for n in NpcAgent.CRITICAL_NEEDS:
+			var h := agent.blocked_hours(str(n), abs_hours)
+			if h <= 0.0 or not NpcConsequence.triggers(policy, str(n), h):
+				continue
+			if policy == NpcConsequence.LEAVE:
+				# Route through the ONE existing exit rather than a second
+				# removal path: push quit pressure over the line and let
+				# _process_departures do everything it already does.
+				agent.quit_pressure = maxf(agent.quit_pressure, NpcMorale.QUIT_PRESSURE_H)
+			else:
+				gone.append(agent)
+				why = NpcConsequence.reason_for(policy, str(n))
+			break
+	_remove_agents(gone, "lost", abs_hours, ctx, why)
 
 
 ## What finally drove them out — the worst blocked critical need, else the
@@ -308,6 +376,7 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"weather": ctx_in.get("weather", _weather),
 		"board": chore_board,
 		"assigned_chore_h": 0.0,
+		"roster_size": agents.size(),
 	}
 
 
@@ -350,8 +419,8 @@ func _separate(dt: float, ctx: Dictionary) -> void:
 				# Exactly coincident (a fresh roster spawns everyone on one
 				# point). Derive a direction from the ids so the split is
 				# deterministic instead of arbitrary.
-				var ang := float(hash(a.id + b.id) % 3600) * 0.1
-				n = Vector2(cos(deg_to_rad(ang)), sin(deg_to_rad(ang)))
+				var ang := NpcHash.unit01(a.id + b.id, "split") * TAU
+				n = Vector2(cos(ang), sin(ang))
 				dist = 0.0
 			var half := (gap - dist) * 0.5
 			push[i] -= n * half
@@ -361,6 +430,11 @@ func _separate(dt: float, ctx: Dictionary) -> void:
 		if p == Vector2.ZERO:
 			continue
 		var agent: NpcAgent = agents[i]
+		# A possessed person PUSHES others but is never pushed: their position
+		# is authored by a remote player's input, and quietly moving it would
+		# fight that input every tick.
+		if agent.controlled_by_peer != 0:
+			continue
 		# Bias the push SIDEWAYS for anyone under way. Shoving someone straight
 		# back down their own route reads as barging and, worse, feeds back into
 		# arrival time; sliding them past each other is both what people do and
@@ -416,6 +490,12 @@ func _catch_up(abs_hours: float, dt: float, ctx: Dictionary) -> void:
 	var registry: SpaceRegistry = ctx.get("registry")
 	for item in agents:
 		var a: NpcAgent = item
+		# A possessed person did not "live through" the skipped span the way an
+		# NPC did — a human is driving them right now. Resetting their state and
+		# rerolling their needs mid-possession would yank the body out from
+		# under the player.
+		if a.controlled_by_peer != 0:
+			continue
 		if registry != null:
 			registry.release_all_for_agent(a.id)
 		a.state = NpcAgent.State.IDLE
@@ -423,6 +503,11 @@ func _catch_up(abs_hours: float, dt: float, ctx: Dictionary) -> void:
 		a.target_space_id = ""
 		a.retry_at = {}
 		a._clear_path()
+		# Where they were looking is as invalid as where they were walking.
+		a.face_anchor = Vector2.INF
+		# The skipped span is a discontinuity — a trail bridging it would paint
+		# a walk that never happened.
+		a.clear_trail()
 		for n in NpcAgent.NEEDS:
 			# "Coped" means coped WITH WHAT WAS THERE. A need whose supply is
 			# currently starved cannot have been met during the skipped span,
@@ -450,6 +535,7 @@ func _catch_up(abs_hours: float, dt: float, ctx: Dictionary) -> void:
 	if chore_board != null:
 		for a2 in agents:
 			chore_board.release_all_for_agent((a2 as NpcAgent).id)
+	_process_consequences(abs_hours, ctx)
 	_process_departures(abs_hours, ctx)
 
 
@@ -530,6 +616,8 @@ func summary() -> Dictionary:
 		"deserted": is_deserted(),
 		"departure_cause": departure_cause(),
 		"departures": _departures.size(),
+		"losses": _losses,
+		"consequence": consequence,
 		"catchups": _catchups,
 		"max_dt": _max_dt,
 	}
@@ -540,10 +628,33 @@ func agent_dots() -> Array:
 	var out: Array = []
 	for item in agents:
 		var a: NpcAgent = item
+		# Mid-haul carry: the renderers hide the real crate and show a box on
+		# the body. carry_prop is resolved HERE (board target, kind "prop")
+		# so the hosts stay dumb consumers of the dot payload.
+		var carrying := a.is_carrying()
+		var carry_prop := ""
+		if carrying and chore_board != null:
+			var tgt: Dictionary = (chore_board.find(a.chore_id) as Dictionary).get("target", {})
+			if str(tgt.get("kind", "")) == "prop":
+				carry_prop = str(tgt.get("id", ""))
+		elif not carrying and a.state == NpcAgent.State.DOING \
+				and not a.chore_id.is_empty() and chore_board != null:
+			# Brigade station worker: standing a post on the relay line with
+			# crates flowing through their hands — reads as carrying (box in
+			# a hold pose), but no single crate is theirs to hide.
+			var haul: Dictionary = (chore_board.find(a.chore_id) as Dictionary).get("haul", {})
+			carrying = str(haul.get("strategy", "")) == "brigade"
 		out.append({
 			"id": a.id,
 			"name": a.display_name,
 			"pos": a.pos,
+			"carrying": carrying,
+			# WHICH work, as a pose family. Classified here because the board and
+			# chore_id are already in hand; the host forwards it and the pose
+			# machine reads it as an INPUT, which is what keeps the machine pure.
+			"work_pose": NpcWorkPose.family_for(chore_board.find(a.chore_id))
+				if (chore_board != null and not a.chore_id.is_empty()) else "",
+			"carry_prop": carry_prop,
 			"color": color_for_agent(a.id),
 			"morale": a.morale,
 			"morale_color": NpcMorale.color(a.morale),
@@ -561,6 +672,22 @@ func agent_dots() -> Array:
 			"ends_h": a.activity_ends_h,
 			"status": a.status_line(),
 			"trail": a.trail,
+			# Multiplayer possession. `yaw` is the driving player's own look
+			# direction, published in their presence packet — a person can look
+			# where they like while walking, so it must not be derived from the
+			# direction of travel the way an NPC's is.
+			"possessed": a.controlled_by_peer != 0,
+			"yaw": float(a.get_meta("possessed_yaw", 0.0)),
+			# Which way a STATIONARY person is turned. Derived here, on the
+			# same cadence as the position, because it has to be recomputed
+			# from the FINAL position: _separate spreads an arrived crowd by
+			# increments the host's own travel-delta test can never see, and
+			# re-deriving is precisely what turns that positional spread into
+			# a spread of FACINGS. A travelling agent ignores it — the host
+			# uses its rendered heading, the only thing that agrees with its
+			# own smoothing.
+			"face_yaw": NpcFacing.yaw_for(a.pos, a.face_anchor,
+				a.face_phase, _last_abs_h),
 		})
 	return out
 
@@ -596,6 +723,7 @@ func snapshot(saved_h: float) -> Dictionary:
 		"initial_roster": _initial_roster,
 		"departures": _departures.duplicate(true),
 		"collapsed": _collapsed,
+		"losses": _losses,
 	}
 	if chore_board != null and not chore_board.chores.is_empty():
 		out["chores"] = chore_board.serialize()
@@ -616,6 +744,7 @@ func restore(snap: Dictionary) -> void:
 		if item is Dictionary:
 			agents.append(NpcAgent.from_snapshot(item))
 	_last_abs_h = NAN
+	_losses = int(snap.get("losses", 0))
 	_initial_roster = int(snap.get("initial_roster", agents.size()))
 	_departures = (snap.get("departures", []) as Array).duplicate(true)
 	_collapsed = bool(snap.get("collapsed", false))

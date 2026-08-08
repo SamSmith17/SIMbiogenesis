@@ -37,6 +37,22 @@ const WIND_STOP_MS := 15.0
 const RAIN_COMFORT_MMH := 0.5
 const RAIN_STOP_MMH := 5.0
 
+## Air quality, as US EPA AQI. 151 is the bottom of the "Unhealthy" category, and
+## the threshold at which Cal/OSHA §5141.1 requires respirators for outdoor work
+## — so it is where productivity starts to fall, not where discomfort starts.
+## 300 is "Hazardous", where outdoor work stops.
+const AIR_COMFORT_AQI := 151.0
+const AIR_STOP_AQI := 300.0
+
+## Air is the ONE driver that follows people indoors. exposure_factor() below
+## returns 0.0 for INDOOR, which is right for rain and wind and wrong for smoke;
+## rather than weaken that (every existing threshold depends on it) air uses its
+## own factors. Values are measured residential PM2.5 infiltration ratios, which
+## cluster in 0.3-0.7 for closed buildings without filtration (Chen & Zhao 2011,
+## Atmos. Environ. 45:275).
+const AIR_INDOOR_RELIEF := 0.35
+const AIR_SHELTERED_RELIEF := 0.70
+
 ## However bad it gets, work that is still legal proceeds at this fraction.
 const WEATHER_FLOOR := 0.15
 
@@ -63,10 +79,26 @@ static func rain_mmh(weather: Dictionary) -> float:
 	return r if is_finite(r) else 0.0
 
 
+static func aqi(weather: Dictionary) -> float:
+	var a := float(weather.get("aqi", NAN))
+	return a if is_finite(a) else 0.0
+
+
 static func exposure_factor(exposure: String) -> float:
 	match exposure:
 		EXPOSURE_INDOOR: return 0.0
 		EXPOSURE_SHELTERED: return SHELTER_RELIEF
+	return 1.0
+
+
+## Exposure factor for AIR specifically. Deliberately a second function rather
+## than a change to the one above: walls stop rain and wind completely, but only
+## damp smoke. Keeping them separate means adding this driver could not shift a
+## single existing threshold — which the population selftest asserts directly.
+static func air_exposure_factor(exposure: String) -> float:
+	match exposure:
+		EXPOSURE_INDOOR: return AIR_INDOOR_RELIEF
+		EXPOSURE_SHELTERED: return AIR_SHELTERED_RELIEF
 	return 1.0
 
 
@@ -94,30 +126,45 @@ static func rain_severity(weather: Dictionary) -> float:
 	return _severity(rain_mmh(weather), RAIN_COMFORT_MMH, RAIN_STOP_MMH)
 
 
+static func air_severity(weather: Dictionary) -> float:
+	return _severity(aqi(weather), AIR_COMFORT_AQI, AIR_STOP_AQI)
+
+
 ## Worst single driver, 0..1 — what "how bad is it out there" means.
+## Air is combined with its OWN exposure factor, so it still bites indoors while
+## the weather drivers correctly do not.
 static func severity(weather: Dictionary, exposure: String = EXPOSURE_OUTDOOR) -> float:
+	var air := air_severity(weather) * air_exposure_factor(exposure)
 	var e := exposure_factor(exposure)
 	if e <= 0.0:
-		return 0.0
-	return maxf(maxf(temp_severity(weather), wind_severity(weather)),
-			rain_severity(weather)) * e
+		return air
+	return maxf(maxf(maxf(temp_severity(weather), wind_severity(weather)),
+			rain_severity(weather)) * e, air)
 
 
 ## Productivity multiplier for work of this exposure class. Drivers MULTIPLY,
 ## so a hot windy rainy day is genuinely brutal rather than merely additive.
 static func productivity(weather: Dictionary, exposure: String = EXPOSURE_OUTDOOR) -> float:
+	var air_f := 1.0 - air_severity(weather) * air_exposure_factor(exposure)
 	var e := exposure_factor(exposure)
 	if e <= 0.0:
-		return 1.0
+		# Indoor work is immune to weather but not to smoke.
+		return clampf(air_f, WEATHER_FLOOR, 1.0)
 	var f := (1.0 - temp_severity(weather) * e) \
 			* (1.0 - wind_severity(weather) * e) \
-			* (1.0 - rain_severity(weather) * e)
+			* (1.0 - rain_severity(weather) * e) \
+			* air_f
 	return clampf(f, WEATHER_FLOOR, 1.0)
 
 
 ## Conditions past a stop-work threshold: the chore is skipped entirely
 ## (its window lapses and the work backs up).
 static func is_unsafe(weather: Dictionary, exposure: String = EXPOSURE_OUTDOOR) -> bool:
+	# Hazardous air stops even INDOOR work, before the early return below: an
+	# unfiltered building during a Hazardous-category smoke event is not a
+	# refuge, and this is the one hazard walls do not solve.
+	if aqi(weather) >= AIR_STOP_AQI:
+		return true
 	if exposure == EXPOSURE_INDOOR:
 		return false
 	var t := temp_c(weather)
@@ -147,7 +194,10 @@ static func describe(weather: Dictionary, exposure: String = EXPOSURE_OUTDOOR) -
 	var ts := temp_severity(weather)
 	var ws := wind_severity(weather)
 	var rs := rain_severity(weather)
-	if ts >= ws and ts >= rs:
+	var as_ := air_severity(weather) * air_exposure_factor(exposure)
+	if as_ >= ts and as_ >= ws and as_ >= rs:
+		worst = "smoke"
+	elif ts >= ws and ts >= rs:
 		worst = "heat" if temp_c(weather) > TEMP_COMFORT_MAX else "cold"
 	elif ws >= rs:
 		worst = "wind"

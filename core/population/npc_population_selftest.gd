@@ -36,6 +36,18 @@ func _init() -> void:
 	_test_departure_and_collapse()
 	_test_weather_gate()
 	_test_chore_board()
+	_test_chore_crew_and_deps()
+	_test_chore_plan_v3()
+	_test_carry_leg()
+	_test_site_project()
+	_test_stage_effects_and_brigade()
+	_test_crew_muster()
+	_test_breakdown_progress()
+	_test_experiment_lab()
+	_test_chore_run_to_completion()
+	_test_ladder_edges()
+	_test_consequence_policy()
+	_test_settlement_log()
 	_test_chore_priority()
 	# --- Tier 3 ---
 	_test_nav_grid_region()
@@ -60,6 +72,8 @@ func _init() -> void:
 	_test_desire_map_retention()
 	_test_desire_map_render()
 	_test_desire_from_walking()
+	_test_trail_expiry()
+	_test_desire_tex_rebuild_gate()
 	# --- Tier 4 ---
 	_test_rig_assets()
 	_test_rig_clip_map()
@@ -74,6 +88,11 @@ func _init() -> void:
 	_test_area_spaces()
 	_test_routine_schedule()
 	_test_routine_behaviour()
+	_test_hash_distribution()
+	_test_recurrence()
+	_test_work_pose_classifier()
+	_test_facing_rules()
+	_test_crew_facing_spread()
 
 	if _fails == 0:
 		print("NPC POPULATION SELFTEST PASS  (%d checks)" % _checks)
@@ -303,6 +322,30 @@ func _make_test_site() -> Dictionary:
 	return {"registry": reg, "pos_of": pos_of}
 
 
+## A REAL camp: the four spaces a player actually tags, and nothing else.
+##
+## `_make_test_site` always tags a shower at capacity 60, which is why the
+## hygiene absorbing state was structurally unreachable by this entire suite
+## and shipped to players. Any test about whether work gets DONE must use this
+## site instead — the point is to reproduce the configuration people play.
+func _make_bare_site() -> Dictionary:
+	var reg := SpaceRegistry.create_empty()
+	var positions := {
+		"kitchen": Vector2(40, 0),
+		"restroom": Vector2(-40, 20),
+		"water": Vector2(0, 40),
+		"beds": Vector2(0, -50),
+	}
+	reg.set_space_type({"kind": "prop", "prop_id": "kitchen"}, "kitchen", 60)
+	reg.set_space_type({"kind": "prop", "prop_id": "restroom"}, "restroom", 60)
+	reg.set_space_type({"kind": "prop", "prop_id": "water"}, "water_point", 60)
+	reg.set_space_type({"kind": "prop", "prop_id": "beds"}, "sleep", 60)
+	var pos_of := func(space: Dictionary) -> Variant:
+		var pid := str((space.get("target", {}) as Dictionary).get("prop_id", ""))
+		return positions.get(pid)
+	return {"registry": reg, "pos_of": pos_of}
+
+
 ## Drive the engine tick-by-tick like the game would (flow-engine cadence at
 ## 1x is ~0.25 s wall = tiny dt; we use 1 sim-minute ticks for speed).
 ## Returns {demand_log: Array of Dictionary, engine: NpcPopulationEngine}.
@@ -311,15 +354,33 @@ func _run_sim(engine: NpcPopulationEngine, site: Dictionary, start_h: float,
 	var log: Array = []
 	var t := start_h
 	var end := start_h + hours
+	# A site MAY resolve chore targets. Most fixtures do not, and without one a
+	# chore happens wherever the worker is standing — which is the real
+	# behaviour, but it means anything testing where people GO for work has to
+	# supply this or it is silently measuring nothing.
+	var chore_pos: Variant = site.get("chore_pos_of")
 	while t < end:
 		t += tick_h
-		var demand := engine.tick(t, {
+		var ctx := {
 			"registry": site["registry"],
 			"pos_of": site["pos_of"],
 			"hour_of_day": fposmod(t, 24.0),
-		})
+		}
+		if chore_pos is Callable:
+			ctx["chore_pos_of"] = chore_pos
+		var demand := engine.tick(t, ctx)
 		log.append(demand)
 	return log
+
+
+## The standard `{kind: "pos", x, z}` chore-target resolver, matching what
+## `NpcPopulationBridge._chore_position` does for that target kind.
+static func _pos_chore_resolver() -> Callable:
+	return func(c: Dictionary) -> Variant:
+		var t: Dictionary = c.get("target", {})
+		if str(t.get("kind", "")) == "pos":
+			return Vector2(float(t.get("x", 0.0)), float(t.get("z", 0.0)))
+		return null
 
 
 func _test_nav() -> void:
@@ -773,7 +834,90 @@ func _hours_to_first_departure(start_morale: float) -> float:
 	return 24.0 * 30.0
 
 
+## Air quality as a work driver (extreme weather). Deliberately additive: the
+## checks below assert that adding it could not move any pre-existing threshold.
+func _test_weather_gate_air() -> void:
+	var mild := {"temp_c": 18.0, "wind_ms": 3.0, "rain_mmh": 0.0}
+
+	# BACKWARD COMPATIBILITY. A weather dict with no `aqi` key — every dict this
+	# project produced before extreme weather existed — must behave EXACTLY as
+	# it used to. This is the check that makes the rest of the feature safe.
+	var with_zero := mild.duplicate()
+	with_zero["aqi"] = 0.0
+	for exposure: String in [NpcWeatherGate.EXPOSURE_INDOOR,
+			NpcWeatherGate.EXPOSURE_SHELTERED, NpcWeatherGate.EXPOSURE_OUTDOOR]:
+		_check("air: absent key == aqi 0 (%s productivity)" % exposure,
+			absf(NpcWeatherGate.productivity(mild, exposure)
+				- NpcWeatherGate.productivity(with_zero, exposure)) < 0.000001)
+		_check("air: absent key == aqi 0 (%s severity)" % exposure,
+			absf(NpcWeatherGate.severity(mild, exposure)
+				- NpcWeatherGate.severity(with_zero, exposure)) < 0.000001)
+		_check("air: clean air is full productivity (%s)" % exposure,
+			absf(NpcWeatherGate.productivity(with_zero, exposure) - 1.0) < 0.0001)
+	_check("air: clean air is safe", not NpcWeatherGate.is_unsafe(with_zero))
+
+	# Good/Moderate air must not slow anyone down: the threshold is the
+	# Cal/OSHA respirator line at 151, not "any measurable smoke".
+	var moderate := mild.duplicate()
+	moderate["aqi"] = 90.0
+	_check("air: moderate AQI does not slow work",
+		absf(NpcWeatherGate.productivity(moderate) - 1.0) < 0.0001)
+
+	var unhealthy := mild.duplicate()
+	unhealthy["aqi"] = 220.0
+	_check("air: unhealthy AQI slows outdoor work",
+		NpcWeatherGate.productivity(unhealthy) < 0.75,
+		"got %f" % NpcWeatherGate.productivity(unhealthy))
+	_check("air: unhealthy AQI is not yet a stop-work",
+		not NpcWeatherGate.is_unsafe(unhealthy))
+
+	# THE INDOOR WRINKLE. Walls stop rain and wind completely but only damp
+	# smoke, so this is the one driver that follows people inside.
+	var storm := {"temp_c": 40.0, "wind_ms": 20.0, "rain_mmh": 12.0}
+	_check("air: indoor still immune to a storm",
+		absf(NpcWeatherGate.productivity(storm, NpcWeatherGate.EXPOSURE_INDOOR) - 1.0) < 0.0001)
+	_check("air: indoor is NOT immune to smoke",
+		NpcWeatherGate.productivity(unhealthy, NpcWeatherGate.EXPOSURE_INDOOR) < 1.0,
+		"got %f" % NpcWeatherGate.productivity(unhealthy, NpcWeatherGate.EXPOSURE_INDOOR))
+	# ...but indoors is still meaningfully better than being out in it.
+	_check("air: indoor beats outdoor under smoke",
+		NpcWeatherGate.productivity(unhealthy, NpcWeatherGate.EXPOSURE_INDOOR)
+			> NpcWeatherGate.productivity(unhealthy))
+	_check("air: sheltered sits between the two",
+		NpcWeatherGate.productivity(unhealthy, NpcWeatherGate.EXPOSURE_SHELTERED)
+			> NpcWeatherGate.productivity(unhealthy)
+		and NpcWeatherGate.productivity(unhealthy, NpcWeatherGate.EXPOSURE_SHELTERED)
+			< NpcWeatherGate.productivity(unhealthy, NpcWeatherGate.EXPOSURE_INDOOR))
+
+	# Hazardous air stops work EVERYWHERE, including indoors — an unfiltered
+	# building during a Hazardous event is not a refuge.
+	var hazardous := mild.duplicate()
+	hazardous["aqi"] = 350.0
+	for exposure: String in [NpcWeatherGate.EXPOSURE_INDOOR,
+			NpcWeatherGate.EXPOSURE_SHELTERED, NpcWeatherGate.EXPOSURE_OUTDOOR]:
+		_check("air: hazardous stops work (%s)" % exposure,
+			NpcWeatherGate.is_unsafe(hazardous, exposure))
+
+	# Monotonic, bounded, and named correctly in the UI string.
+	var prev := 1.01
+	for a: float in [0.0, 100.0, 160.0, 200.0, 260.0, 300.0]:
+		var w := mild.duplicate()
+		w["aqi"] = a
+		var p := NpcWeatherGate.productivity(w)
+		_check("air: productivity non-increasing at AQI %.0f" % a, p <= prev + 0.0001,
+			"%f after %f" % [p, prev])
+		_check("air: productivity floored at AQI %.0f" % a,
+			p >= NpcWeatherGate.WEATHER_FLOOR - 0.0001)
+		prev = p
+	_check("air: describe names smoke as the worst driver",
+		NpcWeatherGate.describe(unhealthy).contains("smoke"),
+		"got '%s'" % NpcWeatherGate.describe(unhealthy))
+	_check("air: describe still names heat when heat dominates",
+		NpcWeatherGate.describe({"temp_c": 36.0, "aqi": 60.0}).contains("heat"))
+
+
 func _test_weather_gate() -> void:
+	_test_weather_gate_air()
 	var mild := {"temp_c": 18.0, "wind_ms": 3.0, "rain_mmh": 0.0}
 	_check("mild weather is full productivity",
 			absf(NpcWeatherGate.productivity(mild) - 1.0) < 0.0001)
@@ -851,21 +995,28 @@ func _test_chore_board() -> void:
 	_check("progress tracked", absf(board.remaining(cid) - 1.5) < 0.0001)
 	var over := board.credit(cid, 99.0, 10.0)
 	_check("credit clamps to remaining", absf(over - 1.5) < 0.0001)
-	# Completing resets progress for the next run, so `remaining` returns the
-	# full job again — "done" is tracked by done_day, not by remaining == 0.
-	_check("finished chore rearms for next time",
-			absf(board.remaining(cid) - 2.0) < 0.0001)
+	# Completing KEEPS progress at chore_hours: remaining() must stay 0 for the
+	# finished cycle (the fix for the re-work loop where a lingering second
+	# claimant re-credited a done once-chore from zero). The reset now happens
+	# in _arm_cycle when the NEXT cycle comes due.
+	_check("finished chore stays complete this cycle",
+			board.remaining(cid) <= 0.0001)
+	_check("lingering claimant credits nothing on a done chore",
+			board.credit(cid, 1.0, 11.0) == 0.0
+				and board.remaining(cid) <= 0.0001)
 	_check("finished chore marked done today",
 			int(board.find(cid).get("done_day", -1)) == NpcChoreBoard.day_index(10.0))
-	_check("finished chore releases its worker",
-			str(board.find(cid).get("worker", "")).is_empty())
+	_check("finished chore releases its crew",
+			(board.find(cid).get("workers", []) as Array).is_empty())
 	_check("finished chore not due today",
 			board.available_for("a1", 10.0, 12.0).all(
 					func(c: Dictionary) -> bool: return str(c.get("id")) != cid))
-	# …but it comes back tomorrow (daily repeat).
+	# …but it comes back tomorrow (daily repeat), armed back to full work.
 	_check("daily chore returns next day",
 			board.available_for("a1", 34.0, 12.0).any(
 					func(c: Dictionary) -> bool: return str(c.get("id")) == cid))
+	_check("daily chore re-arms to full remaining",
+			absf(board.remaining(cid) - 2.0) < 0.0001)
 
 	# Assignment filtering + unsafe-weather skip.
 	var mine := board.add_chore("Mine only", 1.0, {"assigned_to": "a1"})
@@ -898,9 +1049,1255 @@ func _test_chore_board() -> void:
 	var board2 := NpcChoreBoard.create_empty()
 	board2.deserialize(blob)
 	_check("chores round-trip", board2.chores.size() == board.chores.size())
-	_check("claim not persisted", str((board2.find(mine)).get("worker", "")).is_empty())
+	_check("claim not persisted", (board2.find(mine).get("workers", []) as Array).is_empty())
 	_check("ids keep incrementing",
 			board2.add_chore("New", 1.0) != mine)
+
+
+## v2 crew board (PACKING_PLAN.md Phase 6.5 step 0): stacking claims with a
+## cap, quorum-gated credit (the barn-raising gate), dependency holds, the
+## roster filter, and dropping a whole NpcCrewPlan schedule via add_plan.
+func _test_chore_crew_and_deps() -> void:
+	var board := NpcChoreBoard.create_empty()
+	# Claims stack to max_workers, idempotent per agent.
+	var drill := board.add_chore("Drill holes", 4.0, {"max_workers": 3, "repeat": "once"})
+	_check("crew claim 1", board.claim(drill, "a1"))
+	_check("crew claim idempotent", board.claim(drill, "a1")
+			and board.worker_count(drill) == 1)
+	_check("crew claims stack", board.claim(drill, "a2") and board.claim(drill, "a3"))
+	_check("crew cap refuses the 4th", not board.claim(drill, "a4"))
+	_check("full crew hidden from outsiders",
+			board.available_for("a4", 10.0, 12.0).all(
+					func(c: Dictionary) -> bool: return str(c.get("id")) != drill))
+	_check("crew member still sees own chore",
+			board.available_for("a2", 10.0, 12.0).any(
+					func(c: Dictionary) -> bool: return str(c.get("id")) == drill))
+	board.release(drill, "a2")
+	_check("release shrinks the crew", board.worker_count(drill) == 2
+			and board.claim(drill, "a4"))
+	board.release_all_for_agent("a1")
+	_check("release_all removes from crews", board.worker_count(drill) == 2)
+
+	# Quorum: below min_workers the work credits NOTHING — early arrivals
+	# wait; the gathering is the emergent behavior.
+	var raise_c := board.add_chore("Raise structure", 1.0,
+			{"min_workers": 3, "max_workers": 6, "repeat": "once"})
+	board.claim(raise_c, "b1")
+	board.claim(raise_c, "b2")
+	_check("below quorum credits zero", board.credit(raise_c, 0.5, 10.0) == 0.0)
+	_check("below quorum reports so", not board.has_quorum(raise_c))
+	board.claim(raise_c, "b3")
+	_check("at quorum it pays", board.credit(raise_c, 0.5, 10.0) > 0.0)
+	# Roster filter: a quorum the whole roster can't meet is never offered.
+	_check("impossible quorum hidden at roster 2",
+			board.available_for("b9", 10.0, 12.0, {}, 2).all(
+					func(c: Dictionary) -> bool: return str(c.get("id")) != raise_c))
+	_check("possible quorum shown at roster 8",
+			board.available_for("b9", 10.0, 12.0, {}, 8).any(
+					func(c: Dictionary) -> bool: return str(c.get("id")) == raise_c))
+
+	# Dependencies: held until the dep completes its cycle; a DELETED dep
+	# unblocks (removing a chore means "skip that step", never a deadlock).
+	var cut := board.add_chore("Cut", 0.5, {"repeat": "once"})
+	var weld := board.add_chore("Weld", 0.5, {"repeat": "once", "depends_on": [cut]})
+	_check("dependent held while dep due",
+			board.available_for("c1", 10.0, 12.0).all(
+					func(c: Dictionary) -> bool: return str(c.get("id")) != weld))
+	board.claim(cut, "c1")
+	board.credit(cut, 99.0, 10.0)
+	_check("dependent released once dep done",
+			board.available_for("c1", 10.0, 12.0).any(
+					func(c: Dictionary) -> bool: return str(c.get("id")) == weld))
+	var orphan := board.add_chore("Orphan", 0.5,
+			{"repeat": "once", "depends_on": ["chore_9999"]})
+	_check("deleted dep never deadlocks",
+			board.available_for("c1", 10.0, 12.0).any(
+					func(c: Dictionary) -> bool: return str(c.get("id")) == orphan))
+
+	# add_plan: a whole pit-crew schedule lands wired. Only the dep-free
+	# root is offered at t0; finishing it unlocks the next phase.
+	var counts := {"beam_count": 16, "bracket_count": 8, "bolt_count": 12,
+			"module_count": 4, "panel_count": 0}
+	var tasks := NpcCrewPlan.linkage_fab_tasks(counts)
+	var pb := NpcChoreBoard.create_empty()
+	var ids := pb.add_plan(NpcCrewPlan.chore_specs(tasks, NpcCrewPlan.schedule(tasks, 8)))
+	_check("plan drops all phases", ids.size() == 7, str(ids.size()))
+	var avail0: Array = pb.available_for("z1", 10.0, 12.0)
+	_check("only the dep-free root offered",
+			avail0.size() == 1
+				and str((avail0[0] as Dictionary).get("label", "")).begins_with("Cut"),
+			str(avail0.size()))
+	var cut_id := str((avail0[0] as Dictionary).get("id", ""))
+	pb.claim(cut_id, "z1")
+	pb.credit(cut_id, 999.0, 10.0)
+	_check("next phase unlocks after the root",
+			pb.available_for("z1", 10.0, 12.0).any(
+					func(c: Dictionary) -> bool:
+						return str(c.get("label", "")).begins_with("Drill")))
+	# v2 fields survive persistence; runtime crews do not.
+	pb.claim(str((pb.available_for("z1", 10.0, 12.0)[0] as Dictionary).get("id", "")), "z1")
+	var pb2 := NpcChoreBoard.create_empty()
+	pb2.deserialize(pb.serialize())
+	var kept_deps := false
+	var kept_crew := false
+	var any_workers := false
+	for c in pb2.chores:
+		var d := c as Dictionary
+		if not (d.get("depends_on", []) as Array).is_empty():
+			kept_deps = true
+		if int(d.get("min_workers", 1)) >= 6:
+			kept_crew = true
+		if not (d.get("workers", []) as Array).is_empty():
+			any_workers = true
+	_check("deps persist", kept_deps)
+	_check("crew fields persist (the raise's min 6)", kept_crew)
+	_check("runtime crews stripped", not any_workers)
+
+	# Build-site targets: add_plan stamps one target on every phase, and the
+	# bridge resolves the explicit-position kind with no scene at all.
+	var t_board := NpcChoreBoard.create_empty()
+	var t_out: Array = t_board.add_plan(
+			NpcCrewPlan.chore_specs(tasks, NpcCrewPlan.schedule(tasks, 8)),
+			{"start_h": 7.0, "end_h": 19.0}, {"kind": "pos", "x": 12.0, "z": -7.0})
+	var all_targeted := t_out.size() == 7
+	for tcid in t_out:
+		var tgt: Dictionary = t_board.find(str(tcid)).get("target", {})
+		if str(tgt.get("kind", "")) != "pos" or absf(float(tgt.get("x", 0.0)) - 12.0) > 0.001:
+			all_targeted = false
+	_check("plan target inherited by every phase", all_targeted)
+	# NOTE: NpcPopulationBridge cannot be referenced here — it names the
+	# PerfMonitor autoload bare, which fails to compile under --script (the
+	# documented headless autoload trap) and silently ABORTS this function
+	# while the suite still prints PASS. Its "pos" target resolution is a
+	# 2-line branch in _chore_position, covered by the windowed harness.
+
+	# Site rules ("rule cards" v1): tools_down empties the offer, night_shift
+	# ignores windows, both persist with the chores.
+	var rb := NpcChoreBoard.create_empty()
+	var day_job := rb.add_chore("Day job", 1.0, {"window": {"start_h": 8.0, "end_h": 18.0}})
+	_check("rule-free board offers day work",
+			not rb.available_for("r1", 10.0, 12.0).is_empty())
+	_check("day job hidden at night",
+			rb.available_for("r1", 10.0, 23.0).is_empty())
+	rb.rules["night_shift"] = true
+	_check("night_shift ignores windows",
+			rb.available_for("r1", 10.0, 23.0).any(
+					func(c: Dictionary) -> bool: return str(c.get("id")) == day_job))
+	rb.rules["tools_down"] = true
+	_check("tools_down overrides everything",
+			rb.available_for("r1", 10.0, 12.0).is_empty())
+	var rb2 := NpcChoreBoard.create_empty()
+	rb2.deserialize(rb.serialize())
+	_check("rules persist with the chores",
+			bool(rb2.rules.get("night_shift", false))
+				and bool(rb2.rules.get("tools_down", false)))
+
+	# Haul routes: the chore carries the route + strategy, and worker_index
+	# is claim order — the station assignment brigade posts derive from.
+	var hb := NpcChoreBoard.create_empty()
+	var haul_id := hb.add_chore("Unload the delivery", 0.5, {
+			"max_workers": 4,
+			"haul": {"from_x": 0.0, "from_z": 0.0, "to_x": 20.0, "to_z": 0.0,
+				"strategy": "brigade"}})
+	var hrec := hb.find(haul_id)
+	_check("haul route stored on the chore",
+			str((hrec.get("haul", {}) as Dictionary).get("strategy", "")) == "brigade")
+	hb.claim(haul_id, "w1")
+	hb.claim(haul_id, "w2")
+	hb.claim(haul_id, "w3")
+	_check("worker_index is claim order",
+			hb.worker_index(haul_id, "w1") == 0 and hb.worker_index(haul_id, "w3") == 2
+				and hb.worker_index(haul_id, "w9") == -1)
+	hb.release(haul_id, "w2")
+	_check("stations close up on release",
+			hb.worker_index(haul_id, "w3") == 1)
+
+
+## Phase-0 substrate for Site Projects: atomic add_plan, per-task board
+## fields riding through chore_specs overrides + add_plan, uncapped priority,
+## the held pause flag, and effect payload persistence.
+func _test_chore_plan_v3() -> void:
+	# Atomic refusal: a plan that doesn't fit leaves the board UNTOUCHED —
+	# a truncated plan's dangling dep ids read as satisfied and silently
+	# unblock the tail, which is worse than no plan at all.
+	var full := NpcChoreBoard.create_empty()
+	for i in NpcChoreBoard.MAX_CHORES - 2:
+		full.add_chore("Filler %d" % i, 0.1)
+	var before := full.chores.size()
+	var refused: Array = full.add_plan([
+		{"task_id": "a", "label": "A", "chore_hours": 0.1},
+		{"task_id": "b", "label": "B", "chore_hours": 0.1, "depends_on": ["a"]},
+		{"task_id": "c", "label": "C", "chore_hours": 0.1, "depends_on": ["b"]},
+	])
+	_check("overfull plan refused whole", refused.is_empty())
+	_check("refused plan left board untouched", full.chores.size() == before)
+
+	# Per-task fields: a spec row's own target/effect/carry_to/haul override
+	# the shared plan target; rows without them inherit it.
+	var b := NpcChoreBoard.create_empty()
+	var ids: Array = b.add_plan([
+		{"task_id": "haul1", "label": "Haul crate", "chore_hours": 0.2,
+			"target": {"kind": "prop", "id": "prop_42"},
+			"carry_to": {"x": 5.0, "z": -3.0},
+			"effect": {"op": "move_prop", "prop_id": "prop_42", "x": 5.0, "z": -3.0}},
+		{"task_id": "gate", "label": "Unloaded", "chore_hours": 0.05,
+			"depends_on": ["haul1"]},
+	], {"start_h": 0.0, "end_h": 24.0}, {"kind": "pos", "x": 1.0, "z": 2.0})
+	_check("per-task plan lands", ids.size() == 2)
+	var haul_rec: Dictionary = b.find(str(ids[0]))
+	var gate_rec: Dictionary = b.find(str(ids[1]))
+	_check("per-task target wins over shared",
+			str((haul_rec.get("target", {}) as Dictionary).get("kind", "")) == "prop")
+	_check("carry_to rides the chore",
+			absf(float((haul_rec.get("carry_to", {}) as Dictionary).get("x", 0.0)) - 5.0) < 0.001)
+	_check("effect rides the chore",
+			str((haul_rec.get("effect", {}) as Dictionary).get("op", "")) == "move_prop")
+	_check("row without target inherits the shared one",
+			str((gate_rec.get("target", {}) as Dictionary).get("kind", "")) == "pos")
+
+	# Effect + carry_to persist (the fire-once flag will live beside them).
+	b.update_chore(str(ids[0]), {"effect_done": true})
+	var b2 := NpcChoreBoard.create_empty()
+	b2.deserialize(b.serialize())
+	var rt: Dictionary = b2.find(str(ids[0]))
+	_check("effect persists", str((rt.get("effect", {}) as Dictionary).get("op", "")) == "move_prop")
+	_check("effect_done flag persists", bool(rt.get("effect_done", false)))
+	_check("carry_to persists", (rt.get("carry_to", {}) as Dictionary).has("z"))
+
+	# Priority is uncapped: an 11-phase chain must keep build order on ties
+	# of remaining work.
+	var pb := NpcChoreBoard.create_empty()
+	var pids: Array = []
+	for i in 11:
+		pids.append(pb.add_chore("P%d" % i, 1.0,
+				{"repeat": "once", "priority": i + 1,
+					"window": {"start_h": 0.0, "end_h": 24.0}}))
+	var offered: Array = pb.available_for("p1", 10.0, 12.0)
+	var in_order := offered.size() == 11
+	for i in offered.size():
+		if str((offered[i] as Dictionary).get("id", "")) != str(pids[i]):
+			in_order = false
+	_check("priority beyond 9 keeps order", in_order)
+
+	# held: paused chores vanish from the offer without losing progress.
+	var hb := NpcChoreBoard.create_empty()
+	var hid := hb.add_chore("Paused job", 1.0, {"window": {"start_h": 0.0, "end_h": 24.0}})
+	hb.credit(hid, 0.4, 10.0)
+	hb.update_chore(hid, {"held": true})
+	_check("held chore hidden", hb.available_for("h1", 10.0, 12.0).is_empty())
+	hb.update_chore(hid, {"held": false})
+	_check("unheld chore returns with progress intact",
+			not hb.available_for("h1", 10.0, 12.0).is_empty()
+				and absf(hb.remaining(hid) - 0.6) < 0.0001)
+
+	# chore_completed fires exactly once, as a toast convenience only.
+	var sb := NpcChoreBoard.create_empty()
+	var scid := sb.add_chore("Signal job", 0.5,
+			{"repeat": "once", "window": {"start_h": 0.0, "end_h": 24.0}})
+	var fired: Array = []
+	sb.chore_completed.connect(func(id: String, _label: String) -> void:
+		fired.append(id))
+	sb.credit(scid, 0.2, 10.0)
+	sb.credit(scid, 9.0, 10.0)
+	sb.credit(scid, 1.0, 10.0)   # lingering claimant — must not re-fire
+	_check("completion signal fired once for the cycle",
+			fired.size() == 1 and str(fired[0]) == scid)
+
+	# chore_specs overrides: omitted ⇒ byte-identical bridge output; present ⇒
+	# the row carries the override fields for add_plan to pass through.
+	var counts := {"beam_count": 16, "bracket_count": 8, "bolt_count": 12,
+			"module_count": 4, "panel_count": 0}
+	var tasks := NpcCrewPlan.linkage_fab_tasks(counts)
+	var sched := NpcCrewPlan.schedule(tasks, 8)
+	var plain: Array = NpcCrewPlan.chore_specs(tasks, sched)
+	var plain2: Array = NpcCrewPlan.chore_specs(tasks, sched, {})
+	_check("empty overrides change nothing", str(plain) == str(plain2))
+	var erect_id := ""
+	for t in tasks:
+		if str((t as Dictionary).get("id", "")).begins_with("erect"):
+			erect_id = str((t as Dictionary).get("id", ""))
+	var over: Array = NpcCrewPlan.chore_specs(tasks, sched, {
+		erect_id: {"effect": {"op": "unpack_prop", "prop_id": "prop_7"}}})
+	var found_effect := false
+	for row in over:
+		var d := row as Dictionary
+		if str(d.get("task_id", "")) == erect_id:
+			found_effect = str((d.get("effect", {}) as Dictionary).get("op", "")) == "unpack_prop"
+	_check("override attaches effect to the named task", found_effect)
+
+
+## Two-leg haul chores (Site Projects carry): walk to the pickup, flip to the
+## carry leg, walk to carry_to, then work. Preemption mid-carry must leave the
+## world consistent (the crate move is the COMPLETION effect, so an abandoned
+## carry means nothing moved). NOTE: the bridge's effect sweep itself cannot
+## be exercised here — NpcPopulationBridge names the PerfMonitor autoload
+## bare, the documented headless --script compile trap — so the sweep's world
+## half is covered by the windowed --capture=project harness; this covers the
+## agent FSM and the dot payload.
+func _test_carry_leg() -> void:
+	var board := NpcChoreBoard.create_empty()
+	var cid := board.add_chore("Haul crate", 0.1, {
+		"repeat": "once", "window": {"start_h": 0.0, "end_h": 24.0},
+		"target": {"kind": "prop", "id": "crate_1"},
+		"carry_to": {"x": 20.0, "z": 0.0},
+		"effect": {"op": "move_prop", "prop_id": "crate_1", "x": 20.0, "z": 0.0},
+	})
+	var a := NpcAgent.make("hauler", Vector2.ZERO)
+	var ctx := {
+		"board": board, "weather": {}, "hour_of_day": 12.0, "registry": null,
+		"chore_pos_of": func(_c: Dictionary) -> Variant: return Vector2(10.0, 0.0),
+	}
+	_check("carry chore taken", a._begin_chore(10.0, ctx))
+	_check("leg 0 targets the pickup", a.chore_leg == 0
+			and a.target_pos.distance_to(Vector2(10.0, 0.0)) < 0.01)
+	var guard := 0
+	while a.chore_leg == 0 and guard < 200:
+		a._step_traveling(10.0 + 0.01 * float(guard + 1), 0.01, ctx)
+		guard += 1
+	_check("arrival at pickup flips to the carry leg", a.chore_leg == 1)
+	_check("carry leg keeps TRAVELING toward carry_to",
+			a.state == NpcAgent.State.TRAVELING
+				and a.target_pos.distance_to(Vector2(20.0, 0.0)) < 0.01)
+	_check("is_carrying reads true mid-haul", a.is_carrying())
+	# The dot payload the renderers consume: carrying flag + resolved crate id.
+	var eng := NpcPopulationEngine.new()
+	eng.chore_board = board
+	eng.agents.append(a)
+	var dot_ok := false
+	for d in eng.agent_dots():
+		var dd := d as Dictionary
+		if str(dd.get("id", "")) == "hauler":
+			dot_ok = bool(dd.get("carrying", false)) \
+				and str(dd.get("carry_prop", "")) == "crate_1"
+	_check("dot payload carries the crate id", dot_ok)
+	# Preemption mid-carry: claim released, leg reset, nothing credited.
+	a._finish(ctx, false)
+	_check("preempted carry resets the leg", a.chore_leg == 0 and not a.is_carrying())
+	_check("preempted carry left the work untouched",
+			absf(board.remaining(cid) - 0.1) < 0.0001)
+	# Second attempt runs the whole loop: pickup → carry → work → complete.
+	_check("chore re-taken after preemption", a._begin_chore(11.0, ctx))
+	guard = 0
+	while a.chore_leg == 0 and guard < 200:
+		a._step_traveling(11.0 + 0.01 * float(guard + 1), 0.01, ctx)
+		guard += 1
+	guard = 0
+	while a.state == NpcAgent.State.TRAVELING and guard < 400:
+		a._step_traveling(11.5 + 0.01 * float(guard + 1), 0.01, ctx)
+		guard += 1
+	_check("second leg lands at carry_to",
+			a.pos.distance_to(Vector2(20.0, 0.0)) < 0.01)
+	guard = 0
+	while int(board.find(cid).get("done_day", -1)) < 0 and guard < 100:
+		a._step_chore(12.0 + 0.05 * float(guard + 1), 0.05, ctx)
+		guard += 1
+	_check("carry chore completes", int(board.find(cid).get("done_day", -1)) >= 0)
+	_check("agent released after completion",
+			a.chore_id.is_empty() and a.chore_leg == 0)
+	_check("effect payload survives, unfired (the bridge sweep stamps it)",
+			str((board.find(cid).get("effect", {}) as Dictionary).get("op", "")) == "move_prop"
+				and not bool(board.find(cid).get("effect_done", false)))
+
+
+## Site Projects: the grouping layer over the chore board. Status derivation
+## (done / skipped-on-delete), rollup, store cap/persistence round-trip, the
+## build-progress fractions the linkage ghost renders from, and the breakdown
+## plan shape. All offline — the world-effect half (bridge sweep +
+## PlacedPropService) is the windowed --capture=project harness's job.
+func _test_site_project() -> void:
+	var board := NpcChoreBoard.create_empty()
+	var counts := {"beam_count": 16, "bracket_count": 8, "bolt_count": 12,
+			"module_count": 4, "panel_count": 6}
+	var tasks := NpcCrewPlan.linkage_fab_tasks(counts)
+	var sched := NpcCrewPlan.schedule(tasks, 8)
+	var overrides := {
+		"erect": {"effect": {"op": "unpack_prop", "prop_id": "prop_9"}},
+		"panels": {"effect": {"op": "seed_graph", "prop_id": "prop_9"}},
+	}
+	var rows: Array = NpcCrewPlan.chore_specs(tasks, sched, overrides)
+	var made: Array = board.add_plan(rows, {"start_h": 0.0, "end_h": 24.0},
+			{"kind": "prop", "id": "prop_9"})
+	var project := SiteProject.make(SiteProject.KIND_LINKAGE_BUILD, "Build",
+			"prop_9", Vector2(3.0, 4.0), 100.0, {"crew": 8})
+	SiteProject.bind_tasks(project, rows, made)
+	_check("project binds every phase",
+			(project["tasks"] as Array).size() == rows.size())
+	_check("fresh project pending", not SiteProject.sync_with_board(project, board)
+			and str(project["state"]) == "active")
+	# Nothing shows before the cut completes.
+	var bp0 := SiteProject.build_progress(project, board)
+	_check("no beams before the cut", float(bp0["beams"]) == 0.0
+			and not bool(bp0["erected"]))
+	# Complete the whole chain in dependency order via the board's own gates.
+	var spins := 0
+	while spins < 64:
+		var avail: Array = board.available_for("w1", 100.0, 12.0, {}, 12)
+		if avail.is_empty():
+			break
+		var cidn := str((avail[0] as Dictionary).get("id", ""))
+		for k in int((avail[0] as Dictionary).get("min_workers", 1)):
+			board.claim(cidn, "w%d" % k)
+		board.credit(cidn, 999.0, 100.0)
+		spins += 1
+	_check("whole plan executes through the gates", spins > 0
+			and SiteProject.sync_with_board(project, board)
+			and str(project["state"]) == "done")
+	var bp1 := SiteProject.build_progress(project, board)
+	_check("finished build reads fully built", float(bp1["beams"]) == 1.0
+			and float(bp1["panels"]) == 1.0 and bool(bp1["erected"]))
+	var roll := SiteProject.rollup(project, board)
+	_check("rollup complete", int(roll["done"]) == rows.size()
+			and absf(float(roll["progress"]) - 1.0) < 0.001)
+
+	# Deleted chore = skipped task, project still settles.
+	var b2 := NpcChoreBoard.create_empty()
+	var rows2: Array = [
+		{"task_id": "a", "label": "A", "chore_hours": 0.1},
+		{"task_id": "b", "label": "B", "chore_hours": 0.1, "depends_on": ["a"]},
+	]
+	var made2: Array = b2.add_plan(rows2, {"start_h": 0.0, "end_h": 24.0})
+	var p2 := SiteProject.make(SiteProject.KIND_DELIVERY, "Unload", "", Vector2.ZERO, 0.0)
+	SiteProject.bind_tasks(p2, rows2, made2)
+	b2.remove_chore(str(made2[0]))
+	b2.claim(str(made2[1]), "w1")
+	b2.credit(str(made2[1]), 9.0, 5.0)
+	SiteProject.sync_with_board(p2, b2)
+	var statuses: Array = []
+	for t in p2["tasks"]:
+		statuses.append(str((t as Dictionary).get("status", "")))
+	_check("deleted chore skips, survivor completes, project settles",
+			statuses == ["skipped", "done"] and str(p2["state"]) == "done")
+
+	# Store: round-trip + cap pruning (oldest done goes first).
+	var store := SiteProjectStore.new()
+	store.add(project)
+	store.add(p2)
+	var store2 := SiteProjectStore.new()
+	store2.deserialize(store.serialize())
+	_check("store round-trips", store2.projects.size() == 2
+			and str((store2.projects[0] as Dictionary).get("id", "")) == str(project["id"]))
+	for i in SiteProjectStore.MAX_PROJECTS + 2:
+		var filler := SiteProject.make(SiteProject.KIND_DELIVERY, "F%d" % i, "",
+				Vector2.ZERO, float(i))
+		store2.add(filler)
+	_check("store prunes to its cap",
+			store2.projects.size() == SiteProjectStore.MAX_PROJECTS)
+
+	# Breakdown plan: right shape, fold carries the pack effect, load-out only
+	# with a destination, dependency chain intact.
+	var bd := SiteProject.breakdown_spec_rows(counts, "prop_9", {"x": 50.0, "z": 0.0})
+	var ids_bd: Array = []
+	for r in bd:
+		ids_bd.append(str((r as Dictionary).get("task_id", "")))
+	_check("breakdown phases in order",
+			ids_bd == ["strip_panels", "unbolt", "fold_pack", "load_out"], str(ids_bd))
+	var fold_row: Dictionary = bd[2]
+	_check("fold carries the pack effect",
+			str((fold_row.get("effect", {}) as Dictionary).get("op", "")) == "pack_prop")
+	var lo_row: Dictionary = bd[3]
+	_check("load-out is a carry with a move effect",
+			(lo_row.get("carry_to", {}) as Dictionary).has("x")
+				and str((lo_row.get("effect", {}) as Dictionary).get("op", "")) == "move_prop")
+	var bd_no: Array = SiteProject.breakdown_spec_rows(
+			{"panel_count": 0, "module_count": 2, "bolt_count": 8}, "prop_9")
+	var ids_no: Array = []
+	for r in bd_no:
+		ids_no.append(str((r as Dictionary).get("task_id", "")))
+	_check("no panels / no container trims the plan",
+			ids_no == ["unbolt", "fold_pack"], str(ids_no))
+
+	# Coarse reload fractions follow the phase ladder.
+	_check("phase_fractions ladder",
+			float(SiteProject.phase_fractions("")["beams"]) == 0.0
+				and float(SiteProject.phase_fractions("assemble_x")["beams"]) == 1.0
+				and float(SiteProject.phase_fractions("bolts")["bolts"]) == 1.0
+				and float(SiteProject.phase_fractions("cut")["brackets"]) == 0.0)
+
+
+## Round 2: incremental stage effects (the world changes DURING labour, one
+## crate per threshold) and the brigade unload plan built from crew density.
+func _test_stage_effects_and_brigade() -> void:
+	# due_stage_effects: thresholds, fire-once, completion fires the rest.
+	var board := NpcChoreBoard.create_empty()
+	var stages: Array = []
+	for i in 4:
+		stages.append({"at": (float(i) + 0.5) / 4.0,
+			"effect": {"op": "move_prop", "prop_id": "c%d" % i, "x": 0.0, "z": 0.0}})
+	var cid := board.add_chore("Brigade", 1.0, {
+		"repeat": "once", "window": {"start_h": 0.0, "end_h": 24.0},
+		"stage_effects": stages})
+	var rec := board.find(cid)
+	_check("no stages due at zero progress",
+			SiteProject.due_stage_effects(rec).is_empty())
+	board.credit(cid, 0.3, 10.0)   # frac 0.30 — past 0.125, short of 0.375
+	var due1: Array = SiteProject.due_stage_effects(rec)
+	_check("first threshold due", due1 == [0], str(due1))
+	((rec["stage_effects"] as Array)[0] as Dictionary)["fired"] = true
+	_check("fired stage never re-offered",
+			SiteProject.due_stage_effects(rec).is_empty())
+	board.credit(cid, 0.35, 10.0)  # frac 0.65 — stages 1 (0.375) and 2 (0.625)
+	var due2: Array = SiteProject.due_stage_effects(rec)
+	_check("crossed thresholds come due together", due2 == [1, 2], str(due2))
+	board.credit(cid, 9.0, 10.0)   # completes — progress kept at full
+	var due3: Array = SiteProject.due_stage_effects(rec)
+	_check("completion brings every unfired stage due", due3 == [1, 2, 3], str(due3))
+	# stage_effects + fired flags ride persistence (the fire-once contract).
+	((rec["stage_effects"] as Array)[1] as Dictionary)["fired"] = true
+	var b2 := NpcChoreBoard.create_empty()
+	b2.deserialize(board.serialize())
+	var rec2 := b2.find(cid)
+	_check("stage effects persist with fired flags",
+			SiteProject.due_stage_effects(rec2) == [2, 3])
+
+	# unload_spec_rows: strategy follows NpcHaulModel; the shapes differ.
+	var crates: Array = []
+	for i in 7:
+		crates.append({"pid": "crate_p%d" % i,
+			"stage": Vector2(20.0 + float(i), 0.0), "label": "Box %d" % i})
+	var brigade: Dictionary = SiteProject.unload_spec_rows(crates, Vector2.ZERO, 12)
+	if str(brigade.get("strategy", "")) == "brigade":
+		var rows: Array = brigade["rows"]
+		_check("brigade = one crew chore + gate", rows.size() == 2, str(rows.size()))
+		var lead := rows[0] as Dictionary
+		_check("brigade chore carries the relay route",
+				str((lead.get("haul", {}) as Dictionary).get("strategy", "")) == "brigade")
+		_check("one stage effect per crate",
+				(lead.get("stage_effects", []) as Array).size() == crates.size())
+		_check("brigade needs a crew",
+				int(lead.get("min_workers", 1)) >= SiteProject.BRIGADE_MIN_CREW)
+		var gate := rows[1] as Dictionary
+		_check("gate depends on the brigade",
+				(gate.get("depends_on", []) as Array) == ["brigade"])
+	else:
+		# The haul model's verdict at this crew/route is round trips — the
+		# brigade SHAPE is still pinned by forcing the small-roster branch off.
+		_check("haul model chose round trips at this density", true)
+	var solo: Dictionary = SiteProject.unload_spec_rows(
+			[crates[0]], Vector2.ZERO, 12)
+	_check("single crate is always a carry row",
+			str(solo.get("strategy", "")) == "round_trip"
+				and ((solo["rows"] as Array)[0] as Dictionary).has("carry_to"))
+	# Round 3: round-trip rows must carry a STRICTLY ASCENDING priority, or
+	# equal priority + equal hours ties in available_for's (unstable) sort and
+	# the crew pulls crates out of the stack in arbitrary order.
+	var rt: Dictionary = SiteProject.unload_spec_rows(crates, Vector2.ZERO, 2)
+	var rt_rows: Array = rt["rows"]
+	var ascending := true
+	var gate_prio := -1
+	var crate_max := -1
+	for r in rt_rows:
+		var rd := r as Dictionary
+		if str(rd.get("task_id", "")) == "unloaded":
+			gate_prio = int(rd.get("priority", 0))
+			continue
+		if int(rd.get("priority", 0)) <= crate_max:
+			ascending = false
+		crate_max = int(rd.get("priority", 0))
+	_check("round-trip crate priorities ascend", ascending)
+	_check("the unload gate sorts after every crate", gate_prio > crate_max,
+			"%d vs %d" % [gate_prio, crate_max])
+	# Every set-down must put the crate ON THE GROUND and make it touchable
+	# again — it rode the container stack at height with collision off.
+	var setdowns_ok := true
+	for r2 in rt_rows:
+		var eff: Dictionary = (r2 as Dictionary).get("effect", {})
+		if str(eff.get("op", "")) != "move_prop":
+			continue
+		if absf(float(eff.get("y_offset", -1.0))) > 0.0001 \
+				or not bool(eff.get("collision_enabled", false)):
+			setdowns_ok = false
+	_check("round-trip set-downs land on the ground, collidable", setdowns_ok)
+	var brig_stage_ok := true
+	for r3 in (brigade["rows"] as Array):
+		for st2 in ((r3 as Dictionary).get("stage_effects", []) as Array):
+			var seff: Dictionary = (st2 as Dictionary).get("effect", {})
+			if absf(float(seff.get("y_offset", -1.0))) > 0.0001 \
+					or not bool(seff.get("collision_enabled", false)):
+				brig_stage_ok = false
+	_check("brigade stage set-downs land on the ground too", brig_stage_ok)
+	var small: Dictionary = SiteProject.unload_spec_rows(crates, Vector2.ZERO, 2)
+	_check("small roster never brigades",
+			str(small.get("strategy", "")) == "round_trip")
+	# Whichever strategy, the board takes the plan whole and the gate exists.
+	var b3 := NpcChoreBoard.create_empty()
+	var made: Array = b3.add_plan(brigade["rows"], {"start_h": 0.0, "end_h": 24.0})
+	_check("unload plan lands on the board", made.size() == (brigade["rows"] as Array).size())
+
+	# Brigade station workers read as carrying in the dot payload.
+	var eng := NpcPopulationEngine.new()
+	var bb := NpcChoreBoard.create_empty()
+	var bcid := bb.add_chore("Brigade line", 1.0, {
+		"repeat": "once", "window": {"start_h": 0.0, "end_h": 24.0},
+		"max_workers": 4,
+		"haul": {"from_x": 0.0, "from_z": 0.0, "to_x": 20.0, "to_z": 0.0,
+			"strategy": "brigade"}})
+	eng.chore_board = bb
+	var stationed := NpcAgent.make("post_1", Vector2(10.0, 0.0))
+	stationed.chore_id = bcid
+	stationed.activity = NpcAgent.CHORE_ACTIVITY
+	stationed.state = NpcAgent.State.DOING
+	bb.claim(bcid, "post_1")
+	eng.agents.append(stationed)
+	var station_carrying := false
+	for d in eng.agent_dots():
+		if str((d as Dictionary).get("id", "")) == "post_1":
+			station_carrying = bool((d as Dictionary).get("carrying", false))
+	_check("brigade station worker reads as carrying", station_carrying)
+
+
+## Round 2: the muster fixes — free agents converge on a gathering crew
+## chore, and early arrivals' patience scales with how close the crew is.
+func _test_crew_muster() -> void:
+	var board := NpcChoreBoard.create_empty()
+	var urgent := board.add_chore("Urgent solo job", 1.0, {
+		"priority": -5, "window": {"start_h": 0.0, "end_h": 24.0}})
+	var raise_c := board.add_chore("Raise structure", 1.0, {
+		"repeat": "once", "priority": 5, "min_workers": 3, "max_workers": 6,
+		"window": {"start_h": 0.0, "end_h": 24.0}})
+	# Nobody standing at the raise yet: normal priority order holds.
+	var first := str((board.available_for("a2", 10.0, 12.0, {}, 8)[0] as Dictionary).get("id", ""))
+	_check("no gathering → priority order holds", first == urgent)
+	# One worker standing at it: the gathering outranks even priority -5.
+	board.claim(raise_c, "a1")
+	first = str((board.available_for("a2", 10.0, 12.0, {}, 8)[0] as Dictionary).get("id", ""))
+	_check("gathering crew chore jumps the queue", first == raise_c)
+	# Quorum met: boost disappears (it exists to CLOSE the gap, not to pin
+	# the site at the top forever).
+	board.claim(raise_c, "a2")
+	board.claim(raise_c, "a3")
+	first = str((board.available_for("a4", 10.0, 12.0, {}, 8)[0] as Dictionary).get("id", ""))
+	_check("quorate crew chore drops the boost", first == urgent)
+
+	# Adaptive patience: with most of the crew present, an early arrival holds
+	# past the base timer; alone, they bail on the base timer as before.
+	var wb := NpcChoreBoard.create_empty()
+	var wcid := wb.add_chore("Raise", 2.0, {
+		"repeat": "once", "min_workers": 4, "max_workers": 6,
+		"window": {"start_h": 0.0, "end_h": 24.0}})
+	var waiter := NpcAgent.make("w1", Vector2.ZERO)
+	var ctx := {"board": wb, "weather": {}, "hour_of_day": 12.0, "registry": null}
+	wb.claim(wcid, "w1")
+	wb.claim(wcid, "w2")
+	wb.claim(wcid, "w3")   # 3 of 4 — patience ≈ base × 2.5
+	waiter.chore_id = wcid
+	waiter.activity = NpcAgent.CHORE_ACTIVITY
+	waiter.state = NpcAgent.State.DOING
+	waiter._step_chore(10.0, NpcAgent.QUORUM_WAIT_H * 1.4, ctx)
+	_check("near-quorum crew holds past the base timer",
+			waiter.chore_id == wcid, waiter.chore_id)
+	waiter._step_chore(10.0, NpcAgent.QUORUM_WAIT_H * 2.0, ctx)
+	_check("patience is still bounded", waiter.chore_id.is_empty())
+	var loner := NpcAgent.make("l1", Vector2.ZERO)
+	var lb := NpcChoreBoard.create_empty()
+	var lcid := lb.add_chore("Raise", 2.0, {
+		"repeat": "once", "min_workers": 4, "max_workers": 6,
+		"window": {"start_h": 0.0, "end_h": 24.0}})
+	lb.claim(lcid, "l1")
+	loner.chore_id = lcid
+	loner.activity = NpcAgent.CHORE_ACTIVITY
+	loner.state = NpcAgent.State.DOING
+	var lctx := {"board": lb, "weather": {}, "hour_of_day": 12.0, "registry": null}
+	loner._step_chore(10.0, NpcAgent.QUORUM_WAIT_H * 1.6, lctx)
+	_check("a lone early arrival still bails near the base timer",
+			loner.chore_id.is_empty())
+
+
+## Round 3: the reverse lifecycle's visuals. Driven through a REAL board so the
+## fractions are derived the way the bridge derives them, not from a mock.
+func _test_breakdown_progress() -> void:
+	var counts := {"beam_count": 16, "bracket_count": 8, "bolt_count": 12,
+			"module_count": 4, "panel_count": 6}
+	var board := NpcChoreBoard.create_empty()
+	var rows := SiteProject.breakdown_spec_rows(counts, "prop_x", {})
+	var made: Array = board.add_plan(rows, {"start_h": 0.0, "end_h": 24.0})
+	var project := SiteProject.make(SiteProject.KIND_LINKAGE_BREAKDOWN, "Teardown",
+			"prop_x", Vector2.ZERO, 0.0)
+	SiteProject.bind_tasks(project, rows, made)
+	var cid_of := func(tid: String) -> String:
+		for t in project["tasks"]:
+			if str((t as Dictionary).get("task_id", "")) == tid:
+				return str((t as Dictionary).get("chore_id", ""))
+		return ""
+
+	# THE regression check: an untouched teardown paints NOTHING away. The old
+	# branch emitted only `panels`, and _apply_build_progress defaults a missing
+	# key to 1.0 — right at t=0 by accident, wrong for the whole run after.
+	var bd0 := SiteProject.breakdown_progress(project, board)
+	var all_whole := true
+	for k in ["beams", "brackets", "bolts", "supports", "panels"]:
+		if not is_equal_approx(float(bd0[k]), 1.0):
+			all_whole = false
+	_check("fresh teardown leaves every element whole", all_whole, str(bd0))
+	_check("fresh teardown is solid and unfolded",
+			is_equal_approx(float(bd0["ghost"]), 1.0) and not bool(bd0["folded"]))
+
+	# Panels come off first; the frame is untouched.
+	var strip_id := str(cid_of.call("strip_panels"))
+	board.claim(strip_id, "w1")
+	board.claim(strip_id, "w2")
+	board.credit(strip_id, board.find(strip_id)["chore_hours"] * 0.5, 10.0)
+	var bd1 := SiteProject.breakdown_progress(project, board)
+	_check("stripping halves the panels", absf(float(bd1["panels"]) - 0.5) < 0.02, str(bd1["panels"]))
+	_check("stripping leaves bolts and beams alone",
+			is_equal_approx(float(bd1["bolts"]), 1.0) and is_equal_approx(float(bd1["beams"]), 1.0))
+
+	# Hardware leaves together, and the beams still stand.
+	board.credit(strip_id, 99.0, 10.0)
+	SiteProject.sync_with_board(project, board)
+	var unbolt_id := str(cid_of.call("unbolt"))
+	board.claim(unbolt_id, "w1")
+	board.credit(unbolt_id, board.find(unbolt_id)["chore_hours"] * 0.5, 10.0)
+	var bd2 := SiteProject.breakdown_progress(project, board)
+	_check("panels fully gone", is_equal_approx(float(bd2["panels"]), 0.0))
+	_check("bolts and brackets leave together",
+			absf(float(bd2["bolts"]) - 0.5) < 0.02
+				and absf(float(bd2["brackets"]) - float(bd2["bolts"])) < 0.001)
+	_check("beams stand through unbolting — the fold sweep IS their visual",
+			is_equal_approx(float(bd2["beams"]), 1.0))
+
+	# Fold prep pulls the supports and dims the frame toward the crate handoff.
+	board.credit(unbolt_id, 99.0, 10.0)
+	SiteProject.sync_with_board(project, board)
+	var fold_id := str(cid_of.call("fold_pack"))
+	board.claim(fold_id, "w1")
+	board.claim(fold_id, "w2")
+	board.credit(fold_id, board.find(fold_id)["chore_hours"] * 0.5, 10.0)
+	var bd3 := SiteProject.breakdown_progress(project, board)
+	_check("supports come off with the fold prep",
+			absf(float(bd3["supports"]) - 0.5) < 0.02, str(bd3["supports"]))
+	_check("frame ghosts toward the handoff",
+			float(bd3["ghost"]) < 1.0 and float(bd3["ghost"]) >= 0.35, str(bd3["ghost"]))
+	_check("beams still standing at the fold", is_equal_approx(float(bd3["beams"]), 1.0))
+	board.credit(fold_id, 99.0, 10.0)
+	SiteProject.sync_with_board(project, board)
+	_check("folded once the pack completes",
+			bool(SiteProject.breakdown_progress(project, board)["folded"]))
+
+	# Monotonicity: a teardown never re-grows. Fresh plan, 20 even steps.
+	var mb := NpcChoreBoard.create_empty()
+	var mrows := SiteProject.breakdown_spec_rows(counts, "prop_y", {})
+	var mmade: Array = mb.add_plan(mrows, {"start_h": 0.0, "end_h": 24.0})
+	var mproj := SiteProject.make(SiteProject.KIND_LINKAGE_BREAKDOWN, "T2",
+			"prop_y", Vector2.ZERO, 0.0)
+	SiteProject.bind_tasks(mproj, mrows, mmade)
+	var prev := SiteProject.breakdown_progress(mproj, mb)
+	var monotone := true
+	for _i in 20:
+		var avail: Array = mb.available_for("m1", 10.0, 12.0, {}, 8)
+		if not avail.is_empty():
+			var acid := str((avail[0] as Dictionary).get("id", ""))
+			for k2 in int((avail[0] as Dictionary).get("min_workers", 1)):
+				mb.claim(acid, "m%d" % k2)
+			mb.credit(acid, float((avail[0] as Dictionary).get("chore_hours", 1.0)) * 0.34, 10.0)
+		SiteProject.sync_with_board(mproj, mb)
+		var now := SiteProject.breakdown_progress(mproj, mb)
+		for k3 in ["beams", "brackets", "bolts", "supports", "panels", "ghost"]:
+			if float(now[k3]) > float(prev[k3]) + 0.0001:
+				monotone = false
+		prev = now
+	_check("teardown never re-grows", monotone)
+
+	# A design with no panels omits the strip row entirely: the class must stay
+	# whole rather than reading as "already removed".
+	var nb := NpcChoreBoard.create_empty()
+	var nrows := SiteProject.breakdown_spec_rows(
+			{"panel_count": 0, "module_count": 2, "bolt_count": 8}, "prop_z", {})
+	var nmade: Array = nb.add_plan(nrows, {"start_h": 0.0, "end_h": 24.0})
+	var nproj := SiteProject.make(SiteProject.KIND_LINKAGE_BREAKDOWN, "T3",
+			"prop_z", Vector2.ZERO, 0.0)
+	SiteProject.bind_tasks(nproj, nrows, nmade)
+	_check("no-panel design keeps its (nonexistent) panels whole",
+			is_equal_approx(float(SiteProject.breakdown_progress(nproj, nb)["panels"]), 1.0))
+
+
+## Round 3: the sim-backed experiment lab. Everything runs through
+## run_blocking with NO SceneTree — which is itself the structural guard that
+## the lab never reaches for a scene, an autoload, or the bridge.
+func _test_experiment_lab() -> void:
+	var setup := _lab_setup(4)
+	var lab := NpcExperimentLab.new()
+	var res := lab.run_blocking(setup)
+	var rows: Array = res["rows"]
+	_check("lab produces a row per variant",
+			rows.size() == NpcExperimentLab.variants_for(setup).size(), str(rows.size()))
+	var by_id: Dictionary = {}
+	for r in rows:
+		by_id[str((r as Dictionary)["id"])] = r
+	_check("baseline finishes", str((by_id["baseline"] as Dictionary).get("status", "")) == "done",
+			str((by_id["baseline"] as Dictionary).get("dnf_reason", "")))
+
+	# Determinism. Without this the cached table would be a lie.
+	var lab2 := NpcExperimentLab.new()
+	_check("two runs are identical",
+			JSON.stringify(res["rows"]) == JSON.stringify(lab2.run_blocking(_lab_setup(4))["rows"]))
+
+	# Chunked == blocking: a frame boundary must never leak into the numbers.
+	var lab3 := NpcExperimentLab.new()
+	lab3._setup = _lab_setup(4)
+	lab3._variants = NpcExperimentLab.variants_for(lab3._setup)
+	lab3._rows = []
+	lab3._v_index = 0
+	lab3._active = true
+	lab3._begin_variant()
+	var guard := 0
+	while lab3._active and guard < 100000:
+		# Odd stride, deliberately not TICKS_PER_FRAME.
+		for _i in 7:
+			if not lab3._active:
+				break
+			lab3._step_once()
+		guard += 1
+	_check("chunked stepping matches a blocking run",
+			JSON.stringify(lab3._rows) == JSON.stringify(res["rows"]))
+
+	# The simulated makespan can never BEAT the pure scheduler: the plan is a
+	# lower bound that assumes nobody eats, sleeps or waits. That inequality is
+	# the whole reason the sim column exists next to the plan column.
+	var bounded := true
+	for r2 in rows:
+		var rd := r2 as Dictionary
+		if str(rd.get("status", "")) != "done":
+			continue
+		if float(rd.get("plan_h", 0.0)) > 0.0 \
+				and float(rd.get("makespan_h", 0.0)) < float(rd["plan_h"]) - 0.001:
+			bounded = false
+	_check("simulated makespan never beats the planned lower bound", bounded)
+	# No plan_tasks in this fixture, so drag is UNKNOWN (-1) rather than being
+	# reported as the whole makespan — claiming every hour was overhead would
+	# be worse than reporting nothing.
+	_check("drag reads unknown without a task graph",
+			float((by_id["baseline"] as Dictionary).get("drag_h", 0.0)) < 0.0)
+	var with_plan := _lab_setup(4)
+	with_plan["plan_tasks"] = [
+		{"id": "cut", "label": "Cut", "work_s": 7200.0, "min_workers": 1,
+			"max_workers": 4, "deps": []},
+		{"id": "fit", "label": "Fit", "work_s": 5400.0, "min_workers": 2,
+			"max_workers": 4, "deps": ["cut"]}]
+	var planned := NpcExperimentLab.new().run_blocking(with_plan)
+	var pbase := {}
+	for r7 in planned["rows"]:
+		if str((r7 as Dictionary)["id"]) == "baseline":
+			pbase = r7
+	_check("drag is reported against a real plan",
+			float(pbase.get("plan_h", 0.0)) > 0.0
+				and float(pbase.get("drag_h", -1.0)) >= 0.0,
+			"plan %.2f drag %.2f" % [float(pbase.get("plan_h", -1.0)),
+				float(pbase.get("drag_h", -1.0))])
+	_check("diagnostics accumulate",
+			float((by_id["baseline"] as Dictionary).get("worker_h", 0.0)) > 0.0)
+
+	# Quorum infeasibility short-circuits BEFORE any ticks are spent. Roster 4
+	# so the 2-person row exists at all (variants_for skips the crew size that
+	# IS the baseline, since it would be a duplicate).
+	var quorum_setup := _lab_setup(4)
+	for s in quorum_setup["chore_specs"]:
+		(s as Dictionary)["min_workers"] = 6
+		(s as Dictionary)["max_workers"] = 8
+	var lab4 := NpcExperimentLab.new()
+	var qres := lab4.run_blocking(quorum_setup)
+	var small := {}
+	for r3 in qres["rows"]:
+		if str((r3 as Dictionary)["id"]) == "crew_2":
+			small = r3
+	_check("an impossible quorum is named, not simulated",
+			str(small.get("status", "")) == "infeasible"
+				and str(small.get("dnf_reason", "")).contains("6"),
+			str(small.get("dnf_reason", "")))
+	# Naming it costs NOTHING. A quorum no crew size can meet must report a
+	# sentence for every row without simulating a single tick — otherwise each
+	# row burns MAX_SIM_H of sim time to arrive at "DNF". Measured directly:
+	# an all-infeasible run does zero work.
+	var never_setup := _lab_setup(4)
+	for s2 in never_setup["chore_specs"]:
+		(s2 as Dictionary)["min_workers"] = 99
+		(s2 as Dictionary)["max_workers"] = 99
+	var lab4b := NpcExperimentLab.new()
+	var nres := lab4b.run_blocking(never_setup)
+	var all_infeasible := true
+	for r6 in nres["rows"]:
+		# The haul rows are n/a here (this setup is a build, not a delivery)
+		# and never reach the feasibility probe.
+		var st6 := str((r6 as Dictionary).get("status", ""))
+		if st6 != "infeasible" and st6 != "na":
+			all_infeasible = false
+	_check("an unmeetable quorum names every simulated row", all_infeasible)
+	_check("infeasible rows cost no ticks", int(nres["ticks"]) == 0,
+			str(nres["ticks"]))
+
+	# tools_down never finishes — the hour cap must catch it rather than spin.
+	var stuck := _lab_setup(4)
+	stuck["rules"] = {"tools_down": true}
+	var lab5 := NpcExperimentLab.new()
+	var sres := lab5.run_blocking(stuck)
+	var any_dnf := false
+	for r4 in sres["rows"]:
+		if str((r4 as Dictionary).get("status", "")) == "dnf" \
+				and str((r4 as Dictionary).get("dnf_reason", "")) == "hour cap":
+			any_dnf = true
+	_check("a board that never offers work hits the hour cap", any_dnf)
+
+	# n/a rather than a missing row: an absent row reads as a bug.
+	var na_rows := 0
+	for r5 in rows:
+		if str((r5 as Dictionary).get("status", "")) == "na":
+			na_rows += 1
+	_check("haul rows are n/a on a non-delivery project", na_rows == 2, str(na_rows))
+
+	# Signature: stable under per-tick churn, sensitive to what actually
+	# changes the answer. This is what makes the panel's cache correct.
+	var sig := NpcExperimentLab.signature_for(setup)
+	var churn := _lab_setup(4)
+	(churn["chore_specs"][0] as Dictionary)["progress_h"] = 0.4
+	_check("signature ignores per-tick churn",
+			NpcExperimentLab.signature_for(churn) == sig)
+	var changed := _lab_setup(4)
+	(changed["chore_specs"][0] as Dictionary)["min_workers"] = 3
+	_check("signature tracks crew requirements",
+			NpcExperimentLab.signature_for(changed) != sig)
+	var bigger := _lab_setup(4)
+	bigger["roster_size"] = 9
+	_check("signature tracks roster size",
+			NpcExperimentLab.signature_for(bigger) != sig)
+
+	# _set_crew normalizes — update_chore does not, and a max below min is a
+	# chore nobody can ever claim.
+	var nb := NpcChoreBoard.create_empty()
+	var ncid := nb.add_chore("Job", 1.0, {"min_workers": 4, "max_workers": 4})
+	NpcExperimentLab._set_crew(nb, ncid, 4, 2)
+	_check("crew caps never invert",
+			int(nb.find(ncid)["max_workers"]) >= int(nb.find(ncid)["min_workers"]))
+
+	# force_strategy: "" must reproduce the density-derived call EXACTLY, or
+	# every existing delivery changes shape the day the lab shipped.
+	var crates: Array = []
+	for i in 7:
+		crates.append({"pid": "p%d" % i, "stage": Vector2(20.0 + i, 0.0), "label": "B%d" % i})
+	_check("force_strategy '' is byte-identical to the unforced call",
+			JSON.stringify(SiteProject.unload_spec_rows(crates, Vector2.ZERO, 12))
+				== JSON.stringify(SiteProject.unload_spec_rows(crates, Vector2.ZERO, 12, "")))
+	var forced_rt: Dictionary = SiteProject.unload_spec_rows(crates, Vector2.ZERO, 12, "round_trip")
+	var forced_br: Dictionary = SiteProject.unload_spec_rows(crates, Vector2.ZERO, 2, "brigade")
+	_check("forcing round trips yields a row per crate",
+			(forced_rt["rows"] as Array).size() == crates.size() + 1)
+	_check("forcing a brigade yields one crew chore",
+			(forced_br["rows"] as Array).size() == 2)
+
+
+## A scene-free experiment setup: two dependent tasks at a fixed spot, one
+## tagged space so needs resolve, no nav grid.
+func _lab_setup(roster: int) -> Dictionary:
+	var reg := SpaceRegistry.create_empty()
+	var pos: Dictionary = {}
+	for pair in [["kitchen", Vector2(12, 0)], ["water_point", Vector2(-12, 0)],
+			["sleep", Vector2(0, 14)], ["restroom", Vector2(0, -14)]]:
+		var c: Vector2 = pair[1]
+		reg.set_space_type({"kind": "area", "poly": [
+			[c.x - 4, c.y - 4], [c.x + 4, c.y - 4],
+			[c.x + 4, c.y + 4], [c.x - 4, c.y + 4]]}, str(pair[0]), 30)
+	for sp in reg.spaces:
+		var sd: Dictionary = sp
+		var pt: Variant = SpaceRegistry.area_interior_point(
+			(sd.get("target", {}) as Dictionary).get("poly", []) as Array)
+		pos[str(sd.get("id", ""))] = pt if pt is Vector2 else Vector2.ZERO
+	return {
+		"project_id": "proj_lab", "iid": "lab", "kind": "linkage_build",
+		"chore_specs": [
+			{"task_id": "cut", "label": "Cut", "chore_hours": 2.0, "priority": 1,
+				"exposure": "outdoor", "min_workers": 1, "max_workers": 4,
+				"target": {"kind": "pos", "x": 6.0, "z": 6.0}},
+			{"task_id": "fit", "label": "Fit", "chore_hours": 1.5, "priority": 2,
+				"exposure": "outdoor", "min_workers": 2, "max_workers": 4,
+				"depends_on": ["cut"],
+				"target": {"kind": "pos", "x": 6.0, "z": 6.0}},
+		],
+		"gate_task_id": "fit", "plan_tasks": [],
+		"registry_blob": reg.serialize(),
+		"space_pos": pos, "prop_pos": {}, "weather": {}, "starved": [],
+		"roster_size": roster, "home": Vector2.ZERO, "routine": [],
+		"rules": {}, "window": {"start_h": 7.0, "end_h": 19.0},
+		"target": {"kind": "pos", "x": 6.0, "z": 6.0},
+		"start_h": 24.0 * 400.0 + 7.0, "day_index": 400, "haul": {},
+	}
+
+
+## THE test the stall shipped past. A real camp configuration — no shower, no
+## enrichment space, work OUTDOORS, quorum 6, the SHIPPED default routine — run
+## long enough that every agent has passed the hygiene lock window (~5–13 h).
+##
+## It asserts COMPLETION, not progress. That distinction is the whole point:
+## `_test_chore_priority` asserts `progress_h > 0.0 or done_day >= 0`, which a
+## single credited substep satisfies, so it passed happily while the camp
+## froze forever four hours later.
+func _test_chore_run_to_completion() -> void:
+	var site := _make_bare_site()
+	var board := NpcChoreBoard.create_empty()
+	# 240 person-hours: MORE than a 12-person crew can do in one day, so
+	# completion necessarily spans the hygiene lock window (~5–13 h in). A
+	# smaller job finishes before the first agent locks and passes on broken
+	# code — which is exactly how the experiment lab's "done" rows all landed
+	# at 4.5–5.5 h and hid the bug.
+	var cid := board.add_chore("Raise the frame", 240.0, {
+		"window": {"start_h": 7.0, "end_h": 19.0},
+		"exposure": NpcWeatherGate.EXPOSURE_OUTDOOR,
+		"repeat": "once", "min_workers": 6, "max_workers": 12,
+		"target": {"kind": "pos", "x": 60.0, "z": 0.0},
+	})
+	var engine := NpcPopulationEngine.new()
+	engine.configure(12, "raise", Vector2.ZERO)
+	engine.chore_board = board
+	engine.routine = NpcRoutine.default_day()   # the SHIPPED default, on purpose
+	_run_sim(engine, site, 9.0, 24.0 * 6.0, 1.0 / 60.0)
+	if board.remaining(cid) > 0.0:
+		_dump_stall(engine, board)
+	_check("a 240 h crew chore completes in 6 days on a real camp",
+			board.remaining(cid) <= 0.0, "%.1f h left" % board.remaining(cid))
+	_check("completion is recorded",
+			int(board.find(cid).get("done_day", -1)) >= 0)
+	# And the camp is still standing: the fix must not have traded a stall for
+	# people working themselves to death.
+	_check("everyone is still here", engine.agents.size() == 12,
+			str(engine.agents.size()))
+
+
+## Why the board froze, per agent. Without this, "nothing completes" is a
+## week of bisecting; with it, twelve identical lines name the cause on the
+## first run.
+func _dump_stall(engine: NpcPopulationEngine, board: NpcChoreBoard) -> void:
+	print("  STALL DUMP — %d agents, %.2f h of work left" % [
+		engine.agents.size(), board.remaining(str(board.chores[0].get("id", "")))])
+	var tally: Dictionary = {}
+	for a in engine.agents:
+		var ag: NpcAgent = a
+		var key := "%s|%s|%s" % [ag.state, ag.activity, ag.blocking_need()]
+		tally[key] = int(tally.get(key, 0)) + 1
+	for k in tally:
+		print("    x%-3d state|activity|blocked = %s" % [int(tally[k]), str(k)])
+	var sample: NpcAgent = engine.agents[0] if not engine.agents.is_empty() else null
+	if sample != null:
+		print("    sample needs: %s" % str(sample.needs))
+		print("    sample blocked: %s  retry_at: %s" % [
+			str(sample.blocked), str(sample.retry_at)])
+
+
+## The edges of the ladder change, each pinned so a future "just fall through
+## for everything" cannot land.
+func _test_ladder_edges() -> void:
+	var site := _make_bare_site()
+	var board := NpcChoreBoard.create_empty()
+	board.add_chore("Fix the pump", 4.0, {
+		"window": {"start_h": 0.0, "end_h": 24.0},
+		"exposure": NpcWeatherGate.EXPOSURE_INDOOR,
+		"target": {"kind": "pos", "x": 5.0, "z": 5.0},
+	})
+	var ctx := {"registry": site["registry"], "pos_of": site["pos_of"],
+		"hour_of_day": 12.0, "board": board, "weather": {}}
+
+	# A comfort need that cannot be met must NOT stop work. This is the bug.
+	var a := NpcAgent.make("comfort", Vector2.ZERO)
+	for n in a.needs:
+		a.needs[n] = 0.0
+	a.needs["hygiene"] = 0.95
+	a._step_idle(12.0, ctx)
+	_check("an unmeetable comfort need never blocks work",
+			a.activity == NpcAgent.CHORE_ACTIVITY, "activity=%s" % a.activity)
+
+	# A critical need still does — that is the survival sim, and deliberate.
+	var starve_site := _make_bare_site()
+	(starve_site["registry"] as SpaceRegistry).spaces.clear()   # nothing tagged
+	var b := NpcAgent.make("hungry", Vector2.ZERO)
+	for n2 in b.needs:
+		b.needs[n2] = 0.0
+	b.needs["hunger"] = 0.9
+	b._step_idle(12.0, {"registry": starve_site["registry"],
+		"pos_of": starve_site["pos_of"], "hour_of_day": 12.0,
+		"board": board, "weather": {}})
+	_check("an unmeetable CRITICAL need still absorbs",
+			b.activity.is_empty() and b.state == NpcAgent.State.IDLE
+				and b.is_blocked("hunger"))
+
+	# The status line must name what they cannot GET, not what is highest.
+	# Enrichment pins at 1.0 on any site with no fire circle, and it used to
+	# win — so the readout blamed the fire circle for a missing kitchen.
+	b.needs["enrichment"] = 1.0
+	_check("status names the blocker, not the loudest need",
+			b.status_line().contains(SpaceTypes.label("kitchen")),
+			b.status_line())
+	_check("blocking_need is the blocked one", b.blocking_need() == "hunger")
+
+	# The block clock latches on FIRST failure — retrying every backoff must
+	# not keep resetting it, or no alarm could ever reach its threshold.
+	b._mark_blocked("hunger", 20.0)
+	_check("re-marking keeps the original block time",
+			absf(b.blocked_hours("hunger", 20.0) - 8.0) < 0.001,
+			"%.2f" % b.blocked_hours("hunger", 20.0))
+
+	# _most_urgent ranks by normalized excess among needs ALREADY over.
+	var c := NpcAgent.make("masked", Vector2.ZERO)
+	for n3 in c.needs:
+		c.needs[n3] = 0.0
+	c.needs["bladder"] = 0.74   # threshold 0.75 — NOT over
+	c.needs["hunger"] = 0.60    # threshold 0.55 — over
+	_check("a high sub-threshold need cannot mask an over-threshold one",
+			c._most_urgent() == "hunger", c._most_urgent())
+	for n4 in c.needs:
+		c.needs[n4] = 0.0
+	_check("nothing over threshold means nothing urgent", c._most_urgent().is_empty())
+
+	# The preempt floor: a mustered crew holds through ordinary thirst.
+	var cb := NpcChoreBoard.create_empty()
+	var crew_id := cb.add_chore("Raise", 10.0, {
+		"window": {"start_h": 0.0, "end_h": 24.0}, "repeat": "once",
+		"min_workers": 2, "max_workers": 6,
+		"exposure": NpcWeatherGate.EXPOSURE_INDOOR})
+	var w := NpcAgent.make("crew1", Vector2.ZERO)
+	for n5 in w.needs:
+		w.needs[n5] = 0.0
+	cb.claim(crew_id, "crew1")
+	cb.claim(crew_id, "crew2")
+	w.chore_id = crew_id
+	w.activity = NpcAgent.CHORE_ACTIVITY
+	w.state = NpcAgent.State.DOING
+	var cctx := {"board": cb, "weather": {}, "hour_of_day": 12.0, "registry": null}
+	w.needs["thirst"] = 0.60
+	w._step_chore(12.0, 0.1, cctx)
+	_check("a quorate crew works through ordinary thirst",
+			w.chore_id == crew_id, "left at 0.60")
+	w.needs["thirst"] = 0.97
+	w._step_chore(12.1, 0.1, cctx)
+	_check("a quorate crew still breaks for a real emergency",
+			w.chore_id.is_empty())
+
+
+## The consequence dropdown: what running out actually does.
+func _test_consequence_policy() -> void:
+	_check("unknown policies normalize to the safe default",
+			NpcConsequence.normalize("nonsense") == NpcConsequence.STRIKE
+				and NpcConsequence.normalize("") == NpcConsequence.STRIKE
+				and NpcConsequence.DEFAULT == NpcConsequence.STRIKE)
+	_check("a full bladder is never fatal",
+			not NpcConsequence.triggers(NpcConsequence.PERISH, "bladder", 100000.0))
+	_check("strike never triggers a removal",
+			not NpcConsequence.triggers(NpcConsequence.STRIKE, "thirst", 100000.0))
+	_check("leave fires after a day, not before",
+			NpcConsequence.triggers(NpcConsequence.LEAVE, "thirst", 24.5)
+				and not NpcConsequence.triggers(NpcConsequence.LEAVE, "thirst", 23.5))
+	_check("thirst kills long before hunger",
+			NpcConsequence.PERISH_AFTER_H["thirst"] < NpcConsequence.PERISH_AFTER_H["hunger"])
+
+	# A camp with NOTHING tagged, so every critical need is blocked from the
+	# first tick — the worst case each policy has to answer for.
+	var bare := func() -> Dictionary:
+		var reg := SpaceRegistry.create_empty()
+		return {"registry": reg, "pos_of": func(_s: Dictionary) -> Variant: return null}
+
+	# STRIKE is the shipped behaviour: people stop, nobody is removed.
+	var strike := NpcPopulationEngine.new()
+	strike.configure(6, "strike", Vector2.ZERO)
+	strike.consequence = NpcConsequence.STRIKE
+	var strike_lost: Array = []
+	strike.agent_lost.connect(func(_a: String, _n: String, _r: String) -> void:
+		strike_lost.append(1))
+	_run_sim(strike, bare.call(), 8.0, 24.0 * 4.0, 1.0 / 30.0)
+	# STRIKE removes nobody BY SHORTAGE. Morale-driven departure is a separate,
+	# always-on mechanic and still runs — which is exactly what shipped, and
+	# what the blurb now says out loud.
+	_check("STRIKE kills nobody", strike_lost.is_empty()
+			and int(strike.summary().get("losses", -1)) == 0)
+
+	# LEAVE routes through the existing departure path — so the cascade, the
+	# signal and the collapse check are all the ones that already shipped.
+	var leave := NpcPopulationEngine.new()
+	leave.configure(6, "leave", Vector2.ZERO)
+	leave.consequence = NpcConsequence.LEAVE
+	var left_events: Array = []
+	leave.agent_departed.connect(func(_a: String, _n: String, r: String) -> void:
+		left_events.append(r))
+	var lost_on_leave: Array = []
+	leave.agent_lost.connect(func(_a: String, _n: String, _r: String) -> void:
+		lost_on_leave.append(1))
+	_run_sim(leave, bare.call(), 8.0, 24.0 * 4.0, 1.0 / 30.0)
+	_check("LEAVE empties the camp", leave.agents.size() < 6, str(leave.agents.size()))
+	_check("LEAVE reports departures, never losses",
+			not left_events.is_empty() and lost_on_leave.is_empty())
+	_check("LEAVE records no deaths", int(leave.summary().get("losses", -1)) == 0)
+
+	# PERISH is the only policy that removes people via the new path, and it
+	# must emit a DISTINCT signal — challenge code keys off departures.
+	var perish := NpcPopulationEngine.new()
+	perish.configure(6, "perish", Vector2.ZERO)
+	perish.consequence = NpcConsequence.PERISH
+	var lost: Array = []
+	perish.agent_lost.connect(func(_a: String, _n: String, r: String) -> void:
+		lost.append(r))
+	# Long enough to pass the thirst window (72 h) with margin.
+	_run_sim(perish, bare.call(), 8.0, 24.0 * 5.0, 1.0 / 30.0)
+	_check("PERISH loses people", not lost.is_empty(), str(lost.size()))
+	_check("PERISH names the cause",
+			(not lost.is_empty()) and str(lost[0]).contains("water"), str(lost))
+	# And it must not ALSO let them walk out — that would be the LEAVE outcome
+	# wearing this policy's name, and at 24 h vs 72 h it would win every time,
+	# so PERISH would silently never fire.
+	_check("PERISH replaces walking out rather than racing it",
+			int(perish.summary().get("departures", 0)) == lost.size())
+	_check("losses are counted", int(perish.summary().get("losses", 0)) == lost.size())
+	# ...and it takes materially longer than walking out would have.
+	_check("dying of thirst takes longer than quitting",
+			NpcConsequence.PERISH_AFTER_H["thirst"] > NpcConsequence.LEAVE_AFTER_H)
+
+	# The count survives save/load.
+	var rt := NpcPopulationEngine.new()
+	rt.restore(perish.snapshot(100.0))
+	_check("losses round-trip", int(rt.summary().get("losses", -1)) == lost.size())
+
+
+## The settlement feed: cursors that do not starve each other, and latches
+## that do not strobe.
+func _test_settlement_log() -> void:
+	var lg := SettlementLog.create_empty()
+	lg.add("work", "Cut beams finished", 10.0)
+	lg.add("work", "Drilled holes", 11.0)
+
+	# THE fix: two readers, neither destroys the other's view. take_events()
+	# emptied a shared array, so a bake silently ate the player's toasts.
+	_check("first consumer sees everything", lg.since("hud").size() == 2)
+	_check("a second consumer sees it too — reading is not a drain",
+			lg.since("bake").size() == 2)
+	_check("a consumer does not re-read what it has seen", lg.since("hud").is_empty())
+	lg.add("work", "Bolted the ring", 12.0)
+	_check("a consumer sees only what is new", lg.since("hud").size() == 1)
+	_check("the other consumer catches up independently",
+			lg.since("bake").size() == 1)
+
+	# Latching: an alarm fires once, however often the underlying flag flaps.
+	var first := lg.latch("need_unmet|h|hygiene", "Nobody can reach a Shower", 13.0)
+	var again := lg.latch("need_unmet|h|hygiene", "Nobody can reach a Shower", 13.5)
+	_check("an alarm fires once, not once per retry", first and not again)
+	_check("the alarm is standing", lg.is_latched("need_unmet|h|hygiene"))
+	_check("standing alarms are listable", lg.open_alarms().size() == 1)
+	_check("relief clears the latch",
+			lg.clear_latch("need_unmet|h|hygiene", "Showers are back", 20.0))
+	_check("clearing twice is a no-op",
+			not lg.clear_latch("need_unmet|h|hygiene", "Showers are back", 21.0))
+	_check("the alarm can fire again after relief",
+			lg.latch("need_unmet|h|hygiene", "Nobody can reach a Shower", 30.0))
+
+	# Severity filters rather than interrupts — nothing here is modal.
+	lg.add("chatter", "Someone had lunch", 31.0, SettlementLog.INFO)
+	var alerts := lg.recent(50, SettlementLog.ALERT)
+	var all_alerts := true
+	for e in alerts:
+		if int((e as Dictionary)["severity"]) < SettlementLog.ALERT:
+			all_alerts = false
+	_check("severity filters the feed", all_alerts and not alerts.is_empty())
+	_check("recent is newest-first",
+			int((lg.recent(1)[0] as Dictionary)["abs_h"]) == 31)
+
+	# Bounded: a week at speed must not grow the buffer without limit.
+	for i in SettlementLog.CAP * 2:
+		lg.add("spam", "tick %d" % i, float(i))
+	_check("the buffer is bounded", lg.entries.size() == SettlementLog.CAP)
+	_check("a cursor past the trim point still returns only new lines",
+			lg.since("hud").size() <= SettlementLog.CAP)
 
 
 func _test_chore_priority() -> void:
@@ -2155,6 +3552,68 @@ func _test_desire_map_render() -> void:
 			and NpcDesireMap.heat_color(5.0).a == c1.a)
 
 
+## Live-trail expiry: the render trail behind each dot must age out, or an
+## idle agent's last 48 waypoints sit painted on the Site Plan forever — 50
+## sleepers left a permanent web over the whole camp.
+func _test_trail_expiry() -> void:
+	var a := NpcAgent.make("trail_test", Vector2.ZERO)
+	# Seed points through _account_walk's own append path (ctx carries the
+	# stamp), spaced past TRAIL_STEP_M so every segment lands.
+	var t := 100.0
+	for i in 6:
+		var from := Vector2(float(i) * 2.0, 0.0)
+		var to := Vector2(float(i + 1) * 2.0, 0.0)
+		a.pos = from
+		a._account_walk(2.0, from, to, {"abs_hours": t + float(i) * 0.05})
+	_check("trail seeded", a.trail.size() == 6, str(a.trail.size()))
+	_check("trail stamps in lockstep", a.trail_t.size() == a.trail.size())
+	# Nothing old yet: trimming at the last stamp keeps everything.
+	a.trim_trail(t + 0.25)
+	_check("young trail survives trim", a.trail.size() == 6)
+	# Age half the points past TRAIL_MAX_AGE_H.
+	a.trim_trail(t + NpcAgent.TRAIL_MAX_AGE_H + 0.12)
+	_check("aged points dropped", a.trail.size() < 6 and a.trail.size() > 0,
+			str(a.trail.size()))
+	_check("stamps still lockstep", a.trail_t.size() == a.trail.size())
+	# Idle long enough and the whole trail is gone.
+	a.trim_trail(t + 24.0)
+	_check("idle trail fully expires", a.trail.is_empty())
+	# Backward scrub: stamps in the future are a discontinuity — drop them.
+	a._account_walk(2.0, Vector2.ZERO, Vector2(2, 0), {"abs_hours": 500.0})
+	a.trim_trail(400.0)
+	_check("future-stamped trail cleared on scrub-back", a.trail.is_empty())
+	# clear_trail is total.
+	a._account_walk(2.0, Vector2.ZERO, Vector2(2, 0), {"abs_hours": 600.0})
+	a.clear_trail()
+	_check("clear_trail empties both arrays",
+			a.trail.is_empty() and a.trail_t.is_empty())
+
+
+## The bridge's texture-rebuild gate: a THROTTLED call must not consume the
+## dirty flag. The old form did (`stale and changed` evaluated take_dirty()
+## unconditionally), so a change landing inside the throttle window was
+## forgotten and the raster stayed stale until the NEXT mutation. The pure
+## rule lives on NpcDesireMap (this suite must never load the bridge script —
+## its bare PerfMonitor identifier kills the --script compile silently).
+func _test_desire_tex_rebuild_gate() -> void:
+	_check("force always rebuilds",
+			NpcDesireMap.tex_should_rebuild(true, 0.0, 0.5, false))
+	_check("throttled call declines even when dirty",
+			not NpcDesireMap.tex_should_rebuild(false, 0.0, 0.5, true))
+	_check("stale + dirty rebuilds",
+			NpcDesireMap.tex_should_rebuild(false, 999.0, 0.5, true))
+	_check("stale + clean declines",
+			not NpcDesireMap.tex_should_rebuild(false, 999.0, 0.5, false))
+	# set_retention(TODAY) must take effect immediately — the menu item's whole
+	# point is dropping the fossil without waiting for the day boundary.
+	var m := NpcDesireMap.new()
+	m.configure(Vector2.ZERO, 50.0)
+	m.add_segment(Vector2(-20, 0), Vector2(20, 0), "thirst", 100.0)
+	m.set_retention(NpcDesireMap.Retention.TODAY)
+	_check("switching to TODAY clears immediately", m.total_metres() < 0.01)
+	_check("immediate clear marks dirty", m.take_dirty())
+
+
 func _test_desire_from_walking() -> void:
 	# End to end: run the sim with a trace hook and confirm the heat lands on
 	# the corridors between tagged spaces, not scattered noise.
@@ -2164,6 +3623,7 @@ func _test_desire_from_walking() -> void:
 	var engine := NpcPopulationEngine.new()
 	engine.configure(6, "desire", Vector2.ZERO)
 	var t := 8.0
+	var trail_seen := 0
 	while t < 8.0 + 24.0:
 		t += 1.0 / 60.0
 		engine.tick(t, {
@@ -2172,6 +3632,7 @@ func _test_desire_from_walking() -> void:
 			"trace": func(a: Vector2, b: Vector2, ch: String, mm: float) -> void:
 				m.add_segment(a, b, ch, mm),
 		})
+		trail_seen = maxi(trail_seen, (engine.agents[0] as NpcAgent).trail.size())
 	_check("walking leaves a trace", m.total_metres() > 100.0, "%.0f m" % m.total_metres())
 	_check("paths are worn in", m.hot_cells(2.0) > 5, "%d cells" % m.hot_cells(2.0))
 
@@ -2183,11 +3644,19 @@ func _test_desire_from_walking() -> void:
 	var thirst_tex := m.texture("thirst")
 	_check("thirst traffic recorded", thirst_tex != null)
 
-	# Agents also carry a bounded live trail for the overlay.
+	# Agents carry a bounded live trail for the overlay — visible WHILE they
+	# walk, aged out within TRAIL_MAX_AGE_H once they stop (an idle agent's
+	# permanent painted web was the bug the expiry exists to fix, so "still
+	# has a trail at the end of the day" is exactly wrong to assert).
+	_check("agents keep a trail while walking", trail_seen > 0)
+	_check("the trail is bounded", trail_seen <= NpcAgent.TRAIL_MAX,
+			"%d" % trail_seen)
 	var a0: NpcAgent = engine.agents[0]
-	_check("agents keep a trail", a0.trail.size() > 0)
-	_check("the trail is bounded", a0.trail.size() <= NpcAgent.TRAIL_MAX,
-			"%d" % a0.trail.size())
+	var all_recent := true
+	for i in a0.trail_t.size():
+		if t - a0.trail_t[i] > NpcAgent.TRAIL_MAX_AGE_H + 0.05:
+			all_recent = false
+	_check("surviving trail points are recent", all_recent)
 	var dots := engine.agent_dots()
 	_check("dots expose the trail", (dots[0] as Dictionary).has("trail"))
 
@@ -2762,16 +4231,26 @@ func _test_routine_schedule() -> void:
 	# The schedule the player asked for, spot-checked at its boundaries.
 	_check("asleep at 02:00", str(r.block_at(2.0).get("kind", "")) == NpcRoutine.SLEEP)
 	_check("asleep at 23:45", str(r.block_at(23.75).get("kind", "")) == NpcRoutine.SLEEP)
-	_check("bathroom at 09:02", str(r.block_at(9.03).get("kind", "")) == NpcRoutine.BATHROOM)
-	_check("eating at 09:30", str(r.block_at(9.5).get("kind", "")) == NpcRoutine.EAT)
-	_check("enrichment at 10:30", str(r.block_at(10.5).get("kind", "")) == NpcRoutine.ENRICHMENT)
+	_check("bathroom at 08:02", str(r.block_at(8.03).get("kind", "")) == NpcRoutine.BATHROOM)
+	_check("eating at 08:30", str(r.block_at(8.5).get("kind", "")) == NpcRoutine.EAT)
+	_check("enrichment at 09:30", str(r.block_at(9.5).get("kind", "")) == NpcRoutine.ENRICHMENT)
 	_check("working at 12:00", str(r.block_at(12.0).get("kind", "")) == NpcRoutine.WORK)
 	_check("eating at 13:30", str(r.block_at(13.5).get("kind", "")) == NpcRoutine.EAT)
 	_check("bathroom at 13:58", str(r.block_at(13.97).get("kind", "")) == NpcRoutine.BATHROOM)
 	_check("working at 16:00", str(r.block_at(16.0).get("kind", "")) == NpcRoutine.WORK)
 	_check("eating at 18:30", str(r.block_at(18.5).get("kind", "")) == NpcRoutine.EAT)
 	_check("bathroom at 19:02", str(r.block_at(19.03).get("kind", "")) == NpcRoutine.BATHROOM)
-	_check("enrichment at 21:00", str(r.block_at(21.0).get("kind", "")) == NpcRoutine.ENRICHMENT)
+	# The evening block is FREE, not ENRICHMENT — that is what lets it reach the
+	# chore board at all (only WORK and FREE do; every other kind resolves to a
+	# need and returns). Typed ENRICHMENT it contributed zero work hours.
+	_check("free at 21:00", str(r.block_at(21.0).get("kind", "")) == NpcRoutine.FREE)
+	# The work budget itself, pinned so a future routine edit cannot quietly
+	# re-starve the board the way the ENRICHMENT typing did.
+	var chore_h := r.hours_of(NpcRoutine.WORK) + r.hours_of(NpcRoutine.FREE)
+	_check("the default day leaves >=10 chore-eligible hours", chore_h >= 10.0,
+			"%.2f h" % chore_h)
+	_check("the default day still tiles 24 h",
+			absf(r.total_hours() - 24.0) < 0.001, "%.3f" % r.total_hours())
 
 	# A bathroom block really is ~5 minutes.
 	var visit := r.hours_of(NpcRoutine.BATHROOM) / 3.0
@@ -2823,6 +4302,470 @@ func _test_routine_schedule() -> void:
 ## The behaviour the player actually reported: people arriving at the restroom
 ## and STAYING there, because a finished activity left them idling wherever
 ## they stood and nearest-space selection then kept picking the same place.
+## Recurrence — weekly, every-N, and the epoch the weekday rests on.
+func _test_recurrence() -> void:
+	# THE PIN. `weekday()` is `day_index % 7` and is only correct because
+	# abs_hours counts from proleptic-Gregorian year 1 Jan 1, which was a
+	# Monday. If CelestialClock's origin ever moves, this fails loudly here
+	# instead of quietly shifting everyone's laundry day.
+	# 2026-08-08 is a Saturday; its day index is 739835.
+	var sat := 739835
+	_check("the weekday epoch is Monday-aligned",
+		NpcChoreBoard.weekday_of_day(sat) == 5,
+		"day %d -> %d, want 5 (Sat)" % [sat, NpcChoreBoard.weekday_of_day(sat)])
+	_check("and it advances", NpcChoreBoard.weekday_of_day(sat + 1) == 6
+		and NpcChoreBoard.weekday_of_day(sat + 2) == 0)
+	_check("weekday() agrees with weekday_of_day()",
+		NpcChoreBoard.weekday(float(sat) * 24.0 + 9.5) == 5)
+
+	# Fail-closed normalization. Two producers emitted a BOOL here.
+	_check("a bool repeat normalizes to once",
+		NpcChoreBoard.normalize_repeat(false) == "once")
+	_check("an unknown repeat normalizes to once",
+		NpcChoreBoard.normalize_repeat("fortnightly") == "once")
+	_check("a legal repeat survives",
+		NpcChoreBoard.normalize_repeat("weekly") == "weekly")
+
+	var b := NpcChoreBoard.create_empty()
+	var h := func(day: int) -> float: return float(day) * 24.0 + 9.0
+
+	# every_n: due on the Nth day, not before.
+	var e := b.add_chore("Water the beds", 0.5,
+		{"repeat": "every_n", "repeat_days": 3, "window": {"start_h": 0.0, "end_h": 24.0}})
+	b.find(e)["done_day"] = sat
+	_check("every_n is not due the next day",
+		b.available_for("a", h.call(sat + 1), 9.0, {}, 1).is_empty())
+	_check("nor two days later",
+		b.available_for("a", h.call(sat + 2), 9.0, {}, 1).is_empty())
+	_check("and IS due on the third",
+		b.available_for("a", h.call(sat + 3), 9.0, {}, 1).size() == 1)
+
+	# weekly on Wednesday (2). THE ASSERTION THAT FAILS ON THE OLD CODE: before
+	# this, "weekly" was not a legal value, fell through _is_due's silent
+	# `return false`, and the chore was never due again for the rest of the run.
+	var mon := sat + 2                      # Saturday + 2 = Monday
+	var w := b.add_chore("Clean the bathrooms", 1.0,
+		{"repeat": "weekly", "repeat_dow": [2], "window": {"start_h": 0.0, "end_h": 24.0}})
+	b.find(w)["done_day"] = mon
+	var due_on := func(day: int) -> bool:
+		for c in b.available_for("a", h.call(day), 9.0, {}, 1):
+			if str((c as Dictionary).get("id", "")) == w:
+				return true
+		return false
+	_check("a weekly chore is not due the day after it ran",
+		not due_on.call(mon + 1), "Tuesday")
+	_check("and IS due on its weekday", due_on.call(mon + 2), "Wednesday")
+	_check("and is still due the day after, uncaught",
+		due_on.call(mon + 3), "Thursday with catch_up")
+
+	# catch_up false skips a missed slot — Wednesday's lunch cannot be cooked
+	# on Friday.
+	b.find(w)["catch_up"] = false
+	_check("without catch-up a missed weekday is skipped",
+		not due_on.call(mon + 3))
+	_check("but the next occurrence still lands", due_on.call(mon + 9))
+
+	# A weekly with no weekdays named degrades to "every 7 days" rather than
+	# to never.
+	var wd := b.add_chore("Vague weekly", 1.0,
+		{"repeat": "weekly", "window": {"start_h": 0.0, "end_h": 24.0}})
+	b.find(wd)["done_day"] = mon
+	var due_wd := func(day: int) -> bool:
+		for c in b.available_for("a", h.call(day), 9.0, {}, 1):
+			if str((c as Dictionary).get("id", "")) == wd:
+				return true
+		return false
+	_check("a weekday-less weekly waits a week", not due_wd.call(mon + 6))
+	_check("and then comes due", due_wd.call(mon + 7))
+
+	# The bounded scan: a month late must still read as due, and cheaply.
+	b.find(w)["catch_up"] = true
+	_check("a month-late weekly is due", due_on.call(mon + 40))
+
+	# Round-trip, including the fail-closed pass on load.
+	var b2 := NpcChoreBoard.create_empty()
+	b2.deserialize(b.serialize())
+	_check("recurrence survives a round trip",
+		str(b2.find(w).get("repeat", "")) == "weekly"
+			and (b2.find(w).get("repeat_dow", []) as Array) == [2])
+	var raw := b.serialize()
+	(raw["chores"][0] as Dictionary)["repeat"] = false
+	var b3 := NpcChoreBoard.create_empty()
+	b3.deserialize(raw)
+	_check("a bool repeat on disk loads as once",
+		str(b3.chores[0].get("repeat", "")) == "once")
+
+	# Pruning: finished one-offs go, system-owned ones stay.
+	var b4 := NpcChoreBoard.create_empty()
+	var plain := b4.add_chore("Plain", 1.0, {"repeat": "once"})
+	var keyed := b4.add_chore("Machine", 1.0, {"repeat": "once", "chore_key": "mach|g|s"})
+	var eff := b4.add_chore("Effectful", 1.0,
+		{"repeat": "once", "effect": {"op": "unpack_prop", "prop_id": "p"}})
+	var daily := b4.add_chore("Daily", 1.0, {"repeat": "daily"})
+	for cid in [plain, keyed, eff, daily]:
+		b4.find(cid)["done_day"] = sat
+	var pruned := b4.prune_completed(h.call(sat + 10))
+	_check("a finished one-off is retired", pruned == 1, "%d pruned" % pruned)
+	_check("a system-keyed chore is kept", not b4.find_by_key("mach|g|s").is_empty())
+	_check("an unfired effect is kept", not b4.find(eff).is_empty())
+	_check("a repeating chore is kept", not b4.find(daily).is_empty())
+	b4.find(eff)["effect_done"] = true
+	_check("a FIRED effect is then retired",
+		b4.prune_completed(h.call(sat + 10)) == 1)
+	_check("and a recent one is not",
+		b4.prune_completed(h.call(sat + 1)) == 0)
+
+
+## NpcWorkPose — which work a chore IS.
+##
+## Driven from REAL SiteProject spec rows wherever possible rather than
+## hand-built dictionaries: the classifier's whole value is that it reads the
+## vocabulary the generators actually emit, and a fixture I wrote myself would
+## only prove I can restate my own rules.
+func _test_work_pose_classifier() -> void:
+	# Closure first — a family with no clip, or a clip that is not aliased onto
+	# the rigged body's single work animation, would render as a missing-clip
+	# freeze on one body and nothing at all on the other.
+	for fam in NpcWorkPose.FAMILIES:
+		var c := NpcWorkPose.clip_for(str(fam))
+		_check("family %s has a clip" % fam, not c.is_empty())
+		_check("and it resolves to a real rig clip: %s" % c,
+			NpcPoseMachine._clip_file_for(c) == NpcRig.CLIP_WORK
+				or NpcPoseMachine._clip_file_for(c) == NpcRig.CLIP_IDLE, c)
+	_check("an empty chore still classifies",
+		NpcWorkPose.FAMILIES.has(NpcWorkPose.family_for({})))
+	_check("an unknown chore still classifies",
+		NpcWorkPose.FAMILIES.has(NpcWorkPose.family_for({"label": "???"})))
+
+	# A real brigade unload: one crew chore whose crates flow as stage effects.
+	var crates: Array = []
+	for i in 4:
+		crates.append({"pid": "crate_%d" % i, "x": float(i), "z": 0.0})
+	# NOTE the return is a {rows, strategy, plan} dict, not a bare Array —
+	# indexing it as an Array throws, and a Godot runtime error ABORTS this
+	# whole function while the suite still prints PASS. Which is exactly what
+	# it did on the first run of this test: 16 of 35 checks silently vanished.
+	var brigade: Array = SiteProject.unload_spec_rows(
+		crates, Vector2.ZERO, 9, "brigade").get("rows", [])
+	_check("the brigade fixture produced rows", not brigade.is_empty())
+	var saw_hold := false
+	var saw_gate := false
+	for r in brigade:
+		var fam := NpcWorkPose.family_for(r as Dictionary)
+		if fam == NpcWorkPose.HAUL_HOLD:
+			saw_hold = true
+		if fam == NpcWorkPose.INSPECT:
+			saw_gate = true
+	_check("a brigade unload reads as a relay hold", saw_hold)
+	_check("and its completion gate reads as an inspection", saw_gate)
+
+	# The round-trip strategy instead: every crate is its own carry.
+	var trips: Array = SiteProject.unload_spec_rows(
+		crates, Vector2.ZERO, 2, "round_trip").get("rows", [])
+	_check("the round-trip fixture produced rows", not trips.is_empty())
+	var lifts := 0
+	for r in trips:
+		if NpcWorkPose.family_for(r as Dictionary) == NpcWorkPose.LIFT:
+			lifts += 1
+	_check("round-trip hauling reads as lifting", lifts >= crates.size(),
+		"%d lift rows of %d" % [lifts, trips.size()])
+
+	# The Linkage Lab's fabrication phases, which arrive as set_build_phase.
+	var want := {
+		"cut": NpcWorkPose.DRILL, "drill": NpcWorkPose.DRILL,
+		"assemble": NpcWorkPose.OVERHEAD, "assemble_j1": NpcWorkPose.OVERHEAD,
+		"brackets": NpcWorkPose.OVERHEAD, "bolts": NpcWorkPose.OVERHEAD,
+		"fold_test": NpcWorkPose.LIFT,
+	}
+	for phase in want:
+		var got := NpcWorkPose.family_for({"chore_hours": 2.0,
+			"effect": {"op": "set_build_phase", "phase": str(phase)}})
+		_check("phase %s reads as %s" % [phase, want[phase]],
+			got == str(want[phase]), got)
+	_check("raising the structure reads as lifting",
+		NpcWorkPose.family_for({"chore_hours": 2.0,
+			"effect": {"op": "unpack_prop"}}) == NpcWorkPose.LIFT)
+	_check("mounting panels reads as overhead work",
+		NpcWorkPose.family_for({"chore_hours": 2.0,
+			"effect": {"op": "seed_graph"}}) == NpcWorkPose.OVERHEAD)
+
+	# Machine-minted labour (the labour merge keys these `mach|<gid>|<step>`).
+	_check("tending a machine reads as bench work",
+		NpcWorkPose.family_for({"chore_key": "mach|g1|s3", "chore_hours": 0.5})
+			== NpcWorkPose.BENCH)
+	# And a hand-authored crew chore with no effect at all.
+	_check("a plain crew chore reads as overhead work",
+		NpcWorkPose.family_for({"chore_hours": 4.0, "min_workers": 3})
+			== NpcWorkPose.OVERHEAD)
+	_check("a plain solo chore falls back to digging",
+		NpcWorkPose.family_for({"chore_hours": 4.0, "min_workers": 1})
+			== NpcWorkPose.DIG)
+
+	# merge_catalog must not disturb what was already there.
+	var base := {"idle": {"len": 1.0, "loops": true}}
+	var merged := NpcWorkPose.merge_catalog(base)
+	_check("merge_catalog keeps the installed art", merged.has("idle"))
+	_check("and adds the transitions", merged.has(NpcWorkPose.CLIP_WORK_ENTER)
+		and merged.has(NpcWorkPose.CLIP_WORK_EXIT))
+	_check("and does not mutate its input", base.size() == 1)
+	var missing: Array = []
+	for fam2 in NpcWorkPose.FAMILIES:
+		var c2 := NpcWorkPose.clip_for(str(fam2))
+		if NpcWorkPose.is_work_clip(c2) and not merged.has(c2):
+			missing.append(c2)
+	_check("every procedural family clip is in the merged catalog",
+		missing.is_empty(), str(missing))
+
+
+## Circular concentration R over a set of bearings: 1.0 = everyone pointing
+## identically, 0.0 = uniformly spread. The right statistic for "do they all
+## face the same way", because a plain variance over angles is wrong across the
+## ±PI wrap.
+static func _yaw_concentration(yaws: Array) -> float:
+	if yaws.is_empty():
+		return 1.0
+	var sx := 0.0
+	var sy := 0.0
+	for y in yaws:
+		sx += cos(float(y))
+		sy += sin(float(y))
+	return Vector2(sx, sy).length() / float(yaws.size())
+
+
+## NpcFacing — the pure maths, including the two properties that make the
+## anchor scheme work rather than merely compile.
+func _test_facing_rules() -> void:
+	var origin := Vector2.ZERO
+	# CelestialClock convention: north is −Z, so an anchor "north" of us is at
+	# negative Y in the XZ plane and reads as yaw 0.
+	_check("an anchor due north reads as yaw 0",
+		absf(NpcFacing.base_yaw(origin, Vector2(0.0, -10.0), 1.0)) < 1e-5)
+	_check("an anchor due east reads as yaw -PI/2",
+		absf(NpcFacing.base_yaw(origin, Vector2(10.0, 0.0), 1.0) + PI * 0.5) < 1e-5)
+
+	# Degenerate anchors fall back to the agent's own phase, so a camp with
+	# nothing to look at still faces every which way instead of all facing north.
+	_check("no anchor falls back to the agent's phase",
+		is_equal_approx(NpcFacing.base_yaw(origin, Vector2.INF, 1.234), 1.234))
+	_check("an anchor under our feet falls back too",
+		is_equal_approx(NpcFacing.base_yaw(origin, Vector2(0.1, 0.0), 1.234), 1.234))
+	_check("and different agents fall back differently",
+		not is_equal_approx(NpcFacing.base_yaw(origin, Vector2.INF, 1.0),
+			NpcFacing.base_yaw(origin, Vector2.INF, 2.0)))
+
+	# The drift bound is asserted, not sampled and hoped for: the far-LOD path
+	# turns the slew into a hard set, so an unbounded drift would read as a
+	# visible twitch at distance.
+	var worst := 0.0
+	for i in 10000:
+		var h := float(i) * 0.00731
+		for ph in [0.0, 0.8, 1.9, 3.0, 3.9, 4.7, 5.5, 6.1]:
+			worst = maxf(worst, absf(NpcFacing.drift(float(ph), h)))
+	_check("idle drift stays inside its amplitude bound",
+		worst <= NpcFacing.DRIFT_AMP_RAD + 1e-6, "%.6f" % worst)
+	_check("drift actually moves", worst > NpcFacing.DRIFT_AMP_RAD * 0.5)
+	_check("drift before the first tick is zero", NpcFacing.drift(1.0, NAN) == 0.0)
+	_check("drift is reproducible",
+		is_equal_approx(NpcFacing.drift(1.0, 5.5), NpcFacing.drift(1.0, 5.5)))
+
+	# The load-bearing pair. A PROJECTED anchor (8 m out, used when someone
+	# stands exactly on their target) must be stable under one tick of
+	# crowding, while a REAL anchor close by must be responsive to it — that
+	# responsiveness is the whole mechanism by which the separation pass
+	# finally reaches the facings.
+	var nudge := Vector2(0.25, 0.0)   # NpcPopulationEngine.MAX_PUSH_M
+	var far_a := Vector2(0.0, -8.0)
+	var d_far := absf(angle_difference(
+		NpcFacing.base_yaw(origin, far_a, 0.0),
+		NpcFacing.base_yaw(nudge, far_a, 0.0)))
+	var near_a := Vector2(0.0, -1.0)
+	var d_near := absf(angle_difference(
+		NpcFacing.base_yaw(origin, near_a, 0.0),
+		NpcFacing.base_yaw(nudge, near_a, 0.0)))
+	_check("a projected anchor is stable under one tick of crowding",
+		d_far < deg_to_rad(2.5), "%.2f deg" % rad_to_deg(d_far))
+	_check("a nearby anchor is responsive to it",
+		d_near > deg_to_rad(10.0), "%.2f deg" % rad_to_deg(d_near))
+
+
+## The reported bug, as an assertion: workers at one crew site must not all
+## face the same way — and the fix must be a real rule rather than added noise.
+##
+## Both checks FAIL on the pre-fix code by construction. `chore_pos_of`
+## resolves a non-brigade crew chore to ONE coordinate, so every worker walks
+## the same nav route to the same point and arrives on the same heading; the
+## old host latched yaw on exactly that heading and the separation pass, capped
+## at 0.25 m, never nudged hard enough to re-trigger the write.
+func _test_crew_facing_spread() -> void:
+	var site := _make_test_site()
+	site["chore_pos_of"] = _pos_chore_resolver()
+	var board := NpcChoreBoard.create_empty()
+	var work_at := Vector2(60.0, 0.0)
+	board.add_chore("Raise the frame", 240.0, {
+		"window": {"start_h": 0.0, "end_h": 24.0},
+		"exposure": NpcWeatherGate.EXPOSURE_OUTDOOR,
+		"repeat": "once", "min_workers": 4, "max_workers": 8,
+		"target": {"kind": "pos", "x": work_at.x, "z": work_at.y},
+	})
+	var engine := NpcPopulationEngine.new()
+	engine.configure(8, "face", Vector2.ZERO)
+	engine.chore_board = board
+	engine.routine = NpcRoutine.default_day()
+	_run_sim(engine, site, 9.0, 6.0, 1.0 / 60.0)
+
+	var face_yaws: Array = []
+	var to_work_yaws: Array = []
+	for d in engine.agent_dots():
+		var dd: Dictionary = d
+		if str(dd.get("activity", "")) != NpcAgent.CHORE_ACTIVITY:
+			continue
+		if int(dd.get("state", 0)) != NpcAgent.State.DOING:
+			continue
+		face_yaws.append(float(dd.get("face_yaw", 0.0)))
+		var to_work := work_at - (dd.get("pos", Vector2.ZERO) as Vector2)
+		if to_work.length() > 0.05:
+			to_work_yaws.append(atan2(-to_work.x, -to_work.y))
+
+	if face_yaws.size() < 3:
+		_check("a crew mustered at the work site", false,
+			"only %d workers DOING" % face_yaws.size())
+		return
+	var r_face := _yaw_concentration(face_yaws)
+	_check("workers at one crew site do not all face the same way",
+		r_face < 0.6, "R=%.3f over %d workers" % [r_face, face_yaws.size()])
+
+	# The corridor test, and the reason the first check alone is not enough.
+	# Everyone walks from the camp to one work coordinate, so the OLD latched
+	# heading was this bearing for every single worker — R would be ~1.0 about
+	# it. Note the trail cannot be used for this: TRAIL_MAX_AGE_H prunes it to
+	# the last half sim-hour, so by the time a crew is working it is empty.
+	var corridor := atan2(-(work_at - Vector2.ZERO).x, -(work_at - Vector2.ZERO).y)
+	var on_corridor := 0
+	for y in face_yaws:
+		if absf(angle_difference(float(y), corridor)) < deg_to_rad(20.0):
+			on_corridor += 1
+	_check("they are not all still pointing down the approach corridor",
+		on_corridor < face_yaws.size(),
+		"%d of %d within 20 deg of the walk-in bearing"
+			% [on_corridor, face_yaws.size()])
+
+	# And the positive form: spread is not the same as correct. Each worker
+	# must actually be turned toward the job they are standing around.
+	if to_work_yaws.size() == face_yaws.size():
+		var aimed := 0
+		for i in face_yaws.size():
+			if absf(angle_difference(float(face_yaws[i]),
+					float(to_work_yaws[i]))) < deg_to_rad(30.0):
+				aimed += 1
+		_check("each worker is turned toward the work site",
+			aimed >= int(ceil(float(face_yaws.size()) * 0.75)),
+			"%d of %d aimed" % [aimed, face_yaws.size()])
+
+	# The paired opposite, so the rules are proven CONTEXT-AWARE rather than
+	# merely noisy: a relay line must line up, not scatter.
+	var b2 := NpcChoreBoard.create_empty()
+	var from := Vector2(-30.0, 10.0)
+	var to := Vector2(30.0, 10.0)
+	b2.add_chore("Pass the crates", 120.0, {
+		"window": {"start_h": 0.0, "end_h": 24.0},
+		"exposure": NpcWeatherGate.EXPOSURE_OUTDOOR,
+		"repeat": "once", "min_workers": 3, "max_workers": 6,
+		"target": {"kind": "pos", "x": to.x, "z": to.y},
+		"haul": {"strategy": "brigade",
+			"from_x": from.x, "from_z": from.y, "to_x": to.x, "to_z": to.y},
+	})
+	var e2 := NpcPopulationEngine.new()
+	e2.configure(6, "relay", Vector2.ZERO)
+	e2.chore_board = b2
+	e2.routine = NpcRoutine.default_day()
+	_run_sim(e2, site, 9.0, 6.0, 1.0 / 60.0)
+	var relay_yaws: Array = []
+	for d in e2.agent_dots():
+		var dd2: Dictionary = d
+		if int(dd2.get("state", 0)) == NpcAgent.State.DOING \
+				and str(dd2.get("activity", "")) == NpcAgent.CHORE_ACTIVITY:
+			relay_yaws.append(float(dd2.get("face_yaw", 0.0)))
+	if relay_yaws.size() >= 3:
+		var want := atan2(-(to - from).x, -(to - from).y)
+		var r_relay := _yaw_concentration(relay_yaws)
+		_check("a relay line faces the same way, and it is DOWN the line",
+			r_relay > 0.9, "R=%.3f over %d" % [r_relay, relay_yaws.size()])
+		var worst_off := 0.0
+		for y in relay_yaws:
+			worst_off = maxf(worst_off, absf(angle_difference(float(y), want)))
+		_check("every station points along the route",
+			worst_off < deg_to_rad(10.0), "%.1f deg off" % rad_to_deg(worst_off))
+	else:
+		_check("a relay crew mustered", false,
+			"only %d stationed" % relay_yaws.size())
+
+
+## NpcHash — the shared avalanche, and the migration guard around it.
+##
+## The first block is the whole reason this function exists: `NpcRoutine
+## .offset_for` had its avalanche extracted into `NpcHash`, and these literals
+## were captured from the code BEFORE that extraction. Routine offsets shift
+## every agent's entire day, so any drift here — one ULP included — silently
+## moves every downstream sim golden in this file. If this block fails after a
+## refactor, the refactor changed behaviour; it is not the pin that is wrong.
+func _test_hash_distribution() -> void:
+	const FROZEN: Array = [
+		0.152008795, -0.125424745, -0.102638417, 0.155506696,
+		0.473515890, 0.080251849, -0.214971017, 0.308414951,
+	]
+	var drift_ok := true
+	for i in FROZEN.size():
+		if absf(NpcRoutine.offset_for("hab_npc_%d" % i) - float(FROZEN[i])) > 1e-9:
+			drift_ok = false
+	_check("routine offsets are byte-identical after the NpcHash extraction",
+		drift_ok, "offset_for drifted — every sim golden below is now suspect")
+
+	# The bug NpcHash exists to fix, stated as a measurement rather than a
+	# comment. Bucket 64 sequential ids 8 ways: the avalanche fills every bin;
+	# the naive `hash() % n` form collapses them.
+	var good: Array = [0, 0, 0, 0, 0, 0, 0, 0]
+	var weak: Array = [0, 0, 0, 0, 0, 0, 0, 0]
+	for i in 64:
+		var id := "hab_npc_%d" % i
+		good[mini(int(NpcHash.unit01(id) * 8.0), 7)] += 1
+		weak[mini(int(float(absi(hash(id)) % 997) / 997.0 * 8.0), 7)] += 1
+	var good_empty := 0
+	var good_max := 0
+	for b in good:
+		if int(b) == 0:
+			good_empty += 1
+		good_max = maxi(good_max, int(b))
+	var weak_empty := 0
+	for b in weak:
+		if int(b) == 0:
+			weak_empty += 1
+	_check("the avalanche fills every bucket", good_empty == 0, str(good))
+	_check("and concentrates none of them", good_max <= 19, str(good))
+	_check("while the naive hash leaves most buckets empty (the bug)",
+		weak_empty >= 3, str(weak))
+
+	# Salts must decorrelate, or "which gait" and "which stance" would be the
+	# same draw for every person in the camp.
+	var same := 0
+	for i in 64:
+		var id := "hab_npc_%d" % i
+		if absf(NpcHash.unit01(id, "a") - NpcHash.unit01(id, "b")) < 1e-9:
+			same += 1
+	_check("salted draws are independent", same == 0, "%d collisions" % same)
+	_check("and reproducible", is_equal_approx(
+		NpcHash.unit01("hab_npc_3", "a"), NpcHash.unit01("hab_npc_3", "a")))
+
+	# pick() must stay in range including the degenerate sizes.
+	var in_range := true
+	for i in 64:
+		var v := NpcHash.pick("hab_npc_%d" % i, "gait", 3)
+		if v < 0 or v > 2:
+			in_range = false
+	_check("pick stays in 0..n-1", in_range)
+	_check("pick(n=1) is 0", NpcHash.pick("x", "s", 1) == 0)
+	_check("pick(n=0) does not divide by zero", NpcHash.pick("x", "s", 0) == 0)
+
+
 func _test_routine_behaviour() -> void:
 	var site := _make_test_site()
 	var engine := NpcPopulationEngine.new()
@@ -2914,6 +4857,33 @@ func _test_clip_classifier() -> void:
 			NpcRig.classify({"hip_xz_travel_m": 0.0, "pose_delta": 0.1,
 				"y_cycles": 0, "hip_y_swing": 0.001}) == NpcRig.ROLE_STATIC)
 
+	# Offline guard for the carry-clip drop-in (no assets needed). ONLY genuine
+	# level changes get a sampled ground offset. A lift dips to grab the crate
+	# and therefore MEASURES as descend — if it kept that role, the curve would
+	# land the bottom of the dip at seated/lying hip height and sink the figure
+	# ~0.7 m into the ground mid-pickup. ROLE_CARRY is forced past classify()
+	# precisely so it lands on the constant-fill path.
+	_check("descend/ascend need a sampled offset curve",
+			NpcRig.role_needs_offset_curve(NpcRig.ROLE_DESCEND)
+				and NpcRig.role_needs_offset_curve(NpcRig.ROLE_ASCEND))
+	_check("carry takes the constant path (the sink guard)",
+			not NpcRig.role_needs_offset_curve(NpcRig.ROLE_CARRY))
+	_check("locomotion/cyclic/static take the constant path",
+			not NpcRig.role_needs_offset_curve(NpcRig.ROLE_LOCOMOTION)
+				and not NpcRig.role_needs_offset_curve(NpcRig.ROLE_CYCLIC)
+				and not NpcRig.role_needs_offset_curve(NpcRig.ROLE_STATIC))
+	# classify() reads HIPS; carrying is an arms pose. A role the classifier can
+	# never return must never be used as an assertion — hence the forced column.
+	var carry_never := true
+	for probe in [{"hip_xz_travel_m": 1.7, "pose_delta": 1.0, "y_cycles": 2, "hip_y_swing": 0.05},
+			{"hip_xz_travel_m": 0.0, "pose_delta": 0.1, "y_cycles": 0, "hip_y_swing": 0.001},
+			{"hip_xz_travel_m": 0.1, "pose_delta": 5.0, "y_cycles": 0, "hip_y_swing": 0.5,
+				"hip_y_start": 0.94, "hip_y_end": 0.12},
+			{"hip_xz_travel_m": 0.0, "pose_delta": 0.0, "y_cycles": 1, "hip_y_swing": 0.55}]:
+		if NpcRig.classify(probe as Dictionary) == NpcRig.ROLE_CARRY:
+			carry_never = false
+	_check("classify never returns ROLE_CARRY", carry_never)
+
 	if not NpcRig.available():
 		return
 	# Asset-gated: what the real files measured as. The pair that matters is
@@ -2928,6 +4898,17 @@ func _test_clip_classifier() -> void:
 		_check("measured role: %s" % str(pair[0]),
 				str(m.get("role", "")) == str(pair[1]),
 				"%s vs %s" % [str(m.get("role", "?")), str(pair[1])])
+		# The measurement is kept even when a role is forced, so a swapped
+		# export is still detectable after the fact.
+		_check("measurement retained: %s" % str(pair[0]), m.has("measured_role"))
+	# Asset-gated carry rows: only meaningful once someone drops the FBX in.
+	if NpcRig.clip_length(NpcRig.CLIP_CARRY) > 0.0:
+		var cm := NpcRig.clip_measurement(NpcRig.CLIP_CARRY)
+		_check("installed carry clip carries the forced role",
+				str(cm.get("role", "")) == NpcRig.ROLE_CARRY)
+		_check("installed carry clip gets a flat offset",
+				is_equal_approx(NpcRig.clip_ground_offset_at(NpcRig.CLIP_CARRY, 0.0),
+					NpcRig.clip_ground_offset_at(NpcRig.CLIP_CARRY, 1.0)))
 	# Transitions must not loop or animation_finished never fires.
 	for c in [NpcRig.CLIP_SLEEP_ENTER, NpcRig.CLIP_SLEEP_EXIT,
 			NpcRig.CLIP_SIT_EXIT, NpcRig.CLIP_WALK_START, NpcRig.CLIP_WALK_STOP]:
@@ -2986,7 +4967,11 @@ func _pose_run(m: NpcPoseMachine, secs: float, inp: Dictionary,
 
 
 func _test_pose_machine() -> void:
-	var cat := _pose_catalog()
+	# The MERGED catalog, exactly as NpcAvatar.setup builds it — the work
+	# families and their transitions are procedural, so a bare _pose_catalog()
+	# would silently make every _has() guard around them skip and the fuzz
+	# below would never reach a single one of them.
+	var cat := NpcWorkPose.merge_catalog(_pose_catalog())
 
 	# 1. Walking to bed must NOT lie down on the way. This is the reported bug:
 	#    activity is the INTENT for the whole trip, so choosing on intent alone
@@ -3176,6 +5161,11 @@ func _test_pose_machine() -> void:
 			"dwell_left_s": rng.randf_range(0.0, 600.0),
 			"teleported": rng.randf() < 0.02,
 			"finished": rng.randf() < 0.1,
+			# Every work family through the no-wedge guarantee. Cheapest
+			# high-value line here: the families multiply the reachable clip
+			# set sevenfold and each one has an enter/exit pair.
+			"work_pose": str(NpcWorkPose.FAMILIES[
+				rng.randi() % NpcWorkPose.FAMILIES.size()]),
 		})
 		var c := fz.clip()
 		if c.is_empty() or not cat.has(NpcPoseMachine._clip_file_for(c)):
@@ -3200,6 +5190,13 @@ func _test_pose_machine() -> void:
 	if NpcRig.available():
 		var names := NpcRig.clip_names()
 		for c in cat.keys():
+			# Skip ALIASED clips — sit_enter is sit_exit reversed, carry is
+			# the walk, and every work_* family is CLIP_WORK. None of them is
+			# a file. This passed before only because the test catalog
+			# happened to contain no aliases; it would fail the moment a
+			# machine WITH the art installed was fed the merged catalog.
+			if NpcPoseMachine._clip_file_for(str(c)) != str(c):
+				continue
 			_check("catalog clip ships: %s" % c, names.has(str(c)), str(c))
 
 

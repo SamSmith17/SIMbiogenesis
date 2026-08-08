@@ -20,6 +20,11 @@ var _model = null                      # last GraphModel seen by tick()
 var _configured_count: Dictionary = {} # item_id -> int (reconfigure on change)
 var _last_persist_h: Dictionary = {}   # item_id -> float abs-hours
 var _last_persist_blob: Dictionary = {}  # item_id -> String (change gate)
+## Site Projects (the unified camp-lifecycle mechanic): per-habitat project
+## stores, persisted into specs["site_projects"] beside pop_state.
+var _project_stores: Dictionary = {}   # item_id -> SiteProjectStore
+## The settlement feed — one per site, shared by every reader via cursors.
+var _log: SettlementLog = null
 ## Built-in scenes (Soak/Mars) have no TerrainLoader to own the registry —
 ## fall back to a bridge-owned scene-keyed one so spaces still work there.
 var _fallback_registry: SpaceRegistry = null
@@ -155,6 +160,12 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		}
 		var demand: Dictionary = engine.tick(abs_h, ctx)
 		flow_engine.set_habitat_demand(iid, demand)
+		_dispatch_chore_effects(engine, main)
+		_service_alarms(iid, engine, abs_h)
+		_service_machine_chores(iid, engine, model, main, abs_h)
+		var store := _ensure_project_store(iid, specs)
+		store.sync(engine.chore_board)
+		_push_build_progress(store, engine.chore_board, main)
 		_maybe_persist(model, iid, engine, abs_h)
 
 	# Habitats that stopped being pop-driven (toggle off / deleted) fall back
@@ -166,6 +177,351 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			_configured_count.erase(iid)
 			_last_persist_h.erase(iid)
 			_last_persist_blob.erase(iid)
+			_project_stores.erase(iid)
+
+
+## Site Projects: completed chores carrying an `effect` payload fire it here,
+## EXACTLY ONCE — the post-tick world-effect sweep. This deliberately lives in
+## the bridge (scene glue), never inside the pure engine: effects mutate
+## props, and the engine's determinism must not depend on scene state.
+## Fire-once is board state (`effect_done` beside the effect, persisted with
+## the chores inside pop_state), so it survives save/load, scrub-back (the
+## engine freezes; the flag holds), and coarse catch-up jumps. Order is the
+## board's array order — deterministic, never dict-key order.
+## A failed dispatch (loader not ready yet) stays un-stamped and simply
+## retries next sweep; every op is idempotent-safe for that.
+func _dispatch_chore_effects(engine: NpcPopulationEngine, main: Node) -> void:
+	var board := engine.chore_board
+	if board == null:
+		return
+	for c in board.chores:
+		var chore: Dictionary = c
+		if str(chore.get("repeat", "daily")) != "once":
+			continue   # world effects ride one-shot project tasks only (v1)
+		# INCREMENTAL stage effects first (a brigade moves crates one by one
+		# while the chore is still in flight), then the completion effect.
+		for idx in SiteProject.due_stage_effects(chore):
+			var st := ((chore.get("stage_effects", []) as Array)[idx]) as Dictionary
+			if SiteProjectEffects.execute(main, st.get("effect", {}) as Dictionary):
+				st["fired"] = true
+		if int(chore.get("done_day", -1)) < 0:
+			continue
+		var effect: Dictionary = chore.get("effect", {})
+		if effect.is_empty() or bool(chore.get("effect_done", false)):
+			continue
+		if SiteProjectEffects.execute(main, effect):
+			chore["effect_done"] = true
+
+
+# --- Site Projects -----------------------------------------------------------
+
+func _ensure_project_store(iid: String, specs: Dictionary) -> SiteProjectStore:
+	var store: SiteProjectStore = _project_stores.get(iid)
+	if store != null:
+		return store
+	store = SiteProjectStore.new()
+	var saved: Variant = specs.get("site_projects", [])
+	if saved is Array:
+		store.deserialize(saved as Array)
+	_project_stores[iid] = store
+	return store
+
+
+func project_store_for(iid: String) -> SiteProjectStore:
+	var item: Dictionary = _model_item_cache.get(iid, {})
+	return _ensure_project_store(iid, item.get("specs", {}) as Dictionary)
+
+
+## Capture everything NpcExperimentLab needs, ONCE, as plain data.
+##
+## This is the scene-glue half of the experiment: the lab itself must never
+## touch `main`, an autoload, or the nav grid, so every scene-dependent lookup
+## (space positions, prop positions, weather) is pre-resolved here into flat
+## dictionaries. Pre-resolving also frames the honest question the lab
+## answers — "given the layout exactly as it stands right now".
+func experiment_setup(iid: String, project_id: String, main: Node) -> Dictionary:
+	var engine: NpcPopulationEngine = _engines.get(iid)
+	var project := project_store_for(iid).find(project_id)
+	if engine == null or project.is_empty() or engine.chore_board == null:
+		return {}
+	var board := engine.chore_board
+	var reg := _find_registry(main)
+	# Chore specs, rebuilt from the LIVE board but reset to un-started: the
+	# lab re-runs the plan from scratch, and inheriting half-done work (or a
+	# `held` flag from a paused project) would make every row meaningless.
+	var specs: Array = []
+	var prop_pos: Dictionary = {}
+	var gate := ""
+	for t in project.get("tasks", []):
+		var task: Dictionary = t
+		var chore: Dictionary = board.find(str(task.get("chore_id", "")))
+		if chore.is_empty():
+			continue
+		var tgt: Dictionary = chore.get("target", {})
+		if str(tgt.get("kind", "")) == "prop":
+			var p: Variant = _chore_position(chore, main, reg)
+			if p is Vector2:
+				prop_pos[str(tgt.get("id", ""))] = p
+		specs.append({
+			"task_id": str(task.get("task_id", "")),
+			"label": str(chore.get("label", "")),
+			"chore_hours": float(chore.get("chore_hours", 0.1)),
+			"priority": int(chore.get("priority", 0)),
+			"exposure": str(chore.get("exposure", "outdoor")),
+			"min_workers": int(chore.get("min_workers", 1)),
+			"max_workers": int(chore.get("max_workers", 1)),
+			"depends_on": _task_ids_for_deps(project, board, chore),
+			"target": tgt.duplicate(true),
+			"haul": (chore.get("haul", {}) as Dictionary).duplicate(true),
+		})
+		gate = str(task.get("task_id", ""))
+	var space_pos: Dictionary = {}
+	if reg != null:
+		for sp in reg.spaces:
+			var sd: Dictionary = sp
+			var p2: Variant = reg.resolve_position(sd, main)
+			if p2 is Vector2:
+				space_pos[str(sd.get("id", ""))] = p2
+	var item: Dictionary = _model_item_cache.get(iid, {})
+	var specs_live: Dictionary = item.get("specs", {})
+	return {
+		"project_id": project_id, "iid": iid,
+		"kind": str(project.get("kind", "")),
+		"chore_specs": specs, "gate_task_id": gate,
+		# The pure scheduler's task graph, so the lab can report a PLANNED
+		# lower bound beside each simulated makespan. A linkage build stores
+		# the fab counts rather than the tasks, so rebuild them.
+		"plan_tasks": _experiment_plan_tasks(project),
+		"registry_blob": reg.serialize() if reg != null else {},
+		"space_pos": space_pos, "prop_pos": prop_pos,
+		"weather": _weather_cache.duplicate(true),
+		"starved": (specs_live.get("starved_kinds", []) as Array).duplicate(),
+		"roster_size": engine.agents.size(),
+		"home": _home_pos(specs_live, main),
+		"routine": engine.routine.to_array() if engine.routine != null else [],
+		"rules": board.rules.duplicate(true),
+		# The project's REAL window, not a literal. Hardcoding {7,19} meant the
+		# lab's "Longer window" row compared against a window the site was not
+		# using.
+		"window": _experiment_window(project, board),
+		"target": {"kind": "pos",
+			"x": float((project.get("site", {}) as Dictionary).get("x", 0.0)),
+			"z": float((project.get("site", {}) as Dictionary).get("z", 0.0))},
+		"start_h": _last_abs_h,
+		"day_index": NpcChoreBoard.day_index(_last_abs_h),
+		"haul": _experiment_haul(project, board, main, reg),
+	}
+
+
+## The widest window any of this project's chores actually runs in.
+func _experiment_window(project: Dictionary, board) -> Dictionary:
+	var lo := INF
+	var hi := -INF
+	for t in project.get("tasks", []):
+		var chore: Dictionary = board.find(str((t as Dictionary).get("chore_id", "")))
+		var w: Dictionary = chore.get("window", {})
+		if w.is_empty():
+			continue
+		lo = minf(lo, float(w.get("start_h", 7.0)))
+		hi = maxf(hi, float(w.get("end_h", 19.0)))
+	if lo == INF or hi <= lo:
+		return {"start_h": 7.0, "end_h": 19.0}
+	return {"start_h": lo, "end_h": hi}
+
+
+## The NpcCrewPlan task graph behind a project, or [] when there isn't one.
+## Without this every `plan_h` is 0 and the drag column would report the whole
+## makespan as drag — worse than reporting nothing.
+func _experiment_plan_tasks(project: Dictionary) -> Array:
+	var plan: Dictionary = project.get("plan", {})
+	var stored: Array = plan.get("tasks", []) as Array
+	if not stored.is_empty():
+		return stored
+	var counts: Dictionary = plan.get("fab_counts", {})
+	if not counts.is_empty():
+		return NpcCrewPlan.linkage_fab_tasks(counts)
+	return []
+
+
+## Live chore-id deps mapped back onto plan task ids (the lab rebuilds a board
+## from scratch, so board ids mean nothing to it).
+func _task_ids_for_deps(project: Dictionary, _board, chore: Dictionary) -> Array:
+	var by_cid: Dictionary = {}
+	for t in project.get("tasks", []):
+		by_cid[str((t as Dictionary).get("chore_id", ""))] = \
+			str((t as Dictionary).get("task_id", ""))
+	var out: Array = []
+	for d in chore.get("depends_on", []):
+		if by_cid.has(str(d)):
+			out.append(str(by_cid[str(d)]))
+	return out
+
+
+## Crate list for the haul-strategy variants, or {} when this is not a
+## delivery (those rows then report "n/a" rather than silently vanishing).
+func _experiment_haul(project: Dictionary, board, main: Node, reg) -> Dictionary:
+	if str(project.get("kind", "")) != SiteProject.KIND_DELIVERY:
+		return {}
+	var crates: Array = []
+	var from := Vector2.ZERO
+	var rec: Dictionary = PlacedPropService.get_prop_record(main,
+		str(project.get("prop_id", "")))
+	if not rec.is_empty():
+		from = Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	for t in project.get("tasks", []):
+		var chore: Dictionary = board.find(str((t as Dictionary).get("chore_id", "")))
+		var ct: Dictionary = chore.get("target", {})
+		if str(ct.get("kind", "")) != "prop":
+			continue
+		var carry: Dictionary = chore.get("carry_to", {})
+		if carry.is_empty():
+			continue
+		crates.append({"pid": str(ct.get("id", "")),
+			"stage": Vector2(float(carry.get("x", 0.0)), float(carry.get("z", 0.0))),
+			"label": str(chore.get("label", "crate"))})
+	# A brigade project has ONE chore carrying every crate as a stage effect.
+	if crates.is_empty():
+		for t2 in project.get("tasks", []):
+			var ch2: Dictionary = board.find(str((t2 as Dictionary).get("chore_id", "")))
+			for st in (ch2.get("stage_effects", []) as Array):
+				var eff: Dictionary = (st as Dictionary).get("effect", {})
+				if str(eff.get("op", "")) != "move_prop":
+					continue
+				crates.append({"pid": str(eff.get("prop_id", "")),
+					"stage": Vector2(float(eff.get("x", 0.0)), float(eff.get("z", 0.0))),
+					"label": "crate"})
+	return {"crates": crates, "from": from} if not crates.is_empty() else {}
+
+
+## Every habitat's projects, flattened for the panel: [{iid, project}].
+func all_site_projects() -> Array:
+	var out: Array = []
+	for iid in _project_stores:
+		for p in (_project_stores[iid] as SiteProjectStore).projects:
+			out.append({"iid": str(iid), "project": p})
+	return out
+
+
+## Create a project: drop the plan onto the habitat's board (ATOMIC — a board
+## that can't take the whole plan refuses and this returns ""), bind task ids
+## to the created chores, store the record, and force the next tick to
+## persist. `spec_rows` are chore_specs-shaped rows (may carry per-task
+## target/effect/carry_to/haul).
+func create_site_project(iid: String, kind: String, label: String,
+		prop_id: String, site: Vector2, spec_rows: Array,
+		window: Dictionary = {"start_h": 7.0, "end_h": 19.0},
+		target: Dictionary = {}, plan_meta: Dictionary = {}) -> String:
+	var board = chore_board_for(iid)
+	if board == null:
+		return ""
+	var made: Array = board.add_plan(spec_rows, window, target)
+	if made.is_empty():
+		return ""
+	var project := SiteProject.make(kind, label, prop_id, site, _last_abs_h, plan_meta)
+	SiteProject.bind_tasks(project, spec_rows, made)
+	project_store_for(iid).add(project)
+	_last_persist_h.erase(iid)   # persist on the next tick, not in half an hour
+	return str(project.get("id", ""))
+
+
+## Pause/resume: holds every still-pending task's chore out of available_for
+## without losing progress. Workers already on a held chore finish their
+## current step and release naturally (credit still pays — pausing mid-swing
+## must not void labour already under way).
+func set_project_paused(iid: String, project_id: String, paused: bool) -> void:
+	var board = chore_board_for(iid)
+	var project := project_store_for(iid).find(project_id)
+	if board == null or project.is_empty():
+		return
+	for t in project.get("tasks", []):
+		var task: Dictionary = t
+		if str(task.get("status", "pending")) == "pending":
+			board.update_chore(str(task.get("chore_id", "")), {"held": paused})
+	project["paused"] = paused
+	_last_persist_h.erase(iid)
+
+
+## Cancel: remove every still-pending chore from the board (their effects
+## never fire) and mark the project cancelled. Completed tasks keep their
+## fired effects — cancellation is "stop here", not an undo.
+func cancel_project(iid: String, project_id: String) -> void:
+	var board = chore_board_for(iid)
+	var project := project_store_for(iid).find(project_id)
+	if project.is_empty():
+		return
+	for t in project.get("tasks", []):
+		var task: Dictionary = t
+		if str(task.get("status", "pending")) == "pending" and board != null:
+			board.remove_chore(str(task.get("chore_id", "")))
+			task["status"] = "skipped"
+	project["state"] = "cancelled"
+	_last_persist_h.erase(iid)
+
+
+## Live progressive-build visuals: push each active linkage project's real
+## labour fractions onto the structure builder standing at its prop. Node
+## lookup + visible_instance_count writes only — nothing here persists (the
+## coarse phase lands in the record via the set_build_phase chore effects,
+## which is what a fresh load renders until this refines it).
+func _push_build_progress(store: SiteProjectStore, board, main: Node) -> void:
+	if main == null:
+		return
+	# Iterate EVERY project, not just active(): a cancelled teardown has to get
+	# its visuals restored, and only this function can reach the builder.
+	for p in store.projects:
+		var project: Dictionary = p
+		var kind := str(project.get("kind", ""))
+		if kind != SiteProject.KIND_LINKAGE_BUILD \
+				and kind != SiteProject.KIND_LINKAGE_BREAKDOWN:
+			continue
+		var builder := _linkage_builder_for(main, str(project.get("prop_id", "")))
+		if builder == null:
+			continue
+		if str(project.get("state", "")) != "active":
+			# Cancelled or finished mid-teardown. set_ghost_alpha swaps in
+			# DUPLICATED materials and only alpha >= 0.999 restores the shared
+			# originals, so without this a cancelled breakdown leaves the
+			# structure permanently translucent with its bolts missing.
+			# Fire-once via a stamp — this runs every tick.
+			if not bool(project.get("vis_reset", false)):
+				builder.call("set_build_progress", {})
+				builder.call("set_ghost_alpha", 1.0)
+				project["vis_reset"] = true
+			continue
+		if kind == SiteProject.KIND_LINKAGE_BREAKDOWN:
+			var bd := SiteProject.breakdown_progress(project, board)
+			if bool(bd.get("folded", false)):
+				continue   # the crate has replaced the frame; nothing to paint
+			builder.call("set_build_progress", {
+				"beams": bd["beams"], "brackets": bd["brackets"],
+				"bolts": bd["bolts"], "supports": bd["supports"],
+				"panels": bd["panels"]})
+			builder.call("set_ghost_alpha", float(bd.get("ghost", 1.0)))
+			continue
+		var bp := SiteProject.build_progress(project, board)
+		if bool(bp.get("erected", false)):
+			# Deployed structure: only the panel mount still animates.
+			builder.call("set_build_progress", {"panels": float(bp.get("panels", 1.0))})
+			builder.call("set_ghost_alpha", 1.0)
+		else:
+			builder.call("set_build_progress", {
+				"beams": bp["beams"], "brackets": bp["brackets"],
+				"bolts": bp["bolts"], "supports": bp["supports"],
+				"panels": 0.0})
+			builder.call("set_ghost_alpha", float(bp.get("ghost", 1.0)))
+
+
+func _linkage_builder_for(main: Node, prop_id: String) -> Node:
+	if prop_id.is_empty():
+		return null
+	var root := main.find_child("PlacedProps", true, false)
+	if root == null:
+		return null
+	for child in root.get_children():
+		if child is PlacedProp and str((child as PlacedProp).prop_id) == prop_id:
+			var mr := child.get_node_or_null("ModelRoot")
+			return mr if mr != null and mr.has_method("set_build_progress") else null
+	return null
 
 
 ## Site Plan dot payload across all engines (Phase 4 renderer input).
@@ -313,13 +669,22 @@ func _service_desire(abs_h: float, region: Dictionary) -> void:
 
 ## Rebuild the heat texture at most twice a second, and only when the map has
 ## actually changed or the channel filter moved.
+##
+## ORDER MATTERS: the throttle must be checked BEFORE consuming take_dirty().
+## The old single-expression form consumed the dirty flag even while
+## throttled, so a change landing inside the throttle window was forgotten and
+## the on-screen raster stayed stale until the NEXT mutation. The pure rule is
+## NpcDesireMap.tex_should_rebuild(), pinned by the population selftest (it
+## lives on the map class because the selftest may not load THIS script — see
+## the note there about the bare PerfMonitor identifier).
 func _refresh_desire_texture(force: bool = false) -> void:
 	if _desire == null or not _desire.is_configured():
 		return
 	var now := float(Time.get_ticks_msec()) * 0.001
-	var stale := now - _desire_tex_at >= DESIRE_TEX_INTERVAL_S
-	var changed := _desire.take_dirty()
-	if not force and not (stale and changed):
+	if not NpcDesireMap.tex_should_rebuild(force, now - _desire_tex_at,
+			DESIRE_TEX_INTERVAL_S, true):
+		return  # throttled — leave the dirty flag latched for the next window
+	if not force and not _desire.take_dirty():
 		return
 	_desire_tex_at = now
 	_desire_tex = _desire.texture(_desire_tex_channel)
@@ -355,6 +720,23 @@ func desire_map() -> NpcDesireMap:
 func set_desire_window(w: int) -> void:
 	if _desire != null:
 		_desire.set_retention(w)
+		# TODAY clears the buffer immediately — rebuild now so the raster
+		# reflects the choice without waiting for the next dirty tick.
+		_refresh_desire_texture(true)
+
+
+## "Reset desire lines": drop the accumulated heat map AND every agent's live
+## trail, then rebuild the (now empty) texture.
+func reset_desire_map() -> void:
+	if _desire != null:
+		_desire.clear()
+	for iid in _engines:
+		var eng: NpcPopulationEngine = _engines[iid]
+		if eng == null:
+			continue
+		for a in eng.agents:
+			(a as NpcAgent).clear_trail()
+	_refresh_desire_texture(true)
 
 
 ## Where the population actually operates: every resolvable tagged space plus
@@ -524,15 +906,27 @@ func _sample_weather(main: Node, hour_of_day: float) -> Dictionary:
 		"wind_ms": float(ws.call("sample", "wind_speed_10m", month, day, hour_of_day)),
 		"rain_mmh": float(ws.call("sample", "precipitation", month, day, hour_of_day)),
 	}
+	# Extreme-weather air quality. NpcWeatherGate reads `aqi` and it is the one
+	# driver that follows people indoors, so smoke can stop work in a way rain
+	# never does. Absent (no hazard, or the subsystem disabled) it reads 0 and
+	# every existing threshold behaves exactly as before.
+	var xw := main.get_node_or_null("/root/ExtremeWeather") if main != null else null
+	if xw != null:
+		var hz: Dictionary = xw.call("current")
+		_weather_cache["aqi"] = float(hz.get("aqi", 0.0))
+		_weather_cache["pm25_ugm3"] = float(hz.get("pm25_ugm3", 0.0))
 	_weather_hour = hour_of_day
 	return _weather_cache
 
 
-## Where a chore's work happens: an explicit space type, a bound prop, or
-## (null) wherever the worker already stands.
+## Where a chore's work happens: an explicit world position (crew-plan build
+## sites), an explicit space type, a bound prop, or (null) wherever the
+## worker already stands.
 func _chore_position(chore: Dictionary, main: Node, registry: SpaceRegistry) -> Variant:
 	var target: Dictionary = chore.get("target", {})
 	match str(target.get("kind", "")):
+		"pos":
+			return Vector2(float(target.get("x", 0.0)), float(target.get("z", 0.0)))
 		"prop":
 			var rec: Dictionary = PlacedPropService.get_prop_record(main, str(target.get("id", "")))
 			if not rec.is_empty():
@@ -553,9 +947,81 @@ func _chore_position(chore: Dictionary, main: Node, registry: SpaceRegistry) -> 
 
 ## The chore board for a habitat (creating its engine lazily is the caller's
 ## job — this returns null before the first tick).
+## Every habitat currently running a population. The Site Project panel needs
+## it to answer "whose board does a hand-authored job land on" before any
+## project exists to read an id off.
+func pop_driven_item_ids() -> Array:
+	var out: Array = []
+	for iid in _engines:
+		out.append(str(iid))
+	out.sort()   # deterministic: the panel must not pick a different board per open
+	return out
+
+
 func chore_board_for(item_id: String) -> NpcChoreBoard:
 	var engine: NpcPopulationEngine = _engines.get(item_id)
 	return engine.chore_board if engine != null else null
+
+
+func roster_size_for(item_id: String) -> int:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	return engine.agents.size() if engine != null else 0
+
+
+## First habitat with a live engine, people, and a board — where a queued
+## crew plan lands (Linkage Lab "Queue build for crew").
+func first_crewable_habitat() -> String:
+	for iid in _engines:
+		var engine: NpcPopulationEngine = _engines[iid]
+		if engine != null and engine.chore_board != null and not engine.agents.is_empty():
+			return str(iid)
+	return ""
+
+
+## Active work sites for the Site Plan: any claimed chore with a resolvable
+## position — [{pos, label, workers, min_workers, quorum, progress}]. A
+## sub-quorum site is a crew GATHERING (people standing at it, work not yet
+## paying); a quorate one shows real progress. Under the agent dots, so the
+## crowd visibly stands ON its work.
+func crew_site_markers(main: Node) -> Array:
+	var reg := _find_registry(main)
+	var out: Array = []
+	for iid in _engines:
+		var engine: NpcPopulationEngine = _engines[iid]
+		if engine == null or engine.chore_board == null:
+			continue
+		for c in engine.chore_board.chores:
+			var chore: Dictionary = c
+			var workers := (chore.get("workers", []) as Array).size()
+			if workers <= 0:
+				continue
+			var p: Variant = _chore_position(chore, main, reg)
+			if not (p is Vector2):
+				continue
+			var hours := maxf(float(chore.get("chore_hours", 0.0)), 0.01)
+			var min_w := maxi(int(chore.get("min_workers", 1)), 1)
+			var mark := {
+				"pos": p,
+				"label": str(chore.get("label", "")),
+				"workers": workers,
+				"min_workers": min_w,
+				"quorum": workers >= min_w,
+				"progress": clampf(float(chore.get("progress_h", 0.0)) / hours, 0.0, 1.0),
+			}
+			# Haul routes render as a LINE — the brigade formation is the
+			# payoff image of the whole rules-driven direction.
+			var haul: Dictionary = chore.get("haul", {})
+			if not haul.is_empty():
+				mark["from"] = Vector2(float(haul.get("from_x", 0.0)),
+					float(haul.get("from_z", 0.0)))
+				mark["to"] = Vector2(float(haul.get("to_x", 0.0)),
+					float(haul.get("to_z", 0.0)))
+				mark["strategy"] = str(haul.get("strategy", ""))
+				# Sim-time phase for the flowing-item pips: a pure function of
+				# the clock (scrub-safe), frozen exactly when the sim is.
+				mark["flow_t"] = _last_abs_h
+			out.append(mark)
+	return out
 
 
 ## Start a habitat's community over with a fresh roster.
@@ -612,6 +1078,31 @@ func set_routine(item_id: String, blocks: Array) -> bool:
 	specs["pop_routine"] = engine.routine.to_array()
 	_model.update_item(item_id, {"specs": specs})
 	return true
+
+
+## What running out of a critical resource does here. Same shape as
+## set_routine: applied live, persisted into the habitat's specs so it rides
+## the graph autosave and is scoped to THIS settlement rather than following
+## the player between saves.
+func set_consequence(item_id: String, policy: String) -> bool:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	if engine == null:
+		return false
+	engine.consequence = NpcConsequence.normalize(policy)
+	if _model == null:
+		return true
+	var item: Dictionary = _model.get_item(item_id)
+	if item.is_empty():
+		return true
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	specs["pop_consequence"] = engine.consequence
+	_model.update_item(item_id, {"specs": specs})
+	return true
+
+
+func consequence_for(item_id: String) -> String:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	return engine.consequence if engine != null else NpcConsequence.DEFAULT
 
 
 ## Which clip plays in each slot for this habitat (Routines panel).
@@ -725,6 +1216,10 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	var routine_arr: Array = specs.get("pop_routine", []) as Array
 	engine.routine = NpcRoutine.from_array(routine_arr) if not routine_arr.is_empty() 		else NpcRoutine.default_day()
 	engine.anim_overrides = (specs.get("pop_anim_map", {}) as Dictionary).duplicate()
+	# Also config rather than simulation state: an absent key normalizes to
+	# STRIKE, which is exactly the behaviour that shipped, so every existing
+	# save keeps running the way it always has.
+	engine.consequence = NpcConsequence.normalize(specs.get("pop_consequence", ""))
 	# Departures and collapse are narrative events — surface them to the UI.
 	engine.agent_departed.connect(
 		func(_aid: String, who: String, reason: String) -> void:
@@ -742,16 +1237,136 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 			_pending_events.append({
 				"kind": "deserted", "item_id": iid, "reason": cause,
 			}))
+	engine.agent_lost.connect(
+		func(_aid: String, who: String, reason: String) -> void:
+			_pending_events.append({
+				"kind": "lost", "item_id": iid, "name": who, "reason": reason,
+			}))
 	_engines[iid] = engine
 	_configured_count[iid] = count
 	return engine
 
 
 ## Drain queued departure / collapse events (the view toasts them).
+##
+## DEPRECATED and destructive — two consumers race for the same array. New
+## readers should use `log_since(consumer)`, which is cursor-based and cannot
+## starve anyone. Kept only until the last caller moves over.
 func take_events() -> Array:
 	var out := _pending_events
 	_pending_events = []
 	return out
+
+
+## THE LABOUR MERGE: a machine waiting on hands gets a real chore, at the
+## machine, that a real person walks to and does.
+##
+## Before this, `ChoreLedger` and `NpcChoreBoard` shared a unit name and
+## nothing else — `credit_available()` had zero callers, and a recipe step
+## needing `chore_hours` could never be satisfied by the crew standing next to
+## it. It waited for a player button instead.
+##
+## Idempotent: the chore id is remembered on the machine's own specs, so a
+## re-tick finds the existing chore rather than minting a second one. The
+## chore's completion `effect` calls the SAME `RecipeRunner.confirm_chore` the
+## Confirm button always did — so the ledger stays the meter (Site Report
+## totals keep working) while the crew becomes the gate.
+func _service_machine_chores(iid: String, engine: NpcPopulationEngine, model,
+		main: Node, _abs_h: float) -> void:
+	var board := engine.chore_board
+	if board == null or model == null:
+		return
+	for item in model.get_items_in_scope("root"):
+		var d: Dictionary = item
+		var specs: Dictionary = d.get("specs", {})
+		if not bool(specs.get("recipe_waiting_chore", false)):
+			continue
+		if str(specs.get("recipe_waiting_kind", "")) != "crew":
+			continue   # a require_confirm step wants a DECISION, not hands
+		var gid := str(d.get("id", ""))
+		var step_id := str(specs.get("recipe_waiting_step_id", ""))
+		if gid.is_empty() or step_id.is_empty():
+			continue
+		var want_id := "mach|%s|%s" % [gid, step_id]
+		# Already minted and still live? Nothing to do. Checked by KEY as well
+		# as by id, because a reloaded board renumbers its chores and the
+		# remembered id would miss — minting a duplicate every tick.
+		var existing := str(specs.get("recipe_chore_id", ""))
+		if not existing.is_empty() and not board.find(existing).is_empty():
+			continue
+		if not board.find_by_key(want_id).is_empty():
+			continue
+		# A packed machine cannot be operated — send the crew to UNPACK it
+		# instead. "They unpack the mill, then run it" is both correct and the
+		# most on-theme moment the feature has.
+		var prop_id := str(specs.get("bound_prop_id", ""))
+		var label := str(specs.get("recipe_waiting_label", "Tend the machine"))
+		var hours := maxf(float(specs.get("recipe_waiting_chore_hrs", 0.25)), 0.05)
+		var effect: Dictionary = {"op": "recipe_step_done",
+			"item_id": gid, "step_id": step_id}
+		if bool(specs.get("packed_3d", false)) and not prop_id.is_empty():
+			label = "Unpack %s" % str(specs.get("name", "the machine"))
+			effect = {"op": "unpack_prop", "prop_id": prop_id}
+		var opts := {
+			"repeat": "once",
+			"priority": 3,
+			"exposure": NpcWeatherGate.EXPOSURE_SHELTERED,
+			"min_workers": 1, "max_workers": 1,
+			"window": {"start_h": 0.0, "end_h": 24.0},
+			"effect": effect,
+			"chore_key": want_id,
+		}
+		# Target the machine's 3D twin so people actually walk to it. With no
+		# bound prop the work happens where they stand, which is the honest
+		# fallback for a graph-only site.
+		if not prop_id.is_empty():
+			opts["target"] = {"kind": "prop", "id": prop_id}
+		var cid := board.add_chore(label, hours, opts)
+		if cid.is_empty():
+			continue
+		var patch: Dictionary = (d.get("specs", {}) as Dictionary).duplicate(true)
+		patch["recipe_chore_id"] = cid
+		model.update_item(gid, {"specs": patch})
+
+
+## The settlement's persistent feed. Survives fast-forward, unlike a toast.
+func settlement_log() -> SettlementLog:
+	if _log == null:
+		_log = SettlementLog.create_empty()
+	return _log
+
+
+## Everything `consumer` has not read yet — non-destructive for every other
+## consumer.
+func log_since(consumer: String) -> Array:
+	return settlement_log().since(consumer)
+
+
+## Latch/clear the "nobody can get X" alarms once per habitat per need.
+##
+## Keyed on duration rather than the flapping `blocked` flag: an agent retries
+## every RETRY_BACKOFF_H, so an alarm on the raw flag would post the same line
+## several times an hour. ALARM_H of standing failure is the signal.
+const ALARM_H := 0.5
+
+func _service_alarms(iid: String, engine: NpcPopulationEngine, abs_h: float) -> void:
+	var lg := settlement_log()
+	for need in NpcAgent.NEEDS:
+		var worst := 0.0
+		var who := ""
+		for a in engine.agents:
+			var ag: NpcAgent = a
+			var h := ag.blocked_hours(str(need), abs_h)
+			if h > worst:
+				worst = h
+				who = ag.display_name
+		var key := "need_unmet|%s|%s" % [iid, str(need)]
+		if worst >= ALARM_H:
+			var space := SpaceTypes.label(str(NpcAgent.space_of(str(need))))
+			lg.latch(key, "Nobody can reach a %s — work is backing up" % space,
+				abs_h, SettlementLog.ALERT, str(need))
+		elif worst <= 0.0:
+			lg.clear_latch(key, "", abs_h, str(need))
 
 
 ## Challenge replay: snapshot / restore every live engine so a retry replays
@@ -794,7 +1409,13 @@ func _maybe_persist(model, iid: String, engine: NpcPopulationEngine, abs_h: floa
 		return
 	_last_persist_h[iid] = abs_h
 	var snap := engine.snapshot(abs_h)
-	var blob := JSON.stringify(snap)
+	var store: SiteProjectStore = _project_stores.get(iid)
+	var proj_blob: Array = store.serialize() if store != null else []
+	# Project records ride the same change gate: their status derives from
+	# board state (inside the engine snapshot), and create/pause/cancel all
+	# clear _last_persist_h explicitly, so folding them into the blob only
+	# has to catch the sync-derived edits.
+	var blob := JSON.stringify(snap) + JSON.stringify(proj_blob)
 	if str(_last_persist_blob.get(iid, "")) == blob:
 		return
 	_last_persist_blob[iid] = blob
@@ -803,6 +1424,10 @@ func _maybe_persist(model, iid: String, engine: NpcPopulationEngine, abs_h: floa
 		return
 	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 	specs["pop_state"] = snap
+	if not proj_blob.is_empty():
+		specs["site_projects"] = proj_blob
+	else:
+		specs.erase("site_projects")
 	# How many are still here. `occupants` stays the AUTHORED headcount (editing
 	# it deliberately rebuilds the roster), so departures surface separately.
 	specs["pop_present"] = engine.agents.size()

@@ -142,10 +142,22 @@ func _scale_all(k: float) -> void:
 
 func clear() -> void:
 	_scale_all(0.0)
+	_dirty = true
 
 
+## Change the retention policy. Switching to TODAY takes effect IMMEDIATELY —
+## the whole point of picking it is to drop the fossil and see the current
+## layout, not to wait for the next sim-day boundary. The other policies only
+## change how future day boundaries decay (per-day history can't be
+## reconstructed retroactively from the aggregate).
 func set_retention(w: int) -> void:
-	retention = clampi(w, 0, Retention.ALL)
+	var nw := clampi(w, 0, Retention.ALL)
+	if nw == retention:
+		return
+	retention = nw
+	if nw == Retention.TODAY:
+		_scale_all(0.0)
+	_dirty = true
 
 
 static func retention_label(w: int) -> String:
@@ -205,3 +217,16 @@ func take_dirty() -> bool:
 	var d := _dirty
 	_dirty = false
 	return d
+
+
+## Pure form of the bridge's texture-rebuild gate (selftest-pinned): a
+## throttled call must return false WITHOUT the caller consuming the dirty
+## flag. Lives HERE rather than on NpcPopulationBridge because the population
+## selftest may never load the bridge script (its bare PerfMonitor autoload
+## identifier fails the --script compile and silently aborts the test
+## function while PASS still prints).
+static func tex_should_rebuild(force: bool, since_s: float,
+		interval_s: float, dirty: bool) -> bool:
+	if force:
+		return true
+	return since_s >= interval_s and dirty
