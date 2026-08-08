@@ -50,11 +50,20 @@ var _closed_angle_cache := NAN
 var _closed_angle_key := ""
 var _min_fold_cache := NAN
 var _min_fold_key := ""
+var _packed_cache: Dictionary = {}
+var _packed_key := ""
 
 var _wood_mat: StandardMaterial3D
 var _bracket_mat: StandardMaterial3D
 var _bolt_mat: StandardMaterial3D
 var _panel_mat: StandardMaterial3D
+## Translucent variants for the hardware editor's part view, keyed on source
+## material + alpha. See `set_ghost_alpha`.
+var _ghost_mats: Dictionary = {}
+var _ghost_alpha := 1.0
+## Progressive-construction fractions per element class (Site Projects).
+## Empty = feature off, everything visible. See set_build_progress.
+var _build_progress: Dictionary = {}
 
 
 func _ready() -> void:
@@ -191,6 +200,79 @@ func _kinematics_key() -> String:
 	return "%d|%s|%s|%s|%s|%s|%s" % [params.modules, params.pivot_pct, params.hoberman_ang, params.pivot_ang, params.h_length_ft, params.offset_top_in, params.offset_bot_in]
 
 
+## Packed ("shipping") spec for the CURRENT design — PACKING_PLAN.md Phase 0.
+## Cached on everything but the live fold angle (the envelope is solved at the
+## stow angle regardless), because _update_stats calls this on every fold tick.
+func packed_spec() -> Dictionary:
+	var cfg := params.to_config()
+	cfg.erase("foldAngle")
+	var key := str(cfg.hash())
+	if _packed_key != key or _packed_cache.is_empty():
+		_packed_cache = packed_spec_for(params)
+		_packed_key = key
+	return _packed_cache
+
+
+## Packed spec computed from a LinkageParams alone (static, offline-testable).
+## The envelope is solved at the EFFECTIVE minimum fold angle (user override
+## else V-beam contact — see PACKING_PLAN.md Phase 0.5), never at whatever
+## fold the slider happens to show, so an impossible over-fold can't shrink
+## the shipping dims. Covers the structure only: beams + brackets + bolts +
+## support beams (which detach and bundle alongside the folded ring). Solar
+## panels are deliberately EXCLUDED — they pack as their own stack (their
+## count/weight comes from deployed_panel_summary), which is exactly the
+## Phase 3 "boxes within boxes" split.
+static func packed_spec_for(p: LinkageParams) -> Dictionary:
+	# Densities + the per-part volume formulas live in LinkageBom so the BOM and
+	# the shipping spec can never disagree about what a bracket weighs. This
+	# function reduces them to one scalar; LinkageBom keeps the itemization.
+	var in3_to_m3 := LinkageBom.IN3_TO_M3
+	var stow: float = maxf(LinkageKinematics.effective_min_fold_angle(p),
+		LinkageKinematics.MIN_FOLD_ANGLE)
+	var frame: Dictionary = LinkageSolver.solve(p, stow)
+	var beams: Array = frame.get("beams", [])
+	if beams.is_empty():
+		return {}
+	# Envelope: AABB over folded beam corners (+1.5" bracket protrusion).
+	var mn := Vector3(INF, INF, INF)
+	var mx := Vector3(-INF, -INF, -INF)
+	var wood_in3 := 0.0
+	for beam in beams:
+		for c in beam["corners"]:
+			mn = mn.min(c)
+			mx = mx.max(c)
+		wood_in3 += float(beam["w"]) * float(beam["t"]) \
+			* (beam["p1"] as Vector3).distance_to(beam["p2"] as Vector3)
+	var margin := 1.5
+	var size_m := (mx - mn + Vector3.ONE * 2.0 * margin) * INCH_TO_M
+	# Support beams ship in the same bundle: size + count from the deployed
+	# frame (they are visibility-gated away at stow angles).
+	var closed: float = LinkageKinematics.optimal_closed_angle(p)
+	var deployed: Dictionary = LinkageSolver.solve(p, closed)
+	for sb in LinkageGeometry.support_beams(deployed, p, closed):
+		wood_in3 += float(sb["w"]) * float(sb["t"]) \
+			* (sb["p1"] as Vector3).distance_to(sb["p2"] as Vector3)
+	var mass := wood_in3 * in3_to_m3 * PackedSpec.WOOD_KG_M3
+	# Brackets: simplified U-channel steel volume (2 walls + base).
+	for br in frame.get("brackets", []):
+		mass += LinkageBom.bracket_mass_kg(
+			float(br.get("width", p.bracket_width)),
+			float(br.get("depth", p.bracket_depth)),
+			float(br.get("actual_height", p.bracket_height)),
+			p.bracket_wall_thickness)
+	# Bolts: shaft volume ×1.5 for head/nut/washers. Stack washers are
+	# deliberately NOT counted here — they are a BOM line only, and adding
+	# them would move every pinned shipping mass in packing_selftest.
+	for bolt in frame.get("bolts", []):
+		mass += LinkageBom.bolt_mass_kg(
+			float(bolt.get("radius", p.bolt_diameter / 2.0)) * 2.0,
+			float(bolt.get("length", 3.0)))
+	return PackedSpec.normalize({
+		"w_m": size_m.x, "d_m": size_m.y, "h_m": size_m.z,
+		"mass_kg": mass, "form": "folded", "source": "computed",
+	})
+
+
 ## Stats for the designer HUD (imperial from the frame; metric convenience).
 func get_stats() -> Dictionary:
 	if _last_frame.is_empty():
@@ -324,6 +406,84 @@ func _count_mismatch(frame: Dictionary) -> bool:
 	return false
 
 
+## Render the whole frame translucent, for the hardware editor's part view.
+##
+## A joint is INSIDE the members it clamps, so at the range you need to read a
+## bolt stack the timber is simply in the way — the web app fades every beam
+## within 36" of the focus for exactly this reason (`HW_DETAIL_BEAM_RADIUS`,
+## scene-render.js:9). Fading the whole frame instead of a radius costs nothing
+## here and needs no per-instance colour: these are MultiMeshes of unit boxes,
+## so a distance-graded fade would mean a custom shader for a preview.
+##
+## The ghost materials are DUPLICATES. The originals come from
+## `core/structure_materials.gd` and are shared with every structure in the
+## game, so tinting them in place would ghost the props standing in the world.
+## `alpha >= 1.0` restores the originals.
+func set_ghost_alpha(alpha: float) -> void:
+	_ensure_materials()
+	_ghost_alpha = alpha
+	var solid := alpha >= 0.999
+	for pair in [[_beam_mm, _wood_mat], [_panel_mm, _panel_mat],
+			[_support_mm, _wood_mat], [_bracket_mm, _bracket_mat],
+			[_bolt_mm, _bolt_mat], [_bolt_head_mm, _bolt_mat]]:
+		var inst := pair[0] as MultiMeshInstance3D
+		if inst == null:
+			continue
+		var base := pair[1] as StandardMaterial3D
+		inst.material_override = base if solid else _ghost_of(base, alpha)
+
+
+## Progressive-construction reveal (Site Projects): the fraction of each
+## element class currently "built", {beams, brackets, bolts, supports,
+## panels: 0..1}. Missing keys default to 1 (shown); an EMPTY dict clears the
+## feature (everything visible — the ordinary fully-built state). Same
+## mechanism as the CNC print ghost (`cnc_machine_runtime._update_print_ghost`):
+## `visible_instance_count` reveals a prefix of each MultiMesh in its write
+## order, which for beams is the solver's per-module emission order — the ring
+## grows module by module. Pair with set_ghost_alpha for the firming-up read.
+func set_build_progress(p: Dictionary) -> void:
+	_build_progress = p.duplicate(true)
+	_apply_build_progress()
+
+
+func build_progress() -> Dictionary:
+	return _build_progress
+
+
+func _apply_build_progress() -> void:
+	for pair in [[_beam_mm, "beams"], [_bracket_mm, "brackets"],
+			[_bolt_mm, "bolts"], [_bolt_head_mm, "bolts"],
+			[_support_mm, "supports"], [_panel_mm, "panels"]]:
+		var inst := pair[0] as MultiMeshInstance3D
+		if inst == null or inst.multimesh == null:
+			continue
+		if _build_progress.is_empty():
+			inst.multimesh.visible_instance_count = -1
+			continue
+		var frac := clampf(float(_build_progress.get(pair[1], 1.0)), 0.0, 1.0)
+		inst.multimesh.visible_instance_count = \
+			int(round(frac * float(inst.multimesh.instance_count)))
+
+
+func _ghost_of(base: StandardMaterial3D, alpha: float) -> StandardMaterial3D:
+	if base == null:
+		return null
+	var key := "%s|%.2f" % [str(base.get_instance_id()), alpha]
+	var cached = _ghost_mats.get(key)
+	if cached is StandardMaterial3D:
+		return cached
+	var m := base.duplicate() as StandardMaterial3D
+	# Depth pre-pass, not plain alpha: a beam is a closed box, and without it
+	# every internal face stacks up into a milky slab you can see even less
+	# through than the solid timber (the same trap the hardware timber hit).
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+	var c := m.albedo_color
+	c.a = alpha
+	m.albedo_color = c
+	_ghost_mats[key] = m
+	return m
+
+
 func _make_mm_instance(mesh: Mesh, count: int, material: StandardMaterial3D, mm_name: String) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -362,6 +522,15 @@ func _allocate_from_frame(frame: Dictionary) -> void:
 		_support_mm = _make_mm_instance(BoxMesh.new(), _last_support.size(), _wood_mat, "SupportBeams")
 	if not _last_panels.is_empty():
 		_panel_mm = _make_mm_instance(BoxMesh.new(), _last_panels.size(), _panel_mat, "SolarPanels")
+	# Reallocation mints fresh instances carrying the SOLID material, so a
+	# ghosted structure would silently turn opaque on the next param change.
+	if _ghost_alpha < 0.999:
+		set_ghost_alpha(_ghost_alpha)
+	# Same trap for build progress: fresh MultiMeshes default to
+	# visible_instance_count = -1 (all visible), so a half-built structure
+	# would pop fully built on any fold-driven reallocation.
+	if not _build_progress.is_empty():
+		_apply_build_progress()
 
 
 ## Unit U-channel: outer 1x1x1 (x=width, y=height, z=depth), open toward +Y.

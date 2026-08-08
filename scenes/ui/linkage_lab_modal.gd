@@ -16,6 +16,10 @@ const MODAL_NAME := "linkage_lab"
 const REBUILD_DEBOUNCE_S := 0.10
 const PRESET_DIR := "res://core/linkage/presets/"
 const USER_DESIGN_DIR := "user://linkage_designs/"
+## Seeded into a fresh Lab so it opens on a real, correctly-oriented design
+## rather than LinkageParams' bare defaults — those have the solar grid square
+## to the structure and the reciprocal beams at the wrong end offset.
+const DEFAULT_PRESET := PRESET_DIR + "starshade_soak_2026.json"
 const SIDEBAR_W := 280.0
 const RIGHT_W := 280.0
 const TOPBAR_H := 52.0
@@ -128,6 +132,8 @@ var _bracket_wall: SpinBox = null
 var _bracket_inner: SpinBox = null
 var _bracket_hole_opt: OptionButton = null
 var _bracket_hole_dist: SpinBox = null
+var _full_detail_chk: CheckBox = null
+var _spacing_note: Label = null
 var _bolt_dia_opt: OptionButton = null
 var _vbolt_row: Control = null
 var _vbolt_len: SpinBox = null
@@ -144,6 +150,10 @@ var _pivot_ang: Dictionary = {}
 var _hoberman: Dictionary = {}
 var _preset_opt: OptionButton = null
 var _min_fold_spin: SpinBox = null
+var _fab_stats: RichTextLabel = null
+var _fab_cache_key := ""
+var _crew_btn: Button = null
+var _crew_status: Label = null
 var _radial_vis: Dictionary = {}
 var _rcp_vis: Dictionary = {}
 var _panels_vis: Dictionary = {}
@@ -180,6 +190,7 @@ var _export_dlg: FileDialog = null
 var _import_dlg: FileDialog = null
 
 var _presets: Array = []
+var _seeded_default := false
 
 
 func _ready() -> void:
@@ -202,6 +213,8 @@ func open(config: Dictionary = {}) -> void:
 	if not config.is_empty():
 		params = LinkageParams.new()
 		params.from_config(config)
+	elif not _seeded_default:
+		_seed_default_design()
 	_active = true
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -210,6 +223,24 @@ func open(config: Dictionary = {}) -> void:
 	_update_place_buttons()
 	_apply_params(true)
 	_sync_controls()
+
+
+## Load the shipped default design on the FIRST bare open.
+##
+## Latched, so reopening the Lab keeps whatever the player last had on the
+## bench instead of throwing their work away. A failure here is not worth
+## blocking on — the Lab still opens on LinkageParams' defaults.
+func _seed_default_design() -> void:
+	_seeded_default = true
+	var f := FileAccess.open(DEFAULT_PRESET, FileAccess.READ)
+	if f == null:
+		return
+	var parsed = JSON.parse_string(f.get_as_text())
+	if not (parsed is Dictionary):
+		push_warning("Linkage Lab: default preset %s is unreadable" % DEFAULT_PRESET)
+		return
+	params = LinkageParams.new()
+	params.from_config(parsed as Dictionary)
 
 
 ## Edit-in-place: open bound to a placed structure, seeded with its spec.
@@ -514,6 +545,12 @@ func _build_topbar() -> Control:
 	bar.add_child(_btn_apply_prop)
 	bar.add_child(_vsep())
 
+	var btn_guide := _topbar_btn("📋", "Build guide — BOM, cut list, drill templates, assembly sequence")
+	btn_guide.pressed.connect(_on_build_guide_pressed)
+	bar.add_child(btn_guide)
+	var btn_hw := _topbar_btn("🔩", "Hardware detail — the parts stacked at each joint")
+	btn_hw.pressed.connect(_on_hardware_detail_pressed)
+	bar.add_child(btn_hw)
 	var btn_save := _topbar_btn("💾", "Save design (user://linkage_designs)")
 	btn_save.pressed.connect(_on_save_pressed)
 	bar.add_child(btn_save)
@@ -672,6 +709,15 @@ func _build_sidebar() -> Control:
 
 	# Hardware settings (collapsed by default like the web app).
 	var hw := _group(side, "Hardware Settings", true)
+	_full_detail_chk = _check(hw, "Hardware Full Detail", false)
+	_full_detail_chk.tooltip_text = "Let the parametric hardware assemblies drive stack gaps and bracket dimensions. The fields below become read-outs while it is on."
+	_spacing_note = Label.new()
+	_spacing_note.text = "Stack gaps and bracket dims come from the hardware assemblies (🔩)."
+	_spacing_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_spacing_note.add_theme_color_override("font_color", UITheme.C_AMBER)
+	_spacing_note.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_spacing_note.visible = false
+	hw.add_child(_spacing_note)
 	var brd_lbl := Label.new()
 	brd_lbl.text = "Bracket Dimensions"
 	brd_lbl.add_theme_color_override("font_color", C_TEXT_M)
@@ -1325,7 +1371,8 @@ func _build_right_panel() -> Control:
 	stats.add_child(title)
 	for key in ["Height", "Diameter", "Modules", "Beams", "Support Beams",
 			"Brackets", "Bolts", "Panels", "Array Watts",
-			"Fold Angle", "Closed Angle", "Min Fold"]:
+			"Fold Angle", "Closed Angle", "Min Fold",
+			"Packed Size", "Packed Wt"]:
 		var row := HBoxContainer.new()
 		stats.add_child(row)
 		var k := Label.new()
@@ -1340,6 +1387,30 @@ func _build_right_panel() -> Control:
 		v.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		row.add_child(v)
 		_stat_vals[key] = v
+	# Swarm-manufacturing crew plan (PACKING_PLAN.md Phase 6.5): the real
+	# BOM → fabrication task graph → pit-crew schedule, live per design.
+	_fab_stats = RichTextLabel.new()
+	_fab_stats.bbcode_enabled = true
+	_fab_stats.fit_content = true
+	_fab_stats.scroll_active = false
+	_fab_stats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_fab_stats.add_theme_color_override("default_color", C_TEXT_S)
+	_fab_stats.add_theme_font_size_override("normal_font_size", UITheme.FONT_XS)
+	stats.add_child(_fab_stats)
+	# Hand the whole build to the site's NPC crew: drops the fabrication
+	# task graph onto the habitat's chore board, wired by dependencies, with
+	# the build site as every phase's work position.
+	_crew_btn = Button.new()
+	_crew_btn.text = "👷 Queue build for crew"
+	_crew_btn.focus_mode = Control.FOCUS_NONE
+	_crew_btn.tooltip_text = "Adds the fabrication phases to a pop-driven habitat's chore board — the roster drills, assembles, and raises it in dependency order"
+	_crew_btn.pressed.connect(_on_queue_crew_build)
+	stats.add_child(_crew_btn)
+	_crew_status = Label.new()
+	_crew_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_crew_status.add_theme_color_override("font_color", C_TEXT_S)
+	_crew_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	stats.add_child(_crew_status)
 	_anim_status_lbl = Label.new()
 	_anim_status_lbl.text = "Idle"
 	_anim_status_lbl.add_theme_color_override("font_color", C_TEXT_M)
@@ -1769,16 +1840,22 @@ func _read_params() -> void:
 	params.h_stack_count = int((_hstack["spin"] as SpinBox).value)
 	params.v_stack_count = int((_vstack["spin"] as SpinBox).value)
 	params.v_stack_reverse = _vreverse_chk.button_pressed
-	params.h_stack_gap = float((_hgap["spin"] as SpinBox).value)
-	params.v_stack_gap = float((_vgap["spin"] as SpinBox).value)
 	params.modules = int((_modules["spin"] as SpinBox).value)
-	params.bracket_width = float(_bracket_w.value)
-	params.bracket_depth = float(_bracket_d.value)
-	params.bracket_height = float(_bracket_h.value)
-	params.bracket_wall_thickness = float(_bracket_wall.value)
-	params.bracket_inner_width = float(_bracket_inner.value)
-	params.bracket_hole_diameter = _sel_meta_f(_bracket_hole_opt, 0.375)
-	params.bracket_hole_distance = float(_bracket_hole_dist.value)
+	params.show_hardware_full_detail = _full_detail_chk.button_pressed
+	# While the assemblies own spacing these widgets are READ-OUTS showing the
+	# resolved values. Reading them back would overwrite the player's own
+	# sidebar numbers with derived ones, so unticking Full Detail would not
+	# restore what they had — hence the guard.
+	if not LinkageHardwareSpacing.is_active(params):
+		params.h_stack_gap = float((_hgap["spin"] as SpinBox).value)
+		params.v_stack_gap = float((_vgap["spin"] as SpinBox).value)
+		params.bracket_width = float(_bracket_w.value)
+		params.bracket_depth = float(_bracket_d.value)
+		params.bracket_height = float(_bracket_h.value)
+		params.bracket_wall_thickness = float(_bracket_wall.value)
+		params.bracket_inner_width = float(_bracket_inner.value)
+		params.bracket_hole_diameter = _sel_meta_f(_bracket_hole_opt, 0.375)
+		params.bracket_hole_distance = float(_bracket_hole_dist.value)
 	params.bolt_diameter = _sel_meta_f(_bolt_dia_opt, 0.375)
 	params.v_bolt_auto = _vbolt_auto.button_pressed
 	params.h_bolt_auto = _hbolt_auto.button_pressed
@@ -1799,6 +1876,54 @@ func _read_params() -> void:
 	_read_support_beam_params()
 	_read_solar_panel_params()
 	params.apply_auto_bolt_lengths()
+
+
+## Grey out the stack-gap and bracket inputs while the hardware assemblies own
+## them, and show the RESOLVED values so the sidebar never lies about what the
+## structure is actually built to (port of `hwUpdateStructureSpacingUI`).
+func _sync_hardware_spacing_ui() -> void:
+	if _full_detail_chk == null:
+		return
+	var active := LinkageHardwareSpacing.is_active(params)
+	if _spacing_note != null:
+		_spacing_note.visible = active
+	var tip := "Controlled by the hardware assemblies while Full Detail is on" \
+		if active else ""
+	var spins: Array = [_hgap["spin"], _vgap["spin"], _bracket_w, _bracket_d,
+		_bracket_h, _bracket_wall, _bracket_inner, _bracket_hole_dist]
+	for s in spins:
+		var sb := s as SpinBox
+		if sb == null:
+			continue
+		sb.editable = not active
+		sb.modulate.a = 0.55 if active else 1.0
+		sb.tooltip_text = tip
+	for slider in [_hgap.get("slider"), _vgap.get("slider")]:
+		var sl := slider as Range
+		if sl != null:
+			sl.set("editable", not active)
+			(sl as Control).modulate.a = 0.55 if active else 1.0
+	if _bracket_hole_opt != null:
+		_bracket_hole_opt.disabled = active
+		_bracket_hole_opt.tooltip_text = tip
+	if not active:
+		return
+	# Push the resolved numbers into the read-outs.
+	var sp := LinkageHardwareSpacing.resolve(params)
+	if sp.is_empty():
+		return
+	_set_pair(_hgap, float(sp["h_stack_gap"]))
+	_set_pair(_vgap, float(sp["v_stack_gap"]))
+	var br: Dictionary = sp.get("bracket", {})
+	if br.is_empty():
+		return
+	_bracket_w.value = float(br["width"])
+	_bracket_d.value = float(br["depth"])
+	_bracket_h.value = float(br["height"])
+	_bracket_wall.value = float(br["wall_thickness"])
+	_bracket_inner.value = float(br["inner_width"])
+	_bracket_hole_dist.value = float(br["hole_distance"])
+	_select_meta_f(_bracket_hole_opt, float(br["hole_diameter"]))
 
 
 func _read_support_beam_params() -> void:
@@ -1923,6 +2048,8 @@ func _sync_controls() -> void:
 	_set_pair(_radial_vis, params.radial_visible_angle)
 	_set_pair(_rcp_vis, params.rcp_visible_angle)
 	_set_pair(_panels_vis, params.panels_visible_angle)
+	_full_detail_chk.button_pressed = params.show_hardware_full_detail
+	_sync_hardware_spacing_ui()
 	_sync_support_beam_controls()
 	_sync_solar_panel_controls()
 	_rebuild_face_toggles()
@@ -2101,4 +2228,240 @@ func _update_stats() -> void:
 	(_stat_vals["Array Watts"] as Label).text = ("%.0f W" % watts) if panel_count > 0 else "—"
 	(_stat_vals["Fold Angle"] as Label).text = "%.1f°" % float(s["fold_angle_deg"])
 	(_stat_vals["Closed Angle"] as Label).text = "%.1f°" % rad_to_deg(_builder.closed_angle())
-	(_stat_vals["Min Fold"] as Label).text = "%.1f°" % rad_to_deg(_builder.min_fold_angle())
+	var min_fold_deg := rad_to_deg(_builder.min_fold_angle())
+	(_stat_vals["Min Fold"] as Label).text = "%.1f°" % min_fold_deg
+	# Packed ("shipping") envelope + weight — solved at the effective minimum
+	# fold angle, never the live slider angle (PACKING_PLAN.md Phase 0/0.5).
+	var packed := _builder.packed_spec()
+	var pw := float(packed.get("w_m", 0.0)) / 0.0254
+	var pd := float(packed.get("d_m", 0.0)) / 0.0254
+	var ph := float(packed.get("h_m", 0.0)) / 0.0254
+	(_stat_vals["Packed Size"] as Label).text = "—" if packed.is_empty() \
+		else "%s × %s × %s" % [_fmt_len(pw), _fmt_len(pd), _fmt_len(ph)]
+	(_stat_vals["Packed Wt"] as Label).text = PackedSpec.format_mass(packed)
+	# Honest-fold clamp: the slider floor tracks the physical minimum so a
+	# design can no longer be dragged through itself (the brackets/outer
+	# V-beams used to intersect below this angle, faking smaller shipping
+	# dims). The Min Fold Angle Override spin stays the escape hatch for
+	# hardware that genuinely folds tighter than the V-overlap model.
+	var floor_deg := clampf(min_fold_deg, 5.0, 175.0)
+	if absf(_fold_slider.min_value - floor_deg) > 0.01:
+		_fold_slider.min_value = floor_deg
+		_fold_spin.min_value = floor_deg
+	_update_fab_stats(s)
+
+
+## Fabrication + crew readout — the swarm-manufacturing planner over the
+## design's REAL part counts (PACKING_PLAN.md Phase 6.5). Cached on the
+## counts because _update_stats runs per fold tick and the schedule sweep
+## (recommend_crew iterates crew sizes) is worth ~a millisecond, not per
+## frame. An infeasible small crew is shown honestly — the raise needs
+## hands, and that constraint is the lesson.
+func _update_fab_stats(s: Dictionary) -> void:
+	if _fab_stats == null:
+		return
+	# The hardware assemblies change the assemble phase, so they belong in the
+	# cache key alongside the part counts.
+	var key := "%s|%s|%s|%s|%s|%s" % [s.get("beam_count", 0), s.get("bracket_count", 0),
+		s.get("bolt_count", 0), s.get("module_count", 0), s.get("panel_count", 0),
+		LinkageHardware.hash_key(params.hardware_assemblies)]
+	if key == _fab_cache_key:
+		return
+	_fab_cache_key = key
+	var counts := _fab_counts(s)
+	var tasks := NpcCrewPlan.linkage_fab_tasks(counts)
+	var beams := int(counts.get("beam_count", 0))
+	var holes := beams * NpcCrewPlan.HOLES_PER_BEAM
+	var head := "[b]🔧 Fabrication[/b] — %d beams · %d holes · %d brackets · %d bolts\n" % [
+		beams, holes, int(counts.get("bracket_count", 0)),
+		int(counts.get("bom_bolt_count", 0))]
+	var rows: Array = []
+	for n: int in [2, 6, 12]:
+		var r := NpcCrewPlan.schedule(tasks, n)
+		if bool(r["feasible"]):
+			rows.append("%d ppl %.1f h" % [n, float(r["makespan_s"]) / 3600.0])
+		else:
+			rows.append("%d ppl — (raise needs %d)" % [n, NpcCrewPlan.ERECT_MIN_WORKERS])
+	var reco := NpcCrewPlan.recommend_crew(tasks, 24)
+	var tail := ""
+	if not reco.is_empty():
+		var rbest := NpcCrewPlan.schedule(tasks, int(reco["n"]))
+		var bottleneck := ""
+		for row in rbest.get("timeline", []):
+			if str((row as Dictionary)["id"]) == str(rbest.get("bottleneck_id", "")):
+				bottleneck = str((row as Dictionary)["label"])
+		tail = "\nBest crew [b]%d[/b] → %.1f h · %.0f%% busy · bottleneck: %s" % [
+			int(reco["n"]), float(reco["makespan_s"]) / 3600.0,
+			float(reco["utilization"]) * 100.0, bottleneck]
+	_fab_stats.text = head + " · ".join(rows) + tail
+
+
+## Open the Build Guide over the Lab. It lives on its own CanvasLayer one band
+## higher, and CursorController keeps a modal STACK, so the Lab stays exactly
+## as it was underneath — Esc pops the guide back off.
+func _on_build_guide_pressed() -> void:
+	var main := ServiceLocator.main()
+	if main == null or not main.has_method("open_linkage_build_guide"):
+		return
+	var hint := "prop_%s" % _bound_prop_id if not _bound_prop_id.is_empty() else "design"
+	main.call("open_linkage_build_guide", params.to_config(), hint)
+
+
+## Open the Hardware Detail editor on THIS design's assembly graph. It edits
+## `params.hardware_assemblies` in place, so closing it re-solves the structure
+## — visibly re-spacing it when Hardware Full Detail is on.
+func _on_hardware_detail_pressed() -> void:
+	var main := ServiceLocator.main()
+	if main == null or not main.has_method("open_linkage_hardware_editor"):
+		return
+	var modal: Variant = main.call("open_linkage_hardware_editor", params)
+	if modal is Node and not (modal as Node).is_connected("closed", _on_hardware_closed):
+		(modal as Node).connect("closed", _on_hardware_closed)
+
+
+func _on_hardware_closed() -> void:
+	# Spacing is content-keyed and the editor mutated the graph in place, so
+	# the cache has to go before anything re-solves.
+	LinkageHardwareSpacing.clear_cache()
+	_sync_controls()
+	_apply_params(false)
+
+
+## Crew-planner input for the current design: the builder's live geometry
+## counts, sharpened by the bill of materials. The BOM supplies the real bolt
+## total (the solver only emits bolt geometry when "show bolts" is on) and the
+## per-joint hardware stacks that split the assemble phase.
+func _fab_counts(s: Dictionary) -> Dictionary:
+	return LinkageBom.fab_counts(LinkageBom.compute(params), s)
+
+
+## Drop this design's fabrication plan onto the site's NPC crew
+## (PACKING_PLAN.md Phase 6.5 step 0 payoff). The board's dependency gates
+## + quorum rules take it from here: people swarm the parallel phases,
+## gather for the raise, and the Site Plan shows the work sites live.
+func _on_queue_crew_build() -> void:
+	if _builder == null or _crew_status == null:
+		return
+	var sgv: Node = ServiceLocator.graph()
+	var bridge: Variant = sgv.call("npc_population_bridge") \
+		if sgv != null and sgv.has_method("npc_population_bridge") else null
+	if bridge == null:
+		_crew_status.text = "No population running — load a map first."
+		return
+	var iid := str(bridge.call("first_crewable_habitat"))
+	if iid.is_empty():
+		_crew_status.text = "Needs a pop-driven habitat (Inspector → Population Simulation) with people on site."
+		return
+	var board: Variant = bridge.call("chore_board_for", iid)
+	if board == null:
+		_crew_status.text = "The habitat's crew hasn't ticked yet — give it a moment."
+		return
+	var tasks := NpcCrewPlan.linkage_fab_tasks(_fab_counts(_builder.get_stats()))
+	var roster := maxi(int(bridge.call("roster_size_for", iid)), 1)
+	var sched := NpcCrewPlan.schedule(tasks, roster)
+	if not bool(sched["feasible"]):
+		# Too few people to RAISE it — queue anyway (the board's roster
+		# filter holds the raise until the camp grows), ordered by a crew
+		# that could.
+		sched = NpcCrewPlan.schedule(tasks, NpcCrewPlan.ERECT_MIN_WORKERS * 2)
+	var scene := get_tree().current_scene
+	# The build site needs a PACKED KIT CRATE — the thing the crew builds
+	# FROM, whose record carries the growing ghost structure and whose unpack
+	# (the erect phase's effect) IS the raise. Use the edited prop when it is
+	# still packed; otherwise deliver a fresh crate where the player stands.
+	var crate_id := ""
+	if not _bound_prop_id.is_empty():
+		var brec: Dictionary = PlacedPropService.get_prop_record(scene, _bound_prop_id)
+		if bool(brec.get("packed", false)):
+			crate_id = _bound_prop_id
+	if crate_id.is_empty():
+		var player := scene.find_child("Player", true, false) as Node3D \
+			if scene != null else null
+		var px := player.global_position.x + 8.0 if player != null else 0.0
+		var pz := player.global_position.z if player != null else 0.0
+		var placed: Dictionary = PlacedPropService.place_model_at_xz(scene,
+			LinkageStructureBuilder.MODEL_ID, px, pz,
+			{"packed": true, "linkage_spec": params.to_config()})
+		if not bool(placed.get("ok", false)):
+			_crew_status.text = "Couldn't place the kit crate — %s" % str(placed.get("error", ""))
+			return
+		crate_id = str(placed.get("prop_id", ""))
+	# Flip the crate into build-site rendering from the start (crate + empty
+	# ghost footprint; phases fill it in as their effects land).
+	PlacedPropService.update_prop_record(scene, crate_id,
+		{"build_state": {"phase": "", "ghost": 0.12}}, true)
+	# Per-phase world effects: each fabrication phase stamps itself as the
+	# last-completed build phase (coarse reload state), the raise unpacks
+	# (deploy sweep), the panel mount seeds the graph array.
+	# Per-phase WORK SITES spread the yard out: cutting happens at a saw
+	# bench, bracket fitting at its own table, everything structural at the
+	# frame — so the build reads as a working yard, not one dot pile.
+	var site0 := _crate_site(scene, crate_id)
+	var bench := {"kind": "pos", "x": site0.x + 7.0, "z": site0.y + 6.0}
+	var fit_yard := {"kind": "pos", "x": site0.x - 7.0, "z": site0.y + 5.0}
+	var overrides: Dictionary = {}
+	for t in tasks:
+		var tid := str((t as Dictionary).get("id", ""))
+		match tid:
+			"erect":
+				overrides[tid] = {"effect": {"op": "unpack_prop", "prop_id": crate_id}}
+			"panels":
+				overrides[tid] = {"effect": {"op": "seed_graph", "prop_id": crate_id}}
+			"cut", "drill":
+				overrides[tid] = {"effect": {"op": "set_build_phase",
+					"prop_id": crate_id, "phase": tid}, "target": bench}
+			"brackets":
+				overrides[tid] = {"effect": {"op": "set_build_phase",
+					"prop_id": crate_id, "phase": tid}, "target": fit_yard}
+			_:
+				overrides[tid] = {"effect": {"op": "set_build_phase",
+					"prop_id": crate_id, "phase": tid}}
+	var target := {"kind": "prop", "id": crate_id}
+	var project_id := str(bridge.call("create_site_project", iid,
+		SiteProject.KIND_LINKAGE_BUILD, "Build: %s" % _design_label(),
+		crate_id, _crate_site(scene, crate_id),
+		NpcCrewPlan.chore_specs(tasks, sched, overrides),
+		{"start_h": 7.0, "end_h": 19.0}, target,
+		{"crew": roster, "makespan_s": float(sched.get("makespan_s", 0.0)),
+			"feasible": bool(sched.get("feasible", false)),
+			# Compact planned Gantt + the counts the Project panel's what-if
+			# table re-schedules from (records must stay lean — never the
+			# full schedule dump).
+			"timeline": _compact_timeline(sched),
+			"fab_counts": _fab_counts(_builder.get_stats())}))
+	if project_id.is_empty():
+		_crew_status.text = "Chore board is full — clear some chores first."
+		return
+	var eta_txt := "%.1f h of crew time" % (float(sched["makespan_s"]) / 3600.0) \
+		if bool(sched["feasible"]) else "raise waits for a bigger crew"
+	# Hand off to where the action is: close the Lab and jump the graph to
+	# the Site Plan centred on the build site (watch_site_at also nudges a
+	# paused clock — a frozen plan was the #1 "nothing is happening" report).
+	var watch := _crate_site(scene, crate_id)
+	close()
+	if sgv.has_method("watch_site_at"):
+		sgv.call("watch_site_at", watch,
+			"👷 Build project queued for the %d-person crew (%s) — the site grows as they work" % [
+				roster, eta_txt])
+
+
+static func _compact_timeline(sched: Dictionary) -> Array:
+	var out: Array = []
+	for row in sched.get("timeline", []):
+		var r := row as Dictionary
+		out.append({"task_id": str(r.get("id", "")),
+			"start_s": snappedf(float(r.get("start_s", 0.0)), 1.0),
+			"end_s": snappedf(float(r.get("end_s", 0.0)), 1.0)})
+	return out
+
+
+func _crate_site(scene: Node, crate_id: String) -> Vector2:
+	var rec: Dictionary = PlacedPropService.get_prop_record(scene, crate_id) \
+		if scene != null else {}
+	return Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+
+
+func _design_label() -> String:
+	var n := str(params.to_config().get("designName", "")) \
+		if params != null else ""
+	return n if not n.is_empty() else "Linkage structure"

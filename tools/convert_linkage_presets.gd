@@ -8,12 +8,15 @@ extends SceneTree
 const SOURCE_DIR := "C:/Users/notsa/Documents/GitHub/LinkageLab/configs/"
 const DEST_DIR := "res://core/linkage/presets/"
 
+## ⚠ `starshade_soak_2026.json` is DIVERGED from its web-app source and is
+## deliberately NOT regenerated here. It ships hand-corrected orientation —
+## `panels.gridRotation` 22.5° (the solar grid was square to the structure) and
+## `supportBeams.rcpEndOffset` 1.3 (the reciprocal beams sat at the wrong end
+## offset) — and it is the design the Lab opens on by default
+## (`linkage_lab_modal.gd:DEFAULT_PRESET`). Re-adding it to JOBS would silently
+## revert both fixes. If the web config is ever corrected upstream, re-add it
+## and re-verify the array orientation against the structure.
 const JOBS := [
-	{
-		"src": "StarShade 8m Cylinder 18p - soak 26 actual.json",
-		"dst": "starshade_soak_2026.json",
-		"name": "StarShade V1 - SOAK 2026",
-	},
 	{
 		"src": "starshade-default.json",
 		"dst": "starshade_default.json",

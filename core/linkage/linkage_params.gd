@@ -65,6 +65,13 @@ var h_pivot_bolt_auto: bool = true
 var fold_angle: float = 135.4 * PI / 180.0   # radians
 var show_brackets: bool = true
 var show_bolts: bool = false
+## Opt-in high-detail hardware. When true, the parametric assembly stacks own
+## the stack gaps and bracket dimensions instead of the sidebar values above
+## (see LinkageHardwareSpacing). It defaults FALSE and must stay that way: the
+## solver's pinned reference values were generated against a hardware-disabled
+## run of the JS app (`tools/linkage_reference.mjs` mocks the hw* globals off),
+## so flipping this default silently invalidates every pin in the selftest.
+var show_hardware_full_detail: bool = false
 
 # --- Orientation / mode ---
 var orientation: String = "horizontal"       # "horizontal" (cylinder) | "vertical" (arch)
@@ -87,6 +94,16 @@ var support_beams: Dictionary = default_support_beams()
 
 # --- Solar panels (Phase 4) — mirrors state.solarPanels ---
 var solar_panels: Dictionary = default_solar_panels()
+
+# --- Costs (BOM) — mirrors the web app's cost* state fields ---
+var costs: Dictionary = default_costs()
+
+# --- Stack washers (BOM only; the solver never sees them) ---
+var washers: Dictionary = default_washers()
+
+## Parametric hardware stacks per joint. Stored in the web app's own camelCase
+## shape — see LinkageHardware's class docstring for why.
+var hardware_assemblies: Dictionary = LinkageHardware.default_assemblies()
 
 const INCHES_PER_FOOT := 12.0
 const INCHES_PER_METER := 39.37007874015748
@@ -162,6 +179,45 @@ static func default_solar_panels() -> Dictionary:
 		"arch_panel_offset": 2.0,
 		"arch_panel_slide": 0.5,
 		"arch_panel_separation": 0.0,
+	}
+
+
+## Per-item prices in USD (`app-state.js:58-98`). `auto_lumber` prices beams by
+## volume against `ref_beam` instead of the flat `h_beam`/`v_beam` figures.
+static func default_costs() -> Dictionary:
+	return {
+		"h_beam": 12.00,
+		"v_beam": 10.00,
+		"bolt": 0.75,
+		"bolt_v_inner": 0.75,
+		"bolt_v_outer": 0.50,
+		"bolt_h": 0.75,
+		"bolt_h_pivot": 0.75,
+		"washer_v": 0.10,
+		"washer_h": 0.10,
+		"bracket": 5.00,
+		"solar_panel": 150.00,
+		"auto_lumber": true,
+		# 2x4 nominal (1.5" x 3.5" actual) x 8' at a typical retail price.
+		"ref_beam": {"width": 3.5, "thickness": 1.5, "length_ft": 8.0, "price": 5.48},
+	}
+
+
+## Stack washers (`app-state.js:64-75`). These are a BOM/cost concern only —
+## no solver geometry reads them. NOTE both enables default TRUE upstream, so a
+## stock design carries washer lines out of the box; that is faithful, not a bug.
+static func default_washers() -> Dictionary:
+	return {
+		"v_enabled": true,
+		"v_id": 0.4375,
+		"v_od": 1.0,
+		"v_thickness": 0.0,     # 0 = auto-synced with v_stack_gap
+		"v_auto": true,
+		"h_enabled": true,
+		"h_id": 0.4375,
+		"h_od": 1.0,
+		"h_thickness": 0.0,     # 0 = auto-synced with h_stack_gap
+		"h_auto": true,
 	}
 
 
@@ -322,6 +378,13 @@ func apply_auto_bolt_lengths() -> void:
 # v30 config JSON round-trip (web-app compatible)
 # ---------------------------------------------------------------------------
 
+## Snapshot as a v30 config Dictionary (`config-persistence.js:getConfigSnapshot`).
+##
+## `summary` is deliberately NOT emitted. It is a derived export snapshot
+## (dimensions, watts) that changes with every geometry tweak, and
+## `LinkageStructureBuilder.packed_spec()` keys its cache on this dict's hash —
+## a derived block there would bust that cache on every fold tick.
+## `LinkageBom.to_json()` writes `summary` for exports that want it.
 func to_config() -> Dictionary:
 	var sp: Dictionary = solar_panels
 	var sb: Dictionary = support_beams
@@ -378,6 +441,18 @@ func to_config() -> Dictionary:
 			"hobermanAngle": hoberman_ang,
 			"pivotAngle": pivot_ang,
 			"vStackReverse": v_stack_reverse,
+			"washers": {
+				"vEnabled": washers["v_enabled"],
+				"vID": washers["v_id"],
+				"vOD": washers["v_od"],
+				"vThickness": washers["v_thickness"],
+				"vAuto": washers["v_auto"],
+				"hEnabled": washers["h_enabled"],
+				"hID": washers["h_id"],
+				"hOD": washers["h_od"],
+				"hThickness": washers["h_thickness"],
+				"hAuto": washers["h_auto"],
+			},
 		},
 		"mode": {
 			"type": "arch" if orientation == "vertical" else "cylinder",
@@ -446,9 +521,31 @@ func to_config() -> Dictionary:
 			"anchorDist": sb["anchor_dist"],
 			"rcpEndOffset": sb["rcp_end_offset"],
 		},
+		"costs": {
+			"hBeam": costs["h_beam"],
+			"vBeam": costs["v_beam"],
+			"bolt": costs["bolt"],
+			"boltVInner": costs["bolt_v_inner"],
+			"boltVOuter": costs["bolt_v_outer"],
+			"boltH": costs["bolt_h"],
+			"boltHPivot": costs["bolt_h_pivot"],
+			"washerV": costs["washer_v"],
+			"washerH": costs["washer_h"],
+			"bracket": costs["bracket"],
+			"solarPanel": costs["solar_panel"],
+			"autoLumber": costs["auto_lumber"],
+			"refBeam": {
+				"width": (costs["ref_beam"] as Dictionary)["width"],
+				"thickness": (costs["ref_beam"] as Dictionary)["thickness"],
+				"length": (costs["ref_beam"] as Dictionary)["length_ft"],
+				"price": (costs["ref_beam"] as Dictionary)["price"],
+			},
+		},
+		"hardwareAssemblies": hardware_assemblies.duplicate(true),
 		"visibility": {
 			"brackets": show_brackets,
 			"bolts": show_bolts,
+			"hardwareFullDetail": show_hardware_full_detail,
 			"solarPanels": sp["enabled"],
 		},
 		"cameraState": {"structureRotation": structure_rotation},
@@ -556,6 +653,7 @@ func _apply_v30(cfg: Dictionary) -> void:
 	hoberman_ang = _num(s, "hobermanAngle", hoberman_ang)
 	pivot_ang = _num(s, "pivotAngle", pivot_ang)
 	v_stack_reverse = _flag(s, "vStackReverse", v_stack_reverse)
+	_apply_washers_config(s.get("washers", {}))
 
 	var mode: Dictionary = cfg.get("mode", {})
 	orientation = "vertical" if str(mode.get("type", "")) == "arch" else "horizontal"
@@ -575,12 +673,55 @@ func _apply_v30(cfg: Dictionary) -> void:
 	var vis: Dictionary = cfg.get("visibility", {})
 	show_brackets = _flag(vis, "brackets", show_brackets)
 	show_bolts = _flag(vis, "bolts", show_bolts)
+	show_hardware_full_detail = _flag(vis, "hardwareFullDetail", show_hardware_full_detail)
 
 	var cam: Dictionary = cfg.get("cameraState", {})
 	structure_rotation = _num(cam, "structureRotation", structure_rotation)
 
 	_apply_support_beams_config(cfg.get("supportBeams", {}))
 	_apply_panels_config(cfg.get("panels", {}), vis)
+	_apply_costs_config(cfg.get("costs", {}))
+	# `ensure` always deep-copies, so a config parsed off disk can be discarded.
+	hardware_assemblies = LinkageHardware.ensure(cfg.get("hardwareAssemblies"))
+
+
+func _apply_costs_config(cc: Dictionary) -> void:
+	if cc.is_empty():
+		return
+	costs["h_beam"] = _num(cc, "hBeam", costs["h_beam"])
+	costs["v_beam"] = _num(cc, "vBeam", costs["v_beam"])
+	costs["bolt"] = _num(cc, "bolt", costs["bolt"])
+	costs["bolt_v_inner"] = _num(cc, "boltVInner", costs["bolt_v_inner"])
+	costs["bolt_v_outer"] = _num(cc, "boltVOuter", costs["bolt_v_outer"])
+	costs["bolt_h"] = _num(cc, "boltH", costs["bolt_h"])
+	costs["bolt_h_pivot"] = _num(cc, "boltHPivot", costs["bolt_h_pivot"])
+	costs["washer_v"] = _num(cc, "washerV", costs["washer_v"])
+	costs["washer_h"] = _num(cc, "washerH", costs["washer_h"])
+	costs["bracket"] = _num(cc, "bracket", costs["bracket"])
+	costs["solar_panel"] = _num(cc, "solarPanel", costs["solar_panel"])
+	costs["auto_lumber"] = _flag(cc, "autoLumber", costs["auto_lumber"])
+	var rb: Dictionary = cc.get("refBeam", {})
+	if not rb.is_empty():
+		var ref: Dictionary = costs["ref_beam"]
+		ref["width"] = _num(rb, "width", ref["width"])
+		ref["thickness"] = _num(rb, "thickness", ref["thickness"])
+		ref["length_ft"] = _num(rb, "length", ref["length_ft"])
+		ref["price"] = _num(rb, "price", ref["price"])
+
+
+func _apply_washers_config(wc: Dictionary) -> void:
+	if wc.is_empty():
+		return
+	washers["v_enabled"] = _flag(wc, "vEnabled", washers["v_enabled"])
+	washers["v_id"] = _num(wc, "vID", washers["v_id"])
+	washers["v_od"] = _num(wc, "vOD", washers["v_od"])
+	washers["v_thickness"] = _num(wc, "vThickness", washers["v_thickness"])
+	washers["v_auto"] = _flag(wc, "vAuto", washers["v_auto"])
+	washers["h_enabled"] = _flag(wc, "hEnabled", washers["h_enabled"])
+	washers["h_id"] = _num(wc, "hID", washers["h_id"])
+	washers["h_od"] = _num(wc, "hOD", washers["h_od"])
+	washers["h_thickness"] = _num(wc, "hThickness", washers["h_thickness"])
+	washers["h_auto"] = _flag(wc, "hAuto", washers["h_auto"])
 
 
 func _apply_support_beams_config(sbc: Dictionary) -> void:
@@ -716,3 +857,6 @@ func _apply_legacy_flat(cfg: Dictionary) -> void:
 	structure_rotation = _num(cfg, "structureRotation", structure_rotation)
 	show_brackets = _flag(cfg, "showBrackets", show_brackets)
 	show_bolts = _flag(cfg, "showBolts", show_bolts)
+	show_hardware_full_detail = _flag(cfg, "showHardwareFullDetail", show_hardware_full_detail)
+	if cfg.has("hardwareAssemblies"):
+		hardware_assemblies = LinkageHardware.ensure(cfg.get("hardwareAssemblies"))

@@ -17,6 +17,15 @@ const repo = process.argv[2] || path.join(process.cwd(), '..', 'LinkageLab');
 const mod = (p) => import(pathToFileURL(path.join(repo, 'js', 'linkage', p)).href);
 
 // --- Mock the hardware-detail globals the solver probes (all disabled) ------
+//
+// This is DELIBERATE and load-bearing, not a shortcut. Every pinned value in
+// linkage_selftest.gd describes the hardware-DISABLED path, which is why
+// LinkageParams.show_hardware_full_detail defaults false and
+// LinkageHardwareSpacing.effective_params returns its argument unchanged in
+// that case. Never regenerate these numbers against a hardware-ENABLED run:
+// the assemblies rewrite stack gaps and bracket dimensions, so every beam
+// corner moves and the entire suite would be silently re-pinned to a different
+// configuration than the one it claims to test.
 globalThis.hwAnyAssemblyEnabled = () => false;
 globalThis.hwUseFullDetailAssemblies = () => false;
 globalThis.hwUseInnerDetailAssemblies = () => false;

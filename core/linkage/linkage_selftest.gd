@@ -36,6 +36,21 @@ func _initialize() -> void:
 	_test_solar_handoff()
 	_test_modal_script_compiles()
 	_test_shipped_presets()
+	_test_hardware_config_roundtrip()
+	_test_bom()
+	_test_drill_plan()
+	_test_fab_graph()
+	_test_build_guide()
+	_test_hw_layout()
+	_test_hw_presets()
+	_test_hardware_spacing()
+	_test_hw_parts()
+	_test_hw_layout_reference()
+	_test_hw_placement_reference()
+	_test_hw_param_fields()
+	_test_hw_preview_context()
+	_test_hardware_modal()
+	_test_credits_lockstep()
 	if _fails == 0:
 		print("linkage_selftest: PASS (%d checks)" % _checks)
 	else:
@@ -736,6 +751,32 @@ func _test_structure_builder() -> void:
 	_check(int(stats["beam_count"]) == 56, "builder stats beam_count")
 	_feq(float(stats["max_height_m"]), float(stats["max_height_in"]) * 0.0254, 1e-6, "builder stats metric height")
 
+	# Progressive-construction reveal (Site Projects): fractions map onto
+	# visible_instance_count prefixes, and — the trap set_ghost_alpha already
+	# documents — a fold-driven REALLOCATION must re-apply them, because fresh
+	# MultiMeshes default to -1 (all visible) and a half-built structure would
+	# pop fully built. NOTE: the show_bolts rebuild above FREED the earlier
+	# Beams/Brackets nodes — re-fetch, or these checks read a freed object and
+	# silently abort the whole test function while the suite still prints PASS
+	# (the documented selftest gotcha, hit live while writing this block).
+	var beams_now := builder.get_node_or_null("Beams") as MultiMeshInstance3D
+	var brackets_now := builder.get_node_or_null("Brackets") as MultiMeshInstance3D
+	builder.set_build_progress({"beams": 0.5, "brackets": 0.0, "bolts": 1.0})
+	_check(beams_now.multimesh.visible_instance_count == 28,
+		"build progress reveals half the beams")
+	_check(brackets_now.multimesh.visible_instance_count == 0,
+		"build progress hides unfitted brackets")
+	_check(bolts_mm.multimesh.visible_instance_count == 88,
+		"build progress shows all bolts at 1.0")
+	builder.params.show_bolts = false
+	builder.rebuild()   # reallocation path (bolt MMs freed, others re-minted)
+	var beams_mm2 := builder.get_node_or_null("Beams") as MultiMeshInstance3D
+	_check(beams_mm2 != null and beams_mm2.multimesh.visible_instance_count == 28,
+		"build progress survives reallocation")
+	builder.set_build_progress({})
+	_check(beams_mm2.multimesh.visible_instance_count == -1,
+		"empty progress clears the reveal (all visible)")
+
 	builder.queue_free()
 
 
@@ -936,6 +977,42 @@ func _test_modal_script_compiles() -> void:
 		"modal builder solved a frame")
 	modal.call("_on_fold_slider", 90.0)
 	_feq(rad_to_deg(float(modal.get("params").fold_angle)), 90.0, 0.01, "modal fold slider drives angle")
+	# A bare open must land on the shipped default design, not on
+	# LinkageParams' raw defaults — those have the solar grid square to the
+	# structure and the reciprocal beams at the wrong end offset.
+	var seeded := Control.new()
+	seeded.set_script(modal_script)
+	root.add_child(seeded)
+	if seeded.get("_builder") == null:
+		seeded.call("_ready")
+	_check(not bool(seeded.get("_seeded_default")), "nothing seeded before opening")
+	seeded.call("open")
+	_check(bool(seeded.get("_seeded_default")), "a bare open seeds the default design")
+	var sp: LinkageParams = seeded.get("params")
+	_feq(float(sp.solar_panels["grid_rotation"]), 22.5, 1e-9,
+		"the Lab opens on the corrected grid rotation")
+	_feq(float(sp.support_beams["rcp_end_offset"]), 1.3, 1e-9,
+		"the Lab opens on the corrected reciprocal end offset")
+	# Reopening must NOT throw away what the player left on the bench.
+	sp.modules = 11
+	seeded.call("close")
+	seeded.call("open")
+	_check(int((seeded.get("params") as LinkageParams).modules) == 11,
+		"reopening keeps the player's current design")
+	seeded.free()
+	# Opening WITH a config still wins over the default.
+	var bound := Control.new()
+	bound.set_script(modal_script)
+	root.add_child(bound)
+	if bound.get("_builder") == null:
+		bound.call("_ready")
+	var custom := _default_params()
+	custom.modules = 7
+	bound.call("open", custom.to_config())
+	_check(int((bound.get("params") as LinkageParams).modules) == 7,
+		"an explicit config overrides the default seed")
+	bound.free()
+
 	var presets: Array = modal.get("_presets")
 	_check(presets.size() >= 3, "modal scanned shipped presets")
 	if not presets.is_empty():
@@ -975,3 +1052,2463 @@ func _test_shipped_presets() -> void:
 		_check((frame["beams"] as Array).size() > 0, "preset %s solves beams" % fname)
 		_check(float(frame["max_rad"]) > 1.0, "preset %s has radius" % fname)
 	_check(count >= 3, "at least 3 shipped presets")
+
+	# --- The default design the Lab opens on --------------------------------
+	# It ships hand-corrected orientation that its web-app source does not
+	# have, so pin both values: `tools/convert_linkage_presets.gd` no longer
+	# regenerates this file precisely because doing so reverted them.
+	var dfile := FileAccess.open("res://core/linkage/presets/starshade_soak_2026.json",
+		FileAccess.READ)
+	_check(dfile != null, "the default preset exists")
+	if dfile == null:
+		return
+	var draw = JSON.parse_string(dfile.get_as_text())
+	_check(draw is Dictionary, "the default preset parses")
+	if not (draw is Dictionary):
+		return
+	var dcfg: Dictionary = draw
+	_feq(float((dcfg["panels"] as Dictionary)["gridRotation"]), 22.5, 1e-9,
+		"default preset keeps the corrected solar grid rotation")
+	_feq(float((dcfg["supportBeams"] as Dictionary)["rcpEndOffset"]), 1.3, 1e-9,
+		"default preset keeps the corrected reciprocal end offset")
+	_check(str(dcfg.get("name", "")) == "StarShade V1 - SOAK 2026",
+		"default preset keeps the SOAK name, got %s" % str(dcfg.get("name", "")))
+	# It has to survive the round-trip the Lab actually loads it through.
+	var dp := LinkageParams.new()
+	dp.from_config(dcfg)
+	_feq(float(dp.solar_panels["grid_rotation"]), 22.5, 1e-9,
+		"grid rotation survives from_config")
+	_feq(float(dp.support_beams["rcp_end_offset"]), 1.3, 1e-9,
+		"rcp end offset survives from_config")
+	var dframe := LinkageSolver.solve(dp, dp.fold_angle)
+	_check((dframe["beams"] as Array).size() > 0, "the default preset solves")
+	_check(LinkageGeometry.solar_panels(dframe, dp).size() > 0,
+		"the default preset carries panels")
+
+
+# ---------------------------------------------------------------------------
+# Hardware assemblies + costs + washers — v30 round-trip
+# ---------------------------------------------------------------------------
+
+const HW_FIXTURE := "res://core/linkage/testdata/starshade_soak_2026_hw.json"
+
+
+## The assembly graph is stored in the web app's own camelCase shape precisely
+## so unknown keys survive. These checks are what prove that: a real export with
+## presetId/bomKey/sharedKey/mirrorPairs must come back verbatim.
+func _test_hardware_config_roundtrip() -> void:
+	# --- Defaults survive a round-trip -------------------------------------
+	var p := LinkageParams.new()
+	var cfg := p.to_config()
+	var q := LinkageParams.new()
+	q.from_config(cfg)
+	_check(_deep_eq(q.to_config(), cfg), "default config round-trips")
+	_check(not cfg.has("summary"), "to_config omits derived summary block")
+	_check(not p.show_hardware_full_detail, "full detail defaults OFF")
+
+	# Defaults must match the web app's app-state.js literals.
+	_feq(float(p.costs["h_beam"]), 12.0, 1e-9, "default costHBeam")
+	_feq(float(p.costs["bolt_v_outer"]), 0.50, 1e-9, "default costBoltVOuter")
+	_feq(float((p.costs["ref_beam"] as Dictionary)["price"]), 5.48, 1e-9, "default refBeam price")
+	_check(bool(p.costs["auto_lumber"]), "auto lumber pricing defaults on")
+	_check(bool(p.washers["v_enabled"]) and bool(p.washers["h_enabled"]),
+		"both washer sets default enabled (matches upstream)")
+	_feq(float(p.washers["v_id"]), 0.4375, 1e-9, "default vWasherID")
+
+	# --- Default assemblies -------------------------------------------------
+	var ha: Dictionary = p.hardware_assemblies
+	_check(str(ha.get("activeId", "")) == "outerVBeam", "default activeId")
+	for id in LinkageHardware.ASSEMBLY_IDS:
+		_check(not LinkageHardware.assembly(ha, id).is_empty(), "default has assembly %s" % id)
+	var outer := LinkageHardware.assembly(ha, "outerVBeam")
+	# 5 authored + 2 H-beams + 1 gap washer + bolt/washer/nut on the down axis.
+	_check((outer["parts"] as Array).size() == 11, "outerVBeam has 11 parts, got %d"
+		% (outer["parts"] as Array).size())
+	_check((LinkageHardware.assembly(ha, "vCenter")["parts"] as Array).is_empty(),
+		"vCenter starts empty")
+	_check(not LinkageHardware.use_full_detail(p), "use_full_detail false while flag off")
+
+	# parts_on_axis is seq-ordered and excludes the bracket (it anchors the
+	# stack rather than sitting in it).
+	var right := LinkageHardware.parts_on_axis(outer, "right")
+	_check(right.size() == 4, "outerVBeam right axis has 4 parts, got %d" % right.size())
+	var seqs: Array = []
+	for part in right:
+		seqs.append(int(part["seq"]))
+		_check(str(part["type"]) != "bracket", "parts_on_axis excludes brackets")
+	_check(seqs == [1, 2, 3, 4], "right axis seq-ordered, got %s" % str(seqs))
+	_check(str(LinkageHardware.bracket_part(outer).get("axis", "")) == "up",
+		"bracket lives on the up axis")
+
+	# --- Real v30 export with hardware blocks -------------------------------
+	var f := FileAccess.open(HW_FIXTURE, FileAccess.READ)
+	_check(f != null, "hardware fixture opens")
+	if f == null:
+		return
+	var raw = JSON.parse_string(f.get_as_text())
+	_check(raw is Dictionary, "hardware fixture parses")
+	if not (raw is Dictionary):
+		return
+	var src: Dictionary = raw
+
+	var hp := LinkageParams.new()
+	hp.from_config(src)
+	_check(hp.show_hardware_full_detail, "fixture turns full detail on")
+	_feq(float(hp.costs["h_beam"]), 3.7, 1e-9, "fixture costHBeam")
+	_feq(float(hp.costs["bracket"]), 5.38, 1e-9, "fixture costBracket")
+	_feq(float(hp.washers["v_thickness"]), 0.45, 1e-9, "fixture vWasherThickness")
+	_check(not bool(hp.washers["v_auto"]), "fixture vWasherAuto off")
+
+	# Two round-trips: the second proves the first was already a fixed point.
+	var once := hp.to_config()
+	var hq := LinkageParams.new()
+	hq.from_config(once)
+	_check(_deep_eq(hq.to_config(), once), "fixture config round-trips twice")
+
+	# Every part of the source export must survive verbatim, including the keys
+	# this port never reads (presetId / bomKey / sharedKey / flipAxis).
+	var src_asms: Dictionary = (src["hardwareAssemblies"] as Dictionary)["assemblies"]
+	var out_asms: Dictionary = (once["hardwareAssemblies"] as Dictionary)["assemblies"]
+	for id in LinkageHardware.ASSEMBLY_IDS:
+		var src_parts: Array = (src_asms[id] as Dictionary).get("parts", [])
+		var out_parts: Array = (out_asms[id] as Dictionary).get("parts", [])
+		_check(src_parts.size() == out_parts.size(),
+			"%s part count preserved (%d vs %d)" % [id, src_parts.size(), out_parts.size()])
+		_check(_deep_eq(src_parts, out_parts), "%s parts round-trip verbatim" % id)
+	_check(_deep_eq((src_asms["outerVBeam"] as Dictionary).get("mirrorPairs"),
+		(out_asms["outerVBeam"] as Dictionary).get("mirrorPairs")),
+		"mirrorPairs round-trip")
+	var preset_ids := 0
+	for part in (out_asms["outerVBeam"] as Dictionary)["parts"]:
+		if str((part as Dictionary).get("presetId", "")) != "":
+			preset_ids += 1
+	_check(preset_ids >= 4, "presetId survives on %d parts" % preset_ids)
+
+	# --- duplicate_params deep-copies --------------------------------------
+	var dup := hp.duplicate_params()
+	_check(_deep_eq(dup.to_config(), once), "duplicate_params preserves config")
+	var dup_part: Dictionary = ((dup.hardware_assemblies["assemblies"] as Dictionary)
+		["outerVBeam"] as Dictionary)["parts"][0]
+	var src_part: Dictionary = ((hp.hardware_assemblies["assemblies"] as Dictionary)
+		["outerVBeam"] as Dictionary)["parts"][0]
+	var before := float(src_part.get("cost", 0.0))
+	dup_part["cost"] = before + 99.0
+	(dup_part["params"] as Dictionary)["height"] = -1.0
+	dup.costs["bracket"] = -1.0
+	(dup.costs["ref_beam"] as Dictionary)["price"] = -1.0
+	dup.washers["v_od"] = -1.0
+	_feq(float(src_part.get("cost", 0.0)), before, 1e-9, "duplicate deep-copies part cost")
+	_check(float((src_part["params"] as Dictionary).get("height", 0.0)) != -1.0,
+		"duplicate deep-copies nested part params")
+	_check(float(hp.costs["bracket"]) != -1.0, "duplicate deep-copies costs")
+	_check(float((hp.costs["ref_beam"] as Dictionary)["price"]) != -1.0,
+		"duplicate deep-copies nested ref_beam")
+	_check(float(hp.washers["v_od"]) != -1.0, "duplicate deep-copies washers")
+
+	# --- ensure() normalizes junk without aliasing --------------------------
+	_check(_deep_eq(LinkageHardware.ensure(null), LinkageHardware.default_assemblies()),
+		"ensure(null) yields defaults")
+	var partial := {"assemblies": {"outerVBeam": {"id": "outerVBeam", "parts": []}}}
+	var fixed := LinkageHardware.ensure(partial)
+	for id in LinkageHardware.ASSEMBLY_IDS:
+		_check(not LinkageHardware.assembly(fixed, id).is_empty(),
+			"ensure backfills missing assembly %s" % id)
+	_check(str(fixed.get("activeId", "")) == "outerVBeam", "ensure repairs activeId")
+	# outerVBeam is an H-beam sandwich assembly, so the pair + gap washer are
+	# backfilled even though the input listed no parts at all.
+	_check((LinkageHardware.assembly(fixed, "outerVBeam")["parts"] as Array).size() == 3,
+		"ensure backfills the H-beam sandwich")
+	_check(((partial["assemblies"]["outerVBeam"] as Dictionary)["parts"] as Array).is_empty(),
+		"ensure does not mutate its input")
+
+
+# ---------------------------------------------------------------------------
+# Bill of materials
+# ---------------------------------------------------------------------------
+
+func _test_bom() -> void:
+	var p := _default_params()
+	var bom := LinkageBom.compute(p)
+	var c: Dictionary = bom["counts"]
+
+	# --- Counts, hand-derived from 8 modules x 2 H-stacks x 3 V-stacks ------
+	_check(int(c["modules"]) == 8, "bom modules")
+	_check(int(c["h_beams"]) == 32, "bom h_beams=32 got %d" % int(c["h_beams"]))
+	_check(int(c["v_beams"]) == 24, "bom v_beams=24 got %d" % int(c["v_beams"]))
+	_check(int(c["brackets"]) == 32, "bom brackets=32 got %d" % int(c["brackets"]))
+	_check(int(c["bolts_total"]) == 88, "bom bolts_total=88 got %d" % int(c["bolts_total"]))
+	_check(int(c["bolts_v_total"]) == 40, "bom v bolts=40 got %d" % int(c["bolts_v_total"]))
+	_check(int(c["bolts_h_total"]) == 48, "bom h bolts=48 got %d" % int(c["bolts_h_total"]))
+	# Washers sit BETWEEN beams: 3 V-beams => 2 gaps, 2 H-beams => 1 gap.
+	_check(int(c["washers_v"]) == 80, "bom v washers=80 got %d" % int(c["washers_v"]))
+	_check(int(c["washers_h"]) == 48, "bom h washers=48 got %d" % int(c["washers_h"]))
+	_check(bool(c["v_beams_linked"]), "default V beams are dimension-linked")
+	_check(bom["warnings"].is_empty(), "default design raises no BOM warnings")
+
+	# --- Formula vs solver: the cross-check the web app never had -----------
+	# gatherBOMData derives counts from state alone, but the solver only emits
+	# bolt GEOMETRY when show_bolts is on. Turning it on lets the two be
+	# compared directly, which is what proves the analytic formula right.
+	var q := _default_params()
+	q.show_bolts = true
+	q.show_brackets = true
+	var frame := LinkageSolver.solve(q, LinkageKinematics.optimal_closed_angle(q))
+	var qc: Dictionary = (LinkageBom.compute(q))["counts"]
+	_check((frame["bolts"] as Array).size() == int(qc["bolts_total"]),
+		"solver bolts %d == BOM bolts %d"
+		% [(frame["bolts"] as Array).size(), int(qc["bolts_total"])])
+	_check((frame["brackets"] as Array).size() == int(qc["brackets"]),
+		"solver brackets %d == BOM brackets %d"
+		% [(frame["brackets"] as Array).size(), int(qc["brackets"])])
+	# Beams: the solver also builds the V-stack, so compare the H+V total.
+	var solver_beams := _beam_type_counts(frame["beams"])
+	var h_built := int(solver_beams.get("horizontal-top", 0)) \
+		+ int(solver_beams.get("horizontal-bottom", 0))
+	_check(h_built == int(qc["h_beams"]),
+		"solver H beams %d == BOM %d" % [h_built, int(qc["h_beams"])])
+	_check(int(solver_beams.get("vertical", 0)) == int(qc["v_beams"]),
+		"solver V beams %d == BOM %d"
+		% [int(solver_beams.get("vertical", 0)), int(qc["v_beams"])])
+
+	# Cap uprights: the web BOM omits them, this one prices them and says so.
+	var cap := _default_params()
+	cap.orientation = "vertical"
+	cap.arch_cap_uprights = true
+	cap.show_bolts = true
+	var cap_bom := LinkageBom.compute(cap)
+	var cap_c: Dictionary = cap_bom["counts"]
+	_check(not cap_bom["warnings"].is_empty(), "cap uprights raise a divergence warning")
+	_check(int(cap_c["brackets"]) == 36, "cap brackets=36 got %d" % int(cap_c["brackets"]))
+	_check(int(cap_c["v_beams"]) == 27, "cap v_beams=27 got %d" % int(cap_c["v_beams"]))
+	var cap_frame := LinkageSolver.solve(cap, LinkageKinematics.optimal_closed_angle(cap))
+	_check((cap_frame["brackets"] as Array).size() == int(cap_c["brackets"]),
+		"cap solver brackets %d == BOM %d"
+		% [(cap_frame["brackets"] as Array).size(), int(cap_c["brackets"])])
+
+	# --- Totals reconcile ---------------------------------------------------
+	var sum_cost := 0.0
+	var sum_mass := 0.0
+	for item in bom["structure_items"]:
+		_check(int(item["qty"]) >= 0, "line %s qty non-negative" % str(item["item"]))
+		_feq(float(item["total_cost"]), int(item["qty"]) * float(item["unit_cost"]),
+			1e-9, "line %s total = qty x unit" % str(item["item"]))
+		sum_cost += float(item["total_cost"])
+		sum_mass += float(item["total_mass_kg"])
+	_feq(float(bom["structure_cost"]), sum_cost, 1e-9, "structure_cost sums its items")
+	var mass: Dictionary = bom["mass"]
+	_feq(float(mass["structure_kg"]), sum_mass, 1e-6, "structure mass sums its items")
+	_feq(float(mass["total_kg"]), float(mass["structure_kg"]) + float(mass["panels_kg"]),
+		1e-9, "total mass = structure + panels")
+	_check(float(bom["structure_cost"]) > 0.0, "structure costs something")
+	_check(float(mass["total_kg"]) > 0.0, "structure weighs something")
+	_check(bom["power_items"].is_empty(), "no power items without panels")
+
+	# --- Packing fence ------------------------------------------------------
+	# packed_spec_for reduces the SAME formulas to one scalar. Recompute its
+	# mass from the extracted helpers: if these drift apart, the Site Report's
+	# shipping weight and the build guide's weight start disagreeing.
+	var spec := LinkageStructureBuilder.packed_spec_for(p)
+	_check(not spec.is_empty(), "packed spec computed")
+	var stow: float = maxf(LinkageKinematics.effective_min_fold_angle(p),
+		LinkageKinematics.MIN_FOLD_ANGLE)
+	var sframe := LinkageSolver.solve(p, stow)
+	var wood_in3 := 0.0
+	for beam in sframe["beams"]:
+		wood_in3 += float(beam["w"]) * float(beam["t"]) \
+			* (beam["p1"] as Vector3).distance_to(beam["p2"] as Vector3)
+	var closed := LinkageKinematics.optimal_closed_angle(p)
+	for sb in LinkageGeometry.support_beams(LinkageSolver.solve(p, closed), p, closed):
+		wood_in3 += float(sb["w"]) * float(sb["t"]) \
+			* (sb["p1"] as Vector3).distance_to(sb["p2"] as Vector3)
+	var expect := wood_in3 * LinkageBom.IN3_TO_M3 * PackedSpec.WOOD_KG_M3
+	for br in sframe["brackets"]:
+		expect += LinkageBom.bracket_mass_kg(float(br["width"]), float(br["depth"]),
+			float(br["actual_height"]), p.bracket_wall_thickness)
+	for bolt in sframe["bolts"]:
+		expect += LinkageBom.bolt_mass_kg(float(bolt["radius"]) * 2.0, float(bolt["length"]))
+	_feq(float(spec["mass_kg"]), expect, 1e-9, "packed mass rebuilds from LinkageBom helpers")
+	# Regression pin: this literal is the shipping mass every packing check and
+	# the Site Report card read. Moving it means the whole fleet report moved.
+	_feq(float(spec["mass_kg"]), 325.258301265, 1e-6, "packed mass literal")
+
+	# --- Mass primitives ----------------------------------------------------
+	# A 2x4x8' SPF board: 3.5 x 1.5 x 96 in3 -> 0.00826 m3 -> ~3.88 kg.
+	_feq(LinkageBom.beam_mass_kg(3.5, 1.5, 8.0), 3.5 * 1.5 * 96.0
+		* LinkageBom.IN3_TO_M3 * PackedSpec.WOOD_KG_M3, 1e-9, "beam mass formula")
+	_check(absf(LinkageBom.beam_mass_kg(3.5, 1.5, 8.0) - 3.88) < 0.05,
+		"2x4x8 weighs ~3.9 kg, got %.3f" % LinkageBom.beam_mass_kg(3.5, 1.5, 8.0))
+	_feq(LinkageBom.washer_mass_kg(0.5, 0.5, 0.1), 0.0, 1e-12, "zero-area washer is massless")
+	_feq(LinkageBom.washer_mass_kg(0.5, 2.0, 0.0), 0.0, 1e-12, "zero-thickness washer is massless")
+	_check(LinkageBom.washer_mass_kg(0.5, 2.0, 0.0625) > 0.0, "real washer has mass")
+
+	# --- Costs --------------------------------------------------------------
+	# Auto lumber prices by volume: the reference board must price at exactly
+	# its own reference price.
+	_feq(LinkageBom.beam_cost_by_volume(p, 3.5, 1.5, 8.0), 5.48, 1e-9, "ref beam prices at ref")
+	_feq(LinkageBom.beam_cost_by_volume(p, 3.5, 1.5, 16.0), 10.96, 1e-9, "double length doubles price")
+	var manual := _default_params()
+	manual.costs["auto_lumber"] = false
+	_feq(LinkageBom.h_beam_unit_cost(manual), 12.0, 1e-9, "manual pricing uses costHBeam")
+	_feq(LinkageBom.v_beams_cost(manual), 24.0 * 10.0, 1e-9, "manual V beam cost")
+
+	# --- Support beams ------------------------------------------------------
+	var sup := LinkageBom.support_contribution(p)
+	_check(int(sup["radial"]) == 8, "8 radial supports")
+	_check(int(sup["reciprocal"]) == 16, "16 reciprocal supports")
+	var arch := _default_params()
+	arch.orientation = "vertical"
+	_check(LinkageBom.support_contribution(arch)["items"].is_empty(),
+		"arch mode has no support-beam BOM")
+
+	# --- Actuator -----------------------------------------------------------
+	var act: Dictionary = bom["actuator"]
+	_feq(float(act["open_in"]),
+		LinkageKinematics.pivot_span(p, LinkageKinematics.MIN_FOLD_ANGLE),
+		1e-9, "actuator open span")
+	_feq(float(act["stroke_in"]), absf(float(act["closed_in"]) - float(act["open_in"])),
+		1e-9, "actuator stroke is the span delta")
+	_check(float(act["stroke_in"]) > 0.0, "actuator stroke non-zero")
+
+	# --- Assembly steps: the payoff of porting the hardware assemblies ------
+	var steps: Array = bom["assembly_steps"]
+	_check(steps.size() == 3, "3 detailed assemblies carry parts, got %d" % steps.size())
+	var outer_step: Dictionary = {}
+	for entry in steps:
+		if str(entry["assembly_id"]) == "outerVBeam":
+			outer_step = entry
+	_check(not outer_step.is_empty(), "outerVBeam produces assembly steps")
+	if not outer_step.is_empty():
+		var ordered: Array = outer_step["steps"]
+		_check(ordered.size() == 11, "outerVBeam has 11 steps, got %d" % ordered.size())
+		_check(str(ordered[0]["type"]) == "bracket", "bracket is threaded first")
+		# The centre slot is populated before the sides grow outward from it.
+		var axes: Array = []
+		for s in ordered:
+			axes.append(str(s["axis"]))
+		_check(axes.slice(1, 2) == ["center"], "centre slot follows the bracket")
+		var seen_right := false
+		for a in axes:
+			if a == "right":
+				seen_right = true
+			elif seen_right and a == "up":
+				_check(false, "up axis must not follow right axis")
+	# The panel-less default still reports a positive per-module piece count,
+	# which is what the crew scheduler prices assembly labour from.
+	for entry in steps:
+		_check(int(entry["per_module_pieces"]) > 0,
+			"%s counts pieces" % str(entry["assembly_id"]))
+
+	# --- Panels -------------------------------------------------------------
+	var solar := _default_params()
+	solar.solar_panels["enabled"] = true
+	var sbom := LinkageBom.compute(solar)
+	_check(int((sbom["counts"] as Dictionary)["panels"]) > 0, "panels counted when enabled")
+	_check(not sbom["power_items"].is_empty(), "panels produce a power line item")
+	_check(float((sbom["mass"] as Dictionary)["panels_kg"]) > 0.0, "panels weigh something")
+	_feq(float((sbom["power"] as Dictionary)["watts_per_panel"]), 250.0, 1e-9, "panel watts")
+	# 45 lb per panel, stored metric.
+	_feq(LinkageBom.panel_mass_kg({"weight": 45.0}), 45.0 / LinkageBom.LB_PER_KG,
+		1e-9, "panel weight converts to kg")
+
+	# --- Formatting + CSV ---------------------------------------------------
+	_check(LinkageBom.format_beam_spec(8.0, 3.5, 1.5) == "8' x 3.5x1.5\"",
+		"beam spec format, got %s" % LinkageBom.format_beam_spec(8.0, 3.5, 1.5))
+	_check(LinkageBom.format_bolt_spec(0.5, 3.0) == "(1/2\" x 3.00\")",
+		"bolt spec uses fractions, got %s" % LinkageBom.format_bolt_spec(0.5, 3.0))
+	_check(LinkageBom.format_bolt_spec(0.4, 3.0).begins_with("(0.400"),
+		"unlisted bolt diameter falls back to decimals")
+	var csv := LinkageBom.to_csv(bom)
+	_check(csv.contains("Section,Qty,Item,Unit Price,Line Total,Line Mass"), "csv header")
+	_check(csv.contains("STRUCTURE"), "csv has a structure section")
+	_check(csv.contains("ESTIMATED TOTAL:"), "csv has a grand total")
+	_check(csv.contains("\r\n"), "csv uses CRLF line endings")
+	# Every beam line carries a comma inside its spec, so quoting is not
+	# optional — an unquoted row silently shifts every later column.
+	_check(csv.contains("\"H-Beams (8' x 3.5x1.5\"\")\"") or not csv.contains("H-Beams (8'"),
+		"csv quotes and escapes an item containing a quote character")
+	_check(LinkageBom._csv_cell("a,b") == "\"a,b\"", "csv quotes commas")
+	_check(LinkageBom._csv_cell("say \"hi\"") == "\"say \"\"hi\"\"\"", "csv doubles quotes")
+	_check(LinkageBom._csv_cell("plain") == "plain", "csv leaves plain cells alone")
+
+	# --- to_json adds the derived summary back -------------------------------
+	var js := LinkageBom.to_json(p, bom)
+	_check(js.has("summary"), "to_json writes a summary block")
+	_check(int((js["summary"] as Dictionary)["modules"]) == 8, "summary modules")
+	_check(not p.to_config().has("summary"), "to_config still omits summary")
+
+	# --- fab_counts adapter --------------------------------------------------
+	var fab := LinkageBom.fab_counts(bom)
+	_check(int(fab["bracket_count"]) == 32, "fab bracket count")
+	_check(int(fab["bom_bolt_count"]) > int(fab["bolt_count"]),
+		"fab bolt count includes support hardware")
+	_check(int(fab["bom_bolt_count"]) != 8 * 6,
+		"fab bolt count is real, not the modules*6 estimate")
+	_check((fab["assembly_steps"] as Array).size() == 3, "fab carries assembly steps")
+
+
+# ---------------------------------------------------------------------------
+# Hardware assembly layout maths
+# ---------------------------------------------------------------------------
+
+## The densest pins in the port: this maths feeds LinkageHardwareSpacing, which
+## feeds the SOLVER. A silent error here would move structure geometry.
+func _test_hw_layout() -> void:
+	# --- Axial length per part type, hand-computed ---------------------------
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "bolt", "params": {"length": 3.0, "headHeight": 0.3125}}),
+		3.3125, 1e-9, "bolt length = shaft + head")
+	# No head height authored: the JS falls back to 0.6 x diameter.
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "bolt", "params": {"length": 2.0, "diameter": 0.5}}),
+		2.3, 1e-9, "bolt head defaults to 0.6 x diameter")
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "bushing", "params": {"length": 1.25, "od": 0.625, "flangeOd": 0.0}}),
+		1.25, 1e-9, "plain bushing is its own length")
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "bushing", "params": {"length": 1.25, "od": 0.625,
+			"flangeOd": 0.9, "flangeThickness": 0.1}}),
+		1.35, 1e-9, "a proud flange adds to the bushing")
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "bushing", "params": {"length": 1.25, "od": 0.9,
+			"flangeOd": 0.9, "flangeThickness": 0.1}}),
+		1.25, 1e-9, "a flange no wider than the body adds nothing")
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "washer", "params": {"thickness": 0.0625}}),
+		0.0625, 1e-9, "washer length is its thickness")
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "lockWasher", "params": {"thickness": 0.078}}),
+		0.078, 1e-9, "lock washer length is its thickness")
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "nut", "params": {"height": 0.4375, "style": "hex"}}),
+		0.4375, 1e-9, "hex nut length is its height")
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "nut", "params": {"length": 0.5, "style": "rivet",
+			"flangeOd": 0.7, "flangeThickness": 0.04}}),
+		0.54, 1e-9, "rivet nut adds its flange")
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "beam", "params": {"thickness": 1.5, "width": 3.5}}),
+		1.5, 1e-9, "a beam occupies its THICKNESS along the stack")
+	_feq(LinkageHwLayout.part_axial_length(
+		{"type": "bracket", "params": {"height": 3.77}}),
+		3.77, 1e-9, "bracket length is its height")
+	# Missing/zero params must fall through to the default, not to zero — a
+	# zero-length part would collapse the whole stack.
+	_feq(LinkageHwLayout.part_axial_length({"type": "washer", "params": {}}),
+		0.0625, 1e-9, "washer with no thickness uses the default")
+	_check(LinkageHwLayout.part_axial_length({"type": "nonsense"}) > 0.0,
+		"unknown part types still occupy space")
+
+	# --- Default assemblies -------------------------------------------------
+	var p := LinkageParams.new()
+	var ha: Dictionary = p.hardware_assemblies
+	var hc := LinkageHardware.assembly(ha, "hCenter")
+	# hCenter's centre slot is the single gap washer; the H-beams sit on the
+	# up/down axes and are excluded from the span by design.
+	_feq(LinkageHwLayout.sandwich_center_span(hc), 0.0625, 1e-9,
+		"hCenter centre span is the gap washer alone")
+	_feq(LinkageHwLayout.assembly_sandwich_gap(hc), 0.0625, 1e-9,
+		"hCenter sandwich gap with no standoffs")
+	_feq(LinkageHwLayout.sandwich_center_offset(hc), 0.0, 1e-9,
+		"hCenter is anchored at the pivot")
+	var vc := LinkageHardware.assembly(ha, "vCenter")
+	_feq(LinkageHwLayout.assembly_sandwich_gap(vc), 0.0, 1e-9,
+		"an empty assembly has no gap")
+	_check(LinkageHwLayout.center_render_axis(vc) == "right",
+		"a horizontal sandwich renders along +X")
+	_check(LinkageHwLayout.center_render_axis(hc) == "up",
+		"a vertical sandwich renders along +Y")
+
+	# outerVBeam carries the bracket, so its pivot sits at the side-hole height.
+	var outer := LinkageHardware.assembly(ha, "outerVBeam")
+	var bracket := LinkageHardware.bracket_part(outer)
+	_feq(LinkageHwLayout.bracket_hole_y(bracket), 3.77 / 2.0 - 1.1875, 1e-9,
+		"bracket hole sits height/2 - sideHoleFromTop above centre")
+	_feq(LinkageHwLayout.sandwich_center_offset(outer),
+		LinkageHwLayout.bracket_hole_y(bracket), 1e-9,
+		"outerVBeam pivots at the bracket's side hole")
+
+	# --- Axis layout --------------------------------------------------------
+	var right := LinkageHwLayout.compute_axis_layout(outer, "right")
+	var items: Array = right["items"]
+	_check(items.size() == 4, "outerVBeam right axis lays out 4 parts, got %d" % items.size())
+	_check(not bool(right["center"]), "the right axis is not the centre slot")
+	# A chain axis starts clear of the bracket wall and each part follows the
+	# last with a hair of clearance.
+	_feq(float(right["origin"]), 2.15 / 2.0 + 0.02, 1e-9,
+		"right chain starts clear of the bracket wall")
+	var cursor := float(right["origin"])
+	for item in items:
+		var it := item as Dictionary
+		_feq(float(it["base_start"]), cursor, 1e-9,
+			"part %s starts where the previous ended" % str((it["part"] as Dictionary)["id"]))
+		cursor += float(it["len"]) + LinkageHwLayout.CHAIN_CLEARANCE
+	# Ranks are dense and ordered — the explode animation walks them.
+	for i in items.size():
+		_check(int((items[i] as Dictionary)["rank"]) == i, "rank %d is dense" % i)
+
+	# The centre slot is symmetric about the pivot.
+	var center := LinkageHwLayout.compute_axis_layout(hc, "center")
+	_check(bool(center["center"]), "the centre axis reports itself as centred")
+	_feq(float(center["origin"]), -0.0625 / 2.0, 1e-9,
+		"centre slot starts half a span below the pivot")
+	_feq(float(center["span"]), 0.0625, 1e-9, "centre slot span")
+
+	# Negative sandwich axes mirror their origin so they grow AWAY from centre.
+	var up_origin := LinkageHwLayout.axis_stack_origin(hc, "up", {})
+	var down_origin := LinkageHwLayout.axis_stack_origin(hc, "down", {})
+	_feq(up_origin, 0.0625 / 2.0, 1e-9, "up axis starts at the slot's outer face")
+	_feq(down_origin, 0.0625 / 2.0, 1e-9,
+		"down axis mirrors, so its LOCAL origin matches")
+
+	# qty copies stack without a gap and extend the part's span.
+	var stacked := {"type": "washer", "qty": 3, "axis": "center", "seq": 0,
+		"params": {"thickness": 0.1}}
+	_feq(LinkageHwLayout.qty_assembled_span(stacked), 0.3, 1e-9,
+		"3 washers span 3 thicknesses")
+	var stack_asm := {"id": "test", "sandwichPlane": "vertical", "parts": [stacked]}
+	var stack_layout := LinkageHwLayout.compute_axis_layout(stack_asm, "center")
+	_check((stack_layout["items"] as Array).size() == 3, "each qty copy gets an item")
+	_feq(float(stack_layout["span"]), 0.3, 1e-9, "qty copies extend the centre span")
+
+	# --- Snapping -----------------------------------------------------------
+	var planes: Array[float] = [0.0, 1.0, 2.5]
+	_feq(LinkageHwLayout.snap_start_to_planes(1.05, 1.55, planes), 1.0, 1e-9,
+		"a face 0.05 from a plane snaps flush")
+	_feq(LinkageHwLayout.snap_start_to_planes(1.5, 2.0, planes), 1.5, 1e-9,
+		"a face 0.5 away is left alone")
+	# The trailing face snaps too, pulling the part back onto the plane.
+	_feq(LinkageHwLayout.snap_start_to_planes(0.45, 0.95, planes), 0.5, 1e-9,
+		"the trailing face can drive the snap")
+	_feq(LinkageHwLayout.snap_start_to_planes(1.05, 1.55, [], 0.18), 1.05, 1e-9,
+		"no planes, no snap")
+	_feq(LinkageHwLayout.snap_start_to_planes(1.05, 1.55, planes, 0.0), 1.05, 1e-9,
+		"a zero threshold disables snapping")
+	var ctx := LinkageHwLayout.part_stack_context(
+		LinkageHardware.find_part(outer, "r-bushing"), outer, 0.0)
+	_check(not ctx.is_empty(), "stack context resolves for a stacked part")
+	if not ctx.is_empty():
+		var bushing := LinkageHardware.find_part(outer, "r-bushing")
+		_feq(LinkageHwLayout.snap_part_assembled_pos(bushing, outer, ctx, 0.02, false),
+			0.02, 1e-9, "snapping off leaves the position untouched")
+		# Snapping on must land the part's leading face EXACTLY on some plane —
+		# that is the whole contract, and it can pull either way (here it pulls
+		# back onto the beam's face, closing the chain clearance).
+		var snapped := LinkageHwLayout.snap_part_assembled_pos(bushing, outer, ctx, 0.02, true)
+		_check(absf(snapped - 0.02) > 1e-6, "snapping on actually moved the part")
+		var start := float(ctx["stack_base"]) + snapped
+		var end := start + LinkageHwLayout.part_axial_length(bushing)
+		var flush := false
+		for plane in LinkageHwLayout.collect_axis_snap_planes(outer, "right", "r-bushing", 0, bushing):
+			if absf(start - plane) < 1e-4 or absf(end - plane) < 1e-4:
+				flush = true
+		_check(flush, "a snapped part sits flush on a real plane")
+		# A part far from everything is left where it was put.
+		_feq(LinkageHwLayout.snap_part_assembled_pos(bushing, outer, ctx, 5.0, true),
+			5.0, 1e-9, "a part clear of every plane is not dragged")
+	_check(LinkageHwLayout.part_stack_context(bracket, outer, 0.0).is_empty(),
+		"the bracket has no stack context — it anchors the stack")
+
+	# --- Explode ------------------------------------------------------------
+	var ex_ctx := LinkageHwLayout.part_stack_context(
+		LinkageHardware.find_part(outer, "r-bolt"), outer, 1.0)
+	if not ex_ctx.is_empty():
+		var bolt := LinkageHardware.find_part(outer, "r-bolt")
+		var assembled := LinkageHwLayout.axis_pos_from_part(bolt,
+			LinkageHwLayout.part_stack_context(bolt, outer, 0.0))
+		var exploded := LinkageHwLayout.axis_pos_from_part(bolt, ex_ctx)
+		_check(exploded > assembled,
+			"exploding pushes an outer part further out (%f vs %f)" % [exploded, assembled])
+
+	# --- Drag round-trip -----------------------------------------------------
+	# `axis_pos_from_part` places a part; `pos_assembled_for_axis_pos` recovers
+	# the offset that put it there. A viewport drag is exactly that inverse, so
+	# any disagreement between the two shows up as the part jumping the moment
+	# it is grabbed. Sweep the axes the drag actually varies over: the stored
+	# offset, the explode blend (which the inverse has to undo), which body of a
+	# qty stack was grabbed, and the flip — which must not enter the maths at
+	# all, since it reverses a part about its own centre.
+	var rt_asm := LinkageHardware.assembly(
+		LinkageHardware.ensure(LinkageHardware.default_assemblies()), "outerVBeam")
+	var rt_part := LinkageHardware.find_part(rt_asm, "r-washer")
+	if rt_part.is_empty():
+		rt_part = LinkageHardware.find_part(rt_asm, "r-bolt")
+	_check(not rt_part.is_empty(), "the round-trip fixture part exists")
+	if not rt_part.is_empty():
+		var rt_fails := 0
+		var rt_cases := 0
+		for flip in [false, true]:
+			rt_part["flipAxis"] = flip
+			for qty in [1, 3]:
+				rt_part["qty"] = qty
+				for ci in range(qty):
+					for offset in [-0.4, 0.0, 0.37, 2.1]:
+						rt_part["posAssembled"] = offset
+						for explode in [0.0, 0.3, 0.9]:
+							var rc := LinkageHwLayout.part_stack_context(
+								rt_part, rt_asm, explode, ci)
+							if rc.is_empty():
+								continue
+							rt_cases += 1
+							var placed := LinkageHwLayout.axis_pos_from_part(rt_part, rc)
+							var back := LinkageHwLayout.pos_assembled_for_axis_pos(
+								rt_part, rc, placed)
+							if absf(back - offset) > 1e-6:
+								rt_fails += 1
+		_check(rt_cases >= 48, "the round-trip sweep ran (%d cases)" % rt_cases)
+		_check(rt_fails == 0,
+			"every drag round-trip recovers its own offset (%d of %d off)"
+			% [rt_fails, rt_cases])
+		rt_part["qty"] = 1
+		rt_part["flipAxis"] = false
+		rt_part["posAssembled"] = 0.0
+
+		# The forward half must agree with what the BUILDER actually draws, or
+		# the round-trip is only self-consistent and still wrong on screen.
+		var geo_ctx := LinkageHwLayout.part_stack_context(rt_part, rt_asm, 0.0)
+		var geo_layout := LinkageHwLayout.compute_axis_layout(
+			rt_asm, str(rt_part.get("axis", "right")))
+		for item in geo_layout["items"]:
+			var git := item as Dictionary
+			if str((git["part"] as Dictionary).get("id", "")) != str(rt_part["id"]):
+				continue
+			var gxf := LinkageHwAssemblyBuilder.part_transform(git, rt_asm, 0.0,
+				str(geo_ctx["render_axis"]), float(geo_layout["origin"]))
+			# Part meshes span 0..len along their own +Y, so the body's centre
+			# is at local (0, len/2, 0) — the node ORIGIN sits at the stack
+			# start, half a part away, which is exactly the confusion the
+			# centred `axis_pos_from_part` exists to settle. The local offset
+			# stays in INCHES: part_transform's basis already carries the
+			# inch→metre scale, so converting here would apply it twice.
+			var glen := LinkageHwLayout.part_axial_length(rt_part)
+			var gmid: Vector3 = gxf * Vector3(0.0, glen / 2.0, 0.0)
+			var along := gmid.dot(geo_ctx["dir"] as Vector3) \
+				/ LinkageHwAssemblyBuilder.INCH_TO_M
+			_feq(along, LinkageHwLayout.axis_pos_from_part(rt_part, geo_ctx), 1e-4,
+				"the placed mesh sits at the axis position the drag maths reports")
+
+	# Snapping is meaningless once the stack is fanned out — the faces a part
+	# would sit flush against are feet away.
+	_check(LinkageHwLayout.snap_active({"snap": true, "explode": 0.0}),
+		"snap is live on an assembled stack")
+	_check(not LinkageHwLayout.snap_active({"snap": true, "explode": 0.5}),
+		"snap switches off while exploded")
+	_check(not LinkageHwLayout.snap_active({"snap": false, "explode": 0.0}),
+		"snap respects the toggle")
+
+	# --- Sandwich beam coupling ---------------------------------------------
+	var coupled := LinkageHardware.assembly(
+		LinkageHardware.ensure(LinkageHardware.default_assemblies()), "hCenter")
+	var up_beam := LinkageHardware.find_part(coupled, "u-hbeam")
+	LinkageHwLayout.apply_sandwich_beam_coupling(coupled, up_beam, 0.35)
+	_feq(float(LinkageHardware.find_part(coupled, "d-hbeam")["posAssembled"]), 0.35,
+		1e-9, "moving one sandwich beam mirrors the other")
+	# The coupled standoff now shows up in the gap, which is what drives spacing.
+	up_beam["posAssembled"] = 0.35
+	_feq(LinkageHwLayout.assembly_sandwich_gap(coupled), 0.0625 + 0.7, 1e-9,
+		"standoffs on both faces widen the sandwich gap")
+	_check(LinkageHwLayout.sandwich_opposite_axis("up") == "down", "up pairs with down")
+	_check(LinkageHwLayout.sandwich_opposite_axis("left") == "right", "left pairs with right")
+	_check(LinkageHwLayout.sandwich_opposite_axis("center") == "",
+		"the centre axis has no opposite")
+
+	# --- Mirror -------------------------------------------------------------
+	var pair: Dictionary = LinkageHardware.mirror_pairs(outer)[0]
+	_check(str(pair["from"]) == "right" and str(pair["to"]) == "left",
+		"outerVBeam mirrors right onto left")
+	var mirrored := LinkageHwLayout.mirror_part(
+		LinkageHardware.find_part(outer, "r-bolt"), pair)
+	_check(str(mirrored["axis"]) == "left", "the mirror lands on the far axis")
+	_check(str(mirrored["mirrored_from"]) == "r-bolt",
+		"a mirrored part remembers its source, so edits route back")
+
+	# --- Real SOAK config ---------------------------------------------------
+	var f := FileAccess.open(HW_FIXTURE, FileAccess.READ)
+	if f == null:
+		return
+	var raw = JSON.parse_string(f.get_as_text())
+	if not (raw is Dictionary):
+		return
+	var hp := LinkageParams.new()
+	hp.from_config(raw as Dictionary)
+	var soak_outer := LinkageHardware.assembly(hp.hardware_assemblies, "outerVBeam")
+	var soak_gap := LinkageHwLayout.assembly_sandwich_gap(soak_outer)
+	_check(soak_gap > 0.0, "the SOAK outer assembly has a real sandwich gap, got %f" % soak_gap)
+	for id in LinkageHardware.ASSEMBLY_IDS:
+		var asm := LinkageHardware.assembly(hp.hardware_assemblies, id)
+		var gap := LinkageHwLayout.assembly_sandwich_gap(asm)
+		_check(gap >= 0.0 and gap < 24.0, "%s gap is sane (%f)" % [id, gap])
+		for axis in LinkageHwLayout.AXES:
+			var layout := LinkageHwLayout.compute_axis_layout(asm, axis)
+			for item in layout["items"]:
+				_check(float((item as Dictionary)["len"]) > 0.0,
+					"%s/%s part occupies space" % [id, axis])
+
+
+# ---------------------------------------------------------------------------
+# Hardware part meshes
+# ---------------------------------------------------------------------------
+
+func _test_hw_parts() -> void:
+	# --- Every default part yields real geometry ----------------------------
+	var ha := LinkageHardware.default_assemblies()
+	var built := 0
+	for id in LinkageHardware.ASSEMBLY_IDS:
+		var asm := LinkageHardware.assembly(ha, id)
+		for part in asm.get("parts", []):
+			var d := part as Dictionary
+			var mesh := LinkageHwParts.mesh_for(d)
+			var label := "%s/%s" % [id, str(d.get("id", "?"))]
+			_check(mesh != null, "%s builds a mesh" % label)
+			if mesh == null:
+				continue
+			built += 1
+			_check(mesh.get_surface_count() > 0, "%s has a surface" % label)
+			_check(mesh.surface_get_array_len(0) > 0, "%s has vertices" % label)
+			var aabb := mesh.get_aabb()
+			_check(aabb.size.length() > 0.0, "%s has volume" % label)
+			for v in [aabb.position, aabb.size]:
+				_check(is_finite(v.x) and is_finite(v.y) and is_finite(v.z),
+					"%s AABB is finite" % label)
+	_check(built >= 20, "built %d default hardware meshes" % built)
+	_check(LinkageHwParts.mesh_for({"type": "nonsense"}) == null,
+		"an unknown part type yields no mesh")
+
+	# --- Parts span [0, axial_length] along +Y -------------------------------
+	# The layout maths hands out stack positions in that space; a mesh that
+	# does not honour it would drift out of its slot as the stack grew.
+	for spec in [
+		{"type": "washer", "params": {"id": 0.5, "od": 2.0, "thickness": 0.0625}},
+		{"type": "lockWasher", "params": {"id": 0.3125, "od": 0.5, "thickness": 0.078}},
+		{"type": "bushing", "params": {"id": 0.3125, "od": 0.625, "length": 1.25}},
+		{"type": "nut", "params": {"id": 0.5, "widthAcrossFlats": 0.75, "height": 0.4375}},
+		{"type": "bolt", "params": {"diameter": 0.5, "length": 3.0, "headHeight": 0.3125,
+			"headDia": 0.75, "headType": "hex"}},
+	]:
+		var d := spec as Dictionary
+		var mesh := LinkageHwParts.mesh_for(d)
+		if mesh == null:
+			continue
+		var aabb := mesh.get_aabb()
+		var want := LinkageHwLayout.part_axial_length(d)
+		var label := str(d["type"])
+		_feq(aabb.position.y, 0.0, 1e-4, "%s starts at y=0" % label)
+		_feq(aabb.size.y, want, 1e-4, "%s spans its axial length" % label)
+
+	# Cross-section matches the authored diameters.
+	var washer := LinkageHwParts.washer_mesh({"id": 0.5, "od": 2.0, "thickness": 0.0625})
+	var wa := washer.get_aabb()
+	_feq(wa.size.x, 2.0, 1e-3, "washer OD across X")
+	_feq(wa.size.z, 2.0, 1e-3, "washer OD across Z")
+	_feq(wa.size.y, 0.0625, 1e-6, "washer thickness")
+	# A hex is authored with FLATS facing X and corners on Z (the PI/6 offset),
+	# so the two spans differ by the across-corners factor. Checking both is
+	# what catches a hex silently built as a circle.
+	var nut := LinkageHwParts.nut_mesh({"id": 0.5, "widthAcrossFlats": 0.75,
+		"height": 0.4375, "style": "hex"})
+	var na := nut.get_aabb()
+	_feq(na.size.x, 0.75, 1e-3, "hex nut measures its authored width across flats")
+	_feq(na.size.z, 0.75 / cos(PI / 6.0), 1e-3, "hex nut is wider across corners")
+	# A bolt is head + shaft, not just shaft.
+	var bolt := LinkageHwParts.bolt_mesh({"diameter": 0.5, "length": 3.0,
+		"headHeight": 0.3125, "headDia": 0.75, "headType": "hex"})
+	_feq(bolt.get_aabb().size.y, 3.3125, 1e-3, "bolt spans head + shaft")
+	# headDia is the across-CORNERS radius in the web app's convention.
+	_feq(bolt.get_aabb().size.z, 0.75, 1e-2, "bolt is as wide as its head")
+	# A rivet nut is a sleeve, so it is round rather than hex.
+	var rivet := LinkageHwParts.nut_mesh(LinkageHardware.default_rivet_nut_params())
+	_check(rivet != null and rivet.get_aabb().size.y > 0.0, "rivet nut builds a sleeve")
+
+	# --- Winding ------------------------------------------------------------
+	# Godot front faces wind clockwise from outside. If these are backwards the
+	# whole part renders as a culled silhouette, which reads as a shader bug —
+	# so assert the surface normals actually point outward.
+	var ring := LinkageHwParts.washer_mesh({"id": 0.5, "od": 2.0, "thickness": 0.25})
+	var arrays := ring.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var norms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	_check(verts.size() == norms.size() and verts.size() > 0, "washer has per-vertex normals")
+	var outward := 0
+	var inward := 0
+	for i in verts.size():
+		var v := verts[i]
+		var radial := Vector2(v.x, v.z)
+		# Judge only the OUTER wall: at the rim, with a sideways normal. The
+		# cap triangles share those positions but carry a vertical normal, and
+		# SurfaceTool keeps them as separate vertices, so this splits cleanly.
+		if radial.length() < 0.95:
+			continue
+		if absf(norms[i].y) > 0.3:
+			continue
+		var n := Vector2(norms[i].x, norms[i].z)
+		if n.length() < 0.5:
+			continue
+		if radial.normalized().dot(n.normalized()) > 0.5:
+			outward += 1
+		else:
+			inward += 1
+	_check(outward > 0, "sampled the washer's outer wall (%d points)" % outward)
+	_check(inward == 0, "outer wall normals point OUTWARD (%d inward)" % inward)
+
+	# --- Bracket, with and without the GLB ----------------------------------
+	var param_bracket := LinkageHwParts.parametric_bracket_mesh(
+		LinkageHardware.default_part_params("bracket"))
+	_check(param_bracket != null, "parametric bracket builds")
+	_feq(param_bracket.get_aabb().size.y, 3.77, 1e-3, "parametric bracket height")
+	_feq(param_bracket.get_aabb().position.y, 0.0, 1e-4, "parametric bracket sits on y=0")
+	var resolved := LinkageHwParts.bracket_mesh(
+		LinkageHardware.default_part_params("bracket"))
+	_check(resolved != null, "bracket_mesh always resolves")
+	if ResourceLoader.exists(LinkageHwParts.BRACKET_GLB):
+		# The shipped asset is THREE meshes (two side plates + the U body,
+		# 360 + 360 + 822 tris) under differently scaled nodes. Pin the merged
+		# soup exactly: any single-mesh or single-surface regression collapses
+		# the bracket into a fragment that reads as a stray nut — the shipped
+		# bug this merge replaced.
+		var soup := LinkageHwParts.glb_bracket_vertices()
+		_check(soup.size() == 1542 * 3,
+			"GLB merge carries all three meshes (%d verts, want %d)"
+			% [soup.size(), 1542 * 3])
+		var fitted := LinkageHwParts.bracket_mesh(
+			LinkageHardware.default_part_params("bracket"))
+		_check(fitted != null, "GLB bracket builds")
+		var fb := fitted.get_aabb()
+		_feq(fb.size.y, 3.77, 1e-3, "GLB bracket is fitted to the authored height")
+		_feq(fb.position.y, 0.0, 1e-3, "GLB bracket spans [0, h] like every part")
+		_feq(fb.get_center().x, 0.0, 0.05, "GLB bracket centred on X")
+		_feq(fb.get_center().z, 0.0, 0.05, "GLB bracket centred on Z")
+		# Upright: after the web pipeline (authored glbRotY, then auto-orient)
+		# the height must be the LONGEST dimension — the raw asset's tallest
+		# axis is not Y, so a pipeline that skips either rotation ships a
+		# bracket lying on its side.
+		_check(fb.size.y >= fb.size.x and fb.size.y >= fb.size.z,
+			"GLB bracket stands upright (%.2f x %.2f x %.2f)"
+			% [fb.size.x, fb.size.y, fb.size.z])
+		# The authored yaw matters: with it zeroed the footprint swaps.
+		var no_yaw_params := LinkageHardware.default_part_params("bracket")
+		no_yaw_params["glbRotY"] = 0.0
+		var no_yaw := LinkageHwParts.bracket_mesh(no_yaw_params)
+		var nb := no_yaw.get_aabb()
+		_check(absf(nb.size.x - fb.size.x) > 0.01 or absf(nb.size.z - fb.size.z) > 0.01,
+			"glbRotY is honoured (footprint changes without it)")
+	else:
+		# A fresh clone has no asset; the fallback must still produce geometry.
+		_check(LinkageHwParts.glb_bracket_vertices().is_empty(),
+			"absent GLB yields no vertices")
+		_check(resolved.get_aabb().size.y > 0.0, "bracket falls back to parametric")
+	# useGlb false takes the parametric path even when the asset is present.
+	var forced := LinkageHwParts.bracket_mesh({"useGlb": false, "height": 3.0,
+		"width": 2.0, "depth": 1.5, "wallThickness": 0.2})
+	_feq(forced.get_aabb().size.y, 3.0, 1e-3, "useGlb:false honours the authored height")
+
+	# --- Materials ----------------------------------------------------------
+	for type in LinkageHardware.PART_TYPES:
+		var m := LinkageHwParts.material_for(type)
+		_check(m != null, "material for %s" % type)
+	_check(is_same(LinkageHwParts.material_for("bolt"), LinkageHwParts.material_for("bolt")),
+		"materials are cached, not rebuilt per part")
+	_check(LinkageHwParts.material_for("beam").metallic < 0.1, "timber is not metallic")
+
+	# --- Assembly builder ---------------------------------------------------
+	var builder := LinkageHwAssemblyBuilder.new()
+	root.add_child(builder)
+	var outer := LinkageHardware.assembly(ha, "outerVBeam")
+	builder.set_assembly(outer, 0.0)
+	var stack := builder.get_node_or_null("Stack")
+	_check(stack != null, "builder created a stack root")
+	if stack != null:
+		_check(stack.get_child_count() >= 11,
+			"every part spawned, got %d" % stack.get_child_count())
+		# Pick bodies are what make the parts clickable at all.
+		var bodies := 0
+		for child in stack.get_children():
+			for sub in child.get_children():
+				var body := sub as StaticBody3D
+				if body == null:
+					continue
+				bodies += 1
+				_check(str(body.get_meta("part_id", "")) != "",
+					"pick body carries a part id")
+				_check(body.get_child_count() > 0, "pick body has a shape")
+		_check(bodies == stack.get_child_count(), "every rendered part is pickable")
+	var bolt_node := builder.part_node("r-bolt", 0)
+	_check(bolt_node != null, "parts are addressable by id")
+	if bolt_node != null:
+		var before := bolt_node.transform.origin
+		builder.set_explode(1.0)
+		_check(builder.part_node("r-bolt", 0).transform.origin.distance_to(before) > 1e-4,
+			"exploding moves a part")
+		_check(builder.get_node_or_null("Stack").get_child_count() >= 11,
+			"exploding repositions rather than rebuilding")
+		builder.set_explode(0.0)
+		_v3eq(builder.part_node("r-bolt", 0).transform.origin, before, 1e-6,
+			"collapsing returns the part exactly")
+	builder.set_selected("r-bolt", 0)
+	_check(builder.selected_part_id() == "r-bolt", "selection is remembered")
+	builder.set_assembly(LinkageHardware.assembly(ha, "vCenter"), 0.0)
+	_check(builder.get_node_or_null("Stack") != null,
+		"an empty assembly still leaves a stack root")
+	builder.free()
+
+
+# ---------------------------------------------------------------------------
+# Hardware layout — pinned to the REAL web app (tools/linkage_hw_reference.mjs)
+# ---------------------------------------------------------------------------
+
+## Reference values generated by running the actual hardware-detail.js in node
+## against the shipped default assemblies. Each row is one part on one axis:
+## [axis, part_id, part_base, len, rank, axis_pos_centered, cross_pos].
+## `axis_pos_centered` is the part's CENTRE along the stack (hwAxisPosFromPart);
+## `cross_pos` carries the bracket-hole lift on horizontal chains.
+## Regenerate with: node tools/linkage_hw_reference.mjs
+const HW_REF := {
+	"outerVBeam": {
+		"sandwich_gap": 0.0625, "center_span": 0.0625, "bracket_hole_y": 0.6975,
+		"rows": [
+			["up", "u-hbeam", 0.72875, 1.5, 0, 1.47875, 0.0],
+			["down", "d-hbeam", -0.66625, 1.5, 0, 0.08375, 0.0],
+			["down", "c-bolt", 0.87375, 3.3125, 1, 2.53, 0.0],
+			["down", "c-outer-washer", 4.22625, 0.0625, 2, 4.2575, 0.0],
+			["down", "c-nut", 4.32875, 0.539370079, 3, 4.598435039, 0.0],
+			["right", "r-beam", 1.095, 1.5, 0, 1.845, 0.6975],
+			["right", "r-bushing", 2.635, 1.25, 1, 3.26, 0.6975],
+			["right", "r-lock", 3.925, 0.078, 2, 3.964, 0.6975],
+			["right", "r-bolt", 4.043, 2.5591, 3, 5.32255, 0.6975],
+			["center", "outerVBeam-hbeam-gap-washer", 0.66625, 0.0625, 0, 0.6975, 0.0],
+		],
+	},
+	"innerVBeam": {
+		"sandwich_gap": 0.0625, "center_span": 0.0625, "bracket_hole_y": 0.0,
+		"rows": [
+			["up", "u-hbeam", 0.03125, 1.5, 0, 0.78125, 0.0],
+			["down", "d-hbeam", 0.03125, 1.5, 0, 0.78125, 0.0],
+			["right", "r-beam", 0.6, 1.5, 0, 1.35, 0.0],
+			["right", "r-washer", 2.14, 0.0625, 1, 2.17125, 0.0],
+			["right", "r-lock", 2.2425, 0.078, 2, 2.2815, 0.0],
+			["right", "r-bolt", 2.3605, 2.5591, 3, 3.64005, 0.0],
+			["center", "innerVBeam-hbeam-gap-washer", -0.03125, 0.0625, 0, 0.0, 0.0],
+		],
+	},
+	"hCenter": {
+		"sandwich_gap": 0.0625, "center_span": 0.0625, "bracket_hole_y": 0.0,
+		"rows": [
+			["up", "u-hbeam", 0.03125, 1.5, 0, 0.78125, 0.0],
+			["down", "d-hbeam", 0.03125, 1.5, 0, 0.78125, 0.0],
+			["center", "hCenter-hbeam-gap-washer", -0.03125, 0.0625, 0, 0.0, 0.0],
+		],
+	},
+}
+
+
+## Every `params` key a part type ships with must be either editable or
+## explicitly hidden.
+##
+## The inspector builds itself from `LinkageHwParamFields`, so a key missing
+## from the table is a control that silently does not exist — invisible from the
+## UI, and invisible in review too, because nothing errors. This is the guard
+## that turns "someone forgot to expose the new field" into a failing check.
+func _test_hw_param_fields() -> void:
+	var types := ["bolt", "bushing", "washer", "lockWasher", "nut", "rivetNut",
+		"bracket", "beam"]
+	for type in types:
+		var defaults := LinkageHardware.default_part_params(str(type))
+		_check(not defaults.is_empty(), "%s has default params" % type)
+		var rows := LinkageHwParamFields.for_type(str(type))
+		_check(not rows.is_empty(), "%s has an editor field table" % type)
+		var hidden := LinkageHwParamFields.hidden_for_type(str(type))
+
+		var seen := {}
+		for row in rows:
+			var r := row as Dictionary
+			var key := str(r.get("key", ""))
+			_check(key != "", "%s field rows all name a key" % type)
+			_check(not seen.has(key), "%s field %s is listed once" % [type, key])
+			seen[key] = true
+			var kind := str(r.get("kind", ""))
+			_check(kind in ["num", "enum", "bool", "text"],
+				"%s.%s has a known widget kind (%s)" % [type, key, kind])
+			if kind == "num":
+				_check(float(r.get("min", 0.0)) < float(r.get("max", 0.0)),
+					"%s.%s has an ordered range" % [type, key])
+				_check(float(r.get("step", 0.0)) > 0.0,
+					"%s.%s has a positive step" % [type, key])
+			elif kind == "enum":
+				_check((r.get("options", []) as Array).size() >= 2,
+					"%s.%s offers a choice" % [type, key])
+
+		# Both directions: nothing shipped is unreachable, and nothing listed
+		# is a key the part does not actually have.
+		for key in defaults:
+			_check(seen.has(str(key)) or hidden.has(str(key)),
+				"%s.%s is editable or explicitly hidden" % [type, str(key)])
+		for key in seen:
+			# The nut table covers the rivet variant too, so its rivet-only
+			# keys are absent from a plain hex nut's defaults and vice versa.
+			var shared: bool = type in ["nut", "rivetNut"]
+			_check(defaults.has(str(key)) or shared,
+				"%s.%s exists on the part" % [type, str(key)])
+		for key in hidden:
+			_check(defaults.has(str(key)),
+				"%s hides %s, which the part actually has" % [type, str(key)])
+			_check(str(hidden[key]) != "",
+				"%s.%s records WHY it is hidden" % [type, str(key)])
+
+	# The rivet nut is a nut wearing a style, not a type of its own — the port
+	# stores it as `type: "nut"`, which is why `for_type` aliases it.
+	_check(LinkageHwParamFields.for_type("rivetNut")
+		== LinkageHwParamFields.for_type("nut"),
+		"rivetNut shares the nut field table")
+	_check(LinkageHwParamFields.field("bracket", "sideHoleFromTop").has("min"),
+		"the bracket's hole height is an editable numeric field")
+	_check(LinkageHwParamFields.field("bolt", "nonexistent").is_empty(),
+		"an unknown key resolves to no field")
+
+
+const HW_PLACEMENT_REF_PATH := "res://core/linkage/testdata/hw_placement_ref.json"
+
+
+## Where every detailed assembly SITS on the solved structure, pinned against
+## the real web app via `tools/linkage_hw_reference.mjs`.
+##
+## This exists because the original port got the placement wrong three ways at
+## once and every one of them still RENDERED: the assembly was anchored on the
+## bracket's H-ring pivot instead of the joint's V-stack pivot, the per-joint
+## `flipStackAxis` mirror was missing entirely, and the hCenter frame was yawed
+## 90°. None of those produce an error — they produce hardware in the wrong
+## place, which is only diagnosable by eye. Hence a pin.
+##
+## Three of the checks below are JS-FREE invariants (anchoring identity, flip
+## algebra, hCenter radial). Those are the ones that survive a regeneration of
+## the fixture, so they are the real guard; the pinned numbers catch drift.
+func _test_hw_placement_reference() -> void:
+	var f := FileAccess.open(HW_PLACEMENT_REF_PATH, FileAccess.READ)
+	if f == null:
+		_check(false, "hw placement reference fixture is readable")
+		return
+	var parsed = JSON.parse_string(f.get_as_text())
+	f.close()
+	if not (parsed is Dictionary):
+		_check(false, "hw placement reference parses as JSON")
+		return
+	var cases: Dictionary = (parsed as Dictionary).get("cases", {})
+	_check(cases.size() == 5, "placement reference carries 5 cases (%d)" % cases.size())
+
+	for case_id in cases:
+		var c: Dictionary = cases[case_id]
+		var p := _placement_case_params(str(case_id))
+		var closed := LinkageKinematics.optimal_closed_angle(p)
+		_feq(closed, float(c["closed_angle"]), 1e-6,
+			"%s closed angle vs JS" % case_id)
+		var frame := LinkageSolver.solve(p, closed)
+
+		# The beams must be exactly where the hardware-DISABLED pins say they
+		# are. If this moves, the placement config started rewriting the
+		# structure and every number below describes a different design.
+		var corner_sum := Vector3.ZERO
+		var n_corners := 0
+		for beam in frame["beams"]:
+			for corner in (beam as Dictionary)["corners"]:
+				corner_sum += corner as Vector3
+				n_corners += 1
+		_check(n_corners == int(c["n_corners"]),
+			"%s corner count %d vs %d" % [case_id, n_corners, int(c["n_corners"])])
+		# Inch-scale sums over ~450 corners, so the float32 tolerance is coarse.
+		_v3eq(corner_sum, _ref_v3(c["corner_sum"]), 0.05,
+			"%s beams are unmoved by the placement solve" % case_id)
+
+		var got := LinkageHwPlacement.placements(p, frame)
+		var ref_rows: Array = c["placements"]
+		_check(got.size() == ref_rows.size(),
+			"%s placement count %d vs %d" % [case_id, got.size(), ref_rows.size()])
+		if got.size() != ref_rows.size():
+			continue
+		got.sort_custom(_placement_sort)
+
+		var degenerate_seen := 0
+		for i in ref_rows.size():
+			var r: Dictionary = ref_rows[i]
+			var g: Dictionary = got[i]
+			var xf: Transform3D = g["transform"]
+			var tag := "%s[%d] %s m%d %s" % [case_id, i, str(r["id"]),
+				int(r["module"]), "bot" if bool(r["bottom"]) else "top"]
+
+			_check(str(g["assembly_id"]) == str(r["id"]),
+				"%s assembly id (%s)" % [tag, str(g["assembly_id"])])
+			_check(str(g["role"]) == str(r["role"]), "%s pivot role" % tag)
+			_check(bool(g["flip_stack_axis"]) == bool(r["flip"]),
+				"%s flip_stack_axis" % tag)
+			_v3eq(xf.origin, _ref_v3(r["origin"]), 1e-3, "%s origin vs JS" % tag)
+
+			# Basis COLUMNS, never a quaternion: the double cover would fail a
+			# correct frame on a sign. `skip_basis` marks the two hCentre cases
+			# the port deliberately does not pin — see the generator for why.
+			var skip := str(r.get("skip_basis", ""))
+			if skip != "":
+				degenerate_seen += 1
+			else:
+				_v3eq(xf.basis.x, _ref_v3(r["bx"]), 1e-5, "%s basis x vs JS" % tag)
+				_v3eq(xf.basis.y, _ref_v3(r["by"]), 1e-5, "%s basis y vs JS" % tag)
+				_v3eq(xf.basis.z, _ref_v3(r["bz"]), 1e-5, "%s basis z vs JS" % tag)
+
+			# JS-free: right-handed and orthonormal, whatever the numbers say.
+			_check(xf.basis.determinant() > 0.999,
+				"%s frame is right-handed (%.6f)" % [tag, xf.basis.determinant()])
+			_check(xf.basis.is_equal_approx(xf.basis.orthonormalized()),
+				"%s frame is orthonormal" % tag)
+
+			# JS-free: hCentre's local +X is the outward radial and its stack
+			# runs along the bolt. This is the exact property the 90°-yawed port
+			# violated while still rendering a valid-looking frame.
+			if str(r["id"]) == "hCenter" and skip == "":
+				var pivot := _ref_v3(r["pivot"])
+				var radial := Vector3(pivot.x, 0.0, pivot.z).normalized()
+				_check(xf.basis.x.dot(radial) > 0.999,
+					"%s hCentre +X points radially outward (%.4f)"
+					% [tag, xf.basis.x.dot(radial)])
+				_v3eq(xf.basis.y, Vector3.UP, 1e-5, "%s hCentre +Y is world up" % tag)
+		if str(case_id) == "cyl_default":
+			_check(degenerate_seen == 2,
+				"module 0's two hCentre joints are the only unpinned yaws (%d)"
+				% degenerate_seen)
+
+	# Every joint the builder draws must land on its OWN seat. The clones are
+	# children of a node that is itself already seated on placement 0, so their
+	# `transform` is a local one; assigning the absolute seat there composes the
+	# two and scatters joints 1..n across the map while joint 0 — which is the
+	# builder node itself, not a clone — stays perfectly correct.
+	var seat_p := _default_params()
+	seat_p.show_brackets = true
+	seat_p.show_bolts = true
+	var seat_frame := LinkageSolver.solve(seat_p,
+		LinkageKinematics.optimal_closed_angle(seat_p))
+	var seats := LinkageHwPlacement.placements_for(seat_p, seat_frame, "outerVBeam")
+	_check(seats.size() > 4, "the stock design has several outer joints (%d)"
+		% seats.size())
+	var seat_builder := LinkageHwAssemblyBuilder.new()
+	root.add_child(seat_builder)
+	seat_builder.set_assembly(
+		LinkageHardware.assembly(seat_p.hardware_assemblies, "outerVBeam"), 0.0, true)
+	var seat_lift := 0.37     # any non-zero lift: it must not leak into the maths
+	seat_builder.transform = LinkageHwAssemblyBuilder.seat_transform(
+		seats[0], seat_lift)
+	seat_builder.set_instances(seats, seat_lift)
+	_check(seat_builder.instance_count() == seats.size() - 1,
+		"one clone per joint beyond the first (%d of %d)"
+		% [seat_builder.instance_count(), seats.size() - 1])
+	var seat_drift := 0
+	var worst_seat := 0.0
+	for i in seat_builder.instance_count():
+		var clone := seat_builder.get_node_or_null("Context%d" % (i + 1)) as Node3D
+		if clone == null:
+			seat_drift += 1
+			continue
+		# WORLD transform, which is what the player sees — the whole point is
+		# that it must not inherit the builder's own seat.
+		var want := LinkageHwAssemblyBuilder.seat_transform(seats[i + 1], seat_lift)
+		var got := seat_builder.transform * clone.transform
+		worst_seat = maxf(worst_seat, got.origin.distance_to(want.origin))
+		if not got.is_equal_approx(want):
+			seat_drift += 1
+	_check(seat_drift == 0,
+		"every context joint lands on its own seat (%d off, worst %.4f m)"
+		% [seat_drift, worst_seat])
+	# A clone must not wear the selection highlight: duplicate() copies
+	# material_override, so the selected part used to light up at every joint.
+	var lit_part := ""
+	var lit_asm := LinkageHardware.assembly(seat_p.hardware_assemblies, "outerVBeam")
+	for sp in lit_asm.get("parts", []):
+		if str((sp as Dictionary).get("type", "")) != "bracket":
+			lit_part = str((sp as Dictionary).get("id", ""))
+			break
+	if lit_part != "":
+		seat_builder.set_selected(lit_part, 0)
+		seat_builder.set_instances(seats, seat_lift)
+		var lit := 0
+		for i in seat_builder.instance_count():
+			var clone2 := seat_builder.get_node_or_null("Context%d" % (i + 1)) as Node3D
+			if clone2 == null:
+				continue
+			for node in clone2.get_children():
+				var mi := node as MeshInstance3D
+				if mi != null and mi.material_override != null:
+					lit += 1
+		_check(lit == 0, "context clones carry no selection highlight (%d lit)" % lit)
+	seat_builder.queue_free()
+
+	# JS-free: the anchoring identity, and the flip algebra. These are what
+	# actually stop the three original bugs coming back — they hold no matter
+	# how the fixture is regenerated.
+	var sp := _default_params()
+	sp.show_brackets = true
+	sp.show_bolts = true
+	var sframe := LinkageSolver.solve(sp, LinkageKinematics.optimal_closed_angle(sp))
+	var asm := LinkageHardware.assembly(sp.hardware_assemblies, "outerVBeam")
+	var bpart := LinkageHardware.bracket_part(asm)
+	var bhole := LinkageHwLayout.bracket_hole_y(bpart)
+	var bpr: Dictionary = bpart.get("params", {})
+	var nudge := Vector3(float(bpr.get("posX", 0.0)), float(bpr.get("posY", 0.0)),
+		float(bpr.get("posZ", 0.0)))
+	var anchor_fails := 0
+	for entry in LinkageHwPlacement.placements(sp, sframe):
+		var e := entry as Dictionary
+		if str(e["assembly_id"]) != "outerVBeam":
+			continue
+		var xf2: Transform3D = e["transform"]
+		var br := _bracket_matching(sframe, e)
+		if br.is_empty():
+			continue
+		var recovered := xf2.origin + xf2.basis * Vector3(0.0, bhole, 0.0) \
+			- xf2.basis * nudge
+		if recovered.distance_to(br["v_bolt_pivot"] as Vector3) > 1e-3:
+			anchor_fails += 1
+	_check(anchor_fails == 0,
+		"every outer seat's bracket hole lands on its V-stack pivot (%d off)"
+		% anchor_fails)
+
+	var br0 := (sframe["brackets"] as Array)[0] as Dictionary
+	var plain := LinkageSolver.bracket_basis_for(br0, false, false)
+	var flipped := LinkageSolver.bracket_basis_for(br0, false, true)
+	_v3eq(flipped.x, -plain.x, 1e-6, "flip negates the bolt axis")
+	_v3eq(flipped.z, -plain.z, 1e-6, "flip negates the beam axis")
+	_v3eq(flipped.y, plain.y, 1e-6, "flip leaves the U opening alone")
+	_check(flipped.determinant() > 0.999, "a flipped frame stays right-handed")
+	# The rule itself, spelled out so a refactor cannot quietly invert it.
+	_check(LinkageHwPlacement.flip_stack_axis("outerVBeam", "outer", true, false),
+		"outer-bottom flips when the stack is not reversed")
+	_check(not LinkageHwPlacement.flip_stack_axis("outerVBeam", "outer", true, true),
+		"…and does not when it is")
+	_check(not LinkageHwPlacement.flip_stack_axis("innerVBeam", "inner", true, true),
+		"inner joints follow the opposite rule")
+	_check(not LinkageHwPlacement.flip_stack_axis("hCenter", "center", true, true),
+		"centre joints never flip")
+
+
+## The bracket a placement came from, matched on role + ring + module rather
+## than array position — the whole point of `pivot_role` existing.
+func _bracket_matching(frame: Dictionary, entry: Dictionary) -> Dictionary:
+	for bracket in frame["brackets"]:
+		var br := bracket as Dictionary
+		if str(br.get("pivot_role", "")) != str(entry["role"]):
+			continue
+		if bool(br.get("is_bottom", false)) != bool(entry["is_bottom"]):
+			continue
+		if int(br.get("module_index", -1)) != int(entry["module_index"]):
+			continue
+		if (br["v_bolt_pivot"] as Vector3).distance_to(
+				(entry["transform"] as Transform3D).origin) > 12.0:
+			continue
+		return br
+	return {}
+
+
+## Same ordering the generator sorts by, so row i means the same joint on both
+## sides: assembly, module, ring, then height and x to separate the two radial
+## lines of one module.
+func _placement_sort(a: Dictionary, b: Dictionary) -> bool:
+	return _placement_key(a) < _placement_key(b)
+
+
+func _placement_key(e: Dictionary) -> String:
+	var o: Vector3 = (e["transform"] as Transform3D).origin
+	# All three coordinates: the arch's mirrored joints share a height AND an x,
+	# differing only in z, so a y+x key made row i mean a different joint on
+	# each side of the comparison.
+	return "%s|%04d|%s|%014.4f|%014.4f|%014.4f" % [str(e["assembly_id"]),
+		int(e["module_index"]), "0" if bool(e["is_bottom"]) else "1", o.y, o.x, o.z]
+
+
+func _ref_v3(a) -> Vector3:
+	var arr := a as Array
+	return Vector3(float(arr[0]), float(arr[1]), float(arr[2]))
+
+
+## LinkageParams matching one generator case. Kept beside the case list in
+## tools/linkage_hw_reference.mjs — the two must be edited together.
+func _placement_case_params(case_id: String) -> LinkageParams:
+	var p := _default_params()
+	p.show_brackets = true
+	p.show_bolts = true
+	match case_id:
+		"cyl_reversed":
+			p.v_stack_reverse = true
+		"cyl_centers":
+			var vc := LinkageHardware.assembly(p.hardware_assemblies, "vCenter")
+			(vc["parts"] as Array).append(LinkageHardware.make_part(
+				"vc-w1", "washer", "Centre washer", "center", 1, 1, 1, 0.1,
+				{"id": 0.3125, "od": 1.0, "thickness": 0.0625}))
+		"cyl_nudge":
+			var oa := LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")
+			var bp: Dictionary = LinkageHardware.bracket_part(oa).get("params", {})
+			bp["posX"] = 0.13
+			bp["posY"] = -0.07
+			bp["posZ"] = 0.21
+		"arch_caps":
+			p.orientation = "vertical"
+			p.arch_cap_uprights = true
+			p.modules = 6
+	return p
+
+
+func _test_hw_layout_reference() -> void:
+	var ha := LinkageHardware.ensure(LinkageHardware.default_assemblies())
+	for asm_id in HW_REF:
+		var ref: Dictionary = HW_REF[asm_id]
+		var asm := LinkageHardware.assembly(ha, str(asm_id))
+		_feq(LinkageHwLayout.assembly_sandwich_gap(asm), float(ref["sandwich_gap"]),
+			1e-9, "%s sandwich gap vs JS" % asm_id)
+		_feq(LinkageHwLayout.sandwich_center_span(asm), float(ref["center_span"]),
+			1e-9, "%s centre span vs JS" % asm_id)
+		var bracket := LinkageHardware.bracket_part(asm)
+		var hole_y := LinkageHwLayout.bracket_hole_y(bracket) \
+			if not bracket.is_empty() else 0.0
+		_feq(hole_y, float(ref["bracket_hole_y"]), 1e-9, "%s bracket hole vs JS" % asm_id)
+
+		# Index this assembly's laid-out items by axis + part id.
+		var items := {}
+		var origins := {}
+		for axis in LinkageHwLayout.AXES:
+			var layout := LinkageHwLayout.compute_axis_layout(asm, str(axis))
+			origins[str(axis)] = float(layout["origin"])
+			for item in layout["items"]:
+				var it := item as Dictionary
+				items["%s|%s" % [str(axis), str((it["part"] as Dictionary)["id"])]] = it
+
+		for row in ref["rows"]:
+			var axis := str(row[0])
+			var pid := str(row[1])
+			var key := "%s|%s" % [axis, pid]
+			var label := "%s %s" % [asm_id, key]
+			_check(items.has(key), "%s laid out" % label)
+			if not items.has(key):
+				continue
+			var it := items[key] as Dictionary
+			var part := it["part"] as Dictionary
+			_feq(float(it["part_base"]), float(row[2]), 1e-9, "%s part_base vs JS" % label)
+			_feq(float(it["len"]), float(row[3]), 1e-9, "%s len vs JS" % label)
+			_check(int(it["rank"]) == int(row[4]), "%s rank vs JS (%d want %d)"
+				% [label, int(it["rank"]), int(row[4])])
+			var axis_pos := float(it["base_start"]) + float(it["len"]) / 2.0
+			_feq(axis_pos, float(row[5]), 1e-9, "%s centre pos vs JS" % label)
+
+			# The FINAL transform: the part's world-space centre must land at
+			# dir*axis_pos + cross*cross_pos, flipped or not. This is the pin
+			# that caught flipAxis parts sliding a full part-length out of
+			# their slot (a half-turn about the START relocates the body; the
+			# web flips about the CENTRE).
+			var render := str(axis)
+			if LinkageHwLayout.is_center_axis(render):
+				render = LinkageHwLayout.center_render_axis(asm)
+			var xf := LinkageHwAssemblyBuilder.part_transform(
+				it, asm, 0.0, render, float(origins[axis]))
+			var dir: Vector3 = LinkageHwLayout.AXIS_DIRS[render]
+			var cross: Vector3 = LinkageHwLayout.AXIS_CROSS[render]
+			var want := (dir * float(row[5]) + cross * float(row[6])) \
+				* LinkageHwAssemblyBuilder.INCH_TO_M
+			var got: Vector3 = xf * Vector3(0.0, float(it["len"]) / 2.0, 0.0)
+			_v3eq(got, want, 1e-6, "%s world centre vs JS" % label)
+			# And flipping must PRESERVE that centre while reversing the part.
+			var flipped := part.duplicate(true)
+			flipped["flipAxis"] = not bool(part.get("flipAxis", false))
+			var fit := it.duplicate(true)
+			fit["part"] = flipped
+			var fxf := LinkageHwAssemblyBuilder.part_transform(
+				fit, asm, 0.0, render, float(origins[axis]))
+			_v3eq(fxf * Vector3(0.0, float(it["len"]) / 2.0, 0.0), want, 1e-6,
+				"%s flip keeps the centre" % label)
+
+
+# ---------------------------------------------------------------------------
+# Hardware preview IN CONTEXT — the beams must meet the hardware correctly
+# ---------------------------------------------------------------------------
+
+## The web app shows a joint against the design's real members, threaded on the
+## real bolt. Each check here pins one of the three things that has to be true
+## for that to read correctly: the timber is the DESIGN's, it is anchored on
+## its BOLT HOLE, and a horizontal stack is lifted to the bracket's hole.
+func _test_hw_preview_context() -> void:
+	# --- 1. Preview beams are re-cut from the structure ----------------------
+	var p := _default_params()
+	p.v_length_ft = 10.0
+	p.v_beam_outer_w = 1.75
+	p.v_beam_outer_t = 3.25
+	p.vert_end_offset = 2.0
+	p.h_beam_w = 5.5
+	p.h_beam_t = 1.25
+	p.h_length_ft = 12.0
+	p.bolt_diameter = 0.625
+	LinkageHardware.sync_beams_from_structure(p.hardware_assemblies, p)
+
+	var outer := LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")
+	var v_beam := LinkageHardware.find_part(outer, "r-beam")
+	_check(not v_beam.is_empty(), "the outer V-beam part exists")
+	var vp: Dictionary = v_beam["params"]
+	# The member lies flat across the stack, so the structure's THICKNESS is the
+	# beam's plan width and vice versa — swapping these makes a beam that looks
+	# right end-on and wrong from above.
+	_feq(float(vp["width"]), 3.25, 1e-9, "V-beam preview width = structure thickness")
+	_feq(float(vp["thickness"]), 1.75, 1e-9, "V-beam preview thickness = structure width")
+	# V-beams sync at FULL length, exactly as the web's hwSyncBeamPartFromState
+	# does — the near-end alignment hole anchors the joint and the member runs
+	# off through it. Only H-beams take the web's short-segment rule.
+	_feq(float(vp["length"]), 120.0, 1e-9, "V-beam preview is the real full member")
+	_feq(LinkageHardware.preview_beam_length(120.0), 24.0, 1e-9, "H segment ceiling")
+	_feq(LinkageHardware.preview_beam_length(20.0), 8.0, 1e-9, "H segment floor")
+	_feq(LinkageHardware.preview_beam_length(60.0), 12.0, 1e-9, "H segment is 20% of the member")
+	# The BOM must still price the REAL member.
+	var real_bom := LinkageBom.compute(p)
+	var v_line := ""
+	for item in real_bom["structure_items"]:
+		if str((item as Dictionary)["key"]).begins_with("v_beam"):
+			v_line = str((item as Dictionary)["item"])
+	_check(v_line.contains("10'"),
+		"the BOM still prices the full 10' member, got %s" % v_line)
+	_feq(float(vp["holeOffset"]), 2.0, 1e-9, "V-beam hole offset follows vert_end_offset")
+
+	var h_beam := LinkageHardware.find_part(outer, "u-hbeam")
+	_check(not h_beam.is_empty(), "the H-beam part exists")
+	var hp: Dictionary = h_beam["params"]
+	_feq(float(hp["width"]), 5.5, 1e-9, "H-beam preview width")
+	_feq(float(hp["thickness"]), 1.25, 1e-9, "H-beam preview thickness")
+	# The ring beam is shown as a SHORT segment: a full 12' member would dwarf
+	# the joint. Clamped to 8..24", hole centred on it.
+	_feq(float(hp["length"]), 24.0, 1e-9, "H-beam preview is a clamped short segment")
+	_feq(float(hp["holeOffset"]), 12.0, 1e-9, "H-beam hole sits at the segment centre")
+	_feq(float(hp["holeDiameter"]), 0.625, 1e-9, "H-beam hole follows the bolt diameter")
+	# A short design must not produce a segment below the floor.
+	var tiny := _default_params()
+	tiny.h_length_ft = 2.0
+	LinkageHardware.sync_beams_from_structure(tiny.hardware_assemblies, tiny)
+	_feq(float(LinkageHardware.find_part(
+		LinkageHardware.assembly(tiny.hardware_assemblies, "outerVBeam"),
+		"u-hbeam")["params"]["length"]), 8.0, 1e-9, "H-beam segment has a floor")
+	# `syncStructure: false` opts a part out entirely.
+	var opted_out := _default_params()
+	var oo_beam := LinkageHardware.find_part(
+		LinkageHardware.assembly(opted_out.hardware_assemblies, "outerVBeam"), "r-beam")
+	(oo_beam["params"] as Dictionary)["syncStructure"] = false
+	(oo_beam["params"] as Dictionary)["length"] = 42.0
+	LinkageHardware.sync_beams_from_structure(opted_out.hardware_assemblies, opted_out)
+	_feq(float((oo_beam["params"] as Dictionary)["length"]), 42.0, 1e-9,
+		"syncStructure:false leaves a part alone")
+
+	# --- 2. The beam is anchored on its bolt hole ----------------------------
+	# This is what "connects to the hardware": the alignment hole sits on the
+	# stack axis, so the bolt threads through it. A centre-anchored beam would
+	# put the timber's MIDDLE on the bolt and hang the whole member off to one
+	# side of the joint.
+	var near_beam := {"width": 3.5, "thickness": 1.5, "length": 96.0,
+		"holeOffset": 1.5, "holeDiameter": 0.5, "holeAlign": "near", "rotDeg": 0.0}
+	_feq(LinkageHwParts.beam_align_hole_x(near_beam), 1.5, 1e-9, "near align = holeOffset")
+	var mesh_near := LinkageHwParts.beam_mesh(near_beam)
+	var ab := mesh_near.get_aabb()
+	_feq(ab.position.x, -1.5, 1e-3, "near-aligned beam starts 1.5\" before the axis")
+	_feq(ab.position.x + ab.size.x, 94.5, 1e-3, "and runs 94.5\" past it")
+	_feq(ab.size.y, 1.5, 1e-3, "beam occupies its thickness along the stack")
+	_feq(ab.position.y, 0.0, 1e-3, "beam sits on the slot start like every part")
+	_feq(ab.size.z, 3.5, 1e-3, "beam is as wide as authored")
+
+	var far_beam := near_beam.duplicate()
+	far_beam["holeAlign"] = "far"
+	_feq(LinkageHwParts.beam_align_hole_x(far_beam), 94.5, 1e-9, "far align = L - offset")
+	var abf := LinkageHwParts.beam_mesh(far_beam).get_aabb()
+	_feq(abf.position.x, -94.5, 1e-3, "far-aligned beam hangs the other way")
+
+	var mid_beam := near_beam.duplicate()
+	mid_beam["holeAlign"] = "center"
+	_feq(LinkageHwParts.beam_align_hole_x(mid_beam), 48.0, 1e-9, "centre align = L/2")
+	var abm := LinkageHwParts.beam_mesh(mid_beam).get_aabb()
+	_feq(abm.position.x, -48.0, 1e-3, "centre-aligned beam straddles the axis")
+
+	# rotDeg spins the member about the stack axis: at 90 degrees its length
+	# runs along Z rather than X. Zero must be honoured, not treated as unset.
+	var rotated := near_beam.duplicate()
+	rotated["rotDeg"] = 90.0
+	var abr := LinkageHwParts.beam_mesh(rotated).get_aabb()
+	_check(abr.size.z > abr.size.x,
+		"rotDeg 90 turns the member across the view (%.1f vs %.1f)" % [abr.size.z, abr.size.x])
+	_check(ab.size.x > ab.size.z, "rotDeg 0 leaves it along X")
+
+	# The bores are real geometry, not a texture — a drilled slab carries far
+	# more triangles than the plain box this used to be.
+	var plain := LinkageHwParts._begin()
+	LinkageHwParts._add_box(plain, Vector3(0, 0, 0), Vector3(96, 1.5, 3.5))
+	var plain_mesh := LinkageHwParts._commit(plain)
+	_check(mesh_near.surface_get_array_len(0) > plain_mesh.surface_get_array_len(0) * 4,
+		"the drilled beam has real bores (%d verts vs %d for a plain box)"
+		% [mesh_near.surface_get_array_len(0), plain_mesh.surface_get_array_len(0)])
+	# Every bore has to be inside the member, or it is not a hole.
+	for spec in [near_beam, far_beam, mid_beam]:
+		var m := LinkageHwParts.beam_mesh(spec as Dictionary)
+		var box := m.get_aabb()
+		_check(box.size.x > 90.0 and box.size.x < 100.0,
+			"drilled beam keeps its length")
+		_check(is_finite(box.size.length()), "drilled beam AABB is finite")
+
+	# --- 3. Timber is translucent so the stack stays readable ---------------
+	var wood := LinkageHwParts.material_for("beam")
+	_check(wood.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS,
+		"the preview member is translucent WITH a depth pre-pass — plain alpha "
+		+ "stacks every internal face of the drilled mesh into a milky mess")
+	_check(wood.albedo_color.a < 0.6, "and see-through enough to read the stack")
+	_check(LinkageHwParts.material_for("bolt").transparency
+		== BaseMaterial3D.TRANSPARENCY_DISABLED, "the hardware itself stays solid")
+
+	# --- 4. Horizontal stacks lift to the bracket's side hole ---------------
+	var asm := LinkageHardware.assembly(_default_params().hardware_assemblies, "outerVBeam")
+	var bracket := LinkageHardware.bracket_part(asm)
+	var hole_y := LinkageHwLayout.bracket_hole_y(bracket)
+	_check(hole_y > 0.0, "the bracket's side hole is above its centre")
+	var layout := LinkageHwLayout.compute_axis_layout(asm, "right")
+	var first := (layout["items"] as Array)[0] as Dictionary
+	var xf := LinkageHwAssemblyBuilder.part_transform(first, asm, 0.0, "right",
+		float(layout["origin"]))
+	_feq(xf.origin.y, hole_y * LinkageHwAssemblyBuilder.INCH_TO_M, 1e-9,
+		"a horizontal chain is lifted onto the bracket's bolt hole")
+	_feq(xf.origin.x, float(first["base_start"]) * LinkageHwAssemblyBuilder.INCH_TO_M,
+		1e-9, "and still starts where the layout says")
+	# A VERTICAL stack is anchored at the pivot already, so it must NOT be lifted.
+	var up_layout := LinkageHwLayout.compute_axis_layout(asm, "up")
+	if not (up_layout["items"] as Array).is_empty():
+		var up_first := (up_layout["items"] as Array)[0] as Dictionary
+		var up_xf := LinkageHwAssemblyBuilder.part_transform(up_first, asm, 0.0, "up",
+			float(up_layout["origin"]))
+		_feq(up_xf.origin.x, 0.0, 1e-9, "a vertical stack takes no bracket lift")
+	# An assembly with no bracket gets no lift either.
+	var hc := LinkageHardware.assembly(_default_params().hardware_assemblies, "hCenter")
+	_check(LinkageHardware.bracket_part(hc).is_empty(), "hCenter carries no bracket")
+	var hc_layout := LinkageHwLayout.compute_axis_layout(hc, "up")
+	if not (hc_layout["items"] as Array).is_empty():
+		var hc_xf := LinkageHwAssemblyBuilder.part_transform(
+			(hc_layout["items"] as Array)[0] as Dictionary, hc, 0.0, "up",
+			float(hc_layout["origin"]))
+		_feq(hc_xf.origin.x, 0.0, 1e-9, "no bracket, no lift")
+
+	# --- 5. Mirrored beams lean the other way -------------------------------
+	var builder := LinkageHwAssemblyBuilder.new()
+	root.add_child(builder)
+	builder.set_assembly(asm, 0.0)
+	var src_beam := LinkageHardware.find_part(asm, "r-beam")
+	var src_rot := float((src_beam["params"] as Dictionary).get("rotDeg", 90.0))
+	var plain_m: ArrayMesh = builder.call("_mesh_for", src_beam, false)
+	var mirror_m: ArrayMesh = builder.call("_mesh_for", src_beam, true)
+	_check(plain_m != null and mirror_m != null, "both beam meshes build")
+	if absf(src_rot - (180.0 - src_rot)) > 1e-6:
+		_check(plain_m != mirror_m,
+			"a mirrored beam is a distinct mesh (rotDeg %.0f vs %.0f)"
+			% [src_rot, 180.0 - src_rot])
+	# The source part must not be mutated by rendering its mirror.
+	_feq(float((src_beam["params"] as Dictionary).get("rotDeg", 90.0)), src_rot, 1e-9,
+		"mirroring does not write back onto the source part")
+
+	# --- 6. Mesh cache ------------------------------------------------------
+	_check(is_same(builder.call("_mesh_for", src_beam, false), plain_m),
+		"an unchanged part reuses its cached mesh")
+	var bolt_part := LinkageHardware.find_part(asm, "r-bolt")
+	var bolt_a: ArrayMesh = builder.call("_mesh_for", bolt_part, false)
+	(bolt_part["params"] as Dictionary)["length"] = 4.25
+	_check(not is_same(builder.call("_mesh_for", bolt_part, false), bolt_a),
+		"changing a parameter rebuilds that part's mesh")
+	(bolt_part["params"] as Dictionary)["length"] = 60.0 * LinkageHardware.MM_TO_IN
+
+	# --- 6b. Exploding moves EVERY drawn part, mirrors included -------------
+	# Mirrors are not in the addressable node map, so a reposition keyed on
+	# that map left them sitting in the assembled pose while the rest flew
+	# apart — visible only on the two mirrored assemblies.
+	builder.set_assembly(asm, 0.0)
+	var mirror_pairs := LinkageHardware.mirror_pairs(asm)
+	_check(not mirror_pairs.is_empty(), "outerVBeam mirrors an axis")
+	var stack := builder.get_node_or_null("Stack")
+	# A rebuild must leave the tree clean IMMEDIATELY — queue_free alone is
+	# deferred, so a same-frame rebuild would double every node here.
+	_check(stack.get_child_count() == 15,
+		"one stack, no leftovers from the previous build (%d nodes)"
+		% stack.get_child_count())
+	var before_all: Array = []
+	for child in stack.get_children():
+		before_all.append((child as Node3D).transform.origin)
+	builder.set_explode(1.0)
+	var shift: Dictionary = {}
+	var movers := 0
+	for i in stack.get_child_count():
+		var node := stack.get_child(i) as Node3D
+		var d := node.transform.origin.distance_to(before_all[i])
+		shift[str(node.name)] = d
+		if d > 1e-5:
+			movers += 1
+		# The bracket anchors the joint and is placed outside the axis layout,
+		# so it holds still while everything threaded onto it flies apart.
+		if str(node.get_meta("part_type", "")) == "bracket":
+			_feq(d, 0.0, 1e-9, "the bracket stays put")
+	_check(movers >= 6, "exploding fans the stack out (%d parts moved)" % movers)
+	# The rank-0 part on each axis IS the origin of that axis's fan, so it
+	# legitimately holds station — but every mirrored copy must travel exactly
+	# as far as the source it mirrors. Keying the reposition on the addressable
+	# node map left mirrors frozen while their sources flew apart.
+	var mirrored_checked := 0
+	for name in shift:
+		var n := str(name)
+		if not n.contains("_left_"):
+			continue
+		var source := n.replace("_left_", "_")
+		_check(shift.has(source), "mirror %s has a source" % n)
+		if shift.has(source):
+			mirrored_checked += 1
+			_feq(float(shift[n]), float(shift[source]), 1e-9,
+				"mirror %s travels with its source" % n)
+	_check(mirrored_checked >= 4, "checked %d mirrored parts" % mirrored_checked)
+	builder.set_explode(0.0)
+	for i in stack.get_child_count():
+		_v3eq((stack.get_child(i) as Node3D).transform.origin, before_all[i], 1e-6,
+			"collapsing returns every part exactly")
+
+	# --- 6c. In-structure placement ----------------------------------------
+	# The joint has to land ON the frame, seated exactly where the simple
+	# bracket is drawn — a placement that skips the structure's ground lift or
+	# the bracket-hole offset floats the hardware off into space.
+	var sp := _default_params()
+	var closed := LinkageKinematics.optimal_closed_angle(sp)
+	var sframe := LinkageSolver.solve(sp, closed)
+	var all := LinkageHwPlacement.placements(sp, sframe)
+	_check(not all.is_empty(), "the frame yields hardware placements")
+	var outer_seats := LinkageHwPlacement.placements_for(sp, sframe, "outerVBeam")
+	var inner_seats := LinkageHwPlacement.placements_for(sp, sframe, "innerVBeam")
+	var bracket_count := (sframe["brackets"] as Array).size()
+	_check(outer_seats.size() == bracket_count / 2,
+		"half the brackets are outer joints (%d of %d)"
+		% [outer_seats.size(), bracket_count])
+	_check(inner_seats.size() == bracket_count / 2,
+		"the other half are inner joints (%d)" % inner_seats.size())
+	_check(LinkageHwPlacement.placements_for(sp, sframe, "vCenter").is_empty(),
+		"an empty vCenter is not stamped anywhere")
+
+	# Each seat is offset from its joint's V-STACK pivot by exactly the hole
+	# height, along the seat's own up axis. NOT from `bracket["pos"]` — that is
+	# the H-ring pivot where the simple bracket is drawn, a bracket-hole
+	# distance away, and anchoring the detailed stack there was the original
+	# port's "right area, wrong relation to the beams" bug.
+	var asm_o := LinkageHardware.assembly(sp.hardware_assemblies, "outerVBeam")
+	var hole := LinkageHwLayout.bracket_hole_y(LinkageHardware.bracket_part(asm_o))
+	var br0 := (sframe["brackets"] as Array)[0] as Dictionary
+	var seat0: Transform3D = outer_seats[0]
+	var back: Vector3 = seat0.origin + (seat0.basis * Vector3(0.0, hole, 0.0))
+	_v3eq(back, br0["v_bolt_pivot"] as Vector3, 1e-4,
+		"a seat puts the bracket's hole exactly on the V-stack pivot")
+	_check((br0["v_bolt_pivot"] as Vector3).distance_to(br0["pos"] as Vector3) > 0.1,
+		"the V-stack pivot is a distinct point from the H-ring pivot")
+	# Bracket 0 is outer-bottom, so with v_stack_reverse off the flip is
+	# `is_bottom != reversed` = true — its stack mirrors onto the far radial.
+	var flip0 := LinkageHwPlacement.flip_stack_axis("outerVBeam", "outer", true,
+		sp.v_stack_reverse)
+	_check(flip0, "outer-bottom flips its stack axis when the stack is not reversed")
+	_check(seat0.basis.is_equal_approx(
+		LinkageSolver.bracket_basis_for(br0, false, flip0)),
+		"a seat uses the solver's bracket frame flipped for this joint")
+	# …and with the flip off it is byte-identical to the simple bracket's own
+	# frame, which is what keeps `bracket["basis"]` pinned while this works.
+	_check(LinkageSolver.bracket_basis_for(br0, false, false)
+		.is_equal_approx(br0["basis"] as Basis),
+		"an unflipped seat frame is exactly the solver's bracket basis")
+	# Every seat must sit somewhere on the structure, not at the origin.
+	var off_frame := 0
+	for t in outer_seats:
+		if (t as Transform3D).origin.length() < 1.0:
+			off_frame += 1
+	_check(off_frame == 0, "%d seats collapsed to the origin" % off_frame)
+
+	# The ground lift has to match the structure's, or the hardware hovers.
+	var lift := LinkageStructureBuilder.ground_offset_for_frame(sframe)
+	_check(lift > 0.0, "this design is lifted onto the ground plane")
+	var seated := LinkageHwAssemblyBuilder.seat_transform(seat0, lift)
+	# Vector3 components are float32, so 1e-9 on a metre-scale value is below
+	# what the type can represent — 1e-6 is the meaningful bar here.
+	_feq(seated.origin.y,
+		seat0.origin.y * LinkageHwAssemblyBuilder.INCH_TO_M + lift, 1e-6,
+		"seat_transform applies the structure's ground lift")
+	_feq(seated.origin.x, seat0.origin.x * LinkageHwAssemblyBuilder.INCH_TO_M,
+		1e-6, "and converts inches to metres")
+	_check(seated.basis.get_scale().is_equal_approx(Vector3.ONE),
+		"a seat carries NO scale — the parts already bake the inch conversion")
+
+	# --- 6d. In-structure suppresses the preview timber ---------------------
+	# The real frame draws those members; stamping the preview beam at every
+	# joint too would bury the structure in translucent duplicates.
+	builder.set_assembly(asm, 0.0, false)
+	var with_beams := builder.get_node_or_null("Stack").get_child_count()
+	builder.set_assembly(asm, 0.0, true)
+	var stack2 := builder.get_node_or_null("Stack")
+	var without := stack2.get_child_count()
+	_check(without < with_beams,
+		"excluding beams drops nodes (%d -> %d)" % [with_beams, without])
+	for child in stack2.get_children():
+		_check(str((child as Node3D).get_meta("part_type", "")) != "beam",
+			"no beam survives the exclusion")
+	# Their SLOTS must survive, or everything threaded past them shifts.
+	var bolt_with := builder.part_node("r-bolt", 0)
+	builder.set_assembly(asm, 0.0, false)
+	var bolt_ref := builder.part_node("r-bolt", 0)
+	_check(bolt_with != null and bolt_ref != null, "the bolt is placed either way")
+	if bolt_with != null and bolt_ref != null:
+		_v3eq(bolt_with.transform.origin, bolt_ref.transform.origin, 1e-9,
+			"excluded beams keep their slot, so neighbours do not shift")
+
+	# --- 7. Framing measures the HARDWARE, not the eight-foot member --------
+	builder.set_assembly(asm, 0.0)
+	var box := builder.hardware_aabb()
+	_check(box.size.length() > 0.0, "hardware extent is non-zero")
+	# In metres. The joint is inches across; if a 96" beam leaked in, this would
+	# be a couple of metres and the camera would frame empty space.
+	_check(box.size.x < 0.5 and box.size.y < 0.5 and box.size.z < 0.5,
+		"framing excludes the beams (%.3f x %.3f x %.3f m)"
+		% [box.size.x, box.size.y, box.size.z])
+	builder.free()
+
+
+# ---------------------------------------------------------------------------
+# Hardware Detail editor — compile smoke + editing round-trip
+# ---------------------------------------------------------------------------
+
+func _test_hardware_modal() -> void:
+	var script: Script = load("res://scenes/ui/linkage_hardware_modal.gd")
+	_check(script != null, "hardware modal script loads")
+	if script == null:
+		return
+	_check(script.can_instantiate(), "hardware modal can_instantiate")
+	var probe := Control.new()
+	probe.set_script(script)
+	for m in ["open", "close", "hardware_assemblies"]:
+		_check(probe.has_method(m), "hardware modal has %s" % m)
+	probe.free()
+
+	var modal := Control.new()
+	modal.set_script(script)
+	root.add_child(modal)
+	if modal.get("_builder") == null:
+		modal.call("_ready")
+	var p := _default_params()
+	p.show_hardware_full_detail = true
+	modal.call("open", p)
+	_check(bool(modal.get("visible")), "hardware modal opens")
+	_check(modal.get("_builder") != null, "hardware modal built a 3D stack")
+
+	# Switching assemblies must rebuild the sidebar AND the 3D.
+	modal.call("_on_tab_pressed", "hCenter")
+	_check(str(modal.get("_active_id")) == "hCenter", "assembly tab switches")
+	_check((modal.get("_parts_box") as VBoxContainer).get_child_count() > 0,
+		"part list rebuilt for the new assembly")
+	modal.call("_on_tab_pressed", "outerVBeam")
+
+	# --- Editing round-trip --------------------------------------------------
+	var asm_before := LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")
+	var count_before := (asm_before["parts"] as Array).size()
+	modal.call("_on_add_part", "right")
+	_check((LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")["parts"]
+		as Array).size() == count_before + 1, "adding a part grows the assembly")
+	var added := str(modal.get("_selected"))
+	_check(added != "", "the added part is selected")
+
+	# A TYPED offset is taken literally. The snap-plane list always contains the
+	# stack origin, so with the old snap-everything rule a typed 0.05 was pulled
+	# back to 0 and the field went on showing 0.05 — the whole of "changing the
+	# offsets does nothing". A drag still snaps; typing does not.
+	modal.call("_set_offset", added, 0.05)
+	var part := LinkageHardware.find_part(
+		LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam"), added)
+	_check(not part.is_empty(), "the added part is findable")
+	_feq(float(part.get("posAssembled", 0.0)), 0.05, 1e-6,
+		"a typed offset inside the snap threshold is kept, not swallowed")
+	# …and the same value arriving as a DRAG does snap, to the stack origin.
+	modal.call("_set_offset", added, 0.05, true)
+	part = LinkageHardware.find_part(
+		LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam"), added)
+	_check(absf(float(part.get("posAssembled", 0.0))) < 0.05,
+		"a dragged offset inside the threshold snaps flush (%f)"
+		% float(part.get("posAssembled", 0.0)))
+	modal.call("_set_offset", added, 0.5)
+
+	# The inspector exposes the whole part, not four fields. Every key in the
+	# field table for this type must have produced a widget.
+	modal.call("_select", added, 0)
+	var widgets: Dictionary = modal.get("_field_widgets")
+	var wtype := str(part.get("type", ""))
+	for row in LinkageHwParamFields.for_type(wtype):
+		var rkey := str((row as Dictionary)["key"])
+		if not (part.get("params", {}) as Dictionary).has(rkey):
+			continue
+		_check(widgets.has("%s|%s" % [added, rkey]),
+			"the inspector exposes %s.%s" % [wtype, rkey])
+	for pkey in ["posAssembled", "crossOffset", "posExploded", "flipAxis", "axis"]:
+		_check(widgets.has("%s|%s" % [added, pkey]),
+			"the inspector exposes %s" % pkey)
+
+	# A structural edit costs a re-solve; a cross-axis nudge does not. Getting
+	# this wrong is what made every mouse-motion event re-solve the frame.
+	_check(not LinkageHardware.edit_requires_respacing("outerVBeam", part,
+		"crossOffset"), "a cross offset cannot move the structure")
+	_check(not LinkageHardware.edit_requires_respacing("outerVBeam", part,
+		"posExploded"), "an exploded offset cannot move the structure")
+
+	# The bracket anchors the joint and must survive a Del keypress, which is
+	# reachable because it IS pickable in 3D even with no ✕ in the list.
+	var bracket_id := str(LinkageHardware.bracket_part(
+		LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")).get("id", ""))
+	if bracket_id != "":
+		modal.call("_select", bracket_id, 0)
+		modal.call("_delete_selected")
+		_check(not LinkageHardware.bracket_part(LinkageHardware.assembly(
+			p.hardware_assemblies, "outerVBeam")).is_empty(),
+			"the anchoring bracket refuses to be deleted")
+	modal.call("_select", added, 0)
+
+	# Selecting a part raises the axis gizmo — the only thing in the modal that
+	# says a part slides along a LINE rather than wherever the pointer goes.
+	var gizmo := modal.get("_axis_gizmo") as Node3D
+	_check(gizmo != null and gizmo.visible and gizmo.get_child_count() > 0,
+		"selecting a part raises the drag-axis indicator")
+
+	# Exploding must fan the context joints too. `set_instances` DUPLICATES the
+	# stack, so a clone is frozen at the pose it was copied at: before
+	# `sync_instances`, opening the stack under the camera left every other
+	# joint on the frame shut.
+	var hb := modal.get("_builder") as LinkageHwAssemblyBuilder
+	# Assert the clones exist rather than skipping quietly — a guard that never
+	# fires is a check that never ran.
+	_check(hb != null and hb.instance_count() > 0,
+		"the in-structure view cloned the joint across the frame (%d)"
+		% (hb.instance_count() if hb != null else -1))
+	if hb != null and hb.instance_count() > 0:
+		modal.call("_on_explode_changed", 1.0)
+		var stack := hb.get_node_or_null("Stack") as Node3D
+		var clone := hb.get_node_or_null("Context1") as Node3D
+		if stack != null and clone != null:
+			var drift := 0
+			for ci in mini(stack.get_child_count(), clone.get_child_count()):
+				var sc := stack.get_child(ci) as Node3D
+				var cc := clone.get_child(ci) as Node3D
+				if sc != null and cc != null \
+						and not sc.transform.is_equal_approx(cc.transform):
+					drift += 1
+			_check(drift == 0,
+				"exploding fans the context joints too (%d nodes left behind)" % drift)
+		modal.call("_on_explode_changed", 0.0)
+
+	# Reset must re-cut the preview timber from THIS design, not hand back the
+	# library's generic 96" stock.
+	modal.call("_on_tab_pressed", "hCenter")
+	modal.call("_on_reset_assembly")
+	var reset_asm := LinkageHardware.assembly(p.hardware_assemblies, "hCenter")
+	for rp in reset_asm.get("parts", []):
+		var rd := rp as Dictionary
+		if str(rd.get("type", "")) != "beam":
+			continue
+		if str((rd.get("params", {}) as Dictionary).get("syncStructure", "")) == "hBeam":
+			_feq(float((rd["params"] as Dictionary).get("width", 0.0)), p.h_beam_w,
+				1e-6, "a reset H-beam is re-cut from the design's own lumber")
+	# Switching assemblies clears the selection, so restore it for the edits
+	# the rest of this test performs.
+	modal.call("_on_tab_pressed", "outerVBeam")
+	modal.call("_select", added, 0)
+
+	modal.call("_duplicate_selected")
+	_check((LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")["parts"]
+		as Array).size() == count_before + 2, "duplicating grows the assembly")
+	# Duplicates must get their own id, or the layout would place one twice.
+	var ids := {}
+	for pt in LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")["parts"]:
+		var pid := str((pt as Dictionary).get("id", ""))
+		_check(not ids.has(pid), "part id %s is unique after duplicating" % pid)
+		ids[pid] = true
+
+	modal.call("_delete_selected")
+	modal.call("_select", added, 0)
+	modal.call("_delete_selected")
+	_check((LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")["parts"]
+		as Array).size() == count_before, "deleting restores the original count")
+
+	# Preset application through the editor's own path.
+	var bushing := LinkageHardware.find_part(
+		LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam"), "r-bushing")
+	_check(not bushing.is_empty(), "the stock bushing is present")
+	modal.call("_on_reorder", "r-bushing", 1)
+	var reordered := LinkageHardware.parts_on_axis(
+		LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam"), "right")
+	_check(reordered.size() == 4, "reordering keeps every part on the axis")
+	modal.call("_on_reorder", "r-bushing", -1)
+
+	# Reset restores the shipped default even after all of the above.
+	modal.call("_on_reset_assembly")
+	_check((LinkageHardware.assembly(p.hardware_assemblies, "outerVBeam")["parts"]
+		as Array).size() == 11, "reset restores the shipped assembly")
+
+	# Explode drives the builder without rebuilding it.
+	modal.call("_on_explode_changed", 1.0)
+	_feq(float(p.hardware_assemblies["explode"]), 1.0, 1e-9, "explode persists on the graph")
+	modal.call("_on_explode_changed", 0.0)
+
+	_check(modal.call("hardware_assemblies") is Dictionary,
+		"the modal hands its graph back")
+	modal.call("close")
+	_check(not bool(modal.get("visible")), "hardware modal closes")
+	modal.free()
+
+
+## The credits ledger is a lockstep pair by its own rule (CREDITS.md:16-21) —
+## enforce it with a test instead of with discipline.
+func _test_credits_lockstep() -> void:
+	var f := FileAccess.open("res://credits/credits.json", FileAccess.READ)
+	_check(f != null, "credits.json opens")
+	if f == null:
+		return
+	var parsed = JSON.parse_string(f.get_as_text())
+	_check(parsed is Dictionary, "credits.json parses")
+	if not (parsed is Dictionary):
+		return
+	var md := FileAccess.open("res://CREDITS.md", FileAccess.READ)
+	_check(md != null, "CREDITS.md opens")
+	if md == null:
+		return
+	var md_text := md.get_as_text()
+	var covered := false
+	for e in (parsed as Dictionary).get("entries", []):
+		var d := e as Dictionary
+		if not str(d.get("local_path", "")).begins_with("assets/linkage/"):
+			continue
+		covered = true
+		var eid := str(d.get("id", ""))
+		_check(eid != "" and md_text.contains(eid),
+			"CREDITS.md names the ledger entry %s" % eid)
+		_check(str(d.get("status", "")) != "", "entry %s has a status" % str(d["id"]))
+		# The asset is optional by design, so an unresolved licence is allowed
+		# — being SILENT about it is not.
+		if str(d.get("license", "")) == "pending":
+			_check(str(d.get("status", "")) == "pending-verification",
+				"a pending licence is flagged pending-verification")
+			_check(str(d.get("notes", "")) != "",
+				"a pending licence explains what needs checking")
+	_check(covered, "the linkage bracket asset is in the credits ledger")
+
+
+# ---------------------------------------------------------------------------
+# Hardware spacing choke point — the parity proof for all the solver pins
+# ---------------------------------------------------------------------------
+
+func _test_hardware_spacing() -> void:
+	LinkageHardwareSpacing.clear_cache()
+
+	# --- 1. THE assertion. ---------------------------------------------------
+	# With full detail off, effective_params must return the SAME OBJECT, not a
+	# copy with equal values. Every pinned reference number in this file rests
+	# on that: it is what makes the flag-off path bit-identical to the
+	# pre-hardware port by construction rather than by inspection.
+	var p := _default_params()
+	_check(not p.show_hardware_full_detail, "params default to full detail OFF")
+	_check(is_same(LinkageHardwareSpacing.effective_params(p), p),
+		"effective_params returns p ITSELF when full detail is off")
+	_check(not LinkageHardwareSpacing.is_active(p), "spacing inactive when the flag is off")
+	_check(LinkageHardwareSpacing.resolve(p).is_empty(), "nothing to resolve when off")
+	# Even with a fully populated assembly graph, the flag alone gates it.
+	var p_parts := _default_params()
+	p_parts.hardware_assemblies = LinkageHardware.default_assemblies()
+	_check(is_same(LinkageHardwareSpacing.effective_params(p_parts), p_parts),
+		"populated assemblies do not bite while the flag is off")
+
+	# --- 2. Flag on: the assemblies drive the numbers ------------------------
+	var on := _default_params()
+	on.show_hardware_full_detail = true
+	_check(LinkageHardwareSpacing.is_active(on), "spacing active with the flag on")
+	var eff := LinkageHardwareSpacing.effective_params(on)
+	_check(not is_same(eff, on), "the flag-on path substitutes a copy")
+	_check(not eff.show_hardware_full_detail,
+		"the substituted copy has the flag cleared (fixed point)")
+	var sp := LinkageHardwareSpacing.resolve(on)
+	_check(not sp.is_empty(), "flag-on resolves spacing")
+	# hCenter's sandwich is the gap washer alone, shared across (n-1) gaps.
+	var hc := LinkageHardware.assembly(on.hardware_assemblies, "hCenter")
+	_feq(float(sp["h_stack_gap"]),
+		LinkageHwLayout.assembly_sandwich_gap(hc) / float(on.h_stack_count - 1),
+		1e-9, "h gap = hCenter sandwich span / (n-1)")
+	_feq(eff.h_stack_gap, float(sp["h_stack_gap"]), 1e-9, "effective params carry the h gap")
+	# vCenter ships empty, so the V gap keeps the sidebar value.
+	_feq(eff.v_stack_gap, on.v_stack_gap, 1e-9,
+		"an empty vCenter leaves the sidebar V gap alone")
+	# The bracket comes from the outerVBeam bracket part.
+	var bracket := LinkageHardware.bracket_part(
+		LinkageHardware.assembly(on.hardware_assemblies, "outerVBeam"))
+	var bp: Dictionary = bracket["params"]
+	_feq(eff.bracket_height, float(bp["height"]), 1e-9, "bracket height from the part")
+	_feq(eff.bracket_width, float(bp["width"]), 1e-9, "bracket width from the part")
+	_feq(eff.bracket_depth, float(bp["depth"]), 1e-9, "bracket depth from the part")
+	# Sidebar measures the hole UP from the base, the part measures it DOWN
+	# from the top — same hole, opposite datum.
+	_feq(eff.bracket_hole_distance,
+		float(bp["height"]) - float(bp["sideHoleFromTop"]), 1e-9,
+		"hole distance converts from the part's top-down datum")
+	_feq(eff.bracket_inner_width,
+		float(bp["width"]) - 2.0 * float(bp["wallThickness"]), 1e-9,
+		"inner width derives from wall thickness when unset")
+
+	# --- 3. Fixed point + caching -------------------------------------------
+	_check(is_same(LinkageHardwareSpacing.effective_params(eff), eff),
+		"effective_params is a fixed point")
+	_check(is_same(LinkageHardwareSpacing.effective_params(on), eff),
+		"a repeat resolve hits the cache")
+	# The cache must be keyed on the WHOLE config: the cached object bakes in
+	# EVERY field, so a key covering only spacing inputs let any other change
+	# ride a stale hit. The shipped casualty: the hardware modal's display
+	# solve (brackets hidden) primed the cache, its placement solve (brackets
+	# shown) got the hidden copy back, and every joint placement vanished.
+	var flags_off := on.duplicate_params()
+	flags_off.show_brackets = false
+	flags_off.show_bolts = false
+	var eff_off := LinkageHardwareSpacing.effective_params(flags_off)
+	_check(not eff_off.show_brackets, "flags-off resolve keeps flags off")
+	var flags_on := on.duplicate_params()
+	flags_on.show_brackets = true
+	flags_on.show_bolts = true
+	var eff_on := LinkageHardwareSpacing.effective_params(flags_on)
+	_check(eff_on.show_brackets and eff_on.show_bolts,
+		"a flags-on resolve after a flags-off one is NOT served the stale copy")
+	var stale_frame := LinkageSolver.solve(flags_on,
+		LinkageKinematics.optimal_closed_angle(flags_on))
+	_check((stale_frame["brackets"] as Array).size() > 0,
+		"solving flags-on after flags-off still emits brackets")
+
+	# --- 4. The override actually bites, and only when asked ----------------
+	# Same design, flag flipped: geometry must MOVE with it on and return
+	# EXACTLY with it off. Either half failing is a bug — one means the
+	# override is dead, the other means it leaked into the pinned path.
+	var closed := LinkageKinematics.optimal_closed_angle(p)
+	var frame_off := LinkageSolver.solve(p, closed)
+	var frame_on := LinkageSolver.solve(on, closed)
+	_check((frame_off["beams"] as Array).size() == (frame_on["beams"] as Array).size(),
+		"beam count is unchanged by hardware spacing")
+	var sum_off := _corner_sum(frame_off["beams"])
+	var sum_on := _corner_sum(frame_on["beams"])
+	_check(sum_off.distance_to(sum_on) > 1e-6,
+		"hardware spacing MOVES the structure (%s vs %s)" % [sum_off, sum_on])
+	# Re-solving the flag-off params must reproduce the original exactly.
+	var frame_off2 := LinkageSolver.solve(p, closed)
+	_v3eq(_corner_sum(frame_off2["beams"]), sum_off, 1e-9,
+		"the flag-off solve is unchanged after a flag-on solve ran")
+	_feq(float(frame_off2["max_height"]), float(frame_off["max_height"]), 1e-9,
+		"flag-off height is unchanged")
+
+	# Support beams route through the same choke point, so their anchors follow.
+	var sup_off := LinkageGeometry.support_beams(frame_off, p, closed)
+	var sup_on := LinkageGeometry.support_beams(frame_on, on, closed)
+	_check(sup_off.size() == sup_on.size(), "support beam count is unchanged")
+	_check(not sup_off.is_empty(), "the default design builds support beams")
+
+	# --- 5. Fallback rules ---------------------------------------------------
+	# A single-beam stack has no interfaces, so no gap regardless of hardware.
+	var single := _default_params()
+	single.show_hardware_full_detail = true
+	single.h_stack_count = 1
+	single.v_stack_count = 1
+	_feq(LinkageHardwareSpacing.effective_h_stack_gap(single), 0.0, 1e-9,
+		"a 1-beam H stack has no gap")
+	_feq(LinkageHardwareSpacing.effective_v_stack_gap(single), 0.0, 1e-9,
+		"a 1-beam V stack has no gap")
+	# Strip every assembly: the flag is on but there is nothing to resolve from.
+	var bare := _default_params()
+	bare.show_hardware_full_detail = true
+	bare.hardware_assemblies = {"activeId": "outerVBeam", "explode": 0.0,
+		"snap": true, "assemblies": {}}
+	_check(not LinkageHardwareSpacing.is_active(bare),
+		"no assemblies means nothing to drive spacing")
+	_check(is_same(LinkageHardwareSpacing.effective_params(bare), bare),
+		"an empty assembly graph falls back to the identity path")
+	_check(is_nan(LinkageHardwareSpacing._gap_from_assembly({}, 3)),
+		"an empty assembly yields no gap")
+	_check(is_nan(LinkageHardwareSpacing._gap_from_assembly(hc, 1)),
+		"a single-item stack yields no gap")
+	_check(LinkageHardwareSpacing.effective_bracket_params(p).is_empty(),
+		"no bracket override while the flag is off")
+
+	# --- 6. The real SOAK export, which ships with full detail ON -----------
+	var f := FileAccess.open(HW_FIXTURE, FileAccess.READ)
+	if f == null:
+		return
+	var raw = JSON.parse_string(f.get_as_text())
+	if not (raw is Dictionary):
+		return
+	var soak_on := LinkageParams.new()
+	soak_on.from_config(raw as Dictionary)
+	_check(soak_on.show_hardware_full_detail, "the SOAK export enables full detail")
+	_check(LinkageHardwareSpacing.is_active(soak_on), "SOAK spacing is active")
+	var soak_eff := LinkageHardwareSpacing.effective_params(soak_on)
+	var soak_hc := LinkageHardware.assembly(soak_on.hardware_assemblies, "hCenter")
+	_feq(soak_eff.h_stack_gap,
+		LinkageHwLayout.assembly_sandwich_gap(soak_hc) / float(soak_on.h_stack_count - 1),
+		1e-9, "SOAK h gap comes from its hCenter assembly")
+	_check(soak_eff.bracket_height > 0.0, "SOAK bracket height resolved")
+
+	# Same file, flag forced off: the geometry must match a solve of the raw
+	# sidebar values exactly, proving the override is genuinely opt-in.
+	var soak_off := LinkageParams.new()
+	soak_off.from_config(raw as Dictionary)
+	soak_off.show_hardware_full_detail = false
+	var sclosed := LinkageKinematics.optimal_closed_angle(soak_off)
+	var soak_frame_off := LinkageSolver.solve(soak_off, sclosed)
+	var soak_frame_on := LinkageSolver.solve(soak_on, sclosed)
+	_check(_corner_sum(soak_frame_off["beams"]).distance_to(
+		_corner_sum(soak_frame_on["beams"])) > 1e-6,
+		"the SOAK design is genuinely re-spaced by its hardware")
+	_check((soak_frame_off["beams"] as Array).size()
+		== (soak_frame_on["beams"] as Array).size(),
+		"SOAK beam count is unchanged by spacing")
+
+	# --- 7. Nothing leaked ---------------------------------------------------
+	# Re-run the very first assertion after all of the above: a stale cache or
+	# a mutated default would show up here and nowhere else.
+	_check(is_same(LinkageHardwareSpacing.effective_params(p), p),
+		"identity still holds after the hardware-on solves")
+	_v3eq(_corner_sum((LinkageSolver.solve(p, closed))["beams"]), sum_off, 1e-9,
+		"default geometry is untouched at the end of the suite")
+
+
+func _test_hw_presets() -> void:
+	LinkageHwPresets.reload()
+	var all := LinkageHwPresets.all()
+	_check(all.size() == 9, "9 shipped hardware presets, got %d" % all.size())
+	for e in all:
+		var d := e as Dictionary
+		_check(str(d.get("id", "")) != "", "preset has an id")
+		_check(LinkageHardware.PART_TYPES.has(str(d.get("type", ""))),
+			"preset %s has a known type (%s)" % [str(d.get("id", "")), str(d.get("type", ""))])
+		_check(d.get("params") is Dictionary, "preset %s carries params" % str(d["id"]))
+		_check(float(d.get("cost", -1.0)) >= 0.0, "preset %s has a price" % str(d["id"]))
+
+	var br := LinkageHwPresets.by_id("bracket-unistrut-trolley")
+	_check(not br.is_empty(), "bracket preset resolves")
+	_feq(float((br["params"] as Dictionary)["height"]), 3.77, 1e-9, "bracket preset height")
+	_check(str(br["type"]) == "bracket", "bracket preset type")
+	_check(LinkageHwPresets.by_id("no-such-part").is_empty(), "unknown preset id yields {}")
+	_check(LinkageHwPresets.for_type("bolt").size() == 2, "two bolt presets")
+	_check(LinkageHwPresets.for_type("washer").size() == 2, "two washer presets")
+	_check(LinkageHwPresets.for_type("nonsense").is_empty(), "unknown type yields nothing")
+
+	# Applying a preset re-specs the part AND keys it for BOM roll-up.
+	var part := LinkageHardware.make_part("r-bushing", "bushing", "Generic",
+		"right", 2, 1, 2, 0.0, LinkageHardware.default_part_params("bushing"))
+	var applied := LinkageHwPresets.apply_to_part(part, "bushing-516-625-125")
+	_check(str(applied["presetId"]) == "bushing-516-625-125", "preset id stamped")
+	_check(str(applied["bomKey"]) == "bushing-516-625-125", "bom key stamped")
+	_check(str(applied["label"]).contains("Bushing"), "label taken from the preset")
+	_check(float(applied["cost"]) > 0.0, "cost taken from the preset")
+	_check(str(applied["id"]) == "r-bushing", "the part keeps its own id")
+	_check(str(applied["axis"]) == "right", "the part keeps its axis")
+	# Applying must not alias the preset — editing the part would corrupt the
+	# library for every other design in the session.
+	(applied["params"] as Dictionary)["od"] = -1.0
+	_check(float((LinkageHwPresets.by_id("bushing-516-625-125")["params"]
+		as Dictionary)["od"]) > 0.0, "applying a preset deep-copies its params")
+	var untouched := LinkageHwPresets.apply_to_part(part, "no-such-part")
+	_check(str(untouched.get("presetId", "")) == "",
+		"an unknown preset leaves the part alone")
+
+	# Two presets sharing an id would silently merge in the BOM roll-up.
+	var seen := {}
+	for e in LinkageHwPresets.all():
+		var id := str((e as Dictionary)["id"])
+		_check(not seen.has(id), "preset id %s is unique" % id)
+		seen[id] = true
+
+
+# ---------------------------------------------------------------------------
+# Build Guide — compile smoke + the painters' pure layout maths
+# ---------------------------------------------------------------------------
+
+func _test_build_guide() -> void:
+	# The modal has no class_name, so nothing parses it at import; force it.
+	var script: Script = load("res://scenes/ui/linkage_build_guide_modal.gd")
+	_check(script != null, "build guide script loads")
+	if script == null:
+		return
+	_check(script.can_instantiate(), "build guide can_instantiate")
+	var probe := Control.new()
+	probe.set_script(script)
+	for m in ["open", "open_for_prop", "close", "bind_loader"]:
+		_check(probe.has_method(m), "build guide has %s" % m)
+	probe.free()
+
+	# Functional smoke: build the whole UI headless and populate it from a real
+	# design. This is what catches a node-path or container misuse that a bare
+	# compile check sails past.
+	var modal := Control.new()
+	modal.set_script(script)
+	root.add_child(modal)
+	if modal.get("_body") == null:
+		# --script SceneTree does not deliver NOTIFICATION_READY here.
+		modal.call("_ready")
+	modal.call("open", _default_params(), "selftest")
+	_check(bool(modal.get("visible")), "build guide opens")
+	_check(not (modal.get("_bom") as Dictionary).is_empty(), "build guide computed a BOM")
+	var body := modal.get("_body") as VBoxContainer
+	_check(body != null and body.get_child_count() >= 8,
+		"build guide built its cards, got %d" % (body.get_child_count() if body != null else -1))
+	# Toggling units rebuilds without losing the cards.
+	modal.call("_on_toggle_units")
+	_check((modal.get("_body") as VBoxContainer).get_child_count() >= 8,
+		"unit toggle rebuilds the body")
+	modal.call("close")
+	_check(not bool(modal.get("visible")), "build guide closes")
+
+	# Editing a price must flow back into params.costs AND drop auto lumber
+	# pricing, or the typed number is silently overwritten on next recompute.
+	var m2 := Control.new()
+	m2.set_script(script)
+	root.add_child(m2)
+	if m2.get("_body") == null:
+		m2.call("_ready")
+	m2.call("open", _default_params(), "selftest2")
+	_check(str(m2.call("_cost_key_for", "bolt_h_pivot")) == "bolt_h_pivot",
+		"bolt line maps to its cost knob")
+	_check(str(m2.call("_cost_key_for", "support_radial")) == "h_beam",
+		"radial supports are priced as H beams")
+	_check(str(m2.call("_cost_key_for", "hw_asm-uv0kcd")) == "",
+		"assembly hardware carries its own price, not a table knob")
+	m2.call("close")
+	m2.free()
+	modal.free()
+
+	# --- Painter layout maths (pure — draw_* is illegal outside _draw) ------
+	_check(LinkageGuideCharts.drill_hole_color("pivot") == LinkageGuideCharts.COL_PIVOT,
+		"pivot holes are orange")
+	_check(LinkageGuideCharts.drill_hole_color("rcp_anchor") == LinkageGuideCharts.COL_RCP_ANCHOR,
+		"reciprocal anchors are blue")
+	_check(LinkageGuideCharts.drill_hole_color("rcp_cross") == LinkageGuideCharts.COL_RCP_CROSS,
+		"reciprocal crossings are purple")
+	_check(LinkageGuideCharts.drill_hole_color("end") == LinkageGuideCharts.COL_END,
+		"end holes are red")
+	_check(LinkageGuideCharts.drill_hole_color("nonsense") == LinkageGuideCharts.COL_END,
+		"unknown hole kinds fall back to the end colour")
+
+	var pad := LinkageGuideCharts.PAD_X
+	_feq(LinkageGuideCharts.hole_x(0.0, 96.0, 200.0), pad, 1e-9, "hole at 0 sits at the pad")
+	_feq(LinkageGuideCharts.hole_x(96.0, 96.0, 200.0), pad + 200.0, 1e-9, "hole at the far end")
+	_feq(LinkageGuideCharts.hole_x(48.0, 96.0, 200.0), pad + 100.0, 1e-9, "hole at the midpoint")
+	# Out-of-range and degenerate inputs must clamp rather than draw off-card.
+	_feq(LinkageGuideCharts.hole_x(500.0, 96.0, 200.0), pad + 200.0, 1e-9, "hole position clamps high")
+	_feq(LinkageGuideCharts.hole_x(-5.0, 96.0, 200.0), pad, 1e-9, "hole position clamps low")
+	_feq(LinkageGuideCharts.hole_x(10.0, 0.0, 200.0), pad, 1e-9, "zero-length beam does not divide by zero")
+
+	# Stagger: well-spaced labels all sit above; crowded ones alternate so two
+	# dimensions never overprint each other.
+	var spread: Array = [{"pos_in": 0.0}, {"pos_in": 48.0}, {"pos_in": 96.0}]
+	_check(LinkageGuideCharts.stagger_slots(spread, 96.0, 400.0) == ["above", "above", "above"],
+		"well-spaced labels all sit above")
+	var crowded: Array = [{"pos_in": 40.0}, {"pos_in": 42.0}, {"pos_in": 44.0}]
+	var slots := LinkageGuideCharts.stagger_slots(crowded, 96.0, 400.0)
+	_check(slots.size() == 3, "every hole gets a slot")
+	_check(slots[0] == "above" and slots[1] == "below",
+		"a crowded neighbour drops to the far side, got %s" % str(slots))
+	_check(LinkageGuideCharts.stagger_slots([], 96.0, 400.0).is_empty(),
+		"no holes, no slots")
+	_check(LinkageGuideCharts.template_height() > 0.0, "drill template reserves height")
+
+	# The mass legend must name every bucket LinkageBom fills, or a real
+	# contribution silently vanishes from the chart.
+	var bom := LinkageBom.compute(_default_params())
+	var charted := {}
+	for row in LinkageGuideCharts.MASS_ROWS:
+		charted[str(row[0])] = true
+	_check(LinkageGuideCharts.MASS_ROWS.size() == LinkageGuideCharts.MASS_COLORS.size(),
+		"every mass row has a colour")
+	for key in (bom["mass"] as Dictionary):
+		if str(key) in ["total_kg", "structure_kg"]:
+			continue
+		_check(charted.has(key), "mass bucket %s appears in the breakdown chart" % str(key))
+
+
+# ---------------------------------------------------------------------------
+# BOM → fabrication task graph
+# ---------------------------------------------------------------------------
+
+func _test_fab_graph() -> void:
+	# --- Back-compat freeze --------------------------------------------------
+	# Hand-authored counts (no bom_bolt_count, no assembly_steps) must emit the
+	# EXACT graph they always did. npc_population_selftest and packing_selftest
+	# both pin schedules over this shape; if it moves, they break silently in a
+	# way that reads as a scheduler regression rather than a linkage change.
+	var legacy := {"beam_count": 16, "bracket_count": 8, "bolt_count": 12,
+		"module_count": 4, "panel_count": 0}
+	var legacy_tasks := NpcCrewPlan.linkage_fab_tasks(legacy)
+	_check(legacy_tasks.size() == 7, "legacy graph has 7 phases, got %d" % legacy_tasks.size())
+	var expected_ids := ["cut", "drill", "assemble", "brackets", "bolts", "fold_test", "erect"]
+	var legacy_ids: Array = []
+	for t in legacy_tasks:
+		legacy_ids.append(str(t["id"]))
+	_check(legacy_ids == expected_ids, "legacy task ids unchanged, got %s" % str(legacy_ids))
+	var legacy_by_id := {}
+	for t in legacy_tasks:
+		legacy_by_id[str(t["id"])] = t
+	_feq(float(legacy_by_id["assemble"]["work_s"]), 4.0 * NpcCrewPlan.T_ASSEMBLE_MODULE_S,
+		1e-9, "legacy assemble work unchanged")
+	_check((legacy_by_id["bolts"]["deps"] as Array) == ["assemble", "brackets"],
+		"legacy bolt deps unchanged, got %s" % str(legacy_by_id["bolts"]["deps"]))
+	_feq(float(legacy_by_id["bolts"]["work_s"]), 12.0 * NpcCrewPlan.T_BOLT_SET_S,
+		1e-9, "legacy bolt work uses the supplied count")
+	# The modules*6 estimate still fires when no count is available at all.
+	var boltless := legacy.duplicate()
+	boltless["bolt_count"] = 0
+	var est_tasks := NpcCrewPlan.linkage_fab_tasks(boltless)
+	for t in est_tasks:
+		if str(t["id"]) == "bolts":
+			_feq(float(t["work_s"]), 4.0 * 6.0 * NpcCrewPlan.T_BOLT_SET_S, 1e-9,
+				"boltless design still falls back to modules*6")
+
+	# --- Real BOM sharpens the plan -----------------------------------------
+	var p := _default_params()
+	var bom := LinkageBom.compute(p)
+	var counts := LinkageBom.fab_counts(bom)
+	var tasks := NpcCrewPlan.linkage_fab_tasks(counts)
+	var ids: Array = []
+	var by_id := {}
+	for t in tasks:
+		ids.append(str(t["id"]))
+		by_id[str(t["id"])] = t
+	var n_asm := (bom["assembly_steps"] as Array).size()
+	_check(tasks.size() == 7 + n_asm - 1,
+		"assembly steps add %d phases, got %d tasks" % [n_asm - 1, tasks.size()])
+	_check(not ids.has("assemble"), "the flat assemble task is replaced")
+	for entry in bom["assembly_steps"]:
+		var want := "assemble_%s" % str((entry as Dictionary)["assembly_id"])
+		_check(ids.has(want), "task %s emitted" % want)
+		_check((by_id[want]["deps"] as Array) == ["drill"], "%s waits on drilling" % want)
+		# Labour = the joint's share of module time + real seconds per piece.
+		var pieces := int((entry as Dictionary)["per_module_pieces"])
+		var share := NpcCrewPlan.T_ASSEMBLE_MODULE_S / float(n_asm)
+		_feq(float(by_id[want]["work_s"]),
+			p.modules * (pieces * NpcCrewPlan.T_HW_PART_S + share), 1e-6,
+			"%s labour reflects its piece count" % want)
+	# Bolt-up now waits on EVERY joint, not one lumped assemble.
+	var bolt_deps: Array = by_id["bolts"]["deps"]
+	_check(bolt_deps.has("brackets"), "bolt-up still waits on brackets")
+	for entry in bom["assembly_steps"]:
+		_check(bolt_deps.has("assemble_%s" % str((entry as Dictionary)["assembly_id"])),
+			"bolt-up waits on every assembly")
+	# The real count, not the estimate.
+	_check(int(counts["bom_bolt_count"]) != p.modules * 6,
+		"real bolt count differs from the modules*6 estimate")
+	_feq(float(by_id["bolts"]["work_s"]),
+		int(counts["bom_bolt_count"]) * NpcCrewPlan.T_BOLT_SET_S, 1e-9,
+		"bolt-up labour uses the BOM count")
+
+	# --- The emergent properties still hold on the richer graph -------------
+	var r5 := NpcCrewPlan.schedule(tasks, 5)
+	_check(not bool(r5["feasible"]) and str(r5["blocked_id"]) == "erect",
+		"a 5-person crew is still blocked at the raise, got %s" % str(r5["blocked_id"]))
+	var prev := INF
+	for n in range(6, 25, 2):
+		var r := NpcCrewPlan.schedule(tasks, n)
+		_check(bool(r["feasible"]), "fab graph feasible at n=%d" % n)
+		var ms := float(r["makespan_s"])
+		_check(ms >= float(r["critical_path_s"]) - 0.01,
+			"makespan >= critical path at n=%d" % n)
+		_check(ms >= float(r["floor_s"]) - 0.01, "makespan >= total/n at n=%d" % n)
+		_check(ms <= prev + 0.01, "more hands never hurt at n=%d" % n)
+		prev = ms
+	# The chore-board bridge carries every phase through.
+	var sched := NpcCrewPlan.schedule(tasks, 12)
+	var specs := NpcCrewPlan.chore_specs(tasks, sched)
+	_check(specs.size() == tasks.size(), "every phase becomes a chore spec")
+	for spec in specs:
+		_check(float(spec["chore_hours"]) > 0.0, "chore %s has hours" % str(spec["task_id"]))
+
+
+# ---------------------------------------------------------------------------
+# Drill templates
+# ---------------------------------------------------------------------------
+
+func _test_drill_plan() -> void:
+	var p := _default_params()
+	var plan := LinkageDrillPlan.compute(p)
+
+	# --- Horizontal beam ----------------------------------------------------
+	var h: Dictionary = plan["h_beam"]
+	_feq(float(h["length_in"]), 96.0, 1e-9, "h beam template length")
+	var hh: Array = h["holes"]
+	_check(hh.size() == 3, "h beam has 3 holes, got %d" % hh.size())
+	_feq(float(hh[0]["pos_in"]), 1.5, 1e-9, "h BOT hole at offset_bot")
+	_feq(float(hh[1]["pos_in"]), 1.5 + 93.0 * 0.415, 1e-9, "h CTR hole at the pivot")
+	_feq(float(hh[2]["pos_in"]), 94.5, 1e-9, "h TOP hole")
+	_check(str(hh[1]["kind"]) == "pivot", "centre hole tagged as pivot")
+
+	# --- Vertical beam ------------------------------------------------------
+	var v: Dictionary = plan["v_beam"]
+	var vh: Array = v["holes"]
+	_check(vh.size() == 3, "v beam has 3 holes, got %d" % vh.size())
+	_feq(float(vh[0]["pos_in"]), 1.5, 1e-9, "v BOT hole at vert_end_offset")
+	_feq(float(vh[2]["pos_in"]), 94.5, 1e-9, "v TOP hole")
+	_feq(float(vh[1]["pos_in"]), (1.5 + 94.5) / 2.0, 1e-9, "v CTR hole is the midpoint")
+
+	# --- Reciprocal ---------------------------------------------------------
+	_check(bool(plan["has_reciprocal"]), "default design has reciprocal supports")
+	_check(plan.has("rcp_beam"), "reciprocal template produced")
+	var r: Dictionary = plan["rcp_beam"]
+	_check(float(r["length_in"]) > 1.0, "reciprocal beam has length")
+	var rh: Array = r["holes"]
+	_check(rh.size() >= 1, "reciprocal beam has at least the anchor hole")
+	_check(str(rh[0]["name"]) == "ANCH", "first reciprocal hole is the anchor")
+	for hole in rh:
+		_check(float(hole["pos_in"]) >= 0.0 and float(hole["pos_in"]) <= float(r["length_in"]),
+			"reciprocal hole %s lies on the beam" % str(hole["name"]))
+	if plan.has("h_beam_top"):
+		var top: Dictionary = plan["h_beam_top"]
+		var anchors := 0
+		var last := -1.0
+		for hole in top["holes"]:
+			if str(hole["kind"]) == "rcp_anchor":
+				anchors += 1
+			_check(float(hole["pos_in"]) >= last, "top-beam holes are sorted by position")
+			last = float(hole["pos_in"])
+		_check(anchors > 0, "top ring template carries R# anchors")
+		_check(str((plan["h_beam"] as Dictionary)["label"]) == "Bottom Ring H-Beam",
+			"plain H template relabelled once a top variant exists")
+
+	# --- Gates --------------------------------------------------------------
+	var no_rcp := _default_params()
+	no_rcp.support_beams["parallel_enabled"] = false
+	_check(not bool(LinkageDrillPlan.compute(no_rcp)["has_reciprocal"]),
+		"no reciprocal template when parallel beams are off")
+	var arch := _default_params()
+	arch.orientation = "vertical"
+	var arch_plan := LinkageDrillPlan.compute(arch)
+	_check(not bool(arch_plan["has_reciprocal"]), "arch mode has no reciprocal template")
+	_check((arch_plan["h_beam"] as Dictionary)["holes"].size() == 3,
+		"arch mode still produces beam templates")
+
+	# --- Dedupe primitive ---------------------------------------------------
+	var raw: Array[float] = [10.0, 10.1, 30.0, 9.95]
+	_check(LinkageDrillPlan._dedupe(raw, 0.25).size() == 2,
+		"near-coincident positions collapse to one hole")
+	_check(LinkageDrillPlan._dedupe(raw, 0.01).size() == 4,
+		"a tight tolerance keeps them distinct")
+
+
+## Structural deep-equality over the JSON value types a config is made of.
+## Godot's `==` on Dictionary/Array is reference identity, so round-trip checks
+## need this.
+func _deep_eq(a, b) -> bool:
+	if a is Dictionary and b is Dictionary:
+		var da: Dictionary = a
+		var db: Dictionary = b
+		if da.size() != db.size():
+			return false
+		for k in da:
+			if not db.has(k):
+				return false
+			if not _deep_eq(da[k], db[k]):
+				return false
+		return true
+	if a is Array and b is Array:
+		var aa: Array = a
+		var ab: Array = b
+		if aa.size() != ab.size():
+			return false
+		for i in aa.size():
+			if not _deep_eq(aa[i], ab[i]):
+				return false
+		return true
+	if (a is float or a is int) and (b is float or b is int):
+		return absf(float(a) - float(b)) <= 1e-9
+	return a == b

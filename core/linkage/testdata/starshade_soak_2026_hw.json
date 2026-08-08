@@ -1,0 +1,928 @@
+{
+  "structure": {
+    "modules": 8,
+    "beamLengths": {
+      "horizontal": 8,
+      "vertical": 7.85
+    },
+    "pivotPercent": 41.4,
+    "stackCounts": {
+      "horizontal": 2,
+      "vertical": 3
+    },
+    "beamDimensions": {
+      "horizontalWidth": 3.5,
+      "horizontalThickness": 1.5,
+      "verticalWidth": 1.5,
+      "verticalThickness": 3.5,
+      "verticalInnerWidth": 1.5,
+      "verticalInnerThickness": 3.5,
+      "verticalOuterWidth": 1.5,
+      "verticalOuterThickness": 3.5,
+      "verticalDimensionsLinked": true
+    },
+    "offsets": {
+      "top": 1.75,
+      "bottom": 2,
+      "vertEnd": 1,
+      "hStackGap": 0.1,
+      "vStackGap": 0.45
+    },
+    "bracketDimensions": {
+      "width": 2.17,
+      "depth": 1.6,
+      "height": 3.82,
+      "wallThickness": 0.18,
+      "innerWidth": 1.8,
+      "holeDistance": 2.69
+    },
+    "brackets": {
+      "width": 2.17,
+      "depth": 1.6,
+      "height": 3.82,
+      "wallThickness": 0.18,
+      "innerWidth": 1.8,
+      "holeDiameter": 0.3125,
+      "zRotation": 0
+    },
+    "bolts": {
+      "diameter": 0.5,
+      "vStackLength": 6.4,
+      "hStackLength": 3,
+      "vStackAuto": false,
+      "hStackAuto": false,
+      "hPivotBoltLength": 3,
+      "hPivotBoltAuto": false
+    },
+    "washers": {
+      "vEnabled": true,
+      "vID": 0.5,
+      "vOD": 1.5,
+      "vThickness": 0.45,
+      "vAuto": false,
+      "hEnabled": true,
+      "hID": 0.5,
+      "hOD": 1.5,
+      "hThickness": 0.1,
+      "hAuto": false
+    },
+    "hobermanAngle": 0,
+    "pivotAngle": 0,
+    "vStackReverse": false
+  },
+  "mode": {
+    "type": "cylinder",
+    "flipVertical": false,
+    "rotation": 0,
+    "useFixedBeams": false,
+    "capUprights": true,
+    "arrayCount": 1
+  },
+  "hardwareAssemblies": {
+    "activeId": "innerVBeam",
+    "explode": 0,
+    "snap": true,
+    "assemblies": {
+      "outerVBeam": {
+        "id": "outerVBeam",
+        "label": "Outer V-Beam Assembly",
+        "detailed": true,
+        "explodeGap": 1.4,
+        "detailCam": {
+          "pitchDeg": 8,
+          "distMul": 2
+        },
+        "mirror": {
+          "from": "right",
+          "to": "left"
+        },
+        "parts": [
+          {
+            "id": "bracket",
+            "type": "bracket",
+            "label": "U-Bracket (Unistrut Trolley)",
+            "axis": "up",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 4,
+            "cost": 5,
+            "params": {
+              "useGlb": true,
+              "height": 3.77,
+              "width": 2.15,
+              "depth": 1.57,
+              "wallThickness": 0.12,
+              "holeDiameter": 0.41,
+              "bottomLip": 1.01,
+              "sideHoleFromTop": 1.1875,
+              "cutoffHeight": 0,
+              "glbScaleMul": 1,
+              "glbRotX": 0,
+              "glbRotY": 90,
+              "glbRotZ": 0,
+              "posX": 0,
+              "posY": 0,
+              "posZ": 0
+            },
+            "presetId": "asm-rkg43",
+            "bomKey": "asm-rkg43"
+          },
+          {
+            "id": "r-beam",
+            "type": "beam",
+            "label": "Outer V-Beam",
+            "axis": "right",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 2,
+            "cost": 0,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "width": 3.5,
+              "thickness": 1.5,
+              "length": 96,
+              "holeOffset": 1.5,
+              "holeDiameter": 0.31496062992125984,
+              "rotDeg": 90,
+              "syncStructure": true,
+              "color": 9136404,
+              "holeAlign": "near"
+            },
+            "presetId": "asm-ebmrje",
+            "bomKey": "asm-ebmrje"
+          },
+          {
+            "id": "r-bushing",
+            "type": "bushing",
+            "label": "Bushing 5/16\"ID 5/8\"OD 1.25\"",
+            "axis": "right",
+            "seq": 2,
+            "qty": 1,
+            "perModule": 2,
+            "cost": 0.85,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "params": {
+              "id": 0.3125,
+              "od": 0.625,
+              "length": 1.25,
+              "flangeOd": 0,
+              "flangeThickness": 0
+            },
+            "flipAxis": false,
+            "presetId": "asm-uv0kcd",
+            "bomKey": "asm-uv0kcd"
+          },
+          {
+            "id": "r-lock",
+            "type": "lockWasher",
+            "label": "5/16\" Split Lock Washer",
+            "axis": "right",
+            "seq": 3,
+            "qty": 1,
+            "perModule": 2,
+            "cost": 0.06,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "params": {
+              "id": 0.3125,
+              "od": 0.5,
+              "thickness": 0.078,
+              "style": "split"
+            },
+            "flipAxis": false,
+            "presetId": "asm-i80w7b",
+            "bomKey": "asm-i80w7b"
+          },
+          {
+            "id": "r-bolt",
+            "type": "bolt",
+            "label": "Outer V-Beam Bolt (8x60mm button)",
+            "axis": "right",
+            "seq": 4,
+            "qty": 1,
+            "perModule": 2,
+            "cost": 0.55,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "params": {
+              "diameter": 0.315,
+              "length": 2.3622,
+              "threadLength": 0.9449,
+              "headType": "button",
+              "headDia": 0.5118,
+              "headHeight": 0.1969,
+              "driveSize": 0.1575,
+              "metric": "M8x1.25"
+            },
+            "flipAxis": false,
+            "presetId": "asm-gf6qto",
+            "bomKey": "asm-gf6qto"
+          },
+          {
+            "id": "u-hbeam",
+            "type": "beam",
+            "label": "Horizontal H-Beam",
+            "axis": "up",
+            "seq": 2,
+            "qty": 1,
+            "perModule": 0,
+            "cost": 0,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "width": 3.5,
+              "thickness": 1.5,
+              "length": 18,
+              "holeOffset": 9,
+              "holeDiameter": 0.5,
+              "rotDeg": 0,
+              "syncStructure": "hBeam",
+              "color": 9136404,
+              "holeAlign": "near"
+            },
+            "presetId": "asm-5zfevj",
+            "bomKey": "asm-5zfevj"
+          },
+          {
+            "id": "d-hbeam",
+            "type": "beam",
+            "label": "Horizontal H-Beam",
+            "axis": "down",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 0,
+            "cost": 0,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "width": 3.5,
+              "thickness": 1.5,
+              "length": 18,
+              "holeOffset": 9,
+              "holeDiameter": 0.5,
+              "rotDeg": 0,
+              "syncStructure": "hBeam",
+              "color": 9136404,
+              "holeAlign": "near"
+            },
+            "presetId": "asm-5zfevj",
+            "bomKey": "asm-5zfevj"
+          },
+          {
+            "id": "outerVBeam-hbeam-gap-washer",
+            "type": "washer",
+            "label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+            "axis": "center",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 1,
+            "cost": 0.08,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "params": {
+              "id": 0.5,
+              "od": 2,
+              "thickness": 0.0625
+            },
+            "flipAxis": false,
+            "presetId": "asm-6u778p",
+            "bomKey": "asm-6u778p",
+            "sharedKey": "hBeamGapWasher"
+          },
+          {
+            "id": "c-bolt",
+            "type": "bolt",
+            "label": "H-Pivot Bolt 1/2\"x3\" Hex",
+            "axis": "down",
+            "seq": 2,
+            "qty": 1,
+            "perModule": 1,
+            "cost": 0.75,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "diameter": 0.5,
+              "length": 3,
+              "threadLength": 1,
+              "headType": "hex",
+              "headDia": 0.75,
+              "headHeight": 0.3125,
+              "driveSize": 0,
+              "metric": "",
+              "headAtInsert": true
+            },
+            "presetId": "asm-396fj2",
+            "bomKey": "asm-396fj2"
+          },
+          {
+            "id": "c-outer-washer",
+            "type": "washer",
+            "label": "Outer Washer 5/16\"ID 1.5\"OD",
+            "axis": "down",
+            "seq": 3,
+            "qty": 1,
+            "perModule": 1,
+            "cost": 0.08,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "params": {
+              "id": 0.3125,
+              "od": 1.5,
+              "thickness": 0.0625
+            },
+            "flipAxis": false,
+            "presetId": "asm-emq1x6",
+            "bomKey": "asm-emq1x6"
+          },
+          {
+            "id": "c-nut",
+            "type": "nut",
+            "label": "1/2\"-13 Rivet Nut",
+            "axis": "down",
+            "seq": 4,
+            "qty": 1,
+            "perModule": 1,
+            "cost": 0.4,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "params": {
+              "id": 0.5,
+              "od": 0.6692913385826772,
+              "length": 0.5,
+              "flangeOd": 0.7086614173228346,
+              "flangeThickness": 0.03937007874015748,
+              "style": "rivet",
+              "thread": "1/2-13"
+            },
+            "flipAxis": false,
+            "presetId": "asm-gv0hrp",
+            "bomKey": "asm-gv0hrp"
+          }
+        ],
+        "sandwichPlane": "vertical",
+        "mirrorPairs": [
+          {
+            "from": "right",
+            "to": "left"
+          }
+        ]
+      },
+      "innerVBeam": {
+        "id": "innerVBeam",
+        "label": "Inner V-Beam Assembly",
+        "detailed": true,
+        "explodeGap": 1.4,
+        "detailCam": {
+          "pitchDeg": 8,
+          "distMul": 2
+        },
+        "parts": [
+          {
+            "id": "r-beam",
+            "type": "beam",
+            "label": "Inner V-Beam",
+            "axis": "right",
+            "seq": 2,
+            "qty": 1,
+            "perModule": 2,
+            "cost": 0,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "width": 3.5,
+              "thickness": 1.5,
+              "length": 96,
+              "holeOffset": 1.5,
+              "holeDiameter": 0.31496062992125984,
+              "holeAlign": "center",
+              "rotDeg": 90,
+              "syncStructure": true,
+              "color": 9136404
+            },
+            "presetId": "asm-66y71j",
+            "bomKey": "asm-66y71j"
+          },
+          {
+            "id": "r-washer",
+            "type": "washer",
+            "label": "Outer Washer 5/16\"ID 1.5\"OD",
+            "axis": "right",
+            "seq": 3,
+            "qty": 3,
+            "perModule": 2,
+            "cost": 0.08,
+            "posAssembled": -0.37,
+            "posExploded": 0,
+            "crossOffset": 0.1,
+            "params": {
+              "id": 0.32,
+              "od": 1.5,
+              "thickness": 0.05
+            },
+            "flipAxis": false,
+            "presetId": "asm-emq1x6",
+            "bomKey": "asm-emq1x6",
+            "presetManual": false,
+            "link": ""
+          },
+          {
+            "id": "r-lock",
+            "type": "lockWasher",
+            "label": "5/16\" Split Lock Washer",
+            "axis": "right",
+            "seq": 5,
+            "qty": 1,
+            "perModule": 2,
+            "cost": 0.06,
+            "posAssembled": -5.54,
+            "posExploded": 0,
+            "crossOffset": 0.1,
+            "params": {
+              "id": 0.3125,
+              "od": 0.5,
+              "thickness": 0.078,
+              "style": "split"
+            },
+            "flipAxis": false,
+            "presetId": "asm-i80w7b",
+            "bomKey": "asm-i80w7b"
+          },
+          {
+            "id": "r-bolt",
+            "type": "bolt",
+            "label": "Inner V-Beam Bolt (8x60mm button)",
+            "axis": "right",
+            "seq": 4,
+            "qty": 1,
+            "perModule": 2,
+            "cost": 0.55,
+            "posAssembled": -0.51,
+            "posExploded": 0,
+            "crossOffset": 0.08,
+            "flipAxis": true,
+            "params": {
+              "diameter": 0.315,
+              "length": 2.3622,
+              "threadLength": 0.9449,
+              "headType": "button",
+              "headDia": 0.5118,
+              "headHeight": 0.1969,
+              "driveSize": 0.1575,
+              "metric": "M8x1.25"
+            },
+            "presetId": "asm-qnxbqm",
+            "bomKey": "asm-qnxbqm"
+          },
+          {
+            "id": "part-1781475545528-7",
+            "type": "bracket",
+            "label": "U-Bracket (Unistrut Trolley)",
+            "axis": "up",
+            "seq": 2,
+            "qty": 1,
+            "perModule": 1,
+            "cost": 5,
+            "params": {
+              "useGlb": true,
+              "height": 3.77,
+              "width": 2.15,
+              "depth": 1.57,
+              "wallThickness": 0.12,
+              "holeDiameter": 0.41,
+              "bottomLip": 1.01,
+              "sideHoleFromTop": 1.1875,
+              "cutoffHeight": 0,
+              "glbScaleMul": 1,
+              "glbRotX": 0,
+              "glbRotY": 90,
+              "glbRotZ": 0,
+              "posX": 0,
+              "posY": 0,
+              "posZ": 0
+            },
+            "presetId": "bracket-unistrut-trolley",
+            "presetManual": false,
+            "bomKey": "bracket-unistrut-trolley",
+            "link": ""
+          },
+          {
+            "id": "part-1781475697861-680",
+            "type": "bushing",
+            "label": "Bushing",
+            "axis": "left",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 1,
+            "cost": 0.1,
+            "params": {
+              "id": 0.3125,
+              "od": 0.625,
+              "length": 1.5,
+              "flangeOd": 0,
+              "flangeThickness": 0
+            },
+            "presetId": null,
+            "posAssembled": -3.34,
+            "posExploded": 0,
+            "crossOffset": 0.08,
+            "flipAxis": false
+          },
+          {
+            "id": "part-1781475961112-843",
+            "type": "washer",
+            "label": "Outer Washer 5/16\"ID 1.5\"OD",
+            "axis": "right",
+            "seq": 1,
+            "qty": 3,
+            "perModule": 2,
+            "cost": 0.08,
+            "posAssembled": -2.03,
+            "posExploded": 0,
+            "crossOffset": 0.1,
+            "params": {
+              "id": 0.32,
+              "od": 1.5,
+              "thickness": 0.05
+            },
+            "flipAxis": false,
+            "presetId": "asm-emq1x6",
+            "bomKey": "asm-emq1x6",
+            "presetManual": false,
+            "link": ""
+          },
+          {
+            "id": "u-hbeam",
+            "type": "beam",
+            "label": "Horizontal H-Beam",
+            "axis": "up",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 0,
+            "cost": 0,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "width": 3.5,
+              "thickness": 1.5,
+              "length": 18,
+              "holeOffset": 9,
+              "holeDiameter": 0.5,
+              "rotDeg": 0,
+              "syncStructure": "hBeam",
+              "color": 9136404,
+              "holeAlign": "near"
+            }
+          },
+          {
+            "id": "d-hbeam",
+            "type": "beam",
+            "label": "Horizontal H-Beam",
+            "axis": "down",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 0,
+            "cost": 0,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "width": 3.5,
+              "thickness": 1.5,
+              "length": 18,
+              "holeOffset": 9,
+              "holeDiameter": 0.5,
+              "rotDeg": 0,
+              "syncStructure": "hBeam",
+              "color": 9136404,
+              "holeAlign": "near"
+            }
+          },
+          {
+            "id": "innerVBeam-hbeam-gap-washer",
+            "type": "washer",
+            "label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+            "axis": "center",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 0,
+            "cost": 0.08,
+            "sharedKey": "hBeamGapWasher",
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "id": 0.5,
+              "od": 2,
+              "thickness": 0.0625
+            }
+          }
+        ],
+        "sandwichPlane": "vertical"
+      },
+      "hCenter": {
+        "id": "hCenter",
+        "label": "H-Beam Center Linkage Assembly",
+        "detailed": true,
+        "explodeGap": 1.4,
+        "detailCam": {
+          "pitchDeg": 38,
+          "distMul": 2.2
+        },
+        "parts": [
+          {
+            "id": "u-hbeam",
+            "type": "beam",
+            "label": "Horizontal H-Beam",
+            "axis": "up",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 0,
+            "cost": 0,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "width": 3.5,
+              "thickness": 1.5,
+              "length": 18,
+              "holeOffset": 9,
+              "holeDiameter": 0.5,
+              "rotDeg": 0,
+              "syncStructure": "hBeam",
+              "color": 9136404,
+              "holeAlign": "center"
+            }
+          },
+          {
+            "id": "d-hbeam",
+            "type": "beam",
+            "label": "Horizontal H-Beam",
+            "axis": "down",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 0,
+            "cost": 0,
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "width": 3.5,
+              "thickness": 1.5,
+              "length": 18,
+              "holeOffset": 9,
+              "holeDiameter": 0.5,
+              "rotDeg": 0,
+              "syncStructure": "hBeam",
+              "color": 9136404,
+              "holeAlign": "center"
+            }
+          },
+          {
+            "id": "hCenter-hbeam-gap-washer",
+            "type": "washer",
+            "label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+            "axis": "center",
+            "seq": 1,
+            "qty": 1,
+            "perModule": 0,
+            "cost": 0.08,
+            "sharedKey": "hBeamGapWasher",
+            "posAssembled": 0,
+            "posExploded": 0,
+            "crossOffset": 0,
+            "flipAxis": false,
+            "params": {
+              "id": 0.5,
+              "od": 2,
+              "thickness": 0.0625
+            }
+          }
+        ],
+        "sandwichPlane": "vertical",
+        "mirrorPairs": []
+      },
+      "vCenter": {
+        "id": "vCenter",
+        "label": "V-Beam Center Assembly",
+        "detailed": true,
+        "explodeGap": 1.4,
+        "detailCam": {
+          "pitchDeg": 14,
+          "distMul": 1.9
+        },
+        "parts": [],
+        "sandwichPlane": "horizontal",
+        "mirrorPairs": []
+      }
+    },
+    "stackModelV2": true,
+    "mirrorDefaultsV2": true
+  },
+  "foldAngle": 134.89999999999978,
+  "animationStopAngle": 134.89999999999978,
+  "minFoldAngle": null,
+  "radialVisibleAngle": 90,
+  "rcpVisibleAngle": 90,
+  "panelsVisibleAngle": null,
+  "panels": {
+    "enabled": true,
+    "topPanels": {
+      "enabled": true,
+      "size": {
+        "width": 61.4,
+        "length": 31.3,
+        "thickness": 1.8
+      },
+      "electrical": {
+        "ratedWatts": 220,
+        "voc": 48.3,
+        "vmp": 39.8,
+        "isc": 5.95,
+        "imp": 5.53,
+        "weight": 45
+      },
+      "padding": {
+        "x": 1,
+        "y": 0
+      },
+      "grid": {
+        "rows": 6,
+        "cols": 3
+      },
+      "lift": 0.3,
+      "presetId": null,
+      "formFactor": "framed",
+      "foldCount": 4,
+      "foldDeploy": 1,
+      "folded": {
+        "length": 25.25,
+        "width": 21.25,
+        "thickness": 2.5
+      }
+    },
+    "sidePanels": {
+      "enabled": false,
+      "size": {
+        "width": 48,
+        "length": 96,
+        "thickness": 0.5
+      },
+      "electrical": {
+        "ratedWatts": 180,
+        "voc": 49.5,
+        "vmp": 41.5,
+        "isc": 10.2,
+        "imp": 9.65,
+        "weight": 45
+      },
+      "padding": {
+        "x": 0,
+        "y": -0.5
+      },
+      "grid": {
+        "rows": 1,
+        "cols": 1
+      },
+      "presetId": null,
+      "formFactor": "framed",
+      "foldCount": 4,
+      "foldDeploy": 1,
+      "folded": {
+        "length": 25.25,
+        "width": 21.25,
+        "thickness": 2.5
+      }
+    },
+    "layoutMode": "rectangular",
+    "gridRotation": 0,
+    "positioning": {
+      "lift": -3,
+      "slide": 37,
+      "separation": -4.5
+    },
+    "radial": {
+      "count": 4,
+      "offset": 72,
+      "rotation": -22.5,
+      "lateralOffset": 59,
+      "pinwheelAngle": 0
+    },
+    "spiral": {
+      "armCount": 3,
+      "secondaryEnabled": true,
+      "secondaryRadialOffset": -39,
+      "secondaryLateralOffset": 0,
+      "secondaryPinwheel": -2,
+      "secondaryRotation": 2,
+      "armRadialStep": -39,
+      "armLateralStep": 0,
+      "armPinwheelStep": 0,
+      "armRotationStep": 0
+    },
+    "enabledFaces": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "supportBeams": {
+    "enabled": true,
+    "showRadial": true,
+    "length": 96,
+    "width": 1.5,
+    "thickness": 3.5,
+    "rotation": 0,
+    "offsetH": 0,
+    "offsetV": -10,
+    "foldAngle": 0,
+    "parallelEnabled": true,
+    "parallelLength": 96,
+    "parallelWidth": 3.5,
+    "parallelThickness": 1.5,
+    "parallelFoldAngle": 0,
+    "parallelSwingAngle": 90,
+    "parallelOverlap": 62.5,
+    "parallelInset": -9,
+    "parallelVOffset": -1.66,
+    "parallelOffsetV": -3,
+    "anchorDist": 6,
+    "rcpKinematicMode": false,
+    "rcpPivotHole": 0,
+    "rcpPivotT": 1,
+    "rcpEndOffset": 1.25,
+    "rcpActiveHole": 1
+  },
+  "costs": {
+    "hBeam": 3.7,
+    "vBeam": 3.6306249999999998,
+    "bolt": 1.5,
+    "boltVInner": 1.25,
+    "boltVOuter": 1,
+    "boltH": 1.25,
+    "boltHPivot": 1.25,
+    "washerV": 0.5,
+    "washerH": 0.5,
+    "bracket": 5.38,
+    "solarPanel": 15,
+    "autoLumber": true,
+    "refBeam": {
+      "width": 3.5,
+      "thickness": 1.5,
+      "length": 8,
+      "price": 3.7
+    }
+  },
+  "visibility": {
+    "brackets": true,
+    "bolts": true,
+    "hardwareFullDetail": true,
+    "solarPanels": true,
+    "ibc": true
+  },
+  "cameraState": {
+    "yaw": -32.993570322793104,
+    "pitch": 0.8155582090205669,
+    "dist": 418.97679367612494,
+    "panX": -27,
+    "panY": -44,
+    "structureRotation": -22.5
+  },
+  "version": "v30"
+}

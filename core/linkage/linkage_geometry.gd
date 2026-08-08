@@ -186,7 +186,7 @@ static func extract_module_frames(frame: Dictionary, p: LinkageParams) -> Array:
 		var inner_a := _inner_end(beam_a, cx, cz)
 		var inner_b := _inner_end(beam_b, cx, cz)
 		var h_center := Vector3.ZERO
-		var isect := _seg_seg_intersect_xz(beam_a["p1"], beam_a["p2"], beam_b["p1"], beam_b["p2"])
+		var isect := seg_seg_intersect_xz(beam_a["p1"], beam_a["p2"], beam_b["p1"], beam_b["p2"])
 		var mid_y := ((beam_a["center"] as Vector3).y + (beam_b["center"] as Vector3).y) * 0.5
 		if not isect.is_empty() and float(isect["t"]) > -0.2 and float(isect["t"]) < 1.2 \
 				and float(isect["s"]) > -0.2 and float(isect["s"]) < 1.2:
@@ -255,7 +255,9 @@ static func _scissor_end(inner_end: Vector3, h_center: Vector3) -> Dictionary:
 
 
 ## Parametric XZ intersection of two segments — port of segSegIntersectParamsXZ.
-static func _seg_seg_intersect_xz(a0: Vector3, a1: Vector3, b0: Vector3, b1: Vector3) -> Dictionary:
+## Returns `{t, s}` (parameters along a and b) or `{}` when parallel. Public
+## because LinkageDrillPlan derives reciprocal-beam crossing holes from it.
+static func seg_seg_intersect_xz(a0: Vector3, a1: Vector3, b0: Vector3, b1: Vector3) -> Dictionary:
 	var dax := a1.x - a0.x
 	var daz := a1.z - a0.z
 	var dbx := b1.x - b0.x
@@ -277,7 +279,11 @@ static func _seg_seg_intersect_xz(a0: Vector3, a1: Vector3, b0: Vector3, b1: Vec
 
 ## Returns support beam dictionaries (same shape as solver beams), applying
 ## the radial/rcp visibility-angle gates at `fold_rad`. Cylinder mode only.
-static func support_beams(frame: Dictionary, p: LinkageParams, fold_rad: float) -> Array:
+static func support_beams(frame: Dictionary, p_in: LinkageParams, fold_rad: float) -> Array:
+	# Same choke point as LinkageSolver.solve — _build_rcp_anchor reads
+	# p.h_stack_gap to find the ring's top surface, so the reciprocal anchors
+	# must see the same effective spacing the ring was built with.
+	var p := LinkageHardwareSpacing.effective_params(p_in)
 	var out: Array = []
 	var cfg: Dictionary = p.support_beams
 	if not bool(cfg["enabled"]) or p.orientation == "vertical":

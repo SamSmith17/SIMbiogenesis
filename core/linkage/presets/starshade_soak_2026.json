@@ -34,7 +34,7 @@
 			true,
 			true
 		],
-		"gridRotation": 0.0,
+		"gridRotation": 22.5,
 		"layoutMode": "rectangular",
 		"positioning": {
 			"lift": -3.0,
@@ -50,7 +50,7 @@
 		},
 		"sidePanels": {
 			"electrical": {
-				"imp": 9.65,
+				"imp": 9.7,
 				"isc": 10.2,
 				"ratedWatts": 180.0,
 				"vmp": 41.5,
@@ -87,8 +87,8 @@
 		},
 		"topPanels": {
 			"electrical": {
-				"imp": 5.53,
-				"isc": 5.95,
+				"imp": 5.5,
+				"isc": 6.0,
 				"ratedWatts": 220.0,
 				"vmp": 39.8,
 				"voc": 48.3,
@@ -99,7 +99,7 @@
 				"cols": 3,
 				"rows": 6
 			},
-			"lift": 0.3,
+			"lift": 0.300000000000001,
 			"padding": {
 				"x": 1.0,
 				"y": 0.0
@@ -141,15 +141,15 @@
 		},
 		"bracketDimensions": {
 			"depth": 1.6,
-			"height": 3.82,
-			"holeDistance": 2.69,
+			"height": 3.8,
+			"holeDistance": 2.7,
 			"innerWidth": 1.8,
 			"wallThickness": 0.18,
 			"width": 2.17
 		},
 		"brackets": {
 			"depth": 1.6,
-			"height": 3.82,
+			"height": 3.8,
 			"holeDiameter": 0.3125,
 			"innerWidth": 1.8,
 			"wallThickness": 0.18,
@@ -188,7 +188,7 @@
 		"parallelThickness": 1.5,
 		"parallelVOffset": -1.66,
 		"parallelWidth": 3.5,
-		"rcpEndOffset": 1.25,
+		"rcpEndOffset": 1.3,
 		"rotation": 0.0,
 		"showRadial": true,
 		"thickness": 3.5,
