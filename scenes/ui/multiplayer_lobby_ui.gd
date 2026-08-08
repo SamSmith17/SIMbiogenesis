@@ -28,12 +28,41 @@ var _trusted_edit: TextEdit = null
 var _require_trusted: CheckButton = null
 var _ttl_spin: SpinBox = null
 var _exp_lbl: Label = null
+var _reach_lbl: Label = null
+var _reach_retry_btn: Button = null
+var _auth_lbl: Label = null
+var _auth_btn: Button = null
+var _community_edit: LineEdit = null
+var _community_link_btn: Button = null
+var _directory_lbl: Label = null
+var _play_btn: Button = null
+var _voice_btn: Button = null
+## Set while a Play-together election is resolving, so the button can't be
+## double-fired and the label can explain the wait.
+var _electing := false
+var _require_discord: CheckButton = null
+var _allow_offline_discord: CheckButton = null
+var _relay_toggle: CheckButton = null
+var _relay_lbl: Label = null
+var _tabs: TabContainer = null
+## Community-builder inputs, keyed by community-file field name.
+var _builder_fields: Dictionary = {}
+var _builder_lbl: Label = null
 
 
 func open() -> void:
 	if not _built:
 		_build_ui()
 		_built = true
+		_restore_tab()
+	# Directory polling is scoped to the lobby being open (or us hosting): the
+	# webhook route budget is shared by everyone in the community, so a client
+	# that never opens this panel must not spend any of it.
+	var dir := _directory()
+	if dir != null:
+		if str((dir.get("community") as Dictionary).get("guild_id", "")).is_empty():
+			dir.call("set_community", SimCommunity.active())
+		dir.call("start_polling", true)
 	_sync_from_session()
 	MultiplayerSession.start_lan_listen(true)
 	visible = true
@@ -43,6 +72,9 @@ func open() -> void:
 func close() -> void:
 	visible = false
 	CursorController.release_modal(MODAL_NAME)
+	var dir := _directory()
+	if dir != null:
+		dir.call("start_polling", false)
 	# Keep LAN listen while modal closed only if not in session? Stop to save noise.
 	if not MultiplayerSession.is_active():
 		MultiplayerSession.start_lan_listen(false)
@@ -68,12 +100,62 @@ func _ready() -> void:
 		MultiplayerSession.lan_hosts_changed.connect(_refresh_lan)
 	if not MultiplayerSession.status_message.is_connected(_on_status):
 		MultiplayerSession.status_message.connect(_on_status)
+	# Sign-in resolves asynchronously (browser round-trip), so the panel has to
+	# be told rather than polled.
+	var id := _discord_identity()
+	if id != null:
+		# `unbind(0)` is not valid, so the one-argument signals are wired
+		# separately rather than through a clever loop.
+		for sig in ["sign_in_started", "signed_out", "token_refreshed"]:
+			if id.has_signal(sig):
+				id.connect(sig, _on_discord_auth_changed)
+		for sig in ["sign_in_completed", "sign_in_failed"]:
+			if id.has_signal(sig):
+				id.connect(sig, _on_discord_auth_changed.unbind(1))
+	var dir := _directory()
+	if dir != null:
+		dir.connect("directory_changed", _refresh_directory.unbind(1))
+		dir.connect("directory_error", _refresh_directory.unbind(1))
+		dir.connect("election_result", _on_election_result)
 	if MultiplayerSession.design != null:
 		var d: Node = MultiplayerSession.design
 		if d.has_signal("offer_changed") and not d.offer_changed.is_connected(_refresh_offers):
 			d.offer_changed.connect(_refresh_offers)
 		if d.has_signal("sync_changed") and not d.sync_changed.is_connected(_sync_from_session):
 			d.sync_changed.connect(_sync_from_session)
+
+
+## One scrollable page inside the TabContainer. Each tab scrolls on its own so
+## a long section (Security) cannot push the peers strip off screen.
+func _make_tab(title: String) -> VBoxContainer:
+	var scroll := ScrollContainer.new()
+	scroll.name = title
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tabs.add_child(scroll)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(box)
+	return box
+
+
+func _save_tab(idx: int) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(SimCommunity.PREFS_PATH)
+	cfg.set_value("mp", "lobby_tab", idx)
+	cfg.save(SimCommunity.PREFS_PATH)
+
+
+func _restore_tab() -> void:
+	if _tabs == null:
+		return
+	var cfg := ConfigFile.new()
+	if cfg.load(SimCommunity.PREFS_PATH) != OK:
+		return
+	var idx := int(cfg.get_value("mp", "lobby_tab", 0))
+	if idx >= 0 and idx < _tabs.get_tab_count():
+		_tabs.current_tab = idx
 
 
 func _build_ui() -> void:
@@ -95,7 +177,7 @@ func _build_ui() -> void:
 	add_child(center)
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(620, 640)
+	panel.custom_minimum_size = Vector2(720, 700)
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	center.add_child(panel)
@@ -124,6 +206,26 @@ func _build_ui() -> void:
 	hint.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	root.add_child(hint)
 
+	# The panel had grown to one ~450-line column: every control from
+	# "what's my name" to "apply this design merge" stacked in a single scroll.
+	# Tabs split it by WHEN you need it — Play is the whole flow for someone who
+	# just wants in, and nobody should have to visit another tab to get there.
+	#
+	# `root` is re-pointed at each section boundary below rather than the
+	# sections being rewritten, so this stayed a move rather than a rebuild.
+	_tabs = TabContainer.new()
+	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tabs.tab_changed.connect(func(idx: int) -> void: _save_tab(idx))
+	root.add_child(_tabs)
+	var play_box := _make_tab("Play")
+	var manual_box := _make_tab("Manual")
+	var security_box := _make_tab("Security")
+	var design_box := _make_tab("Design")
+	# Everything after the tabs is the persistent strip: who is here and what
+	# just happened matter on every tab.
+	var outer := root
+	root = play_box
+
 	# Display name
 	var name_row := HBoxContainer.new()
 	name_row.add_theme_constant_override("separation", 8)
@@ -143,6 +245,74 @@ func _build_ui() -> void:
 	name_apply.pressed.connect(func() -> void:
 		MultiplayerSession.set_display_name(_name_edit.text))
 	name_row.add_child(name_apply)
+
+	# Discord identity. Signing in is OPTIONAL — everything below still works
+	# without it — but it is what lets a host gate joins on Discord server
+	# membership instead of hand-managed friend keys.
+	var auth_row := HBoxContainer.new()
+	auth_row.add_theme_constant_override("separation", 8)
+	root.add_child(auth_row)
+	var auth_hdr := Label.new()
+	auth_hdr.text = "Discord"
+	auth_hdr.custom_minimum_size.x = 110
+	auth_row.add_child(auth_hdr)
+	_auth_lbl = Label.new()
+	_auth_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_auth_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_auth_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	auth_row.add_child(_auth_lbl)
+	_auth_btn = Button.new()
+	_auth_btn.text = "Sign in"
+	_auth_btn.pressed.connect(_on_discord_auth_pressed)
+	auth_row.add_child(_auth_btn)
+
+	# Community file: the one blob a server owner hands their members. It also
+	# carries the Discord application id, so importing it is what makes sign-in
+	# available at all.
+	var comm_row := HBoxContainer.new()
+	comm_row.add_theme_constant_override("separation", 8)
+	root.add_child(comm_row)
+	var comm_lbl := Label.new()
+	comm_lbl.text = "Community"
+	comm_lbl.custom_minimum_size.x = 110
+	comm_row.add_child(comm_lbl)
+	_community_edit = LineEdit.new()
+	_community_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_community_edit.placeholder_text = "Paste SMBC1:… from your Discord server"
+	_community_edit.text_submitted.connect(func(_t: String) -> void: _on_import_community())
+	comm_row.add_child(_community_edit)
+	var comm_import := Button.new()
+	comm_import.text = "Import"
+	comm_import.pressed.connect(_on_import_community)
+	comm_row.add_child(comm_import)
+	_community_link_btn = Button.new()
+	_community_link_btn.text = "Open channel"
+	_community_link_btn.tooltip_text = "Open the pinned session message in Discord"
+	_community_link_btn.pressed.connect(_on_open_directory_link)
+	comm_row.add_child(_community_link_btn)
+
+	# THE button. Reads the directory and either joins whoever is live or claims
+	# the session — no code to copy, no link to click.
+	var play_row := HBoxContainer.new()
+	play_row.add_theme_constant_override("separation", 8)
+	root.add_child(play_row)
+	var play_pad := Label.new()
+	play_pad.custom_minimum_size.x = 110
+	play_row.add_child(play_pad)
+	_directory_lbl = Label.new()
+	_directory_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_directory_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_directory_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	play_row.add_child(_directory_lbl)
+	_play_btn = Button.new()
+	_play_btn.text = "Play together"
+	_play_btn.pressed.connect(_on_play_together)
+	play_row.add_child(_play_btn)
+	_voice_btn = Button.new()
+	_voice_btn.text = "🎙 Voice"
+	_voice_btn.tooltip_text = "Jump into your community's Discord voice channel"
+	_voice_btn.pressed.connect(_on_join_voice)
+	play_row.add_child(_voice_btn)
 
 	# Discord voice (Phase 5 — out-of-band)
 	var discord_row := HBoxContainer.new()
@@ -170,6 +340,7 @@ func _build_ui() -> void:
 	discord_open.pressed.connect(_on_discord_open)
 	discord_row.add_child(discord_open)
 
+	root = manual_box
 	# Host row
 	var host_row := HBoxContainer.new()
 	host_row.add_theme_constant_override("separation", 8)
@@ -192,6 +363,80 @@ func _build_ui() -> void:
 	_leave_btn.pressed.connect(func() -> void:
 		MultiplayerSession.leave_session())
 	host_row.add_child(_leave_btn)
+
+	# Reachability. Without this the host has no way to tell whether anyone
+	# outside their LAN can actually connect — the join code looks identical
+	# either way, which is exactly how internet play failed silently before.
+	var reach_row := HBoxContainer.new()
+	reach_row.add_theme_constant_override("separation", 8)
+	root.add_child(reach_row)
+	_reach_lbl = Label.new()
+	_reach_lbl.text = ""
+	_reach_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_reach_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_reach_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	reach_row.add_child(_reach_lbl)
+	_reach_retry_btn = Button.new()
+	_reach_retry_btn.text = "Retry UPnP"
+	_reach_retry_btn.tooltip_text = "Ask the router again for a UDP port mapping"
+	_reach_retry_btn.pressed.connect(func() -> void:
+		MultiplayerSession.retry_reachability())
+	reach_row.add_child(_reach_retry_btn)
+
+	root = security_box
+	# Community builder (server owner). Without this the only way to produce a
+	# community file is to hand-write JSON, which makes the whole "hand your
+	# members one code" flow unusable by the person who has to start it.
+	var build_hdr := Label.new()
+	build_hdr.text = "Create a community file (server owner)"
+	build_hdr.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	root.add_child(build_hdr)
+	var build_hint := Label.new()
+	build_hint.text = "Turn on Discord Developer Mode to right-click → Copy ID. The webhook URLs are write credentials for those channels — share the finished code only with people you trust."
+	build_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	build_hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	build_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	root.add_child(build_hint)
+	for spec in [
+		["name", "Community name", "My Camp"],
+		["client_id", "Discord application ID", "Developer Portal → General Information"],
+		["guild_id", "Server ID", "right-click the server → Copy Server ID"],
+		["role_ids", "Role IDs (comma separated, blank = any member)", "e.g. Patreon tier role"],
+		["voice_channel_id", "Voice channel ID", "right-click the voice channel → Copy Channel ID"],
+		["directory_webhook", "Session-status webhook URL", "https://discord.com/api/webhooks/…"],
+		["relay_webhook", "Chat-relay webhook URL (optional)", "a DIFFERENT webhook, so either can be revoked"],
+		["text_channel_hint", "Chat channel name (cosmetic)", "#sim-lobby"],
+	]:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		root.add_child(row)
+		var lbl := Label.new()
+		lbl.text = str(spec[1])
+		lbl.custom_minimum_size.x = 250
+		lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		row.add_child(lbl)
+		var ed := LineEdit.new()
+		ed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ed.placeholder_text = str(spec[2])
+		row.add_child(ed)
+		_builder_fields[str(spec[0])] = ed
+	var build_row := HBoxContainer.new()
+	build_row.add_theme_constant_override("separation", 8)
+	root.add_child(build_row)
+	var build_btn := Button.new()
+	build_btn.text = "Create & copy code"
+	build_btn.pressed.connect(_on_build_community)
+	build_row.add_child(build_btn)
+	var build_load := Button.new()
+	build_load.text = "Load active"
+	build_load.tooltip_text = "Fill these fields from the community you already have"
+	build_load.pressed.connect(_on_load_community_into_builder)
+	build_row.add_child(build_load)
+	_builder_lbl = Label.new()
+	_builder_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_builder_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_builder_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	build_row.add_child(_builder_lbl)
 
 	# Host security (Phase 6)
 	var sec_hdr := Label.new()
@@ -246,6 +491,38 @@ func _build_ui() -> void:
 	apply_sec.pressed.connect(_on_apply_security)
 	trusted_row.add_child(apply_sec)
 
+	# Discord membership as the gate, instead of hand-managed friend keys.
+	var dsc_row := HBoxContainer.new()
+	dsc_row.add_theme_constant_override("separation", 8)
+	root.add_child(dsc_row)
+	_require_discord = CheckButton.new()
+	_require_discord.text = "Require Discord membership"
+	_require_discord.tooltip_text = "Joiners must be signed in and in your community's Discord server"
+	_require_discord.toggled.connect(_on_discord_requirement_toggled)
+	dsc_row.add_child(_require_discord)
+	_allow_offline_discord = CheckButton.new()
+	_allow_offline_discord.text = "…even if Discord is unreachable"
+	# Fails CLOSED by default: an unreachable Discord is a runtime failure of a
+	# restriction the host asked for, not a reason to drop it.
+	_allow_offline_discord.tooltip_text = "Off (recommended): if Discord can't be reached, new joins are refused"
+	_allow_offline_discord.toggled.connect(_on_discord_requirement_toggled)
+	dsc_row.add_child(_allow_offline_discord)
+
+	var relay_row := HBoxContainer.new()
+	relay_row.add_theme_constant_override("separation", 8)
+	root.add_child(relay_row)
+	_relay_toggle = CheckButton.new()
+	_relay_toggle.text = "Mirror chat to Discord"
+	_relay_toggle.tooltip_text = "Host only. Copies in-game chat into your community's text channel — everyone in the session is told."
+	_relay_toggle.toggled.connect(_on_relay_toggled)
+	relay_row.add_child(_relay_toggle)
+	_relay_lbl = Label.new()
+	_relay_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_relay_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_relay_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	relay_row.add_child(_relay_lbl)
+
+	root = manual_box
 	# Join code display
 	var code_lbl := Label.new()
 	code_lbl.text = "Your join code (share with friends)"
@@ -315,6 +592,7 @@ func _build_ui() -> void:
 	_friend_key_edit.placeholder_text = "If host requires allowlist"
 	join_cred.add_child(_friend_key_edit)
 
+	root = outer
 	# Two columns: peers + LAN
 	var cols := HBoxContainer.new()
 	cols.add_theme_constant_override("separation", 12)
@@ -351,6 +629,7 @@ func _build_ui() -> void:
 	_lan_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lan_scroll.add_child(_lan_box)
 
+	root = design_box
 	# Design collaboration
 	var design_hdr := Label.new()
 	design_hdr.text = "Design collaboration"
@@ -417,6 +696,7 @@ func _build_ui() -> void:
 	_offers_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	offers_scroll.add_child(_offers_box)
 
+	root = outer
 	_status_lbl = Label.new()
 	_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
@@ -433,6 +713,11 @@ func _sync_from_session() -> void:
 		_discord_edit.text = MultiplayerSession.get_discord_url()
 	if _require_trusted != null:
 		_require_trusted.set_pressed_no_signal(MultiplayerSession.require_trusted)
+	if _require_discord != null:
+		_require_discord.set_pressed_no_signal(MultiplayerSession.require_discord)
+		_allow_offline_discord.set_pressed_no_signal(
+			MultiplayerSession.allow_when_discord_unreachable)
+		_allow_offline_discord.disabled = not MultiplayerSession.require_discord
 	if _trusted_edit != null and MultiplayerSession.is_host():
 		_trusted_edit.text = "\n".join(MultiplayerSession.trusted_keys)
 	if _exp_lbl != null:
@@ -447,6 +732,18 @@ func _sync_from_session() -> void:
 			]
 		else:
 			_exp_lbl.text = ""
+	_refresh_discord_auth()
+	_refresh_directory()
+	_refresh_relay()
+	if _reach_lbl != null:
+		var reach := MultiplayerSession.reachability_text()
+		_reach_lbl.text = reach
+		_reach_lbl.visible = not reach.is_empty()
+		_reach_retry_btn.visible = MultiplayerSession.is_host()
+		# Anything that mentions a VPN means inbound play cannot work as-is —
+		# colour it as a warning rather than letting it read as status noise.
+		_reach_lbl.add_theme_color_override("font_color",
+			UITheme.C_WARN if reach.contains("Tailscale") else UITheme.C_TEXT_M)
 	var active := MultiplayerSession.is_active()
 	_host_btn.disabled = active
 	_leave_btn.disabled = not active
@@ -475,6 +772,300 @@ func _sync_from_session() -> void:
 	_refresh_peers()
 	_refresh_lan()
 	_refresh_offers()
+
+
+func _discord_identity() -> Node:
+	return get_node_or_null("/root/DiscordIdentity")
+
+
+func _directory() -> Node:
+	return get_node_or_null("/root/DiscordDirectory")
+
+
+# ── Community + directory ────────────────────────────────────────────────────
+
+func _on_import_community() -> void:
+	var text := _community_edit.text.strip_edges()
+	if text.is_empty():
+		_status_lbl.text = "Paste the SMBC1: code your server owner shared"
+		return
+	var decoded: Dictionary = SimCommunity.decode(text)
+	if not bool(decoded.get("ok", false)):
+		_status_lbl.text = str(decoded.get("error", "Could not read that community code"))
+		return
+	var saved: Dictionary = SimCommunity.save_to_disk(decoded["community"] as Dictionary)
+	if not bool(saved.get("ok", false)):
+		_status_lbl.text = str(saved.get("error", "Could not save the community"))
+		return
+	var community: Dictionary = saved["community"]
+	SimCommunity.set_active(community)
+	_apply_community(community)
+	_community_edit.text = ""
+	var name := str(community.get("name", "your community"))
+	var warns: PackedStringArray = SimCommunity.warnings(community)
+	_status_lbl.text = "Imported %s%s" % [name,
+		"" if warns.is_empty() else " · " + str(warns[0])]
+	_sync_from_session()
+
+
+## Push the active community into every consumer at once.
+func _apply_community(community: Dictionary) -> void:
+	var dir := _directory()
+	if dir != null:
+		dir.call("set_community", community)
+		dir.call("start_polling", visible)
+	if MultiplayerSession.discord_relay != null:
+		MultiplayerSession.discord_relay.call("set_community", community)
+	# A host that has imported a community can gate joins on server membership
+	# instead of hand-managed friend keys. Off until the host opts in on the
+	# security row — importing a file must not silently change who can join.
+	MultiplayerSession.set_discord_requirement(community,
+		MultiplayerSession.require_discord)
+
+
+func _on_open_directory_link() -> void:
+	var dir := _directory()
+	if dir == null:
+		return
+	var link := str(dir.call("permanent_link"))
+	if link.is_empty():
+		_status_lbl.text = "No session message yet — press Play together once to create it"
+		return
+	OS.shell_open(link)
+
+
+func _on_join_voice() -> void:
+	var community: Dictionary = SimCommunity.active()
+	var deep := DiscordLinks.voice_deep_link(
+		str(community.get("guild_id", "")), str(community.get("voice_channel_id", "")))
+	if deep.is_empty():
+		# Fall back to the plain invite URL the lobby has always had.
+		var res: Dictionary = MultiplayerSession.open_discord()
+		_status_lbl.text = "Opening Discord…" if bool(res.get("ok", false)) \
+			else str(res.get("error", "No Discord voice channel configured"))
+		return
+	OS.shell_open(deep)
+	# ShellExecute reports success on Windows even when nothing handles
+	# discord://, so failure is not reliably detectable — offer the web link
+	# rather than guessing.
+	_status_lbl.text = "Opening Discord voice… (didn't open? use the invite link)"
+
+
+func _on_play_together() -> void:
+	var dir := _directory()
+	if dir == null:
+		return
+	if MultiplayerSession.is_active():
+		_status_lbl.text = "Already in a session — leave first"
+		return
+	if not bool(dir.call("is_configured")):
+		_status_lbl.text = "Import your community's SMBC1: code first"
+		return
+	_electing = true
+	_status_lbl.text = "Checking who's playing…"
+	_refresh_directory()
+	dir.call("play_together")
+
+
+func _on_election_result(won: bool, record: Dictionary) -> void:
+	_electing = false
+	var dir := _directory()
+	if won:
+		var res: Dictionary = MultiplayerSession.host_session(
+			int(_port_spin.value), str(SimCommunity.active().get("name", "")))
+		if not bool(res.get("ok", false)):
+			_status_lbl.text = str(res.get("error", "Could not start hosting"))
+			if dir != null:
+				dir.call("vacate")
+			return
+		# Publish only now that the ENet server is really up, so the advertised
+		# address is real rather than predicted.
+		if dir != null:
+			dir.call("publish_hosting", str(res.get("join_code", "")),
+				MultiplayerSession.collect_map_info(), MultiplayerSession.peer_count())
+		_status_lbl.text = "You're hosting — everyone else can now press Play together"
+		_sync_from_session()
+		return
+
+	var host: Dictionary = record.get("host", {}) as Dictionary
+	var code := str(host.get("code", ""))
+	if code.is_empty():
+		_status_lbl.text = str(dir.call("status_text")) if dir != null else "Nobody is hosting"
+		return
+	var decoded: Dictionary = MpJoinCode.decode(code)
+	if not bool(decoded.get("ok", false)):
+		_status_lbl.text = "The host's session code is stale — ask them to press Play together again"
+		return
+	# Prompt for sign-in BEFORE connecting rather than letting the peer connect
+	# and be kicked with a confusing message.
+	if not MultiplayerSession.can_satisfy_discord(decoded):
+		_status_lbl.text = "%s's session needs a Discord sign-in — sign in above, then Play together" % \
+			str(host.get("name", "That"))
+		return
+	var res2: Dictionary = MultiplayerSession.join_decoded(decoded)
+	_status_lbl.text = "Joining %s…" % str(host.get("name", "the session")) \
+		if bool(res2.get("ok", false)) else str(res2.get("error", "Could not join"))
+	_sync_from_session()
+
+
+func _on_discord_requirement_toggled(_pressed: bool) -> void:
+	var community: Dictionary = SimCommunity.active()
+	if _require_discord.button_pressed and community.is_empty():
+		_require_discord.set_pressed_no_signal(false)
+		_status_lbl.text = "Import your community's SMBC1: code first"
+		return
+	MultiplayerSession.set_discord_requirement(community,
+		_require_discord.button_pressed, _allow_offline_discord.button_pressed)
+	_status_lbl.text = "Discord membership %s" % (
+		"required to join" if MultiplayerSession.require_discord else "not required")
+	_sync_from_session()
+
+
+func _on_build_community() -> void:
+	var fields := {}
+	for key in _builder_fields:
+		fields[key] = (_builder_fields[key] as LineEdit).text.strip_edges()
+	var roles: Array = []
+	for r in str(fields.get("role_ids", "")).replace(" ", "").split(",", false):
+		roles.append(str(r))
+	fields["role_ids"] = roles
+	fields["issued_at"] = int(Time.get_unix_time_from_system())
+	var built: Dictionary = SimCommunity.encode(SimCommunity.make(fields))
+	if not bool(built.get("ok", false)):
+		# validate() is the security boundary, so its refusal is the message —
+		# it names the offending field rather than saying "invalid".
+		_builder_lbl.text = str(built.get("error", "Could not build the community file"))
+		_builder_lbl.add_theme_color_override("font_color", UITheme.C_ERROR)
+		return
+	var code := str(built["code"])
+	DisplayServer.clipboard_set(code)
+	# Also drop it in the visible field: a clipboard write can fail silently
+	# (headless, some Linux setups) and the owner would have nothing to paste.
+	if _community_edit != null:
+		_community_edit.text = code
+	var community: Dictionary = built["community"]
+	SimCommunity.save_to_disk(community)
+	SimCommunity.set_active(community)
+	_apply_community(community)
+	var warns: PackedStringArray = SimCommunity.warnings(community)
+	_builder_lbl.text = "Copied to clipboard — paste it in your Discord server.%s" % (
+		"" if warns.is_empty() else "\n" + "\n".join(warns))
+	_builder_lbl.add_theme_color_override("font_color",
+		UITheme.C_WARN if not warns.is_empty() else UITheme.C_OK)
+	_sync_from_session()
+
+
+func _on_load_community_into_builder() -> void:
+	var community: Dictionary = SimCommunity.active()
+	if community.is_empty():
+		_builder_lbl.text = "No community imported yet."
+		return
+	for key in _builder_fields:
+		var value: Variant = community.get(key, "")
+		if value is Array:
+			value = ", ".join(PackedStringArray(value))
+		(_builder_fields[key] as LineEdit).text = str(value)
+	_builder_lbl.text = "Loaded %s — edit and re-create to publish an update." % \
+		str(community.get("name", "your community"))
+	_builder_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+
+
+func _on_relay_toggled(pressed: bool) -> void:
+	var relay: Node = MultiplayerSession.discord_relay
+	if relay == null:
+		return
+	var res: Dictionary = relay.call("set_enabled", pressed)
+	if not bool(res.get("ok", false)):
+		_relay_toggle.set_pressed_no_signal(false)
+		_status_lbl.text = str(res.get("error", "Could not start the chat relay"))
+	_refresh_relay()
+
+
+func _refresh_relay() -> void:
+	if _relay_toggle == null:
+		return
+	var relay: Node = MultiplayerSession.discord_relay
+	if relay == null:
+		_relay_toggle.disabled = true
+		return
+	_relay_toggle.set_pressed_no_signal(bool(relay.get("enabled")))
+	_relay_toggle.disabled = not (bool(relay.call("is_configured")) and MultiplayerSession.is_host())
+	_relay_lbl.text = str(relay.call("status_text"))
+	_relay_lbl.add_theme_color_override("font_color",
+		UITheme.C_WARN if bool(relay.get("enabled")) else UITheme.C_TEXT_M)
+
+
+func _refresh_directory() -> void:
+	if _directory_lbl == null:
+		return
+	var dir := _directory()
+	if dir == null:
+		_directory_lbl.text = ""
+		return
+	var configured := bool(dir.call("is_configured"))
+	_directory_lbl.text = "Resolving who hosts…" if _electing else str(dir.call("status_text"))
+	_play_btn.disabled = _electing or not configured or MultiplayerSession.is_active()
+	_community_link_btn.disabled = str(dir.call("permanent_link")).is_empty()
+	# Voice needs either a configured community channel or the older free-text
+	# invite URL; with neither there is nowhere to send the player.
+	var community: Dictionary = SimCommunity.active()
+	var has_channel := not DiscordLinks.voice_deep_link(
+		str(community.get("guild_id", "")), str(community.get("voice_channel_id", ""))).is_empty()
+	var has_invite := not MultiplayerSession.get_discord_url().strip_edges().is_empty()
+	_voice_btn.disabled = not (has_channel or has_invite)
+	_directory_lbl.add_theme_color_override("font_color",
+		UITheme.C_WARN if not str(dir.get("last_error")).is_empty() else UITheme.C_TEXT_M)
+
+
+func _on_discord_auth_changed() -> void:
+	_refresh_discord_auth()
+	var id := _discord_identity()
+	if id != null and bool(id.call("is_signed_in")) and _name_edit != null \
+			and str(id.call("display_name")) != "":
+		# Your Discord name is who everyone in the community already knows you
+		# as, so adopt it rather than making people retype it.
+		var n := str(id.call("display_name"))
+		MultiplayerSession.set_display_name(n)
+		_name_edit.text = n
+
+
+func _refresh_discord_auth() -> void:
+	if _auth_lbl == null:
+		return
+	var id := _discord_identity()
+	if id == null:
+		_auth_lbl.text = "Discord sign-in unavailable in this build"
+		_auth_btn.disabled = true
+		return
+	_auth_lbl.text = str(id.call("status_text"))
+	var signing := bool(id.call("is_signing_in"))
+	var signed := bool(id.call("is_signed_in"))
+	_auth_btn.disabled = signing or (not signed and not bool(id.call("is_available", {})))
+	_auth_btn.text = "Signing in…" if signing else ("Sign out" if signed else "Sign in")
+	if not signed and not bool(id.call("is_available", {})):
+		# Be specific: the button being dead is otherwise unexplainable.
+		_auth_btn.tooltip_text = "Import a community file first — it carries the Discord application id"
+	else:
+		_auth_btn.tooltip_text = "Sign in with Discord so hosts can verify your server membership"
+	_auth_lbl.add_theme_color_override("font_color",
+		UITheme.C_OK if signed else UITheme.C_TEXT_M)
+
+
+func _on_discord_auth_pressed() -> void:
+	var id := _discord_identity()
+	if id == null:
+		return
+	if bool(id.call("is_signed_in")):
+		id.call("sign_out")
+		_status_lbl.text = "Signed out locally — revoke access in Discord's settings to fully remove it"
+		_refresh_discord_auth()
+		return
+	var res: Dictionary = id.call("begin_sign_in", {})
+	if bool(res.get("ok", false)):
+		_status_lbl.text = "Finish signing in in your browser…"
+	else:
+		_status_lbl.text = str(res.get("error", "Could not start Discord sign-in"))
+	_refresh_discord_auth()
 
 
 func _refresh_peers() -> void:

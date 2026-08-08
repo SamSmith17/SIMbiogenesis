@@ -7,6 +7,8 @@ signal session_changed()
 signal peer_list_changed()
 signal lan_hosts_changed()
 signal status_message(text: String, level: String)
+## Someone started or stopped inhabiting one of the simulated people.
+signal possession_changed()
 
 const MpJoinCodeScript := preload("res://core/multiplayer/mp_join_code.gd")
 const RemoteAvatarScript := preload("res://core/multiplayer/remote_player_avatar.gd")
@@ -19,7 +21,12 @@ const DEFAULT_PORT := 34197
 const LAN_DISCOVERY_PORT := 34198
 const MAX_PEERS := 10
 ## Bumped in Phase 6 (hello dict, join-code v2, hardening fields).
-const PROTOCOL_VERSION := 2
+## v3: hello carries `discord_token`, welcome carries `discord`, join code gains
+## `addrs` + `dsc`. Consequence to accept consciously — the strict `!=` check in
+## rpc_hello AND the same constant in `_poll_lan_packets` mean old and new
+## builds neither join nor SEE each other, and only the new client can print a
+## useful message about it.
+const PROTOCOL_VERSION := 3
 const PREFS_PATH := "user://mp_prefs.cfg"
 const PRESENCE_HZ := 12.0
 const CLOCK_HZ := 2.0
@@ -28,6 +35,10 @@ const CLOCK_SNAP_HOURS := 0.002  # ~7 s of sim time
 ## Max distance (m) for 3D proximity chat bubbles above remote avatars.
 const CHAT_BUBBLE_RANGE_M := 45.0
 const DEFAULT_CODE_TTL_SEC := 4 * 3600
+## ENet's create_client() returns OK immediately and a black-holed UDP port —
+## the common NAT case — may NEVER fire connection_failed, so each candidate
+## address gets a wall-clock budget of its own.
+const CONNECT_TIMEOUT_SEC := 6.0
 
 enum Role { NONE, HOST, CLIENT }
 
@@ -73,6 +84,54 @@ var chat: Node = null
 ## Phase 6 per-peer rate buckets (peer_id -> {t, c}).
 var _rate_buckets: Dictionary = {}
 
+## ── Reachability ─────────────────────────────────────────────────────────────
+## `host_address` stays the LAN address (pick_lan_ipv4's RFC1918 preference is
+## load-bearing for LAN discovery). The public address is ADDITIVE: UPnP learns
+## it in the background and it is folded into the join code as a second
+## candidate, which is what finally makes internet play work without a
+## hand-edited ip:port.
+var wan_address: String = ""
+var _reach: MpReachability = null
+var _reach_result: Dictionary = {}
+var _reach_probing := false
+## ── Discord admission ────────────────────────────────────────────────────────
+## Host-side: when a community is imported and `require_discord` is on, a joiner
+## must present a Discord token that resolves to a member of that guild.
+var require_discord: bool = false
+var discord_community: Dictionary = {}
+## Discord being unreachable is a RUNTIME FAILURE of a restriction the host
+## explicitly asked for, so it fails CLOSED by default. Note this is deliberately
+## the OPPOSITE of `MpHardening.trusted_key_allowed`, which fails OPEN on an
+## empty allowlist — that is a CONFIGURATION statement ("nothing configured, so
+## no restriction"). Different semantics, different defaults; do not let a
+## future refactor harmonise them.
+var allow_when_discord_unreachable: bool = false
+## peer_id -> {hello, started_ms, epoch}. Connected at the ENet level, held out
+## of `peers`, RPCs dropped, until verification resolves or times out.
+var _pending_admission: Dictionary = {}
+var _admission_epoch: int = 0
+var discord_gate: Node = null
+var discord_relay: Node = null
+## Host → client NPC stream. Clients render the population; they do not
+## simulate it (see mp_population_controller.gd).
+var population: Node = null
+
+## ── Possession ───────────────────────────────────────────────────────────────
+## agent_id -> peer_id. Host-authoritative; mirrored to clients so everyone
+## knows which people are being driven by humans.
+var possessed: Dictionary = {}
+## The agent THIS peer is inhabiting, or "".
+var my_agent_id: String = ""
+var _last_speed_warn_unix: int = 0
+var _last_speed_bracket: int = -1
+## Client credential presented on the next hello.
+var pending_discord_token: String = ""
+
+## Client-side connect ladder over the join code's candidate addresses.
+var _candidates: Array = []
+var _candidate_index: int = -1
+var _candidate_deadline_ms: int = 0
+
 
 func _ready() -> void:
 	display_name = _load_display_name()
@@ -82,6 +141,14 @@ func _ready() -> void:
 	chat = ChatControllerScript.new()
 	chat.name = "Chat"
 	add_child(chat)
+	discord_gate = preload("res://core/discord/discord_gate.gd").new()
+	add_child(discord_gate)
+	discord_gate.connect("verified", _on_discord_verified)
+	discord_relay = preload("res://core/discord/discord_relay.gd").new()
+	add_child(discord_relay)
+	chat.connect("message_received", discord_relay.on_chat_message)
+	population = preload("res://core/multiplayer/mp_population_controller.gd").new()
+	add_child(population)
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
@@ -91,15 +158,25 @@ func _ready() -> void:
 	set_process(true)
 
 
+## Autoloads leave the tree on shutdown, so this is where a router mapping we
+## created gets torn down if the player quits while still hosting.
+func _exit_tree() -> void:
+	_release_reachability()
+
+
 func _process(delta: float) -> void:
 	_poll_lan_packets()
+	_poll_connect_deadline()
 	if role == Role.NONE:
 		return
 	_presence_accum += delta
 	if _presence_accum >= 1.0 / PRESENCE_HZ:
 		_presence_accum = 0.0
 		_send_local_presence()
+	if is_possessing():
+		_maybe_warn_time_scale()
 	if role == Role.HOST:
+		_sweep_pending_admissions()
 		_clock_accum += delta
 		if _clock_accum >= 1.0 / CLOCK_HZ:
 			_clock_accum = 0.0
@@ -177,6 +254,7 @@ func host_session(port: int = DEFAULT_PORT, p_session_name: String = "",
 	multiplayer.multiplayer_peer = peer
 	role = Role.HOST
 	host_address = pick_lan_ipv4()
+	_begin_reachability_probe()
 	peers.clear()
 	_rate_buckets.clear()
 	peers[1] = {"name": display_name, "ready": true}
@@ -232,23 +310,43 @@ func join_decoded(decoded: Dictionary) -> Dictionary:
 
 func leave_session(announce: bool = true) -> void:
 	var was_active := is_active()
+	# Tell the community the seat is free rather than making everyone wait out
+	# the directory's staleness window. Soft lookup so headless selftests and
+	# the harness (which have no directory) are unaffected.
+	if role == Role.HOST:
+		var dir := get_node_or_null("/root/DiscordDirectory")
+		if dir != null and dir.has_method("vacate"):
+			dir.call("vacate")
 	_stop_lan_broadcast()
+	_release_reachability()
+	_candidates.clear()
+	_candidate_index = -1
+	_candidate_deadline_ms = 0
 	_clear_avatars()
 	if design != null and design.has_method("clear_session_state"):
 		design.call("clear_session_state")
 	if chat != null and chat.has_method("clear_session_state"):
 		chat.call("clear_session_state")
+	if population != null and population.has_method("clear_session_state"):
+		population.call("clear_session_state")
 	_pending_join.clear()
 	_awaiting_map_load = false
 	join_code = ""
 	session_token = ""
 	host_address = ""
+	wan_address = ""
 	session_expires_unix = 0
 	host_password_hash = ""
 	_host_password_plain = ""
 	pending_password = ""
 	pending_friend_key = ""
 	_rate_buckets.clear()
+	_pending_admission.clear()
+	if role == Role.HOST:
+		for aid in possessed.keys():
+			_set_agent_controller(str(aid), 0)
+	possessed.clear()
+	my_agent_id = ""
 	peers.clear()
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer.close()
@@ -265,6 +363,39 @@ func leave_session(announce: bool = true) -> void:
 func set_join_credentials(password: String = "", friend_key: String = "") -> void:
 	pending_password = password.strip_edges()
 	pending_friend_key = friend_key.strip_edges()
+
+
+## Host: require Discord server membership instead of (or alongside) the manual
+## friend-key allowlist. Passing an empty community turns it off.
+func set_discord_requirement(community: Dictionary, require: bool,
+		allow_when_unreachable: bool = false) -> void:
+	discord_community = community.duplicate(true)
+	require_discord = require and DiscordConfig.is_snowflake(
+		str(discord_community.get("guild_id", "")))
+	allow_when_discord_unreachable = allow_when_unreachable
+	if role == Role.HOST:
+		_refresh_join_code()
+		session_changed.emit()
+
+
+## The bearer a joiner presents. `pending_discord_token` is an explicit override
+## (used by tooling); normally this is the signed-in user's own token.
+func _discord_token_for_join() -> String:
+	if not pending_discord_token.is_empty():
+		return pending_discord_token
+	var id := get_node_or_null("/root/DiscordIdentity")
+	if id == null:
+		return ""
+	return str(id.call("present_token"))
+
+
+## Can this client satisfy a host that requires Discord? Lets the lobby prompt
+## for sign-in BEFORE connecting, rather than letting the peer connect and be
+## kicked with a confusing message.
+func can_satisfy_discord(decoded: Dictionary) -> bool:
+	if not MpJoinCodeScript.needs_discord(decoded):
+		return true
+	return not _discord_token_for_join().is_empty()
 
 
 func set_host_security(password: String, trusted_text: String, require: bool,
@@ -313,10 +444,26 @@ func has_host_password() -> bool:
 	return not host_password_hash.is_empty()
 
 
-func note_peer_traffic(peer_id: int, cost: int) -> bool:
-	## Returns false if the peer was disconnected for abuse.
+## Has this peer cleared every gate? Nearly every host-side inbound RPC routes
+## through `note_peer_traffic`, so this one predicate is what stops a connected
+## but unverified peer from acting.
+func peer_admitted(peer_id: int) -> bool:
+	return MpHardeningScript.peer_is_admitted(peers, peer_id)
+
+
+func note_peer_traffic(peer_id: int, cost: int, require_admitted: bool = true) -> bool:
+	## Returns false if the peer's message should be dropped — either because it
+	## was disconnected for abuse, or because it is not admitted yet.
+	##
+	## `require_admitted` is false only for the hello handshake itself, which by
+	## definition arrives before admission.
 	if role != Role.HOST or peer_id <= 1:
 		return true
+	if require_admitted and not peer_admitted(peer_id):
+		# DROP, never kick. Admission can take a Discord round-trip, and a
+		# legitimate joiner whose presence packets arrive first must not be
+		# punished for it — unlike the rate-limit path below, which does kick.
+		return false
 	var result: Dictionary = MpHardeningScript.rate_note(_rate_buckets, peer_id, cost)
 	if bool(result.get("ok", true)):
 		return true
@@ -506,16 +653,127 @@ func collect_map_info() -> Dictionary:
 func _refresh_join_code() -> void:
 	if session_expires_unix <= 0:
 		session_expires_unix = MpHardeningScript.expiry_unix(code_ttl_sec)
+	# Reads CACHED addresses only. `_broadcast_lan_beacon` calls this at 0.5 Hz,
+	# so re-querying UPnP here would hammer the router twice a second.
 	var enc: Dictionary = MpJoinCodeScript.encode({
-		"ip": host_address if not host_address.is_empty() else pick_lan_ipv4(),
-		"port": host_port,
+		"addrs": join_addresses(),
 		"token": session_token,
 		"name": session_name,
 		"map": collect_map_info(),
 		"exp": session_expires_unix,
 		"has_pw": not host_password_hash.is_empty(),
+		# Advertised so a joiner can be told to sign in before connecting.
+		"dsc": {
+			"g": str(discord_community.get("guild_id", "")),
+			"need": require_discord,
+		} if require_discord else {},
 	})
 	join_code = str(enc.get("code", "")) if bool(enc.get("ok", false)) else ""
+
+
+## Ordered candidate addresses baked into the join code: LAN first (so a
+## same-network peer never round-trips through the router), public second.
+func join_addresses() -> Array:
+	var out: Array = []
+	var lan := host_address if not host_address.is_empty() else pick_lan_ipv4()
+	if not lan.is_empty():
+		out.append({"h": lan, "p": host_port, "k": "lan"})
+	if not wan_address.is_empty() and wan_address != lan:
+		out.append({"h": wan_address, "p": host_port, "k": "pub"})
+	return out
+
+
+# ── Reachability (UPnP) ──────────────────────────────────────────────────────
+
+func _begin_reachability_probe() -> void:
+	if _reach_probing:
+		return
+	# Every headless entry point in this project is a selftest or a capture
+	# harness (all export presets have dedicated_server=false), and none of them
+	# should be poking the player's router or leaving a port mapping behind.
+	if DisplayServer.get_name() == "headless":
+		return
+	if _reach == null:
+		_reach = MpReachability.new()
+	_reach_probing = true
+	_reach_result = {}
+	wan_address = ""
+	# UPNP.discover() blocks ~2 s, so this runs on a worker thread and comes
+	# back deferred. Hosting must never stall on a router that is not listening.
+	_reach.probe_async(host_port, _on_reachability_done)
+
+
+func _on_reachability_done(result: Dictionary) -> void:
+	_reach_probing = false
+	if role != Role.HOST:
+		return  # we stopped hosting while the router was thinking
+	_reach_result = result
+	var external := str(result.get("external_ip", "")).strip_edges()
+	# Only a genuinely routable address is worth putting in a join code; a
+	# private or CGNAT "external" address would just cost every joiner a
+	# pointless connect timeout.
+	wan_address = external if MpReachability.is_routable_public(external) else ""
+	_refresh_join_code()
+	MpHardeningScript.log_event("reachability", {
+		"gateway": bool(result.get("gateway", false)),
+		"mapped": bool(result.get("mapped", false)),
+		"code": int(result.get("code", -1)),
+		"public": not wan_address.is_empty(),
+	})
+	_emit_status(reachability_text(), "ok" if bool(result.get("mapped", false)) else "warn")
+	session_changed.emit()
+
+
+## Drop the router mapping we created. Leaving a stray forward on a shared
+## router is rude, and a stale one collides with the next session.
+func _release_reachability() -> void:
+	if _reach == null:
+		return
+	if bool(_reach_result.get("mapped", false)):
+		_reach.release(host_port)
+	_reach_result = {}
+	_reach_probing = false
+
+
+## Re-run the probe (lobby "Retry UPnP"). No-op while one is already in flight.
+func retry_reachability() -> void:
+	if role != Role.HOST:
+		return
+	_release_reachability()
+	_begin_reachability_probe()
+	session_changed.emit()
+
+
+## One line for the lobby: what happened, and what the host should do about it.
+func reachability_text() -> String:
+	if role != Role.HOST:
+		return ""
+	if _reach_probing:
+		return "Checking router for UPnP…"
+	if _reach_result.is_empty():
+		return "Reachability unknown — LAN players can join."
+	if bool(_reach_result.get("verified", false)):
+		return "UPnP mapped UDP %d · public %s (VERIFIED — someone joined from the internet)." % [
+			host_port, wan_address]
+	return MpReachability.diagnosis(_reach_result, host_port)
+
+
+## A peer that connected from a routable public address PROVES the port is open
+## from the internet. We run no external server, so this opportunistic check is
+## the only honest confirmation available.
+func _note_inbound_reach(peer_id: int) -> void:
+	if role != Role.HOST or _reach_result.get("verified", false):
+		return
+	# `get_peer` is ENet-specific; guard so a future transport swap cannot crash here.
+	var api_peer := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	if api_peer == null or not api_peer.has_method("get_peer"):
+		return
+	var enet_peer: ENetPacketPeer = api_peer.get_peer(peer_id)
+	if enet_peer == null:
+		return
+	if MpReachability.is_routable_public(enet_peer.get_remote_address()):
+		_reach_result["verified"] = true
+		session_changed.emit()
 
 
 func _map_needs_switch(map_info: Dictionary) -> bool:
@@ -569,24 +827,82 @@ func _begin_map_switch(map_info: Dictionary) -> void:
 func _connect_pending() -> Dictionary:
 	if _pending_join.is_empty():
 		return {"ok": false, "error": "No pending join"}
-	var ip := str(_pending_join.get("ip", ""))
-	var port := int(_pending_join.get("port", DEFAULT_PORT))
+	var addrs: Array = _pending_join.get("addrs", []) as Array
+	if addrs.is_empty():
+		# v2 codes and bare ip:port only ever carry one address.
+		addrs = [{
+			"h": str(_pending_join.get("ip", "")),
+			"p": int(_pending_join.get("port", DEFAULT_PORT)),
+			"k": "lan",
+		}]
+	_candidates = MpReachability.candidate_order(addrs, pick_lan_ipv4())
+	_candidate_index = -1
+	if _candidates.is_empty():
+		_pending_join.clear()
+		return {"ok": false, "error": "Join code has no usable address"}
+	session_token = str(_pending_join.get("token", ""))
+	session_name = str(_pending_join.get("name", "Session"))
+	return _try_next_candidate()
+
+
+## Start (or advance to) the next candidate address.
+func _try_next_candidate() -> Dictionary:
+	_candidate_deadline_ms = 0
+	_candidate_index += 1
+	if _candidate_index >= _candidates.size():
+		var tried := _candidates.size()
+		_candidates.clear()
+		_candidate_index = -1
+		_pending_join.clear()
+		if multiplayer.multiplayer_peer != null:
+			multiplayer.multiplayer_peer.close()
+			multiplayer.multiplayer_peer = null
+		role = Role.NONE
+		_emit_status("Could not reach the host (tried %d address%s)" % [
+			tried, "" if tried == 1 else "es"], "error")
+		session_changed.emit()
+		return {"ok": false, "error": "Could not reach the host"}
+
+	var cand: Dictionary = _candidates[_candidate_index]
+	var ip := str(cand.get("h", ""))
+	var port := int(cand.get("p", DEFAULT_PORT))
+	if multiplayer.multiplayer_peer != null:
+		multiplayer.multiplayer_peer.close()
+		multiplayer.multiplayer_peer = null
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_client(ip, port)
 	if err != OK:
-		_pending_join.clear()
-		return {"ok": false, "error": "Connect failed (err %d)" % err}
+		# A local failure (bad address, no socket) — move straight on.
+		return _try_next_candidate()
 	multiplayer.multiplayer_peer = peer
 	role = Role.CLIENT
 	host_address = ip
 	host_port = port
-	session_token = str(_pending_join.get("token", ""))
-	session_name = str(_pending_join.get("name", "Session"))
+	_candidate_deadline_ms = Time.get_ticks_msec() + int(CONNECT_TIMEOUT_SEC * 1000.0)
 	_ensure_remote_root()
 	_wire_map_load_signal()
-	_emit_status("Connecting to %s:%d…" % [ip, port], "info")
+	_emit_status("Trying %s %s:%d…" % [_candidate_label(cand), ip, port], "info")
 	session_changed.emit()
 	return {"ok": true, "connecting": true}
+
+
+func _candidate_label(cand: Dictionary) -> String:
+	match str(cand.get("k", "")):
+		"lan": return "LAN"
+		"pub": return "public"
+	return "host"
+
+
+## Advance past a candidate that neither connected nor reported a failure.
+## Without this a black-holed UDP port leaves the client "Connecting…" forever,
+## which is the single most common NAT symptom.
+func _poll_connect_deadline() -> void:
+	if _candidate_deadline_ms <= 0 or role != Role.CLIENT:
+		return
+	if Time.get_ticks_msec() < _candidate_deadline_ms:
+		return
+	_candidate_deadline_ms = 0
+	_try_next_candidate()
 
 
 # ── Presence / clock ─────────────────────────────────────────────────────────
@@ -604,14 +920,17 @@ func _send_local_presence() -> void:
 	var yaw := player.rotation.y
 	if role == Role.HOST:
 		# Host → all clients (no local avatar for self).
-		rpc_presence_apply.rpc(multiplayer.get_unique_id(), pos, yaw, display_name)
+		rpc_presence_apply.rpc(multiplayer.get_unique_id(), pos, yaw, display_name, my_agent_id)
+		# The host's own possession still has to reach the sim.
+		_drive_possessed_agent(my_agent_id, pos, yaw)
 	else:
 		# Client → host; host relays to everyone else.
-		rpc_presence_to_host.rpc_id(1, pos, yaw, display_name)
+		rpc_presence_to_host.rpc_id(1, pos, yaw, display_name, my_agent_id)
 
 
 @rpc("any_peer", "unreliable_ordered", "call_remote")
-func rpc_presence_to_host(pos: Vector3, yaw: float, p_name: String) -> void:
+func rpc_presence_to_host(pos: Vector3, yaw: float, p_name: String,
+		agent_id: String = "") -> void:
 	if role != Role.HOST:
 		return
 	var sender := multiplayer.get_remote_sender_id()
@@ -619,26 +938,74 @@ func rpc_presence_to_host(pos: Vector3, yaw: float, p_name: String) -> void:
 		return
 	if not note_peer_traffic(sender, MpHardeningScript.COST_PRESENCE):
 		return
-	_apply_remote_presence(sender, p_name, pos, yaw)
+	# Only the agent the host actually granted this peer — a client claiming an
+	# arbitrary agent_id must not be able to teleport someone else's person.
+	var granted := MpPossession.agent_of_peer(possessed, sender)
+	if not granted.is_empty() and granted == agent_id:
+		_drive_possessed_agent(agent_id, pos, yaw)
+	else:
+		agent_id = granted
+	_apply_remote_presence(sender, p_name, pos, yaw, agent_id)
 	# Relay to all clients (call_remote skips host local).
-	rpc_presence_apply.rpc(sender, pos, yaw, p_name)
+	rpc_presence_apply.rpc(sender, pos, yaw, p_name, agent_id)
 
 
 @rpc("authority", "unreliable_ordered", "call_remote")
-func rpc_presence_apply(peer_id: int, pos: Vector3, yaw: float, p_name: String) -> void:
+func rpc_presence_apply(peer_id: int, pos: Vector3, yaw: float, p_name: String,
+		agent_id: String = "") -> void:
 	if peer_id == multiplayer.get_unique_id():
 		return
-	_apply_remote_presence(peer_id, p_name, pos, yaw)
+	_apply_remote_presence(peer_id, p_name, pos, yaw, agent_id)
 
 
-func _apply_remote_presence(peer_id: int, p_name: String, pos: Vector3, yaw: float) -> void:
+func _apply_remote_presence(peer_id: int, p_name: String, pos: Vector3, yaw: float,
+		agent_id: String = "") -> void:
 	if not peers.has(peer_id):
 		peers[peer_id] = {"name": p_name, "ready": true}
 		peer_list_changed.emit()
 	elif str((peers[peer_id] as Dictionary).get("name", "")) != p_name and not p_name.is_empty():
 		(peers[peer_id] as Dictionary)["name"] = p_name
 		peer_list_changed.emit()
-	_upsert_avatar(peer_id, p_name, pos, yaw)
+	if agent_id.is_empty():
+		_upsert_avatar(peer_id, p_name, pos, yaw)
+		return
+	# Possessed: the person is already on screen as an NpcAvatar. Drawing the
+	# capsule too would render the same player twice, standing in the same spot.
+	_remove_avatar(peer_id)
+
+
+## Write a possessed person's position straight onto the sim agent. Everything
+## downstream — the Site Plan dots, the 3D avatar, crosshair focus, the
+## replication stream — reads `NpcAgent.pos`, so this one write is the whole
+## integration. Host-only; clients see the result through replication.
+func _drive_possessed_agent(agent_id: String, pos: Vector3, yaw: float) -> void:
+	if role != Role.HOST or agent_id.is_empty():
+		return
+	var agent = _find_agent(agent_id)
+	if agent == null:
+		return
+	agent.pos = Vector2(pos.x, pos.z)
+	agent.set_meta("possessed_yaw", yaw)
+
+
+func _find_agent(agent_id: String):
+	# Re-resolved every call, never cached: _ensure_engine replaces every
+	# NpcAgent object whenever the authored occupants count changes.
+	var view := _find_graph_view()
+	if view == null:
+		return null
+	var bridge = view.get("_npc_population")
+	if bridge == null or not bridge.has_method("find_agent"):
+		return null
+	return bridge.call("find_agent", agent_id)
+
+
+func _find_graph_view() -> Node:
+	var main := _find_main()
+	if main == null:
+		return null
+	var ui := main.get_node_or_null("UILayer")
+	return ui.get_node_or_null("SystemGraphView") if ui != null else null
 
 
 func _broadcast_clock() -> void:
@@ -670,6 +1037,13 @@ func rpc_clock(abs_h: float, scale: float) -> void:
 
 @rpc("any_peer", "reliable", "call_remote")
 func rpc_peer_info(peer_id: int, p_name: String, ready: bool) -> void:
+	# Was completely ungated: any connected peer could rewrite the roster,
+	# including marking itself ready. It bypasses note_peer_traffic, so the
+	# admission check has to be explicit here.
+	if role == Role.HOST:
+		var sender := multiplayer.get_remote_sender_id()
+		if sender != 0 and not peer_admitted(sender):
+			return
 	peers[peer_id] = {"name": p_name, "ready": ready}
 	if _avatars.has(peer_id):
 		var av: RemotePlayerAvatar = _avatars[peer_id] as RemotePlayerAvatar
@@ -699,7 +1073,9 @@ func rpc_hello(hello: Dictionary) -> void:
 	if role != Role.HOST:
 		return
 	var sender := multiplayer.get_remote_sender_id()
-	if not note_peer_traffic(sender, MpHardeningScript.COST_HELLO):
+	# The one RPC that legitimately precedes admission, so it opts out of the
+	# admitted check while still paying the rate limit.
+	if not note_peer_traffic(sender, MpHardeningScript.COST_HELLO, false):
 		return
 	var p_name := str(hello.get("name", "Player")).strip_edges()
 	if p_name.is_empty():
@@ -735,7 +1111,25 @@ func rpc_hello(hello: Dictionary) -> void:
 		if not MpHardeningScript.trusted_key_allowed(friend_key, trusted_keys):
 			_reject_peer(sender, "not on trusted allowlist", {})
 			return
+
+	# Every cheap synchronous check above runs FIRST and unchanged, so a peer
+	# that fails one never costs a Discord API call. Only now does admission
+	# possibly become asynchronous.
+	if _discord_admission_applies():
+		_begin_discord_admission(sender, p_name, str(hello.get("discord_token", "")))
+		return
+	_admit_peer(sender, p_name)
+
+
+## Everything that used to be the tail of rpc_hello. Extracted so the Discord
+## path can reach it from a callback several hundred milliseconds later.
+func _admit_peer(sender: int, p_name: String, extra: Dictionary = {}) -> void:
+	if role != Role.HOST:
+		return
+	_pending_admission.erase(sender)
 	peers[sender] = {"name": p_name, "ready": true}
+	if not extra.is_empty():
+		(peers[sender] as Dictionary)["discord"] = extra
 	var welcome := {
 		"session_name": session_name,
 		"token": session_token,
@@ -749,15 +1143,220 @@ func rpc_hello(hello: Dictionary) -> void:
 	if design != null and design.has_method("rpc_request_full_sync"):
 		design.call("_flush_graph_snapshot")
 		design.call("_flush_props_snapshot")
-	MpHardeningScript.log_event("join_ok", {"peer_id": sender, "name": p_name})
+	MpHardeningScript.log_event("join_ok", {"peer_id": sender, "name": p_name,
+		"discord": str(extra.get("user_id", ""))})
 	_emit_status("%s joined" % p_name, "ok")
 	if chat != null and chat.has_method("push_system"):
 		chat.call("push_system", "%s joined the session" % p_name)
+	# Someone joining mid-session must also be told their chat is leaving the
+	# game, not just whoever was present when the relay was switched on.
+	if discord_relay != null:
+		var notice := str(discord_relay.call("notice_text"))
+		if not notice.is_empty() and chat != null and chat.has_method("_broadcast_chat"):
+			chat.call("_broadcast_chat", 0, "System", notice)
 	peer_list_changed.emit()
+
+
+func _discord_admission_applies() -> bool:
+	return require_discord \
+		and discord_gate != null \
+		and DiscordConfig.is_snowflake(str(discord_community.get("guild_id", "")))
+
+
+func _begin_discord_admission(sender: int, p_name: String, token: String) -> void:
+	_admission_epoch += 1
+	# NOTE the token is NOT stored here. It lives only in the local variable
+	# handed to the gate, and `_pending_admission` keeps metadata alone — which
+	# is also what keeps it out of `MpHardening.log_event`.
+	_pending_admission[sender] = {
+		"name": p_name,
+		"started_ms": Time.get_ticks_msec(),
+		"epoch": _admission_epoch,
+	}
+	peers[sender] = {"name": p_name, "ready": false, "pending": true}
+	peer_list_changed.emit()
+	rpc_admission_pending.rpc_id(sender)
+	discord_gate.call("verify", sender, token, discord_community)
+
+
+func _on_discord_verified(peer_id: int, result: Dictionary) -> void:
+	if role != Role.HOST:
+		return
+	var entry: Dictionary = _pending_admission.get(peer_id, {}) as Dictionary
+	if entry.is_empty():
+		return  # timed out, disconnected, or ENet reused the id — ignore
+	if bool(result.get("ok", false)):
+		_admit_peer(peer_id, str(entry.get("name", "Player")), {
+			"user_id": str(result.get("user_id", "")),
+			"username": str(result.get("username", "")),
+			"avatar": str(result.get("avatar", "")),
+			"roles": result.get("roles", []),
+		})
+		return
+	# A transient failure (Discord down, rate-limited) is not the guest's fault.
+	# Fail CLOSED unless the host explicitly opted out — see the field comment.
+	if not bool(result.get("fatal", false)) and allow_when_discord_unreachable:
+		_admit_peer(peer_id, str(entry.get("name", "Player")))
+		return
+	_pending_admission.erase(peer_id)
+	_reject_peer(peer_id, str(result.get("error", "Discord check failed")), {})
+
+
+## Peers whose verification never came back. Swept from _process.
+func _sweep_pending_admissions() -> void:
+	if role != Role.HOST or _pending_admission.is_empty():
+		return
+	for pid in MpHardeningScript.expired_admissions(_pending_admission, Time.get_ticks_msec()):
+		_pending_admission.erase(pid)
+		_reject_peer(int(pid), "Discord verification timed out", {})
+
+
+## Host → joiner: "you are connected, but hold on". Without this the joiner just
+## looks hung for up to 12 s.
+@rpc("authority", "reliable", "call_remote")
+func rpc_admission_pending() -> void:
+	_emit_status("Checking your Discord membership…", "info")
+
+
+# ── Possession ───────────────────────────────────────────────────────────────
+
+## Ask to inhabit one of the simulated people. Resolves on `possession_changed`.
+func request_possess(agent_id: String) -> Dictionary:
+	if not is_active():
+		return {"ok": false, "error": "Not in a session"}
+	if role == Role.HOST:
+		return _grant_possession(1, agent_id)
+	rpc_possess_request.rpc_id(1, agent_id)
+	return {"ok": true, "pending": true}
+
+
+func release_possession() -> void:
+	if not is_active():
+		my_agent_id = ""
+		return
+	if role == Role.HOST:
+		_grant_possession(1, "")
+		return
+	rpc_possess_request.rpc_id(1, "")
+
+
+func is_possessing() -> bool:
+	return not my_agent_id.is_empty()
+
+
+## Who is driving this person — 0 when the FSM is.
+func possessor_of(agent_id: String) -> int:
+	return int(possessed.get(agent_id, 0))
+
+
+## Host-side authority. `agent_id` empty releases whatever this peer held.
+func _grant_possession(peer_id: int, agent_id: String) -> Dictionary:
+	if role != Role.HOST:
+		return {"ok": false, "error": "Only the host grants possession"}
+	# Always release the peer's current body first, so a swap is one operation
+	# and can never leave two agents flagged for one player.
+	for aid in MpPossession.release_for_peer(possessed, peer_id):
+		_set_agent_controller(str(aid), 0)
+		possessed.erase(aid)
+	if agent_id.is_empty():
+		rpc_possess_sync.rpc(possessed.duplicate())
+		possession_changed.emit()
+		return {"ok": true, "released": true}
+	var check: Dictionary = MpPossession.can_possess(agent_id, peer_id, possessed,
+		_find_agent(agent_id) != null)
+	if not bool(check.get("ok", false)):
+		rpc_possess_sync.rpc(possessed.duplicate())
+		return check
+	possessed[agent_id] = peer_id
+	_set_agent_controller(agent_id, peer_id)
+	rpc_possess_sync.rpc(possessed.duplicate())
+	possession_changed.emit()
+	return {"ok": true}
+
+
+func _set_agent_controller(agent_id: String, peer_id: int) -> void:
+	var agent = _find_agent(agent_id)
+	if agent != null:
+		agent.controlled_by_peer = peer_id
+
+
+@rpc("any_peer", "reliable", "call_remote")
+func rpc_possess_request(agent_id: String) -> void:
+	if role != Role.HOST:
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0 or not note_peer_traffic(sender, MpHardeningScript.COST_CHAT):
+		return
+	var res := _grant_possession(sender, agent_id)
+	rpc_possess_result.rpc_id(sender, bool(res.get("ok", false)),
+		str(res.get("error", "")), agent_id if bool(res.get("ok", false)) else "")
+
+
+@rpc("authority", "reliable", "call_remote")
+func rpc_possess_result(ok: bool, error: String, agent_id: String) -> void:
+	if ok:
+		my_agent_id = agent_id
+		_emit_status("You are now %s" % _agent_display_name(agent_id) if not agent_id.is_empty()
+			else "Back to your own body", "ok")
+	else:
+		_emit_status(error, "warn")
+	possession_changed.emit()
+
+
+@rpc("authority", "reliable", "call_remote")
+func rpc_possess_sync(map: Dictionary) -> void:
+	possessed = map.duplicate()
+	# A client's own binding is whatever the host says it is — never a local
+	# guess, or a refused request would leave the two disagreeing.
+	my_agent_id = MpPossession.agent_of_peer(possessed, multiplayer.get_unique_id())
+	possession_changed.emit()
+
+
+func _agent_display_name(agent_id: String) -> String:
+	var agent = _find_agent(agent_id)
+	if agent == null:
+		return "someone"
+	var n := str(agent.get("display_name"))
+	return n if not n.is_empty() else agent_id
+
+
+## Per the design decision this WARNS and never clamps: the host keeps full
+## control of the clock, and a possessing player is simply told the world is
+## running past them. Throttled by cooldown AND speed bracket — the clock RPC
+## lands at 2 Hz, so a naive check would toast twice a second.
+func _maybe_warn_time_scale() -> void:
+	var main := _find_main()
+	if main == null:
+		return
+	var verdict: Dictionary = MpPossession.time_scale_warning(
+		float(main.get("time_scale")), _last_speed_warn_unix, _last_speed_bracket,
+		MpHardeningScript.now_unix())
+	if not bool(verdict.get("warn", false)):
+		return
+	_last_speed_warn_unix = MpHardeningScript.now_unix()
+	_last_speed_bracket = int(verdict.get("bracket", 0))
+	_emit_status(str(verdict.get("text", "")), "warn")
+	if chat != null and chat.has_method("push_system"):
+		chat.call("push_system", str(verdict.get("text", "")))
+
+
+## Free a departing peer's body so the FSM takes over again.
+func _release_possession_for_peer(peer_id: int) -> void:
+	if role != Role.HOST:
+		return
+	var freed := MpPossession.release_for_peer(possessed, peer_id)
+	if freed.is_empty():
+		return
+	for aid in freed:
+		_set_agent_controller(str(aid), 0)
+		possessed.erase(aid)
+	rpc_possess_sync.rpc(possessed.duplicate())
+	possession_changed.emit()
 	session_changed.emit()
 
 
 func _reject_peer(peer_id: int, reason: String, detail: Dictionary) -> void:
+	_pending_admission.erase(peer_id)
 	var d := detail.duplicate(true)
 	d["peer_id"] = peer_id
 	d["reason"] = reason
@@ -778,12 +1377,18 @@ func _on_peer_connected(id: int) -> void:
 	if role == Role.HOST:
 		# Wait for rpc_hello from client (carries display name / token).
 		peers[id] = {"name": "Player %d" % id, "ready": false}
+		_note_inbound_reach(id)
 		peer_list_changed.emit()
 	session_changed.emit()
 
 
 func _on_peer_disconnected(id: int) -> void:
 	var left_name := str((peers.get(id, {}) as Dictionary).get("name", "Peer %d" % id))
+	# Drop any in-flight verification: ENet reuses peer ids, so a late callback
+	# for a departed peer must never admit whoever inherits its id.
+	_pending_admission.erase(id)
+	# Hand the body back to the sim, or the person stands frozen forever.
+	_release_possession_for_peer(id)
 	peers.erase(id)
 	_remove_avatar(id)
 	if design != null:
@@ -804,6 +1409,10 @@ func _on_peer_disconnected(id: int) -> void:
 
 
 func _on_connected_to_server() -> void:
+	# This candidate won the ladder; stop the timeout and forget the rest.
+	_candidate_deadline_ms = 0
+	_candidates.clear()
+	_candidate_index = -1
 	var my_id := multiplayer.get_unique_id()
 	peers[my_id] = {"name": display_name, "ready": true}
 	rpc_hello.rpc_id(1, {
@@ -812,6 +1421,7 @@ func _on_connected_to_server() -> void:
 		"proto": PROTOCOL_VERSION,
 		"password": pending_password,
 		"friend_key": pending_friend_key,
+		"discord_token": _discord_token_for_join(),
 	})
 	MpHardeningScript.log_event("join_attempt", {
 		"has_pw": not pending_password.is_empty(),
@@ -829,6 +1439,15 @@ func _on_connected_to_server() -> void:
 
 
 func _on_connection_failed() -> void:
+	# The candidate ladder must intercept BEFORE the unconditional leave_session
+	# this used to do — otherwise a failed LAN attempt tears the whole join down
+	# and the public address is never tried.
+	if _candidate_index >= 0 and _candidate_index + 1 < _candidates.size():
+		_try_next_candidate()
+		return
+	_candidates.clear()
+	_candidate_index = -1
+	_candidate_deadline_ms = 0
 	_emit_status("Connection failed", "error")
 	leave_session(false)
 

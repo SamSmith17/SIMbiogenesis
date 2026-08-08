@@ -97,11 +97,107 @@ static func rate_note(bucket: Dictionary, peer_id: int, cost: int, now_sec: floa
 	return {"ok": true, "cost_total": total}
 
 
+## ── Admission (Discord verification is async; rpc_hello is not) ──────────────
+##
+## A peer is ADMITTED once it has cleared every gate and appears in `peers` with
+## `ready == true`. While a Discord check is in flight the peer is connected at
+## the ENet level but must not be able to do anything, so these two predicates
+## are consulted by `MultiplayerSession.peer_admitted()` — which in turn gates
+## `note_peer_traffic()`, and through it presence, chat and every design
+## transfer.
+##
+## Pure so the states are testable without a second peer.
+
+const ADMISSION_TIMEOUT_SEC := 12.0
+
+
+static func peer_is_admitted(peers: Dictionary, peer_id: int) -> bool:
+	if peer_id == 1:
+		return true  # the host is always itself
+	if peer_id <= 1:
+		return false
+	var entry: Variant = peers.get(peer_id, null)
+	if not (entry is Dictionary):
+		return false
+	return bool((entry as Dictionary).get("ready", false))
+
+
+## {allow, pending, reason}
+##
+## `allow == false` with `pending == true` means "hold, do not kick": a slow
+## Discord round-trip must never kick a legitimate joiner who sent presence
+## early, whereas the rate-limit path in `rate_note` DOES kick. Keeping the two
+## apart is the whole reason this returns a dictionary rather than a bool.
+static func admission_decision(peers: Dictionary, pending: Dictionary, peer_id: int) -> Dictionary:
+	if peer_is_admitted(peers, peer_id):
+		return {"allow": true, "pending": false, "reason": ""}
+	if pending.has(peer_id):
+		return {"allow": false, "pending": true, "reason": "awaiting verification"}
+	return {"allow": false, "pending": false, "reason": "not admitted"}
+
+
+## Peer ids whose pending admission has run out of time.
+static func expired_admissions(pending: Dictionary, now_ms: int,
+		timeout_sec: float = ADMISSION_TIMEOUT_SEC) -> Array:
+	var out: Array = []
+	var budget_ms := int(maxf(1.0, timeout_sec) * 1000.0)
+	for pid in pending:
+		var entry: Dictionary = pending[pid] as Dictionary
+		if now_ms - int(entry.get("started_ms", now_ms)) > budget_ms:
+			out.append(int(pid))
+	out.sort()
+	return out
+
+
+## ── Telemetry ────────────────────────────────────────────────────────────────
+
+## Keys whose values must never reach `user://mp_telemetry.log` or any other
+## on-disk log. Lives here rather than in the Discord module because redaction
+## is a telemetry concern and this file owns telemetry — the dependency must not
+## run the other way.
+## Note the deliberate omission of a bare "code": HTTP status codes and UPnP
+## result codes are both named `code` throughout this project, and redacting
+## those would gut the diagnostics without protecting anything. The OAuth
+## authorization code is instead never handed to a logger at all.
+const SECRET_KEYS := [
+	"token", "discord_token", "access_token", "refresh_token",
+	"code_verifier", "client_secret", "webhook_url",
+	"directory_webhook", "relay_webhook", "password", "join_code",
+]
+
+
+## Strip secrets before anything reaches disk.
+##
+## `log_event` writes whatever dict it is handed into a PLAINTEXT file, and the
+## admission path now handles Discord bearer tokens. Redaction happens here, at
+## the choke point, rather than at each call site — a call site that forgets is
+## exactly the failure this guards against. Recurses through nested dicts and
+## arrays because a token arrives inside a `hello` payload, not at the top level.
+static func redact(value: Variant, depth: int = 0) -> Variant:
+	if depth > 8:
+		return "<deep>"
+	if value is Dictionary:
+		var out: Dictionary = {}
+		for k in (value as Dictionary):
+			var key := str(k).to_lower()
+			if SECRET_KEYS.has(key):
+				out[k] = "<redacted>"
+			else:
+				out[k] = redact((value as Dictionary)[k], depth + 1)
+		return out
+	if value is Array:
+		var arr: Array = []
+		for v in (value as Array):
+			arr.append(redact(v, depth + 1))
+		return arr
+	return value
+
+
 static func log_event(kind: String, detail: Dictionary = {}) -> void:
 	var row := {
 		"t": now_unix(),
 		"kind": kind,
-		"detail": detail,
+		"detail": redact(detail),
 	}
 	var line := JSON.stringify(row) + "\n"
 	var existing := ""

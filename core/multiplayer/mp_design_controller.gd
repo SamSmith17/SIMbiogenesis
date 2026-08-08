@@ -398,6 +398,11 @@ func rpc_lock_claim(target: String, p_name: String) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if sender == 0:
 		sender = multiplayer.get_unique_id()
+	# Had no gate and no rate limit at all: a peer could claim every lock on the
+	# site before it had even said hello. This is a `call_local` RPC that
+	# bypasses _note_traffic, so the check has to be explicit.
+	if not _peer_admitted(sender):
+		return
 	var existing: Dictionary = locks.get(target, {}) as Dictionary
 	var holder := int(existing.get("peer_id", 0))
 	if holder != 0 and holder != sender and int(existing.get("until_ms", 0)) > Time.get_ticks_msec():
@@ -415,6 +420,8 @@ func rpc_lock_release(target: String) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if sender == 0:
 		sender = multiplayer.get_unique_id()
+	if not _peer_admitted(sender):
+		return
 	var existing: Dictionary = locks.get(target, {}) as Dictionary
 	if int(existing.get("peer_id", 0)) in [0, sender]:
 		locks.erase(target)
@@ -479,6 +486,18 @@ func _note_traffic(peer_id: int, cost: int) -> bool:
 	if s != null and s.has_method("note_peer_traffic"):
 		return bool(s.call("note_peer_traffic", peer_id, cost))
 	return true
+
+
+## Admission check for the two RPCs that do not route through _note_traffic.
+## Permissive when there is no session (headless selftests instantiate this
+## controller standalone).
+func _peer_admitted(peer_id: int) -> bool:
+	var s := session()
+	if s == null or not s.has_method("peer_admitted"):
+		return true
+	if not bool(s.call("is_host")):
+		return true  # only the host arbitrates
+	return bool(s.call("peer_admitted", peer_id))
 
 
 func _send_sync_payload(bytes: PackedByteArray, kind: String) -> void:

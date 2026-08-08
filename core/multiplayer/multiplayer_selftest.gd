@@ -46,6 +46,12 @@ func _run_all() -> void:
 	checks += 1
 	fails += _run("host_bind_smoke", _test_host_bind_smoke)
 	checks += 1
+	fails += _run("admission_gate", _test_admission_gate)
+	checks += 1
+	fails += _run("possession_rules", _test_possession_rules)
+	checks += 1
+	fails += _run("possession_sim_contract", _test_possession_sim_contract)
+	checks += 1
 	if fails == 0:
 		print("multiplayer_selftest: PASS (%d checks)" % checks)
 	else:
@@ -377,6 +383,22 @@ func _test_host_bind_smoke() -> int:
 		push_error("hosted code should flag has_pw")
 		session.call("leave_session", false)
 		return 1
+	# A hosted code must always carry at least the LAN candidate, and the
+	# top-level ip/port must keep mirroring it — every pre-v3 consumer
+	# (_connect_pending, the LAN beacon, the lobby) still reads those.
+	var addrs: Array = dec.get("addrs", []) as Array
+	if addrs.is_empty():
+		push_error("hosted code carries no candidate addresses")
+		session.call("leave_session", false)
+		return 1
+	if str((addrs[0] as Dictionary).get("h", "")) != str(dec.get("ip", "")):
+		push_error("first candidate must mirror the top-level ip")
+		session.call("leave_session", false)
+		return 1
+	if int(dec.get("port", 0)) != port:
+		push_error("hosted code port mismatch")
+		session.call("leave_session", false)
+		return 1
 	var refreshed: Dictionary = session.call("refresh_join_code")
 	if not bool(refreshed.get("ok", false)):
 		push_error("refresh_join_code failed")
@@ -387,3 +409,254 @@ func _test_host_bind_smoke() -> int:
 		push_error("still active after leave")
 		return 1
 	return 0
+
+
+func _test_admission_gate() -> int:
+	## The gate that stops a CONNECTED-but-unverified peer from acting.
+	##
+	## This matters because rpc_hello has only ever been advisory: once ENet
+	## connects, a peer can invoke any @rpc("any_peer") handler before it has
+	## said hello at all. Async Discord verification stretches that window from
+	## ~0 ms to seconds, so the hold has to be real.
+	var session: Node = root.get_node_or_null("MultiplayerSession")
+	if session == null or not is_instance_valid(session):
+		push_error("MultiplayerSession autoload missing")
+		return 1
+	if bool(session.call("is_active")):
+		session.call("leave_session", false)
+	var result: Dictionary = session.call("host_session", 34212, "Admission", {})
+	if not bool(result.get("ok", false)):
+		push_error("host_session failed: %s" % str(result.get("error")))
+		return 1
+
+	var fails := 0
+	var peers: Dictionary = session.get("peers")
+
+	if not bool(session.call("peer_admitted", 1)):
+		push_error("host itself must be admitted")
+		fails += 1
+	if bool(session.call("peer_admitted", 42)):
+		push_error("unknown peer must not be admitted")
+		fails += 1
+	if bool(session.call("note_peer_traffic", 42, 1)):
+		push_error("unknown peer's traffic must be dropped")
+		fails += 1
+
+	# A peer mid-verification: held, but explicitly NOT kicked. The rate-limit
+	# path kicks; a slow Discord round-trip must not, or a legitimate joiner
+	# whose presence packets arrive first gets punished for being fast.
+	peers[7] = {"name": "Pending", "ready": false, "pending": true}
+	(session.get("_pending_admission") as Dictionary)[7] = {
+		"name": "Pending", "started_ms": Time.get_ticks_msec(), "epoch": 1,
+	}
+	if bool(session.call("peer_admitted", 7)):
+		push_error("pending peer must not be admitted")
+		fails += 1
+	if bool(session.call("note_peer_traffic", 7, 1)):
+		push_error("pending peer's traffic must be dropped")
+		fails += 1
+	if not (session.get("peers") as Dictionary).has(7):
+		push_error("dropping a pending peer's traffic must NOT disconnect it")
+		fails += 1
+	# The hello handshake legitimately precedes admission, so it opts out.
+	if not bool(session.call("note_peer_traffic", 7, 1, false)):
+		push_error("hello path must bypass the admitted check")
+		fails += 1
+
+	# Admitting flips every one of the above.
+	session.call("_admit_peer", 7, "Pending")
+	if not bool(session.call("peer_admitted", 7)):
+		push_error("admitted peer should pass")
+		fails += 1
+	if not bool(session.call("note_peer_traffic", 7, 1)):
+		push_error("admitted peer's traffic should pass")
+		fails += 1
+	if (session.get("_pending_admission") as Dictionary).has(7):
+		push_error("admitting must clear the pending entry")
+		fails += 1
+
+	# Discord requirement is advertised in the join code so a joiner can be told
+	# to sign in BEFORE connecting rather than connecting and being kicked.
+	session.call("set_discord_requirement", {"guild_id": "222222222222222222"}, true)
+	if not bool(session.get("require_discord")):
+		push_error("valid guild should enable the Discord requirement")
+		fails += 1
+	var dec: Dictionary = MpJoinCodeScript.decode(str(session.get("join_code")))
+	if not MpJoinCodeScript.needs_discord(dec):
+		push_error("join code should advertise the Discord requirement")
+		fails += 1
+	if MpJoinCodeScript.discord_guild(dec) != "222222222222222222":
+		push_error("join code should carry the guild id")
+		fails += 1
+	if bool(session.call("can_satisfy_discord", dec)):
+		push_error("a signed-out client cannot satisfy a Discord-gated host")
+		fails += 1
+
+	# A malformed guild must not be able to arm the gate — a gate that is on but
+	# can never pass would lock everyone out with no obvious cause.
+	session.call("set_discord_requirement", {"guild_id": "nope"}, true)
+	if bool(session.get("require_discord")):
+		push_error("invalid guild must not enable the Discord requirement")
+		fails += 1
+
+	# Timeout sweep: a verification that never comes back must release the peer
+	# rather than leaving it connected and mute forever.
+	var pending: Dictionary = session.get("_pending_admission")
+	pending.clear()
+	pending[9] = {"name": "Stuck", "started_ms": Time.get_ticks_msec() - 60_000, "epoch": 2}
+	session.call("_sweep_pending_admissions")
+	if pending.has(9):
+		push_error("expired admission should have been swept")
+		fails += 1
+
+	session.call("set_discord_requirement", {}, false)
+	session.call("leave_session", false)
+	return fails
+
+
+func _test_possession_rules() -> int:
+	## Pure arbitration for "who is driving which person".
+	var fails := 0
+	var controlled := {}
+
+	var ok: Dictionary = MpPossession.can_possess("cap_npc_0", 2, controlled, true)
+	if not bool(ok.get("ok", false)):
+		push_error("a free agent should be possessable")
+		fails += 1
+	controlled["cap_npc_0"] = 2
+
+	# Two players cannot inhabit the same person.
+	if bool((MpPossession.can_possess("cap_npc_0", 3, controlled, true) as Dictionary).get("ok", false)):
+		push_error("a taken agent must not be possessable by someone else")
+		fails += 1
+	# …and one player cannot hold two bodies: both would be driven to the same
+	# position and there would be no way to say which one they are.
+	if bool((MpPossession.can_possess("cap_npc_1", 2, controlled, true) as Dictionary).get("ok", false)):
+		push_error("one peer must not hold two agents")
+		fails += 1
+	# A person who has left the camp is not a body.
+	if bool((MpPossession.can_possess("cap_npc_9", 4, controlled, false) as Dictionary).get("ok", false)):
+		push_error("a departed agent must not be possessable")
+		fails += 1
+	if bool((MpPossession.can_possess("", 4, controlled, true) as Dictionary).get("ok", false)):
+		push_error("empty agent id must be refused")
+		fails += 1
+
+	if MpPossession.agent_of_peer(controlled, 2) != "cap_npc_0":
+		push_error("agent_of_peer lookup failed")
+		fails += 1
+	if not MpPossession.agent_of_peer(controlled, 99).is_empty():
+		push_error("unknown peer should hold nothing")
+		fails += 1
+	var freed: Array = MpPossession.release_for_peer(controlled, 2)
+	if freed.size() != 1 or str(freed[0]) != "cap_npc_0":
+		push_error("release_for_peer should return the held agent")
+		fails += 1
+
+	# Time-scale warning: throttled by cooldown AND bracket, because rpc_clock
+	# lands at 2 Hz. main.gd defaults time_scale to 0.01 (~36x realtime), which
+	# is why the threshold is a tuned multiplier and not "> 1".
+	var slow: Dictionary = MpPossession.time_scale_warning(
+		MpPossession.REALTIME_SCALE, 0, -1, 1000)
+	if bool(slow.get("warn", false)):
+		push_error("realtime must not warn")
+		fails += 1
+	var fast: Dictionary = MpPossession.time_scale_warning(
+		MpPossession.REALTIME_SCALE * 100.0, 0, -1, 1000)
+	if not bool(fast.get("warn", false)):
+		push_error("100x should warn")
+		fails += 1
+	var repeat: Dictionary = MpPossession.time_scale_warning(
+		MpPossession.REALTIME_SCALE * 100.0, 1000, int(fast.get("bracket", 0)), 1005)
+	if bool(repeat.get("warn", false)):
+		push_error("same bracket inside the cooldown must not re-warn")
+		fails += 1
+	var faster: Dictionary = MpPossession.time_scale_warning(
+		MpPossession.REALTIME_SCALE * 5000.0, 1000, int(fast.get("bracket", 0)), 1005)
+	if not bool(faster.get("warn", false)):
+		push_error("a big speed jump should warn again even inside the cooldown")
+		fails += 1
+	if absf(MpPossession.speed_multiplier(MpPossession.REALTIME_SCALE) - 1.0) > 0.001:
+		push_error("realtime should read as 1x")
+		fails += 1
+	return fails
+
+
+func _test_possession_sim_contract() -> int:
+	## What the SIM must do with a person a human is driving. Each of these is a
+	## way the feature silently breaks rather than erroring.
+	var fails := 0
+	var engine := NpcPopulationEngine.new()
+	engine.configure(4, "cap", Vector2.ZERO)
+	var agent: NpcAgent = engine.agents[0]
+	agent.controlled_by_peer = 7
+	agent.state = NpcAgent.State.DOING
+	agent.activity = "thirst"
+
+	var ctx := engine._make_ctx({})
+	var before := agent.pos
+	# Needs keep rising and morale keeps moving — possession is not a way to opt
+	# out of being a person.
+	var thirst_before := float(agent.needs.get("thirst", 0.0))
+	var billed: Dictionary = agent.step(100.0, 0.5, ctx)
+	if float(agent.needs.get("thirst", 0.0)) <= thirst_before:
+		push_error("a possessed agent's needs must keep rising")
+		fails += 1
+	# …and they still bill the resource economy for what they are doing.
+	if billed.is_empty():
+		push_error("a possessed agent doing an activity must still consume")
+		fails += 1
+	# The FSM must not move them: their position is authored by the player.
+	if agent.pos != before:
+		push_error("the FSM must not move a possessed agent")
+		fails += 1
+	if agent.state != NpcAgent.State.DOING:
+		push_error("the FSM must not re-plan a possessed agent")
+		fails += 1
+
+	# A >6 h jump takes the coarse catch-up path, which force-resets state and
+	# rerolls needs — that would yank the body out from under the player.
+	agent.state = NpcAgent.State.DOING
+	agent.activity = "thirst"
+	engine._catch_up(200.0, 12.0, ctx)
+	if agent.state != NpcAgent.State.DOING or agent.activity != "thirst":
+		push_error("catch-up must skip a possessed agent")
+		fails += 1
+	var other: NpcAgent = engine.agents[1]
+	if other.state != NpcAgent.State.IDLE:
+		push_error("catch-up must still reset everyone else")
+		fails += 1
+
+	# Possession is transient: persisting it would restore an agent frozen with
+	# no controller after a reload.
+	var snap: Dictionary = agent.snapshot()
+	if snap.has("controlled_by_peer"):
+		push_error("controlled_by_peer must never be persisted")
+		fails += 1
+	var restored := NpcAgent.from_snapshot(snap)
+	if restored != null and restored.controlled_by_peer != 0:
+		push_error("a restored agent must not come back possessed")
+		fails += 1
+
+	# They must not rage-quit out from under the player.
+	agent.quit_pressure = 999.0
+	var roster_before := engine.agents.size()
+	engine._process_departures(300.0, ctx)
+	if engine.agents.size() != roster_before:
+		push_error("a possessed agent must not depart")
+		fails += 1
+	if engine.find_agent(agent.id) == null:
+		push_error("the possessed agent should still be in the roster")
+		fails += 1
+
+	# The dot payload has to carry the flag, or the 3D layer animates a
+	# player-driven person as a wandering NPC.
+	var dots: Array = engine.agent_dots()
+	var found := false
+	for d in dots:
+		if str((d as Dictionary).get("id", "")) == agent.id:
+			found = bool((d as Dictionary).get("possessed", false))
+	if not found:
+		push_error("agent_dots must report possession")
+		fails += 1
+	return fails
