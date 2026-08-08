@@ -37,6 +37,7 @@ func _initialize() -> void:
 	_test_default_colors()
 	_test_model_catalog()
 	_test_roof_ortho_uv2()
+	_test_roof_ortho_uv_scale()
 	_test_wall_modes()
 	if _failures == 0:
 		print("BUILDING SELFTEST PASS  (%d checks)" % _checks)
@@ -143,6 +144,23 @@ func _test_roof_ortho_uv2() -> void:
 						break
 			_check("uv2: merged vs single parity", parity)
 		mi.free()
+
+
+## roof_ortho_uv_scale must track QUALITY_HYPER_HALF_EXTENT (TerrainLoader) —
+## [500, 500, 1000, 1500] for Low/Medium/High/Ultra — since ORTHO_HALF_EXTENT_M
+## is a fixed 500 baked into roof UV2 at build time. Regression for the bug where
+## the hyper branch left ortho_uv_scale at its 1.0 default (correct only by
+## coincidence at Low/Medium), producing a position+scale registration error at
+## High/Ultra that grows with distance from the site center.
+func _test_roof_ortho_uv_scale() -> void:
+	var tiers_half_extent := [500.0, 500.0, 1000.0, 1500.0]
+	var expect := [1.0, 1.0, 0.5, 1.0 / 3.0]
+	for i in tiers_half_extent.size():
+		var got := BuildingBuilder.roof_ortho_uv_scale(tiers_half_extent[i])
+		_check("roof ortho scale tier %d" % i, absf(got - expect[i]) < 1e-6,
+			"got %f expect %f" % [got, expect[i]])
+	_check("roof ortho scale guards zero/negative",
+		BuildingBuilder.roof_ortho_uv_scale(0.0) == 1.0)
 
 
 ## Wall material modes: tag mapping, size heuristic, determinism, style

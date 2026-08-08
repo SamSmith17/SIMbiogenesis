@@ -21,6 +21,7 @@ var _water_cb: CheckBox = null
 var _camps_cb: CheckBox = null
 var _exclusion_r_spin: SpinBox = null
 var _auto_veg_cb: CheckBox = null
+var _near_detail_cb: CheckBox = null
 var _auto_veg_density_spin: SpinBox = null
 var _cache_cb: CheckBox = null
 var _status_lbl: Label = null
@@ -30,6 +31,12 @@ var _refresh_btns: Array[Button] = []
 var _reset_confirm: ConfirmationDialog = null
 var _veg_style_confirm: ConfirmationDialog = null
 var _osm_offset_lbl: Label = null
+var _world_km_spin: SpinBox = null
+var _detail_m_spin: SpinBox = null
+var _osm_m_spin: SpinBox = null
+var _extent_hint_lbl: Label = null
+var _dem_status_lbl: Label = null
+var _extent_apply_confirm: ConfirmationDialog = null
 
 
 func _ready() -> void:
@@ -178,6 +185,12 @@ func _build_ui() -> void:
 	_auto_veg_density_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_auto_veg_density_spin.value_changed.connect(_on_auto_veg_density_changed)
 	veg_row.add_child(_auto_veg_density_spin)
+	_near_detail_cb = _add_toggle(_body, "Near-field ground texture",
+		"Blend a tiling ground texture and surface relief into the aerial photo "
+		+ "within ~30 m of the camera. The set is dirt/sand, so it sells bare "
+		+ "ground (playa, desert, gravel) but fights grass and forest floor — "
+		+ "turn it off on green sites. Applies instantly.",
+		_on_near_detail_toggled)
 	_cache_cb = _add_toggle(_body, "Show terrain geometry",
 		"Show/hide DEM + OSM world meshes (ground, buildings, water, camps, veg). "
 		+ "Does not control cache loading — use map-select “Load from cache” for that.",
@@ -225,6 +238,8 @@ func _build_ui() -> void:
 	clear_btn.tooltip_text = "Clear OSM↔imagery offset"
 	clear_btn.pressed.connect(_on_clear_osm_offset)
 	align_row.add_child(clear_btn)
+
+	_build_extent_ui(_body)
 
 	var sep := HSeparator.new()
 	_body.add_child(sep)
@@ -334,6 +349,7 @@ func _sync_from_loader() -> void:
 	_set_cb(_buildings_cb, bool(opts.get("show_buildings", true)))
 	_set_cb(_water_cb, bool(opts.get("show_water", true)))
 	_set_cb(_camps_cb, bool(opts.get("generate_camps", true)))
+	_set_cb(_near_detail_cb, bool(opts.get("near_field_detail", true)))
 	if _exclusion_r_spin != null:
 		_exclusion_r_spin.set_block_signals(true)
 		_exclusion_r_spin.value = float(opts.get("camp_exclusion_r", 804.672)) / 1609.344
@@ -352,6 +368,20 @@ func _sync_from_loader() -> void:
 		_auto_veg_density_spin.set_block_signals(false)
 	_set_cb(_cache_cb, bool(opts.get("cached_geometry_visible", true)))
 	_sync_osm_offset_lbl(opts)
+	if _world_km_spin != null:
+		_world_km_spin.set_block_signals(true)
+		_world_km_spin.value = float(opts.get("half_extent_m", 15000.0)) / 1000.0
+		_world_km_spin.set_block_signals(false)
+	if _detail_m_spin != null:
+		_detail_m_spin.set_block_signals(true)
+		_detail_m_spin.value = float(opts.get("detail_half_extent_m", 1500.0))
+		_detail_m_spin.set_block_signals(false)
+		_update_extent_hint(_detail_m_spin.value)
+		_update_dem_status_label()
+	if _osm_m_spin != null:
+		_osm_m_spin.set_block_signals(true)
+		_osm_m_spin.value = float(opts.get("osm_half_extent_m", 1500.0))
+		_osm_m_spin.set_block_signals(false)
 
 
 func _sync_osm_offset_lbl(opts: Dictionary = {}) -> void:
@@ -380,6 +410,179 @@ func _add_nudge_btn(parent: Control, label: String, tip: String,
 	parent.add_child(btn)
 
 
+## World/detail/OSM half-extent controls. Restores what was accidentally dropped
+## from location_picker_ui.gd's old "Advanced terrain size" section during a
+## later batch commit — TerrainLoader.apply_terrain_extents() has been fully
+## built and correct this whole time, just with no UI caller. Living here
+## (rather than only at map-creation time) is what lets an ALREADY-VISITED site
+## change size: per-site cache metadata (TerrainCacheSettings.get_meta_extents)
+## always wins over terrain_config.cfg once a site has loaded once, so hand-
+## editing the config file does nothing for a returning site.
+func _build_extent_ui(parent: Control) -> void:
+	var sep := HSeparator.new()
+	parent.add_child(sep)
+	var lbl := Label.new()
+	lbl.text = "Advanced terrain size"
+	lbl.add_theme_font_size_override("font_size", 12)
+	lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 0.82))
+	parent.add_child(lbl)
+	var hint := Label.new()
+	hint.text = "Reloads the map to rebuild terrain at the new size."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", C_MUTED)
+	parent.add_child(hint)
+
+	var world_row := HBoxContainer.new()
+	world_row.add_theme_constant_override("separation", 6)
+	parent.add_child(world_row)
+	var world_lbl := Label.new()
+	world_lbl.text = "World size"
+	world_lbl.tooltip_text = "Lo-res terrain half-width. Side >20 km uses SRTMGL3 (90 m); side >60 km uses COP90 -- both coarser than the 30 m default."
+	world_lbl.add_theme_color_override("font_color", C_MUTED)
+	world_lbl.add_theme_font_size_override("font_size", 11)
+	world_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	world_row.add_child(world_lbl)
+	_world_km_spin = SpinBox.new()
+	_world_km_spin.min_value = 5.0
+	_world_km_spin.max_value = 100.0
+	_world_km_spin.step = 1.0
+	_world_km_spin.value = 15.0
+	_world_km_spin.suffix = " km"
+	_world_km_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	world_row.add_child(_world_km_spin)
+
+	var detail_row := HBoxContainer.new()
+	detail_row.add_theme_constant_override("separation", 6)
+	parent.add_child(detail_row)
+	var detail_lbl := Label.new()
+	detail_lbl.text = "Hi-res DEM/imagery"
+	detail_lbl.tooltip_text = "Hi-res DEM + imagery patch radius. 1 m USGS lidar DEM (US sites, key required) needs this at or below half of ElevationService.USGS1M_MAX_SIDE_M."
+	detail_lbl.add_theme_color_override("font_color", C_MUTED)
+	detail_lbl.add_theme_font_size_override("font_size", 11)
+	detail_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	detail_row.add_child(detail_lbl)
+	_detail_m_spin = SpinBox.new()
+	_detail_m_spin.min_value = 500.0
+	_detail_m_spin.max_value = 5000.0
+	_detail_m_spin.step = 100.0
+	_detail_m_spin.value = 1500.0
+	_detail_m_spin.suffix = " m"
+	_detail_m_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail_m_spin.value_changed.connect(_update_extent_hint)
+	detail_row.add_child(_detail_m_spin)
+
+	_extent_hint_lbl = Label.new()
+	_extent_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_extent_hint_lbl.add_theme_font_size_override("font_size", 11)
+	parent.add_child(_extent_hint_lbl)
+
+	_dem_status_lbl = Label.new()
+	_dem_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_dem_status_lbl.add_theme_font_size_override("font_size", 11)
+	_dem_status_lbl.add_theme_color_override("font_color", C_MUTED)
+	parent.add_child(_dem_status_lbl)
+
+	var osm_row := HBoxContainer.new()
+	osm_row.add_theme_constant_override("separation", 6)
+	parent.add_child(osm_row)
+	var osm_lbl := Label.new()
+	osm_lbl.text = "Buildings/water/veg"
+	osm_lbl.tooltip_text = "OSM fetch radius for buildings, roads, water, and vegetation polygons."
+	osm_lbl.add_theme_color_override("font_color", C_MUTED)
+	osm_lbl.add_theme_font_size_override("font_size", 11)
+	osm_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	osm_row.add_child(osm_lbl)
+	_osm_m_spin = SpinBox.new()
+	_osm_m_spin.min_value = 500.0
+	_osm_m_spin.max_value = 8000.0
+	_osm_m_spin.step = 100.0
+	_osm_m_spin.value = 1500.0
+	_osm_m_spin.suffix = " m"
+	_osm_m_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	osm_row.add_child(_osm_m_spin)
+
+	var apply_btn := Button.new()
+	apply_btn.text = "Apply & reload"
+	apply_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	apply_btn.tooltip_text = "Rebuild this map's terrain at the sizes above (reloads the scene)"
+	apply_btn.pressed.connect(_on_extent_apply_pressed)
+	parent.add_child(apply_btn)
+	_refresh_btns.append(apply_btn)
+
+	_extent_apply_confirm = ConfirmationDialog.new()
+	_extent_apply_confirm.title = "Change terrain size?"
+	_extent_apply_confirm.dialog_text = "Reloads this map to rebuild the terrain at the new size. Painted vegetation edits for this site will be cleared (regenerated fresh)."
+	_extent_apply_confirm.ok_button_text = "Apply & reload"
+	_extent_apply_confirm.confirmed.connect(_on_apply_extents_confirmed)
+	add_child(_extent_apply_confirm)
+
+	_update_extent_hint(_detail_m_spin.value)
+
+
+## Necessary-but-not-sufficient by design: fitting under the size cap is only
+## half the story. OpenTopography also gates the 1 m dataset to academic-tier
+## keys (confirmed: an ordinary self-registered key gets HTTP 401 there
+## regardless of coverage) -- so this can only ever promise an ATTEMPT, not a
+## result. _update_dem_status_label (synced from the loader, not predicted from
+## the spinbox) is what tells you whether it actually landed.
+func _update_extent_hint(detail_m: float) -> void:
+	if _extent_hint_lbl == null:
+		return
+	var cap: float = ElevationService.USGS1M_MAX_SIDE_M
+	if detail_m * 2.0 <= cap:
+		_extent_hint_lbl.text = "Small enough to attempt 1 m USGS lidar, using your OpenTopography key from Settings -> Keys. That dataset needs an ACADEMIC-tier key though -- an ordinary key falls back to 10 m (see below)."
+		_extent_hint_lbl.add_theme_color_override("font_color", C_MUTED)
+	else:
+		_extent_hint_lbl.text = "Above %.0f m -- always uses 10 m DEM" % (cap * 0.5)
+		_extent_hint_lbl.add_theme_color_override("font_color", C_MUTED)
+
+
+## The REAL outcome for THIS site, read from the actual cache (not predicted).
+func _update_dem_status_label() -> void:
+	if _dem_status_lbl == null or _loader == null or not _loader.has_method("get_detail_dem_status"):
+		return
+	var status: Dictionary = _loader.call("get_detail_dem_status")
+	var label := str(status.get("label", "not loaded yet"))
+	var text := "Detail DEM in use: %s" % label
+	var reason := str(status.get("miss_reason", ""))
+	if not reason.is_empty():
+		text += "  (1 m rejected: %s)" % _clean_dem_reason(reason)
+	_dem_status_lbl.text = text
+	_dem_status_lbl.add_theme_color_override(
+		"font_color", C_OK if bool(status.get("is_best", false)) else C_MUTED)
+
+
+## OpenTopography's own error bodies are raw XML ("<?xml ...?><error>text</error>").
+## The stored diagnostic (ElevationService.usgs1m_miss_reason) keeps that verbatim
+## for anyone reading the flag file directly; this display-only cleanup pulls
+## just the human sentence out of it so the settings panel isn't showing markup.
+func _clean_dem_reason(reason: String) -> String:
+	var open_tag := reason.find("<error>")
+	if open_tag >= 0:
+		var start := open_tag + "<error>".length()
+		var close_tag := reason.find("</error>", start)
+		var inner := reason.substr(start, (close_tag - start) if close_tag >= 0 else -1)
+		if not inner.strip_edges().is_empty():
+			return inner.strip_edges()
+	return reason
+
+
+func _on_extent_apply_pressed() -> void:
+	if _extent_apply_confirm != null:
+		_extent_apply_confirm.popup_centered()
+
+
+func _on_apply_extents_confirmed() -> void:
+	if _loader == null or not _loader.has_method("apply_terrain_extents"):
+		set_status("Terrain not ready", "error")
+		return
+	var world_m := (_world_km_spin.value if _world_km_spin != null else 0.0) * 1000.0
+	var detail_m := _detail_m_spin.value if _detail_m_spin != null else 0.0
+	var osm_m := _osm_m_spin.value if _osm_m_spin != null else 0.0
+	_loader.call("apply_terrain_extents", world_m, detail_m, osm_m)
+
+
 func _on_auto_align_osm() -> void:
 	if _loader != null and _loader.has_method("auto_align_osm_to_imagery"):
 		_loader.call("auto_align_osm_to_imagery")
@@ -406,13 +609,18 @@ func _on_toggle_pressed() -> void:
 
 func _on_loader_status(msg: String, kind: String) -> void:
 	set_status(msg, kind)
+	# Cheap filename-only lookup (ElevationService.cached_dem_source) -- safe to
+	# re-check on every completed action rather than tracking which ones could
+	# plausibly have touched the DEM cache (refresh elevation/all, reset site, …).
+	if kind == "ok":
+		_update_dem_status_label()
 
 
 func _maybe_opentopo_hint() -> void:
 	if _loader == null or not _loader.has_method("needs_opentopo_hint"):
 		return
 	if bool(_loader.call("needs_opentopo_hint")):
-		set_status("Tip: add OpenTopography key in terrain_config.cfg for 30 m DEM", "info")
+		set_status("Tip: add a free OpenTopography key in Settings -> Keys for 30 m (or 10 m US) DEM", "info")
 
 
 func _set_refresh_busy(on: bool) -> void:
@@ -439,6 +647,11 @@ func _on_buildings_toggled(on: bool) -> void:
 func _on_water_toggled(on: bool) -> void:
 	if _loader != null and _loader.has_method("set_show_water"):
 		_loader.call("set_show_water", on)
+
+
+func _on_near_detail_toggled(on: bool) -> void:
+	if _loader != null and _loader.has_method("set_near_field_detail"):
+		_loader.call("set_near_field_detail", on)
 
 
 func _on_camps_toggled(on: bool) -> void:

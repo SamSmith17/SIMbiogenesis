@@ -454,6 +454,17 @@ static func make_roof_material() -> Material:
 	return mat
 
 
+## Roof UV2 is baked at build time normalized against the FIXED ORTHO_HALF_EXTENT_M
+## square (see _roof_geo_uv). Whatever ortho texture is actually bound at material
+## time may cover a DIFFERENT half-extent (the quality-tier hyper patch, or the
+## 3 km detail drape as a fallback) — this ratio rescales UV2 so the shader
+## samples the correct footprint regardless of which texture/extent won.
+static func roof_ortho_uv_scale(ortho_half_extent_m: float) -> float:
+	if ortho_half_extent_m <= 0.0:
+		return 1.0
+	return ORTHO_HALF_EXTENT_M / ortho_half_extent_m
+
+
 ## Flatten hi-res terrain under building footprints so extruded walls meet the mesh.
 static func flatten_footprint_areas(grid: PackedFloat32Array, res: int, extent_m: float,
 		buildings: Array) -> PackedFloat32Array:

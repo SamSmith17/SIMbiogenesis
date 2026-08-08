@@ -29,6 +29,9 @@ func _initialize() -> void:
 	_test_seam_compose()
 	_test_aaigrid()
 	_test_aaigrid_georef()
+	_test_utm_projection()
+	_test_projected_aaigrid()
+	_test_near_detail_toggle()
 	_test_dem_extent_recovery()
 	_test_imagery_equirect_warp()
 	_test_osm_registration()
@@ -47,6 +50,182 @@ func _initialize() -> void:
 	else:
 		print("TERRAIN SELFTEST FAIL  (%d of %d checks failed)" % [_failures, _checks])
 		quit(1)
+
+
+## Forward UTM (Snyder PP 1395). Needed because USGS 3DEP 1 m DEMs arrive as
+## AAIGrid in UTM metres rather than degrees.
+func _test_utm_projection() -> void:
+	# Zone / central-meridian bookkeeping. A longitude exactly on a zone edge
+	# belongs to the EASTERN zone (−120 is the 10/11 boundary → 11).
+	_check("utm zone Bombay Beach", GeoMath.utm_zone_for_lon(-115.7297) == 11,
+		"got %d" % GeoMath.utm_zone_for_lon(-115.7297))
+	_check("utm zone on edge picks east", GeoMath.utm_zone_for_lon(-120.0) == 11,
+		"got %d" % GeoMath.utm_zone_for_lon(-120.0))
+	_check("utm zone west limit", GeoMath.utm_zone_for_lon(-180.0) == 1)
+	_check("utm cm zone 11", _approx(GeoMath.utm_central_meridian(11), -117.0, 1e-9),
+		"got %f" % GeoMath.utm_central_meridian(11))
+	_check("utm cm zone 1", _approx(GeoMath.utm_central_meridian(1), -177.0, 1e-9))
+	_check("utm cm zone 60", _approx(GeoMath.utm_central_meridian(60), 177.0, 1e-9))
+
+	# Identities that hold for any correct TM: on the central meridian the
+	# easting is exactly the false easting, and northing is 0 at the equator.
+	var cm: Dictionary = GeoMath.lonlat_to_utm(33.35, -117.0, 11)
+	_check("utm easting on CM == false easting",
+		_approx(float(cm["easting"]), 500000.0, 1e-6),
+		"got %f" % float(cm["easting"]))
+	var eq: Dictionary = GeoMath.lonlat_to_utm(0.0, -117.0, 11)
+	_check("utm northing 0 at equator on CM", _approx(float(eq["northing"]), 0.0, 1e-6),
+		"got %f" % float(eq["northing"]))
+
+	# Symmetry about the central meridian.
+	var wst: Dictionary = GeoMath.lonlat_to_utm(33.35, -118.0, 11)
+	var est: Dictionary = GeoMath.lonlat_to_utm(33.35, -116.0, 11)
+	_check("utm symmetric about CM",
+		_approx((float(wst["easting"]) - 500000.0) + (float(est["easting"]) - 500000.0), 0.0, 1e-6))
+	_check("utm northing matches across CM",
+		_approx(float(wst["northing"]), float(est["northing"]), 1e-6))
+
+	# Southern hemisphere carries the 10,000 km false northing.
+	var south: Dictionary = GeoMath.lonlat_to_utm(-33.35, -117.0, 11)
+	_check("utm south false northing",
+		_approx(float(south["northing"]) + float(cm["northing"]), 10000000.0, 1e-3),
+		"got %f" % float(south["northing"]))
+
+	# Published cross-check vectors (independent of the identities above, which a
+	# wrong-but-self-consistent projection could still satisfy).
+	var ny: Dictionary = GeoMath.lonlat_to_utm(40.0, -74.0, 18)
+	_check("utm 40N/74W zone 18", _approx(float(ny["easting"]), 585360.0, 2.0)
+		and _approx(float(ny["northing"]), 4428236.0, 2.0),
+		"got %f, %f" % [float(ny["easting"]), float(ny["northing"])])
+
+	# Ground truth from the server: OpenTopography reprojected a real USGS1m
+	# request at Bombay Beach (33.348..33.352 N, 115.732..115.727 W) and returned
+	# a 471x438 m grid at xllcorner 617982 / yllcorner 3690591.
+	#
+	# Do NOT read those as "the SW corner projected". A lat/lon bbox reprojects to
+	# a CURVED quad in UTM, so an axis-aligned 1 m grid is cropped against the
+	# edges — here the south edge lands on the SE corner's northing, ~6 m north of
+	# the SW corner's. The invariant that does hold is containment: OT's declared
+	# rectangle must sit inside our projected corner envelope. Slack covers OT's
+	# 1 m cell snap plus the unmodelled NAD83↔WGS84 shift (~1 m in CONUS).
+	var emin := INF
+	var emax := -INF
+	var nmin := INF
+	var nmax := -INF
+	for la in [33.348, 33.352]:
+		for lo in [-115.732, -115.727]:
+			var p: Dictionary = GeoMath.lonlat_to_utm(la, lo, 11)
+			emin = minf(emin, float(p["easting"]))
+			emax = maxf(emax, float(p["easting"]))
+			nmin = minf(nmin, float(p["northing"]))
+			nmax = maxf(nmax, float(p["northing"]))
+	var slack := 1.5
+	_check("utm agrees with OpenTopography 3DEP header (easting span)",
+		617982.0 >= emin - slack and 617982.0 + 471.0 <= emax + slack,
+		"OT [617982.0 .. 618453.0] vs ours [%.2f .. %.2f]" % [emin, emax])
+	_check("utm agrees with OpenTopography 3DEP header (northing span)",
+		3690591.0 >= nmin - slack and 3690591.0 + 438.0 <= nmax + slack,
+		"OT [3690591.0 .. 3691029.0] vs ours [%.2f .. %.2f]" % [nmin, nmax])
+
+
+## Regression for the CRS bug this path exists to prevent: a UTM AAIGrid fed
+## through the geographic branch collapses every sample onto one corner cell and
+## returns a dead-flat plane, which then gets silently rejected downstream.
+func _test_projected_aaigrid() -> void:
+	_check("aaigrid geographic header not flagged projected",
+		not ElevationServiceScript.aaigrid_is_projected({
+			"xllcorner": -115.740087, "yllcorner": 33.340089, "cellsize": 0.0000926}))
+	_check("aaigrid UTM header flagged projected",
+		ElevationServiceScript.aaigrid_is_projected({
+			"xllcorner": 617227.99, "yllcorner": 3689823.99, "cellsize": 1.0}))
+
+	var lat0 := 33.35
+	var lon0 := -115.7297
+	var bbox := GeoMath.bbox_for(lat0, lon0, 1000.0)
+	var zone := GeoMath.utm_zone_for_lon(lon0)
+	var sw: Dictionary = GeoMath.lonlat_to_utm(bbox["south"], bbox["west"], zone)
+	# 10 m cells keep the fixture small; the code path is identical at 1 m.
+	var cell := 10.0
+	var cols := 260
+	var rows := 260
+	var xll: float = float(sw["easting"]) - 30.0 * cell
+	var yll: float = float(sw["northing"]) - 30.0 * cell
+	# A tilted plane in PROJECTED metres, so the expected value at any lat/lon is
+	# analytic once you project it.
+	var grid := PackedFloat32Array()
+	grid.resize(cols * rows)
+	for r in rows:
+		var n := yll + (float(rows) - 0.5 - float(r)) * cell   # AAIGrid row 0 is north
+		for c in cols:
+			var e := xll + (float(c) + 0.5) * cell
+			grid[r * cols + c] = 100.0 + 0.01 * (e - xll) + 0.02 * (n - yll)
+	var parsed := {
+		"cols": cols, "rows": rows, "grid": grid,
+		"xllcorner": xll, "yllcorner": yll, "cellsize": cell,
+	}
+	var n_out := 16
+	var out: PackedFloat32Array = ElevationServiceScript.resample_aaigrid_to_bbox(
+		parsed, bbox, n_out)
+	_check("projected aaigrid resamples", out.size() == n_out * n_out,
+		"got %d" % out.size())
+	if out.size() != n_out * n_out:
+		return
+	var lo := out[0]
+	var hi := out[0]
+	for v in out:
+		lo = minf(lo, v)
+		hi = maxf(hi, v)
+	# THE regression: the old geographic-only path returned a single value here.
+	_check("projected aaigrid is not a flat plane", hi - lo > 1.0,
+		"min %f max %f" % [lo, hi])
+	# +0.01/m eastward, +0.02/m northward.
+	_check("projected aaigrid increases eastward",
+		out[8 * n_out + n_out - 1] > out[8 * n_out] + 1.0,
+		"west %f east %f" % [out[8 * n_out], out[8 * n_out + n_out - 1]])
+	_check("projected aaigrid decreases southward",
+		out[8] > out[(n_out - 1) * n_out + 8] + 1.0,
+		"north %f south %f" % [out[8], out[(n_out - 1) * n_out + 8]])
+	# Absolute registration: sample (8,8) must match the analytic plane.
+	var inv := 1.0 / float(n_out - 1)
+	var s_lat: float = lerpf(bbox["north"], bbox["south"], 8.0 * inv)
+	var s_lon: float = lerpf(bbox["west"], bbox["east"], 8.0 * inv)
+	var p: Dictionary = GeoMath.lonlat_to_utm(s_lat, s_lon, zone)
+	var expect := 100.0 + 0.01 * (float(p["easting"]) - xll) + 0.02 * (float(p["northing"]) - yll)
+	_check("projected aaigrid registers to the metre",
+		_approx(out[8 * n_out + 8], expect, 0.05),
+		"got %f expected %f" % [out[8 * n_out + 8], expect])
+
+	# Wrong-projection guard: a grid that does not contain the requested centre
+	# must come back EMPTY so the caller drops a rung, never stretch-fitted.
+	var bad := parsed.duplicate()
+	bad["xllcorner"] = xll + 500000.0
+	var bad_out: PackedFloat32Array = ElevationServiceScript.resample_aaigrid_to_bbox(
+		bad, bbox, n_out)
+	_check("projected aaigrid off-site returns empty", bad_out.is_empty(),
+		"got %d samples" % bad_out.size())
+
+
+## The "Near-field ground texture" toggle must survive a terrain REBUILD, not just
+## a live push. terrain_detail.gdshader defaults the uniform to TRUE, so unless
+## every material TerrainBuilder mints is stamped with the player's choice, the
+## next rebuild/refresh silently switches the dirt overlay back on.
+func _test_near_detail_toggle() -> void:
+	var prev := TerrainBuilder.near_detail_enabled
+	# patch_mesh=true forces the ShaderMaterial branch without needing a drape.
+	TerrainBuilder.near_detail_enabled = false
+	var off := TerrainBuilder.make_terrain_material(null, null, 3000.0, 1000.0, true) as ShaderMaterial
+	_check("near detail builds a ShaderMaterial", off != null)
+	if off != null:
+		_check("near detail OFF is stamped on new materials",
+			off.get_shader_parameter("near_detail_enabled") == false,
+			"got %s" % str(off.get_shader_parameter("near_detail_enabled")))
+	TerrainBuilder.near_detail_enabled = true
+	var on := TerrainBuilder.make_terrain_material(null, null, 3000.0, 1000.0, true) as ShaderMaterial
+	if on != null:
+		_check("near detail ON is stamped on new materials",
+			on.get_shader_parameter("near_detail_enabled") == true,
+			"got %s" % str(on.get_shader_parameter("near_detail_enabled")))
+	TerrainBuilder.near_detail_enabled = prev
 
 
 func _test_solar_array() -> void:

@@ -243,6 +243,9 @@ var _growth_caps_auto := {}
 var _growth_rng := RandomNumberGenerator.new()
 var _auto_growth_zone_index: GrowthZoneIndex = null
 var _placed_prop_layer: PlacedPropLayer = null
+## Linkage fold-to-pack sweeps currently animating (prop_id → true) — a
+## second Pack press mid-fold must not double-toggle the sweep.
+var _pack_anim_in_flight: Dictionary = {}
 var _placed_props_ui: Control = null
 var _placed_prop_edit_ui: Control = null
 ## Click-to-move from PlacedPropEditUI Move button (see begin_prop_reposition).
@@ -645,6 +648,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("camp_scatter") and _camp_scatter_ui != null:
+		# C is shared with `charge`. At a usable charging station the charge
+		# wins: yield the event (do NOT consume) so the player's event-driven
+		# handler takes it — deterministic in either _unhandled_input order,
+		# unlike the old polling which fired BOTH.
+		if _main != null:
+			var plr := _main.get_node_or_null("Player")
+			if plr != null and plr.has_method("charge_available") \
+					and bool(plr.call("charge_available")):
+				return
 		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
 			_terrain_edit_ui.call("_exit_mode")
 		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
@@ -916,6 +928,11 @@ func _run_load_sequence() -> void:
 	_load_sequence_active = true
 	auto_veg_ready = false
 	_detail_img_retry_zoom = -1
+	# Seed the near-field detail choice BEFORE anything builds a terrain material,
+	# or the first build of the session takes the shader default instead of the
+	# player's saved setting.
+	TerrainBuilder.near_detail_enabled = bool(
+		_terrain_config().get("near_field_detail", true))
 	if _load_progress != null:
 		_load_progress.configure_for_extents(_half_extent, _detail_half_extent)
 	var es := get_node_or_null("/root/ElevationService")
@@ -2099,7 +2116,11 @@ var _chore_ledger: ChoreLedger = null
 
 func _load_chore_ledger() -> void:
 	_chore_ledger = ChoreLedger.create_default()
-	_chore_ledger.load_for_map(_lat, _lon)
+	# A LOADED ledger keeps exactly the setting it was saved with, so no
+	# existing site silently stops producing when the crew-gated path landed.
+	# Only a map that has never had one takes the new default.
+	if not _chore_ledger.load_for_map(_lat, _lon):
+		_chore_ledger.infinite_labor = ChoreLedger.DEFAULT_INFINITE_FOR_NEW_MAPS
 
 
 ## Per-map chore-hours ledger (hybrid auto-debit / confirm gates for recipes).
@@ -3060,6 +3081,14 @@ func get_prop_graph_item_id(prop_id: String) -> String:
 		return ""
 	var rec := _placed_prop_layer.find_by_id(prop_id)
 	return str(rec.get("graph_item_id", ""))
+
+
+## All placed-prop records (the layer's live array — treat as read-only).
+## Used by CampManifest's packing sweep (PACKING_PLAN.md Phase 2).
+func placed_prop_records() -> Array:
+	if _placed_prop_layer == null:
+		return []
+	return _placed_prop_layer.props
 
 
 func clear_graph_scene_highlight() -> void:
@@ -4375,13 +4404,8 @@ func _make_world_roof_material() -> Material:
 	var sm := mat as ShaderMaterial
 	sm.set_shader_parameter("use_ortho", true)
 	sm.set_shader_parameter("ortho_tex", ortho)
-	var scale := 1.0
-	var ortho_half := _hyper_half_extent()
-	if _hyper_drape == null:
-		scale = BuildingBuilder.ORTHO_HALF_EXTENT_M / _detail_half_extent
-		ortho_half = _detail_half_extent
-	else:
-		ortho_half = _hyper_half_extent()
+	var ortho_half := _detail_half_extent if _hyper_drape == null else _hyper_half_extent()
+	var scale := BuildingBuilder.roof_ortho_uv_scale(ortho_half)
 	sm.set_shader_parameter("ortho_uv_scale", scale)
 	# Ortho texture covers this half-extent; UV2 is ORTHO_HALF-normalized then
 	# scaled — Mercator-correct samples into that coverage square.
@@ -5029,6 +5053,7 @@ func _terrain_config() -> Dictionary:
 	var show_water := true
 	var show_auto_vegetation := true
 	var generate_camps := true
+	var near_field_detail := true
 	var cache_enabled := TerrainCacheSettings.cache_enabled()
 	var camp_exclusion_r := 804.672   # 0.5 miles default
 	if FileAccess.file_exists(CONFIG_PATH):
@@ -5040,6 +5065,7 @@ func _terrain_config() -> Dictionary:
 			show_water = bool(cfg.get_value("terrain", "show_water", true))
 			show_auto_vegetation = bool(cfg.get_value("terrain", "show_auto_vegetation", true))
 			generate_camps = bool(cfg.get_value("terrain", "generate_camps", true))
+			near_field_detail = bool(cfg.get_value("terrain", "near_field_detail", true))
 			cache_enabled = bool(cfg.get_value("terrain", "cache_enabled", true))
 			camp_exclusion_r = float(cfg.get_value("terrain", "camp_exclusion_r", 804.672))
 	return {
@@ -5049,6 +5075,7 @@ func _terrain_config() -> Dictionary:
 		"show_water": show_water,
 		"show_auto_vegetation": show_auto_vegetation,
 		"generate_camps": generate_camps,
+		"near_field_detail": near_field_detail,
 		"cache_enabled": cache_enabled,
 		"camp_exclusion_r": camp_exclusion_r,
 	}
@@ -5073,6 +5100,41 @@ func get_terrain_options() -> Dictionary:
 	opts["cached_geometry_visible"] = _cached_geometry_visible
 	opts["load_from_cache"] = not _force_refetch
 	return opts
+
+
+## Ground truth for the terrain-options "which DEM is actually loaded" hint.
+## Reads the ACTUAL cached file for the current site/extent (filename-only, no
+## multi-hundred-MB JSON decode — see ElevationService.cached_dem_source), not
+## a prediction from the extent alone: eligible-by-size and actually-loaded are
+## different questions once OpenTopography's own access tier is in play (a
+## non-academic key gets HTTP 401 on USGS1m regardless of coverage — see
+## ElevationService.USGS1M_MAX_SIDE_M).
+func get_detail_dem_status() -> Dictionary:
+	var source := ElevationService.cached_dem_source(_lat, _lon, "detail", _detail_half_extent)
+	var miss_reason := ElevationService.usgs1m_miss_reason(_lat, _lon)
+	var label := "not loaded yet"
+	var is_best := false
+	match source:
+		"":
+			label = "not loaded yet"
+		"opentopo_usgs1":
+			label = "1 m USGS lidar"
+			is_best = true
+		"opentopo_usgs10":
+			label = "10 m USGS"
+		"openmeteo":
+			label = "Open-Meteo (~90 m)"
+		_:
+			if source.begins_with("opentopo_"):
+				label = "OpenTopography %s" % source.trim_prefix("opentopo_")
+			else:
+				label = source
+	return {
+		"source": source,
+		"label": label,
+		"is_best": is_best,
+		"miss_reason": miss_reason,
+	}
 
 
 func apply_terrain_extents(world_half_m: float, detail_half_m: float, osm_half_m: float) -> void:
@@ -5168,6 +5230,46 @@ func set_show_water(on: bool) -> void:
 	if not _built:
 		return
 	_attach_water()
+
+
+## Near-field ground detail: the tiling dirt albedo/normal (or its procedural
+## fallback) that terrain_detail.gdshader blends over the aerial photo within
+## ~30 m of the camera. Reads well on bare ground, fights grass/forest.
+##
+## Applied in TWO places on purpose: the static on TerrainBuilder so any material
+## built LATER (terrain rebuild, refresh, new hi-res tile) is stamped with the
+## choice, and a live push onto the materials already on screen so the toggle is
+## instant. Neither alone is sufficient — the shader's own default is true, so a
+## rebuild without the static would silently switch it back on.
+func set_near_field_detail(on: bool) -> void:
+	_save_terrain_config_value("near_field_detail", on)
+	TerrainBuilder.near_detail_enabled = on
+	_push_near_field_detail(on)
+
+
+func _push_near_field_detail(on: bool) -> void:
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	_push_near_field_detail_recursive(terrain, on)
+
+
+## Walks the whole Terrain subtree rather than the named Ground/DetailGround pair
+## the snow push uses: the HeightField sculpt tiles, and any future draped mesh,
+## carry this same shader, and a tile left on the old setting is a visible seam.
+## (Tiles share DetailGround's material INSTANCE, so most writes here are
+## redundant — harmless for a one-shot toggle, and it cannot miss anything.)
+func _push_near_field_detail_recursive(node: Node, on: bool) -> void:
+	var mi := node as MeshInstance3D
+	if mi != null:
+		var sm := mi.material_override as ShaderMaterial
+		if sm != null and sm.shader != null \
+				and sm.shader.resource_path.ends_with("terrain_detail.gdshader"):
+			sm.set_shader_parameter("near_detail_enabled", on)
+	for child in node.get_children():
+		_push_near_field_detail_recursive(child, on)
 
 
 ## Show/hide DEM + OSM world geometry (Ground, buildings, water, camps, veg).
@@ -9495,6 +9597,182 @@ func get_prop_record(prop_id: String) -> Dictionary:
 	if _placed_prop_layer == null:
 		return {}
 	return _placed_prop_layer.find_by_id(prop_id)
+
+
+## PACKED ⇄ DEPLOYED (PACKING_PLAN.md Phase 5): flip a prop's pack state,
+## persist, rebuild, and keep the graph honest — a packed linkage array is
+## stowed (node + wiring survive, zero contribution), and unpacking restores
+## the fold-state truth rather than blindly un-stowing a still-folded frame.
+## Linkage structures ANIMATE the transition: packing folds the live frame
+## first (the stow sweep IS the packing) and only then swaps in the crate;
+## unpacking swaps the crate for the stowed frame and plays the deploy
+## sweep — so pack/unpack reads as one continuous motion, never a teleport.
+func set_prop_packed(prop_id: String, packed: bool) -> void:
+	if _placed_prop_layer == null or prop_id.is_empty():
+		return
+	if _pack_anim_in_flight.has(prop_id):
+		return
+	var rec := _placed_prop_layer.find_by_id(prop_id)
+	if rec.is_empty():
+		return
+	if packed and PlacedPropRuntime.packed_spec_for_record(rec).is_empty():
+		return  # non-packable — nothing to collapse into
+	# You cannot erect a shiftpod inside a shipping container. A stowed crate
+	# is riding the stack at height with its collision off; deploying it in
+	# place would put the model through the container walls, floating at stack
+	# height. The crew hauling it out is what clears `stowed_in`.
+	if not packed and not str(rec.get("stowed_in", "")).is_empty():
+		var sgv0: Node = get_tree().current_scene.get_node_or_null("UILayer/SystemGraphView") \
+			if get_tree().current_scene != null else null
+		if sgv0 != null and sgv0.has_method("_show_toast"):
+			sgv0.call("_show_toast",
+				"📦 Stowed in the container — unload the delivery first")
+		return
+	var main := get_tree().current_scene
+	var is_linkage := str(rec.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID
+	if packed and is_linkage and main != null:
+		var prop := PlacedPropRuntime.find_by_prop_id(main, prop_id)
+		var deploy: Node = prop.get_node_or_null("LinkageDeployRuntime") \
+			if prop != null else null
+		if deploy != null and (bool(deploy.call("is_deployed"))
+				or bool(deploy.call("is_animating"))):
+			_pack_anim_in_flight[prop_id] = true
+			if not bool(deploy.call("is_animating")):
+				deploy.call("toggle_deploy")            # start the stow sweep
+			elif float(deploy.get("_rate")) > 0.0:
+				deploy.call("toggle_deploy")            # reverse a deploy mid-flight
+			await deploy.deploy_state_changed
+			_pack_anim_in_flight.erase(prop_id)
+			if _placed_prop_layer == null or not is_inside_tree():
+				return
+			# Re-read: the settle persisted the stowed fold pose + graph stow.
+			rec = _placed_prop_layer.find_by_id(prop_id)
+			if rec.is_empty():
+				return
+	if not _placed_prop_layer.update_prop(prop_id, {"packed": packed}):
+		return
+	_placed_prop_layer.save(_lat, _lon)
+	_rebuild_placed_props()
+	var sgv: Node = main.get_node_or_null("UILayer/SystemGraphView") \
+		if main != null else null
+	if is_linkage:
+		if sgv != null and sgv.has_method("set_imported_array_stowed"):
+			var stowed := packed or not bool(rec.get("linkage_deployed", false))
+			sgv.call("set_imported_array_stowed", "linkage_%s" % prop_id, stowed)
+	# Any prop bound to a graph item: flag/unflag the twin so every producer
+	# gate (renewables/CSP/heliostat ticks, flow-engine processors) sees it.
+	var gid := str(rec.get("graph_item_id", ""))
+	if not gid.is_empty() and sgv != null and sgv.has_method("set_item_packed_3d"):
+		sgv.call("set_item_packed_3d", gid, packed)
+	# UNPACKING a linkage: the crate just swapped for the STOWED frame — now
+	# play the deploy sweep so it visibly unfolds (its settle re-arms the
+	# graph array and persists the deployed pose through the normal path).
+	if not packed and is_linkage and main != null:
+		await get_tree().process_frame
+		var prop2 := PlacedPropRuntime.find_by_prop_id(main, prop_id)
+		var deploy2: Node = prop2.get_node_or_null("LinkageDeployRuntime") \
+			if prop2 != null else null
+		if deploy2 != null and not bool(deploy2.call("is_animating")):
+			if bool(deploy2.call("is_deployed")):
+				# The crate's DESIGN was saved at the deployed fold (the common
+				# case — the Lab shows designs deployed), so from here there is
+				# no sweep to play and _settle would never run: linkage_deployed
+				# never gets persisted and set_imported_array_stowed(9645) reads
+				# `not linkage_deployed` = true — the graph array stays STOWED
+				# forever on a visibly standing structure. Snap to the stowed
+				# pose and raise from it: the deploy sweep IS the honest visual
+				# (and the Site Projects raise), and its settle persists truth.
+				var b: Node = prop2.get_node_or_null("ModelRoot")
+				if b != null and b.has_method("set_fold_angle"):
+					b.call("set_fold_angle", maxf(float(b.call("min_fold_angle")),
+						LinkageKinematics.MIN_FOLD_ANGLE))
+			deploy2.call("toggle_deploy")
+
+
+## Spawn an UnpackScenario delivery (container + packed crates) at a world
+## position — PACKING_PLAN.md Phase 6. Returns the spawn result (or {}).
+func deliver_packed_kit(scenario_id: String, at_x: float, at_z: float,
+		yaw_deg: float = 0.0) -> Dictionary:
+	if _placed_prop_layer == null:
+		return {}
+	var main_now := get_tree().current_scene
+	var abs_h := float(main_now.call("get_absolute_hours")) \
+		if main_now != null and main_now.has_method("get_absolute_hours") else 0.0
+	var res := UnpackScenario.spawn(_placed_prop_layer, scenario_id, at_x, at_z,
+		yaw_deg, abs_h)
+	if res.is_empty():
+		return {}
+	_placed_prop_layer.save(_lat, _lon)
+	_rebuild_placed_props()
+	_queue_unload_chore(res, at_x, at_z)
+	return res
+
+
+## A delivery is WORK: queue ONE HAUL CHORE PER CRATE (target = the crate
+## prop, carry_to = its stamped staging slot, effect = the move_prop that
+## actually relocates the record on completion) plus a zero-effect "Delivery
+## unloaded" gate depending on all of them — the hook later project phases
+## (or a player-authored chore) can depend on. Crates spawn stacked at the
+## container door (UnpackScenario v2), so the haul is real: the crew streams
+## between the door and the staging rows, visibly carrying. Total labour is
+## priced by NpcHaulModel over the real route and split per crate. Silent
+## no-op with no population — the player just unpacks by hand.
+func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float) -> void:
+	var main := get_tree().current_scene
+	var sgv: Node = main.get_node_or_null("UILayer/SystemGraphView") \
+		if main != null else null
+	if sgv == null or not sgv.has_method("npc_population_bridge"):
+		return
+	var bridge: Variant = sgv.call("npc_population_bridge")
+	if bridge == null:
+		return
+	var iid := str(bridge.call("first_crewable_habitat"))
+	if iid.is_empty():
+		return
+	var board: Variant = bridge.call("chore_board_for", iid)
+	if board == null:
+		return
+	var crate_ids: Array = spawn_res.get("crate_ids", [])
+	if crate_ids.is_empty():
+		return
+	var from := Vector2(cx, cz)
+	var roster := maxi(int(bridge.call("roster_size_for", iid)), 1)
+	var crates: Array = []
+	for pid in crate_ids:
+		var rec := _placed_prop_layer.find_by_id(str(pid))
+		var at := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+		var st: Dictionary = rec.get("staging", {})
+		var entry := ModelCatalog.find(str(rec.get("model_id", "")))
+		crates.append({"pid": str(pid),
+			"stage": Vector2(float(st.get("x", at.x)), float(st.get("z", at.y))),
+			"rank": int(rec.get("unload_rank", rec.get("delivery_slot", 0))),
+			"label": str(entry.get("label", rec.get("model_id", "crate")))})
+	# LIFO. This ONE sort serves both strategies: the brigade's stage effects
+	# fire in list order, and the round-trip rows take an ascending priority
+	# from it — so nobody pulls a crate out from under the one stacked on it.
+	crates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a.get("rank", 0)) < int(b.get("rank", 0)))
+	# Strategy + rows are pure (SiteProject.unload_spec_rows): round trips =
+	# one carry chore per crate; bucket brigade = ONE crew chore with the
+	# crates flowing through as stage effects along the relay line.
+	var built: Dictionary = SiteProject.unload_spec_rows(crates, from, roster)
+	var rows: Array = built.get("rows", [])
+	var centre: Vector2 = built.get("centre", from)
+	var project_id := ""
+	if bridge.has_method("create_site_project"):
+		project_id = str(bridge.call("create_site_project", iid,
+			"delivery_unload", "Unload delivery (%s)" % str(built.get("strategy", "")).replace("_", " "),
+			str(spawn_res.get("container_prop_id", "")), centre, rows,
+			{"start_h": 7.0, "end_h": 19.0},
+			{"kind": "pos", "x": centre.x, "z": centre.y}, {}))
+	if project_id.is_empty():
+		push_warning("Delivery unload plan refused — chore board full")
+
+
+func is_prop_packed(prop_id: String) -> bool:
+	if _placed_prop_layer == null:
+		return false
+	return bool(_placed_prop_layer.find_by_id(prop_id).get("packed", false))
 
 
 func update_prop_record(prop_id: String, patch: Dictionary) -> void:

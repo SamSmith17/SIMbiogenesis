@@ -115,6 +115,88 @@ static func tile_range_for_bbox(bbox: Dictionary, z: int) -> Dictionary:
 	}
 
 
+## ---------------------------------------------------------------------------
+## UTM (Transverse Mercator) forward projection
+## ---------------------------------------------------------------------------
+## USGS 3DEP 1 m lidar DEMs are published in UTM metres, not geographic degrees,
+## so an AAIGrid from that source carries eastings/northings in its header and
+## must be indexed in projected metres — see
+## ElevationService.resample_aaigrid_to_bbox. The SRTM/COP/USGS10m grids
+## OpenTopography serves are in degrees, hence the two code paths.
+##
+## Series form from Snyder, "Map Projections — A Working Manual", USGS
+## Professional Paper 1395 (1987): meridional arc eq. 3-21, forward TM eqs.
+## 8-9 … 8-11.
+##
+## We project on the WGS84 ellipsoid while the USGS products are NAD83. The two
+## differ by ~1 m horizontally in CONUS — sub-cell for a 1 m DEM and far below
+## its own noise — so the datum shift is deliberately not modelled.
+
+const UTM_A := 6378137.0            ## WGS84 semi-major axis (m)
+const UTM_E2 := 0.00669437999014    ## WGS84 first eccentricity squared
+const UTM_K0 := 0.9996              ## UTM scale factor on the central meridian
+const UTM_FALSE_EASTING := 500000.0
+const UTM_FALSE_NORTHING_SOUTH := 10000000.0
+
+
+## UTM zone (1..60) for a longitude. Zones are 6° wide starting at −180°. The
+## Norway/Svalbard width exceptions are NOT applied — they only bite over
+## Scandinavia and every consumer here is a US 3DEP product.
+static func utm_zone_for_lon(lon_deg: float) -> int:
+	return clampi(int(floor(fposmod(lon_deg + 180.0, 360.0) / 6.0)) + 1, 1, 60)
+
+
+## Central meridian of a UTM zone, in degrees.
+static func utm_central_meridian(zone: int) -> float:
+	return float(clampi(zone, 1, 60) - 1) * 6.0 - 180.0 + 3.0
+
+
+## Forward UTM projection. Returns {easting, northing, zone} in metres; pass
+## `zone` to force one (a bbox straddling a zone edge must project every sample
+## into the SAME zone as the grid it indexes, not each into its own).
+##
+## The components are plain GDScript floats (64-bit). Do NOT round-trip them
+## through Vector2: its 32-bit components resolve a ~3,690,000 m northing only
+## to ~0.25 m, which would blur a 1 m DEM.
+static func lonlat_to_utm(lat_deg: float, lon_deg: float, zone: int = -1) -> Dictionary:
+	var z := zone if (zone >= 1 and zone <= 60) else utm_zone_for_lon(lon_deg)
+	var lat := deg_to_rad(clampf(lat_deg, -80.0, 84.0))
+	var dlon := deg_to_rad(wrapf(lon_deg - utm_central_meridian(z), -180.0, 180.0))
+	var sin_lat := sin(lat)
+	var cos_lat := cos(lat)
+	var tan_lat := tan(lat)
+	var ep2 := UTM_E2 / (1.0 - UTM_E2)
+	var rn := UTM_A / sqrt(1.0 - UTM_E2 * sin_lat * sin_lat)
+	var t := tan_lat * tan_lat
+	var c := ep2 * cos_lat * cos_lat
+	var a := dlon * cos_lat
+	var e4 := UTM_E2 * UTM_E2
+	var e6 := e4 * UTM_E2
+	# Meridional arc from the equator (Snyder 3-21).
+	var m := UTM_A * (
+		(1.0 - UTM_E2 / 4.0 - 3.0 * e4 / 64.0 - 5.0 * e6 / 256.0) * lat
+		- (3.0 * UTM_E2 / 8.0 + 3.0 * e4 / 32.0 + 45.0 * e6 / 1024.0) * sin(2.0 * lat)
+		+ (15.0 * e4 / 256.0 + 45.0 * e6 / 1024.0) * sin(4.0 * lat)
+		- (35.0 * e6 / 3072.0) * sin(6.0 * lat))
+	var a2 := a * a
+	var a3 := a2 * a
+	var a4 := a2 * a2
+	var a5 := a4 * a
+	var a6 := a4 * a2
+	var easting := UTM_K0 * rn * (
+		a
+		+ (1.0 - t + c) * a3 / 6.0
+		+ (5.0 - 18.0 * t + t * t + 72.0 * c - 58.0 * ep2) * a5 / 120.0
+	) + UTM_FALSE_EASTING
+	var northing := UTM_K0 * (m + rn * tan_lat * (
+		a2 / 2.0
+		+ (5.0 - t + 9.0 * c + 4.0 * c * c) * a4 / 24.0
+		+ (61.0 - 58.0 * t + t * t + 600.0 * c - 330.0 * ep2) * a6 / 720.0))
+	if lat_deg < 0.0:
+		northing += UTM_FALSE_NORTHING_SOUTH
+	return {"easting": easting, "northing": northing, "zone": z}
+
+
 ## Choose a zoom so the stitched imagery for `bbox` is roughly `target_px` across
 ## (256 px per tile). Clamped to [1, max_zoom].
 static func pick_zoom(bbox: Dictionary, target_px: int = 2048, max_zoom: int = 17) -> int:

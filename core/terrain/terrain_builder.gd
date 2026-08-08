@@ -39,6 +39,14 @@ static var _near_detail_albedo: Texture2D = null
 static var _near_detail_normal: Texture2D = null
 static var _near_detail_rough: Texture2D = null
 static var _near_detail_loaded := false
+## Player toggle ("Near-field ground texture" in Terrain options), stamped onto
+## every material built from here so a terrain REBUILD keeps the choice — the
+## shader's own default is true, so without this a rebuild silently re-enables it.
+## The ground set is dirt/sand: it sells bare playa and desert, and fights the
+## aerial photo over grass and forest floor, which is why this is a choice rather
+## than a constant. Live changes also push straight onto the existing materials —
+## see TerrainLoader.set_near_field_detail.
+static var near_detail_enabled := true
 
 ## Seam blending between hi-res detail patch and coarse world terrain.
 const MIN_FEATHER_M := 80.0
@@ -371,6 +379,7 @@ static func make_terrain_material(base: Texture2D, detail: Texture2D,
 	sm.set_shader_parameter("hide_centre_region", hide_centre_region)
 	sm.set_shader_parameter("feather", feather_uv)
 	apply_drape_bboxes(sm, base_bbox, detail_bbox)
+	sm.set_shader_parameter("near_detail_enabled", near_detail_enabled)
 	apply_near_detail_textures(sm)
 	return sm
 
