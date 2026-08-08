@@ -112,6 +112,14 @@ func _physics_process(_delta: float) -> void:
 		_clear_water_focus()
 		_clear_building_focus()
 		_clear_veg_focus()
+		# In a session, people are pickable WITHOUT the modifier: possession is
+		# the main thing a guest does, and making them hold Alt to look at
+		# someone hides the feature entirely. Deliberately scoped to
+		# multiplayer so single-player crosshair behaviour is unchanged.
+		if _in_multiplayer_session():
+			_update_npc_focus()
+		else:
+			_clear_npc_focus()
 		return
 	var next: Interactable = null
 	# Finished mud prints sit inside the printer hull and may only have an Area3D
@@ -775,6 +783,25 @@ const NPC_PICK_RANGE_M := 60.0
 var _npc_focus_id: String = ""
 
 
+func _in_multiplayer_session() -> bool:
+	var mp := get_node_or_null("/root/MultiplayerSession")
+	return mp != null and bool(mp.call("is_active"))
+
+
+## Ask the host to let us inhabit the focused person. Returns true when the
+## input was consumed (including a refusal — the player gets told why).
+## No-op outside multiplayer, so single-player Interact is unchanged.
+func _try_possess_npc() -> bool:
+	var mp := get_node_or_null("/root/MultiplayerSession")
+	if mp == null or not bool(mp.call("is_active")):
+		return false
+	if bool(mp.call("is_possessing")):
+		mp.call("release_possession")
+		return true
+	var res: Dictionary = mp.call("request_possess", _npc_focus_id)
+	return true if bool(res.get("ok", false)) else true
+
+
 func _update_npc_focus() -> bool:
 	var tree := get_tree()
 	if tree == null or _camera == null:
@@ -817,8 +844,30 @@ func _update_npc_focus() -> bool:
 				tail.append(best.status_text)
 			if not tail.is_empty():
 				parts.append(" · ".join(tail))
+			# In a session the crosshair also has to say the person is playable
+			# — the pick has been read-only since it was written, so nobody
+			# would guess Interact does anything here.
+			var hint := _possession_hint(best.agent_id)
+			if not hint.is_empty():
+				parts.append(hint)
 			_crosshair.set_prompt_text(" — ".join(parts))
 	return true
+
+
+func _possession_hint(agent_id: String) -> String:
+	var mp := get_node_or_null("/root/MultiplayerSession")
+	if mp == null or not bool(mp.call("is_active")):
+		return ""
+	var holder := int(mp.call("possessor_of", agent_id))
+	if holder != 0:
+		var peers: Dictionary = mp.get("peers") as Dictionary
+		var who := str((peers.get(holder, {}) as Dictionary).get("name", "someone"))
+		if str(mp.get("my_agent_id")) == agent_id:
+			return "[Interact] leave this body"
+		return "played by %s" % who
+	if bool(mp.call("is_possessing")):
+		return "[Interact] leave your current body first"
+	return "[Interact] play as them"
 
 
 func _clear_npc_focus() -> void:
@@ -902,6 +951,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	# nothing else (interactable / solar / building) is focused. Do NOT
 	# short-circuit on is_veg_edit here, or focused Interactables never get
 	# their interact() call.
+	# Possess the person under the crosshair (multiplayer only). Placed after
+	# the focused-Interactable block so a prop or SoI marker still wins, and
+	# before the ground-pick fallbacks so aiming at someone is unambiguous.
+	# `_npc_focus_id` has always been computed here and never read — this is the
+	# first consumer.
+	if is_interact and not _npc_focus_id.is_empty() and _focused == null:
+		if _try_possess_npc():
+			get_viewport().set_input_as_handled()
+			return
 	if _focused != null and is_instance_valid(_focused):
 		if _focused is PlacedProp:
 			if is_click:
@@ -971,6 +1029,19 @@ func _try_open_veg_area() -> bool:
 
 func _open_placed_prop_edit(prop: PlacedProp) -> void:
 	if prop == null:
+		return
+	# PACKED crate (PACKING_PLAN.md Phase 5): Interact = unpack in place.
+	# Repacking lives in the edit drawer — a crate has no other interaction,
+	# but a deployed prop's Interact is already spoken for (linkage fold,
+	# StarShade edit…), so packing must never hijack it.
+	# A crew BUILD SITE (Site Projects) is packed too, but its deploy is the
+	# erect phase's effect — Interact must not shortcut the whole build.
+	if bool(prop.get_meta("packed", false)):
+		if bool(prop.get_meta("under_construction", false)):
+			open_prop_edit_ui(prop)
+			return
+		if _loader != null and _loader.has_method("set_prop_packed"):
+			_loader.call("set_prop_packed", str(prop.prop_id), false)
 		return
 	# Linkage Lab structures: Interact = live deploy/stow fold toggle (the
 	# quick-click edit panel — GrabController's path — still reaches
