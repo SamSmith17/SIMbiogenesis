@@ -164,6 +164,73 @@ func _test_chore_hybrid() -> void:
 	var ledger2 := ChoreLedger.create_default()
 	ledger2.deserialize(data)
 	_check("ledger round-trip infinite", ledger2.infinite_labor == ledger.infinite_labor)
+	_test_crew_gated_step()
+
+
+## THE LABOUR MERGE. With finite labour, a step that needs hands must announce
+## itself as CREW work (so the bridge mints a real chore at the machine and
+## somebody walks over), and finishing that chore must resume the step through
+## the SAME confirm path the player's button uses — debiting the ledger exactly
+## once, by exactly the step's hours.
+func _test_crew_gated_step() -> void:
+	var recipe := {
+		"id": "crewtest", "batch_time_hrs": 1.0,
+		"steps": [{"id": "tend", "at_frac": 0.5, "chore_hours": 0.5,
+			"label": "Tend the mill"}],
+	}
+	var specs := {}
+	var finite := ChoreLedger.create_default()
+	finite.infinite_labor = false
+	finite.chore_hours_available = 0.0   # no abstract pool at all
+	RecipeRunner.begin_run(specs, 10.0, recipe)
+	var t := RecipeRunner.tick_state(specs, 10.6, 0.1, finite)
+	_check("a labour step waits", bool(t.get("waiting_chore", false)), str(t))
+	# The distinction the bridge dispatches on: hands, not a decision.
+	_check("it asks for CREW, not a confirm",
+		str(specs.get("recipe_waiting_kind", "")) == "crew",
+		str(specs.get("recipe_waiting_kind", "")))
+	_check("the request names the step and its hours",
+		str((t.get("chore_request", {}) as Dictionary).get("step_id", "")) == "tend"
+			and _approx(float((t.get("chore_request", {}) as Dictionary).get("chore_hours", 0.0)), 0.45, 0.55))
+	var before := finite.chore_hours_consumed_total
+	# The crew finished — this is what the recipe_step_done effect calls.
+	var conf := RecipeRunner.confirm_chore(specs, 11.0, finite)
+	_check("crew work resumes the step", bool(conf.get("ok", false)), str(conf))
+	_check("and it is no longer waiting",
+		not bool(specs.get("recipe_waiting_chore", false)))
+	# The equality that IS the merge's contract: the ledger moved by exactly
+	# the step's hours, once. Any second accounting path would break this.
+	_check("the ledger moved by exactly the step's hours",
+		_approx(finite.chore_hours_consumed_total - before, 0.49, 0.51),
+		"%.3f" % (finite.chore_hours_consumed_total - before))
+	_check("the crew marker is cleared on resume",
+		not specs.has("recipe_waiting_kind") and not specs.has("recipe_chore_id"))
+
+	# A require_confirm step is a DECISION, and must never be minted as crew
+	# work however finite the labour.
+	var recipe2 := {
+		"id": "confirmtest", "batch_time_hrs": 1.0,
+		"steps": [{"id": "sign", "at_frac": 0.5, "chore_hours": 0.25,
+			"require_confirm": true, "label": "Sign it off"}],
+	}
+	var specs2 := {}
+	RecipeRunner.begin_run(specs2, 20.0, recipe2)
+	RecipeRunner.tick_state(specs2, 20.6, 0.1, finite)
+	_check("a require_confirm step asks for a decision",
+		str(specs2.get("recipe_waiting_kind", "")) == "confirm",
+		str(specs2.get("recipe_waiting_kind", "")))
+
+	# With infinite labour nothing waits at all — the old behaviour, intact.
+	var specs3 := {}
+	var inf := ChoreLedger.create_default()   # infinite by default
+	RecipeRunner.begin_run(specs3, 30.0, recipe)
+	var t3 := RecipeRunner.tick_state(specs3, 30.6, 0.1, inf)
+	_check("infinite labour never waits for hands",
+		not bool(t3.get("waiting_chore", false)), str(t3))
+
+	# New maps get the crew-gated default; a SAVED ledger keeps its own value.
+	_check("new maps default to finite labour",
+		ChoreLedger.DEFAULT_INFINITE_FOR_NEW_MAPS == false)
 
 
 func _test_part_credits() -> void:

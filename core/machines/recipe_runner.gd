@@ -80,6 +80,8 @@ static func begin_run(specs: Dictionary, abs_hours: float, recipe: Dictionary = 
 	specs.erase("recipe_waiting_step_id")
 	specs.erase("recipe_waiting_label")
 	specs.erase("recipe_waiting_chore_hrs")
+	specs.erase("recipe_waiting_kind")
+	specs.erase("recipe_chore_id")
 	specs["batch_error"] = ""
 
 	if bool(r.get("require_confirm_start", false)):
@@ -107,6 +109,8 @@ static func cancel_run(specs: Dictionary) -> void:
 	specs.erase("recipe_waiting_step_id")
 	specs.erase("recipe_waiting_label")
 	specs.erase("recipe_waiting_chore_hrs")
+	specs.erase("recipe_waiting_kind")
+	specs.erase("recipe_chore_id")
 	specs.erase("batch_active_watts")
 	specs["batch_error"] = ""
 
@@ -117,7 +121,12 @@ static func confirm_chore(specs: Dictionary, abs_hours: float, ledger: ChoreLedg
 		return {"ok": false, "reason": "not_waiting"}
 	var hours := maxf(float(specs.get("recipe_waiting_chore_hrs", 0.0)), 0.0)
 	if ledger != null and hours > 0.0:
-		if not ledger.try_debit(hours):
+		if str(specs.get("recipe_waiting_kind", "")) == "crew":
+			# The hours were WORKED, by a person who walked here — record them,
+			# do not ask an abstract pool for permission. Asking would deadlock:
+			# finite labour means the pool is empty by design.
+			ledger.record_worked(hours)
+		elif not ledger.try_debit(hours):
 			return {"ok": false, "reason": "no_labor"}
 	var step_id := str(specs.get("recipe_waiting_step_id", ""))
 	var done: Array = specs.get("recipe_chore_done_steps", []) as Array
@@ -274,6 +283,9 @@ static func _try_enter_steps(specs: Dictionary, recipe: Dictionary, prev_frac: f
 			continue
 		if need_confirm:
 			_enter_chore_wait(specs, abs_hours, s)
+			# The designer asked for a human decision here, not for labour —
+			# never mint a crew chore for it.
+			specs["recipe_waiting_kind"] = "confirm"
 			specs["recipe_chore_done_steps"] = done
 			return {
 				"waiting_chore": true,
@@ -282,19 +294,26 @@ static func _try_enter_steps(specs: Dictionary, recipe: Dictionary, prev_frac: f
 					"step_id": sid,
 					"label": str(s.get("label", "Needs attention")),
 					"chore_hours": hours,
+					"kind": "confirm",
 				},
 			}
-		# Auto debit
+		# Auto debit — unless labour is finite, in which case this step needs
+		# actual HANDS. `recipe_waiting_kind = "crew"` is what tells
+		# NpcPopulationBridge to mint a real chore at the machine so somebody
+		# walks over and does it; the player Confirm button stays as the
+		# override for a machine no crew can reach.
 		if ledger != null and not ledger.can_auto_debit(hours):
 			_enter_chore_wait(specs, abs_hours, s)
+			specs["recipe_waiting_kind"] = "crew"
 			specs["recipe_chore_done_steps"] = done
 			return {
 				"waiting_chore": true,
 				"step": sid,
 				"chore_request": {
 					"step_id": sid,
-					"label": "Needs labor: %s" % str(s.get("label", sid)),
+					"label": str(s.get("label", sid)),
 					"chore_hours": hours,
+					"kind": "crew",
 				},
 			}
 		if ledger != null:
@@ -322,3 +341,5 @@ static func _exit_chore_wait(specs: Dictionary, abs_hours: float) -> void:
 	specs.erase("recipe_waiting_step_id")
 	specs.erase("recipe_waiting_label")
 	specs.erase("recipe_waiting_chore_hrs")
+	specs.erase("recipe_waiting_kind")
+	specs.erase("recipe_chore_id")

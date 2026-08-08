@@ -82,29 +82,44 @@ const MAX_PHASE_OFFSET_H := 0.5
 var blocks: Array = []   # [{start_h, end_h, kind}], ordered, may wrap midnight
 
 
-## The default day, from the routine the player sketched:
-##   23:30-09:00 sleep · 09:00-09:05 bathroom · 09:05-10:00 eat
-##   10:00-11:00 enrichment (yoga) · 11:00-13:00 work · 13:00-13:55 eat
+## The default day:
+##   23:30-08:00 sleep · 08:00-08:05 bathroom · 08:05-09:00 eat
+##   09:00-10:00 enrichment (yoga) · 10:00-13:00 work · 13:00-13:55 eat
 ##   13:55-14:00 bathroom · 14:00-18:00 work · 18:00-19:00 eat
-##   19:00-19:05 bathroom · 19:05-23:00 enrichment-or-chores · 23:00-23:30 wash
+##   19:00-19:05 bathroom · 19:05-23:00 FREE · 23:00-23:30 wash
 ##
-## The trailing wash block is the one addition: hygiene is a need the sim
-## already models, and leaving it unscheduled meant it only ever fired as an
-## interruption.
+## The trailing wash block: hygiene is a need the sim already models, and
+## leaving it unscheduled meant it only ever fired as an interruption.
+##
+## TWO THINGS HERE ARE LOAD-BEARING for whether scheduled work ever finishes.
+##
+## 1. The evening block is **FREE, not ENRICHMENT**. Only WORK and FREE reach
+##    `_begin_chore`; every other kind has a `KIND_ACTIVITY` entry, so
+##    `_step_idle` calls `_begin_need(scheduled)` and returns. Typed as
+##    ENRICHMENT — as it was — that four-hour block could never contribute a
+##    single minute to the chore board, despite this comment calling it
+##    "enrichment-or-chores" all along. FREE falls through to tier 3 (chores)
+##    and then tier 4 (gathering), which is what the comment always described.
+## 2. Sleep ends at 08:00, not 09:00, matching `SLEEP_END_H` (6.0) plus its
+##    jitter and freeing an hour into the morning.
+##
+## Net: ~10.9 chore-eligible hours a day (7 WORK + 3.9 FREE) against 6 before.
+## `_test_default_day_work_budget` pins that so a future routine edit cannot
+## quietly re-starve the board.
 static func default_day() -> NpcRoutine:
 	var r := NpcRoutine.new()
 	r.blocks = [
-		{"start_h": 23.5, "end_h": 9.0, "kind": SLEEP},
-		{"start_h": 9.0, "end_h": 9.0 + BATHROOM_HOURS, "kind": BATHROOM},
-		{"start_h": 9.0 + BATHROOM_HOURS, "end_h": 10.0, "kind": EAT},
-		{"start_h": 10.0, "end_h": 11.0, "kind": ENRICHMENT},
-		{"start_h": 11.0, "end_h": 13.0, "kind": WORK},
+		{"start_h": 23.5, "end_h": 8.0, "kind": SLEEP},
+		{"start_h": 8.0, "end_h": 8.0 + BATHROOM_HOURS, "kind": BATHROOM},
+		{"start_h": 8.0 + BATHROOM_HOURS, "end_h": 9.0, "kind": EAT},
+		{"start_h": 9.0, "end_h": 10.0, "kind": ENRICHMENT},
+		{"start_h": 10.0, "end_h": 13.0, "kind": WORK},
 		{"start_h": 13.0, "end_h": 14.0 - BATHROOM_HOURS, "kind": EAT},
 		{"start_h": 14.0 - BATHROOM_HOURS, "end_h": 14.0, "kind": BATHROOM},
 		{"start_h": 14.0, "end_h": 18.0, "kind": WORK},
 		{"start_h": 18.0, "end_h": 19.0, "kind": EAT},
 		{"start_h": 19.0, "end_h": 19.0 + BATHROOM_HOURS, "kind": BATHROOM},
-		{"start_h": 19.0 + BATHROOM_HOURS, "end_h": 23.0, "kind": ENRICHMENT},
+		{"start_h": 19.0 + BATHROOM_HOURS, "end_h": 23.0, "kind": FREE},
 		{"start_h": 23.0, "end_h": 23.5, "kind": WASH},
 	]
 	return r
@@ -116,14 +131,12 @@ static func offset_for(agent_id: String) -> float:
 	# Godot's string hash for a sequence like "hab_npc_0".."hab_npc_23" is
 	# nearly sequential, and taking that modulo a small number lands everyone
 	# in a handful of buckets — 24 people produced 4 distinct offsets, which is
-	# still a camp moving in lockstep. Avalanche the bits first so neighbouring
-	# ids scatter.
-	var h := absi(hash(agent_id))
-	h = (h ^ (h >> 16)) * 0x7feb352d
-	h = (h ^ (h >> 15)) * 0x846ca68b
-	h = absi(h ^ (h >> 16))
+	# still a camp moving in lockstep. NpcHash avalanches the bits first so
+	# neighbouring ids scatter; this call is BIT-IDENTICAL to the arithmetic
+	# that used to be inline here, and the selftest pins that against a frozen
+	# literal because these offsets move every downstream sim golden.
 	# -MAX..+MAX, quantised finely enough to look unplanned.
-	return (float(h % 10007) / 10006.0 * 2.0 - 1.0) * MAX_PHASE_OFFSET_H
+	return (NpcHash.unit01(agent_id) * 2.0 - 1.0) * MAX_PHASE_OFFSET_H
 
 
 ## The block covering `hour_of_day` for an agent with this phase offset.

@@ -1,14 +1,31 @@
 class_name ChoreLedger
 extends RefCounted
 
-## Per-map human-attention (chore hours) ledger. Hybrid model:
-##   - infinite_labor (default true): auto-debit never blocks for scarcity
-##   - when infinite_labor is false, available hours gate auto steps
-##   - require_confirm steps always pause for player Confirm regardless
+## Per-map human-attention (chore hours) ledger.
+##
+## Since the labour merge this is the **meter, not the supply**. A recipe step
+## that needs hands no longer draws from an abstract pool — it mints a real
+## chore at the machine (NpcPopulationBridge.ensure_machine_chore) and waits
+## for somebody to walk over and do it. The completed chore's effect calls the
+## same `confirm_chore` the player's button always did, which debits here — so
+## the totals that feed the Site Report keep working, with the crew as the
+## gate. One code path, two roles, no duplicate accounting.
+##
+##   - infinite_labor TRUE: the old behaviour — auto-debit never pauses, and
+##     machines effectively run themselves. Now a DIFFICULTY setting.
+##   - infinite_labor FALSE: labour-gated steps wait for the crew (or for the
+##     player's Confirm, which stays as the override when no crew can reach).
+##   - require_confirm steps always pause for the player regardless: the
+##     designer asked for a decision, not for hands.
 ##
 ## Persisted at user://maps/labor_<lat>_<lon>.json
 
 const VERSION := 1
+
+## Default for a map that has never had a ledger saved. FALSE so new sites get
+## the crew-gated behaviour; `TerrainLoader` keeps a LOADED ledger exactly as
+## it was, so no existing site silently stops producing.
+const DEFAULT_INFINITE_FOR_NEW_MAPS := false
 
 ## When true, auto-debit steps never pause for insufficient labor.
 var infinite_labor: bool = true
@@ -88,10 +105,20 @@ func try_debit(hours: float) -> bool:
 	return true
 
 
-func credit_available(hours: float) -> void:
+## Record hours a REAL PERSON actually worked. Never refuses, and never draws
+## down `chore_hours_available`, because the labour did not come from that
+## pool — a crew member walked to the machine and did it. This is the ledger
+## acting as the METER while the crew is the gate; `try_debit` remains the
+## abstract-pool path for `infinite_labor` maps and the player's own Confirm.
+##
+## Without this the merge deadlocks in the obvious way: finite labour means an
+## empty pool, an empty pool refuses the debit, and the step the crew just
+## finished refuses to resume.
+func record_worked(hours: float) -> void:
 	if hours <= 0.0:
 		return
-	chore_hours_available += hours
+	chore_hours_consumed_total += hours
+	chore_hours_consumed_ytd += hours
 
 
 func set_infinite(v: bool) -> void:
