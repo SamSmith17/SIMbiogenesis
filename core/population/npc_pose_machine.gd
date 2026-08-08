@@ -77,6 +77,15 @@ var _anchor_age := 0.0
 var _activity := ""
 var _space_type := ""
 var _sad := false
+## Hauling a load this frame (Site Projects carry leg). Arrives as a step()
+## INPUT — the machine has no back-channel to the sim — and only ever affects
+## which GAIT plays: carrying is a property of travel, never of a pose.
+var _carrying := false
+## Which WORK family the current chore is, classified by NpcWorkPose in the
+## engine and forwarded on the dot. An INPUT, never internal state — the
+## machine's purity contract means any per-agent or per-job variation has to
+## arrive through step() rather than be drawn inside it.
+var _work_pose := ""
 var _walk_variant: String = ""
 ## The pose currently occupied. Getting OUT of something is a property of what
 ## you are in, not of where you are going next — and by the time an abort runs,
@@ -172,7 +181,7 @@ func anchor(lag_m: float) -> bool:
 
 ## `inp`: {in_transit: bool, activity: String, space_type: String,
 ##         morale: float, dwell_left_s: float, teleported: bool,
-##         finished: bool}
+##         finished: bool, carrying: bool}
 func step(dt: float, inp: Dictionary) -> void:
 	_changed = false
 	dt = maxf(dt, 0.0)
@@ -187,6 +196,8 @@ func step(dt: float, inp: Dictionary) -> void:
 	var space_type := str(inp.get("space_type", ""))
 	var teleported := bool(inp.get("teleported", false))
 	var dwell := float(inp.get("dwell_left_s", 0.0))
+	_carrying = bool(inp.get("carrying", false))
+	_work_pose = str(inp.get("work_pose", ""))
 	_update_mood(float(inp.get("morale", 1.0)))
 	_playback_rate = maxf(float(inp.get("playback_rate", 1.0)), 0.05)
 
@@ -279,6 +290,10 @@ func _idle_clip() -> String:
 
 
 func _walk_clip() -> String:
+	# Carrying wins over mood and variant: a dejected hauler still hauls, and
+	# the load is the read that matters at silhouette distance.
+	if _carrying and _has(NpcRig.CLIP_CARRY):
+		return NpcRig.CLIP_CARRY
 	if _sad and _has(NpcRig.CLIP_WALK_SAD):
 		return NpcRig.CLIP_WALK_SAD
 	if not _walk_variant.is_empty() and _has(_walk_variant):
@@ -304,7 +319,16 @@ func _pose_clip() -> String:
 			# "bladder" had no entry at all before, so it rendered as standing.
 			return NpcRig.CLIP_SIT
 		"chore":
-			return NpcRig.CLIP_WORK
+			# WHICH work, not just "work". NpcWorkPose.HAUL_HOLD subsumes the
+			# old carrying special case (a DOING agent flagged carrying IS the
+			# brigade station worker), so this is one rule where it was two.
+			# The families alias onto CLIP_WORK for the rigged body, so this
+			# changes nothing there and everything on the stick figure.
+			var fam := _work_pose if not _work_pose.is_empty() else NpcWorkPose.DIG
+			if _carrying and _has(NpcRig.CLIP_CARRY_IDLE):
+				return NpcRig.CLIP_CARRY_IDLE
+			var want := NpcWorkPose.clip_for(fam)
+			return want if _has(want) else NpcRig.CLIP_WORK
 		"enrichment":
 			match _space_type:
 				"movement":
@@ -331,24 +355,50 @@ func _transitions_for(pose: String) -> Array:
 			return [NpcRig.CLIP_SLEEP_ENTER, NpcRig.CLIP_SLEEP_EXIT]
 		NpcRig.CLIP_SIT, NpcRig.CLIP_CLAP_SIT:
 			return [NpcRig.CLIP_SIT_ENTER, NpcRig.CLIP_SIT_EXIT]
+	# Work gets a squaring-up and a straightening-up. The EXIT is the one that
+	# pays: without it a worker snaps out of a deep stoop directly into a
+	# stride. Chores report `dwell_left_s = INF`, so _budget_allows always
+	# grants — acceptable rather than sloppy, because the one-shot length is
+	# divided by the playback rate (a 0.45 s exit is 0.04 s at 12x) and an
+	# abort leaves at most a MIN_STATE_S stub.
+	if NpcWorkPose.is_work_clip(pose):
+		return [NpcWorkPose.CLIP_WORK_ENTER, NpcWorkPose.CLIP_WORK_EXIT]
 	return ["", ""]
 
 
-## `sit_enter` is not a file — it is `sit_exit` reversed.
+## `sit_enter` is not a file — it is `sit_exit` reversed. `carry`/`carry_idle`
+## are not files either — the rigged body plays the plain walk / idle under
+## the attached box.
 static func _clip_file_for(clip: String) -> String:
-	return NpcRig.CLIP_SIT_EXIT if clip == NpcRig.CLIP_SIT_ENTER else clip
+	if clip == NpcRig.CLIP_SIT_ENTER:
+		return NpcRig.CLIP_SIT_EXIT
+	if clip == NpcRig.CLIP_CARRY:
+		return NpcRig.CLIP_WALK
+	if clip == NpcRig.CLIP_CARRY_IDLE:
+		return NpcRig.CLIP_IDLE
+	# Every work FAMILY is the rigged body's one work clip. The stick figure
+	# matches the logical name before this mapping runs and draws the family.
+	if NpcWorkPose.is_work_clip(clip):
+		return NpcRig.CLIP_WORK
+	if clip == NpcWorkPose.CLIP_WORK_ENTER or clip == NpcWorkPose.CLIP_WORK_EXIT:
+		return NpcRig.CLIP_WORK
+	return clip
 
 
 static func _is_reversed(clip: String) -> bool:
 	return clip == NpcRig.CLIP_SIT_ENTER
 
 
+## Identity first, alias second. Today `carry`/`carry_idle` have no file of
+## their own and fall through to walk/idle; the day a real carry FBX is
+## installed the catalog carries the logical name directly and this picks it
+## up with no further edit — the alias retires itself.
 func _has(clip: String) -> bool:
-	return _catalog.has(_clip_file_for(clip))
+	return _catalog.has(clip) or _catalog.has(_clip_file_for(clip))
 
 
 func _len_of(clip: String) -> float:
-	var e: Dictionary = _catalog.get(_clip_file_for(clip), {})
+	var e: Dictionary = _catalog.get(clip, _catalog.get(_clip_file_for(clip), {}))
 	return float(e.get("len", 0.0))
 
 
@@ -379,7 +429,8 @@ func _hard_cut(clip: String, blend: float) -> void:
 
 func _clip_is_walk(clip: String) -> bool:
 	return clip == NpcRig.CLIP_WALK or clip == NpcRig.CLIP_WALK_SAD \
-		or clip == NpcRig.CLIP_WALK_ALT or clip == NpcRig.CLIP_WALK_ALT2
+		or clip == NpcRig.CLIP_WALK_ALT or clip == NpcRig.CLIP_WALK_ALT2 \
+		or clip == NpcRig.CLIP_CARRY
 
 
 func _go(new_state: int) -> void:

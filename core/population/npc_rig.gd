@@ -39,6 +39,20 @@ const CLIP_DANCE := "dance"
 const CLIP_WALK_START := "walk_start"
 const CLIP_WALK_STOP := "walk_stop"
 
+## LOGICAL clip only — no Mixamo carry clip exists in the pack, so the pose
+## machine emits this while an agent hauls a crate (Site Projects) and
+## NpcPoseMachine._clip_file_for maps it onto the plain walk for the rigged
+## body (the carried box is a separate attached mesh). The simple figure
+## matches on the logical name and plays a real two-hand hold. Adding a real
+## clip later means: SOURCES entry (mind the role measurement — a lift
+## measures as descend/ascend and would get a wrong ground-offset curve
+## without an exemption) + retiring the file-clip mapping.
+const CLIP_CARRY := "carry"
+## Standing hold — a bucket-brigade station worker with crates flowing
+## through their hands. Logical only, same contract as CLIP_CARRY: the rig
+## plays plain idle under the chest box, the simple figure poses the hold.
+const CLIP_CARRY_IDLE := "carry_idle"
+
 ## Posture transitions, all one-shots.
 ##
 ## Sleep has a genuine matched PAIR — "Idle To Situp" measured as a descend
@@ -103,6 +117,18 @@ const SOURCES := {
 	"Standing Clap.fbx": [CLIP_CLAP, true, ROLE_CYCLIC],
 	"Sitting Clap.fbx": [CLIP_CLAP_SIT, true, ROLE_STATIC],
 	"Arms Hip Hop Dance.fbx": [CLIP_DANCE, true, ROLE_CYCLIC],
+	# --- carry: NOT YET SOURCED ------------------------------------------
+	# Nothing in the shipped pack can serve — every file is bound above, and
+	# the only spare (Male Sitting Pose.fbx) is a static seated pose. Until a
+	# Mixamo lift/carry export lands, NpcPoseMachine._clip_file_for maps the
+	# logical carry clips onto walk/idle under the avatar's chest box, which
+	# reads acceptably at silhouette distance.
+	#
+	# To enable: download the FBX to Imported Models/NPC/, uncomment, and add
+	# it to the ASSETS.md table. The 4th column FORCES the role — see
+	# ROLE_CARRY for why measuring a lift is actively harmful.
+	# "Walking With Box.fbx": [CLIP_CARRY, true, "", ROLE_CARRY],
+	# "Idle With Box.fbx": [CLIP_CARRY_IDLE, true, "", ROLE_CARRY],
 }
 
 ## Mixamo's own take name, identical in every file.
@@ -303,12 +329,20 @@ static func _ensure_loaded() -> void:
 		# the locomotion roles, and flattening destroys it.
 		var m := measure(anim)
 		var measured_role := classify(m)
-		var expected_role := String(spec[2]) if spec.size() > 2 else ""
-		if not expected_role.is_empty() and measured_role != expected_role:
-			push_warning("NpcRig: %s measured as '%s' but SOURCES expects '%s' — skipped"
-				% [file, measured_role, expected_role])
-			continue
-		m["role"] = measured_role
+		# 4th column FORCES a role classify() cannot produce (see ROLE_CARRY).
+		# The measurement is kept either way: discarding it would give up the
+		# swapped-export protection this whole column exists for.
+		var forced_role := String(spec[3]) if spec.size() > 3 else ""
+		m["measured_role"] = measured_role
+		if forced_role.is_empty():
+			var expected_role := String(spec[2]) if spec.size() > 2 else ""
+			if not expected_role.is_empty() and measured_role != expected_role:
+				push_warning("NpcRig: %s measured as '%s' but SOURCES expects '%s' — skipped"
+					% [file, measured_role, expected_role])
+				continue
+			m["role"] = measured_role
+		else:
+			m["role"] = forced_role
 		_measurements[clip_name] = m
 		_clip_len[clip_name] = anim.length
 		_clip_cycle_m[clip_name] = float(m["hip_xz_travel_m"])
@@ -363,6 +397,17 @@ const ROLE_ASCEND := "ascend"       # seated/lying -> standing
 const ROLE_CYCLIC := "cyclic"       # a repeating in-place motion
 const ROLE_STATIC := "static"       # a held pose
 const ROLE_UNKNOWN := "unknown"
+## Hauling a load. FORCED via the SOURCES 4th column, never returned by
+## classify() — carrying is an ARMS pose and measure() reads the hips, so a
+## role the classifier can never produce must never be used as an assertion.
+##
+## Its real job is `role_needs_offset_curve`: a lift clip dips to grab the
+## crate, which measures as DESCEND, and the offset-curve builder would then
+## land the bottom of the lift at SEATED/LYING hip height — sinking the figure
+## ~0.7 m into the ground mid-pickup. Being neither DESCEND nor ASCEND takes
+## the constant-fill path instead, which is correct for a clip that starts and
+## ends standing.
+const ROLE_CARRY := "carry"
 
 ## Vertical movement below this reads as noise rather than a real rise or fall.
 const Y_NOISE_M := 0.03
@@ -517,6 +562,19 @@ static func measure_file(file_name: String) -> Dictionary:
 	return m
 
 
+## Does this role's clip change LEVEL, and therefore need a sampled ground
+## offset rather than one constant?
+##
+## Extracted so the rule is pinnable offline with no assets installed. It is
+## the single guard standing between a future lift/carry clip and a figure
+## that sinks ~0.7 m into the ground mid-pickup: a lift dips to grab the
+## crate, measures DESCEND, and the curve below would then land the bottom of
+## that dip at seated or lying hip height. ROLE_CARRY is forced precisely so
+## it lands here as false.
+static func role_needs_offset_curve(role: String) -> bool:
+	return role == ROLE_DESCEND or role == ROLE_ASCEND
+
+
 ## Ground offset sampled across a clip, rather than one number for the whole
 ## thing.
 ##
@@ -535,7 +593,7 @@ static func _build_offset_curve(anim: Animation, clip_name: String) -> PackedFlo
 	# Only genuine level changes get a curve. A squat swings the hips 0.55 m
 	# without going anywhere; treating that as a transition would try to land
 	# the bottom of the rep at seated height.
-	if role != ROLE_DESCEND and role != ROLE_ASCEND:
+	if not role_needs_offset_curve(role):
 		out.resize(OFFSET_CURVE_SAMPLES)
 		out.fill(settled)
 		return out
@@ -632,7 +690,7 @@ static func walk_variant_for(agent_id: String) -> String:
 			avail.append(String(c))
 	if avail.is_empty():
 		return CLIP_WALK
-	return String(avail[absi(hash(agent_id)) % avail.size()])
+	return String(avail[NpcHash.pick(agent_id, "gait", avail.size())])
 
 static func _extract(path: String) -> Animation:
 	if not ResourceLoader.exists(path):

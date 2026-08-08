@@ -88,6 +88,14 @@ var _frozen := false
 var _apparent_speed := WALK_SPEED_MPS
 ## Sim seconds per real second, so loops keep pace with the clock.
 var _time_mult := 1.0
+## Hauling a crate this frame (Site Projects). The simple figure draws its own
+## box as part of the carry pose; the rigged body shows this avatar-frame box
+## instead (chest height, forward −Z) — deliberately NOT a bone attachment in
+## v1: with no carry clip the walk arms would swing through a hand-held box
+## anyway, and under the silhouette shader a stable chest box reads better
+## than a bobbing intersecting one.
+var _carrying := false
+var _rig_carry_box: MeshInstance3D = null
 
 
 func setup(p_agent_id: String, color: Color, p_name: String = "") -> void:
@@ -95,7 +103,13 @@ func setup(p_agent_id: String, color: Color, p_name: String = "") -> void:
 	display_name = p_name if not p_name.is_empty() else p_agent_id
 	name = "Npc_%s" % p_agent_id.validate_node_name()
 	_machine = NpcPoseMachine.new()
-	_machine.set_catalog(NpcRig.catalog())
+	# Merged HERE and not inside NpcRig.catalog(): that function answers "what
+	# animation art is installed" and other callers depend on that meaning,
+	# while the work families and their transitions are procedural and exist
+	# whether or not the (gitignored) Mixamo pack is present. Without the merge
+	# every _has() guard skips them on a fresh clone — silently, on exactly the
+	# body they were written for.
+	_machine.set_catalog(NpcWorkPose.merge_catalog(NpcRig.catalog()))
 	_machine.set_walk_variant(NpcRig.walk_variant_for(p_agent_id))
 	_ensure_visuals()
 	# The articulated figure owns its own material. The old fixed-primitive
@@ -345,6 +359,7 @@ func _drive(dt: float, inp: Dictionary) -> void:
 	_space_type = str(inp.get("space_type", ""))
 	_apparent_speed = float(inp.get("apparent_speed_mps", WALK_SPEED_MPS))
 	_time_mult = clampf(float(inp.get("time_mult", 1.0)), 0.05, NpcRig.MAX_PLAYBACK_RATE)
+	_carrying = bool(inp.get("carrying", false))
 	if _machine == null:
 		_lying = _activity == "sleep"
 		return
@@ -360,10 +375,46 @@ func _drive(dt: float, inp: Dictionary) -> void:
 	_lying = _machine.is_lying()
 	if _rigged and _machine.changed():
 		_apply_clip(_machine.clip(), _machine.backwards(), _machine.blend_s(), false)
-	elif _rigged:
+	else:
 		# Rate is refreshed every frame, not only on a clip change: apparent
 		# speed varies continuously and the time scale can be changed mid-stride.
-		_refresh_speed_scale()
+		# This runs for the SIMPLE body too — _process hands _speed_scale to
+		# _simple.pose, and computing the rate only on the rigged path left
+		# every stylised figure at a stale rate forever (no time-lapse, gait
+		# skating at speed). _clip is maintained only by _apply_clip, so the
+		# simple body reads the machine's clip directly.
+		_refresh_speed_scale(NpcPoseMachine._clip_file_for(
+			_clip if _rigged else _machine.clip()))
+	_update_carry_box()
+
+
+## Rigged-body carried-crate visual. Re-derived from current state every step
+## (never edge-triggered), so a body swap, a teleport hard-cut, or a culled
+## frame can never strand a floating box.
+##
+## DELIBERATELY parented to the avatar, not bone-attached — and it should STAY
+## that way even once a real carry clip lands. A BoneAttachment3D costs a
+## per-frame global-transform update per avatar, against a roster of up to 64
+## with an LOD budget tuned to avoid exactly that class of cost, and it would
+## also break this function's "can never strand a box" invariant (the
+## attachment has to be torn down whenever the rig node is freed on a body
+## swap). Bone-attach only if a future clip's hands actually converge on a
+## point the chest box cannot fake.
+func _update_carry_box() -> void:
+	var want := _rigged and _carrying
+	if _rig_carry_box != null:
+		_rig_carry_box.visible = want
+	if not want or _rig_carry_box != null:
+		return
+	_rig_carry_box = MeshInstance3D.new()
+	_rig_carry_box.name = "CarryBox"
+	var box := BoxMesh.new()
+	box.size = Vector3(0.42, 0.32, 0.30)
+	_rig_carry_box.mesh = box
+	_rig_carry_box.position = Vector3(0.0, 1.02, -0.36)
+	if _rig_mat != null:
+		_rig_carry_box.material_override = _rig_mat
+	add_child(_rig_carry_box)
 
 
 ## Playhead position within the current clip, so a test can prove the figure
@@ -375,6 +426,14 @@ func clip_position() -> float:
 ## The clip actually playing, for diagnostics.
 func current_clip() -> String:
 	return _clip
+
+
+## The LOGICAL clip the pose machine chose, before `_clip_file_for` collapses
+## the aliases. `current_clip()` reports the rigged body's file, which maps
+## every work family onto `CLIP_WORK` — so it can never tell you which family
+## is being drawn. This can, on either body style.
+func pose_clip() -> String:
+	return _machine.clip() if _machine != null else ""
 
 
 ## Is this figure playing a gait?
@@ -447,8 +506,6 @@ func _apply_clip(clip: String, backwards: bool, blend: float, immediate: bool) -
 ## the clock, so a work or dance loop reads as time-lapse rather than as
 ## somebody calmly pottering while the day races past.
 func _refresh_speed_scale(file_clip: String = "") -> void:
-	if _rig_ap == null:
-		return
 	if file_clip.is_empty():
 		file_clip = NpcPoseMachine._clip_file_for(_clip)
 	if file_clip.is_empty():
@@ -457,7 +514,9 @@ func _refresh_speed_scale(file_clip: String = "") -> void:
 	if is_equal_approx(want, _speed_scale) and not _frozen:
 		return
 	_speed_scale = want
-	_rig_ap.speed_scale = 0.0 if _frozen else _speed_scale
+	# The rate is state either way; the AnimationPlayer only exists when rigged.
+	if _rig_ap != null:
+		_rig_ap.speed_scale = 0.0 if _frozen else _speed_scale
 
 
 static func _is_gait(clip: String) -> bool:

@@ -64,6 +64,28 @@ var _moved_at: Dictionary = {}     # agent_id -> time of last sim movement (fall
 var _anchor_pos: Dictionary = {}   # agent_id -> Vector3 held while standing up
 var _now := 0.0
 var _focus_id: String = ""         # agent the crosshair is on (nametag shown)
+## Crate props currently hidden because someone is CARRYING them (Site
+## Projects). Node-visibility only — never the persisted hidden_3d record key,
+## which belongs to the placeholder-twins feature. Re-derived from the dot
+## payload every frame, so a prop rebuild mid-carry self-heals next frame.
+var _hidden_props: Dictionary = {}
+## In-world work-site markers (Site Projects): an amber disc + readout at each
+## ACTIVE crew site, mirroring the Site Plan's crew markers so a build is
+## legible from the ground too. Pooled, refreshed on a coarse cadence.
+const CREW_MARKER_MAX := 5
+const CREW_MARKER_REFRESH_S := 0.5
+var _crew_markers: Array = []        # of {root, disc_mat, label}
+var _crew_marker_accum := 0.0
+## Multiplier on the LOD distances. CULL_DIST_M/FAR_DIST_M are tuned for a
+## first-person camera at eye height; the settlement view sits hundreds of
+## metres up, where those numbers would hide the entire camp. Raised while
+## that view is open and restored on exit. MAX_RIGGED is deliberately NOT
+## scaled — twelve skinned bodies is the budget whatever the viewpoint.
+var _range_scale := 1.0
+
+
+func set_view_range_scale(scale: float) -> void:
+	_range_scale = clampf(scale, 1.0, 20.0)
 
 
 func setup(bridge, main: Node) -> void:
@@ -79,6 +101,7 @@ func _process(delta: float) -> void:
 	var dots: Array = _bridge.agent_dots()
 	var seen: Dictionary = {}
 	var near: Array = []   # [dist, agent_id] candidates for the rigged body
+	var carried: Dictionary = {}   # prop_id -> true (crates in someone's arms)
 	var eye := _viewer_xz()
 	for dot_v in dots:
 		if not (dot_v is Dictionary):
@@ -88,6 +111,12 @@ func _process(delta: float) -> void:
 		if aid.is_empty():
 			continue
 		seen[aid] = true
+		# Gathered for EVERY dot (before the cull gate): a crate must stay
+		# hidden even while its carrier is beyond the avatar cull distance.
+		if bool(dot.get("carrying", false)):
+			var cp := str(dot.get("carry_prop", ""))
+			if not cp.is_empty():
+				carried[cp] = true
 		var av: NpcAvatar = _avatars.get(aid)
 		if av == null:
 			av = NpcAvatar.new()
@@ -100,7 +129,18 @@ func _process(delta: float) -> void:
 		av.set_morale(float(dot.get("morale", 0.0)))
 		var sim_pos: Vector2 = dot.get("pos", Vector2.ZERO)
 		var dist := (sim_pos - eye).length()
-		if dist > CULL_DIST_M:
+		# A person someone is PLAYING is never culled, never quarter-rate posed,
+		# and always keeps the rigged body: LOD is an economy for background
+		# figures, and applying it to a player would make them vanish or stutter
+		# for everyone else at exactly the distance the rest of the group stands.
+		if bool(dot.get("possessed", false)):
+			if not av.visible:
+				av.visible = true
+				av.set_process(true)
+			near.push_front([-1.0, aid])
+			_pose_avatar(av, aid, dot, delta)
+			continue
+		if dist > CULL_DIST_M * _range_scale:
 			if av.visible:
 				av.visible = false
 				av.set_process(false)
@@ -116,7 +156,7 @@ func _process(delta: float) -> void:
 			near.append([dist, aid])
 		else:
 			av.set_detail(false)
-		if dist > FAR_DIST_M:
+		if dist > FAR_DIST_M * _range_scale:
 			# Distant figures don't need per-frame smoothing; batch their pose.
 			var acc := float(_far_accum.get(aid, 0.0)) + delta
 			if acc < FAR_POSE_INTERVAL_S:
@@ -128,6 +168,11 @@ func _process(delta: float) -> void:
 			_pose_avatar(av, aid, dot, delta)
 		av.set_tag_visible(aid == _focus_id)
 	_apply_rig_budget(near)
+	_reconcile_carried_props(carried)
+	_crew_marker_accum += delta
+	if _crew_marker_accum >= CREW_MARKER_REFRESH_S:
+		_crew_marker_accum = 0.0
+		_update_crew_markers()
 	# Despawn agents that left the roster (count change / pop_driven off).
 	# .keys() allocates a fresh Array every call, and the roster is unchanged on
 	# the overwhelming majority of frames — if every avatar was seen this frame
@@ -162,6 +207,110 @@ func _apply_rig_budget(near: Array) -> void:
 		var av: NpcAvatar = _avatars.get(str(near[i][1]))
 		if av != null and is_instance_valid(av):
 			av.set_detail(i < MAX_RIGGED)
+
+
+## In-world crew-site markers: pooled discs + readouts at active work sites,
+## fed by the same bridge payload the Site Plan draws from. Ground queries run
+## only on this coarse cadence for at most CREW_MARKER_MAX sites.
+func _update_crew_markers() -> void:
+	var marks: Array = []
+	if _bridge != null and _bridge.has_method("crew_site_markers"):
+		marks = _bridge.crew_site_markers(_main)
+	for i in CREW_MARKER_MAX:
+		var have := i < marks.size()
+		if i >= _crew_markers.size():
+			if not have:
+				break
+			_crew_markers.append(_build_crew_marker())
+		var m: Dictionary = _crew_markers[i]
+		var root := m["root"] as Node3D
+		if not have:
+			root.visible = false
+			continue
+		var mark := marks[i] as Dictionary
+		var pos: Vector2 = mark.get("pos", Vector2.ZERO)
+		var gy := TerrainSurfaceQuery.ground_height_at(_main, pos.x, pos.y)
+		root.visible = true
+		root.position = Vector3(pos.x, gy + 0.12, pos.y)
+		var quorum := bool(mark.get("quorum", true))
+		var col := Color(1.0, 0.72, 0.20, 0.45) if quorum \
+			else Color(0.95, 0.55, 0.25, 0.35)
+		(m["disc_mat"] as StandardMaterial3D).albedo_color = col
+		var lbl := m["label"] as Label3D
+		var crew_txt := "%d/%d — gathering" % [int(mark.get("workers", 0)),
+				int(mark.get("min_workers", 1))] if not quorum \
+			else "%d ppl · %d%%" % [int(mark.get("workers", 0)),
+				int(round(float(mark.get("progress", 0.0)) * 100.0))]
+		lbl.text = "🔨 %s\n%s" % [str(mark.get("label", "")), crew_txt]
+		lbl.modulate = Color(1.0, 0.85, 0.55) if quorum else Color(1.0, 0.7, 0.45)
+
+
+func _build_crew_marker() -> Dictionary:
+	var root := Node3D.new()
+	root.name = "CrewSiteMarker%d" % _crew_markers.size()
+	add_child(root)
+	var disc := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 2.4
+	cyl.bottom_radius = 2.4
+	cyl.height = 0.05
+	disc.mesh = cyl
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1.0, 0.72, 0.20, 0.45)
+	disc.material_override = mat
+	disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(disc)
+	var lbl := Label3D.new()
+	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lbl.no_depth_test = true
+	lbl.font_size = 40
+	lbl.pixel_size = 0.006
+	lbl.outline_size = 10
+	lbl.position = Vector3(0.0, 2.4, 0.0)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(lbl)
+	return {"root": root, "disc_mat": mat, "label": lbl}
+
+
+## Hide crates that are in someone's arms; restore the ones set down (or whose
+## carry was preempted — the record never moved, so showing it where it stands
+## is correct). Hiding is re-asserted EVERY frame for the carried set, so a
+## _rebuild_placed_props that respawned a hidden crate visible self-heals on
+## the next frame; only the ids that LEFT the set pay a restore lookup.
+func _reconcile_carried_props(carried: Dictionary) -> void:
+	if carried.is_empty() and _hidden_props.is_empty():
+		return
+	for pid in carried:
+		var node := _find_prop_node(str(pid))
+		if node != null:
+			node.visible = false
+	for pid in _hidden_props:
+		if carried.has(pid):
+			continue
+		var node2 := _find_prop_node(str(pid))
+		if node2 != null:
+			node2.visible = true
+	_hidden_props = carried
+
+
+func _exit_tree() -> void:
+	# The host dying mid-carry (view closed, map change) must not leave crates
+	# invisible until the next full prop rebuild.
+	_reconcile_carried_props({})
+
+
+func _find_prop_node(prop_id: String) -> Node3D:
+	if _main == null or not is_instance_valid(_main):
+		return null
+	var root := _main.find_child("PlacedProps", true, false)
+	if root == null:
+		return null
+	for child in root.get_children():
+		if child is PlacedProp and str((child as PlacedProp).prop_id) == prop_id:
+			return child as Node3D
+	return null
 
 
 ## Re-tint every already-spawned avatar from NpcDisplayPrefs — called when the
@@ -222,6 +371,52 @@ func _ground_y(aid: String, xz: Vector2) -> float:
 ## arrival pose (lying down, for a trip to bed) while still sliding across the
 ## site. No epsilon fixes that; it is aliasing a stepped signal, so the signal
 ## itself has to change.
+## A person a remote player is driving. Everything the normal path does to make
+## a SIMULATED walk read well works against direct control:
+##
+##  * the SMOOTH_RATE lerp adds ~125 ms of lag — under a player's own input that
+##    reads as the controls being broken, not as smoothing;
+##  * `wants_anchor` deliberately PINS the body for up to 1.2 s while a stand-up
+##    animation plays, which under control reads as input dropping out;
+##  * `paused`/`time_mult` come from the world clock, so a possessed body would
+##    go rigid the moment the host paused or scrubbed;
+##  * `in_transit` comes from the sim's TRAVELING state, which a possessed agent
+##    never enters — so the figure would never play a walk cycle.
+##
+## The yaw comes from the player's own look direction (published in the presence
+## packet), not from the direction of travel: a person can look where they like
+## while walking, and deriving it would fight strafing.
+func _pose_possessed(av: NpcAvatar, aid: String, dot: Dictionary, delta: float,
+		target: Vector3, cur: Vector3, prev: Vector2, sim_pos: Vector2) -> void:
+	_arrive_wait.erase(aid)
+	_anchor_pos.erase(aid)
+	var moved := (sim_pos - prev).length()
+	if moved > MOVE_EPS_M:
+		_moved_at[aid] = _now
+	var in_transit := _now - float(_moved_at.get(aid, -999.0)) < MOVE_HOLD_S
+	var yaw := float(dot.get("yaw", av.rotation.y))
+	# 1:1 with the incoming position, except for a teleport-scale jump which is
+	# still eased so a respawn does not read as a glitch.
+	var next := target
+	if cur != Vector3.ZERO and cur.distance_to(target) >= TELEPORT_SNAP_M:
+		next = cur.lerp(target, minf(delta * SMOOTH_RATE * 3.0, 1.0))
+	var apparent := (cur.distance_to(next) / maxf(delta, 0.0001)) if cur != Vector3.ZERO else 0.0
+	av.apply_pose(next, yaw, {
+		"dt": delta,
+		# A human keeps moving even while the world clock is paused or scrubbing.
+		"paused": false,
+		"apparent_speed_mps": apparent,
+		"time_mult": 1.0,
+		"anim_map": dot.get("anim_map", {}),
+		"in_transit": in_transit,
+		"activity": "",
+		"space_type": "",
+		"morale": float(dot.get("morale", 0.5)),
+		"dwell_left_s": 0.0,
+		"teleported": false,
+	})
+
+
 func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> void:
 	var sim_pos: Vector2 = dot.get("pos", Vector2.ZERO)
 	var prev: Vector2 = _last_pos.get(aid, sim_pos)
@@ -230,6 +425,9 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	var target := Vector3(sim_pos.x, gy, sim_pos.y)
 	var cur := av.global_position
 	var gap := cur.distance_to(target) if cur != Vector3.ZERO else 0.0
+	if bool(dot.get("possessed", false)):
+		_pose_possessed(av, aid, dot, delta, target, cur, prev, sim_pos)
+		return
 
 	# The sim\'s own account of whether this person is going somewhere. A LEVEL,
 	# not an edge, so it cannot alias against the frame rate.
@@ -271,13 +469,32 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 		# Clear the debt quickly rather than drifting back over seconds.
 		next = cur.lerp(target, minf(delta * SMOOTH_RATE * 3.0, 1.0))
 
+	# Direction of travel while GOING somewhere; the sim's facing hint once
+	# stopped.
+	#
+	# This used to take the travel branch unconditionally and gate it on the
+	# delta being big enough — so on arrival `dir` fell under YAW_EPS_M, the
+	# branch stopped firing, and the yaw LATCHED on the last approach heading
+	# for the entire work session. A whole crew walks one nav route to one
+	# chore coordinate, so the whole crew froze on one bearing: the "everyone
+	# faces the same way while working" bug. The gate is now on TRAVELLING, not
+	# on the size of a vector that is designed to shrink to zero.
 	var yaw := av.rotation.y
-	var dir := sim_pos - Vector2(cur.x, cur.z)
-	if dir.length() > YAW_EPS_M:
-		# CelestialClock convention: north −Z, east +X; atan2 gives the
-		# heading of travel in world yaw. Slewed, so a turn reads as a turn —
-		# which is also what makes the start/stop walk clips legible.
-		yaw = lerp_angle(yaw, atan2(-dir.x, -dir.y), minf(delta * YAW_RATE, 1.0))
+	var want := float(dot.get("face_yaw", yaw))
+	if in_transit:
+		# CelestialClock convention: north −Z, east +X; atan2 gives the heading
+		# of travel in world yaw.
+		var dir := sim_pos - Vector2(cur.x, cur.z)
+		if dir.length() > YAW_EPS_M:
+			want = atan2(-dir.x, -dir.y)
+		# Below the epsilon we fall through to face_yaw while STILL in transit,
+		# so the figure pre-turns toward the work as it arrives instead of
+		# holding the corridor bearing and snapping afterwards.
+	# Slewed, so a turn reads as a turn — which is also what makes the
+	# start/stop walk clips legible. Beyond FAR_DIST_M the pose interval makes
+	# this a hard set, which is correct now that `want` is a stable
+	# anchor-derived bearing rather than a noisy shrinking delta.
+	yaw = lerp_angle(yaw, want, minf(delta * YAW_RATE, 1.0))
 
 	# time_scale 0 is paused; negative is a backward scrub, during which the
 	# population engine freezes too, so the figures should hold either way.
@@ -300,6 +517,8 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 		"morale": float(dot.get("morale", 1.0)),
 		"dwell_left_s": _dwell_left_s(dot),
 		"teleported": teleported,
+		"carrying": bool(dot.get("carrying", false)),
+		"work_pose": str(dot.get("work_pose", "")),
 	})
 
 
