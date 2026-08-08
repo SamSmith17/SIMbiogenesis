@@ -111,32 +111,42 @@ func _is_dropping(season: Dictionary) -> bool:
 		float(season.get("leaf_coverage", 1.0)))
 
 
-func _veg_root() -> Node3D:
+## BOTH veg roots: "Vegetation" (painted layer) AND "AutoVegetation" (the OSM
+## auto-scatter, AutoVegetationRuntime.ROOT_NAME). Scanning only the manual
+## root meant auto-scattered deciduous stands — most of the forest on a real
+## site — never emitted a single falling leaf.
+func _veg_roots() -> Array:
 	if _terrain == null or not is_instance_valid(_terrain):
-		return null
-	return _terrain.get_node_or_null("Vegetation") as Node3D
+		return []
+	var out: Array = []
+	for n in ["Vegetation", "AutoVegetation"]:
+		var r := _terrain.get_node_or_null(n) as Node3D
+		if r != null:
+			out.append(r)
+	return out
 
 
 func _refresh_emitters(cam_pos: Vector3, season: Dictionary) -> void:
-	var root := _veg_root()
-	if root == null:
+	var roots := _veg_roots()
+	if roots.is_empty():
 		_clear_emitters()
 		return
 	# Candidate chunks: NEAR-ring leaf-shell batches of a shedding family, close
 	# enough to see an individual leaf.
 	var candidates: Array = []
-	for child in root.get_children():
-		var mi := child as MultiMeshInstance3D
-		if mi == null or mi.multimesh == null or mi.multimesh.instance_count <= 0:
-			continue
-		if not _is_shedding_near_batch(mi):
-			continue
-		var aabb := mi.get_aabb()
-		var center: Vector3 = mi.global_transform * aabb.get_center()
-		var d := center.distance_to(cam_pos)
-		if d > RANGE_M:
-			continue
-		candidates.append({"mi": mi, "dist": d, "aabb": aabb, "center": center})
+	for root in roots:
+		for child in (root as Node3D).get_children():
+			var mi := child as MultiMeshInstance3D
+			if mi == null or mi.multimesh == null or mi.multimesh.instance_count <= 0:
+				continue
+			if not _is_shedding_near_batch(mi):
+				continue
+			var aabb := mi.get_aabb()
+			var center: Vector3 = mi.global_transform * aabb.get_center()
+			var d := center.distance_to(cam_pos)
+			if d > RANGE_M:
+				continue
+			candidates.append({"mi": mi, "dist": d, "aabb": aabb, "center": center})
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a["dist"]) < float(b["dist"]))
 

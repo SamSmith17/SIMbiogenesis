@@ -36,6 +36,13 @@ static func defaults() -> Dictionary:
 		"pine_trunk_taper": 0.38,
 		"pine_fur_enabled": true,
 		"pine_fur_lod_enabled": true,
+		# LOD ladder (Overhaul v2.1): ordered near→far representations, any of
+		# mesh / photocard / impostor, comma-separated. "photocard" needs a
+		# texture at assets/vegetation/photocards/<id>.png (or
+		# user://veg_photocards/). Family-prefixed so subspecies can override
+		# it; the name deliberately avoids the "_lod_" substring so it lands
+		# in the impostor bake key (VegLodPolicy has the full rationale).
+		"pine_detail_chain": "mesh,impostor",
 		"pine_fur_strength": 0.38,
 		"pine_fur_cells": 20.0,
 		"pine_fur_tuft_size": 0.58,
@@ -67,6 +74,7 @@ static func defaults() -> Dictionary:
 		"deciduous_growth_years": 9.85,
 		"deciduous_leaf_shells_enabled": true,
 		"deciduous_leaf_lod_enabled": true,
+		"deciduous_detail_chain": "mesh,impostor",
 		# Foliage fine keys (Advanced; leaf_density/leaf_gap/cluster size derive
 		# from the foliage_density macro unless explicitly set).
 		"deciduous_cluster_count": 12.0,
@@ -83,6 +91,11 @@ static func defaults() -> Dictionary:
 		# real 3D mesh inside this range, baked impostor beyond; quality tiers
 		# override the default and a per-chunk budget may shrink it).
 		"tree_detail_distance_m": 220.0,
+		# End of the photocard band when a 3-entry LOD ladder puts photocard
+		# in the middle (mesh → photocard → impostor). Global like the detail
+		# distance — deliberately NOT family-prefixed, or it would land in the
+		# impostor bake key and re-bake every atlas on a distance drag.
+		"tree_photocard_distance_m": 700.0,
 		"shrub_albedo_tint": Color(1.0, 1.0, 1.0),
 		"shrub_highlight_tint": Color(0.26, 0.34, 0.12),
 		"shrub_bulk_scale": 1.0,

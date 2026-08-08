@@ -24,6 +24,7 @@ var _bark_materials: Array[ShaderMaterial] = []
 
 var _accum := 0.0
 var _night_factor := 0.0
+var _ambient_energy := VegetationRuntime.DAY_AMBIENT_REF
 var _sun_direction := Vector3.UP
 # Seasonal state (lerped toward targets so scrubbing/analemma doesn't pop).
 var _autumn := 0.0
@@ -54,22 +55,11 @@ func clear_registered_materials() -> void:
 
 
 static func _deciduousness_for(species: String) -> float:
-	# Phase 5: the species registry's phenology profile is authoritative —
-	# this is what makes tropical evergreens ACTUALLY evergreen (a palm used
-	# to carry deciduousness 1.0 and dropped its fronds every winter).
-	var reg := VegSpeciesRegistry.deciduousness(species)
-	if reg >= 0.0:
-		return reg
-	var s := species.to_lower()
-	if s.begins_with("pine") or s == "conifer" or s == "taiga" or s == "spruce" or s == "fir":
-		return 0.0
-	if s.begins_with("deciduous") or s == "broadleaf" or s == "oak" or s == "maple":
-		return 1.0
-	if s.begins_with("shrub"):
-		return 0.55
-	if s.begins_with("grass"):
-		return 0.0
-	return 0.8
+	# One shared resolution (registry phenology first, string fallback second)
+	# lives on VegSpeciesRegistry so the Tune-look preview and this sync can
+	# never disagree again — the preview's private copy skipped the registry
+	# and rendered spruce/fir/cedar as 80% deciduous.
+	return VegSpeciesRegistry.deciduousness_for(species)
 
 
 func register_material(mat: Material, species: String = "") -> void:
@@ -125,7 +115,11 @@ func register_multimesh_instance(mi: MultiMeshInstance3D, species: String = "") 
 		return
 	var resolved := species
 	if resolved.is_empty() and mi.name.begins_with("Bulk_"):
-		resolved = mi.name.substr(5)
+		# The runtime's parser, not a raw substr(5): "Bulk_spruce_0_3_4" must
+		# resolve to "spruce", not "spruce_0_3_4" — the latter misses the
+		# registry, falls to the 0.8 default, and renders an evergreen batch
+		# as 80% deciduous.
+		resolved = VegetationRuntime.species_from_bulk_name(mi.name)
 	register_material(mi.material_override, resolved)
 	if mi.multimesh != null:
 		register_mesh(mi.multimesh.mesh, resolved)
@@ -203,7 +197,12 @@ func _process(delta: float) -> void:
 	# test, not equality. It is self-tuning: at ordinary speed the season
 	# converges within a second and the push stops; at a high time scale the
 	# targets keep moving and it pushes every frame, which is correct.
-	if due or _uniforms_dirty():
+	# Evaluate the dirty test FIRST: `due or _uniforms_dirty()` short-circuits
+	# when due is true, so _uniforms_dirty() never ran and never consumed
+	# _force_push — the latch stayed set and bought a redundant extra push on
+	# the next quiet frame.
+	var dirty := _uniforms_dirty()
+	if due or dirty:
 		_push_uniforms()
 
 
@@ -216,6 +215,8 @@ func _poll_main() -> void:
 		return
 	if main.has_method("get_vegetation_night_factor"):
 		_night_factor = float(main.call("get_vegetation_night_factor"))
+	if main.has_method("get_vegetation_ambient_energy"):
+		_ambient_energy = float(main.call("get_vegetation_ambient_energy"))
 	if main.has_method("get_vegetation_sun_direction"):
 		var dir: Variant = main.call("get_vegetation_sun_direction")
 		if dir is Vector3 and (dir as Vector3).length_squared() > 1e-6:
@@ -252,6 +253,7 @@ func _uniforms_dirty() -> bool:
 	if _pushed.is_empty():
 		return true
 	if absf(float(_pushed.get("night", 1e9)) - _night_factor) > UNIFORM_EPS: return true
+	if absf(float(_pushed.get("ambient", 1e9)) - _ambient_energy) > UNIFORM_EPS: return true
 	if absf(float(_pushed.get("autumn", 1e9)) - _autumn) > UNIFORM_EPS: return true
 	if absf(float(_pushed.get("leaf", 1e9)) - _leaf_coverage) > UNIFORM_EPS: return true
 	if absf(float(_pushed.get("bud", 1e9)) - _bud) > UNIFORM_EPS: return true
@@ -295,10 +297,17 @@ func _sweep_freed() -> void:
 func _push_uniforms() -> void:
 	var sun := Vector3(_sun_direction.x, _sun_direction.y, _sun_direction.z)
 	_pushed = {
-		"night": _night_factor, "autumn": _autumn, "leaf": _leaf_coverage,
+		"night": _night_factor, "ambient": _ambient_energy, "autumn": _autumn,
+		"leaf": _leaf_coverage,
 		"bud": _bud, "winter": _winter, "summer": _summer, "snow": _snow,
 		"depth": _snow_depth, "growth": _grass_growth, "sun": _sun_direction,
 	}
+	# Impostor night floor = what a lit tree lands on at this instant (pure
+	# rule + rationale on VegetationRuntime.impostor_night_floor, where the
+	# selftest can pin it — THIS script bare-references autoloads and cannot
+	# be loaded under --script). Pushed to the whole foliage set — the lit
+	# shaders simply have no such uniform and ignore it.
+	var night_amb := VegetationRuntime.impostor_night_floor(_ambient_energy)
 	var i := 0
 	while i < _materials.size():
 		var sm := _materials[i]
@@ -308,6 +317,7 @@ func _push_uniforms() -> void:
 			_material_deciduousness.erase(sm)
 			continue
 		sm.set_shader_parameter("night_factor", _night_factor)
+		sm.set_shader_parameter("night_ambient_mul", night_amb)
 		sm.set_shader_parameter("sun_direction", sun)
 		sm.set_shader_parameter("deciduousness", float(_material_deciduousness.get(sm, 0.8)))
 		sm.set_shader_parameter("autumn", _autumn)

@@ -220,16 +220,19 @@ static func mesh_for_species(species: String, settings: Dictionary = {}) -> Arra
 static func _build_mesh_for_species(species: String, settings: Dictionary) -> ArrayMesh:
 	var family := mesh_family(species)
 	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
-	# Phase 5 photocard upgrade: a PNG dropped at
-	# assets/vegetation/photocards/<id>.png (or user://veg_photocards/) swaps
-	# the species to textured crossed cards, no code change. Canopy families
-	# (pine/deciduous) are EXEMPT here — their photocard rides the FAR tier
-	# only (see mesh_for_canopy_lod): a flat card 10 m from the camera reads
-	# worse than the procedural leaf shells, but it beats the crossed-puff
-	# FAR cards hands down.
-	if family != "pine" and family != "deciduous":
-		var photo := VegSpeciesRegistry.photocard_texture(species)
-		if photo != null:
+	# Phase 5 photocard drop-in: a PNG at assets/vegetation/photocards/<id>.png
+	# (or user://veg_photocards/) swaps the species to textured crossed cards,
+	# no code change. Canopy families (pine/deciduous) take it here only when
+	# the player's LOD ladder puts "photocard" FIRST (Tune look → Detail & LOD
+	# — Overhaul v2.1); otherwise their photocard rides the ladder's own
+	# photocard band / the bake-pending FAR stand-in, since a flat card 10 m
+	# from the camera reads worse than the procedural leaf shells.
+	var photo := VegSpeciesRegistry.photocard_texture(species)
+	if photo != null:
+		if family != "pine" and family != "deciduous":
+			return _build_photocard_mesh(species, s, photo)
+		var chain := lod_chain(species, settings)
+		if str(chain[0]) == VegLodPolicy.REP_PHOTOCARD:
 			return _build_photocard_mesh(species, s, photo)
 	match family:
 		"deciduous":
@@ -346,6 +349,41 @@ static func canopy_lod_enabled(species: String, settings: Dictionary) -> bool:
 	return false
 
 
+## The per-species LOD ladder (Overhaul v2.1): ordered representations from
+## near to far, resolved through the style ladder off `<family>_detail_chain`
+## (see VegLodPolicy for the naming rationale). "photocard" entries are
+## dropped when the species ships no photocard texture (the Tune-look UI
+## hints at this); non-canopy families are always single-band "mesh"
+## (palms/cacti already photocard through the Phase 5 drop-in rule).
+static func lod_chain(species: String, settings: Dictionary) -> Array:
+	var family := mesh_family(species)
+	if family != "pine" and family != "deciduous":
+		return [VegLodPolicy.REP_MESH]
+	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
+	var chain := VegLodPolicy.parse_chain(
+		str(s.get("%s_detail_chain" % family, VegLodPolicy.DEFAULT_CHAIN)))
+	if (VegLodPolicy.REP_PHOTOCARD in chain) \
+			and VegSpeciesRegistry.photocard_texture(species) == null:
+		chain.erase(VegLodPolicy.REP_PHOTOCARD)
+	if chain.is_empty():
+		chain = [VegLodPolicy.REP_MESH]
+	return chain
+
+
+## The photocard crossed-card mesh for a species, cached like the other
+## canopy meshes. Null when the species ships no photocard texture.
+static func photocard_mesh(species: String, settings: Dictionary) -> ArrayMesh:
+	var photo := VegSpeciesRegistry.photocard_texture(species)
+	if photo == null:
+		return null
+	var key := "mesh|%s|photo|%d" % [species, hash(settings)]
+	var cached: Variant = VegAssetCache.fetch(key)
+	if cached is ArrayMesh:
+		return cached
+	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
+	return VegAssetCache.store(key, _build_photocard_mesh(species, s, photo))
+
+
 static func mesh_for_canopy_lod(species: String, settings: Dictionary, tier: CanopyLodTier) -> ArrayMesh:
 	var key := "mesh|%s|%d|%d" % [species, tier, hash(settings)]
 	var cached: Variant = VegAssetCache.fetch(key)
@@ -354,11 +392,15 @@ static func mesh_for_canopy_lod(species: String, settings: Dictionary, tier: Can
 	var family := mesh_family(species)
 	var s := VegSpeciesCatalog.settings_with_variant(species, settings, SPECS)
 	var mesh: ArrayMesh
-	# Photocard upgrade for the FAR tier: a real cutout beats the crossed-puff
-	# cards at distance, while NEAR keeps the full procedural leaf shells.
-	if tier == CanopyLodTier.FAR and (family == "pine" or family == "deciduous"):
+	if family == "pine" or family == "deciduous":
 		var photo := VegSpeciesRegistry.photocard_texture(species)
-		if photo != null:
+		# FAR: a real cutout beats the crossed-puff stand-in at distance,
+		# unconditionally (the Phase 5 upgrade). NEAR: the photocard only when
+		# the LOD ladder puts it first — this is ALSO what VegImpostorBaker
+		# bakes from, so a photocard-first chain's impostor matches the card
+		# silhouette instead of the procedural tree nobody sees.
+		if photo != null and (tier == CanopyLodTier.FAR
+				or str(lod_chain(species, settings)[0]) == VegLodPolicy.REP_PHOTOCARD):
 			return VegAssetCache.store(key, _build_photocard_mesh(species, s, photo))
 	if family == "deciduous":
 		mesh = mesh_for_deciduous_lod(s, tier)

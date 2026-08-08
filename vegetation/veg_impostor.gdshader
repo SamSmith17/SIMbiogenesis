@@ -33,13 +33,28 @@ uniform float snow_depth_m = 0.0;
 uniform float summer : hint_range(0.0, 1.0) = 1.0;
 uniform float deciduousness : hint_range(0.0, 1.0) = 0.8;
 uniform float night_factor : hint_range(0.0, 1.0) = 0.0;
+// The card's brightness floor once night_factor saturates. Pushed live by
+// VegetationEnvironmentSync as (scene ambient / day ambient) × 0.35, i.e. the
+// same composition a LIT tree lands on at that instant (albedo × the
+// night_darkness leftover × ambient). The old hard-coded 0.30 floor left the
+// far forest ~2 orders of magnitude brighter than the near tier at full night
+// — glowing cutouts on a dark horizon, near blooming once the night
+// glow_hdr_threshold drops to 0.6 (main.gd's glow setup).
+uniform float night_ambient_mul : hint_range(0.0, 1.0) = 0.0035;
 uniform vec3 sun_direction = vec3(0.0, 1.0, 0.0);
 uniform vec3 autumn_warm : source_color = vec3(0.96, 0.78, 0.12);
 uniform vec3 autumn_orange : source_color = vec3(0.93, 0.45, 0.06);
 uniform vec3 autumn_hot : source_color = vec3(0.80, 0.13, 0.04);
-// Gentle sway so distant forests don't read as frozen cardboard.
+// Live wind. Uniform names shared with wind_vertex.gdshaderinc so
+// VegetationWindDriver pushes the SAME weather (incl. extreme-weather
+// multipliers) here as to the near tiers — the old private `wind_speed`
+// uniform meant distant forests sat frozen at a fixed 0.02 sway while a
+// storm thrashed the near trees. `wind_strength` stays the base amplitude
+// knob; speed scales it (capped ~36 m/s like the include's own curve).
 uniform float wind_strength = 0.02;
-uniform float wind_speed = 0.7;
+uniform float wind_speed_ms = 2.0;
+uniform float gust_intensity : hint_range(0.0, 1.0) = 0.0;
+uniform vec2 wind_direction = vec2(0.0, 1.0);
 
 varying vec3 v_origin;
 varying float v_rel_yaw;
@@ -78,9 +93,20 @@ void vertex() {
 			}
 		}
 	}
-	// Distant sway: whole-tree lean, stronger at the top of the quad.
+	// Distant sway: whole-tree lean, stronger at the top of the quad, scaled
+	// by live wind speed (same 12 m/s reference + 3.0 cap as the near tiers'
+	// wind_vertex.gdshaderinc) with a faster gust wobble on top and a static
+	// downwind lean projected onto the card's own axis.
+	float speed_t = clamp(wind_speed_ms / 12.0, 0.05, 3.0);
+	float amp = wind_strength * (0.6 + speed_t * 0.9);
+	float freq = 0.5 + speed_t * 0.35;
 	float phase = origin.x * 0.37 + origin.z * 0.53;
-	float sway = sin(TIME * wind_speed + phase) * wind_strength * VERTEX.y;
+	float osc = sin(TIME * freq + phase)
+		+ gust_intensity * 0.55 * sin(TIME * freq * 2.7 + phase * 1.7);
+	vec2 w2 = normalize(wind_direction + vec2(1e-4, 0.0));
+	float along = dot(vec2(right.x, right.z), w2);
+	float sway = amp * (osc * mix(0.35, 1.0, abs(along))
+		+ 0.30 * speed_t * along) * VERTEX.y;
 	vec3 wp = origin + right * (VERTEX.x * sx) + up_axis * (VERTEX.y * sy)
 		+ right * sway;
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(wp, 1.0);
@@ -140,8 +166,10 @@ void fragment() {
 	}
 	// Unshaded card: the atlas is baked evenly lit, so day/night comes from
 	// the same uniforms the env sync already pushes (no light pass on
-	// thousands of distant quads — this tier must stay cheap).
+	// thousands of distant quads — this tier must stay cheap). The night end
+	// tracks the LIVE scene ambient (see night_ambient_mul above) so dusk
+	// fades continuously and full night lands where the lit near tier does.
 	float sun_up = clamp(sun_direction.y * 2.0 + 0.35, 0.0, 1.0);
-	float light_mul = mix(0.30, mix(0.55, 1.0, sun_up), 1.0 - night_factor);
+	float light_mul = mix(night_ambient_mul, mix(0.55, 1.0, sun_up), 1.0 - night_factor);
 	ALBEDO = albedo * light_mul;
 }

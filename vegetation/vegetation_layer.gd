@@ -462,7 +462,17 @@ func serialize() -> Dictionary:
 	}
 
 
-const TINT_SUFFIX := "_albedo_tint"
+## Matches every color-valued style key by the codebase's own naming convention
+## (albedo_tint, highlight_tint, bark_tint, seasonal_tint, and any future one) —
+## NOT just "_albedo_tint". That narrower match was the bug: a card_settings
+## snapshot with a custom HIGHLIGHT color (or bark/seasonal) round-tripped its
+## albedo tint back to a real Color but left the others as raw [r,g,b,a] arrays,
+## and the card factory's typed `var hi: Color = settings.get(...)` throws the
+## instant it reads one — "Trying to assign value of type 'Array' to a variable
+## of type 'Color'" at vegetation_card_factory.gd / grass_builder.gd. Silent
+## until a player actually picks a non-default highlight, which is exactly why
+## it shipped unnoticed.
+const TINT_SUFFIX := "_tint"
 
 
 ## Per-instance "Apply to brush" card_settings can hold Color tints. Plain
@@ -532,7 +542,7 @@ static func _card_to_json(card: Dictionary) -> Dictionary:
 	return out
 
 
-## Coerce any *_albedo_tint value (Color, [r,g,b,a] array, or a legacy
+## Coerce any *_tint value (Color, [r,g,b,a] array, or a legacy
 ## JSON-stringified "(r, g, b, a)" string) back to a real Color so consumers
 ## that assign to a typed Color never trip. Recovers maps saved before the
 ## array round-trip fix as well.

@@ -97,6 +97,30 @@ static func deciduousness(id: String) -> float:
 	return float(PHENOLOGY_DECIDUOUSNESS.get(p, -1.0))
 
 
+## The ONE deciduousness resolution every renderer uses (the map's env-sync
+## AND the Tune-look preview studio): registry phenology first, string-family
+## fallback second. The preview modal once carried its own stale copy of the
+## fallback that never consulted the registry — spruce/fir/cedar/redwood
+## previewed at 0.8 deciduousness (they are evergreen conifers, 0.0) and palm
+## at 1.0, quietly undoing the Phase 5 "tropical evergreens keep leaves" fix
+## inside the modal. Any new caller delegates HERE; never copy the fallback.
+static func deciduousness_for(species: String) -> float:
+	var reg := deciduousness(species)
+	if reg >= 0.0:
+		return reg
+	var s := species.to_lower()
+	if s.begins_with("pine") or s == "conifer" or s == "taiga" or s == "spruce" \
+			or s == "fir" or s == "cedar" or s == "redwood":
+		return 0.0
+	if s.begins_with("deciduous") or s == "broadleaf" or s == "oak" or s == "maple":
+		return 1.0
+	if s.begins_with("shrub"):
+		return 0.55
+	if s.begins_with("grass"):
+		return 0.0
+	return 0.8
+
+
 static func growth_years(id: String, fallback: float = 0.0) -> float:
 	return float(entry(id).get("growth_years", fallback))
 

@@ -9,6 +9,12 @@ const CALM_SPEED_MS := 1.5
 const FOLIAGE_SHADER := "res://vegetation/foliage.gdshader"
 const LEAF_CANOPY_SHADER := "res://vegetation/leaf_canopy.gdshader"
 const BARK_SHADER := "res://vegetation/bark.gdshader"
+## Grass includes wind_vertex.gdshaderinc and the impostor has its own sway —
+## both were missing from this accept-list, so grass swayed at the build-time
+## default forever and the far forest sat frozen while a storm thrashed the
+## near trees.
+const GRASS_SHADER := "res://vegetation/grass.gdshader"
+const IMPOSTOR_SHADER := "res://vegetation/veg_impostor.gdshader"
 
 var _materials: Array[ShaderMaterial] = []
 var _accum := 0.0
@@ -31,7 +37,9 @@ func register_material(mat: Material) -> void:
 	if sm.shader == null or sm in _materials:
 		return
 	var path := sm.shader.resource_path
-	if path != FOLIAGE_SHADER and path != LEAF_CANOPY_SHADER and path != BARK_SHADER:
+	if path != FOLIAGE_SHADER and path != LEAF_CANOPY_SHADER \
+			and path != BARK_SHADER and path != GRASS_SHADER \
+			and path != IMPOSTOR_SHADER:
 		return
 	_materials.append(sm)
 
@@ -98,6 +106,20 @@ func _poll_weather() -> void:
 		var gs := float(WeatherService.wind_gust_ms(month, day, hour))
 		if is_finite(gs) and not is_nan(gs):
 			gust = maxf(gs, speed)
+
+	# Extreme weather multiplies in AFTER the measured base. blank() carries
+	# wind_mult/gust_mult 1.0, so ordinary weather stays bit-identical (the
+	# HazardState identity invariant); a severity-1 damaging-winds event is
+	# 2.6×/3.0× and finally reaches the canopy. Pure rule + rationale:
+	# WindMath.apply_hazard_wind (selftest-pinned). The existing LERP_SPEED
+	# easing above ramps a storm in rather than snapping.
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw != null and xw.has_method("current"):
+		var hz: Variant = xw.call("current")
+		if hz is Dictionary and not (hz as Dictionary).is_empty():
+			var sg := WindMath.apply_hazard_wind(speed, gust, hz)
+			speed = sg.x
+			gust = sg.y
 
 	var gust_excess := maxf(gust - speed, 0.0)
 	_target_gust = clampf(gust_excess / maxf(speed, 2.0), 0.0, 1.0)

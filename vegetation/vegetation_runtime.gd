@@ -146,30 +146,55 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
 		visibility_end_m: float, growth_map: VegetationInstanceMap = null,
 		chunk_x: int = 0, chunk_z: int = 0) -> void:
+	# Overhaul v2.1: the per-species LOD LADDER — the player orders the
+	# representations (mesh / photocard / impostor) and may disable any; the
+	# default chain "mesh,impostor" reproduces the shipped two-band model
+	# exactly. One batch per band, ranges set at BUILD time only.
+	var chain := VegetationCardFactory.lod_chain(species, settings)
+	if not VegetationCardFactory.canopy_lod_enabled(species, settings):
+		# Style opted out of the LOD handoff: full mesh at every distance
+		# (an explicit, costly choice — the budget shrink still applies).
+		chain = [VegLodPolicy.REP_MESH]
 	var detail_m := clampf(float(settings.get("tree_detail_eff_m",
 		settings.get("tree_detail_distance_m", 220.0))), 40.0, 4000.0)
-	if not VegetationCardFactory.canopy_lod_enabled(species, settings):
-		# Style opted out of the impostor handoff: full mesh at every distance
-		# (an explicit, costly choice — the budget shrink still applies).
-		detail_m = visibility_end_m
-	if detail_m >= visibility_end_m - 1.0:
-		_build_canopy_single_batch(root, species, records, ground_y_at, align_to_surface,
-			settings, visibility_end_m, VegetationCardFactory.CanopyLodTier.NEAR,
-			growth_map, chunk_x, chunk_z)
-		return
-	_build_canopy_single_batch(root, species, records, ground_y_at, align_to_surface,
-		settings, detail_m, VegetationCardFactory.CanopyLodTier.NEAR,
-		growth_map, chunk_x, chunk_z)
-	var far_begin := maxf(detail_m - LOD_FADE_MARGIN_M, 0.0)
-	var iset := VegImpostorBaker.cached_set(species, settings)
-	if iset != null and iset.is_usable():
-		_build_impostor_batch(root, species, records, ground_y_at, align_to_surface,
-			settings, visibility_end_m, iset, growth_map, chunk_x, chunk_z, far_begin)
-		return
-	VegImpostorBaker.request_async(species, settings)
-	_build_canopy_single_batch(root, species, records, ground_y_at, align_to_surface,
-		settings, visibility_end_m, VegetationCardFactory.CanopyLodTier.FAR,
-		growth_map, chunk_x, chunk_z, far_begin)
+	var photo_m := clampf(float(settings.get("tree_photocard_distance_m", 700.0)),
+		60.0, 8000.0)
+	var bands := VegLodPolicy.chain_bands(chain, detail_m, photo_m, visibility_end_m)
+	for band_v in bands:
+		var band: Dictionary = band_v
+		var rep := str(band["rep"])
+		var b_begin := float(band["begin_m"])
+		var b_end := float(band["end_m"])
+		var range_begin := maxf(b_begin - LOD_FADE_MARGIN_M, 0.0) if b_begin > 0.0 else -1.0
+		match rep:
+			VegLodPolicy.REP_MESH:
+				_build_canopy_single_batch(root, species, records, ground_y_at,
+					align_to_surface, settings, b_end,
+					VegetationCardFactory.CanopyLodTier.NEAR,
+					growth_map, chunk_x, chunk_z, range_begin)
+			VegLodPolicy.REP_PHOTOCARD:
+				var photo_mesh := VegetationCardFactory.photocard_mesh(species, settings)
+				if photo_mesh != null:
+					_build_canopy_single_batch(root, species, records, ground_y_at,
+						align_to_surface, settings, b_end,
+						VegetationCardFactory.CanopyLodTier.FAR,
+						growth_map, chunk_x, chunk_z, range_begin,
+						photo_mesh, "photo")
+			VegLodPolicy.REP_IMPOSTOR:
+				var iset := VegImpostorBaker.cached_set(species, settings)
+				if iset != null and iset.is_usable():
+					_build_impostor_batch(root, species, records, ground_y_at,
+						align_to_surface, settings, b_end, iset,
+						growth_map, chunk_x, chunk_z, range_begin)
+				else:
+					# Bake pending (or permanently headless): crossed-card
+					# stand-in, deterministic — the completed bake debounces
+					# one rebuild through the loader.
+					VegImpostorBaker.request_async(species, settings)
+					_build_canopy_single_batch(root, species, records, ground_y_at,
+						align_to_surface, settings, b_end,
+						VegetationCardFactory.CanopyLodTier.FAR,
+						growth_map, chunk_x, chunk_z, range_begin)
 
 
 ## OUTER-ring impostor batch: one camera-facing baked quad per tree (2 tris vs
@@ -242,8 +267,10 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
 		visibility_end_m: float, tier: VegetationCardFactory.CanopyLodTier,
 		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0,
-		range_begin: float = -1.0) -> void:
-	var mesh := VegetationCardFactory.mesh_for_canopy_lod(species, settings, tier)
+		range_begin: float = -1.0, mesh_override: ArrayMesh = null,
+		name_tag: String = "") -> void:
+	var mesh := mesh_override if mesh_override != null \
+			else VegetationCardFactory.mesh_for_canopy_lod(species, settings, tier)
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
 	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
 	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
@@ -276,7 +303,9 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 	if i == 0:
 		return
 	var mi := MultiMeshInstance3D.new()
-	mi.name = "Bulk_%s_%d_%d_%d" % [species, tier, chunk_x, chunk_z]
+	mi.name = "Bulk_%s_%d_%d_%d" % [species, tier, chunk_x, chunk_z] \
+			if name_tag.is_empty() \
+			else "Bulk_%s_%s_%d_%d" % [species, name_tag, chunk_x, chunk_z]
 	mi.multimesh = mm
 	mi.material_override = null
 	VegetationShadowPolicy.apply(mi, species)
@@ -358,6 +387,25 @@ static func reregister_existing(terrain: Node3D) -> void:
 
 static func _species_for_node(mi: MultiMeshInstance3D) -> String:
 	return species_from_bulk_name(mi.name)
+
+
+## main.gd's day_ambient — the denominator turning the live scene ambient
+## into a 0..1 "fraction of full daylight".
+const DAY_AMBIENT_REF := 0.3
+## The lit canopy tiers' night_darkness leaves ~35% of albedo, which the
+## scene ambient then scales in the PBR pass.
+const NIGHT_FLOOR_DARKNESS := 0.35
+
+
+## Brightness floor for the UNSHADED impostor tier once night_factor
+## saturates: (scene ambient / day ambient) × the lit tiers' night_darkness
+## leftover — i.e. the same composition a LIT tree lands on at that instant.
+## VegetationEnvironmentSync pushes this as `night_ambient_mul` every poll.
+## The hard-coded 0.30 floor this replaced left the far forest ~2 orders of
+## magnitude brighter than the near tier at full night (glowing cutouts on a
+## dark horizon, near blooming once the night glow_hdr_threshold drops).
+static func impostor_night_floor(ambient_energy: float) -> float:
+	return clampf(ambient_energy / DAY_AMBIENT_REF, 0.004, 1.0) * NIGHT_FLOOR_DARKNESS
 
 
 ## Recover species/slot from MultiMesh names like Bulk_<id>[_tier][_cx_cz].

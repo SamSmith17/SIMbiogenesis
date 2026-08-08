@@ -162,7 +162,18 @@ func _test_json_roundtrip() -> void:
 ## stringify -> parse -> deserialize cycle restores a real Color.
 func _test_card_settings_json() -> void:
 	var layer := VegetationLayer.create_empty()
-	var card := {"pine_card_h": 6.5, "pine_albedo_tint": Color(0.8, 0.5, 0.3, 1.0)}
+	# All four color-valued tint families the card factory/grass builder read
+	# via a typed `var x: Color = settings.get(...)` — a regression test for the
+	# bug where only "_albedo_tint" round-tripped and "_highlight_tint" (etc.)
+	# stayed a raw [r,g,b,a] array, crashing "map load" the instant a saved site
+	# had a non-default highlight/bark/seasonal tint (see coerce_card_colors).
+	var card := {
+		"pine_card_h": 6.5,
+		"pine_albedo_tint": Color(0.8, 0.5, 0.3, 1.0),
+		"pine_highlight_tint": Color(0.1, 0.6, 0.2, 1.0),
+		"pine_bark_tint": Color(0.4, 0.3, 0.2, 1.0),
+		"seasonal_tint": Color(0.9, 0.7, 0.1, 1.0),
+	}
 	layer.add_bulk("pine", 2.0, 2.0, 0.0, 1.3, card)
 	var text := JSON.stringify(layer.serialize())
 	var parsed: Variant = JSON.parse_string(text)
@@ -178,9 +189,26 @@ func _test_card_settings_json() -> void:
 		_check("card tint value preserved",
 			absf(c.r - 0.8) < 1e-3 and absf(c.g - 0.5) < 1e-3 and absf(c.b - 0.3) < 1e-3)
 		_check("card scalar preserved", absf(float(cs.get("pine_card_h", 0.0)) - 6.5) < 1e-3)
+		_check("card highlight tint is Color after roundtrip",
+			cs.get("pine_highlight_tint") is Color, "got %s" % [typeof(cs.get("pine_highlight_tint"))])
+		_check("card bark tint is Color after roundtrip",
+			cs.get("pine_bark_tint") is Color, "got %s" % [typeof(cs.get("pine_bark_tint"))])
+		_check("card seasonal tint is Color after roundtrip",
+			cs.get("seasonal_tint") is Color, "got %s" % [typeof(cs.get("seasonal_tint"))])
 	# Legacy-corrupt recovery: a String tint (old broken save) coerces to Color.
 	var legacy := VegetationLayer.coerce_card_colors({"pine_albedo_tint": "(0.2, 0.4, 0.6, 1.0)"})
 	_check("legacy string tint coerces to Color", legacy.get("pine_albedo_tint") is Color)
+	# The actual bug: coerce_card_colors used to only match "_albedo_tint",
+	# leaving these three as raw arrays for _apply_foliage_uniforms /
+	# _apply_leaf_canopy_uniforms / grass_builder's typed Color reads to crash on.
+	var mixed := VegetationLayer.coerce_card_colors({
+		"pine_highlight_tint": [0.1, 0.6, 0.2, 1.0],
+		"pine_bark_tint": [0.4, 0.3, 0.2, 1.0],
+		"seasonal_tint": [0.9, 0.7, 0.1, 1.0],
+	})
+	_check("array highlight tint coerces to Color", mixed.get("pine_highlight_tint") is Color)
+	_check("array bark tint coerces to Color", mixed.get("pine_bark_tint") is Color)
+	_check("array seasonal tint coerces to Color", mixed.get("seasonal_tint") is Color)
 
 
 func _test_transform_ground_y() -> void:

@@ -96,6 +96,29 @@ func _test_phenology() -> void:
 	_check("no registry opinion -> -1",
 		VegSpeciesRegistry.deciduousness("no_such_species") < 0.0)
 
+	# deciduousness_for is the ONE renderer-facing resolution (registry first,
+	# string fallback second) — the Tune-look preview once kept its own copy
+	# that skipped the registry, so spruce/fir/cedar/redwood previewed at 0.8
+	# and palm at 1.0. Every named conifer must resolve evergreen through it.
+	for conifer in ["pine", "spruce", "fir", "cedar", "redwood"]:
+		_check("%s resolves evergreen via deciduousness_for" % conifer,
+			VegSpeciesRegistry.deciduousness_for(conifer) < 0.1,
+			"got %.2f" % VegSpeciesRegistry.deciduousness_for(conifer))
+	_check("palm resolves evergreen via deciduousness_for",
+		VegSpeciesRegistry.deciduousness_for("coconut_palm") < 0.1)
+	_check("deciduous family resolves 1.0",
+		is_equal_approx(VegSpeciesRegistry.deciduousness_for("deciduous"), 1.0))
+	_check("grass resolves 0.0",
+		VegSpeciesRegistry.deciduousness_for("grass_lawn") < 0.1)
+	_check("unknown species falls back to 0.8",
+		is_equal_approx(VegSpeciesRegistry.deciduousness_for("mystery_bush_x"), 0.8))
+	# The bulk-name parser feeding the env-sync fallback: a chunk-suffixed name
+	# must yield the bare species (a raw substr(5) yielded "spruce_0_3_4",
+	# missed the registry, and rendered the batch 80% deciduous).
+	_check("bulk name resolves species not suffix",
+		VegetationRuntime.species_from_bulk_name("Bulk_spruce_0_3_4") == "spruce",
+		VegetationRuntime.species_from_bulk_name("Bulk_spruce_0_3_4"))
+
 
 func _test_climate_envelopes() -> void:
 	_check("no coconut at 48N", not VegSpeciesRegistry.species_allowed_at("coconut_palm", 48.3))

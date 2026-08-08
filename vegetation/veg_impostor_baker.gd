@@ -23,7 +23,10 @@ signal bake_completed(key: String)
 ## v4: Overhaul v2 — exact-size real-unit meshes + archetype model (any change
 ## to the NEAR tree geometry must bump this or cached impostors serve the old
 ## silhouette forever).
-const BAKE_VERSION := 4
+## v5: Overhaul v2.1 — the configurable LOD ladder: `<fam>_detail_chain` joins
+## the bake key (a photocard-first chain bakes the atlas FROM the photocard
+## mesh, so the chain changes the baked silhouette).
+const BAKE_VERSION := 5
 const CACHE_DIR := "user://veg_impostors"
 const ATLAS_PX := 1024
 const GRID := 3

@@ -22,6 +22,7 @@ func _initialize() -> void:
 	_test_drop_window()
 	_test_litter_mask()
 	_test_litter_strength()
+	_test_impostor_night_floor()
 	if _failures == 0:
 		print("VEG PHENOLOGY SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -284,3 +285,31 @@ func _test_litter_strength() -> void:
 	var trop := SeasonModel.season_signals(_doy(12, 10), 6.0)
 	_check("no litter in the tropics",
 		is_zero_approx(VegLitterMask.strength_for_season(trop, 0.0)))
+
+
+## Unshaded impostor night floor: must land where a LIT tree lands, at both
+## ends. The hard-coded 0.30 floor it replaced left the far forest ~2 orders
+## of magnitude brighter than the near tier at full night — the reported
+## "trees glow in the dark at distance".
+func _test_impostor_night_floor() -> void:
+	# Full daylight: ambient == day_ambient -> floor is exactly the lit
+	# tiers' night_darkness leftover (0.35), so a daytime night_factor of 1
+	# (eclipse) matches the near tier's darkening.
+	_check("day floor == night_darkness leftover",
+		is_equal_approx(VegetationRuntime.impostor_night_floor(0.3), 0.35))
+	# Moonless night: main.gd's night_ambient is 0.003 -> ~0.0035, i.e. the
+	# same order as albedo × 0.35 × ambient on a lit leaf. NOT 0.30.
+	var night := VegetationRuntime.impostor_night_floor(0.003)
+	_check("moonless-night floor is dark", night < 0.006, "%.4f" % night)
+	_check("moonless-night floor stays nonzero", night > 0.0009, "%.4f" % night)
+	# Full-moon night (ambient 0.011): brighter than moonless, still dark.
+	var moon := VegetationRuntime.impostor_night_floor(0.011)
+	_check("moonlit floor between", moon > night and moon < 0.02, "%.4f" % moon)
+	# Monotonic in ambient, clamped above.
+	var prev := -1.0
+	for a in [0.0, 0.001, 0.01, 0.05, 0.1, 0.2, 0.3, 0.5]:
+		var v := VegetationRuntime.impostor_night_floor(float(a))
+		_check("night floor monotonic at %.3f" % a, v >= prev)
+		prev = v
+	_check("night floor caps at the darkness leftover",
+		is_equal_approx(VegetationRuntime.impostor_night_floor(9.9), 0.35))

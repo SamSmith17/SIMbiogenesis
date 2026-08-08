@@ -20,6 +20,70 @@ extends RefCounted
 const MIN_DETAIL_M := 60.0
 const SHRINK_STEP := 0.85
 
+## --- Configurable LOD ladder (Overhaul v2.1) --------------------------------
+## The player picks the ORDER of tree representations per species and may
+## disable any: "mesh,impostor" (the default = the shipped two-band model),
+## "photocard" alone (texture card at ALL distances), "mesh,photocard,
+## impostor", … Style key: `<family>_detail_chain` — family-prefixed so it
+## rides the per-species override ladder AND lands in the impostor bake key
+## (the baked silhouette must follow the nearest representation). It is
+## deliberately NOT named `<family>_lod_chain`: VegImpostorBaker.bake_key
+## excludes any key containing "_lod_" as a LOD-reach key, which would
+## silently drop the chain from the bake key and serve a stale silhouette.
+const REP_MESH := "mesh"
+const REP_PHOTOCARD := "photocard"
+const REP_IMPOSTOR := "impostor"
+const DEFAULT_CHAIN := "mesh,impostor"
+const REPS: Array = [REP_MESH, REP_PHOTOCARD, REP_IMPOSTOR]
+
+
+## Parse + validate a chain string ("mesh,photocard,impostor"). Unknown
+## tokens are dropped, duplicates keep their first position, empty/invalid
+## input falls back to the default chain. Always returns ≥1 entry.
+static func parse_chain(raw: String) -> Array:
+	var out: Array = []
+	for tok in raw.to_lower().split(","):
+		var t := str(tok).strip_edges()
+		if t in REPS and not (t in out):
+			out.append(t)
+	if out.is_empty():
+		for tok in DEFAULT_CHAIN.split(","):
+			out.append(str(tok))
+	return out
+
+
+## Distance bands for a chain: [{rep, begin_m, end_m}] tiling 0..cull_end_m.
+## Interior boundaries come from the two distance knobs — after band 0 the
+## (budget-shrunk) detail distance, after band 1 the photocard distance
+## (forced past the first boundary). Boundaries are clamped monotonic; the
+## LAST band always extends to the cull end; zero-width bands are dropped
+## (e.g. detail ≥ cull collapses a 2-band chain to a single full-range band,
+## matching the old single-batch special case).
+static func chain_bands(chain: Array, detail_m: float, photocard_m: float,
+		cull_end_m: float) -> Array:
+	var n := chain.size()
+	var bands: Array = []
+	if n == 0 or cull_end_m <= 0.0:
+		return bands
+	var bounds: Array = []
+	if n >= 2:
+		bounds.append(detail_m)
+	if n >= 3:
+		bounds.append(maxf(photocard_m, detail_m + 40.0))
+	var prev := 0.0
+	for i in bounds.size():
+		var b := clampf(float(bounds[i]), prev + 1.0, cull_end_m)
+		bounds[i] = b
+		prev = b
+	var begin := 0.0
+	for i in n:
+		var end: float = cull_end_m if i >= bounds.size() or i == n - 1 \
+				else float(bounds[i])
+		if end > begin + 1.0:
+			bands.append({"rep": str(chain[i]), "begin_m": begin, "end_m": end})
+			begin = end
+	return bands
+
 
 ## chunk_counts: {Vector2i chunk coord -> int tree records}. Returns the
 ## largest distance ≤ requested_m whose worst-case near-set count fits the

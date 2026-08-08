@@ -20,7 +20,13 @@ vec3 apply_vegetation_wind(vec3 vertex, vec3 inst_pos, float top_mask, float ver
 	float branch_scale = mix(1.20, mix(0.80, 0.60, step(1.5, wind_profile)), step(0.5, wind_profile));
 	float leaf_scale = mix(0.20, mix(1.00, 1.20, step(1.5, wind_profile)), step(0.5, wind_profile));
 
-	float speed_t = clamp(wind_speed_ms / 12.0, 0.05, 1.6);
+	// Ceiling raised from 1.6 to 3.0 for extreme weather. The old cap saturated
+	// near 19 m/s, so a 30 m/s damaging-wind event bent the canopy no harder
+	// than an ordinary gusty afternoon — the hazard existed in the simulation
+	// and was invisible in the trees. 3.0 saturates near 36 m/s (Beaufort 12),
+	// and ordinary weather never reaches the new headroom, so every normal
+	// scene is unchanged.
+	float speed_t = clamp(wind_speed_ms / 12.0, 0.05, 3.0);
 	float amp = wind_strength * (0.35 + speed_t * 0.85);
 	float world_phase = inst_pos.x * 0.17 + inst_pos.z * 0.13;
 	float t = TIME * sway_frequency;

@@ -62,6 +62,24 @@ func _compute_power_kw() -> float:
 	return power_at_wind_speed_kw(v_hub)
 
 
+## Gust shut-down, kept SEPARATE from power_at_wind_speed_kw so that function's
+## signature and its pinned values in source_physics_selftest are untouched.
+##
+## IEC 61400-1 defines cut-out on a 10-minute MEAN wind speed, with a separate
+## short-gust criterion: machines trip on a ~3 s gust roughly 25% above their
+## cut-out mean, because a gust that brief never registers in the mean but does
+## load the structure. Without this, `wind_gust_ms` — which WeatherService has
+## always provided — was read by nothing but the vegetation shader, and a
+## damaging-wind event could leave turbines happily generating.
+static func gust_shutdown(v_gust: float, cut_out_ms: float) -> bool:
+	if not is_finite(v_gust) or not is_finite(cut_out_ms) or cut_out_ms <= 0.0:
+		return false
+	return v_gust > cut_out_ms * GUST_CUTOUT_FACTOR
+
+
+const GUST_CUTOUT_FACTOR := 1.25
+
+
 ## Instantaneous electrical output (kW) for a given hub-height wind speed.
 ## Pure function of config + speed; used by _compute_power_kw and tests.
 func power_at_wind_speed_kw(v_hub: float) -> float:
