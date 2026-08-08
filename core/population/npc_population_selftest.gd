@@ -90,6 +90,8 @@ func _init() -> void:
 	_test_routine_behaviour()
 	_test_hash_distribution()
 	_test_recurrence()
+	_test_labour_ledger()
+	_test_fairness_rotation()
 	_test_work_pose_classifier()
 	_test_facing_rules()
 	_test_crew_facing_spread()
@@ -4302,6 +4304,222 @@ func _test_routine_schedule() -> void:
 ## The behaviour the player actually reported: people arriving at the restroom
 ## and STAYING there, because a finished activity left them idling wherever
 ## they stood and nearest-space selection then kept picking the same place.
+## Two scarce daily jobs — the shape that exposes the first-refusal bias.
+func _fair_board() -> NpcChoreBoard:
+	var b := NpcChoreBoard.create_empty()
+	for i in 2:
+		b.add_chore("Job %d" % i, 3.0, {
+			"window": {"start_h": 0.0, "end_h": 24.0},
+			"exposure": NpcWeatherGate.EXPOSURE_OUTDOOR,
+			"repeat": "daily", "min_workers": 1, "max_workers": 1,
+			"target": {"kind": "pos", "x": 25.0 + float(i) * 8.0, "z": 5.0},
+		})
+	return b
+
+
+## Fairness — the systematic bias, and the two fixes it needed.
+##
+## Two independent defects, and fixing either alone leaves the other:
+##   - the engine iterated `for a in agents:` in fixed array order, and
+##     _begin_chore takes options[0] and claims it, so agent 0 got first
+##     refusal on every chore every substep, forever;
+##   - available_for's comparator takes agent_id and never used it, so every
+##     agent was handed an identical list to converge on.
+func _test_fairness_rotation() -> void:
+	var site := _make_test_site()
+	site["chore_pos_of"] = _pos_chore_resolver()
+	# TWO single-worker jobs and SIX people, run over four days. The scenario
+	# matters: with a job per person the CLAIM distributes the work by itself
+	# (a claimed chore is filtered out by the crew cap), and the bias hides.
+	# It only bites when jobs are scarcer than hands — which is the normal
+	# state of a settlement — because then the same person wins the same
+	# scramble every single day.
+	var board := _fair_board()
+	var engine := NpcPopulationEngine.new()
+	engine.configure(6, "fair", Vector2.ZERO)
+	engine.chore_board = board
+	engine.routine = NpcRoutine.default_day()
+	_run_sim(engine, site, 8.0, 24.0 * 4.0, 1.0 / 60.0)
+
+	var ids: Array = []
+	for a in engine.agents:
+		ids.append((a as NpcAgent).id)
+	# THE REGRESSION GUARD, and it FAILS on the pre-fix code.
+	#
+	# Two 3 h daily chores over four days is 24 h of work, full stop. Before
+	# _arm_cycle was made once-per-cycle it reset progress on EVERY credit, so
+	# the chores never completed after day one and the crew burned 99.59 h
+	# achieving one day's work. The total is the tell; the completion count is
+	# the cause.
+	var banked := 0.0
+	for aid in ids:
+		banked += engine.labour.total_hours(str(aid))
+	_check("a repeating chore consumes only the labour it is worth",
+		absf(banked - 24.0) < 0.5, "%.2f h banked, want 24" % banked)
+	for c in board.chores:
+		_check("and completes every day, not just the first",
+			int((c as Dictionary).get("done_day", -1)) >= 3,
+			"done_day %d" % int((c as Dictionary).get("done_day", -1)))
+
+	# ⚠ KNOWN LIMITATION, asserted so it cannot silently get worse.
+	#
+	# Work is NOT evenly spread yet, and least-worked-first ask order does not
+	# fix it: measured identically with fixed order. Who works is decided by
+	# who happens to be FREE when a chore comes due, and the routine phase
+	# offsets make that reliably the same people. Ordering removes the
+	# structural first-refusal bias (agent 0 asking first every substep
+	# forever) but availability dominates it.
+	#
+	# Equal rotation needs named slots — the duty roster — which is the next
+	# phase. This asserts only that SOMEBODY does the work and the ledger
+	# reflects it, so a regression to nobody-works is caught here.
+	var f := NpcLabourLog.fairness(engine.labour, ids, 0, 9999)
+	var busy_ids := 0
+	for aid in ids:
+		if engine.labour.total_hours(str(aid)) > 0.0:
+			busy_ids += 1
+	_check("the work got done by somebody", busy_ids >= 1 and banked > 20.0,
+		"%d worked, %.1f h (spread %.2f — see the note above)"
+			% [busy_ids, banked, f.get("spread", 0.0)])
+
+	# Determinism: the rotation is keyed on the sim day and substep index, not
+	# a RNG, so two identical runs must produce identical ledgers. This is the
+	# check that proves the fix did not trade bias for noise.
+	var e2 := NpcPopulationEngine.new()
+	e2.configure(6, "fair", Vector2.ZERO)
+	e2.chore_board = _fair_board()
+	e2.routine = NpcRoutine.default_day()
+	_run_sim(e2, site, 8.0, 24.0 * 4.0, 1.0 / 60.0)
+	var same := true
+	for aid in ids:
+		if absf(engine.labour.total_hours(str(aid))
+				- e2.labour.total_hours(str(aid))) > 1e-6:
+			same = false
+	_check("the rotation is deterministic", same)
+
+	# The yield must never starve anybody: with one job on offer, even the
+	# person furthest ahead still sees it.
+	var b3 := NpcChoreBoard.create_empty()
+	var only := b3.add_chore("The only job", 4.0, {
+		"window": {"start_h": 0.0, "end_h": 24.0}, "repeat": "daily"})
+	for rank in [0, 1, 5, 99]:
+		var opts := b3.available_for("x", 100.0, 9.0, {}, 6, rank)
+		_check("rank %d still sees the only job" % rank,
+			opts.size() == 1 and str((opts[0] as Dictionary).get("id", "")) == only)
+
+	# And it ROTATES rather than reorders arbitrarily: over a list of three,
+	# consecutive ranks see different heads.
+	var b4 := NpcChoreBoard.create_empty()
+	for i in 3:
+		b4.add_chore("J%d" % i, 4.0, {"window": {"start_h": 0.0, "end_h": 24.0},
+			"repeat": "daily", "priority": i})
+	var heads: Array = []
+	for rank in 3:
+		var o := b4.available_for("x", 100.0, 9.0, {}, 6, rank)
+		heads.append(str((o[0] as Dictionary).get("label", "")))
+	_check("consecutive ranks are offered different work first",
+		heads[0] != heads[1] and heads[1] != heads[2], str(heads))
+	_check("and rank 0 still gets the top-priority job", str(heads[0]) == "J0")
+
+
+## NpcLabourLog — who did how much, and is it even.
+func _test_labour_ledger() -> void:
+	var lg := NpcLabourLog.create_empty()
+	lg.bank("a", 10, 2.0, "dig")
+	lg.bank("a", 10, 1.0, "lift")
+	lg.bank("a", 4, 5.0, "dig")
+	lg.bank("b", 10, 0.5, "dig")
+	_check("a day sums across categories", is_equal_approx(lg.day_hours("a", 10), 3.0))
+	_check("categories are kept apart",
+		is_equal_approx(float(lg.by_category("a", 10, 10).get("dig", 0.0)), 2.0))
+	_check("lifetime totals everything", is_equal_approx(lg.total_hours("a"), 8.0))
+	_check("zero and negative hours are ignored",
+		lg.day_hours("nobody", 10) == 0.0)
+	lg.bank("c", 10, -3.0, "dig")
+	_check("a negative credit banks nothing", lg.total_hours("c") == 0.0)
+
+	# Window boundaries: the trailing week INCLUDES today and day-6, excludes
+	# day-7. Off by one here would quietly change every fairness readout.
+	# Day 4 sits exactly six days back from day 10, so it is the far EDGE of
+	# that window and must be included; from day 11 it is seven back and must
+	# not be. An off-by-one here would quietly shift every fairness readout.
+	_check("the week window includes its far edge",
+		is_equal_approx(lg.week_hours("a", 10), 8.0), "%.2f" % lg.week_hours("a", 10))
+	_check("and excludes the day beyond it",
+		is_equal_approx(lg.week_hours("a", 11), 3.0), "%.2f" % lg.week_hours("a", 11))
+	_check("the month window reaches further",
+		is_equal_approx(lg.month_hours("a", 10), 8.0))
+
+	# Fairness, and the names that explain the number.
+	var f := NpcLabourLog.fairness(lg, ["a", "b"], 10, 10)
+	_check("fairness names the hardest worker", str(f.get("max_id", "")) == "a")
+	_check("and the least", str(f.get("min_id", "")) == "b")
+	_check("an uneven split reads as such", str(f.get("label", "")) != "even",
+		"%s (spread %.2f)" % [f.get("label", ""), f.get("spread", 0.0)])
+	var even := NpcLabourLog.create_empty()
+	even.bank("a", 1, 4.0, "dig")
+	even.bank("b", 1, 4.0, "dig")
+	var fe := NpcLabourLog.fairness(even, ["a", "b"], 1, 1)
+	_check("an equal split reads as even", str(fe.get("label", "")) == "even"
+		and is_equal_approx(float(fe.get("spread", 1.0)), 0.0))
+	_check("fairness over nobody does not divide by zero",
+		int(NpcLabourLog.fairness(lg, [], 0, 0).get("n", -1)) == 0)
+
+	# Pruning and forgetting.
+	_check("pruning drops old days", lg.prune(10) == 1)
+	_check("and keeps the rest", is_equal_approx(lg.total_hours("a"), 3.0))
+	lg.forget("a")
+	_check("forgetting a departed person clears them", lg.total_hours("a") == 0.0)
+
+	# Round trip. Hours are snapped on the way out — an unrounded float would
+	# change every tick and defeat the persist blob gate.
+	var lg2 := NpcLabourLog.create_empty()
+	lg2.bank("a", 3, 1.0 / 3.0, "dig")
+	var rt := NpcLabourLog.deserialize(lg2.serialize())
+	_check("a round trip keeps the day index as an int",
+		rt.day_hours("a", 3) > 0.0, str(rt.days))
+	_check("and snaps the hours",
+		is_equal_approx(rt.day_hours("a", 3), 0.33), "%.4f" % rt.day_hours("a", 3))
+
+	# END TO END, and the assertion that FAILS on the pre-ledger code: run a
+	# real crew a full sim-day and every worker must have banked something.
+	# Before this, credit() returned the applied hours and every caller threw
+	# them away, so no per-agent labour record existed anywhere in the game.
+	var site := _make_test_site()
+	site["chore_pos_of"] = _pos_chore_resolver()
+	var board := NpcChoreBoard.create_empty()
+	for i in 5:
+		board.add_chore("Job %d" % i, 6.0, {
+			"window": {"start_h": 0.0, "end_h": 24.0},
+			"exposure": NpcWeatherGate.EXPOSURE_OUTDOOR,
+			"repeat": "daily", "min_workers": 1, "max_workers": 1,
+			"target": {"kind": "pos", "x": 30.0 + float(i) * 4.0, "z": 0.0},
+		})
+	var engine := NpcPopulationEngine.new()
+	engine.configure(5, "led", Vector2.ZERO)
+	engine.chore_board = board
+	engine.routine = NpcRoutine.default_day()
+	_run_sim(engine, site, 9.0, 20.0, 1.0 / 60.0)
+	var worked := 0
+	var total := 0.0
+	for a in engine.agents:
+		var h := engine.labour.total_hours((a as NpcAgent).id)
+		total += h
+		if h > 0.0:
+			worked += 1
+	_check("every worker banked hours over a sim-day",
+		worked == engine.agents.size(),
+		"%d of %d banked, %.2f h total" % [worked, engine.agents.size(), total])
+	_check("and the total is plausible", total > 1.0 and total < 5.0 * 20.0,
+		"%.2f h" % total)
+	# The ledger must survive the save path, which the walking ledger does not.
+	var e2 := NpcPopulationEngine.new()
+	e2.restore(engine.snapshot(29.0))
+	_check("the ledger survives snapshot/restore",
+		absf(e2.labour.total_hours(str((engine.agents[0] as NpcAgent).id))
+			- engine.labour.total_hours(str((engine.agents[0] as NpcAgent).id))) < 0.02)
+
+
 ## Recurrence — weekly, every-N, and the epoch the weekday rests on.
 func _test_recurrence() -> void:
 	# THE PIN. `weekday()` is `day_index % 7` and is only correct because

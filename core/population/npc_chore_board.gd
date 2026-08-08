@@ -327,10 +327,30 @@ func rearm(chore_id: String) -> void:
 ## _is_due with _remaining, so the aggregates see a re-due daily chore as
 ## full work again exactly as before.
 func _arm_cycle(chore: Dictionary, abs_hours: float) -> void:
-	if int(chore.get("done_day", -1)) >= 0 \
-			and float(chore.get("progress_h", 0.0)) > 0.0 \
-			and _is_due(chore, abs_hours):
-		chore["progress_h"] = 0.0
+	if int(chore.get("done_day", -1)) < 0:
+		return
+	if float(chore.get("progress_h", 0.0)) <= 0.0:
+		return
+	if not _is_due(chore, abs_hours):
+		return
+	# ONCE PER CYCLE, not once per credit.
+	#
+	# credit() calls this before applying, and a re-due chore stays due until
+	# it COMPLETES. Without this guard the sequence was: reset to 0, add a few
+	# minutes, next credit resets to 0 again — forever. A repeating chore
+	# could only ever finish if a single credit delivered its whole
+	# chore_hours, so in practice a daily chore completed on its first day and
+	# NEVER AGAIN, silently, while still consuming labour every tick.
+	# Measured: two 3 h daily chores burned 99 h of crew time over four days
+	# and recorded one completion.
+	#
+	# It hid because every test of completion used repeat:"once", where
+	# _is_due goes false after the first finish and this never runs at all.
+	var today := day_index(abs_hours)
+	if int(chore.get("cycle_day", -1)) == today:
+		return
+	chore["progress_h"] = 0.0
+	chore["cycle_day"] = today
 
 
 ## Chores this agent could pick up right now, best first. Filters by
@@ -340,7 +360,8 @@ func _arm_cycle(chore: Dictionary, abs_hours: float) -> void:
 ## whole roster cannot meet — nobody waits forever for hands that don't
 ## exist.
 func available_for(agent_id: String, abs_hours: float, hour_of_day: float,
-		weather: Dictionary = {}, roster_size: int = 0) -> Array:
+		weather: Dictionary = {}, roster_size: int = 0,
+		fair_rank: int = 0) -> Array:
 	if bool(rules.get("tools_down", false)):
 		return []
 	var night_shift := bool(rules.get("night_shift", false))
@@ -383,6 +404,22 @@ func available_for(agent_id: String, abs_hours: float, hour_of_day: float,
 		if pa != pb:
 			return pa < pb
 		return _remaining(a) < _remaining(b))
+	# Fair-share yield.
+	#
+	# The sort above is good, and deliberately untouched — gathering first,
+	# then priority, then finish-what-is-nearly-done. Its problem is that it
+	# is IDENTICAL for everybody, so every agent converges on options[0].
+	#
+	# So rather than corrupt the ordering, rotate it: somebody who is ahead
+	# of the roster steps past the jobs somebody behind should get first.
+	# Rank 0 (furthest behind) still gets the top job. The shift is clamped
+	# below the list length, so this can never empty the list and therefore
+	# can never become a stall.
+	if out.size() > 1 and fair_rank > 0:
+		var shift := mini(fair_rank, out.size() - 1)
+		var head: Array = out.slice(0, shift)
+		out = out.slice(shift)
+		out.append_array(head)
 	return out
 
 

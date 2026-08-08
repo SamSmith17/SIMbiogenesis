@@ -472,6 +472,15 @@ func _step_chore(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 	var effective := dt_hours * NpcMorale.productivity(morale) \
 			* NpcWeatherGate.productivity(weather, exposure)
 	var applied: float = board.credit(chore_id, effective, abs_hours)
+	# Bank it against the PERSON. This return value was discarded for the
+	# whole life of the chore board, which is why "is the load divided
+	# evenly" had no answer. Note credit() returns 0.0 below quorum and that
+	# labour genuinely is lost — banking the wait would reward standing at a
+	# stalled barn-raising, which is worse than no metric at all.
+	if applied > 0.0:
+		var bank: Callable = ctx.get("bank_labour", Callable())
+		if bank.is_valid():
+			bank.call(id, applied, NpcWorkPose.family_for(board.find(chore_id)))
 	if board.remaining(chore_id) <= 0.0:
 		# Finished (by this credit, or a crewmate's).
 		_finish(ctx, true)
@@ -846,7 +855,8 @@ func _begin_chore(abs_hours: float, ctx: Dictionary) -> bool:
 		return false
 	var weather: Dictionary = ctx.get("weather", {})
 	var options: Array = board.available_for(id, abs_hours, _hour(ctx), weather,
-		int(ctx.get("roster_size", 0)))
+		int(ctx.get("roster_size", 0)),
+		int((ctx.get("fair_ranks", {}) as Dictionary).get(id, 0)))
 	if options.is_empty():
 		return false
 	var chore: Dictionary = options[0]

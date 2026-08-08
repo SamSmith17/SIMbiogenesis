@@ -53,6 +53,9 @@ const CATCHUP_MORALE_DRIFT := 0.12
 
 var agents: Array = []            # of NpcAgent
 var chore_board: NpcChoreBoard = null
+## Who worked how much, per sim-day. Rides the snapshot, so it survives
+## save/load — unlike NpcAgent's walking ledger, which does not.
+var labour := NpcLabourLog.create_empty()
 ## The daily schedule everyone follows (per-agent phase offsets vary it).
 ## Editable by the player; defaults to NpcRoutine.default_day().
 var routine: NpcRoutine = null
@@ -175,8 +178,27 @@ func tick(abs_hours: float, ctx_in: Dictionary) -> Dictionary:
 	for i in steps:
 		t += sub
 		ctx["hour_of_day"] = fposmod(float(ctx_in.get("hour_of_day", 12.0)) - (abs_hours - t), 24.0)
-		for a in agents:
-			var agent: NpcAgent = a
+		ctx["abs_hours"] = t
+		# WHO ASKS FIRST — least-worked first.
+		#
+		# _begin_chore takes options[0] and claims it, and this loop used to
+		# run in fixed array order, so agent 0 got first refusal on every
+		# chore every substep forever. That is a systematic bias, not merely
+		# an absence of fairness, and no amount of tuning the board's
+		# comparator fixes it — the comparator is per-CHORE and this is a
+		# per-PERSON problem.
+		#
+		# A blind rotation was tried first and is not enough: with fine ticks
+		# there is only one substep, so a day-keyed offset rotates once a day
+		# and two scarce jobs still land on the same few people (measured
+		# spread 1.23 over four days). Ordering by the labour ledger is both
+		# simpler and actually purposeful: whoever is furthest behind gets
+		# first refusal, which is exactly "equal rotation until everyone has
+		# contributed the same". Deterministic — _fair_ranks is a total order
+		# with an id tiebreak, never a RNG.
+		var ranks := _fair_ranks(t)
+		ctx["fair_ranks"] = ranks
+		for agent in _ask_order(ranks):
 			ctx["assigned_chore_h"] = _assigned_hours_for(agent.id, t)
 			var c: Dictionary = agent.step(t, sub, ctx)
 			for kind in c:
@@ -186,6 +208,37 @@ func tick(abs_hours: float, ctx_in: Dictionary) -> Dictionary:
 	_process_departures(abs_hours, ctx)
 	_last_abs_h = abs_hours
 	return demand
+
+
+## Each agent's position in the roster sorted by trailing-week hours, fewest
+## first. Rank 0 is whoever is furthest behind.
+##
+## Computed ONCE per substep and handed to every agent through ctx — one sort
+## of at most 64 ids, rather than the same sort repeated per agent. Ties break
+## on the id so the ordering is total and reproducible.
+## The roster in ask order: rank 0 (furthest behind) first.
+func _ask_order(ranks: Dictionary) -> Array:
+	var out: Array = agents.duplicate()
+	out.sort_custom(func(x, y) -> bool:
+		return int(ranks.get((x as NpcAgent).id, 0)) 			< int(ranks.get((y as NpcAgent).id, 0)))
+	return out
+
+
+func _fair_ranks(abs_h: float) -> Dictionary:
+	var day := NpcChoreBoard.day_index(abs_h)
+	var ids: Array = []
+	for a in agents:
+		ids.append((a as NpcAgent).id)
+	ids.sort_custom(func(x: String, y: String) -> bool:
+		var hx := labour.week_hours(x, day)
+		var hy := labour.week_hours(y, day)
+		if absf(hx - hy) > 0.01:
+			return hx < hy
+		return x < y)
+	var out: Dictionary = {}
+	for i in ids.size():
+		out[str(ids[i])] = i
+	return out
 
 
 func _assigned_hours_for(agent_id: String, abs_h: float) -> float:
@@ -357,6 +410,15 @@ func has_collapsed() -> bool:
 	return _collapsed
 
 
+## Bank one credit against the person who earned it. The day index comes from
+## the engine's own clock rather than the caller, so every agent in a substep
+## banks to the same day whatever order they ticked in.
+func _bank_labour(agent_id: String, hours: float, category: String) -> void:
+	if is_nan(_last_abs_h):
+		return
+	labour.bank(agent_id, NpcChoreBoard.day_index(_last_abs_h), hours, category)
+
+
 func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 	# NOTE: this rebuilds the dict rather than mutating the caller's, so every
 	# key the agents need must be forwarded explicitly. Forgetting one fails
@@ -376,6 +438,18 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"weather": ctx_in.get("weather", _weather),
 		"board": chore_board,
 		"assigned_chore_h": 0.0,
+		# Refreshed per substep below, alongside hour_of_day. NpcAgent._walk
+		# stamps every live-trail point with this, and it was never forwarded
+		# — so every stamp read 0.0 and trim_trail dropped the whole trail on
+		# the next step. Exactly the silent-omission failure this function's
+		# header warns about, found when the fair-share rotation changed which
+		# agent happened to end a run mid-stride.
+		"abs_hours": _last_abs_h,
+		# Per-agent labour banking. It belongs HERE and not in the bridge's
+		# ctx for exactly the reason the note above gives: this function
+		# rebuilds the dict from scratch, and a key added anywhere else
+		# never arrives.
+		"bank_labour": _bank_labour,
 		"roster_size": agents.size(),
 	}
 
@@ -727,6 +801,8 @@ func snapshot(saved_h: float) -> Dictionary:
 	}
 	if chore_board != null and not chore_board.chores.is_empty():
 		out["chores"] = chore_board.serialize()
+	if not labour.days.is_empty():
+		out["labour"] = labour.serialize()
 	return out
 
 
@@ -755,3 +831,4 @@ func restore(snap: Dictionary) -> void:
 		routine = NpcRoutine.default_day()
 	if snap.has("chores"):
 		chore_board.deserialize(snap.get("chores", {}) as Dictionary)
+	labour = NpcLabourLog.deserialize(snap.get("labour", {}) as Dictionary)
