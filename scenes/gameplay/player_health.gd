@@ -78,6 +78,22 @@ signal damage_taken(amount: float, source: String)
 ## How often to check for nearby fires (seconds)
 @export var fire_check_interval: float = 0.2
 
+## Damage per second at FULL breathing hazard (extreme weather). Two orders of
+## magnitude below fire damage on purpose: smoke is a slow cumulative harm you
+## are meant to be able to work through for a while and then retreat from, not
+## a thing that kills you for walking past it.
+@export var air_damage_rate: float = 0.35
+
+## Fraction of air-quality damage still taken under cover. Not zero — an
+## unfiltered building during a Hazardous smoke event fills with smoke, and
+## "walls do not solve this one" is the whole character of the hazard.
+const AIR_SHELTER_RELIEF := 0.35
+
+## Overhead-cover raycast: how far up to look, and how often (seconds). Cached
+## because it is a physics query with two per-frame callers.
+const COVER_RAY_M := 40.0
+const COVER_CHECK_INTERVAL := 0.5
+
 # ===== INTERNAL STATE =====
 
 var _player: CharacterBody3D = null
@@ -87,6 +103,8 @@ var _fire_check_timer: float = 0.0
 var _is_near_fire: bool = false
 var _current_fire_damage: float = 0.0  # Scaled by proximity
 var _last_damage_source: String = "unknown"
+var _cover_cached: bool = false
+var _cover_checked_at: float = -999.0
 
 # Movement tracking for hydration
 var _is_walking: bool = false
@@ -171,10 +189,32 @@ func _check_sunlight() -> bool:
 	
 	if not is_daytime:
 		return false
-	
-	# Could add raycast to check for shade/indoor, but for now assume outdoors during day
-	# TODO: Add indoor detection
-	return true
+
+	# Under cover counts as out of the sun. This closes a long-standing TODO,
+	# and the same test is what tells the air-quality model whether the player
+	# is sheltered from smoke — one implementation, two consumers.
+	return not _is_under_cover()
+
+
+## True when something solid is directly overhead. Cached at ~2 Hz because it is
+## a physics query and both callers run every frame.
+func _is_under_cover() -> bool:
+	var now := Time.get_ticks_msec() / 1000.0
+	if now - _cover_checked_at < COVER_CHECK_INTERVAL:
+		return _cover_cached
+	_cover_checked_at = now
+	_cover_cached = false
+	if _player == null or not _player.is_inside_tree():
+		return _cover_cached
+	var space := _player.get_world_3d().direct_space_state
+	if space == null:
+		return _cover_cached
+	var from: Vector3 = _player.global_position + Vector3(0.0, 0.5, 0.0)
+	var params := PhysicsRayQueryParameters3D.create(from, from + Vector3(0.0, COVER_RAY_M, 0.0))
+	params.exclude = [_player.get_rid()] if _player is CollisionObject3D else []
+	var hit := space.intersect_ray(params)
+	_cover_cached = not hit.is_empty()
+	return _cover_cached
 
 # ===== HYDRATION =====
 
@@ -258,12 +298,36 @@ func _check_fire_damage(delta: float) -> void:
 	else:
 		_current_fire_damage = 0.0
 
+## ===== AIR QUALITY =====
+##
+## Breathing hazardous air is a slow, cumulative harm, unlike standing in a fire
+## — so the rate is small and it is meant to be survivable for a while. Shelter
+## helps but does not save you: an unfiltered building during a Hazardous smoke
+## event still fills with smoke, which is the point of the hazard.
+func _air_quality_damage_rate() -> float:
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw == null:
+		return 0.0
+	var hz: Dictionary = xw.call("current")
+	var breath := float(hz.get("breath_hazard", 0.0))
+	if not is_finite(breath) or breath <= 0.05:
+		return 0.0
+	var shelter := AIR_SHELTER_RELIEF if _is_under_cover() else 1.0
+	return air_damage_rate * breath * shelter
+
+
 func _physics_process(delta: float) -> void:
 	var gr := GameplayRulesImpl.from_node(self)
-	if gr == null or not gr.is_survival_active() or not gr.is_fire_damage_enabled():
+	if gr == null or not gr.is_survival_active():
 		return
-	if _is_near_fire and _current_fire_damage > 0:
+	if gr.is_fire_damage_enabled() and _is_near_fire and _current_fire_damage > 0:
 		take_damage(_current_fire_damage * delta, "fire")
+	# Gated separately from fire so a player can run extreme weather visually
+	# with survival on but hazard damage off.
+	if gr.is_air_hazard_enabled():
+		var air := _air_quality_damage_rate()
+		if air > 0.0:
+			take_damage(air * delta, "smoke")
 
 # ===== DAMAGE & HEALING =====
 

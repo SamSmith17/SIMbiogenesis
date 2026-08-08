@@ -22,6 +22,9 @@ var _prop_id: String = ""
 var _syncing := false
 
 var _model_lbl: Label
+var _packed_lbl: Label
+var _pack_btn: Button = null
+var _crew_breakdown_btn: Button = null
 var _model_option: OptionButton
 var _off_x: SpinBox
 var _off_y: SpinBox
@@ -39,6 +42,7 @@ var _space_row: NpcSpaceTagRow
 var _del_btn: Button
 var _move_btn: Button
 var _linkage_btn: Button
+var _guide_btn: Button
 var _siphon_btn: Button
 var _ports_btn: Button
 
@@ -135,6 +139,15 @@ func _build_ui() -> void:
 	_model_lbl.add_theme_font_size_override("font_size", 11)
 	left.add_child(_model_lbl)
 
+	# Packed ("shipping") size + weight — PACKING_PLAN.md Phase 0.
+	_packed_lbl = Label.new()
+	_packed_lbl.add_theme_color_override("font_color",
+		Color(C_TEXT.r, C_TEXT.g, C_TEXT.b, 0.65))
+	_packed_lbl.add_theme_font_size_override("font_size", 10)
+	_packed_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_packed_lbl.visible = false
+	left.add_child(_packed_lbl)
+
 	_model_option = OptionButton.new()
 	_model_option.item_selected.connect(_on_model_changed)
 	_model_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -217,12 +230,34 @@ func _build_ui() -> void:
 	_restore_btn.visible = false
 	actions.add_child(_restore_btn)
 
+	# PACKED ⇄ DEPLOYED (PACKING_PLAN.md Phase 5). Hidden for non-packable
+	# props; Interact on a packed crate is the other unpack path.
+	_pack_btn = Button.new()
+	_pack_btn.tooltip_text = "Collapse to the packed shipping form / deploy it again"
+	_pack_btn.pressed.connect(_on_pack_toggled)
+	_pack_btn.visible = false
+	actions.add_child(_pack_btn)
+
+	_crew_breakdown_btn = Button.new()
+	_crew_breakdown_btn.text = "👷 Crew breakdown"
+	_crew_breakdown_btn.tooltip_text = "Queue the reverse project: strip panels → unbolt → fold & pack → load out"
+	_crew_breakdown_btn.pressed.connect(_on_crew_breakdown)
+	_crew_breakdown_btn.visible = false
+	actions.add_child(_crew_breakdown_btn)
+
 	_linkage_btn = Button.new()
 	_linkage_btn.text = "Linkage Lab"
 	_linkage_btn.tooltip_text = "Edit this structure's linkage design in place"
 	_linkage_btn.pressed.connect(_on_edit_linkage)
 	_linkage_btn.visible = false
 	actions.add_child(_linkage_btn)
+
+	_guide_btn = Button.new()
+	_guide_btn.text = "Build guide"
+	_guide_btn.tooltip_text = "Bill of materials, cut list, drill templates and assembly sequence for this structure"
+	_guide_btn.pressed.connect(_on_build_guide)
+	_guide_btn.visible = false
+	actions.add_child(_guide_btn)
 
 	_siphon_btn = Button.new()
 	_siphon_btn.text = "Hydro Lab"
@@ -295,6 +330,7 @@ func _load_from_layer() -> void:
 	var d: Dictionary = rec
 	_syncing = true
 	_model_lbl.text = "Prop"
+	_refresh_packed_line(d)
 	for i in _model_option.item_count:
 		if str(_model_option.get_item_metadata(i)) == str(d.get("model_id", "")):
 			_model_option.select(i)
@@ -324,6 +360,8 @@ func _load_from_layer() -> void:
 		_shadow_option.selected = _shadow_mode_to_idx(str(d.get("shadow_mode", "")))
 	if _linkage_btn != null:
 		_linkage_btn.visible = str(d.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID
+	if _guide_btn != null:
+		_guide_btn.visible = str(d.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID
 	if _siphon_btn != null:
 		var mid := str(d.get("model_id", ""))
 		var kind := str(d.get("kind", ""))
@@ -339,6 +377,116 @@ func _load_from_layer() -> void:
 		else:
 			_del_btn.text = "Delete"
 	_syncing = false
+
+
+## Packed ("shipping") line under the model name — PACKING_PLAN.md Phase 0.
+## Linkage props compute theirs from the live design (honest-fold envelope);
+## everything else resolves through PackedSpec; unknown/non-packable hides.
+func _refresh_packed_line(d: Dictionary) -> void:
+	if _packed_lbl == null:
+		return
+	var packed: Dictionary = {}
+	if d.has("linkage_spec") and d.get("linkage_spec") is Dictionary:
+		var p := LinkageParams.new()
+		p.from_config(d.get("linkage_spec") as Dictionary)
+		packed = LinkageStructureBuilder.packed_spec_for(p)
+	elif d.has("container_spec") and d.get("container_spec") is Dictionary:
+		packed = ContainerCatalog.packed_spec_for(
+			str((d.get("container_spec") as Dictionary).get("container_id", "")))
+	if packed.is_empty():
+		packed = PackedSpec.for_model(str(d.get("model_id", "")))
+	_packed_lbl.visible = not packed.is_empty()
+	if _pack_btn != null:
+		_pack_btn.visible = not packed.is_empty()
+		_pack_btn.text = "Unpack" if bool(d.get("packed", false)) else "📦 Pack up"
+	if _crew_breakdown_btn != null:
+		# Reverse project: a DEPLOYED linkage structure only (the crew strips,
+		# unbolts, folds and loads it out — packed crates just get carried).
+		_crew_breakdown_btn.visible = d.get("linkage_spec") is Dictionary \
+			and not bool(d.get("packed", false))
+	if packed.is_empty():
+		return
+	var est := "  (est.)" if str(packed.get("source", "")) == "estimated" else ""
+	_packed_lbl.text = "📦 Packs to %s · %s%s" % [
+		PackedSpec.format_dims(packed), PackedSpec.format_mass(packed), est]
+
+
+func _on_pack_toggled() -> void:
+	if _loader == null or _prop_id.is_empty() \
+			or not _loader.has_method("set_prop_packed"):
+		return
+	var now_packed := _loader.has_method("is_prop_packed") \
+		and bool(_loader.call("is_prop_packed", _prop_id))
+	_loader.call("set_prop_packed", _prop_id, not now_packed)
+	_load_from_layer()
+
+
+## Queue the REVERSE Site Project on a deployed linkage structure: strip
+## panels → unbolt → fold & pack (the stow sweep) → haul the crate to the
+## nearest container's door when one stands within reach. The chore board's
+## dependency gates run it; effects land through the bridge's post-tick sweep.
+func _on_crew_breakdown() -> void:
+	if _prop_id.is_empty():
+		return
+	var scene := get_tree().current_scene
+	var sgv: Node = ServiceLocator.graph()
+	var bridge: Variant = sgv.call("npc_population_bridge") \
+		if sgv != null and sgv.has_method("npc_population_bridge") else null
+	if bridge == null:
+		return
+	var iid := str(bridge.call("first_crewable_habitat"))
+	if iid.is_empty():
+		if sgv.has_method("_show_toast"):
+			sgv.call("_show_toast", "Needs a pop-driven habitat with people on site")
+		return
+	var rec: Dictionary = PlacedPropService.get_prop_record(scene, _prop_id)
+	if rec.is_empty() or not (rec.get("linkage_spec") is Dictionary):
+		return
+	var p := LinkageParams.new()
+	p.from_config(rec.get("linkage_spec") as Dictionary)
+	# Fab counts from the live builder standing at the prop (same sharpening
+	# the Lab's queue-build uses); a missing node degrades to BOM-only counts.
+	var counts: Dictionary = {}
+	var root := scene.find_child("PlacedProps", true, false) if scene != null else null
+	if root != null:
+		for child in root.get_children():
+			if child is PlacedProp and str((child as PlacedProp).prop_id) == _prop_id:
+				var mr := child.get_node_or_null("ModelRoot")
+				if mr != null and mr.has_method("get_stats"):
+					counts = LinkageBom.fab_counts(LinkageBom.compute(p),
+						mr.call("get_stats") as Dictionary)
+				break
+	if counts.is_empty():
+		counts = LinkageBom.fab_counts(LinkageBom.compute(p), {})
+	var site := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	# Load-out destination: the nearest cargo container's door, if one stands
+	# within 200 m — otherwise the crate stays at the fold site.
+	var loadout: Dictionary = {}
+	if _loader != null and _loader.has_method("placed_prop_records"):
+		var best_d := 200.0
+		for r in (_loader.call("placed_prop_records") as Array):
+			var cr := r as Dictionary
+			if str(cr.get("model_id", "")) != "cargo_container":
+				continue
+			var cpos := Vector2(float(cr.get("x", 0.0)), float(cr.get("z", 0.0)))
+			var dist := site.distance_to(cpos)
+			if dist < best_d:
+				best_d = dist
+				var yaw := deg_to_rad(float(cr.get("yaw", 0.0)))
+				var door := cpos + Vector2(sin(yaw), cos(yaw)) * 5.0
+				loadout = {"x": door.x, "z": door.y}
+	var rows := SiteProject.breakdown_spec_rows(counts, _prop_id, loadout)
+	var project_id := str(bridge.call("create_site_project", iid,
+		SiteProject.KIND_LINKAGE_BREAKDOWN, "Breakdown: linkage structure",
+		_prop_id, site, rows, {"start_h": 7.0, "end_h": 19.0},
+		{"kind": "prop", "id": _prop_id}, {}))
+	if project_id.is_empty():
+		if sgv.has_method("_show_toast"):
+			sgv.call("_show_toast", "Chore board is full — clear some chores first")
+		return
+	if sgv.has_method("watch_site_at"):
+		sgv.call("watch_site_at", site,
+			"👷 Breakdown project queued — %d phases" % rows.size())
 
 
 func _on_spin_changed(_v: float = 0.0) -> void:
@@ -478,6 +626,18 @@ func _on_edit_linkage() -> void:
 	var main := get_tree().current_scene
 	if main != null and main.has_method("open_linkage_lab_for_prop"):
 		main.call("open_linkage_lab_for_prop", pid)
+
+
+## "Build guide": the BOM / cut list / drill templates for this structure,
+## without having to open the designer first.
+func _on_build_guide() -> void:
+	if _prop_id.is_empty():
+		return
+	var pid := _prop_id
+	close()
+	var main := get_tree().current_scene
+	if main != null and main.has_method("open_linkage_build_guide_for_prop"):
+		main.call("open_linkage_build_guide_for_prop", pid)
 
 
 ## Open Siphon Lab for the bound graph item (or toast if unbound).

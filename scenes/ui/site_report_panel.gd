@@ -52,6 +52,7 @@ var _hydro_stat: RichTextLabel = null
 var _hover: Dictionary = {}   # canvas instance id -> month/sector idx
 
 var _builder: SiteReportBuilder = null
+var _packing_stat: RichTextLabel = null
 var _data: SiteReportData = null
 var _building: bool = false
 var _waiting_weather: bool = false
@@ -231,6 +232,34 @@ func _build_cards(parent: VBoxContainer) -> void:
 	_hydro_stat = _mk_stat()
 	_hydro_card = _add_card(row4, "💧 Hydro Potential (current graph)", _hydro_canvas, _hydro_stat, _draw_hydro)
 	_hydro_card.visible = false
+
+	# Packing & logistics (PACKING_PLAN.md Phase 2) — text-only card computed
+	# LIVE at populate time from the current graph + placed props (cheap
+	# greedy solve), deliberately outside the cached report pipeline so a
+	# graph edit never serves a stale packing verdict.
+	var row5 := HBoxContainer.new()
+	row5.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(row5)
+	var pack_card := PanelContainer.new()
+	pack_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pack_card.add_theme_stylebox_override("panel", UITheme.card_style())
+	row5.add_child(pack_card)
+	var pack_vb := VBoxContainer.new()
+	pack_vb.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	pack_card.add_child(pack_vb)
+	var pack_title := Label.new()
+	pack_title.text = "📦 Packing & Logistics — will it fit?"
+	pack_title.add_theme_color_override("font_color", UITheme.C_TEXT)
+	pack_title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	pack_vb.add_child(pack_title)
+	_packing_stat = _mk_stat()
+	pack_vb.add_child(_packing_stat)
+	var lab_btn := Button.new()
+	lab_btn.text = "🧳 Open Packing Lab…"
+	lab_btn.focus_mode = Control.FOCUS_NONE
+	lab_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	lab_btn.pressed.connect(_open_packing_lab)
+	pack_vb.add_child(lab_btn)
 
 
 func _add_card(parent: Control, title: String, canvas: Control, stat: RichTextLabel,
@@ -473,6 +502,7 @@ func _on_recompute_pressed() -> void:
 # ---------------------------------------------------------------------------
 
 func _populate() -> void:
+	_refresh_packing_card()
 	if _data == null:
 		return
 	var d := _data
@@ -635,6 +665,111 @@ func _month_at_x(canvas: Control, x: float) -> int:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+## Live "will it fit" readout — PACKING_PLAN.md Phase 2. Sweeps the graph
+## (nesting-aware, virtual mirrors skipped) + placed props, resolves packed
+## specs, and solves against the standard fleet smallest-first.
+func _refresh_packing_card() -> void:
+	if _packing_stat == null:
+		return
+	var refs := _resolve_refs()
+	var lines: Array = []
+	var model: Object = refs["model"]
+	if model != null and model.has_method("get_items_in_scope"):
+		lines.append_array(CampManifest.from_graph_items(
+			GraphNesting.walk_items(model, "root")))
+	var main: Node = refs["main"]
+	var loader: Node = main.find_child("TerrainLoader", true, false) \
+		if main != null else null
+	if loader != null and loader.has_method("placed_prop_records"):
+		lines.append_array(CampManifest.from_prop_records(
+			loader.call("placed_prop_records")))
+	var manifest := CampManifest.merge(lines)
+	if manifest.is_empty():
+		_packing_stat.text = "Nothing packable on this site yet — add components to the graph or place 3D props."
+		return
+	var units := CampManifest.expand_for_solver(manifest)
+	var mass := CampManifest.total_mass_kg(manifest)
+	var vol := CampManifest.total_volume_m3(manifest)
+	var ok_hex := UITheme.C_OK.to_html(false)
+	var err_hex := UITheme.C_ERROR.to_html(false)
+	var warn_hex := UITheme.C_WARN.to_html(false)
+	var head := "[b]%d[/b] packed units · [b]%.1f[/b] m³ · [b]%.0f[/b] kg (%.0f lb)" % [
+		units.size(), vol, mass["mass_kg"], mass["mass_kg"] * 2.20462]
+	if int(mass["unknown_count"]) > 0:
+		head += " · %d unweighed" % int(mass["unknown_count"])
+	var body := ""
+	var first_fit_seen := false
+	for fr in CampManifest.fleet_report(manifest):
+		var res: Dictionary = (fr as Dictionary)["result"]
+		var label := str((fr as Dictionary)["label"])
+		if bool(res["fit"]):
+			var line := "[color=#%s]✔ %s[/color] — %d%% full" % [ok_hex, label,
+				roundi(float(res["utilization"]) * 100.0)]
+			if not bool(res["payload_ok"]):
+				line += "  [color=#%s]⚠ over payload[/color]" % warn_hex
+			elif not first_fit_seen:
+				line = "→ " + line + "  (smallest fit)"
+				first_fit_seen = true
+			body += "\n" + line
+		else:
+			# Name the offenders (dedup + count) so "won't fit" is actionable.
+			var door_n := 0
+			var by_label: Dictionary = {}
+			var label_order: Array = []
+			for ov in (res["overflow"] as Array):
+				var od := ov as Dictionary
+				if str(od.get("reason", "")) == "door":
+					door_n += 1
+				var ol := str(od.get("label", "?"))
+				if not by_label.has(ol):
+					by_label[ol] = 0
+					label_order.append(ol)
+				by_label[ol] = int(by_label[ol]) + 1
+			var names: Array = []
+			for ol in label_order.slice(0, 3):
+				var n := int(by_label[ol])
+				names.append(("%d× %s" % [n, ol]) if n > 1 else str(ol))
+			if label_order.size() > 3:
+				names.append("+%d more" % (label_order.size() - 3))
+			var why := "%d won't fit: %s" % [(res["overflow"] as Array).size(),
+				", ".join(names)]
+			if door_n > 0:
+				why += " (%d door-blocked)" % door_n
+			body += "\n[color=#%s]✘ %s[/color] — %s" % [err_hex, label, why]
+	body += "\n[color=#%s]Greedy pack (≈ a careful crew) · door, stacking + payload honoured · dims mostly estimated[/color]" \
+		% UITheme.C_TEXT_M.to_html(false)
+	_packing_stat.text = head + body
+
+
+## Same sweep as the card, handed to the interactive Packing Lab
+## (PACKING_PLAN.md Phase 4). Preselects the smallest fitting vehicle.
+func _open_packing_lab() -> void:
+	var refs := _resolve_refs()
+	var lines: Array = []
+	var model: Object = refs["model"]
+	if model != null and model.has_method("get_items_in_scope"):
+		lines.append_array(CampManifest.from_graph_items(
+			GraphNesting.walk_items(model, "root")))
+	var main: Node = refs["main"]
+	var loader: Node = main.find_child("TerrainLoader", true, false) \
+		if main != null else null
+	if loader != null and loader.has_method("placed_prop_records"):
+		lines.append_array(CampManifest.from_prop_records(
+			loader.call("placed_prop_records")))
+	var manifest := CampManifest.merge(lines)
+	var units := CampManifest.expand_for_solver(manifest)
+	var preselect := "uhaul_15"
+	for fr in CampManifest.fleet_report(manifest):
+		if bool(((fr as Dictionary)["result"] as Dictionary)["fit"]):
+			preselect = str((fr as Dictionary)["id"])
+			break
+	var modal: CanvasLayer = load("res://scenes/ui/packing_lab_modal.gd").new()
+	get_tree().root.add_child(modal)
+	modal.call("open_with_units", units, "Site cargo (%d units)" % units.size(),
+		preselect)
+	modal.connect("closed", Callable(modal, "queue_free"))
+
 
 func _resolve_refs() -> Dictionary:
 	var main := _main_node

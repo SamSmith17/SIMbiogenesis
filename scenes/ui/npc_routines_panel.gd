@@ -15,16 +15,23 @@ const C_PANEL := UITheme.C_PANEL
 const C_TEXT := UITheme.C_TEXT
 const C_TEXT_DIM := UITheme.C_TEXT_S
 
-## Day-plan strip colours.
-const C_SLEEP := Color(0.42, 0.40, 0.72)
-const C_NEEDS := Color(0.30, 0.62, 0.80)
-const C_CHORE := Color(0.86, 0.62, 0.28)
-const C_FREE := Color(0.32, 0.66, 0.42)
-const C_OVER := Color(0.88, 0.28, 0.30)
+## Day-plan strip colours. Local NAMES (project convention: a migrating file
+## keeps its own vocabulary) but UITheme VALUES — C_OVER was a near-miss of
+## C_ERROR and C_FREE of C_GREEN, so the panel showed two reds and two greens
+## that meant the same thing.
+const C_SLEEP := UITheme.C_LAVENDER
+const C_NEEDS := UITheme.C_PRIMARY
+const C_CHORE := UITheme.C_AMBER
+const C_FREE := UITheme.C_GREEN
+const C_OVER := UITheme.C_ERROR
 
 var _bridge = null                 # NpcPopulationBridge
 var _item_id := ""
 var _active := false
+var _rule_night: CheckBox = null
+var _rule_tools: CheckBox = null
+var _rule_consequence: OptionButton = null
+var _consequence_hint: Label = null
 
 var _dim: ColorRect = null
 var _panel: PanelContainer = null
@@ -39,6 +46,29 @@ var _new_start: SpinBox = null
 var _new_end: SpinBox = null
 var _new_exposure: OptionButton = null
 var _new_assign: OptionButton = null
+var _new_priority: OptionButton = null
+var _new_min_workers: SpinBox = null
+var _new_max_workers: SpinBox = null
+var _new_repeat: OptionButton = null
+var _new_where: Button = null
+## Ground point the next chore is pinned to, Vector2.INF for "wherever".
+var _new_target := Vector2.INF
+
+## Priority is an uncapped int where LOWER sorts first — a raw spinbox would
+## invite "99 = most important", which is the opposite of what happens. Three
+## named bands is the whole useful range.
+const PRIORITIES := [["High", 0], ["Normal", 50], ["Low", 100]]
+## label, repeat value, repeat_days. Per-WEEKDAY selection ("Mon Wed Fri")
+## needs a toggle row and lives in the Work Planner; a weekly with no weekdays
+## named degrades to "every 7 days", which is honest and immediately useful.
+const REPEATS := [
+	["Every day", "daily", 1],
+	["Every 2 days", "every_n", 2],
+	["Every 3 days", "every_n", 3],
+	["Weekly", "weekly", 7],
+	["Once", "once", 1],
+	["On demand", "on_demand", 1],
+]
 var _refresh_accum := 0.0
 
 # --- routine editor ---------------------------------------------------------
@@ -145,22 +175,33 @@ func _build_ui() -> void:
 	root.add_child(header)
 	_title = Label.new()
 	_title.text = "Routines & Chores"
-	_title.add_theme_font_size_override("font_size", 18)
+	_title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
 	_title.add_theme_color_override("font_color", C_TEXT)
 	header.add_child(_title)
 	_weather_lbl = Label.new()
-	_weather_lbl.add_theme_font_size_override("font_size", 12)
+	_weather_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_weather_lbl.add_theme_color_override("font_color", C_TEXT_DIM)
 	_weather_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_weather_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	header.add_child(_weather_lbl)
+	var projects_btn := Button.new()
+	UITheme.style_button(projects_btn)
+	projects_btn.text = "👷 Projects…"
+	projects_btn.tooltip_text = "Site Projects: crew builds, deliveries, breakdowns — phases, pause/cancel, what-if crew sizing"
+	projects_btn.pressed.connect(func() -> void:
+		var sgv: Node = ServiceLocator.graph()
+		if sgv != null and sgv.has_method("open_site_projects"):
+			close()
+			sgv.call("open_site_projects"))
+	header.add_child(projects_btn)
 	var close_btn := Button.new()
+	UITheme.style_button(close_btn)
 	close_btn.text = "Close"
 	close_btn.pressed.connect(close)
 	header.add_child(close_btn)
 
 	_walk_lbl = Label.new()
-	_walk_lbl.add_theme_font_size_override("font_size", 12)
+	_walk_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_walk_lbl.add_theme_color_override("font_color", C_TEXT_DIM)
 	root.add_child(_walk_lbl)
 
@@ -208,6 +249,7 @@ func _build_ui() -> void:
 	chore_scroll.add_child(_chore_box)
 	right.add_child(HSeparator.new())
 	right.add_child(_build_new_chore_row())
+	right.add_child(_build_site_rules_row())
 
 	var anim_tab := VBoxContainer.new()
 	anim_tab.name = "Animations"
@@ -225,7 +267,7 @@ func _build_ui() -> void:
 func _section_label(text: String) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_size_override("font_size", 14)
+	l.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 	l.add_theme_color_override("font_color", C_TEXT)
 	return l
 
@@ -240,7 +282,7 @@ func _legend_chip(text: String, col: Color) -> HBoxContainer:
 	box.add_child(swatch)
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_size_override("font_size", 10)
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	l.add_theme_color_override("font_color", C_TEXT_DIM)
 	box.add_child(l)
 	return box
@@ -276,10 +318,40 @@ func _build_new_chore_row() -> VBoxContainer:
 	_new_assign = OptionButton.new()
 	_new_assign.custom_minimum_size.x = 130
 	row2.add_child(_labelled("Who", _new_assign))
+
+	var row3 := HBoxContainer.new()
+	row3.add_theme_constant_override("separation", 6)
+	wrap.add_child(row3)
+	_new_priority = OptionButton.new()
+	for p in PRIORITIES:
+		_new_priority.add_item(str((p as Array)[0]))
+	_new_priority.select(1)   # Normal
+	row3.add_child(_labelled("Priority", _new_priority))
+	# One crew-size PAIR, not two independent numbers: "min" is the quorum the
+	# work cannot start below and "max" the point extra hands stop helping, and
+	# they only mean anything read together.
+	_new_min_workers = _spin(1.0, 1.0, 32.0, 1.0)
+	row3.add_child(_labelled("Crew min", _new_min_workers))
+	_new_max_workers = _spin(1.0, 1.0, 32.0, 1.0)
+	row3.add_child(_labelled("max", _new_max_workers))
+	_new_repeat = OptionButton.new()
+	for r in REPEATS:
+		_new_repeat.add_item(str((r as Array)[0]))
+	_new_repeat.select(0)
+	row3.add_child(_labelled("Repeat", _new_repeat))
+	# The highest-value control here: without a target the worker does the chore
+	# where they happen to be standing, which reads as the chore doing nothing.
+	_new_where = Button.new()
+	UITheme.style_button(_new_where)
+	_new_where.text = "Where…"
+	_new_where.tooltip_text = "Pick the spot on the ground in the settlement view"
+	_new_where.pressed.connect(_on_pick_where)
+	row3.add_child(_labelled("Place", _new_where))
 	var add_btn := Button.new()
+	UITheme.style_button(add_btn)
 	add_btn.text = "Add"
 	add_btn.pressed.connect(_on_add_chore)
-	row2.add_child(add_btn)
+	row3.add_child(add_btn)
 	return wrap
 
 
@@ -298,7 +370,7 @@ func _labelled(text: String, control: Control) -> VBoxContainer:
 	col.add_theme_constant_override("separation", 0)
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_size_override("font_size", 10)
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	l.add_theme_color_override("font_color", C_TEXT_DIM)
 	col.add_child(l)
 	col.add_child(control)
@@ -375,11 +447,12 @@ func _refresh_roster() -> void:
 		name_lbl.text = agent.display_name
 		name_lbl.custom_minimum_size.x = 78
 		name_lbl.clip_text = true
-		name_lbl.add_theme_font_size_override("font_size", 12)
+		name_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		name_lbl.add_theme_color_override("font_color", C_TEXT)
 		row.add_child(name_lbl)
 
 		var rename_btn := Button.new()
+		UITheme.style_button(rename_btn)
 		rename_btn.text = "✎"
 		rename_btn.flat = true
 		rename_btn.custom_minimum_size = Vector2(20, 0)
@@ -393,7 +466,7 @@ func _refresh_roster() -> void:
 		var mood := Label.new()
 		mood.text = agent.morale_band_label()
 		mood.custom_minimum_size.x = 110
-		mood.add_theme_font_size_override("font_size", 11)
+		mood.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		mood.add_theme_color_override("font_color", NpcMorale.color(agent.morale))
 		row.add_child(mood)
 
@@ -405,7 +478,7 @@ func _refresh_roster() -> void:
 		var status := Label.new()
 		status.text = agent.status_line()
 		status.custom_minimum_size.x = 150
-		status.add_theme_font_size_override("font_size", 10)
+		status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		status.add_theme_color_override("font_color", C_TEXT_DIM)
 		row.add_child(status)
 
@@ -481,22 +554,111 @@ func _day_plan_strip(agent: NpcAgent, assigned_h: float) -> Control:
 	return strip
 
 
+## Site rules ("rule cards" v1 — PACKING_PLAN.md Phase 6.5): board-wide
+## switches the whole roster obeys. Written straight onto the board's rules
+## dict; persistence rides the chores blob in pop_state.
+func _build_site_rules_row() -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	var lbl := Label.new()
+	lbl.text = "Site rules:"
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	lbl.add_theme_color_override("font_color", C_TEXT_DIM)
+	row.add_child(lbl)
+	_rule_night = CheckBox.new()
+	_rule_night.text = "Night shift"
+	_rule_night.tooltip_text = "Ignore chore windows — work continues around the clock (people still sleep when they must)"
+	_rule_night.add_theme_color_override("font_color", C_TEXT)
+	_rule_night.toggled.connect(func(on: bool) -> void: _on_rule_toggled("night_shift", on))
+	row.add_child(_rule_night)
+	_rule_tools = CheckBox.new()
+	_rule_tools.text = "Tools down"
+	_rule_tools.tooltip_text = "Offer no chores at all — rest day / ceremony; the board holds its work"
+	_rule_tools.add_theme_color_override("font_color", C_TEXT)
+	_rule_tools.toggled.connect(func(on: bool) -> void: _on_rule_toggled("tools_down", on))
+	row.add_child(_rule_tools)
+
+	# What running out actually does to people — the player's call, not the
+	# sim's. Scoped to this settlement (it rides the habitat's specs), so it
+	# does not follow the player between saves the way a display pref would.
+	var sep := Label.new()
+	sep.text = "  ·  Shortages:"
+	sep.add_theme_color_override("font_color", C_TEXT_DIM)
+	row.add_child(sep)
+	_rule_consequence = OptionButton.new()
+	for i in NpcConsequence.POLICIES.size():
+		var pol := str(NpcConsequence.POLICIES[i])
+		_rule_consequence.add_item(NpcConsequence.label(pol), i)
+		_rule_consequence.set_item_metadata(i, pol)
+	_rule_consequence.item_selected.connect(_on_consequence_selected)
+	row.add_child(_rule_consequence)
+	_consequence_hint = Label.new()
+	_consequence_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_consequence_hint.add_theme_color_override("font_color", C_TEXT_DIM)
+	_consequence_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_consequence_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(_consequence_hint)
+	return row
+
+
+func _on_consequence_selected(idx: int) -> void:
+	if _bridge == null or _item_id.is_empty():
+		return
+	var pol := str(_rule_consequence.get_item_metadata(idx))
+	_bridge.set_consequence(_item_id, pol)
+	_consequence_hint.text = NpcConsequence.blurb(pol)
+
+
+func _on_rule_toggled(rule: String, on: bool) -> void:
+	var board := _board()
+	if board == null:
+		return
+	if on:
+		board.rules[rule] = true
+	else:
+		board.rules.erase(rule)
+
+
 func _refresh_chores() -> void:
 	for c in _chore_box.get_children():
 		c.queue_free()
 	var board := _board()
 	if board == null:
 		return
+	if _rule_night != null:
+		_rule_night.set_pressed_no_signal(bool(board.rules.get("night_shift", false)))
+	if _rule_tools != null:
+		_rule_tools.set_pressed_no_signal(bool(board.rules.get("tools_down", false)))
+	if _rule_consequence != null and _bridge != null:
+		var pol := NpcConsequence.normalize(_bridge.consequence_for(_item_id))
+		var want := NpcConsequence.POLICIES.find(pol)
+		if want >= 0 and _rule_consequence.selected != want:
+			_rule_consequence.select(want)
+		_consequence_hint.text = NpcConsequence.blurb(pol)
 	if board.chores.is_empty():
 		var empty := Label.new()
 		empty.text = "No chores yet. Work keeps the infrastructure running —\nand people with nothing to do still need somewhere to gather."
-		empty.add_theme_font_size_override("font_size", 11)
+		empty.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		empty.add_theme_color_override("font_color", C_TEXT_DIM)
 		_chore_box.add_child(empty)
 		return
 	var abs_h: float = _bridge.current_abs_hours()
 	var weather: Dictionary = _bridge.current_weather()
-	for c in board.chores:
+	# THE ORDER THE CREW ACTUALLY WORKS IT. `board.chores` is insertion order
+	# while `available_for` sorts by priority, so the list the player reads was
+	# never the queue the crew pulls from — which makes the priority control
+	# authored two rows below it look like it does nothing. Done work sinks to
+	# the bottom; ties keep insertion order so the list does not shuffle
+	# under the cursor on every refresh.
+	var ordered: Array = board.chores.duplicate()
+	var day := int(floor(abs_h / 24.0))
+	ordered.sort_custom(func(a, b) -> bool:
+		var da := int((a as Dictionary).get("done_day", -1)) == day
+		var db := int((b as Dictionary).get("done_day", -1)) == day
+		if da != db:
+			return db
+		return int((a as Dictionary).get("priority", 0)) 			< int((b as Dictionary).get("priority", 0)))
+	for c in ordered:
 		var chore: Dictionary = c
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 6)
@@ -505,9 +667,27 @@ func _refresh_chores() -> void:
 		var lbl := Label.new()
 		lbl.text = str(chore.get("label", "?"))
 		lbl.custom_minimum_size.x = 150
-		lbl.add_theme_font_size_override("font_size", 12)
+		lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		lbl.add_theme_color_override("font_color", C_TEXT)
 		row.add_child(lbl)
+
+		# Repeat + priority as a compact prefix, because a "once" chore and a
+		# daily one looked identical, and priority was authored and then never
+		# shown again anywhere.
+		var pri := int(chore.get("priority", 0))
+		var pri_name := "Normal"
+		for band in PRIORITIES:
+			if int((band as Array)[1]) == pri:
+				pri_name = str((band as Array)[0])
+		var done_today := int(chore.get("done_day", -1)) == day
+		var held := bool(chore.get("held", false))
+		lbl.tooltip_text = "%s priority · %s%s" % [pri_name,
+			_repeat_text(chore), "
+Paused" if held else ""]
+		if pri != 50:
+			lbl.text = "%s %s" % ["▲" if pri < 50 else "▼", lbl.text]
+		if done_today:
+			lbl.add_theme_color_override("font_color", UITheme.C_OK)
 
 		var bar := ProgressBar.new()
 		bar.min_value = 0.0
@@ -515,7 +695,45 @@ func _refresh_chores() -> void:
 		bar.value = float(chore.get("progress_h", 0.0))
 		bar.custom_minimum_size = Vector2(90, 14)
 		bar.show_percentage = false
+		UITheme.style_progress(bar, UITheme.C_OK if done_today else UITheme.C_AMBER)
+		# The numbers the bar cannot give you: how much is left, and — the one
+		# that answers "why is nothing happening" — how many people are on it
+		# against how many it needs before any credit is earned at all.
+		var workers := (chore.get("workers", []) as Array).size()
+		var min_w := int(chore.get("min_workers", 1))
+		var left := maxf(float(chore.get("chore_hours", 0.0))
+			- float(chore.get("progress_h", 0.0)), 0.0)
+		bar.tooltip_text = "%.1f h of %.1f h left · %d of %d people%s" % [
+			left, float(chore.get("chore_hours", 0.0)), workers, min_w,
+			" (max %d)" % int(chore.get("max_workers", 1))
+				if int(chore.get("max_workers", 1)) > min_w else ""]
 		row.add_child(bar)
+
+		var crew := Label.new()
+		if done_today:
+			crew.text = "done"
+			crew.add_theme_color_override("font_color", UITheme.C_OK)
+		elif held:
+			crew.text = "paused"
+			crew.add_theme_color_override("font_color", C_TEXT_DIM)
+		elif not (chore.get("depends_on", []) as Array).is_empty() and workers == 0:
+			# A dependency-blocked chore looked exactly like an idle one, which
+			# is the single most confusing state on this board.
+			crew.text = "waiting"
+			crew.add_theme_color_override("font_color", C_TEXT_DIM)
+		elif workers == 0:
+			crew.text = "—"
+			crew.add_theme_color_override("font_color", C_TEXT_DIM)
+		elif workers < min_w:
+			crew.text = "%d/%d" % [workers, min_w]
+			crew.add_theme_color_override("font_color", UITheme.C_WARN)
+		else:
+			crew.text = "%d 👤" % workers
+			crew.add_theme_color_override("font_color", UITheme.C_OK)
+		crew.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		crew.custom_minimum_size.x = 46
+		crew.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		row.add_child(crew)
 
 		var w: Dictionary = chore.get("window", {})
 		var meta := Label.new()
@@ -525,21 +743,47 @@ func _refresh_chores() -> void:
 			float(chore.get("chore_hours", 0.0)),
 			int(w.get("start_h", 0)), int(w.get("end_h", 24)),
 			"  ⛔ weather" if gated else ""]
-		meta.add_theme_font_size_override("font_size", 10)
+		meta.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		meta.add_theme_color_override("font_color",
 				UITheme.C_WARN if gated else C_TEXT_DIM)
 		meta.custom_minimum_size.x = 130
+		if gated:
+			meta.tooltip_text = "Too %s to work outside right now" % 				NpcWeatherGate.describe(weather).to_lower()
 		row.add_child(meta)
+
+		# A chore with no target happens wherever the worker is standing, which
+		# reads as broken. Saying so is the cheapest fix for the confusion.
+		var tgt: Dictionary = chore.get("target", {})
+		var place := Label.new()
+		match str(tgt.get("kind", "")):
+			"pos":
+				place.text = "📍"
+				place.tooltip_text = "At %d, %d" % [
+					int(tgt.get("x", 0)), int(tgt.get("z", 0))]
+			"prop":
+				place.text = "📍"
+				place.tooltip_text = "At a placed object"
+			"space":
+				place.text = "📍"
+				place.tooltip_text = "At a tagged space"
+			_:
+				place.text = "·"
+				place.tooltip_text = "No place set — done wherever the worker stands"
+				place.add_theme_color_override("font_color", C_TEXT_DIM)
+		place.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		place.custom_minimum_size.x = 18
+		row.add_child(place)
 
 		var who := Label.new()
 		var assigned := str(chore.get("assigned_to", ""))
 		who.text = _name_for(assigned) if not assigned.is_empty() else "anyone"
-		who.add_theme_font_size_override("font_size", 10)
+		who.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		who.add_theme_color_override("font_color", C_TEXT_DIM)
 		who.custom_minimum_size.x = 80
 		row.add_child(who)
 
 		var del := Button.new()
+		UITheme.style_button(del)
 		del.text = "✕"
 		var cid := str(chore.get("id", ""))
 		del.pressed.connect(func() -> void:
@@ -548,6 +792,30 @@ func _refresh_chores() -> void:
 				b.remove_chore(cid)
 			_refresh())
 		row.add_child(del)
+
+
+## How often, in words. The old form was a two-way `if daily else "once"`,
+## which described every other value wrongly.
+static func _repeat_text(chore: Dictionary) -> String:
+	match NpcChoreBoard.normalize_repeat(chore.get("repeat", "daily")):
+		"daily":
+			return "repeats daily"
+		"every_n":
+			return "every %d days" % maxi(int(chore.get("repeat_days", 1)), 1)
+		"weekly":
+			var dow: Array = chore.get("repeat_dow", []) as Array
+			if dow.is_empty():
+				return "weekly"
+			var names := PackedStringArray()
+			for d in dow:
+				names.append(DOW_SHORT[posmod(int(d), 7)])
+			return " ".join(names)
+		"on_demand":
+			return "when re-armed"
+	return "once"
+
+
+const DOW_SHORT: Array = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 func _name_for(agent_id: String) -> String:
@@ -565,13 +833,54 @@ func _on_add_chore() -> void:
 	var assign := ""
 	if _new_assign.selected > 0:
 		assign = str(_new_assign.get_selected_metadata())
-	board.add_chore(_new_label.text.strip_edges(), float(_new_hours.value), {
+	var min_w := int(_new_min_workers.value)
+	var opts := {
 		"window": {"start_h": float(_new_start.value), "end_h": float(_new_end.value)},
 		"exposure": str(exposure),
 		"assigned_to": assign,
-	})
+		"priority": int((PRIORITIES[maxi(_new_priority.selected, 0)] as Array)[1]),
+		"repeat": str((REPEATS[maxi(_new_repeat.selected, 0)] as Array)[1]),
+		"repeat_days": int((REPEATS[maxi(_new_repeat.selected, 0)] as Array)[2]),
+		"min_workers": min_w,
+		# A max below the quorum is unsatisfiable by construction, so the pair is
+		# clamped rather than refused — the player asked for a bigger crew.
+		"max_workers": maxi(int(_new_max_workers.value), min_w),
+	}
+	if _new_target != Vector2.INF:
+		opts["target"] = {"kind": "pos", "x": _new_target.x, "z": _new_target.y}
+	board.add_chore(_new_label.text.strip_edges(), float(_new_hours.value), opts)
 	_new_label.text = ""
+	_new_target = Vector2.INF
+	_new_where.text = "Where…"
 	_refresh()
+
+
+## Drop into the settlement view to pin the chore's location, then come back.
+## The pick lands in the SAME view the player watches the work happen in, so
+## "where the chore is" and "where people walk to" are one place, not two.
+func _on_pick_where() -> void:
+	var main := get_tree().current_scene
+	if main == null or not main.has_method("open_settlement_view"):
+		_new_where.text = "(no settlement view)"
+		return
+	# ⚠ open() re-runs _load_routine_draft / _load_anim_draft, which would
+	# DISCARD an unapplied Daily-routine or Animations edit. Picking a chore's
+	# location must not silently throw away half an hour of schedule work, so
+	# the drafts are carried across the round trip by hand.
+	var kept_routine: Array = _draft.duplicate(true)
+	var kept_anim: Dictionary = _anim_draft.duplicate(true)
+	close()
+	var view: Variant = main.call("open_settlement_view")
+	if view == null or not view.has_method("pick_point_once"):
+		return
+	view.call("pick_point_once", func(p: Vector2) -> void:
+		if p != Vector2.INF:
+			_new_target = p
+			_new_where.text = "@ %d, %d" % [int(p.x), int(p.y)]
+		open(_bridge, _item_id)
+		_draft = kept_routine
+		_anim_draft = kept_anim
+		_refresh())
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +904,7 @@ func _build_routine_tab(parent: VBoxContainer) -> void:
 	parent.add_child(_section_label("The day everyone follows"))
 	var hint := Label.new()
 	hint.text = "Each person is shifted up to 30 min either way, so the camp does not move in lockstep. Needs still interrupt: someone desperately thirsty leaves a work block and comes back to it."
-	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	hint.add_theme_color_override("font_color", C_TEXT_DIM)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	parent.add_child(hint)
@@ -607,7 +916,7 @@ func _build_routine_tab(parent: VBoxContainer) -> void:
 	parent.add_child(_routine_strip)
 
 	_routine_status = Label.new()
-	_routine_status.add_theme_font_size_override("font_size", 11)
+	_routine_status.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_routine_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	parent.add_child(_routine_status)
 
@@ -623,10 +932,12 @@ func _build_routine_tab(parent: VBoxContainer) -> void:
 	btns.add_theme_constant_override("separation", 6)
 	parent.add_child(btns)
 	var add := Button.new()
+	UITheme.style_button(add)
 	add.text = "Add block"
 	add.pressed.connect(_on_routine_add)
 	btns.add_child(add)
 	var reset := Button.new()
+	UITheme.style_button(reset)
 	reset.text = "Reset to default day"
 	reset.pressed.connect(func() -> void:
 		_draft = NpcRoutine.default_day().to_array()
@@ -636,6 +947,7 @@ func _build_routine_tab(parent: VBoxContainer) -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btns.add_child(spacer)
 	var apply := Button.new()
+	UITheme.style_button(apply)
 	apply.text = "Apply"
 	apply.tooltip_text = "Everyone picks the new day up at their next idle moment. The roster is not restarted."
 	apply.pressed.connect(_on_routine_apply)
@@ -700,12 +1012,13 @@ func _routine_row(idx: int) -> HBoxContainer:
 	if d < 0.0:
 		d += 24.0
 	dur.text = ("%d min" % int(round(d * 60.0))) if d < 1.0 else ("%.2f h" % d)
-	dur.add_theme_font_size_override("font_size", 11)
+	dur.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	dur.add_theme_color_override("font_color", C_TEXT_DIM)
 	dur.custom_minimum_size.x = 56
 	row.add_child(dur)
 
 	var del := Button.new()
+	UITheme.style_button(del)
 	del.text = "X"
 	del.tooltip_text = "Remove this block"
 	del.pressed.connect(func() -> void:
@@ -854,7 +1167,7 @@ func _build_anim_tab(parent: VBoxContainer) -> void:
 	parent.add_child(_section_label("What people do in each space"))
 	var hint := Label.new()
 	hint.text = "Getting there, sitting down and standing up are handled automatically. This is what plays once someone has settled in."
-	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	hint.add_theme_color_override("font_color", C_TEXT_DIM)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	parent.add_child(hint)
@@ -871,6 +1184,7 @@ func _build_anim_tab(parent: VBoxContainer) -> void:
 	btns.add_theme_constant_override("separation", 6)
 	parent.add_child(btns)
 	var reset := Button.new()
+	UITheme.style_button(reset)
 	reset.text = "Reset to defaults"
 	reset.pressed.connect(func() -> void:
 		_anim_draft = {}
@@ -880,6 +1194,7 @@ func _build_anim_tab(parent: VBoxContainer) -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btns.add_child(spacer)
 	var apply := Button.new()
+	UITheme.style_button(apply)
 	apply.text = "Apply"
 	apply.tooltip_text = "Takes effect immediately for everyone already in that space."
 	apply.pressed.connect(_on_anim_apply)

@@ -50,24 +50,21 @@ const ALLOWED_OVERLAPS: Array = [
 			+ "the player is in range of a light and consumes it, so main.gd's pallet-rack "
 			+ "branch in _unhandled_input runs everywhere else",
 	},
+	{
+		"actions": ["charge", "camp_scatter"],
+		"reason": "resolved 2026-08-05: `charge` is now event-driven in "
+			+ "scenes/gameplay/player.gd:_unhandled_input (consumes only when it actually "
+			+ "starts charging), and terrain_loader.gd's camp_scatter branch yields the "
+			+ "event when player.charge_available() — deterministic in either "
+			+ "_unhandled_input order. The old polling from _physics_process ignored "
+			+ "set_input_as_handled() and fired BOTH.",
+	},
 ]
 
 ## Overlaps that are REAL bugs — tracked, deliberately not failing the build yet,
 ## and never to be laundered into ALLOWED_OVERLAPS. Keeping them separate is the
 ## point: ALLOWED_OVERLAPS means "resolved", this means "known and unresolved".
-const KNOWN_CONFLICTS: Array = [
-	{
-		"actions": ["charge", "camp_scatter"],
-		"reason": "Standing AT a charging station and pressing C both charges and opens the "
-			+ "camp dock. core/terrain/terrain_loader.gd consumes the event, but "
-			+ "scenes/gameplay/player.gd:1017 reads `charge` by POLLING from "
-			+ "_handle_vehicle_interaction (called from _physics_process), and polling "
-			+ "ignores set_input_as_handled(). Pre-existing: C was a raw KEY_C handler "
-			+ "before it became an action. Real fix is to make `charge` event-driven, "
-			+ "which means moving it out of _physics_process -- untested vehicle code, so "
-			+ "it is scoped separately rather than done blind.",
-	},
-]
+const KNOWN_CONFLICTS: Array = []
 
 ## Actions deliberately left unbound on keyboard (gamepad-only, or bound at
 ## runtime). An action with no events at all is otherwise a dead action.

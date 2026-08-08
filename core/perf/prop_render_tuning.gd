@@ -145,10 +145,21 @@ static func _mesh_prop_local_radius(mi: MeshInstance3D, model: Node3D) -> float:
 	return aabb.size.length() * 0.5
 
 
+## Floor on the cull distance, in metres, for views that sit far above eye
+## level (the settlement camera). 0 = off, the ordinary tier behaviour.
+##
+## Deliberately NOT `preview_active`, which disables distance culling for
+## EVERY prop and would undo the Tier-2 perf work wholesale. This keeps the
+## distance test running and only widens its reach, so a camera 300 m up still
+## sees the camp while the far clutter beyond it stays culled.
+static var scale_override_m: float = 0.0
+
+
 static func _cull_distance_for_radius(local_radius: float) -> float:
 	if local_radius >= LARGE_PROP_RADIUS_M:
 		return 0.0  # never cull large landmarks (0 = visibility range disabled)
-	return maxf(base_distance_m, 0.0) + maxf(local_radius, 0.0) * SIZE_FACTOR
+	var d := maxf(base_distance_m, 0.0) + maxf(local_radius, 0.0) * SIZE_FACTOR
+	return maxf(d, maxf(scale_override_m, 0.0))
 
 
 ## Re-apply to every placed prop under Terrain/PlacedProps (call after a settings

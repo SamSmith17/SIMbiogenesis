@@ -29,6 +29,8 @@ const C_TEXT := Color(0.886, 0.910, 0.941, 1.0)
 const C_DIM := Color(0.62, 0.68, 0.78, 1.0)
 
 var _loader: Node = null
+## Optional screen-pos → world-XZ override; see set_ray_source.
+var _ray_source := Callable()
 var _active := false
 var _drawing := false
 var _points: PackedVector2Array = PackedVector2Array()
@@ -210,7 +212,21 @@ func _cancel_drawing() -> void:
 		_overlay.queue_redraw()
 
 
+## Override where a screen position becomes a ground point.
+##
+## `terrain_pick_ray` casts from the CURRENT camera, which is the player's in
+## first person and the settlement camera when that view is up — but the loader
+## resolves it against its own assumptions. Handing the dock a Callable lets
+## the settlement view drive the same polygon state machine from its own ray
+## without a second drawing UI existing. Pass an empty Callable to restore.
+func set_ray_source(fn: Callable) -> void:
+	_ray_source = fn
+
+
 func _pick_world(screen_pos: Vector2) -> Vector2:
+	if _ray_source.is_valid():
+		var p: Variant = _ray_source.call(screen_pos)
+		return p as Vector2 if p is Vector2 else Vector2.INF
 	if _loader == null or not _loader.has_method("terrain_pick_ray"):
 		return Vector2.INF
 	var hit: Variant = _loader.call("terrain_pick_ray", screen_pos)

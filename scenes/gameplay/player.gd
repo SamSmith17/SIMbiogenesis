@@ -356,6 +356,14 @@ func _init_first_person_camera() -> void:
 		character_model.visible = true
 		_set_head_visibility(false)
 
+## Show or hide the whole character. Used by the camera-claim stack (Main's
+## `_apply_camera_claim`): a view that is not looking through this body's eyes
+## should not render it standing in the middle of the settlement.
+func set_body_visible(shown: bool) -> void:
+	if character_model != null:
+		character_model.visible = shown
+
+
 ## Set visibility of the character's head (for first-person view)
 func _set_head_visibility(visible: bool) -> void:
 	if character_model == null:
@@ -1016,17 +1024,31 @@ func _handle_vehicle_interaction() -> void:
 			_mount_vehicle(nearby_vehicle)
 			return
 	
-	# Check for charge input when near a charging station (C key)
-	if not is_riding and not is_charging_euc:
-		if Input.is_action_just_pressed("charge"):
-			if nearby_charging_station != null and is_instance_valid(nearby_charging_station):
-				if nearby_charging_station.has_method("can_charge") and nearby_charging_station.can_charge():
-					_start_charging()
-					return
-	
+	# (Charge input moved to _unhandled_input — polling here from
+	# _physics_process ignored set_input_as_handled(), so a C press at a
+	# charging station BOTH charged and opened the camp dock. Event-driven +
+	# the loader's own charge-availability check makes the precedence
+	# deterministic in either _unhandled_input order.)
+
 	# Handle stop charging input (X key - same as dismount)
 	if is_charging_euc and Input.is_action_just_pressed("dismount"):
 		_stop_charging()
+
+
+## True when a C press RIGHT NOW would start charging — also read by
+## TerrainLoader's camp_scatter branch so the dock yields the key at a station.
+func charge_available() -> bool:
+	return not is_riding and not is_charging_euc \
+		and nearby_charging_station != null \
+		and is_instance_valid(nearby_charging_station) \
+		and nearby_charging_station.has_method("can_charge") \
+		and nearby_charging_station.can_charge()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("charge") and charge_available():
+		_start_charging()
+		get_viewport().set_input_as_handled()
 
 func _mount_vehicle(vehicle: Node3D) -> void:
 	if vehicle == null or not vehicle.has_method("mount"):

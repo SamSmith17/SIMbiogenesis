@@ -117,6 +117,25 @@ static func style_button(btn: Button) -> void:
 	btn.add_theme_stylebox_override("pressed", button_style("pressed"))
 
 
+## Style a ProgressBar into the dark palette.
+##
+## Godot's stock ProgressBar is light grey, which on these panels is the one
+## piece of un-themed chrome on screen — and progress bars are exactly what a
+## work UI is made of. `fill` tints the filled portion so a bar can carry its
+## own meaning (amber = in progress, green = done) without a second label.
+static func style_progress(bar: ProgressBar, fill: Color = C_PRIMARY) -> void:
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(C_BG, 0.75)
+	bg.border_color = Color(C_BORDER, 0.8)
+	bg.set_border_width_all(1)
+	bg.set_corner_radius_all(3)
+	var fg := StyleBoxFlat.new()
+	fg.bg_color = fill
+	fg.set_corner_radius_all(3)
+	bar.add_theme_stylebox_override("background", bg)
+	bar.add_theme_stylebox_override("fill", fg)
+
+
 ## Small pill/chip tinted by `color` (mode chips, data-source chips, badges).
 static func chip_style(color: Color) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()

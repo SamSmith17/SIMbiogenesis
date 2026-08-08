@@ -141,6 +141,10 @@ var _mp_chip: Button = null
 var _mp_lobby: Control = null
 var _mp_chat_hud: Control = null
 var _conduits_chip: Button = null
+## Site Projects (the crew's work queue: unload → fabricate → raise → break down).
+var _projects_chip: Button = null
+## Settlement view — the watch-the-community-work camera.
+var _settlement_chip: Button = null
 
 var _solar_analyzer: SolarShadingAnalyzer = null
 var _shading_overlay: PanelContainer = null
@@ -400,6 +404,22 @@ func _on_conduits_chip_pressed() -> void:
 	SimSettingsController.set_conduits_3d_visible(
 		not bool(SimSettingsController.conduits_3d_visible))
 	_refresh_conduits_chip()
+
+
+## Site Projects panel. Called BY STRING through ServiceLocator (the
+## npc_routines_panel idiom) so this chip needs no main.gd wiring; the view's
+## own opener already toasts when no population is running, so pressing it on
+## a crewless map is a no-op with an explanation rather than a dead button.
+func _on_projects_chip_pressed() -> void:
+	var g: Node = ServiceLocator.graph()
+	if g != null and g.has_method("open_site_projects"):
+		g.call("open_site_projects")
+
+
+## Settlement view. Toggles, so the chip is both the way in and the way back.
+func _on_settlement_chip_pressed() -> void:
+	if _main != null and _main.has_method("toggle_settlement_view"):
+		_main.call("toggle_settlement_view")
 
 
 func _on_conduits_visible_signal(_enabled: bool) -> void:
@@ -2407,6 +2427,12 @@ func _build_right_cluster() -> Control:
 	_conduits_chip = _mk_chip_btn("3D wires", _on_conduits_chip_pressed,
 		"Toggle 3D graph wires in the world (off by default for performance)")
 	right.add_child(_conduits_chip)
+	_projects_chip = _mk_chip_btn("Projects", _on_projects_chip_pressed,
+		"Site Projects — the crew's work queue: unload → fabricate → raise → break down")
+	right.add_child(_projects_chip)
+	_settlement_chip = _mk_chip_btn("Settlement", _on_settlement_chip_pressed,
+		"Settlement view — watch the community at work, from ground level out to the whole site")
+	right.add_child(_settlement_chip)
 	var gear_btn := _mk_icon_btn("⚙", _on_settings_pressed, "Settings — clouds, sun/moon, stars & planets, location")
 	right.add_child(gear_btn)
 	_shading_btn = _mk_icon_btn("🔆", _on_solar_shading_pressed, "Solar shading — compute a year-long shadow heatmap")

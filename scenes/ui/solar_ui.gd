@@ -2814,8 +2814,12 @@ func _calculate_solar_power_enhanced() -> void:
 		return
 
 	var has_real_ghi : bool = _open_meteo_active and _simulated_solar_radiation > 1.0
+	# Live path: the hazard at the PLAYHEAD (no abs_hours), unlike
+	# evaluate_solar_at below which must resolve at the instant being rendered.
+	var live_aod : float = float(SolarIrradiance.decorate_with_hazard(
+		{}, SolarIrradiance.hazard_at(self)).get("aod", SolarIrradiance.AOD_BASELINE))
 	var kw : float = _compute_solar_kw(sun_el_deg, sun_az_deg, has_real_ghi,
-		_simulated_solar_radiation, cloud_cover, _estimate_ambient_temp())
+		_simulated_solar_radiation, cloud_cover, _estimate_ambient_temp(), live_aod)
 
 	# --- 3D shadow raycast (optional, ~0.1 ms per call) ---
 	# _get_shadow_factor returns a binary 0/1, so scaling kW is exact.
@@ -2837,10 +2841,21 @@ func _calculate_solar_power_enhanced() -> void:
 ## No scene/clock/HA state — deterministic for any (time, weather) pair.
 ## When `has_real_ghi`, decomposes the measured GHI via Erbs (1982); otherwise
 ## uses geometric clear-sky DNI with a cloud correction.
+## `aod` is the aerosol optical depth including any extreme-weather load; the
+## default is ordinary clean air, so every existing call is unchanged.
+##
+## Note the real-GHI branch needs only to scale GHI: the Erbs correlation below
+## then redistributes the remainder toward DIFFUSE on its own, because a lower
+## clearness index implies a higher diffuse fraction. That reproduces the real
+## behaviour of smoke — direct beam collapses, scattered light persists — with
+## no extra term, and it is why tracking arrays and CSP suffer far more than a
+## fixed tilted array under the same haze.
 func _compute_solar_kw(sun_el_deg: float, sun_az_deg: float, has_real_ghi: bool,
-		ghi_real: float, cloud_frac: float, t_amb: float) -> float:
+		ghi_real: float, cloud_frac: float, t_amb: float,
+		aod: float = SolarIrradiance.AOD_BASELINE) -> float:
 	if sun_el_deg < -2.0:
 		return 0.0
+	var aero : float = SolarIrradiance.aerosol_ghi_factor(sun_el_deg, aod)
 	var sun_el_rad  : float = deg_to_rad(sun_el_deg)
 	var cos_z       : float = maxf(sin(sun_el_rad), 0.01)  # cos(zenith) = sin(elevation)
 	var cos_inc     : float = SolarPosition.panel_cos_incidence(sun_az_deg, sun_el_deg, panel_azimuth_degrees, panel_tilt_degrees)
@@ -2854,7 +2869,7 @@ func _compute_solar_kw(sun_el_deg: float, sun_az_deg: float, has_real_ghi: bool,
 	if has_real_ghi:
 		# Real GHI from WeatherService (already includes cloud/atmosphere effects).
 		# Decompose into DNI + DHI via Erbs correlation (Erbs et al. 1982).
-		var ghi : float = ghi_real
+		var ghi : float = ghi_real * aero
 		var kt  : float = clampf(ghi / maxf(STC_IRRADIANCE * cos_z, 1.0), 0.0, 1.0)
 		var dhi_frac : float
 		if kt <= 0.22:
@@ -2871,8 +2886,10 @@ func _compute_solar_kw(sun_el_deg: float, sun_az_deg: float, has_real_ghi: bool,
 			0.0, 1200.0)
 	else:
 		# Geometric clear-sky DNI with cloud correction (same as standard path)
-		var dni : float = _calculate_dni(sun_el_deg)
-		var dhi : float = _calculate_dhi(sun_el_deg, dni)
+		var dni : float = SolarIrradiance.dni_clear_sky_wm2(sun_el_deg, aod) \
+			if aod > SolarIrradiance.AOD_BASELINE else _calculate_dni(sun_el_deg)
+		var dhi : float = SolarIrradiance.dhi_clear_sky_wm2(sun_el_deg, dni, aod) \
+			if aod > SolarIrradiance.AOD_BASELINE else _calculate_dhi(sun_el_deg, dni)
 		var beam : float = dni * cos_inc * iam
 		var ghi_est : float = dni * cos_z + dhi
 		if cloud_frac > 0.0:
@@ -3311,8 +3328,11 @@ func evaluate_solar_at(abs_hours: float) -> float:
 	if el < -2.0:
 		return 0.0
 	var wx := _weather_at_abs(abs_hours)
+	# _weather_at_abs decorates with the hazard resolved AT abs_hours, so a
+	# rendered week carries each day's own smoke rather than today's.
 	var kw := _compute_solar_kw(el, az, bool(wx["has_real"]), float(wx["ghi"]),
-		float(wx["cloud"]), float(wx["temp"]))
+		float(wx["cloud"]), float(wx["temp"]),
+		float(wx.get("aod", SolarIrradiance.AOD_BASELINE)))
 	# Mirror the live graph DC current-limit cap (held constant across a render,
 	# like aux — v1 shortcut) so the baked series matches what the wiring allows.
 	if _graph_dc_limit_w >= 0.0:
@@ -3356,9 +3376,16 @@ func _weather_at_abs(abs_hours: float) -> Dictionary:
 				var t : float = float(ws.call("temperature_c", m, d, h))
 				if not is_nan(t):
 					out["temp"] = t
-				return out
+				# Extreme weather resolved AT THIS INSTANT, not at the live
+				# playhead: this function is the batch-render/prebake twin of
+				# SolarIrradiance.sample_weather and evaluates arbitrary times.
+				# Using current() here would bake the present hazard across a
+				# whole rendered week.
+				return SolarIrradiance.decorate_with_hazard(
+					out, SolarIrradiance.hazard_at(self, abs_hours))
 	out["temp"] = _synthetic_temp_at(h)
-	return out
+	return SolarIrradiance.decorate_with_hazard(
+		out, SolarIrradiance.hazard_at(self, abs_hours))
 
 
 ## Synthetic diurnal ambient temperature for a time-of-day (offline fallback).

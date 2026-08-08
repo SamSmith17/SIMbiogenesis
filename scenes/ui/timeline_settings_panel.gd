@@ -180,6 +180,10 @@ func toggle() -> void:
 
 func open() -> void:
 	refresh_from_controller()
+	# Called separately because refresh_from_controller() early-returns when
+	# SimSettingsController has no Main or an empty snapshot, and this tab reads
+	# its state from GameplayRules / ExtremeWeatherPrefs / the director instead.
+	_refresh_extreme_weather_tab()
 	_request_center_layout()
 	visible = true
 	CursorController.request_modal("timeline_settings", Callable(self, "close"))
@@ -327,6 +331,7 @@ func _build_ui() -> void:
 	_build_environment_tab(tabs)
 	_build_lighting_tab(tabs)
 	_build_npc_tab(tabs)
+	_build_extreme_weather_tab(tabs)
 	_build_stars_planets_tab(tabs)
 	_build_solar_tab(tabs)
 	_build_ha_tab(tabs)
@@ -357,12 +362,332 @@ func _make_tab(tabs: TabContainer, title: String) -> VBoxContainer:
 	return vbox
 
 
+## ---------------------------------------------------------------------------
+## Extreme Weather
+## ---------------------------------------------------------------------------
+## Opt in per hazard, and see which hazards this site is actually at risk for —
+## computed from the site's own NWS/IEM alert history back to 1986, falling back
+## to climatology derived from WeatherService for non-US sites (which is most of
+## them, since the location picker puts maps anywhere).
+##
+## Persistence is deliberately split: the master switch is a MECHANIC toggle and
+## lives on GameplayRules with survival/crisis/fire (save- and scenario-scoped),
+## while the per-hazard opt-ins and the Drama slider are a TASTE and live in
+## ExtremeWeatherPrefs (user://extreme_weather.cfg).
+var _xw_enabled: CheckBox = null
+var _xw_intensity: HSlider = null
+var _xw_notify: CheckBox = null
+var _xw_rows_box: VBoxContainer = null
+var _xw_zone_lbl: Label = null
+var _xw_preview_opt: OptionButton = null
+var _xw_preview_sev: HSlider = null
+var _xw_preview_btn: Button = null
+var _xw_preview_dur: SpinBox = null
+var _xw_rows: Dictionary = {}   # hazard id -> {check, bar, stat}
+
+
+func _build_extreme_weather_tab(tabs: TabContainer) -> void:
+	var v := _make_tab(tabs, "Extreme Weather")
+
+	_add_section_lbl(v, "Extreme Weather")
+	_xw_enabled = _add_check(v, "Simulate extreme weather events", _on_xw_enabled)
+	_xw_notify = _add_check(v, "Warn me when a hazard begins", _on_xw_notify)
+	_xw_intensity = _add_slider(v, "Drama", 0.25, 2.0, 0.05, _on_xw_intensity)
+
+	var hint := Label.new()
+	hint.text = "Hazards are triggered from real data for this site — air-quality readings, the weather archive, and National Weather Service alert history. Drama scales only how severe a hazard LOOKS; it never changes the physics behind solar output or health. Turning a hazard off removes it from the simulation entirely."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(440, 0)
+	hint.add_theme_color_override("font_color", C_TEXT_S)
+	hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(hint)
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Your site's risk profile")
+
+	_xw_zone_lbl = Label.new()
+	_xw_zone_lbl.text = "Loading…"
+	_xw_zone_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_xw_zone_lbl.custom_minimum_size = Vector2(440, 0)
+	_xw_zone_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	_xw_zone_lbl.add_theme_font_size_override("font_size", 10)
+	v.add_child(_xw_zone_lbl)
+
+	var refresh_btn := Button.new()
+	refresh_btn.text = "Refresh risk profile"
+	refresh_btn.pressed.connect(_on_xw_refresh)
+	v.add_child(refresh_btn)
+
+	_xw_rows_box = VBoxContainer.new()
+	_xw_rows_box.add_theme_constant_override("separation", 4)
+	_xw_rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_child(_xw_rows_box)
+	for id: String in HazardCatalog.ids():
+		_xw_add_hazard_row(_xw_rows_box, id)
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Preview a hazard")
+
+	var prev_hint := Label.new()
+	prev_hint.text = "Forces a hazard on so you can watch it play out — this panel closes so you actually see it; the badge at the top of the screen shows what's running (click it to stop early). Ramps in and out like a real event. Works even with the simulation toggle off, changes no settings, and is never saved."
+	prev_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	prev_hint.custom_minimum_size = Vector2(440, 0)
+	prev_hint.add_theme_color_override("font_color", C_TEXT_S)
+	prev_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(prev_hint)
+
+	var prow := HBoxContainer.new()
+	prow.add_theme_constant_override("separation", 8)
+	_xw_preview_opt = OptionButton.new()
+	for id: String in HazardCatalog.simulated_ids():
+		_xw_preview_opt.add_item("%s %s" % [HazardCatalog.icon(id), HazardCatalog.display_name(id)])
+		_xw_preview_opt.set_item_metadata(_xw_preview_opt.item_count - 1, id)
+	_xw_preview_opt.add_theme_color_override("font_color", C_TEXT)
+	prow.add_child(_xw_preview_opt)
+	var dur_lbl := Label.new()
+	dur_lbl.text = "for"
+	dur_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	prow.add_child(dur_lbl)
+	_xw_preview_dur = SpinBox.new()
+	_xw_preview_dur.min_value = 1.0
+	_xw_preview_dur.max_value = 48.0
+	_xw_preview_dur.step = 1.0
+	_xw_preview_dur.value = 6.0
+	_xw_preview_dur.suffix = "h"
+	prow.add_child(_xw_preview_dur)
+	_xw_preview_btn = Button.new()
+	_xw_preview_btn.text = "Preview"
+	_xw_preview_btn.pressed.connect(_on_xw_preview)
+	prow.add_child(_xw_preview_btn)
+	var clear_btn := Button.new()
+	clear_btn.text = "Clear"
+	clear_btn.pressed.connect(_on_xw_clear_preview)
+	prow.add_child(clear_btn)
+	v.add_child(prow)
+	# LIVE while a preview runs: dragging retunes the forced severity in place
+	# (the old slider was only sampled when Preview was pressed, so dragging
+	# during a preview silently did nothing).
+	_xw_preview_sev = _add_slider(v, "Severity", 0.1, 1.0, 0.05, _on_xw_preview_sev)
+	_xw_preview_sev.value = 0.7
+
+	var attrib := Label.new()
+	attrib.text = "Air-quality data: Copernicus Atmosphere Monitoring Service (CAMS) ENSEMBLE via Open-Meteo. Alert history: NOAA/NWS via Iowa Environmental Mesonet."
+	attrib.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	attrib.custom_minimum_size = Vector2(440, 0)
+	attrib.add_theme_color_override("font_color", C_TEXT_S)
+	attrib.add_theme_font_size_override("font_size", 9)
+	v.add_child(attrib)
+
+
+## One hazard row: [x] icon + name | risk bar | rate/worst-year text.
+func _xw_add_hazard_row(parent: Control, id: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var chk := CheckBox.new()
+	chk.text = "%s %s" % [HazardCatalog.icon(id), HazardCatalog.display_name(id)]
+	chk.custom_minimum_size = Vector2(196, 0)
+	chk.add_theme_color_override("font_color", C_TEXT)
+	chk.toggled.connect(func(on: bool) -> void: _on_xw_hazard_toggled(id, on))
+	if not HazardCatalog.is_simulated(id):
+		chk.tooltip_text = "Tracked for your risk profile; the simulation for this hazard is not built yet."
+	row.add_child(chk)
+
+	# Plain Control + _draw, the same technique timeline_ui._draw_track and
+	# site_report_charts use — no texture, no theme dependency.
+	var bar := Control.new()
+	bar.custom_minimum_size = Vector2(70, 12)
+	bar.set_meta("fill", 0.0)
+	bar.set_meta("level", HazardCatalog.RISK_UNKNOWN)
+	bar.draw.connect(func() -> void: _xw_draw_risk_bar(bar))
+	row.add_child(bar)
+
+	var stat := Label.new()
+	stat.text = "…"
+	stat.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stat.add_theme_color_override("font_color", C_TEXT_S)
+	stat.add_theme_font_size_override("font_size", 10)
+	row.add_child(stat)
+
+	parent.add_child(row)
+	_xw_rows[id] = {"check": chk, "bar": bar, "stat": stat}
+
+
+func _xw_draw_risk_bar(bar: Control) -> void:
+	var w := bar.size.x
+	var h := bar.size.y
+	bar.draw_rect(Rect2(0, 0, w, h), C_BORDER)
+	var fill := clampf(float(bar.get_meta("fill", 0.0)), 0.0, 1.0)
+	if fill <= 0.0:
+		return
+	var level := str(bar.get_meta("level", ""))
+	var col := UITheme.C_OK
+	match level:
+		HazardCatalog.RISK_SEVERE: col = UITheme.C_ERROR
+		HazardCatalog.RISK_HIGH: col = UITheme.C_ERROR
+		HazardCatalog.RISK_MODERATE: col = UITheme.C_WARN
+		HazardCatalog.RISK_LOW: col = UITheme.C_INFO
+	bar.draw_rect(Rect2(0, 0, w * fill, h), col)
+
+
+## Called from open(), independently of SimSettingsController's snapshot — that
+## path early-returns when the controller has no Main yet, and this tab must
+## still populate.
+func _refresh_extreme_weather_tab() -> void:
+	if _xw_enabled == null:
+		return
+	ExtremeWeatherPrefs.ensure_loaded()
+	var prev := _syncing
+	_syncing = true
+
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	var gr := GameplayRulesImpl.from_node(self)
+	_xw_enabled.button_pressed = gr != null and gr.is_extreme_weather_enabled()
+	_xw_notify.button_pressed = ExtremeWeatherPrefs.notify
+	_xw_intensity.value = ExtremeWeatherPrefs.intensity
+
+	var profile: Dictionary = {}
+	var ready := false
+	if xw != null:
+		# Opening the tab is itself a request for the profile: on a site with no
+		# NWS zone the director would otherwise still be waiting on alert
+		# history that is never coming.
+		if not bool(xw.call("is_risk_profile_ready")):
+			xw.call("refresh_risk_profile")
+		profile = xw.call("risk_profile")
+		ready = bool(xw.call("is_risk_profile_ready"))
+		var zone := str(xw.call("risk_profile_zone"))
+		if not ready:
+			_xw_zone_lbl.text = "Loading alert history for this site…"
+		elif bool(xw.call("risk_profile_is_observed")):
+			_xw_zone_lbl.text = "NWS zone %s — from %d years of recorded alerts." % [
+				zone, Time.get_date_dict_from_system().get("year", 2026) - 1986 + 1]
+		else:
+			_xw_zone_lbl.text = "No NWS zone for this site (non-US) — estimated from local climate data."
+	else:
+		_xw_zone_lbl.text = "Extreme weather service unavailable."
+
+	# Re-order rows by risk so the site's real dangers are at the top.
+	if ready and not profile.is_empty() and _xw_rows_box != null:
+		var order := HazardRiskProfile.sorted_ids(profile)
+		for i in order.size():
+			var r: Variant = _xw_rows.get(order[i], null)
+			if r is Dictionary:
+				var row_node := (r as Dictionary)["check"].get_parent() as Control
+				if row_node != null:
+					_xw_rows_box.move_child(row_node, i)
+
+	for id: String in _xw_rows.keys():
+		var r: Dictionary = _xw_rows[id]
+		var chk := r["check"] as CheckBox
+		var bar := r["bar"] as Control
+		var stat := r["stat"] as Label
+		chk.button_pressed = ExtremeWeatherPrefs.is_enabled(id)
+		var entry: Dictionary = profile.get(id, {}) as Dictionary
+		var level := str(entry.get("level", HazardCatalog.RISK_UNKNOWN))
+		bar.set_meta("fill", HazardCatalog.risk_fill(level))
+		bar.set_meta("level", level)
+		bar.queue_redraw()
+		var line := HazardRiskProfile.summary_line(entry) if not entry.is_empty() else "…"
+		if HazardCatalog.is_simulated(id):
+			stat.text = "%s · %s" % [HazardCatalog.risk_label(level), line]
+		else:
+			stat.text = "%s · %s · not yet simulated" % [HazardCatalog.risk_label(level), line]
+
+	_syncing = prev
+
+
+func _on_xw_enabled(on: bool) -> void:
+	if _syncing: return
+	var gr := GameplayRulesImpl.from_node(self)
+	if gr != null:
+		gr.extreme_weather_enabled = on
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw != null:
+		xw.call("invalidate")
+
+
+func _on_xw_notify(on: bool) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.notify = on
+	ExtremeWeatherPrefs.save()
+
+
+func _on_xw_intensity(v: float) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.set_intensity(v)
+	ExtremeWeatherPrefs.save()
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw != null:
+		xw.call("invalidate")
+
+
+func _on_xw_hazard_toggled(id: String, on: bool) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.set_enabled(id, on)
+	ExtremeWeatherPrefs.save()
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw != null:
+		xw.call("invalidate")
+
+
+func _on_xw_refresh() -> void:
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw != null:
+		xw.call("refresh_risk_profile")
+	_refresh_extreme_weather_tab()
+
+
+func _on_xw_preview() -> void:
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw == null or _xw_preview_opt == null:
+		return
+	var idx := _xw_preview_opt.selected
+	if idx < 0:
+		return
+	var id := str(_xw_preview_opt.get_item_metadata(idx))
+	# The director now resolves a FORCED hazard even with the master switch or
+	# the per-hazard opt-in off — the old handler force-flipped BOTH of those
+	# persistently ("not saved" was only half true) and Clear never restored
+	# them. Preview must not write a single pref.
+	var dur := _xw_preview_dur.value if _xw_preview_dur != null else 6.0
+	xw.call("force_hazard", id, _xw_preview_sev.value, dur)
+	if not bool(xw.call("has_forced")):
+		return  # refused (clock unresolved) — the director already warned
+	# Close the panel so the player SEES the hazard they just triggered; the
+	# HazardBadgeUI chip carries the countdown + click-to-clear from here.
+	close()
+	var main := get_tree().get_first_node_in_group("main_scene")
+	if main != null and main.has_method("show_toast"):
+		main.call("show_toast", "Previewing %s %s — click the badge up top to stop" % [
+			HazardCatalog.icon(id), HazardCatalog.display_name(id)],
+			ToastUI.Level.INFO, 4.0)
+
+
+## Severity slider is LIVE during a preview; idle otherwise (its value is
+## sampled when Preview is pressed).
+func _on_xw_preview_sev(v: float) -> void:
+	if _syncing:
+		return
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw != null and xw.has_method("update_forced_severity") \
+			and bool(xw.call("has_forced")):
+		xw.call("update_forced_severity", v)
+
+
+func _on_xw_clear_preview() -> void:
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw != null:
+		xw.call("clear_forced")
+
+
 func _build_keys_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Keys")
 	_add_section_lbl(v, "API Keys  (optional — improve data accuracy)")
 
 	var hint_ot := Label.new()
-	hint_ot.text = "OpenTopography: enables 30 m DEM resolution (vs default 90 m).\nFree key at portal.opentopography.org"
+	hint_ot.text = "OpenTopography: enables 30 m DEM resolution (vs default 90 m), plus 10 m USGS DEM in the US.\nThis SAME key also gates the 1 m USGS lidar option in Terrain options -> Advanced terrain size, but OpenTopography restricts that specific dataset to academic-verified accounts -- an ordinary free key here gets 10 m instead (Terrain options shows which one actually loaded).\nFree key at portal.opentopography.org"
 	hint_ot.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint_ot.custom_minimum_size = Vector2(420, 0)
 	hint_ot.add_theme_color_override("font_color", C_TEXT_S)
@@ -758,6 +1083,32 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	growth_hint.add_theme_color_override("font_color", C_TEXT_S)
 	growth_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(growth_hint)
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "UI sounds")
+	# Backend lives on the UiSound autoload (mute + volume already persist to
+	# user://audio_prefs.cfg) — this is just the missing control surface.
+	# Resolve by path, never bare identifier (CLAUDE.md autoload trap).
+	var sfx := get_node_or_null("/root/UiSound")
+	var mute_chk := _add_check(v, "Mute UI sound effects", func(on: bool) -> void:
+		var s := get_node_or_null("/root/UiSound")
+		if s != null:
+			s.call("set_muted", on))
+	if sfx != null:
+		mute_chk.set_pressed_no_signal(bool(sfx.call("is_muted")))
+	var vol := _add_slider(v, "Volume", -30.0, 6.0, 1.0, func(db: float) -> void:
+		var s := get_node_or_null("/root/UiSound")
+		if s != null:
+			s.call("set_volume_db", db)
+			s.call("play_ui", "success"))
+	if sfx != null:
+		vol.set_value_no_signal(float(sfx.call("get_volume_db")))
+	var sfx_hint := Label.new()
+	sfx_hint.text = "Feedback chirps for wiring, warnings and unlocks. Warnings are also rate-limited to one per 1.5 s so repeated mistakes don't machine-gun."
+	sfx_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sfx_hint.custom_minimum_size = Vector2(520, 0)
+	sfx_hint.add_theme_color_override("font_color", C_TEXT_S)
+	sfx_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(sfx_hint)
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "∞ / Analemma")
 	_analemma_type = OptionButton.new()

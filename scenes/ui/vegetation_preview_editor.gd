@@ -192,6 +192,9 @@ const SHADER_SLIDERS := [
 	# Distance (m) where full 3D trees hand off to baked impostors (Overhaul v2
 	# LOD; a per-quality-tier budget may shrink the effective range on dense maps).
 	{"key": "tree_detail_distance_m", "label": "Tree detail dist (m)", "min": 60.0, "max": 600.0},
+	# End of the photocard band when the LOD ladder runs mesh → photocard →
+	# impostor (only meaningful for 3-step ladders; see the "LOD" dropdown).
+	{"key": "tree_photocard_distance_m", "label": "Photocard dist (m)", "min": 100.0, "max": 2000.0},
 	{"key": "auto_max_tree_instances", "label": "Max tree instances", "min": 2000.0, "max": 24000.0},
 	{"key": "auto_detail_radius_m", "label": "Tree detail radius m", "min": 100.0, "max": 2000.0},
 	{"key": "auto_distant_density", "label": "Distant tree density", "min": 0.0, "max": 1.0},
@@ -827,6 +830,7 @@ func _rebuild_species_section() -> void:
 			_refresh_apply_state()
 			_queue_rebuild())
 		arch_row.add_child(arch_opt)
+		_build_lod_chain_row(fam)
 	# Sliders display the RESOLVED value for the active species — selecting
 	# Birch shows Birch's real dims (SPECS variant / species override), not the
 	# family numbers it doesn't render with.
@@ -1059,6 +1063,74 @@ const SECTIONS_COLLAPSED_BY_DEFAULT: Array = [SECTION_FOLIAGE, SECTION_DETAIL]
 var _section_open: Dictionary = {}
 
 
+## The sensible LOD ladders — every non-empty subset of the three
+## representations in near→far order (an expensive mesh BEYOND a cheap card
+## is never what anyone wants, so reversed orders are not offered; the
+## underlying `<fam>_detail_chain` string accepts any order for hand edits).
+const LOD_CHAIN_PRESETS: Array = [
+	["mesh,impostor", "Full 3D → Impostor (default)"],
+	["mesh,photocard,impostor", "Full 3D → Photo card → Impostor"],
+	["mesh,photocard", "Full 3D → Photo card"],
+	["photocard,impostor", "Photo card → Impostor"],
+	["photocard", "Photo card only (all distances)"],
+	["mesh", "Full 3D only (no LOD)"],
+	["impostor", "Impostor only"],
+]
+
+
+## LOD-ladder dropdown for tree families (Overhaul v2.1): which
+## representations render, in what order — including "Photo card only", the
+## texture-based tree style that Overhaul v2 had orphaned in the never-built
+## FAR tier. Same override routing as the archetype dropdown (named
+## subspecies → per-species override, family → _values).
+func _build_lod_chain_row(fam: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	_species_section.add_child(row)
+	var lbl := Label.new()
+	_style_section(lbl, "LOD")
+	lbl.custom_minimum_size = Vector2(44, 0)
+	row.add_child(lbl)
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var has_photo := VegSpeciesRegistry.photocard_texture(_species) != null \
+			or VegSpeciesRegistry.photocard_texture(fam) != null
+	opt.tooltip_text = ("Which tree representations render, near → far. " +
+		"Distances: the Tree detail / Photocard sliders under Advanced. " +
+		"Photo card needs a texture at assets/vegetation/photocards/<id>.png " +
+		"or user://veg_photocards/<id>.png." +
+		("" if has_photo else "  (No photocard found for this species — " +
+		"photo-card steps will be skipped until one is dropped in.)"))
+	var chain_key := "%s_detail_chain" % fam
+	var current := ",".join(VegLodPolicy.parse_chain(
+		str(_resolved_active().get(chain_key, VegLodPolicy.DEFAULT_CHAIN))))
+	var found := false
+	for i in LOD_CHAIN_PRESETS.size():
+		var preset: Array = LOD_CHAIN_PRESETS[i]
+		opt.add_item(str(preset[1]), i)
+		opt.set_item_metadata(i, str(preset[0]))
+		if str(preset[0]) == current:
+			opt.select(i)
+			found = true
+	if not found:
+		# Hand-edited chain outside the preset set: show it verbatim.
+		var ci := LOD_CHAIN_PRESETS.size()
+		opt.add_item("Custom (%s)" % current, ci)
+		opt.set_item_metadata(ci, current)
+		opt.select(ci)
+	opt.item_selected.connect(func(idx: int) -> void:
+		var chain := str(opt.get_item_metadata(idx))
+		if _is_named_variant():
+			var d: Dictionary = _species_edits.get(_species, {})
+			d[chain_key] = chain
+			_species_edits[_species] = d
+		else:
+			_values[chain_key] = chain
+		_refresh_apply_state()
+		_queue_rebuild())
+	row.add_child(opt)
+
+
 ## Which section a shape-slider key belongs to. Derived from the key so adding a
 ## slider to SPECIES_SHAPE_SLIDERS files it automatically — a per-entry
 ## "section" field on ~60 specs would drift the first time someone forgot one.
@@ -1069,7 +1141,7 @@ static func slider_section(key: String) -> String:
 	if key.ends_with("_growth_years") or key.ends_with("_senescence_years"):
 		return SECTION_GROWTH
 	for frag in ["_lod_", "billboard", "shadow_proxy", "vertical_offset",
-			"trunk_taper", "tree_detail"]:
+			"trunk_taper", "tree_detail", "photocard", "detail_chain"]:
 		if frag in key:
 			return SECTION_DETAIL
 	for frag in ["_leaf", "_fur", "_whorl", "_bough", "cells_per_side", "blade",
@@ -1424,19 +1496,14 @@ func _apply_studio(mat: ShaderMaterial, species: String = "") -> void:
 		mat.set_shader_parameter("deciduousness", _deciduousness_for(species))
 
 
-## Mirrors VegetationEnvironmentSync._deciduousness_for so deciduous canopies shed
-## in autumn/winter in the preview exactly as they do on the map.
+## Delegates to the ONE shared resolution (registry phenology first) so the
+## preview shows exactly what the map's env-sync will render. This used to be
+## a hand-rolled copy that never consulted VegSpeciesRegistry: spruce / fir /
+## cedar / redwood previewed at 0.8 deciduousness (evergreen conifers, 0.0)
+## and palm at 1.0 — so painting a pine from a preview that had just shown it
+## dropping needles looked like a paint bug, not a preview bug.
 func _deciduousness_for(species: String) -> float:
-	var s := species.to_lower()
-	if s.begins_with("pine") or s == "conifer" or s == "taiga":
-		return 0.0
-	if s.begins_with("deciduous") or s == "broadleaf" or s == "palm":
-		return 1.0
-	if s.begins_with("shrub"):
-		return 0.55
-	if s.begins_with("grass"):
-		return 0.0
-	return 0.8
+	return VegSpeciesRegistry.deciduousness_for(species)
 
 
 ## Live seasonal/snow signals from the running map (group "main_scene"), matching

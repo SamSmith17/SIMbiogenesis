@@ -75,6 +75,24 @@ group_uniforms rainbow;
 	// Primary + secondary bows opposite the sun (antisolar point); driven from SolarUI.
 	uniform float rainbow_strength : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
 
+group_uniforms hazard; // Extreme weather (wildfire smoke, dust) — see AtmosphereApplier
+	// Environment.fog_sky_affect can only blend the FOG colour into the sky, and
+	// the fog colour is simultaneously doing duty as the terrain haze — which
+	// under smoke must be dark while the sky must be luminous. One colour cannot
+	// be both, so the sky gets its own tint here.
+	//
+	// Applied BEFORE the moon/sun/cloud blocks below, deliberately: the sky
+	// gradient is taken over, then the sun disc still draws on top at full
+	// strength in its own reddened colour. That combination — luminous orange
+	// sky plus a dim red disc — IS the wildfire-smoke image. Mixing over the
+	// disc instead washes it out and the scene reads as flat brown fog.
+	uniform vec3 hazard_haze_color : source_color = vec3( 0.62, 0.26, 0.10 );
+	uniform float hazard_haze : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
+	// Extra weighting toward the horizon: a smoke layer is optically far thicker
+	// along a grazing line of sight than straight up, which is why the horizon
+	// goes opaque orange while the zenith stays comparatively clear.
+	uniform float hazard_horizon_bias : hint_range( 0.0, 1.0, 0.01 ) = 0.65;
+
 group_uniforms stars;
 	// Stars texture - MUST be equirectangular projection with:
 	//   - North Celestial Pole (Polaris) at TOP CENTER
@@ -397,6 +415,17 @@ void sky()
 		// And if ther are many dark clouds, we also make the horizon darker
 		_horizon_color = mix( _horizon_color, vec3( 0.0 ), ( 1.0 - clouds_cutoff ) * clouds_weight * 0.7 );
 		COLOR = mix( COLOR, _horizon_color, _horizon_amount );
+	}
+
+	//////////////////// HAZARD HAZE ///////////////////////////////////////////////////////////////
+	// Wildfire smoke / blowing dust take over the sky itself. See the uniform
+	// block for why this sits here rather than at the end of sky().
+	if( hazard_haze > 0.003 )
+	{
+		// Grazing lines of sight pass through far more aerosol than the zenith.
+		float _lo = 1.0 - smoothstep( -0.05, 0.60, EYEDIR.y );
+		float _h = hazard_haze * mix( 1.0 - hazard_horizon_bias, 1.0, _lo );
+		COLOR = mix( COLOR, hazard_haze_color, clamp( _h, 0.0, 1.0 ) );
 	}
 
 	//////////////////// MOON //////////////////////////////////////////////////////////////////////
