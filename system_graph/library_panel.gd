@@ -557,6 +557,15 @@ func _make_item_btn(preset: Dictionary, cat_idx: int) -> Button:
 	if not disabled:
 		btn.button_down.connect(_on_btn_down.bind(preset))
 
+	# Packed ("shipping") size on hover — PACKING_PLAN.md Phase 0. Tooltip, not
+	# a third text line: the buttons are already two lines tall.
+	var packed := PackedSpec.for_preset_specs(str(preset.get("type", "")),
+		preset.get("specs", {}))
+	if not packed.is_empty():
+		btn.tooltip_text = "Packs to: %s · %s%s" % [
+			PackedSpec.format_dims(packed), PackedSpec.format_mass(packed),
+			"  (est.)" if str(packed.get("source", "")) == "estimated" else ""]
+
 	return btn
 
 

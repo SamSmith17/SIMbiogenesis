@@ -87,13 +87,26 @@ static func _is_dc_conn(conn: Dictionary) -> bool:
 
 ## Conductive-net key for one wire endpoint, or "" when the item terminates the
 ## net (controller, load, inverter — anything with internal electronics).
+## Phase 5 PACKED⇄DEPLOYED gate for the ELECTRICAL layer: a graph item whose
+## bound 3D prop is still in its shipping crate (specs.packed_3d, stamped by
+## TerrainLoader.set_prop_packed → SystemGraphView.set_item_packed_3d) has no
+## electrical presence — a crated battery is open-circuit, a crated
+## controller regulates nothing, a crated panel contributes 0 Voc/W. The
+## renewables/CSP/processor ticks were gated at Phase 5; these leaf items
+## were the documented "still ungated" hole.
+static func is_packed(item: Dictionary) -> bool:
+	return bool((item.get("specs", {}) as Dictionary).get("packed_3d", false))
+
+
 static func _net_key(model: GraphModel, item_id: String, handle_id: String) -> String:
 	var item := model.get_item(item_id)
 	if item.is_empty():
 		return ""
 	if is_battery_item(item):
-		# Skip destroyed batteries: no EMF, terminals treated open until reset.
-		if bool((item.get("specs", {}) as Dictionary).get("destroyed", false)):
+		# Skip destroyed/PACKED batteries: no EMF, terminals treated open — a
+		# battery still in its shipping crate powers nothing until unpacked.
+		var bsp: Dictionary = item.get("specs", {}) as Dictionary
+		if bool(bsp.get("destroyed", false)) or is_packed(item):
 			return ""
 		var pol := PvElectrical._terminal_polarity(handle_id)
 		if pol.is_empty():
@@ -161,7 +174,8 @@ static func analyze(model: GraphModel, flat_conns: Array) -> Dictionary:
 	var batteries: Array[Dictionary] = []
 	for item in GraphNesting.walk_items(model, "root"):
 		if item is Dictionary and is_battery_item(item as Dictionary) \
-				and not bool(((item as Dictionary).get("specs", {}) as Dictionary).get("destroyed", false)):
+				and not bool(((item as Dictionary).get("specs", {}) as Dictionary).get("destroyed", false)) \
+				and not is_packed(item as Dictionary):
 			batteries.append(item as Dictionary)
 	if batteries.is_empty():
 		return out
@@ -468,8 +482,9 @@ static func _pv_hits_from(model: GraphModel, seeds: Array, flat_conns: Array,
 			continue
 		var ty := str(it.get("type", ""))
 		var sp: Dictionary = it.get("specs", {}) as Dictionary
-		if ty == "controller" and not bool(sp.get("destroyed", false)):
-			continue  # a live controller regulates — stop here
+		if ty == "controller" and not bool(sp.get("destroyed", false)) \
+				and not is_packed(it):
+			continue  # a live controller regulates — stop here (a crated one doesn't)
 		var is_pv := PvElectrical.is_pv_source_item(it)
 		if is_pv:
 			pv_hits[cur] = true

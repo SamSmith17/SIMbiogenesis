@@ -8,6 +8,7 @@ extends SceneTree
 const ResourceKindsScript := preload("res://system_graph/data/resource_kinds.gd")
 const ResourceEdgeVisScript := preload("res://system_graph/data/resource_edge_vis.gd")
 const CspTroughSourceScript := preload("res://power_system/sources/csp_trough_source.gd")
+const WindTurbineSourceScript := preload("res://power_system/sources/wind_turbine_source.gd")
 const HeliostatSourceScript := preload("res://power_system/sources/heliostat_source.gd")
 const HomeBiogasSourceScript := preload("res://power_system/sources/home_biogas_source.gd")
 const PpBeamExtruderSourceScript := preload("res://power_system/sources/pp_beam_extruder_source.gd")
@@ -43,12 +44,105 @@ func _initialize() -> void:
 	_test_pp_sheet_press()
 	_test_cnc()
 	_test_mesh_collision_util()
+	_test_aerosol()
 	if _failures == 0:
 		print("SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
 	else:
 		print("SELFTEST FAIL  (%d of %d checks failed)" % [_failures, _checks])
 		quit(1)
+
+
+## Aerosol attenuation for extreme weather (wildfire smoke, dust storms).
+## Project convention: every physics change adds checks here.
+func _test_aerosol() -> void:
+	# THE BEHAVIOUR-PRESERVING IDENTITY. The old hardcoded aerosol term was
+	# exp(-0.12 * m^0.75); it is now exp(-(AEROSOL_K * aod/AOD_BASELINE) * m^0.75).
+	# At the default those are the SAME EXPRESSION, which is what makes the
+	# refactor provably safe for every existing site — so it is pinned, not
+	# assumed, across the whole elevation range.
+	for el in [1.0, 5.0, 15.0, 30.0, 45.0, 60.0, 75.0, 89.0]:
+		var default_call := SolarIrradiance.dni_clear_sky_wm2(float(el))
+		var explicit := SolarIrradiance.dni_clear_sky_wm2(
+			float(el), SolarIrradiance.AOD_BASELINE)
+		_check("aerosol: default == baseline at el=%d" % el,
+			absf(default_call - explicit) < 0.000001,
+			"%.6f vs %.6f" % [default_call, explicit])
+
+	# More aerosol always means less direct beam, and it is a big effect: this
+	# is what makes CSP and tracking PV collapse under smoke.
+	var clean := SolarIrradiance.dni_clear_sky_wm2(45.0, SolarIrradiance.AOD_BASELINE)
+	var prev := clean + 1.0
+	for aod in [0.1, 0.5, 1.0, 2.0, 3.0]:
+		var dni := SolarIrradiance.dni_clear_sky_wm2(45.0, float(aod))
+		_check("aerosol: DNI falls with aod=%.1f" % aod, dni < prev,
+			"%.2f after %.2f" % [dni, prev])
+		_check("aerosol: DNI finite at aod=%.1f" % aod, is_finite(dni))
+		prev = dni
+	_check("aerosol: heavy smoke guts the beam",
+		SolarIrradiance.dni_clear_sky_wm2(45.0, 2.6) < clean * 0.25,
+		"got %.1f vs clean %.1f" % [SolarIrradiance.dni_clear_sky_wm2(45.0, 2.6), clean])
+
+	# ...while DIFFUSE RISES. Smoke scatters rather than absorbs, so the light
+	# does not vanish, it becomes omnidirectional. That asymmetry is why a smoky
+	# day still feels bright while a trough produces nothing.
+	var dni_c := SolarIrradiance.dni_clear_sky_wm2(45.0, SolarIrradiance.AOD_BASELINE)
+	var dni_s := SolarIrradiance.dni_clear_sky_wm2(45.0, 2.0)
+	var frac_c := SolarIrradiance.dhi_clear_sky_wm2(45.0, dni_c,
+		SolarIrradiance.AOD_BASELINE) / maxf(dni_c, 1.0)
+	var frac_s := SolarIrradiance.dhi_clear_sky_wm2(45.0, dni_s, 2.0) / maxf(dni_s, 1.0)
+	_check("aerosol: diffuse FRACTION rises with aerosol", frac_s > frac_c,
+		"smoky %.3f vs clean %.3f" % [frac_s, frac_c])
+
+	# THE has_real SHORT-CIRCUIT. ghi_wm2_at_calendar returns measured GHI
+	# verbatim when weather has real data; an aerosol factor applied only to the
+	# clear-sky branch would silently do nothing on exactly the sites that HAVE
+	# real weather. These two checks are the regression guard for that trap.
+	var measured := {"has_real": true, "ghi": 800.0, "cloud": 0.0,
+		"aod": SolarIrradiance.AOD_BASELINE}
+	var clean_ghi := SolarIrradiance.ghi_wm2_at_calendar(
+		45.0, -120.0, 7, 15, 12.0, measured, 2024)
+	_check("aerosol: baseline leaves measured GHI untouched",
+		absf(clean_ghi - 800.0) < 0.001, "got %.2f" % clean_ghi)
+	var smoky := measured.duplicate()
+	smoky["aod"] = 2.0
+	var smoky_ghi := SolarIrradiance.ghi_wm2_at_calendar(
+		45.0, -120.0, 7, 15, 12.0, smoky, 2024)
+	_check("aerosol: measured GHI IS attenuated by event aerosol",
+		smoky_ghi < clean_ghi * 0.75,
+		"got %.2f vs %.2f (has_real short-circuit trap)" % [smoky_ghi, clean_ghi])
+	_check("aerosol: attenuated GHI stays positive and finite",
+		smoky_ghi > 0.0 and is_finite(smoky_ghi))
+
+	# aerosol_ghi_factor is the shared helper both branches use.
+	_check("aerosol: factor is 1 at baseline", absf(
+		SolarIrradiance.aerosol_ghi_factor(45.0, SolarIrradiance.AOD_BASELINE) - 1.0) < 0.0001)
+	_check("aerosol: factor is 1 below baseline",
+		absf(SolarIrradiance.aerosol_ghi_factor(45.0, 0.0) - 1.0) < 0.0001)
+	_check("aerosol: factor bounded", SolarIrradiance.aerosol_ghi_factor(45.0, 3.0) >= 0.0
+		and SolarIrradiance.aerosol_ghi_factor(45.0, 3.0) <= 1.0)
+	_check("aerosol: factor NaN-guarded",
+		is_finite(SolarIrradiance.aerosol_ghi_factor(45.0, NAN)))
+
+	# CSP is far more aerosol-sensitive than a flat plate, because it can only
+	# use the beam that smoke destroys.
+	var wx_clean := {"has_real": false, "cloud": 0.0, "aod": SolarIrradiance.AOD_BASELINE}
+	var wx_smoke := {"has_real": false, "cloud": 0.0, "aod": 2.0}
+	var dni_csp_clean := CspTroughSourceScript.dni_wm2(45.0, wx_clean)
+	var dni_csp_smoke := CspTroughSourceScript.dni_wm2(45.0, wx_smoke)
+	_check("aerosol: CSP DNI collapses under smoke",
+		dni_csp_smoke < dni_csp_clean * 0.25,
+		"%.1f vs %.1f" % [dni_csp_smoke, dni_csp_clean])
+	_check("aerosol: CSP unchanged at baseline",
+		absf(dni_csp_clean - SolarIrradiance.dni_clear_sky_wm2(45.0)) < 0.001)
+
+	# Gust cut-out: IEC 61400-1 trips on a short gust above the cut-out MEAN.
+	_check("gust: ordinary gust does not trip",
+		not WindTurbineSourceScript.gust_shutdown(20.0, 25.0))
+	_check("gust: a gust 25% over cut-out trips",
+		WindTurbineSourceScript.gust_shutdown(32.0, 25.0))
+	_check("gust: NaN guarded", not WindTurbineSourceScript.gust_shutdown(NAN, 25.0))
+	_check("gust: zero cut-out guarded", not WindTurbineSourceScript.gust_shutdown(30.0, 0.0))
 
 
 ## Collision-mesh sanitizer: NaN/inf/degenerate triangles must be dropped before

@@ -29,11 +29,87 @@ func _initialize() -> void:
 	fails += _test_open_circuit_needs_return_leg()
 	fails += _test_destroy_fx_envelope()
 	fails += _test_fault_card_placement()
+	fails += _test_starshade_batt_port_net_merge()
+	fails += _test_packed_gate()
 	if fails == 0:
-		print("GRAPH ELECTRICAL SELFTEST PASS  (21 checks)")
+		print("GRAPH ELECTRICAL SELFTEST PASS  (23 checks)")
 	else:
 		print("GRAPH ELECTRICAL SELFTEST FAIL  (%d failed)" % fails)
 	quit()
+
+
+## Phase 5 packed⇄deployed gate, ELECTRICAL layer: a crated (specs.packed_3d)
+## battery is open-circuit (no bank), a crated panel contributes 0 Voc/W, and
+## a crated controller does NOT regulate. The producer ticks were gated when
+## Phase 5 shipped; these leaf items were the documented "still ungated" hole
+## — a battery in its shipping crate kept powering the site.
+func _test_packed_gate() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	# Packed battery: no bank forms around it.
+	_add_battery(model, "pb", 12.0, 1.2)
+	var pbs: Dictionary = (model.get_item("pb").get("specs", {}) as Dictionary).duplicate(true)
+	pbs["packed_3d"] = true
+	model.update_item("pb", {"specs": pbs})
+	var analysis := GraphDcElectrical.analyze(model, GraphNesting.flat_connections(model))
+	if not (analysis.get("banks", []) as Array).is_empty():
+		push_error("a packed battery must not form a bank")
+		return 1
+	# Even a direct +→− wire on a crated battery is inert, not a short.
+	_dc_wire(model, "pb", "positive", "pb", "negative")
+	analysis = GraphDcElectrical.analyze(model, GraphNesting.flat_connections(model))
+	if not (analysis.get("shorts", []) as Array).is_empty():
+		push_error("a crated battery has no EMF — no short")
+		return 1
+	# Packed panel: zero Voc contribution.
+	var packed_panel := {"type": "panel", "specs": {"voc": 40.0, "packed_3d": true}}
+	if PvElectrical.unit_voc(packed_panel) != 0.0:
+		push_error("a crated panel must contribute 0 Voc (got %.1f)"
+			% PvElectrical.unit_voc(packed_panel))
+		return 1
+	if PvElectrical.unit_voc({"type": "panel", "specs": {"voc": 40.0}}) != 40.0:
+		push_error("an unpacked panel keeps its rated Voc")
+		return 1
+	# Packed controller: does not regulate (GraphDcElectrical.is_packed feeds
+	# the raw-PV-reach walk's "live controller" test).
+	if not GraphDcElectrical.is_packed({"specs": {"packed_3d": true}}):
+		push_error("is_packed must read specs.packed_3d")
+		return 1
+	if GraphDcElectrical.is_packed({"specs": {}}):
+		push_error("is_packed must be false when the key is absent")
+		return 1
+	return 0
+
+
+## StarShade rev 2 promoted battery terminals: an external battery wired to
+## the SHELL's batt_pos/batt_neg must union-find into the SAME DC net as the
+## internal bank (starshade/batt_* → bank/batt_* → bat_a.positive/negative,
+## both hops transparent) — one clean 3-battery parallel bank, no short.
+func _test_starshade_batt_port_net_merge() -> int:
+	var model: GraphModel = GraphModelScript.new()
+	for did in ComponentPresets.builtin_component_tree("starshade").keys():
+		model.put_definition(ComponentPresets.builtin_component_tree("starshade")[did] as Dictionary)
+	var cid := GraphComponentDefs.realize(model, "starshade", "root", Vector2(0, 0))
+	if cid.is_empty():
+		push_error("starshade failed to realize")
+		return 1
+	_add_battery(model, "ext_b", 51.2, 2.56)
+	_dc_wire(model, cid, "batt_pos", "ext_b", "positive")
+	_dc_wire(model, cid, "batt_neg", "ext_b", "negative")
+	var analysis := GraphDcElectrical.analyze(model, GraphNesting.flat_connections(model))
+	var shorts: Array = analysis.get("shorts", []) as Array
+	if not shorts.is_empty():
+		push_error("external battery on the shell terminals must not short (got %d)" % shorts.size())
+		return 1
+	# The external battery must land in the same bank as the internal pair.
+	for bank_v in (analysis.get("banks", []) as Array):
+		var ids: Array = (bank_v as Dictionary).get("battery_ids", []) as Array
+		if ids.has("ext_b"):
+			if ids.size() != 3:
+				push_error("shell-wired battery should join the 2-cell bank (bank ids %s)" % str(ids))
+				return 1
+			return 0
+	push_error("external battery not found in any analyzed bank")
+	return 1
 
 
 # ---------------------------------------------------------------------------

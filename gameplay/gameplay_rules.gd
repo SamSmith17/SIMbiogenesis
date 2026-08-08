@@ -37,6 +37,21 @@ var crisis_events_enabled: bool = false
 var random_crises_enabled: bool = false
 var fire_tools_enabled: bool = false
 
+## Extreme weather (wildfire smoke, dust storms, damaging winds, heatwaves).
+## Master switch for the whole subsystem; the per-hazard opt-ins live in
+## ExtremeWeatherPrefs (user://extreme_weather.cfg) because they are a taste
+## about presentation, while THIS is a mechanic toggle and therefore belongs
+## with the rest of them — save-scoped and scenario-scoped.
+##
+## Default false so existing installs are byte-identical until the player opts
+## in. Note this gates the whole subsystem including VISUALS; the additional
+## gameplay consequences (health damage, work stoppage) are gated separately by
+## is_air_hazard_enabled() below, which also requires survival mode.
+var extreme_weather_enabled: bool = false
+## Whether extreme weather can hurt the player / stop NPC work, as opposed to
+## only being visible. Survival-gated, like fire damage and death zones.
+var air_hazard_enabled: bool = true
+
 var show_survival_ui: bool = true
 
 ## Reserved for future use; not read by systems in Phase 4.
@@ -79,6 +94,19 @@ func is_random_crises_enabled() -> bool:
 
 func is_fire_tools_enabled() -> bool:
 	return survival_enabled and fire_tools_enabled
+
+
+## Extreme weather RENDERS whenever the player has opted in — deliberately not
+## gated on survival, so a sandbox or screenshot session can still show a smoke
+## event without taking damage for it.
+func is_extreme_weather_enabled() -> bool:
+	return extreme_weather_enabled
+
+
+## ...but it only HURTS when survival is actually running, matching how fire
+## damage and death zones are gated.
+func is_air_hazard_enabled() -> bool:
+	return extreme_weather_enabled and air_hazard_enabled and is_survival_active()
 
 
 func should_show_survival_ui() -> bool:
@@ -151,6 +179,8 @@ func to_save_dict() -> Dictionary:
 		"crisis_events_enabled": crisis_events_enabled,
 		"random_crises_enabled": random_crises_enabled,
 		"fire_tools_enabled": fire_tools_enabled,
+		"extreme_weather_enabled": extreme_weather_enabled,
+		"air_hazard_enabled": air_hazard_enabled,
 		"show_survival_ui": show_survival_ui,
 		"solar_enabled": solar_enabled,
 	}
@@ -169,5 +199,9 @@ func apply_save_state(data: Dictionary) -> void:
 	crisis_events_enabled = bool(data.get("crisis_events_enabled", crisis_events_enabled))
 	random_crises_enabled = bool(data.get("random_crises_enabled", random_crises_enabled))
 	fire_tools_enabled = bool(data.get("fire_tools_enabled", fire_tools_enabled))
+	# Absent in pre-extreme-weather saves, so the default (off) carries and an
+	# old save loads byte-identical to how it was written.
+	extreme_weather_enabled = bool(data.get("extreme_weather_enabled", extreme_weather_enabled))
+	air_hazard_enabled = bool(data.get("air_hazard_enabled", air_hazard_enabled))
 	show_survival_ui = bool(data.get("show_survival_ui", show_survival_ui))
 	solar_enabled = bool(data.get("solar_enabled", solar_enabled))

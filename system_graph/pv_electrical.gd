@@ -32,6 +32,10 @@ static func is_pv_source_item(item: Dictionary) -> bool:
 static func unit_voc(item: Dictionary) -> float:
 	var ty := str(item.get("type", ""))
 	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	# A packed (crated) item has no electrical presence — 0 Voc contribution
+	# to any string sum (GraphDcElectrical.is_packed has the full rationale).
+	if bool(sp.get("packed_3d", false)):
+		return 0.0
 	if ty == "panel":
 		return float(sp.get("voc", 37.5))
 	if ty == "compound" and str(sp.get("compound_kind", "")) == "array":

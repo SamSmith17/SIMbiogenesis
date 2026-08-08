@@ -5622,6 +5622,7 @@ func _draw() -> void:
 		_draw_npc_desire_site()   # worn-in paths beneath everything…
 		_draw_watershed_overlays_site()
 		_draw_npc_spaces_site()   # …destinations above them…
+		_draw_npc_crew_sites()    # …active work sites (crews gather ON these)…
 		_draw_npc_agents_site()   # …and the people walking between them
 		_draw_prop_radial_preview()
 	_draw_destroy_fx()
@@ -7641,6 +7642,25 @@ func _radial_project_world(world: Vector3) -> Variant:
 	return _disc_origin_screen() + site * GraphSiteLayout.px_per_m(_zoom)
 
 
+## Project a world-XZ point to canvas for the Site Plan NPC overlays (agents,
+## spaces, crew sites, desire raster): through the preview camera when it is
+## the projection authority — i.e. whenever the live disc is up, which is how
+## every other Site Plan element (node chips, elevation overlays) tracks
+## orbit/tilt — else the flat top-down mapping. The NPC layers used the flat
+## math unconditionally, so orbiting rotated the chips but left the people
+## behind. One shared helper so the four layers can't drift again.
+## Returns null when the point can't project (skip it).
+func _npc_project_site(world_xz: Vector2, center3: Vector3) -> Variant:
+	if _phys_camera_projection_active() and soi_preview_service != null \
+			and is_instance_valid(soi_preview_service) \
+			and soi_preview_service.has_method("world_to_canvas"):
+		return soi_preview_service.call("world_to_canvas",
+				Vector3(world_xz.x, center3.y, world_xz.y))
+	return size * 0.5 + _pan \
+			+ GraphSiteLayout.world_xz_to_site(world_xz, center3) \
+			* GraphSiteLayout.px_per_m(_zoom)
+
+
 func _draw_site_array_ghosts(origin: Vector2) -> void:
 	if site_array_ghosts.is_empty():
 		return
@@ -8293,6 +8313,9 @@ var npc_agents_provider: Callable = Callable()
 ## Site Plan: player-tagged NPC spaces — [{pos, space_type, label, occupied,
 ## capacity}] from NpcPopulationBridge.space_markers.
 var npc_spaces_provider: Callable = Callable()
+## Site Plan active work sites (claimed chores with positions) — see
+## NpcPopulationBridge.crew_site_markers.
+var npc_crew_provider: Callable = Callable()
 
 
 ## Site Plan: the population's desire lines — a heat raster of where feet
@@ -8321,16 +8344,29 @@ func _draw_npc_desire_site() -> void:
 	var center3 := Vector3.ZERO
 	if soi_svc != null and soi_svc.has_method("world_center"):
 		center3 = soi_svc.call("world_center") as Vector3
-	var s := GraphSiteLayout.px_per_m(_zoom)
-	var origin := size * 0.5 + _pan
-	# The site transform is a uniform scale + offset, so two opposite corners
-	# define the screen rect.
-	var a := origin + GraphSiteLayout.world_xz_to_site(world.position, center3) * s
-	var b := origin + GraphSiteLayout.world_xz_to_site(world.end, center3) * s
-	var rect := Rect2(a, b - a).abs()
-	if rect.size.x < 1.0 or rect.size.y < 1.0:
+	# All four world corners projected individually: an axis-aligned
+	# draw_texture_rect cannot follow the orbited camera, so the raster is a
+	# textured quad. Un-orbited the projected corners ARE the old rect.
+	var corners_w: Array = [
+		world.position,
+		Vector2(world.end.x, world.position.y),
+		world.end,
+		Vector2(world.position.x, world.end.y),
+	]
+	var pts := PackedVector2Array()
+	for cw in corners_w:
+		var cv: Variant = _npc_project_site(cw as Vector2, center3)
+		if cv == null:
+			return  # a corner behind the camera — skip the raster this frame
+		pts.append(cv as Vector2)
+	var bb := Rect2(pts[0], Vector2.ZERO)
+	for p in pts:
+		bb = bb.expand(p)
+	if bb.size.x < 1.0 or bb.size.y < 1.0:
 		return
-	draw_texture_rect(tex, rect, false)
+	var uvs := PackedVector2Array([
+		Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)])
+	draw_colored_polygon(pts, Color.WHITE, uvs, tex)
 	_draw_npc_desire_legend(d)
 
 
@@ -8376,7 +8412,6 @@ func _draw_npc_spaces_site() -> void:
 	if soi_svc != null and soi_svc.has_method("world_center"):
 		center3 = soi_svc.call("world_center") as Vector3
 	var s := GraphSiteLayout.px_per_m(_zoom)
-	var origin := size * 0.5 + _pan
 	var fnt := ThemeDB.fallback_font
 	# Footprint reads as a ~6 m gathering area, floored so it stays visible
 	# when zoomed out to the whole SoI.
@@ -8386,7 +8421,10 @@ func _draw_npc_spaces_site() -> void:
 			continue
 		var mark: Dictionary = mark_v
 		var world: Vector2 = mark.get("pos", Vector2.ZERO)
-		var screen := origin + GraphSiteLayout.world_xz_to_site(world, center3) * s
+		var screen_v: Variant = _npc_project_site(world, center3)
+		if screen_v == null:
+			continue
+		var screen: Vector2 = screen_v
 		if screen.x < -60.0 or screen.y < -60.0 or screen.x > size.x + 60.0 or screen.y > size.y + 60.0:
 			continue
 		var stype := str(mark.get("space_type", ""))
@@ -8400,11 +8438,17 @@ func _draw_npc_spaces_site() -> void:
 		var poly: PackedVector2Array = mark.get("poly", PackedVector2Array())
 		if poly.size() >= 3:
 			var ring := PackedVector2Array()
+			var ring_ok := true
 			for wp in poly:
-				ring.append(origin + GraphSiteLayout.world_xz_to_site(wp, center3) * s)
-			draw_colored_polygon(ring, Color(col.r, col.g, col.b, 0.10))
-			ring.append(ring[0])
-			draw_polyline(ring, Color(col.r, col.g, col.b, 0.7), 1.6, true)
+				var rv: Variant = _npc_project_site(wp, center3)
+				if rv == null:
+					ring_ok = false
+					break
+				ring.append(rv as Vector2)
+			if ring_ok:
+				draw_colored_polygon(ring, Color(col.r, col.g, col.b, 0.10))
+				ring.append(ring[0])
+				draw_polyline(ring, Color(col.r, col.g, col.b, 0.7), 1.6, true)
 		draw_circle(screen, r, Color(col.r, col.g, col.b, 0.13))
 		draw_arc(screen, r, 0.0, TAU, 40, Color(col.r, col.g, col.b, 0.85), 1.8, true)
 		# Occupancy sweep on the ring — a full space reads at a glance.
@@ -8424,6 +8468,106 @@ func _draw_npc_spaces_site() -> void:
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.85, 0.89, 0.94, 0.9))
 
 
+## Centre the Site Plan on a WORLD position — the "watch the crew" handoff
+## (Linkage Lab queue / deliveries). Bumps the zoom to a people-readable
+## scale only when the current one is too far out to show agent dots.
+func center_site_on(world_xz: Vector2) -> void:
+	var soi_svc := _cached_autoload("/root/SoiService")
+	var center3 := Vector3.ZERO
+	if soi_svc != null and soi_svc.has_method("world_center"):
+		center3 = soi_svc.call("world_center") as Vector3
+	if GraphSiteLayout.px_per_m(_zoom) < 1.2:
+		_zoom = clampf(2.2 / GraphSiteLayout.SOI_PX_PER_M, 0.2, 8.0)
+	_pan = -GraphSiteLayout.world_xz_to_site(world_xz, center3) \
+		* GraphSiteLayout.px_per_m(_zoom)
+	queue_redraw()
+
+
+## Site Plan: active WORK sites — where crews are building right now
+## (PACKING_PLAN.md Phase 6.5). Amber disc + tool glyph, drawn under the
+## agent dots so the gathered crowd visibly stands ON its work. Sub-quorum
+## sites read as a muster ("2/6 ppl" — hands still gathering, work not yet
+## paying); quorate sites show the progress sweep instead.
+func _draw_npc_crew_sites() -> void:
+	if not npc_crew_provider.is_valid():
+		return
+	var marks: Variant = npc_crew_provider.call()
+	if not (marks is Array) or (marks as Array).is_empty():
+		return
+	var soi_svc := _cached_autoload("/root/SoiService")
+	var center3 := Vector3.ZERO
+	if soi_svc != null and soi_svc.has_method("world_center"):
+		center3 = soi_svc.call("world_center") as Vector3
+	var s := GraphSiteLayout.px_per_m(_zoom)
+	var fnt := ThemeDB.fallback_font
+	var r := maxf(11.0, 4.0 * s)
+	var amber := Color(1.0, 0.72, 0.20)
+	for mark_v in marks as Array:
+		if not (mark_v is Dictionary):
+			continue
+		var mark: Dictionary = mark_v
+		var world: Vector2 = mark.get("pos", Vector2.ZERO)
+		var screen_v: Variant = _npc_project_site(world, center3)
+		if screen_v == null:
+			continue
+		var screen: Vector2 = screen_v
+		if screen.x < -60.0 or screen.y < -60.0 or screen.x > size.x + 60.0 or screen.y > size.y + 60.0:
+			continue
+		var quorum := bool(mark.get("quorum", true))
+		var col := amber if quorum else Color(0.95, 0.55, 0.25)
+		# Haul route: the relay line the brigade posts along, drawn before
+		# the site disc so the disc caps its end.
+		if mark.has("from") and mark.has("to"):
+			var fa_v: Variant = _npc_project_site(mark["from"] as Vector2, center3)
+			var fb_v: Variant = _npc_project_site(mark["to"] as Vector2, center3)
+			if fa_v != null and fb_v != null:
+				var fa: Vector2 = fa_v
+				var fb: Vector2 = fb_v
+				draw_line(fa, fb, Color(col.r, col.g, col.b, 0.55), 2.4, true)
+				draw_circle(fa, 4.0, Color(col.r, col.g, col.b, 0.8))
+				draw_circle(fb, 4.0, Color(col.r, col.g, col.b, 0.8))
+				# The payoff image: items FLOWING along a working brigade line.
+				# Phase is sim time (mark.flow_t), so the pips crawl with the
+				# clock, freeze on pause, and rewind on a scrub — and redraws
+				# already ride the population tick.
+				if quorum and str(mark.get("strategy", "")) == "brigade" \
+						and float(mark.get("progress", 0.0)) > 0.0 \
+						and float(mark.get("progress", 0.0)) < 1.0:
+					var pip := maxf(3.0, 1.2 * s)
+					var t0 := float(mark.get("flow_t", 0.0)) * 8.0
+					for k in 4:
+						var f := fposmod(t0 + float(k) / 4.0, 1.0)
+						var at := fa.lerp(fb, f)
+						draw_rect(Rect2(at - Vector2(pip, pip),
+								Vector2(pip * 2.0, pip * 2.0)),
+							Color(0.95, 0.72, 0.25, 0.95))
+		draw_circle(screen, r, Color(col.r, col.g, col.b, 0.14))
+		draw_arc(screen, r, 0.0, TAU, 40, Color(col.r, col.g, col.b, 0.9), 1.8, true)
+		if quorum:
+			# Work underway: the sweep is the chore's real progress.
+			var frac := clampf(float(mark.get("progress", 0.0)), 0.0, 1.0)
+			if frac > 0.0:
+				draw_arc(screen, r, -PI * 0.5, -PI * 0.5 + TAU * frac, 40,
+						Color(0.55, 1.0, 0.45, 0.95), 3.2, true)
+		if r >= 11.0:
+			var glyph := "🔨"
+			var gw := fnt.get_string_size(glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+			draw_string(fnt, screen - Vector2(gw * 0.5, -4.0), glyph,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(col.r, col.g, col.b, 0.95))
+			var head := str(mark.get("label", ""))
+			var crew_txt := "%d/%d ppl — gathering" % [int(mark.get("workers", 0)),
+					int(mark.get("min_workers", 1))] if not quorum \
+					else "%d ppl" % int(mark.get("workers", 0))
+			var lw := fnt.get_string_size(head, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
+			draw_string(fnt, screen - Vector2(lw * 0.5, r + 16.0), head,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.92, 0.88, 0.78, 0.95))
+			var cw := fnt.get_string_size(crew_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
+			draw_string(fnt, screen - Vector2(cw * 0.5, r + 5.0), crew_txt,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+					Color(col.r, col.g, col.b, 0.95))
+	# (Redraws ride the population tick, same as the agent dots.)
+
+
 func _draw_npc_agents_site() -> void:
 	if not npc_agents_provider.is_valid():
 		return
@@ -8435,7 +8579,6 @@ func _draw_npc_agents_site() -> void:
 	if soi_svc != null and soi_svc.has_method("world_center"):
 		center3 = soi_svc.call("world_center") as Vector3
 	var s := GraphSiteLayout.px_per_m(_zoom)
-	var origin := size * 0.5 + _pan
 	# Person-scale dot: ~0.6 m footprint on the plan, but always readable.
 	var r := maxf(3.5, 0.35 * s)
 	for dot_v in dots as Array:
@@ -8443,7 +8586,10 @@ func _draw_npc_agents_site() -> void:
 			continue
 		var dot: Dictionary = dot_v
 		var world: Vector2 = dot.get("pos", Vector2.ZERO)
-		var screen := origin + GraphSiteLayout.world_xz_to_site(world, center3) * s
+		var screen_v: Variant = _npc_project_site(world, center3)
+		if screen_v == null:
+			continue
+		var screen: Vector2 = screen_v
 		if screen.x < -20.0 or screen.y < -20.0 or screen.x > size.x + 20.0 or screen.y > size.y + 20.0:
 			continue
 		# Recent trail behind the dot — the aggregate heat map is statistical;
@@ -8453,13 +8599,16 @@ func _draw_npc_agents_site() -> void:
 			if trail is PackedVector2Array and (trail as PackedVector2Array).size() >= 2:
 				var pts: PackedVector2Array = trail
 				var n := pts.size()
+				var prev_v: Variant = _npc_project_site(pts[0], center3)
 				for i in range(1, n):
-					var p0 := origin + GraphSiteLayout.world_xz_to_site(pts[i - 1], center3) * s
-					var p1 := origin + GraphSiteLayout.world_xz_to_site(pts[i], center3) * s
-					var fade := float(i) / float(n)
-					var tc: Color = dot.get("color", Color.WHITE)
-					tc.a = fade * 0.5
-					draw_line(p0, p1, tc, maxf(1.0, r * 0.4), true)
+					var cur_v: Variant = _npc_project_site(pts[i], center3)
+					if prev_v != null and cur_v != null:
+						var fade := float(i) / float(n)
+						var tc: Color = dot.get("color", Color.WHITE)
+						tc.a = fade * 0.5
+						draw_line(prev_v as Vector2, cur_v as Vector2, tc,
+								maxf(1.0, r * 0.4), true)
+					prev_v = cur_v
 		# Body = the person's own pastel (identity); rim = their morale band,
 		# so the camp's mood is readable at a glance across the whole site.
 		var col: Color = dot.get("color", Color.WHITE)
@@ -8470,6 +8619,13 @@ func _draw_npc_agents_site() -> void:
 		# Asleep reads as a dimmer dot; traveling gets a heading tick later.
 		if str(dot.get("activity", "")) == "sleep":
 			draw_circle(screen, r * 0.55, Color(0.05, 0.08, 0.16, 0.75))
+		# Carrying a crate: a small amber square riding the dot — a working
+		# haul line reads as dots with items flowing along it (the payoff
+		# image PACKING_PLAN Phase 6 names).
+		elif bool(dot.get("carrying", false)):
+			var hw := maxf(r * 0.55, 2.0)
+			draw_rect(Rect2(screen - Vector2(hw, hw), Vector2(hw * 2.0, hw * 2.0)),
+					Color(0.95, 0.72, 0.25, 0.95))
 
 
 ## Elevation CT: sample the cut plane through watershed polys (outer-ring verts

@@ -18,12 +18,34 @@ func _initialize() -> void:
 	fails += _test_warn_descends()
 	fails += _test_connect_is_short_and_quiet()
 	fails += _test_danger_matches_graph_boom()
+	fails += _test_warn_rate_limit_floor()
 	if fails == 0:
-		print("UI SFX SELFTEST PASS  (6 checks)")
+		print("UI SFX SELFTEST PASS  (7 checks)")
 		quit(0)
 	else:
 		print("UI SFX SELFTEST FAIL  (%d failed)" % fails)
 		quit(1)
+
+
+## The WARN tier is floored to one play per 1.5 s regardless of the caller's
+## own (often 90 ms) gap — repeated mistakes must not machine-gun. Other tiers
+## keep exactly what the caller asked for (CONNECT's rapid-wiring click relies
+## on its short gap).
+func _test_warn_rate_limit_floor() -> int:
+	if UiSfx.effective_min_gap_ms(UiSfx.WARN, 90) < 1000:
+		push_error("WARN gap must be floored to >=1s (got %d)"
+			% UiSfx.effective_min_gap_ms(UiSfx.WARN, 90))
+		return 1
+	if UiSfx.effective_min_gap_ms(UiSfx.WARN, 5000) != 5000:
+		push_error("a LONGER caller gap must win over the floor")
+		return 1
+	if UiSfx.effective_min_gap_ms(UiSfx.CONNECT, 90) != 90:
+		push_error("CONNECT must keep the caller's own gap")
+		return 1
+	if UiSfx.effective_min_gap_ms(UiSfx.SUCCESS, 0) != 0:
+		push_error("unfloored tiers with no gap stay unlimited")
+		return 1
+	return 0
 
 
 func _samples(stream: AudioStreamWAV) -> PackedFloat32Array:

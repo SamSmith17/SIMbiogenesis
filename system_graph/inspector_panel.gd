@@ -54,6 +54,13 @@ var _compound_explode_cb: Callable = Callable()
 var _compound_back_cb: Callable = Callable()
 var _component_save_cb: Callable = Callable()
 var _component_make_unique_cb: Callable = Callable()
+## SystemGraphView.request_component_sync — called after any boundary-port
+## edit (promote/demote/rename/face) on a COMPONENT INSTANCE. The view's
+## generic sync hook only fires for edits made INSIDE an instance scope
+## (_innermost_instance_for_scope("root") is ""), so a promotion made from
+## root scope never reached capture and the next sibling edit's restamp
+## silently erased the promoted port AND pruned its external wire.
+var _component_sync_cb: Callable = Callable()
 var _conduit_route_cb: Callable = Callable()
 var _conduit_clear_cb: Callable = Callable()
 var _conduit_style_cb: Callable = Callable()
@@ -206,6 +213,21 @@ func set_compound_callbacks(enter_cb: Callable, ungroup_cb: Callable,
 func set_component_callbacks(save_cb: Callable, make_unique_cb: Callable) -> void:
 	_component_save_cb = save_cb
 	_component_make_unique_cb = make_unique_cb
+
+
+func set_component_sync_callback(cb: Callable) -> void:
+	_component_sync_cb = cb
+
+
+## After a boundary-port edit on `compound_id`: when the compound is a
+## component INSTANCE, queue capture+restamp so the edit lands in its
+## definition and survives sibling restamps (see _component_sync_cb's note).
+func _notify_boundary_edit(compound_id: String) -> void:
+	if _model == null or not _component_sync_cb.is_valid():
+		return
+	var it := _model.get_item(compound_id)
+	if not it.is_empty() and GraphComponentDefs.is_instance(it):
+		_component_sync_cb.call(compound_id)
 
 
 func set_conduit_callbacks(route_cb: Callable, clear_cb: Callable,
@@ -606,6 +628,10 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_section("Specs")
 			_text_field("Name", specs.get("name", ""), "specs/name")
 
+	# Packed ("shipping") size + weight — PACKING_PLAN.md Phase 0. One generic
+	# section for every physical type; abstract nodes resolve empty and skip.
+	_build_packed_section(itype, specs)
+
 	# Automations are sim/gameplay-first - surfaced right after the core specs
 	# so bound rules are visible without scrolling. HA export lives under Advanced.
 	if _item_supports_automation(item):
@@ -642,6 +668,24 @@ func _rebuild_for_item(item: Dictionary) -> void:
 		_build_advanced_calibration_section(item)
 
 	_updating_form = false
+
+
+## Packed ("shipping") dims + weight — PACKING_PLAN.md Phase 0. Resolves via
+## PackedSpec (curated > computed > estimated); an empty resolve means "not
+## packable" and adds no UI. Compounds carrying a model_id (StarShade,
+## linkage arrays) fall back to the model's packed entry.
+func _build_packed_section(itype: String, specs: Dictionary) -> void:
+	var packed := PackedSpec.for_preset_specs(itype, specs)
+	if packed.is_empty():
+		packed = PackedSpec.for_model(str(specs.get("model_id", "")))
+	if packed.is_empty():
+		return
+	# Estimate marker lives on the section title — the value column is narrow
+	# and a per-row suffix clips at the panel edge.
+	var est := str(packed.get("source", "")) == "estimated"
+	_section("Packed (shipping) · estimated" if est else "Packed (shipping)")
+	_readonly_field("Packs to", PackedSpec.format_dims_short(packed))
+	_readonly_field("Ship weight", PackedSpec.format_mass(packed))
 
 
 func _rebuild_for_connection(conn: Dictionary) -> void:
@@ -5455,6 +5499,7 @@ func _expose_child_port(compound_id: String, child_id: String, handle: Dictionar
 	_model.update_item(compound_id, {"specs": specs,
 		"handles": GraphNesting.layout_exposed_handles(patched)})
 	_model.changed.emit("reset")
+	_notify_boundary_edit(compound_id)
 
 
 func _build_exposed_ports_editor(item: Dictionary) -> void:
@@ -5501,7 +5546,8 @@ func _build_exposed_ports_editor(item: Dictionary) -> void:
 		face_opt.item_selected.connect(func(idx: int):
 			GraphNesting.set_exposed_port_face(_model, compound_id, hid,
 				str(GraphNesting.PORT_FACES[idx]))
-			_model.changed.emit("reset"))
+			_model.changed.emit("reset")
+			_notify_boundary_edit(compound_id))
 		hbox.add_child(face_opt)
 		var rm := Button.new()
 		rm.text = "✕"
@@ -5532,6 +5578,12 @@ func _build_subport_toggle_list(item: Dictionary) -> void:
 		promoted_of["%s|%s" % [str(ep.get("child_item_id", "")),
 			str(ep.get("child_handle_id", ""))]] = str(ep.get("handle_id", ""))
 	_section("Sub-ports")
+	var hint := Label.new()
+	hint.text = "Toggle a port to expose it on the collapsed node — e.g. the battery bank's + / − so DC sources can charge it from outside."
+	hint.add_theme_font_size_override("font_size", 10)
+	hint.add_theme_color_override("font_color", C_TEXT_M)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_form_vbox.add_child(hint)
 	for child_v in _model.get_items_in_scope(child_scope):
 		var child := child_v as Dictionary
 		var cid := str(child.get("id", ""))
@@ -5551,7 +5603,16 @@ func _build_subport_toggle_list(item: Dictionary) -> void:
 				continue
 			var row := _row_container()
 			var hbox: HBoxContainer = row.get_child(0)
-			hbox.add_child(_key_label("  " + hid2))
+			# Polarity/kind glyph so a raw handle id like "batt_pos" reads at
+			# a glance ("⊕ batt_pos" / "⊖ …" / "≈ …" for AC / "◇ water …").
+			var pol2 := str(h.get("polarity", "")).to_lower()
+			var glyph := "⊕" if pol2 == "positive" else "⊖" if pol2 == "negative" \
+					else "≈" if pol2 == "ac" else "◇"
+			var kind2 := str(h.get("resource_kind", ""))
+			var port_lbl := "  %s %s" % [glyph, hid2]
+			if not kind2.is_empty():
+				port_lbl += " · " + kind2
+			hbox.add_child(_key_label(port_lbl))
 			var chk := CheckButton.new()
 			chk.focus_mode = Control.FOCUS_NONE
 			var key := "%s|%s" % [cid, hid2]
@@ -5590,6 +5651,7 @@ func _rename_exposed_port(compound_id: String, handle_id: String, new_label: Str
 			ep["label"] = new_label
 	specs["exposed_ports"] = eps
 	_model.update_item(compound_id, {"specs": specs})
+	_notify_boundary_edit(compound_id)
 
 
 func _remove_exposed_port(compound_id: String, handle_id: String) -> void:
@@ -5628,6 +5690,7 @@ func _remove_exposed_port(compound_id: String, handle_id: String) -> void:
 				or (str(conn.get("target_item_id", "")) == compound_id and str(conn.get("target_handle_id", "")) == handle_id):
 			_model.remove_connection(str(conn.get("id", "")))
 	_model.changed.emit("reset")
+	_notify_boundary_edit(compound_id)
 
 
 func _build_array_module_dims_editor(item: Dictionary) -> void:

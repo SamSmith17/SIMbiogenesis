@@ -21,6 +21,10 @@ func _initialize() -> void:
 	fails += _test_external_wire_survives_restamp()
 	fails += _test_make_unique_detaches()
 	fails += _test_v6_to_v7_definitions()
+	fails += _test_starshade_battery_ports()
+	fails += _test_root_promotion_survives_restamp()
+	fails += _test_face_survives_capture_realize()
+	fails += _test_heal_builtin_ports()
 	if fails == 0:
 		print("GRAPH COMPONENTS SELFTEST PASS  (%d checks)" % _checks)
 	else:
@@ -269,4 +273,191 @@ func _test_v6_to_v7_definitions() -> int:
 	var m3: GraphModel = GraphModelScript.new()
 	m3.deserialize(legacy)
 	f += _check(m3.definitions.is_empty(), "legacy v6 save loads with empty definitions")
+	return f
+
+
+## Mimic the inspector's _expose_child_port at the MODEL level: append the
+## exposed_ports entry + matching handle on `cid` fronting (child, child_handle).
+func _promote(model: GraphModel, cid: String, child_id: String,
+		child_handle: String, hid: String, pol: String) -> void:
+	var comp := model.get_item(cid)
+	var specs: Dictionary = (comp.get("specs", {}) as Dictionary).duplicate(true)
+	var eps: Array = (specs.get("exposed_ports", []) as Array).duplicate(true)
+	eps.append({"handle_id": hid, "child_item_id": child_id,
+		"child_handle_id": child_handle, "polarity": pol, "kind": "",
+		"label": "", "direction": "out",
+		"face": GraphNesting.default_face_for_direction("out")})
+	specs["exposed_ports"] = eps
+	var handles: Array = (comp.get("handles", []) as Array).duplicate(true)
+	handles.append({"id": hid, "polarity": pol, "direction": "out",
+		"rx": 0.5, "ry": 1.0})
+	var patched := comp.duplicate(true)
+	patched["specs"] = specs
+	patched["handles"] = handles
+	model.update_item(cid, {"specs": specs,
+		"handles": GraphNesting.layout_exposed_handles(patched)})
+
+
+## rev 2: new StarShades ship with the bank's DC terminals promoted, faced
+## left/right, and they resolve through BOTH transparent hops to a real
+## battery's own terminals.
+func _test_starshade_battery_ports() -> int:
+	var f := 0
+	var model: GraphModel = GraphModelScript.new()
+	_register(model, "starshade")
+	var cid := GraphComponentDefs.realize(model, "starshade", "root", Vector2(0, 0))
+	var hids: Array = []
+	for h_v in (model.get_item(cid).get("handles", []) as Array):
+		hids.append(str((h_v as Dictionary).get("id", "")))
+	f += _check(hids.has("batt_pos") and hids.has("batt_neg"),
+		"StarShade shell exposes batt_pos + batt_neg (got %s)" % str(hids))
+	# Faces survive realize: Battery + right, Battery − left.
+	var faces: Dictionary = {}
+	for ep_v in ((model.get_item(cid).get("specs", {}) as Dictionary)
+			.get("exposed_ports", []) as Array):
+		var ep := ep_v as Dictionary
+		faces[str(ep.get("handle_id", ""))] = GraphNesting.face_for_port(ep)
+	f += _check(str(faces.get("batt_pos", "")) == "right"
+		and str(faces.get("batt_neg", "")) == "left",
+		"battery terminals faced right/left (got %s)" % str(faces))
+	# Resolution chain: starshade/batt_pos -> bank/batt_pos -> bat_a.positive.
+	var leaf := GraphNesting.resolve_port(model, cid, "batt_pos")
+	var leaf_item := model.get_item(str(leaf.get("item_id", "")))
+	f += _check(str(leaf_item.get("type", "")) == "battery"
+		and str(leaf.get("handle_id", "")) == "positive",
+		"batt_pos tunnels to a real battery positive terminal (got %s/%s)"
+			% [str(leaf_item.get("type", "")), str(leaf.get("handle_id", ""))])
+	var leaf_n := GraphNesting.resolve_port(model, cid, "batt_neg")
+	f += _check(str(leaf_n.get("handle_id", "")) == "negative",
+		"batt_neg tunnels to a battery negative terminal")
+	return f
+
+
+## The restamp-erasure bug: a port promoted at ROOT scope never triggered
+## capture (the generic sync hook only fires for edits made INSIDE an
+## instance scope), so the next sibling edit's restamp wiped the promotion
+## and pruned its external wire. The inspector now calls
+## request_component_sync explicitly; this pins the capture→restamp mechanism
+## it relies on: promotion + capture on A propagates the port to B, and a
+## LATER interior edit in B (capture B → restamp A) keeps A's port and wire.
+func _test_root_promotion_survives_restamp() -> int:
+	var f := 0
+	var model: GraphModel = GraphModelScript.new()
+	_register(model, "solar_generator")
+	var a := GraphComponentDefs.realize(model, "solar_generator", "root", Vector2(0, 0))
+	var b := GraphComponentDefs.realize(model, "solar_generator", "root", Vector2(400, 0))
+	# Promote instance A's battery positive terminal onto the shell.
+	var a_bat := ""
+	for k_v in _kids(model, a):
+		if str((k_v as Dictionary).get("type", "")) == "battery":
+			a_bat = str((k_v as Dictionary).get("id", ""))
+	f += _check(not a_bat.is_empty(), "found instance A battery")
+	_promote(model, a, a_bat, "positive", "out_positive_1", "positive")
+	# External wire onto the promoted port.
+	model.add_item({"id": "ext_dc", "type": "battery", "x": 700, "y": 0,
+		"width": 128, "height": 172, "scope_id": "root",
+		"specs": {"name": "External", "voltage": 51.2}})
+	model.add_connection({"id": "ext_dc_w", "scope_id": "root", "polarity": "positive",
+		"source_item_id": a, "source_handle_id": "out_positive_1",
+		"target_item_id": "ext_dc", "target_handle_id": "positive"})
+	# What the inspector's sync callback now triggers: capture A, restamp B.
+	GraphComponentDefs.capture(model, a)
+	GraphComponentDefs.restamp(model, b)
+	var b_hids: Array = []
+	for h_v in (model.get_item(b).get("handles", []) as Array):
+		b_hids.append(str((h_v as Dictionary).get("id", "")))
+	f += _check(b_hids.has("out_positive_1"),
+		"promotion propagated to sibling B (got %s)" % str(b_hids))
+	# A later interior edit in B: capture B -> restamp A. Before the fix this
+	# was the moment A's promotion (never captured) was erased.
+	var b_scope := str(model.get_item(b).get("child_scope_id", ""))
+	var new_id := model.generate_item_id()
+	model.add_item({"id": new_id, "type": "appliance", "x": 0, "y": 200,
+		"width": 120, "height": 90, "scope_id": b_scope, "parent_compound_id": b,
+		"specs": {"name": "Fan", "avg_watts": 20.0}})
+	GraphComponentDefs.capture(model, b)
+	GraphComponentDefs.restamp(model, a)
+	var a_hids: Array = []
+	for h_v in (model.get_item(a).get("handles", []) as Array):
+		a_hids.append(str((h_v as Dictionary).get("id", "")))
+	f += _check(a_hids.has("out_positive_1"),
+		"A keeps the promoted port after B's edit restamps it")
+	f += _check(not model.get_connection("ext_dc_w").is_empty(),
+		"A's external wire on the promoted port survives the restamp")
+	return f
+
+
+## A user-pinned face must survive capture → (restamp|realize) — capture used
+## to drop the "face" field and _apply_exposed_ports re-piled every port onto
+## the default edges.
+func _test_face_survives_capture_realize() -> int:
+	var f := 0
+	var model: GraphModel = GraphModelScript.new()
+	_register(model, "hybrid_inverter")
+	var a := GraphComponentDefs.realize(model, "hybrid_inverter", "root", Vector2(0, 0))
+	GraphNesting.set_exposed_port_face(model, a, "ac_out", "right")
+	GraphComponentDefs.capture(model, a)
+	var def_eps: Array = ((model.get_definition("hybrid_inverter")
+		.get("subgraph", {}) as Dictionary).get("exposed_ports", []) as Array)
+	var def_face := ""
+	for ep_v in def_eps:
+		if str((ep_v as Dictionary).get("handle_id", "")) == "ac_out":
+			def_face = str((ep_v as Dictionary).get("face", ""))
+	f += _check(def_face == "right", "capture carries the pinned face (got '%s')" % def_face)
+	# A fresh realize honours it: the ac_out handle sits on the right edge.
+	var b := GraphComponentDefs.realize(model, "hybrid_inverter", "root", Vector2(400, 0))
+	var rx := -1.0
+	for h_v in (model.get_item(b).get("handles", []) as Array):
+		if str((h_v as Dictionary).get("id", "")) == "ac_out":
+			rx = float((h_v as Dictionary).get("rx", -1.0))
+	f += _check(is_equal_approx(rx, 1.0),
+		"realized sibling lays ac_out on the right edge (rx %.2f)" % rx)
+	return f
+
+
+## Old saves: the stored starshade definition predates the battery terminals.
+## heal_builtin_exposed_ports must add them to the stored def AND every live
+## instance — additively (customized interiors untouched) and idempotently.
+func _test_heal_builtin_ports() -> int:
+	var f := 0
+	var model: GraphModel = GraphModelScript.new()
+	# Register the CURRENT builtin tree, then strip the battery terminals from
+	# the stored starshade def — exactly what a pre-rev-2 save carries.
+	_register(model, "starshade")
+	var old_def: Dictionary = model.get_definition("starshade").duplicate(true)
+	var old_sub: Dictionary = (old_def.get("subgraph", {}) as Dictionary).duplicate(true)
+	var kept: Array = []
+	for ep_v in (old_sub.get("exposed_ports", []) as Array):
+		var hid := str((ep_v as Dictionary).get("handle_id", ""))
+		if hid != "batt_pos" and hid != "batt_neg":
+			kept.append(ep_v)
+	old_sub["exposed_ports"] = kept
+	old_def["subgraph"] = old_sub
+	old_def["rev"] = 1
+	model.put_definition(old_def)
+	var cid := GraphComponentDefs.realize(model, "starshade", "root", Vector2(0, 0))
+	var hids0: Array = []
+	for h_v in (model.get_item(cid).get("handles", []) as Array):
+		hids0.append(str((h_v as Dictionary).get("id", "")))
+	f += _check(not hids0.has("batt_pos"), "pre-heal instance lacks batt_pos")
+	var healed := GraphComponentDefs.heal_builtin_exposed_ports(model)
+	f += _check(healed == 1, "heal reports 1 instance healed (got %d)" % healed)
+	var hids1: Array = []
+	for h_v in (model.get_item(cid).get("handles", []) as Array):
+		hids1.append(str((h_v as Dictionary).get("id", "")))
+	f += _check(hids1.has("batt_pos") and hids1.has("batt_neg"),
+		"heal adds the battery terminals to the live instance")
+	var def_hids: Array = []
+	for ep_v in ((model.get_definition("starshade").get("subgraph", {}) as Dictionary)
+			.get("exposed_ports", []) as Array):
+		def_hids.append(str((ep_v as Dictionary).get("handle_id", "")))
+	f += _check(def_hids.has("batt_pos") and def_hids.has("batt_neg"),
+		"heal adds the terminals to the stored definition")
+	# The healed port really resolves to a battery terminal.
+	var leaf := GraphNesting.resolve_port(model, cid, "batt_pos")
+	f += _check(str(model.get_item(str(leaf.get("item_id", ""))).get("type", "")) == "battery",
+		"healed port tunnels to a real battery")
+	# Idempotent: a second run adds nothing.
+	f += _check(GraphComponentDefs.heal_builtin_exposed_ports(model) == 0,
+		"second heal run is a no-op")
 	return f

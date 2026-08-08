@@ -160,6 +160,8 @@ var _sim_load_host: Node = null
 var _resource_flow: RefCounted = null
 ## NPC population host (one engine per pop-driven habitat; ambient-ticked).
 var _npc_population: NpcPopulationBridge = null
+## Site Plan provider callables are installed once; see _wire_npc_providers.
+var _npc_providers_wired := false
 ## 3D silhouette avatars for the population (spawned while any engine runs).
 var _npc_host: Node3D = null
 ## Active multi-machine workflow (Phase 2) — empty dict when idle.
@@ -250,7 +252,11 @@ const VIEW_MODE_FREEFORM := 100
 const VIEW_MODE_SITE := 101
 const VIEW_MODE_ELEVATION := 102
 const VIEW_MODE_SEED_SITE := 103
-const VIEW_MODE_EMBODY_TWINS := 151
+## 157, NOT 151: this shared the "View options ▾" popup with
+## VIEW_MODE_SITE_PORTS (also 151), whose match arm won — "Embody missing Site
+## twins…" silently toggled Site ports instead. Menu ids are session-only, so
+## renumbering is safe; ui_compile_selftest now asserts VIEW_MODE_* uniqueness.
+const VIEW_MODE_EMBODY_TWINS := 157
 const VIEW_MODE_EXAG_1X := 104
 const VIEW_MODE_EXAG_5X := 105
 const VIEW_MODE_HEADING_ROTATE := 106
@@ -273,13 +279,13 @@ const VIEW_MODE_SITE_WIRE_NONE := 148
 const VIEW_MODE_SITE_WIRE_METRO := 149
 const VIEW_MODE_SITE_WIRE_3D := 150
 const VIEW_MODE_SITE_PORTS := 151
-## Desire lines (Tier 3e). NOTE 151 is already used TWICE
-## (VIEW_MODE_EMBODY_TWINS and VIEW_MODE_SITE_PORTS) — start at 152.
+## Desire lines (Tier 3e).
 const VIEW_MODE_DESIRE_LINES := 152
 const VIEW_MODE_DESIRE_TRAILS := 153
 const VIEW_MODE_DESIRE_CHANNEL := 154
 const VIEW_MODE_DESIRE_WINDOW := 155
 const VIEW_MODE_DESIRE_3D := 156
+const VIEW_MODE_DESIRE_RESET := 158
 const DESIGNATE_OFF := 200
 const DESIGNATE_CATCHMENT := 201
 const DESIGNATE_CROP := 202
@@ -641,6 +647,28 @@ func cancel_process_recipe(item_id: String) -> void:
 		return
 	RecipeRunner.cancel_run(specs)
 	model.update_item(item_id, {"specs": specs})
+
+
+## A crew member finished the chore a labour-gated recipe step was waiting on.
+##
+## Called BY STRING from SiteProjectEffects (the bridge's post-tick sweep), and
+## deliberately routed through the same `confirm_recipe_chore` the player's
+## button uses: one resume path, one debit, no second accounting. The step_id
+## guard means a stale effect — a chore completing after the player cancelled
+## the run, or after the machine moved on — resolves to a harmless no-op
+## rather than skipping whatever step happens to be waiting now.
+func resume_recipe_step(item_id: String, step_id: String) -> bool:
+	if model == null or item_id.is_empty():
+		return false
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return true   # the machine is gone; consume the effect
+	var specs: Dictionary = item.get("specs", {})
+	if not bool(specs.get("recipe_waiting_chore", false)):
+		return true
+	if not step_id.is_empty() and str(specs.get("recipe_waiting_step_id", "")) != step_id:
+		return true   # it has moved on to a different step
+	return confirm_recipe_chore(item_id)
 
 
 func confirm_recipe_chore(item_id: String) -> bool:
@@ -2107,6 +2135,7 @@ func _build_topbar() -> Control:
 	vmp.add_item("Filter: all traffic", VIEW_MODE_DESIRE_CHANNEL)
 	vmp.add_item("Remember: past week", VIEW_MODE_DESIRE_WINDOW)
 	vmp.add_check_item("Drape worn paths in the 3D world", VIEW_MODE_DESIRE_3D)
+	vmp.add_item("Reset desire lines", VIEW_MODE_DESIRE_RESET)
 	vmp.add_separator("Site Plan wires")
 	vmp.add_radio_check_item("Wires: 3D conduits", VIEW_MODE_SITE_WIRE_3D)
 	vmp.add_radio_check_item("Wires: Metro 2D overlay", VIEW_MODE_SITE_WIRE_METRO)
@@ -2303,38 +2332,6 @@ func _build_topbar() -> Control:
 
 func _on_view_menu_id(id: int) -> void:
 	match id:
-		VIEW_MODE_DESIRE_LINES:
-			_desire_lines_on = not _desire_lines_on
-			if _graph_canvas != null:
-				_graph_canvas.call("queue_redraw")
-			_sync_view_mode_menu_checks()
-			return
-		VIEW_MODE_DESIRE_TRAILS:
-			if _graph_canvas != null:
-				_graph_canvas.set("npc_trails_enabled",
-						not bool(_graph_canvas.get("npc_trails_enabled")))
-				_graph_canvas.call("queue_redraw")
-			_sync_view_mode_menu_checks()
-			return
-		VIEW_MODE_DESIRE_CHANNEL:
-			_cycle_desire_channel()
-			if _npc_population != null:
-				_npc_population.set_desire_channel(_desire_channel)
-			if _graph_canvas != null:
-				_graph_canvas.call("queue_redraw")
-			_sync_view_mode_menu_checks()
-			return
-		VIEW_MODE_DESIRE_3D:
-			_desire_3d_on = not _desire_3d_on
-			_ensure_desire_overlay()
-			_sync_view_mode_menu_checks()
-			return
-		VIEW_MODE_DESIRE_WINDOW:
-			_desire_window = (_desire_window + 1) % 3
-			if _npc_population != null:
-				_npc_population.set_desire_window(_desire_window)
-			_sync_view_mode_menu_checks()
-			return
 		VIEW_LEGEND:  _on_legend_toggle()
 		VIEW_HISTORY: _on_history_btn_pressed()
 		VIEW_PBI_BAR: _on_toggle_pbi_bar()
@@ -2612,6 +2609,42 @@ func _on_view_mode_menu_id(id: int) -> void:
 			_seed_site_from_freeform()
 		VIEW_MODE_EMBODY_TWINS:
 			_embody_site_twins_manual()
+		# Desire lines (Tier 3e). These items live in THIS menu ("View options ▾"),
+		# so their arms must live in THIS handler — they sat in _on_view_menu_id
+		# (the "View ▾" handler) for a while, where every click was a dead no-op.
+		VIEW_MODE_DESIRE_LINES:
+			_desire_lines_on = not _desire_lines_on
+			if _graph_canvas != null:
+				_graph_canvas.call("queue_redraw")
+			_sync_view_mode_menu_checks()
+		VIEW_MODE_DESIRE_TRAILS:
+			if _graph_canvas != null:
+				_graph_canvas.set("npc_trails_enabled",
+						not bool(_graph_canvas.get("npc_trails_enabled")))
+				_graph_canvas.call("queue_redraw")
+			_sync_view_mode_menu_checks()
+		VIEW_MODE_DESIRE_CHANNEL:
+			_cycle_desire_channel()
+			if _npc_population != null:
+				_npc_population.set_desire_channel(_desire_channel)
+			if _graph_canvas != null:
+				_graph_canvas.call("queue_redraw")
+			_sync_view_mode_menu_checks()
+		VIEW_MODE_DESIRE_3D:
+			_desire_3d_on = not _desire_3d_on
+			_ensure_desire_overlay()
+			_sync_view_mode_menu_checks()
+		VIEW_MODE_DESIRE_WINDOW:
+			_desire_window = (_desire_window + 1) % 3
+			if _npc_population != null:
+				_npc_population.set_desire_window(_desire_window)
+			_sync_view_mode_menu_checks()
+		VIEW_MODE_DESIRE_RESET:
+			if _npc_population != null and _npc_population.has_method("reset_desire_map"):
+				_npc_population.call("reset_desire_map")
+			if _graph_canvas != null:
+				_graph_canvas.call("queue_redraw")
+			_show_toast("Desire lines cleared")
 		VIEW_MODE_EXAG_1X:
 			_set_elevation_exaggeration(1.0)
 		VIEW_MODE_EXAG_5X:
@@ -4331,6 +4364,9 @@ func _build_right_sidebar() -> Control:
 		_inspector_panel.call("set_component_callbacks",
 			Callable(self, "save_compound_as_component"),
 			Callable(self, "make_compound_unique"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_component_sync_callback"):
+		_inspector_panel.call("set_component_sync_callback",
+			Callable(self, "request_component_sync"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_conduit_callbacks"):
 		_inspector_panel.call("set_conduit_callbacks",
 			Callable(self, "_start_conduit_route"),
@@ -5444,6 +5480,31 @@ const _STOWED_PREFIX := "STOWED • "
 ## Deploy gate for a live-foldable structure's imported array (Linkage Lab).
 ## A stowed array keeps its node + wiring (the hardware still exists, folded
 ## away) but stops contributing capacity to SolarUI until redeployed.
+## Packed 3D twin flag (PACKING_PLAN.md Phase 5): called by
+## TerrainLoader.set_prop_packed for a prop bound to a graph item. Every
+## producer gate reads specs.packed_3d — renewables/CSP/heliostat ticks
+## zero their output, ResourceFlowEngine._processor_switched_on refuses to
+## run — so a crated machine is honest across the whole sim.
+func set_item_packed_3d(item_id: String, packed: bool) -> bool:
+	if model == null or item_id.is_empty():
+		return false
+	var item: Dictionary = model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	if bool(specs.get("packed_3d", false)) == packed:
+		return true
+	if packed:
+		specs["packed_3d"] = true
+	else:
+		specs.erase("packed_3d")
+	model.update_item(item_id, {"specs": specs})
+	_schedule_graph_autosave()
+	if _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+	return true
+
+
 func set_imported_array_stowed(tag: String, stowed: bool) -> bool:
 	if model == null or tag.is_empty():
 		return false
@@ -7510,6 +7571,7 @@ const _INSTANCE_ONLY_SPEC_KEYS := [
 	"unlimited_capacity", "allow_negative", "scale_with_fill", "jit_outflow",
 	"live_capture_lph", "live_capture_rate",
 	"pop_state", "pop_present", "pop_morale", "pop_collapse_risk",
+	"site_projects",
 ]
 
 ## Called by the inspector after "Save/Add to Library" writes `preset`. Pushes
@@ -10258,6 +10320,25 @@ func npc_reset_population(item_id: String) -> bool:
 
 const _NPC_ROUTINES_SCRIPT := preload("res://scenes/ui/npc_routines_panel.gd")
 var _npc_routines_panel: Control = null
+const _SITE_PROJECTS_SCRIPT := preload("res://scenes/ui/site_project_panel.gd")
+var _site_project_panel: Control = null
+
+
+## Site Projects panel (the camp-lifecycle mechanic's management surface).
+## Lazily instantiated the same way the Routines panel is; reachable from the
+## Routines panel's "Projects…" button and anywhere with a view reference.
+func open_site_projects() -> void:
+	if _npc_population == null:
+		_show_toast("No population running — projects need a crew")
+		return
+	if _site_project_panel == null or not is_instance_valid(_site_project_panel):
+		_site_project_panel = _SITE_PROJECTS_SCRIPT.new()
+		_site_project_panel.name = "SiteProjectPanel"
+		var parent := get_parent()
+		if parent == null:
+			return
+		parent.add_child(_site_project_panel)
+	_site_project_panel.call("open", _npc_population)
 
 
 ## Routines & chores for one habitat (inspector button). Lazily instantiated
@@ -10308,6 +10389,24 @@ func npc_population_bridge() -> NpcPopulationBridge:
 	return _npc_population
 
 
+## The "watch the crew" handoff: open the graph on the Site Plan centred on
+## a world position, and make sure there is something to watch — a paused
+## clock is why the plan reads as a frozen snapshot (no dots move, no time
+## passes), so queueing work nudges it to 1x. One entry point shared by the
+## Linkage Lab crew queue and kit deliveries, so the flow feels identical.
+func watch_site_at(world_xz: Vector2, toast := "") -> void:
+	var m := _get_scene_main_node()
+	if m != null and m.get("time_scale") != null and float(m.time_scale) <= 0.0:
+		m.time_scale = 1.0
+	visible = true
+	_apply_graph_open_mode_from_sim_state()
+	_apply_graph_view_mode("site")
+	if _graph_canvas != null and _graph_canvas.has_method("center_site_on"):
+		_graph_canvas.call("center_site_on", world_xz)
+	if not toast.is_empty():
+		_show_toast(toast)
+
+
 ## The live 3D host (null until at least one pop-driven habitat has spawned
 ## it) — for settings-driven live refreshes like re-tinting on a display-pref
 ## change, which need to reach already-built NpcAvatars directly.
@@ -10327,6 +10426,11 @@ func _drain_npc_events() -> void:
 				_show_toast("%s has left the community (%s)" % [
 					str(ev.get("name", "Someone")),
 					_npc_reason_text(str(ev.get("reason", "")))])
+			"lost":
+				# The PERISH consequence, and only ever that — stated plainly,
+				# without ceremony.
+				_show_toast("%s did not make it — %s" % [
+					str(ev.get("name", "Someone")), str(ev.get("reason", ""))])
 			"collapse_warning":
 				_show_toast("The community is unravelling — people are talking about leaving")
 			"collapsed":
@@ -10349,16 +10453,72 @@ static func _npc_reason_text(need: String) -> String:
 
 ## Spawn/despawn the 3D avatar host to match whether any population engine
 ## is running (pop-driven habitat present).
+## Site Plan providers. Resolved through `_npc_dot_source()` on every call so a
+## client (which never builds an NpcPopulationBridge) still draws the host's
+## people, and so switching between hosting and joining needs no re-wiring.
+## The space/crew/desire layers stay bridge-only: none of them are replicated,
+## and a provider that quietly returned [] would read as "this camp has no
+## tagged spaces" rather than "you are a guest".
+func _wire_npc_providers() -> void:
+	if _graph_canvas == null or _npc_providers_wired:
+		return
+	_npc_providers_wired = true
+	_graph_canvas.set("npc_agents_provider", func() -> Array:
+		var src = _npc_dot_source()
+		return src.call("agent_dots") if src != null else [])
+	var main_for_spaces := _get_scene_main_node()
+	_graph_canvas.set("npc_spaces_provider", func() -> Array:
+		return _npc_population.space_markers(main_for_spaces) if _npc_population != null else [])
+	_graph_canvas.set("npc_crew_provider", func() -> Array:
+		return _npc_population.crew_site_markers(main_for_spaces) if _npc_population != null else [])
+	_graph_canvas.set("npc_desire_provider", func() -> Dictionary:
+		if not _desire_lines_on or _npc_population == null:
+			return {}
+		var p: Dictionary = _npc_population.desire_payload(_desire_channel)
+		if not p.is_empty():
+			p["channel_label"] = _desire_channel_label()
+		return p)
+
+
+## True when a multiplayer client should render the host's population rather
+## than run its own. Soft lookup: the harness and headless selftests have no
+## session, and single-player must be byte-identical to before.
+func _mp_is_replica() -> bool:
+	var mp := get_node_or_null("/root/MultiplayerSession")
+	if mp == null:
+		return false
+	var pop = mp.get("population")
+	return pop != null and bool(pop.call("is_replica"))
+
+
+## The dot source for the 3D figures. On a client this is the replication
+## mirror, which duck-types the two methods NpcPopulationHost needs — that one
+## substitution is what makes the whole avatar/LOD/pose path work unchanged.
+func _npc_dot_source():
+	if _mp_is_replica():
+		var mp := get_node_or_null("/root/MultiplayerSession")
+		if mp != null:
+			var pop = mp.get("population")
+			if pop != null:
+				return pop.get("mirror")
+	return _npc_population
+
+
 func _ensure_npc_host() -> void:
-	var wants := _npc_population != null and _npc_population.active()
+	var source = _npc_dot_source()
+	var wants := source != null and bool(source.call("active"))
 	var alive := _npc_host != null and is_instance_valid(_npc_host)
 	if wants and not alive:
 		var main_node := _get_scene_main_node()
 		if main_node == null:
 			return
 		_npc_host = NpcPopulationHost.new()
-		_npc_host.setup(_npc_population, main_node)
+		_npc_host.setup(source, main_node)
 		main_node.add_child(_npc_host)
+	elif alive and _npc_host.get("_bridge") != source:
+		# Role changed mid-session (hosted, then joined someone else). Re-point
+		# rather than rebuild so avatars do not pop.
+		_npc_host.setup(source, _get_scene_main_node())
 	elif not wants and alive:
 		_npc_host.queue_free()
 		_npc_host = null
@@ -10385,6 +10545,19 @@ func _ensure_desire_overlay() -> void:
 
 
 func _tick_resource_flow_ambient(delta: float) -> void:
+	# Multiplayer: the HOST owns the simulation. Before this guard every client
+	# independently ran its own flow engine and population sim off its synced
+	# copy of the graph, drifted, and got stomped by the host's snapshot every
+	# 12 s — so tank levels crept and the people on screen were a local
+	# hallucination that snapped twice a minute. A client RENDERS replicated
+	# state (MpPopulationController) instead of computing its own.
+	#
+	# Checked before the `_resource_flow == null` guard on purpose: the client
+	# path must not depend on a flow engine it is never going to step.
+	if _mp_is_replica():
+		_wire_npc_providers()
+		_ensure_npc_host()
+		return
 	if _resource_flow == null:
 		return
 	# Challenge bake/playback: the ChallengeBakeEngine owns the flow engine —
@@ -10408,18 +10581,7 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 	# BEFORE the flow step consumes them (runs ambient, graph open or closed).
 	if _npc_population == null:
 		_npc_population = NpcPopulationBridge.new()
-		if _graph_canvas != null:
-			_graph_canvas.set("npc_agents_provider", Callable(_npc_population, "agent_dots"))
-			var main_for_spaces := _get_scene_main_node()
-			_graph_canvas.set("npc_spaces_provider",
-					func() -> Array: return _npc_population.space_markers(main_for_spaces))
-			_graph_canvas.set("npc_desire_provider", func() -> Dictionary:
-				if not _desire_lines_on:
-					return {}
-				var p: Dictionary = _npc_population.desire_payload(_desire_channel)
-				if not p.is_empty():
-					p["channel_label"] = _desire_channel_label()
-				return p)
+		_wire_npc_providers()
 	PerfMonitor.begin("npc_population")
 	_npc_population.tick(model, _resource_flow, _get_scene_main_node())
 	PerfMonitor.end("npc_population")
@@ -11966,6 +12128,10 @@ func _collect_root_array_aggregate() -> Dictionary:
 			continue
 		var itype := str(item.get("type", ""))
 		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		# Packed (crated) items contribute no capacity until unpacked — same
+		# rule as stowed linkage arrays below.
+		if bool(specs.get("packed_3d", false)):
+			continue
 		if itype == "panel":
 			panel_wmp += float(specs.get("wmp", 0.0))
 			panel_imp += float(specs.get("imp", 0.0))
@@ -12247,6 +12413,13 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 		if model != null:
 			model.deserialize(graph_d as Dictionary)
 			legacy_stripped = GraphVirtualIds.strip_legacy_virtual_solar(model)
+			# Built-in definitions evolve (starshade rev 2 grew battery DC
+			# terminals); saved graphs carry their own older copy. Additively
+			# merge any missing shipped exposed ports into the stored defs +
+			# live instances (idempotent, never a full restamp).
+			var healed := GraphComponentDefs.heal_builtin_exposed_ports(model)
+			if healed > 0:
+				print("SystemGraphView: healed exposed ports on %d component instance(s)" % healed)
 	_sync_array_compound_layouts()
 	_normalize_battery_bank_display_nodes()
 	if preserve_positions and not position_backup.is_empty():
@@ -12485,7 +12658,11 @@ func _tick_graph_renewables(delta: float) -> void:
 			continue
 		var kw := 0.0
 		var specs_dirty := false
-		if ty == "wind":
+		# Packed 3D twin (PACKING_PLAN.md Phase 5): a crated turbine generates
+		# nothing — kw stays 0 and converges via the change gate below.
+		if bool(specs.get("packed_3d", false)):
+			pass
+		elif ty == "wind":
 			kw = WindTurbineSource.power_kw_from_graph_specs(specs, hour, real_wind_10m)
 		else:
 			# Prefer site-plan head / penstock / Q when hydro + intake have elevations.
@@ -12562,6 +12739,9 @@ func _tick_dc_throttle(delta: float) -> void:
 			total_wmp += _pv_item_wmp(it)
 			continue
 		if str(it.get("type", "")) != "controller":
+			continue
+		# A crated controller delivers no charge current (Phase 5 packed gate).
+		if GraphDcElectrical.is_packed(it):
 			continue
 		var bank := GraphDcElectrical.bank_for_controller(
 			model, str(it.get("id", "")), _dc_flat_conns, _dc_analysis)
@@ -12698,6 +12878,9 @@ static func _pv_item_wmp(item: Dictionary) -> float:
 	if item.is_empty():
 		return 0.0
 	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	# Crated panels deliver nothing (Phase 5 packed gate).
+	if bool(sp.get("packed_3d", false)):
+		return 0.0
 	if str(item.get("type", "")) == "compound":
 		var units := float(sp.get("array_panel_units", 0.0))
 		var per := float(sp.get("array_panel_wmp", sp.get("wmp", 0.0)))
@@ -12761,7 +12944,10 @@ func _tick_graph_csp(delta: float) -> void:
 			continue
 		var specs: Dictionary = specs_ref.duplicate(false)
 		var iid: String = item.get("id", "") as String
-		var result := _CspTroughSource.simulate(specs, sun_az, sun_el, weather)
+		# Packed 3D twin (PACKING_PLAN.md Phase 5): a crated trough tracks and
+		# boils nothing — {} zeroes every telemetry key via the .get defaults.
+		var result: Dictionary = {} if bool(specs_ref.get("packed_3d", false)) \
+			else _CspTroughSource.simulate(specs, sun_az, sun_el, weather)
 
 		var dirty := absf(float(specs.get("thermal_output_kw", 0.0)) - float(result.get("thermal_output_kw", 0.0))) > 0.001 \
 			or absf(float(specs.get("tracking_angle_deg", 0.0)) - float(result.get("tracking_angle_deg", 0.0))) > 0.05
@@ -12929,7 +13115,9 @@ func _tick_graph_heliostat(delta: float) -> void:
 			continue
 		var specs: Dictionary = specs_ref.duplicate(false)
 		var iid: String = item.get("id", "") as String
-		var result := _HeliostatSource.simulate(specs, sun_az, sun_el, weather)
+		# Packed 3D twin: a crated dish concentrates nothing (see CSP tick).
+		var result: Dictionary = {} if bool(specs_ref.get("packed_3d", false)) \
+			else _HeliostatSource.simulate(specs, sun_az, sun_el, weather)
 
 		var dirty := absf(float(specs.get("thermal_output_kw", 0.0)) - float(result.get("thermal_output_kw", 0.0))) > 0.001 \
 			or absf(float(specs.get("focal_temp_c", 0.0)) - float(result.get("focal_temp_c", 0.0))) > 0.5

@@ -1748,7 +1748,7 @@ static func _def_starshade_battery_bank() -> Dictionary:
 ## structure reads as sunlight in / AC electricity out.
 static func _def_starshade() -> Dictionary:
 	return {
-		"id": "starshade", "name": "StarShade", "icon": "✨", "rev": 1,
+		"id": "starshade", "name": "StarShade", "icon": "✨", "rev": 2,
 		"width": 220.0, "height": 150.0,
 		# Banner: render the 3D StarShade GLB as the node's 2D image (like a
 		# processor card) instead of the child-graph miniature. `model_id` is an
@@ -1783,6 +1783,19 @@ static func _def_starshade() -> Dictionary:
 					"direction": "in", "polarity": "resource", "kind": "sunlight", "label": "Sunlight"},
 				{"handle_id": "ac_out", "child": "hinv", "child_handle": "ac_out",
 					"direction": "out", "polarity": "ac", "label": "AC out"},
+				# rev 2: the bank's DC terminals surface on the shell so external
+				# DC sources (wind/hydro) can charge the bank directly. They
+				# tunnel starshade/batt_* → bank/batt_* → bat_a.positive/negative
+				# (both hops transparent), landing in the SAME union-find net as
+				# the inverter's battery wires — GraphDcElectrical then applies
+				# its ordinary short/overvoltage/mismatch physics. Faced
+				# left/right so they don't pile onto the bottom edge with AC out.
+				{"handle_id": "batt_pos", "child": "bank", "child_handle": "batt_pos",
+					"direction": "out", "polarity": "positive", "label": "Battery +",
+					"face": "right"},
+				{"handle_id": "batt_neg", "child": "bank", "child_handle": "batt_neg",
+					"direction": "out", "polarity": "negative", "label": "Battery −",
+					"face": "left"},
 			],
 		},
 	}

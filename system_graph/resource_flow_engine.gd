@@ -2774,6 +2774,11 @@ func _has_ac_power_wire(item_id: String) -> bool:
 ## current_state; unset → OFF. Default-off means a processor runs only when the
 ## user (double-click) or an automation switches it on.
 func _processor_switched_on(specs: Dictionary) -> bool:
+	# Packed 3D twin (PACKING_PLAN.md Phase 5): a machine in its shipping
+	# crate cannot run, whatever the switch says. One gate here covers every
+	# processor path in the engine.
+	if bool(specs.get("packed_3d", false)):
+		return false
 	var req := str(specs.get("requested_state", "")).to_lower()
 	if req == "on":
 		return true

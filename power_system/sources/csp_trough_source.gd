@@ -118,15 +118,29 @@ static func tracking_offset_from_normal(normal_world: Vector3, axis_world: Vecto
 ## an approximate clearness-index correction — direct beam attenuates faster
 ## than diffuse under cloud (Erbs 1982 trend) — approximated here as kt²,
 ## not a literal DNI/DHI decomposition.
+## Aerosol enters through the SAME clear-sky helpers the rest of the project
+## uses, so a concentrating collector needs no attenuation logic of its own.
+## Its response is nonetheless far harsher than flat-plate PV's, and correctly
+## so: a trough can only use the DIRECT beam, and beam is exactly what smoke and
+## dust destroy while leaving diffuse light behind. A hazy day that costs a
+## rooftop array a third of its yield can take a trough to almost nothing.
 static func dni_wm2(sun_el_deg: float, weather: Dictionary) -> float:
 	if sun_el_deg <= 0.0:
 		return 0.0
-	var dni_clear := SolarIrradiance.dni_clear_sky_wm2(sun_el_deg)
+	var aod := float(weather.get("aod", SolarIrradiance.AOD_BASELINE))
+	if not is_finite(aod):
+		aod = SolarIrradiance.AOD_BASELINE
+	var dni_clear := SolarIrradiance.dni_clear_sky_wm2(sun_el_deg, aod)
 	if bool(weather.get("has_real", false)):
 		var sin_el := sin(deg_to_rad(sun_el_deg))
 		var ghi_clear := dni_clear * sin_el \
-			+ SolarIrradiance.dhi_clear_sky_wm2(sun_el_deg, dni_clear)
+			+ SolarIrradiance.dhi_clear_sky_wm2(sun_el_deg, dni_clear, aod)
 		var ghi_measured := float(weather.get("ghi", 0.0))
+		# Measured GHI carries only climatological aerosol, so scale it the same
+		# way SolarIrradiance.ghi_wm2_at_calendar does before forming kt — else
+		# the clearness index reads high and cancels the attenuation applied to
+		# dni_clear above.
+		ghi_measured *= SolarIrradiance.aerosol_ghi_factor(sun_el_deg, aod)
 		var kt := clampf(ghi_measured / maxf(ghi_clear, 1.0), 0.0, 1.15)
 		return dni_clear * clampf(kt * kt, 0.0, 1.0)
 	var cloud := clampf(float(weather.get("cloud", 0.0)), 0.0, 1.0)

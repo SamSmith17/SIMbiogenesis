@@ -35,7 +35,7 @@ const INSTANCE_ONLY_SPEC_KEYS: Array[String] = [
 	"destroyed", "node_state", "node_state_reason", "node_state_kinds", "deficit_qty",
 	"live_capture_lph", "live_capture_rate",
 	"sunlight_factor", "source", "site_x_m", "site_z_m",
-	"pop_state", "starved_kinds", "is_starved",
+	"pop_state", "site_projects", "starved_kinds", "is_starved",
 	"pop_present", "pop_morale", "pop_collapse_risk",
 ]
 
@@ -176,7 +176,12 @@ static func _realize_subgraph(model: GraphModel, sub: Dictionary,
 
 
 ## Build the compound's exposed_ports + handles from a template's exposed_ports
-## (local ids resolved via `id_map`), laid out inputs-left / outputs-right.
+## (local ids resolved via `id_map`). Faces carry through from the template
+## and layout goes through GraphNesting.layout_exposed_handles — the SAME
+## face-aware distribution the inspector's promotion path uses (for face-less
+## ports it degrades to exactly the old top-in/bottom-out spread), so a
+## user-pinned face survives realize/restamp instead of being re-piled onto
+## the default edges.
 static func _apply_exposed_ports(model: GraphModel, comp_id: String,
 		tpl_eps: Array, id_map: Dictionary) -> void:
 	var eps: Array = []
@@ -189,16 +194,20 @@ static func _apply_exposed_ports(model: GraphModel, comp_id: String,
 		var hid := str(ep.get("handle_id", ""))
 		var direction := str(ep.get("direction", "in"))
 		var pol := str(ep.get("polarity", "ac"))
-		eps.append({
+		var entry := {
 			"handle_id": hid, "child_item_id": child_id,
 			"child_handle_id": str(ep.get("child_handle", "")),
 			"polarity": pol, "kind": str(ep.get("kind", "")),
 			"label": str(ep.get("label", "")), "direction": direction,
-		})
+		}
+		var face := str(ep.get("face", ""))
+		if face in GraphNesting.PORT_FACES:
+			entry["face"] = face
+		eps.append(entry)
 		handles.append({"id": hid, "polarity": pol, "direction": direction,
 			"rx": 0.5, "ry": 0.0, "resource_kind": str(ep.get("kind", ""))})
-	_distribute_handles(handles)
-	var specs: Dictionary = (model.get_item(comp_id).get("specs", {}) as Dictionary).duplicate(true)
+	var item := model.get_item(comp_id)
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 	specs["exposed_ports"] = eps
 	var in_n := 0
 	var out_n := 0
@@ -209,7 +218,11 @@ static func _apply_exposed_ports(model: GraphModel, comp_id: String,
 			in_n += 1
 	specs["port_in_count"] = in_n
 	specs["port_out_count"] = out_n
-	model.update_item(comp_id, {"specs": specs, "handles": handles})
+	var patched := item.duplicate(true)
+	patched["specs"] = specs
+	patched["handles"] = handles
+	model.update_item(comp_id, {"specs": specs,
+		"handles": GraphNesting.layout_exposed_handles(patched)})
 
 
 static func _distribute_handles(handles: Array) -> void:
@@ -298,13 +311,20 @@ static func capture(model: GraphModel, instance_id: String) -> String:
 		var child_local := str(local_of.get(str(ep.get("child_item_id", "")), ""))
 		if child_local.is_empty():
 			continue
-		tpl_eps.append({
+		var tpl_ep := {
 			"handle_id": str(ep.get("handle_id", "")), "child": child_local,
 			"child_handle": str(ep.get("child_handle_id", "")),
 			"direction": str(ep.get("direction", "in")),
 			"polarity": str(ep.get("polarity", "ac")),
 			"kind": str(ep.get("kind", "")), "label": str(ep.get("label", "")),
-		})
+		}
+		# A user-pinned face is part of the boundary's look — dropping it here
+		# meant every realize/restamp shuffled the ports back to the default
+		# edges.
+		var ep_face := str(ep.get("face", ""))
+		if ep_face in GraphNesting.PORT_FACES:
+			tpl_ep["face"] = ep_face
+		tpl_eps.append(tpl_ep)
 	def["subgraph"] = {"items": tpl_items, "connections": tpl_conns, "exposed_ports": tpl_eps}
 	def["rev"] = int(def.get("rev", 1)) + 1
 	model.put_definition(def)
@@ -482,3 +502,118 @@ static func make_unique(model: GraphModel, instance_id: String) -> void:
 			ks.erase("def_local_id")
 			model.update_item(str(k.get("id", "")), {"specs": ks})
 	model.remove_definition_if_unused(def_id)
+
+
+# ---------------------------------------------------------------------------
+# Built-in definition healing — additive exposed-port upgrades for old saves
+# ---------------------------------------------------------------------------
+
+## When a BUILT-IN definition's shipped exposed-port set grows (e.g. starshade
+## rev 2 added the battery DC terminals), saved graphs keep serving their own
+## older copy of the definition — new StarShades get the ports, placed ones
+## never do. This ADDITIVELY merges the missing shipped entries into the
+## stored definition and appends the matching promoted port + handle to every
+## live instance, matching children by def_local_id. Deliberately NOT a
+## rev-forced restamp: restamp rebuilds the whole interior and a save's array
+## definition may be customized (panel count/watts) — appending ports touches
+## nothing else. Idempotent: a second run adds nothing. Returns the number of
+## instances that gained ports.
+static func heal_builtin_exposed_ports(model: GraphModel) -> int:
+	if model == null:
+		return 0
+	var healed := 0
+	for def_id_v in model.definitions.keys():
+		var def_id := str(def_id_v)
+		var shipped := ComponentPresets.builtin_definition(def_id)
+		if shipped.is_empty():
+			continue
+		var shipped_eps: Array = ((shipped.get("subgraph", {}) as Dictionary)
+			.get("exposed_ports", []) as Array)
+		var stored: Dictionary = model.get_definition(def_id)
+		var sub: Dictionary = stored.get("subgraph", {}) as Dictionary
+		var stored_eps: Array = (sub.get("exposed_ports", []) as Array).duplicate(true)
+		var have: Dictionary = {}
+		for ep_v in stored_eps:
+			have[str((ep_v as Dictionary).get("handle_id", ""))] = true
+		var added: Array = []
+		for ep_v in shipped_eps:
+			var ep := ep_v as Dictionary
+			if not have.has(str(ep.get("handle_id", ""))):
+				stored_eps.append(ep.duplicate(true))
+				added.append(ep.duplicate(true))
+		if added.is_empty():
+			continue
+		stored = stored.duplicate(true)
+		sub = sub.duplicate(true)
+		sub["exposed_ports"] = stored_eps
+		stored["subgraph"] = sub
+		model.put_definition(stored)
+		for inst_v in model.instances_of_definition(def_id):
+			if _heal_instance_ports(model, inst_v as Dictionary, added):
+				healed += 1
+	return healed
+
+
+## Append `tpl_added` template exposed-port entries to one live instance,
+## resolving each entry's `child` local id through the children's
+## def_local_id tags. Skips entries whose child is missing or whose handle_id
+## already exists on the instance. Returns true when anything was added.
+static func _heal_instance_ports(model: GraphModel, inst: Dictionary,
+		tpl_added: Array) -> bool:
+	var inst_id := str(inst.get("id", ""))
+	var child_scope := str(inst.get("child_scope_id", ""))
+	if inst_id.is_empty() or child_scope.is_empty():
+		return false
+	var child_by_local: Dictionary = {}
+	for k_v in model.get_items_in_scope(child_scope):
+		var k := k_v as Dictionary
+		var lid := str((k.get("specs", {}) as Dictionary).get("def_local_id", ""))
+		if not lid.is_empty():
+			child_by_local[lid] = str(k.get("id", ""))
+	var specs: Dictionary = (inst.get("specs", {}) as Dictionary).duplicate(true)
+	var eps: Array = (specs.get("exposed_ports", []) as Array).duplicate(true)
+	var handles: Array = (inst.get("handles", []) as Array).duplicate(true)
+	var have: Dictionary = {}
+	for ep_v in eps:
+		have[str((ep_v as Dictionary).get("handle_id", ""))] = true
+	var changed := false
+	for ep_v in tpl_added:
+		var ep := ep_v as Dictionary
+		var hid := str(ep.get("handle_id", ""))
+		var child_id := str(child_by_local.get(str(ep.get("child", "")), ""))
+		if hid.is_empty() or child_id.is_empty() or have.has(hid):
+			continue
+		var direction := str(ep.get("direction", "in"))
+		var pol := str(ep.get("polarity", "ac"))
+		var entry := {
+			"handle_id": hid, "child_item_id": child_id,
+			"child_handle_id": str(ep.get("child_handle", "")),
+			"polarity": pol, "kind": str(ep.get("kind", "")),
+			"label": str(ep.get("label", "")), "direction": direction,
+		}
+		var face := str(ep.get("face", ""))
+		if face in GraphNesting.PORT_FACES:
+			entry["face"] = face
+		eps.append(entry)
+		handles.append({"id": hid, "polarity": pol, "direction": direction,
+			"rx": 0.5, "ry": 0.0, "resource_kind": str(ep.get("kind", ""))})
+		have[hid] = true
+		changed = true
+	if not changed:
+		return false
+	specs["exposed_ports"] = eps
+	var in_n := 0
+	var out_n := 0
+	for h_v in handles:
+		if str((h_v as Dictionary).get("direction", "in")) == "out":
+			out_n += 1
+		else:
+			in_n += 1
+	specs["port_in_count"] = in_n
+	specs["port_out_count"] = out_n
+	var patched := inst.duplicate(true)
+	patched["specs"] = specs
+	patched["handles"] = handles
+	model.update_item(inst_id, {"specs": specs,
+		"handles": GraphNesting.layout_exposed_handles(patched)})
+	return true

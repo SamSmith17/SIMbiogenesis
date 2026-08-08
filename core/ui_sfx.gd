@@ -41,6 +41,12 @@ const TIER_GAIN_DB := {
 	DANGER: -6.0,
 	FANFARE: -6.0,
 }
+## Per-tier FLOOR on the caller-supplied rate limit. WARN fires on repeated
+## mistakes (invalid wire drops and the like) and its callers pass gaps as
+## short as 90 ms — user-reported as "annoying and too frequent". A warn
+## every 1.5 s still lands; faster than that is just noise. Applied inside
+## play_ui via effective_min_gap_ms (pure, selftest-pinned).
+const TIER_MIN_GAP_MS := {WARN: 1500}
 
 var _streams: Dictionary = {}
 var _voices: Array[AudioStreamPlayer] = []
@@ -66,6 +72,7 @@ func play_ui(kind: String, min_gap_ms: int = 0) -> void:
 		return
 	if DisplayServer.get_name() == "headless":
 		return
+	min_gap_ms = effective_min_gap_ms(kind, min_gap_ms)
 	if min_gap_ms > 0:
 		var now := Time.get_ticks_msec()
 		# Sentinel is "long enough ago that the first play always passes".
@@ -151,6 +158,11 @@ func _save_prefs() -> void:
 	cfg.set_value("audio", "ui_muted", _muted)
 	cfg.set_value("audio", "ui_volume_db", _volume_db)
 	cfg.save(PREFS_PATH)
+
+
+## Pure rate-limit rule: the caller's requested gap, floored per tier.
+static func effective_min_gap_ms(kind: String, requested_ms: int) -> int:
+	return maxi(requested_ms, int(TIER_MIN_GAP_MS.get(kind, 0)))
 
 
 # ---------------------------------------------------------------------------
