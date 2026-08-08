@@ -117,6 +117,9 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	if model_id == ScadPartBuilder.MODEL_ID:
 		var scad_spec: Dictionary = extras.get("scad_spec", extras) as Dictionary
 		return ScadPartBuilder.build_node(scad_spec)
+	if model_id == CargoContainerBuilder.MODEL_ID:
+		var container_spec: Dictionary = extras.get("container_spec", extras) as Dictionary
+		return CargoContainerBuilder.build_node(container_spec)
 	if model_id == GENERIC_BOX_ID:
 		var box_spec: Dictionary = extras.get("box_spec", extras) as Dictionary
 		return _build_generic_box(box_spec)
@@ -349,6 +352,11 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "pallet_rack", "label": "Pallet Rack (parametric)",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 2.0},
+		# Procedural ISO shipping container (PACKING_PLAN.md Phase 1) — dims
+		# from ContainerCatalog via `container_spec.container_id` (default 20').
+		{"id": "cargo_container", "label": "Shipping Container",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 2.6},
 		# Procedural scissor-linkage structure — designed in the Linkage Lab
 		# modal, built via LinkageStructureBuilder from a v30 linkage_spec.
 		{"id": "linkage_structure", "label": "Linkage Structure (Linkage Lab)",

@@ -65,6 +65,21 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	var model_id := str(rec.get("model_id", ""))
 	if model_id.is_empty():
 		return null
+	# PACKED state (PACKING_PLAN.md Phase 5): render the honest packed form
+	# instead of the deployed model. Non-packable records fall through and
+	# deploy normally (the flag is meaningless for them).
+	if bool(rec.get("packed", false)):
+		# UNDER CONSTRUCTION (Site Projects): a packed linkage record whose
+		# build project has started renders the ghost structure growing at the
+		# build site instead of the crate. The record stays packed:true the
+		# whole time — the erect phase's unpack effect is what deploys it.
+		var bs: Variant = rec.get("build_state")
+		if bs is Dictionary and not (bs as Dictionary).is_empty() \
+				and rec.get("linkage_spec") is Dictionary:
+			return _build_construction_prop(rec, bs as Dictionary, ground_y_at)
+		var pspec := packed_spec_for_record(rec)
+		if not pspec.is_empty():
+			return _build_packed_prop(rec, pspec, ground_y_at)
 	var extras: Dictionary = {}
 	if rec.has("rack_spec"):
 		extras["rack_spec"] = rec.get("rack_spec", {})
@@ -74,6 +89,11 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		extras["box_spec"] = rec.get("box_spec", {})
 	if rec.has("tank_spec"):
 		extras["tank_spec"] = rec.get("tank_spec", {})
+	# Without this a placed container ALWAYS renders as the 20' default,
+	# whatever its container_id says — and a stow plan solved against a 40'
+	# interior would then put crates through the walls.
+	if rec.has("container_spec"):
+		extras["container_spec"] = rec.get("container_spec", {})
 	if model_id == GrowBed.MODEL_ID:
 		var bed_spec: Dictionary = {}
 		if rec.has("grow_bed_spec"):
@@ -166,6 +186,118 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	if bool(rec.get("hidden_3d", false)):
 		prop.visible = false
 		prop.set_collision_enabled(false)
+	return prop
+
+
+## Resolve a record's packed spec — same precedence as the edit drawer:
+## live linkage design > container variant > model catalog entry.
+static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
+	if rec.get("linkage_spec") is Dictionary:
+		var p := LinkageParams.new()
+		p.from_config(rec.get("linkage_spec") as Dictionary)
+		var s := LinkageStructureBuilder.packed_spec_for(p)
+		if not s.is_empty():
+			return s
+	if rec.get("container_spec") is Dictionary:
+		var c := ContainerCatalog.packed_spec_for(
+			str((rec.get("container_spec") as Dictionary).get("container_id", "")))
+		if not c.is_empty():
+			return c
+	return PackedSpec.for_model(str(rec.get("model_id", "")))
+
+
+## The PACKED build: a PackedFormBuilder crate at the record's spot. Yaw-only
+## transform at USER scale (the crate is authored in real metres — the
+## catalog's GLB unit-compensation scale must NOT apply), no behavior
+## runtimes (trackers/spinners animate deployed geometry that doesn't
+## exist), no connection ports (plugs live on the deployed model).
+static func _build_packed_prop(rec: Dictionary, pspec: Dictionary,
+		ground_y_at: Callable) -> PlacedProp:
+	var model := PackedFormBuilder.build_node(pspec)
+	var prop := PlacedProp.new()
+	prop.name = "PlacedProp_%s" % str(rec.get("id", "unknown"))
+	prop.prop_id = str(rec.get("id", ""))
+	prop.model_id = str(rec.get("model_id", ""))
+	prop.is_osm_replacement = str(rec.get("type", "")) == "osm"
+	prop.building_idx = int(rec.get("building_idx", -1))
+	prop.prompt = "Stowed — unload the delivery first" \
+		if not str(rec.get("stowed_in", "")).is_empty() \
+		else "Unpack (Interact) / Edit (click)"
+	prop.add_child(model)
+	model.name = "ModelRoot"
+	var x := float(rec.get("x", 0.0))
+	var z := float(rec.get("z", 0.0))
+	model.rotation = Vector3(0.0, deg_to_rad(float(rec.get("yaw", 0.0))), 0.0)
+	model.scale = Vector3.ONE * float(rec.get("scale", 1.0))
+	var gy: float = float(ground_y_at.call(x, z)) if ground_y_at.is_valid() \
+		else float(rec.get("ground_y", 0.0))
+	prop.position = Vector3(x, gy, z)
+	if rec.has("y_offset"):
+		prop.position.y += float(rec["y_offset"])
+	prop.setup_collision()
+	prop.set_meta("shadow_mode", str(rec.get("shadow_mode", "")))
+	prop.set_meta("packed", true)
+	PropRenderTuning.apply_to_prop(prop, prop.get_local_pick_radius())
+	prop.set_burnable(bool(rec.get("burnable", false)))
+	if not bool(rec.get("collision_enabled", true)):
+		prop.set_collision_enabled(false)
+	if bool(rec.get("hidden_3d", false)):
+		prop.visible = false
+		prop.set_collision_enabled(false)
+	return prop
+
+
+## The UNDER-CONSTRUCTION build (Site Projects): the ghost linkage structure
+## at its STOWED fold, revealed element class by element class as the crew's
+## real labour progresses. Coarse fractions come from the record's
+## build_state (stamped by the set_build_phase chore effects, so a fresh
+## load renders roughly right); NpcPopulationBridge refines them live each
+## population tick. No deploy runtime (the raise IS the erect phase's unpack
+## effect), no connection ports, no graph presence.
+static func _build_construction_prop(rec: Dictionary, build_state: Dictionary,
+		ground_y_at: Callable) -> PlacedProp:
+	var params := LinkageParams.new()
+	params.from_config(rec.get("linkage_spec") as Dictionary)
+	params.fold_angle = maxf(LinkageKinematics.effective_min_fold_angle(params),
+		LinkageKinematics.MIN_FOLD_ANGLE)
+	var builder := LinkageStructureBuilder.new()
+	builder.name = "ModelRoot"
+	builder.collision_mesh_enabled = false   # walk-through while it grows
+	builder.set_params(params)
+	var fr := SiteProject.phase_fractions(str(build_state.get("phase", "")))
+	builder.set_build_progress(fr)
+	builder.set_ghost_alpha(clampf(float(build_state.get("ghost",
+		float(fr.get("ghost", 0.2)))), 0.05, 1.0))
+	# The kit crate stays standing beside the growing frame — early phases
+	# (cut/drill) reveal no geometry at all, and a build site with nothing on
+	# it reads as a bug, not as a work in progress. It vanishes with the whole
+	# prop rebuild when the erect phase unpacks.
+	var pspec := packed_spec_for_record(rec)
+	if not pspec.is_empty():
+		var crate := PackedFormBuilder.build_node(pspec)
+		crate.name = "KitCrate"
+		crate.position = Vector3(float(pspec.get("w_m", 1.0)) * 0.5 + 2.0, 0.0, 0.0)
+		builder.add_child(crate)
+	var prop := PlacedProp.new()
+	prop.name = "PlacedProp_%s" % str(rec.get("id", "unknown"))
+	prop.prop_id = str(rec.get("id", ""))
+	prop.model_id = str(rec.get("model_id", ""))
+	prop.prompt = "Under construction — see the crew's project"
+	prop.add_child(builder)
+	var x := float(rec.get("x", 0.0))
+	var z := float(rec.get("z", 0.0))
+	builder.rotation = Vector3(0.0, deg_to_rad(float(rec.get("yaw", 0.0))), 0.0)
+	var gy: float = float(ground_y_at.call(x, z)) if ground_y_at.is_valid() \
+		else float(rec.get("ground_y", 0.0))
+	prop.position = Vector3(x, gy, z)
+	prop.setup_collision()
+	prop.set_meta("shadow_mode", str(rec.get("shadow_mode", "")))
+	prop.set_meta("packed", true)
+	prop.set_meta("under_construction", true)
+	PropRenderTuning.apply_to_prop(prop, prop.get_local_pick_radius())
+	prop.set_collision_enabled(false)
+	if bool(rec.get("hidden_3d", false)):
+		prop.visible = false
 	return prop
 
 
@@ -315,7 +447,14 @@ static func apply_record_to_prop(prop: PlacedProp, rec: Dictionary,
 	var model := prop.get_node_or_null("ModelRoot") as Node3D
 	if model == null:
 		return
-	_apply_transform(prop, model, rec, ground_y_at)
+	if bool(rec.get("packed", false)):
+		# A crate is authored in real metres, so it must be repositioned the
+		# way _build_packed_prop places it — yaw only, USER scale, no catalog
+		# unit-compensation or foot offset. Running the deployed path here
+		# would rescale the crate by the model's GLB compensation factor.
+		_apply_packed_transform(prop, model, rec, ground_y_at)
+	else:
+		_apply_transform(prop, model, rec, ground_y_at)
 	prop.setup_collision()
 	prop.set_burnable(bool(rec.get("burnable", false)))
 	if not bool(rec.get("collision_enabled", true)):
@@ -326,6 +465,21 @@ static func apply_record_to_prop(prop: PlacedProp, rec: Dictionary,
 	prop.visible = not hide
 	if hide:
 		prop.set_collision_enabled(false)
+
+
+## Packed-crate placement, matching _build_packed_prop exactly (the two must
+## never drift — one builds, the other moves).
+static func _apply_packed_transform(prop: PlacedProp, model: Node3D,
+		rec: Dictionary, ground_y_at: Callable) -> void:
+	var x := float(rec.get("x", 0.0))
+	var z := float(rec.get("z", 0.0))
+	model.rotation = Vector3(0.0, deg_to_rad(float(rec.get("yaw", 0.0))), 0.0)
+	model.scale = Vector3.ONE * float(rec.get("scale", 1.0))
+	var gy: float = float(ground_y_at.call(x, z)) if ground_y_at.is_valid() \
+		else float(rec.get("ground_y", 0.0))
+	prop.position = Vector3(x, gy, z)
+	if rec.has("y_offset"):
+		prop.position.y += float(rec["y_offset"])
 
 
 static func _apply_transform(_prop: PlacedProp, model: Node3D, rec: Dictionary,

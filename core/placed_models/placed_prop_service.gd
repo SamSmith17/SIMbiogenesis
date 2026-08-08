@@ -132,9 +132,12 @@ static func move_prop_xz(main: Node, prop_id: String, x: float, z: float) -> boo
 
 
 ## Move prop to world XZ; when `ground_y` is finite, pin that footing (Elevation
-## CT drag) instead of resampling terrain under the new XZ.
+## CT drag) instead of resampling terrain under the new XZ. A finite
+## `y_offset` also rewrites the record's stack height — a crate hauled out of a
+## container stack MUST be put back down on the ground, or it arrives floating
+## at the height it rode at, which no XZ-based check would ever catch.
 static func move_prop_at(main: Node, prop_id: String, x: float, z: float,
-		ground_y: float = NAN) -> bool:
+		ground_y: float = NAN, y_offset: float = NAN) -> bool:
 	if main == null or prop_id.is_empty():
 		return false
 	var layer := _layer_for_main(main)
@@ -143,7 +146,12 @@ static func move_prop_at(main: Node, prop_id: String, x: float, z: float,
 	var gy := ground_y
 	if is_nan(gy):
 		gy = TerrainSurfaceQuery.ground_height_at(main, x, z)
-	if not layer.update_prop(prop_id, {"x": x, "z": z, "ground_y": gy}):
+	# Moving a crate is exactly what un-stows it, whoever moved it — a chore
+	# effect or the player dragging it out. One unconditional key covers both.
+	var patch := {"x": x, "z": z, "ground_y": gy, "stowed_in": null}
+	if not is_nan(y_offset):
+		patch["y_offset"] = y_offset
+	if not layer.update_prop(prop_id, patch):
 		return false
 	_save_layer(main, layer)
 	_reposition_scene_prop(main, layer, prop_id)

@@ -113,13 +113,26 @@ func add_osm_prop(building_idx: int, model_id: String, x: float, y_offset: float
 	return str(rec["id"])
 
 
+## Shallow key merge, with one addition: a patch value of `null` ERASES the
+## key rather than storing a null.
+##
+## Callers use null to mean "this no longer applies" — `stowed_in` when a crate
+## is hauled out of its container, `build_state` when a structure finishes
+## building. Storing the null instead would leave the key present, and every
+## reader does `str(rec.get(key, ""))` or `rec.get(key) is Dictionary`; the
+## first yields "<null>" (which is not empty, so the flag reads as still set)
+## and the second silently works by accident. Erasing makes both correct, and
+## keeps dead keys out of the saved JSON.
 func update_prop(prop_id: String, patch: Dictionary) -> bool:
 	for i in props.size():
 		var d: Dictionary = props[i]
 		if str(d.get("id", "")) != prop_id:
 			continue
 		for k in patch.keys():
-			d[k] = patch[k]
+			if patch[k] == null:
+				d.erase(k)
+			else:
+				d[k] = patch[k]
 		props[i] = d
 		return true
 	return false
