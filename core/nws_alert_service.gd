@@ -174,6 +174,41 @@ func get_alert_events_for_year(ugc: String, year: int) -> Array[Dictionary]:
 	return result
 
 
+## Every loaded historical alert for a zone, keyed by issue year:
+##   {int year -> Array[Dictionary]}
+##
+## Exists because get_alerts_in_range() above deliberately searches only
+## `_loaded_hist_year` — a SINGLE year, tracked from Main's clock on a 60 s
+## poll. That is right for the timeline's alert bands (they draw a few days
+## around the playhead) but wrong for any consumer that evaluates arbitrary
+## absolute hours: scrubbing across New Year, or a batch render covering a
+## decade, would silently read the wrong bucket and see no alerts at all.
+## ExtremeWeather uses this to build its own sorted span index once, then
+## binary-searches it, so hazard severity stays a pure function of abs_hours.
+##
+## Empty when the zone's history has not been loaded — callers must have run
+## request_all_hist_years() and awaited all_hist_years_ready first.
+func get_all_alert_events(ugc: String) -> Dictionary:
+	if ugc.is_empty() or ugc != _hist_zone_loaded:
+		return {}
+	var out: Dictionary = {}
+	for year_v: Variant in _hist_alerts.keys():
+		var raw: Variant = _hist_alerts[year_v]
+		if not (raw is Array):
+			continue
+		var rows: Array[Dictionary] = []
+		for item: Variant in (raw as Array):
+			if item is Dictionary:
+				rows.append(item as Dictionary)
+		out[int(year_v)] = rows
+	return out
+
+
+## True when a zone's full history is loaded and ready for get_all_alert_events.
+func has_zone_history(ugc: String) -> bool:
+	return not ugc.is_empty() and ugc == _hist_zone_loaded and not _hist_alerts.is_empty()
+
+
 ## Load full IEM history for [from_year, to_year], bucketed by issue year.
 ## Emits hist_year_loaded for each year in range, then all_hist_years_ready.
 ## Safe to call multiple times; skips work when the zone is already loaded.
@@ -463,14 +498,26 @@ func _parse_iem_event(ev_var: Variant) -> Dictionary:
 	var expires_abs := _iem_timestamp_to_abs_hours(expire_str)
 	if is_nan(onset_abs) or is_nan(expires_abs):
 		return {}
+	# The VTEC codes are carried through verbatim, not just consumed to build a
+	# display name. They are the authority for mapping an alert onto an
+	# extreme-weather hazard (HazardCatalog.id_for_alert), and the rendered
+	# English name cannot stand in for them: _vtec_to_event_name below covers
+	# only a subset, so HU/TY/TR/SS/HW/EH/WC/ZR/AF all fall through it to the
+	# bare phenomena string. Matching on the code is also immune to the NWS
+	# re-wording an event name.
+	# Additive — existing consumers (timeline_ui, record_book_panel) index by
+	# key and ignore extras, and the zone cache stores the RAW IEM response and
+	# re-parses through here on every load, so no cache version bump is needed.
+	var phenomena := str(ev.get("phenomena", "")).strip_edges().to_upper()
+	var significance := str(ev.get("significance", "")).strip_edges().to_upper()
 	var event_name := str(ev.get("name", "")).strip_edges()
 	if event_name.is_empty():
-		var phenomena := str(ev.get("phenomena", ""))
-		var significance := str(ev.get("significance", ""))
 		event_name = _vtec_to_event_name(phenomena, significance)
 	return {
 		"id": str(ev.get("eventid", "")),
 		"event": event_name,
+		"phenomena": phenomena,
+		"significance": significance,
 		"severity": "",
 		"onset_abs": onset_abs,
 		"expires_abs": expires_abs,
