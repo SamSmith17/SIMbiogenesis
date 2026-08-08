@@ -193,6 +193,20 @@ var weather_light_factor : float = 1.0 :
 	set(value):
 		weather_light_factor = clampf(value, 0.0, 4.0) if is_finite(value) else 1.0
 
+## Extreme-weather sun dimming, 0..1. SEPARATE from weather_light_factor on
+## purpose: solar_ui._apply_smooth_weather_lighting owns that one through a
+## per-frame lerp (see the note at _update_sun), so a hazard writing it directly
+## would strobe. This multiplies alongside it instead, leaving one owner each.
+var _hazard_light_factor : float = 1.0 :
+	set( value ) :
+		_hazard_light_factor = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 1.0
+## Tonemap exposure shift under haze, added alongside lightning_flash_boost.
+var _hazard_exposure_offset : float = 0.0
+## Volumetric-fog overrides for an emissive dust wall, produced by
+## AtmosphereApplier.volumetric_for and consumed by
+## _apply_advanced_rendering_toggles (which owns volumetric fog).
+var _hazard_vol : Dictionary = {}
+
 ## Atmospheric perspective/fog (0 = clear, 0.2 = light haze, 0.5 = moderate, 1 = heavy)
 @export_range( 0.0, 1.0, 0.01 ) var fog_amount : float = 0.2 :
 	set( value ) :
@@ -270,6 +284,83 @@ func _apply_clock_claim_values() -> void :
 		_analemma_applying_claim = true
 		analemma_mode = want
 		_analemma_applying_claim = false
+
+
+# ==================== CAMERA CLAIMS ====================
+
+## Which camera is live, as an ordered claim stack — the camera counterpart of
+## the clock claims above, and for the same reason. See core/camera_claims.gd
+## for the bug that private saved-camera fields cannot avoid.
+##
+## The service is PURE (it stores instance ids, never nodes); everything
+## side-effecting lives here, in ONE place, so restore knowledge is not spread
+## across eleven subsystems.
+var camera_claims : CameraClaims = CameraClaims.new()
+## The camera to fall back to when the stack empties — the player's, captured
+## the first time anyone claims.
+var _base_camera_id : int = 0
+var _saved_shadow_distance : float = -1.0
+
+
+## Take a named claim on the active camera. `values` may carry `camera_id`
+## (int, from Object.get_instance_id()), `hide_player_mesh`,
+## `shadow_max_distance` and `prop_cull_scale_m`. Returns false if refused by
+## a foreign exclusive claim.
+func push_camera_claim( owner: String, values: Dictionary, exclusive: bool = false ) -> bool :
+	if _base_camera_id == 0 :
+		var cur := get_viewport().get_camera_3d()
+		if cur != null :
+			_base_camera_id = cur.get_instance_id()
+	var ok : bool = camera_claims.claim( owner, values, exclusive )
+	if ok :
+		_apply_camera_claim()
+	return ok
+
+
+## Release a named claim. Idempotent, so it is safe on every exit path —
+## including one that runs twice.
+func pop_camera_claim( owner: String ) -> void :
+	camera_claims.release( owner )
+	_apply_camera_claim()
+
+
+func camera_is_owned() -> bool :
+	return not camera_claims.exclusive_owner().is_empty()
+
+
+## Resolve the top-most claim and apply it. An id whose object has been freed
+## falls through to the base camera rather than leaving the viewport pointing
+## at nothing — which is the failure mode the whole service exists to prevent.
+func _apply_camera_claim() -> void :
+	var want_id : int = camera_claims.effective_camera_id()
+	if want_id == 0 :
+		want_id = _base_camera_id
+	var cam := instance_from_id( want_id ) as Camera3D if want_id != 0 else null
+	if cam == null and want_id != _base_camera_id :
+		cam = instance_from_id( _base_camera_id ) as Camera3D if _base_camera_id != 0 else null
+	if cam != null and is_instance_valid( cam ) :
+		cam.current = true
+
+	# Side-effecting keys. Each reverts by construction when the stack empties,
+	# because value_or() falls back to the base we pass in.
+	var hide_mesh : bool = bool( camera_claims.value_or( "hide_player_mesh", false ) )
+	var body := get_node_or_null( "Player" )
+	if body != null and body.has_method( "set_body_visible" ) :
+		body.call( "set_body_visible", not hide_mesh )
+
+	if sun != null :
+		if _saved_shadow_distance < 0.0 :
+			_saved_shadow_distance = sun.directional_shadow_max_distance
+		sun.directional_shadow_max_distance = maxf(
+			float( camera_claims.value_or( "shadow_max_distance", _saved_shadow_distance ) ),
+			_saved_shadow_distance )
+
+	# Distance culling is tuned for eye level; a camera 2 km up needs its reach
+	# extended or the settlement renders as bare terrain. 0 restores the tier.
+	var cull : float = float( camera_claims.value_or( "prop_cull_scale_m", 0.0 ) )
+	if not is_equal_approx( cull, PropRenderTuning.scale_override_m ) :
+		PropRenderTuning.scale_override_m = cull
+		PropRenderTuning.apply_to_all( self )
 
 # ==================== GAMEPLAY MECHANICS ====================
 
@@ -563,6 +654,7 @@ var lightning_flash_boost : float = 0.0
 
 var _precipitation_vfx : PrecipitationVfx
 var _lightning_vfx : LightningVfx
+var _dust_smoke_vfx : DustSmokeVfx
 
 const CLOUDS_SPEED_BASE : float = 2.0
 const CIRRUS_SPEED_BASE : float = 1.0
@@ -644,6 +736,10 @@ var unified_library_ui : Control = null
 const UNIFIED_LIBRARY_MODAL_SCRIPT := preload( "res://scenes/ui/unified_library_modal.gd" )
 var linkage_lab_ui : Control = null
 const LINKAGE_LAB_MODAL_SCRIPT := preload( "res://scenes/ui/linkage_lab_modal.gd" )
+var linkage_build_guide_ui : Control = null
+const LINKAGE_BUILD_GUIDE_SCRIPT := preload( "res://scenes/ui/linkage_build_guide_modal.gd" )
+var linkage_hardware_ui : Control = null
+const LINKAGE_HARDWARE_SCRIPT := preload( "res://scenes/ui/linkage_hardware_modal.gd" )
 var scad_store_ui : Control = null
 const SCAD_STORE_MODAL_SCRIPT := preload( "res://scenes/ui/scad_store_modal.gd" )
 @onready var location_picker : Control = get_node_or_null( "UILayer/LocationPickerUI" ) as Control
@@ -1102,6 +1198,12 @@ func _unhandled_input( e : InputEvent ) -> void :
 		var tl := get_node_or_null( "UILayer/TimelineUI" )
 		if tl != null and tl.has_method( "_on_site_report_pressed" ) :
 			tl.call( "_on_site_report_pressed" )
+		get_viewport().set_input_as_handled()
+		return
+	if InputMap.has_action( "toggle_packing_lab" ) and e.is_action_pressed( "toggle_packing_lab" ) :
+		# Direct entry (Q) — the Lab used to hide three levels deep behind the
+		# Site Report's packing card.
+		load( "res://scenes/ui/packing_lab_modal.gd" ).call( "open_site_cargo", get_tree() )
 		get_viewport().set_input_as_handled()
 		return
 	if InputMap.has_action( "toggle_linkage_lab" ) and e.is_action_pressed( "toggle_linkage_lab" ) :
@@ -1682,8 +1784,29 @@ func _apply_advanced_rendering_toggles() -> void :
 	# old per-frame suppress fight contributed to AMD TDRs on G).
 	var soi_ct := _graph_soi_section_preview_active()
 	var want_god_rays := god_rays_enabled and not soi_ct
-	env.volumetric_fog_enabled = volumetric_fog_user_enabled or want_god_rays
-	if want_god_rays :
+	# A wind-driven dust wall lights from WITHIN — sunlight scattered inside the
+	# dust volume — which only volumetric fog can express. It is forced on here
+	# rather than at the environment choke point because THIS function owns
+	# volumetric fog and is also reachable straight from the settings panel;
+	# writing it in both places meant toggling god-rays erased the dust wall.
+	var haz_vol : bool = bool( _hazard_vol.get( "vol_force", false ) ) and not soi_ct
+	env.volumetric_fog_enabled = volumetric_fog_user_enabled or want_god_rays or haz_vol
+	if haz_vol :
+		env.volumetric_fog_density = maxf( float( _hazard_vol[ "vol_density" ] ),
+			env.volumetric_fog_density if volumetric_fog_user_enabled else 0.0 )
+		env.volumetric_fog_length = float( _hazard_vol[ "vol_length" ] )
+		env.volumetric_fog_detail_spread = 2.0
+		env.volumetric_fog_gi_inject = 0.0
+		env.volumetric_fog_ambient_inject = 0.9
+		env.volumetric_fog_albedo = _hazard_vol[ "vol_albedo" ]
+		env.volumetric_fog_emission = _hazard_vol[ "vol_emission" ]
+		env.volumetric_fog_emission_energy = float( _hazard_vol[ "vol_emission_energy" ] )
+		if is_instance_valid( sun ) :
+			sun.light_volumetric_fog_energy = float( _hazard_vol[ "vol_sun_energy" ] )
+	elif want_god_rays :
+		# Emission is a hazard-only effect; clear it or a dust wall's glow
+		# outlives the storm that made it.
+		env.volumetric_fog_emission_energy = 0.0
 		# Thin fog + strong in-scattering length so the sun scatters into visible
 		# shafts without fogging the whole scene into a grey wash.
 		var god_ray_density = 0.002
@@ -1699,8 +1822,42 @@ func _apply_advanced_rendering_toggles() -> void :
 			# Tie god ray visibility to cloud cover so beams only show when clouds occlude
 			var ray_energy = 1.5 + (clouds_weight * 2.5)
 			sun.light_volumetric_fog_energy = ray_energy
-	elif is_instance_valid( sun ) :
-		sun.light_volumetric_fog_energy = 0.0 if soi_ct else 1.0
+	else :
+		env.volumetric_fog_emission_energy = 0.0
+		if is_instance_valid( sun ) :
+			sun.light_volumetric_fog_energy = 0.0 if soi_ct else 1.0
+
+## Per-frame dust grains (wildfire smoke has no particle system — see
+## DustSmokeVfx). Driven from _process rather than from the ~20 Hz
+## environment recompute, because the emitter blend is an exponential ease that
+## needs a real frame delta to stay frame-rate independent.
+func _update_hazard_vfx( delta : float ) -> void :
+	if _dust_smoke_vfx == null or not is_instance_valid( _dust_smoke_vfx ) :
+		return
+	var xw := get_node_or_null( "/root/ExtremeWeather" )
+	if xw == null :
+		return
+	var hz : Dictionary = xw.call( "current" )
+	var cam := get_viewport().get_camera_3d()
+	if cam == null :
+		return
+	# Grains ride the air, so they take their direction from the SAME helper the
+	# turbines and the vegetation shader use (WindMath.downwind_xz). One wind
+	# source means nothing on screen can visibly disagree about which way it is
+	# blowing.
+	var speed := 4.0
+	var dir2 := Vector2( 1.0, 0.0 )
+	var ws := get_node_or_null( "/root/WeatherService" )
+	if ws != null and ws.has_method( "has_data" ) and bool( ws.call( "has_data" ) ) :
+		var s : float = ws.call( "wind_speed_ms", month, day, day_time )
+		if is_finite( s ) :
+			speed = s
+		var from_deg : float = ws.call( "wind_direction_deg", month, day, day_time )
+		if is_finite( from_deg ) :
+			dir2 = WindMath.downwind_xz( from_deg )
+	var wind := Vector3( dir2.x, 0.0, dir2.y ) * speed * float( hz.get( "wind_mult", 1.0 ) )
+	_dust_smoke_vfx.update_frame( delta, hz, wind, cam.global_position )
+
 
 func _setup_environment_vfx() -> void :
 	if Engine.is_editor_hint() :
@@ -1712,6 +1869,11 @@ func _setup_environment_vfx() -> void :
 	_lightning_vfx.name = "LightningVfx"
 	add_child( _lightning_vfx )
 	_lightning_vfx.flash_triggered.connect( _on_lightning_flash )
+	# Ash / dust grains for extreme weather. The volumetric fog already colours
+	# the air; this is what makes it read as BLOWING rather than painted.
+	_dust_smoke_vfx = DustSmokeVfx.new()
+	_dust_smoke_vfx.name = "DustSmokeVfx"
+	add_child( _dust_smoke_vfx )
 
 
 func _on_lightning_flash( intensity: float ) -> void :
@@ -1724,7 +1886,10 @@ func _apply_tonemap_settings() -> void :
 		return
 	var env : Environment = environment.environment
 	env.tonemap_mode = tonemap_mode as Environment.ToneMapper
-	env.tonemap_exposure = tonemap_exposure + lightning_flash_boost
+	# Haze darkens the frame slightly on top of the lightning flash — both are
+	# transient offsets on the user's exposure, so they share the same slot.
+	env.tonemap_exposure = maxf(
+		tonemap_exposure + lightning_flash_boost + _hazard_exposure_offset, 0.05 )
 	env.tonemap_white = tonemap_white
 
 func _apply_msaa_level() -> void :
@@ -2043,6 +2208,11 @@ func _graph_soi_section_preview_active() -> bool :
 
 var _vegetation_night_factor : float = 0.0
 var _vegetation_sun_direction : Vector3 = Vector3.UP
+## The live scene ambient (environment.ambient_light_energy as computed by
+## _update_environment, incl. moon + eclipse). VegetationEnvironmentSync reads
+## it to scale the UNSHADED impostor tier's night floor: lit trees darken with
+## this ambient for free, an unshaded card must be told.
+var _vegetation_ambient_energy : float = 0.3
 ## Seasonal phenology signals + weather-driven snow cover, cached in
 ## _update_environment() and read by VegetationEnvironmentSync / TerrainLoader.
 var _season_signals : Dictionary = {
@@ -2160,6 +2330,7 @@ func _process( delta: float ) -> void :
 	if lightning_flash_boost > 0.001 :
 		lightning_flash_boost = lerpf( lightning_flash_boost, 0.0, 1.0 - exp( -delta * 18.0 ) )
 		_apply_tonemap_settings()
+	_update_hazard_vfx( delta )
 	if not Engine.is_editor_hint() :
 		# Analemma / ∞ view: each frame jumps to the next day's solar noon and
 		# refreshes the world. Visual-only — time_scale is 0 so no other system
@@ -2294,6 +2465,10 @@ func _update_sun() -> void :
 	# Vulkan renderer (full-desktop "shattered glass" + reboot), so never let one through.
 	var sun_e : float = horizon_fade * high_sun_boost * sun_base_enegry * weather_light_factor * _compute_cloud_shadow_factor()
 	sun_e *= _eclipse_sun_transmission()
+	# Extreme-weather dimming multiplies alongside weather_light_factor rather
+	# than into it: solar_ui owns that value through a per-frame lerp, so two
+	# writers would fight and strobe.
+	sun_e *= _hazard_light_factor
 	sun.light_energy = clampf(sun_e, 0.0, 64.0) if is_finite(sun_e) else 0.0
 
 
@@ -2620,13 +2795,106 @@ func _update_environment() -> void :
 	if eclipse_obs > 0.05 and sun_height > 0.0 :
 		ambient *= lerpf( 1.0, 0.04 if eclipse_total else 0.18, eclipse_obs )
 	environment.environment.ambient_light_energy = ambient
+	_vegetation_ambient_energy = ambient
 
 	_update_glow( night_amount )
-	
+
 	# fog_amount export can boost haze further (e.g. dusty/smoky conditions)
 	# The baseline atmospheric perspective above is always active.
 	if fog_amount > 0.01:
 		environment.environment.fog_density += fog_amount * 0.00015
+
+	# Extreme weather is the LAST word on the atmosphere: everything above has
+	# computed the clean-air look for this instant (night, twilight, eclipse,
+	# the user fog knob), and a hazard is a modifier on that. One choke point,
+	# so no existing branch above needs to know this subsystem exists.
+	_apply_hazard_atmosphere( night_amount, sun_height )
+
+
+## Single injection point for extreme weather. AtmosphereApplier does the maths
+## (pure and selftest-pinned); this only writes the result onto the live nodes.
+##
+## Zero-severity is a genuine no-op: resolve() returns the base dictionary field
+## for field, so a disabled or quiet hazard system leaves every value exactly as
+## the code above set it.
+func _apply_hazard_atmosphere( night_amount : float, sun_height : float ) -> void :
+	var xw := get_node_or_null( "/root/ExtremeWeather" )
+	if xw == null :
+		_hazard_light_factor = 1.0
+		_hazard_vol = {}
+		return
+	var hz : Dictionary = xw.call( "current" )
+	if float( hz.get( "severity", 0.0 ) ) <= 0.005 :
+		_hazard_light_factor = 1.0
+		_hazard_vol = {}
+		_hazard_exposure_offset = 0.0
+		# Restoring these is not optional: the sun's colour and the sky's haze
+		# uniform both persist, so a cleared hazard that skipped this would
+		# leave the world permanently reddened.
+		if is_instance_valid( sun ) and sun.light_color != Color.WHITE :
+			sun.light_color = Color.WHITE
+		if environment.environment.sky != null :
+			var m = environment.environment.sky.sky_material
+			if m != null :
+				m.set_shader_parameter( "hazard_haze", 0.0 )
+		return
+
+	var env : Environment = environment.environment
+	var base := {
+		"fog_density": env.fog_density,
+		"fog_depth_end": env.fog_depth_end,
+		"fog_light_color": env.fog_light_color,
+		"fog_aerial_perspective": env.fog_aerial_perspective,
+		"fog_sun_scatter": env.fog_sun_scatter,
+		"fog_sky_affect": env.fog_sky_affect,
+		"ambient_energy": env.ambient_light_energy,
+		"glow_intensity": env.glow_intensity,
+		"glow_hdr_threshold": env.glow_hdr_threshold,
+		"exposure_offset": 0.0,
+	}
+	var out := AtmosphereApplier.resolve( base, hz, night_amount, sun_height )
+
+	env.fog_density            = float( out[ "fog_density" ] )
+	env.fog_depth_end          = float( out[ "fog_depth_end" ] )
+	env.fog_light_color        = out[ "fog_light_color" ]
+	env.fog_aerial_perspective = float( out[ "fog_aerial_perspective" ] )
+	env.fog_sun_scatter        = float( out[ "fog_sun_scatter" ] )
+	env.fog_sky_affect         = float( out[ "fog_sky_affect" ] )
+	env.ambient_light_energy   = float( out[ "ambient_energy" ] )
+	env.glow_intensity         = float( out[ "glow_intensity" ] )
+	env.glow_hdr_threshold     = float( out[ "glow_hdr_threshold" ] )
+
+	# The sun's own colour is uncontested — nothing else in the project writes
+	# it — but it MUST be restored to white above when the hazard clears, or a
+	# smoke event permanently reddens the world.
+	if is_instance_valid( sun ) :
+		sun.light_color = out[ "sun_tint" ]
+
+	# The sky itself. Environment.fog_sky_affect can only blend the FOG colour
+	# into the sky, and that same colour is simultaneously the terrain haze —
+	# which under smoke must be dark while the sky must be luminous. So the sky
+	# gets its own uniform, and this is why sky.gdshader carries a hazard block.
+	if environment.environment.sky != null :
+		var sky_mat = environment.environment.sky.sky_material
+		if sky_mat != null :
+			var sh := AtmosphereApplier.sky_haze_for( hz, night_amount )
+			var sc : Color = sh[ "haze_color" ]
+			# The sky is scattered light, so it reads far brighter than the same
+			# aerosol does looking at shadowed ground. Lift it well clear of the
+			# fog colour or the sky reads as dirty brown rather than as glowing.
+			sky_mat.set_shader_parameter( "hazard_haze_color",
+				Vector3( minf( sc.r * 1.9, 1.0 ), minf( sc.g * 1.7, 1.0 ), minf( sc.b * 1.5, 1.0 ) ) )
+			sky_mat.set_shader_parameter( "hazard_haze", float( sh[ "haze_strength" ] ) )
+
+	# Handed to _update_sun / solar_ui rather than written here: solar_ui owns
+	# weather_light_factor through a per-frame lerp and would fight a direct
+	# write (main.gd:2392 documents that ownership).
+	_hazard_light_factor = float( out[ "sun_energy_mult" ] )
+	_hazard_exposure_offset = float( out[ "exposure_offset" ] )
+	# Volumetric fog is owned by _apply_advanced_rendering_toggles, which is
+	# also reachable from the settings panel — so it reads this rather than
+	# being written here, or toggling god-rays would erase the dust wall.
+	_hazard_vol = AtmosphereApplier.volumetric_for( hz, sun_height )
 
 ## Bloom / glow, driven by the same day->night signal as the rest of the
 ## environment.  This is the single post-process pass that turns the camp
@@ -2694,6 +2962,10 @@ func get_vegetation_night_factor() -> float :
 
 func get_vegetation_sun_direction() -> Vector3 :
 	return _vegetation_sun_direction
+
+
+func get_vegetation_ambient_energy() -> float :
+	return _vegetation_ambient_energy
 
 
 ## Recompute seasonal phenology + snow cover for the current clock date.
@@ -3297,10 +3569,16 @@ func _setup_toast_ui() -> void :
 	var existing := ui_layer.get_node_or_null( "ToastUI" )
 	if existing != null :
 		toast_ui = existing as ToastUI
-		return
-	toast_ui = ToastUI.new()
-	toast_ui.name = "ToastUI"
-	ui_layer.add_child( toast_ui )
+	else :
+		toast_ui = ToastUI.new()
+		toast_ui.name = "ToastUI"
+		ui_layer.add_child( toast_ui )
+	# Extreme-weather badge + onset toasts (preview countdown chip; the
+	# hazard_began/ended listeners that make the "Warn me" pref real).
+	if ui_layer.get_node_or_null( "HazardBadgeUI" ) == null :
+		var badge : Control = load( "res://scenes/ui/hazard_badge_ui.gd" ).new()
+		badge.name = "HazardBadgeUI"
+		ui_layer.add_child( badge )
 
 
 ## Returns the ProjectionCanvas, instancing it under UILayer on maps that don't
@@ -3439,6 +3717,128 @@ func _setup_linkage_lab_ui() -> void :
 	ui.set_script( LINKAGE_LAB_MODAL_SCRIPT )
 	layer.add_child( ui )
 	linkage_lab_ui = ui
+
+
+## Build Guide — BOM, cut list, drill templates and assembly sequence for a
+## linkage design. Its own CanvasLayer so it stacks OVER the Lab: CursorController
+## keeps a modal STACK, so Esc pops the guide and a second Esc pops the Lab.
+# ==================== SETTLEMENT VIEW ====================
+
+var settlement_view : SettlementView = null
+
+
+## Open (or close) the settlement view — watch the community work from
+## anywhere between standing height and the whole site. Lazily built, the same
+## way the Record Book and Site Report panels are.
+func toggle_settlement_view( at: Vector2 = Vector2.INF ) -> void :
+	if settlement_view != null and is_instance_valid( settlement_view ) and settlement_view.is_open() :
+		settlement_view.close()
+		return
+	open_settlement_view( at )
+
+
+## Returns the view so a caller can drive it further — the Routines panel's
+## "Where…" button opens it in one-shot pick mode this way.
+func open_settlement_view( at: Vector2 = Vector2.INF ) -> SettlementView :
+	if settlement_view == null or not is_instance_valid( settlement_view ) :
+		settlement_view = SettlementView.new()
+		settlement_view.name = "SettlementView"
+		add_child( settlement_view )
+	settlement_view.open( self, at )
+	return settlement_view
+
+
+func settlement_view_open() -> bool :
+	return settlement_view != null and is_instance_valid( settlement_view ) \
+		and settlement_view.is_open()
+
+
+func _setup_linkage_build_guide_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "LinkageBuildGuideLayer" )
+	if existing_layer != null :
+		linkage_build_guide_ui = existing_layer.get_node_or_null( "LinkageBuildGuideModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "LinkageBuildGuideLayer"
+	# One band above the Lab so the guide always draws on top of it.
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "LinkageBuildGuideModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( LINKAGE_BUILD_GUIDE_SCRIPT )
+	layer.add_child( ui )
+	linkage_build_guide_ui = ui
+
+
+## Open the Build Guide for a v30 config dict (the Lab's 📋 button).
+func open_linkage_build_guide( config: Dictionary = {}, name_hint := "" ) -> void :
+	if not is_instance_valid( linkage_build_guide_ui ) :
+		_setup_linkage_build_guide_ui()
+	if not is_instance_valid( linkage_build_guide_ui ) :
+		return
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader == null :
+		loader = TerrainSurfaceQuery.find_terrain_loader( self )
+	if linkage_build_guide_ui.has_method( "bind_loader" ) :
+		linkage_build_guide_ui.call( "bind_loader", loader )
+	var p := LinkageParams.new()
+	if not config.is_empty() :
+		p.from_config( config )
+	if linkage_build_guide_ui.has_method( "open" ) :
+		linkage_build_guide_ui.call( "open", p, name_hint )
+
+
+## Build Guide for a linkage structure already standing in the world.
+func open_linkage_build_guide_for_prop( prop_id: String ) -> void :
+	if not is_instance_valid( linkage_build_guide_ui ) :
+		_setup_linkage_build_guide_ui()
+	if not is_instance_valid( linkage_build_guide_ui ) :
+		return
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader == null :
+		loader = TerrainSurfaceQuery.find_terrain_loader( self )
+	if linkage_build_guide_ui.has_method( "bind_loader" ) :
+		linkage_build_guide_ui.call( "bind_loader", loader )
+	if linkage_build_guide_ui.has_method( "open_for_prop" ) :
+		linkage_build_guide_ui.call( "open_for_prop", prop_id )
+
+
+## Hardware Detail — the parametric assembly editor behind each joint. Stacks
+## over the Lab like the Build Guide does.
+func _setup_linkage_hardware_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "LinkageHardwareLayer" )
+	if existing_layer != null :
+		linkage_hardware_ui = existing_layer.get_node_or_null( "LinkageHardwareModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "LinkageHardwareLayer"
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "LinkageHardwareModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( LINKAGE_HARDWARE_SCRIPT )
+	layer.add_child( ui )
+	linkage_hardware_ui = ui
+
+
+## Open the Hardware Detail editor on a LinkageParams. The caller keeps the
+## reference, so edits land straight back on its assembly graph.
+func open_linkage_hardware_editor( p: LinkageParams ) -> Control :
+	if not is_instance_valid( linkage_hardware_ui ) :
+		_setup_linkage_hardware_ui()
+	if not is_instance_valid( linkage_hardware_ui ) :
+		return null
+	if linkage_hardware_ui.has_method( "open" ) :
+		linkage_hardware_ui.call( "open", p )
+	return linkage_hardware_ui
 
 
 ## Parametric Hardware Store — full-screen OpenSCAD part store (lazy, every map).

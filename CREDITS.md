@@ -136,7 +136,23 @@ only for provenance/completeness.
   - Source: (own repo) · License: same as this project (`MIT`) · Added: (in-tree)
   - Attribution required: n/a (our own work) · Share-alike: no · Commercial OK: yes
   - Notes: The upstream three.js app is also ours, so there is no external
-    attribution debt for the port. Kept here for provenance.
+    attribution debt for the port. Kept here for provenance. The part library
+    under `core/linkage/hardware/` is the web app's own `hardware/*.json`
+    copied verbatim (first-party data).
+  - Status: verified
+
+- **`linkage-unistrut-trolley-bracket`** — the U-bracket mesh used by the
+  Linkage Lab hardware detail editor (`assets/linkage/unistrut_trolley_bracket.glb`).
+  - Author: **project author (first-party)** · Source: (LinkageLab repo root,
+    `Unistrut Trolley Bracket.glb`)
+  - License: same as this project (`MIT`) · Added: 2026-08-04 · Modifications:
+    none (merged/re-oriented at load time only)
+  - Attribution required: n/a (our own work) · Share-alike: no · Commercial OK: yes
+  - Notes: Modelled first-party by the project author (confirmed 2026-08-04) —
+    it depicts a commercial Unistrut trolley, but the mesh itself is original
+    work, so no external license attaches. Still optional at runtime:
+    `LinkageHwParts.bracket_mesh()` falls back to a parametric U-channel when
+    the file is absent.
   - Status: verified
 
 ## Parametric parts — OpenSCAD hardware store
@@ -188,6 +204,28 @@ usage; confirm each provider's live attribution string before release.**
   - License: data `CC-BY-4.0`; API `Apache-2.0` · Attribution: credit Open-Meteo;
     elevation is Copernicus DEM (credit © Copernicus).
   - Attribution required: yes · Share-alike: no · Commercial OK: yes (free tier limits)
+  - Status: pending-verification
+
+- **CAMS air quality (via Open-Meteo)** — hourly aerosols driving the wildfire-smoke
+  and dust-storm hazards (`core/weather/air_quality_service.gd`).
+  - Source: https://open-meteo.com/en/docs/air-quality-api · License: `CC-BY-4.0`
+  - Attribution required: **yes, and stricter than the weather endpoint** — Open-Meteo
+    requires credit to the **CAMS ENSEMBLE data provider** *as well as* a reference to
+    Open-Meteo, which is why this is a separate entry rather than folded into the
+    Open-Meteo one above. Surfaced in-game at the foot of Settings → Extreme Weather.
+  - Fields used: `pm2_5`, `pm10`, `dust`, `aerosol_optical_depth`, `us_aqi`,
+    `carbon_monoxide`. Coverage: `past_days` ≤ 92, `forecast_days` ≤ 7; the global
+    archive begins Aug 2022, so older sim years fall back to alert history and
+    climatology rather than measured aerosol.
+  - Commercial OK: yes (free tier limits) · Status: pending-verification
+
+- **NWS alerts + IEM VTEC archive** — extreme-weather triggers and the per-site risk
+  profile ("which hazards has this location actually experienced since 1986").
+  - Source: https://mesonet.agron.iastate.edu/ · License: public domain (US federal
+    government work), re-served by Iowa State University's Environmental Mesonet.
+  - Attribution required: not legally, but credited as a courtesy · Commercial OK: yes
+  - Notes: US-only. Sites with no UGC zone fall back to climatology derived from
+    WeatherService, labelled as an estimate in the UI.
   - Status: pending-verification
 
 - **OpenTopography / SRTM** — optional 30 m elevation upgrade (with API key).

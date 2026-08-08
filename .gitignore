@@ -31,6 +31,18 @@ desktop.ini
 **/planet_prefs.cfg
 **/saves/
 
+# Multiplayer + Discord runtime state. These only ever live under user://, so
+# these lines are belt-and-braces against a stray copy inside the tree — but
+# discord_auth.cfg holds a real OAuth refresh token and a community file holds
+# webhook write credentials, so they are worth naming explicitly.
+**/mp_prefs.cfg
+**/mp_telemetry.log
+**/discord_auth.cfg
+**/discord_config.cfg
+**/discord_cache.cfg
+**/communities/
+**/*.simcommunity
+
 # Godot headless / import TMP artifacts
 **/~*.TMP
 **/*~RF*.TMP

@@ -19,6 +19,12 @@ Required for SOAK / Mars / player:
 
 Optional PBR sets: `Wood034_1K-JPG/`, `Metal051C_1K-JPG/`.
 
+> **Not** part of this pack: `assets/linkage/unistrut_trolley_bracket.glb` is
+> **committed** to the repo (72 KB, first-party — see `CREDITS.md`) and needs
+> no local download. It is still optional at runtime —
+> `LinkageHwParts.bracket_mesh()` falls back to a parametric U-channel if it
+> is missing.
+
 ## Without the asset pack
 
 The simulator still runs:
@@ -37,17 +43,53 @@ its head/torso/legs figure — the sim itself never depends on these files.
 Download from [mixamo.com](https://www.mixamo.com/) (free Adobe account) into
 `Imported Models/NPC/`, then run `--headless --path . --import`:
 
+The character mesh, then every clip in `NpcRig.SOURCES` (this table is the
+whole list — keep it in lockstep with that dict; a missing file is a
+`push_warning` at load, not an error, so a partial pack degrades one clip at a
+time rather than failing loudly):
+
 | File | Mixamo item | Download settings |
 |---|---|---|
 | `Ch36_nonPBR.fbx` | character "Ch36" | **With** skin, FBX Binary, T-pose |
 | `Walking.fbx` | Walking | Without Skin, FBX Binary, 30 fps, no keyframe reduction |
+| `Walking (1).fbx` | Walking (variant) | as above |
+| `Walking (2).fbx` | Walking (variant) | as above |
+| `Sad Walk.fbx` | Sad Walk | as above |
+| `Start Walking.fbx` | Start Walking | as above |
+| `Stop Walking.fbx` | Stop Walking | as above |
 | `Laying Sleeping.fbx` | Laying Sleeping | as above |
-| `Overhead Squat.fbx` | Overhead Squat | as above |
+| `Idle To Situp.fbx` | Idle To Situp | as above |
+| `Sleep To Idle.fbx` | Sleep To Idle | as above |
 | `Sitting Idle.fbx` | Sitting Idle | as above |
+| `Sit To Stand.fbx` | Sit To Stand | as above |
+| `Sad Idle.fbx` | Sad Idle | as above |
+| `Overhead Squat.fbx` | Overhead Squat | as above |
+| `Back Squat.fbx` | Back Squat | as above |
+| `Standing Clap.fbx` | Standing Clap | as above |
+| `Sitting Clap.fbx` | Sitting Clap | as above |
 | `Arms Hip Hop Dance.fbx` | Arms Hip Hop Dance | as above |
+
+The three walk variants exist so a group walking together is not a chorus
+line; they are authored at different speeds and the loader rate-matches each
+one, so any Mixamo walk works as a substitute.
 
 The standing idle is **not** in this list — it is retargeted at load from
 `Player Character/Breathing Idle (no skin).fbx`.
+
+**Not yet sourced — the carry pair.** NPCs hauling crates (Site Projects)
+currently play the ordinary walk/idle under a chest-height box, which reads
+acceptably at silhouette distance. A real two-hand carry needs two clips that
+nothing in the pack above can stand in for:
+
+| File | Mixamo item | Notes |
+|---|---|---|
+| `Walking With Box.fbx` | any walking-with-load clip | starts and ends STANDING |
+| `Idle With Box.fbx` | any standing-hold clip | the brigade station pose |
+
+To enable, drop them in and uncomment the two rows at the bottom of
+`NpcRig.SOURCES`. They carry a forced `ROLE_CARRY` on purpose: a lift dips to
+grab the load, which the loader would otherwise measure as a genuine level
+change and correct by sinking the figure into the ground mid-pickup.
 
 "In Place" does **not** need to be ticked: `NpcRig` flattens horizontal root
 motion at load, because the simulation owns each agent's position. Any Mixamo

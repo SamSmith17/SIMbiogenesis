@@ -102,6 +102,8 @@ Godot.exe.exe --headless --path . --script core/terrain/watershed_selftest.gd
 | **J** | Light place mode | LMB place, RMB / J exit; Ctrl/Alt+click existing light to edit |
 | **N** | Linkage Lab | |
 | **K** | Site Report | Also timeline 📊 |
+| **H** | Parametric part store (OpenSCAD) | `toggle_scad_store` |
+| **Q** | Packing Lab (site cargo → truck) | `toggle_packing_lab`; also Site Report packing card |
 | **M** | Placed Props edit dock | `placed_props_edit` |
 | **Y** | NPC space edit dock | `space_edit` |
 | **Z** | POV warp overlay | `toggle_pov_warp` (StarShade projector) |
@@ -484,6 +486,27 @@ Full-screen parametric scissor designer (inches internally).
 4. In world: Interact toggles deploy/stow; stowed arrays contribute 0 capacity  
 5. Click structure → **Linkage Lab** to edit in place  
 6. Import `.gamebundle.json` via timeline 🎮 or Placed Props  
+
+**📋 Build Guide** (topbar, or "Build guide" on a placed structure): priced
+bill of materials with editable unit prices, weight breakdown, cut list, drill
+templates with dimensioned hole positions, the U-bracket detail drawing, the
+per-joint assembly sequence, and the crew schedule. Exports CSV / JSON to
+`user://linkage_designs/` (no PDF — see the footnote in the guide).
+
+**🔩 Hardware Detail** (topbar): the parts stacked at each joint — bolt,
+bushing, lock washer, beam, washer, nut — threaded on the real bolt, through
+ghosted timber cut from your own design. Assembly tabs across the top, an
+explode slider, per-axis part cards with the shipped preset library. Click a
+part in 3D to select it, drag along its axis to move it (it snaps flush),
+`Del` removes, `Ctrl+D` duplicates, arrows nudge by 0.01″.
+
+- **In structure** (default ON, the webapp's part view): the joint on the
+  solved frame, with EVERY detailed assembly's hardware stamped at EVERY joint
+  that uses it and the camera parked on the focused one. Untick for a
+  standalone studio when you want the stack alone.
+- **Hardware Full Detail** (in the Lab's Hardware Settings card) lets those
+  parts drive the structure's real stack gaps and bracket dimensions. Off by
+  default; the sidebar's own numbers are preserved while it is on.
 
 ---
 

@@ -52,8 +52,12 @@ PlaytestHarness="*res://core/terrain/playtest_harness.gd"
 MapillaryService="*res://core/terrain/mapillary_service.gd"
 AiImageryService="*res://core/terrain/ai_imagery_service.gd"
 SoiService="*res://core/soi/soi_service.gd"
+DiscordIdentity="*res://core/discord/discord_identity.gd"
+DiscordDirectory="*res://core/discord/discord_directory.gd"
 MultiplayerSession="*res://core/multiplayer/multiplayer_session.gd"
 UiSound="*res://core/ui_sfx.gd"
+AirQualityService="*res://core/weather/air_quality_service.gd"
+ExtremeWeather="*res://core/weather/extreme_weather_director.gd"
 
 [display]
 
@@ -323,6 +327,11 @@ toggle_library={
 toggle_site_report={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":75,"key_label":0,"unicode":107,"location":0,"echo":false,"script":null)
+]
+}
+toggle_packing_lab={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":81,"key_label":0,"unicode":113,"location":0,"echo":false,"script":null)
 ]
 }
 toggle_linkage_lab={

@@ -44,6 +44,27 @@ Godot.exe.exe --headless --path . --script core/services_selftest.gd
 # thinning. One-shot <45 fps auto-drop after load persists veg_auto_dropped
 # in perf_prefs.cfg [render]):
 Godot.exe.exe --headless --path . --script core/env/render_profile_selftest.gd
+# Camera-claim stack self-test (offline — the CAMERA counterpart of the clock
+# stack, same API and same reason. ~11 subsystems each swapped the active
+# camera by hand with a private saved-camera field, which cannot nest: a
+# harness capture saves the player cam, the snowglobe then saves the CAPTURE
+# cam and restores THAT, and when the capture frees its camera the viewport is
+# left on a freed object. The selftest reproduces exactly that, released out
+# of order. The service stores camera_id ints so it stays pure; main.gd owns
+# push/pop/_apply_camera_claim and every side effect (hide_player_mesh,
+# shadow_max_distance, prop_cull_scale_m) plus restore-on-empty. NOT claimants,
+# permanently: the six SubViewport modal previews and graph_soi_preview_service
+# never touch the main viewport's camera):
+Godot.exe.exe --headless --path . --script core/camera_claims_selftest.gd
+# Shared crosshair-ladder self-test (offline — SiteTargetPicker, the ONE
+# ray→target resolver used by BOTH the first-person crosshair and the
+# settlement view's mouse, so the two provably agree. Pins the ladder order,
+# the `want` filter, and — the invisible one — the MINIMUM ANGULAR PICK RADIUS:
+# at 500 m a person is sub-pixel and an exact sphere test is unclickable, so
+# the radius grows as t·tan(0.6°) past a ~52 m crossover. Also pins its own
+# check COUNT, because a Godot runtime error aborts the enclosing test function
+# while the suite still prints PASS — this file lost a whole function to that):
+Godot.exe.exe --headless --path . --script gameplay/site_target_picker_selftest.gd
 # Clock-claim stack self-test (offline — the ordered claim stack that replaced
 # nine private `_saved_time_scale` fields; covers re-claim-does-not-stack,
 # order-independent release, exclusive refusal, partial-claim fall-through, and
@@ -131,6 +152,30 @@ Godot.exe.exe --headless --path . --script vegetation/veg_dock_state_selftest.gd
 # keep the requested range, dense maps shrink until the worst-case near-set
 # fits the tier budget, 60 m floor, grass/shrub never counted; --import first):
 Godot.exe.exe --headless --path . --script vegetation/veg_lod_policy_selftest.gd
+# Extreme weather (offline — core/weather/): hazard catalog + VTEC mapping, the
+# HazardState algebra (blank() is the IDENTITY element, combine() commutative,
+# worst-wins optics / multiplying energy), Koschmieder + IMPROVE visibility
+# maths, the per-hazard severity curves (incl. a CLIFF guard comparing each
+# step's ratio against the median — a previous dust curve did nothing until 0.8
+# severity then collapsed 2.4 km -> 90 m), the smoke-vs-dust fine-mode
+# disambiguation (both events push PM2.5/PM10/AOD the same way; PM2.5/PM10 is
+# what tells them apart), the AirQualityService parser incl. a NEW YEAR window
+# crossing, the risk profile from canned VTEC history + the climatology
+# fallback, and AtmosphereApplier's identity guarantee — resolve(base, blank())
+# returns base FIELD FOR FIELD, which is what makes "feature off => not one
+# pixel changes" true. Run --import first:
+Godot.exe.exe --headless --path . --script core/weather/extreme_weather_selftest.gd
+# Extreme weather capture (WINDOWED): shoots the settings tab through its real
+# entry point, then a clear baseline and a severity ramp per simulated hazard
+# from one fixed viewpoint with distant terrain in frame, plus a night shot
+# (where a daylight-ungated sky tint shows up as a brown, starless sky). DUMPS
+# every resolved number to console — visibility, fog density, sun tint, AOD,
+# AQI, DNI/GHI — because a PNG cannot tell you whether the fog is 900 m or
+# 9 km, and that difference is the whole feature. Snapshots and byte-restores
+# user://extreme_weather.cfg. NOTE the scene renders non-deterministically
+# (TAA), so two identical runs produce different PNGs — pixel-diffing cannot
+# prove the no-op property; the selftest identity assertion is what does:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=weather --shots-dir=<label> --quit-after-capture
 # Site Report metrics/data + UI-compile self-test (offline, deterministic):
 Godot.exe.exe --headless --path . --script core/report/site_report_selftest.gd
 # NPC population self-test (offline, deterministic — SpaceRegistry tagging/
@@ -141,7 +186,51 @@ Godot.exe.exe --headless --path . --script core/report/site_report_selftest.gd
 # starved runs, brief-outage recovery, enrichment ceiling lift + social
 # clustering, departure/contagion/collapse cascade + resilience buffer,
 # weather multiplicative gating, chore board windows/claims/credit/serialize,
-# chore-vs-need preemption and productivity scaling;
+# chore-vs-need preemption and productivity scaling, and the v2 crew board
+# (stacking claims to max_workers, quorum-gated credit incl. the v1
+# credit-without-claim back-compat for single-worker chores, dependency
+# holds + deleted-dep unblock, roster filter, add_plan wiring a whole
+# NpcCrewPlan schedule with a shared build-site target, site rules
+# night_shift/tools_down incl. persistence, haul-route storage +
+# worker_index claim order = brigade station assignment; NOTE the suite must
+# never reference NpcPopulationBridge — bare PerfMonitor autoload fails the
+# --script compile and silently aborts the test function while PASS prints);
+# SITE PROJECTS (the unified camp-lifecycle mechanic): completion-keeps-
+# progress semantics (remaining()==0 for a done cycle — the re-work-loop
+# fix; daily chores re-arm via _arm_cycle when next due), atomic add_plan
+# refusal at MAX_CHORES(160), per-task target/effect/carry_to/haul fields,
+# held pause flag, uncapped priority ordering, the chore_completed
+# toast-only signal, the two-leg carry FSM (chore_leg pickup→carry_to,
+# preemption leaves the crate unmoved — the move is the COMPLETION effect,
+# dispatched once by the bridge's post-tick sweep with effect_done as the
+# persisted fire-once flag), the carrying/carry_prop dot payload, and
+# SiteProject/SiteProjectStore (status sync incl. deleted-chore=skipped,
+# labour-weighted rollup, build_progress fractions for the ghost reveal,
+# breakdown_spec_rows, store cap/round-trip); round 2: stage_effects
+# (incremental world effects fired as progress crosses thresholds —
+# due_stage_effects, fire-once per stage, completion brings stragglers due,
+# persistence with fired flags), unload_spec_rows strategy split (round-trip
+# carry rows vs ONE brigade crew chore whose stage effects move the crates
+# while the relay line works; brigade station workers read as carrying in
+# the dot payload), and the muster fixes (gathering crew chores jump the
+# available_for queue; quorum patience scales with crew fraction present);
+# round 3: SiteProject.breakdown_progress (the REVERSE lifecycle's visuals —
+# emits ALL five element keys because _apply_build_progress defaults a
+# MISSING key to 1.0, which is why the old panels-only push left the frame
+# solid; beams deliberately stay 1.0 throughout since fold_pack's pack_prop
+# awaits the stow sweep and the fold IS the beam visual; monotonic, and a
+# design with no panels keeps its nonexistent panels whole), the LIFO unload
+# row order (round-trip priorities ascend, gate above all; every set-down
+# carries y_offset 0 + collision_enabled so a crate hauled off a container
+# stack lands ON THE GROUND), NpcRig.role_needs_offset_curve (four lines
+# pinning the carry-clip drop-in hazard: a lift MEASURES as descend and the
+# offset curve would sink the figure ~0.7 m mid-pickup, so ROLE_CARRY is
+# forced past classify() to take the constant path), and NpcExperimentLab
+# (the sim-backed variant comparison — determinism, chunked==blocking,
+# simulated never beats the planned lower bound, unmeetable quorum names
+# every row at ZERO tick cost, hour-cap DNF, n/a haul rows on a non-delivery,
+# signature stable under progress_h churn but tracking min_workers/roster,
+# and force_strategy "" byte-identical to the unforced unload_spec_rows);
 # Tier 3: nav-grid region/bake/slope-vs-steps/stamping/fingerprints, and A*
 # mazes, step + drop asymmetry, staircase climbing, climb-cost detours,
 # route cache/lane jitter/determinism, path following + teleport degradation;
@@ -204,9 +293,25 @@ Godot.exe.exe --headless --path . --script core/conduits/pipe_kit_selftest.gd
 Godot.exe.exe --headless --path . --script core/conduits/pipe_kit_extractor.gd
 # LinkageLab designer self-test (offline — solver/kinematics pinned to JS
 # reference values, support/panel geometry, structure builder, world-placement
-# runtime, solar/graph handoff, modal compile smoke; extend with every solver
+# runtime, solar/graph handoff, modal compile smoke; PLUS the hardware/BOM port:
+# v30 hardware-assembly round-trip, LinkageBom counts cross-checked against the
+# SOLVER's own bolt/bracket arrays (the web app never did this), the packing
+# mass fence, drill templates, the BOM→crew fabrication graph incl. a frozen
+# back-compat literal, build-guide + hardware-modal compile smoke, hardware
+# axis-stack layout/snap/mirror maths JS-PINNED via tools/linkage_hw_reference.mjs,
+# part meshes (incl. an outward-normal
+# WINDING assertion), the credits lockstep guard, and the hardware-spacing
+# parity proof — `is_same(effective_params(p), p)` when full detail is off,
+# which is what protects every pinned value here. Extend with every solver
 # change; run --import first so new class_names register):
 Godot.exe.exe --headless --path . --script core/linkage/linkage_selftest.gd
+# Packing data model (offline — PACKING_PLAN.md Phase 0: PackedSpec
+# resolution/normalization, per-type mass+dims heuristics, the shipped-model
+# packing-decision coverage guard (a new structures/tools catalog model FAILS
+# this until it appears in CURATED_MODELS / DYNAMIC_MODELS / NON_PACKABLE),
+# and the LinkageLab packed envelope solved at the EFFECTIVE min fold angle;
+# run --import first so PackedSpec registers):
+Godot.exe.exe --headless --path . --script core/packing/packing_selftest.gd
 # Process recipes + chore ledger + workflow runner (offline — normalize/catalog,
 # legacy batch migration, scrub-safe progress, hybrid chore confirm, part credits,
 # workflow step advance; run --import first so class_names register):
@@ -214,10 +319,34 @@ Godot.exe.exe --headless --path . --script core/machines/process_recipe_selftest
 # Portable .esim site package (offline — validate/build, ghost strip/remap,
 # share-code + file round-trip, summary counts; run --import first):
 Godot.exe.exe --headless --path . --script core/esim/esim_selftest.gd
-# Multiplayer helpers (offline — join-code v2 round-trip/expiry, bare ip:port,
+# Multiplayer helpers (offline — join-code round-trip/expiry, bare ip:port,
 # protocol reject, avatar color, transfer codec, chat sanitize/mute, Phase 6
-# password/allowlist/rate-limit + headless host bind smoke; run --import first):
+# password/allowlist/rate-limit + headless host bind smoke, which now also pins
+# that a hosted code carries a candidate address list AND still mirrors the LAN
+# address into the top-level ip/port every pre-v3 consumer reads; --import first):
 Godot.exe.exe --headless --path . --script core/multiplayer/multiplayer_selftest.gd
+# Discord integration (offline — every security-relevant decision in core/discord/
+# is a PURE class_name file precisely so it can be fed fixtures here instead of
+# only against a live Discord app). Covers: PKCE pinned to the RFC 7636 Appendix B
+# vector (catches every base64url/padding slip at once — a slip otherwise surfaces
+# only as an opaque `invalid_grant` from Discord's token endpoint); the community
+# file codec INCLUDING the SSRF guard that a webhook URL must be on discord.com;
+# the session-directory record's parse/staleness/seq and its ELECTION arbitration
+# (two simultaneous claims, exactly one winner, loser flips to joining); the gate
+# verdicts over canned /oauth2/@me + guild-member bodies (notably that a token
+# minted by any OTHER Discord application is rejected); deep-link injection
+# rejection; reachability classification incl. the 100.64/10 CGNAT block and a
+# sweep of every UPNP_RESULT_* constant; relay batching (every payload must carry
+# allowed_mentions.parse == [] or an in-game "@everyone" pings the whole server);
+# telemetry redaction; the admission hold-vs-kick states; join-code v3 plus a
+# FROZEN v2 literal so codes already pasted into Discord keep decoding; the
+# DiscordIdentity offline contract + loopback-port binding; the community STORE
+# (snapshots and byte-restores the player's user://communities + active pointer,
+# same write-discipline as the veg harnesses); and an END-TO-END election driven
+# through a FakeDiscordHttp stand-in — empty directory wins, live host stands
+# down, stale host frees the seat. That last one is awaited and deliberately
+# waits out the real confirm delay, because the delay IS the mechanism:
+Godot.exe.exe --headless --path . --script core/discord/discord_selftest.gd
 # Terrain live-fetch smoke test (NETWORK — elevation + imagery for one site):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_fetch_smoketest.gd
 # Parametric SCAD store (offline — -D/param-set literal formatting, param-set JSON,
@@ -239,6 +368,29 @@ Godot.exe.exe --headless --path . --script core/scad/scad_import.gd -- --src="<p
 # In-game store: press H in a loaded map (ScadStore + scenes/ui/scad_store_modal.gd;
 # ScadPartBuilder MODEL_ID scad_part places rendered parts via PlacedProp).
 
+# Packing Lab capture (WINDOWED — PACKING_PLAN.md Phase 4): sweeps the site
+# cargo (graph + placed props, same sweep as the Site Report card) into the
+# interactive Packing Lab modal, auto-packs it into the 15' and 26' trucks,
+# orbits, then loads the builtin StarShade kit into a 20' container — one PNG
+# per state for visual review. Read-only, nothing persisted:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=packing --shots-dir=<label> --quit-after-capture
+# Hardware Detail capture (WINDOWED): opens the hardware editor through Main's
+# real entry point (so it lands on its own CanvasLayer above the HUD) and shoots
+# one PNG per state — each assembly seated on the frame, exploded, standalone,
+# selected-with-axis-gizmo, and arch mode — then DUMPS to console how many
+# joints each assembly got, how many flipped their stack axis, and the worst
+# "anchor error": the distance from each seat's bracket hole to the V-stack
+# pivot it clamps. That number must be 0.000000; anything else means the
+# placement is back on the wrong pivot. Joint placement is unreviewable from a
+# description — the port shipped anchored on the H-ring pivot, with no
+# flipStackAxis and a 90°-yawed H-centre frame, and all three RENDERED:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=hardware --shots-dir=<label> --quit-after-capture
+# Regenerate the hardware LAYOUT + PLACEMENT reference values from the real web
+# app (writes core/linkage/testdata/hw_placement_ref.json in place; run from the
+# repo root). Part 2 solves with showHardwareFullDetail=false + hwDetailMode=true
+# — the only combination that emits placements while leaving the beams identical
+# to linkage_reference.mjs's cyl_default, which the printed cornerSum proves:
+node tools/linkage_hw_reference.mjs ../LinkageLab
 # Visual playtest capture (WINDOWED — cannot be --headless): launch a user map
 # by CLI, freeze a daytime clock, hide HUD, shoot drone-orbit + street PNG sets
 # (+ manifest.json) to user://screenshots/<label>/ for agent/visual review:
@@ -322,8 +474,97 @@ Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/m
 # falls, people rage-quit, the roster shrinks, the colony collapses. Do NOT
 # add a >6 h time jump to the starvation phase — that takes the coarse
 # catch-up path and empties the camp before anything can be observed.
+# It also seeds a plain 0.5 h scheduled chore and asserts it reached
+# `done_day >= 0` during the ambient day: movement and consumption were always
+# checked, but WORK REACHING COMPLETION was the gap the hygiene stall lived in
+# (see the settlement plan) — the same hole the selftest had one level down.
+# Note avatars are counted by TYPE, not by the host's child count: the host
+# also parents the pooled CrewSiteMarker nodes, so a child count reads high
+# whenever crew work is on the board.
 # Cleans its cap_pop_* graph items off the map autosave:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=population --shots-dir=<label> --quit-after-capture
+# Settlement view capture (WINDOWED — the mode's whole risk surface is
+# invisible to every other harness): opens the view through Main's REAL entry
+# point and shoots five zoom stops (eye 1.7 / street 12 / block 60 / camp 300 /
+# site 1200 m), dumping height, pitch, near/far, scale label and prop-cull
+# reach per stop. At each stop it drives SiteTargetPicker at a known agent's
+# screen position — that is the ANGULAR pick radius (`t·tan(0.6°)`) end to end,
+# the one line that makes a person clickable at every zoom and which is
+# invisible to both code review and screenshots. Beyond ~52 m the radius
+# exceeds a body, so picking a NEIGHBOUR is correct and only the sub-4 m stops
+# demand exact identity. Ends with the anti-snowglobe assertions: the player
+# camera is current again, `time_scale` NEVER moved, and the cull override is
+# cleared. The harness parks the clock at --time BEFORE opening (the view must
+# not touch it; the harness may, or a run after sunset ships five dark PNGs):
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=settlement --shots-dir=<label> --quit-after-capture
+# NPC pose portraits (WINDOWED): stands ONE stick figure per work-pose family
+# in empty air against sky and shoots it NEAR (2.5 m) and FAR (13 m), printing
+# the family asked for beside the clip the pose machine actually chose — which
+# is what separates "this pose looks wrong" from "the machine picked the wrong
+# clip", two different bugs in two different files. `--capture=npc-anim` cannot
+# do this job: it observes only is_rigged() avatars, and the rigged Mixamo body
+# aliases all seven families onto its single `work` clip, so the families only
+# exist on the stick figure. Traps it handles: it FORCES NpcDisplayPrefs to
+# STYLE_SIMPLE and restores it (a global persisted player preference); the
+# avatar must be add_child'ed because _simple.pose runs only from _process;
+# `paused` must be false even though the harness freezes time_scale; the
+# transitions are ONE-SHOTS so they are pinned via the anim_map slot override
+# rather than waited for; `carrying` OVERRIDES the family so it is set for
+# haul_hold only; and the camera sits BELOW the waist looking up so the horizon
+# never crosses the silhouette:
+Godot.exe.exe --path . --windowed --resolution 900x900 -- --user-map=mtvernon --capture=npcpose --shots-dir=<label> --quit-after-capture
+# Labour merge verify (WINDOWED, console-only, needs a REAL TerrainLoader map):
+# parks a processor on a `chore_hours` step with the ledger at infinite_labor
+# false and ZERO abstract pool, then asserts the whole merge: the step asks for
+# CREW (not a confirm), a chore is minted AT the machine's bound prop (so
+# people walk to it), somebody finishes it and the step resumes, and — the
+# contract no screenshot can show — `chore_hours_consumed_total` moves by
+# EXACTLY the step's hours. A second accounting path shows up here as a
+# doubling and nowhere else. Cleans its cap_lab_* items and prop afterward:
+Godot.exe.exe --path . --windowed --resolution 640x480 -- --user-map=mtvernon --capture=labour --quit-after-capture
+# Site Projects end-to-end verify (WINDOWED, needs a REAL TerrainLoader map —
+# the delivery path is loader-only): seeds a 12-person pop-driven habitat +
+# tanks + spaces, delivers the StarShade kit, and walks the WHOLE unified
+# camp-lifecycle mechanic with console asserts + a PNG per stage: crates
+# spawn AT the container door carrying delivery identity + staging slots and
+# an unload project lands on the board; a CARRYING dot is observed and the
+# crate record moves to staging via the chore's COMPLETION effect (the world
+# only changes when labour is done — a preempted carry moves nothing); a
+# linkage build project grows the ghost structure's beam
+# visible_instance_count with real labour; the erect phase's unpack effect
+# plays the deploy sweep (packed:false, linkage_deployed, build_state
+# cleared); the reverse breakdown project folds it back to packed:true.
+# Round 2 added a SECOND delivery (starter_camp, 7 crates) whose strategy
+# NpcHaulModel picks from crew density — brigade = one crew chore with the
+# crates flowing as stage effects — asserting every crate reaches its
+# staging slot either way. NOTE the carrying flag is sampled at a CRAWL
+# (~7×, per-frame polls) before the clock speeds up: at 720× a carry leg is
+# sub-frame and a 0.5 s poll never catches it.
+# Round 3 asserts: crates spawn STOWED INSIDE the container (inside the
+# interior footprint, at the solved stack height) and a hauled crate is set
+# down with y_offset ~0 and no `stowed_in` — the XZ checks pass either way,
+# so a crate left floating at stack height would otherwise ship invisible
+# (and a stale `stowed_in` silently BLOCKS the erect phase's unpack, which
+# is how that bug was caught); the teardown strips hardware while the beams
+# stand (05a_stripping); and the experiment lab runs, dumping the whole
+# variant table (sim / plan / drag / status per row) to console, because a
+# PNG cannot tell you whether a makespan is 6 h or 60 h.
+# Runs the board on night_shift and steps the clock by time_scale (never a
+# >6 h jump — the catch-up path would reroll the roster). Cleans its
+# cap_prj_* graph items off the map autosave:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=project --shots-dir=<label> --quit-after-capture
+# Settlement view (WINDOWED): opens the mode through Main's REAL entry point,
+# seeds a small crew (so the picking assertions have somebody to click), and
+# shoots five zoom stops — eye 1.7 / street 12 / block 60 / camp 300 / site
+# 1200 m — dumping what a PNG cannot show: height, pitch, near/far, the scale
+# label and the prop-cull override. At each stop it projects a known agent to
+# screen and resolves the ray BACK through SiteTargetPicker, which is the
+# angular-pick-radius property end to end; past ~500 m the radius exceeds the
+# spacing between people, so "picked a neighbour" is correct and only "picked
+# nobody" fails. Ends on the ANTI-SNOWGLOBE assertions: the player camera is
+# current again, the prop-cull override is back to 0, and `time_scale` NEVER
+# MOVED — soi_snowglobe_camera freezes the clock, and this view must not:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=settlement --shots-dir=<label> --quit-after-capture
 # NPC animation observation on a REAL saved map (WINDOWED, READ-ONLY): unlike
 # --capture=population (which SEEDS its own spaces/tanks/habitat and would
 # overwrite a curated site), this finds whatever pop-driven habitat is already
@@ -451,6 +692,16 @@ now rejects near-uniform mosaics as failed layers. `_make_world_roof_material()`
 on `building_roof.gdshader` so roofs inside the patch sample the REAL aerial
 photo (procedural shingle shade layered on top via `ortho_relief`; detail-drape
 fallback remaps UV2 by extent ratio; outside-patch/no-texture → procedural).
+**`ortho_uv_scale` must be `BuildingBuilder.roof_ortho_uv_scale(ortho_half_extent)`
+— `ORTHO_HALF_EXTENT_M / <half-extent of whatever texture is actually bound>` —
+in BOTH the hyper and detail-drape branches, not just one.** The hyper branch
+used to leave it at its `1.0` default, which is only correct by coincidence at
+quality tiers Low/Medium (`QUALITY_HYPER_HALF_EXTENT` = 500 m there, matching
+`ORTHO_HALF_EXTENT_M`); at High/Ultra (1000/1500 m) it silently mis-registered
+every roof, worse the farther a building sits from the site center — a bug that
+was invisible until a session raised the quality tier specifically to get
+sharper imagery. Pinned by `_test_roof_ortho_uv_scale` in
+`building_builder_selftest.gd`.
 Wall surface UV2 = `(WallMode + 0.5, seed01)`: `building_wall.gdshader` modes
 LAP(0, byte-identical original)/TRAILER/CORRUGATED/PLYWOOD/STUCCO +
 `weathering` uniform; `resolve_wall_mode` maps `building:material`/
@@ -598,6 +849,26 @@ hemisphere symmetry, and `tracking_offset_from_normal` regression checks
 pinned to the GLB's measured rest-pose bias — the identity is covered without
 loading the GLB).
 
+**Near-field ground detail (Terrain options → "Near-field ground texture").**
+`terrain_detail.gdshader` blends a tiling ground albedo/normal (CC0 AmbientCG
+`ground049a`, `use_detail_textures`; procedural fBm fallback when the files are
+absent) over the aerial photo inside `near_detail_start..end` (4–30 m from the
+camera) to give the flat ortho real relief up close. The set is DIRT/SAND — it
+sells playa/desert/gravel and fights grass and forest floor, so it is a player
+toggle (`[terrain] near_field_detail`, default true = the long-standing
+behaviour). Turning it off restores the plain ortho colour, which also exposes
+how soft the underlying imagery is — the grain was partly hiding that.
+The setting is applied in TWO places and needs both: `TerrainBuilder`'s
+`near_detail_enabled` static is stamped into every material `make_terrain_material`
+mints (the SHADER's own default is true, so a terrain rebuild/refresh would
+otherwise silently switch it back on), and `TerrainLoader.set_near_field_detail`
+pushes it live onto the materials already on screen so the toggle is instant.
+The live push walks the whole `Terrain` subtree rather than the named
+Ground/DetailGround pair the snow push uses, because the HeightField sculpt tiles
+carry the same shader and a tile left on the old setting is a visible seam.
+`_run_load_sequence` seeds the static from config before anything builds.
+Pinned by `_test_near_detail_toggle` in terrain_selftest.
+
 **Terrain data services (autoloads, copy the weather_service HTTP+cache+deferred
 pattern):**
 - `core/terrain/elevation_service.gd` (`ElevationService`): DEM grid. No-key
@@ -614,13 +885,61 @@ pattern):**
  (`TerrainBuilder` + `TerrainSeamDiag`): vertical offset alignment in the overlap
  ring, adaptive feather (80–800 m from boundary delta), exterior coarse ring blend,
  and player spawn gated until composed heightfield is ready. Configurable extents:
- `MapDefinition.half_extent_m` / `detail_half_extent_m` / `osm_half_extent_m` +
- location picker Advanced + in-game Terrain options. The `terrain_loader` used to
+ `MapDefinition.half_extent_m` / `detail_half_extent_m` / `osm_half_extent_m`,
+ user-adjustable via Terrain options → "Advanced terrain size" (World size / Hi-res
+ DEM-imagery / Buildings-water-veg SpinBoxes, `terrain_options_ui.gd`), which calls
+ `TerrainLoader.apply_terrain_extents()` — this restores a control surface that
+ briefly existed as location-picker-only UI and was later dropped as collateral
+ damage in an unrelated batch commit; `apply_terrain_extents` itself was never
+ broken, it just had no caller. Works for an ALREADY-VISITED site, not just at
+ map creation, because per-site cache metadata
+ (`TerrainCacheSettings.get_meta_extents`) always wins over the global
+ `terrain_config.cfg` once a site has loaded once — hand-editing that config file
+ does nothing for a returning site. The `terrain_loader` used to
  gate detail behind post-terrain phases — detail now blocks terrain build. DEM caches,
  so the first visit per site pays the fetch once (inside the blocking load sequence)
  and every reload is an instant cache hit. Optional upgrade = OpenTopography SRTM 30 m
  when `user://terrain_config.cfg [opentopography] api_key=` is set (gitignored, never
- commit). 429/5xx → backoff retry (MAX_RETRIES=3). **Open-Meteo enforces a DAILY quota
+ commit). **3DEP 1 m lidar detail patch (key required — and gated further, see
+ below):** with a key, a US `detail` request whose square is ≤ `USGS1M_MAX_SIDE_M`
+ (3200 m, so the 3 km default qualifies) fetches `datasetName=USGS1m` off the same
+ `usgsdem` endpoint — the USGS-published bare-earth DTM derived from the 3DEP
+ lidar projects, ~0.1 m accurate where Copernicus/SRTM carry 1–2 m of their own
+ noise. **OpenTopography restricts USGS1m itself to academic-verified accounts —
+ confirmed empirically, an ordinary self-registered key gets HTTP 401 "restricted
+ for academics" at every site regardless of coverage** (see
+ https://opentopography.org/content/how-access-restricted-data-opentopography, or
+ email info@opentopography.org re: an Enterprise key). USGS10m has no such gate,
+ so it is what most players actually get; `_retry_opentopo_coarser` classifies the
+ 401 as PERMANENT same as a genuine coverage gap (both correctly fall back), but
+ records which one actually happened (`usgs1m_miss_reason`) rather than collapsing
+ them into one generic message, since a player can't do anything about a coverage
+ gap but might chase down academic access for the 401 case. Surfaced live in
+ Terrain options → Advanced terrain size (`TerrainLoader.get_detail_dem_status`,
+ filename-only lookup via `ElevationService.cached_dem_source` — no need to decode
+ a 100+ MB cached grid just to answer "which one loaded"). **That grid arrives
+ in UTM METRES, not degrees** — every other source here is geographic, and feeding a
+ UTM header through the degrees path is a SILENT failure: `(lon − 617228)/1.0` clamps
+ every sample onto one corner cell, returns a dead-flat plane, and `grid_is_usable`
+ then rejects it, so it reads as "1 m did nothing" rather than as a bug.
+ `resample_aaigrid_to_bbox` therefore dispatches on `aaigrid_is_projected` and
+ forward-projects each target sample via `GeoMath.lonlat_to_utm` (Snyder PP 1395;
+ WGS84 ellipsoid — the ~1 m CONUS NAD83 shift is sub-cell and unmodelled). A
+ projected grid that fails the centre-containment gate returns EMPTY and drops a
+ rung rather than being stretch-fitted (that would misregister terrain vs OSM and
+ imagery while looking plausible). Coverage is patchy by nature — 1 m only exists
+ where a project flew — so `_retry_opentopo_coarser` falls USGS1m→USGS10m on the
+ same endpoint (the one rung allowed for the `detail` tag), and a PERMANENT failure
+ writes `dem_usgs1m_miss_<token>.flag` so the next load skips straight to 10 m
+ instead of re-pulling ~190 MB; transient 429/network failures deliberately do NOT
+ latch it. The flag carries the `dem_` prefix + standard coord token so
+ `TerrainCacheSettings.invalidate_dem` sweeps it with the rest of the generation.
+ No CACHE_VERSION bump was needed: `opentopo_usgs1` is a new cache-source key, and
+ the broken projected path never cached anything (it was rejected upstream).
+ Note a 3 km 1 m square is ~9 M cells ≈ 190 MB of ASCII (measured: 26 s to pull,
+ 10 s to parse) resampled down to `DETAIL_GRID_N` 512² ≈ 5.9 m/vertex — the win is
+ accuracy and noise floor, NOT resolution; raising the mesh resolution to actually
+ express 1 m is a separate, unmade decision. 429/5xx → backoff retry (MAX_RETRIES=3). **Open-Meteo enforces a DAILY quota
  per IP** — when a batch returns `{"error":true,"reason":"Daily API request limit exceeded"}`
  (`_is_openmeteo_daily_limit`), the service fails FAST (no wasteful retries),
  latches `is_openmeteo_daily_exhausted()`, and the loader then SKIPS the no-key
@@ -1081,7 +1400,11 @@ autoload holds the shared logic; `TimeUI` only forwards signals for backward com
 | ElevationService | core/terrain/elevation_service.gd | DEM grid: Open-Meteo (no key) / OpenTopography (key); `elevation_ready/failed/progress` |
 | ImageryService | core/terrain/imagery_service.gd | ESRI World Imagery XYZ drape; `imagery_ready/failed/progress` |
 | AiImageryService | core/terrain/ai_imagery_service.gd | Opt-in Gemini "hero patch" ground enhancement (image in/out); `ai_imagery_ready/failed`; key `[gemini] api_key` / `GEMINI_API_KEY` |
-| MultiplayerSession | core/multiplayer/multiplayer_session.gd | Listen-server co-presence (ENet host/join, avatars, host clock) + Phase 3–4 design share/ghost-merge + live graph/props sync (`Design` child) + Phase 5 session text chat (`Chat` child; Enter compose, proximity bubbles, mute, Discord invite deep-link) + Phase 6 hardening (join-code expiry, optional password, trusted-key allowlist, peer/snapshot caps, rate-limit kicks, local `user://mp_telemetry.log`); lobby via Timeline **Multiplayer** chip |
+| DiscordIdentity | core/discord/discord_identity.gd | "Sign in with Discord" via OAuth2 **authorization-code + PKCE, no client_secret** (needs the app's "Public Client" toggle — see LOCAL_CONFIG.md). Loopback `TCPServer` on one of 34199/34200/34201 catches the callback; refresh token in `user://discord_auth.cfg`; scopes deliberately limited to `identify` + `guilds.members.read`. Signals `sign_in_completed/failed`, `signed_out`, `membership_checked` |
+| DiscordDirectory | core/discord/discord_directory.gd (+ `Relay` and `Population` children on MultiplayerSession) | "Who is playing right now", as ONE webhook message edited in place (no server, no bot). Read/heartbeat/vacate + the host election; `play_together()` is the whole one-button flow. Polls only while the lobby is open or we host — the webhook route budget is shared by the community. Signals `directory_changed`, `directory_error`, `election_result(won, record)` |
+| MultiplayerSession | core/multiplayer/multiplayer_session.gd | **v3**: UPnP reachability + candidate-address connect ladder + Discord admission (see below). Listen-server co-presence (ENet host/join, avatars, host clock) + Phase 3–4 design share/ghost-merge + live graph/props sync (`Design` child) + Phase 5 session text chat (`Chat` child; Enter compose, proximity bubbles, mute, Discord invite deep-link) + Phase 6 hardening (join-code expiry, optional password, trusted-key allowlist, peer/snapshot caps, rate-limit kicks, local `user://mp_telemetry.log`); lobby via Timeline **Multiplayer** chip |
+| AirQualityService | core/weather/air_quality_service.gd | Open-Meteo/CAMS hourly aerosols (pm2_5, pm10, dust, AOD, us_aqi); `air_quality_ready/failed` |
+| ExtremeWeather | core/weather/extreme_weather_director.gd | Resolves hazards as a PURE FUNCTION of abs hours; `hazard_began/ended`, `risk_profile_ready` |
 | MapContext | core/terrain/map_context.gd | Transient lat/lon hand-off to generated map scene (pre-`change_scene`) |
 | CursorController | scenes/ui/cursor_controller.gd | Mouse capture policy: play/pause/modal stack |
 | SimSettingsController | scenes/ui/sim_settings_controller.gd | Date/location/clouds/lighting/live mode; `live_mode_changed` / `simulation_started` |
@@ -1430,7 +1753,7 @@ to metres (×0.0254) only in the mesh builder.
   electrical specs at the closed angle (the Phase 6 handoff numbers);
   `orientation_from_normal(n_world)` → tilt + compass azimuth (CelestialClock
   convention: north −Z, east +X, clockwise).
-- `linkage_selftest.gd`: offline deterministic (349 checks) — in CLAUDE.md validation
+- `linkage_selftest.gd`: offline deterministic (1122 checks) — in CLAUDE.md validation
   list; run `--import` first so class_names register.
 
 **World placement + live folding.** ModelCatalog procedural entry delegates to
@@ -1458,8 +1781,359 @@ array keeps its node/wiring but contributes NO capacity to SolarUI
 `.gamebundle.json` import still works unchanged (static GLB); additionally, when a
 bundle carries the v30 `project` block (`DesignBundle.project_from_bundle`), TimelineUI
 offers "Open in Linkage Lab" so the web design becomes live-foldable natively.
-**Deferred:** full BOM/costs/actuator analysis, hardware full-detail assemblies, build
-guide, kinematic RCP continuation solver.
+**Hardware detail + BOM + build guide (ported 2026-08-04).**
+
+- **`LinkageBom`** (`core/linkage/linkage_bom.gd`, pure static) — the whole
+  bill of materials: counts, priced line items, masses, dimensions, actuator
+  stroke, panel electricals, per-joint `assembly_steps`, plus `to_csv` /
+  `to_json` / `fab_counts`. Counts are derived ANALYTICALLY from the params
+  (as `gatherBOMData` does), because the solver only emits bolt geometry when
+  "show bolts" is on while the hardware exists regardless; the selftest
+  cross-checks the two against each other, which the web app never did.
+  **Masses are metric** — `PackedSpec.WOOD_KG_M3` (470) and steel 7850 —
+  because `packed_spec_for` now reduces the SAME extracted helpers
+  (`bracket_mass_kg` / `bolt_mass_kg`), so a design's shipping weight and its
+  BOM weight can never disagree. The web app's lb constants (`woodDensity
+  0.018`, 0.5 lb/bracket, 0.01 lb/bolt) are deleted, not converted, so figures
+  run ~6% lighter than a web export. **Two deliberate divergences:** stack
+  washers are BOM-only and must NEVER be added to `packed_spec_for` (it would
+  move the pinned shipping masses in packing_selftest), and cap uprights ARE
+  priced here though `gatherBOMData` omits them — flagged in `bom.warnings`.
+- **`LinkageDrillPlan`** — hole patterns per beam type. The reciprocal R#/X#
+  positions are derived ANALYTICALLY from support-beam geometry rather than by
+  porting `rcp-ring`/`rcp-cross` bolts: the web app only uses those bolts as a
+  pass-through (it projects each back onto a representative beam), and adding
+  ~3n bolts would move `get_stats().bolt_count`, `packed_spec_for`'s mass and
+  the crew graph at once.
+- **Hardware assemblies** — `LinkageHardware` (data model + `ensure`),
+  `LinkageHwLayout` (axis-stack maths: `compute_axis_layout`,
+  `assembly_sandwich_gap`, snapping, mirror coupling), `LinkageHwPresets`
+  (the 9-part library under `core/linkage/hardware/`), `LinkageHwParts`
+  (procedural meshes) and `LinkageHwAssemblyBuilder` (per-part
+  MeshInstance3D + StaticBody3D so Godot can ray-pick them — a mesh with no
+  body is invisible to the physics server). `params.hardware_assemblies` is
+  stored in the web app's own **camelCase** shape, the one deliberate casing
+  exception in this port, so unknown keys from a newer web build survive a
+  round-trip instead of being silently dropped.
+- **`LinkageHardwareSpacing` is THE choke point** where hardware takes over the
+  structure's stack gaps and bracket dimensions. `effective_params(p)` is
+  called at exactly two sites — `LinkageSolver.solve` and
+  `LinkageGeometry.support_beams` — and **returns `p` ITSELF when
+  `show_hardware_full_detail` is false**, which is what makes the flag-off path
+  bit-identical to the pre-hardware port. ⚠ **That flag defaults FALSE and must
+  stay that way**: every pinned reference value in `linkage_selftest.gd` was
+  generated by running the real JS app with the `hw*` globals mocked off
+  (`tools/linkage_reference.mjs`), so flipping the default silently re-pins the
+  entire suite to a different configuration. The selftest asserts the identity
+  with `is_same()`, not value equality, so it is protected by construction.
+- **Build Guide** (`scenes/ui/linkage_build_guide_modal.gd`, 📋 in the Lab
+  topbar or the prop edit drawer) — summary, editable-price BOM tree, weight
+  breakdown, cut list, `_draw`-painted drill templates + U-bracket detail
+  (`LinkageGuideCharts`), the **assembly sequence** from `bom.assembly_steps`,
+  the crew Gantt, actuator and electricals. **Hardware Detail**
+  (`linkage_hardware_modal.gd`, 🔩) — assembly tabs, explode slider, per-axis
+  part cards with preset pickers, ray-pick + drag-snap along a part's own axis.
+  Both live on `UITheme.LAYER_MODAL + 1` so they stack OVER the Lab;
+  `CursorController` keeps a modal stack, so Esc pops them one at a time.
+- **What makes the hardware preview read correctly** (each of these looked
+  "nearly right" while wrong):
+  (1) `LinkageHardware.sync_beams_from_structure` re-cuts every preview beam
+  from the DESIGN's own members (V-beams FULL length, H-beams the web's own
+  8–24″ segment rule — both per `hwSyncBeamPartFromState`); (2)
+  `LinkageHwParts.beam_mesh` drills real bolt holes and translates the member
+  so its ALIGNMENT hole sits on the stack axis; (3) every part is anchored on
+  its axial CENTRE and `flipAxis` is a half-turn about that centre — anchoring
+  on the start looked identical for straight parts but slid every flipped part
+  a full part-length out of its slot; (4) `part_transform` adds
+  `bracket_hole_y` to the cross offset on HORIZONTAL axes, because that chain
+  hangs off the bracket's side wall, not its centre; (5) timber uses
+  `TRANSPARENCY_ALPHA_DEPTH_PRE_PASS` — plain no-depth alpha stacked every
+  internal face of the drilled mesh into a milky mess. **Layout numbers are
+  pinned against the REAL web app**: `tools/linkage_hw_reference.mjs` runs
+  hardware-detail.js in node (browser + THREE stubs) and
+  `_test_hw_layout_reference` pins every default part's base/len/rank/centre
+  per axis. The bracket GLB is THREE meshes under differently scaled nodes —
+  `glb_bracket_vertices` merges them all (single-mesh loading renders one side
+  plate that reads as a stray nut) and `_build_glb_bracket` follows the web's
+  exact pipeline: authored glbRotX/Y/Z euler, auto-orient longest-axis-vertical,
+  fit to authored height, recentre.
+- **The part view IS the in-structure view** (default ON, = the web's
+  `hwDetailMode`): the DISPLAY frame is solved with simple brackets/bolts
+  hidden (`hideLegacyHardware`), a separate flags-ON solve feeds
+  `LinkageHwPlacement` (brackets seat outer/inner joints; the `"center"`
+  sub-type bolts seat hCenter at BOTH ring crossings and vCenter at the
+  V-stack middle — 56 placements on the stock design), and EVERY detailed
+  assembly is stamped at EVERY joint, `exclude_beams` everywhere since the
+  real members are the beams. The editable stack sits on the active
+  assembly's first seat; other assemblies get pick-body-stripped context
+  builders. Traps: a seat must apply
+  `LinkageStructureBuilder.ground_offset_for_frame` or hardware floats off
+  the frame; a seat carries NO scale (parts bake the inch conversion); camera
+  re-aims along the joint's radial FROM THE RING'S CENTRE (the solver builds
+  module 0 AT the world origin, so the structure's middle is nowhere near it).
+  ⚠ `LinkageHardwareSpacing`'s substituted-params cache is keyed on the FULL
+  `to_config()` hash — it bakes every field, and a spacing-inputs-only key let
+  the modal's flags-off display solve poison the flags-on placement solve
+  (every placement silently vanished).
+- **Three placement invariants, all of which RENDER when broken** — the port
+  shipped with each of them wrong, and none produced an error, only hardware in
+  the wrong place. Pinned by `_test_hw_placement_reference` against
+  `core/linkage/testdata/hw_placement_ref.json`; verify visually with
+  `--capture=hardware`, whose "anchor error" must read 0.000000.
+  (1) **A detailed assembly anchors on `bracket["v_bolt_pivot"]`, NOT
+  `bracket["pos"]`.** `pos` is the H-ring pivot where the SIMPLE bracket mesh is
+  drawn; `v_bolt_pivot` is the V-stack corner the crossed uprights bolt through,
+  a bracket-hole-distance away (solver.js:1987 hands `spec.vBoltPivot` to
+  `hwAddAssemblyPlacement`). Reads as "right area, wrong relation to the beams".
+  (2) **`compute_bracket_basis` takes a 5th `flip_stack_axis`**, mirroring the
+  bolt+beam axes so an asymmetric stack sits on the correct side of the CROSSED
+  V-beams. Rule in `LinkageHwPlacement.flip_stack_axis`; ~half of all joints
+  flip. Simple brackets pass false, which is why `bracket["basis"]` and every
+  value pinned against it are untouched by the parameter existing.
+  (3) **hCentre's local +X is the RADIAL direction**, `+Y` the bolt axis
+  (`computeHwHCenterBasis`). Yawing that 90° still yields a valid right-handed
+  basis, so it renders fine while sending every `crossOffset` tangentially.
+  In ARCH mode the port deliberately diverges: the web hardcodes world-up as the
+  hCentre stack axis claiming "the H-ring bolt never tilts" (solver.js:2790),
+  but the arch's 90° X-rotation makes that bolt horizontal and collapses every
+  arch hCentre joint to one ±X yaw — so the port takes the axis from the bolt's
+  own transformed direction. Identical in cylinder mode; those rows carry
+  `skip_basis: "arch"` in the fixture.
+  Also fixed alongside: the cap-upright bracket chord spans the H-ring heights
+  (0..top_h), not the upright heights (y_min..y_max) — the web's bracket and
+  bolt blocks genuinely differ there (solver.js:2134 vs :2103) and the port had
+  copied the bolt block's into both, tilting every cap joint ~half a degree.
+- **Editing UX invariants.** Typed offsets are NOT snapped (a drag still is —
+  Ctrl suppresses it): the snap-plane list always contains the layout origin, so
+  at a 0.18" threshold a typed 0.05 was unconditionally reverted to 0 while the
+  field went on showing 0.05, which is the whole of "changing the offsets does
+  nothing". Every write echoes the STORED value back via `_sync_field`.
+  `axis_pos_from_part` returns the part's axial CENTRE and
+  `pos_assembled_for_axis_pos` is its exact inverse (round-trip pinned over
+  offset × explode × copy_index × flip) — the drag is that inverse, so a
+  half-part disagreement makes every grabbed part jump. Edits are classified by
+  `LinkageHardware.edit_requires_respacing`: only sandwich standoffs, centre-slot
+  spans and the outer bracket's dims can move the STRUCTURE, so only those pay a
+  re-solve (debounced 150 ms, forced on mouse-up); everything else is a
+  transform-only `set_part_offset`. Before this, every mouse-motion event ran
+  `set_params` + `set_fold_angle` + a full `LinkageSolver.solve`.
+  `set_explode`/`set_part_offset` call `sync_instances()` — `set_instances`
+  DUPLICATES the stack, so without it the context joints stayed frozen at the
+  pose they were cloned at. ⚠ **A clone's `transform` is LOCAL and the builder
+  it hangs under is ALREADY seated on placement 0**, so `set_instances` divides
+  that seat out (`inv * seat_transform(...)`); assigning the absolute seat
+  composes the two and puts joint i at `seat0 * seat_i`. The tell is specific
+  and misleading — joint 0 IS the builder node rather than a clone, so the
+  FOCUSED joint looks perfect while every other joint on the frame scatters.
+  Pinned by the "every context joint lands on its own seat" check (verified to
+  fail 15/15 when the inverse is removed). Clones also get
+  `material_override = null`: `duplicate()` copies the selection highlight, so
+  whichever part was selected when they were minted lit up at every joint.
+  **The BRACKET is draggable** — it is not on a stack, so it drives its own
+  `posX`/`posY` nudge (Shift for Y) through `refresh_bracket`, which is the same
+  field the inspector edits. It used to refuse in silence, and since it is the
+  biggest thing on screen it is the part a player grabs first, which reads as
+  "dragging doesn't work" rather than "not this one". Declines now say why
+  (`_flash_hint`). Verify with `--capture=hardware`, which drives REAL
+  InputEvents through the viewport — including via the Lab entry point, since
+  opening the editor standalone does not test whether the Lab's own full-rect
+  Control swallows the pointer first — and prints DRAG OK/FAIL with the inches
+  moved. The part view ghosts the surrounding timber
+  (`LinkageStructureBuilder.set_ghost_alpha`, X-ray toggle) because a joint sits
+  INSIDE the members it clamps; ghost materials are DUPLICATES, since the
+  originals are shared with every structure in the game.
+- **The crew plan reads the BOM.** `NpcCrewPlan.linkage_fab_tasks` takes
+  optional `bom_bolt_count` (replacing its `modules * 6` estimate) and
+  `assembly_steps` (splitting one flat "assemble" task into one per joint, at
+  `T_HW_PART_S` per piece). Omit both and the emitted graph is byte-identical
+  to before — a frozen literal in the selftest guards that, because
+  `npc_population_selftest` and `packing_selftest` both pin schedules over it.
+
+**Deferred:** kinematic RCP continuation solver; PDF export (GDScript has no
+jsPDF equivalent — the guide exports CSV and JSON and says so in a footnote).
+
+## Packing data model (core/packing/ — PACKING_PLAN.md, Phase 0 landed)
+
+Every physical thing gets a **packed ("shipping") spec** — dims (m, displayed
+ft/in), first-class `mass_kg` (-1.0 = unknown; NAN doesn't survive JSON), form,
+stackable/this_side_up flags, `count`, `contains` (Phase 3 nesting), `source:
+curated|computed|estimated`. `PackedSpec` (core/packing/packed_spec.gd, pure
+static) is the ONE resolver: curated (`packed` dict on a catalog entry/preset
+specs, else `CURATED_MODELS`) > computed (procedural builders) > estimated
+(type heuristics with cited constants — W/kg panels, Wh/kg by chemistry,
+kg/L HDPE tanks, wood/steel densities). Unless `this_side_up`, dims
+canonicalize w≥d≥h. **Coverage guard:** every structures/tools catalog model
+must appear in CURATED_MODELS / DYNAMIC_MODELS / NON_PACKABLE or the selftest
+fails — adding a model forces a packing decision. **LinkageLab computes its
+own** (`LinkageStructureBuilder.packed_spec_for`): solved at the EFFECTIVE min
+fold angle (`LinkageKinematics.effective_min_fold_angle` — user override else
+V-beam contact), never the live slider angle, so an impossible over-fold can't
+fake smaller shipping dims; structure only (beams+brackets+bolts+supports),
+panels deliberately excluded (they pack as their own stack — Phase 3 split);
+cached on the instance keyed on params-minus-foldAngle because the modal's
+stats refresh runs per fold tick. The modal's fold-slider FLOOR now tracks
+`min_fold_angle()` (was hardcoded 5° — brackets/outer V-beams could be dragged
+through each other), with the Min Fold Angle Override spin as the escape
+hatch; "Packed Size"/"Packed Wt" stat rows show the result. The BETTER fix —
+collision-aware min fold via OBB sweep over solved beams+brackets — is
+planned, not built (PACKING_PLAN.md Phase 0.5). **Display:** library item
+buttons carry a "Packs to" tooltip; the inspector adds a generic "Packed
+(shipping)" section after the per-type match (`_build_packed_section` —
+short ft/in form via `format_dims_short`, the narrow value column clips the
+metric-parens string; compounds fall back to their `model_id`'s entry so
+StarShade super-nodes resolve); the prop-edit drawer shows a 📦 line, with
+linkage props computing from the record's live `linkage_spec`. **Phase 1
+containers:** `ContainerCatalog` (core/packing/container_catalog.gd, pure
+data) holds 16 real target volumes — U-Haul fleet (published interior/door/
+payload specs), 5x8/6x12 trailers, ISO 668 20'/40'/40HC, and nestable subs
+(GMA pallet, 27-gal tote, action packer, job box, 55-gal drum) — each with
+interior dims + DOOR APERTURE (`fits_through_door`: 90° orientations only,
+no diagonal tilt; open-top = always passes) + payload; droppable containers
+also carry exterior+tare (`packed_spec_for`, `this_side_up` so normalize()
+can't lay a container on its side). `CargoContainerBuilder` (procedural
+ModelCatalog id `cargo_container`, `container_spec.container_id` picks the
+box, default 20') emits ONE MeshInstance3D "Mesh" (PalletRack pattern —
+PlacedProp collision/pick just works); dims come FROM the catalog so
+geometry and packing data can't drift. Gotcha burned once already: Godot
+front faces wind CLOCKWISE from outside — CCW-wound boxes render as culled
+backfaces and the whole prop reads as an unlit silhouette. **Phase 2
+solver + report:** `PackSolver` (core/packing/pack_solver.gd, pure static,
+deterministic) is a greedy extreme-point largest-first heuristic —
+deliberately NOT optimal; ~70-85% fill matches a careful human crew, which
+is the honest number for a "will it fit" report. Honours container bounds,
+overlap, gravity support (floor or ≥50% footprint on a STACKABLE top —
+non-stackable tops support nothing), this_side_up (2 yaw orientations vs
+all 6), the door aperture, and payload (reported via `payload_ok`, not
+blocking — an overweight load still physically packs); also returns
+mass-weighted CoM + `com_len_frac` for tongue-weight checks. Test-writing
+trap: largest-first placement legally rearranges around a contrived
+scenario — unit-test `_supported`/constraint internals directly instead of
+trying to force an arrangement through solve(). `CampManifest`
+(core/packing/camp_manifest.gd): PURE collectors (`from_graph_items` over
+`GraphNesting.walk_items` output — skips virtual/compound/abstract and
+resource tanks >20,000 L = site infrastructure, nobody U-Hauls a pond;
+`from_prop_records` over `TerrainLoader.placed_prop_records()` — linkage
+props compute their honest folded envelope, containers resolve their
+variant), qty merge, solver expansion, and `fleet_report` (smallest-first
+shortlist). Surfaced as the Site Report "📦 Packing & Logistics" card
+(site_report_panel `_refresh_packing_card` — computed LIVE at populate
+time, deliberately OUTSIDE the cached report pipeline so graph edits never
+serve a stale verdict). **Phase 3 nesting:** `PackTree`
+(core/packing/pack_tree.gd) solves boxes-within-boxes INNERMOST-FIRST —
+a container unit's contents solve into its ContainerCatalog interior and
+the parent scope sees one leaf at the exterior dims with tare+contents
+mass; contents that don't fit a sub-container ESCAPE loose into the parent
+scope ("(loose from <tote>)") rather than failing the load; qty>1
+container units are identical instances (contents solved once, outer units
+replicated); MAX_DEPTH 8. `PackDefs` (core/packing/pack_defs.gd) holds
+reusable kits as UNIT LISTS — a def is a list, not one root box, because
+real kits split across handling units (the StarShade 18-panel stack
+physically cannot share the 2' crate with the folded frame; forcing one
+root just makes panels escape on every solve). Builtins `starshade_kit`
+(crate + strapped panel stack, mirrors the graph's 3-level StarShade
+component tree) and `solar_starter_kit`; `{def_ref: id}` splices another
+def's units with a visited-set cycle guard; user defs in
+user://pack_defs.json (selftest snapshots+restores that file). **Phase 4
+Packing Lab (`scenes/ui/packing_lab_modal.gd`, no class_name — ui_compile
+sweeps it):** interactive 3D packing modal (own CanvasLayer at
+UITheme.LAYER_MODAL, CursorController modal contract) — SubViewport studio
+with a cutaway container (camera-facing walls hide themselves per orbit
+frame; amber door marker at the HIGH-z end because the solver fills from
+z=0, so auto-packs read as loaded nose-first — the order LIFO unpack
+warnings will lean on), Auto-pack seeds from PackSolver, manual placement
+ghost (ItemList pick → aim → R rotate via _unhandled_key_input so focus
+doesn't matter → LMB place; click a placed box to take it back out —
+placement/removal are each other's undo). Hand-placement validity calls
+THE SOLVER'S OWN `_overlaps_any`/`_supported`/`_orientations`, so the
+modal can never teach a packing the report would reject. Sidebar: container
+picker (whole catalog incl. sub-containers), kit loader (PackDefs), live
+stats (fill %, load vs payload, CoM % toward rear + trailer tail-heavy
+warning), door-blocked items tinted red in the list. Opened from the Site
+Report packing card ("Open Packing Lab…", preselects the smallest fitting
+vehicle) or `--capture=packing`. v1 deferrals: per-site layout persistence,
+tote drill-in, LIFO warnings (need deploy-priority data). **Phase 5
+PACKED⇄DEPLOYED:** a prop record with `packed: true` builds
+`PackedFormBuilder` (core/packing/packed_form_builder.gd — form-styled
+crate/bundle/panel_stack/pallet/tank/folded silhouette from the record's
+resolved PackedSpec via `PlacedPropRuntime.packed_spec_for_record`, Godot
+PRIMITIVE meshes so no winding traps) instead of the model: yaw-only
+USER-scale transform (the catalog's GLB unit-compensation `resolved_scale`
+must NOT touch a real-metre crate), NO behavior runtimes (trackers animate
+geometry that doesn't exist) and NO connection ports. Interact on a crate
+unpacks in place (interaction_focus checks the prop's `packed` meta FIRST —
+a deployed prop's Interact is already owned by linkage fold/StarShade edit,
+so packing must never hijack it; repack lives in the edit drawer's
+"📦 Pack up" button, hidden for non-packables). `TerrainLoader.
+set_prop_packed(id, bool)` persists + rebuilds + keeps linkage graph
+arrays honest via set_imported_array_stowed (unpack restores fold-state
+truth). The packed-generation gate: `specs.packed_3d`
+(`SystemGraphView.set_item_packed_3d`, called by set_prop_packed for any
+prop bound via graph_item_id) zeroes the renewables tick (wind/hydro), the
+CSP/heliostat ticks (empty result dict → every telemetry key defaults 0),
+and refuses `ResourceFlowEngine._processor_switched_on` — ONE guard there
+covers every processor path. Still ungated: individual panel items,
+battery/controller electrical presence. **Phase 6 delivery scenarios**
+(`core/packing/unpack_scenario.gd`): spawn = REAL prop records (container +
+`packed: true` crates staged off the door end) so the Phase 5 loop IS the
+gameplay and `progress()` just counts records; builtins `starter_camp` /
+`starshade_kit` (linkage crate carries a real default v30 design); Packing
+Lab "🚚 Deliver kit to site" button (14 m ahead, door toward player;
+disabled without a TerrainLoader) / loader `deliver_packed_kit`.
+**Emergent group-labor groundwork** (`core/population/npc_haul.gd`,
+`NpcHaulModel`, pure static): round-trip vs bucket-brigade throughput from
+first principles; `best_plan` picks the winner — the strategy FLIP with
+crew density and the saturated brigade's route-length independence
+(throughput → 1/t_handoff) are pinned as selftest properties, surfaced in
+the Lab's delivery crew readout, and bridged to the chore board via
+`chore_spec`. **Pit-crew scheduler** (`core/population/npc_crew_plan.gd`,
+`NpcCrewPlan`, pure static): compound-task graphs ({work_s person-seconds,
+min_workers = barn-raising threshold, max_workers, deps}) scheduled by
+event-driven critical-path-first list scheduling with malleable
+reallocation at every completion event. Selftest pins the classic
+emergent facts: makespan ≥ max(critical path, total/N), more hands never
+hurt, flatline at the critical path once parallelism exhausts, min-crew
+gates block AT the blocking task (blocked_id). `linkage_fab_tasks` builds
+the swarm-manufacturing DAG from a design's REAL solver part counts
+(cut → drill → assemble ∥ brackets → bolt → fold-test → raise min-6 →
+panels). Bolts come from `LinkageBom.fab_counts` when a bill of materials
+is available; the `modules * 6` estimate survives only as the fallback for
+hand-authored counts (the solver emits bolt GEOMETRY only when show_bolts
+is on, but the hardware exists regardless). With `assembly_steps` present
+the flat "assemble" task splits into one per hardware assembly, priced at
+`T_HW_PART_S` per piece — the payoff of porting the hardware editor.
+`recommend_crew` = "bring 9, not 40";
+`timeline_text` = ASCII Gantt for build docs; `chore_specs` bridges a
+schedule onto NpcChoreBoard (depends_on/min_workers carried as groundwork
+for a dependency-aware board). Surfaced LIVE in the Linkage Lab stats
+block ("🔧 Fabrication …", cached on part counts — recommend_crew sweeps
+crew sizes, not per fold tick). Full vision: PACKING_PLAN.md Phase 6.5.
+**Deliveries stow INSIDE the container (Round 3).**
+`UnpackScenario.stow_plan(scenario_id)` resolves each unit to a PackedSpec
+(`LinkageStructureBuilder.packed_spec_for` for `linkage_default`, else
+`PackedSpec.for_model`), **forces `this_side_up` on every item** — the solver
+otherwise returns all six axis permutations, but a spawned crate is a BoxMesh
+with yaw and nothing else, so only `(w,h,d)` and `(d,h,w)` are renderable —
+and runs `PackSolver.solve`. `spawn()` maps each placement into world space
+(solver `x` = interior width → container-local +X = world `side`; `z` = load
+length with the DOOR at high z → world `fwd`) and sets **`y_offset = pos.y`
+exactly**: `PackedFormBuilder` puts a crate's origin at its own floor and the
+container's floor is local Y=0, so no deck fudge. Stowed crates carry
+`stowed_in` + `unload_rank` + `collision_enabled: false`; anything the solver
+cannot fit falls back to the pre-v3 door stack so an oversized unit degrades
+visibly. `crate_ids` is returned in **LIFO order** (highest top first, then
+nearest the door), so every consumer inherits it — the brigade's stage-effect
+index IS its order, and round-trip rows take an ascending priority from the
+same sort. Two rules keep it honest: **`move_prop` always clears `stowed_in`
+and puts `y_offset` back to 0** (moving a crate is what un-stows it, whether a
+chore effect or a player drag), and **`set_prop_packed` refuses to unpack a
+stowed crate** ("unload the delivery first") — you cannot erect a shiftpod
+inside a shipping container. Note `PlacedPropLayer.update_prop` treats a
+`null` patch value as an ERASE: readers do `str(rec.get(k, "")).is_empty()`,
+and a stored null reads back as `"<null>"`, so a stale `stowed_in` silently
+blocked an erect-phase deploy until this was fixed. The container mesh is a
+solid box with no cavity, so the stack is invisible in-world — the Packing
+Lab (`--capture=packing`) is its visual surface.
+Selftest: `core/packing/packing_selftest.gd` (511 checks; --import first).
 
 ## NPC population simulation (core/population/)
 
@@ -1817,6 +2491,228 @@ that person's Label3D nametag. Selftest + the `--capture=population` harness
 (which also asserts the crosshair contract + space-marker resolution) are in
 the Validation list.
 
+## Settlement mode + the work substrate it exists to show
+
+Plan: `~/.claude/plans/i-want-to-strengthen-groovy-pearl.md`. The second play
+mode: shape the conditions, then watch the community work. **Never call it a
+"god's eye" view** — in code or in game. The mode is `Settlement` /
+`SettlementView`, claim id `"settlement"`, and the verbs are *shape, schedule,
+watch*.
+
+**The stall this arc exists to fix.** `NpcAgent._step_idle` used to `return`
+unconditionally once `_pick()` named ANY need. `_pick` returns `"hygiene"` at
+0.7 with no satisfiability check, so on a map with no shower tagged the agent
+re-picked it forever and tiers 2.5/3/4 became unreachable — **every agent
+locked between ~5 and ~13 sim-hours and never worked again.** Tier 1 absorbs by
+design (`POPULATION_PLAN.md:248`); tier 2 inherited it by accident. Now only
+`CRITICAL_NEEDS` absorb, and a blocked comfort need falls through to routine
+and chores. It hid three ways: hygiene is not in `NpcMorale.CRITICAL_NEEDS` so
+morale sat at 0.75 with no warning; `status_line()` reported `_worst_need()`
+over ALL needs and so blamed enrichment; and **no test ran a chore to
+completion** — every fixture tagged a shower, making the absorbing state
+structurally unreachable. Companion fixes: `default_day()`'s evening block is
+`FREE`, not `ENRICHMENT` (which is in `KIND_ACTIVITY` and can never reach a
+chore) — ~10.9 chore-eligible h/day vs 6; a crew AT QUORUM yields only at
+`URGENT` and solo work at `CHORE_PREEMPT_FLOOR` 0.80 (one thirsty person used
+to zero six people's progress); and `_most_urgent` ranks by NORMALIZED EXCESS
+among needs already past their own threshold (argmax-then-threshold let bladder
+0.74 mask over-threshold hunger 0.60). Pinned by
+`_test_chore_run_to_completion` (240 person-hours over 6 days on a site with
+NO shower — verified to FAIL on the pre-fix code with `145.7 h left`).
+
+**Consequences (`core/population/npc_consequence.gd`).** What running out of a
+critical resource does is the PLAYER'S choice, authored per-habitat in
+`specs["pop_consequence"]` via the Routines panel: `STRIKE` (default — today's
+behaviour, named), `LEAVE` (routes through the ONE existing exit by setting
+`quit_pressure = QUIT_PRESSURE_H`, so the cascade and its selftests are
+untouched by construction) or `PERISH` (`agent_lost`, a NEW signal — challenge
+code keys off collapse and must not read a death as a walk-out; no body, no
+marker). Not in `NpcDisplayPrefs` (global cross-save taste) and not in
+`GameplayRules` (an autoload, invisible under `--script`). ⚠ `PERISH` makes
+`_process_departures` return early: morale rage-quit at ~24 h otherwise beats
+the 72 h thirst window and nobody ever reaches the consequence they chose.
+
+**The quiet alarm (`core/population/settlement_log.gd`).** A CAP-400 ring
+buffer with **per-consumer cursors**, replacing the destructive `take_events()`
+whose two consumers (toast drain / challenge-bake collapse detection) raced —
+toasts vanished during a bake. Blocked needs are LATCHED (fire once after
+`ALARM_H`, relief when the last clears): `blocked` flaps on every backoff and an
+unlatched signal would strobe. Nothing beeps; nothing must be dismissed.
+
+**`CameraClaims` (`core/camera_claims.gd`, + Main's impure half).** Mirrors
+`ClockClaims`; stores `camera_id` as an int instance id to stay pure. Main owns
+`push_camera_claim`/`pop_camera_claim`/`_apply_camera_claim`, resolves the top
+claim, applies `hide_player_mesh` / `shadow_max_distance` / `prop_cull_scale_m`,
+and **restores the player camera when the stack empties** — all restore
+knowledge in one place. The six SubViewport modal previews and
+`graph_soi_preview_service` are PERMANENTLY excluded (private composited
+worlds, never claimants). Selftest: `core/camera_claims_selftest.gd`.
+
+**The mode (`scenes/settlement/`).** A real full-screen `Camera3D` on Main, NOT
+a SubViewport — the preview service carries AMD-TDR crop/clamp scar tissue and
+a 60 m height cap, and rendering to the main viewport is what makes picking,
+culling, shadows and TAA behave exactly as in first person. **One scalar `_h`**
+(camera height) drives everything: pitch 0 → −80° interpolated on `log(_h)`,
+**perspective throughout with no ortho toggle** (a projection switch is the
+discontinuity that makes Site Plan picking fiddly), pan speed ∝ `_h`. Three
+rules the file exists to hold, restated in its docstring: **the clock is NEVER
+claimed** (`soi_snowglobe_camera.gd` freezes the sim — do not copy that line);
+**no orders, ever** (selection is inspection + follow-cam; the levers are the
+routine editor, chore board, priorities, space tagging and site rules); **it
+borrows nothing from the 2D graph** (reading `agent_dots()` as DATA for the
+inspector card is fine, drawing dots over people who are right there is not).
+Overlays reuse the existing 3D ones; the only new one is `space_overlay.gd`
+(tagged AREA spaces, triangulated with per-vertex ground sampling — 
+`TerrainBuilder.build_polygon_highlight` takes a DEM grid + extent, not a height
+callable, and this view must work on scenes with no TerrainLoader).
+`pick_point_once(cb)` lends the view for ONE ground pick (the Routines panel's
+"Where…" and the project panel's site picker) — ground only, so clicking a
+person can never quietly become an order, and Esc always answers with
+`Vector2.INF`.
+
+**Picking (`gameplay/site_target_picker.gd`).** `resolve(main, origin, dir,
+opts)` is the ONE crosshair ladder as a function of a ray, shared by the
+first-person centre ray and the settlement mouse ray. The load-bearing line is
+the **minimum angular pick radius** `r = max(PICK_RADIUS_M, t·tan(0.6°))` — at
+500 m a person is sub-pixel and an exact sphere test is unclickable. Crossover
+is ~52 m, so beyond that picking a NEIGHBOUR is correct behaviour, which is why
+`--capture=settlement` only demands exact identity where the radius is under
+4 m. Selftest carries an `EXPECTED_CHECKS` guard: a Godot runtime error aborts
+the enclosing test function while PASS still prints, and instantiating a real
+`NpcAvatar` in a bare SceneTree throws — the NPC rung is tested as pure
+ray-vs-sphere maths for that reason.
+
+**The labour merge.** `ChoreLedger` is now the **meter, not the supply**. A
+`chore_hours` step without `require_confirm` stamps `recipe_waiting_kind =
+"crew"`; `NpcPopulationBridge._service_machine_chores` mints an idempotent
+chore keyed `mach|<gid>|<step_id>` whose `target` is the machine's
+`bound_prop_id` (so people WALK there), and completion fires the new
+`recipe_step_done` effect op through the post-tick sweep — the only place
+completed work mutates the world, already fire-once. That calls the SAME
+`RecipeRunner.confirm_chore` the player's button always did. ⚠ It must call
+`ChoreLedger.record_worked`, not `try_debit`: finite labour means an empty
+pool, an empty pool refuses the debit, and the step the crew just finished
+would refuse to resume — the merge deadlocks by construction. A PACKED machine
+mints an `unpack_prop` chore instead. `infinite_labor` is now the DIFFICULTY
+switch, defaulting false **for new maps only** (`DEFAULT_INFINITE_FOR_NEW_MAPS`;
+a loaded ledger keeps its own value, so no existing site silently stops
+producing). `credit_available()` is deleted — it modelled a pool that stopped
+existing. The contract is an EQUALITY, verified by `--capture=labour`.
+
+**Facing (`core/population/npc_facing.gd`) — the "everyone works facing the
+same way" fix.** `npc_population_host` used to write yaw ONLY while the body
+was still moving (`if dir.length() > YAW_EPS_M`). `_step_traveling` sets
+`pos = target_pos` on arrival, the rendered body converges, `dir` falls under
+the threshold, and **the yaw latched on the approach heading for the whole work
+session** — and since a non-brigade crew chore resolves to exactly ONE
+coordinate, the whole crew walked one nav route to one point and froze on one
+bearing. `_separate` then spread their POSITIONS by pushes capped at
+`MAX_PUSH_M` 0.25, at or below the very threshold that would have re-triggered
+the write, so the facings never followed. The fix is not a bigger epsilon:
+`NpcAgent` latches a TRANSIENT `face_anchor` when it commits to a destination
+(space centre before the slot offset / chore target / the relay's far end),
+`agent_dots()` derives `face_yaw` from `(pos, face_anchor)` **every tick**, and
+the host gates the travel branch on `in_transit` instead. Re-deriving per tick
+is the whole mechanism — it is what finally lets the separation spread reach
+the facings. Three subtleties: the anchor must be cleared in THREE places
+(`_finish`, `release_claims` via `_finish`, and the engine's `_catch_up`); a
+SOLO worker standing on their own anchor projects the arrival heading ~8 m
+forward while a SHARED job keeps its anchor (`_chore_is_shared` — projecting
+for a crew scatters the facings without aiming any of them, which looked
+"fixed" while everyone faced out into a field); and the idle drift is bounded
+in AMPLITUDE not rate, because beyond `FAR_DIST_M` the 0.25 s pose interval
+turns the slew into a hard set. MP costs zero protocol churn — `_pack_frame`'s
+`yaw` slot is meaningful only for possessed agents, a possessed agent never
+runs the FSM planner, so the two are mutually exclusive and `flags` bit 0
+already discriminates them. Pinned by `_test_crew_facing_spread` (circular
+concentration R over a crew's facings, verified to FAIL on the pre-fix
+behaviour with `R=1.000` and `7 of 7 within 20 deg of the walk-in bearing`),
+its paired brigade opposite (`R > 0.9`, every station within 10° of the relay
+line — so the rules are proven CONTEXT-AWARE rather than merely noisy), and
+end to end by `--capture=population`'s facing-spread line.
+
+**Task-aware work poses (`core/population/npc_work_pose.gd`).** A chore record
+has no `kind` field and does not need one — the work is named by what it DOES:
+`haul.strategy`, `carry_to`, a `chore_key` prefixed `mach|`, and above all
+`effect.op` plus `effect.phase` (which carries the Linkage Lab's real
+fabrication phase names). Deliberately NOT the free-text `label`, and not
+`SiteProject.kind` (bridge-side, unreachable from a pure classifier).
+`family_for` is TOTAL and returns one of seven families chosen to differ in
+SILHOUETTE at ~60 m: `haul_hold` / `lift` / `dig` / `overhead` / `drill` /
+`bench` / `inspect`. Rule 1 subsumes the pose machine's old `carrying` special
+case. Plumbing: classified in `agent_dots()` (where the board is in hand),
+rides the dot as `work_pose`, forwarded by the host, read by the machine as an
+**INPUT** — which is what keeps the machine's purity contract. The families are
+LOGICAL clips that `_clip_file_for` aliases onto `NpcRig.CLIP_WORK`, so the
+rigged Mixamo body plays its single work clip unchanged while
+`NpcSimpleFigure` (which already matched the logical name first, for carry)
+draws the real family. That asymmetry is permanent until somebody authors more
+Mixamo clips. ⚠ `merge_catalog` must be applied at `NpcAvatar.setup`, NOT
+inside `NpcRig.catalog()` — that function answers "what art is installed" and
+has other callers; without the merge every `_has()` guard skips the families
+and their transitions on a fresh clone, silently, on exactly the body they were
+written for. (The same condition means `sleep_enter`/`sit_enter` do not play on
+a fresh clone either — a real gap, deliberately not widened here.) Per-agent
+flavour (mirror / amplitude / stance / tempo / lean / variant) is cached in
+`NpcSimpleFigure.setup()`; ⚠ **tempo scales each pose's own frequency constant,
+never `_phase`'s advance**, which is what rate-matches the walk to apparent
+speed. `work_enter`/`work_exit` are the one new transition pair — the exit is
+the one that pays, since a worker used to snap out of a deep stoop into a
+stride.
+
+**`NpcHash` (`core/population/npc_hash.gd`).** One avalanche hash for every
+per-agent scatter, lifted BIT-IDENTICALLY from `NpcRoutine.offset_for` (pinned
+against a frozen literal, because routine offsets move every downstream sim
+golden). Measured over 64 sequential ids in 8 bins: the naive `hash() % n` form
+leaves FIVE BINS EMPTY with 30 of 64 in one; the avalanche fills every bin.
+Two deliberate non-adopters: `NpcAgent.name_for` (snapshot only persists
+`display_name` when it differs, so changing it would rename every unnamed
+person in every save) and `color_for_agent` (already avalanched).
+
+**Authoring depth.** The Routines panel exposes `priority` as three named bands
+(never a raw int — it is uncapped and LOWER sorts first), one crew-size pair,
+`repeat`, and the highest-value control, `target` via "Where…". Without a
+target a hand-authored chore has no position and the worker does it where they
+stand, which reads as broken. `depends_on`/`haul`/`effect`/`stage_effects`/
+`carry_to` stay unexposed: that is the project compiler's vocabulary. The Site
+Project panel gained a one-task "New project…" row (same reason — the
+generators split into phases because they KNOW what the phases are) and a
+per-project **Watch** button that opens the settlement view over that site.
+`space_edit_ui.set_ray_source(Callable)` is the seam that lets the mode drive
+the same polygon state machine rather than growing a second drawing UI.
+
+**The work dock (`scenes/settlement/work_dock.gd`).** The chore board, inside
+the settlement view, because editing the work and watching the work used to be
+mutually exclusive — the board lived in a full-screen modal over the 2D graph,
+so "retune a priority, see the crew re-form" meant closing the only surface
+that shows the crew. It carries the queue in WORK order with live crew
+fractions and exactly three knobs, all of which change a CONDITION: priority
+band, hold, and look-at. Deep authoring stays in the modal, one button away.
+It inherits the mode's no-order-verb rule verbatim. It rebuilds only when a
+content SIGNATURE changes, not blindly every tick — a blind rebuild dismisses
+tooltips mid-hover and makes a button impossible to click twice, which is most
+of why the modal panels feel unresponsive. ⚠ That signature starts at a
+sentinel, not `""`: an empty board produces an empty signature, so `""` would
+compare equal on the first pass and the empty-state row would never build.
+
+**Work-UI polish.** Both big panels now route every button through
+`UITheme.style_button`, use the `FONT_*` scale, and take their palette from
+UITheme (the local `C_OVER`/`C_FREE` were near-misses of `C_ERROR`/`C_GREEN`,
+so two reds and two greens meant the same thing on one screen);
+`UITheme.style_progress` exists because a stock Godot `ProgressBar` was the
+only light-grey chrome in a dark panel, and a work UI is mostly progress bars.
+The chore board is **sorted into the order the crew actually works it** —
+`board.chores` is insertion order while `available_for` sorts by priority, so
+the list the player read was never the queue, which made the priority control
+two rows below it look inert. Rows now surface the live crew fraction, the
+repeat mode, whether a chore is held or dependency-blocked, and whether it has
+a PLACE at all (a chore with no target happens wherever the worker is standing,
+which reads as broken). Two real bugs fixed alongside: the "Where…" round trip
+called `close()`+`open()`, which re-ran the draft loaders and silently
+discarded an unapplied routine or animation edit; and the project panel
+reported failures by mutating a `LineEdit`'s placeholder, invisible the moment
+anyone types.
+
 ## Solar Bootcamp tutorial + pre-baked challenges
 
 **DC electrical layer (`system_graph/graph_dc_electrical.gd`, sibling of
@@ -1884,6 +2780,238 @@ tutorial sandbox and vice versa). "Useful utilization" = (loads served +
 charge banked)/potential — the generated-solar channel reads ~100% even
 while the battery-full clamp wastes sun, so it is the wrong teaching number.
 
+## Extreme weather (core/weather/)
+
+Eleven hazards in `HazardCatalog`; four SIMULATED so far (wildfire smoke, dust
+storm, damaging winds, heatwave), the rest are risk-profile-only rows marked
+"not yet simulated". Master toggle is `GameplayRules.extreme_weather_enabled`
+(**default false**, save- and scenario-scoped like every other mechanic);
+per-hazard opt-ins + the "Drama" slider live in `ExtremeWeatherPrefs`
+(`user://extreme_weather.cfg`). Settings → **Extreme Weather** tab shows the
+site's real risk profile and a non-persistent **Preview** control.
+
+**Severity is a PURE FUNCTION of absolute hours.** This is the load-bearing
+constraint, not a stylistic choice: it is why hazards scrub backwards, replay,
+and bake into prebaked challenges for free. `crisis_events/crisis_event_manager.gd`
+is therefore the WRONG host — it rolls triggers on real seconds and PAUSES every
+event whenever `time_scale != 1/3600`, so weather there would vanish at any speed
+players actually use. Dependency direction is one-way: a crisis event may READ
+the director; the director never reads crisis state. `hazard_began`/`hazard_ended`
+are derived by DIFFING the evaluated set, never by a trigger, so rewinding out of
+a smoke event emits `ended` exactly as fast-forwarding past it does.
+
+**Four-layer resolution ladder** (`ExtremeWeather.resolve_at`): NWS/IEM alert
+spans (authoritative timing, 1986→now, US) → measured AQ + weather (shapes the
+alert into an hourly curve, and can raise a hazard on its own) → deterministic
+climatology synthesis (ONLY where layers 1-2 have no DATA, not merely no event —
+otherwise you invent smoke onto a verifiably clean day) → `blank()`.
+
+**`HazardState` is the one contract.** `blank()` is the IDENTITY element and
+`combine()` is commutative; optics take the worst, energy factors MULTIPLY.
+`AtmosphereApplier.resolve(base, blank())` returns `base` field-for-field — that
+single property is the "feature off ⇒ zero visual change" guarantee.
+
+Traps, each of which RENDERS rather than erroring:
+- **`fog_aerial_perspective` moves DOWN under haze, not up.** With
+  `fog_sky_affect = 0` it blends the *rendered sky colour* into distant geometry,
+  so raising it under smoke pushes terrain toward BLUE.
+- **`fog_sky_affect` alone cannot take over the sky**, because the fog colour is
+  simultaneously the terrain haze — which must be dark while the sky is luminous.
+  Hence the `hazard_haze_color`/`hazard_haze` block in `sky.gdshader`, applied
+  BEFORE the sun block so the disc survives as a dim red ball. Daylight-gate it
+  or nights go brown and starless.
+- **`weather_light_factor` has one owner** (`solar_ui._apply_smooth_weather_lighting`,
+  rewritten every frame). Hazard dimming is a SEPARATE `_hazard_light_factor`
+  multiplied alongside it in `_update_sun`.
+- **`_apply_advanced_rendering_toggles` owns volumetric fog** and is reachable
+  straight from the settings panel, so the emissive dust wall is forced there,
+  not at the environment choke point — writing both erased the wall on any
+  god-rays toggle.
+- **`clampf` does NOT filter NaN**, and CAMS returns real null hours. Every 0..1
+  factor in the applier goes through a NaN-safe clamp; the selftest sweep exists
+  because three of them originally did not.
+- **`SolarIrradiance.ghi_wm2_at_calendar` short-circuits on `has_real`** and
+  returns measured GHI verbatim. Aerosol is applied on THAT branch too, or
+  extreme weather is silently free of consequence on exactly the sites that have
+  real weather data. Open-Meteo's shortwave field carries only climatological
+  aerosol and does not resolve plumes — which is why CAMS publishes it separately.
+- **Four weather samplers exist** with different key names. They are not unified
+  (too risky across the prebake path); instead all four call
+  `SolarIrradiance.decorate_with_hazard` and the selftest pins that they agree.
+- **`NpcWeatherGate` air uses a SECOND exposure factor**
+  (`air_exposure_factor`), never a change to `exposure_factor` — walls stop rain
+  completely but only damp smoke, and every existing threshold depends on the
+  original returning 0.0 indoors.
+
+**Severity-curve design lessons** (both shipped broken once): anchor severity 1.0
+at the observed EXTREME TAIL, not a category boundary — anchoring smoke at the
+EPA "Hazardous" threshold rendered a hazardous day as light haze. And check the
+curve SHAPE, not just monotonicity: the selftest's cliff guard compares each
+step's ratio against the MEDIAN step, because a uniformly steep curve is
+legitimate (dust fronts really do arrive fast) while one anomalous step is not.
+Related: the US AQI truncates at 500 by definition, which smoke reaches by ~0.6
+severity, so gameplay channels derive from SEVERITY while the displayed AQI stays
+truncated like the real index.
+
+## Discord-native multiplayer (core/discord/ + core/multiplayer/)
+
+Goal: a private community on one Discord server drops into a shared world with
+Discord handling identity, discovery and voice. **Zero always-on servers of
+ours.** Full plan + remaining phases:
+`~/.claude/plans/i-want-to-do-flickering-torvalds.md`. One-time Discord
+developer-portal setup: `LOCAL_CONFIG.md`.
+
+**The structural rule:** every security-relevant decision lives in a PURE
+`class_name` file with no HTTP (`discord_pkce`, `gate_rules`, `community_file`,
+`directory_record`, `relay_batcher`, `discord_links`, `discord_config`, plus
+`MpReachability`'s classification half), so `core/discord/discord_selftest.gd`
+feeds it fixtures offline. The Node halves (`discord_http`, `discord_identity`,
+`discord_gate`) only fetch. Do not move a verdict into a Node.
+
+**Sign-in** is OAuth2 authorization-code + **PKCE with no client_secret**
+(needs the app's "Public Client" toggle — without it every token exchange 401s,
+and Discord's own error text does not say so, which is why
+`discord_identity._on_token_response` appends the hint). The code arrives in the
+redirect's QUERY STRING, so a loopback `TCPServer` is enough — no JS shim, which
+the implicit grant would have required. **The redirect port cannot be dynamic**
+(Discord demands an exact registered match): three are reserved, 34199–34201,
+and binding falls through them; all busy = a loud refusal, never an unregistered
+port. The callback socket is held ~0.75 s before closing so the browser actually
+renders the "you can close this tab" page. Scopes are deliberately
+`identify` + `guilds.members.read` only — the broad `guilds` scope would let a
+host holding a guest's token enumerate every server that guest is in.
+
+**Reachability.** `pick_lan_ipv4()` returns an RFC1918 address by design (LAN
+discovery depends on it), so internet play never worked: the join code's address
+was always a LAN address. `MpReachability` adds UPnP — **on a WorkerThreadPool
+task, because `UPNP.discover()` blocks ~2 s** — and the public address is folded
+in ADDITIVELY as a second candidate. Join code v3 carries `addrs` while STILL
+mirroring the LAN address into the top-level `ip`/`port`, so every pre-v3
+consumer keeps working untouched; `decode()` accepts v2 and v3, pinned by a
+frozen v2 literal in the selftest. The client tries candidates in order —
+**LAN first only when its own /16 matches**, since a naive LAN-first costs every
+internet player a pointless 6 s timeout. `_on_connection_failed` used to call
+`leave_session` unconditionally; the ladder now intercepts before it, and there
+is a wall-clock per-candidate timeout because a black-holed UDP port (the common
+NAT case) may never fire `connection_failed` at all. We run no external server,
+so a mapping is reported "created — not verified" until a peer actually connects
+from a public address. CGNAT (`100.64/10`) is called out by name — port
+forwarding cannot work there, so "check your router" would be wrong advice.
+
+**Admission.** `rpc_hello` was only ever ADVISORY: once ENet connects, any peer
+can drive `@rpc("any_peer")` handlers before saying hello, and
+`rpc_lock_claim`/`rpc_lock_release` had no gate or rate limit at all. Async
+Discord verification would have widened that window to seconds, so
+`peer_admitted()` now gates **inside `note_peer_traffic`** (covering presence,
+chat and every design transfer in one edit) with explicit checks added to the
+handlers that bypass it. Two rules that must not be "simplified":
+the not-admitted path **drops without kicking** (the rate-limit path kicks, and a
+slow Discord round-trip must not punish a fast joiner), and `rpc_hello` passes
+`require_admitted = false` since it legitimately precedes admission.
+All the cheap synchronous checks still run first and unchanged, so a peer that
+fails one never costs an API call; only then does `_begin_discord_admission`
+hold the peer out of `peers` pending `DiscordGate`. **The gate's first call is
+`GET /oauth2/@me` to prove the token was issued to OUR application** — without
+it, a token the guest granted to any other Discord app would be accepted.
+Discord unreachable fails **CLOSED** by default, deliberately the opposite of
+`MpHardening.trusted_key_allowed`'s fail-open-on-empty (that is a
+*configuration* statement; this is a *runtime failure* of a restriction the host
+asked for) — do not let a refactor harmonise them. The host briefly holds a
+guest's bearer token: it is never persisted, the cache keys on its SHA-256, and
+`MpHardening.redact` strips it at the telemetry choke point. `DiscordBridge` is
+the seam that removes the trade-off once someone runs a bot.
+
+**The directory is ONE Discord message, edited in place forever.** Discord's
+webhook message endpoints (`GET`/`PATCH` `/webhooks/{id}/{token}/messages/{msg}`)
+need no authentication, so a single message is a readable AND writable
+key-value store every member can reach with no bot and no server of ours. It is
+created once and only ever edited, so its Discord link never changes — that pin
+IS the permanent "join my map" link. `SimDirRecord` (pure) owns all the
+concurrency; `discord_directory.gd` fetches and sequences.
+**Host election:** read → if no live host (heartbeat older than `STALE_SEC` 150)
+mint a claim, PATCH with `seq+1`, wait `CONFIRM_DELAY_SEC` **writing nothing**,
+re-read. Discord serialises the two PATCHes and last-write-wins the stored
+content, so if both racers re-read after the same fixed delay with no
+intervening write, exactly one sees its own claim. **That no-intervening-write
+discipline is what makes last-write-wins a valid arbiter** — which is why the
+claim PATCH passes `no_retry` (`discord_http` would otherwise silently retry a
+429 into the confirm window and mint a second host) and why a failed claim reads
+as LOST, not as a retry. A `RECONFIRM_SEC` (+8 s) re-read before the winner
+accepts its first peer makes the rare double-host self-healing. Reads whose
+`seq` regressed are ignored (stale cache). `_host_block` reads LIVE session
+state on every heartbeat, not the cached publish, so a refreshed join code or a
+changed player count never goes stale in the channel. Writes DO overwrite a
+hand-edited message: refusing would lock the community out of hosting until
+someone tidied the channel, which is worse than losing one typed line — give the
+directory its own channel. The directory is a CONVENIENCE, not a security
+boundary; anyone with the community file can stomp it. `DiscordGate` is the
+boundary.
+
+**The community file** (`SimCommunity`, `SMBC1:` + base64(gzip(JSON)), also a
+`.simcommunity` file) is the one blob an owner hands members: client id, guild,
+role ids, voice channel, directory webhook + message id. `validate()` is a
+SECURITY BOUNDARY — every id must be a snowflake (they are interpolated into
+URLs) and **every webhook URL must be on discord.com**, or a pasted file
+redirects the host's relayed chat to an attacker. Stored one file per community
+under `user://communities/`, active one in `mp_prefs.cfg`; `active()` falls back
+to "the only one on disk" so a member who imports a single file never also has
+to pick it.
+
+**Chat relay is OUTBOUND ONLY and host-only.** `rpc_chat_deliver` is
+`call_local`, so `MpChatController._append` runs on the host for every message —
+relaying from each client would post every line N times and would need to hand
+every client the webhook credential. ⚠ A BROADCAST system line arrives with
+`peer_id == 0` **and `system: false`** (rpc_chat_deliver hardcodes that field),
+so the relay filters on `peer_id <= 0` too — without it the relay's own "chat is
+being mirrored" notice gets copied into the channel. Every payload must carry
+`allowed_mentions: {"parse": []}` or an in-game `@everyone` pings the server.
+Off by default and it ANNOUNCES itself, to everyone present and to each later
+joiner — mirroring people's chat into a semi-public channel silently is a trust
+violation, so the notice is part of the feature. Inbound needs a bot
+(`DiscordBridge`): a webhook can only read back messages it wrote itself.
+
+**Host-authoritative simulation + NPC replication.**
+`SystemGraphView._tick_resource_flow_ambient` had NO host/client guard: every
+client ran its own `ResourceFlowEngine` and `NpcPopulationBridge` off its synced
+graph copy, drifted, and got stomped by the host snapshot every 12 s — the
+people on a joiner's screen were a local hallucination that snapped twice a
+minute. `_mp_is_replica()` now short-circuits that tick **before** the
+`_resource_flow == null` guard (the client path must not depend on an engine it
+never steps). `MpPopulationController` streams the roster at 6 Hz: an id TABLE
+on roster change (reliable), then INDEXED frames (unreliable_ordered) — by name
+a 64-person camp would be ~7 kB/s of pure string, by index it is ~4 kB/s.
+**The seam is one call:** `NpcPopulationHost._process` reads
+`_bridge.agent_dots()` and nothing else, so handing it the controller's mirror
+(which duck-types `agent_dots`/`active`) makes the whole avatar/LOD/pose path
+work unchanged. Frames for an unknown table rev are dropped, not queued — the
+reliable table and unreliable frames race by design.
+
+**Possession ("play as one of the NPCs").** Call it **possess**, never
+"embody" — `VIEW_MODE_EMBODY_TWINS := 157` already means "give a graph item a 3D
+twin" and has a documented id-collision history. `NpcAgent.controlled_by_peer`
+is TRANSIENT (absent from `snapshot()`; persisting it strands a frozen agent
+with no controller after a reload). The engine skips a controlled agent in
+`tick()`, `_separate()` (they push, they are never pushed), `_catch_up()` (which
+would otherwise reroll their needs mid-possession) and `_process_departures()`
+(they cannot rage-quit out from under a player — quit pressure still accrues, so
+they leave the moment they are released). `_decay`, `_update_morale` and
+`current_consumption` keep running: possession is not a way to opt out of the
+resource economy. Bind by `agent_id` STRING, never by object reference —
+`_ensure_engine` replaces every `NpcAgent` when authored `occupants` changes.
+`_pose_possessed` bypasses the SMOOTH_RATE lerp (~125 ms of lag reads as broken
+controls), `wants_anchor` (reads as input dropping out), and clock-derived
+`paused`/`time_mult` (a possessed body would freeze when the host pauses); yaw
+comes from the player's own look direction, not the direction of travel.
+Possessed avatars are exempt from cull/far-pose/rig budget. Per the design
+decision the clock is **warned about, never clamped** (`MpPossession
+.time_scale_warning`, throttled by cooldown AND speed bracket since `rpc_clock`
+lands at 2 Hz; note main.gd defaults `time_scale` to 0.01 ≈ 36×, so the
+threshold is a tuned multiplier and not "> 1").
+
+⚠ `PROTOCOL_VERSION` is now **3**, and `_poll_lan_packets` filters LAN beacons on
+the same constant — old and new builds neither join nor SEE each other, and only
+the new client can print a useful message about it.
+
 ## Conventions
 
 - Signals are wired in code in `_ready()` (zero editor connections).
@@ -1929,6 +3057,16 @@ never lands: `'detail' layer not cached — fetching z16 tiles …`), it is **no
 in the Validation list above, and it fails identically on d38417a — i.e. this
 predates the 2026-08-01 stabilisation pass and is not a regression from it.
 Diagnose the imagery fetch before trusting the grounding/vegetation assertions.
+
+**`--capture=population` phase-1 food sub-check is STATE-SENSITIVE** (verified
+2026-08-03 by A/B against HEAD population files on identical map state — both
+fail identically, so it is NOT a chore-board regression): whether the food
+tank moves in the short observation window depends on the persisted roster's
+seeded hunger levels crossing a meal inside it; consecutive harness runs also
+inherit pop_state from each other through the soak autosave (roster size
+varied 16→10 across back-to-back runs). Water/movement/starvation/cascade
+sub-checks were stable throughout. Diagnose against a fresh state before
+reading a food-flat FAIL as a regression.
 
 **Re-verify this list before trusting it** — it is hand-maintained and drifts.
 The former "UISP button node-path misses" entry was stale: nothing outside
