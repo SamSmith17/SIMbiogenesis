@@ -313,7 +313,10 @@ func _bake_chunk() -> void:
 				var sub := minf(POP_SUBSTEP_H, _cursor - t)
 				t += sub
 				_bridge.call("tick_at", model, _flow, _main, t)
-			for e in (_bridge.call("take_events") as Array):
+			# Cursor-named log read: the graph's toast drain keeps its own
+			# cursor, so a bake no longer eats the player's toasts (the old
+			# destructive take_events race).
+			for e in (_bridge.call("log_since", "bake_collapse") as Array):
 				var kind := str((e as Dictionary).get("kind", ""))
 				if _def.fail_on_collapse and (kind == "collapsed" or kind == "deserted"):
 					_failure = {"abs_h": _cursor, "reason": "colony_collapsed"}

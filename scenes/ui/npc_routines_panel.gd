@@ -106,6 +106,8 @@ func open(bridge, item_id: String) -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
 	move_to_front()
+	_roster_sig = "<unbuilt>"
+	_chores_sig = "<unbuilt>"
 	_refresh_assign_options()
 	_load_routine_draft()
 	_load_anim_draft()
@@ -437,9 +439,22 @@ func _board() -> NpcChoreBoard:
 	return _bridge.chore_board_for(_item_id)
 
 
+## Membership key, so the "Who" dropdown refreshes when somebody joins or
+## leaves — it used to refresh only on open(), going stale the moment a
+## departure shrank the roster. Keyed on MEMBERSHIP, not status: rebuilding
+## an OptionButton closes its popup, so it must not churn on mood swings.
+var _assign_sig := "<unbuilt>"
+
+
 func _refresh_assign_options() -> void:
 	if _new_assign == null or _bridge == null:
 		return
+	var sig := ""
+	for a in _bridge.roster_for(_item_id):
+		sig += (a as NpcAgent).id + ";"
+	if sig == _assign_sig:
+		return
+	_assign_sig = sig
 	var prev := str(_new_assign.get_selected_metadata())
 	_new_assign.clear()
 	_new_assign.add_item("Anyone free")
@@ -470,6 +485,7 @@ func _refresh() -> void:
 	elif _walk_lbl != null:
 		_walk_lbl.text = ""
 	_refresh_weather()
+	_refresh_assign_options()
 	_refresh_roster()
 	_refresh_chores()
 
@@ -484,11 +500,30 @@ func _refresh_weather() -> void:
 		NpcWeatherGate.describe(w)]
 
 
+## Signature-gated rebuilds (the work dock's discipline): a blind rebuild
+## every 0.5 s dismisses tooltips mid-hover and makes buttons impossible to
+## click twice. Sentinel, not "" — an empty roster/board makes an empty
+## signature, and "" would compare equal before the first build.
+var _roster_sig := "<unbuilt>"
+var _chores_sig := "<unbuilt>"
+
+
 func _refresh_roster() -> void:
-	for c in _roster_box.get_children():
-		c.queue_free()
 	var board := _board()
 	var abs_h: float = _bridge.current_abs_hours()
+	var sig := ""
+	for a in _bridge.roster_for(_item_id):
+		var ag: NpcAgent = a
+		var hrs := 0.0
+		if board != null:
+			hrs = board.assigned_hours_for(ag.id, abs_h)
+		sig += "%s|%s|%s|%.1f;" % [ag.display_name, ag.morale_band_label(),
+			ag.status_line(), hrs]
+	if sig == _roster_sig:
+		return
+	_roster_sig = sig
+	for c in _roster_box.get_children():
+		c.queue_free()
 	for a in _bridge.roster_for(_item_id):
 		var agent: NpcAgent = a
 		var row := HBoxContainer.new()
@@ -672,8 +707,6 @@ func _on_rule_toggled(rule: String, on: bool) -> void:
 
 
 func _refresh_chores() -> void:
-	for c in _chore_box.get_children():
-		c.queue_free()
 	var board := _board()
 	if board == null:
 		return
@@ -687,6 +720,27 @@ func _refresh_chores() -> void:
 		if want >= 0 and _rule_consequence.selected != want:
 			_rule_consequence.select(want)
 		_consequence_hint.text = NpcConsequence.blurb(pol)
+	var abs_h: float = _bridge.current_abs_hours()
+	var weather: Dictionary = _bridge.current_weather()
+	# Rebuild only when the DISPLAYED content changed (progress snapped to
+	# 0.1 h, so a working crew redraws in readable steps rather than every
+	# refresh) — a blind rebuild dismisses tooltips mid-hover.
+	var sig := ""
+	for c in board.chores:
+		var ch: Dictionary = c
+		sig += "%s|%s|%d|%d|%d|%.1f|%s|%s;" % [str(ch.get("id", "")),
+			str(ch.get("label", "")), int(ch.get("priority", 0)),
+			int(ch.get("done_day", -1)),
+			(ch.get("workers", []) as Array).size(),
+			float(ch.get("progress_h", 0.0)),
+			str(ch.get("assigned_to", "")),
+			board.blocked_reason(ch, abs_h, fposmod(abs_h, 24.0), weather,
+				_bridge.roster_size_for(_item_id))]
+	if sig == _chores_sig:
+		return
+	_chores_sig = sig
+	for c in _chore_box.get_children():
+		c.queue_free()
 	if board.chores.is_empty():
 		var empty := Label.new()
 		empty.text = "No chores yet. Work keeps the infrastructure running —\nand people with nothing to do still need somewhere to gather."
@@ -694,8 +748,6 @@ func _refresh_chores() -> void:
 		empty.add_theme_color_override("font_color", C_TEXT_DIM)
 		_chore_box.add_child(empty)
 		return
-	var abs_h: float = _bridge.current_abs_hours()
-	var weather: Dictionary = _bridge.current_weather()
 	# THE ORDER THE CREW ACTUALLY WORKS IT. `board.chores` is insertion order
 	# while `available_for` sorts by priority, so the list the player reads was
 	# never the queue the crew pulls from — which makes the priority control

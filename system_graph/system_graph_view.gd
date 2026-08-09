@@ -10432,41 +10432,31 @@ func npc_population_host() -> Node3D:
 	return _npc_host
 
 
+## Which settlement-log kinds are story beats worth a toast.
+const _NPC_TOAST_KINDS: Array = ["departed", "lost", "collapse_warning",
+	"collapsed", "deserted"]
+
+
 ## Departures and collapse are story beats — surface them even with the graph
-## closed (the toast rides the normal toast channel).
+## closed. Reads the settlement log through a NAMED CURSOR (log_since), so this
+## toast and the challenge bake's collapse watcher can no longer race each
+## other — the destructive take_events() drain is retired. While the
+## settlement view is open its own feed already shows these lines, so the
+## toast stays quiet there; the cursor still advances, so closing the view
+## never replays a backlog of stale toasts.
 func _drain_npc_events() -> void:
 	if _npc_population == null:
 		return
-	for e in _npc_population.take_events():
+	var quiet := false
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("settlement_view_open"):
+		quiet = bool(main.call("settlement_view_open"))
+	for e in _npc_population.log_since("graph_toast"):
 		var ev: Dictionary = e
-		match str(ev.get("kind", "")):
-			"departed":
-				_show_toast("%s has left the community (%s)" % [
-					str(ev.get("name", "Someone")),
-					_npc_reason_text(str(ev.get("reason", "")))])
-			"lost":
-				# The PERISH consequence, and only ever that — stated plainly,
-				# without ceremony.
-				_show_toast("%s did not make it — %s" % [
-					str(ev.get("name", "Someone")), str(ev.get("reason", ""))])
-			"collapse_warning":
-				_show_toast("The community is unravelling — people are talking about leaving")
-			"collapsed":
-				_show_toast("COLONY COLLAPSE — too few people remain to keep this place running")
-			"deserted":
-				# The world goes silent at this point, so say so plainly and
-				# name both the cause and the way back.
-				_show_toast("EVERYONE HAS LEFT — %s. Fix it, then Reset population in the habitat inspector." % [
-					_npc_reason_text(str(ev.get("reason", "")))])
-
-
-static func _npc_reason_text(need: String) -> String:
-	match need:
-		"thirst": return "no water"
-		"hunger": return "no food"
-		"sleep": return "nowhere to sleep"
-		"bladder": return "no sanitation"
-	return "Fuck This"
+		if not _NPC_TOAST_KINDS.has(str(ev.get("kind", ""))):
+			continue
+		if not quiet:
+			_show_toast(str(ev.get("text", "")))
 
 
 ## Spawn/despawn the 3D avatar host to match whether any population engine

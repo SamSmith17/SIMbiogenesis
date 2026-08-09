@@ -10,12 +10,13 @@ extends RefCounted
 ## passes in a minute, so the player fast-forwards past every event that
 ## mattered and arrives at the consequences with no account of the causes.
 ##
-## **The destructive drain.** `NpcPopulationBridge.take_events()` EMPTIES the
-## array, and two consumers call it — the graph view (which toasts) and the
-## challenge bake engine (which watches for collapse). Whichever ran first
-## won, so during a bake the player's toasts silently vanished. A ring buffer
-## with per-consumer CURSORS fixes that by construction: reading is not a
-## mutation, and two readers cannot starve each other.
+## **The destructive drain.** `NpcPopulationBridge.take_events()` (now
+## retired) EMPTIED the array, and two consumers called it — the graph view
+## (which toasts) and the challenge bake engine (which watches for collapse).
+## Whichever ran first won, so during a bake the player's toasts silently
+## vanished. A ring buffer with per-consumer CURSORS fixes that by
+## construction: reading is not a mutation, and two readers cannot starve
+## each other.
 ##
 ## Quiet by design: no sound, nothing to dismiss, nothing modal. Severity
 ## exists to sort and tint, never to interrupt.
@@ -107,12 +108,21 @@ func recent(count: int = 50, at_least: int = INFO) -> Array:
 
 ## Standing alarms, for a status strip that should read "2 problems" rather
 ## than making the player scroll a log to find out.
+##
+## NEWEST first and ONE entry per latch key: an alarm that latched, cleared
+## and re-latched has several entries under the same kind, and returning them
+## all both over-counted the "(+N more)" suffix and put the OLDEST line at
+## index 0 — exactly the one a headline must not show.
 func open_alarms() -> Array:
+	var seen: Dictionary = {}
 	var out: Array = []
-	for e in entries:
-		var d: Dictionary = e
-		if bool(_latched.get(str(d.get("kind", "")), false)):
-			out.append(d)
+	for i in range(entries.size() - 1, -1, -1):
+		var d: Dictionary = entries[i]
+		var kind := str(d.get("kind", ""))
+		if not bool(_latched.get(kind, false)) or seen.has(kind):
+			continue
+		seen[kind] = true
+		out.append(d)
 	return out
 
 

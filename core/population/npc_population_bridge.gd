@@ -67,9 +67,6 @@ const NAV_REGION_SNAP_M := 5.0
 ## hit only counts as another level once it clears the ground by this much.
 const SURFACE_PROBE_TOP_M := 12.0
 const SURFACE_MIN_CLEARANCE_M := 1.6
-## Departure / collapse events for the view to toast, drained each read.
-var _pending_events: Array = []
-
 ## Cached agent_dots() payload. NpcPopulationHost calls agent_dots() every
 ## RENDER frame, and the Site Plan provider calls it again, but the simulation
 ## only steps on a 0.25–0.5 s accumulator — so the payload was identical between
@@ -1302,42 +1299,48 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	engine.skills = NpcSkills.deserialize(specs.get("pop_skills", {}) as Dictionary)
 	engine.duty.load_duties(specs.get("pop_duties", {}) as Dictionary)
 	engine.oncall.load_from(specs.get("pop_oncall", {}) as Dictionary)
-	# Departures and collapse are narrative events — surface them to the UI.
+	# Departures and collapse are narrative events. They go into the settlement
+	# LOG (per-consumer cursors: the graph toast and the challenge bake's
+	# collapse watcher can no longer race), which also finally puts these story
+	# beats in the settlement feed — before this the feed missed every one.
 	engine.agent_departed.connect(
 		func(_aid: String, who: String, reason: String) -> void:
-			_pending_events.append({
-				"kind": "departed", "item_id": iid, "name": who, "reason": reason,
-			}))
+			settlement_log().add("departed", "%s has left the community (%s)" % [
+				who, _need_text(reason)], _last_abs_h, SettlementLog.ALERT, iid))
 	engine.collapse_warning.connect(
-		func(risk: float) -> void:
-			_pending_events.append({"kind": "collapse_warning", "item_id": iid, "risk": risk}))
+		func(_risk: float) -> void:
+			settlement_log().add("collapse_warning",
+				"The community is unravelling — people are talking about leaving",
+				_last_abs_h, SettlementLog.ALERT, iid))
 	engine.colony_collapsed.connect(
 		func() -> void:
-			_pending_events.append({"kind": "collapsed", "item_id": iid}))
+			settlement_log().add("collapsed",
+				"COLONY COLLAPSE — too few people remain to keep this place running",
+				_last_abs_h, SettlementLog.ALERT, iid))
 	engine.colony_deserted.connect(
 		func(cause: String) -> void:
-			_pending_events.append({
-				"kind": "deserted", "item_id": iid, "reason": cause,
-			}))
+			settlement_log().add("deserted",
+				"EVERYONE HAS LEFT — %s. Fix it, then Reset population in the habitat inspector." % _need_text(cause),
+				_last_abs_h, SettlementLog.ALERT, iid))
 	engine.agent_lost.connect(
 		func(_aid: String, who: String, reason: String) -> void:
-			_pending_events.append({
-				"kind": "lost", "item_id": iid, "name": who, "reason": reason,
-			}))
+			# The PERISH consequence, and only ever that — stated plainly.
+			settlement_log().add("lost", "%s did not make it — %s" % [who, reason],
+				_last_abs_h, SettlementLog.ALERT, iid))
 	_engines[iid] = engine
 	_configured_count[iid] = count
 	return engine
 
 
-## Drain queued departure / collapse events (the view toasts them).
-##
-## DEPRECATED and destructive — two consumers race for the same array. New
-## readers should use `log_since(consumer)`, which is cursor-based and cannot
-## starve anyone. Kept only until the last caller moves over.
-func take_events() -> Array:
-	var out := _pending_events
-	_pending_events = []
-	return out
+## The needs, in the words a player uses. Shared by the departure/desertion
+## log lines; the fallback covers the morale rage-quit, which has no need.
+static func _need_text(need: String) -> String:
+	match need:
+		"thirst": return "no water"
+		"hunger": return "no food"
+		"sleep": return "nowhere to sleep"
+		"bladder": return "no sanitation"
+	return "Fuck This"
 
 
 ## THE LABOUR MERGE: a machine waiting on hands gets a real chore, at the

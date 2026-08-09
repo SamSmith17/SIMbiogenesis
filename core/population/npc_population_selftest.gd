@@ -2287,6 +2287,13 @@ func _test_settlement_log() -> void:
 			not lg.clear_latch("need_unmet|h|hygiene", "Showers are back", 21.0))
 	_check("the alarm can fire again after relief",
 			lg.latch("need_unmet|h|hygiene", "Nobody can reach a Shower", 30.0))
+	# The re-latched alarm now has TWO entries under one key. The list must
+	# carry ONE — the "(+N more)" suffix over-counted — and it must be the
+	# NEWEST, because index 0 is what a HUD headline shows.
+	_check("a re-latched alarm lists once", lg.open_alarms().size() == 1,
+			str(lg.open_alarms().size()))
+	_check("and the listed entry is the newest firing",
+			int((lg.open_alarms()[0] as Dictionary)["abs_h"]) == 30)
 
 	# Severity filters rather than interrupts — nothing here is modal.
 	lg.add("chatter", "Someone had lunch", 31.0, SettlementLog.INFO)

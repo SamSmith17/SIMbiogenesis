@@ -309,15 +309,48 @@ static func _next_band(v: int) -> int:
 
 ## Point the camera at a job. Framing is not commanding — nobody is told to go
 ## anywhere, the viewer just looks.
+##
+## Resolves prop and space targets too, not only raw positions — system-minted
+## work (machine chores, deliveries, duty slots at a kitchen) almost always
+## targets a PROP, and a look-at button that silently ignores exactly those
+## reads as broken on the rows the player most wants to watch.
 func _frame(chore: Dictionary) -> void:
 	if _view == null:
 		return
-	var tgt: Dictionary = chore.get("target", {})
-	if str(tgt.get("kind", "")) != "pos":
-		return
 	var cam := _view.camera()
-	if cam != null:
-		cam.look_at_xz(Vector2(float(tgt.get("x", 0.0)), float(tgt.get("z", 0.0))))
+	if cam == null:
+		return
+	var tgt: Dictionary = chore.get("target", {})
+	var main := get_tree().current_scene
+	match str(tgt.get("kind", "")):
+		"pos":
+			cam.look_at_xz(Vector2(float(tgt.get("x", 0.0)), float(tgt.get("z", 0.0))))
+		"prop":
+			if main == null:
+				return
+			var rec: Dictionary = PlacedPropService.get_prop_record(main, str(tgt.get("id", "")))
+			if not rec.is_empty():
+				cam.look_at_xz(Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))))
+		"space":
+			# Fall through to the crew-site marker below — a space target's
+			# position needs the registry, which the marker sweep already paid.
+			_frame_via_marker(chore, cam)
+		_:
+			# No target: if a crew is standing at it, the marker sweep knows
+			# where "at it" is.
+			_frame_via_marker(chore, cam)
+
+
+func _frame_via_marker(chore: Dictionary, cam: Variant) -> void:
+	if _bridge == null or not _bridge.has_method("crew_site_markers"):
+		return
+	var main := get_tree().current_scene
+	for m in (_bridge.call("crew_site_markers", main) as Array):
+		var mark: Dictionary = m
+		if str(mark.get("label", "")) == str(chore.get("label", "")) \
+				and mark.get("pos") is Vector2:
+			cam.call("look_at_xz", mark.get("pos"))
+			return
 
 
 func _open_full_editor() -> void:
