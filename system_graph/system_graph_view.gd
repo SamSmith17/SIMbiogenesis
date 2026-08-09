@@ -10322,6 +10322,24 @@ const _NPC_ROUTINES_SCRIPT := preload("res://scenes/ui/npc_routines_panel.gd")
 var _npc_routines_panel: Control = null
 const _SITE_PROJECTS_SCRIPT := preload("res://scenes/ui/site_project_panel.gd")
 var _site_project_panel: Control = null
+const _WORK_PLANNER_SCRIPT := preload("res://scenes/ui/work_planner_panel.gd")
+var _work_planner_panel: Control = null
+
+
+## The Work Planner (Chores / Tasks / Schedule / Person). Same lazy pattern as
+## the Routines panel; reachable from the work dock and the Routines panel.
+func open_work_planner(item_id: String = "") -> void:
+	if _npc_population == null:
+		_show_toast("No population running — planning needs a crew")
+		return
+	if _work_planner_panel == null or not is_instance_valid(_work_planner_panel):
+		_work_planner_panel = _WORK_PLANNER_SCRIPT.new()
+		_work_planner_panel.name = "WorkPlannerPanel"
+		var parent := get_parent()
+		if parent == null:
+			return
+		parent.add_child(_work_planner_panel)
+	_work_planner_panel.call("open", _npc_population, item_id)
 
 
 ## Site Projects panel (the camp-lifecycle mechanic's management surface).

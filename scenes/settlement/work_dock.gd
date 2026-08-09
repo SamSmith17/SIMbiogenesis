@@ -37,6 +37,7 @@ var _panel: PanelContainer = null
 var _rows: VBoxContainer = null
 var _title: Label = null
 var _summary: Label = null
+var _today_lbl: Label = null
 var _toggle: Button = null
 
 
@@ -98,7 +99,9 @@ func _build() -> void:
 		_collapsed = not _collapsed
 		_toggle.text = "▸" if _collapsed else "▾"
 		_rows.visible = not _collapsed
-		_summary.visible = not _collapsed)
+		_summary.visible = not _collapsed
+		if _today_lbl != null:
+			_today_lbl.visible = not _collapsed)
 	head.add_child(_toggle)
 
 	_summary = Label.new()
@@ -112,12 +115,30 @@ func _build() -> void:
 	_rows.add_theme_constant_override("separation", 3)
 	col.add_child(_rows)
 
+	# Who is rostered today — reporting, not commanding. Folded into _sig so
+	# the signature-gated rebuild refreshes it when the rota changes.
+	_today_lbl = Label.new()
+	_today_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_today_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_today_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_today_lbl.custom_minimum_size.x = WIDTH - 24
+	col.add_child(_today_lbl)
+
+	var btns := HBoxContainer.new()
+	btns.add_theme_constant_override("separation", 4)
+	col.add_child(btns)
+	var plan := Button.new()
+	UITheme.style_button(plan)
+	plan.text = "Plan work…"
+	plan.tooltip_text = "Work Planner: recurring chores, tasks, the duty rota, per-person hours and skills"
+	plan.pressed.connect(func() -> void: _open_modal("open_work_planner"))
+	btns.add_child(plan)
 	var deep := Button.new()
 	UITheme.style_button(deep)
-	deep.text = "Routines & chores…"
+	deep.text = "Routines…"
 	deep.tooltip_text = "Full editor: add chores, edit the daily routine, site rules"
 	deep.pressed.connect(_open_full_editor)
-	col.add_child(deep)
+	btns.add_child(deep)
 
 
 ## The dock is a live view, so it rebuilds — but only when the CONTENT changed.
@@ -169,9 +190,19 @@ func _refresh() -> void:
 			int(ch.get("priority", 0)), int(ch.get("done_day", -1))]
 	_summary.text = "%d working · %d gathering · %d done today" % [
 		working, waiting, done]
+	# Who is rostered today, straight off the duty rota. Part of the signature,
+	# or the gate would freeze this line at whatever it said on first build.
+	var today_text := ""
+	var duty: Variant = _bridge.call("duty_roster_for", _first_iid())
+	if duty != null:
+		today_text = str(duty.call("today_text", day,
+			func(aid: String) -> String: return _name_of(aid)))
+	sig += "|today:%s" % today_text
 	if sig == _sig:
 		return   # nothing moved; leave the rows (and any hover) alone
 	_sig = sig
+	_today_lbl.text = ("Today: %s" % today_text) if not today_text.is_empty() else ""
+	_today_lbl.visible = not today_text.is_empty() and not _collapsed
 
 	for c in _rows.get_children():
 		c.queue_free()
@@ -213,7 +244,17 @@ func _chore_row(board: Variant, chore: Dictionary, day: int) -> Control:
 	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	var left := maxf(float(chore.get("chore_hours", 0.0))
 		- float(chore.get("progress_h", 0.0)), 0.0)
-	lbl.tooltip_text = "%.1f h left · %d of %d people" % [left, w, mn]
+	# blocked_reason in the tooltip: the dock is where the player WATCHES, so
+	# "why is this not moving" must be answerable without leaving it.
+	var reason := ""
+	if board != null and board.has_method("blocked_reason"):
+		var abs_h: float = _bridge.call("current_abs_hours")
+		reason = str(board.call("blocked_reason", chore, abs_h,
+			fposmod(abs_h, 24.0), _bridge.call("current_weather"),
+			int(_bridge.call("roster_size_for", _first_iid())),
+			func(aid: String) -> String: return _name_of(aid)))
+	lbl.tooltip_text = "%.1f h left · %d of %d people%s" % [left, w, mn,
+		("\n⚠ " + reason) if not reason.is_empty() else ""]
 	row.add_child(lbl)
 
 	var crew := Label.new()
@@ -280,18 +321,31 @@ func _frame(chore: Dictionary) -> void:
 
 
 func _open_full_editor() -> void:
+	_open_modal("open_npc_routines")
+
+
+## Close the settlement view and open one of the graph view's work modals —
+## they live on the UI layer the view sits under, so the view must yield first.
+func _open_modal(method: String) -> void:
 	var main := get_tree().current_scene
 	if main == null:
 		return
 	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
-	if sgv == null or not sgv.has_method("open_npc_routines"):
+	if sgv == null or not sgv.has_method(method):
 		return
 	var iid := _first_iid()
 	if iid.is_empty():
 		return
 	if _view != null:
 		_view.close()
-	sgv.call("open_npc_routines", iid)
+	sgv.call(method, iid)
+
+
+func _name_of(agent_id: String) -> String:
+	if _bridge == null:
+		return agent_id
+	var agent: Variant = _bridge.call("find_agent", agent_id)
+	return str(agent.get("display_name")) if agent != null else agent_id
 
 
 func _first_iid() -> String:

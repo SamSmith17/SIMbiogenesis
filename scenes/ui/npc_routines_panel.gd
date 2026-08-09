@@ -50,6 +50,9 @@ var _new_priority: OptionButton = null
 var _new_min_workers: SpinBox = null
 var _new_max_workers: SpinBox = null
 var _new_repeat: OptionButton = null
+var _new_skill: OptionButton = null
+var _new_n: SpinBox = null
+var _new_dow: Array = []   # 7 toggle Buttons, weekly only
 var _new_where: Button = null
 ## Ground point the next chore is pinned to, Vector2.INF for "wherever".
 var _new_target := Vector2.INF
@@ -58,13 +61,12 @@ var _new_target := Vector2.INF
 ## invite "99 = most important", which is the opposite of what happens. Three
 ## named bands is the whole useful range.
 const PRIORITIES := [["High", 0], ["Normal", 50], ["Low", 100]]
-## label, repeat value, repeat_days. Per-WEEKDAY selection ("Mon Wed Fri")
-## needs a toggle row and lives in the Work Planner; a weekly with no weekdays
-## named degrades to "every 7 days", which is honest and immediately useful.
+## label, repeat value, repeat_days. "Every N days" opens a spinner and
+## "Weekly" a weekday toggle row (a weekly with NO weekdays picked degrades to
+## "every 7 days", which is honest and immediately useful).
 const REPEATS := [
 	["Every day", "daily", 1],
-	["Every 2 days", "every_n", 2],
-	["Every 3 days", "every_n", 3],
+	["Every N days", "every_n", 3],
 	["Weekly", "weekly", 7],
 	["Once", "once", 1],
 	["On demand", "on_demand", 1],
@@ -184,6 +186,17 @@ func _build_ui() -> void:
 	_weather_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_weather_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	header.add_child(_weather_lbl)
+	var planner_btn := Button.new()
+	UITheme.style_button(planner_btn)
+	planner_btn.text = "📅 Plan work…"
+	planner_btn.tooltip_text = "Work Planner: recurring chores, one-time tasks, the duty rota, per-person hours and skills"
+	planner_btn.pressed.connect(func() -> void:
+		var sgv: Node = ServiceLocator.graph()
+		if sgv != null and sgv.has_method("open_work_planner"):
+			var iid := _item_id
+			close()
+			sgv.call("open_work_planner", iid))
+	header.add_child(planner_btn)
 	var projects_btn := Button.new()
 	UITheme.style_button(projects_btn)
 	projects_btn.text = "👷 Projects…"
@@ -338,7 +351,16 @@ func _build_new_chore_row() -> VBoxContainer:
 	for r in REPEATS:
 		_new_repeat.add_item(str((r as Array)[0]))
 	_new_repeat.select(0)
+	_new_repeat.item_selected.connect(func(_i: int) -> void: _sync_repeat_vis())
 	row3.add_child(_labelled("Repeat", _new_repeat))
+	_new_skill = OptionButton.new()
+	_new_skill.add_item("Any skill")
+	_new_skill.set_item_metadata(0, "")
+	for t in NpcSkills.TAGS:
+		_new_skill.add_item(NpcSkills.label(str(t)))
+		_new_skill.set_item_metadata(_new_skill.item_count - 1, str(t))
+	_new_skill.tooltip_text = "Qualified people take it first; with nobody qualified anyone may still try (the work never hides)"
+	row3.add_child(_labelled("Needs", _new_skill))
 	# The highest-value control here: without a target the worker does the chore
 	# where they happen to be standing, which reads as the chore doing nothing.
 	_new_where = Button.new()
@@ -352,7 +374,37 @@ func _build_new_chore_row() -> VBoxContainer:
 	add_btn.text = "Add"
 	add_btn.pressed.connect(_on_add_chore)
 	row3.add_child(add_btn)
+
+	# Contextual recurrence detail: the N spinner for "Every N days", the
+	# weekday toggles for "Weekly". Hidden otherwise so the row stays calm.
+	var row4 := HBoxContainer.new()
+	row4.add_theme_constant_override("separation", 6)
+	wrap.add_child(row4)
+	_new_n = _spin(1.0, 2.0, 30.0, 3.0)
+	row4.add_child(_labelled("Every N days", _new_n))
+	var dow_box := HBoxContainer.new()
+	dow_box.add_theme_constant_override("separation", 2)
+	_new_dow = []
+	for i in 7:
+		var btn := Button.new()
+		UITheme.style_button(btn)
+		btn.text = str(DOW_SHORT[i])
+		btn.toggle_mode = true
+		btn.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		dow_box.add_child(btn)
+		_new_dow.append(btn)
+	row4.add_child(_labelled("Weekdays", dow_box))
+	_sync_repeat_vis()
 	return wrap
+
+
+## Show only the recurrence detail the chosen repeat actually uses.
+func _sync_repeat_vis() -> void:
+	if _new_n == null or _new_dow.is_empty():
+		return
+	var rep := str((REPEATS[maxi(_new_repeat.selected, 0)] as Array)[1])
+	_new_n.get_parent().visible = rep == "every_n"
+	(_new_dow[0] as Button).get_parent().get_parent().visible = rep == "weekly"
 
 
 func _spin(step: float, min_v: float, max_v: float, value: float) -> SpinBox:
@@ -681,9 +733,14 @@ func _refresh_chores() -> void:
 				pri_name = str((band as Array)[0])
 		var done_today := int(chore.get("done_day", -1)) == day
 		var held := bool(chore.get("held", false))
-		lbl.tooltip_text = "%s priority · %s%s" % [pri_name,
+		# The one line that says why a chore is not moving — the honesty this
+		# panel lacked while the hygiene stall was invisible.
+		var reason := board.blocked_reason(chore, abs_h, fposmod(abs_h, 24.0),
+			weather, _bridge.roster_size_for(_item_id), Callable(self, "_name_for"))
+		lbl.tooltip_text = "%s priority · %s%s%s" % [pri_name,
 			_repeat_text(chore), "
-Paused" if held else ""]
+Paused" if held else "", ("
+⚠ " + reason) if not reason.is_empty() else ""]
 		if pri != 50:
 			lbl.text = "%s %s" % ["▲" if pri < 50 else "▼", lbl.text]
 		if done_today:
@@ -716,11 +773,13 @@ Paused" if held else ""]
 		elif held:
 			crew.text = "paused"
 			crew.add_theme_color_override("font_color", C_TEXT_DIM)
-		elif not (chore.get("depends_on", []) as Array).is_empty() and workers == 0:
-			# A dependency-blocked chore looked exactly like an idle one, which
-			# is the single most confusing state on this board.
+		elif workers == 0 and not reason.is_empty():
+			# A blocked chore looked exactly like an idle one, which is the
+			# single most confusing state on this board. The reason itself is
+			# one hover away.
 			crew.text = "waiting"
-			crew.add_theme_color_override("font_color", C_TEXT_DIM)
+			crew.tooltip_text = reason
+			crew.add_theme_color_override("font_color", UITheme.C_WARN)
 		elif workers == 0:
 			crew.text = "—"
 			crew.add_theme_color_override("font_color", C_TEXT_DIM)
@@ -834,13 +893,22 @@ func _on_add_chore() -> void:
 	if _new_assign.selected > 0:
 		assign = str(_new_assign.get_selected_metadata())
 	var min_w := int(_new_min_workers.value)
+	var rep := str((REPEATS[maxi(_new_repeat.selected, 0)] as Array)[1])
+	var dow: Array = []
+	if rep == "weekly":
+		for i in 7:
+			if (_new_dow[i] as Button).button_pressed:
+				dow.append(i)
 	var opts := {
 		"window": {"start_h": float(_new_start.value), "end_h": float(_new_end.value)},
 		"exposure": str(exposure),
 		"assigned_to": assign,
 		"priority": int((PRIORITIES[maxi(_new_priority.selected, 0)] as Array)[1]),
-		"repeat": str((REPEATS[maxi(_new_repeat.selected, 0)] as Array)[1]),
-		"repeat_days": int((REPEATS[maxi(_new_repeat.selected, 0)] as Array)[2]),
+		"repeat": rep,
+		"repeat_days": int(_new_n.value) if rep == "every_n"
+			else int((REPEATS[maxi(_new_repeat.selected, 0)] as Array)[2]),
+		"repeat_dow": dow,
+		"requires_skill": str(_new_skill.get_item_metadata(maxi(_new_skill.selected, 0))),
 		"min_workers": min_w,
 		# A max below the quorum is unsatisfiable by construction, so the pair is
 		# clamped rather than refused — the player asked for a bigger crew.
