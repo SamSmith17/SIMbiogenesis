@@ -262,10 +262,12 @@ func _unhandled_input(event: InputEvent) -> void:
 ## world XZ, nothing else, and the caller uses it to author a RULE (where a
 ## chore lives) rather than to command a person. Esc cancels, delivering
 ## `Vector2.INF`, so the caller always hears back exactly once.
-func pick_point_once(cb: Callable) -> void:
+## `hint` names WHAT is being placed — the same picker serves chores, duties
+## and whole projects, and "this chore" was a lie for two of the three.
+func pick_point_once(cb: Callable, hint: String = "this chore") -> void:
 	_pick_cb = cb
 	if _hud != null and is_instance_valid(_hud):
-		_hud.call("set_pick_hint", "Click the spot for this chore · Esc to cancel")
+		_hud.call("set_pick_hint", "Click the spot for %s · Esc to cancel" % hint)
 
 
 func _deliver_pick(p: Vector2) -> void:

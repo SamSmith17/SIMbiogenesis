@@ -25,8 +25,8 @@ const WIDTH := 330
 
 ## Priority is an uncapped int where LOWER sorts first. Same three bands the
 ## Routines panel authors with, deliberately — two vocabularies for one field
-## would be worse than none.
-const PRIORITIES: Array = [["High", 0], ["Normal", 50], ["Low", 100]]
+## would be worse than none. Single-sourced on NpcChoreBoard.
+const PRIORITIES: Array = NpcChoreBoard.PRIORITY_BANDS
 
 var _view: SettlementView = null
 var _bridge: Variant = null
@@ -307,10 +307,24 @@ func _chore_row(board: Variant, chore: Dictionary, day: int) -> Control:
 	row.add_child(lbl)
 
 	var crew := Label.new()
-	crew.text = "done" if done_today else ("hold" if held else "%d/%d" % [w, mn])
+	if done_today:
+		crew.text = "done"
+		crew.add_theme_color_override("font_color", UITheme.C_OK)
+	elif held:
+		crew.text = "hold"
+		crew.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	elif w == 0 and not reason.is_empty():
+		# Same amber "waiting" the Routines panel uses — a blocked chore
+		# rendered as a dim "0/1" was the single most confusing state on this
+		# board, and the dock is the surface the player actually watches.
+		crew.text = "waiting"
+		crew.tooltip_text = reason
+		crew.mouse_filter = Control.MOUSE_FILTER_PASS
+		crew.add_theme_color_override("font_color", UITheme.C_WARN)
+	else:
+		crew.text = "%d/%d" % [w, mn]
+		crew.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	crew.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	crew.add_theme_color_override("font_color",
-		UITheme.C_OK if done_today else UITheme.C_TEXT_S)
 	crew.custom_minimum_size.x = 34
 	row.add_child(crew)
 
@@ -369,15 +383,13 @@ static func _reason_category(reason: String) -> String:
 	return "blocked"
 
 
+## Single-sourced on the board beside reason_glyph.
 static func _band_name(v: int) -> String:
-	return "High" if v < 50 else ("Low" if v > 50 else "Normal")
+	return NpcChoreBoard.band_name(v)
 
 
-## Cycle Normal -> High -> Low -> Normal.
 static func _next_band(v: int) -> int:
-	if v == 50:
-		return 0
-	return 100 if v == 0 else 50
+	return NpcChoreBoard.next_band(v)
 
 
 ## Point the camera at a job. Framing is not commanding — nobody is told to go

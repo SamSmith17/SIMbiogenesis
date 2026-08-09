@@ -60,7 +60,7 @@ var _new_target := Vector2.INF
 ## Priority is an uncapped int where LOWER sorts first — a raw spinbox would
 ## invite "99 = most important", which is the opposite of what happens. Three
 ## named bands is the whole useful range.
-const PRIORITIES := [["High", 0], ["Normal", 50], ["Low", 100]]
+const PRIORITIES := NpcChoreBoard.PRIORITY_BANDS
 ## label, repeat value, repeat_days. "Every N days" opens a spinner and
 ## "Weekly" a weekday toggle row (a weekly with NO weekdays picked degrades to
 ## "every 7 days", which is honest and immediately useful).
@@ -522,6 +522,8 @@ func _refresh_roster() -> void:
 	if sig == _roster_sig:
 		return
 	_roster_sig = sig
+	# Keep the reader's place: rebuilt lists used to snap to the top.
+	UITheme.keep_scroll(_roster_box).call()
 	for c in _roster_box.get_children():
 		c.queue_free()
 	for a in _bridge.roster_for(_item_id):
@@ -766,6 +768,8 @@ func _refresh_chores() -> void:
 	if sig == _chores_sig:
 		return
 	_chores_sig = sig
+	# Keep the reader's place: rebuilt lists used to snap to the top.
+	UITheme.keep_scroll(_chore_box).call()
 	for c in _chore_box.get_children():
 		c.queue_free()
 	if board.chores.is_empty():
@@ -989,28 +993,12 @@ Paused" if held else "", ("
 		row.add_child(del)
 
 
-## How often, in words. The old form was a two-way `if daily else "once"`,
-## which described every other value wrongly.
+## How often, in words — single-sourced on the board beside reason_glyph.
 static func _repeat_text(chore: Dictionary) -> String:
-	match NpcChoreBoard.normalize_repeat(chore.get("repeat", "daily")):
-		"daily":
-			return "repeats daily"
-		"every_n":
-			return "every %d days" % maxi(int(chore.get("repeat_days", 1)), 1)
-		"weekly":
-			var dow: Array = chore.get("repeat_dow", []) as Array
-			if dow.is_empty():
-				return "weekly"
-			var names := PackedStringArray()
-			for d in dow:
-				names.append(DOW_SHORT[posmod(int(d), 7)])
-			return " ".join(names)
-		"on_demand":
-			return "when re-armed"
-	return "once"
+	return NpcChoreBoard.repeat_text(chore)
 
 
-const DOW_SHORT: Array = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+const DOW_SHORT: Array = NpcChoreBoard.DOW_SHORT
 
 
 ## A flat button does not look clickable, and a click-through nobody discovers

@@ -13,10 +13,13 @@ extends Control
 
 const MODAL_NAME := "site_projects"
 
-const C_DONE := Color(0.30, 0.72, 0.42)
-const C_ACTIVE := Color(0.92, 0.70, 0.25)
-const C_PENDING := Color(0.45, 0.48, 0.56)
-const C_SKIPPED := Color(0.60, 0.42, 0.42)
+# Redirected to UITheme (repo convention): the old literals were near-misses
+# of C_OK / C_AMBER / C_TEXT_M / C_ERROR, so this panel showed a THIRD green
+# and red beside the ones every other work surface uses.
+const C_DONE := UITheme.C_OK
+const C_ACTIVE := UITheme.C_AMBER
+const C_PENDING := UITheme.C_TEXT_M
+const C_SKIPPED := UITheme.C_ERROR
 
 var _bridge = null                 # NpcPopulationBridge
 var _active := false
@@ -42,6 +45,9 @@ var _lab_sig := ""
 var _lab_rows: Array = []
 var _lab_summary: Dictionary = {}
 var _lab_progress := 0.0
+## Sentinel, not "": an empty list's empty signature would compare equal to ""
+## on the first pass and the empty-state row would never build.
+var _list_sig := "<unbuilt>"
 
 
 func _ready() -> void:
@@ -124,6 +130,20 @@ func _build_ui() -> void:
 	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(title)
+	# The same header pair the other work panels carry — projects, routines
+	# and the planner are one workflow, and this panel had no way across.
+	var routines_btn := Button.new()
+	UITheme.style_button(routines_btn)
+	routines_btn.text = "Routines…"
+	routines_btn.tooltip_text = "Full editor: add chores, edit the daily routine, site rules"
+	routines_btn.pressed.connect(func() -> void: _open_work_modal("open_npc_routines"))
+	head.add_child(routines_btn)
+	var plan_btn := Button.new()
+	UITheme.style_button(plan_btn)
+	plan_btn.text = "Plan work…"
+	plan_btn.tooltip_text = "Work Planner: recurring chores, tasks, the duty rota, per-person hours and skills"
+	plan_btn.pressed.connect(func() -> void: _open_work_modal("open_work_planner"))
+	head.add_child(plan_btn)
 	var close_btn := Button.new()
 	UITheme.style_button(close_btn)
 	close_btn.text = "✕"
@@ -135,6 +155,7 @@ func _build_ui() -> void:
 
 	var hint := Label.new()
 	hint.text = "End-to-end crew work: unload → fabricate → raise → operate → break down → pack out. World changes land when the labour is actually done."
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vb.add_child(hint)
@@ -150,6 +171,7 @@ func _build_ui() -> void:
 
 	_empty_lbl = Label.new()
 	_empty_lbl.text = "No projects yet. Deliver a kit (Packing Lab → 🚚) or queue a build (Linkage Lab → 👷)."
+	_empty_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_empty_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_empty_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_list.add_child(_empty_lbl)
@@ -237,7 +259,7 @@ func _on_np_where() -> void:
 		if p != Vector2.INF:
 			_np_site = p
 			_np_where.text = "@ %d, %d" % [int(p.x), int(p.y)]
-		open(_bridge))
+		open(_bridge), "the project site")
 
 
 func _on_np_queue() -> void:
@@ -336,23 +358,54 @@ func _rebuild_row(rec: Dictionary) -> Control:
 	return row
 
 
+## Rebuild signature (same discipline as every other work panel — sentinel
+## start, snapped progress). Rebuilding blind every 0.75 s dismissed tooltips
+## mid-hover and made Pause/Cancel a race against the timer.
+func _list_signature(rows: Array, crates: Array) -> String:
+	var sig := "lab:%s|%d|%.2f|%s;" % [_lab_sig, _lab_rows.size(), _lab_progress,
+		str(_lab != null and is_instance_valid(_lab) and _lab.is_running())]
+	for c in crates:
+		sig += "crate:%s;" % str((c as Dictionary).get("id", ""))
+	var now := _now_h()
+	for row in rows:
+		var p: Dictionary = row["project"]
+		var board = _bridge.chore_board_for(str(row["iid"]))
+		sig += "%s|%s|%s|%.1f;" % [str(p.get("id", "")), str(p.get("state", "")),
+			str(p.get("paused", false)),
+			maxf(now - float(p.get("created_h", 0.0)), 0.0)]
+		for t in p.get("tasks", []):
+			var td := t as Dictionary
+			var ch: Dictionary = board.find(str(td.get("chore_id", ""))) \
+				if board != null else {}
+			sig += "%s|%d|%.1f;" % [str(td.get("status", "")),
+				(ch.get("workers", []) as Array).size(),
+				float(ch.get("progress_h", 0.0))]
+	return sig
+
+
 func _refresh() -> void:
 	if _bridge == null:
 		return
-	for child in _list.get_children():
-		if child != _empty_lbl:
-			child.queue_free()
 	var rows: Array = _bridge.all_site_projects()
 	var crates := _rebuildable_crates()
-	for c in crates:
-		_list.add_child(_rebuild_row(c as Dictionary))
-	_empty_lbl.visible = rows.is_empty() and crates.is_empty()
 	# Newest first — the project just queued is the one being watched.
 	rows.sort_custom(func(a, b) -> bool:
 		return float((a["project"] as Dictionary).get("created_h", 0.0)) \
 			> float((b["project"] as Dictionary).get("created_h", 0.0)))
+	var sig := _list_signature(rows, crates)
+	if sig == _list_sig:
+		return
+	_list_sig = sig
+	var restore := UITheme.keep_scroll(_list)
+	for child in _list.get_children():
+		if child != _empty_lbl:
+			child.queue_free()
+	for c in crates:
+		_list.add_child(_rebuild_row(c as Dictionary))
+	_empty_lbl.visible = rows.is_empty() and crates.is_empty()
 	for row in rows:
 		_list.add_child(_project_card(str(row["iid"]), row["project"] as Dictionary))
+	restore.call()
 
 
 func _project_card(iid: String, project: Dictionary) -> Control:
@@ -376,6 +429,7 @@ func _project_card(iid: String, project: Dictionary) -> Control:
 	}.get(str(project.get("kind", "")), "👷"))
 	var name_lbl := Label.new()
 	name_lbl.text = "%s %s" % [glyph, str(project.get("label", "Project"))]
+	name_lbl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(name_lbl)
 	# The click-through that closes the loop between the plan and the work:
@@ -395,6 +449,7 @@ func _project_card(iid: String, project: Dictionary) -> Control:
 	head.add_child(watch)
 	var state_lbl := Label.new()
 	state_lbl.text = ("⏸ paused" if paused else state)
+	state_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	state_lbl.add_theme_color_override("font_color",
 		C_DONE if state == "done" else (C_SKIPPED if state == "cancelled" else UITheme.C_TEXT_S))
 	head.add_child(state_lbl)
@@ -432,6 +487,7 @@ func _project_card(iid: String, project: Dictionary) -> Control:
 	var elapsed := maxf(_now_h() - float(project.get("created_h", 0.0)), 0.0)
 	meta.text = "%s%d/%d phases done · %.1f h since queued" % [
 		plan_txt, int(roll.get("done", 0)), int(roll.get("total", 0)), elapsed]
+	meta.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	meta.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	vb.add_child(meta)
 
@@ -483,12 +539,14 @@ func _task_row(task: Dictionary, board) -> Control:
 	row.add_child(chip)
 	var lbl := Label.new()
 	lbl.text = str(task.get("label", ""))
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(lbl)
 	if status == "pending" and not chore.is_empty():
 		var workers := (chore.get("workers", []) as Array).size()
 		var min_w := int(chore.get("min_workers", 1))
 		var crew := Label.new()
+		crew.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		if workers > 0 and workers < min_w:
 			crew.text = "%d/%d ppl — gathering" % [workers, min_w]
 			crew.add_theme_color_override("font_color", C_ACTIVE)
@@ -562,6 +620,7 @@ func _whatif_block(iid: String, counts: Dictionary) -> Control:
 	var vb := VBoxContainer.new()
 	var head := Label.new()
 	head.text = "What-if (planned makespan — the sim will stretch it):"
+	head.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	head.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	vb.add_child(head)
 	var tasks := NpcCrewPlan.linkage_fab_tasks(counts)
@@ -577,6 +636,7 @@ func _whatif_block(iid: String, counts: Dictionary) -> Control:
 		line += cell + "   "
 	var lbl := Label.new()
 	lbl.text = line.strip_edges()
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vb.add_child(lbl)
 	var board = _bridge.chore_board_for(iid)
@@ -661,6 +721,7 @@ func _experiment_table() -> Control:
 	var vb := VBoxContainer.new()
 	var head := Label.new()
 	head.text = "Simulated (real crew — needs, morale, weather, windows):"
+	head.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	head.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	vb.add_child(head)
 	var grid := GridContainer.new()
@@ -720,10 +781,32 @@ func _experiment_table() -> Control:
 		vb.add_child(best)
 	var caveat := Label.new()
 	caveat.text = "Fresh crew from the current hour · today's weather held · straight-line routes, no terrain · 15-minute resolution."
+	caveat.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	caveat.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	caveat.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vb.add_child(caveat)
 	return vb
+
+
+## Same yield-first pattern as the work dock: the modals live on the graph
+## view, which handles opening them over whatever is up.
+func _open_work_modal(method: String) -> void:
+	var main := get_tree().current_scene
+	if main == null:
+		return
+	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	if sgv == null or not sgv.has_method(method):
+		return
+	var iid := ""
+	if _bridge != null and _bridge.has_method("pop_driven_item_ids"):
+		var ids: Array = _bridge.call("pop_driven_item_ids")
+		if not ids.is_empty():
+			iid = str(ids[0])
+	if iid.is_empty():
+		_np_error("Nobody to do the work — turn on Population Simulation for a habitat first.")
+		return
+	close()
+	sgv.call(method, iid)
 
 
 func _now_h() -> float:

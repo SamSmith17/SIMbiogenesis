@@ -27,8 +27,8 @@ const MODAL_NAME := "work_planner"
 const C_TEXT := UITheme.C_TEXT
 const C_DIM := UITheme.C_TEXT_S
 
-const PRIORITIES: Array = [["High", 0], ["Normal", 50], ["Low", 100]]
-const DOW_SHORT: Array = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+const PRIORITIES: Array = NpcChoreBoard.PRIORITY_BANDS
+const DOW_SHORT: Array = NpcChoreBoard.DOW_SHORT
 ## Period choices for the duty authoring row (a rota slot must FALL on days,
 ## so on-demand is meaningless there).
 const PERIODS: Array = [["Daily", "daily"], ["Every N days", "every_n"],
@@ -359,23 +359,9 @@ static func _period_of(rec: Dictionary) -> String:
 	return NpcChoreBoard.normalize_repeat(rec.get("repeat", "daily"))
 
 
+## How often, in words — single-sourced on the board beside reason_glyph.
 static func _repeat_text(rec: Dictionary) -> String:
-	match _period_of(rec):
-		"daily":
-			return "daily"
-		"every_n":
-			return "every %d d" % maxi(int(rec.get("repeat_days", 1)), 1)
-		"weekly":
-			var dow: Array = rec.get("repeat_dow", []) as Array
-			if dow.is_empty():
-				return "weekly"
-			var names := PackedStringArray()
-			for d in dow:
-				names.append(DOW_SHORT[posmod(int(d), 7)])
-			return " ".join(names)
-		"on_demand":
-			return "on demand"
-	return "once"
+	return NpcChoreBoard.repeat_text(rec)
 
 
 # --- construction -----------------------------------------------------------
@@ -793,6 +779,8 @@ func _refresh_chores() -> void:
 		return
 	_chore_sig = sig
 	var prj_ids := _project_chore_ids()
+	# Keep the reader's place: rebuilt lists used to snap to the top.
+	UITheme.keep_scroll(_chore_rows).call()
 	for c in _chore_rows.get_children():
 		c.queue_free()
 	if recs.is_empty():
@@ -1086,6 +1074,8 @@ func _refresh_tasks() -> void:
 		return
 	_task_sig = sig
 	var prj_ids := _project_chore_ids()
+	# Keep the reader's place: rebuilt lists used to snap to the top.
+	UITheme.keep_scroll(_task_rows).call()
 	for c in _task_rows.get_children():
 		c.queue_free()
 	if recs.is_empty():
@@ -1212,6 +1202,8 @@ func _refresh_schedule() -> void:
 	if sig == _sched_sig:
 		return
 	_sched_sig = sig
+	# Keep the reader's place: rebuilt lists used to snap to the top.
+	UITheme.keep_scroll(_sched_box).call()
 	for c in _sched_box.get_children():
 		c.queue_free()
 
@@ -1509,7 +1501,7 @@ func _on_pick_duty_where() -> void:
 		open(bridge, iid)
 		if _tabs != null:
 			_tabs.current_tab = 2
-		_refresh())
+		_refresh(), "this duty")
 
 
 func _on_regenerate() -> void:
@@ -1738,6 +1730,8 @@ func _refresh_person() -> void:
 		var pc := NpcPopulationEngine.color_for_agent(_person_id)
 		_person_swatch.visible = pc != Color.BLACK   # colors pref off => hide
 		_person_swatch.color = pc
+	# Keep the reader's place: rebuilt lists used to snap to the top.
+	UITheme.keep_scroll(_person_box).call()
 	for c in _person_box.get_children():
 		c.queue_free()
 

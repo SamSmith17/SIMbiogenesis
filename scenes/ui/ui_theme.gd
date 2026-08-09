@@ -136,6 +136,18 @@ static func style_progress(bar: ProgressBar, fill: Color = C_PRIMARY) -> void:
 	bar.add_theme_stylebox_override("fill", fg)
 
 
+## Capture a rebuilt list's scroll position; call the returned Callable after
+## the rebuild to restore it (deferred — the new children need a layout pass
+## before the old offset is reachable). Signature-gated panels rebuild whole
+## row lists, and every one of them used to snap back to the top.
+static func keep_scroll(rows_box: Control) -> Callable:
+	var sc := rows_box.get_parent() as ScrollContainer
+	if sc == null:
+		return func() -> void: pass
+	var v := sc.scroll_vertical
+	return func() -> void: sc.set_deferred("scroll_vertical", v)
+
+
 ## Small pill/chip tinted by `color` (mode chips, data-source chips, badges).
 static func chip_style(color: Color) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()

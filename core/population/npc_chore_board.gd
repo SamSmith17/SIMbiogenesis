@@ -100,7 +100,11 @@ func add_chore(label: String, chore_hours: float, opts: Dictionary = {}) -> Stri
 		"repeat_dow": (opts.get("repeat_dow", []) as Array).duplicate(),
 		"catch_up": bool(opts.get("catch_up", true)),
 		"exposure": str(opts.get("exposure", NpcWeatherGate.EXPOSURE_OUTDOOR)),
-		"priority": int(opts.get("priority", 0)),
+		# Default NORMAL (50), the middle band every surface renders without a
+		# marker. The old default 0 made every unadorned chore — the seed set,
+		# hand-authored rows — read as player-set "▲ high". System minters keep
+		# passing their explicit low numbers: their work SHOULD outrank.
+		"priority": int(opts.get("priority", PRIORITY_NORMAL)),
 		"assigned_to": str(opts.get("assigned_to", "")),
 		"requires_skill": str(opts.get("requires_skill", "")),
 		"depends_on": (opts.get("depends_on", []) as Array).duplicate(),
@@ -539,6 +543,53 @@ func blocked_reason(chore: Dictionary, abs_hours: float, hour_of_day: float,
 	if workers > 0 and workers < min_w:
 		return "gathering a crew — %d of %d" % [workers, min_w]
 	return ""
+
+
+# --- shared display vocabulary (single-source, same rule as reason_glyph:
+# --- every surface calls these; three panels each carried their own copy) ----
+
+## Priority bands: LOWER SORTS FIRST. The raw int is uncapped (system minters
+## use 2-10 to outrank everything), but every UI speaks in these three bands.
+const PRIORITY_HIGH := 0
+const PRIORITY_NORMAL := 50
+const PRIORITY_LOW := 100
+const PRIORITY_BANDS: Array = [
+	["High", PRIORITY_HIGH], ["Normal", PRIORITY_NORMAL], ["Low", PRIORITY_LOW]]
+
+const DOW_SHORT: Array = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+static func band_name(v: int) -> String:
+	return "High" if v < PRIORITY_NORMAL \
+		else ("Low" if v > PRIORITY_NORMAL else "Normal")
+
+
+## Cycle Normal -> High -> Low -> Normal.
+static func next_band(v: int) -> int:
+	if v == PRIORITY_NORMAL:
+		return PRIORITY_HIGH
+	return PRIORITY_LOW if v == PRIORITY_HIGH else PRIORITY_NORMAL
+
+
+## How often, in words. Two panels used to carry two different wordings of
+## this ("repeats daily" vs "daily"); one vocabulary now.
+static func repeat_text(chore: Dictionary) -> String:
+	match normalize_repeat(chore.get("repeat", "daily")):
+		"daily":
+			return "daily"
+		"every_n":
+			return "every %d d" % maxi(int(chore.get("repeat_days", 1)), 1)
+		"weekly":
+			var dow: Array = chore.get("repeat_dow", []) as Array
+			if dow.is_empty():
+				return "weekly"
+			var names := PackedStringArray()
+			for d in dow:
+				names.append(DOW_SHORT[posmod(int(d), 7)])
+			return " ".join(names)
+		"on_demand":
+			return "on demand"
+	return "once"
 
 
 ## Display glyph for a blocked_reason sentence, so every surface prefixes the
