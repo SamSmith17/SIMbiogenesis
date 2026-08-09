@@ -93,6 +93,8 @@ func _init() -> void:
 	_test_labour_ledger()
 	_test_fairness_rotation()
 	_test_assignment_hazards()
+	_test_skills()
+	_test_duty_roster()
 	_test_work_pose_classifier()
 	_test_facing_rules()
 	_test_crew_facing_spread()
@@ -4305,6 +4307,204 @@ func _test_routine_schedule() -> void:
 ## The behaviour the player actually reported: people arriving at the restroom
 ## and STAYING there, because a finished activity left them idling wherever
 ## they stood and nearest-space selection then kept picking the same place.
+## Skills, and the anti-invisibility rule that keeps them from hiding work.
+func _test_skills() -> void:
+	var sk := NpcSkills.create_empty()
+	_check("nobody starts qualified", not sk.has("sam", NpcSkills.COOK))
+	sk.grant("sam", NpcSkills.COOK)
+	_check("a granted tag sticks", sk.has("sam", NpcSkills.COOK))
+	_check("and shows up in the tag set",
+		bool(sk.tags_of("sam").get(NpcSkills.COOK, false)))
+	_check("supply sees it", bool(sk.supply(["sam", "ava"]).get(NpcSkills.COOK, false)))
+	_check("but not for a tag nobody holds",
+		not sk.supply(["sam", "ava"]).has(NpcSkills.MEDIC))
+	_check("the qualified pool is just Sam",
+		sk.qualified_pool(NpcSkills.COOK, ["sam", "ava"]) == ["sam"])
+	_check("and an EMPTY requirement means everyone",
+		sk.qualified_pool("", ["sam", "ava"]).size() == 2)
+
+	# Training: supervised earns the tag in TRAIN_HOURS, solo takes 1/SOLO_RATE
+	# as long, and `train` reports the crossing exactly once.
+	var earned := 0
+	for i in 40:
+		if sk.train("ava", NpcSkills.COOK, 1.0, true):
+			earned += 1
+	_check("supervised training earns the tag", sk.has("ava", NpcSkills.COOK))
+	_check("and reports the crossing exactly once", earned == 1, str(earned))
+	_check("training a qualified person is a no-op",
+		not sk.train("ava", NpcSkills.COOK, 5.0, true))
+	var solo := NpcSkills.create_empty()
+	for i in 40:
+		solo.train("kirby", NpcSkills.COOK, 1.0, false)
+	_check("unsupervised practice is slower",
+		not solo.has("kirby", NpcSkills.COOK)
+			and solo.level("kirby", NpcSkills.COOK) > 0.0,
+		"%.2f" % solo.level("kirby", NpcSkills.COOK))
+	for i in 130:
+		solo.train("kirby", NpcSkills.COOK, 1.0, false)
+	_check("but it does get there in the end — a settlement that loses its "
+		+ "only specialist is set back, not locked out",
+		solo.has("kirby", NpcSkills.COOK))
+
+	sk.revoke("sam", NpcSkills.COOK)
+	_check("revoking works", not sk.has("sam", NpcSkills.COOK))
+	_check("forget_missing drops departed people",
+		sk.forget_missing(["ava"]) >= 0 and sk.by_agent.has("ava"))
+	var rt := NpcSkills.deserialize(sk.serialize())
+	_check("skills round-trip", rt.has("ava", NpcSkills.COOK))
+
+	# THE ANTI-INVISIBILITY RULE. A chore nobody is qualified for must stay
+	# offerable — the work gets done badly rather than not at all, and the
+	# board can say so. A chore that silently vanishes because nobody can do
+	# it is the hygiene stall wearing a hat.
+	var b := NpcChoreBoard.create_empty()
+	var w := {"start_h": 0.0, "end_h": 24.0}
+	b.add_chore("Commission the array", 2.0,
+		{"window": w, "repeat": "daily", "requires_skill": NpcSkills.ELECTRICAL})
+	b.skill_supply = {}
+	_check("with no skills configured the requirement is inert",
+		b.available_for("ava", 100.0, 9.0, {}, 4, 0, {}).size() == 1)
+	b.skill_supply = {NpcSkills.ELECTRICAL: true}
+	_check("with somebody qualified, an unqualified person is skipped",
+		b.available_for("ava", 100.0, 9.0, {}, 4, 0, {}).is_empty())
+	_check("and the qualified person sees it",
+		b.available_for("sam", 100.0, 9.0, {}, 4, 0,
+			{NpcSkills.ELECTRICAL: true}).size() == 1)
+	b.skill_supply = {NpcSkills.COOK: true}
+	_check("a DIFFERENT skill on site does not satisfy the requirement",
+		b.available_for("ava", 100.0, 9.0, {}, 4, 0,
+			{NpcSkills.COOK: true}).size() == 1,
+		"nobody is electrical, so it must stay open to everyone")
+
+
+## The duty roster — "Monday, Sam and Ava make lunch."
+func _test_duty_roster() -> void:
+	var r := NpcDutyRoster.create_empty()
+	var sk := NpcSkills.create_empty()
+	var lab := NpcLabourLog.create_empty()
+	var roster: Array = ["a1", "a2", "a3", "a4"]
+	var lunch := r.add_duty("Lunch", 2.0, {"crew": 2, "repeat": "daily"})
+	var dinner := r.add_duty("Dinner", 2.0, {"crew": 2, "repeat": "daily",
+		"window": {"start_h": 17.0, "end_h": 20.0}})
+	var day0 := 700
+	_check("generating a week fills every day",
+		r.generate(day0, roster, sk, lab) == 14, str(r.slots.size()))
+
+	# Everyone gets a fair share of the slots, and nobody is left out.
+	var count: Dictionary = {}
+	for s in r.slots:
+		for a in ((s as Dictionary).get("agents", []) as Array):
+			count[str(a)] = int(count.get(str(a), 0)) + 1
+	var lo := 999
+	var hi := 0
+	for a in roster:
+		var c := int(count.get(str(a), 0))
+		lo = mini(lo, c)
+		hi = maxi(hi, c)
+	_check("everyone is rostered", lo > 0, str(count))
+	_check("and the load is within one slot of even", hi - lo <= 1,
+		"%d..%d %s" % [lo, hi, str(count)])
+
+	# Determinism.
+	var r2 := NpcDutyRoster.create_empty()
+	r2.add_duty("Lunch", 2.0, {"crew": 2, "repeat": "daily"})
+	r2.add_duty("Dinner", 2.0, {"crew": 2, "repeat": "daily",
+		"window": {"start_h": 17.0, "end_h": 20.0}})
+	r2.generate(day0, roster, sk, NpcLabourLog.create_empty())
+	var same := true
+	for i in r.slots.size():
+		if str((r.slots[i] as Dictionary).get("agents", [])) \
+				!= str((r2.slots[i] as Dictionary).get("agents", [])):
+			same = false
+	_check("generation is deterministic", same)
+
+	# It reads out in the sentence the player asked for.
+	var text := r.today_text(day0)
+	_check("today reads as a sentence", text.contains(" on Lunch")
+		and text.contains(" on Dinner"), text)
+
+	# Minting: idempotent by key, and the board carries the names.
+	var b := NpcChoreBoard.create_empty()
+	var made := r.mint_day(b, day0, float(day0) * 24.0 + 6.0, roster, sk, lab)
+	_check("minting a day creates one chore per duty", made.size() == 2, str(made))
+	_check("and it is assigned to a named person",
+		not str(b.find(str(made[0])).get("assigned_to", "")).is_empty())
+	_check("with a hold, so it is a first refusal rather than a lock",
+		float(b.find(str(made[0])).get("assign_hold_h", 0.0)) > 0.0)
+	_check("minting the same day again mints nothing",
+		r.mint_day(b, day0, float(day0) * 24.0 + 7.0, roster, sk, lab).is_empty())
+	# The key check specifically, because deserialize RENUMBERS chore ids and
+	# a remembered id would miss — minting a duplicate every single tick.
+	var b2 := NpcChoreBoard.create_empty()
+	b2.deserialize(b.serialize())
+	var r3 := NpcDutyRoster.create_empty()
+	r3.load_duties(r.serialize_duties())
+	r3.load_slots(r.serialize_slots())
+	for s in r3.slots:
+		(s as Dictionary)["state"] = "planned"   # force a re-mint attempt
+	_check("nor after a save reload renumbers the ids",
+		r3.mint_day(b2, day0, float(day0) * 24.0 + 8.0, roster, sk, lab).is_empty(),
+		"minted a duplicate through the id renumber")
+
+	# A departed person is substituted at mint time and the swap is logged.
+	var r4 := NpcDutyRoster.create_empty()
+	r4.add_duty("Lunch", 2.0, {"crew": 2, "repeat": "daily"})
+	r4.generate(day0, roster, sk, lab, 1)
+	var lg := SettlementLog.new()
+	var shrunk: Array = ["a3", "a4"]
+	var b3 := NpcChoreBoard.create_empty()
+	var m2 := r4.mint_day(b3, day0, float(day0) * 24.0 + 6.0, shrunk, sk, lab, lg)
+	_check("a slot whose person left is still minted", m2.size() == 1)
+	var crew: Array = (r4.slot_for(day0, "duty_1") as Dictionary).get("agents", [])
+	var all_live := true
+	for a in crew:
+		if not shrunk.has(str(a)):
+			all_live = false
+	_check("with a live substitute", all_live, str(crew))
+	var saw_sub := false
+	for e in lg.recent(20):
+		if str((e as Dictionary).get("kind", "")) == "duty_sub":
+			saw_sub = true
+	_check("and the substitution is logged", saw_sub)
+
+	# Swap, and its two refusals.
+	var a_first := str((r.slot_for(day0, lunch) as Dictionary).get("agents", [])[0])
+	var b_first := str((r.slot_for(day0, dinner) as Dictionary).get("agents", [])[0])
+	_check("swapping two people succeeds",
+		not r.swap(day0, lunch, a_first, day0, dinner, b_first, sk).is_empty())
+	_check("and they actually traded",
+		((r.slot_for(day0, lunch) as Dictionary).get("agents", []) as Array).has(b_first))
+	r.slot_for(day0, lunch)["state"] = "done"
+	_check("a done slot refuses a swap — you cannot un-cook yesterday",
+		r.swap(day0, lunch, b_first, day0, dinner, a_first, sk).is_empty())
+
+	# Skill gating on the pool.
+	var r5 := NpcDutyRoster.create_empty()
+	r5.add_duty("Commission the array", 3.0,
+		{"crew": 1, "repeat": "daily", "requires_skill": NpcSkills.ELECTRICAL})
+	var sk2 := NpcSkills.create_empty()
+	sk2.grant("a2", NpcSkills.ELECTRICAL)
+	r5.generate(day0, roster, sk2, lab, 3)
+	var only_qualified := true
+	for s in r5.slots:
+		for a in ((s as Dictionary).get("agents", []) as Array):
+			if str(a) != "a2":
+				only_qualified = false
+	_check("a skilled duty only rosters qualified people", only_qualified)
+
+	# Weekly duties land on their weekday and nowhere else.
+	var r6 := NpcDutyRoster.create_empty()
+	r6.add_duty("Clean the bathrooms", 1.0,
+		{"crew": 1, "repeat": "weekly", "repeat_dow": [2]})
+	r6.generate(day0, roster, sk, lab, 14)
+	var wrong_day := 0
+	for s in r6.slots:
+		if NpcChoreBoard.weekday_of_day(int((s as Dictionary).get("day", 0))) != 2:
+			wrong_day += 1
+	_check("a weekly duty lands only on its weekday", wrong_day == 0
+		and r6.slots.size() == 2, "%d slots, %d wrong" % [r6.slots.size(), wrong_day])
+
+
 ## assigned_to — the hazards, now that the duty roster is about to lean on it.
 func _test_assignment_hazards() -> void:
 	var b := NpcChoreBoard.create_empty()

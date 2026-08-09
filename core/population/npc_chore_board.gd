@@ -70,6 +70,11 @@ var _next_id := 1
 ##                 nap when they must — an emergent shift pattern)
 ##   tools_down  — no chores offered at all (rest day / ceremony / strike)
 var rules: Dictionary = {}
+## tag -> true when at least one person on the roster is qualified.
+## Refreshed by the engine each tick; RUNTIME ONLY, never serialized.
+## An EMPTY dict means "skills are not configured here", which makes every
+## requirement inert — that is the default and it must stay harmless.
+var skill_supply: Dictionary = {}
 
 
 static func create_empty() -> NpcChoreBoard:
@@ -97,6 +102,7 @@ func add_chore(label: String, chore_hours: float, opts: Dictionary = {}) -> Stri
 		"exposure": str(opts.get("exposure", NpcWeatherGate.EXPOSURE_OUTDOOR)),
 		"priority": int(opts.get("priority", 0)),
 		"assigned_to": str(opts.get("assigned_to", "")),
+		"requires_skill": str(opts.get("requires_skill", "")),
 		"depends_on": (opts.get("depends_on", []) as Array).duplicate(),
 		"min_workers": min_w,
 		"max_workers": maxi(int(opts.get("max_workers", 1)), min_w),
@@ -404,7 +410,7 @@ func _arm_cycle(chore: Dictionary, abs_hours: float) -> void:
 ## exist.
 func available_for(agent_id: String, abs_hours: float, hour_of_day: float,
 		weather: Dictionary = {}, roster_size: int = 0,
-		fair_rank: int = 0) -> Array:
+		fair_rank: int = 0, my_skills: Dictionary = {}) -> Array:
 	if bool(rules.get("tools_down", false)):
 		return []
 	var night_shift := bool(rules.get("night_shift", false))
@@ -413,6 +419,17 @@ func available_for(agent_id: String, abs_hours: float, hour_of_day: float,
 		var chore: Dictionary = c
 		_arm_cycle(chore, abs_hours)
 		if bool(chore.get("held", false)):
+			continue
+		# Skill gating, and the rule that keeps it from HIDING work: skip this
+		# chore only when somebody ELSE on site could do it instead. If nobody
+		# is qualified it stays offerable to everyone — the work gets done
+		# badly rather than not at all, and blocked_reason can say so. A chore
+		# that silently vanishes because nobody can do it is the hygiene stall
+		# wearing a hat.
+		var need_skill := str(chore.get("requires_skill", ""))
+		if not need_skill.is_empty() \
+				and bool(skill_supply.get(need_skill, false)) \
+				and not bool(my_skills.get(need_skill, false)):
 			continue
 		var assigned := str(chore.get("assigned_to", ""))
 		if not assigned.is_empty() and assigned != agent_id \
