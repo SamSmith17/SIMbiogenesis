@@ -3058,15 +3058,13 @@ in the Validation list above, and it fails identically on d38417a — i.e. this
 predates the 2026-08-01 stabilisation pass and is not a regression from it.
 Diagnose the imagery fetch before trusting the grounding/vegetation assertions.
 
-**`--capture=population` phase-1 food sub-check is STATE-SENSITIVE** (verified
-2026-08-03 by A/B against HEAD population files on identical map state — both
-fail identically, so it is NOT a chore-board regression): whether the food
-tank moves in the short observation window depends on the persisted roster's
-seeded hunger levels crossing a meal inside it; consecutive harness runs also
-inherit pop_state from each other through the soak autosave (roster size
-varied 16→10 across back-to-back runs). Water/movement/starvation/cascade
-sub-checks were stable throughout. Diagnose against a fresh state before
-reading a food-flat FAIL as a regression.
+**`--capture=population` flakes: FIXED 2026-08-09** (root cause found): the
+food/chore/cascade sub-checks were "state-sensitive" because the soak map's
+autosave carries the SIM CLOCK forward between runs and agent RNG reseeds per
+sim-DAY — every run sampled a different population day. The harness now pins
+2026-07-15 07:00 at the start of `_run_population_verify` and the capture
+passes fully and reproducibly. If a sub-check fails now, it is a real
+regression (or someone removed the date pin).
 
 **Re-verify this list before trusting it** — it is hand-maintained and drifts.
 The former "UISP button node-path misses" entry was stale: nothing outside
