@@ -221,11 +221,15 @@ func _np_error(text: String) -> void:
 func _on_np_where() -> void:
 	var main := get_tree().current_scene
 	if main == null or not main.has_method("open_settlement_view"):
+		_np_error("The settlement view is not available here.")
 		return
-	close()
 	var view: Variant = main.call("open_settlement_view")
 	if view == null or not view.has_method("pick_point_once"):
+		_np_error("The settlement view is not available here.")
 		return
+	# Close only once the pick is actually armed — closing first and then
+	# bailing stranded the player with no UI at all.
+	close()
 	view.call("pick_point_once", func(p: Vector2) -> void:
 		if p != Vector2.INF:
 			_np_site = p
@@ -238,6 +242,7 @@ func _on_np_queue() -> void:
 		return
 	var label := _np_label.text.strip_edges()
 	if label.is_empty():
+		_np_error("Give the project a name.")
 		return
 	# Whichever habitat is running: this is a settlement-wide job, and the
 	# board it lands on is the one with people on it.
@@ -268,7 +273,10 @@ func _on_np_queue() -> void:
 		_np_site if _np_site != Vector2.INF else Vector2.ZERO, rows,
 		{"start_h": 7.0, "end_h": 19.0}, target))
 	if made.is_empty():
+		# Leave the typed label in place — clearing it on failure both erased
+		# the player's input AND wiped this very error one line later.
 		_np_error("The board is full — finish or cancel something first.")
+		return
 	_np_label.text = ""
 	_np_error("")
 	_np_site = Vector2.INF

@@ -73,6 +73,7 @@ var _task_sig := "<unbuilt>"
 var _sched_box: VBoxContainer = null
 var _sched_sig := "<unbuilt>"
 var _fair_lbl: RichTextLabel = null
+var _swap_lbl: Label = null      # swap-refusal status, near the fairness line
 var _swap_sel: Dictionary = {}   # {day, duty_id, agent}
 var _nd_label: LineEdit = null
 var _nd_hours: SpinBox = null
@@ -543,6 +544,14 @@ func _build_schedule_tab() -> void:
 	regen.pressed.connect(_on_regenerate)
 	fair_row.add_child(regen)
 
+	# A refused trade used to render identically to a successful one — the
+	# roster simply didn't change, which read as the click not registering.
+	_swap_lbl = Label.new()
+	_swap_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_swap_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
+	_swap_lbl.visible = false
+	tab.add_child(_swap_lbl)
+
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	tab.add_child(scroll)
@@ -999,6 +1008,10 @@ func _refresh_schedule() -> void:
 				str(f.get("min_id", "")), _name_for(str(f.get("min_id", ""))),
 				float(f.get("min_h", 0.0)), float(f.get("mean_h", 0.0)),
 				str(f.get("label", ""))]
+	else:
+		# Without this, the line kept naming departed people forever after the
+		# roster emptied.
+		_fair_lbl.text = "Nobody is on the roster."
 
 	var sig := "day:%d|sw:%s|ed:%s;" % [day, str(_swap_sel), _sel_duty]
 	for d in duty.duties:
@@ -1131,6 +1144,8 @@ func _slot_cell(duty: NpcDutyRoster, board: NpcChoreBoard,
 
 ## Two-click swap: first click selects, second executes the trade.
 func _on_slot_name(day: int, duty_id: String, agent: String) -> void:
+	if _swap_lbl != null:
+		_swap_lbl.visible = false
 	if _swap_sel.is_empty():
 		_swap_sel = {"day": day, "duty_id": duty_id, "agent": agent}
 		_sched_sig = "<unbuilt>"
@@ -1147,6 +1162,17 @@ func _on_slot_name(day: int, duty_id: String, agent: String) -> void:
 	var board := _board()
 	if duty == null:
 		return
+	# Name a refusal instead of silently not changing anything — swap()'s
+	# empty return is ambiguous, so the reason comes from swap_refusal.
+	var refusal := duty.swap_refusal(int(_swap_sel["day"]), str(_swap_sel["duty_id"]),
+		str(_swap_sel["agent"]), day, duty_id, agent, _skills())
+	if not refusal.is_empty():
+		if _swap_lbl != null:
+			_swap_lbl.text = "Swap refused — %s." % refusal
+			_swap_lbl.visible = true
+		return
+	if _swap_lbl != null:
+		_swap_lbl.visible = false
 	var changed := duty.swap(int(_swap_sel["day"]), str(_swap_sel["duty_id"]),
 		str(_swap_sel["agent"]), day, duty_id, agent, _skills())
 	# A minted slot's live chore keeps assigned_to in sync with the trade.
@@ -1277,10 +1303,13 @@ func _on_pick_duty_where() -> void:
 		return
 	var bridge = _bridge
 	var iid := _item_id
-	close()
+	# Resolve the view BEFORE closing — close-then-bail stranded the player
+	# with no UI at all when the view failed to come up.
 	var view: Variant = main.call("open_settlement_view")
 	if view == null or not view.has_method("pick_point_once"):
+		_nd_where.text = "(no settlement view)"
 		return
+	close()
 	view.call("pick_point_once", func(p: Vector2) -> void:
 		if p != Vector2.INF:
 			_nd_target = p
@@ -1301,18 +1330,31 @@ func _on_regenerate() -> void:
 	_refresh()
 
 
-func _refresh_oncall() -> void:
+## The on-call section's rebuild signature. Interaction handlers that mutate a
+## role in place must RE-SYNC `_oncall_sig` to this (never set "<unbuilt>"):
+## invalidating from a handler frees the very control mid-interaction — the
+## members popup vanished after the first check, so a second member could
+## never be added.
+func _oncall_signature() -> String:
 	var oc := _oncall()
 	if oc == null:
-		return
-	var ids := _roster_ids()
+		return "<none>"
 	var sig := ""
 	for r in oc.roles:
 		var role: Dictionary = r
 		sig += "%s|%s|%s|%s|%s;" % [str(role.get("role_id", "")),
 			str(role.get("label", "")), str(role.get("members", [])),
 			str(role.get("conditions", [])), str(role.get("requires_skill", ""))]
-	sig += "|roster:%d" % ids.size()
+	sig += "|roster:%d" % _roster_ids().size()
+	return sig
+
+
+func _refresh_oncall() -> void:
+	var oc := _oncall()
+	if oc == null:
+		return
+	var ids := _roster_ids()
+	var sig := _oncall_signature()
 	if sig == _oncall_sig:
 		return
 	_oncall_sig = sig
@@ -1355,7 +1397,9 @@ func _refresh_oncall() -> void:
 				elif not on:
 					conds.erase(str(cond))
 				_persist()
-				_oncall_sig = "<unbuilt>")
+				# Re-sync, never invalidate: the chip already shows the new
+				# state, and a rebuild would free it mid-interaction.
+				_oncall_sig = _oncall_signature())
 			row.add_child(chip)
 		# Members via a checkable dropdown — a 24-person roster as inline chips
 		# would swallow the row.
@@ -1385,8 +1429,13 @@ func _refresh_oncall() -> void:
 			else:
 				mem.append(aid)
 				pop.set_item_checked(idx, true)
+			members_btn.text = "%d member%s ▾" % [mem.size(),
+				"" if mem.size() == 1 else "s"]
 			_persist()
-			_oncall_sig = "<unbuilt>")
+			# Re-sync, never invalidate: invalidating here freed the open
+			# popup on the next 0.5 s tick, so a second member could never
+			# be checked in one visit.
+			_oncall_sig = _oncall_signature())
 		row.add_child(members_btn)
 		var rm := Button.new()
 		UITheme.style_button(rm)

@@ -333,6 +333,33 @@ func swap(day_a: int, duty_a: String, agent_a: String,
 	return out
 
 
+## Why a proposed trade would be refused, in words — "" when it is allowed.
+## The UI calls this BEFORE swap(): swap's return is ambiguous on its own (a
+## legal trade between two slots with no minted chores also returns no ids),
+## so a refusal has to be named by re-running the same checks, kept in the
+## same order as swap() above.
+func swap_refusal(day_a: int, duty_a: String, agent_a: String,
+		day_b: int, duty_b: String, agent_b: String,
+		skills: NpcSkills = null) -> String:
+	var sa := slot_for(day_a, duty_a)
+	var sb := slot_for(day_b, duty_b)
+	if sa.is_empty() or sb.is_empty():
+		return "one of the two slots is not on the rota"
+	if str(sa.get("state", "")) == "done" or str(sb.get("state", "")) == "done":
+		return "a finished shift cannot be traded"
+	if not (sa.get("agents", []) as Array).has(agent_a) \
+			or not (sb.get("agents", []) as Array).has(agent_b):
+		return "one of the two people is no longer on that shift"
+	if skills != null:
+		var need_a := str(find_duty(duty_a).get("requires_skill", ""))
+		var need_b := str(find_duty(duty_b).get("requires_skill", ""))
+		if not need_a.is_empty() and not skills.has(agent_b, need_a):
+			return "needs someone with the '%s' skill" % need_a
+		if not need_b.is_empty() and not skills.has(agent_a, need_b):
+			return "needs someone with the '%s' skill" % need_b
+	return ""
+
+
 ## Who is on today, in words: "Sam, Ava on Lunch · Seva, Kirby on Dinner".
 func today_text(day: int, name_of: Callable = Callable()) -> String:
 	var parts: PackedStringArray = PackedStringArray()

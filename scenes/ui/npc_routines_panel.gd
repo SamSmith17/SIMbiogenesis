@@ -1024,10 +1024,13 @@ func _on_pick_where() -> void:
 	# the drafts are carried across the round trip by hand.
 	var kept_routine: Array = _draft.duplicate(true)
 	var kept_anim: Dictionary = _anim_draft.duplicate(true)
-	close()
+	# Resolve the view BEFORE closing — close-then-bail stranded the player
+	# with no UI at all when the view failed to come up.
 	var view: Variant = main.call("open_settlement_view")
 	if view == null or not view.has_method("pick_point_once"):
+		_new_where.text = "(no settlement view)"
 		return
+	close()
 	view.call("pick_point_once", func(p: Vector2) -> void:
 		if p != Vector2.INF:
 			_new_target = p
@@ -1148,25 +1151,33 @@ func _routine_row(idx: int) -> HBoxContainer:
 		kind_opt.add_item(str(NpcRoutine.LABELS.get(k, k)))
 	kind_opt.selected = maxi(NpcRoutine.KINDS.find(str(b.get("kind", NpcRoutine.FREE))), 0)
 	kind_opt.custom_minimum_size.x = 118
+	# Update the draft + in-place visuals ONLY. Rebuilding the rows from a
+	# control's own signal frees the control mid-interaction: the SpinBox
+	# up-arrow could not be clicked twice, and typing lost focus per digit.
+	# Rows rebuild solely on add/remove/apply.
 	kind_opt.item_selected.connect(func(sel: int) -> void:
 		(_draft[idx] as Dictionary)["kind"] = str(NpcRoutine.KINDS[sel])
-		_refresh_routine())
+		swatch.color = _kind_color(str(NpcRoutine.KINDS[sel]))
+		_routine_edited_in_place())
 	row.add_child(kind_opt)
+
+	var dur := Label.new()
+	var sync_dur := func() -> void:
+		var d := float((_draft[idx] as Dictionary).get("end_h", 0.0)) - float((_draft[idx] as Dictionary).get("start_h", 0.0))
+		if d < 0.0:
+			d += 24.0
+		dur.text = ("%d min" % int(round(d * 60.0))) if d < 1.0 else ("%.2f h" % d)
 
 	# Times are edited in MINUTES past midnight: a 5-minute bathroom block is
 	# unreachable on an hours spinner.
-	row.add_child(_time_spin(idx, "start_h"))
+	row.add_child(_time_spin(idx, "start_h", sync_dur))
 	var arrow := Label.new()
 	arrow.text = "to"
 	arrow.add_theme_color_override("font_color", C_TEXT_DIM)
 	row.add_child(arrow)
-	row.add_child(_time_spin(idx, "end_h"))
+	row.add_child(_time_spin(idx, "end_h", sync_dur))
 
-	var dur := Label.new()
-	var d := float(b.get("end_h", 0.0)) - float(b.get("start_h", 0.0))
-	if d < 0.0:
-		d += 24.0
-	dur.text = ("%d min" % int(round(d * 60.0))) if d < 1.0 else ("%.2f h" % d)
+	sync_dur.call()
 	dur.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	dur.add_theme_color_override("font_color", C_TEXT_DIM)
 	dur.custom_minimum_size.x = 56
@@ -1183,7 +1194,7 @@ func _routine_row(idx: int) -> HBoxContainer:
 	return row
 
 
-func _time_spin(idx: int, key: String) -> SpinBox:
+func _time_spin(idx: int, key: String, sync_dur: Callable) -> SpinBox:
 	var sp := SpinBox.new()
 	sp.min_value = 0
 	sp.max_value = 24 * 60 - 1
@@ -1195,8 +1206,18 @@ func _time_spin(idx: int, key: String) -> SpinBox:
 			float((_draft[idx] as Dictionary).get(key, 0.0)))
 	sp.value_changed.connect(func(v: float) -> void:
 		(_draft[idx] as Dictionary)[key] = v / 60.0
-		_refresh_routine())
+		sp.tooltip_text = "Minutes past midnight (currently %s)" % NpcRoutine.format_hour(v / 60.0)
+		sync_dur.call()
+		_routine_edited_in_place())
 	return sp
+
+
+## In-place refresh after a live-control edit: duration/status/strip only.
+## Never rebuilds the rows — that frees the control that fired the signal.
+func _routine_edited_in_place() -> void:
+	_update_routine_status()
+	if _routine_strip != null:
+		_routine_strip.queue_redraw()
 
 
 ## Whether the draft is a usable day. An untiled routine is not an ERROR —
@@ -1389,12 +1410,13 @@ func _refresh_anim() -> void:
 				sel = i
 				break
 		opt.selected = sel
+		# Draft-only: the OptionButton already displays the new choice, and a
+		# rebuild from its own signal frees it while its popup is closing.
 		opt.item_selected.connect(func(idx: int) -> void:
 			if idx <= 0:
 				_anim_draft.erase(key)
 			else:
-				_anim_draft[key] = String(choices[idx])
-			_refresh_anim())
+				_anim_draft[key] = String(choices[idx]))
 		row.add_child(opt)
 		_anim_rows.add_child(row)
 

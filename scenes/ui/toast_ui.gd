@@ -41,14 +41,28 @@ func _ready() -> void:
 	_bind_timeline_clearance()
 
 
+## Make room for one more toast. Pending Confirm chips are EXEMPT from
+## eviction — the recipe they gate has no other surface to resume it — so the
+## oldest ORDINARY toast goes instead. If the stack is nothing but confirm
+## chips, allow a brief overflow rather than eat one.
+func _evict_for_new_entry() -> void:
+	if _entries.size() < MAX_TOASTS:
+		return
+	for e in _entries:
+		var p := e as PanelContainer
+		if is_instance_valid(p) and bool(p.get_meta("confirm_chip", false)):
+			continue
+		_remove_entry(p)
+		return
+
+
 ## level: one of ToastUI.Level. duration: seconds before auto-dismiss.
 func show_toast(text: String, level: Level = Level.INFO, duration: float = DEFAULT_DURATION) -> void:
 	if _stack == null:
 		return
 	_refresh_stack_top()
 	_play_level_sfx(level)
-	if _entries.size() >= MAX_TOASTS:
-		_remove_entry(_entries[0])
+	_evict_for_new_entry()
 	var entry := _make_entry(text, level)
 	_stack.add_child(entry)
 	_entries.append(entry)
@@ -107,6 +121,13 @@ func show_community(kind: String, title: String, detail: String = "",
 			var sub: Label = last.get_meta("community_sub", null)
 			if sub != null and not detail.is_empty():
 				sub.text = detail
+			# The chip is a doorway to the NEWEST event it shows — keeping the
+			# first on_click opened the wrong person's ledger once aggregated.
+			if on_click.is_valid():
+				last.set_meta("community_click", on_click)
+				last.mouse_filter = Control.MOUSE_FILTER_STOP
+				last.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+				last.tooltip_text = "Click to open"
 			# Refresh the lifetime: bump the generation so the OLD timer's
 			# fade (already scheduled) no-ops, and arm a fresh one.
 			var gen := int(last.get_meta("community_gen", 0)) + 1
@@ -118,8 +139,7 @@ func show_community(kind: String, title: String, detail: String = "",
 					_fade_and_remove(last), CONNECT_ONE_SHOT)
 			return
 	_play_level_sfx(level)
-	if _entries.size() >= MAX_TOASTS:
-		_remove_entry(_entries[0])
+	_evict_for_new_entry()
 	var entry := _make_community_entry(kind, title, detail, level, on_click)
 	entry.set_meta("community_kind", kind)
 	entry.set_meta("community_count", 1)
@@ -143,14 +163,20 @@ func _make_community_entry(kind: String, title: String, detail: String,
 	panel.pivot_offset = Vector2(TOAST_WIDTH * 0.5, 18.0)
 	panel.scale = Vector2(0.94, 0.94)
 	panel.add_theme_stylebox_override("panel", UITheme.chip_style(color))
+	# The click target lives in meta so aggregation can retarget it to the
+	# newest event; the handler is connected unconditionally for the same
+	# reason (a later aggregated event may bring the first valid on_click).
+	panel.set_meta("community_click", on_click)
 	if on_click.is_valid():
 		panel.mouse_filter = Control.MOUSE_FILTER_STOP
 		panel.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		panel.tooltip_text = "Click to open"
-		panel.gui_input.connect(func(ev: InputEvent) -> void:
-			if ev is InputEventMouseButton and ev.pressed \
-					and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
-				on_click.call()
+	panel.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and ev.pressed \
+				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			var cb: Callable = panel.get_meta("community_click", Callable())
+			if cb.is_valid():
+				cb.call()
 				_fade_and_remove(panel))
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", UITheme.SPACE_SM)
@@ -199,8 +225,7 @@ func show_part_up(label: String, count: int = 1, duration: float = PART_UP_DURAT
 	if _stack == null:
 		return
 	_refresh_stack_top()
-	if _entries.size() >= MAX_TOASTS:
-		_remove_entry(_entries[0])
+	_evict_for_new_entry()
 	var n := maxi(count, 1)
 	var entry := _make_part_up_entry(label, n)
 	_stack.add_child(entry)
@@ -414,9 +439,12 @@ func show_chore_confirm(item_id: String, label: String, chore_hours: float = 0.0
 	if _stack == null:
 		return
 	_refresh_stack_top()
-	if _entries.size() >= MAX_TOASTS:
-		_remove_entry(_entries[0])
+	_evict_for_new_entry()
 	var entry := _make_chore_confirm_entry(item_id, label, chore_hours, on_confirm)
+	# Exempt from eviction: the recipe stays GATED until this chip is clicked,
+	# so losing it to three ordinary toasts left the step stuck with no
+	# surface to resume it.
+	entry.set_meta("confirm_chip", true)
 	_stack.add_child(entry)
 	_entries.append(entry)
 	_pop_in(entry)
