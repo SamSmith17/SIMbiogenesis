@@ -837,7 +837,8 @@ func _refresh_chores() -> void:
 
 		var lbl := Label.new()
 		lbl.text = str(chore.get("label", "?"))
-		lbl.custom_minimum_size.x = 150
+		lbl.custom_minimum_size.x = 138
+		lbl.clip_text = true
 		lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		lbl.add_theme_color_override("font_color", C_TEXT)
 		# Labels default to MOUSE_FILTER_IGNORE, and Godot only shows tooltips
@@ -874,7 +875,7 @@ Paused" if held else "", ("
 		bar.min_value = 0.0
 		bar.max_value = maxf(float(chore.get("chore_hours", 1.0)), 0.01)
 		bar.value = float(chore.get("progress_h", 0.0))
-		bar.custom_minimum_size = Vector2(90, 14)
+		bar.custom_minimum_size = Vector2(78, 14)
 		bar.show_percentage = false
 		UITheme.style_progress(bar, UITheme.C_OK if done_today else UITheme.C_AMBER)
 		# The numbers the bar cannot give you: how much is left, and — the one
@@ -930,7 +931,7 @@ Paused" if held else "", ("
 		meta.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		meta.add_theme_color_override("font_color",
 				UITheme.C_WARN if gated else C_TEXT_DIM)
-		meta.custom_minimum_size.x = 130
+		meta.custom_minimum_size.x = 106
 		meta.mouse_filter = Control.MOUSE_FILTER_PASS
 		if gated:
 			meta.tooltip_text = "Too %s to work outside right now" % 				NpcWeatherGate.describe(weather).to_lower()
@@ -980,7 +981,8 @@ Paused" if held else "", ("
 			who.text = "anyone"
 		who.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		who.add_theme_color_override("font_color", C_TEXT_DIM)
-		who.custom_minimum_size.x = 80
+		who.custom_minimum_size.x = 70
+		who.clip_text = true
 		who.mouse_filter = Control.MOUSE_FILTER_PASS
 		row.add_child(who)
 

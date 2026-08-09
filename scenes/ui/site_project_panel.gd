@@ -200,6 +200,8 @@ func _new_project_row() -> Control:
 	_np_hours.value = 8.0
 	_np_hours.prefix = "≈"
 	_np_hours.suffix = " person-h"
+	# Wide enough for "≈8 person-h" — the default width clipped the suffix.
+	_np_hours.custom_minimum_size.x = 150
 	row.add_child(_np_hours)
 	_np_crew = SpinBox.new()
 	_np_crew.min_value = 1
