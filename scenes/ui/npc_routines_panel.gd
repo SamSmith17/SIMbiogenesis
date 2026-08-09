@@ -222,7 +222,9 @@ func _build_ui() -> void:
 
 	var split := HSplitContainer.new()
 	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	split.split_offset = 560
+	# 500, not 560: the right pane's widest rows need ~500 px of the 1040 px
+	# panel, and at 560 the Add-a-chore controls clipped off the edge.
+	split.split_offset = 500
 	root.add_child(split)
 
 	# Left: roster with day-plan strips.
@@ -355,6 +357,11 @@ func _build_new_chore_row() -> VBoxContainer:
 	_new_repeat.select(0)
 	_new_repeat.item_selected.connect(func(_i: int) -> void: _sync_repeat_vis())
 	row3.add_child(_labelled("Repeat", _new_repeat))
+	# Second line: at the pane's ~500 px, one row of seven controls clipped
+	# off the right edge — with the Add button among the casualties.
+	var row3b := HBoxContainer.new()
+	row3b.add_theme_constant_override("separation", 6)
+	wrap.add_child(row3b)
 	_new_skill = OptionButton.new()
 	_new_skill.add_item("Any skill")
 	_new_skill.set_item_metadata(0, "")
@@ -362,7 +369,7 @@ func _build_new_chore_row() -> VBoxContainer:
 		_new_skill.add_item(NpcSkills.label(str(t)))
 		_new_skill.set_item_metadata(_new_skill.item_count - 1, str(t))
 	_new_skill.tooltip_text = "Qualified people take it first; with nobody qualified anyone may still try (the work never hides)"
-	row3.add_child(_labelled("Needs", _new_skill))
+	row3b.add_child(_labelled("Needs", _new_skill))
 	# The highest-value control here: without a target the worker does the chore
 	# where they happen to be standing, which reads as the chore doing nothing.
 	_new_where = Button.new()
@@ -370,12 +377,13 @@ func _build_new_chore_row() -> VBoxContainer:
 	_new_where.text = "Where…"
 	_new_where.tooltip_text = "Pick the spot on the ground in the settlement view"
 	_new_where.pressed.connect(_on_pick_where)
-	row3.add_child(_labelled("Place", _new_where))
+	row3b.add_child(_labelled("Place", _new_where))
 	var add_btn := Button.new()
 	UITheme.style_button(add_btn)
 	add_btn.text = "Add"
+	add_btn.tooltip_text = "Put this chore on the board"
 	add_btn.pressed.connect(_on_add_chore)
-	row3.add_child(add_btn)
+	row3b.add_child(_labelled(" ", add_btn))
 
 	# Contextual recurrence detail: the N spinner for "Every N days", the
 	# weekday toggles for "Weekly". Hidden otherwise so the row stays calm.
@@ -671,8 +679,13 @@ func _day_plan_strip(agent: NpcAgent, assigned_h: float) -> Control:
 ## switches the whole roster obeys. Written straight onto the board's rules
 ## dict; persistence rides the chores blob in pop_state.
 func _build_site_rules_row() -> Control:
+	# Two lines: rules + shortages together overflowed the ~500 px pane and
+	# pushed the consequence picker off the edge.
+	var wrap := VBoxContainer.new()
+	wrap.add_theme_constant_override("separation", 2)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
+	wrap.add_child(row)
 	var lbl := Label.new()
 	lbl.text = "Site rules:"
 	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
@@ -694,24 +707,28 @@ func _build_site_rules_row() -> Control:
 	# What running out actually does to people — the player's call, not the
 	# sim's. Scoped to this settlement (it rides the habitat's specs), so it
 	# does not follow the player between saves the way a display pref would.
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 10)
+	wrap.add_child(row2)
 	var sep := Label.new()
-	sep.text = "  ·  Shortages:"
+	sep.text = "Shortages:"
+	sep.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	sep.add_theme_color_override("font_color", C_TEXT_DIM)
-	row.add_child(sep)
+	row2.add_child(sep)
 	_rule_consequence = OptionButton.new()
 	for i in NpcConsequence.POLICIES.size():
 		var pol := str(NpcConsequence.POLICIES[i])
 		_rule_consequence.add_item(NpcConsequence.label(pol), i)
 		_rule_consequence.set_item_metadata(i, pol)
 	_rule_consequence.item_selected.connect(_on_consequence_selected)
-	row.add_child(_rule_consequence)
+	row2.add_child(_rule_consequence)
 	_consequence_hint = Label.new()
 	_consequence_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_consequence_hint.add_theme_color_override("font_color", C_TEXT_DIM)
 	_consequence_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_consequence_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(_consequence_hint)
-	return row
+	row2.add_child(_consequence_hint)
+	return wrap
 
 
 func _on_consequence_selected(idx: int) -> void:

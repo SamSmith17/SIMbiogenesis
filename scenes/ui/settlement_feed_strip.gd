@@ -162,6 +162,19 @@ func _process(delta: float) -> void:
 		_box.add_child(srow)
 	if _peek:
 		var lg: Variant = _bridge.call("settlement_log")
+		# The "⚠ 2" in the status line was a dead end: the peek showed only
+		# the recent LOG, and the two standing problems it counted could have
+		# scrolled out of it long ago. Open alarms lead (same as the
+		# settlement HUD).
+		var alarms2: Array = lg.call("open_alarms") as Array
+		if not alarms2.is_empty():
+			_box.add_child(_strip_label("— standing problems —",
+				SettlementLog.INFO, 0.7))
+			for a in alarms2:
+				var ad: Dictionary = a
+				_box.add_child(_strip_label("%s  %s" % [
+					SettlementLog.icon_for(str(ad.get("kind", ""))),
+					str(ad.get("text", ""))], SettlementLog.ALERT, 1.0))
 		var recents: Array = lg.call("recent", PEEK_LINES) as Array
 		recents.reverse()   # oldest at the top, like the settlement feed
 		_box.add_child(_strip_label("— recent —", SettlementLog.INFO, 0.7))

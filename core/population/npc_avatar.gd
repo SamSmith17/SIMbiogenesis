@@ -159,12 +159,20 @@ func _build_nametag() -> void:
 	_tag.name = "NameTag"
 	_tag.text = display_name
 	_tag.font_size = 40
-	_tag.pixel_size = 0.0075
+	# fixed_size: constant on-screen height regardless of distance — the old
+	# fixed WORLD size (pixel_size 0.0075) filled the screen up close and
+	# shrank to unreadable pixels at range. 0.0007 ≈ a 13 px line at 720p.
+	_tag.fixed_size = true
+	_tag.pixel_size = 0.0007
 	_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_tag.position = Vector3(0.0, HEIGHT_M + 0.28, 0.0)
 	_tag.modulate = Color(1, 1, 1, 0.97)
 	_tag.outline_modulate = Color(0.02, 0.04, 0.09, 0.9)
 	_tag.outline_size = 8
+	# The FOCUS nametag alone keeps no_depth_test: it answers "who am I
+	# pointing at", which must survive the person being behind a wall. The
+	# ambient readout below is depth-tested — a camp's bars and tags glowing
+	# through every building read as x-ray noise, not information.
 	_tag.no_depth_test = true
 	_tag.visible = false  # only for the person the crosshair is on
 	add_child(_tag)
@@ -251,7 +259,6 @@ func _make_bar_quad(color: Color) -> MeshInstance3D:
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.no_depth_test = true
 	mat.albedo_color = color
 	mi.set_surface_override_material(0, mat)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -263,13 +270,15 @@ func _make_status_label(text: String, font_size: int, pos: Vector3) -> Label3D:
 	var lbl := Label3D.new()
 	lbl.text = text
 	lbl.font_size = font_size
-	lbl.pixel_size = 0.0075
+	# Constant screen size (see _build_nametag) — the task tag was 2 px of
+	# noise at range and a billboard-sized word up close.
+	lbl.fixed_size = true
+	lbl.pixel_size = 0.0011
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lbl.position = pos
 	lbl.modulate = Color(1, 1, 1, 0.97)
 	lbl.outline_modulate = Color(0.02, 0.04, 0.09, 0.9)
 	lbl.outline_size = 7
-	lbl.no_depth_test = true
 	return lbl
 
 

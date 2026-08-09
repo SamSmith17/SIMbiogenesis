@@ -22,6 +22,8 @@ extends CanvasLayer
 
 const REFRESH_S := 0.5
 const WIDTH := 330
+## Height cap for the chore list (the dock sits at y=330 on a 720p screen).
+const ROWS_MAX_PX := 300.0
 
 ## Priority is an uncapped int where LOWER sorts first. Same three bands the
 ## Routines panel authors with, deliberately — two vocabularies for one field
@@ -41,6 +43,7 @@ var _today_lbl: Label = null
 var _toggle: Button = null
 var _plan_btn: Button = null
 var _deep_btn: Button = null
+var _rows_scroll: ScrollContainer = null
 
 
 func _ready() -> void:
@@ -100,7 +103,8 @@ func _build() -> void:
 	_toggle.pressed.connect(func() -> void:
 		_collapsed = not _collapsed
 		_toggle.text = "▸" if _collapsed else "▾"
-		_rows.visible = not _collapsed
+		_toggle.tooltip_text = "Expand" if _collapsed else "Collapse"
+		_rows_scroll.visible = not _collapsed
 		_summary.visible = not _collapsed
 		if _today_lbl != null:
 			_today_lbl.visible = not _collapsed)
@@ -113,9 +117,16 @@ func _build() -> void:
 	_summary.custom_minimum_size.x = WIDTH - 24
 	col.add_child(_summary)
 
+	# A busy board grew the dock straight off the bottom of a 720p screen —
+	# rows live in a height-capped scroll. The cap is sized per rebuild
+	# (row-count estimate) so a short board doesn't reserve empty space.
+	_rows_scroll = ScrollContainer.new()
+	_rows_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	col.add_child(_rows_scroll)
 	_rows = VBoxContainer.new()
 	_rows.add_theme_constant_override("separation", 3)
-	col.add_child(_rows)
+	_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_rows_scroll.add_child(_rows)
 
 	# Who is rostered today — reporting, not commanding. Folded into _sig so
 	# the signature-gated rebuild refreshes it when the rota changes.
@@ -239,8 +250,10 @@ func _refresh() -> void:
 	_today_lbl.text = ("Today: %s" % today_text) if not today_text.is_empty() else ""
 	_today_lbl.visible = not today_text.is_empty() and not _collapsed
 
+	UITheme.keep_scroll(_rows).call()
 	for c in _rows.get_children():
 		c.queue_free()
+	_size_rows_scroll(ordered.size())
 	if ordered.is_empty():
 		var none := Label.new()
 		none.text = "Nothing queued."
@@ -250,6 +263,14 @@ func _refresh() -> void:
 		return
 	for c in ordered:
 		_rows.add_child(_chore_row(board, c as Dictionary, day))
+
+
+## Fit the scroll to the board, capped so the dock never runs off a 720p
+## screen (it sits at y=330).
+func _size_rows_scroll(row_count: int) -> void:
+	if _rows_scroll == null:
+		return
+	_rows_scroll.custom_minimum_size.y = minf(maxf(float(row_count), 1.0) * 27.0 + 4.0, ROWS_MAX_PX)
 
 
 func _chore_row(board: Variant, chore: Dictionary, day: int) -> Control:

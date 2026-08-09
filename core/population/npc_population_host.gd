@@ -460,13 +460,17 @@ static func _task_text_of(dot: Dictionary) -> String:
 			"bladder": text = "bathroom"
 			"hygiene": text = "washing"
 			"chore": text = "working"
+			# Before the enrichment SPACE resolves (and on the walk there) the
+			# dot still says "enrichment" — the missing case left a blank tag.
+			"enrichment": text = "gathering"
 			"fire_circle": text = "at the fire"
 			"movement": text = "exercising"
 			"quiet": text = "resting"
 			"workshop_social": text = "socialising"
 			_: text = ""
 	if text.is_empty():
-		return ""
+		# Idle is a real state, not missing data — a blank tag reads as a bug.
+		return "free"
 	if int(dot.get("state", 0)) == NpcAgent.State.TRAVELING:
 		return "→ " + text
 	return text
