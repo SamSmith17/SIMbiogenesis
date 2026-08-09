@@ -27,6 +27,7 @@ var _card_task: Button = null
 ## Resolved once per selection, not per frame — Vector2.INF = no task site.
 var _card_task_site := Vector2.INF
 var _feed_box: VBoxContainer = null
+var _feed_sig := "<unbuilt>"
 var _alarm_lbl: Label = null
 var _speed_lbl: Label = null
 var _pick_lbl: Label = null
@@ -136,6 +137,7 @@ func _build() -> void:
 	_card_follow = Button.new()
 	UITheme.style_button(_card_follow)
 	_card_follow.text = "Follow (F)"
+	_card_follow.tooltip_text = "Keep the camera on this person as they move"
 	_card_follow.pressed.connect(func() -> void:
 		if _view != null:
 			_view.set("_follow_id", str(_view.selection().get("agent_id", ""))))
@@ -146,6 +148,7 @@ func _build() -> void:
 	_card_person = Button.new()
 	UITheme.style_button(_card_person)
 	_card_person.text = "Hours & skills…"
+	_card_person.tooltip_text = "This person's ledger in the Work Planner: hours banked, skills, on-call roles"
 	_card_person.pressed.connect(func() -> void:
 		if _view == null:
 			return
@@ -158,14 +161,20 @@ func _build() -> void:
 		var sgv := main.get_node_or_null("UILayer/SystemGraphView")
 		if sgv == null or not sgv.has_method("open_work_planner"):
 			return
+		# THIS person's habitat — "" let the planner bind to whichever
+		# habitat happened to be first on a two-habitat map.
+		var iid := ""
+		if _bridge != null and _bridge.has_method("habitat_of_agent"):
+			iid = str(_bridge.call("habitat_of_agent", aid))
 		_view.close()
-		sgv.call("open_work_planner", "", aid))
+		sgv.call("open_work_planner", iid, aid))
 	cv.add_child(_card_person)
 	# Looking, never ordering: frames the selected person's CURRENT job so
 	# "what are they working on" is one click from the card that named it.
 	_card_task = Button.new()
 	UITheme.style_button(_card_task)
 	_card_task.text = "⌖ Their task"
+	_card_task.tooltip_text = "Look at the job this person is on — looking, never ordering"
 	_card_task.pressed.connect(func() -> void:
 		if _view == null or _card_task_site == Vector2.INF:
 			return
@@ -269,6 +278,14 @@ func _refresh() -> void:
 	var panel := _feed_box.get_parent() as Control
 	if panel != null:
 		panel.visible = not entries.is_empty()
+	# Signature gate, same rule as every work panel: a blind rebuild every
+	# 0.5 s churns the labels for a feed that mostly has not changed.
+	var fsig := ""
+	for e in entries:
+		fsig += "%d;" % int((e as Dictionary).get("seq", (e as Dictionary).get("abs_h", 0.0) * 1000.0))
+	if fsig == _feed_sig:
+		return
+	_feed_sig = fsig
 	for c in _feed_box.get_children():
 		c.queue_free()
 	for e in entries:

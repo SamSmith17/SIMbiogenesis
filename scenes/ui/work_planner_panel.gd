@@ -165,6 +165,16 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not _active:
 		return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		# An armed shift trade eats the first Esc — closing the whole panel
+		# out from under a half-made swap read as data loss.
+		if not _swap_sel.is_empty():
+			_swap_sel = {}
+			if _swap_lbl != null:
+				_swap_lbl.visible = false
+			_sched_sig = "<unbuilt>"
+			_refresh()
+			get_viewport().set_input_as_handled()
+			return
 		close()
 		get_viewport().set_input_as_handled()
 
@@ -810,6 +820,19 @@ func _refresh_chores() -> void:
 			_refresh())
 		_chore_rows.add_child(seed)
 		return
+	# The add affordance must survive a non-empty board — it used to render
+	# only in the empty state, so the way to add a SECOND chore vanished.
+	var add_btn := Button.new()
+	UITheme.style_button(add_btn)
+	add_btn.text = "＋ Add a chore…"
+	add_btn.tooltip_text = "New chores are authored in Routines & chores"
+	add_btn.pressed.connect(func() -> void:
+		var sgv: Node = ServiceLocator.graph()
+		if sgv != null and sgv.has_method("open_npc_routines"):
+			var iid := _item_id
+			close()
+			sgv.call("open_npc_routines", iid))
+	_chore_rows.add_child(add_btn)
 	for c in recs:
 		var ch: Dictionary = c
 		var cid := str(ch.get("id", ""))
@@ -1319,7 +1342,9 @@ func _slot_cell(duty: NpcDutyRoster, board: NpcChoreBoard,
 				btn.add_theme_color_override("font_color", base))
 		if slot_done:
 			btn.tooltip_text = "Done — a finished slot cannot be traded"
-		elif not selected:
+		elif selected:
+			btn.tooltip_text = "Armed for a trade — click another name to swap, click again or press Esc to cancel"
+		else:
 			btn.tooltip_text = "Click, then click another name to trade shifts"
 		btn.pressed.connect(func() -> void: _on_slot_name(cell_day, did, aid))
 		cell.add_child(btn)
@@ -1332,6 +1357,11 @@ func _on_slot_name(day: int, duty_id: String, agent: String) -> void:
 		_swap_lbl.visible = false
 	if _swap_sel.is_empty():
 		_swap_sel = {"day": day, "duty_id": duty_id, "agent": agent}
+		if _swap_lbl != null:
+			_swap_lbl.text = "Trading %s's shift — click another name to swap · Esc or click again to cancel." \
+				% _name_for(agent)
+			_swap_lbl.add_theme_color_override("font_color", UITheme.C_AMBER)
+			_swap_lbl.visible = true
 		_sched_sig = "<unbuilt>"
 		_refresh()
 		return
@@ -1353,6 +1383,7 @@ func _on_slot_name(day: int, duty_id: String, agent: String) -> void:
 	if not refusal.is_empty():
 		if _swap_lbl != null:
 			_swap_lbl.text = "Swap refused — %s." % refusal
+			_swap_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
 			_swap_lbl.visible = true
 		return
 	if _swap_lbl != null:

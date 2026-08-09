@@ -66,6 +66,7 @@ func show_toast(text: String, level: Level = Level.INFO, duration: float = DEFAU
 	var entry := _make_entry(text, level)
 	_stack.add_child(entry)
 	_entries.append(entry)
+	_pop_in(entry)
 	var timer := get_tree().create_timer(duration)
 	timer.timeout.connect(_fade_and_remove.bind(entry), CONNECT_ONE_SHOT)
 
@@ -330,7 +331,12 @@ func _make_entry(text: String, level: Level) -> PanelContainer:
 	var color := _level_color(level)
 	var panel := PanelContainer.new()
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	# Starts transparent + slightly shrunk for the same _pop_in every chip
+	# gets — plain toasts used to just appear, one of two entrance styles on
+	# one stack.
+	panel.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	panel.pivot_offset = Vector2(TOAST_WIDTH * 0.5, 14.0)
+	panel.scale = Vector2(0.94, 0.94)
 	panel.add_theme_stylebox_override("panel", UITheme.chip_style(color))
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", UITheme.SPACE_SM)

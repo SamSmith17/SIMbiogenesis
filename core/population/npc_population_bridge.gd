@@ -1251,6 +1251,17 @@ func find_agent(agent_id: String) -> NpcAgent:
 	return null
 
 
+## The habitat whose roster carries this agent, "" when unknown. The
+## settlement card's person jump needs it — passing "" let the planner bind
+## to whichever habitat happened to be first, silently showing a different
+## settlement's board on a two-habitat map.
+func habitat_of_agent(agent_id: String) -> String:
+	for iid in _engines:
+		if (_engines[iid] as NpcPopulationEngine).find_agent(agent_id) != null:
+			return str(iid)
+	return ""
+
+
 ## Inspector telemetry for one habitat ({} when not simulated yet).
 func summary_for(item_id: String) -> Dictionary:
 	var engine: NpcPopulationEngine = _engines.get(item_id)

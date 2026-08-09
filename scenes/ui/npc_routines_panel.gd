@@ -80,10 +80,29 @@ var _routine_status: Label = null
 ## Working copy. Edits are staged here and only reach the sim on Apply, so a
 ## half-finished day (a gap mid-edit, an overlap) never drives behaviour.
 var _draft: Array = []
+## Unapplied-edit tracking: dirty drafts for `_draft_owner` survive a
+## close/reopen (auto-stash) instead of being silently reloaded over.
+var _routine_dirty := false
+var _anim_dirty := false
+var _draft_owner := ""
+var _apply_note: Label = null
 
 # --- animation bindings -----------------------------------------------------
 var _anim_rows: VBoxContainer = null
 var _anim_draft: Dictionary = {}
+var _anim_note: Label = null
+
+
+func _mark_routine_dirty() -> void:
+	_routine_dirty = true
+	_note(_apply_note, "Unapplied changes", UITheme.C_WARN)
+
+
+func _note(lbl: Label, text: String, col: Color) -> void:
+	if lbl == null:
+		return
+	lbl.text = text
+	lbl.add_theme_color_override("font_color", col)
 
 
 func _ready() -> void:
@@ -743,10 +762,9 @@ func _on_rule_toggled(rule: String, on: bool) -> void:
 	var board := _board()
 	if board == null:
 		return
-	if on:
-		board.rules[rule] = true
-	else:
-		board.rules.erase(rule)
+	board.set_rule(rule, on)
+	if _bridge != null and _bridge.has_method("persist_work_config"):
+		_bridge.call("persist_work_config", _item_id)
 
 
 func _refresh_chores() -> void:
@@ -1179,11 +1197,15 @@ func _build_routine_tab(parent: VBoxContainer) -> void:
 	reset.text = "Reset to default day"
 	reset.pressed.connect(func() -> void:
 		_draft = NpcRoutine.default_day().to_array()
+		_mark_routine_dirty()
 		_refresh_routine())
 	btns.add_child(reset)
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btns.add_child(spacer)
+	_apply_note = Label.new()
+	_apply_note.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_apply_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_apply_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_apply_note.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	btns.add_child(_apply_note)
 	var apply := Button.new()
 	UITheme.style_button(apply)
 	apply.text = "Apply"
@@ -1194,19 +1216,38 @@ func _build_routine_tab(parent: VBoxContainer) -> void:
 
 ## Pull the live schedule into the draft, so the editor always opens showing
 ## what people are actually doing rather than a template.
+##
+## Unless an UNAPPLIED draft for this same habitat is pending: closing the
+## panel used to silently discard half an hour of schedule work the
+## Where-picker round trip was already careful to preserve — honour it here
+## instead, and say so.
 func _load_routine_draft() -> void:
+	if _routine_dirty and _draft_owner == _item_id and not _draft.is_empty():
+		_note(_apply_note, "Unapplied draft restored — Apply to keep it", UITheme.C_WARN)
+		_refresh_routine()
+		return
 	var r: NpcRoutine = null
 	if _bridge != null and _bridge.has_method("routine_for"):
 		r = _bridge.call("routine_for", _item_id)
 	if r == null:
 		r = NpcRoutine.default_day()
 	_draft = r.to_array()
+	_routine_dirty = false
+	_draft_owner = _item_id
+	_note(_apply_note, "", UITheme.C_TEXT_S)
 	_refresh_routine()
 
 
 func _refresh_routine() -> void:
 	if _routine_rows == null:
 		return
+	# Chronological, not insertion order — the ARRAY is re-sorted (not just
+	# the view) so each row's index keeps pointing at its own block. A block
+	# added into a morning gap used to land at the bottom of the list.
+	_draft.sort_custom(func(pa, pb) -> bool:
+		return float((pa as Dictionary).get("start_h", 0.0)) \
+			< float((pb as Dictionary).get("start_h", 0.0)))
+	UITheme.keep_scroll(_routine_rows).call()
 	for c in _routine_rows.get_children():
 		c.queue_free()
 	for i in range(_draft.size()):
@@ -1269,6 +1310,7 @@ func _routine_row(idx: int) -> HBoxContainer:
 	del.tooltip_text = "Remove this block"
 	del.pressed.connect(func() -> void:
 		_draft.remove_at(idx)
+		_mark_routine_dirty()
 		_refresh_routine())
 	row.add_child(del)
 	return row
@@ -1295,6 +1337,7 @@ func _time_spin(idx: int, key: String, sync_dur: Callable) -> SpinBox:
 ## In-place refresh after a live-control edit: duration/status/strip only.
 ## Never rebuilds the rows — that frees the control that fired the signal.
 func _routine_edited_in_place() -> void:
+	_mark_routine_dirty()
 	_update_routine_status()
 	if _routine_strip != null:
 		_routine_strip.queue_redraw()
@@ -1369,8 +1412,40 @@ func _draw_routine_strip() -> void:
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.55))
 
 
+## New blocks land in the FIRST GAP in the day, not on top of 12:00 — the
+## fixed insert overlapped whatever the schedule already had there, and an
+## overlap is usually a mistake the status line then had to call out.
 func _on_routine_add() -> void:
-	_draft.append({"start_h": 12.0, "end_h": 13.0, "kind": NpcRoutine.WORK})
+	var start := 12.0
+	var length := 1.0
+	var gaps: Array = []
+	var edges: Array = []   # [start, end] pairs sorted by start
+	for b_v in _draft:
+		var b := b_v as Dictionary
+		var s := fposmod(float(b.get("start_h", 0.0)), 24.0)
+		var e := float(b.get("end_h", 0.0))
+		# Split a wrapping block so the gap scan stays a flat sweep.
+		if e < s:
+			edges.append([0.0, fposmod(e, 24.0)])
+			edges.append([s, 24.0])
+		else:
+			edges.append([s, e])
+	edges.sort_custom(func(pa, pb) -> bool: return float((pa as Array)[0]) < float((pb as Array)[0]))
+	var cursor := 0.0
+	for pair in edges:
+		var s2 := float((pair as Array)[0])
+		if s2 - cursor >= 0.25:
+			gaps.append([cursor, s2])
+		cursor = maxf(cursor, float((pair as Array)[1]))
+	if cursor < 24.0 - 0.25:
+		gaps.append([cursor, 24.0])
+	if not gaps.is_empty():
+		var g := gaps[0] as Array
+		start = float(g[0])
+		length = minf(1.0, float(g[1]) - float(g[0]))
+	_draft.append({"start_h": start, "end_h": fposmod(start + length, 24.0),
+		"kind": NpcRoutine.WORK})
+	_mark_routine_dirty()
 	_refresh_routine()
 
 
@@ -1378,7 +1453,12 @@ func _on_routine_apply() -> void:
 	if _bridge == null or not _bridge.has_method("set_routine"):
 		return
 	if _bridge.call("set_routine", _item_id, _draft):
+		_routine_dirty = false
 		_load_routine_draft()   # read back whatever the sim actually accepted
+		_note(_apply_note, "Applied", UITheme.C_OK)
+	else:
+		# Apply used to be indistinguishable from doing nothing on refusal.
+		_note(_apply_note, "Not applied — the schedule was refused", UITheme.C_WARN)
 
 
 # ---------------------------------------------------------------------------
@@ -1449,6 +1529,12 @@ func _build_anim_tab(parent: VBoxContainer) -> void:
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btns.add_child(spacer)
+	_anim_note = Label.new()
+	_anim_note.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_anim_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_anim_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_anim_note.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	btns.add_child(_anim_note)
 	var apply := Button.new()
 	UITheme.style_button(apply)
 	apply.text = "Apply"
@@ -1458,9 +1544,17 @@ func _build_anim_tab(parent: VBoxContainer) -> void:
 
 
 func _load_anim_draft() -> void:
+	# Same auto-stash rule as the routine draft: unapplied edits for this
+	# habitat survive a close/reopen instead of being silently discarded.
+	if _anim_dirty and _draft_owner == _item_id:
+		_note(_anim_note, "Unapplied draft restored — Apply to keep it", UITheme.C_WARN)
+		_refresh_anim()
+		return
 	_anim_draft = {}
 	if _bridge != null and _bridge.has_method("anim_overrides_for"):
 		_anim_draft = (_bridge.call("anim_overrides_for", _item_id) as Dictionary).duplicate()
+	_anim_dirty = false
+	_note(_anim_note, "", UITheme.C_TEXT_S)
 	_refresh_anim()
 
 
@@ -1496,7 +1590,9 @@ func _refresh_anim() -> void:
 			if idx <= 0:
 				_anim_draft.erase(key)
 			else:
-				_anim_draft[key] = String(choices[idx]))
+				_anim_draft[key] = String(choices[idx])
+			_anim_dirty = true
+			_note(_anim_note, "Unapplied changes", UITheme.C_WARN))
 		row.add_child(opt)
 		_anim_rows.add_child(row)
 
@@ -1505,4 +1601,8 @@ func _on_anim_apply() -> void:
 	if _bridge == null or not _bridge.has_method("set_anim_overrides"):
 		return
 	if _bridge.call("set_anim_overrides", _item_id, _anim_draft):
+		_anim_dirty = false
 		_load_anim_draft()
+		_note(_anim_note, "Applied", UITheme.C_OK)
+	else:
+		_note(_anim_note, "Not applied", UITheme.C_WARN)

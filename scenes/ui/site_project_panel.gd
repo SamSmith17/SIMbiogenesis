@@ -645,7 +645,9 @@ func _whatif_block(iid: String, counts: Dictionary) -> Control:
 		night.text = "Night shift (site rule — chores ignore daily windows)"
 		night.button_pressed = bool(board.rules.get("night_shift", false))
 		night.toggled.connect(func(on: bool) -> void:
-			board.rules["night_shift"] = on)
+			board.set_rule("night_shift", on)
+			if _bridge != null and _bridge.has_method("persist_work_config"):
+				_bridge.call("persist_work_config", iid))
 		vb.add_child(night)
 	return vb
 

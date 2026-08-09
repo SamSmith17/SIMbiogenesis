@@ -175,6 +175,16 @@ func find_by_key(key: String) -> Dictionary:
 	return {}
 
 
+## Canonical site-rule write: ABSENT means false. Two surfaces used to
+## disagree — one erased on false, the other stored `false` — so identical
+## states serialized differently and rules.has() checks drifted.
+func set_rule(rule: String, on: bool) -> void:
+	if on:
+		rules[rule] = true
+	else:
+		rules.erase(rule)
+
+
 func update_chore(chore_id: String, patch: Dictionary) -> bool:
 	var rec := find(chore_id)
 	if rec.is_empty():
