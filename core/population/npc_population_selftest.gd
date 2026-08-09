@@ -94,6 +94,7 @@ func _init() -> void:
 	_test_fairness_rotation()
 	_test_assignment_hazards()
 	_test_skills()
+	_test_oncall()
 	_test_duty_roster()
 	_test_work_pose_classifier()
 	_test_facing_rules()
@@ -4307,6 +4308,92 @@ func _test_routine_schedule() -> void:
 ## The behaviour the player actually reported: people arriving at the restroom
 ## and STAYING there, because a finished activity left them idling wherever
 ## they stood and nearest-space selection then kept picking the same place.
+## On-call roles — who answers, and the line between fixing and escalating.
+func _test_oncall() -> void:
+	var oc := NpcOnCall.create_empty()
+	var lab := NpcLabourLog.create_empty()
+	var roster: Array = ["a1", "a2", "a3"]
+
+	# The scope line is the whole design, so it is asserted rather than
+	# commented: a condition either has a real unit of work behind it or it
+	# escalates. Nothing is allowed to sit in between.
+	for c in NpcOnCall.FIXABLE:
+		_check("%s is fixable" % c, NpcOnCall.is_fixable(str(c)))
+	for c in NpcOnCall.ESCALATE:
+		_check("%s only escalates" % c, not NpcOnCall.is_fixable(str(c)))
+	var covered := true
+	for c in NpcOnCall.CONDITIONS:
+		if not NpcOnCall.CONDITION_LABELS.has(str(c)):
+			covered = false
+	_check("every condition has a label a player can read", covered)
+	_check("a look is short enough to read as an inspection",
+		NpcOnCall.LOOK_HOURS <= NpcWorkPose.GATE_HOURS,
+		"%.3f vs %.3f" % [NpcOnCall.LOOK_HOURS, NpcWorkPose.GATE_HOURS])
+	_check("and it classifies as one",
+		NpcWorkPose.family_for({"chore_hours": NpcOnCall.LOOK_HOURS})
+			== NpcWorkPose.INSPECT)
+
+	var rid := oc.add_role("Water crew", [NpcOnCall.ESC_STARVED],
+		{"members": ["a1", "a2"]})
+	_check("a role answers its condition",
+		str(oc.role_for(NpcOnCall.ESC_STARVED).get("role_id", "")) == rid)
+	_check("and not somebody else's",
+		oc.role_for(NpcOnCall.FIX_MACHINE_STALLED).is_empty())
+
+	# Least-worked responder, so being on call does not fall on one person.
+	lab.bank("a1", 5, 9.0, "bench")
+	var role := oc.find_role(rid)
+	_check("the least-worked member takes the call",
+		oc.next_responder(role, roster, lab) == "a2")
+	lab.bank("a2", 5, 20.0, "bench")
+	_check("and it rotates as they work",
+		oc.next_responder(role, roster, lab) == "a1")
+	_check("responder choice is deterministic",
+		oc.next_responder(role, roster, lab)
+			== oc.next_responder(role, roster, lab))
+
+	# A role whose people have all left cannot respond, and says so rather
+	# than silently drafting somebody who never volunteered.
+	_check("a role with no live members returns nobody",
+		oc.next_responder(role, ["a3"], lab).is_empty())
+	_check("a non-member is never drafted",
+		oc.next_responder(role, roster, lab) != "a3")
+	_check("forget_missing drops departed members",
+		oc.forget_missing(["a1"]) == 1)
+	_check("and leaves the live one", (oc.find_role(rid).get("members", [])
+		as Array) == ["a1"])
+
+	# A required skill narrows the pool, and an unqualified member is skipped
+	# rather than sent to a job they cannot do.
+	var oc2 := NpcOnCall.create_empty()
+	var rid2 := oc2.add_role("Electricians", [NpcOnCall.FIX_MACHINE_STALLED],
+		{"members": ["a1", "a2"], "requires_skill": NpcSkills.ELECTRICAL})
+	var sk := NpcSkills.create_empty()
+	sk.grant("a2", NpcSkills.ELECTRICAL)
+	_check("only a qualified member is called",
+		oc2.next_responder(oc2.find_role(rid2), roster, lab, sk) == "a2")
+	sk.revoke("a2", NpcSkills.ELECTRICAL)
+	_check("and with nobody qualified, nobody is called",
+		oc2.next_responder(oc2.find_role(rid2), roster, lab, sk).is_empty())
+
+	# The key is stable, which is what makes the mint idempotent across the
+	# id renumber a save/load performs.
+	var k := NpcOnCall.chore_key_for(NpcOnCall.ESC_STARVED, "g1", rid)
+	_check("the response key is stable",
+		k == NpcOnCall.chore_key_for(NpcOnCall.ESC_STARVED, "g1", rid))
+	_check("and distinguishes subject and role",
+		k != NpcOnCall.chore_key_for(NpcOnCall.ESC_STARVED, "g2", rid)
+			and k != NpcOnCall.chore_key_for(NpcOnCall.ESC_STARVED, "g1", "role_9"))
+	_check("and is recognisable by the un-mint sweep", k.begins_with("oncall|"))
+
+	var rt := NpcOnCall.create_empty()
+	rt.load_from(oc2.serialize())
+	_check("roles round-trip",
+		str(rt.find_role(rid2).get("requires_skill", "")) == NpcSkills.ELECTRICAL)
+	_check("removing a role works", rt.remove_role(rid2)
+		and rt.role_for(NpcOnCall.FIX_MACHINE_STALLED).is_empty())
+
+
 ## Skills, and the anti-invisibility rule that keeps them from hiding work.
 func _test_skills() -> void:
 	var sk := NpcSkills.create_empty()
