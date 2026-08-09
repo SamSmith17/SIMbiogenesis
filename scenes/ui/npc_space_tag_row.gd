@@ -26,6 +26,7 @@ var _loader: Node = null
 var _target: Dictionary = {}
 var _option: OptionButton
 var _capacity: SpinBox
+var _assigned: OptionButton
 var _syncing := false
 
 
@@ -97,6 +98,16 @@ func _build() -> void:
 	_capacity.visible = false
 	add_child(_capacity)
 
+	# Sleep spaces only: reserve this spot for one person ("Devi's bed").
+	# The same assignment is editable from the Routines roster row.
+	_assigned = OptionButton.new()
+	_assigned.tooltip_text = "Reserve this sleeping spot for one person — Anyone means first come"
+	_assigned.add_theme_color_override("font_color", C_TEXT)
+	_assigned.custom_minimum_size.x = 110.0
+	_assigned.item_selected.connect(_on_assigned_selected)
+	_assigned.visible = false
+	add_child(_assigned)
+
 
 func _registry() -> SpaceRegistry:
 	if _loader == null or not is_instance_valid(_loader):
@@ -122,6 +133,10 @@ func _sync() -> void:
 	if idx >= 0:
 		_capacity.set_value_no_signal(
 			float(int(rec.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))))
+	var is_sleep := idx >= 0 and str(SpaceTypes.TYPES[idx]) == "sleep"
+	_assigned.visible = is_sleep
+	if is_sleep:
+		_populate_assigned(rec)
 	_syncing = false
 
 
@@ -148,6 +163,60 @@ func _on_capacity_changed(v: float) -> void:
 	if rec.is_empty():
 		return
 	reg.set_space_type(_target, str(rec.get("space_type", "")), int(v))
+	_save()
+
+
+func _populate_assigned(rec: Dictionary) -> void:
+	_assigned.clear()
+	_assigned.add_item("Anyone")
+	_assigned.set_item_metadata(0, "")
+	var cur := str(rec.get("assigned", ""))
+	var found := cur.is_empty()
+	for a in _roster_agents():
+		var agent: NpcAgent = a
+		_assigned.add_item(agent.display_name)
+		_assigned.set_item_metadata(_assigned.item_count - 1, agent.id)
+		if agent.id == cur:
+			_assigned.select(_assigned.item_count - 1)
+			found = true
+	if not found:
+		# Assigned to someone no longer on the roster. Shown honestly — the
+		# sim already treats a stale assignment as open, so this is a label,
+		# not a lock.
+		_assigned.add_item("%s (gone)" % NpcAgent.name_for(cur))
+		_assigned.set_item_metadata(_assigned.item_count - 1, cur)
+		_assigned.select(_assigned.item_count - 1)
+
+
+## Everyone across every pop-driven habitat — the picker should offer the
+## whole settlement, not one board's roster.
+func _roster_agents() -> Array:
+	var out: Array = []
+	var tree := get_tree()
+	if tree == null:
+		return out
+	var sgv := tree.root.find_child("SystemGraphView", true, false)
+	if sgv == null or not sgv.has_method("npc_population_bridge"):
+		return out
+	var bridge: Variant = sgv.call("npc_population_bridge")
+	if bridge == null or not bridge.has_method("pop_driven_item_ids"):
+		return out
+	for iid in (bridge.call("pop_driven_item_ids") as Array):
+		for a in (bridge.call("roster_for", str(iid)) as Array):
+			out.append(a)
+	return out
+
+
+func _on_assigned_selected(i: int) -> void:
+	if _syncing:
+		return
+	var reg := _registry()
+	if reg == null or _target.is_empty():
+		return
+	var rec := reg.space_for_target(_target)
+	if rec.is_empty():
+		return
+	reg.assign_agent(str(rec.get("id", "")), str(_assigned.get_item_metadata(i)))
 	_save()
 
 

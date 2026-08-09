@@ -149,6 +149,47 @@ func remove_space(space_id: String) -> bool:
 	return false
 
 
+# --- per-agent assignment ("this bed is Devi's") -----------------------------
+#
+# `assigned` on a space record reserves it for ONE agent id. Selection
+# (nearest_space_by) prefers an agent's own assigned space and skips spaces
+# assigned to somebody else. Deliberately NEVER swept: an assignment naming an
+# id that is not on the live roster is treated as OPEN by the caller-supplied
+# liveness check, so a departed person's bed frees itself and Reset population
+# (which re-mints the same hab_npc_N ids) keeps everyone's bed.
+
+func assign_agent(space_id: String, agent_id: String) -> bool:
+	var space := find_by_id(space_id)
+	if space.is_empty():
+		return false
+	if agent_id.is_empty():
+		space.erase("assigned")
+	else:
+		space["assigned"] = agent_id
+		# One bed per person: the same agent assigned elsewhere loses that one.
+		for item in spaces:
+			var other: Dictionary = item
+			if str(other.get("id", "")) != space_id \
+					and str(other.get("assigned", "")) == agent_id \
+					and str(other.get("space_type", "")) == str(space.get("space_type", "")):
+				other.erase("assigned")
+	return true
+
+
+func assignment_of(space_id: String) -> String:
+	return str(find_by_id(space_id).get("assigned", ""))
+
+
+## The space of `space_type` assigned to this agent, {} when none.
+func assigned_space_for(agent_id: String, space_type: String) -> Dictionary:
+	if agent_id.is_empty():
+		return {}
+	for item in spaces_of_type(space_type):
+		if str((item as Dictionary).get("assigned", "")) == agent_id:
+			return item
+	return {}
+
+
 func _new_id() -> String:
 	var max_n := 0
 	for item in spaces:
@@ -185,12 +226,33 @@ func spaces_of_type(space_type: String) -> Array:
 ## `pos_of` (space Dictionary -> Vector2 world XZ, or null for dangling
 ## targets, which are skipped). `require_free` skips spaces at capacity.
 ## Returns {} when nothing qualifies.
+##
+## Assignment semantics (see assign_agent): with an `agent_id`, that agent's
+## own assigned space wins OUTRIGHT (even if farther) when it resolves and has
+## room; spaces assigned to a different agent are skipped — unless
+## `live_check` says the owner is no longer on the roster, in which case the
+## assignment reads as open (stale assignments self-heal, never swept).
+## Without a live_check an assignment is treated as binding.
 func nearest_space_by(space_type: String, pos: Vector2, pos_of: Callable,
-		require_free: bool = true) -> Dictionary:
+		require_free: bool = true, agent_id: String = "",
+		live_check: Callable = Callable()) -> Dictionary:
+	if not agent_id.is_empty():
+		var own := assigned_space_for(agent_id, space_type)
+		if not own.is_empty() \
+				and (not require_free or has_free_capacity(str(own.get("id", "")))) \
+				and pos_of.call(own) is Vector2:
+			return own
 	var best: Dictionary = {}
 	var best_d := INF
 	for item in spaces_of_type(space_type):
 		var space: Dictionary = item
+		var owner := str(space.get("assigned", ""))
+		if not owner.is_empty() and owner != agent_id:
+			var owner_live := true
+			if live_check.is_valid():
+				owner_live = bool(live_check.call(owner))
+			if owner_live:
+				continue
 		if require_free and not has_free_capacity(str(space.get("id", ""))):
 			continue
 		var p: Variant = pos_of.call(space)
@@ -229,6 +291,20 @@ func resolve_position(space: Dictionary, main: Node) -> Variant:
 		"area":
 			return area_interior_point(target.get("poly", []) as Array)
 	return null
+
+
+## World yaw (RADIANS) of a space's target, NAN when it has no orientation.
+## Only prop targets carry one (the placed record's `yaw`, stored in degrees)
+## — it is what lets a sleeper lie along a bed's long axis instead of at
+## whatever angle they walked in on.
+func resolve_yaw(space: Dictionary, main: Node) -> float:
+	var target: Dictionary = space.get("target", {})
+	if str(target.get("kind", "")) != "prop":
+		return NAN
+	var rec: Dictionary = PlacedPropService.get_prop_record(main, str(target.get("prop_id", "")))
+	if rec.is_empty():
+		return NAN
+	return deg_to_rad(float(rec.get("yaw", 0.0)))
 
 
 # --- area geometry ----------------------------------------------------------

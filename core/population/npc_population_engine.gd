@@ -522,6 +522,12 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		# across the whole roster.
 		"skills": skills,
 		"roster_size": agents.size(),
+		# Space-assignment liveness: a bed assigned to an id NOT on this
+		# roster reads as open (departed people's beds free themselves;
+		# Reset population re-mints the same ids so beds are kept).
+		"agent_live": func(aid: String) -> bool: return find_agent(aid) != null,
+		# Prop yaw for lie-orientation (bed long axis); null/absent = unknown.
+		"yaw_of": ctx_in.get("yaw_of", Callable()),
 	}
 
 
@@ -651,6 +657,7 @@ func _catch_up(abs_hours: float, dt: float, ctx: Dictionary) -> void:
 		a._clear_path()
 		# Where they were looking is as invalid as where they were walking.
 		a.face_anchor = Vector2.INF
+		a.lie_yaw = NAN
 		# The skipped span is a discontinuity — a trail bridging it would paint
 		# a walk that never happened.
 		a.clear_trail()
@@ -832,8 +839,16 @@ func agent_dots() -> Array:
 			# a spread of FACINGS. A travelling agent ignores it — the host
 			# uses its rendered heading, the only thing that agrees with its
 			# own smoothing.
-			"face_yaw": NpcFacing.yaw_for(a.pos, a.face_anchor,
-				a.face_phase, _last_abs_h),
+			#
+			# EXCEPT in bed: a sleeper on an oriented sleep space (a bed) takes
+			# the BED's yaw, fixed — no anchor projection and, critically, no
+			# idle drift (drift on a lying figure reads as the sleeper slowly
+			# rotating in place; at high time scale, as a head-shake).
+			"face_yaw": a.lie_yaw \
+				if (not is_nan(a.lie_yaw) and a.state == NpcAgent.State.DOING
+					and a.activity == "sleep") \
+				else NpcFacing.yaw_for(a.pos, a.face_anchor,
+					a.face_phase, _last_abs_h),
 		})
 	return out
 

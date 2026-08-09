@@ -120,6 +120,8 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	if model_id == CargoContainerBuilder.MODEL_ID:
 		var container_spec: Dictionary = extras.get("container_spec", extras) as Dictionary
 		return CargoContainerBuilder.build_node(container_spec)
+	if model_id == BedBuilder.MODEL_ID:
+		return BedBuilder.build_node(extras)
 	if model_id == GENERIC_BOX_ID:
 		var box_spec: Dictionary = extras.get("box_spec", extras) as Dictionary
 		return _build_generic_box(box_spec)
@@ -357,6 +359,12 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "cargo_container", "label": "Shipping Container",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 2.6},
+		# Procedural single bed. Placing one AUTO-TAGS it as a capacity-1 sleep
+		# space (PlacedPropService), and a sleeper aligns to its long axis —
+		# see BedBuilder's orientation contract (long axis = local Z, head -Z).
+		{"id": "bed", "label": "Bed",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 0.75},
 		# Procedural scissor-linkage structure — designed in the Linkage Lab
 		# modal, built via LinkageStructureBuilder from a v30 linkage_spec.
 		{"id": "linkage_structure", "label": "Linkage Structure (Linkage Lab)",

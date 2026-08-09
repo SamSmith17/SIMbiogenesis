@@ -603,6 +603,19 @@ func _refresh_roster() -> void:
 		rename_btn.pressed.connect(func() -> void: _open_rename_dialog(agent))
 		row.add_child(rename_btn)
 
+		# This person's bed. A standalone dialog for the same reason renaming
+		# is one: the roster rebuilds every 0.5 s and would free an open
+		# dropdown mid-selection.
+		var bed_btn := Button.new()
+		UITheme.style_button(bed_btn)
+		bed_btn.text = "🛏"
+		bed_btn.flat = true
+		bed_btn.custom_minimum_size = Vector2(24, 0)
+		bed_btn.tooltip_text = _bed_tooltip(agent.id)
+		bed_btn.add_theme_color_override("font_color", C_TEXT_DIM)
+		bed_btn.pressed.connect(func() -> void: _open_bed_dialog(agent))
+		row.add_child(bed_btn)
+
 		var mood := Label.new()
 		mood.text = agent.morale_band_label()
 		mood.custom_minimum_size.x = 110
@@ -660,6 +673,87 @@ func _open_rename_dialog(agent: NpcAgent) -> void:
 	dlg.popup_centered(Vector2(320, 120))
 	edit.grab_focus()
 	edit.select_all()
+
+
+func _space_registry() -> SpaceRegistry:
+	if _bridge == null or not _bridge.has_method("registry_for"):
+		return null
+	return _bridge.registry_for(get_tree().current_scene)
+
+
+func _bed_tooltip(agent_id: String) -> String:
+	var reg := _space_registry()
+	if reg == null:
+		return "Assign a bed"
+	var own := reg.assigned_space_for(agent_id, "sleep")
+	if own.is_empty():
+		return "Assign a bed — sleeps at any free spot today"
+	return "Bed: %s" % _space_display_name(own)
+
+
+func _space_display_name(sp: Dictionary) -> String:
+	var name := str(sp.get("label", ""))
+	return name if not name.is_empty() else "Sleep spot %s" % str(sp.get("id", ""))
+
+
+## Pick this person's bed. Assigning a spot that belongs to somebody else
+## takes it over (the dropdown says whose it is); "Any free spot" clears the
+## assignment.
+func _open_bed_dialog(agent: NpcAgent) -> void:
+	var reg := _space_registry()
+	if reg == null:
+		return
+	var dlg := ConfirmationDialog.new()
+	dlg.title = "%s's bed" % agent.display_name
+	dlg.ok_button_text = "Assign"
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_right", 16)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	dlg.add_child(margin)
+	var opt := OptionButton.new()
+	opt.custom_minimum_size = Vector2(260, 0)
+	opt.add_item("Any free spot")
+	opt.set_item_metadata(0, "")
+	var cur := str(reg.assigned_space_for(agent.id, "sleep").get("id", ""))
+	for item in reg.spaces_of_type("sleep"):
+		var sp: Dictionary = item
+		var sid := str(sp.get("id", ""))
+		var disp := _space_display_name(sp)
+		var owner := str(sp.get("assigned", ""))
+		if not owner.is_empty() and owner != agent.id:
+			disp += " — %s's" % _name_for(owner)
+		opt.add_item(disp)
+		opt.set_item_metadata(opt.item_count - 1, sid)
+		if sid == cur:
+			opt.select(opt.item_count - 1)
+	margin.add_child(opt)
+	add_child(dlg)
+	var commit := func() -> void:
+		var sid2 := str(opt.get_item_metadata(maxi(opt.selected, 0)))
+		if sid2.is_empty():
+			var own := reg.assigned_space_for(agent.id, "sleep")
+			if not own.is_empty():
+				reg.assign_agent(str(own.get("id", "")), "")
+		else:
+			reg.assign_agent(sid2, agent.id)
+		_save_spaces(reg)
+		_roster_sig = "<unbuilt>"
+		dlg.queue_free()
+	dlg.confirmed.connect(commit)
+	dlg.canceled.connect(func() -> void: dlg.queue_free())
+	dlg.popup_centered(Vector2(340, 130))
+
+
+func _save_spaces(reg: SpaceRegistry) -> void:
+	var main := get_tree().current_scene
+	var loader: Node = TerrainSurfaceQuery.find_terrain_loader(main) \
+		if main != null else null
+	if loader != null and loader.has_method("save_npc_spaces"):
+		loader.call("save_npc_spaces")
+	elif main != null and not str(main.scene_file_path).is_empty():
+		reg.save_for_scene(str(main.scene_file_path))
 
 
 ## The affordance that makes over-scheduling visible: sleep / needs / chores /

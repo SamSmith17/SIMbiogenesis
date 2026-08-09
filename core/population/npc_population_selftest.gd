@@ -23,6 +23,8 @@ func _init() -> void:
 	_test_registry_queries()
 	_test_registry_occupancy()
 	_test_registry_persistence()
+	_test_space_assignment()
+	_test_bed_lie_yaw()
 	_test_nav()
 	_test_agent_daily_loop()
 	_test_determinism()
@@ -302,6 +304,113 @@ func _test_registry_persistence() -> void:
 	_check("file load ok", reg4.load_for_map(lat, lon))
 	_check("file round-trip count", reg4.spaces.size() == 2)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(reg.save_path_for_map(lat, lon)))
+
+
+## Per-agent bed assignment: "this bed is Devi's". Assignment is a persisted
+## key on the space record; selection prefers your own bed outright, skips
+## somebody else's, and treats an assignment naming a departed id as OPEN
+## (self-healing, never swept).
+func _test_space_assignment() -> void:
+	var reg := SpaceRegistry.create_empty()
+	var positions := {
+		"bed_a": Vector2(0, 0),
+		"bed_b": Vector2(10, 0),
+		"bed_c": Vector2(20, 0),
+	}
+	var ids: Dictionary = {}
+	for pid in positions:
+		ids[pid] = reg.set_space_type({"kind": "prop", "prop_id": pid}, "sleep", 1)
+	var pos_of := func(space: Dictionary) -> Variant:
+		return positions.get(str((space.get("target", {}) as Dictionary).get("prop_id", "")))
+
+	_check("assign", reg.assign_agent(str(ids["bed_b"]), "ava"))
+	_check("assignment_of", reg.assignment_of(str(ids["bed_b"])) == "ava")
+	_check("assigned_space_for finds it",
+		str(reg.assigned_space_for("ava", "sleep").get("id", "")) == str(ids["bed_b"]))
+
+	var live := func(aid: String) -> bool: return aid in ["ava", "kai"]
+	# Kai stands right beside Ava's bed — it is skipped, the next free one wins.
+	var got := reg.nearest_space_by("sleep", Vector2(9, 0), pos_of, true, "kai", live)
+	_check("someone else's bed is skipped",
+		str(got.get("id", "")) == str(ids["bed_a"]),
+		"got %s" % str(got.get("id", "")))
+	# Ava's own bed wins OUTRIGHT even when another free bed is nearer.
+	var got2 := reg.nearest_space_by("sleep", Vector2(0, 0), pos_of, true, "ava", live)
+	_check("own bed wins even when farther",
+		str(got2.get("id", "")) == str(ids["bed_b"]))
+	# Ava departs: her assignment reads as open to whoever asks.
+	var live2 := func(aid: String) -> bool: return aid == "kai"
+	var got3 := reg.nearest_space_by("sleep", Vector2(9, 0), pos_of, true, "kai", live2)
+	_check("a departed person's bed opens up",
+		str(got3.get("id", "")) == str(ids["bed_b"]))
+	# Without a live check an assignment is binding (conservative default).
+	var got4 := reg.nearest_space_by("sleep", Vector2(9, 0), pos_of, true, "kai")
+	_check("no live check = assignment binding",
+		str(got4.get("id", "")) == str(ids["bed_a"]))
+
+	# One bed per person: re-assigning Ava moves her, freeing the old bed.
+	reg.assign_agent(str(ids["bed_c"]), "ava")
+	_check("reassign clears the old bed",
+		reg.assignment_of(str(ids["bed_b"])).is_empty()
+			and reg.assignment_of(str(ids["bed_c"])) == "ava")
+	# Clearing.
+	reg.assign_agent(str(ids["bed_c"]), "")
+	_check("clear assignment", reg.assignment_of(str(ids["bed_c"])).is_empty())
+
+	# Assignment survives the JSON round-trip.
+	reg.assign_agent(str(ids["bed_a"]), "kai")
+	var reg2 := SpaceRegistry.create_empty()
+	reg2.deserialize(reg.serialize())
+	_check("assignment persists",
+		str(reg2.assigned_space_for("kai", "sleep").get("id", "")) == str(ids["bed_a"]))
+
+
+## A sleeper on an oriented sleep space (a bed) lies at the BED's yaw — fixed
+## across ticks (no idle drift; a drifting sleeper reads as rotating in bed).
+func _test_bed_lie_yaw() -> void:
+	var reg := SpaceRegistry.create_empty()
+	var bed_pos := Vector2(5, -5)
+	reg.set_space_type({"kind": "prop", "prop_id": "bed_1"}, "sleep", 4)
+	var pos_of := func(_space: Dictionary) -> Variant: return bed_pos
+	var bed_yaw := 1.234
+	var yaw_of := func(_space: Dictionary) -> float: return bed_yaw
+
+	var engine := NpcPopulationEngine.new()
+	engine.configure(3, "bed_hab", Vector2.ZERO)
+	for item in engine.agents:
+		(item as NpcAgent).needs["sleep"] = 0.97   # straight to bed
+	var ctx := {"registry": reg, "pos_of": pos_of, "yaw_of": yaw_of,
+		"hour_of_day": 22.0}
+	var t := 22.0
+	for i in 120:   # 2 sim-hours in 1-minute steps, hour pinned in window
+		t += 1.0 / 60.0
+		ctx["hour_of_day"] = fposmod(t, 24.0)
+		engine.tick(t, ctx)
+	var sleeping := 0
+	var yaw_ok := true
+	var first: Dictionary = {}
+	for d in engine.agent_dots():
+		var dot: Dictionary = d
+		if str(dot.get("activity", "")) == "sleep" \
+				and int(dot.get("state", 0)) == NpcAgent.State.DOING:
+			sleeping += 1
+			first[str(dot.get("id", ""))] = float(dot.get("face_yaw", 0.0))
+			if absf(float(dot.get("face_yaw", 0.0)) - bed_yaw) > 0.0001:
+				yaw_ok = false
+	_check("sleepers found for the yaw test", sleeping >= 1, "%d asleep" % sleeping)
+	_check("sleeper lies at the bed's yaw", yaw_ok)
+	# One more tick: the yaw must be IDENTICAL (drift suppressed).
+	t += 0.05
+	ctx["hour_of_day"] = fposmod(t, 24.0)
+	engine.tick(t, ctx)
+	var stable := true
+	for d in engine.agent_dots():
+		var dot: Dictionary = d
+		var aid := str(dot.get("id", ""))
+		if first.has(aid) and str(dot.get("activity", "")) == "sleep":
+			if absf(float(dot.get("face_yaw", 0.0)) - float(first[aid])) > 1e-9:
+				stable = false
+	_check("bed yaw is drift-free across ticks", stable)
 
 
 # =============================================================================

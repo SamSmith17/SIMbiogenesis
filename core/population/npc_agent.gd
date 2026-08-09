@@ -136,6 +136,11 @@ var face_anchor: Vector2 = Vector2.INF
 ## is no anchor (so a fresh roster does not all face world north) and as the
 ## idle-drift phase offset (so nobody wanders in step).
 var face_phase: float = 0.0
+## The claimed sleep space's own yaw (radians; NAN = none) — a bed's long
+## axis, so the sleeper lies IN it rather than at the walk-in angle. Same
+## TRANSIENT lifecycle rule as face_anchor: cleared in _finish (which
+## release_claims routes through) and in the engine's _catch_up.
+var lie_yaw: float = NAN
 var activity_ends_h: float = 0.0
 ## Per-tier backoff after a failed attempt (need id / CHORE_ACTIVITY /
 ## "enrichment" -> earliest abs-hour to retry). Deliberately NOT a single
@@ -782,7 +787,10 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 		retry_at[need] = abs_hours + RETRY_BACKOFF_H
 		return
 	var space_type := str((ACTIVITIES[need] as Dictionary).get("space", ""))
-	var space := registry.nearest_space_by(space_type, pos, pos_of)
+	# Assignment-aware: my own assigned space (a bed with my name on it) wins
+	# outright; someone else's stays theirs while they are on the roster.
+	var space := registry.nearest_space_by(space_type, pos, pos_of, true, id,
+		ctx.get("agent_live", Callable()))
 	if space.is_empty():
 		# Nothing tagged for this need (or everything is full) — this is a
 		# BLOCKED need, and it costs double morale.
@@ -806,6 +814,13 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	var from_key := at_space_id
 	target_space_id = sid
 	target_space_type = space_type
+	# A sleep space with an orientation (a bed) fixes the lying yaw — the
+	# sleeper lies ALONG it, not at whatever angle they walked in on.
+	lie_yaw = NAN
+	if need == "sleep":
+		var yaw_of: Callable = ctx.get("yaw_of", Callable())
+		if yaw_of.is_valid():
+			lie_yaw = float(yaw_of.call(space))
 	# Stand in this agent's own slot rather than on the space's centre point,
 	# or every occupant converges on one spot. Purely positional — the space is
 	# already claimed, so this changes nobody's consumption.
@@ -1037,6 +1052,7 @@ func _finish(ctx: Dictionary, _completed: bool) -> void:
 	chore_id = ""
 	chore_leg = 0
 	face_anchor = Vector2.INF
+	lie_yaw = NAN
 	# Remember the space we finished at: the next trip starts there, which is
 	# what lets the space-pair route cache hit.
 	at_space_id = target_space_id

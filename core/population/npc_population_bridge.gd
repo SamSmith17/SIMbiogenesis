@@ -130,6 +130,10 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			"registry": registry,
 			"pos_of": func(space: Dictionary) -> Variant:
 				return registry.resolve_position(space, main) if registry != null else null,
+			# Bed-orientation: the yaw of a space's prop target (radians, NAN
+			# unknown), so a sleeper can lie along the bed's long axis.
+			"yaw_of": func(space: Dictionary) -> float:
+				return registry.resolve_yaw(space, main) if registry != null else NAN,
 			"chore_pos_of": func(chore: Dictionary) -> Variant:
 				return _chore_position(chore, main, registry),
 			"hour_of_day": hour_of_day,

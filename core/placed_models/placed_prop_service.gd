@@ -83,6 +83,8 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 	_rebuild_scene_props(main, layer)
 	if ModelCatalog.is_starshade_model(model_id):
 		_trigger_starshade_graph_seed(main, {}, prop_id)
+	elif model_id == BedBuilder.MODEL_ID:
+		_auto_tag_bed_space(main, prop_id)
 	_notify_mp_props_edited()
 	return {"ok": true, "prop_id": prop_id, "x": x, "z": z, "ground_y": gy}
 
@@ -298,9 +300,37 @@ static func confirm_placement() -> bool:
 		# Deferred so the prop's global_transform has propagated (azimuth is
 		# derived from the world-space panel normal).
 		Callable(PlacedPropService, "seed_linkage_graph").call_deferred(main, prop_id)
+	elif model_id == BedBuilder.MODEL_ID:
+		_auto_tag_bed_space(main, prop_id)
 	# Keep any bound graph node's site/elevation coords in sync with the 3D twin.
 	_notify_graph_prop_moved(main, prop_id)
 	return true
+
+
+## A bed IS a sleeping spot: placing one tags it as a capacity-1 sleep space
+## so a sleeper routes to it with no manual tagging step. Registered through
+## the population bridge's registry resolution when the graph view is up
+## (covers built-in scenes via the scene-keyed fallback registry), else the
+## loader's registry directly. Idempotent (the registry upserts by target);
+## deleting the prop is cleaned by prune_dangling on the next save.
+static func _auto_tag_bed_space(main: Node, prop_id: String) -> void:
+	var target := {"kind": "prop", "prop_id": prop_id}
+	var reg: SpaceRegistry = null
+	var sgv := main.get_node_or_null("UILayer/SystemGraphView") if main != null else null
+	if sgv != null and sgv.has_method("npc_population_bridge"):
+		var bridge: Variant = sgv.call("npc_population_bridge")
+		if bridge != null and bridge.has_method("registry_for"):
+			reg = bridge.call("registry_for", main)
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if reg == null and loader != null:
+		reg = loader.get("npc_spaces") as SpaceRegistry
+	if reg == null:
+		return
+	reg.set_space_type(target, "sleep", 1, "Bed")
+	if loader != null and loader.has_method("save_npc_spaces"):
+		loader.call("save_npc_spaces")
+	elif main != null and not str(main.scene_file_path).is_empty():
+		reg.save_for_scene(str(main.scene_file_path))
 
 
 ## World-metre plan footprint (W×D) from ModelCatalog metrics × resolved_scale.

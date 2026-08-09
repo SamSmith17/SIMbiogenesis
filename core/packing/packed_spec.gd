@@ -79,6 +79,9 @@ const CURATED_MODELS := {
 		"form": "bundle", "source": "estimated"},
 	"grow_bed": {"w_m": 1.25, "d_m": 0.65, "h_m": 0.35, "mass_kg": 30.0,
 		"form": "crate", "source": "estimated"},
+	# Single bed knocks down: frame flat-pack + rolled mattress.
+	"bed": {"w_m": 2.05, "d_m": 0.95, "h_m": 0.35, "mass_kg": 32.0,
+		"form": "bundle", "source": "estimated"},
 	# 1 kW-class VAWT: mast sections + rotor blades + genny, disassembled.
 	"vawt": {"w_m": 3.20, "d_m": 0.80, "h_m": 0.80, "mass_kg": 220.0,
 		"form": "bundle", "source": "estimated"},
