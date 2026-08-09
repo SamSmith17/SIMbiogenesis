@@ -2048,7 +2048,37 @@ func _run_population_verify() -> void:
 	# Long enough for a MEAL to complete, not just a drink. Eating is a 0.5 h
 	# activity behind a 0.55 hunger threshold, and now that agents walk real
 	# routes instead of gliding, the first round of meals lands later.
-	await get_tree().create_timer(75.0).timeout
+	# (60 s + 3 s smoothness probe + 12 s = the original 75 s window, so the
+	# calibrated downstream phases see the same elapsed sim time.)
+	await get_tree().create_timer(60.0).timeout
+	# --- smoothness probe: at this speed (~720×) a sim tick moves a walker
+	# ~470 m. Rendered motion must be CONTINUOUS — the old regime showed up as
+	# a single-frame teleport of a whole tick step. Per-frame jumps must stay
+	# an order of magnitude under it.
+	var probe_max := 0.0
+	var probe_host := main.find_child("NpcPopulationHost", true, false)
+	if probe_host != null:
+		var probe_last: Dictionary = {}
+		var probe_end := Time.get_ticks_msec() + 3000
+		while Time.get_ticks_msec() < probe_end:
+			await get_tree().process_frame
+			for c in probe_host.get_children():
+				if not (c is NpcAvatar):
+					continue
+				var av3 := c as Node3D
+				if not av3.visible:
+					continue
+				var pk := str(av3.name)
+				var pp := av3.global_position
+				if probe_last.has(pk):
+					probe_max = maxf(probe_max,
+						(pp - (probe_last[pk] as Vector3)).length())
+				probe_last[pk] = pp
+	var ok_smooth := probe_max < 150.0
+	print("PlaytestHarness: population verify — motion smoothness %s (max frame jump %.1f m at ~720×, limit 150)" % [
+		"PASS" if ok_smooth else "FAIL (a rendered body jumped a whole sim tick in one frame)",
+		probe_max])
+	await get_tree().create_timer(12.0).timeout
 	if main != null and "time_scale" in main:
 		main.time_scale = 0.0
 	var dots1: Array = bridge.call("agent_dots")
@@ -2646,7 +2676,7 @@ func _run_population_verify() -> void:
 		if not (model.get_item(str(pid)) as Dictionary).is_empty():
 			model.remove_item(str(pid))
 	print("PlaytestHarness: population verify — %s (%d shots in %s)" % [
-		"PASS" if (ok_flow and ok_move and ok_chore and ok_face and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire and ok_drape) else "FAIL",
+		"PASS" if (ok_flow and ok_move and ok_smooth and ok_chore and ok_face and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire and ok_drape) else "FAIL",
 		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
 

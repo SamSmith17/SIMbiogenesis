@@ -10,10 +10,29 @@ extends Node3D
 ## figures are always the same people in the same places.
 
 ## Above this (m per frame-step) the sim jumped (high time-scale / catch-up):
-## hard-snap instead of gliding across the map.
+## hard-snap instead of gliding across the map. At high time scale this is a
+## FLOOR, not the whole rule — a step that is exactly "walking at timelapse
+## speed" (expected_step × margin) interpolates instead of snapping; only a
+## step beyond what walking could cover is a genuine relocation. Before this,
+## 60× sawtoothed (19.5 m per tick, just under 25) and ≥~320× hard-cut the
+## pose FSM every single tick.
 const TELEPORT_SNAP_M := 25.0
+const TELEPORT_STEP_MARGIN := 1.6
 const SMOOTH_RATE := 8.0
 const MOVE_EPS_M := 0.05
+## Tick-to-tick interpolation kicks in when the sim's per-tick step exceeds
+## this — big enough that 1× play (≈0.33 m/tick) keeps the long-standing
+## exponential-smoothing look, small enough that 10×+ becomes a glide.
+const INTERP_MIN_STEP_M := 2.0
+## Estimated tick intervals are biased high so the interpolation rarely parks
+## at f=1 waiting for the next tick (a park reads as 4 Hz stutter); the small
+## residual folds into the next segment.
+const INTERP_INTERVAL_BIAS := 1.1
+## Stationary yaw slew ceiling (rad per real second). NpcFacing's idle drift
+## runs on the SIM clock, so at 450× its ±6.3° wander completes in under two
+## wall seconds — a head-shake on every standing figure. The drift AMPLITUDE
+## bound stays the far-LOD guarantee; this bounds the RATE where it renders.
+const YAW_SLEW_IDLE_RAD_S := 0.6
 
 ## LOD. Ground height is the expensive part (a terrain query per avatar per
 ## frame — 50 of those, and on scenes with no TerrainLoader each is a
@@ -62,6 +81,9 @@ var _far_accum: Dictionary = {}    # agent_id -> float (seconds since last far p
 var _arrive_wait: Dictionary = {}  # agent_id -> seconds the render has been catching up
 var _moved_at: Dictionary = {}     # agent_id -> time of last sim movement (fallback path)
 var _anchor_pos: Dictionary = {}   # agent_id -> Vector3 held while standing up
+## Tick-to-tick interpolation state: agent_id -> {prev/next: Vector3 targets,
+## at: wall time the dot last moved, interval: EMA of tick spacing, step_m}.
+var _interp: Dictionary = {}
 var _now := 0.0
 var _focus_id: String = ""         # agent the crosshair is on (nametag shown)
 ## Crate props currently hidden because someone is CARRYING them (Site
@@ -198,6 +220,7 @@ func _process(delta: float) -> void:
 			_arrive_wait.erase(aid)
 			_moved_at.erase(aid)
 			_anchor_pos.erase(aid)
+			_interp.erase(aid)
 
 
 ## Give the rigged body to the MAX_RIGGED nearest candidates and the primitive
@@ -562,12 +585,53 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	var gy := _ground_y(aid, sim_pos)
 	var target := Vector3(sim_pos.x, gy, sim_pos.y)
 	var cur := av.global_position
-	var gap := cur.distance_to(target) if cur != Vector3.ZERO else 0.0
 	if bool(dot.get("possessed", false)):
 		_pose_possessed(av, aid, dot, delta, target, cur, prev, sim_pos)
 		return
 
-	# The sim\'s own account of whether this person is going somewhere. A LEVEL,
+	# --- tick-to-tick interpolation state -----------------------------------
+	# The sim publishes positions as a step function (one jump per 0.25/0.5 s
+	# wall tick). At timelapse speeds each step is metres to hundreds of
+	# metres; chasing the newest step exponentially produced a sawtooth, and
+	# past the snap threshold a hard teleport EVERY tick. Instead: remember
+	# the previous tick's target and glide prev→next over the measured tick
+	# spacing — continuous piecewise-linear motion, one tick behind the sim,
+	# invisible at the speeds where it engages (see INTERP_MIN_STEP_M).
+	var st: Dictionary = _interp.get(aid, {})
+	if st.is_empty():
+		st = {"prev": target, "next": target, "at": _now, "interval": 0.25,
+			"step_m": 0.0}
+	var moved := (sim_pos - prev).length() > 0.001
+	if moved:
+		var since := _now - float(st["at"])
+		if since > 0.02 and since < 1.5:
+			st["interval"] = lerpf(float(st["interval"]), since, 0.3)
+		st["prev"] = st["next"]
+		st["next"] = target
+		st["at"] = _now
+		st["step_m"] = (sim_pos - prev).length()
+	else:
+		st["next"] = target   # ground refresh may move Y under a parked dot
+	_interp[aid] = st
+
+	# What a WALK could cover in one tick at the current time scale. A step
+	# beyond that (× margin) is a genuine relocation — catch-up, scrub, an
+	# activity re-seat — and gets the hard snap; a step within it is just
+	# timelapse walking and interpolates.
+	var scale: float = float(_main.get("time_scale")) if "time_scale" in _main else 1.0
+	var expected_step := NpcNav.WALK_SPEED_MPS * absf(scale) * 3600.0 \
+		* float(st["interval"])
+	var tp_threshold := maxf(TELEPORT_SNAP_M, expected_step * TELEPORT_STEP_MARGIN)
+	var step_is_jump := float(st["step_m"]) >= tp_threshold
+	var use_interp := float(st["step_m"]) > INTERP_MIN_STEP_M and not step_is_jump
+	var desired := target
+	if use_interp:
+		var f := clampf((_now - float(st["at"]))
+			/ maxf(float(st["interval"]) * INTERP_INTERVAL_BIAS, 0.05), 0.0, 1.0)
+		desired = (st["prev"] as Vector3).lerp(st["next"] as Vector3, f)
+	var gap := cur.distance_to(desired) if cur != Vector3.ZERO else 0.0
+
+	# The sim's own account of whether this person is going somewhere. A LEVEL,
 	# not an edge, so it cannot alias against the frame rate.
 	var has_state := dot.has("state")
 	var travelling := int(dot.get("state", -1)) == NpcAgent.State.TRAVELING
@@ -586,10 +650,15 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	_arrive_wait[aid] = (wait + delta) if catching_up else 0.0
 	var in_transit := travelling or catching_up
 
-	var teleported := gap >= TELEPORT_SNAP_M and cur != Vector3.ZERO
-	var next := target
+	var teleported := cur != Vector3.ZERO \
+		and ((step_is_jump and moved) or gap >= tp_threshold)
+	var next := desired
 	if not teleported and cur != Vector3.ZERO:
-		next = cur.lerp(target, minf(delta * SMOOTH_RATE, 1.0))
+		# In interp mode the goal itself moves continuously, so track it hard
+		# (the interpolation IS the smoothing); at 1× keep the long-standing
+		# gentle chase.
+		var rate := SMOOTH_RATE * 3.0 if use_interp else SMOOTH_RATE
+		next = cur.lerp(desired, minf(delta * rate, 1.0))
 
 	# Standing up takes ~1.2 s during which the sim has already set off. Hold
 	# the body still so the world does not slide out from under the animation,
@@ -597,7 +666,7 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	# on a teleport.
 	var held: Variant = _anchor_pos.get(aid)
 	if not teleported and av.wants_anchor(
-			(held as Vector3).distance_to(target) if held is Vector3 else 0.0):
+			(held as Vector3).distance_to(desired) if held is Vector3 else 0.0):
 		if not (held is Vector3):
 			_anchor_pos[aid] = cur
 			held = cur
@@ -605,7 +674,7 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	elif _anchor_pos.has(aid):
 		_anchor_pos.erase(aid)
 		# Clear the debt quickly rather than drifting back over seconds.
-		next = cur.lerp(target, minf(delta * SMOOTH_RATE * 3.0, 1.0))
+		next = cur.lerp(desired, minf(delta * SMOOTH_RATE * 3.0, 1.0))
 
 	# Direction of travel while GOING somewhere; the sim's facing hint once
 	# stopped.
@@ -621,8 +690,13 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	var want := float(dot.get("face_yaw", yaw))
 	if in_transit:
 		# CelestialClock convention: north −Z, east +X; atan2 gives the heading
-		# of travel in world yaw.
+		# of travel in world yaw. In interp mode the SEGMENT direction is the
+		# stable one — the per-frame render delta wobbles inside a segment.
 		var dir := sim_pos - Vector2(cur.x, cur.z)
+		if use_interp:
+			var pv := st["prev"] as Vector3
+			var nx := st["next"] as Vector3
+			dir = Vector2(nx.x - pv.x, nx.z - pv.z)
 		if dir.length() > YAW_EPS_M:
 			want = atan2(-dir.x, -dir.y)
 		# Below the epsilon we fall through to face_yaw while STILL in transit,
@@ -632,15 +706,26 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	# start/stop walk clips legible. Beyond FAR_DIST_M the pose interval makes
 	# this a hard set, which is correct now that `want` is a stable
 	# anchor-derived bearing rather than a noisy shrinking delta.
-	yaw = lerp_angle(yaw, want, minf(delta * YAW_RATE, 1.0))
+	#
+	# Stationary figures additionally get a RATE ceiling: face_yaw carries the
+	# idle drift, which runs on the sim clock — at 450× its wander completes
+	# in under two wall seconds and read as a head-shake on everyone standing.
+	var slewed := lerp_angle(yaw, want, minf(delta * YAW_RATE, 1.0))
+	if in_transit:
+		yaw = slewed
+	else:
+		var max_step := YAW_SLEW_IDLE_RAD_S * delta
+		yaw += clampf(angle_difference(yaw, slewed), -max_step, max_step)
 
 	# time_scale 0 is paused; negative is a backward scrub, during which the
 	# population engine freezes too, so the figures should hold either way.
-	var scale: float = float(_main.get("time_scale")) if "time_scale" in _main else 1.0
+	# (`scale` was read above for the teleport classification.)
 	# What the body is ACTUALLY covering on screen this frame, which is what a
-	# gait has to agree with. Derived from the rendered step rather than the
-	# sim's nominal speed, so smoothing and catch-up are already in it.
+	# gait has to agree with. In interp mode the ANALYTIC segment speed is the
+	# honest number — the rendered step inherits smoothing residue and pulses.
 	var apparent := (cur.distance_to(next) / maxf(delta, 0.0001)) if cur != Vector3.ZERO else 0.0
+	if use_interp:
+		apparent = float(st["step_m"]) / maxf(float(st["interval"]), 0.05)
 	av.apply_pose(next, yaw, {
 		"dt": delta,
 		"paused": scale <= 0.0,
