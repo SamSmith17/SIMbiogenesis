@@ -56,6 +56,12 @@ var chore_board: NpcChoreBoard = null
 ## Who worked how much, per sim-day. Rides the snapshot, so it survives
 ## save/load — unlike NpcAgent's walking ledger, which does not.
 var labour := NpcLabourLog.create_empty()
+## Who is qualified for what. CONFIG — loaded from specs.pop_skills by the
+## bridge, so a roster reset does not wipe the settlement's expertise.
+var skills := NpcSkills.create_empty()
+## The duty rota. `duties` are config (specs.pop_duties); `slots` are
+## simulation state and ride the snapshot below.
+var duty := NpcDutyRoster.create_empty()
 ## The daily schedule everyone follows (per-agent phase offsets vary it).
 ## Editable by the player; defaults to NpcRoutine.default_day().
 var routine: NpcRoutine = null
@@ -173,6 +179,14 @@ func tick(abs_hours: float, ctx_in: Dictionary) -> Dictionary:
 	# integrates this rate over the same dt — bills exactly the mass the
 	# activities used, at any time scale. Billing the instantaneous end-of-
 	# tick rate instead over-charged short activities ~2x at coarse dt.
+	# What the site can do, refreshed each tick. EMPTY means "skills are not
+	# configured here", which makes every requires_skill inert — the default
+	# and the safe one.
+	if chore_board != null:
+		var ids: Array = []
+		for a in agents:
+			ids.append((a as NpcAgent).id)
+		chore_board.skill_supply = skills.supply(ids)
 	var steps := clampi(int(ceil(dt / MAX_SUBSTEP_H)), 1, MAX_SUBSTEPS)
 	var sub := dt / float(steps)
 	var w := 1.0 / float(steps)
@@ -469,6 +483,10 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		# rebuilds the dict from scratch, and a key added anywhere else
 		# never arrives.
 		"bank_labour": _bank_labour,
+		# The agent asks this for its OWN tags when picking work. Passed as
+		# the object rather than a per-agent dict because ctx is shared
+		# across the whole roster.
+		"skills": skills,
 		"roster_size": agents.size(),
 	}
 
@@ -822,6 +840,8 @@ func snapshot(saved_h: float) -> Dictionary:
 		out["chores"] = chore_board.serialize()
 	if not labour.days.is_empty():
 		out["labour"] = labour.serialize()
+	if not duty.slots.is_empty():
+		out["duty_slots"] = duty.serialize_slots()
 	return out
 
 
@@ -851,6 +871,7 @@ func restore(snap: Dictionary) -> void:
 	if snap.has("chores"):
 		chore_board.deserialize(snap.get("chores", {}) as Dictionary)
 	labour = NpcLabourLog.deserialize(snap.get("labour", {}) as Dictionary)
+	duty.load_slots(snap.get("duty_slots", {}) as Dictionary)
 	# A save can carry assignments to people the restored roster does not
 	# contain — authored occupants changed, or the file predates a reset.
 	_validate_assignments()

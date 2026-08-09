@@ -856,7 +856,8 @@ func _begin_chore(abs_hours: float, ctx: Dictionary) -> bool:
 	var weather: Dictionary = ctx.get("weather", {})
 	var options: Array = board.available_for(id, abs_hours, _hour(ctx), weather,
 		int(ctx.get("roster_size", 0)),
-		int((ctx.get("fair_ranks", {}) as Dictionary).get(id, 0)))
+		int((ctx.get("fair_ranks", {}) as Dictionary).get(id, 0)),
+		_my_skills(ctx))
 	if options.is_empty():
 		return false
 	var chore: Dictionary = options[0]
@@ -1099,6 +1100,14 @@ func _chore_is_shared(ctx: Dictionary) -> bool:
 	# max_workers, not the live count: the second person may still be walking,
 	# and the first one must not spend that time aimed off into the distance.
 	return int(chore.get("max_workers", 1)) > 1
+
+
+## This person's qualified tags, for the board's skill gate. Allocated per
+## pick attempt rather than per frame — chore selection runs on the backoff
+## cadence, not every tick.
+func _my_skills(ctx: Dictionary) -> Dictionary:
+	var sk = ctx.get("skills")
+	return sk.tags_of(id) if sk != null else {}
 
 
 func _wake_hour() -> float:

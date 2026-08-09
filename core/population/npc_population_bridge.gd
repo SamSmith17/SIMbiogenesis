@@ -20,6 +20,9 @@ var _model = null                      # last GraphModel seen by tick()
 var _configured_count: Dictionary = {} # item_id -> int (reconfigure on change)
 var _last_persist_h: Dictionary = {}   # item_id -> float abs-hours
 var _last_persist_blob: Dictionary = {}  # item_id -> String (change gate)
+## item_id -> the sim-day the duty rota last ran for. Everything in that
+## service is day-granular and must not touch the substep path.
+var _last_duty_day: Dictionary = {}
 ## Site Projects (the unified camp-lifecycle mechanic): per-habitat project
 ## stores, persisted into specs["site_projects"] beside pop_state.
 var _project_stores: Dictionary = {}   # item_id -> SiteProjectStore
@@ -163,6 +166,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		_dispatch_chore_effects(engine, main)
 		_service_alarms(iid, engine, abs_h)
 		_service_machine_chores(iid, engine, model, main, abs_h)
+		_service_duty_roster(iid, engine, abs_h)
 		var store := _ensure_project_store(iid, specs)
 		store.sync(engine.chore_board)
 		_push_build_progress(store, engine.chore_board, main)
@@ -958,6 +962,48 @@ func pop_driven_item_ids() -> Array:
 	return out
 
 
+## --- duty rota + skills (config, persisted beside pop_routine) -------------
+
+func duty_roster_for(item_id: String) -> NpcDutyRoster:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	return engine.duty if engine != null else null
+
+
+func skills_for(item_id: String) -> NpcSkills:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	return engine.skills if engine != null else null
+
+
+func labour_for(item_id: String) -> NpcLabourLog:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	return engine.labour if engine != null else null
+
+
+## Persist the duty TEMPLATES after an edit. Slots are simulation state and
+## ride pop_state; only the templates are config.
+func save_duties(model, item_id: String) -> void:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	if engine == null or model == null:
+		return
+	var item: Dictionary = model.get_item(item_id)
+	if item.is_empty():
+		return
+	(item.get("specs", {}) as Dictionary)["pop_duties"] = engine.duty.serialize_duties()
+	# Re-plan from today, so an edit shows up now rather than when the horizon
+	# happens to roll past it.
+	_last_duty_day.erase(item_id)
+
+
+func save_skills(model, item_id: String) -> void:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	if engine == null or model == null:
+		return
+	var item: Dictionary = model.get_item(item_id)
+	if item.is_empty():
+		return
+	(item.get("specs", {}) as Dictionary)["pop_skills"] = engine.skills.serialize()
+
+
 func chore_board_for(item_id: String) -> NpcChoreBoard:
 	var engine: NpcPopulationEngine = _engines.get(item_id)
 	return engine.chore_board if engine != null else null
@@ -1220,6 +1266,12 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	# STRIKE, which is exactly the behaviour that shipped, so every existing
 	# save keeps running the way it always has.
 	engine.consequence = NpcConsequence.normalize(specs.get("pop_consequence", ""))
+	# Skills and the duty rota are CONFIG too, for the same reason: the
+	# settlement's expertise and the schedule the player wrote should
+	# outlive a "Reset population". Agent ids are regenerated identically
+	# by configure(), so both reattach to the same slots.
+	engine.skills = NpcSkills.deserialize(specs.get("pop_skills", {}) as Dictionary)
+	engine.duty.load_duties(specs.get("pop_duties", {}) as Dictionary)
 	# Departures and collapse are narrative events — surface them to the UI.
 	engine.agent_departed.connect(
 		func(_aid: String, who: String, reason: String) -> void:
@@ -1271,6 +1323,37 @@ func take_events() -> Array:
 ## chore's completion `effect` calls the SAME `RecipeRunner.confirm_chore` the
 ## Confirm button always did — so the ledger stays the meter (Site Report
 ## totals keep working) while the crew becomes the gate.
+## The duty rota, once per sim-day.
+##
+## Settle yesterday, top the plan back up to the horizon, mint today's slots
+## onto the board, and retire finished one-offs so a month of dead chores is
+## not competing with the rota for MAX_CHORES.
+func _service_duty_roster(iid: String, engine: NpcPopulationEngine,
+		abs_h: float) -> void:
+	var board := engine.chore_board
+	if board == null:
+		return
+	var day := NpcChoreBoard.day_index(abs_h)
+	if int(_last_duty_day.get(iid, -999999)) == day:
+		return
+	_last_duty_day[iid] = day
+	var ids: Array = []
+	for a in engine.agents:
+		ids.append((a as NpcAgent).id)
+	if ids.is_empty():
+		return
+	engine.skills.forget_missing(ids)
+	engine.duty.settle_day(board, day)
+	engine.duty.generate(day, ids, engine.skills, engine.labour)
+	engine.duty.mint_day(board, day, abs_h, ids, engine.skills,
+		engine.labour, settlement_log())
+	board.prune_completed(abs_h)
+	engine.labour.prune(day - NpcLabourLog.KEEP_DAYS)
+	# A new day of assignments is exactly when a stale one should be caught.
+	board.validate_assignments(ids)
+	_last_persist_h.erase(iid)
+
+
 func _service_machine_chores(iid: String, engine: NpcPopulationEngine, model,
 		main: Node, _abs_h: float) -> void:
 	var board := engine.chore_board
