@@ -39,6 +39,8 @@ var _title: Label = null
 var _summary: Label = null
 var _today_lbl: Label = null
 var _toggle: Button = null
+var _plan_btn: Button = null
+var _deep_btn: Button = null
 
 
 func _ready() -> void:
@@ -127,18 +129,18 @@ func _build() -> void:
 	var btns := HBoxContainer.new()
 	btns.add_theme_constant_override("separation", 4)
 	col.add_child(btns)
-	var plan := Button.new()
-	UITheme.style_button(plan)
-	plan.text = "Plan work…"
-	plan.tooltip_text = "Work Planner: recurring chores, tasks, the duty rota, per-person hours and skills"
-	plan.pressed.connect(func() -> void: _open_modal("open_work_planner"))
-	btns.add_child(plan)
-	var deep := Button.new()
-	UITheme.style_button(deep)
-	deep.text = "Routines…"
-	deep.tooltip_text = "Full editor: add chores, edit the daily routine, site rules"
-	deep.pressed.connect(_open_full_editor)
-	btns.add_child(deep)
+	_plan_btn = Button.new()
+	UITheme.style_button(_plan_btn)
+	_plan_btn.text = "Plan work…"
+	_plan_btn.tooltip_text = "Work Planner: recurring chores, tasks, the duty rota, per-person hours and skills"
+	_plan_btn.pressed.connect(func() -> void: _open_modal("open_work_planner"))
+	btns.add_child(_plan_btn)
+	_deep_btn = Button.new()
+	UITheme.style_button(_deep_btn)
+	_deep_btn.text = "Routines…"
+	_deep_btn.tooltip_text = "Full editor: add chores, edit the daily routine, site rules"
+	_deep_btn.pressed.connect(_open_full_editor)
+	btns.add_child(_deep_btn)
 
 
 ## The dock is a live view, so it rebuilds — but only when the CONTENT changed.
@@ -155,6 +157,17 @@ func _refresh() -> void:
 	if _bridge == null or _rows == null:
 		return
 	var board: Variant = _first_board()
+	# With no pop-driven habitat both modal buttons would silently no-op —
+	# disable them and say why instead.
+	var have_crew := not _first_iid().is_empty()
+	if _plan_btn != null and _plan_btn.disabled == have_crew:
+		_plan_btn.disabled = not have_crew
+		_deep_btn.disabled = not have_crew
+		var why := "Turn on Population Simulation for a habitat first"
+		_plan_btn.tooltip_text = why if not have_crew \
+			else "Work Planner: recurring chores, tasks, the duty rota, per-person hours and skills"
+		_deep_btn.tooltip_text = why if not have_crew \
+			else "Full editor: add chores, edit the daily routine, site rules"
 	if board == null:
 		_summary.text = "No crew on site."
 		_sig = "none"
@@ -275,9 +288,22 @@ func _chore_row(board: Variant, chore: Dictionary, day: int) -> Control:
 			fposmod(abs_h, 24.0), _bridge.call("current_weather"),
 			int(_bridge.call("roster_size_for", _first_iid())),
 			func(aid: String) -> String: return _name_of(aid)))
-	lbl.tooltip_text = "%.1f h left · %d of %d people%s" % [left, w, mn,
+	# Who is actually on it: cover outranks assignment (same rule as the
+	# planner's Schedule tab).
+	var cov := str(chore.get("covered_by", ""))
+	var asg := str(chore.get("assigned_to", ""))
+	var who_line := ""
+	if not cov.is_empty():
+		who_line = "\n%s covering%s" % [_name_of(cov),
+			(" for " + _name_of(asg)) if not asg.is_empty() else ""]
+	elif not asg.is_empty():
+		who_line = "\nheld for %s" % _name_of(asg)
+	lbl.tooltip_text = "%.1f h left · %d of %d people%s%s" % [left, w, mn, who_line,
 		("\n%s %s" % [NpcChoreBoard.reason_glyph(reason), reason])
 			if not reason.is_empty() else ""]
+	# Labels default to MOUSE_FILTER_IGNORE and Godot suppresses tooltips on
+	# IGNORE controls — the reason line above was silently dead.
+	lbl.mouse_filter = Control.MOUSE_FILTER_PASS
 	row.add_child(lbl)
 
 	var crew := Label.new()

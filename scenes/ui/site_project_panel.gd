@@ -127,6 +127,7 @@ func _build_ui() -> void:
 	var close_btn := Button.new()
 	UITheme.style_button(close_btn)
 	close_btn.text = "✕"
+	close_btn.tooltip_text = "Close (Esc)"
 	close_btn.pressed.connect(close)
 	head.add_child(close_btn)
 
@@ -187,11 +188,13 @@ func _new_project_row() -> Control:
 	_np_where = Button.new()
 	UITheme.style_button(_np_where)
 	_np_where.text = "Where…"
+	_np_where.tooltip_text = "Pick where the work happens — the crew walks there"
 	_np_where.pressed.connect(_on_np_where)
 	row.add_child(_np_where)
 	var add := Button.new()
 	UITheme.style_button(add)
 	add.text = "Queue"
+	add.tooltip_text = "Put this job on the board as a project"
 	add.pressed.connect(_on_np_queue)
 	row.add_child(add)
 	var wrap := VBoxContainer.new()

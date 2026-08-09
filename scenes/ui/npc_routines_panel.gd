@@ -752,12 +752,15 @@ func _refresh_chores() -> void:
 	var sig := ""
 	for c in board.chores:
 		var ch: Dictionary = c
-		sig += "%s|%s|%d|%d|%d|%.1f|%s|%s;" % [str(ch.get("id", "")),
+		sig += "%s|%s|%d|%d|%d|%.1f|%s|%s|%s|%s|%s;" % [str(ch.get("id", "")),
 			str(ch.get("label", "")), int(ch.get("priority", 0)),
 			int(ch.get("done_day", -1)),
 			(ch.get("workers", []) as Array).size(),
 			float(ch.get("progress_h", 0.0)),
 			str(ch.get("assigned_to", "")),
+			str(ch.get("covered_by", "")),
+			str(ch.get("held", false)),
+			str(ch.get("orphaned_from", "")),
 			board.blocked_reason(ch, abs_h, fposmod(abs_h, 24.0), weather,
 				_bridge.roster_size_for(_item_id))]
 	if sig == _chores_sig:
@@ -779,6 +782,7 @@ func _refresh_chores() -> void:
 	# the bottom; ties keep insertion order so the list does not shuffle
 	# under the cursor on every refresh.
 	var ordered: Array = board.chores.duplicate()
+	var prj_ids := _project_chore_ids()
 	var day := int(floor(abs_h / 24.0))
 	ordered.sort_custom(func(a, b) -> bool:
 		var da := int((a as Dictionary).get("done_day", -1)) == day
@@ -797,6 +801,11 @@ func _refresh_chores() -> void:
 		lbl.custom_minimum_size.x = 150
 		lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		lbl.add_theme_color_override("font_color", C_TEXT)
+		# Labels default to MOUSE_FILTER_IGNORE, and Godot only shows tooltips
+		# on non-IGNORE controls — every tooltip in these rows was silently
+		# dead. PASS keeps clicks flowing to the parent. Applied to each label
+		# below that carries a tooltip.
+		lbl.mouse_filter = Control.MOUSE_FILTER_PASS
 		row.add_child(lbl)
 
 		# Repeat + priority as a compact prefix, because a "once" chore and a
@@ -868,6 +877,7 @@ Paused" if held else "", ("
 		crew.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		crew.custom_minimum_size.x = 46
 		crew.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		crew.mouse_filter = Control.MOUSE_FILTER_PASS
 		row.add_child(crew)
 
 		var w: Dictionary = chore.get("window", {})
@@ -882,6 +892,7 @@ Paused" if held else "", ("
 		meta.add_theme_color_override("font_color",
 				UITheme.C_WARN if gated else C_TEXT_DIM)
 		meta.custom_minimum_size.x = 130
+		meta.mouse_filter = Control.MOUSE_FILTER_PASS
 		if gated:
 			meta.tooltip_text = "Too %s to work outside right now" % 				NpcWeatherGate.describe(weather).to_lower()
 		row.add_child(meta)
@@ -907,25 +918,74 @@ Paused" if held else "", ("
 				place.add_theme_color_override("font_color", C_TEXT_DIM)
 		place.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		place.custom_minimum_size.x = 18
+		place.mouse_filter = Control.MOUSE_FILTER_PASS
 		row.add_child(place)
 
 		var who := Label.new()
 		var assigned := str(chore.get("assigned_to", ""))
-		who.text = _name_for(assigned) if not assigned.is_empty() else "anyone"
+		var covered := str(chore.get("covered_by", ""))
+		var orphaned := str(chore.get("orphaned_from", ""))
+		if not covered.is_empty():
+			# Who is ACTUALLY doing it outranks who it is assigned to.
+			who.text = _name_for(covered)
+			who.tooltip_text = "Covering%s" % (
+				" for %s" % _name_for(assigned) if not assigned.is_empty() else "")
+		elif not assigned.is_empty():
+			who.text = _name_for(assigned)
+		elif not orphaned.is_empty():
+			# Stamped by validate_assignments precisely so the UI can say WHY
+			# this is suddenly everyone's job.
+			who.text = "anyone (was %s — left)" % _name_for(orphaned)
+			who.tooltip_text = "%s was assigned but left the settlement" % _name_for(orphaned)
+		else:
+			who.text = "anyone"
 		who.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		who.add_theme_color_override("font_color", C_TEXT_DIM)
 		who.custom_minimum_size.x = 80
+		who.mouse_filter = Control.MOUSE_FILTER_PASS
 		row.add_child(who)
+
+		var cid := str(chore.get("id", ""))
+		var badge: Array = NpcChoreBoard.system_badge(chore, prj_ids)
+		if not badge.is_empty():
+			var sysb := Label.new()
+			sysb.text = str(badge[0])
+			sysb.tooltip_text = str(badge[1])
+			sysb.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			sysb.custom_minimum_size.x = 18
+			sysb.mouse_filter = Control.MOUSE_FILTER_PASS
+			row.add_child(sysb)
+
+		# A paused chore used to be a dead end here — the row said "paused"
+		# with no way back. Same ❙❙/▶ pair the settlement dock uses.
+		var hold := Button.new()
+		UITheme.style_button(hold)
+		hold.text = "▶" if held else "❙❙"
+		hold.tooltip_text = "Resume this chore" if held else "Pause this chore"
+		hold.pressed.connect(func() -> void:
+			var b := _board()
+			if b != null:
+				b.update_chore(cid, {"held": not held})
+			_chores_sig = "<unbuilt>"
+			_refresh())
+		row.add_child(hold)
 
 		var del := Button.new()
 		UITheme.style_button(del)
 		del.text = "✕"
-		var cid := str(chore.get("id", ""))
-		del.pressed.connect(func() -> void:
-			var b := _board()
-			if b != null:
-				b.remove_chore(cid)
-			_refresh())
+		if badge.is_empty():
+			del.tooltip_text = "Delete this chore"
+			del.pressed.connect(func() -> void:
+				var b := _board()
+				if b != null:
+					b.remove_chore(cid)
+				_refresh())
+		else:
+			# Deleting a system chore re-mints it next tick (keyed minters) or
+			# breaks its project's phase tracking — refuse, and say where the
+			# real control lives.
+			del.disabled = true
+			del.tooltip_text = str(badge[1])
 		row.add_child(del)
 
 
@@ -964,11 +1024,26 @@ static func _linkify(btn: Button, base: Color) -> void:
 		btn.add_theme_color_override("font_color", base))
 
 
+## Chore ids owned by site projects, for NpcChoreBoard.system_badge — project
+## tasks carry no chore_key; the project record tracks them by id.
+func _project_chore_ids() -> Dictionary:
+	var out: Dictionary = {}
+	if _bridge == null or not _bridge.has_method("all_site_projects"):
+		return out
+	for r in _bridge.all_site_projects():
+		var prj: Dictionary = (r as Dictionary).get("project", {})
+		for t in (prj.get("tasks", []) as Array):
+			out[str((t as Dictionary).get("chore_id", ""))] = true
+	return out
+
+
 func _name_for(agent_id: String) -> String:
 	if agent_id.is_empty():
 		return "anyone"
 	var agent: NpcAgent = _bridge.find_agent(agent_id)
-	return agent.display_name if agent != null else agent_id
+	# A departed person still gets their deterministic name — orphaned_from
+	# and old ledger lines would otherwise print a raw internal id.
+	return agent.display_name if agent != null else NpcAgent.name_for(agent_id)
 
 
 func _on_add_chore() -> void:

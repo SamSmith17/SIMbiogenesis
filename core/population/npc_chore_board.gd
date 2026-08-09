@@ -567,6 +567,29 @@ static func reason_glyph(reason: String) -> String:
 	return "⚠"
 
 
+## [glyph, tooltip] identifying a SYSTEM-minted chore, [] for a player chore.
+## Same single-source rule as reason_glyph: every surface that badges a row or
+## guards its delete button calls this, so the vocabulary cannot fork. A
+## system chore must not be hand-deleted — a keyed minter re-mints it next
+## tick, and a project task deletion breaks the project's phase tracking —
+## which is why the tooltip says where it IS managed. `project_chore_ids` is
+## the caller's set of chore ids owned by site projects (they carry no
+## chore_key; the project record tracks them by id).
+static func system_badge(chore: Dictionary, project_chore_ids: Dictionary = {}) -> Array:
+	var key := str(chore.get("chore_key", ""))
+	if key.begins_with("mach|"):
+		return ["⚙", "Minted by a machine recipe — manage it from the machine; deleting it would just re-mint"]
+	if key.begins_with("duty|"):
+		return ["📅", "Minted from the duty rota — manage it on the Schedule tab"]
+	if key.begins_with("oncall|") or key.begins_with("need_unmet|"):
+		return ["🚨", "Minted by an on-call alarm — it clears when the condition does"]
+	if project_chore_ids.has(str(chore.get("id", ""))):
+		return ["👷", "Part of a site project — manage it from the Site projects panel"]
+	if not key.is_empty():
+		return ["⚙", "System-minted — deleting it would just re-mint"]
+	return []
+
+
 static func _is_gathering(chore: Dictionary) -> bool:
 	var min_w := int(chore.get("min_workers", 1))
 	if min_w <= 1:

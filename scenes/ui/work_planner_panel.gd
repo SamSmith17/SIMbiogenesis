@@ -64,6 +64,11 @@ var _ed_skill: OptionButton = null
 var _ed_min: SpinBox = null
 var _ed_max: SpinBox = null
 var _ed_priority: OptionButton = null
+var _ed_exposure: OptionButton = null
+var _ed_who: OptionButton = null
+var _ed_where: Button = null
+var _ed_target: Dictionary = {}  # staged by Where…, written on Apply
+var _ed_hold: Button = null      # ❙❙/▶ mirror of the dock's pause control
 
 # Tasks tab
 var _task_rows: VBoxContainer = null
@@ -102,6 +107,7 @@ var _person_pick: OptionButton = null
 var _person_swatch: ColorRect = null
 var _person_box: VBoxContainer = null
 var _person_sig := "<unbuilt>"
+var _person_roster_sig := "<unbuilt>"
 var _person_id := ""
 
 
@@ -203,13 +209,28 @@ func _roster_ids() -> Array:
 	return out
 
 
+## Chore ids owned by site projects, for NpcChoreBoard.system_badge — project
+## tasks carry no chore_key; the project record tracks them by id.
+func _project_chore_ids() -> Dictionary:
+	var out: Dictionary = {}
+	if _bridge == null or not _bridge.has_method("all_site_projects"):
+		return out
+	for r in _bridge.call("all_site_projects"):
+		var prj: Dictionary = (r as Dictionary).get("project", {})
+		for t in (prj.get("tasks", []) as Array):
+			out[str((t as Dictionary).get("chore_id", ""))] = true
+	return out
+
+
 func _name_for(agent_id: String) -> String:
 	if agent_id.is_empty():
 		return "anyone"
 	if _bridge == null:
-		return agent_id
+		return NpcAgent.name_for(agent_id)
 	var agent: NpcAgent = _bridge.call("find_agent", agent_id)
-	return agent.display_name if agent != null else agent_id
+	# A departed person still gets their deterministic name — orphaned_from
+	# and old ledger lines would otherwise print a raw internal id.
+	return agent.display_name if agent != null else NpcAgent.name_for(agent_id)
 
 
 func _persist() -> void:
@@ -284,6 +305,10 @@ func _small(text: String, col: Color = UITheme.C_TEXT_S) -> Label:
 	l.text = text
 	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	l.add_theme_color_override("font_color", col)
+	# Labels default to MOUSE_FILTER_IGNORE, and Godot only shows tooltips on
+	# non-IGNORE controls — every tooltip_text this panel puts on a _small was
+	# silently dead. PASS keeps clicks flowing to the parent.
+	l.mouse_filter = Control.MOUSE_FILTER_PASS
 	return l
 
 
@@ -479,11 +504,34 @@ func _build_chores_tab() -> void:
 	for p in PRIORITIES:
 		_ed_priority.add_item(str((p as Array)[0]))
 	row2.add_child(_labelled("Priority", _ed_priority))
+	# Row 3: the fields that used to be permanent after creation — exposure,
+	# assignee and place — plus the pause control both modals lacked.
+	var row3 := HBoxContainer.new()
+	row3.add_theme_constant_override("separation", 6)
+	_ed_box.add_child(row3)
+	_ed_exposure = OptionButton.new()
+	for e in NpcWeatherGate.EXPOSURES:
+		_ed_exposure.add_item(str(e).capitalize())
+	_ed_exposure.tooltip_text = "Indoor work ignores weather; sheltered is damped; outdoor is fully gated"
+	row3.add_child(_labelled("Exposure", _ed_exposure))
+	_ed_who = OptionButton.new()
+	_ed_who.tooltip_text = "Hold this chore for one person, or leave it for anyone"
+	row3.add_child(_labelled("Who", _ed_who))
+	_ed_where = Button.new()
+	UITheme.style_button(_ed_where)
+	_ed_where.text = "Where…"
+	_ed_where.tooltip_text = "Pick where this work happens — without a place it is done wherever the worker stands"
+	_ed_where.pressed.connect(_on_pick_chore_where)
+	row3.add_child(_labelled("Place", _ed_where))
+	_ed_hold = Button.new()
+	UITheme.style_button(_ed_hold)
+	_ed_hold.pressed.connect(_on_toggle_hold)
+	row3.add_child(_labelled(" ", _ed_hold))
 	var apply := Button.new()
 	UITheme.style_button(apply)
 	apply.text = "Apply"
 	apply.pressed.connect(_on_chore_apply)
-	row2.add_child(_labelled(" ", apply))
+	row3.add_child(_labelled(" ", apply))
 
 
 func _build_tasks_tab() -> void:
@@ -690,6 +738,13 @@ func _refresh() -> void:
 		return
 	var count := _roster_ids().size()
 	_title.text = "Work Planner — %d people" % count
+	# Re-list the person picker when roster MEMBERSHIP changes (departures,
+	# resets) — it used to be filled once on open and went stale, offering
+	# people who had already left.
+	var rsig := ";".join(_roster_ids())
+	if rsig != _person_roster_sig:
+		_person_roster_sig = rsig
+		_refresh_person_picker()
 	match _tabs.current_tab:
 		0: _refresh_chores()
 		1: _refresh_tasks()
@@ -723,14 +778,21 @@ func _refresh_chores() -> void:
 	var sig := ""
 	for c in recs:
 		var ch: Dictionary = c
-		sig += "%s|%s|%s|%d|%d|%s|%s;" % [str(ch.get("id", "")),
+		sig += "%s|%s|%s|%d|%d|%s|%s|%s|%s|%s|%.2f|%d|%d|%s;" % [str(ch.get("id", "")),
 			str(ch.get("label", "")), _repeat_text(ch),
 			int(ch.get("priority", 0)), int(ch.get("done_day", -1)),
-			str(ch.get("requires_skill", "")), _reason_of(ch)]
+			str(ch.get("requires_skill", "")),
+			str(ch.get("assigned_to", "")), str(ch.get("covered_by", "")),
+			str(ch.get("orphaned_from", "")),
+			str(ch.get("target", {})) + str(ch.get("window", {})) + str(ch.get("held", false)),
+			float(ch.get("chore_hours", 0.0)),
+			int(ch.get("min_workers", 1)), int(ch.get("max_workers", 1)),
+			_reason_of(ch)]
 	sig += "|sel:%s" % _sel_chore
 	if sig == _chore_sig:
 		return
 	_chore_sig = sig
+	var prj_ids := _project_chore_ids()
 	for c in _chore_rows.get_children():
 		c.queue_free()
 	if recs.is_empty():
@@ -789,8 +851,24 @@ func _refresh_chores() -> void:
 			row.add_child(_small("▲ high" if pri < 50 else "▼ low",
 				UITheme.C_AMBER if pri < 50 else C_DIM))
 		var who := str(ch.get("assigned_to", ""))
-		if not who.is_empty():
+		var covered := str(ch.get("covered_by", ""))
+		var orphaned := str(ch.get("orphaned_from", ""))
+		if not covered.is_empty():
+			var cov := _small("→ %s" % _name_for(covered), UITheme.C_OK)
+			cov.tooltip_text = "Covering%s" % (
+				" for %s" % _name_for(who) if not who.is_empty() else "")
+			row.add_child(cov)
+		elif not who.is_empty():
 			row.add_child(_small("→ %s" % _name_for(who)))
+		elif not orphaned.is_empty():
+			var orp := _small("anyone (was %s — left)" % _name_for(orphaned), C_DIM)
+			orp.tooltip_text = "%s was assigned but left the settlement" % _name_for(orphaned)
+			row.add_child(orp)
+		var badge: Array = NpcChoreBoard.system_badge(ch, prj_ids)
+		if not badge.is_empty():
+			var sysb := _small(str(badge[0]))
+			sysb.tooltip_text = str(badge[1])
+			row.add_child(sysb)
 		var reason := _reason_of(ch)
 		if not reason.is_empty():
 			var r := _small("%s %s" % [NpcChoreBoard.reason_glyph(reason), reason],
@@ -816,15 +894,22 @@ func _refresh_chores() -> void:
 		var del := Button.new()
 		UITheme.style_button(del)
 		del.text = "✕"
-		del.pressed.connect(func() -> void:
-			var b := _board()
-			if b != null:
-				b.remove_chore(cid)
-			if _sel_chore == cid:
-				_sel_chore = ""
-				_ed_box.visible = false
-			_chore_sig = "<unbuilt>"
-			_refresh())
+		if badge.is_empty():
+			del.tooltip_text = "Delete this chore"
+			del.pressed.connect(func() -> void:
+				var b := _board()
+				if b != null:
+					b.remove_chore(cid)
+				if _sel_chore == cid:
+					_sel_chore = ""
+					_ed_box.visible = false
+				_chore_sig = "<unbuilt>"
+				_refresh())
+		else:
+			# A system chore re-mints (keyed) or breaks its project's phase
+			# tracking if hand-deleted — refuse and say where it is managed.
+			del.disabled = true
+			del.tooltip_text = str(badge[1])
 		row.add_child(del)
 
 
@@ -866,7 +951,83 @@ func _select_chore(cid: String) -> void:
 		if int((PRIORITIES[i] as Array)[1]) == pri:
 			bidx = i
 	_ed_priority.select(bidx)
+	var expo := str(rec.get("exposure", NpcWeatherGate.EXPOSURE_OUTDOOR))
+	_ed_exposure.select(maxi(NpcWeatherGate.EXPOSURES.find(expo), 0))
+	_ed_who.clear()
+	_ed_who.add_item("anyone")
+	_ed_who.set_item_metadata(0, "")
+	var assigned := str(rec.get("assigned_to", ""))
+	var rids := _roster_ids()
+	for i in rids.size():
+		_ed_who.add_item(_name_for(str(rids[i])))
+		_ed_who.set_item_metadata(i + 1, str(rids[i]))
+		if str(rids[i]) == assigned:
+			_ed_who.select(i + 1)
+	_ed_target = (rec.get("target", {}) as Dictionary).duplicate(true)
+	_sync_ed_where()
+	_sync_ed_hold(bool(rec.get("held", false)))
 	_sync_period_vis()
+
+
+func _sync_ed_where() -> void:
+	if _ed_where == null:
+		return
+	match str(_ed_target.get("kind", "")):
+		"pos":
+			_ed_where.text = "@ %d, %d" % [int(_ed_target.get("x", 0)),
+				int(_ed_target.get("z", 0))]
+		"prop":
+			_ed_where.text = "@ object"
+		"space":
+			_ed_where.text = "@ space"
+		_:
+			_ed_where.text = "Where…"
+
+
+func _sync_ed_hold(held: bool) -> void:
+	if _ed_hold == null:
+		return
+	_ed_hold.text = "▶ Resume" if held else "❙❙ Pause"
+	_ed_hold.tooltip_text = "Resume this chore" if held \
+		else "Put on hold — progress is kept"
+
+
+## Immediate, like the dock's ❙❙/▶ — a pause is a state, not a draft edit.
+func _on_toggle_hold() -> void:
+	var board := _board()
+	if board == null or _sel_chore.is_empty():
+		return
+	var held := bool(board.find(_sel_chore).get("held", false))
+	board.update_chore(_sel_chore, {"held": not held})
+	_sync_ed_hold(not held)
+	_chore_sig = "<unbuilt>"
+	_refresh()
+
+
+## Ground pick for the SELECTED chore's place (same round trip as the duty
+## form's Where…). Staged into _ed_target; written on Apply.
+func _on_pick_chore_where() -> void:
+	var main := get_tree().current_scene
+	if main == null or not main.has_method("open_settlement_view"):
+		return
+	var bridge = _bridge
+	var iid := _item_id
+	var cid := _sel_chore
+	var view: Variant = main.call("open_settlement_view")
+	if view == null or not view.has_method("pick_point_once"):
+		return
+	close()
+	view.call("pick_point_once", func(p: Vector2) -> void:
+		open(bridge, iid)
+		if _tabs != null:
+			_tabs.current_tab = 0   # Chores, where the editor lives
+		if not cid.is_empty():
+			_select_chore(cid)
+			if p != Vector2.INF:
+				_ed_target = {"kind": "pos", "x": p.x, "z": p.y}
+				_sync_ed_where()
+		_chore_sig = "<unbuilt>"
+		_refresh())
 
 
 func _on_chore_apply() -> void:
@@ -890,6 +1051,10 @@ func _on_chore_apply() -> void:
 		"min_workers": min_w,
 		"max_workers": maxi(int(_ed_max.value), min_w),
 		"priority": int((PRIORITIES[maxi(_ed_priority.selected, 0)] as Array)[1]),
+		"exposure": str(NpcWeatherGate.EXPOSURES[maxi(_ed_exposure.selected, 0)]),
+		"assigned_to": str(_ed_who.get_item_metadata(maxi(_ed_who.selected, 0)))
+			if _ed_who.item_count > 0 else "",
+		"target": _ed_target.duplicate(true),
 	})
 	_chore_sig = "<unbuilt>"
 	_refresh()
@@ -920,6 +1085,7 @@ func _refresh_tasks() -> void:
 	if sig == _task_sig:
 		return
 	_task_sig = sig
+	var prj_ids := _project_chore_ids()
 	for c in _task_rows.get_children():
 		c.queue_free()
 	if recs.is_empty():
@@ -982,6 +1148,26 @@ func _refresh_tasks() -> void:
 			row.add_child(_look_btn(ch.get("target", {}) as Dictionary))
 		if done and int(ch.get("done_day", -1)) == day:
 			row.add_child(_small("done today", UITheme.C_OK))
+		var badge: Array = NpcChoreBoard.system_badge(ch, prj_ids)
+		if not badge.is_empty():
+			var sysb := _small(str(badge[0]))
+			sysb.tooltip_text = str(badge[1])
+			row.add_child(sysb)
+		elif workers.is_empty():
+			# One-time player tasks had no way OUT — deletable only while
+			# nothing system tracks it and nobody is mid-work on it.
+			var del := Button.new()
+			UITheme.style_button(del)
+			del.text = "✕"
+			del.tooltip_text = "Delete this task"
+			var cid := str(ch.get("id", ""))
+			del.pressed.connect(func() -> void:
+				var b := _board()
+				if b != null:
+					b.remove_chore(cid)
+				_task_sig = "<unbuilt>"
+				_refresh())
+			row.add_child(del)
 
 
 func _refresh_schedule() -> void:
@@ -1068,10 +1254,14 @@ func _refresh_schedule() -> void:
 			UITheme.C_AMBER if editing else C_TEXT)
 		dl.custom_minimum_size.x = 96
 		dl.clip_text = true
-		dl.tooltip_text = "%s · %.1f h · crew %d · %s" % [
+		var dw: Dictionary = drec.get("window", {})
+		dl.tooltip_text = "%s · %.1f h · crew %d · %02d–%02d · %s" % [
 			str(drec.get("label", "?")), float(drec.get("chore_hours", 1.0)),
-			int(drec.get("crew", 1)), _repeat_text(drec)]
+			int(drec.get("crew", 1)), int(dw.get("start_h", 0)),
+			int(dw.get("end_h", 24)), _repeat_text(drec)]
 		name_cell.add_child(dl)
+		if _frameable(drec.get("target", {}) as Dictionary):
+			name_cell.add_child(_look_btn(drec.get("target", {}) as Dictionary))
 		var ed := Button.new()
 		UITheme.style_button(ed)
 		ed.text = "✎"
@@ -1104,7 +1294,9 @@ func _slot_cell(duty: NpcDutyRoster, board: NpcChoreBoard,
 	var cell := VBoxContainer.new()
 	cell.add_theme_constant_override("separation", 1)
 	if slot.is_empty():
-		cell.add_child(_small("·"))
+		var dot := _small("·")
+		dot.tooltip_text = "Not on the rota this day"
+		cell.add_child(dot)
 		return cell
 	var chore := board.find(str(slot.get("chore_id", "")))
 	var covered := str(chore.get("covered_by", ""))
@@ -1370,13 +1562,27 @@ func _refresh_oncall() -> void:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		_oncall_box.add_child(row)
-		var lbl := Label.new()
-		lbl.text = str(role.get("label", rid))
-		lbl.custom_minimum_size.x = 110
-		lbl.clip_text = true
-		lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-		lbl.add_theme_color_override("font_color", C_TEXT)
-		row.add_child(lbl)
+		# Editable in place — duties could be renamed, roles could not.
+		var name_edit := LineEdit.new()
+		name_edit.text = str(role.get("label", rid))
+		name_edit.custom_minimum_size.x = 110
+		name_edit.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		name_edit.tooltip_text = "Rename this role"
+		var commit_name := func() -> void:
+			var oc3 := _oncall()
+			if oc3 == null:
+				return
+			var role3 := oc3.find_role(rid)
+			var nm := name_edit.text.strip_edges()
+			if nm.is_empty() or nm == str(role3.get("label", "")):
+				name_edit.text = str(role3.get("label", rid))
+				return
+			role3["label"] = nm
+			_persist()
+			_oncall_sig = _oncall_signature()
+		name_edit.text_submitted.connect(func(_t: String) -> void: commit_name.call())
+		name_edit.focus_exited.connect(commit_name)
+		row.add_child(name_edit)
 		# Conditions as toggle chips.
 		for cond in NpcOnCall.CONDITIONS:
 			var chip := Button.new()
@@ -1384,7 +1590,16 @@ func _refresh_oncall() -> void:
 			chip.toggle_mode = true
 			chip.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 			chip.text = str(NpcOnCall.CONDITION_SHORT.get(str(cond), str(cond)))
-			chip.tooltip_text = str(NpcOnCall.CONDITION_LABELS.get(str(cond), str(cond)))
+			# The feature's whole honesty (see NpcOnCall's header): a FIXABLE
+			# condition mints real work; an ESCALATE one only names who looks.
+			# Rendering the two identically buried that distinction.
+			var fixable := (NpcOnCall.FIXABLE as Array).has(str(cond))
+			chip.add_theme_color_override("font_color",
+				UITheme.C_OK if fixable else UITheme.C_TEXT_S)
+			chip.tooltip_text = "%s — %s" % [
+				str(NpcOnCall.CONDITION_LABELS.get(str(cond), str(cond))),
+				"a responder can fix this" if fixable
+					else "a responder can only look; the fix is yours"]
 			chip.set_pressed_no_signal((role.get("conditions", []) as Array).has(str(cond)))
 			chip.toggled.connect(func(on: bool) -> void:
 				var oc2 := _oncall()
@@ -1437,9 +1652,27 @@ func _refresh_oncall() -> void:
 			# be checked in one visit.
 			_oncall_sig = _oncall_signature())
 		row.add_child(members_btn)
+		# The model always supported requires_skill; the UI just never let
+		# anyone set it.
+		var skill_opt := _skill_option()
+		skill_opt.tooltip_text = "Only people with this skill respond"
+		var cur_skill := str(role.get("requires_skill", ""))
+		for i in skill_opt.item_count:
+			if str(skill_opt.get_item_metadata(i)) == cur_skill:
+				skill_opt.select(i)
+		skill_opt.item_selected.connect(func(i: int) -> void:
+			var oc4 := _oncall()
+			if oc4 == null:
+				return
+			var role4 := oc4.find_role(rid)
+			role4["requires_skill"] = str(skill_opt.get_item_metadata(i))
+			_persist()
+			_oncall_sig = _oncall_signature())
+		row.add_child(skill_opt)
 		var rm := Button.new()
 		UITheme.style_button(rm)
 		rm.text = "✕"
+		rm.tooltip_text = "Remove this role"
 		rm.pressed.connect(func() -> void:
 			var oc2 := _oncall()
 			if oc2 != null:
