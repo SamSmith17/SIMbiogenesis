@@ -92,6 +92,7 @@ func _init() -> void:
 	_test_recurrence()
 	_test_labour_ledger()
 	_test_fairness_rotation()
+	_test_assignment_hazards()
 	_test_work_pose_classifier()
 	_test_facing_rules()
 	_test_crew_facing_spread()
@@ -4304,6 +4305,70 @@ func _test_routine_schedule() -> void:
 ## The behaviour the player actually reported: people arriving at the restroom
 ## and STAYING there, because a finished activity left them idling wherever
 ## they stood and nearest-space selection then kept picking the same place.
+## assigned_to — the hazards, now that the duty roster is about to lean on it.
+func _test_assignment_hazards() -> void:
+	var b := NpcChoreBoard.create_empty()
+	var w := {"start_h": 0.0, "end_h": 24.0}
+	var mine := b.add_chore("Sam's job", 1.0, {"window": w, "repeat": "daily",
+		"assigned_to": "sam"})
+	_check("an assignee sees their own chore",
+		b.available_for("sam", 100.0, 9.0, {}, 4).size() == 1)
+	_check("and nobody else does",
+		b.available_for("ava", 100.0, 9.0, {}, 4).is_empty())
+
+	# THE DEADLOCK, and it FAILS on the pre-fix code. A chore assigned to
+	# somebody who has left is permanently unclaimable — and because _deps_met
+	# treats a present-but-never-due dependency as unsatisfied, it takes every
+	# dependent chore down with it. A DELETED dependency unblocks by design;
+	# an orphan-assigned one blocked forever, and nothing ever cleared it.
+	var b2 := NpcChoreBoard.create_empty()
+	var gone_job := b2.add_chore("Gone's job", 1.0, {"window": w,
+		"repeat": "daily", "assigned_to": "departed"})
+	var dependent := b2.add_chore("Blocked on it", 1.0, {"window": w,
+		"repeat": "daily", "depends_on": [gone_job]})
+	_check("a dependent is blocked while the orphan stands",
+		b2.available_for("ava", 100.0, 9.0, {}, 4).is_empty())
+	var freed: Array = b2.validate_assignments(["ava", "sam"])
+	_check("validation frees the orphaned chore", freed.size() == 1
+		and str(freed[0]) == gone_job, str(freed))
+	_check("and records who left",
+		str(b2.find(gone_job).get("orphaned_from", "")) == "departed")
+	var open_now := b2.available_for("ava", 100.0, 9.0, {}, 4)
+	_check("the orphan is now anyone's", open_now.size() >= 1)
+	# Finish it, and the dependent unblocks.
+	b2.claim(gone_job, "ava")
+	b2.credit(gone_job, 2.0, 100.0)
+	_check("which unblocks the dependent",
+		not b2.available_for("sam", 100.0, 9.0, {}, 4).is_empty(),
+		"dependent still blocked after the orphan completed")
+	_check("validation leaves live assignments alone",
+		b2.validate_assignments(["ava", "sam"]).is_empty())
+	_check("and the dependent chore was never touched",
+		str(b2.find(dependent).get("assigned_to", "")) == "")
+
+	# The hold: a named slot is a FIRST REFUSAL, not a lock.
+	var b3 := NpcChoreBoard.create_empty()
+	var slot := b3.add_chore("Lunch", 1.0, {"window": w, "repeat": "daily",
+		"assigned_to": "sam"})
+	b3.find(slot)["assign_at_h"] = 100.0
+	b3.find(slot)["assign_hold_h"] = 2.0
+	_check("inside the hold it is Sam's alone",
+		b3.available_for("ava", 101.0, 9.0, {}, 4).is_empty())
+	_check("Sam can still take it, obviously",
+		b3.available_for("sam", 101.0, 9.0, {}, 4).size() == 1)
+	_check("past the hold anyone may cover",
+		b3.available_for("ava", 103.0, 9.0, {}, 4).size() == 1)
+	# And without a hold the OLD permanent behaviour is byte-identical, which
+	# is what keeps every hand-authored chore and v1 record unaffected.
+	_check("no hold means no expiry",
+		b3.available_for("ava", 1e6, 9.0, {}, 4).size() == 1)
+	_check("an unheld assignment never expires",
+		b.available_for("ava", 1e6, 9.0, {}, 4).is_empty(),
+		"the chore with no assign_hold_h opened up")
+	_check("and its owner still holds it",
+		b.available_for("sam", 1e6, 9.0, {}, 4).size() == 1, mine)
+
+
 ## Two scarce daily jobs — the shape that exposes the first-refusal bias.
 func _fair_board() -> NpcChoreBoard:
 	var b := NpcChoreBoard.create_empty()

@@ -108,6 +108,9 @@ func configure(count: int, seed_key: String, home: Vector2) -> void:
 ## and the reason the UI names the cause next to the button.
 func reset_roster(count: int, seed_key: String, home: Vector2) -> void:
 	configure(count, seed_key, home)
+	# configure() mints entirely new agents, so every assignment on the board
+	# now names somebody who does not exist.
+	_validate_assignments()
 
 
 ## Has this community emptied out completely? Distinct from `collapsed`, which
@@ -279,6 +282,18 @@ func _process_departures(abs_hours: float, ctx: Dictionary) -> void:
 ## check, desertion — rather than growing a parallel path that would drift
 ## from it. `kind` is "left" or "lost"; they emit DIFFERENT signals because
 ## challenge code keys off departures and must not read a death as a walk-out.
+## Free chores held for people who are no longer here, and forget their
+## labour history is NOT done — the ledger keeps departed people so a fairness
+## readout over last week still explains itself.
+func _validate_assignments() -> void:
+	if chore_board == null:
+		return
+	var live: Array = []
+	for a in agents:
+		live.append((a as NpcAgent).id)
+	chore_board.validate_assignments(live)
+
+
 func _remove_agents(gone: Array, kind: String, abs_hours: float,
 		ctx: Dictionary, reason_override: String = "") -> void:
 	if gone.is_empty():
@@ -297,6 +312,10 @@ func _remove_agents(gone: Array, kind: String, abs_hours: float,
 			agent_lost.emit(agent.id, agent.display_name, why)
 		else:
 			agent_departed.emit(agent.id, agent.display_name, why)
+	# release_claims cleared their CLAIMS; it has never touched their
+	# ASSIGNMENTS. An assignment to somebody who has left is permanently
+	# unclaimable and deadlocks every chore that depends on it.
+	_validate_assignments()
 	# Contagion: watching people go is demoralising, scaled by how big a
 	# share of the community just went.
 	var share := float(gone.size()) / maxf(float(agents.size() + gone.size()), 1.0)
@@ -832,3 +851,6 @@ func restore(snap: Dictionary) -> void:
 	if snap.has("chores"):
 		chore_board.deserialize(snap.get("chores", {}) as Dictionary)
 	labour = NpcLabourLog.deserialize(snap.get("labour", {}) as Dictionary)
+	# A save can carry assignments to people the restored roster does not
+	# contain — authored occupants changed, or the file predates a reset.
+	_validate_assignments()

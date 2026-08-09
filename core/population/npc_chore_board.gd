@@ -326,6 +326,49 @@ func rearm(chore_id: String) -> void:
 ## the moment the next cycle opens. Called by every reader that pairs
 ## _is_due with _remaining, so the aggregates see a re-due daily chore as
 ## full work again exactly as before.
+## Has a personal assignment lapsed into "anyone"?
+##
+## A named assignment is a FIRST REFUSAL, not a lock. Without a hold the old
+## permanent behaviour is kept byte-for-byte (`assign_hold_h` absent => 0.0 =>
+## never expires), so hand-authored chores and every v1 record are unaffected.
+## With one, a rostered slot whose person is asleep, eating or simply elsewhere
+## opens to the rest of the crew rather than going undone — which is the
+## difference between a schedule and a single point of failure.
+static func _assign_expired(chore: Dictionary, abs_hours: float) -> bool:
+	var hold := float(chore.get("assign_hold_h", 0.0))
+	if hold <= 0.0:
+		return false
+	return abs_hours >= float(chore.get("assign_at_h", abs_hours)) + hold
+
+
+## Clear assignments to people who are not on the roster.
+##
+## This is the worst failure the board has and nothing ever cleared it. An
+## orphaned assignment is permanently unclaimable — no live agent id can match
+## it — AND it deadlocks every DEPENDENT chore, because `_deps_met` treats a
+## present-but-never-due dependency as unsatisfied. A deleted dependency
+## unblocks by design; an orphan-assigned one blocks forever.
+##
+## Returns the freed chore ids so the caller can say who left and what it cost.
+func validate_assignments(live_agent_ids: Array) -> Array:
+	var live: Dictionary = {}
+	for a in live_agent_ids:
+		live[str(a)] = true
+	var freed: Array = []
+	for c in chores:
+		var chore: Dictionary = c
+		var who := str(chore.get("assigned_to", ""))
+		if who.is_empty() or live.has(who):
+			continue
+		chore["assigned_to"] = ""
+		chore.erase("assign_at_h")
+		chore.erase("assign_hold_h")
+		# Kept so the UI can say WHY this is suddenly everyone's job.
+		chore["orphaned_from"] = who
+		freed.append(str(chore.get("id", "")))
+	return freed
+
+
 func _arm_cycle(chore: Dictionary, abs_hours: float) -> void:
 	if int(chore.get("done_day", -1)) < 0:
 		return
@@ -372,7 +415,8 @@ func available_for(agent_id: String, abs_hours: float, hour_of_day: float,
 		if bool(chore.get("held", false)):
 			continue
 		var assigned := str(chore.get("assigned_to", ""))
-		if not assigned.is_empty() and assigned != agent_id:
+		if not assigned.is_empty() and assigned != agent_id \
+				and not _assign_expired(chore, abs_hours):
 			continue
 		var workers: Array = chore.get("workers", [])
 		if not workers.has(agent_id) \
