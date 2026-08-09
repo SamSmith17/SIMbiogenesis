@@ -5757,11 +5757,6 @@ func _run_labour_capture() -> void:
 	print("PlaytestHarness: labour — the ledger moved by EXACTLY the step's hours %s (%.4f h, want 0.5)" % [
 		"PASS" if ok_ledger else "FAIL", moved])
 
-	# Leave the map as we found it.
-	model.remove_item("cap_lab_mill")
-	model.remove_item("cap_lab_hab")
-	if not prop_id.is_empty() and loader.has_method("delete_prop_by_id"):
-		loader.call("delete_prop_by_id", prop_id)
 	# --- the duty rota, end to end through the real bridge ------------------
 	# The classes are selftested offline; what this proves is the WIRING —
 	# config loaded, the daily service running, chores minted with names on
@@ -5794,21 +5789,26 @@ func _run_labour_capture() -> void:
 			tot += float(lab.call("total_hours", (a as NpcAgent).id))
 		ok_hours = tot > 0.0
 		print("PlaytestHarness: labour — %.2f person-hours banked across the crew" % tot)
-	# ⚠ KNOWN GAP, reported but NOT folded into the verdict below.
+	# The end-to-end proof of the whole scheduling arc: a duty template the
+	# player wrote became a chore on the board with NAMES on it, and the hours
+	# the crew worked landed against the people who worked them.
 	#
-	# NpcDutyRoster / NpcSkills / NpcLabourLog are green offline (see
-	# npc_population_selftest), but the BRIDGE wiring does not work yet: by the
-	# time this phase runs, duty_roster_for() returns null because the engine
-	# for this habitat is no longer in _engines, so save_duties writes nothing
-	# and _service_duty_roster never mints. Diagnosed, not fixed. Folding these
-	# into the aggregate would turn --capture=labour permanently red and train
-	# everyone to ignore it; leaving them silent would lose the finding.
-	print("PlaytestHarness: labour — [known gap] duty rota minted a NAMED slot: %s" % [
-		"yes" if ok_duty else "NO (engine missing from _engines — bridge wiring)"])
-	print("PlaytestHarness: labour — [known gap] per-agent hours recorded: %s" % [
-		"yes" if ok_hours else "NO"])
+	# ⚠ Position matters: this must run BEFORE the cleanup below removes the
+	# habitat. Placed after it, `duty_roster_for` correctly returns null
+	# (the bridge drops the engine when the item goes) and the whole phase
+	# reads as a wiring failure that is really a test-ordering mistake.
+	print("PlaytestHarness: labour — the duty rota minted a NAMED slot %s" % [
+		"PASS" if ok_duty else "FAIL (no duty| chore reached the board)"])
+	print("PlaytestHarness: labour — per-agent hours are recorded %s" % [
+		"PASS" if ok_hours else "FAIL (nothing banked)"])
+
+	# Leave the map as we found it.
+	model.remove_item("cap_lab_mill")
+	model.remove_item("cap_lab_hab")
+	if not prop_id.is_empty() and loader.has_method("delete_prop_by_id"):
+		loader.call("delete_prop_by_id", prop_id)
 
 	print("PlaytestHarness: labour — %s" % [
-		"PASS" if (waiting and minted and at_machine and resumed and ok_ledger)
-			else "FAIL"])
+		"PASS" if (waiting and minted and at_machine and resumed and ok_ledger
+			and ok_duty and ok_hours) else "FAIL"])
 	_maybe_quit()
