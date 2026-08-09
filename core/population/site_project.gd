@@ -164,15 +164,21 @@ static func build_progress(project: Dictionary, board) -> Dictionary:
 			asm_total += 1.0
 			asm_done += float(frac[tid])
 	var beams := (asm_done / asm_total) if asm_total > 0.0 else 0.0
-	# Nothing shows until the drilling is real work underway — a lumber pile
-	# has no silhouette worth drawing at plan scale.
-	if float(frac.get("cut", 0.0)) < 1.0:
+	# PREFAB (a rebuild): no "cut" task means the parts already exist, so the
+	# whole frame ghosts in from the first tick — the faint outline of what is
+	# being raised — instead of growing piece by piece.
+	var prefab := not frac.has("cut")
+	if prefab:
+		beams = 1.0
+	elif float(frac.get("cut", 0.0)) < 1.0:
+		# Nothing shows until the drilling is real work underway — a lumber
+		# pile has no silhouette worth drawing at plan scale.
 		beams = 0.0
 	return {
 		"beams": beams,
-		"brackets": float(frac.get("brackets", 0.0)),
+		"brackets": 1.0 if prefab else float(frac.get("brackets", 0.0)),
 		"bolts": float(frac.get("bolts", 0.0)),
-		"supports": 1.0 if erected else 0.0,
+		"supports": 1.0 if (erected or prefab) else 0.0,
 		"panels": float(frac.get("panels", 0.0)),
 		"ghost": clampf(0.12 + 0.88 * (pre_done / pre_total if pre_total > 0.0 else 0.0),
 			0.12, 1.0),
@@ -370,26 +376,30 @@ static func rebuild_spec_rows(counts: Dictionary, prop_id: String) -> Array:
 	var panels := maxi(int(counts.get("panel_count", 0)), 0)
 	var bolts := maxi(int(counts.get("bolt_count", 0)),
 		maxi(int(counts.get("module_count", 1)), 1) * 6)
+	# Task ids reuse the build vocabulary ("erect"/"bolts"/"panels") on
+	# purpose: build_progress() and the ghost renderer key on those names, and
+	# the ABSENCE of a "cut" task is what tells them this is a PREFAB raise
+	# (whole frame ghosted from the start) rather than a fabrication.
 	var rows: Array = [{
-		"task_id": "raise", "label": "Raise the frame",
+		"task_id": "erect", "label": "Raise the frame",
 		"chore_hours": 0.35,
 		"priority": 1, "min_workers": NpcCrewPlan.ERECT_MIN_WORKERS,
 		"max_workers": NpcCrewPlan.ERECT_MIN_WORKERS + 2,
 		"exposure": "outdoor",
 		"effect": {"op": "unpack_prop", "prop_id": prop_id},
 	}, {
-		"task_id": "bolt_ring", "label": "Bolt the ring",
+		"task_id": "bolts", "label": "Bolt the ring",
 		"chore_hours": maxf(bolts * NpcCrewPlan.T_BOLT_SET_S * 0.5 / 3600.0, 0.05),
 		"priority": 2, "min_workers": 1,
 		"max_workers": maxi(int(counts.get("module_count", 1)), 1),
-		"exposure": "outdoor", "depends_on": ["raise"],
+		"exposure": "outdoor", "depends_on": ["erect"],
 	}]
 	if panels > 0:
 		rows.append({
-			"task_id": "mount_panels", "label": "Mount the panels",
+			"task_id": "panels", "label": "Mount the panels",
 			"chore_hours": maxf(panels * NpcCrewPlan.T_PANEL_MOUNT_S * 0.6 / 3600.0, 0.05),
 			"priority": 3, "min_workers": 2, "max_workers": maxi(mini(panels, 8), 2),
-			"exposure": "outdoor", "depends_on": ["bolt_ring"],
+			"exposure": "outdoor", "depends_on": ["bolts"],
 			"effect": {"op": "seed_graph", "prop_id": prop_id},
 		})
 	return rows

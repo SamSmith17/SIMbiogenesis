@@ -2445,6 +2445,32 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	colors_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(colors_hint)
 
+	var overhead_row := HBoxContainer.new()
+	overhead_row.add_theme_constant_override("separation", 8)
+	var oh_hdr := Label.new()
+	oh_hdr.text = "Overhead status"
+	oh_hdr.custom_minimum_size = Vector2(110, 0)
+	oh_hdr.add_theme_color_override("font_color", C_TEXT_S)
+	overhead_row.add_child(oh_hdr)
+	var oh_opt := OptionButton.new()
+	oh_opt.add_item("Always (nearby)", 0)
+	oh_opt.add_item("Only when aimed at", 1)
+	oh_opt.add_item("Off", 2)
+	oh_opt.selected = NpcDisplayPrefs.OVERHEAD_MODES.find(
+		NpcDisplayPrefs.overhead_mode())
+	oh_opt.item_selected.connect(func(idx: int) -> void:
+		NpcDisplayPrefs.set_overhead_mode(
+			str(NpcDisplayPrefs.OVERHEAD_MODES[clampi(idx, 0, 2)])))
+	overhead_row.add_child(oh_opt)
+	v.add_child(overhead_row)
+	var oh_hint := Label.new()
+	oh_hint.text = "The morale bar and task tag above each head. 'Always' shows them for people within ~30 m; 'Off' keeps clean silhouettes (aiming still names people)."
+	oh_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	oh_hint.custom_minimum_size = Vector2(420, 0)
+	oh_hint.add_theme_color_override("font_color", C_TEXT_S)
+	oh_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(oh_hint)
+
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Routines")
 	var routines_btn := Button.new()

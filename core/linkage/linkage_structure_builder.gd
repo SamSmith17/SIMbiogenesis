@@ -491,11 +491,19 @@ func _apply_build_progress() -> void:
 		set_process(true)
 
 
+## Softest gap between reveal clicks — beams animate at up to ~15/s, and a
+## click per beam at that rate is a machine gun, not carpentry.
+const REVEAL_CLICK_GAP_S := 0.12
+var _click_cooldown := 0.0
+
+
 func _process(delta: float) -> void:
 	if _build_progress.is_empty():
 		set_process(false)
 		return
+	_click_cooldown = maxf(_click_cooldown - delta, 0.0)
 	var busy := false
+	var landed := false
 	for pair in _progress_pairs():
 		var inst := pair[0] as MultiMeshInstance3D
 		if inst == null or inst.multimesh == null:
@@ -510,7 +518,18 @@ func _process(delta: float) -> void:
 		shown = move_toward(shown, target,
 			delta * maxf(REVEAL_MIN_PER_S, count / 10.0))
 		_reveal_shown[inst.name] = shown
-		inst.multimesh.visible_instance_count = int(roundf(shown))
+		var vis := int(roundf(shown))
+		if vis != inst.multimesh.visible_instance_count:
+			landed = true
+		inst.multimesh.visible_instance_count = vis
+	# A soft click when an element actually lands (or leaves) — the sound is
+	# what makes the one-at-a-time reveal read as work being done rather than
+	# a counter ticking. Same quiet tier as the graph's wire click.
+	if landed and _click_cooldown <= 0.0:
+		_click_cooldown = REVEAL_CLICK_GAP_S
+		var sfx := get_node_or_null("/root/UiSound")
+		if sfx != null and sfx.has_method("play_ui"):
+			sfx.call("play_ui", "connect", 80)
 	if not busy:
 		set_process(false)
 

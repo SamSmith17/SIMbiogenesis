@@ -45,6 +45,7 @@ func _ready() -> void:
 func show_toast(text: String, level: Level = Level.INFO, duration: float = DEFAULT_DURATION) -> void:
 	if _stack == null:
 		return
+	_refresh_stack_top()
 	_play_level_sfx(level)
 	if _entries.size() >= MAX_TOASTS:
 		_remove_entry(_entries[0])
@@ -92,6 +93,7 @@ func show_community(kind: String, title: String, detail: String = "",
 		on_click: Callable = Callable()) -> void:
 	if _stack == null:
 		return
+	_refresh_stack_top()
 	# Aggregate into the newest live chip when it carries the same kind.
 	if not _entries.is_empty():
 		var last: PanelContainer = _entries[-1]
@@ -196,6 +198,7 @@ func _make_community_entry(kind: String, title: String, detail: String,
 func show_part_up(label: String, count: int = 1, duration: float = PART_UP_DURATION) -> void:
 	if _stack == null:
 		return
+	_refresh_stack_top()
 	if _entries.size() >= MAX_TOASTS:
 		_remove_entry(_entries[0])
 	var n := maxi(count, 1)
@@ -260,13 +263,42 @@ func _apply_stack_clearance(timeline_h: float) -> void:
 	if _stack == null:
 		return
 	var clearance := maxf(timeline_h, UiScreenLayout.timeline_stack_height()) + ABOVE_TIMELINE_GAP
-	# Anchored to the left rail (anchor_top 0.66 ≈ just under the Power
-	# Scoreboard); the bottom still respects the timeline so a tall stack
-	# never slides under it.
-	_stack.offset_top = 0.0
+	# Anchored to the left rail; the bottom still respects the timeline so a
+	# tall stack never slides under it. The TOP tracks the scoreboard's live
+	# edge — see _refresh_stack_top.
 	_stack.offset_bottom = -clearance
 	_stack.offset_left = 16.0
 	_stack.offset_right = 16.0 + TOAST_WIDTH
+	_refresh_stack_top()
+
+
+## Tuck the column under the Power Scoreboard's ACTUAL bottom edge. The
+## scoreboard's height varies (content rows, collapse), so a fixed fraction
+## either overlaps it or floats in dead space; probed live and cheaply on
+## every show. Falls back to the 0.66 fraction when the panel is not found.
+var _solar_ui: Node = null
+
+func _refresh_stack_top() -> void:
+	if _stack == null:
+		return
+	var vh := get_viewport().get_visible_rect().size.y
+	var top := 0.66 * vh
+	if _solar_ui == null or not is_instance_valid(_solar_ui):
+		_solar_ui = get_tree().root.find_child("SolarUI", true, false)
+	if _solar_ui != null:
+		var bottom := 0.0
+		var probes: Array = [_solar_ui] if _solar_ui is Control \
+			else _solar_ui.get_children()
+		for c in probes:
+			if c is Control and (c as Control).visible:
+				var r := (c as Control).get_global_rect()
+				# Left-rail panels only; ignore stray full-width overlays.
+				if r.position.x < 600.0 and r.size.y > 40.0:
+					bottom = maxf(bottom, r.end.y)
+		if bottom > 0.0:
+			top = clampf(bottom + 10.0, 100.0, vh * 0.8)
+	_stack.anchor_top = 0.0
+	_stack.offset_top = top
 
 
 func _make_entry(text: String, level: Level) -> PanelContainer:
@@ -381,6 +413,7 @@ func show_chore_confirm(item_id: String, label: String, chore_hours: float = 0.0
 		on_confirm: Callable = Callable(), duration: float = 12.0) -> void:
 	if _stack == null:
 		return
+	_refresh_stack_top()
 	if _entries.size() >= MAX_TOASTS:
 		_remove_entry(_entries[0])
 	var entry := _make_chore_confirm_entry(item_id, label, chore_hours, on_confirm)

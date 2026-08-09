@@ -263,16 +263,26 @@ static func _build_construction_prop(rec: Dictionary, build_state: Dictionary,
 		ground_y_at: Callable) -> PlacedProp:
 	var params := LinkageParams.new()
 	params.from_config(rec.get("linkage_spec") as Dictionary)
-	params.fold_angle = maxf(LinkageKinematics.effective_min_fold_angle(params),
-		LinkageKinematics.MIN_FOLD_ANGLE)
+	var preview := bool(build_state.get("preview", false))
+	if not preview:
+		params.fold_angle = maxf(LinkageKinematics.effective_min_fold_angle(params),
+			LinkageKinematics.MIN_FOLD_ANGLE)
 	var builder := LinkageStructureBuilder.new()
 	builder.name = "ModelRoot"
 	builder.collision_mesh_enabled = false   # walk-through while it grows
 	builder.set_params(params)
-	var fr := SiteProject.phase_fractions(str(build_state.get("phase", "")))
-	builder.set_build_progress(fr)
-	builder.set_ghost_alpha(clampf(float(build_state.get("ghost",
-		float(fr.get("ghost", 0.2)))), 0.05, 1.0))
+	if preview:
+		# A queued REBUILD: the parts exist, so the promise is the whole
+		# DEPLOYED structure, ghosted — not a folded frame growing piece by
+		# piece. ({} = every element visible; the low alpha is the "not yet".)
+		builder.set_build_progress({})
+		builder.set_ghost_alpha(clampf(float(build_state.get("ghost", 0.14)),
+			0.05, 1.0))
+	else:
+		var fr := SiteProject.phase_fractions(str(build_state.get("phase", "")))
+		builder.set_build_progress(fr)
+		builder.set_ghost_alpha(clampf(float(build_state.get("ghost",
+			float(fr.get("ghost", 0.2)))), 0.05, 1.0))
 	# The kit crate stays standing beside the growing frame — early phases
 	# (cut/drill) reveal no geometry at all, and a build site with nothing on
 	# it reads as a bug, not as a work in progress. It vanishes with the whole

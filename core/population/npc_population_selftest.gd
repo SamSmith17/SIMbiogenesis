@@ -1515,13 +1515,14 @@ func _test_site_project() -> void:
 
 	# Rebuild plan (the road back UP): the parts are already fabricated, so
 	# there is NO cutting or drilling — raise (which unpacks), re-bolt,
-	# re-mount (which re-seeds the graph array).
+	# re-mount (which re-seeds the graph array). Ids reuse the build
+	# vocabulary so build_progress can render the raise.
 	var rb := SiteProject.rebuild_spec_rows(counts, "prop_9")
 	var ids_rb: Array = []
 	for r in rb:
 		ids_rb.append(str((r as Dictionary).get("task_id", "")))
 	_check("rebuild phases in order",
-			ids_rb == ["raise", "bolt_ring", "mount_panels"], str(ids_rb))
+			ids_rb == ["erect", "bolts", "panels"], str(ids_rb))
 	_check("the raise IS the unpack",
 			str(((rb[0] as Dictionary).get("effect", {}) as Dictionary).get("op", ""))
 				== "unpack_prop")
@@ -1534,6 +1535,25 @@ func _test_site_project() -> void:
 	var rb_no := SiteProject.rebuild_spec_rows(
 			{"panel_count": 0, "module_count": 2, "bolt_count": 8}, "prop_9")
 	_check("a panel-less design skips the mount", rb_no.size() == 2)
+	# The prefab branch: a task set with no "cut" ghosts the WHOLE frame from
+	# the first tick — the outline of what is being raised — where a
+	# fabrication build reveals nothing until cutting is done.
+	var rb_proj := {"tasks": [
+		{"task_id": "erect", "status": "pending", "chore_id": ""},
+		{"task_id": "bolts", "status": "pending", "chore_id": ""},
+	]}
+	var bp_rb := SiteProject.build_progress(rb_proj, NpcChoreBoard.create_empty())
+	_check("a prefab raise ghosts the full frame from the start",
+			float(bp_rb["beams"]) == 1.0 and float(bp_rb["brackets"]) == 1.0
+				and float(bp_rb["supports"]) == 1.0)
+	_check("and is not yet erected", not bool(bp_rb["erected"]))
+	var fab_proj := {"tasks": [
+		{"task_id": "cut", "status": "pending", "chore_id": ""},
+		{"task_id": "erect", "status": "pending", "chore_id": ""},
+	]}
+	var bp_fab := SiteProject.build_progress(fab_proj, NpcChoreBoard.create_empty())
+	_check("a fabrication build still starts invisible",
+			float(bp_fab["beams"]) == 0.0 and float(bp_fab["supports"]) == 0.0)
 
 	# Coarse reload fractions follow the phase ladder.
 	_check("phase_fractions ladder",

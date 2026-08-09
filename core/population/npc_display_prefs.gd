@@ -59,6 +59,36 @@ static func wants_simple() -> bool:
 	return style() == STYLE_SIMPLE
 
 
+## Overhead readout (the morale bar + task tag above each head):
+##   always — ambient within AMBIENT_STATUS_DIST_M, plus on aim (the default)
+##   aim    — only for the person the crosshair is on
+##   off    — never (the name on aim is unaffected; that is basic interaction)
+const OVERHEAD_ALWAYS := "always"
+const OVERHEAD_AIM := "aim"
+const OVERHEAD_OFF := "off"
+const OVERHEAD_MODES: Array = [OVERHEAD_ALWAYS, OVERHEAD_AIM, OVERHEAD_OFF]
+static var _overhead := ""
+
+
+static func overhead_mode() -> String:
+	if _overhead.is_empty():
+		var cfg := ConfigFile.new()
+		if cfg.load(CFG_PATH) == OK:
+			_overhead = str(cfg.get_value(SECTION, "overhead", OVERHEAD_ALWAYS))
+		if not OVERHEAD_MODES.has(_overhead):
+			_overhead = OVERHEAD_ALWAYS
+	return _overhead
+
+
+static func set_overhead_mode(m: String) -> void:
+	_overhead = m if OVERHEAD_MODES.has(m) else OVERHEAD_ALWAYS
+	_generation += 1
+	var cfg := ConfigFile.new()
+	cfg.load(CFG_PATH)
+	cfg.set_value(SECTION, "overhead", _overhead)
+	cfg.save(CFG_PATH)
+
+
 ## True when each person should render with their own distinct pastel tint
 ## (the default). False renders everyone in plain black — no way to tell
 ## individuals apart by color, only by name/nametag.

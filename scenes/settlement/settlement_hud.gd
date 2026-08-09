@@ -23,6 +23,9 @@ var _card_title: Label = null
 var _card_body: Label = null
 var _card_follow: Button = null
 var _card_person: Button = null
+var _card_task: Button = null
+## Resolved once per selection, not per frame — Vector2.INF = no task site.
+var _card_task_site := Vector2.INF
 var _feed_box: VBoxContainer = null
 var _alarm_lbl: Label = null
 var _speed_lbl: Label = null
@@ -158,6 +161,18 @@ func _build() -> void:
 		_view.close()
 		sgv.call("open_work_planner", "", aid))
 	cv.add_child(_card_person)
+	# Looking, never ordering: frames the selected person's CURRENT job so
+	# "what are they working on" is one click from the card that named it.
+	_card_task = Button.new()
+	UITheme.style_button(_card_task)
+	_card_task.text = "⌖ Their task"
+	_card_task.pressed.connect(func() -> void:
+		if _view == null or _card_task_site == Vector2.INF:
+			return
+		var cam: Variant = _view.camera()
+		if cam != null:
+			cam.call("look_at_xz", _card_task_site))
+	cv.add_child(_card_task)
 
 
 func set_pick_hint(text: String) -> void:
@@ -193,6 +208,13 @@ func _on_selection(sel: Dictionary) -> void:
 				"  · carrying a load" if bool(d.get("carrying", false)) else ""]
 			_card_follow.visible = true
 			_card_person.visible = true
+			_card_task_site = Vector2.INF
+			if _bridge != null and _bridge.has_method("chore_site_of"):
+				var site: Variant = _bridge.call("chore_site_of",
+					str(sel.get("agent_id", "")), get_tree().current_scene)
+				if site is Vector2:
+					_card_task_site = site
+			_card_task.visible = _card_task_site != Vector2.INF
 		"crew":
 			_card_title.text = "🔨 %s" % str(sel.get("label", "Work site"))
 			var w := int(sel.get("workers", 0))
@@ -201,16 +223,19 @@ func _on_selection(sel: Dictionary) -> void:
 				else "%d working · %d%%" % [w, int(round(float(sel.get("progress", 0.0)) * 100.0))]
 			_card_follow.visible = false
 			_card_person.visible = false
+			_card_task.visible = false
 		"space":
 			_card_title.text = SpaceTypes.label(str(sel.get("space_type", "")))
 			_card_body.text = "Tagged space"
 			_card_follow.visible = false
 			_card_person.visible = false
+			_card_task.visible = false
 		"prop":
 			_card_title.text = str(sel.get("prop_id", "Prop"))
 			_card_body.text = "Placed prop"
 			_card_follow.visible = false
 			_card_person.visible = false
+			_card_task.visible = false
 		_:
 			_card.visible = false
 

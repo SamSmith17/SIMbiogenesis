@@ -506,43 +506,23 @@ func _on_crew_breakdown() -> void:
 
 
 ## The mirror of _on_crew_breakdown: raise a packed, already-fabricated
-## linkage crate again. Same crew plumbing; the rows come from
-## SiteProject.rebuild_spec_rows (raise → bolt ring → mount panels — the
-## parts exist, so no cutting or drilling), and the raise's unpack effect IS
-## the deploy sweep the player would otherwise trigger by hand with Interact.
+## linkage crate again. All the logic lives in
+## PlacedPropService.queue_linkage_rebuild — shared with the Site Projects
+## panel, so the two entry points queue byte-identical projects.
 func _on_crew_rebuild() -> void:
 	if _prop_id.is_empty():
 		return
-	var scene := get_tree().current_scene
 	var sgv: Node = ServiceLocator.graph()
-	var bridge: Variant = sgv.call("npc_population_bridge") \
-		if sgv != null and sgv.has_method("npc_population_bridge") else null
-	if bridge == null:
+	var res := PlacedPropService.queue_linkage_rebuild(
+		get_tree().current_scene, _prop_id)
+	if not bool(res.get("ok", false)):
+		if sgv != null and sgv.has_method("_show_toast") \
+				and not str(res.get("error", "")).is_empty():
+			sgv.call("_show_toast", str(res.get("error", "")))
 		return
-	var iid := str(bridge.call("first_crewable_habitat"))
-	if iid.is_empty():
-		if sgv.has_method("_show_toast"):
-			sgv.call("_show_toast", "Needs a pop-driven habitat with people on site")
-		return
-	var rec: Dictionary = PlacedPropService.get_prop_record(scene, _prop_id)
-	if rec.is_empty() or not (rec.get("linkage_spec") is Dictionary):
-		return
-	var p := LinkageParams.new()
-	p.from_config(rec.get("linkage_spec") as Dictionary)
-	var counts := LinkageBom.fab_counts(LinkageBom.compute(p), {})
-	var site := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
-	var rows := SiteProject.rebuild_spec_rows(counts, _prop_id)
-	var project_id := str(bridge.call("create_site_project", iid,
-		SiteProject.KIND_LINKAGE_BUILD, "Rebuild: linkage structure",
-		_prop_id, site, rows, {"start_h": 7.0, "end_h": 19.0},
-		{"kind": "prop", "id": _prop_id}, {}))
-	if project_id.is_empty():
-		if sgv.has_method("_show_toast"):
-			sgv.call("_show_toast", "Chore board is full — clear some chores first")
-		return
-	if sgv.has_method("watch_site_at"):
-		sgv.call("watch_site_at", site,
-			"👷 Rebuild queued — the crew raises it again (%d phases)" % rows.size())
+	if sgv != null and sgv.has_method("watch_site_at"):
+		sgv.call("watch_site_at", res.get("site", Vector2.ZERO),
+			"👷 Rebuild queued — the crew raises it again")
 
 
 func _on_spin_changed(_v: float = 0.0) -> void:

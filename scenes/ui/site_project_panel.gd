@@ -278,6 +278,53 @@ func _on_np_queue() -> void:
 
 # --- refresh -----------------------------------------------------------------
 
+## Packed linkage crates that could be raised again — the management surface's
+## own road back up, so a teardown is reversible from the same panel that
+## watched it happen (the crate's edit drawer is the other entry point).
+func _rebuildable_crates() -> Array:
+	var main := get_tree().current_scene
+	var loader: Node = TerrainSurfaceQuery.find_terrain_loader(main) \
+		if main != null else null
+	if loader == null or not loader.has_method("placed_prop_records"):
+		return []
+	var out: Array = []
+	for r in (loader.call("placed_prop_records") as Array):
+		var rec := r as Dictionary
+		if rec.get("linkage_spec") is Dictionary \
+				and bool(rec.get("packed", false)) \
+				and str(rec.get("stowed_in", "")).is_empty() \
+				and not (rec.get("build_state") is Dictionary):
+			out.append(rec)
+	return out
+
+
+func _rebuild_row(rec: Dictionary) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var lbl := Label.new()
+	lbl.text = "📦 Packed structure at %d, %d" % [
+		int(rec.get("x", 0.0)), int(rec.get("z", 0.0))]
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(lbl)
+	var btn := Button.new()
+	UITheme.style_button(btn)
+	btn.text = "👷 Rebuild…"
+	btn.tooltip_text = "Queue the raise: the crew unfolds the frame, re-bolts the ring and re-mounts the panels"
+	var pid := str(rec.get("id", ""))
+	btn.pressed.connect(func() -> void:
+		var res := PlacedPropService.queue_linkage_rebuild(
+			get_tree().current_scene, pid)
+		if not bool(res.get("ok", false)):
+			_np_error(str(res.get("error", "Could not queue the rebuild")))
+			return
+		_np_error("")
+		_refresh())
+	row.add_child(btn)
+	return row
+
+
 func _refresh() -> void:
 	if _bridge == null:
 		return
@@ -285,7 +332,10 @@ func _refresh() -> void:
 		if child != _empty_lbl:
 			child.queue_free()
 	var rows: Array = _bridge.all_site_projects()
-	_empty_lbl.visible = rows.is_empty()
+	var crates := _rebuildable_crates()
+	for c in crates:
+		_list.add_child(_rebuild_row(c as Dictionary))
+	_empty_lbl.visible = rows.is_empty() and crates.is_empty()
 	# Newest first — the project just queued is the one being watched.
 	rows.sort_custom(func(a, b) -> bool:
 		return float((a["project"] as Dictionary).get("created_h", 0.0)) \

@@ -133,10 +133,33 @@ func _process(delta: float) -> void:
 		c.queue_free()
 	# The group readout, always first: how many, how they feel, who is
 	# working, what is wrong — the camp's vital signs from first person.
+	# The 👁 chip is the strip's ONE clickable pixel-region (the strip itself
+	# stays mouse-ignored, so it can never eat a click meant for the world):
+	# vital signs → watch the settlement, one click.
 	if not status.is_empty():
+		var srow := HBoxContainer.new()
+		srow.add_theme_constant_override("separation", 6)
+		var eye := Button.new()
+		UITheme.style_button(eye)
+		eye.text = "👁"
+		eye.tooltip_text = "Watch the settlement"
+		eye.focus_mode = Control.FOCUS_NONE
+		eye.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		eye.pressed.connect(func() -> void:
+			var m := get_tree().current_scene
+			if m != null and m.has_method("open_settlement_view"):
+				m.call("open_settlement_view"))
+		srow.add_child(eye)
 		var st := _strip_label(status, SettlementLog.INFO, 1.0)
 		st.add_theme_color_override("font_color", UITheme.C_TEXT)
-		_box.add_child(st)
+		st.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		# One line, expanded: inside an HBox an autowrapping label's minimum
+		# width is ~one character, which renders the whole line as a vertical
+		# letter column.
+		st.autowrap_mode = TextServer.AUTOWRAP_OFF
+		st.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		srow.add_child(st)
+		_box.add_child(srow)
 	if _peek:
 		var lg: Variant = _bridge.call("settlement_log")
 		var recents: Array = lg.call("recent", PEEK_LINES) as Array

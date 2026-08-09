@@ -127,6 +127,7 @@ func _process(delta: float) -> void:
 		av.morale_label = str(dot.get("morale_label", ""))
 		av.set_display_name(str(dot.get("name", "")))
 		av.set_morale(float(dot.get("morale", 0.0)))
+		av.set_morale_trend(_morale_trend_of(aid, float(dot.get("morale", 0.0))))
 		av.set_task_text(_task_text_of(dot))
 		var sim_pos: Vector2 = dot.get("pos", Vector2.ZERO)
 		var dist := (sim_pos - eye).length()
@@ -177,6 +178,7 @@ func _process(delta: float) -> void:
 	if _crew_marker_accum >= CREW_MARKER_REFRESH_S:
 		_crew_marker_accum = 0.0
 		_update_crew_markers()
+		_update_fire_rings()
 	# Despawn agents that left the roster (count change / pop_driven off).
 	# .keys() allocates a fresh Array every call, and the roster is unchanged on
 	# the overwhelming majority of frames — if every avatar was seen this frame
@@ -211,6 +213,66 @@ func _apply_rig_budget(near: Array) -> void:
 		var av: NpcAvatar = _avatars.get(str(near[i][1]))
 		if av != null and is_instance_valid(av):
 			av.set_detail(i < MAX_RIGGED)
+
+
+## Warm night rings at tagged fire-circle spaces — the dance floor as a
+## visible destination. The space drives the gathering already; this gives the
+## gatherers somewhere to be SEEN heading. Same pooled pattern and cadence as
+## the crew markers; visible only at night (a glow ring at noon is chrome).
+const FIRE_RING_MAX := 4
+var _fire_rings: Array = []   # of Node3D
+
+
+func _update_fire_rings() -> void:
+	var spots: Array = []
+	if _bridge != null and _bridge.has_method("space_markers"):
+		for m in (_bridge.space_markers(_main) as Array):
+			var mark: Dictionary = m
+			if str(mark.get("space_type", "")) == "fire_circle" \
+					and mark.get("pos") is Vector2:
+				spots.append(mark.get("pos"))
+				if spots.size() >= FIRE_RING_MAX:
+					break
+	var night := true
+	if _main != null and "day_time" in _main:
+		var h := float(_main.day_time)
+		night = h < 6.5 or h > 19.5
+	for i in FIRE_RING_MAX:
+		var have: bool = night and i < spots.size()
+		if i >= _fire_rings.size():
+			if not have:
+				break
+			_fire_rings.append(_build_fire_ring())
+		var ring := _fire_rings[i] as Node3D
+		if not have:
+			ring.visible = false
+			continue
+		var pos: Vector2 = spots[i]
+		ring.visible = true
+		ring.position = Vector3(pos.x,
+			TerrainSurfaceQuery.ground_height_at(_main, pos.x, pos.y) + 0.10, pos.y)
+
+
+func _build_fire_ring() -> Node3D:
+	var root := Node3D.new()
+	root.name = "FireRing"
+	var mi := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 1.45
+	torus.outer_radius = 1.65
+	torus.rings = 32
+	mi.mesh = torus
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_color = Color(1.0, 0.55, 0.22, 0.5)
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	root.add_child(mi)
+	add_child(root)
+	return root
 
 
 ## In-world crew-site markers: pooled discs + readouts at active work sites,
@@ -346,6 +408,31 @@ func set_focus_agent(agent_id: String) -> void:
 ## without being aimed at. Under the 45 m rig radius: the readout is for the
 ## camp you are standing IN, not the whole valley.
 const AMBIENT_STATUS_DIST_M := 30.0
+
+## Morale history for the trend tick: agent_id -> [[abs_h, morale], …],
+## sampled every TREND_SAMPLE_H sim-hours, kept ~TREND_WINDOW_H deep.
+const TREND_SAMPLE_H := 0.25
+const TREND_WINDOW_H := 1.25
+var _morale_hist: Dictionary = {}
+
+
+## Morale movement over roughly the last sim-hour. Positive = climbing.
+## Sampled on the SIM clock, so a paused world holds its trend instead of
+## decaying toward "flat".
+func _morale_trend_of(aid: String, morale: float) -> float:
+	if _main == null or not _main.has_method("get_absolute_hours"):
+		return 0.0
+	var now_h := float(_main.call("get_absolute_hours"))
+	var hist: Array = _morale_hist.get(aid, [])
+	if hist.is_empty() or now_h - float((hist[-1] as Array)[0]) >= TREND_SAMPLE_H \
+			or now_h < float((hist[-1] as Array)[0]):   # scrubbed back: restart
+		if not hist.is_empty() and now_h < float((hist[-1] as Array)[0]):
+			hist = []
+		hist.append([now_h, morale])
+		while hist.size() > 1 and now_h - float((hist[0] as Array)[0]) > TREND_WINDOW_H:
+			hist.pop_front()
+		_morale_hist[aid] = hist
+	return morale - float((hist[0] as Array)[1])
 
 
 ## One or two words under the morale bar: what this person is doing right now.

@@ -546,6 +546,26 @@ func _invalidate_dots() -> void:
 	_dots_cache_valid = false
 
 
+## Where this person's current chore happens, as world XZ — or null when they
+## hold no chore / it has no resolvable place. The settlement card's "their
+## task" look-at reads this; resolution is the same _chore_position every
+## other surface uses, so the camera lands where the workers actually walk.
+func chore_site_of(agent_id: String, main: Node) -> Variant:
+	for iid in _engines:
+		var engine: NpcPopulationEngine = _engines[iid]
+		var ag := engine.find_agent(agent_id)
+		if ag == null:
+			continue
+		var cid := str(ag.chore_id)
+		if cid.is_empty() or engine.chore_board == null:
+			return null
+		var chore := engine.chore_board.find(cid)
+		if chore.is_empty():
+			return null
+		return _chore_position(chore, main, _find_registry(main))
+	return null
+
+
 ## Tagged spaces with resolved world positions + live occupancy, for the Site
 ## Plan markers: [{pos, space_type, label, occupied, capacity}]. Dangling
 ## targets (deleted prop / missing building) resolve null and are skipped.

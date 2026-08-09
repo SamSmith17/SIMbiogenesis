@@ -59,6 +59,8 @@ var _bar_fill: MeshInstance3D = null
 var _bar_fill_mat: StandardMaterial3D = null
 var _task_lbl: Label3D = null
 var _task_text := ""
+var _trend_lbl: Label3D = null
+var _morale_trend := 0.0
 ## Overhead readout visibility has TWO drivers with different owners: the host
 ## grants AMBIENT visibility by distance (the group-monitoring read), and the
 ## crosshair grants FOCUS (which also shows the name). Either shows the bar.
@@ -211,7 +213,23 @@ func _build_status_bar() -> void:
 	_task_lbl.modulate = Color(0.92, 0.94, 0.97, 0.92)
 	_status_root.add_child(_task_lbl)
 
+	# Trend tick at the bar's right end: "unhappy" and "getting worse" are
+	# different triage cases, and the bar alone cannot tell them apart.
+	_trend_lbl = _make_status_label("", 20,
+		Vector3(STATUS_BAR_WIDTH * 0.5 + 0.075, STATUS_BAR_Y, 0.0))
+	_status_root.add_child(_trend_lbl)
+
 	_update_status_bar()
+
+
+## Morale movement over roughly the last sim-hour, host-computed. Small
+## drifts stay silent — the tick marks a TREND, not noise.
+func set_morale_trend(delta: float) -> void:
+	if absf(delta - _morale_trend) < 0.005:
+		return
+	_morale_trend = delta
+	if _status_root != null and _status_root.visible:
+		_update_status_bar()
 
 
 ## What this person is doing, in one or two words under the bar. Set by the
@@ -269,6 +287,15 @@ func _update_status_bar() -> void:
 		_bar_fill_mat.albedo_color = NpcMorale.color(morale)
 	if _task_lbl != null:
 		_task_lbl.text = _task_text
+	if _trend_lbl != null:
+		if _morale_trend >= 0.03:
+			_trend_lbl.text = "▲"
+			_trend_lbl.modulate = Color(0.5, 0.85, 0.55, 0.95)
+		elif _morale_trend <= -0.03:
+			_trend_lbl.text = "▼"
+			_trend_lbl.modulate = Color(0.9, 0.45, 0.4, 0.95)
+		else:
+			_trend_lbl.text = ""
 
 
 ## Host-driven LOD: `true` swaps in the rigged body, `false` the primitive.
@@ -338,7 +365,11 @@ func _refresh_overhead() -> void:
 	if _tag != null:
 		_tag.visible = _focus
 	if _status_root != null:
-		var show := _focus or _ambient
+		# The display pref gates the READOUT, never the name: "off" is for
+		# players who want clean silhouettes, and aiming still names people.
+		var mode := NpcDisplayPrefs.overhead_mode()
+		var show := (_focus and mode != NpcDisplayPrefs.OVERHEAD_OFF) \
+			or (_ambient and mode == NpcDisplayPrefs.OVERHEAD_ALWAYS)
 		if show and not _status_root.visible:
 			# Morale/task may have drifted while hidden (their setters skip the
 			# refresh) — catch up right as it shows.

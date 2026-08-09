@@ -342,6 +342,60 @@ static func linkage_array_tag(prop_id: String) -> String:
 ## into the system graph as an imported solar array, tagged per prop. Derives
 ## real tilt + compass azimuth from the deployed panel normals rotated into
 ## world space (improves on the web app's gridRotation heuristic). Idempotent.
+## Queue a crew REBUILD of a packed, already-fabricated linkage crate: the
+## SiteProject.rebuild_spec_rows plan (raise → re-bolt → re-mount — no
+## cutting or drilling, the parts exist) plus the build-site ghost preview
+## stamped onto the record, so the faint outline of what is being raised is
+## visible from the moment the project is queued. One implementation, called
+## by the crate's edit drawer AND the Site Projects panel — the two entry
+## points must queue byte-identical projects.
+## Returns {ok, error, project_id, site: Vector2}.
+static func queue_linkage_rebuild(main: Node, prop_id: String) -> Dictionary:
+	var out := {"ok": false, "error": "", "project_id": "", "site": Vector2.ZERO}
+	if main == null or prop_id.is_empty():
+		out["error"] = "no prop"
+		return out
+	var sgv := _system_graph_view(main)
+	var bridge: Variant = sgv.call("npc_population_bridge") \
+		if sgv != null and sgv.has_method("npc_population_bridge") else null
+	if bridge == null:
+		out["error"] = "no population bridge"
+		return out
+	var iid := str(bridge.call("first_crewable_habitat"))
+	if iid.is_empty():
+		out["error"] = "Needs a pop-driven habitat with people on site"
+		return out
+	var rec: Dictionary = get_prop_record(main, prop_id)
+	if rec.is_empty() or not (rec.get("linkage_spec") is Dictionary):
+		out["error"] = "not a linkage crate"
+		return out
+	if not bool(rec.get("packed", false)) \
+			or not str(rec.get("stowed_in", "")).is_empty():
+		out["error"] = "not a free-standing packed crate"
+		return out
+	var p := LinkageParams.new()
+	p.from_config(rec.get("linkage_spec") as Dictionary)
+	var counts := LinkageBom.fab_counts(LinkageBom.compute(p), {})
+	var site := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	var rows := SiteProject.rebuild_spec_rows(counts, prop_id)
+	var project_id := str(bridge.call("create_site_project", iid,
+		SiteProject.KIND_LINKAGE_BUILD, "Rebuild: linkage structure",
+		prop_id, site, rows, {"start_h": 7.0, "end_h": 19.0},
+		{"kind": "prop", "id": prop_id}, {}))
+	if project_id.is_empty():
+		out["error"] = "Chore board is full — clear some chores first"
+		return out
+	# The ghost preview: build_state with `preview` renders the DEPLOYED frame
+	# fully ghosted beside the crate, so "what are they building" is
+	# answerable from minute one. The erect phase's unpack clears it.
+	update_prop_record(main, prop_id,
+		{"build_state": {"phase": "", "ghost": 0.14, "preview": true}}, true)
+	out["ok"] = true
+	out["project_id"] = project_id
+	out["site"] = site
+	return out
+
+
 static func seed_linkage_graph(main: Node, prop_id: String) -> bool:
 	if main == null or prop_id.is_empty():
 		return false
