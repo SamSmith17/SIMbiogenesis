@@ -10494,9 +10494,28 @@ func _drain_npc_events() -> void:
 		if toaster != null:
 			toaster.show_community(kind,
 				str(meta.get("title", ev.get("text", ""))),
-				str(meta.get("detail", "")), level)
+				str(meta.get("detail", "")), level, 4.0,
+				_community_chip_action(kind, str(ev.get("subject", "")),
+					str(meta.get("agent_id", ""))))
 		else:
 			_show_toast(str(ev.get("text", "")), 2.5, level)
+
+
+## What clicking a community chip opens: a qualification opens that person's
+## ledger (the planner's Person tab); everything else — departures, collapse —
+## opens the settlement view, because "go look at the community" is the honest
+## response to community news. Closing the graph first uses the same side-
+## effect path the G toggle does, so survival pausing stays balanced.
+func _community_chip_action(kind: String, iid: String, agent_id: String) -> Callable:
+	if kind == "skill_earned" and not agent_id.is_empty():
+		return func() -> void:
+			open_work_planner(iid, agent_id)
+	return func() -> void:
+		if visible:
+			_apply_graph_close_side_effects()
+		var main := _get_scene_main_node()
+		if main != null and main.has_method("open_settlement_view"):
+			main.call("open_settlement_view")
 
 
 ## Spawn/despawn the 3D avatar host to match whether any population engine

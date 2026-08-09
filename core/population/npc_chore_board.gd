@@ -541,6 +541,32 @@ func blocked_reason(chore: Dictionary, abs_hours: float, hour_of_day: float,
 	return ""
 
 
+## Display glyph for a blocked_reason sentence, so every surface prefixes the
+## same one. Derived from the sentence rather than a parallel enum: the
+## sentence IS the contract, and a second channel would drift. Order matters —
+## "needs a crew of 4" must not read as the skill case's "needs Electrical".
+static func reason_glyph(reason: String) -> String:
+	if reason.is_empty():
+		return ""
+	if reason.begins_with("weather"):
+		return "⛅"
+	if reason.begins_with("outside"):
+		return "🕐"
+	if reason.begins_with("waiting on"):
+		return "⏳"
+	if reason.begins_with("held for"):
+		return "👤"
+	if reason == "on hold":
+		return "⏸"
+	if reason.begins_with("tools down"):
+		return "🛑"
+	if reason.contains("crew of") or reason.begins_with("gathering"):
+		return "👥"
+	if reason.begins_with("needs"):
+		return "🎓"
+	return "⚠"
+
+
 static func _is_gathering(chore: Dictionary) -> bool:
 	var min_w := int(chore.get("min_workers", 1))
 	if min_w <= 1:

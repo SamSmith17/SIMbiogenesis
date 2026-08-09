@@ -195,7 +195,8 @@ func _refresh() -> void:
 			var reason := str(board.call("blocked_reason", ch, abs_h,
 				fposmod(abs_h, 24.0), weather, roster))
 			if not reason.is_empty():
-				var cat := _reason_category(reason)
+				var cat := "%s %s" % [NpcChoreBoard.reason_glyph(reason),
+					_reason_category(reason)]
 				blocked[cat] = int(blocked.get(cat, 0)) + 1
 		sig += "%s|%d|%d|%d;" % [str(ch.get("id", "")), w,
 			int(ch.get("priority", 0)), int(ch.get("done_day", -1))]
@@ -275,7 +276,8 @@ func _chore_row(board: Variant, chore: Dictionary, day: int) -> Control:
 			int(_bridge.call("roster_size_for", _first_iid())),
 			func(aid: String) -> String: return _name_of(aid)))
 	lbl.tooltip_text = "%.1f h left · %d of %d people%s" % [left, w, mn,
-		("\n⚠ " + reason) if not reason.is_empty() else ""]
+		("\n%s %s" % [NpcChoreBoard.reason_glyph(reason), reason])
+			if not reason.is_empty() else ""]
 	row.add_child(lbl)
 
 	var crew := Label.new()

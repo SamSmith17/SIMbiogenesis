@@ -17,6 +17,9 @@ extends Control
 const POLL_S := 0.5
 const LINE_TTL_S := 24.0
 const MAX_LINES := 4
+## Hovering the strip expands it to this many recent log lines — the answer
+## to "wait, what did I just miss" without opening the settlement view.
+const PEEK_LINES := 12
 
 var _bridge: Variant = null
 ## The graph view — the strip hides while it is visible (toasts own that
@@ -26,6 +29,10 @@ var _lines: Array = []   # [{text, sev, at_ms}]
 var _box: VBoxContainer = null
 var _accum := 0.0
 var _sig := "<unbuilt>"
+## Hover-peek: mouse inside the strip's rect expands it to recent history.
+## Detected by RECT CONTAINMENT, not gui_input — the strip stays mouse-ignored
+## so it can never eat a click meant for the world behind it.
+var _peek := false
 
 
 func _ready() -> void:
@@ -51,6 +58,10 @@ func bind(bridge: Variant, graph_view: CanvasItem) -> void:
 
 func _process(delta: float) -> void:
 	_accum += delta
+	# The hover check runs EVERY frame (one rect test) — a peek that answers
+	# half a second late feels broken. Only the log poll is on the timer.
+	if visible and get_global_rect().has_point(get_global_mouse_position()) != _peek:
+		_accum = POLL_S
 	if _accum < POLL_S:
 		return
 	_accum = 0.0
@@ -80,35 +91,67 @@ func _process(delta: float) -> void:
 		covered = bool(main.call("settlement_view_open"))
 	visible = not covered and not _lines.is_empty()
 	if not visible:
+		if _peek:
+			_peek = false
+			offset_top = -352
 		return
+	# Hover-peek: while the pointer rests on the strip, it grows to the recent
+	# history and stops fading; leaving snaps it back.
+	var peek_now := get_global_rect().has_point(get_global_mouse_position())
+	if peek_now != _peek:
+		_peek = peek_now
+		offset_top = -352 - (PEEK_LINES - MAX_LINES) * 18 if _peek else -352
+		_sig = "<unbuilt>"
 	var sig := ""
-	for l in _lines:
-		sig += "%d;" % int((l as Dictionary)["at_ms"])
+	if _peek:
+		sig = "peek"   # rebuilt once on entry; history does not move mid-hover
+	else:
+		for l in _lines:
+			sig += "%d;" % int((l as Dictionary)["at_ms"])
 	if sig == _sig:
-		# Content unchanged; only refresh the fades.
-		var idx := 0
-		for c in _box.get_children():
-			if idx < _lines.size():
-				(c as Control).modulate.a = _alpha_of(_lines[idx] as Dictionary, now)
-			idx += 1
+		if not _peek:
+			# Content unchanged; only refresh the fades.
+			var idx := 0
+			for c in _box.get_children():
+				if idx < _lines.size():
+					(c as Control).modulate.a = _alpha_of(_lines[idx] as Dictionary, now)
+				idx += 1
 		return
 	_sig = sig
 	for c in _box.get_children():
 		c.queue_free()
+	if _peek:
+		var lg: Variant = _bridge.call("settlement_log")
+		var recents: Array = lg.call("recent", PEEK_LINES) as Array
+		recents.reverse()   # oldest at the top, like the settlement feed
+		_box.add_child(_strip_label("— recent —", SettlementLog.INFO, 0.7))
+		for e in recents:
+			var ed: Dictionary = e
+			_box.add_child(_strip_label("%s  %s" % [
+				SettlementLog.icon_for(str(ed.get("kind", ""))),
+				str(ed.get("text", ""))], int(ed.get("severity", 0)), 1.0))
+		return
 	for l in _lines:
 		var ld: Dictionary = l
-		var lbl := Label.new()
-		lbl.text = str(ld["text"])
-		lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-		lbl.add_theme_color_override("font_color",
-			UITheme.C_WARN if int(ld["sev"]) >= SettlementLog.ALERT else UITheme.C_TEXT_S)
-		# A thin outline instead of a panel: the strip sits over the world and
-		# a backing rect would read as UI chrome in the middle of a landscape.
-		lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
-		lbl.add_theme_constant_override("outline_size", 3)
-		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		lbl.modulate.a = _alpha_of(ld, now)
-		_box.add_child(lbl)
+		_box.add_child(_strip_label(str(ld["text"]), int(ld["sev"]),
+			_alpha_of(ld, now)))
+	# The peek's only affordance: a dim ellipsis inviting the hover.
+	_box.add_child(_strip_label("⋯", SettlementLog.INFO, 0.5))
+
+
+func _strip_label(text: String, severity: int, alpha: float) -> Label:
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	lbl.add_theme_color_override("font_color",
+		UITheme.C_WARN if severity >= SettlementLog.ALERT else UITheme.C_TEXT_S)
+	# A thin outline instead of a panel: the strip sits over the world and
+	# a backing rect would read as UI chrome in the middle of a landscape.
+	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	lbl.add_theme_constant_override("outline_size", 3)
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl.modulate.a = alpha
+	return lbl
 
 
 static func _alpha_of(line: Dictionary, now_ms: int) -> float:

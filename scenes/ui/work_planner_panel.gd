@@ -86,12 +86,19 @@ var _nd_skill: OptionButton = null
 var _nd_where: Button = null
 ## Ground point the next duty is pinned to, Vector2.INF for "wherever".
 var _nd_target := Vector2.INF
+## Duty the form is EDITING ("" = authoring a new one). The same form serves
+## both jobs — a second row of identical fields would just be drift waiting.
+var _sel_duty := ""
+var _nd_title: Label = null
+var _nd_add: Button = null
+var _nd_cancel: Button = null
 var _oncall_box: VBoxContainer = null
 var _oncall_sig := "<unbuilt>"
 var _new_role_name: LineEdit = null
 
 # Person tab
 var _person_pick: OptionButton = null
+var _person_swatch: ColorRect = null
 var _person_box: VBoxContainer = null
 var _person_sig := "<unbuilt>"
 var _person_id := ""
@@ -211,6 +218,46 @@ func _persist() -> void:
 
 func _abs_h() -> float:
 	return float(_bridge.call("current_abs_hours")) if _bridge != null else 0.0
+
+
+## "Read about the work → watch the work": close the planner and open the
+## settlement view framed on a chore's place. Framing is looking, never
+## ordering. Only pos/prop targets are resolvable here; rows without one
+## simply do not offer the button.
+func _frame_in_settlement(tgt: Dictionary) -> void:
+	var main := get_tree().current_scene
+	if main == null or not main.has_method("open_settlement_view"):
+		return
+	var at := Vector2.INF
+	match str(tgt.get("kind", "")):
+		"pos":
+			at = Vector2(float(tgt.get("x", 0.0)), float(tgt.get("z", 0.0)))
+		"prop":
+			var rec: Dictionary = PlacedPropService.get_prop_record(main,
+				str(tgt.get("id", "")))
+			if not rec.is_empty():
+				at = Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	if at == Vector2.INF:
+		return
+	close()
+	var view: Variant = main.call("open_settlement_view")
+	if view != null and view.has_method("camera"):
+		var cam: Variant = view.call("camera")
+		if cam != null:
+			cam.call("look_at_xz", at)
+
+
+static func _frameable(tgt: Dictionary) -> bool:
+	return str(tgt.get("kind", "")) in ["pos", "prop"]
+
+
+func _look_btn(tgt: Dictionary) -> Button:
+	var go := Button.new()
+	UITheme.style_button(go)
+	go.text = "⌖"
+	go.tooltip_text = "Look at this in the settlement view"
+	go.pressed.connect(func() -> void: _frame_in_settlement(tgt))
+	return go
 
 
 func _reason_of(chore: Dictionary) -> String:
@@ -510,7 +557,8 @@ func _build_schedule_tab() -> void:
 	var wrap := VBoxContainer.new()
 	wrap.add_theme_constant_override("separation", 3)
 	tab.add_child(wrap)
-	wrap.add_child(_section("New duty"))
+	_nd_title = _section("New duty")
+	wrap.add_child(_nd_title)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	wrap.add_child(row)
@@ -548,11 +596,18 @@ func _build_schedule_tab() -> void:
 	_nd_where.tooltip_text = "Pick the spot on the ground in the settlement view"
 	_nd_where.pressed.connect(_on_pick_duty_where)
 	row2.add_child(_labelled("Place", _nd_where))
-	var add := Button.new()
-	UITheme.style_button(add)
-	add.text = "Add duty"
-	add.pressed.connect(_on_add_duty)
-	row2.add_child(_labelled(" ", add))
+	_nd_add = Button.new()
+	UITheme.style_button(_nd_add)
+	_nd_add.text = "Add duty"
+	_nd_add.pressed.connect(_on_add_duty)
+	row2.add_child(_labelled(" ", _nd_add))
+	_nd_cancel = Button.new()
+	UITheme.style_button(_nd_cancel)
+	_nd_cancel.text = "New"
+	_nd_cancel.tooltip_text = "Stop editing and go back to authoring a fresh duty"
+	_nd_cancel.visible = false
+	_nd_cancel.pressed.connect(func() -> void: _set_sel_duty(""))
+	row2.add_child(_labelled(" ", _nd_cancel))
 
 	tab.add_child(HSeparator.new())
 	var oc_head := HBoxContainer.new()
@@ -582,6 +637,12 @@ func _build_person_tab() -> void:
 	head.add_theme_constant_override("separation", 8)
 	tab.add_child(head)
 	head.add_child(_section("Person"))
+	# The same pastel as this person's dot and avatar rim — the thread that
+	# ties the figure being watched to the ledger being read.
+	_person_swatch = ColorRect.new()
+	_person_swatch.custom_minimum_size = Vector2(12, 12)
+	_person_swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(_person_swatch)
 	_person_pick = OptionButton.new()
 	_person_pick.custom_minimum_size.x = 170
 	_person_pick.item_selected.connect(func(idx: int) -> void:
@@ -651,6 +712,29 @@ func _refresh_chores() -> void:
 	if recs.is_empty():
 		_chore_rows.add_child(_small(
 			"No recurring chores. Add one in Routines & chores, or rota work as a duty on the Schedule tab."))
+		# From empty board to living settlement in one gesture. Sensible
+		# defaults the player can retune — everything here is editable above.
+		var seed := Button.new()
+		UITheme.style_button(seed)
+		seed.text = "Seed common chores"
+		seed.tooltip_text = "Cook meals · clean the bathrooms · water run — with sensible hours, all editable"
+		seed.pressed.connect(func() -> void:
+			var b := _board()
+			if b == null:
+				return
+			b.add_chore("Cook meals", 2.0, {"repeat": "daily",
+				"window": {"start_h": 11.0, "end_h": 14.0},
+				"exposure": NpcWeatherGate.EXPOSURE_SHELTERED,
+				"min_workers": 1, "max_workers": 2})
+			b.add_chore("Clean the bathrooms", 0.5, {"repeat": "every_n",
+				"repeat_days": 2, "window": {"start_h": 9.0, "end_h": 12.0},
+				"exposure": NpcWeatherGate.EXPOSURE_SHELTERED})
+			b.add_chore("Water run", 1.0, {"repeat": "daily",
+				"window": {"start_h": 8.0, "end_h": 11.0},
+				"exposure": NpcWeatherGate.EXPOSURE_OUTDOOR})
+			_chore_sig = "<unbuilt>"
+			_refresh())
+		_chore_rows.add_child(seed)
 		return
 	for c in recs:
 		var ch: Dictionary = c
@@ -685,7 +769,8 @@ func _refresh_chores() -> void:
 			row.add_child(_small("→ %s" % _name_for(who)))
 		var reason := _reason_of(ch)
 		if not reason.is_empty():
-			var r := _small("· %s" % reason, UITheme.C_WARN)
+			var r := _small("%s %s" % [NpcChoreBoard.reason_glyph(reason), reason],
+				UITheme.C_WARN)
 			r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			r.clip_text = true
 			r.tooltip_text = reason
@@ -694,6 +779,8 @@ func _refresh_chores() -> void:
 			var pad := Control.new()
 			pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			row.add_child(pad)
+		if _frameable(ch.get("target", {}) as Dictionary):
+			row.add_child(_look_btn(ch.get("target", {}) as Dictionary))
 		var edit := Button.new()
 		UITheme.style_button(edit)
 		edit.text = "Editing…" if selected else "Edit"
@@ -857,7 +944,8 @@ func _refresh_tasks() -> void:
 			row.add_child(_small("👤 %s" % ", ".join(names2), UITheme.C_OK))
 		var reason := _reason_of(ch)
 		if not reason.is_empty() and not done:
-			var r := _small("· %s" % reason, UITheme.C_WARN)
+			var r := _small("%s %s" % [NpcChoreBoard.reason_glyph(reason), reason],
+				UITheme.C_WARN)
 			r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			r.clip_text = true
 			r.tooltip_text = reason
@@ -866,6 +954,8 @@ func _refresh_tasks() -> void:
 			var pad := Control.new()
 			pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			row.add_child(pad)
+		if not done and _frameable(ch.get("target", {}) as Dictionary):
+			row.add_child(_look_btn(ch.get("target", {}) as Dictionary))
 		if done and int(ch.get("done_day", -1)) == day:
 			row.add_child(_small("done today", UITheme.C_OK))
 
@@ -895,7 +985,7 @@ func _refresh_schedule() -> void:
 				float(f.get("min_h", 0.0)), float(f.get("mean_h", 0.0)),
 				str(f.get("label", ""))]
 
-	var sig := "day:%d|sw:%s;" % [day, str(_swap_sel)]
+	var sig := "day:%d|sw:%s|ed:%s;" % [day, str(_swap_sel), _sel_duty]
 	for d in duty.duties:
 		sig += "%s|%s;" % [str((d as Dictionary).get("duty_id", "")),
 			str((d as Dictionary).get("label", ""))]
@@ -945,13 +1035,21 @@ func _refresh_schedule() -> void:
 		var did := str(drec.get("duty_id", ""))
 		var name_cell := HBoxContainer.new()
 		name_cell.add_theme_constant_override("separation", 3)
-		var dl := _small(str(drec.get("label", "?")), C_TEXT)
-		dl.custom_minimum_size.x = 110
+		var editing := did == _sel_duty
+		var dl := _small(("▸ " if editing else "") + str(drec.get("label", "?")),
+			UITheme.C_AMBER if editing else C_TEXT)
+		dl.custom_minimum_size.x = 96
 		dl.clip_text = true
 		dl.tooltip_text = "%s · %.1f h · crew %d · %s" % [
 			str(drec.get("label", "?")), float(drec.get("chore_hours", 1.0)),
 			int(drec.get("crew", 1)), _repeat_text(drec)]
 		name_cell.add_child(dl)
+		var ed := Button.new()
+		UITheme.style_button(ed)
+		ed.text = "✎"
+		ed.tooltip_text = "Edit this duty in the form below"
+		ed.pressed.connect(func() -> void: _set_sel_duty(did))
+		name_cell.add_child(ed)
 		var rm := Button.new()
 		UITheme.style_button(rm)
 		rm.text = "✕"
@@ -961,6 +1059,8 @@ func _refresh_schedule() -> void:
 			if dy != null:
 				dy.remove_duty(did)
 				_persist()
+			if _sel_duty == did:
+				_set_sel_duty("")
 			_sched_sig = "<unbuilt>"
 			_refresh())
 		name_cell.add_child(rm)
@@ -996,8 +1096,15 @@ func _slot_cell(duty: NpcDutyRoster, board: NpcChoreBoard,
 		var selected := int(_swap_sel.get("day", -1)) == cell_day \
 			and str(_swap_sel.get("duty_id", "")) == did \
 			and str(_swap_sel.get("agent", "")) == aid
-		btn.add_theme_color_override("font_color",
-			UITheme.C_AMBER if selected else (C_DIM if slot_done or struck else C_TEXT))
+		var base := UITheme.C_AMBER if selected \
+			else (C_DIM if slot_done or struck else C_TEXT)
+		btn.add_theme_color_override("font_color", base)
+		if not slot_done:
+			btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+			btn.mouse_entered.connect(func() -> void:
+				btn.add_theme_color_override("font_color", UITheme.C_INFO))
+			btn.mouse_exited.connect(func() -> void:
+				btn.add_theme_color_override("font_color", base))
 		if slot_done:
 			btn.tooltip_text = "Done — a finished slot cannot be traded"
 		elif not selected:
@@ -1043,6 +1150,54 @@ func _on_slot_name(day: int, duty_id: String, agent: String) -> void:
 	_refresh()
 
 
+## Bind the shared form to one duty (Edit), or back to authoring ("").
+func _set_sel_duty(did: String) -> void:
+	var duty := _duty()
+	_sel_duty = ""
+	if duty != null and not did.is_empty():
+		var rec := duty.find_duty(did)
+		if not rec.is_empty():
+			_sel_duty = did
+			_nd_label.text = str(rec.get("label", ""))
+			_nd_hours.value = float(rec.get("chore_hours", 1.0))
+			var w: Dictionary = rec.get("window", {})
+			_nd_start.value = float(w.get("start_h", 11.0))
+			_nd_end.value = float(w.get("end_h", 14.0))
+			_nd_crew.value = float(int(rec.get("crew", 1)))
+			var period := NpcChoreBoard.normalize_repeat(rec.get("repeat", "daily"))
+			for i in PERIODS.size():
+				if str((PERIODS[i] as Array)[1]) == period:
+					_nd_period.select(i)
+			_nd_n.value = float(maxi(int(rec.get("repeat_days", 1)), 2))
+			var dow: Array = rec.get("repeat_dow", []) as Array
+			for i in 7:
+				(_nd_dow[i] as Button).set_pressed_no_signal(dow.has(i))
+			var skill := str(rec.get("requires_skill", ""))
+			for i in _nd_skill.item_count:
+				if str(_nd_skill.get_item_metadata(i)) == skill:
+					_nd_skill.select(i)
+			var tgt: Dictionary = rec.get("target", {})
+			if str(tgt.get("kind", "")) == "pos":
+				_nd_target = Vector2(float(tgt.get("x", 0.0)), float(tgt.get("z", 0.0)))
+				_nd_where.text = "@ %d, %d" % [int(_nd_target.x), int(_nd_target.y)]
+			else:
+				_nd_target = Vector2.INF
+				_nd_where.text = "Where…"
+	if _sel_duty.is_empty():
+		_nd_label.text = ""
+		_nd_target = Vector2.INF
+		_nd_where.text = "Where…"
+	_nd_title.text = ("Edit duty — %s" % _nd_label.text) if not _sel_duty.is_empty() \
+		else "New duty"
+	_nd_add.text = "Apply changes" if not _sel_duty.is_empty() else "Add duty"
+	_nd_add.tooltip_text = ("Applies from the next re-plan — a slot already minted today keeps its card" \
+		if not _sel_duty.is_empty() else "")
+	_nd_cancel.visible = not _sel_duty.is_empty()
+	_sched_sig = "<unbuilt>"
+	_sync_period_vis()
+	_refresh()
+
+
 func _on_add_duty() -> void:
 	var duty := _duty()
 	if duty == null:
@@ -1055,6 +1210,29 @@ func _on_add_duty() -> void:
 	for i in 7:
 		if (_nd_dow[i] as Button).button_pressed:
 			dow.append(i)
+	var tgt: Dictionary = {}
+	if _nd_target != Vector2.INF:
+		tgt = {"kind": "pos", "x": _nd_target.x, "z": _nd_target.y}
+	if not _sel_duty.is_empty():
+		# EDIT: mutate the template in place. save_duties re-plans from today,
+		# so future planned slots pick the change up on the next tick; a slot
+		# already minted today keeps its card (history is history).
+		var rec := duty.find_duty(_sel_duty)
+		if not rec.is_empty():
+			rec["label"] = label
+			rec["chore_hours"] = maxf(float(_nd_hours.value), 0.01)
+			rec["window"] = {"start_h": float(_nd_start.value),
+				"end_h": float(_nd_end.value)}
+			rec["crew"] = maxi(int(_nd_crew.value), 1)
+			rec["repeat"] = period
+			rec["repeat_days"] = maxi(int(_nd_n.value), 1)
+			rec["repeat_dow"] = dow
+			rec["requires_skill"] = str(_nd_skill.get_item_metadata(
+				maxi(_nd_skill.selected, 0)))
+			rec["target"] = tgt
+		_persist()
+		_set_sel_duty("")
+		return
 	var opts := {
 		"window": {"start_h": float(_nd_start.value), "end_h": float(_nd_end.value)},
 		"crew": int(_nd_crew.value),
@@ -1063,8 +1241,8 @@ func _on_add_duty() -> void:
 		"repeat_dow": dow,
 		"requires_skill": str(_nd_skill.get_item_metadata(maxi(_nd_skill.selected, 0))),
 	}
-	if _nd_target != Vector2.INF:
-		opts["target"] = {"kind": "pos", "x": _nd_target.x, "z": _nd_target.y}
+	if not tgt.is_empty():
+		opts["target"] = tgt
 	duty.add_duty(label, float(_nd_hours.value), opts)
 	_nd_label.text = ""
 	_nd_target = Vector2.INF
@@ -1259,6 +1437,10 @@ func _refresh_person() -> void:
 	if sig == _person_sig:
 		return
 	_person_sig = sig
+	if _person_swatch != null:
+		var pc := NpcPopulationEngine.color_for_agent(_person_id)
+		_person_swatch.visible = pc != Color.BLACK   # colors pref off => hide
+		_person_swatch.color = pc
 	for c in _person_box.get_children():
 		c.queue_free()
 
@@ -1277,6 +1459,41 @@ func _refresh_person() -> void:
 		v.add_theme_color_override("font_color", C_TEXT)
 		col.add_child(v)
 		nums.add_child(col)
+
+	# Today at a glance — the same sleep/needs/chores/free bar the Routines
+	# roster carries, so "what does the day look like" sits beside "what got
+	# done". Same UITheme values, so the two readings agree.
+	var agent: NpcAgent = _bridge.call("find_agent", _person_id)
+	var board := _board()
+	if agent != null:
+		_person_box.add_child(_section("Today's plan"))
+		var assigned := 0.0
+		if board != null:
+			assigned = board.assigned_hours_for(_person_id, _abs_h())
+		var strip0 := HBoxContainer.new()
+		strip0.add_theme_constant_override("separation", 0)
+		strip0.custom_minimum_size = Vector2(360, 16)
+		_person_box.add_child(strip0)
+		var sleep_h := 24.0 - NpcAgent.SLEEP_START_H + NpcAgent.SLEEP_END_H
+		var free_before := agent.free_hours(0.0)
+		var need_h := maxf(24.0 - sleep_h - free_before, 0.0)
+		var chore_h := minf(assigned, maxf(free_before, 0.0))
+		var over_h := maxf(assigned - free_before, 0.0)
+		var free_h := maxf(free_before - chore_h, 0.0)
+		for seg in [[sleep_h, UITheme.C_LAVENDER], [need_h, UITheme.C_PRIMARY],
+				[chore_h, UITheme.C_AMBER], [free_h, UITheme.C_GREEN],
+				[over_h, UITheme.C_ERROR]]:
+			var hrs := float((seg as Array)[0])
+			if hrs <= 0.01:
+				continue
+			var bar0 := ColorRect.new()
+			bar0.color = (seg as Array)[1] as Color
+			bar0.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			bar0.size_flags_stretch_ratio = hrs
+			strip0.add_child(bar0)
+		strip0.tooltip_text = "sleep %.1f h · needs %.1f h · chores %.1f h · free %.1f h%s" % [
+			sleep_h, need_h, chore_h, free_h,
+			"  ⚠ OVER-SCHEDULED by %.1f h" % over_h if over_h > 0.01 else ""]
 
 	# The week strip: seven bars, today rightmost.
 	_person_box.add_child(_section("The week"))

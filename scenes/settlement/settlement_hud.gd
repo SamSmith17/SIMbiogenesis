@@ -174,10 +174,19 @@ func _on_selection(sel: Dictionary) -> void:
 		_card.visible = false
 		return
 	_card.visible = true
+	# Neutral by default; the npc branch overrides with the person's pastel —
+	# without this reset a crew card inherits the last person's color.
+	_card_title.add_theme_color_override("font_color", UITheme.C_TEXT)
 	match str(sel.get("kind", "")):
 		"npc":
 			var d: Dictionary = sel.get("detail", {})
 			_card_title.text = str(d.get("name", "Someone"))
+			# The person's own pastel — the same one on their avatar rim, so
+			# the card visibly belongs to the figure that was clicked.
+			var pastel := NpcPopulationEngine.color_for_agent(
+				str(sel.get("agent_id", "")))
+			_card_title.add_theme_color_override("font_color",
+				pastel if pastel != Color.BLACK else UITheme.C_TEXT)
 			_card_body.text = "%s\n%s%s" % [
 				str(d.get("status", "")),
 				str(d.get("morale_label", "")),

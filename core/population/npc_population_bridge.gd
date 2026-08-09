@@ -1341,12 +1341,14 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 				_last_abs_h, SettlementLog.ALERT, iid,
 				{"title": "%s did not make it" % who, "detail": reason}))
 	engine.skill_earned.connect(
-		func(_aid: String, who: String, tag: String) -> void:
+		func(aid: String, who: String, tag: String) -> void:
 			# Apprenticeship made visible: train() reports the crossing exactly
 			# once, so this cannot spam. NOTE severity — good news, not an alarm.
+			# agent_id rides the meta so the chip can open THIS person's ledger.
 			settlement_log().add("skill_earned", "%s qualified: %s" % [
 				who, NpcSkills.label(tag)], _last_abs_h, SettlementLog.NOTE, iid,
-				{"title": "%s qualified" % who, "detail": NpcSkills.label(tag)}))
+				{"title": "%s qualified" % who, "detail": NpcSkills.label(tag),
+					"agent_id": aid}))
 	_engines[iid] = engine
 	_configured_count[iid] = count
 	return engine

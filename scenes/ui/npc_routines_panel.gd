@@ -530,6 +530,15 @@ func _refresh_roster() -> void:
 		row.add_theme_constant_override("separation", 8)
 		_roster_box.add_child(row)
 
+		# The same pastel as this person's dot and avatar rim, so the row reads
+		# as THAT figure's row. Hidden when the colors display pref is off.
+		var swatch := ColorRect.new()
+		var pastel := NpcPopulationEngine.color_for_agent(agent.id)
+		swatch.color = pastel
+		swatch.visible = pastel != Color.BLACK
+		swatch.custom_minimum_size = Vector2(9, 9)
+		swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(swatch)
 		# The name clicks through to this person's Work Planner tab — the same
 		# jump the fairness line makes, so "who is this and what do they do"
 		# is one click from anywhere a name appears.
@@ -543,6 +552,7 @@ func _refresh_roster() -> void:
 		name_btn.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		name_btn.add_theme_color_override("font_color", C_TEXT)
 		name_btn.tooltip_text = "Hours, skills and on-call — open in the Work Planner"
+		_linkify(name_btn, C_TEXT)
 		var aid := agent.id
 		name_btn.pressed.connect(func() -> void:
 			var sgv: Node = ServiceLocator.graph()
@@ -941,6 +951,17 @@ static func _repeat_text(chore: Dictionary) -> String:
 
 
 const DOW_SHORT: Array = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+## A flat button does not look clickable, and a click-through nobody discovers
+## may as well not exist: pointing-hand cursor plus an info-blue hover says
+## "this is a link" without any layout cost.
+static func _linkify(btn: Button, base: Color) -> void:
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.mouse_entered.connect(func() -> void:
+		btn.add_theme_color_override("font_color", UITheme.C_INFO))
+	btn.mouse_exited.connect(func() -> void:
+		btn.add_theme_color_override("font_color", base))
 
 
 func _name_for(agent_id: String) -> String:

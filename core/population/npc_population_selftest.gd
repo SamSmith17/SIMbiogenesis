@@ -4573,6 +4573,17 @@ func _test_blocked_reason() -> void:
 	_check("a completed cycle reports nothing",
 		b.blocked_reason(c, t, 14.0).is_empty())
 
+	# Display glyphs: the crew case must not read as the skill case (both
+	# start with "needs"), and no reason means no glyph.
+	_check("crew reasons glyph as people",
+		NpcChoreBoard.reason_glyph("needs a crew of 6 — only 4 people on site") == "👥")
+	_check("skill reasons glyph as training",
+		NpcChoreBoard.reason_glyph(
+			"needs Electrical — nobody on site is qualified, so anyone may try") == "🎓")
+	_check("weather reasons glyph as weather",
+		NpcChoreBoard.reason_glyph("weather is too dangerous for outdoor work") == "⛅")
+	_check("no reason, no glyph", NpcChoreBoard.reason_glyph("").is_empty())
+
 
 ## Skills, and the anti-invisibility rule that keeps them from hiding work.
 func _test_skills() -> void:

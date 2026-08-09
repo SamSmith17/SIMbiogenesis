@@ -78,24 +78,62 @@ func _play_level_sfx(level: Level, allow_danger: bool = true) -> void:
 ## beats (departures, collapse, qualifications), which used to render as one
 ## long sentence in the graph view's private single-slot label and were
 ## therefore invisible everywhere else. Same stack, same cap, same fades as
-## every other toast, so a burst of departures queues instead of overwriting.
+## every other toast.
+##
+## Two behaviours the part-up chip already proved out:
+## - `on_click` makes the chip a DOORWAY (a qualification opens that person's
+##   ledger, a departure opens the settlement view); clicking dismisses it.
+## - Consecutive same-kind chips AGGREGATE into the newest one ("Wren left ·
+##   +2 more") instead of churning the 3-slot stack — at 400× a collapse is
+##   ten departures in seconds, and ten chips racing through three slots is
+##   noise, not news. The log keeps every individual line.
 func show_community(kind: String, title: String, detail: String = "",
-		level: Level = Level.INFO, duration: float = 4.0) -> void:
+		level: Level = Level.INFO, duration: float = 4.0,
+		on_click: Callable = Callable()) -> void:
 	if _stack == null:
 		return
+	# Aggregate into the newest live chip when it carries the same kind.
+	if not _entries.is_empty():
+		var last: PanelContainer = _entries[-1]
+		if is_instance_valid(last) \
+				and str(last.get_meta("community_kind", "")) == kind:
+			var n := int(last.get_meta("community_count", 1)) + 1
+			last.set_meta("community_count", n)
+			var head: Label = last.get_meta("community_head", null)
+			if head != null:
+				head.text = "%s · +%d more" % [title, n - 1]
+			var sub: Label = last.get_meta("community_sub", null)
+			if sub != null and not detail.is_empty():
+				sub.text = detail
+			# Refresh the lifetime: bump the generation so the OLD timer's
+			# fade (already scheduled) no-ops, and arm a fresh one.
+			var gen := int(last.get_meta("community_gen", 0)) + 1
+			last.set_meta("community_gen", gen)
+			var t := get_tree().create_timer(duration)
+			t.timeout.connect(func() -> void:
+				if is_instance_valid(last) \
+						and int(last.get_meta("community_gen", 0)) == gen:
+					_fade_and_remove(last), CONNECT_ONE_SHOT)
+			return
 	_play_level_sfx(level)
 	if _entries.size() >= MAX_TOASTS:
 		_remove_entry(_entries[0])
-	var entry := _make_community_entry(kind, title, detail, level)
+	var entry := _make_community_entry(kind, title, detail, level, on_click)
+	entry.set_meta("community_kind", kind)
+	entry.set_meta("community_count", 1)
+	entry.set_meta("community_gen", 0)
 	_stack.add_child(entry)
 	_entries.append(entry)
 	_pop_in(entry)
 	var timer := get_tree().create_timer(duration)
-	timer.timeout.connect(_fade_and_remove.bind(entry), CONNECT_ONE_SHOT)
+	timer.timeout.connect(func() -> void:
+		if is_instance_valid(entry) \
+				and int(entry.get_meta("community_gen", 0)) == 0:
+			_fade_and_remove(entry), CONNECT_ONE_SHOT)
 
 
 func _make_community_entry(kind: String, title: String, detail: String,
-		level: Level) -> PanelContainer:
+		level: Level, on_click: Callable = Callable()) -> PanelContainer:
 	var color := _level_color(level)
 	var panel := PanelContainer.new()
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -103,6 +141,15 @@ func _make_community_entry(kind: String, title: String, detail: String,
 	panel.pivot_offset = Vector2(TOAST_WIDTH * 0.5, 18.0)
 	panel.scale = Vector2(0.94, 0.94)
 	panel.add_theme_stylebox_override("panel", UITheme.chip_style(color))
+	if on_click.is_valid():
+		panel.mouse_filter = Control.MOUSE_FILTER_STOP
+		panel.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		panel.tooltip_text = "Click to open"
+		panel.gui_input.connect(func(ev: InputEvent) -> void:
+			if ev is InputEventMouseButton and ev.pressed \
+					and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+				on_click.call()
+				_fade_and_remove(panel))
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", UITheme.SPACE_SM)
 	margin.add_theme_constant_override("margin_right", UITheme.SPACE_SM)
@@ -127,7 +174,9 @@ func _make_community_entry(kind: String, title: String, detail: String,
 	head.custom_minimum_size = Vector2(TOAST_WIDTH - 52.0, 0.0)
 	head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	head.add_theme_color_override("font_color", UITheme.C_TEXT)
+	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(head)
+	panel.set_meta("community_head", head)
 	if not detail.is_empty():
 		var sub := Label.new()
 		sub.text = detail
@@ -137,7 +186,9 @@ func _make_community_entry(kind: String, title: String, detail: String,
 		# NOT C_TEXT_S: the chip background is TINTED, and the muted grey
 		# disappears into it — the detail is the "why", which must survive.
 		sub.add_theme_color_override("font_color", Color(UITheme.C_TEXT, 0.78))
+		sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		col.add_child(sub)
+		panel.set_meta("community_sub", sub)
 	return panel
 
 
