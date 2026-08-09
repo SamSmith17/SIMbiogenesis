@@ -10324,11 +10324,32 @@ const _SITE_PROJECTS_SCRIPT := preload("res://scenes/ui/site_project_panel.gd")
 var _site_project_panel: Control = null
 const _WORK_PLANNER_SCRIPT := preload("res://scenes/ui/work_planner_panel.gd")
 var _work_planner_panel: Control = null
+const _FEED_STRIP_SCRIPT := preload("res://scenes/ui/settlement_feed_strip.gd")
+var _feed_strip: Control = null
+
+
+## The settlement log's first-person strip — a few quiet fading lines while
+## neither the graph (toasts) nor the settlement view (feed panel) is up.
+## Spawned once a population is actually running; it polls the log itself.
+func _ensure_feed_strip() -> void:
+	if _feed_strip != null and is_instance_valid(_feed_strip):
+		return
+	if _npc_population == null or not _npc_population.has_pop_driven():
+		return
+	var parent := get_parent()
+	if parent == null:
+		return
+	_feed_strip = _FEED_STRIP_SCRIPT.new()
+	_feed_strip.name = "SettlementFeedStrip"
+	parent.add_child(_feed_strip)
+	_feed_strip.call("bind", _npc_population, self)
 
 
 ## The Work Planner (Chores / Tasks / Schedule / Person). Same lazy pattern as
 ## the Routines panel; reachable from the work dock and the Routines panel.
-func open_work_planner(item_id: String = "") -> void:
+## A non-empty `agent_id` lands straight on that person's tab — the jump the
+## fairness line, the roster strip and the settlement card all share.
+func open_work_planner(item_id: String = "", agent_id: String = "") -> void:
 	if _npc_population == null:
 		_show_toast("No population running — planning needs a crew")
 		return
@@ -10339,7 +10360,10 @@ func open_work_planner(item_id: String = "") -> void:
 		if parent == null:
 			return
 		parent.add_child(_work_planner_panel)
-	_work_planner_panel.call("open", _npc_population, item_id)
+	if agent_id.is_empty():
+		_work_planner_panel.call("open", _npc_population, item_id)
+	else:
+		_work_planner_panel.call("open_person", _npc_population, item_id, agent_id)
 
 
 ## Site Projects panel (the camp-lifecycle mechanic's management surface).
@@ -10434,7 +10458,7 @@ func npc_population_host() -> Node3D:
 
 ## Which settlement-log kinds are story beats worth a toast.
 const _NPC_TOAST_KINDS: Array = ["departed", "lost", "collapse_warning",
-	"collapsed", "deserted"]
+	"collapsed", "deserted", "skill_earned"]
 
 
 ## Departures and collapse are story beats — surface them even with the graph
@@ -10594,6 +10618,7 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 	_npc_population.tick(model, _resource_flow, _get_scene_main_node())
 	PerfMonitor.end("npc_population")
 	_ensure_npc_host()
+	_ensure_feed_strip()
 	if _desire_3d_on:
 		_ensure_desire_overlay()
 	_drain_npc_events()

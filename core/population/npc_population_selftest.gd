@@ -4595,6 +4595,37 @@ func _test_skills() -> void:
 
 	sk.revoke("sam", NpcSkills.COOK)
 	_check("revoking works", not sk.has("sam", NpcSkills.COOK))
+
+	# On-the-job training through the ENGINE seam (_train_skill, called from
+	# the agent's credit site): supervised beside a qualified crewmate, solo
+	# otherwise, and the milestone signal fires exactly once.
+	var eng := NpcPopulationEngine.new()
+	eng.configure(2, "sk_train", Vector2.ZERO)
+	var a0 := (eng.agents[0] as NpcAgent).id
+	var a1 := (eng.agents[1] as NpcAgent).id
+	eng.skills.grant(a1, NpcSkills.ELECTRICAL)
+	var chore := {"requires_skill": NpcSkills.ELECTRICAL, "workers": [a0, a1]}
+	var fired: Array = []
+	eng.skill_earned.connect(func(aid: String, _who: String, tag: String) -> void:
+		fired.append([aid, tag]))
+	eng._train_skill(a0, chore, NpcSkills.TRAIN_HOURS)
+	_check("working beside a qualified crewmate earns the tag",
+		eng.skills.has(a0, NpcSkills.ELECTRICAL))
+	_check("and the milestone fires exactly once", fired.size() == 1, str(fired))
+	eng._train_skill(a0, chore, 5.0)
+	_check("a qualified person trains no further — no re-fire",
+		fired.size() == 1)
+	var eng2 := NpcPopulationEngine.new()
+	eng2.configure(1, "sk_solo", Vector2.ZERO)
+	var b0 := (eng2.agents[0] as NpcAgent).id
+	eng2._train_skill(b0, {"requires_skill": NpcSkills.COOK, "workers": [b0]}, 4.0)
+	_check("solo practice banks at the slower rate",
+		absf(eng2.skills.level(b0, NpcSkills.COOK)
+			- 4.0 * NpcSkills.SOLO_RATE / NpcSkills.TRAIN_HOURS) < 0.001,
+		"%.4f" % eng2.skills.level(b0, NpcSkills.COOK))
+	eng2._train_skill(b0, {"workers": [b0]}, 4.0)
+	_check("a chore with no skill requirement teaches nothing",
+		(eng2.skills.by_agent.get(b0, {}) as Dictionary).size() == 1)
 	_check("forget_missing drops departed people",
 		sk.forget_missing(["ava"]) >= 0 and sk.by_agent.has("ava"))
 	var rt := NpcSkills.deserialize(sk.serialize())

@@ -175,6 +175,9 @@ func _refresh() -> void:
 	var working := 0
 	var waiting := 0
 	var done := 0
+	var blocked: Dictionary = {}
+	var weather: Dictionary = _bridge.call("current_weather")
+	var roster := int(_bridge.call("roster_size_for", _first_iid()))
 	var sig := ""
 	for c in ordered:
 		var ch: Dictionary = c
@@ -186,10 +189,28 @@ func _refresh() -> void:
 			working += w
 		elif w > 0:
 			waiting += w
+		elif board.has_method("blocked_reason"):
+			# Idle AND unexplainable is fine; idle WITH a reason feeds the
+			# rollup below — the one-line answer to "why is nobody working".
+			var reason := str(board.call("blocked_reason", ch, abs_h,
+				fposmod(abs_h, 24.0), weather, roster))
+			if not reason.is_empty():
+				var cat := _reason_category(reason)
+				blocked[cat] = int(blocked.get(cat, 0)) + 1
 		sig += "%s|%d|%d|%d;" % [str(ch.get("id", "")), w,
 			int(ch.get("priority", 0)), int(ch.get("done_day", -1))]
-	_summary.text = "%d working · %d gathering · %d done today" % [
+	var line := "%d working · %d gathering · %d done today" % [
 		working, waiting, done]
+	if not blocked.is_empty():
+		var parts := PackedStringArray()
+		var total := 0
+		var cats: Array = blocked.keys()
+		cats.sort()
+		for cat in cats:
+			total += int(blocked[cat])
+			parts.append("%d %s" % [int(blocked[cat]), str(cat)])
+		line += "\n%d blocked — %s" % [total, " · ".join(parts)]
+	_summary.text = line
 	# Who is rostered today, straight off the duty rota. Part of the signature,
 	# or the gate would freeze this line at whatever it said on first build.
 	var today_text := ""
@@ -294,6 +315,30 @@ func _chore_row(board: Variant, chore: Dictionary, day: int) -> Control:
 	go.pressed.connect(func() -> void: _frame(chore))
 	row.add_child(go)
 	return row
+
+
+## Fold a blocked_reason sentence into a short rollup category. Order matters:
+## "needs a crew of 4" must not read as the skill case's "needs Electrical".
+static func _reason_category(reason: String) -> String:
+	if reason.begins_with("weather"):
+		return "weather"
+	if reason.begins_with("outside"):
+		return "outside hours"
+	if reason.begins_with("waiting on"):
+		return "waiting on a step"
+	if reason.begins_with("held for"):
+		return "held for someone"
+	if reason == "on hold":
+		return "on hold"
+	if reason.begins_with("tools down"):
+		return "tools down"
+	if reason.contains("crew of"):
+		return "short of crew"
+	if reason.begins_with("needs"):
+		return "needs a skill"
+	if reason.begins_with("gathering"):
+		return "gathering"
+	return "blocked"
 
 
 static func _band_name(v: int) -> String:

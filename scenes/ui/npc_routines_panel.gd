@@ -530,13 +530,27 @@ func _refresh_roster() -> void:
 		row.add_theme_constant_override("separation", 8)
 		_roster_box.add_child(row)
 
-		var name_lbl := Label.new()
-		name_lbl.text = agent.display_name
-		name_lbl.custom_minimum_size.x = 78
-		name_lbl.clip_text = true
-		name_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-		name_lbl.add_theme_color_override("font_color", C_TEXT)
-		row.add_child(name_lbl)
+		# The name clicks through to this person's Work Planner tab — the same
+		# jump the fairness line makes, so "who is this and what do they do"
+		# is one click from anywhere a name appears.
+		var name_btn := Button.new()
+		UITheme.style_button(name_btn)
+		name_btn.flat = true
+		name_btn.text = agent.display_name
+		name_btn.custom_minimum_size.x = 78
+		name_btn.clip_text = true
+		name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		name_btn.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		name_btn.add_theme_color_override("font_color", C_TEXT)
+		name_btn.tooltip_text = "Hours, skills and on-call — open in the Work Planner"
+		var aid := agent.id
+		name_btn.pressed.connect(func() -> void:
+			var sgv: Node = ServiceLocator.graph()
+			if sgv != null and sgv.has_method("open_work_planner"):
+				var iid := _item_id
+				close()
+				sgv.call("open_work_planner", iid, aid))
+		row.add_child(name_btn)
 
 		var rename_btn := Button.new()
 		UITheme.style_button(rename_btn)

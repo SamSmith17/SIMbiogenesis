@@ -145,6 +145,8 @@ func _ready() -> void:
 			_run_labour_capture.call_deferred()
 		elif _capture_mode == "npcpose":
 			_run_npc_pose_capture.call_deferred()
+		elif _capture_mode == "workui":
+			_run_workui_capture.call_deferred()
 		elif _capture_mode == "npc-anim":
 			_run_npc_anim_verify.call_deferred()
 		elif _capture_mode == "autobind":
@@ -342,6 +344,8 @@ func _launch_map() -> void:
 		_run_labour_capture()
 	elif _capture_mode == "npcpose":
 		_run_npc_pose_capture()
+	elif _capture_mode == "workui":
+		_run_workui_capture()
 	elif _capture_mode == "npc-anim":
 		_run_npc_anim_verify()
 	elif _capture_mode == "autobind":
@@ -401,6 +405,8 @@ func _launch_scene_direct() -> void:
 		_run_labour_capture()
 	elif _capture_mode == "npcpose":
 		_run_npc_pose_capture()
+	elif _capture_mode == "workui":
+		_run_workui_capture()
 	elif _capture_mode == "autobind":
 		_run_autobind_verify()
 	elif _capture_mode == "pondid":
@@ -4725,6 +4731,137 @@ func _spec_float(model: Variant, item_id: String, key: String) -> float:
 const TREE_PORTRAIT_SPECIES: Array = [
 	"deciduous", "birch", "maple", "beech", "chestnut", "aspen", "pine",
 ]
+
+
+## --capture=workui — PNG coverage for the work UI, which had none: the
+## Routines panel, the Site Projects panel and the Work Planner's four tabs,
+## each opened through its REAL entry point (open_npc_routines /
+## open_site_projects / open_work_planner) over a seeded habitat with enough
+## content that every list has rows: chores across the recurrence forms, a
+## duty on the rota, a granted skill, an on-call role. Read-only beyond the
+## seeded cap_wui_* items, which are removed afterwards.
+func _run_workui_capture() -> void:
+	var sgv := await _find_graph_view()
+	if sgv == null:
+		push_error("PlaytestHarness: workui — no graph view; aborting")
+		_maybe_quit()
+		return
+	var scene := get_tree().current_scene
+	var loader0: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader0 != null and not (loader0.get("load_completed") == true):
+		await loader0.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	_set_capture_conditions()
+	# _set_capture_conditions hides EVERY CanvasLayer (a world capture wants a
+	# clean frame) — but the panels under review live on UILayer, so it comes
+	# back. The modal dim covers the HUD behind it.
+	var scene2 := get_tree().current_scene
+	var ui_layer: Node = scene2.get_node_or_null("UILayer") if scene2 != null else null
+	if ui_layer is CanvasLayer:
+		(ui_layer as CanvasLayer).visible = true
+	var label := _shots_label if not _shots_label.is_empty() else "workui"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var model: Variant = sgv.get("model")
+	if model == null:
+		push_error("PlaytestHarness: workui — no graph model; aborting")
+		_maybe_quit()
+		return
+
+	model.add_item({
+		"id": "cap_wui_hab", "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 150.0,
+		"specs": {"name": "Planner Crew", "role": "habitat", "occupants": 8,
+			"pop_driven": true, "watts": 0.0, "energy_source": "",
+			"efficiency": 1.0, "inputs": [], "outputs": []},
+	})
+	await get_tree().create_timer(1.5).timeout
+	var bridge: Variant = sgv.get("_npc_population")
+	if bridge == null or bridge.call("chore_board_for", "cap_wui_hab") == null:
+		push_error("PlaytestHarness: workui — bridge/board never came up; aborting")
+		model.remove_item("cap_wui_hab")
+		_maybe_quit()
+		return
+
+	# Content, so every tab has something to show.
+	var board: Variant = bridge.call("chore_board_for", "cap_wui_hab")
+	board.call("add_chore", "Clean the bathrooms", 1.0, {
+		"repeat": "weekly", "repeat_dow": [2],
+		"window": {"start_h": 9.0, "end_h": 12.0}})
+	board.call("add_chore", "Commission the array", 2.0, {
+		"repeat": "every_n", "repeat_days": 3,
+		"requires_skill": NpcSkills.ELECTRICAL,
+		"window": {"start_h": 8.0, "end_h": 18.0}})
+	board.call("add_chore", "Raise the frame", 4.0, {
+		"repeat": "once", "min_workers": 4, "max_workers": 6,
+		"target": {"kind": "pos", "x": 25.0, "z": 10.0},
+		"window": {"start_h": 7.0, "end_h": 19.0}})
+	var ids: Array = []
+	for a in (bridge.call("roster_for", "cap_wui_hab") as Array):
+		ids.append((a as NpcAgent).id)
+	var skills: Variant = bridge.call("skills_for", "cap_wui_hab")
+	if skills != null and not ids.is_empty():
+		skills.call("grant", str(ids[0]), NpcSkills.ELECTRICAL)
+	var roster: Variant = bridge.call("duty_roster_for", "cap_wui_hab")
+	if roster != null:
+		roster.call("add_duty", "Cook lunch", 2.0, {"crew": 2, "repeat": "daily"})
+	var oncall: Variant = bridge.call("oncall_for", "cap_wui_hab")
+	if oncall != null and ids.size() >= 2:
+		oncall.call("add_role", "Water crew", [NpcOnCall.ESC_STARVED],
+			{"members": [str(ids[0]), str(ids[1])]})
+	bridge.call("persist_work_config", "cap_wui_hab")
+	# save_duties cleared the daily gate, so the next tick re-plans and mints
+	# today's slot — give it a moment so the Schedule grid has names.
+	await get_tree().create_timer(2.0).timeout
+
+	# --- the Routines panel, every tab -----------------------------------
+	sgv.call("open_npc_routines", "cap_wui_hab")
+	await get_tree().create_timer(0.8).timeout
+	var routines: Variant = sgv.get("_npc_routines_panel")
+	var rtabs: Variant = null
+	if routines != null:
+		var found: Array = routines.find_children("*", "TabContainer", true, false)
+		rtabs = found[0] if not found.is_empty() else null
+	await _shoot_ui(dir, "routines_chores")
+	if rtabs != null:
+		rtabs.set("current_tab", 1)
+		await get_tree().create_timer(0.4).timeout
+		await _shoot_ui(dir, "routines_animations")
+		rtabs.set("current_tab", 2)
+		await get_tree().create_timer(0.4).timeout
+		await _shoot_ui(dir, "routines_daily")
+	if routines != null:
+		routines.call("close")
+
+	# --- the Site Projects panel -----------------------------------------
+	sgv.call("open_site_projects")
+	await get_tree().create_timer(0.8).timeout
+	await _shoot_ui(dir, "site_projects")
+	var projects: Variant = sgv.get("_site_project_panel")
+	if projects != null:
+		projects.call("close")
+
+	# --- the Work Planner, all four surfaces ------------------------------
+	sgv.call("open_work_planner", "cap_wui_hab")
+	await get_tree().create_timer(0.8).timeout
+	var planner: Variant = sgv.get("_work_planner_panel")
+	var shot_names := ["planner_chores", "planner_tasks", "planner_schedule",
+		"planner_person"]
+	for t in 4:
+		if planner != null:
+			(planner.get("_tabs") as TabContainer).current_tab = t
+			planner.call("_refresh")
+		await get_tree().create_timer(0.5).timeout
+		await _shoot_ui(dir, shot_names[t])
+	var opened := planner != null and bool(planner.get("_active"))
+	if planner != null:
+		planner.call("close")
+
+	model.remove_item("cap_wui_hab")
+	print("PlaytestHarness: workui — %s (8 shots in %s)" % [
+		"PASS" if opened else "FAIL (planner never opened)",
+		ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
 
 
 # ==================== NPC POSE PORTRAIT (--capture=npcpose) ====================

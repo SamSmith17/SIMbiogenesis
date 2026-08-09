@@ -1327,6 +1327,12 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 			# The PERISH consequence, and only ever that — stated plainly.
 			settlement_log().add("lost", "%s did not make it — %s" % [who, reason],
 				_last_abs_h, SettlementLog.ALERT, iid))
+	engine.skill_earned.connect(
+		func(_aid: String, who: String, tag: String) -> void:
+			# Apprenticeship made visible: train() reports the crossing exactly
+			# once, so this cannot spam. NOTE severity — good news, not an alarm.
+			settlement_log().add("skill_earned", "%s is now qualified: %s" % [
+				who, NpcSkills.label(tag)], _last_abs_h, SettlementLog.NOTE, iid))
 	_engines[iid] = engine
 	_configured_count[iid] = count
 	return engine
@@ -1695,7 +1701,8 @@ func _maybe_persist(model, iid: String, engine: NpcPopulationEngine, abs_h: floa
 	# board state (inside the engine snapshot), and create/pause/cancel all
 	# clear _last_persist_h explicitly, so folding them into the blob only
 	# has to catch the sync-derived edits.
-	var blob := JSON.stringify(snap) + JSON.stringify(proj_blob)
+	var blob := JSON.stringify(snap) + JSON.stringify(proj_blob) \
+		+ JSON.stringify(engine.skills.serialize())
 	if str(_last_persist_blob.get(iid, "")) == blob:
 		return
 	_last_persist_blob[iid] = blob
@@ -1704,6 +1711,12 @@ func _maybe_persist(model, iid: String, engine: NpcPopulationEngine, abs_h: floa
 		return
 	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 	specs["pop_state"] = snap
+	# Training progress accrues on the job, and skills are CONFIG — without
+	# this ride-along a reload would silently lose every part-trained
+	# apprenticeship. Serialize snaps levels to 0.001, so the blob-compare
+	# gate above still holds when nothing actually moved.
+	if not engine.skills.by_agent.is_empty():
+		specs["pop_skills"] = engine.skills.serialize()
 	if not proj_blob.is_empty():
 		specs["site_projects"] = proj_blob
 	else:

@@ -29,9 +29,14 @@ const C_DIM := UITheme.C_TEXT_S
 
 const PRIORITIES: Array = [["High", 0], ["Normal", 50], ["Low", 100]]
 const DOW_SHORT: Array = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-## Period choices shared by the chore editor and the duty authoring row.
+## Period choices for the duty authoring row (a rota slot must FALL on days,
+## so on-demand is meaningless there).
 const PERIODS: Array = [["Daily", "daily"], ["Every N days", "every_n"],
 	["Weekly", "weekly"]]
+## The chore editor also speaks on-demand — without it, editing an on-demand
+## chore silently converted it to daily on Apply.
+const EDIT_PERIODS: Array = [["Daily", "daily"], ["Every N days", "every_n"],
+	["Weekly", "weekly"], ["On demand", "on_demand"]]
 
 var _bridge = null
 var _item_id := ""
@@ -78,6 +83,9 @@ var _nd_period: OptionButton = null
 var _nd_n: SpinBox = null
 var _nd_dow: Array = []
 var _nd_skill: OptionButton = null
+var _nd_where: Button = null
+## Ground point the next duty is pinned to, Vector2.INF for "wherever".
+var _nd_target := Vector2.INF
 var _oncall_box: VBoxContainer = null
 var _oncall_sig := "<unbuilt>"
 var _new_role_name: LineEdit = null
@@ -410,7 +418,7 @@ func _build_chores_tab() -> void:
 	row2.add_theme_constant_override("separation", 6)
 	_ed_box.add_child(row2)
 	_ed_period = OptionButton.new()
-	for p in PERIODS:
+	for p in EDIT_PERIODS:
 		_ed_period.add_item(str((p as Array)[0]))
 	_ed_period.item_selected.connect(func(_i: int) -> void: _sync_period_vis())
 	row2.add_child(_labelled("Repeats", _ed_period))
@@ -531,6 +539,15 @@ func _build_schedule_tab() -> void:
 	row2.add_child(_labelled("Weekdays", _dow_row(_nd_dow)))
 	_nd_skill = _skill_option()
 	row2.add_child(_labelled("Needs", _nd_skill))
+	# Without a place, duty work happens wherever the worker is standing —
+	# which reads as the rota doing nothing. Same one-shot pick the Routines
+	# panel's chore row uses, same view the work then happens in.
+	_nd_where = Button.new()
+	UITheme.style_button(_nd_where)
+	_nd_where.text = "Where…"
+	_nd_where.tooltip_text = "Pick the spot on the ground in the settlement view"
+	_nd_where.pressed.connect(_on_pick_duty_where)
+	row2.add_child(_labelled("Place", _nd_where))
 	var add := Button.new()
 	UITheme.style_button(add)
 	add.text = "Add duty"
@@ -600,7 +617,7 @@ func _refresh() -> void:
 
 func _sync_period_vis() -> void:
 	if _ed_period != null and not _ed_dow.is_empty():
-		var p := str((PERIODS[maxi(_ed_period.selected, 0)] as Array)[1])
+		var p := str((EDIT_PERIODS[maxi(_ed_period.selected, 0)] as Array)[1])
 		_ed_n.get_parent().visible = p == "every_n"
 		(_ed_dow[0] as Button).get_parent().get_parent().visible = p == "weekly"
 	if _nd_period != null and not _nd_dow.is_empty():
@@ -712,8 +729,8 @@ func _select_chore(cid: String) -> void:
 	_ed_max.value = float(int(rec.get("max_workers", 1)))
 	var period := _period_of(rec)
 	var pidx := 0
-	for i in PERIODS.size():
-		if str((PERIODS[i] as Array)[1]) == period:
+	for i in EDIT_PERIODS.size():
+		if str((EDIT_PERIODS[i] as Array)[1]) == period:
 			pidx = i
 	_ed_period.select(pidx)
 	_ed_n.value = float(maxi(int(rec.get("repeat_days", 1)), 2))
@@ -739,7 +756,7 @@ func _on_chore_apply() -> void:
 	var board := _board()
 	if board == null or _sel_chore.is_empty():
 		return
-	var period := str((PERIODS[maxi(_ed_period.selected, 0)] as Array)[1])
+	var period := str((EDIT_PERIODS[maxi(_ed_period.selected, 0)] as Array)[1])
 	var dow: Array = []
 	for i in 7:
 		if (_ed_dow[i] as Button).button_pressed:
@@ -1015,18 +1032,47 @@ func _on_add_duty() -> void:
 	for i in 7:
 		if (_nd_dow[i] as Button).button_pressed:
 			dow.append(i)
-	duty.add_duty(label, float(_nd_hours.value), {
+	var opts := {
 		"window": {"start_h": float(_nd_start.value), "end_h": float(_nd_end.value)},
 		"crew": int(_nd_crew.value),
 		"repeat": period,
 		"repeat_days": maxi(int(_nd_n.value), 1),
 		"repeat_dow": dow,
 		"requires_skill": str(_nd_skill.get_item_metadata(maxi(_nd_skill.selected, 0))),
-	})
+	}
+	if _nd_target != Vector2.INF:
+		opts["target"] = {"kind": "pos", "x": _nd_target.x, "z": _nd_target.y}
+	duty.add_duty(label, float(_nd_hours.value), opts)
 	_nd_label.text = ""
+	_nd_target = Vector2.INF
+	_nd_where.text = "Where…"
 	_persist()   # also re-plans from today, so the grid fills on the next tick
 	_sched_sig = "<unbuilt>"
 	_refresh()
+
+
+## Drop into the settlement view for a one-shot ground pick, then come back on
+## the Schedule tab. The new-duty fields are persistent controls, so a
+## half-filled row survives the round trip.
+func _on_pick_duty_where() -> void:
+	var main := get_tree().current_scene
+	if main == null or not main.has_method("open_settlement_view"):
+		_nd_where.text = "(no settlement view)"
+		return
+	var bridge = _bridge
+	var iid := _item_id
+	close()
+	var view: Variant = main.call("open_settlement_view")
+	if view == null or not view.has_method("pick_point_once"):
+		return
+	view.call("pick_point_once", func(p: Vector2) -> void:
+		if p != Vector2.INF:
+			_nd_target = p
+			_nd_where.text = "@ %d, %d" % [int(p.x), int(p.y)]
+		open(bridge, iid)
+		if _tabs != null:
+			_tabs.current_tab = 2
+		_refresh())
 
 
 func _on_regenerate() -> void:

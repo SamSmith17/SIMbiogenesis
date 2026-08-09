@@ -29,6 +29,10 @@ signal colony_deserted(cause: String)
 ## SEPARATE signal from agent_departed on purpose: challenge and bake code
 ## keys off departures, and a death must never be reported as a walk-out.
 signal agent_lost(agent_id: String, display_name: String, reason: String)
+## Apprenticeship milestone: fired exactly once, on the tick a tag is earned
+## (NpcSkills.train reports the crossing once). UI-note-only, same contract as
+## chore_completed — nothing gameplay-relevant may hang off it.
+signal skill_earned(agent_id: String, display_name: String, tag: String)
 
 ## Separation is skipped above this tick length — see _separate.
 const SEPARATION_MAX_DT_H := 0.1
@@ -456,6 +460,29 @@ func _bank_labour(agent_id: String, hours: float, category: String) -> void:
 	labour.bank(agent_id, NpcChoreBoard.day_index(_last_abs_h), hours, category)
 
 
+## On-the-job training: working a required-skill chore teaches its skill —
+## at full rate beside a qualified crewmate, at SOLO_RATE alone (which is what
+## keeps a settlement that lost its only specialist set back rather than
+## locked out). Called from the agent's credit site with the hours actually
+## applied, so waiting below quorum teaches nothing, same as it banks nothing.
+func _train_skill(agent_id: String, chore: Dictionary, hours: float) -> void:
+	var tag := str(chore.get("requires_skill", ""))
+	if tag.is_empty() or hours <= 0.0:
+		return
+	var supervised := false
+	for w in (chore.get("workers", []) as Array):
+		if str(w) != agent_id and skills.has(str(w), tag):
+			supervised = true
+			break
+	if skills.train(agent_id, tag, hours, supervised):
+		# Fires exactly once, on the crossing — the bridge logs and toasts it.
+		var who := agent_id
+		for a in agents:
+			if (a as NpcAgent).id == agent_id:
+				who = (a as NpcAgent).display_name
+		skill_earned.emit(agent_id, who, tag)
+
+
 func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 	# NOTE: this rebuilds the dict rather than mutating the caller's, so every
 	# key the agents need must be forwarded explicitly. Forgetting one fails
@@ -487,6 +514,9 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		# rebuilds the dict from scratch, and a key added anywhere else
 		# never arrives.
 		"bank_labour": _bank_labour,
+		# Same rule as bank_labour: it must be forwarded HERE or it never
+		# arrives (this function rebuilds the dict from scratch).
+		"train_skill": _train_skill,
 		# The agent asks this for its OWN tags when picking work. Passed as
 		# the object rather than a per-agent dict because ctx is shared
 		# across the whole roster.

@@ -22,6 +22,7 @@ var _card: PanelContainer = null
 var _card_title: Label = null
 var _card_body: Label = null
 var _card_follow: Button = null
+var _card_person: Button = null
 var _feed_box: VBoxContainer = null
 var _alarm_lbl: Label = null
 var _speed_lbl: Label = null
@@ -135,6 +136,26 @@ func _build() -> void:
 		if _view != null:
 			_view.set("_follow_id", str(_view.selection().get("agent_id", ""))))
 	cv.add_child(_card_follow)
+	# Inspection, not orders: the jump opens this person's ledger in the Work
+	# Planner (hours, skills, on-call). The planner is a graph-layer modal, so
+	# the view yields first — same discipline as the work dock's buttons.
+	_card_person = Button.new()
+	_card_person.text = "Hours & skills…"
+	_card_person.pressed.connect(func() -> void:
+		if _view == null:
+			return
+		var aid := str(_view.selection().get("agent_id", ""))
+		if aid.is_empty():
+			return
+		var main := get_tree().current_scene
+		if main == null:
+			return
+		var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+		if sgv == null or not sgv.has_method("open_work_planner"):
+			return
+		_view.close()
+		sgv.call("open_work_planner", "", aid))
+	cv.add_child(_card_person)
 
 
 func set_pick_hint(text: String) -> void:
@@ -160,6 +181,7 @@ func _on_selection(sel: Dictionary) -> void:
 				str(d.get("morale_label", "")),
 				"  · carrying a load" if bool(d.get("carrying", false)) else ""]
 			_card_follow.visible = true
+			_card_person.visible = true
 		"crew":
 			_card_title.text = "🔨 %s" % str(sel.get("label", "Work site"))
 			var w := int(sel.get("workers", 0))
@@ -167,14 +189,17 @@ func _on_selection(sel: Dictionary) -> void:
 			_card_body.text = ("%d of %d — gathering" % [w, mn]) if w < mn \
 				else "%d working · %d%%" % [w, int(round(float(sel.get("progress", 0.0)) * 100.0))]
 			_card_follow.visible = false
+			_card_person.visible = false
 		"space":
 			_card_title.text = SpaceTypes.label(str(sel.get("space_type", "")))
 			_card_body.text = "Tagged space"
 			_card_follow.visible = false
+			_card_person.visible = false
 		"prop":
 			_card_title.text = str(sel.get("prop_id", "Prop"))
 			_card_body.text = "Placed prop"
 			_card_follow.visible = false
+			_card_person.visible = false
 		_:
 			_card.visible = false
 

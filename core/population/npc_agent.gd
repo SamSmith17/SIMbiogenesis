@@ -481,6 +481,11 @@ func _step_chore(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 		var bank: Callable = ctx.get("bank_labour", Callable())
 		if bank.is_valid():
 			bank.call(id, applied, NpcWorkPose.family_for(board.find(chore_id)))
+		# On-the-job training rides the same applied-hours: a required-skill
+		# chore teaches its skill, fast beside somebody qualified, slowly alone.
+		var train: Callable = ctx.get("train_skill", Callable())
+		if train.is_valid():
+			train.call(id, board.find(chore_id), applied)
 	if board.remaining(chore_id) <= 0.0:
 		# Finished (by this credit, or a crewmate's).
 		_finish(ctx, true)
