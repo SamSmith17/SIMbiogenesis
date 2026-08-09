@@ -4814,6 +4814,22 @@ func _run_workui_capture() -> void:
 	# today's slot — give it a moment so the Schedule grid has names.
 	await get_tree().create_timer(2.0).timeout
 
+	# --- the community toast chips, one per severity ----------------------
+	# The styling is the review target: icon + headline + dim detail, tinted
+	# border, stacking. A real event fires these through the same calls.
+	var main2 := get_tree().current_scene
+	var toaster: Variant = main2.get("toast_ui") if main2 != null else null
+	if toaster != null and toaster.has_method("show_community"):
+		toaster.call("show_community", "skill_earned", "Devi qualified",
+			"Electrical", ToastUI.Level.OK, 30.0)
+		toaster.call("show_community", "departed", "Wren left",
+			"no water", ToastUI.Level.WARN, 30.0)
+		toaster.call("show_community", "collapsed", "Colony collapse",
+			"too few people remain to keep this place running",
+			ToastUI.Level.ERROR, 30.0)
+		await get_tree().create_timer(0.6).timeout
+		await _shoot_ui(dir, "community_toasts")
+
 	# --- the Routines panel, every tab -----------------------------------
 	sgv.call("open_npc_routines", "cap_wui_hab")
 	await get_tree().create_timer(0.8).timeout

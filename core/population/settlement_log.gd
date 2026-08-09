@@ -28,6 +28,28 @@ const INFO := 0
 const NOTE := 1
 const ALERT := 2
 
+## One glyph per event kind, shared by EVERY surface that renders log lines —
+## the toast chips, the first-person strip and the settlement feed — so the
+## visual language cannot drift between them. An unknown kind gets the neutral
+## dot; alarm keys (need_unmet|…, oncall|…) match by prefix.
+const KIND_ICONS: Dictionary = {
+	"departed": "👋", "lost": "🕯", "collapse_warning": "⚠",
+	"collapsed": "🏚", "deserted": "🏜", "skill_earned": "🎓",
+	"duty_sub": "🔁", "duty_cover": "🔁", "oncall_page": "📟",
+}
+
+static func icon_for(kind: String) -> String:
+	if KIND_ICONS.has(kind):
+		return str(KIND_ICONS[kind])
+	# The relief suffix wins over the alarm prefix — a cleared alarm's key is
+	# the alarm key PLUS "_ok", and it must read as good news.
+	if kind.ends_with("_ok"):
+		return "✓"
+	if kind.begins_with("need_unmet") or kind.begins_with("oncall|"):
+		return "⚠"
+	return "·"
+
+
 var entries: Array = []          # of {seq, abs_h, kind, severity, text, subject}
 var _seq := 0
 var _cursors: Dictionary = {}    # consumer name -> last seq handed out
@@ -40,13 +62,20 @@ static func create_empty() -> SettlementLog:
 	return SettlementLog.new()
 
 
+## `meta` is optional presentation structure (e.g. {"title": …, "detail": …})
+## for surfaces that render richer than one line — the toast chips split a
+## headline from its detail. The `text` stays the complete readable sentence,
+## so every plain-line consumer needs nothing new.
 func add(kind: String, text: String, abs_h: float, severity: int = INFO,
-		subject: String = "") -> void:
+		subject: String = "", meta: Dictionary = {}) -> void:
 	_seq += 1
-	entries.append({
+	var entry := {
 		"seq": _seq, "abs_h": abs_h, "kind": kind,
 		"severity": severity, "text": text, "subject": subject,
-	})
+	}
+	if not meta.is_empty():
+		entry["meta"] = meta.duplicate()
+	entries.append(entry)
 	if entries.size() > CAP:
 		entries = entries.slice(entries.size() - CAP)
 

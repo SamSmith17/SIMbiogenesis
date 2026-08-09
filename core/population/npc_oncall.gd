@@ -44,6 +44,16 @@ const CONDITION_LABELS: Dictionary = {
 	ESC_COLLAPSE_RISK: "People are starting to leave",
 }
 
+## Chip-sized forms of the same vocabulary — a toggle row of five full
+## sentences swallows the role row. The full sentence stays as the tooltip.
+const CONDITION_SHORT: Dictionary = {
+	FIX_MACHINE_STALLED: "Machine stalled",
+	FIX_MACHINE_PACKED: "Still crated",
+	ESC_NEED_UNMET: "Need unmet",
+	ESC_STARVED: "Supply out",
+	ESC_COLLAPSE_RISK: "Leaving",
+}
+
 ## How long a responder spends looking at something they cannot fix. Under
 ## `NpcWorkPose.GATE_HOURS`, so the classifier gives it the INSPECT pose for
 ## free — somebody standing and assessing, which is what is actually happening.

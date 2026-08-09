@@ -2306,6 +2306,26 @@ func _test_settlement_log() -> void:
 	_check("recent is newest-first",
 			int((lg.recent(1)[0] as Dictionary)["abs_h"]) == 31)
 
+	# One glyph per kind, shared by every surface: the narrative kinds must
+	# each have a DEDICATED icon (the neutral dot means "unmapped"), and the
+	# prefixed alarm keys resolve through the fallback rules.
+	for k in ["departed", "lost", "collapse_warning", "collapsed", "deserted",
+			"skill_earned"]:
+		_check("%s has a dedicated icon" % k, SettlementLog.icon_for(str(k)) != "·")
+	_check("alarm keys resolve by prefix",
+			SettlementLog.icon_for("need_unmet|h|thirst") == "⚠"
+			and SettlementLog.icon_for("oncall|h|starved") == "⚠")
+	_check("relief lines read as good news",
+			SettlementLog.icon_for("need_unmet|h|thirst_ok") == "✓")
+	# meta rides an entry untouched and absent means absent.
+	lg.add("departed", "Devi left — no water", 32.0, SettlementLog.ALERT, "h",
+			{"title": "Devi left", "detail": "no water"})
+	var last: Dictionary = lg.recent(1)[0]
+	_check("meta rides the entry",
+			str((last.get("meta", {}) as Dictionary).get("title", "")) == "Devi left")
+	_check("plain adds carry no meta",
+			not (lg.recent(2)[1] as Dictionary).has("meta"))
+
 	# Bounded: a week at speed must not grow the buffer without limit.
 	for i in SettlementLog.CAP * 2:
 		lg.add("spam", "tick %d" % i, float(i))

@@ -660,12 +660,15 @@ func _refresh_chores() -> void:
 		_chore_rows.add_child(row)
 		var done_today := int(ch.get("done_day", -1)) == day
 		var lbl := Label.new()
-		lbl.text = str(ch.get("label", "?"))
+		# The editor below binds to ONE chore; mark which, or "Edit → change →
+		# Apply" reads as editing whatever row the eye happens to be on.
+		var selected := cid == _sel_chore
+		lbl.text = ("▸ " if selected else "") + str(ch.get("label", "?"))
 		lbl.custom_minimum_size.x = 170
 		lbl.clip_text = true
 		lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		lbl.add_theme_color_override("font_color",
-			UITheme.C_OK if done_today else C_TEXT)
+			UITheme.C_AMBER if selected else (UITheme.C_OK if done_today else C_TEXT))
 		row.add_child(lbl)
 		row.add_child(_small(_repeat_text(ch)))
 		var skill := str(ch.get("requires_skill", ""))
@@ -693,8 +696,11 @@ func _refresh_chores() -> void:
 			row.add_child(pad)
 		var edit := Button.new()
 		UITheme.style_button(edit)
-		edit.text = "Edit"
-		edit.pressed.connect(func() -> void: _select_chore(cid))
+		edit.text = "Editing…" if selected else "Edit"
+		edit.pressed.connect(func() -> void:
+			_select_chore(cid)
+			_chore_sig = "<unbuilt>"   # re-render so the ▸ marker moves
+			_refresh())
 		row.add_child(edit)
 		var del := Button.new()
 		UITheme.style_button(del)
@@ -873,16 +879,21 @@ func _refresh_schedule() -> void:
 	var lab := _labour()
 	var ids := _roster_ids()
 
-	# The fairness line, always current (it is cheap and text-only).
+	# The fairness line, always current (it is cheap and text-only). With no
+	# hours banked yet, min and max are the same arbitrary name twice — say
+	# what is actually true instead.
 	if lab != null and not ids.is_empty():
 		var f := NpcLabourLog.fairness(lab, ids, day - 6, day)
-		_fair_lbl.text = \
-			"This week: [url=%s]%s[/url] %.1f h · [url=%s]%s[/url] %.1f h · mean %.1f h — %s" % [
-			str(f.get("max_id", "")), _name_for(str(f.get("max_id", ""))),
-			float(f.get("max_h", 0.0)),
-			str(f.get("min_id", "")), _name_for(str(f.get("min_id", ""))),
-			float(f.get("min_h", 0.0)), float(f.get("mean_h", 0.0)),
-			str(f.get("label", ""))]
+		if float(f.get("max_h", 0.0)) <= 0.01:
+			_fair_lbl.text = "No hours banked yet this week — the ledger fills as people work."
+		else:
+			_fair_lbl.text = \
+				"This week: [url=%s]%s[/url] %.1f h · [url=%s]%s[/url] %.1f h · mean %.1f h — %s" % [
+				str(f.get("max_id", "")), _name_for(str(f.get("max_id", ""))),
+				float(f.get("max_h", 0.0)),
+				str(f.get("min_id", "")), _name_for(str(f.get("min_id", ""))),
+				float(f.get("min_h", 0.0)), float(f.get("mean_h", 0.0)),
+				str(f.get("label", ""))]
 
 	var sig := "day:%d|sw:%s;" % [day, str(_swap_sel)]
 	for d in duty.duties:
@@ -911,10 +922,22 @@ func _refresh_schedule() -> void:
 	grid.add_theme_constant_override("v_separation", 4)
 	_sched_box.add_child(grid)
 	grid.add_child(_small("Duty", C_TEXT))
+	# Real calendar dates on the headers — "Sat 9" reads as a plan for THIS
+	# week, where a bare weekday reads as a template. Pure decompose off the
+	# scene clock; a scene without one (bare selftest tree) keeps weekdays.
+	var clock: Variant = null
+	var scene := get_tree().current_scene
+	if scene != null:
+		clock = scene.get("clock")
 	for offset in 7:
 		var d2 := day + offset
-		var head := _small("%s%s" % [DOW_SHORT[NpcChoreBoard.weekday_of_day(d2)],
-			" (today)" if offset == 0 else ""],
+		var head_text := str(DOW_SHORT[NpcChoreBoard.weekday_of_day(d2)])
+		if clock != null and clock.has_method("abs_hours_to_date"):
+			var date: Dictionary = clock.call("abs_hours_to_date", float(d2) * 24.0)
+			head_text += " %d" % int(date.get("day", 0))
+		if offset == 0:
+			head_text += " · today"
+		var head := _small(head_text,
 			UITheme.C_AMBER if offset == 0 else C_DIM)
 		grid.add_child(head)
 	for dd in duty.duties:
@@ -1125,7 +1148,8 @@ func _refresh_oncall() -> void:
 			UITheme.style_button(chip)
 			chip.toggle_mode = true
 			chip.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-			chip.text = str(NpcOnCall.CONDITION_LABELS.get(str(cond), str(cond)))
+			chip.text = str(NpcOnCall.CONDITION_SHORT.get(str(cond), str(cond)))
+			chip.tooltip_text = str(NpcOnCall.CONDITION_LABELS.get(str(cond), str(cond)))
 			chip.set_pressed_no_signal((role.get("conditions", []) as Array).has(str(cond)))
 			chip.toggled.connect(func(on: bool) -> void:
 				var oc2 := _oncall()

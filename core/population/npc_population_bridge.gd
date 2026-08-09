@@ -1303,36 +1303,50 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	# LOG (per-consumer cursors: the graph toast and the challenge bake's
 	# collapse watcher can no longer race), which also finally puts these story
 	# beats in the settlement feed — before this the feed missed every one.
+	# Texts are deliberately TIGHT — name first, one em-dash, the reason in the
+	# player's words. The meta {title, detail} split feeds the toast chips'
+	# two-line layout; the text alone stays a complete feed line.
 	engine.agent_departed.connect(
 		func(_aid: String, who: String, reason: String) -> void:
-			settlement_log().add("departed", "%s has left the community (%s)" % [
-				who, _need_text(reason)], _last_abs_h, SettlementLog.ALERT, iid))
+			var why := _need_text(reason)
+			settlement_log().add("departed", "%s left — %s" % [who, why],
+				_last_abs_h, SettlementLog.ALERT, iid,
+				{"title": "%s left" % who, "detail": why}))
 	engine.collapse_warning.connect(
 		func(_risk: float) -> void:
 			settlement_log().add("collapse_warning",
-				"The community is unravelling — people are talking about leaving",
-				_last_abs_h, SettlementLog.ALERT, iid))
+				"People are talking about leaving",
+				_last_abs_h, SettlementLog.ALERT, iid,
+				{"title": "The community is unravelling",
+					"detail": "people are talking about leaving"}))
 	engine.colony_collapsed.connect(
 		func() -> void:
 			settlement_log().add("collapsed",
-				"COLONY COLLAPSE — too few people remain to keep this place running",
-				_last_abs_h, SettlementLog.ALERT, iid))
+				"Colony collapse — too few people remain",
+				_last_abs_h, SettlementLog.ALERT, iid,
+				{"title": "Colony collapse",
+					"detail": "too few people remain to keep this place running"}))
 	engine.colony_deserted.connect(
 		func(cause: String) -> void:
+			var why2 := _need_text(cause)
 			settlement_log().add("deserted",
-				"EVERYONE HAS LEFT — %s. Fix it, then Reset population in the habitat inspector." % _need_text(cause),
-				_last_abs_h, SettlementLog.ALERT, iid))
+				"Everyone has left — %s" % why2,
+				_last_abs_h, SettlementLog.ALERT, iid,
+				{"title": "Everyone has left",
+					"detail": "%s · fix it, then Reset population" % why2}))
 	engine.agent_lost.connect(
 		func(_aid: String, who: String, reason: String) -> void:
 			# The PERISH consequence, and only ever that — stated plainly.
 			settlement_log().add("lost", "%s did not make it — %s" % [who, reason],
-				_last_abs_h, SettlementLog.ALERT, iid))
+				_last_abs_h, SettlementLog.ALERT, iid,
+				{"title": "%s did not make it" % who, "detail": reason}))
 	engine.skill_earned.connect(
 		func(_aid: String, who: String, tag: String) -> void:
 			# Apprenticeship made visible: train() reports the crossing exactly
 			# once, so this cannot spam. NOTE severity — good news, not an alarm.
-			settlement_log().add("skill_earned", "%s is now qualified: %s" % [
-				who, NpcSkills.label(tag)], _last_abs_h, SettlementLog.NOTE, iid))
+			settlement_log().add("skill_earned", "%s qualified: %s" % [
+				who, NpcSkills.label(tag)], _last_abs_h, SettlementLog.NOTE, iid,
+				{"title": "%s qualified" % who, "detail": NpcSkills.label(tag)}))
 	_engines[iid] = engine
 	_configured_count[iid] = count
 	return engine

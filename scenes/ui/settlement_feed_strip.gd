@@ -60,8 +60,11 @@ func _process(delta: float) -> void:
 	var now := Time.get_ticks_msec()
 	for e in (_bridge.call("log_since", "fp_strip") as Array):
 		var ed: Dictionary = e
+		# The shared per-kind glyph keeps the strip speaking the same visual
+		# language as the toast chips and the settlement feed.
 		_lines.append({
-			"text": str(ed.get("text", "")),
+			"text": "%s  %s" % [SettlementLog.icon_for(str(ed.get("kind", ""))),
+				str(ed.get("text", ""))],
 			"sev": int(ed.get("severity", 0)),
 			"at_ms": now,
 		})

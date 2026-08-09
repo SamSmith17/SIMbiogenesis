@@ -73,6 +73,74 @@ func _play_level_sfx(level: Level, allow_danger: bool = true) -> void:
 				sfx.call("play_ui", _UI_SFX.DANGER, 250)
 
 
+## Community status chip: an icon, a short headline, and an optional dim
+## detail line — "👋  Devi left / no water". Built for the settlement's story
+## beats (departures, collapse, qualifications), which used to render as one
+## long sentence in the graph view's private single-slot label and were
+## therefore invisible everywhere else. Same stack, same cap, same fades as
+## every other toast, so a burst of departures queues instead of overwriting.
+func show_community(kind: String, title: String, detail: String = "",
+		level: Level = Level.INFO, duration: float = 4.0) -> void:
+	if _stack == null:
+		return
+	_play_level_sfx(level)
+	if _entries.size() >= MAX_TOASTS:
+		_remove_entry(_entries[0])
+	var entry := _make_community_entry(kind, title, detail, level)
+	_stack.add_child(entry)
+	_entries.append(entry)
+	_pop_in(entry)
+	var timer := get_tree().create_timer(duration)
+	timer.timeout.connect(_fade_and_remove.bind(entry), CONNECT_ONE_SHOT)
+
+
+func _make_community_entry(kind: String, title: String, detail: String,
+		level: Level) -> PanelContainer:
+	var color := _level_color(level)
+	var panel := PanelContainer.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	panel.pivot_offset = Vector2(TOAST_WIDTH * 0.5, 18.0)
+	panel.scale = Vector2(0.94, 0.94)
+	panel.add_theme_stylebox_override("panel", UITheme.chip_style(color))
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", UITheme.SPACE_SM)
+	margin.add_theme_constant_override("margin_right", UITheme.SPACE_SM)
+	margin.add_theme_constant_override("margin_top", 4)
+	margin.add_theme_constant_override("margin_bottom", 4)
+	panel.add_child(margin)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	margin.add_child(row)
+	var icon := Label.new()
+	icon.text = SettlementLog.icon_for(kind)
+	icon.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(icon)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 0)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(col)
+	var head := Label.new()
+	head.text = title
+	head.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	head.custom_minimum_size = Vector2(TOAST_WIDTH - 52.0, 0.0)
+	head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	head.add_theme_color_override("font_color", UITheme.C_TEXT)
+	col.add_child(head)
+	if not detail.is_empty():
+		var sub := Label.new()
+		sub.text = detail
+		sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		sub.custom_minimum_size = Vector2(TOAST_WIDTH - 52.0, 0.0)
+		sub.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		# NOT C_TEXT_S: the chip background is TINTED, and the muted grey
+		# disappears into it — the detail is the "why", which must survive.
+		sub.add_theme_color_override("font_color", Color(UITheme.C_TEXT, 0.78))
+		col.add_child(sub)
+	return panel
+
+
 ## Compact +N UP chip when a fabricated part lands in inventory.
 func show_part_up(label: String, count: int = 1, duration: float = PART_UP_DURATION) -> void:
 	if _stack == null:

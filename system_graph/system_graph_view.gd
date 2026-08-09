@@ -10456,15 +10456,23 @@ func npc_population_host() -> Node3D:
 	return _npc_host
 
 
-## Which settlement-log kinds are story beats worth a toast.
-const _NPC_TOAST_KINDS: Array = ["departed", "lost", "collapse_warning",
-	"collapsed", "deserted", "skill_earned"]
+## Which settlement-log kinds are story beats worth a toast, and how loudly.
+const _NPC_TOAST_LEVELS: Dictionary = {
+	"departed": ToastUI.Level.WARN,
+	"lost": ToastUI.Level.ERROR,
+	"collapse_warning": ToastUI.Level.WARN,
+	"collapsed": ToastUI.Level.ERROR,
+	"deserted": ToastUI.Level.ERROR,
+	"skill_earned": ToastUI.Level.OK,
+}
 
 
-## Departures and collapse are story beats — surface them even with the graph
-## closed. Reads the settlement log through a NAMED CURSOR (log_since), so this
-## toast and the challenge bake's collapse watcher can no longer race each
-## other — the destructive take_events() drain is retired. While the
+## Departures and collapse are story beats — surface them in EVERY mode.
+## Reads the settlement log through a NAMED CURSOR (log_since), so this toast
+## and the challenge bake's collapse watcher can no longer race each other.
+## Chips render through the global ToastUI stack (icon + headline + dim
+## detail, severity-tinted) rather than the graph's private single-slot label,
+## which was only visible while the graph itself was open. While the
 ## settlement view is open its own feed already shows these lines, so the
 ## toast stays quiet there; the cursor still advances, so closing the view
 ## never replays a backlog of stale toasts.
@@ -10475,12 +10483,20 @@ func _drain_npc_events() -> void:
 	var main := _get_scene_main_node()
 	if main != null and main.has_method("settlement_view_open"):
 		quiet = bool(main.call("settlement_view_open"))
+	var toaster: ToastUI = main.get("toast_ui") if main != null else null
 	for e in _npc_population.log_since("graph_toast"):
 		var ev: Dictionary = e
-		if not _NPC_TOAST_KINDS.has(str(ev.get("kind", ""))):
+		var kind := str(ev.get("kind", ""))
+		if not _NPC_TOAST_LEVELS.has(kind) or quiet:
 			continue
-		if not quiet:
-			_show_toast(str(ev.get("text", "")))
+		var level: int = _NPC_TOAST_LEVELS[kind]
+		var meta: Dictionary = ev.get("meta", {})
+		if toaster != null:
+			toaster.show_community(kind,
+				str(meta.get("title", ev.get("text", ""))),
+				str(meta.get("detail", "")), level)
+		else:
+			_show_toast(str(ev.get("text", "")), 2.5, level)
 
 
 ## Spawn/despawn the 3D avatar host to match whether any population engine

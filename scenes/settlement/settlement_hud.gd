@@ -131,6 +131,7 @@ func _build() -> void:
 	_card_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	cv.add_child(_card_body)
 	_card_follow = Button.new()
+	UITheme.style_button(_card_follow)
 	_card_follow.text = "Follow (F)"
 	_card_follow.pressed.connect(func() -> void:
 		if _view != null:
@@ -140,6 +141,7 @@ func _build() -> void:
 	# Planner (hours, skills, on-call). The planner is a graph-layer modal, so
 	# the view yields first — same discipline as the work dock's buttons.
 	_card_person = Button.new()
+	UITheme.style_button(_card_person)
 	_card_person.text = "Hours & skills…"
 	_card_person.pressed.connect(func() -> void:
 		if _view == null:
@@ -238,7 +240,9 @@ func _refresh() -> void:
 	for e in entries:
 		var ed: Dictionary = e
 		var l := Label.new()
-		l.text = "%s  %s" % [_clock(float(ed.get("abs_h", 0.0))), str(ed.get("text", ""))]
+		l.text = "%s %s %s" % [_clock(float(ed.get("abs_h", 0.0))),
+			SettlementLog.icon_for(str(ed.get("kind", ""))),
+			str(ed.get("text", ""))]
 		l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		var sev := int(ed.get("severity", SettlementLog.INFO))
 		l.add_theme_color_override("font_color",
