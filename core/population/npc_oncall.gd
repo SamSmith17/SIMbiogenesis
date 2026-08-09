@@ -151,6 +151,78 @@ static func chore_key_for(condition: String, subject: String,
 	return "oncall|%s|%s|%s" % [condition, subject, role_id]
 
 
+## Withdraw system-minted chores whose condition has cleared, and retire the
+## stale keyed ones nothing will ever look up again. This is the UN-MINT half
+## every minter was missing — and the `mach|` leak was a real bug: a stalled
+## machine the player fixed by hand left a phantom job on the board forever,
+## because `prune_completed` deliberately skips anything with a `chore_key`.
+##
+## The one inviolable rule: NEVER remove a chore with progress or claimed
+## workers. A worker's FSM is in DOING holding that chore_id, and `_step_chore`
+## finding {} would thrash. Likewise never one with an unfired `effect` — the
+## bridge's post-tick sweep still needs it.
+##
+##   oncall| — live while its key is in `wanted` (the conditions active this
+##             tick). A cleared condition withdraws an untouched response;
+##             a DONE response is retired the next day.
+##   mach|   — live while `mach_live.(key)` says the machine is still waiting
+##             on that step. A done one whose effect fired is retired the next
+##             day (the machine moved on; a re-stall mints a fresh chore).
+##   duty|   — per-day instances. A done slot is retired after
+##             `keep_done_days` (so "✓ done" stays readable a while); a MISSED
+##             slot (its day has passed, nobody started it) is withdrawn —
+##             Wednesday's lunch cannot be cooked on Friday.
+##
+## Returns how many chores were removed.
+static func sweep_stale(board: NpcChoreBoard, wanted: Dictionary,
+		mach_live: Callable, abs_hours: float,
+		keep_done_days: int = NpcChoreBoard.KEEP_DONE_DAYS) -> int:
+	if board == null:
+		return 0
+	var today := NpcChoreBoard.day_index(abs_hours)
+	var gone := 0
+	for i in range(board.chores.size() - 1, -1, -1):
+		var c: Dictionary = board.chores[i]
+		var key := str(c.get("chore_key", ""))
+		if key.is_empty():
+			continue
+		var is_oncall := key.begins_with("oncall|")
+		var is_mach := key.begins_with("mach|")
+		var is_duty := key.begins_with("duty|")
+		if not (is_oncall or is_mach or is_duty):
+			continue
+		if float(c.get("progress_h", 0.0)) > 0.0 and int(c.get("done_day", -1)) < 0:
+			continue   # in flight — someone has real work in it
+		if not (c.get("workers", []) as Array).is_empty():
+			continue   # claimed — an FSM holds this id
+		if c.has("effect") and not bool(c.get("effect_done", false)) \
+				and int(c.get("done_day", -1)) >= 0:
+			continue   # completed but its world effect has not fired yet
+		var done := int(c.get("done_day", -1))
+		var remove := false
+		if is_oncall:
+			if done >= 0:
+				remove = done < today
+			else:
+				remove = not wanted.has(key)
+		elif is_mach:
+			var live := mach_live.is_valid() and bool(mach_live.call(key))
+			if done >= 0:
+				remove = done < today
+			else:
+				remove = not live
+		elif is_duty:
+			var slot_day := int(key.get_slice("|", 2))
+			if done >= 0:
+				remove = done <= today - maxi(keep_done_days, 0)
+			else:
+				remove = slot_day < today   # missed — its day has passed
+		if remove:
+			board.chores.remove_at(i)
+			gone += 1
+	return gone
+
+
 func serialize() -> Dictionary:
 	return {"version": VERSION, "roles": roles.duplicate(true)}
 

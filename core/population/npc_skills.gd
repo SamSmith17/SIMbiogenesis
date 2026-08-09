@@ -61,6 +61,10 @@ static func create_empty() -> NpcSkills:
 	return NpcSkills.new()
 
 
+static func label(tag: String) -> String:
+	return str(LABELS.get(tag, tag.capitalize()))
+
+
 func level(agent_id: String, tag: String) -> float:
 	return float((by_agent.get(agent_id, {}) as Dictionary).get(tag, 0.0))
 

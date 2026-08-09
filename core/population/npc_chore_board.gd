@@ -484,6 +484,63 @@ func available_for(agent_id: String, abs_hours: float, hour_of_day: float,
 	return out
 
 
+## One line explaining why a chore is not moving, or "" when nothing blocks it.
+##
+## Its absence is exactly what made the hygiene stall invisible for a whole
+## release: the sim always KNEW why nothing was happening, and no surface could
+## say it. This feeds the Routines panel, the Work Planner tabs and the work
+## dock tooltip — one implementation, so the surfaces cannot disagree.
+##
+## Returns "" for a chore that is done for its cycle (finished is not blocked)
+## and for one that is simply available with nobody on it yet (idle is not
+## blocked either). `name_of` resolves an agent id to a display name; without
+## it the raw id is shown, which is still honest.
+func blocked_reason(chore: Dictionary, abs_hours: float, hour_of_day: float,
+		weather: Dictionary = {}, roster_size: int = 0,
+		name_of: Callable = Callable()) -> String:
+	if bool(rules.get("tools_down", false)):
+		return "tools down — no work is offered"
+	if bool(chore.get("held", false)):
+		return "on hold"
+	_arm_cycle(chore, abs_hours)
+	if not _is_due(chore, abs_hours):
+		return ""   # completed this cycle — finished, not blocked
+	# Dependencies first: "waiting on X" explains more than any gate below.
+	for dep_id in chore.get("depends_on", []):
+		var dep := find(str(dep_id))
+		if not dep.is_empty() and _is_due(dep, abs_hours):
+			return "waiting on %s" % str(dep.get("label", "an earlier step"))
+	# The anti-invisibility rule made visible: when nobody on site holds the
+	# required skill the chore stays OFFERED to everyone, and this is where the
+	# board says so instead of the work just quietly going worse.
+	var need_skill := str(chore.get("requires_skill", ""))
+	if not need_skill.is_empty() and not skill_supply.is_empty() \
+			and not bool(skill_supply.get(need_skill, false)):
+		return "needs %s — nobody on site is qualified, so anyone may try" \
+			% NpcSkills.label(need_skill)
+	if roster_size > 0 and int(chore.get("min_workers", 1)) > roster_size:
+		return "needs a crew of %d — only %d people on site" % [
+			int(chore.get("min_workers", 1)), roster_size]
+	if not bool(rules.get("night_shift", false)) \
+			and not window_open(chore, hour_of_day):
+		var w: Dictionary = chore.get("window", {})
+		return "outside its hours (%02d–%02d)" % [
+			int(w.get("start_h", 0.0)), int(w.get("end_h", 24.0))]
+	if NpcWeatherGate.is_unsafe(weather, str(chore.get("exposure", "outdoor"))):
+		return "weather is too dangerous for %s work" \
+			% str(chore.get("exposure", "outdoor"))
+	var assigned := str(chore.get("assigned_to", ""))
+	if not assigned.is_empty() and not _assign_expired(chore, abs_hours) \
+			and (chore.get("workers", []) as Array).is_empty():
+		var who := str(name_of.call(assigned)) if name_of.is_valid() else assigned
+		return "held for %s" % who
+	var workers := (chore.get("workers", []) as Array).size()
+	var min_w := int(chore.get("min_workers", 1))
+	if workers > 0 and workers < min_w:
+		return "gathering a crew — %d of %d" % [workers, min_w]
+	return ""
+
+
 static func _is_gathering(chore: Dictionary) -> bool:
 	var min_w := int(chore.get("min_workers", 1))
 	if min_w <= 1:
@@ -525,6 +582,14 @@ func claim(chore_id: String, agent_id: String) -> bool:
 		return false
 	workers.append(agent_id)
 	rec["workers"] = workers
+	# A named slot whose person did not show: the hold lapsed and somebody else
+	# stepped in. Stamped ONCE, first coverer wins — the Schedule strikes the
+	# original name through, and the bridge logs the substitution as a NOTE
+	# (a covered shift is the system working, not an alarm).
+	var assigned := str(rec.get("assigned_to", ""))
+	if not assigned.is_empty() and assigned != agent_id \
+			and str(rec.get("covered_by", "")).is_empty():
+		rec["covered_by"] = agent_id
 	return true
 
 

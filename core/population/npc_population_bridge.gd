@@ -166,6 +166,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		_dispatch_chore_effects(engine, main)
 		_service_alarms(iid, engine, abs_h)
 		_service_machine_chores(iid, engine, model, main, abs_h)
+		_service_oncall(iid, engine, model, abs_h)
 		_service_duty_roster(iid, engine, abs_h)
 		var store := _ensure_project_store(iid, specs)
 		store.sync(engine.chore_board)
@@ -981,27 +982,55 @@ func labour_for(item_id: String) -> NpcLabourLog:
 
 ## Persist the duty TEMPLATES after an edit. Slots are simulation state and
 ## ride pop_state; only the templates are config.
+## ⚠ Through `update_item`, never by mutating the returned specs in place —
+## a direct mutation skips the model's dirty marking, so the edit would render
+## live and silently miss the next autosave.
 func save_duties(model, item_id: String) -> void:
-	var engine: NpcPopulationEngine = _engines.get(item_id)
-	if engine == null or model == null:
-		return
-	var item: Dictionary = model.get_item(item_id)
-	if item.is_empty():
-		return
-	(item.get("specs", {}) as Dictionary)["pop_duties"] = engine.duty.serialize_duties()
+	_save_config_key(model, item_id, "pop_duties",
+		func(engine: NpcPopulationEngine) -> Dictionary:
+			return engine.duty.serialize_duties())
 	# Re-plan from today, so an edit shows up now rather than when the horizon
 	# happens to roll past it.
 	_last_duty_day.erase(item_id)
 
 
 func save_skills(model, item_id: String) -> void:
+	_save_config_key(model, item_id, "pop_skills",
+		func(engine: NpcPopulationEngine) -> Dictionary:
+			return engine.skills.serialize())
+
+
+func oncall_for(item_id: String) -> NpcOnCall:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	return engine.oncall if engine != null else null
+
+
+func save_oncall(model, item_id: String) -> void:
+	_save_config_key(model, item_id, "pop_oncall",
+		func(engine: NpcPopulationEngine) -> Dictionary:
+			return engine.oncall.serialize())
+
+
+func _save_config_key(model, item_id: String, key: String, value_of: Callable) -> void:
 	var engine: NpcPopulationEngine = _engines.get(item_id)
 	if engine == null or model == null:
 		return
 	var item: Dictionary = model.get_item(item_id)
 	if item.is_empty():
 		return
-	(item.get("specs", {}) as Dictionary)["pop_skills"] = engine.skills.serialize()
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	specs[key] = value_of.call(engine)
+	model.update_item(item_id, {"specs": specs})
+
+
+## One call for the Work Planner: persist every piece of work CONFIG this
+## habitat carries (duty templates, skill tags, on-call roles) using the model
+## the bridge already holds. Slots/labour are simulation state and ride
+## pop_state on their own.
+func persist_work_config(item_id: String) -> void:
+	save_duties(_model, item_id)
+	save_skills(_model, item_id)
+	save_oncall(_model, item_id)
 
 
 func chore_board_for(item_id: String) -> NpcChoreBoard:
@@ -1272,6 +1301,7 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	# by configure(), so both reattach to the same slots.
 	engine.skills = NpcSkills.deserialize(specs.get("pop_skills", {}) as Dictionary)
 	engine.duty.load_duties(specs.get("pop_duties", {}) as Dictionary)
+	engine.oncall.load_from(specs.get("pop_oncall", {}) as Dictionary)
 	# Departures and collapse are narrative events — surface them to the UI.
 	engine.agent_departed.connect(
 		func(_aid: String, who: String, reason: String) -> void:
@@ -1412,6 +1442,155 @@ func _service_machine_chores(iid: String, engine: NpcPopulationEngine, model,
 		model.update_item(gid, {"specs": patch})
 
 
+## On-call roles (NpcOnCall): who answers when something breaks.
+##
+## FIXABLE conditions already have a real chore — _service_machine_chores mints
+## it — so on-call only NAMES the responder on it, as a short first refusal
+## (they get ONCALL_HOLD_H to show up; then anyone covers, which is the same
+## path a duty substitute takes). ESCALATE conditions have no finishable unit
+## of work behind them, so the response is a short inspect chore (the responder
+## walks over to look — visible, honest) plus a latched alarm that NAMES them.
+## The fix stays the player's, because the graph has no repair model.
+##
+## Also runs the un-mint sweep EVERY tick, roles or no roles — that is the fix
+## for the `mach|` leak, where a machine the player fixed by hand left a
+## phantom job on the board forever, and it retires yesterday's duty-slot
+## instances too.
+const ONCALL_HOLD_H := 0.5
+
+func _service_oncall(iid: String, engine: NpcPopulationEngine, model,
+		abs_h: float) -> void:
+	var board := engine.chore_board
+	if board == null or model == null:
+		return
+	var oc := engine.oncall
+	var lg := settlement_log()
+	var ids: Array = []
+	for a in engine.agents:
+		ids.append((a as NpcAgent).id)
+	var wanted: Dictionary = {}
+	if oc != null and not oc.roles.is_empty() and not ids.is_empty():
+		# --- fixable: put the responder's name on the machine chores ---------
+		for item in model.get_items_in_scope("root"):
+			var d: Dictionary = item
+			var specs: Dictionary = d.get("specs", {})
+			if not bool(specs.get("recipe_waiting_chore", false)):
+				continue
+			if str(specs.get("recipe_waiting_kind", "")) != "crew":
+				continue
+			var gid := str(d.get("id", ""))
+			var step_id := str(specs.get("recipe_waiting_step_id", ""))
+			var rec := board.find_by_key("mach|%s|%s" % [gid, step_id])
+			if rec.is_empty() or rec.has("oncall_named"):
+				continue
+			var cond := NpcOnCall.FIX_MACHINE_PACKED \
+				if bool(specs.get("packed_3d", false)) else NpcOnCall.FIX_MACHINE_STALLED
+			var role := oc.role_for(cond)
+			if role.is_empty():
+				continue
+			var who := oc.next_responder(role, ids, engine.labour, engine.skills)
+			if who.is_empty():
+				continue   # everybody in the role has left; the chore stays open
+			rec["assigned_to"] = who
+			rec["assign_at_h"] = abs_h
+			rec["assign_hold_h"] = ONCALL_HOLD_H
+			rec["oncall_named"] = who
+			lg.add("oncall_page", "%s is on call for %s — %s" % [
+				_agent_name(engine, who), str(role.get("label", "the role")),
+				str(rec.get("label", "a machine"))], abs_h, SettlementLog.NOTE, cond)
+		# --- escalations: mint the look, latch the alarm, name the name ------
+		var item_specs: Dictionary = \
+			((_model_item_cache.get(iid, {}) as Dictionary).get("specs", {}) as Dictionary)
+		var active: Dictionary = {}
+		var starved: Array = item_specs.get("starved_kinds", []) as Array
+		if not starved.is_empty():
+			active[NpcOnCall.ESC_STARVED] = "The %s supply has run out" % str(starved[0])
+		if engine.collapse_risk() >= NpcPopulationEngine.COLLAPSE_WARN_RISK:
+			active[NpcOnCall.ESC_COLLAPSE_RISK] = "People are starting to leave"
+		for cond2 in [NpcOnCall.ESC_STARVED, NpcOnCall.ESC_COLLAPSE_RISK]:
+			var role2 := oc.role_for(str(cond2))
+			if role2.is_empty():
+				continue
+			var alarm_key := "oncall|%s|%s" % [iid, str(cond2)]
+			if not active.has(cond2):
+				lg.clear_latch(alarm_key, "", abs_h, str(cond2))
+				continue
+			var key := NpcOnCall.chore_key_for(str(cond2), iid,
+				str(role2.get("role_id", "")))
+			wanted[key] = true
+			var who2 := oc.next_responder(role2, ids, engine.labour, engine.skills)
+			if who2.is_empty():
+				lg.latch(alarm_key, "%s — nobody in %s is left to answer" % [
+					str(active[cond2]), str(role2.get("label", "the role"))],
+					abs_h, SettlementLog.ALERT, str(cond2))
+				continue
+			lg.latch(alarm_key, "%s — %s is on call" % [
+				str(active[cond2]), _agent_name(engine, who2)],
+				abs_h, SettlementLog.ALERT, str(cond2))
+			if not board.find_by_key(key).is_empty():
+				continue
+			var opts := {
+				"repeat": "once", "priority": 5,
+				"exposure": NpcWeatherGate.EXPOSURE_OUTDOOR,
+				"min_workers": 1, "max_workers": 1,
+				"window": {"start_h": 0.0, "end_h": 24.0},
+				"assigned_to": who2, "chore_key": key,
+			}
+			var prop_id := str(item_specs.get("bound_prop_id", ""))
+			if not prop_id.is_empty():
+				opts["target"] = {"kind": "prop", "id": prop_id}
+			# LOOK_HOURS sits under NpcWorkPose.GATE_HOURS, so this classifies
+			# as INSPECT — the responder stands and assesses, which is what is
+			# actually happening.
+			var cid := board.add_chore("Check: %s" % str(active[cond2]).to_lower(),
+				NpcOnCall.LOOK_HOURS, opts)
+			if not cid.is_empty():
+				var rec2 := board.find(cid)
+				rec2["assign_at_h"] = abs_h
+				rec2["assign_hold_h"] = ONCALL_HOLD_H
+	# --- the un-mint sweep, unconditionally ---------------------------------
+	NpcOnCall.sweep_stale(board, wanted,
+		func(key: String) -> bool: return _machine_key_live(model, key), abs_h)
+	# Covered duty slots: log the substitution once. NOTE, not ALERT — a
+	# covered shift is the system working.
+	for c in board.chores:
+		var ch: Dictionary = c
+		if not str(ch.get("chore_key", "")).begins_with("duty|"):
+			continue
+		var cover := str(ch.get("covered_by", ""))
+		if cover.is_empty() or bool(ch.get("covered_logged", false)):
+			continue
+		ch["covered_logged"] = true
+		lg.add("duty_cover", "%s stepped in on %s (%s did not show)" % [
+			_agent_name(engine, cover), str(ch.get("label", "a duty")),
+			_agent_name(engine, str(ch.get("assigned_to", "")))],
+			abs_h, SettlementLog.NOTE, str(ch.get("chore_key", "")))
+
+
+## Is the machine this `mach|<gid>|<step>` chore was minted for still waiting
+## on that step with crew hands? Feeds the un-mint sweep.
+func _machine_key_live(model, key: String) -> bool:
+	if model == null:
+		return false
+	var gid := key.get_slice("|", 1)
+	var step := key.get_slice("|", 2)
+	var item: Dictionary = model.get_item(gid)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = item.get("specs", {})
+	return bool(specs.get("recipe_waiting_chore", false)) \
+		and str(specs.get("recipe_waiting_kind", "")) == "crew" \
+		and str(specs.get("recipe_waiting_step_id", "")) == step
+
+
+func _agent_name(engine: NpcPopulationEngine, agent_id: String) -> String:
+	for a in engine.agents:
+		var ag: NpcAgent = a
+		if ag.id == agent_id:
+			return ag.display_name
+	return agent_id if not agent_id.is_empty() else "somebody"
+
+
 ## The settlement's persistent feed. Survives fast-forward, unlike a toast.
 func settlement_log() -> SettlementLog:
 	if _log == null:
@@ -1446,8 +1625,23 @@ func _service_alarms(iid: String, engine: NpcPopulationEngine, abs_h: float) -> 
 		var key := "need_unmet|%s|%s" % [iid, str(need)]
 		if worst >= ALARM_H:
 			var space := SpaceTypes.label(str(NpcAgent.space_of(str(need))))
-			lg.latch(key, "Nobody can reach a %s — work is backing up" % space,
-				abs_h, SettlementLog.ALERT, str(need))
+			var line := "Nobody can reach a %s — work is backing up" % space
+			# `who` (worst affected) used to be computed and thrown away; naming
+			# the RESPONDER is where it finally goes. The alarm stays up either
+			# way — the fix (tag a space, fix the supply) is the player's.
+			var role: Dictionary = engine.oncall.role_for(NpcOnCall.ESC_NEED_UNMET) \
+				if engine.oncall != null else {}
+			if not role.is_empty():
+				var ids: Array = []
+				for a2 in engine.agents:
+					ids.append((a2 as NpcAgent).id)
+				var resp := engine.oncall.next_responder(role, ids,
+					engine.labour, engine.skills)
+				if not resp.is_empty():
+					line += " — %s is on call" % _agent_name(engine, resp)
+			if not who.is_empty():
+				line += " (%s has waited longest)" % who
+			lg.latch(key, line, abs_h, SettlementLog.ALERT, str(need))
 		elif worst <= 0.0:
 			lg.clear_latch(key, "", abs_h, str(need))
 

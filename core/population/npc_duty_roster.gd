@@ -251,10 +251,15 @@ func mint_day(board: NpcChoreBoard, day: int, abs_hours: float,
 		# name owns the assignment (the board's assigned_to is a single id);
 		# the rest reach it through the crew cap once the hold lapses, which is
 		# the same path a substitute takes.
+		# ⚠ "once", NEVER "daily": each slot is one day's instance and tomorrow
+		# gets its own mint under its own key. A repeating mint re-arms the next
+		# day ALONGSIDE the fresh one — measured as one extra duplicate of every
+		# duty per day, compounding. Yesterday's done/missed instances are
+		# retired by NpcOnCall.sweep_stale.
 		var new_id := board.add_chore(str(duty.get("label", "Duty")),
 			float(duty.get("chore_hours", 1.0)), {
 				"window": duty.get("window", {"start_h": 11.0, "end_h": 14.0}),
-				"repeat": "daily",
+				"repeat": "once",
 				"exposure": str(duty.get("exposure", NpcWeatherGate.EXPOSURE_SHELTERED)),
 				"priority": int(duty.get("priority", 10)),
 				"min_workers": 1,

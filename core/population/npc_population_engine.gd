@@ -62,6 +62,10 @@ var skills := NpcSkills.create_empty()
 ## The duty rota. `duties` are config (specs.pop_duties); `slots` are
 ## simulation state and ride the snapshot below.
 var duty := NpcDutyRoster.create_empty()
+## Who answers when something breaks. CONFIG (specs.pop_oncall), read by the
+## bridge's _service_oncall — the engine itself never consults it, so keeping
+## it here is purely so config survives a roster reset beside skills/duties.
+var oncall := NpcOnCall.create_empty()
 ## The daily schedule everyone follows (per-agent phase offsets vary it).
 ## Editable by the player; defaults to NpcRoutine.default_day().
 var routine: NpcRoutine = null

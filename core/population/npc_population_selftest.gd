@@ -94,6 +94,7 @@ func _init() -> void:
 	_test_fairness_rotation()
 	_test_assignment_hazards()
 	_test_skills()
+	_test_blocked_reason()
 	_test_oncall()
 	_test_duty_roster()
 	_test_work_pose_classifier()
@@ -4393,6 +4394,158 @@ func _test_oncall() -> void:
 	_check("removing a role works", rt.remove_role(rid2)
 		and rt.role_for(NpcOnCall.FIX_MACHINE_STALLED).is_empty())
 
+	# --- the un-mint sweep ---------------------------------------------------
+	# Withdraws with zero progress, keeps with progress or a claimed worker,
+	# and fixes the mach| leak (prune_completed skips keyed chores by design,
+	# so nothing else ever retires them).
+	var b := NpcChoreBoard.create_empty()
+	var t0 := 700.0 * 24.0 + 6.0
+	var w24 := {"start_h": 0.0, "end_h": 24.0}
+	var stale_id := b.add_chore("Check: water", 0.05, {"repeat": "once",
+		"window": w24, "chore_key": "oncall|starved|g1|role_1"})
+	var live_id := b.add_chore("Check: leavers", 0.05, {"repeat": "once",
+		"window": w24, "chore_key": "oncall|collapse_risk|g1|role_1"})
+	var busy_id := b.add_chore("Check: busy", 0.05, {"repeat": "once",
+		"window": w24, "chore_key": "oncall|starved|g2|role_1"})
+	b.find(busy_id)["progress_h"] = 0.02
+	var claimed_id := b.add_chore("Check: claimed", 0.05, {"repeat": "once",
+		"window": w24, "chore_key": "oncall|starved|g3|role_1"})
+	b.claim(claimed_id, "a1")
+	var mach_dead := b.add_chore("Tend the mill", 0.5, {"repeat": "once",
+		"window": w24, "chore_key": "mach|g9|s1",
+		"effect": {"op": "recipe_step_done", "item_id": "g9", "step_id": "s1"}})
+	var mach_alive := b.add_chore("Tend the press", 0.5, {"repeat": "once",
+		"window": w24, "chore_key": "mach|g8|s1",
+		"effect": {"op": "recipe_step_done", "item_id": "g8", "step_id": "s1"}})
+	var wanted := {"oncall|collapse_risk|g1|role_1": true,
+		"oncall|starved|g2|role_1": true, "oncall|starved|g3|role_1": true}
+	var live_fn := func(key: String) -> bool: return key == "mach|g8|s1"
+	var gone := NpcOnCall.sweep_stale(b, wanted, live_fn, t0)
+	_check("a cleared condition withdraws its untouched response",
+		b.find(stale_id).is_empty())
+	_check("a still-active response stays", not b.find(live_id).is_empty())
+	_check("progress protects a response from the sweep",
+		not b.find(busy_id).is_empty())
+	_check("a claimed response is never yanked from under its worker",
+		not b.find(claimed_id).is_empty())
+	_check("the mach leak: a hand-fixed machine's phantom job is withdrawn",
+		b.find(mach_dead).is_empty())
+	_check("while a machine still waiting keeps its job",
+		not b.find(mach_alive).is_empty())
+	_check("the sweep reports its removals", gone == 2, str(gone))
+
+	# Completed responses keep their record for the rest of the day, then go.
+	var done_look := b.add_chore("Check: done", 0.05, {"repeat": "once",
+		"window": w24, "chore_key": "oncall|starved|g4|role_1"})
+	b.claim(done_look, "a1")
+	b.credit(done_look, 1.0, t0)
+	NpcOnCall.sweep_stale(b, {}, live_fn, t0)
+	_check("a completed response keeps its record for the day",
+		not b.find(done_look).is_empty())
+	NpcOnCall.sweep_stale(b, {}, live_fn, t0 + 24.0)
+	_check("and is retired the next day", b.find(done_look).is_empty())
+
+	# Duty instances: a missed slot is withdrawn (its day has passed); a done
+	# one keeps its record through the grace window, then goes.
+	var day := NpcChoreBoard.day_index(t0)
+	var missed := b.add_chore("Lunch", 2.0, {"repeat": "once", "window": w24,
+		"chore_key": "duty|duty_1|%d" % (day - 1)})
+	var done_duty := b.add_chore("Dinner", 2.0, {"repeat": "once", "window": w24,
+		"chore_key": "duty|duty_2|%d" % (day - 1)})
+	b.claim(done_duty, "a1")
+	b.credit(done_duty, 3.0, t0 - 24.0)
+	NpcOnCall.sweep_stale(b, {}, live_fn, t0)
+	_check("a missed duty slot is withdrawn — its day has passed",
+		b.find(missed).is_empty())
+	_check("a done duty slot keeps its record through the grace window",
+		not b.find(done_duty).is_empty())
+	NpcOnCall.sweep_stale(b, {}, live_fn,
+		t0 + 24.0 * float(NpcChoreBoard.KEEP_DONE_DAYS + 1))
+	_check("and is retired after it", b.find(done_duty).is_empty())
+
+
+## blocked_reason — the one line that says why a chore is not moving. Its
+## absence is exactly what made the hygiene stall invisible for a release, so
+## every gate available_for applies must have a sentence here.
+func _test_blocked_reason() -> void:
+	var b := NpcChoreBoard.create_empty()
+	var w := {"start_h": 8.0, "end_h": 18.0}
+	var t := 700.0 * 24.0 + 9.0
+	var cid := b.add_chore("Fix the pump", 2.0, {"repeat": "daily", "window": w})
+	var c := b.find(cid)
+	_check("an available chore reports nothing",
+		b.blocked_reason(c, t, 9.0).is_empty())
+	_check("outside its window it says so",
+		b.blocked_reason(c, t, 5.0).contains("hours"))
+	b.rules["night_shift"] = true
+	_check("night shift opens the window",
+		b.blocked_reason(c, t, 5.0).is_empty())
+	b.rules.erase("night_shift")
+	b.rules["tools_down"] = true
+	_check("tools down names itself",
+		b.blocked_reason(c, t, 9.0).contains("tools down"))
+	b.rules.erase("tools_down")
+	c["held"] = true
+	_check("a held chore reads on hold",
+		b.blocked_reason(c, t, 9.0) == "on hold")
+	c.erase("held")
+
+	# Skills: an empty supply keeps every requirement inert; an unsupplied one
+	# is NAMED, together with the anti-invisibility rule ("anyone may try").
+	c["requires_skill"] = NpcSkills.ELECTRICAL
+	_check("no skill config keeps the requirement silent",
+		b.blocked_reason(c, t, 9.0).is_empty())
+	b.skill_supply = {NpcSkills.COOK: true}
+	var reason := b.blocked_reason(c, t, 9.0)
+	_check("an unsupplied skill is named, with the honest rule",
+		reason.contains("Electrical") and reason.contains("anyone"), reason)
+	b.skill_supply = {NpcSkills.ELECTRICAL: true}
+	_check("a supplied skill is silent",
+		b.blocked_reason(c, t, 9.0).is_empty())
+	b.skill_supply = {}
+	c.erase("requires_skill")
+
+	c["min_workers"] = 6
+	_check("a quorum beyond the roster says so",
+		b.blocked_reason(c, t, 9.0, {}, 4).contains("crew of 6"))
+	c["max_workers"] = 6
+	b.claim(cid, "a1")
+	_check("a gathering crew reports its count",
+		b.blocked_reason(c, t, 9.0, {}, 8).contains("1 of 6"))
+	(c["workers"] as Array).clear()
+	c["min_workers"] = 1
+	c["max_workers"] = 1
+
+	var dep := b.add_chore("Cut beams", 1.0, {"repeat": "once", "window": w})
+	c["depends_on"] = [dep]
+	_check("a dependency names the step it waits on",
+		b.blocked_reason(c, t, 9.0).contains("Cut beams"))
+	b.claim(dep, "a1")
+	b.credit(dep, 2.0, t)
+	_check("and clears when the step completes",
+		b.blocked_reason(c, t, 9.0).is_empty())
+	c["depends_on"] = []
+
+	c["assigned_to"] = "a9"
+	var named := b.blocked_reason(c, t, 9.0, {}, 0,
+		func(aid: String) -> String: return "Sam" if aid == "a9" else aid)
+	_check("a personal hold names its person", named.contains("Sam"), named)
+	c["assigned_to"] = ""
+
+	var storm := {"temp_c": 20.0, "wind_ms": 30.0, "rain_mmh": 0.0}
+	_check("dangerous weather is named for outdoor work",
+		b.blocked_reason(c, t, 9.0, storm).contains("weather"))
+	c["exposure"] = NpcWeatherGate.EXPOSURE_INDOOR
+	_check("and indoor work shrugs it off",
+		b.blocked_reason(c, t, 9.0, storm).is_empty())
+	c["exposure"] = NpcWeatherGate.EXPOSURE_OUTDOOR
+
+	# Done for the cycle: finished is NOT blocked.
+	b.claim(cid, "a1")
+	b.credit(cid, 3.0, t)
+	_check("a completed cycle reports nothing",
+		b.blocked_reason(c, t, 14.0).is_empty())
+
 
 ## Skills, and the anti-invisibility rule that keeps them from hiding work.
 func _test_skills() -> void:
@@ -4579,6 +4732,24 @@ func _test_duty_roster() -> void:
 				only_qualified = false
 	_check("a skilled duty only rosters qualified people", only_qualified)
 
+	# One slot is ONE day's instance — minted "once", never "daily". Minted
+	# repeating, yesterday's chore re-armed the next morning ALONGSIDE the
+	# fresh mint under the new day's key: one extra duplicate of every duty
+	# per day, compounding. FAILS on the pre-fix code.
+	var lunch_rec := b.find(str(made[0]))
+	_check("a duty instance never repeats on its own",
+		NpcChoreBoard.normalize_repeat(lunch_rec.get("repeat", "")) == "once",
+		str(lunch_rec.get("repeat", "")))
+	var assignee := str(lunch_rec.get("assigned_to", ""))
+	b.claim(str(made[0]), assignee)
+	b.credit(str(made[0]), 5.0, float(day0) * 24.0 + 12.0)
+	var offered_again := false
+	for ch in b.available_for(assignee, float(day0 + 1) * 24.0 + 12.0, 12.0, {}, 4):
+		if str((ch as Dictionary).get("id", "")) == str(made[0]):
+			offered_again = true
+	_check("a completed duty instance is not offered again the next day",
+		not offered_again)
+
 	# Weekly duties land on their weekday and nowhere else.
 	var r6 := NpcDutyRoster.create_empty()
 	r6.add_duty("Clean the bathrooms", 1.0,
@@ -4645,6 +4816,16 @@ func _test_assignment_hazards() -> void:
 		b3.available_for("sam", 101.0, 9.0, {}, 4).size() == 1)
 	_check("past the hold anyone may cover",
 		b3.available_for("ava", 103.0, 9.0, {}, 4).size() == 1)
+	# The cover is RECORDED — the Schedule tab's strikethrough and the log's
+	# "Ava stepped in" line both read this stamp.
+	b3.claim(slot, "ava")
+	_check("a non-assignee claim stamps covered_by",
+		str(b3.find(slot).get("covered_by", "")) == "ava")
+	var own := b3.add_chore("Sam's own", 1.0, {"window": w, "repeat": "daily",
+		"assigned_to": "sam"})
+	b3.claim(own, "sam")
+	_check("the named person claiming stamps nothing",
+		str(b3.find(own).get("covered_by", "")).is_empty())
 	# And without a hold the OLD permanent behaviour is byte-identical, which
 	# is what keeps every hand-authored chore and v1 record unaffected.
 	_check("no hold means no expiry",
