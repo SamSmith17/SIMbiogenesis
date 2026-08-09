@@ -419,8 +419,13 @@ func _step_doing(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 				_finish(ctx, false)
 				return {}
 	if activity == "sleep":
-		var wake := _hour(ctx) >= _wake_hour() and _hour(ctx) < SLEEP_START_H
-		if wake or float(needs.get("sleep", 0.0)) <= 0.02:
+		# The wake test is the ONLY terminator: one begun night can only end
+		# at wake. Ending on the need bottoming out (`<= 0.02`) released the
+		# bed, re-rolled the need UP in _satisfy, and the routine tier
+		# re-issued sleep with no cooldown — 6-12 lie-down/get-up cycles per
+		# agent per night. _decay clamps needs at 0, so a bottomed-out need is
+		# safe to sleep through.
+		if _hour(ctx) >= _wake_hour() and _hour(ctx) < SLEEP_START_H:
 			_satisfy("sleep")
 			_finish(ctx, true)
 		return {}
@@ -569,6 +574,13 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 			if left > 0.0:
 				activity_ends_h = minf(activity_ends_h, abs_hours + left)
 	if activity == "sleep":
+		# One night = one session: the wake hour is this session's absolute
+		# end. Presentation-only (the wake test in _step_doing is the real
+		# terminator) but the pose machine's dwell budget reads it — a stale
+		# value left over from the previous activity made the lie-down snap.
+		# Cross-midnight-safe via fposmod; deliberately NOT clamped to
+		# hours_left_in_block (a night is one session, not a routine visit).
+		activity_ends_h = abs_hours + fposmod(_wake_hour() - _hour(ctx), 24.0)
 		return {}
 	var consumes: Dictionary = _consumes_for(activity)
 	var starved: Dictionary = ctx.get("starved", {})
@@ -736,6 +748,13 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 	if routine != null:
 		var kind := str(routine.block_at(_hour(ctx), routine_offset_h).get("kind", NpcRoutine.FREE))
 		var scheduled := NpcRoutine.activity_for(kind)
+		# Mirror _pick's slept-enough guard: the SLEEP block runs to ~08:00
+		# while people wake 6.0-7.5, and re-issuing sleep with the need near 0
+		# walked the whole camp back to bed every tick. Fall through — NOT an
+		# absorbing return — so between wake and 08:00 people drink, eat and
+		# idle near the beds: the camp wakes gradually.
+		if scheduled == "sleep" and float(needs.get("sleep", 0.0)) < 0.25:
+			scheduled = ""
 		if not scheduled.is_empty() and abs_hours >= float(retry_at.get(scheduled, 0.0)):
 			routine_kind = kind
 			_begin_need(scheduled, abs_hours, ctx)
@@ -1022,6 +1041,7 @@ func _finish(ctx: Dictionary, _completed: bool) -> void:
 	# what lets the space-pair route cache hit.
 	at_space_id = target_space_id
 	activity = ""
+	activity_ends_h = 0.0
 	target_space_id = ""
 	target_space_type = ""
 	last_exposure = NpcWeatherGate.EXPOSURE_INDOOR

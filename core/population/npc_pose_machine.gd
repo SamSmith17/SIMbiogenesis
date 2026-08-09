@@ -214,10 +214,18 @@ func step(dt: float, inp: Dictionary) -> void:
 
 	# Something started moving mid-transition. Nothing a transition expresses
 	# survives the body relocating, so drop it immediately.
-	if in_transit and (_state == State.ENTER or _state == State.POSE
-			or _state == State.IDLE or _state == State.WALK_STOP):
-		if _state != State.ENTER or _state_age >= MIN_STATE_S:
+	if in_transit and (_state == State.IDLE or _state == State.WALK_STOP):
+		_begin_walk(activity)
+		return
+	if in_transit and (_state == State.ENTER or _state == State.POSE):
+		if _state_age >= MIN_STATE_S:
 			_begin_walk(activity)
+			return
+		if _state == State.POSE:
+			# Settled less than MIN_STATE_S ago — hold one beat rather than
+			# snapping straight back into a stride. Must RETURN: falling
+			# through reaches the steady-state match whose POSE arm calls
+			# _begin_walk anyway, which un-does the gate.
 			return
 
 	# The destination changed while settling in. Re-derive from scratch.

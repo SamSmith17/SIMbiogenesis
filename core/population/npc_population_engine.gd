@@ -645,6 +645,7 @@ func _catch_up(abs_hours: float, dt: float, ctx: Dictionary) -> void:
 			registry.release_all_for_agent(a.id)
 		a.state = NpcAgent.State.IDLE
 		a.activity = ""
+		a.activity_ends_h = 0.0
 		a.target_space_id = ""
 		a.retry_at = {}
 		a._clear_path()

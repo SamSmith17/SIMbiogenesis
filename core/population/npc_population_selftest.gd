@@ -88,6 +88,7 @@ func _init() -> void:
 	_test_area_spaces()
 	_test_routine_schedule()
 	_test_routine_behaviour()
+	_test_sleep_single_session()
 	_test_hash_distribution()
 	_test_recurrence()
 	_test_labour_ledger()
@@ -4983,7 +4984,14 @@ func _test_fairness_rotation() -> void:
 	engine.configure(6, "fair", Vector2.ZERO)
 	engine.chore_board = board
 	engine.routine = NpcRoutine.default_day()
-	_run_sim(engine, site, 8.0, 24.0 * 4.0, 1.0 / 60.0)
+	# End the run at the day-4 MIDNIGHT boundary so exactly four armed cycles
+	# are on offer (2 chores x 3 h x 4 days = 24 h). Running a further morning
+	# used to be free — the sleep-churn bug kept everyone in bed until 08:00 —
+	# but since one-night-one-session landed, people who wake at 6.0-7.5 fall
+	# through to the board like any FREE block and would bank real hours on
+	# day 4's freshly re-armed chores, which is correct behaviour but not what
+	# this assertion is counting.
+	_run_sim(engine, site, 8.0, 24.0 * 4.0 - 8.0, 1.0 / 60.0)
 
 	var ids: Array = []
 	for a in engine.agents:
@@ -5033,7 +5041,7 @@ func _test_fairness_rotation() -> void:
 	e2.configure(6, "fair", Vector2.ZERO)
 	e2.chore_board = _fair_board()
 	e2.routine = NpcRoutine.default_day()
-	_run_sim(e2, site, 8.0, 24.0 * 4.0, 1.0 / 60.0)
+	_run_sim(e2, site, 8.0, 24.0 * 4.0 - 8.0, 1.0 / 60.0)
 	var same := true
 	for aid in ids:
 		if absf(engine.labour.total_hours(str(aid))
@@ -5675,6 +5683,54 @@ func _test_routine_behaviour() -> void:
 		worst_hunger = maxf(worst_hunger, float((a as NpcAgent).needs.get("hunger", 0.0)))
 	_check("a scheduled day still feeds people", worst_hunger < 0.95,
 			"worst hunger %.2f" % worst_hunger)
+
+
+## One night = ONE sleep session. The old terminator (`needs.sleep <= 0.02`)
+## ended the night early (~04:30), _satisfy re-rolled the need UP, and the
+## routine tier re-issued sleep with no cooldown — 6-12 lie-down/get-up cycles
+## per agent per night, the churn the playtest reported. Counts RISING EDGES of
+## activity == "sleep" across a full night: exactly one per person, and a
+## sleeping agent's activity_ends_h points at wake (not stale garbage from the
+## previous activity — that staleness is what snapped the lie-down pose).
+func _test_sleep_single_session() -> void:
+	var site := _make_test_site()
+	var engine := NpcPopulationEngine.new()
+	engine.configure(8, "sleep_hab", Vector2.ZERO)
+	for item in engine.agents:
+		(item as NpcAgent).needs["sleep"] = 0.6
+	var begins: Dictionary = {}
+	var was_sleeping: Dictionary = {}
+	var mid_night_all_asleep := true
+	var mid_night_ends_ok := true
+	var t := 18.0
+	while t < 33.0:
+		t += 1.0 / 60.0
+		engine.tick(t, {
+			"registry": site["registry"], "pos_of": site["pos_of"],
+			"hour_of_day": fposmod(t, 24.0),
+		})
+		var sample_mid_night := absf(t - 26.0) < 0.5 / 60.0
+		for item in engine.agents:
+			var a: NpcAgent = item
+			var sleeping := a.activity == "sleep"
+			if sleeping and not bool(was_sleeping.get(a.id, false)):
+				begins[a.id] = int(begins.get(a.id, 0)) + 1
+			was_sleeping[a.id] = sleeping
+			if sample_mid_night:
+				if not (sleeping and a.state == NpcAgent.State.DOING):
+					mid_night_all_asleep = false
+				elif a.activity_ends_h <= t:
+					mid_night_ends_ok = false
+	_check("everyone is asleep mid-night (t=26 / 02:00)", mid_night_all_asleep)
+	_check("a sleeping agent knows when the night ends", mid_night_ends_ok,
+			"activity_ends_h must be set at sleep arrival, not stale")
+	var worst_begins := 0
+	for aid in begins:
+		worst_begins = maxi(worst_begins, int(begins[aid]))
+	_check("one night is ONE sleep session per person",
+			begins.size() == engine.agents.size() and worst_begins == 1,
+			"%d of %d agents slept; worst begin-count %d (pre-fix: 6-12)"
+				% [begins.size(), engine.agents.size(), worst_begins])
 
 
 # --- Tier 5: clip roles + pose machine ---------------------------------------
