@@ -211,14 +211,17 @@ func _build_stack() -> void:
 	_stack = VBoxContainer.new()
 	_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_stack.add_theme_constant_override("separation", 4)
-	_stack.alignment = BoxContainer.ALIGNMENT_END
-	# Centered horizontally, pinned just above the timeline.
-	_stack.anchor_left = 0.5
-	_stack.anchor_right = 0.5
-	_stack.anchor_top = 1.0
+	_stack.alignment = BoxContainer.ALIGNMENT_BEGIN
+	# LEFT edge, tucked under the Power Scoreboard — dead centre put every
+	# toast on top of whatever the player was actually looking at (the
+	# crosshair, a graph node, the person mid-frame), which read as an
+	# interruption rather than a status column. The left rail is already the
+	# status side (weather chip, scoreboard), so news belongs there too.
+	_stack.anchor_left = 0.0
+	_stack.anchor_right = 0.0
+	_stack.anchor_top = 0.66
 	_stack.anchor_bottom = 1.0
-	_stack.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_stack.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_stack.grow_horizontal = Control.GROW_DIRECTION_END
 	_stack.custom_minimum_size = Vector2(TOAST_WIDTH, 0.0)
 	_apply_stack_clearance(UiScreenLayout.timeline_stack_height())
 	add_child(_stack)
@@ -257,10 +260,13 @@ func _apply_stack_clearance(timeline_h: float) -> void:
 	if _stack == null:
 		return
 	var clearance := maxf(timeline_h, UiScreenLayout.timeline_stack_height()) + ABOVE_TIMELINE_GAP
+	# Anchored to the left rail (anchor_top 0.66 ≈ just under the Power
+	# Scoreboard); the bottom still respects the timeline so a tall stack
+	# never slides under it.
+	_stack.offset_top = 0.0
 	_stack.offset_bottom = -clearance
-	_stack.offset_top = _stack.offset_bottom - STACK_HEIGHT
-	_stack.offset_left = -TOAST_WIDTH * 0.5
-	_stack.offset_right = TOAST_WIDTH * 0.5
+	_stack.offset_left = 16.0
+	_stack.offset_right = 16.0 + TOAST_WIDTH
 
 
 func _make_entry(text: String, level: Level) -> PanelContainer:

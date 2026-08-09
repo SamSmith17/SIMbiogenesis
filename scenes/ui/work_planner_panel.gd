@@ -636,6 +636,21 @@ func _build_person_tab() -> void:
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 8)
 	tab.add_child(head)
+	# The way back OUT: everything jumps INTO this tab (roster names, the
+	# fairness line, the settlement card), and without a return door the only
+	# exits were Esc or guessing at the header — a dead end at the end of
+	# every jump.
+	var back := Button.new()
+	UITheme.style_button(back)
+	back.text = "◂ Everyone"
+	back.tooltip_text = "Back to the full roster (Routines & chores)"
+	back.pressed.connect(func() -> void:
+		var sgv: Node = ServiceLocator.graph()
+		if sgv != null and sgv.has_method("open_npc_routines"):
+			var iid := _item_id
+			close()
+			sgv.call("open_npc_routines", iid))
+	head.add_child(back)
 	head.add_child(_section("Person"))
 	# The same pastel as this person's dot and avatar rim — the thread that
 	# ties the figure being watched to the ledger being read.

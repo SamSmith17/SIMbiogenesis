@@ -220,9 +220,14 @@ static func _build_packed_prop(rec: Dictionary, pspec: Dictionary,
 	prop.model_id = str(rec.get("model_id", ""))
 	prop.is_osm_replacement = str(rec.get("type", "")) == "osm"
 	prop.building_idx = int(rec.get("building_idx", -1))
-	prop.prompt = "Stowed — unload the delivery first" \
-		if not str(rec.get("stowed_in", "")).is_empty() \
-		else "Unpack (Interact) / Edit (click)"
+	if not str(rec.get("stowed_in", "")).is_empty():
+		prop.prompt = "Stowed — unload the delivery first"
+	elif rec.get("linkage_spec") is Dictionary:
+		# A folded structure: both roads back up are named, or the player who
+		# watched the crew fold it stands at a mute crate wondering how.
+		prop.prompt = "Unpack (Interact) / Crew rebuild (click)"
+	else:
+		prop.prompt = "Unpack (Interact) / Edit (click)"
 	prop.add_child(model)
 	model.name = "ModelRoot"
 	var x := float(rec.get("x", 0.0))

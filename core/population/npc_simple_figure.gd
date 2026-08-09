@@ -78,6 +78,7 @@ var _stance := 1.0     ## feet apart, ~0.90..1.15
 var _tempo := 1.0      ## cycle rate WITHIN a pose, ~0.85..1.15
 var _lean := 0.0       ## resting torso pitch, ±0.06 rad
 var _variant := 0      ## discrete pick inside a family
+var _flavor := ""      ## per-frame rendering hint from the avatar (see pose())
 
 
 func setup(seed_key: String, tint: Color) -> void:
@@ -105,12 +106,16 @@ func setup(seed_key: String, tint: Color) -> void:
 
 
 ## `clip` is the pose machine's chosen clip; `rate` its playback rate (so the
-## figure speeds up with the world clock); `dt` real seconds.
-func pose(clip: String, rate: float, dt: float) -> void:
+## figure speeds up with the world clock); `dt` real seconds. `flavor` is an
+## optional rendering hint from the avatar ("urgent" = hurrying to the
+## bathroom: the walk keeps its legs but pulls the arms in and shortens the
+## neck — the classic pee-walk, now used ONLY where it is true).
+func pose(clip: String, rate: float, dt: float, flavor: String = "") -> void:
 	if _body == null:
 		return
 	var r := clampf(rate, 0.0, 12.0)
 	_phase += dt * TAU * STRIDE_HZ * maxf(r, 0.001)
+	_flavor = flavor
 	# Matched on the LOGICAL clip, before the file mapping collapses it onto
 	# the plain walk/idle (which is only right for the rigged body).
 	if _carry_box != null:
@@ -185,6 +190,13 @@ func set_tint(tint: Color) -> void:
 ## recovery (leg swinging forward) and stay near-straight on the stance leg,
 ## which is the single cue that separates "walking" from "scissoring".
 func _pose_walk(amp: float, dt: float) -> void:
+	# The URGENT walk: hurrying somewhere with the arms pulled in tight and a
+	# clipped, faster-feeling stride — the pee-walk, played only on the way to
+	# the bathroom, where it is both funny and true. This is the arms-in shape
+	# the ordinary idle USED to have by accident.
+	if _flavor == "urgent":
+		_pose_walk_urgent(amp, dt)
+		return
 	var s := sin(_phase)
 	var body_y := HIP_Y + absf(sin(_phase * 2.0)) * 0.022 * amp
 	_settle(_torso, Vector3(0.0, 0.0, 0.0), dt)
@@ -200,6 +212,22 @@ func _pose_walk(amp: float, dt: float) -> void:
 		_ease(_elbow[i], Vector3(-(0.25 + maxf(s * side, 0.0) * 0.35) * amp, 0.0, 0.0), dt)
 	# Trudging drops the head and rounds the shoulders.
 	_ease(_head, Vector3(0.30 * (1.0 - amp), 0.0, 0.0), dt)
+
+
+func _pose_walk_urgent(amp: float, dt: float) -> void:
+	var s := sin(_phase)
+	_settle(_torso, Vector3(0.14, 0.0, 0.0), dt)
+	_place_body(HIP_Y - 0.03 + absf(sin(_phase * 2.0)) * 0.014, 0.0, dt)
+	_ease(_head, Vector3(0.08, 0.0, 0.0), dt)
+	for i in 2:
+		var side := 1.0 if i == 0 else -1.0
+		# Short quick steps, knees a touch together.
+		var swing := s * side * 0.44 * amp
+		_ease(_hip[i], Vector3(swing, 0.0, -0.03 * side), dt)
+		_ease(_knee[i], Vector3(maxf(-s * side, 0.0) * 0.75, 0.0, 0.0), dt)
+		# Arms clamped in across the front — the tell.
+		_ease(_shoulder[i], Vector3(-0.55, 0.0, 0.30 * side), dt)
+		_ease(_elbow[i], Vector3(-1.05, 0.0, 0.0), dt)
 
 
 ## Walking while hugging a load to the chest: walk legs with a shortened
@@ -245,9 +273,12 @@ func _pose_idle(sad: bool, dt: float) -> void:
 		var side := 1.0 if i == 0 else -1.0
 		_ease(_hip[i], Vector3(0.0, 0.0, 0.04 * side), dt)
 		_ease(_knee[i], Vector3(0.05, 0.0, 0.0), dt)
-		# Dejected arms hang dead; relaxed arms keep a slight elbow break.
-		_ease(_shoulder[i], Vector3(0.0, 0.0, (0.10 if sad else 0.16) * side), dt)
-		_ease(_elbow[i], Vector3(-0.05 if sad else -0.22, 0.0, 0.0), dt)
+		# Arms hang slightly OUT from the body (negative z = away), with a
+		# relaxed elbow break. The old +0.16 turned both arms INWARD across
+		# the front, which at a glance read as needing the bathroom — that
+		# shape now belongs to _pose_walk_urgent, where it is the point.
+		_ease(_shoulder[i], Vector3(0.0, 0.0, (-0.04 if sad else -0.09) * side), dt)
+		_ease(_elbow[i], Vector3(-0.05 if sad else -0.16, 0.0, 0.0), dt)
 
 
 ## Hips drop to seat height, thighs forward, shins down. Reused for the
@@ -451,21 +482,40 @@ func _pose_work_exit(dt: float) -> void:
 		_ease(_elbow[i], Vector3(-0.15, 0.0, 0.0), dt)
 
 
+## Dancing has to look like JOY, not labour — the old version bobbed in a
+## half-squat with both arms in one plane, which at 60 m read as another work
+## family. Three fixes: the body BOUNCES off the beat and leans back a touch
+## (work leans forward, that lean is most of the difference), the hips swing
+## wide, and the arms live ABOVE the shoulders with the elbows opening and
+## closing so the silhouette keeps changing. Two per-agent variants: raise-the-
+## roof pumps vs a side-to-side wave, plus everyone turning slowly in place.
 func _pose_dance(dt: float) -> void:
-	var sway := sin(_phase * 1.1)
-	var pump := sin(_phase * 2.2)
-	_place_body(HIP_Y + absf(pump) * 0.05, 0.0, dt)
-	_settle(_torso, Vector3(0.0, sway * 0.22, sway * 0.10), dt)
-	_ease(_head, Vector3(pump * 0.12, sway * 0.20, 0.0), dt)
+	var beat := _phase * 1.15 * _tempo
+	var sway := sin(beat)                    # side-to-side, the groove
+	var pump := sin(beat * 2.0)              # double-time, the bounce
+	var turn := sin(beat * 0.23) * 0.85      # slow drift around, ±~50°
+	var hop := maxf(pump, 0.0)
+	_place_body(HIP_Y + hop * 0.10 * _amp, 0.0, dt)
+	# Lean BACK, roll with the sway, and keep turning — three axes moving at
+	# once is what separates a dancer from a worker at any distance.
+	_settle(_torso, Vector3(-0.12 + pump * 0.06, turn + sway * 0.30, sway * 0.16), dt)
+	_ease(_head, Vector3(-0.10 + pump * 0.16, sway * 0.30, 0.0), dt)
 	for i in 2:
 		var side := 1.0 if i == 0 else -1.0
-		var up := pump * side
-		_ease(_hip[i], Vector3(sway * 0.16 * side, 0.0, 0.06 * side), dt)
-		_ease(_knee[i], Vector3(0.20 + maxf(up, 0.0) * 0.30, 0.0, 0.0), dt)
-		# Arms alternate overhead — the clearest read of "dancing" at this
-		# level of detail.
-		_ease(_shoulder[i], Vector3(-1.9 - up * 0.55, 0.0, 0.30 * side), dt)
-		_ease(_elbow[i], Vector3(-0.55 + up * 0.30, 0.0, 0.0), dt)
+		var up := pump * side * _mirror
+		# Hips swing wide and the free leg kicks on the beat.
+		_ease(_hip[i], Vector3(sway * 0.22 * side - hop * 0.18, 0.0, 0.10 * side), dt)
+		_ease(_knee[i], Vector3(0.15 + maxf(up, 0.0) * 0.55 * _amp, 0.0, 0.0), dt)
+		if _variant == 0:
+			# Raise the roof: both hands high, elbows pumping with the beat.
+			_ease(_shoulder[i], Vector3(-2.35 - pump * 0.25 * _amp, 0.0,
+				(-0.35 - hop * 0.15) * side), dt)
+			_ease(_elbow[i], Vector3(-0.85 + pump * 0.65 * _amp, 0.0, 0.0), dt)
+		else:
+			# The wave: arms out wide, rolling opposite each other.
+			_ease(_shoulder[i], Vector3(-1.65 - up * 0.55, 0.0,
+				(-0.85 + sway * side * 0.35) * side), dt)
+			_ease(_elbow[i], Vector3(-0.55 + up * 0.50 * _amp, 0.0, 0.0), dt)
 
 
 func _pose_clap(dt: float) -> void:

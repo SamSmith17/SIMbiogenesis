@@ -1911,6 +1911,17 @@ func _run_population_verify() -> void:
 		_maybe_quit()
 		return
 	var main := get_tree().current_scene
+	# Pin the SIM DATE. The soak autosave carries the clock forward between
+	# runs, and per-agent RNG reseeds per sim-DAY — so every run was sampling a
+	# different day's needs/phases, which is where the "state-sensitive"
+	# food/chore/cascade flakes actually lived. A fixed morning on a fixed date
+	# makes consecutive runs replay the same population day.
+	if main != null:
+		if "year" in main:
+			main.year = 2026
+		_set_capture_date(main, 7, 15)
+		if "day_time" in main:
+			main.day_time = 7.0
 
 	# --- graph: pop-driven habitat + tanks -----------------------------------
 	# The soak map's graph autosave persists between runs — drop any leftovers
@@ -4909,6 +4920,10 @@ const NPCPOSE_SUBJECTS: Array = [
 	# Baselines, so a family can be judged against what the body does at rest.
 	["pose_idle", "", false],
 	["pose_walk", "walk", false],
+	# The two flavour poses: joy and urgency. Dance must NOT read as a work
+	# family; the urgent walk is the arms-in shape the idle used to leak.
+	["pose_dance", "dance", false],
+	["pose_pee_walk", "walk_urgent", false],
 ]
 
 ## Real seconds to let the joints settle before shooting. The figure eases
@@ -5042,6 +5057,18 @@ static func _npcpose_input(dt: float, family: String, carrying: bool) -> Diction
 		"walk":
 			activity = ""
 			in_transit = true
+		"walk_urgent":
+			# The avatar derives the urgent flavour itself from
+			# moving + activity == bladder — same inputs the host sends.
+			activity = "bladder"
+			in_transit = true
+			fam = ""
+		"dance":
+			# Reaching the fire-circle POSE needs a real arrival the portrait
+			# cannot run; the anim_map binding (the Animations tab's own
+			# mechanism) pins the clip on the idle slot instead.
+			activity = ""
+			fam = ""
 		"work_enter", "work_exit":
 			fam = NpcWorkPose.DIG
 		"haul_hold":
@@ -5060,6 +5087,8 @@ static func _npcpose_input(dt: float, family: String, carrying: bool) -> Diction
 	var anim_map: Dictionary = {}
 	if family == "work_enter" or family == "work_exit":
 		anim_map = {"chore": family}
+	elif family == "dance":
+		anim_map = {"idle": "dance"}
 	return {
 		"dt": dt,
 		"paused": false,

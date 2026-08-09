@@ -54,10 +54,16 @@ var morale: float = 0.0
 
 var _root: Node3D = null            # animated sub-root (bob/lie-down)
 var _tag: Label3D = null
-var _status_root: Node3D = null     # holds the morale bar + its labels
+var _status_root: Node3D = null     # holds the morale bar + the task tag
 var _bar_fill: MeshInstance3D = null
 var _bar_fill_mat: StandardMaterial3D = null
-var _bar_pct_lbl: Label3D = null
+var _task_lbl: Label3D = null
+var _task_text := ""
+## Overhead readout visibility has TWO drivers with different owners: the host
+## grants AMBIENT visibility by distance (the group-monitoring read), and the
+## crosshair grants FOCUS (which also shows the name). Either shows the bar.
+var _ambient := false
+var _focus := false
 var _moving := false
 var _lying := false
 
@@ -171,18 +177,19 @@ func set_morale(value: float) -> void:
 		_update_status_bar()
 
 
-## Name + morale bar, below the nametag, in the same billboard frame — shown
-## together for whoever the crosshair is on (see set_tag_visible). The bar
-## fills left-to-right from a fixed "Fuck This!" origin to "Fuck Yes!", the
-## same 0..1 morale scale NpcMorale already bands into labels/colors
-## elsewhere (Routines panel roster, Site Plan dots) — reused here via
-## NpcMorale.color() rather than inventing a second color mapping.
+## Morale bar + task tag, below the nametag, in the same billboard frame.
+## The bar's COLOR carries the "Fuck This → Fuck Yes" scale on its own
+## (NpcMorale.color(), the same mapping the roster and Site Plan dots use) —
+## the old flanking text labels doubled the bar's width and shouted a joke
+## sixteen times at once; the words survive in the Routines roster where
+## there is room for them. Under it, a small tag says what this person is
+## DOING right now, which is the other half of monitoring a camp at a glance.
 func _build_status_bar() -> void:
 	if _status_root != null:
 		return
 	_status_root = Node3D.new()
 	_status_root.name = "StatusBar"
-	_status_root.visible = false  # only for the person the crosshair is on
+	_status_root.visible = false  # ambient (near) or focus shows it
 	add_child(_status_root)
 
 	# Track (the empty/background part of the bar) — static, never rescaled.
@@ -200,21 +207,21 @@ func _build_status_bar() -> void:
 	_bar_fill_mat.render_priority = 1
 	_status_root.add_child(_bar_fill)
 
-	_bar_pct_lbl = _make_status_label("", 26, Vector3(0.0, STATUS_BAR_Y, 0.002))
-	_bar_pct_lbl.render_priority = 2
-	_status_root.add_child(_bar_pct_lbl)
-
-	var left_lbl := _make_status_label("Fuck This!", 22,
-		Vector3(-STATUS_BAR_WIDTH * 0.5 - 0.20, STATUS_BAR_Y, 0.0))
-	left_lbl.modulate = Color(0.85, 0.4, 0.4, 0.95)
-	_status_root.add_child(left_lbl)
-
-	var right_lbl := _make_status_label("Fuck Yes!", 22,
-		Vector3(STATUS_BAR_WIDTH * 0.5 + 0.20, STATUS_BAR_Y, 0.0))
-	right_lbl.modulate = Color(0.5, 0.85, 0.55, 0.95)
-	_status_root.add_child(right_lbl)
+	_task_lbl = _make_status_label("", 20, Vector3(0.0, STATUS_BAR_Y - 0.085, 0.0))
+	_task_lbl.modulate = Color(0.92, 0.94, 0.97, 0.92)
+	_status_root.add_child(_task_lbl)
 
 	_update_status_bar()
+
+
+## What this person is doing, in one or two words under the bar. Set by the
+## host every tick from the dot payload; refreshes only while visible.
+func set_task_text(text: String) -> void:
+	if text == _task_text:
+		return
+	_task_text = text
+	if _task_lbl != null and _status_root != null and _status_root.visible:
+		_task_lbl.text = _task_text
 
 
 func _make_bar_quad(color: Color) -> MeshInstance3D:
@@ -260,8 +267,8 @@ func _update_status_bar() -> void:
 	_bar_fill.position.x = -STATUS_BAR_WIDTH * 0.5 * (1.0 - frac)
 	if _bar_fill_mat != null:
 		_bar_fill_mat.albedo_color = NpcMorale.color(morale)
-	if _bar_pct_lbl != null:
-		_bar_pct_lbl.text = "%d%%" % roundi(frac * 100.0)
+	if _task_lbl != null:
+		_task_lbl.text = _task_text
 
 
 ## Host-driven LOD: `true` swaps in the rigged body, `false` the primitive.
@@ -312,14 +319,33 @@ func pick_center() -> Vector3:
 ## Nametag + morale bar are off by default (50 floating labels is noise) —
 ## the crosshair turns them on for whoever the player is looking at.
 func set_tag_visible(on: bool) -> void:
+	_focus = on
+	_refresh_overhead()
+
+
+## Host-driven by distance: near people carry their bar + task tag all the
+## time (the "monitor the group from first person" read); far people stay
+## clean silhouettes. The name stays focus-only — sixteen names is clutter,
+## sixteen thin bars is a dashboard.
+func set_ambient_status(on: bool) -> void:
+	if on == _ambient:
+		return
+	_ambient = on
+	_refresh_overhead()
+
+
+func _refresh_overhead() -> void:
 	if _tag != null:
-		_tag.visible = on
+		_tag.visible = _focus
 	if _status_root != null:
-		_status_root.visible = on
-		if on:
-			# Morale may have drifted while this avatar wasn't focused (set_morale
-			# skips the refresh while hidden) — catch it up right as it shows.
+		var show := _focus or _ambient
+		if show and not _status_root.visible:
+			# Morale/task may have drifted while hidden (their setters skip the
+			# refresh) — catch up right as it shows.
+			_status_root.visible = true
 			_update_status_bar()
+		else:
+			_status_root.visible = show
 
 
 ## pos = ground point (feet); yaw = facing; moving/activity drive animation.
@@ -532,8 +558,11 @@ func _process(delta: float) -> void:
 		return
 	if _simple != null and _machine != null:
 		# Same machine, same decisions — only the rendering differs, so the two
-		# styles can never disagree about what somebody is doing.
-		_simple.pose(_machine.clip(), _speed_scale, delta)
+		# styles can never disagree about what somebody is doing. The flavor is
+		# a rendering HINT only: hurrying to the bathroom plays the arms-in
+		# urgent walk, which is where that shape belongs.
+		var flavor := "urgent" if _moving and _activity == "bladder" else ""
+		_simple.pose(_machine.clip(), _speed_scale, delta, flavor)
 		return
 
 

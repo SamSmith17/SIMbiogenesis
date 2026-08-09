@@ -25,6 +25,7 @@ var _model_lbl: Label
 var _packed_lbl: Label
 var _pack_btn: Button = null
 var _crew_breakdown_btn: Button = null
+var _crew_rebuild_btn: Button = null
 var _model_option: OptionButton
 var _off_x: SpinBox
 var _off_y: SpinBox
@@ -245,6 +246,13 @@ func _build_ui() -> void:
 	_crew_breakdown_btn.visible = false
 	actions.add_child(_crew_breakdown_btn)
 
+	_crew_rebuild_btn = Button.new()
+	_crew_rebuild_btn.text = "👷 Crew rebuild"
+	_crew_rebuild_btn.tooltip_text = "Queue the raise: the crew unfolds the frame, re-bolts the ring and re-mounts the panels"
+	_crew_rebuild_btn.pressed.connect(_on_crew_rebuild)
+	_crew_rebuild_btn.visible = false
+	actions.add_child(_crew_rebuild_btn)
+
 	_linkage_btn = Button.new()
 	_linkage_btn.text = "Linkage Lab"
 	_linkage_btn.tooltip_text = "Edit this structure's linkage design in place"
@@ -404,6 +412,14 @@ func _refresh_packed_line(d: Dictionary) -> void:
 		# unbolts, folds and loads it out — packed crates just get carried).
 		_crew_breakdown_btn.visible = d.get("linkage_spec") is Dictionary \
 			and not bool(d.get("packed", false))
+	if _crew_rebuild_btn != null:
+		# The mirror: a PACKED linkage crate whose parts were already
+		# fabricated — the crew raises it again (no cutting or drilling).
+		# Hidden while stowed in a container: unload the delivery first.
+		_crew_rebuild_btn.visible = d.get("linkage_spec") is Dictionary \
+			and bool(d.get("packed", false)) \
+			and str(d.get("stowed_in", "")).is_empty() \
+			and not (d.get("build_state") is Dictionary)
 	if packed.is_empty():
 		return
 	var est := "  (est.)" if str(packed.get("source", "")) == "estimated" else ""
@@ -487,6 +503,46 @@ func _on_crew_breakdown() -> void:
 	if sgv.has_method("watch_site_at"):
 		sgv.call("watch_site_at", site,
 			"👷 Breakdown project queued — %d phases" % rows.size())
+
+
+## The mirror of _on_crew_breakdown: raise a packed, already-fabricated
+## linkage crate again. Same crew plumbing; the rows come from
+## SiteProject.rebuild_spec_rows (raise → bolt ring → mount panels — the
+## parts exist, so no cutting or drilling), and the raise's unpack effect IS
+## the deploy sweep the player would otherwise trigger by hand with Interact.
+func _on_crew_rebuild() -> void:
+	if _prop_id.is_empty():
+		return
+	var scene := get_tree().current_scene
+	var sgv: Node = ServiceLocator.graph()
+	var bridge: Variant = sgv.call("npc_population_bridge") \
+		if sgv != null and sgv.has_method("npc_population_bridge") else null
+	if bridge == null:
+		return
+	var iid := str(bridge.call("first_crewable_habitat"))
+	if iid.is_empty():
+		if sgv.has_method("_show_toast"):
+			sgv.call("_show_toast", "Needs a pop-driven habitat with people on site")
+		return
+	var rec: Dictionary = PlacedPropService.get_prop_record(scene, _prop_id)
+	if rec.is_empty() or not (rec.get("linkage_spec") is Dictionary):
+		return
+	var p := LinkageParams.new()
+	p.from_config(rec.get("linkage_spec") as Dictionary)
+	var counts := LinkageBom.fab_counts(LinkageBom.compute(p), {})
+	var site := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	var rows := SiteProject.rebuild_spec_rows(counts, _prop_id)
+	var project_id := str(bridge.call("create_site_project", iid,
+		SiteProject.KIND_LINKAGE_BUILD, "Rebuild: linkage structure",
+		_prop_id, site, rows, {"start_h": 7.0, "end_h": 19.0},
+		{"kind": "prop", "id": _prop_id}, {}))
+	if project_id.is_empty():
+		if sgv.has_method("_show_toast"):
+			sgv.call("_show_toast", "Chore board is full — clear some chores first")
+		return
+	if sgv.has_method("watch_site_at"):
+		sgv.call("watch_site_at", site,
+			"👷 Rebuild queued — the crew raises it again (%d phases)" % rows.size())
 
 
 func _on_spin_changed(_v: float = 0.0) -> void:

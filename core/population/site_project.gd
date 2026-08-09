@@ -359,6 +359,42 @@ static func breakdown_spec_rows(counts: Dictionary, prop_id: String,
 	return rows
 
 
+## Rebuild plan: raise a structure that was already fabricated ONCE and then
+## broken down — the crate holds finished parts, so there is nothing to cut or
+## drill. The mirror of breakdown_spec_rows, at the same discounted labour:
+## raise the frame (the unpack effect IS the raise) → re-bolt the ring →
+## re-mount the panels (which re-seeds the graph array). This is what makes a
+## teardown reversible by the CREW rather than only by the player's Interact —
+## "they took it down, they can put it back up".
+static func rebuild_spec_rows(counts: Dictionary, prop_id: String) -> Array:
+	var panels := maxi(int(counts.get("panel_count", 0)), 0)
+	var bolts := maxi(int(counts.get("bolt_count", 0)),
+		maxi(int(counts.get("module_count", 1)), 1) * 6)
+	var rows: Array = [{
+		"task_id": "raise", "label": "Raise the frame",
+		"chore_hours": 0.35,
+		"priority": 1, "min_workers": NpcCrewPlan.ERECT_MIN_WORKERS,
+		"max_workers": NpcCrewPlan.ERECT_MIN_WORKERS + 2,
+		"exposure": "outdoor",
+		"effect": {"op": "unpack_prop", "prop_id": prop_id},
+	}, {
+		"task_id": "bolt_ring", "label": "Bolt the ring",
+		"chore_hours": maxf(bolts * NpcCrewPlan.T_BOLT_SET_S * 0.5 / 3600.0, 0.05),
+		"priority": 2, "min_workers": 1,
+		"max_workers": maxi(int(counts.get("module_count", 1)), 1),
+		"exposure": "outdoor", "depends_on": ["raise"],
+	}]
+	if panels > 0:
+		rows.append({
+			"task_id": "mount_panels", "label": "Mount the panels",
+			"chore_hours": maxf(panels * NpcCrewPlan.T_PANEL_MOUNT_S * 0.6 / 3600.0, 0.05),
+			"priority": 3, "min_workers": 2, "max_workers": maxi(mini(panels, 8), 2),
+			"exposure": "outdoor", "depends_on": ["bolt_ring"],
+			"effect": {"op": "seed_graph", "prop_id": prop_id},
+		})
+	return rows
+
+
 ## Live per-element fractions for the REVERSE lifecycle — the mirror of
 ## build_progress(). Keys: beams/brackets/bolts/supports/panels 0..1 + ghost
 ## + folded (bool — the crate has replaced the frame, stop pushing).

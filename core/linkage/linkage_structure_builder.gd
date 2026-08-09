@@ -450,19 +450,69 @@ func build_progress() -> Dictionary:
 	return _build_progress
 
 
+## Elements per second the reveal animation may move, per element class. The
+## FLOOR is what makes single panels readable — 18 panels at 2.5/s is a
+## seven-second sweep where each one visibly lands (or leaves) on its own;
+## the count/10 term keeps a 200-beam ring from taking a minute.
+const REVEAL_MIN_PER_S := 2.5
+
+## mm name -> currently DISPLAYED element count (float — the animator's
+## position between integers). Progress updates land in chunks (a labour
+## credit is a tick, not a panel), so the displayed count walks toward the
+## target one element at a time instead of jumping four panels per credit.
+var _reveal_shown: Dictionary = {}
+
+
+func _progress_pairs() -> Array:
+	return [[_beam_mm, "beams"], [_bracket_mm, "brackets"],
+		[_bolt_mm, "bolts"], [_bolt_head_mm, "bolts"],
+		[_support_mm, "supports"], [_panel_mm, "panels"]]
+
+
 func _apply_build_progress() -> void:
-	for pair in [[_beam_mm, "beams"], [_bracket_mm, "brackets"],
-			[_bolt_mm, "bolts"], [_bolt_head_mm, "bolts"],
-			[_support_mm, "supports"], [_panel_mm, "panels"]]:
+	for pair in _progress_pairs():
 		var inst := pair[0] as MultiMeshInstance3D
 		if inst == null or inst.multimesh == null:
 			continue
 		if _build_progress.is_empty():
 			inst.multimesh.visible_instance_count = -1
+			_reveal_shown.erase(inst.name)
 			continue
 		var frac := clampf(float(_build_progress.get(pair[1], 1.0)), 0.0, 1.0)
-		inst.multimesh.visible_instance_count = \
-			int(round(frac * float(inst.multimesh.instance_count)))
+		var target := int(round(frac * float(inst.multimesh.instance_count)))
+		# Offline / not-yet-in-tree contexts snap (selftests read the count
+		# straight back); a live scene animates via _process below. The FIRST
+		# application also snaps — a fresh load must not animate a standing
+		# frame out of nothing.
+		if not is_inside_tree() or not _reveal_shown.has(inst.name):
+			inst.multimesh.visible_instance_count = target
+			_reveal_shown[inst.name] = float(target)
+	if is_inside_tree() and not _build_progress.is_empty():
+		set_process(true)
+
+
+func _process(delta: float) -> void:
+	if _build_progress.is_empty():
+		set_process(false)
+		return
+	var busy := false
+	for pair in _progress_pairs():
+		var inst := pair[0] as MultiMeshInstance3D
+		if inst == null or inst.multimesh == null:
+			continue
+		var count := float(inst.multimesh.instance_count)
+		var frac := clampf(float(_build_progress.get(pair[1], 1.0)), 0.0, 1.0)
+		var target := roundf(frac * count)
+		var shown := float(_reveal_shown.get(inst.name, target))
+		if absf(shown - target) < 0.001:
+			continue
+		busy = true
+		shown = move_toward(shown, target,
+			delta * maxf(REVEAL_MIN_PER_S, count / 10.0))
+		_reveal_shown[inst.name] = shown
+		inst.multimesh.visible_instance_count = int(roundf(shown))
+	if not busy:
+		set_process(false)
 
 
 func _ghost_of(base: StandardMaterial3D, alpha: float) -> StandardMaterial3D:

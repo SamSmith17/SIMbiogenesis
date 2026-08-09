@@ -38,8 +38,11 @@ var _peek := false
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
-	offset_left = 14
-	offset_right = 434
+	# To the RIGHT of the toast column (left rail, width ~250) — the two are
+	# both "settlement news" and firing together is their normal case, so they
+	# get adjacent lanes rather than a pile-up.
+	offset_left = 254
+	offset_right = 674
 	offset_top = -352
 	offset_bottom = -186
 	_box = VBoxContainer.new()
@@ -89,7 +92,12 @@ func _process(delta: float) -> void:
 	var main := get_tree().current_scene
 	if not covered and main != null and main.has_method("settlement_view_open"):
 		covered = bool(main.call("settlement_view_open"))
-	visible = not covered and not _lines.is_empty()
+	# The strip is also first person's ONLY group readout, so with a
+	# population running it stays up for the status line alone — the log
+	# lines come and go beneath it.
+	var has_pop: bool = _bridge.has_method("has_pop_driven") \
+		and bool(_bridge.call("has_pop_driven"))
+	visible = not covered and (has_pop or not _lines.is_empty())
 	if not visible:
 		if _peek:
 			_peek = false
@@ -102,24 +110,33 @@ func _process(delta: float) -> void:
 		_peek = peek_now
 		offset_top = -352 - (PEEK_LINES - MAX_LINES) * 18 if _peek else -352
 		_sig = "<unbuilt>"
-	var sig := ""
+	var status := _status_line() if has_pop else ""
+	var sig := "st:%s|" % status
 	if _peek:
-		sig = "peek"   # rebuilt once on entry; history does not move mid-hover
+		sig += "peek"   # rebuilt once on entry; history does not move mid-hover
 	else:
 		for l in _lines:
 			sig += "%d;" % int((l as Dictionary)["at_ms"])
 	if sig == _sig:
 		if not _peek:
-			# Content unchanged; only refresh the fades.
+			# Content unchanged; only refresh the fades (never the status row,
+			# which is the first child and permanent).
 			var idx := 0
 			for c in _box.get_children():
-				if idx < _lines.size():
-					(c as Control).modulate.a = _alpha_of(_lines[idx] as Dictionary, now)
+				if idx > 0 and idx - 1 < _lines.size():
+					(c as Control).modulate.a = _alpha_of(
+						_lines[idx - 1] as Dictionary, now)
 				idx += 1
 		return
 	_sig = sig
 	for c in _box.get_children():
 		c.queue_free()
+	# The group readout, always first: how many, how they feel, who is
+	# working, what is wrong — the camp's vital signs from first person.
+	if not status.is_empty():
+		var st := _strip_label(status, SettlementLog.INFO, 1.0)
+		st.add_theme_color_override("font_color", UITheme.C_TEXT)
+		_box.add_child(st)
 	if _peek:
 		var lg: Variant = _bridge.call("settlement_log")
 		var recents: Array = lg.call("recent", PEEK_LINES) as Array
@@ -137,6 +154,33 @@ func _process(delta: float) -> void:
 			_alpha_of(ld, now)))
 	# The peek's only affordance: a dim ellipsis inviting the hover.
 	_box.add_child(_strip_label("⋯", SettlementLog.INFO, 0.5))
+
+
+## "👥 12 · Content · 5 working · ⚠ 2" — the one-line camp dashboard.
+func _status_line() -> String:
+	var ids: Array = _bridge.call("pop_driven_item_ids") \
+		if _bridge.has_method("pop_driven_item_ids") else []
+	if ids.is_empty():
+		return ""
+	var summ: Dictionary = _bridge.call("summary_for", str(ids[0]))
+	if summ.is_empty():
+		return ""
+	var working := 0
+	for d in (_bridge.call("agent_dots") as Array):
+		var dot: Dictionary = d
+		if not str(dot.get("work_pose", "")).is_empty() \
+				or (str(dot.get("activity", "")) == "chore"
+					and int(dot.get("state", 0)) == NpcAgent.State.DOING):
+			working += 1
+	var parts := PackedStringArray()
+	parts.append("👥 %d" % int(summ.get("count", 0)))
+	parts.append(str(summ.get("morale_label", "")))
+	if working > 0:
+		parts.append("%d working" % working)
+	var alarms: Array = (_bridge.call("settlement_log") as SettlementLog).open_alarms()
+	if not alarms.is_empty():
+		parts.append("⚠ %d" % alarms.size())
+	return " · ".join(parts)
 
 
 func _strip_label(text: String, severity: int, alpha: float) -> Label:

@@ -127,8 +127,12 @@ func _process(delta: float) -> void:
 		av.morale_label = str(dot.get("morale_label", ""))
 		av.set_display_name(str(dot.get("name", "")))
 		av.set_morale(float(dot.get("morale", 0.0)))
+		av.set_task_text(_task_text_of(dot))
 		var sim_pos: Vector2 = dot.get("pos", Vector2.ZERO)
 		var dist := (sim_pos - eye).length()
+		# Near people carry their morale bar + task tag ambiently — the
+		# monitor-the-camp-from-first-person read; far people stay clean.
+		av.set_ambient_status(dist < AMBIENT_STATUS_DIST_M)
 		# A person someone is PLAYING is never culled, never quarter-rate posed,
 		# and always keeps the rigged body: LOD is an economy for background
 		# figures, and applying it to a player would make them vanish or stutter
@@ -336,6 +340,49 @@ func set_focus_agent(agent_id: String) -> void:
 	var now: NpcAvatar = _avatars.get(agent_id)
 	if now != null and is_instance_valid(now):
 		now.set_tag_visible(true)
+
+
+## How near somebody has to be for their overhead bar + task tag to show
+## without being aimed at. Under the 45 m rig radius: the readout is for the
+## camp you are standing IN, not the whole valley.
+const AMBIENT_STATUS_DIST_M := 30.0
+
+
+## One or two words under the morale bar: what this person is doing right now.
+## Derived from the dot the same way the pose is, so the tag and the body can
+## never tell different stories. Travelling shows where they are HEADED.
+static func _task_text_of(dot: Dictionary) -> String:
+	var text := ""
+	if bool(dot.get("carrying", false)):
+		text = "hauling"
+	else:
+		var wp := str(dot.get("work_pose", ""))
+		match wp:
+			NpcWorkPose.HAUL_HOLD: text = "hauling"
+			NpcWorkPose.LIFT: text = "lifting"
+			NpcWorkPose.DIG: text = "working"
+			NpcWorkPose.OVERHEAD: text = "building"
+			NpcWorkPose.DRILL: text = "drilling"
+			NpcWorkPose.BENCH: text = "at the bench"
+			NpcWorkPose.INSPECT: text = "inspecting"
+	if text.is_empty():
+		match str(dot.get("activity", "")):
+			"hunger": text = "eating"
+			"thirst": text = "drinking"
+			"sleep": text = "sleeping"
+			"bladder": text = "bathroom"
+			"hygiene": text = "washing"
+			"chore": text = "working"
+			"fire_circle": text = "at the fire"
+			"movement": text = "exercising"
+			"quiet": text = "resting"
+			"workshop_social": text = "socialising"
+			_: text = ""
+	if text.is_empty():
+		return ""
+	if int(dot.get("state", 0)) == NpcAgent.State.TRAVELING:
+		return "→ " + text
+	return text
 
 
 func _viewer_xz() -> Vector2:

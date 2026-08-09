@@ -1513,6 +1513,28 @@ func _test_site_project() -> void:
 	_check("no panels / no container trims the plan",
 			ids_no == ["unbolt", "fold_pack"], str(ids_no))
 
+	# Rebuild plan (the road back UP): the parts are already fabricated, so
+	# there is NO cutting or drilling — raise (which unpacks), re-bolt,
+	# re-mount (which re-seeds the graph array).
+	var rb := SiteProject.rebuild_spec_rows(counts, "prop_9")
+	var ids_rb: Array = []
+	for r in rb:
+		ids_rb.append(str((r as Dictionary).get("task_id", "")))
+	_check("rebuild phases in order",
+			ids_rb == ["raise", "bolt_ring", "mount_panels"], str(ids_rb))
+	_check("the raise IS the unpack",
+			str(((rb[0] as Dictionary).get("effect", {}) as Dictionary).get("op", ""))
+				== "unpack_prop")
+	_check("raising takes a real crew",
+			int((rb[0] as Dictionary).get("min_workers", 0))
+				== NpcCrewPlan.ERECT_MIN_WORKERS)
+	_check("re-mounting panels re-seeds the array",
+			str(((rb[2] as Dictionary).get("effect", {}) as Dictionary).get("op", ""))
+				== "seed_graph")
+	var rb_no := SiteProject.rebuild_spec_rows(
+			{"panel_count": 0, "module_count": 2, "bolt_count": 8}, "prop_9")
+	_check("a panel-less design skips the mount", rb_no.size() == 2)
+
 	# Coarse reload fractions follow the phase ladder.
 	_check("phase_fractions ladder",
 			float(SiteProject.phase_fractions("")["beams"]) == 0.0
