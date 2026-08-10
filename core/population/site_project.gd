@@ -446,10 +446,18 @@ static func breakdown_progress(project: Dictionary, board) -> Dictionary:
 		# not attached to anything.
 		"bolts": 1.0 - unbolt,
 		"brackets": 1.0 - unbolt,
-		# Ground supports come off as the fold is prepped.
-		"supports": 1.0 - fold,
+		# Supports stay WITH the frame through the fold, like the beams — they
+		# physically fold with it, and revealing them away during fold_pack
+		# (the old 1-fold ramp) plus the deep ghost left the structure all but
+		# invisible for the whole fold: the "it disappears, then a crate
+		# appears" read this function exists to prevent.
+		"supports": 1.0,
 		"beams": 1.0,
-		"ghost": clampf(1.0 - 0.65 * fold, 0.35, 1.0),
+		# Shallow ghost, floored high: the fold sweep that follows fold_pack
+		# plays on THIS frame, and it must stay clearly visible right up to
+		# the crate swap. (Was 1−0.65·fold floored at 0.35 — mostly gone
+		# before the fold even started.)
+		"ghost": clampf(1.0 - 0.25 * fold, 0.75, 1.0),
 		"folded": folded,
 	}
 

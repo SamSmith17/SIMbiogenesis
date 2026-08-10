@@ -1922,10 +1922,13 @@ func _test_breakdown_progress() -> void:
 	board.claim(fold_id, "w2")
 	board.credit(fold_id, board.find(fold_id)["chore_hours"] * 0.5, 10.0)
 	var bd3 := SiteProject.breakdown_progress(project, board)
-	_check("supports come off with the fold prep",
-			absf(float(bd3["supports"]) - 0.5) < 0.02, str(bd3["supports"]))
-	_check("frame ghosts toward the handoff",
-			float(bd3["ghost"]) < 1.0 and float(bd3["ghost"]) >= 0.35, str(bd3["ghost"]))
+	# Supports fold WITH the frame (like the beams): revealing them away during
+	# fold_pack plus the old deep ghost left the structure all but invisible
+	# for the whole fold — the "it disappears, then a crate appears" gap.
+	_check("supports fold with the frame, not away",
+			is_equal_approx(float(bd3["supports"]), 1.0), str(bd3["supports"]))
+	_check("frame ghosts toward the handoff but stays clearly visible",
+			float(bd3["ghost"]) < 1.0 and float(bd3["ghost"]) >= 0.75, str(bd3["ghost"]))
 	_check("beams still standing at the fold", is_equal_approx(float(bd3["beams"]), 1.0))
 	board.credit(fold_id, 99.0, 10.0)
 	SiteProject.sync_with_board(project, board)

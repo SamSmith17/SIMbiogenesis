@@ -496,8 +496,14 @@ func _push_build_progress(store: SiteProjectStore, board, main: Node) -> void:
 			continue
 		if kind == SiteProject.KIND_LINKAGE_BREAKDOWN:
 			var bd := SiteProject.breakdown_progress(project, board)
-			if bool(bd.get("folded", false)):
-				continue   # the crate has replaced the frame; nothing to paint
+			# `folded` used to `continue` (stop painting) — which froze the
+			# frame at whatever the LAST push showed while pack_prop's ~3 s
+			# stow-fold sweep played, and with the old deep ghost that was a
+			# near-invisible skeleton: the "structure disappears, then a crate
+			# appears" gap. Keep painting the final pre-pack state instead —
+			# beams+supports solid, ghost held high — right up to the crate
+			# swap (after which _linkage_builder_for returns null and this
+			# loop naturally stops reaching it).
 			builder.call("set_build_progress", {
 				"beams": bd["beams"], "brackets": bd["brackets"],
 				"bolts": bd["bolts"], "supports": bd["supports"],

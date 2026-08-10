@@ -481,12 +481,28 @@ func _apply_build_progress() -> void:
 		var frac := clampf(float(_build_progress.get(pair[1], 1.0)), 0.0, 1.0)
 		var target := int(round(frac * float(inst.multimesh.instance_count)))
 		# Offline / not-yet-in-tree contexts snap (selftests read the count
-		# straight back); a live scene animates via _process below. The FIRST
-		# application also snaps — a fresh load must not animate a standing
-		# frame out of nothing.
-		if not is_inside_tree() or not _reveal_shown.has(inst.name):
+		# straight back, and a cold load must not animate a standing frame out
+		# of nothing — construction props are built OFF-tree, so a restore
+		# always lands here).
+		if not is_inside_tree():
 			inst.multimesh.visible_instance_count = target
 			_reveal_shown[inst.name] = float(target)
+		elif not _reveal_shown.has(inst.name):
+			# A LIVE builder meeting this element for the first time — the
+			# post-unpack fresh builder, or a mid-build reallocation minting
+			# the panel MultiMesh. A COMPLETE element (frac ~1, e.g. the beams
+			# the deploy sweep just raised) snaps: it is not under
+			# construction. An INCOMPLETE one starts at ZERO and walks up via
+			# _process — this is what makes panels land one at a time during
+			# the build instead of popping in at the accrued fraction (the
+			# fresh MultiMesh's -1 default meant they ALL showed until the
+			# target next moved).
+			if frac >= 0.999:
+				inst.multimesh.visible_instance_count = target
+				_reveal_shown[inst.name] = float(target)
+			else:
+				inst.multimesh.visible_instance_count = 0
+				_reveal_shown[inst.name] = 0.0
 	if is_inside_tree() and not _build_progress.is_empty():
 		set_process(true)
 
@@ -597,8 +613,13 @@ func _allocate_from_frame(frame: Dictionary) -> void:
 		set_ghost_alpha(_ghost_alpha)
 	# Same trap for build progress: fresh MultiMeshes default to
 	# visible_instance_count = -1 (all visible), so a half-built structure
-	# would pop fully built on any fold-driven reallocation.
+	# would pop fully built on any fold-driven reallocation. The reveal state
+	# is cleared FIRST: stale entries under the old MultiMeshes' names made
+	# _apply_build_progress skip initializing the fresh ones (the "every panel
+	# visible until the target moves" bug), and _process's shown≈target skip
+	# then never wrote the count either.
 	if not _build_progress.is_empty():
+		_reveal_shown.clear()
 		_apply_build_progress()
 
 
