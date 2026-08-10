@@ -359,7 +359,9 @@ func free_hours(assigned_chore_h: float = 0.0) -> float:
 func current_consumption(ctx: Dictionary) -> Dictionary:
 	if state != State.DOING or activity.is_empty():
 		return {}
-	var consumes: Dictionary = (ACTIVITIES.get(activity, {}) as Dictionary).get("consumes", {})
+	# One source of truth with the FSM's own billing (_consumes_for), so the
+	# possessed-agent path bills the same kinds — including meal-first eating.
+	var consumes: Dictionary = _consumes_for(activity, ctx)
 	if consumes.is_empty():
 		return {}
 	var starved: Dictionary = ctx.get("starved", {})
@@ -414,7 +416,7 @@ func _step_doing(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 		return _step_chore(abs_hours, dt_hours, ctx)
 	# Starved supply blocks the activity: abort and retry later — the need is
 	# NOT satisfied and keeps rising (the two-way-coupling payoff).
-	var consumes: Dictionary = _consumes_for(activity)
+	var consumes: Dictionary = _consumes_for(activity, ctx)
 	if activity != "sleep":
 		var starved: Dictionary = ctx.get("starved", {})
 		for kind in consumes:
@@ -587,7 +589,7 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 		# hours_left_in_block (a night is one session, not a routine visit).
 		activity_ends_h = abs_hours + fposmod(_wake_hour() - _hour(ctx), 24.0)
 		return {}
-	var consumes: Dictionary = _consumes_for(activity)
+	var consumes: Dictionary = _consumes_for(activity, ctx)
 	var starved: Dictionary = ctx.get("starved", {})
 	for kind in consumes:
 		if starved.get(kind, false):
@@ -601,12 +603,23 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 	return _scaled(consumes, doing_h, dt_hours)
 
 
+## Meal-first draw rate: 2 meals/h over the same 0.5 h sitting = 1 meal
+## (~0.5 kg raw-food equivalent — the same mass the raw path bills).
+const MEAL_PER_H := 2.0
+
+
 ## What an activity consumes right now. Enrichment is normally free, but a
 ## fire circle burns real biomass — joy has a cost the player must supply.
-func _consumes_for(act: String) -> Dictionary:
+## Eating is MEAL-FIRST: when the habitat's meal input is wired to a stocked
+## counter (ctx.meal_available, computed once per tick by the bridge), a
+## sitting draws prepared meals; otherwise the long-standing raw-food draw —
+## so a camp with no kitchen behaves byte-identically to before meals existed.
+func _consumes_for(act: String, ctx: Dictionary = {}) -> Dictionary:
 	var base: Dictionary = (ACTIVITIES.get(act, {}) as Dictionary).get("consumes", {})
 	if act == "enrichment" and target_space_type == "fire_circle":
 		return {"biomass": FIRE_BIOMASS_KG_H}
+	if act == "hunger" and bool(ctx.get("meal_available", false)):
+		return {"meal": MEAL_PER_H, "water": float(base.get("water", 8.0))}
 	return base
 
 

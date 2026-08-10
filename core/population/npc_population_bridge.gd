@@ -127,6 +127,12 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		# Last flow tick's verdict drives this tick's blocked activities.
 		engine.set_starved(specs.get("starved_kinds", []) as Array)
 		var ctx := {
+			# Meal-first eating: true when this habitat's meal input is wired
+			# to a stocked tank. Checked ONCE per tick, not per agent — the
+			# agents read the flag from ctx.
+			"meal_available": flow_engine != null
+				and flow_engine.has_method("habitat_kind_supplied")
+				and flow_engine.habitat_kind_supplied(iid, "meal"),
 			"registry": registry,
 			"pos_of": func(space: Dictionary) -> Variant:
 				return registry.resolve_position(space, main) if registry != null else null,

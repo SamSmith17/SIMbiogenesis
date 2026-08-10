@@ -83,6 +83,30 @@ func _test_catalog() -> void:
 	_check("user delete", ProcessRecipeCatalog.delete_user_recipe("selftest_tmp_recipe"))
 	_check("user gone", ProcessRecipeCatalog.find("selftest_tmp_recipe").is_empty())
 
+	# The meal loop's producer half (kitchen preset + meal_prep builtin).
+	var meal := ProcessRecipe.normalize(ProcessRecipeCatalog.find("meal_prep"))
+	_check("meal_prep exists", not meal.is_empty())
+	_check("meal_prep resolves for the kitchen role",
+		ProcessRecipeCatalog.recipes_for_role("kitchen").size() >= 1)
+	# Total chore_hours rolls up from the steps (0.5 prep + 0.25 serve) — the
+	# normalizer's own rule; authoring both would double-count.
+	_check("meal_prep chore hours roll up from steps",
+		_approx(float(meal.get("chore_hours", 0.0)), 0.74, 0.76),
+		str(meal.get("chore_hours")))
+	var out_kinds: Array = []
+	for o in (meal.get("outputs", []) as Array):
+		out_kinds.append(str((o as Dictionary).get("kind", "")))
+	_check("meal_prep outputs the full waste stream",
+		out_kinds.has("meal") and out_kinds.has("food_waste")
+			and out_kinds.has("packaging_waste"), str(out_kinds))
+	# Neither crew step demands a player Confirm — with a finite ledger they
+	# become real cooking chores through the labour merge instead.
+	var any_confirm := false
+	for st in (meal.get("steps", []) as Array):
+		if bool((st as Dictionary).get("require_confirm", false)):
+			any_confirm = true
+	_check("meal_prep steps are crew work, not Confirm gates", not any_confirm)
+
 
 func _test_legacy_migration() -> void:
 	var specs := {

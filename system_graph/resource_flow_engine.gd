@@ -2631,6 +2631,32 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 		_write_node_state(iid, specs, GraphNodeState.IDLE)
 
 
+## Whether a habitat's input channel for `kind` is WIRED to a tank that has
+## supply right now. The population sim's MEAL-FIRST eating asks this each
+## tick ("is there a stocked meal counter?") and falls back to raw food when
+## the answer is no — which is what keeps every kitchen-less camp, fixture
+## and capture on the food path byte-identically. Pure read; no flow moves.
+func habitat_kind_supplied(item_id: String, kind: String) -> bool:
+	var item := _model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = item.get("specs", {})
+	var want := ResourceKinds.normalize_kind(kind)
+	var inputs: Array = specs.get("inputs", []) as Array
+	for i: int in inputs.size():
+		if ResourceKinds.normalize_kind(
+				str((inputs[i] as Dictionary).get("kind", ""))) != want:
+			continue
+		var tank_id := _tank_at_port(item_id, "res_in_%d" % i, true)
+		if tank_id.is_empty():
+			tank_id = _tank_at_port(item_id, "input", true)
+		if tank_id.is_empty():
+			return false
+		var tl: ResourceTimeline = _timelines.get(tank_id) as ResourceTimeline
+		return tl != null and tl.level_at(maxf(_last_abs_hours, 0.0)) > 0.001
+	return false
+
+
 func _write_habitat_starved(item_id: String, specs: Dictionary, starved: Array) -> void:
 	var prev: Array = specs.get("starved_kinds", []) as Array
 	var changed := prev.size() != starved.size()

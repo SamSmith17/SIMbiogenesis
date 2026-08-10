@@ -147,6 +147,29 @@ const BUILTIN: Dictionary = {
 		"abbrev": "ðŸŽ",
 		"flow_ref_rate": 10.0,
 	},
+	"meal": {
+		# Prepared meals out of a Kitchen processor (meal_prep recipe). One
+		# meal ~ 0.5 kg of raw food — the same sitting the eating activity
+		# used to draw as `food 1.0 kg/h x 0.5 h`. Counted in MEALS, not kg:
+		# a meal is a discrete serving, and the habitat's meal-first draw is
+		# 2 meals/h over the same half-hour sitting.
+		"display": "Prepared Meals",
+		"color": Color(0.980, 0.702, 0.302, 1.0),
+		"unit": "meals",
+		"abbrev": "ML",
+		"flow_ref_rate": 4.0,
+		"aliases": ["meals", "prepared_meal", "prepared_meals"],
+	},
+	"packaging_waste": {
+		# Wrappers, sacks, cans — the dry side of a kitchen's waste stream
+		# (food_waste is the wet side). Feeds the waste bins / plastic loop.
+		"display": "Packaging Waste",
+		"color": Color(0.760, 0.700, 0.560, 1.0),
+		"unit": "kg",
+		"abbrev": "PW",
+		"flow_ref_rate": 2.0,
+		"aliases": ["packaging"],
+	},
 	"nutrients": {
 		"display": "Nutrients",
 		"color": Color(0.820, 0.720, 0.180, 1.0),
@@ -539,6 +562,10 @@ static func infer_kind_from_name(name: String) -> String:
 		return "manure"
 	if ("food" in n and ("waste" in n or "scrap" in n)) or "kitchen" in n:
 		return "food_waste"
+	if "packaging" in n or "wrapper" in n:
+		return "packaging_waste"
+	if "meal" in n:
+		return "meal"
 	if "food" in n:
 		return "food"
 	if "money" in n or "cash" in n:

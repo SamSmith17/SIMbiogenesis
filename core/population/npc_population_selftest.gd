@@ -28,6 +28,7 @@ func _init() -> void:
 	_test_nav()
 	_test_agent_daily_loop()
 	_test_determinism()
+	_test_meal_first_eating()
 	_test_starvation_block()
 	_test_scrub_and_catchup()
 	_test_engine_snapshot()
@@ -609,6 +610,59 @@ func _sim_trace() -> String:
 					float(ag.needs["hunger"]), float(ag.needs["thirst"]),
 					float(ag.needs["bladder"]), float(ag.needs["sleep"])])
 	return "\n".join(PackedStringArray(parts))
+
+
+## Meal-first eating: with a stocked meal counter wired (ctx.meal_available,
+## computed by the bridge) a sitting draws MEALS; without one it draws raw
+## food exactly as it always has — the fallback that keeps every kitchen-less
+## camp byte-identical. A starved meal channel blocks the sitting the same
+## two-way way food starvation always did.
+func _test_meal_first_eating() -> void:
+	var site := _make_test_site()
+
+	var run_eaters := func(meal_available: bool, starved: Array) -> Dictionary:
+		var engine := NpcPopulationEngine.new()
+		engine.configure(4, "meal_hab", Vector2.ZERO)
+		engine.set_starved(starved)
+		for item in engine.agents:
+			var a: NpcAgent = item
+			a.needs["hunger"] = 0.9
+			for calm in ["thirst", "bladder", "sleep", "hygiene", "enrichment"]:
+				a.needs[calm] = 0.05
+		var totals := {"meal": 0.0, "food": 0.0}
+		var t := 12.0   # lunch block — the routine sends them to eat anyway
+		while t < 14.0:
+			t += 1.0 / 60.0
+			var d: Dictionary = engine.tick(t, {
+				"registry": site["registry"], "pos_of": site["pos_of"],
+				"hour_of_day": fposmod(t, 24.0),
+				"meal_available": meal_available})
+			totals["meal"] += float(d.get("meal", 0.0))
+			totals["food"] += float(d.get("food", 0.0))
+		return totals
+
+	var with_meals: Dictionary = run_eaters.call(true, [])
+	_check("stocked counter: sittings draw meals",
+		float(with_meals["meal"]) > 0.0, str(with_meals))
+	_check("stocked counter: no raw food drawn",
+		is_zero_approx(float(with_meals["food"])), str(with_meals))
+
+	var without: Dictionary = run_eaters.call(false, [])
+	_check("no counter: the raw-food path is unchanged",
+		float(without["food"]) > 0.0 and is_zero_approx(float(without["meal"])),
+		str(without))
+
+	# ~Equivalent mass either way: 2 meals/h vs 1 kg/h over the same sittings
+	# (1 meal ~ 0.5 kg raw). The ratio proves nobody eats twice.
+	_check("a meal sitting bills the equivalent of a food sitting",
+		absf(float(with_meals["meal"]) - 2.0 * float(without["food"]))
+			< 0.35 * maxf(float(with_meals["meal"]), 0.001),
+		"meal %.2f vs food %.2f" % [with_meals["meal"], without["food"]])
+
+	# Meal channel starved mid-service: the sitting blocks, nothing is drawn.
+	var dry: Dictionary = run_eaters.call(true, ["meal"])
+	_check("a dry meal counter blocks the sitting (no invented mass)",
+		is_zero_approx(float(dry["meal"])), str(dry))
 
 
 func _test_starvation_block() -> void:

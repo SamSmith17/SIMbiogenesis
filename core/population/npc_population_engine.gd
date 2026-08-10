@@ -528,6 +528,10 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"agent_live": func(aid: String) -> bool: return find_agent(aid) != null,
 		# Prop yaw for lie-orientation (bed long axis); null/absent = unknown.
 		"yaw_of": ctx_in.get("yaw_of", Callable()),
+		# Meal-first eating: the bridge computes "is a stocked meal counter
+		# wired" once per tick; agents read the flag (same forward-or-it-
+		# never-arrives rule as everything else here).
+		"meal_available": bool(ctx_in.get("meal_available", false)),
 	}
 
 

@@ -104,6 +104,44 @@ const BUILTINS: Array = [
 		"note": "Starter process recipe for generic processors.",
 		"builtin": true,
 	},
+	{
+		# The meal loop's producer half (see the Kitchen preset). One batch =
+		# one cooked round: 4 kg raw food + 10 L water + 1.5 kWh → 8 meals
+		# (1 meal ~ 0.5 kg raw, the same sitting the eating activity draws),
+		# plus the honest waste stream — wet scraps to the digester loop, dry
+		# packaging to the bins. The two chore-hours steps are what put a COOK
+		# at the kitchen: with a finite labour ledger they auto-mint real
+		# chores at the kitchen's bound prop via the existing labour merge.
+		# Total chore_hours deliberately left 0 — the normalizer rolls it up
+		# from the steps (authoring both double-counts).
+		"id": "meal_prep",
+		"label": "Meal Prep (8 servings)",
+		"compatible_roles": ["kitchen"],
+		"batch_time_hrs": 1.0,
+		"failure_mode": "pause_and_resume",
+		"chore_hours": 0.0,
+		"require_confirm_start": false,
+		"inputs": [
+			{"kind": "food", "qty": 4.0, "mode": "frontloaded"},
+			{"kind": "water", "qty": 10.0, "mode": "continuous"},
+			{"kind": "electric", "qty": 1500.0, "mode": "continuous"},
+		],
+		"outputs": [
+			{"kind": "meal", "qty": 8.0, "mode": "end_batch"},
+			{"kind": "food_waste", "qty": 0.8, "mode": "end_batch"},
+			{"kind": "packaging_waste", "qty": 0.3, "mode": "end_batch"},
+		],
+		"steps": [
+			{"id": "prep", "label": "Prep ingredients", "at_frac": 0.0,
+				"chore_hours": 0.5, "require_confirm": false},
+			{"id": "cook", "label": "Cook", "at_frac": 0.0,
+				"chore_hours": 0.0, "require_confirm": false},
+			{"id": "serve", "label": "Plate and serve", "at_frac": 1.0,
+				"chore_hours": 0.25, "require_confirm": false},
+		],
+		"note": "Cooked rounds for the meal counter — people eat meals first and fall back to raw food.",
+		"builtin": true,
+	},
 ]
 
 

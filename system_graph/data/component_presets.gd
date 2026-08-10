@@ -347,6 +347,32 @@ const PROCESSORS: Array = [
 		},
 	},
 	{
+		# Camp kitchen — the meal loop's producer. Role "kitchen" is
+		# deliberately NOT in ResourceFlowEngine's specialized_job list, so it
+		# gets the whole ProcessRecipe machinery (the meal_prep builtin) for
+		# free: crew-hours steps auto-mint cooking chores at the bound 3D twin
+		# via the existing labour merge, ingredients pull from wired tanks,
+		# meals/scraps/packaging push out as ordinary graph flows. The
+		# constant rates below only drive the recipe-less fallback mode.
+		"type": "processor", "label": "Kitchen", "icon": "🍲",
+		"width": 160.0, "height": 150.0,
+		"specs": {
+			"name": "Kitchen", "role": "kitchen", "watts": 1500.0, "cost": 600.0,
+			"energy_source": "ac",
+			"efficiency": 0.9, "energy_wh_per_unit": 150.0,
+			"daily_note": "meal_prep: 4 kg food + 10 L water + 1.5 kWh → 8 meals + scraps + packaging",
+			"inputs": [
+				{"kind": "food", "rate": 4.0, "unit": "kg/h"},
+				{"kind": "water", "rate": 10.0, "unit": "L/h"},
+			],
+			"outputs": [
+				{"kind": "meal", "rate": 8.0, "unit": "meals/h"},
+				{"kind": "food_waste", "rate": 0.8, "unit": "L/h"},
+				{"kind": "packaging_waste", "rate": 0.3, "unit": "kg/h"},
+			],
+		},
+	},
+	{
 		"type": "processor", "label": "Compost Digester", "icon": "🌱",
 		"width": 140.0, "height": 130.0,
 		"specs": {
@@ -530,6 +556,11 @@ const HABITATS: Array = [
 			"inputs": [
 				{"kind": "water", "rate": 2.083, "unit": "L/h"},
 				{"kind": "food", "rate": 0.0625, "unit": "kg/h"},
+				# Prepared meals (Kitchen → Meal Counter → here). Rate 0 →
+				# inert in the constant-rate model; the pop sim's MEAL-FIRST
+				# eating draws it when the port is wired and supplied, and
+				# falls back to raw food otherwise.
+				{"kind": "meal", "rate": 0.0, "unit": "meals/h"},
 				# Fuel for gathering (fire circles). Rate 0 → inert in the
 				# classic constant-rate model; only the NPC population sim
 				# draws on it, and only when people gather at a fire.
@@ -662,6 +693,25 @@ const RESOURCES: Array = [
 			"name": "Food Store", "resource_kind": "food",
 			"capacity": "50 kg", "capacity_qty": 50.0, "capacity_unit": "kg",
 			"level": 0.8, "cost": 40.0,
+		},
+	},
+	{
+		# The meal loop's buffer: Kitchen → here → habitat meal input.
+		"type": "resource", "label": "Meal Counter (40 meals)", "icon": "🍲",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Meal Counter", "resource_kind": "meal",
+			"capacity": "40 meals", "capacity_qty": 40.0, "capacity_unit": "meals",
+			"level": 0.0, "cost": 30.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Packaging Waste Bin", "icon": "🗑",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Packaging Waste Bin", "resource_kind": "packaging_waste",
+			"capacity": "60 kg", "capacity_qty": 60.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 25.0,
 		},
 	},
 	{
