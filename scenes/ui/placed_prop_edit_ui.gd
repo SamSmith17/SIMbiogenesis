@@ -423,8 +423,15 @@ func _refresh_packed_line(d: Dictionary) -> void:
 	if packed.is_empty():
 		return
 	var est := "  (est.)" if str(packed.get("source", "")) == "estimated" else ""
-	_packed_lbl.text = "📦 Packs to %s · %s%s" % [
-		PackedSpec.format_dims(packed), PackedSpec.format_mass(packed), est]
+	if bool(d.get("packed", false)):
+		# Already a crate: lead with WHAT IS INSIDE (same helper as the
+		# crosshair focus label, so the two never drift).
+		_packed_lbl.text = "📦 Contains: %s · %s%s" % [
+			PlacedPropRuntime.packed_contents_label(d, get_tree().current_scene),
+			PackedSpec.format_mass(packed), est]
+	else:
+		_packed_lbl.text = "📦 Packs to %s · %s%s" % [
+			PackedSpec.format_dims(packed), PackedSpec.format_mass(packed), est]
 
 
 func _on_pack_toggled() -> void:

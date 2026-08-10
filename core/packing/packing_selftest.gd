@@ -38,6 +38,7 @@ func _initialize() -> void:
 	_test_pack_tree()
 	_test_pack_defs()
 	_test_packed_form_builder()
+	_test_packed_contents_label()
 	_test_haul_model()
 	_test_unpack_scenario()
 	_test_stow_plan()
@@ -625,6 +626,28 @@ func _form_aabb(node: Node3D) -> AABB:
 ## Phase 5: the PACKED world form. The crate node is what PlacedPropRuntime
 ## builds for a `packed: true` record — dims must match the spec and the
 ## floor must sit at local y=0 (the prop grounding contract).
+## "What is inside this crate" — the crosshair focus + edit drawer share this
+## one helper, so its ladder is pinned here: a folded linkage design describes
+## itself from its params; everything else gets the catalog label + shipping
+## dims (delivery context needs a live scene and is exercised windowed).
+func _test_packed_contents_label() -> void:
+	var p := LinkageParams.new()
+	var lk := PlacedPropRuntime.packed_contents_label(
+		{"linkage_spec": p.to_config(), "packed": true})
+	_check("linkage crate names its modules",
+		lk.begins_with("Folded structure") and str(p.modules) in lk, lk)
+	var gen := PlacedPropRuntime.packed_contents_label(
+		{"model_id": "cargo_container", "packed": true,
+			"container_spec": {"container_id": "container_20"}})
+	_check("generic crate leads with the catalog label",
+		gen.begins_with("Shipping Container"), gen)
+	_check("generic crate carries the shipping dims", "·" in gen, gen)
+	var unknown := PlacedPropRuntime.packed_contents_label(
+		{"model_id": "no_such_model_xyz", "packed": true})
+	_check("unknown model still yields a readable label",
+		not unknown.is_empty(), unknown)
+
+
 func _test_packed_form_builder() -> void:
 	var crate := PackedFormBuilder.build_node(PackedSpec.normalize(
 		{"w_m": 2.0, "d_m": 1.0, "h_m": 0.5, "form": "crate"}))

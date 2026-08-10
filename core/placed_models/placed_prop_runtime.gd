@@ -206,6 +206,41 @@ static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
 	return PackedSpec.for_model(str(rec.get("model_id", "")))
 
 
+## One human line for "what is inside this packed thing" — the crosshair
+## focus label and the edit drawer both use it, so the two can't drift. A
+## packed crate is visually anonymous (a box is a box); this is the answer to
+## "what IS that" without opening a modal. Cheap by design: no solver runs —
+## a folded linkage design is described from its params, everything else from
+## the model catalog + the honest shipping envelope, with the delivery kit
+## named when the crate arrived in one.
+static func packed_contents_label(rec: Dictionary, main: Node = null) -> String:
+	if rec.get("linkage_spec") is Dictionary:
+		var p := LinkageParams.new()
+		p.from_config(rec.get("linkage_spec") as Dictionary)
+		var txt := "Folded structure — %d modules" % p.modules
+		if bool((p.solar_panels as Dictionary).get("enabled", false)):
+			txt += " + solar panels"
+		return txt
+	var entry := ModelCatalog.find(str(rec.get("model_id", "")))
+	var label := str(entry.get("label", ""))
+	if label.is_empty():
+		label = str(rec.get("model_id", "packed item")).capitalize()
+	var spec := packed_spec_for_record(rec)
+	if not spec.is_empty():
+		label += " · %s" % PackedSpec.format_dims_short(spec)
+	# Delivery context: which kit drop this crate came off, resolved through
+	# the container it arrived in.
+	var did := str(rec.get("delivery_id", ""))
+	if not did.is_empty() and main != null:
+		var container := PlacedPropService.get_prop_record(main, did)
+		var scen := UnpackScenario.find(str(
+			(container.get("delivery", {}) as Dictionary).get("scenario_id", "")))
+		var kit_label := str(scen.get("label", ""))
+		if not kit_label.is_empty():
+			label += " (%s)" % kit_label
+	return label
+
+
 ## The PACKED build: a PackedFormBuilder crate at the record's spot. Yaw-only
 ## transform at USER scale (the crate is authored in real metres — the
 ## catalog's GLB unit-compensation scale must NOT apply), no behavior

@@ -892,7 +892,18 @@ func _update_ui() -> void:
 				var lbl := _focused.get_prompt_text()
 				if _focused is PlacedProp:
 					var pp := _focused as PlacedProp
-					if pp.has_meta("printed_job_id"):
+					if pp.has_meta("packed"):
+						# A packed crate is visually anonymous — say what is
+						# INSIDE it, plus the runtime's own action prompt
+						# ("Unpack (Interact)…" / "Stowed — unload the
+						# delivery first" / "Under construction…"), which the
+						# old "Edit prop" fallthrough was discarding.
+						var main := get_tree().current_scene
+						var rec := PlacedPropService.get_prop_record(main, pp.prop_id)
+						var contents := PlacedPropRuntime.packed_contents_label(rec, main)
+						lbl = "📦 %s — %s" % [contents, pp.get_prompt_text()] \
+							if not contents.is_empty() else pp.get_prompt_text()
+					elif pp.has_meta("printed_job_id"):
 						lbl = "Inspect · Move (drag)"
 					elif pp.get_node_or_null("CncMachineRuntime") != null \
 							and _is_fdm_printer_prop(pp):
