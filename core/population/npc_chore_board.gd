@@ -853,11 +853,20 @@ func add_plan(plan_chores: Array,
 				opts[opt_key] = d[opt_key]
 		if d.get("stage_effects", null) is Array and not (d["stage_effects"] as Array).is_empty():
 			opts["stage_effects"] = d["stage_effects"]
-		var cid := add_chore(str(d.get("label", "Task")),
-			float(d.get("chore_hours", 0.1)), opts)
+		# chore_specs rows carry `chore_hours`; hand-authored and labour-phase
+		# rows (site_project_panel's New project, RecipeCatalog assembly
+		# phases) carry `work_s` PERSON-SECONDS instead. Accepting either
+		# closes a silent drop: a "~8 person-h" custom project used to mint a
+		# 0.1 h chore whatever the player typed.
+		var hours := float(d.get("chore_hours", 0.0))
+		if hours <= 0.0:
+			hours = float(d.get("work_s", 0.0)) / 3600.0
+		if hours <= 0.0:
+			hours = 0.1
+		var cid := add_chore(str(d.get("label", "Task")), hours, opts)
 		if cid.is_empty():
 			break
-		by_task[str(d.get("task_id", ""))] = cid
+		by_task[str(d.get("task_id", d.get("id", "")))] = cid
 		made.append({"cid": cid, "deps": d.get("depends_on", [])})
 	var out: Array = []
 	for m in made:

@@ -21,6 +21,10 @@ extends RefCounted
 ##   {op:"remove_prop", prop_id}         consume an emptied crate
 ##   {op:"spawn_prop",  model_id, x, z, extra:{}}
 ##   {op:"set_build_phase", prop_id, phase, ghost}  progressive build state
+##   {op:"finalize_assembly", prop_id, graph_preset} crew assembly complete:
+##       clear the ghost; when graph_preset names a ComponentPresets entry,
+##       bind the finished structure into the 2D graph (a crafted VAWT
+##       becomes a live wind generator)
 ##
 ## set_prop_packed is a COROUTINE (it awaits the fold sweep); it is always
 ## call_deferred'd and never awaited here — the sweep runs inside the ambient
@@ -90,6 +94,19 @@ static func execute(main: Node, op: Dictionary) -> bool:
 			if str(op.get("phase", "")).is_empty():
 				patch = {"build_state": null}
 			return PlacedPropService.update_prop_record(main, prop_id, patch, true)
+		"finalize_assembly":
+			# Crew assembly complete: the ghost firms into the real structure
+			# (build_state cleared -> normal rebuild, trackers/runtimes
+			# attach), and a graph-linked recipe binds it into the 2D graph.
+			PlacedPropService.update_prop_record(main, prop_id,
+				{"build_state": null}, true)
+			var preset := str(op.get("graph_preset", ""))
+			if preset.is_empty():
+				return true
+			var sgv2 := main.get_node_or_null("UILayer/SystemGraphView")
+			if sgv2 == null or not sgv2.has_method("bind_assembled_structure"):
+				return false  # view not up yet — retry next sweep
+			return bool(sgv2.call("bind_assembled_structure", prop_id, preset))
 		_:
 			# Consumed, not retried: an unknown op (older build reading a newer
 			# save) must not warn on every tick forever. Returning false would

@@ -41,6 +41,7 @@ func _init() -> void:
 	_test_chore_board()
 	_test_chore_crew_and_deps()
 	_test_chore_plan_v3()
+	_test_plan_row_dialects()
 	_test_carry_leg()
 	_test_site_project()
 	_test_stage_effects_and_brigade()
@@ -1387,6 +1388,28 @@ func _test_chore_crew_and_deps() -> void:
 ## Phase-0 substrate for Site Projects: atomic add_plan, per-task board
 ## fields riding through chore_specs overrides + add_plan, uncapped priority,
 ## the held pause flag, and effect payload persistence.
+## add_plan accepts BOTH row dialects: chore_specs rows (`task_id` +
+## `chore_hours`) and hand-authored / crew-assembly labour rows (`id` +
+## `work_s` person-seconds). The second used to be silently dropped — a
+## "~8 person-h" custom project minted a 0.1 h chore whatever was typed.
+func _test_plan_row_dialects() -> void:
+	var b := NpcChoreBoard.create_empty()
+	var made: Array = b.add_plan([
+		{"id": "one", "label": "Big job", "work_s": 4.0 * 3600.0,
+			"min_workers": 1, "max_workers": 2},
+		{"task_id": "two", "label": "Small job", "chore_hours": 0.5,
+			"depends_on": ["one"]},
+	], {"start_h": 0.0, "end_h": 24.0})
+	_check("both dialects minted", made.size() == 2, str(made))
+	var big := b.find(str(made[0]))
+	_check("work_s converts to hours",
+		absf(float(big.get("chore_hours", 0.0)) - 4.0) < 0.001,
+		str(big.get("chore_hours")))
+	var small := b.find(str(made[1]))
+	_check("deps map across dialects (task_id ref -> id row)",
+		(small.get("depends_on", []) as Array).has(str(made[0])))
+
+
 func _test_chore_plan_v3() -> void:
 	# Atomic refusal: a plan that doesn't fit leaves the board UNTOUCHED —
 	# a truncated plan's dangling dep ids read as satisfied and silently

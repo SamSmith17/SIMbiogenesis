@@ -4753,7 +4753,12 @@ func place_mud_building(mud_spec: Dictionary) -> void:
 ## Begin ghost placement of a crafted output model (no bound graph node) — the
 ## crafting "assemble" action hands off to the same in-world placement loop the
 ## library "Place Model" uses.
-func place_crafted_model(model_id: String, label: String) -> void:
+## `crew_recipe_id` (RecipeCatalog id with a `labour` block): the structure
+## commits as an under-construction GHOST, parts are debited AT COMMIT
+## (cancelling the placement costs nothing), and an "assembly" site project
+## puts the crew on it — see _queue_assembly_project.
+func place_crafted_model(model_id: String, label: String,
+		crew_recipe_id: String = "") -> void:
 	if model_id.is_empty():
 		return
 	var main := _get_scene_main_node()
@@ -4771,6 +4776,12 @@ func place_crafted_model(model_id: String, label: String) -> void:
 				"ghost_highlight": false,
 			},
 		}
+	if not crew_recipe_id.is_empty():
+		var extra: Dictionary = prep.get("record_extra", {})
+		extra["build_state"] = {"phase": "", "ghost": 0.15}
+		prep["record_extra"] = extra
+		prep["on_committed"] = func(prop_id: String) -> void:
+			_queue_assembly_project(crew_recipe_id, prop_id)
 	var r: Dictionary = PlacedPropService.begin_placement(main, model_id, prep)
 	if not bool(r.get("ok", false)):
 		_show_toast("Could not start placement")
@@ -4790,6 +4801,120 @@ func place_crafted_model(model_id: String, label: String) -> void:
 		if ppui != null and ppui.has_method("notify_bundle_imported"):
 			ppui.call("notify_bundle_imported", r)
 	_show_toast("Place your %s" % label)
+
+
+## The crew-assembly queue half of place_crafted_model: runs once the player
+## commits the ghost's spot. Parts are debited HERE (the CNC reserve/refund
+## discipline: any downstream refusal credits them straight back and removes
+## the ghost), the recipe's labour phases become chained board chores, and
+## the last phase carries the finalize_assembly effect that firms the ghost
+## and binds a graph node.
+func _queue_assembly_project(recipe_id: String, prop_id: String) -> void:
+	var main := _get_scene_main_node()
+	var loader := _find_terrain_loader(main) if main != null else null
+	var recipe := RecipeCatalog.find(recipe_id)
+	var requires: Dictionary = recipe.get("requires", {})
+	var abort := func(msg: String, refund: bool) -> void:
+		if refund:
+			var inv2: PartInventory = loader.call("get_part_inventory")
+			for pid2 in requires:
+				inv2.add_part(str(pid2), int(requires[pid2]))
+			loader.call("save_part_inventory")
+		if loader != null and loader.has_method("delete_prop_by_id"):
+			loader.call("delete_prop_by_id", prop_id)
+		_show_toast(msg)
+	if loader == null or not loader.has_method("get_part_inventory") \
+			or recipe.is_empty():
+		abort.call("Crew assembly needs a generated map with an inventory", false)
+		return
+	var inv: PartInventory = loader.call("get_part_inventory")
+	if _npc_population == null or _npc_population.pop_driven_item_ids().is_empty():
+		abort.call("Nobody to do the work — turn on Population Simulation for a habitat first", false)
+		return
+	if not RecipeCatalog.spend(inv, recipe_id):
+		abort.call("Parts were used up before assembly could start", false)
+		return
+	loader.call("save_part_inventory")
+	var phases: Array = (recipe.get("labour", {}) as Dictionary).get("phases", [])
+	var n := phases.size()
+	var rows: Array = []
+	var prev_id := ""
+	for i in n:
+		var ph := phases[i] as Dictionary
+		var pid := str(ph.get("id", "p%d" % i))
+		var row := {
+			"task_id": pid,
+			"label": str(ph.get("label", "Assembly work")),
+			"work_s": maxf(float(ph.get("work_s", 3600.0)), 60.0),
+			"min_workers": int(ph.get("min_workers", 1)),
+			"max_workers": int(ph.get("max_workers", 2)),
+			"exposure": NpcWeatherGate.EXPOSURE_OUTDOOR,
+			"priority": i + 1,
+		}
+		if not prev_id.is_empty():
+			row["depends_on"] = [prev_id]
+		if i < n - 1:
+			# Each finished phase firms the ghost a step.
+			row["effect"] = {"op": "set_build_phase", "prop_id": prop_id,
+				"phase": pid, "ghost": lerpf(0.15, 0.85, float(i + 1) / float(n))}
+		else:
+			row["effect"] = {"op": "finalize_assembly", "prop_id": prop_id,
+				"graph_preset": str(recipe.get("graph_preset", ""))}
+		rows.append(row)
+		prev_id = pid
+	var rec := PlacedPropService.get_prop_record(main, prop_id)
+	var site := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	var iid := str(_npc_population.pop_driven_item_ids()[0])
+	var made := _npc_population.create_site_project(iid, "assembly",
+		str(recipe.get("label", "Assembly")), prop_id, site, rows,
+		{"start_h": 7.0, "end_h": 19.0}, {"kind": "prop", "id": prop_id},
+		{"refund_parts": requires.duplicate(true)})
+	if made.is_empty():
+		abort.call("The chore board is full — finish or cancel something first", true)
+		return
+	_show_toast("👷 %s queued — the crew will assemble it" % str(recipe.get("label", "Assembly")))
+
+
+## Bind a crew-ASSEMBLED structure into the 2D graph once its project
+## completes (the finalize_assembly effect). The preset label names the
+## ComponentPresets entry whose specs the node takes; the prop record gains
+## the kind/turbine_node/wind_specs extras so the 3D spin runtime attaches
+## on the rebuild that firmed the ghost.
+func bind_assembled_structure(prop_id: String, preset_label: String) -> bool:
+	var main := _get_scene_main_node()
+	if main == null or model == null:
+		return false
+	var preset := ComponentPresets.find_preset_by_label(preset_label)
+	if preset.is_empty():
+		push_warning("bind_assembled_structure: no preset labelled '%s'" % preset_label)
+		return true   # consumed — an unknown label must not retry forever
+	var rec := PlacedPropService.get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return true   # prop deleted meanwhile — nothing to bind
+	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+	var model_id := str(rec.get("model_id", ""))
+	specs["model_id"] = model_id
+	var ptype := str(preset.get("type", "wind"))
+	var record_extra := {
+		"kind": str(specs.get("kind", "vawt" if ptype == "wind" else "")),
+		"turbine_node": str(specs.get("turbine_node",
+			ModelCatalog.find(model_id).get("turbine_node", ""))),
+		"wind_specs": specs if ptype == "wind" else {},
+	}
+	PlacedPropService.update_prop_record(main, prop_id, record_extra, true)
+	var dims := ComponentPresets.spawn_dimensions(preset)
+	var node_id := create_bound_generator_node(prop_id, {
+		"node_type": ptype,
+		"label": str(preset.get("label", preset_label)),
+		"icon": str(preset.get("icon", "🌀")),
+		"width": dims.x, "height": dims.y,
+		"specs": specs,
+	})
+	if node_id.is_empty():
+		return false   # graph not ready — retry next sweep
+	PlacedPropService.update_prop_record(main, prop_id, {"graph_item_id": node_id}, false)
+	_show_toast("⚡ %s commissioned — it is live on the graph" % preset_label)
+	return true
 
 
 ## Create OR bind a graph node for a placed 3D prop. Called by

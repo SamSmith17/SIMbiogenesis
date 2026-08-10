@@ -55,7 +55,9 @@ static func bind_tasks(project: Dictionary, spec_rows: Array, chore_ids: Array) 
 	for i in mini(spec_rows.size(), chore_ids.size()):
 		var spec := spec_rows[i] as Dictionary
 		tasks.append({
-			"task_id": str(spec.get("task_id", "t%d" % i)),
+			# Same key fallback as add_plan's by_task: chore_specs rows say
+			# `task_id`, hand-authored/labour-phase rows say `id`.
+			"task_id": str(spec.get("task_id", spec.get("id", "t%d" % i))),
 			"chore_id": str(chore_ids[i]),
 			"label": str(spec.get("label", "")),
 			"status": "pending",

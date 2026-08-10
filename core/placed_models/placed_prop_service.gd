@@ -304,6 +304,11 @@ static func confirm_placement() -> bool:
 		_auto_tag_bed_space(main, prop_id)
 	# Keep any bound graph node's site/elevation coords in sync with the 3D twin.
 	_notify_graph_prop_moved(main, prop_id)
+	# Generic post-commit hook (crew assembly queues its project here) —
+	# deferred so the committed prop node and record are fully settled first.
+	var on_committed: Callable = seed_prep.get("on_committed", Callable())
+	if on_committed.is_valid():
+		on_committed.call_deferred(prop_id)
 	return true
 
 

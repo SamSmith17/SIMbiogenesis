@@ -150,15 +150,32 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	# Use the LOCAL radius — the prop is not in the tree yet (no global_transform).
 	prop.set_meta("shadow_mode", str(rec.get("shadow_mode", "")))
 	PropRenderTuning.apply_to_prop(prop, prop.get_local_pick_radius())
-	_maybe_attach_wind_spin(prop, rec)
-	_maybe_attach_hawt_tracker(prop, rec)
-	_maybe_attach_csp_tracker(prop, rec)
-	_maybe_attach_heliostat_tracker(prop, rec)
-	_maybe_attach_siphon_spin(prop, rec)
-	_maybe_attach_cnc_runtime(prop, rec)
-	_maybe_attach_pp_beam_extruder(prop, rec)
-	_maybe_attach_pp_sheet_press(prop, rec)
-	_maybe_attach_linkage_deploy(prop, rec)
+	# UNDER CONSTRUCTION (crew assembly): a non-linkage, non-packed prop with
+	# build_state renders its normal model as a translucent ghost that firms
+	# up as the project's phases complete (set_build_phase effects rebuild it
+	# at each new alpha; finalize_assembly clears the state). No behavior
+	# runtimes — a ghost turbine must not spin — and no connection ports
+	# until it is real. Linkage construction has its own richer branch above.
+	var bs_any: Variant = rec.get("build_state")
+	var under_construction := bs_any is Dictionary \
+		and not (bs_any as Dictionary).is_empty() \
+		and not bool(rec.get("packed", false)) \
+		and not (rec.get("linkage_spec") is Dictionary)
+	if under_construction:
+		_apply_generic_ghost(model,
+			clampf(float((bs_any as Dictionary).get("ghost", 0.2)), 0.05, 1.0))
+		prop.prompt = "Under construction — see the crew's project"
+		prop.set_meta("under_construction", true)
+	else:
+		_maybe_attach_wind_spin(prop, rec)
+		_maybe_attach_hawt_tracker(prop, rec)
+		_maybe_attach_csp_tracker(prop, rec)
+		_maybe_attach_heliostat_tracker(prop, rec)
+		_maybe_attach_siphon_spin(prop, rec)
+		_maybe_attach_cnc_runtime(prop, rec)
+		_maybe_attach_pp_beam_extruder(prop, rec)
+		_maybe_attach_pp_sheet_press(prop, rec)
+		_maybe_attach_linkage_deploy(prop, rec)
 	prop.set_burnable(bool(rec.get("burnable", false)))
 	var prop_id := str(rec.get("id", ""))
 	# Spawn ConnectionPort markers so ConduitManager can snap conduits to tagged plugs.
@@ -172,7 +189,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		ports = ConnectionPortDefs.default_ports_for_model(model_id, dims)
 		if ports.is_empty():
 			ports = ConnectionPortDefs.load_catalog_ports(model_id)
-	if not ports.is_empty():
+	if not ports.is_empty() and not under_construction:
 		ConnectionPortDefs.sync_port_markers(prop, ports)
 	if PlacedPropService.is_placement_active() and prop_id == PlacedPropService.placement_prop_id():
 		prop.set_collision_enabled(false)
@@ -187,6 +204,26 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		prop.visible = false
 		prop.set_collision_enabled(false)
 	return prop
+
+
+## Translucent override for a whole model subtree — the crew-assembly ghost.
+## Materials are DUPLICATES (the originals are shared library resources), and
+## depth pre-pass rather than plain alpha: closed meshes otherwise stack every
+## internal face into a milky slab (the linkage ghost's own lesson).
+static func _apply_generic_ghost(model: Node, alpha: float) -> void:
+	if model == null:
+		return
+	for mi in model.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		if m == null or m.mesh == null:
+			continue
+		for s in m.mesh.get_surface_count():
+			var base := m.get_active_material(s)
+			if base is BaseMaterial3D:
+				var g := (base as BaseMaterial3D).duplicate() as BaseMaterial3D
+				g.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+				g.albedo_color = Color(g.albedo_color, alpha)
+				m.set_surface_override_material(s, g)
 
 
 ## Resolve a record's packed spec — same precedence as the edit drawer:

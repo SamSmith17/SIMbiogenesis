@@ -1905,6 +1905,20 @@ static func load_user_presets() -> void:
 			_user_overrides[cat_id] = (data[cat_id] as Array).duplicate(true)
 
 
+## First built-in preset whose label matches, swept across every category —
+## crew-assembly recipes name the graph node their structure binds into by
+## preset LABEL (RecipeCatalog.graph_preset), the same key the tutorial's
+## unlock gating uses.
+static func find_preset_by_label(label: String) -> Dictionary:
+	if label.is_empty():
+		return {}
+	for cat in CATEGORIES:
+		for p in (cat.get("presets", []) as Array):
+			if p is Dictionary and str((p as Dictionary).get("label", "")) == label:
+				return (p as Dictionary).duplicate(true)
+	return {}
+
+
 ## Built-in presets for a category with any user overrides/additions merged
 ## on top (matched by label). Always returns a fresh, mutable Array.
 static func presets_for_category(cat_id: String) -> Array:

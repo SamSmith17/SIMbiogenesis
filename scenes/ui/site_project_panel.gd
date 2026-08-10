@@ -466,9 +466,10 @@ func _project_card(iid: String, project: Dictionary) -> Control:
 		var cancel_btn := Button.new()
 		UITheme.style_button(cancel_btn)
 		cancel_btn.text = "Cancel"
-		cancel_btn.tooltip_text = "Removes the remaining phases. Completed work keeps its effects."
+		cancel_btn.tooltip_text = "Removes the remaining phases. Completed work keeps its effects; a cancelled ASSEMBLY refunds its parts and clears the ghost."
 		cancel_btn.pressed.connect(func() -> void:
-			_bridge.cancel_project(iid, str(project.get("id", "")))
+			_bridge.cancel_project(iid, str(project.get("id", "")),
+				get_tree().current_scene)
 			_refresh())
 		head.add_child(cancel_btn)
 

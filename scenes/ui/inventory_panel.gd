@@ -196,13 +196,49 @@ func _build_recipe_card(recipe: Dictionary, inv: PartInventory) -> Control:
 		v.add_child(line)
 
 	var can := RecipeCatalog.can_craft(inv, str(recipe.get("id", "")))
-	var btn := Button.new()
-	btn.text = "🔨 Assemble & place"
-	btn.disabled = not can
 	var rid := str(recipe.get("id", ""))
-	btn.pressed.connect(func(): _on_assemble(rid))
+	var phases: Array = (recipe.get("labour", {}) as Dictionary).get("phases", [])
+	var btn := Button.new()
+	if phases.is_empty():
+		btn.text = "🔨 Assemble & place"
+		btn.pressed.connect(func(): _on_assemble(rid))
+	else:
+		# Crew-assembled: a labour summary so the card says what it will cost
+		# in person-hours, and the button routes through the site-project flow
+		# (parts are debited at placement COMMIT, refunded on cancel).
+		var total_s := 0.0
+		var max_crew := 1
+		for ph in phases:
+			total_s += float((ph as Dictionary).get("work_s", 0.0))
+			max_crew = maxi(max_crew, int((ph as Dictionary).get("max_workers", 1)))
+		var lab_line := Label.new()
+		lab_line.text = "👷 ~%.1f person-h · crew up to %d · %d phases" % [
+			total_s / 3600.0, max_crew, phases.size()]
+		lab_line.add_theme_font_size_override("font_size", 11)
+		lab_line.modulate = Color(0.7, 0.75, 0.82)
+		v.add_child(lab_line)
+		btn.text = "👷 Assemble with crew…"
+		btn.tooltip_text = "Pick a site; the crew builds it as a project. Parts are taken when you place the ghost and refunded if you cancel."
+		btn.pressed.connect(func(): _on_assemble_crew(rid))
+	btn.disabled = not can
 	v.add_child(btn)
 	return card
+
+
+## Crew flow: parts are NOT spent here — the commit hook debits them once a
+## site is actually picked (cancelling the placement costs nothing).
+func _on_assemble_crew(recipe_id: String) -> void:
+	var inv := _inventory()
+	if inv == null or not RecipeCatalog.can_craft(inv, recipe_id):
+		return
+	var recipe := RecipeCatalog.find(recipe_id)
+	var out: Dictionary = recipe.get("output", {})
+	var model_id := str(out.get("model_id", ""))
+	var label := str(out.get("label", "structure"))
+	var sgv := _system_graph_view()
+	if sgv != null and sgv.has_method("place_crafted_model") and not model_id.is_empty():
+		close()
+		sgv.call("place_crafted_model", model_id, label, recipe_id)
 
 
 func _on_assemble(recipe_id: String) -> void:

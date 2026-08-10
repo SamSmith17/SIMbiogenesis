@@ -229,6 +229,39 @@ func _test_recipes() -> void:
 	_check("recipe consumed A", inv.count("dome_strut_a") == 0, str(inv.count("dome_strut_a")))
 	_check("recipe not craftable after", not RecipeScript.can_craft(inv, "geodesic_dome"))
 
+	# Crew-assembly labour blocks (Part 5B): every labour phase must be a
+	# well-formed chore-spec row, and the VAWT's parts must be ids the
+	# machines actually produce — a typo here is a recipe nobody can craft.
+	for r: Dictionary in RecipeScript.all_recipes():
+		var phases: Array = (r.get("labour", {}) as Dictionary).get("phases", [])
+		for ph in phases:
+			var pd := ph as Dictionary
+			_check("%s phase %s has real work" % [r.get("id"), pd.get("id")],
+				float(pd.get("work_s", 0.0)) >= 60.0
+					and int(pd.get("min_workers", 0)) >= 1
+					and int(pd.get("max_workers", 0)) >= int(pd.get("min_workers", 1)))
+	var vawt := RecipeScript.find("vawt_turbine")
+	_check("vawt recipe exists", not vawt.is_empty())
+	_check("vawt has a graph preset",
+		str(vawt.get("graph_preset", "")) == "VAWT 400W")
+	var vreq: Dictionary = vawt.get("requires", {})
+	_check("vawt parts are producible ids",
+		vreq.has(DomePartsScript.PART_BEAM) and vreq.has("pp_sheet_8mm"), str(vreq))
+	# The graph preset the recipe names must actually resolve.
+	_check("vawt graph preset resolves",
+		not PresetsScript.find_preset_by_label("VAWT 400W").is_empty())
+	# Spend/refund round-trip: a cancelled assembly credits back exactly what
+	# it took (the CNC reserve/refund discipline).
+	var inv3 := InventoryScript.create_empty()
+	inv3.add_part("pp_beam", 6)
+	inv3.add_part("pp_sheet_8mm", 3)
+	_check("vawt craftable at exact counts", RecipeScript.can_craft(inv3, "vawt_turbine"))
+	_check("vawt spend", RecipeScript.spend(inv3, "vawt_turbine"))
+	_check("vawt consumed all", inv3.count("pp_beam") == 0 and inv3.count("pp_sheet_8mm") == 0)
+	for pid in vreq:
+		inv3.add_part(str(pid), int(vreq[pid]))
+	_check("refund restores craftability", RecipeScript.can_craft(inv3, "vawt_turbine"))
+
 
 func _test_trash_and_dome() -> void:
 	# Trash printer preset: inventory credit, no map persist, FDM role.

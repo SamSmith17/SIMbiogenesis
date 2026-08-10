@@ -456,7 +456,13 @@ func set_project_paused(iid: String, project_id: String, paused: bool) -> void:
 ## Cancel: remove every still-pending chore from the board (their effects
 ## never fire) and mark the project cancelled. Completed tasks keep their
 ## fired effects — cancellation is "stop here", not an undo.
-func cancel_project(iid: String, project_id: String) -> void:
+##
+## EXCEPT crew-assembly projects, where cancel IS an undo: an unfinished
+## structure is just parts laid out on the ground, so the debited parts go
+## back to the inventory (`plan.refund_parts`, erased fire-once) and the
+## ghost prop is cleared. Needs `main` for the loader; without it the
+## project still cancels but nothing is refunded.
+func cancel_project(iid: String, project_id: String, main: Node = null) -> void:
 	var board = chore_board_for(iid)
 	var project := project_store_for(iid).find(project_id)
 	if project.is_empty():
@@ -467,6 +473,22 @@ func cancel_project(iid: String, project_id: String) -> void:
 			board.remove_chore(str(task.get("chore_id", "")))
 			task["status"] = "skipped"
 	project["state"] = "cancelled"
+	if main != null and str(project.get("kind", "")) == "assembly":
+		var plan: Dictionary = project.get("plan", {})
+		var refund: Dictionary = plan.get("refund_parts", {})
+		var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+		if not refund.is_empty() and loader != null \
+				and loader.has_method("get_part_inventory"):
+			var inv: Variant = loader.call("get_part_inventory")
+			if inv != null:
+				for pid in refund:
+					inv.add_part(str(pid), int(refund[pid]))
+				loader.call("save_part_inventory")
+				plan.erase("refund_parts")
+		var prop_id := str(project.get("prop_id", ""))
+		if not prop_id.is_empty() and loader != null \
+				and loader.has_method("delete_prop_by_id"):
+			loader.call_deferred("delete_prop_by_id", prop_id)
 	_last_persist_h.erase(iid)
 
 
