@@ -2242,6 +2242,9 @@ func _run_population_verify() -> void:
 		"PASS" if (pose_violations == 0 and travel_samples > 0) else
 		("FAIL (never saw a traveller)" if travel_samples == 0 else "FAIL"),
 		travel_samples, pose_violations])
+	# Feeds the FINAL verdict — this check used to print FAIL while the run
+	# still said PASS (caught when the motion stall-veto briefly regressed it).
+	var ok_pose := pose_violations == 0 and travel_samples > 0
 	if main != null and "time_scale" in main:
 		main.time_scale = 0.0
 	print("PlaytestHarness: population verify — nav %s (%d cells @ %.2f m, %d layers; hits=%d misses=%d fails=%d)" % [
@@ -2676,7 +2679,7 @@ func _run_population_verify() -> void:
 		if not (model.get_item(str(pid)) as Dictionary).is_empty():
 			model.remove_item(str(pid))
 	print("PlaytestHarness: population verify — %s (%d shots in %s)" % [
-		"PASS" if (ok_flow and ok_move and ok_smooth and ok_chore and ok_face and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire and ok_drape) else "FAIL",
+		"PASS" if (ok_flow and ok_move and ok_smooth and ok_chore and ok_face and ok_pose and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire and ok_drape) else "FAIL",
 		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
 

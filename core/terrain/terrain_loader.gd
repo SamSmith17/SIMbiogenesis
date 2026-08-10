@@ -9743,9 +9743,16 @@ func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float) -> void:
 		var at := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
 		var st: Dictionary = rec.get("staging", {})
 		var entry := ModelCatalog.find(str(rec.get("model_id", "")))
+		# Honest shipping mass + longest dimension drive the TEAM-LIFT crew
+		# size per crate (NpcHaulModel.carriers_for via unload_spec_rows).
+		var pspec := PlacedPropRuntime.packed_spec_for_record(rec)
+		var long_m := maxf(float(pspec.get("w_m", 0.0)),
+			maxf(float(pspec.get("d_m", 0.0)), float(pspec.get("h_m", 0.0))))
 		crates.append({"pid": str(pid),
 			"stage": Vector2(float(st.get("x", at.x)), float(st.get("z", at.y))),
 			"rank": int(rec.get("unload_rank", rec.get("delivery_slot", 0))),
+			"mass_kg": float(pspec.get("mass_kg", -1.0)),
+			"long_m": long_m,
 			"label": str(entry.get("label", rec.get("model_id", "crate")))})
 	# LIFO. This ONE sort serves both strategies: the brigade's stage effects
 	# fire in list order, and the round-trip rows take an ascending priority

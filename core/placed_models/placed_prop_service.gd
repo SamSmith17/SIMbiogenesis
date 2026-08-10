@@ -139,12 +139,21 @@ static func move_prop_xz(main: Node, prop_id: String, x: float, z: float) -> boo
 ## container stack MUST be put back down on the ground, or it arrives floating
 ## at the height it rode at, which no XZ-based check would ever catch.
 static func move_prop_at(main: Node, prop_id: String, x: float, z: float,
-		ground_y: float = NAN, y_offset: float = NAN) -> bool:
+		ground_y: float = NAN, y_offset: float = NAN, glide_s: float = 0.0) -> bool:
 	if main == null or prop_id.is_empty():
 		return false
 	var layer := _layer_for_main(main)
 	if layer == null:
 		return false
+	# `glide_s` > 0: animate the NODE from where it visibly is to its new
+	# home instead of teleporting (crew set-downs, brigade stage moves). The
+	# RECORD moves instantly either way — the glide is presentation only, and
+	# a mid-glide rebuild lands on the true position.
+	var glide_from := Vector3.INF
+	if glide_s > 0.0:
+		var pre := PlacedPropRuntime.find_by_prop_id(main, prop_id)
+		if pre != null and is_instance_valid(pre) and pre.is_inside_tree():
+			glide_from = pre.global_position
 	var gy := ground_y
 	if is_nan(gy):
 		gy = TerrainSurfaceQuery.ground_height_at(main, x, z)
@@ -157,6 +166,15 @@ static func move_prop_at(main: Node, prop_id: String, x: float, z: float,
 		return false
 	_save_layer(main, layer)
 	_reposition_scene_prop(main, layer, prop_id)
+	if glide_from != Vector3.INF:
+		var node := PlacedPropRuntime.find_by_prop_id(main, prop_id)
+		if node != null and is_instance_valid(node) and node.is_inside_tree():
+			var target := node.global_position
+			if glide_from.distance_to(target) > 0.05:
+				node.global_position = glide_from
+				var tw := node.create_tween()
+				tw.tween_property(node, "global_position", target, glide_s) \
+					.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	_notify_graph_prop_moved(main, prop_id)
 	_notify_mp_props_edited()
 	return true

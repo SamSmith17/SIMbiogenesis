@@ -532,6 +532,19 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		# wired" once per tick; agents read the flag (same forward-or-it-
 		# never-arrives rule as everything else here).
 		"meal_available": bool(ctx_in.get("meal_available", false)),
+		# Team-lift gather gate: how many of a chore's claimed workers stand
+		# within `r` of `p`. The agent at a multi-worker pickup polls this so
+		# the whole crew leaves with the load together.
+		"crew_near": func(cid: String, p: Vector2, r: float) -> int:
+			if chore_board == null:
+				return 0
+			var workers: Array = (chore_board.find(cid) as Dictionary).get("workers", []) as Array
+			var n := 0
+			for w in workers:
+				var wa := find_agent(str(w))
+				if wa != null and (wa.pos - p).length() <= r:
+					n += 1
+			return n,
 	}
 
 
@@ -662,6 +675,7 @@ func _catch_up(abs_hours: float, dt: float, ctx: Dictionary) -> void:
 		# Where they were looking is as invalid as where they were walking.
 		a.face_anchor = Vector2.INF
 		a.lie_yaw = NAN
+		a.pickup_wait_h = NAN
 		# The skipped span is a discontinuity — a trail bridging it would paint
 		# a walk that never happened.
 		a.clear_trail()

@@ -40,10 +40,13 @@ static func execute(main: Node, op: Dictionary) -> bool:
 		"move_prop":
 			# y_offset defaults to 0: a crate set down after a haul lands ON
 			# THE GROUND, whatever stack height it rode at inside the
-			# container. Passing NAN here would leave it floating.
+			# container. Passing NAN here would leave it floating. The 0.9 s
+			# glide is presentation: a round-trip set-down settles from the
+			# carriers' hands, a brigade stage move slides down the relay
+			# instead of teleporting.
 			var moved := PlacedPropService.move_prop_at(main, prop_id,
 				float(op.get("x", 0.0)), float(op.get("z", 0.0)), NAN,
-				float(op.get("y_offset", 0.0)))
+				float(op.get("y_offset", 0.0)), 0.9)
 			if moved and op.has("collision_enabled"):
 				PlacedPropService.update_prop_record(main, prop_id,
 					{"collision_enabled": bool(op["collision_enabled"])}, true)

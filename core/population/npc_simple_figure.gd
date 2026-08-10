@@ -67,6 +67,13 @@ var _elbow: Array[Node3D] = []     # [L, R] forearm pivots
 ## coherent whatever the world yaw. Shown only while the pose machine plays
 ## the logical carry gait.
 var _carry_box: MeshInstance3D = null
+## True while the REAL prop node is riding this carrier's hands (host-side
+## follow) — the internal generic box would double-draw the load.
+var _carry_box_suppressed := false
+
+
+func set_carry_box_suppressed(suppressed: bool) -> void:
+	_carry_box_suppressed = suppressed
 var _phase := 0.0
 ## Per-agent flavour, all set once in setup(). Applied ONLY in the asymmetric
 ## work families: mirroring a contralateral gait just phase-shifts it, and
@@ -119,7 +126,8 @@ func pose(clip: String, rate: float, dt: float, flavor: String = "") -> void:
 	# Matched on the LOGICAL clip, before the file mapping collapses it onto
 	# the plain walk/idle (which is only right for the rigged body).
 	if _carry_box != null:
-		_carry_box.visible = clip == NpcRig.CLIP_CARRY or clip == NpcRig.CLIP_CARRY_IDLE
+		_carry_box.visible = (clip == NpcRig.CLIP_CARRY
+			or clip == NpcRig.CLIP_CARRY_IDLE) and not _carry_box_suppressed
 	if clip == NpcRig.CLIP_CARRY:
 		_pose_carry(dt)
 		return
@@ -234,34 +242,46 @@ func _pose_walk_urgent(amp: float, dt: float) -> void:
 ## stride, arms locked in the forward hold (the clap shape without its
 ## oscillation) so they never swing through the carried box, torso leaned
 ## slightly back as a counterweight.
+##
+## Flavor "heavy" = a shared TEAM lift: the load rides low between the crew,
+## so the arms hang nearly straight down to it, the knees stay bent under the
+## weight, the stride shortens further, and the torso leans back harder.
 func _pose_carry(dt: float) -> void:
+	var heavy := _flavor == "heavy"
 	var s := sin(_phase)
-	_place_body(HIP_Y + absf(sin(_phase * 2.0)) * 0.016, 0.0, dt)
-	_settle(_torso, Vector3(-0.07, 0.0, 0.0), dt)
-	_ease(_head, Vector3(0.10, 0.0, 0.0), dt)
+	var crouch := 0.05 if heavy else 0.0
+	_place_body(HIP_Y - crouch + absf(sin(_phase * 2.0)) * (0.010 if heavy else 0.016),
+		0.0, dt)
+	_settle(_torso, Vector3(-0.13 if heavy else -0.07, 0.0, 0.0), dt)
+	_ease(_head, Vector3(0.16 if heavy else 0.10, 0.0, 0.0), dt)
+	var stride := 0.34 if heavy else 0.48
+	var sh_pitch := -0.38 if heavy else -1.05
+	var el_pitch := -0.30 if heavy else -1.15
 	for i in 2:
 		var side := 1.0 if i == 0 else -1.0
-		var swing := s * side * 0.48
+		var swing := s * side * stride
 		_ease(_hip[i], Vector3(swing, 0.0, 0.0), dt)
 		var lift := maxf(-s * side, 0.0)
-		_ease(_knee[i], Vector3(lift * 0.8, 0.0, 0.0), dt)
-		_ease(_shoulder[i], Vector3(-1.05, 0.0, 0.14 * side), dt)
-		_ease(_elbow[i], Vector3(-1.15, 0.0, 0.0), dt)
+		_ease(_knee[i], Vector3((0.18 if heavy else 0.0) + lift * 0.8, 0.0, 0.0), dt)
+		_ease(_shoulder[i], Vector3(sh_pitch, 0.0, 0.14 * side), dt)
+		_ease(_elbow[i], Vector3(el_pitch, 0.0, 0.0), dt)
 
 
 ## The brigade station hold: standing, load hugged to the chest, a light
-## breathe — the walk-carry pose with the legs planted.
+## breathe — the walk-carry pose with the legs planted. Flavor "heavy" plants
+## the same low-hold stance the walking team lift uses.
 func _pose_carry_idle(dt: float) -> void:
+	var heavy := _flavor == "heavy"
 	var breathe := sin(_phase * 0.5) * 0.015
-	_place_body(HIP_Y + breathe, 0.0, dt)
-	_settle(_torso, Vector3(-0.06, 0.0, 0.0), dt)
-	_ease(_head, Vector3(0.08, 0.0, 0.0), dt)
+	_place_body(HIP_Y - (0.05 if heavy else 0.0) + breathe, 0.0, dt)
+	_settle(_torso, Vector3(-0.12 if heavy else -0.06, 0.0, 0.0), dt)
+	_ease(_head, Vector3(0.14 if heavy else 0.08, 0.0, 0.0), dt)
 	for i in 2:
 		var side := 1.0 if i == 0 else -1.0
 		_ease(_hip[i], Vector3(0.0, 0.0, 0.05 * side), dt)
-		_ease(_knee[i], Vector3(0.08, 0.0, 0.0), dt)
-		_ease(_shoulder[i], Vector3(-1.05, 0.0, 0.14 * side), dt)
-		_ease(_elbow[i], Vector3(-1.15, 0.0, 0.0), dt)
+		_ease(_knee[i], Vector3(0.20 if heavy else 0.08, 0.0, 0.0), dt)
+		_ease(_shoulder[i], Vector3(-0.38 if heavy else -1.05, 0.0, 0.14 * side), dt)
+		_ease(_elbow[i], Vector3(-0.30 if heavy else -1.15, 0.0, 0.0), dt)
 
 
 func _pose_idle(sad: bool, dt: float) -> void:

@@ -84,13 +84,17 @@ var _anchor_pos: Dictionary = {}   # agent_id -> Vector3 held while standing up
 ## Tick-to-tick interpolation state: agent_id -> {prev/next: Vector3 targets,
 ## at: wall time the dot last moved, interval: EMA of tick spacing, step_m}.
 var _interp: Dictionary = {}
+## agent_id -> size of the carry group this frame (how many hands share the
+## same carried prop) — feeds the heavy-lift posture flag.
+var _carry_group_of: Dictionary = {}
 var _now := 0.0
 var _focus_id: String = ""         # agent the crosshair is on (nametag shown)
-## Crate props currently hidden because someone is CARRYING them (Site
-## Projects). Node-visibility only — never the persisted hidden_3d record key,
-## which belongs to the placeholder-twins feature. Re-derived from the dot
-## payload every frame, so a prop rebuild mid-carry self-heals next frame.
-var _hidden_props: Dictionary = {}
+## Props currently riding someone's hands (Site Projects carry): prop_id ->
+## {xf: the original global transform, for the preempted-carry restore}.
+## Node-transform only — the RECORD never moves here (the move is the chore's
+## completion effect); never the persisted hidden_3d key either, which
+## belongs to the placeholder-twins feature.
+var _carried_state: Dictionary = {}
 ## In-world work-site markers (Site Projects): an amber disc + readout at each
 ## ACTIVE crew site, mirroring the Site Plan's crew markers so a build is
 ## legible from the ground too. Pooled, refreshed on a coarse cadence.
@@ -123,8 +127,23 @@ func _process(delta: float) -> void:
 	var dots: Array = _bridge.agent_dots()
 	var seen: Dictionary = {}
 	var near: Array = []   # [dist, agent_id] candidates for the rigged body
-	var carried: Dictionary = {}   # prop_id -> true (crates in someone's arms)
+	var carried: Dictionary = {}   # prop_id -> Array of carrier agent ids
 	var eye := _viewer_xz()
+	# Pre-pass: carry groups, so each carrier's pose payload knows whether the
+	# REAL prop is in hand (suppress the generic chest box) and whether this is
+	# a team lift (low-hold posture).
+	var carry_group_of: Dictionary = {}   # agent_id -> group size
+	for dot_v in dots:
+		if dot_v is Dictionary and bool((dot_v as Dictionary).get("carrying", false)):
+			var cp0 := str((dot_v as Dictionary).get("carry_prop", ""))
+			if not cp0.is_empty():
+				var arr0: Array = carried.get(cp0, [])
+				arr0.append(str((dot_v as Dictionary).get("id", "")))
+				carried[cp0] = arr0
+	for cp1 in carried:
+		for aid1 in (carried[cp1] as Array):
+			carry_group_of[str(aid1)] = (carried[cp1] as Array).size()
+	_carry_group_of = carry_group_of
 	for dot_v in dots:
 		if not (dot_v is Dictionary):
 			continue
@@ -133,12 +152,6 @@ func _process(delta: float) -> void:
 		if aid.is_empty():
 			continue
 		seen[aid] = true
-		# Gathered for EVERY dot (before the cull gate): a crate must stay
-		# hidden even while its carrier is beyond the avatar cull distance.
-		if bool(dot.get("carrying", false)):
-			var cp := str(dot.get("carry_prop", ""))
-			if not cp.is_empty():
-				carried[cp] = true
 		var av: NpcAvatar = _avatars.get(aid)
 		if av == null:
 			av = NpcAvatar.new()
@@ -195,7 +208,7 @@ func _process(delta: float) -> void:
 			_pose_avatar(av, aid, dot, delta)
 		av.set_tag_visible(aid == _focus_id)
 	_apply_rig_budget(near)
-	_reconcile_carried_props(carried)
+	_follow_carried_props(carried)
 	_crew_marker_accum += delta
 	if _crew_marker_accum >= CREW_MARKER_REFRESH_S:
 		_crew_marker_accum = 0.0
@@ -363,31 +376,95 @@ func _build_crew_marker() -> Dictionary:
 	return {"root": root, "disc_mat": mat, "label": lbl}
 
 
-## Hide crates that are in someone's arms; restore the ones set down (or whose
-## carry was preempted — the record never moved, so showing it where it stands
-## is correct). Hiding is re-asserted EVERY frame for the carried set, so a
-## _rebuild_placed_props that respawned a hidden crate visible self-heals on
-## the next frame; only the ids that LEFT the set pay a restore lookup.
-func _reconcile_carried_props(carried: Dictionary) -> void:
-	if carried.is_empty() and _hidden_props.is_empty():
+## The base of a solo-carried load rides at chest-carry height; a team lift
+## rides low (arms down at the sides — the two-person furniture carry).
+const CARRY_BASE_SOLO_M := 0.72
+const CARRY_BASE_TEAM_M := 0.40
+## Solo: the load is held out in front of the carrier.
+const CARRY_AHEAD_M := 0.32
+
+
+## Carried props RIDE THE CARRIERS' HANDS. The real prop node (not a proxy
+## box) is repositioned every frame at its carriers' rendered position — solo:
+## held out in front; team lift: at the crew's centroid, low — so the actual
+## object visibly travels instead of hiding and teleporting at completion.
+## Render-side only: the RECORD never moves here (the move is still the
+## chore's completion effect), so a preempted carry restores the prop exactly
+## where the sim says it is.
+##
+## Restore discipline: the original transform + collision state are
+## snapshotted on first grab. On release the prop is restored ONLY if the
+## record still matches the snapshot position (a completed carry has already
+## moved the record and rebuilt the node at its new home — snapping THAT back
+## to the container would undo the delivery). Re-asserted every frame, so a
+## prop rebuild mid-carry self-heals next frame.
+func _follow_carried_props(carried: Dictionary) -> void:
+	if carried.is_empty() and _carried_state.is_empty():
 		return
 	for pid in carried:
 		var node := _find_prop_node(str(pid))
-		if node != null:
+		if node == null:
+			continue
+		if not _carried_state.has(pid):
+			_carried_state[pid] = {"xf": node.global_transform}
+		node.visible = true
+		if node.has_method("set_collision_enabled"):
+			node.set_collision_enabled(false)   # a load in arms shoves nobody
+		var pts: Array = []
+		var fwd := Vector2.ZERO
+		for aid in (carried[pid] as Array):
+			var av: NpcAvatar = _avatars.get(str(aid))
+			if av != null and is_instance_valid(av) and av.visible:
+				pts.append(av.global_position)
+				fwd += Vector2(-sin(av.rotation.y), -cos(av.rotation.y))
+		if pts.is_empty():
+			# Carrier beyond the cull distance: park the prop hidden (the old
+			# behaviour) rather than drawing it floating with nobody near.
 			node.visible = false
-	for pid in _hidden_props:
+			continue
+		var centre := Vector3.ZERO
+		for p in pts:
+			centre += p as Vector3
+		centre /= float(pts.size())
+		var team := pts.size() >= 2
+		var want_yaw := atan2(-fwd.x, -fwd.y) if fwd.length() > 0.01 else node.rotation.y
+		var base_h := CARRY_BASE_TEAM_M if team else CARRY_BASE_SOLO_M
+		var hold := centre
+		if not team:
+			hold += Vector3(fwd.x, 0.0, fwd.y).normalized() * CARRY_AHEAD_M \
+				if fwd.length() > 0.01 else Vector3.ZERO
+		hold.y = centre.y + base_h
+		node.global_position = hold
+		# Yaw the PROP so the model's world heading matches the carriers'
+		# (the record's own yaw lives on ModelRoot underneath).
+		var mr := node.get_node_or_null("ModelRoot")
+		var model_yaw := (mr as Node3D).rotation.y if mr is Node3D else 0.0
+		node.rotation = Vector3(0.0, want_yaw - model_yaw, 0.0)
+	for pid in _carried_state.keys():
 		if carried.has(pid):
 			continue
+		var st: Dictionary = _carried_state[pid]
 		var node2 := _find_prop_node(str(pid))
-		if node2 != null:
-			node2.visible = true
-	_hidden_props = carried
+		if node2 != null and is_instance_valid(node2):
+			var rec := PlacedPropService.get_prop_record(_main, str(pid))
+			var xf: Transform3D = st.get("xf", Transform3D.IDENTITY)
+			var rec_at := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+			var snap_at := Vector2(xf.origin.x, xf.origin.z)
+			if rec.is_empty() or (rec_at - snap_at).length() < 0.5:
+				# Preempted (or record gone): put it back exactly where it was.
+				node2.global_transform = xf
+				node2.visible = true
+				if node2.has_method("set_collision_enabled"):
+					node2.set_collision_enabled(bool(rec.get("collision_enabled", true)))
+			# else: the completion effect already moved + rebuilt it — the
+			# fresh node is authoritative, touch nothing.
+		_carried_state.erase(pid)
 
 
 func _exit_tree() -> void:
 	# The host dying mid-carry (view closed, map change) must not leave crates
-	# invisible until the next full prop rebuild.
-	_reconcile_carried_props({})
+	# floating in mid-air or non-colliding until the next full prop rebuild.
+	_follow_carried_props({})
 
 
 func _find_prop_node(prop_id: String) -> Node3D:
@@ -603,6 +680,7 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 			"step_m": 0.0}
 	var moved := (sim_pos - prev).length() > 0.001
 	if moved:
+		_moved_at[aid] = _now
 		var since := _now - float(st["at"])
 		if since > 0.02 and since < 1.5:
 			st["interval"] = lerpf(float(st["interval"]), since, 0.3)
@@ -648,7 +726,20 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	var wait := float(_arrive_wait.get(aid, 0.0))
 	var catching_up := gap > ARRIVE_EPS_M and wait < ARRIVE_MAX_S
 	_arrive_wait[aid] = (wait + delta) if catching_up else 0.0
-	var in_transit := travelling or catching_up
+	# Stall veto — CHORE travellers only: a team-lift crew member holding at
+	# the pickup is TRAVELING but stationary, and walking in place there
+	# reads as a treadmill; with the veto they settle into the chore's own
+	# work pose (the carry hold — hands on the load, which is what they are
+	# doing). It must NEVER widen to other activities: `activity` is the
+	# INTENT, so a stalled walker headed to bed would lie down mid-route —
+	# the exact aliasing bug in_transit exists to prevent (and the travel-
+	# pose capture check failed precisely that way when this was activity-
+	# blind). Tick-aliasing safe: sim positions change at most every 0.5 s
+	# wall, under the 0.6 s hold.
+	var stalled := str(dot.get("activity", "")) == NpcAgent.CHORE_ACTIVITY \
+		and _now - float(_moved_at.get(aid, _now)) > MOVE_HOLD_S
+	var in_transit := (travelling and not (stalled and gap <= ARRIVE_EPS_M)) \
+		or catching_up
 
 	var teleported := cur != Vector3.ZERO \
 		and ((step_is_jump and moved) or gap >= tp_threshold)
@@ -741,6 +832,14 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 		"dwell_left_s": _dwell_left_s(dot),
 		"teleported": teleported,
 		"carrying": bool(dot.get("carrying", false)),
+		# The REAL prop rides the carriers' hands (see _follow_carried_props)
+		# — the avatar suppresses its generic chest box so the load is not
+		# drawn twice. Brigade station workers have no carry_prop and keep
+		# the generic box.
+		"carry_prop_live": bool(dot.get("carrying", false))
+			and not str(dot.get("carry_prop", "")).is_empty(),
+		# Two or more sets of hands on one load = the low team-lift posture.
+		"carry_heavy": int(_carry_group_of.get(aid, 0)) >= 2,
 		"work_pose": str(dot.get("work_pose", "")),
 	})
 

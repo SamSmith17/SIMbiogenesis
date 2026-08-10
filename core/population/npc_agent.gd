@@ -141,6 +141,11 @@ var face_phase: float = 0.0
 ## TRANSIENT lifecycle rule as face_anchor: cleared in _finish (which
 ## release_claims routes through) and in the engine's _catch_up.
 var lie_yaw: float = NAN
+## When this agent started waiting at a team-lift pickup for the rest of the
+## crew (NAN = not waiting). TRANSIENT, same _finish/_catch_up lifecycle.
+var pickup_wait_h: float = NAN
+## How close the lift crew must stand to the load before the carry leaves.
+const TEAM_LIFT_GATHER_M := 3.0
 var activity_ends_h: float = 0.0
 ## Per-tier backoff after a failed attempt (need id / CHORE_ACTIVITY /
 ## "enrichment" -> earliest abs-hour to retry). Deliberately NOT a single
@@ -555,8 +560,31 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 	if activity == CHORE_ACTIVITY and chore_leg == 0:
 		var board = ctx.get("board")
 		if board != null and not chore_id.is_empty():
-			var carry_to: Dictionary = (board.find(chore_id) as Dictionary).get("carry_to", {})
+			var chore_rec: Dictionary = board.find(chore_id) as Dictionary
+			var carry_to: Dictionary = chore_rec.get("carry_to", {})
 			if not carry_to.is_empty():
+				# TEAM LIFT gather gate: a multi-worker carry only leaves the
+				# pickup once the whole lift crew has hands on the load —
+				# otherwise the first arriver walks the crate off alone while
+				# the others mime a pickup at an empty spot. Bounded wait
+				# (QUORUM_WAIT_H, same patience as a muster): if the crew
+				# never shows, release and back off rather than standing at a
+				# crate forever.
+				var min_w := int(chore_rec.get("min_workers", 1))
+				if min_w > 1:
+					var near_fn: Callable = ctx.get("crew_near", Callable())
+					var near_n := min_w
+					if near_fn.is_valid():
+						near_n = int(near_fn.call(chore_id, pos, TEAM_LIFT_GATHER_M))
+					if near_n < min_w:
+						if is_nan(pickup_wait_h):
+							pickup_wait_h = abs_hours
+						face_anchor = pos   # look at the load while waiting
+						if abs_hours - pickup_wait_h > QUORUM_WAIT_H:
+							retry_at[CHORE_ACTIVITY] = abs_hours + RETRY_BACKOFF_H
+							_finish(ctx, false)
+						return {}
+				pickup_wait_h = NAN
 				chore_leg = 1
 				target_pos = Vector2(float(carry_to.get("x", pos.x)),
 					float(carry_to.get("z", pos.y)))
@@ -1066,6 +1094,7 @@ func _finish(ctx: Dictionary, _completed: bool) -> void:
 	chore_leg = 0
 	face_anchor = Vector2.INF
 	lie_yaw = NAN
+	pickup_wait_h = NAN
 	# Remember the space we finished at: the next trip starts there, which is
 	# what lets the space-pair route cache hit.
 	at_space_id = target_space_id

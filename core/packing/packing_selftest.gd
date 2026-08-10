@@ -691,6 +691,18 @@ func _test_packed_form_builder() -> void:
 ## with crew density, and a saturated brigade's throughput stops caring
 ## about route length. Nobody scripted either rule.
 func _test_haul_model() -> void:
+	# TEAM-LIFT crew sizing (NIOSH 23 kg solo ceiling; ~0.85 team efficiency;
+	# ≥1.8 m needs a hand on each end whatever it weighs; cap 4).
+	_check("light load is a solo carry", NpcHaulModel.carriers_for(20.0) == 1)
+	_check("unknown mass reads as light", NpcHaulModel.carriers_for(-1.0) == 1)
+	_check("35 kg is a two-person lift", NpcHaulModel.carriers_for(35.0) == 2)
+	_check("55 kg takes three", NpcHaulModel.carriers_for(55.0) == 3,
+		str(NpcHaulModel.carriers_for(55.0)))
+	_check("300 kg caps at four hands", NpcHaulModel.carriers_for(300.0) == 4)
+	_check("a long light beam still takes two",
+		NpcHaulModel.carriers_for(8.0, 2.4) == 2)
+	_check("carriers monotone in mass",
+		NpcHaulModel.carriers_for(70.0) >= NpcHaulModel.carriers_for(45.0))
 	_check("solo can't brigade", NpcHaulModel.brigade_throughput(1, 20.0) == 0.0
 		and NpcHaulModel.brigade_throughput(2, 20.0) == 0.0)
 	_check("solo plan is round trips",

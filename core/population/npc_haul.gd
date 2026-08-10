@@ -84,6 +84,37 @@ static func best_plan(workers: int, length_m: float, units: int) -> Dictionary:
 	}
 
 
+## One-person lift ceiling. 23 kg is the NIOSH lifting-equation load constant
+## (RWL ceiling for a routine two-handed lift under ideal conditions —
+## Waters et al. 1993); heavier loads are team lifts.
+const SOLO_LIFT_KG := 23.0
+## A team's usable capacity is LESS than the sum of its members — hands get in
+## each other's way and the load is shared unevenly. ~0.85 per the two-person
+## team-lift literature (Karwowski & Mital 1986 report 68-91% of summed
+## individual capacity).
+const TEAM_LIFT_EFF := 0.85
+## Anything this long needs a hand on each end whatever it weighs — a 6 m beam
+## is a two-person carry at any mass, purely to steer it.
+const AWKWARD_LENGTH_M := 1.8
+## More than four people cannot usefully reach one crate.
+const MAX_CARRIERS := 4
+
+
+## People needed to lift ONE object, from its mass and longest dimension.
+## Unknown mass (<= 0, PackedSpec's -1 sentinel) reads as light — a solo
+## carry, the long-standing behaviour.
+static func carriers_for(mass_kg: float, long_m: float = 0.0) -> int:
+	var n := 1
+	if mass_kg > SOLO_LIFT_KG:
+		n = 2
+		while n < MAX_CARRIERS \
+				and float(n) * SOLO_LIFT_KG * TEAM_LIFT_EFF < mass_kg:
+			n += 1
+	if long_m >= AWKWARD_LENGTH_M:
+		n = maxi(n, 2)
+	return clampi(n, 1, MAX_CARRIERS)
+
+
 ## Chore-board bridge: a NpcChoreBoard-shaped dict for a haul goal, sized by
 ## the plan's labor. The board's productivity/weather/morale scaling then
 ## applies on top exactly as it does for every other chore — group hauling

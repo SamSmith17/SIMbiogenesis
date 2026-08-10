@@ -103,6 +103,11 @@ var _time_mult := 1.0
 ## anyway, and under the silhouette shader a stable chest box reads better
 ## than a bobbing intersecting one.
 var _carrying := false
+## The REAL prop is riding this carrier's hands (host follow) — suppress the
+## generic chest box so the load is not drawn twice.
+var _carry_prop_live := false
+## Two or more sets of hands on one load: the low team-lift posture.
+var _carry_heavy := false
 var _rig_carry_box: MeshInstance3D = null
 
 
@@ -426,6 +431,8 @@ func _drive(dt: float, inp: Dictionary) -> void:
 	_apparent_speed = float(inp.get("apparent_speed_mps", WALK_SPEED_MPS))
 	_time_mult = clampf(float(inp.get("time_mult", 1.0)), 0.05, NpcRig.MAX_PLAYBACK_RATE)
 	_carrying = bool(inp.get("carrying", false))
+	_carry_prop_live = bool(inp.get("carry_prop_live", false))
+	_carry_heavy = bool(inp.get("carry_heavy", false))
 	if _machine == null:
 		_lying = _activity == "sleep"
 		return
@@ -467,7 +474,10 @@ func _drive(dt: float, inp: Dictionary) -> void:
 ## swap). Bone-attach only if a future clip's hands actually converge on a
 ## point the chest box cannot fake.
 func _update_carry_box() -> void:
-	var want := _rigged and _carrying
+	# Suppressed while the REAL prop follows the hands (carry_prop_live) —
+	# the generic box then only serves brigade station workers, who read as
+	# carrying with no single crate of their own.
+	var want := _rigged and _carrying and not _carry_prop_live
 	if _rig_carry_box != null:
 		_rig_carry_box.visible = want
 	if not want or _rig_carry_box != null:
@@ -600,8 +610,13 @@ func _process(delta: float) -> void:
 		# Same machine, same decisions — only the rendering differs, so the two
 		# styles can never disagree about what somebody is doing. The flavor is
 		# a rendering HINT only: hurrying to the bathroom plays the arms-in
-		# urgent walk, which is where that shape belongs.
-		var flavor := "urgent" if _moving and _activity == "bladder" else ""
+		# urgent walk, and a shared team lift plays the low arms-down hold.
+		var flavor := ""
+		if _carrying and _carry_heavy:
+			flavor = "heavy"
+		elif _moving and _activity == "bladder":
+			flavor = "urgent"
+		_simple.set_carry_box_suppressed(_carry_prop_live)
 		_simple.pose(_machine.clip(), _speed_scale, delta, flavor)
 		return
 

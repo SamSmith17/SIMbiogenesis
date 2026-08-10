@@ -43,6 +43,7 @@ func _init() -> void:
 	_test_chore_plan_v3()
 	_test_plan_row_dialects()
 	_test_carry_leg()
+	_test_team_lift_gather()
 	_test_site_project()
 	_test_stage_effects_and_brigade()
 	_test_crew_muster()
@@ -1593,6 +1594,98 @@ func _test_carry_leg() -> void:
 				and not bool(board.find(cid).get("effect_done", false)))
 
 
+## TEAM LIFT gather gate: a multi-worker carry holds at the pickup until the
+## whole crew has hands on the load — the first arriver must not walk the
+## crate off alone while the second mimes a pickup at an empty spot. The hold
+## is bounded (QUORUM_WAIT_H): a crew that never shows releases the chore
+## instead of standing at a crate forever.
+func _test_team_lift_gather() -> void:
+	var board := NpcChoreBoard.create_empty()
+	var cid := board.add_chore("Team carry", 0.1, {
+		"repeat": "once", "window": {"start_h": 0.0, "end_h": 24.0},
+		"min_workers": 2, "max_workers": 2,
+		"target": {"kind": "prop", "id": "crate_9"},
+		"carry_to": {"x": 30.0, "z": 0.0},
+	})
+	var pickup := Vector2(10.0, 0.0)
+	var a := NpcAgent.make("lift_a", Vector2.ZERO)
+	var b := NpcAgent.make("lift_b", Vector2(-30.0, 0.0))   # much farther out
+	var eng := NpcPopulationEngine.new()
+	eng.chore_board = board
+	eng.agents.append(a)
+	eng.agents.append(b)
+	var ctx := {
+		"board": board, "weather": {}, "hour_of_day": 12.0, "registry": null,
+		"chore_pos_of": func(_c: Dictionary) -> Variant: return pickup,
+		"crew_near": func(cid2: String, p: Vector2, r: float) -> int:
+			var n := 0
+			for w in (board.find(cid2).get("workers", []) as Array):
+				var wa := eng.find_agent(str(w))
+				if wa != null and (wa.pos - p).length() <= r:
+					n += 1
+			return n,
+	}
+	_check("A takes the team carry", a._begin_chore(10.0, ctx))
+	_check("B joins the same chore", b._begin_chore(10.0, ctx))
+	var t := 10.0
+	var first_carry_t := NAN
+	var left_together := false
+	for i in 900:
+		t += 0.01
+		a.step(t, 0.01, ctx)
+		b.step(t, 0.01, ctx)
+		if (a.is_carrying() or b.is_carrying()) and is_nan(first_carry_t):
+			first_carry_t = t
+			# The moment the load first moves, EVERYONE must be at the pickup.
+			left_together = a.pos.distance_to(pickup) < 4.0 \
+				and b.pos.distance_to(pickup) < 4.0
+		if int(board.find(cid).get("done_day", -1)) >= 0:
+			break
+	_check("the carry did eventually leave", not is_nan(first_carry_t))
+	_check("the lift left the pickup TOGETHER", left_together,
+		"A %.1f m, B %.1f m from pickup at first carry" % [
+			a.pos.distance_to(pickup), b.pos.distance_to(pickup)])
+	_check("team carry completes at quorum",
+		int(board.find(cid).get("done_day", -1)) >= 0)
+
+	# Bounded wait: a lone claimant on a 2-person crate gives up after
+	# QUORUM_WAIT_H rather than standing at it forever.
+	var b2 := NpcChoreBoard.create_empty()
+	var cid2 := b2.add_chore("Abandoned lift", 0.1, {
+		"repeat": "once", "window": {"start_h": 0.0, "end_h": 24.0},
+		"min_workers": 2, "max_workers": 2,
+		"target": {"kind": "prop", "id": "crate_x"},
+		"carry_to": {"x": 30.0, "z": 0.0},
+	})
+	var lone := NpcAgent.make("lift_solo", Vector2.ZERO)
+	var eng2 := NpcPopulationEngine.new()
+	eng2.chore_board = b2
+	eng2.agents.append(lone)
+	var ctx2 := {
+		"board": b2, "weather": {}, "hour_of_day": 12.0, "registry": null,
+		"chore_pos_of": func(_c: Dictionary) -> Variant: return pickup,
+		"crew_near": func(cid3: String, p: Vector2, r: float) -> int:
+			var n := 0
+			for w in (b2.find(cid3).get("workers", []) as Array):
+				var wa := eng2.find_agent(str(w))
+				if wa != null and (wa.pos - p).length() <= r:
+					n += 1
+			return n,
+	}
+	_check("lone claimant takes it", lone._begin_chore(10.0, ctx2))
+	var t2 := 10.0
+	var carried_alone := false
+	for i in 200:   # 2 sim-hours >> QUORUM_WAIT_H
+		t2 += 0.01
+		lone.step(t2, 0.01, ctx2)
+		if lone.is_carrying():
+			carried_alone = true
+	_check("a lone lifter never walks a team crate off", not carried_alone)
+	_check("the bounded wait released the chore", lone.chore_id.is_empty())
+	_check("the abandoned crate's work is untouched",
+		absf(b2.remaining(cid2) - 0.1) < 0.0001)
+
+
 ## Site Projects: the grouping layer over the chore board. Status derivation
 ## (done / skipped-on-delete), rollup, store cap/persistence round-trip, the
 ## build-progress fractions the linkage ghost renders from, and the breakdown
@@ -1832,6 +1925,30 @@ func _test_stage_effects_and_brigade() -> void:
 	_check("round-trip crate priorities ascend", ascending)
 	_check("the unload gate sorts after every crate", gate_prio > crate_max,
 			"%d vs %d" % [gate_prio, crate_max])
+	# TEAM LIFT: a crate's own mass / longest dimension sets its carry crew
+	# (NpcHaulModel.carriers_for), clamped to the roster so a small camp
+	# strains honestly rather than deadlocking on an unmeetable quorum.
+	# Massless dicts (every fixture above) stay solo — the old behaviour.
+	var lift: Dictionary = SiteProject.unload_spec_rows([
+		{"pid": "hp", "stage": Vector2(20, 0), "label": "Heavy", "mass_kg": 55.0},
+		{"pid": "lp", "stage": Vector2(22, 0), "label": "Light", "mass_kg": 10.0},
+		{"pid": "bp", "stage": Vector2(24, 0), "label": "Beam",
+			"mass_kg": 8.0, "long_m": 2.4},
+	], Vector2.ZERO, 12, "round_trip")
+	var lift_rows: Array = lift["rows"]
+	_check("heavy crate takes a 3-person lift crew",
+		int((lift_rows[0] as Dictionary).get("min_workers", 0)) == 3
+			and int((lift_rows[0] as Dictionary).get("max_workers", 0)) == 3,
+		str(lift_rows[0]))
+	_check("light crate stays a solo carry",
+		int((lift_rows[1] as Dictionary).get("min_workers", 0)) == 1)
+	_check("a long beam takes a hand on each end",
+		int((lift_rows[2] as Dictionary).get("min_workers", 0)) == 2)
+	var small_cap: Dictionary = SiteProject.unload_spec_rows([
+		{"pid": "hp2", "stage": Vector2(20, 0), "label": "Huge", "mass_kg": 300.0}],
+		Vector2.ZERO, 2, "round_trip")
+	_check("lift crew clamps to the roster",
+		int(((small_cap["rows"] as Array)[0] as Dictionary).get("min_workers", 0)) == 2)
 	# Every set-down must put the crate ON THE GROUND and make it touchable
 	# again — it rode the container stack at height with collision off.
 	var setdowns_ok := true

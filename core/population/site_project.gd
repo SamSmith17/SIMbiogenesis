@@ -286,6 +286,15 @@ static func unload_spec_rows(crates: Array, from: Vector2, roster: int,
 			var stg2: Vector2 = cd2.get("stage", Vector2.ZERO)
 			var tid := "crate_%d" % i
 			gate_deps.append(tid)
+			# TEAM LIFT: crew size from the crate's own mass and longest
+			# dimension (NIOSH-derived rule in NpcHaulModel.carriers_for). A
+			# crate dict with no mass reads as light — solo, the long-standing
+			# behaviour, which is what keeps every massless fixture stable.
+			# Clamped to the roster: a 3-person camp moving a 4-person crate
+			# strains honestly rather than deadlocking on an unmeetable quorum.
+			var lift_crew := mini(NpcHaulModel.carriers_for(
+				float(cd2.get("mass_kg", 0.0)), float(cd2.get("long_m", 0.0))),
+				maxi(roster, 1))
 			rows.append({
 				"task_id": tid,
 				"label": "Haul crate — %s" % str(cd2.get("label", "crate")),
@@ -295,7 +304,7 @@ static func unload_spec_rows(crates: Array, from: Vector2, roster: int,
 				# is not stable, so the unload order would be arbitrary — which
 				# would take the top crate out from under the one above it.
 				"priority": 1 + i,
-				"min_workers": 1, "max_workers": 1,
+				"min_workers": lift_crew, "max_workers": lift_crew,
 				"exposure": "outdoor",
 				"target": {"kind": "prop", "id": str(cd2.get("pid", ""))},
 				"carry_to": {"x": stg2.x, "z": stg2.y},
