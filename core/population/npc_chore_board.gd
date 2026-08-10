@@ -551,7 +551,7 @@ func blocked_reason(chore: Dictionary, abs_hours: float, hour_of_day: float,
 	var workers := (chore.get("workers", []) as Array).size()
 	var min_w := int(chore.get("min_workers", 1))
 	if workers > 0 and workers < min_w:
-		return "gathering a crew — %d of %d" % [workers, min_w]
+		return "waiting for a crew — %d of %d" % [workers, min_w]
 	return ""
 
 
@@ -621,7 +621,7 @@ static func reason_glyph(reason: String) -> String:
 		return "⏸"
 	if reason.begins_with("tools down"):
 		return "🛑"
-	if reason.contains("crew of") or reason.begins_with("gathering"):
+	if reason.contains("crew of") or reason.begins_with("waiting for a crew"):
 		return "👥"
 	if reason.begins_with("needs"):
 		return "🎓"

@@ -228,7 +228,7 @@ func _on_selection(sel: Dictionary) -> void:
 			_card_title.text = "🔨 %s" % str(sel.get("label", "Work site"))
 			var w := int(sel.get("workers", 0))
 			var mn := int(sel.get("min_workers", 1))
-			_card_body.text = ("%d of %d — gathering" % [w, mn]) if w < mn \
+			_card_body.text = ("%d of %d — waiting" % [w, mn]) if w < mn \
 				else "%d working · %d%%" % [w, int(round(float(sel.get("progress", 0.0)) * 100.0))]
 			_card_follow.visible = false
 			_card_person.visible = false

@@ -339,7 +339,7 @@ func _update_crew_markers() -> void:
 			else Color(0.95, 0.55, 0.25, 0.35)
 		(m["disc_mat"] as StandardMaterial3D).albedo_color = col
 		var lbl := m["label"] as Label3D
-		var crew_txt := "%d/%d — gathering" % [int(mark.get("workers", 0)),
+		var crew_txt := "%d/%d — waiting" % [int(mark.get("workers", 0)),
 				int(mark.get("min_workers", 1))] if not quorum \
 			else "%d ppl · %d%%" % [int(mark.get("workers", 0)),
 				int(round(float(mark.get("progress", 0.0)) * 100.0))]
@@ -562,7 +562,7 @@ static func _task_text_of(dot: Dictionary) -> String:
 			"chore": text = "working"
 			# Before the enrichment SPACE resolves (and on the walk there) the
 			# dot still says "enrichment" — the missing case left a blank tag.
-			"enrichment": text = "gathering"
+			"enrichment": text = "vibing"
 			"fire_circle": text = "at the fire"
 			"movement": text = "exercising"
 			"quiet": text = "resting"

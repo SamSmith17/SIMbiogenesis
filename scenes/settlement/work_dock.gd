@@ -224,7 +224,7 @@ func _refresh() -> void:
 				blocked[cat] = int(blocked.get(cat, 0)) + 1
 		sig += "%s|%d|%d|%d;" % [str(ch.get("id", "")), w,
 			int(ch.get("priority", 0)), int(ch.get("done_day", -1))]
-	var line := "%d working · %d gathering · %d done today" % [
+	var line := "%d working · %d waiting · %d done today" % [
 		working, waiting, done]
 	if not blocked.is_empty():
 		var parts := PackedStringArray()
@@ -399,8 +399,8 @@ static func _reason_category(reason: String) -> String:
 		return "short of crew"
 	if reason.begins_with("needs"):
 		return "needs a skill"
-	if reason.begins_with("gathering"):
-		return "gathering"
+	if reason.begins_with("waiting for a crew"):
+		return "waiting"
 	return "blocked"
 
 

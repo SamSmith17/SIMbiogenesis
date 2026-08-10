@@ -8555,7 +8555,7 @@ func _draw_npc_crew_sites() -> void:
 			draw_string(fnt, screen - Vector2(gw * 0.5, -4.0), glyph,
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(col.r, col.g, col.b, 0.95))
 			var head := str(mark.get("label", ""))
-			var crew_txt := "%d/%d ppl — gathering" % [int(mark.get("workers", 0)),
+			var crew_txt := "%d/%d ppl — waiting" % [int(mark.get("workers", 0)),
 					int(mark.get("min_workers", 1))] if not quorum \
 					else "%d ppl" % int(mark.get("workers", 0))
 			var lw := fnt.get_string_size(head, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x

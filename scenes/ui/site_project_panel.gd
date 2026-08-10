@@ -551,7 +551,7 @@ func _task_row(task: Dictionary, board) -> Control:
 		var crew := Label.new()
 		crew.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		if workers > 0 and workers < min_w:
-			crew.text = "%d/%d ppl — gathering" % [workers, min_w]
+			crew.text = "%d/%d ppl — waiting" % [workers, min_w]
 			crew.add_theme_color_override("font_color", C_ACTIVE)
 		elif workers > 0:
 			crew.text = "%d ppl" % workers
