@@ -177,6 +177,15 @@ Compare boot errors against CLAUDE.md "Known pre-existing runtime errors". Gotch
 
 **Also found, NOT fixed (separate bug, flagged for follow-up):** auto-scattered deciduous trees render as sparse "pom-pom" canopies (thin trunk + small disconnected foliage clusters) rather than full canopy, on the same Lincoln, MA map. This is a mesh-generation/scale issue in the auto-vegetation card-building path, unrelated to Forward+ or tonemap — it would look identical under GL Compatibility. Out of scope for this phase; needs its own investigation into why auto-scatter's `VegetationCardFactory` output differs so much from manually-painted specimens of the same species.
 
+> **RESOLVED by Veg Overhaul v2 (verified 2026-08-11):** the deciduous canopy
+> was rebuilt on a space-colonization branch skeleton with real foliage clumps
+> capping the tips (see CLAUDE.md "Procedural deciduous tree"), and the
+> `--capture=tree` portraits on the Mount Vernon map now show a full connected
+> canopy at NEAR for every deciduous species (~7k tris, exact authored
+> heights, foot at y 0). The clump-scale root causes (NEUTRAL_BULK ×1.6 on the
+> auto path, clump floor swallowing the trunk) are pinned in
+> `auto_vegetation_selftest.gd`.
+
 **Verify:** [SUITE] all green (physics 124, terrain 115, graph 6, vegetation 2139) both before and after the registration fix; both maps boot clean vs. baseline throughout.
 
 ## Phase 10 (original spec) — Post-switch environment & AA tuning 🔶 Sonnet-class
@@ -240,6 +249,14 @@ Landed on user request. Three coupled changes across the seasonal-uniform pipeli
 Verified: `source_physics_selftest.gd` gained 3 grass-growth checks (121→124, all pass); forced render pass compiled both shaders' new vertex+fragment paths; both maps boot clean vs. the known baseline (the 26 `data.tree is null` import errors are pre-existing editor-import noise, confirmed by stash-diff).
 
 ## Phase 13 — Far-tree impostor/billboard LOD 🔴 STRONG MODEL REQUIRED
+
+> **SUPERSEDED by Veg Overhaul v2 (2026-08-11):** the impostor tier shipped in
+> a different, more capable form than planned here —
+> `vegetation/veg_impostor_baker.gd` (in-process 8-yaw + top 3×3 atlas bakes,
+> content-hash cached under `user://veg_impostors/`, BAKE_VERSION-gated) +
+> `veg_impostor.gdshader` + `veg_lod_policy.gd` (budget-aware detail distance
+> replacing the SoI rings). See CLAUDE.md "Tree LOD (Overhaul v2)". The plan
+> below is retained for history only; do not build from it.
 
 **Why strong:** cross-system — runtime SubViewport baking, distance-partitioned MultiMesh population inside AutoVegetationGenerator (caps, species weights, OSM overrides), rebake hooks on style change, shadow policy. Easiest phase to get subtly wrong (popping, double-drawing, stale bakes).
 
