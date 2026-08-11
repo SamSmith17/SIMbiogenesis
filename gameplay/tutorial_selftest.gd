@@ -155,6 +155,26 @@ func _test_sandbox_snapshot() -> int:
 	if (ProgressStore.load_sandbox_snapshot().get("graph", {}) as Dictionary).is_empty():
 		push_error("sandbox snapshot did not survive a cache drop")
 		return 1
+	# The resume gate (TutorialDirector._snapshot_resumable_into): a snapshot
+	# only restores into the level that saved it or the one right after — a
+	# leftover from quitting mid-level-3 must never restore into level 10 as
+	# if it were the level-9 build.
+	var director: Node = (load("res://gameplay/tutorial_director.gd") as GDScript).new()
+	if not bool(director.call("_snapshot_resumable_into", "bootcamp_11_optimize")):
+		push_error("snapshot should resume into the level that saved it")
+		director.free()
+		return 1
+	var after_11 := str(TutorialCatalog.next_after("bootcamp_11_optimize"))
+	if not bool(director.call("_snapshot_resumable_into", after_11)):
+		push_error("snapshot should resume into the level after the one that saved it")
+		director.free()
+		return 1
+	ProgressStore.save_sandbox_snapshot("bootcamp_01_short", blob)
+	if bool(director.call("_snapshot_resumable_into", "bootcamp_11_optimize")):
+		push_error("a stale early-level snapshot must not restore into a later carry level")
+		director.free()
+		return 1
+	director.free()
 	# reset_tutorial_progress clears completion + the snapshot, but must not
 	# touch unrelated unlock grants (the per-level palette, not global unlocks,
 	# is what actually gates content while a level is active).

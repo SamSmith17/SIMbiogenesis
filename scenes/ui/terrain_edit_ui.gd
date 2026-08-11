@@ -325,6 +325,14 @@ func _build_ui() -> void:
 	param_row.add_child(_rain_row)
 	_labeled_slider(_rain_row, "Rate m/s", 0.02, 1.0, _rain_rate,
 		func(v: float) -> void: _rain_rate = v, 100)
+	var flood_btn := Button.new()
+	flood_btn.text = "Flood pits"
+	flood_btn.custom_minimum_size = Vector2(76, 28)
+	flood_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	flood_btn.tooltip_text = ("Gravity-fill every closed depression inside the "
+			+ "selection — each pit ponds to its own natural spill level")
+	flood_btn.pressed.connect(_on_flood_pits)
+	_rain_row.add_child(flood_btn)
 	_basin_lbl = Label.new()
 	_basin_lbl.add_theme_color_override("font_color", Color(0.55, 0.85, 0.95, 1.0))
 	_basin_lbl.add_theme_font_size_override("font_size", 11)
@@ -877,6 +885,24 @@ func _update_basin_label() -> void:
 		float(_basin_cache.get("fill_frac", 0.0)) * 100.0,
 		rate_txt,
 	]
+
+
+## One-shot gravity flood of the locked selection. The loader half
+## (fill_selection_depressions) shipped complete but caller-less — the same
+## shape as the apply_terrain_extents incident (built and correct, no UI).
+func _on_flood_pits() -> void:
+	if _loader == null or not _selection_locked or _selection_poly.size() < 3:
+		_set_status("Lock a selection first (Rect / Circle / Lasso), then flood")
+		return
+	if not _loader.has_method("fill_selection_depressions"):
+		return
+	_push_sculpt_undo_if_possible()
+	var n := int(_loader.call("fill_selection_depressions", _selection_poly))
+	if n > 0:
+		_set_status("Flooded %d pit%s to natural spill level" % [
+			n, "" if n == 1 else "s"])
+	else:
+		_set_status("No closed depressions here — carve a basin first (Pond)")
 
 
 func _begin_water_modulate() -> void:

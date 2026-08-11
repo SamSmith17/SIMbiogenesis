@@ -1235,7 +1235,7 @@ func _build_center() -> Control:
 	vp_container.gui_input.connect(_on_viewport_input)
 	_viewport = SubViewport.new()
 	_viewport.size = Vector2i(900, 700)
-	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
 	_viewport.own_world_3d = true
 	vp_container.add_child(_viewport)
 	_build_studio_world()
@@ -1433,7 +1433,7 @@ func _ortho_inset(label_text: String) -> Array:
 	overlay.add_child(vpc)
 	var vp := SubViewport.new()
 	vp.size = Vector2i(270, 180)
-	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	vp.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
 	# Share the studio world so the insets track the same structure.
 	vp.world_3d = _viewport.world_3d
 	vpc.add_child(vp)

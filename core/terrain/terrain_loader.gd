@@ -302,7 +302,6 @@ var _footing_grid := PackedFloat32Array()
 var _detail_surface_grid := PackedFloat32Array()
 var _detail_collision_active := false
 const DRONE_GROUND_CLEARANCE_M := 1.5
-var _parcel_rect := Rect2()
 var _selection_highlight: MeshInstance3D = null
 var _last_selection_rect := Rect2(-99999.0, -99999.0, 0.0, 0.0)
 var _last_veg_poly_hash := 0
@@ -1464,9 +1463,6 @@ func _feed_solar_graph(panel_count: int, watts: float, label: String = "OSM Sola
 ## OSM solar array crosshair selection (player targets an array → adds to graph)
 ## ---------------------------------------------------------------------------
 
-func has_solar_arrays() -> bool:
-	return not _solar_arrays.is_empty()
-
 
 ## Which built array footprint contains the world XZ point (topmost / smallest wins
 ## when nested). Returns {valid, array_idx}.
@@ -2485,17 +2481,6 @@ func set_water_focus_idx(idx: int) -> void:
 	_draw_water_highlight(idx)
 
 
-func is_pond_added(idx: int) -> bool:
-	if idx < 0 or idx >= _water_data.size():
-		return false
-	var item: Variant = _water_data[idx]
-	if not (item is Dictionary):
-		return false
-	var poly: PackedVector2Array = (item as Dictionary).get("points", PackedVector2Array())
-	var tag := str((item as Dictionary).get("tag", _water_body_tag(poly)))
-	return _pond_tag_on_graph(tag)
-
-
 func _draw_water_highlight(idx: int, tint: Color = Color(0.15, 0.55, 1.0, 0.45)) -> void:
 	if _main == null or idx < 0 or idx >= _water_data.size():
 		return
@@ -2541,15 +2526,6 @@ func get_watershed_analysis():
 	if _watershed_analysis == null and not _built_grid.is_empty():
 		refresh_watershed_analysis()
 	return _watershed_analysis
-
-
-## Upstream catchment area (m²) at a world XZ — 0 when analysis unavailable.
-func watershed_upstream_area_m2(x: float, z: float) -> float:
-	var a: Variant = get_watershed_analysis()
-	if a == null:
-		return 0.0
-	var cell := Watershed.world_to_cell(a, x, z)
-	return Watershed.upstream_area_m2(a, cell.x, cell.y)
 
 
 ## Local-window D8 for the hillside that drains into a pond.
@@ -3095,13 +3071,6 @@ func _find_system_graph_view() -> Node:
 	if sgv == null:
 		sgv = get_tree().root.find_child("SystemGraphView", true, false)
 	return sgv
-
-
-func get_prop_graph_item_id(prop_id: String) -> String:
-	if _placed_prop_layer == null or prop_id.is_empty():
-		return ""
-	var rec := _placed_prop_layer.find_by_id(prop_id)
-	return str(rec.get("graph_item_id", ""))
 
 
 ## All placed-prop records (the layer's live array — treat as read-only).
@@ -5300,10 +5269,6 @@ func set_cached_geometry_visible(on: bool) -> void:
 	_apply_cached_geometry_visibility()
 
 
-func is_cached_geometry_visible() -> bool:
-	return _cached_geometry_visible
-
-
 func _apply_cached_geometry_visibility() -> void:
 	if _main == null:
 		return
@@ -6027,13 +5992,6 @@ func get_vegetation_settings() -> Dictionary:
 	return _vegetation_layer.user_settings()
 
 
-func get_map_vegetation_bounds() -> PackedVector2Array:
-	var he := _half_extent
-	return PackedVector2Array([
-		Vector2(-he, -he), Vector2(he, -he), Vector2(he, he), Vector2(-he, he),
-	])
-
-
 func set_vegetation_settings(patch: Dictionary, rebuild: bool = true, persist: bool = true) -> void:
 	if _vegetation_layer == null:
 		return
@@ -6333,10 +6291,6 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 ## Per-polygon scatter diagnostics from the last generator run (see
 ## GeneratorState.poly_stats). Also feeds the veg-area inspector UI.
 var _auto_veg_poly_stats: Array = []
-
-
-func get_auto_veg_poly_stats() -> Array:
-	return _auto_veg_poly_stats
 
 
 ## Per-kind scatter summary: why polygons did/didn't populate (budget, slope,
@@ -6748,10 +6702,6 @@ func is_climelapse_exporting() -> bool:
 	return _climelapse_capture != null and _climelapse_capture.is_active()
 
 
-func get_climelapse_export_message() -> String:
-	return _export_status_message
-
-
 var _export_status_message := ""
 var _export_cull_saved: Array = []
 ## Result of the LAST finished export: "" while none has run, else "ok"/"fail".
@@ -7114,22 +7064,6 @@ func _auto_veg_biome() -> Dictionary:
 		biome["weights"] = VegSpeciesRegistry.filter_weights_by_climate(
 			bw as Dictionary, _lat, _site_winter_min_c())
 	return biome
-
-
-## Patch bulk (non-hero) vegetation inside a locked selection — manual + auto layers.
-func apply_selection_patch(poly: PackedVector2Array, params: Dictionary) -> Dictionary:
-	var result := {"manual": 0, "auto": 0}
-	if poly.size() < 3 or params.is_empty():
-		return result
-	if _vegetation_layer != null:
-		result["manual"] = _vegetation_layer.patch_bulk_in_polygon(poly, params)
-		if int(result["manual"]) > 0:
-			_vegetation_layer.save(_lat, _lon)
-			VegetationCardFactory.clear_foot_cache()
-			_rebuild_vegetation()
-	if _auto_veg_layer != null and _auto_veg_generated:
-		result["auto"] = apply_auto_vegetation_patch(poly, params, true)
-	return result
 
 
 func _rebuild_auto_vegetation() -> void:
@@ -7769,16 +7703,6 @@ func convert_plant_to_hero_at(world_xz: Vector2, radius_m: float = 6.0) -> Dicti
 	}
 
 
-func delete_nearest_hero(world_xz: Vector2) -> bool:
-	if _vegetation_layer == null:
-		return false
-	if not _vegetation_layer.remove_nearest_hero(world_xz):
-		return false
-	_vegetation_layer.save(_lat, _lon)
-	_rebuild_vegetation()
-	return true
-
-
 func update_vegetation_highlight(poly: PackedVector2Array,
 		color: Color = Color(0.2, 0.9, 0.4, 0.42), fast_preview: bool = false) -> void:
 	if _main == null or poly.size() < 3:
@@ -7924,23 +7848,6 @@ func terrain_pick_ray(screen_pos: Vector2) -> Variant:
 	return hit["position"]
 
 
-func apply_sculpt_op(op: String, rect_min: Vector2, rect_max: Vector2,
-		falloff_m: float, amount_m: float, level_y: float) -> void:
-	if _terrain_edits == null or _base_dem_grid.is_empty():
-		return
-	var work := _compose_base_footing_grid(false)
-	var value := amount_m
-	if op == "level":
-		value = _mean_local_height_in_rect(work, rect_min, rect_max)
-		if level_y != 0.0:
-			value = level_y - _built_center_elev
-	TerrainSculpt.apply_rect(_terrain_edits.delta, MESH_RES, _built_extent,
-		rect_min, rect_max, op, value, falloff_m, work, _built_center_elev)
-	_terrain_edits.save(_lat, _lon)
-	_rebuild_heightfield()
-	update_selection_highlight(rect_min, rect_max)
-
-
 ## ---------------------------------------------------------------------------
 ## Live brush/shape sculpt (terrain_edit_ui). Precision detail-patch layer.
 ## ---------------------------------------------------------------------------
@@ -7949,10 +7856,6 @@ func apply_sculpt_op(op: String, rect_min: Vector2, rect_max: Vector2,
 func can_sculpt_detail() -> bool:
 	return not _detail_surface_grid.is_empty() and _detail_elev_cols >= 2 \
 		and _terrain_edits != null
-
-
-func sculpt_detail_res() -> int:
-	return _detail_elev_cols
 
 
 ## Snapshot the user water bodies for undo (Rain/Drain / designated ponds). The
@@ -8655,29 +8558,6 @@ func _water_idx_for_tag(tag: String) -> int:
 			return i
 	return -1
 
-
-func _mean_local_height_in_rect(grid: PackedFloat32Array, rect_min: Vector2,
-		rect_max: Vector2) -> float:
-	var x0 := minf(rect_min.x, rect_max.x)
-	var x1 := maxf(rect_min.x, rect_max.x)
-	var z0 := minf(rect_min.y, rect_max.y)
-	var z1 := maxf(rect_min.y, rect_max.y)
-	var total := 0.0
-	var count := 0
-	for r in MESH_RES:
-		for c in MESH_RES:
-			var w := TerrainSculpt.cell_to_world(c, r, MESH_RES, _built_extent)
-			if w.x < x0 or w.x > x1 or w.y < z0 or w.y > z1:
-				continue
-			total += grid[r * MESH_RES + c] - _built_center_elev
-			count += 1
-	return total / float(maxi(count, 1))
-
-
-func get_parcel_rect() -> Rect2:
-	return _parcel_rect
-
-
 func get_sculpt_locked_yaw() -> float:
 	return _locked_yaw
 
@@ -8717,42 +8597,10 @@ func update_selection_highlight(world_min: Vector2, world_max: Vector2) -> void:
 	_selection_highlight.visible = true
 
 
-func clear_selection_highlight() -> void:
-	_clear_selection_highlight()
-
-
 func _clear_selection_highlight() -> void:
 	_last_selection_rect = Rect2(-99999.0, -99999.0, 0.0, 0.0)
 	if _selection_highlight != null:
 		_selection_highlight.visible = false
-
-
-func clear_parcel_rect() -> void:
-	_parcel_rect = Rect2()
-
-
-func select_nearest_parcel(world_xz: Vector2) -> void:
-	var polys: Array = []
-	for key in ["landuse", "buildings"]:
-		for item in _osm_vectors.get(key, []):
-			if item is Dictionary:
-				polys.append(item)
-	var poly := TerrainSculpt.nearest_parcel(polys, world_xz)
-	if poly.is_empty():
-		return
-	var min_x := poly[0].x
-	var max_x := poly[0].x
-	var min_z := poly[0].y
-	var max_z := poly[0].y
-	for p in poly:
-		min_x = minf(min_x, p.x)
-		max_x = maxf(max_x, p.x)
-		min_z = minf(min_z, p.y)
-		max_z = maxf(max_z, p.y)
-	_parcel_rect = Rect2(Vector2(min_x, min_z), Vector2(max_x - min_x, max_z - min_z))
-	update_selection_highlight(Vector2(min_x, min_z), Vector2(max_x, max_z))
-	if _terrain_edit_ui != null and _terrain_edit_ui.has_method("set_selection_from_world_rect"):
-		_terrain_edit_ui.call("set_selection_from_world_rect", Vector2(min_x, min_z), Vector2(max_x, max_z))
 
 
 ## ---------------------------------------------------------------------------
@@ -9573,17 +9421,6 @@ func _replace_osm_from_pick(pick: Dictionary, model_id: String) -> bool:
 		int(pick.get("building_idx", -1)), model_id,
 		centroid.x, 0.0, centroid.y, 0.0, 0.0, 0.0, fit_scale, gy)
 	if prop_id.is_empty():
-		return false
-	_placed_prop_layer.save(_lat, _lon)
-	_attach_buildings()
-	_rebuild_placed_props()
-	return true
-
-
-func delete_nearest_prop(world_xz: Vector2) -> bool:
-	if _placed_prop_layer == null:
-		return false
-	if not _placed_prop_layer.remove_nearest(world_xz):
 		return false
 	_placed_prop_layer.save(_lat, _lon)
 	_attach_buildings()

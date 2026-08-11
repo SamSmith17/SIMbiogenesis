@@ -27,10 +27,11 @@ even while old code is migrated incrementally.
 
 | Layer | What it is | Examples |
 |---|---|---|
-| **Services (autoloads)** | Global, always-on singletons that own state or talk to the outside world. The de-facto public API other code depends on. | `TimeDirector`/`SimMode`, `SaveSystem`, `WeatherService`, `ElevationService`/`ImageryService`/`AiImageryService`, `DeviceRegistry`, `MapContext`, `MultiplayerSession` (31 total — see `project.godot [autoload]`) |
+| **Services (autoloads)** | Global, always-on singletons that own state or talk to the outside world. The de-facto public API other code depends on. | `TimeDirector`/`SimMode`, `SaveSystem`, `WeatherService`, `ElevationService`/`ImageryService`/`AiImageryService`, `DeviceRegistry`, `MapContext`, `MultiplayerSession` (37 total — see `project.godot [autoload]`) |
 | **Core sim** | The simulation surfaces. Heavy, central, currently monolithic. | `system_graph/` (the 2D systems graph = core gameplay), `power_system/`, `core/` subsystems, `main.gd` (world/env/save orchestration) |
 | **World & gameplay** | Embodied 3D twin, player, props, vehicles. | `gameplay/`, `scenes/gameplay/`, `core/terrain/`, `vegetation/`, `core/placed_models/` |
 | **UI / views** | Screens and panels under the Main `UILayer` (CanvasLayer). | `scenes/ui/`, `system_graph/*_view.gd`, `location_picker/` |
+| **Settlement mode** | The second play mode: full-screen camera on Main, work dock, HUD, space overlay (see CLAUDE.md "Settlement mode"). | `scenes/settlement/` (`settlement_view.gd`, `settlement_camera.gd`, `settlement_hud.gd`, `work_dock.gd`, `space_overlay.gd`) |
 | **Feature subsystems** | Self-contained capabilities, each in its own `core/` dir with a selftest. This is the pattern to copy. | `core/conduits/`, `core/machines/`, `core/scad/`, `core/linkage/`, `core/esim/`, `core/multiplayer/`, `core/report/`, `core/perf/` |
 
 The **feature subsystems** column is the model for new work: each is a directory
@@ -125,20 +126,35 @@ selftests green.
    self-registrations, and 35 hardcoded `"UILayer/SystemGraphView"` lookups
    across 23 files. There are now **zero bare `Services` identifiers** outside
    `services.gd`. *Remaining:* the `SolarUI` / `TerrainLoader` / `Player` /
-   `HAClient` path lookups, and ~280 other `"UILayer/…"` / `"/root/…"` strings.
+   `HAClient` path lookups, and ~340 other `"UILayer/…"` / `"/root/…"` strings.
    Do **not** register autoloads (WeatherService, TimeDirector, …) — reference
    those directly.
-2. **Monoliths — 8 files hold ~23% of the code.** `system_graph_view.gd` (~13.9k
-   lines), `terrain_loader.gd` (~9.2k), `graph_canvas.gd` (~8.9k),
-   `inspector_panel.gd` (~5.7k), `solar_ui.gd` (~4.5k), `main.gd` (~3.9k),
-   `timeline_ui.gd` (~3.0k), `resource_flow_engine.gd` (~3.0k). *Fix:* extract one
+   ⚠ *Regressed (re-measured 2026-08-11):* 12 `"UILayer/SystemGraphView"`
+   lookups are back, **concentrated in code written AFTER the sweep** — the
+   settlement surface (`scenes/settlement/work_dock.gd`, `settlement_view.gd`,
+   `settlement_hud.gd`), `core/population/site_project_effects.gd`,
+   `scenes/ui/site_project_panel.gd`, `gameplay/site_target_picker.gd`,
+   `core/placed_models/placed_prop_service.gd`, `core/terrain/terrain_loader.gd`.
+   The convention is not enforcing itself on new code; use
+   `ServiceLocator.graph()` in anything new and sweep these when touching those
+   files.
+2. **Monoliths — the big files keep growing** (re-measured 2026-08-11):
+   `system_graph_view.gd` (~15.8k lines), `terrain_loader.gd` (~10.2k),
+   `graph_canvas.gd` (~9.2k), `playtest_harness.gd` (~6.8k — now bigger than
+   inspector_panel and previously missing from this list), `inspector_panel.gd`
+   (~6.0k), `solar_ui.gd` (~4.7k), `main.gd` (~4.3k),
+   `siphon_hydro_modal.gd` (~3.8k), `resource_flow_engine.gd` (~3.6k),
+   `timeline_ui.gd` (~3.1k). Every file grew since the 2026-07-26 measurement —
+   the "extract one responsibility per push" remedy is being outrun. *Fix:* extract one
    cohesive responsibility per push into a delegate helper (e.g. the graph's
    `_tick_graph_csp` / `_tick_graph_renewables` / `_tick_resource_flow_ambient`;
    main's env/sky, save/load, collision generation).
-3. **Loose root `.gd` (13 files)** — vehicles (`euc_/golf_cart_/skid_steer_`),
-   `ha_switch`, `ha_websocket_client`, `inverter_bridge`, `ibc_glow`,
-   `auto_collision_generator`, `auto_light`, `solar_calculator`, `planets`,
-   `star_system`. *Fix (medium-risk):* relocate into homes (`gameplay/vehicles/`,
+3. **Loose root `.gd` (11 files)** — vehicles (`euc_/golf_cart_/skid_steer_`),
+   `ha_switch`, `ha_websocket_client`, `ibc_glow`, `auto_light`,
+   `solar_calculator`, `planets`, `star_system`, `main.gd`
+   (`auto_collision_generator` and the root `inverter_bridge` shim are gone —
+   the live `inverter_bridge.gd` autoload is under `core/`).
+   *Fix (medium-risk):* relocate into homes (`gameplay/vehicles/`,
    `core/ha/`, `core/astronomy/`, …) **via the Godot editor** so `res://` /
    `.tscn` / `.tres` references are rewritten — do not `git mv` code blindly.
 4. **Stalled v1/v2 split** — `system_graph_v2/graph_canvas_v2.gd extends
@@ -152,7 +168,7 @@ selftests green.
    pass-only stubs and the no-op root `inverter_bridge.gd` shim were deleted
    2026-08-01, and the unreachable `uisp/` subsystem moved to `parked/uisp/`
    behind a `.gdignore` (see `parked/README.md`).
-6. **Autoload count (31).** High, but it's the current service API — do not churn
+6. **Autoload count (37, re-counted 2026-08-11).** High, but it's the current service API — do not churn
    it until debt #1 gives a cleaner indirection. Then the shims become removable.
 
 *Rule of thumb:* asset/junk hygiene is zero-risk (do freely). Moving or splitting

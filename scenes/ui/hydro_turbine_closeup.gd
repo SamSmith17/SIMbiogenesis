@@ -493,14 +493,6 @@ func _free_particles() -> void:
 # Public API (called BY STRING from the Lab — keep the surface stable)
 # ---------------------------------------------------------------------------
 
-func setup(_graph_view: Node) -> void:
-	pass
-
-
-func set_turbine(_item_id: String) -> void:
-	pass
-
-
 ## {q_lps, h_net_m, v_jet_ms, rpm, speed_ratio, nozzle_d_m, nozzle_n,
 ##  runner_pcd_m, load_frac, eta_runner}
 func set_state(s: Dictionary) -> void:

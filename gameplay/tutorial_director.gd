@@ -70,7 +70,7 @@ func start(level_id: String = "") -> void:
 	# begin_tutorial_sandbox always starts from an empty canvas, so resuming
 	# into one of these (a new session, or straight from the level picker)
 	# needs that graph restored, or there is nothing left to build on.
-	if def.carry_graph:
+	if def.carry_graph and _snapshot_resumable_into(def.id):
 		_gv.call("restore_tutorial_sandbox_snapshot")
 	# Snapshot the world the sandbox will perturb (runs advance the clock,
 	# bake commits move the battery) so exit hands everything back.
@@ -81,6 +81,17 @@ func start(level_id: String = "") -> void:
 	_gv.call("open_graph_view")
 	_ensure_hud()
 	_load_level(def)
+
+
+## A persisted sandbox graph is only resumable into the level that saved it or
+## the one right after (a carry level builds on its predecessor's output).
+## Without this gate, a snapshot left by quitting mid-level-3 restored into
+## level 10 as if it were the level-9 build.
+func _snapshot_resumable_into(level_id: String) -> bool:
+	var snap_lid := str(ProgressStore.load_sandbox_snapshot().get("level_id", ""))
+	if snap_lid.is_empty():
+		return false
+	return snap_lid == level_id or TutorialCatalog.next_after(snap_lid) == level_id
 
 
 func exit_tutorial() -> void:
@@ -130,6 +141,10 @@ func _load_level(def: TutorialLevelDef) -> void:
 	if not def.carry_graph:
 		_gv.call("tutorial_clear_graph")
 		_gv.call("tutorial_seed_level", def.seed, def.seed_wires)
+		# The seed just replaced whatever the persisted carry snapshot held;
+		# clearing keeps "snapshot exists" == "sandbox content is resumable"
+		# (the debounced save re-captures this level as the player edits).
+		_gv.call("clear_tutorial_sandbox_snapshot")
 	# Full Library everywhere (design decision 2026-07-30): levels no longer
 	# restrict the palette — allowed_presets is retained in the defs as
 	# curriculum metadata but not enforced. Clearing (rather than skipping)
@@ -370,6 +385,10 @@ func _complete_level(stats: Dictionary = {}) -> void:
 	# New unlocks appear once the per-level palette lifts (level advance/exit).
 	var next_id := TutorialCatalog.next_after(_level.id)
 	var next_def := TutorialCatalog.by_id(next_id) if not next_id.is_empty() else null
+	if next_def == null and _gv != null:
+		# Curriculum finished — the carry chain has no successor, so the
+		# persisted sandbox graph could only ever stale-restore. Drop it.
+		_gv.call("clear_tutorial_sandbox_snapshot")
 	var actions: Array = []
 	if next_def != null:
 		actions.append({"label": "Next level", "callback": Callable(self, "_on_next_level")})

@@ -46,7 +46,8 @@ var _step_climb_accum : float = 0.0
 # Node references
 @onready var camera_arm : Node3D = $CameraArm
 @onready var camera : Camera3D = $CameraArm/Camera3D
-@onready var tool_manager : Node = $ToolManager
+# Not in player.tscn — _setup_tool_manager() creates it when absent.
+@onready var tool_manager : Node = get_node_or_null("ToolManager")
 @onready var character_model : Node3D = $CharacterModel
 
 # Character animation

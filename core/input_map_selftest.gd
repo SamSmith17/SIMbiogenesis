@@ -70,6 +70,23 @@ const KNOWN_CONFLICTS: Array = []
 ## runtime). An action with no events at all is otherwise a dead action.
 const ALLOWED_UNBOUND: Array = []
 
+## Actions that are deliberately CONTROLLER-ONLY. Each entry names the keyboard
+## path that stands in for it (or why none is needed). A working handler behind
+## a joypad-only binding is invisible to every keyboard player — toggle_solar_ui
+## shipped that way and the Solar HUD could not be toggled from a keyboard at
+## all — so gamepad-only is a declared choice here or it is a bug.
+const ALLOWED_KEYBOARD_UNBOUND: Dictionary = {
+	"jump": "no keyboard jump verb by design; walking gameplay never requires it",
+	"look_left": "mouse-look is the keyboard path",
+	"look_right": "mouse-look is the keyboard path",
+	"look_up": "mouse-look is the keyboard path",
+	"look_down": "mouse-look is the keyboard path",
+	"use_tool": "LMB fallback hardcoded in scenes/gameplay/player.gd (use_tool poll)",
+	"toggle_tool": "keyboard uses equip_tool/unequip_tool (1 / 0) instead",
+	"sim_speed_up": "timeline-bar speed buttons are the keyboard path (timeline_ui.gd)",
+	"sim_speed_down": "timeline-bar speed buttons are the keyboard path (timeline_ui.gd)",
+}
+
 var _fails := 0
 var _checks := 0
 
@@ -90,6 +107,7 @@ func _initialize() -> void:
 
 	_test_every_action_is_bound(actions)
 	_test_physical_keycodes(actions)
+	_test_keyboard_coverage(actions)
 	_test_no_key_collisions(actions)
 	_test_whitelist_is_live(actions)
 
@@ -161,6 +179,35 @@ func _test_physical_keycodes(actions: Dictionary) -> void:
 				_check("action '%s' uses physical_keycode" % action, false,
 					"bound via keycode %d (%s) — moves on non-QWERTY layouts" % [
 						k.keycode, OS.get_keycode_string(k.keycode)])
+			# A code outside KEY_CODE_MASK can never match a real key event.
+			# The projection actions shipped with Godot 3 F-key values
+			# (1677724x) and were dead for months — only the hardcoded
+			# fallbacks in projection_canvas.gd kept the feature alive.
+			var code: int = k.physical_keycode if k.physical_keycode != 0 else k.keycode
+			if code != 0 and (code & KEY_CODE_MASK) != code:
+				_check("action '%s' keycode is a valid Godot 4 key" % action, false,
+					"%d exceeds KEY_CODE_MASK — a Godot 3 keycode, unmatchable in Godot 4" % code)
+
+
+## Every action must be reachable from a keyboard/mouse unless it is declared
+## controller-only in ALLOWED_KEYBOARD_UNBOUND. Both directions are policed:
+## an undeclared joypad-only action fails, and a declared entry that has since
+## gained a keyboard binding fails as a stale whitelist row.
+func _test_keyboard_coverage(actions: Dictionary) -> void:
+	for action: String in actions.keys():
+		var has_kb := false
+		for ev: Variant in actions[action]:
+			if ev is InputEventKey or ev is InputEventMouseButton:
+				has_kb = true
+				break
+		var declared: bool = ALLOWED_KEYBOARD_UNBOUND.has(action)
+		if not has_kb and not declared:
+			_check("action '%s' reachable from keyboard" % action, false,
+				"joypad-only binding with no ALLOWED_KEYBOARD_UNBOUND entry — "
+				+ "keyboard players cannot fire it")
+		elif has_kb and declared:
+			_check("ALLOWED_KEYBOARD_UNBOUND entry for '%s' is live" % action, false,
+				"now has a keyboard binding — drop the stale whitelist row")
 
 
 ## Two actions on the same key+modifier combination both fire from one press

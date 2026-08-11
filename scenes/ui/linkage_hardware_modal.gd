@@ -331,7 +331,7 @@ func _build_center() -> Control:
 	_vpc = vpc
 	_viewport = SubViewport.new()
 	_viewport.size = Vector2i(900, 700)
-	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
 	_viewport.own_world_3d = true
 	vpc.add_child(_viewport)
 

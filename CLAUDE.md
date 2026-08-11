@@ -25,6 +25,10 @@ Godot.exe.exe --headless --path . --import
 
 # Physics self-test (extend it with every physics change):
 Godot.exe.exe --headless --path . --script power_system/sources/source_physics_selftest.gd
+# Resource-flow engine self-test (offline — spec-driven hydro incl. the
+# stream-source path, penstock-conn authority, habitat/processor/tank flows;
+# extend it with every flow-engine change):
+Godot.exe.exe --headless --path . --script power_system/sources/resource_flow_selftest.gd
 # Services node-registry self-test (offline — register/get/has, auto-clear on
 # tree exit, freed-node guard; see ARCHITECTURE.md debt #1):
 Godot.exe.exe --headless --path . --script core/services_selftest.gd
@@ -3282,11 +3286,17 @@ Available gstack skills: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`
 
 ## Known pre-existing runtime errors (not regressions)
 
-Missing `ToolManager` under Player; missing
-`res://vegetation/baked/camp_scatter_bake.tres`; duplicate device id
-`ibc_glow_lights` (two Starshade IBCGlow instances); HAConnectionUI
-button node-path misses; 4× `!is_inside_tree()` from fire-extinguisher spawn;
-"target vector can't be zero" from road/camp scatter.
+List re-verified + pruned 2026-08-11: both boot-time "Node not found" errors
+are FIXED (`ToolManager` under Player → `get_node_or_null` + self-heal;
+HAConnectionUI button paths now include `/ButtonContainer`). Four long-listed
+entries were STALE and are dropped: duplicate device id `ibc_glow_lights`
+(second instance renamed `ibc_glow_lights_2`, see ARCHITECTURE.md), the 4×
+fire-extinguisher `!is_inside_tree()` (main.gd adds children before setting
+global_position), the missing `camp_scatter_bake.tres` (the only load site is
+guarded by `ResourceLoader.exists()`), and "target vector can't be zero" from
+road/camp scatter (every look_at/Basis site now guards zero-length). A clean
+boot of both built-in maps currently greps ZERO node-path/parse/script errors
+— treat any new one as a regression.
 
 **`core/terrain/site_boot_selftest.gd` currently FAILS 2 of 7** — "player above
 ground gap -93.75 m" and "auto-veg generated got 0" at Mount St. Helens. It is a

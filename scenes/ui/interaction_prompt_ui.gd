@@ -36,7 +36,7 @@ const KEYBOARD_LABELS := {
 	"unequip_tool": "0",
 	"toggle_light_menu": "P",
 	"toggle_tool": "1/0",
-	"toggle_solar_ui": "—",
+	"toggle_solar_ui": "E",
 	"toggle_library": "U",
 	"sim_speed_up": "—",
 	"sim_speed_down": "—",

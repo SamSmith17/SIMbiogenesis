@@ -9,8 +9,8 @@ var time_ui: Control
 @onready var panel: Panel = $Panel
 @onready var url_input: LineEdit = $Panel/MarginContainer/VBoxContainer/ConnectionSection/URLInput
 @onready var token_input: LineEdit = $Panel/MarginContainer/VBoxContainer/ConnectionSection/TokenInput
-@onready var connect_button: Button = $Panel/MarginContainer/VBoxContainer/ConnectionSection/ConnectButton
-@onready var disconnect_button: Button = $Panel/MarginContainer/VBoxContainer/ConnectionSection/DisconnectButton
+@onready var connect_button: Button = $Panel/MarginContainer/VBoxContainer/ConnectionSection/ButtonContainer/ConnectButton
+@onready var disconnect_button: Button = $Panel/MarginContainer/VBoxContainer/ConnectionSection/ButtonContainer/DisconnectButton
 @onready var status_label: Label = $Panel/MarginContainer/VBoxContainer/ConnectionSection/StatusLabel
 @onready var entity_list_input: TextEdit = $Panel/MarginContainer/VBoxContainer/EntitySection/EntityListInput
 @onready var subscribe_button: Button = $Panel/MarginContainer/VBoxContainer/EntitySection/SubscribeButton

@@ -46,7 +46,7 @@ const CONTRACTS: Dictionary = {
 	# from a preloaded script, not typed), so a rename here is a silent no-op that
 	# leaves the tab showing an empty rect.
 	"res://scenes/ui/hydro_turbine_closeup.gd": [
-		"setup", "set_turbine", "set_state", "set_display_mode", "set_active"],
+		"set_state", "set_display_mode", "set_active"],
 }
 
 ## Directories to sweep. All of these share the same exposure: their scripts

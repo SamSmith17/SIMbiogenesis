@@ -75,6 +75,21 @@ const _GROUPS := [
 		["ui_cancel", "Close panel / menu"],
 		["toggle_help", "Open this help"],
 	]],
+	# `key:` rows are hardcoded keys (no InputMap action behind them) — the
+	# chip shows the literal label. Everything here worked for months as pure
+	# hidden knowledge; this group is its only in-game surface.
+	["Debug & Performance", [
+		["key:F3", "Performance HUD (per-system timings)"],
+		["key:F4", "Node histogram dump (to console)"],
+		["key:F7", "Vegetation shadow A/B toggle"],
+		["key:Shift+F7", "Hide all trees (perf diagnosis)"],
+		["key:Ctrl+F7", "Cycle 3D render scale"],
+		["toggle_pov_warp", "POV warp overlay"],
+		["toggle_star_calibration", "Star calibration"],
+		["toggle_projection_warp", "Projection warp (StarShade)"],
+		["toggle_projection_calibration", "Projection calibration"],
+		["reset_projection_warp", "Reset projection warp"],
+	]],
 ]
 
 var _rows_container: VBoxContainer = null
@@ -213,8 +228,15 @@ func _make_row(action: String, display_label: String) -> HBoxContainer:
 	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
 	row.add_child(lbl)
-	row.add_child(_make_key_chip(_keyboard_label(action)))
+	if action.begins_with("key:"):
+		row.add_child(_make_key_chip(action.trim_prefix("key:")))
+		return row
+	var kb := _keyboard_label(action)
 	var controller := _controller_label(action)
+	# A bare "—" chip reads as broken; controller-only actions say so.
+	if kb == "—" and not controller.is_empty() and controller != "—":
+		kb = "pad only"
+	row.add_child(_make_key_chip(kb))
 	if not controller.is_empty() and controller != "—":
 		row.add_child(_make_key_chip(controller))
 	return row
