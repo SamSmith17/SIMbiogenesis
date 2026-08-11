@@ -26,6 +26,16 @@ const VIEW_ELEVATION := "elevation"
 ## Siphon Lab — hydro detail panel (not a physical map projection).
 const VIEW_SIPHON := "siphon"
 
+## Floor on the Hydro Lab cross-section's ortho height, in metres. A CAMERA limit
+## (5 cm frames a 25 mm nozzle), not a framing preference — it lives here because
+## BOTH halves of the Lab must clamp to the same number: the 2D overlay
+## (siphon_hydro_modal._lab_view_metrics) and the 3D section camera
+## (graph_soi_preview_service._update_section_camera). It used to be 2.0 m, a
+## framing number, clamped on the camera side only, so past roughly 1.25× Lab zoom
+## the 3D section stopped zooming while the overlay kept going and the routed
+## penstock, level ticks and gizmo drifted off the 3D turbine.
+const LAB_MIN_ORTHO_H_M := 0.05
+
 
 static func has_site_coords(item: Dictionary) -> bool:
 	return item.has("site_x_m") and item.has("site_z_m") \

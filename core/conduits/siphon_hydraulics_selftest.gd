@@ -17,6 +17,8 @@ func _initialize() -> void:
 	_test_rpm_and_pe()
 	_test_modal_script_compiles()
 	_test_direct_intake_visibility()
+	_test_powerspout_model()
+	_test_powerspout_spin()
 	_test_elevation_cross_section_drawer()
 	_test_elevation_profile_bake()
 	_test_lab_engine_step()
@@ -480,3 +482,144 @@ func _test_lab_dt_no_flood() -> void:
 	# 0.5 L/s × 60 s = 30 L → +0.003 on 10 kL — nowhere near full.
 	_check("small dt does not flood 10kL pond", lvl < 0.55,
 			"level=%.4f" % lvl)
+
+
+## Round 2 / Phase F: the PowerSpout PLT model is registered as a hydro turbine,
+## names its runner node + spin axis, ships default connection ports (a turbine
+## used to have NONE until the player authored them, so there was nothing to
+## attach a penstock to), and the kind→model mapping is complete. Geometry
+## assertions are skipped when the gitignored GLB is absent (fresh clone).
+func _test_powerspout_model() -> void:
+	_check("powerspout entry exists",
+		not ModelCatalog.find("powerspout_plt").is_empty())
+	_check("powerspout is a hydro turbine",
+		ModelCatalog.is_hydro_turbine("powerspout_plt"))
+	_check("siphon hydroturbine still a hydro turbine",
+		ModelCatalog.is_hydro_turbine("hydroturbine"))
+	_check("non-hydro model is not", not ModelCatalog.is_hydro_turbine("vawt"))
+	_check("powerspout names its runner node",
+		ModelCatalog.turbine_node_for("powerspout_plt") == "Pelton Wheel, 24 Spoon")
+	_check("powerspout declares its X spin axis",
+		ModelCatalog.spin_axis_for("powerspout_plt") == "x")
+	_check("siphon turbine keeps the default (+Z) axis",
+		ModelCatalog.spin_axis_for("hydroturbine").is_empty())
+	# Every turbine kind names the 3D model it wears.
+	for k: String in HydroSource.KINDS.keys():
+		var mid := str((HydroSource.KINDS[k] as Dictionary).get("model_id", ""))
+		_check("kind '%s' names a real model" % k,
+			not mid.is_empty() and not ModelCatalog.find(mid).is_empty(), mid)
+	_check("powerspout kind wears the powerspout model",
+		str(HydroSource.kind_meta("powerspout_pelton").get("model_id", "")) == "powerspout_plt")
+	# Default ports: a penstock inlet that advertises poly tubing, a tailrace,
+	# and the DC pair matching the preset's res_out_1 dc_electricity port.
+	var ports := ConnectionPortDefs.default_ports_for_model("powerspout_plt")
+	_check("powerspout ships 4 default ports", ports.size() == 4, str(ports.size()))
+	var by_handle: Dictionary = {}
+	for p_v in ports:
+		by_handle[str((p_v as Dictionary).get("handle_id", ""))] = p_v
+	_check("penstock inlet on res_in_0", by_handle.has("res_in_0"))
+	_check("tailrace on res_out_0", by_handle.has("res_out_0"))
+	_check("DC pair on res_out_1_pos/neg",
+		by_handle.has("res_out_1_pos") and by_handle.has("res_out_1_neg"))
+	if by_handle.has("res_in_0"):
+		var inlet: Dictionary = by_handle["res_in_0"]
+		_check("inlet prefers poly penstock",
+			str(inlet.get("preferred_conduit_type", "")) == "poly_penstock")
+		_check("inlet carries the water kind",
+			str(inlet.get("resource_kind", "")) == "water")
+	# Ports must sit ON the machine, not scattered by the generic 1.0/1.2 dims
+	# fallback — this GLB is only ~0.35 x 0.38 x 0.59 m.
+	if ResourceLoader.exists(str(ModelCatalog.find("powerspout_plt").get("path", ""))):
+		var m := ModelCatalog.mesh_metrics("powerspout_plt")
+		var half := maxf(maxf(float(m.get("width", 1.0)), float(m.get("depth", 1.0))), 0.2)
+		var top := float(m.get("foot_local_y", 0.0)) + float(m.get("unit_height", 1.0))
+		for p2_v in ports:
+			var p2: Dictionary = p2_v
+			var pos := Vector3(float(p2.get("x", 0.0)), float(p2.get("y", 0.0)),
+					float(p2.get("z", 0.0)))
+			_check("port '%s' within the body footprint" % str(p2.get("id", "")),
+				absf(pos.x) <= half and absf(pos.z) <= half,
+				"%.3f,%.3f (half %.3f)" % [pos.x, pos.z, half])
+			_check("port '%s' between foot and top" % str(p2.get("id", "")),
+				pos.y >= float(m.get("foot_local_y", 0.0)) - 0.05 and pos.y <= top + 0.05,
+				"%.3f" % pos.y)
+
+
+## Phase F: the runner actually turns, about the RIGHT axis. Builds the real
+## model under a ModelRoot, binds SiphonTurbineSpin, and checks the resolved
+## axis + that a published live_rpm produces rotation about it. A wrong axis
+## renders as the wheel tumbling end-over-end, which no static screenshot
+## catches — hence a mechanical check. Skipped when the gitignored GLB is
+## absent (fresh clone).
+func _test_powerspout_spin() -> void:
+	var path := str(ModelCatalog.find("powerspout_plt").get("path", ""))
+	if not ResourceLoader.exists(path):
+		print("  (skip powerspout spin — GLB not installed)")
+		return
+	var host := Node3D.new()
+	var model_root := Node3D.new()
+	model_root.name = "ModelRoot"
+	host.add_child(model_root)
+	var inst := ModelCatalog.instantiate("powerspout_plt")
+	_check("powerspout instantiates", inst != null)
+	if inst == null:
+		host.free()
+		return
+	model_root.add_child(inst)
+	var tree := Engine.get_main_loop() as SceneTree
+	tree.root.add_child(host)
+
+	# Declared axis ("x").
+	var spin := SiphonTurbineSpin.new()
+	spin.configure("", ModelCatalog.turbine_node_for("powerspout_plt"),
+			ModelCatalog.spin_axis_for("powerspout_plt"))
+	host.add_child(spin)
+	spin.call("_bind_turbine")
+	_check("spin bound to the runner", bool(spin.get("_ready_ok")))
+	var axis: Vector3 = spin.get("_axis_p")
+	_check("declared axis resolves to model X",
+		absf(axis.x) > 0.95 and absf(axis.y) < 0.2 and absf(axis.z) < 0.2, str(axis))
+
+	# With NO hint the geometric fallback must find the same axis — that is what
+	# keeps a re-export (or a future hydro model) working without a hand-written
+	# spin_axis key.
+	var spin2 := SiphonTurbineSpin.new()
+	spin2.configure("", ModelCatalog.turbine_node_for("powerspout_plt"), "")
+	host.add_child(spin2)
+	spin2.call("_bind_turbine")
+	var axis2: Vector3 = spin2.get("_axis_p")
+	_check("measured axis agrees with the declared one",
+		axis2.normalized().dot(axis.normalized()) > 0.98 \
+			or axis2.normalized().dot(-axis.normalized()) > 0.98, str(axis2))
+
+	# Rotation: drive the target directly and step _process; the runner's
+	# transform must change, and about the resolved axis (its basis Z, which is
+	# perpendicular to an X axis, must swing).
+	var runner: Node3D = spin.get("_turbine")
+	_check("runner node resolved", runner != null)
+	if runner != null:
+		var before := runner.transform
+		spin.set("_target_omega", 40.0)
+		spin.set("_omega", 40.0)
+		spin.set("_parked", false)
+		for i in 6:
+			spin.call("_process", 0.05)
+		var after := runner.transform
+		_check("runner rotated", not after.is_equal_approx(before))
+		# Probe with a basis column PERPENDICULAR to the spin axis — the runner's
+		# own local Z IS its shaft direction here, so it is invariant under the
+		# rotation and would read as "didn't move".
+		var ax := axis.normalized()
+		var probe := before.basis.x.normalized()
+		if absf(probe.dot(ax)) > 0.5:
+			probe = before.basis.y.normalized()
+		var probe_after := (after.basis * (before.basis.inverse() * probe)).normalized()
+		var swing := probe.angle_to(probe_after)
+		_check("rotation is about the resolved axis (perp vector swung)",
+			swing > 0.05, "%.4f rad" % swing)
+		var moved_along_axis := absf((after.origin - before.origin).dot(axis.normalized()))
+		_check("runner did not translate along its own axis",
+			moved_along_axis < 0.01, "%.4f" % moved_along_axis)
+
+	tree.root.remove_child(host)
+	host.free()

@@ -151,6 +151,10 @@ func _ready() -> void:
 			_run_npc_anim_verify.call_deferred()
 		elif _capture_mode == "autobind":
 			_run_autobind_verify.call_deferred()
+		elif _capture_mode == "penstock":
+			_run_penstock_verify.call_deferred()
+		elif _capture_mode == "hydroload":
+			_run_hydro_load_verify.call_deferred()
 		elif _capture_mode == "pondid":
 			_run_pond_id_verify.call_deferred()
 		elif _capture_mode == "culvert":
@@ -350,6 +354,10 @@ func _launch_map() -> void:
 		_run_npc_anim_verify()
 	elif _capture_mode == "autobind":
 		_run_autobind_verify()
+	elif _capture_mode == "penstock":
+		_run_penstock_verify()
+	elif _capture_mode == "hydroload":
+		_run_hydro_load_verify()
 	elif _capture_mode == "pondid":
 		_run_pond_id_verify()
 	elif _capture_mode == "culvert":
@@ -409,6 +417,10 @@ func _launch_scene_direct() -> void:
 		_run_workui_capture()
 	elif _capture_mode == "autobind":
 		_run_autobind_verify()
+	elif _capture_mode == "penstock":
+		_run_penstock_verify()
+	elif _capture_mode == "hydroload":
+		_run_hydro_load_verify()
 	elif _capture_mode == "pondid":
 		_run_pond_id_verify()
 	elif _capture_mode == "veg":
@@ -1677,6 +1689,146 @@ func _run_pond_id_verify() -> void:
 	_maybe_quit()
 
 
+## Load-time hydro diagnostic (--capture=hydroload, console only). Loads a REAL
+## saved map and dumps the state of every hydro conduit BEFORE the graph has ever
+## been opened, then again after a graph open/close — the exact sequence that
+## "fixes" a culvert pointing at the sky and "loses" a routed penstock.
+func _run_hydro_load_verify() -> void:
+	var sgv := await _find_graph_view()
+	if sgv == null:
+		push_error("PlaytestHarness: no SystemGraphView — aborting hydroload")
+		_maybe_quit()
+		return
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S + 3.0).timeout
+	var main := get_tree().current_scene
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+
+	var fails := _hydro_assert_anchors(sgv, main)
+	_hydro_dump(sgv, main, "AS LOADED (graph never opened)")
+	# Exactly what the player does: G, then back to 3D.
+	sgv.set("visible", true)
+	await get_tree().create_timer(2.0).timeout
+	_hydro_dump(sgv, main, "GRAPH OPEN")
+	sgv.set("visible", false)
+	await get_tree().create_timer(1.5).timeout
+	_hydro_dump(sgv, main, "BACK IN 3D (after graph open/close)")
+	# The Hydro Lab round trip — the other half of the report ("open Hydrolab and
+	# return to 3D, the pipe is gone"). The Lab forces global wires ON and its
+	# teardown restores them OFF, which is where an explicitly-visible penstock
+	# could get swept out with the rest.
+	var model: Variant = sgv.get("model")
+	var turb_id := ""
+	if model != null:
+		for it in model.items:
+			if it is Dictionary and str(((it as Dictionary).get("specs", {})
+					as Dictionary).get("role", "")) == "siphon_hydro":
+				turb_id = str((it as Dictionary).get("id", ""))
+				break
+	if not turb_id.is_empty() and sgv.has_method("open_siphon_lab"):
+		sgv.set("visible", true)
+		await get_tree().create_timer(1.0).timeout
+		sgv.call("open_siphon_lab", turb_id)
+		await get_tree().create_timer(2.5).timeout
+		_hydro_dump(sgv, main, "HYDRO LAB OPEN (%s)" % turb_id)
+		if sgv.has_method("close_hydro_lab"):
+			sgv.call("close_hydro_lab")
+		await get_tree().create_timer(1.0).timeout
+		sgv.set("visible", false)
+		await get_tree().create_timer(1.5).timeout
+		_hydro_dump(sgv, main, "BACK IN 3D (after Hydro Lab)")
+	if fails == 0:
+		print("PlaytestHarness: hydroload verify — PASS")
+	else:
+		push_error("PlaytestHarness: hydroload verify — %d CHECK(S) FAILED" % fails)
+	_maybe_quit()
+
+
+## The load-time contract, asserted BEFORE the graph has ever been opened: every
+## hydro conduit's two endpoints must already sit within a sane vertical band of
+## each other. An unbound outlet sink whose elevation was never resolved anchored
+## at world Y ~ 0 while its machine sat 80 m below, which rendered as a culvert
+## firing several hundred feet into the sky until the player pressed G.
+func _hydro_assert_anchors(sgv: Node, main: Node) -> int:
+	var fails := 0
+	var model: Variant = sgv.get("model")
+	if model == null or main == null:
+		return 0
+	# A gravity conduit that CLIMBS more than this is not a plausible install.
+	const MAX_RISE_M := 25.0
+	for conn_v in model.connections:
+		if not (conn_v is Dictionary):
+			continue
+		var c := conn_v as Dictionary
+		var ctype := str(c.get("conduit_type", ""))
+		if ctype != "poly_penstock" and ctype != "culvert_pipe":
+			continue
+		var src: Dictionary = model.call("get_item", str(c.get("source_item_id", "")))
+		var tgt: Dictionary = model.call("get_item", str(c.get("target_item_id", "")))
+		var a0 := ConduitManager.anchor_global_for_item(src, get_tree(),
+				str(c.get("source_handle_id", "")), main)
+		var a1 := ConduitManager.anchor_global_for_item(tgt, get_tree(),
+				str(c.get("target_handle_id", "")), main)
+		if not (is_finite(a0.y) and is_finite(a1.y)):
+			continue
+		var cid := str(c.get("id", ""))
+		if ctype == "culvert_pipe":
+			# A culvert is a DRAIN: its outlet must not sit above its inlet.
+			fails += _pen_check("%s culvert outlet is not above its inlet (%.1f -> %.1f m)"
+					% [cid, a0.y, a1.y], a1.y <= a0.y + MAX_RISE_M)
+		# Neither end may be stranded at an unresolved world Y ~ 0 while the other
+		# is on real terrain tens of metres away.
+		fails += _pen_check("%s endpoints share a plausible band (%.1f vs %.1f m)"
+				% [cid, a0.y, a1.y], absf(a0.y - a1.y) < 120.0)
+	return fails
+
+
+func _hydro_dump(sgv: Node, main: Node, label: String) -> void:
+	print("=== hydroload [%s] ===" % label)
+	var model: Variant = sgv.get("model")
+	if model == null:
+		print("  (no model)")
+		return
+	var mgr: Node = main.find_child("ConduitManager", true, false) if main != null else null
+	if mgr != null:
+		print("  manager: global_visible=%s explicit_seen=%s instances=%d" % [
+			str(mgr.get("_global_visible")), str(mgr.get("_explicit_seen")),
+			(mgr.get("_instances") as Dictionary).size()])
+	for conn_v in model.connections:
+		if not (conn_v is Dictionary):
+			continue
+		var c := conn_v as Dictionary
+		var ctype := str(c.get("conduit_type", ""))
+		if ctype != "poly_penstock" and ctype != "culvert_pipe":
+			continue
+		var cid := str(c.get("id", ""))
+		var src: Dictionary = model.call("get_item", str(c.get("source_item_id", "")))
+		var tgt: Dictionary = model.call("get_item", str(c.get("target_item_id", "")))
+		var routable := bool(model.call("connection_is_3d_routable", c))
+		var has_inst := false
+		var a0 := Vector3.INF
+		var a1 := Vector3.INF
+		if mgr != null:
+			if mgr.has_method("get_instance"):
+				has_inst = mgr.call("get_instance", cid) != null
+			a0 = ConduitManager.anchor_global_for_item(src, get_tree(),
+					str(c.get("source_handle_id", "")), main)
+			a1 = ConduitManager.anchor_global_for_item(tgt, get_tree(),
+					str(c.get("target_handle_id", "")), main)
+		print("  %s [%s] vis3d=%s routable=%s inst=%s" % [
+			cid, ctype, str(c.get("visible_3d", "<unset>")), str(routable), str(has_inst)])
+		print("      src %s elev=%s bound=%s -> anchor %s" % [
+			str(src.get("id", "?")), str(src.get("elevation_m", "<none>")),
+			str((src.get("specs", {}) as Dictionary).get("bound_prop_id", "")), str(a0)])
+		print("      tgt %s elev=%s bound=%s -> anchor %s" % [
+			str(tgt.get("id", "?")), str(tgt.get("elevation_m", "<none>")),
+			str((tgt.get("specs", {}) as Dictionary).get("bound_prop_id", "")), str(a1)])
+
+
 func _run_autobind_verify() -> void:
 	var sgv := await _find_graph_view()
 	if sgv == null:
@@ -2120,8 +2272,23 @@ func _run_population_verify() -> void:
 	sgv.visible = true
 	if sgv.has_method("_apply_graph_open_mode_from_sim_state"):
 		sgv.call("_apply_graph_open_mode_from_sim_state")
+	# Site Plan must run on the LIVE clock: entering it used to take the
+	# elevation noon-bake claim (time_scale=0), which froze the population and
+	# made the plan read as "nothing is happening". Assert the view neither
+	# moved time_scale nor holds the noon claim.
+	var ts_before_site := float(main.time_scale) if main != null and "time_scale" in main else -1.0
 	if sgv.has_method("_apply_graph_view_mode"):
 		sgv.call("_apply_graph_view_mode", "site")
+	var noon_claim := false
+	if main != null and main.get("clock") != null:
+		var claims: Variant = main.clock.get("claims")
+		if claims != null and claims.has_method("has_claim"):
+			noon_claim = bool(claims.call("has_claim", "graph_elevation_noon"))
+	var ts_after_site := float(main.time_scale) if main != null and "time_scale" in main else -1.0
+	var ok_live_clock := not noon_claim and is_equal_approx(ts_after_site, ts_before_site)
+	print("PlaytestHarness: population verify — site plan clock %s (ts %.3f -> %.3f, noon claim=%s)" % [
+			"LIVE (PASS)" if ok_live_clock else "FROZEN (FAIL)",
+			ts_before_site, ts_after_site, str(noon_claim)])
 	await get_tree().create_timer(1.5).timeout
 	await _graph_shot(dir, "01_site_dots", manifest)
 	if main != null and "time_scale" in main:
@@ -2811,6 +2978,8 @@ func _run_siphon_lab_capture() -> void:
 	await get_tree().create_timer(1.5).timeout
 	await _graph_shot(dir, "04_lab_water_dragged_low", manifest)
 
+	await _verify_view_camera_decoupled(sgv, siphon_id)
+
 	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(manifest, "\t"))
@@ -2818,6 +2987,54 @@ func _run_siphon_lab_capture() -> void:
 	print("PlaytestHarness: siphon capture — %d shots in %s" % [
 		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
+
+
+## The zoom-decoupling contract, which no PNG can show: the freeform camera must
+## survive a whole Hydro Lab session untouched. Before per-view camera slots the
+## Lab parked the canvas in VIEW_FREEFORM and then framed it, so opening the Lab
+## silently destroyed the framing the player had — and coming back landed on an
+## empty, absurdly-zoomed graph.
+func _verify_view_camera_decoupled(sgv: Node, siphon_id: String) -> void:
+	var canvas: Variant = sgv.get("_graph_canvas")
+	if canvas == null or not (canvas as Object).has_method("set_view_mode"):
+		print("PlaytestHarness: view-camera decoupling — SKIPPED (no canvas)")
+		return
+	# Park in freeform at a framing nothing else would pick, so a value that
+	# survives cannot have been coincidentally re-derived.
+	if sgv.has_method("_apply_graph_view_mode"):
+		sgv.call("_apply_graph_view_mode", GraphSiteLayout.VIEW_FREEFORM)
+	await get_tree().create_timer(0.6).timeout
+	const WANT_ZOOM := 0.37
+	var want_pan := Vector2(-211.0, 87.0)
+	canvas.set("_zoom", WANT_ZOOM)
+	canvas.set("_pan", want_pan)
+	await get_tree().create_timer(0.3).timeout
+
+	if sgv.has_method("open_siphon_lab"):
+		sgv.call("open_siphon_lab", siphon_id)
+	await get_tree().create_timer(1.5).timeout
+	var modal: Variant = sgv.get("_siphon_lab_modal")
+	if modal != null:
+		modal.set("_view_zoom", 3.4)
+		if (modal as Object).has_method("_redraw_preview"):
+			modal.call("_redraw_preview")
+	await get_tree().create_timer(0.8).timeout
+	if sgv.has_method("close_hydro_lab"):
+		sgv.call("close_hydro_lab")
+	await get_tree().create_timer(0.8).timeout
+	if sgv.has_method("_apply_graph_view_mode"):
+		sgv.call("_apply_graph_view_mode", GraphSiteLayout.VIEW_FREEFORM)
+	await get_tree().create_timer(0.6).timeout
+
+	var got_zoom := float(canvas.get("_zoom"))
+	var got_pan: Vector2 = canvas.get("_pan") as Vector2
+	var zoom_ok := absf(got_zoom - WANT_ZOOM) < 1e-4
+	var pan_ok := got_pan.distance_to(want_pan) < 1e-3
+	print("PlaytestHarness: view-camera decoupling — freeform zoom %.6f (want %.6f) %s, pan %s (want %s) %s" % [
+		got_zoom, WANT_ZOOM, "OK" if zoom_ok else "FAIL",
+		str(got_pan), str(want_pan), "OK" if pan_ok else "FAIL"])
+	if not zoom_ok or not pan_ok:
+		push_error("PlaytestHarness: Hydro Lab clobbered the freeform camera")
 
 
 ## Read-only Siphon Lab capture for a REAL user map: open the Lab on the existing
@@ -2853,6 +3070,39 @@ func _run_siphon_lab_capture_readonly(sgv: Node, siphon_id: String) -> void:
 		await _graph_shot(dir, "03_zoom_in", manifest)
 		modal.set("_view_zoom", 1.0)
 
+	# Phase E surface: flip the turbine kind to the PowerSpout Pelton so the
+	# nozzle knobs + power-curve chart + warnings render, shoot, then restore
+	# the original kind (snapshot/restore — the map's turbine stays as saved).
+	var model: Variant = sgv.get("model")
+	if modal != null and model != null:
+		var item: Dictionary = model.call("get_item", siphon_id)
+		var orig_specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var ps_specs: Dictionary = orig_specs.duplicate(true)
+		ps_specs["turbine_kind"] = "powerspout_pelton"
+		model.call("update_item", siphon_id, {"specs": ps_specs})
+		if modal.has_method("_load_from_model"):
+			modal.call("_load_from_model")
+		await get_tree().create_timer(1.2).timeout
+		# Scroll the params dock to the bottom so the power-curve chart +
+		# warnings row are actually IN the frame (they live below the fold).
+		var side: Variant = modal.get("_side")
+		if side != null and (side as Control).get_parent() is ScrollContainer:
+			((side as Control).get_parent() as ScrollContainer).scroll_vertical = 4000
+			await get_tree().create_timer(0.4).timeout
+		await _graph_shot(dir, "04_powerspout_charts", manifest)
+		if side != null and (side as Control).get_parent() is ScrollContainer:
+			((side as Control).get_parent() as ScrollContainer).scroll_vertical = 0
+		# Console dump of what the PNG can't show: the chart's per-size stats.
+		var stats: Variant = modal.get("_chart_stats_lbl")
+		if stats != null:
+			print("PlaytestHarness: siphon lab chart stats — %s" % str((stats as Label).text))
+		await _siphon_capture_closeup(modal, dir, manifest)
+		model.call("update_item", siphon_id, {"specs": orig_specs})
+		if modal.has_method("_load_from_model"):
+			modal.call("_load_from_model")
+
+	await _verify_view_camera_decoupled(sgv, siphon_id)
+
 	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(manifest, "\t"))
@@ -2860,6 +3110,52 @@ func _run_siphon_lab_capture_readonly(sgv: Node, siphon_id: String) -> void:
 	print("PlaytestHarness: siphon capture (read-only, existing siphon %s) — %d shots in %s" % [
 		siphon_id, manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
+
+
+## Turbine close-up: matched load vs runaway. Shoots both AND dumps the operating
+## point, because a PNG cannot tell you whether the wheel is at 690 rpm or 1380 —
+## and "spins faster with less load, makes nothing" is the entire point of the view.
+func _siphon_capture_closeup(modal: Node, dir: String, manifest: Array) -> void:
+	if not modal.has_method("_set_lab_view"):
+		print("PlaytestHarness: siphon close-up — SKIPPED (no view tabs)")
+		return
+	# Force a real operating point. On a map whose turbine happens to be dry the
+	# view is CORRECT to show no jet — but then the shots prove nothing about the
+	# jet, the splash or the speed model, which is the whole reason they exist.
+	if modal.has_method("set_state_for_test"):
+		modal.call("set_state_for_test", 1.35, 17.0)
+	modal.call("_set_lab_view", "closeup")
+	await get_tree().create_timer(1.6).timeout
+	var closeup: Variant = modal.get("_closeup")
+	for phase: Array in [["05_closeup_matched_load", 1.0], ["06_closeup_runaway", 0.0]]:
+		modal.set("_load_frac", float(phase[1]))
+		if modal.has_method("_push_closeup_state"):
+			modal.call("_push_closeup_state")
+		# Let the runner's inertia settle toward the new speed before shooting.
+		await get_tree().create_timer(3.2).timeout
+		await _graph_shot(dir, str(phase[0]), manifest)
+		var hud := ""
+		if closeup != null:
+			var lbl: Variant = (closeup as Object).get("_hud")
+			if lbl != null:
+				hud = str((lbl as Label).text)
+		print("PlaytestHarness: siphon close-up [%s] load %.0f%% — %s" % [
+			str(phase[0]), float(phase[1]) * 100.0, hud])
+	# Display modes: implemented and contract-pinned since the view landed, but
+	# only ever driven with "cutaway" until they got a control row.
+	if closeup != null and (closeup as Object).has_method("set_display_mode"):
+		for m: String in ["runner", "housing", "cutaway"]:
+			closeup.call("set_display_mode", m)
+			await get_tree().create_timer(0.5).timeout
+			if m == "runner":
+				await _graph_shot(dir, "07_closeup_runner_only", manifest)
+		print("PlaytestHarness: siphon close-up — display modes OK (back on %s)"
+			% str((closeup as Object).get("_display_mode")))
+	modal.set("_load_frac", 1.0)
+	if modal.has_method("set_state_for_test"):
+		modal.call("set_state_for_test", 0.0, 0.0)   # release the pin
+	modal.call("_set_lab_view", "section")
+	await get_tree().create_timer(0.6).timeout
 
 
 func _siphon_capture_set_test_inflow(model: Variant, siphon_id: String,
@@ -3083,7 +3379,6 @@ func _write_site_diagnostics(root: String, loader: Node, sgv: Node) -> void:
 						if canvas.has_method("get_elev_anchor_elev_m") else NAN,
 				"has_elev_anchor": bool(canvas.call("has_elev_anchor")) \
 						if canvas.has_method("has_elev_anchor") else false,
-				"siphon_lab_active": bool(canvas.get("siphon_lab_active")),
 			}
 	if loader != null:
 		diag["terrain_load_completed"] = bool(loader.get("load_completed"))
@@ -3544,7 +3839,8 @@ func _site_review_siphon(sgv: Node, root: String, manifest: Array) -> void:
 	# Lab embeds Elevation CT — pan/zoom the modal and push the linked CT frame.
 	var modal: Node = sgv.get("_siphon_lab_modal")
 	if modal != null:
-		modal.set("_view_pan", Vector2(72.0, -40.0))
+		# Pan is in section METRES now (it used to be pixels re-scaled by zoom).
+		modal.set("_view_pan_m", Vector2(4.0, -2.2))
 		modal.set("_view_zoom", 1.35)
 		if modal.has_method("_push_lab_section_frame"):
 			modal.call("_push_lab_section_frame")
@@ -6027,3 +6323,453 @@ func _run_labour_capture() -> void:
 		"PASS" if (waiting and minted and at_machine and resumed and ok_ledger
 			and ok_duty and ok_hours) else "FAIL"])
 	_maybe_quit()
+
+
+# ---------------------------------------------------------------------------
+# Penstock placement verify (--capture=penstock) — Round 2 / Phase G
+# ---------------------------------------------------------------------------
+
+## Drives the whole "drop the pipe uphill and that is the source" path on a REAL
+## map and asserts the parts a screenshot cannot show: that a Stream Intake prop
+## + graph node were minted at the release point, that the penstock connection
+## exists and RENDERS (3D wires default off, which is exactly why the feature
+## looked dead), that the conduit rebuild stamped a measured run at least as
+## long as the straight chord plus real endpoint inverts, and that the turbine
+## adopted them and produced power. Cleans up its cap_pen_* items afterward.
+func _run_penstock_verify() -> void:
+	var sgv := await _find_graph_view()
+	if sgv == null:
+		push_error("PlaytestHarness: SystemGraphView not found — aborting penstock verify")
+		_maybe_quit()
+		return
+	var loader := await _find_terrain_loader()
+	if loader == null:
+		push_error("PlaytestHarness: penstock verify needs a TerrainLoader (--user-map=…)")
+		_maybe_quit()
+		return
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var model: Variant = sgv.get("model")
+	var main := get_tree().current_scene
+	if model == null or main == null:
+		_maybe_quit()
+		return
+	var label := _shots_label if not _shots_label.is_empty() else "penstock"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var manifest: Array = []
+	var fails := 0
+
+	# Clear leftovers from a previous run so the assertions are honest.
+	_penstock_cleanup(model, main)
+
+	var soi := get_tree().root.get_node_or_null("SoiService")
+	if soi == null or not soi.has_method("world_center"):
+		push_error("PlaytestHarness: SoiService unavailable")
+		_maybe_quit()
+		return
+	var center: Vector3 = soi.call("world_center") as Vector3
+
+	# Find real high ground to tap: scan rings and take the highest terrain
+	# within ~90 m (a genuine hillside, not a synthetic offset).
+	var best_xz := Vector2(center.x + 40.0, center.z)
+	var best_y := -INF
+	for i in 48:
+		var a := TAU * float(i) / 48.0
+		for r in [35.0, 60.0, 90.0]:
+			var wx: float = center.x + cos(a) * float(r)
+			var wz: float = center.z + sin(a) * float(r)
+			var gy := TerrainSurfaceQuery.ground_height_at(main, wx, wz)
+			if gy > best_y:
+				best_y = gy
+				best_xz = Vector2(wx, wz)
+	var turbine_y := TerrainSurfaceQuery.ground_height_at(main, center.x, center.z)
+	print("PlaytestHarness: penstock verify — turbine ground %.2f m, best uphill %.2f m (%.0f m away)" % [
+		turbine_y, best_y, Vector2(center.x, center.z).distance_to(best_xz)])
+	if best_y <= turbine_y + 1.0:
+		print("PlaytestHarness: penstock verify — SKIP (flat site; no uphill source within 90 m)")
+		_maybe_quit()
+		return
+
+	# Seed a PowerSpout turbine at the site centre, bound to a real 3D prop so
+	# the conduit has an anchor at that end.
+	var placed: Dictionary = PlacedPropService.place_model_at_xz(
+			main, "powerspout_plt", center.x, center.z)
+	if not bool(placed.get("ok", false)):
+		push_error("PlaytestHarness: could not place the PowerSpout prop")
+		_maybe_quit()
+		return
+	var prop_id := str(placed.get("prop_id", ""))
+	var turbine_id := "cap_pen_turbine"
+	var t_specs := _penstock_turbine_specs()
+	if t_specs.is_empty():
+		push_error("PlaytestHarness: PowerSpout preset not found")
+		_maybe_quit()
+		return
+	t_specs["bound_prop_id"] = prop_id
+	t_specs["gross_head_m"] = 0.0   # force the ROUTED geometry to be the authority
+	model.call("add_item", {
+		"id": turbine_id, "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 130.0, "scope_id": "root",
+		"site_x_m": 0.0, "site_z_m": 0.0, "elevation_m": turbine_y,
+		"specs": t_specs,
+	})
+	PlacedPropService.update_prop_record(main, prop_id,
+			{"graph_item_id": turbine_id, "kind": "siphon_hydro",
+			"turbine_node": ModelCatalog.turbine_node_for("powerspout_plt"),
+			"spin_axis": ModelCatalog.spin_axis_for("powerspout_plt")}, true)
+	await get_tree().create_timer(0.6).timeout
+	await _graph_shot(dir, "01_turbine_placed", manifest)
+
+	# THE ACT UNDER TEST: drop the penstock uphill end on that hillside.
+	var conn_id := str(sgv.call("create_penstock_intake_at",
+			Vector3(best_xz.x, best_y, best_xz.y), turbine_id, "res_in_0",
+			{"pipe_size_in": 2.0}))
+	fails += _pen_check("penstock connection created", not conn_id.is_empty())
+	await get_tree().create_timer(1.2).timeout
+
+	# An intake item + prop exist at the release point.
+	var intake_id := ""
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var sp: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if str(sp.get("model_id", "")) == "stream_intake":
+			intake_id = str((it as Dictionary).get("id", ""))
+			break
+	fails += _pen_check("stream intake graph node created", not intake_id.is_empty())
+	if not intake_id.is_empty():
+		var intake_item: Dictionary = model.call("get_item", intake_id)
+		var isp: Dictionary = intake_item.get("specs", {}) as Dictionary
+		fails += _pen_check("intake bound to a 3D prop (conduits need an anchor)",
+				not str(isp.get("bound_prop_id", "")).is_empty())
+		var ielev := float(intake_item.get("elevation_m", 0.0))
+		fails += _pen_check("intake above the turbine (%.2f > %.2f)" % [ielev, turbine_y],
+				ielev > turbine_y + 0.5)
+
+	# The run RENDERED — the whole reason this used to look like a no-op.
+	var conn: Dictionary = model.call("get_connection", conn_id)
+	var run_m := float(conn.get("route_length_m", 0.0))
+	var chord := Vector2(center.x, center.z).distance_to(best_xz)
+	fails += _pen_check("conduit rebuild stamped a measured run (%.1f m)" % run_m,
+			run_m > 0.5)
+	fails += _pen_check("measured run follows the ground (>= chord %.1f m)" % chord,
+			run_m >= chord * 0.98)
+	var inv_in := float(conn.get("invert_in_m", NAN))
+	var inv_out := float(conn.get("invert_out_m", NAN))
+	fails += _pen_check("endpoint inverts stamped", not (is_nan(inv_in) or is_nan(inv_out)))
+	if not (is_nan(inv_in) or is_nan(inv_out)):
+		fails += _pen_check("penstock falls toward the turbine (%.2f → %.2f)" % [inv_in, inv_out],
+				inv_in > inv_out)
+	var mgr: Node = main.find_child("ConduitManager", true, false)
+	if mgr != null and mgr.has_method("get_instance"):
+		fails += _pen_check("a 3D tube mesh exists for the run",
+				mgr.call("get_instance", conn_id) != null)
+
+	# The physics adopted the routed geometry.
+	var t_item: Dictionary = model.call("get_item", turbine_id)
+	var t_live: Dictionary = t_item.get("specs", {}) as Dictionary
+	print("PlaytestHarness: penstock verify — turbine now: run %.1f m, bore %.1f mm, outlet inv %.2f, %.1f W" % [
+		float(t_live.get("penstock_length_m", 0.0)),
+		float(t_live.get("penstock_diameter_mm", 0.0)),
+		float(t_live.get("outlet_invert_m", NAN)),
+		float(t_live.get("current_output_kw", 0.0)) * 1000.0])
+	fails += _pen_check("turbine adopted the measured run",
+			absf(float(t_live.get("penstock_length_m", 0.0)) - run_m) < 1.0)
+	fails += _pen_check("turbine adopted the styled 2in SDR-9 bore",
+			absf(float(t_live.get("penstock_diameter_mm", 0.0)) - 46.92) < 0.2)
+	fails += _pen_check("turbine produces from the routed head",
+			float(t_live.get("current_output_kw", 0.0)) > 0.0)
+
+	# The supply loop: the intake really runs water, the water really MOVES
+	# through the turbine, and the Lab's test flow really changes the answer.
+	# None of this is visible in a screenshot, and all of it was broken.
+	if not intake_id.is_empty():
+		var isp2: Dictionary = (model.call("get_item", intake_id).get("specs", {})
+				as Dictionary)
+		print("PlaytestHarness: penstock verify — intake supply: base %.2f L/s, rain %.2f mm/h → live %.2f L/s (Q at turbine %.2f L/s)" % [
+			float(isp2.get("base_flow_lps", 0.0)), float(isp2.get("live_rain_mmh", 0.0)),
+			float(isp2.get("live_supply_lps", 0.0)), float(t_live.get("live_q_lps", 0.0))])
+		fails += _pen_check("intake seeded a real base flow",
+				float(isp2.get("base_flow_lps", 0.0)) > 0.0)
+		fails += _pen_check("intake resolved a live supply",
+				float(isp2.get("live_supply_lps", 0.0)) > 0.0)
+		fails += _pen_check("turbine flows water (live_q_lps > 0)",
+				float(t_live.get("live_q_lps", 0.0)) > 0.0)
+		var wrate := 0.0
+		for od_v: Variant in (t_live.get("outputs", []) as Array):
+			if od_v is Dictionary and str((od_v as Dictionary).get("kind", "")) == "water":
+				wrate = float((od_v as Dictionary).get("rate", 0.0))
+		fails += _pen_check("water output port carries a real rate (%.1f L/h)" % wrate,
+				wrate > 0.0)
+		# Drive the Lab's test flow and confirm the power TRACKS it — the knob the
+		# player actually turns, and previously a no-op on a pond-less intake.
+		var lo_specs: Dictionary = t_live.duplicate(true)
+		lo_specs["lab_sim_inflow_enabled"] = true
+		lo_specs["lab_sim_inflow_lps"] = 0.25
+		model.call("update_item", turbine_id, {"specs": lo_specs})
+		await get_tree().create_timer(0.8).timeout
+		var kw_lo := float((model.call("get_item", turbine_id).get("specs", {})
+				as Dictionary).get("current_output_kw", 0.0))
+		var hi_specs: Dictionary = (model.call("get_item", turbine_id).get("specs", {})
+				as Dictionary).duplicate(true)
+		hi_specs["lab_sim_inflow_lps"] = 4.0
+		model.call("update_item", turbine_id, {"specs": hi_specs})
+		await get_tree().create_timer(0.8).timeout
+		var kw_hi := float((model.call("get_item", turbine_id).get("specs", {})
+				as Dictionary).get("current_output_kw", 0.0))
+		print("PlaytestHarness: penstock verify — test flow 0.25 L/s → %.1f W, 4.0 L/s → %.1f W" % [
+			kw_lo * 1000.0, kw_hi * 1000.0])
+		fails += _pen_check("Lab test flow drives the power (%.1f W → %.1f W)" % [
+				kw_lo * 1000.0, kw_hi * 1000.0], kw_hi > kw_lo)
+		var off_specs: Dictionary = (model.call("get_item", turbine_id).get("specs", {})
+				as Dictionary).duplicate(true)
+		off_specs["lab_sim_inflow_enabled"] = false
+		model.call("update_item", turbine_id, {"specs": off_specs})
+		await get_tree().create_timer(0.6).timeout
+
+		# Seasonal supply: the annual estimate must run the intake's rain response
+		# across the YEAR, not freeze at whatever the spring is doing right now.
+		var live_sp: Dictionary = (model.call("get_item", turbine_id).get("specs", {})
+				as Dictionary)
+		var prof_v: Variant = live_sp.get("supply_monthly_lps", null)
+		var prof: Array = []
+		if prof_v is PackedFloat32Array:
+			prof = Array(prof_v as PackedFloat32Array)
+		elif prof_v is Array:
+			prof = prof_v as Array
+		fails += _pen_check("engine stamped a 12-month supply curve", prof.size() == 12)
+		if prof.size() == 12:
+			var lo := 1e30
+			var hi := -1e30
+			for v: Variant in prof:
+				lo = minf(lo, float(v))
+				hi = maxf(hi, float(v))
+			var frozen := float(HydroSource.annual_energy_kwh_from_specs(
+					live_sp, [])["annual_kwh"])
+			var seasonal := float(HydroSource.annual_energy_kwh_from_specs(
+					live_sp, [], prof)["annual_kwh"])
+			print("PlaytestHarness: penstock verify — seasonal supply %.2f–%.2f L/s; annual frozen %.0f kWh vs seasonal %.0f kWh" % [
+				lo, hi, frozen, seasonal])
+			fails += _pen_check("seasonal curve actually varies over the year",
+					hi > lo + 1e-4)
+			fails += _pen_check("seasonal annual differs from the frozen estimate",
+					absf(seasonal - frozen) > 1.0)
+
+	# Phase H: the tube renders at its STYLED bore, and the Lab section draws
+	# the REAL routed polyline instead of the schematic glyph.
+	if mgr != null and mgr.has_method("get_instance"):
+		var inst: Variant = mgr.call("get_instance", conn_id)
+		# NOTE: the tube BORE is deliberately not asserted here. This run climbs
+		# 46 m over 90 m, so every AABB axis is dominated by the route geometry
+		# and no cheap in-world measure isolates a 60 mm pipe. The radius path is
+		# pinned offline instead (conduit_selftest._test_size_driven_tube_radius
+		# builds a straight run and reads the diameter straight off the mesh);
+		# what this line records is the size the styled conn resolves to.
+		if inst is MeshInstance3D:
+			print("PlaytestHarness: penstock verify — styled bore %.1f mm (kind fallback %.1f mm)" % [
+				ConduitKinds.outer_diameter_m("poly_penstock", {"pipe_size_in": 2.0}) * 1000.0,
+				float(ConduitKinds.type_meta("poly_penstock").get("radius_m", 0.024)) * 2000.0])
+	# Kind → model swap: the turbine wears the PowerSpout body, not the siphon one.
+	var t_rec := PlacedPropService.get_prop_record(main, prop_id)
+	fails += _pen_check("turbine wears its own model (%s)" % str(t_rec.get("model_id", "")),
+			str(t_rec.get("model_id", "")) == "powerspout_plt")
+	fails += _pen_check("record names the PowerSpout runner node",
+			str(t_rec.get("turbine_node", "")) == "Pelton Wheel, 24 Spoon")
+	await _graph_shot(dir, "02_penstock_routed", manifest)
+
+	# Regression: the reported multi-turbine bug. Open the Lab EXACTLY the way
+	# the 3D prop edit UI does — `visible = true` then open_siphon_lab(id) —
+	# which queues a deferred _reapply_current_graph_view_mode with NO opts.
+	# Pre-fix, that re-entered the Lab through the empty-id fallback and
+	# retargeted it to the FIRST siphon on the graph (this map carries the
+	# player's own turbines), so the dock edited the wrong machine.
+	sgv.set("visible", true)
+	sgv.call("open_siphon_lab", turbine_id)
+	await get_tree().create_timer(0.8).timeout   # let the deferred reapply land
+	var lab: Variant = sgv.get("_siphon_lab_modal")
+	var lab_item := str(lab.get("_item_id")) if lab != null else ""
+	fails += _pen_check("Lab stays on the turbine it was opened for (got %s)" % lab_item,
+			lab_item == turbine_id)
+	# Round 3: opening the Lab runs ensure_siphon_outlet_sink — for a PENSTOCK
+	# kind it must NOT mint the phantom ∞ culvert tailrace (a Pelton discharges
+	# tailwater at the machine), and any previously-minted one is healed away.
+	var sink_wired := false
+	for conn2 in model.connections:
+		if not (conn2 is Dictionary):
+			continue
+		var c2 := conn2 as Dictionary
+		if str(c2.get("source_item_id", "")) != turbine_id:
+			continue
+		var tgt2: Dictionary = model.call("get_item", str(c2.get("target_item_id", "")))
+		if bool((tgt2.get("specs", {}) as Dictionary).get("outlet_sink", false)):
+			sink_wired = true
+	fails += _pen_check("no auto culvert outlet minted for a penstock kind",
+			not sink_wired)
+	# The oversized-nozzle recommendation is ACTIONABLE. Checked here, with the
+	# Lab actually running, because _fit_nozzle_mm is written by the physics
+	# refresh — a closed Lab has simply never computed it.
+	if lab != null and (lab as Object).has_method("_on_fit_nozzle"):
+		var rec := float((lab as Object).get("_fit_nozzle_mm"))
+		var noz: Variant = (lab as Object).get("_nozzle_d_spin")
+		var before_mm := float((noz as SpinBox).value) if noz != null else 0.0
+		var persisted: Dictionary = (model.call("get_item", turbine_id).get("specs", {})
+				as Dictionary)
+		# Regression: opening the Lab used to auto-rebind an "unbound" turbine to
+		# the nearest POND — and a stream intake is not a pond, so every
+		# stream-fed PowerSpout had its penstock DELETED the moment you opened
+		# the panel meant for tuning it.
+		var still_wired := false
+		for cc in model.connections:
+			if not (cc is Dictionary):
+				continue
+			var cd := cc as Dictionary
+			if str(cd.get("source_item_id", "")) == intake_id \
+					and str(cd.get("target_item_id", "")) == turbine_id:
+				still_wired = true
+		fails += _pen_check("opening the Lab did NOT delete the penstock wiring",
+				still_wired)
+		fails += _pen_check("stream source survives the Lab (mode=%s supply=%s)" % [
+				str(persisted.get("penstock_source_mode", "<none>")),
+				str(persisted.get("supply_lps", "<none>"))],
+				str(persisted.get("penstock_source_mode", "")) == "stream")
+		# The 3D end of the loop: a running spring must LOOK like one.
+		var intake_prop_id := str((model.call("get_item", intake_id).get("specs", {})
+				as Dictionary).get("bound_prop_id", ""))
+		var iprop: Variant = PlacedPropRuntime.find_by_prop_id(main, intake_prop_id) \
+				if not intake_prop_id.is_empty() else null
+		if iprop != null:
+			var flow: Variant = (iprop as Node).get_node_or_null("StreamIntakeFlow")
+			fails += _pen_check("intake carries its flow VFX runtime", flow != null)
+			if flow != null:
+				var parts: Variant = (flow as Node).get_node_or_null("InflowParticles")
+				var pool: Variant = (flow as Node).get_node_or_null("Pool")
+				var emitting := parts != null and bool((parts as GPUParticles3D).emitting)
+				var wet := pool != null and bool((pool as MeshInstance3D).visible)
+				print("PlaytestHarness: penstock verify — intake VFX: emitting=%s pool=%s at %.2f L/s" % [
+					str(emitting), str(wet), float(flow.get("_q_lps"))])
+				fails += _pen_check("a running spring shows water at the intake",
+						emitting and wet)
+		var lr: Dictionary = (lab as Object).get("_last_r") as Dictionary
+		print("PlaytestHarness: penstock verify — nozzle now %.1f mm, recommended %.2f mm; reach: conveyance=%s regime=%s supply_limited=%s q=%.3f unused=%.2f head=%.2f" % [
+			before_mm, rec, str(lr.get("conveyance", "?")), str(lr.get("regime", "?")),
+			str(lr.get("supply_limited", "?")), float(lr.get("q_lps", 0.0)),
+			float(lr.get("unused_head_m", 0.0)), float(lr.get("head_m", 0.0))])
+		fails += _pen_check("a 1 L/s spring on a 10 mm jet is flagged supply-limited",
+				rec > 0.0 and rec < before_mm)
+		if rec > 0.0 and noz != null:
+			# Real jets come in discrete sizes; the recommendation is snapped to
+			# the spin's own step, so assert against THAT, not the raw float.
+			var step := maxf((noz as SpinBox).step, 0.01)
+			lab.call("_on_fit_nozzle")
+			await get_tree().create_timer(0.4).timeout
+			fails += _pen_check("Fit-nozzle wrote the recommended Ø (now %.1f mm)"
+					% float((noz as SpinBox).value),
+					absf(float((noz as SpinBox).value) - snappedf(rec, step)) < step * 0.5)
+			# And fitting it must actually recover power: a matched jet converts
+			# the head instead of leaving 36 m of it on the table.
+			await get_tree().create_timer(0.8).timeout
+			var lr2: Dictionary = (lab as Object).get("_last_r") as Dictionary
+			print("PlaytestHarness: penstock verify — after fitting: unused %.2f m (was %.2f m), %.1f W" % [
+				float(lr2.get("unused_head_m", 0.0)), float(lr.get("unused_head_m", 0.0)),
+				float(lr2.get("power_w", 0.0))])
+			fails += _pen_check("fitting the nozzle converts the wasted head",
+					float(lr2.get("unused_head_m", 0.0))
+						< float(lr.get("unused_head_m", 0.0)) * 0.5)
+		# The test-flow control must move the ESTIMATE and the per-size stats, not
+		# just the live readouts: both sat behind signature gates that had no
+		# supply term, so dragging the slider looked like it did nothing.
+		var spin_v: Variant = (lab as Object).get("_sim_inflow_spin")
+		var stats_lbl: Variant = (lab as Object).get("_chart_stats_lbl")
+		if spin_v != null and stats_lbl != null and lab.has_method("_write_sim_inflow"):
+			var seen: Array = []
+			for q: float in [0.4, 3.5]:
+				(spin_v as SpinBox).value = q
+				lab.call("_write_sim_inflow", true, q)
+				await get_tree().create_timer(0.9).timeout
+				seen.append(str((stats_lbl as Label).text))
+				print("PlaytestHarness: penstock verify — stats @%.1f L/s: %s" % [
+					q, str((stats_lbl as Label).text)])
+			fails += _pen_check("per-size stats track the test flow",
+					seen.size() == 2 and str(seen[0]) != str(seen[1])
+					and not str(seen[0]).is_empty())
+			var annual_lbl: Variant = (lab as Object).get("_annual_lbl")
+			if annual_lbl != null:
+				print("PlaytestHarness: penstock verify — annual now %s"
+					% str((annual_lbl as Label).text))
+			lab.call("_write_sim_inflow", false, 0.5)
+		# The cross-section with a REAL routed run in it — the only place the
+		# penstock's along-datum can be checked against the terrain profile.
+		await get_tree().create_timer(0.8).timeout
+		await _graph_shot(dir, "04_lab_section_routed", manifest)
+		if lab.has_method("_set_lab_view"):
+			lab.call("_set_lab_view", "closeup")
+			await get_tree().create_timer(2.5).timeout
+			await _graph_shot(dir, "05_lab_closeup_nozzle", manifest)
+			lab.call("_set_lab_view", "section")
+	if sgv.has_method("close_hydro_lab"):
+		sgv.call("close_hydro_lab")
+	await get_tree().create_timer(0.3).timeout
+	# Stand at the turbine so the run reads in first person too.
+	var player: Variant = main.get("player")
+	if player is Node3D:
+		(player as Node3D).global_position = Vector3(
+				center.x + 6.0, turbine_y + 2.0, center.z + 6.0)
+		await get_tree().create_timer(0.6).timeout
+		await _graph_shot(dir, "03_first_person", manifest)
+
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	_penstock_cleanup(model, main)
+	if fails == 0:
+		print("PlaytestHarness: penstock verify — PASS (%d shots in %s)" % [
+			manifest.size(), ProjectSettings.globalize_path(dir)])
+	else:
+		push_error("PlaytestHarness: penstock verify — %d CHECK(S) FAILED" % fails)
+	_maybe_quit()
+
+
+## The PowerSpout preset specs from the library catalog.
+func _penstock_turbine_specs() -> Dictionary:
+	for cat in ComponentPresets.CATEGORIES:
+		for p in ((cat as Dictionary).get("presets", []) as Array):
+			var sp: Dictionary = (p as Dictionary).get("specs", {}) as Dictionary
+			if str(sp.get("turbine_kind", "")) == "powerspout_pelton":
+				return sp.duplicate(true)
+	return {}
+
+
+func _pen_check(label: String, ok: bool) -> int:
+	if ok:
+		print("PlaytestHarness: penstock verify — OK: %s" % label)
+		return 0
+	push_error("PlaytestHarness: penstock verify — FAIL: %s" % label)
+	return 1
+
+
+## Remove this capture's turbine / intake items, their props and any wires
+## between them, so the saved site is left as it was found.
+func _penstock_cleanup(model: Variant, main: Node) -> void:
+	var doomed: Array[String] = []
+	for it in (model.items as Array).duplicate():
+		if not (it is Dictionary):
+			continue
+		var iid := str((it as Dictionary).get("id", ""))
+		var sp: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if iid.begins_with("cap_pen_") or str(sp.get("model_id", "")) == "stream_intake":
+			doomed.append(iid)
+			var pid := str(sp.get("bound_prop_id", ""))
+			if not pid.is_empty():
+				var ld: Node = main.find_child("TerrainLoader", true, false)
+				if ld != null and ld.has_method("delete_prop_by_id"):
+					ld.call("delete_prop_by_id", pid)
+	for conn in (model.connections as Array).duplicate():
+		if not (conn is Dictionary):
+			continue
+		var c := conn as Dictionary
+		if doomed.has(str(c.get("source_item_id", ""))) \
+				or doomed.has(str(c.get("target_item_id", ""))):
+			model.call("remove_connection", str(c.get("id", "")))
+	for iid2 in doomed:
+		model.call("remove_item", iid2)

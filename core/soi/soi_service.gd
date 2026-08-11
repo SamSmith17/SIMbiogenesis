@@ -321,6 +321,13 @@ func set_graph_preview_glass_enabled(on: bool) -> void:
 		_subsurface.call("set_glass_enabled", on)
 
 
+## Site Plan top-down: fill the below-ground bowl with the flat ground tan
+## (the diagram cutaway with veins/aquifer stays for Elevation/Snowglobe).
+func set_graph_preview_plain_soil(on: bool) -> void:
+	if _subsurface != null and _subsurface.has_method("set_plain_soil"):
+		_subsurface.call("set_plain_soil", on)
+
+
 func open_panel() -> void:
 	if _panel == null:
 		_ensure_panel()

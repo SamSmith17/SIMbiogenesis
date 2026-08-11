@@ -473,6 +473,14 @@ func set_world_suspended_for_lab(on: bool) -> void:
 ## Full moon = 1.0, so 0.7 means shadows only near full moon
 @export_range( 0.0, 1.0, 0.05 ) var moon_shadow_threshold : float = 0.5
 
+## Site Plan night-visibility boost (set by graph_soi_preview_service while
+## the top-down preview is live, restored to 1.0 on every exit path). Lives
+## HERE because _update_moon rewrites light_energy/shadow_enabled every pass —
+## a boost applied from outside would be stomped on the next update. >1 also
+## relaxes the phase gate so a part moon still casts the readable moonshadows
+## the plan view asks for.
+var moon_light_boost : float = 1.0
+
 ## Shadow quality profile:
 ## 0 = Low (performance), 1 = Medium, 2 = High, 3 = Ultra (sharpest/longest shadows)
 @export_range( 0, 3, 1 ) var shadow_quality : int = 2 :
@@ -2543,13 +2551,15 @@ func _update_moon() -> void :
 
 	# Apply weather attenuation (clouds block moonlight too).
 	var final_brightness : float = horizon_fade * phase_brightness * weather_light_factor
-	var moon_e : float = final_brightness * moon_base_enegry
+	var moon_e : float = final_brightness * moon_base_enegry * maxf( moon_light_boost, 0.0 )
 	moon.light_energy = clampf(moon_e, 0.0, 64.0) if is_finite(moon_e) else 0.0
 
 	# === DYNAMIC MOON SHADOWS ===
 	# Enable shadows only when moon is bright enough and above horizon
 	var moon_above_horizon : bool = moon_direction.y > 0.05
-	var bright_enough_for_shadows : bool = phase_brightness >= moon_shadow_threshold
+	var shadow_gate : float = moon_shadow_threshold if moon_light_boost <= 1.0 \
+			else minf( moon_shadow_threshold, 0.15 )
+	var bright_enough_for_shadows : bool = phase_brightness >= shadow_gate
 	var clear_enough_for_shadows : bool = weather_light_factor > 0.5  # Not too cloudy
 	# Moon shadows are invisible once the sun is up, but the cascade still costs a
 	# full extra shadow pass — skip it in daylight (a real GPU saving at noon).

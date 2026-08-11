@@ -60,6 +60,10 @@ func _initialize() -> void:
 	_test_jit_conduit_derate()
 	_test_jit_severed_conduit()
 	_test_lab_sim_inflow_realtime_paused()
+	_test_spec_driven_hydro()
+	_test_stream_intake_supply()
+	_test_penstock_conn_authority()
+	_test_no_head_zero_flow()
 	if _failures == 0:
 		print("RESOURCE SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -1770,3 +1774,395 @@ func _test_lab_sim_inflow_realtime_paused() -> void:
 	_check("lab pause fill updates level_m",
 			not is_nan(level_m) and absf(level_m - 1.6) < 0.05,
 			"level_m=%.3f" % level_m)
+
+
+## Phase B (hydro unification): spec-driven hydro output. A penstock turbine
+## with NO pond bound produces power from authored gross_head_m/design_flow_lps
+## (the legacy type=="hydro" estimator physics, now inside the engine), a
+## streaming kind (run_of_river, pond_drawdown false) NEVER drains a bound
+## pond, and a pond-less siphon still idles at zero (no estimator hijack).
+## The play loop this whole arc exists for: a stream intake above a PowerSpout,
+## joined by a routed contour penstock. Before this the turbine took the
+## spec-driven branch, which forced the water output rate to 0 and took no
+## net_rates at all — so nothing ever flowed, no sink accumulated, and the
+## penstock never animated, which is precisely the "I can't get water to flow
+## through the turbine" report.
+func _test_stream_intake_supply() -> void:
+	var model = GraphModelScript.new()
+	model.add_item({
+		"id": "spring", "type": "resource", "x": -200.0, "y": 0.0,
+		"width": 90.0, "height": 100.0, "elevation_m": 30.0,
+		"specs": {
+			"name": "Stream Intake", "resource_kind": "water",
+			"pond_storage": false, "stream_source": true,
+			"unlimited_capacity": true, "capacity_qty": 1000.0, "level": 1.0,
+			"stock_l": 500.0,
+			"base_flow_lps": 3.0, "rain_lps_per_tenth_in_h": 0.0,
+			"max_flow_lps": 0.0, "recession_tau_h": 0.0,
+		},
+	})
+	model.add_item({
+		"id": "ps", "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 130.0, "elevation_m": 10.0,
+		"specs": {
+			"name": "PowerSpout", "role": "siphon_hydro",
+			"turbine_kind": "powerspout_pelton",
+			"penstock_length_m": 90.0, "penstock_diameter_mm": 37.53,
+			"pipe_roughness_mm": 0.0015, "generator_efficiency": 0.85,
+			"nozzle_count": 1, "nozzle_diameter_mm": 10.0,
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h"}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+		},
+	})
+	model.add_item({
+		"id": "tail", "type": "resource", "x": 200.0, "y": 0.0,
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Tailrace", "resource_kind": "water",
+			"outlet_sink": true, "unlimited_capacity": true,
+			"capacity_qty": 1000.0, "level": 0.0, "cumulative_l": 0.0,
+		},
+	})
+	# The contour-routed penstock IS the authority for run / bore / head.
+	model.add_connection({
+		"id": "c_pen", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "spring", "source_handle_id": "output",
+		"target_item_id": "ps", "target_handle_id": "res_in_0",
+		"conduit_type": "poly_penstock",
+		"conduit_style": {"route_mode": "contour", "pipe_size_in": 1.5},
+		"route_length_m": 90.0, "invert_in_m": 30.0, "invert_out_m": 10.0,
+	})
+	model.add_connection({
+		"id": "c_tail", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "ps", "source_handle_id": "res_out_0",
+		"target_item_id": "tail", "target_handle_id": "input",
+	})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var sp: Dictionary = (model.get_item("ps").get("specs", {}) as Dictionary)
+	_check("stream intake: turbine produces from a levelless spring",
+			float(sp.get("current_output_kw", 0.0)) > 0.0,
+			"kw=%.4f" % float(sp.get("current_output_kw", 0.0)))
+	_check("stream intake: routed penstock supplies the 20 m head",
+			absf(float(sp.get("gross_head_m", 0.0)) - 20.0) < 0.01,
+			"head=%.2f" % float(sp.get("gross_head_m", 0.0)))
+	# Q is the nozzle op point capped by the 3 L/s spring.
+	var want_q: float = HydroSource.operating_flow_lps_from_graph_specs(sp, 6, [])
+	var q := float(sp.get("live_q_lps", 0.0))
+	_check("stream intake: flow == min(nozzle op point, supply)",
+			absf(q - want_q) < 1e-6 and q > 0.0, "q=%.4f want=%.4f" % [q, want_q])
+	# The water actually MOVES — this is the reported bug.
+	var out_rate := 0.0
+	for od_v: Variant in (sp.get("outputs", []) as Array):
+		if str((od_v as Dictionary).get("kind", "")) == "water":
+			out_rate = float((od_v as Dictionary).get("rate", 0.0))
+	_check("stream intake: water output port carries the real rate",
+			absf(out_rate - q * 3600.0) < 1e-3, "rate=%.2f L/h" % out_rate)
+	var tail_sp: Dictionary = (model.get_item("tail").get("specs", {}) as Dictionary)
+	_check("stream intake: tailrace accumulated exactly q x dt",
+			absf(float(tail_sp.get("cumulative_l", 0.0)) - q * 3600.0) < 0.5,
+			"cum=%.2f L" % float(tail_sp.get("cumulative_l", 0.0)))
+	# A spring is not a stock the player can empty.
+	var spring_sp: Dictionary = (model.get_item("spring").get("specs", {}) as Dictionary)
+	_check("stream intake: an unlimited spring is never debited",
+			absf(float(spring_sp.get("stock_l", 0.0)) - 500.0) < 0.01,
+			"stock=%.2f" % float(spring_sp.get("stock_l", 0.0)))
+	_check("stream intake: live supply telemetry lands on the intake",
+			absf(float(spring_sp.get("live_supply_lps", 0.0)) - 3.0) < 1e-6,
+			"%.3f" % float(spring_sp.get("live_supply_lps", 0.0)))
+
+	# The Hydro Lab's test flow overrides the spring's own rate.
+	var lab_sp: Dictionary = sp.duplicate(true)
+	lab_sp["lab_sim_inflow_enabled"] = true
+	lab_sp["lab_sim_inflow_lps"] = 0.4
+	model.update_item("ps", {"specs": lab_sp})
+	engine.simulate_step_for_test(2.0, 1.0)
+	var sp2: Dictionary = (model.get_item("ps").get("specs", {}) as Dictionary)
+	_check("stream intake: Lab test flow overrides the supply",
+			absf(float(sp2.get("live_q_lps", 0.0)) - 0.4) < 1e-6,
+			"q=%.4f" % float(sp2.get("live_q_lps", 0.0)))
+	_check("stream intake: an oversized nozzle on a small test flow makes less power",
+			float(sp2.get("current_output_kw", 0.0))
+				< float(sp.get("current_output_kw", 0.0)),
+			"%.4f vs %.4f" % [float(sp2.get("current_output_kw", 0.0)),
+				float(sp.get("current_output_kw", 0.0))])
+	var spring_sp2: Dictionary = (model.get_item("spring").get("specs", {}) as Dictionary)
+	_check("stream intake: the intake flags the Lab override",
+			bool(spring_sp2.get("supply_override", false)))
+
+
+func _test_spec_driven_hydro() -> void:
+	var model = GraphModelScript.new()
+	model.add_item({
+		"id": "pel", "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Pelton", "role": "siphon_hydro", "turbine_kind": "pelton",
+			"gross_head_m": 25.0, "design_flow_lps": 3.0,
+			"penstock_length_m": 60.0, "penstock_diameter_mm": 63.0,
+			"pipe_roughness_mm": 0.0015,
+			"turbine_efficiency": 0.0, "generator_efficiency": 0.85,
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+		},
+	})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var sp: Dictionary = (model.get_item("pel").get("specs", {}) as Dictionary)
+	var kw := float(sp.get("current_output_kw", 0.0))
+	# Null host → _sim_month() month 6, no weather multipliers: exactly the
+	# closed-form estimator value.
+	var want := HydroSource.power_kw_from_graph_specs(sp, 6, [])
+	_check("spec-driven pelton produces without a pond", kw > 0.1, "kw=%.3f" % kw)
+	_check("spec-driven kW == estimator closed form", absf(kw - want) < 1e-6,
+			"kw=%.4f want=%.4f" % [kw, want])
+	_check("spec-driven regime stamped", str(sp.get("live_regime", "")) == "spec")
+	_check("spec-driven flow telemetry", float(sp.get("live_q_lps", 0.0)) > 0.1,
+			"q=%.3f" % float(sp.get("live_q_lps", 0.0)))
+
+	# Run-of-river with a BOUND pond: streams (kw > 0) but never drains storage.
+	var model2 = GraphModelScript.new()
+	model2.add_item({
+		"id": "pond", "type": "resource", "x": -200.0, "y": 0.0,
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Pond", "resource_kind": "water", "pond_storage": true,
+			"capacity_qty": 100000.0, "capacity_unit": "L", "level": 0.5,
+			"stock_l": 50000.0, "floor_m": 0.0, "rim_m": 4.0, "level_m": 2.0,
+		},
+	})
+	model2.add_item({
+		"id": "ror", "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "RoR", "role": "siphon_hydro", "turbine_kind": "run_of_river",
+			"gross_head_m": 3.0, "design_flow_lps": 20.0,
+			"penstock_length_m": 10.0, "penstock_diameter_mm": 160.0,
+			"pipe_roughness_mm": 0.0015,
+			"turbine_efficiency": 0.0, "generator_efficiency": 0.85,
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+		},
+	})
+	model2.add_connection({
+		"id": "c_ror", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "pond", "source_handle_id": "output",
+		"target_item_id": "ror", "target_handle_id": "res_in_0",
+	})
+	var engine2 = ResourceFlowEngineScript.new()
+	engine2.setup(model2, null)
+	engine2.simulate_step_for_test(0.0, 0.0)
+	engine2.simulate_step_for_test(24.0, 24.0)
+	var ror_sp: Dictionary = (model2.get_item("ror").get("specs", {}) as Dictionary)
+	_check("run-of-river streams power", float(ror_sp.get("current_output_kw", 0.0)) > 0.05,
+			"kw=%.3f" % float(ror_sp.get("current_output_kw", 0.0)))
+	var pond_sp: Dictionary = (model2.get_item("pond").get("specs", {}) as Dictionary)
+	_check("run-of-river never drains the pond",
+			absf(float(pond_sp.get("stock_l", 0.0)) - 50000.0) < 1.0,
+			"stock=%.1f" % float(pond_sp.get("stock_l", 0.0)))
+
+	# A pond-less SIPHON has no head spec — it must stay idle at zero, not
+	# borrow the estimator path.
+	var model3 = GraphModelScript.new()
+	model3.add_item({
+		"id": "sip", "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Siphon", "role": "siphon_hydro", "turbine_kind": "siphon",
+			"intake_diameter_mm": 203.0, "outlet_diameter_mm": 203.0,
+			"barrel_length_m": 20.0, "manning_n": 0.012,
+			"hydraulic_efficiency": 0.6, "generator_efficiency": 0.7,
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+		},
+	})
+	var engine3 = ResourceFlowEngineScript.new()
+	engine3.setup(model3, null)
+	engine3.simulate_step_for_test(0.0, 0.0)
+	engine3.simulate_step_for_test(1.0, 1.0)
+	var sip_sp: Dictionary = (model3.get_item("sip").get("specs", {}) as Dictionary)
+	_check("pond-less siphon stays at zero",
+			float(sip_sp.get("current_output_kw", 0.0)) < 1e-9,
+			"kw=%.4f" % float(sip_sp.get("current_output_kw", 0.0)))
+
+
+## Phase C: a routed contour penstock is the AUTHORITY for penstock geometry —
+## measured run length replaces the typed estimate, the styled pipe size drives
+## the hydraulic diameter, the turbine-end invert sets outlet_invert_m — and
+## contour conns are EXEMPT from the generic Hazen-Williams derate (HydroReach
+## owns their friction; a second loss would double-count).
+func _test_penstock_conn_authority() -> void:
+	var model = GraphModelScript.new()
+	model.add_item({
+		"id": "pond", "type": "resource", "x": -200.0, "y": 0.0,
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Pond", "resource_kind": "water", "pond_storage": true,
+			"capacity_qty": 100000.0, "capacity_unit": "L", "level": 0.75,
+			"stock_l": 75000.0, "floor_m": 28.0, "rim_m": 32.0, "level_m": 31.0,
+		},
+	})
+	model.add_item({
+		"id": "pel", "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 130.0, "elevation_m": 5.0,
+		"specs": {
+			"name": "Pelton", "role": "siphon_hydro", "turbine_kind": "pelton",
+			"penstock_length_m": 60.0, "penstock_diameter_mm": 63.0,
+			"pipe_roughness_mm": 0.0015, "design_flow_lps": 3.0,
+			"turbine_efficiency": 0.0, "generator_efficiency": 0.85,
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+		},
+	})
+	model.add_connection({
+		"id": "c_pen", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "pond", "source_handle_id": "output",
+		"target_item_id": "pel", "target_handle_id": "res_in_0",
+		"conduit_type": "poly_penstock",
+		"conduit_style": {"pipe_size_in": 2.0},
+		"route_length_m": 87.3,
+		"invert_in_m": 31.5, "invert_out_m": 5.2,
+	})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(0.1, 0.1)
+	var sp: Dictionary = (model.get_item("pel").get("specs", {}) as Dictionary)
+	_check("penstock conn: measured run wins",
+			absf(float(sp.get("penstock_length_m", 0.0)) - 87.3) < 0.01,
+			"len=%.2f" % float(sp.get("penstock_length_m", 0.0)))
+	_check("penstock conn: styled 2in SDR-9 ID wins",
+			absf(float(sp.get("penstock_diameter_mm", 0.0)) - 46.92) < 0.1,
+			"d=%.2f" % float(sp.get("penstock_diameter_mm", 0.0)))
+	_check("penstock conn: turbine-end invert wins",
+			absf(float(sp.get("outlet_invert_m", 0.0)) - 5.2) < 0.01,
+			"inv=%.2f" % float(sp.get("outlet_invert_m", 0.0)))
+	# Gross head 31 - 5.2 = 25.8 m: the turbine actually generates from it.
+	_check("penstock conn: turbine produces from routed head",
+			float(sp.get("current_output_kw", 0.0)) > 0.05,
+			"kw=%.3f" % float(sp.get("current_output_kw", 0.0)))
+	# Derate exemption: forced-on losses still pass a contour conn untouched.
+	engine.connector_losses_override = 1
+	var conn := model.get_connection("c_pen")
+	var passed: float = engine.call("_apply_conduit_derate", conn, 3600.0)
+	_check("contour conn exempt from generic derate",
+			absf(passed - 3600.0) < 0.001
+			and absf(float(conn.get("flow_derate", 0.0)) - 1.0) < 0.001,
+			"passed=%.1f derate=%.3f" % [passed, float(conn.get("flow_derate", 0.0))])
+	# A plain hose is still derated (the exemption is contour-only).
+	model.add_connection({
+		"id": "c_hose", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "pond", "source_handle_id": "output",
+		"target_item_id": "pel", "target_handle_id": "res_in_0",
+		"conduit_type": "garden_hose", "route_length_m": 60.0,
+	})
+	var hose := model.get_connection("c_hose")
+	var hose_passed: float = engine.call("_apply_conduit_derate", hose, 3600.0)
+	_check("hose still derated (exemption is contour-only)",
+			hose_passed < 3600.0 - 0.001, "passed=%.1f" % hose_passed)
+
+
+## Round 3: honest telemetry. A penstock whose intake sits BELOW the turbine
+## has no head — it must read ZERO flow and zero power (stale live_q_lps here
+## kept the tailwater jet running forever), and a PRODUCING PowerSpout must
+## report its real nozzle operating flow (its design_flow_lps is 0 — the old
+## display read 0 L/s while making 500 W).
+func _test_no_head_zero_flow() -> void:
+	var model = GraphModelScript.new()
+	model.add_item({
+		"id": "psp", "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 130.0, "elevation_m": 30.0,
+		"specs": {
+			"name": "PowerSpout", "role": "siphon_hydro",
+			"turbine_kind": "powerspout_pelton",
+			"penstock_length_m": 40.0, "penstock_diameter_mm": 37.53,
+			"pipe_roughness_mm": 0.0015, "nozzle_count": 1,
+			"nozzle_diameter_mm": 10.0, "design_flow_lps": 0.0,
+			"generator_efficiency": 0.85,
+			"live_q_lps": 3.3, "current_output_kw": 0.4,  # stale, must be zeroed
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+		},
+	})
+	# Routed penstock whose SOURCE end is 12 m BELOW the turbine.
+	model.add_connection({
+		"id": "c_down", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "nowhere_intake", "source_handle_id": "output",
+		"target_item_id": "psp", "target_handle_id": "res_in_0",
+		"conduit_type": "poly_penstock",
+		"route_length_m": 44.0, "invert_in_m": 18.0, "invert_out_m": 30.0,
+	})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(0.5, 0.5)
+	var sp: Dictionary = (model.get_item("psp").get("specs", {}) as Dictionary)
+	_check("downhill intake: zero power",
+			float(sp.get("current_output_kw", 1.0)) < 1e-9,
+			"kw=%.4f" % float(sp.get("current_output_kw", 0.0)))
+	_check("downhill intake: zero FLOW (stale telemetry zeroed — tailwater off)",
+			float(sp.get("live_q_lps", 1.0)) < 1e-9,
+			"q=%.3f" % float(sp.get("live_q_lps", 0.0)))
+	_check("downhill intake: head adopted as zero",
+			float(sp.get("gross_head_m", 1.0)) < 1e-6,
+			"h=%.3f" % float(sp.get("gross_head_m", 0.0)))
+
+	# The same turbine with the intake ABOVE it flows its NOZZLE rate.
+	var model2 = GraphModelScript.new()
+	model2.add_item({
+		"id": "psp2", "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 130.0, "elevation_m": 10.0,
+		"specs": {
+			"name": "PowerSpout", "role": "siphon_hydro",
+			"turbine_kind": "powerspout_pelton",
+			"penstock_length_m": 100.0, "penstock_diameter_mm": 37.53,
+			"pipe_roughness_mm": 0.0015, "nozzle_count": 1,
+			"nozzle_diameter_mm": 10.0, "design_flow_lps": 0.0,
+			"generator_efficiency": 0.85,
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+		},
+	})
+	model2.add_connection({
+		"id": "c_up", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "high_intake", "source_handle_id": "output",
+		"target_item_id": "psp2", "target_handle_id": "res_in_0",
+		"conduit_type": "poly_penstock",
+		"route_length_m": 100.0, "invert_in_m": 30.0, "invert_out_m": 10.0,
+	})
+	var engine2 = ResourceFlowEngineScript.new()
+	engine2.setup(model2, null)
+	engine2.simulate_step_for_test(0.0, 0.0)
+	engine2.simulate_step_for_test(0.5, 0.5)
+	var sp2: Dictionary = (model2.get_item("psp2").get("specs", {}) as Dictionary)
+	_check("uphill intake: produces", float(sp2.get("current_output_kw", 0.0)) > 0.05,
+			"kw=%.3f" % float(sp2.get("current_output_kw", 0.0)))
+	# 20 m gross / 100 m of 1.5in SDR-9 / 1x10 mm nozzle: op point ~1.34 L/s.
+	var q2 := float(sp2.get("live_q_lps", 0.0))
+	_check("uphill intake: reports the NOZZLE operating flow (~1.34 L/s)",
+			q2 > 1.2 and q2 < 1.5, "q=%.3f" % q2)

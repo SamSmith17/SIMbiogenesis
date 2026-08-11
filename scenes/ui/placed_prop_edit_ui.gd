@@ -373,8 +373,8 @@ func _load_from_layer() -> void:
 	if _siphon_btn != null:
 		var mid := str(d.get("model_id", ""))
 		var kind := str(d.get("kind", ""))
-		_siphon_btn.visible = mid == "hydroturbine" or kind == "siphon_hydro" \
-				or kind == "siphon_hoverboard"
+		_siphon_btn.visible = ModelCatalog.is_hydro_turbine(mid) \
+				or kind == "siphon_hydro" or kind == "siphon_hoverboard"
 	_refresh_restore_visibility()
 	_space_row.bind_prop(_loader, _prop_id)
 
@@ -507,9 +507,9 @@ func _on_crew_breakdown() -> void:
 		if sgv.has_method("_show_toast"):
 			sgv.call("_show_toast", "Chore board is full — clear some chores first")
 		return
-	if sgv.has_method("watch_site_at"):
-		sgv.call("watch_site_at", site,
-			"👷 Breakdown project queued — %d phases" % rows.size())
+	if sgv.has_method("notify_crew_queued"):
+		sgv.call("notify_crew_queued", site,
+			"👷 Breakdown queued — %d phases" % rows.size())
 
 
 ## The mirror of _on_crew_breakdown: raise a packed, already-fabricated
@@ -527,8 +527,8 @@ func _on_crew_rebuild() -> void:
 				and not str(res.get("error", "")).is_empty():
 			sgv.call("_show_toast", str(res.get("error", "")))
 		return
-	if sgv != null and sgv.has_method("watch_site_at"):
-		sgv.call("watch_site_at", res.get("site", Vector2.ZERO),
+	if sgv != null and sgv.has_method("notify_crew_queued"):
+		sgv.call("notify_crew_queued", res.get("site", Vector2.ZERO),
 			"👷 Rebuild queued — the crew raises it again")
 
 
@@ -701,7 +701,7 @@ func _on_edit_siphon() -> void:
 		gv.visible = true
 		gv.call("open_siphon_lab", graph_id)
 	elif gv != null and gv.has_method("_show_toast"):
-		gv.call("_show_toast", "Bind this prop to a Siphon Hydroturbine graph node first")
+		gv.call("_show_toast", "Bind this prop to a hydro turbine graph node first")
 
 
 func _on_edit_ports() -> void:

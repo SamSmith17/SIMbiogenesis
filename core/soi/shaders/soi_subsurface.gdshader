@@ -26,6 +26,11 @@ global uniform float soi_water_table_m;
 uniform float glass_enabled = 1.0;
 /// Multiplier on glass alpha (Snowglobe pitch fade near horizon).
 uniform float glass_opacity = 1.0;
+/// Site Plan top-down: paint the below-ground bowl a flat ground-tan fill
+/// instead of the water-cycle diagram (soil gradient + percolation veins +
+/// aquifer). The plan wants "solid earth under the terrain", not a poster.
+uniform float plain_soil = 0.0;
+uniform vec3 plain_soil_color : source_color = vec3(0.62, 0.52, 0.38);
 
 varying vec3 v_world_pos;
 varying float v_terrain_y;
@@ -86,10 +91,24 @@ void fragment() {
 		RIM_TINT = 0.7;
 	} else {
 		// ---- Below ground: opaque earth cross-section (terrarium cutaway) ----
+		float depth = surface_y - v_world_pos.y;
+		if (plain_soil > 0.5) {
+			// Site Plan: solid ground-tan bowl. Mild depth shading + grain so
+			// it still reads as earth, not plastic; same emission path as the
+			// diagram so the bowl stays visible at night.
+			float pgrain = hash2(floor(v_world_pos.xy * 6.0) + floor(v_world_pos.zy * 4.0));
+			vec3 pcol = plain_soil_color * (1.0 - 0.25 * clamp(depth / 60.0, 0.0, 1.0));
+			pcol = mix(pcol, pcol * 0.90, pgrain * 0.35);
+			ALBEDO = vec3(0.0);
+			EMISSION = pcol;
+			ROUGHNESS = 1.0;
+			METALLIC = 0.0;
+			SPECULAR = 0.0;
+			ALPHA = 1.0;
+		} else {
 		// The water-cycle-diagram look: soil darkening steadily with depth,
 		// animated percolation veins trickling down from the surface, and a
 		// saturated groundwater band below the water table.
-		float depth = surface_y - v_world_pos.y;
 		vec3 soil_near = vec3(0.34, 0.235, 0.135);
 		vec3 soil_far  = vec3(0.20, 0.125, 0.070);
 		float n = hash2(floor(v_world_pos.xz * 3.0)) * 0.55
@@ -140,5 +159,6 @@ void fragment() {
 		METALLIC = 0.0;
 		SPECULAR = 0.0;
 		ALPHA = 1.0;
+		}
 	}
 }

@@ -93,6 +93,14 @@ const CURATED_MODELS := {
 		"form": "bundle", "source": "estimated"},
 	"hydroturbine": {"w_m": 1.20, "d_m": 0.60, "h_m": 0.60, "mass_kg": 45.0,
 		"form": "crate", "source": "estimated"},
+	# PowerSpout PLT: a pico-hydro unit ships as one ~20 kg carton (the machine
+	# itself measures ~0.35 × 0.38 × 0.59 m — see the ModelCatalog entry).
+	"powerspout_plt": {"w_m": 0.62, "d_m": 0.42, "h_m": 0.42, "mass_kg": 20.0,
+		"form": "crate", "source": "estimated"},
+	# Stream intake sump: a small precast/HDPE box with a screen. Ships as one
+	# awkward-but-light unit (~0.7 × 0.5 × 0.42 m body).
+	"stream_intake": {"w_m": 0.74, "d_m": 0.56, "h_m": 0.46, "mass_kg": 28.0,
+		"form": "crate", "source": "estimated"},
 	# ~5 m dish heliostat: petals + mast + drives, palletized.
 	"heliostat": {"w_m": 2.60, "d_m": 1.60, "h_m": 0.90, "mass_kg": 420.0,
 		"form": "pallet", "source": "estimated"},

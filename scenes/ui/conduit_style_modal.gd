@@ -525,9 +525,9 @@ func _read_draft_from_controls() -> void:
 	_draft["conduit_type"] = str(_type_opt.get_item_metadata(_type_opt.selected))
 	var eff := _effective_type_id()
 	var glow_type := ConduitKinds.is_conceptual_type(eff) or ConduitKinds.is_light_type(eff)
-	if _size_opt != null and ConduitKinds.uses_pipe_kit(eff):
+	if _size_opt != null and ConduitKinds.has_size_options(eff):
 		_draft["pipe_size_in"] = float(_size_opt.get_item_metadata(_size_opt.selected))
-	elif _draft.has("pipe_size_in") and not ConduitKinds.uses_pipe_kit(eff):
+	elif _draft.has("pipe_size_in") and not ConduitKinds.has_size_options(eff):
 		_draft.erase("pipe_size_in")
 	_draft["color"] = _color_picker.color
 	_draft["radius_m"] = _radius_slider.value
@@ -579,7 +579,7 @@ func _on_type_changed() -> void:
 		if meta.has(k):
 			_draft[k] = meta[k]
 	_draft["conduit_type"] = new_type
-	if ConduitKinds.uses_pipe_kit(eff):
+	if ConduitKinds.has_size_options(eff):
 		_draft["pipe_size_in"] = float(meta.get("default_pipe_size_in", 1.25))
 	if keep_vis != null:
 		_draft["visible_3d"] = keep_vis
@@ -632,7 +632,7 @@ func _update_control_visibility() -> void:
 	var can_sag := rm == "catenary" or rm == "direct" or rm == "" \
 			or ConduitKinds.is_flexible_type(eff) or ConduitKinds.is_ground_drape_type(eff)
 	if _row_size != null:
-		_row_size.visible = kit
+		_row_size.visible = kit or ConduitKinds.has_size_options(eff)
 	# Kit OD is baked into fittings — thickness slider is misleading.
 	_row_radius.visible = not kit
 	_row_roughness.visible = not glow_type
@@ -669,6 +669,11 @@ func _rebuild_preview() -> void:
 	var flat := func(_p: Vector3) -> float: return 0.0
 	var control: Array = []
 	match rm:
+		"contour":
+			# Studio floor is flat — the preview reads as a low ground-hugging run.
+			var r_min := ConduitKinds.contour_bend_radius_m(type_id, _draft)
+			for p: Vector3 in ContourRouter.route_polyline([a, b], flat, r_min):
+				control.append(p)
 		"ortho":
 			for p: Vector3 in ConduitOrthoRouter.route(a, b, [], true, elbow):
 				control.append(p)

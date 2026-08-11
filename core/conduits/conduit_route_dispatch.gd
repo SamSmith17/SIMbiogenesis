@@ -58,7 +58,7 @@ static func resolve_route_ends(a: Vector3, b: Vector3, src: Dictionary, tgt: Dic
 ## geometry without a drop-time snap; commit always passes true.
 static func control_points(ends: Dictionary, type_id: String, style_ov: Dictionary,
 		waypoints: Array, locked: bool, obstacles: Array, allow_astar: bool,
-		site_clearance_m: float) -> Array:
+		site_clearance_m: float, ground_fn: Callable = Callable()) -> Array:
 	var a: Vector3 = ends.get("a", Vector3.ZERO)
 	var b: Vector3 = ends.get("b", Vector3.ZERO)
 	var a_route: Vector3 = ends.get("a_route", a)
@@ -75,6 +75,19 @@ static func control_points(ends: Dictionary, type_id: String, style_ov: Dictiona
 		meta.get("elbow_radius_frac", 0.35)))
 	var want_culvert := route_mode == "culvert" \
 			or (route_mode.is_empty() and ConduitKinds.uses_culvert_kit(type_id))
+	# Contour (poly penstock): the ground samples ARE the route — this is the
+	# ONE mode that receives the ground callable (the pipes branch deliberately
+	# passes Callable(); see the comment there).
+	if route_mode == "contour":
+		var c_pts: Array = [a_route]
+		for wp: Vector3 in waypoints:
+			c_pts.append(wp)
+		c_pts.append(b_route)
+		var r_min := ConduitKinds.contour_bend_radius_m(type_id, style_ov)
+		var packed_c := ContourRouter.route_polyline(c_pts, ground_fn, r_min)
+		return ConduitManager._seat_approaches_legal(a, b,
+			ConduitManager._packed_to_array(packed_c),
+			seat_a, seat_b, out_a, out_b, false, 0.0)
 	var want_pipes := (route_mode == "pipes" \
 			or (route_mode.is_empty() and ConduitKinds.is_pipes_type(type_id))) \
 			and not want_culvert

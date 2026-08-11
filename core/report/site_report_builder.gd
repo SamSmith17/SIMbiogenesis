@@ -48,6 +48,26 @@ var _wind_specs: Array = []
 var _hydro_specs: Array = []
 var _wind_rated_kw: float = 0.0
 
+## Physics-only view of a hydro turbine's specs. Unified turbines (processor
+## role "siphon_hydro") carry live telemetry (live_q_lps / siphon_primed / node
+## state) that churns while a pond drains — folding that into the capacity
+## signature would invalidate the report cache on every tick. These are exactly
+## the keys HydroSource.power_kw_from_graph_specs reads.
+const _HYDRO_PHYSICS_KEYS: Array = [
+	"kind", "turbine_kind", "gross_head_m", "design_flow_lps",
+	"penstock_length_m", "penstock_diameter_mm", "pipe_roughness_mm",
+	"turbine_efficiency", "generator_efficiency", "max_power_w",
+	"monthly_flow_multipliers",
+]
+
+
+static func _hydro_physics_specs(specs: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for k: String in _HYDRO_PHYSICS_KEYS:
+		if specs.has(k):
+			out[k] = specs[k]
+	return out
+
 var _data: SiteReportData = null
 
 
@@ -118,8 +138,11 @@ func start(main: Node, solar_ui: Node, model: Object, sim_year: int,
 			if ty == "wind":
 				_wind_specs.append(specs)
 				_wind_rated_kw += maxf(float(specs.get("rated_w", 1000.0)), 0.0) / 1000.0
-			elif ty == "hydro":
-				_hydro_specs.append(specs)
+			elif ty == "hydro" \
+					or (ty == "processor" and str(specs.get("role", "")) == "siphon_hydro"):
+				# Unified hydro turbines are processors (role "siphon_hydro");
+				# the bare "hydro" arm keeps pre-migration snapshots working.
+				_hydro_specs.append(_hydro_physics_specs(specs))
 	_data.wind_turbine_count = _wind_specs.size()
 	_data.wind_rated_kw = _wind_rated_kw
 	_data.hydro_count = _hydro_specs.size()
@@ -418,8 +441,9 @@ static func signature_for(main: Node, solar_ui: Node, model: Object, sim_year: i
 			var ty := str(item.get("type", ""))
 			if ty == "wind":
 				wind_specs.append((item.get("specs", {}) as Dictionary).duplicate(true))
-			elif ty == "hydro":
-				hydro_specs.append((item.get("specs", {}) as Dictionary).duplicate(true))
+			elif ty == "hydro" \
+					or (ty == "processor" and str((item.get("specs", {}) as Dictionary).get("role", "")) == "siphon_hydro"):
+				hydro_specs.append(_hydro_physics_specs(item.get("specs", {}) as Dictionary))
 	var wx := "synthetic"
 	if weather_covers:
 		wx = "generated" if weather_generated else "archive"

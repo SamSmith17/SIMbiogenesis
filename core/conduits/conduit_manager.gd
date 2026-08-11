@@ -50,6 +50,9 @@ var _parts_active: Dictionary = {}  ## conn_id -> bool (GLB fittings assembled)
 var _pipe_kit_warn: Dictionary = {}  ## conn_id -> last error (dedupe warnings)
 var _elbow_cache: Dictionary = {}  ## conn_id -> Array[{bend_deg, transform, corner, …}]
 var _discharge_vfx: Dictionary = {}  ## conn_id -> ConduitDischargeVfx (culvert outlet jet)
+## Cached _any_explicit_visible() so the per-frame guard stays O(1); refreshed
+## on every sync/enqueue pass (structure changes route through those).
+var _explicit_seen: bool = false
 var _elbow_highlight: MeshInstance3D = null
 var _elbow_hl_mat: StandardMaterial3D = null
 var _elbow_hl_key: String = ""  ## "cid:index" — skip redundant highlight updates
@@ -69,10 +72,13 @@ func setup(model: GraphModel, main_node: Node) -> void:
 			_model.changed.connect(_on_model_changed)
 	_migrate_dense_unlocked_routes()
 	invalidate_astar()
-	set_process(_global_visible)
-	if _global_visible:
+	_explicit_seen = _any_explicit_visible()
+	set_process(_global_visible or _explicit_seen)
+	if _global_visible or _explicit_seen:
 		# Never sync_all() here — graph restore also deferred SolarUI sync on the
 		# same idle queue; a full Sch40 kit remesh would block that + physics.
+		# With wires off, _enqueue_all_remesh keeps only the explicitly-visible
+		# conns (routed penstocks / forced tailraces survive a map reload).
 		_enqueue_all_remesh()
 	else:
 		_clear_all_instances()
@@ -134,8 +140,16 @@ func set_global_visibility(visible: bool) -> void:
 	if not visible:
 		_sync_pending = false
 		_remesh_queue.clear()
-		_clear_all_instances()
-		set_process(false)
+		_explicit_seen = _any_explicit_visible()
+		if not _explicit_seen:
+			_clear_all_instances()
+			set_process(false)
+			return
+		# Wires off, but explicitly-visible conns stay: sweep everything else
+		# out via the enqueue pass (its `active` set drops non-visible
+		# instances) instead of clearing the lot.
+		set_process(true)
+		_enqueue_all_remesh()
 		return
 	set_process(true)
 	invalidate_obstacle_cache()
@@ -165,7 +179,15 @@ func invalidate_astar() -> void:
 
 
 func _on_model_changed(reason: String) -> void:
-	if _updating_model or not _global_visible:
+	if _updating_model:
+		return
+	# With global 3D wires OFF, explicitly-visible conns (visible_3d == true —
+	# routed penstocks, forced culvert tailraces) still render, so structural
+	# changes must still schedule a sync for them. Without this, a penstock
+	# routed while wires were off simply never existed in 3D — and because the
+	# measured length/inverts are stamped inside the rebuild, its physics were
+	# dead too ("can't always see the tubing").
+	if not _global_visible and not _any_explicit_visible():
 		return
 	# Tank / telemetry item writes are the hot path during flow_engine — skip.
 	# Prop moves call sync_all / invalidate explicitly from SystemGraphView.
@@ -191,7 +213,8 @@ func sync_all() -> void:
 		return
 	_sync_pending = false
 	_refresh_global_prefs()
-	if not _global_visible:
+	_explicit_seen = _any_explicit_visible()
+	if not _global_visible and not _explicit_seen:
 		_remesh_queue.clear()
 		_clear_all_instances()
 		set_process(false)
@@ -200,8 +223,24 @@ func sync_all() -> void:
 	_enqueue_all_remesh()
 
 
+## True when any routable connection carries an explicit `visible_3d: true` —
+## those render whatever the global 3D-wires toggle says (that is what the
+## explicit flag MEANS per ConduitKinds.resolve_visible_3d; the manager's
+## global early-outs used to starve them anyway).
+func _any_explicit_visible() -> bool:
+	if _model == null:
+		return false
+	for conn: Dictionary in _model.connections:
+		if conn.get("visible_3d") == true and _model.connection_is_3d_routable(conn):
+			return true
+	return false
+
+
 func _enqueue_all_remesh() -> void:
-	if _model == null or not _global_visible:
+	if _model == null:
+		return
+	_explicit_seen = _any_explicit_visible()
+	if not _global_visible and not _explicit_seen:
 		return
 	_migrate_dense_unlocked_routes()
 	_rebuild_lane_map()
@@ -297,8 +336,9 @@ func reset_all_autoroutes() -> int:
 
 
 func _process(delta: float) -> void:
-	# Siphon Lab can focus a culvert while global 3D wires are off.
-	if _model == null or (not _global_visible and _focus_id.is_empty()):
+	# With wires off, the focused conn AND explicitly-visible conns still tick.
+	if _model == null \
+			or (not _global_visible and _focus_id.is_empty() and not _explicit_seen):
 		return
 	# Lab suspend: keep queued remesh drain only (no follow/VFX storm).
 	if _main != null and _main.has_method("is_world_suspended_for_lab") \
@@ -329,7 +369,8 @@ func _process(delta: float) -> void:
 		var cid: String = str(conn.get("id", ""))
 		if cid.is_empty():
 			continue
-		var focus_only := not _global_visible and cid == _focus_id
+		var focus_only: bool = not _global_visible \
+				and (cid == _focus_id or conn.get("visible_3d") == true)
 		if not focus_only and not _instances.has(cid):
 			continue
 		if not _model.connection_is_3d_routable(conn):
@@ -340,7 +381,7 @@ func _process(delta: float) -> void:
 			_rebuild_if_dirty(conn, true)
 		elif do_follow:
 			_rebuild_if_dirty(conn, false)
-		if _global_flow_glow or cid == _focus_id:
+		if _global_flow_glow or cid == _focus_id or conn.get("flow_glow") == true:
 			_tick_flow_params(cid, conn)
 		_update_discharge_vfx(delta, cid, conn)
 	_perf_end("conduits_3d")
@@ -974,7 +1015,7 @@ func build_control_points(conn: Dictionary) -> Array:
 		conn.get("route_3d", []) as Array, tree, resolve_pins) if locked else []
 	var style_ov: Dictionary = conn.get("conduit_style", {}) as Dictionary
 	return ConduitRouteDispatch.control_points(ends, type_id, style_ov, wps, locked,
-		_cached_obstacles([]), true, SITE_CLEARANCE_M)
+		_cached_obstacles([]), true, SITE_CLEARANCE_M, Callable(self, "ground_y_at"))
 
 
 ## Sparse chain: [port_a,] approach_a, leave_shoulder, pins…, arrive_shoulder, approach_b [,port_b].
@@ -1152,11 +1193,15 @@ func force_remesh(conn_id: String) -> void:
 	var conn := _model.get_connection(conn_id)
 	if conn.is_empty():
 		return
-	# Allow focused Lab culvert remesh even when global 3D wires are off.
-	if not _global_visible and conn_id != _focus_id:
+	# Focused Lab culvert AND explicitly-visible conns remesh even when the
+	# global 3D wires toggle is off.
+	if not _global_visible and conn_id != _focus_id \
+			and conn.get("visible_3d") != true:
 		return
 	if not _model.connection_is_3d_routable(conn):
 		return
+	_explicit_seen = _explicit_seen or conn.get("visible_3d") == true
+	set_process(true)
 	_rebuild_if_dirty(conn, true)
 
 
@@ -1327,6 +1372,14 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 	for msk: String in rm_ov.keys():
 		if not mesh_style.has(msk):
 			mesh_style[msk] = rm_ov[msk]
+	# Draw the tube at its STYLED nominal size. The mesh builder reads radius_m
+	# straight off the kind meta, so without this every poly penstock rendered
+	# at the kind's single fallback radius and a 2" run looked identical to a
+	# 1" one — the diameter is the main thing the player is tuning.
+	if not mesh_style.has("radius_m"):
+		var od := ConduitKinds.outer_diameter_m(type_id, style_ov)
+		if od > 0.0 and ConduitKinds.has_size_options(type_id):
+			mesh_style["radius_m"] = od * 0.5
 	# Hang-edit with locked mid pins: span-wise catenary (not whole-run ground-snake).
 	# Still pass terrain so sag that hits the ground rests on it (no under-mesh).
 	var hang_sag := ConduitKinds.conn_uses_hang_sag(conn)
@@ -1347,7 +1400,11 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 		mesh_style["terrain_clamp"] = true
 		ground_fn = Callable(self, "ground_y_at")
 	var is_light: bool = ConduitKinds.is_light_type(type_id)
-	var segs := 8 if is_pipes else ConduitMeshBuilder.DEFAULT_SEGMENTS_PER_SPAN
+	# Contour routes carry ~1 m control spacing already — default per-span
+	# tessellation on 160 spans would be thousands of ring segments.
+	var is_contour := rm == "contour"
+	var segs := 8 if is_pipes \
+			else (2 if is_contour else ConduitMeshBuilder.DEFAULT_SEGMENTS_PER_SPAN)
 	var built: Dictionary
 	if is_light:
 		built = ConduitMeshBuilder.build_light_string(control, type_id, segs, ground_fn, mesh_style)
@@ -1405,6 +1462,31 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 	_apply_severed_state(cid, severed)
 	var arc: float = float(built.get("arc_length_m", 0.0))
 	_write_length_back(cid, arc)
+	# Contour (penstock) runs also persist their endpoint elevations — the
+	# intake/outlet inverts the flow engine feeds HydroReach (same keys culvert
+	# conns already carry, same semantics).
+	if is_contour and control.size() >= 2:
+		_write_contour_inverts(cid, (control[0] as Vector3).y,
+				(control[control.size() - 1] as Vector3).y)
+
+
+## Persist a contour run's endpoint elevations onto the connection
+## (change-gated like _write_length_back).
+func _write_contour_inverts(conn_id: String, inv_in_m: float, inv_out_m: float) -> void:
+	if _model == null:
+		return
+	var conn := _model.get_connection(conn_id)
+	if conn.is_empty():
+		return
+	if absf(float(conn.get("invert_in_m", NAN)) - inv_in_m) < 0.01 \
+			and absf(float(conn.get("invert_out_m", NAN)) - inv_out_m) < 0.01:
+		return
+	_updating_model = true
+	_model.update_connection(conn_id, {
+		"invert_in_m": inv_in_m,
+		"invert_out_m": inv_out_m,
+	})
+	_updating_model = false
 
 
 ## Plug/socket capsules at endpoints + mid-couplers when over max_segment_m.

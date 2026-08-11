@@ -83,7 +83,68 @@ static func default_ports_for_model(model_id: String, dims: Dictionary = {}) -> 
 				Vector3(0.0, 0.35, -0.4), Vector3(0, -1, 0), "res_out_1",
 				"output", "liquid_fertilizer", "", 0.5),
 		])
+	# Stream intake: one water outlet on the collar (+Z), preferring poly
+	# penstock so plugging off it continues the run in the same pipe.
+	if model_id == StreamIntakeBuilder.MODEL_ID:
+		return _normalize_ports([
+			make_port("intake_out", "Penstock outlet",
+				Vector3(0.0, StreamIntakeBuilder.BODY_H_M * 0.34,
+					StreamIntakeBuilder.DEPTH_M * 0.5 + StreamIntakeBuilder.COLLAR_LEN_M),
+				Vector3(0, 0.15, 1), "output", "output", "water", "",
+				DEFAULT_APPROACH_M, "poly_penstock"),
+		])
+	# Hydro turbines. Without these a placed turbine has NO ports at all until
+	# the player authors them in the Connection Ports modal, so there is nothing
+	# to attach a penstock to. Handle ids follow the preset's port order:
+	# res_in_0 = water in, res_out_0 = tailrace, res_out_1_pos/neg = DC.
+	# The inlet advertises poly_penstock so plug-dragging off it produces a
+	# penstock rather than the generic water default (garden hose).
+	if ModelCatalog.is_hydro_turbine(model_id):
+		var box := _hydro_turbine_box(model_id, dims)
+		var pw: float = box["w"]
+		var pd: float = box["d"]
+		var ph: float = box["h"]
+		# Ports are anchored off the measured FOOT, not local y=0 — these GLBs
+		# put their origin partway up the casing, so a naive h·frac lands above
+		# the machine. Approximate plugs; the player refines them in the
+		# Connection Ports modal (same contract as home_biogas_2 above).
+		var foot: float = box["foot"]
+		return _normalize_ports([
+			make_port("penstock_in", "Penstock inlet",
+				Vector3(0.0, foot + ph * 0.62, pd * 0.46), Vector3(0, 0.3, 1), "res_in_0",
+				"input", "water", "", DEFAULT_APPROACH_M, "poly_penstock"),
+			make_port("tailrace", "Tailrace outlet",
+				Vector3(0.0, foot + ph * 0.12, -pd * 0.46), Vector3(0, -0.4, -1),
+				"res_out_0", "output", "water", "", DEFAULT_APPROACH_M),
+			make_port("dc_pos", "DC +",
+				Vector3(pw * 0.46, foot + ph * 0.78, pd * 0.14), Vector3(1, 0.25, 0),
+				"res_out_1_pos", "positive", "dc_electricity", "", DEFAULT_APPROACH_M),
+			make_port("dc_neg", "DC −",
+				Vector3(pw * 0.46, foot + ph * 0.78, -pd * 0.14), Vector3(1, 0.25, 0),
+				"res_out_1_neg", "negative", "dc_electricity", "", DEFAULT_APPROACH_M),
+		])
 	return []
+
+
+## Body box (w/d/h + foot offset, metres) for default hydro port placement.
+## `dims` only counts when the caller actually supplied a key — the w/d/h locals
+## above carry generic 1.0/1.2 fallbacks that would otherwise masquerade as a
+## real measurement and scatter ports a half-metre off a 0.35 m machine.
+static func _hydro_turbine_box(model_id: String, dims: Dictionary) -> Dictionary:
+	if dims.has("w_m") and dims.has("d_m") and dims.has("h_m"):
+		return {
+			"w": maxf(float(dims["w_m"]), 0.2),
+			"d": maxf(float(dims["d_m"]), 0.2),
+			"h": maxf(float(dims["h_m"]), 0.3),
+			"foot": float(dims.get("foot_local_y", 0.0)),
+		}
+	var m := ModelCatalog.mesh_metrics(model_id)
+	return {
+		"w": maxf(float(m.get("width", 0.4)), 0.2),
+		"d": maxf(float(m.get("depth", 0.6)), 0.2),
+		"h": maxf(float(m.get("unit_height", 0.4)), 0.3),
+		"foot": float(m.get("foot_local_y", 0.0)),
+	}
 
 
 static func save_catalog_ports(model_id: String, ports: Array) -> bool:

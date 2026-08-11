@@ -342,6 +342,12 @@ func _build_category(cat: Dictionary, idx: int, presets_override: Variant = null
 	hdr.focus_mode = Control.FOCUS_NONE
 	hdr.alignment  = HORIZONTAL_ALIGNMENT_LEFT
 	hdr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# _cat_headers is keyed by the BUILT index (locked categories are skipped,
+	# runtime categories appended past CATEGORIES' end), so the catalog row can
+	# never be re-derived from a header index — carry the display bits on the
+	# button itself for _refresh_header.
+	hdr.set_meta("cat_icon", str(cat.get("icon", "")))
+	hdr.set_meta("cat_label", str(cat.get("label", "")))
 	_apply_cat_header_style(hdr)
 	_cat_headers.append(hdr)
 
@@ -708,9 +714,12 @@ func _on_search(text: String) -> void:
 func _refresh_header(idx: int) -> void:
 	if idx >= _cat_headers.size():
 		return
-	var cat: Dictionary = ComponentPresets.CATEGORIES[idx]
+	# idx is the BUILT index, not a ComponentPresets.CATEGORIES index — indexing
+	# the catalog with it misnamed headers whenever a category was locked/skipped
+	# and went out of range for the runtime "In Model" / "Scene Objects" rows.
+	var hdr: Button = _cat_headers[idx]
 	_cat_headers[idx].text = "%s  %s  %s" % [
-		cat.get("icon", ""), cat.get("label", ""),
+		str(hdr.get_meta("cat_icon", "")), str(hdr.get_meta("cat_label", "")),
 		"▼" if _cat_expanded[idx] else "▶"
 	]
 

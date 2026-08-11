@@ -290,6 +290,36 @@ const BUILTIN: Dictionary = {
 		"max_flow_lpm": 2500.0,
 		"burst_pressure_psi": 30.0,
 	},
+	"poly_penstock": {
+		"label": "Poly Penstock",
+		"radius_m": 0.024,  # 1.5″ IPS OD/2 fallback (visual; styled size is data-side)
+		"color": Color(0.10, 0.10, 0.11, 1.0),  # black HDPE coil stock
+		"roughness": 0.55,
+		"metallic": 0.0,
+		"clearcoat": 0.06,
+		# Rigid to the MESH (the contour router owns the path — no sag/drape
+		# resampling on top of it), but it renders as gentle terrain-following
+		# sweeps, which is exactly how coiled poly lies on a hillside.
+		"flexible": false,
+		"sag_amount": 0.0,
+		"route_mode": "contour",
+		"elbow_radius_frac": 0.0,
+		"fitting_step_deg": 0.0,
+		# PPI Handbook of Polyethylene Pipe, ch. 7 (field bending): minimum
+		# cold-bend radius for DR ≥ 9 HDPE without fittings is 20–27 × OD.
+		"bend_radius_od_mult": 25.0,
+		# Size list only — coiled tubing has no elbow-fitting GLB kit.
+		"pipe_size_options_in": [1.0, 1.25, 1.5, 2.0],
+		"default_pipe_size_in": 1.5,
+		# SDR-9 1.5″ IPS: ID = OD·(1 − 2/DR) = 1.900″ × 7/9 ≈ 1.478″ ≈ 37.5 mm.
+		# inner_diameter_for() derives the styled size's ID; this is the fallback.
+		"inner_diameter_m": 0.0375,
+		"hw_c": 150.0,  # smooth PE (generic-conduit fallback only — HydroReach
+		                # owns penstock friction via Darcy–Weisbach, see
+		                # _apply_conduit_derate's contour exemption)
+		"max_flow_lpm": 400.0,
+		"burst_pressure_psi": 250.0,  # PE4710 SDR-9 pressure class
+	},
 	"led_strip": {
 		"label": "LED Strip",
 		"radius_m": 0.004,
@@ -531,19 +561,70 @@ static func pipe_size_in(type_id: String, style: Dictionary = {}) -> float:
 		raw = fallback
 	if raw < 0.05:
 		return 0.0
+	# Kinds with an explicit size list but no fitting kit (poly_penstock):
+	# snap to the nearest listed size.
+	var opts: Array = meta.get("pipe_size_options_in", []) as Array
+	if not opts.is_empty():
+		var best := float(opts[0])
+		for s: Variant in opts:
+			if absf(float(s) - raw) < absf(best - raw):
+				best = float(s)
+		return best
 	var family := str(meta.get("pipe_kit_family", ""))
 	if family == CulvertKit.FAMILY:
 		return CulvertKit.nearest_size_in(raw)
 	return PipeKit.nearest_size_in(raw)
 
 
-## Sizes offered in the style modal for a kit family.
+## Sizes offered in the style modal for a kit family (or an explicit size list).
 static func pipe_kit_sizes_in(type_id: String) -> Array:
+	var opts: Array = type_meta(type_id).get("pipe_size_options_in", []) as Array
+	if not opts.is_empty():
+		return opts.duplicate()
 	if uses_culvert_kit(type_id):
 		return CulvertKit.SIZES_IN.duplicate()
 	if uses_pipe_kit(type_id):
 		return PipeKit.SCH40_SIZES_IN.duplicate()
 	return []
+
+
+## IPS (iron-pipe-size) outside diameters for HDPE pressure pipe, inches
+## (ASTM D3035 / F714 OD convention — same OD as steel IPS so fittings interchange).
+const _IPS_OD_IN: Dictionary = {1.0: 1.315, 1.25: 1.660, 1.5: 1.900, 2.0: 2.375}
+
+## Dimension ratio for the poly penstock stock: PE4710 SDR-9 (≈250 psi pressure
+## class) — the class micro-hydro suppliers (e.g. PowerSpout) spec for penstock.
+const _POLY_PENSTOCK_SDR := 9.0
+
+
+## Hydraulic inner diameter honoring the styled nominal size. SDR pipe walls
+## are OD/DR thick, so ID = OD·(1 − 2/DR). Kinds without a size table fall back
+## to their flat `inner_diameter_m` (the long-standing single-value behavior).
+static func inner_diameter_for(type_id: String, style: Dictionary = {}) -> float:
+	var meta := type_meta(type_id)
+	var opts: Array = meta.get("pipe_size_options_in", []) as Array
+	if not opts.is_empty():
+		var sz := pipe_size_in(type_id, style)
+		if sz >= 0.05 and _IPS_OD_IN.has(sz):
+			var od_in := float(_IPS_OD_IN[sz])
+			return od_in * (1.0 - 2.0 / _POLY_PENSTOCK_SDR) * 0.0254
+	return float(meta.get("inner_diameter_m", 0.0))
+
+
+## Outside diameter (m) for the styled size (IPS table), else 2 × radius_m.
+static func outer_diameter_m(type_id: String, style: Dictionary = {}) -> float:
+	var meta := type_meta(type_id)
+	var sz := pipe_size_in(type_id, style)
+	if sz >= 0.05 and _IPS_OD_IN.has(sz) \
+			and not (meta.get("pipe_size_options_in", []) as Array).is_empty():
+		return float(_IPS_OD_IN[sz]) * 0.0254
+	return 2.0 * float(meta.get("radius_m", 0.01))
+
+
+## Minimum bend radius (m) for a contour-routed kind: bend_radius_od_mult × OD.
+static func contour_bend_radius_m(type_id: String, style: Dictionary = {}) -> float:
+	var mult := clampf(float(type_meta(type_id).get("bend_radius_od_mult", 25.0)), 2.0, 60.0)
+	return maxf(mult * outer_diameter_m(type_id, style), 0.25)
 
 
 ## Physical fittings kit id (e.g. "us_sch40_2_5" / "pe_culvert_8"), or "".
@@ -572,10 +653,20 @@ static func uses_pipe_kit(type_id: String) -> bool:
 	return not str(meta.get("pipe_kit_id", "")).is_empty()
 
 
-## Display label including nominal size when kit-backed + style known.
+## True when the kind offers a nominal-size choice at all — either a fittings
+## kit family (PVC/ABS/culvert) or an explicit size list (poly_penstock, which
+## has sizes but no elbow GLBs). Gates the style modal's size dropdown.
+static func has_size_options(type_id: String) -> bool:
+	if uses_pipe_kit(type_id):
+		return true
+	return not (type_meta(type_id).get("pipe_size_options_in", []) as Array).is_empty()
+
+
+## Display label including nominal size when kit-backed (or size-listed) + style known.
 static func display_name_with_size(type_id: String, style: Dictionary = {}) -> String:
 	var base := display_name(type_id)
-	if not uses_pipe_kit(type_id):
+	var has_sizes: bool = not (type_meta(type_id).get("pipe_size_options_in", []) as Array).is_empty()
+	if not uses_pipe_kit(type_id) and not has_sizes:
 		return base
 	var sz := pipe_size_in(type_id, style)
 	if sz < 0.05:
@@ -691,6 +782,7 @@ static func route_mode_options() -> Array:
 		{"id": "", "label": "Auto (by cord type)"},
 		{"id": "pipes", "label": "Rigid pipe (elbows)"},
 		{"id": "culvert", "label": "Culvert (PE wide arcs)"},
+		{"id": "contour", "label": "Ground contour (penstock)"},
 		{"id": "ortho", "label": "Right-angle (walls/trays)"},
 		{"id": "taut", "label": "Taut (straight, no sag)"},
 		{"id": "catenary", "label": "Overhead (hanging sag)"},

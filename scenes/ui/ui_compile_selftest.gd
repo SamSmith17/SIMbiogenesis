@@ -37,7 +37,16 @@ const CONTRACTS: Dictionary = {
 	"res://scenes/ui/space_edit_ui.gd": ["toggle_mode", "_exit_mode", "is_panel_open"],
 	"res://scenes/ui/placed_props_ui.gd": ["toggle_mode", "_exit_mode", "is_panel_open"],
 	"res://system_graph/system_graph_view.gd": [
-		"open_site_projects", "open_npc_routines", "npc_population_bridge"],
+		"open_site_projects", "open_npc_routines", "npc_population_bridge",
+		# Called by string from graph_dashboard_panel's Settlement card.
+		"npc_dot_summary",
+		# The Hydro Lab hands the section CT's slot to the turbine close-up by name.
+		"set_lab_section_ct_visible"],
+	# The Hydro Lab drives the close-up entirely by string (it is instantiated
+	# from a preloaded script, not typed), so a rename here is a silent no-op that
+	# leaves the tab showing an empty rect.
+	"res://scenes/ui/hydro_turbine_closeup.gd": [
+		"setup", "set_turbine", "set_state", "set_display_mode", "set_active"],
 }
 
 ## Directories to sweep. All of these share the same exposure: their scripts
@@ -92,6 +101,7 @@ func _initialize() -> void:
 
 	_test_contracts(loaded)
 	_test_view_mode_menu_ids()
+	_test_dashboard_store_rows()
 
 	if _fails == 0:
 		print("UI COMPILE SELFTEST PASS  (%d checks, %d scripts)" % [_checks, scripts.size()])
@@ -174,3 +184,68 @@ func _test_view_mode_menu_ids() -> void:
 				% str(seen.get(id, "")))
 		seen[id] = cname
 	_check("view-mode id sweep found consts (got %d)" % count, count >= 20)
+
+
+## The left-sidebar RESOURCE STORES row model (GraphDashboardPanel.store_rows,
+## pure static). Pinned because it once had NO filtering: the ∞ "Culvert
+## Outlet" sink rendered as a 0% water store, a habitat's auto-spawned ghost
+## containers rendered as human-looking in/out stores, and first-item-of-kind
+## naming let the water row wear the outlet's name.
+func _test_dashboard_store_rows() -> void:
+	var s: Variant = load("res://system_graph/graph_dashboard_panel.gd")
+	_check("dashboard panel script loads", s is Script)
+	if not (s is Script):
+		return
+	var items: Array = [
+		# The ∞ culvert outlet — must never be a store row (and it comes FIRST,
+		# which is exactly the first-item-wins naming trap).
+		{"type": "resource", "specs": {"name": "Culvert Outlet",
+			"resource_kind": "water", "capacity_qty": 1.0e12, "level": 0.0,
+			"unlimited_capacity": true, "outlet_sink": true}},
+		# A processor ghost container (item- AND specs-level is_ghost).
+		{"type": "resource", "is_ghost": true, "specs": {"name": "Greywater",
+			"resource_kind": "greywater", "capacity_qty": 100.0, "level": 0.5,
+			"is_ghost": true}},
+		# A virtual (solar-bridge style) item.
+		{"type": "resource", "is_virtual": true, "specs": {"name": "Virtual",
+			"resource_kind": "water", "capacity_qty": 50.0, "level": 1.0}},
+		# Two real water tanks — the LARGER names the row, stocks aggregate.
+		{"type": "resource", "specs": {"name": "Rain Barrel",
+			"resource_kind": "water", "capacity_qty": 200.0, "level": 0.5,
+			"capacity_unit": "L"}},
+		{"type": "resource", "specs": {"name": "Cistern",
+			"resource_kind": "water", "capacity_qty": 1000.0, "level": 0.25,
+			"capacity_unit": "L"}},
+		# A non-resource item and a kindless resource — both ignored.
+		{"type": "battery", "specs": {"resource_kind": "water"}},
+		{"type": "resource", "specs": {"name": "Mystery"}},
+		# One food tank to prove per-kind separation.
+		{"type": "resource", "specs": {"name": "Pantry",
+			"resource_kind": "biomass", "capacity_qty": 60.0, "level": 1.0,
+			"capacity_unit": "kg"}},
+	]
+	var rows: Array = (s as Script).call("store_rows", items)
+	_check("store_rows: two kinds survive filtering (got %d)" % rows.size(),
+		rows.size() == 2)
+	if rows.size() != 2:
+		return
+	var water: Dictionary = rows[0]
+	var food: Dictionary = rows[1]
+	_check("store_rows: water row first (model order)", str(water.get("kind")) == "water")
+	_check("store_rows: water row named after the LARGEST tank, not the outlet",
+		str(water.get("name")) == "Cistern", "got %s" % str(water.get("name")))
+	_check("store_rows: water stock aggregates (100 + 250)",
+		absf(float(water.get("stock")) - 350.0) < 0.01)
+	_check("store_rows: water capacity aggregates (200 + 1000)",
+		absf(float(water.get("cap")) - 1200.0) < 0.01)
+	_check("store_rows: water counts both tanks", int(water.get("count")) == 2)
+	var wtanks: Array = water.get("tanks", [])
+	_check("store_rows: water carries per-tank breakdown (got %d)" % wtanks.size(),
+		wtanks.size() == 2)
+	if wtanks.size() == 2:
+		_check("store_rows: tank rows keep model order",
+			str((wtanks[0] as Dictionary).get("name")) == "Rain Barrel"
+			and str((wtanks[1] as Dictionary).get("name")) == "Cistern")
+	_check("store_rows: biomass row intact",
+		str(food.get("kind")) == "biomass" and str(food.get("name")) == "Pantry"
+		and int(food.get("count")) == 1)

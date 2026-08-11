@@ -39,6 +39,9 @@ const MAX_SECTION_VIEWPORT_PX := 1280
 # ~0.5× (blurry) just under the crop threshold and snap sharp above it (the "zoom
 # jump"). Equal caps keep render density ~1× on both sides of the switch.
 const MAX_DISC_CONTAINER_PX := 2048.0
+## Hydro Lab CT ortho floor — shared with the Lab's 2D overlay so the two cannot
+## clamp differently. See GraphSiteLayout.LAB_MIN_ORTHO_H_M for the why.
+const LAB_MIN_ORTHO_H_M := GraphSiteLayout.LAB_MIN_ORTHO_H_M
 ## Frames to wait after activate before first UPDATE_ONCE (lets layout settle).
 const SOFT_BOOT_FRAMES := 3
 const YAW_SENS := 0.005
@@ -46,10 +49,14 @@ const PITCH_SENS := 0.004
 const PITCH_MIN := 0.05
 const PITCH_MAX := 1.45
 ## Physical-view orbit (Site top-down / Elevation section — free tilt).
-const PHYS_YAW_SENS := 0.006
-const PHYS_PITCH_SENS := 0.006
-## Site: 0 = straight down, up to nearly horizon. Section: ± above/below side-on.
-const PHYS_PITCH_MAX := 1.30
+## Sensitivity raised 0.006 → 0.008 so a working orbit at deep zoom takes one
+## drag, not three.
+const PHYS_YAW_SENS := 0.008
+const PHYS_PITCH_SENS := 0.008
+## Site: 0 = straight down, up to nearly horizon (raised 1.30 → 1.45, matching
+## the freeform PITCH_MAX, so a zoomed-in orbit can get low enough to read
+## building heights). Section: ± above/below side-on.
+const PHYS_PITCH_MAX := 1.45
 ## Cap idle redraws while SoI lite preview is active (~24 FPS).
 const IDLE_REFRESH_HZ := 24.0
 ## When the disc Control would exceed MAX_DISC_CONTAINER_PX (high 2D zoom).
@@ -107,9 +114,30 @@ var _lab_along_m: float = NAN
 var _lab_elev_m: float = NAN
 var _lab_ortho_h_m: float = NAN
 var _section_env: Environment = null
+## Per-camera environment for the top-down Site Plan: a constant COLOR ambient
+## floor so the plan is readable at night while the (boosted) moon still
+## shades it — the ambient casts no shadows, the moon does, so moonshadows
+## survive. Only this camera sees it; the first-person world is untouched.
+var _topdown_env: Environment = null
+const TOPDOWN_AMBIENT_COLOR := Color(0.58, 0.64, 0.78)
+const TOPDOWN_AMBIENT_ENERGY := 0.55
+## Moon light-energy multiplier while the top-down plan is live (applied via
+## main.moon_light_boost — main's _update_moon rewrites the light every pass,
+## so the multiplier must live inside that computation). Restored on exit.
+const MOON_BOOST := 3.0
+var _moon_boost_applied := false
 var _disc_material: ShaderMaterial = null
 ## Soft-boot: hold first capture until layout has a few idle frames.
 var _soft_boot_frames: int = 0
+## First-frame handshake: the canvas must not punch its SoI hole (nor hand the
+## camera projection authority) until the SubViewport has actually RENDERED
+## once — flipping soi_live_preview at activate time showed a black disc for
+## the whole soft-boot window, and chips jumped to the camera projection
+## frames before any image existed. Pending is cleared by
+## _on_first_preview_frame, which runs on RenderingServer.frame_post_draw of
+## the first real capture.
+var _first_frame_pending: bool = false
+var _first_frame_hooked: bool = false
 
 
 func setup(host: Control, canvas: Control) -> void:
@@ -125,6 +153,18 @@ func setup(host: Control, canvas: Control) -> void:
 
 
 ## Reparent the preview into `host` (Siphon Lab), or restore to the graph host.
+## Hide/show the embedded preview container without tearing the embed down. The
+## Hydro Lab's turbine close-up takes over the same rect, and leaving this
+## rendering underneath it costs a full 3D pass for pixels nobody sees.
+func set_embed_visible(on: bool) -> void:
+	if _container == null or not is_instance_valid(_container):
+		return
+	_container.visible = on
+	if _viewport != null and is_instance_valid(_viewport):
+		_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE \
+				if on else SubViewport.UPDATE_DISABLED
+
+
 func set_embed_host(host: Control) -> void:
 	_embed_host = host if (host != null and is_instance_valid(host)) else null
 	_ensure_nodes()
@@ -199,13 +239,17 @@ func set_active(on: bool) -> void:
 	var _pmain := get_tree().current_scene if get_tree() != null else null
 	if _pmain != null:
 		PropRenderTuning.preview_active = on
-		PropRenderTuning.apply_to_all(_pmain)
+		# The whole-scene prop walk is deferred off the activation frame (which
+		# already pays layout + world bind); the first capture is ≥3 soft-boot
+		# frames later, so culling state settles well before anything renders.
+		call_deferred("_apply_prop_tuning_deferred")
 	if on:
 		_ensure_nodes()
 		_connect_canvas_camera_signals()
 		_bind_world()
 		_apply_soi_visuals(true)
 		_apply_preview_shell_visuals()
+		_sync_moon_boost()
 		_layout_dirty = true
 		_camera_dirty = true
 		_orbit_mult_target = _orbit_mult
@@ -220,23 +264,38 @@ func set_active(on: bool) -> void:
 		if _viewport != null:
 			_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		_soft_boot_frames = SOFT_BOOT_FRAMES
+		_first_frame_pending = true
 		if _section_mode:
 			_apply_hydroturbine_section_clip(true)
 			_ensure_section_soil_visible()
 	else:
 		_section_env = null
+		_topdown_env = null
 		_soft_boot_frames = 0
+		_first_frame_pending = false
 		set_process(false)
 		_set_visible(false)
 		_apply_hydroturbine_section_clip(false)
 		_apply_soi_visuals(false)
+		_sync_moon_boost()
 		_restore_lite_camera()
 		if _viewport != null:
 			_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	if _canvas != null and is_instance_valid(_canvas):
-		_canvas.set("soi_live_preview", on)
+		# Reveal is deferred to the first RENDERED frame (_on_first_preview_frame)
+		# — flipping soi_live_preview now would punch the SoI hole over a
+		# SubViewport that stays UPDATE_DISABLED through the soft-boot window,
+		# which was the black-flash on every Site/Elevation entry.
+		if not on:
+			_canvas.set("soi_live_preview", false)
 		_canvas.queue_redraw()
 	preview_active_changed.emit(on)
+
+
+func _apply_prop_tuning_deferred() -> void:
+	var pmain := get_tree().current_scene if get_tree() != null else null
+	if pmain != null and is_instance_valid(pmain):
+		PropRenderTuning.apply_to_all(pmain)
 
 
 func teardown() -> void:
@@ -306,6 +365,10 @@ func is_phys_orbited() -> bool:
 ## Hydro Lab embed still projects (container fills the Lab preview stack).
 func is_projection_authority() -> bool:
 	if not active or _camera == null or not is_instance_valid(_camera):
+		return false
+	# Until the first frame has rendered, chips keep the proven flat-disc math —
+	# the camera's default top-down pose matches it, so the handover is seamless.
+	if _first_frame_pending:
 		return false
 	if _viewport == null or _viewport.size.x <= 1 or _viewport.size.y <= 1:
 		return false
@@ -533,6 +596,7 @@ func set_top_down(on: bool) -> void:
 		_section_mode = false
 		_clear_section_cutaway()
 	_apply_preview_shell_visuals()
+	_sync_moon_boost()
 	_apply_viewport_msaa()
 	if _camera != null:
 		_camera.projection = Camera3D.PROJECTION_ORTHOGONAL if (on or _section_mode) \
@@ -589,7 +653,9 @@ func _apply_hydroturbine_section_clip(on: bool) -> void:
 		if not (child is PlacedProp):
 			continue
 		var prop := child as PlacedProp
-		if str(prop.model_id) != "hydroturbine":
+		# Every hydro turbine model midplane-slices with the Elevation / Hydro
+		# Lab cut, not just the original siphon one.
+		if not ModelCatalog.is_hydro_turbine(str(prop.model_id)):
 			continue
 		if on:
 			SoiSectionMeshClip.apply_to_node(prop)
@@ -625,6 +691,31 @@ func _request_viewport_refresh() -> void:
 		return
 	# Dirty-driven: one frame now; _process re-arms on orbit/layout/time scrub.
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	# First real capture just got scheduled — reveal the disc only once this
+	# frame has actually drawn (see _first_frame_pending).
+	if _first_frame_pending and not _first_frame_hooked:
+		_first_frame_hooked = true
+		RenderingServer.frame_post_draw.connect(_on_first_preview_frame, CONNECT_ONE_SHOT)
+
+
+## Runs on frame_post_draw of the first scheduled capture: the SubViewport's
+## image now exists, so terrain visibility (soi_live_preview → the SoI hole)
+## and camera projection authority flip in the SAME frame — no black disc, no
+## chips jumping to a camera pose that has no picture yet.
+func _on_first_preview_frame() -> void:
+	_first_frame_hooked = false
+	if not active or not _first_frame_pending:
+		return
+	if _soft_boot_frames > 0:
+		# Stale hook from a rapid deactivate/reactivate — the real first capture
+		# hasn't been scheduled yet; leave pending set so it re-hooks then.
+		return
+	_first_frame_pending = false
+	if _canvas != null and is_instance_valid(_canvas):
+		_canvas.set("soi_live_preview", true)
+		if _canvas.has_method("begin_soi_reveal"):
+			_canvas.call("begin_soi_reveal")
+		_canvas.queue_redraw()
 
 
 ## Public one-shot re-capture. Callers that mutate the shared World3D directly (e.g.
@@ -652,15 +743,36 @@ func _apply_preview_shell_visuals() -> void:
 	var soi := _soi()
 	if soi == null:
 		return
-	# Top-down: hide the whole subsurface mesh (glass from above = black disc).
-	# Elevation section: keep soil bowl, kill glass — Fresnel on the dome from
-	# the side paints the concentric "bullseye" over the sky.
+	# Top-down Site Plan: keep the SOIL BOWL so an orbited/tilted view shows a
+	# solid tan underside instead of a hollow rim, but not the glass dome
+	# (glass from above = black disc) and not the water-cycle-diagram cutaway
+	# (veins/aquifer belong to Elevation/Snowglobe) — plain_soil paints it the
+	# flat ground tan instead.
+	# Elevation section: soil bowl + diagram, kill glass — Fresnel on the dome
+	# from the side paints the concentric "bullseye" over the sky.
 	# Freeform orbit: full glass snowglobe.
 	if soi.has_method("set_graph_preview_shell_visible"):
-		soi.call("set_graph_preview_shell_visible", not _top_down)
+		soi.call("set_graph_preview_shell_visible", true)
 	if soi.has_method("set_graph_preview_glass_enabled"):
 		soi.call("set_graph_preview_glass_enabled", not _top_down and not _section_mode)
+	if soi.has_method("set_graph_preview_plain_soil"):
+		soi.call("set_graph_preview_plain_soil", _top_down)
 	_apply_viewport_background()
+
+
+## Push/restore the moon boost while the top-down plan is live. Idempotent and
+## restore-on-every-exit-path (set_active(false), leaving top-down): the boost
+## lives on Main because _update_moon owns the light.
+func _sync_moon_boost() -> void:
+	var want := active and _top_down
+	if want == _moon_boost_applied:
+		return
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null or main.get("moon_light_boost") == null:
+		return
+	main.set("moon_light_boost", MOON_BOOST if want else 1.0)
+	_moon_boost_applied = want
 
 
 func _apply_viewport_background() -> void:
@@ -670,6 +782,8 @@ func _apply_viewport_background() -> void:
 	# Plan, wrong for Elevation where the upper disc is empty air.
 	_viewport.transparent_bg = not _section_mode
 	_bind_world()
+	# Mode changed — re-resolve which per-camera environment applies.
+	_apply_section_environment()
 
 
 func _apply_top_down_visuals() -> void:
@@ -815,6 +929,24 @@ func _apply_section_environment() -> void:
 		return
 	if not _section_mode:
 		_section_env = null
+		if _top_down:
+			# Site Plan night floor: a shadowless COLOR ambient lifts the whole
+			# disc to readable at night while staying dimmer than day, and the
+			# boosted moon (see _sync_moon_boost) keeps casting real shadows on
+			# top of it — so night reads as night, with moonshadows. Per-camera
+			# only; the shared world's environment is never touched.
+			if _topdown_env == null:
+				_topdown_env = src_env.duplicate(true) as Environment
+				var env := _topdown_env
+				env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+				env.ambient_light_color = TOPDOWN_AMBIENT_COLOR
+				env.ambient_light_energy = TOPDOWN_AMBIENT_ENERGY
+				# Volumetric fog in a 60 m ortho render is pure cost; plain fog
+				# stays so weather/hazards still read on the plan.
+				env.volumetric_fog_enabled = false
+			_camera.environment = _topdown_env
+			return
+		_topdown_env = null
 		_camera.environment = src_env
 		return
 	if _section_env == null:
@@ -989,10 +1121,12 @@ func _sync_layout() -> void:
 	var origin: Vector2 = disc.get("origin", Vector2.ZERO)
 	var r_px: float = maxf(float(disc.get("radius_px", 0.0)), 1.0)
 	var place_d := r_px * 2.0
-	_top_down_cropped = false
 	# Site Plan AND Elevation section: never grow SubViewportContainer to
 	# hundreds of thousands of pixels at high 2D zoom (GPU/compositor stall).
-	var want_crop := (_top_down or _section_mode) and place_d > MAX_DISC_CONTAINER_PX
+	# _want_crop reads _top_down_cropped for its hysteresis, so decide BEFORE
+	# the reset below.
+	var want_crop := _want_crop(place_d)
+	_top_down_cropped = false
 	if want_crop:
 		_top_down_cropped = true
 		var csz := _canvas.size
@@ -1043,6 +1177,42 @@ func _sync_layout() -> void:
 		str(_top_down), str(_section_mode), _section_heading,
 		_section_offset_m, _section_zoom, canvas_zoom, elev_along, elev_elev,
 	]
+
+
+## Crop decision with one-directional hysteresis: crossing UP happens at the
+## container cap, crossing back DOWN only below 90% of it. Right at the
+## boundary the old exact test flip-flopped every wheel notch — each flip
+## re-allocating the viewport, swapping the mask mode, and reframing the
+## camera, which is most of what read as "the zoom jumps".
+func _want_crop(place_d: float) -> bool:
+	if not (_top_down or _section_mode):
+		return false
+	if _top_down_cropped:
+		return place_d > MAX_DISC_CONTAINER_PX * 0.9
+	return place_d > MAX_DISC_CONTAINER_PX
+
+
+## Same-frame camera-pose sync for one wheel notch — deliberately WITHOUT
+## _sync_layout (re-cropping the SubViewport per notch was the deep-zoom
+## stutter; the camera framing is pure math). The canvas calls this from
+## _zoom_at while the preview camera is projection authority, so chips never
+## draw a frame against a stale pose and then snap. If the notch crosses the
+## crop threshold, the ONE full re-crop happens now instead, so the mode
+## switch lands in the same frame as the 2D zoom.
+func sync_camera_now() -> void:
+	if not active:
+		return
+	if _embed_host != null and is_instance_valid(_embed_host):
+		return
+	var disc := _read_disc()
+	var place_d := maxf(float(disc.get("radius_px", 0.0)), 1.0) * 2.0
+	if _want_crop(place_d) != _top_down_cropped:
+		force_layout_sync()
+		return
+	_camera_dirty = true
+	_update_camera()
+	_camera_dirty = false
+	_request_viewport_refresh()
 
 
 ## Section / cropped previews skip MSAA — fill-rate savings at high zoom.
@@ -1168,13 +1338,13 @@ func _update_section_camera(center: Vector3, r: float) -> void:
 	var used_anchors := false
 	var lab_frame := _embed_host != null and is_instance_valid(_embed_host) \
 			and not is_nan(_lab_along_m) and not is_nan(_lab_elev_m) \
-			and not is_nan(_lab_ortho_h_m) and _lab_ortho_h_m > 0.5
+			and not is_nan(_lab_ortho_h_m) and _lab_ortho_h_m >= LAB_MIN_ORTHO_H_M
 	if lab_frame:
 		look = Vector3(
 			center.x + along.x * _lab_along_m + cross.x * _section_offset_m,
 			_lab_elev_m,
 			center.z + along.z * _lab_along_m + cross.z * _section_offset_m)
-		ortho_h = maxf(_lab_ortho_h_m, 2.0)
+		ortho_h = maxf(_lab_ortho_h_m, LAB_MIN_ORTHO_H_M)
 		used_anchors = true
 	elif _canvas != null and is_instance_valid(_canvas) \
 			and _canvas.has_method("get_elev_anchor_along_m") \
@@ -1198,12 +1368,12 @@ func _update_section_camera(center: Vector3, r: float) -> void:
 		ortho_h = maxf(cont_h / maxf(s, 0.0001), 2.0)
 		used_anchors = true
 	elif not is_nan(_lab_along_m) and not is_nan(_lab_elev_m) \
-			and not is_nan(_lab_ortho_h_m) and _lab_ortho_h_m > 0.5:
+			and not is_nan(_lab_ortho_h_m) and _lab_ortho_h_m >= LAB_MIN_ORTHO_H_M:
 		look = Vector3(
 			center.x + along.x * _lab_along_m + cross.x * _section_offset_m,
 			_lab_elev_m,
 			center.z + along.z * _lab_along_m + cross.z * _section_offset_m)
-		ortho_h = maxf(_lab_ortho_h_m, 2.0)
+		ortho_h = maxf(_lab_ortho_h_m, LAB_MIN_ORTHO_H_M)
 	elif _top_down_cropped and _canvas != null and is_instance_valid(_canvas) \
 			and not used_anchors:
 		# Legacy Site-Plan-style crop framing (no elev anchors).

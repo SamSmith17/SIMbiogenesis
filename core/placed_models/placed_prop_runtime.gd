@@ -176,6 +176,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_pp_beam_extruder(prop, rec)
 		_maybe_attach_pp_sheet_press(prop, rec)
 		_maybe_attach_linkage_deploy(prop, rec)
+		_maybe_attach_stream_intake_flow(prop, rec)
 	prop.set_burnable(bool(rec.get("burnable", false)))
 	var prop_id := str(rec.get("id", ""))
 	# Spawn ConnectionPort markers so ConduitManager can snap conduits to tagged plugs.
@@ -414,20 +415,41 @@ static func _maybe_attach_wind_spin(prop: PlacedProp, rec: Dictionary) -> void:
 	prop.add_child(spin)
 
 
-## Attach propeller spin for a placed siphon hydroturbine.
+## Attach runner spin for a placed hydro turbine (siphon hydroturbine,
+## PowerSpout PLT, …).
+## Water arriving at a placed stream/spring intake. Without it a dry spring and
+## one in full spate are indistinguishable in the world, even though the whole
+## penstock loop downstream is driven by the difference.
+static func _maybe_attach_stream_intake_flow(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("model_id", "")) != StreamIntakeBuilder.MODEL_ID:
+		return
+	if prop.get_node_or_null("StreamIntakeFlow") != null:
+		return
+	var flow := StreamIntakeFlow.new()
+	flow.name = "StreamIntakeFlow"
+	flow.configure(str(rec.get("graph_item_id", "")))
+	prop.add_child(flow)
+
+
 static func _maybe_attach_siphon_spin(prop: PlacedProp, rec: Dictionary) -> void:
 	var kind := str(rec.get("kind", ""))
 	var model_id := str(rec.get("model_id", ""))
 	if kind != "siphon_hydro" and kind != "siphon_hoverboard" \
-			and model_id != "hydroturbine":
+			and not ModelCatalog.is_hydro_turbine(model_id):
 		return
 	if prop.get_node_or_null("SiphonTurbineSpin") != null:
 		return
 	var spin := SiphonTurbineSpin.new()
 	spin.name = "SiphonTurbineSpin"
-	spin.configure(str(rec.get("graph_item_id", "")),
-			str(rec.get("turbine_node",
-				ModelCatalog.find("hydroturbine").get("turbine_node", ""))))
+	# Runner node + axis come from THIS model's catalog entry. The record's
+	# stamped `turbine_node` wins (a model swap patches it), but the fallback
+	# must key off model_id — reading the hydroturbine entry unconditionally
+	# handed every other hydro model an empty node name.
+	var node_name := str(rec.get("turbine_node", ""))
+	if node_name.is_empty():
+		node_name = ModelCatalog.turbine_node_for(model_id)
+	spin.configure(str(rec.get("graph_item_id", "")), node_name,
+			str(rec.get("spin_axis", ModelCatalog.spin_axis_for(model_id))))
 	prop.add_child(spin)
 
 

@@ -1031,7 +1031,28 @@ func _run_load_sequence() -> void:
 		mly.request_photo_index(_lat, _lon, _osm_half_extent, "site")
 	load_completed = true
 	_ensure_leaf_fall()
+	_resolve_graph_site_elevations()
 	map_load_complete.emit()
+
+
+## Resolve every placed graph item's `elevation_m` now that the terrain exists.
+##
+## Item elevations used to be recomputed ONLY on entry to Site / Elevation / the
+## Hydro Lab, so a freshly loaded map ran with whatever the save carried — and an
+## UNBOUND item (a culvert outlet sink has no prop) whose saved elevation was 0
+## anchored its conduit at world Y ≈ 0 while the machine sat 80 m below. The
+## culvert therefore shot several hundred feet into the sky at an angle until the
+## player happened to open the graph, which is exactly what "it fixes itself after
+## I press G" was describing.
+##
+## Deferred so the placed props are all in the tree first (prop-bound items
+## resolve against their real connection ports), and it re-syncs the conduits
+## afterwards so anything already built at the wrong height is re-routed.
+func _resolve_graph_site_elevations() -> void:
+	var sgv := _find_system_graph_view()
+	if sgv == null or not sgv.has_method("_refresh_item_elevations"):
+		return
+	sgv.call_deferred("resolve_site_elevations_after_load")
 
 
 func _fetch_detail_dem_phase(es: Node) -> void:

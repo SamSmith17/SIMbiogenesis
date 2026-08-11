@@ -112,6 +112,12 @@ var _ambient_ghi_wm2: float = 0.0
 var _ambient_cloud_frac: float = 0.0
 var _ambient_atmo: Dictionary = {}
 
+## Cached seasonal supply curve for a stream intake (12 × L/s), keyed on the
+## intake's AUTHORED params. Feeds the annual-energy estimate only; the live tick
+## uses the instantaneous supply.
+var _supply_profile: PackedFloat32Array = PackedFloat32Array()
+var _supply_profile_sig: String = ""
+
 ## conn_id -> {rate, active} cached for wire animation
 var _conn_flow: Dictionary = {}
 
@@ -1010,6 +1016,19 @@ func _apply_lab_sim_inflow_realtime(wall_dt_s: float) -> void:
 		var sim_lps := maxf(float(specs.get("lab_sim_inflow_lps", 0.0)), 0.0)
 		if sim_lps <= 1e-9:
 			continue
+		# STREAM tap: there is no pond to fill, so the test flow is the supply
+		# itself and the answer is instantaneous. Re-evaluating here is what makes
+		# dragging the Lab's test L/s move the power NOW rather than only once the
+		# clock is unfrozen — the Lab holds the clock at noon, so without this the
+		# knob looks completely inert, which is exactly how it was reported.
+		if not _stream_intake_for(item).is_empty():
+			var dt_h_stream := (wall_dt_s * LAB_PAUSE_FILL_SCALE) / 3600.0
+			_resolve_penstock_supply_lps(item, specs, dt_h_stream)
+			_adopt_penstock_conn(item, specs)
+			var sink_rates := {}
+			_process_spec_driven_hydro(item, specs, str(item.get("id", "")),
+					sink_rates, dt_h_stream)
+			continue
 		var tank := _resolve_siphon_inlet_tank(item)
 		if tank.is_empty():
 			continue
@@ -1103,6 +1122,38 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 			continue
 		var proc_id := str(item.get("id", ""))
 		var tank := _resolve_siphon_inlet_tank(item)
+		var kind_meta := HydroSource.kind_meta(str(specs.get("turbine_kind", "siphon")))
+		# A ROUTED penstock is the authority for its own geometry regardless of
+		# what feeds it — adopt run length / bore / inverts BEFORE deciding how
+		# this turbine is driven, so a stream-intake source (which has no water
+		# LEVEL, only an elevation) still gets a real gross head.
+		var specs_dirty := _adopt_penstock_conn(item, specs)
+		# Available water at a tapped stream/spring, resolved AFTER the head is
+		# adopted and BEFORE the pond decision — the spec-driven branch below needs
+		# it, and so does HydroReach when the source has no level to draw down.
+		# NAN (no stream intake) leaves the legacy design-flow behaviour alone.
+		if not is_nan(_resolve_penstock_supply_lps(item, specs, dt_hours)):
+			specs_dirty = true
+		# A "tank" with no resolvable water level is a source, not a reservoir
+		# (a stream intake) — it cannot drive the pond drawdown path.
+		var pond_level := _pond_level_of(tank)
+		var has_pond := not tank.is_empty() and not is_nan(pond_level)
+		# Streaming kinds (pond_drawdown false — run-of-river) never drain
+		# storage, and a PENSTOCK-kind turbine with no pond runs SPEC-DRIVEN:
+		# the legacy type=="hydro" estimator physics, unified here in Phase B so
+		# migrated estimator nodes keep producing. Neither moves any water.
+		# NOTE the penstock case is unconditional (no gross-head gate): a
+		# turbine whose intake sits BELOW it must still take this branch so its
+		# telemetry is honestly ZEROED — the old gate sent it to the reach path,
+		# which bailed on the levelless intake without touching live_q_lps, and
+		# the stale flow kept the tailwater jet running forever.
+		var spec_driven := not bool(kind_meta.get("pond_drawdown", true)) \
+				or (not has_pond and bool(kind_meta.get("has_penstock", false)))
+		if spec_driven:
+			_process_spec_driven_hydro(item, specs, proc_id, net_rates, dt_hours)
+			continue
+		if specs_dirty and not tank.is_empty():
+			_model.update_item(proc_id, {"specs": specs})
 		if tank.is_empty():
 			var was_q := float(specs.get("live_q_lps", 0.0))
 			var was_kw := float(specs.get("current_output_kw", 0.0))
@@ -1151,6 +1202,18 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 				level_m = floor_y + clampf(float(tank_specs.get("level", 0.0)), 0.0, 1.0) \
 						* maxf(rim - floor_y, 0.05)
 		if is_nan(level_m):
+			# The "tank" carries no water level (a levelless source wired to a
+			# siphon). Zero the telemetry before skipping — a bare `continue`
+			# left the last forward frame's live_q_lps frozen, which kept the
+			# tailwater jet (and every readout) running forever.
+			if float(specs.get("live_q_lps", 0.0)) > 1e-6 \
+					or float(specs.get("current_output_kw", 0.0)) > 1e-9:
+				specs["live_q_lps"] = 0.0
+				specs["current_output_kw"] = 0.0
+				specs["live_power_w"] = 0.0
+				specs["live_rpm"] = 0.0
+				specs["siphon_primed"] = false
+				_model.update_item(proc_id, {"specs": specs})
 			continue
 		var orig := (item.get("specs", {}) as Dictionary).duplicate(true)
 		_ensure_siphon_inverts(item, specs, tank)
@@ -1212,26 +1275,8 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 			new_state = GraphNodeState.RUNNING
 			var src_id := str(tank.get("id", ""))
 			net_rates[src_id] = float(net_rates.get(src_id, 0.0)) - drained_lph
-			var down := _resolve_siphon_outlet_tank(item)
-			if not down.is_empty():
-				var tid := str(down.get("id", ""))
-				if tid != src_id:
-					net_rates[tid] = float(net_rates.get(tid, 0.0)) + drained_lph
-					var ds: Dictionary = (down.get("specs", {}) as Dictionary).duplicate(true)
-					if bool(ds.get("outlet_sink", false)) or bool(ds.get("unlimited_capacity", false)):
-						var prev_cum := float(ds.get("cumulative_l", 0.0))
-						var next_cum := prev_cum + drained_lph * maxf(dt_hours, 0.0)
-						var next_lps := drained_lph / 3600.0
-						# Sink cumulative — write every lab/minute step (was 0.5 L
-						# gate which hid short Lab ticks).
-						if next_cum - prev_cum > 1e-4 \
-								or absf(next_lps - float(ds.get("live_in_lps", 0.0))) > 1e-6:
-							ds["cumulative_l"] = next_cum
-							ds["live_in_lps"] = next_lps
-							# Mirror stock so freeform card isn't stuck at 0.00 L.
-							ds["level"] = 0.0
-							ds["stock_l"] = next_cum
-							_model.update_item(tid, {"specs": ds})
+			_credit_outlet_sink(_resolve_siphon_outlet_tank(item), net_rates,
+					drained_lph, dt_hours, src_id)
 			_stamp_siphon_outlet_culvert_flow(proc_id, drained_lph, q_lps)
 		else:
 			_stamp_siphon_outlet_culvert_flow(proc_id, 0.0, 0.0)
@@ -1260,6 +1305,187 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 			_model.update_item(proc_id, elev_patch)
 
 
+## Deliver `lph` litres/hour of tailwater into a turbine's downstream sink: the
+## net_rates credit plus the sink's own cumulative/live readouts. Shared by the
+## pond drawdown path and the tapped-stream path so the two can never book the
+## same water differently. `skip_id` guards the degenerate self-wire.
+func _credit_outlet_sink(down: Dictionary, net_rates: Dictionary, lph: float,
+		dt_hours: float, skip_id: String = "") -> void:
+	if down.is_empty() or lph <= 1e-9:
+		return
+	var tid := str(down.get("id", ""))
+	if tid.is_empty() or tid == skip_id:
+		return
+	net_rates[tid] = float(net_rates.get(tid, 0.0)) + lph
+	var ds: Dictionary = (down.get("specs", {}) as Dictionary).duplicate(true)
+	if not (bool(ds.get("outlet_sink", false))
+			or bool(ds.get("unlimited_capacity", false))):
+		return
+	var prev_cum := float(ds.get("cumulative_l", 0.0))
+	var next_cum := prev_cum + lph * maxf(dt_hours, 0.0)
+	var next_lps := lph / 3600.0
+	# Sink cumulative — write every lab/minute step (was a 0.5 L gate which hid
+	# short Lab ticks).
+	if next_cum - prev_cum > 1e-4 \
+			or absf(next_lps - float(ds.get("live_in_lps", 0.0))) > 1e-6:
+		ds["cumulative_l"] = next_cum
+		ds["live_in_lps"] = next_lps
+		# Mirror stock so the freeform card isn't stuck at 0.00 L.
+		ds["level"] = 0.0
+		ds["stock_l"] = next_cum
+		_model.update_item(tid, {"specs": ds})
+
+
+## Spec-driven ("estimator") hydro output: power from the authored gross_head_m
+## / design_flow_lps via the SAME physics the legacy type=="hydro" estimator ran
+## in _tick_graph_renewables before Phase B unified turbines onto this processor
+## (HydroSource.power_kw_from_graph_specs — Darcy–Weisbach penstock losses +
+## per-kind efficiency + monthly flow multipliers), so migrated saves keep their
+## numbers. Computed here so it runs ambient AND inside prebaked challenge bakes
+## (_sim_month respects the render context).
+##
+## WATER: run-of-river STREAMS THE RIVER THROUGH — it neither consumes an upstream
+## stock nor delivers metered water downstream, because the river is not a resource
+## the graph owns and crediting a sink from it would conjure water out of the
+## landscape. A TAPPED supply through a penstock is the opposite: the intake
+## diverts a measured Q, the turbine passes it, and the tailrace really does
+## deliver it. The distinction is the kind's `pond_drawdown` flag. (An intake
+## marked `unlimited_capacity` — every stream intake — is never debited: a spring
+## is not a stock the player can empty.)
+func _process_spec_driven_hydro(item: Dictionary, specs: Dictionary,
+		proc_id: String, net_rates: Dictionary = {},
+		dt_hours: float = 0.0) -> void:
+	var orig: Dictionary = item.get("specs", {}) as Dictionary
+	var month := _sim_month()
+	var wx_mults := _monthly_precip_multipliers()
+	var kw := 0.0
+	var q_lps := 0.0
+	# Packed 3D twin: a crated turbine generates nothing (same gate the old
+	# estimator tick applied).
+	if not bool(specs.get("packed_3d", false)):
+		kw = HydroSource.power_kw_from_graph_specs(specs, month, wx_mults)
+		# The OPERATING flow, not the design-flow knob: a PowerSpout's flow
+		# comes from its nozzle at the current head (design_flow is 0), and a
+		# turbine producing nothing flows nothing — live_q_lps drives the
+		# tailwater jet, so a phantom flow here is a phantom waterfall.
+		q_lps = HydroSource.operating_flow_lps_from_graph_specs(specs, month, wx_mults)
+	if kw <= 1e-9:
+		q_lps = 0.0
+	var head_m := maxf(float(specs.get("gross_head_m", 0.0)), 0.0)
+	specs["siphon_primed"] = kw > 1e-6
+	specs["live_q_lps"] = q_lps
+	specs["live_head_m"] = head_m
+	# PE at gross head (loss-free potential); electrical is the physics number.
+	specs["live_pe_w"] = 1000.0 * 9.80665 * (q_lps / 1000.0) * head_m
+	specs["live_power_w"] = kw * 1000.0
+	specs["current_output_kw"] = kw
+	specs["live_rpm"] = SiphonHydraulics.omega_from_pe_w(
+			float(specs.get("live_pe_w", 0.0))) * 60.0 / TAU if kw > 1e-6 else 0.0
+	specs["live_regime"] = "spec"
+	# A tapped penstock supply really moves water; a run-of-river does not.
+	var kind_meta := HydroSource.kind_meta(
+			str(specs.get("turbine_kind", specs.get("kind", "pelton"))))
+	var moves_water := bool(kind_meta.get("pond_drawdown", true))
+	var water_lph := q_lps * 3600.0 if moves_water else 0.0
+	var inputs: Array = specs.get("inputs", []) as Array
+	if not inputs.is_empty() and inputs[0] is Dictionary:
+		(inputs[0] as Dictionary)["rate"] = water_lph
+	specs["inputs"] = inputs
+	var outputs: Array = specs.get("outputs", []) as Array
+	for oi in outputs.size():
+		if not (outputs[oi] is Dictionary):
+			continue
+		var od: Dictionary = outputs[oi]
+		if str(od.get("kind", "")) == "water":
+			od["rate"] = water_lph
+		elif str(od.get("kind", "")) == "dc_electricity":
+			od["rate"] = kw
+	specs["outputs"] = outputs
+	if water_lph > 1e-6:
+		# Debit the source only when it is a finite stock. A stream intake carries
+		# unlimited_capacity, so a spring is never drained — which also keeps the
+		# ambient conservation assertions honest.
+		var intake := _stream_intake_for(item)
+		if not intake.is_empty():
+			var isp: Dictionary = intake.get("specs", {}) as Dictionary
+			if not bool(isp.get("unlimited_capacity", false)):
+				var iid := str(intake.get("id", ""))
+				net_rates[iid] = float(net_rates.get(iid, 0.0)) - water_lph
+		_credit_outlet_sink(_resolve_siphon_outlet_tank(item), net_rates,
+				water_lph, dt_hours, str(intake.get("id", "")))
+		# Glow the outlet culvert AND the penstock itself. Without the second one
+		# the pipe the player just routed never animates, which reads as "the water
+		# isn't flowing" even when the turbine is producing.
+		_stamp_siphon_outlet_culvert_flow(proc_id, water_lph, q_lps)
+		var pconn := _penstock_conn_for(proc_id)
+		if not pconn.is_empty():
+			_cache_conn_flow(str(pconn.get("id", "")), water_lph, "water")
+	elif moves_water:
+		_stamp_siphon_outlet_culvert_flow(proc_id, 0.0, 0.0)
+	if kw > 1e-6:
+		_write_node_state(proc_id, specs, GraphNodeState.RUNNING)
+	elif head_m <= 0.01 and not _penstock_conn_for(proc_id).is_empty():
+		# A penstock IS routed but it doesn't climb — say the real problem.
+		_write_node_state(proc_id, specs, GraphNodeState.IDLE,
+				"Water source must be ABOVE the turbine — no head")
+	else:
+		_write_node_state(proc_id, specs, GraphNodeState.IDLE,
+				"Set Gross head + Design flow (or bind a pond)")
+	const EPS := 0.002
+	var changed := str(specs.get("node_state", "")) != str(orig.get("node_state", "")) \
+			or absf(float(specs.get("current_output_kw", 0.0)) - float(orig.get("current_output_kw", 0.0))) > 1e-5 \
+			or absf(float(specs.get("live_q_lps", 0.0)) - float(orig.get("live_q_lps", 0.0))) > EPS \
+			or absf(float(specs.get("live_head_m", 0.0)) - float(orig.get("live_head_m", 0.0))) > EPS
+	if changed:
+		_model.update_item(proc_id, {"specs": specs})
+
+
+## Mean rainfall rate (mm/h) per calendar month at the sim location, or [] when
+## WeatherService has nothing for this site. Derived from the year's precipitation
+## TOTALS divided by the hours in each month — the input HydroSupply needs to turn
+## a rain coefficient into a seasonal supply curve.
+func _monthly_rain_mmh() -> Array:
+	if _host == null or not _host.has_method("_get_scene_main_node"):
+		return []
+	var main_node: Node = _host.call("_get_scene_main_node")
+	var ws: Node = _host.get_node_or_null("/root/WeatherService")
+	if ws == null or main_node == null or not ws.has_method("monthly_precip_mm"):
+		return []
+	if ws.has_method("covers"):
+		var lat: Variant = main_node.get("latitude")
+		var lon: Variant = main_node.get("longitude")
+		if lat == null or lon == null \
+				or not bool(ws.call("covers", float(lat), float(lon))):
+			return []
+	var mm: Array = ws.call("monthly_precip_mm") as Array
+	if mm.size() != 12:
+		return []
+	const DAYS := [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+	var out: Array = []
+	out.resize(12)
+	for m in 12:
+		out[m] = maxf(float(mm[m]), 0.0) / (float(DAYS[m]) * 24.0)
+	return out
+
+
+## Precipitation-derived monthly flow multipliers from WeatherService when it
+## covers the sim location (same sourcing the old estimator tick used); [] keeps
+## HydroSource on its built-in default profile.
+func _monthly_precip_multipliers() -> Array:
+	if _host == null or not _host.has_method("_get_scene_main_node"):
+		return []
+	var main_node: Node = _host.call("_get_scene_main_node")
+	var ws: Node = _host.get_node_or_null("/root/WeatherService")
+	if ws == null or main_node == null or not ws.has_method("covers"):
+		return []
+	var lat: Variant = main_node.get("latitude")
+	var lon: Variant = main_node.get("longitude")
+	if lat == null or lon == null \
+			or not bool(ws.call("covers", float(lat), float(lon))):
+		return []
+	return ws.call("monthly_precip_multipliers") as Array
+
+
 ## Re-derive siphon live telemetry (prime / RPM / power / regime) + culvert flow
 ## glow from the CURRENT restored pond levels, WITHOUT moving any water. Called on
 ## a backward scrub: the tanks are rewound by _read_all_tanks_at, but the live_*
@@ -1274,7 +1500,24 @@ func _refresh_hydro_telemetry_readonly() -> void:
 	for item: Dictionary in _model.items_of_type("processor"):
 		if str((item.get("specs", {}) as Dictionary).get("role", "")) != "siphon_hydro":
 			continue
+		# Streaming kinds (pond_drawdown false) run spec-driven — no pond level
+		# to rewind, telemetry is a function of the calendar month only.
+		var i_specs: Dictionary = item.get("specs", {}) as Dictionary
+		if not bool(HydroSource.kind_meta(
+				str(i_specs.get("turbine_kind", "siphon"))).get("pond_drawdown", true)):
+			continue
 		var proc_id := str(item.get("id", ""))
+		# STREAM tap: no pond level to rewind. Supply is re-derived from the
+		# intake's base flow + the rain at the scrubbed instant — deliberately
+		# UN-LAGGED, since a recession is path-dependent and cannot be reproduced
+		# by evaluating a single instant. Documented in the intake's inspector.
+		if not _stream_intake_for(item).is_empty():
+			var s_specs := (item.get("specs", {}) as Dictionary).duplicate(true)
+			_adopt_penstock_conn(item, s_specs)
+			_resolve_penstock_supply_lps(item, s_specs, 0.0)
+			var no_rates := {}
+			_process_spec_driven_hydro(item, s_specs, proc_id, no_rates, 0.0)
+			continue
 		var tank := _resolve_siphon_inlet_tank(item)
 		if tank.is_empty():
 			continue
@@ -1455,6 +1698,7 @@ func _ensure_siphon_inverts(item: Dictionary, specs: Dictionary, tank: Dictionar
 			specs["siphon_start_offset_m"] = start_m - mod_e
 			specs["intake_crown_m"] = start_m
 	var inv := break_m if not is_nan(break_m) else mod_e
+	_adopt_penstock_conn(item, specs)
 	var out_inv := float(specs.get("outlet_invert_m", NAN))
 	if is_nan(out_inv):
 		# Prefer outbound culvert_pipe invert_out, else sink elevation, else drop.
@@ -1473,7 +1717,15 @@ func _ensure_siphon_inverts(item: Dictionary, specs: Dictionary, tank: Dictionar
 				out_inv = float(tgt.get("elevation_m", 0.0))
 				break
 		if is_nan(out_inv):
-			out_inv = inv - 9.0
+			# Terrain at the turbine's own site is the honest tailwater level;
+			# the old fixed `inv - 9.0` (~30 ft) drop invented head the site may
+			# not have. Kept only as the last resort where no terrain exists
+			# below the intake (flat / no-DEM built-in scenes).
+			var g := _ground_elev_at_item(item)
+			if not is_nan(g) and g < inv - 0.05:
+				out_inv = g
+			else:
+				out_inv = inv - 9.0
 		specs["outlet_invert_m"] = out_inv
 	# Sync barrel length from site XY when both ends placed.
 	if GraphSiteLayout.has_site_coords(item):
@@ -1484,6 +1736,221 @@ func _ensure_siphon_inverts(item: Dictionary, specs: Dictionary, tank: Dictionar
 			var L := a.distance_to(b)
 			if L > 1.0:
 				specs["barrel_length_m"] = L
+
+
+## A routed poly penstock (contour conduit) is the AUTHORITY for its turbine's
+## geometry: the measured ground-following run replaces the typed estimate, the
+## styled pipe size drives the hydraulic bore, the turbine-end elevation is the
+## outlet invert, and — when the far end is a plain SOURCE rather than a pond
+## with a water level (a stream intake) — the invert drop IS the gross head.
+## That last part is what lets "drop the pipe on the hillside" produce power:
+## there is no reservoir level to read, only two measured elevations.
+## Returns true when it changed anything.
+func _adopt_penstock_conn(item: Dictionary, specs: Dictionary) -> bool:
+	if not bool(HydroSource.kind_meta(
+			str(specs.get("turbine_kind", "siphon"))).get("has_penstock", false)):
+		return false
+	var proc_id := str(item.get("id", ""))
+	var pen_conn := _penstock_conn_for(proc_id)
+	if pen_conn.is_empty():
+		return false
+	var changed := false
+	var run_l := float(pen_conn.get("route_length_m", 0.0))
+	if run_l > 0.5 and absf(float(specs.get("penstock_length_m", 0.0)) - run_l) > 0.05:
+		specs["penstock_length_m"] = run_l
+		changed = true
+	var pen_style: Dictionary = pen_conn.get("conduit_style", {}) as Dictionary
+	var d_id := ConduitKinds.inner_diameter_for(
+			ConduitKinds.derive_type_for_connection(pen_conn), pen_style)
+	if d_id > 0.001 \
+			and absf(float(specs.get("penstock_diameter_mm", 0.0)) - d_id * 1000.0) > 0.01:
+		specs["penstock_diameter_mm"] = d_id * 1000.0
+		changed = true
+	var turbine_is_target := str(pen_conn.get("target_item_id", "")) == proc_id
+	var t_end := float(pen_conn.get(
+			"invert_out_m" if turbine_is_target else "invert_in_m", NAN))
+	var s_end := float(pen_conn.get(
+			"invert_in_m" if turbine_is_target else "invert_out_m", NAN))
+	if not is_nan(t_end):
+		# NOTE the NaN guard order: an UNSET outlet_invert_m reads back as NAN,
+		# and `absf(NAN - x) > 0.01` is FALSE — a bare change-gate here silently
+		# skipped the very first write and the turbine fell through to the
+		# fixed-drop fallback instead of using the routed elevation.
+		var prev_out := float(specs.get("outlet_invert_m", NAN))
+		if is_nan(prev_out) or absf(prev_out - t_end) > 0.01:
+			specs["outlet_invert_m"] = t_end
+			changed = true
+	# Gross head from the routed drop — only when the source end has no water
+	# level of its own (a pond keeps driving head from its surface elevation).
+	if not is_nan(t_end) and not is_nan(s_end):
+		var src_id := str(pen_conn.get(
+				"source_item_id" if turbine_is_target else "target_item_id", ""))
+		var src := _model.get_item(src_id) if not src_id.is_empty() else {}
+		var src_specs: Dictionary = src.get("specs", {}) as Dictionary
+		if not bool(src_specs.get("pond_storage", false)):
+			var drop := maxf(s_end - t_end, 0.0)
+			# Write even when the key is ABSENT and the drop is zero: this gate
+			# read the missing key as 0, matched drop 0, and skipped the write —
+			# while power_kw_from_graph_specs reads the same missing key as its
+			# 25 m default. A downhill "penstock" then generated 194 W from
+			# nonexistent head (and its phantom flow ran the tailwater jet).
+			var prev_h := float(specs.get("gross_head_m", NAN))
+			if is_nan(prev_h) or absf(prev_h - drop) > 0.01:
+				specs["gross_head_m"] = drop
+				changed = true
+	return changed
+
+
+## Pond surface elevation for an inlet tank, or NAN when the item carries no
+## water LEVEL (a stream intake is a source, not a reservoir).
+func _pond_level_of(tank: Dictionary) -> float:
+	if tank.is_empty():
+		return NAN
+	var ts: Dictionary = tank.get("specs", {}) as Dictionary
+	var level_m := float(ts.get("level_m", NAN))
+	if not is_nan(level_m):
+		return level_m
+	var rim := float(ts.get("rim_m", NAN))
+	var floor_y := float(ts.get("floor_m", NAN))
+	if is_nan(rim) or is_nan(floor_y):
+		return NAN
+	return floor_y + clampf(float(ts.get("level", 0.0)), 0.0, 1.0) \
+			* maxf(rim - floor_y, 0.05)
+
+
+## The routed contour-penstock connection attached to a turbine (either side),
+## or {} when none is routed yet.
+## True when this resource item is a tapped SOURCE (spring / creek / diverted
+## stream) rather than a reservoir. `stream_source` is the marker; the model_id
+## fallback keeps intakes minted before that key existed working.
+static func is_stream_intake(item: Dictionary) -> bool:
+	if str(item.get("type", "")) != "resource":
+		return false
+	var s: Dictionary = item.get("specs", {}) as Dictionary
+	if bool(s.get("pond_storage", false)):
+		return false
+	if bool(s.get("stream_source", false)):
+		return true
+	return str(s.get("model_id", "")) == StreamIntakeBuilder.MODEL_ID
+
+
+## The stream intake feeding this turbine, or {}.
+func _stream_intake_for(item: Dictionary) -> Dictionary:
+	var proc_id := str(item.get("id", ""))
+	# Prefer the routed penstock's far end — that IS the physical tap.
+	var conn := _penstock_conn_for(proc_id)
+	if not conn.is_empty() and _model != null:
+		var other_id := str(conn.get("source_item_id", ""))
+		if other_id == proc_id:
+			other_id = str(conn.get("target_item_id", ""))
+		var other := _model.get_item(other_id)
+		if is_stream_intake(other):
+			return other
+	var tank := _resolve_siphon_inlet_tank(item)
+	return tank if is_stream_intake(tank) else {}
+
+
+## Available supply (L/s) at the intake feeding this turbine, or NAN when there is
+## no stream intake (→ the legacy design_flow behaviour, byte-identical).
+##
+## Stamps live telemetry back onto the INTAKE item so the freeform inspector can
+## show what the spring is doing, and writes `supply_lps` +
+## `penstock_source_mode` onto the turbine's working specs so both the estimator
+## and HydroReach see the same number.
+##
+## Called BEFORE the pond decision in _process_siphon_hydro, i.e. after
+## _adopt_penstock_conn has already stamped the measured head.
+func _resolve_penstock_supply_lps(item: Dictionary, specs: Dictionary,
+		dt_hours: float) -> float:
+	var intake := _stream_intake_for(item)
+	if intake.is_empty():
+		specs.erase("supply_lps")
+		specs.erase("penstock_source_mode")
+		return NAN
+	var isp: Dictionary = (intake.get("specs", {}) as Dictionary).duplicate(true)
+	# Back-fill an intake minted before the supply model existed — otherwise it
+	# resolves to HydroSupply's defaults every tick but the inspector shows blanks.
+	var migrated := false
+	if not isp.has("base_flow_lps"):
+		isp.merge(HydroSupply.default_intake_specs())
+		isp["stream_source"] = true
+		migrated = true
+	var rain_mmh := _rain_rate_mmh()
+	# The Lab's test flow simulates what the stream is running at, BEFORE the
+	# nozzle — so it overrides base flow and rain rather than adding to them.
+	var override_on := bool(specs.get("lab_sim_inflow_enabled", false))
+	var target := maxf(float(specs.get("lab_sim_inflow_lps", 0.0)), 0.0) if override_on \
+			else HydroSupply.intake_supply_lps(isp, rain_mmh)
+	var q := target
+	if not override_on:
+		# Optional storm recession. State lives in the intake's own visible spec so
+		# it round-trips through save like everything else; a private engine field
+		# would vanish on reload and disagree with what the inspector shows.
+		var tau := maxf(float(isp.get("recession_tau_h", 0.0)), 0.0)
+		if tau > 0.0:
+			q = HydroSupply.recess(float(isp.get("live_supply_lps", NAN)), target,
+					maxf(dt_hours, 0.0), tau)
+	var prev := float(isp.get("live_supply_lps", NAN))
+	if migrated or is_nan(prev) or absf(prev - q) > 0.002 \
+			or bool(isp.get("supply_override", false)) != override_on:
+		isp["live_supply_lps"] = q
+		isp["live_rain_mmh"] = rain_mmh
+		isp["live_rain_term_lps"] = HydroSupply.rain_term_lps(isp, rain_mmh)
+		isp["supply_override"] = override_on
+		_model.update_item(str(intake.get("id", "")), {"specs": isp})
+	specs["supply_lps"] = q
+	specs["penstock_source_mode"] = "stream"
+	# Seasonal supply curve for the ANNUAL estimate. Recomputed only when the
+	# authored intake params change — it is 12 evaluations against a cached
+	# rainfall profile, not something to redo on every tick. The live path keeps
+	# using the instantaneous `supply_lps` above; this is a separate key precisely
+	# so the two cannot be confused (a monthly MEAN would be wrong for live rain).
+	var prof_sig := "%.4f|%.4f|%.2f" % [
+		float(isp.get("base_flow_lps", 0.0)),
+		float(isp.get("rain_lps_per_tenth_in_h", 0.0)),
+		float(isp.get("max_flow_lps", 0.0))]
+	if prof_sig != _supply_profile_sig:
+		_supply_profile_sig = prof_sig
+		_supply_profile = HydroSupply.monthly_supply_lps(isp, _monthly_rain_mmh())
+	if not _supply_profile.is_empty():
+		specs["supply_monthly_lps"] = _supply_profile
+	else:
+		specs.erase("supply_monthly_lps")
+	return q
+
+
+func _penstock_conn_for(proc_id: String) -> Dictionary:
+	if _model == null or proc_id.is_empty():
+		return {}
+	for conn: Dictionary in _model.connections:
+		if str(conn.get("source_item_id", "")) != proc_id \
+				and str(conn.get("target_item_id", "")) != proc_id:
+			continue
+		var tid := ConduitKinds.derive_type_for_connection(conn)
+		var rm := ConduitKinds.normalize_route_mode(
+				str((conn.get("conduit_style", {}) as Dictionary).get("route_mode",
+					ConduitKinds.type_meta(tid).get("route_mode", ""))))
+		if rm == "contour":
+			return conn
+	return {}
+
+
+## Terrain elevation at a graph item's site position (NAN when the item has no
+## site coords or no world/terrain is available — offline selftests).
+func _ground_elev_at_item(item: Dictionary) -> float:
+	if _host == null or not GraphSiteLayout.has_site_coords(item):
+		return NAN
+	if not _host.has_method("_get_scene_main_node"):
+		return NAN
+	var main_node: Node = _host.call("_get_scene_main_node")
+	if main_node == null or not main_node.is_inside_tree():
+		return NAN
+	var soi := _host.get_node_or_null("/root/SoiService")
+	if soi == null or not soi.has_method("world_center"):
+		return NAN
+	var center: Vector3 = soi.call("world_center") as Vector3
+	var wxz := GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(item), center)
+	return TerrainSurfaceQuery.ground_height_at(main_node, wxz.x, wxz.y)
 
 
 ## Free-surface culvert drains from pond tanks (stage-discharge). Debits the
@@ -1893,7 +2360,14 @@ func _apply_conduit_derate(conn: Dictionary, rate_qph: float) -> float:
 	# wires render as the conceptual-flow glow, which has no hydraulic
 	# diameter and would silently skip friction loss on every unstyled pipe).
 	var type_id: String = ConduitKinds.physical_type_for_connection(conn)
-	if not enabled or not ConduitKinds.is_fluid_type(type_id):
+	# Contour-routed penstock: HydroReach owns 100% of its friction
+	# (Darcy–Weisbach over the measured run — see _ensure_siphon_inverts), so
+	# a second Hazen-Williams derate here would double-count the pipe loss.
+	# Keep this exemption or the generic path grows back.
+	var rm := ConduitKinds.normalize_route_mode(
+			str((conn.get("conduit_style", {}) as Dictionary).get("route_mode",
+				ConduitKinds.type_meta(type_id).get("route_mode", ""))))
+	if not enabled or rm == "contour" or not ConduitKinds.is_fluid_type(type_id):
 		real["pressure_drop_psi"] = 0.0
 		real["flow_derate"] = 1.0
 		real["overload_ratio"] = 0.0

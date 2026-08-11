@@ -41,6 +41,10 @@ func _initialize() -> void:
 	_test_conduit_styles_and_routing()
 	_test_hang_edit()
 	_test_pipe_kit_meta()
+	_test_poly_penstock_kind()
+	_test_contour_router()
+	_test_contour_dispatch()
+	_test_size_driven_tube_radius()
 	if _failures == 0:
 		print("CONDUIT SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -1485,3 +1489,162 @@ func _test_pipe_kit_meta() -> void:
 		float(ConduitKinds.type_meta("abs_dwv").get("elbow_radius_frac", 1.0)), 0.0))
 	_check("pvc sharp elbow frac", is_equal_approx(
 		float(ConduitKinds.type_meta("pvc_pipe").get("elbow_radius_frac", 1.0)), 0.0))
+
+
+## Poly penstock kind + contour router (Phase C of the Hydro Lab overhaul).
+func _test_poly_penstock_kind() -> void:
+	_check("has poly_penstock", ConduitKinds.has_type("poly_penstock"))
+	var meta := ConduitKinds.type_meta("poly_penstock")
+	_check("penstock route_mode contour", str(meta.get("route_mode", "")) == "contour")
+	_check("penstock bend mult 25 (PPI 20-27x OD)",
+		is_equal_approx(float(meta.get("bend_radius_od_mult", 0.0)), 25.0))
+	_check("penstock not a pipes/culvert kind",
+		not ConduitKinds.is_pipes_type("poly_penstock")
+		and not ConduitKinds.uses_culvert_kit("poly_penstock")
+		and not ConduitKinds.uses_pipe_kit("poly_penstock"))
+	var sizes := ConduitKinds.pipe_kit_sizes_in("poly_penstock")
+	_check("penstock sizes 1/1.25/1.5/2", sizes == [1.0, 1.25, 1.5, 2.0],
+		str(sizes))
+	_check("penstock default size 1.5",
+		is_equal_approx(ConduitKinds.pipe_size_in("poly_penstock"), 1.5))
+	_check("penstock size snaps to list",
+		is_equal_approx(ConduitKinds.pipe_size_in("poly_penstock", {"pipe_size_in": 1.6}), 1.5))
+	# SDR-9 inner diameters, hand-computed: ID = OD_in * (7/9) * 25.4 mm.
+	#   1":   1.315 * 7/9 = 1.0228" = 25.98 mm
+	#   1.5": 1.900 * 7/9 = 1.4778" = 37.53 mm
+	#   2":   2.375 * 7/9 = 1.8472" = 46.92 mm
+	var id_1 := ConduitKinds.inner_diameter_for("poly_penstock", {"pipe_size_in": 1.0})
+	var id_15 := ConduitKinds.inner_diameter_for("poly_penstock", {"pipe_size_in": 1.5})
+	var id_2 := ConduitKinds.inner_diameter_for("poly_penstock", {"pipe_size_in": 2.0})
+	_check("SDR-9 ID 1in ~25.98mm", absf(id_1 * 1000.0 - 25.98) < 0.05, "%.2f" % (id_1 * 1000.0))
+	_check("SDR-9 ID 1.5in ~37.53mm", absf(id_15 * 1000.0 - 37.53) < 0.05, "%.2f" % (id_15 * 1000.0))
+	_check("SDR-9 ID 2in ~46.92mm", absf(id_2 * 1000.0 - 46.92) < 0.05, "%.2f" % (id_2 * 1000.0))
+	# Non-size kinds keep their flat inner_diameter_m (unchanged behavior).
+	_check("garden hose keeps flat ID",
+		is_equal_approx(ConduitKinds.inner_diameter_for("garden_hose"),
+			float(ConduitKinds.type_meta("garden_hose").get("inner_diameter_m", 0.0))))
+	# Min bend radius at 1.5": 25 x 1.900" OD = 25 x 0.04826 m = 1.2065 m.
+	var r_bend := ConduitKinds.contour_bend_radius_m("poly_penstock", {"pipe_size_in": 1.5})
+	_check("bend radius 1.5in ~1.21m", absf(r_bend - 1.2065) < 0.005, "%.4f" % r_bend)
+	_check("size in display name",
+		ConduitKinds.display_name_with_size("poly_penstock").contains("1"))
+
+
+## Synthetic hill for contour routing tests: smooth ridge at x=30, plus a sharp
+## V-notch gully at x=70 that a pipe with a real bend radius must bridge.
+func _contour_test_ground(pos: Vector3) -> float:
+	var ridge := 6.0 * exp(-pow((pos.x - 30.0) / 12.0, 2.0))
+	var notch := 0.0
+	var d := absf(pos.x - 70.0)
+	if d < 2.0:
+		notch = -3.0 * (1.0 - d / 2.0)
+	return ridge + notch
+
+
+func _test_contour_router() -> void:
+	var a := Vector3(0, 0.4, 0)
+	var b := Vector3(100, 0.4, 0)
+	var r1 := ContourRouter.route_polyline([a, b],
+		Callable(self, "_contour_test_ground"), 1.2)
+	_check("contour: sampled route", r1.size() >= 60, "n=%d" % r1.size())
+	var chord := a.distance_to(b)
+	var run := ContourRouter.polyline_length_m(r1)
+	_check("contour: run over a hill > chord", run > chord + 0.5,
+		"run=%.2f chord=%.2f" % [run, chord])
+	# Endpoints pinned to the ports.
+	_check("contour: start pinned", r1[0].is_equal_approx(a))
+	_check("contour: end pinned", r1[r1.size() - 1].is_equal_approx(b))
+	# Every interior sample sits on-or-above the ground (clearance respected;
+	# smoothing only ever RAISES points).
+	var below := 0
+	for i in range(3, r1.size() - 3):
+		var g := _contour_test_ground(r1[i])
+		if r1[i].y < g + ContourRouter.CLEARANCE_M - 0.001:
+			below += 1
+	_check("contour: never tunnels below ground", below == 0, "below=%d" % below)
+	# The sharp V-notch (walls steeper than a 1.2 m bend radius can follow at
+	# this sample step) is bridged: the routed pipe at the notch centre stays
+	# well above the notch floor.
+	var notch_y := INF
+	for p in r1:
+		if absf(p.x - 70.0) < 0.8:
+			notch_y = minf(notch_y, p.y)
+	_check("contour: sharp gully bridged", notch_y > -2.0, "y=%.2f" % notch_y)
+	# Determinism (preview==commit): identical inputs, identical output.
+	var r2 := ContourRouter.route_polyline([a, b],
+		Callable(self, "_contour_test_ground"), 1.2)
+	_check("contour: deterministic", r1 == r2)
+	# Player waypoint keeps its position (pin honored in the polyline).
+	var pin := Vector3(50, 1.5, 8)
+	var r3 := ContourRouter.route_polyline([a, pin, b],
+		Callable(self, "_contour_test_ground"), 1.2)
+	var pin_hit := false
+	for p in r3:
+		if p.distance_to(pin) < 0.01:
+			pin_hit = true
+			break
+	_check("contour: waypoint pinned", pin_hit)
+	# No ground callable -> straight chord samples (offline/headless fallback).
+	var r4 := ContourRouter.route_polyline([a, b], Callable(), 1.2)
+	_check("contour: no-ground fallback stays on chord",
+		absf(ContourRouter.polyline_length_m(r4) - chord) < 0.01)
+
+
+func _test_contour_dispatch() -> void:
+	# Through the SAME dispatch commit + preview use, with the ground callable:
+	# the returned control points must follow the terrain, and the derived
+	# route length is what _write_length_back will persist as route_length_m.
+	var ends := {
+		"a": Vector3(0, 0.4, 0), "b": Vector3(100, 0.4, 0),
+		"a_route": Vector3(0, 0.4, 0), "b_route": Vector3(100, 0.4, 0),
+		"seat_a": false, "seat_b": false,
+		"out_a": Vector3.ZERO, "out_b": Vector3.ZERO,
+	}
+	var r := ConduitRouteDispatch.control_points(ends, "poly_penstock", {}, [], false,
+		[], true, 0.6, Callable(self, "_contour_test_ground"))
+	_check("dispatch contour: routed", r.size() >= 60, "n=%d" % r.size())
+	var over_ridge := false
+	for p: Vector3 in r:
+		if absf(p.x - 30.0) < 1.5 and p.y > 4.0:
+			over_ridge = true
+			break
+	_check("dispatch contour: follows the ridge", over_ridge)
+	# Without a ground callable (defaulted param) it degrades to the chord —
+	# never an error (offline callers).
+	var flat := ConduitRouteDispatch.control_points(ends, "poly_penstock", {}, [], false,
+		[], true, 0.6)
+	_check("dispatch contour: no-ground degrades to chord", flat.size() >= 2)
+
+
+## Phase H: a size-listed kind renders at its STYLED bore. ConduitMeshBuilder
+## reads radius_m off the kind meta, so without the manager stamping it a 2"
+## poly run drew exactly as thin as a 1" one — the diameter being the main
+## thing the player tunes, that made the whole size picker look inert.
+func _test_size_driven_tube_radius() -> void:
+	var meta_r := float(ConduitKinds.type_meta("poly_penstock").get("radius_m", 0.0))
+	_check("poly kind carries a fallback radius", meta_r > 0.0)
+	var r1 := ConduitKinds.outer_diameter_m("poly_penstock", {"pipe_size_in": 1.0}) * 0.5
+	var r2 := ConduitKinds.outer_diameter_m("poly_penstock", {"pipe_size_in": 2.0}) * 0.5
+	# IPS OD: 1" = 1.315", 2" = 2.375" → radii 0.0167 m and 0.0302 m.
+	_check("1in tube radius ~16.7mm", absf(r1 - 0.016700) < 0.0002, "%.5f" % r1)
+	_check("2in tube radius ~30.2mm", absf(r2 - 0.030163) < 0.0002, "%.5f" % r2)
+	_check("a 2in run draws visibly fatter than a 1in run", r2 > r1 * 1.5)
+	# Kinds WITHOUT a size list keep their single authored radius (unchanged).
+	_check("garden hose has no size options",
+		not ConduitKinds.has_size_options("garden_hose"))
+	_check("kit pipes still report size options",
+		ConduitKinds.has_size_options("pvc_pipe")
+		and ConduitKinds.has_size_options("culvert_pipe"))
+	# The builder honours an explicit radius override (the stamp path).
+	var pts: Array = [Vector3.ZERO, Vector3(4.0, 0.0, 0.0)]
+	var thin: Dictionary = ConduitMeshBuilder.build(pts, "poly_penstock", 2,
+		Callable(), {"radius_m": r1})
+	var fat: Dictionary = ConduitMeshBuilder.build(pts, "poly_penstock", 2,
+		Callable(), {"radius_m": r2})
+	var thin_mesh: ArrayMesh = thin.get("mesh", null)
+	var fat_mesh: ArrayMesh = fat.get("mesh", null)
+	_check("both tube meshes built", thin_mesh != null and fat_mesh != null)
+	if thin_mesh != null and fat_mesh != null:
+		var ty := thin_mesh.get_aabb().size.y
+		var fy := fat_mesh.get_aabb().size.y
+		_check("styled radius reaches the mesh (%.4f vs %.4f)" % [ty, fy], fy > ty * 1.5)

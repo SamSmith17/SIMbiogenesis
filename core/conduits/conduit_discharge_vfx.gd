@@ -60,10 +60,17 @@ func _ready() -> void:
 	add_child(_particles)
 
 
-static func flow_intensity_t(q_lps: float) -> float:
+## Per-instance reference flow. A pico Pelton runs ~1 L/s where a culvert bank
+## runs tens, so the 12 L/s default renders a PowerSpout tailrace as a trickle;
+## set this lower for small machines. Optional and additive — the default keeps
+## every existing culvert reading exactly as before.
+var q_ref_lps: float = Q_REF_LPS
+
+
+static func flow_intensity_t(q_lps: float, q_ref: float = Q_REF_LPS) -> float:
 	if q_lps <= Q_MIN_LPS:
 		return 0.0
-	return clampf(q_lps / Q_REF_LPS, 0.0, 1.0)
+	return clampf(q_lps / maxf(q_ref, 0.01), 0.0, 1.0)
 
 
 ## Drive the jet from the live flow. `mouth` = world position of the outlet;
@@ -72,7 +79,7 @@ func set_flow(delta: float, q_lps: float, mouth: Vector3, dir: Vector3) -> void:
 	if _particles == null:
 		return
 	global_position = mouth
-	var target := flow_intensity_t(q_lps)
+	var target := flow_intensity_t(q_lps, q_ref_lps)
 	_activity = lerpf(_activity, target, 1.0 - exp(-delta * LERP_SPEED))
 	if q_lps <= Q_MIN_LPS and _activity < 0.02:
 		_particles.emitting = false

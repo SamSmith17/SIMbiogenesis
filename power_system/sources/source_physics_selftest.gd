@@ -484,14 +484,133 @@ func _test_graph_adapters() -> void:
 	_check("hydro KINDS: run_of_river η", absf(HydroSource.default_turbine_efficiency("run_of_river") - 0.70) < 1e-9)
 	_check("hydro KINDS: unknown → custom 0.70",
 		absf(HydroSource.default_turbine_efficiency("waterwheel_todo") - 0.70) < 1e-9)
-	_check("hydro KINDS: pelton head band above 30 m",
-		float((HydroSource.kind_meta("pelton").get("head_band", [0, 0]) as Array)[0]) >= 30.0)
+	# Pelton band floor is 10 m since the Hydro Lab overhaul (the old 30 m floor
+	# described utility practice; micro Peltons run at 10 m-class heads — Thake).
+	_check("hydro KINDS: pelton head band floor 10 m",
+		is_equal_approx(float((HydroSource.kind_meta("pelton").get("head_band", [0, 0]) as Array)[0]), 10.0))
+	# PowerSpout PLT-class pico Pelton (published 3–130 m, 1.6 kW max).
+	var psp := HydroSource.kind_meta("powerspout_pelton")
+	_check("hydro KINDS: powerspout band 3–130 m",
+		is_equal_approx(float((psp.get("head_band", [0, 0]) as Array)[0]), 3.0)
+		and is_equal_approx(float((psp.get("head_band", [0, 0]) as Array)[1]), 130.0))
+	_check("hydro KINDS: powerspout nozzle-modeled + 1.6 kW nameplate",
+		bool(psp.get("uses_nozzle_model", false))
+		and is_equal_approx(float(psp.get("max_power_w", 0.0)), 1600.0))
+
+	# PeltonPhysics (nozzle-governed impulse turbine, Thake):
+	# jet velocity v = Cv·√(2gh) — at 20 m: 0.97·19.81 = 19.21 m/s.
+	var vj := PeltonPhysics.jet_velocity_ms(20.0)
+	_check("pelton: jet velocity @20m ≈ 19.21", absf(vj - 19.215) < 0.01, "%.3f" % vj)
+	# 1× 10 mm nozzle at that head: Q = A·v = 7.854e-5 · 19.215 = 1.509 L/s.
+	var qn := PeltonPhysics.nozzle_flow_m3s(20.0, 0.010, 1) * 1000.0
+	_check("pelton: nozzle demand @20m ≈ 1.51 L/s", absf(qn - 1.509) < 0.005, "%.4f" % qn)
+	# nozzle_head_required is the exact inverse of nozzle_flow.
+	var h_rt := PeltonPhysics.nozzle_head_required_m(
+		PeltonPhysics.nozzle_flow_m3s(12.0, 0.010, 2), 0.010, 2)
+	_check("pelton: nozzle head/flow round-trip", absf(h_rt - 12.0) < 0.01, "%.3f" % h_rt)
+	# Operating point: friction eats head, so op flow < frictionless nozzle
+	# demand, and h_f + h_net == h_gross at the solution.
+	var op := PeltonPhysics.operating_point(20.0, 100.0, 0.03753, 1.5e-6, 0.010, 1)
+	var op_q := float(op.get("q_lps", 0.0))
+	_check("pelton op: flow below frictionless demand", op_q > 0.5 and op_q < 1.509,
+		"%.3f" % op_q)
+	_check("pelton op: heads balance", absf(float(op.get("h_net_m", 0.0))
+		+ float(op.get("head_loss_m", 0.0)) - 20.0) < 0.05,
+		"net %.2f + loss %.2f" % [float(op.get("h_net_m", 0.0)), float(op.get("head_loss_m", 0.0))])
+	# Fatter pipe → less friction → more flow (the what-if the Lab teaches).
+	var op_fat := PeltonPhysics.operating_point(20.0, 100.0, 0.04692, 1.5e-6, 0.010, 1)
+	_check("pelton op: 2in pipe beats 1.5in", float(op_fat.get("q_lps", 0.0)) > op_q)
+	# Runner curve: peaks at x = 0.46, zero at stall and runaway.
+	_check("pelton runner: peak at x=0.46",
+		absf(PeltonPhysics.runner_efficiency(0.46, 0.65) - 0.65) < 1e-6)
+	_check("pelton runner: stall + runaway are zero",
+		PeltonPhysics.runner_efficiency(0.0, 0.65) == 0.0
+		and PeltonPhysics.runner_efficiency(0.92, 0.65) == 0.0)
+	_check("pelton runner: off-peak below peak",
+		PeltonPhysics.runner_efficiency(0.30, 0.65) < 0.65)
+	# RPM: u = 0.46·v_j, ω = 2u/PCD. At v_j 17.05, PCD 0.22 → ~681 rpm.
+	var rpm := PeltonPhysics.rpm(17.05, 0.22)
+	_check("pelton rpm @17.05 m/s jet ≈ 681", absf(rpm - 681.0) < 5.0, "%.0f" % rpm)
+
+	# Estimator closed form for nozzle kinds: flow comes from the nozzle
+	# operating point (design_flow_lps 0 = unlimited supply), nameplate applies.
+	var ps_specs := {"turbine_kind": "powerspout_pelton", "gross_head_m": 20.0,
+		"penstock_length_m": 100.0, "penstock_diameter_mm": 37.53,
+		"pipe_roughness_mm": 0.0015, "nozzle_count": 1, "nozzle_diameter_mm": 10.0,
+		"design_flow_lps": 0.0, "generator_efficiency": 0.85}
+	var ps_kw := HydroSource.power_kw_from_graph_specs(ps_specs, 6)
+	_check("powerspout estimator: 20m/100m/1x10mm in the ~0.09–0.14 kW band",
+		ps_kw > 0.09 and ps_kw < 0.14, "%.4f kW" % ps_kw)
+	# Operating flow accessor (drives live_q_lps + the tailwater jet): nozzle
+	# kinds report the PeltonPhysics op point (the 20 m case pins ~1.34 L/s),
+	# design-flow kinds report design x multiplier, and zero head flows NOTHING.
+	var of_ps := HydroSource.operating_flow_lps_from_graph_specs(ps_specs, 6)
+	_check("op flow: powerspout 20m ~1.34 L/s", of_ps > 1.2 and of_ps < 1.5,
+		"%.3f" % of_ps)
+	var of_zero := ps_specs.duplicate(true)
+	of_zero["gross_head_m"] = 0.0
+	_check("op flow: zero head flows nothing",
+		HydroSource.operating_flow_lps_from_graph_specs(of_zero, 6) == 0.0)
+	var of_supply := ps_specs.duplicate(true)
+	of_supply["design_flow_lps"] = 0.5
+	of_supply["monthly_flow_multipliers"] = [1.0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+	_check("op flow: supply cap bites",
+		absf(HydroSource.operating_flow_lps_from_graph_specs(of_supply, 1) - 0.5) < 1e-6)
+	var of_design := {"turbine_kind": "turgo", "gross_head_m": 15.0,
+		"design_flow_lps": 10.0,
+		"monthly_flow_multipliers": [0.5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}
+	_check("op flow: design kinds = design x multiplier",
+		absf(HydroSource.operating_flow_lps_from_graph_specs(of_design, 1) - 5.0) < 1e-6)
+
+	var ps_big := ps_specs.duplicate(true)
+	ps_big["gross_head_m"] = 130.0
+	ps_big["penstock_length_m"] = 10.0
+	ps_big["penstock_diameter_mm"] = 63.0
+	ps_big["nozzle_count"] = 2
+	ps_big["nozzle_diameter_mm"] = 12.0
+	_check("powerspout estimator: 130 m clamps at the 1.6 kW nameplate",
+		absf(HydroSource.power_kw_from_graph_specs(ps_big, 6) - 1.6) < 1e-6)
+	var ps_low := ps_specs.duplicate(true)
+	ps_low["gross_head_m"] = 3.0
+	var ps_low_kw := HydroSource.power_kw_from_graph_specs(ps_low, 6)
+	_check("powerspout estimator: 3 m head still positive (pico class)",
+		ps_low_kw > 0.001, "%.4f kW" % ps_low_kw)
 	# turbine_kind key is honored as an alias for the legacy `kind` key.
 	var by_kind := {"gross_head_m": 40.0, "design_flow_lps": 10.0, "kind": "turgo"}
 	var by_turbine := {"gross_head_m": 40.0, "design_flow_lps": 10.0, "turbine_kind": "turgo"}
 	_check("hydro: turbine_kind aliases kind",
 		absf(HydroSource.power_kw_from_graph_specs(by_kind, 6)
 			- HydroSource.power_kw_from_graph_specs(by_turbine, 6)) < 1e-9)
+
+	# monthly_flow_multiplier (extracted so telemetry and physics share ONE
+	# lookup): specs array > weather array > built-in default profile, and
+	# power_kw_from_graph_specs uses exactly this value (flow scales linearly,
+	# so halving the multiplier halves an unclamped turbine's output).
+	var mm_specs := {"monthly_flow_multipliers":
+			[0.5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}
+	_check("hydro multiplier: specs array wins",
+		absf(HydroSource.monthly_flow_multiplier(mm_specs, 1, [2.0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]) - 0.5) < 1e-9)
+	_check("hydro multiplier: weather array when specs absent",
+		absf(HydroSource.monthly_flow_multiplier({}, 3, [1, 1, 0.25, 1, 1, 1, 1, 1, 1, 1, 1, 1]) - 0.25) < 1e-9)
+	var apr_mult := HydroSource.monthly_flow_multiplier({}, 4, [])
+	var aug_mult := HydroSource.monthly_flow_multiplier({}, 8, [])
+	_check("hydro multiplier: default profile April > August", apr_mult > aug_mult)
+	# Fat pipe (200 mm) so friction is negligible and P is ~linear in Q — with
+	# the default 63 mm pipe the halved flow would also halve friction loss and
+	# the ratio drifts to ~0.62, which is friction physics, not the multiplier.
+	var one_x := {"gross_head_m": 40.0, "design_flow_lps": 10.0, "kind": "turgo",
+		"penstock_diameter_mm": 200.0,
+		"monthly_flow_multipliers": [1.0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}
+	var half_x: Dictionary = one_x.duplicate(true)
+	half_x["monthly_flow_multipliers"] = [0.5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+	var p_1x := HydroSource.power_kw_from_graph_specs(one_x, 1)
+	var p_half := HydroSource.power_kw_from_graph_specs(half_x, 1)
+	_check("hydro multiplier: physics uses the same lookup (≈linear in Q)",
+		p_half > p_1x * 0.48 and p_half < p_1x * 0.52,
+		"1x %.3f vs 0.5x %.3f" % [p_1x, p_half])
+
+	_test_pelton_supply()
+	_test_hydro_supply()
 
 	# Nameplate clamp: max_power_w caps the estimator; absent = uncapped.
 	var big := {"gross_head_m": 200.0, "design_flow_lps": 50.0, "kind": "pelton"}
@@ -1193,6 +1312,230 @@ func _test_solar_eclipse() -> void:
 
 ## Parabolic-trough CSP: single-axis N-S tracking law, incidence cosine loss,
 ## end losses, and water->steam mass/energy balance (csp_trough_source.gd).
+## Supply-limited Pelton: what happens when a spring simply does not run as hard
+## as the nozzle would pass. Thake, "The Micro-Hydro Pelton Turbine Manual" (ITDG
+## 2000) — nozzle Cv 0.97, speed ratio x = u/v_jet with peak near 0.46.
+func _test_pelton_supply() -> void:
+	const L := 100.0
+	const D := 0.03753   ## 1.5" SDR-9 poly ID
+	const EPS := 1.5e-6
+	const NOZ := 0.010
+	# 1. Unlimited parity — NAN supply must return the unconstrained answer FIELD
+	#    FOR FIELD. This is what makes "design_flow_lps 0 means unlimited" survive
+	#    the new code path. And a supply of exactly 0.0 is the OPPOSITE answer:
+	#    dry. Both are reachable, which is why the guard is is_nan, never <= 0.
+	var free := PeltonPhysics.operating_point(20.0, L, D, EPS, NOZ, 1)
+	var unl := PeltonPhysics.operating_point_supply_limited(20.0, L, D, EPS, NOZ, 1, NAN)
+	var parity := true
+	for k: String in ["q_m3s", "q_lps", "h_net_m", "head_loss_m", "v_jet_ms"]:
+		if absf(float(unl[k]) - float(free[k])) > 1e-12:
+			parity = false
+	_check("pelton supply: NAN supply == unconstrained op point, field for field",
+		parity and not bool(unl["supply_limited"]))
+	var dry_op := PeltonPhysics.operating_point_supply_limited(20.0, L, D, EPS, NOZ, 1, 0.0)
+	_check("pelton supply: 0.0 supply is DRY, not unconstrained",
+		float(dry_op["q_lps"]) == 0.0 and float(dry_op["v_jet_ms"]) == 0.0
+		and bool(dry_op["supply_limited"]))
+	var ample := PeltonPhysics.operating_point_supply_limited(
+			20.0, L, D, EPS, NOZ, 1, float(free["q_m3s"]) * 2.0)
+	_check("pelton supply: ample supply does not bind",
+		not bool(ample["supply_limited"])
+		and absf(float(ample["q_lps"]) - float(free["q_lps"])) < 1e-12)
+
+	# 2. Supply-limited, hand-computed. Q = 0.5 L/s through one 10 mm jet:
+	#    A = pi/4 * 0.01^2 = 7.854e-5 m^2, v = 5e-4/7.854e-5 = 6.366 m/s,
+	#    h_jet = (v/0.97)^2 / (2g) = 2.196 m.
+	var lim := PeltonPhysics.operating_point_supply_limited(
+			20.0, L, D, EPS, NOZ, 1, 0.0005)
+	_check("pelton supply: flow caps at the supply exactly",
+		bool(lim["supply_limited"]) and absf(float(lim["q_lps"]) - 0.5) < 1e-9,
+		"%.6f L/s" % float(lim["q_lps"]))
+	_check("pelton supply: nozzle converts only the head its flow demands (2.20 m)",
+		absf(float(lim["h_net_m"]) - 2.196) < 0.01, "%.4f m" % float(lim["h_net_m"]))
+	# 3. The head book balances: jet + friction + unused == gross.
+	var book := float(lim["h_net_m"]) + float(lim["head_loss_m"]) \
+			+ float(lim["unused_head_m"])
+	_check("pelton supply: h_net + loss + unused == gross", absf(book - 20.0) < 0.01,
+		"%.4f" % book)
+	# 4. The whole point: the honest model makes LESS power than naively clamping
+	#    Q while keeping the full net head, because the surplus head is never
+	#    converted to jet velocity.
+	var rho := 1000.0
+	var g := 9.80665
+	var honest_w := rho * g * 0.0005 * float(lim["h_net_m"])
+	var naive_w := rho * g * 0.0005 * float(free["h_net_m"])
+	_check("pelton supply: supply-limited power below the naive clamp",
+		honest_w < naive_w * 0.2, "%.2f W vs %.2f W" % [honest_w, naive_w])
+	# 5. The recommendation round-trips: fit the suggested nozzle and the free
+	#    operating point delivers the supply it was sized for.
+	var d_fit := PeltonPhysics.nozzle_d_for_supply_m(20.0, L, D, EPS, 1, 0.0005)
+	var refit := PeltonPhysics.operating_point(20.0, L, D, EPS, d_fit, 1)
+	_check("pelton supply: recommended nozzle is smaller than the fitted one",
+		d_fit > 0.0 and d_fit < NOZ, "%.2f mm" % (d_fit * 1000.0))
+	_check("pelton supply: recommended nozzle delivers the supply (±2%)",
+		absf(float(refit["q_lps"]) - 0.5) < 0.01, "%.4f L/s" % float(refit["q_lps"]))
+
+	# 6. available_supply_lps discriminates on has(), not on > 0 — a dried-up
+	#    spring (supply 0) and an unlimited nozzle (design 0) are opposites.
+	_check("supply resolver: supply_lps 0.0 means DRY",
+		HydroSource.available_supply_lps({"supply_lps": 0.0}, 6) == 0.0)
+	_check("supply resolver: design_flow 0 with no supply key means unlimited",
+		is_nan(HydroSource.available_supply_lps({"design_flow_lps": 0.0}, 6)))
+	var legacy := {"design_flow_lps": 4.0,
+		"monthly_flow_multipliers": [0.5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}
+	_check("supply resolver: absent supply key falls back to design x multiplier",
+		absf(HydroSource.available_supply_lps(legacy, 1) - 2.0) < 1e-9)
+	_check("supply resolver: supply_lps wins over design_flow_lps",
+		absf(HydroSource.available_supply_lps(
+			{"supply_lps": 1.25, "design_flow_lps": 99.0}, 6) - 1.25) < 1e-9)
+	# A dry spring must produce nothing even at big head.
+	var dry := {"turbine_kind": "powerspout_pelton", "gross_head_m": 40.0,
+		"penstock_length_m": L, "penstock_diameter_mm": 37.53,
+		"nozzle_diameter_mm": 10.0, "nozzle_count": 1, "supply_lps": 0.0}
+	_check("supply resolver: a dry spring makes no power at 40 m head",
+		HydroSource.power_kw_from_graph_specs(dry, 6) == 0.0)
+
+	# 7. Speed ratio / rpm additions are ADDITIVE: the design-point helpers must
+	#    still return exactly what they did (every pinned rpm depends on it).
+	_check("pelton speed: omega_rad_s == omega_rad_s_at_ratio(x_opt)",
+		absf(PeltonPhysics.omega_rad_s(17.05, 0.22)
+			- PeltonPhysics.omega_rad_s_at_ratio(17.05, 0.22,
+				PeltonPhysics.SPEED_RATIO_OPT)) < 1e-12)
+	_check("pelton load: matched load sits at x_opt",
+		absf(PeltonPhysics.speed_ratio_for_load(1.0)
+			- PeltonPhysics.SPEED_RATIO_OPT) < 1e-12)
+	_check("pelton load: no load runs away to 2·x_opt",
+		absf(PeltonPhysics.speed_ratio_for_load(0.0)
+			- 2.0 * PeltonPhysics.SPEED_RATIO_OPT) < 1e-12)
+	# Runaway spins fastest and makes nothing — the whole teaching point of the
+	# close-up view, and it falls straight out of the existing runner parabola.
+	_check("pelton load: runaway spins ~2x and yields zero runner efficiency",
+		PeltonPhysics.rpm_at_ratio(17.05, 0.22, PeltonPhysics.speed_ratio_for_load(0.0))
+			> PeltonPhysics.rpm(17.05, 0.22) * 1.9
+		and PeltonPhysics.runner_efficiency(
+			PeltonPhysics.speed_ratio_for_load(0.0), 0.65) == 0.0)
+
+	# 8. Bucket exit speed |v_jet - 2u| — the other half of the Euler relation, and
+	#    the reason a well-matched Pelton visibly dribbles while a runaway sprays.
+	const VJ := 17.05
+	_check("pelton bucket: matched load leaves the water nearly dead",
+		absf(PeltonPhysics.bucket_exit_speed_ms(VJ, PeltonPhysics.SPEED_RATIO_OPT)
+			- VJ * 0.08) < 1e-4,
+		"%.4f m/s" % PeltonPhysics.bucket_exit_speed_ms(VJ, PeltonPhysics.SPEED_RATIO_OPT))
+	_check("pelton bucket: a stalled runner passes the jet straight through",
+		absf(PeltonPhysics.bucket_exit_speed_ms(VJ, 0.0) - VJ) < 1e-9)
+	_check("pelton bucket: runaway flings it far faster than matched",
+		PeltonPhysics.bucket_exit_speed_ms(VJ, PeltonPhysics.speed_ratio_for_load(0.0))
+			> PeltonPhysics.bucket_exit_speed_ms(VJ,
+				PeltonPhysics.speed_ratio_for_load(1.0)) * 8.0,
+		"%.2f vs %.2f m/s" % [
+			PeltonPhysics.bucket_exit_speed_ms(VJ, PeltonPhysics.speed_ratio_for_load(0.0)),
+			PeltonPhysics.bucket_exit_speed_ms(VJ, PeltonPhysics.speed_ratio_for_load(1.0))])
+	# Exactly half the runaway ratio is the one speed where the bucket keeps pace
+	# with the jet and nothing leaves — the zero of the relation.
+	_check("pelton bucket: exit speed vanishes at x = 0.5",
+		PeltonPhysics.bucket_exit_speed_ms(VJ, 0.5) < 1e-9)
+
+
+## Stream/spring hydrology: HydroSupply's rain coupling and storm recession.
+func _test_hydro_supply() -> void:
+	var spec := {"base_flow_lps": 2.0, "rain_lps_per_tenth_in_h": 1.0,
+		"max_flow_lps": 0.0}
+	_check("hydro supply: no rain gives the dry-weather base flow",
+		absf(HydroSupply.intake_supply_lps(spec, 0.0) - 2.0) < 1e-9)
+	# THE conversion pin. 0.1 in = 2.54 mm exactly, so 2.54 mm/h of rain must add
+	# exactly one coefficient's worth. Getting this wrong is silent — the numbers
+	# stay plausible and the turbine is simply off by 2.54x forever.
+	_check("hydro supply: 2.54 mm/h == 0.1 in/h adds exactly one coefficient",
+		absf(HydroSupply.intake_supply_lps(spec, 2.54) - 3.0) < 1e-9,
+		"%.6f" % HydroSupply.intake_supply_lps(spec, 2.54))
+	_check("hydro supply: rain term is linear",
+		absf(HydroSupply.intake_supply_lps(spec, 25.4) - 12.0) < 1e-9,
+		"%.6f" % HydroSupply.intake_supply_lps(spec, 25.4))
+	_check("hydro supply: rain_term_lps isolates the storm contribution",
+		absf(HydroSupply.rain_term_lps(spec, 2.54) - 1.0) < 1e-9)
+	var capped: Dictionary = spec.duplicate(true)
+	capped["max_flow_lps"] = 4.0
+	_check("hydro supply: peak cap bites",
+		absf(HydroSupply.intake_supply_lps(capped, 25.4) - 4.0) < 1e-9)
+	_check("hydro supply: negative rain clamps to zero, never below base",
+		absf(HydroSupply.intake_supply_lps(spec, -5.0) - 2.0) < 1e-9)
+	_check("hydro supply: NAN rain degrades to base (offline weather)",
+		absf(HydroSupply.intake_supply_lps(spec, NAN) - 2.0) < 1e-9)
+
+	# Recession. tau 0 = instantaneous (the scrub-safe default).
+	_check("hydro recess: tau 0 is instantaneous",
+		absf(HydroSupply.recess(1.0, 9.0, 0.5, 0.0) - 9.0) < 1e-9)
+	# One tau of elapsed time reaches 1 - 1/e = 63.2% of the step.
+	var one_tau := HydroSupply.recess(0.0, 10.0, 3.0, 3.0)
+	_check("hydro recess: one tau reaches 63.2% of the step",
+		absf(one_tau - 6.3212) < 0.001, "%.4f" % one_tau)
+	# The big-dt guard: this runs on whatever tick the world clock hands it, and
+	# at high time_scale that is routinely many tau at once. 1-exp is exact for a
+	# step at ANY dt; a naive lerp(dt/tau) would overshoot wildly here.
+	var big_dt := HydroSupply.recess(0.0, 10.0, 30.0, 3.0)
+	_check("hydro recess: a 10-tau step lands on target without overshoot",
+		big_dt <= 10.0 and absf(big_dt - 10.0) < 0.001, "%.6f" % big_dt)
+	_check("hydro recess: never returns negative",
+		HydroSupply.recess(5.0, 0.0, 1.0, 2.0) >= 0.0)
+
+	# End to end: a stream-fed PowerSpout makes more power in the rain.
+	var wet_base := {"turbine_kind": "powerspout_pelton", "gross_head_m": 30.0,
+		"penstock_length_m": 80.0, "penstock_diameter_mm": 37.53,
+		"nozzle_diameter_mm": 10.0, "nozzle_count": 1}
+	var isp := {"base_flow_lps": 0.4, "rain_lps_per_tenth_in_h": 0.6}
+	var dry_specs: Dictionary = wet_base.duplicate(true)
+	dry_specs["supply_lps"] = HydroSupply.intake_supply_lps(isp, 0.0)
+	var wet_specs: Dictionary = wet_base.duplicate(true)
+	wet_specs["supply_lps"] = HydroSupply.intake_supply_lps(isp, 5.08)  # 0.2 in/h
+	var kw_dry := HydroSource.power_kw_from_graph_specs(dry_specs, 6)
+	var kw_wet := HydroSource.power_kw_from_graph_specs(wet_specs, 6)
+	_check("hydro supply: rain raises a stream-fed PowerSpout's output",
+		kw_wet > kw_dry * 2.0 and kw_dry > 0.0,
+		"dry %.4f kW → wet %.4f kW" % [kw_dry, kw_wet])
+
+	# Seasonal supply curve, and the annual estimate honouring it. Without the
+	# per-month array the annual figure freezes at ONE instantaneous supply, so a
+	# wet-season reading is extrapolated across the whole year and vice versa.
+	var rain_year: Array = []
+	for m in 12:
+		# Wet winter / dry summer MEANS in mm/h. A 250 mm winter month over 720 h
+		# really is only ~0.35 mm/h — monthly means are small numbers, which is
+		# exactly why the coefficient is authored per 0.1 in/h.
+		rain_year.append(0.35 if (m < 3 or m > 9) else 0.02)
+	# A creek with a real catchment, so the rain term dominates its own base flow
+	# (with a small coefficient the seasonal swing is there but undramatic).
+	var creek := {"base_flow_lps": 0.4, "rain_lps_per_tenth_in_h": 6.0}
+	var prof := HydroSupply.monthly_supply_lps(creek, rain_year)
+	_check("hydro supply: monthly curve has 12 entries", prof.size() == 12)
+	_check("hydro supply: wet months carry more than dry ones",
+		prof[0] > prof[6] * 1.5, "Jan %.3f vs Jul %.3f" % [prof[0], prof[6]])
+	# PackedFloat32Array — compare at float32 precision, not 1e-9.
+	_check("hydro supply: each month equals the closed form at that rain rate",
+		absf(prof[0] - HydroSupply.intake_supply_lps(creek, 0.35)) < 1e-6
+		and absf(prof[6] - HydroSupply.intake_supply_lps(creek, 0.02)) < 1e-6,
+		"%.6f vs %.6f" % [prof[0], HydroSupply.intake_supply_lps(creek, 0.35)])
+	# Freeze the supply at the WETTEST month and the annual figure is inflated;
+	# with the real curve it must land between the all-dry and all-wet bounds.
+	var frozen_wet: Dictionary = wet_base.duplicate(true)
+	frozen_wet["supply_lps"] = prof[0]
+	var frozen_dry: Dictionary = wet_base.duplicate(true)
+	frozen_dry["supply_lps"] = prof[6]
+	var ann_wet := float(HydroSource.annual_energy_kwh_from_specs(
+			frozen_wet, [])["annual_kwh"])
+	var ann_dry := float(HydroSource.annual_energy_kwh_from_specs(
+			frozen_dry, [])["annual_kwh"])
+	var ann_seasonal := float(HydroSource.annual_energy_kwh_from_specs(
+			frozen_wet, [], Array(prof))["annual_kwh"])
+	_check("hydro annual: seasonal supply lands between the frozen extremes",
+		ann_seasonal < ann_wet and ann_seasonal > ann_dry,
+		"dry %.0f < seasonal %.0f < wet %.0f" % [ann_dry, ann_seasonal, ann_wet])
+	# And the legacy call (no array) is byte-identical to before.
+	_check("hydro annual: omitting the array reuses the single supply, unchanged",
+		absf(float(HydroSource.annual_energy_kwh_from_specs(frozen_wet, [],
+			[])["annual_kwh"]) - ann_wet) < 1e-9)
+
+
 func _test_csp() -> void:
 	# E-W horizontal single-axis tracker: at solar noon (az=180) the aperture
 	# tilts (90° - elevation) toward the equator to face the sun head-on.

@@ -15,6 +15,13 @@ const C_WATER_LINE := Color(0.45, 0.85, 1.0, 0.95)
 const _UI_HZ := 12.0
 const _PHYS_HZ := 6.0
 const _DEM_SAMPLES := 64
+const _CHART_SCRIPT := preload("res://scenes/ui/hydro_power_chart.gd")
+const C_WARN := Color(0.98, 0.75, 0.35, 1.0)
+## Poly-pipe-size palette for the power-curve families (1″ → 2″).
+const _CHART_SIZE_COLORS: Array = [
+	Color(0.55, 0.75, 1.00), Color(0.45, 0.95, 0.75),
+	Color(1.00, 0.78, 0.45), Color(0.95, 0.58, 0.85),
+]
 
 var _graph_view: Node = null
 var _item_id: String = ""
@@ -45,6 +52,11 @@ var _penstock_d_spin: SpinBox
 var _roughness_spin: SpinBox
 var _design_flow_spin: SpinBox
 var _turb_eff_spin: SpinBox
+## Nozzle-governed kinds (kind_meta.uses_nozzle_model — PowerSpout Pelton):
+## nozzle count/Ø replace the design-flow knob.
+var _nozzle_count_spin: SpinBox
+var _nozzle_d_spin: SpinBox
+var _nozzle_off_spin: SpinBox
 var _rpm_lbl: Label
 var _pe_lbl: Label
 var _elec_lbl: Label
@@ -57,6 +69,30 @@ var _loss_lbl: Label
 var _capfac_lbl: Label
 var _annual_lbl: Label
 var _estimate_hint_lbl: Label
+## Phase E what-if surface: warnings row + power-curve chart (P vs head, one
+## polyline per poly pipe size, operating point marked) + per-size stats.
+var _warn_lbl: Label
+var _chart: Control
+var _chart_body: VBoxContainer
+var _chart_stats_lbl: Label
+var _chart_sig: String = ""
+var _route_size_opt: OptionButton
+var _route_status_lbl: Label
+## Penstock placement mode: a glowing gizmo sits on the turbine inlet and the
+## player DRAGS it across the section to the uphill water source. The same
+## commit the 3D drag uses (SystemGraphView.create_penstock_intake_at), so both
+## surfaces produce one identical routed connection.
+var _penstock_mode := false
+var _penstock_dragging := false
+## Ghost end while dragging: section along-metres + absolute elevation.
+var _penstock_ghost_along := 0.0
+var _penstock_ghost_elev := 0.0
+var _penstock_ghost_site := Vector2.ZERO
+var _penstock_ghost_valid := false
+## Screen rect of the inlet gizmo, rebuilt every draw (hit target).
+var _penstock_gizmo_screen := Vector2.INF
+var _penstock_btn: Button
+var _outlet_btn: Button
 var _hint_lbl: Label
 var _ws_status_lbl: Label
 var _ws_season_lbl: Label
@@ -65,6 +101,35 @@ var _ws_designate_btn: Button
 var _sim_inflow_btn: CheckButton
 var _sim_inflow_spin: SpinBox
 var _nav_hint_lbl: Label
+var _status_lbl: Label
+var _drive_hint_lbl: Label
+## View tabs — the cross-section and the turbine close-up are peer views of the
+## same machine, not a panel nested inside the dock.
+const VIEW_SECTION := "section"
+const VIEW_CLOSEUP := "closeup"
+const _CLOSEUP_SCRIPT := preload("res://scenes/ui/hydro_turbine_closeup.gd")
+var _lab_view := VIEW_SECTION
+var _tab_section_btn: Button
+var _tab_closeup_btn: Button
+var _closeup: Control
+## Load fraction for the close-up's speed model: 1.0 = matched (x_opt), 0.0 = open
+## circuit (runaway at 2·x_opt). Driven by a slider, overridden by the real
+## electrical load once the turbine's DC output is feeding something.
+var _load_frac := 1.0
+var _load_slider: HSlider
+var _load_lbl: Label
+var _load_row: HBoxContainer
+## Harness-pinned operating point (see set_state_for_test); empty = use the live
+## reach snapshot.
+var _test_op: Dictionary = {}
+## Nozzle Ø (mm) the supply-limited warning recommends; 0 = nothing to offer.
+var _fit_nozzle_mm := 0.0
+var _fit_nozzle_btn: Button
+## Test-flow slider (mirrors _sim_inflow_spin). Linear over the band essentially
+## every micro-hydro site lives in; the spin still reaches 2000 L/s and the
+## slider's ceiling follows it up when it does.
+const FLOW_SLIDER_MAX_LPS := 20.0
+var _sim_inflow_slider: HSlider
 var _side: VBoxContainer
 
 var _prop_angle: float = 0.0
@@ -86,7 +151,16 @@ var _dem_elev: PackedFloat32Array = PackedFloat32Array()
 var _dem_bake_key: String = ""
 ## Own 2D cross-section view transform (Phase 2 — no shared Elev canvas).
 var _view_zoom := 1.0
-var _view_pan := Vector2.ZERO
+## Pan in SECTION METRES (along-rel, elev), not pixels. It used to be pixels that
+## _lab_view_metrics then divided by a zoom-dependent metres-per-pixel, so a wheel
+## notch after a pan silently re-scaled the accumulated pan and the view slid.
+var _view_pan_m := Vector2.ZERO
+const LAB_ZOOM_MIN := 0.25
+const LAB_ZOOM_MAX := 8.0
+## Per-notch zoom step. 1.1 needs seven notches to double — that slowness is a
+## large part of the Lab reading as sluggish. Ctrl+wheel keeps a fine step.
+const LAB_ZOOM_STEP := 1.18
+const LAB_ZOOM_STEP_FINE := 1.05
 var _view_dragging := false
 var _view_last_mouse := Vector2.ZERO
 ## Which level line the user grabbed on the CT: "" | "prime" | "break" | "water".
@@ -100,6 +174,19 @@ var _pv_linked := false
 var _pv_elev_mid := 0.0
 ## Spatial edit is consuming a prop drag inside the Lab preview.
 var _lab_prop_drag := false
+## Cached _slice_frame result (see that function — it is called from the draw,
+## from _lab_view_metrics, and from every pan/zoom event).
+var _slice_cache: Dictionary = {}
+var _slice_sig: String = ""
+## Signature gates for the 6 Hz refreshes that are NOT live telemetry: the annual
+## estimate + chart stats, and the routed-penstock scan. Live readouts (rpm, flow,
+## head, state) stay ungated — those are the numbers that must feel live.
+var _est_sig: String = ""
+var _stats_sig: String = ""
+var _route_sig: String = ""
+## Cached id of the routed contour penstock feeding this turbine (re-resolved
+## whenever _route_sig moves) — resolving it walked every connection per draw.
+var _routed_conn_id: String = ""
 
 
 func _ready() -> void:
@@ -119,7 +206,17 @@ func enter_as_view(item_id: String = "") -> void:
 	_as_view = true
 	_elev_ct_bg = true
 	if item_id.is_empty():
-		item_id = _pick_default_siphon_id()
+		# Re-entry with no explicit target — e.g. the DEFERRED visibility
+		# reapply that fires right after open_siphon_lab(id) when the graph was
+		# opened programmatically (prop edit UI sets `visible = true`, which
+		# queues _reapply_current_graph_view_mode with no opts). Falling to
+		# "first siphon on the graph" here is how selecting a PowerSpout used
+		# to land you in the Lab with the ORIGINAL siphon turbine active: keep
+		# the current turbine whenever it is still valid.
+		if _is_lab_turbine(_item_id):
+			item_id = _item_id
+		else:
+			item_id = _pick_default_siphon_id()
 	_item_id = item_id
 	_show_shell()
 	_load_from_model()
@@ -135,6 +232,9 @@ func enter_as_view(item_id: String = "") -> void:
 	if _graph_view != null and _graph_view.has_method("prepare_siphon_lab_session"):
 		_graph_view.call("prepare_siphon_lab_session", _item_id)
 	_reset_view_transform()
+	# Always open on the cross-section: it answers "is the water getting there",
+	# which is what a player has just come to check.
+	_set_lab_view(VIEW_SECTION)
 	set_process(true)
 	_phys_acc = 999.0
 	_ui_acc = 0.0
@@ -157,8 +257,17 @@ func exit_view() -> void:
 		_write_sim_inflow(false, lps1)
 	_as_view = false
 	_elev_ct_bg = false
+	# Free the close-up's particles and stop its viewport before hiding; the
+	# section CT must be handed its slot back or the next Lab open shows nothing.
+	if _closeup != null and _closeup.has_method("set_active"):
+		_closeup.call("set_active", false)
+	if _graph_view != null and _graph_view.has_method("set_lab_section_ct_visible"):
+		_graph_view.call("set_lab_section_ct_visible", true)
+	_lab_view = VIEW_SECTION
 	if _preview_col != null:
 		_preview_col.visible = true
+	if _preview != null:
+		_preview.visible = true
 	_hide_shell()
 	_item_id = ""
 	set_process(false)
@@ -211,13 +320,22 @@ func _lab_view_metrics() -> Dictionary:
 	if ortho_w < need_along:
 		ortho_w = need_along
 		ortho_h = ortho_w / aspect
+	# Clamp to the SAME floor the CT camera clamps to. Doing it here — in the one
+	# function that feeds both the 2D overlay projection and the 3D frame push —
+	# is what makes the clamp invisible: the value never reaches the camera below
+	# its limit, so the two can no longer drift apart at deep zoom.
+	if ortho_h < GraphSiteLayout.LAB_MIN_ORTHO_H_M:
+		ortho_h = GraphSiteLayout.LAB_MIN_ORTHO_H_M
+		ortho_w = ortho_h * aspect
 	# Overlay DEM is pond-relative (pond at along=0). CT camera uses absolute
 	# site along = relative + pond·heading. Look-at = turbine.
 	var heading := float(frame.get("heading", 0.0))
 	var pond_site: Vector2 = frame.get("pond_site", Vector2.ZERO) as Vector2
 	var pond_along := pond_site.dot(Vector2(cos(heading), sin(heading)))
-	var along_mid_rel := module_along - _view_pan.x * (ortho_w / host.x)
-	var elev_mid := module_m + _view_pan.y * (ortho_h / host.y)
+	# Pan is already in metres — no zoom-dependent conversion, which is what stops
+	# the view sliding when you zoom after panning.
+	var along_mid_rel := module_along - _view_pan_m.x
+	var elev_mid := module_m + _view_pan_m.y
 	return {
 		"along_m": along_mid_rel + pond_along,
 		"along_m_rel": along_mid_rel,
@@ -250,7 +368,12 @@ func _lab_host_size() -> Vector2:
 
 
 func close() -> void:
-	if _graph_view != null and _graph_view.has_method("_apply_graph_view_mode"):
+	# Return to whatever mode the player opened the Lab from (the graph view
+	# recorded it in open_siphon_lab); hard-coding Elevation dumped a player who
+	# came from Site Plan somewhere they never asked to be.
+	if _graph_view != null and _graph_view.has_method("close_hydro_lab"):
+		_graph_view.call("close_hydro_lab")
+	elif _graph_view != null and _graph_view.has_method("_apply_graph_view_mode"):
 		_graph_view.call("_apply_graph_view_mode", GraphSiteLayout.VIEW_ELEVATION)
 	else:
 		exit_view()
@@ -287,15 +410,6 @@ func _show_shell() -> void:
 	if _preview_stack != null:
 		_preview_stack.custom_minimum_size = Vector2.ZERO
 	if _side != null:
-		# Keep the right dock readable over the CT.
-		var side_bg := StyleBoxFlat.new()
-		side_bg.bg_color = Color(0.07, 0.10, 0.18, 0.94)
-		side_bg.set_corner_radius_all(8)
-		side_bg.content_margin_left = 6
-		side_bg.content_margin_right = 6
-		side_bg.content_margin_top = 6
-		side_bg.content_margin_bottom = 6
-		# ScrollContainer parent — wrap side in a panel if needed; tint via modulate.
 		_side.modulate = Color(1, 1, 1, 1)
 
 
@@ -358,6 +472,21 @@ func _build_ui() -> void:
 	_preview_col.add_theme_constant_override("separation", 8)
 	body.add_child(_preview_col)
 
+	# View tabs. The close-up is a genuinely different way of looking at the same
+	# machine — the cross-section answers "is the water getting there", the
+	# close-up answers "what is the runner actually doing" — so it is a peer view,
+	# not a panel buried in the dock.
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 6)
+	_preview_col.add_child(tabs)
+	_tab_section_btn = _view_tab(tabs, "Cross-section",
+			"The reach: source, penstock, turbine and water line in elevation.",
+			VIEW_SECTION)
+	_tab_closeup_btn = _view_tab(tabs, "Turbine close-up",
+			"The runner side-on with the housing ghosted: jet, buckets, tailwater.",
+			VIEW_CLOSEUP)
+	_tab_section_btn.set_pressed_no_signal(true)
+
 	_preview_stack = Control.new()
 	_preview_stack.custom_minimum_size = Vector2(520, 280)
 	_preview_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -371,6 +500,71 @@ func _build_ui() -> void:
 	_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_preview.draw.connect(_draw_preview)
 	_preview_stack.add_child(_preview)
+
+	# Close-up studio, over the section. Built lazily on first activation, so a Lab
+	# session that never opens this tab costs nothing.
+	_closeup = Control.new()
+	_closeup.name = "TurbineCloseup"
+	_closeup.set_script(_CLOSEUP_SCRIPT)
+	_closeup.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_preview_stack.add_child(_closeup)
+
+	# Live status strip under the section. The same facts used to be a string
+	# PAINTED into the cross-section, where it fought the terrain for contrast and
+	# scrolled off under pan/zoom.
+	var status_row := HBoxContainer.new()
+	status_row.add_theme_constant_override("separation", 10)
+	_preview_col.add_child(status_row)
+	_status_lbl = Label.new()
+	_status_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_status_lbl.add_theme_font_size_override("font_size", 11)
+	_status_lbl.add_theme_color_override("font_color", C_MUTED)
+	_status_lbl.text = "—"
+	status_row.add_child(_status_lbl)
+	# Load control — only meaningful in the close-up, where you watch the wheel
+	# run away as the load is shed and the runner efficiency collapse with it.
+	_load_row = HBoxContainer.new()
+	_load_row.add_theme_constant_override("separation", 6)
+	_load_row.visible = false
+	status_row.add_child(_load_row)
+	var load_key := Label.new()
+	load_key.text = "Load"
+	load_key.add_theme_font_size_override("font_size", 11)
+	load_key.add_theme_color_override("font_color", C_MUTED)
+	_load_row.add_child(load_key)
+	_load_slider = HSlider.new()
+	_load_slider.min_value = 0.0
+	_load_slider.max_value = 1.0
+	_load_slider.step = 0.01
+	_load_slider.value = 1.0
+	_load_slider.custom_minimum_size = Vector2(110, 0)
+	_load_slider.tooltip_text = ("Electrical load on the generator. 100% is the "
+			+ "matched load (bucket speed u = 0.46 x jet) — what a real dump-load "
+			+ "or MPPT controller holds, and what the graph node reports. Shedding "
+			+ "it lets the runner accelerate toward runaway, where it spins "
+			+ "fastest and makes no power at all. A what-if: this drives the "
+			+ "close-up, not the graph's output.")
+	_load_slider.value_changed.connect(func(v: float) -> void:
+		_load_frac = clampf(v, 0.0, 1.0)
+		if _load_lbl != null:
+			_load_lbl.text = "%d%%" % int(round(_load_frac * 100.0)))
+	_load_row.add_child(_load_slider)
+	_load_lbl = Label.new()
+	_load_lbl.text = "100%"
+	_load_lbl.add_theme_font_size_override("font_size", 11)
+	_load_lbl.add_theme_color_override("font_color", C_MUTED)
+	_load_row.add_child(_load_lbl)
+
+	var frame_btn := Button.new()
+	frame_btn.text = "Frame turbine (F)"
+	frame_btn.tooltip_text = "Reset zoom/pan back onto the turbine."
+	frame_btn.pressed.connect(_on_frame_turbine)
+	status_row.add_child(frame_btn)
+	var runbtn := Button.new()
+	runbtn.text = "Whole run (Home)"
+	runbtn.tooltip_text = "Zoom out until the intake and the turbine are both in frame."
+	runbtn.pressed.connect(_on_frame_whole_run)
+	status_row.add_child(runbtn)
 
 	# Fixed-width params dock (~300 px) so CT owns ~3/4 of Lab width.
 	var side_panel := PanelContainer.new()
@@ -427,6 +621,12 @@ func _build_ui() -> void:
 	_section(_side, "Geometry")
 	_module_spin = _spin(_side, "Turbine elevation (m)", -500.0, 5000.0, 0.01,
 			func(v: float) -> void: _commit_float("module_elev_m", v))
+	var snap_btn := Button.new()
+	snap_btn.text = "Snap turbine to terrain"
+	snap_btn.tooltip_text = ("Set the turbine elevation to the ground height at "
+			+ "its site position (you can also drag the 3D module on the cut).")
+	snap_btn.pressed.connect(_on_snap_module_to_terrain)
+	_side.add_child(snap_btn)
 	_outlet_inv_spin = _spin(_side, "Outlet invert (m)", -500.0, 5000.0, 0.01,
 			func(v: float) -> void: _commit_float("outlet_invert_m", v))
 	_intake_d_spin = _spin(_side, "Intake diameter (mm)", 25.0, 600.0, 1.0,
@@ -473,8 +673,85 @@ func _build_ui() -> void:
 			func(v: float) -> void: _commit_float("pipe_roughness_mm", v))
 	_design_flow_spin = _spin(_penstock_group, "Design flow (L/s)", 0.1, 5000.0, 0.1,
 			func(v: float) -> void: _commit_float("design_flow_lps", v))
+	# Nozzle-governed kinds (PowerSpout Pelton): flow is jet velocity × nozzle
+	# area at the head — these replace the design-flow knob when visible.
+	_nozzle_count_spin = _spin(_penstock_group, "Nozzles", 1.0, 2.0, 1.0,
+			func(v: float) -> void: _commit_float("nozzle_count", v))
+	_nozzle_d_spin = _spin(_penstock_group, "Nozzle Ø (mm)", 3.0, 25.0, 0.5,
+			func(v: float) -> void: _commit_float("nozzle_diameter_mm", v))
+	# Visual only — it moves where the jet is DRAWN, never the physics (the jet
+	# strikes the pitch circle wherever it enters, and the head/flow do not care
+	# which chord it takes). Stored on specs so it persists per machine.
+	_nozzle_off_spin = _spin(_penstock_group, "Nozzle height offset (mm)",
+			-300.0, 300.0, 5.0, func(v: float) -> void:
+		_commit_float("nozzle_offset_mm", v)
+		if _closeup != null and _closeup.has_method("set_nozzle_offset_m"):
+			_closeup.call("set_nozzle_offset_m", v / 1000.0))
+	_nozzle_off_spin.tooltip_text = ("Fine-tune where the jet meets the wheel, "
+			+ "relative to the machine's penstock inlet port. 0 sits on the port.")
 	_turb_eff_spin = _spin(_penstock_group, "Turbine η (0=auto)", 0.0, 0.95, 0.01,
 			func(v: float) -> void: _commit_float("turbine_efficiency", v))
+
+	# Penstock route: restyle the pond→turbine wire as a contour-routed poly
+	# penstock. ONE route, two surfaces — this is the same connection the 3D
+	# conduit controller edits, so the measured ground-following run (length,
+	# drop, styled Ø) is what drives HydroReach from then on.
+	_section(_penstock_group, "Penstock route")
+	var route_hint := Label.new()
+	route_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	route_hint.add_theme_color_override("font_color", C_MUTED)
+	route_hint.add_theme_font_size_override("font_size", 11)
+	route_hint.text = ("Runs poly tubing along the ground from the bound pond. "
+			+ "Measured run + drop replace the typed length/head above.")
+	_penstock_group.add_child(route_hint)
+	var route_row := HBoxContainer.new()
+	route_row.add_theme_constant_override("separation", 6)
+	_penstock_group.add_child(route_row)
+	_route_size_opt = OptionButton.new()
+	_route_size_opt.focus_mode = Control.FOCUS_NONE
+	for sz: Variant in ConduitKinds.pipe_kit_sizes_in("poly_penstock"):
+		_route_size_opt.add_item(PipeKit.size_label(float(sz)))
+		_route_size_opt.set_item_metadata(_route_size_opt.item_count - 1, float(sz))
+		if is_equal_approx(float(sz), 1.5):
+			_route_size_opt.select(_route_size_opt.item_count - 1)
+	route_row.add_child(_route_size_opt)
+	_penstock_btn = Button.new()
+	_penstock_btn.text = "Route penstock…"
+	_penstock_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_penstock_btn.tooltip_text = ("Drag the glowing gizmo on the turbine inlet "
+			+ "up the slope to the water source, then release. You can do the "
+			+ "same in first person by dragging off the inlet port.")
+	_penstock_btn.pressed.connect(_on_toggle_penstock_mode)
+	route_row.add_child(_penstock_btn)
+	var route_btn := Button.new()
+	route_btn.text = "From pond"
+	route_btn.tooltip_text = ("Restyle the existing pond→turbine wire as Poly "
+			+ "Penstock (ground-contour route; edit it later with the 3D wire tools)")
+	route_btn.pressed.connect(_on_route_penstock)
+	route_row.add_child(route_btn)
+	# One-click alternative to dragging: scan the terrain around the turbine
+	# and tap the best genuinely-higher ground — navigating the section uphill
+	# by hand is fiddly, and most sites have one obvious answer anyway.
+	var uphill_btn := Button.new()
+	uphill_btn.text = "Auto-route uphill"
+	uphill_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	uphill_btn.tooltip_text = ("Scan up to ~120 m around the turbine, place a "
+			+ "Stream Intake on the highest ground found, and run the penstock "
+			+ "there. Drag its 3D pins afterwards to refine the path.")
+	uphill_btn.pressed.connect(_on_auto_route_uphill)
+	_penstock_group.add_child(uphill_btn)
+	_route_status_lbl = Label.new()
+	_route_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_route_status_lbl.add_theme_color_override("font_color", C_MUTED)
+	_route_status_lbl.add_theme_font_size_override("font_size", 11)
+	_route_status_lbl.text = ""
+	_penstock_group.add_child(_route_status_lbl)
+	var goto_btn := Button.new()
+	goto_btn.text = "Go to turbine in 3D"
+	goto_btn.tooltip_text = ("Close the Lab and stand at the turbine, with the "
+			+ "penstock lit — grab a mid-pin there to add bends.")
+	goto_btn.pressed.connect(_on_go_to_turbine)
+	_penstock_group.add_child(goto_btn)
 
 	# Placing the turbine near a pond auto-binds it and auto-routes its outlet
 	# (and re-tries automatically whenever the Lab opens on an unbound siphon)
@@ -484,11 +761,11 @@ func _build_ui() -> void:
 	bind_btn.tooltip_text = "Auto-bind normally happens on placement — use this to switch ponds or retry"
 	bind_btn.pressed.connect(_on_bind_pond)
 	_side.add_child(bind_btn)
-	var outlet_btn := Button.new()
-	outlet_btn.text = "Refresh outlet route"
-	outlet_btn.tooltip_text = "Re-route the downhill culvert outlet (e.g. after sculpting terrain)"
-	outlet_btn.pressed.connect(_on_ensure_outlet)
-	_side.add_child(outlet_btn)
+	_outlet_btn = Button.new()
+	_outlet_btn.text = "Refresh outlet route"
+	_outlet_btn.tooltip_text = "Re-route the downhill culvert outlet (e.g. after sculpting terrain)"
+	_outlet_btn.pressed.connect(_on_ensure_outlet)
+	_side.add_child(_outlet_btn)
 
 	# Folded by default — Geometry / Levels / Live stay primary.
 	var ws_body := _fold_section(_side, "Watershed (rain → pond)", false)
@@ -535,26 +812,54 @@ func _build_ui() -> void:
 	_ws_season_lbl.text = ""
 	ws_body.add_child(_ws_season_lbl)
 
-	_section(_side, "Test inflow")
-	var drive_hint := Label.new()
-	drive_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	drive_hint.add_theme_color_override("font_color", C_MUTED)
-	drive_hint.add_theme_font_size_override("font_size", 11)
-	drive_hint.text = "Steady fill into the pond, advanced on the world clock. Play / speed up time to watch it prime, then drain (orifice-limited by the barrel)."
-	_side.add_child(drive_hint)
+	_section(_side, "Test flow")
+	_drive_hint_lbl = Label.new()
+	_drive_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_drive_hint_lbl.add_theme_color_override("font_color", C_MUTED)
+	_drive_hint_lbl.add_theme_font_size_override("font_size", 11)
+	_side.add_child(_drive_hint_lbl)
 	_sim_inflow_btn = CheckButton.new()
-	_sim_inflow_btn.text = "Test inflow (steady L/s)"
-	_sim_inflow_btn.tooltip_text = (
-			"Constant fill into the bound pond (works while sim is paused / "
-			+ "Elev noon-lock). The only manual water driver.")
 	_sim_inflow_btn.toggled.connect(_on_sim_inflow_toggled)
 	_side.add_child(_sim_inflow_btn)
-	_sim_inflow_spin = _spin(_side, "Inflow L/s", 0.05, 2000.0, 0.05, func(v: float) -> void:
+	_sim_inflow_spin = _spin(_side, "Flow L/s", 0.05, 2000.0, 0.05, func(v: float) -> void:
+		if _syncing:
+			return
+		_sync_flow_slider_from_spin(v)
 		var on := _sim_inflow_btn != null and _sim_inflow_btn.button_pressed
 		_write_sim_inflow(on, v))
 	_sim_inflow_spin.value = 0.5
+	# Slider for the same value: sweeping a flow and watching the power track is
+	# the point of the control, and a SpinBox's up/down arrows make that a chore.
+	# Linear over the micro-hydro band; the spin stays the escape hatch above it
+	# and the slider's ceiling follows whatever it is set to.
+	_sim_inflow_slider = HSlider.new()
+	_sim_inflow_slider.min_value = 0.0
+	_sim_inflow_slider.max_value = FLOW_SLIDER_MAX_LPS
+	_sim_inflow_slider.step = 0.01
+	_sim_inflow_slider.value = 0.5
+	_sim_inflow_slider.custom_minimum_size = Vector2(0, 18)
+	_sim_inflow_slider.tooltip_text = "Drag to sweep the source flow and watch the power, head and nozzle warnings track it live."
+	_sim_inflow_slider.value_changed.connect(func(v: float) -> void:
+		if _syncing or _sim_inflow_spin == null:
+			return
+		_syncing = true
+		_sim_inflow_spin.value = v
+		_syncing = false
+		var on := _sim_inflow_btn != null and _sim_inflow_btn.button_pressed
+		_write_sim_inflow(on, v))
+	_side.add_child(_sim_inflow_slider)
+	_sync_test_flow_labels()
 
 	_section(_side, "Live readouts")
+	# Name the source explicitly. Three surfaces in this Lab show live numbers and
+	# people could not tell which to trust; these and the strip under the section
+	# are the SAME operating point, written in the same refresh.
+	var live_hint := Label.new()
+	live_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	live_hint.add_theme_color_override("font_color", C_MUTED)
+	live_hint.add_theme_font_size_override("font_size", 10)
+	live_hint.text = "The machine's operating point at the matched load — the same numbers as the strip under the section. The close-up's own readout shows this scaled to whatever load you set there."
+	_side.add_child(live_hint)
 	_rpm_lbl = _ro(_side, "RPM")
 	_pe_lbl = _ro(_side, "Hydraulic PE")
 	_elec_lbl = _ro(_side, "Electrical")
@@ -562,6 +867,34 @@ func _build_ui() -> void:
 	_head_lbl = _ro(_side, "Head")
 	_state_lbl = _ro(_side, "State")
 	_cum_lbl = _ro(_side, "Outlet volume")
+	_warn_lbl = Label.new()
+	_warn_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_warn_lbl.add_theme_color_override("font_color", C_WARN)
+	_warn_lbl.add_theme_font_size_override("font_size", 11)
+	_warn_lbl.visible = false
+	_side.add_child(_warn_lbl)
+	# The oversized-nozzle warning already knows the diameter that would match the
+	# supply, and the nozzle Ø spin is four rows up — so make the recommendation
+	# something you can act on rather than something you have to retype.
+	_fit_nozzle_btn = Button.new()
+	_fit_nozzle_btn.visible = false
+	_fit_nozzle_btn.pressed.connect(_on_fit_nozzle)
+	_side.add_child(_fit_nozzle_btn)
+
+	# Power curves: P vs gross head, one polyline per poly pipe size, with the
+	# live operating point marked — change a knob and watch the marker move
+	# against the alternatives (penstock kinds only; hidden for the siphon).
+	_chart_body = _fold_section(_side, "Power curves", true)
+	_chart = Control.new()
+	_chart.set_script(_CHART_SCRIPT)
+	_chart.custom_minimum_size = Vector2(0, 168)
+	_chart.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chart_body.add_child(_chart)
+	_chart_stats_lbl = Label.new()
+	_chart_stats_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chart_stats_lbl.add_theme_color_override("font_color", C_MUTED)
+	_chart_stats_lbl.add_theme_font_size_override("font_size", 11)
+	_chart_body.add_child(_chart_stats_lbl)
 
 	var est_body := _fold_section(_side, "Estimate", false)
 	_capacity_lbl = _ro(est_body, "Pipe capacity")
@@ -584,7 +917,7 @@ func _build_ui() -> void:
 	_nav_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_nav_hint_lbl.add_theme_color_override("font_color", C_MUTED)
 	_nav_hint_lbl.add_theme_font_size_override("font_size", 10)
-	_nav_hint_lbl.text = "Drag CT to pan · Wheel zoom · heading locked to pond→outlet"
+	_nav_hint_lbl.text = "Right-drag pans · wheel zooms at the cursor (Ctrl = fine) · F frames the turbine, Home the whole run · heading locked to source→outlet"
 	_side.add_child(_nav_hint_lbl)
 
 
@@ -673,6 +1006,41 @@ func _model() -> GraphModel:
 	return _graph_view.get("model") as GraphModel
 
 
+## True when `item_id` is a live hydro-turbine item this Lab can drive.
+func _is_lab_turbine(item_id: String) -> bool:
+	if item_id.is_empty():
+		return false
+	var m := _model()
+	if m == null:
+		return false
+	var it := m.get_item(item_id)
+	if it.is_empty():
+		return false
+	return str((it.get("specs", {}) as Dictionary).get("role", "")) == "siphon_hydro"
+
+
+## Switch the Lab to another turbine WITHOUT leaving the view — clicking a
+## different turbine in the cross-section makes it the active one (before this,
+## the dock params always applied to whichever turbine the Lab opened on, and
+## with two turbines on a site there was no way to move the session over).
+func set_active_turbine(item_id: String) -> void:
+	if item_id == _item_id or not _is_lab_turbine(item_id):
+		return
+	# Park the old turbine's test inflow — it belongs to that session.
+	if not _item_id.is_empty():
+		var lps := float(_sim_inflow_spin.value) if _sim_inflow_spin != null else 0.5
+		_write_sim_inflow(false, lps)
+	_item_id = item_id
+	_load_from_model()
+	if _graph_view != null and _graph_view.has_method("prepare_siphon_lab_session"):
+		_graph_view.call("prepare_siphon_lab_session", _item_id)
+	_reset_view_transform()
+	_phys_acc = 999.0
+	call_deferred("_push_lab_section_frame")
+	if _preview != null:
+		_preview.queue_redraw()
+
+
 func _pick_default_siphon_id() -> String:
 	var m := _model()
 	if m == null:
@@ -680,8 +1048,6 @@ func _pick_default_siphon_id() -> String:
 	# Prefer current selection on the graph view.
 	if _graph_view != null:
 		var sel := str(_graph_view.get("_selected_item_id") if _graph_view.get("_selected_item_id") != null else "")
-		if sel.is_empty() and _graph_view.has_method("get"):
-			pass
 		var canvas = _graph_view.get("_graph_canvas")
 		if canvas != null:
 			sel = str(canvas.get("selected_item_id"))
@@ -700,6 +1066,12 @@ func _pick_default_siphon_id() -> String:
 
 
 func _load_from_model() -> bool:
+	# A reload means the pond binding, the basin polygon or the routed penstock
+	# may all have changed under the cached signatures.
+	_invalidate_slice_cache()
+	_est_sig = ""
+	_route_sig = ""
+	_routed_conn_id = ""
 	var m := _model()
 	var has_item := m != null and not _item_id.is_empty()
 	var item := m.get_item(_item_id) if has_item else {}
@@ -748,11 +1120,29 @@ func _load_from_model() -> bool:
 	_roughness_spin.value = float(specs.get("pipe_roughness_mm", 0.0015))
 	_design_flow_spin.value = float(specs.get("design_flow_lps", 5.0))
 	_turb_eff_spin.value = float(specs.get("turbine_efficiency", 0.0))
+	# A model reload means a different turbine / fresh state — never leave the
+	# placement gizmo armed against the previous one.
+	_penstock_mode = false
+	_penstock_dragging = false
+	_penstock_ghost_valid = false
+	_sync_penstock_btn()
 	var kind := str(specs.get("turbine_kind", "siphon"))
+	var kmeta := HydroSource.kind_meta(kind)
+	if _nozzle_count_spin != null:
+		_nozzle_count_spin.max_value = maxf(float(kmeta.get("nozzle_count_max", 2)), 1.0)
+		_nozzle_count_spin.value = maxf(float(specs.get("nozzle_count", 1)), 1.0)
+	if _nozzle_d_spin != null:
+		_nozzle_d_spin.value = float(specs.get("nozzle_diameter_mm",
+				float(kmeta.get("default_nozzle_mm", 10.0))))
+	if _nozzle_off_spin != null:
+		_nozzle_off_spin.value = float(specs.get("nozzle_offset_mm", 0.0))
+		if _closeup != null and _closeup.has_method("set_nozzle_offset_m"):
+			_closeup.call("set_nozzle_offset_m", float(_nozzle_off_spin.value) / 1000.0)
 	_select_kind_in_dropdown(kind)
 	_apply_kind_visibility(kind)
 	if _sim_inflow_spin != null:
 		_sim_inflow_spin.value = maxf(float(specs.get("lab_sim_inflow_lps", 0.5)), 0.05)
+		_sync_flow_slider_from_spin(float(_sim_inflow_spin.value))
 	if _sim_inflow_btn != null:
 		_sim_inflow_btn.set_pressed_no_signal(bool(specs.get("lab_sim_inflow_enabled", false)))
 	_title_lbl.text = "Hydro Lab — %s" % str(specs.get("name", "Turbine"))
@@ -854,6 +1244,10 @@ func _on_kind_selected(idx: int) -> void:
 	var kind := str(_kind_opt.get_item_metadata(idx))
 	_commit_string("turbine_kind", kind)
 	_apply_kind_visibility(kind)
+	# A different turbine kind is a different MACHINE — swap the placed 3D model
+	# so a PowerSpout stops wearing the siphon turbine's body.
+	if _graph_view != null and _graph_view.has_method("sync_turbine_model_to_kind"):
+		_graph_view.call("sync_turbine_model_to_kind", _item_id)
 	_refresh_physics()
 	if _preview != null:
 		_preview.queue_redraw()
@@ -875,10 +1269,29 @@ func _select_kind_in_dropdown(kind: String) -> void:
 func _apply_kind_visibility(kind: String) -> void:
 	var meta := HydroSource.kind_meta(kind)
 	var penstock := bool(meta.get("has_penstock", false))
+	var nozzle := bool(meta.get("uses_nozzle_model", false))
+	_sync_test_flow_labels()
 	if _siphon_group != null:
 		_siphon_group.visible = not penstock
 	if _penstock_group != null:
 		_penstock_group.visible = penstock
+	# Nozzle-governed kinds: the nozzle IS the flow control — swap the knob.
+	if _design_flow_spin != null and _design_flow_spin.get_parent() != null:
+		(_design_flow_spin.get_parent() as Control).visible = penstock and not nozzle
+	if _nozzle_count_spin != null and _nozzle_count_spin.get_parent() != null:
+		(_nozzle_count_spin.get_parent() as Control).visible = penstock and nozzle
+	if _nozzle_d_spin != null and _nozzle_d_spin.get_parent() != null:
+		(_nozzle_d_spin.get_parent() as Control).visible = penstock and nozzle
+	if _nozzle_off_spin != null and _nozzle_off_spin.get_parent() != null:
+		(_nozzle_off_spin.get_parent() as Control).visible = penstock and nozzle
+	# Power curves are a penstock story (pipe-size families); the siphon's
+	# output is orifice/weir-limited, not pipe-diameter-limited.
+	if _chart_body != null and _chart_body.get_parent() != null:
+		(_chart_body.get_parent() as Control).visible = penstock
+	# Penstock kinds discharge tailwater at the machine — there is no culvert
+	# outlet to refresh (and ensure_siphon_outlet_sink now refuses to mint one).
+	if _outlet_btn != null:
+		_outlet_btn.visible = not penstock
 	if _kind_hint_lbl != null:
 		var band: Array = meta.get("head_band", []) as Array
 		var band_txt := "%.0f–%.0f m head" % [float(band[0]), float(band[1])] if band.size() == 2 else ""
@@ -894,6 +1307,349 @@ func _current_kind() -> String:
 
 func _kind_has_penstock() -> bool:
 	return bool(HydroSource.kind_meta(_current_kind()).get("has_penstock", false))
+
+
+## Nozzle-governed (PowerSpout-class Pelton): the NOZZLE sets the flow, so
+## `design_flow_lps == 0` means unlimited rather than "no water".
+func _kind_uses_nozzle() -> bool:
+	return bool(HydroSource.kind_meta(_current_kind()).get("uses_nozzle_model", false))
+
+
+## Snap the turbine module to the ground at its site position — the quick
+## "seat it on the hillside" placement move (the CT drag stays for fine work).
+func _on_snap_module_to_terrain() -> void:
+	var m := _model()
+	if m == null or _item_id.is_empty():
+		return
+	var item := m.get_item(_item_id)
+	if not GraphSiteLayout.has_site_coords(item):
+		if _route_status_lbl != null:
+			_route_status_lbl.text = "Place the turbine on the map first (Site Plan / 3D)."
+		return
+	var soi := _soi_service()
+	if soi == null or not soi.has_method("ground_y_at") \
+			or not soi.has_method("world_center"):
+		return
+	var center: Vector3 = soi.call("world_center") as Vector3
+	var wxz := GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(item), center)
+	var gy := float(soi.call("ground_y_at", wxz.x, wxz.y))
+	if _module_spin != null:
+		_module_spin.value = gy   # spin commit path persists module_elev_m + levels
+	_commit_float("module_elev_m", gy)
+
+
+## Restyle the pond→turbine water wire as a contour-routed poly penstock — the
+## SAME connection the 3D wire tools edit (one route, two surfaces). The
+## conduit manager then measures the ground-following run and stamps
+## route_length_m + endpoint inverts, which the flow engine feeds HydroReach.
+func _on_route_penstock() -> void:
+	var m := _model()
+	if m == null or _item_id.is_empty() or _route_status_lbl == null:
+		return
+	var tank: Dictionary = {}
+	if _graph_view != null and _graph_view.has_method("resolve_siphon_pond"):
+		tank = _graph_view.call("resolve_siphon_pond", _item_id)
+	if tank.is_empty():
+		_route_status_lbl.text = "No pond bound — Rebind to nearest pond first."
+		return
+	var tid := str(tank.get("id", ""))
+	var conn_id := ""
+	for conn: Dictionary in m.connections:
+		var s := str(conn.get("source_item_id", ""))
+		var t := str(conn.get("target_item_id", ""))
+		if (s == tid and t == _item_id) or (s == _item_id and t == tid):
+			conn_id = str(conn.get("id", ""))
+			break
+	if conn_id.is_empty():
+		_route_status_lbl.text = "No pond wire found — Rebind to nearest pond first."
+		return
+	var sel_size := 1.5
+	if _route_size_opt != null and _route_size_opt.selected >= 0:
+		sel_size = float(_route_size_opt.get_item_metadata(_route_size_opt.selected))
+	var conn := m.get_connection(conn_id)
+	var style: Dictionary = (conn.get("conduit_style", {}) as Dictionary).duplicate(true)
+	style["pipe_size_in"] = sel_size
+	m.update_connection(conn_id, {
+		"conduit_type": "poly_penstock",
+		"conduit_style": style,
+		# A physical penstock is visible even into a direct-intake port, and a
+		# fresh route must re-derive from the terrain (drop any stale pins).
+		"visible_3d": true,
+		"flow_glow": true,
+		"route_3d": [],
+		"route_locked": false,
+	})
+	# Restyling the wire is not enough on its own: ConduitManager ignores model
+	# changes while global 3D wires are off, so without this the pipe is never
+	# built, its run length / inverts are never stamped, and the physics never
+	# adopts the route (it just reads "measuring run…" forever).
+	if _graph_view != null and _graph_view.has_method("reveal_penstock_conduit"):
+		_graph_view.call("reveal_penstock_conduit", conn_id)
+	_phys_acc = 999.0
+	_refresh_route_status(true)
+	# The run length is stamped by the rebuild, which lands a frame or two
+	# later — refresh the readout again once it has.
+	get_tree().create_timer(0.35).timeout.connect(
+			_refresh_route_status.bind(true), CONNECT_ONE_SHOT)
+
+
+## Arm / disarm penstock placement: a glowing gizmo appears on the turbine
+## inlet in the cross-section and the player drags it to the water source.
+func _on_toggle_penstock_mode() -> void:
+	_penstock_mode = not _penstock_mode
+	_penstock_dragging = false
+	_penstock_ghost_valid = false
+	_sync_penstock_btn()
+	if _route_status_lbl != null:
+		if _penstock_mode:
+			_route_status_lbl.text = "Drag the ● on the turbine inlet up to the water source, then release."
+		else:
+			_refresh_route_status(true)
+	_redraw_preview()
+
+
+func _sync_penstock_btn() -> void:
+	if _penstock_btn == null:
+		return
+	_penstock_btn.text = "Cancel routing" if _penstock_mode else "Route penstock…"
+	_penstock_btn.modulate = Color(1.0, 0.86, 0.45) if _penstock_mode else Color.WHITE
+
+
+## Section drag → world. `canvas_to_elevation_hit` is the SAME authority
+## GraphSpatialEdit uses (it intersects the canvas ray with the section plane
+## and stays correct under pan/zoom), so the gizmo can never disagree with the
+## props drawn beside it.
+func _penstock_hit_from_canvas(pos: Vector2) -> Dictionary:
+	if _graph_view == null:
+		return {}
+	var preview = _graph_view.get("_soi_preview")
+	if preview == null or not preview.has_method("canvas_to_elevation_hit"):
+		return {}
+	var params := _elev_section_params()
+	var e: Variant = preview.call("canvas_to_elevation_hit", pos,
+			float(params.get("heading", 0.0)))
+	if not (e is Dictionary) or (e as Dictionary).is_empty():
+		return {}
+	return e as Dictionary
+
+
+func _penstock_try_input(event: InputEvent) -> bool:
+	if not _penstock_mode or _item_id.is_empty():
+		return false
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+			_on_toggle_penstock_mode()   # RMB cancels the mode
+			_preview_stack.accept_event()
+			return true
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return false
+		if mb.pressed:
+			# Grab only ON the gizmo, so panning and level drags still work.
+			if not is_finite(_penstock_gizmo_screen.x) \
+					or mb.position.distance_to(_penstock_gizmo_screen) > 22.0:
+				return false
+			_penstock_dragging = true
+			_penstock_ghost_valid = false
+			_preview_stack.accept_event()
+			return true
+		if _penstock_dragging:
+			_penstock_dragging = false
+			_preview_stack.accept_event()
+			_commit_penstock_drag()
+			return true
+		return false
+	if event is InputEventMouseMotion and _penstock_dragging:
+		var hit := _penstock_hit_from_canvas((event as InputEventMouseMotion).position)
+		if hit.is_empty():
+			_penstock_ghost_valid = false
+		else:
+			var site := Vector2(float(hit.get("site_x_m", 0.0)),
+					float(hit.get("site_z_m", 0.0)))
+			var params := _elev_section_params()
+			_penstock_ghost_site = site
+			# Pond-relative, like everything else the overlay draws — see
+			# _pond_along_m. Absolute here put the drag ghost (and therefore the
+			# committed intake) against the wrong part of the terrain profile.
+			_penstock_ghost_along = GraphSiteLayout.project_onto_section(
+					site, float(params.get("heading", 0.0))).x - _pond_along_m()
+			# Snap the end to the GROUND, not the click height — a penstock
+			# intake sits on the terrain, and the drag then reads as "walking"
+			# the pipe up the slope.
+			var gy := _ground_elev_at_site(site)
+			_penstock_ghost_elev = gy if not is_nan(gy) \
+					else float(hit.get("elevation_m", 0.0))
+			_penstock_ghost_valid = true
+		_preview_stack.accept_event()
+		_redraw_preview()
+		return true
+	return false
+
+
+## Terrain elevation at a site point (SoI service), NAN when unavailable.
+func _ground_elev_at_site(site: Vector2) -> float:
+	var soi := _soi_service()
+	if soi == null or not soi.has_method("ground_y_at") \
+			or not soi.has_method("world_center"):
+		return NAN
+	var center: Vector3 = soi.call("world_center") as Vector3
+	var wxz := GraphSiteLayout.site_to_world_xz(site, center)
+	return float(soi.call("ground_y_at", wxz.x, wxz.y))
+
+
+func _commit_penstock_drag() -> void:
+	if not _penstock_ghost_valid:
+		if _route_status_lbl != null:
+			_route_status_lbl.text = "Released off the terrain — try again on the hillside."
+		_redraw_preview()
+		return
+	var turbine_elev := float(_module_spin.value) if _module_spin != null else 0.0
+	if _penstock_ghost_elev <= turbine_elev + 0.25:
+		if _route_status_lbl != null:
+			_route_status_lbl.text = "Source must be ABOVE the turbine — drag further uphill."
+		_penstock_ghost_valid = false
+		_redraw_preview()
+		return
+	var soi := _soi_service()
+	if soi == null or not soi.has_method("world_center") or _graph_view == null:
+		return
+	var center: Vector3 = soi.call("world_center") as Vector3
+	var wxz := GraphSiteLayout.site_to_world_xz(_penstock_ghost_site, center)
+	var sel_size := 1.5
+	if _route_size_opt != null and _route_size_opt.selected >= 0:
+		sel_size = float(_route_size_opt.get_item_metadata(_route_size_opt.selected))
+	var conn_id := ""
+	if _graph_view.has_method("create_penstock_intake_at"):
+		conn_id = str(_graph_view.call("create_penstock_intake_at",
+				Vector3(wxz.x, _penstock_ghost_elev, wxz.y), _item_id, "res_in_0",
+				{"pipe_size_in": sel_size}))
+	_penstock_mode = false
+	_penstock_ghost_valid = false
+	_sync_penstock_btn()
+	_phys_acc = 999.0
+	if conn_id.is_empty():
+		if _route_status_lbl != null:
+			_route_status_lbl.text = "Couldn't place the intake there."
+	else:
+		_refresh_route_status(true)
+		get_tree().create_timer(0.35).timeout.connect(
+				_refresh_route_status.bind(true), CONNECT_ONE_SHOT)
+	_redraw_preview()
+
+
+func _on_go_to_turbine() -> void:
+	if _graph_view != null and _graph_view.has_method("go_to_turbine_in_world"):
+		_graph_view.call("go_to_turbine_in_world", _item_id)
+
+
+## One-click uphill routing: ring-scan real terrain around the turbine, place
+## the Stream Intake on the best genuinely-higher ground, run the penstock.
+func _on_auto_route_uphill() -> void:
+	if _graph_view == null or _item_id.is_empty() or _route_status_lbl == null:
+		return
+	var m := _model()
+	if m == null:
+		return
+	var item := m.get_item(_item_id)
+	if not GraphSiteLayout.has_site_coords(item):
+		_route_status_lbl.text = "Place the turbine on the map first (Site Plan / 3D)."
+		return
+	var soi := _soi_service()
+	if soi == null or not soi.has_method("ground_y_at") \
+			or not soi.has_method("world_center"):
+		_route_status_lbl.text = "No terrain on this map — set Gross head by hand."
+		return
+	var center: Vector3 = soi.call("world_center") as Vector3
+	var t_xz := GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(item), center)
+	var t_y := float(soi.call("ground_y_at", t_xz.x, t_xz.y))
+	var best := Vector3.INF
+	var best_y := t_y + 1.0   # require at least a metre of genuine rise
+	for i in 48:
+		var a := TAU * float(i) / 48.0
+		for r in [30.0, 60.0, 90.0, 120.0]:
+			var wx: float = t_xz.x + cos(a) * float(r)
+			var wz: float = t_xz.y + sin(a) * float(r)
+			var gy := float(soi.call("ground_y_at", wx, wz))
+			# Prefer height; on a tie prefer the SHORTER run (cheaper pipe).
+			if gy > best_y + 0.05 or (gy > best_y - 0.05 and is_finite(best.x) \
+					and Vector2(wx, wz).distance_to(t_xz) \
+						< Vector2(best.x, best.z).distance_to(t_xz)):
+				best_y = gy
+				best = Vector3(wx, gy, wz)
+	if not is_finite(best.x):
+		_route_status_lbl.text = "No higher ground within 120 m — drag the gizmo further, or set Gross head by hand."
+		return
+	var sel_size := 1.5
+	if _route_size_opt != null and _route_size_opt.selected >= 0:
+		sel_size = float(_route_size_opt.get_item_metadata(_route_size_opt.selected))
+	var conn_id := ""
+	if _graph_view.has_method("create_penstock_intake_at"):
+		conn_id = str(_graph_view.call("create_penstock_intake_at", best, _item_id,
+				"res_in_0", {"pipe_size_in": sel_size}))
+	_phys_acc = 999.0
+	if conn_id.is_empty():
+		_route_status_lbl.text = "Couldn't place the intake."
+	else:
+		_route_status_lbl.text = "Intake placed %.1f m above the turbine." % (best_y - t_y)
+		get_tree().create_timer(0.35).timeout.connect(_refresh_route_status,
+				CONNECT_ONE_SHOT)
+	_redraw_preview()
+
+
+## The routed penstock's live facts (run / drop / size), or why there isn't one.
+## Signature-gated: this ran a full connections scan on every 6 Hz physics tick,
+## and the answer only moves when a route is added, removed or re-measured.
+## `force` is for the paths that just wrote a TRANSIENT message into this label
+## (placement hints, refusals): the route itself did not change, so the signature
+## would otherwise leave that message on screen forever.
+func _refresh_route_status(force: bool = false) -> void:
+	if _route_status_lbl == null:
+		return
+	var m := _model()
+	if m == null or _item_id.is_empty():
+		return
+	if force:
+		_route_sig = ""
+	var conn := _penstock_conn_for_status(m)
+	var sig := "%d|%s|%.3f|%.3f|%.3f|%.3f" % [
+		m.connections.size(), str(conn.get("id", "")),
+		float(conn.get("route_length_m", 0.0)),
+		float(conn.get("invert_in_m", NAN)),
+		float(conn.get("invert_out_m", NAN)),
+		ConduitKinds.pipe_size_in("poly_penstock",
+				conn.get("conduit_style", {}) as Dictionary) if not conn.is_empty() else 0.0,
+	]
+	if sig == _route_sig:
+		return
+	_route_sig = sig
+	if conn.is_empty():
+		_route_status_lbl.text = "Not routed — physics uses the typed length/head above."
+		return
+	var sz := ConduitKinds.pipe_size_in("poly_penstock",
+			conn.get("conduit_style", {}) as Dictionary)
+	var run := float(conn.get("route_length_m", 0.0))
+	var inv_in := float(conn.get("invert_in_m", NAN))
+	var inv_out := float(conn.get("invert_out_m", NAN))
+	var drop := absf(inv_in - inv_out) if not (is_nan(inv_in) or is_nan(inv_out)) else NAN
+	if run > 0.5:
+		var txt := "Routed: %s poly · run %.0f m" % [PipeKit.size_label(sz), run]
+		if not is_nan(drop):
+			txt += " · drop %.1f m"  % drop
+		_route_status_lbl.text = txt
+	else:
+		_route_status_lbl.text = "Routed: %s poly (measuring run…)" % PipeKit.size_label(sz)
+
+
+## Status looks for ANY poly_penstock on this turbine (not only contour-routed
+## ones — a hand-pinned run still has a real measured length worth reporting).
+func _penstock_conn_for_status(m: Variant) -> Dictionary:
+	for conn: Dictionary in m.connections:
+		if str(conn.get("source_item_id", "")) != _item_id \
+				and str(conn.get("target_item_id", "")) != _item_id:
+			continue
+		if str(conn.get("conduit_type", "")) == "poly_penstock":
+			return conn
+	return {}
 
 
 func _on_bind_pond() -> void:
@@ -1288,8 +2044,11 @@ func _process(delta: float) -> void:
 	# Lab is open. The flow engine ticks the water on the world clock; this only
 	# syncs visuals (no separate lab clock, no demo oscillator).
 	if _as_view and _graph_view != null and _graph_view.has_method("lab_siphon_tick"):
-		_graph_view.call("lab_siphon_tick", _item_id, delta)
-		_pond_cache_t = 999.0  # force pond context refresh after tank writes
+		# Only invalidate the pond cache when the tick's own 0.12 s throttle
+		# actually fired and wrote tank state. Dropping it unconditionally turned
+		# the 0.25 s _pond_context() cache into a per-frame resolve_siphon_pond().
+		if bool(_graph_view.call("lab_siphon_tick", _item_id, delta)):
+			_pond_cache_t = 999.0
 	_phys_acc += delta
 	_ui_acc += delta
 	_pond_cache_t += delta
@@ -1407,6 +2166,14 @@ func _refresh_physics() -> void:
 	sim_specs["siphon_start_m"] = float(_start_spin.value)
 	sim_specs["siphon_break_m"] = float(_break_spin.value)
 	sim_specs["module_elev_m"] = float(_module_spin.value)
+	# Apply the test flow to OUR OWN evaluation immediately rather than waiting
+	# for the flow engine to re-stamp `supply_lps` on its next tick. The engine
+	# lands within a frame or two, but "a frame or two" is exactly the lag that
+	# made dragging the slider feel disconnected from the readouts.
+	if _kind_has_penstock() and bool(specs.get("lab_sim_inflow_enabled", false)):
+		sim_specs["supply_lps"] = maxf(float(specs.get("lab_sim_inflow_lps", 0.0)), 0.0)
+		if not sim_specs.has("penstock_source_mode"):
+			sim_specs["penstock_source_mode"] = "stream"
 	if is_nan(float(sim_specs.get("outlet_invert_m", NAN))):
 		sim_specs["outlet_invert_m"] = float(_module_spin.value) - 9.0
 	_last_r = HydroReach.evaluate_specs(level_m, sim_specs)
@@ -1445,6 +2212,47 @@ func _refresh_physics() -> void:
 		cum = float(_graph_view.call("siphon_outlet_cumulative_l", _item_id))
 	_cum_lbl.text = "%.0f L" % cum
 	_refresh_estimate(sim_specs)
+	_refresh_warnings()
+	_refresh_route_status()
+	_refresh_status_strip()
+	_push_closeup_state()
+
+
+## The at-a-glance line under the cross-section.
+##
+## There are three places in this Lab that show live numbers, and they confused
+## people because nothing said how they relate. They now have distinct jobs and,
+## crucially, ONE source:
+##   * this strip — the CHAIN, source → machine, at a glance;
+##   * the dock's "Live readouts" — the same operating point, itemised with units;
+##   * the close-up's HUD — the same machine AT THE VIEWED LOAD, which is the only
+##     one that may legitimately differ, and it says so on its own line.
+## Strip and dock both read `_last_r` and are written in the same refresh, so they
+## cannot drift apart.
+func _refresh_status_strip() -> void:
+	if _status_lbl == null:
+		return
+	var q := float(_last_r.get("q_lps", 0.0))
+	var flowing := q > 0.01
+	# Lead with the SOURCE so the chain reads left to right: what the water is
+	# doing, then what the machine makes of it.
+	var parts := PackedStringArray()
+	var supply := float(_last_r.get("q_supply_lps", NAN))
+	if not is_nan(supply):
+		parts.append("source %.2f L/s" % supply)
+	parts.append("→ Q %.2f L/s" % q)
+	parts.append("head %.1f m" % float(_last_r.get("head_m", 0.0)))
+	parts.append("%.0f W" % float(_last_r.get("power_w", 0.0)))
+	parts.append("%.0f rpm" % float(_last_r.get("rpm", 0.0)))
+	if _kind_has_penstock():
+		parts.append("FLOWING" if flowing else str(_last_r.get("regime", "dry")))
+	else:
+		parts.append("PRIMED" if bool(_last_r.get("primed", false)) else
+				str(_last_r.get("regime", "dry")))
+	if bool(_last_r.get("supply_limited", false)):
+		parts.append("supply-limited")
+	_status_lbl.text = " · ".join(parts)
+	_status_lbl.add_theme_color_override("font_color", C_ACCENT if flowing else C_MUTED)
 
 
 ## Populate the Estimate card: instantaneous pipe capacity + head loss (from the
@@ -1470,27 +2278,291 @@ func _refresh_estimate(sim_specs: Dictionary) -> void:
 	# Build a spec for the shared closed form from the live geometry + penstock edits.
 	var gross := maxf(float(_last_r.get("head_m", 0.0)), 0.0)
 	var est := sim_specs.duplicate(true)
+	# Head is snapped to 5 cm: it drifts continuously as the pond fills/drains, and
+	# a raw float in the signature would defeat the gate on every single tick.
+	var est_sig := "%s|%.2f|%.2f|%.2f|%.3f|%.3f|%.2f|%d|%.2f|%.1f" % [
+		_current_kind(), snappedf(gross, 0.05),
+		float(_penstock_len_spin.value) if _penstock_len_spin != null else 60.0,
+		float(_penstock_d_spin.value) if _penstock_d_spin != null else 63.0,
+		float(_roughness_spin.value) if _roughness_spin != null else 0.0015,
+		float(_turb_eff_spin.value) if _turb_eff_spin != null else 0.0,
+		float(_design_flow_spin.value) if _design_flow_spin != null else 0.0,
+		int(_nozzle_count_spin.value) if _nozzle_count_spin != null else 1,
+		float(_nozzle_d_spin.value) if _nozzle_d_spin != null else 0.0,
+		float(sim_specs.get("max_power_w", 0.0)),
+	]
+	# Editing the intake's base flow / rain response reshapes the seasonal curve
+	# without touching a single control in THIS panel, so the annual estimate has
+	# to notice. Summing it is enough to discriminate; it is 12 floats.
+	var prof_sum := 0.0
+	for v: Variant in (sim_specs.get("supply_monthly_lps", []) as Array):
+		prof_sum += float(v)
+	# The LIVE supply belongs here too. Without it, dragging the Lab's test flow
+	# changed every physics number but left the estimate, the chart and the
+	# per-size stats frozen — the single loudest "nothing updates" symptom.
+	est_sig += "|%.4f|%.4f" % [prof_sum,
+		float(sim_specs.get("supply_lps", -1.0))]
 	est["gross_head_m"] = gross
-	est["design_flow_lps"] = maxf(float(_design_flow_spin.value) if _design_flow_spin != null else 0.0, 0.01)
+	# design_flow 0 means UNLIMITED for a nozzle kind (the nozzle is the flow
+	# control), so flooring it at 0.01 pinned the whole estimate to a 0.01 L/s
+	# supply and returned ~0 W — the PowerSpout's power curve was flat zero
+	# whenever its (hidden) design-flow spin sat at 0, which is its default.
+	# Only design-flow kinds, where 0 really does mean "no flow", get the floor.
+	var design_in := float(_design_flow_spin.value) if _design_flow_spin != null else 0.0
+	if _kind_uses_nozzle():
+		est["design_flow_lps"] = maxf(design_in, 0.0)
+	else:
+		est["design_flow_lps"] = maxf(design_in, 0.01)
 	est["penstock_length_m"] = float(_penstock_len_spin.value) if _penstock_len_spin != null else 60.0
 	est["penstock_diameter_mm"] = float(_penstock_d_spin.value) if _penstock_d_spin != null else 63.0
 	if _roughness_spin != null:
 		est["pipe_roughness_mm"] = float(_roughness_spin.value)
 	if _turb_eff_spin != null and float(_turb_eff_spin.value) > 0.0:
 		est["turbine_efficiency"] = float(_turb_eff_spin.value)
-	var mults: Array = []
-	var ws := _weather_service()
-	if ws != null and ws.has_method("monthly_precip_multipliers"):
-		mults = ws.call("monthly_precip_multipliers") as Array
-	var ann := HydroSource.annual_energy_kwh_from_specs(est, mults)
-	var mean_kw := float(ann.get("mean_kw", 0.0))
-	var nameplate_w := float(sim_specs.get("max_power_w", 0.0))
-	if nameplate_w > 0.0:
-		_capfac_lbl.text = "%.0f%%" % clampf(mean_kw * 1000.0 / nameplate_w * 100.0, 0.0, 100.0)
-	else:
-		_capfac_lbl.text = "n/a (no nameplate)"
-	_annual_lbl.text = "%.0f kWh/yr" % float(ann.get("annual_kwh", 0.0))
-	_estimate_hint_lbl.text = "Representative-year estimate at continuous flow (Q capped by pipe + design flow); seasonal precipitation weights the monthly flow."
+	# The annual closed form is 12 power evaluations and nothing about it is live
+	# telemetry, so it runs only when a design input actually moved — it used to
+	# recompute at the full 6 Hz physics rate.
+	if est_sig != _est_sig:
+		_est_sig = est_sig
+		var mults: Array = []
+		var ws := _weather_service()
+		if ws != null and ws.has_method("monthly_precip_multipliers"):
+			mults = ws.call("monthly_precip_multipliers") as Array
+		# A stream intake's supply VARIES over the year. Without the monthly curve
+		# every month reuses the one instantaneous supply the engine last stamped,
+		# so the annual figure reads whatever the spring happened to be doing when
+		# the panel opened.
+		var supply_prof: Array = []
+		var prof_v: Variant = sim_specs.get("supply_monthly_lps", null)
+		if prof_v is PackedFloat32Array:
+			supply_prof = Array(prof_v as PackedFloat32Array)
+		elif prof_v is Array:
+			supply_prof = prof_v as Array
+		var ann := HydroSource.annual_energy_kwh_from_specs(est, mults, supply_prof)
+		var mean_kw := float(ann.get("mean_kw", 0.0))
+		var nameplate_w := float(sim_specs.get("max_power_w", 0.0))
+		if nameplate_w > 0.0:
+			_capfac_lbl.text = "%.0f%%" % clampf(mean_kw * 1000.0 / nameplate_w * 100.0, 0.0, 100.0)
+		else:
+			_capfac_lbl.text = "n/a (no nameplate)"
+		_annual_lbl.text = "%.0f kWh/yr" % float(ann.get("annual_kwh", 0.0))
+		if supply_prof.size() == 12:
+			var lo := 1e30
+			var hi := -1e30
+			for v: Variant in supply_prof:
+				lo = minf(lo, float(v))
+				hi = maxf(hi, float(v))
+			_estimate_hint_lbl.text = "Representative-year estimate from the intake's SEASONAL supply (%.2f–%.2f L/s over the year), not today's flow." % [lo, hi]
+		else:
+			_estimate_hint_lbl.text = "Representative-year estimate at continuous flow (Q capped by pipe + design flow); seasonal precipitation weights the monthly flow."
+	# Always: the chart's OPERATING-POINT MARKER is live telemetry. The curve
+	# itself carries its own _chart_sig gate.
+	_refresh_power_chart(est, gross)
+
+
+## Warnings row under Live readouts — the "is this design sane" glance:
+##  - head outside the turbine kind's published band (KINDS head_band);
+##  - penstock friction eating > 30% of gross head — standard micro-hydro
+##    sizing guidance keeps pipe loss in the 10–30% range (Thake; upsizing the
+##    pipe is the fix);
+##  - penstock velocity > 3 m/s — common PE-penstock design ceiling before
+##    surge/wear costs outweigh the pipe savings.
+func _refresh_warnings() -> void:
+	if _warn_lbl == null:
+		return
+	var warns := PackedStringArray()
+	var fit_mm := 0.0   ## recommended nozzle Ø (mm); 0 = nothing to recommend
+	var kind := _current_kind()
+	var meta := HydroSource.kind_meta(kind)
+	var gross := float(_last_r.get("head_m", 0.0))
+	var band: Array = meta.get("head_band", []) as Array
+	if gross > 0.05 and band.size() == 2:
+		if gross < float(band[0]) * 0.95:
+			warns.append("⚠ %.1f m head is below %s's %.0f–%.0f m band — expect poor output."
+					% [gross, str(meta.get("display", kind)), float(band[0]), float(band[1])])
+		elif gross > float(band[1]) * 1.05:
+			warns.append("⚠ %.1f m head is above %s's %.0f–%.0f m band."
+					% [gross, str(meta.get("display", kind)), float(band[0]), float(band[1])])
+	if str(_last_r.get("conveyance", "")) == "penstock" and gross > 0.05:
+		var loss := float(_last_r.get("head_loss_m", 0.0))
+		if loss / gross > 0.30:
+			warns.append("⚠ Pipe undersized — friction eats %.0f%% of the head (keep it under ~30%%: shorter run or fatter Ø)."
+					% (loss / gross * 100.0))
+		var q_m3s := float(_last_r.get("q_lps", 0.0)) / 1000.0
+		var d := maxf(float(_penstock_d_spin.value) if _penstock_d_spin != null else 63.0, 1.0) / 1000.0
+		var v := q_m3s / (PI * 0.25 * d * d)
+		if v > 3.0:
+			warns.append("⚠ Penstock velocity %.1f m/s (> 3 m/s guideline) — upsize the pipe." % v)
+		# Supply-limited: the jet is bigger than the stream can feed, so most of the
+		# head never becomes jet velocity. The fix is a SMALLER nozzle, which is
+		# unintuitive enough that the Lab should just name the size.
+		if bool(_last_r.get("supply_limited", false)):
+			var unused := float(_last_r.get("unused_head_m", 0.0))
+			var supply := float(_last_r.get("q_lps", 0.0))
+			var msg := "⚠ Nozzle oversized for this supply — only %.1f m of the %.1f m head is converted." \
+					% [float(_last_r.get("net_head_m", 0.0)), gross]
+			if bool(HydroSource.kind_meta(kind).get("uses_nozzle_model", false)) \
+					and supply > 1e-6 and unused > 0.05:
+				var d_fit := PeltonPhysics.nozzle_d_for_supply_m(gross,
+						float(_penstock_len_spin.value) if _penstock_len_spin != null else 60.0,
+						d, maxf(float(_roughness_spin.value) if _roughness_spin != null else 0.0015, 0.0) / 1000.0,
+						int(_nozzle_count_spin.value) if _nozzle_count_spin != null else 1,
+						supply / 1000.0)
+				if d_fit > 0.0:
+					msg += " A %.1f mm nozzle would match %.2f L/s." % [d_fit * 1000.0, supply]
+					fit_mm = d_fit * 1000.0
+			warns.append(msg)
+	if str(_last_r.get("regime", "")) == "no_supply":
+		warns.append("⚠ The source is dry — no flow at the intake. Set a base flow on the intake node, raise the test flow, or wait for rain.")
+	_warn_lbl.visible = not warns.is_empty()
+	_warn_lbl.text = "\n".join(warns)
+	_fit_nozzle_mm = fit_mm
+	if _fit_nozzle_btn != null and _nozzle_d_spin != null:
+		# Offer — and LABEL — the size that will actually be written: the spin
+		# steps by 0.5 mm, so promising 6.6 and delivering 6.5 would be a lie the
+		# player can read straight off the control.
+		var step := maxf(_nozzle_d_spin.step, 0.01)
+		var snapped := clampf(snappedf(fit_mm, step),
+				_nozzle_d_spin.min_value, _nozzle_d_spin.max_value)
+		var cur_mm := float(_nozzle_d_spin.value)
+		_fit_nozzle_btn.visible = fit_mm > 0.0 and absf(snapped - cur_mm) > step * 0.5
+		if _fit_nozzle_btn.visible:
+			_fit_nozzle_btn.text = "Fit the %.1f mm nozzle" % snapped
+			_fit_nozzle_btn.tooltip_text = ("Sets Nozzle Ø to %.1f mm — the jet "
+					+ "this supply can actually feed, so the head goes into "
+					+ "velocity instead of being left unconverted.") % snapped
+
+
+## Power-curve chart: P vs gross head for the four poly sizes (plus the current
+## Ø when it matches none), operating point marked. Curve recompute is gated on
+## a parameter signature; the marker alone follows the live pond level.
+func _refresh_power_chart(est: Dictionary, gross: float) -> void:
+	if _chart == null or not _kind_has_penstock():
+		return
+	var marker := Vector2(gross, float(_last_r.get("power_w", 0.0)))
+	var base := est.duplicate(true)
+	# Nameplate curve, not a seasonal sample: flat multipliers so the chart
+	# answers "what does this HARDWARE do at head X".
+	base["monthly_flow_multipliers"] = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+	# The per-size curves are a HARDWARE comparison — "what would a fatter pipe
+	# buy me". A live stream supply is a property of the SITE, not the pipe, and
+	# leaving it in made every size return the identical number (Q = supply and
+	# h_jet = nozzle_head_required(supply) regardless of bore), so four curves
+	# drew on top of each other and the comparison silently said "nothing". The
+	# supply gets its own curve below instead, which is the honest way to show it.
+	var supply_lps := float(base.get("supply_lps", NAN)) if base.has("supply_lps") else NAN
+	base.erase("supply_lps")
+	base.erase("supply_monthly_lps")
+	var x_max := clampf(maxf(gross * 1.6, 15.0), 10.0, 200.0)
+	var cur_d := float(base.get("penstock_diameter_mm", 63.0))
+	var sig := "%s|%.1f|%.2f|%.3f|%.2f|%s|%s|%.1f|%.0f|%.1f|%.3f" % [
+		str(base.get("turbine_kind", base.get("kind", ""))),
+		float(base.get("penstock_length_m", 0.0)),
+		cur_d,
+		float(base.get("design_flow_lps", 0.0)),
+		float(base.get("generator_efficiency", 0.85)),
+		str(base.get("nozzle_count", "")), str(base.get("nozzle_diameter_mm", "")),
+		float(base.get("turbine_efficiency", 0.0)),
+		float(base.get("max_power_w", 0.0)),
+		x_max,
+		# Supply is in the signature even though the size curves exclude it —
+		# the supply curve below depends on it, and dragging the Lab's test flow
+		# has to redraw the chart. Its absence here is why the test slider looked
+		# inert.
+		0.0 if is_nan(supply_lps) else supply_lps,
+	]
+	if sig == _chart_sig:
+		if _chart.has_method("set_marker"):
+			_chart.call("set_marker", marker)
+		_refresh_chart_stats(est, gross)
+		return
+	_chart_sig = sig
+	var sizes: Array = ConduitKinds.pipe_kit_sizes_in("poly_penstock")
+	var curves: Array = []
+	var cur_matches_listed := false
+	for i in sizes.size():
+		var sz := float(sizes[i])
+		var id_mm := ConduitKinds.inner_diameter_for("poly_penstock",
+				{"pipe_size_in": sz}) * 1000.0
+		if absf(id_mm - cur_d) < 0.6:
+			cur_matches_listed = true
+		var s2 := base.duplicate(true)
+		s2["penstock_diameter_mm"] = id_mm
+		curves.append({
+			"label": "%s poly" % PipeKit.size_label(sz),
+			"color": _CHART_SIZE_COLORS[i % _CHART_SIZE_COLORS.size()],
+			"pts": _power_curve_pts(s2, x_max),
+		})
+	if not cur_matches_listed:
+		curves.push_front({
+			"label": "current Ø %.0f mm" % cur_d,
+			"color": Color(0.92, 0.94, 0.98),
+			"pts": _power_curve_pts(base, x_max),
+		})
+	# What the SOURCE actually allows, on the current pipe. The gap between this
+	# and the size curves above is the whole story for a supply-limited machine:
+	# the pipe is not the limit, the spring is — and no amount of fatter pipe
+	# closes it. Drawn last so it reads as the ceiling over the family.
+	if not is_nan(supply_lps) and supply_lps > 1e-6:
+		var s_sup := base.duplicate(true)
+		s_sup["supply_lps"] = supply_lps
+		curves.append({
+			"label": "at your supply (%.2f L/s)" % supply_lps,
+			"color": Color(1.0, 0.72, 0.30),
+			"pts": _power_curve_pts(s_sup, x_max),
+		})
+	if _chart.has_method("set_data"):
+		_chart.call("set_data", curves, marker)
+	# Stats stay SUPPLY-AWARE: "what would a fatter pipe buy me" has to answer
+	# honestly, and when the spring is the limit the honest answer is "nothing".
+	_refresh_chart_stats(est, gross)
+
+
+func _power_curve_pts(specs: Dictionary, x_max: float) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	const N := 24
+	for i in range(1, N + 1):
+		var h := x_max * float(i) / float(N)
+		var s := specs.duplicate(true)
+		s["gross_head_m"] = h
+		pts.append(Vector2(h, HydroSource.power_kw_from_graph_specs(s, 6, []) * 1000.0))
+	return pts
+
+
+## Per-size watts at the CURRENT head — the one-line "what would a fatter pipe
+## buy me" answer under the chart.
+func _refresh_chart_stats(base: Dictionary, gross: float) -> void:
+	if _chart_stats_lbl == null:
+		return
+	if gross <= 0.05:
+		_stats_sig = ""
+		_chart_stats_lbl.text = "No head yet — raise the pond or lower the turbine."
+		return
+	# One power evaluation per listed pipe size. Sat OUTSIDE the chart's own gate,
+	# so it ran on every 6 Hz physics tick even when the curve was cached.
+	var stats_sig := "%s|%.2f" % [_chart_sig, snappedf(gross, 0.05)]
+	if stats_sig == _stats_sig:
+		return
+	_stats_sig = stats_sig
+	var parts := PackedStringArray()
+	var lo := 1e30
+	var hi := -1e30
+	for sz: Variant in ConduitKinds.pipe_kit_sizes_in("poly_penstock"):
+		var s2 := base.duplicate(true)
+		s2["gross_head_m"] = gross
+		s2["penstock_diameter_mm"] = ConduitKinds.inner_diameter_for(
+				"poly_penstock", {"pipe_size_in": float(sz)}) * 1000.0
+		var w := HydroSource.power_kw_from_graph_specs(s2, 6, []) * 1000.0
+		lo = minf(lo, w)
+		hi = maxf(hi, w)
+		parts.append("%s %.0fW" % [PipeKit.size_label(float(sz)), w])
+	var txt := "At %.1f m head: %s" % [gross, " · ".join(parts)]
+	# When every size returns the same number the pipe is NOT the constraint, and
+	# saying so is more useful than four identical figures the player has to
+	# notice are identical.
+	if hi > 0.0 and (hi - lo) < maxf(hi * 0.02, 0.5):
+		txt += "  — pipe size makes no difference here; the source flow is the limit."
+	_chart_stats_lbl.text = txt
 
 
 func _weather_service() -> Node:
@@ -1524,15 +2596,31 @@ func _elev_section_params() -> Dictionary:
 	return {"heading": heading, "offset": offset}
 
 
+## Drop the cached slice frame. The pond POLYGON is deliberately not part of the
+## cache signature (it would mean re-projecting the basin just to decide whether
+## to re-project the basin), so a re-carve or a rebind must say so explicitly.
+func _invalidate_slice_cache() -> void:
+	_slice_sig = ""
+	_slice_cache.clear()
+
+
 func _slice_frame(pond: Dictionary) -> Dictionary:
 	## Pond-relative along window on the Elevation CT plane (shared heading/offset).
 	## half_w from full basin poly span when available (not footprint-only).
+	##
+	## CACHED: this runs from _draw_preview (12 Hz), from _lab_view_metrics, AND
+	## from every mouse-move during a pan and every wheel notch — while calling an
+	## uncached terrain pond lookup plus a full basin-polygon projection.
 	var half_w := 4.0
 	var module_along := 3.5
 	var params := _elev_section_params()
 	var heading := float(params.get("heading", 0.0))
 	var offset := float(params.get("offset", 0.0))
 	var pond_site := pond.get("site", Vector2.ZERO) as Vector2
+	var sig := "%s|%.5f|%.3f|%.3f|%.3f" % [_item_id, heading, offset,
+			pond_site.x, pond_site.y]
+	if sig == _slice_sig and not _slice_cache.is_empty():
+		return _slice_cache
 	var m := _model()
 	var along_dir := Vector2(cos(heading), sin(heading))
 	var tank: Dictionary = {}
@@ -1564,7 +2652,8 @@ func _slice_frame(pond: Dictionary) -> Dictionary:
 	if module_along < 0.0:
 		along0 = minf(module_along - 6.0, -half_w - 2.0)
 		along1 = half_w + 2.0
-	return {
+	_slice_sig = sig
+	_slice_cache = {
 		"heading": heading,
 		"offset": offset,
 		"half_w": half_w,
@@ -1573,6 +2662,25 @@ func _slice_frame(pond: Dictionary) -> Dictionary:
 		"along1": along1,
 		"pond_site": pond_site,
 	}
+	return _slice_cache
+
+
+## Along-axis offset of the POND on the section plane.
+##
+## This overlay draws everything in POND-RELATIVE along — `_ensure_dem_bake`
+## subtracts this from the terrain profile, and `along_mid` is the metrics'
+## `along_m_rel`. So anything derived from an ABSOLUTE site coordinate
+## (`GraphSiteLayout.project_onto_section`) must subtract it as well.
+##
+## Getting that wrong does not look like a horizontal error: on sloping ground a
+## sideways shift puts the element against a different part of the terrain
+## profile, which reads as the penstock FLOATING several metres above the ground
+## it is lying on — while 3D, which never goes through here, looks correct.
+func _pond_along_m() -> float:
+	var frame := _slice_frame(_pond_context())
+	var heading := float(frame.get("heading", 0.0))
+	return (frame.get("pond_site", Vector2.ZERO) as Vector2) \
+			.dot(Vector2(cos(heading), sin(heading)))
 
 
 func _ensure_dem_bake(pond: Dictionary, frame: Dictionary) -> void:
@@ -1610,9 +2718,245 @@ func _focus_siphon_conduit_glow() -> void:
 
 func _reset_view_transform() -> void:
 	_view_zoom = 1.0
-	_view_pan = Vector2.ZERO
+	_view_pan_m = Vector2.ZERO
 	_view_dragging = false
 	_grab_kind = ""
+
+
+func _view_tab(parent: Control, text: String, tip: String, mode: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.tooltip_text = tip
+	b.toggle_mode = true
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(func() -> void: _set_lab_view(mode))
+	parent.add_child(b)
+	return b
+
+
+## Switch between the cross-section and the turbine close-up.
+func _set_lab_view(mode: String) -> void:
+	_lab_view = mode
+	var closeup := mode == VIEW_CLOSEUP
+	if _tab_section_btn != null:
+		_tab_section_btn.set_pressed_no_signal(not closeup)
+	if _tab_closeup_btn != null:
+		_tab_closeup_btn.set_pressed_no_signal(closeup)
+	if _preview != null:
+		_preview.visible = not closeup
+	if _closeup != null and _closeup.has_method("set_active"):
+		_closeup.call("set_active", closeup)
+	# The 3D section CT lives BEHIND the 2D overlay in the same stack — hide it
+	# while the close-up owns the slot, or two 3D views fight for the same pixels.
+	if _graph_view != null and _graph_view.has_method("set_lab_section_ct_visible"):
+		_graph_view.call("set_lab_section_ct_visible", not closeup)
+	if _load_row != null:
+		_load_row.visible = closeup
+	_redraw_preview()
+
+
+## Apply the recommended nozzle. Snapped to the SPIN'S OWN step (real jets come in
+## discrete sizes, and the control steps by 0.5 mm) — writing 6.64 would be
+## silently rounded by the SpinBox anyway, and then read back as a value the
+## player never saw recommended.
+func _on_fit_nozzle() -> void:
+	if _nozzle_d_spin == null or _fit_nozzle_mm <= 0.0:
+		return
+	var step := maxf(_nozzle_d_spin.step, 0.01)
+	_nozzle_d_spin.value = clampf(snappedf(_fit_nozzle_mm, step),
+			_nozzle_d_spin.min_value, _nozzle_d_spin.max_value)
+	# Force the gated recomputes: the nozzle is in both signatures, but the
+	# warnings + status strip should update on THIS frame, not in a sixth of one.
+	_phys_acc = 999.0
+	_refresh_physics()
+
+
+## Harness hook: pin a synthetic operating point so --capture=siphon can shoot the
+## jet / splash / speed model on a map whose turbine happens to be dry. Held in its
+## own field rather than written into `_last_r`, which the 6 Hz physics refresh
+## rewrites from the real reach within a sixth of a second. Pass q_lps <= 0 to clear.
+func set_state_for_test(q_lps: float, v_jet_ms: float) -> void:
+	if q_lps <= 0.0:
+		_test_op = {}
+	else:
+		var h_net := v_jet_ms * v_jet_ms / (2.0 * 9.80665 * 0.97 * 0.97)
+		_test_op = {"q_lps": q_lps, "v_jet_ms": v_jet_ms, "net_head_m": h_net,
+			# P = rho g Q h_net · eta_t · eta_g at the matched load.
+			"power_w": 1000.0 * 9.80665 * (q_lps / 1000.0) * h_net * 0.65 * 0.85}
+	_push_closeup_state()
+
+
+## Feed the close-up the live operating point. Load comes from the slider, but a
+## turbine whose DC output is actually being consumed reports its OWN ratio —
+## the slider is for experimenting, the real graph wins when there is one.
+func _push_closeup_state() -> void:
+	if _closeup == null or _lab_view != VIEW_CLOSEUP \
+			or not _closeup.has_method("set_state"):
+		return
+	var meta := HydroSource.kind_meta(_current_kind())
+	var kw := float(_last_r.get("power_kw", 0.0))
+	var nameplate_w := maxf(float(meta.get("max_power_w", 0.0)), 0.0)
+	var load := _load_frac
+	if _graph_dc_load_active() and nameplate_w > 0.0:
+		load = clampf(kw * 1000.0 / nameplate_w, 0.0, 1.0)
+	var op: Dictionary = _test_op if not _test_op.is_empty() else _last_r
+	_closeup.call("set_state", {
+		"q_lps": float(op.get("q_lps", 0.0)),
+		"h_net_m": float(op.get("net_head_m", 0.0)),
+		"v_jet_ms": float(op.get("v_jet_ms", 0.0)),
+		"rpm": float(op.get("rpm", 0.0)),
+		"nozzle_d_m": maxf(float(_nozzle_d_spin.value)
+				if _nozzle_d_spin != null else 10.0, 1.0) / 1000.0,
+		"nozzle_n": int(_nozzle_count_spin.value) if _nozzle_count_spin != null else 1,
+		"runner_pcd_m": float(meta.get("runner_pcd_m", 0.28)),
+		"load_frac": load,
+		# Matched-load output — the close-up derates it by the speed-ratio's
+		# runner efficiency so shedding load visibly costs watts.
+		"power_w": float(op.get("power_w", _last_r.get("power_w", 0.0))),
+	})
+
+
+## True when this turbine's DC output actually reaches a consumer, so the real
+## electrical load is meaningful rather than a disconnected machine reading zero.
+func _graph_dc_load_active() -> bool:
+	var m := _model()
+	if m == null or _item_id.is_empty():
+		return false
+	for conn: Dictionary in m.connections:
+		if str(conn.get("source_item_id", "")) != _item_id:
+			continue
+		if str(conn.get("polarity", "")) == "resource":
+			continue
+		return true
+	return false
+
+
+## Keep the slider tracking the spin, growing its ceiling if the spin is driven
+## past it (so a 500 L/s canal still leaves the handle somewhere meaningful).
+func _sync_flow_slider_from_spin(v: float) -> void:
+	if _sim_inflow_slider == null:
+		return
+	var was := _syncing
+	_syncing = true
+	_sim_inflow_slider.max_value = maxf(FLOW_SLIDER_MAX_LPS, v)
+	_sim_inflow_slider.value = clampf(v, 0.0, _sim_inflow_slider.max_value)
+	_syncing = was
+
+
+## The test-flow control means two different things and must SAY which. On a
+## penstock turbine it is the flow the stream/spring is running, before the nozzle
+## — no pond required, which is the whole point. On a siphon it is a steady fill
+## into the bound pond, as it always was.
+func _sync_test_flow_labels() -> void:
+	if _sim_inflow_btn == null:
+		return
+	if _sim_inflow_slider != null and _sim_inflow_spin != null:
+		_sync_flow_slider_from_spin(float(_sim_inflow_spin.value))
+	if _kind_has_penstock():
+		_sim_inflow_btn.text = "Test stream flow at intake (L/s)"
+		_sim_inflow_btn.tooltip_text = ("Overrides what the source is running, "
+				+ "BEFORE the nozzle. Works with no pond — a spring or creek is a "
+				+ "flow, not a reservoir. Updates immediately, even while paused.")
+		if _drive_hint_lbl != null:
+			_drive_hint_lbl.text = "Simulate the stream at a chosen rate to size the nozzle and read the power. The intake's own Base flow + Rain response (freeform inspector) drive it when this is off."
+	else:
+		_sim_inflow_btn.text = "Test inflow (steady L/s)"
+		_sim_inflow_btn.tooltip_text = ("Constant fill into the bound pond (works "
+				+ "while sim is paused / Elev noon-lock). The only manual water driver.")
+		if _drive_hint_lbl != null:
+			_drive_hint_lbl.text = "Steady fill into the pond, advanced on the world clock. Play / speed up time to watch it prime, then drain (orifice-limited by the barrel)."
+
+
+## F — back to the default framing, centred on the turbine.
+func _on_frame_turbine() -> void:
+	_reset_view_transform()
+	_push_lab_section_frame()
+	_redraw_preview()
+
+
+## Home — zoom out until the whole intake→turbine run is in frame. On a 90 m
+## penstock the default framing shows the turbine and nothing else, so "where did
+## my intake go" is the first thing that happens after routing one.
+func _on_frame_whole_run() -> void:
+	_view_pan_m = Vector2.ZERO
+	var frame := _slice_frame(_pond_context())
+	var module_along := float(frame.get("module_along", 3.5))
+	var half_w := float(frame.get("half_w", 3.0))
+	# The routed run's own along-extent when there is one; else the pond window.
+	var span := absf(module_along) + half_w + 8.0
+	var conn := _routed_penstock_conn()
+	if not conn.is_empty():
+		var run := float(conn.get("route_length_m", 0.0))
+		if run > 1.0:
+			span = maxf(span, run * 1.15)
+	var base := _lab_projection_for(1.0, Vector2.ZERO)
+	var host := _lab_host_size()
+	var base_span := host.x / maxf(float(base.get("sx", 1.0)), 1e-6)
+	_view_zoom = clampf(base_span / maxf(span, 1.0), LAB_ZOOM_MIN, LAB_ZOOM_MAX)
+	# Recentre on the midpoint of the run rather than the turbine.
+	_view_pan_m.x = -module_along * 0.5
+	_push_lab_section_frame()
+	_redraw_preview()
+
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	if not visible or not _as_view:
+		return
+	var k := event as InputEventKey
+	if k == null or not k.pressed or k.echo:
+		return
+	if k.keycode == KEY_F:
+		_on_frame_turbine()
+		get_viewport().set_input_as_handled()
+	elif k.keycode == KEY_HOME:
+		_on_frame_whole_run()
+		get_viewport().set_input_as_handled()
+
+
+## Where a HYPOTHETICAL zoom/pan would put the section: centre metres plus px/m on
+## each axis. Reuses _lab_view_metrics rather than re-deriving the framing maths,
+## so the cursor anchoring below can never drift from what actually gets drawn.
+func _lab_projection_for(zoom: float, pan_m: Vector2) -> Dictionary:
+	var z0 := _view_zoom
+	var p0 := _view_pan_m
+	_view_zoom = zoom
+	_view_pan_m = pan_m
+	var mt := _lab_view_metrics()
+	_view_zoom = z0
+	_view_pan_m = p0
+	var host := _lab_host_size()
+	return {
+		"along_mid": float(mt.get("along_m_rel", 0.0)),
+		"elev_mid": float(mt.get("elev_m", 0.0)),
+		"sx": host.x / maxf(float(mt.get("ortho_w_m", 1.0)), 1e-6),
+		"sy": host.y / maxf(float(mt.get("ortho_h_m", 1.0)), 1e-6),
+	}
+
+
+## Section metres under a point in preview-stack pixels, at the given projection.
+func _lab_point_to_section_m(proj: Dictionary, p: Vector2) -> Vector2:
+	var d := p - _lab_host_size() * 0.5
+	return Vector2(
+		float(proj.get("along_mid", 0.0)) + d.x / float(proj.get("sx", 1.0)),
+		float(proj.get("elev_mid", 0.0)) - d.y / float(proj.get("sy", 1.0)))
+
+
+## Wheel zoom that keeps the metre under the CURSOR fixed, matching how Elevation
+## already zooms (graph_canvas._elev_zoom_at). Zooming about the turbine instead
+## meant every notch also walked the view away from whatever you were looking at.
+func _lab_zoom_at(factor: float, screen_pos: Vector2) -> void:
+	var old_zoom := _view_zoom
+	var new_zoom := clampf(old_zoom * factor, LAB_ZOOM_MIN, LAB_ZOOM_MAX)
+	if is_equal_approx(new_zoom, old_zoom):
+		return
+	var before := _lab_point_to_section_m(
+			_lab_projection_for(old_zoom, _view_pan_m), screen_pos)
+	var after := _lab_point_to_section_m(
+			_lab_projection_for(new_zoom, _view_pan_m), screen_pos)
+	_view_zoom = new_zoom
+	# along_mid = module_along - pan.x and elev_mid = module_m + pan.y, so the
+	# corrections carry opposite signs.
+	_view_pan_m += Vector2(after.x - before.x, before.y - after.y)
 
 
 func _redraw_preview() -> void:
@@ -1630,31 +2974,40 @@ func _elev_at_screen_y(y: float) -> float:
 	var denom2 := _pv_sy * _view_zoom
 	if denom2 <= 1e-6:
 		return _pv_y_min
-	return _pv_y_min + (_pv_origin.y + _pv_size.y + _view_pan.y - y) / denom2
+	return _pv_y_min + _view_pan_m.y + (_pv_origin.y + _pv_size.y - y) / denom2
 
 
 ## Preview interaction: wheel zoom (linked CT), prop hover/drag, level lines, pan.
 func _on_preview_stack_input(event: InputEvent) -> void:
 	if not visible:
 		return
+	# Penstock gizmo FIRST — the prop drag and the pond level grab both claim
+	# broad areas of the section and would swallow it.
+	if _penstock_try_input(event):
+		return
 	# Prop hover / drag / click (Elevation-plane spatial edit) before level/pan.
 	if _try_lab_spatial_input(event):
 		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		var step := LAB_ZOOM_STEP_FINE if mb.ctrl_pressed else LAB_ZOOM_STEP
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			_view_zoom = clampf(_view_zoom * 1.1, 0.25, 8.0)
+			_lab_zoom_at(step, mb.position)
 			_preview_stack.accept_event()
 			_push_lab_section_frame()
 			_redraw_preview()
 			return
 		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			_view_zoom = clampf(_view_zoom / 1.1, 0.25, 8.0)
+			_lab_zoom_at(1.0 / step, mb.position)
 			_preview_stack.accept_event()
 			_push_lab_section_frame()
 			_redraw_preview()
 			return
-		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_MIDDLE:
+		# RIGHT / MIDDLE always pan; LEFT pans only when it did not grab a level
+		# line. LEFT alone used to mean gizmo, prop drag, level grab AND pan, which
+		# is most of why the cross-section feels unpredictable to navigate.
+		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_MIDDLE \
+				or mb.button_index == MOUSE_BUTTON_RIGHT:
 			if mb.pressed:
 				_view_last_mouse = mb.position
 				_grab_kind = _pick_level_grab(mb.position) \
@@ -1674,7 +3027,10 @@ func _on_preview_stack_input(event: InputEvent) -> void:
 			_redraw_preview()
 			return
 		if _view_dragging:
-			_view_pan += mm.position - _view_last_mouse
+			var proj := _lab_projection_for(_view_zoom, _view_pan_m)
+			var d := mm.position - _view_last_mouse
+			_view_pan_m += Vector2(d.x / float(proj.get("sx", 1.0)),
+					d.y / float(proj.get("sy", 1.0)))
 			_view_last_mouse = mm.position
 			_preview_stack.accept_event()
 			_push_lab_section_frame()
@@ -1702,6 +3058,17 @@ func _try_lab_spatial_input(event: InputEvent) -> bool:
 				var pid := str(se.get("selected_prop_id"))
 				if not pid.is_empty() and _graph_view.has_method("select_item_by_world_binding"):
 					_graph_view.call("select_item_by_world_binding", pid)
+				# Clicking ANOTHER hydro turbine hands it the whole Lab session
+				# — the dock params, kind selector and charts follow the click
+				# (before this they were pinned to whichever turbine the Lab
+				# opened on, with no way to move over).
+				if not pid.is_empty():
+					var m2 := _model()
+					if m2 != null:
+						var hit_item := GraphEmbodiment.find_item_by_bound_prop_id(m2, pid)
+						if not hit_item.is_empty() and hit_item != _item_id \
+								and _is_lab_turbine(hit_item):
+							set_active_turbine(hit_item)
 				_preview_stack.accept_event()
 				_redraw_preview()
 				return true
@@ -1930,10 +3297,15 @@ func _draw_preview() -> void:
 	# are the turbine/pipe visuals; 2D glyphs are a fallback for offline CT.
 	if not _elev_ct_bg:
 		if _kind_has_penstock():
-			var pen_d_m := float(_penstock_d_spin.value) * 0.001 if _penstock_d_spin != null else 0.063
-			_draw_penstock_glyph(mx, intake_elev, half_w - 0.3, out_inv, module_m,
-					a1, along_mid, pen_d_m, out_d_m, q_lps, flowing,
-					origin, size)
+			# The idealized two-segment glyph is the NO-ROUTE fallback only. Once
+			# a real penstock is routed its measured polyline is drawn above
+			# (_draw_routed_penstock) — drawing both told two different stories,
+			# and the schematic one was why routing looked like a no-op.
+			if not _has_routed_penstock():
+				var pen_d_m := float(_penstock_d_spin.value) * 0.001 if _penstock_d_spin != null else 0.063
+				_draw_penstock_glyph(mx, intake_elev, half_w - 0.3, out_inv, module_m,
+						a1, along_mid, pen_d_m, out_d_m, q_lps, flowing,
+						origin, size)
 		else:
 			var in_d_m := float(_intake_d_spin.value) * 0.001 if _intake_d_spin != null else 0.2
 			_draw_turbine_module(mx, mod_base, mod_top_elev, intake_elev,
@@ -1955,18 +3327,177 @@ func _draw_preview() -> void:
 				"↓ culvert → outlet %.1f m" % out_inv,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.85, 0.65, 0.25, 0.95))
 
-	var caption := str(pond.get("label", "Pond"))
+	_draw_routed_penstock(along_mid, origin, size, q_lps, flowing)
+	_draw_penstock_gizmo(mx, module_m, along_mid, origin, size)
+
+	# The source label stays painted (it names what you are looking at, in place);
+	# the numbers moved to the status strip below the section, where they have
+	# contrast and do not scroll away under pan/zoom.
+	var caption := str(pond.get("label", ""))
 	if caption.is_empty():
-		caption = "Bind a pond for a site CT slice"
-	else:
-		var st: String
-		if _kind_has_penstock():
-			st = "FLOWING · %.1f L/s" % q_lps if flowing else "dry"
-		else:
-			st = "PRIMED · %.1f L/s" % q_lps if flowing else "broken (dry)"
-		caption = "%s · %s" % [caption, st]
+		caption = "Stream intake" if _kind_has_penstock() else "Bind a pond for a site CT slice"
 	_preview.draw_string(ThemeDB.fallback_font, origin + Vector2(8, 16), caption,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_MUTED)
+
+
+## True when `conn` is a contour-routed conduit on THIS turbine.
+func _is_our_contour_conn(conn: Dictionary) -> bool:
+	if conn.is_empty():
+		return false
+	if str(conn.get("source_item_id", "")) != _item_id \
+			and str(conn.get("target_item_id", "")) != _item_id:
+		return false
+	var tid := ConduitKinds.derive_type_for_connection(conn)
+	var rm := ConduitKinds.normalize_route_mode(
+			str((conn.get("conduit_style", {}) as Dictionary).get("route_mode",
+				ConduitKinds.type_meta(tid).get("route_mode", ""))))
+	return rm == "contour"
+
+
+## The routed penstock connection for this turbine, or {}.
+## The id is CACHED: this is called per draw (12 Hz) and again from the route
+## status refresh, and each miss walked every connection in the model. GraphModel
+## indexes connections by id, so a hit is a dictionary lookup.
+func _routed_penstock_conn() -> Dictionary:
+	var m := _model()
+	if m == null or _item_id.is_empty():
+		return {}
+	if not _routed_conn_id.is_empty():
+		var cached: Dictionary = m.get_connection(_routed_conn_id)
+		if _is_our_contour_conn(cached):
+			return cached
+		_routed_conn_id = ""
+	for conn: Dictionary in m.connections:
+		if _is_our_contour_conn(conn):
+			_routed_conn_id = str(conn.get("id", ""))
+			return conn
+	return {}
+
+
+func _has_routed_penstock() -> bool:
+	return not _routed_penstock_conn().is_empty()
+
+
+## Draw the ACTUAL routed penstock on the cross-section — its real terrain-
+## following polyline, projected through the section frame. Before this the Lab
+## only ever drew an idealized two-segment schematic, so routing a pipe changed
+## nothing on screen (the single loudest symptom of the whole feature looking
+## broken). Samples come from ConduitManager.ensure_preview_samples, which
+## builds them WITHOUT remeshing, so this works even with 3D wires off.
+func _draw_routed_penstock(along_mid: float, origin: Vector2, size: Vector2,
+		q_lps: float, flowing: bool) -> bool:
+	var conn := _routed_penstock_conn()
+	if conn.is_empty() or _graph_view == null:
+		return false
+	var mgr = _graph_view.call("_get_conduit_manager") \
+			if _graph_view.has_method("_get_conduit_manager") else null
+	if mgr == null or not mgr.has_method("ensure_preview_samples"):
+		return false
+	var samples: PackedVector3Array = mgr.call("ensure_preview_samples", conn)
+	if samples.size() < 2:
+		return false
+	var soi := _soi_service()
+	if soi == null or not soi.has_method("world_center"):
+		return false
+	var center: Vector3 = soi.call("world_center") as Vector3
+	var heading := float(_elev_section_params().get("heading", 0.0))
+	var pond_along := _pond_along_m()
+	var pts := PackedVector2Array()
+	for p in samples:
+		var site := GraphSiteLayout.world_xz_to_site(Vector2(p.x, p.z), center)
+		var along := GraphSiteLayout.project_onto_section(site, heading).x - pond_along
+		pts.append(_pv_to_screen_centered(along, p.y, along_mid))
+	if pts.size() < 2:
+		return false
+	var style: Dictionary = conn.get("conduit_style", {}) as Dictionary
+	var sz_in := ConduitKinds.pipe_size_in("poly_penstock", style)
+	var col := Color(0.30, 0.80, 1.0, 0.95) if flowing else Color(0.62, 0.70, 0.80, 0.85)
+	# Stroke width tracks the pipe's real bore at the section's scale, floored
+	# so a 1" run is still visible when zoomed out.
+	var od_px := maxf(ConduitKinds.outer_diameter_m("poly_penstock", style)
+			* _pv_sx * (1.0 if _pv_linked else _view_zoom), 2.5)
+	_preview.draw_polyline(pts, Color(0.05, 0.07, 0.10, 0.85), od_px + 2.5, true)
+	_preview.draw_polyline(pts, col, od_px, true)
+	if flowing:
+		_draw_flow_dashes(pts, q_lps)
+	# Label at the run's midpoint: measured length + drop + size.
+	var mid := pts[pts.size() / 2]
+	var run := float(conn.get("route_length_m", 0.0))
+	var inv_in := float(conn.get("invert_in_m", NAN))
+	var inv_out := float(conn.get("invert_out_m", NAN))
+	var txt := "%s poly" % PipeKit.size_label(sz_in)
+	if run > 0.5:
+		txt += " · %.0f m run" % run
+	if not (is_nan(inv_in) or is_nan(inv_out)):
+		txt += " · %.1f m drop" % absf(inv_in - inv_out)
+	var lp := mid + Vector2(8.0, -8.0)
+	lp.x = clampf(lp.x, origin.x + 6.0, origin.x + size.x - 180.0)
+	lp.y = clampf(lp.y, origin.y + 30.0, origin.y + size.y - 8.0)
+	_preview.draw_string(ThemeDB.fallback_font, lp, txt,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.72, 0.86, 1.0, 0.95))
+	return true
+
+
+## Penstock placement gizmo: a pulsing ring on the turbine inlet, plus — while
+## dragging — the ghost run following the DEM up to the release point and a
+## live run/drop readout. Drawn last so it sits over the terrain + pond fills.
+func _draw_penstock_gizmo(module_along: float, module_elev: float,
+		along_mid: float, origin: Vector2, size: Vector2) -> void:
+	_penstock_gizmo_screen = Vector2.INF
+	if not _penstock_mode:
+		return
+	var inlet_elev := module_elev + 0.35
+	var g := _pv_to_screen_centered(module_along, inlet_elev, along_mid)
+	if g.x < origin.x - 40.0 or g.x > origin.x + size.x + 40.0:
+		return
+	_penstock_gizmo_screen = g
+	var pulse := 0.65 + 0.35 * sin(_flow_phase * 4.0)
+	var glow := Color(1.0, 0.86, 0.40, 0.30 * pulse)
+	_preview.draw_circle(g, 15.0, glow)
+	_preview.draw_circle(g, 7.0, Color(1.0, 0.90, 0.55, 0.95))
+	_preview.draw_arc(g, 11.0, 0.0, TAU, 28, Color(1.0, 0.80, 0.35, 0.95), 2.0, true)
+
+	if _penstock_dragging and _penstock_ghost_valid:
+		# Ghost run: sample the section's baked DEM between the inlet and the
+		# release point so the preview reads as pipe LYING ON the hillside —
+		# the same story ContourRouter tells in 3D.
+		var pts := PackedVector2Array()
+		pts.append(g)
+		var steps := 28
+		for i in range(1, steps + 1):
+			var t := float(i) / float(steps)
+			var a := lerpf(module_along, _penstock_ghost_along, t)
+			var ground := _dem_elev_at(a)
+			var e := lerpf(inlet_elev, _penstock_ghost_elev, t)
+			if not is_nan(ground):
+				e = maxf(ground + 0.12, minf(e, maxf(inlet_elev, _penstock_ghost_elev)))
+			pts.append(_pv_to_screen_centered(a, e, along_mid))
+		var end_pt := _pv_to_screen_centered(_penstock_ghost_along,
+				_penstock_ghost_elev, along_mid)
+		pts.append(end_pt)
+		var rise := _penstock_ghost_elev - module_elev
+		var ok := rise > 0.25
+		var col := Color(0.35, 0.85, 1.0, 0.95) if ok else Color(0.95, 0.45, 0.35, 0.95)
+		if pts.size() >= 2:
+			_preview.draw_polyline(pts, Color(col.r, col.g, col.b, 0.35), 7.0, true)
+			_preview.draw_polyline(pts, col, 3.0, true)
+		_preview.draw_circle(end_pt, 6.0, col)
+		_preview.draw_arc(end_pt, 10.0, 0.0, TAU, 20,
+				Color(col.r, col.g, col.b, 0.55), 1.5, true)
+		# Report the SECTION run in metres (the honest measured 3D run is
+		# stamped by the conduit rebuild once the route commits).
+		var run_m := absf(_penstock_ghost_along - module_along)
+		var lbl := "intake %.1f m up · run ≈ %.0f m" % [rise, maxf(run_m, 0.0)] if ok \
+				else "source must be ABOVE the turbine"
+		var lp := end_pt + Vector2(10.0, -10.0)
+		lp.x = clampf(lp.x, origin.x + 6.0, origin.x + size.x - 190.0)
+		lp.y = clampf(lp.y, origin.y + 18.0, origin.y + size.y - 8.0)
+		_preview.draw_string(ThemeDB.fallback_font, lp, lbl,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 12, col)
+	else:
+		_preview.draw_string(ThemeDB.fallback_font, g + Vector2(14.0, -12.0),
+				"drag to the water source", HORIZONTAL_ALIGNMENT_LEFT, -1, 11,
+				Color(1.0, 0.86, 0.45, 0.9))
 
 
 ## Interpolated baked-DEM ground elevation at a pond-relative along distance.
@@ -2237,9 +3768,13 @@ func _pv_to_screen_centered(along_m: float, elev_m: float, along_mid: float) -> 
 		return Vector2(
 			_pv_origin.x + _pv_size.x * 0.5 + (along_m - along_mid) * _pv_sx,
 			_pv_origin.y + _pv_size.y * 0.5 - (elev_m - _pv_elev_mid) * _pv_sy)
+	# Unlinked (no CT behind): zoom/pan applied here. Pan is metres, so scale it by
+	# the same px/m the geometry uses — same convention as the linked branch.
 	return Vector2(
-		_pv_origin.x + _pv_size.x * 0.5 + (along_m - along_mid) * _pv_sx * _view_zoom + _view_pan.x,
-		_pv_origin.y + _pv_size.y - (elev_m - _pv_y_min) * _pv_sy * _view_zoom + _view_pan.y)
+		_pv_origin.x + _pv_size.x * 0.5
+			+ (along_m - along_mid + _view_pan_m.x) * _pv_sx * _view_zoom,
+		_pv_origin.y + _pv_size.y
+			- (elev_m - _pv_y_min - _view_pan_m.y) * _pv_sy * _view_zoom)
 
 
 func _pv_to_screen(along_m: float, elev_m: float) -> Vector2:

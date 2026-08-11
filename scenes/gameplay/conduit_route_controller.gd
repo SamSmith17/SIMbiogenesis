@@ -216,6 +216,9 @@ func _plug_type_for_port(port: Dictionary) -> String:
 
 
 ## Aim at a port under the crosshair; if found, begin plug mode from it.
+## A port that ALREADY has a wire hands the click to drag-reroute of that wire
+## instead — starting a fresh plug there minted a second, default-styled
+## connection and read as "the port system overrules my conduit styles".
 func _try_begin_plug_from_port() -> bool:
 	if _ensure_manager() == null or _camera == null:
 		return false
@@ -231,8 +234,33 @@ func _try_begin_plug_from_port() -> bool:
 	var hit := ConduitPlugLogic.nearest_port_along_ray(origin, dir, ports, PLUG_PICK_PERP_M)
 	if hit.is_empty():
 		return false
+	var existing := _conn_on_port(hit)
+	if not existing.is_empty():
+		var wp: Vector3 = hit.get("world_pos", Vector3.INF)
+		begin_drag_reroute(str(existing.get("id", "")), wp, 0)
+		return true
 	begin_plug(hit)
 	return true
+
+
+## The connection already wired to a port hit's (item, handle), or {}.
+func _conn_on_port(port_hit: Dictionary) -> Dictionary:
+	if _manager == null:
+		return {}
+	var model: GraphModel = _manager.get_graph_model()
+	if model == null:
+		return {}
+	var iid := str(port_hit.get("item_id", ""))
+	var handle := str((port_hit.get("port", {}) as Dictionary).get("handle_id", ""))
+	if iid.is_empty() or handle.is_empty():
+		return {}
+	for conn: Dictionary in model.connections:
+		if (str(conn.get("source_item_id", "")) == iid \
+				and str(conn.get("source_handle_id", "")) == handle) \
+				or (str(conn.get("target_item_id", "")) == iid \
+				and str(conn.get("target_handle_id", "")) == handle):
+			return conn
+	return {}
 
 
 ## Refresh the snapped target while pulling a plug: nearest compatible port to the
@@ -273,13 +301,62 @@ func _update_plug_target() -> void:
 
 
 func _commit_plug() -> void:
-	if _plug_target.is_empty() or _manager == null:
+	if _manager == null:
+		_cancel_plug()
+		return
+	if _plug_target.is_empty():
+		# Released in open ground. A penstock is EXPECTED to end there — the
+		# uphill water source is a place, not an existing machine — so create
+		# the intake and connect to it. Every other kind still needs a port at
+		# the far end, but say so instead of silently dropping the run (the run
+		# vanishing with no feedback read as "dragging pipe is broken").
+		if _contour_mode() and _ghost_valid:
+			if _commit_penstock_to_new_intake(_ghost_pos):
+				_cancel_plug()
+				return
+		elif not _ghost_valid:
+			_toast("Aim at the ground or a matching port, then release")
+		else:
+			_toast("Nothing to plug into there — release on a matching port")
 		_cancel_plug()
 		return
 	var spec := ConduitPlugLogic.build_connection_spec(_plug_src, _plug_target, _type_id, [])
 	if _manager.has_method("create_plug_connection"):
 		_manager.call("create_plug_connection", spec)
 	_cancel_plug()
+
+
+## Drop the far end of a penstock in open terrain: mint a Stream Intake there
+## (a real prop + graph node — conduits have no free endpoints, both ends must
+## resolve to an item with a 3D anchor) and wire it to the turbine port the
+## drag started from. Returns false if the graph view can't service it.
+func _commit_penstock_to_new_intake(world_pos: Vector3) -> bool:
+	var sgv := _graph_view_node()
+	if sgv == null or not sgv.has_method("create_penstock_intake_at"):
+		_toast("Can't place an intake here")
+		return false
+	var src_item := str(_plug_src.get("item_id", ""))
+	var src_handle := str((_plug_src.get("port", {}) as Dictionary).get("handle_id", ""))
+	var conn_id := str(sgv.call("create_penstock_intake_at", world_pos, src_item,
+			src_handle, _style_ov))
+	return not conn_id.is_empty()
+
+
+func _graph_view_node() -> Node:
+	var sgv := ServiceLocator.graph()
+	if sgv != null:
+		return sgv
+	if _manager != null and _manager.has_method("get_main_node"):
+		var main: Node = _manager.call("get_main_node")
+		if main != null:
+			return main.find_child("SystemGraphView", true, false)
+	return null
+
+
+func _toast(msg: String) -> void:
+	var sgv := _graph_view_node()
+	if sgv != null and sgv.has_method("_show_toast"):
+		sgv.call("_show_toast", msg)
 
 
 func _cancel_plug() -> void:
@@ -958,6 +1035,16 @@ func _control_points_for_preview() -> Array:
 		var step := ConduitKinds.fitting_step_deg(_type_id)
 		if step < 0.5:
 			step = 45.0
+		# Contour kinds (poly penstock) must preview through the SHARED dispatch
+		# with a ground callable, or the ghost is a straight chord while the
+		# committed run hugs the terrain — the drag would lie about what you get.
+		if _contour_mode():
+			return ConduitRouteDispatch.control_points(
+				{"a": a0, "b": b0, "a_route": a_route, "b_route": b_route,
+					"seat_a": seat_a, "seat_b": seat_b,
+					"out_a": out_a, "out_b": out_b},
+				_type_id, _style_ov, [], false, [], _preview_settled,
+				0.6, _ground_fn())
 		if ConduitKinds.uses_pipe_kit(_type_id):
 			var plug_chain := ConduitManager._approach_chain(
 				a0, b0, a_route, b_route, [], seat_a, seat_b, out_a, out_b)
@@ -998,7 +1085,7 @@ func _control_points_for_preview() -> Array:
 		if m != null:
 			locked = bool(m.get_connection(_conn_id).get("route_locked", false))
 	return ConduitRouteDispatch.control_points(ends, _type_id, _style_ov, wps, locked,
-		obstacles, _preview_settled, clearance)
+		obstacles, _preview_settled, clearance, _ground_fn())
 
 
 ## True port seats + approach route ends for the active connection — delegates to the
@@ -1026,13 +1113,23 @@ func _preview_route_ends() -> Dictionary:
 		_type_id, main_n)
 
 
+## True when the active kind routes along the ground (poly penstock).
+func _contour_mode() -> bool:
+	return ConduitKinds.normalize_route_mode(str(_style_ov.get("route_mode",
+			ConduitKinds.type_meta(_type_id).get("route_mode", "")))) == "contour"
+
+
 func _ground_fn() -> Callable:
 	# Hang-edit / ground-drape: sample against live terrain (catenary clamps
 	# where sag meets the ground; unlocked cords still use ground-snake).
+	# Contour (poly penstock): the router itself consumes the ground samples.
 	# Kit pipes never use ground clamp / catenary.
 	if _manager == null:
 		return Callable()
-	if ConduitKinds.supports_hang_edit(_type_id) \
+	var rm := ConduitKinds.normalize_route_mode(str(_style_ov.get("route_mode",
+			ConduitKinds.type_meta(_type_id).get("route_mode", ""))))
+	if rm == "contour" \
+			or ConduitKinds.supports_hang_edit(_type_id) \
 			or ConduitKinds.is_ground_drape_type(_type_id):
 		return Callable(_manager, "ground_y_at")
 	return Callable()
@@ -1042,6 +1139,12 @@ func _preview_mesh_style() -> Dictionary:
 	var style: Dictionary = ConduitKinds.type_meta(_type_id).duplicate(true)
 	for k: Variant in _style_ov.keys():
 		style[k] = _style_ov[k]
+	# Ghost matches the committed tube thickness for size-listed kinds (see the
+	# matching radius stamp in ConduitManager._rebuild_if_dirty).
+	if not _style_ov.has("radius_m") and ConduitKinds.has_size_options(_type_id):
+		var od := ConduitKinds.outer_diameter_m(_type_id, _style_ov)
+		if od > 0.0:
+			style["radius_m"] = od * 0.5
 	# Catenary sag is hang-edit cords only — never kit pipes.
 	if ConduitKinds.supports_hang_edit(_type_id) and not _waypoints.is_empty():
 		var hang_ov := ConduitKinds.mesh_style_override("catenary")

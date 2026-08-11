@@ -240,6 +240,14 @@ Godot.exe.exe --headless --path . --script core/population/npc_population_selfte
 # walk recursion, cascade delete, v6->v7 migration, exposed-port maintenance,
 # nesting-aware PV faulting; run --import first so GraphNesting registers):
 Godot.exe.exe --headless --path . --script system_graph/graph_nesting_selftest.gd
+# Hydro node unification (offline — Phase B of the Hydro Lab overhaul): legacy
+# type=="hydro" estimator items migrate on deserialize into processor role
+# "siphon_hydro" (specs carried, DC wires remapped positive/negative →
+# res_out_1_pos/neg, battery trace still counts the kW), idempotent over a
+# serialize round-trip, existing siphon processors untouched. The spec-driven
+# output path itself (no pond → estimator physics; run_of_river never drains)
+# is pinned in resource_flow_selftest's _test_spec_driven_hydro:
+Godot.exe.exe --headless --path . --script system_graph/hydro_migration_selftest.gd
 # Graph COMPONENTS self-test (offline — SketchUp-style definitions: realize
 # single + multi-level (StarShade tree), capture round-trip, edit-one-instance-
 # updates-all with per-instance battery SOC preserved, external-wire survival on
@@ -273,8 +281,18 @@ Godot.exe.exe --headless --path . --script gameplay/challenge_bake_selftest.gd
 # Challenge defs/catalog/runner rules (offline):
 Godot.exe.exe --headless --path . --script gameplay/challenge_selftest.gd
 # 3D conduits (offline — kinds/conceptual default, mesh/drape/lights, loss,
-# bound-prop routability, connection ports, triangle pick, ortho elbows;
-# run --import first so new class_names register):
+# bound-prop routability, connection ports, triangle pick, ortho elbows, the
+# size-driven tube radius (a size-listed kind renders at its STYLED bore; the
+# mesh builder reads radius_m off the kind meta, so without ConduitManager
+# stamping it a 2" poly run drew exactly as thin as a 1" one and the size
+# picker looked inert), and
+# the poly_penstock kind + ContourRouter (Hydro Lab overhaul Phase C):
+# SDR-9 ID-per-size table, PPI 25×OD bend radius, terrain-following route that
+# bridges too-sharp gullies, dispatch contour branch determinism + no-ground
+# chord fallback. The flow-engine side (routed conn is the authority for
+# penstock length/Ø/outlet invert; contour conns exempt from the generic
+# Hazen-Williams derate) is pinned in resource_flow_selftest's
+# _test_penstock_conn_authority. Run --import first so class_names register:
 Godot.exe.exe --headless --path . --script core/conduits/conduit_selftest.gd
 # Culvert stage-discharge + Hydro Section calculator (offline — weir/orifice,
 # Manning cap, stepped 3×8″ bank, PE vs HydroSource; --import first):
@@ -283,8 +301,24 @@ Godot.exe.exe --headless --path . --script core/conduits/culvert_hydraulics_self
 Godot.exe.exe --headless --path . --script core/conduits/siphon_hydraulics_selftest.gd
 # Unified hydro reach: pond→siphon→culvert→outlet ONE stepper — parity vs
 # SiphonHydraulics, prime/break cycle, mass conservation, effective air-break
-# dead pool, overflow (offline, deterministic; --import first). This reach is the
-# single physics source for the flow engine + Siphon Lab (no fallback branch):
+# dead pool, overflow, penstock conveyance (design-flow vs gravity capacity),
+# and the NOZZLE model (Hydro Lab overhaul Phase D): powerspout_pelton runs
+# PeltonPhysics' operating point (penstock delivery meets nozzle demand,
+# Cv 0.97, x_opt 0.46 — Thake; pinned to a hand-computed 20 m / 100 m /
+# 1×10 mm case), jet-derived RPM (not the 5 kW siphon rotor curve), and the
+# kind's 1.6 kW nameplate when the spec leaves max_power_w at 0. PeltonPhysics'
+# own pins (jet velocity, nozzle head/flow round-trip, runner parabola, the
+# powerspout estimator branch of power_kw_from_graph_specs incl. the pelton
+# head-band floor moving 30→10 m) live in source_physics_selftest. Offline,
+# deterministic; --import first. This reach is the single physics source for
+# the flow engine + Hydro Lab (no fallback branch). Also pins the LEVELLESS
+# STREAM mode (`penstock_source_mode: "stream"`): a spring/creek tapped by a
+# penstock has no water surface to draw down, so the reach takes its head from
+# the adopted invert drop and skips both the `is_nan(level)` bail and the
+# submergence dead-pool — without it a stream-fed PowerSpout reported regime
+# "unset" and every Lab readout sat at zero. Plus the supply cap, the
+# oversized-nozzle head collapse, and `no_supply` (a DRY spring, distinct from
+# `no_head` — the Lab must not tell you to move a correctly-sited turbine):
 Godot.exe.exe --headless --path . --script core/conduits/hydro_reach_selftest.gd
 # ABS DWV pipe kit (offline — kit JSON/meshes, planner 45/90 BOM; bake once with
 # pipe_kit_extractor.gd if data/*.res missing; --import first):
@@ -406,10 +440,16 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres
 # state — freeform/arranged/selection+inspector/compound interior/zoom
 # extremes/site plan/elevation — via the REAL view handlers, for visual review:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=graph --shots-dir=<label> --quit-after-capture
-# Siphon Lab capture (WINDOWED): builds a pond + siphon on the graph, binds them,
-# opens the Lab's own 2D cross-section (VIEW_SIPHON), and shoots primed/flowing →
-# time-accelerated drain/broken → test-inflow refill/reprime (drives the pond on
-# the world clock via the unified HydroReach) for visual review of the flow render:
+# Hydro Lab capture (WINDOWED): builds a pond + siphon on the graph, binds them,
+# opens the Lab's own 2D cross-section (VIEW_SIPHON, item-bound — the mode chip
+# is gone), and shoots primed/flowing → time-accelerated drain/broken →
+# test-inflow refill/reprime (drives the pond on the world clock via the unified
+# HydroReach) for visual review of the flow render. The read-only variant also
+# flips the turbine to powerspout_pelton for one shot (04) — nozzle knobs +
+# Penstock-route section + the power-curve chart (P vs head per poly size, live
+# operating-point marker) with the dock scrolled to frame them — and DUMPS the
+# per-size watts line to console (the number a PNG can't prove), then restores
+# the saved kind:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=siphon --shots-dir=<label> --quit-after-capture
 # Site-review (WINDOWED): load a REAL user map as-is (autosaved graph + terrain
 # artifacts), shoot world/ + graph/ (freeform + elevation) + siphon/ Lab, write
@@ -576,6 +616,33 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # 1.7 s at 0.05 and 4.2 s at 0.02, against a ~2.6 s requirement), and asserts
 # nobody holds a lying/seated pose while the sim says they are travelling:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres> --capture=npc-anim --shots-dir=<label> --quit-after-capture
+# Penstock placement verify (WINDOWED, needs a REAL TerrainLoader map — the
+# terrain scan and prop placement are loader-only). Drives the whole "drop the
+# pipe uphill and THAT is the source" path: scans rings for genuinely high
+# ground within 90 m, seats a PowerSpout bound to a real prop at the site
+# centre, then calls the same SystemGraphView.create_penstock_intake_at both
+# the Lab gizmo and the 3D plug-drag commit through. Asserts what a screenshot
+# cannot: a Stream Intake prop + graph node exist at the release point (a
+# conduit has NO free endpoints — a `resource` item only gets a 3D anchor via
+# bound_prop_id), the run RENDERED (3D wires default OFF, and ConduitManager
+# ignores model changes while they are — the original "route does nothing"
+# bug), the rebuild stamped a measured run ≥ the straight chord plus endpoint
+# inverts falling toward the turbine, and the turbine ADOPTED run/bore/head and
+# produced power. That last group is the one that failed first: a stream intake
+# has no water LEVEL, so the pond path bailed before adopting the route — and
+# the fix's change-gate then hid itself, because `absf(NAN - x) > 0.01` is
+# FALSE and an unset outlet_invert_m never got its first write. Cleans its
+# cap_pen_* items + props afterward:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=penstock --shots-dir=<label> --quit-after-capture
+# Hydro LOAD-TIME diagnostic (WINDOWED, console-only, needs a REAL saved map with
+# hydro on it): dumps every penstock/culvert conn's visible_3d, routability, 3D
+# instance and BOTH resolved endpoint anchors at four moments — as loaded (graph
+# never opened), graph open, back in 3D, and after a Hydro Lab round trip. It
+# exists because those states differ: item elevations used to be resolved only on
+# graph-view entry, so a culvert loaded anchored at world Y ~ 0 and fired into the
+# sky until the player pressed G. Asserts up front that no culvert outlet sits
+# above its inlet and no endpoint pair is stranded 120 m apart:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=hydroload --quit-after-capture
 # Siphon auto-bind distance-cap guard (WINDOWED, console-only): places a NEAR
 # pond and a FAR pond next to a synthetic siphon and confirms bind_siphon_to_
 # nearest_pond(id, silent, max_dist_m) binds the near one, refuses the far one
@@ -3011,6 +3078,177 @@ threshold is a tuned multiplier and not "> 1").
 ⚠ `PROTOCOL_VERSION` is now **3**, and `_poll_lan_packets` filters LAN beacons on
 the same constant — old and new builds neither join nor SEE each other, and only
 the new client can print a useful message about it.
+
+## Stream-fed PowerSpout (the tapped-source hydro loop)
+
+The play loop: place a PowerSpout, drop a **stream intake** uphill, draw a
+penstock between them, dial a test L/s in the Hydro Lab, watch real power.
+
+**A source is a FLOW, not a reservoir.** `create_penstock_intake_at` mints a
+`resource` item with `stream_source: true`, `unlimited_capacity: true` and NO
+`level_m`/`floor_m`/`rim_m` — there is no surface to draw down. Its **ground
+elevation is the gross head** (the routed contour penstock's invert drop, adopted
+by `_adopt_penstock_conn`), and how much water it runs comes from
+`core/conduits/hydro_supply.gd` (`HydroSupply`, pure static):
+`Q = base_flow_lps + rain_lps_per_tenth_in_h × (rain_mmh / 2.54)`, capped by
+`max_flow_lps`, optionally lagged by `recession_tau_h` (default 0). **0.1 in =
+2.54 mm exactly** — that conversion is the single likeliest thing to be silently
+wrong, so it is pinned. Authored in the freeform inspector
+(`_build_stream_intake_section`); `recess()` uses `1 − exp(−dt/τ)`, exact for a
+step at ANY dt, because the world clock hands it multi-hour ticks at speed.
+
+**Supply and design flow are DIFFERENT ZEROES, and merging them is the bug that
+keeps coming back.** `HydroSource.available_supply_lps` discriminates on
+`specs.has("supply_lps")`, never on `> 0`: an engine-written `supply_lps` of 0.0
+means a spring that has stopped running, while `design_flow_lps` of 0 means a
+nozzle kind is UNLIMITED. Downstream, `PeltonPhysics.operating_point_supply_limited`
+carries the same contract — **NAN = unconstrained, 0.0 = dry**.
+
+**Supply-limited physics is honest, not a clamp.** When the spring runs less than
+the nozzle would pass, `Q = supply` AND the nozzle only converts the head its own
+flow demands (`nozzle_head_required_m`), so the penstock runs partly full and the
+surplus head is never turned into jet velocity. That is why a big jet on a small
+spring makes far less power than the gross head suggests; the Lab warns and names
+the matching nozzle via `nozzle_d_for_supply_m`. Verified end to end by
+`--capture=penstock`: 0.25 L/s → 0.7 W, 4.0 L/s → 505 W on the same 46 m head.
+
+**Water really moves.** `_process_spec_driven_hydro` takes `net_rates` and
+`dt_hours` and classifies on the kind's `pond_drawdown`: run-of-river STREAMS THE
+RIVER THROUGH (rate stays 0 — the river is not a resource the graph owns, and
+crediting a sink from it would conjure water out of the landscape), while a tapped
+penstock stamps real port rates, credits the outlet sink through the shared
+`_credit_outlet_sink`, glows the penstock via `_cache_conn_flow`, and debits the
+source ONLY when it is not `unlimited_capacity`. Before this the branch forced the
+water output to 0 and took no `net_rates` at all — the reported "I can't get water
+to flow through the turbine".
+
+**Opening the Lab must not rebind a stream-fed turbine.** `prepare_siphon_lab_session`
+auto-binds the nearest pond when `resolve_siphon_pond` comes back empty — and a
+stream intake is not a pond, so that fired every single time and
+`bind_siphon_to_nearest_pond` REPLACED the water-in wiring, deleting the penstock
+the player had just routed and latching the turbine onto a pond elsewhere on the
+map. Guarded by `_turbine_has_stream_source`; the explicit "Rebind to nearest
+pond" button is deliberately NOT gated (that one is the player asking). Pinned by
+`--capture=penstock`'s "opening the Lab did NOT delete the penstock wiring".
+
+**The annual estimate needs the SEASONAL supply.** `available_supply_lps` returns
+one instantaneous number, so `annual_energy_kwh_from_specs` reused it for all
+twelve months — the annual figure read whatever the spring happened to be doing
+when the panel opened, blind to the rainfall that is the whole point of the rain
+coefficient. The engine now stamps `supply_monthly_lps` (12 × L/s, from
+`HydroSupply.monthly_supply_lps` against `WeatherService.monthly_precip_mm`,
+change-gated on the intake's authored params) and the annual closed form takes it
+as an optional argument. Separate key from `supply_lps` ON PURPOSE: the live tick
+must use real-time rain, never a monthly mean.
+
+**The close-up's load slider is a what-if, and it costs watts.** The graph node
+reports the MATCHED-load output (what a dump-load or MPPT controller holds).
+`runner_efficiency(x, 1.0)` is the fraction of that delivered at the current speed
+ratio — 1.0 at x_opt by construction — so the HUD scales the graph's power through
+it. Without that the HUD read "η 0%" at runaway while the status strip a few
+pixels below reported full watts.
+
+**The Lab's test flow is the SUPPLY, not a pond fill.** For penstock kinds
+`lab_sim_inflow_lps` overrides base flow + rain at the intake (flagged there as
+`supply_override`, cleared by `teardown_siphon_lab_session`), and
+`_apply_lab_sim_inflow_realtime` gained a stream branch BEFORE its pond lookup so
+the knob moves the power instantly while the Lab holds the clock frozen.
+
+**Per-view cameras.** `graph_canvas._view_cam` holds `{zoom, pan, along_m, elev_m}`
+per view; `set_view_mode` captures the outgoing view and restores the incoming one
+— capture happens at the SWITCH, not at each of the ten `_zoom` write sites, so a
+new writer cannot break it. `VIEW_SIPHON` is a real mode (the canvas draws only its
+background under the Lab) instead of being faked by parking in `VIEW_FREEFORM`,
+which is what handed the Lab the freeform camera to overwrite;
+`frame_elevation_for_siphon(id, set_camera)` lets the Lab take the heading/slice
+without the framing. Pinned by `--capture=siphon`'s decoupling assertion.
+
+**Elevation registers with 3D.** `_refresh_item_elevations` resolves a prop-bound
+item's elevation from `ConduitManager.anchor_global_for_item` — the SAME resolver
+the 3D conduit terminates its pipes at — before falling back to terrain ground Y,
+and skips siphon modules whose elevation the flow engine and the Lab own.
+`_phys_item_world_center` does the same for the whole anchor (XZ too), memoized
+per draw. `_elev_exaggeration_draw()` returns 1.0 whenever a CAMERA is the
+projection authority, not just under `soi_live_preview`: the overlay sits ON the
+3D image, so a 5× stretch could never line up. `GraphSiteLayout.LAB_MIN_ORTHO_H_M`
+(0.05 m) is clamped by BOTH the Lab's `_lab_view_metrics` and the section camera,
+so deep zoom can no longer unlink them.
+
+**Item elevations must be resolved AT MAP LOAD, not only on graph-view entry.**
+`_refresh_item_elevations` used to run solely from `_apply_graph_view_mode` for
+Site / Elevation / Siphon, so a map booted into first person ran every conduit off
+whatever the save carried. An UNBOUND item — a culvert outlet sink has no prop —
+saved at elevation 0 anchored at world Y ≈ 0 while its machine sat 80 m below, and
+the culvert fired ~265 ft into the sky at an angle until the player pressed G.
+`TerrainLoader` now calls `SystemGraphView.resolve_site_elevations_after_load`
+(backfill + refresh + `ConduitManager.sync_all`) right before `map_load_complete`;
+the `sync_all` also rebuilds any conduit that failed to build at boot. Pinned by
+`--capture=hydroload`, which asserts BEFORE the graph is ever opened that no
+culvert outlet sits above its inlet and no endpoint pair is stranded 120 m apart.
+
+**Three Lab traps that all render plausibly while being wrong.** (a) The overlay
+draws in POND-RELATIVE along — `_ensure_dem_bake` subtracts `pond_along` — so
+anything built from an ABSOLUTE `project_onto_section` coordinate must too
+(`_pond_along_m`). The routed penstock and the drag ghost did not, and on sloping
+ground a sideways shift reads as the pipe FLOATING metres above the terrain while
+3D looks right. (b) Port positions are flat `x`/`y`/`z` scalars, NOT a `pos`
+Vector3 — `get("pos", Vector3.ZERO)` silently measures the model ORIGIN and
+returns a plausible 0.000 m offset. (c) `design_flow_lps == 0` means UNLIMITED for
+a nozzle kind, so the Lab's `maxf(design, 0.01)` floor pinned the whole power
+curve to a 0.01 L/s supply and drew it at ~0 W; only design-flow kinds get the
+floor.
+
+**The power chart separates HARDWARE from SITE.** The per-size curves exclude
+`supply_lps` (a live supply is a property of the site, not the pipe — leaving it
+in made all four sizes return the identical number and four curves drew on top of
+each other, silently answering "a fatter pipe buys you nothing"). The supply gets
+its own labelled curve, and the per-size STATS stay supply-aware and say outright
+when the source, not the pipe, is the limit.
+
+**The runner's DISPLAYED speed is compressed** (`_display_omega`). 24 buckets at
+533 rpm is 213 bucket-passes/s against 60 fps — far above Nyquist, so the wheel
+aliased into a crawl while only the arms read ("spins so fast it looks slow"). No
+frame rate fixes that. The display saturates toward `DISPLAY_RPM_MAX` 55 (~22
+passes/s) on a monotonic curve, so faster still looks faster; the HUD reports the
+TRUE rpm, and only the animation is slowed.
+
+**The splash is the OTHER half of the Euler relation, not a fudge.**
+`PeltonPhysics.bucket_exit_speed_ms(v_jet, x)` = `v_jet·|1 − 2x|` (ideal 180°
+bucket reverses the relative velocity). At the matched load that is only
+0.08·v_jet, because nearly all the jet's momentum went into the shaft — which is
+why a well-tuned Pelton visibly DRIBBLES while a runaway flings water everywhere.
+Driving the close-up's splash from it makes the load slider legible at a glance
+and replaced an arbitrary fraction-of-jet-speed constant. `--capture=siphon`'s two
+shots are the visual pin.
+
+**Stream-intake VFX** (`gameplay/stream_intake_flow.gd`, attached by
+`PlacedPropRuntime._maybe_attach_stream_intake_flow` on `model_id ==
+"stream_intake"`): falling inflow plus a pool whose level rises with
+`live_supply_lps`, so a dry spring and one in spate no longer look identical in
+the world. ⚠ It resolves its `graph_item_id` LAZILY per poll, because
+`create_penstock_intake_at` places the prop and patches `graph_item_id` onto the
+record AFTERWARDS — the runtime is attached with an empty id and, without the
+re-read, never showed water at all.
+
+**Turbine close-up** (`scenes/ui/hydro_turbine_closeup.gd`, a Hydro Lab view tab):
+an `own_world_3d` studio — deliberately not `graph_soi_preview_service`, which
+carries the AMD-TDR crop/clamp scar tissue — showing the real
+`Pelton Wheel, 24 Spoon` node with the housing ghosted (`CULL_FRONT` on the shell
+is what reads as *cut open* rather than as fog; the housing set is DERIVED as
+"every mesh that is not the runner", never name-matched). Two traps, both of which
+RENDER rather than erroring: the spin centre must be measured in the runner's
+**PARENT** frame (`_runner_centre_parent`) because `_runner.transform` is local and
+the GLB has a baked inch→metre node between ModelRoot and the wheel — rotating
+about a ModelRoot-space centre throws the wheel out of the housing; and the jet
+must arrive **in the plane of the wheel** (`_jet_side`, perpendicular to the spin
+axis), or a side-on camera looking along that axis sees it end-on and it is
+invisible. Speed is `omega_rad_s_at_ratio(v_jet, PCD, speed_ratio_for_load(load))`,
+so shedding the load runs the wheel toward 2·x_opt while `runner_efficiency`
+collapses to zero — verified by `--capture=siphon`'s console dump (matched 458 rpm
+η 65% → runaway 903 rpm η 0%). `core/conduits/pelton_jet.gdshader` scrolls at the
+REAL `jet_velocity_ms`; it is written clean rather than reusing
+`terrain_river`/`terrain_water`, which `#include soi_clip.gdshaderinc` and can
+vanish in a studio viewport where the clip uniforms are unset.
 
 ## Conventions
 

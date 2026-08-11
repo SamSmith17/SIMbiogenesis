@@ -59,6 +59,29 @@ var pipe_roughness_m: float = 1.5e-6
 var design_flow_lps: float = 3.0
 var turbine_efficiency: float = 0.0   ## 0 → per-kind default from HydroSource.KINDS
 
+## Nozzle-governed impulse turbines (kind_meta.uses_nozzle_model — PowerSpout-
+## class Pelton): flow is set by jet velocity × nozzle area at the operating
+## point where penstock delivery meets nozzle demand (PeltonPhysics), not by
+## the design-flow knob; RPM comes from the jet speed ratio and runner PCD
+## instead of the siphon-tuned omega_from_pe_w curve.
+var uses_nozzle_model: bool = false
+var nozzle_count: int = 1
+var nozzle_diameter_m: float = 0.010
+var runner_pcd_m: float = 0.22
+
+# --- Levelless (stream / spring) source ---------------------------------------
+## "pond" drains a stored reservoir and derives head from its water SURFACE — the
+## original and only mode until now. "stream" is a spring or creek tapped by a
+## penstock: it has no surface to draw down, its head is the invert drop the
+## routed penstock measured, and what it can deliver is a FLOW, not a volume.
+## Everything below defaults to the pond behaviour, so existing saves and every
+## pinned selftest value are untouched.
+var source_mode: String = "pond"
+## Gross head (m) for stream mode — the adopted penstock invert drop.
+var gross_head_m: float = NAN
+## Available supply (L/s); NAN = unlimited (legacy). 0.0 legitimately means DRY.
+var supply_lps: float = NAN
+
 # --- Persistent state --------------------------------------------------------
 var primed: bool = false
 var cumulative_out_l: float = 0.0
@@ -123,6 +146,23 @@ func configure_siphon(specs: Dictionary) -> void:
 	pipe_roughness_m = maxf(float(specs.get("pipe_roughness_mm", 0.0015)) / 1000.0, 0.0)
 	design_flow_lps = maxf(float(specs.get("design_flow_lps", 3.0)), 0.0)
 	turbine_efficiency = float(specs.get("turbine_efficiency", 0.0))
+	var kmeta := HydroSource.kind_meta(turbine_kind)
+	uses_nozzle_model = bool(kmeta.get("uses_nozzle_model", false))
+	nozzle_count = clampi(int(specs.get("nozzle_count", 1)), 1,
+			maxi(int(kmeta.get("nozzle_count_max", 2)), 1))
+	nozzle_diameter_m = maxf(float(specs.get("nozzle_diameter_mm",
+			float(kmeta.get("default_nozzle_mm", 10.0)))) / 1000.0, 0.001)
+	runner_pcd_m = maxf(float(specs.get("runner_pcd_m",
+			float(kmeta.get("runner_pcd_m", 0.22)))), 0.02)
+	# Product-modeled kinds carry a real nameplate: an unset spec (0 =
+	# uncapped) inherits the kind's cap — a PowerSpout cannot exceed 1.6 kW
+	# however the head/pipe pencil out.
+	if uses_nozzle_model and max_power_w <= 0.0:
+		max_power_w = maxf(float(kmeta.get("max_power_w", 0.0)), 0.0)
+	# Levelless source. Absent keys keep the pond path byte-identical.
+	source_mode = str(specs.get("penstock_source_mode", "pond"))
+	gross_head_m = float(specs.get("gross_head_m", NAN))
+	supply_lps = float(specs["supply_lps"]) if specs.has("supply_lps") else NAN
 
 
 ## ---------------------------------------------------------------------------
@@ -193,34 +233,80 @@ func _penstock_evaluate(level: float) -> Dictionary:
 		"siphon_start_m": siphon_start_m, "siphon_break_m": siphon_break_m,
 		"conveyance": "penstock", "q_capacity_lps": 0.0,
 		"head_loss_m": 0.0, "net_head_m": 0.0,
+		"supply_limited": false, "unused_head_m": 0.0,
+		"q_supply_lps": supply_lps,
 	}
-	if is_nan(level) or is_nan(outlet_invert_m):
-		r["regime"] = "unset"
-		return r
-	var gross_head := level - outlet_invert_m
-	r["head_m"] = maxf(gross_head, 0.0)
-	# Intake must stay submerged (same ½-diameter anti-vortex band as the siphon,
-	# using the penstock intake diameter). Below it → no flow (the dead pool).
-	var eff := effective_break_level_m()
-	if not is_nan(eff) and level <= eff:
-		r["regime"] = "dry"
-		return r
+	# STREAM source (spring / creek): no water surface to draw down, so neither the
+	# level bail nor the submergence dead-pool applies. Head is the invert drop the
+	# routed penstock measured. Without this branch a stream-fed PowerSpout reports
+	# regime "unset" and every Lab readout sits at zero — which is most of why this
+	# setup looked broken even when the estimator was producing power.
+	var is_stream := source_mode == "stream"
+	var gross_head: float
+	if is_stream:
+		gross_head = gross_head_m
+		if is_nan(gross_head):
+			r["regime"] = "unset"
+			return r
+		r["head_m"] = maxf(gross_head, 0.0)
+	else:
+		if is_nan(level) or is_nan(outlet_invert_m):
+			r["regime"] = "unset"
+			return r
+		gross_head = level - outlet_invert_m
+		r["head_m"] = maxf(gross_head, 0.0)
+		# Intake must stay submerged (same ½-diameter anti-vortex band as the
+		# siphon, using the penstock intake diameter). Below it → the dead pool.
+		var eff := effective_break_level_m()
+		if not is_nan(eff) and level <= eff:
+			r["regime"] = "dry"
+			return r
 	if gross_head <= 1e-4:
 		r["regime"] = "no_head"
 		return r
+	if is_stream and not is_nan(supply_lps) and supply_lps <= 1e-6:
+		# A spring that has run dry is not "no head" — say so distinctly, or the
+		# Lab tells the player to move the turbine when the fix is to wait for rain.
+		r["regime"] = "no_supply"
+		return r
 	var q_cap_lps := _penstock_capacity_lps(gross_head)
 	r["q_capacity_lps"] = q_cap_lps
-	# Operating point: the turbine draws its design flow, but never more than the
-	# penstock can gravity-deliver at the current head — so as the pond draws
-	# down and head falls, delivery (and power) taper naturally.
-	var q_lps := minf(q_cap_lps, design_flow_lps)
+	var q_lps: float
+	var h_f: float
+	var h_net: float
+	var v_jet := 0.0
+	if uses_nozzle_model:
+		# Nozzle-governed (PowerSpout-class Pelton): the operating point is
+		# where penstock delivery meets nozzle demand — flow follows head and
+		# nozzle area, and the design-flow knob is ignored by construction.
+		# A finite supply caps it, and when it binds the nozzle converts only the
+		# head its own flow demands (PeltonPhysics.operating_point_supply_limited).
+		# NAN carries through as "unconstrained"; 0.0 as "dry".
+		var supply_m3s := supply_lps / 1000.0
+		var op := PeltonPhysics.operating_point_supply_limited(
+				gross_head, penstock_length_m, penstock_diameter_m,
+				pipe_roughness_m, nozzle_diameter_m, nozzle_count, supply_m3s)
+		q_lps = float(op.get("q_lps", 0.0))
+		h_f = float(op.get("head_loss_m", 0.0))
+		h_net = float(op.get("h_net_m", 0.0))
+		v_jet = float(op.get("v_jet_ms", 0.0))
+		r["supply_limited"] = bool(op.get("supply_limited", false))
+		r["unused_head_m"] = float(op.get("unused_head_m", 0.0))
+	else:
+		# Operating point: the turbine draws its design flow, but never more
+		# than the penstock can gravity-deliver at the current head — so as the
+		# pond draws down and head falls, delivery (and power) taper naturally.
+		q_lps = minf(q_cap_lps, design_flow_lps)
+		if not is_nan(supply_lps):
+			r["supply_limited"] = supply_lps < q_lps
+			q_lps = minf(q_lps, supply_lps)
+		h_f = HydroSource.pipe_friction_head_loss_m(
+				q_lps / 1000.0, penstock_diameter_m, penstock_length_m, pipe_roughness_m)
+		h_net = maxf(gross_head - h_f, 0.0)
 	if q_lps <= 1e-6:
 		r["regime"] = "no_head"
 		return r
 	var q_m3s := q_lps / 1000.0
-	var h_f := HydroSource.pipe_friction_head_loss_m(
-			q_m3s, penstock_diameter_m, penstock_length_m, pipe_roughness_m)
-	var h_net := maxf(gross_head - h_f, 0.0)
 	var eta_t := turbine_efficiency
 	if eta_t <= 0.0:
 		eta_t = HydroSource.default_turbine_efficiency(turbine_kind)
@@ -241,9 +327,18 @@ func _penstock_evaluate(level: float) -> Dictionary:
 	r["net_head_m"] = h_net
 	r["primed"] = true   # a submerged penstock is always "flowing" for visuals
 	r["regime"] = "penstock"
-	var omega := SiphonHydraulics.omega_from_pe_w(pe_w)
-	r["omega"] = omega
-	r["rpm"] = omega * 60.0 / TAU
+	if uses_nozzle_model:
+		# Impulse-runner speed from the jet, not the siphon rotor curve
+		# (omega_from_pe_w is tuned to a 5 kW reference and reads absurd for a
+		# few-hundred-watt pico Pelton).
+		var omega_n := PeltonPhysics.omega_rad_s(v_jet, runner_pcd_m)
+		r["omega"] = omega_n
+		r["rpm"] = omega_n * 60.0 / TAU
+		r["v_jet_ms"] = v_jet
+	else:
+		var omega := SiphonHydraulics.omega_from_pe_w(pe_w)
+		r["omega"] = omega
+		r["rpm"] = omega * 60.0 / TAU
 	return r
 
 

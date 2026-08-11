@@ -8,6 +8,9 @@ const _CLOSURE_SCRIPT := preload("res://system_graph/closure_metrics.gd")
 const _HIGH_SCORE_SCRIPT := preload("res://core/high_score_store.gd")
 
 const REFRESH_INTERVAL := 0.2
+## Stores + Settlement card refresh at 1 Hz — both walk model/roster arrays,
+## and neither changes fast enough to justify the 5 Hz power cadence.
+const REFRESH_SLOW_MS := 1000
 
 var _graph_view: Node = null
 var _mode := "build"
@@ -25,6 +28,20 @@ var _score_lbl: Label = null
 var _best_lbl: Label = null
 var _need_rows: Dictionary = {}  # kind -> {status, detail}
 var _stores_vbox: VBoxContainer = null
+## Content signature of the last-built store rows. Starts at a sentinel, never
+## "" — an empty board yields an empty signature, and "" would compare equal on
+## the first pass so the empty-state hint would never build.
+var _stores_sig := "<unset>"
+var _settlement_vbox: VBoxContainer = null
+var _settlement_sig := "<unset>"
+var _slow_last_ms := 0
+## Rolling strip of the latest notable settlement-log lines (own named cursor,
+## so this never races the toast drain or the challenge bake's watcher).
+var _alerts: Array = []
+const _ALERT_KINDS := {"blocked": true, "relief": true, "departed": true,
+	"lost": true, "collapse_warning": true, "collapsed": true,
+	"deserted": true}
+const _MAX_ALERTS := 3
 
 
 func _ready() -> void:
@@ -50,7 +67,13 @@ func refresh(force: bool = false) -> void:
 	_refresh_acc = 0.0
 	_refresh_power()
 	_refresh_closure()
-	_refresh_stores()
+	# Stores + Settlement walk model/roster arrays — 1 Hz is plenty, and the
+	# signature diffs inside them make even that mostly free.
+	var now_ms := Time.get_ticks_msec()
+	if now_ms - _slow_last_ms >= REFRESH_SLOW_MS:
+		_slow_last_ms = now_ms
+		_refresh_stores()
+		_refresh_settlement()
 
 
 func _process(delta: float) -> void:
@@ -169,6 +192,14 @@ func _build_ui() -> void:
 		var row := _need_row(str(kind_meta[1]))
 		closure_body.add_child(row)
 		_need_rows[kind] = row
+
+	add_child(_card_section("🏕 SETTLEMENT"))
+	var settle_wrap := _card_body()
+	add_child(settle_wrap)
+	var settle_body := _card_inner(settle_wrap)
+	_settlement_vbox = VBoxContainer.new()
+	_settlement_vbox.add_theme_constant_override("separation", 3)
+	settle_body.add_child(_settlement_vbox)
 
 	add_child(_card_section("🛢 RESOURCE STORES"))
 	var stores_wrap := _card_body()
@@ -428,62 +459,253 @@ func _trend_arrow(kind: String, closure_pct: float, now_msec: int) -> String:
 	return str(snap.get("arrow", "→"))
 
 
-func _refresh_stores() -> void:
-	for c in _stores_vbox.get_children():
-		c.queue_free()
+## Pure row model for the RESOURCE STORES card — one row per resource kind,
+## aggregated over REAL tanks only. Extracted static so it can be pinned
+## headless. The ∞ culvert outlet (specs.outlet_sink / unlimited_capacity) and
+## processor ghost containers (is_ghost, item- or specs-level) used to leak in
+## here: a habitat's auto-spawned in/out ghosts rendered as stores, and the
+## first-item-of-kind-wins naming let the water row wear the outlet's
+## "Culvert Outlet" name. Rows are named after the LARGEST tank of the kind.
+static func store_rows(items: Array) -> Array:
+	var by_kind: Dictionary = {}
+	var order: Array = []
+	for item: Dictionary in items:
+		if str(item.get("type", "")) != "resource":
+			continue
+		if bool(item.get("is_ghost", false)) or bool(item.get("is_virtual", false)):
+			continue
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if bool(specs.get("is_ghost", false)):
+			continue
+		if bool(specs.get("outlet_sink", false)) or bool(specs.get("unlimited_capacity", false)):
+			continue
+		var kind := str(specs.get("resource_kind", ""))
+		if kind.is_empty():
+			continue
+		var level := clampf(float(specs.get("level", 0.0)), 0.0, 1.0)
+		var cap_qty := maxf(float(specs.get("capacity_qty", 0.0)), 0.0)
+		var name := str(specs.get("name", ""))
+		if name.is_empty():
+			name = kind.capitalize()
+		var row: Dictionary = by_kind.get(kind, {})
+		if row.is_empty():
+			row = {"kind": kind, "name": name, "name_cap": cap_qty,
+					"stock": 0.0, "cap": 0.0, "count": 0,
+					"unit": str(specs.get("capacity_unit", "")), "tanks": []}
+			by_kind[kind] = row
+			order.append(kind)
+		elif cap_qty > float(row["name_cap"]):
+			row["name"] = name
+			row["name_cap"] = cap_qty
+			row["unit"] = str(specs.get("capacity_unit", row["unit"]))
+		row["stock"] = float(row["stock"]) + level * cap_qty
+		row["cap"] = float(row["cap"]) + cap_qty
+		row["count"] = int(row["count"]) + 1
+		(row["tanks"] as Array).append({"name": name, "stock": level * cap_qty,
+				"cap": cap_qty, "unit": str(specs.get("capacity_unit", ""))})
+	var out: Array = []
+	for kind: String in order:
+		out.append(by_kind[kind])
+	return out
 
+
+func _refresh_stores() -> void:
 	var model: GraphModel = null
 	if _graph_view != null:
 		model = _graph_view.get("model") as GraphModel
+	var rows: Array = []
+	if model != null:
+		rows = store_rows(model.get_items_in_scope("root"))
+
+	# Rebuild only when content changes. The old free-then-add pattern used
+	# queue_free(), which is deferred — any frame where refresh(true) ran more
+	# than once (bind + set_mode + closure telemetry all force it) rendered N
+	# copies of every row until end of frame.
+	var sig_parts := PackedStringArray()
 	if model == null:
+		sig_parts.append("<no-model>")
+	for row: Dictionary in rows:
+		sig_parts.append("%s|%s|%d|%.1f|%.0f" % [str(row["kind"]), str(row["name"]),
+				int(row["count"]), float(row["stock"]), float(row["cap"])])
+		for tank_v in (row.get("tanks", []) as Array):
+			var tank: Dictionary = tank_v
+			sig_parts.append("  %s|%.1f|%.0f" % [str(tank["name"]),
+					float(tank["stock"]), float(tank["cap"])])
+	var sig := "\n".join(sig_parts)
+	if sig == _stores_sig:
+		return
+	_stores_sig = sig
+
+	for c in _stores_vbox.get_children():
+		_stores_vbox.remove_child(c)
+		c.free()
+
+	if model == null or rows.is_empty():
 		var hint := Label.new()
-		hint.text = "No tanks on graph"
+		hint.text = "No tanks on graph" if model == null \
+				else "Add resource tanks from the library"
 		hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 		_stores_vbox.add_child(hint)
 		return
 
-	var kinds_seen: Dictionary = {}
-	for item: Dictionary in model.get_items_in_scope("root"):
-		if str(item.get("type", "")) != "resource":
+	for row_data: Dictionary in rows:
+		var tanks: Array = row_data.get("tanks", [])
+		if tanks.size() <= 1:
+			# One tank of this kind: one row, named after the real tank.
+			_add_store_row(str(row_data["name"]), float(row_data["stock"]),
+					float(row_data["cap"]), str(row_data["unit"]), false)
 			continue
-		var specs: Dictionary = item.get("specs", {}) as Dictionary
-		var kind := str(specs.get("resource_kind", ""))
-		if kind.is_empty():
-			continue
-		var level := clampf(float(specs.get("level", 0.0)), 0.0, 1.0)
-		var cap_qty := float(specs.get("capacity_qty", 0.0))
-		var unit := str(specs.get("capacity_unit", ""))
-		var name := str(specs.get("name", kind.capitalize()))
-		if kinds_seen.has(kind):
-			continue
-		kinds_seen[kind] = true
+		# Several tanks of one kind: a per-kind subtotal line, then one honest
+		# row per tank (this is what replaced the old first-item-wins single
+		# row — a camp with a cistern AND rain barrels should read as both).
+		var subtotal := Label.new()
+		subtotal.text = "%s — %d tanks · %s / %s %s" % [
+			ResourceKinds.display_name(str(row_data["kind"])), tanks.size(),
+			_fmt_qty(float(row_data["stock"])), _fmt_qty(float(row_data["cap"])),
+			str(row_data["unit"])]
+		subtotal.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		subtotal.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+		_stores_vbox.add_child(subtotal)
+		for tank_v in tanks:
+			var tank: Dictionary = tank_v
+			_add_store_row(str(tank["name"]), float(tank["stock"]),
+					float(tank["cap"]), str(tank["unit"]), true)
 
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 6)
-		_stores_vbox.add_child(row)
 
-		var bar := ProgressBar.new()
-		bar.custom_minimum_size = Vector2(80, 10)
-		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		bar.max_value = 100.0
-		bar.value = level * 100.0
-		bar.show_percentage = false
-		_style_progress(bar)
-		row.add_child(bar)
+func _add_store_row(name: String, stock: float, cap_qty: float,
+		unit: String, indent: bool) -> void:
+	var frac := clampf(stock / cap_qty, 0.0, 1.0) if cap_qty > 0.0 else 0.0
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	_stores_vbox.add_child(row)
+	if indent:
+		var pad := Control.new()
+		pad.custom_minimum_size = Vector2(10, 0)
+		row.add_child(pad)
+	var bar := ProgressBar.new()
+	bar.custom_minimum_size = Vector2(70 if indent else 80, 10)
+	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.max_value = 100.0
+	bar.value = frac * 100.0
+	bar.show_percentage = false
+	_style_progress(bar)
+	row.add_child(bar)
+	var lbl := Label.new()
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbl.text = "%s  %.0f%%" % [name, frac * 100.0]
+	if cap_qty > 0.0:
+		lbl.text = "%s  %s / %s %s" % [name, _fmt_qty(stock), _fmt_qty(cap_qty), unit]
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	row.add_child(lbl)
 
-		var lbl := Label.new()
-		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lbl.text = "%s  %.0f%%" % [name, level * 100.0]
-		if cap_qty > 0.0:
-			lbl.text = "%s  %.1f / %.0f %s" % [name, level * cap_qty, cap_qty, unit]
-		lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-		lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-		row.add_child(lbl)
 
-	if kinds_seen.is_empty():
+## Compact quantity: 30000 -> "30k", 1234.5 -> "1234.5" -> keeps tank rows from
+## wrapping the narrow sidebar.
+static func _fmt_qty(v: float) -> String:
+	if absf(v) >= 10000.0:
+		return "%.0fk" % (v / 1000.0)
+	if absf(v) >= 100.0 or is_equal_approx(v, roundf(v)):
+		return "%.0f" % v
+	return "%.1f" % v
+
+
+## Sim activity names -> what a player would call them. Raw fallthrough keeps
+## a NEW sim activity visible (capitalised) instead of silently dropped.
+const _ACTIVITY_LABELS := {
+	"chore": "working", "sleep": "sleeping", "hunger": "eating",
+	"thirst": "drinking", "bladder": "restroom", "hygiene": "washing",
+	"enrichment": "gathering", "idle": "free", "walking": "walking",
+}
+
+
+## 🏕 SETTLEMENT — the people themselves: headcount, mood, what everyone is
+## doing right now, and the latest notable settlement-log lines. This is the
+## panel answer to "the sidebar told me nothing about my community".
+func _refresh_settlement() -> void:
+	if _settlement_vbox == null:
+		return
+	var summary: Dictionary = {}
+	if _graph_view != null and _graph_view.has_method("npc_dot_summary"):
+		summary = _graph_view.call("npc_dot_summary") as Dictionary
+	# Alerts ride their own named settlement-log cursor ("dashboard") — the
+	# cursor pattern exists precisely so this never races the toast drain or
+	# the challenge bake's collapse watcher. Bridge is null on an MP guest.
+	if _graph_view != null and _graph_view.has_method("npc_population_bridge"):
+		var bridge: Variant = _graph_view.call("npc_population_bridge")
+		if bridge != null and bridge.has_method("log_since"):
+			for e in (bridge.call("log_since", "dashboard") as Array):
+				var ev: Dictionary = e
+				if _ALERT_KINDS.has(str(ev.get("kind", ""))):
+					_alerts.append(str(ev.get("text", "")))
+	while _alerts.size() > _MAX_ALERTS:
+		_alerts.pop_front()
+
+	var sig_parts := PackedStringArray()
+	if summary.is_empty():
+		sig_parts.append("<none>")
+	else:
+		sig_parts.append("n=%d t=%d m=%.2f" % [int(summary.get("count", 0)),
+				int(summary.get("traveling", 0)), float(summary.get("morale_avg", 0.0))])
+		var acts: Dictionary = summary.get("activities", {})
+		var akeys: Array = acts.keys()
+		akeys.sort()
+		for a in akeys:
+			sig_parts.append("a:%s=%d" % [str(a), int(acts[a])])
+	for al in _alerts:
+		sig_parts.append("!%s" % str(al))
+	var sig := "\n".join(sig_parts)
+	if sig == _settlement_sig:
+		return
+	_settlement_sig = sig
+
+	for c in _settlement_vbox.get_children():
+		_settlement_vbox.remove_child(c)
+		c.free()
+
+	if summary.is_empty():
 		var hint := Label.new()
-		hint.text = "Add resource tanks from the library"
+		hint.text = "No settlement yet — enable Population on a habitat"
 		hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-		_stores_vbox.add_child(hint)
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_settlement_vbox.add_child(hint)
+		return
+
+	var morale_avg := float(summary.get("morale_avg", 0.0))
+	var head := Label.new()
+	head.text = "👥 %d people · %s" % [int(summary.get("count", 0)),
+			NpcMorale.label(morale_avg)]
+	head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	head.add_theme_color_override("font_color", NpcMorale.color(morale_avg))
+	_settlement_vbox.add_child(head)
+
+	# One line of "what everyone is doing", biggest groups first.
+	var acts2: Dictionary = summary.get("activities", {})
+	var pairs: Array = []
+	for a in acts2.keys():
+		pairs.append([int(acts2[a]), str(a)])
+	var traveling := int(summary.get("traveling", 0))
+	if traveling > 0:
+		pairs.append([traveling, "walking"])
+	pairs.sort_custom(func(x, y): return int(x[0]) > int(y[0]))
+	var bits := PackedStringArray()
+	for p in pairs.slice(0, 4):
+		var label := str(_ACTIVITY_LABELS.get(str(p[1]), str(p[1]).capitalize()))
+		bits.append("%d %s" % [int(p[0]), label])
+	if not bits.is_empty():
+		var act_lbl := Label.new()
+		act_lbl.text = " · ".join(bits)
+		act_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		act_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		act_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+		_settlement_vbox.add_child(act_lbl)
+
+	for al in _alerts:
+		var alert_lbl := Label.new()
+		alert_lbl.text = "⚠ %s" % str(al)
+		alert_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		alert_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		alert_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
+		_settlement_vbox.add_child(alert_lbl)

@@ -2434,15 +2434,14 @@ func _on_queue_crew_build() -> void:
 		return
 	var eta_txt := "%.1f h of crew time" % (float(sched["makespan_s"]) / 3600.0) \
 		if bool(sched["feasible"]) else "raise waits for a bigger crew"
-	# Hand off to where the action is: close the Lab and jump the graph to
-	# the Site Plan centred on the build site (watch_site_at also nudges a
-	# paused clock — a frozen plan was the #1 "nothing is happening" report).
+	# No auto-jump: close the Lab and offer a Watch chip (opens the settlement
+	# view over the build site). notify_crew_queued also nudges a paused clock
+	# — a frozen sim was the #1 "nothing is happening" report.
 	var watch := _crate_site(scene, crate_id)
 	close()
-	if sgv.has_method("watch_site_at"):
-		sgv.call("watch_site_at", watch,
-			"👷 Build project queued for the %d-person crew (%s) — the site grows as they work" % [
-				roster, eta_txt])
+	if sgv.has_method("notify_crew_queued"):
+		sgv.call("notify_crew_queued", watch,
+			"👷 Build queued — %d-person crew" % roster, eta_txt)
 
 
 static func _compact_timeline(sched: Dictionary) -> Array:

@@ -366,21 +366,10 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_section("Cost")
 			_num_field("Unit Cost ($)",       specs.get("cost", 0.0),             "specs/cost", 0, 99999, 1.0)
 
-		"hydro":
-			_section("Turbine")
-			_text_field("Name",               specs.get("name", ""),              "specs/name")
-			_turbine_kind_field("Turbine kind", str(specs.get("kind", "pelton")), "specs/kind")
-			_num_field("Turbine Eff. (0=auto)", specs.get("turbine_efficiency", 0.0), "specs/turbine_efficiency", 0.0, 0.95, 0.01)
-			_num_field("Generator Eff.",      specs.get("generator_efficiency", 0.85), "specs/generator_efficiency", 0.5, 1.0, 0.01)
-			_section("Site / Placement")
-			_num_field("Gross Head (m)",      specs.get("gross_head_m", 25.0),    "specs/gross_head_m",     0.5, 300.0, 0.5)
-			_num_field("Design Flow (L/s)",   specs.get("design_flow_lps", 3.0),  "specs/design_flow_lps",  0.1, 5000.0, 0.1)
-			_section("Penstock")
-			_num_field("Length (m)",          specs.get("penstock_length_m", 60.0),    "specs/penstock_length_m",    1.0, 2000.0, 1.0)
-			_num_field("Diameter (mm)",       specs.get("penstock_diameter_mm", 63.0), "specs/penstock_diameter_mm", 20.0, 2000.0, 1.0)
-			_num_field("Roughness ε (mm)",    specs.get("pipe_roughness_mm", 0.0015),  "specs/pipe_roughness_mm",    0.0005, 1.0, 0.0005)
-			_section("Cost")
-			_num_field("Unit Cost ($)",       specs.get("cost", 0.0),             "specs/cost", 0, 99999, 1.0)
+		# NOTE: the legacy `type=="hydro"` estimator case is gone — GraphModel
+		# migrates those items to `processor` / role "siphon_hydro" on load
+		# (Phase B of the Hydro Lab overhaul), which lands in
+		# _build_siphon_hydro_section via the processor branch below.
 
 		"battery", "smartbattery":
 			_section("Specs")
@@ -478,6 +467,8 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_section("Specs")
 			_text_field("Name",         specs.get("name", ""),      "specs/name")
 			_build_resource_kind_picker(specs)
+			if ResourceFlowEngine.is_stream_intake(item):
+				_build_stream_intake_section(item, specs)
 			var unlimited := bool(specs.get("unlimited_capacity", false))
 			var unlim_row := _row_container()
 			var unlim_h: HBoxContainer = unlim_row.get_child(0) as HBoxContainer
@@ -1466,6 +1457,12 @@ func _turbine_kind_field(label: String, current: String, path: String) -> void:
 	opt.select(sel_idx)
 	opt.item_selected.connect(func(idx: int) -> void:
 		_commit_field(path, str(opt.get_item_metadata(idx)))
+		# A different turbine kind is a different machine — swap the placed 3D
+		# model to match (no-op when the node has no 3D twin).
+		var gv := _find_owner_graph_view()
+		if gv != null and gv.has_method("sync_turbine_model_to_kind") \
+				and not _item_id.is_empty():
+			gv.call("sync_turbine_model_to_kind", _item_id)
 		_rebuild_current_item()
 	)
 	hbox.add_child(opt)
@@ -3642,14 +3639,31 @@ func _build_siphon_hydro_section(specs: Dictionary) -> void:
 	if has_penstock:
 		# Penstock turbine (pelton/turgo/run-of-river): pond drains through a
 		# pressurized pipe; Q is set by penstock delivery vs. turbine design flow.
+		# With NO pond bound the node runs spec-driven from Gross head +
+		# Design flow (the unified estimator path in ResourceFlowEngine).
+		var kmeta := HydroSource.kind_meta(kind)
+		var uses_nozzle := bool(kmeta.get("uses_nozzle_model", false))
+		_num_field("Gross head (m)", specs.get("gross_head_m", 25.0),
+				"specs/gross_head_m", 0.0, 300.0, 0.5)
 		_num_field("Penstock length (m)", specs.get("penstock_length_m", 60.0),
 				"specs/penstock_length_m", 1.0, 2000.0, 1.0)
 		_num_field("Penstock Ø (mm)", specs.get("penstock_diameter_mm", 63.0),
 				"specs/penstock_diameter_mm", 20.0, 2000.0, 1.0)
 		_num_field("Roughness ε (mm)", specs.get("pipe_roughness_mm", 0.0015),
 				"specs/pipe_roughness_mm", 0.0005, 1.0, 0.0005)
-		_num_field("Design flow (L/s)", specs.get("design_flow_lps", 5.0),
-				"specs/design_flow_lps", 0.1, 5000.0, 0.1)
+		if uses_nozzle:
+			# Nozzle-governed (PowerSpout Pelton): the nozzle IS the flow
+			# control — jet velocity × nozzle area at the operating point
+			# (PeltonPhysics); no design-flow knob.
+			_num_field("Nozzles", specs.get("nozzle_count", 1),
+					"specs/nozzle_count", 1.0,
+					maxf(float(kmeta.get("nozzle_count_max", 2)), 1.0), 1.0)
+			_num_field("Nozzle Ø (mm)", specs.get("nozzle_diameter_mm",
+					float(kmeta.get("default_nozzle_mm", 10.0))),
+					"specs/nozzle_diameter_mm", 3.0, 25.0, 0.5)
+		else:
+			_num_field("Design flow (L/s)", specs.get("design_flow_lps", 5.0),
+					"specs/design_flow_lps", 0.1, 5000.0, 0.1)
 		_num_field("Turbine η (0=auto)", specs.get("turbine_efficiency", 0.0),
 				"specs/turbine_efficiency", 0.0, 0.95, 0.01)
 	else:
@@ -3673,7 +3687,7 @@ func _build_siphon_hydro_section(specs: Dictionary) -> void:
 	_readonly_field("PE potential", "%.0f W" % float(specs.get("live_pe_w", 0.0)))
 	_readonly_field("DC output", "%.0f W" % (float(specs.get("current_output_kw", 0.0)) * 1000.0))
 	_readonly_field("Regime", str(specs.get("live_regime", "—")))
-	_readonly_field("Hint", "Siphon Lab → Bind pond + ∞ outlet · DC +/- → 48V battery")
+	_readonly_field("Hint", "Hydro Lab → Bind pond + ∞ outlet · DC +/- → 48V battery")
 
 
 ## Parabolic-trough CSP fields: geometry/optics inputs plus read-only live
@@ -4355,6 +4369,41 @@ func _build_io_row(specs: Dictionary, arr_name: String, idx: int, batch_mode: bo
 
 ## Pond tank twin: Capacity Auto (terrain bathymetry) / Manual (L) and Fill Auto
 ## (water surface) / Manual (%). Mirrors the Pond settings modal.
+## Stream / spring intake: how much water this source actually runs, and how it
+## responds to rain. This is what makes a penstock turbine produce — and what
+## makes it SPIKE in a storm — so it belongs on the intake node, in the freeform
+## graph, next to everything else the player authors.
+##
+## The rain coefficient is authored in tenths of an inch per hour because that is
+## the unit a micro-hydro siter reads off a rain gauge; HydroSupply converts.
+func _build_stream_intake_section(item: Dictionary, specs: Dictionary) -> void:
+	_section("Stream / spring")
+	# Its ground elevation IS the gross head, so show it here rather than making
+	# the player go and hunt for it.
+	var elev := float(item.get("elevation_m", NAN))
+	_readonly_field("Ground elevation", "—" if is_nan(elev) else "%.2f m" % elev)
+	_num_field("Base flow (L/s)",
+		specs.get("base_flow_lps", HydroSupply.DEFAULT_BASE_FLOW_LPS),
+		"specs/base_flow_lps", 0.0, 5000.0, 0.1)
+	_num_field("Rain response (L/s per 0.1 in/h)",
+		specs.get("rain_lps_per_tenth_in_h", HydroSupply.DEFAULT_RAIN_LPS_PER_TENTH_IN_H),
+		"specs/rain_lps_per_tenth_in_h", 0.0, 500.0, 0.1)
+	_num_field("Peak flow cap (L/s, 0 = none)",
+		specs.get("max_flow_lps", 0.0), "specs/max_flow_lps", 0.0, 5000.0, 1.0)
+	_num_field("Response lag (h, 0 = instant)",
+		specs.get("recession_tau_h", 0.0), "specs/recession_tau_h", 0.0, 72.0, 0.5)
+	var rain := float(specs.get("live_rain_mmh", 0.0))
+	_readonly_field("Rain now", "%.2f mm/h  (%.2f in/h)"
+		% [rain, rain / 25.4])
+	_readonly_field("Rain term", "%.2f L/s" % float(specs.get("live_rain_term_lps", 0.0)))
+	var live := float(specs.get("live_supply_lps", NAN))
+	var live_txt := "—" if is_nan(live) else "%.2f L/s" % live
+	if bool(specs.get("supply_override", false)):
+		live_txt += "  (Hydro Lab test flow)"
+	_readonly_field("Live supply", live_txt)
+	_hint_label("Base flow is the dry-weather spring. Rain response adds flow per 0.1 in/h of rainfall — that is what makes the turbine spike in a storm. A response lag above 0 gives a slower storm rise and tail-off; scrubbing time backwards then shows the un-lagged supply.")
+
+
 func _build_pond_twin_mode_section(specs: Dictionary) -> void:
 	_section("Pond twin")
 	var cap_mode := str(specs.get("capacity_mode", "auto"))

@@ -309,6 +309,15 @@ const WIRE_SEG_REF_LEN := 260.0
 
 var _pan:            Vector2 = Vector2.ZERO
 var _zoom:           float   = 1.0
+## Per-view camera slots, so no view can destroy another's framing. There is ONE
+## live `_pan`/`_zoom` (every existing writer below keeps mutating it directly);
+## `set_view_mode` captures the outgoing view's framing into its slot and restores
+## the incoming one. Capturing at the SWITCH rather than guarding each of the ten
+## `_zoom` write sites is deliberate — an eleventh writer added later cannot break
+## the decoupling by forgetting to opt in.
+## Slot shape: {zoom, pan, along_m, elev_m, anchor_inited} (the elev anchors are
+## meaningful only for VIEW_ELEVATION, which folds its pan into them).
+var _view_cam: Dictionary = {}
 var _dragging:       bool    = false
 var _last_drag_pos:  Vector2 = Vector2.ZERO
 var _pan_button:     int     = -1
@@ -456,8 +465,6 @@ signal soi_preview_orbit(relative: Vector2)
 signal soi_preview_zoom(zoom_in: bool)
 ## Elevation: Shift+drag rotates the section heading (continuous).
 signal elevation_heading_changed(heading_rad: float)
-## Siphon Lab: Elev chord/water drag updated specs (kind, item_id, elev_m).
-signal lab_level_dragged(kind: String, item_id: String, elev_m: float)
 ## Elevation CT: slice depth along the cross-axis (−R…+R metres).
 signal elevation_section_offset_changed(offset_m: float)
 ## Site Plan empty-canvas click (world designate tools).
@@ -490,16 +497,6 @@ var elev_show_ports: bool = false
 var site_show_ports: bool = true
 var elev_show_schematic_wires: bool = false
 var elev_show_projected_pipes: bool = false
-## True while Siphon Lab dock is open (same Elev CT; draws prime/break ticks).
-var siphon_lab_active: bool = false
-## Hit targets for Lab level drag (rebuilt each Elev draw).
-var _lab_level_hits: Array = []
-var _lab_pond_level_hit: Dictionary = {}
-var _lab_level_dragging: bool = false
-var _lab_level_drag_kind: String = ""
-var _lab_level_drag_item_id: String = ""
-var _lab_level_drag_start_y: float = 0.0
-var _lab_level_drag_start_elev: float = 0.0
 ## Current visible graph scope. Root matches historical behavior.
 var active_scope_id: String  = "root"
 
@@ -656,6 +653,14 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 		interval = REDRAW_INTERVAL_HIGH_SPEED if _high_speed_lod else REDRAW_INTERVAL
 	elif _alert_nodes_present:
 		interval = ALERT_REDRAW_INTERVAL
+	# Site Plan dot motion: while people are on the plan and the sim is
+	# running, hold the ~20 Hz cadence so the render-side dot interpolation
+	# actually animates between 2-4 Hz population ticks. Paused
+	# (flow_mult == 0) the lerp saturates and this driver stands down.
+	if view_mode == GraphSiteLayout.VIEW_SITE and flow_mult != 0.0 \
+			and _npc_site_renderer != null \
+			and bool(_npc_site_renderer.call("has_motion")):
+		interval = minf(interval, REDRAW_INTERVAL)
 	if _redraw_accum >= interval:
 		_redraw_accum = 0.0
 		queue_redraw()
@@ -755,19 +760,95 @@ func frame_elevation_window(along0: float, along1: float, y0: float, y1: float,
 	_notify_elev_soi_layout()
 
 
-## Public wrappers so Siphon Lab can pan/zoom the shared Elev CT camera.
-func elev_pan_by_pixels(delta_px: Vector2) -> void:
-	_elev_pan_by_pixels(delta_px)
-	queue_redraw()
+## ---- Per-view camera slots -------------------------------------------------
+## Save the live camera into `mode`'s slot.
+func _capture_view_cam(mode: String) -> void:
+	if mode.is_empty():
+		return
+	_view_cam[mode] = {
+		"zoom": _zoom,
+		"pan": _pan,
+		"along_m": _elev_anchor_along_m,
+		"elev_m": _elev_anchor_elev_m,
+		"anchor_inited": _elev_anchor_inited,
+	}
 
 
-func elev_zoom_at_screen(factor: float, screen_pos: Vector2,
-		viewport_size: Vector2 = Vector2.ZERO) -> void:
-	if viewport_size.x > 1.0 and viewport_size.y > 1.0:
-		_elev_zoom_at_in_viewport(factor, screen_pos, viewport_size)
-	else:
-		_elev_zoom_at(factor, screen_pos)
-	queue_redraw()
+## Load `mode`'s slot into the live camera. False when the view was never visited
+## (caller leaves whatever framing is current, so a first entry still auto-fits).
+func _restore_view_cam(mode: String) -> bool:
+	var slot: Dictionary = _view_cam.get(mode, {}) as Dictionary
+	if slot.is_empty():
+		return false
+	_zoom = clampf(float(slot.get("zoom", _zoom)), ZOOM_MIN, ZOOM_MAX)
+	_pan = slot.get("pan", Vector2.ZERO) as Vector2
+	_elev_anchor_along_m = float(slot.get("along_m", 0.0))
+	_elev_anchor_elev_m = float(slot.get("elev_m", NAN))
+	_elev_anchor_inited = bool(slot.get("anchor_inited", false))
+	return true
+
+
+## THE way `view_mode` changes. Freeform, Site Plan, Elevation and the Hydro Lab
+## each keep their own zoom/pan: opening the Lab used to overwrite the freeform
+## camera (it parked the canvas in VIEW_FREEFORM, then framed it), which is why
+## returning from the Lab landed on an empty, absurdly-zoomed graph.
+func set_view_mode(mode: String) -> void:
+	if mode.is_empty() or mode == view_mode:
+		return
+	_capture_view_cam(view_mode)
+	view_mode = mode
+	if _restore_view_cam(mode):
+		queue_redraw()
+		_notify_elev_soi_layout()
+
+
+## Save-restore only: adopt `mode` WITHOUT capturing the outgoing view. The camera
+## sitting live during a load is pre-restore leftovers, not a framing anyone chose
+## — capturing it would stamp it into whichever view we happened to be in.
+func adopt_view_mode_no_capture(mode: String) -> void:
+	if mode.is_empty():
+		return
+	view_mode = mode
+	if _restore_view_cam(mode):
+		queue_redraw()
+
+
+## Save/restore every slot (graph save state). The LIVE view is folded in so the
+## current framing is not lost when it has never been switched away from.
+func get_view_cam_state() -> Dictionary:
+	_capture_view_cam(view_mode)
+	var out := {}
+	for mode: String in _view_cam.keys():
+		var slot: Dictionary = _view_cam[mode] as Dictionary
+		var pan: Vector2 = slot.get("pan", Vector2.ZERO) as Vector2
+		out[mode] = {
+			"zoom": float(slot.get("zoom", 1.0)),
+			"pan_x": pan.x,
+			"pan_y": pan.y,
+			"along_m": float(slot.get("along_m", 0.0)),
+			"elev_m": float(slot.get("elev_m", NAN)),
+			"anchor_inited": bool(slot.get("anchor_inited", false)),
+		}
+	return out
+
+
+func set_view_cam_state(state: Dictionary) -> void:
+	if state.is_empty():
+		return
+	for mode: String in state.keys():
+		var s: Dictionary = state[mode] as Dictionary
+		if s.is_empty():
+			continue
+		_view_cam[mode] = {
+			"zoom": clampf(float(s.get("zoom", 1.0)), ZOOM_MIN, ZOOM_MAX),
+			"pan": Vector2(float(s.get("pan_x", 0.0)), float(s.get("pan_y", 0.0))),
+			"along_m": float(s.get("along_m", 0.0)),
+			"elev_m": float(s.get("elev_m", NAN)),
+			"anchor_inited": bool(s.get("anchor_inited", false)),
+		}
+	# The restored save may name the view we are already sitting in.
+	if _restore_view_cam(view_mode):
+		queue_redraw()
 
 
 func _ensure_elev_anchor() -> void:
@@ -815,26 +896,6 @@ func _elev_zoom_at(factor: float, screen_pos: Vector2) -> void:
 	_pan = Vector2.ZERO
 	_notify_elev_soi_layout()
 	queue_redraw()
-
-
-## Like `_elev_zoom_at`, but focal maths use an external viewport (Siphon Lab CT).
-func _elev_zoom_at_in_viewport(factor: float, screen_pos: Vector2,
-		viewport_size: Vector2) -> void:
-	_ensure_elev_anchor()
-	var old_zoom := _zoom
-	_zoom = clampf(_zoom * factor, ZOOM_MIN, ZOOM_MAX)
-	if is_equal_approx(_zoom, old_zoom):
-		return
-	var vc := viewport_size * 0.5
-	var s_old := GraphSiteLayout.px_per_m(old_zoom)
-	var s_new := GraphSiteLayout.px_per_m(_zoom)
-	var ex := _elev_exaggeration_draw()
-	var along := _elev_anchor_along_m + (screen_pos.x - vc.x) / maxf(s_old, 1e-6)
-	var elev := _elev_anchor_elev_m - (screen_pos.y - vc.y) / maxf(s_old * ex, 1e-6)
-	_elev_anchor_along_m = along - (screen_pos.x - vc.x) / maxf(s_new, 1e-6)
-	_elev_anchor_elev_m = elev + (screen_pos.y - vc.y) / maxf(s_new * ex, 1e-6)
-	_pan = Vector2.ZERO
-	_notify_elev_soi_layout()
 
 
 ## Returns true when the event was consumed as SoI preview camera control.
@@ -890,24 +951,6 @@ const _ELEV_OFFSET_SENS := 0.35
 
 
 func _handle_elevation_heading_input(event: InputEvent) -> bool:
-	# Siphon Lab: lock side cut — no Shift+drag heading/slice (wheel zoom OK).
-	if siphon_lab_active:
-		if event is InputEventMouseButton:
-			var mb_lab := event as InputEventMouseButton
-			if mb_lab.shift_pressed and soi_live_preview \
-					and (mb_lab.button_index == MOUSE_BUTTON_WHEEL_UP \
-					or mb_lab.button_index == MOUSE_BUTTON_WHEEL_DOWN) \
-					and mb_lab.pressed:
-				soi_preview_zoom.emit(mb_lab.button_index == MOUSE_BUTTON_WHEEL_UP)
-				accept_event()
-				return true
-			if mb_lab.shift_pressed and mb_lab.button_index == MOUSE_BUTTON_LEFT:
-				accept_event()
-				return true
-		if event is InputEventMouseMotion and (event as InputEventMouseMotion).shift_pressed:
-			accept_event()
-			return true
-		return false
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		# Shift+wheel zooms the 3D section ortho into the cut face.
@@ -955,136 +998,6 @@ func _handle_elevation_heading_input(event: InputEvent) -> bool:
 		accept_event()
 		return true
 	return false
-
-
-func _handle_lab_level_drag_input(event: InputEvent) -> bool:
-	if model == null:
-		return false
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if mb.button_index != MOUSE_BUTTON_LEFT:
-			return false
-		if not mb.pressed:
-			if _lab_level_dragging:
-				# Final sync for dock SpinBoxes.
-				if model != null and not _lab_level_drag_item_id.is_empty():
-					var fin := model.get_item(_lab_level_drag_item_id)
-					var fs: Dictionary = fin.get("specs", {}) as Dictionary
-					var elev := float(fs.get("siphon_start_m" if _lab_level_drag_kind == "prime" \
-							else ("siphon_break_m" if _lab_level_drag_kind == "break" \
-							else "level_m"), NAN))
-					if not is_nan(elev):
-						lab_level_dragged.emit(_lab_level_drag_kind,
-								_lab_level_drag_item_id, elev)
-				_lab_level_dragging = false
-				_lab_level_drag_kind = ""
-				_lab_level_drag_item_id = ""
-				accept_event()
-				return true
-			return false
-		if mb.shift_pressed:
-			return false
-		var hit := _lab_level_hit_at(mb.position)
-		if hit.is_empty():
-			return false
-		_lab_level_dragging = true
-		_lab_level_drag_kind = str(hit.get("kind", ""))
-		_lab_level_drag_item_id = str(hit.get("item_id", ""))
-		_lab_level_drag_start_y = mb.position.y
-		_lab_level_drag_start_elev = float(hit.get("elev_m", 0.0))
-		accept_event()
-		return true
-	if event is InputEventMouseMotion:
-		if not _lab_level_dragging:
-			return false
-		var mm := event as InputEventMouseMotion
-		var s := GraphSiteLayout.px_per_m(_zoom)
-		var ex := _elev_exaggeration_draw()
-		var px_per_m := maxf(s * ex, 1e-6)
-		# Screen Y down → elevation down.
-		var d_elev := -((mm.position.y - _lab_level_drag_start_y) / px_per_m)
-		var new_elev := _lab_level_drag_start_elev + d_elev
-		_apply_lab_level_drag(new_elev)
-		accept_event()
-		return true
-	return false
-
-
-func _lab_level_hit_at(pos: Vector2) -> Dictionary:
-	const PAD := 8.0
-	for h in _lab_level_hits:
-		if not (h is Dictionary):
-			continue
-		var d: Dictionary = h
-		if pos.x < float(d.get("x0", 0.0)) or pos.x > float(d.get("x1", 0.0)):
-			continue
-		if absf(pos.y - float(d.get("y_px", 0.0))) <= PAD:
-			return d
-	if not _lab_pond_level_hit.is_empty():
-		var p := _lab_pond_level_hit
-		if pos.x >= float(p.get("x0", 0.0)) and pos.x <= float(p.get("x1", 0.0)) \
-				and absf(pos.y - float(p.get("y_px", 0.0))) <= PAD:
-			return {
-				"kind": "pond",
-				"item_id": str(p.get("item_id", "")),
-				"elev_m": float(p.get("level_m", 0.0)),
-			}
-	return {}
-
-
-func _apply_lab_level_drag(new_elev: float) -> void:
-	if model == null or _lab_level_drag_item_id.is_empty():
-		return
-	var kind := _lab_level_drag_kind
-	if kind == "prime" or kind == "break":
-		var item := model.get_item(_lab_level_drag_item_id)
-		if item.is_empty():
-			return
-		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-		var key := "siphon_start_m" if kind == "prime" else "siphon_break_m"
-		var other_key := "siphon_break_m" if kind == "prime" else "siphon_start_m"
-		var other := float(specs.get(other_key, new_elev))
-		if kind == "prime":
-			new_elev = maxf(new_elev, other + 0.02)
-		else:
-			new_elev = minf(new_elev, other - 0.02)
-		specs[key] = new_elev
-		model.update_item(_lab_level_drag_item_id, {"specs": specs})
-		lab_level_dragged.emit(kind, _lab_level_drag_item_id, new_elev)
-		queue_redraw()
-		return
-	if kind == "pond":
-		var tank := model.get_item(_lab_level_drag_item_id)
-		if tank.is_empty():
-			return
-		var ts: Dictionary = (tank.get("specs", {}) as Dictionary).duplicate(true)
-		var floor_y := float(ts.get("floor_m", NAN))
-		var rim := float(ts.get("rim_m", NAN))
-		if is_nan(floor_y):
-			floor_y = new_elev - 1.0
-		if is_nan(rim):
-			rim = new_elev + 0.5
-		new_elev = clampf(new_elev, floor_y + 0.02, rim - 0.02)
-		var span := maxf(rim - floor_y, 0.05)
-		var frac := clampf((new_elev - floor_y) / span, 0.0, 1.0)
-		var cap := maxf(float(ts.get("capacity_qty", 1.0)), 1.0)
-		ts["level_m"] = new_elev
-		ts["level"] = frac
-		ts["stock_l"] = frac * cap
-		# Dragging the CT water line re-anchors the pond level; the flow engine
-		# then continues fill/drain from here on the world clock (fill_mode auto).
-		ts["fill_mode"] = "auto"
-		ts["overflowing"] = false
-		model.update_item(_lab_level_drag_item_id, {"specs": ts, "elevation_m": new_elev})
-		if resource_flow_engine != null and resource_flow_engine.has_method("reanchor_tank"):
-			resource_flow_engine.call("reanchor_tank", _lab_level_drag_item_id, frac)
-		var host: Node = get_parent()
-		while host != null and not host.has_method("push_pond_levels_to_mesh"):
-			host = host.get_parent()
-		if host != null:
-			host.call("push_pond_levels_to_mesh", true)
-		lab_level_dragged.emit(kind, _lab_level_drag_item_id, new_elev)
-		queue_redraw()
 
 
 ## Site/Elev: pick & drag 3D props via GraphSpatialEdit before chip/orbit paths.
@@ -1217,10 +1130,6 @@ func _gui_input(event: InputEvent) -> void:
 
 	if _should_ignore_emulated_mouse(event):
 		accept_event()
-		return
-
-	# Siphon Lab: drag Prime/Break/pond level on Elev CT (before SoI camera).
-	if siphon_lab_active and _handle_lab_level_drag_input(event):
 		return
 
 	# Site/Elev 3D prop pick/drag (wins over chip hits + Shift+orbit while dragging).
@@ -1600,6 +1509,15 @@ func _zoom_at(factor: float, screen_pos: Vector2) -> void:
 	var world := (screen_pos - center - _pan) / old_zoom
 	_pan = screen_pos - center - world * _zoom
 	queue_redraw()
+	# Same-frame 3D camera sync while the preview camera is projection
+	# authority: the service otherwise re-poses only on its NEXT _process, so
+	# every wheel notch drew chips against a stale pose and then snapped.
+	# sync_camera_now is camera-only (no re-crop — see the scar above about
+	# force_layout_sync fighting fast deep zoom) except exactly at the crop
+	# threshold, where it lands the one full re-crop in this same frame.
+	if _phys_camera_projection_active() \
+			and soi_preview_service.has_method("sync_camera_now"):
+		soi_preview_service.call("sync_camera_now")
 	# Seamless TouchDesigner-style scope navigation via zoom.
 	# Site/Elev: zoom scales metres — never drill.
 	# Freeform: always allow drill/pop, even with SoI bubble behind nodes
@@ -1898,6 +1816,11 @@ var _cached_visible_connections: Array = []
 ## Per-draw memo of bound_prop_id -> hidden_3d, so Site Plan can skip rings for
 ## twins hidden from 3D without a loader lookup per item per draw.
 var _twin_hidden_cache: Dictionary = {}
+## Per-draw memo of item_id -> world anchor (_phys_item_world_center). Resolving a
+## prop-bound anchor walks PlacedPropRuntime and the model's port defs, and every
+## elevation chip + wire endpoint asks for it, so it must not repeat per endpoint.
+var _conn_anchor_cache: Dictionary = {}
+var _draw_main_cached: Node = null
 
 
 func _visible_items() -> Array:
@@ -1924,7 +1847,17 @@ func _compute_visible_items() -> Array:
 			if str(it.get("type", "")) == "pbi":
 				continue
 			filtered.append(it)
-		return filtered
+		items = filtered
+	# Site Plan draws only what is actually ON the site. Unplaced items used to
+	# sit in a bottom tray; that bar is gone — anything still missing site
+	# coords is auto-seeded by the view (on entry AND on add_item), so this
+	# filter only ever hides a transient.
+	if view_mode == GraphSiteLayout.VIEW_SITE:
+		var placed: Array = []
+		for it2: Dictionary in items:
+			if GraphSiteLayout.has_site_coords(it2):
+				placed.append(it2)
+		return placed
 	return items
 
 
@@ -3017,6 +2950,10 @@ func _wire_snap_radius() -> float:
 func _wheel_zoom_factor() -> float:
 	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
 		return ELEV_WHEEL_ZOOM
+	# Site Plan gets a snappier step (1.08 → 1.13): getting from SoI overview
+	# down to person scale took ~24 notches, which read as "can't zoom in".
+	if view_mode == GraphSiteLayout.VIEW_SITE:
+		return 1.13
 	return 1.08
 
 
@@ -5511,6 +5448,32 @@ var soi_live_preview: bool = false
 ## wires track the orbit; otherwise the proven 2D disc projection is used.
 var soi_preview_service = null
 
+## Reveal fade after the SoI SubViewport's first rendered frame (started by
+## graph_soi_preview_service._on_first_preview_frame): the backdrop cross-fades
+## out over the fresh terrain instead of popping. One draw_circle per frame for
+## a quarter second — removable polish, never load-bearing.
+const SOI_REVEAL_MS := 250
+var _soi_reveal_start_ms: int = -1
+
+
+func begin_soi_reveal() -> void:
+	_soi_reveal_start_ms = Time.get_ticks_msec()
+	queue_redraw()
+
+
+func _draw_soi_reveal_fade(fill: Color) -> void:
+	if _soi_reveal_start_ms < 0:
+		return
+	var t := float(Time.get_ticks_msec() - _soi_reveal_start_ms) / float(SOI_REVEAL_MS)
+	if t >= 1.0:
+		_soi_reveal_start_ms = -1
+		return
+	var disc := get_soi_disc_layout()
+	var origin: Vector2 = disc.get("origin", size * 0.5)
+	var r := maxf(float(disc.get("radius_px", 0.0)), 1.0)
+	draw_circle(origin, r, Color(fill.r, fill.g, fill.b, fill.a * (1.0 - t)))
+	queue_redraw()
+
 
 ## True when the SoI preview camera should drive physical-view projection.
 ## Elevation section: always (locks 2D DEM/pond/ports to the CT camera).
@@ -5535,15 +5498,46 @@ func _phys_camera_projection_active() -> bool:
 
 
 ## Vertical exaggeration used for flat (non-camera) elev mapping.
-## When the 3D section backdrop is live, force 1× so 2D never stretches vs the CT.
+##
+## Forced to 1× whenever a CAMERA is the projection authority — not merely when
+## `soi_live_preview` is on. The whole premise of the cross-section is that the 2D
+## overlay sits ON the 3D image, and the projected conduit polylines go through
+## that camera at 1×; stretching the chips and schematic wires 5× against an
+## unstretched backdrop can never register, which is one of the reasons a penstock
+## drew in a different place in elevation than in 3D.
 func _elev_exaggeration_draw() -> float:
-	if view_mode == GraphSiteLayout.VIEW_ELEVATION and soi_live_preview:
+	if view_mode == GraphSiteLayout.VIEW_ELEVATION \
+			and (soi_live_preview or _phys_camera_projection_active()):
 		return 1.0
 	return maxf(elevation_exaggeration, 0.001)
 
 
-## World-space centre of a placed physical item (SoI centre + site metres, Y=elevation).
+## World-space centre of a placed physical item.
+##
+## For a PROP-BOUND item this is the same anchor the 3D conduit builder terminates
+## its pipes at (ConduitManager.anchor_global_for_item — port on the model, else a
+## tagged conduit_anchor, else the mesh centre), so the 2D overlay and the 3D run
+## agree BY CONSTRUCTION rather than by two code paths happening to match. Falls
+## back to SoI centre + site metres + elevation_m for everything unbound.
 func _phys_item_world_center(item: Dictionary) -> Vector3:
+	var id := str(item.get("id", ""))
+	if _draw_cache_active and _conn_anchor_cache.has(id):
+		return _conn_anchor_cache[id] as Vector3
+	var out := _phys_item_world_center_uncached(item)
+	if _draw_cache_active and not id.is_empty():
+		_conn_anchor_cache[id] = out
+	return out
+
+
+func _phys_item_world_center_uncached(item: Dictionary) -> Vector3:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if not str(specs.get("bound_prop_id", "")).is_empty():
+		var tree := get_tree()
+		if tree != null:
+			var anchor := ConduitManager.anchor_global_for_item(
+					item, tree, "", _cached_scene_main())
+			if is_finite(anchor.x) and is_finite(anchor.y) and is_finite(anchor.z):
+				return anchor
 	var site := GraphSiteLayout.site_xz(item)
 	var elev := _elevation_m_for_item(item)
 	var c := Vector3.ZERO
@@ -5551,6 +5545,25 @@ func _phys_item_world_center(item: Dictionary) -> Vector3:
 	if soi != null and soi.has_method("world_center"):
 		c = soi.call("world_center")
 	return Vector3(c.x + site.x, elev, c.z + site.y)
+
+
+## Main scene node for anchor resolution — a PlacedPropRuntime lookup per item per
+## draw is exactly the cost this file guards against elsewhere, so the walk up is
+## memoized for the pass.
+func _cached_scene_main() -> Node:
+	if _draw_main_cached != null and is_instance_valid(_draw_main_cached):
+		return _draw_main_cached
+	var n: Node = self
+	while n != null:
+		if n.has_method("_get_scene_main_node"):
+			_draw_main_cached = n.call("_get_scene_main_node") as Node
+			if _draw_main_cached != null:
+				return _draw_main_cached
+			break
+		n = n.get_parent()
+	var tree := get_tree()
+	_draw_main_cached = tree.current_scene if tree != null else null
+	return _draw_main_cached
 
 
 ## Project a placed item's centre to canvas-local pixels via the preview camera.
@@ -5566,6 +5579,17 @@ func _draw() -> void:
 	var pm := get_node_or_null("/root/PerfMonitor")
 	if pm != null:
 		pm.begin("gv_draw")
+	# Hydro Lab: the Lab panel covers this canvas completely and renders its own
+	# cross-section, so draw only the background. This mode used to be faked by
+	# parking the canvas in VIEW_FREEFORM, which cost the same and ALSO handed the
+	# Lab the freeform camera to overwrite — the zoom-coupling bug.
+	if view_mode == GraphSiteLayout.VIEW_SIPHON:
+		draw_rect(Rect2(Vector2.ZERO, size),
+				Color(C_CANVAS_BG.r, C_CANVAS_BG.g, C_CANVAS_BG.b,
+					C_CANVAS_BG.a * canvas_bg_alpha))
+		if pm != null:
+			pm.end("gv_draw")
+		return
 	_controller_reset_rects.clear()
 	_refresh_ambient_wired_ports()
 	_alert_seen_this_draw = false
@@ -5581,28 +5605,30 @@ func _draw() -> void:
 	_cached_visible_items = _compute_visible_items()
 	_cached_visible_connections = _compute_visible_connections()
 	_twin_hidden_cache.clear()
+	_conn_anchor_cache.clear()
 	_draw_cache_active = true
 	var fill := Color(C_CANVAS_BG.r, C_CANVAS_BG.g, C_CANVAS_BG.b, C_CANVAS_BG.a * canvas_bg_alpha)
 	if soi_live_preview:
 		_draw_canvas_fill_with_soi_hole(fill)
+		_draw_soi_reveal_fade(fill)
 	else:
 		draw_rect(Rect2(Vector2.ZERO, size), fill)
 	_draw_dot_grid()
 	_draw_soi_background()
-	if not siphon_lab_active:
+	# Site Plan lost its unplaced tray (nodes are auto-seated on entry and on
+	# add — see _compute_visible_items); Elevation keeps it.
+	if view_mode != GraphSiteLayout.VIEW_SITE:
 		_draw_unplaced_tray()
 
 	if model != null and _visible_items().size() > 0:
 		_draw_connections()
 		for item: Dictionary in _visible_items():
 			_render_item(item)
-		if not siphon_lab_active:
-			for item: Dictionary in _visible_items():
-				_draw_item_overlays(item)
-			for item2: Dictionary in _visible_items():
-				_draw_resize_handle(item2)
-	elif model != null and not siphon_lab_active and not _is_physical_view() \
-			and not soi_live_preview:
+		for item: Dictionary in _visible_items():
+			_draw_item_overlays(item)
+		for item2: Dictionary in _visible_items():
+			_draw_resize_handle(item2)
+	elif model != null and not _is_physical_view() and not soi_live_preview:
 		_draw_empty_state_prompt()
 	# Derive alert presence from what we actually drew, so tick() can pick a
 	# coarse animation cadence without a separate model scan. If the state just
@@ -5619,11 +5645,13 @@ func _draw() -> void:
 	# Site Plan: only the live Preview ghost (not designated hillside polys) —
 	# designated watershed stays a freeform graph node, not a default map outline.
 	if view_mode == GraphSiteLayout.VIEW_SITE:
-		_draw_npc_desire_site()   # worn-in paths beneath everything…
+		var npc_r := _npc_renderer()
+		npc_r.set("center3", _soi_world_center())
+		npc_r.call("draw_desire")     # worn-in paths beneath everything…
 		_draw_watershed_overlays_site()
-		_draw_npc_spaces_site()   # …destinations above them…
-		_draw_npc_crew_sites()    # …active work sites (crews gather ON these)…
-		_draw_npc_agents_site()   # …and the people walking between them
+		npc_r.call("draw_spaces")     # …destinations above them…
+		npc_r.call("draw_crew_sites") # …active work sites (crews gather ON these)…
+		npc_r.call("draw_agents")     # …and the people walking between them
 		_draw_prop_radial_preview()
 	_draw_destroy_fx()
 	_draw_temp_wire()                # always on top of everything
@@ -7455,6 +7483,14 @@ func _draw_canvas_fill_with_soi_hole(fill: Color) -> void:
 		r_m = float(soi_svc.call("radius_m"))
 	var r_px := r_m * GraphSiteLayout.SOI_PX_PER_M * _zoom
 	var origin := _disc_origin_screen()
+	# Zoomed in past the disc edge (the common Site Plan working state) the
+	# circle covers the whole viewport — nothing to fill. This skips up to
+	# 4 rects + 40 fan polygons EVERY draw at exactly the zoom levels where
+	# the 20 Hz dot-motion cadence is also running.
+	var far_corner := Vector2(maxf(origin.x, size.x - origin.x),
+			maxf(origin.y, size.y - origin.y))
+	if far_corner.length_squared() <= r_px * r_px:
+		return
 	var left := origin.x - r_px
 	var right := origin.x + r_px
 	var top := origin.y - r_px
@@ -7480,8 +7516,15 @@ func _draw_canvas_fill_with_soi_hole(fill: Color) -> void:
 		Vector2(origin.x - r_px, origin.y - r_px), # NW, arc PI → 3PI/2
 	]
 	var a0s := [-PI * 0.5, 0.0, PI * 0.5, PI]
+	var viewport_rect := Rect2(Vector2.ZERO, size)
 	for q in range(4):
 		var corner: Vector2 = corners[q]
+		# Each fan lives inside the quadrant square between disc centre and its
+		# corner — skip quadrants that are entirely off-screen.
+		var quad := Rect2(Vector2(minf(origin.x, corner.x), minf(origin.y, corner.y)),
+				Vector2(r_px, r_px))
+		if not viewport_rect.intersects(quad):
+			continue
 		var a0: float = a0s[q]
 		for i in range(segs):
 			var t0 := a0 + (PI * 0.5) * (float(i) / float(segs))
@@ -7642,25 +7685,6 @@ func _radial_project_world(world: Vector3) -> Variant:
 	return _disc_origin_screen() + site * GraphSiteLayout.px_per_m(_zoom)
 
 
-## Project a world-XZ point to canvas for the Site Plan NPC overlays (agents,
-## spaces, crew sites, desire raster): through the preview camera when it is
-## the projection authority — i.e. whenever the live disc is up, which is how
-## every other Site Plan element (node chips, elevation overlays) tracks
-## orbit/tilt — else the flat top-down mapping. The NPC layers used the flat
-## math unconditionally, so orbiting rotated the chips but left the people
-## behind. One shared helper so the four layers can't drift again.
-## Returns null when the point can't project (skip it).
-func _npc_project_site(world_xz: Vector2, center3: Vector3) -> Variant:
-	if _phys_camera_projection_active() and soi_preview_service != null \
-			and is_instance_valid(soi_preview_service) \
-			and soi_preview_service.has_method("world_to_canvas"):
-		return soi_preview_service.call("world_to_canvas",
-				Vector3(world_xz.x, center3.y, world_xz.y))
-	return size * 0.5 + _pan \
-			+ GraphSiteLayout.world_xz_to_site(world_xz, center3) \
-			* GraphSiteLayout.px_per_m(_zoom)
-
-
 func _draw_site_array_ghosts(origin: Vector2) -> void:
 	if site_array_ghosts.is_empty():
 		return
@@ -7690,24 +7714,6 @@ func _ensure_elev_profile_bake(soi_svc: Node, center3: Vector3, r_m: float,
 	var offset := clampf(elevation_section_offset_m, -r_m, r_m)
 	# Soft TTL picks up terrain sculpt without forcing DEM every frame.
 	var ttl_bucket := int(Time.get_ticks_msec() / 2000)
-	# Siphon Lab: denser bake only over the framed along window (tight CT zoom).
-	if siphon_lab_active:
-		_ensure_elev_anchor()
-		var s := GraphSiteLayout.px_per_m(_zoom)
-		var half_along := maxf(size.x * 0.55 / maxf(s, 1e-6), 6.0)
-		var a0 := _elev_anchor_along_m - half_along
-		var a1 := _elev_anchor_along_m + half_along
-		var n_lab := ElevationProfile.sample_count_for_lab_window(a1 - a0)
-		var key_lab := "lab|%s|%d" % [
-			ElevationProfile.cache_key(elevation_heading_rad, offset, a1 - a0,
-					n_lab, center3.y),
-			ttl_bucket]
-		if key_lab == _elev_bake_key and _elev_along.size() == n_lab + 1:
-			return
-		_elev_bake_key = key_lab
-		ElevationProfile.bake_window(soi_svc, center3, elevation_heading_rad, offset,
-				a0, a1, n_lab, _elev_along, _elev_y)
-		return
 	var n := ElevationProfile.sample_count_for_r_px(r_px)
 	var key := "%s|%d" % [
 		ElevationProfile.cache_key(elevation_heading_rad, offset, r_m, n, center3.y),
@@ -7736,9 +7742,7 @@ func _draw_elevation_section(origin: Vector2, r_px: float, r_m: float, soi_svc: 
 	var lock_note := " · 3D locks 1×" if (soi_live_preview and ex_label == 1) else ""
 	var noon_tag := " · solar noon" if soi_live_preview else ""
 	# Label just above the disc so it isn't clipped oddly near the rim.
-	var ctrl_hint := "drag Prime/Break/water · wheel zoom · side view locked" \
-			if siphon_lab_active \
-			else "Shift+drag rotate/depth · Shift+wheel zoom"
+	var ctrl_hint := "Shift+drag rotate/depth · Shift+wheel zoom"
 	draw_string(fnt, origin + Vector2(-r_px + 6.0, -r_px - 6.0),
 			"Elevation · %.0f° · slice %+.0fm · %d×%s%s%s  (%s)" % [
 				heading_deg, elevation_section_offset_m, ex_label, mode_tag, lock_note,
@@ -7797,22 +7801,11 @@ func _draw_elevation_section(origin: Vector2, r_px: float, r_m: float, soi_svc: 
 			_draw_polyline_stroke(line_pts, ElevationCrossSection.C_TERRAIN_LINE,
 					_elev_stroke_px(2.5))
 
-	# Siphon Lab always draws the DEM pond bowl (even if DEM overlay menu is off).
-	if siphon_lab_active:
-		_lab_level_hits.clear()
-		_lab_pond_level_hit.clear()
-	if elev_show_dem_overlay or siphon_lab_active:
+	if elev_show_dem_overlay:
 		_draw_elevation_pond_water_lines(origin, r_px, r_m, datum, s, along_dir, cross_dir,
 				offset, soi_svc, center3)
-	# Lab: 3D barrel owns the culvert look — skip 2D invert chords (doubles).
-	if not siphon_lab_active:
-		_draw_elevation_culvert_inverts(origin, r_px, r_m, datum, s, along_dir, cross_dir,
-				offset, center3)
-	if siphon_lab_active:
-		_draw_elevation_siphon_levels(origin, r_px, r_m, datum, s, along_dir, cross_dir,
-				offset, center3)
-		_draw_elevation_siphon_flow_cues(origin, r_px, r_m, datum, s, along_dir, cross_dir,
-				offset, center3)
+	_draw_elevation_culvert_inverts(origin, r_px, r_m, datum, s, along_dir, cross_dir,
+			offset, center3)
 	# Elev CT: watershed hill scrape is Site Plan / ground only — the teal wedge
 	# fights the pond DEM fill and culvert read (Mt. Vernon audit).
 	# (Intentionally not drawn here; `_draw_watershed_overlays_site` still runs.)
@@ -7850,25 +7843,20 @@ func _draw_elevation_pond_water_lines(origin: Vector2, r_px: float, r_m: float,
 			floor_m = level_m - 0.35
 		var site := GraphSiteLayout.site_xz(item)
 		var cross := site.dot(cross_dir)
-		# Lab: always draw the bound pond (heading lock may sit slightly off-slice).
-		var cross_tol := maxf(r_m * 0.55, 40.0) if siphon_lab_active \
-				else maxf(r_m * 0.35, 8.0)
+		var cross_tol := maxf(r_m * 0.35, 8.0)
 		if absf(cross - slice_offset) > cross_tol:
 			continue
 		var half_w := _elevation_pond_half_width_m(item, specs, along_dir)
 		var pond_along := site.dot(along_dir)
-		# Lab: footprint+bank. Free Elev: wider DEM bank search.
-		var bank_pad := 2.0 if siphon_lab_active else 4.0
-		var search := half_w + bank_pad
-		if not siphon_lab_active:
-			search = maxf(half_w * 2.5, 60.0)
-			search = minf(search, maxf(r_m * 0.95, half_w + 4.0))
+		# Wider DEM bank search so the bowl reads even off the footprint.
+		var search := maxf(half_w * 2.5, 60.0)
+		search = minf(search, maxf(r_m * 0.95, half_w + 4.0))
 		var a0 := pond_along - search
 		var a1 := pond_along + search
 		# Same projection path as the DEM profile so pond + terrain stay coupled
 		# under pan/zoom (camera is synced to elev anchors every pan).
 		var use_proj := _phys_camera_projection_active()
-		var step_m := 0.35 if siphon_lab_active else 0.75
+		var step_m := 0.75
 		var samples := clampi(int(ceili((a1 - a0) / step_m)), 32, 200)
 		var alongs := PackedFloat32Array()
 		var elevs := PackedFloat32Array()
@@ -7940,28 +7928,16 @@ func _draw_elevation_pond_water_lines(origin: Vector2, r_px: float, r_m: float,
 			poly.append(floor_pts[i])
 		if poly.size() >= 3:
 			draw_colored_polygon(poly, Color(0.22, 0.52, 0.92, 0.55))
-		# Siphon Lab: fill only (surface is the poly top). Free Elev keeps chords.
-		if not siphon_lab_active:
-			draw_line(surf_l, surf_r, Color(0.45, 0.85, 1.0, 0.95), _elev_stroke_px(2.5), true)
-			if not is_nan(rim_m) and rim_m > level_m + 0.05:
-				var rim_pad := maxf(half_w, (wet_max - wet_min) * 0.5) + 2.0
-				var rim_l := _elev_section_to_canvas(
-						along_dir * (pond_along - rim_pad) + cross_dir * slice_offset, rim_m,
-						origin, datum, s, along_dir, _center3, r_px, use_proj)
-				var rim_r := _elev_section_to_canvas(
-						along_dir * (pond_along + rim_pad) + cross_dir * slice_offset, rim_m,
-						origin, datum, s, along_dir, _center3, r_px, use_proj)
-				draw_line(rim_l, rim_r, Color(1.0, 0.75, 0.35, 0.55), _elev_stroke_px(1.5))
-		else:
-			_lab_pond_level_hit = {
-				"item_id": str(item.get("id", "")),
-				"y_px": (surf_l.y + surf_r.y) * 0.5,
-				"x0": minf(surf_l.x, surf_r.x) - 8.0,
-				"x1": maxf(surf_l.x, surf_r.x) + 8.0,
-				"level_m": level_m,
-				"floor_m": floor_m,
-				"rim_m": rim_m,
-			}
+		draw_line(surf_l, surf_r, Color(0.45, 0.85, 1.0, 0.95), _elev_stroke_px(2.5), true)
+		if not is_nan(rim_m) and rim_m > level_m + 0.05:
+			var rim_pad := maxf(half_w, (wet_max - wet_min) * 0.5) + 2.0
+			var rim_l := _elev_section_to_canvas(
+					along_dir * (pond_along - rim_pad) + cross_dir * slice_offset, rim_m,
+					origin, datum, s, along_dir, _center3, r_px, use_proj)
+			var rim_r := _elev_section_to_canvas(
+					along_dir * (pond_along + rim_pad) + cross_dir * slice_offset, rim_m,
+					origin, datum, s, along_dir, _center3, r_px, use_proj)
+			draw_line(rim_l, rim_r, Color(1.0, 0.75, 0.35, 0.55), _elev_stroke_px(1.5))
 
 
 ## Contiguous wet interval containing `pond_along` (dry berms split runs).
@@ -8025,119 +8001,6 @@ func _elev_profile_y_at(along_m: float) -> float:
 	var a1 := _elev_along[hi]
 	var t := 0.0 if is_equal_approx(a1, a0) else (along_m - a0) / (a1 - a0)
 	return lerpf(_elev_y[lo], _elev_y[hi], t)
-
-
-## Siphon Lab: prime (green) + air-break (red) chords on the shared Elev CT.
-func _draw_elevation_siphon_levels(origin: Vector2, r_px: float, r_m: float,
-		datum: float, s: float, along_dir: Vector2, cross_dir: Vector2,
-		slice_offset: float, center3: Vector3) -> void:
-	if model == null:
-		return
-	var use_proj := _phys_camera_projection_active()
-	for it in model.items:
-		if not (it is Dictionary):
-			continue
-		var item: Dictionary = it
-		var specs: Dictionary = item.get("specs", {}) as Dictionary
-		if str(specs.get("role", "")) != "siphon_hydro" \
-				and str(specs.get("model_id", "")) != "hydroturbine":
-			continue
-		if not GraphSiteLayout.has_site_coords(item):
-			continue
-		var site := GraphSiteLayout.site_xz(item)
-		var cross := site.dot(cross_dir)
-		if absf(cross - slice_offset) > maxf(r_m * 0.35, 12.0):
-			continue
-		var module_m := float(specs.get("module_elev_m", NAN))
-		var start_m := float(specs.get("siphon_start_m", module_m))
-		var break_m := float(specs.get("siphon_break_m", module_m))
-		if is_nan(start_m) and is_nan(break_m):
-			continue
-		var half_w := 4.0
-		var pond_along := site.dot(along_dir)
-		var pond_item := _elev_find_siphon_pond(item)
-		if not pond_item.is_empty() and GraphSiteLayout.has_site_coords(pond_item):
-			var ps: Dictionary = pond_item.get("specs", {}) as Dictionary
-			half_w = _elevation_pond_half_width_m(pond_item, ps, along_dir)
-			pond_along = GraphSiteLayout.site_xz(pond_item).dot(along_dir)
-		var sid := str(item.get("id", ""))
-		if not is_nan(start_m):
-			var s0 := _elev_section_to_canvas(
-					along_dir * (pond_along - half_w) + cross_dir * slice_offset, start_m,
-					origin, datum, s, along_dir, center3, r_px, use_proj)
-			var s1 := _elev_section_to_canvas(
-					along_dir * (pond_along + half_w) + cross_dir * slice_offset, start_m,
-					origin, datum, s, along_dir, center3, r_px, use_proj)
-			draw_line(s0, s1, Color(0.35, 0.85, 0.55, 0.85), _elev_stroke_px(2.0), true)
-			draw_string(ThemeDB.fallback_font, s1 + Vector2(4, -2), "Prime",
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.35, 0.85, 0.55, 0.95))
-			_lab_level_hits.append({
-				"kind": "prime", "item_id": sid,
-				"y_px": (s0.y + s1.y) * 0.5,
-				"x0": minf(s0.x, s1.x) - 6.0, "x1": maxf(s0.x, s1.x) + 40.0,
-				"elev_m": start_m,
-			})
-		if not is_nan(break_m):
-			var b0 := _elev_section_to_canvas(
-					along_dir * (pond_along - half_w) + cross_dir * slice_offset, break_m,
-					origin, datum, s, along_dir, center3, r_px, use_proj)
-			var b1 := _elev_section_to_canvas(
-					along_dir * (pond_along + half_w) + cross_dir * slice_offset, break_m,
-					origin, datum, s, along_dir, center3, r_px, use_proj)
-			draw_line(b0, b1, Color(0.95, 0.45, 0.35, 0.85), _elev_stroke_px(2.0), true)
-			draw_string(ThemeDB.fallback_font, b1 + Vector2(4, 12), "Break",
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.95, 0.45, 0.35, 0.95))
-			_lab_level_hits.append({
-				"kind": "break", "item_id": sid,
-				"y_px": (b0.y + b1.y) * 0.5,
-				"x0": minf(b0.x, b1.x) - 6.0, "x1": maxf(b0.x, b1.x) + 40.0,
-				"elev_m": break_m,
-			})
-
-
-func _elev_find_siphon_pond(siphon: Dictionary) -> Dictionary:
-	var sid := str(siphon.get("id", ""))
-	if sid.is_empty() or model == null:
-		return {}
-	for conn in model.connections:
-		if not (conn is Dictionary):
-			continue
-		var c: Dictionary = conn
-		var a := str(c.get("source_item_id", ""))
-		var b := str(c.get("target_item_id", ""))
-		var other := ""
-		if a == sid:
-			other = b
-		elif b == sid:
-			other = a
-		else:
-			continue
-		var tank: Dictionary = model.get_item(other)
-		if tank.is_empty():
-			continue
-		var ts: Dictionary = tank.get("specs", {}) as Dictionary
-		if bool(ts.get("pond_storage", false)):
-			return tank
-	# Nearest pond by site as fallback.
-	if not GraphSiteLayout.has_site_coords(siphon):
-		return {}
-	var sxz := GraphSiteLayout.site_xz(siphon)
-	var best: Dictionary = {}
-	var best_d := INF
-	for it in model.items:
-		if not (it is Dictionary):
-			continue
-		var item: Dictionary = it
-		var ts2: Dictionary = item.get("specs", {}) as Dictionary
-		if not bool(ts2.get("pond_storage", false)):
-			continue
-		if not GraphSiteLayout.has_site_coords(item):
-			continue
-		var d := GraphSiteLayout.site_xz(item).distance_to(sxz)
-		if d < best_d:
-			best_d = d
-			best = item
-	return best
 
 
 ## Map a section point (site metres from SoI centre, absolute elevation) to a
@@ -8326,146 +8189,25 @@ var npc_crew_provider: Callable = Callable()
 var npc_desire_provider: Callable = Callable()
 var npc_trails_enabled := true
 
+## The Site Plan NPC layers (desire raster, spaces, crew sites, agent dots +
+## their render-side motion interpolation) live in their own renderer —
+## extracted as a pure move so this file keeps only the providers above and
+## the four call sites in _draw. Preloaded RefCounted, no class_name.
+const _NPC_SITE_RENDERER := preload("res://system_graph/graph_npc_site_renderer.gd")
+var _npc_site_renderer: RefCounted = null
 
-func _draw_npc_desire_site() -> void:
-	if not npc_desire_provider.is_valid():
-		return
-	var payload: Variant = npc_desire_provider.call()
-	if not (payload is Dictionary) or (payload as Dictionary).is_empty():
-		return
-	var d: Dictionary = payload
-	var tex: Texture2D = d.get("texture")
-	if tex == null:
-		return
-	var world: Rect2 = d.get("rect", Rect2())
-	if world.size.x <= 0.0 or world.size.y <= 0.0:
-		return
+
+func _npc_renderer() -> RefCounted:
+	if _npc_site_renderer == null:
+		_npc_site_renderer = _NPC_SITE_RENDERER.new(self)
+	return _npc_site_renderer
+
+
+func _soi_world_center() -> Vector3:
 	var soi_svc := _cached_autoload("/root/SoiService")
-	var center3 := Vector3.ZERO
 	if soi_svc != null and soi_svc.has_method("world_center"):
-		center3 = soi_svc.call("world_center") as Vector3
-	# All four world corners projected individually: an axis-aligned
-	# draw_texture_rect cannot follow the orbited camera, so the raster is a
-	# textured quad. Un-orbited the projected corners ARE the old rect.
-	var corners_w: Array = [
-		world.position,
-		Vector2(world.end.x, world.position.y),
-		world.end,
-		Vector2(world.position.x, world.end.y),
-	]
-	var pts := PackedVector2Array()
-	for cw in corners_w:
-		var cv: Variant = _npc_project_site(cw as Vector2, center3)
-		if cv == null:
-			return  # a corner behind the camera — skip the raster this frame
-		pts.append(cv as Vector2)
-	var bb := Rect2(pts[0], Vector2.ZERO)
-	for p in pts:
-		bb = bb.expand(p)
-	if bb.size.x < 1.0 or bb.size.y < 1.0:
-		return
-	var uvs := PackedVector2Array([
-		Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)])
-	draw_colored_polygon(pts, Color.WHITE, uvs, tex)
-	_draw_npc_desire_legend(d)
-
-
-## Key for the heat ramp. Without it the colours are just pretty — this says
-## what "hot" means, which channel is showing, and how far back it remembers.
-func _draw_npc_desire_legend(d: Dictionary) -> void:
-	var fnt := ThemeDB.fallback_font
-	var pad := 10.0
-	var bar_w := 132.0
-	var bar_h := 9.0
-	# Sits clear of the Unplaced tray along the bottom edge.
-	var box := Rect2(pad, size.y - 142.0, bar_w + pad * 2.0, 52.0)
-	draw_rect(box, Color(0.04, 0.06, 0.10, 0.82), true)
-	draw_rect(box, Color(0.30, 0.38, 0.52, 0.75), false, 1.0)
-	var title := "Desire lines · %s" % str(d.get("channel_label", "all traffic"))
-	draw_string(fnt, Vector2(box.position.x + pad, box.position.y + 15.0), title,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.88, 0.91, 0.94, 0.95))
-	# The ramp itself, sampled the same way the raster is coloured.
-	var bx := box.position.x + pad
-	var by := box.position.y + 23.0
-	var steps := 44
-	for i in steps:
-		var t := float(i) / float(steps - 1)
-		draw_rect(Rect2(bx + bar_w * t, by, bar_w / float(steps) + 1.0, bar_h),
-				NpcDesireMap.heat_color(t), true)
-	var foot := "quiet → worn %d m · %s" % [
-			int(round(float(d.get("peak", 0.0)))), str(d.get("window", ""))]
-	draw_string(fnt, Vector2(bx, by + bar_h + 13.0), foot,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.62, 0.70, 0.80, 0.92))
-
-
-## Site Plan: where the people are going. A soft disc + ring per tagged space,
-## with its glyph and live occupancy, so the destinations behind the agent
-## dots are legible.
-func _draw_npc_spaces_site() -> void:
-	if not npc_spaces_provider.is_valid():
-		return
-	var marks: Variant = npc_spaces_provider.call()
-	if not (marks is Array) or (marks as Array).is_empty():
-		return
-	var soi_svc := _cached_autoload("/root/SoiService")
-	var center3 := Vector3.ZERO
-	if soi_svc != null and soi_svc.has_method("world_center"):
-		center3 = soi_svc.call("world_center") as Vector3
-	var s := GraphSiteLayout.px_per_m(_zoom)
-	var fnt := ThemeDB.fallback_font
-	# Footprint reads as a ~6 m gathering area, floored so it stays visible
-	# when zoomed out to the whole SoI.
-	var r := maxf(9.0, 6.0 * s)
-	for mark_v in marks as Array:
-		if not (mark_v is Dictionary):
-			continue
-		var mark: Dictionary = mark_v
-		var world: Vector2 = mark.get("pos", Vector2.ZERO)
-		var screen_v: Variant = _npc_project_site(world, center3)
-		if screen_v == null:
-			continue
-		var screen: Vector2 = screen_v
-		if screen.x < -60.0 or screen.y < -60.0 or screen.x > size.x + 60.0 or screen.y > size.y + 60.0:
-			continue
-		var stype := str(mark.get("space_type", ""))
-		var col := SpaceTypes.color(stype)
-		var occupied := int(mark.get("occupied", 0))
-		var capacity := maxi(int(mark.get("capacity", 1)), 1)
-		var full := occupied >= capacity
-		# An AREA space is a region, not a point — draw the outline the player
-		# actually drew, with the marker at its interior point. Without this a
-		# 40 m plaza and a single portaloo look identical on the plan.
-		var poly: PackedVector2Array = mark.get("poly", PackedVector2Array())
-		if poly.size() >= 3:
-			var ring := PackedVector2Array()
-			var ring_ok := true
-			for wp in poly:
-				var rv: Variant = _npc_project_site(wp, center3)
-				if rv == null:
-					ring_ok = false
-					break
-				ring.append(rv as Vector2)
-			if ring_ok:
-				draw_colored_polygon(ring, Color(col.r, col.g, col.b, 0.10))
-				ring.append(ring[0])
-				draw_polyline(ring, Color(col.r, col.g, col.b, 0.7), 1.6, true)
-		draw_circle(screen, r, Color(col.r, col.g, col.b, 0.13))
-		draw_arc(screen, r, 0.0, TAU, 40, Color(col.r, col.g, col.b, 0.85), 1.8, true)
-		# Occupancy sweep on the ring — a full space reads at a glance.
-		if occupied > 0:
-			var frac := clampf(float(occupied) / float(capacity), 0.0, 1.0)
-			draw_arc(screen, r, -PI * 0.5, -PI * 0.5 + TAU * frac, 40,
-					Color(1.0, 0.45, 0.35, 0.95) if full else col, 3.2, true)
-		if r >= 14.0:
-			var glyph := SpaceTypes.icon(stype)
-			var fs := 11
-			var gw := fnt.get_string_size(glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-			draw_string(fnt, screen - Vector2(gw * 0.5, -4.0), glyph,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col.r, col.g, col.b, 0.95))
-			var occ := "%d/%d" % [occupied, capacity]
-			var ow := fnt.get_string_size(occ, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
-			draw_string(fnt, screen - Vector2(ow * 0.5, -r - 6.0), occ,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.85, 0.89, 0.94, 0.9))
+		return soi_svc.call("world_center") as Vector3
+	return Vector3.ZERO
 
 
 ## Centre the Site Plan on a WORLD position — the "watch the crew" handoff
@@ -8481,151 +8223,6 @@ func center_site_on(world_xz: Vector2) -> void:
 	_pan = -GraphSiteLayout.world_xz_to_site(world_xz, center3) \
 		* GraphSiteLayout.px_per_m(_zoom)
 	queue_redraw()
-
-
-## Site Plan: active WORK sites — where crews are building right now
-## (PACKING_PLAN.md Phase 6.5). Amber disc + tool glyph, drawn under the
-## agent dots so the gathered crowd visibly stands ON its work. Sub-quorum
-## sites read as a muster ("2/6 ppl" — hands still gathering, work not yet
-## paying); quorate sites show the progress sweep instead.
-func _draw_npc_crew_sites() -> void:
-	if not npc_crew_provider.is_valid():
-		return
-	var marks: Variant = npc_crew_provider.call()
-	if not (marks is Array) or (marks as Array).is_empty():
-		return
-	var soi_svc := _cached_autoload("/root/SoiService")
-	var center3 := Vector3.ZERO
-	if soi_svc != null and soi_svc.has_method("world_center"):
-		center3 = soi_svc.call("world_center") as Vector3
-	var s := GraphSiteLayout.px_per_m(_zoom)
-	var fnt := ThemeDB.fallback_font
-	var r := maxf(11.0, 4.0 * s)
-	var amber := Color(1.0, 0.72, 0.20)
-	for mark_v in marks as Array:
-		if not (mark_v is Dictionary):
-			continue
-		var mark: Dictionary = mark_v
-		var world: Vector2 = mark.get("pos", Vector2.ZERO)
-		var screen_v: Variant = _npc_project_site(world, center3)
-		if screen_v == null:
-			continue
-		var screen: Vector2 = screen_v
-		if screen.x < -60.0 or screen.y < -60.0 or screen.x > size.x + 60.0 or screen.y > size.y + 60.0:
-			continue
-		var quorum := bool(mark.get("quorum", true))
-		var col := amber if quorum else Color(0.95, 0.55, 0.25)
-		# Haul route: the relay line the brigade posts along, drawn before
-		# the site disc so the disc caps its end.
-		if mark.has("from") and mark.has("to"):
-			var fa_v: Variant = _npc_project_site(mark["from"] as Vector2, center3)
-			var fb_v: Variant = _npc_project_site(mark["to"] as Vector2, center3)
-			if fa_v != null and fb_v != null:
-				var fa: Vector2 = fa_v
-				var fb: Vector2 = fb_v
-				draw_line(fa, fb, Color(col.r, col.g, col.b, 0.55), 2.4, true)
-				draw_circle(fa, 4.0, Color(col.r, col.g, col.b, 0.8))
-				draw_circle(fb, 4.0, Color(col.r, col.g, col.b, 0.8))
-				# The payoff image: items FLOWING along a working brigade line.
-				# Phase is sim time (mark.flow_t), so the pips crawl with the
-				# clock, freeze on pause, and rewind on a scrub — and redraws
-				# already ride the population tick.
-				if quorum and str(mark.get("strategy", "")) == "brigade" \
-						and float(mark.get("progress", 0.0)) > 0.0 \
-						and float(mark.get("progress", 0.0)) < 1.0:
-					var pip := maxf(3.0, 1.2 * s)
-					var t0 := float(mark.get("flow_t", 0.0)) * 8.0
-					for k in 4:
-						var f := fposmod(t0 + float(k) / 4.0, 1.0)
-						var at := fa.lerp(fb, f)
-						draw_rect(Rect2(at - Vector2(pip, pip),
-								Vector2(pip * 2.0, pip * 2.0)),
-							Color(0.95, 0.72, 0.25, 0.95))
-		draw_circle(screen, r, Color(col.r, col.g, col.b, 0.14))
-		draw_arc(screen, r, 0.0, TAU, 40, Color(col.r, col.g, col.b, 0.9), 1.8, true)
-		if quorum:
-			# Work underway: the sweep is the chore's real progress.
-			var frac := clampf(float(mark.get("progress", 0.0)), 0.0, 1.0)
-			if frac > 0.0:
-				draw_arc(screen, r, -PI * 0.5, -PI * 0.5 + TAU * frac, 40,
-						Color(0.55, 1.0, 0.45, 0.95), 3.2, true)
-		if r >= 11.0:
-			var glyph := "🔨"
-			var gw := fnt.get_string_size(glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-			draw_string(fnt, screen - Vector2(gw * 0.5, -4.0), glyph,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(col.r, col.g, col.b, 0.95))
-			var head := str(mark.get("label", ""))
-			var crew_txt := "%d/%d ppl — waiting" % [int(mark.get("workers", 0)),
-					int(mark.get("min_workers", 1))] if not quorum \
-					else "%d ppl" % int(mark.get("workers", 0))
-			var lw := fnt.get_string_size(head, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
-			draw_string(fnt, screen - Vector2(lw * 0.5, r + 16.0), head,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.92, 0.88, 0.78, 0.95))
-			var cw := fnt.get_string_size(crew_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
-			draw_string(fnt, screen - Vector2(cw * 0.5, r + 5.0), crew_txt,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
-					Color(col.r, col.g, col.b, 0.95))
-	# (Redraws ride the population tick, same as the agent dots.)
-
-
-func _draw_npc_agents_site() -> void:
-	if not npc_agents_provider.is_valid():
-		return
-	var dots: Variant = npc_agents_provider.call()
-	if not (dots is Array) or (dots as Array).is_empty():
-		return
-	var soi_svc := _cached_autoload("/root/SoiService")
-	var center3 := Vector3.ZERO
-	if soi_svc != null and soi_svc.has_method("world_center"):
-		center3 = soi_svc.call("world_center") as Vector3
-	var s := GraphSiteLayout.px_per_m(_zoom)
-	# Person-scale dot: ~0.6 m footprint on the plan, but always readable.
-	var r := maxf(3.5, 0.35 * s)
-	for dot_v in dots as Array:
-		if not (dot_v is Dictionary):
-			continue
-		var dot: Dictionary = dot_v
-		var world: Vector2 = dot.get("pos", Vector2.ZERO)
-		var screen_v: Variant = _npc_project_site(world, center3)
-		if screen_v == null:
-			continue
-		var screen: Vector2 = screen_v
-		if screen.x < -20.0 or screen.y < -20.0 or screen.x > size.x + 20.0 or screen.y > size.y + 20.0:
-			continue
-		# Recent trail behind the dot — the aggregate heat map is statistical;
-		# this is what makes the view feel alive.
-		if npc_trails_enabled:
-			var trail: Variant = dot.get("trail", null)
-			if trail is PackedVector2Array and (trail as PackedVector2Array).size() >= 2:
-				var pts: PackedVector2Array = trail
-				var n := pts.size()
-				var prev_v: Variant = _npc_project_site(pts[0], center3)
-				for i in range(1, n):
-					var cur_v: Variant = _npc_project_site(pts[i], center3)
-					if prev_v != null and cur_v != null:
-						var fade := float(i) / float(n)
-						var tc: Color = dot.get("color", Color.WHITE)
-						tc.a = fade * 0.5
-						draw_line(prev_v as Vector2, cur_v as Vector2, tc,
-								maxf(1.0, r * 0.4), true)
-					prev_v = cur_v
-		# Body = the person's own pastel (identity); rim = their morale band,
-		# so the camp's mood is readable at a glance across the whole site.
-		var col: Color = dot.get("color", Color.WHITE)
-		var mood: Color = dot.get("morale_color", Color(0.6, 0.6, 0.6))
-		draw_circle(screen, r + 2.0, Color(0.0, 0.0, 0.0, 0.55))
-		draw_circle(screen, r + 1.4, mood)
-		draw_circle(screen, r, col)
-		# Asleep reads as a dimmer dot; traveling gets a heading tick later.
-		if str(dot.get("activity", "")) == "sleep":
-			draw_circle(screen, r * 0.55, Color(0.05, 0.08, 0.16, 0.75))
-		# Carrying a crate: a small amber square riding the dot — a working
-		# haul line reads as dots with items flowing along it (the payoff
-		# image PACKING_PLAN Phase 6 names).
-		elif bool(dot.get("carrying", false)):
-			var hw := maxf(r * 0.55, 2.0)
-			draw_rect(Rect2(screen - Vector2(hw, hw), Vector2(hw * 2.0, hw * 2.0)),
-					Color(0.95, 0.72, 0.25, 0.95))
 
 
 ## Elevation CT: sample the cut plane through watershed polys (outer-ring verts
@@ -8799,8 +8396,8 @@ func _draw_elevation_culvert_inverts(origin: Vector2, r_px: float, r_m: float,
 		_slice_offset: float, center3: Vector3 = Vector3.ZERO) -> void:
 	if model == null:
 		return
-	# Siphon Lab always shows the outlet barrel; otherwise Elev 3D owns the look.
-	if not siphon_lab_active and soi_live_preview \
+	# Elev 3D owns the barrel look unless the 2D overlays are asked for.
+	if soi_live_preview \
 			and not elev_show_schematic_wires and not elev_show_projected_pipes:
 		return
 	var use_proj := _phys_camera_projection_active()
@@ -8835,105 +8432,12 @@ func _draw_elevation_culvert_inverts(origin: Vector2, r_px: float, r_m: float,
 		draw_circle(p0, mark_r, col)
 		draw_circle(p1, mark_r, col)
 		var q := float(c.get("live_q_lps", 0.0))
-		if q <= 0.01 and siphon_lab_active:
-			# Prefer siphon live Q when the culvert wire hasn't stamped yet.
-			var ss: Dictionary = src.get("specs", {}) as Dictionary
-			if str(ss.get("role", "")) == "siphon_hydro":
-				q = float(ss.get("live_q_lps", 0.0))
 		if q > 0.01:
 			var mid := (p0 + p1) * 0.5
 			draw_string(ThemeDB.fallback_font, mid + Vector2(4, -4),
 					"%.1f L/s" % q, HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
 					Color(0.95, 0.85, 0.45, 0.9))
 			_draw_elev_outlet_discharge(p0, p1, q)
-
-
-## Animated chase dashes through the turbine + spray at the culvert outlet.
-func _draw_elevation_siphon_flow_cues(origin: Vector2, r_px: float, r_m: float,
-		datum: float, s: float, along_dir: Vector2, cross_dir: Vector2,
-		slice_offset: float, center3: Vector3) -> void:
-	if model == null:
-		return
-	var use_proj := _phys_camera_projection_active()
-	for it in model.items:
-		if not (it is Dictionary):
-			continue
-		var item: Dictionary = it
-		var specs: Dictionary = item.get("specs", {}) as Dictionary
-		if str(specs.get("role", "")) != "siphon_hydro":
-			continue
-		var q := float(specs.get("live_q_lps", 0.0))
-		if q <= 0.02 and not bool(specs.get("siphon_primed", false)):
-			continue
-		if not GraphSiteLayout.has_site_coords(item):
-			continue
-		var site := GraphSiteLayout.site_xz(item)
-		if absf(site.dot(cross_dir) - slice_offset) > maxf(r_m * 0.4, 14.0):
-			continue
-		var mod_e := float(specs.get("module_elev_m", item.get("elevation_m", datum)))
-		var along := site.dot(along_dir)
-		var p_in := _elev_section_to_canvas(
-				along_dir * (along - 2.5) + cross_dir * slice_offset, mod_e,
-				origin, datum, s, along_dir, center3, r_px, use_proj)
-		var p_out := _elev_section_to_canvas(
-				along_dir * (along + 2.5) + cross_dir * slice_offset, mod_e,
-				origin, datum, s, along_dir, center3, r_px, use_proj)
-		var col := Color(0.35, 0.85, 1.0, 0.95) if q > 0.02 \
-				else Color(0.55, 0.75, 0.85, 0.55)
-		_draw_elev_flow_chase(p_in, p_out, col, q > 0.02)
-		if q > 0.02:
-			draw_string(ThemeDB.fallback_font, (p_in + p_out) * 0.5 + Vector2(0, -10),
-					"turbine %.1f L/s" % q, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
-	# Culvert outlet jets (siphon → ∞ sink).
-	for conn in model.connections:
-		if not (conn is Dictionary):
-			continue
-		var c: Dictionary = conn
-		if not ConduitKinds.uses_culvert_kit(ConduitKinds.derive_type_for_connection(c)):
-			continue
-		var src := model.get_item(str(c.get("source_item_id", "")))
-		var tgt := model.get_item(str(c.get("target_item_id", "")))
-		if src.is_empty() or tgt.is_empty():
-			continue
-		var ss: Dictionary = src.get("specs", {}) as Dictionary
-		if str(ss.get("role", "")) != "siphon_hydro":
-			continue
-		var q2 := maxf(float(c.get("live_q_lps", 0.0)), float(ss.get("live_q_lps", 0.0)))
-		if q2 <= 0.02:
-			continue
-		var inv_in := float(c.get("invert_in_m", NAN))
-		var inv_out := float(c.get("invert_out_m", NAN))
-		if is_nan(inv_in) or is_nan(inv_out):
-			continue
-		var a0 := GraphSiteLayout.site_xz(src).dot(along_dir) \
-				if GraphSiteLayout.has_site_coords(src) else 0.0
-		var a1 := GraphSiteLayout.site_xz(tgt).dot(along_dir) \
-				if GraphSiteLayout.has_site_coords(tgt) else a0 + 12.0
-		var p0 := _elev_section_to_canvas(along_dir * a0, inv_in, origin, datum, s,
-				along_dir, center3, r_px, use_proj)
-		var p1 := _elev_section_to_canvas(along_dir * a1, inv_out, origin, datum, s,
-				along_dir, center3, r_px, use_proj)
-		_draw_elev_flow_chase(p0, p1, Color(0.4, 0.8, 1.0, 0.9), true)
-		_draw_elev_outlet_discharge(p0, p1, q2)
-
-
-func _draw_elev_flow_chase(from: Vector2, to: Vector2, col: Color, flowing: bool) -> void:
-	var w := _elev_stroke_px(2.2)
-	draw_line(from, to, Color(col.r, col.g, col.b, col.a * 0.35), w, true)
-	if not flowing:
-		return
-	var dir := to - from
-	var len := dir.length()
-	if len < 4.0:
-		return
-	dir /= len
-	var phase := fmod(_flow_phase * 28.0, 14.0)
-	var t := phase
-	while t < len:
-		var a := from + dir * t
-		var b := from + dir * minf(t + 6.0, len)
-		draw_line(a, b, col, w + 0.5, true)
-		t += 14.0
 
 
 func _draw_elev_outlet_discharge(p0: Vector2, p1: Vector2, q_lps: float) -> void:

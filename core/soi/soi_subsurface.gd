@@ -29,6 +29,15 @@ func set_glass_opacity(opacity: float) -> void:
 	mat.set_shader_parameter("glass_opacity", clampf(opacity, 0.0, 1.0))
 
 
+## Site Plan top-down: flat ground-tan below-ground fill instead of the
+## water-cycle diagram (veins/aquifer stay for Elevation/Snowglobe).
+func set_plain_soil(on: bool) -> void:
+	var mat := material_override as ShaderMaterial
+	if mat == null:
+		return
+	mat.set_shader_parameter("plain_soil", 1.0 if on else 0.0)
+
+
 func sync_transform() -> void:
 	var svc := get_node_or_null("/root/SoiService")
 	if svc == null:

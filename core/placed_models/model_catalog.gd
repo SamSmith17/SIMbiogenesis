@@ -60,6 +60,30 @@ static func is_starshade_model(model_id: String) -> bool:
 	return false
 
 
+## True for any hydro-turbine model (siphon hydroturbine, PowerSpout PLT, …).
+## Several subsystems used to hardcode the literal "hydroturbine" — the CT
+## midplane clip, the Lab's section yaw, the prop-edit "Open Hydro Lab" button —
+## so every hydro model must answer here or it silently loses those behaviours.
+static func is_hydro_turbine(model_id: String) -> bool:
+	if model_id.is_empty():
+		return false
+	if model_id == "hydroturbine":
+		return true
+	return bool(find(model_id).get("hydro_turbine", false))
+
+
+## The spinning-runner node name authored on a model entry ("" = let the spin
+## runtime fall back to its name/size heuristic).
+static func turbine_node_for(model_id: String) -> String:
+	return str(find(model_id).get("turbine_node", ""))
+
+
+## Explicit runner spin axis ("x" | "y" | "z"), or "" to measure it from the
+## runner mesh geometry.
+static func spin_axis_for(model_id: String) -> String:
+	return str(find(model_id).get("spin_axis", ""))
+
+
 ## Designs offered by the StarShade editor (family + path heuristic).
 static func starshade_designs() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
@@ -122,6 +146,8 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return CargoContainerBuilder.build_node(container_spec)
 	if model_id == BedBuilder.MODEL_ID:
 		return BedBuilder.build_node(extras)
+	if model_id == StreamIntakeBuilder.MODEL_ID:
+		return StreamIntakeBuilder.build_node(extras)
 	if model_id == GENERIC_BOX_ID:
 		var box_spec: Dictionary = extras.get("box_spec", extras) as Dictionary
 		return _build_generic_box(box_spec)
@@ -365,6 +391,12 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "bed", "label": "Bed",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 0.75},
+		# Procedural stream / spring intake — minted where a player drops the
+		# uphill end of a penstock (conduits have no free endpoints, so the
+		# water source has to be a real prop + graph node).
+		{"id": "stream_intake", "label": "Stream Intake",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 0.42},
 		# Procedural scissor-linkage structure — designed in the Linkage Lab
 		# modal, built via LinkageStructureBuilder from a v30 linkage_spec.
 		{"id": "linkage_structure", "label": "Linkage Structure (Linkage Lab)",
@@ -428,7 +460,25 @@ static func _shipped_models() -> Array[Dictionary]:
 			"path": "res://Imported Models/Hydro/hydroturbine.glb",
 			"preserve_scale": true, "category": "structures",
 			"forced_yaw_deg": 0.0,
-			"turbine_node": ""},
+			"turbine_node": "",
+			"hydro_turbine": true},
+		# PowerSpout PLT-class pico Pelton (turbine_kind "powerspout_pelton").
+		# SimLab/SketchUp export: the inch→metre 0.0254 is baked on the
+		# "Assembly-4" ancestor, so the GLB imports at TRUE metres (~0.35 W ×
+		# 0.38 H × 0.59 D) — preserve_scale with NO reference height (the
+		# mud_printer idiom). The runner is the node literally named
+		# "Pelton Wheel, 24 Spoon"; its disc normal composes to model local
+		# ±X, NOT the +Z that SiphonTurbineSpin assumes by default — hence the
+		# explicit spin_axis (the spin runtime also measures it geometrically
+		# when the key is absent). Measured runner radius ≈ 0.139 m → PCD
+		# ≈ 0.28 m, which is what HydroSource.KINDS.runner_pcd_m carries.
+		{"id": "powerspout_plt", "label": "PowerSpout PLT (Pelton)",
+			"path": "res://Imported Models/Hydro/powerspout_plt.glb",
+			"preserve_scale": true, "category": "structures",
+			"forced_yaw_deg": 0.0,
+			"turbine_node": "Pelton Wheel, 24 Spoon",
+			"spin_axis": "x",
+			"hydro_turbine": true},
 		# Dual-axis point-focus solar concentrator ("dish" heliostat / solar
 		# furnace). Authored in inches baked into the "Component#1" ancestor's
 		# 0.025 scale (same convention as VAWT.glb / single_axis_csp.glb), so

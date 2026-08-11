@@ -107,6 +107,12 @@ func _rebuild_conn_index() -> void:
 ## Lets us fix saved wires when migrate strips auto-inserted electric inputs.
 var _res_in_remap: Dictionary = {}
 
+## Transient during deserialize: ids of legacy `type=="hydro"` estimator items
+## converted to hydro-turbine processors, so their saved DC wires on the old
+## "positive"/"negative" handles can be remapped to the processor's DC port
+## pair (items migrate before connections in deserialize).
+var _hydro_dc_remap: Dictionary = {}
+
 
 func _init() -> void:
 	_ensure_root_scope()
@@ -545,8 +551,10 @@ func deserialize(data: Dictionary) -> void:
 		if not scopes.has(csid):
 			ensure_scope(csid)
 		_apply_res_in_remap(conn)
+		_apply_hydro_dc_remap(conn)
 		_migrate_connection(conn)
 	_res_in_remap.clear()
+	_hydro_dc_remap.clear()
 	_item_counter       = int(data.get("item_counter",       0))
 	_connection_counter = int(data.get("connection_counter", 0))
 	last_line_style     = str(data.get("last_line_style", "bezier"))
@@ -641,6 +649,13 @@ func _ensure_root_scope() -> void:
 
 func _migrate_item_specs(item: Dictionary) -> void:
 	var ty: String = str(item.get("type", ""))
+	# Legacy standalone `type=="hydro"` estimator nodes (pre-unification) become
+	# the simulated hydro-turbine processor (role "siphon_hydro"): one inspector
+	# section, one Hydro Lab, one physics path. Runs before the type branches
+	# below so the converted item then takes the normal processor migration.
+	if ty == "hydro":
+		_migrate_legacy_hydro_item(item)
+		ty = str(item.get("type", ""))
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	# v6: legacy generic compounds stored promotion metadata in boundary_links;
 	# the nested super-node model uses live exposed_ports. Convert on load.
@@ -658,6 +673,76 @@ func _migrate_item_specs(item: Dictionary) -> void:
 		var handles: Array = item.get("handles", []) as Array
 		if not handles.is_empty():
 			GraphHubPorts.migrate_handles_array(handles)
+
+
+## Convert a legacy `type=="hydro"` estimator item to the hydro-turbine
+## processor shape (mirrors ComponentPresets.HYDRO_TURBINES' Pelton preset).
+## Estimator specs (gross_head_m / design_flow_lps / penstock_*) carry over so
+## the tankless spec-driven output path reproduces the old estimator numbers;
+## binding a pond later upgrades the node to the full HydroReach simulation.
+## Idempotent by construction (keys off item type).
+func _migrate_legacy_hydro_item(item: Dictionary) -> void:
+	var old: Dictionary = item.get("specs", {}) as Dictionary
+	# Legacy key was `kind` (pelton | turgo | run_of_river | free text).
+	var turbine_kind := str(old.get("turbine_kind", old.get("kind", "pelton")))
+	var pen_d_mm := float(old.get("penstock_diameter_mm", 63.0))
+	var specs := {
+		"name": str(old.get("name", item.get("label", "Hydro Turbine"))),
+		"role": "siphon_hydro",
+		"kind": "siphon_hydro",
+		"turbine_kind": turbine_kind,
+		"cost": float(old.get("cost", 0.0)),
+		"energy_source": "", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+		"gross_head_m": float(old.get("gross_head_m", 0.0)),
+		"design_flow_lps": float(old.get("design_flow_lps", 0.0)),
+		"penstock_length_m": float(old.get("penstock_length_m", 60.0)),
+		"penstock_diameter_mm": pen_d_mm,
+		"pipe_roughness_mm": float(old.get("pipe_roughness_mm", 0.0015)),
+		"turbine_efficiency": float(old.get("turbine_efficiency", 0.0)),
+		"generator_efficiency": float(old.get("generator_efficiency", 0.85)),
+		"intake_diameter_mm": pen_d_mm,
+		"outlet_diameter_mm": pen_d_mm,
+		"max_power_w": float(old.get("max_power_w", 0.0)),
+		"siphon_primed": false, "live_q_lps": 0.0, "live_head_m": 0.0,
+		"live_pe_w": 0.0, "live_rpm": 0.0,
+		"current_output_kw": float(old.get("current_output_kw", 0.0)),
+		"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+		"outputs": [
+			{"kind": "water", "rate": 0.0, "unit": "L/h"},
+			{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+		],
+		"model_id": "hydroturbine",
+	}
+	# Preserve any keys the shape above doesn't own (HA links, notes,
+	# monthly_flow_multipliers, lock_* flags) rather than dropping them.
+	for k: Variant in old:
+		if not specs.has(k):
+			specs[k] = old[k]
+	item["type"] = "processor"
+	item["specs"] = specs
+	# Processor card is bigger than the old estimator chip.
+	item["width"] = maxf(float(item.get("width", 0.0)), 150.0)
+	item["height"] = maxf(float(item.get("height", 0.0)), 130.0)
+	var iid := str(item.get("id", ""))
+	if not iid.is_empty():
+		_hydro_dc_remap[iid] = true
+
+
+## Rewrite a saved wire on a migrated legacy hydro item: the old node's
+## "positive"/"negative" handles become the processor's DC output port pair
+## (outputs[1] == dc_electricity → res_out_1_pos / res_out_1_neg).
+func _apply_hydro_dc_remap(conn: Dictionary) -> void:
+	if _hydro_dc_remap.is_empty():
+		return
+	const HANDLE_MAP := {"positive": "res_out_1_pos", "negative": "res_out_1_neg"}
+	if _hydro_dc_remap.has(str(conn.get("source_item_id", ""))):
+		var sh := str(conn.get("source_handle_id", ""))
+		if HANDLE_MAP.has(sh):
+			conn["source_handle_id"] = HANDLE_MAP[sh]
+	if _hydro_dc_remap.has(str(conn.get("target_item_id", ""))):
+		var th := str(conn.get("target_handle_id", ""))
+		if HANDLE_MAP.has(th):
+			conn["target_handle_id"] = HANDLE_MAP[th]
 
 
 ## Build the res_in_N port remap for a processor whose auto-inserted electric

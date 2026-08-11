@@ -25,6 +25,8 @@ func _init() -> void:
 	_test_penstock_capacity_solve()
 	_test_penstock_nameplate()
 	_test_penstock_drawdown()
+	_test_nozzle_model()
+	_test_stream_source()
 	print("--- %d checks, %d failures ---" % [_checks, _fails])
 	quit(1 if _fails > 0 else 0)
 
@@ -290,3 +292,131 @@ func _test_penstock_drawdown() -> void:
 	# Parks at the intake dead pool (intake invert + ½ penstock-diameter band).
 	_ok(reach.pond_level_m() >= 100.4 - 0.05, "penstock pond parks at the intake dead pool")
 	_ok(reach.pond_level_m() < 101.5, "penstock actually drew the pond down")
+
+## PowerSpout-class nozzle-governed Pelton through the SAME reach (Phase D):
+## flow follows head + nozzle area (design_flow ignored by construction), RPM
+## comes from the jet speed ratio (not the siphon rotor curve), the kind's
+## 1.6 kW nameplate applies when the spec leaves max_power_w at 0, and the
+## dead-pool/drawdown machinery is unchanged.
+func _make_powerspout_reach(nozzle_mm: float, nozzle_n: int) -> HydroReach:
+	var reach := HydroReach.new()
+	reach.set_pond(100.0, 103.0, 30000.0, 24000.0)   # level 102.4
+	reach.configure_siphon({
+		"turbine_kind": "powerspout_pelton",
+		"penstock_length_m": 100.0,
+		"penstock_diameter_mm": 37.53,   # 1.5" SDR-9 poly ID
+		"pipe_roughness_mm": 0.0015,
+		"design_flow_lps": 500.0,        # must be IGNORED by the nozzle model
+		"generator_efficiency": 0.85,
+		"nozzle_count": nozzle_n,
+		"nozzle_diameter_mm": nozzle_mm,
+		"siphon_break_m": 100.4,
+		"outlet_invert_m": 82.4,         # 20 m gross head at level 102.4
+	})
+	return reach
+
+
+func _test_nozzle_model() -> void:
+	print("[nozzle model (powerspout)]")
+	var reach := _make_powerspout_reach(10.0, 1)
+	var r := reach.evaluate()
+	_ok(str(r.get("conveyance", "")) == "penstock", "powerspout → penstock conveyance")
+	# Hand-computed operating point (20 m gross, 100 m of 1.5" SDR-9, 1x10 mm
+	# nozzle, Cv 0.97): converges near h_net ~15.7 m, Q ~1.34 L/s, P ~114 W.
+	var q := float(r.get("q_lps", 0.0))
+	_ok(q > 1.2 and q < 1.5, "nozzle op point Q in the 1.2-1.5 L/s band (got %.3f)" % q)
+	_ok(q < 500.0 * 0.99, "design_flow knob ignored by the nozzle model")
+	var p := float(r.get("power_w", 0.0))
+	_ok(p > 90.0 and p < 140.0, "power in the 90-140 W band (got %.1f)" % p)
+	var h_net := float(r.get("net_head_m", 0.0))
+	var h_loss := float(r.get("head_loss_m", 0.0))
+	_approx(h_net + h_loss, float(r.get("head_m", 0.0)), 0.05,
+		"nozzle op point: net + loss == gross")
+	# RPM from the jet (u = 0.46 v_j, PCD 0.22 m) — hundreds of rpm, not the
+	# siphon curve's tens.
+	var rpm := float(r.get("rpm", 0.0))
+	_ok(rpm > 500.0 and rpm < 900.0, "jet-derived rpm in the 500-900 band (got %.0f)" % rpm)
+	# Bigger nozzle draws more water and more power at the same head.
+	var big := _make_powerspout_reach(14.0, 1).evaluate()
+	_ok(float(big.get("q_lps", 0.0)) > q, "bigger nozzle draws more flow")
+	# Kind nameplate: 130 m head + twin fat nozzles on a short fat pipe would
+	# pencil to multiple kW; the reach clamps at the kind's 1600 W (spec left
+	# max_power_w unset).
+	var hot := HydroReach.new()
+	hot.set_pond(100.0, 103.0, 30000.0, 24000.0)
+	hot.configure_siphon({
+		"turbine_kind": "powerspout_pelton",
+		"penstock_length_m": 10.0, "penstock_diameter_mm": 63.0,
+		"pipe_roughness_mm": 0.0015, "generator_efficiency": 0.85,
+		"nozzle_count": 2, "nozzle_diameter_mm": 12.0,
+		"siphon_break_m": 100.4, "outlet_invert_m": -27.6,   # 130 m gross
+	})
+	var rh := hot.evaluate()
+	_approx(float(rh.get("power_w", 0.0)), 1600.0, 1e-6,
+		"kind nameplate clamps an unset max_power_w at 1.6 kW")
+	# Dead pool unchanged: below the intake band the nozzle stops.
+	reach.set_pond_level(100.41)
+	var dry := reach.evaluate()
+	_ok(float(dry.get("q_lps", 0.0)) < 1e-6, "nozzle stops at the dead pool")
+
+
+## Levelless source (spring / creek tapped by a penstock). The reach used to bail
+## with regime "unset" for exactly this setup because it only knew how to drain a
+## stored pond, which is why a stream-fed PowerSpout read as dead in the Lab even
+## while the graph estimator was producing power.
+func _test_stream_source() -> void:
+	print("[stream source (levelless)]")
+	var base := {
+		"turbine_kind": "powerspout_pelton",
+		"penstock_source_mode": "stream",
+		"gross_head_m": 20.0,
+		"penstock_length_m": 100.0,
+		"penstock_diameter_mm": 37.53,
+		"pipe_roughness_mm": 0.0015,
+		"generator_efficiency": 0.85,
+		"nozzle_count": 1, "nozzle_diameter_mm": 10.0,
+	}
+	# No pond set AT ALL — the whole point.
+	var amp := HydroReach.new()
+	amp.configure_siphon(base)
+	var ra := amp.evaluate()
+	_ok(str(ra.get("regime", "")) == "penstock",
+		"stream source runs without a pond (regime %s)" % str(ra.get("regime", "")))
+	_approx(float(ra.get("head_m", 0.0)), 20.0, 1e-6, "stream head is the adopted drop")
+	var qa := float(ra.get("q_lps", 0.0))
+	_ok(qa > 1.2 and qa < 1.5, "unlimited stream matches the nozzle op point (%.3f L/s)" % qa)
+	# The reach and the graph estimator must agree — they are the same physics and
+	# the Lab reads one while the flow engine prices the other.
+	var est_kw := HydroSource.power_kw_from_graph_specs(base, 6)
+	_approx(float(ra.get("power_kw", 0.0)), est_kw, 0.002,
+		"reach and estimator agree on a stream-fed PowerSpout")
+
+	# Supply-limited: a 0.5 L/s spring cannot feed a 10 mm jet.
+	var lim_specs: Dictionary = base.duplicate(true)
+	lim_specs["supply_lps"] = 0.5
+	var lim := HydroReach.new()
+	lim.configure_siphon(lim_specs)
+	var rl := lim.evaluate()
+	_approx(float(rl.get("q_lps", 0.0)), 0.5, 1e-6, "flow caps at the spring's supply")
+	_ok(bool(rl.get("supply_limited", false)), "reach reports supply_limited")
+	_ok(float(rl.get("power_w", 0.0)) < float(ra.get("power_w", 0.0)) * 0.35,
+		"supply-limited power collapses (oversized nozzle)")
+	_ok(float(rl.get("unused_head_m", 0.0)) > 10.0,
+		"most of the gross head goes unconverted (%.1f m)" % float(rl.get("unused_head_m", 0.0)))
+
+	# A spring that stopped running is "no_supply", NOT "no_head" — the Lab must
+	# not tell the player to move a correctly-sited turbine.
+	var dry_specs: Dictionary = base.duplicate(true)
+	dry_specs["supply_lps"] = 0.0
+	var dry_reach := HydroReach.new()
+	dry_reach.configure_siphon(dry_specs)
+	var rd := dry_reach.evaluate()
+	_ok(str(rd.get("regime", "")) == "no_supply" and float(rd.get("q_lps", 0.0)) == 0.0,
+		"a dry spring reads no_supply, not no_head")
+
+	# Regression: the POND path must be untouched by all of the above.
+	var pond := _make_powerspout_reach(10.0, 1)
+	var rp := pond.evaluate()
+	_ok(str(rp.get("regime", "")) == "penstock"
+		and float(rp.get("q_lps", 0.0)) > 1.2 and float(rp.get("q_lps", 0.0)) < 1.5,
+		"pond-fed nozzle model unchanged by the stream mode")

@@ -232,6 +232,48 @@ var _explode_pending_id: String = ""
 var _bg_rect: ColorRect = null
 var _soi_preview: Node = null
 var _view_mode_menu: MenuButton = null
+## The View options submenus (Site Plan / Elevation / People & paths) — kept so
+## the _vm_set_* helpers can find which popup holds a given VIEW_MODE_* id.
+var _view_mode_subpopups: Array = []
+
+
+func _add_view_mode_submenu(root: PopupMenu, label: String, sub: PopupMenu) -> void:
+	sub.id_pressed.connect(_on_view_mode_menu_id)
+	root.add_child(sub)
+	root.add_submenu_node_item(label, sub)
+	_view_mode_subpopups.append(sub)
+
+
+## The popup (root or submenu) holding a VIEW_MODE_* item, or null.
+func _vm_popup_holding(id: int) -> PopupMenu:
+	if _view_mode_menu == null:
+		return null
+	var root := _view_mode_menu.get_popup()
+	if root.get_item_index(id) >= 0:
+		return root
+	for sub_v in _view_mode_subpopups:
+		var sub := sub_v as PopupMenu
+		if sub != null and is_instance_valid(sub) and sub.get_item_index(id) >= 0:
+			return sub
+	return null
+
+
+func _vm_set_checked(id: int, checked: bool) -> void:
+	var p := _vm_popup_holding(id)
+	if p != null:
+		p.set_item_checked(p.get_item_index(id), checked)
+
+
+func _vm_set_disabled(id: int, disabled: bool) -> void:
+	var p := _vm_popup_holding(id)
+	if p != null:
+		p.set_item_disabled(p.get_item_index(id), disabled)
+
+
+func _vm_set_text(id: int, text: String) -> void:
+	var p := _vm_popup_holding(id)
+	if p != null:
+		p.set_item_text(p.get_item_index(id), text)
 var _mode_chip_row: HBoxContainer = null
 var _mode_chip_btns: Dictionary = {}  # mode_id -> Button
 var _designate_menu: MenuButton = null
@@ -297,6 +339,11 @@ var _elev_saved_day_time: float = NAN
 const ELEV_CLOCK_OWNER := "graph_elevation_noon"
 ## When true, Site/Elev keep the live clock (skip noon bake).
 var _site_elev_live_lighting: bool = false
+## Site Plan lighting-drift throttle: the live clock moves the sun, so the
+## dirty-driven SoI SubViewport is re-captured at this wall-clock cadence
+## while the plan is open (cheap UPDATE_ONCE, never the _preview_live path).
+const SITE_LIGHT_REFRESH_MS := 5000
+var _site_light_refresh_ms: int = 0
 ## Saved conduits_3d_visible when Site Plan forces a wire mode session.
 var _site_saved_conduits_3d: Variant = null
 var _spatial_edit = null
@@ -2074,7 +2121,11 @@ func _build_topbar() -> Control:
 	sep2.add_theme_constant_override("separation", 8)
 	right_grp.add_child(sep2)
 
-	# ── Graph view mode: Freeform / Site Plan / Elevation / Siphon Lab ──
+	# ── Graph view mode: Freeform / Site Plan / Elevation / Snowglobe ──
+	# The Hydro Lab is deliberately NOT a chip: it is item-bound (opened from a
+	# hydro turbine's inspector / double-click / 3D prop menu), and a chip entry
+	# carried no item id — with no turbine on the graph it opened a useless
+	# empty full-screen view.
 	_mode_chip_row = HBoxContainer.new()
 	_mode_chip_row.add_theme_constant_override("separation", 4)
 	_mode_chip_row.tooltip_text = "Graph / SoI view mode"
@@ -2082,7 +2133,6 @@ func _build_topbar() -> Control:
 		["freeform", "Freeform"],
 		["site", "Site Plan"],
 		["elevation", "Elevation"],
-		["siphon", "Hydro Lab"],
 		["snowglobe", "Snowglobe"],
 	]:
 		var b := _make_mode_chip(str(pair[0]), str(pair[1]))
@@ -2112,51 +2162,67 @@ func _build_topbar() -> Control:
 		+ "Site Plan: starts top-down; Shift+drag orbits (yaw/tilt); scroll zooms 2D+3D.\n"
 		+ "Elevation CT: side-on half-cutaway; Shift+drag rotate/depth; "
 		+ "Shift+wheel zoom cut; Slice depth slider; Reset section.\n"
-		+ "Siphon Lab: hydro detail panel (module height, start/break, RPM) — SoI preview off.")
+		+ "Hydro Lab: hydro detail panel (module height, start/break, RPM) — SoI preview off.")
+	# The flat ~30-item popup accreted per feature; it is now grouped into
+	# per-view submenus. Every VIEW_MODE_* id is UNCHANGED (ui_compile_selftest
+	# pins uniqueness, autosaved prefs key off the ids) and every submenu's
+	# id_pressed routes to the same _on_view_mode_menu_id handler — only the
+	# geometry of the menu changed. Sync code goes through _vm_set_* helpers,
+	# which search the root + submenus for the popup holding an id.
 	var vmp := _view_mode_menu.get_popup()
+	_view_mode_subpopups.clear()
 	vmp.add_check_item("SoI bubble (freeform)", VIEW_MODE_SOI_BUBBLE)
-	vmp.add_check_item("3D snowglobe section (elevation)", VIEW_MODE_ELEV_3D)
-	vmp.add_separator("Elevation overlays")
-	vmp.add_check_item("DEM / pond 2D overlay", VIEW_MODE_ELEV_DEM)
-	vmp.add_check_item("Chips (labels/bodies)", VIEW_MODE_ELEV_CHIPS)
-	vmp.add_check_item("Ports", VIEW_MODE_ELEV_PORTS)
-	vmp.add_check_item("Schematic 2D wires", VIEW_MODE_ELEV_SCHEM_WIRES)
-	vmp.add_check_item("Projected 2D pipe overlay", VIEW_MODE_ELEV_PROJ_PIPES)
-	vmp.add_separator()
 	vmp.add_check_item("Node cards (no 3D previews)", VIEW_MODE_NODE_CARDS)
 	vmp.add_check_item("Preview node labels", VIEW_MODE_PREVIEW_LABELS)
-	vmp.add_check_item("Radial layout (Site Plan auto-yaw)", VIEW_MODE_RADIAL)
-	vmp.add_check_item("Site magnifier labels", VIEW_MODE_SITE_CHIPS)
-	vmp.add_check_item("Site ports", VIEW_MODE_SITE_PORTS)
-	vmp.add_check_item("Live lighting (Site / Elevation)", VIEW_MODE_SITE_LIVE_LIGHT)
-	vmp.add_separator("Desire lines (Site Plan)")
-	vmp.add_check_item("Show worn paths", VIEW_MODE_DESIRE_LINES)
-	vmp.add_check_item("Show live trails", VIEW_MODE_DESIRE_TRAILS)
-	vmp.add_item("Filter: all traffic", VIEW_MODE_DESIRE_CHANNEL)
-	vmp.add_item("Remember: past week", VIEW_MODE_DESIRE_WINDOW)
-	vmp.add_check_item("Drape worn paths in the 3D world", VIEW_MODE_DESIRE_3D)
-	vmp.add_item("Reset desire lines", VIEW_MODE_DESIRE_RESET)
-	vmp.add_separator("Site Plan wires")
-	vmp.add_radio_check_item("Wires: 3D conduits", VIEW_MODE_SITE_WIRE_3D)
-	vmp.add_radio_check_item("Wires: Metro 2D overlay", VIEW_MODE_SITE_WIRE_METRO)
-	vmp.add_radio_check_item("Wires: none (overlay)", VIEW_MODE_SITE_WIRE_NONE)
-	vmp.add_separator()
-	vmp.add_item("Seed site from freeform…", VIEW_MODE_SEED_SITE)
-	vmp.add_item("Embody missing Site twins…", VIEW_MODE_EMBODY_TWINS)
-	vmp.add_separator()
-	vmp.add_radio_check_item("Elevation scale 1× (3D section locks to 1×)", VIEW_MODE_EXAG_1X)
-	vmp.add_radio_check_item("Elevation scale 5× (2D-only Elev)", VIEW_MODE_EXAG_5X)
-	vmp.add_item("Rotate section heading +15°", VIEW_MODE_HEADING_ROTATE)
-	vmp.add_item("Reset section (N/S · slice 0 · zoom fit)", VIEW_MODE_RESET_SECTION)
+
+	var site_sub := PopupMenu.new()
+	site_sub.add_check_item("Radial layout (auto-yaw)", VIEW_MODE_RADIAL)
+	site_sub.add_check_item("Magnifier labels", VIEW_MODE_SITE_CHIPS)
+	site_sub.add_check_item("Ports", VIEW_MODE_SITE_PORTS)
+	site_sub.add_separator("Wires")
+	site_sub.add_radio_check_item("3D conduits", VIEW_MODE_SITE_WIRE_3D)
+	site_sub.add_radio_check_item("Metro 2D overlay", VIEW_MODE_SITE_WIRE_METRO)
+	site_sub.add_radio_check_item("None (overlay)", VIEW_MODE_SITE_WIRE_NONE)
+	site_sub.add_separator()
+	site_sub.add_item("Seed site from freeform…", VIEW_MODE_SEED_SITE)
+	site_sub.add_item("Embody missing Site twins…", VIEW_MODE_EMBODY_TWINS)
+	_add_view_mode_submenu(vmp, "Site Plan", site_sub)
+
+	var elev_sub := PopupMenu.new()
+	elev_sub.add_check_item("3D snowglobe section", VIEW_MODE_ELEV_3D)
+	elev_sub.add_separator("Overlays")
+	elev_sub.add_check_item("DEM / pond 2D overlay", VIEW_MODE_ELEV_DEM)
+	elev_sub.add_check_item("Chips (labels/bodies)", VIEW_MODE_ELEV_CHIPS)
+	elev_sub.add_check_item("Ports", VIEW_MODE_ELEV_PORTS)
+	elev_sub.add_check_item("Schematic 2D wires", VIEW_MODE_ELEV_SCHEM_WIRES)
+	elev_sub.add_check_item("Projected 2D pipe overlay", VIEW_MODE_ELEV_PROJ_PIPES)
+	elev_sub.add_separator()
+	elev_sub.add_check_item("Live lighting (follow sim clock)", VIEW_MODE_SITE_LIVE_LIGHT)
+	elev_sub.add_separator()
+	elev_sub.add_radio_check_item("Scale 1× (3D section locks to 1×)", VIEW_MODE_EXAG_1X)
+	elev_sub.add_radio_check_item("Scale 5× (2D-only Elev)", VIEW_MODE_EXAG_5X)
+	elev_sub.add_item("Rotate section heading +15°", VIEW_MODE_HEADING_ROTATE)
+	elev_sub.add_item("Reset section (N/S · slice 0 · zoom fit)", VIEW_MODE_RESET_SECTION)
+	_add_view_mode_submenu(vmp, "Elevation", elev_sub)
+
+	var people_sub := PopupMenu.new()
+	people_sub.add_check_item("Show worn paths", VIEW_MODE_DESIRE_LINES)
+	people_sub.add_check_item("Show live trails", VIEW_MODE_DESIRE_TRAILS)
+	people_sub.add_item("Filter: all traffic", VIEW_MODE_DESIRE_CHANNEL)
+	people_sub.add_item("Remember: past week", VIEW_MODE_DESIRE_WINDOW)
+	people_sub.add_check_item("Drape worn paths in the 3D world", VIEW_MODE_DESIRE_3D)
+	people_sub.add_item("Reset desire lines", VIEW_MODE_DESIRE_RESET)
+	_add_view_mode_submenu(vmp, "People & paths", people_sub)
+
 	vmp.id_pressed.connect(_on_view_mode_menu_id)
-	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_EXAG_5X), true)
-	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_3D), _elevation_3d_section)
-	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_DEM), true)
-	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_CHIPS), false)
-	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_PORTS), true)
-	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_SCHEM_WIRES), false)
-	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_ELEV_PROJ_PIPES), false)
-	vmp.set_item_checked(vmp.get_item_index(VIEW_MODE_SITE_PORTS), true)
+	_vm_set_checked(VIEW_MODE_EXAG_5X, true)
+	_vm_set_checked(VIEW_MODE_ELEV_3D, _elevation_3d_section)
+	_vm_set_checked(VIEW_MODE_ELEV_DEM, true)
+	_vm_set_checked(VIEW_MODE_ELEV_CHIPS, false)
+	_vm_set_checked(VIEW_MODE_ELEV_PORTS, true)
+	_vm_set_checked(VIEW_MODE_ELEV_SCHEM_WIRES, false)
+	_vm_set_checked(VIEW_MODE_ELEV_PROJ_PIPES, false)
+	_vm_set_checked(VIEW_MODE_SITE_PORTS, true)
 	right_grp.add_child(_view_mode_menu)
 
 	_elev_slice_row = HBoxContainer.new()
@@ -2590,11 +2656,11 @@ func _on_view_mode_menu_id(id: int) -> void:
 			_schedule_graph_autosave()
 		VIEW_MODE_SITE_LIVE_LIGHT, VIEW_MODE_ELEV_LIVE_LIGHT:
 			_site_elev_live_lighting = not _site_elev_live_lighting
+			# Elevation-only: Site Plan never claims the clock (live by design).
 			if _site_elev_live_lighting:
 				_elev_end_noon_lock()
-				_show_toast("Live lighting ON — Site/Elev follow the sim clock")
-			elif _graph_view_mode in [GraphSiteLayout.VIEW_SITE, GraphSiteLayout.VIEW_ELEVATION] \
-					and visible:
+				_show_toast("Live lighting ON — Elevation follows the sim clock")
+			elif _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION and visible:
 				_elev_begin_noon_lock()
 				_show_toast("Daytime bake ON — mean solar noon")
 			_sync_view_mode_menu_checks()
@@ -2674,8 +2740,6 @@ func _on_mode_chip_pressed(mode_id: String) -> void:
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_SITE)
 		"elevation":
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_ELEVATION)
-		"siphon":
-			_apply_graph_view_mode(GraphSiteLayout.VIEW_SIPHON)
 		"snowglobe":
 			_open_full_snowglobe()
 
@@ -2780,27 +2844,26 @@ func _apply_graph_view_mode(mode: String, opts: Dictionary = {}) -> void:
 		# the same frame as the SoI CT SubViewport boots was TDR'ing AMD GPUs.
 		# Soft-focus remeshes only the siphon culvert (below).
 		_maybe_toast_elev_3d_wires_hint()
-	# Site/Elev: bake at mean solar noon unless live lighting is on.
+	# Elevation only: bake at mean solar noon unless live lighting is on.
+	# Site Plan deliberately NEVER claims the clock — the noon freeze was why
+	# the plan read as a frozen snapshot (people stop ticking, nothing moves;
+	# PACKING_PLAN.md names this exact player report). Site lighting is live.
 	var is_phys := mode in [GraphSiteLayout.VIEW_SITE, GraphSiteLayout.VIEW_ELEVATION]
-	if is_phys and visible and not _site_elev_live_lighting:
+	if mode == GraphSiteLayout.VIEW_ELEVATION and visible and not _site_elev_live_lighting:
 		_elev_begin_noon_lock()
-	elif not is_phys:
+	else:
 		_elev_end_noon_lock()
-		if was_site:
-			_restore_site_conduit_visibility()
+	if was_site and not is_phys:
+		_restore_site_conduit_visibility()
 	if _graph_canvas != null:
 		_graph_canvas.visible = true
-		# Phase 2: the Siphon Lab renders its OWN 2D cross-section full-area and no
-		# longer borrows the Elevation CT / SoI section. Park the (covered) canvas
-		# in a cheap freeform mode so it does no hidden elevation/SoI work.
-		if mode == GraphSiteLayout.VIEW_SIPHON:
-			_graph_canvas.set("view_mode", GraphSiteLayout.VIEW_FREEFORM)
-			_graph_canvas.set("siphon_lab_active", false)
-		else:
-			_graph_canvas.set("view_mode", mode)
-			_graph_canvas.set("siphon_lab_active", false)
-		if entering_elev:
-			_graph_canvas.set("_pan", Vector2.ZERO)
+		# ALWAYS through set_view_mode — it is what saves the outgoing view's
+		# zoom/pan into its own slot and restores the incoming one. VIEW_SIPHON is
+		# a real mode now (the canvas draws only its background under the Lab); it
+		# used to be faked by parking in VIEW_FREEFORM, which handed the Lab the
+		# freeform camera to overwrite. Do NOT zero _pan on Elevation entry either
+		# — frame_elevation_window already does, and the elevation slot owns it.
+		_graph_canvas.call("set_view_mode", mode)
 		_graph_canvas.call("queue_redraw")
 	_sync_view_mode_menu_checks()
 	_sync_elev_slice_row()
@@ -2829,8 +2892,10 @@ func _apply_graph_view_mode(mode: String, opts: Dictionary = {}) -> void:
 	if entering_elev and not bool(opts.get("skip_elev_siphon_focus", false)):
 		call_deferred("_ensure_elev_siphon_ct_ready")
 	# Extreme zoom: crop SoI SubViewport on the next frame before a giant Control
-	# can allocate (Elevation GPU cliff). Siphon Lab uses no SoI preview now.
-	if entering_elev:
+	# can allocate (GPU cliff). Applies to fresh Site entry too — restoring the
+	# plan at deep zoom used to wait for the service's next idle _process, one
+	# frame of oversized Control. Siphon Lab uses no SoI preview now.
+	if entering_elev or (mode == GraphSiteLayout.VIEW_SITE and not was_site):
 		call_deferred("_force_soi_preview_layout_sync")
 	_schedule_graph_autosave()
 
@@ -3127,7 +3192,7 @@ func _on_elev_open_hydro_lab_pressed() -> void:
 				continue
 			var specs: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
 			if str(specs.get("role", "")) == "siphon_hydro" \
-					or str(specs.get("model_id", "")) == "hydroturbine":
+					or ModelCatalog.is_hydro_turbine(str(specs.get("model_id", ""))):
 				sid = str((it as Dictionary).get("id", ""))
 				break
 	if sid.is_empty():
@@ -3297,6 +3362,7 @@ func focus_siphon_conduit_glow(siphon_id: String, force_global_wires: bool = tru
 	ensure_siphon_outlet_sink(siphon_id)
 	var mgr := _get_conduit_manager()
 	var focus_id := ""
+	var penstock_id := ""
 	for conn in model.connections:
 		if not (conn is Dictionary):
 			continue
@@ -3305,10 +3371,16 @@ func focus_siphon_conduit_glow(siphon_id: String, force_global_wires: bool = tru
 		var tgt := str(c.get("target_item_id", ""))
 		if src != siphon_id and tgt != siphon_id:
 			continue
-		# Force culvert/outlet visible + glow (intake stays schematic).
+		# Force culvert/outlet AND any routed penstock visible + glowing (a bare
+		# intake wire stays schematic). A penstock is the player's own routed
+		# pipe — it must render, not sit behind the direct-intake hide rule.
 		var type_id := ConduitKinds.derive_type_for_connection(c)
+		var is_penstock := ConduitKinds.normalize_route_mode(
+				str((c.get("conduit_style", {}) as Dictionary).get("route_mode",
+					ConduitKinds.type_meta(type_id).get("route_mode", "")))) == "contour"
 		var patch := {}
-		if ConduitKinds.uses_culvert_kit(type_id) or str(c.get("conduit_type", "")) == "culvert_pipe":
+		if is_penstock or ConduitKinds.uses_culvert_kit(type_id) \
+				or str(c.get("conduit_type", "")) == "culvert_pipe":
 			if c.get("visible_3d") != true:
 				patch["visible_3d"] = true
 			if c.get("flow_glow") != true:
@@ -3321,8 +3393,15 @@ func focus_siphon_conduit_glow(siphon_id: String, force_global_wires: bool = tru
 				if c.is_empty():
 					c = conn
 		focus_id = str(c.get("id", focus_id))
+		if is_penstock:
+			penstock_id = str(c.get("id", ""))
 		if mgr != null and mgr.has_method("ensure_preview_samples"):
 			mgr.call("ensure_preview_samples", c)
+	# The loop keeps the LAST match; prefer the penstock when one is routed —
+	# that is the run the player is designing, and only the focused connection
+	# renders while global 3D wires are off.
+	if not penstock_id.is_empty():
+		focus_id = penstock_id
 	if focus_id.is_empty() or mgr == null:
 		if _graph_canvas != null:
 			_graph_canvas.call("queue_redraw")
@@ -3353,6 +3432,255 @@ func focus_siphon_conduit_glow(siphon_id: String, force_global_wires: bool = tru
 				CONNECT_ONE_SHOT)
 	if _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
+
+
+## Leave the Lab and stand next to the turbine in first person, with its
+## penstock focused/glowing — the "go look at the thing I just built" move, and
+## the way into the 3D wire tools for finer bends.
+func go_to_turbine_in_world(item_id: String) -> bool:
+	if model == null or item_id.is_empty():
+		return false
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var prop_id := str((item.get("specs", {}) as Dictionary).get("bound_prop_id", ""))
+	var main := _get_scene_main_node()
+	if main == null:
+		return false
+	if prop_id.is_empty():
+		prop_id = _find_hydroturbine_prop_id_for_item(item_id, main)
+	if prop_id.is_empty():
+		_show_toast("This turbine has no 3D twin yet — place it in the world first")
+		return false
+	var rec := PlacedPropService.get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return false
+	var px := float(rec.get("x", 0.0))
+	var pz := float(rec.get("z", 0.0))
+	# Stand a few metres back so the machine AND the pipe leaving it are in
+	# frame, on the ground (never inside the prop or under the terrain).
+	var stand := Vector2(px + 4.0, pz + 4.0)
+	var gy := TerrainSurfaceQuery.ground_height_at(main, stand.x, stand.y)
+	var player: Variant = main.get("player")
+	if not (player is Node3D):
+		return false
+	var p3 := player as Node3D
+	p3.global_position = Vector3(stand.x, gy + 1.2, stand.y)
+	if p3 is CharacterBody3D:
+		(p3 as CharacterBody3D).velocity = Vector3.ZERO
+	if "player_spawn_position" in main:
+		main.player_spawn_position = p3.global_position
+	# Keep the penstock lit so it is obvious what to grab.
+	focus_siphon_conduit_glow(item_id)
+	if visible:
+		_apply_graph_close_side_effects()
+	return true
+
+
+## Keep a bound turbine's 3D model in step with its turbine_kind — a PowerSpout
+## must not wear the siphon hydroturbine's body. The prop record's own model_id
+## is authoritative (changing the graph spec alone does nothing), so this swaps
+## it in place: update_prop_record with rebuild frees just that prop, respawns
+## it, and re-runs the whole behaviour-attach dispatch.
+## ⚠ `turbine_node` / `spin_axis` were stamped on the record at PLACEMENT time
+## and must be patched too, or the spin runtime binds a node name from the old
+## GLB and the new runner never turns.
+func sync_turbine_model_to_kind(item_id: String) -> bool:
+	if model == null or item_id.is_empty():
+		return false
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return false
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(specs.get("role", "")) != "siphon_hydro":
+		return false
+	var prop_id := str(specs.get("bound_prop_id", ""))
+	if prop_id.is_empty():
+		return false
+	var want := str(HydroSource.kind_meta(
+			str(specs.get("turbine_kind", "siphon"))).get("model_id", ""))
+	if want.is_empty() or ModelCatalog.find(want).is_empty():
+		return false
+	var main := _get_scene_main_node()
+	if main == null:
+		return false
+	var rec := PlacedPropService.get_prop_record(main, prop_id)
+	if rec.is_empty() or str(rec.get("model_id", "")) == want:
+		return false
+	PlacedPropService.update_prop_record(main, prop_id, {
+		"model_id": want,
+		"turbine_node": ModelCatalog.turbine_node_for(want),
+		"spin_axis": ModelCatalog.spin_axis_for(want),
+	}, true)
+	# Keep the graph spec's model_id honest too (library/packing read it).
+	var s2: Dictionary = specs.duplicate(true)
+	s2["model_id"] = want
+	model.update_item(item_id, {"specs": s2})
+	# Mid-Lab / mid-Elevation swap: the CT midplane clip and the section yaw
+	# were applied to the node that was just FREED — re-apply to the respawn or
+	# the new model renders unsliced (or not at all) on the cut.
+	if _graph_view_mode == GraphSiteLayout.VIEW_SIPHON \
+			or (_graph_view_mode == GraphSiteLayout.VIEW_ELEVATION and _elevation_3d_section):
+		if _soi_preview != null \
+				and _soi_preview.has_method("_apply_hydroturbine_section_clip"):
+			_soi_preview.call("_apply_hydroturbine_section_clip", true)
+		_ensure_hydroturbine_section_yaw(item_id)
+	_show_toast("Swapped the 3D model to %s" % ModelCatalog.find(want).get("label", want))
+	return true
+
+
+## Mint a Stream Intake at a world point and wire a penstock from it to
+## `turbine_id`'s inlet handle. This is what "drop the pipe here and that's the
+## source" means mechanically: a conduit has NO free endpoints (both ends must
+## resolve to an item with a 3D anchor, and a `resource` item only gets one via
+## bound_prop_id), so the drop has to create a real prop + graph node. Head then
+## follows from the intake's terrain elevation through the normal invert path.
+## Returns the new connection id, or "" on failure.
+## Specs for a freshly minted stream intake. `stream_source` is the marker the
+## flow engine and the inspector key off (model_id is the fallback, so intakes
+## made before this key existed still resolve).
+func _stream_intake_specs(prop_id: String) -> Dictionary:
+	var specs := {
+		"name": "Stream Intake",
+		"resource_kind": "water",
+		# NOT pond_storage: this is a running source, not a reservoir with a
+		# level to draw down — the turbine reads its ELEVATION for head.
+		"pond_storage": false,
+		"stream_source": true,
+		"unlimited_capacity": true,
+		"capacity_qty": 1000.0, "capacity_unit": "L", "level": 1.0,
+		"bound_prop_id": prop_id,
+		"model_id": StreamIntakeBuilder.MODEL_ID,
+		"daily_note": "Tapped by a penstock. Its ground elevation sets the gross head, its base flow + rain response set how much water it runs.",
+	}
+	specs.merge(HydroSupply.default_intake_specs())
+	return specs
+
+
+func create_penstock_intake_at(world_pos: Vector3, turbine_id: String,
+		turbine_handle: String, style_ov: Dictionary = {}) -> String:
+	if model == null or turbine_id.is_empty():
+		return ""
+	var turbine := model.get_item(turbine_id)
+	if turbine.is_empty():
+		_show_toast("Penstock needs a turbine at the other end")
+		return ""
+	var main := _get_scene_main_node()
+	if main == null:
+		return ""
+	var placed: Dictionary = PlacedPropService.place_model_at_xz(
+			main, StreamIntakeBuilder.MODEL_ID, world_pos.x, world_pos.z)
+	if not bool(placed.get("ok", false)):
+		_show_toast("Couldn't place the intake here")
+		return ""
+	var prop_id := str(placed.get("prop_id", ""))
+	var ground_y := float(placed.get("ground_y", world_pos.y))
+	var item_id: String = model.generate_item_id()
+	var site := Vector2.ZERO
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		site = GraphSiteLayout.world_xz_to_site(
+				Vector2(world_pos.x, world_pos.z), soi.call("world_center") as Vector3)
+	var graph_pos := Vector2(randf_range(-90.0, 90.0), randf_range(-70.0, 70.0))
+	model.add_item({
+		"id": item_id,
+		"type": "resource",
+		"x": graph_pos.x, "y": graph_pos.y,
+		"width": 90.0, "height": 100.0,
+		"scope_id": _active_scope_id,
+		"site_x_m": site.x, "site_z_m": site.y,
+		"elevation_m": ground_y,
+		"is_virtual": false,
+		# A new intake ships with a real dry-weather flow and a rain response
+		# (HydroSupply.default_intake_specs), so the turbine produces the moment
+		# the penstock is routed. Zeros here would leave the whole
+		# place-intake-then-route flow ending at 0 W with nothing saying why.
+		"specs": _stream_intake_specs(prop_id),
+	})
+	PlacedPropService.update_prop_record(main, prop_id,
+			{"graph_item_id": item_id}, false)
+	var style: Dictionary = style_ov.duplicate(true)
+	style.erase("route_mode")
+	# add_connection() returns void and stamps a generated id when absent, so
+	# mint the id here to hand it straight to the reveal/remesh path.
+	var conn_id: String = model.generate_connection_id()
+	model.add_connection({
+		"id": conn_id,
+		"source_item_id": item_id, "source_handle_id": "output",
+		"target_item_id": turbine_id,
+		"target_handle_id": turbine_handle if not turbine_handle.is_empty() else "res_in_0",
+		"polarity": "resource", "resource_type": "water",
+		"conduit_type": "poly_penstock",
+		"conduit_style": style,
+		"visible_3d": true, "flow_glow": true,
+	})
+	reveal_penstock_conduit(conn_id)
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+	_show_toast("Stream Intake placed — penstock routed to the turbine")
+	return conn_id
+
+
+## A penstock the player just routed must RENDER, or nothing downstream works:
+## ConduitManager skips `_on_model_changed` entirely while global 3D wires are
+## off, and only the focused connection is built otherwise — so the mesh never
+## exists, and because `route_length_m` / the endpoint inverts are stamped
+## INSIDE the rebuild, the flow engine never adopts the measured run either.
+## Turning wires on + focusing + forcing one remesh is what closes that loop.
+func reveal_penstock_conduit(conn_id: String) -> void:
+	if conn_id.is_empty():
+		return
+	var mgr := _get_conduit_manager()
+	if mgr == null:
+		return
+	# The conn carries visible_3d: true, and the manager now renders explicit
+	# conns whatever the global 3D-wires toggle says — no need to flip the
+	# player's global preference anymore. Focus + a forced remesh (twice: the
+	# first can race empty port anchors) is all it takes.
+	if mgr.has_method("set_focus_highlight"):
+		mgr.call("set_focus_highlight", conn_id)
+	if mgr.has_method("force_remesh"):
+		mgr.call("force_remesh", conn_id)
+		get_tree().create_timer(0.15).timeout.connect(
+				func() -> void:
+					if mgr != null and is_instance_valid(mgr) \
+							and mgr.has_method("force_remesh"):
+						mgr.call("force_remesh", conn_id),
+				CONNECT_ONE_SHOT)
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+
+
+## Remove the auto-minted ∞ culvert outlet from a PENSTOCK-kind turbine: the
+## sink item plus its wire, but ONLY when the sink is wired to nothing else —
+## a tank the player wired for their own reasons is not ours to delete.
+func _remove_auto_outlet_sink(siphon_id: String) -> void:
+	if model == null or siphon_id.is_empty():
+		return
+	var removed := false
+	for it: Dictionary in model.get_items_in_scope(
+			str(model.get_item(siphon_id).get("scope_id", "root"))):
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		if not bool(sp.get("outlet_sink", false)):
+			continue
+		var sink_id := str(it.get("id", ""))
+		var conns: Array = model.connections_for_item(sink_id)
+		var only_this := not conns.is_empty()
+		for cn: Dictionary in conns:
+			if str(cn.get("source_item_id", "")) != siphon_id \
+					and str(cn.get("target_item_id", "")) != siphon_id:
+				only_this = false
+				break
+		if not only_this:
+			continue
+		for cn2: Dictionary in conns.duplicate():
+			model.remove_connection(str(cn2.get("id", "")))
+		model.remove_item(sink_id)
+		removed = true
+	if removed:
+		_show_toast("Removed the culvert outlet — this turbine discharges tailwater at the machine")
+		_schedule_graph_autosave()
 
 
 ## First siphon on the graph (selection preferred) — Elev soft-focus / frame helper.
@@ -3392,6 +3720,9 @@ func teardown_siphon_lab_session(siphon_id: String = "") -> void:
 	if mgr != null:
 		if mgr.has_method("set_focus_highlight"):
 			mgr.call("set_focus_highlight", "")
+		# Restoring the pre-Lab prefs is safe now: explicitly-visible conns
+		# (routed penstocks, forced tailraces) render regardless of the global
+		# toggle, so nothing the player built vanishes on Lab close.
 		if _lab_conduit_prefs_saved:
 			if mgr.has_method("set_global_flow_glow"):
 				mgr.call("set_global_flow_glow", _lab_saved_flow_glow)
@@ -3405,6 +3736,17 @@ func teardown_siphon_lab_session(siphon_id: String = "") -> void:
 			if bool(specs.get("lab_sim_inflow_enabled", false)):
 				specs["lab_sim_inflow_enabled"] = false
 				model.update_item(siphon_id, {"specs": specs})
+			# The override flag lives on the INTAKE (it is what the freeform
+			# inspector reads), so clearing the turbine's toggle is not enough —
+			# the intake would keep claiming a Lab override after the Lab closed.
+			if _resource_flow != null \
+					and _resource_flow.has_method("_stream_intake_for"):
+				var intake: Dictionary = _resource_flow.call("_stream_intake_for", item)
+				if not intake.is_empty():
+					var isp: Dictionary = (intake.get("specs", {}) as Dictionary).duplicate(true)
+					if bool(isp.get("supply_override", false)):
+						isp["supply_override"] = false
+						model.update_item(str(intake.get("id", "")), {"specs": isp})
 		var tank := resolve_siphon_pond(siphon_id)
 		if not tank.is_empty():
 			var tid := str(tank.get("id", ""))
@@ -3425,9 +3767,25 @@ func teardown_siphon_lab_session(siphon_id: String = "") -> void:
 		loader.call("clear_watershed_preview")
 
 
+## Show/hide the embedded Elevation cross-section 3D view. The Hydro Lab's
+## turbine close-up owns the same slot when it is the active tab, and two 3D views
+## rendering into one rect is both wrong and wasteful.
+func set_lab_section_ct_visible(on: bool) -> void:
+	if _soi_preview == null or not is_instance_valid(_soi_preview):
+		return
+	if _soi_preview.has_method("set_embed_visible"):
+		_soi_preview.call("set_embed_visible", on)
+
+
 ## Frame Elevation CT on the siphon's pond + module (shared with Elev).
 ## Locks heading to pond → siphon/outlet side cut and a tight zoom window.
-func frame_elevation_for_siphon(siphon_id: String) -> void:
+##
+## Two jobs, separable on purpose. The HEADING + slice offset are what the Hydro
+## Lab genuinely needs (its cross-section reads them back via _elev_section_params).
+## The CAMERA framing belongs to Elevation alone — the Lab drives its own CT
+## through sync_siphon_lab_section_frame, and letting it frame the canvas here is
+## what used to overwrite another view's zoom. Lab callers pass set_camera=false.
+func frame_elevation_for_siphon(siphon_id: String, set_camera: bool = true) -> void:
 	if _graph_canvas == null or siphon_id.is_empty() or model == null:
 		return
 	var item := model.get_item(siphon_id)
@@ -3464,6 +3822,23 @@ func frame_elevation_for_siphon(siphon_id: String) -> void:
 	if _graph_canvas.has_signal("elevation_section_offset_changed"):
 		_graph_canvas.emit_signal("elevation_section_offset_changed", pond_slice)
 	var pond_along := pond_site.dot(along_dir)
+	# Push heading/slice into the SoI section camera (anchors drive look/ortho).
+	# Ahead of the framing below because both halves want it and only the framing
+	# half is optional — these are pure heading/offset writes, order-independent.
+	if _soi_preview != null:
+		if _soi_preview.has_method("set_section_heading"):
+			_soi_preview.call("set_section_heading", heading)
+		if _soi_preview.has_method("set_section_offset"):
+			_soi_preview.call("set_section_offset", pond_slice)
+		# Elev owns pan/zoom; while Hydro Lab is open, Lab CT frame stays in charge.
+		if _graph_view_mode != GraphSiteLayout.VIEW_SIPHON \
+				and _soi_preview.has_method("clear_lab_section_frame"):
+			_soi_preview.call("clear_lab_section_frame")
+	call_deferred("_force_soi_preview_layout_sync")
+	if not set_camera:
+		# Hydro Lab: heading + slice are all it wanted. Framing the canvas from
+		# here would write whichever view's camera is live.
+		return
 	# Cap footprint so large OSM ponds don't zoom the CT out to a void.
 	var half_w := 4.0
 	if not pond.is_empty():
@@ -3519,106 +3894,63 @@ func frame_elevation_for_siphon(siphon_id: String) -> void:
 		st["along_m"] = turbine_along
 		st["elev_m"] = module_m
 		_graph_canvas.call("set_elev_view_state", st)
-	# Push heading/slice into the SoI section camera (anchors drive look/ortho).
-	if _soi_preview != null:
-		if _soi_preview.has_method("set_section_heading"):
-			_soi_preview.call("set_section_heading", heading)
-		if _soi_preview.has_method("set_section_offset"):
-			_soi_preview.call("set_section_offset", pond_slice)
-		# Elev owns pan/zoom; while Hydro Lab is open, Lab CT frame stays in charge.
-		if _graph_view_mode != GraphSiteLayout.VIEW_SIPHON \
-				and _soi_preview.has_method("clear_lab_section_frame"):
-			_soi_preview.call("clear_lab_section_frame")
-	call_deferred("_force_soi_preview_layout_sync")
 
 
-func _sync_desire_menu_labels(vp: PopupMenu) -> void:
+func _sync_desire_menu_labels() -> void:
 	var site_only := _graph_view_mode == GraphSiteLayout.VIEW_SITE
 	for id in [VIEW_MODE_DESIRE_LINES, VIEW_MODE_DESIRE_TRAILS]:
-		var i := vp.get_item_index(id)
-		if i >= 0:
-			vp.set_item_disabled(i, not site_only)
+		_vm_set_disabled(int(id), not site_only)
 	# The channel/retention filters and the 3D drape apply in the world too,
 	# so they stay live outside Site Plan.
-	var d3 := vp.get_item_index(VIEW_MODE_DESIRE_3D)
-	if d3 >= 0:
-		vp.set_item_checked(d3, _desire_3d_on)
-	var li := vp.get_item_index(VIEW_MODE_DESIRE_LINES)
-	if li >= 0:
-		vp.set_item_checked(li, _desire_lines_on)
-	var ti := vp.get_item_index(VIEW_MODE_DESIRE_TRAILS)
-	if ti >= 0 and _graph_canvas != null:
-		vp.set_item_checked(ti, bool(_graph_canvas.get("npc_trails_enabled")))
-	var ci := vp.get_item_index(VIEW_MODE_DESIRE_CHANNEL)
-	if ci >= 0:
-		vp.set_item_text(ci, "Filter: %s" % _desire_channel_label())
-	var wi := vp.get_item_index(VIEW_MODE_DESIRE_WINDOW)
-	if wi >= 0:
-		vp.set_item_text(wi, "Remember: %s" %
-				NpcDesireMap.retention_label(_desire_window).to_lower())
+	_vm_set_checked(VIEW_MODE_DESIRE_3D, _desire_3d_on)
+	_vm_set_checked(VIEW_MODE_DESIRE_LINES, _desire_lines_on)
+	if _graph_canvas != null:
+		_vm_set_checked(VIEW_MODE_DESIRE_TRAILS,
+				bool(_graph_canvas.get("npc_trails_enabled")))
+	_vm_set_text(VIEW_MODE_DESIRE_CHANNEL, "Filter: %s" % _desire_channel_label())
+	_vm_set_text(VIEW_MODE_DESIRE_WINDOW, "Remember: %s" %
+			NpcDesireMap.retention_label(_desire_window).to_lower())
 
 
 func _sync_view_mode_menu_checks() -> void:
 	if _view_mode_menu == null:
 		return
-	var vp := _view_mode_menu.get_popup()
-	_sync_desire_menu_labels(vp)
+	_sync_desire_menu_labels()
 	# Mode radios no longer live in this menu (the chip strip is the single
-	# mode switcher); only the per-view extras need syncing.
-	var bubble_idx := vp.get_item_index(VIEW_MODE_SOI_BUBBLE)
-	if bubble_idx >= 0:
-		vp.set_item_checked(bubble_idx, _freeform_soi_bubble)
-		vp.set_item_disabled(bubble_idx,
-				_graph_view_mode != GraphSiteLayout.VIEW_FREEFORM)
-	var elev3d_idx := vp.get_item_index(VIEW_MODE_ELEV_3D)
-	if elev3d_idx >= 0:
-		vp.set_item_checked(elev3d_idx, _elevation_3d_section)
-		vp.set_item_disabled(elev3d_idx,
-				_graph_view_mode != GraphSiteLayout.VIEW_ELEVATION)
+	# mode switcher); only the per-view extras need syncing. All lookups go
+	# through _vm_set_* since the items are spread across submenus now.
+	_vm_set_checked(VIEW_MODE_SOI_BUBBLE, _freeform_soi_bubble)
+	_vm_set_disabled(VIEW_MODE_SOI_BUBBLE,
+			_graph_view_mode != GraphSiteLayout.VIEW_FREEFORM)
+	_vm_set_checked(VIEW_MODE_ELEV_3D, _elevation_3d_section)
+	_vm_set_disabled(VIEW_MODE_ELEV_3D,
+			_graph_view_mode != GraphSiteLayout.VIEW_ELEVATION)
 	var elev_in := _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
 	for elev_id in [VIEW_MODE_ELEV_DEM, VIEW_MODE_ELEV_CHIPS, VIEW_MODE_ELEV_PORTS,
 			VIEW_MODE_ELEV_SCHEM_WIRES, VIEW_MODE_ELEV_PROJ_PIPES]:
-		var eidx := vp.get_item_index(elev_id)
-		if eidx >= 0:
-			vp.set_item_disabled(eidx, not elev_in)
+		_vm_set_disabled(int(elev_id), not elev_in)
 	if _graph_canvas != null:
-		var cards_idx := vp.get_item_index(VIEW_MODE_NODE_CARDS)
-		if cards_idx >= 0:
-			vp.set_item_checked(cards_idx,
-					str(_graph_canvas.get("node_display_mode")) == "card")
-		var lbl_idx := vp.get_item_index(VIEW_MODE_PREVIEW_LABELS)
-		if lbl_idx >= 0:
-			vp.set_item_checked(lbl_idx,
-					bool(_graph_canvas.get("show_preview_labels")))
-		var rad_idx := vp.get_item_index(VIEW_MODE_RADIAL)
-		if rad_idx >= 0:
-			vp.set_item_checked(rad_idx,
-					bool(_graph_canvas.get("radial_layout_mode")))
-		var chips_idx := vp.get_item_index(VIEW_MODE_SITE_CHIPS)
-		if chips_idx >= 0:
-			vp.set_item_checked(chips_idx, bool(_graph_canvas.get("site_show_chips")))
-			vp.set_item_disabled(chips_idx,
-					_graph_view_mode != GraphSiteLayout.VIEW_SITE)
-		var sports_idx := vp.get_item_index(VIEW_MODE_SITE_PORTS)
-		if sports_idx >= 0:
-			vp.set_item_checked(sports_idx, bool(_graph_canvas.get("site_show_ports")))
-			vp.set_item_disabled(sports_idx,
-					_graph_view_mode != GraphSiteLayout.VIEW_SITE)
-		var live_idx := vp.get_item_index(VIEW_MODE_SITE_LIVE_LIGHT)
-		if live_idx >= 0:
-			vp.set_item_checked(live_idx, _site_elev_live_lighting)
+		_vm_set_checked(VIEW_MODE_NODE_CARDS,
+				str(_graph_canvas.get("node_display_mode")) == "card")
+		_vm_set_checked(VIEW_MODE_PREVIEW_LABELS,
+				bool(_graph_canvas.get("show_preview_labels")))
+		_vm_set_checked(VIEW_MODE_RADIAL,
+				bool(_graph_canvas.get("radial_layout_mode")))
+		var site_in := _graph_view_mode == GraphSiteLayout.VIEW_SITE
+		_vm_set_checked(VIEW_MODE_SITE_CHIPS, bool(_graph_canvas.get("site_show_chips")))
+		_vm_set_disabled(VIEW_MODE_SITE_CHIPS, not site_in)
+		_vm_set_checked(VIEW_MODE_SITE_PORTS, bool(_graph_canvas.get("site_show_ports")))
+		_vm_set_disabled(VIEW_MODE_SITE_PORTS, not site_in)
+		_vm_set_checked(VIEW_MODE_SITE_LIVE_LIGHT, _site_elev_live_lighting)
 		var sw := str(_graph_canvas.get("site_wire_mode"))
 		for pair in [
 			[VIEW_MODE_SITE_WIRE_3D, "prefer_3d"],
 			[VIEW_MODE_SITE_WIRE_METRO, "metro"],
 			[VIEW_MODE_SITE_WIRE_NONE, "none"],
 		]:
-			var widx := vp.get_item_index(int(pair[0]))
-			if widx >= 0:
-				vp.set_item_checked(widx, sw == str(pair[1]))
-				vp.set_item_disabled(widx,
-						_graph_view_mode != GraphSiteLayout.VIEW_SITE)
-		_sync_elev_overlay_menu_checks(vp)
+			_vm_set_checked(int(pair[0]), sw == str(pair[1]))
+			_vm_set_disabled(int(pair[0]), not site_in)
+		_sync_elev_overlay_menu_checks()
 	# Mode chip strip mirrors the active view (Snowglobe is modal, not sticky).
 	for mid in _mode_chip_btns:
 		var btn: Button = _mode_chip_btns[mid] as Button
@@ -3632,8 +3964,6 @@ func _sync_view_mode_menu_checks() -> void:
 				on = _graph_view_mode == GraphSiteLayout.VIEW_SITE
 			"elevation":
 				on = _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
-			"siphon":
-				on = _graph_view_mode == GraphSiteLayout.VIEW_SIPHON
 			"snowglobe":
 				on = false
 		btn.set_pressed_no_signal(on)
@@ -3644,9 +3974,8 @@ func _set_elevation_exaggeration(ex: float) -> void:
 		_graph_canvas.set("elevation_exaggeration", ex)
 		_graph_canvas.call("queue_redraw")
 	if _view_mode_menu != null:
-		var vp := _view_mode_menu.get_popup()
-		vp.set_item_checked(vp.get_item_index(VIEW_MODE_EXAG_1X), is_equal_approx(ex, 1.0))
-		vp.set_item_checked(vp.get_item_index(VIEW_MODE_EXAG_5X), is_equal_approx(ex, 5.0))
+		_vm_set_checked(VIEW_MODE_EXAG_1X, is_equal_approx(ex, 1.0))
+		_vm_set_checked(VIEW_MODE_EXAG_5X, is_equal_approx(ex, 5.0))
 
 
 func _toggle_elev_overlay(id: int) -> void:
@@ -3672,8 +4001,8 @@ func _toggle_elev_overlay(id: int) -> void:
 	_schedule_graph_autosave()
 
 
-func _sync_elev_overlay_menu_checks(vp: PopupMenu) -> void:
-	if _graph_canvas == null or vp == null:
+func _sync_elev_overlay_menu_checks() -> void:
+	if _graph_canvas == null:
 		return
 	var pairs := {
 		VIEW_MODE_ELEV_DEM: "elev_show_dem_overlay",
@@ -3683,9 +4012,7 @@ func _sync_elev_overlay_menu_checks(vp: PopupMenu) -> void:
 		VIEW_MODE_ELEV_PROJ_PIPES: "elev_show_projected_pipes",
 	}
 	for mid in pairs:
-		var idx := vp.get_item_index(int(mid))
-		if idx >= 0:
-			vp.set_item_checked(idx, bool(_graph_canvas.get(pairs[mid])))
+		_vm_set_checked(int(mid), bool(_graph_canvas.get(pairs[mid])))
 
 
 ## Hint only — never force-enable 3D wires (GPU remesh storm + CT = TDR risk).
@@ -3985,6 +4312,39 @@ func _world_xz_for_osm_tag(main: Node, tag: String) -> Variant:
 	return cent
 
 
+## Resolve `elevation_m` for every placed graph item, in this precedence:
+##
+##   1. the bound prop's own connection-port / anchor height, via the SAME
+##      resolver the 3D conduit builder uses (ConduitManager.anchor_global_for_item)
+##   2. an elevation the engine owns (a siphon module's level, edited in the Lab)
+##   3. terrain ground Y — the original behaviour, still right for unbound items
+##
+## Rung 1 is the fix for "the penstock ends in a different place in elevation than
+## it does in 3D". This function used to stamp EVERY item to ground Y, so an
+## elevation-view chip sat on the DEM line while the 3D pipe terminated at a port
+## on the prop — a turbine inlet flange or a culvert invert, metres away.
+## Called once by TerrainLoader when a map has finished loading.
+##
+## Before this, elevations were resolved ONLY on entry to Site / Elevation / the
+## Hydro Lab. A map that booted straight into first person therefore ran every
+## conduit off whatever the save carried — and an unbound outlet sink saved at
+## elevation 0 anchored its culvert at world Y ≈ 0 while the turbine sat 80 m
+## below it, so the pipe launched into the sky until the player opened the graph.
+## Re-syncs the conduits afterwards so anything already built at the wrong height
+## is re-routed rather than left pointing at the horizon.
+func resolve_site_elevations_after_load() -> void:
+	if model == null:
+		return
+	_backfill_site_from_world()
+	_refresh_item_elevations()
+	var mgr := _get_conduit_manager()
+	if mgr != null:
+		if mgr.has_method("invalidate_obstacle_cache"):
+			mgr.call("invalidate_obstacle_cache")
+		if mgr.has_method("sync_all"):
+			mgr.call("sync_all")
+
+
 func _refresh_item_elevations() -> void:
 	if model == null:
 		return
@@ -3992,15 +4352,33 @@ func _refresh_item_elevations() -> void:
 	if soi == null or not soi.has_method("world_center"):
 		return
 	var center: Vector3 = soi.call("world_center")
+	var main := _get_scene_main_node()
+	var tree := get_tree()
 	for item: Dictionary in model.items:
 		if not GraphSiteLayout.has_site_coords(item):
 			continue
-		var site := GraphSiteLayout.site_xz(item)
-		var wxz := GraphSiteLayout.site_to_world_xz(site, center)
-		var gy := float(center.y)
-		if soi.has_method("ground_y_at"):
-			gy = float(soi.call("ground_y_at", wxz.x, wxz.y))
-		model.update_item(str(item.get("id", "")), {"elevation_m": gy})
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		# The flow engine and the Lab's level drag both own a siphon module's
+		# elevation; re-stamping it here would fight them every frame.
+		if str(specs.get("role", "")) == "siphon_hydro" \
+				and not is_nan(float(specs.get("module_elev_m", NAN))):
+			continue
+		var elev := NAN
+		if not str(specs.get("bound_prop_id", "")).is_empty() and tree != null:
+			var anchor := ConduitManager.anchor_global_for_item(item, tree, "", main)
+			if is_finite(anchor.x) and is_finite(anchor.y):
+				elev = anchor.y
+		if is_nan(elev):
+			var site := GraphSiteLayout.site_xz(item)
+			var wxz := GraphSiteLayout.site_to_world_xz(site, center)
+			elev = float(center.y)
+			if soi.has_method("ground_y_at"):
+				elev = float(soi.call("ground_y_at", wxz.x, wxz.y))
+		if is_nan(elev):
+			continue
+		if absf(float(item.get("elevation_m", NAN)) - elev) > 0.005 \
+				or is_nan(float(item.get("elevation_m", NAN))):
+			model.update_item(str(item.get("id", "")), {"elevation_m": elev})
 
 
 func _refresh_site_autoroutes() -> void:
@@ -4061,12 +4439,18 @@ func _force_teardown_siphon_lab_on_graph_close() -> void:
 		if _siphon_lab_modal.has_method("exit_view"):
 			_siphon_lab_modal.call("exit_view")
 	teardown_siphon_lab_session(leave_id)
-	# Prefer Elevation over a parked Siphon mode so the next G open isn't Lab.
+	# Park the mode the player opened the Lab from (else Elevation) so the next
+	# G open isn't the Lab.
 	if _graph_view_mode == GraphSiteLayout.VIEW_SIPHON:
-		_graph_view_mode = GraphSiteLayout.VIEW_ELEVATION
+		var back := _lab_return_mode
+		_lab_return_mode = ""
+		if back.is_empty() or back == GraphSiteLayout.VIEW_SIPHON:
+			back = GraphSiteLayout.VIEW_ELEVATION
+		_graph_view_mode = back
 		if _graph_canvas != null:
-			_graph_canvas.set("view_mode", GraphSiteLayout.VIEW_ELEVATION)
-			_graph_canvas.set("siphon_lab_active", false)
+			# set_view_mode, not a raw set: leaving the Lab must restore the
+			# framing `back` was left at, not inherit the Lab's.
+			_graph_canvas.call("set_view_mode", back)
 		_sync_view_mode_menu_checks()
 
 
@@ -4598,9 +4982,11 @@ func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String 
 			kind = "vawt"
 		elif str(specs.get("role", "")) == "habitat":
 			kind = "habitat"
-		elif model_id == "hydroturbine" or str(specs.get("role", "")) == "siphon_hydro":
+		elif ModelCatalog.is_hydro_turbine(model_id) \
+				or str(specs.get("role", "")) == "siphon_hydro":
 			kind = "siphon_hydro"
-	elif model_id == "hydroturbine" or str(specs.get("role", "")) == "siphon_hydro":
+	elif ModelCatalog.is_hydro_turbine(model_id) \
+			or str(specs.get("role", "")) == "siphon_hydro":
 		kind = "siphon_hydro"
 	var plant_abs_h := -1.0
 	if kind == "grow_bed" and main.has_method("get_absolute_hours"):
@@ -4608,7 +4994,9 @@ func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String 
 	var record_extra := {
 		"kind": kind,
 		"turbine_node": str(specs.get("turbine_node",
-			ModelCatalog.find(model_id).get("turbine_node", ""))),
+			ModelCatalog.turbine_node_for(model_id))),
+		# Runner axis travels with the record so a model swap can repoint it.
+		"spin_axis": str(specs.get("spin_axis", ModelCatalog.spin_axis_for(model_id))),
 		"wind_specs": specs if ptype == "wind" else {},
 	}
 	if kind == "grow_bed":
@@ -6341,14 +6729,35 @@ func _sync_siphon_lab_view(preferred_item_id: String = "") -> void:
 func open_siphon_lab(item_id: String) -> void:
 	if model == null:
 		return
-	if not item_id.is_empty():
-		var item := model.get_item(item_id)
-		if item.is_empty():
-			return
-		var specs: Dictionary = item.get("specs", {}) as Dictionary
-		if str(specs.get("role", "")) != "siphon_hydro":
-			return
+	# The Lab is item-bound: an empty id used to bypass validation entirely and
+	# open a useless empty full-screen view (the old mode-chip path).
+	if item_id.is_empty():
+		_show_toast("Select a hydro turbine first — the Hydro Lab opens from its node")
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if str(specs.get("role", "")) != "siphon_hydro":
+		return
+	# Remember where the player came from so closing the Lab returns there
+	# instead of always dumping them in Elevation.
+	if _graph_view_mode != GraphSiteLayout.VIEW_SIPHON:
+		_lab_return_mode = _graph_view_mode
 	_apply_graph_view_mode(GraphSiteLayout.VIEW_SIPHON, {"siphon_item_id": item_id})
+
+
+## Graph view mode to restore when the Hydro Lab closes (recorded on open).
+var _lab_return_mode: String = ""
+
+
+## Close the Hydro Lab and return to the mode the player opened it from.
+func close_hydro_lab() -> void:
+	var back := _lab_return_mode
+	_lab_return_mode = ""
+	if back.is_empty() or back == GraphSiteLayout.VIEW_SIPHON:
+		back = GraphSiteLayout.VIEW_ELEVATION
+	_apply_graph_view_mode(back)
 
 
 ## Throttle Elev redraws while the Siphon Lab is open (~15 Hz).
@@ -6358,17 +6767,23 @@ var _lab_redraw_acc: float = 0.0
 ## Siphon Lab per-frame sync: push pond twin mesh into the embedded Elev CT.
 ## Water stock itself is advanced by ResourceFlowEngine (world clock, or wall
 ## time while paused via lab Test Inflow).
-func lab_siphon_tick(siphon_id: String, real_delta: float, _opts: Dictionary = {}) -> void:
+##
+## Returns TRUE only when the throttle actually fired and tank state was written.
+## The Lab uses that to decide whether to drop its pond-context cache — it used to
+## drop it unconditionally every frame, which turned a 0.25 s cache into a
+## per-frame `resolve_siphon_pond()` and was a large part of the Lab's sluggishness.
+func lab_siphon_tick(siphon_id: String, real_delta: float, _opts: Dictionary = {}) -> bool:
 	if model == null or siphon_id.is_empty() or real_delta <= 0.0:
-		return
+		return false
 	_lab_redraw_acc += real_delta
 	if _lab_redraw_acc < 0.12:
-		return
+		return false
 	_lab_redraw_acc = 0.0
 	# Force mesh rebuild so the Lab CT pond surface tracks stock while the
 	# ambient throttle skips Elev/Siphon (and world-suspend) remeshes.
 	push_pond_levels_to_mesh(true)
 	queue_canvas_redraw()
+	return true
 
 
 ## Siphon Lab: directly set the bound pond's water level (dragging the water line
@@ -6409,6 +6824,25 @@ static func pond_has_usable_bathymetry(specs: Dictionary) -> bool:
 
 
 ## Heal tags, prune orphans, ensure outlet, select bound pond (Lab enter).
+## True when this turbine is wired to a tapped stream/spring intake. Such a
+## turbine already HAS a water source — the penstock — and must never be
+## auto-rebound to a pond, because binding replaces the water-in wiring.
+## The explicit "Rebind to nearest pond" button is deliberately not gated by this:
+## that one is the player asking.
+func _turbine_has_stream_source(siphon_id: String) -> bool:
+	if model == null or siphon_id.is_empty():
+		return false
+	for conn: Dictionary in model.connections:
+		var src := str(conn.get("source_item_id", ""))
+		var tgt := str(conn.get("target_item_id", ""))
+		if src != siphon_id and tgt != siphon_id:
+			continue
+		var other_id := tgt if src == siphon_id else src
+		if ResourceFlowEngine.is_stream_intake(model.get_item(other_id)):
+			return true
+	return false
+
+
 func prepare_siphon_lab_session(siphon_id: String) -> void:
 	var loader := _find_terrain_loader(_get_scene_main_node())
 	if loader != null:
@@ -6424,6 +6858,14 @@ func prepare_siphon_lab_session(siphon_id: String) -> void:
 		if not need_rebind:
 			var bs: Dictionary = bound.get("specs", {}) as Dictionary
 			need_rebind = not pond_has_usable_bathymetry(bs)
+		# ...but NEVER for a turbine already fed by a tapped stream/spring. A
+		# stream intake is not a pond, so resolve_siphon_pond returns empty and
+		# this path used to fire every time — and bind_siphon_to_nearest_pond
+		# REPLACES the water-in wiring, so merely opening the Hydro Lab deleted
+		# the penstock the player had just routed and silently latched the
+		# turbine onto a pond somewhere else on the map.
+		if need_rebind and _turbine_has_stream_source(siphon_id):
+			need_rebind = false
 		if need_rebind:
 			# Generous but bounded — the placement path already binds within 40 m,
 			# so this fallback only fires when the turbine was placed before a
@@ -6448,7 +6890,10 @@ func prepare_siphon_lab_session(siphon_id: String) -> void:
 		focus_siphon_conduit_glow(siphon_id, false)
 		_relax_legacy_siphon_nameplate(siphon_id)
 		_ensure_hydroturbine_section_yaw(siphon_id)
-		frame_elevation_for_siphon(siphon_id)
+		# Heading + slice only: the Lab frames its OWN CT via
+		# sync_siphon_lab_section_frame, and framing the canvas from here wrote
+		# whichever view's camera happened to be live (the freeform-zoom bug).
+		frame_elevation_for_siphon(siphon_id, false)
 		var tank := resolve_siphon_pond(siphon_id)
 		if not tank.is_empty():
 			heal_pond_terrain_capacity_for_tank(str(tank.get("id", "")))
@@ -6484,8 +6929,11 @@ func _ensure_hydroturbine_section_yaw(siphon_id: String) -> void:
 	var heading := 0.0
 	if _graph_canvas != null:
 		heading = float(_graph_canvas.get("elevation_heading_rad"))
-	# Mesh authoring bias (usually 0 — see ModelCatalog hydroturbine note).
-	var forced := ModelCatalog.forced_yaw_deg("hydroturbine")
+	# Mesh authoring bias (usually 0 — see the ModelCatalog hydro notes). Read
+	# it from the prop's OWN model, not the siphon turbine's.
+	var rec_for_yaw := PlacedPropService.get_prop_record(main, prop_id)
+	var yaw_model := str(rec_for_yaw.get("model_id", "hydroturbine"))
+	var forced := ModelCatalog.forced_yaw_deg(yaw_model)
 	var want := -rad_to_deg(heading) + forced
 	want = fposmod(want + 180.0, 360.0) - 180.0
 	var cur := PlacedPropService.get_prop_record(main, prop_id)
@@ -6506,7 +6954,7 @@ func _ensure_hydroturbine_section_yaw(siphon_id: String) -> void:
 			break
 
 
-## Resolve placed hydroturbine for a siphon graph item (bound id or graph_item_id).
+## Resolve a placed hydro turbine (any hydro model) for a turbine graph item.
 func _find_hydroturbine_prop_id_for_item(siphon_id: String, main: Node) -> String:
 	if main == null or siphon_id.is_empty():
 		return ""
@@ -6518,7 +6966,7 @@ func _find_hydroturbine_prop_id_for_item(siphon_id: String, main: Node) -> Strin
 		if not (child is PlacedProp):
 			continue
 		var pp := child as PlacedProp
-		if str(pp.model_id) != "hydroturbine":
+		if not ModelCatalog.is_hydro_turbine(str(pp.model_id)):
 			continue
 		var rec := PlacedPropService.get_prop_record(main, str(pp.prop_id))
 		var gid := str(rec.get("graph_item_id", ""))
@@ -7029,6 +7477,16 @@ func ensure_siphon_outlet_sink(siphon_id: String) -> String:
 	var siphon := model.get_item(siphon_id)
 	if siphon.is_empty():
 		return ""
+	# Penstock kinds (PowerSpout / Pelton / Turgo / run-of-river) discharge AT
+	# THE MACHINE — the tailwater jet is their outlet. The auto ∞ culvert
+	# tailrace is a siphon-only affordance: minting one here drew a phantom
+	# culvert barrel off every placed PowerSpout. Also HEAL an already-minted
+	# one (existing saves / a kind change) so the phantom disappears on the
+	# next Lab open rather than living forever.
+	var kind0 := str((siphon.get("specs", {}) as Dictionary).get("turbine_kind", "siphon"))
+	if bool(HydroSource.kind_meta(kind0).get("has_penstock", false)):
+		_remove_auto_outlet_sink(siphon_id)
+		return ""
 	# Existing water outlet?
 	if _resource_flow != null and _resource_flow.has_method("_resolve_siphon_outlet_tank"):
 		var existing: Dictionary = _resource_flow.call("_resolve_siphon_outlet_tank", siphon)
@@ -7036,6 +7494,63 @@ func ensure_siphon_outlet_sink(siphon_id: String) -> String:
 			var es: Dictionary = existing.get("specs", {}) as Dictionary
 			if bool(es.get("outlet_sink", false)) or bool(es.get("unlimited_capacity", false)):
 				return str(existing.get("id", ""))
+	# Fallback scan (true idempotency): _resolve_siphon_outlet_tank only finds a
+	# sink still WIRED to a res_out port — if the player wired their own tank
+	# first, or the connection was ever dropped, every caller (placement, Lab
+	# entry, siphon modal) minted ANOTHER ∞ outlet, which is how a map ends up
+	# with "Culvert Outlet" ×N. Reuse an existing sink in this scope instead:
+	# one already wired to this siphon wins (extras wired to the same siphon are
+	# merged away), else an unwired orphan is re-wired rather than duplicated.
+	var scope_id := str(siphon.get("scope_id", "root"))
+	var wired_sink_ids: Array[String] = []
+	var orphan_sink_id := ""
+	for it: Dictionary in model.get_items_in_scope(scope_id):
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		if not bool(sp.get("outlet_sink", false)):
+			continue
+		var cand_id := str(it.get("id", ""))
+		var conns: Array = model.connections_for_item(cand_id)
+		var wired_to_this := false
+		for cn: Dictionary in conns:
+			if str(cn.get("source_item_id", "")) == siphon_id:
+				wired_to_this = true
+				break
+		if wired_to_this:
+			wired_sink_ids.append(cand_id)
+		elif orphan_sink_id.is_empty() and conns.is_empty():
+			orphan_sink_id = cand_id
+	if not wired_sink_ids.is_empty():
+		for i in range(1, wired_sink_ids.size()):
+			model.remove_item(wired_sink_ids[i])
+		if wired_sink_ids.size() > 1:
+			_show_toast("Merged %d duplicate culvert outlets" % (wired_sink_ids.size() - 1))
+			_schedule_graph_autosave()
+		return wired_sink_ids[0]
+	if not orphan_sink_id.is_empty():
+		var siphon_elev0 := float(siphon.get("elevation_m",
+				(siphon.get("specs", {}) as Dictionary).get("module_elev_m", 0.0)))
+		var orphan_item := model.get_item(orphan_sink_id)
+		var orphan_elev := float(orphan_item.get("elevation_m", siphon_elev0 - 9.0))
+		model.add_connection({
+			"scope_id": scope_id,
+			"polarity": "resource",
+			"resource_type": "water",
+			"source_item_id": siphon_id,
+			"source_handle_id": "res_out_0",
+			"target_item_id": orphan_sink_id,
+			"target_handle_id": "input",
+			"waypoints": [],
+			"conduit_type": "culvert_pipe",
+			"invert_in_m": siphon_elev0 - 0.2,
+			"invert_out_m": orphan_elev,
+			"visible_3d": true,
+			"flow_glow": true,
+			"line_style": model.last_line_style,
+			"curve_tension": 1.0,
+			"corner_radius": 28.0,
+		})
+		_schedule_graph_autosave()
+		return orphan_sink_id
 	var sink_id := model.generate_item_id()
 	var sx := float(siphon.get("x", 200.0)) + 180.0
 	var sy := float(siphon.get("y", 200.0)) + 40.0
@@ -10556,22 +11071,69 @@ func npc_population_bridge() -> NpcPopulationBridge:
 	return _npc_population
 
 
-## The "watch the crew" handoff: open the graph on the Site Plan centred on
-## a world position, and make sure there is something to watch — a paused
-## clock is why the plan reads as a frozen snapshot (no dots move, no time
-## passes), so queueing work nudges it to 1x. One entry point shared by the
-## Linkage Lab crew queue and kit deliveries, so the flow feels identical.
-func watch_site_at(world_xz: Vector2, toast := "") -> void:
+## Aggregate roster snapshot for the dashboard's Settlement card. Routed
+## through _npc_dot_source() so an MP guest reads the host's replicated dots
+## exactly like the 3D avatar layer does. {} = no population running.
+func npc_dot_summary() -> Dictionary:
+	var src = _npc_dot_source()
+	if src == null or not bool(src.call("active")):
+		return {}
+	var dots: Variant = src.call("agent_dots")
+	if not (dots is Array) or (dots as Array).is_empty():
+		return {}
+	var n := 0
+	var morale_sum := 0.0
+	var bands: Dictionary = {}       # morale_label -> count
+	var acts: Dictionary = {}        # activity -> count (raw sim names)
+	var traveling := 0
+	for dot_v in dots as Array:
+		if not (dot_v is Dictionary):
+			continue
+		var dot: Dictionary = dot_v
+		n += 1
+		morale_sum += float(dot.get("morale", 0.0))
+		var band := str(dot.get("morale_label", ""))
+		if not band.is_empty():
+			bands[band] = int(bands.get(band, 0)) + 1
+		if int(dot.get("state", NpcAgent.State.IDLE)) == NpcAgent.State.TRAVELING:
+			traveling += 1
+		else:
+			var act := str(dot.get("activity", ""))
+			if act.is_empty():
+				act = "idle"
+			acts[act] = int(acts.get(act, 0)) + 1
+	if n == 0:
+		return {}
+	return {"count": n, "morale_avg": morale_sum / float(n),
+			"bands": bands, "activities": acts, "traveling": traveling}
+
+
+## The "watch the crew" handoff, v2: queueing work no longer yanks the camera
+## anywhere (the old watch_site_at jumped to the Site Plan and hard-set its
+## zoom, which was jarring and — while the plan froze the clock — showed a
+## frozen crew anyway). Instead: nudge a paused clock so the work actually
+## starts, and offer a clickable Watch chip that opens the settlement view —
+## the surface built for watching people work — centred on the site.
+func notify_crew_queued(world_xz: Vector2, title: String, detail := "") -> void:
 	var m := _get_scene_main_node()
+	var resumed := false
 	if m != null and m.get("time_scale") != null and float(m.time_scale) <= 0.0:
 		m.time_scale = 1.0
-	visible = true
-	_apply_graph_open_mode_from_sim_state()
-	_apply_graph_view_mode("site")
-	if _graph_canvas != null and _graph_canvas.has_method("center_site_on"):
-		_graph_canvas.call("center_site_on", world_xz)
-	if not toast.is_empty():
-		_show_toast(toast)
+		resumed = true
+	var det := detail
+	if resumed:
+		det = "clock resumed" if det.is_empty() else "%s · clock resumed" % det
+	det = "tap to watch" if det.is_empty() else "%s · tap to watch" % det
+	var toaster: ToastUI = m.get("toast_ui") if m != null else null
+	if toaster == null:
+		_show_toast(title, 3.0, ToastUI.Level.OK)
+		return
+	toaster.show_community("crew_queued", title, det, ToastUI.Level.OK, 5.0,
+		func() -> void:
+			if visible:
+				_apply_graph_close_side_effects()
+			if m != null and m.has_method("open_settlement_view"):
+				m.call("open_settlement_view", world_xz))
 
 
 ## The live 3D host (null until at least one pop-driven habitat has spawned
@@ -10787,6 +11349,15 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 	if visible and _npc_population.active() and _graph_canvas != null \
 			and _graph_view_mode == GraphSiteLayout.VIEW_SITE:
 		_graph_canvas.queue_redraw()
+	# Site Plan runs on the LIVE clock (no noon lock), so the top-down disc's
+	# lighting drifts with sim time. Re-capture the (dirty-driven) SubViewport
+	# at a low wall-clock throttle — never the expensive _preview_live path.
+	if visible and _graph_view_mode == GraphSiteLayout.VIEW_SITE \
+			and _soi_preview != null and _soi_preview.has_method("request_refresh"):
+		var now_ms := Time.get_ticks_msec()
+		if now_ms - _site_light_refresh_ms >= SITE_LIGHT_REFRESH_MS:
+			_site_light_refresh_ms = now_ms
+			_soi_preview.call("request_refresh")
 	PerfMonitor.begin("flow_engine")
 	_resource_flow.call("tick", delta)
 	PerfMonitor.end("flow_engine")
@@ -11924,6 +12495,13 @@ func _on_model_changed(reason: String) -> void:
 		_refresh_telemetry()
 		if reason == "update_item" or reason == "reset":
 			_schedule_pond_twin_push()
+		# The Site Plan's unplaced tray is gone — a node added while the plan
+		# is open is seated on the disc immediately instead of landing
+		# invisible (entry already seeds; this covers live adds). Recurses one
+		# level as "update_item", which takes the branch above.
+		if reason == "add_item" and visible \
+				and _graph_view_mode == GraphSiteLayout.VIEW_SITE:
+			_auto_seed_site_unplaced()
 		_sync_solar_ui_from_graph()
 		_sync_graph_controller_ac_fault()
 		call_deferred("_populate_library_scene_devices")
@@ -12516,6 +13094,53 @@ func _sync_solar_ui_from_graph() -> void:
 # Save / Load  (matches solar_ui pattern used in main.gd)
 # ---------------------------------------------------------------------------
 
+## Seed the canvas's per-view camera slots from a save blob and adopt the restored
+## view's framing. Three layers, weakest first, so an old save still lands right:
+##   1. legacy canvas_pan_*/canvas_zoom  → the FREEFORM slot (and, for saves that
+##      predate elev_view entirely, the ELEVATION slot with anchor_inited false so
+##      _ensure_elev_anchor still runs its pixel-pan → metre-anchor migration)
+##   2. legacy elev_view {zoom, along_m, elev_m} → the ELEVATION slot
+##   3. canvas_view_cams → every slot, authoritative
+func _restore_view_cams(data: Dictionary, restored_view: String) -> void:
+	if _graph_canvas == null or not _graph_canvas.has_method("set_view_cam_state"):
+		return
+	var legacy_zoom := clampf(float(data.get("canvas_zoom", 1.0)),
+			GraphLayout.ZOOM_MIN, GraphLayout.ZOOM_MAX)
+	var legacy_pan_x := float(data.get("canvas_pan_x", 0.0))
+	var legacy_pan_y := float(data.get("canvas_pan_y", 0.0))
+	var cams := {
+		GraphSiteLayout.VIEW_FREEFORM: {
+			"zoom": legacy_zoom, "pan_x": legacy_pan_x, "pan_y": legacy_pan_y,
+			"along_m": 0.0, "elev_m": NAN, "anchor_inited": false,
+		},
+		GraphSiteLayout.VIEW_ELEVATION: {
+			"zoom": legacy_zoom, "pan_x": legacy_pan_x, "pan_y": legacy_pan_y,
+			"along_m": 0.0, "elev_m": NAN, "anchor_inited": false,
+		},
+	}
+	var elev_view: Variant = data.get("elev_view", {})
+	if elev_view is Dictionary and not (elev_view as Dictionary).is_empty():
+		var ev: Dictionary = elev_view as Dictionary
+		cams[GraphSiteLayout.VIEW_ELEVATION] = {
+			"zoom": clampf(float(ev.get("zoom", legacy_zoom)),
+					GraphLayout.ZOOM_MIN, GraphLayout.ZOOM_MAX),
+			"pan_x": 0.0, "pan_y": 0.0,
+			"along_m": float(ev.get("along_m", 0.0)),
+			"elev_m": float(ev.get("elev_m", NAN)),
+			"anchor_inited": true,
+		}
+	var saved: Variant = data.get("canvas_view_cams", {})
+	if saved is Dictionary:
+		for mode_v: Variant in (saved as Dictionary).keys():
+			cams[str(mode_v)] = (saved as Dictionary)[mode_v]
+	# Adopt FIRST so set_view_cam_state's own restore targets the right slot, and
+	# so the deferred _apply_graph_view_mode(restored_view) is a no-op switch that
+	# cannot capture pre-restore leftovers into a neighbouring view.
+	if _graph_canvas.has_method("adopt_view_mode_no_capture"):
+		_graph_canvas.call("adopt_view_mode_no_capture", restored_view)
+	_graph_canvas.call("set_view_cam_state", cams)
+
+
 func collect_save_state() -> Dictionary:
 	# Sandbox safety: while the tutorial owns the canvas, the authoritative
 	# player state is the snapshot taken on entry — game saves and autosaves
@@ -12547,6 +13172,12 @@ func collect_save_state() -> Dictionary:
 		"elevation_section_offset_m": float(_graph_canvas.get("elevation_section_offset_m")) if _graph_canvas != null else 0.0,
 		"elev_view": (_graph_canvas.call("get_elev_view_state") as Dictionary) \
 				if _graph_canvas != null and _graph_canvas.has_method("get_elev_view_state") \
+				else {},
+		# Per-view camera slots. canvas_zoom/canvas_pan_* and elev_view above still
+		# describe the freeform and elevation slots respectively, so an OLD build
+		# reading this save still restores something sane.
+		"canvas_view_cams": (_graph_canvas.call("get_view_cam_state") as Dictionary) \
+				if _graph_canvas != null and _graph_canvas.has_method("get_view_cam_state") \
 				else {},
 		"elevation_exaggeration": float(_graph_canvas.get("elevation_exaggeration")) if _graph_canvas != null else 5.0,
 		"elev_show_dem_overlay": bool(_graph_canvas.get("elev_show_dem_overlay")) if _graph_canvas != null else true,
@@ -12728,8 +13359,14 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 	_sync_elev_slice_row()
 	_sync_site_tool_row()
 	var restored_view := str(data.get("view_mode", GraphSiteLayout.VIEW_FREEFORM))
+	# The Hydro Lab is item-bound and never restored as a sticky mode — a saved
+	# "siphon" view (quit with the Lab open) reopens as Elevation instead, so the
+	# graph can't boot into a Lab that carries no item id.
+	if restored_view == GraphSiteLayout.VIEW_SIPHON:
+		restored_view = GraphSiteLayout.VIEW_ELEVATION
+	_restore_view_cams(data, restored_view)
 	if restored_view in [GraphSiteLayout.VIEW_FREEFORM, GraphSiteLayout.VIEW_SITE,
-			GraphSiteLayout.VIEW_ELEVATION, GraphSiteLayout.VIEW_SIPHON]:
+			GraphSiteLayout.VIEW_ELEVATION]:
 		# Restore prefs only; `_sync_soi_preview_for_mode` no-ops world clip
 		# while the graph is hidden (first-person map load). Keep saved elev 3D.
 		call_deferred("_apply_graph_view_mode", restored_view,
@@ -12814,25 +13451,24 @@ func _tick_graph_renewables(delta: float) -> void:
 		if dd != null:
 			day = clampi(int(dd), 1, 31)
 
-	# Real weather inputs (shared by every item this tick): measured 10 m wind
-	# and precipitation-derived flow multipliers, when WeatherService covers
-	# the sim location. NAN / [] keep the items on their synthetic models.
+	# Real weather input (shared by every item this tick): measured 10 m wind
+	# when WeatherService covers the sim location. NAN keeps the synthetic model.
 	var real_wind_10m := NAN
-	var precip_mults: Array = []
 	var ws := get_node_or_null("/root/WeatherService")
 	if ws != null and m != null and ws.has_method("covers"):
 		var lat: Variant = m.get("latitude")
 		var lon: Variant = m.get("longitude")
 		if lat != null and lon != null and bool(ws.call("covers", float(lat), float(lon))):
 			real_wind_10m = float(ws.call("wind_speed_ms", month, day, hour))
-			precip_mults = ws.call("monthly_precip_multipliers") as Array
 
-	# Only the three generating types — via the model's shared type index instead
-	# of a full-list scan. Shallow spec copies: we only read/write scalar telemetry
-	# and rebuild nested arrays wholesale, so a deep copy per item per tick is waste.
+	# Only the generating types — via the model's shared type index instead of a
+	# full-list scan. Shallow spec copies: we only read/write scalar telemetry
+	# and rebuild nested arrays wholesale, so a deep copy per item per tick is
+	# waste. Hydro left this tick in Phase B of the Hydro Lab overhaul: every
+	# turbine is now a role=="siphon_hydro" processor computed by
+	# ResourceFlowEngine (_process_siphon_hydro / _process_spec_driven_hydro).
 	var _renewables: Array = []
 	_renewables.append_array(model.items_of_type("wind"))
-	_renewables.append_array(model.items_of_type("hydro"))
 	_renewables.append_array(model.items_of_type("panel"))
 	for item: Dictionary in _renewables:
 		var ty: String = item.get("type", "") as String
@@ -12850,40 +13486,13 @@ func _tick_graph_renewables(delta: float) -> void:
 		if ty == "panel":
 			continue
 		var kw := 0.0
-		var specs_dirty := false
 		# Packed 3D twin (PACKING_PLAN.md Phase 5): a crated turbine generates
 		# nothing — kw stays 0 and converges via the change gate below.
 		if bool(specs.get("packed_3d", false)):
 			pass
 		elif ty == "wind":
 			kw = WindTurbineSource.power_kw_from_graph_specs(specs, hour, real_wind_10m)
-		else:
-			# Prefer site-plan head / penstock / Q when hydro + intake have elevations.
-			# Culvert stage-discharge overrides watershed Q when the intake is a pond.
-			var head_specs := specs.duplicate(false)
-			var intake := _hydro_intake_item(item)
-			var culvert_snap := _hydro_section_snapshot_for_intake(intake)
-			var derived := _derived_hydro_head_m(item, intake)
-			if not culvert_snap.is_empty() and not bool(specs.get("lock_gross_head", false)):
-				derived = float(culvert_snap.get("gross_head_m", derived))
-			if derived >= 0.0 and not bool(specs.get("lock_gross_head", false)):
-				head_specs["gross_head_m"] = derived
-			var pen := _derived_hydro_penstock_m(item, intake)
-			if pen >= 0.0:
-				head_specs["penstock_length_m"] = pen
-				# Persist measured site distance so the inspector matches physics.
-				if absf(float(specs.get("penstock_length_m", 0.0)) - pen) >= 0.5:
-					specs["penstock_length_m"] = pen
-					specs_dirty = true
-			var q_est := -1.0
-			if not culvert_snap.is_empty() and not bool(specs.get("lock_design_flow", false)):
-				q_est = float(culvert_snap.get("live_q_lps", -1.0))
-			if q_est < 0.0:
-				q_est = _derived_hydro_flow_lps(item, intake, month, day, hour)
-			if q_est >= 0.0 and not bool(specs.get("lock_design_flow", false)):
-				head_specs["design_flow_lps"] = q_est
-			kw = HydroSource.power_kw_from_graph_specs(head_specs, month, precip_mults)
-		if absf(float(specs.get("current_output_kw", 0.0)) - kw) < 0.0005 and not specs_dirty:
+		if absf(float(specs.get("current_output_kw", 0.0)) - kw) < 0.0005:
 			continue
 		specs["current_output_kw"] = kw
 		model.update_item(iid, {"specs": specs})
@@ -14358,27 +14967,6 @@ func _tick_graph_solar_shading(delta: float) -> void:
 
 
 ## Pond + culvert Hydro Section snapshot for an intake item (or {}).
-func _hydro_section_snapshot_for_intake(intake: Dictionary) -> Dictionary:
-	if intake.is_empty() or model == null:
-		return {}
-	var specs: Dictionary = intake.get("specs", {}) as Dictionary
-	var tag := str(specs.get("osm_water_tag", specs.get("osm_tag", "")))
-	var tank := intake
-	if str(intake.get("type", "")) == "catchment" or not bool(specs.get("pond_storage", false)):
-		tank = HydroSectionCalculator.find_pond_tank(model, tag)
-	if tank.is_empty() and bool(specs.get("pond_storage", false)):
-		tank = intake
-	if tank.is_empty():
-		return {}
-	var level_m := HydroSectionCalculator.pond_level_m_from_tank(tank)
-	if is_nan(level_m):
-		return {}
-	var culverts := HydroSectionCalculator.culverts_from_model(model, tag)
-	if culverts.is_empty():
-		return {}
-	return HydroSectionCalculator.evaluate(level_m, culverts)
-
-
 ## Live Hydro Section readout (Elevation toolbar chip). Refreshed on renewables tick.
 func refresh_hydro_section_panel() -> void:
 	if _hydro_section_lbl == null:
@@ -14395,8 +14983,9 @@ func refresh_hydro_section_panel() -> void:
 	var level_m := HydroSectionCalculator.pond_level_m_from_tank(tank)
 	var culverts := HydroSectionCalculator.culverts_from_model(model, tag)
 	var hydro_specs := {}
-	for h in model.items_of_type("hydro") if model != null else []:
-		if h is Dictionary:
+	for h in model.items_of_type("processor") if model != null else []:
+		if h is Dictionary \
+				and str(((h as Dictionary).get("specs", {}) as Dictionary).get("role", "")) == "siphon_hydro":
 			hydro_specs = (h as Dictionary).get("specs", {}) as Dictionary
 			break
 	var cur_month := 6
@@ -14434,93 +15023,6 @@ func refresh_hydro_section_panel() -> void:
 				int(snap.get("open_count", 0)),
 				int(snap.get("culvert_count", 0)),
 			])
-
-
-## Connected water intake (resource tank or catchment) for a hydro node, or {}.
-func _hydro_intake_item(hydro_item: Dictionary) -> Dictionary:
-	if model == null:
-		return {}
-	var hid := str(hydro_item.get("id", ""))
-	for conn: Dictionary in model.connections:
-		if str(conn.get("target_item_id", "")) != hid \
-				and str(conn.get("source_item_id", "")) != hid:
-			continue
-		var other_id := str(conn.get("source_item_id", ""))
-		if other_id == hid:
-			other_id = str(conn.get("target_item_id", ""))
-		var other := model.get_item(other_id)
-		if other.is_empty():
-			continue
-		var otype := str(other.get("type", ""))
-		if otype == "resource" or otype == "catchment":
-			return other
-	return {}
-
-
-## Gross head from elevation_m delta between hydro node and its water intake.
-## Returns -1 when unavailable (keep manual gross_head_m).
-func _derived_hydro_head_m(hydro_item: Dictionary, intake: Dictionary = {}) -> float:
-	if model == null or not hydro_item.has("elevation_m"):
-		return -1.0
-	if intake.is_empty():
-		intake = _hydro_intake_item(hydro_item)
-	if intake.is_empty() or not intake.has("elevation_m"):
-		return -1.0
-	var hydro_e := float(hydro_item.get("elevation_m", 0.0))
-	var other_e := float(intake.get("elevation_m", 0.0))
-	# Intake above turbine → positive head.
-	return maxf(other_e - hydro_e, 0.0)
-
-
-## Horizontal site XY distance (m) between hydro and intake — used as penstock length.
-## Returns -1 when either node lacks site coords.
-func _derived_hydro_penstock_m(hydro_item: Dictionary, intake: Dictionary = {}) -> float:
-	if intake.is_empty():
-		intake = _hydro_intake_item(hydro_item)
-	if intake.is_empty():
-		return -1.0
-	if not GraphSiteLayout.has_site_coords(hydro_item) \
-			or not GraphSiteLayout.has_site_coords(intake):
-		return -1.0
-	var a := GraphSiteLayout.site_xz(hydro_item)
-	var b := GraphSiteLayout.site_xz(intake)
-	return maxf(a.distance_to(b), 1.0)
-
-
-## Estimate design flow (L/s) from watershed upstream area × precip when loader
-## exposes watershed_upstream_area_m2 and WeatherService has precip.
-## Returns -1 to keep the manual design_flow_lps.
-func _derived_hydro_flow_lps(hydro_item: Dictionary, intake: Dictionary,
-		month: int, day: int, hour: float) -> float:
-	if intake.is_empty():
-		intake = _hydro_intake_item(hydro_item)
-	if intake.is_empty() or not GraphSiteLayout.has_site_coords(intake):
-		return -1.0
-	var main := _get_scene_main_node()
-	var loader := _find_terrain_loader(main) if main != null else null
-	if loader == null or not loader.has_method("watershed_upstream_area_m2"):
-		return -1.0
-	var soi := get_node_or_null("/root/SoiService")
-	if soi == null or not soi.has_method("world_center"):
-		return -1.0
-	var center: Vector3 = soi.call("world_center") as Vector3
-	var wxz := GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(intake), center)
-	var area_m2 := float(loader.call("watershed_upstream_area_m2", wxz.x, wxz.y))
-	if area_m2 < 50.0:
-		return -1.0
-	var ws := get_node_or_null("/root/WeatherService")
-	if ws == null or not ws.has_method("rain_rate_mmh"):
-		return -1.0
-	var precip_mm := float(ws.call("rain_rate_mmh", month, day, hour))
-	if is_nan(precip_mm) or precip_mm < 0.0:
-		return -1.0
-	# Runoff coeff 0.35 (mixed watershed); mm/h over m² → L/s:
-	# Q_lps = area_m2 * (mm/h) * 0.35 / 3600
-	var q := area_m2 * precip_mm * 0.35 / 3600.0
-	# Floor tiny drizzle so turbines don't show noise; clamp runaway storms.
-	if q < 0.05:
-		return -1.0
-	return clampf(q, 0.05, 500.0)
 
 
 # ---------------------------------------------------------------------------
