@@ -273,6 +273,24 @@ const PROCESSORS: Array = [
 		},
 	},
 	{
+		# Precious Plastic injection machine (~1.5–2 kW barrel heaters + manual
+		# lever). ~150 g parts on a ~5 min heat-inject cycle → 12 parts/h from
+		# 1.8 kg/h of flake. io_absolute: parts/h vs kg/h must not min-squash.
+		# Closes the plastic loop the shredder starts: waste → flake → parts
+		# (the sheet press and beam extruder cover the big-format outputs).
+		"type": "processor", "label": "PP Injection Molder", "icon": "🧩",
+		"width": 150.0, "height": 140.0,
+		"specs": {
+			"name": "PP Injection Molder", "watts": 1800.0, "cost": 1400.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 150.0,
+			"io_absolute": true,
+			"daily_note": "Flake 1.8 kg/h + 1.8 kW → 12 parts/h (~150 g each, ~5 min cycles). Precious Plastic injection workspace.",
+			"inputs": [{"kind": "plastic_flake", "rate": 1.8, "unit": "kg/h"}],
+			"outputs": [{"kind": "finished_part", "rate": 12.0, "unit": "units/h"}],
+		},
+	},
+	{
 		"type": "processor", "label": "Biochar Reactor", "icon": "🔥",
 		"width": 150.0, "height": 140.0,
 		"specs": {
@@ -347,6 +365,89 @@ const PROCESSORS: Array = [
 		},
 	},
 	{
+		# Undersink booster-pump reverse osmosis (Aquatec CDP 8800-class pump +
+		# 200 GPD TFC membrane). io_absolute: the concentrate port's smaller
+		# rate must not min-squash the permeate (mass balances 40 = 30 + 10).
+		# Recovery ~75% is the pumped-RO figure; unpumped undersink units run
+		# nearer 25%. Specific energy 36 W / 30 L/h = 1.2 Wh/L — inside the
+		# 0.5–2.5 kWh/m³ brackish-RO range (Fritzmann et al. 2007, Desalination
+		# 216) with small-unit overhead. Concentrate is routed to greywater —
+		# it is feed water carrying the rejected solutes, reusable the same way.
+		"type": "processor", "label": "RO Purifier", "icon": "💠",
+		"width": 140.0, "height": 130.0,
+		"specs": {
+			"name": "RO Purifier", "watts": 36.0, "cost": 260.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 1.2,
+			"io_absolute": true,
+			"daily_note": "Feed 40 L/h + 36 W → 30 L/h potable permeate + 10 L/h concentrate (to greywater). Pumped recovery ~75%.",
+			"inputs": [{"kind": "water", "rate": 40.0, "unit": "L/h"}],
+			"outputs": [
+				{"kind": "water", "rate": 30.0, "unit": "L/h"},
+				{"kind": "greywater", "rate": 10.0, "unit": "L/h"},
+			],
+		},
+	},
+	{
+		# Compressor (dew-point) atmospheric water generator. 300 Wh/L is the
+		# industry rating point at 26.7 °C / 60% RH (AHAM-style test
+		# conditions; Watergen/EcoloBlue home units quote 250–350 Wh/L there).
+		# Constant-rate model: real yield collapses below ~30% RH / ~15 °C —
+		# noted rather than simulated, matching the catalog's other
+		# nameplate-rate machines.
+		"type": "processor", "label": "Atmospheric Water Gen", "icon": "🌫",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Atmospheric Water Generator", "watts": 300.0, "cost": 1500.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 300.0,
+			"daily_note": "300 W → 1 L/h (~24 L/day) condensed from air at the 26.7 °C / 60% RH rating point. Yield collapses in dry or cold air (not simulated).",
+			"inputs": [],
+			"outputs": [{"kind": "water", "rate": 1.0, "unit": "L/h"}],
+		},
+	},
+	{
+		# Countertop electric distiller (580 W, ~1 gal per 5.5 h). Distillation
+		# treats what the greywater filter cannot (dissolved solids, biologicals)
+		# at the cost of the latent heat of vaporization: 2257 kJ/kg = 627 Wh/L
+		# is the thermodynamic floor at 100 °C; 580 W / 0.7 L/h ≈ 830 Wh/L
+		# includes sensible heat + losses. The 0.1 L/h gap is uncondensed vapor.
+		"type": "processor", "label": "Water Distiller", "icon": "⚗",
+		"width": 140.0, "height": 130.0,
+		"specs": {
+			"name": "Water Distiller", "watts": 580.0, "cost": 120.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 830.0,
+			"io_absolute": true,
+			"daily_note": "Greywater 0.8 L/h + 580 W → 0.7 L/h distilled. Latent heat alone is 627 Wh/L — distillation is the expensive, treat-anything option.",
+			"inputs": [{"kind": "greywater", "rate": 0.8, "unit": "L/h"}],
+			"outputs": [{"kind": "water", "rate": 0.7, "unit": "L/h"}],
+		},
+	},
+	{
+		# Sunlit greenhouse bed — circulation/irrigation pumps only, no grow
+		# lights. Water ~20 L per kg of leafy produce is the hydroponic figure
+		# (Barbosa et al. 2015, Int J Env Res Public Health 12: ~20 L/kg vs
+		# ~250 L/kg field lettuce); 120 W / 0.1 kg/h = 1.2 kWh/kg is pump-only —
+		# fully lit indoor CEA runs ~25 kWh/kg and is deliberately NOT this
+		# preset. Complements the seasonal food_forest path with a steady
+		# year-round trickle that consumes the compost loop's nutrients.
+		"type": "processor", "label": "Greenhouse Grow Bed", "icon": "🥬",
+		"width": 150.0, "height": 140.0,
+		"specs": {
+			"name": "Greenhouse Grow Bed", "watts": 120.0, "cost": 900.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 1200.0,
+			"io_absolute": true,
+			"daily_note": "Water 2 L/h + nutrients 0.05 kg/h + 120 W of pumps → 0.1 kg/h food (~2.4 kg/day). Sunlit bed — no grow-light energy modeled.",
+			"inputs": [
+				{"kind": "water", "rate": 2.0, "unit": "L/h"},
+				{"kind": "nutrients", "rate": 0.05, "unit": "kg/h"},
+			],
+			"outputs": [{"kind": "food", "rate": 0.1, "unit": "kg/h"}],
+		},
+	},
+	{
 		# Camp kitchen — the meal loop's producer. Role "kitchen" is
 		# deliberately NOT in ResourceFlowEngine's specialized_job list, so it
 		# gets the whole ProcessRecipe machinery (the meal_prep builtin) for
@@ -384,6 +485,28 @@ const PROCESSORS: Array = [
 				{"kind": "blackwater", "rate": 1.0, "unit": "L/h"},
 			],
 			"outputs": [{"kind": "nutrients", "rate": 1.5, "unit": "kg/h"}],
+		},
+	},
+	{
+		# Passive mixing bed: charged biochar + finished compost → growing
+		# medium. 10% biochar by mass sits inside the IBI soil-amendment
+		# guidance band (5–20% by volume; biochar is roughly half compost's
+		# bulk density, so 10% by mass ≈ mid-band by volume). Mass-exact:
+		# 0.5 + 4.5 = 5.0. Closes the pyrolysis loop — the biochar reactor's
+		# main product finally has a consumer, and the output feeds planting.
+		"type": "processor", "label": "Soil Blender", "icon": "🪴",
+		"width": 140.0, "height": 130.0,
+		"specs": {
+			"name": "Soil Blender", "watts": 0.0, "cost": 60.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"io_absolute": true,
+			"daily_note": "Biochar 0.5 kg/h + compost nutrients 4.5 kg/h → 5 kg/h growing medium (10% char by mass, IBI amendment band).",
+			"inputs": [
+				{"kind": "biochar", "rate": 0.5, "unit": "kg/h"},
+				{"kind": "nutrients", "rate": 4.5, "unit": "kg/h"},
+			],
+			"outputs": [{"kind": "soil", "rate": 5.0, "unit": "kg/h"}],
 		},
 	},
 	{
@@ -624,6 +747,26 @@ const RESOURCES: Array = [
 			"name": "Plastic Flake Store", "resource_kind": "plastic_flake",
 			"capacity": "100 kg", "capacity_qty": 100.0, "capacity_unit": "kg",
 			"level": 0.0, "cost": 80.0,
+		},
+	},
+	{
+		# The injection molder's output tank — parts count in units, not mass.
+		"type": "resource", "label": "Finished Parts Bin", "icon": "🧩",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Finished Parts Bin", "resource_kind": "finished_part",
+			"capacity": "200 units", "capacity_qty": 200.0, "capacity_unit": "units",
+			"level": 0.0, "cost": 30.0,
+		},
+	},
+	{
+		# The Soil Blender's output store; feeds planting/grow beds.
+		"type": "resource", "label": "Soil Bin", "icon": "🪴",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Soil Bin", "resource_kind": "soil",
+			"capacity": "500 kg", "capacity_qty": 500.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 50.0,
 		},
 	},
 	{

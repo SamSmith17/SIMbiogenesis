@@ -12,6 +12,7 @@ const PbiBiomassScript := preload("res://system_graph/pbi_biomass.gd")
 const DcPowerWiringScript := preload("res://system_graph/dc_power_wiring.gd")
 const GraphHubPortsScript := preload("res://system_graph/graph_hub_ports.gd")
 const GraphPortServiceScript := preload("res://system_graph/graph_port_service.gd")
+const ComponentPresetsScript := preload("res://system_graph/data/component_presets.gd")
 
 var _failures: int = 0
 var _checks: int = 0
@@ -64,6 +65,9 @@ func _initialize() -> void:
 	_test_stream_intake_supply()
 	_test_penstock_conn_authority()
 	_test_no_head_zero_flow()
+	_test_isru_catalog_kinds()
+	_test_ro_purifier_mass_balance()
+	_test_soil_blender_passive()
 	if _failures == 0:
 		print("RESOURCE SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -77,6 +81,143 @@ func _check(label: String, ok: bool, detail: String = "") -> void:
 	if not ok:
 		_failures += 1
 		print("  FAIL: %s  %s" % [label, detail])
+
+
+func _preset_specs(label: String) -> Dictionary:
+	for preset: Dictionary in ComponentPresetsScript.PROCESSORS:
+		if str(preset.get("label", "")) == label:
+			return (preset.get("specs", {}) as Dictionary).duplicate(true)
+	return {}
+
+
+## ISRU catalog integrity: every processor preset's port kinds must be
+## registered in ResourceKinds — a typo'd kind ships a processor whose port
+## can never legally wire, and nothing else checks the catalog as a whole.
+func _test_isru_catalog_kinds() -> void:
+	for preset: Dictionary in ComponentPresetsScript.PROCESSORS:
+		var label := str(preset.get("label", "?"))
+		var specs: Dictionary = preset.get("specs", {}) as Dictionary
+		for io_key: String in ["inputs", "outputs"]:
+			for io: Variant in (specs.get(io_key, []) as Array):
+				var kind := str((io as Dictionary).get("kind", ""))
+				_check("preset '%s' %s kind '%s' registered" % [label, io_key, kind],
+					ResourceKindsScript.has_kind(kind), "unregistered resource kind")
+	_check("soil kind registered", ResourceKindsScript.has_kind("soil"))
+	_check("soil alias growing_medium",
+		ResourceKindsScript.kinds_compatible("soil", "growing_medium"))
+	_check("soil/biomass distinct",
+		not ResourceKindsScript.kinds_compatible("soil", "biomass"))
+	_check("soil/mud distinct",
+		not ResourceKindsScript.kinds_compatible("soil", "mud"))
+	# The new water/greenhouse/materials presets exist and opted into absolute
+	# port rates where their ports differ (the min+proportion path would
+	# squash them — see _process_processor's io_absolute comment).
+	for label2: String in ["RO Purifier", "Water Distiller", "Greenhouse Grow Bed",
+			"PP Injection Molder", "Soil Blender"]:
+		var s := _preset_specs(label2)
+		_check("preset '%s' exists" % label2, not s.is_empty())
+		_check("preset '%s' io_absolute" % label2, bool(s.get("io_absolute", false)))
+	_check("preset 'Atmospheric Water Gen' exists",
+		not _preset_specs("Atmospheric Water Gen").is_empty())
+
+
+## RO Purifier (io_absolute, AC-powered): each port moves its EXACT authored
+## rate — the 10 L/h concentrate must not min-squash the 30 L/h permeate —
+## and the mass balances: 40 L feed = 30 L permeate + 10 L to greywater.
+func _test_ro_purifier_mass_balance() -> void:
+	var specs := _preset_specs("RO Purifier")
+	if specs.is_empty():
+		_check("RO preset exists", false)
+		return
+	specs["current_state"] = "on"
+	var model = GraphModelScript.new()
+	model.add_item({"id": "feed", "type": "resource", "specs": {
+		"name": "Feed Tank", "resource_kind": "water",
+		"capacity_qty": 1000.0, "capacity_unit": "L", "level": 1.0}})
+	model.add_item({"id": "ro", "type": "processor", "specs": specs})
+	model.add_item({"id": "perm", "type": "resource", "specs": {
+		"name": "Permeate", "resource_kind": "water",
+		"capacity_qty": 1000.0, "capacity_unit": "L", "level": 0.0}})
+	model.add_item({"id": "conc", "type": "resource", "specs": {
+		"name": "Concentrate", "resource_kind": "greywater",
+		"capacity_qty": 1000.0, "capacity_unit": "L", "level": 0.0}})
+	model.add_item({"id": "ctrl", "type": "controller", "specs": {"name": "Controller"}})
+	model.add_connection({"id": "c0", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "feed", "source_handle_id": "output",
+		"target_item_id": "ro", "target_handle_id": "res_in_0"})
+	model.add_connection({"id": "c1", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "ro", "source_handle_id": "res_out_0",
+		"target_item_id": "perm", "target_handle_id": "input"})
+	model.add_connection({"id": "c2", "polarity": "resource", "resource_type": "greywater",
+		"source_item_id": "ro", "source_handle_id": "res_out_1",
+		"target_item_id": "conc", "target_handle_id": "input"})
+	model.add_connection({"id": "c_pwr", "polarity": "ac",
+		"source_item_id": "ctrl", "source_handle_id": "acOutput",
+		"target_item_id": "ro", "target_handle_id": "power_in"})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.power_available_override = 1
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var feed := _tank_level(model, "feed")
+	var perm := _tank_level(model, "perm")
+	var conc := _tank_level(model, "conc")
+	_check("RO 1h: feed -40 L", absf(feed - 0.96) < 0.005, "feed=%.4f" % feed)
+	_check("RO 1h: permeate +30 L", absf(perm - 0.03) < 0.005, "perm=%.4f" % perm)
+	_check("RO 1h: concentrate +10 L", absf(conc - 0.01) < 0.005, "conc=%.4f" % conc)
+	# Mass conservation across the membrane (in L; all three are water-dimension).
+	var moved_in := (1.0 - feed) * 1000.0
+	var moved_out := perm * 1000.0 + conc * 1000.0
+	_check("RO 1h: mass conserved", absf(moved_in - moved_out) < 0.5,
+		"in=%.2f out=%.2f" % [moved_in, moved_out])
+
+
+## Soil Blender (passive, io_absolute): runs with no power wire at all, and
+## the blend is mass-exact — 0.5 kg biochar + 4.5 kg nutrients → 5.0 kg soil.
+func _test_soil_blender_passive() -> void:
+	var specs := _preset_specs("Soil Blender")
+	if specs.is_empty():
+		_check("Soil Blender preset exists", false)
+		return
+	specs["current_state"] = "on"
+	var model = GraphModelScript.new()
+	model.add_item({"id": "char", "type": "resource", "specs": {
+		"name": "Biochar Store", "resource_kind": "biochar",
+		"capacity_qty": 50.0, "capacity_unit": "kg", "level": 1.0}})
+	model.add_item({"id": "nutr", "type": "resource", "specs": {
+		"name": "Nutrient Store", "resource_kind": "nutrients",
+		"capacity_qty": 50.0, "capacity_unit": "kg", "level": 1.0}})
+	model.add_item({"id": "blend", "type": "processor", "specs": specs})
+	model.add_item({"id": "soil", "type": "resource", "specs": {
+		"name": "Soil Bin", "resource_kind": "soil",
+		"capacity_qty": 50.0, "capacity_unit": "kg", "level": 0.0}})
+	model.add_connection({"id": "c0", "polarity": "resource", "resource_type": "biochar",
+		"source_item_id": "char", "source_handle_id": "output",
+		"target_item_id": "blend", "target_handle_id": "res_in_0"})
+	model.add_connection({"id": "c1", "polarity": "resource", "resource_type": "nutrients",
+		"source_item_id": "nutr", "source_handle_id": "output",
+		"target_item_id": "blend", "target_handle_id": "res_in_1"})
+	model.add_connection({"id": "c2", "polarity": "resource", "resource_type": "soil",
+		"source_item_id": "blend", "source_handle_id": "res_out_0",
+		"target_item_id": "soil", "target_handle_id": "input"})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	# Headless fail-closed gate: _processor_has_power bails with no host even
+	# for passive machines. The passive contract under test is "no AC WIRE
+	# required" — note the graph above has no controller and no power_in wire.
+	engine.power_available_override = 1
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var char_l := _tank_level(model, "char")
+	var nutr_l := _tank_level(model, "nutr")
+	var soil_l := _tank_level(model, "soil")
+	_check("blend 1h: biochar -0.5 kg", absf(char_l - 0.99) < 0.002, "char=%.4f" % char_l)
+	_check("blend 1h: nutrients -4.5 kg", absf(nutr_l - 0.91) < 0.002, "nutr=%.4f" % nutr_l)
+	_check("blend 1h: soil +5.0 kg", absf(soil_l - 0.10) < 0.002, "soil=%.4f" % soil_l)
+	var mass_in := (1.0 - char_l) * 50.0 + (1.0 - nutr_l) * 50.0
+	var mass_out := soil_l * 50.0
+	_check("blend 1h: mass exact", absf(mass_in - mass_out) < 0.05,
+		"in=%.3f out=%.3f" % [mass_in, mass_out])
 
 
 func _test_step_level() -> void:

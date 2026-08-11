@@ -118,6 +118,18 @@ const BUILTIN: Dictionary = {
 		"abbrev": "ðŸ”¥",
 		"flow_ref_rate": 8.0,
 	},
+	"soil": {
+		# Growing medium out of the Soil Blender (biochar + compost). Distinct
+		# from `mud` (construction material) and `biomass` (unprocessed plant
+		# matter) — this is the plantable end product of the pyrolysis+compost
+		# loop, measured by mass like its two ingredients.
+		"display": "Soil / Growing Medium",
+		"color": Color(0.596, 0.463, 0.322, 1.0),
+		"unit": "kg",
+		"abbrev": "🪴",
+		"flow_ref_rate": 20.0,
+		"aliases": ["growing_medium", "potting_soil"],
+	},
 	"hot_water": {
 		"display": "Hot Water",
 		"color": Color(0.937, 0.420, 0.420, 1.0),
@@ -556,6 +568,8 @@ static func infer_kind_from_name(name: String) -> String:
 		return "plastic_waste"
 	if "biochar" in n:
 		return "biochar"
+	if "soil" in n or "growing medium" in n or "potting" in n:
+		return "soil"
 	if "biomass" in n:
 		return "biomass"
 	if "manure" in n or "dung" in n:
