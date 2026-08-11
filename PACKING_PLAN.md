@@ -86,8 +86,16 @@ offline selftest per project convention.
 > kw = 0), CSP + heliostat ticks (empty result dict zeroes all telemetry
 > via the .get defaults), and `ResourceFlowEngine._processor_switched_on`
 > (one guard covers every processor path — a crated machine can't run,
-> whatever the switch says). Still ungated: individual panel items and
-> battery/controller electrical presence (deeper; noted, not forgotten).
+> whatever the switch says). **The electrical layer is CLOSED too**
+> (verified 2026-08-11 — this note previously said "still ungated" and was
+> stale): `PvElectrical.unit_voc` returns 0 for a packed panel,
+> `GraphDcElectrical.is_packed` gates bank formation, controller liveness
+> AND the current-throttle wattage (all selftest-pinned in
+> `graph_electrical_selftest._test_packed_gate`), and the SolarUI capacity
+> aggregate skips packed panels. The display sums followed 2026-08-11:
+> battery kWh / controller max-PV watts / average bank SOC skip crated
+> items, while COST keeps counting them — you own a crated battery, it
+> just isn't wired.
 >
 > **Phase 6 v1 LANDED (2026-08-03):** `core/packing/unpack_scenario.gd` —
 > delivery scenarios spawn as REAL world state (container prop + one
@@ -481,14 +489,22 @@ Roadmap for the full vision (each step small and testable):
 
 ## Phase 7 — Lofty: the real-world camp tool
 
-- **Export the pack plan**: printable manifest + per-layer load diagrams +
-  load order (Site Report export pattern → HTML/PNG). Share via the `.esim`
-  share-code path so a camp lead sends the truck crew the plan.
-- **Arbitrary gear**: a "generic item" entry form (label + dims + weight +
-  flags) so bikes, coolers, and kitchen boxes — things with no game model —
-  join the manifest. This is the line between "game feature" and "tool my
-  camp actually uses."
-- Later/maybe: photo-reference measuring, cut-list-style tote labels,
+> **First slice LANDED (2026-08-11):** `core/packing/pack_manifest_export.gd`
+> (`PackManifestExport`, pure static — selftest-pinned in
+> `_test_manifest_export`) builds the printable manifest from the Lab's live
+> layout: LOAD ORDER sorted nose-first / floor-first (never asks a crew to
+> stack onto a box not yet placed; unload = read bottom-up), per-item
+> dims/mass/position/THIS-SIDE-UP/do-not-stack notes, the didn't-fit table
+> with a door verdict, and totals (fill %, mass vs payload, load-centre
+> fraction). Exports CSV + JSON via a FileDialog to `user://exports`
+> (LinkageBom guide pattern — no PDF in GDScript). **Custom gear landed
+> too**: the Lab's "➕ Item" form (name, dims cm, mass, count, stackable /
+> this-side-up) mints an estimated-source PackedSpec, joins the live session
+> immediately (append-only — placements reference units by index), and
+> persists per site in `user://maps/packing_custom_items.json` so site cargo
+> always includes it on reopen.
+- Still open: per-layer load DIAGRAMS (HTML/PNG), `.esim` share of a pack
+  plan, photo-reference measuring, cut-list-style tote labels,
   multi-vehicle splits ("what goes in the truck vs. the trailer").
 
 ---

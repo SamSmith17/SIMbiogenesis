@@ -10251,12 +10251,16 @@ func _build_review_modal() -> Control:
 			if bool(item.get("is_virtual", false)):
 				continue
 			var sp := item.get("specs", {}) as Dictionary
-			match item.get("type", ""):
-				"battery":
-					bat_kwh_total += float(sp.get("kwh", 0.0))
-					bat_v_set      = float(sp.get("voltage", 48.0))
-				"controller":
-					ctrl_max_watts += float(sp.get("max_pv_watts", 0.0))
+			# Crated gear contributes no CAPACITY (same rule as the panel
+			# aggregate + GraphDcElectrical.is_packed) but its cost still
+			# counts — you own it either way.
+			if not bool(sp.get("packed_3d", false)):
+				match item.get("type", ""):
+					"battery":
+						bat_kwh_total += float(sp.get("kwh", 0.0))
+						bat_v_set      = float(sp.get("voltage", 48.0))
+					"controller":
+						ctrl_max_watts += float(sp.get("max_pv_watts", 0.0))
 			total_cost += float(sp.get("cost", 0.0))
 			if not bool(item.get("is_virtual", false)):
 				user_items += 1
@@ -12727,6 +12731,8 @@ func _refresh_telemetry() -> void:
 		var itype: String    = item.get("type",  "") as String
 		var specs: Dictionary = item.get("specs", {})
 		var cost: float      = float(specs.get("cost", 0.0))
+		# Crated gear: cost counts (you own it), capacity does not.
+		var packed: bool     = bool(specs.get("packed_3d", false))
 
 		match itype:
 			"panel":
@@ -12736,14 +12742,16 @@ func _refresh_telemetry() -> void:
 					cost_panels += cost
 
 			"battery", "smartbattery":
-				bat_kwh     += float(specs.get("kwh",     0.0))
-				var bv: float = float(specs.get("voltage", 0.0))
-				if bv > 0.0 and not bat_v_set.has(bv):
-					bat_v_set.append(bv)
+				if not packed:
+					bat_kwh     += float(specs.get("kwh",     0.0))
+					var bv: float = float(specs.get("voltage", 0.0))
+					if bv > 0.0 and not bat_v_set.has(bv):
+						bat_v_set.append(bv)
 				cost_batteries += cost
 
 			"controller":
-				ctrl_max_watts += float(specs.get("max_pv_watts", 0.0))
+				if not packed:
+					ctrl_max_watts += float(specs.get("max_pv_watts", 0.0))
 				cost_controllers += cost
 
 			_:
@@ -12975,6 +12983,10 @@ func _average_graph_battery_soc() -> float:
 		if itype not in ["battery", "smartbattery"]:
 			continue
 		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		# A crated battery is not part of the bank — its SOC must not drag
+		# the displayed average.
+		if bool(specs.get("packed_3d", false)):
+			continue
 		var kwh := float(specs.get("kwh", 0.0))
 		if kwh <= 0.0:
 			continue

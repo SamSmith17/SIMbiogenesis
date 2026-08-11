@@ -43,11 +43,77 @@ func _initialize() -> void:
 	_test_unpack_scenario()
 	_test_stow_plan()
 	_test_crew_plan()
+	_test_manifest_export()
 	if _fails == 0:
 		print("PACKING SELFTEST PASS  (%d checks)" % _checks)
 	else:
 		print("PACKING SELFTEST FAIL  (%d of %d checks failed)" % [_fails, _checks])
 	quit(1 if _fails > 0 else 0)
+
+
+## PackManifestExport (Phase 7): load order is nose-first / floor-first (the
+## physical order — never asks a crew to stack onto a box not yet placed),
+## totals are mass-exact, unplaced items are reported with a door verdict,
+## and the CSV round-trips the same numbers.
+func _test_manifest_export() -> void:
+	var entry := ContainerCatalog.find("uhaul_15")
+	_check("manifest: uhaul_15 entry resolves", not entry.is_empty())
+	if entry.is_empty():
+		return
+	var units: Array = [
+		{"label": "Heavy crate", "w_m": 1.0, "d_m": 1.0, "h_m": 1.0,
+			"mass_kg": 100.0, "stackable": true, "this_side_up": false},
+		{"label": "Top box", "w_m": 0.5, "d_m": 0.5, "h_m": 0.5,
+			"mass_kg": 20.0, "stackable": true, "this_side_up": true},
+		{"label": "Door-side crate", "w_m": 1.0, "d_m": 1.0, "h_m": 1.0,
+			"mass_kg": 60.0, "stackable": false, "this_side_up": false},
+		{"label": "Left behind, with comma", "w_m": 9.0, "d_m": 9.0, "h_m": 9.0,
+			"mass_kg": -1.0, "stackable": true, "this_side_up": false},
+	]
+	# Hand-authored placements: one on the floor at the nose, one stacked on
+	# it, one on the floor by the door. Index 3 stays unplaced (oversized).
+	var placed: Array = [
+		{"unit_idx": 2, "pos": Vector3(0.0, 0.0, 2.5), "size": Vector3(1.0, 1.0, 1.0)},
+		{"unit_idx": 1, "pos": Vector3(0.2, 1.0, 0.2), "size": Vector3(0.5, 0.5, 0.5)},
+		{"unit_idx": 0, "pos": Vector3(0.0, 0.0, 0.0), "size": Vector3(1.0, 1.0, 1.0)},
+	]
+	var m := PackManifestExport.build(entry, units, placed)
+	var loaded: Array = m.get("loaded", []) as Array
+	_check("manifest: 3 loaded rows", loaded.size() == 3)
+	var order: Array = []
+	for r: Variant in loaded:
+		order.append(str((r as Dictionary).get("label", "")))
+	_check("manifest: nose floor box loads first, stacked second, door last",
+		order == ["Heavy crate", "Top box", "Door-side crate"], str(order))
+	_check("manifest: load_seq is 1..n",
+		int((loaded[0] as Dictionary).get("load_seq", 0)) == 1
+		and int((loaded[2] as Dictionary).get("load_seq", 0)) == 3)
+	var t: Dictionary = m.get("totals", {}) as Dictionary
+	_check("manifest: mass sums placed only (180 kg)",
+		absf(float(t.get("mass_kg", 0.0)) - 180.0) < 0.01,
+		"mass=%.2f" % float(t.get("mass_kg", 0.0)))
+	_check("manifest: payload ok at 180 kg", bool(t.get("payload_ok", false)))
+	var unplaced: Array = m.get("unplaced", []) as Array
+	_check("manifest: 1 unplaced row", unplaced.size() == 1)
+	if unplaced.size() == 1:
+		_check("manifest: oversized item flagged at the door",
+			not bool((unplaced[0] as Dictionary).get("fits_door", true)))
+	# CoM sits between the two floor crates, biased toward the nose pair.
+	var com := float(t.get("com_len_frac", 0.0))
+	_check("manifest: CoM fraction sane (0..0.5)", com > 0.0 and com < 0.5,
+		"com=%.3f" % com)
+	# JSON-cleanliness: build() must emit no Vector3s (they stringify badly).
+	var json := JSON.stringify(m)
+	_check("manifest: JSON round-trips", JSON.parse_string(json) is Dictionary)
+	_check("manifest: no Vector3 leaked into JSON", not json.contains("("),
+		json.substr(0, 200))
+	var csv := PackManifestExport.to_csv(m)
+	_check("manifest CSV: has load order header", csv.contains("LOAD ORDER"))
+	_check("manifest CSV: comma label quoted",
+		csv.contains("\"Left behind, with comma\""))
+	_check("manifest CSV: this-side-up note present", csv.contains("THIS SIDE UP"))
+	_check("manifest CSV: do-not-stack note present", csv.contains("do not stack on"))
+	_check("manifest CSV: totals present", csv.contains("Load mass,180 kg"))
 
 
 func _test_normalize() -> void:

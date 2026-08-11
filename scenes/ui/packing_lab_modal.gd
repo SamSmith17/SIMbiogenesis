@@ -52,6 +52,9 @@ static func open_site_cargo(tree: SceneTree) -> void:
 		if bool(((fr as Dictionary)["result"] as Dictionary)["fit"]):
 			preselect = str((fr as Dictionary)["id"])
 			break
+	# Player-entered custom items (gear the game doesn't model) ride along
+	# with the site cargo — they are part of what the truck must hold.
+	units.append_array(_load_custom_units(_site_token_for(tree.current_scene)))
 	var modal: CanvasLayer = load("res://scenes/ui/packing_lab_modal.gd").new()
 	tree.root.add_child(modal)
 	modal.call("open_with_units", units, "Site cargo (%d units)" % units.size(),
@@ -62,6 +65,11 @@ const SIDEBAR_W := 360.0
 ## Per-site hand-packed layouts: one JSON, keyed site|container|kit so the
 ## same truck at the same site reopens exactly as you left it.
 const LAYOUTS_PATH := "user://maps/packing_layouts.json"
+## Player-entered custom cargo (PACKING_PLAN.md Phase 7): gear the game does
+## not model, per site, so the manifest covers the WHOLE load.
+const CUSTOM_ITEMS_PATH := "user://maps/packing_custom_items.json"
+## Manifest exports land here by default (LinkageBom guide precedent).
+const EXPORT_DIR := "user://exports"
 
 var _restoring := false
 
@@ -87,6 +95,19 @@ var _deliver_lbl: Label = null
 var _item_list: ItemList = null
 var _stats: RichTextLabel = null
 var _hint: Label = null
+
+# Manifest export + custom-item entry (Phase 7).
+var _save_dialog: FileDialog = null
+var _pending_export := ""
+var _custom_popup: PanelContainer = null
+var _ci_name: LineEdit = null
+var _ci_w: SpinBox = null
+var _ci_d: SpinBox = null
+var _ci_h: SpinBox = null
+var _ci_mass: SpinBox = null
+var _ci_count: SpinBox = null
+var _ci_stackable: CheckBox = null
+var _ci_tsu: CheckBox = null
 
 var _yaw := -0.7
 var _pitch := -0.55
@@ -170,16 +191,82 @@ func _set_container(container_id: String) -> void:
 ## Site token from the live map (lat/lon), else the scene name — layouts are
 ## a property of the site, like every other per-site artifact.
 func _layout_key() -> String:
-	var site := "global"
-	var scene := get_tree().current_scene
-	if scene != null:
-		var lat: Variant = scene.get("latitude")
-		var lon: Variant = scene.get("longitude")
-		if lat != null and lon != null:
-			site = "%.4f_%.4f" % [float(lat), float(lon)]
-		else:
-			site = str(scene.name)
-	return "%s|%s|%s" % [site, str(_entry.get("id", "")), _kit_id]
+	return "%s|%s|%s" % [_site_token_for(get_tree().current_scene),
+		str(_entry.get("id", "")), _kit_id]
+
+
+static func _site_token_for(scene: Node) -> String:
+	if scene == null:
+		return "global"
+	var lat: Variant = scene.get("latitude")
+	var lon: Variant = scene.get("longitude")
+	if lat != null and lon != null:
+		return "%.4f_%.4f" % [float(lat), float(lon)]
+	return str(scene.name)
+
+
+# ---------------------------------------------------------------------------
+# Custom cargo (Phase 7): player-entered items, persisted per site
+# ---------------------------------------------------------------------------
+
+static func _load_custom_file() -> Dictionary:
+	if not FileAccess.file_exists(CUSTOM_ITEMS_PATH):
+		return {"version": 1, "sites": {}}
+	var f := FileAccess.open(CUSTOM_ITEMS_PATH, FileAccess.READ)
+	if f == null:
+		return {"version": 1, "sites": {}}
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	f.close()
+	if parsed is Dictionary and (parsed as Dictionary).has("sites"):
+		return parsed as Dictionary
+	return {"version": 1, "sites": {}}
+
+
+## Expanded solver units (one dict per physical box) for a site's saved
+## custom items — same shape CampManifest.expand_for_solver emits, plus a
+## `custom: true` marker so sessions can tell them apart.
+static func _load_custom_units(site: String) -> Array:
+	var out: Array = []
+	var sites: Dictionary = _load_custom_file().get("sites", {}) as Dictionary
+	for entry: Variant in (sites.get(site, []) as Array):
+		var e := entry as Dictionary
+		var spec := PackedSpec.normalize(e.get("spec", {}) as Dictionary)
+		if spec.is_empty():
+			continue
+		for _i: int in maxi(int(spec.get("count", 1)), 1):
+			var unit := spec.duplicate()
+			unit["label"] = str(e.get("label", "Custom item"))
+			unit["custom"] = true
+			unit["count"] = 1
+			out.append(unit)
+	return out
+
+
+static func _append_custom_spec(site: String, label: String, spec: Dictionary) -> void:
+	var data := _load_custom_file()
+	var sites: Dictionary = data.get("sites", {}) as Dictionary
+	var list: Array = sites.get(site, []) as Array
+	list.append({"label": label, "spec": spec})
+	sites[site] = list
+	data["sites"] = sites
+	DirAccess.make_dir_recursive_absolute("user://maps")
+	var f := FileAccess.open(CUSTOM_ITEMS_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(data, "\t"))
+		f.close()
+
+
+static func _clear_custom_specs(site: String) -> void:
+	var data := _load_custom_file()
+	var sites: Dictionary = data.get("sites", {}) as Dictionary
+	if not sites.has(site):
+		return
+	sites.erase(site)
+	data["sites"] = sites
+	var f := FileAccess.open(CUSTOM_ITEMS_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(data, "\t"))
+		f.close()
 
 
 static func _load_layouts() -> Dictionary:
@@ -786,6 +873,101 @@ func _refresh_stats() -> void:
 	_stats.text = lines
 
 
+# ---------------------------------------------------------------------------
+# Manifest export (Phase 7) — the printable document a crew loads from
+# ---------------------------------------------------------------------------
+
+func _on_export_csv() -> void:
+	_begin_export("csv")
+
+
+func _on_export_json() -> void:
+	_begin_export("json")
+
+
+func _begin_export(kind: String) -> void:
+	_pending_export = kind
+	DirAccess.make_dir_recursive_absolute(EXPORT_DIR)
+	_save_dialog.filters = PackedStringArray(
+		["*.csv ; Spreadsheet"] if kind == "csv" else ["*.json ; Manifest JSON"])
+	_save_dialog.current_dir = EXPORT_DIR
+	_save_dialog.current_file = "packing_manifest_%s.%s" % [
+		str(_entry.get("id", "container")), kind]
+	_save_dialog.popup_centered()
+
+
+func _on_save_path_chosen(path: String) -> void:
+	var manifest := PackManifestExport.build(_entry, _units, _placed)
+	var text := PackManifestExport.to_csv(manifest) if _pending_export == "csv" \
+		else JSON.stringify(manifest, "\t")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		push_warning("Packing manifest export failed: %s" % path)
+		return
+	f.store_string(text)
+	f.close()
+	if _hint != null:
+		_hint.text = "Manifest saved: %s" % path
+
+
+# ---------------------------------------------------------------------------
+# Custom-item entry (Phase 7) — cover the gear the game doesn't model
+# ---------------------------------------------------------------------------
+
+func _on_custom_item_pressed() -> void:
+	if _custom_popup != null:
+		_custom_popup.visible = not _custom_popup.visible
+
+
+func _on_add_custom() -> void:
+	var label := _ci_name.text.strip_edges()
+	if label.is_empty():
+		label = "Custom item"
+	var mass := float(_ci_mass.value)
+	var spec := PackedSpec.normalize({
+		"w_m": float(_ci_w.value) / 100.0,
+		"d_m": float(_ci_d.value) / 100.0,
+		"h_m": float(_ci_h.value) / 100.0,
+		"mass_kg": mass if mass > 0.0 else -1.0,
+		"form": "crate",
+		"stackable": _ci_stackable.button_pressed,
+		"this_side_up": _ci_tsu.button_pressed,
+		"count": int(_ci_count.value),
+		"source": "estimated",
+	})
+	if spec.is_empty():
+		if _hint != null:
+			_hint.text = "Custom item needs non-zero dimensions"
+		return
+	_append_custom_spec(_site_token_for(get_tree().current_scene), label, spec)
+	# Join the live session immediately (append-only — _placed references
+	# _units by index, so units are never removed mid-session).
+	for _i: int in maxi(int(spec.get("count", 1)), 1):
+		var unit := spec.duplicate()
+		unit["label"] = label
+		unit["custom"] = true
+		unit["count"] = 1
+		_units.append(unit)
+		_remaining.append(_units.size() - 1)
+	_refresh_lists()
+	if _hint != null:
+		_hint.text = "Added %s — saved for this site" % label
+
+
+func _on_clear_custom() -> void:
+	_clear_custom_specs(_site_token_for(get_tree().current_scene))
+	# Already-placed customs keep their boxes this session (indices stay
+	# valid); unplaced ones leave the to-pack list now.
+	var keep: Array = []
+	for idx: Variant in _remaining:
+		if not bool((_units[int(idx)] as Dictionary).get("custom", false)):
+			keep.append(idx)
+	_remaining = keep
+	_refresh_lists()
+	if _hint != null:
+		_hint.text = "Saved custom items cleared for this site"
+
+
 func _update_hint() -> void:
 	if _hint == null:
 		return
@@ -924,6 +1106,25 @@ func _build_ui() -> void:
 		b.pressed.connect(Callable(self, str(spec[1])))
 		btns.add_child(b)
 
+	# Phase 7 row: the printable manifest + player-entered cargo.
+	var btns2 := HBoxContainer.new()
+	btns2.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	side.add_child(btns2)
+	for spec2: Array in [
+			["📄 Manifest CSV", "_on_export_csv",
+				"Save the load order + totals as a printable spreadsheet"],
+			["💾 JSON", "_on_export_json",
+				"Save the full manifest data (positions, masses, container)"],
+			["➕ Item", "_on_custom_item_pressed",
+				"Add a custom item the game doesn't model — saved for this site"]]:
+		var b2 := Button.new()
+		b2.text = str(spec2[0])
+		b2.focus_mode = Control.FOCUS_NONE
+		b2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b2.tooltip_text = str(spec2[2])
+		b2.pressed.connect(Callable(self, str(spec2[1])))
+		btns2.add_child(b2)
+
 	side.add_child(_labeled("Still to pack (click to place)"))
 	_item_list = ItemList.new()
 	_item_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -945,6 +1146,98 @@ func _build_ui() -> void:
 	_hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	side.add_child(_hint)
+
+	_save_dialog = FileDialog.new()
+	_save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	_save_dialog.access = FileDialog.ACCESS_USERDATA
+	_save_dialog.use_native_dialog = false
+	_save_dialog.size = Vector2i(760, 520)
+	_save_dialog.file_selected.connect(_on_save_path_chosen)
+	add_child(_save_dialog)
+
+	_build_custom_popup()
+
+
+## Small centered form over the studio: name, dims (cm), mass, count, flags.
+## Produces an estimated-source PackedSpec; persisted per site so the truck
+## manifest covers gear the game does not model.
+func _build_custom_popup() -> void:
+	_custom_popup = PanelContainer.new()
+	_custom_popup.add_theme_stylebox_override("panel", UITheme.panel_style())
+	_custom_popup.visible = false
+	_custom_popup.set_anchors_preset(Control.PRESET_CENTER)
+	_custom_popup.custom_minimum_size = Vector2(330, 0)
+	_root.add_child(_custom_popup)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	_custom_popup.add_child(v)
+
+	var title := Label.new()
+	title.text = "➕ Custom item"
+	title.add_theme_color_override("font_color", UITheme.C_PRIMARY)
+	title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	v.add_child(title)
+
+	_ci_name = LineEdit.new()
+	_ci_name.placeholder_text = "Name (e.g. Cooler, Toolbox)"
+	v.add_child(_ci_name)
+
+	var dims := HBoxContainer.new()
+	dims.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	v.add_child(dims)
+	_ci_w = _ci_spin(dims, "W cm", 60.0, 1.0, 1200.0)
+	_ci_d = _ci_spin(dims, "D cm", 40.0, 1.0, 1200.0)
+	_ci_h = _ci_spin(dims, "H cm", 40.0, 1.0, 1200.0)
+
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	v.add_child(row2)
+	_ci_mass = _ci_spin(row2, "Mass kg (0 = ?)", 10.0, 0.0, 2000.0)
+	_ci_count = _ci_spin(row2, "Count", 1.0, 1.0, 50.0)
+
+	var flags := HBoxContainer.new()
+	flags.add_theme_constant_override("separation", UITheme.SPACE_MD)
+	v.add_child(flags)
+	_ci_stackable = CheckBox.new()
+	_ci_stackable.text = "Stackable"
+	_ci_stackable.button_pressed = true
+	_ci_stackable.focus_mode = Control.FOCUS_NONE
+	flags.add_child(_ci_stackable)
+	_ci_tsu = CheckBox.new()
+	_ci_tsu.text = "This side up"
+	_ci_tsu.focus_mode = Control.FOCUS_NONE
+	flags.add_child(_ci_tsu)
+
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	v.add_child(actions)
+	for spec: Array in [["Add", "_on_add_custom"],
+			["Clear saved", "_on_clear_custom"], ["Close", "_on_custom_item_pressed"]]:
+		var b := Button.new()
+		b.text = str(spec[0])
+		b.focus_mode = Control.FOCUS_NONE
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.pressed.connect(Callable(self, str(spec[1])))
+		actions.add_child(b)
+
+
+func _ci_spin(parent: Control, label: String, value: float, min_v: float,
+		max_v: float) -> SpinBox:
+	var box := VBoxContainer.new()
+	parent.add_child(box)
+	var lbl := Label.new()
+	lbl.text = label
+	lbl.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	box.add_child(lbl)
+	var sb := SpinBox.new()
+	sb.min_value = min_v
+	sb.max_value = max_v
+	sb.step = 1.0
+	sb.value = value
+	box.add_child(sb)
+	return sb
 
 
 func _on_autopack() -> void:
