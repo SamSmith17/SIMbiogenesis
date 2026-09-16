@@ -60,6 +60,17 @@ Godot.exe.exe --headless --path . --script core/env/render_profile_selftest.gd
 # permanently: the six SubViewport modal previews and graph_soi_preview_service
 # never touch the main viewport's camera):
 Godot.exe.exe --headless --path . --script core/camera_claims_selftest.gd
+# Window Wall data layer self-test (offline — core/windowwall/): the multi-
+# monitor viewport's layout + off-axis frustum maths, prefs and per-map
+# viewpoint. The load-bearing check INVERTS the projection Godot itself builds
+# (Projection.create_frustum_aspect with flip_fov = KEEP_WIDTH) and asserts the
+# four corner rays land on the physical monitor's corners, plus a NEGATIVE pin
+# that the flip_fov=false form does NOT — that pair is what freezes "size is
+# the near-plane WIDTH", the whole bezel-continuity property. Also the far-
+# point-through-any-panel = one wall point identity, screen auto-assignment,
+# prefs round-trip against a TEMP path, and the viewpoint JSON. Carries
+# EXPECTED_CHECKS (a runtime error aborts a test function while PASS prints):
+Godot.exe.exe --headless --path . --script core/windowwall/window_wall_selftest.gd
 # Shared crosshair-ladder self-test (offline — SiteTargetPicker, the ONE
 # ray→target resolver used by BOTH the first-person crosshair and the
 # settlement view's mouse, so the two provably agree. Pins the ladder order,
@@ -541,6 +552,20 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/
 # cleared. The harness parks the clock at --time BEFORE opening (the view must
 # not touch it; the harness may, or a run after sunset ships five dark PNGs):
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=settlement --shots-dir=<label> --quit-after-capture
+# Window Wall capture (WINDOWED): opens the multi-monitor view through Main's
+# REAL entry point with prefs forced IN MEMORY (the player's window_wall.cfg is
+# never written) and proves what a PNG cannot: every slot camera shares ONE
+# origin and ONE basis and differs only by its frustum (size/offset/near/corner
+# hits DUMPED per slot), the extra native windows exist fullscreen with
+# KEEP_WIDTH frustum cameras, U twice restores every CanvasLayer EXACTLY, a
+# nudge moves all cameras together, a key pushed into an EXTRA window reaches
+# the view (the relay node — `window_input` never fires for push_input), the
+# "live" clock mode claims 1x + syncs the date and hands both back, and
+# close() restores the ROOT WINDOW, the embed flag, the player camera, the UI
+# map and the player's process mode. One PNG per window per state. On a
+# single-screen machine every slot lands on screen 0 as overlapping fullscreen
+# windows, which still proves creation, restoration and the maths:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=windowwall --shots-dir=<label> --quit-after-capture
 # NPC pose portraits (WINDOWED): stands ONE stick figure per work-pose family
 # in empty air against sky and shoots it NEAR (2.5 m) and FAR (13 m), printing
 # the family asked for beside the clip the pose machine actually chose — which
@@ -2623,6 +2648,124 @@ StaticBody would shove the player); Ctrl/Alt-aim shows "Name — status" and
 that person's Label3D nametag. Selftest + the `--capture=population` harness
 (which also asserts the crosshair contract + space-marker resolution) are in
 the Validation list.
+
+## Window wall (multi-monitor viewport — `core/windowwall/` + `scenes/windowwall/`)
+
+The bus has three 27" 1080p monitors in a row on one wall, 4" bezel gap; the
+Window Wall renders the world across them so they read as WINDOWS. Off by
+default (Settings → Window Wall, `user://window_wall.cfg` via `WindowWallPrefs`,
+own file on the `ExtremeWeatherPrefs` pattern); **F11** / `toggle_window_wall`
+or the tab's button opens it; `--window-wall` opens it after load for a desktop
+shortcut. Mode class `WindowWallView`, claim id `"window_wall"`, mirrors
+`SettlementView` (modal via CursorController, camera through the claim stack,
+idempotent `close()` on every exit path).
+
+**One eye, one orientation, N off-axis frusta — physically correct, not
+fanned.** `WindowWallLayout` (pure static) lays the panels out along the wall
+(eye at the origin, wall at `z = -eye_distance_m`) and turns each rectangle
+into `Camera3D.set_frustum(size, offset, near, far)` with
+`keep_aspect = KEEP_WIDTH`: `size = w·near/d`, `offset = (cx, cy)·near/d`.
+⚠ Under `KEEP_WIDTH` Godot's `size` is the near-plane WIDTH; with
+`KEEP_HEIGHT` the engine multiplies it by the aspect first and it becomes the
+HEIGHT — same call, silently different picture. The selftest inverts
+`Projection.create_frustum_aspect(..., flip_fov=true)` (the exact call the
+camera makes) to put the corner rays on the monitor corners AND pins that
+`flip_fov=false` does not. Tilted panels rotate the camera basis to the
+panel's normal and project in that frame (`slot_basis`); a panel the eye is
+not in front of returns `{}` rather than a plausible-looking frustum.
+
+**The game window IS one of the monitors.** Its root `Window` is moved
+fullscreen onto the assigned OS screen and shows the main slot's camera via
+`push_camera_claim` (no `shadow_max_distance` / `prop_cull_scale_m` — this is
+eye-level tuning); every other slot is a native `Window` with
+`own_world_3d = false`, `world_3d = root.world_3d`, borderless
+`MODE_FULLSCREEN` (never exclusive: focus loss would minimise it), a
+`Camera3D` child (which IS that window's camera), the root viewport's
+`msaa_3d/use_taa/screen_space_aa/use_debanding/scaling_3d_*/shadow atlas`
+copied over (main.gd applies those to the root viewport only), and an
+`InputRelay` node. Spawned ONE PER FRAME (the AMD-TDR discipline from
+`graph_soi_preview_service`). Facts measured by the Phase 0 spike, on this
+machine: (1) `root.gui_embed_subwindows` CAN be flipped at runtime, and Godot
+REFUSES (warning, value unchanged) while any embedded child window is visible
+— every existing `Window.new()` popup in the project is embedded, so
+`_set_embed(false)` hides visible ones first and a refusal aborts the open with
+a toast rather than the project-wide setting flip (which would turn every
+popup native); (2) screen/size/position may be set before or after
+`add_child`, both land; (3) `w.get_texture().get_image()` works on a native
+window; (4) `window_input` does NOT fire for `push_input` — only for OS
+events — which is why each window carries a relay NODE whose `_input`
+forwards to the view (harness-drivable AND responsive to real keys); (5) three
+KEEP_WIDTH cameras put the horizon on the identical pixel row (539.5/1080).
+Nudge keys are POLLED (`Input.is_physical_key_pressed`) so they work from
+whichever window has focus; discrete keys go through `handle_window_event`
+from both the main window's `_input` and the relays, and every key is marked
+handled while the view is up (hidden panels still receive `_unhandled_input`
+— the help overlay would un-hide itself on F1).
+
+**⚠ Two measured ordering rules, both of which fail SILENTLY or CRASH.**
+(1) **Closing from a relay must be DEFERRED.** Esc is delivered by the relay
+INSIDE an extra window; the teardown frees that window, so a synchronous
+`close()` destroys the caller and its viewport mid-stack — "Cannot call method
+'get_viewport' on a previously freed instance". `request_close()` sets
+`_closing`, stops consuming input and defers `close()` by one idle frame;
+every input-reachable path (Esc/F11, `close_requested`, the CursorController
+modal callable, Main's toggle) goes through it, while `close()` stays
+synchronous for `_exit_tree` and the harness. The relay additionally captures
+its viewport BEFORE calling in and re-validates after, so nothing touches
+`self` past the call. Pinned by `--capture=windowwall`'s "Esc inside an extra
+window closes the view".
+(2) **`current_screen`/`position`/`size` go BEFORE `add_child`, and `mode`
+in the SAME frame as it.** Applying `MODE_FULLSCREEN` a frame later is
+silently ignored (measured on a 3-screen machine: `mode` reads back 0 and the
+window sits 2 px short of the screen), and writing `size` to an
+already-fullscreen window drops it back to windowed the same way. Only the
+camera is re-asserted on the following frame. `_log_window_state()` prints one
+line per slot on every open — screen wanted vs landed, size vs screen, mode,
+camera, shared world, eye — because a grey window is indistinguishable from a
+working one by eye, and the harness reads those lines back.
+
+**A grey monitor is a PRESENTATION failure, not a rendering one.**
+`w.get_texture().get_image()` can come back with a perfect frame while the
+monitor shows flat grey: the render target and the swapchain are different
+things, and a second fullscreen window whose monitor hangs off a different
+graphics adapter may never present. Hence `extra_window_mode`
+(`WindowWallPrefs.WINDOW_MODES`): "fullscreen" (default) or "borderless",
+which leaves the extra windows windowed + `always_on_top` at exactly the
+screen rect — visually identical, different presentation path. Exposed as
+Settings → Window Wall → "Extra monitors".
+
+**Clock: claim the scale, sync the date, never `set_live_mode`.** "live"
+(default) and "1×" push a non-exclusive clock claim
+`{"time_scale": 1/3600}` (composes with every other owner, base restored by
+construction); "live" additionally calls
+`SimSettingsController.sync_to_system_time()` on open and every 10 s while
+our scale is still the effective one, and hands the date back on close unless
+the player was already in live mode. `set_live_mode` is deliberately not used:
+it persists a user preference and its disable path hard-writes
+`time_scale = 1.0` (3600×). A refused claim (video export, a bake) toasts the
+owner and carries on.
+
+**Leave the world exactly as found.** `open()` snapshots the root window's
+mode/screen/size/position, the embed flag, the root render scale, the player's
+process mode and every Main CanvasLayer's `visible`; `close()` puts each back
+— never blanket-true, several layers are hidden by design. Windows are
+`free()`d (not queued) BEFORE the embed flag is restored, since the flip is
+refused while a child window is displayed. ⚠ The extra windows take their
+cameras with them: check `is_instance_valid` BEFORE `is Camera3D`, because
+`is` on a freed instance is a runtime error that aborted the rest of the
+restore (UI map, player mode, clock) while the harness still read
+"closed PASS" — caught by `--capture=windowwall`'s restore assertions. The
+hint strip lives UNDER THE VIEW NODE so the hide sweep never touches it.
+
+**Viewpoint** (`WindowWallViewpoint`): a per-map ground point + yaw
+(`user://maps/window_wall_viewpoint_<lat>_<lon>.json`, scene fallback by
+basename, `CoordToken` keying like `SpaceRegistry`); pitch is always 0 (the
+wall is vertical) and the eye is `seat_eye_height_m` above it, a global pref
+so re-seating the chair does not touch every map. No file → the player's
+current pose + a hint to Ctrl+S. Settings tab:
+`scenes/ui/window_wall_settings_tab.gd` (own script, instantiated by
+`timeline_settings_panel._build_window_wall_tab`; ⚠ a helper named `_set`
+there collided with `Object._set` and failed the compile sweep).
 
 ## Settlement mode + the work substrate it exists to show
 

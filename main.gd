@@ -232,7 +232,8 @@ var _hazard_vol : Dictionary = {}
 		use_day_time_for_shader = value
 		_update_shader()
 
-## Time multiplier. 0 = paused, 1.0 = 1 hour per second, 0.01 = 1x real-time.
+## Time multiplier. 0 = paused, 1.0 = 1 hour per second, 1/3600 = 1x real-time
+## (TimeDirector.REALTIME_SCALE_REF); the 0.01 default is 36x.
 ## Writing this sets the USER's intent (`clock.base_time_scale`); reading it
 ## returns the EFFECTIVE value, which a subsystem holding a clock claim may be
 ## overriding. See push_clock_claim below.
@@ -1226,6 +1227,12 @@ func _unhandled_input( e : InputEvent ) -> void :
 		var prl := get_node_or_null( "TerrainLoader" )
 		if prl != null and prl.has_method( "open_pallet_rack_builder" ) :
 			prl.call( "open_pallet_rack_builder" )
+		get_viewport().set_input_as_handled()
+		return
+	if InputMap.has_action( "toggle_window_wall" ) and e.is_action_pressed( "toggle_window_wall" ) :
+		# F11: the Window Wall (multi-monitor viewport). While it is open the
+		# modal blocks this branch and the view's own handler closes on F11.
+		toggle_window_wall_view()
 		get_viewport().set_input_as_handled()
 
 func _setup_save_load_ui() -> void :
@@ -3761,6 +3768,42 @@ func open_settlement_view( at: Vector2 = Vector2.INF ) -> SettlementView :
 func settlement_view_open() -> bool :
 	return settlement_view != null and is_instance_valid( settlement_view ) \
 		and settlement_view.is_open()
+
+
+# ==================== WINDOW WALL (multi-monitor viewport) ====================
+
+var window_wall_view : WindowWallView = null
+
+
+## Open (or close) the Window Wall — the world rendered across a row of
+## physical monitors as if they were windows out of the bus. Optional and off
+## by default (Settings → Window Wall); F11 or the tab's button. Lazily built
+## the same way the settlement view is.
+func toggle_window_wall_view() -> void :
+	if window_wall_view_open() :
+		# request_close, not close: this can run from an input dispatch, and the
+		# teardown frees the extra windows (and their input relays).
+		window_wall_view.request_close()
+		return
+	open_window_wall_view()
+
+
+func open_window_wall_view() -> WindowWallView :
+	if window_wall_view == null or not is_instance_valid( window_wall_view ) :
+		window_wall_view = WindowWallView.new()
+		window_wall_view.name = "WindowWallView"
+		add_child( window_wall_view )
+	window_wall_view.open( self )
+	return window_wall_view
+
+
+func close_window_wall_view() -> void :
+	if window_wall_view_open() :
+		window_wall_view.request_close()
+
+
+func window_wall_view_open() -> bool :
+	return window_wall_view != null and is_instance_valid( window_wall_view ) and window_wall_view.is_open()
 
 
 func _setup_linkage_build_guide_ui() -> void :

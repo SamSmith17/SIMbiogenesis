@@ -67,6 +67,12 @@ const _GROUPS := [
 		["place_light", "Place a light"],
 		["mp_chat", "Multiplayer chat"],
 	]],
+	["Views", [
+		["toggle_window_wall", "Window wall - the world across your monitor row (Settings > Window Wall)"],
+		["key:U", "...toggle UI while the window wall is up"],
+		["key:Ctrl+S", "...save this map's window-wall viewpoint"],
+		["key:I", "...identify screens (window wall)"],
+	]],
 	["Puzzle & SoI", [
 		["interact", "SoI pin → Snowglobe (resize radius)"],
 		["system_graph_toggle", "Graph / Challenges / System Review"],

@@ -184,6 +184,7 @@ func open() -> void:
 	# SimSettingsController has no Main or an empty snapshot, and this tab reads
 	# its state from GameplayRules / ExtremeWeatherPrefs / the director instead.
 	_refresh_extreme_weather_tab()
+	_refresh_window_wall_tab()
 	_request_center_layout()
 	visible = true
 	CursorController.request_modal("timeline_settings", Callable(self, "close"))
@@ -331,6 +332,7 @@ func _build_ui() -> void:
 	_build_environment_tab(tabs)
 	_build_lighting_tab(tabs)
 	_build_npc_tab(tabs)
+	_build_window_wall_tab(tabs)
 	_build_extreme_weather_tab(tabs)
 	_build_stars_planets_tab(tabs)
 	_build_solar_tab(tabs)
@@ -2397,6 +2399,30 @@ func _on_open_location_picker() -> void:
 ## Both styles are posed from the SAME NpcPoseMachine, so behaviour is
 ## identical either way — people still walk the whole route, lie down on
 ## arrival and sit for the bathroom. Only the rendering differs.
+## Settings → Window Wall (multi-monitor viewport). The tab body lives in its
+## own script (scenes/ui/window_wall_settings_tab.gd) so this file does not
+## grow another few hundred lines; it rebuilds itself from WindowWallPrefs on
+## every open.
+var _window_wall_tab: Control = null
+
+func _build_window_wall_tab(tabs: TabContainer) -> void:
+	var v := _make_tab(tabs, "Window Wall")
+	var script := load("res://scenes/ui/window_wall_settings_tab.gd") as Script
+	if script == null:
+		return
+	_window_wall_tab = VBoxContainer.new()
+	_window_wall_tab.set_script(script)
+	_window_wall_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_child(_window_wall_tab)
+	_window_wall_tab.call("bind", self)
+	_window_wall_tab.call("refresh")
+
+
+func _refresh_window_wall_tab() -> void:
+	if _window_wall_tab != null and is_instance_valid(_window_wall_tab):
+		_window_wall_tab.call("refresh")
+
+
 func _build_npc_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "NPC")
 	_add_section_lbl(v, "Body style")
