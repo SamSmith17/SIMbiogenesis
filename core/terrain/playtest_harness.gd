@@ -33,6 +33,14 @@ extends Node
 ##                              "site-review" = composite: world + freeform +
 ##                              site plan + elevation + snowglobe + Siphon Lab
 ##                              (+ diagnostics/perf JSON) for a real user map
+##                              "windowwall" = the multi-monitor Window Wall
+##                              "stars" = star field: marker-vs-texture pixel error + 2 h rotation about the pole
+##                              "dawn"  = sunrise lighting ladder: beam energy/colour + ambient per solar altitude
+##                              through Main's real entry point: per-slot
+##                              frustum dump, PNG per window, full-restore
+##                              assertions (see _run_window_wall_capture)
+##   --window-wall              open the Window Wall right after the map
+##                              loads (desktop-shortcut launch for the bus)
 ##   --shots-dir=<label>        subfolder under user://screenshots/ (default timestamp)
 ##   --time=<hour>              sim clock hour for the shoot (default 10.0, paused)
 ##   --perf                     enable PerfMonitor HUD (F3) + write perf/*.json
@@ -104,6 +112,8 @@ var _no_mutate := false
 ## site-review subsets; empty → default world+freeform+elevation+siphon.
 var _review_sets: PackedStringArray = PackedStringArray()
 var _map_def_path := ""
+## --window-wall: open the Window Wall after load (no capture, no quit).
+var _boot_window_wall := false
 
 
 func _ready() -> void:
@@ -114,7 +124,7 @@ func _ready() -> void:
 		return
 	_parse_args(args)
 	var wants_post_load := not _capture_mode.is_empty() or _assign_facades_count > 0 \
-		or _sculpt_test
+		or _sculpt_test or _boot_window_wall
 	if not is_nan(_launch_lat) and not is_nan(_launch_lon):
 		_active = true
 		_launch_map.call_deferred()
@@ -171,6 +181,14 @@ func _ready() -> void:
 			_run_tree_portrait_capture.call_deferred()
 		elif _capture_mode == "weather":
 			_run_extreme_weather_capture.call_deferred()
+		elif _capture_mode == "stars":
+			_run_star_capture.call_deferred()
+		elif _capture_mode == "dawn":
+			_run_dawn_capture.call_deferred()
+		elif _capture_mode == "windowwall":
+			_run_window_wall_capture.call_deferred()
+		elif _boot_window_wall:
+			_boot_window_wall_view.call_deferred()
 		else:
 			_await_and_run.call_deferred()
 
@@ -211,6 +229,8 @@ func _parse_args(args: PackedStringArray) -> void:
 			_sculpt_test = true
 		elif a == "--quit-after-capture":
 			_quit_after = true
+		elif a == "--window-wall":
+			_boot_window_wall = true
 	if not map_file.is_empty():
 		_load_map_definition(map_file)
 	if _perf_hud:
@@ -378,6 +398,14 @@ func _launch_map() -> void:
 		_run_hardware_capture()
 	elif _capture_mode == "weather":
 		_run_extreme_weather_capture()
+	elif _capture_mode == "stars":
+		_run_star_capture()
+	elif _capture_mode == "dawn":
+		_run_dawn_capture()
+	elif _capture_mode == "windowwall":
+		_run_window_wall_capture()
+	elif _boot_window_wall:
+		_boot_window_wall_view()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -439,6 +467,14 @@ func _launch_scene_direct() -> void:
 		_run_hardware_capture()
 	elif _capture_mode == "weather":
 		_run_extreme_weather_capture()
+	elif _capture_mode == "stars":
+		_run_star_capture()
+	elif _capture_mode == "dawn":
+		_run_dawn_capture()
+	elif _capture_mode == "windowwall":
+		_run_window_wall_capture()
+	elif _boot_window_wall:
+		_boot_window_wall_view()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
 		_await_and_run()
 
@@ -1710,6 +1746,10 @@ func _run_hydro_load_verify() -> void:
 
 	var fails := _hydro_assert_anchors(sgv, main)
 	_hydro_dump(sgv, main, "AS LOADED (graph never opened)")
+	# The x-ray runs must not hang over the landscape in first person.
+	fails += _hydro_assert_world_hidden(main, true, "as loaded (first person)")
+	var mgr0: Node = main.find_child("ConduitManager", true, false) if main != null else null
+	var wires_pref: bool = bool(mgr0.get("_global_visible")) if mgr0 != null else false
 	# Exactly what the player does: G, then back to 3D.
 	sgv.set("visible", true)
 	await get_tree().create_timer(2.0).timeout
@@ -1717,6 +1757,13 @@ func _run_hydro_load_verify() -> void:
 	sgv.set("visible", false)
 	await get_tree().create_timer(1.5).timeout
 	_hydro_dump(sgv, main, "BACK IN 3D (after graph open/close)")
+	# Site Plan's prefer_3d wire mode borrows the global "Show 3D wires (world)"
+	# preference; closing the graph must hand it back, or every x-ray run stays
+	# over the landscape for the rest of the session.
+	if mgr0 != null:
+		fails += _pen_check("graph close restored the world-wires pref (%s)"
+				% str(wires_pref), bool(mgr0.get("_global_visible")) == wires_pref)
+	fails += _hydro_assert_world_hidden(main, true, "back in 3D after graph close")
 	# The Hydro Lab round trip — the other half of the report ("open Hydrolab and
 	# return to 3D, the pipe is gone"). The Lab forces global wires ON and its
 	# teardown restores them OFF, which is where an explicitly-visible penstock
@@ -1735,12 +1782,15 @@ func _run_hydro_load_verify() -> void:
 		sgv.call("open_siphon_lab", turb_id)
 		await get_tree().create_timer(2.5).timeout
 		_hydro_dump(sgv, main, "HYDRO LAB OPEN (%s)" % turb_id)
+		# …but the Lab's CT section is the whole reason they are x-ray at all.
+		fails += _hydro_assert_world_hidden(main, false, "Hydro Lab CT open")
 		if sgv.has_method("close_hydro_lab"):
 			sgv.call("close_hydro_lab")
 		await get_tree().create_timer(1.0).timeout
 		sgv.set("visible", false)
 		await get_tree().create_timer(1.5).timeout
 		_hydro_dump(sgv, main, "BACK IN 3D (after Hydro Lab)")
+		fails += _hydro_assert_world_hidden(main, true, "back in 3D after the Lab")
 	if fails == 0:
 		print("PlaytestHarness: hydroload verify — PASS")
 	else:
@@ -1787,6 +1837,21 @@ func _hydro_assert_anchors(sgv: Node, main: Node) -> int:
 	return fails
 
 
+## ConduitManager's world-visibility gate, which no screenshot of this run can
+## show: the conduit materials draw THROUGH terrain by design (the Elevation /
+## Site CT soil bowl would otherwise bury every run), so with the player's
+## "Show 3D wires (world)" preference off they must be hidden in first person
+## and revealed only while the graph's 3D preview is on screen. Skipped outright
+## when the preference IS on — then they are meant to be visible everywhere.
+func _hydro_assert_world_hidden(main: Node, want_hidden: bool, label: String) -> int:
+	var mgr: Node3D = main.find_child("ConduitManager", true, false) as Node3D 			if main != null else null
+	if mgr == null or bool(mgr.get("_global_visible")):
+		return 0
+	return _pen_check("conduit runs %s %s" % [
+			"hidden" if want_hidden else "shown", label],
+			mgr.visible != want_hidden)
+
+
 func _hydro_dump(sgv: Node, main: Node, label: String) -> void:
 	print("=== hydroload [%s] ===" % label)
 	var model: Variant = sgv.get("model")
@@ -1795,8 +1860,12 @@ func _hydro_dump(sgv: Node, main: Node, label: String) -> void:
 		return
 	var mgr: Node = main.find_child("ConduitManager", true, false) if main != null else null
 	if mgr != null:
-		print("  manager: global_visible=%s explicit_seen=%s instances=%d" % [
-			str(mgr.get("_global_visible")), str(mgr.get("_explicit_seen")),
+		# world_visible is the FIRST-PERSON gate: conduit materials are x-ray, so
+		# with wires off the runs are built but hidden until the graph's 3D
+		# preview (Site / Elevation CT / Hydro Lab) asks for them.
+		print("  manager: global_visible=%s preview_visible=%s world_visible=%s explicit_seen=%s instances=%d" % [
+			str(mgr.get("_global_visible")), str(mgr.get("_preview_visible")),
+			str((mgr as Node3D).visible), str(mgr.get("_explicit_seen")),
 			(mgr.get("_instances") as Dictionary).size()])
 	for conn_v in model.connections:
 		if not (conn_v is Dictionary):
@@ -6773,3 +6842,802 @@ func _penstock_cleanup(model: Variant, main: Node) -> void:
 			model.call("remove_connection", str(c.get("id", "")))
 	for iid2 in doomed:
 		model.call("remove_item", iid2)
+
+
+# ==================== WINDOW WALL (--capture=windowwall / --window-wall) ====================
+## Opens the multi-monitor Window Wall through Main's REAL entry point and
+## proves what a screenshot cannot: that every slot's camera shares ONE origin
+## and ONE basis and differs only by its off-axis frustum (the numbers are
+## DUMPED per slot — size, offset, near, the four corner hits on the wall
+## plane, the screen it landed on); that the extra windows exist, are
+## fullscreen and carry a frustum camera; that U twice puts every CanvasLayer
+## back exactly; that a nudge moves all cameras together; that a key pushed
+## into an EXTRA window reaches the view (the relay node — `window_input`
+## never fires for push_input); that "live" clock mode really syncs the date at
+## 1× and hands it back; and — the one that bites — that close() restores the
+## ROOT WINDOW, the embed flag, the player camera, the clock, the UI map and
+## the player's process mode. On a single-screen machine every slot lands on
+## screen 0 (overlapping fullscreen windows), which still proves creation,
+## restoration and the frustum maths. Prefs are forced IN MEMORY
+## (override_for_session); the viewpoint is saved to a TEMP path. Nothing of
+## the player's is written.
+func _run_window_wall_capture() -> void:
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var main := get_tree().current_scene
+	if main == null or not main.has_method("open_window_wall_view"):
+		push_error("PlaytestHarness: Main has no window wall view — aborting")
+		_maybe_quit()
+		return
+	var label := _shots_label if not _shots_label.is_empty() else "windowwall"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var tally := {"checks": 0, "fails": 0}
+	var check := func(name: String, ok: bool, detail: String = "") -> void:
+		tally["checks"] += 1
+		if not ok:
+			tally["fails"] += 1
+		print("PlaytestHarness: windowwall — %s %s %s" % [name, "PASS" if ok else "FAIL", detail])
+
+	WindowWallPrefs.override_for_session({
+		"enabled": true, "clock_mode": WindowWallPrefs.CLOCK_LEAVE, "hide_ui": true,
+		"monitor_count": 3, "main_slot": 1, "render_scale": 1.0,
+	})
+	print("PlaytestHarness: windowwall — screens: %s" % str(WindowWallView.os_screens()))
+	var root := get_tree().root
+	var main_hour := 10.0
+	main.time_scale = 0.0
+	main.day_time = main_hour
+
+	# Snapshot everything close() must put back.
+	var cam_before := get_viewport().get_camera_3d()
+	var ts_before := float(main.get("time_scale"))
+	var date_before := [int(main.get("year")), int(main.get("month")), int(main.get("day"))]
+	var day_time_before := float(main.get("day_time"))
+	var win_before := {"mode": root.mode, "screen": root.current_screen, "size": root.size,
+		"embed": root.gui_embed_subwindows, "scale": root.scaling_3d_scale}
+	var ui_before: Dictionary = {}
+	for child in main.get_children():
+		if child is CanvasLayer:
+			ui_before[child] = (child as CanvasLayer).visible
+	var player := main.get_node_or_null("Player")
+	var pm_before: int = player.process_mode if player != null else Node.PROCESS_MODE_INHERIT
+
+	# ---- open ----------------------------------------------------------------
+	var view: Node = main.call("open_window_wall_view")
+	await get_tree().create_timer(1.5).timeout
+	var opened := view != null and bool(view.call("is_open"))
+	check.call("view open", opened)
+	if not opened:
+		_maybe_quit()
+		return
+	var n_extra: int = view.call("window_count")
+	check.call("extra windows == monitors - 1", n_extra == 2, "got %d" % n_extra)
+	var wins: Array = view.call("windows")
+	for w in wins:
+		var win := w as Window
+		# Either real fullscreen or a borderless window covering the screen —
+		# both are shipping configurations (see WindowWallPrefs.WINDOW_MODES).
+		var scr_size := DisplayServer.screen_get_size(DisplayServer.window_get_current_screen(win.get_window_id()))
+		var covers := win.mode == Window.MODE_FULLSCREEN 			or (absi(win.size.x - scr_size.x) <= 4 and absi(win.size.y - scr_size.y) <= 4)
+		check.call("window %s in tree + covers its screen" % win.name,
+			win.is_inside_tree() and covers,
+			"mode=%d size=%s screen=%s" % [win.mode, win.size, scr_size])
+		var wc := win.get_camera_3d()
+		check.call("window %s has a KEEP_WIDTH frustum camera" % win.name,
+			wc != null and wc.projection == Camera3D.PROJECTION_FRUSTUM and wc.keep_aspect == Camera3D.KEEP_WIDTH)
+	var main_cam := get_viewport().get_camera_3d()
+	check.call("main viewport shows a frustum camera",
+		main_cam != null and main_cam.projection == Camera3D.PROJECTION_FRUSTUM and main_cam != cam_before)
+	check.call("root window fullscreen", root.mode == Window.MODE_FULLSCREEN, "mode=%d" % root.mode)
+	check.call("embed flag off while open", root.gui_embed_subwindows == false)
+
+	# ---- the numbers ---------------------------------------------------------
+	var dump: Array = view.call("frustum_dump")
+	var origin0: Vector3 = Vector3.INF
+	var basis0 := Basis.IDENTITY
+	var same_origin := true
+	var same_basis := true
+	var aspect_ok := true
+	for row in dump:
+		var r := row as Dictionary
+		print("PlaytestHarness: windowwall —   slot %d screen %d: size %.6f offset %s near %.3f d %.3f hfov %.1f° viewport %s aspect-mismatch %.4f" % [
+			int(r["slot"]), int(r["screen"]), float(r["size"]), str(r["offset"]), float(r["near"]),
+			float(r["d"]), float(r["hfov_deg"]), str(r["viewport_px"]), float(r["aspect_mismatch"])])
+		for c in (r["corners"] as Array):
+			print("PlaytestHarness: windowwall —       corner %s" % str(c))
+		var o: Vector3 = r["origin"]
+		var b: Basis = r["basis"]
+		if origin0 == Vector3.INF:
+			origin0 = o
+			basis0 = b
+		else:
+			if (o - origin0).length() > 1e-4:
+				same_origin = false
+			if not b.is_equal_approx(basis0):
+				same_basis = false
+		if float(r["aspect_mismatch"]) > 0.01:
+			aspect_ok = false
+	check.call("one eye: every camera shares the origin", same_origin, str(origin0))
+	check.call("one orientation: every camera shares the basis (flat wall)", same_basis)
+	check.call("panel aspect matches the viewport", aspect_ok)
+	check.call("eye is the viewpoint + seat height", (origin0 - (view.call("eye") as Vector3)).length() < 1e-4)
+
+	# ---- shots ---------------------------------------------------------------
+	await _shoot_ui(dir, "01_main_slot")
+	for w in wins:
+		var win := w as Window
+		await RenderingServer.frame_post_draw
+		var tex := win.get_texture()
+		var readable := tex != null
+		if readable:
+			tex.get_image().save_png("%s/01_%s.png" % [dir, win.name.to_lower()])
+		check.call("%s frame readable" % win.name, readable)
+
+	# ---- UI toggle ----------------------------------------------------------
+	var hidden_all := true
+	for layer in ui_before.keys():
+		if is_instance_valid(layer) and (layer as CanvasLayer).visible:
+			hidden_all = false
+	check.call("every Main CanvasLayer hidden on entry", hidden_all)
+	view.call("toggle_ui")
+	await get_tree().process_frame
+	var back_exact := true
+	for layer in ui_before.keys():
+		if is_instance_valid(layer) and (layer as CanvasLayer).visible != bool(ui_before[layer]):
+			back_exact = false
+	check.call("U restores every layer to its recorded flag", back_exact)
+	view.call("toggle_ui")
+	await get_tree().process_frame
+	check.call("U again hides them", bool(view.call("ui_hidden")))
+	view.call("identify", 0.6)
+	await get_tree().create_timer(0.3).timeout
+	await _shoot_ui(dir, "02_identify")
+	await get_tree().create_timer(0.6).timeout
+
+	# ---- nudge moves everyone together ---------------------------------------
+	var eye_a: Vector3 = view.call("eye")
+	view.call("nudge", Vector3(0.5, 0.0, 0.0), 0.2)
+	await get_tree().process_frame
+	var dump2: Array = view.call("frustum_dump")
+	var moved_together := true
+	for row in dump2:
+		var r := row as Dictionary
+		if ((r["origin"] as Vector3) - (eye_a + Vector3(0.5, 0, 0))).length() > 1e-4:
+			moved_together = false
+		if not (r["basis"] as Basis).is_equal_approx((dump2[0] as Dictionary)["basis"]):
+			moved_together = false
+	check.call("nudge moves + turns every camera together", moved_together)
+	await _shoot_ui(dir, "03_nudged")
+	# Save the viewpoint to a TEMP path only.
+	var tmp_vp := "%s/viewpoint_tmp.json" % dir
+	check.call("save_viewpoint to a temp path",
+		bool(view.call("save_viewpoint", tmp_vp)) and FileAccess.file_exists(tmp_vp))
+	var saved_vp := WindowWallViewpoint.load_from(tmp_vp)
+	check.call("saved viewpoint carries the nudged eye", saved_vp != null
+		and (saved_vp.eye(WindowWallPrefs.seat_eye_height_m()) - (eye_a + Vector3(0.5, 0, 0))).length() < 1e-3)
+	if FileAccess.file_exists(tmp_vp):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp_vp))
+
+	# ---- a key on an EXTRA window reaches the view (relay node) --------------
+	if not wins.is_empty():
+		var hidden_before := bool(view.call("ui_hidden"))
+		for _i in 2:
+			var ev := InputEventKey.new()
+			ev.pressed = true
+			ev.keycode = KEY_U
+			ev.physical_keycode = KEY_U
+			(wins[0] as Window).push_input(ev)
+			await get_tree().process_frame
+			if _i == 0:
+				check.call("U pushed into an extra window toggles the UI",
+					bool(view.call("ui_hidden")) != hidden_before)
+
+	# ---- close THE WAY A PLAYER DOES: Esc inside an extra window -------------
+	# That path frees the very window whose input relay is mid-dispatch, which
+	# is the "Cannot call method 'get_viewport' on a previously freed instance"
+	# crash this assertion exists to keep fixed. Watch the console: a freed-
+	# instance error prints without failing anything by itself.
+	if not wins.is_empty():
+		var esc := InputEventKey.new()
+		esc.pressed = true
+		esc.keycode = KEY_ESCAPE
+		esc.physical_keycode = KEY_ESCAPE
+		(wins[0] as Window).push_input(esc)
+		await get_tree().create_timer(0.5).timeout
+		check.call("Esc inside an extra window closes the view", not bool(view.call("is_open")))
+	view.call("close")
+	await get_tree().create_timer(0.5).timeout
+	check.call("closed", not bool(view.call("is_open")))
+	check.call("player camera restored", get_viewport().get_camera_3d() == cam_before and cam_before != null)
+	check.call("root window mode/screen restored",
+		root.mode == win_before["mode"] and root.current_screen == win_before["screen"],
+		"mode %d screen %d" % [root.mode, root.current_screen])
+	check.call("embed flag restored", root.gui_embed_subwindows == bool(win_before["embed"]))
+	check.call("root render scale restored", is_equal_approx(root.scaling_3d_scale, float(win_before["scale"])))
+	check.call("extra windows freed", int(view.call("window_count")) == 0)
+	var ui_after_ok := true
+	for layer in ui_before.keys():
+		if is_instance_valid(layer) and (layer as CanvasLayer).visible != bool(ui_before[layer]):
+			ui_after_ok = false
+	check.call("UI map restored exactly", ui_after_ok)
+	check.call("player process mode restored", player == null or player.process_mode == pm_before)
+	check.call("clock untouched in 'leave' mode", absf(float(main.get("time_scale")) - ts_before) < 1e-9)
+
+	# ---- second pass: live clock ---------------------------------------------
+	WindowWallPrefs.override_for_session({"clock_mode": WindowWallPrefs.CLOCK_LIVE})
+	var live_was_on := bool(SimSettingsController.get("live_mode_enabled"))
+	main.time_scale = 0.01
+	view = main.call("open_window_wall_view")
+	await get_tree().create_timer(1.5).timeout
+	var now := Time.get_datetime_dict_from_system()
+	check.call("live: 1x claimed", absf(float(main.get("time_scale")) - 1.0 / 3600.0) < 1e-7,
+		"%.6f" % float(main.get("time_scale")))
+	check.call("live: date synced to the system clock",
+		int(main.get("year")) == int(now["year"]) and int(main.get("month")) == int(now["month"]) and int(main.get("day")) == int(now["day"]),
+		"%d-%d-%d" % [int(main.get("year")), int(main.get("month")), int(main.get("day"))])
+	await _shoot_ui(dir, "04_live_clock")
+	view.call("close")
+	await get_tree().create_timer(0.5).timeout
+	check.call("live: speed handed back", absf(float(main.get("time_scale")) - 0.01) < 1e-9,
+		"%.6f" % float(main.get("time_scale")))
+	if not live_was_on:
+		check.call("live: date handed back",
+			int(main.get("year")) == date_before[0] and int(main.get("month")) == date_before[1]
+			and int(main.get("day")) == date_before[2] and absf(float(main.get("day_time")) - main_hour) < 0.05,
+			"%d-%d-%d %.2f" % [int(main.get("year")), int(main.get("month")), int(main.get("day")), float(main.get("day_time"))])
+	main.time_scale = ts_before
+	main.day_time = day_time_before
+
+	print("PlaytestHarness: windowwall — %d of %d checks passed %s" % [
+		int(tally["checks"]) - int(tally["fails"]), int(tally["checks"]), "PASS" if int(tally["fails"]) == 0 else "FAIL"])
+	_maybe_quit()
+
+
+## --window-wall: the desktop-shortcut launch. Wait for the map, then open the
+## wall through Main's entry point and leave it running (no capture, no quit).
+func _boot_window_wall_view() -> void:
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(2.0).timeout
+	var main := get_tree().current_scene
+	if main == null or not main.has_method("open_window_wall_view"):
+		push_error("PlaytestHarness: --window-wall — Main has no window wall view")
+		return
+	if not WindowWallPrefs.enabled():
+		print("PlaytestHarness: --window-wall — the feature is off; enable it in Settings → Window Wall")
+		if main.has_method("show_toast"):
+			main.call("show_toast", "--window-wall: enable Window Wall in Settings first", ToastUI.Level.WARN, 8.0)
+		return
+	main.call("open_window_wall_view")
+
+
+## --- Star field capture -------------------------------------------------------
+## The star field's whole risk surface is invisible to a PNG: a sky that is
+## rotated 4° or whose texture pole sits at the zenith still LOOKS like a sky.
+## So this mode parks the clock on a fixed winter night, shoots each reference
+## star with the computed markers ON and OFF, and — the number — finds the
+## brightest texture blob near each marker's PROJECTED screen position in the
+## markers-off frame and prints the pixel distance. Then the 2 h rotation proof:
+## looking straight at the pole, Polaris must stay put while Dubhe sweeps
+## ~30° counter-clockwise (facing north), and at a southern site the same about
+## the SCP, clockwise. Twinkle + TAA make the PNGs non-deterministic, so only
+## centroids are compared, never pixels. Nothing is persisted: no calibration
+## save, location restored with persist=false, planet prefs put back.
+const STAR_CAP_SEARCH_PX := 25
+const STAR_CAP_PASS_PX := 6.0
+const STAR_CAP_VIEWS: Array[String] = ["polaris", "betelgeuse", "sirius", "vega", "zenith"]
+
+
+func _run_star_capture() -> void:
+	var tree := get_tree()
+	var loader := tree.current_scene.find_child("TerrainLoader", true, false) \
+		if tree.current_scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+
+	var main := _find_main()
+	if main == null or not main.has_method("get_star_system"):
+		push_error("PlaytestHarness: no Main with a StarSystem — aborting star capture")
+		_maybe_quit()
+		return
+	var ss: Node = main.call("get_star_system")
+	if ss == null or not ss.has_method("get_reference_star_position"):
+		push_error("PlaytestHarness: StarSystem missing — aborting star capture")
+		_maybe_quit()
+		return
+
+	var label := _shots_label if not _shots_label.is_empty() else "stars"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var manifest: Array = []
+	var diag := {"views": {}, "rotation": {}, "fails": []}
+
+	# Conditions: fixed winter night, clock frozen, clear sky, planets off (a
+	# bright Jupiter inside a search window reads as a star), HUD hidden.
+	_set_capture_conditions()
+	var orig_lat := float(main.get("latitude"))
+	var orig_lon := float(main.get("longitude"))
+	var planets: Node = main.find_child("PlanetSystem", true, false)
+	var planet_prefs: Dictionary = planets.call("get_settings") if planets != null and planets.has_method("get_settings") else {}
+	if planets != null and planets.has_method("set_all_enabled"):
+		planets.call("set_all_enabled", false)
+	var saved_clouds: Variant = main.get("clouds_cutoff")
+	_star_cap_set_night(main, 2026, 1, 15, 22.0)
+
+	var prev_cam := get_viewport().get_camera_3d()
+	var cam := Camera3D.new()
+	cam.name = "PlaytestStarCam"
+	cam.far = 40000.0
+	cam.fov = 60.0
+	main.add_child(cam)
+	# 80 m above the player: the soak map's tents, roofs and the StarShade sit
+	# right in the lower half of a ground-level frame and read as "star missing".
+	if prev_cam != null:
+		cam.global_position = prev_cam.global_position + Vector3(0.0, 80.0, 0.0)
+	else:
+		cam.global_position = Vector3(0.0, 83.0, 0.0)
+	cam.make_current()
+
+	print("\n=== STAR FIELD CAPTURE ===")
+	print("site lat %.4f lon %.4f   registration: %s" % [orig_lat, orig_lon, str(ss.call("registration_summary")) if ss.has_method("registration_summary") else "?"])
+	print("clock 2026-01-15 22:00 local   LST %.3f deg" % float(ss.get("current_lst")))
+
+	# --- 1. marker-vs-texture per view ---------------------------------------
+	var total := 0
+	var bad := 0
+	for view in STAR_CAP_VIEWS:
+		var aim := Vector3.UP
+		if view != "zenith":
+			var p: Dictionary = ss.call("get_reference_star_position", view)
+			if p.is_empty() or float(p.get("altitude", -90.0)) < 5.0:
+				print("  view %-10s skipped (below horizon tonight)" % view)
+				continue
+			aim = p["direction"]
+		_star_cap_aim(cam, aim)
+		ss.call("set_reference_stars_visible", true)
+		await _star_cap_settle(main)
+		await _graph_shot(dir, "stars_%s_markers" % view, manifest, "stars")
+		ss.call("set_reference_stars_visible", false)
+		await _star_cap_settle(main)
+		await _graph_shot(dir, "stars_%s" % view, manifest, "stars")
+		var img := get_viewport().get_texture().get_image()
+		var rows: Array = _star_cap_measure(main, ss, cam, img)
+		diag["views"][view] = rows
+		print("  view %-10s (%d stars in frame)" % [view, rows.size()])
+		for r in rows:
+			total += 1
+			var ok: bool = bool(r["found"]) and float(r["dist_px"]) <= STAR_CAP_PASS_PX
+			if not ok:
+				bad += 1
+			print("    %-11s expected (%6.1f,%6.1f)  found %-16s  dist %s  %s" % [
+				r["star"], r["expected"].x, r["expected"].y,
+				("(%6.1f,%6.1f)" % [r["found_px"].x, r["found_px"].y]) if r["found"] else "-",
+				("%.1f px = %.2f deg" % [float(r["dist_px"]), float(r["dist_deg"])]) if r["found"] else "n/a",
+				"ok" if ok else "MISS"])
+	var marker_ok := total >= 8 and bad <= 1
+	if not marker_ok:
+		diag["fails"].append("markers: %d of %d stars beyond %.0f px" % [bad, total, STAR_CAP_PASS_PX])
+		push_error("PlaytestHarness: star markers vs texture — %d of %d beyond %.0f px" % [bad, total, STAR_CAP_PASS_PX])
+	else:
+		print("  marker-vs-texture: %d stars, %d beyond %.0f px  PASS" % [total, bad, STAR_CAP_PASS_PX])
+
+	# --- 2. rotation about the north celestial pole over 2 h -----------------
+	var basis: Dictionary = StarSkyMath.equatorial_basis(orig_lat)
+	cam.fov = 90.0
+	_star_cap_aim(cam, basis["pole"])
+	ss.call("set_reference_stars_visible", false)
+	await _star_cap_settle(main)
+	await _graph_shot(dir, "rotation_north_22h", manifest, "stars")
+	var a := _star_cap_pair(main, ss, cam, get_viewport().get_texture().get_image(), "polaris", "dubhe")
+	_star_cap_set_night(main, 2026, 1, 15, 24.0)  # rolls to Jan 16 00:00
+	await _star_cap_settle(main)
+	await _graph_shot(dir, "rotation_north_24h", manifest, "stars")
+	var b := _star_cap_pair(main, ss, cam, get_viewport().get_texture().get_image(), "polaris", "dubhe")
+	diag["rotation"]["north"] = _star_cap_rotation_report(a, b, 30.08, "north (Polaris still, Dubhe CCW)", diag, cam, float(get_viewport().get_texture().get_image().get_height()), ss)
+
+	# --- 3. southern site: the same about the SCP, clockwise -----------------
+	main.call("apply_location", -31.95, 115.86, "Perth (harness)", false)
+	_star_cap_set_night(main, 2026, 1, 15, 22.0)
+	await _star_cap_settle(main)
+	var sbasis: Dictionary = StarSkyMath.equatorial_basis(-31.95)
+	_star_cap_aim(cam, -(sbasis["pole"] as Vector3))
+	await _star_cap_settle(main)
+	await _graph_shot(dir, "rotation_south_22h", manifest, "stars")
+	var simg := get_viewport().get_texture().get_image()
+	var srows: Array = _star_cap_measure(main, ss, cam, simg)
+	diag["views"]["south_pole"] = srows
+	print("  view %-10s (%d stars in frame, Perth)" % ["south_pole", srows.size()])
+	var sbad := 0
+	for r in srows:
+		var ok: bool = bool(r["found"]) and float(r["dist_px"]) <= STAR_CAP_PASS_PX
+		if not ok:
+			sbad += 1
+		print("    %-11s expected (%6.1f,%6.1f)  found %-16s  dist %s  %s" % [
+			r["star"], r["expected"].x, r["expected"].y,
+			("(%6.1f,%6.1f)" % [r["found_px"].x, r["found_px"].y]) if r["found"] else "-",
+			("%.1f px = %.2f deg" % [float(r["dist_px"]), float(r["dist_deg"])]) if r["found"] else "n/a",
+			"ok" if ok else "MISS"])
+	if srows.size() < 2 or sbad > 1:
+		diag["fails"].append("south: %d of %d stars beyond %.0f px" % [sbad, srows.size(), STAR_CAP_PASS_PX])
+		push_error("PlaytestHarness: southern sky markers vs texture — %d of %d beyond %.0f px" % [sbad, srows.size(), STAR_CAP_PASS_PX])
+	var sa := _star_cap_pair(main, ss, cam, simg, "acrux", "canopus")
+	_star_cap_set_night(main, 2026, 1, 15, 24.0)
+	await _star_cap_settle(main)
+	await _graph_shot(dir, "rotation_south_24h", manifest, "stars")
+	var sb := _star_cap_pair(main, ss, cam, get_viewport().get_texture().get_image(), "acrux", "canopus")
+	diag["rotation"]["south"] = _star_cap_rotation_report(sa, sb, -30.08, "south (about the SCP, clockwise)", diag, cam, float(get_viewport().get_texture().get_image().get_height()), ss)
+
+	# --- restore --------------------------------------------------------------
+	main.call("apply_location", orig_lat, orig_lon, "", false)
+	if planets != null and planets.has_method("apply_settings") and not planet_prefs.is_empty():
+		planets.call("apply_settings", planet_prefs)
+	if saved_clouds != null:
+		main.set("clouds_cutoff", saved_clouds)
+	ss.call("set_reference_stars_visible", false)
+	for child in main.get_children():
+		if child is CanvasLayer:
+			child.visible = true
+	cam.queue_free()
+	if prev_cam != null and is_instance_valid(prev_cam):
+		prev_cam.make_current()
+
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	var df := FileAccess.open("%s/stars_diagnostics.json" % dir, FileAccess.WRITE)
+	if df != null:
+		df.store_string(JSON.stringify(_star_cap_jsonable(diag), "\t"))
+		df.close()
+	var fails: Array = diag["fails"]
+	print("PlaytestHarness: star capture — %d shots in %s — %s" % [
+		manifest.size(), ProjectSettings.globalize_path(dir),
+		"PASS" if fails.is_empty() else "FAIL: " + "; ".join(PackedStringArray(fails))])
+	_maybe_quit()
+
+
+func _star_cap_set_night(main: Node, y: int, m: int, d: int, hour: float) -> void:
+	main.set("time_scale", 0.0)
+	main.set("year", y)
+	main.set("month", m)
+	main.set("day", d)
+	main.set("day_time", hour)
+	main.set("clouds_cutoff", 1.0)
+
+
+## Wait for the 20 Hz sky tick to push the new clock/markers, then two draws.
+func _star_cap_settle(main: Node) -> void:
+	await get_tree().create_timer(0.35).timeout
+	# Whatever the weather sampler wants tonight, the shots need a clear sky.
+	var env: Variant = main.get("environment")
+	if env is WorldEnvironment and env.environment != null and env.environment.sky != null:
+		var mat: Material = env.environment.sky.sky_material
+		if mat is ShaderMaterial:
+			mat.set_shader_parameter("clouds_cutoff", 1.0)
+			mat.set_shader_parameter("clouds_weight", 0.0)
+			mat.set_shader_parameter("cirrus_amount", 0.0)
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+
+
+func _star_cap_aim(cam: Camera3D, dir: Vector3) -> void:
+	var up := Vector3.UP if absf(dir.normalized().y) < 0.99 else Vector3(0, 0, -1)
+	cam.look_at(cam.global_position + dir.normalized() * 100.0, up)
+
+
+## Luminance-weighted centroid of the pixels >= 60% of the window peak within
+## +-radius of (cx, cy). Returns {found, px, peak}.
+func _star_cap_blob(img: Image, cx: float, cy: float, radius: int) -> Dictionary:
+	var w := img.get_width()
+	var h := img.get_height()
+	var x0 := clampi(int(cx) - radius, 0, w - 1)
+	var x1 := clampi(int(cx) + radius, 0, w - 1)
+	var y0 := clampi(int(cy) - radius, 0, h - 1)
+	var y1 := clampi(int(cy) + radius, 0, h - 1)
+	var peak := 0.0
+	for yy in range(y0, y1 + 1):
+		for xx in range(x0, x1 + 1):
+			peak = maxf(peak, img.get_pixel(xx, yy).get_luminance())
+	# 0.05: after the shader's contrast curve a 2nd-magnitude star (Polaris,
+	# Merak) sits well under 0.12; the sky itself is ~0.01 at night.
+	if peak < 0.05:
+		return {"found": false, "px": Vector2.ZERO, "peak": peak}
+	var thr := peak * 0.6
+	var sw := 0.0
+	var sx := 0.0
+	var sy := 0.0
+	for yy in range(y0, y1 + 1):
+		for xx in range(x0, x1 + 1):
+			var l := img.get_pixel(xx, yy).get_luminance()
+			if l >= thr:
+				sw += l
+				sx += l * (float(xx) + 0.5)
+				sy += l * (float(yy) + 0.5)
+	return {"found": true, "px": Vector2(sx / sw, sy / sw), "peak": peak}
+
+
+## Every catalog star above 10° and inside the frame: projected marker position
+## vs the brightest texture blob nearby (markers OFF in `img`).
+func _star_cap_measure(main: Node, ss: Node, cam: Camera3D, img: Image) -> Array:
+	var rows: Array = []
+	var vp_size := Vector2(img.get_width(), img.get_height())
+	var deg_per_px := cam.fov / vp_size.y
+	var moon_dir := Vector3.ZERO
+	var clk: Variant = main.get("clock")
+	if clk != null and clk.has_method("get_moon_direction"):
+		moon_dir = clk.call("get_moon_direction")
+	var catalog: Dictionary = ss.get("REFERENCE_STARS")
+	for name in catalog.keys():
+		var p: Dictionary = ss.call("get_reference_star_position", name)
+		if p.is_empty() or float(p["altitude"]) < 10.0:
+			continue
+		var d: Vector3 = p["direction"]
+		if moon_dir.length() > 0.5 and d.angle_to(moon_dir) < deg_to_rad(8.0):
+			continue
+		var world := cam.global_position + d * 1000.0
+		if cam.is_position_behind(world):
+			continue
+		var sp := cam.unproject_position(world)
+		var margin := float(STAR_CAP_SEARCH_PX + 4)
+		if sp.x < margin or sp.y < margin or sp.x > vp_size.x - margin or sp.y > vp_size.y - margin:
+			continue
+		var blob := _star_cap_blob(img, sp.x, sp.y, STAR_CAP_SEARCH_PX)
+		var row := {"star": name, "expected": sp, "found": blob["found"], "found_px": blob["px"],
+			"dist_px": -1.0, "dist_deg": -1.0, "peak": blob["peak"]}
+		if blob["found"]:
+			row["dist_px"] = sp.distance_to(blob["px"])
+			row["dist_deg"] = row["dist_px"] * deg_per_px
+		rows.append(row)
+	return rows
+
+
+func _star_cap_pair(main: Node, ss: Node, cam: Camera3D, img: Image, a: String, b: String) -> Dictionary:
+	var out := {}
+	for name in [a, b]:
+		var p: Dictionary = ss.call("get_reference_star_position", name)
+		var sp := cam.unproject_position(cam.global_position + (p["direction"] as Vector3) * 1000.0)
+		var blob := _star_cap_blob(img, sp.x, sp.y, STAR_CAP_SEARCH_PX)
+		out[name] = {"expected": sp, "found": blob["found"], "px": blob["px"]}
+	return out
+
+
+func _star_cap_rotation_report(a: Dictionary, b: Dictionary, expect_deg: float, label: String, diag: Dictionary,
+		cam: Camera3D, img_h: float, ss: Node) -> Dictionary:
+	var ka: Array = a.keys()
+	var pivot: String = ka[0]
+	var mover: String = ka[1]
+	var rep := {"pivot": pivot, "mover": mover, "expected_deg": expect_deg}
+	if not (a[pivot]["found"] and a[mover]["found"] and b[pivot]["found"] and b[mover]["found"]):
+		rep["error"] = "a star was not found in one of the frames"
+		diag["fails"].append("rotation %s: star not found" % label)
+		push_error("PlaytestHarness: rotation %s — a star was not found" % label)
+		return rep
+	var pa: Vector2 = a[pivot]["px"]
+	var pb: Vector2 = b[pivot]["px"]
+	var ma: Vector2 = a[mover]["px"]
+	var mb: Vector2 = b[mover]["px"]
+	# The camera looks straight at the pole, so a star θ° from the pole sits at
+	# radius f·tan θ in a gnomonic frame (f = h/2 / tan(fov/2)) and a 2 h turn
+	# moves it along a chord 2·f·tan θ·sin(Δ/2). Pinning the measured chord to
+	# that geometry (not "some pixels") is what makes the check mean something.
+	var f := img_h * 0.5 / tan(deg_to_rad(cam.fov * 0.5))
+	var half := sin(deg_to_rad(absf(expect_deg) * 0.5))
+	var catalog: Dictionary = ss.get("REFERENCE_STARS")
+	var exp_pivot := 2.0 * f * tan(deg_to_rad(90.0 - absf(float(catalog[pivot]["dec"])))) * half
+	var exp_mover := 2.0 * f * tan(deg_to_rad(90.0 - absf(float(catalog[mover]["dec"])))) * half
+	var pivot_moved := pa.distance_to(pb)
+	var mover_moved := ma.distance_to(mb)
+	# Screen y points DOWN; use the math convention (y up) so CCW is positive.
+	var ang_a := atan2(-(ma.y - pa.y), ma.x - pa.x)
+	var ang_b := atan2(-(mb.y - pb.y), mb.x - pb.x)
+	var rot := rad_to_deg(wrapf(ang_b - ang_a, -PI, PI))
+	rep["pivot_moved_px"] = pivot_moved
+	rep["pivot_expected_px"] = exp_pivot
+	rep["mover_moved_px"] = mover_moved
+	rep["mover_expected_px"] = exp_mover
+	rep["rotation_deg"] = rot
+	var ok_pivot := absf(pivot_moved - exp_pivot) <= maxf(4.0, 0.15 * exp_pivot)
+	var ok_mover := absf(mover_moved - exp_mover) <= maxf(4.0, 0.15 * exp_mover)
+	var ok_rot := absf(rot - expect_deg) <= 1.5
+	var ok := ok_pivot and ok_mover and ok_rot
+	print("  rotation %s: %s moved %.1f px (expect %.1f), %s moved %.1f px (expect %.1f), %s->%s vector rotated %+.2f deg (expect %+.2f)  %s" % [
+		label, pivot, pivot_moved, exp_pivot, mover, mover_moved, exp_mover, pivot, mover, rot, expect_deg, "PASS" if ok else "FAIL"])
+	if not ok:
+		diag["fails"].append("rotation %s: pivot %.1f/%.1f px, mover %.1f/%.1f px, rot %.2f" % [label, pivot_moved, exp_pivot, mover_moved, exp_mover, rot])
+		push_error("PlaytestHarness: rotation proof failed — %s" % label)
+	return rep
+
+
+func _star_cap_jsonable(v: Variant) -> Variant:
+	if v is Dictionary:
+		var d := {}
+		for k in v.keys():
+			d[str(k)] = _star_cap_jsonable(v[k])
+		return d
+	if v is Array:
+		var arr := []
+		for e in v:
+			arr.append(_star_cap_jsonable(e))
+		return arr
+	if v is Vector2:
+		return [v.x, v.y]
+	if v is Vector3:
+		return [v.x, v.y, v.z]
+	return v
+
+
+## --- Dawn lighting capture ---------------------------------------------------
+## The sunrise used to switch on like a lightbulb, and a single PNG cannot show
+## a RATE. This parks the clock at a ladder of solar altitudes (−14° … +20°) on
+## the equinox, shoots toward the sun's bearing and away from it at each step,
+## and DUMPS what the lighting actually did on the live nodes: DirectionalLight
+## energy + colour, ambient, night amount. Asserts the contract the daylight
+## selftest pins offline, now measured end to end: no beam with the sun below
+## the horizon (the old ramp lit the ground from −5.7°), energy and ambient
+## monotonic through the ladder, the beam still weak on the horizon, and every
+## light colour white at 20°. Clock and clouds are restored; nothing persists.
+const DAWN_CAP_ALTITUDES: Array[float] = [-14.0, -10.0, -7.0, -5.0, -3.0, -1.5, -0.5, 0.0, 0.5, 1.0, 2.0, 4.0, 7.0, 12.0, 20.0]
+
+
+func _run_dawn_capture() -> void:
+	var tree := get_tree()
+	var loader := tree.current_scene.find_child("TerrainLoader", true, false) \
+		if tree.current_scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+
+	var main := _find_main()
+	var sun: DirectionalLight3D = main.get("sun") as DirectionalLight3D if main != null else null
+	var clock: Object = main.get("clock") as Object if main != null else null  # CelestialClock is a RefCounted
+	var env: WorldEnvironment = main.get("environment") as WorldEnvironment if main != null else null
+	if main == null or sun == null or clock == null or env == null or env.environment == null:
+		push_error("PlaytestHarness: no Main/sun/clock/environment — aborting dawn capture")
+		_maybe_quit()
+		return
+
+	var label := _shots_label if not _shots_label.is_empty() else "dawn"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var manifest: Array = []
+	var diag := {"steps": [], "fails": []}
+
+	_set_capture_conditions()
+	var saved_clouds: Variant = main.get("clouds_cutoff")
+	var saved_date := [int(main.get("year")), int(main.get("month")), int(main.get("day")), float(main.get("day_time"))]
+	main.set("time_scale", 0.0)
+	main.set("year", 2026)
+	main.set("month", 3)
+	main.set("day", 20)
+	main.set("clouds_cutoff", 1.0)
+
+	var prev_cam := get_viewport().get_camera_3d()
+	var cam := Camera3D.new()
+	cam.name = "PlaytestDawnCam"
+	cam.far = 40000.0
+	cam.fov = 60.0
+	main.add_child(cam)
+	if prev_cam != null:
+		cam.global_position = prev_cam.global_position + Vector3(0.0, 12.0, 0.0)
+	else:
+		cam.global_position = Vector3(0.0, 15.0, 0.0)
+	cam.make_current()
+
+	var noon_e := float(main.get("sun_base_enegry")) * DaylightModel.SUN_ZENITH_GAIN
+	print("\n=== DAWN LIGHTING CAPTURE ===")
+	print("site lat %.4f lon %.4f   2026-03-20   twilight_length %.2f  sun_warmth %.2f  sun base %.2f (noon ref %.2f)" % [
+		float(main.get("latitude")), float(main.get("longitude")),
+		float(main.get("twilight_length")), float(main.get("sun_warmth")),
+		float(main.get("sun_base_enegry")), noon_e])
+	# The ambient column is the player's own ramp: with ambient_energy_mult 0 it
+	# reads 0 at every step and the ground is lit by the beam alone.
+	print("player prefs: ambient_energy_mult %.2f  ambient_sky_contribution %.2f  tonemap_exposure %.2f" % [
+		float(main.get("ambient_energy_mult")), float(main.get("ambient_sky_contribution")), float(main.get("tonemap_exposure"))])
+	print("  %6s %7s %8s %8s %-22s %8s %6s" % ["alt", "clock", "beam", "beam%", "light colour", "ambient", "night"])
+
+	var prev_e := -1.0
+	var prev_amb := -1.0
+	for alt in DAWN_CAP_ALTITUDES:
+		var t := _dawn_cap_time_for_altitude(main, clock, alt)
+		if is_nan(t):
+			print("  %+6.1f  (sun never reaches this altitude here today) skipped" % alt)
+			continue
+		main.set("day_time", t)
+		await _star_cap_settle(main)
+		var sd: Vector3 = clock.call("get_sun_direction")
+		var bearing := Vector3(sd.x, 0.0, sd.z)
+		if bearing.length() < 1e-4:
+			bearing = Vector3(0.0, 0.0, -1.0)
+		bearing = bearing.normalized()
+		var tag := ("m" if alt < 0.0 else "p") + ("%04.1f" % absf(alt))
+		_star_cap_aim(cam, (bearing + Vector3(0.0, -0.1, 0.0)).normalized())
+		await RenderingServer.frame_post_draw
+		await _graph_shot(dir, "dawn_%s_sunward" % tag, manifest, "dawn")
+		_star_cap_aim(cam, (-bearing + Vector3(0.0, -0.1, 0.0)).normalized())
+		await RenderingServer.frame_post_draw
+		await _graph_shot(dir, "dawn_%s_antisun" % tag, manifest, "dawn")
+
+		var e := sun.light_energy
+		var c := sun.light_color
+		var amb := env.environment.ambient_light_energy
+		var night := DaylightModel.night_amount(sd.y, float(main.get("twilight_length")))
+		var row := {"alt_deg": alt, "clock_h": t, "sun_dir_y": sd.y, "beam": e, "beam_frac": e / maxf(noon_e, 1e-6),
+			"color": [c.r, c.g, c.b], "ambient": amb, "night_amount": night}
+		diag["steps"].append(row)
+		print("  %+6.1f %7.3f %8.4f %7.1f%% (%.2f, %.2f, %.2f)      %8.4f %6.3f" % [
+			alt, t, e, 100.0 * e / maxf(noon_e, 1e-6), c.r, c.g, c.b, amb, night])
+		if alt <= -1.0 and e > 1e-6:
+			diag["fails"].append("beam %.4f with the sun at %+.1f° (must be 0 below the horizon)" % [e, alt])
+		if e < prev_e - 1e-6:
+			diag["fails"].append("beam fell from %.4f to %.4f between steps ending %+.1f°" % [prev_e, e, alt])
+		if amb < prev_amb - 1e-6:
+			diag["fails"].append("ambient fell from %.4f to %.4f between steps ending %+.1f°" % [prev_amb, amb, alt])
+		if absf(alt) < 0.01 and e > 0.08 * noon_e:
+			diag["fails"].append("beam on the horizon is %.1f%% of noon (lightbulb — must be a few percent)" % (100.0 * e / noon_e))
+		if absf(alt) < 0.01 and (c.b > 0.25 or c.g > 0.7):
+			diag["fails"].append("horizon light colour %s is not deep orange" % str(c))
+		if absf(alt - 20.0) < 0.01 and (c.g < 0.9 or c.b < 0.8):
+			diag["fails"].append("light at 20° is still tinted %s" % str(c))
+		prev_e = e
+		prev_amb = amb
+
+	# --- restore --------------------------------------------------------------
+	main.set("year", saved_date[0])
+	main.set("month", saved_date[1])
+	main.set("day", saved_date[2])
+	main.set("day_time", saved_date[3])
+	if saved_clouds != null:
+		main.set("clouds_cutoff", saved_clouds)
+	for child in main.get_children():
+		if child is CanvasLayer:
+			child.visible = true
+	cam.queue_free()
+	if prev_cam != null and is_instance_valid(prev_cam):
+		prev_cam.make_current()
+
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	var df := FileAccess.open("%s/dawn_diagnostics.json" % dir, FileAccess.WRITE)
+	if df != null:
+		df.store_string(JSON.stringify(diag, "\t"))
+		df.close()
+	var fails: Array = diag["fails"]
+	for msg in fails:
+		push_error("PlaytestHarness dawn: %s" % msg)
+	print("PlaytestHarness: dawn capture — %d shots in %s — %s" % [
+		manifest.size(), ProjectSettings.globalize_path(dir),
+		"PASS" if fails.is_empty() else "FAIL: " + "; ".join(PackedStringArray(fails))])
+	_maybe_quit()
+
+
+## Clock hour (morning, 1 h … 12.5 h) at which the sun sits at `alt_deg`, by
+## bisection on the clock's own sun direction. NAN when the sun never gets
+## there today. Leaves day_time wherever the last probe put it.
+func _dawn_cap_time_for_altitude(main: Node, clock: Object, alt_deg: float) -> float:
+	var target := sin(deg_to_rad(alt_deg))
+	var lo := 1.0
+	var hi := 12.5
+	main.set("day_time", lo)
+	var f_lo: float = (clock.call("get_sun_direction") as Vector3).y - target
+	main.set("day_time", hi)
+	var f_hi: float = (clock.call("get_sun_direction") as Vector3).y - target
+	if f_lo > 0.0 or f_hi < 0.0:
+		return NAN
+	for _i in 48:
+		var mid := 0.5 * (lo + hi)
+		main.set("day_time", mid)
+		var fm: float = (clock.call("get_sun_direction") as Vector3).y - target
+		if fm < 0.0:
+			lo = mid
+		else:
+			hi = mid
+	return 0.5 * (lo + hi)
