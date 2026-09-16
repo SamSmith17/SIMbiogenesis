@@ -470,10 +470,14 @@ func _ensure_preview() -> void:
 	_preview = MeshInstance3D.new()
 	_preview.name = "ConduitRoutePreview"
 	_preview.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	if _manager != null:
-		_manager.add_child(_preview)
-	else:
-		add_child(_preview)
+	# The ghost's vertices are WORLD-space, so it must sit at global identity —
+	# top_level gives it that under any parent, including this controller, which
+	# rides the moving Player. Parenting here rather than under ConduitManager
+	# also keeps the drag ghost alive when the manager hides its runs in first
+	# person (ConduitManager._refresh_world_visibility): the feedback you are
+	# dragging must show even when the finished wire will not.
+	_preview.top_level = true
+	add_child(_preview)
 	_preview.visible = false
 
 

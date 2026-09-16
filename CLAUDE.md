@@ -645,7 +645,10 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # exists because those states differ: item elevations used to be resolved only on
 # graph-view entry, so a culvert loaded anchored at world Y ~ 0 and fired into the
 # sky until the player pressed G. Asserts up front that no culvert outlet sits
-# above its inlet and no endpoint pair is stranded 120 m apart:
+# above its inlet and no endpoint pair is stranded 120 m apart, and — the state
+# no screenshot of this run can show — the WORLD-VISIBILITY gate at each moment:
+# runs hidden in first person, shown while the Lab CT is up, and the global
+# wires pref handed back on graph close (see "Conduits are x-ray by design"):
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=hydroload --quit-after-capture
 # Siphon auto-bind distance-cap guard (WINDOWED, console-only): places a NEAR
 # pond and a FAR pond next to a synthetic siphon and confirms bind_siphon_to_

@@ -524,6 +524,7 @@ func _on_automation_triggered(automation_id: String) -> void:
 func _exit_tree() -> void:
 	_flush_graph_autosave()
 	_shutdown_soi_preview_world_effects()
+	_restore_site_conduit_visibility()
 	if _sim_load_host != null and _sim_load_host.has_method("teardown"):
 		_sim_load_host.call("teardown")
 	# Make sure a hot historical session does not leave the global SimMode
@@ -1054,6 +1055,14 @@ func _notification(what: int) -> void:
 			# switching view modes inside an open graph.
 			_force_teardown_siphon_lab_on_graph_close()
 			_shutdown_soi_preview_world_effects()
+			# Site Plan's prefer_3d wire mode FORCES the player's global
+			# "Show 3D wires (world)" pref on for the duration of the session,
+			# and only restored it when switching to a non-physical view — so
+			# closing the graph straight out of Site (or via Elevation, which
+			# is physical) left it stomped ON, and every x-ray conduit stayed
+			# hanging over the landscape in first person for the rest of the
+			# session. Closing the graph ends the session too.
+			_restore_site_conduit_visibility()
 			_elev_end_noon_lock()
 		_apply_mouse_for_graph(visible)
 	elif what == NOTIFICATION_RESIZED:
@@ -4424,10 +4433,25 @@ func _ensure_soi_preview() -> void:
 	add_child(_soi_preview)
 	if _soi_preview.has_method("setup"):
 		_soi_preview.call("setup", self, _graph_canvas)
+	# 3D conduits are X-ray by design (they must read through the Elevation /
+	# Site CT soil bowl), so with world wires off they are hidden in first
+	# person and shown only while this preview is up — one signal covers both
+	# the mode switches and the graph-close teardown path.
+	if _soi_preview.has_signal("preview_active_changed") 			and not _soi_preview.is_connected(
+				"preview_active_changed", _on_soi_preview_active_changed):
+		_soi_preview.connect("preview_active_changed", _on_soi_preview_active_changed)
 	# Hand the canvas a reference so it can use the preview camera as the
 	# projection authority for orbited Site/Elevation views (workstream E).
 	if _graph_canvas != null and is_instance_valid(_graph_canvas):
 		_graph_canvas.set("soi_preview_service", _soi_preview)
+
+
+func _on_soi_preview_active_changed(on: bool) -> void:
+	# Only the reveal may build a manager on demand — the teardown path also
+	# runs on graph close / exit, where minting one would be pointless at best.
+	var mgr: Node3D = _get_conduit_manager() if on else _conduit_manager
+	if mgr != null and is_instance_valid(mgr) and mgr.has_method("set_preview_visibility"):
+		mgr.call("set_preview_visibility", on)
 
 
 ## Called when the graph Control is hidden (G toggle). Ensures Lab session
@@ -11649,6 +11673,11 @@ func _init_conduit_manager() -> void:
 		main_node.add_child(_conduit_manager)
 	if _conduit_manager.has_method("setup"):
 		_conduit_manager.call("setup", model, main_node)
+	# setup() re-applies the world-visibility gate from the global pref alone,
+	# so re-push the live preview state (a manager rebuilt while Site/Elevation
+	# is open would otherwise stay hidden inside the preview that needs it).
+	if _conduit_manager.has_method("set_preview_visibility"):
+		_conduit_manager.call("set_preview_visibility", is_soi_preview_active())
 	_ensure_conduit_route_ui(main_node)
 	_wire_player_conduit_controller(main_node)
 

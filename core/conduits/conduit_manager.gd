@@ -37,6 +37,10 @@ var _dense_routes_migrated: bool = false
 var _focus_id: String = ""
 var _global_visible: bool = false
 var _global_flow_glow: bool = false
+## True while the graph's 3D preview (Site Plan / Elevation CT / Hydro Lab
+## section) is rendering the shared World3D into its SubViewport. See
+## `_refresh_world_visibility` for why the node's own visibility rides on it.
+var _preview_visible: bool = false
 var _sync_pending: bool = false
 var _sync_timer: float = 0.0
 var _follow_timer: float = 0.0
@@ -73,6 +77,7 @@ func setup(model: GraphModel, main_node: Node) -> void:
 	_migrate_dense_unlocked_routes()
 	invalidate_astar()
 	_explicit_seen = _any_explicit_visible()
+	_refresh_world_visibility()
 	set_process(_global_visible or _explicit_seen)
 	if _global_visible or _explicit_seen:
 		# Never sync_all() here — graph restore also deferred SolarUI sync on the
@@ -137,6 +142,7 @@ func _autoload(name: String) -> Node:
 
 func set_global_visibility(visible: bool) -> void:
 	_global_visible = visible
+	_refresh_world_visibility()
 	if not visible:
 		_sync_pending = false
 		_remesh_queue.clear()
@@ -154,6 +160,33 @@ func set_global_visibility(visible: bool) -> void:
 	set_process(true)
 	invalidate_obstacle_cache()
 	_enqueue_all_remesh()
+
+
+## Told by SystemGraphView when the SoI preview service activates/deactivates
+## (its `preview_active_changed`), i.e. when Site Plan / Elevation CT / the
+## Hydro Lab section starts or stops rendering.
+func set_preview_visibility(on: bool) -> void:
+	if _preview_visible == on:
+		return
+	_preview_visible = on
+	_refresh_world_visibility()
+
+
+## Conduit materials are deliberately X-RAY (StandardMaterial3D.no_depth_test in
+## ConduitKinds.make_material, `depth_test_disabled` in conduit_flow.gdshader) so
+## buried runs read through the Elevation / Site CT soil bowl. That is exactly
+## what made them confusing in first person: an auto-revealed culvert tailrace or
+## routed penstock draws straight through the terrain, hanging over the landscape.
+##
+## So while the player's "Show 3D wires (world)" preference is OFF, the visuals
+## are still BUILT — the rebuild is what stamps route_length_m / endpoint inverts
+## for the physics, and explicitly-revealed conns must survive a map reload — but
+## the node is HIDDEN, and only unhidden while the graph preview is on screen.
+## The preview shares this World3D (own_world_3d = false), so hiding here hides
+## it there too; the preview flag is what keeps Site / Elevation / Hydro Lab
+## drawing the pipes they exist to show. Wires ON = visible everywhere, as before.
+func _refresh_world_visibility() -> void:
+	visible = _global_visible or _preview_visible
 
 
 func set_global_flow_glow(enabled: bool) -> void:
