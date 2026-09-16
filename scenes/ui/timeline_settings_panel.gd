@@ -71,14 +71,28 @@ var _drone_max_altitude: HSlider
 var _drone_tilt_intensity: HSlider
 var _drone_tilt_speed: HSlider
 var _stars_brightness: HSlider
-var _stars_scale: HSlider
 var _stars_twinkle: HSlider
 var _stars_horizon: HSlider
-var _stars_north: HSlider
-var _stars_decl: HSlider
-var _stars_flip_v: CheckBox
-var _stars_flip_h: CheckBox
 var _stars_glow: HSlider
+var _star_reg_lbl: Label
+var _stars_point_size: HSlider
+var _stars_saturation: HSlider
+var _stars_contrast: HSlider
+var _stars_bg_cut: HSlider
+var _stars_wash: HSlider
+var _mw_gain: HSlider
+var _mw_sat: HSlider
+var _mw_tint: ColorPickerButton
+var _star_quality: OptionButton
+var _planet_labels: OptionButton
+var _twilight_drama: HSlider
+var _twilight_length: HSlider
+var _sun_warmth: HSlider
+var _airglow: HSlider
+var _airglow_col: ColorPickerButton
+var _light_pollution: HSlider
+var _light_pollution_col: ColorPickerButton
+var _moon_sky_glow: HSlider
 var _star_trails: CheckBox
 var _star_trail_length: HSlider
 var _lock_sky: CheckBox
@@ -1298,6 +1312,23 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	_sun_glow = _add_slider(v, "Sun glow", 0.0, 4.0, 0.05, _on_sun_glow)
 	_sun_glow_size = _add_slider(v, "Sun glow size", 1.0, 30.0, 0.5, _on_sun_glow_size)
 	_sun_aureole = _add_slider(v, "Sun aureole", 0.0, 3.0, 0.05, _on_sun_aureole)
+	_twilight_drama = _add_slider(v, "Twilight drama", 0.0, 2.0, 0.05, _on_twilight_drama)
+	var td_hint := Label.new()
+	td_hint.text = "Scales the horizon fire band, the sun's aureole and glow near the horizon, and the pink Belt of Venus opposite the sun. 1.0 = natural, 0 = flat."
+	td_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	td_hint.custom_minimum_size = Vector2(420, 0)
+	td_hint.add_theme_color_override("font_color", C_TEXT_S)
+	td_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(td_hint)
+	_twilight_length = _add_slider(v, "Twilight length", 0.25, 3.0, 0.05, _on_twilight_length)
+	_sun_warmth = _add_slider(v, "Low-sun warmth", 0.0, 2.0, 0.05, _on_sun_warmth)
+	var tl_hint := Label.new()
+	tl_hint.text = "Sunlight follows the real atmosphere: none until the disc clears the horizon, then a few percent of noon in deep orange, half strength by 10°, white by 30°. Twilight length stretches how slowly the sky and ground fade after sunset (1 = natural, compressed for the screen). Low-sun warmth is the reddening of the direct light near the horizon (0 = white)."
+	tl_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tl_hint.custom_minimum_size = Vector2(420, 0)
+	tl_hint.add_theme_color_override("font_color", C_TEXT_S)
+	tl_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(tl_hint)
 	_god_rays = _add_check(v, "God rays (light shafts via volumetric fog)", _on_god_rays)
 	var gr_hint := Label.new()
 	gr_hint.text = "God rays enable a thin volumetric fog so the sun casts crepuscular shafts, strongest at sunrise/sunset. Adds some GPU cost."
@@ -1308,6 +1339,20 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	v.add_child(gr_hint)
 	_moon_size = _add_slider(v, "Moon disc size", 0.01, 0.2, 0.005, _on_moon_size)
 	_moon_glow = _add_slider(v, "Moon glow", 0.0, 2.0, 0.05, _on_moon_glow)
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Night sky")
+	_airglow = _add_slider(v, "Airglow", 0.0, 1.0, 0.01, _on_airglow)
+	_airglow_col = _add_color_row(v, "Airglow colour", Color(0.16, 0.30, 0.22), _on_airglow_color)
+	_light_pollution = _add_slider(v, "Light pollution", 0.0, 1.0, 0.01, _on_light_pollution)
+	_light_pollution_col = _add_color_row(v, "Pollution colour", Color(0.95, 0.62, 0.35), _on_light_pollution_color)
+	_moon_sky_glow = _add_slider(v, "Moonlit sky", 0.0, 2.0, 0.05, _on_moon_sky_glow)
+	var ns_hint := Label.new()
+	ns_hint.text = "The dark sky is a near-black gradient plus three light sources: airglow (the faint green band real dark skies show low down), a light-pollution dome, and moonlight. All zero on a moonless night = a Bortle-1 wilderness sky. Bright skies wash out faint stars (Stars tab → Sky-glow washout)."
+	ns_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ns_hint.custom_minimum_size = Vector2(420, 0)
+	ns_hint.add_theme_color_override("font_color", C_TEXT_S)
+	ns_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(ns_hint)
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Camera (field of view)")
 	_player_fov = _add_slider(v, "Player FOV°", 30.0, 120.0, 1.0, _on_player_fov)
@@ -1323,18 +1368,30 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 func _build_stars_planets_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Stars & Planets")
 	_add_section_lbl(v, "Stars")
+	# No RA/Dec/flip "calibration" here any more: orientation is computed from
+	# the clock + latitude and the map's registration comes from its sidecar
+	# (StarSystem / StarSkyMath). HOME shows the computed reference-star markers.
 	_stars_brightness = _add_slider(v, "Brightness", 0.0, 3.0, 0.05, _on_stars_brightness)
-	_stars_scale = _add_slider(v, "Scale", 0.5, 2.0, 0.05, _on_stars_scale)
+	_stars_point_size = _add_slider(v, "Point size", -1.0, 1.0, 0.05, _on_stars_point_size)
+	_stars_saturation = _add_slider(v, "Colour saturation", 0.0, 3.0, 0.05, _on_stars_saturation)
+	_stars_contrast = _add_slider(v, "Contrast", 1.0, 4.0, 0.05, _on_stars_contrast)
+	_stars_bg_cut = _add_slider(v, "Faint-star cut", 0.0, 0.3, 0.005, _on_stars_bg_cut)
 	_stars_twinkle = _add_slider(v, "Twinkle", 0.0, 1.0, 0.05, _on_stars_twinkle)
 	_stars_horizon = _add_slider(v, "Horizon fade", 0.0, 1.0, 0.05, _on_stars_horizon_fade)
-	_stars_north = _add_slider(v, "RA offset", -360.0, 360.0, 0.5, _on_stars_north_offset)
-	_stars_decl = _add_slider(v, "Dec offset", -180.0, 180.0, 0.5, _on_stars_decl_offset)
-	_stars_flip_v = _add_check(v, "Flip vertical", _on_stars_flip_vertical)
-	_stars_flip_h = _add_check(v, "Flip horizontal", _on_stars_flip_horizontal)
+	_stars_wash = _add_slider(v, "Sky-glow washout", 0.0, 1.0, 0.05, _on_stars_wash)
 	_stars_glow = _add_slider(v, "Star glow (halo)", 0.0, 1.0, 0.05, _on_stars_glow)
+	var stars_hint := _add_status_label(v, "Point size erodes/dilates every star disc by a texel. Colour comes from each disc's fringe (the export clips cores to white). Washout is how much moonlight and light pollution hide the faint stars.")
+	stars_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_add_section_lbl(v, "Milky Way")
+	_mw_gain = _add_slider(v, "Brightness", 0.0, 4.0, 0.05, _on_mw_gain)
+	_mw_sat = _add_slider(v, "Colour saturation", 0.0, 3.0, 0.05, _on_mw_sat)
+	_mw_tint = _add_color_row(v, "Tint", Color(1.0, 0.94, 0.88), _on_mw_tint)
+	_add_section_lbl(v, "Effects")
 	_star_trails = _add_check(v, "Star trails (long exposure)", _on_star_trails)
 	_star_trail_length = _add_slider(v, "Trail length", 0.0, 1.0, 0.05, _on_star_trail_length)
 	_lock_sky = _add_check(v, "Lock camera to sky (astro still)", _on_lock_camera_to_sky)
+	_add_section_lbl(v, "Star map")
+	_star_quality = _add_option(v, "Texture quality", ["Standard (8k, 32 MB VRAM)", "High (16k, 128 MB VRAM)"], _on_star_quality)
 	var tex_row := HBoxContainer.new()
 	tex_row.add_theme_constant_override("separation", 6)
 	var upload_btn := Button.new()
@@ -1347,9 +1404,13 @@ func _build_stars_planets_tab(tabs: TabContainer) -> void:
 	tex_row.add_child(reset_btn)
 	v.add_child(tex_row)
 	_star_texture_lbl = _add_status_label(v, "")
+	_star_reg_lbl = _add_status_label(v, "")
+	var reg_hint := _add_status_label(v, "Registration is measured by tools/starmap_prepare.py (sidecar .json next to the image). HOME toggles reference-star markers.")
+	reg_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Planets")
 	_planets_master = _add_check(v, "Show planets", _on_planets_master)
+	_planet_labels = _add_option(v, "Planet labels", ["Off", "On highlight (look at a planet)", "Always"], _on_planet_labels)
 	for spec in [
 		["mercury", "Mercury"], ["venus", "Venus"], ["mars", "Mars"],
 		["jupiter", "Jupiter"], ["saturn", "Saturn"],
@@ -1592,6 +1653,8 @@ func _refresh_labels() -> void:
 	if _star_texture_lbl:
 		var tp := str(snap.get("texture_path", ""))
 		_star_texture_lbl.text = "Texture: %s" % (tp if not tp.is_empty() else "default starmap")
+	if _star_reg_lbl:
+		_star_reg_lbl.text = "Registration: %s" % str(snap.get("registration_summary", "?"))
 
 
 func _sync_gameplay_from_snapshot(snap: Dictionary) -> void:
@@ -1670,6 +1733,22 @@ func _sync_advanced_from_snapshot(snap: Dictionary) -> void:
 		_sun_glow_size.value = snap.get("sun_glow_size", 9.0)
 	if _sun_aureole:
 		_sun_aureole.value = snap.get("sun_aureole", 0.8)
+	if _twilight_drama:
+		_twilight_drama.value = snap.get("twilight_drama", 1.2)
+	if _twilight_length:
+		_twilight_length.value = snap.get("twilight_length", 1.0)
+	if _sun_warmth:
+		_sun_warmth.value = snap.get("sun_warmth", 1.0)
+	if _airglow:
+		_airglow.value = snap.get("airglow_strength", 0.25)
+	if _airglow_col and snap.get("airglow_color") is Color:
+		_airglow_col.color = snap.get("airglow_color")
+	if _light_pollution:
+		_light_pollution.value = snap.get("light_pollution", 0.0)
+	if _light_pollution_col and snap.get("light_pollution_color") is Color:
+		_light_pollution_col.color = snap.get("light_pollution_color")
+	if _moon_sky_glow:
+		_moon_sky_glow.value = snap.get("moon_sky_glow", 1.0)
 	if _god_rays:
 		_god_rays.button_pressed = snap.get("god_rays_enabled", false)
 	if _player_fov:
@@ -1713,22 +1792,34 @@ func _sync_drone_from_snapshot(snap: Dictionary) -> void:
 func _sync_stars_planets_from_snapshot(snap: Dictionary) -> void:
 	if _stars_brightness:
 		_stars_brightness.value = snap.get("stars_brightness", 1.0)
-	if _stars_scale:
-		_stars_scale.value = snap.get("stars_scale", 1.0)
 	if _stars_twinkle:
 		_stars_twinkle.value = snap.get("stars_twinkle", 0.3)
 	if _stars_horizon:
 		_stars_horizon.value = snap.get("stars_horizon_fade", 0.5)
-	if _stars_north:
-		_stars_north.value = snap.get("stars_north_offset", 0.0)
-	if _stars_decl:
-		_stars_decl.value = snap.get("stars_declination_offset", 0.0)
-	if _stars_flip_v:
-		_stars_flip_v.button_pressed = snap.get("stars_flip_vertical", false)
-	if _stars_flip_h:
-		_stars_flip_h.button_pressed = snap.get("stars_flip_horizontal", false)
 	if _stars_glow:
 		_stars_glow.value = snap.get("stars_glow", 0.0)
+	if _stars_point_size:
+		_stars_point_size.value = snap.get("stars_point_size", 0.0)
+	if _stars_saturation:
+		_stars_saturation.value = snap.get("stars_saturation", 1.5)
+	if _stars_contrast:
+		_stars_contrast.value = snap.get("stars_contrast", 1.4)
+	if _stars_bg_cut:
+		_stars_bg_cut.value = snap.get("stars_background_cut", 0.02)
+	if _stars_wash:
+		_stars_wash.value = snap.get("stars_wash", 0.7)
+	if _mw_gain:
+		_mw_gain.value = snap.get("milkyway_gain", 1.3)
+	if _mw_sat:
+		_mw_sat.value = snap.get("milkyway_saturation", 1.2)
+	if _mw_tint and snap.get("milkyway_tint") is Color:
+		_mw_tint.color = snap.get("milkyway_tint")
+	if _star_quality:
+		var high_ok := bool(snap.get("texture_quality_high_available", false))
+		_star_quality.set_item_disabled(1, not high_ok)
+		_star_quality.selected = 1 if str(snap.get("texture_quality", "standard")) == "high" and high_ok else 0
+	if _planet_labels:
+		_planet_labels.selected = clampi(int(snap.get("planet_labels_mode", 0)), 0, 2)
 	if _star_trails:
 		_star_trails.button_pressed = float(snap.get("star_trails", 0.0)) > 0.5
 	if _star_trail_length:
@@ -2089,10 +2180,6 @@ func _on_stars_brightness(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_star_setting("stars_brightness", v)
 
-func _on_stars_scale(v: float) -> void:
-	if _syncing: return
-	SimSettingsController.apply_star_setting("stars_scale", v)
-
 func _on_stars_twinkle(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_star_setting("stars_twinkle", v)
@@ -2100,22 +2187,6 @@ func _on_stars_twinkle(v: float) -> void:
 func _on_stars_horizon_fade(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_star_setting("stars_horizon_fade", v)
-
-func _on_stars_north_offset(v: float) -> void:
-	if _syncing: return
-	SimSettingsController.apply_star_setting("stars_north_offset", v)
-
-func _on_stars_decl_offset(v: float) -> void:
-	if _syncing: return
-	SimSettingsController.apply_star_setting("stars_declination_offset", v)
-
-func _on_stars_flip_vertical(on: bool) -> void:
-	if _syncing: return
-	SimSettingsController.apply_star_setting("stars_flip_vertical", on)
-
-func _on_stars_flip_horizontal(on: bool) -> void:
-	if _syncing: return
-	SimSettingsController.apply_star_setting("stars_flip_horizontal", on)
 
 func _on_stars_glow(v: float) -> void:
 	if _syncing: return
@@ -2541,3 +2612,79 @@ func _on_open_npc_routines() -> void:
 			if not ids.is_empty():
 				item_id = str(ids[0])
 	graph.call("open_npc_routines", item_id)
+
+
+# ==================== Star look / night sky / planet labels ====================
+
+func _on_stars_point_size(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("stars_point_size", v)
+
+func _on_stars_saturation(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("stars_saturation", v)
+
+func _on_stars_contrast(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("stars_contrast", v)
+
+func _on_stars_bg_cut(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("stars_background_cut", v)
+
+func _on_stars_wash(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("stars_wash", v)
+
+func _on_mw_gain(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("milkyway_gain", v)
+
+func _on_mw_sat(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("milkyway_saturation", v)
+
+func _on_star_quality(idx: int) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("texture_quality", "high" if idx == 1 else "standard")
+
+func _on_planet_labels(idx: int) -> void:
+	if _syncing: return
+	SimSettingsController.apply_planet_setting("planet_labels_mode", idx)
+
+func _on_twilight_drama(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sky_setting("twilight_drama", v)
+
+func _on_airglow(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sky_setting("airglow_strength", v)
+
+func _on_airglow_color(c: Color) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sky_setting("airglow_color", c)
+
+func _on_light_pollution(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sky_setting("light_pollution", v)
+
+func _on_light_pollution_color(c: Color) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sky_setting("light_pollution_color", c)
+
+func _on_moon_sky_glow(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sky_setting("moon_sky_glow", v)
+
+func _on_mw_tint(c: Color) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("milkyway_tint", c)
+
+
+func _on_twilight_length(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sky_setting("twilight_length", v)
+
+func _on_sun_warmth(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sky_setting("sun_warmth", v)

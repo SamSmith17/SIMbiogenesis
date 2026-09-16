@@ -95,7 +95,7 @@ const _GROUPS := [
 		["key:Shift+F7", "Hide all trees (perf diagnosis)"],
 		["key:Ctrl+F7", "Cycle 3D render scale"],
 		["toggle_pov_warp", "POV warp overlay"],
-		["toggle_star_calibration", "Star calibration"],
+		["toggle_star_calibration", "Reference-star markers (sky alignment check)"],
 		["toggle_projection_warp", "Projection warp (StarShade)"],
 		["toggle_projection_calibration", "Projection calibration"],
 		["reset_projection_warp", "Reset projection warp"],

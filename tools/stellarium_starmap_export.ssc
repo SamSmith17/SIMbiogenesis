@@ -1,0 +1,103 @@
+// Stellarium script: export the all-sky star map SIMbiogenesis renders at night.
+//
+// Output: an 8192x4096 plate-carrée (equirectangular) image of the whole
+// celestial sphere in the EQUATORIAL frame at J2000.0, GUI hidden, no ground,
+// no atmosphere, no labels/lines — then run
+//     python tools/starmap_prepare.py <the screenshot> --note "Stellarium <version>"
+// which black-floors the background, FINDS the bright stars to measure how the
+// image is registered (which RA sits at the left edge, which way RA runs, is
+// north up), writes assets/sky/starmap_equirect_8k.png + .json, and refuses to
+// write anything if the stars are not where the catalog says they should be.
+//
+// CHECKLIST (do these BEFORE running — none of them is scriptable):
+//   1. Stellarium >= 1.2 (the "Plate carrée"/ProjectionCylinderFill projection
+//      was added in 1.2, Dec 2022). Help > About shows the version.
+//   2. Screenshot size lives in config.ini, [main] section
+//      (Windows: %APPDATA%\Stellarium\config.ini; edit with Stellarium CLOSED):
+//          screenshot_custom_size   = true
+//          screenshot_custom_width  = 8192
+//          screenshot_custom_height = 4096
+//      (Or: Configuration [F2] > Tools > "Custom size" for screenshots.)
+//   3. Give the window roughly a 2:1 shape so what you see previews the file.
+//   4. Open the script console (F12), load this file, Run. The PNG lands in
+//      the screenshot directory (Configuration > Tools shows it; default is
+//      your Pictures\Stellarium folder).
+//   5. If a line errors, the API name drifted for your version — check
+//      Help [F1] > "Scripting" for the current spelling (e.g. older builds use
+//      setFlagCardinalsPoints; some use setLightPollutionLuminance instead of
+//      setBortleScaleIndex). Wrap the offender in try {} catch(e) {} and re-run;
+//      the registration step downstream does not depend on any of them.
+//
+// Every visual knob below is a taste choice recorded in the sidecar; the
+// registration is measured, so changing them cannot break alignment.
+
+function tryCall(f, what) {
+	try { f(); } catch (e) { core.debug("starmap export: skipped " + what + " (" + e + ")"); }
+}
+
+core.setGuiVisible(false);
+core.setTimeRate(0);
+// J2000.0 — the epoch of the reference catalog the game checks against.
+// Equatorial mount mode is "of date"; at this date that IS J2000.
+core.setDate("2000-01-01T12:00:00", "utc");
+core.setObserverLocation(0.0, 0.0, 0, 0, "", "Earth");
+core.setMountMode("equatorial");
+// Plate carrée all-sky map filling the whole frame (FOV/pan are locked by it).
+core.setProjectionMode("ProjectionCylinderFill");
+
+tryCall(function(){ LandscapeMgr.setFlagLandscape(false); }, "landscape");
+tryCall(function(){ LandscapeMgr.setFlagAtmosphere(false); }, "atmosphere");
+tryCall(function(){ LandscapeMgr.setFlagFog(false); }, "fog");
+tryCall(function(){ LandscapeMgr.setFlagCardinalPoints(false); }, "cardinal points");
+tryCall(function(){ LandscapeMgr.setFlagCardinalsPoints(false); }, "cardinal points (old name)");
+// Every grid/line/pole marker off — the NCP marker is exactly the point that
+// flickers on the frame edge in this projection.
+tryCall(function(){ GridLinesMgr.setFlagGridlines(false); }, "grid lines");
+tryCall(function(){ GridLinesMgr.setFlagEquatorGrid(false); }, "equatorial grid");
+tryCall(function(){ GridLinesMgr.setFlagAzimuthalGrid(false); }, "azimuthal grid");
+tryCall(function(){ GridLinesMgr.setFlagEquatorLine(false); }, "equator line");
+tryCall(function(){ GridLinesMgr.setFlagEclipticLine(false); }, "ecliptic line");
+tryCall(function(){ GridLinesMgr.setFlagMeridianLine(false); }, "meridian line");
+tryCall(function(){ GridLinesMgr.setFlagHorizonLine(false); }, "horizon line");
+tryCall(function(){ GridLinesMgr.setFlagGalacticEquatorLine(false); }, "galactic equator");
+tryCall(function(){ GridLinesMgr.setFlagCelestialPoles(false); }, "celestial poles");
+tryCall(function(){ ConstellationMgr.setFlagLines(false); }, "constellation lines");
+tryCall(function(){ ConstellationMgr.setFlagLabels(false); }, "constellation labels");
+tryCall(function(){ ConstellationMgr.setFlagArt(false); }, "constellation art");
+tryCall(function(){ ConstellationMgr.setFlagBoundaries(false); }, "constellation boundaries");
+tryCall(function(){ SolarSystem.setFlagPlanets(false); }, "planets");
+tryCall(function(){ SolarSystem.setFlagLabels(false); }, "planet labels");
+tryCall(function(){ SolarSystem.setFlagOrbits(false); }, "orbits");
+tryCall(function(){ SolarSystem.setFlagTrails(false); }, "trails");
+tryCall(function(){ NebulaMgr.setFlagShow(false); }, "DSO images");
+tryCall(function(){ NebulaMgr.setFlagHints(false); }, "DSO hints");
+tryCall(function(){ ZodiacalLight.setFlagShow(false); }, "zodiacal light");
+tryCall(function(){ MeteorShowers.setEnableMarker(false); }, "meteor shower markers");
+tryCall(function(){ MeteorShowers.setEnableAtStartup(false); }, "meteor showers");
+tryCall(function(){ Satellites.setFlagHintsVisible(false); }, "satellite hints");
+tryCall(function(){ Satellites.setFlagLabelsVisible(false); }, "satellite labels");
+
+tryCall(function(){ StarMgr.setFlagStars(true); }, "stars on");
+tryCall(function(){ StarMgr.setFlagLabels(false); }, "star labels");
+tryCall(function(){ StelSkyDrawer.setFlagLuminanceAdaptation(false); }, "luminance adaptation");
+tryCall(function(){ StelSkyDrawer.setFlagTwinkle(false); }, "twinkle");
+// Darkest sky; the game applies its own light pollution / extinction / twinkle.
+tryCall(function(){ StelSkyDrawer.setBortleScaleIndex(1); }, "Bortle scale");
+tryCall(function(){ StelSkyDrawer.setLightPollutionLuminance(0.0); }, "light pollution luminance");
+// ~3–6 px star cores at 8k. Recorded in the sidecar by --note.
+tryCall(function(){ StelSkyDrawer.setAbsoluteStarScale(1.4); }, "absolute star scale");
+tryCall(function(){ StelSkyDrawer.setRelativeStarScale(1.0); }, "relative star scale");
+tryCall(function(){ StelSkyDrawer.setFlagStarMagnitudeLimit(true); }, "mag limit flag");
+tryCall(function(){ StelSkyDrawer.setCustomStarMagnitudeLimit(8.5); }, "mag limit");
+// Milky Way bright enough to survive the prep tool's black floor AND the sky shader's contrast (2.5 ≈ 40-90/255 on the band; 1.6 left it at 20-40 and it vanished in-game).
+tryCall(function(){ MilkyWay.setFlagShow(true); }, "milky way on");
+tryCall(function(){ MilkyWay.setIntensity(2.5); }, "milky way intensity");
+
+// Centre RA 12h so the u = 0/1 seam falls at RA 0h. The prep tool measures the
+// seam anyway, so a different centre only changes the sidecar's ra_deg_at_u0.
+core.moveToRaDecJ2000("12h00m00s", "+00d00m00s", 0);
+core.wait(3);
+core.screenshot("starmap_equirect", false, "", true, "png");
+core.wait(2);
+core.setGuiVisible(true);
+core.debug("starmap export: done — now run tools/starmap_prepare.py on the PNG");

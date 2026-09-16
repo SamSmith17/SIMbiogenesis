@@ -157,6 +157,10 @@ selftests green.
    *Fix (medium-risk):* relocate into homes (`gameplay/vehicles/`,
    `core/ha/`, `core/astronomy/`, …) **via the Godot editor** so `res://` /
    `.tscn` / `.tres` references are rewritten — do not `git mv` code blindly.
+   *Partial (2026-09-14):* `core/astronomy/` now exists and holds the star-field
+   math (`StarSkyMath` + selftest) that `star_system.gd`, `planets.gd`,
+   `CelestialClock` and `LunarPosition` all delegate to; the root scripts
+   themselves stay put by decision (4 scenes reference them).
 4. **Stalled v1/v2 split** — `system_graph_v2/graph_canvas_v2.gd extends
    system_graph/graph_canvas.gd`. Decide: finish the migration or fold v2 back.
 5. **Compat shims / dead ends** — `SimMode`→`TimeDirector`, the hidden `TimeUI`

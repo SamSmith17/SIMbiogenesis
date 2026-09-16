@@ -1281,6 +1281,24 @@
       "share_alike": false,
       "source": null,
       "status": "verified"
+    },
+    {
+      "added": "2026-09-14",
+      "attribution_required": null,
+      "attribution_string": "Star map rendered with Stellarium (stellarium.org); star data Hipparcos/Tycho-2 (ESA)",
+      "author": "Stellarium contributors; star catalogue data Hipparcos/Tycho-2 (ESA); Milky Way background per the installed Stellarium's own credits",
+      "category": "textures",
+      "commercial_ok": null,
+      "id": "starmap-stellarium",
+      "license": "pending",
+      "local_path": "assets/sky/starmap_equirect_8k.png (+ starmap_equirect_16k.png, the optional high-quality export from the same pipeline)",
+      "modifications": "Plate-carree all-sky render at J2000 (tools/stellarium_starmap_export.ssc), GUI/ground/atmosphere/labels off; black-floored and registration-measured by tools/starmap_prepare.py (sidecar .json)",
+      "name": "All-sky star map (Stellarium render)",
+      "notes": "Stellarium itself is GPL-2.0-or-later; a screenshot is program OUTPUT, but the bundled Milky Way panorama and star catalogues carry their own credits (Help > About > Credits in the installed version). Confirm the Milky Way texture author/licence before public release.",
+      "role": "Night-sky star field: sky.gdshader stars_texture via StarSystem",
+      "share_alike": null,
+      "source": "https://stellarium.org",
+      "status": "pending-verification"
     }
   ],
   "field_guide": {

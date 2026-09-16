@@ -170,6 +170,26 @@ func is_dst_active() -> bool :
 	else :
 		return manual_dst
 
+## Standard-time meridian of the observer's zone, approximated as the nearest
+## multiple of 15° of longitude (Bombay Beach −115.74° → −120°, Pacific).
+## THE ONE definition: get_solar_time(), the two *_to_clock_time inverses and
+## _julian_day_utc_for() all read it. They used to disagree — the sun used this
+## rounded meridian while every UTC-based consumer (stars, moon, planets, SPA)
+## used the EXACT longitude — so the star field sat ~4° from the sun's own sky
+## at Bombay Beach, by a per-site amount. Pinned by core/astronomy/
+## star_sky_selftest.gd ("one sky").
+func zone_meridian_deg() -> float :
+	return round( longitude / 15.0 ) * 15.0
+
+## Hours to ADD to UTC to get the local clock reading at a given local instant:
+## zone meridian / 15 plus one hour while DST is in force (US rules — applied
+## at any longitude, a pre-existing simplification). UTC = local − this.
+func zone_offset_hours( y: int, m: int, d: int, time_hours: float ) -> float :
+	var off : float = zone_meridian_deg() / 15.0
+	if _calculate_dst_for_date( y, m, d, time_hours ) :
+		off += 1.0
+	return off
+
 ## Calculate if DST is active for a given date (US rules)
 ## DST starts: 2nd Sunday of March at 2:00 AM
 ## DST ends: 1st Sunday of November at 2:00 AM
@@ -342,13 +362,14 @@ func unix_to_abs_hours( t_unix: int ) -> float :
 
 # ==================== JULIAN DAY / SOLAR TIME ====================
 
-## Calculate Julian Day Number (days since Jan 1, 4713 BC)
+## Julian Day (UTC) of the current clock instant. Historically this treated the
+## LOCAL clock reading as if it were UT (an ~8 h epoch error at Bombay Beach)
+## and fed declination, equation of time, sunrise/sunset and lunar phase with
+## it; those are all slow functions of JD, so the correction is small
+## (≤ 0.13° of declination, ~1 % of a lunation), but there is now exactly one
+## JD in this file and it is UTC.
 func get_julian_day() -> float :
-	var a : int = ( 14 - month ) / 12
-	var y : int = year + 4800 - a
-	var m : int = month + 12 * a - 3
-	var jdn : int = day + ( 153 * m + 2 ) / 5 + 365 * y + y / 4 - y / 100 + y / 400 - 32045
-	return float( jdn ) + ( day_time / HOURS_IN_DAY ) - 0.5
+	return get_julian_day_utc()
 
 ## Calculate Julian Day in UTC from local clock time
 ## day_time is treated as local clock time, we convert to UTC
@@ -359,17 +380,11 @@ func get_julian_day_utc() -> float :
 ## beyond longitude/DST rules). Shared by get_julian_day_utc() and the
 ## abs-hours evaluator path.
 func _julian_day_utc_for( y_in: int, mo: int, d: int, tod: float ) -> float :
-	# Local clock time to UTC conversion
-	# Base offset from longitude (approximates standard timezone)
-	# For Bombay Beach at -115.74°: base offset ≈ 7.716 hours (close to PST = UTC-8)
-	var utc_offset_hours : float = -longitude / 15.0
-
-	# DST adjustment: when DST is active, clocks are 1 hour ahead
-	# So we subtract 1 hour from the offset to get correct UTC
-	if _calculate_dst_for_date( y_in, mo, d, tod ) :
-		utc_offset_hours -= 1.0
-
-	var utc_time : float = tod + utc_offset_hours
+	# Local clock time to UTC through the SAME zone model the sun uses
+	# (zone_offset_hours: rounded meridian + DST). Do not "improve" this back to
+	# -longitude/15 — that is exact-longitude local mean time, not zone time,
+	# and it rotated the stars ~4° away from the sun at Bombay Beach.
+	var utc_time : float = tod - zone_offset_hours( y_in, mo, d, tod )
 
 	# Handle day overflow/underflow
 	var day_offset : int = 0
@@ -430,7 +445,7 @@ func get_solar_time() -> float :
 
 	# Standard timezone meridian (Pacific Time = -120°, i.e., UTC-8)
 	# We approximate the timezone from longitude, rounding to nearest 15°
-	var timezone_meridian : float = round( longitude / 15.0 ) * 15.0
+	var timezone_meridian : float = zone_meridian_deg()
 
 	# Longitude correction: difference between observer's longitude and timezone meridian
 	# Positive means sun reaches us BEFORE the timezone standard (earlier solar noon)
@@ -453,7 +468,7 @@ func solar_time_to_clock_time( solar_time: float ) -> float :
 	var jd := get_julian_day()
 
 	# Standard timezone meridian (approximate from longitude)
-	var timezone_meridian : float = round( longitude / 15.0 ) * 15.0
+	var timezone_meridian : float = zone_meridian_deg()
 
 	# Longitude correction (reverse sign from get_solar_time)
 	var longitude_correction : float = ( longitude - timezone_meridian ) / 15.0
@@ -494,7 +509,7 @@ func solar_time_to_clock_time( solar_time: float ) -> float :
 ## against get_solar_time()'s DST correction — the resulting sun direction lands on
 ## mean solar noon regardless of DST, giving a continuous (undistorted) analemma.
 func mean_solar_time_to_clock_time( mean_solar_time: float ) -> float :
-	var timezone_meridian : float = round( longitude / 15.0 ) * 15.0
+	var timezone_meridian : float = zone_meridian_deg()
 	var longitude_correction : float = ( longitude - timezone_meridian ) / 15.0
 	
 	var standard_time : float = mean_solar_time - longitude_correction
@@ -577,23 +592,11 @@ func _calculate_sunrise_sunset() -> Vector2 :
 
 # ==================== SIDEREAL TIME / MOON POSITION ====================
 
-## Calculate Local Sidereal Time in degrees (using UTC-based Julian Day)
+## Local Mean Sidereal Time in degrees (0–360) from a UTC Julian Day.
+## Delegates to StarSkyMath (Meeus eq. 12.4, incl. the T²/T³ terms) so the
+## stars, the moon and the planets all read the one sidereal clock.
 func get_local_sidereal_time( jd_utc: float ) -> float :
-	# Days since J2000.0 (in UTC)
-	var d : float = jd_utc - 2451545.0
-
-	# Greenwich Mean Sidereal Time
-	var gmst : float = 280.46061837 + 360.98564736629 * d
-
-	# Local Sidereal Time = GMST + longitude (east positive)
-	var lst : float = gmst + longitude
-
-	# Normalize to 0-360
-	lst = fmod( lst, 360.0 )
-	if lst < 0.0 :
-		lst += 360.0
-
-	return lst
+	return StarSkyMath.local_sidereal_deg( jd_utc, longitude )
 
 ## Calculate moon's ecliptic coordinates (longitude, latitude)
 func get_moon_position( jd_utc: float ) -> Dictionary :

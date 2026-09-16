@@ -108,10 +108,11 @@ Godot.exe.exe --headless --path . --script core/terrain/watershed_selftest.gd
 | **M** | Placed Props edit dock | `placed_props_edit` |
 | **Y** | NPC space edit dock | `space_edit` |
 | **Z** | POV warp overlay | `toggle_pov_warp` (StarShade projector) |
-| **Home** | Star calibration | `toggle_star_calibration` |
+| **Home** | Reference-star markers (computed Polaris/Sirius/… over the star map — alignment check) | `toggle_star_calibration` |
 | **P** | Light menu / pallet rack | Contextual — see [Key conflicts](#key-conflicts--gotchas) |
 | **I** | Projection canvas | NLE / compare panels |
 | **F1** | Help overlay | |
+| **F11** | Window wall (multi-monitor viewport) | `toggle_window_wall`; off until enabled in Settings → Window Wall. In the view: Esc/F11 leave, U toggles UI, WASD/QE nudge, ←→ or mouse-drag turn, R reset, Ctrl+S save viewpoint, I identify screens |
 | **Enter** | Multiplayer chat compose | `mp_chat` |
 | Esc | Close modal / cancel | |
 

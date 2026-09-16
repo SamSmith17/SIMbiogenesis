@@ -1280,7 +1280,11 @@ func _test_solar_eclipse() -> void:
 	clk.year = 2024
 	clk.month = 4
 	clk.day = 8
-	clk.day_time = 13.35  # near maximum totality (~13:21-13:40 CDT window)
+	# 13:42 CDT = 18:42 UTC, inside the published 18:40–18:44 UTC totality window.
+	# (Was 13.35: that only landed near totality while the clock converted local
+	# time with the EXACT longitude, 18.80 UTC; under the shared zone model it is
+	# 18.35 UTC, twenty minutes early — see CelestialClock.zone_offset_hours.)
+	clk.day_time = 13.70
 	var dallas := clk.sample_solar_eclipse()
 	var dallas_obs := float( dallas.get( "obscuration", 0.0 ) )
 	var dallas_sep := float( dallas.get( "separation_deg", 99.0 ) )

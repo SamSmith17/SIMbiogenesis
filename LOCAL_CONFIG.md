@@ -25,7 +25,7 @@ If you need to share structure with collaborators, use the examples in [`config-
 | `ui_prefs.cfg` | Timeline UI units / track layout ([`scenes/ui/timeline_ui.gd`](scenes/ui/timeline_ui.gd)) |
 | `solar_ui_ha_entities.cfg` | Solar UI HA entity bindings ([`scenes/ui/solar_ui.gd`](scenes/ui/solar_ui.gd)) |
 | `solar_panel_config.cfg` | Solar panel / battery config ([`scenes/ui/solar_ui.gd`](scenes/ui/solar_ui.gd)) |
-| `star_calibration.cfg` | Star calibration + starmap path ([`star_system.gd`](star_system.gd)) |
+| `star_calibration.cfg` | Star LOOK prefs (brightness/twinkle/fade/glow/contrast/trails/lock) + uploaded starmap path ([`star_system.gd`](star_system.gd)). `calibration_version 2` dropped the old RA/Dec/flip/scale/drift keys: orientation is computed and the map's registration is its sidecar JSON, not a setting |
 | `planet_prefs.cfg` | Planet visibility / colors ([`planets.gd`](planets.gd)) |
 | `location_prefs.cfg` | Location prefs ([`main.gd`](main.gd)) |
 | `climate_prefs.cfg` | Climate scenario prefs |

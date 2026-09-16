@@ -206,6 +206,11 @@ var _hazard_exposure_offset : float = 0.0
 ## AtmosphereApplier.volumetric_for and consumed by
 ## _apply_advanced_rendering_toggles (which owns volumetric fog).
 var _hazard_vol : Dictionary = {}
+## The sun's clear-air colour for the current altitude (DaylightModel) and the
+## extreme-weather tint on top of it. The light carries their PRODUCT, so a
+## cleared hazard restores the altitude colour rather than flat white.
+var _sun_clear_color : Color = Color.WHITE
+var _hazard_sun_tint : Color = Color.WHITE
 
 ## Atmospheric perspective/fog (0 = clear, 0.2 = light haze, 0.5 = moderate, 1 = heavy)
 @export_range( 0.0, 1.0, 0.01 ) var fog_amount : float = 0.2 :
@@ -456,6 +461,56 @@ func set_world_suspended_for_lab(on: bool) -> void:
 @export_range( 0.0, 3.0, 0.05 ) var sun_aureole : float = 0.8 :
 	set( value ) :
 		sun_aureole = value
+		_update_celestial_sizes()
+
+## Twilight drama: scales the horizon fire band, the aureole/glow near the
+## horizon and the Belt of Venus opposite the sun (sky.gdshader). 1 = natural.
+@export_range( 0.0, 2.0, 0.05 ) var twilight_drama : float = 1.2 :
+	set( value ) :
+		twilight_drama = clampf( value, 0.0, 2.0 ) if is_finite( value ) else 1.2
+		_update_celestial_sizes()
+
+## Twilight length: scales the solar-depression ramp that the sky, the ambient,
+## the fog and the glow all follow after sunset (DaylightModel.sky_light —
+## mirrored by daylight_fraction() in sky.gdshader). 1 = exp(−0.25/°), the
+## physical twilight compressed for a fixed-exposure renderer; 2 = twice as slow.
+@export_range( 0.25, 3.0, 0.05 ) var twilight_length : float = 1.0 :
+	set( value ) :
+		twilight_length = clampf( value, 0.25, 3.0 ) if is_finite( value ) else 1.0
+		_update_celestial_sizes()
+		_update_environment()
+
+## Low-sun warmth: strength of the Rayleigh reddening of the DIRECT sun and
+## moon light near the horizon (DaylightModel.direct_color). 0 = white light at
+## every altitude; 1 = ≈2100 K on the horizon, ≈3700 K at 5°, neutral by 30°.
+@export_range( 0.0, 2.0, 0.05 ) var sun_warmth : float = 1.0 :
+	set( value ) :
+		sun_warmth = clampf( value, 0.0, 2.0 ) if is_finite( value ) else 1.0
+		_update_sun()
+		_update_moon()
+
+## Night sky — airglow band strength/colour, light-pollution dome, moonlit-sky
+## wash. Each is a separate light source in the shader's NIGHT block; all zero
+## on a moonless night = a Bortle-1 wilderness sky.
+@export_range( 0.0, 1.0, 0.01 ) var airglow_strength : float = 0.25 :
+	set( value ) :
+		airglow_strength = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.25
+		_update_celestial_sizes()
+@export var airglow_color : Color = Color( 0.16, 0.30, 0.22 ) :
+	set( value ) :
+		airglow_color = value
+		_update_celestial_sizes()
+@export_range( 0.0, 1.0, 0.01 ) var light_pollution : float = 0.0 :
+	set( value ) :
+		light_pollution = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.0
+		_update_celestial_sizes()
+@export var light_pollution_color : Color = Color( 0.95, 0.62, 0.35 ) :
+	set( value ) :
+		light_pollution_color = value
+		_update_celestial_sizes()
+@export_range( 0.0, 2.0, 0.05 ) var moon_sky_glow : float = 1.0 :
+	set( value ) :
+		moon_sky_glow = clampf( value, 0.0, 2.0 ) if is_finite( value ) else 1.0
 		_update_celestial_sizes()
 
 ## Moon light intensity (0 = use node default)
@@ -1635,6 +1690,54 @@ func set_sun_aureole( value: float ) -> void :
 func get_sun_aureole() -> float :
 	return sun_aureole
 
+func set_twilight_drama( value: float ) -> void :
+	twilight_drama = value
+
+func get_twilight_drama() -> float :
+	return twilight_drama
+
+func set_twilight_length( value: float ) -> void :
+	twilight_length = value
+
+func get_twilight_length() -> float :
+	return twilight_length
+
+func set_sun_warmth( value: float ) -> void :
+	sun_warmth = value
+
+func get_sun_warmth() -> float :
+	return sun_warmth
+
+func set_airglow_strength( value: float ) -> void :
+	airglow_strength = value
+
+func get_airglow_strength() -> float :
+	return airglow_strength
+
+func set_airglow_color( value: Color ) -> void :
+	airglow_color = value
+
+func get_airglow_color() -> Color :
+	return airglow_color
+
+func set_light_pollution( value: float ) -> void :
+	light_pollution = value
+
+func get_light_pollution() -> float :
+	return light_pollution
+
+func set_light_pollution_color( value: Color ) -> void :
+	light_pollution_color = value
+
+func get_light_pollution_color() -> Color :
+	return light_pollution_color
+
+func set_moon_sky_glow( value: float ) -> void :
+	moon_sky_glow = value
+
+func get_moon_sky_glow() -> float :
+	return moon_sky_glow
+
 func set_cirrus_amount( value: float ) -> void :
 	cirrus_amount = value
 
@@ -2470,15 +2573,22 @@ func _update_sun() -> void :
 			up_vector = Vector3.FORWARD
 		sun.look_at( sun.global_position - sun_direction, up_vector )
 
-	# Fade light near horizon, boost when high in sky
-	var horizon_fade : float = smoothstep( -0.1, 0.2, sun_direction.y )
-	# Add extra intensity when sun is high (simulates less atmospheric scattering)
-	var high_sun_boost : float = 1.0 + smoothstep( 0.3, 0.8, sun_direction.y ) * 0.3
+	# Direct beam: zero until the refracted upper limb clears the horizon, then
+	# Kasten-Young air mass through the PV model's own clear-sky transmittance
+	# (DaylightModel) — 2.5 % of noon and ≈2100 K ON the horizon, 31 % / ≈3700 K
+	# at 5°, 52 % at 10°, 85 % at 30°. The old smoothstep(-0.1, 0.2) put 26 %
+	# of noon, in pure white, on the ground with the sun still 5.7° DOWN —
+	# the "lightbulb" sunrise. SUN_ZENITH_GAIN keeps the midday look the old
+	# high-sun boost produced; the shape is all atmosphere.
+	var sy : float = sun_direction.y
+	var direct : float = DaylightModel.direct_fraction( sy ) * DaylightModel.SUN_ZENITH_GAIN
+	_sun_clear_color = DaylightModel.direct_color( sy, sun_warmth )
+	sun.light_color = _sun_clear_color * _hazard_sun_tint
 	# Apply weather attenuation (clouds reduce direct sunlight) plus the drifting
 	# cloud-shadow factor (a passing cloud briefly dims the direct sun).
 	# Final clamp at the GPU boundary: a non-finite light_energy hard-hangs the
 	# Vulkan renderer (full-desktop "shattered glass" + reboot), so never let one through.
-	var sun_e : float = horizon_fade * high_sun_boost * sun_base_enegry * weather_light_factor * _compute_cloud_shadow_factor()
+	var sun_e : float = direct * sun_base_enegry * weather_light_factor * _compute_cloud_shadow_factor()
 	sun_e *= _eclipse_sun_transmission()
 	# Extreme-weather dimming multiplies alongside weather_light_factor rather
 	# than into it: solar_ui owns that value through a per-frame lerp, so two
@@ -2553,11 +2663,14 @@ func _update_moon() -> void :
 	# Get realistic phase brightness using improved model
 	var phase_brightness : float = clock.get_lunar_phase_brightness()
 
-	# Fade light near horizon (atmospheric extinction)
-	var horizon_fade : float = smoothstep( -0.05, 0.15, moon_direction.y )
+	# The same atmosphere as the sun: extinction and reddening on the horizon
+	# (DaylightModel), so a rising moon is dim and orange, not full white at 8°.
+	var my : float = moon_direction.y
+	var direct : float = DaylightModel.direct_fraction( my )
+	moon.light_color = DaylightModel.direct_color( my, sun_warmth )
 
 	# Apply weather attenuation (clouds block moonlight too).
-	var final_brightness : float = horizon_fade * phase_brightness * weather_light_factor
+	var final_brightness : float = direct * phase_brightness * weather_light_factor
 	var moon_e : float = final_brightness * moon_base_enegry * maxf( moon_light_boost, 0.0 )
 	moon.light_energy = clampf(moon_e, 0.0, 64.0) if is_finite(moon_e) else 0.0
 
@@ -2681,6 +2794,14 @@ func _update_celestial_sizes() -> void :
 		environment.environment.sky.sky_material.set_shader_parameter( "sun_glow", sun_glow )
 		environment.environment.sky.sky_material.set_shader_parameter( "sun_glow_size", sun_glow_size )
 		environment.environment.sky.sky_material.set_shader_parameter( "sun_aureole", sun_aureole )
+		var _skym : ShaderMaterial = environment.environment.sky.sky_material
+		_skym.set_shader_parameter( "twilight_drama", twilight_drama )
+		_skym.set_shader_parameter( "twilight_length", twilight_length )
+		_skym.set_shader_parameter( "airglow_strength", airglow_strength )
+		_skym.set_shader_parameter( "airglow_color", airglow_color )
+		_skym.set_shader_parameter( "light_pollution", light_pollution )
+		_skym.set_shader_parameter( "light_pollution_color", light_pollution_color )
+		_skym.set_shader_parameter( "moon_sky_glow", moon_sky_glow )
 		var obs := float( _solar_eclipse.get( "obscuration", 0.0 ) )
 		environment.environment.sky.sky_material.set_shader_parameter( "eclipse_obscuration", obs )
 		var tot := 1.0 if bool( _solar_eclipse.get( "is_total", false ) ) else 0.0
@@ -2697,14 +2818,17 @@ func _update_environment() -> void :
 	var sun_direction = sun.to_global( Vector3( 0.0, 0.0, 1.0 ) ).normalized()
 	var sun_height : float = sun_direction.y
 	
-	# Calculate night amount (0 = full day, 1 = full night)
-	var night_amount : float = clamp( -sun_height + 0.1, 0.0, 1.0 )
-	night_amount = smoothstep( 0.0, 0.5, night_amount )
+	# Night amount (0 = full day, 1 = full night) and the skylight fraction, both
+	# from DaylightModel so the ground (ambient, fog, glow) and the sky
+	# (daylight_fraction in sky.gdshader) darken on ONE solar-depression curve:
+	# exp(-0.25/° of depression) below the horizon, scaled by twilight_length.
+	var sky_light : float = DaylightModel.sky_light( sun_height, twilight_length )
+	var night_amount : float = DaylightModel.night_amount( sun_height, twilight_length )
 	
-	# Trees should fade to dark exactly at sunset so they don't glow after the sun drops.
-	# Transition from day (0) at sun_height 0.08 to night (1) at sun_height 0.0
-	var veg_night : float = clamp( (0.08 - maxf(sun_height, 0.0)) / 0.08, 0.0, 1.0 )
-	veg_night = smoothstep( 0.0, 1.0, veg_night )
+	# Vegetation's "the direct beam is gone" signal (kills the canopy's fake sun
+	# highlights, darkens the albedo) follows the beam itself — 0 above ~5°, 1
+	# by the horizon — instead of the old separate 4.6° step at sunset.
+	var veg_night : float = DaylightModel.vegetation_night( sun_height )
 
 	# Totality / deep partial eclipse: daylight collapses even with the sun above the horizon.
 	if sun_height > 0.0 and eclipse_obs > 0.05 :
@@ -2808,7 +2932,7 @@ func _update_environment() -> void :
 	# Dynamic ambient light - brighter during day, dimmer at night but with moon contribution
 	var day_ambient : float = 0.3
 	var night_ambient : float = 0.003 + moon_ambient_contribution
-	var ambient := lerpf( day_ambient, night_ambient, night_amount ) * ambient_energy_mult
+	var ambient := lerpf( night_ambient, day_ambient, sky_light ) * ambient_energy_mult
 	if eclipse_obs > 0.05 and sun_height > 0.0 :
 		ambient *= lerpf( 1.0, 0.04 if eclipse_total else 0.18, eclipse_obs )
 	environment.environment.ambient_light_energy = ambient
@@ -2845,11 +2969,14 @@ func _apply_hazard_atmosphere( night_amount : float, sun_height : float ) -> voi
 		_hazard_light_factor = 1.0
 		_hazard_vol = {}
 		_hazard_exposure_offset = 0.0
-		# Restoring these is not optional: the sun's colour and the sky's haze
+		# Restoring these is not optional: the sun's tint and the sky's haze
 		# uniform both persist, so a cleared hazard that skipped this would
-		# leave the world permanently reddened.
-		if is_instance_valid( sun ) and sun.light_color != Color.WHITE :
-			sun.light_color = Color.WHITE
+		# leave the world permanently reddened. The light carries the
+		# altitude colour × the hazard tint (see _update_sun).
+		if _hazard_sun_tint != Color.WHITE :
+			_hazard_sun_tint = Color.WHITE
+			if is_instance_valid( sun ) :
+				sun.light_color = _sun_clear_color
 		if environment.environment.sky != null :
 			var m = environment.environment.sky.sky_material
 			if m != null :
@@ -2881,11 +3008,12 @@ func _apply_hazard_atmosphere( night_amount : float, sun_height : float ) -> voi
 	env.glow_intensity         = float( out[ "glow_intensity" ] )
 	env.glow_hdr_threshold     = float( out[ "glow_hdr_threshold" ] )
 
-	# The sun's own colour is uncontested — nothing else in the project writes
-	# it — but it MUST be restored to white above when the hazard clears, or a
+	# The hazard tint multiplies the sun's altitude colour (_update_sun owns the
+	# write) and MUST be restored to white above when the hazard clears, or a
 	# smoke event permanently reddens the world.
+	_hazard_sun_tint = out[ "sun_tint" ]
 	if is_instance_valid( sun ) :
-		sun.light_color = out[ "sun_tint" ]
+		sun.light_color = _sun_clear_color * _hazard_sun_tint
 
 	# The sky itself. Environment.fog_sky_affect can only blend the FOG colour
 	# into the sky, and that same colour is simultaneously the terrain haze —

@@ -289,6 +289,24 @@ origin + license here as it's added (PBR sets `Wood034_1K-JPG/`,
   - Notes: Blender source + animation frames discarded; creator suggests
     (optional) credit to CityBuildingKit.com — given here.
   - Status: verified
+- **All-sky star map (Stellarium render)** — the night-sky star field
+  (`assets/sky/starmap_equirect_8k.png` + `.json` sidecar, plus the optional
+  16384×8192 `starmap_equirect_16k.png` from the same pipeline), an 8192×4096
+  plate-carrée render of the whole celestial sphere at J2000 made with
+  `tools/stellarium_starmap_export.ssc` and black-floored/registered by
+  `tools/starmap_prepare.py`.
+  - Author: Stellarium contributors; star data Hipparcos/Tycho-2 (ESA); Milky
+    Way background per the installed Stellarium's own credits
+  - Source: https://stellarium.org
+  - License: pending (Stellarium is GPL-2.0-or-later; a screenshot is program
+    output, but the bundled Milky Way panorama has its own credit)  ·  Added: 2026-09-14
+  - Attribution required: unknown  ·  Share-alike: unknown  ·  Commercial OK: unknown
+  - Notes: GUI/ground/atmosphere/labels off; luminance floor applied;
+    registration (RA at the left edge, RA direction, north-up) MEASURED from the
+    bright stars and stored in the sidecar. Check Help > About > Credits in the
+    installed Stellarium for the Milky Way texture author/licence before a
+    public release.
+  - Status: pending-verification
 
 ## Fonts
 

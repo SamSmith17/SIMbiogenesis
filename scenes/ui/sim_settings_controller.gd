@@ -195,6 +195,14 @@ func get_state_snapshot() -> Dictionary:
 		"sun_glow": _main_float("get_sun_glow", 1.4),
 		"sun_glow_size": _main_float("get_sun_glow_size", 9.0),
 		"sun_aureole": _main_float("get_sun_aureole", 0.8),
+		"twilight_drama": _main_float("get_twilight_drama", 1.2),
+		"twilight_length": _main_float("get_twilight_length", 1.0),
+		"sun_warmth": _main_float("get_sun_warmth", 1.0),
+		"airglow_strength": _main_float("get_airglow_strength", 0.25),
+		"airglow_color": main.call("get_airglow_color") if main.has_method("get_airglow_color") else Color(0.16, 0.30, 0.22),
+		"light_pollution": _main_float("get_light_pollution", 0.0),
+		"light_pollution_color": main.call("get_light_pollution_color") if main.has_method("get_light_pollution_color") else Color(0.95, 0.62, 0.35),
+		"moon_sky_glow": _main_float("get_moon_sky_glow", 1.0),
 		"cirrus_user_scale": _main_float("get_cirrus_user_scale", 1.0),
 		"cirrus_wave_frequency_scale": _main_float("get_cirrus_wave_frequency_scale", 1.0),
 		"cirrus_wave_intensity_scale": _main_float("get_cirrus_wave_intensity_scale", 1.0),
@@ -472,6 +480,16 @@ func apply_sun_aureole(value: float) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_sun_aureole"):
 		main.call("set_sun_aureole", value)
+
+
+## Night-sky / twilight knobs (sky.gdshader NIGHT + TWILIGHT blocks via Main).
+func apply_sky_setting(key: String, value: Variant) -> void:
+	var main := _valid_main()
+	if main == null:
+		return
+	var setter := "set_" + key
+	if main.has_method(setter):
+		main.call(setter, value)
 
 
 func apply_cirrus_scale(value: float) -> void:
@@ -930,6 +948,9 @@ func persist_settings() -> void:
 		cfg.set_value("rendering_adv", "sun_glow", main_node.call("get_sun_glow"))
 		cfg.set_value("rendering_adv", "sun_glow_size", main_node.call("get_sun_glow_size"))
 		cfg.set_value("rendering_adv", "sun_aureole", main_node.call("get_sun_aureole"))
+	for sky_key in ["twilight_drama", "twilight_length", "sun_warmth", "airglow_strength", "airglow_color", "light_pollution", "light_pollution_color", "moon_sky_glow"]:
+		if main_node.has_method("get_" + sky_key):
+			cfg.set_value("rendering_adv", sky_key, main_node.call("get_" + sky_key))
 		if main_node.has_method("get_cirrus_user_scale"):
 			cfg.set_value("rendering_adv", "cirrus_user_scale", main_node.call("get_cirrus_user_scale"))
 		if main_node.has_method("get_cirrus_wave_frequency_scale"):
@@ -1051,6 +1072,14 @@ func _load_rendering_adv(cfg: ConfigFile) -> void:
 		apply_sun_glow_size(float(cfg.get_value("rendering_adv", "sun_glow_size")))
 	if cfg.has_section_key("rendering_adv", "sun_aureole"):
 		apply_sun_aureole(float(cfg.get_value("rendering_adv", "sun_aureole")))
+	for sky_key in ["twilight_drama", "twilight_length", "sun_warmth", "airglow_strength", "light_pollution", "moon_sky_glow"]:
+		if cfg.has_section_key("rendering_adv", sky_key):
+			apply_sky_setting(sky_key, float(cfg.get_value("rendering_adv", sky_key)))
+	for sky_col in ["airglow_color", "light_pollution_color"]:
+		if cfg.has_section_key("rendering_adv", sky_col):
+			var cv: Variant = cfg.get_value("rendering_adv", sky_col)
+			if cv is Color:
+				apply_sky_setting(sky_col, cv)
 	if cfg.has_section_key("rendering_adv", "cirrus_user_scale"):
 		apply_cirrus_scale(float(cfg.get_value("rendering_adv", "cirrus_user_scale")))
 	if cfg.has_section_key("rendering_adv", "cirrus_wave_frequency_scale"):

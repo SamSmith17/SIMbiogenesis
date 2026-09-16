@@ -310,11 +310,10 @@ static func angular_radius_deg(jd_utc: float) -> float:
 	return rad_to_deg(asin(_MOON_RADIUS_KM / dist_km))
 
 
+## Greenwich Mean Sidereal Time (Meeus eq. 12.4) — one implementation for the
+## whole sky, shared with the star field and CelestialClock.
 static func _gmst_deg(jd_utc: float) -> float:
-	var T: float = (jd_utc - 2451545.0) / 36525.0
-	var gmst: float = 280.46061837 + 360.98564736629 * (jd_utc - 2451545.0) \
-			+ 0.000387933 * T * T - T * T * T / 38710000.0
-	return _norm360(gmst)
+	return StarSkyMath.gmst_deg(jd_utc)
 
 
 ## Topocentric altitude/azimuth for observer (same azimuth convention as SolarPosition).

@@ -103,6 +103,74 @@ Godot.exe.exe --headless --path . --script core/input_map_selftest.gd
 # Catches parse/identifier/preload/autoload errors, NOT node-path misses or
 # layout — those still need the windowed --capture harnesses:
 Godot.exe.exe --headless --path . --script scenes/ui/ui_compile_selftest.gd
+# Unified edit toolbar data layer (offline — scenes/ui/toolbar/): the tool
+# registry, PER-TOOL parameter isolation (the whole reason the toolbar exists —
+# the legacy T dock kept ONE global radius/strength/hardness, so tuning Smooth
+# silently moved Raise), per-tool shape memory, option_specs row model,
+# ConfigFile + real-file persistence round-trips (against a TEMP path, so a
+# player's user://toolbar_prefs.cfg is never touched) including a corrupt /
+# stale-build config, and the ShapeGestureController ladder (circle/rect/lasso/
+# polygon, the Esc peel, the radius cap, lasso pixel-threshold sampling).
+# Pins the one cross-file coupling that would fail SILENTLY: VEG_FAMILIES
+# stores VegetationPaint.Preset values as LITERAL ints (so the model still
+# loads with a stale global class cache), and this asserts they still match the
+# enum — reorder it and every scatter paints the wrong family. Carries its own
+# EXPECTED_CHECKS count, because a Godot runtime error aborts the enclosing
+# test function while the suite still prints PASS:
+Godot.exe.exe --headless --path . --script scenes/ui/toolbar/toolbar_selftest.gd
+
+# Night-sky star field self-test (offline — core/astronomy/): StarSkyMath's
+# GMST pinned to Meeus's worked examples 12.a/12.b, the equatorial BASIS form
+# of RA/Dec -> world direction against the independent hour-angle/alt-az
+# derivation (the sky shader used to read the texture latitude off the rotated
+# WORLD vector — the zenith as the texture pole, only right at latitude 90°;
+# this pin is what keeps the shader and the reference-star markers on one
+# sky), a line-for-line GDScript MIRROR of the shader's star block against the
+# pure UV mapping (edit sky.gdshader -> edit StarSkyMath.shader_uv_for_direction
+# -> or this fails), the "one sky" timezone contract (the DirectionalLight sun
+# and Meeus SPA at the clock's own UTC point at the same sun — they were ~4°
+# apart at Bombay Beach while the sun used the rounded meridian and everything
+# UTC-based used the exact longitude), and the shipped map + sidecar
+# (assets/sky/starmap_equirect_8k.{png,json}: 2:1, pole rows black, fit
+# residual <= 8 px). Carries EXPECTED_CHECKS; run --import first:
+Godot.exe.exe --headless --path . --script core/astronomy/star_sky_selftest.gd
+# Daylight model self-test (offline — core/env/daylight_model.gd, the ONE curve
+# the DirectionalLight sun/moon, the ambient, the vegetation night signal, the
+# glow AND sky.gdshader's daylight_fraction() all follow). Pins what a PNG
+# cannot: the sunrise is CONTINUOUS — beam energy, beam colour, skylight and
+# the vegetation signal sampled at 0.05° across the horizon with the largest
+# single step asserted small (the "lightbulb" regression IS a step); the beam
+# is ZERO below the horizon (the old ramp put 26 % of noon, in white, on the
+# ground with the sun 5.7° down); the one-atmosphere contract (beam
+# transmittance == SolarIrradiance's clear-sky DNI ratio, so what the player
+# sees and what the panels make cannot disagree); measured-CCT colour anchors
+# (≈2100 K on the horizon, ≈3700 K at 5°, white by 30°); and the twilight
+# decades (-6° = 22 %, -12° = 5 %, dark by -21°). Carries EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/env/daylight_model_selftest.gd
+# Star-map regeneration (NOT a selftest — the asset pipeline): run
+# tools/stellarium_starmap_export.ssc in Stellarium >= 1.2 (config.ini custom
+# screenshot size 8192x4096; the header is the checklist), then
+#   python tools/starmap_prepare.py <screenshot.png> --note "Stellarium <ver>"
+# which black-floors the export, MEASURES the registration from the bright
+# stars (RA at the left edge, RA direction, north-up — never assumed), and
+# refuses to write the sidecar if the stars are not where the catalog says.
+# Star-field capture (WINDOWED): parks the clock at a fixed night, shoots each
+# reference star with the computed markers ON and OFF, and DUMPS per star the
+# projected marker position vs the brightest texture blob nearby plus the 2 h
+# rotation about the pole (Polaris still, Dubhe moved ~117 px, +30° CCW) — the
+# numbers a PNG cannot prove; then the same at a southern site about the SCP:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=stars --shots-dir=<label> --quit-after-capture
+# Dawn lighting capture (WINDOWED): parks the clock at a ladder of solar
+# altitudes (-14° … +20°, equinox, found by bisection on the clock's own sun
+# direction), shoots toward the sun's bearing and away from it at each, and
+# DUMPS per step what the lighting actually did on the live nodes — beam
+# energy + colour, ambient, night amount — because a single PNG cannot show a
+# RATE. Asserts end to end: no beam with the sun below the horizon, energy and
+# ambient monotonic through the ladder, a few percent on the horizon (not a
+# lightbulb), deep orange there and white by 20°. NOTE the ambient column is
+# the PLAYER'S ramp (ambient_energy_mult 0 reads 0 at every step); the header
+# prints their prefs. Clock and clouds restored, nothing persisted:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=dawn --shots-dir=<label> --quit-after-capture
 
 # Boot both maps, 120 frames each; compare errors against the known
 # pre-existing set (see Known Issues). NOTE the default main scene is the map
@@ -1750,6 +1818,122 @@ High-accuracy mode (`_high_accuracy_physics = true` in Panel Settings):
 Self-test: `power_system/sources/source_physics_selftest.gd` (97 checks total)
 includes solar-physics checks (NOCT formula, gamma derating, SPA horizon, cos_incidence).
 
+## Night sky (stars)
+
+`star_system.gd` (root, node "StarSystem" under Main) + the star block of
+`sky.gdshader` + `core/astronomy/star_sky_math.gd` (`StarSkyMath`, pure static,
+selftest `core/astronomy/star_sky_selftest.gd`). **Orientation is COMPUTED,
+never calibrated:** every sky tick StarSystem pushes the local sidereal time
+and the equatorial basis for the current latitude — `pole = (0, sin φ, −cos φ)`,
+`meridian = (0, cos φ, sin φ)` (due south), `east = (1, 0, 0)` — as three
+vec3 uniforms, and the shader inverts them per pixel: `dec = asin(v·P)`,
+`H = atan2(−v·E, v·M)` (positive WEST), `RA = LST − H`. **The bug this
+replaced, so nobody puts it back:** the shader rotated the view about the pole
+by LST and then read the texture latitude off the rotated WORLD vector's y —
+the zenith as the texture pole — which is only right at latitude 90°; the old
+RA/Dec "offset" + "flip" sliders existed to fight that and could only null it
+at one instant. They are gone (`user://star_calibration.cfg`
+`calibration_version 2` erases the keys); HOME toggles the computed
+reference-star markers (Polaris/Sirius/…) which must sit ON the texture stars.
+**The map's registration is DATA:** `assets/sky/starmap_equirect_8k.json`
+(sidecar next to the PNG) says which RA sits at u = 0, which way RA runs across
+the image (`ra_direction −1` = increases leftward, the inside-the-sphere
+convention) and whether the NCP is the top row — MEASURED by
+`tools/starmap_prepare.py` from the bright stars, never assumed. The map is a
+J2000 plate-carrée export from Stellarium (`tools/stellarium_starmap_export.ssc`,
+GUI/ground/atmosphere/labels off; Stellarium's all-sky projection works in the
+mount frame — keep the mount equatorial). Two traps the prep tool exists to
+close: Stellarium draws bright stars as SATURATED discs, so "the brightest
+pixel" ties across dozens of stars (blobs are ranked by integrated brightness),
+and the Milky Way core at intensity 1.6 out-sums every star disc (compact-disc
+area/mean filters). The old FOV-180 "Cylindrical" screenshots were alt-az
+panoramas with the GUI baked in and could not be registered at all. **Third
+trap — Polaris vanishes without it:** Stellarium draws every star as a fixed
+~10 px disc in IMAGE space, and a plate carrée squeezes 1 px of x into
+`360/w·cos δ` degrees, so at dec 89.26° a 10 px disc is 0.006° of sky and the
+shader renders the pole star as a sub-pixel sliver. The prep tool's
+`pole_footprint_dilate` runs a 1-D horizontal MAX filter of radius
+`R·(1/cos δ − 1)` per declination band (R measured from the anchor star's own
+disc, x wrapping like RA) for |δ| ≥ 45°, so image-space discs become
+sky-space discs; recorded in the sidecar under `prepare.pole_footprint`. **One
+timezone for sun AND stars:** `CelestialClock.zone_offset_hours` (rounded
+meridian + the US DST rule) feeds `get_solar_time`, both `*_to_clock_time`
+inverses and `_julian_day_utc_for`; `get_julian_day()` is UTC. Sidereal time
+is `StarSkyMath.gmst_deg` (Meeus 12.4) for the stars, moon and clock alike.
+Texture import: BC7 (`compress/high_quality=true`), no mipmaps — the sampler
+is `filter_linear` and mips bloomed halos. Planets stay in `planets.gd` but
+share `StarSkyMath` for their alt/az.
+
+**Daylight model (`core/env/daylight_model.gd`, `DaylightModel`) — ONE curve
+for the sun, the sky and the ground.** The sunrise used to switch on like a
+lightbulb because four different altitude curves ran the lighting: the
+DirectionalLight faded in with `smoothstep(-0.1, 0.2, sin alt)` — 26 % of noon
+power, pure WHITE, hard shadows, with the disc still 5.7° BELOW the horizon;
+the sky shader went from black to full twilight between −7° and +2°; the
+ambient ramp was still a third of daylight at −12°; the forest went dark over
+its own 4.6° window. Now `main.gd` reads everything off DaylightModel and
+`sky.gdshader` carries `daylight_fraction()`, a line-for-line MIRROR of
+`DaylightModel.sky_light` (edit both or the ground and the sky darken on
+different curves; the selftest pins the GDScript side). Direct beam:
+Kasten-Young air mass through the SAME four-term clear-sky transmittance
+`SolarIrradiance.dni_clear_sky_wm2` uses for the PV physics, normalised to the
+zenith (2.5 % on the horizon, 31 % at 5°, 52 % at 10°, 85 % at 30°), zero
+until the refracted upper limb clears −0.9°, times `SUN_ZENITH_GAIN` 1.3 so
+the midday look the old high-sun boost gave is preserved. Beam COLOUR:
+Rayleigh optical depth relative to green over 0.45 of the excess air mass
+(≈2100 K on the horizon, ≈3700 K at 5°, white by 30°), `sun_warmth` scales
+it; the light's colour is `_sun_clear_color × _hazard_sun_tint`, so a cleared
+hazard restores the altitude colour, NOT flat white (the old code hard-reset
+`Color.WHITE`). The moon gets the same extinction + reddening. Skylight:
+55 % at sunrise → full by 15° above; `exp(−0.25 · depression°)` below (−6° =
+22 %, −12° = 5 %, cut by −21°), scaled by `twilight_length`; it drives the
+ambient (`lerp(night, day, sky_light)`), the fog/glow `night_amount`
+(`1 − palette`) and the shader's night mix. Vegetation's `night_factor`
+follows the BEAM (`1 − smoothstep(0, 0.35, direct)`), not a step at sunset.
+⚠ `air_mass()` returns the HORIZON value below 0°: the Kasten-Young fit is
+only defined to −6.08° and, evaluated there with the sine clamped, it SHRINKS
+again as the sun sinks (12 at −3°), which wobbled the beam and its colour
+during the disc rise. Note a player running `ambient_energy_mult 0` (the
+author's own prefs at the time) sees the ground lit by the beam alone —
+the ambient ramp being wrong was probably why it got zeroed. Verify with the
+selftest and `--capture=dawn` (Validation list).
+
+**Night-sky look (visual polish pass).** The shader's TWILIGHT/NIGHT blocks are
+a solar-DEPRESSION model: `_sunset_amount` is 1 on the horizon and gone 15°
+above / 14° below; `_night_amount = 1 − min(daylight_fraction / 0.55, 1)`, i.e.
+the DaylightModel twilight envelope (civil twilight still 22 % lit, gone by
+−21°). Two older forms, so nobody restores them: ONE symmetric sunset tint from
+30° above to 30° below the horizon (afternoon went pale early, midnight stayed
+violet) with "night" already 70 % black with the sun ON the horizon (dim
+sunsets, purple night); then a `smoothstep(−0.12, 0.03)^1.6` that was black by
+−7° while the ground ambient was still two-thirds of daylight (dusk read as a
+switch). The star washout reads the WHOLE sky's luminance, so the twilight
+glow hides the faint stars exactly as the moon does. The dark sky is a
+near-black blue-grey gradient (`night_top/bottom_color`, no purple) plus three
+separate user light sources: airglow band (`airglow_strength/color`), a
+light-pollution dome (`light_pollution/_color`) and moonlit sky
+(`moon_sky_glow`, from the moon's phase × altitude); their luminance feeds
+`stars_wash`, which raises the star background cut so a full moon hides the
+faint stars and the Milky Way like it does outside. `twilight_drama` scales
+the horizon fire band (pushed past 1.0 so bloom carries the glare), the
+aureole/glow near the horizon and the Belt of Venus opposite the sun. Star
+look: every neighbour tap is in TEXELS (`stars_texel`, pushed by StarSystem
+from the texture size, so 8k and 16k render alike); `stars_point_size`
+erodes/dilates the discs by a texel; star COLOUR is read off each disc's
+fringe (the export clips cores to white) and re-applied to the core's
+luminance (`stars_saturation`); the map is split by luminance into star cores
+(contrast curve) and the diffuse Milky Way, which is sampled through a 4-texel
+ring (the export's dithered, block-compressed band SPECKLES at one texel) with
+its own `milkyway_gain/saturation/tint`. Texture quality: Settings → Stars
+offers the 16k map (`assets/sky/starmap_equirect_16k.png`, same pipeline,
+BC7 = 128 MiB VRAM) when it is shipped; `StarSystem.texture_quality`.
+Planet labels: `PlanetSystem.planet_labels_mode` (0 off / 1 on highlight
+within 3° of the view centre / 2 always; sky-gated on the sun below +3°),
+a CanvasLayer of Labels projected through the active camera, persisted with
+the planet prefs. Knobs live on Main (`twilight_drama`, `airglow_*`,
+`light_pollution*`, `moon_sky_glow` → `_update_celestial_sizes`) and persist
+through `SimSettingsController.apply_sky_setting` / `[rendering_adv]`.
+
 ## Time & simulation (timecode, modes, reversibility)
 
 **Timebase.** `core/celestial_clock.gd` (owned by Main as `clock`) is the
@@ -3382,6 +3566,32 @@ projection authority, not just under `soi_live_preview`: the overlay sits ON the
 3D image, so a 5× stretch could never line up. `GraphSiteLayout.LAB_MIN_ORTHO_H_M`
 (0.05 m) is clamped by BOTH the Lab's `_lab_view_metrics` and the section camera,
 so deep zoom can no longer unlink them.
+
+**Conduits are X-RAY by design, so they are HIDDEN in first person.**
+`ConduitKinds.make_material` sets `no_depth_test` and `conduit_flow.gdshader`
+declares `depth_test_disabled` so buried runs read through the Elevation / Site
+CT soil bowl — which is exactly what made them confusing in the world: an
+auto-revealed culvert tailrace or routed penstock (both stamped `visible_3d:
+true` by `ensure_siphon_outlet_sink` / `create_penstock_intake_at`, which the
+player never asked for) draws straight through the terrain. They cannot simply
+stop being built — the REBUILD is what stamps `route_length_m` and the endpoint
+inverts the flow engine adopts — so `ConduitManager._refresh_world_visibility`
+gates the NODE instead: `visible = _global_visible or _preview_visible`. The
+preview flag is pushed by SystemGraphView off the SoI service's
+`preview_active_changed` (one signal covers mode switches AND the graph-close
+teardown), and since the preview shares this World3D (`own_world_3d = false`),
+that same node visibility is what keeps Site Plan / Elevation CT / the Hydro Lab
+section drawing the pipes they exist to show. "Show 3D wires (world)" ON =
+visible everywhere, unchanged. Two consequences to preserve: the first-person
+plug/route GHOST is parented to `ConduitRouteController` itself with
+`top_level = true` (its verts are world-space) so the drag feedback survives the
+hide — everything left under the manager is a run visual and hides with it; and
+Site Plan's `prefer_3d` wire mode, which BORROWS the global pref, must hand it
+back on graph close (`_restore_site_conduit_visibility` in the visibility-changed
+branch and `_exit_tree`) — it used to restore only when switching to a
+non-physical view, so one visit to Site Plan left every x-ray run hanging over
+the landscape for the rest of the session. All four states are pinned by
+`--capture=hydroload`.
 
 **Item elevations must be resolved AT MAP LOAD, not only on graph-view entry.**
 `_refresh_item_elevations` used to run solely from `_apply_graph_view_mode` for

@@ -96,6 +96,18 @@ const ORBITAL_ELEMENTS := {
 
 const PREFS_PATH := "user://planet_prefs.cfg"
 const PLANET_NAMES := ["mercury", "venus", "mars", "jupiter", "saturn"]
+const PLANET_TITLES := {"mercury": "Mercury", "venus": "Venus", "mars": "Mars", "jupiter": "Jupiter", "saturn": "Saturn"}
+
+## On-screen name tags for the planets: 0 = never, 1 = only while the view
+## centre is within LABEL_HIGHLIGHT_DEG of a planet, 2 = always (while the
+## planet is up and the sun is down). Persisted with the other planet prefs.
+enum LabelsMode { OFF = 0, HIGHLIGHT = 1, ALWAYS = 2 }
+@export_group("Labels")
+@export_range(0, 2, 1) var planet_labels_mode : int = LabelsMode.OFF
+const LABEL_HIGHLIGHT_DEG : float = 3.0
+const LABEL_LAYER : int = 24
+var _label_layer : CanvasLayer = null
+var _labels : Dictionary = {}
 
 ## Slerp rate (per second) for easing each rendered planet direction toward its
 ## freshly computed position. High enough to track fast motion at Max speed with
@@ -144,6 +156,7 @@ func _ready() -> void:
 		main_scene = get_tree().get_first_node_in_group("main_scene")
 	if not Engine.is_editor_hint():
 		_load_prefs()
+		_ensure_labels()
 	if main_scene != null:
 		update_all_planets()
 		_snap_render_to_target()
@@ -158,6 +171,77 @@ func _process(delta: float) -> void:
 	if main_scene != null and main_scene.has_method("get_julian_day_utc"):
 		update_all_planets()
 	_smooth_render_directions(delta)
+	_update_labels()
+
+
+# ==================== LABELS ====================
+
+func _ensure_labels() -> void:
+	if _label_layer != null and is_instance_valid(_label_layer):
+		return
+	_label_layer = CanvasLayer.new()
+	_label_layer.name = "PlanetLabels"
+	_label_layer.layer = LABEL_LAYER
+	add_child(_label_layer)
+	for pname in PLANET_NAMES:
+		var lbl := Label.new()
+		lbl.name = "Label_" + pname
+		lbl.text = PLANET_TITLES[pname]
+		lbl.add_theme_font_size_override("font_size", 13)
+		lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))
+		lbl.add_theme_constant_override("shadow_offset_x", 1)
+		lbl.add_theme_constant_override("shadow_offset_y", 1)
+		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		lbl.visible = false
+		_label_layer.add_child(lbl)
+		_labels[pname] = lbl
+
+
+## Project each visible planet to the screen and show its tag per the mode.
+## Sky-gated like the shader (sun below +3°), altitude-gated like the dots,
+## and — in HIGHLIGHT mode — faded in as the view centre approaches the planet.
+func _update_labels() -> void:
+	if _label_layer == null or not is_instance_valid(_label_layer):
+		return
+	var mode := planet_labels_mode
+	var vp := get_viewport()
+	var cam : Camera3D = vp.get_camera_3d() if vp != null else null
+	var sun_up := false
+	if main_scene != null:
+		var sun: Variant = main_scene.get("sun")
+		if sun is Node3D:
+			sun_up = (sun as Node3D).to_global(Vector3(0, 0, 1)).y - (sun as Node3D).global_position.y > 0.05
+	for pname in PLANET_NAMES:
+		var lbl : Label = _labels.get(pname)
+		if lbl == null:
+			continue
+		var show := mode != LabelsMode.OFF and cam != null and not sun_up 			and bool(get(pname + "_enabled")) and float(planet_altitudes[pname]) > 0.0
+		if not show:
+			lbl.visible = false
+			continue
+		var dir : Vector3 = _render_directions[pname]
+		var world := cam.global_position + dir * 1000.0
+		if cam.is_position_behind(world):
+			lbl.visible = false
+			continue
+		var alpha := 1.0
+		if mode == LabelsMode.HIGHLIGHT:
+			var ang := rad_to_deg(dir.angle_to(-cam.global_transform.basis.z))
+			alpha = 1.0 - smoothstep(LABEL_HIGHLIGHT_DEG * 0.6, LABEL_HIGHLIGHT_DEG, ang)
+			if alpha <= 0.01:
+				lbl.visible = false
+				continue
+		var sp := cam.unproject_position(world)
+		var vsize := vp.get_visible_rect().size
+		if sp.x < -40.0 or sp.y < -40.0 or sp.x > vsize.x + 40.0 or sp.y > vsize.y + 40.0:
+			lbl.visible = false
+			continue
+		var col : Color = get(pname + "_color")
+		lbl.add_theme_color_override("font_color", Color(col.r, col.g, col.b, 0.9 * alpha))
+		lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85 * alpha))
+		lbl.text = "%s  %.0f°" % [PLANET_TITLES[pname], float(planet_altitudes[pname])]
+		lbl.position = sp + Vector2(10.0, -9.0)
+		lbl.visible = true
 
 func force_update() -> void:
 	# Discrete jump (date/location/analemma/save-load): recompute AND snap the
@@ -190,6 +274,7 @@ func set_all_enabled(on: bool) -> void:
 
 func get_settings() -> Dictionary:
 	var out := {}
+	out["planet_labels_mode"] = planet_labels_mode
 	for pname in PLANET_NAMES:
 		out[pname + "_enabled"] = get(pname + "_enabled")
 		out[pname + "_color"] = get(pname + "_color")
@@ -201,7 +286,9 @@ func get_settings() -> Dictionary:
 
 func apply_settings(settings: Dictionary) -> void:
 	for key in settings:
-		if key in self:
+		if key == "planet_labels_mode":
+			planet_labels_mode = clampi(int(settings[key]), 0, 2)
+		elif key in self:
 			set(key, settings[key])
 
 func save_prefs() -> void:
@@ -380,49 +467,15 @@ func ecliptic_to_equatorial(ecl_lon: float, ecl_lat: float) -> Dictionary:
 	
 	return {"ra": ra_deg, "dec": rad_to_deg(dec)}
 
-## Convert equatorial coordinates to horizontal (altitude/azimuth)
+## Convert equatorial coordinates to horizontal (altitude/azimuth).
+## One implementation for the whole sky — shared with the star field
+## (StarSkyMath, pinned by core/astronomy/star_sky_selftest.gd).
 func equatorial_to_horizontal(ra: float, dec: float, lst: float, latitude: float) -> Dictionary:
-	# Hour angle
-	var ha: float = lst - ra
-	while ha > 180.0:
-		ha -= 360.0
-	while ha < -180.0:
-		ha += 360.0
-	
-	var ha_rad: float = deg_to_rad(ha)
-	var dec_rad: float = deg_to_rad(dec)
-	var lat_rad: float = deg_to_rad(latitude)
-	
-	# Calculate altitude
-	var sin_alt: float = sin(lat_rad) * sin(dec_rad) + cos(lat_rad) * cos(dec_rad) * cos(ha_rad)
-	sin_alt = clamp(sin_alt, -1.0, 1.0)
-	var altitude: float = asin(sin_alt)
-	
-	# Calculate azimuth
-	var cos_alt: float = cos(altitude)
-	var cos_az: float = 0.0
-	if abs(cos_alt) > 0.0001 and abs(cos(lat_rad)) > 0.0001:
-		cos_az = (sin(dec_rad) - sin(lat_rad) * sin_alt) / (cos(lat_rad) * cos_alt)
-		cos_az = clamp(cos_az, -1.0, 1.0)
-	var azimuth: float = acos(cos_az)
-	
-	# Adjust azimuth for western sky
-	if sin(ha_rad) > 0.0:
-		azimuth = TAU - azimuth
-	
-	return {"altitude": rad_to_deg(altitude), "azimuth": rad_to_deg(azimuth)}
+	return StarSkyMath.equatorial_to_horizontal(ra, dec, lst, latitude)
 
-## Convert horizontal coordinates to direction vector
+## Convert horizontal coordinates to direction vector (north −Z, east +X, up +Y).
 func horizontal_to_direction(altitude: float, azimuth: float) -> Vector3:
-	var alt_rad: float = deg_to_rad(altitude)
-	var az_rad: float = deg_to_rad(azimuth)
-	
-	var cos_alt: float = cos(alt_rad)
-	var dir_x: float = cos_alt * sin(az_rad)
-	var dir_y: float = sin(alt_rad)
-	var dir_z: float = -cos_alt * cos(az_rad)
-	
-	return Vector3(dir_x, dir_y, dir_z).normalized()
+	return StarSkyMath.horizontal_to_direction(altitude, azimuth)
 
 ## Get planet data for shader (called by main scene)
 func get_shader_data() -> Dictionary:

@@ -8,8 +8,10 @@ group_uniforms sky;
 	uniform vec3 day_bottom_color : source_color = vec3( 0.4, 0.8, 1.0 );
 	uniform vec3 sunset_top_color : source_color = vec3( 0.52, 0.56, 0.68 );    // Muted grey-blue upper sky
 	uniform vec3 sunset_bottom_color : source_color = vec3( 0.92, 0.68, 0.40 ); // Warm amber-orange near horizon
-	uniform vec3 night_top_color : source_color = vec3( 0.02, 0.0, 0.04 );
-	uniform vec3 night_bottom_color : source_color = vec3( 0.1, 0.0, 0.2 );
+	// A moonless Bortle-1 sky is near-black and slightly BLUE-grey, not purple:
+	// zenith ~(0.004, 0.006, 0.012), a shade lighter toward the horizon.
+	uniform vec3 night_top_color : source_color = vec3( 0.004, 0.006, 0.012 );
+	uniform vec3 night_bottom_color : source_color = vec3( 0.010, 0.014, 0.024 );
 
 group_uniforms horizon;
 	uniform vec3 horizon_color : source_color = vec3( 0.0, 0.7, 0.8 );
@@ -94,41 +96,98 @@ group_uniforms hazard; // Extreme weather (wildfire smoke, dust) — see Atmosph
 	uniform float hazard_horizon_bias : hint_range( 0.0, 1.0, 0.01 ) = 0.65;
 
 group_uniforms stars;
-	// Stars texture - MUST be equirectangular projection with:
-	//   - North Celestial Pole (Polaris) at TOP CENTER
-	//   - South Celestial Pole at BOTTOM CENTER  
-	//   - Right Ascension 0h at horizontal center (or adjust stars_ra_offset)
-	// Generate with Stellarium: File > Save Screenshot > Spherical (equirectangular)
-	// Linear (no mipmap) keeps Stellarium points sharp — mipmaps were blooming a soft glow halo.
+	// Stars texture — an EQUIRECTANGULAR (plate carrée) all-sky map in the EQUATORIAL
+	// frame, exported by tools/stellarium_starmap_export.ssc and cleaned/registered by
+	// tools/starmap_prepare.py. Which RA sits at u = 0, which way RA runs across the
+	// image and whether the NCP is the top row are NOT assumed here: they come from
+	// the sidecar JSON next to the texture and are pushed by StarSystem as the three
+	// registration uniforms below.
+	// Linear (no mipmap) keeps the point stars sharp — mipmaps were blooming a soft halo.
 	uniform sampler2D stars_texture : filter_linear, hint_default_black, repeat_enable;
-	uniform float stars_speed : hint_range( 0.0, 20.0, 0.01 ) = 1.0;
-	uniform float stars_scale : hint_range(0.5, 2.0, 0.01) = 1.0;
+	// The SAME map through a mipmap sampler: the diffuse Milky Way path reads a
+	// genuine box blur off the mip chain (one textureLod tap). filter_linear on
+	// stars_texture keeps the star points sharp; this one exists only so the
+	// band can be smooth. StarSystem pushes both.
+	uniform sampler2D stars_texture_soft : filter_linear_mipmap, hint_default_black, repeat_enable;
 	uniform float stars_opacity : hint_range(0.0, 3.0, 0.01) = 1.0;
 	// Soft glow mix around stars (0 = sharp point stars, 1 = max halo from blurred sample).
 	uniform float stars_glow : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
 	// Contrast lift for sharp cores (higher = dim texture noise cut harder).
 	uniform float stars_contrast : hint_range( 1.0, 4.0, 0.05 ) = 2.2;
-	// Classic long-exposure star trails (swirl around celestial pole).
+	// Luminance below which the map reads as sky background (the prep tool already
+	// black-floors the export; this only trims residual airglow). Fades in to 3× this.
+	uniform float stars_background_cut : hint_range( 0.0, 0.3, 0.005 ) = 0.04;
+	// Classic long-exposure star trails (arcs about the celestial pole).
 	uniform float star_trails : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
 	uniform float star_trail_length : hint_range( 0.0, 1.0, 0.01 ) = 0.35;
-	// Manual calibration offset - aligns the HDRI starmap's RA zero point (degrees)
-	// This corrects for when the Stellarium export was made
-	uniform float stars_north_offset : hint_range( -360.0, 360.0, 0.1 ) = 0.0;
-	// Local Sidereal Time in degrees (0-360) - drives star rotation throughout the night
-	// This should be updated every frame based on simulation date/time/location
+	// Local Mean Sidereal Time in degrees (0-360), pushed on every sky tick by StarSystem.
 	uniform float stars_lst : hint_range( 0.0, 360.0, 0.1 ) = 0.0;
-	// Vertical offset to correct pole alignment (degrees, large range for different projections)
-	uniform float stars_declination_offset : hint_range( -180.0, 180.0, 0.1 ) = 0.0;
-	// Flip the vertical axis (1.0 = flipped, 0.0 = normal)
-	// Use if your starmap has NCP at bottom instead of top
-	uniform float stars_flip_vertical : hint_range( 0.0, 1.0, 1.0 ) = 0.0;
-	// Flip the horizontal axis (1.0 = flipped, 0.0 = normal)
-	// Use if stars move backwards with time
-	uniform float stars_flip_horizontal : hint_range( 0.0, 1.0, 1.0 ) = 0.0;
+	// Equatorial basis in WORLD space at the observer's latitude φ
+	// (StarSkyMath.equatorial_basis; world north = −Z, east = +X, up = +Y):
+	//   pole     = north celestial pole              = (0,  sin φ, −cos φ)
+	//   meridian = equator point on the meridian     = (0,  cos φ,  sin φ)   (due south)
+	//   east     = east point of the equator         = (1,  0,      0)
+	// Three vectors rather than a mat3 so there is no Basis column/row ambiguity.
+	// The OLD block rotated the view about the pole and then read the texture latitude
+	// off the rotated WORLD vector's y — the zenith as the texture pole — which is only
+	// right at latitude 90°. Do not reintroduce that; the basis is the whole fix.
+	uniform vec3 stars_axis_pole = vec3( 0.0, 1.0, 0.0 );
+	uniform vec3 stars_axis_meridian = vec3( 0.0, 0.0, 1.0 );
+	uniform vec3 stars_axis_east = vec3( 1.0, 0.0, 0.0 );
+	// Texture registration (from the sidecar): RA at u = 0 (deg); RA direction across the
+	// image (−1 = RA increases LEFTWARD, the inside-the-sphere convention; +1 = rightward);
+	// 1.0 when the north celestial pole is the TOP row.
+	uniform float stars_ra_at_u0_deg : hint_range( 0.0, 360.0, 0.01 ) = 0.0;
+	uniform float stars_ra_direction : hint_range( -1.0, 1.0, 2.0 ) = -1.0;
+	uniform float stars_north_up : hint_range( 0.0, 1.0, 1.0 ) = 1.0;
 	// Twinkling intensity (atmospheric scintillation)
 	uniform float stars_twinkle : hint_range( 0.0, 1.0, 0.01 ) = 0.3;
 	// How much stars fade near the horizon (atmospheric extinction)
 	uniform float stars_horizon_fade : hint_range( 0.0, 1.0, 0.01 ) = 0.5;
+
+	// --- Star look ---------------------------------------------------------------
+	// Texel size of stars_texture (1/w, 1/h). Every neighbour tap below is in
+	// TEXELS so an 8k and a 16k map render the same look; pushed by StarSystem.
+	uniform vec2 stars_texel = vec2( 0.0001220703125, 0.000244140625 ); // 1/8192, 1/4096
+	// −1 = erode every star disc by one texel (smaller, sharper points),
+	// +1 = dilate. 0 = the map as exported.
+	uniform float stars_point_size : hint_range( -1.0, 1.0, 0.05 ) = 0.0;
+	// Colour saturation of the star cores. The export clips a bright star's
+	// centre to white; its colour survives in the FRINGE, so the tint is read
+	// off the four neighbour taps and re-applied to the core's luminance.
+	uniform float stars_saturation : hint_range( 0.0, 3.0, 0.05 ) = 1.5;
+	// How strongly a bright sky (moonlight, light pollution) washes out the
+	// faint stars and the Milky Way: raises the background cut by this × the
+	// night-sky luminance. 0 = stars ignore the sky (the old behaviour).
+	uniform float stars_wash : hint_range( 0.0, 1.0, 0.05 ) = 0.7;
+	// The Milky Way is the DIFFUSE part of the map (luminance below the star
+	// cores): its own gain and colour saturation, so it can be lifted out of the
+	// black without turning every star into a blob.
+	uniform float milkyway_gain : hint_range( 0.0, 4.0, 0.05 ) = 1.3;
+	uniform float milkyway_saturation : hint_range( 0.0, 3.0, 0.05 ) = 1.2;
+	// Tint multiplied into the diffuse band (the export's Milky Way is blue-grey;
+	// a long exposure reads warm-white with brown dust lanes).
+	uniform vec3 milkyway_tint : source_color = vec3( 1.0, 0.94, 0.88 );
+
+group_uniforms night; // The dark sky itself — see the NIGHT block in sky()
+	// Airglow: the faint luminous band a truly dark sky shows 10–25° above the
+	// horizon (upper-atmosphere chemiluminescence; the 557.7 nm oxygen line
+	// makes it read green on a camera). Strength 0 = none.
+	uniform vec3 airglow_color : source_color = vec3( 0.16, 0.30, 0.22 );
+	uniform float airglow_strength : hint_range( 0.0, 1.0, 0.01 ) = 0.25;
+	// Light pollution: a warm sodium/LED dome brightening steeply toward the
+	// horizon and lifting the whole sky a little. 0 = Bortle-1 wilderness.
+	uniform vec3 light_pollution_color : source_color = vec3( 0.95, 0.62, 0.35 );
+	uniform float light_pollution : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
+	// Moonlit sky: a moon-blue wash scaled by phase and altitude. A full moon
+	// brightens the sky roughly tenfold over a moonless night and hides the
+	// faint stars — which is what stars_wash turns into.
+	uniform float moon_sky_glow : hint_range( 0.0, 2.0, 0.05 ) = 1.0;
+	// Twilight drama: scales the horizon fire band, the sun aureole and glow
+	// near the horizon, and the Belt of Venus opposite the sun. 1 = natural.
+	uniform float twilight_drama : hint_range( 0.0, 2.0, 0.05 ) = 1.2;
+	// Scales the solar-depression ramp of daylight_fraction() (1 = exp(−0.25/°)).
+	uniform float twilight_length : hint_range( 0.25, 3.0, 0.05 ) = 1.0;
 
 group_uniforms planets;
 	// Planet direction vectors (normalized, pointing toward each planet)
@@ -199,8 +258,6 @@ group_uniforms reference_stars;
 group_uniforms settings;
 	uniform float overwritten_time = 0.0;
 	// Cloud motion uses explicit UV offsets in the groups above.
-	uniform float star_rotation_angle = 0.0;
-	uniform float celestial_pole_elevation = 0.0;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Function for clouds noises. You can replace using "gen_fractal_ping_pong" with a simple texture reading.
@@ -348,6 +405,21 @@ vec3 _rainbow_spectrum( float t )
 	return mix( _b, _v, ( t - 0.83 ) / 0.17 );
 }
 
+// Diffuse skylight relative to full day, as a function of sin(solar altitude).
+// A line-for-line MIRROR of DaylightModel.sky_light (core/env/daylight_model.gd),
+// which main.gd feeds to the ambient, fog and glow — edit both or the ground
+// and the sky darken on different curves. Above the horizon the sky climbs
+// from 55 % at sunrise to full by 15°; below it, exp(−0.25 · depression°)
+// per twilight_length with a soft cut at the end of astronomical twilight.
+float daylight_fraction( float sin_alt, float tw_len )
+{
+	if( sin_alt >= 0.0 )
+		return mix( 0.55, 1.0, smoothstep( 0.0, 0.26, sin_alt ) );
+	float tl = max( tw_len, 0.05 );
+	float d = degrees( asin( clamp( -sin_alt, 0.0, 1.0 ) ) );
+	return 0.55 * exp( -0.25 / tl * d ) * ( 1.0 - smoothstep( 15.0 * tl, 21.0 * tl, d ) );
+}
+
 void sky()
 {
 	float time = overwritten_time != 0.0 ? overwritten_time : TIME;
@@ -369,38 +441,92 @@ void sky()
 
 	//////////////////// SKY ///////////////////////////////////////////////////////////////////////
 	float _eyedir_y = abs( sin( EYEDIR.y * PI * 0.5 ));
+	float _sun_alt = LIGHT0_DIRECTION.y;   // sin( solar altitude )
+	float _daylight = daylight_fraction( _sun_alt, twilight_length );
+	// Moon phase: needed by the NIGHT block here and by the MOON block later.
+	float _moon_phase_lit = 0.0; // 0 at new moon, 1 at full moon
+	if( LIGHT1_ENABLED )
+		_moon_phase_lit = pow( ( 1.0 - dot( LIGHT1_DIRECTION, LIGHT0_DIRECTION ) ) * 0.5, 0.7 );
 
-	// The day color will be our base color
-	vec3 _sky_color = mix( day_bottom_color, day_top_color, _eyedir_y );
+	// The day color will be our base color — the blue itself is dimmer at
+	// sunrise than at noon (55 % → 100 % over the first 15° of altitude).
+	vec3 _sky_color = mix( day_bottom_color, day_top_color, _eyedir_y ) * max( _daylight, 0.55 );
 	_sky_color = mix( _sky_color, vec3( 0.0 ), clamp(( 0.7 - clouds_cutoff ) * clouds_weight, 0.0, 1.0 ));
 
-	float _sunset_amount = clamp( 0.5 - abs( LIGHT0_DIRECTION.y ), 0.0, 0.5 ) * 2.0;
-	// Dramatic multi-band twilight gradient — only computed while the sun is near the
-	// horizon (skipped entirely at midday/deep night, where _sunset_amount is 0).
-	//   • Toward the sun: fiery orange near the horizon → pink/magenta mid → deep blue up high.
-	//   • Away from the sun: cooler violet/indigo, so the dome reads directional and real.
+	//////////////////// TWILIGHT //////////////////////////////////////////////////////////////////
+	// A solar-DEPRESSION model. In sin(altitude): 0.105 = 6° (civil twilight
+	// ends), 0.208 = 12° (nautical), 0.309 = 18° (astronomical night). The old
+	// form ran one symmetric sunset tint from 30° ABOVE the horizon to 30° BELOW
+	// it, so the afternoon sky went pale hours early and the night sky stayed
+	// violet until the sun was 30° down; and "night" was already 70 % black with
+	// the sun still ON the horizon, which is why sunsets rendered dim.
+	//
+	// _sunset_amount: 1 on the horizon, gone 15° above (golden hour) and 14°
+	// below — the palette's BRIGHTNESS below the horizon is the night mix
+	// (_daylight), so the last of the glow fades out rather than cutting.
+	float _sunset_amount = ( _sun_alt >= 0.0 )
+		? 1.0 - smoothstep( 0.0, 0.26, _sun_alt )
+		: 1.0 - smoothstep( 0.0, 0.24, -_sun_alt );
+	_sunset_amount = _sunset_amount * _sunset_amount * ( 3.0 - 2.0 * _sunset_amount );
 	if( _sunset_amount > 0.0 )
 	{
 		float _sky_h = clamp( EYEDIR.y, 0.0, 1.0 );
-		vec3 _fire = mix( vec3( 1.0, 0.42, 0.14 ), vec3( 0.98, 0.40, 0.52 ), smoothstep( 0.0, 0.16, _sky_h ) );
-		_fire = mix( _fire, sunset_top_color, smoothstep( 0.14, 0.55, _sky_h ) );
-		vec3 _cool_sky = mix( vec3( 0.40, 0.30, 0.52 ), sunset_top_color, smoothstep( 0.0, 0.5, _sky_h ) );
-		vec3 _sky_sunset_color = mix( _cool_sky, _fire, smoothstep( 0.15, 0.85, _toward_sun ) );
-		// Concentrate the strongest fiery band right around the sun on the horizon.
-		float _sunset_focus = clamp( 1.0 - pow( _sun_view_dist, 2.0 ), 0.0, 1.0 );
-		_sky_sunset_color = mix( _sky_sunset_color, vec3( 1.0, 0.5, 0.2 ), _sunset_amount * _sunset_focus * 0.6 );
-		_sky_color = mix( _sky_color, _sky_sunset_color, _sunset_amount );
+		float _drama = twilight_drama;
+		// Sun side: fire on the horizon -> salmon -> the twilight top colour above.
+		vec3 _fire_lo = mix( vec3( 1.0, 0.50, 0.16 ), vec3( 1.0, 0.34, 0.08 ), clamp( _drama - 1.0, 0.0, 1.0 ) )
+			* ( 1.0 + 0.35 * _drama ); // pushed past 1.0 so the bloom carries the glare
+		vec3 _fire = mix( _fire_lo, vec3( 0.98, 0.58, 0.46 ), smoothstep( 0.0, 0.12, _sky_h ) );
+		_fire = mix( _fire, sunset_top_color, smoothstep( 0.10, 0.45, _sky_h ) );
+		// Anti-sun side: the Earth's shadow (blue-grey) with the Belt of Venus
+		// (pink) on top of it 2–8° up, then the twilight top colour.
+		vec3 _shadow = vec3( 0.30, 0.34, 0.50 );
+		vec3 _venus = vec3( 0.86, 0.56, 0.62 );
+		float _belt = smoothstep( 0.02, 0.09, _sky_h ) * ( 1.0 - smoothstep( 0.11, 0.30, _sky_h ) );
+		vec3 _anti = mix( _shadow, _venus, _belt * clamp( 0.7 * _drama, 0.0, 1.0 ) );
+		_anti = mix( _anti, sunset_top_color, smoothstep( 0.15, 0.55, _sky_h ) );
+		vec3 _tw = mix( _anti, _fire, smoothstep( 0.2, 0.85, _toward_sun ) );
+		// Horizon glare band around the sun's bearing — the brightest part of the show.
+		float _focus = clamp( 1.0 - pow( _sun_view_dist / 1.25, 2.0 ), 0.0, 1.0 );
+		_tw = mix( _tw, vec3( 1.0, 0.62, 0.26 ), clamp( _sunset_amount * _focus * 0.55 * _drama, 0.0, 1.0 ) );
+		_sky_color = mix( _sky_color, _tw, _sunset_amount );
 	}
 
-	float _night_amount = clamp( -LIGHT0_DIRECTION.y + 0.7, 0.0, 1.0 );
+	//////////////////// NIGHT /////////////////////////////////////////////////////////////////////
+	// Night amount = 1 − the twilight envelope: 1 with the sun on or above the
+	// horizon, exp(−0.25 · depression°) below it (DaylightModel.twilight_palette
+	// — the same curve main.gd runs the ambient on). Civil twilight (−6°) is
+	// still 22 % lit, nautical (−12°) 5 %, gone by −21°. The old form was black
+	// by −7° while the ground ambient was still two-thirds of daylight — which
+	// is half of why dusk read as a switch. It is what the horizon, cirrus and
+	// cloud blocks read as "how dark is it".
+	float _night_amount = 1.0 - min( _daylight / 0.55, 1.0 );
 	// Totality / deep partial eclipse: daylight collapses while the sun is still up.
 	if( LIGHT0_DIRECTION.y > 0.0 && eclipse_obscuration > 0.05 )
 	{
 		float _eclipse_night = eclipse_obscuration * ( eclipse_obscuration > 0.92 ? 0.95 : 0.55 );
 		_night_amount = max( _night_amount, _eclipse_night );
 	}
-	vec3 _sky_night_color = mix( night_bottom_color, night_top_color, _eyedir_y );
-	_sky_color = mix( _sky_color, _sky_night_color, _night_amount );
+	// The dark sky = a near-black zenith→horizon gradient plus three separate,
+	// user-controlled light sources, so a Bortle-1 wilderness night is all three
+	// at zero and a suburban night is light pollution up.
+	vec3 _night = mix( night_bottom_color, night_top_color, _eyedir_y );
+	float _up = clamp( EYEDIR.y, 0.0, 1.0 );
+	// Airglow: strongest along grazing sight lines through the emitting layer,
+	// fading toward the zenith; cut off at the horizon.
+	float _ag = exp( -_up * 5.0 ) * smoothstep( -0.04, 0.03, EYEDIR.y );
+	_night += airglow_color * airglow_strength * 0.12 * _ag;
+	// Light pollution: cubic falloff from the horizon plus a dim floor everywhere.
+	float _lp = pow( 1.0 - _up, 3.0 );
+	_night += light_pollution_color * light_pollution * ( 0.02 + 0.16 * _lp );
+	// Moonlight: scattered moon-blue, a little brighter low in the sky, gone at new moon.
+	float _moon_up = LIGHT1_ENABLED ? clamp( LIGHT1_DIRECTION.y * 3.0, 0.0, 1.0 ) : 0.0;
+	float _moon_sky = _moon_up * _moon_phase_lit * moon_sky_glow;
+	_night += vec3( 0.06, 0.09, 0.16 ) * _moon_sky * ( 0.55 + 0.45 * ( 1.0 - _up ) );
+	_sky_color = mix( _sky_color, _night, _night_amount );
+	// Sky luminance the STARS block uses to wash out the faint stars: the whole
+	// sky, so the twilight glow hides them exactly as the moon does and they
+	// emerge as it fades instead of on a separate timer.
+	float _night_sky_lum = dot( _sky_color, vec3( 0.299, 0.587, 0.114 ) );
 
 	// Final sky color
 	COLOR = _sky_color;
@@ -430,10 +556,8 @@ void sky()
 
 	//////////////////// MOON //////////////////////////////////////////////////////////////////////
 	float _moon_amount = 0.0;
-	float _moon_phase_lit = 0.0; // 0 at new moon, 1 at full moon
 	if( LIGHT1_ENABLED )
 	{
-		_moon_phase_lit = pow( ( 1.0 - dot( LIGHT1_DIRECTION, LIGHT0_DIRECTION ) ) * 0.5, 0.7 );
 		// Subtle size increase near the horizon (reduced from 25% to 8%)
 		float _moon_size = moon_size + cos( LIGHT1_DIRECTION.y * PI ) * moon_size * 0.08;
 		float _moon_distance = distance( EYEDIR, LIGHT1_DIRECTION ) / _moon_size;
@@ -534,14 +658,14 @@ void sky()
 		{
 			float _aur = pow( max( 0.0, 1.0 - _sun_view_dist / 1.3 ), 2.5 );
 			vec3 _aur_col = mix( vec3( 0.85, 0.88, 0.95 ), sun_aureole_color, _sun_redden );
-			_aur *= sun_aureole * ( 0.30 + _sun_redden * 1.5 ) * _atmos_illumination;
+			_aur *= sun_aureole * ( 0.30 + _sun_redden * 1.5 * twilight_drama ) * _atmos_illumination;
 			COLOR += _aur_col * _aur;
 		}
 
 		// Soft radial corona hugging the disc — the "glow" instead of a hard bright disc.
 		if( sun_glow > 0.0 && LIGHT0_DIRECTION.y > -0.12 )
 		{
-			float _glow_radius = _sun_size * sun_glow_size;
+			float _glow_radius = _sun_size * sun_glow_size * mix( 1.0, twilight_drama, _sun_redden );
 			float _sg = pow( max( 0.0, 1.0 - _sun_view_dist / _glow_radius ), 2.5 );
 			vec3 _glow_col = mix( sun_glow_color, _sun_warm, _sun_redden );
 			COLOR = mix( COLOR, _glow_col, clamp( _sg * sun_glow * _atmos_illumination, 0.0, 1.0 ) );
@@ -560,87 +684,57 @@ void sky()
 		}
 	}
 
-	//////////////////// STARS /////////////////////////////////////////////////////////////////
-	// Show stars when sun is below horizon
-	if( EYEDIR.y > -0.05 && LIGHT0_DIRECTION.y < 0.0 )
+	//////////////////// STARS /////////////////////////////////////////////////////////////
+	// Gate where the twilight ramp below reaches exactly zero (LIGHT0.y = +0.05). Gating
+	// at 0.0 switched ~7% of the star brightness on in one frame at sunset.
+	if( EYEDIR.y > -0.05 && LIGHT0_DIRECTION.y < 0.05 )
 	{
-		// Get view direction
 		vec3 _view_dir = normalize( EYEDIR );
-		
-		// The celestial pole axis points toward Polaris (North Celestial Pole)
-		// At the equator (lat=0°), NCP is on the northern horizon
-		// At lat=33° (Bombay Beach), NCP is 33° above the northern horizon
-		// In our coordinate system: +Y is up, -Z is north
-		float _pole_elevation = radians( celestial_pole_elevation );
-		vec3 _pole_axis = vec3( 0.0, sin( _pole_elevation ), -cos( _pole_elevation ) );
-		
-		// LST rotation: rotate the view around the celestial pole axis
-		// This makes stars appear to rotate around Polaris throughout the night
-		// Combined with calibration offset for HDRI alignment
-		float _lst_rotation = radians( stars_lst + stars_north_offset );
-		
-		// Apply horizontal flip to rotation direction if needed
-		if( stars_flip_horizontal > 0.5 ) {
-			_lst_rotation = -_lst_rotation;
-		}
-		
-		// Rodrigues' rotation formula - rotate view around celestial pole
-		float _cos_rot = cos( _lst_rotation );
-		float _sin_rot = sin( _lst_rotation );
-		vec3 _rotated_view = _view_dir * _cos_rot 
-			+ cross( _pole_axis, _view_dir ) * _sin_rot 
-			+ _pole_axis * dot( _pole_axis, _view_dir ) * ( 1.0 - _cos_rot );
-		
-		// Convert rotated view direction to equirectangular UV coordinates
-		float _longitude = atan( _rotated_view.x, -_rotated_view.z ); // -PI to PI
-		float _latitude = asin( clamp( _rotated_view.y, -1.0, 1.0 ) ); // -PI/2 to PI/2
-		
-		// Apply vertical offset (Declination calibration for HDRI alignment)
-		float _dec_offset_rad = radians( stars_declination_offset );
-		_latitude = _latitude + _dec_offset_rad;
-		
-		// Handle latitude wrapping for large offsets
-		float _lon_flip = 0.0;
-		if( _latitude > PI * 0.5 ) {
-			_latitude = PI - _latitude;
-			_lon_flip = PI;
-		}
-		if( _latitude < -PI * 0.5 ) {
-			_latitude = -PI - _latitude;
-			_lon_flip = PI;
-		}
-		_latitude = clamp( _latitude, -PI * 0.5, PI * 0.5 );
-		
-		// Calculate UV coordinates (no LST here - it's in the 3D rotation)
-		float _u = fract( ( _longitude + _lon_flip ) / TAU + 0.5 );
-		float _v = _latitude / PI + 0.5;  // 0 = SCP, 0.5 = equator, 1 = NCP
-		
-		// Apply vertical flip if needed (for starmaps with NCP at bottom)
-		if( stars_flip_vertical > 0.5 ) {
-			_v = 1.0 - _v;
-		}
-		
-		vec2 _stars_uv = vec2( _u, _v );
-		
-		// Apply scale (centered on current view, not on texture center)
-		_stars_uv = ( _stars_uv - 0.5 ) / stars_scale + 0.5;
-		
-		// Stars texture - sample the HDRI (sharp; optional soft glow mix)
+
+		// World direction -> equatorial (RA, Dec) through the basis StarSystem pushes:
+		//   dec = asin( v·P );  hour angle H = atan2( −v·E, v·M ), positive WEST;  RA = LST − H.
+		// Mirrored line for line in StarSkyMath.shader_uv_for_direction — keep them in
+		// sync; core/astronomy/star_sky_selftest.gd is what proves they still agree.
+		float _sin_dec = clamp( dot( _view_dir, stars_axis_pole ), -1.0, 1.0 );
+		float _dec = asin( _sin_dec );
+		float _ha = atan( -dot( _view_dir, stars_axis_east ), dot( _view_dir, stars_axis_meridian ) );
+		float _ra = radians( stars_lst ) - _ha;
+
+		// Equatorial -> texture UV through the registration (see the uniform block).
+		float _u = fract( ( _ra - radians( stars_ra_at_u0_deg ) ) * stars_ra_direction / TAU );
+		float _vv = 0.5 - _dec / PI;
+		if( stars_north_up < 0.5 ) { _vv = 1.0 - _vv; }
+		vec2 _stars_uv = vec2( _u, _vv );
+
+		// --- Sample: the sharp centre plus a 4-tap cross ONE TEXEL out ----------------
+		vec2 _px = stars_texel;
 		vec3 _stars_sharp = texture( stars_texture, _stars_uv ).rgb;
-		vec3 _stars_color = _stars_sharp;
+		vec3 _t0 = texture( stars_texture, _stars_uv + vec2( _px.x, 0.0 ) ).rgb;
+		vec3 _t1 = texture( stars_texture, _stars_uv - vec2( _px.x, 0.0 ) ).rgb;
+		vec3 _t2 = texture( stars_texture, _stars_uv + vec2( 0.0, _px.y ) ).rgb;
+		vec3 _t3 = texture( stars_texture, _stars_uv - vec2( 0.0, _px.y ) ).rgb;
+		vec3 _soft = ( _t0 + _t1 + _t2 + _t3 ) * 0.25;
+		// The DIFFUSE (Milky Way) source: a real box blur from the map's mip chain —
+		// LOD 3 on the 8k map, 4 on the 16k (≈ 8 texels = 0.35° of sky either way;
+		// Stellarium's own Milky Way texture is grainy and LOD 2 still showed it).
+		// A sparse ring of far taps was tried first and drew a SQUARE of dots
+		// around every faint star. min() with the 1-texel cross keeps a bright
+		// disc's blur from bleeding a halo past its own edge.
+		float _mw_lod = 3.0 + log2( max( 1.0 / ( stars_texel.x * 8192.0 ), 1.0 ) );
+		vec3 _wide = min( textureLod( stars_texture_soft, _stars_uv, _mw_lod ).rgb, _soft );
+		// Point size: erode (min over the cross) shrinks every disc by a texel,
+		// dilate (max) grows it; continuous through mix.
+		vec3 _nmin = min( min( _t0, _t1 ), min( _t2, _t3 ) );
+		vec3 _nmax = max( max( _t0, _t1 ), max( _t2, _t3 ) );
+		vec3 _stars_color = mix( _stars_sharp, min( _stars_sharp, _nmin ), clamp( -stars_point_size, 0.0, 1.0 ) );
+		_stars_color = mix( _stars_color, max( _stars_color, _nmax ), clamp( stars_point_size, 0.0, 1.0 ) );
+		// Optional soft halo (off by default).
 		if( stars_glow > 0.001 )
 		{
-			// Tiny neighbour taps for an optional soft halo (off by default).
-			vec2 _px = vec2( 0.0012, 0.0008 );
-			vec3 _soft = (
-				texture( stars_texture, _stars_uv + vec2( _px.x, 0.0 ) ).rgb +
-				texture( stars_texture, _stars_uv - vec2( _px.x, 0.0 ) ).rgb +
-				texture( stars_texture, _stars_uv + vec2( 0.0, _px.y ) ).rgb +
-				texture( stars_texture, _stars_uv - vec2( 0.0, _px.y ) ).rgb
-			) * 0.25;
-			_stars_color = mix( _stars_sharp, _soft, clamp( stars_glow, 0.0, 1.0 ) );
+			_stars_color = mix( _stars_color, max( _stars_color, _soft * 1.5 ), clamp( stars_glow, 0.0, 1.0 ) );
 		}
-		// Long-exposure trails: blend samples rotated about the celestial pole.
+		// Long-exposure trails: a star's EARLIER positions lie at larger RA on the same
+		// declination (it rose in the east), so a trail is a straight walk along u.
 		if( star_trails > 0.001 )
 		{
 			float _trail_span = radians( 8.0 + star_trail_length * 40.0 );
@@ -648,56 +742,40 @@ void sky()
 			const int TRAIL_SAMPLES = 5;
 			for( int _ti = 1; _ti <= TRAIL_SAMPLES; _ti++ )
 			{
-				float _ta = -_trail_span * ( float( _ti ) / float( TRAIL_SAMPLES ) );
-				float _tc = cos( _ta );
-				float _ts = sin( _ta );
-				vec3 _tv = _view_dir * _tc
-					+ cross( _pole_axis, _view_dir ) * _ts
-					+ _pole_axis * dot( _pole_axis, _view_dir ) * ( 1.0 - _tc );
-				// Re-apply the same LST rotation used for the primary sample.
-				vec3 _tr = _tv * _cos_rot
-					+ cross( _pole_axis, _tv ) * _sin_rot
-					+ _pole_axis * dot( _pole_axis, _tv ) * ( 1.0 - _cos_rot );
-				float _tlon = atan( _tr.x, -_tr.z );
-				float _tlat = asin( clamp( _tr.y, -1.0, 1.0 ) ) + _dec_offset_rad;
-				_tlat = clamp( _tlat, -PI * 0.5, PI * 0.5 );
-				float _tu = fract( _tlon / TAU + 0.5 );
-				float _tvv = _tlat / PI + 0.5;
-				if( stars_flip_vertical > 0.5 ) { _tvv = 1.0 - _tvv; }
-				vec2 _tuv = ( vec2( _tu, _tvv ) - 0.5 ) / stars_scale + 0.5;
+				float _td = _trail_span * ( float( _ti ) / float( TRAIL_SAMPLES ) );
+				vec2 _tuv = vec2( fract( _u + stars_ra_direction * _td / TAU ), _vv );
 				_trail_accum += texture( stars_texture, _tuv ).rgb;
 			}
 			_trail_accum /= float( TRAIL_SAMPLES + 1 );
 			_stars_color = mix( _stars_color, _trail_accum, clamp( star_trails, 0.0, 1.0 ) );
 		}
-		
-		// Mask out Stellarium UI artifacts (toolbar icons at top, status bar at bottom)
-		// that were baked into the texture during screenshot export
-		float _tex_v = fract( _stars_uv.y );
-		float _edge_mask = smoothstep( 0.0, 0.06, _tex_v ) * smoothstep( 1.0, 0.94, _tex_v );
-		_stars_color *= _edge_mask;
-		
-		// Clean faint background: remove dim noise/airglow while keeping the Milky Way
-		float _star_lum = dot( _stars_color, vec3( 0.299, 0.587, 0.114 ) );
-		// Higher threshold + contrast = sharp star cores, no glow-y airglow wash.
-		float _bg_mask = smoothstep( 0.04, 0.12, _star_lum );
+
+		// --- Split the map into star CORES and the diffuse MILKY WAY ------------------
+		// The export draws stars as saturated discs (luminance ≥ ~0.5) over a dim
+		// diffuse background (≤ ~0.3), so luminance separates the two cleanly.
+		const vec3 _LUMA = vec3( 0.299, 0.587, 0.114 );
+		float _lum = dot( _stars_color, _LUMA );
+		float _core = smoothstep( 0.30, 0.60, _lum );
+		// Star colour: the core clipped to white in the export, so read the tint
+		// off the fringe (the 4-tap average) and re-apply it to the core's luminance.
+		float _soft_lum = max( dot( _soft, _LUMA ), 1e-4 );
+		vec3 _fringe_chroma = clamp( _soft / _soft_lum, 0.0, 4.0 ) - vec3( 1.0 );
+		vec3 _star_part = vec3( _lum ) * max( vec3( 1.0 ) + _fringe_chroma * stars_saturation, vec3( 0.0 ) );
+		_star_part = pow( max( _star_part, vec3( 0.0 ) ), vec3( stars_contrast ) );
+		// Milky Way: the smoothed wide sample (never the noisy single texel), its
+		// own gain, tint and saturation, and no contrast crush. Stars fainter than
+		// the core threshold live in the same path — the ring keeps them soft.
+		vec3 _mw_part = _wide * milkyway_gain * milkyway_tint;
+		float _mw_lum = dot( _mw_part, _LUMA );
+		_mw_part = max( mix( vec3( _mw_lum ), _mw_part, milkyway_saturation ), vec3( 0.0 ) );
+		_stars_color = mix( _mw_part, _star_part, _core );
+
+		// Background cut — raised by the sky's own glow (moon, light pollution):
+		// under a bright sky the faint stars and the Milky Way are the first to go.
+		float _cut = stars_background_cut + stars_wash * _night_sky_lum * 6.0;
+		float _bg_mask = smoothstep( _cut, _cut * 3.0 + 0.02, dot( _stars_color, _LUMA ) );
 		_stars_color *= _bg_mask;
-		_stars_color = pow( max( _stars_color, vec3( 0.0 ) ), vec3( stars_contrast ) );
-		// Desaturate dim pixels to neutralize any residual color cast;
-		// only bright stars retain full natural color
-		_star_lum = dot( _stars_color, vec3( 0.299, 0.587, 0.114 ) );
-		float _color_keep = smoothstep( 0.08, 0.35, _star_lum );
-		_stars_color = mix( vec3( _star_lum * _bg_mask ), _stars_color, _color_keep );
-		
-		// Pole artifact mitigation - fade stars near celestial poles to hide pinching
-		// In equirectangular projection, all pixels at poles converge to a single point
-		// causing visible pinching/accordion artifacts
-		float _pole_distance = abs( _rotated_view.y );  // 1.0 at poles, 0.0 at equator
-		float _pole_fade = smoothstep( 0.995, 0.90, _pole_distance );  // Fade within ~25° of poles
-		// Near poles, blend stars with a subtle gradient instead of the distorted texture
-		vec3 _pole_replacement = vec3( 0.01, 0.01, 0.015 );  // Very dark blue-ish
-		_stars_color = mix( _pole_replacement, _stars_color, _pole_fade );
-		
+
 		// Star twinkling effect (atmospheric scintillation)
 		// Uses position-based noise that varies over time for natural shimmer
 		if( stars_twinkle > 0.0 )
@@ -705,60 +783,60 @@ void sky()
 			// Create unique twinkle pattern per viewing direction
 			float _twinkle_seed = dot( _view_dir, vec3( 12.9898, 78.233, 45.164 ) );
 			float _twinkle_noise = fract( sin( _twinkle_seed * 43758.5453 + time * 3.0 ) * 43758.5453 );
-			
+
 			// Secondary slower variation for more organic feel
 			float _twinkle_slow = fract( sin( _twinkle_seed * 12345.6789 + time * 0.7 ) * 23456.789 );
-			
+
 			// Combine fast and slow variations
 			float _twinkle_amount = mix( _twinkle_noise, _twinkle_slow, 0.4 );
-			
+
 			// Stars twinkle more near horizon (more atmosphere)
 			float _horizon_twinkle_boost = 1.0 + ( 1.0 - smoothstep( 0.0, 0.4, EYEDIR.y ) ) * 1.5;
-			
-			// Apply twinkle - brighter stars twinkle less noticeably
-			float _star_brightness = dot( _stars_color, vec3( 0.299, 0.587, 0.114 ) );
-			float _twinkle_strength = stars_twinkle * ( 1.0 - _star_brightness * 0.5 ) * _horizon_twinkle_boost;
-			
+
+			// Apply twinkle only to the star cores — the Milky Way does not scintillate.
+			float _star_brightness = dot( _stars_color, _LUMA );
+			float _twinkle_strength = stars_twinkle * ( 1.0 - _star_brightness * 0.5 ) * _horizon_twinkle_boost * _core;
+
 			_stars_color *= 1.0 + ( _twinkle_amount - 0.5 ) * _twinkle_strength;
 		}
-		
-		// Fade stars based on how dark the sky is (twilight transition)
-		// More gradual transition for realistic civil/nautical/astronomical twilight
+
+		// Fade stars based on how dark the sky is (twilight transition): the
+		// brightest stars show at −2°, the full field by −17°.
 		float _sun_altitude = -LIGHT0_DIRECTION.y;
 		float _twilight_factor = smoothstep( -0.05, 0.25, _sun_altitude );
 		_stars_color *= _twilight_factor;
-		
+
 		// Atmospheric extinction near horizon
 		// Stars appear dimmer near horizon due to more atmosphere
 		float _view_altitude = EYEDIR.y;
 		float _extinction_start = 0.0;
 		float _extinction_end = 0.2 + stars_horizon_fade * 0.3;
 		float _horizon_extinction = smoothstep( _extinction_start, _extinction_end, _view_altitude );
-		
+
 		// Extra dimming for very low angles (light pollution and thick atmosphere)
 		float _low_angle_fade = pow( _horizon_extinction, 1.0 + stars_horizon_fade * 2.0 );
 		_stars_color *= _low_angle_fade;
-		
+
 		// Hiding stars behind the moon
 		_stars_color *= 1.0 - _moon_amount;
-		
+
 		// Cloud cover attenuation - clouds block starlight
 		// clouds_cutoff: 1.0 = clear sky, 0.0 = fully overcast
 		// Stars are blocked more by clouds, especially near horizon where clouds extend
 		float _cloud_cover = 1.0 - clouds_cutoff;  // 0 = clear, 1 = overcast
-		
+
 		// Near horizon, even partial cloud cover blocks stars (clouds are thicker at low angles)
 		float _horizon_cloud_factor = 1.0 - smoothstep( 0.1, 0.5, _view_altitude );
 		float _cloud_blocking = _cloud_cover * ( 0.7 + _horizon_cloud_factor * 0.3 );
-		
+
 		// Storm darkness makes clouds even more opaque to starlight
 		_cloud_blocking += clouds_weight * 0.3;
 		_cloud_blocking = clamp( _cloud_blocking, 0.0, 1.0 );
-		
+
 		// Apply cloud blocking - exponential falloff for more natural look
 		float _star_cloud_transmission = pow( 1.0 - _cloud_blocking, 2.0 );
 		_stars_color *= _star_cloud_transmission;
-		
+
 		COLOR += _stars_color * stars_opacity;
 
 		//////////////////// PLANETS /////////////////////////////////////////////////////////////
