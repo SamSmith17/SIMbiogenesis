@@ -117,6 +117,40 @@ static func style_button(btn: Button) -> void:
 	btn.add_theme_stylebox_override("pressed", button_style("pressed"))
 
 
+## Four-state toggle face for tool / mode buttons (tool strips, shape pickers,
+## species families). The OFF+hover face is the whole point: a row of identical
+## toggles otherwise gives no feedback about what is clickable — every one of
+## the veg dock's 15 buttons used to render hover identically to normal. Lifted
+## out of that dock so the unified edit toolbar and future strips share it.
+static func toggle_style(on: bool, hover: bool = false) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(CORNER_RADIUS)
+	sb.set_border_width_all(1)
+	if on:
+		sb.bg_color = Color(C_PRIMARY, 0.30 if hover else 0.22)
+		sb.border_color = C_PRIMARY
+	elif hover:
+		sb.bg_color = C_PANEL_RAISED
+		sb.border_color = Color(C_PRIMARY, 0.75)
+	else:
+		sb.bg_color = C_PANEL
+		sb.border_color = C_BORDER
+	return sb
+
+
+## Apply all four toggle faces plus the on/off font colour in one call.
+## `hover_pressed` matters: without it Godot falls back to `hover`, so an
+## ACTIVE button loses its highlight the moment the pointer touches it.
+static func style_toggle(btn: Button, on: bool, font_size: int = FONT_SM) -> void:
+	btn.add_theme_stylebox_override("normal", toggle_style(on, false))
+	btn.add_theme_stylebox_override("hover", toggle_style(on, true))
+	btn.add_theme_stylebox_override("pressed", toggle_style(true, false))
+	btn.add_theme_stylebox_override("hover_pressed", toggle_style(true, true))
+	btn.add_theme_font_size_override("font_size", font_size)
+	btn.add_theme_color_override("font_color", C_TEXT if on else C_TEXT_S)
+	btn.add_theme_color_override("font_disabled_color", C_TEXT_M)
+
+
 ## Style a ProgressBar into the dark palette.
 ##
 ## Godot's stock ProgressBar is light grey, which on these panels is the one

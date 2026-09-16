@@ -32,6 +32,11 @@ extends SceneTree
 ## timeline's Projects chip and the Routines panel both reach it by string.
 const CONTRACTS: Dictionary = {
 	"res://scenes/ui/terrain_edit_ui.gd": ["toggle_mode", "_exit_mode"],
+	# The unified edit toolbar — terrain_loader reaches all four by string
+	# (dispatch re-route + _close_edit_toolbar force-close).
+	"res://scenes/ui/toolbar/edit_toolbar_ui.gd": [
+		"toggle_mode", "_exit_mode", "is_panel_open", "open_with_section",
+		"toggle_section"],
 	"res://scenes/ui/vegetation_edit_ui.gd": ["toggle_mode", "_exit_mode"],
 	"res://scenes/ui/camp_scatter_ui.gd": ["toggle_mode", "_exit_mode"],
 	"res://scenes/ui/space_edit_ui.gd": ["toggle_mode", "_exit_mode", "is_panel_open"],

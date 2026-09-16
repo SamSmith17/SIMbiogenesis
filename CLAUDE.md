@@ -1416,11 +1416,70 @@ interior of active tiles (`_detail_mesh_grid_with_sink`; boundary ring follows t
 local cut) so cut bowls/ponds are neither occluded nor bridged — tile skirts
 (`SKIRT_DROP_M` 65 m, must exceed the sink; selftest-pinned) seal the chasm at
 cut boundaries. Footing: `_ground_height_at = composed DEM + tile delta`; commits
-call `_reseat_actors_after_edit()` (lift only if buried — lowering lets gravity
-work). Tile meshes share DetailGround's drape material (re-pointed via
+call `_reseat_actors_after_edit(touched_keys)` — scoped to the committed tiles
+(an actor outside every touched tile is never moved) and lift only when the
+FEET are genuinely below the new surface (`pos.y < gy - 0.05`, small lift, keep
+horizontal velocity; the player origin is at the capsule bottom, so the old
+`< gy + 0.1` test fired on every commit and launched a grounded player 2 m up —
+the "player pops on brush release" bug). Lowering lets gravity work. Tile meshes share DetailGround's drape material (re-pointed via
 `set_material` whenever imagery lands). Legacy coarse/detail delta grids +
 earthworks migrate one-time into tiles (`_migrate_legacy_edits_to_tiles`).
 Validate with the `--sculpt-test` harness (above) + terrain_selftest.
+
+**Unified edit toolbar (`scenes/ui/toolbar/`) — T / V.** One Photoshop-style
+surface for BOTH tool sets: a vertical tool strip on the left (TERRAIN: Raise /
+Lower / Smooth / Level / Ramp / Pond / Rain / Drain / Measure; VEGETATION:
+Paint / Place / Clear / Select) plus a slim options bar across the top carrying
+the ACTIVE tool's parameters, its shape picker, the species picker, live
+ground/basin readouts and Undo. It exists to fix three things the two legacy
+docks could not: they locked out navigation, they shared one global
+radius/strength/hardness across every tool, and getting the camera back took
+Esc THEN Space. The old docks are untouched and still reachable on **Shift+T /
+Shift+V** until they are retired.
+
+**It is NOT a modal — it runs in CursorController's TOOL OVERLAY tier**
+(`request_tool_overlay` / `release_tool_overlay` / `has_tool_overlay` /
+`overlay_look_active` / `tool_overlay_movement_active`). `should_capture_look()`
+excludes the overlay, so every downstream consumer (crosshair, interaction
+focus, grab controller) correctly treats it as "not capturing", while the actual
+mouse-capture decision is `should_capture_look() OR overlay_look_active()` in
+BOTH `_apply_capture_deferred` and the diagnostic `_wanted_mode` — keep those
+two in sync or the reconcile warns every quarter second. `player.gd` gained
+exactly three additive branches: RMB edge tracking + an overlay-look motion
+branch in `_input`, `tool_overlay_movement_active()` in the movement gate
+(guarded by a SpinBox-aware `_keyboard_captured_by_ui()` so typing a brush
+radius does not walk the player), and a `has_tool_overlay()` guard around
+tool-use — **that last one is mandatory: tool use fires on raw LMB, so without
+it every paint stroke sprays the fire extinguisher.** Because the overlay never
+touches the pause latch, ONE Esc returns full control. And because it is not a
+blocking modal, `InputGuard` stays open and terrain_loader's key dispatch stays
+live while it is open, which is how T/V toggle it closed (the legacy docks
+cannot — their modal claim eats their own hotkey).
+
+**Per-tool parameters are the headline fix.** `EditToolbarState`
+(`toolbar_state.gd`, pure data) holds a params dict PER TOOL seeded from a
+schema, plus per-tool shape memory and the shared veg brush identity
+(family / subspecies / hero preset). `option_specs()` is the row model the
+options bar renders from. Persisted to `user://toolbar_prefs.cfg` via
+`save_to`/`load_from` (file I/O lives on the model so the selftest can
+round-trip a TEMP path), loaded in `_ready` BEFORE the strip is built, written
+on a 1 s debounce and flushed immediately on close.
+
+Traps worth keeping: `VEG_FAMILIES` stores `VegetationPaint.Preset` values as
+LITERAL ints so the model still loads with a stale class cache — the selftest
+asserts they still match the enum, because a reorder would silently paint the
+wrong family everywhere. `set_veg_family` resets the subspecies only on a REAL
+family change (membership belongs to the species catalog; a name-prefix guess
+wrongly cleared spruce, which is a pine). T/V go through `toggle_section`, which
+SWITCHES sections when the toolbar is already open on the other one rather than
+closing. There is no fullscreen capture rect — the two panels stop mouse events
+over themselves and everything else arrives via `_unhandled_input`, which is
+what lets RMB reach the player. **RMB deliberately does NOT close a polygon or
+cancel a shape** (it is the look button); polygons close with Enter or by
+clicking the first vertex. Options rows are rebuilt per tool switch with the
+dying rows DETACHED before `queue_free`, or the container measures both sets for
+a frame and the bar visibly doubles in width. Selftest:
+`scenes/ui/toolbar/toolbar_selftest.gd` (312 checks, in the Validation list).
 
 **Ponds are player-owned, never auto-added to the graph.** `pond_command` carves a
 basin and optionally seeds a thin puddle; **Rain** / **Drain** (T dock) hold-modulate

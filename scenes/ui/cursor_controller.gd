@@ -11,6 +11,13 @@ const RECONCILE_INTERVAL := 0.25
 var _paused: bool = false
 var _modal_stack: Array[String] = []
 var _modal_close: Dictionary = {}
+## Non-blocking "tool overlay" (the unified edit toolbar): mouse visible for the
+## palette, but the player keeps WASD, and holding RMB captures the mouse for
+## look. One overlay at a time — it is a mode, not a stack; real modals (e.g.
+## the veg Tune-look editor) still stack ON TOP via request_modal and win.
+var _tool_overlay: String = ""
+var _tool_overlay_close: Callable = Callable()
+var _overlay_look_held: bool = false
 var _capture_apply_pending: bool = false
 var _reconcile_accum: float = 0.0
 ## Mismatches already reported, so a persistent desync warns once, not 4×/second.
@@ -38,6 +45,9 @@ func _ready() -> void:
 func _on_scene_changed() -> void:
 	_modal_stack.clear()
 	_modal_close.clear()
+	_tool_overlay = ""
+	_tool_overlay_close = Callable()
+	_overlay_look_held = false
 	call_deferred("_apply_capture")
 
 
@@ -50,7 +60,62 @@ func has_blocking_modal() -> bool:
 
 
 func should_capture_look() -> bool:
-	return not _paused and not has_blocking_modal()
+	return not _paused and not has_blocking_modal() and not has_tool_overlay()
+
+
+# ---------------------------------------------------------------------------
+# Tool overlay — the non-blocking tier the unified edit toolbar runs in.
+# Downstream consumers of should_capture_look() (crosshair, interaction focus,
+# grab controller, …) see it as "not capturing", same as a modal — correct: the
+# mouse is visible and LMB belongs to the tools. Movement and RMB-look are the
+# two deliberate exceptions, exposed through the queries below.
+# ---------------------------------------------------------------------------
+
+func request_tool_overlay(name: String, close_callable: Callable = Callable()) -> void:
+	if _tool_overlay == name:
+		return
+	_tool_overlay = name
+	_tool_overlay_close = close_callable
+	_overlay_look_held = false
+	_request_apply_capture()
+	capture_state_changed.emit()
+
+
+func release_tool_overlay(name: String) -> void:
+	if _tool_overlay != name:
+		return
+	_tool_overlay = ""
+	_tool_overlay_close = Callable()
+	_overlay_look_held = false
+	_request_apply_capture()
+	capture_state_changed.emit()
+
+
+func has_tool_overlay() -> bool:
+	return _tool_overlay != ""
+
+
+## RMB press/release while the overlay is up. The raw held flag is stored; every
+## reader goes through overlay_look_active(), which re-derives against the live
+## pause/modal state — so a modal stacking mid-hold or a pause cancels look
+## instantly without stale-flag bookkeeping (RMB release clears the flag later).
+func set_overlay_look(held: bool) -> void:
+	if _overlay_look_held == held:
+		return
+	_overlay_look_held = held
+	_request_apply_capture()
+	capture_state_changed.emit()
+
+
+func overlay_look_active() -> bool:
+	return _overlay_look_held and has_tool_overlay() \
+		and not _paused and not has_blocking_modal()
+
+
+## WASD/jump stays live while the toolbar is open — unless paused or a real
+## modal (e.g. the veg Tune-look editor) is stacked on top.
+func tool_overlay_movement_active() -> bool:
+	return has_tool_overlay() and not _paused and not has_blocking_modal()
 
 
 func request_modal(name: String, close_callable: Callable = Callable()) -> void:
@@ -74,6 +139,14 @@ func release_modal(name: String) -> void:
 
 func pop_top_modal() -> bool:
 	if _modal_stack.is_empty():
+		# No blocking modal — Esc falls through to the tool overlay, so the
+		# toolbar closes through the same central path as every modal.
+		if has_tool_overlay():
+			if _tool_overlay_close.is_valid():
+				_tool_overlay_close.call()
+			else:
+				release_tool_overlay(_tool_overlay)
+			return true
 		return false
 	var top: String = _modal_stack.back()
 	if _modal_close.has(top):
@@ -97,14 +170,16 @@ func _apply_capture_deferred() -> void:
 	if not is_inside_tree():
 		return
 	var player := _find_player()
-	var want_capture := should_capture_look() and player != null
+	# Overlay RMB-look captures the mouse too, but through its own player branch:
+	# is_mouse_captured stays false so the legacy captured-look path stays dead.
+	var want_capture := (should_capture_look() or overlay_look_active()) and player != null
 	var want_mode := Input.MOUSE_MODE_CAPTURED if want_capture else Input.MOUSE_MODE_VISIBLE
 	if want_capture:
 		_release_gui_focus()
 	if Input.mouse_mode != want_mode:
 		Input.set_mouse_mode(want_mode)
 	if player != null:
-		player.is_mouse_captured = want_capture
+		player.is_mouse_captured = should_capture_look()
 	# Whatever we just applied is by definition not a desync.
 	_reported_desyncs.clear()
 
@@ -115,7 +190,8 @@ func _wanted_mode() -> int:
 	var player := _find_player()
 	if player == null:
 		return -1
-	return int(Input.MOUSE_MODE_CAPTURED if should_capture_look() else Input.MOUSE_MODE_VISIBLE)
+	var want := should_capture_look() or overlay_look_active()
+	return int(Input.MOUSE_MODE_CAPTURED if want else Input.MOUSE_MODE_VISIBLE)
 
 
 ## DIAGNOSTIC ONLY — reports, does not correct.

@@ -421,11 +421,25 @@ func _set_character_riding_position(riding: bool) -> void:
 		remy.position = Vector3(0, 0, character_base_offset.z)
 
 func _input(event: InputEvent) -> void:
+	# Tool-overlay (unified edit toolbar) RMB-hold look: track the button edge
+	# here — _input runs before GUI input, so the press is seen even over a
+	# toolbar panel, and RMB has no panel meaning. overlay_look_active()
+	# re-derives against live pause/modal state, so the stored edge can't go
+	# stale if a modal stacks mid-hold.
+	if event is InputEventMouseButton and CursorController.has_tool_overlay():
+		var mbo := event as InputEventMouseButton
+		if mbo.button_index == MOUSE_BUTTON_RIGHT:
+			CursorController.set_overlay_look(mbo.pressed)
 	if event is InputEventMouseMotion and is_mouse_captured and CursorController.should_capture_look():
 		var mm := event as InputEventMouseMotion
 		if mm.relative.length_squared() > 1e-12:
 			_suppress_gamepad_look_until_axes_released = true
 		_handle_mouse_look(mm.relative)
+	elif event is InputEventMouseMotion and CursorController.overlay_look_active():
+		var mmo := event as InputEventMouseMotion
+		if mmo.relative.length_squared() > 1e-12:
+			_suppress_gamepad_look_until_axes_released = true
+		_handle_mouse_look(mmo.relative)
 
 	# Skip all key/action input when a UI text field has keyboard focus so that
 	# typing in the location picker (or any other LineEdit/TextEdit) doesn't
@@ -503,10 +517,16 @@ func _physics_process(delta: float) -> void:
 	# Handle vehicle interaction
 	_handle_vehicle_interaction()
 	
-	# Only process player controls when mouse is captured and sim is playing
-	if is_mouse_captured and CursorController.should_capture_look():
-		# Handle controller look (right stick) - disabled in FPV drone mode (drone handles it)
-		if not is_fpv_drone_mode:
+	# Only process player controls when mouse is captured and sim is playing —
+	# or while the tool overlay (unified edit toolbar) is up: mouse visible,
+	# WASD/jump stay live, unless a text field holds keyboard focus (typing a
+	# brush radius must not walk the player).
+	var overlay_move := CursorController.tool_overlay_movement_active() \
+		and not _keyboard_captured_by_ui()
+	if (is_mouse_captured and CursorController.should_capture_look()) or overlay_move:
+		# Handle controller look (right stick) - disabled in FPV drone mode
+		# (drone handles it) and during the tool overlay (visible cursor).
+		if not is_fpv_drone_mode and is_mouse_captured:
 			if _suppress_gamepad_look_until_axes_released:
 				var look_axes := Input.get_vector("look_left", "look_right", "look_up", "look_down")
 				if look_axes.length() < controller_deadzone:
@@ -519,8 +539,10 @@ func _physics_process(delta: float) -> void:
 			velocity.y = jump_velocity
 			_coyote_timer = 0  # Consume coyote time on jump
 		
-		# Handle tool use (left click) - disabled in FPV drone mode / prop grab
-		if not is_fpv_drone_mode:
+		# Handle tool use (left click) - disabled in FPV drone mode / prop grab,
+		# and during the tool overlay, where LMB paints (a stroke must not
+		# spray the fire extinguisher).
+		if not is_fpv_drone_mode and not CursorController.has_tool_overlay():
 			var grab := get_node_or_null("GrabController")
 			var block_tool: bool = grab != null and grab.has_method("blocks_tool_use") and grab.blocks_tool_use()
 			if not block_tool:
@@ -667,6 +689,18 @@ func _update_character_animation_simple(delta: float) -> void:
 		var walk_factor := (speed - WALK_SPEED_THRESHOLD) / (JOG_SPEED_THRESHOLD - WALK_SPEED_THRESHOLD)
 		rate = lerpf(0.8, 1.2, clampf(walk_factor, 0.0, 1.0))
 	_simple_figure.pose(NpcRig.CLIP_WALK, rate, delta)
+
+## A LineEdit/SpinBox/TextEdit with keyboard focus is TYPING, not playing —
+## typing "12" into the toolbar's brush-radius field must not walk the player.
+## Same rule as FPVDrone._keyboard_captured_by_ui.
+func _keyboard_captured_by_ui() -> bool:
+	var vp := get_viewport()
+	if vp == null:
+		return false
+	var f := vp.gui_get_focus_owner()
+	if f == null:
+		return false
+	return f is LineEdit or f is TextEdit or f is SpinBox
 
 func _handle_mouse_look(mouse_delta: Vector2) -> void:
 	# Rotate player (yaw) on Y axis

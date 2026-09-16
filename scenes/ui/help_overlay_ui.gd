@@ -44,9 +44,13 @@ const _GROUPS := [
 		["system_graph_toggle", "System graph (wire habitat + power)"],
 		["toggle_library", "Unified library (buildings / graph / veg / structures)"],
 		["toggle_location_picker", "Location / map picker"],
-		["vegetation_edit", "Vegetation paint dock"],
+		["terrain_edit", "Edit toolbar - terrain tools (keep moving while you edit)"],
+		["vegetation_edit", "Edit toolbar - vegetation tools"],
+		["key:RMB", "...hold to look around while the toolbar is open"],
+		["key:[ / ]", "...shrink / grow the active brush"],
+		["terrain_edit_legacy", "Terrain sculpt dock (classic)"],
+		["vegetation_edit_legacy", "Vegetation paint dock (classic)"],
 		["vegetation_area_edit", "Vegetation area fill"],
-		["terrain_edit", "Terrain sculpt dock"],
 		["placed_props_edit", "Placed props editor"],
 		["toggle_solar_ui", "Solar panel HUD"],
 		["toggle_projection_canvas", "Projection canvas"],
@@ -264,7 +268,17 @@ func _keyboard_label(action: String) -> String:
 			var key_ev := ev as InputEventKey
 			var code := key_ev.physical_keycode if key_ev.physical_keycode != 0 else key_ev.keycode
 			if code != 0:
-				return OS.get_keycode_string(code)
+				# Modifiers are part of the binding: the toolbar keeps the
+				# classic docks on Shift+T / Shift+V, and without this both
+				# rows render as a bare "T" with different descriptions.
+				var mods := ""
+				if key_ev.ctrl_pressed:
+					mods += "Ctrl+"
+				if key_ev.shift_pressed:
+					mods += "Shift+"
+				if key_ev.alt_pressed:
+					mods += "Alt+"
+				return mods + OS.get_keycode_string(code)
 	return "—"
 
 

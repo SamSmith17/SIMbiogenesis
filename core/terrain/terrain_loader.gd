@@ -102,6 +102,7 @@ const SPAWN_CLEAR_ANGLE_STEPS := 16
 const SPAWN_CLEAR_MARGIN_M := 3.0
 
 const TERRAIN_EDIT_UI_SCRIPT := preload("res://scenes/ui/terrain_edit_ui.gd")
+const EDIT_TOOLBAR_UI_SCRIPT := preload("res://scenes/ui/toolbar/edit_toolbar_ui.gd")
 const TERRAIN_OPTIONS_UI_SCRIPT := preload("res://scenes/ui/terrain_options_ui.gd")
 const VEGETATION_EDIT_UI_SCRIPT := preload("res://scenes/ui/vegetation_edit_ui.gd")
 const VEGETATION_PREVIEW_EDITOR_SCRIPT := preload("res://scenes/ui/vegetation_preview_editor.gd")
@@ -193,6 +194,9 @@ var _detail_elev_resolved := false
 var _osm_vectors: Dictionary = {}
 var _terrain_edits: TerrainEditGrid = null
 var _terrain_edit_ui: Control = null
+## The unified edit toolbar (scenes/ui/toolbar/) — coexists with the legacy
+## T/V docks (now on Shift+T / Shift+V) until it fully replaces them.
+var _edit_toolbar_ui: Control = null
 var _space_edit_ui: Control = null
 var _terrain_options_ui: Control = null
 var _vegetation_layer: VegetationLayer = null
@@ -624,10 +628,26 @@ func _unhandled_input(event: InputEvent) -> void:
 				_confirm_prop_reposition()
 				get_viewport().set_input_as_handled()
 				return
-	if event.is_action_pressed("vegetation_edit") and _vegetation_edit_ui != null:
-		if _terrain_edit_ui != null and _terrain_edit_ui.has_method("toggle_mode"):
-			if _terrain_edit_ui.visible:
-				_terrain_edit_ui.call("_exit_mode")
+	# Legacy docks live on Shift+T / Shift+V while the unified toolbar proves
+	# out. These branches MUST run before the plain-key ones: is_action_pressed
+	# without exact_match also matches the shifted chord, so the plain branches
+	# below pass exact_match=true and the legacy checks come first.
+	if event.is_action_pressed("terrain_edit_legacy") and _terrain_edit_ui != null:
+		_close_edit_toolbar()
+		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
+			_vegetation_edit_ui.call("_exit_mode")
+		if _placed_props_ui != null and _placed_props_ui.has_method("is_panel_open") \
+				and bool(_placed_props_ui.call("is_panel_open")):
+			_placed_props_ui.call("_exit_mode")
+		if _camp_scatter_ui != null and _camp_scatter_ui.visible:
+			_camp_scatter_ui.call("_exit_mode")
+		_terrain_edit_ui.toggle_mode()
+		get_viewport().set_input_as_handled()
+		return
+	if event.is_action_pressed("vegetation_edit_legacy") and _vegetation_edit_ui != null:
+		_close_edit_toolbar()
+		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
+			_terrain_edit_ui.call("_exit_mode")
 		if _placed_props_ui != null and _placed_props_ui.has_method("is_panel_open") \
 				and bool(_placed_props_ui.call("is_panel_open")):
 			_placed_props_ui.call("_exit_mode")
@@ -636,7 +656,24 @@ func _unhandled_input(event: InputEvent) -> void:
 		_vegetation_edit_ui.toggle_mode()
 		get_viewport().set_input_as_handled()
 		return
+	# Plain V = the unified toolbar, vegetation section (Shift+V keeps the
+	# legacy dock). Like T, the dispatch stays live while the toolbar is open
+	# because the tool overlay is not a blocking modal.
+	if event.is_action_pressed("vegetation_edit", false, true) and _edit_toolbar_ui != null:
+		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
+			_terrain_edit_ui.call("_exit_mode")
+		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
+			_vegetation_edit_ui.call("_exit_mode")
+		if _placed_props_ui != null and _placed_props_ui.has_method("is_panel_open") \
+				and bool(_placed_props_ui.call("is_panel_open")):
+			_placed_props_ui.call("_exit_mode")
+		if _camp_scatter_ui != null and _camp_scatter_ui.visible:
+			_camp_scatter_ui.call("_exit_mode")
+		_edit_toolbar_ui.call("toggle_section", "veg")
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("space_edit") and _space_edit_ui != null:
+		_close_edit_toolbar()
 		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
 			_terrain_edit_ui.call("_exit_mode")
 		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
@@ -656,6 +693,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if plr != null and plr.has_method("charge_available") \
 					and bool(plr.call("charge_available")):
 				return
+		_close_edit_toolbar()
 		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
 			_terrain_edit_ui.call("_exit_mode")
 		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
@@ -667,6 +705,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("placed_props_edit") and _placed_props_ui != null:
+		_close_edit_toolbar()
 		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
 			_terrain_edit_ui.call("_exit_mode")
 		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
@@ -674,15 +713,21 @@ func _unhandled_input(event: InputEvent) -> void:
 		_placed_props_ui.toggle_mode()
 		get_viewport().set_input_as_handled()
 		return
-	if _terrain_edit_ui == null:
-		return
-	if event.is_action_pressed("terrain_edit"):
+	# Plain T = the unified toolbar (terrain section). The toolbar runs in the
+	# non-blocking tool overlay, so this dispatch stays live while it is open
+	# and T toggles it closed — unlike the legacy docks, whose modal claim
+	# makes InputGuard eat their own hotkey.
+	if event.is_action_pressed("terrain_edit", false, true) and _edit_toolbar_ui != null:
 		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
 			_vegetation_edit_ui.call("_exit_mode")
+		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
+			_terrain_edit_ui.call("_exit_mode")
 		if _placed_props_ui != null and _placed_props_ui.has_method("is_panel_open") \
 				and bool(_placed_props_ui.call("is_panel_open")):
 			_placed_props_ui.call("_exit_mode")
-		_terrain_edit_ui.toggle_mode()
+		if _camp_scatter_ui != null and _camp_scatter_ui.visible:
+			_camp_scatter_ui.call("_exit_mode")
+		_edit_toolbar_ui.call("toggle_section", "terrain")
 		get_viewport().set_input_as_handled()
 
 
@@ -4468,6 +4513,7 @@ func _build_terrain() -> void:
 
 	# Temp floor stays until _finalize_spawn_actors seats the player on composed ground.
 	_setup_terrain_edit_ui()
+	_setup_edit_toolbar()
 	_setup_terrain_options_ui()
 	_setup_vegetation()
 	_setup_placed_props()
@@ -4940,29 +4986,50 @@ func _refresh_detail_sink(force: bool = false) -> void:
 ## After a committed sculpt edit: if the ground under the player/drone was
 ## RAISED above them (buried), lift them onto the new surface. Lowered ground is
 ## left to gravity — the actor just falls/steps down naturally.
-func _reseat_actors_after_edit() -> void:
-	if _main == null:
+##
+## Scoped to `touched_keys` (the edit-tile keys the commit actually changed):
+## an actor standing outside every touched tile cannot have been buried by the
+## edit, so it is never moved. The burial test is against the actor's FEET —
+## the Player origin sits at the capsule bottom, so a grounded player has
+## pos.y ≈ gy and `pos.y < gy + 0.1` was true on EVERY commit, teleporting them
+## to gy + 2.0 to fall back down (the "player pops on brush release" bug).
+func _reseat_actors_after_edit(touched_keys: Array = []) -> void:
+	if _main == null or touched_keys.is_empty():
 		return
 	var player := _main.get_node_or_null("Player") as CharacterBody3D
 	if player != null:
 		var pos := player.global_position
-		var gy := _ground_height_at(pos.x, pos.z)
-		if pos.y < gy + 0.1:
-			pos.y = gy + TerrainBuilder.PLAYER_SPAWN_CLEARANCE_M
-			player.global_position = pos
-			player.velocity = Vector3.ZERO
-			if "fall_start_height" in player:
-				player.fall_start_height = pos.y
-				player.highest_point_during_fall = pos.y
-			if "void_reference_y" in player:
-				player.void_reference_y = pos.y
+		if _xz_in_touched_tiles(Vector2(pos.x, pos.z), touched_keys):
+			var gy := _ground_height_at(pos.x, pos.z)
+			if pos.y < gy - 0.05:
+				pos.y = gy + 0.1
+				player.global_position = pos
+				player.velocity = Vector3(player.velocity.x, 0.0, player.velocity.z)
+				if "fall_start_height" in player:
+					player.fall_start_height = pos.y
+					player.highest_point_during_fall = pos.y
+				if "void_reference_y" in player:
+					player.void_reference_y = pos.y
 	var drone := _main.get_node_or_null("FPVDrone") as FPVDrone
 	if drone != null:
 		var dpos := drone.global_position
-		var dgy := _ground_height_at(dpos.x, dpos.z)
-		if dpos.y < dgy + 0.25:
-			dpos.y = dgy + DRONE_GROUND_CLEARANCE_M
-			drone.global_position = dpos
+		if _xz_in_touched_tiles(Vector2(dpos.x, dpos.z), touched_keys):
+			var dgy := _ground_height_at(dpos.x, dpos.z)
+			if dpos.y < dgy + 0.25:
+				dpos.y = dgy + DRONE_GROUND_CLEARANCE_M
+				drone.global_position = dpos
+
+
+## True when the XZ point lies inside (or within one cell of) any touched
+## edit-tile's world rect — the grow covers an actor straddling a tile edge
+## whose height came from the neighbouring tile's edited corner samples.
+func _xz_in_touched_tiles(p: Vector2, keys: Array) -> bool:
+	if _edit_tiles == null:
+		return false
+	for k: Variant in keys:
+		if k is Vector2i and _edit_tiles.tile_world_rect(k).grow(_edit_tiles.cell_m).has_point(p):
+			return true
+	return false
 
 
 func _sync_actors_to_ground(force: bool = false) -> void:
@@ -7838,6 +7905,33 @@ func _setup_terrain_edit_ui() -> void:
 	_terrain_edit_ui = edit_ui
 
 
+## The unified toolbar gets its own CanvasLayer at the panel band — unlike the
+## legacy terrain dock, which sits on bare UILayer (layer 1) and predates the
+## UITheme.LAYER_* convention.
+func _setup_edit_toolbar() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "EditToolbarLayer"
+	layer.layer = UITheme.LAYER_PANEL
+	ui_layer.add_child(layer)
+	var toolbar := Control.new()
+	toolbar.name = "EditToolbarUI"
+	toolbar.set_script(EDIT_TOOLBAR_UI_SCRIPT)
+	layer.add_child(toolbar)
+	toolbar.bind_loader(self)
+	_edit_toolbar_ui = toolbar
+
+
+func _close_edit_toolbar() -> void:
+	if _edit_toolbar_ui != null and _edit_toolbar_ui.has_method("is_panel_open") \
+			and bool(_edit_toolbar_ui.call("is_panel_open")):
+		_edit_toolbar_ui.call("_exit_mode")
+
+
 func terrain_pick_ray(screen_pos: Vector2) -> Variant:
 	var cam := get_viewport().get_camera_3d()
 	if cam == null or _main == null:
@@ -7896,7 +7990,7 @@ func end_terrain_tile_edit() -> void:
 		_height_field.reconcile_dirty_now()
 	_refresh_detail_sink()
 	_save_edit_tiles()
-	_reseat_actors_after_edit()
+	_reseat_actors_after_edit(snap.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -8018,13 +8112,14 @@ func undo_terrain_sculpt() -> bool:
 		# touched tiles are restored + re-meshed. Reconcile immediately so the
 		# tile colliders match before the DetailGround sink refresh + reseat.
 		if _edit_tiles != null:
-			_edit_tiles.apply_snapshot((snap as Dictionary)["tiles"])
+			var tile_snap: Dictionary = (snap as Dictionary)["tiles"]
+			_edit_tiles.apply_snapshot(tile_snap)
 			_edit_tiles.prune_flat_tiles()
 			if _height_field != null:
 				_height_field.reconcile_dirty_now()
 			_refresh_detail_sink()
 			_save_edit_tiles()
-			_reseat_actors_after_edit()
+			_reseat_actors_after_edit(tile_snap.keys())
 		handled = true
 	if snap is Dictionary and (snap as Dictionary).has("user_water"):
 		# Water-body undo (Rain/Drain / pond — may ride the same entry as tiles

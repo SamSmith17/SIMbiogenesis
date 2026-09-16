@@ -96,8 +96,9 @@ Godot.exe.exe --headless --path . --script core/terrain/watershed_selftest.gd
 | **G** | System graph | Core gameplay surface |
 | **U** | Unified Library | Also timeline 📦 |
 | **L** | Location picker | Older docs sometimes say **M** — InputMap is **L** |
-| **T** | Terrain sculpt dock | |
-| **V** | Vegetation paint dock | Sole owner — the dead `toggle_camera` action was removed |
+| **T** | Edit toolbar - terrain tools | Unified toolbar; keep walking/looking (RMB) while you edit |
+| **V** | Edit toolbar - vegetation tools | Same toolbar, plants section |
+| **Shift+T / Shift+V** | Classic sculpt / paint docks | Legacy modals, kept until the toolbar fully replaces them |
 | **B** | Building Builder (aimed building) | Or Interact on amber-highlighted building |
 | **J** | Light place mode | LMB place, RMB / J exit; Ctrl/Alt+click existing light to edit |
 | **N** | Linkage Lab | |
