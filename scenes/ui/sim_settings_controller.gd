@@ -834,9 +834,14 @@ func _initialize_sim_defaults() -> void:
 	# Simulation mode by default — live mode (wall-clock 1× HA sync) is opt-in via settings.
 	live_mode_enabled = false
 	stored_time_scale = 0.016667
-	if main_node != null and float(main_node.get("time_scale")) > 0.0:
+	# Deferred from _resolve_main: a scene change in the same frame frees Main
+	# first, and get() on a freed node returns null (float(null) is the
+	# "Nonexistent 'float' constructor" crash) - same guard as _process above.
+	var main := _valid_main()
+	var ts: Variant = main.get("time_scale") if main != null else null
+	if ts is float and float(ts) > 0.0:
 		# Leave an already-running time_scale untouched (save resume, etc.).
-		stored_time_scale = float(main_node.get("time_scale"))
+		stored_time_scale = float(ts)
 	_auto_update_gameplay_pause()
 	live_mode_changed.emit(false)
 

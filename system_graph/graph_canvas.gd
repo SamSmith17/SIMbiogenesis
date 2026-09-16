@@ -839,16 +839,28 @@ func set_view_cam_state(state: Dictionary) -> void:
 		var s: Dictionary = state[mode] as Dictionary
 		if s.is_empty():
 			continue
+		# elev_m is NAN until the anchor is initialised, and JSON turns NAN
+		# into null on the way to disk — float(null) is a runtime error that
+		# aborted every autosave restore of this state.
+		var ev: Variant = s.get("elev_m", NAN)
 		_view_cam[mode] = {
-			"zoom": clampf(float(s.get("zoom", 1.0)), ZOOM_MIN, ZOOM_MAX),
-			"pan": Vector2(float(s.get("pan_x", 0.0)), float(s.get("pan_y", 0.0))),
-			"along_m": float(s.get("along_m", 0.0)),
-			"elev_m": float(s.get("elev_m", NAN)),
+			"zoom": clampf(_num(s.get("zoom", 1.0), 1.0), ZOOM_MIN, ZOOM_MAX),
+			"pan": Vector2(_num(s.get("pan_x", 0.0), 0.0), _num(s.get("pan_y", 0.0), 0.0)),
+			"along_m": _num(s.get("along_m", 0.0), 0.0),
+			"elev_m": float(ev) if (ev is float or ev is int) else NAN,
 			"anchor_inited": bool(s.get("anchor_inited", false)),
 		}
 	# The restored save may name the view we are already sitting in.
 	if _restore_view_cam(view_mode):
 		queue_redraw()
+
+
+## JSON-safe float read: null (a serialised NAN/INF) or a non-number falls
+## back instead of throwing inside float().
+static func _num(v: Variant, fallback: float) -> float:
+	if v is float or v is int:
+		return float(v)
+	return fallback
 
 
 func _ensure_elev_anchor() -> void:
