@@ -17,6 +17,7 @@ render_mode cull_disabled, depth_prepass_alpha;
 
 #include "res://vegetation/wind_vertex.gdshaderinc"
 #include "res://vegetation/leaf_phenology.gdshaderinc"
+#include "res://vegetation/veg_growth.gdshaderinc"
 #include "res://core/soi/shaders/soi_clip.gdshaderinc"
 
 // 0 = deciduous broadleaf, 1 = conifer needle (grass-style streak mask).
@@ -77,6 +78,7 @@ varying vec3 v_world_pos;
 varying vec3 v_inst_pos;
 varying vec3 v_crown_dir;
 varying float v_shell_t;
+varying float v_growth_leaf;
 
 float hash21(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21));
@@ -128,6 +130,12 @@ void vertex() {
 	// which we reuse both for lighting and to lay out the per-cell leaf grid.
 	v_crown_dir = normalize(NORMAL);
 	vec3 inst_pos = MODEL_MATRIX[3].xyz;
+	// Growth first, in model space (height + crown width from the plant's age).
+	float g_gen;
+	vec4 g_st = veg_growth_state(INSTANCE_CUSTOM, g_gen);
+	v_growth_leaf = g_st.w;
+	VERTEX = veg_growth_apply(VERTEX, g_st.x, g_st.y,
+		veg_growth_generation(g_gen, INSTANCE_CUSTOM.w));
 	float vert_phase = dot(VERTEX, vec3(17.3, 31.1, 11.7)) + inst_pos.x * 3.7 + inst_pos.z * 5.1;
 	VERTEX = apply_vegetation_wind(VERTEX, inst_pos, top_mask, vert_phase);
 	vec3 world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -195,6 +203,12 @@ void fragment() {
 		mask = broadleaf_cell_mask(cell_f, seed2, eff_size, leaf_loss, v_shell_t);
 		mask = max(mask, 0.92 * broadleaf_cell_mask(cell_f + vec2(0.5, 0.5),
 			seed2 + 7.3, eff_size, leaf_loss, v_shell_t));
+	}
+
+	// A declining tree loses whole leaf cells until it stands bare, whatever
+	// the season and whether or not it is deciduous (same key as leaf fall).
+	if (veg_growth_leaf_gone(cell + seed2, v_growth_leaf)) {
+		mask = 0.0;
 	}
 
 	ALPHA = mask;

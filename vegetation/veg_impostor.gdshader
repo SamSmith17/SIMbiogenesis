@@ -15,6 +15,7 @@ render_mode unshaded, cull_disabled, depth_prepass_alpha;
 
 #include "res://core/soi/shaders/soi_clip.gdshaderinc"
 #include "res://vegetation/leaf_phenology.gdshaderinc"
+#include "res://vegetation/veg_growth.gdshaderinc"
 
 uniform sampler2D atlas_tex : source_color, filter_linear_mipmap, repeat_disable;
 uniform sampler2D mask_tex : filter_linear, repeat_disable, hint_default_black;
@@ -56,9 +57,20 @@ uniform float wind_speed_ms = 2.0;
 uniform float gust_intensity : hint_range(0.0, 1.0) = 0.0;
 uniform vec2 wind_direction = vec2(0.0, 1.0);
 
+// SNAG. The atlas is a bake of the tree in full leaf, so the stem behind the
+// foliage was never drawn — a declining tree that only DROPPED foliage pixels
+// dissolved into a few dots on a stub. The stem is drawn procedurally instead:
+// a tapered band down the card's centre line, revealed wherever foliage has
+// gone. Quad size + stem radius are in metres of the MATURE tree.
+uniform float snag_world_w = 8.0;
+uniform float snag_world_h = 8.0;
+uniform float snag_trunk_radius = 0.0;
+uniform vec3 snag_color : source_color = vec3(0.21, 0.18, 0.15);
+
 varying vec3 v_origin;
 varying float v_rel_yaw;
 varying float v_elev;
+varying float v_growth_leaf;
 
 float hash21(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -66,6 +78,13 @@ float hash21(vec2 p) {
 
 void vertex() {
 	vec3 origin = MODEL_MATRIX[3].xyz;
+	// Growth: the baked card is the MATURE tree, so the quad itself is scaled —
+	// height and width separately, like the 3D tiers it stands in for.
+	float g_gen;
+	vec4 g_st = veg_growth_state(INSTANCE_CUSTOM, g_gen);
+	vec3 g_var = veg_growth_generation(g_gen, INSTANCE_CUSTOM.w);
+	v_growth_leaf = g_st.w;
+	origin.xz += g_var.yz * step(0.0001, g_st.x);
 	v_origin = origin;
 	// Instance yaw + scale straight from the instance basis (rotation about Y
 	// by t gives basis.x = (cos t, 0, -sin t)).
@@ -107,8 +126,10 @@ void vertex() {
 	float along = dot(vec2(right.x, right.z), w2);
 	float sway = amp * (osc * mix(0.35, 1.0, abs(along))
 		+ 0.30 * speed_t * along) * VERTEX.y;
-	vec3 wp = origin + right * (VERTEX.x * sx) + up_axis * (VERTEX.y * sy)
-		+ right * sway;
+	float g_w = g_st.y * g_var.x;
+	float g_h = g_st.x * g_var.x;
+	vec3 wp = origin + right * (VERTEX.x * sx * g_w) + up_axis * (VERTEX.y * sy * g_h)
+		+ right * (sway * g_h);
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(wp, 1.0);
 }
 
@@ -148,10 +169,23 @@ void fragment() {
 	// the card and leaf-shell tiers).
 	float inst_seed = hash21(floor(v_origin.xz * 0.5) + 0.5);
 	vec2 leaf_key = floor(uv * 96.0) + vec2(inst_seed * 19.3, inst_seed * 7.7);
-	if (col.a < 0.5 || veg_leaf_fallen(leaf_key, leaf_coverage, leafy)) {
+	// A declining tree thins to its bare stem: foliage pixels go, and the stem
+	// they were hiding is drawn in their place (never in the top-down view,
+	// where a centre-line band would read as a plank across the crown).
+	bool gone = col.a < 0.5 || veg_leaf_fallen(leaf_key, leaf_coverage, leafy)
+		|| (foliage > 0.5 && veg_growth_leaf_gone(leaf_key, v_growth_leaf));
+	float stem_up = 1.0 - uv.y;
+	float stem_r = max(snag_trunk_radius, 0.2) * mix(1.0, 0.12, stem_up);
+	float stem = step(abs(uv.x - 0.5) * snag_world_w, stem_r) * step(stem_up, 0.97)
+		* step(v_growth_leaf, 0.998) * step(0.0001, snag_trunk_radius)
+		* step(v_elev, 0.85);
+	if (gone && stem < 0.5) {
 		discard;
 	}
-	vec3 albedo = col.rgb;
+	float snag = gone ? 1.0 : 0.0;
+	foliage *= 1.0 - snag;
+	leafy *= 1.0 - snag;
+	vec3 albedo = mix(col.rgb, snag_color, snag);
 	float svar = veg_phenology_hash(vec2(inst_seed * 73.1, inst_seed * 11.7));
 	albedo = veg_apply_bud(albedo, spring_bud * leafy, vec3(0.55, 0.78, 0.24));
 	albedo = veg_apply_autumn(albedo, autumn * leafy, svar,

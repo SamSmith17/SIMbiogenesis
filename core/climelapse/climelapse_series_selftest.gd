@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Headless validation for ClimelapseSeries + ClimelapseScaleBake (Phase 3–4).
+## Headless validation for ClimelapseSeries + the drone-path rig.
 
 const HOURS_PER_YEAR := 8760.0
 
@@ -8,7 +8,6 @@ const HOURS_PER_YEAR := 8760.0
 func _init() -> void:
 	var fails := 0
 	fails += _test_series_keyframes()
-	fails += _test_scale_bake_roundtrip()
 	fails += _test_drone_path_interpolate()
 	if fails == 0:
 		print("climelapse_series_selftest: PASS")
@@ -69,32 +68,4 @@ func _test_drone_path_interpolate() -> int:
 	if absf(end.origin.x - 100.0) > 0.01:
 		fails += 1
 		print("  path end mismatch: ", end.origin)
-	return fails
-
-
-func _test_scale_bake_roundtrip() -> int:
-	var fails := 0
-	var bake := ClimelapseScaleBake.new()
-	bake.keyframe_count = 3
-	bake.manual_entry_count = 2
-	bake.manual_scales = PackedFloat32Array([1.0, 2.0, 1.1, 2.1, 1.2, 2.2])
-	var dir := "user://climelapse_selftest_bake"
-	var meta := bake.save_to_dir(dir)
-	if meta.is_empty():
-		fails += 1
-		print("  save_to_dir returned empty meta")
-		return fails
-	var loaded := ClimelapseScaleBake.new()
-	if not loaded.load_from_dir(dir, meta):
-		fails += 1
-		print("  load_from_dir failed")
-	elif loaded.manual_scales.size() != bake.manual_scales.size():
-		fails += 1
-		print("  scale array size mismatch")
-	else:
-		for i in bake.manual_scales.size():
-			if absf(loaded.manual_scales[i] - bake.manual_scales[i]) > 1e-6:
-				fails += 1
-				print("  scale mismatch at ", i)
-				break
 	return fails

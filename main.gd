@@ -1798,6 +1798,26 @@ func set_show_moon_path( value: bool ) -> void :
 func get_show_moon_path() -> bool :
 	return show_moon_path
 
+func set_show_planet_paths( value: bool ) -> void :
+	show_planet_paths = value
+
+func get_show_planet_paths() -> bool :
+	return show_planet_paths
+
+func set_analemma_star_reveal( value: float ) -> void :
+	analemma_star_reveal = clampf( value, 0.0, 1.0 )
+	if analemma_mode :
+		_update()
+
+func get_analemma_star_reveal() -> float :
+	return analemma_star_reveal
+
+func set_planet_path_frame( value: int ) -> void :
+	planet_path_frame = value
+
+func get_planet_path_frame() -> int :
+	return planet_path_frame
+
 func set_analemma_type( value: int ) -> void :
 	analemma_type = value
 
@@ -1809,6 +1829,7 @@ func set_analemma_diurnal_offset_min_per_day( minutes: float ) -> void :
 	if analemma_mode and not _analemma_using_trail :
 		_build_analemma_preview_mesh()
 		_build_moon_preview_mesh()
+		_build_planet_preview_meshes()
 
 func get_analemma_diurnal_offset_min_per_day() -> float :
 	return analemma_diurnal_offset_min_per_day
@@ -1817,6 +1838,7 @@ func set_analemma_noon_offset_minutes( minutes: float ) -> void :
 	analemma_noon_offset_minutes = clampf( minutes, -720.0, 720.0 )
 	if analemma_mode and not _analemma_using_trail :
 		_build_analemma_preview_mesh()
+		_build_planet_preview_meshes()
 
 func get_analemma_noon_offset_minutes() -> float :
 	return analemma_noon_offset_minutes
@@ -2423,6 +2445,69 @@ var show_moon_path : bool = false :
 		_update_analemma_paths_visibility()
 		if value and not _analemma_using_trail :
 			_build_moon_preview_mesh()
+
+## Planet paths in analemma mode: each planet sampled at the SAME instants as
+## the sun/moon trail (mean solar noon, or the lunar-day step in Lunar mode), so
+## the curves share one frame with the figure-eight. At a fixed solar time the
+## sky frame turns with the sun, which is what makes this informative: Mercury
+## and Venus draw loops that hug the sun's analemma (their elongation swinging
+## east↔west of it), while Mars/Jupiter/Saturn sweep the whole sky once per
+## SYNODIC period. Colours come from PlanetSystem's own per-planet colours, and a
+## planet disabled there gets no path. Positions come from
+## PlanetSystem.calculate_planet_position — the same Kepler solve that places the
+## dots in the sky shader, so a path can never disagree with its planet.
+var show_planet_paths : bool = false :
+	set( value ) :
+		show_planet_paths = value
+		_update_analemma_paths_visibility()
+		if value and not _analemma_using_trail :
+			_build_planet_preview_meshes()
+
+## "Stars through daylight" while analemma_mode is on (0 = off). Every ∞ sample
+## is at noon, so the star field — which the sky turns correctly the whole
+## time — would otherwise be invisible. StarSystem reads this each sky tick and
+## sky.gdshader dims the visible dome (never the ambient) and lets the stars,
+## Milky Way, planets and zodiac through. Default on: analemma mode is already
+## an explicitly didactic, photograph-bending view.
+var analemma_star_reveal : float = 0.75
+
+var _planet_paths : Dictionary = {}   # planet name -> MeshInstance3D
+var _planet_trails : Dictionary = {}  # planet name -> PackedVector3Array
+var _planet_trails_dirty : bool = false
+
+## What the planet paths are drawn AGAINST:
+##   SKY   — the horizon frame at each sample instant (the default above): the
+##           same frame as the sun's figure-eight, so the curves compare to it.
+##   STARS — the star field. Each sample is stored as the planet's RA/Dec and
+##           the whole path is turned with the sky by the LIVE sidereal time, so
+##           it sits on the stars it actually crossed. This is how real
+##           retrograde-loop composites are made (frames from many nights,
+##           registered on the background stars), and it is the frame in which
+##           the loops appear: at a fixed clock time the sky frame turns ~1°/day
+##           with the sun and smears them out.
+enum PlanetPathFrame { SKY = 0, STARS = 1 }
+var planet_path_frame : int = PlanetPathFrame.SKY :
+	set( value ) :
+		value = clampi( value, 0, 1 )
+		if value == planet_path_frame :
+			return
+		planet_path_frame = value
+		# Old samples live in the other frame's coordinates — they cannot be kept.
+		_planet_trails.clear()
+		_planet_trails_dirty = false
+		for pname in _planet_paths :
+			var node : MeshInstance3D = _planet_paths[pname]
+			if is_instance_valid( node ) :
+				node.mesh = null
+		if analemma_mode :
+			_build_planet_preview_meshes()
+		_position_analemma_path()
+
+## STARS-frame preview spans ±this many days around today: one full Mars
+## synodic period (~780 d, Standish/Meeus mean value) so every planet —
+## including Mars, whose loop comes only every ~26 months — shows a retrograde
+## loop in the preview whatever the date.
+const PLANET_STAR_PREVIEW_HALF_DAYS : int = 390
 
 var analemma_type : int = 0 : # 0 = Solar, 1 = Lunar
 	set( value ) :
@@ -3191,6 +3276,13 @@ func _step_analemma() -> void :
 				or not is_equal_approx( _analemma_path_offset_cached, analemma_diurnal_offset_min_per_day ) :
 			_build_analemma_preview_mesh()
 			_build_moon_preview_mesh()
+			_build_planet_preview_meshes()
+	# Planet trails are appended per day but re-meshed once per FRAME: five
+	# planets × up to 7 days/frame × a 5000-point tube would otherwise dominate ∞.
+	if _planet_trails_dirty :
+		_planet_trails_dirty = false
+		for pname in _planet_trails :
+			_apply_planet_line_mesh( pname, _planet_trails[pname] )
 	_position_analemma_path()
 
 
@@ -3297,11 +3389,13 @@ func _advance_analemma_one_day() -> bool :
 		_analemma_using_trail = true
 		_analemma_trail.clear()
 		_moon_trail.clear()
+		_planet_trails.clear()
 		_clear_ghost_moons()
 		_moon_ghosts_trail.clear()
 		_ensure_analemma_path()
 		_ensure_moon_path()
-		
+		_ensure_planet_paths()
+
 	if analemma_type == 0 : # Solar
 		var sample_mean : float = analemma_mean_solar_hours_for_day( _analemma_session_day_index )
 		clock.day_time = clock.mean_solar_time_to_clock_time( sample_mean )
@@ -3347,6 +3441,7 @@ func _on_analemma_mode_changed( active: bool ) -> void :
 		_analemma_using_trail = false
 		_analemma_trail.clear()
 		_moon_trail.clear()
+		_planet_trails.clear()
 		_clear_ghost_moons()
 		_moon_ghosts_trail.clear()
 		if analemma_type == 1 :
@@ -3355,8 +3450,10 @@ func _on_analemma_mode_changed( active: bool ) -> void :
 			_lunar_analemma_start_abs_hours = clock.get_absolute_hours()
 		_ensure_analemma_path()
 		_ensure_moon_path()
+		_ensure_planet_paths()
 		_build_analemma_preview_mesh()
 		_build_moon_preview_mesh()
+		_build_planet_preview_meshes()
 		_update_analemma_paths_visibility()
 		_position_analemma_path()
 	else :
@@ -3412,6 +3509,10 @@ func _update_analemma_paths_visibility() -> void :
 		_moon_path.visible = analemma_mode and show_moon_path
 	if is_instance_valid( _moon_ghosts_container ) :
 		_moon_ghosts_container.visible = analemma_mode and show_moon_path
+	for pname in _planet_paths :
+		var node : MeshInstance3D = _planet_paths[pname]
+		if is_instance_valid( node ) :
+			node.visible = analemma_mode and show_planet_paths and _planet_path_enabled( pname )
 
 func _ensure_ghost_shader() -> void :
 	if _ghost_shader == null :
@@ -3526,6 +3627,155 @@ func _append_analemma_trail_point() -> void :
 				var fade_alpha : float = 0.8 * ( 1.0 - float( age ) / float( MAX_GHOSTS ) )
 				if ghost.material_override is ShaderMaterial :
 					ghost.material_override.set_shader_parameter( "alpha", fade_alpha )
+	if show_planet_paths :
+		var pts : Dictionary = _planet_points_for_clock( clock )
+		for pname in pts :
+			var trail : PackedVector3Array = _planet_trails.get( pname, PackedVector3Array() )
+			trail.append( pts[pname] as Vector3 )
+			if trail.size() > ANALEMMA_TRAIL_MAX_POINTS :
+				trail = trail.slice( trail.size() - ANALEMMA_TRAIL_MAX_POINTS )
+			_planet_trails[pname] = trail
+		_planet_trails_dirty = true
+
+# ==================== PLANET PATHS (analemma mode) ====================
+
+## Planet names PlanetSystem knows, or [] on a scene without one.
+func _planet_path_names() -> Array :
+	if not is_instance_valid( planet_system ) :
+		return []
+	var names : Variant = planet_system.get( "PLANET_NAMES" )
+	return names if names is Array else []
+
+## A planet disabled in PlanetSystem (Settings → Stars & Planets) gets no path either.
+func _planet_path_enabled( pname: String ) -> bool :
+	if not is_instance_valid( planet_system ) :
+		return false
+	var on : Variant = planet_system.get( pname + "_enabled" )
+	return on == null or bool( on )
+
+## Path vertex for every planet at clock `c`'s instant, in the active frame's
+## coordinates, through the SAME solve PlanetSystem uses for the sky dots.
+##   SKY   — the world (horizon-frame) direction × radius.
+##   STARS — the equatorial unit vector (x → RA 0h, y → RA 6h, z → NCP) ×
+##           radius; StarSkyMath.equatorial_to_world_basis() turns it onto the live sky.
+func _planet_points_for_clock( c: CelestialClock ) -> Dictionary :
+	var out : Dictionary = {}
+	if not is_instance_valid( planet_system ) \
+			or not planet_system.has_method( "calculate_planet_position" ) :
+		return out
+	var jd : float = c.get_julian_day_utc()
+	var lst : float = c.get_local_sidereal_time( jd )
+	for pname in _planet_path_names() :
+		var res : Dictionary = planet_system.call( "calculate_planet_position", pname, jd, lst, c.latitude )
+		if planet_path_frame == PlanetPathFrame.STARS :
+			out[pname] = StarSkyMath.equatorial_vector( float( res.get( "ra", 0.0 ) ),
+				float( res.get( "dec", 0.0 ) ) ) * ANALEMMA_PATH_RADIUS
+		else :
+			out[pname] = ( res.get( "direction", Vector3.UP ) as Vector3 ) * ANALEMMA_PATH_RADIUS
+	return out
+
+
+## Create one path node (+ name tag) per planet, coloured from PlanetSystem.
+func _ensure_planet_paths() -> void :
+	if Engine.is_editor_hint() or not is_inside_tree() :
+		return
+	for pname in _planet_path_names() :
+		var node : MeshInstance3D = _planet_paths.get( pname )
+		if not is_instance_valid( node ) :
+			node = MeshInstance3D.new()
+			node.name = "PlanetAnalemmaPath_" + str( pname )
+			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			node.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+			var mat := StandardMaterial3D.new()
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			mat.disable_receive_shadows = true
+			node.material_override = mat
+			var tag := Label3D.new()
+			tag.name = "Tag"
+			tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+			tag.fixed_size = true
+			tag.no_depth_test = true
+			tag.pixel_size = 0.0012
+			tag.font_size = 22
+			tag.outline_size = 6
+			tag.offset = Vector2( 0.0, 14.0 )
+			var titles : Variant = planet_system.get( "PLANET_TITLES" )
+			tag.text = str( ( titles as Dictionary ).get( pname, pname ) ) if titles is Dictionary else str( pname )
+			node.add_child( tag )
+			add_child( node )
+			_planet_paths[pname] = node
+		var col : Variant = planet_system.get( str( pname ) + "_color" )
+		var c : Color = col if col is Color else Color.WHITE
+		( node.material_override as StandardMaterial3D ).albedo_color = c
+		( node.get_node( "Tag" ) as Label3D ).modulate = c
+		node.visible = analemma_mode and show_planet_paths and _planet_path_enabled( pname )
+
+## Preview curves before ∞ playback starts: the same sample instants as the sun
+## preview (a year of mean solar noons) or, in Lunar mode, the moon preview's
+## 30 lunar days — so each planet's curve lines up point-for-point with the
+## body it is being compared against.
+func _build_planet_preview_meshes() -> void :
+	if not show_planet_paths or not analemma_mode :
+		return
+	_ensure_planet_paths()
+	if _planet_paths.is_empty() :
+		return
+	var tc := _analemma_throwaway_clock()
+	var per : Dictionary = {}
+	for pname in _planet_paths :
+		per[pname] = PackedVector3Array()
+	var tag_index : int = 0
+	if planet_path_frame == PlanetPathFrame.STARS :
+		# Against the stars the time of day barely matters (a planet moves at
+		# most ~2°/day across them), so sample daily at the CURRENT clock time,
+		# centred on today, long enough to hold a retrograde loop of every planet.
+		var now_abs : float = clock.get_absolute_hours()
+		var half : int = PLANET_STAR_PREVIEW_HALF_DAYS
+		for k in range( -half, half + 1 ) :
+			tc.set_absolute_hours( now_abs + float( k ) * 24.0 )
+			_append_planet_samples( per, tc )
+		tag_index = half
+	elif analemma_type == 1 :
+		var start_hour : float = _find_moon_transit_hour_for_current_day()
+		var start_abs : float = tc.get_absolute_hours() - tc.day_time + start_hour
+		var mean_lunar_day_h : float = 24.0 * tc.moon_orbital_period / ( tc.moon_orbital_period - 1.0 )
+		for i in range( 31 ) :
+			_apply_dst_correction_to_clock( tc, start_abs + float( i ) * mean_lunar_day_h )
+			_append_planet_samples( per, tc )
+	else :
+		var days : int = 366 if tc._is_leap_year( tc.year ) else 365
+		var today_doy : int = clock.day
+		for m in range( 1, clock.month ) :
+			today_doy += clock.get_days_in_month( m, clock.year )
+		tag_index = clampi( today_doy - 1, 0, days )
+		for i in range( days + 1 ) :
+			_set_clock_to_doy( tc, ( i % days ) + 1 )
+			tc.day_time = tc.mean_solar_time_to_clock_time(
+				analemma_mean_solar_hours_for_day( i ) )
+			_append_planet_samples( per, tc )
+	for pname in per :
+		_apply_planet_line_mesh( pname, per[pname], tag_index )
+
+func _append_planet_samples( per: Dictionary, c: CelestialClock ) -> void :
+	var pts : Dictionary = _planet_points_for_clock( c )
+	for pname in per :
+		if pts.has( pname ) :
+			# Packed arrays are value types: append to a local and store it back.
+			var verts : PackedVector3Array = per[pname]
+			verts.append( pts[pname] as Vector3 )
+			per[pname] = verts
+
+## Re-mesh one planet's path and park its name tag on vertex `tag_index`
+## (-1 = the newest trail point, i.e. where the planet is now).
+func _apply_planet_line_mesh( pname: String, verts: PackedVector3Array, tag_index: int = -1 ) -> void :
+	var node : MeshInstance3D = _planet_paths.get( pname )
+	if not is_instance_valid( node ) or verts.size() < 2 :
+		return
+	node.mesh = _build_tube_mesh( verts, analemma_path_thickness )
+	var tag := node.get_node_or_null( "Tag" ) as Label3D
+	if tag != null :
+		var idx : int = verts.size() - 1 if tag_index < 0 else mini( tag_index, verts.size() - 1 )
+		tag.position = verts[idx]
 
 func _build_tube_mesh( verts: PackedVector3Array, thickness: float ) -> ArrayMesh :
 	var mesh := ArrayMesh.new()
@@ -3604,6 +3854,7 @@ func _analemma_throwaway_clock() -> CelestialClock :
 func _build_analemma_mesh() -> void :
 	_build_analemma_preview_mesh()
 	_build_moon_preview_mesh()
+	_build_planet_preview_meshes()
 
 ## Set a clock's month/day from a 1-based day-of-year (uses the clock's own
 ## month-length rules so leap years are handled).
@@ -3633,6 +3884,16 @@ func _position_analemma_path() -> void :
 			_moon_path.global_position = cam.global_position
 		if is_instance_valid( _moon_ghosts_container ) :
 			_moon_ghosts_container.global_position = cam.global_position
+		# STARS-frame paths turn with the sky every frame (live sidereal time),
+		# so they stay glued to the star field however the clock moves.
+		var sky_basis := Basis.IDENTITY
+		if planet_path_frame == PlanetPathFrame.STARS and not _planet_paths.is_empty() :
+			sky_basis = StarSkyMath.equatorial_to_world_basis(
+				clock.get_local_sidereal_time( clock.get_julian_day_utc() ), clock.latitude )
+		for pname in _planet_paths :
+			var node : MeshInstance3D = _planet_paths[pname]
+			if is_instance_valid( node ) :
+				node.global_transform = Transform3D( sky_basis, cam.global_position )
 
 ## Inclusive [min, max] sim-year range the ∞ analemma view cycles through: the
 ## full weather archive, from 1940 (the ERA5 archive start) up to the newest

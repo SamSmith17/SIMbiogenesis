@@ -179,8 +179,8 @@ func _run_capture(loader: Node, start_abs: float, end_abs: float, time_scale: fl
 			main.call("set_absolute_hours", abs_h)
 
 		# Step physics so vegetation growth catches up
-		if loader.has_method("_advance_growth"):
-			loader.call("_advance_growth")
+		if loader.has_method("_push_growth_year"):
+			loader.call("_push_growth_year")
 
 		# Pose the camera BEFORE the render waits — setting it afterwards
 		# captured the texture drawn from the PREVIOUS frame's pose, so a moving

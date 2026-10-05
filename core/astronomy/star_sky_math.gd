@@ -111,6 +111,28 @@ static func direction_from_equatorial( ra_deg: float, dec_deg: float, lst_deg: f
 	return v.normalized()
 
 
+## Equatorial unit vector (x → RA 0h, y → RA 6h, z → celestial north pole).
+static func equatorial_vector( ra_deg: float, dec_deg: float ) -> Vector3 :
+	var a : float = ra_deg * _DEG2RAD
+	var d : float = dec_deg * _DEG2RAD
+	return Vector3( cos( d ) * cos( a ), cos( d ) * sin( a ), sin( d ) )
+
+
+## The rotation taking equatorial_vector() onto the world sky at sidereal time
+## `lst_deg` and latitude `lat_deg` — direction_from_equatorial as ONE Basis, so
+## geometry authored in RA/Dec (the analemma STARS-frame planet paths) is turned
+## with the sky by setting a node's basis each frame instead of re-meshing.
+## Expanding direction_from_equatorial with h = LST − RA:
+##   dir = cosδ·cosα·(M cosL − E sinL) + cosδ·sinα·(M sinL + E cosL) + sinδ·P
+## so the columns are exactly those three vectors (pinned by star_sky_selftest).
+static func equatorial_to_world_basis( lst_deg: float, lat_deg: float ) -> Basis :
+	var b : Dictionary = equatorial_basis( lat_deg )
+	var m : Vector3 = b[ "meridian" ]
+	var e : Vector3 = b[ "east" ]
+	var l : float = lst_deg * _DEG2RAD
+	return Basis( m * cos( l ) - e * sin( l ), m * sin( l ) + e * cos( l ), b[ "pole" ] )
+
+
 ## World direction -> {"ra", "dec", "hour_angle"} (degrees) via the basis.
 static func equatorial_from_direction( dir: Vector3, lst_deg: float, lat_deg: float ) -> Dictionary :
 	var b : Dictionary = equatorial_basis( lat_deg )

@@ -135,7 +135,7 @@ func _build_ui() -> void:
 	var camps_row := HBoxContainer.new()
 	_body.add_child(camps_row)
 	var camps_edit_btn := Button.new()
-	camps_edit_btn.text = "🏕 Edit camps (C)"
+	camps_edit_btn.text = "🏕 Street camps (Shift+C)"
 	camps_edit_btn.tooltip_text = "Open the camp scatter UI (also C key)"
 	camps_edit_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	camps_edit_btn.pressed.connect(_on_camps_edit_pressed)

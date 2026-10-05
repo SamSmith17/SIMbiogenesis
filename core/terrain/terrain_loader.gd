@@ -185,6 +185,17 @@ var _flow_alpha := 0.88
 var _camps_root: Node3D = null
 var _camp_profiles: Dictionary = {}
 var _camp_scatter_ui: Control = null
+## Player-painted camp areas (core/camps/). Separate from the street-following
+## `_camps_root` above: these are saved per map and survive every regenerate.
+var camp_areas: CampAreaLayer = null
+var _camp_areas_path := ""
+var _camp_area_runtime: CampAreaRuntime = null
+var _camp_excl_index: RefCounted = null
+var _camp_undo: Array = []
+var _camp_highlight: MeshInstance3D = null
+var _camp_style_modal: Control = null
+var _camp_focus_id := ""
+const CAMP_UNDO_MAX := 24
 var _base_dem_grid := PackedFloat32Array()
 var _detail_elev_grid := PackedFloat32Array()
 var _detail_elev_cols := 0
@@ -214,21 +225,13 @@ var _veg_style: Dictionary = {}
 var _auto_rebuild_active := false
 var _auto_rebuild_dirty := false
 var _veg_undo := VegetationUndo.new()
-## Vegetation growth (VegetationGrowth): a monotonic sim-hours clock that ages the
-## plants. It advances mostly in analemma / ∞ mode (a day per frame) so the player
-## watches forests grow, die at maturity, and reseed over seasons; at normal play
-## speeds growth is imperceptible so ticks essentially never fire. Reset each load
-## — growth PROGRESS isn't persisted (birth times are re-seeded), only the tunable
-## <species>_growth_years survives. See _advance_growth / _growth_tick.
-const GROWTH_MAX_STEP_H := 48.0     # ignore bigger per-frame clock jumps (UI scrubs)
-const GROWTH_SCALE_BUDGET_PER_FRAME := 2000
-var _growth_clock_h := 0.0
-var _growth_last_calendar_doy := -1
-var _growth_prev_abs_h := 0.0
-var _manual_growth_map := VegetationInstanceMap.new()
-var _auto_growth_map := VegetationInstanceMap.new()
-var _growth_scale_apply_doy := -1
-var _growth_caps_manual := {}
+## Vegetation growth is a PURE FUNCTION of the calendar (VegGrowthModel): each
+## plant's birth year rides its MultiMesh instance data and the shaders evaluate
+## its size from one `growth_year` uniform. The loader's whole job is to say what
+## year it is (_push_growth_year) and to stamp a birth year on painted plants.
+## There is no growth clock, no tick and no kill-and-reseed pass any more.
+var _growth_year_pushed := NAN
+var _growth_frozen_pushed := false
 ## Climelapse pre-bake (Phase 3–4): calendar keyframes + per-instance scale snapshots.
 const CLIMELAPSE_ROOT := "user://climelapses"
 var _export_render_start := NAN
@@ -243,9 +246,6 @@ var _export_pending := false
 var _export_fps := 30
 ## Waypoints collected for hyperlapse export ({pos, yaw, pitch}).
 var _climelapse_drone_path: Array = []
-var _growth_caps_auto := {}
-var _growth_rng := RandomNumberGenerator.new()
-var _auto_growth_zone_index: GrowthZoneIndex = null
 var _placed_prop_layer: PlacedPropLayer = null
 ## Linkage fold-to-pack sweeps currently animating (prop_id → true) — a
 ## second Pack press mid-fold must not double-toggle the sweep.
@@ -390,7 +390,7 @@ func _process(delta: float) -> void:
 	if _reposition_prop != null:
 		_tick_prop_reposition(delta)
 	PerfMonitor.begin("terrain_tick")
-	_advance_growth()
+	_push_growth_year()
 	_apply_water_flow(delta)
 	PerfMonitor.end("terrain_tick")
 	if not _main.has_method("get_snow_amount"):
@@ -683,16 +683,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_space_edit_ui.call("toggle_mode")
 		get_viewport().set_input_as_handled()
 		return
-	if event.is_action_pressed("camp_scatter") and _camp_scatter_ui != null:
-		# C is shared with `charge`. At a usable charging station the charge
-		# wins: yield the event (do NOT consume) so the player's event-driven
-		# handler takes it — deterministic in either _unhandled_input order,
-		# unlike the old polling which fired BOTH.
-		if _main != null:
-			var plr := _main.get_node_or_null("Player")
-			if plr != null and plr.has_method("charge_available") \
-					and bool(plr.call("charge_available")):
-				return
+	# Shift+C = the legacy street-following camp dock. Like the other legacy
+	# branches it must be tested BEFORE plain C (which passes exact_match).
+	if event.is_action_pressed("camp_scatter_legacy") and _camp_scatter_ui != null:
 		_close_edit_toolbar()
 		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
 			_terrain_edit_ui.call("_exit_mode")
@@ -702,6 +695,29 @@ func _unhandled_input(event: InputEvent) -> void:
 				and bool(_placed_props_ui.call("is_panel_open")):
 			_placed_props_ui.call("_exit_mode")
 		_camp_scatter_ui.toggle_mode()
+		get_viewport().set_input_as_handled()
+		return
+	# Plain C = the unified toolbar, camps section.
+	if event.is_action_pressed("camp_scatter", false, true) and _edit_toolbar_ui != null:
+		# C is shared with `charge`. At a usable charging station the charge
+		# wins: yield the event (do NOT consume) so the player's event-driven
+		# handler takes it — deterministic in either _unhandled_input order,
+		# unlike the old polling which fired BOTH.
+		if _main != null:
+			var plr := _main.get_node_or_null("Player")
+			if plr != null and plr.has_method("charge_available") \
+					and bool(plr.call("charge_available")):
+				return
+		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
+			_terrain_edit_ui.call("_exit_mode")
+		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
+			_vegetation_edit_ui.call("_exit_mode")
+		if _placed_props_ui != null and _placed_props_ui.has_method("is_panel_open") \
+				and bool(_placed_props_ui.call("is_panel_open")):
+			_placed_props_ui.call("_exit_mode")
+		if _camp_scatter_ui != null and _camp_scatter_ui.visible:
+			_camp_scatter_ui.call("_exit_mode")
+		_edit_toolbar_ui.call("toggle_section", "camps")
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("placed_props_edit") and _placed_props_ui != null:
@@ -1164,6 +1180,7 @@ func _run_post_terrain_sequence(include_vegetation: bool = true) -> void:
 
 	# 9. Camp generation (deterministic, optional) — before veg so spawn is early.
 	_attach_camps()
+	_attach_camp_areas()
 	await _settle_gpu()
 	_refresh_water_reflection_probes()
 
@@ -3940,6 +3957,7 @@ func _apply_osm_vectors_after_fetch() -> void:
 	_apply_solar_arrays()
 	_queue_auto_veg_generate(_auto_veg_generated)
 	call_deferred("_attach_camps")
+	call_deferred("_attach_camp_areas")
 	_finish_refresh("osm_map")
 
 
@@ -4403,6 +4421,395 @@ func _remove_existing_camps() -> void:
 	_camps_root = null
 
 
+## ---------------------------------------------------------------------------
+## Painted camp areas (core/camps/) — the unified toolbar's Camps section.
+##
+## Unlike the street-following generator above, these need no roads, are saved
+## per map (user://maps/camp_areas_*.json) and are rebuilt one camp at a time.
+## ---------------------------------------------------------------------------
+
+## Load this map's camp areas (once) and (re)build them under Terrain. Safe to
+## call again after a terrain rebuild or an OSM refresh: the layer is the
+## authority, the nodes are disposable.
+func _attach_camp_areas() -> void:
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	var path := CampAreaLayer.save_path_for_map(_lat, _lon)
+	if camp_areas == null or _camp_areas_path != path:
+		camp_areas = CampAreaLayer.create_empty()
+		camp_areas.load_from(path)
+		_camp_areas_path = path
+		_camp_undo.clear()
+	# Roads / buildings / water may have changed under us (OSM refresh).
+	_camp_excl_index = null
+	# The player's tuned styles + added models (global, like veg styles).
+	CampStyleStore.load_and_apply()
+	var rt := _ensure_camp_area_runtime()
+	if rt == null:
+		return
+	rt.sync(camp_areas, _camp_ctx())
+	_apply_cached_geometry_visibility()
+	if not camp_areas.areas.is_empty():
+		print("TerrainLoader._attach_camp_areas: %d camps, %d structures" % [
+			camp_areas.areas.size(), rt.structure_count()])
+
+
+func _ensure_camp_area_runtime() -> CampAreaRuntime:
+	if _main == null:
+		return null
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return null
+	if is_instance_valid(_camp_area_runtime) and _camp_area_runtime.get_parent() == terrain:
+		return _camp_area_runtime
+	var stale := terrain.get_node_or_null(CampAreaRuntime.NODE_NAME)
+	if stale != null:
+		terrain.remove_child(stale)
+		stale.queue_free()
+	_camp_area_runtime = CampAreaRuntime.new()
+	# Headless runs (selftests, boot smoke) never load the imported camp art.
+	_camp_area_runtime.setup(_main, DisplayServer.get_name() != "headless")
+	terrain.add_child(_camp_area_runtime)
+	return _camp_area_runtime
+
+
+## What CampLayoutGenerator needs from the world. The exclusion index is built
+## lazily and kept until the next attach — rebuilding it per brush stroke would
+## re-buffer every building on the map.
+func _camp_ctx() -> Dictionary:
+	if _camp_excl_index == null:
+		var roads: Array = _osm_vectors.get("roads", []) as Array
+		_camp_excl_index = VegExclusionBuilder.build_index(
+			VegExclusionBuilder.build_all(_buildings_data, roads, _water_data,
+				1.0, 1.0, 1.5, true, true),
+			maxf(_osm_half_extent, 500.0))
+	return {
+		"ground_y_at": Callable(self, "_ground_height_at"),
+		"roads": get_osm_roads(),
+		"is_excluded": Callable(_camp_excl_index, "is_excluded"),
+		"map_styles": camp_areas.map_styles if camp_areas != null else {},
+	}
+
+
+## The same world context for the Tune-look studio: real exclusions and slope
+## tests (so the preview shows what the map will show) drawn on flat ground.
+func camp_preview_ctx() -> Dictionary:
+	var ctx := _camp_ctx()
+	ctx["flatten"] = true
+	return ctx
+
+
+## Re-seat every painted camp on the current ground (after sculpting).
+func reground_camp_areas() -> void:
+	_reground_camp_areas()
+
+
+func _reground_camp_areas() -> void:
+	if camp_areas == null or camp_areas.areas.is_empty():
+		return
+	var rt := _ensure_camp_area_runtime()
+	if rt != null:
+		rt.sync(camp_areas, _camp_ctx())
+
+
+func _apply_camp_changes(changed: Array, removed: Array) -> void:
+	var rt := _ensure_camp_area_runtime()
+	if rt != null:
+		var ctx := _camp_ctx()
+		for id in removed:
+			rt.remove_area(str(id))
+		for id in changed:
+			var rec := camp_areas.get_area(str(id))
+			if not rec.is_empty():
+				rt.rebuild_area(rec, ctx)
+	camp_areas.save_to(_camp_areas_path)
+
+
+func _camp_layer_ready() -> bool:
+	if not _built or _main == null:
+		return false
+	if camp_areas == null:
+		_attach_camp_areas()
+	return camp_areas != null
+
+
+## Paint a camp. Overlapping a camp of the same style GROWS it (nothing already
+## standing moves); otherwise a new camp is created. params: style, density,
+## heading_deg (< 0 = auto: nearest road, else the outline's longest edge),
+## align_jitter_deg, light_density, seed, name. Returns the camp id ("" = refused).
+func paint_camp_area(poly: PackedVector2Array, params: Dictionary = {}) -> String:
+	if not _camp_layer_ready() or poly.size() < 3:
+		return ""
+	var p := params.duplicate()
+	var auto := float(p.get("heading_deg", -1.0)) < 0.0
+	p["heading_auto"] = auto
+	if auto:
+		# Resolved ONCE and stored, so brushing the camp bigger later cannot
+		# swing its heading (and with it every tent) to a new longest edge.
+		p["heading_deg"] = CampLayoutGenerator.resolve_heading(poly, get_osm_roads())
+	var res := camp_areas.paint(poly, p)
+	_apply_camp_changes(res["changed"], res["removed"])
+	return str(res["id"])
+
+
+## Remove camp ground inside the polygon. Returns how many camps were touched.
+func erase_camps_in_polygon(poly: PackedVector2Array) -> int:
+	if not _camp_layer_ready() or poly.size() < 3:
+		return 0
+	var res := camp_areas.erase(poly)
+	_apply_camp_changes(res["changed"], res["removed"])
+	return (res["changed"] as Array).size() + (res["removed"] as Array).size()
+
+
+## Split a zone into plots with lanes; every plot becomes its own camp.
+## params: plot_w_m, plot_d_m, lane_w_m, heading_deg (< 0 = auto), style
+## (CampStyles.VARIED = a seeded style per plot), density, align_jitter_deg,
+## light_density. Returns the new camp ids.
+func subdivide_camp_zone(poly: PackedVector2Array, params: Dictionary = {}) -> Array:
+	var ids: Array = []
+	if not _camp_layer_ready() or poly.size() < 3:
+		return ids
+	var heading := float(params.get("heading_deg", -1.0))
+	var auto := heading < 0.0
+	if auto:
+		heading = CampLayoutGenerator.resolve_heading(poly, get_osm_roads())
+	var plots := CampSubdivider.subdivide(poly, heading,
+		float(params.get("plot_w_m", 30.0)), float(params.get("plot_d_m", 22.0)),
+		float(params.get("lane_w_m", 6.0)))
+	if plots.is_empty():
+		return ids
+	# The zone replaces whatever camps stood on that ground.
+	var cleared := camp_areas.erase(poly)
+	var style_id := str(params.get("style", CampStyles.DEFAULT_STYLE))
+	var group_id := "zone_%d" % (Time.get_ticks_usec() & 0x7fffffff)
+	var base_seed := int(params.get("seed", CampAreaLayer._poly_seed(poly)))
+	for i in plots.size():
+		var plot: Dictionary = plots[i]
+		var plot_seed := hash(Vector2i(base_seed & 0x7fffffff, i)) & 0x7fffffff
+		var plot_style := style_id
+		if style_id == CampStyles.VARIED:
+			plot_style = str(CampStyles.VARIED_POOL[plot_seed % CampStyles.VARIED_POOL.size()])
+		var id := camp_areas.add(plot["polygon"], {
+			"name": str(plot["name"]), "style": plot_style, "seed": plot_seed,
+			"density": params.get("density", 0.8), "heading_deg": heading,
+			"heading_auto": auto,
+			"align_jitter_deg": params.get("align_jitter_deg", 5.0),
+			"light_density": params.get("light_density", 1.0), "group_id": group_id})
+		if not id.is_empty():
+			ids.append(id)
+	var changed: Array = cleared["changed"]
+	changed.append_array(ids)
+	_apply_camp_changes(changed, cleared["removed"])
+	return ids
+
+
+## Edit one camp's settings (name, style, density, heading_deg, seed, ...).
+func update_camp_area(id: String, patch: Dictionary) -> bool:
+	if not _camp_layer_ready() or camp_areas.index_of(id) < 0:
+		return false
+	var p := patch.duplicate()
+	# Hand edits are keyed by lattice cell. Anything that re-deals the lattice
+	# (a reseed, another style or layout) makes them point at different
+	# households, so they go unless the caller is setting them explicitly.
+	if not p.has("edits"):
+		var before := camp_areas.get_area(id)
+		for k in ["seed", "style", "variant"]:
+			if p.has(k) and str(p[k]) != str(before.get(k, "")):
+				p["edits"] = {}
+				break
+	if p.has("heading_deg"):
+		var auto := float(p["heading_deg"]) < 0.0
+		p["heading_auto"] = auto
+		if auto:
+			p["heading_deg"] = CampLayoutGenerator.resolve_heading(
+				camp_areas.get_area(id).get("polygon", PackedVector2Array()), get_osm_roads())
+	camp_areas.update(id, p)
+	_apply_camp_changes([id], [])
+	return true
+
+
+func delete_camp_area(id: String) -> bool:
+	if not _camp_layer_ready() or not camp_areas.remove(id):
+		return false
+	_apply_camp_changes([], [id])
+	return true
+
+
+## Topmost camp under a world XZ point, or "".
+func camp_area_at(xz: Vector2) -> String:
+	return camp_areas.area_at(xz) if _camp_layer_ready() else ""
+
+
+## Record + live counts for the options bar / harness. {} when unknown.
+func camp_area_info(id: String) -> Dictionary:
+	if not _camp_layer_ready():
+		return {}
+	var rec := camp_areas.get_area(id)
+	if rec.is_empty():
+		return {}
+	var info := rec.duplicate()
+	info["area_m2"] = CampAreaLayer.record_area(rec)
+	info["structures"] = 0
+	info["stats"] = {}
+	if is_instance_valid(_camp_area_runtime):
+		info["structures"] = _camp_area_runtime.area_structure_count(id)
+		info["stats"] = _camp_area_runtime.area_stats(id)
+	return info
+
+
+## {areas, structures, budget} across every painted camp.
+func camp_areas_summary() -> Dictionary:
+	var n := 0
+	if is_instance_valid(_camp_area_runtime):
+		n = _camp_area_runtime.structure_count()
+	return {"areas": camp_areas.areas.size() if camp_areas != null else 0,
+		"structures": n, "budget": CampAreaRuntime.MAX_TOTAL_STRUCTURES}
+
+
+## Persist a tuned style set (CampStyleStore data) and rebuild every camp with it.
+func apply_camp_styles(data: Dictionary) -> void:
+	CampStyleStore.save_data(data)
+	CampStyleStore.apply(data)
+	CampMeshLibrary.clear_cache()
+	if camp_areas != null:
+		var rt := _ensure_camp_area_runtime()
+		if rt != null:
+			rt.sync(camp_areas, _camp_ctx())
+
+
+## Save this MAP's edit to a style ("all camps of this type on this map") and
+## rebuild the camps it touches. An empty entry removes the map-level edit.
+func save_map_camp_style(style_id: String, entry: Dictionary) -> void:
+	if not _camp_layer_ready() or not CampStyles.is_valid(style_id):
+		return
+	var clean := CampStyleStore.normalize_entry(entry)
+	if clean.is_empty():
+		camp_areas.map_styles.erase(style_id)
+	else:
+		camp_areas.map_styles[style_id] = clean
+	var changed: Array = []
+	for rec: Dictionary in camp_areas.areas:
+		if str(rec["style"]) == style_id:
+			changed.append(str(rec["id"]))
+	_apply_camp_changes(changed, [])
+
+
+func map_camp_style(style_id: String) -> Dictionary:
+	if camp_areas == null:
+		return {}
+	return (camp_areas.map_styles.get(style_id, {}) as Dictionary).duplicate(true)
+
+
+## Crosshair pick: the camp under a world XZ point. {valid, id, name, style}.
+func pick_camp_at_world(x: float, z: float) -> Dictionary:
+	if camp_areas == null or camp_areas.areas.is_empty():
+		return {"valid": false}
+	var id := camp_areas.area_at(Vector2(x, z))
+	if id.is_empty():
+		return {"valid": false}
+	var rec := camp_areas.get_area(id)
+	return {"valid": true, "id": id, "name": str(rec.get("name", "Camp")),
+		"style": str(rec.get("style", ""))}
+
+
+## Crosshair focus highlight, change-gated (it is called every physics frame).
+func set_camp_focus(id: String) -> void:
+	if id == _camp_focus_id:
+		return
+	_camp_focus_id = id
+	if id.is_empty():
+		clear_camp_highlight()
+	else:
+		update_camp_highlight(id)
+
+
+## Open the Tune-look modal on ONE placed camp (its real outline and elements).
+func open_camp_tune_for_camp(camp_id: String) -> void:
+	if camp_areas == null or camp_areas.index_of(camp_id) < 0:
+		return
+	open_camp_style_modal(str(camp_areas.get_area(camp_id).get("style", "")), camp_id)
+
+
+## The camp Tune-look modal (preview + mix + models for one style).
+func open_camp_style_modal(style_id: String = "", camp_id: String = "") -> void:
+	if _main == null:
+		return
+	if _camp_style_modal == null or not is_instance_valid(_camp_style_modal):
+		var ui_layer := _main.get_node_or_null("UILayer")
+		if ui_layer == null:
+			return
+		var layer := CanvasLayer.new()
+		layer.name = "CampStyleModalLayer"
+		layer.layer = UITheme.LAYER_MODAL
+		ui_layer.add_child(layer)
+		var modal := Control.new()
+		modal.name = "CampStyleModal"
+		modal.set_script(load("res://scenes/ui/camp_style_modal.gd"))
+		layer.add_child(modal)
+		modal.call("bind_loader", self)
+		_camp_style_modal = modal
+	_camp_style_modal.call("open", style_id, camp_id)
+
+
+func push_camp_undo() -> void:
+	if not _camp_layer_ready():
+		return
+	_camp_undo.append(camp_areas.snapshot())
+	while _camp_undo.size() > CAMP_UNDO_MAX:
+		_camp_undo.pop_front()
+
+
+func can_undo_camps() -> bool:
+	return not _camp_undo.is_empty()
+
+
+func undo_camps() -> bool:
+	if _camp_undo.is_empty() or camp_areas == null:
+		return false
+	camp_areas.restore(_camp_undo.pop_back())
+	var rt := _ensure_camp_area_runtime()
+	if rt != null:
+		rt.sync(camp_areas, _camp_ctx())
+	camp_areas.save_to(_camp_areas_path)
+	clear_camp_highlight()
+	return true
+
+
+## Outline one camp on the ground (the Camp Select tool).
+func update_camp_highlight(id: String) -> void:
+	var rec := camp_areas.get_area(id) if camp_areas != null else {}
+	var poly: PackedVector2Array = rec.get("polygon", PackedVector2Array())
+	if _main == null or poly.size() < 3:
+		clear_camp_highlight()
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	if _camp_highlight == null or not is_instance_valid(_camp_highlight):
+		_camp_highlight = MeshInstance3D.new()
+		_camp_highlight.name = "CampAreaHighlight"
+		terrain.add_child(_camp_highlight)
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.albedo_color = Color(1.0, 0.72, 0.2, 0.35)
+		_camp_highlight.material_override = mat
+	var footing := _highlight_footing_grid(true)
+	_camp_highlight.mesh = TerrainBuilder.build_polygon_highlight(
+		poly, footing["grid"], footing["res"], footing["extent"], _built_center_elev)
+	_camp_highlight.visible = true
+
+
+func clear_camp_highlight() -> void:
+	if _camp_highlight != null and is_instance_valid(_camp_highlight):
+		_camp_highlight.visible = false
+		_camp_highlight.mesh = null
+
+
 func _apply_building_textures() -> void:
 	var roof_mat := _make_world_roof_material()
 	if _buildings_root != null:
@@ -4548,7 +4955,11 @@ func _reseat_player() -> void:
 	var player := _main.get_node_or_null("Player")
 	if player == null:
 		return
-	var spawn := Vector3(0.0, _spawn_ground_y + TerrainBuilder.PLAYER_SPAWN_CLEARANCE_M, 0.0)
+	var xz := _spawn_xz()
+	var gy := _spawn_ground_y
+	if xz != Vector2.ZERO:
+		gy = _ground_height_at(xz.x, xz.y)
+	var spawn := Vector3(xz.x, gy + TerrainBuilder.PLAYER_SPAWN_CLEARANCE_M, xz.y)
 	player.global_position = spawn
 	if player is CharacterBody3D:
 		(player as CharacterBody3D).velocity = Vector3.ZERO
@@ -4559,7 +4970,38 @@ func _reseat_player() -> void:
 		player.highest_point_during_fall = spawn.y
 
 
-## Re-seat player + explore drone once the final hi-res footing is in place.
+## Where a fresh (non-resume) load puts the player: the site's location marker
+## (the Sphere-of-Influence centre the player drags around), so moving the marker
+## moves the spawn. Read straight from the per-map SoiConfig because SoiService
+## is only bound to this map AFTER the spawn pass. A map whose marker was never
+## moved has it at the origin, which is the old behaviour.
+func _spawn_xz() -> Vector2:
+	var cfg := SoiConfig.load_for_map(_lat, _lon)
+	var xz := Vector2(cfg.center_x, cfg.center_z)
+	# A marker dragged off the built terrain would spawn the player in the void.
+	var limit := maxf(_half_extent - 50.0, 0.0)
+	if not (is_finite(xz.x) and is_finite(xz.y)) or absf(xz.x) > limit or absf(xz.y) > limit:
+		return Vector2.ZERO
+	return xz
+
+
+## Make sure the map has a survey drone (a save resume skips the spawn pass, and
+## an older save may not carry one). Used by the remote drone-view hotkey.
+func ensure_explore_drone() -> Node3D:
+	if _main == null:
+		return null
+	var drone := _main.get_node_or_null("FPVDrone") as FPVDrone
+	if drone == null:
+		drone = FPV_DRONE_SCENE.instantiate() as FPVDrone
+		if drone == null:
+			return null
+		drone.name = "FPVDrone"
+		_main.add_child(drone)
+	_explore_drone = drone
+	return drone
+
+
+## Re-seat player + explore drone once the final hi-res footing is in place.## Re-seat player + explore drone once the final hi-res footing is in place.
 func _finalize_spawn_actors() -> void:
 	if _main == null:
 		return
@@ -5344,7 +5786,8 @@ func _apply_cached_geometry_visibility() -> void:
 		return
 	var on := _cached_geometry_visible
 	for child_name in ["Ground", "DetailGround", "Buildings", "BuildingsCustom",
-			"Water", "Camps", "AutoVegetation", "Vegetation", "SolarArrays"]:
+			"Water", "Camps", CampAreaRuntime.NODE_NAME, "AutoVegetation", "Vegetation",
+			"SolarArrays"]:
 		var n := terrain.get_node_or_null(child_name) as Node3D
 		if n != null:
 			n.visible = on
@@ -5451,7 +5894,6 @@ func reset_site_to_fresh() -> void:
 	_clear_auto_vegetation()
 	_auto_veg_generated = false
 	_auto_veg_data = {}
-	_auto_growth_zone_index = null
 	_notify_options_status("Resetting site — cleared %d user veg file(s) …" % n_edits, "busy")
 	refresh_all_cached_layers()
 
@@ -5592,7 +6034,6 @@ func _begin_osm_vectors_refetch() -> void:
 func _begin_osm_vegetation_refetch() -> void:
 	_auto_veg_data = {}
 	_auto_veg_generated = false
-	_auto_growth_zone_index = null
 	var vs := get_node_or_null("/root/VegetationService")
 	if vs == null:
 		push_warning("TerrainLoader: VegetationService unavailable")
@@ -5665,8 +6106,13 @@ func _compose_terrain_grids(apply_user_edits: bool = true) -> Dictionary:
 			detail_surf, _detail_elev_cols, _detail_extent_m())
 		built_collision = built_visual.duplicate()
 		var sink_depth := TerrainBuilder.compute_sink_depth_m(detail_surf)
+		# Sink below the LOWEST ground in the patch, not below the map's mean
+		# elevation: on a wide map the site can sit far under the mean (Walton:
+		# ~100 m on a 120 km world), and a floor at "mean - 80" then hangs
+		# metres ABOVE the real terrain as an invisible walkable sheet.
 		TerrainBuilder.sink_coarse_centre_for_detail(
-			built_collision, MESH_RES, _built_extent, _detail_extent_m(), _built_center_elev,
+			built_collision, MESH_RES, _built_extent, _detail_extent_m(),
+			TerrainBuilder.sink_reference_elev(detail_surf, _built_center_elev),
 			sink_depth, _seam_feather_m * 0.75)
 		var seam := TerrainSeamDiag.measure_boundary_delta(
 			detail_surf, _detail_elev_cols, _detail_extent_m(),
@@ -5836,6 +6282,7 @@ func _finish_heightfield_rebuild(had_detail: bool, reseat_actors: bool = true) -
 	_reground_placed_props()
 	if _auto_veg_generated:
 		_reground_auto_vegetation()
+	_reground_camp_areas()
 	var terrain_node := _main.get_node_or_null("Terrain") if _main != null else null
 	if terrain_node != null:
 		_ensure_height_field(terrain_node)
@@ -5998,7 +6445,11 @@ func _setup_vegetation() -> void:
 		_impostor_baker.name = "VegImpostorBaker"
 		add_child(_impostor_baker)
 		_impostor_baker.bake_completed.connect(_on_impostor_bake_completed)
-	_growth_init_manual()
+	# The growth maths reads <species>_growth_years off the style, so it must be
+	# loaded BEFORE the painted records are migrated (_setup_auto_vegetation
+	# loads it again; it used to be the only load).
+	_veg_style = VegetationStyleConfig.load_merged(_lat, _lon)
+	_growth_migrate_manual()
 	_setup_vegetation_edit_ui()
 	_setup_camp_scatter_ui()
 	_manual_veg_pending = true
@@ -6020,7 +6471,7 @@ func _rebuild_vegetation() -> void:
 	if terrain == null:
 		return
 	VegetationRuntime.rebuild(terrain, _vegetation_layer, Callable(self, "_ground_height_at"),
-		false, _auto_veg_runtime_settings(), _manual_growth_map)
+		false, _auto_veg_runtime_settings())
 
 
 
@@ -6170,7 +6621,7 @@ func _reground_vegetation() -> void:
 	if terrain == null:
 		return
 	VegetationRuntime.reground(terrain, _vegetation_layer, Callable(self, "_ground_height_at"),
-		_auto_veg_runtime_settings(), _manual_growth_map)
+		_auto_veg_runtime_settings())
 
 
 ## ---------------------------------------------------------------------------
@@ -6331,8 +6782,6 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 	_print_auto_veg_diag(state)
 	_apply_auto_veg_edits()
 	_rebuild_litter_mask()
-	_rebuild_auto_growth_zone_index()
-	_growth_init_auto()
 	_auto_veg_generated = true
 	await get_tree().process_frame
 	if not _built:
@@ -6519,10 +6968,12 @@ func _auto_veg_runtime_settings() -> Dictionary:
 	# (defaults + deltas) is a complete dict and shadowed every style-store
 	# value ("Tune-look doesn't apply" cause #3).
 	s.merge(_vegetation_layer.user_settings() if _vegetation_layer != null else {}, true)
-	# Current growth-clock time so the runtime can scale each instance by its age
-	# (VegetationGrowth.instance_scale_mult). Same value for every record in a
-	# rebuild, so it never affects batch partitioning.
-	s["growth_now_h"] = _growth_clock_h
+	# Growth: only the STATIC inputs go in here (the site epoch the derived
+	# births hang off). The current year must NOT — mesh/material caches and
+	# batch partitioning hash this dict, and a value that moves with the clock
+	# would miss the cache on every rebuild. The year reaches the shaders as a
+	# uniform instead (_push_growth_year).
+	s[VegetationGrowth.KEY_EPOCH] = _growth_epoch_y()
 	# Overhaul v2 LOD: budget-shrunk effective tree detail distance. The user's
 	# tree_detail_distance_m is honoured wherever affordable; on dense maps the
 	# worst-case near-set of full 3D trees is capped by the quality tier's
@@ -6541,22 +6992,50 @@ func _auto_veg_runtime_settings() -> Dictionary:
 
 # ==================== VEGETATION GROWTH ====================
 
-func _current_abs_h() -> float:
-	if _main != null and _main.has_method("get_absolute_hours"):
-		return float(_main.call("get_absolute_hours"))
-	return 0.0
+## The growth-year right now: whole years tick with the calendar, the fraction
+## follows the growing season (VegGrowthModel.growth_year).
+func _growth_year_now() -> float:
+	if _main == null:
+		return VegGrowthModel.BASE_YEAR
+	var y: Variant = _main.get("year")
+	var doy: Variant = _main.get("day_of_year")
+	var hour: Variant = _main.get("day_time")
+	if y == null or doy == null:
+		return VegGrowthModel.BASE_YEAR
+	return VegGrowthModel.growth_year(int(y),
+		float(doy) + (float(hour) / 24.0 if hour != null else 0.0), _lat)
 
 
-## Light settings dict for the growth math: growth_years per species + the clock.
+## Site epoch the `mixed` / `young` forest-age profiles count from. Stamped once
+## per map (and saved) the first time one of those profiles is in use; the
+## default `mature` profile is stationary and never reads it.
+func _growth_epoch_y() -> float:
+	if _vegetation_layer == null:
+		return VegGrowthModel.BASE_YEAR
+	if is_nan(_vegetation_layer.growth_epoch_y):
+		if VegetationGrowth.forest_age_profile(_veg_style) == VegetationGrowth.FOREST_AGE_MATURE:
+			return VegGrowthModel.BASE_YEAR
+		_vegetation_layer.growth_epoch_y = _growth_year_now()
+		_vegetation_layer.save(_lat, _lon)
+	return _vegetation_layer.growth_epoch_y
+
+
+## Settings for CPU-side growth queries (food yield, readouts, stamping): the
+## span keys off the style + what year it is. NOT for the render path — see the
+## cache note in _auto_veg_runtime_settings.
 func _growth_style() -> Dictionary:
 	var s := {
-		"growth_now_h": _growth_clock_h,
-		# Phase 9: the forest-age profile a fresh seeding draws its ages from.
+		VegetationGrowth.KEY_NOW: _growth_year_now(),
+		VegetationGrowth.KEY_EPOCH: _growth_epoch_y(),
+		VegetationGrowth.KEY_FROZEN: not _growth_any_enabled(),
 		"forest_age": str(_veg_style.get("forest_age",
 			VegetationGrowth.FOREST_AGE_MATURE)),
 	}
-	for sp in VegetationLayer.ALL_SPECIES:
-		s["%s_growth_years" % sp] = float(_veg_style.get("%s_growth_years" % sp, 0.0))
+	for k in _veg_style:
+		var ks := str(k)
+		if ks.ends_with("_growth_years") or ks.ends_with("_growth_days") \
+				or ks.ends_with("_lifespan_years"):
+			s[ks] = _veg_style[k]
 	return s
 
 
@@ -6570,104 +7049,38 @@ func _growth_any_enabled() -> bool:
 	return false
 
 
-## Advance the monotonic growth clock; on phenology milestones during the growing
-## season, run a growth tick (reseed + rebuild). Winter dormancy freezes the clock.
-## Forward-only — rewinding the world clock freezes growth rather than resurrecting
-## dead trees. Analemma contributes a fixed day per frame; normal play uses the
-## real clock delta but ignores big jumps (UI scrubs) via the clamp.
-func _advance_growth() -> void:
-	if not _growth_any_enabled():
+## Tell the vegetation shaders what year it is. This is ALL that happens as time
+## passes: no transform is rewritten and nothing is rebuilt. Change-gated, so a
+## paused clock costs one float compare per frame.
+func _push_growth_year() -> void:
+	var frozen := not _growth_any_enabled()
+	var now := _growth_year_now()
+	if frozen == _growth_frozen_pushed and not is_nan(_growth_year_pushed) \
+			and absf(now - _growth_year_pushed) < 1.0e-5:
 		return
-	var now_abs := _current_abs_h()
-	var calendar_doy := _growth_calendar_doy()
-	var season := VegetationGrowth.structural_growth_factor(calendar_doy, _lat)
-	var step := 0.0
-	if bool(_main.get("analemma_mode")):
-		var days := 1
-		if _main.get("analemma_days_per_frame") != null:
-			days = maxi(1, int(_main.get("analemma_days_per_frame")))
-		step = 24.0 * float(days)
-	else:
-		step = clampf(now_abs - _growth_prev_abs_h, 0.0, GROWTH_MAX_STEP_H)
-	_growth_prev_abs_h = now_abs
-	if step <= 0.0:
+	var tree := get_tree()
+	if tree == null:
 		return
-	if season > VegetationGrowth.DORMANCY_THRESHOLD:
-		_growth_clock_h += step * season
-		if bool(_main.get("analemma_mode")):
-			if calendar_doy != _growth_scale_apply_doy:
-				_growth_scale_apply_doy = calendar_doy
-				_manual_growth_map.reset_cursor()
-				_auto_growth_map.reset_cursor()
-			_apply_growth_scales_budgeted(GROWTH_SCALE_BUDGET_PER_FRAME)
-	var prev_doy := _growth_last_calendar_doy
-	_growth_last_calendar_doy = calendar_doy
-	if prev_doy < 0:
-		prev_doy = calendar_doy
-	if not VegetationGrowth.milestones_crossed(prev_doy, calendar_doy, _lat):
+	var env := tree.root.get_node_or_null("VegetationEnvironmentSync")
+	if env == null or not env.has_method("set_growth"):
 		return
-	if season <= VegetationGrowth.DORMANCY_THRESHOLD:
-		return
-	var allow_reseed := VegetationGrowth.reseed_allowed(calendar_doy, _lat)
-	_growth_tick(allow_reseed)
+	env.call("set_growth", now - VegGrowthModel.BASE_YEAR, frozen)
+	_growth_year_pushed = now
+	_growth_frozen_pushed = frozen
 
 
-func _growth_calendar_doy() -> int:
-	if _main != null:
-		var v: Variant = _main.get("day_of_year")
-		if v != null:
-			return int(v)
-	return 1
-
-
-func _growth_tick(allow_reseed: bool = true) -> void:
+## Upgrade painted records to calendar birth years right after the manual layer
+## loads (legacy files carry `birth_h` on a dead per-session clock, or nothing).
+## Not saved here — the next ordinary save persists it, so merely LOADING a map
+## never rewrites the player's vegetation file.
+func _growth_migrate_manual() -> void:
+	if _vegetation_layer == null:
+		return
 	var st := _growth_style()
-	var manual_zone := _manual_growth_zone_index()
-	var manual_pop := false
-	if allow_reseed and _vegetation_layer != null:
-		manual_pop = VegetationGrowth.advance_generations(_vegetation_layer.bulk,
-			_growth_clock_h, st, _growth_rng, _growth_caps_manual,
-			Callable(self, "_growth_add_manual"), manual_zone)
-	var auto_pop := false
-	if allow_reseed and _auto_veg_generated and _auto_veg_layer != null:
-		auto_pop = VegetationGrowth.advance_generations(_auto_veg_layer.bulk,
-			_growth_clock_h, st, _growth_rng, _growth_caps_auto,
-			Callable(self, "_growth_add_auto"), _auto_growth_zone_index)
-		if auto_pop:
-			_auto_veg_layer._recount_bulk()
-	# During analemma / ∞ playback a reseed milestone fires while the world is
-	# stepping a day per frame; a SYNCHRONOUS full MultiMesh rebuild (~50k auto
-	# instances) then hitches a single frame — the periodic spring/fall spikes.
-	# Use the frame-chunked async rebuild so the reseed spreads across frames.
-	var analemma := _main != null and bool(_main.get("analemma_mode"))
-	if manual_pop:
-		_rebuild_vegetation()
-	elif not _manual_growth_map.is_empty():
-		_manual_growth_map.reset_cursor()
-		_manual_growth_map.apply_scales(st, Callable(self, "_ground_height_at"), -1)
-	if auto_pop:
-		if analemma:
-			_rebuild_auto_vegetation_async()
-		else:
-			_rebuild_auto_vegetation()
-	elif _auto_veg_generated and not _auto_growth_map.is_empty():
-		_auto_growth_map.reset_cursor()
-		_auto_growth_map.apply_scales(st, Callable(self, "_ground_height_at"), -1)
-
-
-func _apply_growth_scales_budgeted(budget: int) -> void:
-	if budget <= 0 or not _growth_any_enabled():
-		return
-
-	var st := _growth_style()
-	var gy := Callable(self, "_ground_height_at")
-	var rem := budget
-	if _vegetation_layer != null and not _manual_growth_map.is_empty():
-		rem = _manual_growth_map.apply_scales(st, gy, rem)
-	if rem == 0:
-		return
-	if _auto_veg_generated and not _auto_growth_map.is_empty():
-		_auto_growth_map.apply_scales(st, gy, rem)
+	var n := VegetationGrowth.migrate_records(_vegetation_layer.bulk, st,
+		float(st[VegetationGrowth.KEY_NOW]))
+	if n > 0:
+		print("TerrainLoader: migrated %d painted plant(s) to calendar birth years" % n)
 
 
 # ==================== CLIMELAPSE BAKE / PLAYBACK ====================
@@ -6872,95 +7285,6 @@ func _save_tighten_visibility(node: Node, end_m: float) -> void:
 
 
 
-## add_cb for reseeding — appends one manual bulk record and returns it so the
-## growth pass can stamp its birth time (a fresh seedling: birth = now).
-func _growth_add_manual(species: String, x: float, z: float, yaw: float,
-		scale: float, card: Variant) -> Variant:
-	if _vegetation_layer == null:
-		return null
-	var card_dict: Dictionary = card if card is Dictionary else {}
-	if not _vegetation_layer.add_bulk(species, x, z, yaw, scale, card_dict):
-		return null
-	return (_vegetation_layer.bulk[species] as Array).back()
-
-
-func _growth_add_auto(slot: String, x: float, z: float, yaw: float,
-		scale: float, _card: Variant) -> Variant:
-	if _auto_veg_layer == null:
-		return null
-	if not _auto_veg_layer.add_bulk(slot, x, z, yaw, scale):
-		return null
-	return (_auto_veg_layer.bulk[slot] as Array).back()
-
-
-const _AUTO_GROWTH_ZONE_SKIP_KINDS: Array[String] = ["grass_lawn", "grass_field"]
-
-
-func _rebuild_auto_growth_zone_index() -> void:
-	_auto_growth_zone_index = null
-	if _auto_veg_data.is_empty():
-		return
-	# Same trim budget as scatter — never index every OSM wood on a dense site.
-	var trimmed: Array = AutoVegetationGenerator._trim_polygons(
-		_auto_veg_data.get("polygons", []), AutoVegetationGenerator.DENSE_POLY_BUDGET)
-	var polys: Array = []
-	for rec in trimmed:
-		if not (rec is Dictionary):
-			continue
-		var kind := str((rec as Dictionary).get("kind", ""))
-		if kind in _AUTO_GROWTH_ZONE_SKIP_KINDS:
-			continue
-		var pts: PackedVector2Array = (rec as Dictionary).get("points", PackedVector2Array())
-		if pts.size() >= 3:
-			polys.append(pts)
-	_auto_growth_zone_index = GrowthZoneIndex.from_polygons(polys)
-
-
-func _manual_growth_zone_index() -> GrowthZoneIndex:
-	if _vegetation_layer == null:
-		return null
-	return GrowthZoneIndex.from_polygons(_vegetation_layer.growth_zones)
-
-
-## Seed the growth RNG/clock + per-instance birth times right after the manual
-## layer loads, so the first render already shows an established age mix. reset=true
-## discards any birth_h persisted from a prior session (different clock epoch).
-func _growth_init_manual() -> void:
-	if _vegetation_layer == null:
-		return
-	_growth_rng.seed = int(_lat * 10000.0) ^ int(_lon * 10000.0) ^ 0x6b7f
-	_growth_prev_abs_h = _current_abs_h()
-	_growth_last_calendar_doy = _growth_calendar_doy()
-	VegetationGrowth.ensure_birth_times(_vegetation_layer.bulk, _growth_clock_h,
-		_growth_style(), _growth_rng, true)
-	_growth_caps_manual = VegetationGrowth.capture_caps(_vegetation_layer.bulk)
-
-
-func _growth_init_auto() -> void:
-	if _auto_veg_layer == null:
-		return
-	# Same gate as _growth_after_manual_edit: with growth disabled (survival
-	# toggle off) birth times must NOT be stamped — instance_scale_mult would
-	# still apply them while _advance_growth never runs, freezing every auto
-	# tree at a random seeded age instead of full mature size.
-	if not _growth_any_enabled():
-		return
-	VegetationGrowth.ensure_birth_times(_auto_veg_layer.bulk, _growth_clock_h,
-		_growth_style(), _growth_rng, true)
-	_growth_caps_auto = VegetationGrowth.capture_caps(_auto_veg_layer.bulk)
-
-
-## After a manual placement (paint scatter / single drop) give the new records an
-## established age mix (so a painted grove isn't a field of seedlings) and refresh
-## the population cap so reseeding holds the new density.
-func _growth_after_manual_edit() -> void:
-	if _vegetation_layer == null or not _growth_any_enabled():
-		return
-	VegetationGrowth.ensure_birth_times(_vegetation_layer.bulk, _growth_clock_h,
-		_growth_style(), _growth_rng, false)
-	_growth_caps_manual = VegetationGrowth.capture_caps(_vegetation_layer.bulk)
-
-
 ## Building / water / road polygons the generator must avoid scattering onto.
 func _auto_veg_exclusions() -> Array:
 	var building_m := float(_veg_style.get("building_exclusion_m", 0.0))
@@ -7071,8 +7395,7 @@ func _rebuild_auto_vegetation_chunks(poly: PackedVector2Array) -> bool:
 	if keys.is_empty():
 		return false
 	var n := AutoVegetationRuntime.rebuild_chunks(terrain, _auto_veg_layer,
-		Callable(self, "_ground_height_at"), _auto_veg_runtime_settings(), keys,
-		_auto_growth_map)
+		Callable(self, "_ground_height_at"), _auto_veg_runtime_settings(), keys)
 	print("TerrainLoader: incremental veg rebuild — %d chunk batches over %d chunks"
 		% [n, keys.size()])
 	return true
@@ -7150,7 +7473,7 @@ func _rebuild_auto_vegetation() -> void:
 	var settings := _auto_veg_runtime_settings()
 	var exclusions := _auto_veg_exclusions()
 	AutoVegetationRuntime.rebuild(terrain, _auto_veg_layer,
-		Callable(self, "_ground_height_at"), settings, exclusions, _auto_growth_map)
+		Callable(self, "_ground_height_at"), settings, exclusions)
 
 
 
@@ -7172,7 +7495,7 @@ func _rebuild_auto_vegetation_async() -> void:
 	var settings := _auto_veg_runtime_settings()
 	var exclusions := _auto_veg_exclusions()
 	await AutoVegetationRuntime.rebuild_async(terrain, _auto_veg_layer,
-		Callable(self, "_ground_height_at"), settings, exclusions, _auto_growth_map)
+		Callable(self, "_ground_height_at"), settings, exclusions)
 	_auto_rebuild_active = false
 
 	if _auto_rebuild_dirty:
@@ -7197,7 +7520,6 @@ func _full_regenerate_auto_vegetation_async() -> void:
 	_print_auto_veg_diag(state)
 	_apply_auto_veg_edits()
 	_rebuild_litter_mask()
-	_growth_init_auto()
 	await _rebuild_auto_vegetation_async()
 
 
@@ -7418,7 +7740,6 @@ func _full_regenerate_auto_vegetation() -> void:
 	_print_auto_veg_diag(state)
 	_apply_auto_veg_edits()
 	_rebuild_litter_mask()
-	_growth_init_auto()
 	_rebuild_auto_vegetation()
 
 
@@ -7532,12 +7853,13 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 	var brush_card: Dictionary = params.get("card_settings", {}) if params.get("card_settings") is Dictionary else {}
 	var forced_species := str(params.get("species", ""))
 	var use_forced := not forced_species.is_empty() and VegSpeciesCatalog.is_paintable(forced_species)
-	# Overhaul v2: painted plants appear MATURE, exactly as previewed (birth
-	# stamped one full growth span ago). "Plant young" opts into watching them
-	# grow from seedlings. Records carrying birth_h are never re-randomized by
-	# ensure_birth_times, so paint scale is deterministic — the random
-	# "near-mature age" jitter was a hidden source of inconsistent tree sizes.
+	# Painted plants appear MATURE, exactly as previewed: each is stamped with a
+	# birth year that puts it somewhere on its full-size plateau (seed-chosen,
+	# so one brush stroke dies decades-to-centuries apart). "Plant young" stamps
+	# the birth as NOW instead — a seedling that grows year on year.
 	var plant_young := bool(params.get("plant_young", false))
+	var growth_st := _growth_style()
+	var growth_now := float(growth_st[VegetationGrowth.KEY_NOW])
 	var added := 0
 	for spot in spots:
 		var species := forced_species if use_forced else VegetationPaint.pick_species(
@@ -7553,15 +7875,12 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 			else lerpf(scale_min, scale_max, rng.randf())
 		if _vegetation_layer.add_bulk(species, float(spot["x"]), float(spot["z"]), yaw, scale, brush_card):
 			added += 1
-			if _growth_any_enabled():
-				var rec: Dictionary = (_vegetation_layer.bulk[species] as Array).back()
-				rec["birth_h"] = _growth_clock_h if plant_young \
-					else _growth_clock_h - VegetationGrowth.growth_span_hours(species, _growth_style())
+			var rec: Dictionary = (_vegetation_layer.bulk[species] as Array).back()
+			if plant_young:
+				VegetationGrowth.stamp_young(rec, growth_now)
+			else:
+				VegetationGrowth.stamp_established(rec, species, growth_st, growth_now)
 	if added > 0:
-		if preset_enum != VegetationPaint.Preset.GRASS_LAWN \
-				and preset_enum != VegetationPaint.Preset.GRASS_FIELD:
-			_vegetation_layer.add_growth_zone(poly)
-		_growth_after_manual_edit()
 		_vegetation_layer.save(_lat, _lon)
 		_rebuild_vegetation()
 	return added
@@ -7590,12 +7909,13 @@ func place_single_vegetation(species: String, x: float, z: float, params: Dictio
 	# Overhaul v2: single drops match the preview too — mature by default.
 	# "Plant young" (dock toggle) plants a seedling to watch grow. The old
 	# always-seedling single click (a 0.14× sprout) read as "my tree shrank".
-	if _growth_any_enabled():
-		var plant_young := bool(params.get("plant_young", false))
-		(_vegetation_layer.bulk[species] as Array).back()["birth_h"] = \
-			_growth_clock_h if plant_young \
-			else _growth_clock_h - VegetationGrowth.growth_span_hours(species, _growth_style())
-		_growth_caps_manual = VegetationGrowth.capture_caps(_vegetation_layer.bulk)
+	var growth_st := _growth_style()
+	var placed: Dictionary = (_vegetation_layer.bulk[species] as Array).back()
+	if bool(params.get("plant_young", false)):
+		VegetationGrowth.stamp_young(placed, float(growth_st[VegetationGrowth.KEY_NOW]))
+	else:
+		VegetationGrowth.stamp_established(placed, species, growth_st,
+			float(growth_st[VegetationGrowth.KEY_NOW]))
 	_vegetation_layer.save(_lat, _lon)
 	_rebuild_vegetation()
 	return true

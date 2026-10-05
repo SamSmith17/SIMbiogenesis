@@ -126,6 +126,55 @@ class_name StarSystem
 		milkyway_tint = value
 		_push_params()
 
+# ==================== ZODIAC OVERLAY ====================
+
+@export_group("Zodiac")
+
+## Constellation overlay (assets/sky/zodiac_overlay_8k.png, built by
+## tools/zodiac_overlay_export.py from Stellarium data in the star map's own
+## registration). 0 = off, 1 = with the stars (night, or the analemma daylight
+## reveal), 2 = always.
+@export_range(0, 2, 1) var zodiac_mode : int = 0 :
+	set(value):
+		zodiac_mode = clampi(value, 0, 2)
+		_push_params()
+
+@export_range(0.0, 2.0, 0.05) var zodiac_opacity : float = 0.8 :
+	set(value):
+		zodiac_opacity = value
+		_push_params()
+
+@export var zodiac_show_lines : bool = true :
+	set(value):
+		zodiac_show_lines = value
+		_push_params()
+
+@export var zodiac_show_labels : bool = true :
+	set(value):
+		zodiac_show_labels = value
+		_push_params()
+
+## Ophiuchus: the ecliptic crosses it too (IAU boundaries), so astronomically
+## the sun passes through 13 constellations. Off by default — the classical 12.
+@export var zodiac_show_ophiuchus : bool = false :
+	set(value):
+		zodiac_show_ophiuchus = value
+		_push_params()
+
+## The J2000 ecliptic, computed in the shader (not baked into the overlay).
+@export var zodiac_show_ecliptic : bool = true :
+	set(value):
+		zodiac_show_ecliptic = value
+		_push_params()
+
+const ZODIAC_TEXTURE := "res://assets/sky/zodiac_overlay_8k.png"
+var _zodiac_texture : Texture2D = null
+
+## Analemma "stars through daylight" amount, read from Main every sky tick
+## (Main.analemma_star_reveal while analemma_mode is on, else 0). Transient —
+## persisted by Main with the other analemma settings, never here.
+var daylight_reveal : float = 0.0
+
 ## "standard" = the 8k map, "high" = the 16k map when it is shipped
 ## (assets/sky/starmap_equirect_16k.png, ~128 MiB of VRAM as BC7).
 var texture_quality : String = "standard"
@@ -254,6 +303,8 @@ func _get_sky_material() -> ShaderMaterial:
 
 func _push_texture() -> void:
 	var mat := _get_sky_material()
+	if mat and _zodiac_texture:
+		mat.set_shader_parameter("zodiac_texture", _zodiac_texture)
 	if mat and stars_texture:
 		mat.set_shader_parameter("stars_texture", stars_texture)
 		mat.set_shader_parameter("stars_texture_soft", stars_texture)
@@ -279,6 +330,15 @@ func _push_look(mat: ShaderMaterial) -> void:
 	mat.set_shader_parameter("milkyway_gain", milkyway_gain)
 	mat.set_shader_parameter("milkyway_saturation", milkyway_saturation)
 	mat.set_shader_parameter("milkyway_tint", milkyway_tint)
+	mat.set_shader_parameter("stars_daylight_reveal", daylight_reveal)
+	# Mode 0 without the texture too: a missing overlay must never draw black-on-nothing.
+	var zmode := zodiac_mode if _zodiac_texture != null else 0
+	mat.set_shader_parameter("zodiac_mode", float(zmode))
+	mat.set_shader_parameter("zodiac_opacity", zodiac_opacity)
+	mat.set_shader_parameter("zodiac_show_lines", 1.0 if zodiac_show_lines else 0.0)
+	mat.set_shader_parameter("zodiac_show_labels", 1.0 if zodiac_show_labels else 0.0)
+	mat.set_shader_parameter("zodiac_show_ophiuchus", 1.0 if zodiac_show_ophiuchus else 0.0)
+	mat.set_shader_parameter("zodiac_show_ecliptic", 1.0 if zodiac_show_ecliptic else 0.0)
 	# Neighbour taps in the shader are in TEXELS, so an 8k and a 16k map look alike.
 	if stars_texture != null:
 		var sz := stars_texture.get_size()
@@ -302,6 +362,11 @@ func update_stars() -> void:
 	if stars_texture:
 		mat.set_shader_parameter("stars_texture", stars_texture)
 		mat.set_shader_parameter("stars_texture_soft", stars_texture)
+	if _zodiac_texture:
+		mat.set_shader_parameter("zodiac_texture", _zodiac_texture)
+	daylight_reveal = 0.0
+	if bool(main_scene.get("analemma_mode")):
+		daylight_reveal = clampf(float(main_scene.get("analemma_star_reveal")), 0.0, 1.0)
 
 	var jd_utc : float = main_scene.get_julian_day_utc()
 	var lst : float = StarSkyMath.wrap360(main_scene.get_local_sidereal_time(jd_utc))
@@ -459,6 +524,12 @@ func _load_calibration() -> void:
 		var mwt: Variant = config.get_value("stars", "milkyway_tint", milkyway_tint)
 		if mwt is Color:
 			milkyway_tint = mwt
+		zodiac_mode = int(config.get_value("stars", "zodiac_mode", zodiac_mode))
+		zodiac_opacity = float(config.get_value("stars", "zodiac_opacity", zodiac_opacity))
+		zodiac_show_lines = bool(config.get_value("stars", "zodiac_lines", zodiac_show_lines))
+		zodiac_show_labels = bool(config.get_value("stars", "zodiac_labels", zodiac_show_labels))
+		zodiac_show_ophiuchus = bool(config.get_value("stars", "zodiac_ophiuchus", zodiac_show_ophiuchus))
+		zodiac_show_ecliptic = bool(config.get_value("stars", "zodiac_ecliptic", zodiac_show_ecliptic))
 		var tq := str(config.get_value("stars", "texture_quality", texture_quality))
 		texture_quality = tq if tq in TEXTURE_QUALITIES else "standard"
 		var tex_path := str(config.get_value("stars", "texture_path", ""))
@@ -466,6 +537,9 @@ func _load_calibration() -> void:
 			loaded_texture = _load_texture_from_file(tex_path)
 	if not loaded_texture:
 		_load_default_texture()
+	if ResourceLoader.exists(ZODIAC_TEXTURE):
+		_zodiac_texture = load(ZODIAC_TEXTURE) as Texture2D
+	_push_texture()
 	_push_params()
 
 func _load_default_texture() -> void:
@@ -521,6 +595,12 @@ func save_calibration() -> void:
 	config.set_value("stars", "milkyway_saturation", milkyway_saturation)
 	config.set_value("stars", "milkyway_tint", milkyway_tint)
 	config.set_value("stars", "texture_quality", texture_quality)
+	config.set_value("stars", "zodiac_mode", zodiac_mode)
+	config.set_value("stars", "zodiac_opacity", zodiac_opacity)
+	config.set_value("stars", "zodiac_lines", zodiac_show_lines)
+	config.set_value("stars", "zodiac_labels", zodiac_show_labels)
+	config.set_value("stars", "zodiac_ophiuchus", zodiac_show_ophiuchus)
+	config.set_value("stars", "zodiac_ecliptic", zodiac_show_ecliptic)
 	var tex_path := _stored_texture_path()
 	if not tex_path.is_empty():
 		config.set_value("stars", "texture_path", tex_path)
@@ -544,6 +624,13 @@ func get_settings() -> Dictionary:
 		"milkyway_saturation": milkyway_saturation,
 		"milkyway_tint": milkyway_tint,
 		"texture_quality": texture_quality,
+		"zodiac_mode": zodiac_mode,
+		"zodiac_opacity": zodiac_opacity,
+		"zodiac_show_lines": zodiac_show_lines,
+		"zodiac_show_labels": zodiac_show_labels,
+		"zodiac_show_ophiuchus": zodiac_show_ophiuchus,
+		"zodiac_show_ecliptic": zodiac_show_ecliptic,
+		"zodiac_available": _zodiac_texture != null,
 		"texture_quality_high_available": has_high_quality_texture(),
 		"texture_path": _stored_texture_path(),
 		"registration_summary": StarSkyMath.registration_summary(registration),
@@ -582,6 +669,13 @@ func apply_settings(settings: Dictionary) -> void:
 		milkyway_tint = settings["milkyway_tint"]
 	if settings.has("texture_quality"):
 		set_texture_quality(str(settings["texture_quality"]))
+	if settings.has("zodiac_mode"):
+		zodiac_mode = int(settings["zodiac_mode"])
+	if settings.has("zodiac_opacity"):
+		zodiac_opacity = float(settings["zodiac_opacity"])
+	for key in ["zodiac_show_lines", "zodiac_show_labels", "zodiac_show_ophiuchus", "zodiac_show_ecliptic"]:
+		if settings.has(key):
+			set(key, bool(settings[key]))
 
 # ==================== TEXTURE SWAP ====================
 

@@ -1,12 +1,15 @@
 extends SceneTree
 
-## Headless self-test for VegetationGrowth (age→scale curve, birth-time seeding,
-## and the death+reseed generational turnover). Pure / offline.
-## Run with:
+## Headless self-test for the plant growth model: VegGrowthModel (the pure
+## calendar → size function) and VegetationGrowth (its record/settings facade).
+## Pure / offline. Run --import first so VegGrowthModel registers.
 ##   godot --headless --path . --script vegetation/vegetation_growth_selftest.gd
 ## Exits 0 when all assertions pass, 1 otherwise.
 
 const HPY := VegetationGrowth.HOURS_PER_YEAR
+## A Godot runtime error aborts the enclosing test function while the suite
+## still prints PASS, so the check COUNT is pinned too.
+const EXPECTED_CHECKS := 109
 
 var _failures: int = 0
 var _checks: int = 0
@@ -14,19 +17,24 @@ var _checks: int = 0
 
 func _initialize() -> void:
 	_test_scale_curve()
-	_test_instance_scale()
 	_test_lifecycle_senescence()
-	_test_lettuce_90_days()
-	_test_birth_times()
-	_test_reseed_population()
-	_test_reseed_radius()
-	_test_reseed_zone()
-	_test_seasonal_growth()
-	_test_instance_map()
-	_test_forest_age_profiles()
-	_test_disabled_species()
+	_test_height_curve()
+	_test_identity()
+	_test_life_cycle()
+	_test_growth_year()
+	_test_seed()
+	_test_painted_grove_never_shrinks_together()
+	_test_plant_young()
+	_test_migration()
+	_test_forest_profiles()
+	_test_instance_custom()
+	_test_shader_mirror_constants()
 	_test_settings_with_variant_non_clobber()
 	_test_size_var_scales()
+	if _checks != EXPECTED_CHECKS:
+		_failures += 1
+		print("  FAIL: ran %d checks, expected %d (a test function aborted?)"
+			% [_checks, EXPECTED_CHECKS])
 	if _failures == 0:
 		print("VEG GROWTH SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -46,6 +54,12 @@ func _approx(a: float, b: float, eps: float) -> bool:
 	return absf(a - b) <= eps
 
 
+func _st(t: float, born: float, maturity: float, life: float, seed: float) -> Dictionary:
+	return VegGrowthModel.state(t, born, maturity, life, seed)
+
+
+# ---- grow-bed crop curve (unchanged; GrowBed reads these directly) ---------
+
 func _test_scale_curve() -> void:
 	var gy := 20.0
 	_check("seedling scale at age 0",
@@ -56,7 +70,6 @@ func _test_scale_curve() -> void:
 		"got %f" % VegetationGrowth.scale_for_age(gy, gy))
 	_check("full scale past maturity (clamped)",
 		_approx(VegetationGrowth.scale_for_age(gy * 3.0, gy), 1.0, 1e-6))
-	# Monotonic increasing over the life.
 	var mono := true
 	var prev := -1.0
 	for i in 21:
@@ -67,352 +80,6 @@ func _test_scale_curve() -> void:
 	_check("scale monotonic non-decreasing", mono)
 	_check("gy<=0 disables growth (scale 1)",
 		_approx(VegetationGrowth.scale_for_age(5.0, 0.0), 1.0, 1e-6))
-
-
-func _test_instance_scale() -> void:
-	var settings := {"pine_growth_years": 10.0, "growth_now_h": 10.0 * HPY}
-	# Born at t=0, clock at 10 years → mature → full size.
-	var mature := {"birth_h": 0.0}
-	_check("instance mature full",
-		_approx(VegetationGrowth.instance_scale_mult("pine", mature, settings), 1.0, 1e-6))
-	# Born now → seedling.
-	var seedling := {"birth_h": 10.0 * HPY}
-	_check("instance seedling small",
-		_approx(VegetationGrowth.instance_scale_mult("pine", seedling, settings),
-			VegetationGrowth.SEEDLING_SCALE, 1e-6))
-	# No birth stamp → renders full (never popped to seedling).
-	_check("instance no birth → full",
-		_approx(VegetationGrowth.instance_scale_mult("pine", {}, settings), 1.0, 1e-6))
-
-
-func _test_birth_times() -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 12345
-	var gy := 30.0
-	var settings := {"pine_growth_years": gy}
-	var bulk := {"pine": []}
-	for i in 400:
-		(bulk["pine"] as Array).append({"x": float(i), "z": 0.0, "scale": 1.0})
-	VegetationGrowth.ensure_birth_times(bulk, 0.0, settings, rng, true)
-	# Every record gets a birth_h, and every derived age sits within [0, gy].
-	var all_have := true
-	var all_in_range := true
-	var sum_frac := 0.0
-	for d in bulk["pine"]:
-		if not d.has("birth_h"):
-			all_have = false
-			continue
-		var age := (0.0 - float(d["birth_h"])) / HPY
-		if age < -1e-3 or age > gy + 1e-3:
-			all_in_range = false
-		sum_frac += clampf(age / gy, 0.0, 1.0)
-	_check("all records seeded birth_h", all_have)
-	_check("ages within [0, gy]", all_in_range)
-	# Distribution skews mature: mean age fraction should be well above 0.5.
-	var mean_frac := sum_frac / 400.0
-	_check("age distribution skews mature", mean_frac > 0.55,
-		"mean age frac %f" % mean_frac)
-
-
-func _test_reseed_population() -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 999
-	var gy := 5.0
-	var settings := {"deciduous_growth_years": gy}
-	var bulk := {"deciduous": []}
-	var start_n := 300
-	for i in start_n:
-		# Spread birth times so a subset matures each tick.
-		(bulk["deciduous"] as Array).append({
-			"x": float(i % 20), "z": float(i / 20), "scale": 1.0,
-			"birth_h": -rng.randf() * gy * HPY})
-	var caps := VegetationGrowth.capture_caps(bulk)
-	_check("cap captured", int(caps["deciduous"]) == start_n)
-	# Advance the clock in yearly steps for a few generations; population must stay
-	# bounded at the cap and never collapse to zero.
-	var now := 0.0
-	var min_seen := start_n
-	var max_seen := start_n
-	for step in 60:
-		now += gy * 0.5 * HPY
-		var add := func(slot: String, x: float, z: float, yaw: float, sc: float, card: Variant) -> Variant:
-			var rec := {"x": x, "z": z, "yaw": yaw, "scale": sc}
-			(bulk[slot] as Array).append(rec)
-			return rec
-		VegetationGrowth.advance_generations(bulk, now, settings, rng, caps, add)
-		var n: int = (bulk["deciduous"] as Array).size()
-		min_seen = mini(min_seen, n)
-		max_seen = maxi(max_seen, n)
-	_check("population never exceeds cap", max_seen <= start_n,
-		"max %d cap %d" % [max_seen, start_n])
-	_check("population does not collapse", min_seen > start_n / 2,
-		"min %d" % min_seen)
-	# After turnover all survivors carry a birth_h (seedlings stamped by add_cb path).
-	var all_stamped := true
-	for d in bulk["deciduous"]:
-		if not d.has("birth_h"):
-			all_stamped = false
-	_check("post-turnover all stamped", all_stamped)
-
-
-func _test_reseed_radius() -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 7
-	var gy := 2.0
-	var settings := {"pine_growth_years": gy}
-	# One matured parent at a known spot; its seedlings must land within 1 m.
-	var bulk := {"pine": [{"x": 100.0, "z": 50.0, "scale": 1.0, "birth_h": -gy * HPY * 2.0}]}
-	var caps := {"pine": 8}
-	var seedling_positions: Array = []
-	var add := func(slot: String, x: float, z: float, yaw: float, sc: float, card: Variant) -> Variant:
-		var rec := {"x": x, "z": z, "yaw": yaw, "scale": sc}
-		(bulk[slot] as Array).append(rec)
-		seedling_positions.append(Vector2(x, z))
-		return rec
-	var changed := VegetationGrowth.advance_generations(bulk, 0.0, settings, rng, caps, add)
-	_check("mature parent triggered turnover", changed)
-	_check("at least one seedling", seedling_positions.size() >= 1)
-	var all_near := true
-	for p in seedling_positions:
-		if Vector2(p.x - 100.0, p.y - 50.0).length() > VegetationGrowth.SEED_RADIUS_M + 1e-4:
-			all_near = false
-	_check("seedlings within SEED_RADIUS_M", all_near)
-
-
-func _test_reseed_zone() -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 42
-	var gy := 2.0
-	var settings := {"pine_growth_years": gy}
-	var zone_poly := VegetationPaint.rect_to_polygon(Vector2(98.0, 48.0), Vector2(102.0, 52.0))
-	var zone := GrowthZoneIndex.from_polygons([zone_poly])
-	var bulk := {"pine": [{"x": 100.0, "z": 50.0, "scale": 1.0, "birth_h": -gy * HPY * 2.0}]}
-	var caps := {"pine": 8}
-	var seedling_positions: Array = []
-	var add := func(slot: String, x: float, z: float, yaw: float, sc: float, card: Variant) -> Variant:
-		var rec := {"x": x, "z": z, "yaw": yaw, "scale": sc}
-		(bulk[slot] as Array).append(rec)
-		seedling_positions.append(Vector2(x, z))
-		return rec
-	VegetationGrowth.advance_generations(bulk, 0.0, settings, rng, caps, add, zone)
-	var in_zone := true
-	for p in seedling_positions:
-		if not zone.contains(p.x, p.y):
-			in_zone = false
-	_check("zone-bound seedlings inside polygon", in_zone or seedling_positions.is_empty())
-	# Parent outside a distant zone → no reseeds escape into that zone from far away.
-	seedling_positions.clear()
-	bulk = {"pine": [{"x": 100.0, "z": 50.0, "scale": 1.0, "birth_h": -gy * HPY * 2.0}]}
-	var far_zone := GrowthZoneIndex.from_polygons([
-		VegetationPaint.rect_to_polygon(Vector2(0.0, 0.0), Vector2(2.0, 2.0))])
-	VegetationGrowth.advance_generations(bulk, 0.0, settings, rng, caps, add, far_zone)
-	_check("seedlings rejected outside distant zone", seedling_positions.is_empty())
-
-
-func _doy(month: int, day: int) -> int:
-	var c := CelestialClock.new()
-	c.month = month
-	c.day = day
-	return c.day_of_year
-
-
-func _test_seasonal_growth() -> void:
-	var jan15 := _doy(1, 15)
-	var jul15 := _doy(7, 15)
-	var apr1 := _doy(4, 1)
-	_check("winter structural factor low",
-		VegetationGrowth.structural_growth_factor(jan15, 40.0) < VegetationGrowth.DORMANCY_THRESHOLD)
-	_check("summer structural factor high",
-		VegetationGrowth.structural_growth_factor(jul15, 40.0) > 0.8)
-	_check("winter reseed blocked", not VegetationGrowth.reseed_allowed(jan15, 40.0))
-	_check("summer reseed allowed", VegetationGrowth.reseed_allowed(jul15, 40.0))
-	_check("milestone crossed spring (Mar→Apr)",
-		VegetationGrowth.milestones_crossed(_doy(3, 20), apr1, 40.0))
-	_check("no milestone within same week",
-		not VegetationGrowth.milestones_crossed(jul15, _doy(7, 20), 40.0))
-	# Southern hemisphere: January local summer → high factor at lat -40.
-	_check("southern hemisphere summer factor high",
-		VegetationGrowth.structural_growth_factor(jan15, -40.0) > 0.8)
-	_check("generations skip when reseed disallowed", not VegetationGrowth.advance_generations(
-		{"pine": [{"x": 0.0, "z": 0.0, "scale": 1.0, "birth_h": -200.0 * HPY}]},
-		0.0, {"pine_growth_years": 5.0}, RandomNumberGenerator.new(), {"pine": 4},
-		func(_s, _x, _z, _y, _sc, _c): return null, null, false))
-
-
-func _test_instance_map() -> void:
-	var map := VegetationInstanceMap.new()
-	var gy := func(x: float, _z: float) -> float: return x * 0.0
-	_check("empty map preserves budget", map.apply_scales({}, gy, 100) == 100)
-	map.clear()
-	_check("cleared map empty", map.is_empty())
-	_test_instance_map_dedupe()
-
-
-## Phase 9: ONE entry per plant, N slots. A NEAR-ring tree lives in two
-## MultiMeshes, so the map used to hold two entries for it and a growth pass
-## re-ran the terrain query and the growth curve once per SLOT.
-func _test_instance_map_dedupe() -> void:
-	var map := VegetationInstanceMap.new()
-	var near_mmi := _stub_mmi(3)
-	var far_mmi := _stub_mmi(3)
-	var records: Array = []
-	for i in 3:
-		records.append({"x": float(i) * 10.0, "z": 0.0, "scale": 1.0, "birth_h": 0.0})
-	# Register the same three plants twice — once per LOD tier, exactly as
-	# _build_canopy_lod_bulk_batches does.
-	for tier_mmi in [near_mmi, far_mmi]:
-		for i in records.size():
-			var d: Dictionary = records[i]
-			map.add(tier_mmi, i, d, "pine", 1.0, 0.0, 0.0, false,
-				float(d["x"]), float(d["z"]), 0.0, 0.0)
-	_check("one entry per plant, not per slot", map.entry_count() == 3,
-		"got %d" % map.entry_count())
-	_check("both tiers registered as slots", map.slot_count() == 6,
-		"got %d" % map.slot_count())
-
-	# The ground query now runs once per PLANT. Counting the calls is the whole
-	# point of the change, so count them.
-	var calls := {"n": 0}
-	var counting_gy := func(_x: float, _z: float) -> float:
-		calls.n += 1
-		return 0.0
-	var st := {"pine_growth_years": 10.0, "growth_now_h": 5.0 * HPY}
-	map.apply_scales(st, counting_gy, -1)
-	_check("one ground query per plant", int(calls.n) == 3, "got %d" % int(calls.n))
-
-	# NOTE: the transform WRITE itself cannot be observed here — under the
-	# headless dummy renderer MultiMesh.set_instance_transform does not
-	# round-trip through get_instance_transform (the buffer lives in the
-	# RenderingServer, which is a stub). What is checkable offline is the value
-	# the map derives per entry; the visual result is covered by --capture=veg.
-	var expect := VegetationGrowth.instance_scale_mult("pine", records[1], st)
-	_check("entry scale matches the growth curve",
-		is_equal_approx(map.scale_mult_at(1, st), expect),
-		"%.4f vs %.4f" % [map.scale_mult_at(1, st), expect])
-	_check("growth actually moved the scale", expect < 0.99 and expect > 0.1,
-		"%.4f" % expect)
-
-	# Budget counts plants, so a budget of 2 leaves exactly one plant pending.
-	map.reset_cursor()
-	calls.n = 0
-	var rem := map.apply_scales(st, counting_gy, 2)
-	_check("budget counts plants", rem == 0 and int(calls.n) == 2,
-		"rem=%d calls=%d" % [rem, int(calls.n)])
-
-	# Scale-only (impostor) slots never re-sample terrain.
-	var imp := VegetationInstanceMap.new()
-	var imp_mmi := _stub_mmi(2)
-	for i in 2:
-		var d := {"x": float(i), "z": 0.0, "scale": 1.0, "birth_h": 0.0}
-		imp.add(imp_mmi, i, d, "pine", 1.0, 0.0, 0.0, false, float(i), 0.0, 0.0, 0.0, false)
-	calls.n = 0
-	imp.apply_scales(st, counting_gy, -1)
-	_check("impostor slots are scale-only", int(calls.n) == 0, "got %d" % int(calls.n))
-
-	# A freed tier drops its slot without losing the plant (rebuilds free MMIs
-	# while the growth map outlives them).
-	far_mmi.free()
-	map.reset_cursor()
-	map.apply_scales(st, gy_zero(), -1)
-	_check("freed tier drops only its slot",
-		map.entry_count() == 3 and map.slot_count() == 3,
-		"entries=%d slots=%d" % [map.entry_count(), map.slot_count()])
-	near_mmi.free()
-
-
-func gy_zero() -> Callable:
-	return func(_x: float, _z: float) -> float: return 0.0
-
-
-func _stub_mmi(count: int) -> MultiMeshInstance3D:
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = BoxMesh.new()
-	mm.instance_count = count
-	var mi := MultiMeshInstance3D.new()
-	mi.multimesh = mm
-	return mi
-
-
-## Phase 9: the forest-age profile decides where in the growth span a freshly
-## seeded stand starts. MATURE must stay the default and keep the old behaviour.
-func _test_forest_age_profiles() -> void:
-	_check("default profile is mature",
-		VegetationGrowth.forest_age_profile({}) == VegetationGrowth.FOREST_AGE_MATURE)
-	_check("unknown profile falls back to mature",
-		VegetationGrowth.forest_age_profile({"forest_age": "nonsense"})
-			== VegetationGrowth.FOREST_AGE_MATURE)
-	_check("profile is case-insensitive",
-		VegetationGrowth.forest_age_profile({"forest_age": "YOUNG"})
-			== VegetationGrowth.FOREST_AGE_YOUNG)
-
-	# Every profile stays inside the span, and the endpoints are shared.
-	for profile in [VegetationGrowth.FOREST_AGE_MATURE, VegetationGrowth.FOREST_AGE_MIXED,
-			VegetationGrowth.FOREST_AGE_YOUNG]:
-		for r in [0.0, 0.25, 0.5, 0.75, 1.0]:
-			var f := VegetationGrowth.age_fraction(profile, r)
-			_check("%s age fraction in range at r=%.2f" % [profile, r],
-				f >= 0.0 and f <= 1.0, "%.4f" % f)
-
-	# Mean age ordering is the whole feature: young < mixed < mature.
-	var means := {}
-	for profile in [VegetationGrowth.FOREST_AGE_MATURE, VegetationGrowth.FOREST_AGE_MIXED,
-			VegetationGrowth.FOREST_AGE_YOUNG]:
-		var total := 0.0
-		var n := 400
-		for i in n:
-			total += VegetationGrowth.age_fraction(profile, float(i) / float(n - 1))
-		means[profile] = total / float(n)
-	_check("young stand is younger than mixed",
-		float(means[VegetationGrowth.FOREST_AGE_YOUNG])
-			< float(means[VegetationGrowth.FOREST_AGE_MIXED]),
-		str(means))
-	_check("mixed is younger than mature",
-		float(means[VegetationGrowth.FOREST_AGE_MIXED])
-			< float(means[VegetationGrowth.FOREST_AGE_MATURE]),
-		str(means))
-	_check("mixed averages mid-span",
-		absf(float(means[VegetationGrowth.FOREST_AGE_MIXED]) - 0.5) < 0.01,
-		str(means[VegetationGrowth.FOREST_AGE_MIXED]))
-
-	# ensure_birth_times honours it: a young stand is visibly smaller.
-	var st := {"pine_growth_years": 20.0, "growth_now_h": 0.0}
-	var sizes := {}
-	for profile in [VegetationGrowth.FOREST_AGE_MATURE, VegetationGrowth.FOREST_AGE_YOUNG]:
-		var rng := RandomNumberGenerator.new()
-		rng.seed = 4242
-		var bulk := {"pine": []}
-		for i in 200:
-			(bulk["pine"] as Array).append({"x": float(i), "z": 0.0, "scale": 1.0})
-		var s2 := st.duplicate()
-		s2["forest_age"] = profile
-		VegetationGrowth.ensure_birth_times(bulk, 0.0, s2, rng, true)
-		var total := 0.0
-		for item in bulk["pine"]:
-			total += VegetationGrowth.instance_scale_mult("pine", item, s2)
-		sizes[profile] = total / 200.0
-	_check("young stand renders smaller than a mature one",
-		float(sizes[VegetationGrowth.FOREST_AGE_YOUNG])
-			< float(sizes[VegetationGrowth.FOREST_AGE_MATURE]) - 0.05,
-		str(sizes))
-	# The default path must be byte-identical to "mature" — an untouched map
-	# keeps exactly the forest it had before this key existed.
-	var rng_a := RandomNumberGenerator.new()
-	rng_a.seed = 77
-	var bulk_a := {"pine": [{"x": 0.0, "z": 0.0, "scale": 1.0}]}
-	VegetationGrowth.ensure_birth_times(bulk_a, 100.0, st, rng_a, true)
-	var rng_b := RandomNumberGenerator.new()
-	rng_b.seed = 77
-	var bulk_b := {"pine": [{"x": 0.0, "z": 0.0, "scale": 1.0}]}
-	var st_mature := st.duplicate()
-	st_mature["forest_age"] = VegetationGrowth.FOREST_AGE_MATURE
-	VegetationGrowth.ensure_birth_times(bulk_b, 100.0, st_mature, rng_b, true)
-	_check("default == mature",
-		is_equal_approx(float((bulk_a["pine"][0] as Dictionary)["birth_h"]),
-			float((bulk_b["pine"][0] as Dictionary)["birth_h"])))
-	_check("forest_age is a style default",
-		str(VegetationStyleConfig.defaults().get("forest_age", ""))
-			== VegetationGrowth.FOREST_AGE_MATURE)
 
 
 func _test_lifecycle_senescence() -> void:
@@ -433,50 +100,447 @@ func _test_lifecycle_senescence() -> void:
 		VegetationGrowth.growth_stage(grow_h + sen_h * 0.5, grow_h, sen_h) == "senescent")
 
 
-func _test_lettuce_90_days() -> void:
-	var settings := {
-		"lettuce_growth_days": 90.0,
-		"lettuce_senescence_days": 15.0,
-		"growth_now_h": 90.0 * 24.0,
+# ---- the model --------------------------------------------------------------
+
+func _test_height_curve() -> void:
+	_check("seedling height at age 0",
+		_approx(VegGrowthModel.height_curve(0.0), VegGrowthModel.SEED_HEIGHT, 1e-9))
+	_check("height is EXACTLY 1 at maturity",
+		VegGrowthModel.height_curve(1.0) == 1.0)
+	_check("height approaches 1 continuously",
+		VegGrowthModel.height_curve(0.9999) > 0.999)
+	_check("height holds past maturity", VegGrowthModel.height_curve(7.0) == 1.0)
+	var mono := true
+	var prev := -1.0
+	for i in 201:
+		var h := VegGrowthModel.height_curve(float(i) / 200.0)
+		if h <= prev:
+			mono = false
+		prev = h
+	_check("height strictly increasing to maturity", mono)
+	# Sigmoid, not a ramp: slow establishment, then the pole stage.
+	_check("slow establishment (10% of the span is < 20% of the height)",
+		VegGrowthModel.height_curve(0.1) < 0.2,
+		"got %f" % VegGrowthModel.height_curve(0.1))
+	_check("half the span is well over half the height",
+		VegGrowthModel.height_curve(0.5) > 0.6)
+	# Allometry: a young tree is a slender whip with a thin stem.
+	var young := _st(5.0, 0.0, 20.0, 200.0, 0.5)
+	_check("young crown lags height", float(young["crown"]) < float(young["height"]))
+	_check("young girth lags crown", float(young["girth"]) < float(young["crown"]))
+	var ripe := _st(20.0, 0.0, 20.0, 200.0, 0.5)
+	_check("height, crown and girth are all 1 at maturity",
+		float(ripe["height"]) == 1.0 and float(ripe["crown"]) == 1.0
+		and _approx(float(ripe["girth"]), 1.0, 1e-9))
+
+
+func _test_identity() -> void:
+	var s := _st(2026.0, 1990.0, 0.0, 250.0, 0.3)
+	_check("maturity 0 is the identity",
+		float(s["height"]) == 1.0 and float(s["crown"]) == 1.0
+		and float(s["girth"]) == 1.0 and float(s["leaf"]) == 1.0
+		and float(s["present"]) == 1.0)
+	var rec := {"x": 1.0, "z": 2.0, "born_y": 2026.0}
+	_check("no growth_year in settings -> full size",
+		VegetationGrowth.instance_scale_mult("pine", rec, {"pine_growth_years": 30.0}) == 1.0)
+	_check("frozen -> full size",
+		VegetationGrowth.instance_scale_mult("pine", rec,
+			{"pine_growth_years": 30.0, "growth_year": 2026.0, "growth_frozen": true}) == 1.0)
+	_check("species with growth off -> full size",
+		VegetationGrowth.instance_scale_mult("grass_lawn", rec,
+			{"grass_lawn_growth_years": 0.0, "growth_year": 2026.0}) == 1.0)
+	_check("unfrozen seedling really is small (the three above are not vacuous)",
+		VegetationGrowth.instance_scale_mult("pine", rec,
+			{"pine_growth_years": 30.0, "growth_year": 2026.0}) < 0.05)
+
+
+func _test_life_cycle() -> void:
+	# maturity 20, lifespan 200, seed 0.5 -> gap 3, head start 3 y, decline
+	# from 192; later generations repeat every 3 + 200 − 3 = 200 years.
+	var m := 20.0
+	var life := 200.0
+	var sd := 0.5
+	_check("gap from seed", _approx(VegGrowthModel.gap_years(sd), 3.0, 1e-9))
+	_check("later generations repeat on gap + life − head start",
+		_approx(VegGrowthModel.cycle_years(m, life, sd), 200.0, 1e-9))
+	var plateau := _st(100.0, 0.0, m, life, sd)
+	_check("plateau: full size, full leaf",
+		float(plateau["height"]) == 1.0 and float(plateau["leaf"]) == 1.0)
+	_check("plateau: the trunk keeps thickening",
+		float(plateau["girth"]) > 1.0 and float(plateau["girth"]) < VegGrowthModel.OLD_GIRTH)
+	var thinning := _st(194.0, 0.0, m, life, sd)
+	_check("decline: foliage thinning, still standing",
+		float(thinning["leaf"]) > 0.0 and float(thinning["leaf"]) < 1.0
+		and float(thinning["height"]) == 1.0)
+	var snag := _st(197.5, 0.0, m, life, sd)
+	_check("decline: bare snag at full height",
+		float(snag["leaf"]) == 0.0 and float(snag["height"]) == 1.0)
+	var falling := _st(199.9, 0.0, m, life, sd)
+	_check("decline: the snag comes down", float(falling["height"]) < 0.2)
+	var gone := _st(200.0, 0.0, m, life, sd)
+	_check("the instant between generations: nothing stands",
+		float(gone["present"]) == 0.0 and float(gone["height"]) == 0.0)
+	# Advance regeneration: the replacement is a released sapling rising out of
+	# the gap, not bare ground followed by a seedling.
+	var rising := _st(201.0, 0.0, m, life, sd)
+	var released := VegGrowthModel.height_curve(VegGrowthModel.REGEN_HEAD_START)
+	_check("regrowth: a sapling is already rising one year into the gap",
+		int(rising["generation"]) == 1 and float(rising["present"]) == 1.0
+		and float(rising["height"]) > 0.0 and float(rising["height"]) < released)
+	var out := _st(203.0, 0.0, m, life, sd)
+	_check("regrowth: released at sapling size, not from a seedling",
+		_approx(float(out["height"]), released, 1e-6)
+		and released > VegGrowthModel.SEED_HEIGHT * 2.0)
+	var next := _st(206.0, 0.0, m, life, sd)
+	_check("regrowth: then it grows on from its head-start age",
+		int(next["generation"]) == 1 and _approx(float(next["age"]), 3.0 + 3.0, 1e-6)
+		and float(next["height"]) > released)
+	var third := _st(200.0 + 200.0 + 50.0, 0.0, m, life, sd)
+	_check("the cycle repeats: generation 2 is full size 50 years in",
+		int(third["generation"]) == 2 and float(third["height"]) == 1.0)
+	var before := _st(-10.0, 0.0, m, life, sd)
+	_check("before it was planted it is a seedling, not a previous generation",
+		int(before["generation"]) == 0
+		and _approx(float(before["height"]), VegGrowthModel.SEED_HEIGHT, 1e-9))
+	# Continuity: no pop anywhere in two full cycles — the snag comes down to
+	# nothing and the next sapling rises from nothing.
+	var worst := 0.0
+	var prev_h := float(_st(0.0, 0.0, m, life, sd)["height"])
+	var t := 0.0
+	while t < 420.0:
+		t += 0.01
+		var h := float(_st(t, 0.0, m, life, sd)["height"])
+		worst = maxf(worst, absf(h - prev_h))
+		prev_h = h
+	_check("height is continuous through decline, gap and regrowth",
+		worst <= 0.02, "worst step %f" % worst)
+	# Pure function: the answer at a date does not depend on what was asked before.
+	var a := _st(77.7, 0.0, m, life, sd)
+	_st(300.0, 0.0, m, life, sd)
+	_st(5.0, 0.0, m, life, sd)
+	_check("rewind returns the identical state", a == _st(77.7, 0.0, m, life, sd))
+	# The bug this model replaces: lifespan == maturity killed every tree the
+	# moment it reached full size.
+	_check("a lifespan inside the maturity age is pushed out past it",
+		VegGrowthModel.effective_lifespan(20.0, 10.0) == 25.0)
+	var guarded := _st(20.0, 0.0, 20.0, 20.0, sd)
+	_check("a tree AT maturity is alive and full size even with lifespan == maturity",
+		float(guarded["height"]) == 1.0 and float(guarded["leaf"]) == 1.0
+		and float(guarded["present"]) == 1.0)
+	var hold := _st(5000.0, 0.0, 5.0, 0.0, sd)
+	_check("lifespan 0 grows and holds forever",
+		float(hold["height"]) == 1.0 and int(hold["generation"]) == 0
+		and float(hold["present"]) == 1.0)
+
+
+func _test_growth_year() -> void:
+	var lat := 45.0
+	_check("Jan 1 is the whole year",
+		_approx(VegGrowthModel.growth_year(2026, 1.0, lat), 2026.0, 1e-6))
+	_check("winter stands still",
+		_approx(VegGrowthModel.growth_year(2026, 30.0, lat),
+			VegGrowthModel.growth_year(2026, 70.0, lat), 1e-6))
+	_check("the spring flush lays down most of the year by midsummer",
+		VegGrowthModel.growth_year(2026, 172.0, lat) - 2026.0 > 0.6)
+	_check("the year is complete after the flush",
+		_approx(VegGrowthModel.growth_year(2026, 250.0, lat), 2027.0, 1e-6))
+	for site in [45.0, -45.0, 5.0]:
+		var mono := true
+		var worst := 0.0
+		var prev := VegGrowthModel.growth_year(2025, 1.0, site)
+		for y in [2025, 2026, 2027]:
+			for d in range(1, 366):
+				var g := VegGrowthModel.growth_year(y, float(d), site)
+				if g < prev - 1e-9:
+					mono = false
+				worst = maxf(worst, g - prev)
+				prev = g
+		_check("growth year never runs backward or jumps at lat %.0f" % site,
+			mono and worst < 0.02, "mono=%s worst daily step %f" % [mono, worst])
+	# Southern spring is October: growing there while the north stands still.
+	var s_grow := VegGrowthModel.growth_year(2026, 320.0, -45.0) \
+		- VegGrowthModel.growth_year(2026, 290.0, -45.0)
+	var n_grow := VegGrowthModel.growth_year(2026, 320.0, 45.0) \
+		- VegGrowthModel.growth_year(2026, 290.0, 45.0)
+	_check("hemisphere flip: the south grows in October, the north does not",
+		s_grow > 0.1 and n_grow < 1e-6, "south %f north %f" % [s_grow, n_grow])
+	_check("the tropics grow all year (linear)",
+		_approx(VegGrowthModel.growth_year(2026, 183.625, 5.0), 2026.5, 1e-3))
+	# Total growth per calendar year is exactly one year everywhere.
+	_check("one growth year per calendar year",
+		_approx(VegGrowthModel.growth_year(2031, 100.0, -45.0)
+			- VegGrowthModel.growth_year(2026, 100.0, -45.0), 5.0, 1e-6))
+
+
+func _test_seed() -> void:
+	_check("seed is deterministic",
+		VegGrowthModel.seed01("pine", 12.34, -5.6) == VegGrowthModel.seed01("pine", 12.34, -5.6))
+	_check("seed ignores sub-centimetre float noise",
+		VegGrowthModel.seed01("pine", 12.34, -5.6) == VegGrowthModel.seed01("pine", 12.3401, -5.6))
+	_check("seed differs by species",
+		VegGrowthModel.seed01("pine", 12.34, -5.6) != VegGrowthModel.seed01("cedar", 12.34, -5.6))
+	var bins := [0, 0, 0, 0, 0, 0, 0, 0]
+	var sum := 0.0
+	var in_range := true
+	for i in 1000:
+		var s := VegGrowthModel.seed01("pine", float(i) * 3.0, float(i % 37) * 2.0)
+		if s < 0.0 or s >= 1.0:
+			in_range = false
+		sum += s
+		bins[mini(int(s * 8.0), 7)] += 1
+	_check("seeds stay in [0, 1)", in_range)
+	_check("seeds spread evenly (mean)", _approx(sum / 1000.0, 0.5, 0.05),
+		"mean %f" % (sum / 1000.0))
+	_check("seeds fill every bin (no sequential-hash clumping)",
+		bins.min() > 80, "bins %s" % str(bins))
+
+
+func _grove(species: String, n: int) -> Array:
+	var out: Array = []
+	for i in n:
+		out.append({"x": 500.0 + float(i % 40) * 4.1, "z": 60.0 + float(i / 40) * 3.7,
+			"yaw": 0.0, "scale": 1.0})
+	return out
+
+
+## The Walton regression, generalised: a grove painted in one stroke stands full
+## size, and no single year takes a visible bite out of it — ever.
+func _test_painted_grove_never_shrinks_together() -> void:
+	var settings := {"pine_growth_years": 47.0}
+	var t0 := 2026.76
+	var grove := _grove("pine", 800)
+	for d in grove:
+		VegetationGrowth.stamp_established(d, "pine", settings, t0)
+	var st := settings.duplicate()
+	st["growth_year"] = t0
+	var all_full := true
+	for d in grove:
+		var s := VegetationGrowth.plant_state("pine", d, st)
+		if float(s["height"]) != 1.0 or float(s["leaf"]) != 1.0:
+			all_full = false
+	_check("every painted tree is exactly full size on the day it is painted", all_full)
+	var worst_small := 0
+	var worst_absent := 0
+	var worst_new_deaths := 0
+	var prev_gen: Array = []
+	for d in grove:
+		prev_gen.append(0)
+	for yr in 500:
+		st["growth_year"] = t0 + float(yr)
+		var small := 0
+		var absent := 0
+		var deaths := 0
+		for i in grove.size():
+			var s := VegetationGrowth.plant_state("pine", grove[i], st)
+			if float(s["present"]) < 0.5:
+				absent += 1
+			elif float(s["height"]) < 0.5:
+				small += 1
+			var g := int(s["generation"])
+			if g != int(prev_gen[i]):
+				deaths += 1
+				prev_gen[i] = g
+		worst_small = maxi(worst_small, small)
+		worst_absent = maxi(worst_absent, absent)
+		worst_new_deaths = maxi(worst_new_deaths, deaths)
+	_check("over 500 years never more than 10% of the grove is visibly small",
+		worst_small <= 80, "worst %d of 800" % worst_small)
+	_check("the grove never has a missing tree (regeneration fills every gap)",
+		worst_absent == 0, "worst %d of 800" % worst_absent)
+	_check("turnover is staggered: at most 3% replaced in any one year",
+		worst_new_deaths <= 24, "worst %d of 800" % worst_new_deaths)
+	_check("the grove does turn over (the cycle is real, not grow-and-hold)",
+		int(prev_gen.max()) >= 1)
+	# Shrubs paint full size too, and hold.
+	var shrub := {"x": 3.0, "z": 4.0}
+	var ss := {"shrub_growth_years": 5.0}
+	VegetationGrowth.stamp_established(shrub, "shrub", ss, t0)
+	ss["growth_year"] = t0 + 900.0
+	_check("a painted shrub is full size and never cycles",
+		VegetationGrowth.instance_scale_mult("shrub", shrub, ss) == 1.0)
+
+
+func _test_plant_young() -> void:
+	var settings := {"pine_growth_years": 47.0}
+	var t0 := 2026.3
+	var d := {"x": 10.0, "z": 20.0}
+	VegetationGrowth.stamp_young(d, t0)
+	var st := settings.duplicate()
+	st["growth_year"] = t0
+	_check("planted young: a seedling today",
+		_approx(VegetationGrowth.instance_scale_mult("pine", d, st),
+			VegGrowthModel.SEED_HEIGHT, 1e-6))
+	st["growth_year"] = t0 + 1.0
+	var y1 := VegetationGrowth.instance_scale_mult("pine", d, st)
+	st["growth_year"] = t0 + 2.0
+	var y2 := VegetationGrowth.instance_scale_mult("pine", d, st)
+	_check("bigger every year", y2 > y1 and y1 > VegGrowthModel.SEED_HEIGHT)
+	st["growth_year"] = t0 + 47.0
+	_check("full size at its maturity age",
+		VegetationGrowth.instance_scale_mult("pine", d, st) == 1.0)
+	st["growth_year"] = t0 - 30.0
+	_check("scrubbing before the planting date shows a seedling, not an old tree",
+		_approx(VegetationGrowth.instance_scale_mult("pine", d, st),
+			VegGrowthModel.SEED_HEIGHT, 1e-6))
+
+
+func _test_migration() -> void:
+	var settings := {"pine_growth_years": 47.0, "grass_lawn_growth_years": 0.0}
+	var span := 47.0 * HPY
+	var t0 := 2026.76
+	var bulk := {
+		"pine": [
+			{"x": 0.0, "z": 0.0, "birth_h": 22.8 - span},      # the real Walton stamp
+			{"x": 5.0, "z": 0.0, "birth_h": 22.8},              # planted young
+			{"x": 9.0, "z": 0.0, "birth_h": -span * 0.5},       # half grown
+			{"x": 14.0, "z": 0.0},                              # no birth at all
+			{"x": 19.0, "z": 0.0, "born_y": 1999.0},            # already migrated
+		],
+		"cedar": [{"x": 3.0, "z": 0.0, "birth_h": 22.8 - span}],
+		"grass_lawn": [{"x": 1.0, "z": 1.0, "birth_h": 22.8}],
 	}
-	var grow_h := VegetationGrowth.growth_span_hours("lettuce", settings)
-	_check("lettuce grow span 90 days",
-		_approx(grow_h, 90.0 * 24.0, 1e-4), "got %f" % grow_h)
-	var seedling := {"birth_h": 90.0 * 24.0}
-	_check("lettuce seedling at plant",
-		_approx(VegetationGrowth.instance_scale_mult("lettuce", seedling, settings),
-			VegetationGrowth.SEEDLING_SCALE, 1e-5))
-	var mature := {"birth_h": 0.0}
-	_check("lettuce full at day 90",
-		_approx(VegetationGrowth.instance_scale_mult("lettuce", mature, settings), 1.0, 1e-5))
-	settings["growth_now_h"] = (90.0 + 15.0) * 24.0
-	_check("lettuce senescent after 105 days",
-		_approx(VegetationGrowth.instance_scale_mult("lettuce", mature, settings),
-			VegetationGrowth.SENESCENT_SCALE, 1e-5))
-	# Pure math mirror of GrowBed (no scene tree required).
-	var mid := VegetationGrowth.scale_for_lifecycle(45.0 * 24.0, 90.0 * 24.0, 15.0 * 24.0)
-	_check("lettuce mid-growth between seed and full",
-		mid > VegetationGrowth.SEEDLING_SCALE + 0.05 and mid < 0.99,
-		"mid=%f" % mid)
+	var n := VegetationGrowth.migrate_records(bulk, settings, t0)
+	_check("migration touches every legacy record", n == 6, "got %d" % n)
+	var any_legacy := false
+	for slot in bulk:
+		for d in bulk[slot]:
+			if (d as Dictionary).has("birth_h"):
+				any_legacy = true
+	_check("no birth_h survives", not any_legacy)
+	var st := settings.duplicate()
+	st["growth_year"] = t0
+	_check("the Walton stamp migrates to a full-size tree",
+		VegetationGrowth.instance_scale_mult("pine", bulk["pine"][0], st) == 1.0
+		and VegetationGrowth.instance_scale_mult("cedar", bulk["cedar"][0], st) == 1.0)
+	st["growth_year"] = t0 + 3.0
+	_check("... which is still full size three years on (it used to die within a day)",
+		VegetationGrowth.instance_scale_mult("pine", bulk["pine"][0], st) == 1.0)
+	_check("a session-young plant restarts as planted today",
+		_approx(float(bulk["pine"][1]["born_y"]), t0, 1e-9))
+	_check("a half-grown plant keeps its age",
+		_approx(float(bulk["pine"][2]["born_y"]), t0 - 23.5, 1e-6))
+	st["growth_year"] = t0
+	_check("a record with no birth was drawn full size, and still is",
+		VegetationGrowth.instance_scale_mult("pine", bulk["pine"][3], st) == 1.0)
+	_check("an already-migrated record is left alone",
+		float(bulk["pine"][4]["born_y"]) == 1999.0)
+	_check("a growth-off species gets no birth year",
+		not (bulk["grass_lawn"][0] as Dictionary).has("born_y"))
+	_check("migration is idempotent",
+		VegetationGrowth.migrate_records(bulk, settings, t0 + 50.0) == 0)
 
 
-func _test_disabled_species() -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 3
-	# Growth disabled → ensure_birth_times leaves birth_h unset and render is full.
-	var settings := {"grass_lawn_growth_years": 0.0}
-	var bulk := {"grass_lawn": [{"x": 0.0, "z": 0.0, "scale": 1.0}]}
-	VegetationGrowth.ensure_birth_times(bulk, 0.0, settings, rng, true)
-	_check("disabled species leaves birth unset",
-		not (bulk["grass_lawn"][0] as Dictionary).has("birth_h"))
-	# Grass is not a tree → advance_generations never removes it.
-	var caps := VegetationGrowth.capture_caps(bulk)
-	var add := func(slot: String, x: float, z: float, yaw: float, sc: float, card: Variant) -> Variant:
-		return null
-	var changed := VegetationGrowth.advance_generations(
-		{"grass_lawn": [{"x": 0.0, "z": 0.0, "scale": 1.0, "birth_h": -100.0 * HPY}]},
-		0.0, {"grass_lawn_growth_years": 1.0}, rng, caps, add)
-	_check("grass never dies (not a tree)", not changed)
+func _mean_and_small(recs: Array, st: Dictionary) -> Vector3:
+	var sum := 0.0
+	var small := 0
+	var full := 0
+	for d in recs:
+		var h := VegetationGrowth.instance_scale_mult("pine", d, st)
+		sum += h
+		if h < 0.5:
+			small += 1
+		if h >= 0.99:
+			full += 1
+	var n := float(recs.size())
+	return Vector3(sum / n, float(small) / n, float(full) / n)
+
+
+## Generated forest: no stored birth, derived from the position hash.
+func _test_forest_profiles() -> void:
+	var recs := _grove("pine", 2000)
+	var st := {"pine_growth_years": 30.0, "growth_year": 2026.4, "growth_epoch_y": 2026.4}
+	var now := _mean_and_small(recs, st)
+	_check("mature profile: most of the stand is full size", now.z > 0.6,
+		"full frac %f" % now.z)
+	_check("mature profile: only a small minority is young", now.y > 0.005 and now.y < 0.06,
+		"small frac %f" % now.y)
+	_check("mature profile: at least four trees in five are full size", now.z > 0.8,
+		"full frac %f" % now.z)
+	st["growth_year"] = 2326.4
+	var later := _mean_and_small(recs, st)
+	_check("mature profile is STATIONARY (same stand in 300 years)",
+		_approx(now.x, later.x, 0.03), "mean %f vs %f" % [now.x, later.x])
+	st["growth_year"] = 1500.0
+	var past := _mean_and_small(recs, st)
+	_check("... and 500 years in the past (never a field of seedlings)",
+		_approx(now.x, past.x, 0.03), "mean %f vs %f" % [now.x, past.x])
+	var deterministic := VegetationGrowth.record_params("pine", recs[7], st) \
+		== VegetationGrowth.record_params("pine", recs[7], st)
+	_check("derived birth is deterministic", deterministic)
+	st["growth_year"] = 2026.4
+	st["forest_age"] = "young"
+	var young := _mean_and_small(recs, st)
+	_check("young profile: a plantation of saplings at the site epoch",
+		young.y > 0.99 and young.z == 0.0, "small %f full %f" % [young.y, young.z])
+	st["growth_year"] = 2026.4 + 30.0
+	_check("young profile: all full size one maturity later",
+		_mean_and_small(recs, st).z > 0.99)
+	st["growth_year"] = 2026.4
+	st["forest_age"] = "mixed"
+	var mixed := _mean_and_small(recs, st)
+	_check("mixed profile sits between young and mature",
+		mixed.x > young.x + 0.1 and mixed.x < now.x - 0.05,
+		"young %f mixed %f mature %f" % [young.x, mixed.x, now.x])
+
+
+func _test_instance_custom() -> void:
+	var st := {"pine_growth_years": 47.0, "shrub_growth_years": 5.0,
+		"grass_lawn_growth_years": 0.0}
+	var d := {"x": 12.0, "z": 34.0, "born_y": 2010.5}
+	var c := VegetationGrowth.instance_custom("cedar", d, st)
+	_check("custom.r = born - base year", _approx(c.r, 10.5, 1e-4))
+	_check("custom.g = maturity (subspecies reads its family's key)", _approx(c.g, 47.0, 1e-4))
+	_check("custom.b = jittered catalog lifespan (cedar 500 x 0.7..1.3)",
+		c.b >= 350.0 - 1e-3 and c.b <= 650.0 + 1e-3, "got %f" % c.b)
+	_check("custom.a = seed", c.a >= 0.0 and c.a < 1.0
+		and _approx(c.a, VegGrowthModel.seed01("cedar", 12.0, 34.0), 1e-6))
+	var s := VegetationGrowth.instance_custom("shrub", d, st)
+	_check("a shrub grows and holds (lifespan 0)", s.b == 0.0 and s.g > 0.0)
+	_check("growth off -> all zero (the shader's identity)",
+		VegetationGrowth.instance_custom("grass_lawn", d, st) == Color(0, 0, 0, 0))
+	st["growth_frozen"] = true
+	_check("frozen -> all zero",
+		VegetationGrowth.instance_custom("cedar", d, st) == Color(0, 0, 0, 0))
+	st.erase("growth_frozen")
+	st["pine_lifespan_years"] = 90.0
+	var o := VegetationGrowth.instance_custom("pine", d, st)
+	_check("an explicit lifespan setting beats the catalog",
+		o.b >= 63.0 - 1e-3 and o.b <= 117.0 + 1e-3, "got %f" % o.b)
+	# The CPU answer and the numbers handed to the shader describe one plant.
+	st["growth_year"] = 2026.0
+	var via_custom := VegGrowthModel.state(2026.0, c.r + VegGrowthModel.BASE_YEAR, c.g, c.b, c.a)
+	st.erase("pine_lifespan_years")
+	_check("instance_custom round-trips to the same state as plant_state",
+		_approx(float(via_custom["height"]),
+			VegetationGrowth.instance_scale_mult("cedar", d, st), 1e-5))
+
+
+## veg_growth.gdshaderinc mirrors VegGrowthModel.state(); its constants are
+## parsed out of the shader text so the two cannot drift apart silently.
+func _test_shader_mirror_constants() -> void:
+	var path := "res://vegetation/veg_growth.gdshaderinc"
+	var src := FileAccess.get_file_as_string(path)
+	_check("shader include exists", not src.is_empty())
+	var want := {
+		"VG_CR_K": VegGrowthModel.CR_K, "VG_CR_P": VegGrowthModel.CR_P,
+		"VG_SEED_HEIGHT": VegGrowthModel.SEED_HEIGHT,
+		"VG_CROWN_EXP": VegGrowthModel.CROWN_EXP, "VG_GIRTH_EXP": VegGrowthModel.GIRTH_EXP,
+		"VG_OLD_GIRTH": VegGrowthModel.OLD_GIRTH,
+		"VG_DECLINE_FRAC": VegGrowthModel.DECLINE_FRAC,
+		"VG_LEAF_LOSS_FRAC": VegGrowthModel.LEAF_LOSS_FRAC,
+		"VG_COLLAPSE_FRAC": VegGrowthModel.COLLAPSE_FRAC,
+		"VG_GAP_MIN_Y": VegGrowthModel.GAP_MIN_Y, "VG_GAP_SPAN_Y": VegGrowthModel.GAP_SPAN_Y,
+		"VG_MIN_LIFE_RATIO": VegGrowthModel.MIN_LIFE_MATURITY_RATIO,
+		"VG_REGEN_HEAD_START": VegGrowthModel.REGEN_HEAD_START,
+	}
+	var bad := ""
+	for k in want:
+		var re := RegEx.new()
+		re.compile("const\\s+float\\s+%s\\s*=\\s*([0-9.]+)\\s*;" % k)
+		var m := re.search(src)
+		if m == null or not _approx(float(m.get_string(1)), float(want[k]), 1e-6):
+			bad += " %s" % k
+	_check("every shader constant matches the model", bad.is_empty(), "mismatch:%s" % bad)
 
 
 func _test_settings_with_variant_non_clobber() -> void:

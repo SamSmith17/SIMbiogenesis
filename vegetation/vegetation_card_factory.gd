@@ -487,6 +487,11 @@ static func _build_bark_material_for_species(species: String, settings: Dictiona
 	var mat := ShaderMaterial.new()
 	mat.shader = BARK_SHADER
 	mat.set_shader_parameter("albedo_tex", _build_bark_texture(spec))
+	# Mature stem radius (cm diameter → m radius): the growth shader scales
+	# vertices inside it by GIRTH and the branches beyond it by crown width.
+	if family == "deciduous" or family == "pine":
+		mat.set_shader_parameter("growth_trunk_radius",
+			float(s.get("%s_trunk_diameter_cm" % family, 0.0)) / 200.0)
 	# Player bark tint: family key (species overrides land on it re-prefixed),
 	# beating the SPECS variant fill riding bark_albedo_tint — same user-edit >
 	# SPECS ladder as every other key.

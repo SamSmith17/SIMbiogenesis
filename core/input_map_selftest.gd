@@ -54,7 +54,8 @@ const ALLOWED_OVERLAPS: Array = [
 		"actions": ["charge", "camp_scatter"],
 		"reason": "resolved 2026-08-05: `charge` is now event-driven in "
 			+ "scenes/gameplay/player.gd:_unhandled_input (consumes only when it actually "
-			+ "starts charging), and terrain_loader.gd's camp_scatter branch yields the "
+			+ "starts charging), and terrain_loader.gd's camp_scatter branch (now the "
+			+ "toolbar's Camps section; the legacy dock moved to Shift+C) yields the "
 			+ "event when player.charge_available() — deterministic in either "
 			+ "_unhandled_input order. The old polling from _physics_process ignored "
 			+ "set_input_as_handled() and fired BOTH.",

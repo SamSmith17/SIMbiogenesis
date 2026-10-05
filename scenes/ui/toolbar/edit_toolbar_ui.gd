@@ -104,6 +104,16 @@ var _picked_plant: Dictionary = {}
 ## plants floating, so switching terrain -> veg re-snaps them once.
 var _last_section := ""
 
+# Camps
+var _camp_style_buttons: Dictionary = {}
+## Outline(s) of the brush stroke in progress: the union of its stamps. The
+## stroke commits ONE polygon on release, so a camp is never rebuilt per frame.
+var _camp_stroke: Array = []
+var _picked_camp := ""
+var _camp_name_edit: LineEdit = null
+var _camp_action_buttons: Array[Button] = []
+var _camp_apply_timer: Timer = null
+
 ## Debounced write of the per-tool settings. Dragging a slider fires
 ## value_changed continuously, so saving inline would hit the disk every frame.
 var _save_timer: Timer = null
@@ -128,6 +138,13 @@ func _ready() -> void:
 	_save_timer.wait_time = 1.0
 	_save_timer.timeout.connect(_save_prefs_now)
 	add_child(_save_timer)
+	# Editing a picked camp's sliders rebuilds that camp; debounce so a drag
+	# rebuilds once when it pauses rather than on every value_changed.
+	_camp_apply_timer = Timer.new()
+	_camp_apply_timer.one_shot = true
+	_camp_apply_timer.wait_time = 0.2
+	_camp_apply_timer.timeout.connect(_apply_camp_select_params)
+	add_child(_camp_apply_timer)
 	_build_ui()
 
 
@@ -201,6 +218,7 @@ func _exit_mode() -> void:
 	if not _active:
 		return
 	_cancel_stroke()
+	_clear_picked_camp()
 	_end_water_modulate()
 	_clear_locked_selection()
 	_gesture.reset()
@@ -245,6 +263,11 @@ func _cancel_stroke() -> void:
 	if not _stroking:
 		return
 	_stroking = false
+	if _is_camp_tool():
+		# A cancelled camp stroke commits nothing — the camp only changes on release.
+		_camp_stroke.clear()
+		_queue_overlay_redraw()
+		return
 	if _loader != null:
 		_loader.call("end_terrain_tile_edit")
 	_update_undo_button()
@@ -290,6 +313,7 @@ func _build_ui() -> void:
 	_strip_box.add_child(_collapse_btn)
 	_build_strip_section("TERRAIN", "terrain")
 	_build_strip_section("VEGETATION", "veg")
+	_build_strip_section("CAMPS", "camps")
 
 	# Top options bar.
 	_options = PanelContainer.new()
@@ -380,6 +404,7 @@ func _set_active_tool(id: String) -> void:
 	if _selection_locked and not _is_water_tool():
 		_clear_locked_selection()
 	_picked_plant = {}
+	_clear_picked_camp()
 	_gesture.set_mode(_state.shape_for(id))
 	# Sculpting leaves painted plants hanging in the air, and this toolbar makes
 	# terrain->veg a one-click move, so re-snap them on the way in (the legacy
@@ -387,6 +412,10 @@ func _set_active_tool(id: String) -> void:
 	var section := String(_state.tool_def(id).get("section", ""))
 	if section == "veg" and _last_section != "veg" and _loader != null 			and _loader.has_method("reground_all_vegetation"):
 		_loader.call("reground_all_vegetation")
+	# Same for camps: a sculpted pad leaves the tents on the old surface.
+	if section == "camps" and _last_section == "terrain" and _loader != null \
+			and _loader.has_method("reground_camp_areas"):
+		_loader.call("reground_camp_areas")
 	_last_section = section
 	_restyle_tool_buttons()
 	_rebuild_options_bar()
@@ -434,6 +463,8 @@ func _rebuild_options_bar() -> void:
 		_param_rows[key] = pair
 	if String(def.get("section", "")) == "veg":
 		_build_species_row()
+	elif String(def.get("section", "")) == "camps":
+		_build_camp_rows()
 	# Shape picker — only when the tool actually offers a choice.
 	var shapes: Array = def.get("shapes", [])
 	if shapes.size() > 1:
@@ -504,6 +535,9 @@ func _make_param_handler(key: String) -> Callable:
 	return func(v: float) -> void:
 		_state.set_param(key, v)
 		_queue_save_prefs()
+		# In Camp Edit the sliders ARE the picked camp's settings.
+		if _state.active_tool == "camp_select" and _camp_apply_timer != null:
+			_camp_apply_timer.start()
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +575,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				_resize_picked_plant(1.15 if key.physical_keycode == KEY_BRACKETRIGHT else 1.0 / 1.15)
 				get_viewport().set_input_as_handled()
 				return
+		if _state.active_tool == "camp_select" and not _picked_camp.is_empty() \
+				and (key.keycode == KEY_DELETE or key.keycode == KEY_BACKSPACE):
+			_delete_picked_camp()
+			get_viewport().set_input_as_handled()
+			return
 		if key.physical_keycode == KEY_BRACKETLEFT or key.physical_keycode == KEY_BRACKETRIGHT:
 			_nudge_radius(key.physical_keycode == KEY_BRACKETRIGHT)
 			get_viewport().set_input_as_handled()
@@ -615,6 +654,9 @@ func _on_lmb_pressed() -> void:
 	if _state.active_tool == "veg_select":
 		_pick_plant_at(world)
 		return
+	if _state.active_tool == "camp_select":
+		_pick_camp_at(world)
+		return
 
 	# Rain/Drain: hold inside the locked basin to modulate its level.
 	if (_state.active_tool == "rain" or _state.active_tool == "drain") \
@@ -631,6 +673,8 @@ func _on_lmb_pressed() -> void:
 	if _gesture.mode == "brush":
 		if _is_veg_tool():
 			_begin_veg_stroke(world)
+		elif _is_camp_tool():
+			_begin_camp_stroke(world)
 		else:
 			_begin_brush(world)
 		return
@@ -651,6 +695,8 @@ func _on_lmb_released() -> void:
 	if _stroking:
 		if _is_veg_tool():
 			_end_veg_stroke()
+		elif _is_camp_tool():
+			_end_camp_stroke()
 		else:
 			_stroking = false
 			if _loader != null:
@@ -682,6 +728,11 @@ func _lock_selection(poly: PackedVector2Array) -> void:
 	# hi-res detail patch, so the sculpt gate below must not apply to it.
 	if _is_veg_tool():
 		_apply_veg_region(poly)
+		_queue_overlay_redraw()
+		return
+	# Camp regions also apply at once, and need no detail patch either.
+	if _is_camp_tool():
+		_apply_camp_region(poly)
 		_queue_overlay_redraw()
 		return
 	if not bool(_loader.call("can_sculpt_detail")):
@@ -957,6 +1008,8 @@ func _process(delta: float) -> void:
 		var p: Vector3 = _cursor_hit
 		if _is_veg_tool():
 			_stamp_veg_at(Vector2(p.x, p.z))
+		elif _is_camp_tool():
+			_stamp_camp_at(Vector2(p.x, p.z))
 		else:
 			_apply_brush_at(Vector2(p.x, p.z), delta)
 	elif _gesture.is_dragging() and _cursor_hit is Vector3:
@@ -1027,6 +1080,14 @@ func _draw_overlay() -> void:
 			_overlay.draw_circle(line[0], 4.0, col)
 			_overlay.draw_circle(line[1], 4.0, col)
 		return
+	# Camp brush stroke in progress: the outline that will be committed.
+	if _stroking and _is_camp_tool():
+		for ring: PackedVector2Array in _camp_stroke:
+			var cpts := _project_poly(ring)
+			if cpts.size() >= 3:
+				cpts.append(cpts[0])
+				_overlay.draw_polyline(cpts, col, 2.0, true)
+		return
 	var mode := _gesture.mode
 	if mode == "lasso" and _gesture.lasso_screen().size() >= 2:
 		_overlay.draw_polyline(_gesture.lasso_screen(), col, 2.0, true)
@@ -1078,6 +1139,9 @@ func _tool_color() -> Color:
 		"veg_paint": return Color(0.45, 0.85, 0.45, 0.9)
 		"veg_clear": return Color(0.95, 0.45, 0.45, 0.9)
 		"veg_select", "veg_place": return Color(0.85, 0.75, 0.35, 0.9)
+		"camp_paint": return Color(1.0, 0.72, 0.25, 0.9)
+		"camp_erase": return Color(0.95, 0.45, 0.45, 0.9)
+		"camp_subdivide": return Color(0.9, 0.55, 0.95, 0.9)
 		_: return Color(0.35, 0.65, 1.0, 0.9)
 
 
@@ -1148,6 +1212,12 @@ func _do_undo() -> void:
 			_set_status("Undid last vegetation edit")
 		else:
 			_set_status("Nothing to undo")
+	elif _is_camp_tool():
+		if _loader.has_method("undo_camps") and bool(_loader.call("undo_camps")):
+			_clear_picked_camp()
+			_set_status("Undid last camp edit — %s" % _camp_totals())
+		else:
+			_set_status("Nothing to undo")
 	elif bool(_loader.call("undo_terrain_sculpt")):
 		_set_status("Undone — %s" % _volume_summary())
 		if _selection_locked:
@@ -1161,6 +1231,8 @@ func _update_undo_button() -> void:
 	var can := false
 	if _is_veg_tool():
 		can = _loader.has_method("can_undo_vegetation") 			and bool(_loader.call("can_undo_vegetation"))
+	elif _is_camp_tool():
+		can = _loader.has_method("can_undo_camps") and bool(_loader.call("can_undo_camps"))
 	else:
 		can = bool(_loader.call("can_undo_terrain_sculpt"))
 	_undo_btn.disabled = not can
@@ -1512,3 +1584,338 @@ func _resize_picked_plant(factor: float) -> void:
 	# Re-read the record so the readout shows the NEW scale, not the old one.
 	_picked_plant = _loader.call("pick_plant_at", at, PICK_RADIUS_M)
 	_set_status("Resized %s" % _picked_label(_picked_plant))
+
+
+# ---------------------------------------------------------------------------
+# Camps — paint / erase / plots / edit. The loader owns the camp layer
+# (core/camps/); this file only turns gestures into its commands.
+# ---------------------------------------------------------------------------
+
+## Stamps closer together than this fraction of the brush radius are skipped.
+const CAMP_STAMP_STEP := 0.4
+
+
+func _is_camp_tool() -> bool:
+	return String(_state.tool_def(_state.active_tool).get("section", "")) == "camps"
+
+
+func _camp_params() -> Dictionary:
+	return {
+		"style": _state.camp_style_for_tool(),
+		"density": _state.get_param("density", 0.8),
+		"heading_deg": _state.get_param("heading_deg", -1.0),
+		"align_jitter_deg": _state.get_param("align_jitter_deg", 5.0),
+		"light_density": _state.get_param("light_density", 1.0),
+	}
+
+
+func _camp_totals() -> String:
+	if _loader == null or not _loader.has_method("camp_areas_summary"):
+		return ""
+	var s: Dictionary = _loader.call("camp_areas_summary")
+	return "%d camps, %d structures" % [int(s.get("areas", 0)), int(s.get("structures", 0))]
+
+
+func _push_camp_undo() -> void:
+	if _loader != null and _loader.has_method("push_camp_undo"):
+		_loader.call("push_camp_undo")
+	_update_undo_button()
+
+
+# --- Options bar rows -------------------------------------------------------
+
+func _build_camp_rows() -> void:
+	_camp_style_buttons.clear()
+	_camp_action_buttons.clear()
+	_camp_name_edit = null
+	var tool_id := _state.active_tool
+	if tool_id != "camp_erase":
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 2)
+		_options_box.add_child(row)
+		for s in ToolbarStateScript.CAMP_STYLES:
+			var sid := String(s["id"])
+			# "Varied" (one style per plot) only exists for the Plots tool.
+			if sid == "varied" and tool_id != "camp_subdivide":
+				continue
+			var b := Button.new()
+			b.text = String(s["label"])
+			b.tooltip_text = CampStyles.label(sid)
+			b.custom_minimum_size = Vector2(48, 24)
+			b.focus_mode = Control.FOCUS_NONE
+			b.pressed.connect(_on_camp_style_pressed.bind(sid))
+			row.add_child(b)
+			_camp_style_buttons[sid] = b
+		_restyle_camp_style_buttons()
+		var tune := Button.new()
+		tune.text = "Tune look…"
+		tune.tooltip_text = "Preview a camp style and edit its mix, spacing and models"
+		tune.focus_mode = Control.FOCUS_NONE
+		UITheme.style_button(tune)
+		tune.pressed.connect(_open_camp_tune_look)
+		_options_box.add_child(tune)
+	if tool_id == "camp_select":
+		_camp_name_edit = LineEdit.new()
+		_camp_name_edit.placeholder_text = "click a camp"
+		_camp_name_edit.custom_minimum_size = Vector2(120, 24)
+		_camp_name_edit.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		_camp_name_edit.text_submitted.connect(_on_camp_name_submitted)
+		_options_box.add_child(_camp_name_edit)
+		for spec in [["Reseed", "Roll a different arrangement for this camp", "_reseed_picked_camp"],
+				["Delete", "Delete this camp (Del)", "_delete_picked_camp"]]:
+			var ab := Button.new()
+			ab.text = String(spec[0])
+			ab.tooltip_text = String(spec[1])
+			ab.focus_mode = Control.FOCUS_NONE
+			UITheme.style_button(ab)
+			ab.pressed.connect(Callable(self, String(spec[2])))
+			_options_box.add_child(ab)
+			_camp_action_buttons.append(ab)
+		_sync_camp_select_controls()
+
+
+func _restyle_camp_style_buttons() -> void:
+	var cur := _state.camp_style_for_tool()
+	if _state.active_tool == "camp_select":
+		# In Edit the row shows the PICKED camp's style, not the brush's.
+		cur = str(_picked_camp_info().get("style", ""))
+	for sid in _camp_style_buttons.keys():
+		_style_toggle(_camp_style_buttons[sid], String(sid) == cur)
+
+
+func _on_camp_style_pressed(style_id: String) -> void:
+	if _state.active_tool == "camp_select":
+		if _picked_camp.is_empty() or _loader == null:
+			_set_status("Click a camp first")
+			return
+		_push_camp_undo()
+		_loader.call("update_camp_area", _picked_camp, {"style": style_id})
+		_restyle_camp_style_buttons()
+		_report_picked_camp()
+		return
+	if not _state.set_camp_style(style_id):
+		return
+	_restyle_camp_style_buttons()
+	_queue_save_prefs()
+
+
+# --- Brush strokes ----------------------------------------------------------
+
+func _begin_camp_stroke(world: Vector2) -> void:
+	_stroking = true
+	_camp_stroke.clear()
+	_last_stamp = Vector2(-1e9, -1e9)
+	_stamp_camp_at(world)
+
+
+## Grow the stroke outline by one brush circle. Nothing is built yet.
+func _stamp_camp_at(world: Vector2) -> void:
+	var radius := _state.get_param("radius_m", 12.0)
+	if _last_stamp.x > -1e8 and world.distance_to(_last_stamp) < radius * CAMP_STAMP_STEP:
+		return
+	_last_stamp = world
+	var acc := VegetationPaint.circle_polygon(world, radius, 20)
+	var rest: Array = []
+	for ring: PackedVector2Array in _camp_stroke:
+		var outers: Array = []
+		for piece: PackedVector2Array in Geometry2D.merge_polygons(acc, ring):
+			# Clockwise pieces are holes (a stroke that loops back on itself);
+			# a looped stroke simply fills its middle.
+			if not Geometry2D.is_polygon_clockwise(piece):
+				outers.append(piece)
+		if outers.size() == 1:
+			acc = outers[0]
+		else:
+			rest.append(ring)
+	rest.append(acc)
+	_camp_stroke = rest
+	_queue_overlay_redraw()
+
+
+func _end_camp_stroke() -> void:
+	_stroking = false
+	_last_stamp = Vector2(-1e9, -1e9)
+	var rings := _camp_stroke.duplicate()
+	_camp_stroke.clear()
+	if _loader == null or rings.is_empty():
+		return
+	_push_camp_undo()
+	for ring: PackedVector2Array in rings:
+		_commit_camp_polygon(ring)
+	_update_undo_button()
+	_queue_overlay_redraw()
+
+
+## Region (circle / rect / lasso / polygon) apply for the camp tools.
+func _apply_camp_region(poly: PackedVector2Array) -> void:
+	if _loader == null:
+		return
+	_push_camp_undo()
+	if _state.active_tool == "camp_subdivide":
+		var params := _camp_params()
+		params["plot_w_m"] = _state.get_param("plot_w_m", 30.0)
+		params["plot_d_m"] = _state.get_param("plot_d_m", 22.0)
+		params["lane_w_m"] = _state.get_param("lane_w_m", 6.0)
+		var ids: Array = _loader.call("subdivide_camp_zone", poly, params)
+		if ids.is_empty():
+			_set_status("Zone too small for one plot — draw it larger or shrink the plot size")
+		else:
+			_set_status("Zone split into %d plots — %s" % [ids.size(), _camp_totals()])
+	else:
+		_commit_camp_polygon(poly)
+	_update_undo_button()
+
+
+func _commit_camp_polygon(poly: PackedVector2Array) -> void:
+	if _state.active_tool == "camp_erase":
+		var n := int(_loader.call("erase_camps_in_polygon", poly))
+		_set_status("Erased from %d camp%s — %s" % [n, "" if n == 1 else "s", _camp_totals()]
+			if n > 0 else "No camp there to erase")
+		return
+	var id := str(_loader.call("paint_camp_area", poly, _camp_params()))
+	if id.is_empty():
+		_set_status("Too small for a camp — paint a larger area")
+		return
+	var info: Dictionary = _loader.call("camp_area_info", id)
+	var stats: Dictionary = info.get("stats", {})
+	if bool(stats.get("over_budget", false)):
+		_set_status("Camp budget reached — erase some camps or lower density")
+	elif int(info.get("structures", 0)) == 0:
+		_set_status("%s: nothing fits (too small, too steep, or on a road/building)"
+			% str(info.get("name", "Camp")))
+	else:
+		_set_status("%s — %d structures, %s, %.0f m2" % [str(info.get("name", "Camp")),
+			int(info.get("structures", 0)), CampStyles.label(str(info.get("style", ""))),
+			float(info.get("area_m2", 0.0))])
+
+
+# --- Edit (select) ----------------------------------------------------------
+
+func _picked_camp_info() -> Dictionary:
+	if _picked_camp.is_empty() or _loader == null or not _loader.has_method("camp_area_info"):
+		return {}
+	return _loader.call("camp_area_info", _picked_camp)
+
+
+func _pick_camp_at(world: Vector2) -> void:
+	if _loader == null or not _loader.has_method("camp_area_at"):
+		return
+	var id := str(_loader.call("camp_area_at", world))
+	if id.is_empty():
+		_clear_picked_camp()
+		_set_status("No camp here — click inside a painted camp")
+		return
+	_picked_camp = id
+	_loader.call("update_camp_highlight", id)
+	_sync_camp_select_controls()
+	_report_picked_camp()
+
+
+func _clear_picked_camp() -> void:
+	if _camp_apply_timer != null:
+		_camp_apply_timer.stop()
+	if _picked_camp.is_empty():
+		return
+	_picked_camp = ""
+	if _loader != null and _loader.has_method("clear_camp_highlight"):
+		_loader.call("clear_camp_highlight")
+	_sync_camp_select_controls()
+
+
+func _report_picked_camp() -> void:
+	var info := _picked_camp_info()
+	if info.is_empty():
+		return
+	_set_status("%s — %d structures, %s, heading %.0f%s" % [str(info.get("name", "")),
+		int(info.get("structures", 0)), CampStyles.label(str(info.get("style", ""))),
+		float(info.get("heading_deg", 0.0)),
+		" (auto)" if bool(info.get("heading_auto", false)) else ""])
+
+
+## Load the picked camp's settings into the Edit tool's sliders. Setting a
+## slider re-fires its handler, which queues an apply — harmless, because the
+## apply compares against the record and finds nothing to change.
+func _sync_camp_select_controls() -> void:
+	var info := _picked_camp_info()
+	var have := not info.is_empty()
+	if _camp_name_edit != null and is_instance_valid(_camp_name_edit):
+		_camp_name_edit.editable = have
+		_camp_name_edit.text = str(info.get("name", "")) if have else ""
+	for b in _camp_action_buttons:
+		if is_instance_valid(b):
+			b.disabled = not have
+	if have and _state.active_tool == "camp_select":
+		for key in ["density", "heading_deg", "align_jitter_deg", "light_density"]:
+			_state.set_param(key, float(info.get(key, _state.get_param(key))))
+			if _param_rows.has(key):
+				SliderSpinRow.set_values(_param_rows[key], _state.get_param(key))
+	_restyle_camp_style_buttons()
+
+
+## Push the Edit sliders onto the picked camp — only the values that differ.
+func _apply_camp_select_params() -> void:
+	if _state.active_tool != "camp_select" or _loader == null:
+		return
+	var info := _picked_camp_info()
+	if info.is_empty():
+		return
+	var patch := {}
+	for key in ["density", "align_jitter_deg", "light_density"]:
+		if absf(float(info.get(key, 0.0)) - _state.get_param(key)) > 0.001:
+			patch[key] = _state.get_param(key)
+	var heading := _state.get_param("heading_deg", -1.0)
+	if heading < 0.0:
+		if not bool(info.get("heading_auto", false)):
+			patch["heading_deg"] = -1.0
+	elif absf(float(info.get("heading_deg", 0.0)) - heading) > 0.01:
+		patch["heading_deg"] = heading
+	if patch.is_empty():
+		return
+	_push_camp_undo()
+	_loader.call("update_camp_area", _picked_camp, patch)
+	_loader.call("update_camp_highlight", _picked_camp)
+	# An auto heading resolves to a number; show it.
+	_sync_camp_select_controls()
+	_report_picked_camp()
+
+
+func _on_camp_name_submitted(text: String) -> void:
+	if _camp_name_edit != null:
+		_camp_name_edit.release_focus()
+	if _picked_camp.is_empty() or _loader == null or text.strip_edges().is_empty():
+		return
+	_push_camp_undo()
+	_loader.call("update_camp_area", _picked_camp, {"name": text.strip_edges()})
+	_report_picked_camp()
+
+
+func _reseed_picked_camp() -> void:
+	if _picked_camp.is_empty() or _loader == null:
+		return
+	_push_camp_undo()
+	_loader.call("update_camp_area", _picked_camp, {"seed": randi() & 0x7fffffff})
+	_report_picked_camp()
+
+
+func _delete_picked_camp() -> void:
+	if _picked_camp.is_empty() or _loader == null:
+		return
+	var gone := str(_picked_camp_info().get("name", "Camp"))
+	_push_camp_undo()
+	_loader.call("delete_camp_area", _picked_camp)
+	_clear_picked_camp()
+	_set_status("Deleted %s — %s" % [gone, _camp_totals()])
+
+
+func _open_camp_tune_look() -> void:
+	if _loader == null or not _loader.has_method("open_camp_style_modal"):
+		return
+	var sid := _state.camp_style_for_tool()
+	# With a camp picked in Edit, tune THAT camp (its own elements and settings).
+	if _state.active_tool == "camp_select" and not _picked_camp.is_empty() \
+			and _loader.has_method("open_camp_tune_for_camp"):
+		_loader.call("open_camp_tune_for_camp", _picked_camp)
+		return
+	if sid == "varied":
+		sid = "mixed"
+	_loader.call("open_camp_style_modal", sid)

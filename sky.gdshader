@@ -168,6 +168,30 @@ group_uniforms stars;
 	// Tint multiplied into the diffuse band (the export's Milky Way is blue-grey;
 	// a long exposure reads warm-white with brown dust lanes).
 	uniform vec3 milkyway_tint : source_color = vec3( 1.0, 0.94, 0.88 );
+	// "Stars through daylight" (analemma mode only, pushed by StarSystem): opens
+	// the night gate and pretends the sky is dark for the star field, and dims
+	// the visible dome so the stars, Milky Way and planets read over a noon sky.
+	// A deliberate photographic cheat — the ground stays daylit, the radiance
+	// cubemap is untouched (so ambient light does not change), and 0 = no-op.
+	uniform float stars_daylight_reveal : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
+
+group_uniforms zodiac; // Constellation overlay — see the ZODIAC block in sky()
+	// assets/sky/zodiac_overlay_8k.png (tools/zodiac_overlay_export.py): SAME
+	// plate-carrée registration as stars_texture, so it is sampled through the
+	// same stars_* registration uniforms. R = the 12 zodiac figures, G = their
+	// names, B = Ophiuchus (figure + name). No mipmaps: at the RA seam fract()
+	// jumps u by 1, and a mip-selecting sampler would draw a seam line there.
+	uniform sampler2D zodiac_texture : filter_linear, hint_default_black, repeat_enable;
+	// 0 = off, 1 = with the stars (night, or the analemma daylight reveal), 2 = always.
+	uniform float zodiac_mode : hint_range( 0.0, 2.0, 1.0 ) = 0.0;
+	uniform float zodiac_opacity : hint_range( 0.0, 2.0, 0.01 ) = 0.8;
+	uniform float zodiac_show_lines : hint_range( 0.0, 1.0, 1.0 ) = 1.0;
+	uniform float zodiac_show_labels : hint_range( 0.0, 1.0, 1.0 ) = 1.0;
+	uniform float zodiac_show_ophiuchus : hint_range( 0.0, 1.0, 1.0 ) = 0.0;
+	uniform float zodiac_show_ecliptic : hint_range( 0.0, 1.0, 1.0 ) = 1.0;
+	uniform vec3 zodiac_line_color : source_color = vec3( 0.43, 0.67, 1.0 );
+	uniform vec3 zodiac_label_color : source_color = vec3( 0.78, 0.86, 1.0 );
+	uniform vec3 zodiac_ecliptic_color : source_color = vec3( 1.0, 0.78, 0.35 );
 
 group_uniforms night; // The dark sky itself — see the NIGHT block in sky()
 	// Airglow: the faint luminous band a truly dark sky shows 10–25° above the
@@ -530,6 +554,18 @@ void sky()
 
 	// Final sky color
 	COLOR = _sky_color;
+	// Analemma "stars through daylight": dim the VISIBLE dome only (and, in the
+	// SUN block, the aureole/glow that would repaint a daylit haze round the sun).
+	// Skipped in the cubemap pass so the radiance the ground is lit by is unchanged.
+	// Exponential so the slider is useful along its length — and deep, because the
+	// sRGB encode lifts a dim linear sky a lot: a 9 % dome still read as mid-grey.
+	// 0.5 → 10 %, 0.75 → 3 %, 1 → 1 %.
+	float _reveal_dim = 1.0;
+	if( stars_daylight_reveal > 0.001 && !AT_CUBEMAP_PASS )
+	{
+		_reveal_dim = mix( 1.0, pow( 0.01, stars_daylight_reveal ), 1.0 - _night_amount );
+		COLOR *= _reveal_dim;
+	}
 
 	//////////////////// HORIZON ///////////////////////////////////////////////////////////////////
 	float _horizon_amount = 0.0;
@@ -658,7 +694,7 @@ void sky()
 		{
 			float _aur = pow( max( 0.0, 1.0 - _sun_view_dist / 1.3 ), 2.5 );
 			vec3 _aur_col = mix( vec3( 0.85, 0.88, 0.95 ), sun_aureole_color, _sun_redden );
-			_aur *= sun_aureole * ( 0.30 + _sun_redden * 1.5 * twilight_drama ) * _atmos_illumination;
+			_aur *= sun_aureole * ( 0.30 + _sun_redden * 1.5 * twilight_drama ) * _atmos_illumination * _reveal_dim;
 			COLOR += _aur_col * _aur;
 		}
 
@@ -668,7 +704,8 @@ void sky()
 			float _glow_radius = _sun_size * sun_glow_size * mix( 1.0, twilight_drama, _sun_redden );
 			float _sg = pow( max( 0.0, 1.0 - _sun_view_dist / _glow_radius ), 2.5 );
 			vec3 _glow_col = mix( sun_glow_color, _sun_warm, _sun_redden );
-			COLOR = mix( COLOR, _glow_col, clamp( _sg * sun_glow * _atmos_illumination, 0.0, 1.0 ) );
+			// The reveal keeps a floor of the glow so the sun still reads as the sun.
+			COLOR = mix( COLOR, _glow_col, clamp( _sg * sun_glow * _atmos_illumination * max( _reveal_dim, 0.2 ), 0.0, 1.0 ) );
 		}
 
 		// Finding sun disc and edge blur
@@ -687,7 +724,7 @@ void sky()
 	//////////////////// STARS /////////////////////////////////////////////////////////////
 	// Gate where the twilight ramp below reaches exactly zero (LIGHT0.y = +0.05). Gating
 	// at 0.0 switched ~7% of the star brightness on in one frame at sunset.
-	if( EYEDIR.y > -0.05 && LIGHT0_DIRECTION.y < 0.05 )
+	if( EYEDIR.y > -0.05 && ( LIGHT0_DIRECTION.y < 0.05 || stars_daylight_reveal > 0.001 ) )
 	{
 		vec3 _view_dir = normalize( EYEDIR );
 
@@ -772,7 +809,9 @@ void sky()
 
 		// Background cut — raised by the sky's own glow (moon, light pollution):
 		// under a bright sky the faint stars and the Milky Way are the first to go.
-		float _cut = stars_background_cut + stars_wash * _night_sky_lum * 6.0;
+		// (The daylight reveal pretends the sky is dark, or a noon sky would cut everything.)
+		float _wash_lum = _night_sky_lum * ( 1.0 - smoothstep( 0.0, 0.3, stars_daylight_reveal ) );
+		float _cut = stars_background_cut + stars_wash * _wash_lum * 6.0;
 		float _bg_mask = smoothstep( _cut, _cut * 3.0 + 0.02, dot( _stars_color, _LUMA ) );
 		_stars_color *= _bg_mask;
 
@@ -803,7 +842,7 @@ void sky()
 		// Fade stars based on how dark the sky is (twilight transition): the
 		// brightest stars show at −2°, the full field by −17°.
 		float _sun_altitude = -LIGHT0_DIRECTION.y;
-		float _twilight_factor = smoothstep( -0.05, 0.25, _sun_altitude );
+		float _twilight_factor = max( smoothstep( -0.05, 0.25, _sun_altitude ), stars_daylight_reveal );
 		_stars_color *= _twilight_factor;
 
 		// Atmospheric extinction near horizon
@@ -909,6 +948,44 @@ void sky()
 			+ ref_star_color_7 * pow( max( 0.0, 1.0 - _pd / _ref_glow_r ), 3.0 ) * 0.5
 			) * ref_star_enabled_7;
 		COLOR += _ref_accum * ( 1.0 - _moon_amount );
+	}
+
+	//////////////////// ZODIAC ////////////////////////////////////////////////////////////
+	// Constellation figures + names from the overlay map, and the J2000 ecliptic
+	// computed exactly. Drawn before the clouds so they cover it like the stars.
+	// Same world -> RA/Dec -> UV as the STARS block (and its GDScript mirror,
+	// StarSkyMath.shader_uv_for_direction) — keep the three in step.
+	if( zodiac_mode > 0.5 && EYEDIR.y > -0.05 && !AT_CUBEMAP_PASS )
+	{
+		float _z_fade = zodiac_mode > 1.5 ? 1.0
+			: max( smoothstep( -0.05, 0.25, -LIGHT0_DIRECTION.y ), stars_daylight_reveal );
+		_z_fade *= smoothstep( -0.02, 0.06, EYEDIR.y ) * ( 1.0 - _moon_amount );
+		if( _z_fade > 0.001 )
+		{
+			vec3 _zv = normalize( EYEDIR );
+			float _z_sin_dec = clamp( dot( _zv, stars_axis_pole ), -1.0, 1.0 );
+			float _z_dec = asin( _z_sin_dec );
+			float _z_ra = radians( stars_lst ) - atan( -dot( _zv, stars_axis_east ), dot( _zv, stars_axis_meridian ) );
+			vec2 _z_uv = vec2( fract( ( _z_ra - radians( stars_ra_at_u0_deg ) ) * stars_ra_direction / TAU ),
+				0.5 - _z_dec / PI );
+			if( stars_north_up < 0.5 ) { _z_uv.y = 1.0 - _z_uv.y; }
+			vec3 _zm = texture( zodiac_texture, _z_uv ).rgb;
+			vec3 _z_col = zodiac_line_color * max( _zm.r * zodiac_show_lines, _zm.b * zodiac_show_ophiuchus )
+				+ zodiac_label_color * _zm.g * zodiac_show_labels;
+			// Ecliptic latitude β from RA/Dec with the J2000 obliquity (Meeus 13.4):
+			//   sin β = sin δ cos ε − cos δ sin ε sin α,  ε = 23.4392911°.
+			// J2000 because the map and the planet paths are J2000; the ecliptic
+			// "of date" sits ~0.37° off by 2026 (precession).
+			if( zodiac_show_ecliptic > 0.5 )
+			{
+				const float _EPS = 0.40909280; // 23.4392911° in radians
+				float _sin_beta = _z_sin_dec * cos( _EPS ) - cos( _z_dec ) * sin( _EPS ) * sin( _z_ra );
+				float _beta_deg = degrees( abs( asin( clamp( _sin_beta, -1.0, 1.0 ) ) ) );
+				// 0.07° half-width, 0.05° soft edge (fixed: no derivatives in this shader).
+				_z_col += zodiac_ecliptic_color * ( 1.0 - smoothstep( 0.07, 0.12, _beta_deg ) ) * 0.8;
+			}
+			COLOR += _z_col * zodiac_opacity * _z_fade;
+		}
 	}
 
 	//////////////////// CIRRUS //////////////////////////////////////////////////////////////////

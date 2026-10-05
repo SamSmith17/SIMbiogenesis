@@ -1125,19 +1125,26 @@ func _test_gap_fill_bounded() -> void:
 	_check("gap-fill returns promptly (got %d ms)" % elapsed, elapsed < 5000)
 
 
-## reground() must thread settings + growth map: the bare rebuild it used to do
-## rebuilt the manual layer style-less at full size (the "V pops full detail"
-## bug) and left the growth map pointing at freed MultiMeshes.
+## reground() must thread the live settings: the bare rebuild it used to do
+## rebuilt the manual layer style-less (the "V pops full detail" bug). With
+## growth riding the instance data, "threaded" is observable as the batch
+## carrying per-instance custom data at all.
 func _test_reground_threads_growth() -> void:
 	var terrain := Node3D.new()
 	get_root().add_child(terrain)
 	var layer := VegetationLayer.create_empty()
 	layer.add_bulk("pine", 0.0, 0.0, 0.0, 1.0)
 	var ground := func(_x: float, _z: float) -> float: return 0.0
-	var map := VegetationInstanceMap.new()
-	var settings := {"pine_growth_years": 5.0, "growth_now_h": 1000.0}
-	VegetationRuntime.reground(terrain, layer, ground, settings, map)
-	_check("reground repopulates the growth map", not map.is_empty())
+	var settings := {"pine_growth_years": 5.0}
+	VegetationRuntime.reground(terrain, layer, ground, settings)
+	var with_data := 0
+	var batches := 0
+	for node in terrain.find_children("Bulk_pine*", "MultiMeshInstance3D", true, false):
+		batches += 1
+		if (node as MultiMeshInstance3D).multimesh.use_custom_data:
+			with_data += 1
+	_check("reground builds tree batches carrying growth instance data",
+		batches > 0 and with_data == batches, "%d of %d" % [with_data, batches])
 	terrain.queue_free()
 
 

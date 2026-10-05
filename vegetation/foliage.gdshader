@@ -4,6 +4,7 @@ render_mode cull_disabled, depth_prepass_alpha;
 
 #include "res://vegetation/wind_vertex.gdshaderinc"
 #include "res://vegetation/leaf_phenology.gdshaderinc"
+#include "res://vegetation/veg_growth.gdshaderinc"
 
 #include "res://core/soi/shaders/soi_clip.gdshaderinc"
 
@@ -71,6 +72,7 @@ uniform vec3 bud_color : source_color = vec3(0.55, 0.78, 0.24);
 varying float v_view_dist;
 varying vec3 v_world_pos;
 varying vec3 v_inst_pos;
+varying float v_growth_leaf;
 
 float hash21(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21));
@@ -102,6 +104,12 @@ float pine_fur_tuft(vec2 uv, vec3 inst_pos) {
 void vertex() {
 	float top_mask = 1.0 - UV.y;
 	vec3 inst_pos = MODEL_MATRIX[3].xyz;
+	// Growth first, in model space (height + crown width from the plant's age).
+	float g_gen;
+	vec4 g_st = veg_growth_state(INSTANCE_CUSTOM, g_gen);
+	v_growth_leaf = g_st.w;
+	VERTEX = veg_growth_apply(VERTEX, g_st.x, g_st.y,
+		veg_growth_generation(g_gen, INSTANCE_CUSTOM.w));
 	if (whorl_variation_strength > 0.001 && VERTEX.y > 0.15) {
 		float inst_seed = hash21(inst_pos.xz * 0.37);
 		float tier = floor(VERTEX.y / max(whorl_band_h, 0.05));
@@ -182,6 +190,10 @@ void fragment() {
 	float leaf_inst_seed = hash21(floor(v_inst_pos.xz * 0.5) + 0.5);
 	vec2 leaf_key = floor(UV * 13.0) + vec2(leaf_inst_seed * 19.3, leaf_inst_seed * 7.7);
 	if (veg_leaf_fallen(leaf_key, leaf_coverage, deciduousness)) {
+		discard;
+	}
+	// A declining tree thins to a bare snag whatever the season, evergreen or not.
+	if (veg_growth_leaf_gone(leaf_key, v_growth_leaf)) {
 		discard;
 	}
 

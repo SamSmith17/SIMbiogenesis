@@ -130,11 +130,11 @@ static func defaults() -> Dictionary:
 		"grass_field_blade_lean": 0.22,
 		"grass_field_hue_jitter": 0.06,
 		"grass_field_growth_years": 0.0,
-		# Forest age profile (Phase 9): how a freshly seeded stand's ages spread
-		# across the growth span — "mature" (the long-standing behaviour and the
-		# default), "mixed" (an even spread, uneven-aged stand) or "young"
-		# (regrowth: mostly saplings). Consumed by
-		# VegetationGrowth.ensure_birth_times; takes effect on the next reseed.
+		# Forest age profile: how the GENERATED forest's birth years are derived
+		# (VegGrowthModel.derived_born) — "mature" (default: a stationary
+		# uneven-aged stand, mostly full size), "mixed" (ages spread over the
+		# growth span at the site epoch) or "young" (a plantation of saplings).
+		# Written into each batch's instance data, so it applies on rebuild.
 		"forest_age": "mature",
 		"wind_strength": 0.03,
 		"wind_speed": 0.7,

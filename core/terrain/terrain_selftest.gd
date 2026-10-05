@@ -708,6 +708,25 @@ func _test_buildings() -> void:
 	TerrainBuilder.sink_coarse_centre_for_detail(sunk, 5, 1000.0, 400.0, 100.0)
 	_check("sink lowers centre for detail collision", sunk[12] < patched[12],
 		"sunk=%.1f patched=%.1f" % [sunk[12], patched[12]])
+	# A site far BELOW the map's mean elevation (mean 100, valley floor -20):
+	# sinking from the mean leaves the floor at 20, 40 m above the ground.
+	var valley := PackedFloat32Array()
+	valley.resize(25)
+	for i in 25:
+		valley[i] = -20.0 + float(i % 5)
+	var valley_base := TerrainBuilder.patch_centre_heights(base, 5, valley, 5, 1000.0, 400.0, 0.0)
+	var from_mean := valley_base.duplicate()
+	TerrainBuilder.sink_coarse_centre_for_detail(from_mean, 5, 1000.0, 400.0, 100.0)
+	_check("sinking from the mean leaves the floor above a deep site (the bug)",
+		from_mean[12] > -20.0, "floor=%.1f" % from_mean[12])
+	var ref := TerrainBuilder.sink_reference_elev(valley, 100.0)
+	var from_low := valley_base.duplicate()
+	TerrainBuilder.sink_coarse_centre_for_detail(from_low, 5, 1000.0, 400.0, ref)
+	_check("sink reference is the lowest detail point", _approx(ref, -20.0, 1e-6))
+	_check("coarse collider is sunk below the lowest ground of the patch",
+		from_low[12] < -20.0 - 50.0, "floor=%.1f" % from_low[12])
+	_check("a site above the mean still sinks from the mean",
+		_approx(TerrainBuilder.sink_reference_elev(detail, 100.0), 100.0, 1e-6))
 	var detail_foot := detail.duplicate()
 	var sunk_y := TerrainBuilder.height_at_world_xz(sunk, 5, 1000.0, 100.0, 0.0, 0.0)
 	var detail_y := TerrainBuilder.height_at_world_xz_rect(detail_foot, 5, 5, 400.0, 100.0, 0.0, 0.0)

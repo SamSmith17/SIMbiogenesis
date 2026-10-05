@@ -307,6 +307,20 @@ origin + license here as it's added (PBR sets `Wood034_1K-JPG/`,
     installed Stellarium for the Milky Way texture author/licence before a
     public release.
   - Status: pending-verification
+- **Zodiac constellation overlay (Stellarium sky-culture data)** — the 12
+  zodiac stick figures + Latin names and Ophiuchus
+  (`assets/sky/zodiac_overlay_8k.png` + `.json`), rasterised by
+  `tools/zodiac_overlay_export.py` in the star map's own registration.
+  - Author: Stellarium contributors (sky culture "modern" figures; star
+    positions dumped from Stellarium 26.2); label glyphs set in Noto Sans (Google)
+  - Source: https://github.com/Stellarium/stellarium/tree/master/skycultures/modern
+  - License: CC BY-SA 4.0 (figure data); Noto Sans SIL OFL 1.1  ·  Added: 2026-09-30
+  - Attribution required: yes  ·  Share-alike: **yes**  ·  Commercial OK: yes
+  - Notes: the overlay PNG is a derivative of CC BY-SA data and must itself be
+    distributed under CC BY-SA 4.0 with this attribution; that does not
+    extend to the rest of the project. The font is only used to rasterise
+    glyphs — no font file is shipped.
+  - Status: verified
 
 ## Fonts
 

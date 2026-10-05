@@ -3,6 +3,7 @@ shader_type spatial;
 render_mode cull_disabled;
 
 #include "res://vegetation/wind_vertex.gdshaderinc"
+#include "res://vegetation/veg_growth.gdshaderinc"
 
 #include "res://core/soi/shaders/soi_clip.gdshaderinc"
 
@@ -23,9 +24,25 @@ uniform float night_darkness : hint_range(0.0, 1.0) = 0.72;
 
 varying vec3 v_inst_pos;
 
+// Stem radius (m) of the mature tree. Vertices inside it scale with GIRTH (a
+// young stem is thin, an old one thick); branches further out scale with the
+// crown so they still reach the foliage. 0 = unknown: everything follows the crown.
+uniform float growth_trunk_radius = 0.0;
+
 void vertex() {
 	vec3 inst_pos = MODEL_MATRIX[3].xyz;
 	float top_mask = 1.0 - UV.y;
+	// Growth first, in model space, so wind bends the tree at its current size.
+	float g_gen;
+	vec4 g_st = veg_growth_state(INSTANCE_CUSTOM, g_gen);
+	float g_radial = g_st.y;
+	if (growth_trunk_radius > 0.0) {
+		float stem = 1.0 - smoothstep(growth_trunk_radius * 1.2,
+			growth_trunk_radius * 2.5, length(VERTEX.xz));
+		g_radial = mix(g_st.y, g_st.z, stem);
+	}
+	VERTEX = veg_growth_apply(VERTEX, g_st.x, g_radial,
+		veg_growth_generation(g_gen, INSTANCE_CUSTOM.w));
 	float vert_phase = dot(VERTEX, vec3(9.1, 21.7, 6.3));
 	VERTEX = apply_vegetation_wind(VERTEX, inst_pos, top_mask, vert_phase);
 	v_inst_pos = inst_pos;

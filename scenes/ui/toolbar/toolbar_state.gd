@@ -131,6 +131,49 @@ const TOOLS: Array[Dictionary] = [
 		"shapes": ["brush"],
 		"params": [],
 	},
+	{
+		"id": "camp_paint", "section": "camps", "label": "Camp",
+		"tooltip": "Paint a camp: tents, shade and vehicles fill the area you brush or draw.\nPainting over a camp of the same style grows it; nothing already standing moves.",
+		"shapes": ["brush", "circle", "rect", "lasso", "polygon"],
+		"params": [
+			{"key": "radius_m", "label": "Size m", "min": 3.0, "max": 60.0, "default": 12.0, "step": 0.5},
+			{"key": "density", "label": "Dens", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
+			{"key": "heading_deg", "label": "Heading (-1 auto)", "min": -1.0, "max": 179.0, "default": -1.0, "step": 1.0},
+			{"key": "align_jitter_deg", "label": "Align +/-", "min": 0.0, "max": 30.0, "default": 5.0, "step": 0.5},
+			{"key": "light_density", "label": "Lights", "min": 0.0, "max": 2.0, "default": 1.0, "step": 0.05},
+		],
+	},
+	{
+		"id": "camp_erase", "section": "camps", "label": "Erase",
+		"tooltip": "Remove camp ground under the brush / inside a drawn shape.\nCutting a camp in two leaves two camps.",
+		"shapes": ["brush", "circle", "rect", "lasso", "polygon"],
+		"params": [
+			{"key": "radius_m", "label": "Size m", "min": 3.0, "max": 60.0, "default": 10.0, "step": 0.5},
+		],
+	},
+	{
+		"id": "camp_subdivide", "section": "camps", "label": "Plots",
+		"tooltip": "Draw a zone: it is split into camp plots with access lanes between them.\nEach plot becomes its own camp you can restyle or delete.",
+		"shapes": ["rect", "lasso", "polygon"],
+		"params": [
+			{"key": "plot_w_m", "label": "Plot W m", "min": 8.0, "max": 80.0, "default": 30.0, "step": 1.0},
+			{"key": "plot_d_m", "label": "Plot D m", "min": 8.0, "max": 80.0, "default": 22.0, "step": 1.0},
+			{"key": "lane_w_m", "label": "Lane m", "min": 0.0, "max": 15.0, "default": 6.0, "step": 0.5},
+			{"key": "heading_deg", "label": "Heading (-1 auto)", "min": -1.0, "max": 179.0, "default": -1.0, "step": 1.0},
+			{"key": "density", "label": "Dens", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
+		],
+	},
+	{
+		"id": "camp_select", "section": "camps", "label": "Edit",
+		"tooltip": "Click a camp to edit it: style, density, heading, name. Del deletes it.",
+		"shapes": [],
+		"params": [
+			{"key": "density", "label": "Dens", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
+			{"key": "heading_deg", "label": "Heading (-1 auto)", "min": -1.0, "max": 179.0, "default": -1.0, "step": 1.0},
+			{"key": "align_jitter_deg", "label": "Align +/-", "min": 0.0, "max": 30.0, "default": 5.0, "step": 0.5},
+			{"key": "light_density", "label": "Lights", "min": 0.0, "max": 2.0, "default": 1.0, "step": 0.05},
+		],
+	},
 ]
 
 ## Vegetation families offered by the veg tools. `preset` mirrors
@@ -144,6 +187,20 @@ const VEG_FAMILIES: Array[Dictionary] = [
 	{"id": "mix", "label": "Mix", "preset": 3},
 	{"id": "grass_lawn", "label": "Lawn", "preset": 4},
 	{"id": "grass_field", "label": "Field", "preset": 5},
+]
+
+## Camp styles offered by the camp tools. LITERAL ids for the same reason as
+## VEG_FAMILIES (the model must load with a stale class cache); toolbar_selftest
+## asserts they still match CampStyles. "varied" is the Plots tool's
+## one-style-per-plot option; the paint tool reads it as "mixed".
+const CAMP_STYLES: Array[Dictionary] = [
+	{"id": "mixed", "label": "Mixed"},
+	{"id": "rv_park", "label": "RVs"},
+	{"id": "tent_village", "label": "Tents"},
+	{"id": "car_camping", "label": "Cars"},
+	{"id": "theme_camp", "label": "Theme"},
+	{"id": "glamping", "label": "Glamp"},
+	{"id": "varied", "label": "Varied"},
 ]
 
 ## Tools whose UI/dispatch has not shipped yet render disabled in the strip.
@@ -162,6 +219,8 @@ var _shapes: Dictionary = {}
 var veg_family: String = "shrub"
 var veg_species: String = "shrub"
 var hero_preset: String = "pine_1"
+## Camp brush identity, shared by every camp tool for the same reason.
+var camp_style: String = "mixed"
 
 
 func _init() -> void:
@@ -278,6 +337,33 @@ func set_veg_species(species_id: String) -> void:
 	veg_species = species_id
 
 
+# ---------------------------------------------------------------------------
+# Camp brush identity
+# ---------------------------------------------------------------------------
+
+func camp_style_def(style_id: String) -> Dictionary:
+	for s in CAMP_STYLES:
+		if String(s["id"]) == style_id:
+			return s
+	return {}
+
+
+func set_camp_style(style_id: String) -> bool:
+	if camp_style_def(style_id).is_empty():
+		return false
+	camp_style = style_id
+	return true
+
+
+## The style a tool actually applies. "varied" only means something to the
+## Plots tool; anywhere else it paints the mixed camp.
+func camp_style_for_tool(tool_id: String = "") -> String:
+	var id := tool_id if not tool_id.is_empty() else active_tool
+	if camp_style == "varied" and id != "camp_subdivide":
+		return "mixed"
+	return camp_style
+
+
 ## 0..0.5 size-variance fraction from the 0..50 percent slider.
 func size_var_fraction() -> float:
 	return clampf(get_param("size_var", 25.0) / 100.0, 0.0, 0.5)
@@ -336,6 +422,7 @@ func to_config(cfg: ConfigFile) -> void:
 	cfg.set_value("toolbar", "veg_family", veg_family)
 	cfg.set_value("toolbar", "veg_species", veg_species)
 	cfg.set_value("toolbar", "hero_preset", hero_preset)
+	cfg.set_value("toolbar", "camp_style", camp_style)
 	for t in TOOLS:
 		var id := String(t["id"])
 		var section := "tool_%s" % id
@@ -357,6 +444,7 @@ func from_config(cfg: ConfigFile) -> void:
 		veg_family = fam
 		veg_species = String(cfg.get_value("toolbar", "veg_species", veg_species))
 	hero_preset = String(cfg.get_value("toolbar", "hero_preset", hero_preset))
+	set_camp_style(String(cfg.get_value("toolbar", "camp_style", camp_style)))
 	for t in TOOLS:
 		var id := String(t["id"])
 		var section := "tool_%s" % id

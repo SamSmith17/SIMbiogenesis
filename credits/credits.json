@@ -1299,6 +1299,24 @@
       "share_alike": null,
       "source": "https://stellarium.org",
       "status": "pending-verification"
+    },
+    {
+      "added": "2026-09-30",
+      "attribution_required": true,
+      "attribution_string": "Zodiac constellation figures from Stellarium's 'modern' sky culture (CC BY-SA 4.0), star positions via Stellarium (stellarium.org); labels set in Noto Sans (SIL OFL 1.1)",
+      "author": "Stellarium contributors (sky culture 'modern' figures + star positions); Noto Sans by Google (label glyphs)",
+      "category": "textures",
+      "commercial_ok": true,
+      "id": "zodiac-overlay-stellarium",
+      "license": "CC BY-SA 4.0 (figure data); glyphs from Noto Sans, SIL OFL 1.1",
+      "local_path": "assets/sky/zodiac_overlay_8k.png (+ zodiac_overlay_8k.json)",
+      "modifications": "Rasterised by tools/zodiac_overlay_export.py: HIP polylines from skycultures/modern/index.json drawn as great-circle arcs in the star map's plate-carree registration; star positions dumped from Stellarium 26.2 (core.getObjectInfo, J2000); Latin names placed clear of the lines",
+      "name": "Zodiac constellation overlay (Stellarium sky-culture data)",
+      "notes": "SHARE-ALIKE: the overlay is a derivative of CC BY-SA 4.0 data, so the overlay PNG itself must be distributed under CC BY-SA 4.0 with attribution. This does not affect the rest of the project. Noto Sans is used only to rasterise label glyphs (OFL permits this; the font file is not shipped).",
+      "role": "Optional zodiac lines/names over the night sky (sky.gdshader, analemma star view)",
+      "share_alike": true,
+      "source": "https://github.com/Stellarium/stellarium/tree/master/skycultures/modern",
+      "status": "verified"
     }
   ],
   "field_guide": {

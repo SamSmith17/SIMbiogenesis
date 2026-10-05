@@ -1084,6 +1084,48 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("charge") and charge_available():
 		_start_charging()
 		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("drone_view") and not InputGuard.blocked(get_viewport()):
+		if toggle_remote_drone_view():
+			get_viewport().set_input_as_handled()
+
+
+## Tab: take the survey drone's view from wherever you are, without walking to
+## it. The drone lifts off from the player's CURRENT camera position (its home is
+## moved there first), so the view starts where you were already looking from
+## rather than back at the drone's parking spot. Pressed again (or X) it lands
+## beside you. Returns false when it did nothing (riding something else, no drone).
+func toggle_remote_drone_view() -> bool:
+	if is_riding:
+		if is_fpv_drone_mode:
+			_dismount_vehicle()
+			return true
+		return false
+	if is_charging_euc:
+		return false
+	var main := get_parent()
+	if main == null:
+		return false
+	var drone := main.get_node_or_null("FPVDrone") as Node3D
+	if drone == null:
+		var loader := main.get_node_or_null("TerrainLoader")
+		if loader != null and loader.has_method("ensure_explore_drone"):
+			drone = loader.call("ensure_explore_drone") as Node3D
+	if drone == null or not drone.has_method("mount") or bool(drone.get("is_mounted")):
+		return false
+	var cam := get_node_or_null("CameraArm/Camera3D") as Camera3D
+	var eye := cam.global_position if cam != null else global_position + Vector3(0.0, 1.6, 0.0)
+	# mount() takes off from drone_spawn_position + REMOTE_DRONE_LIFT_M, so park
+	# the home that far below the eye — but never under the player's feet.
+	var home := eye - Vector3(0.0, REMOTE_DRONE_LIFT_M, 0.0)
+	home.y = maxf(home.y, global_position.y + 0.1)
+	drone.set("drone_spawn_position", home)
+	drone.global_position = home
+	_mount_vehicle(drone)
+	return is_riding
+
+
+## Must match the takeoff lift in FPVDrone.mount().
+const REMOTE_DRONE_LIFT_M := 1.5
 
 func _mount_vehicle(vehicle: Node3D) -> void:
 	if vehicle == null or not vehicle.has_method("mount"):

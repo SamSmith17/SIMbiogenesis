@@ -173,12 +173,16 @@ func _ready() -> void:
 			_run_veg_capture.call_deferred()
 		elif _capture_mode == "areafill":
 			_run_area_fill_verify.call_deferred()
+		elif _capture_mode == "camps":
+			_run_camp_capture.call_deferred()
 		elif _capture_mode == "vegdock":
 			_run_veg_dock_capture.call_deferred()
 		elif _capture_mode == "foodforest":
 			_run_food_forest_verify.call_deferred()
 		elif _capture_mode == "tree":
 			_run_tree_portrait_capture.call_deferred()
+		elif _capture_mode == "growth":
+			_run_growth_capture.call_deferred()
 		elif _capture_mode == "weather":
 			_run_extreme_weather_capture.call_deferred()
 		elif _capture_mode == "stars":
@@ -386,12 +390,16 @@ func _launch_map() -> void:
 		_run_veg_capture()
 	elif _capture_mode == "areafill":
 		_run_area_fill_verify()
+	elif _capture_mode == "camps":
+		_run_camp_capture()
 	elif _capture_mode == "vegdock":
 		_run_veg_dock_capture()
 	elif _capture_mode == "foodforest":
 		_run_food_forest_verify()
 	elif _capture_mode == "tree":
 		_run_tree_portrait_capture()
+	elif _capture_mode == "growth":
+		_run_growth_capture()
 	elif _capture_mode == "packing":
 		_run_packing_capture()
 	elif _capture_mode == "hardware":
@@ -455,12 +463,16 @@ func _launch_scene_direct() -> void:
 		_run_veg_capture()
 	elif _capture_mode == "areafill":
 		_run_area_fill_verify()
+	elif _capture_mode == "camps":
+		_run_camp_capture()
 	elif _capture_mode == "vegdock":
 		_run_veg_dock_capture()
 	elif _capture_mode == "foodforest":
 		_run_food_forest_verify()
 	elif _capture_mode == "tree":
 		_run_tree_portrait_capture()
+	elif _capture_mode == "growth":
+		_run_growth_capture()
 	elif _capture_mode == "packing":
 		_run_packing_capture()
 	elif _capture_mode == "hardware":
@@ -4898,6 +4910,361 @@ func _area_fill_waypoints(loader: Node, centroid: Vector2) -> Array:
 	]
 
 
+# ==================== PAINTED CAMPS (--capture=camps) ====================
+# Drives the loader's camp-area API on a real saved map: paints an RV camp on
+# the best open ground it can find, grows it, splits a second zone into plots,
+# and asserts what a PNG cannot show — vehicles within the alignment jitter of
+# the camp heading, every structure seated on the (edit-aware) ground, growth
+# leaving the existing structures in place, the layer persisted and reproduced
+# by a fresh attach, and undo. Shoots day + night sets. The map's
+# camp_areas_*.json is snapshotted and byte-restored, so a run never leaves
+# camps on the player's site.
+
+const CAMP_SITE_W := 120.0
+const CAMP_SITE_D := 90.0
+
+
+func _camp_result(ok: bool, what: String) -> void:
+	print("PlaytestHarness: camps %s — %s" % ["PASS" if ok else "FAIL", what])
+
+
+func _run_camp_capture() -> void:
+	var loader := await _find_terrain_loader()
+	if loader == null:
+		push_error("PlaytestHarness: camps needs a TerrainLoader map")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	_set_capture_conditions()
+
+	var path: String = CampAreaLayer.save_path_for_map(
+		float(loader.get("_lat")), float(loader.get("_lon")))
+	var snap := _snapshot_files([path])
+	# Start from an empty layer so counts are this run's alone.
+	var blank := CampAreaLayer.create_empty()
+	blank.save_to(path)
+	loader.set("camp_areas", null)
+	loader.call("_attach_camp_areas")
+
+	var sites := _camp_pick_sites(loader)
+	if sites.is_empty():
+		_camp_result(false, "no open ground found for a camp near the site centre")
+		_restore_files(snap)
+		_maybe_quit()
+		return
+	var a: Vector2 = sites[0]
+	var hw := CAMP_SITE_W * 0.5
+	var hd := CAMP_SITE_D * 0.5
+	var rect_a := PackedVector2Array([a + Vector2(-hw, -hd), a + Vector2(hw, -hd),
+		a + Vector2(hw, hd), a + Vector2(-hw, hd)])
+	print("PlaytestHarness: camps — site A at (%.0f, %.0f)" % [a.x, a.y])
+
+	# 1. Paint an RV camp.
+	var id := str(loader.call("paint_camp_area", rect_a, {"style": "rv_park", "density": 1.0}))
+	var info: Dictionary = loader.call("camp_area_info", id)
+	var n_a := int(info.get("structures", 0))
+	var heading := float(info.get("heading_deg", 0.0))
+	print("PlaytestHarness: camps — %s: %d structures, heading %.1f deg (auto=%s), stats=%s" % [
+		id, n_a, heading, str(info.get("heading_auto", false)), str(info.get("stats", {}))])
+	_camp_result(not id.is_empty() and n_a > 10, "painting placed structures (%d)" % n_a)
+
+	# 2. Vehicles are aligned to the camp heading.
+	var rt := loader.get("_camp_area_runtime") as CampAreaRuntime
+	var rvs: Array = rt.area_class_transforms(id, "rv") if rt != null else []
+	var worst := 0.0
+	for xf: Transform3D in rvs:
+		var ax := xf.basis.x
+		worst = maxf(worst, CampLayoutGenerator.axis_deviation_deg(atan2(ax.z, ax.x), heading))
+	print("PlaytestHarness: camps — %d RVs, worst deviation from heading %.2f deg" % [
+		rvs.size(), worst])
+	# The jitter is 5 deg in plan; a vehicle tilted to a slope reads a hair more.
+	_camp_result(rvs.size() > 3 and worst <= 6.5, "RVs aligned within the jitter")
+
+	# 3. Everything sits on the ground the loader reports (terrain edits included).
+	var worst_dy := 0.0
+	for cls in ["rv", "ez_up", "car", "van", "camping_tent"]:
+		for xf: Transform3D in (rt.area_class_transforms(id, cls) if rt != null else []):
+			worst_dy = maxf(worst_dy, absf(xf.origin.y - _ground_y(loader, xf.origin.x, xf.origin.z)))
+	print("PlaytestHarness: camps — worst height error vs ground %.4f m" % worst_dy)
+	_camp_result(worst_dy < 0.02, "structures are seated on the ground")
+
+	_camp_result(FileAccess.file_exists(path)
+		and FileAccess.get_file_as_string(path).contains(id), "camp written to disk")
+
+	# 4. Growing the camp keeps what is already standing.
+	var before_keys := {}
+	for xf: Transform3D in rvs:
+		before_keys["%.2f|%.2f" % [xf.origin.x, xf.origin.z]] = true
+	var grow := PackedVector2Array([a + Vector2(hw - 10.0, -hd), a + Vector2(hw + 50.0, -hd),
+		a + Vector2(hw + 50.0, hd), a + Vector2(hw - 10.0, hd)])
+	var id2 := str(loader.call("paint_camp_area", grow, {"style": "rv_park", "density": 1.0}))
+	var grown: Array = rt.area_class_transforms(id, "rv") if rt != null else []
+	var kept := 0
+	for xf: Transform3D in grown:
+		if before_keys.has("%.2f|%.2f" % [xf.origin.x, xf.origin.z]):
+			kept += 1
+	var n_grown := int((loader.call("camp_area_info", id) as Dictionary).get("structures", 0))
+	print("PlaytestHarness: camps — grown: same id=%s, %d -> %d structures, %d/%d RVs kept" % [
+		str(id2 == id), n_a, n_grown, kept, before_keys.size()])
+	_camp_result(id2 == id and n_grown >= n_a and kept == before_keys.size(),
+		"growing a camp moves nothing already standing")
+
+	# 5. Subdivide a second zone into plots.
+	var plot_ids: Array = []
+	var b: Vector2 = sites[1] if sites.size() > 1 else a + Vector2(0.0, CAMP_SITE_D + 60.0)
+	var zone := PackedVector2Array([b + Vector2(-80, -55), b + Vector2(80, -55),
+		b + Vector2(80, 55), b + Vector2(-80, 55)])
+	plot_ids = loader.call("subdivide_camp_zone", zone, {"style": "varied",
+		"plot_w_m": 30.0, "plot_d_m": 22.0, "lane_w_m": 6.0, "density": 0.9})
+	var styles := {}
+	var plot_structs := 0
+	for pid in plot_ids:
+		var pi: Dictionary = loader.call("camp_area_info", str(pid))
+		styles[str(pi.get("style", ""))] = true
+		plot_structs += int(pi.get("structures", 0))
+	print("PlaytestHarness: camps — zone at (%.0f, %.0f): %d plots, %d structures, styles %s" % [
+		b.x, b.y, plot_ids.size(), plot_structs, str(styles.keys())])
+	_camp_result(plot_ids.size() >= 4 and plot_structs > 0, "a zone splits into filled plots")
+
+	var summary: Dictionary = loader.call("camp_areas_summary")
+	print("PlaytestHarness: camps — total %s" % str(summary))
+
+	# Shots: day, then night for the glow.
+	var label := _shots_label if not _shots_label.is_empty() else "camps"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var cam := Camera3D.new()
+	cam.name = "PlaytestCam"
+	cam.far = 40000.0
+	get_tree().current_scene.add_child(cam)
+	cam.make_current()
+	var manifest: Array = []
+	var wps := _camp_waypoints(loader, a, b)
+	await _capture_set(cam, wps, "day", dir, manifest)
+	var main := get_tree().current_scene
+	if "day_time" in main:
+		main.day_time = 23.0
+	await get_tree().create_timer(1.0).timeout
+	await _capture_set(cam, wps, "night", dir, manifest)
+	if "day_time" in main:
+		main.day_time = _capture_hour
+
+	# 6. A fresh attach (what a reload does) reproduces the same camps.
+	var want := int(summary.get("structures", 0))
+	loader.set("camp_areas", null)
+	loader.call("_attach_camp_areas")
+	var again: Dictionary = loader.call("camp_areas_summary")
+	print("PlaytestHarness: camps — after re-attach %s" % str(again))
+	_camp_result(int(again.get("structures", -1)) == want
+		and int(again.get("areas", -1)) == int(summary.get("areas", 0)),
+		"a reload reproduces every camp exactly")
+
+	# 7. Erase + undo.
+	loader.call("push_camp_undo")
+	var hit := int(loader.call("erase_camps_in_polygon", rect_a))
+	var after_erase := int((loader.call("camp_areas_summary") as Dictionary).get("structures", 0))
+	var undone := bool(loader.call("undo_camps"))
+	var after_undo := int((loader.call("camp_areas_summary") as Dictionary).get("structures", 0))
+	print("PlaytestHarness: camps — erase touched %d, %d -> %d, undo -> %d" % [
+		hit, want, after_erase, after_undo])
+	_camp_result(hit > 0 and after_erase < want and undone and after_undo == want,
+		"erase removes structures and undo restores them")
+
+	# 8. Tune look: the style modal through its real entry point. Adds a library
+	# model to a style, checks it shows up in the preview AND (after Apply) on
+	# the map, then byte-restores the player's camp_styles.json.
+	var style_snap := _snapshot_files([CampStyleStore.PATH])
+	var ui_layer := main.get_node_or_null("UILayer") as CanvasLayer
+	if ui_layer != null:
+		ui_layer.visible = true
+	loader.call("open_camp_style_modal", "rv_park")
+	await get_tree().create_timer(1.0).timeout
+	var modal := loader.get("_camp_style_modal") as Control
+	_camp_result(modal != null and modal.visible, "the Tune-look modal opens")
+	if modal != null:
+		await _shoot_ui(dir, "tune_00_rv_park")
+		modal.call("_add_model", "shiftpod", "Shiftpod")
+		await get_tree().create_timer(1.0).timeout
+		var draft: Dictionary = modal.get("_draft")
+		var added := (draft["models"] as Dictionary).has("u_shiftpod")
+		var prt := modal.get("_runtime") as CampAreaRuntime
+		var pods: Array = prt.area_class_transforms("preview", "u_shiftpod") if prt != null else []
+		print("PlaytestHarness: camps — tune look: model %s, %d in the preview; stats: %s | warnings: %s" % [
+			str((draft["models"] as Dictionary).get("u_shiftpod", {})), pods.size(),
+			str((modal.get("_stats_lbl") as Label).text), str((modal.get("_warn_lbl") as Label).text)])
+		_camp_result(added and pods.size() > 0, "an added library model appears in the preview")
+		await _shoot_ui(dir, "tune_01_model_added")
+		modal.call("_save_to_global")
+		await get_tree().create_timer(1.0).timeout
+		var on_map := 0
+		for rec: Dictionary in (loader.get("camp_areas") as CampAreaLayer).areas:
+			if str(rec["style"]) == "rv_park":
+				on_map += rt.area_class_transforms(str(rec["id"]), "u_shiftpod").size()
+		print("PlaytestHarness: camps — after Apply: %d of the added model on the map" % on_map)
+		_camp_result(on_map > 0 and FileAccess.file_exists(CampStyleStore.PATH),
+			"Apply saves the style and restyles the camps on the map")
+		modal.call("close")
+
+		# 9. One placed camp: crosshair pick + footprint highlight, then CAMP
+		# mode — click an element in the preview, turn it, remove another, save
+		# to THIS camp only; then a map-wide edit; then a second layout.
+		var pick: Dictionary = loader.call("pick_camp_at_world", a.x, a.y)
+		loader.call("set_camp_focus", str(pick.get("id", "")))
+		var hl := (main.get_node_or_null("Terrain/CampAreaHighlight")) as MeshInstance3D
+		_camp_result(bool(pick.get("valid", false)) and str(pick.get("id", "")) == id
+			and hl != null and hl.visible and hl.mesh != null,
+			"aiming at a camp picks it and highlights its footprint")
+		loader.call("set_camp_focus", "")
+		loader.call("open_camp_tune_for_camp", id)
+		await get_tree().create_timer(1.0).timeout
+		_camp_result(bool(modal.call("is_camp_mode")), "clicking a camp opens the modal on THAT camp")
+		var prt2 := modal.get("_runtime") as CampAreaRuntime
+		var items: Array = prt2.area_items("preview")
+		var rv_items: Array = items.filter(func(it: Dictionary) -> bool: return str(it["cls"]) == "rv")
+		var pcam := modal.get("_camera") as Camera3D
+		var want_item: Dictionary = rv_items[rv_items.size() / 2] if not rv_items.is_empty() else {}
+		var got := ""
+		if not want_item.is_empty():
+			got = str(modal.call("pick_element", pcam.unproject_position((want_item["pos"] as Vector3) + Vector3(0, 1.2, 0))))
+		print("PlaytestHarness: camps — camp mode: %d elements in the preview (%d RVs); clicked %s, picked %s" % [
+			items.size(), rv_items.size(), str(want_item.get("key", "")), got])
+		_camp_result(not got.is_empty() and got == str(want_item.get("key", "")),
+			"a click in the preview picks the element under it")
+		var before_n := int((loader.call("camp_area_info", id) as Dictionary).get("structures", 0))
+		modal.set("_selected_key", got)
+		modal.call("_edit_selected", "yaw_deg", 90.0)
+		modal.call("_update_marker")
+		await get_tree().create_timer(0.6).timeout
+		await _shoot_ui(dir, "tune_02_camp_element_turned")
+		var victim := str((rv_items[0] as Dictionary)["key"]) if rv_items.size() > 1 else ""
+		if victim == got and rv_items.size() > 1:
+			victim = str((rv_items[1] as Dictionary)["key"])
+		modal.set("_selected_key", victim)
+		modal.call("_remove_selected")
+		modal.call("_save_to_camp")
+		await get_tree().create_timer(0.8).timeout
+		var rec_after: Dictionary = loader.call("camp_area_info", id)
+		var saved_edits: Dictionary = rec_after.get("edits", {})
+		var turned_ok := false
+		for xf: Transform3D in rt.area_class_transforms(id, "rv"):
+			var ax := xf.basis.x
+			if absf(CampLayoutGenerator.axis_deviation_deg(atan2(ax.z, ax.x), float(rec_after["heading_deg"])) - 90.0) < 6.0:
+				turned_ok = true
+		print("PlaytestHarness: camps — saved to this camp: edits=%s, structures %d -> %d" % [
+			str(saved_edits), before_n, int(rec_after.get("structures", 0))])
+		_camp_result(saved_edits.size() == 2 and turned_ok
+			and int(rec_after.get("structures", 0)) == before_n - 1
+			and FileAccess.get_file_as_string(path).contains("\"edits\""),
+			"hand edits are saved on the camp and drawn on the map")
+
+		# Map scope: thin every RV-park camp on this map.
+		var rv_before := 0
+		for rec: Dictionary in (loader.get("camp_areas") as CampAreaLayer).areas:
+			if str(rec["style"]) == "rv_park":
+				rv_before += rt.area_structure_count(str(rec["id"]))
+		modal.set("_delta", {"fill": 0.4})
+		modal.call("_save_to_map")
+		await get_tree().create_timer(0.8).timeout
+		var rv_after := 0
+		for rec: Dictionary in (loader.get("camp_areas") as CampAreaLayer).areas:
+			if str(rec["style"]) == "rv_park":
+				rv_after += rt.area_structure_count(str(rec["id"]))
+		print("PlaytestHarness: camps — map-wide fill 0.4: RV-park structures %d -> %d; map style %s" % [
+			rv_before, rv_after, str(loader.call("map_camp_style", "rv_park"))])
+		_camp_result(rv_after < rv_before and not (loader.call("map_camp_style", "rv_park") as Dictionary).is_empty()
+			and (loader.call("camp_area_info", id).get("edits", {}) as Dictionary).size() == 2,
+			"'all camps of this type on this map' restyles them and keeps the hand edits")
+
+		# Layouts: a second look under the same style, saved globally, then
+		# dealt to new camps by chance.
+		modal.set("_delta", {"lane_w": 12.0, "templates": {"van_site": 8.0, "rv_site": 0.0}})
+		modal.call("_on_new_layout")
+		modal.call("_save_to_global")
+		await get_tree().create_timer(0.8).timeout
+		modal.call("close")
+		var layouts := CampStyles.variants("rv_park")
+		var dealt := {}
+		for n in 14:
+			var c := a + Vector2(-260.0 + float(n % 7) * 44.0, 190.0 + float(n / 7) * 44.0)
+			var nid := str(loader.call("paint_camp_area", PackedVector2Array([c + Vector2(-18, -18),
+				c + Vector2(18, -18), c + Vector2(18, 18), c + Vector2(-18, 18)]),
+				{"style": "rv_park", "seed": 1000 + n * 37}))
+			if not nid.is_empty():
+				var dealt_v := str((loader.call("camp_area_info", nid) as Dictionary).get("variant", "?"))
+				dealt[dealt_v] = int(dealt.get(dealt_v, 0)) + 1
+		print("PlaytestHarness: camps — layouts of rv_park: %s; 14 new camps were dealt %s" % [
+			str(layouts.map(func(lv: Variant) -> String: return str((lv as Dictionary).get("name", "")))), str(dealt)])
+		_camp_result(layouts.size() == 1 and dealt.size() == 2,
+			"a saved layout is mixed into new camps of that style")
+	_restore_files(style_snap)
+	CampStyleStore.load_and_apply()
+	CampMeshLibrary.clear_cache()
+	if ui_layer != null:
+		ui_layer.visible = false
+
+	# Leave the map exactly as found.
+	_restore_files(snap)
+	loader.set("camp_areas", null)
+	loader.call("_attach_camp_areas")
+	print("PlaytestHarness: camps — restored %s" % (
+		"the map's own camps" if snap[path] != null else "a map with no camps"))
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+		f.close()
+	cam.queue_free()
+	print("PlaytestHarness: camps — %d shots in %s" % [
+		manifest.size(), ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
+## The two candidate centres (>= 260 m apart) where a test camp fills best —
+## scored with the real generator and the loader's real exclusions/ground, so
+## the run lands on ground a player could actually camp on.
+func _camp_pick_sites(loader: Node) -> Array:
+	var ctx: Dictionary = loader.call("_camp_ctx")
+	var scored: Array = []
+	var hw := CAMP_SITE_W * 0.5
+	var hd := CAMP_SITE_D * 0.5
+	for gx in range(-4, 5):
+		for gz in range(-4, 5):
+			var c := Vector2(gx * 130.0, gz * 130.0)
+			var rect := PackedVector2Array([c + Vector2(-hw, -hd), c + Vector2(hw, -hd),
+				c + Vector2(hw, hd), c + Vector2(-hw, hd)])
+			var res := CampLayoutGenerator.generate({"polygon": rect, "style": "rv_park",
+				"density": 1.0, "seed": 1, "heading_deg": 90.0}, ctx)
+			scored.append({"c": c, "n": int(res["stats"]["structures"])})
+	scored.sort_custom(func(x: Dictionary, y: Dictionary) -> bool: return int(x["n"]) > int(y["n"]))
+	var out: Array = []
+	if scored.is_empty() or int(scored[0]["n"]) < 10:
+		return out
+	out.append(scored[0]["c"])
+	for s: Dictionary in scored:
+		if (s["c"] as Vector2).distance_to(out[0]) >= 260.0 and int(s["n"]) >= 10:
+			out.append(s["c"])
+			break
+	return out
+
+
+func _camp_waypoints(loader: Node, a: Vector2, b: Vector2) -> Array:
+	var ga := _ground_y(loader, a.x, a.y)
+	var gb := _ground_y(loader, b.x, b.y)
+	return [
+		{"pos": Vector3(a.x - 110.0, ga + 60.0, a.y - 110.0), "look": Vector3(a.x, ga, a.y),
+			"tag": "camp_oblique"},
+		{"pos": Vector3(a.x, ga + 170.0, a.y + 12.0), "look": Vector3(a.x, ga, a.y),
+			"tag": "camp_overhead"},
+		{"pos": Vector3(a.x - 30.0, ga + 2.2, a.y - 28.0), "look": Vector3(a.x + 20.0, ga + 1.5, a.y + 10.0),
+			"tag": "camp_street"},
+		{"pos": Vector3(b.x, gb + 230.0, b.y + 16.0), "look": Vector3(b.x, gb, b.y),
+			"tag": "plots_overhead"},
+		{"pos": Vector3(b.x - 140.0, gb + 70.0, b.y - 120.0), "look": Vector3(b.x, gb, b.y),
+			"tag": "plots_oblique"},
+	]
+
+
 # ==================== VEG DOCK CAPTURE (--capture=vegdock) ====================
 # Veg overhaul Phase 8: shoot the redesigned paint dock and the Tune-look modal
 # through their REAL entry points, so a layout/theme regression is visible
@@ -5126,6 +5493,256 @@ func _spec_float(model: Variant, item_id: String, key: String) -> float:
 	if it.is_empty():
 		return 0.0
 	return float((it.get("specs", {}) as Dictionary).get(key, 0.0))
+
+
+# ==================== GROWTH (--capture=growth) ====================
+## Plant growth is a pure function of the calendar, drawn per instance by the
+## shaders (VegGrowthModel / veg_growth.gdshaderinc). Two things only a windowed
+## run can show:
+##   LADDER   one species, nine ages side by side in ONE MultiMesh — seedling,
+##            sapling, pole, mature, old, thinning, snag — for the real 3D mesh
+##            and for the impostor card, so a shape defect at one age (or a
+##            shader that ignores the instance data) is visible at a glance.
+##            The model's height/crown/girth/leaf per rung is DUMPED, because a
+##            PNG cannot tell 0.72 from 0.80.
+##   TIMELAPSE one fixed forest viewpoint at +0, +5, +20, +80, +200 years and
+##            BACK to +0, dumping per-layer size statistics at each stop. Asserts
+##            the painted layer is full size today, never mostly-small at any
+##            stop (the "all my trees shrank" regression), and that the return
+##            to +0 reproduces the first stop exactly — the reversibility a
+##            forward-only integrator could not offer.
+## Read-only: restores the calendar, never paints, never saves.
+const GROWTH_LADDER_SPECIES: Array = ["pine", "deciduous"]
+const GROWTH_TIMELAPSE_YEARS: Array = [0, 5, 20, 80, 200, 0]
+const GROWTH_STATS_SAMPLE := 4000
+
+
+func _growth_layer_stats(loader: Node, layer_prop: String, st: Dictionary) -> Dictionary:
+	var out := {"n": 0, "mean": 0.0, "small": 0.0, "absent": 0.0, "full": 0.0}
+	var layer: Object = loader.get(layer_prop)
+	if layer == null or not (layer.get("bulk") is Dictionary):
+		return out
+	var bulk: Dictionary = layer.get("bulk")
+	var n := 0
+	var sum := 0.0
+	var small := 0
+	var absent := 0
+	var full := 0
+	for slot in bulk:
+		var species := str(slot)
+		if layer_prop == "_auto_veg_layer":
+			species = AutoVegetationRuntime._resolve_species(species)
+		if VegetationGrowth._species_for_slot(species) not in VegetationGrowth.TREE_SPECIES:
+			continue
+		var recs: Array = bulk[slot]
+		if recs.is_empty():
+			continue
+		var bp := VegetationGrowth.batch_params(species, st)
+		var stride := maxi(1, recs.size() / GROWTH_STATS_SAMPLE)
+		var i := 0
+		while i < recs.size():
+			if recs[i] is Dictionary:
+				var p := VegetationGrowth.params_for(bp, recs[i])
+				var state := VegGrowthModel.state(float(st[VegetationGrowth.KEY_NOW]),
+					float(p["born"]), float(p["maturity"]), float(p["lifespan"]),
+					float(p["seed"]))
+				var h := float(state["height"])
+				n += 1
+				sum += h
+				if float(state["present"]) < 0.5:
+					absent += 1
+				elif h < 0.5:
+					small += 1
+				if h >= 0.99:
+					full += 1
+			i += stride
+	if n > 0:
+		out = {"n": n, "mean": sum / float(n), "small": float(small) / float(n),
+			"absent": float(absent) / float(n), "full": float(full) / float(n)}
+	return out
+
+
+func _run_growth_capture() -> void:
+	var loader := await _find_terrain_loader()
+	if loader == null or not loader.has_method("_growth_style"):
+		push_error("PlaytestHarness: growth capture needs a TerrainLoader map")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	var opts: Dictionary = loader.call("get_terrain_options") \
+		if loader.has_method("get_terrain_options") else {}
+	if bool(opts.get("show_auto_vegetation", true)):
+		var waited := 0.0
+		while loader.get("_auto_veg_generated") != true and waited < VEG_SCATTER_WAIT_MAX_S:
+			await get_tree().create_timer(2.0).timeout
+			waited += 2.0
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	_set_capture_conditions()
+	var main := get_tree().current_scene
+	var year0 := int(main.get("year"))
+	var month0 := int(main.get("month"))
+	var day0 := int(main.get("day"))
+	# Mid-summer: full foliage, and past the spring flush so the growth year is
+	# a whole number of years at every stop.
+	_set_capture_date(main, 8, 15)
+	await get_tree().process_frame
+	var label := _shots_label if not _shots_label.is_empty() else "growth"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var failures := 0
+
+	# ---- LADDER -------------------------------------------------------------
+	var style: Dictionary = loader.call("_auto_veg_runtime_settings")
+	var st: Dictionary = loader.call("_growth_style")
+	var t_now := float(st[VegetationGrowth.KEY_NOW])
+	var scene := get_tree().current_scene
+	var root := Node3D.new()
+	root.name = "GrowthLadder"
+	scene.add_child(root)
+	var cam := Camera3D.new()
+	cam.name = "GrowthCam"
+	cam.far = 40000.0
+	scene.add_child(cam)
+	cam.make_current()
+	var base := Vector3(0.0, 4000.0, 0.0)
+	for species in GROWTH_LADDER_SPECIES:
+		var sid := str(species)
+		var bp := VegetationGrowth.batch_params(sid, st)
+		var m := float(bp["maturity"])
+		var life := float(bp["lifespan"])
+		if m <= 0.0:
+			print("PlaytestHarness: growth — %s has growth switched off, ladder skipped" % sid)
+			continue
+		var d0 := life * (1.0 - VegGrowthModel.DECLINE_FRAC)
+		var ages: Array = [1.0, 3.0, m * 0.25, m * 0.5, m, (m + d0) * 0.5,
+			d0 + (life - d0) * 0.3, d0 + (life - d0) * 0.75, d0 + (life - d0) * 0.95]
+		var names: Array = ["1 yr", "3 yr", "quarter", "half", "MATURE", "old",
+			"thinning", "snag", "falling"]
+		var near_mesh := VegetationCardFactory.mesh_for_canopy_lod(
+			sid, style, VegetationCardFactory.CanopyLodTier.NEAR)
+		var tiers: Array = [["near", near_mesh]]
+		var iset := VegImpostorBaker.cached_set(sid, style)
+		if iset != null:
+			var imp_mesh := VegImpostorBaker.quad_mesh_for(iset)
+			VegImpostorBaker.stamp_snag(imp_mesh, sid, VegSpeciesCatalog.settings_with_variant(
+				sid, style, VegetationCardFactory.SPECS))
+			tiers.append(["impostor", imp_mesh])
+		else:
+			print("PlaytestHarness: growth — %s impostor not baked yet, near tier only" % sid)
+		var aabb := near_mesh.get_aabb()
+		var h := maxf(aabb.size.y, 1.0)
+		var spacing := maxf(maxf(aabb.size.x, aabb.size.z), 2.0) * 1.15
+		for tier_spec in tiers:
+			var mesh: Mesh = tier_spec[1]
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.use_custom_data = true
+			mm.mesh = mesh
+			mm.instance_count = ages.size()
+			for i in ages.size():
+				mm.set_instance_transform(i, Transform3D(Basis.IDENTITY,
+					Vector3((float(i) - float(ages.size() - 1) * 0.5) * spacing, 0.0, 0.0)))
+				mm.set_instance_custom_data(i, Color(
+					t_now - float(ages[i]) - VegGrowthModel.BASE_YEAR, m, life, 0.5))
+			var mi := MultiMeshInstance3D.new()
+			mi.multimesh = mm
+			mi.position = base
+			mi.extra_cull_margin = 1000.0
+			root.add_child(mi)
+			# The materials are the map's own cached ones; set the year directly
+			# as well, so the ladder does not depend on the env-sync cadence.
+			for si in mesh.get_surface_count():
+				var mat := mesh.surface_get_material(si)
+				if mat is ShaderMaterial:
+					(mat as ShaderMaterial).set_shader_parameter(
+						"growth_year", t_now - VegGrowthModel.BASE_YEAR)
+					(mat as ShaderMaterial).set_shader_parameter("growth_freeze", 0.0)
+			var span := spacing * float(ages.size())
+			var dist := maxf(span * 0.5, h * 1.2)
+			cam.position = base + Vector3(0.0, h * 0.5, dist)
+			cam.look_at(base + Vector3(0.0, h * 0.5, 0.0), Vector3.UP)
+			await RenderingServer.frame_post_draw
+			await get_tree().create_timer(0.3).timeout
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png(
+				"%s/ladder_%s_%s.png" % [dir, sid, str(tier_spec[0])])
+			mi.queue_free()
+			await get_tree().process_frame
+		print("PlaytestHarness: growth — %s ladder (maturity %.0f y, lifespan %.0f y, mature height %.1f m):"
+			% [sid, m, life, h])
+		for i in ages.size():
+			var state := VegGrowthModel.state(t_now, t_now - float(ages[i]), m, life, 0.5)
+			print("    %-9s age %6.1f  height %.3f (%.1f m)  crown %.3f  girth %.3f  leaf %.2f"
+				% [names[i], float(ages[i]), float(state["height"]),
+					float(state["height"]) * h, float(state["crown"]),
+					float(state["girth"]), float(state["leaf"])])
+	root.queue_free()
+
+	# ---- TIMELAPSE ----------------------------------------------------------
+	# Stand over the PAINTED grove when the map has one (that is the layer the
+	# "my trees shrank" report was about); otherwise the densest generated stand.
+	var anchor := _veg_forest_anchor(loader)
+	var painted_layer: Object = loader.get("_vegetation_layer")
+	if painted_layer != null and painted_layer.get("bulk") is Dictionary:
+		var sum := Vector2.ZERO
+		var cnt := 0
+		var pb: Dictionary = painted_layer.get("bulk")
+		for slot in pb:
+			if str(slot).begins_with("grass"):
+				continue
+			for r in pb[slot]:
+				sum += Vector2(float(r["x"]), float(r["z"]))
+				cnt += 1
+		if cnt > 0:
+			anchor = sum / float(cnt)
+	# Drone oblique: high enough that seedlings, poles and snags all read
+	# against the ground rather than against each other.
+	var gy := _ground_y(loader, anchor.x, anchor.y)
+	var wp := {
+		"pos": Vector3(anchor.x + 150.0, gy + 120.0, anchor.y + 150.0),
+		"look": Vector3(anchor.x, gy + 10.0, anchor.y),
+	}
+	var manifest: Array = []
+	var first := {}
+	for k in GROWTH_TIMELAPSE_YEARS.size():
+		var off := int(GROWTH_TIMELAPSE_YEARS[k])
+		main.set("year", year0 + off)
+		await get_tree().create_timer(0.8).timeout
+		await _capture_set(cam, [wp], "years_%d_plus%03d" % [k, off], dir, manifest)
+		var now_st: Dictionary = loader.call("_growth_style")
+		var painted := _growth_layer_stats(loader, "_vegetation_layer", now_st)
+		var auto := _growth_layer_stats(loader, "_auto_veg_layer", now_st)
+		print("PlaytestHarness: growth — +%3d y (growth year %.2f)" % [
+			off, float(now_st[VegetationGrowth.KEY_NOW])])
+		for row in [["painted", painted], ["generated", auto]]:
+			var r: Dictionary = row[1]
+			print("    %-9s n=%-5d mean size %.3f  full %.1f%%  small %.1f%%  absent %.1f%%"
+				% [str(row[0]), int(r["n"]), float(r["mean"]), float(r["full"]) * 100.0,
+					float(r["small"]) * 100.0, float(r["absent"]) * 100.0])
+		if int(painted["n"]) > 0:
+			if k == 0 and float(painted["full"]) < 0.999:
+				failures += 1
+				print("PlaytestHarness: growth — FAIL: painted trees are not all full size today")
+			if float(painted["small"]) + float(painted["absent"]) > 0.25:
+				failures += 1
+				print("PlaytestHarness: growth — FAIL: >25%% of the painted grove is small/absent at +%d y" % off)
+		if k == 0:
+			first = {"painted": painted, "auto": auto}
+		elif off == 0:
+			if first["painted"] != painted or first["auto"] != auto:
+				failures += 1
+				print("PlaytestHarness: growth — FAIL: returning to +0 did not reproduce the first stop")
+			else:
+				print("PlaytestHarness: growth — PASS: rewinding 200 years reproduces the first stop exactly")
+
+	main.set("year", year0)
+	_set_capture_date(main, month0, day0)
+	cam.queue_free()
+	print("PlaytestHarness: growth capture %s — shots in %s" % [
+		"PASS" if failures == 0 else "FAIL (%d)" % failures,
+		ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
 
 
 # ==================== TREE PORTRAIT (--capture=tree) ====================

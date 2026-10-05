@@ -12,6 +12,10 @@ var _prompt_ui: CanvasLayer = null
 var _loader: Node = null
 var _solar_focus_idx: int = -1
 var _water_focus_idx: int = -1
+## Painted camp under the crosshair ("" = none). Stamped with the physics frame
+## it was last confirmed on, so every OTHER focus path drops it for free.
+var _camp_focus_id := ""
+var _camp_focus_frame := -1
 var _conduit_focus_id: String = ""
 var _conduit_focus_hang_edit: bool = false
 var _last_graph_sync_key: String = ""
@@ -195,6 +199,13 @@ func _physics_process(_delta: float) -> void:
 				_clear_building_focus()
 				_clear_veg_focus()
 				_sync_graph_from_world_focus()
+			elif _update_camp_focus(ground as Vector3):
+				# A painted camp is the player's own object: it wins over the
+				# OSM ground polygons it was painted across.
+				_clear_solar_focus()
+				_clear_water_focus()
+				_clear_building_focus()
+				_clear_veg_focus()
 			elif _update_water_focus(ground as Vector3):
 				_clear_solar_focus()
 				_clear_building_focus()
@@ -765,7 +776,39 @@ func _update_water_focus(hit_pos: Vector3) -> bool:
 	return true
 
 
+func _update_camp_focus(hit_pos: Vector3) -> bool:
+	if _loader == null or not _loader.has_method("pick_camp_at_world"):
+		return false
+	var pick: Dictionary = _loader.call("pick_camp_at_world", hit_pos.x, hit_pos.z)
+	if not bool(pick.get("valid", false)):
+		_clear_camp_focus()
+		return false
+	_camp_focus_id = str(pick.get("id", ""))
+	_camp_focus_frame = Engine.get_physics_frames()
+	_loader.call("set_camp_focus", _camp_focus_id)
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(true)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		var act := "Interact"
+		if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
+			act = _prompt_ui.get_action_label("interact")
+		_crosshair.set_prompt_text("[%s / Click] Tune %s" % [act, str(pick.get("name", "camp"))])
+	return true
+
+
+func _clear_camp_focus() -> void:
+	if _camp_focus_id.is_empty():
+		return
+	_camp_focus_id = ""
+	if _loader != null and _loader.has_method("set_camp_focus"):
+		_loader.call("set_camp_focus", "")
+
+
 func _clear_water_focus() -> void:
+	# Every focus path that is NOT the camp branch comes through here, so a camp
+	# focus that was not re-confirmed this frame is dropped.
+	if _camp_focus_frame != Engine.get_physics_frames():
+		_clear_camp_focus()
 	_water_focus_idx = -1
 	if _loader != null and _loader.has_method("set_water_focus_idx"):
 		if _loader.has_method("get_water_focus_idx") \
@@ -1006,6 +1049,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if bool(_loader.call("add_solar_array_to_graph", _solar_focus_idx)):
 			get_viewport().set_input_as_handled()
+		return
+	# Aimed at a painted camp → its Tune-look modal (this camp's own settings).
+	if not _camp_focus_id.is_empty() and _loader != null \
+			and _loader.has_method("open_camp_tune_for_camp"):
+		_loader.call("open_camp_tune_for_camp", _camp_focus_id)
+		get_viewport().set_input_as_handled()
 		return
 	# Aimed at a still-water body → open the pond settings modal (override volume /
 	# fill level, add-to-graph / remove / delete). Ponds are no longer auto-added.

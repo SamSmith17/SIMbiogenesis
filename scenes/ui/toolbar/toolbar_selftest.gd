@@ -25,7 +25,7 @@ const GestureScript := preload("res://scenes/ui/toolbar/shape_gesture_controller
 ## Guard against a Godot runtime error aborting a test function early while the
 ## suite still prints PASS — the trap veg_dock_state_selftest documents.
 ## Count of every check ABOVE the guard itself. Bump it when adding checks.
-const EXPECTED_CHECKS := 311
+const EXPECTED_CHECKS := 417
 
 var _fails := 0
 var _checks := 0
@@ -45,6 +45,7 @@ func _initialize() -> void:
 	_test_option_specs()
 	_test_veg_families_match_preset_enum()
 	_test_veg_identity()
+	_test_camp_styles()
 	_test_config_round_trip()
 	_test_config_robustness()
 	_test_file_round_trip()
@@ -81,7 +82,8 @@ func _test_registry_integrity() -> void:
 		_check("tool id unique: %s" % id, not seen.has(id))
 		seen[id] = true
 		var section := String(t.get("section", ""))
-		_check("%s section is terrain|veg" % id, section == "terrain" or section == "veg")
+		_check("%s section is terrain|veg|camps" % id,
+			section == "terrain" or section == "veg" or section == "camps")
 		_check("%s has a label" % id, not String(t.get("label", "")).is_empty())
 		_check("%s has a tooltip" % id, not String(t.get("tooltip", "")).is_empty())
 		var shapes: Array = t.get("shapes", [])
@@ -102,9 +104,10 @@ func _test_registry_integrity() -> void:
 			_check("%s.%s min < max" % [id, key], lo < hi)
 			_check("%s.%s default in range" % [id, key], dv >= lo and dv <= hi)
 			_check("%s.%s step > 0" % [id, key], float(pd.get("step", 0.0)) > 0.0)
-	_check("both sections are populated",
+	_check("every section is populated",
 		not st.tools_in_section("terrain").is_empty()
-		and not st.tools_in_section("veg").is_empty())
+		and not st.tools_in_section("veg").is_empty()
+		and not st.tools_in_section("camps").is_empty())
 	_check("unknown tool id is refused", not st.set_active_tool("nope"))
 	_check("tool_def of an unknown id is empty", st.tool_def("nope").is_empty())
 
@@ -213,6 +216,41 @@ func _test_veg_families_match_preset_enum() -> void:
 			_check("family %s preset int still matches the enum" % fid,
 				int(f["preset"]) == int(expect[fid]),
 				"stored %d, enum %d" % [int(f["preset"]), int(expect[fid])])
+
+
+## CAMP_STYLES is a LITERAL copy of CampStyles' ids (same stale-class-cache
+## reason as VEG_FAMILIES). Rename a style there and the toolbar would paint a
+## style the layer silently normalises back to "mixed".
+func _test_camp_styles() -> void:
+	var ids: Array = []
+	for s: Dictionary in StateScript.CAMP_STYLES:
+		ids.append(String(s["id"]))
+	var real: Array = CampStyles.STYLE_ORDER.duplicate()
+	real.append(CampStyles.VARIED)
+	_check("CAMP_STYLES matches CampStyles.STYLE_ORDER + varied", ids == real, str(ids))
+	var st = StateScript.new()
+	_check("default camp style is valid", CampStyles.is_valid(st.camp_style))
+	_check("unknown camp style is refused", not st.set_camp_style("nope")
+		and st.camp_style == "mixed")
+	_check("varied is accepted", st.set_camp_style("varied"))
+	_check("varied paints as mixed", st.camp_style_for_tool("camp_paint") == "mixed")
+	_check("varied stays varied for Plots", st.camp_style_for_tool("camp_subdivide") == "varied")
+	st.set_camp_style("rv_park")
+	var cfg := ConfigFile.new()
+	st.to_config(cfg)
+	var back = StateScript.new()
+	back.from_config(cfg)
+	_check("camp style survives a config round-trip", back.camp_style == "rv_park")
+	var bad := ConfigFile.new()
+	bad.set_value("toolbar", "camp_style", "gone_in_this_build")
+	var kept = StateScript.new()
+	kept.from_config(bad)
+	_check("a stale camp style in the config is ignored", kept.camp_style == "mixed")
+	# Per-tool isolation holds across the camp tools too.
+	st.set_tool_param("camp_paint", "density", 0.3)
+	_check("camp tools keep separate params",
+		is_equal_approx(float(st.params_for("camp_paint")["density"]), 0.3)
+		and is_equal_approx(float(st.params_for("camp_subdivide")["density"]), 0.8))
 
 
 func _test_veg_identity() -> void:

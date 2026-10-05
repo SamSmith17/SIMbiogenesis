@@ -1,45 +1,53 @@
 class_name VegetationGrowth
 extends RefCounted
 
-## Per-instance plant growth over sim-years (or crop days): seedling → full size,
-## then optional senescence fade, then (for trees) death at maturity + reseeding.
+## Record/settings facade over VegGrowthModel — the model is numbers only, this
+## file knows what a vegetation RECORD and a style SETTINGS dict are.
 ##
-## Growth is a SESSION-LIVE effect layered over the vegetation layers, driven by a
-## monotonic "growth clock" the terrain loader advances (mainly in analemma / ∞
-## mode — see terrain_loader._advance_growth). Design choices, and why:
-##   * The apparent SCALE is a pure function of (growth_clock − birth) so it eases
-##     smoothly as seasons pass and reverses cleanly if the clock rewinds.
-##   * The generational turnover (death + reseed) is forward-only and throttled,
-##     like the battery integrator — it can't be analytically reversed.
-##   * birth_h lives in the growth-clock domain, which resets each load, so it is
-##     re-derived on load (reset=true) rather than trusted from disk; that keeps a
-##     stale value from a previous session from warping ages. Growth PROGRESS is
-##     therefore not persisted across reloads (the forest re-seeds its age mix),
-##     which is fine for a visual time-lapse feature.
+## A plant's size is a pure function of the calendar (see VegGrowthModel):
+##   * painted records carry `born_y` — the growth-year they were born — which
+##     is persisted, so ages survive a reload and scrub with the timeline;
+##   * generated (auto) records carry nothing: their birth is derived from a
+##     position hash and the `forest_age` profile every time it is needed;
+##   * a settings dict carries `growth_year` (now). Without it everything is
+##     full size — which is what selftests, the Tune-look preview and the
+##     impostor baker rely on.
+##
+## What is NOT here any more, so nobody restores it: the per-session growth
+## clock, milestone ticks, advance_generations (kill + reseed, which mutated the
+## record lists), population caps and growth zones. Death and regrowth are part
+## of the pure function now.
+##
+## The lifecycle helpers at the bottom (scale_for_lifecycle / growth_stage) are
+## the GROW BED's crop model and are unrelated to the forest.
 
 const HOURS_PER_YEAR := 8766.0        # 365.25 × 24
 const HOURS_PER_DAY := 24.0
-const SEEDLING_SCALE := 0.14          # apparent size at age 0
-const SENESCENT_SCALE := 0.35         # floor after full senescence
-## Growth curve exponent (<1 = grows fast early, tapering toward maturity).
+const SEEDLING_SCALE := 0.14          # grow-bed crop size at age 0
+const SENESCENT_SCALE := 0.35         # grow-bed floor after full senescence
+## Grow-bed curve exponent (<1 = grows fast early, tapering toward maturity).
 const GROWTH_EASE := 0.6
-const SEED_RADIUS_M := 1.0            # seedlings spring up within this of the parent
-const SEEDLINGS_MIN := 1
-const SEEDLINGS_MAX := 2
-const SEED_ATTEMPTS := 8              # retries when a zone boundary rejects a sample
-## Structural clock advance below this factor is treated as winter dormancy (no aging).
-const DORMANCY_THRESHOLD := 0.05
-## Phenology milestone days (NH reference) when scale refresh + optional reseed run.
-## ~4 pulses per growing season vs ~12 under the old fixed 720 h throttle.
-const GROWTH_MILESTONE_DOYS: Array[float] = [84.0, 135.0, 172.0, 260.0]
-## Only these mesh families die at maturity and reseed. Grass / shrub grow-and-hold
-## (plus optional senescence scale fade without removal).
+## Only these mesh families live a life cycle (decline, die, regrow). Grass and
+## shrubs grow and hold.
 const TREE_SPECIES: Array[String] = ["pine", "deciduous"]
+## A tree with no catalog lifespan lives this many maturity ages.
+const DEFAULT_LIFESPAN_MATURITIES := 6.0
+## A legacy record at or past this fraction of its growth span migrates as
+## ESTABLISHED (full size) rather than as a nearly-grown plant.
+const ESTABLISHED_AGE_FRAC := 0.95
+
+## Settings keys this facade reads.
+const KEY_NOW := "growth_year"            # growth-year now; absent = full size
+const KEY_EPOCH := "growth_epoch_y"       # site epoch for mixed/young profiles
+const KEY_FROZEN := "growth_frozen"       # true = draw everything mature
+
+const FOREST_AGE_MATURE := VegGrowthModel.PROFILE_MATURE
+const FOREST_AGE_MIXED := VegGrowthModel.PROFILE_MIXED
+const FOREST_AGE_YOUNG := VegGrowthModel.PROFILE_YOUNG
 
 ## Kept local (not VegetationLayer.ALL_SPECIES / AutoVegetationRuntime.SLOT_ALIAS)
 ## on purpose: VegetationRuntime + AutoVegetationRuntime both reference this class,
-## so referencing them back would form a class_name resolution cycle ("Identifier
-## VegetationGrowth not declared"). This class stays a dependency-free leaf.
+## so referencing them back would form a class_name resolution cycle.
 const _SPECIES: Array[String] = ["pine", "deciduous", "shrub", "grass_lawn", "grass_field"]
 const _SLOT_ALIAS := {
 	"conifer": "pine",
@@ -60,8 +68,6 @@ const _SLOT_ALIAS := {
 	"pear": "deciduous",
 	"orange": "deciduous",
 	"avocado": "deciduous",
-	# Phase 5 registry species → growth-settings slot (the *_growth_years key
-	# each reads when it has no own key).
 	"walnut": "deciduous",
 	"olive": "deciduous",
 	"mango": "deciduous",
@@ -89,6 +95,8 @@ const _SLOT_ALIAS := {
 }
 
 
+# ---- settings → spans ----------------------------------------------------
+
 static func growth_years(species: String, settings: Dictionary) -> float:
 	var key := "%s_growth_years" % species
 	if settings.has(key):
@@ -105,17 +113,6 @@ static func growth_days(species: String, settings: Dictionary) -> float:
 	return 0.0
 
 
-## Senescence length after maturity (years for trees, days for crops when using days).
-static func senescence_span(species: String, settings: Dictionary) -> float:
-	var day_key := "%s_senescence_days" % species
-	if settings.has(day_key):
-		return float(settings[day_key])
-	var yr_key := "%s_senescence_years" % species
-	if settings.has(yr_key):
-		return float(settings[yr_key])
-	return 0.0
-
-
 ## Span of the grow phase in hours (days or years depending on species settings).
 static func growth_span_hours(species: String, settings: Dictionary) -> float:
 	var days := growth_days(species, settings)
@@ -127,67 +124,184 @@ static func growth_span_hours(species: String, settings: Dictionary) -> float:
 	return 0.0
 
 
-static func senescence_span_hours(species: String, settings: Dictionary) -> float:
-	var days := growth_days(species, settings)
-	var sen := senescence_span(species, settings)
-	if sen <= 0.0:
+## Age at which the plant reaches full size, in years. 0 = growth off.
+static func maturity_years(species: String, settings: Dictionary) -> float:
+	return growth_span_hours(species, settings) / HOURS_PER_YEAR
+
+
+## Species lifespan in years (before the per-plant jitter). 0 = grow and hold.
+## Resolution: explicit `<species>_lifespan_years` setting > the registry's
+## `lifespan_years` (species, then its family) > DEFAULT_LIFESPAN_MATURITIES.
+static func lifespan_years(species: String, settings: Dictionary) -> float:
+	var fam := _species_for_slot(species)
+	if fam not in TREE_SPECIES:
 		return 0.0
-	if days > 0.0:
-		return sen * HOURS_PER_DAY
-	return sen * HOURS_PER_YEAR
+	var maturity := maturity_years(species, settings)
+	if maturity <= 0.0:
+		return 0.0
+	var life := 0.0
+	var key := "%s_lifespan_years" % species
+	if settings.has(key):
+		life = float(settings[key])
+	if life <= 0.0:
+		life = VegSpeciesRegistry.lifespan_years(species)
+	if life <= 0.0:
+		life = VegSpeciesRegistry.lifespan_years(fam)
+	if life <= 0.0:
+		life = maturity * DEFAULT_LIFESPAN_MATURITIES
+	return VegGrowthModel.effective_lifespan(maturity, life)
 
 
 ## True if the settings enable growth for at least one species.
 static func any_enabled(settings: Dictionary) -> bool:
-	for species in _SPECIES:
-		if float(settings.get("%s_growth_years" % species, 0.0)) > 0.0:
-			return true
-		if float(settings.get("%s_growth_days" % species, 0.0)) > 0.0:
-			return true
 	for k in settings.keys():
 		var ks := str(k)
-		if ks.ends_with("_growth_days") and float(settings[k]) > 0.0:
-			return true
-		if ks.ends_with("_growth_years") and float(settings[k]) > 0.0:
-			return true
-	return false
-
-
-## 0..1 envelope for how much the structural growth clock should advance today.
-## Uses canopy + grass phenology so temperate sites pause in winter and pulse in
-## spring/summer (matches shader seasonality without a separate model).
-static func structural_growth_factor(day_of_year: int, latitude: float) -> float:
-	var sig := SeasonModel.season_signals(day_of_year, latitude)
-	var leaf := float(sig.get("leaf_coverage", 0.0))
-	var grass := float(sig.get("grass_growth", 0.0))
-	return clampf(maxf(leaf, grass), 0.0, 1.0)
-
-
-## Death/reseed only during the active growing window (not deep winter dormancy).
-static func reseed_allowed(day_of_year: int, latitude: float) -> bool:
-	var nh := SeasonModel.to_nh_doy(day_of_year, latitude)
-	return nh >= SeasonModel.LEAF_OUT_START and nh <= SeasonModel.GRASS_FADE_END
-
-
-## True when the calendar crossed a growth milestone between two day-of-year samples.
-## Handles year rollover (Dec → Jan) for analemma multi-year loops.
-static func milestones_crossed(from_doy: int, to_doy: int, latitude: float) -> bool:
-	if from_doy == to_doy:
-		return false
-	var nh_from := SeasonModel.to_nh_doy(from_doy, latitude)
-	var nh_to := SeasonModel.to_nh_doy(to_doy, latitude)
-	for m in GROWTH_MILESTONE_DOYS:
-		if _milestone_in_crossing(nh_from, nh_to, m):
+		if (ks.ends_with("_growth_days") or ks.ends_with("_growth_years")) \
+				and float(settings[k]) > 0.0:
 			return true
 	return false
 
 
-static func _milestone_in_crossing(nh_from: float, nh_to: float, milestone: float) -> bool:
-	if nh_from < nh_to:
-		return milestone > nh_from and milestone <= nh_to
-	# Year wrap (e.g. Dec → Jan).
-	return milestone > nh_from or milestone <= nh_to
+static func forest_age_profile(settings: Dictionary) -> String:
+	var p := str(settings.get("forest_age", FOREST_AGE_MATURE)).to_lower()
+	if p == FOREST_AGE_YOUNG or p == FOREST_AGE_MIXED:
+		return p
+	return FOREST_AGE_MATURE
 
+
+# ---- record → model parameters -------------------------------------------
+
+## Everything about a species + settings pair that is the SAME for every record
+## in a batch. Resolve once per batch (a forest build touches ~150k records; the
+## registry and settings lookups must not run per tree).
+static func batch_params(species: String, settings: Dictionary) -> Dictionary:
+	var maturity := 0.0 if bool(settings.get(KEY_FROZEN, false)) \
+		else maturity_years(species, settings)
+	return {
+		"species": species,
+		"maturity": maturity,
+		"lifespan": lifespan_years(species, settings) if maturity > 0.0 else 0.0,
+		"profile": forest_age_profile(settings),
+		"epoch": float(settings.get(KEY_EPOCH, VegGrowthModel.BASE_YEAR)),
+	}
+
+
+## The four numbers VegGrowthModel.state() needs for one record:
+## {born, maturity, lifespan, seed}. `maturity` 0 = growth off for this plant.
+static func params_for(bp: Dictionary, d: Dictionary) -> Dictionary:
+	var maturity := float(bp["maturity"])
+	if maturity <= 0.0:
+		return {"born": VegGrowthModel.BASE_YEAR, "maturity": 0.0, "lifespan": 0.0, "seed": 0.0}
+	var seed := VegGrowthModel.seed01(str(bp["species"]),
+		float(d.get("x", 0.0)), float(d.get("z", 0.0)))
+	var life_i := VegGrowthModel.jittered_lifespan(maturity, float(bp["lifespan"]), seed)
+	var born := 0.0
+	if d.has("born_y"):
+		born = float(d["born_y"])
+	else:
+		born = VegGrowthModel.derived_born(str(bp["profile"]), float(bp["epoch"]),
+			maturity, life_i, seed)
+	return {"born": born, "maturity": maturity, "lifespan": life_i, "seed": seed}
+
+
+static func record_params(species: String, d: Dictionary, settings: Dictionary) -> Dictionary:
+	return params_for(batch_params(species, settings), d)
+
+
+## INSTANCE_CUSTOM payload for one record — what veg_growth.gdshaderinc reads:
+## (born − BASE_YEAR, maturity, lifespan, seed). All zero = identity.
+static func custom_for(bp: Dictionary, d: Dictionary) -> Color:
+	var p := params_for(bp, d)
+	if float(p["maturity"]) <= 0.0:
+		return Color(0.0, 0.0, 0.0, 0.0)
+	return Color(float(p["born"]) - VegGrowthModel.BASE_YEAR, float(p["maturity"]),
+		float(p["lifespan"]), float(p["seed"]))
+
+
+static func instance_custom(species: String, d: Dictionary, settings: Dictionary) -> Color:
+	return custom_for(batch_params(species, settings), d)
+
+
+## Full model state for one record at settings[KEY_NOW]. No KEY_NOW = identity.
+static func plant_state(species: String, d: Dictionary, settings: Dictionary) -> Dictionary:
+	if not settings.has(KEY_NOW):
+		return VegGrowthModel.state(0.0, 0.0, 0.0, 0.0, 0.0)
+	var p := record_params(species, d, settings)
+	return VegGrowthModel.state(float(settings[KEY_NOW]), float(p["born"]),
+		float(p["maturity"]), float(p["lifespan"]), float(p["seed"]))
+
+
+## Apparent size 0..1 of one record now (its height fraction; 0 while the spot
+## stands empty between generations). The CPU-side answer for anything that
+## needs a plant's size — food yield, readouts. Drawing does NOT use this: the
+## shader evaluates the same function per instance.
+static func instance_scale_mult(species: String, d: Dictionary, settings: Dictionary) -> float:
+	return float(plant_state(species, d, settings)["height"])
+
+
+# ---- stamping + migration --------------------------------------------------
+
+## Mark a record as planted NOW (a seedling that grows from this date).
+static func stamp_young(d: Dictionary, t_now: float) -> void:
+	d.erase("birth_h")
+	d["born_y"] = t_now
+
+
+## Mark a record as standing FULL SIZE now, somewhere on its plateau.
+static func stamp_established(d: Dictionary, species: String, settings: Dictionary,
+		t_now: float) -> void:
+	d.erase("birth_h")
+	var maturity := maturity_years(species, settings)
+	if maturity <= 0.0:
+		d.erase("born_y")
+		return
+	var seed := VegGrowthModel.seed01(species,
+		float(d.get("x", 0.0)), float(d.get("z", 0.0)))
+	var life_i := VegGrowthModel.jittered_lifespan(
+		maturity, lifespan_years(species, settings), seed)
+	d["born_y"] = VegGrowthModel.established_born(t_now, maturity, life_i, seed)
+
+
+## One-way upgrade of painted records to `born_y`. Returns how many changed.
+##   * legacy `birth_h` (hours on a per-session clock that restarted at 0 each
+##     load, so −birth_h is the age): ≥ 0 → planted now; near/over the growth
+##     span → established; otherwise that age is kept.
+##   * no birth at all → established (it was drawn full size).
+## Records that already have `born_y` are left alone.
+static func migrate_records(bulk_dict: Dictionary, settings: Dictionary, t_now: float) -> int:
+	var changed := 0
+	for slot in bulk_dict.keys():
+		var species := str(slot)
+		var grow_h := growth_span_hours(species, settings)
+		for item in bulk_dict[slot]:
+			if not (item is Dictionary):
+				continue
+			var d: Dictionary = item
+			if d.has("born_y"):
+				if d.has("birth_h"):
+					d.erase("birth_h")
+					changed += 1
+				continue
+			if grow_h <= 0.0:
+				# Growth off for this species: nothing to stamp, and a stale
+				# session-clock value must not linger in the file.
+				if d.has("birth_h"):
+					d.erase("birth_h")
+					changed += 1
+				continue
+			var b := float(d.get("birth_h", -INF))
+			if b >= 0.0:
+				stamp_young(d, t_now)
+			elif -b >= grow_h * ESTABLISHED_AGE_FRAC:
+				stamp_established(d, species, settings, t_now)
+			else:
+				d.erase("birth_h")
+				d["born_y"] = t_now - (-b / HOURS_PER_YEAR)
+			changed += 1
+	return changed
+
+
+# ---- grow bed (crop) lifecycle — unrelated to the forest model -------------
 
 ## Age fraction (age / growth_years) → apparent scale multiplier (seedling → full).
 static func scale_for_age(age_years: float, gy: float) -> float:
@@ -197,8 +311,8 @@ static func scale_for_age(age_years: float, gy: float) -> float:
 	return SEEDLING_SCALE + (1.0 - SEEDLING_SCALE) * pow(t, GROWTH_EASE)
 
 
-## Full lifecycle: seed → full over grow_h, then fade toward SENESCENT_SCALE over
-## senesce_h. Ages are in hours. When senesce_h <= 0, holds at full after maturity.
+## Seed → full over grow_h, then fade toward SENESCENT_SCALE over senesce_h.
+## Ages are in hours. When senesce_h <= 0, holds at full after maturity.
 static func scale_for_lifecycle(age_h: float, grow_h: float, senesce_h: float = 0.0) -> float:
 	if grow_h <= 0.0:
 		return 1.0
@@ -224,161 +338,6 @@ static func growth_stage(age_h: float, grow_h: float, senesce_h: float = 0.0) ->
 	if senesce_h > 0.0 and age_h > grow_h + senesce_h * 0.2:
 		return "senescent"
 	return "full"
-
-
-## Per-instance render scale multiplier from its birth time + the growth clock.
-## Records with no birth_h (growth off, or not yet seeded) render at full size.
-static func instance_scale_mult(species: String, d: Dictionary, settings: Dictionary) -> float:
-	var grow_h := growth_span_hours(species, settings)
-	if grow_h <= 0.0 or not d.has("birth_h"):
-		return 1.0
-	var now_h := float(settings.get("growth_now_h", 0.0))
-	var age_h := now_h - float(d["birth_h"])
-	var sen_h := senescence_span_hours(species, settings)
-	return scale_for_lifecycle(age_h, grow_h, sen_h)
-
-
-## Assign birth times to bulk records. With reset=false only records missing a
-## birth_h are touched (new placements keep whatever they were given); with
-## reset=true every record is re-seeded (used on load). Ages are skewed toward
-## mature so an established forest reads as full canopy with a scatter of younger
-## trees rather than a field of seedlings.
-## Forest age profiles (veg overhaul Phase 9) — how a freshly seeded forest's
-## ages are distributed across the growth span. The exponent shapes `randf()`:
-## >1 clusters near 0 (young), 1 is a flat spread, and the MATURE profile
-## mirrors it (1 − r^k) to cluster near full size.
-##
-## MATURE is the default and reproduces the pre-Phase-9 behaviour exactly, so an
-## untouched map keeps the forest it had.
-const FOREST_AGE_MATURE := "mature"
-const FOREST_AGE_MIXED := "mixed"
-const FOREST_AGE_YOUNG := "young"
-const FOREST_AGE_SKEW := 1.6
-
-
-## 0..1 age fraction of the growth span for one freshly seeded plant.
-static func age_fraction(profile: String, r: float) -> float:
-	var u := clampf(r, 0.0, 1.0)
-	match profile:
-		FOREST_AGE_YOUNG:
-			# Regrowth / plantation: mostly saplings, a few older survivors.
-			return pow(u, FOREST_AGE_SKEW)
-		FOREST_AGE_MIXED:
-			# An uneven-aged stand: every age equally likely.
-			return u
-		_:
-			return 1.0 - pow(u, FOREST_AGE_SKEW)
-
-
-static func forest_age_profile(settings: Dictionary) -> String:
-	var p := str(settings.get("forest_age", FOREST_AGE_MATURE)).to_lower()
-	if p == FOREST_AGE_YOUNG or p == FOREST_AGE_MIXED:
-		return p
-	return FOREST_AGE_MATURE
-
-
-static func ensure_birth_times(bulk_dict: Dictionary, now_h: float,
-		settings: Dictionary, rng: RandomNumberGenerator, reset: bool = false) -> void:
-	var profile := forest_age_profile(settings)
-	for slot in bulk_dict.keys():
-		var species := str(slot)
-		var grow_h := growth_span_hours(species, settings)
-		# Growth disabled for this species → leave birth_h unset so the instance
-		# renders at full size. (Stamping "now" here would make every tree an age-0
-		# seedling the moment growth is later enabled — a sudden shrink.)
-		if grow_h <= 0.0:
-			continue
-		for item in bulk_dict[slot]:
-			if not (item is Dictionary):
-				continue
-			var d: Dictionary = item
-			if not reset and d.has("birth_h"):
-				continue
-			d["birth_h"] = now_h - age_fraction(profile, rng.randf()) * grow_h
-
-
-## Per-slot record counts — the population caps captured when growth starts so
-## reseeding can hold the forest near its original density instead of exploding.
-static func capture_caps(bulk_dict: Dictionary) -> Dictionary:
-	var caps := {}
-	for slot in bulk_dict.keys():
-		caps[str(slot)] = (bulk_dict[slot] as Array).size()
-	return caps
-
-
-## Kill matured trees (age ≥ growth span + senescence) and spring up SEEDLINGS_MIN..MAX
-## seedlings within SEED_RADIUS_M of each, holding each slot near its cap so the
-## population stays stable. `add_cb(slot, x, z, yaw, scale, card) -> Dictionary`
-## adds one record and returns it (or null on capacity). Returns true if any
-## record changed so the caller can rebuild.
-static func advance_generations(bulk_dict: Dictionary, now_h: float,
-		settings: Dictionary, rng: RandomNumberGenerator, caps: Dictionary,
-		add_cb: Callable, zone: GrowthZoneIndex = null,
-		allow_reseed: bool = true) -> bool:
-	if not allow_reseed:
-		return false
-	var changed := false
-	for slot in bulk_dict.keys():
-		var species := _species_for_slot(str(slot))
-		if species not in TREE_SPECIES:
-			continue
-		var grow_h := growth_span_hours(str(slot), settings)
-		if grow_h <= 0.0:
-			continue
-		var sen_h := senescence_span_hours(str(slot), settings)
-		var life_h := grow_h + maxf(sen_h, 0.0)
-		var arr: Array = bulk_dict[slot]
-		var kept: Array = []
-		var dead: Array = []
-		for item in arr:
-			if not (item is Dictionary):
-				kept.append(item)
-				continue
-			var d: Dictionary = item
-			var age := now_h - float(d.get("birth_h", now_h))
-			if age >= life_h:
-				dead.append(d)
-			else:
-				kept.append(d)
-		if dead.is_empty():
-			continue
-		changed = true
-		bulk_dict[slot] = kept
-		var cap := int(caps.get(str(slot), arr.size()))
-		for parent in dead:
-			var count := rng.randi_range(SEEDLINGS_MIN, SEEDLINGS_MAX)
-			for _k in count:
-				if (bulk_dict[slot] as Array).size() >= cap:
-					break
-				var pos := _sample_seed_pos(parent, rng, zone)
-				if not is_finite(pos.x):
-					continue
-				var rec: Variant = add_cb.call(str(slot),
-					pos.x, pos.y,
-					rng.randf() * TAU,
-					float(parent.get("scale", 1.0)),
-					parent.get("card_settings", {}))
-				if rec is Dictionary:
-					(rec as Dictionary)["birth_h"] = now_h
-	return changed
-
-
-## Uniform disc sample around parent; when `zone` is non-empty, only accept
-## positions inside the zone (up to SEED_ATTEMPTS). Empty zone → radius only.
-static func _sample_seed_pos(parent: Dictionary, rng: RandomNumberGenerator,
-		zone: GrowthZoneIndex) -> Vector2:
-	var px := float(parent.get("x", 0.0))
-	var pz := float(parent.get("z", 0.0))
-	var use_zone := zone != null and not zone.is_empty()
-	for _attempt in SEED_ATTEMPTS:
-		var ang := rng.randf() * TAU
-		# sqrt keeps seedlings uniformly spread over the disc, not clumped centre.
-		var r := sqrt(rng.randf()) * SEED_RADIUS_M
-		var x := px + cos(ang) * r
-		var z := pz + sin(ang) * r
-		if not use_zone or zone.contains(x, z):
-			return Vector2(x, z)
-	return Vector2(NAN, NAN)
 
 
 ## Auto-vegetation slots may be biome names (conifer/broadleaf/…); map to the

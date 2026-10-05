@@ -31,7 +31,7 @@ extends SceneTree
 ## Run: Godot.exe.exe --headless --path . --import   (once, new class_names)
 ##      Godot.exe.exe --headless --path . --script core/astronomy/star_sky_selftest.gd
 
-const EXPECTED_CHECKS := 82
+const EXPECTED_CHECKS := 89
 
 const STARMAP_PATH := "res://assets/sky/starmap_equirect_8k.png"
 
@@ -89,6 +89,7 @@ func _initialize() -> void :
 	_test_uv_registration()
 	_test_shader_mirror()
 	_test_timezone()
+	_test_planet_star_frame()
 	_test_asset()
 	if EXPECTED_CHECKS > 0 and _checks != EXPECTED_CHECKS :
 		_fails += 1
@@ -390,6 +391,89 @@ func _test_timezone() -> void :
 	var spa_noon : Dictionary = SolarPosition.get_position( LAT_BB, LON_BB, clk.get_julian_day_utc() )
 	_check( "one sky: SPA sun on the meridian at clock solar noon", _ang_near( float( spa_noon.azimuth_deg ), 180.0, 0.6 ),
 		"az %.3f at clock %.3f (LST %.2f)" % [ float( spa_noon.azimuth_deg ), noon_clock, lst_noon ] )
+
+
+# ==================== PLANET PATHS — STARS FRAME (analemma mode) ====================
+
+## The analemma "Stars" planet paths are meshed ONCE in equatorial coordinates
+## and turned with the sky by a node basis (StarSkyMath.equatorial_to_world_basis)
+## — that basis must be exactly direction_from_equatorial, or the paths slide
+## off the stars they crossed. And the loops they draw must be the REAL ones:
+## the station dates (where geocentric ecliptic longitude stops and reverses)
+## are pinned against almanac values, which is the whole point of the frame.
+func _test_planet_star_frame() -> void :
+	var worst : float = 0.0
+	for lat in [ -65.0, -31.95, 0.0, LAT_BB, 89.0 ] :
+		for lst in [ 0.0, 47.3, 181.0, 300.5 ] :
+			var basis : Basis = StarSkyMath.equatorial_to_world_basis( lst, lat )
+			for ra in [ 0.0, 93.0, 200.0, 333.0 ] :
+				for dec in [ -80.0, -20.0, 0.0, 45.0, 88.0 ] :
+					var a : Vector3 = basis * StarSkyMath.equatorial_vector( ra, dec )
+					var b : Vector3 = StarSkyMath.direction_from_equatorial( ra, dec, lst, lat )
+					worst = maxf( worst, a.distance_to( b ) )
+	_check( "star-frame basis == direction_from_equatorial", worst < 1e-5, "worst " + str( worst ) )
+	var bb : Basis = StarSkyMath.equatorial_to_world_basis( 123.4, LAT_BB )
+	_check( "star-frame basis is a pure rotation",
+		( bb * bb.transposed() ).is_equal_approx( Basis.IDENTITY ) and _near( bb.determinant(), 1.0, 1e-5 ),
+		"det %.6f" % bb.determinant() )
+
+	# Almanac stations (geocentric ecliptic longitude, UT dates, 2024–25).
+	# Measured: every station within 0.5 d. Tolerance ±1.5 d because the mean
+	# Keplerian elements are arcminute-accurate, and at a station the longitude
+	# is flat, so an arcminute of error moves the DATE by roughly a day.
+	var ps : Node = load( "res://planets.gd" ).new()
+	var stations := [
+		[ "mars",    _jd( 2024, 12, 7 ),  _jd( 2025, 2, 24 ) ],
+		[ "jupiter", _jd( 2024, 10, 9 ),  _jd( 2025, 2, 4 ) ],
+		[ "saturn",  _jd( 2025, 7, 13 ),  _jd( 2025, 11, 28 ) ],
+		[ "venus",   _jd( 2025, 3, 2 ),   _jd( 2025, 4, 13 ) ],
+		[ "mercury", _jd( 2025, 3, 15 ),  _jd( 2025, 4, 7 ) ],
+	]
+	for st in stations :
+		var pname : String = st[ 0 ]
+		var found : Array = _stations( ps, pname, float( st[ 1 ] ) - 20.0, float( st[ 2 ] ) + 20.0 )
+		var ok : bool = found.size() == 2 \
+			and absf( float( found[ 0 ] ) - float( st[ 1 ] ) ) <= 1.5 \
+			and absf( float( found[ 1 ] ) - float( st[ 2 ] ) ) <= 1.5
+		var detail : String = "found %d stations" % found.size()
+		if found.size() == 2 :
+			detail = "retrograde start %.1f d, end %.1f d vs almanac" % [
+				float( found[ 0 ] ) - float( st[ 1 ] ), float( found[ 1 ] ) - float( st[ 2 ] ) ]
+		_check( "%s retrograde loop matches the almanac" % pname, ok, detail )
+	ps.free()
+
+
+## Geocentric ecliptic longitude (deg) of a planet at `jd` from PlanetSystem's
+## own heliocentric solve — the quantity almanac station dates are quoted in.
+func _geo_lon( ps: Node, pname: String, jd: float ) -> float :
+	var p : Dictionary = ps.call( "get_heliocentric_coords", pname, jd )
+	var e : Dictionary = ps.call( "get_heliocentric_coords", "earth", jd )
+	return rad_to_deg( atan2( float( p.y ) - float( e.y ), float( p.x ) - float( e.x ) ) )
+
+
+## Julian days (0.25 d resolution) where the longitude rate changes sign.
+func _stations( ps: Node, pname: String, jd0: float, jd1: float ) -> Array :
+	var out : Array = []
+	var step : float = 0.25
+	var prev_rate : float = NAN
+	var jd : float = jd0
+	while jd < jd1 :
+		var rate : float = wrapf( _geo_lon( ps, pname, jd + step ) - _geo_lon( ps, pname, jd ), -180.0, 180.0 )
+		if not is_nan( prev_rate ) and signf( rate ) != signf( prev_rate ) :
+			out.append( jd )
+		prev_rate = rate
+		jd += step
+	return out
+
+
+## Julian day at 0h UT of a Gregorian date (Meeus 7.1).
+func _jd( y: int, m: int, d: int ) -> float :
+	if m <= 2 :
+		y -= 1
+		m += 12
+	var a : int = y / 100
+	var b : int = 2 - a + a / 4
+	return floor( 365.25 * ( y + 4716 ) ) + floor( 30.6001 * ( m + 1 ) ) + d + b - 1524.5
 
 
 # ==================== SHIPPED ASSET ====================

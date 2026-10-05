@@ -126,6 +126,15 @@ var _analemma_lunar_col: ColorPickerButton
 var _analemma_type: OptionButton
 var _show_sun_path: CheckBox
 var _show_moon_path: CheckBox
+var _show_planet_paths: CheckBox
+var _planet_path_frame: OptionButton
+var _analemma_star_reveal: HSlider
+var _zodiac_mode: OptionButton
+var _zodiac_opacity: HSlider
+var _zodiac_lines: CheckBox
+var _zodiac_labels: CheckBox
+var _zodiac_ophiuchus: CheckBox
+var _zodiac_ecliptic: CheckBox
 var _live_status: Label
 var _survival_status: Label
 
@@ -1093,7 +1102,7 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	rainbow_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(rainbow_hint)
 	var growth_hint := Label.new()
-	growth_hint.text = "Animates trees growing and reseeding over seasons. Turn off for smoother ∞ / analemma mode (skips per-frame scale updates)."
+	growth_hint.text = "Trees grow year on year with the calendar and live out a life cycle. Off = every plant draws at full size."
 	growth_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	growth_hint.custom_minimum_size = Vector2(520, 0)
 	growth_hint.add_theme_color_override("font_color", C_TEXT_S)
@@ -1146,6 +1155,13 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	
 	_show_sun_path = _add_check(v, "Show sun path", _on_show_sun_path)
 	_show_moon_path = _add_check(v, "Show moon path", _on_show_moon_path)
+	_show_planet_paths = _add_check(v, "Show planet paths", _on_show_planet_paths)
+	_planet_path_frame = _add_option(v, "Planet path frame",
+		["Sky — same instants as the sun", "Stars — retrograde loops"], _on_planet_path_frame)
+	_planet_path_frame.tooltip_text = "Sky: each planet sampled at the sun's (or moon's) daily instant, drawn where it stood in the sky then — compares against the figure-eight.\nStars: each planet's track against the star field, turned with the sky in real time — the frame real retrograde-loop composites are registered in. Mars, Jupiter and Saturn draw their backward loops around opposition; Mercury and Venus trace theirs near the sun."
+	_analemma_star_reveal = _add_slider(v, "Stars through daylight", 0.0, 1.0, 0.05, _on_analemma_star_reveal)
+	_analemma_star_reveal.tooltip_text = "Every analemma sample is at noon, so the stars are up but drowned in daylight. This dims the sky dome (not the lighting on the ground) and lets the stars, Milky Way, planets and zodiac through, so you can watch the star field turn once a year behind the sun. 0 = off."
+	_show_planet_paths.tooltip_text = "Trace Mercury, Venus, Mars, Jupiter and Saturn at the same instants as the sun (or moon) path. Mercury and Venus loop around the sun's figure-eight; the outer planets sweep the sky once per synodic period. Colours follow the planet colours in Settings → Stars & Planets; a planet switched off there gets no path."
 	_analemma_thickness = _add_slider(v, "Path thickness", 0.1, 20.0, 0.1, _on_analemma_thickness)
 	_analemma_solar_col = _add_color_picker(v, "Solar path color", _on_analemma_solar_col)
 	_analemma_lunar_col = _add_color_picker(v, "Lunar path color", _on_analemma_lunar_col)
@@ -1295,6 +1311,15 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	_ssao_enabled = _add_check(v, "SSAO (ambient occlusion)", _on_ssao_enabled)
 	_ssil_enabled = _add_check(v, "SSIL (indirect light)", _on_ssil_enabled)
 	_sdfgi_enabled = _add_check(v, "SDFGI (global illumination)", _on_sdfgi_enabled)
+	# SDFGI voxelises a handful of cascades CENTRED ON THE CAMERA — roughly 400 m
+	# across at the default cell size. On a 120 km terrain that is a small box that
+	# follows the player: ground inside it picks up bounced light, ground outside it
+	# gets none, and the seam reads as a lit square around the camera that fades out
+	# as a drone climbs past the cascade. It is worst at night, and worst of all with
+	# "Ambient x" at 0, where SDFGI is then the ONLY thing lighting that square.
+	# Off by default for that reason; the lighting model (DaylightModel) already
+	# carries direct beam + skylight on its own.
+	_sdfgi_enabled.tooltip_text = "Bounced-light GI. Not recommended at this world scale: SDFGI only covers a ~400 m box centred on the camera, so it lights a square patch of ground that follows you and stops at a hard edge — very visible at night, especially with Ambient × turned down."
 	_volumetric_fog = _add_check(v, "Volumetric fog", _on_volumetric_fog_enabled)
 	_fog_amount = _add_slider(v, "Fog amount", 0.0, 1.0, 0.01, _on_fog_amount)
 	_tonemap_mode = _add_option(v, "Tonemap", ["Linear", "Reinhard", "Filmic", "ACES", "AgX"], _on_tonemap_mode)
@@ -1407,6 +1432,17 @@ func _build_stars_planets_tab(tabs: TabContainer) -> void:
 	_star_reg_lbl = _add_status_label(v, "")
 	var reg_hint := _add_status_label(v, "Registration is measured by tools/starmap_prepare.py (sidecar .json next to the image). HOME toggles reference-star markers.")
 	reg_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_add_section_lbl(v, "Zodiac")
+	_zodiac_mode = _add_option(v, "Show zodiac", ["Off", "With the stars", "Always"], _on_zodiac_mode)
+	_zodiac_mode.tooltip_text = "With the stars: at night, and in analemma mode when 'Stars through daylight' is on. Always: over the daytime sky too."
+	_zodiac_opacity = _add_slider(v, "Brightness", 0.0, 2.0, 0.05, _on_zodiac_opacity)
+	_zodiac_lines = _add_check(v, "Constellation figures", _on_zodiac_lines)
+	_zodiac_labels = _add_check(v, "Names", _on_zodiac_labels)
+	_zodiac_ophiuchus = _add_check(v, "Ophiuchus (the 13th)", _on_zodiac_ophiuchus)
+	_zodiac_ophiuchus.tooltip_text = "The ecliptic also crosses Ophiuchus (IAU constellation boundaries, 1930): the sun spends about 18 days of each year there, between Scorpius and Sagittarius."
+	_zodiac_ecliptic = _add_check(v, "Ecliptic (the planets' plane)", _on_zodiac_ecliptic)
+	var zod_hint := _add_status_label(v, "Figures from Stellarium's 'modern' sky culture (CC BY-SA 4.0), in the same registration as the star map.")
+	zod_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Planets")
 	_planets_master = _add_check(v, "Show planets", _on_planets_master)
@@ -1688,6 +1724,25 @@ func _sync_gameplay_from_snapshot(snap: Dictionary) -> void:
 		_show_sun_path.button_pressed = bool(snap.get("show_sun_path", true))
 	if _show_moon_path:
 		_show_moon_path.button_pressed = bool(snap.get("show_moon_path", false))
+	if _show_planet_paths:
+		_show_planet_paths.button_pressed = bool(snap.get("show_planet_paths", false))
+	if _planet_path_frame:
+		_planet_path_frame.select(clampi(int(snap.get("planet_path_frame", 0)), 0, 1))
+	if _analemma_star_reveal:
+		_analemma_star_reveal.value = float(snap.get("analemma_star_reveal", 0.75))
+	if _zodiac_mode:
+		_zodiac_mode.select(clampi(int(snap.get("zodiac_mode", 0)), 0, 2))
+		_zodiac_mode.disabled = not bool(snap.get("zodiac_available", false))
+	if _zodiac_opacity:
+		_zodiac_opacity.value = float(snap.get("zodiac_opacity", 0.8))
+	if _zodiac_lines:
+		_zodiac_lines.button_pressed = bool(snap.get("zodiac_show_lines", true))
+	if _zodiac_labels:
+		_zodiac_labels.button_pressed = bool(snap.get("zodiac_show_labels", true))
+	if _zodiac_ophiuchus:
+		_zodiac_ophiuchus.button_pressed = bool(snap.get("zodiac_show_ophiuchus", false))
+	if _zodiac_ecliptic:
+		_zodiac_ecliptic.button_pressed = bool(snap.get("zodiac_show_ecliptic", true))
 	if _analemma_type:
 		var atype := int(snap.get("analemma_type", 0))
 		if atype >= 0 and atype < _analemma_type.item_count:
@@ -1866,6 +1921,42 @@ func _on_show_sun_path(on: bool) -> void:
 func _on_show_moon_path(on: bool) -> void:
 	if _syncing: return
 	SimSettingsController.apply_show_moon_path(on)
+
+func _on_show_planet_paths(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_show_planet_paths(on)
+
+func _on_analemma_star_reveal(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_analemma_star_reveal(v)
+
+func _on_zodiac_mode(idx: int) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("zodiac_mode", idx)
+
+func _on_zodiac_opacity(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("zodiac_opacity", v)
+
+func _on_zodiac_lines(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("zodiac_show_lines", on)
+
+func _on_zodiac_labels(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("zodiac_show_labels", on)
+
+func _on_zodiac_ophiuchus(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("zodiac_show_ophiuchus", on)
+
+func _on_zodiac_ecliptic(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_star_setting("zodiac_show_ecliptic", on)
+
+func _on_planet_path_frame(idx: int) -> void:
+	if _syncing: return
+	SimSettingsController.apply_planet_path_frame(idx)
 
 func _on_clouds_weight(v: float) -> void:
 	if _syncing: return

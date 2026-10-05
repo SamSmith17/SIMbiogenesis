@@ -35,6 +35,7 @@ const _GROUPS := [
 	["Interaction", [
 		["interact", "Interact / pick up / use"],
 		["dismount", "Exit vehicle"],
+		["drone_view", "Drone view from here (again to land)"],
 		["charge", "Charge battery at station"],
 		["repair", "Repair structure"],
 		["equip_tool", "Ready tool"],

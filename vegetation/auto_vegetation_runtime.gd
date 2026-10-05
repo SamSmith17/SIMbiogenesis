@@ -116,17 +116,15 @@ const HERO_CHUNK := 6
 
 static func rebuild(terrain: Node3D, layer: AutoVegetationLayer,
 		ground_y_at: Callable, settings: Dictionary = {},
-		exclusions: Array = [], growth_map: VegetationInstanceMap = null) -> void:
+		exclusions: Array = []) -> void:
 	if terrain == null or layer == null:
 		return
-	if growth_map != null:
-		growth_map.clear()
 	_clear_shader_registrations()
 	var s := neutralized_settings(settings)
 	var root := ensure_root(terrain)
 	_clear_children(root)
 	for slot in layer.slots():
-		_build_bulk_layer(root, str(slot), layer.bulk.get(slot, []), ground_y_at, s, growth_map)
+		_build_bulk_layer(root, str(slot), layer.bulk.get(slot, []), ground_y_at, s)
 	_build_hero_layer(root, layer.hero, ground_y_at, s)
 	# See VegetationRuntime.rebuild()'s matching comment: _clear_shader_registrations()
 	# above wipes the manual layer's registrations too, which this rebuild doesn't touch.
@@ -148,8 +146,7 @@ static func rebuild(terrain: Node3D, layer: AutoVegetationLayer,
 ##
 ## Returns the number of chunk nodes rebuilt.
 static func rebuild_chunks(terrain: Node3D, layer: AutoVegetationLayer,
-		ground_y_at: Callable, settings: Dictionary, chunk_keys: Dictionary,
-		growth_map: VegetationInstanceMap = null) -> int:
+		ground_y_at: Callable, settings: Dictionary, chunk_keys: Dictionary) -> int:
 	if terrain == null or layer == null or chunk_keys.is_empty():
 		return 0
 	var root := ensure_root(terrain)
@@ -181,7 +178,7 @@ static func rebuild_chunks(terrain: Node3D, layer: AutoVegetationLayer,
 		# Filtering BEFORE partitioning is what makes this equivalent to a full
 		# rebuild for these chunks: batches are grouped by per-record settings,
 		# so the same records always land in the same batch either way.
-		_build_bulk_layer(root, str(slot), subset, ground_y_at, s, growth_map)
+		_build_bulk_layer(root, str(slot), subset, ground_y_at, s)
 	return freed
 
 
@@ -192,15 +189,13 @@ static func rebuild_chunks(terrain: Node3D, layer: AutoVegetationLayer,
 ## synchronous path when no SceneTree is available (e.g. headless tools).
 static func rebuild_async(terrain: Node3D, layer: AutoVegetationLayer,
 		ground_y_at: Callable, settings: Dictionary = {},
-		exclusions: Array = [], growth_map: VegetationInstanceMap = null) -> void:
+		exclusions: Array = []) -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:
-		rebuild(terrain, layer, ground_y_at, settings, exclusions, growth_map)
+		rebuild(terrain, layer, ground_y_at, settings, exclusions)
 		return
 	if terrain == null or layer == null:
 		return
-	if growth_map != null:
-		growth_map.clear()
 	_clear_shader_registrations()
 	var s := neutralized_settings(settings)
 	var root := ensure_root(terrain)
@@ -208,7 +203,7 @@ static func rebuild_async(terrain: Node3D, layer: AutoVegetationLayer,
 	for slot in layer.slots():
 		if not is_instance_valid(root):
 			return
-		_build_bulk_layer(root, str(slot), layer.bulk.get(slot, []), ground_y_at, s, growth_map)
+		_build_bulk_layer(root, str(slot), layer.bulk.get(slot, []), ground_y_at, s)
 		await tree.process_frame
 	if not is_instance_valid(root):
 		return
@@ -224,9 +219,8 @@ static func rebuild_async(terrain: Node3D, layer: AutoVegetationLayer,
 ## Thread the live settings AND growth map — see VegetationRuntime.reground()'s
 ## comment for the bug a bare rebuild causes.
 static func reground(terrain: Node3D, layer: AutoVegetationLayer,
-		ground_y_at: Callable, settings: Dictionary = {},
-		growth_map: VegetationInstanceMap = null) -> void:
-	rebuild(terrain, layer, ground_y_at, settings, [], growth_map)
+		ground_y_at: Callable, settings: Dictionary = {}) -> void:
+	rebuild(terrain, layer, ground_y_at, settings, [])
 
 
 static func _resolve_species(slot: String) -> String:
@@ -243,8 +237,7 @@ static func _clear_children(root: Node3D) -> void:
 
 
 static func _build_bulk_layer(root: Node3D, slot: String, records: Array,
-		ground_y_at: Callable, settings: Dictionary,
-		growth_map: VegetationInstanceMap = null) -> void:
+		ground_y_at: Callable, settings: Dictionary) -> void:
 	if records.is_empty():
 		return
 	var species := _resolve_species(slot)
@@ -253,7 +246,7 @@ static func _build_bulk_layer(root: Node3D, slot: String, records: Array,
 		var chunks := VegetationRuntime._partition_spatial_chunks(batch["records"] as Array)
 		for chunk in chunks:
 			_build_bulk_batch(root, slot, species, chunk["records"], ground_y_at,
-				batch["settings"], growth_map, int(chunk["cx"]), int(chunk["cz"]))
+				batch["settings"], int(chunk["cx"]), int(chunk["cz"]))
 
 
 static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -> Array:
@@ -313,7 +306,7 @@ static func height_norm_factor(species: String, settings: Dictionary) -> float:
 
 static func _build_bulk_batch(root: Node3D, slot: String, species: String, records: Array,
 		ground_y_at: Callable, settings: Dictionary,
-		growth_map: VegetationInstanceMap = null, chunk_x: int = 0, chunk_z: int = 0) -> void:
+		chunk_x: int = 0, chunk_z: int = 0) -> void:
 	if records.is_empty():
 		return
 	var family := VegetationCardFactory.mesh_family(species)
@@ -322,7 +315,7 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	if family in VegetationLayer.GRASS_SPECIES or family.begins_with("grass_"):
 		# Grass builder keys on family id (lawn/field); variant dims live in settings.
 		VegetationRuntime._build_grass_bulk_batches(root, family, records, ground_y_at,
-			batch_settings, growth_map, chunk_x, chunk_z)
+			batch_settings, chunk_x, chunk_z)
 		return
 	if family == "deciduous" or family == "pine":
 		var tree_end := float(batch_settings.get("auto_visibility_end_m", VISIBILITY_END))
@@ -330,8 +323,7 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 		# LOD dispatch (NEAR mesh within the detail range, impostor beyond)
 		# lives inside _build_canopy_lod_bulk_batches.
 		VegetationRuntime._build_canopy_lod_bulk_batches(root, species, records, ground_y_at,
-			false, batch_settings, tree_end, growth_map,
-			chunk_x, chunk_z)
+			false, batch_settings, tree_end, chunk_x, chunk_z)
 		return
 	var mesh := VegetationCardFactory.mesh_for_species(species, batch_settings)
 	var use_surface_mats := VegetationCardFactory.mesh_has_surface_materials(species)
@@ -344,11 +336,16 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 		* height_norm_factor(species, batch_settings)
 	var foot_y := VegetationCardFactory.foot_local_y(species, batch_settings)
 	var vert_off := VegetationLayer.vertical_offset_for(family, batch_settings)
+	VegetationRuntime.stamp_growth_pivot(mesh, mat, foot_y)
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
+	# Growth rides the instance, not the transform: the shader scales each
+	# plant from its birth year (veg_growth.gdshaderinc). Must be set while
+	# instance_count is still 0.
+	mm.use_custom_data = true
+	var growth_bp := VegetationGrowth.batch_params(species, settings)
 	mm.mesh = mesh
 	mm.instance_count = records.size()
-	var pending: Array = []
 	var i := 0
 	for item in records:
 		if not (item is Dictionary):
@@ -357,17 +354,12 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 		var x := float(d.get("x", 0.0))
 		var z := float(d.get("z", 0.0))
 		var yaw := float(d.get("yaw", 0.0))
-		var base_scale := float(d.get("scale", 1.0)) * species_scale
-		var scale := base_scale * VegetationGrowth.instance_scale_mult(species, d, settings)
+		var scale := float(d.get("scale", 1.0)) * species_scale
 		var record_vert := float(d.get("vert_off", vert_off))
 		var gy: float = float(ground_y_at.call(x, z))
 		mm.set_instance_transform(i, VegetationPaint.build_transform(
 			x, gy, z, yaw, scale, false, Vector3.UP, record_vert, foot_y))
-		if growth_map != null:
-			pending.append({
-				"record": d, "base_scale": base_scale, "vert_off": record_vert,
-				"x": x, "z": z, "yaw": yaw, "ground_y": gy,
-			})
+		mm.set_instance_custom_data(i, VegetationGrowth.custom_for(growth_bp, d))
 		i += 1
 	mm.instance_count = i
 	if i == 0:
@@ -375,6 +367,9 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	var mi := MultiMeshInstance3D.new()
 	mi.name = "Bulk_%s_%d_%d" % [slot, chunk_x, chunk_z]
 	mi.multimesh = mm
+	# A regrown generation stands up to a metre off the original spot
+	# (veg_growth.gdshaderinc), outside the AABB the transforms imply.
+	mi.extra_cull_margin = 2.0
 	if use_surface_mats:
 		mi.material_override = null
 	else:
@@ -387,12 +382,6 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 		else float(settings.get("auto_visibility_end_m", VISIBILITY_END))
 	VegetationRuntime.apply_visibility_range(mi, VISIBILITY_BEGIN, vis_end)
 	root.add_child(mi)
-	if growth_map != null:
-		for j in pending.size():
-			var p: Dictionary = pending[j]
-			VegetationRuntime._register_growth(growth_map, mi, j, p["record"], species,
-				float(p["base_scale"]), float(p["vert_off"]), foot_y, false,
-				float(p["x"]), float(p["z"]), float(p["yaw"]), float(p["ground_y"]))
 	_register_multimesh(mi, species)
 
 

@@ -102,6 +102,50 @@ const NEW_FIRE_GRACE_PERIOD : float = 5.0
 const _FIRE_COUNT_CACHE_SECONDS : float = 0.5
 const _MESH_CACHE_REFRESH_SECONDS : float = 5.0
 
+## --- Surface burn (the burn FRONT) ---------------------------------------
+## A fire used to be a point: it sat where it was lit and "spread" only by
+## absorbing whole sibling meshes, so a structure that is ONE mesh never spread
+## at all. Now the structure is sampled once into world-space surface points and
+## a burn front climbs it from the base: flames are emitted from the surface
+## points in a band under the front, and a char overlay (fire_char.gdshader)
+## darkens everything the front has passed. All in WORLD space — a GLB's own
+## axes and import scale (inches) are exactly what made the old ignition point
+## land at the top of the model.
+const CHAR_SHADER := preload("res://crisis_events/fire/fire_char.gdshader")
+const ASH_SHADER := preload("res://crisis_events/fire/fire_ash.gdshader")
+## Share of a fire's life (0..1 of DESTROY_TIME_HOURS) at which the blackened
+## structure starts to be eaten away.
+const BURN_AWAY_FROM : float = 0.82
+const MAX_SURFACE_POINTS : int = 3000
+const MAX_EMISSION_POINTS : int = 512
+const BURN_STEPS : int = 24
+## The front climbs at about this speed in real time (sim time also counts).
+const CLIMB_SPEED_MPS : float = 0.22
+const CLIMB_MIN_SECONDS : float = 18.0
+const CLIMB_MAX_SECONDS : float = 90.0
+## Fire grows in real time too — at 1x sim speed GROWTH_RATE alone adds 0.02/s
+## and a fire never reached the intensity that lets it spread.
+const WALL_GROWTH_PER_SEC : float = 2.5
+## Fixed particle budgets in surface mode; `amount_ratio` does the scaling,
+## because writing `amount` restarts the emitter (a visible gap every tier).
+const SURFACE_FLAME_AMOUNT : int = 160
+const SURFACE_SMOKE_AMOUNT : int = 110
+const SURFACE_EMBER_AMOUNT : int = 60
+
+## 0 = just lit at the base, 1 = the front has reached the top.
+var burn_progress : float = 0.0
+var _surface_mode : bool = false
+var _surface_setup_done : bool = false
+var _burn_points : PackedVector3Array = PackedVector3Array()  # sorted by y
+var _burn_base_y : float = 0.0
+var _burn_top_y : float = 0.0
+var _burn_reach_max : float = 1.0
+var _ignite_xz : Vector2 = Vector2.ZERO
+var _burn_step : int = -1
+var _char_mat : ShaderMaterial = null
+var _ash_mat : ShaderMaterial = null
+var _charred : Array[MeshInstance3D] = []
+
 static var _cached_fire_count : int = 0
 static var _last_fire_count_update_sec : float = -1000.0
 static var _cached_flammable_meshes : Array[MeshInstance3D] = []
@@ -166,6 +210,10 @@ static func regenerate_meshes_under(root: Node) -> int:
 		if mi.has_meta("fire_pre_burn_override") and not (mi.has_meta("fire_burned") and bool(mi.get_meta("fire_burned"))):
 			_restore_burned_mesh(mi)
 			restored += 1
+		elif mi.has_meta("fire_char_overlay"):
+			# Charred by a burn front that was put out before it destroyed anything.
+			_clear_char_overlay(mi)
+			restored += 1
 	if root is PlacedProp:
 		(root as PlacedProp).clear_burned_flag()
 	invalidate_flammable_mesh_cache()
@@ -185,6 +233,7 @@ static func _restore_burned_mesh(mesh: MeshInstance3D) -> void:
 	if mesh == null or not is_instance_valid(mesh):
 		return
 	mesh.visible = true
+	_clear_char_overlay(mesh)
 	if mesh.has_meta("fire_pre_burn_override"):
 		var prev: Variant = mesh.get_meta("fire_pre_burn_override")
 		mesh.material_override = prev as Material
@@ -202,6 +251,17 @@ static func _restore_burned_mesh(mesh: MeshInstance3D) -> void:
 			(n as PlacedProp).clear_burned_flag()
 			break
 		n = n.get_parent()
+
+
+## Take the char overlay (and any burn-away fade) off a mesh.
+static func _clear_char_overlay(mesh: MeshInstance3D) -> void:
+	if mesh == null or not is_instance_valid(mesh) or not mesh.has_meta("fire_char_overlay"):
+		return
+	var prev: Variant = mesh.get_meta("fire_pre_overlay") if mesh.has_meta("fire_pre_overlay") else null
+	mesh.material_overlay = prev as Material
+	mesh.remove_meta("fire_char_overlay")
+	if mesh.has_meta("fire_pre_overlay"):
+		mesh.remove_meta("fire_pre_overlay")
 
 
 static func _register_burned_mesh(mesh: MeshInstance3D) -> void:
@@ -579,13 +639,21 @@ func _process(delta: float) -> void:
 		# Natural growth only when NOT being sprayed (SIMULATION time)
 		# But only if fire is above a minimum threshold
 		if intensity > EXTINGUISH_THRESHOLD:
-			intensity += GROWTH_RATE * sim_hours
+			intensity += maxf(GROWTH_RATE * sim_hours, WALL_GROWTH_PER_SEC * delta)
 	
 	intensity = clampf(intensity, 0.0, 200.0)
 	_refresh_growth_tier()
 
 	# Track fire time (simulation)
 	fire_time_hours += sim_hours
+
+	# The burn front. Set up on the first frame, not in _ready: the event places
+	# this node AFTER add_child, and the ignition spot is where it was placed.
+	if not _surface_setup_done:
+		_surface_setup_done = true
+		_setup_surface_burn()
+	if _surface_mode:
+		_advance_burn_front(delta, sim_hours, being_sprayed)
 	
 	# Check if extinguished - once intensity is low enough, fire is OUT
 	# No need to keep spraying once it's this low
@@ -832,7 +900,7 @@ func absorb_mesh(mesh: MeshInstance3D) -> void:
 	# Climb: move flame toward this piece's burning surface (bottom→mid as we grow).
 	var climb_t := clampf(float(burning_meshes.size()) / 6.0, 0.0, 1.0)
 	var dest := ignition_point_on_mesh_progress(mesh, climb_t)
-	if dest.y >= global_position.y - 0.25:
+	if not _surface_mode and dest.y >= global_position.y - 0.25:
 		global_position = global_position.lerp(dest, 0.45)
 		global_position.y = maxf(global_position.y, lerpf(global_position.y, dest.y, 0.65))
 	_refresh_growth_tier()
@@ -869,25 +937,32 @@ func _apply_growth_visuals(force: bool) -> void:
 	var radius: float = radii[growth_tier]
 	var smoke_vel: float = smoke_vels[growth_tier]
 	var smoke_grav: float = smoke_gravs[growth_tier]
+	# In surface mode the emitters keep a fixed budget and unit scale (their
+	# emission points are world offsets); `_refresh_surface_ratios` scales them.
 	if flame_particles != null:
-		flame_particles.amount = flame_n
+		if not _surface_mode:
+			flame_particles.amount = flame_n
 		var fmat := flame_particles.process_material as ParticleProcessMaterial
 		if fmat != null:
 			fmat.emission_sphere_radius = radius
 			fmat.initial_velocity_max = 3.0 + float(growth_tier) * 1.1
 			fmat.gravity = Vector3(0, 5.0 + float(growth_tier) * 1.5, 0)
-		flame_particles.scale = Vector3.ONE * (0.85 + float(growth_tier) * 0.22)
+		if not _surface_mode:
+			flame_particles.scale = Vector3.ONE * (0.85 + float(growth_tier) * 0.22)
 	if smoke_particles != null:
-		smoke_particles.amount = smoke_n
+		if not _surface_mode:
+			smoke_particles.amount = smoke_n
 		var smat := smoke_particles.process_material as ParticleProcessMaterial
 		if smat != null:
 			smat.emission_sphere_radius = radius * 1.2
 			smat.initial_velocity_min = smoke_vel * 0.55
 			smat.initial_velocity_max = smoke_vel
 			smat.gravity = Vector3(0, smoke_grav, 0)
-		smoke_particles.scale = Vector3.ONE * (0.9 + float(growth_tier) * 0.25)
+		if not _surface_mode:
+			smoke_particles.scale = Vector3.ONE * (0.9 + float(growth_tier) * 0.25)
 	if ember_particles != null:
-		ember_particles.amount = ember_n
+		if not _surface_mode:
+			ember_particles.amount = ember_n
 		var emat := ember_particles.process_material as ParticleProcessMaterial
 		if emat != null:
 			emat.emission_sphere_radius = radius
@@ -899,6 +974,8 @@ func _apply_growth_visuals(force: bool) -> void:
 	if fire_light_2 != null:
 		fire_light_2.light_energy = 2.0 + float(growth_tier) * 1.8
 		fire_light_2.omni_range = 18.0 + float(growth_tier) * 8.0
+	if _surface_mode:
+		_refresh_surface_ratios()
 
 
 ## Meshes under burn_scope only (excludes player / drone / SoI / tools).
@@ -1036,14 +1113,12 @@ static func ignition_point_on_mesh_progress(mesh: MeshInstance3D, progress: floa
 	if mesh == null:
 		return Vector3.ZERO
 	var t := clampf(progress, 0.0, 1.0)
-	var local_aabb := mesh.get_aabb()
-	var local := local_aabb.get_center()
-	# Bottom → top along the mesh height.
-	local.y = local_aabb.position.y + local_aabb.size.y * lerpf(0.12, 0.92, t)
-	var world := mesh.to_global(local)
-	var lift := maxf(0.35, local_aabb.size.y * 0.03)
-	var sy := mesh.global_transform.basis.get_scale().y
-	world.y += lift * maxf(sy, 1.0)
+	# WORLD AABB. This used to work in the mesh's LOCAL frame: local Y is not up
+	# on a Z-up GLB, and the "lift" was taken from the local height and added as
+	# metres — on an inch-unit import that put the flame metres above the model.
+	var box := _mesh_world_aabb(mesh)
+	var world := box.get_center()
+	world.y = box.position.y + box.size.y * lerpf(0.12, 0.92, t) + 0.15
 	return world
 
 
@@ -1097,6 +1172,9 @@ func _mesh_has_fire(mesh: MeshInstance3D) -> bool:
 func _darken_mesh(mesh: MeshInstance3D) -> void:
 	if mesh == null:
 		return
+	if _surface_mode:
+		_apply_char_overlay(mesh)  # the burn front darkens it progressively
+		return
 	if not mesh.has_meta("fire_pre_burn_override"):
 		mesh.set_meta("fire_pre_burn_override", mesh.material_override)
 	var mat := StandardMaterial3D.new()
@@ -1111,6 +1189,8 @@ func _darken_mesh(mesh: MeshInstance3D) -> void:
 func _char_mesh(mesh: MeshInstance3D) -> void:
 	if mesh == null or not is_instance_valid(mesh):
 		return
+	if mesh.has_meta("fire_char_overlay"):
+		return  # already charred by the burn front, to exactly where it reached
 	if not mesh.has_meta("fire_pre_burn_override"):
 		mesh.set_meta("fire_pre_burn_override", mesh.material_override)
 	var char_mat := StandardMaterial3D.new()
@@ -1191,6 +1271,7 @@ func _find_ground_level() -> float:
 
 ## Convert this fire to a simple smoldering pile on ground (saves computation)
 func _become_smoldering_pile(ground_y: float) -> void:
+	_leave_surface_mode()
 	# Move to ground level
 	global_position.y = ground_y + 0.1
 	
@@ -1247,6 +1328,9 @@ func _become_smoldering_pile(ground_y: float) -> void:
 	target_mesh = null
 
 func _extinguish() -> void:
+	# The char stays exactly where the front reached; only the embers go out.
+	if _char_mat != null:
+		_char_mat.set_shader_parameter("ember", 0.0)
 	# Char the target mesh (make it black/burned looking)
 	if target_mesh != null and is_instance_valid(target_mesh):
 		target_mesh.set_meta("fire_active", false)
@@ -1465,3 +1549,297 @@ func resume_fire() -> void:
 		indicator_mesh.visible = true
 	# Force visual update
 	_update_visuals_immediate()
+
+
+# ---------------------------------------------------------------------------
+# Surface burn — the climbing burn front
+# ---------------------------------------------------------------------------
+
+## Sample the structure's surface once (world space) and switch the emitters to
+## emit from those points. Falls back to the old point fire when the structure
+## has no readable geometry.
+func _setup_surface_burn() -> void:
+	if target_mesh == null or not is_instance_valid(target_mesh):
+		return
+	if burn_scope == null:
+		burn_scope = _structure_root_of(target_mesh)
+	var meshes := _collect_scope_meshes()
+	if meshes.is_empty():
+		meshes = [target_mesh]
+	var pts := sample_surface_points(meshes, MAX_SURFACE_POINTS)
+	if pts.size() < 8:
+		return
+	_burn_points = pts
+	_burn_base_y = pts[0].y
+	_burn_top_y = pts[pts.size() - 1].y
+	_ignite_xz = Vector2(global_position.x, global_position.z)
+	_burn_reach_max = 1.0
+	for p in pts:
+		_burn_reach_max = maxf(_burn_reach_max, Vector2(p.x, p.z).distance_to(_ignite_xz))
+	_surface_mode = true
+	_char_mat = ShaderMaterial.new()
+	_char_mat.shader = CHAR_SHADER
+	_char_mat.set_shader_parameter("soft_m", _char_soft_m())
+	_char_mat.set_shader_parameter("ignite_xz", _ignite_xz)
+	for m in meshes:
+		_apply_char_overlay(m)
+	# Emission points are world offsets from this node: no per-emitter offset or
+	# scale may sit between them and the world.
+	for ps: GPUParticles3D in [flame_particles, smoke_particles, ember_particles, ignition_particles]:
+		if ps == null:
+			continue
+		ps.position = Vector3.ZERO
+		ps.scale = Vector3.ONE
+	if flame_particles != null:
+		flame_particles.amount = SURFACE_FLAME_AMOUNT
+		flame_particles.visibility_aabb = _surface_visibility_aabb(40.0)
+	if smoke_particles != null:
+		smoke_particles.amount = SURFACE_SMOKE_AMOUNT
+		smoke_particles.visibility_aabb = _surface_visibility_aabb(140.0)
+	if ember_particles != null:
+		ember_particles.amount = SURFACE_EMBER_AMOUNT
+		ember_particles.visibility_aabb = _surface_visibility_aabb(80.0)
+	_burn_step = -1
+	_advance_burn_front(0.0, 0.0, false)
+
+
+## Particles are culled by this box, and the node now travels up the structure.
+func _surface_visibility_aabb(rise_m: float) -> AABB:
+	var h := _burn_top_y - _burn_base_y
+	var r := _burn_reach_max + 12.0
+	return AABB(Vector3(-r, -h - 4.0, -r), Vector3(r * 2.0, h * 2.0 + rise_m + 8.0, r * 2.0))
+
+
+func _char_soft_m() -> float:
+	return clampf((_burn_top_y - _burn_base_y) * 0.06, 0.12, 1.2)
+
+
+func _apply_char_overlay(mesh: MeshInstance3D) -> void:
+	if mesh == null or not is_instance_valid(mesh) or _char_mat == null:
+		return
+	if not mesh.has_meta("fire_char_overlay"):
+		if mesh.material_overlay != null:
+			mesh.set_meta("fire_pre_overlay", mesh.material_overlay)
+		mesh.set_meta("fire_char_overlay", true)
+	mesh.material_overlay = _char_mat
+	if mesh not in _charred:
+		_charred.append(mesh)
+
+
+## The structure is fully black by now, so its materials can be swapped for the
+## dissolving ash material without a visible change — and from there it is eaten
+## away. (Instance `transparency` was tried first: it hides an alpha overlay
+## entirely, so the charred structure flashed back to clean wood as it faded.)
+func _burn_away(t: float) -> void:
+	if _ash_mat == null:
+		_ash_mat = ShaderMaterial.new()
+		_ash_mat.shader = ASH_SHADER
+		_ash_mat.set_shader_parameter("base_y", _burn_base_y)
+		_ash_mat.set_shader_parameter("top_y", _burn_top_y)
+		for m in _charred:
+			if not is_instance_valid(m):
+				continue
+			if not m.has_meta("fire_pre_burn_override"):
+				m.set_meta("fire_pre_burn_override", m.material_override)
+			m.material_override = _ash_mat
+			# The overlay redraws the whole mesh and would fill the holes back in.
+			m.material_overlay = null
+	t = clampf(t, 0.0, 1.0)
+	_ash_mat.set_shader_parameter("dissolve", t)
+	# The top goes first, so the flames come down with what is left of it —
+	# otherwise they hang in the air where the top used to be.
+	var step := 1000 + int(t * 6.0)
+	if step != _burn_step:
+		_burn_step = step
+		var h := _burn_top_y - _burn_base_y
+		_rebuild_emission_points(lerpf(_burn_top_y, _burn_base_y + h * 0.3, t), 1.0e9, h)
+
+
+## World height of the front for a progress value. It starts a little above the
+## base so there is something alight on the first frame.
+func _front_y_for(progress: float) -> float:
+	var h := _burn_top_y - _burn_base_y
+	var start := minf(maxf(h * 0.04, 0.25), h)
+	return _burn_base_y + start + (h - start) * clampf(progress, 0.0, 1.0)
+
+
+func _advance_burn_front(delta: float, sim_hours: float, being_sprayed: bool) -> void:
+	var h := maxf(_burn_top_y - _burn_base_y, 0.01)
+	if not being_sprayed and burn_progress < 1.0:
+		var climb_s := clampf(h / CLIMB_SPEED_MPS, CLIMB_MIN_SECONDS, CLIMB_MAX_SECONDS)
+		burn_progress = minf(1.0, burn_progress
+			+ delta / climb_s * clampf(intensity / 60.0, 0.5, 1.6)
+			+ sim_hours / ENGULF_TIME_HOURS)
+		if burn_progress >= 1.0:
+			_engulf_nearby_meshes()
+	var front_y := _front_y_for(burn_progress)
+	# It catches at one spot and runs round the base well before it tops out.
+	var reach := 1.5 + _burn_reach_max * clampf(burn_progress * 4.0, 0.0, 1.0) * 1.05
+	if _char_mat != null:
+		_char_mat.set_shader_parameter("front_y", front_y + _char_soft_m() * 0.5)
+		_char_mat.set_shader_parameter("reach_m", reach)
+		# Once the front is at the top the whole thing goes black, and over the
+		# last stretch before it collapses it burns away.
+		var life := clampf(fire_time_hours / DESTROY_TIME_HOURS, 0.0, 1.0)
+		var all_black := smoothstep(0.3, 0.75, life) if burn_progress >= 1.0 else 0.0
+		_char_mat.set_shader_parameter("char_all", all_black)
+		if life >= BURN_AWAY_FROM and burn_progress >= 1.0:
+			_burn_away((life - BURN_AWAY_FROM) / (1.0 - BURN_AWAY_FROM))
+	var step := int(burn_progress * float(BURN_STEPS))
+	if _ash_mat == null and step != _burn_step:
+		_burn_step = step
+		_rebuild_emission_points(front_y, reach)
+
+
+## Point the emitters at the surface that is burning NOW: a band under the front,
+## within reach of the ignition spot. Moves this node to the band's centre so
+## the lights and the extinguisher's detection sphere travel with the fire.
+func _rebuild_emission_points(front_y: float, reach: float, band_m: float = -1.0) -> void:
+	var h := maxf(_burn_top_y - _burn_base_y, 0.01)
+	var band := band_m if band_m > 0.0 else maxf(h * 0.4, 1.5)
+	var active := PackedVector3Array()
+	var reach2 := reach * reach
+	for p in _burn_points:
+		if p.y > front_y:
+			break  # sorted by height
+		if p.y < front_y - band:
+			continue
+		if Vector2(p.x, p.z).distance_squared_to(_ignite_xz) > reach2:
+			continue
+		active.append(p)
+	if active.size() < 6:
+		# Nothing in the band yet (first frames, or a gap in the model): use the
+		# lowest points nearest the ignition spot so there is always a flame.
+		active = _nearest_low_points(6)
+	if active.is_empty():
+		return
+	var stride := maxi(1, int(ceil(float(active.size()) / float(MAX_EMISSION_POINTS))))
+	var centre := Vector3.ZERO
+	var picked := PackedVector3Array()
+	for i in range(0, active.size(), stride):
+		picked.append(active[i])
+		centre += active[i]
+	centre /= float(picked.size())
+	global_position = centre
+	var img := Image.create(picked.size(), 1, false, Image.FORMAT_RGBF)
+	for i in picked.size():
+		var o := picked[i] - centre
+		img.set_pixel(i, 0, Color(o.x, o.y, o.z))
+	var tex := ImageTexture.create_from_image(img)
+	for ps: GPUParticles3D in [flame_particles, smoke_particles, ember_particles, ignition_particles]:
+		if ps == null:
+			continue
+		var pm := ps.process_material as ParticleProcessMaterial
+		if pm == null:
+			continue
+		pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_POINTS
+		pm.emission_point_texture = tex
+		pm.emission_point_count = picked.size()
+	set_meta("burn_active_points", active.size())
+	_refresh_surface_ratios()
+
+
+func _nearest_low_points(count: int) -> PackedVector3Array:
+	var low_n := mini(_burn_points.size(), maxi(count, _burn_points.size() / 10))
+	var ranked: Array = []
+	for i in low_n:
+		ranked.append(_burn_points[i])
+	var at := _ignite_xz
+	ranked.sort_custom(func(a: Vector3, b: Vector3) -> bool:
+		return Vector2(a.x, a.z).distance_squared_to(at) < Vector2(b.x, b.z).distance_squared_to(at))
+	var out := PackedVector3Array()
+	for i in mini(count, ranked.size()):
+		out.append(ranked[i])
+	return out
+
+
+## How much of the fixed particle budget to use: more as the fire covers more of
+## the structure and as it grows hotter.
+func _refresh_surface_ratios() -> void:
+	if not _surface_mode or _burn_points.is_empty():
+		return
+	var share := float(int(get_meta("burn_active_points", 0))) / float(_burn_points.size())
+	var ratio := clampf(0.14 + share * 1.7 + float(growth_tier) * 0.09, 0.14, 1.0)
+	if flame_particles != null:
+		flame_particles.amount_ratio = ratio
+	if smoke_particles != null:
+		smoke_particles.amount_ratio = clampf(ratio * 1.1, 0.2, 1.0)
+	if ember_particles != null:
+		ember_particles.amount_ratio = ratio
+
+
+## Back to a plain point fire (the smouldering pile): sphere emitters, full ratio.
+func _leave_surface_mode() -> void:
+	if not _surface_mode:
+		return
+	_surface_mode = false
+	for ps: GPUParticles3D in [flame_particles, smoke_particles, ember_particles, ignition_particles]:
+		if ps == null:
+			continue
+		ps.amount_ratio = 1.0
+		var pm := ps.process_material as ParticleProcessMaterial
+		if pm != null:
+			pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+
+
+## World-space points spread over the surfaces of `meshes`, SORTED BY HEIGHT.
+## Random points on sampled triangles rather than bare vertices: a box is eight
+## vertices, and a wall of flame from eight points is eight candles.
+static func sample_surface_points(meshes: Array, budget: int) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var live: Array[MeshInstance3D] = []
+	for m in meshes:
+		var mi := m as MeshInstance3D
+		if mi != null and is_instance_valid(mi) and mi.mesh != null:
+			live.append(mi)
+	if live.is_empty():
+		return out
+	var per_mesh := maxi(60, budget / live.size())
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 90210
+	for mi in live:
+		var xf := mi.global_transform
+		var surfaces := mi.mesh.get_surface_count()
+		var per_surface := maxi(20, per_mesh / maxi(surfaces, 1))
+		for s in surfaces:
+			var arr := mi.mesh.surface_get_arrays(s)
+			if arr.is_empty() or arr[Mesh.ARRAY_VERTEX] == null:
+				continue
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var idx: PackedInt32Array = PackedInt32Array()
+			if arr[Mesh.ARRAY_INDEX] != null:
+				idx = arr[Mesh.ARRAY_INDEX]
+			var tri_count := (idx.size() if not idx.is_empty() else verts.size()) / 3
+			if tri_count <= 0:
+				continue
+			# AREA-weighted, several samples per triangle: a plain box is twelve
+			# triangles, and one point each is far too few to carry a flame front.
+			# Very dense meshes are strided so this stays a one-off few ms.
+			var tri_step := maxi(1, tri_count / 20000)
+			var tris := PackedInt32Array()
+			var cum := PackedFloat32Array()
+			var total_area := 0.0
+			for ti in range(0, tri_count, tri_step):
+				var t0 := ti * 3
+				var pa: Vector3 = verts[t0] if idx.is_empty() else verts[idx[t0]]
+				var pb: Vector3 = verts[t0 + 1] if idx.is_empty() else verts[idx[t0 + 1]]
+				var pc: Vector3 = verts[t0 + 2] if idx.is_empty() else verts[idx[t0 + 2]]
+				total_area += (pb - pa).cross(pc - pa).length() * 0.5
+				tris.append(t0)
+				cum.append(total_area)
+			if total_area <= 0.0:
+				continue
+			for k in per_surface:
+				var t := tris[mini(cum.bsearch(rng.randf() * total_area), tris.size() - 1)]
+				var a: Vector3 = verts[t] if idx.is_empty() else verts[idx[t]]
+				var b: Vector3 = verts[t + 1] if idx.is_empty() else verts[idx[t + 1]]
+				var c: Vector3 = verts[t + 2] if idx.is_empty() else verts[idx[t + 2]]
+				var u := rng.randf()
+				var v := rng.randf()
+				if u + v > 1.0:
+					u = 1.0 - u
+					v = 1.0 - v
+				out.append(xf * (a + (b - a) * u + (c - a) * v))
+	var list: Array = Array(out)
+	list.sort_custom(func(p: Vector3, q: Vector3) -> bool: return p.y < q.y)
+	return PackedVector3Array(list)

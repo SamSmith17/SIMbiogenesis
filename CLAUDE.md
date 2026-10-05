@@ -119,6 +119,43 @@ Godot.exe.exe --headless --path . --script scenes/ui/ui_compile_selftest.gd
 # test function while the suite still prints PASS:
 Godot.exe.exe --headless --path . --script scenes/ui/toolbar/toolbar_selftest.gd
 
+# Painted camp areas (offline — core/camps/): every household template fits its
+# style's lattice cell (the property that makes neighbouring households
+# independent), a ROADLESS field fills (the regression the module exists for —
+# BrcCampGenerator places nothing farther than plot_depth from an OSM street),
+# vehicles within the alignment jitter of the camp heading with ONE parking
+# direction per row, no two footprints overlapping in any style, nothing outside
+# the outline or inside a hole, GROW STABILITY (enlarging a camp leaves every
+# existing structure byte-identical — the lattice is world-anchored and seeded
+# per cell, never from a running RNG), slope/exclusion rejection, the layer's
+# paint = union / erase = difference algebra incl. a cut that splits one camp in
+# two, file round-trip of every record key, the Plots subdivider, and
+# CampAreaRuntime's per-camp nodes. Carries EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/camps/camp_area_selftest.gd
+# Legacy street-following camp generator (offline — BrcCampGenerator, still what
+# auto-generate-on-load and the Shift+C dock use; CampMeshLibrary borrows its
+# mesh builders, so this must keep passing):
+Godot.exe.exe --headless --path . --script vegetation/camp_generator_selftest.gd
+# Painted camps end to end (WINDOWED, needs a REAL TerrainLoader map): scores a
+# grid of candidate sites with the real generator + the loader's real
+# exclusions, paints an RV camp on the best one, and asserts what a PNG cannot:
+# worst RV deviation from the camp heading (DUMPED; must sit inside the jitter),
+# every structure seated on ground_height_at (the edit-aware surface), growing
+# the camp keeps every RV where it stood, a zone splits into filled plots, a
+# fresh attach reproduces the same counts (= what a reload does), erase + undo.
+# Shoots day and night sets. Snapshots and byte-restores the map's
+# camp_areas_*.json, so a run never leaves camps on the player's site:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=camps --shots-dir=<label> --quit-after-capture
+
+# Fire burn front (offline — FireNode surface mode): on an inch-unit, Z-up rig
+# (the import shape that put the flame at the TOP of a model) ignition lands in
+# the bottom quarter of the WORLD box, the front climbs monotonically to the
+# top, flames emit from surface points, the char overlay follows the front, a
+# sprayed fire holds, the structure goes black then is eaten away, and a restore
+# removes both. Headless has no renderer, so the two shaders are only proven by
+# running the game:
+Godot.exe.exe --headless --path . --script crisis_events/fire/fire_burn_selftest.gd
+
 # Night-sky star field self-test (offline — core/astronomy/): StarSkyMath's
 # GMST pinned to Meeus's worked examples 12.a/12.b, the equatorial BASIS form
 # of RA/Dec -> world direction against the independent hour-angle/alt-az
@@ -193,7 +230,15 @@ Godot.exe.exe --headless --path . --script core/climelapse/climelapse_series_sel
 # the world one frame at a time (paused clock, `speed / 30` sim-hours per frame) and
 # encodes 30 fps MP4 — requires ffmpeg in PATH. The export owns the clock: it forces
 # time_scale 0 + analemma_mode off and restores both on every exit path.
-# Vegetation growth seasonal gate + instance map (offline):
+# Plant growth model (offline — VegGrowthModel, the pure calendar → size
+# function, + the VegetationGrowth record facade: Chapman-Richards height
+# exactly 1.0 at maturity, crown/girth allometry, the staggered life cycle
+# (plateau → decline → snag → gap → regrowth) sampled for continuity, the
+# growth year's spring flush incl. the southern-hemisphere half-year shift, the
+# "painted grove never shrinks together" property over 500 simulated years,
+# legacy birth_h migration incl. the real Walton stamp, forest-age profiles
+# (mature = STATIONARY), and the shader-mirror constants parsed out of
+# veg_growth.gdshaderinc. Carries EXPECTED_CHECKS; --import first):
 Godot.exe.exe --headless --path . --script vegetation/vegetation_growth_selftest.gd
 # Veg style store (offline — Phase 2 layered persistence: precedence matrix
 # species>family>SPECS>defaults, v1→v2 migrations incl. the defaults-dump
@@ -556,6 +601,16 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # a regression run never mutates the player's site (verify after: the file is
 # back at its original version/cleared/patch counts with 0 fills):
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=areafill --shots-dir=<label> --quit-after-capture
+# Growth capture (WINDOWED): an AGE LADDER per family — nine ages of one species
+# side by side in ONE MultiMesh, for the 3D mesh and the impostor card, with the
+# model's height/crown/girth/leaf DUMPED per rung (a PNG cannot tell 0.72 from
+# 0.80) — then a TIME-LAPSE from one drone viewpoint over the painted grove at
+# +0/+5/+20/+80/+200 years and BACK to +0, dumping per-layer size statistics.
+# Asserts the painted layer is full size today, is never mostly small at any
+# stop, and that the rewind reproduces the first stop exactly. Read-only: it
+# restores the calendar and never saves (the load-time record migration is
+# deliberately not persisted, so the vegetation file's hash is unchanged):
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres> --capture=growth --shots-dir=<label> --quit-after-capture
 # Tree portraits (WINDOWED, console + PNGs): stands ONE tree of each species in
 # empty air against sky and shoots it at NEAR and FAR, with per-shot surface/
 # tri/AABB/foot numbers. Shape work is unreviewable from forest shots — a
@@ -803,6 +858,27 @@ from re-seating the player on save resume). `core/terrain/terrain_loader.gd`
 `TerrainBuilder`, and re-seats the player. Save/load already round-trips lat/lon
 (main.gd save snapshot + `_apply_save_snapshot`); resume rebuilds the same terrain
 (deterministic, same mean-elevation centring → saved player y still valid).
+
+**Spawn = the location marker.** A fresh (non-resume) load seats the player at
+the map's SoI centre — the marker the player drags — via
+`TerrainLoader._spawn_xz()`, which reads `SoiConfig.load_for_map` directly
+because SoiService is bound to the map only AFTER the spawn pass. A marker never
+moved is at the origin (the old behaviour); one dragged off the built terrain
+falls back to the origin. A save RESUME still restores the saved position.
+⚠ The coarse `TerrainCollision` is sunk under the hi-res patch from
+`TerrainBuilder.sink_reference_elev` (the patch's LOWEST point), not from the
+map's mean elevation: on a wide map the site can lie far below the mean
+(Walton: ~100 m on a 120 km world), and a floor at "mean − 80" then hangs
+metres ABOVE the ground as an invisible walkable sheet. It went unnoticed while
+the spawn was the origin only because `_raycast_reseat_player` rejects a hit
+more than 6 m above the footing, which put the player UNDER the one-sided
+sheet; at the marker the sheet was 5.7 m up and the player was seated on it.
+**Remote drone view (Tab, action `drone_view`)**:
+`Player.toggle_remote_drone_view()` moves the drone's home to the current camera
+position (minus FPVDrone.mount()'s 1.5 m takeoff lift, hence
+`REMOTE_DRONE_LIFT_M`) and mounts it, so the view starts where the player was
+looking from; Tab again or X lands it there. `ensure_explore_drone()` covers a
+resumed map with no drone node.
 
 **OSM solar arrays (player-selected, not auto-added).** BuildingService pulls
 `power=generator` solar ways; `terrain_loader._apply_solar_arrays()` builds each
@@ -1415,24 +1491,83 @@ which persists global + per-map style — the harness snapshots the style files
 them after (`_snapshot_files`/`_restore_files`, same discipline as areafill).
 Before this every vegdock run silently rewrote the player's saved looks.
 
-**Growth (Phase 9).** `VegetationInstanceMap` holds ONE entry per PLANT with a
-list of MultiMesh slots, not one entry per slot: a NEAR-ring tree lives in two
-MultiMeshes, so a full growth pass used to re-run the terrain height query and
-the growth curve once per SLOT (~408k `ground_y_at` calls where ~150k plants
-exist). The query and the scale are now computed once and only the transform
-write repeats; the budget counts plants, and OUTER-ring impostor slots are
-registered scale-only (`reground=false`) so a 700 m card never re-samples
-terrain. Slots holding a freed MMI are dropped individually — read the slot
-UNTYPED first, because assigning a freed instance to a typed variable throws
-before any `is_instance_valid()` guard runs. `forest_age` (style key:
-`mature`/`mixed`/`young`, default mature = the long-standing behaviour) shapes
-where in the growth span `ensure_birth_times` seeds a fresh stand; the
-Tune-look modal exposes it and its "Growth yrs" sliders are now "Maturity age
-(yr)". **Headless caveat pinned in the selftest:** under the dummy renderer
-`MultiMesh.set_instance_transform` does NOT round-trip through
-`get_instance_transform` (the buffer lives in the RenderingServer stub), so the
-offline test asserts the derived scale and the ground-query COUNT rather than
-reading transforms back.
+**Growth — a pure function of the calendar, drawn on the GPU.** A plant is four
+numbers: the growth-year it was born, its maturity age, its (individually
+jittered) lifespan and a 0..1 seed. `VegGrowthModel.state(t, born, maturity,
+lifespan, seed)` (pure static, `vegetation/veg_growth_model.gd`) returns
+height / crown / girth / leaf / present / generation, and
+`vegetation/veg_growth.gdshaderinc` is its LINE-FOR-LINE MIRROR: the batch
+builders write `INSTANCE_CUSTOM = (born − 2000, maturity, lifespan, seed)` once
+(`VegetationGrowth.custom_for`), transforms are written at FULL size, and the
+only thing that changes as time passes is ONE uniform, `growth_year`
+(`TerrainLoader._push_growth_year` → `VegetationEnvironmentSync.set_growth`).
+Nothing ticks, nothing mutates a record, nothing is rebuilt; it scrubs
+backwards and survives a reload. **What it replaced, so nobody restores it:** a
+per-session growth clock + milestone ticks + `advance_generations` (kill and
+reseed, mutating the record lists) + population caps + growth zones +
+`VegetationInstanceMap` rewriting MultiMesh transforms on a frame budget + the
+climelapse scale bake. Its painted trees were stamped at exactly clock − growth
+span, i.e. AT their death age, so one milestone replaced a whole painted grove
+with 0.14× seedlings in a frame (the Walton "all my trees shrank" report).
+Rules that carry the design:
+- **`maturity == 0` is the IDENTITY** — a plain `MeshInstance3D` reads
+  `INSTANCE_CUSTOM = 0`, and the impostor baker, the Tune-look preview and
+  `--capture=tree` all draw plain meshes. Likewise a settings dict with no
+  `growth_year` means full size on the CPU side (every selftest relies on it).
+- **The current year must NEVER enter the render settings dict.** Mesh and
+  material caches and batch partitioning hash that dict; a value that moves
+  with the clock would miss the cache on every rebuild. Only the static inputs
+  go in (`growth_epoch_y`, `forest_age`, the `*_growth_years` keys).
+- **Lifespan is never inside 1.25 × maturity** (`effective_lifespan`) — the old
+  bug was exactly lifespan == maturity. Lifespans come from
+  `species_catalog.json` `lifespan_years` (× 0.7–1.3 per plant); only the
+  pine/deciduous families cycle, shrubs and grass grow and hold (`lifespan 0`).
+- **All three curves are EXACTLY 1.0 at maturity** (Chapman-Richards height,
+  crown = height^1.35, girth = height^1.6), which is what keeps "a painted tree
+  is the previewed size" true. Girth alone creeps on to 1.2 through old age;
+  `bark.gdshader` applies it inside `growth_trunk_radius` and crown width
+  beyond, so branches still reach the foliage.
+- **Painted records carry `born_y`** (VegetationLayer v4). Mature paint stamps a
+  SEED-CHOSEN point on the full-size plateau (`established_born`) so one brush
+  stroke dies decades-to-centuries apart; "Plant young" stamps now. Legacy
+  `birth_h` migrates on load (`migrate_records`) but is NOT saved by loading —
+  the next ordinary save persists it. Before `born` a plant is a seedling,
+  never a previous generation.
+- **The generated forest stores nothing**: birth is derived from the position
+  hash and `forest_age` — `mature` is a STATIONARY uneven-aged stand (phase
+  uniform over the whole cycle, births pushed ~2500 y back so no reachable date
+  precedes them), `mixed`/`young` count from a per-map `growth_epoch_y`.
+- **The growth year is not the date**: whole years tick with the calendar but
+  the fraction follows the spring flush (flat in winter), damped to linear in
+  the tropics and shifted half a year in the southern hemisphere so there is no
+  jump at New Year. In August `growth_year` already reads the NEXT whole number.
+- **Regeneration is advance regeneration, not bare ground.** A later
+  generation rises out of the gap over 2–4 years as a released sapling and
+  grows on from age `REGEN_HEAD_START` (0.15) × maturity — about a quarter of
+  full height. Generation 0 (a plant set out young) still starts as a
+  seedling. The first cut left the spot EMPTY for 2–8 years and restarted from
+  a 3 % seedling, which put ~3 % of a generated forest missing and ~8 %
+  visibly small at any date. What remains small is structural: the share of a
+  life spent growing (maturity ÷ lifespan), so a long "Maturity age" on a
+  short-lived species (53 y on an 80 y cottonwood) reads as a young stand.
+  For scale: the OLD system's default "mature" profile drew 15 % of the
+  generated forest under half size and only 8 % at full size.
+- **Impostor snag.** The atlas is a bake in full leaf, so the stem behind the
+  foliage was never drawn; `veg_impostor.gdshader` draws a tapered stem band
+  procedurally where a declining tree's foliage has gone (`snag_*` uniforms,
+  radius stamped per look by `VegImpostorBaker.stamp_snag`). ⚠ Keep it as ONE
+  top-level `if (gone && stem < 0.5) discard;` — the first form nested the
+  discard inside a second `if` and every HEALTHY impostor rendered as blocky
+  fragments with no trunk, with no shader error; only `--capture=growth`'s
+  impostor ladder showed it.
+- Per-generation size (±8 %) and position (≤1 m) jitter is SHADER-ONLY and
+  cosmetic; the CPU model reports sizes without it, and generation 0 — the
+  plant the player placed — is exact. Seeds use linear sub-streams so CPU and
+  GPU never have to agree on a chaotic hash.
+- Grass and crops are NOT on this system (grass batches carry no instance
+  data); `scale_for_lifecycle` / `growth_stage` on VegetationGrowth are the
+  GROW BED's crop model and unrelated to the forest.
+Verify with the growth selftest and `--capture=growth` (Validation list).
 
 **Food forest → graph (Phase 10).** Adding an OSM vegetation area to the graph
 (`terrain_loader.add_veg_area_plant_to_graph` → `add_imported_plant`) now
@@ -1576,6 +1711,132 @@ clicking the first vertex. Options rows are rebuilt per tool switch with the
 dying rows DETACHED before `queue_free`, or the container measures both sets for
 a frame and the bar visibly doubles in width. Selftest:
 `scenes/ui/toolbar/toolbar_selftest.gd` (312 checks, in the Validation list).
+
+**Painted camp areas (`core/camps/`) — the toolbar's CAMPS section, C.** The
+player paints or draws where a festival camps and the area fills with tents,
+shade and vehicles. Four tools: **Camp** (brush / circle / rect / lasso /
+polygon), **Erase**, **Plots** (draw a zone → plots with lanes, each plot its
+own camp) and **Edit** (click a camp: style, density, heading, name, reseed,
+Del). Saved per map in `user://maps/camp_areas_<lat>_<lon>.json`
+(`CampAreaLayer`); nothing about the tents is stored — `CampLayoutGenerator`
+rebuilds them from the record.
+
+It exists because the street-following `BrcCampGenerator` only works on Black
+Rock City: it places a structure only within `plot_depth` of an OSM street (a
+polygon over a field got ZERO), always excludes an 804 m "playa" disc at the map
+origin, saves nothing, and puts a 9 m RV and a 2 m tent on the same 6 m grid.
+**That generator, its auto-generate-on-load and its dock are deliberately left
+unchanged** (the dock moved to **Shift+C**, action `camp_scatter_legacy`); the
+two systems render into different nodes and do not know about each other.
+
+- **Households, not props.** `CampStyles.TEMPLATES` are units — RV + awning +
+  car, tents round a canopy — in a household frame; a STYLE is a lattice cell
+  plus a weighted template mix. Every template must fit its style's cell
+  (selftest-asserted): that is what makes neighbouring households independent.
+- **The lattice is anchored to the WORLD and seeded per cell**
+  (`hash(seed, i, row)`), never from a running RNG, and every random draw for a
+  cell happens whether or not the household survives. A household therefore
+  depends only on (seed, heading, style, density, cell) — so brushing a camp
+  bigger adds households and moves nothing already standing. `paint` grows a
+  same-style camp in place (keeping id / seed / heading) for the same reason,
+  and the loader resolves an auto heading ONCE at creation and stores it, or the
+  next stroke would swing every tent to a new longest edge.
+- **Plots are the exception**: a record with a `group_id` fits its lattice to
+  its OWN extent (no inner lane, cells stretched to share the slack). On the
+  world lattice a 30 x 22 m plot wasted most of itself on straddled cells.
+- **Alignment.** `ALIGNED` classes (vehicles, rigid shade) take the camp heading
+  or its reverse — one choice per ROW — plus uniform +/- `align_jitter_deg`
+  (default 5). Tents are `LOOSE` (+/- 25), domes `FREE`. `heading_deg` is a
+  compass bearing folded to 0..180 (an axis has no front); auto = the nearest
+  road within 40 m, else the outline's longest edge.
+- **Footprints are real**: oriented-rect SAT against everything placed, corners
+  inside the outline with a 0.75 m margin, outside holes, off buildings / roads /
+  water (`VegExclusionBuilder`, cached in `_camp_excl_index` until the next
+  attach), and under a slope limit (vehicles 10 deg and they tilt with the
+  ground; tents 18 deg and stay plumb). Heights come from `_ground_height_at`,
+  which includes sculpt edits — the legacy path reads the raw grid.
+- **One node per camp** (`PaintedCamps/Area_<id>`), so an edit rebuilds one
+  camp and each culls on its own; GLB classes draw the art to 220 m (padded by
+  the batch radius — ranges are measured to the batch, not the instance) and a
+  tinted proxy beyond; ONE glow batch + `CampLightPool` for all camps.
+  ⚠ The root is `PaintedCamps`, never `Camps*`: `_remove_existing_camps()` frees
+  every Terrain child whose name begins with "Camps".
+- `CampMeshLibrary` normalises each GLB (recentred, stood on y = 0, long axis
+  onto +X, scaled to the class's nominal length) so the footprint reserved is
+  the footprint drawn. The pop-up canopy GLB is deliberately unused — one black
+  model repeated reads as a car park; the tinted shape takes a per-camp colour.
+- Toolbar: `CAMP_STYLES` in `toolbar_state.gd` is a LITERAL copy of
+  `CampStyles` ids (stale-class-cache rule, same as `VEG_FAMILIES`; selftest
+  pins the match). A brush stroke only accumulates an outline and commits ONE
+  polygon + ONE undo entry on release. In **Edit** the sliders are the picked
+  camp's own settings, applied on a 0.2 s debounce and only where they differ.
+- The editor-only `CampScatter` aerial-photo detector and its stamp / bake /
+  candidate / forced-volume resources were deleted (no bake file ever shipped,
+  so it rendered nothing). `camp_scatter_profile.gd` and the five
+  `camp_profile_*.tres` stay — the legacy generator reads them.
+Not built: collision on camp structures, camps as NPC `sleep` spaces, per-vertex
+outline editing, the built-in SOAK/Mars scenes (no TerrainLoader), nose-in cars.
+
+**Camp Tune look (`scenes/ui/camp_style_modal.gd`).** One modal, two ways in:
+STYLE mode ("Tune look…" in the Camps options bar — a sample patch; where a
+preset's baseline and its LAYOUTS are authored) and CAMP mode (Ctrl-aim a placed
+camp + click, or the Edit tool's "Tune look…" with a camp picked — that camp's
+real outline, seed and heading). The preview runs the REAL
+`CampLayoutGenerator` + `CampAreaRuntime` in an `own_world_3d` SubViewport.
+
+- **Four layers, one resolver.** `CampStyles.resolve(style_id, layers)` stacks
+  sparse ENTRIES over the shipped table, weakest first: global style edit →
+  the camp's LAYOUT → this map's edit → the camp's own override
+  (`style_for_area(area, map_styles)`). An entry is `{fill, lane_w,
+  rows_per_block, spacing, pos_jitter, loose_jitter_deg, scale_var,
+  templates: {template_id: weight}}`. With no layers the shipped styles are
+  byte-identical (selftest-pinned).
+- **Three save scopes, one DELTA.** Sliders write a delta drawn on top of
+  everything saved; the buttons decide where it lands: **This camp**
+  (`rec.style_override` + `edits` + `variant`), **All <style> here**
+  (`CampAreaLayer.map_styles`, saved in the map's camp file), **Global
+  baseline** (`CampStyleStore`, `user://camp_styles.json`, every map — the dev
+  tuning path). Models and layouts are ALWAYS persisted to the global file
+  whichever scope is chosen: a camp cannot wear a layout or use a model that
+  was never stored.
+- **Layouts ("variants").** Several named looks under one style
+  (`styles[sid].variants`, max 8, each with a `weight`; the style itself is
+  "Default" with `default_weight`). `CampAreaLayer.add` deals a NEW camp one
+  via `CampStyles.pick_variant(style, seed)` and STORES it on the record, so
+  adding a layout later never restyles a camp already standing. This is the
+  camp analogue of the veg "mix".
+- **Hand edits to single elements** (`rec.edits`: `{key: {yaw_deg, scale,
+  removed}}`). Every emitted item carries `key = "i:row:k"` (lattice cell +
+  item index). Edits are applied AFTER the placement tests on purpose — turning
+  an RV must not make it fail a test and vanish — so a hand edit may overlap a
+  neighbour, by the player's choice. They are tied to the lattice:
+  `update_camp_area` clears them when the seed, style or layout changes.
+  Layouts do NOT carry hand edits (a cell key means nothing on another outline).
+- **Click picking in the studio** is `CampLayoutGenerator.pick_item_on_ray`
+  (ray vs each element's oriented box; flat things get a 2.4 m clickable body)
+  over `CampAreaRuntime.area_items` (`rebuild_area(..., keep_items=true)`).
+  It lives on the generator, not the modal, because the modal references the
+  CursorController autoload and cannot be loaded under `--script`.
+- CAMP mode passes `camp_preview_ctx()` — the real exclusions and slope tests
+  with `flatten: true`, so the preview shows exactly the elements the map
+  shows, on flat ground.
+- A player-added model is a household of ONE (template `m:<class_id>`, class
+  `u_<model_id>`, REAL size from `CampMeshLibrary.measure_model`), and
+  `resolve()` grows the lattice cell to the largest household in the mix (and
+  with `scale_var`) — that is what keeps no-overlap and grow stability true.
+- The modal mutates the STATIC user layer while open; `close()` re-applies the
+  SAVED data. Performance is a WARNING, never a refusal (`model_warnings` /
+  `layout_cost`).
+- **World focus:** `interaction_focus._update_camp_focus` (before water /
+  buildings / veg — a painted camp is the player's own object) →
+  `pick_camp_at_world` → `set_camp_focus` (change-gated footprint highlight) →
+  Interact / Ctrl-click → `open_camp_tune_for_camp`. The focus is stamped with
+  the physics frame and dropped from `_clear_water_focus`, which every other
+  focus path already calls.
+`--capture=camps` drives all of it and byte-restores the style file and the
+map's camp file. ⚠ A run that is KILLED mid-way (or dies on a script error)
+never reaches the restore and leaves its test camps in the map's
+`camp_areas_*.json` — delete that file if a run did not finish.
 
 **Ponds are player-owned, never auto-added to the graph.** `pond_command` carves a
 basin and optionally seeds a thin puddle; **Rain** / **Drain** (T dock) hold-modulate
@@ -1863,6 +2124,33 @@ is `StarSkyMath.gmst_deg` (Meeus 12.4) for the stars, moon and clock alike.
 Texture import: BC7 (`compress/high_quality=true`), no mipmaps — the sampler
 is `filter_linear` and mips bloomed halos. Planets stay in `planets.gd` but
 share `StarSkyMath` for their alt/az.
+**Analemma planet paths** (main.gd `PLANET PATHS`, `show_planet_paths` +
+`planet_path_frame`): SKY = horizon-frame directions sampled at the sun's (or
+moon's) daily instant; STARS = RA/Dec meshed once as
+`StarSkyMath.equatorial_vector` and turned with the sky every frame by
+`equatorial_to_world_basis(live LST, lat)` — that basis must stay identical
+to `direction_from_equatorial` or the loops slide off the stars. Both pinned
+in star_sky_selftest, which also checks the retrograde station dates of all
+five planets against the 2024–25 almanac (measured within 0.5 d).
+**Zodiac overlay + analemma "stars through daylight".**
+`assets/sky/zodiac_overlay_8k.png` (R = 12 figures, G = names, B =
+Ophiuchus) is built by `tools/zodiac_overlay_export.py`: Stellarium supplies
+DATA (the "modern" sky culture's HIP polylines + a scripted
+`core.getObjectInfo` dump of each star's J2000 position) and the tool
+rasterises in the star map's own sidecar registration, then refuses to write
+unless every bright line star sits on a blob in the star map (measured worst
+1.06 px). Screenshots were tried first and abandoned: 26.2's scripted
+"isolate selected" drew one constellation, then all 88, with English names.
+The overlay is CC BY-SA 4.0 (share-alike — see CREDITS). BC7, NO mipmaps (a
+mip-selecting sampler draws a seam at the RA wrap). The ZODIAC block in
+sky.gdshader re-derives the same UV as the STARS block and draws the J2000
+ecliptic analytically (Meeus 13.4). StarSystem owns `zodiac_*` (persisted in
+star_calibration.cfg) and pushes `stars_daylight_reveal` from
+`Main.analemma_star_reveal` while analemma_mode is on — it opens the star
+night gate, zeroes the sky-glow washout, and dims the dome + sun aureole/glow
+by `pow(0.01, reveal)` (deep because sRGB lifts a dim linear sky: a 9 % dome
+read mid-grey) but NEVER in `AT_CUBEMAP_PASS`, so ground/ambient lighting is
+unchanged. reveal 0 is a byte-for-byte no-op.
 
 **Daylight model (`core/env/daylight_model.gd`, `DaylightModel`) — ONE curve
 for the sun, the sky and the ground.** The sunrise used to switch on like a
@@ -3698,6 +3986,48 @@ Available gstack skills: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`
 `/document-generate`, `/codex`, `/cso`, `/autoplan`, `/plan-devex-review`,
 `/devex-review`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`,
 `/learn`.
+
+## Fire (crisis_events/fire/) — the burn front
+
+A fire used to be a POINT: it sat where it was lit and "spread" only by
+absorbing whole sibling meshes, so a structure that is one mesh never spread,
+and `ignition_point_on_mesh_progress` worked in the mesh's LOCAL frame (local Y
+is not up on a Z-up GLB, and its "lift" was read off the local height and added
+as metres — on an inch-unit import that is metres above the model: "the flame
+starts at the very top"). `FireNode` now runs in **surface mode**:
+
+- On its first `_process` frame (not `_ready` — the event positions the node
+  AFTER `add_child`, and that position is the ignition spot) the structure is
+  sampled once into ~3000 world-space surface points, AREA-weighted over the
+  triangles (a box is twelve triangles; one point each is eight candles),
+  sorted by height.
+- `burn_progress` 0..1 is the front. It climbs in REAL time (~0.22 m/s, 18–90 s)
+  as well as sim time, holds while sprayed, and reaches round the base from the
+  ignition spot before it tops out. `WALL_GROWTH_PER_SEC` does the same for
+  intensity: at 1x sim speed `GROWTH_RATE` alone adds 0.02/s and a fire never
+  reached `SPREAD_MIN_INTENSITY`.
+- The emitters switch to `EMISSION_SHAPE_POINTS` over the points in a band
+  under the front, rebuilt in `BURN_STEPS` steps; the node moves to that band's
+  centre so the lights and the extinguisher's detection sphere travel with it.
+  In surface mode the emitters keep a FIXED `amount` and unit scale/zero offset
+  (the points are world offsets) and `amount_ratio` does the scaling — writing
+  `amount` restarts an emitter.
+- `fire_char.gdshader` is assigned as `material_overlay` (so the model keeps
+  its own materials): scorched behind the front, black below, an ember line on
+  the front, all from world height + distance from the ignition point. Late in
+  the fire `char_all` takes the whole structure black, then from
+  `BURN_AWAY_FROM` of its life the materials are swapped for `fire_ash.gdshader`
+  (noise-threshold dissolve, top first) — the overlay is REMOVED at that point,
+  because it redraws the whole mesh and would fill the holes back in.
+  ⚠ `GeometryInstance3D.transparency` was tried for the fade first: it hides an
+  alpha overlay entirely, so the charred structure flashed back to clean wood.
+- Restore goes through the existing `_restore_burned_mesh` /
+  `regenerate_meshes_under`, which now also clear the overlay
+  (`fire_char_overlay` / `fire_pre_overlay` metas). A fire put out part-way
+  leaves the char exactly where the front reached, with the embers off.
+Scope: `MeshInstance3D` only (as `set_burnable` always was) — MultiMesh-built
+structures such as Linkage frames are not sampled. Destruction is still at
+`DESTROY_TIME_HOURS` of SIM time, unchanged.
 
 ## Known pre-existing runtime errors (not regressions)
 

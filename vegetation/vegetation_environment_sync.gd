@@ -294,6 +294,19 @@ func _sweep_freed() -> void:
 		i += 1
 
 
+## Growth: what year it is (minus VegGrowthModel.BASE_YEAR) and whether growth
+## is frozen. The shaders evaluate each plant's size from this one number and
+## its instance data (veg_growth.gdshaderinc) — nothing else moves with time.
+var _growth_year := 0.0
+var _growth_freeze := 0.0
+
+
+func set_growth(year_rel: float, frozen: bool) -> void:
+	_growth_year = year_rel
+	_growth_freeze = 1.0 if frozen else 0.0
+	_force_push = true
+
+
 func _push_uniforms() -> void:
 	var sun := Vector3(_sun_direction.x, _sun_direction.y, _sun_direction.z)
 	_pushed = {
@@ -327,6 +340,8 @@ func _push_uniforms() -> void:
 		sm.set_shader_parameter("snow_amount", _snow)
 		sm.set_shader_parameter("snow_depth_m", _snow_depth)
 		sm.set_shader_parameter("summer", _summer)
+		sm.set_shader_parameter("growth_year", _growth_year)
+		sm.set_shader_parameter("growth_freeze", _growth_freeze)
 		i += 1
 
 	i = 0
@@ -343,6 +358,8 @@ func _push_uniforms() -> void:
 		gm.set_shader_parameter("snow_amount", _snow)
 		gm.set_shader_parameter("snow_depth_m", _snow_depth)
 		gm.set_shader_parameter("growth", _grass_growth)
+		gm.set_shader_parameter("growth_year", _growth_year)
+		gm.set_shader_parameter("growth_freeze", _growth_freeze)
 		i += 1
 
 	i = 0
@@ -356,4 +373,6 @@ func _push_uniforms() -> void:
 		# Bark darkens with the canopy at dusk (it received no night uniform
 		# before — lit trunks poked out of near-black foliage).
 		bm.set_shader_parameter("night_factor", _night_factor)
+		bm.set_shader_parameter("growth_year", _growth_year)
+		bm.set_shader_parameter("growth_freeze", _growth_freeze)
 		i += 1

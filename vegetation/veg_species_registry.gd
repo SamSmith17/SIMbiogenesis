@@ -125,6 +125,12 @@ static func growth_years(id: String, fallback: float = 0.0) -> float:
 	return float(entry(id).get("growth_years", fallback))
 
 
+## Typical longevity in years (0 = not recorded). The forest life cycle's
+## lifespan before the per-plant jitter — see VegetationGrowth.lifespan_years.
+static func lifespan_years(id: String, fallback: float = 0.0) -> float:
+	return float(entry(id).get("lifespan_years", fallback))
+
+
 static func senescence_years(id: String, fallback: float = 0.0) -> float:
 	return float(entry(id).get("senescence_years", fallback))
 

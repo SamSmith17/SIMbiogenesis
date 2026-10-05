@@ -78,10 +78,10 @@ func _append_keyframe(clock: CelestialClock, abs_h: float, growth_clock_h: float
 	clock.day = int(dt.get("day", 1))
 	clock.day_time = float(dt.get("day_time", 12.0))
 	var doy := clock.day_of_year
-	var step_h := step_hours()
-	var season := VegetationGrowth.structural_growth_factor(doy, latitude)
-	if season > VegetationGrowth.DORMANCY_THRESHOLD:
-		growth_clock_h += step_h * season
+	# Growth is a pure function of the date now; the keyframe carries the
+	# growth-year so playback can hand it straight to the shaders.
+	growth_clock_h = VegGrowthModel.growth_year(clock.year,
+		float(doy) + clock.day_time / 24.0, latitude)
 	var sig := SeasonModel.season_signals(doy, latitude)
 	var kf := {
 		"abs_h": abs_h,

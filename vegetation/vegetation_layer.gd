@@ -12,7 +12,13 @@ extends RefCounted
 ## the painted RECORDS (positions/species/yaw/scale) + heroes + growth zones —
 ## settings deltas and per-record card_settings snapshots are dropped (they
 ## carry retired keys that would shadow the new model forever).
-const VERSION := 3
+## v4 (growth rebuild): records carry `born_y` — the calendar growth-year the
+## plant was born (VegGrowthModel) — instead of `birth_h` on a per-session
+## clock; `growth_zones` (the reseed pass's bounds) are gone; `growth_epoch_y`
+## is the site epoch the mixed/young forest-age profiles count from. Older
+## files load unchanged and the loader migrates their records
+## (VegetationGrowth.migrate_records).
+const VERSION := 4
 const SPECIES: Array[String] = ["pine", "deciduous", "shrub"]
 const GRASS_SPECIES: Array[String] = ["grass_lawn", "grass_field"]
 ## Base family slots (always present). Subspecies (spruce, fir, …) are created
@@ -56,7 +62,6 @@ static func create_empty() -> VegetationLayer:
 	# store (the recurring stale-styling bug class this overhaul retires).
 	# get_settings() still merges defaults over for per-key fallbacks.
 	layer.settings = {}
-	layer.growth_zones = []
 	return layer
 
 
@@ -64,7 +69,9 @@ var bulk: Dictionary = {}
 var hero: Array = []
 var settings: Dictionary = {}
 ## Paint polygons that define where generational reseeding may place seedlings.
-var growth_zones: Array = []
+## Site epoch for the mixed/young forest-age profiles (growth-year). NAN until
+## one of those profiles is first used on this map.
+var growth_epoch_y := NAN
 
 
 ## All species keys currently stored (base families + painted subspecies).
@@ -442,24 +449,21 @@ func load_for_map(lat: float, lon: float) -> bool:
 	return true
 
 
-func add_growth_zone(poly: PackedVector2Array) -> void:
-	if poly.size() < 3:
-		return
-	growth_zones.append(poly)
-
-
 func serialize() -> Dictionary:
 	var bulk_out := {}
 	for species in species_keys():
 		bulk_out[species] = _records_to_json(bulk.get(species, []))
-	return {
+	var out := {
 		"version": VERSION,
 		"bulk": bulk_out,
 		"hero": hero.duplicate(true),
 		# v2: sparse deltas only — never persist the defaults back to disk.
 		"settings": settings.duplicate(true),
-		"growth_zones": _zones_to_json(growth_zones),
 	}
+	# JSON has no NaN: the key is simply absent until the epoch is stamped.
+	if not is_nan(growth_epoch_y):
+		out["growth_epoch_y"] = growth_epoch_y
+	return out
 
 
 ## Matches every color-valued style key by the codebase's own naming convention
@@ -600,7 +604,8 @@ func deserialize(data: Dictionary) -> void:
 	for item in data.get("hero", []):
 		if item is Dictionary:
 			hero.append(item)
-	growth_zones = _zones_from_json(data.get("growth_zones", []))
+	growth_epoch_y = float(data["growth_epoch_y"]) \
+		if data.get("growth_epoch_y") is float or data.get("growth_epoch_y") is int else NAN
 	var loaded: Dictionary = {}
 	if data.get("settings") is Dictionary:
 		loaded = data["settings"]

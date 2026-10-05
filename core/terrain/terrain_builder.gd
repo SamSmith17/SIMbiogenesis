@@ -632,6 +632,18 @@ static func compute_sink_depth_m(detail: PackedFloat32Array, default_depth: floa
 	return maxf(default_depth, relief * 0.25)
 
 
+## The elevation the coarse collider's sink is measured DOWN from: the lowest
+## point of the detail patch, or the map's mean elevation if that is lower.
+## Using the mean alone left the "sunk" floor above the ground wherever the
+## site lies well below the map's mean elevation.
+static func sink_reference_elev(detail: PackedFloat32Array, center_elev: float) -> float:
+	var lo := center_elev
+	for v in detail:
+		if not is_nan(v):
+			lo = minf(lo, v)
+	return lo
+
+
 ## Merge a hi-res centre DEM patch into the full terrain grid with edge feathering.
 static func patch_centre_heights(base: PackedFloat32Array, base_res: int,
 		detail: PackedFloat32Array, detail_res: int, terrain_extent_m: float,

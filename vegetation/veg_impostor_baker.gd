@@ -175,7 +175,25 @@ static func material_for(iset: VegImpostorSet) -> ShaderMaterial:
 	mat.set_shader_parameter("frames_x", float(iset.frames_x))
 	mat.set_shader_parameter("frames_y", float(iset.frames_y))
 	mat.set_shader_parameter("yaw_frames", float(iset.yaw_frames))
+	mat.set_shader_parameter("snag_world_w", iset.world_w)
+	mat.set_shader_parameter("snag_world_h", iset.world_h)
 	return VegAssetCache.store(key, mat)
+
+
+## Tell an impostor material how thick this look's mature stem is, so a
+## declining tree can show a bare snag (the bake has no stem behind the
+## foliage). `settings` must be the variant-resolved batch settings; the
+## material is cached per bake key, which already includes the trunk diameter,
+## so the value is stable for everyone sharing it.
+static func stamp_snag(mesh: Mesh, species: String, settings: Dictionary) -> void:
+	if mesh == null or mesh.get_surface_count() == 0:
+		return
+	var mat := mesh.surface_get_material(0) as ShaderMaterial
+	if mat == null:
+		return
+	var family := VegetationCardFactory.mesh_family(species)
+	mat.set_shader_parameter("snag_trunk_radius",
+		float(settings.get("%s_trunk_diameter_cm" % family, 0.0)) / 200.0)
 
 
 func _enqueue(species: String, settings: Dictionary) -> void:

@@ -32,7 +32,7 @@ static func maturity_factor(growth_scale: float) -> float:
 ## Summarise every food-bearing plant inside `poly`.
 ##
 ## `bulk` is a layer's species → [records] dict; `growth_settings` is what
-## VegetationGrowth reads (growth_now_h + the *_growth_years keys), so an
+## VegetationGrowth reads (growth_year + the *_growth_years keys), so an
 ## immature stand reports a smaller crop. Returns:
 ##   trees            food-bearing instances counted
 ##   species_counts   species id → count

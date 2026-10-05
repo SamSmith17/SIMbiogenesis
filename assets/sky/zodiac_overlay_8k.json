@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "file": "zodiac_overlay_8k.png",
+  "width": 8192,
+  "height": 4096,
+  "projection": "plate-carree",
+  "frame": "equatorial",
+  "epoch": "J2000",
+  "north_up": true,
+  "ra_direction": -1,
+  "ra_deg_at_u0": 0.0005,
+  "registration_from": "starmap_equirect_8k.json",
+  "channels": {
+    "r": "zodiac-12 stick figures",
+    "g": "zodiac-12 names",
+    "b": "Ophiuchus stick figure + name"
+  },
+  "line_width_deg": 0.12,
+  "star_gap_deg": 0.3,
+  "label_height_deg": 1.5,
+  "verification": {
+    "bright_line_stars_checked": 43,
+    "vmag_limit": 3.0,
+    "worst_offset_px_vs_star_map": 1.063
+  },
+  "sources": {
+    "figures": "Stellarium sky culture 'modern' (index.json), CC BY-SA 4.0",
+    "positions": "Stellarium core.getObjectInfo, J2000 at 2000-01-01T12:00Z",
+    "font": "Noto Sans Regular (SIL OFL 1.1), as bundled with Stellarium"
+  },
+  "arc_length_deg": {
+    "Ari": 15.85,
+    "Tau": 68.36,
+    "Gem": 78.24,
+    "Cnc": 36.87,
+    "Leo": 74.36,
+    "Vir": 107.29,
+    "Lib": 43.64,
+    "Sco": 55.87,
+    "Sgr": 116.26,
+    "Cap": 58.4,
+    "Aqr": 88.74,
+    "Psc": 97.15,
+    "Oph": 83.68
+  },
+  "labels": {
+    "Ari": {
+      "name": "Aries",
+      "ra": 32.7023,
+      "dec": 20.1078
+    },
+    "Tau": {
+      "name": "Taurus",
+      "ra": 68.519,
+      "dec": 13.9123
+    },
+    "Gem": {
+      "name": "Gemini",
+      "ra": 105.8355,
+      "dec": 23.8347
+    },
+    "Cnc": {
+      "name": "Cancer",
+      "ra": 126.4358,
+      "dec": 19.2825
+    },
+    "Leo": {
+      "name": "Leo",
+      "ra": 158.1107,
+      "dec": 17.2256
+    },
+    "Vir": {
+      "name": "Virgo",
+      "ra": 199.2067,
+      "dec": -3.1833
+    },
+    "Lib": {
+      "name": "Libra",
+      "ra": 227.7265,
+      "dec": -17.2146
+    },
+    "Sco": {
+      "name": "Scorpius",
+      "ra": 246.2088,
+      "dec": -36.4491
+    },
+    "Sgr": {
+      "name": "Sagittarius",
+      "ra": 286.2598,
+      "dec": -34.6211
+    },
+    "Cap": {
+      "name": "Capricornus",
+      "ra": 321.716,
+      "dec": -24.1091
+    },
+    "Aqr": {
+      "name": "Aquarius",
+      "ra": 337.1128,
+      "dec": -15.4337
+    },
+    "Psc": {
+      "name": "Pisces",
+      "ra": 9.4948,
+      "dec": 5.6972
+    },
+    "Oph": {
+      "name": "Ophiuchus",
+      "ra": 255.3246,
+      "dec": -5.2802
+    }
+  }
+}

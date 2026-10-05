@@ -168,6 +168,9 @@ func get_state_snapshot() -> Dictionary:
 		"analemma_noon_offset_minutes": _main_float("get_analemma_noon_offset_minutes", 0.0),
 		"show_sun_path": _main_bool("get_show_sun_path", true),
 		"show_moon_path": _main_bool("get_show_moon_path", false),
+		"show_planet_paths": _main_bool("get_show_planet_paths", false),
+		"planet_path_frame": _main_int("get_planet_path_frame", 0),
+		"analemma_star_reveal": _main_float("get_analemma_star_reveal", 0.75),
 		"analemma_type": _main_int("get_analemma_type", 0),
 		"analemma_path_thickness": float(main.get("analemma_path_thickness")) if "analemma_path_thickness" in main else 1.0,
 		"analemma_solar_color": main.get("analemma_solar_color") if "analemma_solar_color" in main else Color(1.0, 0.9, 0.3),
@@ -554,6 +557,24 @@ func apply_show_moon_path(on: bool) -> void:
 		main.call("set_show_moon_path", on)
 
 
+func apply_show_planet_paths(on: bool) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_show_planet_paths"):
+		main.call("set_show_planet_paths", on)
+
+
+func apply_analemma_star_reveal(amount: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_analemma_star_reveal"):
+		main.call("set_analemma_star_reveal", amount)
+
+
+func apply_planet_path_frame(frame: int) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_planet_path_frame"):
+		main.call("set_planet_path_frame", frame)
+
+
 func apply_analemma_type(type: int) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_analemma_type"):
@@ -919,6 +940,12 @@ func persist_settings() -> void:
 		cfg.set_value("gameplay", "show_sun_path", main_node.call("get_show_sun_path"))
 	if main_node.has_method("get_show_moon_path"):
 		cfg.set_value("gameplay", "show_moon_path", main_node.call("get_show_moon_path"))
+	if main_node.has_method("get_show_planet_paths"):
+		cfg.set_value("gameplay", "show_planet_paths", main_node.call("get_show_planet_paths"))
+	if main_node.has_method("get_planet_path_frame"):
+		cfg.set_value("gameplay", "planet_path_frame", main_node.call("get_planet_path_frame"))
+	if main_node.has_method("get_analemma_star_reveal"):
+		cfg.set_value("gameplay", "analemma_star_reveal", main_node.call("get_analemma_star_reveal"))
 	if main_node.has_method("get_analemma_type"):
 		cfg.set_value("gameplay", "analemma_type", main_node.call("get_analemma_type"))
 	if "analemma_path_thickness" in main_node:
@@ -1010,6 +1037,12 @@ func _load_persisted_settings() -> void:
 		apply_show_sun_path(bool(cfg.get_value("gameplay", "show_sun_path")))
 	if cfg.has_section_key("gameplay", "show_moon_path"):
 		apply_show_moon_path(bool(cfg.get_value("gameplay", "show_moon_path")))
+	if cfg.has_section_key("gameplay", "show_planet_paths"):
+		apply_show_planet_paths(bool(cfg.get_value("gameplay", "show_planet_paths")))
+	if cfg.has_section_key("gameplay", "planet_path_frame"):
+		apply_planet_path_frame(int(cfg.get_value("gameplay", "planet_path_frame")))
+	if cfg.has_section_key("gameplay", "analemma_star_reveal"):
+		apply_analemma_star_reveal(float(cfg.get_value("gameplay", "analemma_star_reveal")))
 	if cfg.has_section_key("gameplay", "analemma_type"):
 		apply_analemma_type(int(cfg.get_value("gameplay", "analemma_type")))
 	if cfg.has_section_key("gameplay", "analemma_path_thickness"):

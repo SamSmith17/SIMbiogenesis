@@ -1193,7 +1193,7 @@ func _build_forest_age_section(sidebar: VBoxContainer) -> void:
 	_forest_age_opt.item_selected.connect(_on_forest_age_selected)
 	row.add_child(_forest_age_opt)
 	var hint := Label.new()
-	hint.text = "Applies on the next reseed"
+	hint.text = "Generated forest only"
 	hint.add_theme_font_size_override("font_size", 10)
 	hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
 	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL

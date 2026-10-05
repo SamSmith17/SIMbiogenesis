@@ -119,9 +119,9 @@ func _test_harvest_rate() -> void:
 ## --- Per-area summary -------------------------------------------------------
 
 func _mature_settings() -> Dictionary:
-	# growth_now_h far past maturity → every tree renders full size.
-	return {"deciduous_growth_years": 10.0, "pine_growth_years": 20.0,
-		"growth_now_h": 500.0 * HPY}
+	# No `growth_year` in the settings → every tree is full size (the growth
+	# facade's identity), which is what these summary tests want.
+	return {"deciduous_growth_years": 10.0, "pine_growth_years": 20.0}
 
 
 func _test_summary() -> void:
@@ -129,10 +129,10 @@ func _test_summary() -> void:
 	var bulk := {"apple": [], "pine": []}
 	for i in 10:
 		(bulk["apple"] as Array).append(
-			{"x": float(i) * 2.0, "z": 0.0, "scale": 1.0, "birth_h": 0.0})
+			{"x": float(i) * 2.0, "z": 0.0, "scale": 1.0})
 	for i in 5:
 		(bulk["pine"] as Array).append(
-			{"x": float(i) * 2.0, "z": 10.0, "scale": 1.0, "birth_h": 0.0})
+			{"x": float(i) * 2.0, "z": 10.0, "scale": 1.0})
 	var s := VegFoodYield.summarize(bulk, poly, _mature_settings())
 	# Pines are not food — a conifer stand must not read as an orchard.
 	_check("only food species counted", int(s["trees"]) == 10, str(s["trees"]))
@@ -158,10 +158,10 @@ func _test_summary() -> void:
 	var mixed := {"apple": [], "walnut": []}
 	for i in 3:
 		(mixed["apple"] as Array).append(
-			{"x": float(i), "z": 0.0, "scale": 1.0, "birth_h": 0.0})
+			{"x": float(i), "z": 0.0, "scale": 1.0})
 	for i in 20:
 		(mixed["walnut"] as Array).append(
-			{"x": float(i), "z": 5.0, "scale": 1.0, "birth_h": 0.0})
+			{"x": float(i), "z": 5.0, "scale": 1.0})
 	var m := VegFoodYield.summarize(mixed, poly, _mature_settings())
 	var walnut := VegSpeciesRegistry.food("walnut")
 	_check("mixed orchard counts both", int(m["trees"]) == 23)
@@ -185,8 +185,8 @@ func _test_polygon_bounds() -> void:
 	# Only trees INSIDE the outline count — an orchard next door is not yours.
 	var poly := _square(10.0)
 	var bulk := {"apple": [
-		{"x": 0.0, "z": 0.0, "scale": 1.0, "birth_h": 0.0},
-		{"x": 500.0, "z": 500.0, "scale": 1.0, "birth_h": 0.0},
+		{"x": 0.0, "z": 0.0, "scale": 1.0},
+		{"x": 500.0, "z": 500.0, "scale": 1.0},
 	]}
 	var s := VegFoodYield.summarize(bulk, poly, _mature_settings())
 	_check("outside trees excluded", int(s["trees"]) == 1, str(s["trees"]))
@@ -198,15 +198,15 @@ func _test_maturity_scales_yield() -> void:
 	for i in 10:
 		# Planted "now" → seedlings.
 		(young["apple"] as Array).append(
-			{"x": float(i), "z": 0.0, "scale": 1.0, "birth_h": 10.0 * HPY})
-	var st := {"deciduous_growth_years": 10.0, "growth_now_h": 10.0 * HPY}
+			{"x": float(i), "z": 0.0, "scale": 1.0, "born_y": 2026.0})
+	var st := {"deciduous_growth_years": 10.0, "growth_year": 2026.0}
 	var s_young := VegFoodYield.summarize(young, poly, st)
 	_check("a fresh planting counts trees", int(s_young["trees"]) == 10)
 	_check("a fresh planting yields nothing yet",
 		is_zero_approx(float(s_young["kg_per_year"])), str(s_young["kg_per_year"]))
 	# Same trees, a decade later.
 	var st_old := st.duplicate()
-	st_old["growth_now_h"] = 20.0 * HPY
+	st_old["growth_year"] = 2036.0
 	var s_old := VegFoodYield.summarize(young, poly, st_old)
 	_check("the same trees bear once mature",
 		float(s_old["kg_per_year"]) > 0.0, str(s_old["kg_per_year"]))
