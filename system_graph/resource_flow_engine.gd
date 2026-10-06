@@ -555,6 +555,7 @@ func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 	_process_culvert_stage_discharge(net_rates, dt_hours, abs_hours)
 	_process_siphon_hydro(net_rates, dt_hours, abs_hours)
 	_process_jit_transfers(net_rates, dt_hours, abs_hours)
+	_apply_external_flows(net_rates, dt_hours)
 
 	# Integrate timelines
 	for item: Dictionary in _model.items_of_type("resource"):
@@ -3001,6 +3002,55 @@ func set_habitat_demand(item_id: String, rates: Dictionary) -> void:
 	_habitat_demand[item_id] = rates
 
 
+## One-off quantities a crowd billed to a graph tank between steps (+ fills,
+## − draws): a venue's portapotty bank fills from the whole festival, not from
+## one habitat. Applied on the next step as a rate over that step, so the mass
+## is exact whatever the cadence. Only `resource` items take them; anything
+## else is dropped (a kitchen processor is driven by its own inputs).
+func add_external_flow(item_id: String, kind: String, qty: float) -> void:
+	if item_id.is_empty() or qty == 0.0:
+		return
+	var d: Dictionary = _external_flows.get(item_id, {})
+	d[kind] = float(d.get(kind, 0.0)) + qty
+	_external_flows[item_id] = d
+
+
+var _external_flows: Dictionary = {}
+## scope_id -> bool: per-camp AC availability (CampPowerModel). Scopes not
+## listed fall back to the global AcPowerBus.
+var _scope_ac_available: Dictionary = {}
+
+
+func set_scope_ac_available(scope_id: String, on: bool) -> void:
+	if scope_id.is_empty():
+		return
+	_scope_ac_available[scope_id] = on
+
+
+func clear_scope_ac_available(scope_id: String = "") -> void:
+	if scope_id.is_empty():
+		_scope_ac_available = {}
+	else:
+		_scope_ac_available.erase(scope_id)
+
+
+func _apply_external_flows(net_rates: Dictionary, dt_hours: float) -> void:
+	if _external_flows.is_empty() or dt_hours <= 0.0:
+		return
+	for iid in _external_flows:
+		var item: Dictionary = _model.get_item(str(iid))
+		if item.is_empty() or str(item.get("type", "")) != "resource":
+			continue
+		var tank_kind := ResourceKinds.normalize_kind(
+			str((item.get("specs", {}) as Dictionary).get("resource_kind", "")))
+		var flows: Dictionary = _external_flows[iid]
+		for kind in flows:
+			if ResourceKinds.normalize_kind(str(kind)) != tank_kind:
+				continue
+			net_rates[str(iid)] = float(net_rates.get(str(iid), 0.0)) + float(flows[kind]) / dt_hours
+	_external_flows = {}
+
+
 func clear_habitat_demand(item_id: String = "") -> void:
 	if item_id.is_empty():
 		_habitat_demand = {}
@@ -3250,6 +3300,13 @@ func _processor_has_power(item: Dictionary) -> bool:
 	if es.is_empty() and float(specs.get("watts", 0.0)) > 0.0:
 		es = "ac"
 	if es == "ac":
+		# A festival camp's processors run off THAT camp's power (the
+		# simplified per-camp model), not the player's AC bus.
+		var scope := str(item.get("scope_id", ""))
+		if _scope_ac_available.has(scope):
+			if not bool(_scope_ac_available[scope]):
+				return false
+			return _has_ac_power_wire(iid)
 		if not _ac_output_available():
 			return false
 		return _has_ac_power_wire(iid)

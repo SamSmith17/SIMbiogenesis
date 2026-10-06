@@ -4443,6 +4443,7 @@ func _attach_camp_areas() -> void:
 		camp_areas.load_from(path)
 		_camp_areas_path = path
 		_camp_undo.clear()
+	_attach_placement()
 	# Roads / buildings / water may have changed under us (OSM refresh).
 	_camp_excl_index = null
 	# The player's tuned styles + added models (global, like veg styles).
@@ -4481,14 +4482,19 @@ func _ensure_camp_area_runtime() -> CampAreaRuntime:
 ## re-buffer every building on the map.
 func _camp_ctx() -> Dictionary:
 	if _camp_excl_index == null:
-		var roads: Array = _osm_vectors.get("roads", []) as Array
+		var roads: Array = (_osm_vectors.get("roads", []) as Array).duplicate()
+		# Festival roads are corridors too: their dicts carry the same
+		# points/half_width_m keys, so they buffer exactly like OSM roads.
+		roads.append_array(get_festival_roads())
 		_camp_excl_index = VegExclusionBuilder.build_index(
 			VegExclusionBuilder.build_all(_buildings_data, roads, _water_data,
 				1.0, 1.0, 1.5, true, true),
 			maxf(_osm_half_extent, 500.0))
+	var heading_roads: Array = get_festival_roads()
+	heading_roads.append_array(get_osm_roads())
 	return {
 		"ground_y_at": Callable(self, "_ground_height_at"),
-		"roads": get_osm_roads(),
+		"roads": heading_roads,
 		"is_excluded": Callable(_camp_excl_index, "is_excluded"),
 		"map_styles": camp_areas.map_styles if camp_areas != null else {},
 	}
@@ -4549,7 +4555,7 @@ func paint_camp_area(poly: PackedVector2Array, params: Dictionary = {}) -> Strin
 	if auto:
 		# Resolved ONCE and stored, so brushing the camp bigger later cannot
 		# swing its heading (and with it every tent) to a new longest edge.
-		p["heading_deg"] = CampLayoutGenerator.resolve_heading(poly, get_osm_roads())
+		p["heading_deg"] = _resolve_camp_heading(poly)
 	var res := camp_areas.paint(poly, p)
 	_apply_camp_changes(res["changed"], res["removed"])
 	return str(res["id"])
@@ -4575,7 +4581,7 @@ func subdivide_camp_zone(poly: PackedVector2Array, params: Dictionary = {}) -> A
 	var heading := float(params.get("heading_deg", -1.0))
 	var auto := heading < 0.0
 	if auto:
-		heading = CampLayoutGenerator.resolve_heading(poly, get_osm_roads())
+		heading = _resolve_camp_heading(poly)
 	var plots := CampSubdivider.subdivide(poly, heading,
 		float(params.get("plot_w_m", 30.0)), float(params.get("plot_d_m", 22.0)),
 		float(params.get("lane_w_m", 6.0)))
@@ -4624,8 +4630,8 @@ func update_camp_area(id: String, patch: Dictionary) -> bool:
 		var auto := float(p["heading_deg"]) < 0.0
 		p["heading_auto"] = auto
 		if auto:
-			p["heading_deg"] = CampLayoutGenerator.resolve_heading(
-				camp_areas.get_area(id).get("polygon", PackedVector2Array()), get_osm_roads())
+			p["heading_deg"] = _resolve_camp_heading(
+				camp_areas.get_area(id).get("polygon", PackedVector2Array()))
 	camp_areas.update(id, p)
 	_apply_camp_changes([id], [])
 	return true
@@ -4808,6 +4814,573 @@ func clear_camp_highlight() -> void:
 	if _camp_highlight != null and is_instance_valid(_camp_highlight):
 		_camp_highlight.visible = false
 		_camp_highlight.mesh = null
+
+
+## ---------------------------------------------------------------------------
+## Festival placement (core/camps/festival_*) — the toolbar's PLACEMENT section.
+##
+## Roads the placement team draws, the zones it allocates along them, the lots
+## those zones are cut into (equal USABLE area on real ground) and the roster of
+## camps that want a lot. Lots are mirrored into CampAreaLayer one record each
+## (group_id = the zone) so the painted-camp generator fills them unchanged;
+## `camp_area_id` on the lot is the link. Saved per map next to the camps file.
+## ---------------------------------------------------------------------------
+
+var placement: FestivalPlacementLayer = null
+var _placement_path := ""
+var _placement_undo: Array = []
+var _placement_highlight: MeshInstance3D = null
+## A festival road wins the camp heading at this reach; OSM roads at 40 m.
+const FESTIVAL_ROAD_ALIGN_DIST_M := 60.0
+const PLACEMENT_UNDO_MAX := 24
+const FESTIVAL_ROAD_FEATHER_M := 3.0
+
+
+func _attach_placement() -> void:
+	var path := FestivalPlacementLayer.save_path_for_map(_lat, _lon)
+	if placement == null or _placement_path != path:
+		placement = FestivalPlacementLayer.create_empty()
+		placement.load_from(path)
+		_placement_path = path
+		_placement_undo.clear()
+		if not placement.is_empty():
+			print("TerrainLoader._attach_placement: %d roads, %d zones, %d lots" % [
+				placement.roads.size(), placement.zones.size(), placement.lots.size()])
+	_push_camps_to_graph()
+
+
+## Every assigned lot is a camp super-node on the systems graph
+## (SystemGraphView.sync_camps_from_placement, idempotent by lot id). Called
+## after every placement change; a no-op before the graph view exists.
+func _push_camps_to_graph() -> void:
+	if placement == null:
+		return
+	var graph: Node = ServiceLocator.graph()
+	if graph == null or not graph.has_method("sync_camps_from_placement"):
+		return
+	graph.call_deferred("sync_camps_from_placement", placement.lots.duplicate(true))
+
+
+func _placement_ready() -> bool:
+	if not _camp_layer_ready():
+		return false
+	if placement == null:
+		_attach_placement()
+	return placement != null
+
+
+func _save_placement() -> void:
+	if placement != null and not _placement_path.is_empty():
+		placement.save_to(_placement_path)
+
+
+## Festival road dicts, OSM-shaped ({points, half_width_m, tags, …}).
+func get_festival_roads() -> Array:
+	if placement == null:
+		return []
+	return placement.road_dicts()
+
+
+## Camp heading: festival road within 60 m → OSM road within 40 m → the
+## outline's longest edge.
+func _resolve_camp_heading(poly: PackedVector2Array) -> float:
+	var d := CampLayoutGenerator.nearest_road_dir(poly, get_festival_roads(), FESTIVAL_ROAD_ALIGN_DIST_M)
+	if d == Vector2.ZERO:
+		d = CampLayoutGenerator.nearest_road_dir(poly, get_osm_roads(), CampLayoutGenerator.ROAD_ALIGN_DIST_M)
+	if d == Vector2.ZERO:
+		return CampLayoutGenerator.resolve_heading(poly, [])
+	return CampLayoutGenerator.direction_to_heading(d)
+
+
+# --- Roads -------------------------------------------------------------------
+
+## params: name, width_m, surface, flatten (bool). Returns the road id or "".
+func add_festival_road(points: PackedVector2Array, params: Dictionary = {}) -> String:
+	if not _placement_ready() or points.size() < 2:
+		return ""
+	var id := placement.add_road(points, params)
+	if id.is_empty():
+		return ""
+	_camp_excl_index = null   # the corridor is now an exclusion
+	_save_placement()
+	if bool(params.get("flatten", false)):
+		flatten_festival_road(id)
+	else:
+		_reground_camp_areas()
+	return id
+
+
+func update_festival_road(id: String, patch: Dictionary) -> bool:
+	if not _placement_ready() or not placement.update_road(id, patch):
+		return false
+	_camp_excl_index = null
+	_save_placement()
+	_reground_camp_areas()
+	return true
+
+
+func delete_festival_road(id: String) -> bool:
+	if not _placement_ready() or not placement.remove_road(id):
+		return false
+	_camp_excl_index = null
+	_save_placement()
+	_reground_camp_areas()
+	return true
+
+
+## Grade the road's corridor to its own smoothed profile on the edit layer —
+## ONE terrain undo entry (the Terrain section's Undo takes it back).
+func flatten_festival_road(id: String) -> bool:
+	if not _placement_ready():
+		return false
+	var road := placement.get_road(id)
+	if road.is_empty() or not can_sculpt_detail():
+		return false
+	_ensure_edit_tiles()
+	if _edit_tiles == null:
+		return false
+	begin_terrain_tile_edit()
+	TerrainSculptOps.level_polyline(_edit_tiles, road["points"], float(road["half_width_m"]),
+		FESTIVAL_ROAD_FEATHER_M, Callable(self, "_height_field_base"))
+	end_terrain_tile_edit()
+	placement.update_road(id, {"flattened": true})
+	_save_placement()
+	_reground_camp_areas()
+	return true
+
+
+## Roads whose corridor comes within `depth_m` of the outline, nearest first.
+func _zone_roads_auto(poly: PackedVector2Array, depth_m: float) -> Array:
+	var scored: Array = []
+	for r: Dictionary in get_festival_roads():
+		var pts: PackedVector2Array = r["points"]
+		var best := INF
+		for p in poly:
+			for i in range(pts.size() - 1):
+				best = minf(best, p.distance_to(Geometry2D.get_closest_point_to_segment(p, pts[i], pts[i + 1])))
+		# Also the road passing THROUGH the zone.
+		for q in pts:
+			if Geometry2D.is_point_in_polygon(q, poly):
+				best = 0.0
+		if best <= float(r["half_width_m"]) + depth_m:
+			scored.append([best, str(r["id"])])
+	scored.sort_custom(func(a, b): return float(a[0]) < float(b[0]))
+	var out: Array = []
+	for s in scored:
+		out.append(s[1])
+	return out
+
+
+# --- Zones -------------------------------------------------------------------
+
+## params: name, spec (FestivalPlacementLayer spec keys), road_ids (default:
+## every festival road within the spec's depth, nearest first), features,
+## subdivide (default true). Returns the zone id or "".
+func add_placement_zone(poly: PackedVector2Array, params: Dictionary = {}) -> String:
+	if not _placement_ready() or poly.size() < 3:
+		return ""
+	var spec := FestivalPlacementLayer.normalize_spec(params.get("spec", {}))
+	var road_ids: Array = params.get("road_ids", [])
+	if road_ids.is_empty():
+		road_ids = _zone_roads_auto(poly, float(spec["depth_m"]))
+	var id := placement.add_zone(poly, {
+		"name": params.get("name", "Zone %s" % CampSubdivider.row_letters(placement.zones.size())),
+		"spec": spec, "road_ids": road_ids, "features": params.get("features", []),
+		"holes": params.get("holes", []),
+	})
+	if id.is_empty():
+		return ""
+	# The zone replaces whatever free-painted camps stood on that ground.
+	var cleared := camp_areas.erase(poly)
+	_apply_camp_changes(cleared["changed"], cleared["removed"])
+	_save_placement()
+	if bool(params.get("subdivide", true)):
+		subdivide_placement_zone(id)
+	return id
+
+
+func update_placement_zone(id: String, patch: Dictionary, resubdivide: bool = false) -> bool:
+	if not _placement_ready() or not placement.update_zone(id, patch):
+		return false
+	_save_placement()
+	if resubdivide:
+		subdivide_placement_zone(id)
+	return true
+
+
+func delete_placement_zone(id: String) -> bool:
+	if not _placement_ready() or placement.get_zone(id).is_empty():
+		return false
+	var camp_ids := placement.remove_zone(id)
+	var removed: Array = []
+	for cid in camp_ids:
+		if camp_areas.remove(str(cid)):
+			removed.append(str(cid))
+	_apply_camp_changes([], removed)
+	_save_placement()
+	_push_camps_to_graph()
+	return true
+
+
+## Cut (or re-cut) one zone into lots and mirror them into camp records.
+## Returns the partition result ({lots, stats, warnings, lot_ids}); {} when refused.
+func subdivide_placement_zone(id: String) -> Dictionary:
+	if not _placement_ready():
+		return {}
+	var zone := placement.get_zone(id)
+	if zone.is_empty():
+		return {}
+	var res := FestivalLotPartition.partition(zone, get_festival_roads(), _placement_ctx(id))
+	var lot_ids := placement.apply_partition(id, res)
+	_sync_lot_camps(id)
+	_save_placement()
+	res["lot_ids"] = lot_ids
+	return res
+
+
+func subdivide_all_placement_zones() -> Dictionary:
+	var out := {"zones": 0, "lots": 0}
+	if not _placement_ready():
+		return out
+	for z in placement.zones.duplicate():
+		var res := subdivide_placement_zone(str((z as Dictionary)["id"]))
+		out["zones"] = int(out["zones"]) + 1
+		out["lots"] = int(out["lots"]) + (res.get("lot_ids", []) as Array).size()
+	return out
+
+
+## What the partition needs from the world: the edit-aware ground, the camp
+## exclusion index (buildings / water / OSM roads / festival corridors), the
+## zone's locked lots and its previous lots for id inheritance.
+func _placement_ctx(zone_id: String) -> Dictionary:
+	var ctx := _camp_ctx()
+	return {
+		"ground_y_at": ctx["ground_y_at"],
+		"is_excluded": ctx["is_excluded"],
+		"locked_lots": placement.locked_lots_for_zone(zone_id),
+		"prior_lots": placement.lots_for_zone(zone_id),
+	}
+
+
+## One camp record per lot, byte-stable where the lot did not change. Camp
+## records of this zone that no lot points at any more are removed.
+func _sync_lot_camps(zone_id: String) -> void:
+	var zone := placement.get_zone(zone_id)
+	var spec: Dictionary = zone.get("spec", FestivalPlacementLayer.default_spec())
+	var styles: Array = spec.get("styles", [CampStyles.DEFAULT_STYLE])
+	var style0 := str(styles[0]) if not styles.is_empty() else CampStyles.DEFAULT_STYLE
+	var referenced: Dictionary = {}
+	var changed: Array = []
+	for lot in placement.lots_for_zone(zone_id):
+		var l: Dictionary = lot
+		var ac: Dictionary = l.get("assigned_camp", {})
+		var style := str(ac.get("style", style0)) if not ac.is_empty() else style0
+		var name := str(ac.get("name", "")) if not ac.is_empty() else ""
+		if name.is_empty():
+			name = str(l.get("name", "Lot"))
+		var seed := hash(Vector2i(int(zone.get("seed", 0)) & 0x7fffffff,
+			int(str(l["lot_id"]).trim_prefix("lot_")))) & 0x7fffffff
+		var patch := {
+			"polygon": l["polygon"], "name": name, "style": style, "seed": seed,
+			"heading_deg": float(l.get("heading_deg", 0.0)), "heading_auto": false,
+			"density": float(spec.get("density", 0.8)),
+			"align_jitter_deg": float(spec.get("align_jitter_deg", 5.0)),
+			"light_density": float(spec.get("light_density", 1.0)), "group_id": zone_id,
+		}
+		var cid := str(l.get("camp_area_id", ""))
+		var rec := camp_areas.get_area(cid) if not cid.is_empty() else {}
+		if rec.is_empty():
+			cid = camp_areas.add(l["polygon"], patch)
+			if cid.is_empty():
+				continue
+			placement.update_lot(str(l["lot_id"]), {"camp_area_id": cid})
+			changed.append(cid)
+		else:
+			# Only touch the record when something it draws from moved.
+			var same_poly: bool = (rec.get("polygon", PackedVector2Array()) as PackedVector2Array) == (l["polygon"] as PackedVector2Array)
+			var differs := not same_poly \
+				or str(rec.get("style", "")) != style or str(rec.get("name", "")) != name \
+				or absf(float(rec.get("heading_deg", 0.0)) - float(patch["heading_deg"])) > 0.01 \
+				or absf(float(rec.get("density", 0.8)) - float(patch["density"])) > 0.001
+			if differs:
+				if str(rec.get("style", "")) != style:
+					patch["edits"] = {}
+				camp_areas.update(cid, patch)
+				changed.append(cid)
+		referenced[cid] = true
+	var removed: Array = []
+	for rec: Dictionary in camp_areas.areas.duplicate():
+		if str(rec.get("group_id", "")) == zone_id and not referenced.has(str(rec["id"])):
+			camp_areas.remove(str(rec["id"]))
+			removed.append(str(rec["id"]))
+	_apply_camp_changes(changed, removed)
+	_push_camps_to_graph()
+
+
+# --- Assignment ----------------------------------------------------------------
+
+## Auto-assign the roster (largest-first best-fit) over every zone, or one.
+func assign_placement(zone_id: String = "") -> Dictionary:
+	if not _placement_ready():
+		return {}
+	var lots: Array = placement.lots if zone_id.is_empty() else placement.lots_for_zone(zone_id)
+	var res := FestivalAssigner.assign(lots, placement.roster, placement.zones_by_id())
+	var touched: Dictionary = {}
+	for lid in (res["assignments"] as Dictionary).keys():
+		placement.update_lot(str(lid), {"assigned_camp": res["assignments"][lid]})
+		touched[str(placement.get_lot(str(lid)).get("zone_id", ""))] = true
+	for zid in touched.keys():
+		_sync_lot_camps(str(zid))
+	_save_placement()
+	return res
+
+
+func assign_lot(lot_id: String, roster_id: String) -> bool:
+	if not _placement_ready():
+		return false
+	var lot := placement.get_lot(lot_id)
+	var entry := placement.get_roster_entry(roster_id)
+	if lot.is_empty() or entry.is_empty():
+		return false
+	# One lot per camp: clear it off any other lot first.
+	for other: Dictionary in placement.lots:
+		if str((other.get("assigned_camp", {}) as Dictionary).get("roster_id", "")) == roster_id \
+				and str(other["lot_id"]) != lot_id:
+			placement.update_lot(str(other["lot_id"]), {"assigned_camp": {}})
+	var hc := int(entry.get("headcount", 0))
+	if hc <= 0:
+		hc = FestivalAssigner.default_headcount(float(lot.get("usable_m2", 0.0)), str(entry["style"]))
+	placement.update_lot(lot_id, {"assigned_camp": {
+		"roster_id": roster_id, "name": str(entry["name"]), "style": str(entry["style"]),
+		"headcount": hc, "requirements": (entry["requirements"] as Array).duplicate(),
+		"manual": true}})
+	_sync_lot_camps(str(lot.get("zone_id", "")))
+	_save_placement()
+	return true
+
+
+func clear_lot_assignment(lot_id: String) -> bool:
+	if not _placement_ready() or placement.get_lot(lot_id).is_empty():
+		return false
+	placement.update_lot(lot_id, {"assigned_camp": {}})
+	_sync_lot_camps(str(placement.get_lot(lot_id).get("zone_id", "")))
+	_save_placement()
+	return true
+
+
+## Edit a lot's camp by hand: style, headcount, name (keeps/creates a manual
+## assignment with no roster entry).
+func update_lot_camp(lot_id: String, patch: Dictionary) -> bool:
+	if not _placement_ready():
+		return false
+	var lot := placement.get_lot(lot_id)
+	if lot.is_empty():
+		return false
+	var ac: Dictionary = (lot.get("assigned_camp", {}) as Dictionary).duplicate(true)
+	if ac.is_empty():
+		var zone := placement.get_zone(str(lot.get("zone_id", "")))
+		var styles: Array = (zone.get("spec", {}) as Dictionary).get("styles", ["mixed"])
+		ac = {"roster_id": "", "name": str(lot.get("name", "")), "style": str(styles[0]),
+			"headcount": FestivalAssigner.default_headcount(float(lot.get("usable_m2", 0.0)), str(styles[0])),
+			"requirements": [], "manual": true}
+	for k in ["style", "headcount", "name", "requirements"]:
+		if patch.has(k):
+			ac[k] = patch[k]
+	ac["manual"] = true
+	placement.update_lot(lot_id, {"assigned_camp": ac})
+	_sync_lot_camps(str(lot.get("zone_id", "")))
+	_save_placement()
+	return true
+
+
+func set_lot_locked(lot_id: String, on: bool) -> bool:
+	if not _placement_ready() or placement.get_lot(lot_id).is_empty():
+		return false
+	placement.update_lot(lot_id, {"locked": on})
+	_save_placement()
+	return true
+
+
+# --- Picking / info ------------------------------------------------------------
+
+## {kind: "lot"|"zone"|"road"|"", id} under a world XZ point — lot first (the
+## most specific thing), then zone, then road corridor.
+func placement_pick_at(xz: Vector2) -> Dictionary:
+	if not _placement_ready():
+		return {"kind": "", "id": ""}
+	var lid := placement.lot_at(xz)
+	if not lid.is_empty():
+		return {"kind": "lot", "id": lid}
+	var zid := placement.zone_at(xz)
+	if not zid.is_empty():
+		return {"kind": "zone", "id": zid}
+	var rid := placement.road_at(xz, 1.0)
+	if not rid.is_empty():
+		return {"kind": "road", "id": rid}
+	return {"kind": "", "id": ""}
+
+
+## Record + live numbers for the options bar / harness. {} when unknown.
+func placement_info(kind: String, id: String) -> Dictionary:
+	if not _placement_ready():
+		return {}
+	match kind:
+		"lot":
+			var lot := placement.get_lot(id)
+			if lot.is_empty():
+				return {}
+			var info := lot.duplicate(true)
+			info["structures"] = 0
+			var cid := str(lot.get("camp_area_id", ""))
+			if not cid.is_empty() and is_instance_valid(_camp_area_runtime):
+				info["structures"] = _camp_area_runtime.area_structure_count(cid)
+			info["orphan"] = not cid.is_empty() and camp_areas.get_area(cid).is_empty()
+			info["size_class"] = FestivalAssigner.size_class(float(lot.get("usable_m2", 0.0)))
+			return info
+		"zone":
+			var zone := placement.get_zone(id)
+			if zone.is_empty():
+				return {}
+			var info := zone.duplicate(true)
+			info["lots"] = placement.lots_for_zone(id).size()
+			info["area_m2"] = CampAreaLayer.record_area(zone)
+			return info
+		"road":
+			var road := placement.get_road(id)
+			if road.is_empty():
+				return {}
+			var info := road.duplicate(true)
+			var pts: PackedVector2Array = road["points"]
+			var l := 0.0
+			for i in range(pts.size() - 1):
+				l += pts[i].distance_to(pts[i + 1])
+			info["length_m"] = l
+			info["width_m"] = float(road["half_width_m"]) * 2.0
+			return info
+	return {}
+
+
+## Whole-site (or one zone's) readout for the options bar.
+func placement_summary(zone_id: String = "") -> Dictionary:
+	if not _placement_ready():
+		return {}
+	var lots: Array = placement.lots if zone_id.is_empty() else placement.lots_for_zone(zone_id)
+	var people := 0
+	var assigned := 0
+	var usable := 0.0
+	for l: Dictionary in lots:
+		usable += float(l.get("usable_m2", 0.0))
+		var ac: Dictionary = l.get("assigned_camp", {})
+		if not ac.is_empty():
+			people += int(ac.get("headcount", 0))
+			if not str(ac.get("roster_id", "")).is_empty():
+				assigned += 1
+	var unplaced := 0
+	var placed_ids: Dictionary = {}
+	for l: Dictionary in placement.lots:
+		placed_ids[str((l.get("assigned_camp", {}) as Dictionary).get("roster_id", ""))] = true
+	for e: Dictionary in placement.roster:
+		if not placed_ids.has(str(e["id"])):
+			unplaced += 1
+	return {"roads": placement.roads.size(), "zones": placement.zones.size(),
+		"lots": lots.size(), "usable_m2": usable, "people": people,
+		"assigned": assigned, "roster": placement.roster.size(), "unplaced": unplaced}
+
+
+# --- Road helpers --------------------------------------------------------------
+
+## A road along edge `edge_i` of a zone, inset by `inset_m`; the zone fronts it.
+func road_from_zone_edge(zone_id: String, edge_i: int, inset_m: float = 6.0,
+		params: Dictionary = {}) -> String:
+	if not _placement_ready():
+		return ""
+	var zone := placement.get_zone(zone_id)
+	if zone.is_empty():
+		return ""
+	var pts := FestivalPlacementLayer.road_from_zone_edge(zone["polygon"], edge_i, inset_m, inset_m)
+	var rid := add_festival_road(pts, params)
+	if not rid.is_empty():
+		var ids: Array = (zone.get("road_ids", []) as Array).duplicate()
+		ids.push_front(rid)
+		update_placement_zone(zone_id, {"road_ids": ids})
+	return rid
+
+
+func road_from_zone_spine(zone_id: String, params: Dictionary = {}) -> String:
+	if not _placement_ready():
+		return ""
+	var zone := placement.get_zone(zone_id)
+	if zone.is_empty():
+		return ""
+	var pts := FestivalPlacementLayer.road_from_zone_spine(zone["polygon"])
+	var rid := add_festival_road(pts, params)
+	if not rid.is_empty():
+		var ids: Array = (zone.get("road_ids", []) as Array).duplicate()
+		ids.push_front(rid)
+		update_placement_zone(zone_id, {"road_ids": ids})
+	return rid
+
+
+# --- Undo (both layers at once) ------------------------------------------------
+
+func push_placement_undo() -> void:
+	if not _placement_ready():
+		return
+	_placement_undo.append({"placement": placement.snapshot(), "camps": camp_areas.snapshot()})
+	while _placement_undo.size() > PLACEMENT_UNDO_MAX:
+		_placement_undo.pop_front()
+
+
+func can_undo_placement() -> bool:
+	return not _placement_undo.is_empty()
+
+
+func undo_placement() -> bool:
+	if _placement_undo.is_empty() or placement == null or camp_areas == null:
+		return false
+	var snap: Dictionary = _placement_undo.pop_back()
+	placement.restore(snap["placement"])
+	camp_areas.restore(snap["camps"])
+	_camp_excl_index = null
+	var rt := _ensure_camp_area_runtime()
+	if rt != null:
+		rt.sync(camp_areas, _camp_ctx())
+	camp_areas.save_to(_camp_areas_path)
+	_save_placement()
+	clear_placement_highlight()
+	return true
+
+
+# --- Highlight -----------------------------------------------------------------
+
+## Drape an outline on the ground (the picked road / zone / lot).
+func update_placement_highlight(poly: PackedVector2Array, color: Color = Color(0.9, 0.55, 0.95, 0.35)) -> void:
+	if _main == null or poly.size() < 3:
+		clear_placement_highlight()
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	if _placement_highlight == null or not is_instance_valid(_placement_highlight):
+		_placement_highlight = MeshInstance3D.new()
+		_placement_highlight.name = "PlacementHighlight"
+		terrain.add_child(_placement_highlight)
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_placement_highlight.material_override = mat
+	(_placement_highlight.material_override as StandardMaterial3D).albedo_color = color
+	var footing := _highlight_footing_grid(true)
+	_placement_highlight.mesh = TerrainBuilder.build_polygon_highlight(
+		poly, footing["grid"], footing["res"], footing["extent"], _built_center_elev)
+	_placement_highlight.visible = true
+
+
+func clear_placement_highlight() -> void:
+	if _placement_highlight != null and is_instance_valid(_placement_highlight):
+		_placement_highlight.visible = false
+		_placement_highlight.mesh = null
 
 
 func _apply_building_textures() -> void:

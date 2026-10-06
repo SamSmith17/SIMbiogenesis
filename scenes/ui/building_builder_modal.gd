@@ -379,7 +379,7 @@ func _build_ui() -> void:
 	space_row.add_child(_space_opt)
 	_space_cap_spin = SpinBox.new()
 	_space_cap_spin.min_value = 1
-	_space_cap_spin.max_value = 64
+	_space_cap_spin.max_value = 5000
 	_space_cap_spin.step = 1
 	_space_cap_spin.custom_minimum_size = Vector2(64, 0)
 	_space_cap_spin.tooltip_text = "How many people can use this space at once"

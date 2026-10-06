@@ -16,12 +16,28 @@ extends RefCounted
 ## never serialized. Persistence follows the PlacedPropLayer pattern:
 ## user://maps/npc_spaces_<lat>_<lon>.json (or _scene_<tag>.json).
 
-const VERSION := 1
-const MAX_SPACES := 200
+## v2: records carry `draw` (base attraction 0..1), `units` (fixtures in a
+## bank — eight portapotties), `graph_item_id` (the graph tank / machine that
+## receives what is consumed here) and `program` (FestivalProgram slots).
+## v1 files load with the defaults filled in; unknown types are KEPT on load
+## so an older build never erases a festival venue.
+const VERSION := 2
+## A festival site: every camp's beds plus venues and banks.
+const MAX_SPACES := 4000
 const DEFAULT_CAPACITY := 2
+const DEFAULT_DRAW := 0.5
 
 var spaces: Array = []
 var _occupancy: Dictionary = {}  # space_id -> Array[String] agent ids (runtime only)
+## Lazy indices (rebuilt on the next lookup after any record change). With
+## thousands of spaces the old linear find_by_id inside has_free_capacity
+## inside nearest_space_by was O(S²) per query.
+var _by_id: Dictionary = {}
+var _by_type: Dictionary = {}
+var _index_dirty := true
+## Resolved world positions, space_id -> Vector2, refreshed by the owner once
+## per tick (refresh_positions) so a query never resolves a prop record.
+var _pos_cache: Dictionary = {}
 
 
 static func create_empty() -> SpaceRegistry:
@@ -87,18 +103,101 @@ func serialize() -> Dictionary:
 func deserialize(data: Dictionary) -> void:
 	spaces = []
 	for item in data.get("spaces", []):
-		if item is Dictionary and SpaceTypes.is_valid(str((item as Dictionary).get("space_type", ""))):
-			spaces.append(item)
+		if not (item is Dictionary):
+			continue
+		var rec: Dictionary = (item as Dictionary).duplicate(true)
+		if str(rec.get("space_type", "")).is_empty() or str(rec.get("id", "")).is_empty():
+			continue
+		spaces.append(_normalized(rec))
 	_occupancy = {}
+	_pos_cache = {}
+	_invalidate()
+
+
+## Every v2 key present with a sane value; v1 records gain the defaults.
+static func _normalized(rec: Dictionary) -> Dictionary:
+	rec["capacity"] = maxi(int(rec.get("capacity", DEFAULT_CAPACITY)), 1)
+	rec["label"] = str(rec.get("label", ""))
+	rec["draw"] = clampf(float(rec.get("draw", DEFAULT_DRAW)), 0.0, 1.0)
+	rec["units"] = maxi(int(rec.get("units", 1)), 1)
+	rec["graph_item_id"] = str(rec.get("graph_item_id", ""))
+	rec["program"] = FestivalProgram.normalize(rec.get("program", []))
+	return rec
+
+
+func _invalidate() -> void:
+	_index_dirty = true
+
+
+func _rebuild_index() -> void:
+	_by_id = {}
+	_by_type = {}
+	for item in spaces:
+		if not (item is Dictionary):
+			continue
+		var rec: Dictionary = item
+		_by_id[str(rec.get("id", ""))] = rec
+		var ty := str(rec.get("space_type", ""))
+		var arr: Array = _by_type.get(ty, [])
+		arr.append(rec)
+		_by_type[ty] = arr
+	_index_dirty = false
+
+
+# --- cached positions --------------------------------------------------------
+
+## Resolve every space ONCE through `pos_of` (space -> Vector2 | null) and
+## keep the answers; queries then read the cache. Call once per sim tick (or
+## whenever props move) — the bridge does.
+func refresh_positions(pos_of: Callable) -> void:
+	_pos_cache = {}
+	for item in spaces:
+		if not (item is Dictionary):
+			continue
+		var p: Variant = pos_of.call(item)
+		if p is Vector2:
+			_pos_cache[str((item as Dictionary).get("id", ""))] = p
+
+
+func positions_ready() -> bool:
+	return not _pos_cache.is_empty()
+
+
+## Cached world XZ of a space, or null when unknown / unresolved.
+func cached_position(space_id: String) -> Variant:
+	return _pos_cache.get(space_id, null)
+
+
+## The position a query should use: the cache first, the resolver otherwise.
+func _position_for(space: Dictionary, pos_of: Callable) -> Variant:
+	var sid := str(space.get("id", ""))
+	if _pos_cache.has(sid):
+		return _pos_cache[sid]
+	if positions_ready():
+		return null   # cache is live and this space did not resolve
+	return pos_of.call(space) if pos_of.is_valid() else null
+
+
+## Patch a record's own fields (capacity, label, draw, units, graph_item_id,
+## program). Returns false for an unknown space.
+func set_space_fields(space_id: String, patch: Dictionary) -> bool:
+	var rec := find_by_id(space_id)
+	if rec.is_empty():
+		return false
+	for k in patch.keys():
+		match str(k):
+			"capacity", "label", "draw", "units", "graph_item_id", "program":
+				rec[str(k)] = patch[k]
+	_normalized(rec)
+	return true
 
 
 # --- record CRUD ------------------------------------------------------------
 
 func find_by_id(space_id: String) -> Dictionary:
-	for item in spaces:
-		if item is Dictionary and str(item.get("id", "")) == space_id:
-			return item
-	return {}
+	if _index_dirty:
+		_rebuild_index()
+	return _by_id.get(space_id, {})
 
 
 ## The space record whose target matches `target` (kind + identifying key).
@@ -126,17 +225,19 @@ func set_space_type(target: Dictionary, space_type: String,
 		existing["capacity"] = maxi(capacity, 1)
 		if not label.is_empty():
 			existing["label"] = label
+		_invalidate()
 		return str(existing.get("id", ""))
 	if spaces.size() >= MAX_SPACES:
 		return ""
-	var rec := {
+	var rec := _normalized({
 		"id": _new_id(),
 		"space_type": space_type,
 		"target": target.duplicate(true),
 		"capacity": maxi(capacity, 1),
 		"label": label,
-	}
+	})
 	spaces.append(rec)
+	_invalidate()
 	return str(rec["id"])
 
 
@@ -145,6 +246,8 @@ func remove_space(space_id: String) -> bool:
 		if str((spaces[i] as Dictionary).get("id", "")) == space_id:
 			spaces.remove_at(i)
 			_occupancy.erase(space_id)
+			_pos_cache.erase(space_id)
+			_invalidate()
 			return true
 	return false
 
@@ -215,11 +318,9 @@ func _targets_equal(a: Dictionary, b: Dictionary) -> bool:
 # --- queries ----------------------------------------------------------------
 
 func spaces_of_type(space_type: String) -> Array:
-	var out: Array = []
-	for item in spaces:
-		if item is Dictionary and str(item.get("space_type", "")) == space_type:
-			out.append(item)
-	return out
+	if _index_dirty:
+		_rebuild_index()
+	return (_by_type.get(space_type, []) as Array).duplicate()
 
 
 ## Nearest space of `space_type` to `pos`, resolving world positions through
@@ -240,7 +341,7 @@ func nearest_space_by(space_type: String, pos: Vector2, pos_of: Callable,
 		var own := assigned_space_for(agent_id, space_type)
 		if not own.is_empty() \
 				and (not require_free or has_free_capacity(str(own.get("id", "")))) \
-				and pos_of.call(own) is Vector2:
+				and _position_for(own, pos_of) is Vector2:
 			return own
 	var best: Dictionary = {}
 	var best_d := INF
@@ -255,7 +356,7 @@ func nearest_space_by(space_type: String, pos: Vector2, pos_of: Callable,
 				continue
 		if require_free and not has_free_capacity(str(space.get("id", ""))):
 			continue
-		var p: Variant = pos_of.call(space)
+		var p: Variant = _position_for(space, pos_of)
 		if not (p is Vector2):
 			continue
 		var d := ((p as Vector2) - pos).length_squared()
@@ -428,6 +529,8 @@ func prune_dangling(main: Node) -> int:
 			_occupancy.erase(str((spaces[i] as Dictionary).get("id", "")))
 			spaces.remove_at(i)
 			removed += 1
+	if removed > 0:
+		_invalidate()
 	return removed
 
 

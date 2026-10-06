@@ -123,6 +123,7 @@ func pose_slot() -> String:
 const SLOTS: Array = [
 	"sleep", "hunger", "bladder", "hygiene", "thirst", "chore", "idle",
 	"fire_circle", "movement", "quiet", "workshop_social",
+	"stage", "temple", "center_camp", "art",
 ]
 
 
@@ -348,8 +349,12 @@ func _pose_clip() -> String:
 					return NpcRig.CLIP_DANCE
 				"workshop_social":
 					return NpcRig.CLIP_CLAP
-				"quiet":
+				"quiet", "temple":
 					return NpcRig.CLIP_SIT
+				"stage":
+					return NpcRig.CLIP_DANCE
+				"center_camp", "art":
+					return NpcRig.CLIP_CLAP
 			return NpcRig.CLIP_DANCE
 	return _idle_clip()
 

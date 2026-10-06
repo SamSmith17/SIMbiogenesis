@@ -135,6 +135,88 @@ static func level_polygon(tiles: TerrainEditTiles, poly: PackedVector2Array,
 			tiles.set_delta_sample(gi, gj, want)
 
 
+## Grade a ROAD: level a corridor `half_w` wide along `points` to the
+## centreline's own smoothed profile (TerrainRoadFlatten's rule, applied to
+## the edit layer instead of the base grid), feathered out over `feather_m`
+## beyond the shoulder. Absolute op like level_polygon.
+static func level_polyline(tiles: TerrainEditTiles, points: PackedVector2Array,
+		half_w: float, feather_m: float, base_fn: Callable,
+		smooth_radius_m: float = 12.0) -> void:
+	if points.size() < 2:
+		return
+	# Centreline profile: samples every ~third of a cell, smoothed over
+	# smooth_radius_m so the road grades over bumps instead of copying them.
+	var step := maxf(tiles.cell_m * 0.35, 0.5)
+	var cum := PackedFloat32Array()
+	cum.resize(points.size())
+	var total_len := 0.0
+	for i in points.size():
+		if i > 0:
+			total_len += points[i].distance_to(points[i - 1])
+		cum[i] = total_len
+	if total_len < 0.01:
+		return
+	var n_prof := int(ceil(total_len / step)) + 1
+	var raw := PackedFloat32Array()
+	raw.resize(n_prof)
+	for k in n_prof:
+		var p := _polyline_point_at(points, cum, float(k) * step)
+		raw[k] = float(base_fn.call(p.x, p.y))
+	var smooth_n := maxi(1, int(round(smooth_radius_m / step)))
+	var profile := PackedFloat32Array()
+	profile.resize(n_prof)
+	for k in n_prof:
+		var lo := maxi(0, k - smooth_n)
+		var hi := mini(n_prof - 1, k + smooth_n)
+		var total := 0.0
+		for j in range(lo, hi + 1):
+			total += raw[j]
+		profile[k] = total / float(hi - lo + 1)
+	# One write per sample: project onto the polyline (few segments), look the
+	# profile up at that arc length, weight by distance from the shoulder.
+	var reach := half_w + maxf(feather_m, 0.0)
+	var aabb := Rect2(points[0], Vector2.ZERO)
+	for p in points:
+		aabb = aabb.expand(p)
+	aabb = aabb.grow(reach + tiles.cell_m)
+	var b := tiles.sample_bounds_for_aabb(aabb, 1)
+	var feather := maxf(feather_m, 0.01)
+	for gj in range(b.y, b.w + 1):
+		var z := float(gj) * tiles.cell_m
+		for gi in range(b.x, b.z + 1):
+			var x := float(gi) * tiles.cell_m
+			var p := Vector2(x, z)
+			var best_d := INF
+			var best_s := 0.0
+			for i in range(points.size() - 1):
+				var a := points[i]
+				var c := points[i + 1]
+				var q := Geometry2D.get_closest_point_to_segment(p, a, c)
+				var d := p.distance_to(q)
+				if d < best_d:
+					best_d = d
+					best_s = cum[i] + a.distance_to(q)
+			if best_d > reach:
+				continue
+			var w := 1.0
+			if best_d > half_w:
+				w = 1.0 - smoothstep(0.0, 1.0, (best_d - half_w) / feather)
+			var k := clampi(int(round(best_s / step)), 0, n_prof - 1)
+			var base := float(base_fn.call(x, z))
+			tiles.set_delta_sample(gi, gj, (profile[k] - base) * w)
+
+
+static func _polyline_point_at(pts: PackedVector2Array, cum: PackedFloat32Array, s: float) -> Vector2:
+	if s <= 0.0:
+		return pts[0]
+	for i in range(pts.size() - 1):
+		if s <= cum[i + 1] + 1e-6:
+			var seg := cum[i + 1] - cum[i]
+			var t := (s - cum[i]) / seg if seg > 1e-9 else 0.0
+			return pts[i].lerp(pts[i + 1], clampf(t, 0.0, 1.0))
+	return pts[pts.size() - 1]
+
+
 ## Linear grade (ramp) between world points `a` and `b` at heights `ya`/`yb`,
 ## `width_m` wide, feathered at the sides.
 static func ramp(tiles: TerrainEditTiles, a: Vector2, b: Vector2, ya: float,

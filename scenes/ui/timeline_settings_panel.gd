@@ -2659,6 +2659,43 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	oh_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(oh_hint)
 
+	# Festival scale: which people are DRAWN. The simulation runs regardless.
+	var crowd_row := HBoxContainer.new()
+	crowd_row.add_theme_constant_override("separation", 8)
+	var cr_hdr := Label.new()
+	cr_hdr.text = "Draw people"
+	cr_hdr.custom_minimum_size = Vector2(110, 0)
+	cr_hdr.add_theme_color_override("font_color", C_TEXT_S)
+	crowd_row.add_child(cr_hdr)
+	var cr_opt := OptionButton.new()
+	cr_opt.add_item("Home camp only", 0)
+	cr_opt.add_item("All camps", 1)
+	cr_opt.add_item("Within a distance", 2)
+	cr_opt.add_item("Nobody", 3)
+	cr_opt.selected = NpcDisplayPrefs.CROWD_MODES.find(NpcDisplayPrefs.crowd_draw())
+	cr_opt.item_selected.connect(func(idx: int) -> void:
+		NpcDisplayPrefs.set_crowd_draw(str(NpcDisplayPrefs.CROWD_MODES[clampi(idx, 0, 3)])))
+	crowd_row.add_child(cr_opt)
+	var cr_dist := SpinBox.new()
+	cr_dist.min_value = 50
+	cr_dist.max_value = 5000
+	cr_dist.step = 50
+	cr_dist.suffix = " m"
+	cr_dist.value = NpcDisplayPrefs.crowd_lod_m()
+	cr_dist.custom_minimum_size = Vector2(96, 0)
+	cr_dist.tooltip_text = "Reach of 'Within a distance'"
+	cr_dist.value_changed.connect(func(v2: float) -> void:
+		NpcDisplayPrefs.set_crowd_lod_m(v2))
+	crowd_row.add_child(cr_dist)
+	v.add_child(crowd_row)
+	var cr_hint := Label.new()
+	cr_hint.text = "At festival scale the camp you are in keeps full bodies; every other camp is a light crowd drawn as figures up close and dots far away. 'Home camp only' draws just your camp; 'Nobody' hides everyone (the simulation and the Site Plan keep running)."
+	cr_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	cr_hint.custom_minimum_size = Vector2(420, 0)
+	cr_hint.add_theme_color_override("font_color", C_TEXT_S)
+	cr_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(cr_hint)
+
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Routines")
 	var routines_btn := Button.new()

@@ -25,7 +25,7 @@ const GestureScript := preload("res://scenes/ui/toolbar/shape_gesture_controller
 ## Guard against a Godot runtime error aborting a test function early while the
 ## suite still prints PASS — the trap veg_dock_state_selftest documents.
 ## Count of every check ABOVE the guard itself. Bump it when adding checks.
-const EXPECTED_CHECKS := 417
+const EXPECTED_CHECKS := 529
 
 var _fails := 0
 var _checks := 0
@@ -46,6 +46,8 @@ func _initialize() -> void:
 	_test_veg_families_match_preset_enum()
 	_test_veg_identity()
 	_test_camp_styles()
+	_test_placement_state()
+	_test_gesture_path()
 	_test_config_round_trip()
 	_test_config_robustness()
 	_test_file_round_trip()
@@ -82,14 +84,15 @@ func _test_registry_integrity() -> void:
 		_check("tool id unique: %s" % id, not seen.has(id))
 		seen[id] = true
 		var section := String(t.get("section", ""))
-		_check("%s section is terrain|veg|camps" % id,
-			section == "terrain" or section == "veg" or section == "camps")
+		_check("%s section is terrain|veg|camps|placement" % id,
+			section == "terrain" or section == "veg" or section == "camps"
+			or section == "placement")
 		_check("%s has a label" % id, not String(t.get("label", "")).is_empty())
 		_check("%s has a tooltip" % id, not String(t.get("tooltip", "")).is_empty())
 		var shapes: Array = t.get("shapes", [])
 		for sh: Variant in shapes:
 			_check("%s shape %s is known" % [id, sh],
-				["brush", "circle", "rect", "lasso", "polygon"].has(String(sh)))
+				["brush", "circle", "rect", "lasso", "polygon", "path"].has(String(sh)))
 		# The default shape is shapes[0] — an empty list means a click gesture.
 		_check("%s default shape resolves" % id,
 			st.shape_for(id) == (String(shapes[0]) if not shapes.is_empty() else ""))
@@ -107,7 +110,8 @@ func _test_registry_integrity() -> void:
 	_check("every section is populated",
 		not st.tools_in_section("terrain").is_empty()
 		and not st.tools_in_section("veg").is_empty()
-		and not st.tools_in_section("camps").is_empty())
+		and not st.tools_in_section("camps").is_empty()
+		and not st.tools_in_section("placement").is_empty())
 	_check("unknown tool id is refused", not st.set_active_tool("nope"))
 	_check("tool_def of an unknown id is empty", st.tool_def("nope").is_empty())
 
@@ -251,6 +255,80 @@ func _test_camp_styles() -> void:
 	_check("camp tools keep separate params",
 		is_equal_approx(float(st.params_for("camp_paint")["density"]), 0.3)
 		and is_equal_approx(float(st.params_for("camp_subdivide")["density"]), 0.8))
+
+
+## The PLACEMENT section's shared identity (allowed style mix, features,
+## surface, equalise mode) and the LITERAL vocabularies it mirrors.
+func _test_placement_state() -> void:
+	_check("PLACEMENT_SURFACES mirrors FestivalPlacementLayer.SURFACES",
+		Array(StateScript.PLACEMENT_SURFACES) == FestivalPlacementLayer.SURFACES)
+	_check("PLACEMENT_FEATURES mirrors FestivalPlacementLayer.FEATURES",
+		Array(StateScript.PLACEMENT_FEATURES) == FestivalPlacementLayer.FEATURES)
+	var st = StateScript.new()
+	_check("default style mix is one valid style", st.placement_styles == ["mixed"])
+	_check("the last style cannot be toggled off", not st.toggle_placement_style("mixed")
+		and st.placement_styles == ["mixed"])
+	_check("a second style toggles on", st.toggle_placement_style("rv_park")
+		and st.placement_styles == ["mixed", "rv_park"])
+	_check("varied is not a placement style", not st.toggle_placement_style("varied"))
+	_check("feature toggles on and off", st.toggle_placement_feature("power")
+		and st.placement_features == ["power"] and st.toggle_placement_feature("power")
+		and st.placement_features.is_empty())
+	_check("unknown feature refused", not st.toggle_placement_feature("wifi"))
+	_check("surface + equalise validated", st.set_placement_surface("playa")
+		and not st.set_placement_surface("lava") and st.set_placement_equalise("raw")
+		and not st.set_placement_equalise("fair"))
+	# The Zone tool's rows + chips become ONE spec; target_n 0 means "by area".
+	st.set_tool_param("fest_zone", "target_n", 0.0)
+	var spec_a: Dictionary = st.placement_zone_spec()
+	st.set_tool_param("fest_zone", "target_n", 6.0)
+	var spec_n: Dictionary = st.placement_zone_spec()
+	_check("zone spec: target_n 0 → area mode, else count mode",
+		str(spec_a["mode"]) == "area" and str(spec_n["mode"]) == "count" and int(spec_n["target_n"]) == 6)
+	_check("zone spec carries the chip state", spec_n["styles"] == ["mixed", "rv_park"]
+		and str(spec_n["equalise"]) == "raw")
+	_check("zone spec normalizes through the layer",
+		int(FestivalPlacementLayer.normalize_spec(spec_n)["target_n"]) == 6)
+	# Persistence round-trip of the placement identity.
+	st.toggle_placement_feature("water")
+	st.placement_subdivide_now = false
+	var cfg := ConfigFile.new()
+	st.to_config(cfg)
+	var back = StateScript.new()
+	back.from_config(cfg)
+	_check("placement identity survives a config round-trip",
+		back.placement_styles == ["mixed", "rv_park"] and back.placement_features == ["water"]
+		and back.placement_surface == "playa" and back.placement_equalise == "raw"
+		and back.placement_subdivide_now == false)
+	var bad := ConfigFile.new()
+	bad.set_value("toolbar", "placement_styles", ["gone", "varied"])
+	bad.set_value("toolbar", "placement_features", ["wifi"])
+	var kept = StateScript.new()
+	kept.from_config(bad)
+	_check("stale placement values in the config are ignored",
+		kept.placement_styles == ["mixed"] and kept.placement_features.is_empty())
+
+
+## The open-path gesture (festival roads): points accumulate, nothing closes.
+func _test_gesture_path() -> void:
+	var g = GestureScript.new()
+	g.set_mode("path")
+	_check("path is a region mode (Esc peels it)", g.is_region_mode())
+	for pt: Vector2 in [Vector2(0, 0), Vector2(50, 0), Vector2(50, 40), Vector2(0.2, 0.2)]:
+		_check("path accepts a bend", g.begin(pt, Vector2.ZERO, 3.0) == GestureScript.POLY_POINT)
+	_check("path never closes on its first vertex", g.poly_points().size() == 4)
+	_check("path reports pending work", g.has_pending() and not g.is_dragging())
+	_check("finish returns the bends", g.finish_polygon().size() == 4 and g.poly_points().is_empty())
+	_check("a one-point path is refused",
+		not GestureScript.path_rejection_reason(PackedVector2Array([Vector2.ZERO])).is_empty())
+	_check("a 3 km path is refused", not GestureScript.path_rejection_reason(
+		PackedVector2Array([Vector2.ZERO, Vector2(3000, 0)])).is_empty())
+	_check("a sane path is accepted", GestureScript.path_rejection_reason(
+		PackedVector2Array([Vector2.ZERO, Vector2(300, 0), Vector2(300, 200)])).is_empty())
+	var g2 = GestureScript.new()
+	g2.set_mode("path")
+	g2.begin(Vector2.ZERO, Vector2.ZERO)
+	_check("Esc cancels a pending path", g2.cancel() and not g2.has_pending())
 
 
 func _test_veg_identity() -> void:

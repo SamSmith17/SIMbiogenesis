@@ -35,7 +35,7 @@ const GestureScript := preload("res://scenes/ui/toolbar/shape_gesture_controller
 const HIGHLIGHT_COLOR := Color(0.35, 0.85, 1.0, 0.45)
 const SHAPE_LABELS := {
 	"brush": "Brush", "circle": "Circle", "rect": "Rect",
-	"lasso": "Lasso", "polygon": "Poly",
+	"lasso": "Lasso", "polygon": "Poly", "path": "Path",
 }
 const SHAPE_TIPS := {
 	"brush": "Freehand sweep — hold LMB and drag",
@@ -43,6 +43,7 @@ const SHAPE_TIPS := {
 	"rect": "Drag corner to corner",
 	"lasso": "Hold LMB and trace an outline",
 	"polygon": "Click each corner; Enter or click the first corner to close",
+	"path": "Click each bend; Enter finishes the road",
 }
 
 var _state: ToolbarStateScript = ToolbarStateScript.new()
@@ -256,6 +257,11 @@ func _escape_step() -> void:
 		_clear_locked_selection()
 		_set_status("Selection cleared")
 		return
+	if not _picked_place["kind"].is_empty():
+		_clear_picked_place()
+		_set_status("Selection cleared")
+		_queue_overlay_redraw()
+		return
 	_exit_mode()
 
 
@@ -314,6 +320,7 @@ func _build_ui() -> void:
 	_build_strip_section("TERRAIN", "terrain")
 	_build_strip_section("VEGETATION", "veg")
 	_build_strip_section("CAMPS", "camps")
+	_build_strip_section("PLACEMENT", "placement")
 
 	# Top options bar.
 	_options = PanelContainer.new()
@@ -405,6 +412,7 @@ func _set_active_tool(id: String) -> void:
 		_clear_locked_selection()
 	_picked_plant = {}
 	_clear_picked_camp()
+	_clear_picked_place()
 	_gesture.set_mode(_state.shape_for(id))
 	# Sculpting leaves painted plants hanging in the air, and this toolbar makes
 	# terrain->veg a one-click move, so re-snap them on the way in (the legacy
@@ -413,8 +421,8 @@ func _set_active_tool(id: String) -> void:
 	if section == "veg" and _last_section != "veg" and _loader != null 			and _loader.has_method("reground_all_vegetation"):
 		_loader.call("reground_all_vegetation")
 	# Same for camps: a sculpted pad leaves the tents on the old surface.
-	if section == "camps" and _last_section == "terrain" and _loader != null \
-			and _loader.has_method("reground_camp_areas"):
+	if (section == "camps" or section == "placement") and _last_section == "terrain" \
+			and _loader != null and _loader.has_method("reground_camp_areas"):
 		_loader.call("reground_camp_areas")
 	_last_section = section
 	_restyle_tool_buttons()
@@ -465,6 +473,8 @@ func _rebuild_options_bar() -> void:
 		_build_species_row()
 	elif String(def.get("section", "")) == "camps":
 		_build_camp_rows()
+	elif String(def.get("section", "")) == "placement":
+		_build_placement_rows()
 	# Shape picker — only when the tool actually offers a choice.
 	var shapes: Array = def.get("shapes", [])
 	if shapes.size() > 1:
@@ -538,6 +548,8 @@ func _make_param_handler(key: String) -> Callable:
 		# In Camp Edit the sliders ARE the picked camp's settings.
 		if _state.active_tool == "camp_select" and _camp_apply_timer != null:
 			_camp_apply_timer.start()
+		if _state.active_tool == "fest_edit" and _place_apply_timer != null:
+			_place_apply_timer.start()
 
 
 # ---------------------------------------------------------------------------
@@ -559,6 +571,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _gesture.mode == "polygon" and _gesture.poly_points().size() >= 3:
 				_lock_selection(_gesture.finish_polygon())
 				get_viewport().set_input_as_handled()
+			elif _gesture.mode == "path" and _gesture.poly_points().size() >= 2:
+				_commit_festival_road(_gesture.finish_polygon())
+				get_viewport().set_input_as_handled()
 			return
 		# With a plant picked, Del / [ ] / H act on THAT plant — the bracket keys
 		# resize it instead of the (nonexistent) Select brush radius.
@@ -578,6 +593,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _state.active_tool == "camp_select" and not _picked_camp.is_empty() \
 				and (key.keycode == KEY_DELETE or key.keycode == KEY_BACKSPACE):
 			_delete_picked_camp()
+			get_viewport().set_input_as_handled()
+			return
+		if _state.active_tool == "fest_edit" and not _picked_place["kind"].is_empty() \
+				and (key.keycode == KEY_DELETE or key.keycode == KEY_BACKSPACE):
+			_delete_picked_place()
 			get_viewport().set_input_as_handled()
 			return
 		if key.physical_keycode == KEY_BRACKETLEFT or key.physical_keycode == KEY_BRACKETRIGHT:
@@ -657,6 +677,10 @@ func _on_lmb_pressed() -> void:
 	if _state.active_tool == "camp_select":
 		_pick_camp_at(world)
 		return
+	if _state.active_tool == "fest_lots" or _state.active_tool == "fest_assign" \
+			or _state.active_tool == "fest_edit":
+		_pick_place_at(world)
+		return
 
 	# Rain/Drain: hold inside the locked basin to modulate its level.
 	if (_state.active_tool == "rain" or _state.active_tool == "drain") \
@@ -684,7 +708,10 @@ func _on_lmb_pressed() -> void:
 		GestureScript.POLY_CLOSED:
 			_lock_selection(_gesture.finish_polygon())
 		GestureScript.POLY_POINT:
-			_set_status("Polygon: %d points — Enter to close" % _gesture.poly_points().size())
+			if _gesture.mode == "path":
+				_set_status("Road: %d points — Enter to finish" % _gesture.poly_points().size())
+			else:
+				_set_status("Polygon: %d points — Enter to close" % _gesture.poly_points().size())
 	_queue_overlay_redraw()
 
 
@@ -733,6 +760,10 @@ func _lock_selection(poly: PackedVector2Array) -> void:
 	# Camp regions also apply at once, and need no detail patch either.
 	if _is_camp_tool():
 		_apply_camp_region(poly)
+		_queue_overlay_redraw()
+		return
+	if _is_placement_tool():
+		_apply_placement_region(poly)
 		_queue_overlay_redraw()
 		return
 	if not bool(_loader.call("can_sculpt_detail")):
@@ -1088,11 +1119,13 @@ func _draw_overlay() -> void:
 				cpts.append(cpts[0])
 				_overlay.draw_polyline(cpts, col, 2.0, true)
 		return
+	if _is_placement_tool():
+		_draw_placement_overlay()
 	var mode := _gesture.mode
 	if mode == "lasso" and _gesture.lasso_screen().size() >= 2:
 		_overlay.draw_polyline(_gesture.lasso_screen(), col, 2.0, true)
 		return
-	if mode == "polygon" and _gesture.poly_points().size() >= 1:
+	if (mode == "polygon" or mode == "path") and _gesture.poly_points().size() >= 1:
 		var pts := _project_poly(_gesture.poly_points())
 		if pts.size() >= 2:
 			_overlay.draw_polyline(pts, col, 2.0, true)
@@ -1142,6 +1175,9 @@ func _tool_color() -> Color:
 		"camp_paint": return Color(1.0, 0.72, 0.25, 0.9)
 		"camp_erase": return Color(0.95, 0.45, 0.45, 0.9)
 		"camp_subdivide": return Color(0.9, 0.55, 0.95, 0.9)
+		"fest_road": return Color(0.95, 0.9, 0.7, 0.9)
+		"fest_zone", "fest_lots": return Color(0.9, 0.55, 0.95, 0.9)
+		"fest_assign", "fest_edit": return Color(0.85, 0.75, 0.35, 0.9)
 		_: return Color(0.35, 0.65, 1.0, 0.9)
 
 
@@ -1218,6 +1254,15 @@ func _do_undo() -> void:
 			_set_status("Undid last camp edit — %s" % _camp_totals())
 		else:
 			_set_status("Nothing to undo")
+	elif _is_placement_tool():
+		if _loader.has_method("undo_placement") and bool(_loader.call("undo_placement")):
+			_clear_picked_place()
+			_refresh_place_readout()
+			_refresh_roster_options()
+			_set_status("Undid last placement edit — %s" % _place_summary_text())
+			_queue_overlay_redraw()
+		else:
+			_set_status("Nothing to undo")
 	elif bool(_loader.call("undo_terrain_sculpt")):
 		_set_status("Undone — %s" % _volume_summary())
 		if _selection_locked:
@@ -1233,6 +1278,8 @@ func _update_undo_button() -> void:
 		can = _loader.has_method("can_undo_vegetation") 			and bool(_loader.call("can_undo_vegetation"))
 	elif _is_camp_tool():
 		can = _loader.has_method("can_undo_camps") and bool(_loader.call("can_undo_camps"))
+	elif _is_placement_tool():
+		can = _loader.has_method("can_undo_placement") and bool(_loader.call("can_undo_placement"))
 	else:
 		can = bool(_loader.call("can_undo_terrain_sculpt"))
 	_undo_btn.disabled = not can
@@ -1919,3 +1966,816 @@ func _open_camp_tune_look() -> void:
 	if sid == "varied":
 		sid = "mixed"
 	_loader.call("open_camp_style_modal", sid)
+
+
+# ---------------------------------------------------------------------------
+# Placement — festival roads, theme-camp zones, fair lots, roster assignment.
+# The loader owns the layer (core/camps/festival_*); this file only turns
+# gestures into its commands and draws the overlay. Undo here snapshots BOTH
+# the placement layer and the camp layer (a lot is a camp record too).
+# ---------------------------------------------------------------------------
+
+## {kind: ""|"road"|"zone"|"lot", id}
+var _picked_place := {"kind": "", "id": ""}
+var _place_style_buttons: Dictionary = {}
+var _place_feature_buttons: Dictionary = {}
+var _place_surface_opt: OptionButton = null
+var _place_name_edit: LineEdit = null
+var _place_roster_opt: OptionButton = null
+var _place_readout: Label = null
+var _place_equalise_btn: Button = null
+var _place_cutnow_btn: Button = null
+var _place_lock_btn: Button = null
+var _place_action_buttons: Array[Button] = []
+var _place_apply_timer: Timer = null
+## Roster entry picked in the Assign tool ("" = none).
+var _place_roster_pick := ""
+## Lot colours by fairness (usable / zone mean).
+const LOT_FAIR_GREEN := Color(0.45, 0.9, 0.5, 0.9)
+const LOT_FAIR_AMBER := Color(0.95, 0.75, 0.3, 0.9)
+const LOT_FAIR_RED := Color(0.95, 0.4, 0.4, 0.9)
+const ZONE_COLOR := Color(0.9, 0.55, 0.95, 0.8)
+const ROAD_COLOR := Color(0.95, 0.9, 0.7, 0.85)
+
+
+func _is_placement_tool() -> bool:
+	return String(_state.tool_def(_state.active_tool).get("section", "")) == "placement"
+
+
+func _ensure_place_timer() -> void:
+	if _place_apply_timer != null:
+		return
+	_place_apply_timer = Timer.new()
+	_place_apply_timer.one_shot = true
+	_place_apply_timer.wait_time = 0.25
+	_place_apply_timer.timeout.connect(_apply_place_edit_params)
+	add_child(_place_apply_timer)
+
+
+func _push_place_undo() -> void:
+	if _loader != null and _loader.has_method("push_placement_undo"):
+		_loader.call("push_placement_undo")
+	_update_undo_button()
+
+
+func _place_summary_text(zone_id: String = "") -> String:
+	if _loader == null or not _loader.has_method("placement_summary"):
+		return ""
+	var s: Dictionary = _loader.call("placement_summary", zone_id)
+	if s.is_empty():
+		return ""
+	var txt := "%d roads · %d zones · %d lots · ~%d people" % [
+		int(s.get("roads", 0)), int(s.get("zones", 0)), int(s.get("lots", 0)), int(s.get("people", 0))]
+	if int(s.get("roster", 0)) > 0:
+		txt += " · roster %d/%d placed" % [int(s.get("roster", 0)) - int(s.get("unplaced", 0)),
+			int(s.get("roster", 0))]
+	return txt
+
+
+func _zone_readout(zone_id: String) -> String:
+	if _loader == null:
+		return ""
+	var info: Dictionary = _loader.call("placement_info", "zone", zone_id)
+	if info.is_empty():
+		return ""
+	var st: Dictionary = info.get("stats", {})
+	if st.is_empty():
+		return "%s — %.0f m², not cut yet" % [str(info.get("name", "Zone")), float(info.get("area_m2", 0.0))]
+	return "%s — usable %.0f / %.0f m² · %d lots · %.0f–%.0f m² (max/min %.2f, Gini %.2f) · ~%d people" % [
+		str(info.get("name", "Zone")), float(st.get("usable_m2", 0.0)), float(st.get("raw_m2", 0.0)),
+		int(st.get("lots", 0)), float(st.get("usable_min", 0.0)), float(st.get("usable_max", 0.0)),
+		float(st.get("ratio_max_min", 0.0)), float(st.get("gini", 0.0)), int(st.get("capacity_people", 0))]
+
+
+# --- Options bar rows -------------------------------------------------------
+
+func _build_placement_rows() -> void:
+	_ensure_place_timer()
+	_place_style_buttons.clear()
+	_place_feature_buttons.clear()
+	_place_action_buttons.clear()
+	_place_surface_opt = null
+	_place_name_edit = null
+	_place_roster_opt = null
+	_place_equalise_btn = null
+	_place_cutnow_btn = null
+	_place_lock_btn = null
+	var tool_id := _state.active_tool
+	match tool_id:
+		"fest_road":
+			_place_surface_opt = OptionButton.new()
+			_place_surface_opt.custom_minimum_size = Vector2(84, 24)
+			_place_surface_opt.focus_mode = Control.FOCUS_NONE
+			_place_surface_opt.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			for s in ToolbarStateScript.PLACEMENT_SURFACES:
+				_place_surface_opt.add_item(String(s).capitalize())
+			_place_surface_opt.select(ToolbarStateScript.PLACEMENT_SURFACES.find(_state.placement_surface))
+			_place_surface_opt.item_selected.connect(func(i: int) -> void:
+				_state.set_placement_surface(String(ToolbarStateScript.PLACEMENT_SURFACES[i]))
+				_queue_save_prefs())
+			_options_box.add_child(_place_surface_opt)
+			_place_name_edit = LineEdit.new()
+			_place_name_edit.placeholder_text = "road name"
+			_place_name_edit.custom_minimum_size = Vector2(110, 24)
+			_place_name_edit.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			_options_box.add_child(_place_name_edit)
+		"fest_zone":
+			_build_place_style_chips(true)
+			_build_place_feature_chips()
+			_place_equalise_btn = Button.new()
+			_place_equalise_btn.focus_mode = Control.FOCUS_NONE
+			_place_equalise_btn.custom_minimum_size = Vector2(96, 24)
+			_place_equalise_btn.tooltip_text = "Equalise lots by USABLE ground (slope + obstacles count) or by raw area"
+			_place_equalise_btn.pressed.connect(func() -> void:
+				_state.set_placement_equalise("raw" if _state.placement_equalise == "usable" else "usable")
+				_refresh_place_toggle_buttons()
+				_queue_save_prefs())
+			_options_box.add_child(_place_equalise_btn)
+			_place_cutnow_btn = Button.new()
+			_place_cutnow_btn.focus_mode = Control.FOCUS_NONE
+			_place_cutnow_btn.custom_minimum_size = Vector2(72, 24)
+			_place_cutnow_btn.tooltip_text = "Cut a drawn zone into lots at once (off: draw now, cut with the Lots tool)"
+			_place_cutnow_btn.pressed.connect(func() -> void:
+				_state.placement_subdivide_now = not _state.placement_subdivide_now
+				_refresh_place_toggle_buttons()
+				_queue_save_prefs())
+			_options_box.add_child(_place_cutnow_btn)
+			_refresh_place_toggle_buttons()
+		"fest_lots":
+			_add_place_action("Cut all zones", "Re-cut every zone with its own settings", "_cut_all_zones")
+		"fest_assign":
+			_place_roster_opt = OptionButton.new()
+			_place_roster_opt.custom_minimum_size = Vector2(140, 24)
+			_place_roster_opt.focus_mode = Control.FOCUS_NONE
+			_place_roster_opt.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			_place_roster_opt.item_selected.connect(_on_roster_selected)
+			_options_box.add_child(_place_roster_opt)
+			_refresh_roster_options()
+			_place_name_edit = LineEdit.new()
+			_place_name_edit.placeholder_text = "new camp name"
+			_place_name_edit.custom_minimum_size = Vector2(110, 24)
+			_place_name_edit.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			_place_name_edit.text_submitted.connect(_on_roster_name_submitted)
+			_options_box.add_child(_place_name_edit)
+			_build_place_style_chips(false)
+			_build_place_feature_chips()
+			_add_place_action("+ Add", "Add the named camp to the roster (style + needs from the chips; Enter in the box does the same)", "_add_roster_from_bar")
+			_add_place_action("Auto-assign", "Place the whole roster: largest first, best fit, needs honoured", "_auto_assign")
+			_add_place_action("Clear all", "Clear every automatic assignment (manual ones stay)", "_clear_assignments")
+		"fest_edit":
+			_place_name_edit = LineEdit.new()
+			_place_name_edit.placeholder_text = "click a road / zone / lot"
+			_place_name_edit.custom_minimum_size = Vector2(120, 24)
+			_place_name_edit.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			_place_name_edit.text_submitted.connect(_on_place_name_submitted)
+			_options_box.add_child(_place_name_edit)
+			_build_place_style_chips(false)
+			_place_lock_btn = Button.new()
+			_place_lock_btn.focus_mode = Control.FOCUS_NONE
+			_place_lock_btn.custom_minimum_size = Vector2(60, 24)
+			_place_lock_btn.tooltip_text = "Lock this lot: a re-cut never moves it"
+			_place_lock_btn.pressed.connect(_toggle_picked_lock)
+			_options_box.add_child(_place_lock_btn)
+			_add_place_action("Re-cut", "Cut this zone again with its current settings", "_recut_picked_zone")
+			_add_place_action("Road: edge", "Add a road just inside the zone edge nearest the pointer", "_road_from_picked_edge")
+			_add_place_action("Road: spine", "Add a road down the middle of this zone", "_road_from_picked_spine")
+			_add_place_action("Flatten", "Grade this road's corridor (a TERRAIN undo entry)", "_flatten_picked_road")
+			_add_place_action("Delete", "Delete this road / zone (Del)", "_delete_picked_place")
+			_sync_place_edit_controls()
+	_place_readout = Label.new()
+	_place_readout.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_place_readout.add_theme_color_override("font_color", UITheme.C_INFO)
+	_options_box.add_child(_place_readout)
+	_place_readout.text = _place_summary_text()
+
+
+func _add_place_action(text: String, tip: String, method: String) -> void:
+	var b := Button.new()
+	b.text = text
+	b.tooltip_text = tip
+	b.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(b)
+	b.pressed.connect(Callable(self, method))
+	_options_box.add_child(b)
+	_place_action_buttons.append(b)
+
+
+## Style chips: multi-select (the zone's allowed mix) or single (a lot's camp).
+func _build_place_style_chips(multi: bool) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
+	_options_box.add_child(row)
+	for s in ToolbarStateScript.CAMP_STYLES:
+		var sid := String(s["id"])
+		if sid == "varied":
+			continue
+		var b := Button.new()
+		b.text = String(s["label"])
+		b.tooltip_text = CampStyles.label(sid) + (" (toggle; first on = default)" if multi else "")
+		b.custom_minimum_size = Vector2(46, 24)
+		b.focus_mode = Control.FOCUS_NONE
+		b.pressed.connect(_on_place_style_pressed.bind(sid, multi))
+		row.add_child(b)
+		_place_style_buttons[sid] = b
+	_restyle_place_style_buttons()
+
+
+func _build_place_feature_chips() -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
+	_options_box.add_child(row)
+	for f in ToolbarStateScript.PLACEMENT_FEATURES:
+		var fid := String(f)
+		var b := Button.new()
+		b.text = fid
+		b.tooltip_text = "Zone offers / camp needs: %s" % fid
+		b.custom_minimum_size = Vector2(44, 24)
+		b.focus_mode = Control.FOCUS_NONE
+		b.pressed.connect(func() -> void:
+			_state.toggle_placement_feature(fid)
+			_restyle_place_feature_buttons()
+			_queue_save_prefs())
+		row.add_child(b)
+		_place_feature_buttons[fid] = b
+	_restyle_place_feature_buttons()
+
+
+func _restyle_place_style_buttons() -> void:
+	var on: Array = _state.placement_styles
+	if _state.active_tool == "fest_edit":
+		var info := _picked_place_info()
+		var ac: Dictionary = info.get("assigned_camp", {}) if _picked_place["kind"] == "lot" else {}
+		on = [str(ac.get("style", ""))] if not ac.is_empty() else []
+	elif _state.active_tool == "fest_assign":
+		on = [str(_state.placement_styles[0])] if not _state.placement_styles.is_empty() else []
+	for sid in _place_style_buttons.keys():
+		_style_toggle(_place_style_buttons[sid], on.has(String(sid)))
+
+
+func _restyle_place_feature_buttons() -> void:
+	for fid in _place_feature_buttons.keys():
+		_style_toggle(_place_feature_buttons[fid], _state.placement_features.has(String(fid)))
+
+
+func _refresh_place_toggle_buttons() -> void:
+	if _place_equalise_btn != null and is_instance_valid(_place_equalise_btn):
+		_place_equalise_btn.text = "Equal: usable" if _state.placement_equalise == "usable" else "Equal: raw"
+		UITheme.style_toggle(_place_equalise_btn, _state.placement_equalise == "usable", UITheme.FONT_XS)
+	if _place_cutnow_btn != null and is_instance_valid(_place_cutnow_btn):
+		_place_cutnow_btn.text = "Cut now"
+		UITheme.style_toggle(_place_cutnow_btn, _state.placement_subdivide_now, UITheme.FONT_XS)
+
+
+func _on_place_style_pressed(style_id: String, multi: bool) -> void:
+	if _state.active_tool == "fest_edit":
+		if _picked_place["kind"] != "lot" or _loader == null:
+			_set_status("Click a lot first")
+			return
+		_push_place_undo()
+		_loader.call("update_lot_camp", str(_picked_place["id"]), {"style": style_id})
+		_restyle_place_style_buttons()
+		_report_picked_place()
+		return
+	if multi:
+		if not _state.toggle_placement_style(style_id):
+			return
+	else:
+		# Single pick: put it first (= default / the roster entry's style).
+		_state.placement_styles.erase(style_id)
+		_state.placement_styles.push_front(style_id)
+	_restyle_place_style_buttons()
+	_queue_save_prefs()
+
+
+# --- Gestures ---------------------------------------------------------------
+
+func _commit_festival_road(pts: PackedVector2Array) -> void:
+	if _loader == null:
+		return
+	var reason := GestureScript.path_rejection_reason(pts)
+	if not reason.is_empty():
+		_set_status(reason)
+		return
+	_push_place_undo()
+	var name := _place_name_edit.text.strip_edges() if _place_name_edit != null else ""
+	var params := {"width_m": _state.get_param("width_m", 8.0),
+		"surface": _state.placement_surface,
+		"flatten": _state.get_param("flatten", 0.0) >= 0.5}
+	if not name.is_empty():
+		params["name"] = name
+	var id := str(_loader.call("add_festival_road", pts, params))
+	if id.is_empty():
+		_set_status("Road refused (two points at least, 200 roads at most)")
+		return
+	var info: Dictionary = _loader.call("placement_info", "road", id)
+	_set_status("%s — %.0f m long, %.0f m wide%s" % [str(info.get("name", "Road")),
+		float(info.get("length_m", 0.0)), float(info.get("width_m", 0.0)),
+		" · flattened" if bool(info.get("flattened", false)) else ""])
+	_refresh_place_readout()
+	_update_undo_button()
+	_queue_overlay_redraw()
+
+
+## Region apply for the Zone tool.
+func _apply_placement_region(poly: PackedVector2Array) -> void:
+	if _loader == null or _state.active_tool != "fest_zone":
+		return
+	_push_place_undo()
+	var id := str(_loader.call("add_placement_zone", poly, {
+		"spec": _state.placement_zone_spec(),
+		"features": _state.placement_features.duplicate(),
+		"subdivide": _state.placement_subdivide_now,
+	}))
+	if id.is_empty():
+		_set_status("Too small for a zone — draw a larger area")
+		return
+	var info: Dictionary = _loader.call("placement_info", "zone", id)
+	var roads: Array = info.get("road_ids", [])
+	if roads.is_empty():
+		_set_status("%s drawn with NO road in reach — lots use a plain grid; draw a Road, then Re-cut" % str(info.get("name", "Zone")))
+	else:
+		_set_status(_zone_readout(id))
+	_refresh_place_readout()
+	_update_undo_button()
+
+
+func _refresh_place_readout(zone_id: String = "") -> void:
+	if _place_readout != null and is_instance_valid(_place_readout):
+		_place_readout.text = _place_summary_text(zone_id)
+
+
+# --- Picking -----------------------------------------------------------------
+
+func _picked_place_info() -> Dictionary:
+	if _picked_place["kind"].is_empty() or _loader == null or not _loader.has_method("placement_info"):
+		return {}
+	return _loader.call("placement_info", str(_picked_place["kind"]), str(_picked_place["id"]))
+
+
+func _pick_place_at(world: Vector2) -> void:
+	if _loader == null or not _loader.has_method("placement_pick_at"):
+		return
+	var pick: Dictionary = _loader.call("placement_pick_at", world)
+	var kind := str(pick.get("kind", ""))
+	if kind.is_empty():
+		_clear_picked_place()
+		_set_status("Nothing here — click a road, zone or lot")
+		return
+	match _state.active_tool:
+		"fest_lots":
+			# Lots tool: click a zone (or a lot of it) to cut it.
+			var zid := str(pick["id"]) if kind == "zone" else str(
+				(_loader.call("placement_info", "lot", str(pick["id"])) as Dictionary).get("zone_id", ""))
+			if zid.is_empty():
+				_set_status("Click inside a zone to cut it")
+				return
+			_push_place_undo()
+			var res: Dictionary = _loader.call("subdivide_placement_zone", zid)
+			_picked_place = {"kind": "zone", "id": zid}
+			_highlight_picked_place()
+			_set_status(_zone_readout(zid) + ("" if (res.get("warnings", []) as Array).is_empty()
+				else " · " + str(res["warnings"][0])))
+			_refresh_place_readout()
+			_update_undo_button()
+		"fest_assign":
+			if kind != "lot":
+				_set_status("Click a lot to assign it")
+				return
+			_picked_place = {"kind": "lot", "id": str(pick["id"])}
+			_highlight_picked_place()
+			if _place_roster_pick.is_empty():
+				# No roster pick: clicking an assigned lot clears it.
+				var info: Dictionary = _loader.call("placement_info", "lot", str(pick["id"]))
+				if not (info.get("assigned_camp", {}) as Dictionary).is_empty():
+					_push_place_undo()
+					_loader.call("clear_lot_assignment", str(pick["id"]))
+					_set_status("%s cleared" % str(info.get("name", "Lot")))
+				else:
+					_set_status("Pick a camp in the roster box, then click a lot")
+			else:
+				_push_place_undo()
+				_loader.call("assign_lot", str(pick["id"]), _place_roster_pick)
+				var info2: Dictionary = _loader.call("placement_info", "lot", str(pick["id"]))
+				_set_status("%s → %s (%d people)" % [str(info2.get("name", "Lot")),
+					str((info2.get("assigned_camp", {}) as Dictionary).get("name", "")),
+					int((info2.get("assigned_camp", {}) as Dictionary).get("headcount", 0))])
+			_refresh_place_readout()
+			_update_undo_button()
+		_:
+			_picked_place = {"kind": kind, "id": str(pick["id"])}
+			_highlight_picked_place()
+			_sync_place_edit_controls()
+			_report_picked_place()
+
+
+func _highlight_picked_place() -> void:
+	if _loader == null:
+		return
+	var info := _picked_place_info()
+	var kind := str(_picked_place["kind"])
+	if info.is_empty():
+		_loader.call("clear_placement_highlight")
+		return
+	var poly := PackedVector2Array()
+	if kind == "road":
+		poly = TerrainRoadFlatten.road_corridor_polygon(info["points"], float(info["half_width_m"]))
+	else:
+		poly = info.get("polygon", PackedVector2Array())
+	_loader.call("update_placement_highlight", poly)
+
+
+func _clear_picked_place() -> void:
+	if _place_apply_timer != null:
+		_place_apply_timer.stop()
+	if _picked_place["kind"].is_empty():
+		return
+	_picked_place = {"kind": "", "id": ""}
+	if _loader != null and _loader.has_method("clear_placement_highlight"):
+		_loader.call("clear_placement_highlight")
+	_sync_place_edit_controls()
+
+
+func _report_picked_place() -> void:
+	var info := _picked_place_info()
+	if info.is_empty():
+		return
+	match str(_picked_place["kind"]):
+		"road":
+			_set_status("%s — %.0f m, %.0f m wide, %s%s" % [str(info.get("name", "Road")),
+				float(info.get("length_m", 0.0)), float(info.get("width_m", 0.0)),
+				str(info.get("surface", "")), " · flattened" if bool(info.get("flattened", false)) else ""])
+		"zone":
+			_set_status(_zone_readout(str(_picked_place["id"])))
+		"lot":
+			var ac: Dictionary = info.get("assigned_camp", {})
+			var who := "unassigned"
+			if not ac.is_empty():
+				who = "%s · %s · %d people" % [str(ac.get("name", "")),
+					CampStyles.label(str(ac.get("style", ""))), int(ac.get("headcount", 0))]
+			_set_status("%s (%s) — usable %.0f of %.0f m² · front %.0f m · slope %.1f° · fairness %.2f · %d structures · %s%s" % [
+				str(info.get("name", "Lot")), str(info.get("size_class", "")),
+				float(info.get("usable_m2", 0.0)), float(info.get("raw_m2", 0.0)),
+				float(info.get("frontage_m", 0.0)), float(info.get("mean_slope_deg", 0.0)),
+				float(info.get("fairness", 0.0)), int(info.get("structures", 0)), who,
+				" · LOCKED" if bool(info.get("locked", false)) else ""])
+
+
+## Load the picked thing's settings into the Edit tool's controls.
+func _sync_place_edit_controls() -> void:
+	if _state.active_tool != "fest_edit":
+		return
+	var info := _picked_place_info()
+	var have := not info.is_empty()
+	var kind := str(_picked_place["kind"])
+	if _place_name_edit != null and is_instance_valid(_place_name_edit):
+		_place_name_edit.editable = have
+		var nm := ""
+		if have:
+			nm = str((info.get("assigned_camp", {}) as Dictionary).get("name", info.get("name", ""))) \
+				if kind == "lot" else str(info.get("name", ""))
+		_place_name_edit.text = nm
+	for b in _place_action_buttons:
+		if not is_instance_valid(b):
+			continue
+		match b.text:
+			"Re-cut": b.disabled = not (kind == "zone" or kind == "lot")
+			"Road: edge", "Road: spine": b.disabled = kind != "zone"
+			"Flatten": b.disabled = kind != "road"
+			"Delete": b.disabled = not (kind == "road" or kind == "zone")
+			_: b.disabled = not have
+	if _place_lock_btn != null and is_instance_valid(_place_lock_btn):
+		_place_lock_btn.disabled = kind != "lot"
+		var locked := kind == "lot" and bool(info.get("locked", false))
+		_place_lock_btn.text = "Locked" if locked else "Lock"
+		UITheme.style_toggle(_place_lock_btn, locked, UITheme.FONT_XS)
+	if have:
+		if kind == "road":
+			_state.set_param("width_m", float(info.get("width_m", 8.0)))
+			if _param_rows.has("width_m"):
+				SliderSpinRow.set_values(_param_rows["width_m"], _state.get_param("width_m"))
+		elif kind == "lot":
+			var ac: Dictionary = info.get("assigned_camp", {})
+			var hc := int(ac.get("headcount", 0)) if not ac.is_empty() else 0
+			_state.set_param("headcount", float(hc))
+			if _param_rows.has("headcount"):
+				SliderSpinRow.set_values(_param_rows["headcount"], _state.get_param("headcount"))
+	_restyle_place_style_buttons()
+
+
+## Debounced push of the Edit rows onto the picked road / lot.
+func _apply_place_edit_params() -> void:
+	if _state.active_tool != "fest_edit" or _loader == null:
+		return
+	var info := _picked_place_info()
+	if info.is_empty():
+		return
+	match str(_picked_place["kind"]):
+		"road":
+			var w := _state.get_param("width_m", 8.0)
+			if absf(float(info.get("width_m", 0.0)) - w) > 0.01:
+				_push_place_undo()
+				_loader.call("update_festival_road", str(_picked_place["id"]), {"width_m": w})
+				_highlight_picked_place()
+				_report_picked_place()
+		"lot":
+			var hc := int(round(_state.get_param("headcount", 0.0)))
+			var ac: Dictionary = info.get("assigned_camp", {})
+			var cur := int(ac.get("headcount", 0)) if not ac.is_empty() else 0
+			if hc != cur:
+				_push_place_undo()
+				_loader.call("update_lot_camp", str(_picked_place["id"]), {"headcount": hc})
+				_refresh_place_readout()
+				_report_picked_place()
+
+
+func _on_place_name_submitted(text: String) -> void:
+	var info := _picked_place_info()
+	if info.is_empty() or _loader == null:
+		return
+	var nm := text.strip_edges()
+	if nm.is_empty():
+		return
+	_push_place_undo()
+	match str(_picked_place["kind"]):
+		"road": _loader.call("update_festival_road", str(_picked_place["id"]), {"name": nm})
+		"zone": _loader.call("update_placement_zone", str(_picked_place["id"]), {"name": nm})
+		"lot": _loader.call("update_lot_camp", str(_picked_place["id"]), {"name": nm})
+	_report_picked_place()
+
+
+func _toggle_picked_lock() -> void:
+	if _picked_place["kind"] != "lot" or _loader == null:
+		return
+	var info := _picked_place_info()
+	_push_place_undo()
+	_loader.call("set_lot_locked", str(_picked_place["id"]), not bool(info.get("locked", false)))
+	_sync_place_edit_controls()
+	_report_picked_place()
+
+
+func _recut_picked_zone() -> void:
+	if _loader == null:
+		return
+	var info := _picked_place_info()
+	var zid := str(_picked_place["id"]) if _picked_place["kind"] == "zone" else str(info.get("zone_id", ""))
+	if zid.is_empty():
+		return
+	_push_place_undo()
+	_loader.call("subdivide_placement_zone", zid)
+	_picked_place = {"kind": "zone", "id": zid}
+	_highlight_picked_place()
+	_sync_place_edit_controls()
+	_set_status(_zone_readout(zid))
+	_refresh_place_readout()
+
+
+func _road_from_picked_edge() -> void:
+	if _picked_place["kind"] != "zone" or _loader == null:
+		return
+	var info := _picked_place_info()
+	var poly: PackedVector2Array = info.get("polygon", PackedVector2Array())
+	# The edge nearest the pointer, else the longest one.
+	var edge_i := 0
+	var best := INF
+	if _cursor_hit is Vector3:
+		var p := Vector2((_cursor_hit as Vector3).x, (_cursor_hit as Vector3).z)
+		for i in poly.size():
+			var d := p.distance_to(Geometry2D.get_closest_point_to_segment(p, poly[i], poly[(i + 1) % poly.size()]))
+			if d < best:
+				best = d
+				edge_i = i
+	else:
+		var longest := -1.0
+		for i in poly.size():
+			var l := poly[i].distance_squared_to(poly[(i + 1) % poly.size()])
+			if l > longest:
+				longest = l
+				edge_i = i
+	_push_place_undo()
+	var rid := str(_loader.call("road_from_zone_edge", str(_picked_place["id"]), edge_i, 6.0,
+		{"width_m": _state.get_param("width_m", 8.0), "surface": _state.placement_surface}))
+	if rid.is_empty():
+		_set_status("Could not place an edge road")
+		return
+	_loader.call("subdivide_placement_zone", str(_picked_place["id"]))
+	_set_status("Edge road added — " + _zone_readout(str(_picked_place["id"])))
+	_refresh_place_readout()
+	_queue_overlay_redraw()
+
+
+func _road_from_picked_spine() -> void:
+	if _picked_place["kind"] != "zone" or _loader == null:
+		return
+	_push_place_undo()
+	var rid := str(_loader.call("road_from_zone_spine", str(_picked_place["id"]),
+		{"width_m": _state.get_param("width_m", 8.0), "surface": _state.placement_surface}))
+	if rid.is_empty():
+		_set_status("Could not place a spine road")
+		return
+	_loader.call("subdivide_placement_zone", str(_picked_place["id"]))
+	_set_status("Spine road added — " + _zone_readout(str(_picked_place["id"])))
+	_refresh_place_readout()
+	_queue_overlay_redraw()
+
+
+func _flatten_picked_road() -> void:
+	if _picked_place["kind"] != "road" or _loader == null:
+		return
+	if bool(_loader.call("flatten_festival_road", str(_picked_place["id"]))):
+		_set_status("Road graded — Undo in the TERRAIN section takes it back")
+	else:
+		_set_status("Grading needs the hi-res detail patch")
+
+
+func _delete_picked_place() -> void:
+	if _loader == null:
+		return
+	var kind := str(_picked_place["kind"])
+	var info := _picked_place_info()
+	if info.is_empty() or not (kind == "road" or kind == "zone"):
+		return
+	_push_place_undo()
+	if kind == "road":
+		_loader.call("delete_festival_road", str(_picked_place["id"]))
+	else:
+		_loader.call("delete_placement_zone", str(_picked_place["id"]))
+	_set_status("Deleted %s" % str(info.get("name", kind)))
+	_clear_picked_place()
+	_refresh_place_readout()
+	_queue_overlay_redraw()
+
+
+func _cut_all_zones() -> void:
+	if _loader == null:
+		return
+	_push_place_undo()
+	var r: Dictionary = _loader.call("subdivide_all_placement_zones")
+	_set_status("Cut %d zones into %d lots" % [int(r.get("zones", 0)), int(r.get("lots", 0))])
+	_refresh_place_readout()
+	_queue_overlay_redraw()
+
+
+# --- Roster ------------------------------------------------------------------
+
+func _roster_entries() -> Array:
+	if _loader == null:
+		return []
+	var layer: Variant = _loader.get("placement")
+	if layer == null:
+		return []
+	return layer.get("roster")
+
+
+func _refresh_roster_options() -> void:
+	if _place_roster_opt == null or not is_instance_valid(_place_roster_opt):
+		return
+	_place_roster_opt.clear()
+	_place_roster_opt.add_item("— pick a camp —")
+	_place_roster_opt.set_item_metadata(0, "")
+	var placed: Dictionary = {}
+	var layer: Variant = _loader.get("placement") if _loader != null else null
+	if layer != null:
+		for l in layer.get("lots"):
+			placed[str(((l as Dictionary).get("assigned_camp", {}) as Dictionary).get("roster_id", ""))] = true
+	var sel := 0
+	for e in _roster_entries():
+		var d: Dictionary = e
+		var idx := _place_roster_opt.item_count
+		_place_roster_opt.add_item("%s%s (%s, %d)" % ["✓ " if placed.has(str(d["id"])) else "",
+			str(d.get("name", "")), str(d.get("size_class", "")), int(d.get("headcount", 0))])
+		_place_roster_opt.set_item_metadata(idx, str(d["id"]))
+		if str(d["id"]) == _place_roster_pick:
+			sel = idx
+	_place_roster_opt.select(sel)
+	if sel == 0:
+		_place_roster_pick = ""
+
+
+func _on_roster_selected(i: int) -> void:
+	_place_roster_pick = str(_place_roster_opt.get_item_metadata(i))
+	if _place_roster_pick.is_empty():
+		_set_status("Click an assigned lot to clear it")
+	else:
+		_set_status("Click a lot to give it to this camp")
+
+
+func _on_roster_name_submitted(_text: String) -> void:
+	_add_roster_from_bar()
+
+
+func _add_roster_from_bar() -> void:
+	if _loader == null or _place_name_edit == null:
+		return
+	var layer: Variant = _loader.get("placement")
+	if layer == null:
+		return
+	var nm := _place_name_edit.text.strip_edges()
+	if nm.is_empty():
+		_set_status("Type a camp name first")
+		return
+	var style := str(_state.placement_styles[0]) if not _state.placement_styles.is_empty() else "mixed"
+	var hc := int(round(_state.get_tool_param_value("fest_edit", "headcount")))
+	var id := str(layer.call("add_roster_entry", {"name": nm, "style": style,
+		"headcount": hc, "requirements": _state.placement_features.duplicate(),
+		"size_class": "M"}))
+	if id.is_empty():
+		_set_status("Roster is full")
+		return
+	_loader.call("_save_placement")
+	_place_name_edit.text = ""
+	_place_roster_pick = id
+	_refresh_roster_options()
+	_set_status("%s added to the roster — click a lot, or Auto-assign" % nm)
+
+
+func _auto_assign() -> void:
+	if _loader == null:
+		return
+	_push_place_undo()
+	var res: Dictionary = _loader.call("assign_placement", "")
+	var unplaced: Array = res.get("unplaced", [])
+	_set_status("Auto-assigned — %d camps unplaced%s" % [unplaced.size(),
+		"" if unplaced.is_empty() else ": " + str(res.get("warnings", [""])[0])])
+	_refresh_roster_options()
+	_refresh_place_readout()
+	_queue_overlay_redraw()
+
+
+func _clear_assignments() -> void:
+	if _loader == null:
+		return
+	var layer: Variant = _loader.get("placement")
+	if layer == null:
+		return
+	_push_place_undo()
+	var n := 0
+	for l in (layer.get("lots") as Array).duplicate():
+		var ac: Dictionary = (l as Dictionary).get("assigned_camp", {})
+		if not ac.is_empty() and not bool(ac.get("manual", false)):
+			_loader.call("clear_lot_assignment", str((l as Dictionary)["lot_id"]))
+			n += 1
+	_set_status("Cleared %d automatic assignments" % n)
+	_refresh_roster_options()
+	_refresh_place_readout()
+	_queue_overlay_redraw()
+
+
+# --- Overlay -----------------------------------------------------------------
+
+## Roads, zones and lots, drawn whenever a placement tool is up: lots coloured
+## by fairness (usable ÷ zone mean), assigned lots filled, locked lots marked,
+## and the picked lot's unusable cells hatched.
+func _draw_placement_overlay() -> void:
+	if _loader == null:
+		return
+	var layer: Variant = _loader.get("placement")
+	if layer == null:
+		return
+	var font := ThemeDB.fallback_font
+	for r in layer.get("roads"):
+		var rd: Dictionary = r
+		var pts := _project_poly(rd["points"])
+		if pts.size() >= 2:
+			var w := maxf(2.0, float(rd["half_width_m"]) * 2.0 * _px_per_m(rd["points"][0]))
+			_overlay.draw_polyline(pts, Color(ROAD_COLOR, 0.35), w, false)
+			_overlay.draw_polyline(pts, ROAD_COLOR, 1.5, true)
+	for z in layer.get("zones"):
+		var zd: Dictionary = z
+		var pts := _project_poly(zd["polygon"])
+		if pts.size() >= 3:
+			pts.append(pts[0])
+			_overlay.draw_polyline(pts, ZONE_COLOR, 1.5, true)
+	for l in layer.get("lots"):
+		var ld: Dictionary = l
+		var pts := _project_poly(ld["polygon"])
+		if pts.size() < 3:
+			continue
+		var fair := float(ld.get("fairness", 1.0))
+		var col := LOT_FAIR_GREEN
+		if absf(fair - 1.0) > 0.15:
+			col = LOT_FAIR_RED
+		elif absf(fair - 1.0) > 0.05:
+			col = LOT_FAIR_AMBER
+		var ac: Dictionary = ld.get("assigned_camp", {})
+		if not ac.is_empty() and not str(ac.get("roster_id", "")).is_empty():
+			_overlay.draw_colored_polygon(pts, Color(col, 0.15))
+		var ring := pts.duplicate()
+		ring.append(ring[0])
+		_overlay.draw_polyline(ring, col, 2.5 if bool(ld.get("locked", false)) else 1.2, true)
+		var label_at := _project_poly(PackedVector2Array([CampAreaLayer._inner_point(ld["polygon"])]))
+		if label_at.size() == 1:
+			var txt := str(ld.get("name", ""))
+			if not ac.is_empty():
+				txt += " " + str(ac.get("name", ""))
+			if bool(ld.get("locked", false)):
+				txt = "🔒 " + txt
+			_overlay.draw_string(font, label_at[0] + Vector2(-10, 4), txt,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, UITheme.FONT_XS, col)
+
+
+## Screen pixels per world metre near a world point (for road widths).
+func _px_per_m(world: Vector2) -> float:
+	var a := _project_poly(PackedVector2Array([world, world + Vector2(1.0, 0.0)]))
+	if a.size() != 2:
+		return 0.0
+	return a[0].distance_to(a[1])

@@ -124,6 +124,28 @@ const TEMPLATES := {
 	],
 }
 
+## How many people each household template SLEEPS — the placement tool's
+## headcount source (FestivalAssigner.people_per_m2). One line each:
+##   rv_site      3  an RV sleeps 2–4
+##   van_site     2  a van sleeps two
+##   car_tent     2  a car and a tent or two
+##   tent_cluster 4  four tents at 60–80 % presence round a canopy
+##   popup_pair   2  one per pop-up
+##   shade_site   3  a shade structure with two tents
+##   tarp_site    3  same under a tarp
+##   theme_camp   8  a 10 m shade array plus a dome and a yurt
+##   theme_rv     6  two RVs and a dome
+##   glamp_pair   2  one per shift pod
+##   glamp_lotus  2  a bell tent sleeps two
+##   glamp_yurt   2  a yurt sleeps two
+const PEOPLE_PER_TEMPLATE := {
+	"rv_site": 3, "van_site": 2, "car_tent": 2, "tent_cluster": 4, "popup_pair": 2,
+	"shade_site": 3, "tarp_site": 3, "theme_camp": 8, "theme_rv": 6,
+	"glamp_pair": 2, "glamp_lotus": 2, "glamp_yurt": 2,
+}
+## A player-added model ("m:<class>") as a household of one.
+const PEOPLE_PER_MODEL_TEMPLATE := 2
+
 ## cell_u x cell_v: one household's lattice cell (along x across the heading).
 ## rows_per_block rows sit back-to-back, then a lane `lane_w` wide.
 ## fill: chance a cell holds a household at all.

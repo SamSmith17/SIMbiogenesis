@@ -18,6 +18,7 @@ func _check(name: String, cond: bool, detail: String = "") -> void:
 
 func _init() -> void:
 	_test_space_types()
+	_test_festival_spaces()
 	_test_identity_and_readouts()
 	_test_registry_crud()
 	_test_registry_queries()
@@ -128,6 +129,108 @@ func _test_space_types() -> void:
 	for need in SpaceTypes.NEED_TO_SPACE:
 		_check("need %s maps to a valid space" % need,
 				SpaceTypes.is_valid(str(SpaceTypes.NEED_TO_SPACE[need])))
+
+
+# --- Festival venues: registry v2, programme, venue choice ------------------
+
+func _test_festival_spaces() -> void:
+	for t in SpaceTypes.ENRICHMENT_TYPES:
+		_check("enrichment type %s has a kind" % t, SpaceTypes.ENRICHMENT_KIND.has(t))
+		_check("enrichment type %s is a venue" % t, SpaceTypes.is_venue(str(t)))
+	_check("hunger can be served by a vendor too",
+		SpaceTypes.spaces_for_need("hunger") == ["kitchen", "vendor"])
+	_check("a bank of portapotties is still a restroom", SpaceTypes.is_valid("restroom")
+		and not SpaceTypes.is_venue("restroom"))
+
+	# Registry v2: new keys default in, programme round-trips, unknown types
+	# survive a load (an older build must never erase a festival venue).
+	var reg := SpaceRegistry.create_empty()
+	var stage_id := reg.set_space_type({"kind": "area", "poly": [[0, 0], [40, 0], [40, 40], [0, 40]]},
+		"stage", 800, "Bass Stage")
+	var rec := reg.find_by_id(stage_id)
+	_check("v2 defaults filled on a new record", int(rec.get("units", 0)) == 1
+		and absf(float(rec.get("draw", 0.0)) - SpaceRegistry.DEFAULT_DRAW) < 1e-6
+		and (rec.get("program", []) as Array).is_empty() and str(rec.get("graph_item_id", "x")).is_empty())
+	_check("set_space_fields patches the record", reg.set_space_fields(stage_id, {
+		"draw": 0.9, "units": 3, "graph_item_id": "tank_1",
+		"program": [{"start_h": 20.0, "end_h": 2.0, "draw": 1.0, "label": "Headliner", "load_w": 8000.0}]})
+		and int(reg.find_by_id(stage_id)["units"]) == 3
+		and (reg.find_by_id(stage_id)["program"] as Array).size() == 1)
+	var ser := reg.serialize()
+	ser["spaces"].append({"id": "sp_future", "space_type": "hovercraft_pad",
+		"target": {"kind": "area", "poly": [[0, 0], [1, 0], [1, 1]]}, "capacity": 2})
+	var back := SpaceRegistry.create_empty()
+	back.deserialize(JSON.parse_string(JSON.stringify(ser)))
+	_check("v2 round-trips through JSON", int(back.find_by_id(stage_id)["units"]) == 3
+		and absf(float(back.find_by_id(stage_id)["draw"]) - 0.9) < 1e-6
+		and str((back.find_by_id(stage_id)["program"] as Array)[0]["label"]) == "Headliner")
+	_check("an unknown space type is kept on load, not dropped",
+		not back.find_by_id("sp_future").is_empty())
+	_check("MAX_SPACES fits a festival", SpaceRegistry.MAX_SPACES >= 4000)
+
+	# Position cache: queries read it and never call the resolver.
+	var reg2 := SpaceRegistry.create_empty()
+	reg2.set_space_type(_prop_target("near"), "restroom", 4)
+	reg2.set_space_type(_prop_target("far"), "restroom", 4)
+	var positions := {"near": Vector2(10, 0), "far": Vector2(100, 0)}
+	var calls := [0]
+	var counting := func(space: Dictionary) -> Variant:
+		calls[0] += 1
+		return positions.get(str((space.get("target", {}) as Dictionary).get("prop_id", "")), null)
+	reg2.refresh_positions(counting)
+	var before := int(calls[0])
+	var got := reg2.nearest_space_by("restroom", Vector2.ZERO, counting)
+	_check("cached positions answer the query without the resolver",
+		str((got.get("target", {}) as Dictionary).get("prop_id", "")) == "near" and calls[0] == before)
+	_check("cached_position reads back", reg2.cached_position(str(got["id"])) == Vector2(10, 0))
+
+	# Programme: wrap past midnight, closed residual draw, no programme = open.
+	var stage := {"draw": 0.6, "program": FestivalProgram.normalize(
+		[{"start_h": 22.0, "end_h": 2.0, "draw": 1.0, "label": "Set"}])}
+	var at23 := FestivalProgram.state_at(stage, 23.0)
+	var at1 := FestivalProgram.state_at(stage, 1.0)
+	var at14 := FestivalProgram.state_at(stage, 14.0)
+	_check("a 22:00–02:00 set is on at 23:00 and 01:00", bool(at23["active"]) and bool(at1["active"])
+		and absf(float(at23["draw"]) - 1.0) < 1e-6 and absf(float(at1["ends_h"]) - 1.0) < 1e-6)
+	_check("the same set is off at 14:00 with a residual draw", not bool(at14["active"])
+		and absf(float(at14["draw"]) - FestivalProgram.CLOSED_DRAW * 0.6) < 1e-6)
+	var fire := {"draw": 0.5, "program": []}
+	_check("no programme = always open at the base draw",
+		bool(FestivalProgram.state_at(fire, 3.0)["active"])
+		and not bool(FestivalProgram.state_at(fire, 3.0)["programmed"]))
+	_check("next_slot finds the next start", absf(float(FestivalProgram.next_slot(stage, 14.0)["start_h"]) - 22.0) < 1e-6)
+	_check("slot text", FestivalProgram.slot_text(stage["program"][0]) == "22:00–02:00 Set")
+
+	# Venue choice: at set time a programmed stage out-pulls a fire circle
+	# for someone who likes music; off-hours the fire wins.
+	var taste := {"music": 0.9, "quiet": 0.2, "social": 0.5, "art": 0.3}
+	var fire_c := {"id": "sp_fire", "type": "fire_circle", "pos": Vector2(20, 0), "draw": 0.5,
+		"occupants": 0, "capacity": 20}
+	var stage_on := {"id": "sp_stage", "type": "stage", "pos": Vector2(80, 0), "draw": 1.0,
+		"occupants": 0, "capacity": 800}
+	var stage_off := stage_on.duplicate()
+	stage_off["draw"] = FestivalProgram.CLOSED_DRAW
+	_check("a headline set pulls past the nearer fire",
+		str(NpcVenueChoice.pick(taste, Vector2.ZERO, [fire_c, stage_on])["id"]) == "sp_stage")
+	_check("a dark stage loses to the fire",
+		str(NpcVenueChoice.pick(taste, Vector2.ZERO, [fire_c, stage_off])["id"]) == "sp_fire")
+	var full := stage_on.duplicate()
+	full["occupants"] = 800
+	_check("a full venue is never picked",
+		str(NpcVenueChoice.pick(taste, Vector2.ZERO, [fire_c, full])["id"]) == "sp_fire")
+	var quiet_taste := {"music": 0.1, "quiet": 0.9, "social": 0.3, "art": 0.3}
+	var temple := {"id": "sp_temple", "type": "temple", "pos": Vector2(80, 0), "draw": 0.8,
+		"occupants": 0, "capacity": 200}
+	_check("taste decides between equal venues",
+		str(NpcVenueChoice.pick(quiet_taste, Vector2.ZERO, [stage_on, temple])["id"]) == "sp_temple"
+		and str(NpcVenueChoice.pick(taste, Vector2.ZERO, [stage_on, temple])["id"]) == "sp_stage")
+	var t1 := NpcVenueChoice.taste_for("hab_npc_3")
+	var t2 := NpcVenueChoice.taste_for("hab_npc_3")
+	_check("taste is deterministic per id and in 0..1", t1 == t2
+		and float(t1["music"]) >= 0.0 and float(t1["music"]) <= 1.0)
+	_check("ties break on the venue id", str(NpcVenueChoice.pick(taste, Vector2.ZERO,
+		[{"id": "sp_b", "type": "stage", "pos": Vector2(50, 0), "draw": 1.0, "occupants": 0, "capacity": 9},
+		 {"id": "sp_a", "type": "stage", "pos": Vector2(50, 0), "draw": 1.0, "occupants": 0, "capacity": 9}])["id"]) == "sp_a")
 	for need in NpcAgent.NEEDS:
 		_check("need %s has an activity" % need, NpcAgent.ACTIVITIES.has(need))
 		_check("need %s has a rise rate" % need, NpcAgent.RISE_PER_H.has(need))
@@ -290,14 +393,19 @@ func _test_registry_persistence() -> void:
 	_check("round-trip fields", str((reg2.spaces[0] as Dictionary).get("label")) == "Portapotty row")
 	_check("occupancy not persisted", reg2.occupant_count(str((reg2.spaces[0] as Dictionary).get("id"))) == 0)
 
-	# Deserialize drops invalid space types (forward-compat with removed types).
+	# Deserialize KEEPS unknown space types (v2 contract: a build that does not
+	# know a festival venue must not erase it from the file on the next save);
+	# they are inert — no need or query names them — and v1 records gain the
+	# v2 defaults.
 	var bad := {"version": 1, "spaces": [
 		{"id": "sp_1", "space_type": "restroom", "target": {"kind": "prop", "prop_id": "x"}},
 		{"id": "sp_2", "space_type": "holodeck", "target": {"kind": "prop", "prop_id": "y"}},
 	]}
 	var reg3 := SpaceRegistry.create_empty()
 	reg3.deserialize(bad)
-	_check("invalid types dropped on load", reg3.spaces.size() == 1)
+	_check("unknown types kept on load, inert", reg3.spaces.size() == 2
+		and reg3.spaces_of_type("restroom").size() == 1
+		and int(reg3.find_by_id("sp_1").get("capacity", 0)) == SpaceRegistry.DEFAULT_CAPACITY)
 
 	# File round-trip through user:// (JSON path, real FileAccess).
 	var lat := -89.1234
@@ -4272,7 +4380,7 @@ func _test_space_tag_row() -> void:
 	_check("tag row accepts an area target", row.visible)
 
 	# Every taggable type must be offered, enrichment included.
-	_check("all space types are offered", SpaceTypes.TYPES.size() == 9,
+	_check("all space types are offered", SpaceTypes.TYPES.size() == 15,
 			"%d types" % SpaceTypes.TYPES.size())
 	for t in SpaceTypes.TYPES:
 		_check("type is valid: %s" % t, SpaceTypes.is_valid(str(t)))

@@ -19,7 +19,8 @@ extends Node
 
 ## Sections drawn in this order; anything not listed is appended alphabetically.
 const SECTION_ORDER: Array[String] = [
-	"graph_sim", "flow_engine", "conduits_3d", "world_env", "terrain_tick", "drone",
+	"graph_sim", "flow_engine", "npc_population", "npc_dots", "npc_host", "crowd_sim",
+	"crowd_render", "conduits_3d", "world_env", "terrain_tick", "drone",
 	"prop_ticks", "canvas_draw",
 ]
 
@@ -32,7 +33,7 @@ var _enabled: bool = false
 var _accum: Dictionary = {}
 ## section -> start usec of an open begin() (supports one open span per name).
 var _open: Dictionary = {}
-## section -> smoothed usec for display.
+## section -> smoothed MILLISECONDS for display (and snapshot()).
 var _display: Dictionary = {}
 ## section -> live per-frame call count, and its smoothed display value.
 var _calls: Dictionary = {}
@@ -63,7 +64,10 @@ func is_enabled() -> bool:
 func snapshot() -> Dictionary:
 	var sections := {}
 	for k in _display.keys():
-		sections[str(k)] = float(_display[k]) / 1000.0
+		# _display is already smoothed MILLISECONDS (see _process: _accum usec / 1000).
+		# It was divided by 1000 again here, so every crowdbench section median
+		# printed 1000x low (npc_host 0.22 ms while the F3 HUD read 220 ms).
+		sections[str(k)] = float(_display[k])
 	var calls := {}
 	for k in _calls_display.keys():
 		calls[str(k)] = float(_calls_display[k])

@@ -84,6 +84,18 @@ var _anchor_pos: Dictionary = {}   # agent_id -> Vector3 held while standing up
 ## Tick-to-tick interpolation state: agent_id -> {prev/next: Vector3 targets,
 ## at: wall time the dot last moved, interval: EMA of tick spacing, step_m}.
 var _interp: Dictionary = {}
+## HERO POOL (festival plan Phase 4): with more full-tier people than the
+## quality tier's `hero_max`, only the nearest that many keep an NpcAvatar;
+## the rest are handed to CrowdRenderer as segments. A roster at or under
+## the budget is all heroes (no distance test), so single-camp maps are
+## byte-identical. Membership has hysteresis so walking the boundary does
+## not thrash avatars in and out.
+const HERO_HYSTERESIS_M := 8.0
+const HERO_PUSH_S := 0.2
+var _crowd_renderer: Node = null
+var _hero_ids: Dictionary = {}
+var _hero_push_accum := 0.0
+var _crowd_prev: Dictionary = {}   # id -> {pos: Vector2, h: float}
 ## agent_id -> size of the carry group this frame (how many hands share the
 ## same carried prop) — feeds the heavy-lift posture flag.
 var _carry_group_of: Dictionary = {}
@@ -123,6 +135,21 @@ func setup(bridge, main: Node) -> void:
 func _process(delta: float) -> void:
 	if _bridge == null or _main == null or not is_instance_valid(_main):
 		return
+	# The avatar loop is the per-frame cost that scales with the roster (one
+	# NpcAvatar subtree per person today); the bench reads this section to prove
+	# a crowd renderer actually flattened it.
+	# "Draw nobody" hides the full-tier avatars too; the sim is untouched.
+	var draw := NpcDisplayPrefs.crowd_draw() != NpcDisplayPrefs.CROWD_NONE
+	if visible != draw:
+		visible = draw
+	if not draw:
+		return
+	PerfMonitor.begin("npc_host")
+	_process_avatars(delta)
+	PerfMonitor.end("npc_host")
+
+
+func _process_avatars(delta: float) -> void:
 	_now += delta
 	var dots: Array = _bridge.agent_dots()
 	var seen: Dictionary = {}
@@ -144,6 +171,13 @@ func _process(delta: float) -> void:
 		for aid1 in (carried[cp1] as Array):
 			carry_group_of[str(aid1)] = (carried[cp1] as Array).size()
 	_carry_group_of = carry_group_of
+	var heroes := _pick_heroes(dots, eye)
+	var crowd_entries: Array = []
+	var push_crowd := false
+	if _crowd_renderer != null and is_instance_valid(_crowd_renderer):
+		_hero_push_accum += delta
+		push_crowd = _hero_push_accum >= HERO_PUSH_S
+	var now_h := float(_main.call("get_absolute_hours")) if _main != null and _main.has_method("get_absolute_hours") else 0.0
 	for dot_v in dots:
 		if not (dot_v is Dictionary):
 			continue
@@ -151,7 +185,31 @@ func _process(delta: float) -> void:
 		var aid := str(dot.get("id", ""))
 		if aid.is_empty():
 			continue
+		# Light-tier people are drawn by CrowdRenderer (one MultiMesh), never
+		# as NpcAvatar subtrees — that is the whole point of the tier.
+		if str(dot.get("tier", "")) == "light":
+			continue
 		seen[aid] = true
+		if not heroes.has(aid):
+			# Beyond the hero budget: no NpcAvatar work at all this frame; the
+			# crowd renderer draws them from their last two tick positions.
+			var av0: NpcAvatar = _avatars.get(aid)
+			if av0 != null and av0.visible:
+				av0.visible = false
+				av0.set_process(false)
+			var sp0: Vector2 = dot.get("pos", Vector2.ZERO)
+			var pv: Dictionary = _crowd_prev.get(aid, {})
+			if pv.is_empty() or (sp0 - (pv["pos"] as Vector2)).length() > 0.001 or now_h - float(pv["h"]) > 1.0:
+				_crowd_prev[aid] = {"pos": sp0, "h": now_h, "from": pv.get("pos", sp0) if not pv.is_empty() else sp0,
+					"from_h": float(pv.get("h", now_h)) if not pv.is_empty() else now_h}
+			if push_crowd:
+				var rec: Dictionary = _crowd_prev[aid]
+				crowd_entries.append({"id": aid, "prev": rec.get("from", sp0), "next": sp0,
+					"t0": float(rec.get("from_h", now_h)), "t1": float(rec.get("h", now_h)),
+					"pose": _crowd_pose_for(dot), "yaw": float(dot.get("face_yaw", 0.0)),
+					"color": dot.get("color", Color.WHITE), "morale": float(dot.get("morale", 0.7))})
+			_last_pos[aid] = sp0
+			continue
 		var av: NpcAvatar = _avatars.get(aid)
 		if av == null:
 			av = NpcAvatar.new()
@@ -208,6 +266,9 @@ func _process(delta: float) -> void:
 			_pose_avatar(av, aid, dot, delta)
 		av.set_tag_visible(aid == _focus_id)
 	_apply_rig_budget(near)
+	if push_crowd:
+		_hero_push_accum = 0.0
+		_crowd_renderer.call("set_full_people", crowd_entries, now_h)
 	_follow_carried_props(carried)
 	_crew_marker_accum += delta
 	if _crew_marker_accum >= CREW_MARKER_REFRESH_S:
@@ -565,6 +626,10 @@ static func _task_text_of(dot: Dictionary) -> String:
 			"enrichment": text = "vibing"
 			"fire_circle": text = "at the fire"
 			"movement": text = "exercising"
+			"stage": text = "at the show"
+			"temple": text = "at the temple"
+			"center_camp": text = "at center camp"
+			"art": text = "looking at art"
 			"quiet": text = "resting"
 			"workshop_social": text = "socialising"
 			_: text = ""
@@ -858,3 +923,70 @@ func _dwell_left_s(dot: Dictionary) -> float:
 	if scale <= 0.0001:
 		return INF      # paused: no reason to rush
 	return maxf(ends_h - now_h, 0.0) / scale
+
+
+## The view hands over the CrowdRenderer so full-tier people past the hero
+## budget have somewhere to be drawn. Without one everybody is a hero.
+func set_crowd_renderer(cr: Node) -> void:
+	_crowd_renderer = cr
+
+
+func hero_budget() -> int:
+	var q := int(_main.get("graphics_quality")) if _main != null and _main.get("graphics_quality") != null \
+		else RenderProfile.QUALITY_HIGH
+	return int(RenderProfile.npc_profile(q).get("hero_max", 40))
+
+
+## Which full-tier ids keep an NpcAvatar this frame: everyone when the roster
+## fits the budget or there is no crowd renderer; else the nearest `hero_max`
+## to the viewer (current heroes get HERO_HYSTERESIS_M of grace; possessed
+## and focused people are always heroes).
+func _pick_heroes(dots: Array, eye: Vector2) -> Dictionary:
+	var full: Array = []
+	for dot_v in dots:
+		if dot_v is Dictionary and str((dot_v as Dictionary).get("tier", "")) != "light":
+			full.append(dot_v)
+	var budget := hero_budget()
+	var out: Dictionary = {}
+	if _crowd_renderer == null or not is_instance_valid(_crowd_renderer) or full.size() <= budget:
+		for d in full:
+			out[str((d as Dictionary).get("id", ""))] = true
+		_hero_ids = out
+		return out
+	var ranked: Array = []
+	for d in full:
+		var dd: Dictionary = d
+		var aid := str(dd.get("id", ""))
+		if bool(dd.get("possessed", false)) or aid == _focus_id:
+			out[aid] = true
+			continue
+		var dist := ((dd.get("pos", Vector2.ZERO) as Vector2) - eye).length()
+		if _hero_ids.has(aid):
+			dist -= HERO_HYSTERESIS_M
+		ranked.append([dist, aid])
+	ranked.sort_custom(func(a, b):
+		if is_equal_approx(float(a[0]), float(b[0])):
+			return str(a[1]) < str(b[1])
+		return float(a[0]) < float(b[0]))
+	for r in ranked:
+		if out.size() >= budget:
+			break
+		out[str(r[1])] = true
+	_hero_ids = out
+	return out
+
+
+## A crowd pose code for a full-tier dot (the cohort's own vocabulary).
+static func _crowd_pose_for(dot: Dictionary) -> int:
+	if int(dot.get("state", -1)) == NpcAgent.State.TRAVELING:
+		return CrowdCohort.POSE_WALK
+	var act := str(dot.get("activity", ""))
+	if act == "sleep":
+		return CrowdCohort.POSE_LIE
+	if act in ["eat", "bathroom", "rest", "hunger"]:
+		return CrowdCohort.POSE_SIT
+	if act == "chore" or act == "work" or not str(dot.get("work_pose", "")).is_empty():
+		return CrowdCohort.POSE_WORK
+	if act == "enrichment" or act == "social":
+		return CrowdCohort.POSE_DANCE
+	return CrowdCohort.POSE_STAND

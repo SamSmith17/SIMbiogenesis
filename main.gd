@@ -3985,6 +3985,12 @@ func _setup_toast_ui() -> void :
 		var badge : Control = load( "res://scenes/ui/hazard_badge_ui.gd" ).new()
 		badge.name = "HazardBadgeUI"
 		ui_layer.add_child( badge )
+	# Festival "Overall Vibe" chip — visible only while the graph carries
+	# festival camps (festival plan Phase 7); reads SystemGraphView.festival_vibe().
+	if ui_layer.get_node_or_null( "FestivalVibeChip" ) == null :
+		var vibe_chip : Control = load( "res://scenes/ui/festival_vibe_chip.gd" ).new()
+		vibe_chip.name = "FestivalVibeChip"
+		ui_layer.add_child( vibe_chip )
 
 
 ## Returns the ProjectionCanvas, instancing it under UILayer on maps that don't

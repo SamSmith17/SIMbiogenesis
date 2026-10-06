@@ -11306,6 +11306,38 @@ func _ensure_npc_host() -> void:
 		_npc_host = null
 
 
+## The light-tier crowd (CrowdRenderer): one MultiMesh for every person not
+## in the focused camp. Exists only while some camp is light.
+var _crowd_renderer: Node3D = null
+
+
+func _ensure_crowd_renderer() -> void:
+	# Wanted whenever anybody simulates: light camps draw through it, and so
+	# do full-tier people past the host's hero budget. Empty it costs nothing
+	# (instance_count 0, _process returns at once).
+	var wants := _npc_population != null and _npc_population.has_method("active") \
+		and bool(_npc_population.call("active"))
+	var alive := _crowd_renderer != null and is_instance_valid(_crowd_renderer)
+	if wants and not alive:
+		var main_node := _get_scene_main_node()
+		if main_node == null:
+			return
+		_crowd_renderer = CrowdRenderer.new()
+		_crowd_renderer.setup(_npc_population, main_node)
+		main_node.add_child(_crowd_renderer)
+		alive = true
+	elif not wants and alive:
+		_crowd_renderer.queue_free()
+		_crowd_renderer = null
+		alive = false
+	if _npc_host != null and is_instance_valid(_npc_host) and _npc_host.has_method("set_crowd_renderer"):
+		_npc_host.call("set_crowd_renderer", _crowd_renderer if alive else null)
+
+
+func crowd_renderer() -> Node3D:
+	return _crowd_renderer if (_crowd_renderer != null and is_instance_valid(_crowd_renderer)) else null
+
+
 ## Build or tear down the 3D desire drape. Lazily created on first enable, so
 ## a player who never turns it on pays nothing.
 func _ensure_desire_overlay() -> void:
@@ -11364,10 +11396,21 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 	if _npc_population == null:
 		_npc_population = NpcPopulationBridge.new()
 		_wire_npc_providers()
+	# Focus follows the player: the bridge promotes the camp the camera is in
+	# to the full engine and runs every other camp as a light crowd.
+	var focus_cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+	if focus_cam != null:
+		_npc_population.set_viewer(Vector2(focus_cam.global_position.x, focus_cam.global_position.z))
 	PerfMonitor.begin("npc_population")
 	_npc_population.tick(model, _resource_flow, _get_scene_main_node())
 	PerfMonitor.end("npc_population")
 	_ensure_npc_host()
+	_ensure_crowd_renderer()
+	if _crowd_renderer != null and is_instance_valid(_crowd_renderer):
+		PerfMonitor.begin("crowd_render")
+		_crowd_renderer.sync(_npc_population.last_abs_h())
+		PerfMonitor.end("crowd_render")
+	_tick_camp_power(_npc_population.last_abs_h())
 	_ensure_feed_strip()
 	if _desire_3d_on:
 		_ensure_desire_overlay()
@@ -11481,6 +11524,7 @@ func _process(delta: float) -> void:
 		_closure_refresh_acc = 0.0
 		PerfMonitor.begin("gv_closure")
 		_refresh_closure_telemetry()
+		_refresh_camp_cards()
 		PerfMonitor.end("gv_closure")
 	# end_bulk_sync flushes the coalesced load-state sync, which may itself write
 	# update_item. Run it BEFORE clearing the bulk/history flags so those writes
@@ -15839,3 +15883,283 @@ func _tick_graph_pbis(delta: float) -> void:
 			specs["is_active"] = active_a
 			model.update_item(iid, {"specs": specs})
 			continue
+
+
+# ---------------------------------------------------------------------------
+# Festival camps as super-nodes (plan Phase 5). Every ASSIGNED placement lot
+# gets one compound stamped from CampTemplates, keyed by `specs.camp_lot_id`
+# — idempotent like add_imported_solar_panels' array_tag. The loader calls
+# this after placement changes; a lot that disappears takes its camp with it.
+# ---------------------------------------------------------------------------
+
+## lots: FestivalPlacementLayer lot records with an assigned_camp. Returns
+## {"added": n, "updated": n, "removed": n}.
+func sync_camps_from_placement(lots: Array) -> Dictionary:
+	var out := {"added": 0, "updated": 0, "removed": 0}
+	if model == null:
+		return out
+	var want: Dictionary = {}   # lot_id -> lot
+	for l in lots:
+		if not (l is Dictionary):
+			continue
+		var lot: Dictionary = l
+		var ac: Dictionary = lot.get("assigned_camp", {})
+		if ac.is_empty() or str(lot.get("lot_id", "")).is_empty():
+			continue
+		want[str(lot["lot_id"])] = lot
+	# Existing camp compounds at root, by lot.
+	var have: Dictionary = {}
+	for it in model.get_items_in_scope("root"):
+		var d: Dictionary = it
+		var specs: Dictionary = d.get("specs", {})
+		if str(d.get("type", "")) == "compound" and specs.has("camp_lot_id"):
+			have[str(specs["camp_lot_id"])] = str(d.get("id", ""))
+	_sim_bulk_update = true
+	_history_suppress = true
+	for lot_id in have.keys():
+		if not want.has(lot_id):
+			model.remove_item(str(have[lot_id]))
+			out["removed"] = int(out["removed"]) + 1
+	var col := 0
+	for lot_id in want.keys():
+		var lot: Dictionary = want[lot_id]
+		var ac: Dictionary = lot["assigned_camp"]
+		var n := maxi(int(ac.get("headcount", 0)), 1)
+		var style := str(ac.get("style", "mixed"))
+		var poly: PackedVector2Array = lot.get("polygon", PackedVector2Array())
+		var centre := CampAreaLayer._inner_point(poly) if poly.size() >= 3 else Vector2.ZERO
+		var name := str(ac.get("name", lot.get("name", "Camp")))
+		if have.has(lot_id):
+			var cid := str(have[lot_id])
+			var comp: Dictionary = model.get_item(cid)
+			var cspecs: Dictionary = (comp.get("specs", {}) as Dictionary).duplicate(true)
+			var changed := int(cspecs.get("camp_headcount", -1)) != n or str(cspecs.get("name", "")) != name
+			cspecs["camp_headcount"] = n
+			cspecs["name"] = name
+			cspecs["site_x_m"] = centre.x
+			cspecs["site_z_m"] = centre.y
+			model.update_item(cid, {"specs": cspecs})
+			_sync_camp_habitat(cid, n, centre)
+			if changed:
+				out["updated"] = int(out["updated"]) + 1
+			continue
+		var def := CampTemplates.definition(style, n)
+		model.put_definition(def)
+		var pos := Vector2(-600.0 + 260.0 * float(col % 6), 700.0 + 220.0 * float(col / 6))
+		col += 1
+		var power := CampPowerModel.defaults_for(style)
+		var cid2 := GraphComponentDefs.realize(model, str(def["id"]), "root", pos, {
+			"camp_lot_id": lot_id, "camp_headcount": n, "name": name,
+			"site_x_m": centre.x, "site_z_m": centre.y,
+			"node_banner": false,
+			"pv_wp": float(power["pv_wp"]), "battery_kwh": float(power["battery_kwh"]),
+			"inverter_w": float(power["inverter_w"]), "base_load_w": float(power["base_load_w"]),
+		})
+		if cid2.is_empty():
+			continue
+		GraphComponentDefs.make_unique(model, cid2)
+		_sync_camp_habitat(cid2, n, centre)
+		out["added"] = int(out["added"]) + 1
+	_sim_bulk_update = false
+	_history_suppress = false
+	if int(out["added"]) + int(out["updated"]) + int(out["removed"]) > 0:
+		_on_model_changed("camps_synced")
+	return out
+
+
+## The camp's habitat carries the headcount and the lot centre (its people's
+## home) — instance state the template cannot know.
+func _sync_camp_habitat(comp_id: String, n: int, centre: Vector2) -> void:
+	var comp: Dictionary = model.get_item(comp_id)
+	var scope := str(comp.get("child_scope_id", ""))
+	for it in model.get_items_in_scope(scope):
+		var d: Dictionary = it
+		var specs: Dictionary = d.get("specs", {})
+		if str(specs.get("role", "")) != "habitat":
+			continue
+		var patched: Dictionary = specs.duplicate(true)
+		patched["occupants"] = n
+		patched["pop_driven"] = true
+		patched["home_x"] = centre.x
+		patched["home_z"] = centre.y
+		patched["site_x_m"] = centre.x
+		patched["site_z_m"] = centre.y
+		model.update_item(str(d.get("id", "")), {"specs": patched})
+		return
+
+
+## Every festival camp compound: [{id, lot_id, name, headcount, scope}].
+func festival_camps() -> Array:
+	var out: Array = []
+	if model == null:
+		return out
+	for it in model.get_items_in_scope("root"):
+		var d: Dictionary = it
+		var specs: Dictionary = d.get("specs", {})
+		if str(d.get("type", "")) == "compound" and specs.has("camp_lot_id"):
+			out.append({"id": str(d.get("id", "")), "lot_id": str(specs["camp_lot_id"]),
+				"name": str(specs.get("name", "")), "headcount": int(specs.get("camp_headcount", 0)),
+				"scope": str(d.get("child_scope_id", ""))})
+	return out
+
+
+## Stamp what the camp card draws onto each camp compound — its open loops
+## (CampLedger) and its people's morale (the bridge) — once a second, inside
+## the bulk/history-suppressed window, so the canvas never walks the model.
+func _refresh_camp_cards() -> void:
+	if model == null:
+		return
+	var camps := festival_camps()
+	if camps.is_empty():
+		if not _festival_vibe.is_empty():
+			_festival_vibe = {}
+			_vibe_tracker.clear()
+		return
+	var summaries: Array = []
+	var queueing := 0
+	for c in camps:
+		var cid := str(c["id"])
+		var comp: Dictionary = model.get_item(cid)
+		if comp.is_empty():
+			continue
+		var specs: Dictionary = comp.get("specs", {})
+		var open := CampLedger.open_kinds(model, cid)
+		var morale := -1.0
+		var present := int(specs.get("camp_headcount", 0))
+		if _npc_population != null:
+			for it in model.get_items_in_scope(str(c["scope"])):
+				var d: Dictionary = it
+				if str((d.get("specs", {}) as Dictionary).get("role", "")) != "habitat":
+					continue
+				var summ: Dictionary = _npc_population.summary_for(str(d.get("id", "")))
+				if not summ.is_empty():
+					morale = float(summ.get("mean_morale", -1.0))
+					present = int(summ.get("count", present))
+					summaries.append(summ)
+					for a in (summ.get("activities", {}) as Dictionary):
+						if str(a).begins_with("queue"):
+							queueing += int((summ["activities"] as Dictionary)[a])
+				break
+		var same := (specs.get("camp_open", []) as Array) == open \
+			and absf(float(specs.get("camp_morale", -2.0)) - morale) < 0.005 \
+			and int(specs.get("camp_present", -1)) == present
+		if same:
+			continue
+		var patched: Dictionary = specs.duplicate(true)
+		patched["camp_open"] = open
+		patched["camp_morale"] = snappedf(morale, 0.01)
+		patched["camp_present"] = present
+		model.update_item(cid, {"specs": patched})
+	_refresh_festival_vibe_from(summaries, queueing)
+
+
+# ---------------------------------------------------------------------------
+# Simplified per-camp energy (plan Phase 6): every camp compound carries
+# pv_wp / battery_kwh / inverter_w / base_load_w; its SOC lives here and is
+# written onto the compound (camp_soc, camp_pv_kw, camp_load_kw, camp_ac,
+# camp_hours_left) at most twice a sim-hour — the pop_state cadence — plus on
+# every 1 % move of the displayed SOC. The yield is SolarUI's own evaluate_
+# solar_at over its nameplate, so camps see the player's sun and weather.
+# ---------------------------------------------------------------------------
+
+var _camp_power: Dictionary = {}       # comp_id -> CampPowerModel state
+var _camp_power_last_h := NAN
+var _camp_power_written: Dictionary = {}   # comp_id -> {soc, h}
+const _CAMP_POWER_PERSIST_H := 0.5
+
+
+func _site_pv_yield(abs_h: float) -> float:
+	var root := get_tree().root if get_tree() != null else null
+	var sui: Node = root.find_child("SolarUI", true, false) if root != null else null
+	if sui == null or not sui.has_method("evaluate_solar_at"):
+		return 0.0
+	var peak := float(sui.get("PEAK_CAPACITY_KW")) if sui.get("PEAK_CAPACITY_KW") != null else 0.0
+	if peak <= 1e-6:
+		return 0.0
+	return maxf(float(sui.call("evaluate_solar_at", abs_h)), 0.0) / peak
+
+
+func _tick_camp_power(abs_h: float) -> void:
+	if model == null or is_nan(abs_h):
+		return
+	var camps := festival_camps()
+	if camps.is_empty():
+		if not _camp_power.is_empty():
+			_camp_power = {}
+			if _resource_flow != null and _resource_flow.has_method("clear_scope_ac_available"):
+				_resource_flow.call("clear_scope_ac_available")
+		_camp_power_last_h = abs_h
+		return
+	if is_nan(_camp_power_last_h):
+		_camp_power_last_h = abs_h
+		return
+	var dt := abs_h - _camp_power_last_h
+	_camp_power_last_h = abs_h
+	if dt <= 0.0 or dt > 6.0:
+		return   # scrub-back or a jump: hold (the SOC is a forward integrator)
+	var yield_kw := _site_pv_yield(abs_h)
+	var hour := fposmod(abs_h, 24.0)
+	var seen: Dictionary = {}
+	for c in camps:
+		var cid := str(c["id"])
+		seen[cid] = true
+		var comp: Dictionary = model.get_item(cid)
+		var specs: Dictionary = comp.get("specs", {})
+		var spec := {"pv_wp": float(specs.get("pv_wp", 0.0)), "battery_kwh": float(specs.get("battery_kwh", 0.0)),
+			"inverter_w": float(specs.get("inverter_w", 0.0)), "base_load_w": float(specs.get("base_load_w", 0.0))}
+		var st: Dictionary = _camp_power.get(cid, {})
+		if st.is_empty():
+			st = CampPowerModel.make_state(spec, float(specs.get("camp_soc", 0.8)))
+			_camp_power[cid] = st
+		var n := int(specs.get("camp_present", specs.get("camp_headcount", 0)))
+		CampPowerModel.step(spec, st, n, hour, yield_kw, dt)
+		if _resource_flow != null and _resource_flow.has_method("set_scope_ac_available"):
+			_resource_flow.call("set_scope_ac_available", str(c["scope"]), bool(st["ac_available"]))
+		var soc := CampPowerModel.soc_frac(spec, st)
+		var last: Dictionary = _camp_power_written.get(cid, {})
+		var due := last.is_empty() or absf(abs_h - float(last.get("h", -INF))) >= _CAMP_POWER_PERSIST_H \
+			or absf(soc - float(last.get("soc", -1.0))) >= 0.01 \
+			or bool(specs.get("camp_ac", true)) != bool(st["ac_available"])
+		if not due:
+			continue
+		_camp_power_written[cid] = {"soc": soc, "h": abs_h}
+		var patched: Dictionary = specs.duplicate(true)
+		patched["camp_soc"] = snappedf(soc, 0.01)
+		patched["camp_pv_kw"] = snappedf(float(st["pv_kw"]), 0.01)
+		patched["camp_load_kw"] = snappedf(float(st["load_kw"]), 0.01)
+		patched["camp_ac"] = bool(st["ac_available"])
+		patched["camp_hours_left"] = snappedf(minf(float(st["hours_left"]), 999.0), 0.1)
+		model.update_item(cid, {"specs": patched})
+	for cid in _camp_power.keys():
+		if not seen.has(cid):
+			_camp_power.erase(cid)
+			_camp_power_written.erase(cid)
+
+
+## The per-camp power states (the dashboard / harness read them).
+func camp_power_states() -> Dictionary:
+	return _camp_power
+
+
+# ---------------------------------------------------------------------------
+# Festival vibe (plan Phase 7): one FestivalVibe over every camp's summary,
+# refreshed with the camp cards (once a second) and READ by the chip, the
+# settlement HUD and the dashboard — none of them walk the model.
+# ---------------------------------------------------------------------------
+
+var _festival_vibe: Dictionary = {}
+var _vibe_tracker := FestivalVibe.new()
+
+
+func _refresh_festival_vibe_from(summaries: Array, queueing: int) -> void:
+	var v := FestivalVibe.compute(summaries, queueing)
+	var abs_h := float(_npc_population.last_abs_h()) if _npc_population != null and _npc_population.has_method("last_abs_h") else NAN
+	var trend := _vibe_tracker.sample(abs_h, float(v["score"])) if not is_nan(abs_h) else 0.0
+	v["trend"] = trend
+	v["headline"] = FestivalVibe.headline(v, trend)
+	_festival_vibe = v
+
+
+## The festival-wide vibe ({} when the map has no festival camps).
+func festival_vibe() -> Dictionary:
+	return _festival_vibe

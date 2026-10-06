@@ -18,6 +18,8 @@ extends RefCounted
 
 const MAX_RADIUS_M := 150.0
 const MAX_AREA_M2 := 90000.0
+## A festival road longer than this is almost certainly a misclick chain.
+const MAX_PATH_LEN_M := 2000.0
 ## Minimum pointer travel between lasso samples. Sampling every motion event
 ## makes a polygon with thousands of near-duplicate vertices.
 const LASSO_SAMPLE_PX := 8.0
@@ -86,6 +88,11 @@ func begin(world: Vector2, screen: Vector2, close_tol_m: float = 3.0) -> int:
 			if _poly_points.size() >= 3 \
 					and world.distance_to(_poly_points[0]) < maxf(close_tol_m, 1.0):
 				return POLY_CLOSED
+			_poly_points.append(world)
+			return POLY_POINT
+		"path":
+			# An OPEN polyline (a festival road): every click is a bend, it never
+			# closes on its first vertex, and Enter finishes it (finish_polygon).
 			_poly_points.append(world)
 			return POLY_POINT
 	return NONE
@@ -177,4 +184,16 @@ static func rejection_reason(poly: PackedVector2Array) -> String:
 		return "Selection too small — draw again"
 	if VegetationPaint.polygon_area(poly) > MAX_AREA_M2:
 		return "Area too large — shrink the selection"
+	return ""
+
+
+## Same for an open path (the "path" mode): "" when it can be a road.
+static func path_rejection_reason(pts: PackedVector2Array) -> String:
+	if pts.size() < 2:
+		return "Road needs two points — click the far end"
+	var total := 0.0
+	for i in range(pts.size() - 1):
+		total += pts[i].distance_to(pts[i + 1])
+	if total > MAX_PATH_LEN_M:
+		return "Road too long — split it into two"
 	return ""

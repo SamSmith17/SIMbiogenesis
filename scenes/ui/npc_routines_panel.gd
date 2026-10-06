@@ -1567,7 +1567,8 @@ const SLOT_LABELS: Dictionary = {
 	"hygiene": "Washing", "thirst": "Drinking", "chore": "Working",
 	"idle": "Standing around", "fire_circle": "Fire circle",
 	"movement": "Movement / yoga", "quiet": "Quiet space",
-	"workshop_social": "Workshop / social",
+	"workshop_social": "Workshop / social", "stage": "At a show",
+	"temple": "At the temple", "center_camp": "Center camp", "art": "At an art piece",
 }
 
 

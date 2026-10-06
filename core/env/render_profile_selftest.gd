@@ -30,6 +30,7 @@ func _initialize() -> void:
 	_test_render_scale_roundtrip()
 	_test_veg_profiles()
 	_test_veg_monotonic()
+	_test_npc_profiles()
 	if _fails == 0:
 		print("RENDER PROFILE SELFTEST PASS  (%d checks)" % _checks)
 	else:
@@ -230,3 +231,21 @@ func _test_veg_monotonic() -> void:
 			_check("large-map %s <= normal at q%d" % [k, q],
 				float(l[k]) <= float(s[k]),
 				"%s > %s" % [str(l[k]), str(s[k])])
+
+
+func _test_npc_profiles() -> void:
+	var tiers := [RenderProfile.QUALITY_LOW, RenderProfile.QUALITY_MEDIUM,
+		RenderProfile.QUALITY_HIGH, RenderProfile.QUALITY_ULTRA]
+	var prev: Dictionary = {}
+	for q in tiers:
+		var p := RenderProfile.npc_profile(q)
+		for k in ["hero_max", "hero_dist_m", "figure_dist_m", "card_dist_m", "crowd_lod_m"]:
+			_check("npc_profile(%d) has %s" % [q, k], p.has(k))
+		if not prev.is_empty():
+			_check("npc hero_max grows with quality (%d)" % q, int(p["hero_max"]) > int(prev["hero_max"]))
+			_check("npc figure_dist grows with quality (%d)" % q, float(p["figure_dist_m"]) > float(prev["figure_dist_m"]))
+		prev = p
+	_check("npc_profile unknown falls back to High",
+		RenderProfile.npc_profile(99) == RenderProfile.npc_profile(RenderProfile.QUALITY_HIGH))
+	_check("High hero budget is 40 (the pinned default)",
+		int(RenderProfile.npc_profile(RenderProfile.QUALITY_HIGH)["hero_max"]) == 40)

@@ -132,6 +132,75 @@ Godot.exe.exe --headless --path . --script scenes/ui/toolbar/toolbar_selftest.gd
 # two, file round-trip of every record key, the Plots subdivider, and
 # CampAreaRuntime's per-camp nodes. Carries EXPECTED_CHECKS; --import first:
 Godot.exe.exe --headless --path . --script core/camps/camp_area_selftest.gd
+# Festival placement (offline — core/camps/festival_*): the usable-ground
+# raster (slope + exclusions + holes + locked lots), the equal-USABLE-area lot
+# partition along a road (count + area modes, cross lanes, curved road, double-
+# loaded block, corner lots, grow-stability in area mode, id inheritance by
+# overlap, locked lots never move, no-road lattice fallback), the roster
+# assigner (largest-first best-fit, features/styles honoured, manual pins
+# untouched, deterministic) incl. the people-per-m² derived from the camp
+# templates, the placement layer's file round-trip, the road helpers, the
+# festival-road heading preference, and TerrainSculptOps.level_polyline.
+# Carries EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/camps/festival_placement_selftest.gd
+# Light population tier (offline — CrowdCohort / CrowdFocus / NpcTierConvert):
+# determinism (two 40-person 2-day runs trace-identical), mass-exact billing
+# at two cadences, a daily loop, the EQUIVALENCE property (one 24-person camp
+# run 3 days FULL vs LIGHT: water/food within 6 %, morale within 0.08 and one
+# band), queues at a full space, venue billing to a bound tank, scrub-back /
+# catch-up contracts, the compact snapshot round-trip, tier conversion both
+# ways, the focus policy incl. hysteresis, the departure cascade, and a
+# 2000-person day bounded in time. Carries EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/population/crowd_cohort_selftest.gd
+# Festival camps on the graph (offline — CampTemplates stamped through
+# GraphComponentDefs + make_unique, five promoted boundary ports, CampLedger's
+# closed/importing/surplus/open classification, live demand overrides, wired
+# ports leaving the badge, the festival sum). Carries EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script system_graph/camp_ledger_selftest.gd
+# Simplified per-camp energy (offline — CampPowerModel: the style defaults,
+# the night-lighting load term + inverter cap, charge/drain through the SAME
+# EnergyTimeline.step_soc the player's battery uses, the floor + unserved
+# load, two camps stepping independently, the daily balance):
+Godot.exe.exe --headless --path . --script core/power/camp_power_selftest.gd
+# Festival vibe (offline — FestivalVibe over per-camp summaries: headcount
+# weighting, histogram sum, blocked share from CRITICAL needs only,
+# component ordering, the headline, the 24 h trend ring incl. scrub reset):
+Godot.exe.exe --headless --path . --script core/population/festival_vibe_selftest.gd
+# Festival-scale crowd BENCH (WINDOWED): seeds --count=N people as
+# ceil(N/100) pop-driven habitats + shared spaces, runs ~450x with the graph
+# closed, and prints median fps / frame / render CPU+GPU ms, the per-section
+# cost (npc_population / npc_dots / npc_host / crowd_render / flow_engine),
+# draw calls and node count, a GPU probe of whether MultiMesh INSTANCE_CUSTOM
+# / COLOR survive at float32 (Forward+ here: both float32), the first slots'
+# heights against the ground raycast, and four PNGs aimed at the BUSIEST
+# 10 m cell of people (the centroid of a crowd spread over six spaces is the
+# empty middle of the field — the first shots looked at nobody). Runs on the
+# soak map or any user map (`--user-map=walton` is the festival target site;
+# the soak map is GPU-bound on its own at ~70 ms, so read deltas there).
+# ⚠ PerfMonitor.snapshot() used to divide the section ms by 1000 a second
+# time, so every bench median before 2026-10-06 printed 1000x low — the F3
+# HUD was right (npc_host ≈ 220 ms for 100 NpcAvatars, ~2 ms per figure):
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=crowdbench --count=1000 --shots-dir=<label> --quit-after-capture
+# Crowd renderer studio diagnostic (WINDOWED, not a selftest): three crowd
+# figures in an empty grey studio rendered FIVE ways — plain material with
+# cull_back / cull_disabled, crowd_figure.gdshader as shipped / with culling
+# patched off, and the card shader — counting the pixels each puts on screen
+# and saving user://crowd_diag_<variant>.png. Separates "the shader is wrong"
+# from "the mesh is wound inside out" from "the game is gating it":
+Godot.exe.exe --path . --windowed --resolution 640x480 --script core/population/crowd_render_diag.gd
+# Festival end to end on Walton (WINDOWED, needs a TerrainLoader map): road +
+# zone cut into ~24 assigned lots → one camp compound per lot (habitat,
+# tanks, power model) → venues with a 20:00–02:00 stage set, temple, center
+# camp, two portapotty banks + a water station BOUND to graph tanks → one
+# sim-day at 720x with the graph CLOSED → cut the water → the settlement
+# view's five zoom stops over the crowd. Asserts what a PNG cannot: stage
+# occupancy inside vs outside the set, L/person/day off the camps' own water
+# stores, blackwater landing on BOTH bound tanks, both tiers running, every
+# camp with a power state, the ledger's headcount, the vibe falling and
+# naming thirst, per-stop ms + draw calls. --count=N scales the headcounts.
+# Snapshots and byte-restores camp / placement / spaces files + the graph
+# autosave; strips its cap_fest_* items and the camp compounds:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=festival --shots-dir=<label> --quit-after-capture
 # Legacy street-following camp generator (offline — BrcCampGenerator, still what
 # auto-generate-on-load and the Shift+C dock use; CampMeshLibrary borrows its
 # mesh builders, so this must keep passing):
@@ -152,8 +221,11 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # the bottom quarter of the WORLD box, the front climbs monotonically to the
 # top, flames emit from surface points, the char overlay follows the front, a
 # sprayed fire holds, the structure goes black then is eaten away, and a restore
-# removes both. Headless has no renderer, so the two shaders are only proven by
-# running the game:
+# removes both. Then the end of the fire: at 75 % consumed it collapses into a
+# FireAshPile on its base footprint (no flame left up where it stood), a
+# one-shot whoosh fires on landing, and the pile burns down bonfire -> embers
+# -> black -> ash on SIM time, outliving the fire node. Headless has no
+# renderer, so the three shaders are only proven by running the game:
 Godot.exe.exe --headless --path . --script crisis_events/fire/fire_burn_selftest.gd
 
 # Night-sky star field self-test (offline — core/astronomy/): StarSkyMath's
@@ -1837,6 +1909,308 @@ real outline, seed and heading). The preview runs the REAL
 map's camp file. ⚠ A run that is KILLED mid-way (or dies on a script error)
 never reaches the restore and leaves its test camps in the map's
 `camp_areas_*.json` — delete that file if a run did not finish.
+
+**Festival placement (`core/camps/festival_*`) — the toolbar's PLACEMENT
+section (Road / Zone / Lots / Assign / Edit).** Phase 1 of the festival-scale
+plan (`~/.claude/plans/we-already-have-the-federated-brooks.md`). Regionals
+allocate theme-camp ZONES along festival ROADS (rarely OSM roads), cut them
+into LOTS of equal area despite slope and irregular outlines, and hand lots to
+camps by size class and requirements. This tool recreates real layouts and
+plans new ones; its lots are what the later phases populate.
+- **One file, four record kinds** (`FestivalPlacementLayer`,
+  `user://maps/festival_placement_<lat>_<lon>.json`): roads, zones, lots,
+  roster — they reference each other by id, so one snapshot is one undo entry
+  (the placement undo snapshots the CAMP layer too). NOT `kind:"zone"` records
+  in CampAreaLayer: its `paint` carves every record a stroke crosses and its
+  runtime would fill a zone with households.
+- **Lots ARE camp records.** `_sync_lot_camps` mirrors each lot into one
+  CampAreaLayer record (`group_id` = the zone, `heading_auto: false`, name /
+  style from the assignment) through the same path the Plots tool used, so
+  `CampLayoutGenerator` fills them unchanged (a `group_id` record fits the
+  lattice to its own extent — trapezoid lots just work). `camp_area_id` on
+  the lot is the link; records of a zone no lot points at are removed.
+- **Fair = equal USABLE area.** `FestivalUsableRaster` (1–2 m cells,
+  synchronous, ≤ 22 500 cells for a 90 000 m² zone) marks each cell inside /
+  unusable (slope over the limit, or excluded: buildings, water, OSM roads
+  AND festival road corridors — the corridors are fed to
+  `VegExclusionBuilder.build_all` as plain road dicts) / usable; holes and
+  LOCKED lots are not ground at all. `FestivalLotPartition`: per road (zone
+  priority order) and side, usable cells in the band `[half_w, half_w+depth]`
+  bin their area along arc length `s` → `cum(s)`; cuts at equal increments of
+  `cum` (cross lane every K lots or D metres, second pass re-targets with the
+  lane area removed); each `[s_a, s_b]` becomes a ribbon between the offset
+  curves at `half_w + 0.3` and `half_w + depth`, clipped to the zone minus
+  holes / locked lots / earlier roads' lots; slivers and lots under
+  `front_min_m` fold into the smaller neighbour; names `A1…` with the block
+  letter = road × side. The lot over blocked ground is WIDER — equal usable,
+  unequal raw. `equalise: raw` ignores slope and exclusions (holes still bind).
+  `target_n` is the ZONE's count, split across road sides by usable share
+  (largest remainder, so the total lands on N); a side whose band is under
+  0.3 of a lot or averages shallower than 0.35 × depth is SKIPPED — the first
+  real-terrain run cut the 2 m strip between an inset road and the zone edge
+  into eight 18 m² "lots" because each side used to get N of its own.
+- **Grow-stability has two mechanisms.** In `area` mode the cuts march from
+  the road's own s = 0, so extending a zone along its road appends lots and
+  moves none (bit-identical, selftest-pinned). In `count` mode cuts must
+  rebalance, so ids survive by overlap matching (IoU ≥ 0.5 against
+  `prior_lots`, same road + side), carrying the assignment and the camp
+  record with them. A LOCKED lot is subtracted before anything is cut and
+  re-emitted untouched. Extending a zone at the START of its road shifts
+  every cut — documented, not solved.
+- **No road in reach** (`_zone_roads_auto`: corridors within `depth_m` of
+  the outline, nearest first) → the old rectangular `CampSubdivider` lattice,
+  measured like the rest, `road_id ""` and a warning; draw a Road, then
+  Re-cut. The CAMPS Plots tool is untouched.
+- **Headcounts are derived, not guessed**: `CampStyles.PEOPLE_PER_TEMPLATE`
+  (how many each household sleeps) → `FestivalAssigner.people_per_m2(style)`
+  = fill × weighted mean people per household ÷ lattice cell (`mixed` ≈ 0.027
+  p/m² ≈ 37 m²/person, `theme_camp` ≈ 0.024). The assigner is largest-first
+  best-fit (`usable ≥ 0.85 × requested`, features ⊇ requirements, style
+  allowed by the zone, adjacency preference within 15 % of best fit), never
+  touches `manual` assignments, and is deterministic.
+- **Heading** now resolves festival road within 60 m → OSM road within 40 m →
+  longest edge (`TerrainLoader._resolve_camp_heading`, replacing the three
+  `resolve_heading(poly, get_osm_roads())` sites; `nearest_road_dir` was
+  split out of `resolve_heading`, whose behaviour is unchanged).
+- **Flatten** grades a road's corridor on the EDIT layer
+  (`TerrainSculptOps.level_polyline`: smoothed centreline profile, feathered
+  shoulder, absolute op) as ONE terrain undo entry — the TERRAIN section's
+  Undo takes it back, not the placement Undo.
+- Toolbar: `ShapeGestureController` gained a `"path"` mode (open polyline,
+  never closes on its first vertex, Enter finishes via `finish_polygon`,
+  `path_rejection_reason`); `EditToolbarState` carries the shared placement
+  identity (allowed style mix, features, surface, equalise, cut-now) with
+  `PLACEMENT_SURFACES` / `PLACEMENT_FEATURES` as LITERAL copies of the layer's
+  tables (selftest-pinned). The overlay draws roads, zones and lots coloured
+  by fairness (±5 % green / ±15 % amber / red), assigned lots filled, locked
+  lots bold. `--capture=camps` step 10 cuts a real zone on Mount Vernon and
+  dumps the per-lot table; it snapshots and restores the placement file too.
+Not built: per-vertex lot editing, a roster modal (the Assign bar adds entries
+inline), lots → population/graph (Phases 3 and 5 of the plan).
+
+**Festival spaces, programme and venue choice (plan Phase 2).**
+`SpaceTypes` gained the VENUES `stage` / `temple` / `center_camp` / `art`
+(enrichment) plus `vendor` (feeds `hunger` after `kitchen` via
+`NEED_ALTERNATIVES` / `spaces_for_need`) and `medical` (a role, no need
+yet). A portapotty bank is a `restroom` with `units`; a water station is a
+`water_point`. Every enrichment type carries a KIND (music / quiet / social /
+art, `ENRICHMENT_KIND`) matched against a person's TASTE —
+`NpcVenueChoice.taste_for(id)` hashes four 0..1 appetites per person — so two
+stages pull the same people and a stage and the temple pull different ones.
+- **`SpaceRegistry` v2**: `MAX_SPACES` 200 → 4000; records carry `draw`
+  (base pull), `units`, `graph_item_id` (the tank / machine that receives what
+  is consumed there — Phase 3 bills it) and `program`; v1 files gain the
+  defaults; **unknown types are KEPT on load** (an older build must not erase
+  a venue on its next save — the old test asserted the opposite). Lazy
+  `_by_id` / `_by_type` indices replace the linear scans, and a POSITION
+  CACHE (`refresh_positions(pos_of)`, filled once per bridge tick) means
+  `nearest_space_by` and venue choice never resolve a prop record per
+  candidate; `_nav_anchor_points` reads the cache too. `set_space_fields`
+  patches the v2 keys.
+- **`FestivalProgram`** (pure static over `rec.program`, slots `{day, start_h,
+  end_h, draw, label, load_w}`, `end_h ≤ start_h` wraps midnight):
+  `state_at(rec, hour)` → active / draw / label / load_w / ends_h /
+  programmed. A programmed venue outside its slots keeps `CLOSED_DRAW` 0.15 ×
+  base (people drift past a dark stage); a venue with NO programme is simply
+  open at its base draw, so a site with only fire circles behaves as before.
+  `load_w` is reserved for Phase 6 (a set's sound system on the camp's power).
+- **`NpcVenueChoice.pick`** is the ONE enrichment rule for every tier:
+  `draw × (0.35 + taste[kind]) × room − dist/150 m + company × 0.08`,
+  deterministic (ties on id). `NpcAgent._begin_enrichment` builds the
+  candidates from the registry (fire circles with no biomass skipped, as
+  before), caches `_taste`, and clamps the visit to the set's remaining hours
+  (`_enrichment_cap_h`) so nobody stands at a dark stage.
+- The Y dock lists a venue's programme under its row (base draw, each set as
+  a removable chip, an add-set line); capacity spinners everywhere go to 5000.
+  Pose/host/routines name the new types (stage → dance, temple → sit,
+  center camp / art → clap). Pinned by `_test_festival_spaces` in
+  `npc_population_selftest.gd` (TYPES.size is now 15).
+**A festival camp lives a festival day.** `NpcRoutine.festival_day()` (sleep
+02:30–09:30, FREE afternoons, ENRICHMENT 19:05–02:00) is stamped as
+`pop_routine` on every `CampTemplates` habitat. The camp `default_day` puts
+everyone to bed at 23:30 and gathers in the AFTERNOON, which emptied a
+20:00–02:00 stage set an hour and a half in and filled the DARK stage by
+day (it is the closest, roomiest venue, and `NpcVenueChoice`'s distance
+term beats a 0.15 closed draw) — the festival harness measured the set's
+mean occupancy at 4.7 against 55.7 outside it before the swap.
+Not built: per-camp default-space tables (`camp_defaults`, needs the camp
+unit from Phase 3), day-of-festival slots in the UI (the `day` field exists).
+
+**The LIGHT population tier (plan Phase 3) — `CrowdCohort`, `CrowdFocus`,
+`NpcTierConvert`.** `NpcPopulationEngine` steps every agent's FSM on every
+substep; `core/population/crowd_cohort.gd` simulates the same people as a
+DISCRETE-EVENT crowd in packed arrays: a person is touched only when
+something happens to them (arrive, finish, queue poll, set ends, an hour of
+sleep), needs are lines between events (`value + rate × dt`,
+`_materialize`), positions are segments (`a → b` over `t0 → t1`, `pos_at`),
+and due events fire in (time, index) order (`MAX_EVENT_PASSES` bounds a
+tick). Every random draw is `NpcHash.unit01(id, counter)`. 2000 people × one
+sim-day at 0.1 h ticks ≈ 2.8 s here (≈12 ms per tick).
+- **Consumption is tier-independent by construction**, and
+  `crowd_cohort_selftest._test_equivalence_with_full_engine` pins it: the
+  same 24-person camp run 3 days in both tiers lands water and food within
+  6 % (measured 1–2 %) and morale within 0.08 / one band. Getting there
+  meant mirroring three things the full tier actually does, each found by
+  measuring per-activity hours: (1) a routine block RE-ISSUES its activity
+  for as long as it lasts — a second meal inside the same EAT block
+  (`NpcAgent._step_idle` has no "served once"; the shipped full tier eats
+  ~2.5 kg/person/day against the preset's 1.5 — a calibration finding, left
+  consistent across tiers rather than fixed in one); (2) sleep is NEVER
+  interrupted (the wake test is the only terminator; the light heartbeat was
+  sending sleepers to the bathroom at 1–5 am); (3) a DAYTIME sleep (need
+  ≥ 0.9 between the wake hour and 21:00) is INSTANT in the full tier — its
+  wake test fires on the next substep and refreshes the need — so it is
+  instant here too, not a two-hour nap. Also `has_work`: with no chores on
+  the (parked) board a WORK block falls through to gathering, as
+  `_step_idle` does.
+- **What the tier does not do:** A* (straight lines + a per-person lane
+  offset), separation, chores with effects, crews, PERISH, walking kcal.
+  Work is credited statistically (`take_work_hours`, banked by the bridge in
+  `_light_work_h`; Phase 5 pays it onto the board). Queues are real: a full
+  space makes people stand in a seeded slot and re-poll every 3 min for up
+  to 30 min. Consumption at a space with a `graph_item_id` goes to THAT item
+  (`take_venue_flows` → `ResourceFlowEngine.add_external_flow`, applied as a
+  rate over the next step — a portapotty bank fills from the whole festival,
+  `PORTAPOTTY_BLACKWATER_L` per visit and no flush water on the camp).
+- **`CrowdFocus.decide`** is the tier policy, pure: a site whose whole
+  population fits `MAX_FULL_PEOPLE` (150) is FULL everywhere — today's maps
+  never convert — otherwise the watched camp and the camps within
+  `FULL_RADIUS_M` of the viewer (nearest first, within the budget) are full,
+  the rest light, with hysteresis (`LEAVE_RADIUS_M`, `HYSTERESIS_H`) so a lot
+  boundary does not thrash. The view sets the viewer each ambient tick
+  (`set_viewer`); `set_watched_habitat` pins a camp.
+- **Conversion** (`npc_tier_convert.gd`) copies exactly what a person IS —
+  id, position, six needs, morale, quit pressure — releases registry claims,
+  and lets the receiving tier re-plan from IDLE. The full engine is PARKED
+  (`_parked`) while its camp is light so the board, labour log, skills and
+  duties survive; promotion hands the crowd back to it. Both snapshots ride
+  `specs.pop_state` (`v: 3, tier: "light"`, packed arrays base64, ~45 B per
+  person; `CrowdCohort.is_light_snapshot` discriminates) and `_ensure_engine`
+  / `_ensure_cohort` restore from either shape, so a map saved in one tier
+  loads in the other. The bridge now enumerates habitats through
+  `GraphNesting.walk_items` (a habitat inside a camp compound counts), and
+  `agent_dots` / `summary_for` / `habitat_of_agent` / `active` /
+  `snapshot_all` / `reset_population` are tier-aware.
+Verify with `core/population/crowd_cohort_selftest.gd` (Validation list)
+and the unchanged `npc_population_selftest` + `--capture=population`
+(the single-camp contract).
+
+**Crowd rendering (plan Phase 4) — `CrowdRenderer` + `crowd_figure.gdshader`
++ `crowd_card.gdshader` + `CrowdFigureMesh`.** Every light-tier person is
+drawn from TWO MultiMeshes (a ~220-vertex six-capsule figure, and a 2-triangle
+card) with no per-frame CPU work beyond one uniform. The instance "transform"
+is DATA, not a transform: `basis.x` = segment start, `basis.y` = segment end
+(world, y from `TerrainSurfaceQuery` at the endpoints), `basis.z` = (t0, t1,
+yaw_hint), `origin` = (pose, seed, flags); instance COLOR = the pastel +
+morale. The vertex stage computes `mix(a, b, (t_rel − t0)/(t1 − t0))`, so
+motion costs nothing and SCRUBS BACKWARDS inside a segment for free — the
+growth-year pattern applied to people. Slots are rewritten only for people
+whose event fired (`CrowdCohort.take_dirty`), everyone on a layout change or
+a time REBASE (times are float32 relative to `time_base`; absolute sim hours
+are ~1.7e7 and would quantise to whole hours). `custom_aabb` covers the site
+because Godot's own instance AABB is meaningless for this layout. UV2 tags
+each vertex's body PART and limb fraction (never COLOR — that is the instance
+tint), and the shader swings limbs about joint constants that MUST match
+`CrowdFigureMesh` (walk from distance travelled ÷ stride, sit, lie, dance,
+work, queue). LOD is in the vertex stage: past `figure_dist` the figure
+collapses behind the clip plane and the card draws at constant APPARENT size
+(view-space, never `VIEWPORT_SIZE` — see camp_glow.gdshader), so the
+settlement view at 1200 m shows a thousand marks where a thousand people
+are. `NpcPopulationHost` skips dots with `tier == "light"` (never an
+NpcAvatar for them) and hides itself under the "Nobody" pref.
+`NpcDisplayPrefs.crowd_draw` (`home | all | lod | none`, Settings → NPCs →
+"Draw people") + `crowd_lod_m` are uniforms, so switching is instant.
+`SystemGraphView._ensure_crowd_renderer` creates it whenever anybody
+simulates (empty it costs nothing) and `sync(abs_h)` runs after each
+population tick (`crowd_render` section).
+**The HERO POOL.** An NpcAvatar costs ~2 ms per figure per frame (measured:
+`npc_host` 220 ms for the 100 full-tier avatars of a bench camp), so
+`NpcPopulationHost._pick_heroes` keeps a real avatar only for the
+`RenderProfile.npc_profile(quality).hero_max` (16/24/40/64) full-tier people
+nearest the viewer — possessed and crosshair-focused people always, with
+`HERO_HYSTERESIS_M` of grace so walking a boundary does not thrash — and
+hands the rest to the SAME CrowdRenderer (`set_full_people`: a segment from
+the last two tick positions, so the GPU glides them exactly as the host's
+own prev→next interpolation would; pose from `_crowd_pose_for`). A roster
+at or under the budget is ALL heroes with no distance test, which is what
+keeps every single-camp map byte-identical. Hidden non-hero avatars keep
+their node (invisible, no process) so promotion back is free.
+Verifying the renderer: the figures were "invisible" for a whole evening
+because the bench cameras looked from the crowd's CENTROID (the empty middle
+of a field with people at six spaces) toward the origin, and then read dot
+`x`/`z` keys that do not exist (dots carry `pos`). Aim at the busiest 10 m
+cell (`--capture=crowdbench` now does), and use the studio diagnostic
+`core/population/crowd_render_diag.gd` to separate shader / winding / gating
+before touching the shader. Measured on Walton: 1000 people at 33–42 fps,
+draw calls flat in N, slot heights equal to the ground raycast.
+Not built yet: crowd picking, a height raster (a long segment over a hill
+floats or sinks mid-way), the Site Plan MultiMesh dots, blob shadows.
+
+**Camps as super-nodes + ledgers (plan Phase 5) — `CampTemplates`,
+`SystemGraphView.sync_camps_from_placement`, `CampLedger`.** Every ASSIGNED
+placement lot becomes one compound at root, stamped from
+`CampTemplates.definition(style, headcount)` (a pop-driven habitat, water /
+food / firewood stores and greywater / blackwater tanks sized per person,
+with the five open loops promoted as ports: water, food, firewood IN on the
+top face, greywater, blackwater OUT on the bottom) through
+`GraphComponentDefs.realize` and then **`make_unique`** — camps are
+independent by default; editing one must not restamp fifty (a player who
+wants lock-step camps can still Save as Component one and re-stamp).
+Idempotent by `specs.camp_lot_id` (the `add_imported_solar_panels` tag
+discipline): a re-sync updates `camp_headcount` / name / `site_x_m,z_m` and
+the habitat's `occupants` + `home_x/home_z` (which `NpcPopulationBridge
+._home_pos` now reads before `bound_prop_id` — a camp has no prop), and a lot
+that vanished removes its compound. The loader calls it (deferred, through
+`ServiceLocator.graph()`) from `_attach_placement`, `_sync_lot_camps` and
+`delete_placement_zone`. `CampLedger.compute(model, scope)` is the per-scope
+sibling of the whole-model `ClosureMetrics`: per kind stock / capacity /
+supply / demand / imports (nominal specs, or the bridge's live demand per
+habitat) → `closed | importing | surplus | open`, days to empty / full;
+`boundary_ports` says which promoted ports carry a wire in the parent scope;
+`open_kinds` = the loops neither closed nor wired out (the badge);
+`festival()` sums every camp compound. Selftest
+`system_graph/camp_ledger_selftest.gd`. The canvas draws a camp compound as
+a CARD (`graph_canvas._draw_camp_card`: present/headcount + morale band in
+its colour, the power line, the open loops) off `camp_open` / `camp_morale`
+/ `camp_present`, which `SystemGraphView._refresh_camp_cards` stamps once a
+second inside the bulk/history-suppressed window — the canvas never walks
+the model. Not built: festival infrastructure presets (water depot, pump-out,
+portapotty bank item), crediting `take_light_work_hours` onto the parked
+board.
+
+**Simplified per-camp energy (plan Phase 6) — `CampPowerModel`
+(`core/power/camp_power_model.gd`, pure static).** A camp is four numbers
+on its compound — `pv_wp`, `battery_kwh`, `inverter_w`, `base_load_w`
+(stamped from `STYLE_DEFAULTS` by `sync_camps_from_placement`) — plus a
+state of charge that lives in `SystemGraphView._camp_power` and is stepped
+by `_tick_camp_power` every ambient tick: `pv = pv_wp × yield` where the
+yield is SolarUI's own `evaluate_solar_at` over its nameplate (camps see
+the player's sun, tilt and weather — one sun, no per-camp tilt at this
+tier), load = base load + `LIGHT_W_PER_PERSON` after dusk × `camp_present`,
+capped by the inverter, and the SOC moves through the SAME
+`EnergyTimeline.step_soc` the player's battery uses (95 %/95 %, a 10 %
+floor). `ac_available` = the load was served; it is pushed per scope into
+`ResourceFlowEngine.set_scope_ac_available`, and `_processor_has_power`
+consults `_scope_ac_available[scope]` BEFORE the global `AcPowerBus` — so a
+camp's processors run off that camp's power while root-scope and
+single-system maps are untouched. Written onto the compound (`camp_soc`,
+`camp_pv_kw`, `camp_load_kw`, `camp_ac`, `camp_hours_left`) at most twice a
+sim-hour or on a 1 % SOC move; a scrub-back or a >6 h jump HOLDS (the SOC is
+a forward integrator). Selftest `core/power/camp_power_selftest.gd`.
+
+**Festival vibe + the Walton harness (plan Phase 7) — `FestivalVibe`
+(`core/population/festival_vibe.gd`).** `compute(summaries)` is pure over
+the per-camp `summary()` dicts both tiers share: the headcount-weighted
+mean morale → band via `NpcMorale.BANDS`, the band histogram, the share of
+people with a BLOCKED critical need, queueing, departures, and a
+`components` list naming the need that drags the number — a diagnostic,
+not a mood ring. `SystemGraphView._refresh_camp_cards` computes it once a
+second (`festival_vibe()`, with a 24 h trend ring and the `headline`), and
+three readers never walk the model: the top-centre chip
+(`scenes/ui/festival_vibe_chip.gd`, created by Main under the hazard badge,
+visible only while camps exist), the settlement HUD's line under the
+scale label, and the dashboard's Festival block. Verify end to end with
+`--capture=festival` on Walton (Validation list).
 
 **Ponds are player-owned, never auto-added to the graph.** `pond_command` carves a
 basin and optionally seeds a thin puddle; **Rain** / **Drain** (T dock) hold-modulate
@@ -4025,9 +4399,32 @@ starts at the very top"). `FireNode` now runs in **surface mode**:
   `regenerate_meshes_under`, which now also clear the overlay
   (`fire_char_overlay` / `fire_pre_overlay` metas). A fire put out part-way
   leaves the char exactly where the front reached, with the embers off.
+- **Collapse, then a pile that burns down** (`FireAshPile`,
+  `fire_ash_pile.gd` + `fire_pile.gdshader`). Burning away used to leave the
+  last quarter of a structure hanging in the air, and the old "smouldering
+  pile" was re-armed every frame (`_destroy_target_mesh` ran each tick past
+  `DESTROY_TIME_HOURS`), so it burned forever — up where the node happened to
+  be, since its ground raycast hit the prop's own collider. Now at
+  `COLLAPSE_AT_DISSOLVE` 0.65 — MEASURED as 75 % of the surface gone against
+  the ash shader's noise, not a guess — `_begin_collapse` runs the ash
+  shader's `collapse` uniform (world_vertex_coords; the burn pattern is keyed
+  on the PRE-fall position so the holes ride down with the piece) over a
+  free-fall-scaled 1.2–3.2 real seconds, the pile fires a one-shot `whoosh()`
+  (flame, smoke, sparks) at ~55 % of the fall, and the meshes are hidden as
+  before when it lands. The pile covers the footprint of the BASE (bottom
+  quarter of the surface points) and everything it shows is
+  `FireAshPile.look(age_hours)` of SIM time: flames to 3 h, ember bed black by
+  6.5 h, grey ash by 9 h.
+  ⚠ The pile is its OWN node (sibling of the FireNode), because the fire event
+  times out at 2 sim-hours and frees its FireNodes; the FireNode stays only as
+  the fire's HANDLE (extinguisher, fire damage, event) while there is open
+  flame, then `_leave_quietly`. The ash stays until the structure is restored
+  (`FireAshPile.clear_for`, from both restore paths) or deleted. It is not
+  saved — a reload shows the burned prop without its ash.
 Scope: `MeshInstance3D` only (as `set_burnable` always was) — MultiMesh-built
-structures such as Linkage frames are not sampled. Destruction is still at
-`DESTROY_TIME_HOURS` of SIM time, unchanged.
+structures such as Linkage frames are not sampled. A point fire (no readable
+geometry) still ends at `DESTROY_TIME_HOURS` of SIM time, and gets the same
+pile without the fall.
 
 ## Known pre-existing runtime errors (not regressions)
 

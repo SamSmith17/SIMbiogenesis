@@ -288,3 +288,25 @@ static func save_render_scale(value: float) -> void:
 	cfg.load(PERF_PREFS_CFG)  # keep [props] and any other sections
 	cfg.set_value("render", "scale_3d", value)
 	cfg.save(PERF_PREFS_CFG)
+
+
+## NPC figure budgets per quality tier (festival plan Phase 4): `hero_max`
+## full-tier people nearest the viewer get a real NpcAvatar (the HERO pool);
+## everyone else — the light tier and the rest of the full tier — is drawn
+## by CrowdRenderer. A roster at or under the budget is all heroes, so every
+## single-camp map renders exactly as before. figure/card distances are the
+## crowd shader's LOD handover; crowd_lod_m is the "lod" draw pref's default.
+static func npc_profile(quality: int) -> Dictionary:
+	match quality:
+		QUALITY_LOW:
+			return {"hero_max": 16, "hero_dist_m": 45.0, "figure_dist_m": 120.0,
+				"card_dist_m": 2000.0, "crowd_lod_m": 300.0}
+		QUALITY_MEDIUM:
+			return {"hero_max": 24, "hero_dist_m": 60.0, "figure_dist_m": 160.0,
+				"card_dist_m": 3000.0, "crowd_lod_m": 400.0}
+		QUALITY_ULTRA:
+			return {"hero_max": 64, "hero_dist_m": 90.0, "figure_dist_m": 300.0,
+				"card_dist_m": 5000.0, "crowd_lod_m": 800.0}
+		_:
+			return {"hero_max": 40, "hero_dist_m": 60.0, "figure_dist_m": 220.0,
+				"card_dist_m": 4000.0, "crowd_lod_m": 500.0}

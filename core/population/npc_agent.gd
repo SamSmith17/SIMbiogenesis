@@ -120,6 +120,10 @@ var state: int = State.IDLE
 var activity: String = ""          # need id or CHORE_ACTIVITY ("" when idle)
 var target_space_id: String = ""
 var target_space_type: String = "" # enrichment picks its type per visit
+## {music, quiet, social, art} in 0..1, hashed from the id on first use.
+var _taste: Dictionary = {}
+## Hours a programmed venue has left when the visit begins (-1 = none).
+var _enrichment_cap_h := -1.0
 var target_pos: Vector2 = Vector2.ZERO
 ## Where this person LOOKS while standing still: the work site, the far end of
 ## a relay line, or the centre of the space they came to. `agent_dots()` turns
@@ -608,6 +612,10 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 			var left := routine.hours_left_in_block(_hour(ctx), routine_offset_h)
 			if left > 0.0:
 				activity_ends_h = minf(activity_ends_h, abs_hours + left)
+		# A programmed set ends when the programme ends: nobody stands at a
+		# dark stage for the rest of their hour.
+		if activity == "enrichment" and _enrichment_cap_h > 0.0:
+			activity_ends_h = minf(activity_ends_h, arrive_abs + _enrichment_cap_h)
 	if activity == "sleep":
 		# One night = one session: the wake hour is this session's absolute
 		# end. Presentation-only (the wake test in _step_doing is the real
@@ -886,30 +894,33 @@ func _begin_enrichment(abs_hours: float, ctx: Dictionary) -> void:
 		retry_at["enrichment"] = abs_hours + RETRY_BACKOFF_H
 		return
 	var starved: Dictionary = ctx.get("starved", {})
-	var best: Dictionary = {}
-	var best_type := ""
-	var best_pos := Vector2.ZERO
-	var best_score := INF
+	# ONE venue rule for every tier (NpcVenueChoice): a venue's programme says
+	# what it is doing now, the person's taste says how much that appeals,
+	# distance and company do the rest. A fire circle with no fuel is skipped
+	# rather than looped on.
+	var hour := float(ctx.get("hour_of_day", 12.0))
+	var candidates: Array = []
+	var by_id: Dictionary = {}
 	for stype in SpaceTypes.ENRICHMENT_TYPES:
-		# No fuel, no fire — head somewhere else rather than looping on a
-		# gathering the graph cannot supply.
 		if str(stype) == "fire_circle" and bool(starved.get("biomass", false)):
 			continue
 		for item in registry.spaces_of_type(str(stype)):
 			var space: Dictionary = item
 			var sid := str(space.get("id", ""))
-			if not registry.has_free_capacity(sid):
-				continue
-			var p: Variant = pos_of.call(space)
+			var p: Variant = registry._position_for(space, pos_of)
 			if not (p is Vector2):
 				continue
-			var company := mini(registry.occupant_count(sid), SOCIAL_PULL_CAP)
-			var score := ((p as Vector2) - pos).length() - float(company) * SOCIAL_PULL_M
-			if score < best_score:
-				best_score = score
-				best = space
-				best_type = str(stype)
-				best_pos = p
+			var st := FestivalProgram.state_at(space, hour)
+			candidates.append({"id": sid, "type": str(stype), "pos": p,
+				"draw": float(st["draw"]), "occupants": registry.occupant_count(sid),
+				"capacity": int(space.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))})
+			by_id[sid] = space
+	if _taste.is_empty():
+		_taste = NpcVenueChoice.taste_for(id)
+	var win := NpcVenueChoice.pick(_taste, pos, candidates)
+	var best: Dictionary = by_id.get(str(win.get("id", "")), {}) if not win.is_empty() else {}
+	var best_type := str(win.get("type", ""))
+	var best_pos: Vector2 = win.get("pos", Vector2.ZERO) if not win.is_empty() else Vector2.ZERO
 	if best.is_empty():
 		# No enrichment space tagged. NOT a blocked critical need — it simply
 		# means this community is capped at NpcMorale.BASELINE_CEILING.
@@ -924,8 +935,14 @@ func _begin_enrichment(abs_hours: float, ctx: Dictionary) -> void:
 	target_space_type = best_type
 	target_pos = _standing_spot(registry, sid2, best_pos, ctx)
 	face_anchor = best_pos
-	last_exposure = NpcWeatherGate.EXPOSURE_OUTDOOR if best_type == "fire_circle" \
+	last_exposure = NpcWeatherGate.EXPOSURE_OUTDOOR if SpaceTypes.OUTDOOR_TYPES.has(best_type) \
 			else NpcWeatherGate.EXPOSURE_SHELTERED
+	# A programmed set ends when the programme says, not when the hour is up.
+	var st2 := FestivalProgram.state_at(best, hour)
+	if bool(st2.get("programmed", false)) and float(st2.get("ends_h", -1.0)) > 0.0:
+		_enrichment_cap_h = float(st2["ends_h"])
+	else:
+		_enrichment_cap_h = -1.0
 	state = State.TRAVELING
 
 
@@ -1276,6 +1293,10 @@ static func _enrich_verb(space_type: String) -> String:
 		"movement": return "dancing"
 		"quiet": return "resting"
 		"workshop_social": return "making things"
+		"stage": return "at the show"
+		"temple": return "at the temple"
+		"center_camp": return "at center camp"
+		"art": return "looking at art"
 	return "unwinding"
 
 

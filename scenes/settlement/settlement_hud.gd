@@ -18,6 +18,7 @@ var _bridge: Variant = null
 var _accum := 0.0
 
 var _scale_lbl: Label = null
+var _vibe_lbl: Label = null
 var _card: PanelContainer = null
 var _card_title: Label = null
 var _card_body: Label = null
@@ -77,6 +78,12 @@ func _build() -> void:
 	_scale_lbl.add_theme_font_size_override("font_size", UITheme.FONT_LG)
 	_scale_lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
 	tl.add_child(_scale_lbl)
+	# The festival's overall vibe — the one number the whole mode exists to
+	# let you watch move. Hidden on a map with no festival camps.
+	_vibe_lbl = Label.new()
+	_vibe_lbl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	_vibe_lbl.visible = false
+	tl.add_child(_vibe_lbl)
 	_alarm_lbl = Label.new()
 	_alarm_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_alarm_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
@@ -256,6 +263,13 @@ func _refresh() -> void:
 	if cam != null and _scale_lbl != null:
 		_scale_lbl.text = "%s · %s m" % [cam.scale_label(), str(int(round(cam.height())))]
 	var main := get_tree().current_scene
+	if _vibe_lbl != null and main != null:
+		var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+		var v: Dictionary = sgv.call("festival_vibe") if sgv != null and sgv.has_method("festival_vibe") else {}
+		_vibe_lbl.visible = not v.is_empty() and int(v.get("people", 0)) > 0
+		if _vibe_lbl.visible:
+			_vibe_lbl.text = str(v.get("headline", ""))
+			_vibe_lbl.add_theme_color_override("font_color", v.get("color", UITheme.C_TEXT) as Color)
 	if _speed_lbl != null and main != null and "time_scale" in main:
 		var ts := float(main.get("time_scale"))
 		_speed_lbl.text = "paused" if ts <= 0.0 else "%d× · %s" % [

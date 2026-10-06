@@ -146,7 +146,7 @@ func _build_ui() -> void:
 
 	_capacity = SpinBox.new()
 	_capacity.min_value = 1
-	_capacity.max_value = 64
+	_capacity.max_value = 5000   # a stage holds a crowd
 	_capacity.value = 6      # areas hold more than a single fixture
 	_capacity.custom_minimum_size.x = 66
 	row.add_child(_capacity)
@@ -328,11 +328,105 @@ func _refresh_list() -> void:
 		del.pressed.connect(func() -> void: _delete_space(sid))
 		row.add_child(del)
 		_list.add_child(row)
+		if SpaceTypes.is_venue(str(rec.get("space_type", ""))):
+			_list.add_child(_build_program_row(rec))
 	if not any:
 		var empty := Label.new()
 		empty.text = "No areas yet."
 		empty.add_theme_color_override("font_color", C_DIM)
 		_list.add_child(empty)
+
+
+## A venue's PROGRAMME, inline under its row: the base draw, every set with
+## an ✕, and one compact "add set" line (start, end, draw, name). Sets wrap
+## midnight when end ≤ start. Saved on every change.
+func _build_program_row(rec: Dictionary) -> Control:
+	var sid := str(rec.get("id", ""))
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	var indent := Control.new()
+	indent.custom_minimum_size.x = 24
+	box.add_child(indent)
+	var dl := Label.new()
+	dl.text = "Draw"
+	dl.add_theme_color_override("font_color", C_DIM)
+	dl.add_theme_font_size_override("font_size", 11)
+	box.add_child(dl)
+	var draw := SpinBox.new()
+	draw.min_value = 0.0
+	draw.max_value = 1.0
+	draw.step = 0.05
+	draw.value = float(rec.get("draw", SpaceRegistry.DEFAULT_DRAW))
+	draw.custom_minimum_size.x = 64
+	draw.tooltip_text = "How strongly this venue pulls people when it is open (0–1)"
+	draw.value_changed.connect(func(v: float) -> void:
+		_patch_space(sid, {"draw": v}))
+	box.add_child(draw)
+	for i in (rec.get("program", []) as Array).size():
+		var slot: Dictionary = rec["program"][i]
+		var chip := Button.new()
+		chip.text = "%s ×" % FestivalProgram.slot_text(slot)
+		chip.tooltip_text = "draw %.2f — click to remove this set" % float(slot.get("draw", 1.0))
+		chip.add_theme_font_size_override("font_size", 11)
+		var idx := i
+		chip.pressed.connect(func() -> void:
+			var prog: Array = (_registry().find_by_id(sid).get("program", []) as Array).duplicate(true)
+			if idx < prog.size():
+				prog.remove_at(idx)
+			_patch_space(sid, {"program": prog}))
+		box.add_child(chip)
+	var start := SpinBox.new()
+	start.min_value = 0.0
+	start.max_value = 23.75
+	start.step = 0.25
+	start.value = 20.0
+	start.custom_minimum_size.x = 64
+	start.tooltip_text = "Set starts (hour)"
+	box.add_child(start)
+	var dash := Label.new()
+	dash.text = "–"
+	dash.add_theme_color_override("font_color", C_DIM)
+	box.add_child(dash)
+	var end := SpinBox.new()
+	end.min_value = 0.0
+	end.max_value = 23.75
+	end.step = 0.25
+	end.value = 23.0
+	end.custom_minimum_size.x = 64
+	end.tooltip_text = "Set ends (hour; before the start = wraps midnight)"
+	box.add_child(end)
+	var sdraw := SpinBox.new()
+	sdraw.min_value = 0.05
+	sdraw.max_value = 1.0
+	sdraw.step = 0.05
+	sdraw.value = 1.0
+	sdraw.custom_minimum_size.x = 60
+	sdraw.tooltip_text = "Draw during the set (1 = a headliner)"
+	box.add_child(sdraw)
+	var name := LineEdit.new()
+	name.placeholder_text = "set name"
+	name.custom_minimum_size.x = 90
+	name.add_theme_font_size_override("font_size", 11)
+	box.add_child(name)
+	var add := Button.new()
+	add.text = "+ set"
+	add.tooltip_text = "Add this time window to the venue's programme"
+	add.pressed.connect(func() -> void:
+		var prog: Array = (_registry().find_by_id(sid).get("program", []) as Array).duplicate(true)
+		prog.append({"start_h": start.value, "end_h": end.value, "draw": sdraw.value,
+			"label": name.text.strip_edges()})
+		_patch_space(sid, {"program": prog}))
+	box.add_child(add)
+	return box
+
+
+func _patch_space(space_id: String, patch: Dictionary) -> void:
+	var reg := _registry()
+	if reg == null or not reg.set_space_fields(space_id, patch):
+		return
+	if _loader.has_method("save_npc_spaces"):
+		_loader.call("save_npc_spaces")
+	_refresh_list()
 
 
 func _delete_space(space_id: String) -> void:

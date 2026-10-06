@@ -174,7 +174,60 @@ const TOOLS: Array[Dictionary] = [
 			{"key": "light_density", "label": "Lights", "min": 0.0, "max": 2.0, "default": 1.0, "step": 0.05},
 		],
 	},
+	# --- PLACEMENT: festival roads, theme-camp zones, fair lots, assignment ---
+	{
+		"id": "fest_road", "section": "placement", "label": "Road",
+		"tooltip": "Draw a festival road: click each bend, Enter to finish.\nZones front onto roads; lots are cut along them.",
+		"shapes": ["path"],
+		"params": [
+			{"key": "width_m", "label": "Width m", "min": 3.0, "max": 20.0, "default": 8.0, "step": 0.5},
+			{"key": "flatten", "label": "Flatten", "min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
+		],
+	},
+	{
+		"id": "fest_zone", "section": "placement", "label": "Zone",
+		"tooltip": "Draw a theme-camp allocation zone. It fronts the nearest festival road\nand is cut into lots of equal USABLE area (slope and obstacles count).",
+		"shapes": ["rect", "lasso", "polygon"],
+		"params": [
+			{"key": "target_n", "label": "Lots (0=by area)", "min": 0.0, "max": 200.0, "default": 0.0, "step": 1.0},
+			{"key": "target_m2", "label": "m² per lot", "min": 100.0, "max": 5000.0, "default": 600.0, "step": 25.0},
+			{"key": "depth_m", "label": "Depth m", "min": 8.0, "max": 80.0, "default": 25.0, "step": 1.0},
+			{"key": "lane_w_m", "label": "Lane m", "min": 0.0, "max": 12.0, "default": 5.0, "step": 0.5},
+			{"key": "lots_per_lane", "label": "Lots/lane", "min": 0.0, "max": 12.0, "default": 4.0, "step": 1.0},
+			{"key": "front_min_m", "label": "Front min", "min": 4.0, "max": 60.0, "default": 12.0, "step": 1.0},
+			{"key": "front_max_m", "label": "Front max", "min": 10.0, "max": 150.0, "default": 45.0, "step": 1.0},
+			{"key": "slope_limit_deg", "label": "Slope ≤°", "min": 3.0, "max": 30.0, "default": 10.0, "step": 0.5},
+			{"key": "density", "label": "Dens", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
+		],
+	},
+	{
+		"id": "fest_lots", "section": "placement", "label": "Lots",
+		"tooltip": "Click a zone to cut (or re-cut) it into lots with its current settings.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "fest_assign", "section": "placement", "label": "Assign",
+		"tooltip": "Pick a camp from the roster, then click a lot to give it that lot.\nAuto-assign places the whole roster largest-first, best-fit.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "fest_edit", "section": "placement", "label": "Edit",
+		"tooltip": "Click a road, zone or lot to edit it. Del deletes a road or zone.",
+		"shapes": [],
+		"params": [
+			{"key": "width_m", "label": "Width m", "min": 3.0, "max": 20.0, "default": 8.0, "step": 0.5},
+			{"key": "headcount", "label": "People", "min": 0.0, "max": 500.0, "default": 0.0, "step": 1.0},
+		],
+	},
 ]
+
+## Placement chip vocabularies. LITERAL copies of FestivalPlacementLayer's
+## tables (stale-class-cache rule, same as VEG_FAMILIES / CAMP_STYLES);
+## toolbar_selftest asserts they still match.
+const PLACEMENT_SURFACES: Array[String] = ["dirt", "gravel", "playa", "paved", "grass"]
+const PLACEMENT_FEATURES: Array[String] = ["power", "water", "quiet", "loud", "shade"]
 
 ## Vegetation families offered by the veg tools. `preset` mirrors
 ## VegetationPaint.Preset and is written as a LITERAL int so this model still
@@ -221,6 +274,14 @@ var veg_species: String = "shrub"
 var hero_preset: String = "pine_1"
 ## Camp brush identity, shared by every camp tool for the same reason.
 var camp_style: String = "mixed"
+## Placement identity, shared by the placement tools: the styles a new zone
+## allows (first = default), its features, the road surface, how to equalise
+## lots, and whether a drawn zone is cut at once.
+var placement_styles: Array = ["mixed"]
+var placement_features: Array = []
+var placement_surface: String = "gravel"
+var placement_equalise: String = "usable"
+var placement_subdivide_now: bool = true
 
 
 func _init() -> void:
@@ -364,6 +425,77 @@ func camp_style_for_tool(tool_id: String = "") -> String:
 	return camp_style
 
 
+# ---------------------------------------------------------------------------
+# Placement identity
+# ---------------------------------------------------------------------------
+
+## Toggle a style in the zone's allowed mix. The mix never empties: refusing
+## to clear the last one keeps "first entry = default style" well defined.
+func toggle_placement_style(style_id: String) -> bool:
+	if camp_style_def(style_id).is_empty() or style_id == "varied":
+		return false
+	if placement_styles.has(style_id):
+		if placement_styles.size() <= 1:
+			return false
+		placement_styles.erase(style_id)
+	else:
+		placement_styles.append(style_id)
+	return true
+
+
+func toggle_placement_feature(feature: String) -> bool:
+	if not PLACEMENT_FEATURES.has(feature):
+		return false
+	if placement_features.has(feature):
+		placement_features.erase(feature)
+	else:
+		placement_features.append(feature)
+	return true
+
+
+func set_placement_surface(surface: String) -> bool:
+	if not PLACEMENT_SURFACES.has(surface):
+		return false
+	placement_surface = surface
+	return true
+
+
+func set_placement_equalise(mode: String) -> bool:
+	if mode != "usable" and mode != "raw":
+		return false
+	placement_equalise = mode
+	return true
+
+
+## The zone spec the Zone tool's rows + chips currently describe.
+func placement_zone_spec() -> Dictionary:
+	var n := int(round(get_tool_param_value("fest_zone", "target_n")))
+	return {
+		"mode": "count" if n > 0 else "area",
+		"target_n": maxi(n, 1),
+		"target_m2": get_tool_param_value("fest_zone", "target_m2"),
+		"depth_m": get_tool_param_value("fest_zone", "depth_m"),
+		"lane_w_m": get_tool_param_value("fest_zone", "lane_w_m"),
+		"lots_per_lane": int(round(get_tool_param_value("fest_zone", "lots_per_lane"))),
+		"front_min_m": get_tool_param_value("fest_zone", "front_min_m"),
+		"front_max_m": get_tool_param_value("fest_zone", "front_max_m"),
+		"slope_limit_deg": get_tool_param_value("fest_zone", "slope_limit_deg"),
+		"density": get_tool_param_value("fest_zone", "density"),
+		"equalise": placement_equalise,
+		"styles": placement_styles.duplicate(),
+	}
+
+
+func get_tool_param_value(tool_id: String, key: String) -> float:
+	var vals: Dictionary = _params.get(tool_id, {})
+	if vals.has(key):
+		return float(vals[key])
+	for p in (tool_def(tool_id).get("params", []) as Array):
+		if String((p as Dictionary)["key"]) == key:
+			return float((p as Dictionary)["default"])
+	return 0.0
+
+
 ## 0..0.5 size-variance fraction from the 0..50 percent slider.
 func size_var_fraction() -> float:
 	return clampf(get_param("size_var", 25.0) / 100.0, 0.0, 0.5)
@@ -423,6 +555,11 @@ func to_config(cfg: ConfigFile) -> void:
 	cfg.set_value("toolbar", "veg_species", veg_species)
 	cfg.set_value("toolbar", "hero_preset", hero_preset)
 	cfg.set_value("toolbar", "camp_style", camp_style)
+	cfg.set_value("toolbar", "placement_styles", placement_styles.duplicate())
+	cfg.set_value("toolbar", "placement_features", placement_features.duplicate())
+	cfg.set_value("toolbar", "placement_surface", placement_surface)
+	cfg.set_value("toolbar", "placement_equalise", placement_equalise)
+	cfg.set_value("toolbar", "placement_subdivide_now", placement_subdivide_now)
 	for t in TOOLS:
 		var id := String(t["id"])
 		var section := "tool_%s" % id
@@ -445,6 +582,24 @@ func from_config(cfg: ConfigFile) -> void:
 		veg_species = String(cfg.get_value("toolbar", "veg_species", veg_species))
 	hero_preset = String(cfg.get_value("toolbar", "hero_preset", hero_preset))
 	set_camp_style(String(cfg.get_value("toolbar", "camp_style", camp_style)))
+	var ps: Variant = cfg.get_value("toolbar", "placement_styles", placement_styles)
+	if ps is Array:
+		var clean: Array = []
+		for s in ps:
+			if not camp_style_def(String(s)).is_empty() and String(s) != "varied" \
+					and not clean.has(String(s)):
+				clean.append(String(s))
+		if not clean.is_empty():
+			placement_styles = clean
+	var pf: Variant = cfg.get_value("toolbar", "placement_features", placement_features)
+	if pf is Array:
+		placement_features = []
+		for f in pf:
+			if PLACEMENT_FEATURES.has(String(f)) and not placement_features.has(String(f)):
+				placement_features.append(String(f))
+	set_placement_surface(String(cfg.get_value("toolbar", "placement_surface", placement_surface)))
+	set_placement_equalise(String(cfg.get_value("toolbar", "placement_equalise", placement_equalise)))
+	placement_subdivide_now = bool(cfg.get_value("toolbar", "placement_subdivide_now", placement_subdivide_now))
 	for t in TOOLS:
 		var id := String(t["id"])
 		var section := "tool_%s" % id

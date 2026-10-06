@@ -114,6 +114,8 @@ var _review_sets: PackedStringArray = PackedStringArray()
 var _map_def_path := ""
 ## --window-wall: open the Window Wall after load (no capture, no quit).
 var _boot_window_wall := false
+## --count=N: how many people the crowd bench seeds (festival-scale baseline).
+var _bench_count := 300
 
 
 func _ready() -> void:
@@ -191,6 +193,10 @@ func _ready() -> void:
 			_run_dawn_capture.call_deferred()
 		elif _capture_mode == "windowwall":
 			_run_window_wall_capture.call_deferred()
+		elif _capture_mode == "crowdbench":
+			_run_crowd_bench.call_deferred()
+		elif _capture_mode == "festival":
+			_run_festival_capture.call_deferred()
 		elif _boot_window_wall:
 			_boot_window_wall_view.call_deferred()
 		else:
@@ -235,6 +241,8 @@ func _parse_args(args: PackedStringArray) -> void:
 			_quit_after = true
 		elif a == "--window-wall":
 			_boot_window_wall = true
+		elif a.begins_with("--count="):
+			_bench_count = clampi(a.get_slice("=", 1).to_int(), 1, 20000)
 	if not map_file.is_empty():
 		_load_map_definition(map_file)
 	if _perf_hud:
@@ -272,6 +280,14 @@ func _resolve_user_map_path(map_file: String) -> String:
 			print("PlaytestHarness: --user-map=%s → %s" % [map_file, found])
 			return found
 		push_error("PlaytestHarness: no user://maps/*.tres matched Mount Vernon alias")
+		return ""
+	# Walton, Oregon — the festival-scale target site (Pataha Creek Road).
+	if key in ["walton", "walton_or", "walton-or", "pataha"]:
+		var found_w := _find_map_by_display_substring(["pataha creek", "walton"])
+		if not found_w.is_empty():
+			print("PlaytestHarness: --user-map=%s → %s" % [map_file, found_w])
+			return found_w
+		push_error("PlaytestHarness: no user://maps/*.tres matched Walton alias")
 		return ""
 	var is_bombay := key in [
 		"bombay", "bombaybeach", "bombay_beach", "bombay-beach",
@@ -412,6 +428,10 @@ func _launch_map() -> void:
 		_run_dawn_capture()
 	elif _capture_mode == "windowwall":
 		_run_window_wall_capture()
+	elif _capture_mode == "crowdbench":
+		_run_crowd_bench()
+	elif _capture_mode == "festival":
+		_run_festival_capture()
 	elif _boot_window_wall:
 		_boot_window_wall_view()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
@@ -485,6 +505,10 @@ func _launch_scene_direct() -> void:
 		_run_dawn_capture()
 	elif _capture_mode == "windowwall":
 		_run_window_wall_capture()
+	elif _capture_mode == "crowdbench":
+		_run_crowd_bench()
+	elif _capture_mode == "festival":
+		_run_festival_capture()
 	elif _boot_window_wall:
 		_boot_window_wall_view()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
@@ -2115,6 +2139,341 @@ func _run_ambient_flow_verify() -> void:
 	print("PlaytestHarness: ambient verify — %s" % ("PASS (water flowed with the graph closed)" if ok \
 			else "FAIL (water did NOT flow while the graph was closed — ambient tick regressed)"))
 	_maybe_quit()
+
+
+## Festival-scale BASELINE bench (Phase 0 of the festival plan). Seeds
+## --count=N people as ceil(N/100) pop-driven habitats of ≤100 (the engine's
+## comfortable size — the roster clamp is 200 per habitat) sharing one set of
+## large-capacity spaces, runs the clock at ~450× with the graph CLOSED, and
+## dumps what a screenshot cannot: the per-section frame cost (npc_population /
+## npc_dots / npc_host / flow_engine), fps, draw calls, primitives and node
+## count — the numbers every later festival phase is measured against. Before
+## seeding it runs a GPU precision probe (whether MultiMesh INSTANCE_CUSTOM and
+## COLOR survive at float32 or are stored half precision), which decides where
+## the crowd buffer may keep its time values. Cleans its cap_cb_* items.
+func _run_crowd_bench() -> void:
+	var sgv := await _find_graph_view()
+	if sgv == null:
+		push_error("PlaytestHarness: SystemGraphView not found — aborting crowd bench")
+		_maybe_quit()
+		return
+	sgv.visible = false
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var model: Variant = sgv.get("model")
+	if model == null or not model.has_method("add_item"):
+		push_error("PlaytestHarness: graph model unavailable — aborting crowd bench")
+		_maybe_quit()
+		return
+	var main := get_tree().current_scene
+	if main != null:
+		if "year" in main:
+			main.year = 2026
+		_set_capture_date(main, 7, 15)
+		if "day_time" in main:
+			main.day_time = 9.0
+		if "time_scale" in main:
+			main.time_scale = 0.0
+
+	# --- GPU precision probe (independent of the roster) ----------------------
+	var probe := await _probe_multimesh_precision()
+	print("PlaytestHarness: crowd bench — MultiMesh precision: INSTANCE_CUSTOM=%s COLOR=%s (renderer %s)" % [
+		str(probe.get("custom", "?")), str(probe.get("color", "?")),
+		str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "?"))])
+
+	# --- seed: N people over ceil(N/100) habitats + shared spaces -------------
+	var count := _bench_count
+	var per_hab := 100
+	var n_hab := int(ceil(float(count) / float(per_hab)))
+	# Leftovers from an earlier run (the soak autosave persists graph items).
+	for it in (model.items as Array).duplicate():
+		var iid := str((it as Dictionary).get("id", ""))
+		if iid.begins_with("cap_cb_"):
+			model.remove_item(iid)
+	var remaining := count
+	for h in n_hab:
+		var n := mini(per_hab, remaining)
+		remaining -= n
+		var hab_id := "cap_cb_hab_%d" % h
+		model.add_item({
+			"id": hab_id, "type": "processor", "x": 200.0 * h, "y": 0.0,
+			"width": 150.0, "height": 150.0,
+			"specs": {
+				"name": "Bench camp %d" % h, "role": "habitat", "occupants": n,
+				"pop_driven": true, "watts": 0.0, "energy_source": "", "efficiency": 1.0,
+				"inputs": [
+					{"kind": "water", "rate": 2.083, "unit": "L/h"},
+					{"kind": "food", "rate": 0.0625, "unit": "kg/h"},
+				],
+				"outputs": [
+					{"kind": "greywater", "rate": 1.666, "unit": "L/h"},
+					{"kind": "blackwater", "rate": 0.417, "unit": "L/h"},
+				],
+			},
+		})
+		var w_id := "cap_cb_water_%d" % h
+		var f_id := "cap_cb_food_%d" % h
+		var g_id := "cap_cb_grey_%d" % h
+		var b_id := "cap_cb_black_%d" % h
+		for t in [[w_id, "water", "L", 50000.0, 1.0], [f_id, "food", "kg", 2000.0, 1.0],
+				[g_id, "greywater", "L", 50000.0, 0.0], [b_id, "blackwater", "L", 20000.0, 0.0]]:
+			model.add_item({
+				"id": str(t[0]), "type": "resource", "x": 200.0 * h, "y": 220.0,
+				"width": 90.0, "height": 100.0,
+				"specs": {"name": str(t[1]).capitalize(), "resource_kind": str(t[1]),
+					"capacity_qty": float(t[3]), "capacity_unit": str(t[2]), "level": float(t[4])},
+			})
+		for c in [[w_id, "output", hab_id, "res_in_0", "water"],
+				[f_id, "output", hab_id, "res_in_1", "food"],
+				[hab_id, "res_out_0", g_id, "input", "greywater"],
+				[hab_id, "res_out_1", b_id, "input", "blackwater"]]:
+			model.add_connection({
+				"polarity": "resource", "resource_type": str(c[4]),
+				"source_item_id": str(c[0]), "source_handle_id": str(c[1]),
+				"target_item_id": str(c[2]), "target_handle_id": str(c[3]),
+			})
+	var flow0: Variant = sgv.get("_resource_flow")
+	if flow0 != null and flow0.has_method("clear_timelines"):
+		flow0.call("clear_timelines")
+	await get_tree().create_timer(1.0).timeout
+	var bridge: Variant = sgv.get("_npc_population")
+	if bridge == null or not bridge.has_method("registry_for"):
+		push_error("PlaytestHarness: population bridge missing — aborting crowd bench")
+		_maybe_quit()
+		return
+	var reg: Variant = bridge.call("registry_for", main)
+	var seeded_spaces: Array = []
+	var half := 12.0
+	var sites := {
+		"kitchen": Vector2(60, 0), "restroom": Vector2(-60, 30),
+		"water_point": Vector2(0, 70), "sleep": Vector2(0, -80),
+		"shower": Vector2(-45, -45), "fire_circle": Vector2(55, 55),
+	}
+	for stype in sites:
+		var c: Vector2 = sites[stype]
+		var sid: Variant = reg.call("set_space_type", {"kind": "area", "poly": [
+			[c.x - half, c.y - half], [c.x + half, c.y - half],
+			[c.x + half, c.y + half], [c.x - half, c.y + half]]}, str(stype), count)
+		seeded_spaces.append(str(sid))
+	print("PlaytestHarness: crowd bench — seeded %d people in %d habitats, %d spaces (graph CLOSED)" % [
+		count, n_hab, sites.size()])
+
+	# --- run: 450×, sample the HUD every second --------------------------------
+	var pm := get_node_or_null("/root/PerfMonitor")
+	if pm != null and pm.has_method("set_enabled"):
+		pm.call("set_enabled", true)
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.125
+	# Let the roster spawn and the smoothed HUD values settle before sampling.
+	await get_tree().create_timer(6.0).timeout
+	var samples: Array = []
+	for i in 20:
+		await get_tree().create_timer(1.0).timeout
+		if pm != null and pm.has_method("snapshot"):
+			samples.append(pm.call("snapshot"))
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	var dots: Array = bridge.call("agent_dots")
+	var host := main.find_child("NpcPopulationHost", true, false) if main != null else null
+	var avatars := 0
+	var visible_av := 0
+	if host != null:
+		for ch in host.get_children():
+			if ch is NpcAvatar:
+				avatars += 1
+				if (ch as Node3D).visible:
+					visible_av += 1
+	var med := func(key: String, sub: String) -> float:
+		var vals: Array = []
+		for s in samples:
+			var d: Dictionary = s
+			if sub.is_empty():
+				vals.append(float(d.get(key, 0.0)))
+			else:
+				vals.append(float((d.get(sub, {}) as Dictionary).get(key, 0.0)))
+		vals.sort()
+		return float(vals[vals.size() >> 1]) if not vals.is_empty() else 0.0
+	print("PlaytestHarness: crowd bench — people %d (dots %d, avatars %d / %d visible)" % [
+		count, dots.size(), avatars, visible_av])
+	print("PlaytestHarness: crowd bench — fps %.0f  frame %.2f ms  process %.2f ms  render cpu %.2f / gpu %.2f ms" % [
+		med.call("fps", ""), med.call("frame_ms", ""), med.call("process_ms", "render"),
+		med.call("render_cpu_ms", "render"), med.call("render_gpu_ms", "render")])
+	for sec in ["npc_population", "npc_dots", "npc_host", "crowd_render", "flow_engine"]:
+		print("PlaytestHarness: crowd bench — section %-16s %6.2f ms" % [sec, med.call(sec, "sections_ms")])
+	# Tiers: past the focus budget most camps run as light crowds drawn by
+	# the CrowdRenderer; report what the bench actually exercised.
+	var light_people := 0
+	var light_camps := 0
+	if bridge.has_method("light_cohorts"):
+		var lc: Dictionary = bridge.call("light_cohorts")
+		light_camps = lc.size()
+		for k in lc:
+			light_people += int((lc[k] as CrowdCohort).alive_count())
+	var cr: Node = sgv.call("crowd_renderer") if sgv.has_method("crowd_renderer") else null
+	print("PlaytestHarness: crowd bench — tiers: %d light camps / %d light people, crowd renderer %s (%d slots)" % [
+		light_camps, light_people, "present" if cr != null else "absent",
+		int(cr.call("people_drawn")) if cr != null else 0])
+	print("PlaytestHarness: crowd bench — draw calls %d  primitives %d  scene nodes %d" % [
+		int(med.call("draw_calls", "render")), int(med.call("primitives", "render")),
+		int(med.call("scene_nodes", "render"))])
+	print("PlaytestHarness: crowd bench — BENCH count=%d fps=%.0f npc_population=%.2f npc_dots=%.2f npc_host=%.2f flow=%.2f draws=%d nodes=%d" % [
+		count, med.call("fps", ""), med.call("npc_population", "sections_ms"),
+		med.call("npc_dots", "sections_ms"), med.call("npc_host", "sections_ms"),
+		med.call("flow_engine", "sections_ms"), int(med.call("draw_calls", "render")),
+		int(med.call("scene_nodes", "render"))])
+
+	# --- shots: the crowd from the ground and from above --------------------------
+	# The numbers above cannot show whether a figure or a card actually DRAWS.
+	# Cameras are anchored on the people's CENTROID (the bench habitats carry
+	# no home position, so on a built-in map everyone parks at the origin) at
+	# the ground height under the camera, so a shot is never underground; the
+	# count inside figure range per shot says which tier each PNG exercises.
+	var shot_dir := "%s/%s" % [SHOTS_ROOT, _shots_label if not _shots_label.is_empty() else "crowdbench_%d" % count]
+	DirAccess.make_dir_recursive_absolute(shot_dir)
+	var cen := Vector2.ZERO
+	var ndots := 0
+	for d in dots:
+		cen += ((d as Dictionary).get("pos", Vector2.ZERO) as Vector2)
+		ndots += 1
+	if ndots > 0:
+		cen /= float(ndots)
+	var gcen := TerrainSurfaceQuery.ground_height_at(main, cen.x, cen.y)
+	print("PlaytestHarness: crowd bench — people centroid (%.1f, %.1f), ground there %.2f m, player at %s" % [
+		cen.x, cen.y, gcen, str(main.get_node_or_null("Player").global_position if main.get_node_or_null("Player") != null else "?")])
+	if cr != null:
+		var mmf: MultiMesh = cr.get("_mm_fig")
+		for si in mini(5, int(cr.call("people_drawn"))):
+			var xf: Transform3D = mmf.get_instance_transform(si)
+			var a := xf.basis.x
+			var ray := TerrainSurfaceQuery.ground_height_at(main, a.x, a.z)
+			print("PlaytestHarness: crowd bench —   slot %d a=(%.1f, %.2f, %.1f) ground %.2f pose %d t0 %.2f t1 %.2f flags %.0f" % [
+				si, a.x, a.y, a.z, ray, int(xf.origin.x), xf.basis.z.x, xf.basis.z.y, xf.origin.z])
+	var bcam := Camera3D.new()
+	bcam.name = "CrowdBenchCam"
+	bcam.far = 20000.0
+	get_tree().current_scene.add_child(bcam)
+	bcam.make_current()
+	# Aim at the BUSIEST 10 m cell of people, not the centroid: the centroid
+	# of a crowd spread over six spaces is the empty middle of the field.
+	var cells: Dictionary = {}
+	for d in dots:
+		var dd: Dictionary = d
+		var key := Vector2i(int(floor((dd.get("pos", Vector2.ZERO) as Vector2).x / 10.0)), int(floor((dd.get("pos", Vector2.ZERO) as Vector2).y / 10.0)))
+		cells[key] = int(cells.get(key, 0)) + 1
+	var best_key := Vector2i.ZERO
+	var best_n := -1
+	for k in cells:
+		if int(cells[k]) > best_n:
+			best_n = int(cells[k])
+			best_key = k
+	var tgt := Vector2(float(best_key.x) * 10.0 + 5.0, float(best_key.y) * 10.0 + 5.0)
+	var gtgt := TerrainSurfaceQuery.ground_height_at(main, tgt.x, tgt.y)
+	print("PlaytestHarness: crowd bench — busiest cell at (%.0f, %.0f): %d people, ground %.2f" % [tgt.x, tgt.y, best_n, gtgt])
+	var views := [["01_eye", Vector2(0.0, 25.0), 1.7, 1.0], ["02_street", Vector2(20.0, 20.0), 10.0, 0.0],
+		["03_block", Vector2(0.0, 160.0), 90.0, 0.0], ["04_site", Vector2(0.0, 500.0), 600.0, 0.0]]
+	for v in views:
+		var off: Vector2 = v[1]
+		var cxz := tgt + off
+		var cy := TerrainSurfaceQuery.ground_height_at(main, cxz.x, cxz.y) + float(v[2])
+		bcam.global_position = Vector3(cxz.x, cy, cxz.y)
+		bcam.look_at(Vector3(tgt.x, gtgt + float(v[3]), tgt.y), Vector3.UP)
+		var near_n := 0
+		var in_view := 0
+		for d in dots:
+			var dd: Dictionary = d
+			var dp: Vector2 = dd.get("pos", Vector2.ZERO)
+			var wp := Vector3(dp.x, gtgt + 1.0, dp.y)
+			if wp.distance_to(bcam.global_position) < 150.0:
+				near_n += 1
+			if not bcam.is_position_behind(wp):
+				var sp := bcam.unproject_position(wp)
+				if sp.x >= 0.0 and sp.y >= 0.0 and sp.x <= get_viewport().get_visible_rect().size.x and sp.y <= get_viewport().get_visible_rect().size.y:
+					in_view += 1
+		await get_tree().create_timer(0.5).timeout
+		await _shoot_ui(shot_dir, str(v[0]))
+		print("PlaytestHarness: crowd bench — shot %s from %s: %d people inside figure range (150 m), %d in frame" % [str(v[0]), str(bcam.global_position), near_n, in_view])
+	bcam.queue_free()
+	print("PlaytestHarness: crowd bench — %d shots in %s" % [views.size(), ProjectSettings.globalize_path(shot_dir)])
+
+	# --- cleanup ------------------------------------------------------------------
+	for sid in seeded_spaces:
+		if reg.has_method("remove_space"):
+			reg.call("remove_space", str(sid))
+	for it in (model.items as Array).duplicate():
+		var iid := str((it as Dictionary).get("id", ""))
+		if iid.begins_with("cap_cb_"):
+			model.remove_item(iid)
+	_maybe_quit()
+
+
+## Renders one MultiMesh instance whose INSTANCE_CUSTOM.x and COLOR.r carry
+## 1 + 2^-12 — representable in float32, rounded to exactly 1.0 in half
+## precision — through an unshaded shader into an 8×8 SubViewport, and reads
+## the pixel back: white = the value survived (float32), black = it was
+## stored as half. Returns {"custom": "float32"|"half", "color": ...}. The
+## crowd buffer keeps its time values in the transform regardless; this
+## decides whether pose/seed fields may live in the cheaper slots.
+func _probe_multimesh_precision() -> Dictionary:
+	var out := {"custom": "unknown", "color": "unknown"}
+	var vp := SubViewport.new()
+	vp.size = Vector2i(8, 8)
+	vp.own_world_3d = true
+	vp.world_3d = World3D.new()
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	vp.transparent_bg = false
+	add_child(vp)
+	var cam := Camera3D.new()
+	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+	cam.size = 1.0
+	cam.position = Vector3(0, 0, 2)
+	vp.add_child(cam)
+	cam.current = true
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = true
+	mm.instance_count = 1
+	var quad := QuadMesh.new()
+	quad.size = Vector2(4, 4)
+	mm.mesh = quad
+	var probe_val := 1.0 + 1.0 / 4096.0
+	mm.set_instance_transform(0, Transform3D.IDENTITY)
+	mm.set_instance_color(0, Color(probe_val, 0.0, 0.0, 1.0))
+	mm.set_instance_custom_data(0, Color(probe_val, 0.0, 0.0, 1.0))
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode unshaded, cull_disabled;
+varying float ok_custom;
+varying float ok_color;
+void vertex() {
+	ok_custom = abs(INSTANCE_CUSTOM.x - 1.000244140625) < 0.00001 ? 1.0 : 0.0;
+	ok_color = abs(COLOR.r - 1.000244140625) < 0.00001 ? 1.0 : 0.0;
+}
+void fragment() {
+	ALBEDO = vec3(ok_custom, ok_color, 1.0);
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.material_override = mat
+	vp.add_child(mmi)
+	# Two presented frames: one to build the instance, one to draw it.
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	var img := vp.get_texture().get_image()
+	if img != null and img.get_width() >= 8:
+		var px := img.get_pixel(4, 4)
+		out["custom"] = "float32" if px.r > 0.5 else "half"
+		out["color"] = "float32" if px.g > 0.5 else "half"
+		out["pixel"] = px
+	vp.queue_free()
+	return out
 
 
 ## NPC population end-to-end verify + Site Plan dot capture
@@ -4941,11 +5300,16 @@ func _run_camp_capture() -> void:
 
 	var path: String = CampAreaLayer.save_path_for_map(
 		float(loader.get("_lat")), float(loader.get("_lon")))
-	var snap := _snapshot_files([path])
+	var place_path: String = FestivalPlacementLayer.save_path_for_map(
+		float(loader.get("_lat")), float(loader.get("_lon")))
+	var snap := _snapshot_files([path, place_path])
 	# Start from an empty layer so counts are this run's alone.
 	var blank := CampAreaLayer.create_empty()
 	blank.save_to(path)
+	if FileAccess.file_exists(place_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(place_path))
 	loader.set("camp_areas", null)
+	loader.set("placement", null)
 	loader.call("_attach_camp_areas")
 
 	var sites := _camp_pick_sites(loader)
@@ -5204,9 +5568,16 @@ func _run_camp_capture() -> void:
 	if ui_layer != null:
 		ui_layer.visible = false
 
+	# 10. Festival placement on REAL ground: a road along site B's long edge, a
+	# zone cut into equal-usable lots, each one a filled camp. Asserts what the
+	# offline selftest cannot — fairness on a real DEM with the loader's real
+	# exclusions — and that a fresh attach + undo both reproduce it.
+	await _camp_placement_step(loader, sites)
+
 	# Leave the map exactly as found.
 	_restore_files(snap)
 	loader.set("camp_areas", null)
+	loader.set("placement", null)
 	loader.call("_attach_camp_areas")
 	print("PlaytestHarness: camps — restored %s" % (
 		"the map's own camps" if snap[path] != null else "a map with no camps"))
@@ -5218,6 +5589,80 @@ func _run_camp_capture() -> void:
 	print("PlaytestHarness: camps — %d shots in %s" % [
 		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
+
+
+## Step 10 of the camps capture: festival placement end to end on real ground.
+func _camp_placement_step(loader: Node, sites: Array) -> void:
+	if sites.is_empty() or not loader.has_method("add_placement_zone"):
+		_camp_result(false, "placement: no site / no placement API on the loader")
+		return
+	var b: Vector2 = sites[sites.size() - 1]
+	var hw := CAMP_SITE_W * 0.5 + 30.0
+	var hd := CAMP_SITE_D * 0.5 + 10.0
+	var zone_poly := PackedVector2Array([b + Vector2(-hw, -hd), b + Vector2(hw, -hd),
+		b + Vector2(hw, hd), b + Vector2(-hw, hd)])
+	# Clear whatever the plots step left on that ground, then draw the road
+	# just inside the zone's long (south) edge and the zone fronting it.
+	loader.call("erase_camps_in_polygon", zone_poly)
+	var road_pts := FestivalPlacementLayer.road_from_zone_edge(zone_poly, 0, 6.0, 6.0)
+	var rid := str(loader.call("add_festival_road", road_pts, {"name": "Esplanade", "width_m": 8.0}))
+	var zid := str(loader.call("add_placement_zone", zone_poly, {
+		"spec": {"mode": "count", "target_n": 8, "depth_m": 25.0, "lane_w_m": 5.0,
+			"lots_per_lane": 4, "styles": ["mixed"]}, "subdivide": true}))
+	var zinfo: Dictionary = loader.call("placement_info", "zone", zid)
+	var st: Dictionary = zinfo.get("stats", {})
+	var lots: Array = (loader.get("placement") as FestivalPlacementLayer).lots_for_zone(zid) \
+		if not zid.is_empty() else []
+	print("PlaytestHarness: camps — placement: road %s, zone %s fronts %s; usable %.0f / %.0f m², %d lots, %.0f–%.0f m² (max/min %.2f, Gini %.3f), ~%d people, remainder %.0f m², warnings %s" % [
+		rid, zid, str(zinfo.get("road_ids", [])), float(st.get("usable_m2", 0.0)),
+		float(st.get("raw_m2", 0.0)), int(st.get("lots", 0)), float(st.get("usable_min", 0.0)),
+		float(st.get("usable_max", 0.0)), float(st.get("ratio_max_min", 0.0)),
+		float(st.get("gini", 0.0)), int(st.get("capacity_people", 0)),
+		float(st.get("remainder_m2", 0.0)), str(st.get("warnings", []))])
+	var road: Dictionary = loader.call("placement_info", "road", rid)
+	var filled := 0
+	var touching := 0
+	var total_structs := 0
+	for l: Dictionary in lots:
+		var li: Dictionary = loader.call("placement_info", "lot", str(l["lot_id"]))
+		var n := int(li.get("structures", 0))
+		total_structs += n
+		if n > 0:
+			filled += 1
+		var nearest := INF
+		for v in (l["polygon"] as PackedVector2Array):
+			var pts: PackedVector2Array = road["points"]
+			for i in range(pts.size() - 1):
+				nearest = minf(nearest, v.distance_to(Geometry2D.get_closest_point_to_segment(v, pts[i], pts[i + 1])))
+		if nearest <= float(road["half_width_m"]) + 0.9:
+			touching += 1
+		print("PlaytestHarness: camps —   lot %-4s usable %6.0f raw %6.0f front %5.1f m slope %4.1f° fair %.2f structures %d" % [
+			str(l["name"]), float(l["usable_m2"]), float(l["raw_m2"]), float(l["frontage_m"]),
+			float(l["mean_slope_deg"]), float(l["fairness"]), n])
+	_camp_result(not rid.is_empty() and not zid.is_empty() and (zinfo.get("road_ids", []) as Array).has(rid),
+		"placement: the zone fronts the drawn road")
+	_camp_result(lots.size() >= 6 and filled == lots.size(),
+		"placement: ≥6 lots, every one filled with structures (%d lots, %d filled)" % [lots.size(), filled])
+	_camp_result(float(st.get("ratio_max_min", 99.0)) <= 1.25,
+		"placement: equal usable area on real terrain (max/min %.2f ≤ 1.25)" % float(st.get("ratio_max_min", 0.0)))
+	_camp_result(touching == lots.size(), "placement: every lot touches the road (%d/%d)" % [touching, lots.size()])
+	# A fresh attach (= what a reload does) reproduces the same lots and camps.
+	var camps_before := int((loader.call("camp_areas_summary") as Dictionary).get("areas", 0))
+	loader.set("camp_areas", null)
+	loader.set("placement", null)
+	loader.call("_attach_camp_areas")
+	var lots_again: Array = (loader.get("placement") as FestivalPlacementLayer).lots_for_zone(zid)
+	var camps_after := int((loader.call("camp_areas_summary") as Dictionary).get("areas", 0))
+	_camp_result(lots_again.size() == lots.size() and camps_after == camps_before,
+		"placement: a fresh attach reproduces %d lots / %d camps" % [lots.size(), camps_before])
+	# Undo takes the whole thing back (both layers).
+	loader.call("push_placement_undo")
+	loader.call("delete_placement_zone", zid)
+	var gone := (loader.get("placement") as FestivalPlacementLayer).lots_for_zone(zid).is_empty()
+	var undone := bool(loader.call("undo_placement"))
+	var back := (loader.get("placement") as FestivalPlacementLayer).lots_for_zone(zid).size()
+	_camp_result(gone and undone and back == lots.size(),
+		"placement: delete removes the lots and their camps, undo brings them back")
 
 
 ## The two candidate centres (>= 260 m apart) where a test camp fills best —
@@ -8258,3 +8703,371 @@ func _dawn_cap_time_for_altitude(main: Node, clock: Object, alt_deg: float) -> f
 		else:
 			hi = mid
 	return 0.5 * (lo + hi)
+
+
+# ==================== FESTIVAL (--capture=festival) ====================
+# The festival-scale plan's end-to-end harness, built for the Walton, OR map
+# (`--user-map=walton`) but runnable on any TerrainLoader map. It drives the
+# whole chain the player would: a festival road + zone cut into lots →
+# assigned camps (placement) → one camp compound per lot on the graph with
+# its own habitat, tanks and power model → venues with a programme + two
+# portapotty banks and a water station bound to graph tanks → one sim-day
+# at speed with the graph CLOSED → the vibe meter → the settlement view's
+# five zoom stops with the crowd drawn at each. Console asserts carry what a
+# PNG cannot: venue occupancy inside vs outside the set, water per person per
+# day off the camps' own stores, blackwater landing on the BOUND tanks, the
+# vibe falling when the water runs out, and per-stop ms + draw calls.
+# --count=N scales the lots' headcounts to N people in total.
+# Snapshots and byte-restores the map's camp / placement / spaces files and
+# the graph autosave; strips its own graph items and camp compounds.
+
+func _fest_result(ok: bool, label: String) -> void:
+	print("PlaytestHarness: festival %s — %s" % ["PASS" if ok else "FAIL", label])
+
+
+func _run_festival_capture() -> void:
+	var loader := await _find_terrain_loader()
+	if loader == null or not loader.has_method("add_placement_zone"):
+		push_error("PlaytestHarness: festival needs a TerrainLoader map with the placement API")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	_set_capture_conditions()
+	var main := get_tree().current_scene
+	var sgv := await _find_graph_view()
+	if sgv == null or sgv.get("model") == null:
+		push_error("PlaytestHarness: festival — graph model unavailable")
+		_maybe_quit()
+		return
+	var model: Variant = sgv.get("model")
+	var bridge: Variant = sgv.get("_npc_population")
+	if bridge == null:
+		push_error("PlaytestHarness: festival — population bridge missing")
+		_maybe_quit()
+		return
+	var label := _shots_label if not _shots_label.is_empty() else "festival"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var lat := float(loader.get("_lat"))
+	var lon := float(loader.get("_lon"))
+	var files := [CampAreaLayer.save_path_for_map(lat, lon), FestivalPlacementLayer.save_path_for_map(lat, lon),
+		SpaceRegistry.new().save_path_for_map(lat, lon)]
+	if sgv.has_method("_graph_autosave_path"):
+		files.append(str(sgv.call("_graph_autosave_path")))
+	var snap := _snapshot_files(files)
+	# A fixed day so every run samples the same population day.
+	if "year" in main:
+		main.year = 2026
+		main.month = 7
+		main.day = 15
+	if "day_time" in main:
+		main.day_time = 10.0
+	if "time_scale" in main:
+		main.time_scale = 0.0
+	var pm := get_node_or_null("/root/PerfMonitor")
+	if pm != null and pm.has_method("set_enabled"):
+		pm.call("set_enabled", true)
+
+	# --- 1. placement: a road + zone next to the player, cut into lots -----
+	# Where a festival could actually camp: score candidate sites with the
+	# real generator + the loader's real exclusions (the camps capture's
+	# scorer), else fall back to a spot near the player.
+	var sites := _camp_pick_sites(loader)
+	var player := main.get_node_or_null("Player") as Node3D
+	var origin := Vector2(player.global_position.x, player.global_position.z) if player != null else Vector2.ZERO
+	var zc: Vector2 = sites[0] if not sites.is_empty() else origin + Vector2(0.0, -140.0)
+	var hw := CAMP_SITE_W
+	var hd := CAMP_SITE_D * 0.8
+	print("PlaytestHarness: festival — zone centre %s (%d scored sites; player at %s)" % [str(zc), sites.size(), str(origin)])
+	var zone_poly := PackedVector2Array([zc + Vector2(-hw, -hd), zc + Vector2(hw, -hd),
+		zc + Vector2(hw, hd), zc + Vector2(-hw, hd)])
+	loader.call("erase_camps_in_polygon", zone_poly)
+	var road_pts := FestivalPlacementLayer.road_from_zone_spine(zone_poly, 90.0)
+	var rid := str(loader.call("add_festival_road", road_pts, {"name": "Esplanade", "width_m": 8.0}))
+	var zid := str(loader.call("add_placement_zone", zone_poly, {
+		"spec": {"mode": "count", "target_n": 24, "depth_m": 30.0, "lane_w_m": 5.0,
+			"lots_per_lane": 6, "styles": ["mixed", "theme_camp", "rv_park", "car_camping"]},
+		"subdivide": true}))
+	var placement: FestivalPlacementLayer = loader.get("placement")
+	var lots: Array = placement.lots_for_zone(zid) if placement != null and not zid.is_empty() else []
+	var zinfo: Dictionary = loader.call("placement_info", "zone", zid)
+	var zst: Dictionary = zinfo.get("stats", {})
+	print("PlaytestHarness: festival — zone cut: %d lots, usable %.0f / %.0f m², warnings %s" % [
+		lots.size(), float(zst.get("usable_m2", 0.0)), float(zst.get("raw_m2", 0.0)), str(zst.get("warnings", []))])
+	loader.call("assign_placement", zid)
+	lots = placement.lots_for_zone(zid)
+	# --count scales the headcounts to the requested festival size.
+	var want_total := _bench_count if _bench_count > 0 and _bench_count != 300 else 0
+	var people := 0
+	for l: Dictionary in lots:
+		people += int((l.get("assigned_camp", {}) as Dictionary).get("headcount", 0))
+	if want_total > 0 and people > 0:
+		var k := float(want_total) / float(people)
+		people = 0
+		for l: Dictionary in lots:
+			var ac: Dictionary = (l.get("assigned_camp", {}) as Dictionary).duplicate()
+			if ac.is_empty():
+				continue
+			ac["headcount"] = maxi(int(round(float(ac.get("headcount", 0)) * k)), 1)
+			people += int(ac["headcount"])
+			placement.update_lot(str(l["lot_id"]), {"assigned_camp": ac})
+		loader.call("_sync_lot_camps", zid)
+		lots = placement.lots_for_zone(zid)
+	for _i in 4:
+		await get_tree().process_frame
+	var camps: Array = sgv.call("festival_camps")
+	print("PlaytestHarness: festival — road %s, zone %s: %d lots, %d people, %d camp compounds" % [
+		rid, zid, lots.size(), people, camps.size()])
+	_fest_result(lots.size() >= 12 and camps.size() == lots.size() and people >= 200,
+		"placement → graph: %d lots became %d camp compounds (%d people)" % [lots.size(), camps.size(), people])
+
+	# --- 2. venues + infrastructure --------------------------------------------
+	var reg: SpaceRegistry = bridge.call("registry_for", main)
+	var seeded_spaces: Array = []
+	var seeded_items: Array = []
+	var add_tank := func(id: String, kind: String, cap: float, level: float, gx: float, gy: float) -> void:
+		model.add_item({"id": id, "type": "resource", "x": gx, "y": gy, "width": 90.0, "height": 100.0,
+			"specs": {"name": id, "resource_kind": kind, "capacity_qty": cap, "capacity_unit": "L", "level": level,
+				"site_x_m": 0.0, "site_z_m": 0.0}})
+		seeded_items.append(id)
+	add_tank.call("cap_fest_black_a", "blackwater", 20000.0, 0.0, -900.0, -400.0)
+	add_tank.call("cap_fest_black_b", "blackwater", 20000.0, 0.0, -700.0, -400.0)
+	add_tank.call("cap_fest_water", "water", 100000.0, 1.0, -500.0, -400.0)
+	var venue := func(stype: String, c: Vector2, half: float, cap: int, lbl: String, fields: Dictionary) -> String:
+		var sid: String = reg.set_space_type({"kind": "area", "poly": [
+			[c.x - half, c.y - half], [c.x + half, c.y - half], [c.x + half, c.y + half], [c.x - half, c.y + half]]},
+			stype, cap, lbl)
+		if not sid.is_empty():
+			if not fields.is_empty():
+				reg.set_space_fields(sid, fields)
+			seeded_spaces.append(sid)
+		return sid
+	# The set: 20:00 → 02:00 with a loud draw; a dark stage pulls almost nobody.
+	var stage_id: String = venue.call("stage", zc + Vector2(0.0, 150.0), 25.0, 600, "Bass Stage",
+		{"draw": 1.0, "program": [{"day": -1, "start_h": 20.0, "end_h": 2.0, "draw": 1.0, "label": "Headliner", "load_w": 4000.0}]})
+	# Temple and Center Camp sit at the stage's distance from the camps, so
+	# the choice between them is draw and taste, not the walk.
+	var temple_id: String = venue.call("temple", zc + Vector2(-150.0, 150.0), 18.0, 200, "Temple", {"draw": 0.6})
+	var center_id: String = venue.call("center_camp", zc + Vector2(150.0, 150.0), 20.0, 300, "Center Camp", {"draw": 0.7})
+	var bank_a: String = venue.call("restroom", zc + Vector2(-120.0, 95.0), 6.0, 24, "Portapotties A",
+		{"units": 12, "graph_item_id": "cap_fest_black_a"})
+	var bank_b: String = venue.call("restroom", zc + Vector2(120.0, 95.0), 6.0, 24, "Portapotties B",
+		{"units": 12, "graph_item_id": "cap_fest_black_b"})
+	var water_id: String = venue.call("water_point", zc + Vector2(0.0, 100.0), 5.0, 40, "Water station",
+		{"graph_item_id": "cap_fest_water"})
+	var kitchen_id: String = venue.call("kitchen", zc + Vector2(60.0, 100.0), 8.0, maxi(people, 60), "Camp kitchens", {})
+	var sleep_id: String = venue.call("sleep", zc, 60.0, 5000, "Camp beds", {})
+	# Shower trucks: without a shower the FULL tier's hygiene need climbs past
+	# its threshold and NpcAgent._wants_enrichment refuses every venue trip
+	# for good — a site with no showers never gathers.
+	var shower_id: String = venue.call("shower", zc + Vector2(-60.0, 100.0), 6.0, maxi(people / 8, 10), "Shower trucks", {})
+	var venues_ok := not stage_id.is_empty() and not temple_id.is_empty() and not center_id.is_empty() \
+		and not bank_a.is_empty() and not bank_b.is_empty() and not water_id.is_empty() \
+		and not kitchen_id.is_empty() and not sleep_id.is_empty()
+	_fest_result(venues_ok, "venues seeded (stage with a 20:00–02:00 set, temple, center camp, 2 portapotty banks, water, kitchen, beds)")
+	var flow0: Variant = sgv.get("_resource_flow")
+	if flow0 != null and flow0.has_method("clear_timelines"):
+		flow0.call("clear_timelines")
+
+	# --- 3. one sim-day at speed, graph closed --------------------------------
+	var hab_ids: Array = []
+	var water_cap := 0.0
+	for c in camps:
+		for it in model.get_items_in_scope(str(c["scope"])):
+			var d: Dictionary = it
+			var sp: Dictionary = d.get("specs", {})
+			if str(sp.get("role", "")) == "habitat":
+				hab_ids.append(str(d["id"]))
+			elif str(d.get("type", "")) == "resource" and str(sp.get("resource_kind", "")) == "water":
+				water_cap += float(sp.get("capacity_qty", 0.0)) * float(sp.get("level", 0.0))
+	var stage_in: Array = []
+	var stage_out: Array = []
+	var vibe := FestivalVibe.new()
+	var vibe_samples: Array = []
+	var light_seen := 0
+	var full_seen := 0
+	main.time_scale = 0.2   # 720× → one sim-day in ~2 min of real time
+	var t_start := Time.get_ticks_msec()
+	var h_start := float(main.call("get_absolute_hours"))
+	var last_h := -1.0
+	print("PlaytestHarness: festival — running the day: time_scale asked 0.2, effective %.3f" % float(main.get("time_scale")))
+	while true:
+		await get_tree().create_timer(1.0).timeout
+		var h := float(main.get("day_time"))
+		var abs_h := float(main.call("get_absolute_hours"))
+		var occ := reg.occupant_count(stage_id)
+		var st := FestivalProgram.state_at(reg.find_by_id(stage_id), h)
+		# The set vs the DARK stage by day (10:00–18:00). The hour before a
+		# set is people already drifting over, and the hours after it are
+		# people drifting home — neither says anything about the pull.
+		if bool(st.get("active", false)):
+			stage_in.append(occ)
+		elif h >= 10.0 and h < 18.0:
+			stage_out.append(occ)
+		var sums: Array = []
+		for hid in hab_ids:
+			sums.append(bridge.call("summary_for", str(hid)))
+		var v := FestivalVibe.compute(sums)
+		vibe.sample(abs_h, float(v["score"]))
+		vibe_samples.append(v)
+		var lc: Dictionary = bridge.call("light_cohorts") if bridge.has_method("light_cohorts") else {}
+		var lp := 0
+		for k in lc:
+			lp += int((lc[k] as CrowdCohort).alive_count())
+		light_seen = maxi(light_seen, lp)
+		full_seen = maxi(full_seen, int(v["people"]) - lp)
+		if int(Time.get_ticks_msec() - t_start) % 20000 < 1000:
+			var acts: Dictionary = {}
+			for sm in sums:
+				for a in (sm as Dictionary).get("activities", {}):
+					acts[str(a)] = int(acts.get(str(a), 0)) + int((sm as Dictionary)["activities"][a])
+			var akeys: Array = acts.keys()
+			akeys.sort_custom(func(x, y): return int(acts[x]) > int(acts[y]))
+			var abits := PackedStringArray()
+			for a in akeys.slice(0, 7):
+				abits.append("%s %d" % [str(a), int(acts[a])])
+			print("PlaytestHarness: festival — %02d:%02d  stage %3d temple %3d center %3d (set %s)  %s  light %d  | %s" % [
+				int(h), int(fposmod(h, 1.0) * 60.0), occ, reg.occupant_count(temple_id), reg.occupant_count(center_id),
+				"ON" if bool(st.get("active", false)) else "off",
+				FestivalVibe.headline(v, vibe.trend()), lp, " · ".join(abits)])
+		last_h = h
+		# 10:00 → 04:00: the whole 20:00–02:00 set and the hours either side.
+		if abs_h - h_start >= 18.0 or Time.get_ticks_msec() - t_start > 420000:
+			break
+	main.time_scale = 0.0
+	print("PlaytestHarness: festival — day loop: %.1f sim-hours in %.0f s real" % [
+		float(main.call("get_absolute_hours")) - h_start, float(Time.get_ticks_msec() - t_start) / 1000.0])
+	var peak_in := 0
+	var mean_in := 0.0
+	for o in stage_in:
+		peak_in = maxi(peak_in, int(o))
+		mean_in += float(o)
+	mean_in = (mean_in / float(stage_in.size())) if not stage_in.is_empty() else 0.0
+	var mean_out := 0.0
+	for o in stage_out:
+		mean_out += float(o)
+	mean_out = (mean_out / float(stage_out.size())) if not stage_out.is_empty() else 0.0
+	print("PlaytestHarness: festival — stage occupancy: inside the set peak %d / mean %.1f (%d samples), dark stage by day mean %.1f (%d samples)" % [
+		peak_in, mean_in, stage_in.size(), mean_out, stage_out.size()])
+	_fest_result(peak_in >= 20 and mean_in > 2.0 * maxf(mean_out, 1.0),
+		"the programmed stage pulls a crowd inside its set (mean %.1f) and little by day while dark (mean %.1f)" % [mean_in, mean_out])
+	# Water: what the camps' own stores lost over the day, per person.
+	var water_now := 0.0
+	for c in camps:
+		for it in model.get_items_in_scope(str(c["scope"])):
+			var d: Dictionary = it
+			var sp: Dictionary = d.get("specs", {})
+			if str(d.get("type", "")) == "resource" and str(sp.get("resource_kind", "")) == "water":
+				water_now += float(sp.get("capacity_qty", 0.0)) * float(sp.get("level", 0.0))
+	var hours := absf(float(main.call("get_absolute_hours")) - (vibe._ring[0][0] if not vibe._ring.is_empty() else 0.0))
+	var l_per_person_day := ((water_cap - water_now) / float(maxi(people, 1))) / maxf(hours, 0.1) * 24.0
+	print("PlaytestHarness: festival — camp water stores: %.0f → %.0f L over %.1f h = %.1f L/person/day" % [
+		water_cap, water_now, hours, l_per_person_day])
+	_fest_result(l_per_person_day > 25.0 and l_per_person_day < 90.0,
+		"water per person per day off the camps' own stores is in range (%.1f L; calibration ~50 L)" % l_per_person_day)
+	var black_a := float((model.get_item("cap_fest_black_a") as Dictionary).get("specs", {}).get("level", 0.0))
+	var black_b := float((model.get_item("cap_fest_black_b") as Dictionary).get("specs", {}).get("level", 0.0))
+	var water_depot := float((model.get_item("cap_fest_water") as Dictionary).get("specs", {}).get("level", 1.0))
+	print("PlaytestHarness: festival — bound tanks: portapotty A %.2f%% · B %.2f%% · water station %.2f%%" % [
+		black_a * 100.0, black_b * 100.0, water_depot * 100.0])
+	_fest_result(black_a > 0.0 and black_b > 0.0,
+		"blackwater from the whole festival lands on BOTH portapotty banks' bound tanks")
+	var cr: Node = sgv.call("crowd_renderer") if sgv.has_method("crowd_renderer") else null
+	var full_drawn := int(cr.call("full_people_drawn")) if cr != null and cr.has_method("full_people_drawn") else -1
+	var hero_budget := int(main.get_node_or_null("NpcPopulationHost").call("hero_budget")) 		if main.get_node_or_null("NpcPopulationHost") != null else -1
+	_fest_result(light_seen > 0 and full_seen > 0,
+		"both tiers ran (peak %d light-tier, %d full-tier people)" % [light_seen, full_seen])
+	_fest_result(full_drawn >= 0 and full_drawn >= full_seen - hero_budget - 5 and full_drawn <= full_seen,
+		"the hero pool handed the full tier past its budget to the crowd renderer (%d of %d drawn as crowd, budget %d)" % [full_drawn, full_seen, hero_budget])
+	var pstates: Dictionary = sgv.call("camp_power_states") if sgv.has_method("camp_power_states") else {}
+	var soc_stamped := 0
+	for c in camps:
+		if (model.get_item(str(c["id"])) as Dictionary).get("specs", {}).has("camp_soc"):
+			soc_stamped += 1
+	_fest_result(pstates.size() == camps.size() and soc_stamped == camps.size(),
+		"every camp runs its own power model (%d states, %d SOC stamps)" % [pstates.size(), soc_stamped])
+	var fest := CampLedger.festival(model)
+	var totals: Dictionary = fest.get("totals", {})
+	var wrow: Dictionary = totals.get("water", {})
+	print("PlaytestHarness: festival — ledger: %d people, water demand %.1f L/h vs supply %.1f, open kinds across camps: %s" % [
+		int(fest.get("people", 0)), float(wrow.get("demand", 0.0)), float(wrow.get("supply", 0.0)) + float(wrow.get("imports", 0.0)),
+		str(_fest_open_kinds(fest))])
+	_fest_result(int(fest.get("people", 0)) == people, "the festival ledger counts the lots' people")
+	var v_before: Dictionary = vibe_samples[vibe_samples.size() - 1] if not vibe_samples.is_empty() else {}
+	print("PlaytestHarness: festival — vibe after the day: %s" % FestivalVibe.headline(v_before, vibe.trend()))
+
+	# --- 4. cut the water: the vibe must answer -------------------------------
+	for c in camps:
+		for it in model.get_items_in_scope(str(c["scope"])):
+			var d: Dictionary = it
+			var sp: Dictionary = (d.get("specs", {}) as Dictionary).duplicate(true)
+			if str(d.get("type", "")) == "resource" and str(sp.get("resource_kind", "")) == "water":
+				sp["level"] = 0.0
+				model.update_item(str(d["id"]), {"specs": sp})
+	var sp_w: Dictionary = (model.get_item("cap_fest_water") as Dictionary).get("specs", {}).duplicate(true)
+	sp_w["level"] = 0.0
+	model.update_item("cap_fest_water", {"specs": sp_w})
+	if flow0 != null and flow0.has_method("clear_timelines"):
+		flow0.call("clear_timelines")
+	main.time_scale = 0.2
+	await get_tree().create_timer(45.0).timeout   # ~9 sim-hours
+	main.time_scale = 0.0
+	var sums2: Array = []
+	for hid in hab_ids:
+		sums2.append(bridge.call("summary_for", str(hid)))
+	var v_after := FestivalVibe.compute(sums2)
+	print("PlaytestHarness: festival — vibe after the water ran out: %s" % FestivalVibe.headline(v_after, 0.0))
+	_fest_result(float(v_after["score"]) < float(v_before.get("score", 1.0)) - 0.03
+		and (v_after["blocked"] as Dictionary).has("thirst"),
+		"the vibe falls and names thirst once the water is gone (%.2f → %.2f)" % [float(v_before.get("score", 0.0)), float(v_after["score"])])
+
+	# --- 5. the settlement view over the crowd, five zoom stops ---------------
+	if main.has_method("open_settlement_view"):
+		main.call("open_settlement_view", zc)
+		await get_tree().create_timer(1.0).timeout
+		var view: Variant = main.get("settlement_view")
+		var cam: Variant = view.call("camera") if view != null else null
+		if cam != null:
+			cam.call("look_at_xz", zc + Vector2(0.0, 80.0))
+			for s in [["eye", 1.7], ["street", 12.0], ["block", 60.0], ["camp", 300.0], ["site", 1200.0]]:
+				cam.set("_h_target", float(s[1]))
+				cam.set("_h", float(s[1]))
+				await get_tree().create_timer(0.8).timeout
+				var snapd: Dictionary = pm.call("snapshot") if pm != null and pm.has_method("snapshot") else {}
+				var secs: Dictionary = snapd.get("sections_ms", {})
+				var rend: Dictionary = snapd.get("render", {})
+				await _shoot_ui(dir, "settlement_%s" % str(s[0]))
+				print("PlaytestHarness: festival — stop %-6s h=%6.1f  frame %.1f ms  npc_host %.1f  crowd_render %.1f  flow %.1f  draws %d" % [
+					str(s[0]), float(cam.call("height")), float(snapd.get("frame_ms", 0.0)),
+					float(secs.get("npc_host", 0.0)), float(secs.get("crowd_render", 0.0)),
+					float(secs.get("flow_engine", 0.0)), int(rend.get("draw_calls", 0))])
+		if view != null:
+			view.call("close")
+		await get_tree().process_frame
+		_fest_result(main.get("settlement_view") == null or not bool((main.get("settlement_view") as Node).call("is_open")),
+			"settlement view closed again")
+
+	# --- cleanup --------------------------------------------------------------
+	for sid in seeded_spaces:
+		reg.remove_space(str(sid))
+	for iid in seeded_items:
+		model.remove_item(str(iid))
+	if sgv.has_method("sync_camps_from_placement"):
+		sgv.call("sync_camps_from_placement", [])
+	loader.call("delete_placement_zone", zid)
+	if loader.has_method("delete_festival_road"):
+		loader.call("delete_festival_road", rid)
+	_restore_files(snap)
+	print("PlaytestHarness: festival — restored the map's camp / placement / spaces files and the graph autosave")
+	print("PlaytestHarness: festival — shots in %s" % ProjectSettings.globalize_path(dir))
+	_maybe_quit()
+
+
+func _fest_open_kinds(fest: Dictionary) -> Dictionary:
+	var out := {}
+	for c in fest.get("camps", []):
+		for k in (c as Dictionary).get("open", []):
+			out[str(k)] = int(out.get(str(k), 0)) + 1
+	return out

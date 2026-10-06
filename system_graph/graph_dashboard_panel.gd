@@ -655,6 +655,10 @@ func _refresh_settlement() -> void:
 			sig_parts.append("a:%s=%d" % [str(a), int(acts[a])])
 	for al in _alerts:
 		sig_parts.append("!%s" % str(al))
+	var vibe: Dictionary = _graph_view.call("festival_vibe") \
+		if _graph_view != null and _graph_view.has_method("festival_vibe") else {}
+	if not vibe.is_empty():
+		sig_parts.append("v=%s" % str(vibe.get("headline", "")))
 	var sig := "\n".join(sig_parts)
 	if sig == _settlement_sig:
 		return
@@ -709,3 +713,24 @@ func _refresh_settlement() -> void:
 		alert_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		alert_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
 		_settlement_vbox.add_child(alert_lbl)
+	# Festival: the whole event's vibe + its band histogram, from the camp
+	# compounds (festival plan Phase 7). Absent on a single-camp map.
+	if not vibe.is_empty() and int(vibe.get("people", 0)) > 0:
+		var fhead := Label.new()
+		fhead.text = "🎪 " + str(vibe.get("headline", ""))
+		fhead.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		fhead.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		fhead.add_theme_color_override("font_color", vibe.get("color", UITheme.C_TEXT) as Color)
+		_settlement_vbox.add_child(fhead)
+		var hist: Array = vibe.get("histogram", [])
+		var hbits := PackedStringArray()
+		for i in hist.size():
+			if int(hist[i]) > 0:
+				hbits.append("%d %s" % [int(hist[i]), str((NpcMorale.BANDS[i] as Dictionary)["label"])])
+		if not hbits.is_empty():
+			var hl := Label.new()
+			hl.text = " · ".join(hbits)
+			hl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			hl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			hl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+			_settlement_vbox.add_child(hl)

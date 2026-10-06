@@ -6814,6 +6814,13 @@ func _draw_compound_body(rect: Rect2, specs: Dictionary, item: Dictionary = {}) 
 	# same GLB-thumbnail path processor cards use.
 	if _draw_compound_banner(rect, specs):
 		return
+	# A festival CAMP reads as people + the loops it has not closed — never as
+	# a miniature of its tanks (fifty of those per redraw is the one thing
+	# that made the festival canvas crawl). `camp_open` / `camp_morale` are
+	# stamped onto the compound by the view's 1 s ledger refresh.
+	if specs.has("camp_lot_id"):
+		_draw_camp_card(rect, specs)
+		return
 	# When the super-node is drawn large enough on screen, show a live miniature
 	# of its child canvas (TouchDesigner-style) instead of a plain text summary,
 	# so a collapsed group still reads as "a system inside a node". LOD-gated on
@@ -6836,6 +6843,53 @@ func _draw_compound_body(rect: Rect2, specs: Dictionary, item: Dictionary = {}) 
 	y += fsize + 3.0
 	draw_string(fnt, Vector2(x, y), "In %d  Out %d" % [port_in, port_out],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_M)
+
+
+## The camp card: headcount + morale band in the band's colour, then one line
+## per open loop ("⚠ water in", "⚠ blackwater out"). Nothing here walks the
+## model — the view precomputes `camp_open` and `camp_morale`.
+func _draw_camp_card(rect: Rect2, specs: Dictionary) -> void:
+	var fnt := ThemeDB.fallback_font
+	var fsize := _fit_font_size(rect, 2, 10.0, 11.0)
+	var x := rect.position.x + 8.0
+	var y := rect.position.y + fsize + 4.0
+	var n := int(specs.get("camp_headcount", 0))
+	var present := int(specs.get("camp_present", n))
+	var morale := float(specs.get("camp_morale", -1.0))
+	var head := "👥 %d" % present
+	if present != n:
+		head += " of %d" % n
+	var col := C_TEXT
+	if morale >= 0.0:
+		head += " · " + NpcMorale.label(morale)
+		col = NpcMorale.color(morale)
+	draw_string(fnt, Vector2(x, y), head, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, col)
+	y += fsize + 4.0
+	# Power line (the simplified per-camp model): SOC, in, out, hours left.
+	if specs.has("camp_soc"):
+		var soc := float(specs.get("camp_soc", 0.0))
+		var txt := "⚡ %d%% · %.1f kW in · %.1f kW out" % [int(round(soc * 100.0)),
+			float(specs.get("camp_pv_kw", 0.0)), float(specs.get("camp_load_kw", 0.0))]
+		var hl := float(specs.get("camp_hours_left", -1.0))
+		if hl >= 0.0 and hl < 48.0:
+			txt += " · %.0f h" % hl
+		var pcol := C_TEXT_M if bool(specs.get("camp_ac", true)) else Color(0.95, 0.4, 0.4)
+		draw_string(fnt, Vector2(x, y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, pcol)
+		y += fsize + 3.0
+	var open: Array = specs.get("camp_open", [])
+	if open.is_empty():
+		draw_string(fnt, Vector2(x, y), "all loops closed", HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT_M)
+		return
+	var lines := 0
+	for kind in open:
+		if y > rect.end.y - 2.0:
+			break
+		var k := str(kind)
+		var is_out := k == "greywater" or k == "blackwater" or k == "food_waste"
+		draw_string(fnt, Vector2(x, y), "⚠ %s %s" % [k, "out" if is_out else "in"],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.95, 0.75, 0.3))
+		y += fsize + 2.0
+		lines += 1
 
 
 ## Draw a super-node's 2D banner image (its `model_id` GLB thumbnail) filling the

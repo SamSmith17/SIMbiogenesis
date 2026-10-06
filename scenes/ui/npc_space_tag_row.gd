@@ -89,7 +89,7 @@ func _build() -> void:
 
 	_capacity = SpinBox.new()
 	_capacity.min_value = 1.0
-	_capacity.max_value = 64.0
+	_capacity.max_value = 5000.0
 	_capacity.step = 1.0
 	_capacity.value = float(SpaceRegistry.DEFAULT_CAPACITY)
 	_capacity.tooltip_text = "How many people can use this space at once"

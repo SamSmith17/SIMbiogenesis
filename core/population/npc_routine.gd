@@ -125,6 +125,29 @@ static func default_day() -> NpcRoutine:
 	return r
 
 
+## A FESTIVAL day: late nights at the venues, late mornings in camp. The camp
+## default above sends everyone to bed at 23:30, which empties a 20:00–02:00
+## stage set an hour and a half in; festival camp templates stamp this one
+## instead (CampTemplates). No WORK block — the festival is the point — so
+## chores on a camp board are picked up through need/free fall-through only.
+static func festival_day() -> NpcRoutine:
+	var r := NpcRoutine.new()
+	r.blocks = [
+		{"start_h": 2.5, "end_h": 9.5, "kind": SLEEP},
+		{"start_h": 9.5, "end_h": 9.5 + BATHROOM_HOURS, "kind": BATHROOM},
+		{"start_h": 9.5 + BATHROOM_HOURS, "end_h": 10.5, "kind": EAT},
+		{"start_h": 10.5, "end_h": 13.0, "kind": FREE},
+		{"start_h": 13.0, "end_h": 14.0 - BATHROOM_HOURS, "kind": EAT},
+		{"start_h": 14.0 - BATHROOM_HOURS, "end_h": 14.0, "kind": BATHROOM},
+		{"start_h": 14.0, "end_h": 18.0, "kind": FREE},
+		{"start_h": 18.0, "end_h": 19.0, "kind": EAT},
+		{"start_h": 19.0, "end_h": 19.0 + BATHROOM_HOURS, "kind": BATHROOM},
+		{"start_h": 19.0 + BATHROOM_HOURS, "end_h": 2.0, "kind": ENRICHMENT},
+		{"start_h": 2.0, "end_h": 2.5, "kind": WASH},
+	]
+	return r
+
+
 ## Deterministic per-agent shift so a camp does not move in lockstep. Derived
 ## from the agent id, so it is stable across saves and identical between runs.
 static func offset_for(agent_id: String) -> float:

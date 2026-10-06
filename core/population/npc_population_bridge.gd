@@ -16,6 +16,17 @@ extends RefCounted
 const PERSIST_INTERVAL_H := 0.5   # snapshot into specs.pop_state at most 2x/sim-hour
 
 var _engines: Dictionary = {}          # item_id -> NpcPopulationEngine
+## The LIGHT tier (festival scale): one CrowdCohort per camp that is not in
+## focus, the tier each camp is currently in, and the full engines PARKED
+## while their camp is light (board, labour, skills and duties stay on them,
+## so promotion finds the settlement exactly as left). CrowdFocus decides.
+var _cohorts: Dictionary = {}          # item_id -> CrowdCohort
+var _tiers: Dictionary = {}            # item_id -> CrowdFocus.TIER_*
+var _tier_pending: Dictionary = {}
+var _parked: Dictionary = {}           # item_id -> NpcPopulationEngine
+var _light_work_h: Dictionary = {}     # item_id -> statistical labour banked
+var _watched_iid := ""
+var _viewer_xz := Vector2.ZERO
 var _model = null                      # last GraphModel seen by tick()
 var _configured_count: Dictionary = {} # item_id -> int (reconfigure on change)
 var _last_persist_h: Dictionary = {}   # item_id -> float abs-hours
@@ -105,6 +116,12 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	_model = model
 	var hour_of_day: float = fposmod(abs_h, 24.0)
 	var registry := _find_registry(main)
+	# Resolve every space's world position ONCE per tick; every query this
+	# tick (nearest restroom, venue choice, nav anchors) reads the cache
+	# instead of resolving a prop record per candidate.
+	if registry != null:
+		registry.refresh_positions(func(space: Dictionary) -> Variant:
+			return registry.resolve_position(space, main))
 	_nav_queries_this_tick = 0
 	var region := _population_region(main, registry)
 	_service_nav(main, registry, region)
@@ -113,16 +130,31 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	_service_desire(abs_h, region)
 	var seen: Dictionary = {}
 
-	for item in model.get_items_in_scope("root"):
+	# Every pop-driven habitat, INCLUDING those inside camp compounds (a
+	# festival camp is a super-node), and the tier each one runs in this tick.
+	var habitats: Array = []
+	var camps: Array = []
+	for item in GraphNesting.walk_items(model, "root"):
+		var d0: Dictionary = item
+		if str(d0.get("type", "")) != "processor":
+			continue
+		var specs0: Dictionary = d0.get("specs", {})
+		if str(specs0.get("role", "")) != "habitat" or not bool(specs0.get("pop_driven", false)):
+			continue
+		habitats.append(d0)
+		camps.append({"id": str(d0.get("id", "")), "home": _home_pos(specs0, main),
+			"count": clampi(int(float(specs0.get("occupants", 10.0))), 1, 5000)})
+	_tiers = CrowdFocus.decide(camps, _viewer_xz, _watched_iid, _tiers, _tier_pending, abs_h)
+
+	for item in habitats:
 		var d: Dictionary = item
-		if str(d.get("type", "")) != "processor":
-			continue
 		var specs: Dictionary = d.get("specs", {})
-		if str(specs.get("role", "")) != "habitat" or not bool(specs.get("pop_driven", false)):
-			continue
 		var iid := str(d.get("id", ""))
 		seen[iid] = true
 		_model_item_cache[iid] = d
+		if str(_tiers.get(iid, CrowdFocus.TIER_FULL)) == CrowdFocus.TIER_LIGHT:
+			_tick_light(iid, specs, main, flow_engine, model, registry, abs_h, hour_of_day)
+			continue
 		var engine := _ensure_engine(iid, specs, main)
 		# Last flow tick's verdict drives this tick's blocked activities.
 		engine.set_starved(specs.get("starved_kinds", []) as Array)
@@ -190,6 +222,168 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			_last_persist_h.erase(iid)
 			_last_persist_blob.erase(iid)
 			_project_stores.erase(iid)
+	for iid in _cohorts.keys():
+		if not seen.has(str(iid)):
+			flow_engine.clear_habitat_demand(str(iid))
+			_cohorts.erase(iid)
+			_parked.erase(iid)
+			_configured_count.erase(iid)
+			_tiers.erase(iid)
+			_last_persist_h.erase(iid)
+			_last_persist_blob.erase(iid)
+
+
+# ---------------------------------------------------------------------------
+# Light tier (festival scale)
+# ---------------------------------------------------------------------------
+
+## Where the player (camera) is, for the focus policy. Set by the view each
+## ambient tick; a site that fits the full budget never reads it.
+func set_viewer(xz: Vector2) -> void:
+	_viewer_xz = xz
+
+
+## A camp the player is watching (settlement view / graph selection) is
+## always full detail.
+func set_watched_habitat(item_id: String) -> void:
+	_watched_iid = item_id
+
+
+func tier_of(item_id: String) -> String:
+	return str(_tiers.get(item_id, CrowdFocus.TIER_FULL))
+
+
+func cohort_for(item_id: String) -> CrowdCohort:
+	return _cohorts.get(item_id)
+
+
+## Every light-tier camp: {item_id: CrowdCohort}. The crowd renderer's input.
+func light_cohorts() -> Dictionary:
+	return _cohorts
+
+
+func last_abs_h() -> float:
+	return _last_abs_h
+
+
+## Statistical labour banked by a light camp since the last call (person-
+## hours at their productivity). Phase 5 credits it to the camp's board.
+func take_light_work_hours(item_id: String) -> float:
+	var h := float(_light_work_h.get(item_id, 0.0))
+	_light_work_h.erase(item_id)
+	return h
+
+
+func _tick_light(iid: String, specs: Dictionary, main: Node, flow_engine, model,
+		registry: SpaceRegistry, abs_h: float, hour_of_day: float) -> void:
+	var cohort := _ensure_cohort(iid, specs, main, registry)
+	cohort.set_starved(specs.get("starved_kinds", []) as Array)
+	var parked: NpcPopulationEngine = _parked.get(iid)
+	cohort.has_work = parked != null and parked.chore_board != null 		and not parked.chore_board.chores.is_empty()
+	var ctx := {
+		"registry": registry,
+		"hour_of_day": hour_of_day,
+		"abs_hours": abs_h,
+		"weather": _sample_weather(main, hour_of_day),
+		"meal_available": flow_engine != null and flow_engine.has_method("habitat_kind_supplied")
+			and flow_engine.habitat_kind_supplied(iid, "meal"),
+		"routine": cohort.routine,
+	}
+	var demand: Dictionary = cohort.tick(abs_h, ctx)
+	flow_engine.set_habitat_demand(iid, demand)
+	# What was consumed AT bound venues (a portapotty bank, a water station)
+	# lands on those tanks, not on this camp's habitat.
+	var flows := cohort.take_venue_flows()
+	if flow_engine.has_method("add_external_flow"):
+		for item_id in flows:
+			for kind in flows[item_id]:
+				flow_engine.add_external_flow(str(item_id), str(kind), float(flows[item_id][kind]))
+	_light_work_h[iid] = float(_light_work_h.get(iid, 0.0)) + cohort.take_work_hours()
+	_maybe_persist_light(model, iid, cohort, abs_h)
+
+
+func _ensure_cohort(iid: String, specs: Dictionary, main: Node, registry: SpaceRegistry) -> CrowdCohort:
+	var count := clampi(int(float(specs.get("occupants", 10.0))), 1, 5000)
+	var cohort: CrowdCohort = _cohorts.get(iid)
+	if cohort != null and int(_configured_count.get(iid, -1)) == count:
+		return cohort
+	var home := _home_pos(specs, main)
+	if _engines.has(iid):
+		# Demotion: park the engine (its board, labour and skills are not
+		# people) and hand its people to the crowd.
+		var engine: NpcPopulationEngine = _engines[iid]
+		cohort = NpcTierConvert.to_light(engine, registry, home)
+		_parked[iid] = engine
+		_engines.erase(iid)
+	else:
+		cohort = CrowdCohort.new()
+		var snap: Dictionary = specs.get("pop_state", {}) as Dictionary
+		if CrowdCohort.is_light_snapshot(snap) and int(snap.get("n", -1)) == count:
+			cohort.restore(snap)
+		elif not snap.is_empty() and (snap.get("agents", []) as Array).size() == count:
+			# Saved while full: rebuild that roster and convert it.
+			var e := NpcPopulationEngine.new()
+			e.restore(snap)
+			cohort = NpcTierConvert.to_light(e, registry, home)
+		else:
+			cohort.configure(count, iid, home)
+	var routine_arr: Array = specs.get("pop_routine", []) as Array
+	cohort.routine = NpcRoutine.from_array(routine_arr) if not routine_arr.is_empty() \
+		else NpcRoutine.default_day()
+	cohort.consequence = NpcConsequence.normalize(specs.get("pop_consequence", ""))
+	cohort.agent_departed.connect(
+		func(_aid: String, who: String, reason: String) -> void:
+			var why := _need_text(reason)
+			settlement_log().add("departed", "%s left — %s" % [who, why],
+				_last_abs_h, SettlementLog.ALERT, iid,
+				{"title": "%s left" % who, "detail": why}))
+	cohort.collapse_warning.connect(
+		func(_risk: float) -> void:
+			settlement_log().add("collapse_warning",
+				"People are talking about leaving",
+				_last_abs_h, SettlementLog.ALERT, iid,
+				{"title": "The community is unravelling",
+					"detail": "people are talking about leaving"}))
+	cohort.colony_collapsed.connect(
+		func() -> void:
+			settlement_log().add("collapsed",
+				"Colony collapse — too few people remain",
+				_last_abs_h, SettlementLog.ALERT, iid,
+				{"title": "Colony collapse",
+					"detail": "too few people remain to keep this place running"}))
+	cohort.colony_deserted.connect(
+		func(cause: String) -> void:
+			var why2 := _need_text(cause)
+			settlement_log().add("deserted", "Everyone has left — %s" % why2,
+				_last_abs_h, SettlementLog.ALERT, iid,
+				{"title": "Everyone has left",
+					"detail": "%s · fix it, then Reset population" % why2}))
+	_cohorts[iid] = cohort
+	_configured_count[iid] = count
+	_invalidate_dots()
+	return cohort
+
+
+## The light tier's compact snapshot rides the same specs.pop_state key.
+func _maybe_persist_light(model, iid: String, cohort: CrowdCohort, abs_h: float) -> void:
+	var last := float(_last_persist_h.get(iid, -INF))
+	if absf(abs_h - last) < PERSIST_INTERVAL_H:
+		return
+	_last_persist_h[iid] = abs_h
+	var snap := cohort.snapshot(abs_h)
+	var blob := JSON.stringify(snap)
+	if str(_last_persist_blob.get(iid, "")) == blob:
+		return
+	_last_persist_blob[iid] = blob
+	var item: Dictionary = model.get_item(iid)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	specs["pop_state"] = snap
+	specs["pop_present"] = cohort.alive_count()
+	specs["pop_morale"] = snappedf(cohort.mean_morale(), 0.01)
+	specs["pop_collapse_risk"] = snappedf(cohort.collapse_risk(), 0.01)
+	model.update_item(iid, {"specs": specs})
 
 
 ## Site Projects: completed chores carrying an `effect` payload fire it here,
@@ -570,8 +764,15 @@ func agent_dots() -> Array:
 	if _dots_cache_valid and gen == _dots_cache_gen:
 		return _dots_cache
 	var out: Array = []
+	# Timed separately from the sim tick: the dot payload is a per-agent dict
+	# build (status strings, chore lookups) and scales with the roster on its
+	# own — the festival-scale bench needs to see it apart from the agent steps.
+	PerfMonitor.begin("npc_dots")
 	for iid in _engines:
 		out.append_array((_engines[iid] as NpcPopulationEngine).agent_dots())
+	for iid in _cohorts:
+		out.append_array((_cohorts[iid] as CrowdCohort).agent_dots())
+	PerfMonitor.end("npc_dots")
 	_dots_cache = out
 	_dots_cache_valid = true
 	_dots_cache_gen = gen
@@ -805,7 +1006,8 @@ func reset_desire_map() -> void:
 func _nav_anchor_points(main: Node, registry: SpaceRegistry) -> PackedVector2Array:
 	var out := PackedVector2Array()
 	for space in registry.spaces:
-		var p: Variant = registry.resolve_position(space, main)
+		var p: Variant = registry.cached_position(str((space as Dictionary).get("id", ""))) \
+			if registry.positions_ready() else registry.resolve_position(space, main)
 		if p is Vector2:
 			out.append(p)
 	for iid in _engines:
@@ -1166,6 +1368,27 @@ func crew_site_markers(main: Node) -> Array:
 ## restore the very roster that just walked out.
 func reset_population(item_id: String, model, main: Node) -> bool:
 	var engine: NpcPopulationEngine = _engines.get(item_id)
+	if engine == null and _cohorts.has(item_id) and model != null:
+		var item0: Dictionary = model.get_item(item_id)
+		if item0.is_empty():
+			return false
+		var specs0: Dictionary = (item0.get("specs", {}) as Dictionary).duplicate(true)
+		var count0 := clampi(int(float(specs0.get("occupants", 10.0))), 1, 5000)
+		var fresh := CrowdCohort.new()
+		fresh.configure(count0, item_id, _home_pos(specs0, main))
+		fresh.routine = (_cohorts[item_id] as CrowdCohort).routine
+		fresh.consequence = (_cohorts[item_id] as CrowdCohort).consequence
+		_cohorts[item_id] = fresh
+		_parked.erase(item_id)
+		_invalidate_dots()
+		specs0.erase("pop_state")
+		specs0["pop_present"] = count0
+		specs0["pop_morale"] = snappedf(fresh.mean_morale(), 0.01)
+		specs0["pop_collapse_risk"] = 0.0
+		_last_persist_h.erase(item_id)
+		_last_persist_blob.erase(item_id)
+		model.update_item(item_id, {"specs": specs0})
+		return true
 	if engine == null or model == null:
 		return false
 	var item: Dictionary = model.get_item(item_id)
@@ -1297,13 +1520,19 @@ func habitat_of_agent(agent_id: String) -> String:
 	for iid in _engines:
 		if (_engines[iid] as NpcPopulationEngine).find_agent(agent_id) != null:
 			return str(iid)
+	for iid in _cohorts:
+		if (_cohorts[iid] as CrowdCohort).agent_index(agent_id) >= 0:
+			return str(iid)
 	return ""
 
 
 ## Inspector telemetry for one habitat ({} when not simulated yet).
 func summary_for(item_id: String) -> Dictionary:
 	var engine: NpcPopulationEngine = _engines.get(item_id)
-	return engine.summary() if engine != null else {}
+	if engine != null:
+		return engine.summary()
+	var cohort: CrowdCohort = _cohorts.get(item_id)
+	return cohort.summary() if cohort != null else {}
 
 
 func has_engine(item_id: String) -> bool:
@@ -1311,7 +1540,7 @@ func has_engine(item_id: String) -> bool:
 
 
 func active() -> bool:
-	return not _engines.is_empty()
+	return not _engines.is_empty() or not _cohorts.is_empty()
 
 
 ## The registry agents will read this map (loader-owned or scene fallback) —
@@ -1344,9 +1573,27 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	var engine: NpcPopulationEngine = _engines.get(iid)
 	if engine != null and int(_configured_count.get(iid, -1)) == count:
 		return engine
+	if _parked.has(iid):
+		# Promotion from the light tier: the parked engine (board, labour,
+		# skills, signals already wired) takes the crowd's people back.
+		engine = _parked[iid]
+		_parked.erase(iid)
+		if _cohorts.has(iid):
+			NpcTierConvert.to_full(_cohorts[iid], engine, _find_registry(main))
+			_cohorts.erase(iid)
+		_invalidate_dots()
+		_engines[iid] = engine
+		_configured_count[iid] = count
+		return engine
 	engine = NpcPopulationEngine.new()
 	var snap: Dictionary = specs.get("pop_state", {}) as Dictionary
-	if not snap.is_empty() and (snap.get("agents", []) as Array).size() == count:
+	if CrowdCohort.is_light_snapshot(snap) and int(snap.get("n", -1)) == count:
+		# Saved while light: rebuild the crowd, promote it below.
+		var c := CrowdCohort.new()
+		c.restore(snap)
+		_cohorts[iid] = c
+		engine.configure(count, iid, _home_pos(specs, main))
+	elif not snap.is_empty() and (snap.get("agents", []) as Array).size() == count:
 		engine.restore(snap)
 		_invalidate_dots()
 	else:
@@ -1418,6 +1665,10 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 				who, NpcSkills.label(tag)], _last_abs_h, SettlementLog.NOTE, iid,
 				{"title": "%s qualified" % who, "detail": NpcSkills.label(tag),
 					"agent_id": aid}))
+	if _cohorts.has(iid):
+		NpcTierConvert.to_full(_cohorts[iid], engine, _find_registry(main))
+		_cohorts.erase(iid)
+		_invalidate_dots()
 	_engines[iid] = engine
 	_configured_count[iid] = count
 	return engine
@@ -1746,23 +1997,33 @@ func snapshot_all(abs_h: float) -> Dictionary:
 	var out: Dictionary = {}
 	for iid in _engines:
 		out[str(iid)] = (_engines[iid] as NpcPopulationEngine).snapshot(abs_h)
+	for iid in _cohorts:
+		out[str(iid)] = (_cohorts[iid] as CrowdCohort).snapshot(abs_h)
 	return out
 
 
 func restore_all(snaps: Dictionary) -> void:
 	for iid in snaps:
-		if _engines.has(str(iid)) and snaps[iid] is Dictionary:
+		if not (snaps[iid] is Dictionary):
+			continue
+		if _engines.has(str(iid)):
 			(_engines[str(iid)] as NpcPopulationEngine).restore(snaps[iid] as Dictionary)
+		elif _cohorts.has(str(iid)) and CrowdCohort.is_light_snapshot(snaps[iid]):
+			(_cohorts[str(iid)] as CrowdCohort).restore(snaps[iid] as Dictionary)
 	_invalidate_dots()
 
 
 func has_pop_driven() -> bool:
-	return not _engines.is_empty()
+	return not _engines.is_empty() or not _cohorts.is_empty()
 
 
 ## Where the population anchors in world XZ: the habitat's 3D twin when one
 ## is placed, else the world origin (SoI center).
 func _home_pos(specs: Dictionary, main: Node) -> Vector2:
+	# A festival camp's habitat carries its lot centre (CampTemplates stamp
+	# it); there is no prop to anchor on.
+	if specs.has("home_x") and specs.has("home_z"):
+		return Vector2(float(specs.get("home_x", 0.0)), float(specs.get("home_z", 0.0)))
 	var pid := str(specs.get("bound_prop_id", ""))
 	if not pid.is_empty():
 		var rec: Dictionary = PlacedPropService.get_prop_record(main, pid)

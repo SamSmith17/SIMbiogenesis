@@ -253,10 +253,28 @@ static func generate(area: Dictionary, ctx: Dictionary = {}) -> Dictionary:
 static func resolve_heading(poly: PackedVector2Array, roads: Array = []) -> float:
 	if poly.size() < 2:
 		return 0.0
+	var best_dir := nearest_road_dir(poly, roads, ROAD_ALIGN_DIST_M)
+	if best_dir == Vector2.ZERO:
+		var best_len := -1.0
+		for i in poly.size():
+			var e := poly[(i + 1) % poly.size()] - poly[i]
+			if e.length_squared() > best_len:
+				best_len = e.length_squared()
+				best_dir = e
+	return direction_to_heading(best_dir)
+
+
+## Direction of the nearest road segment within `max_dist_m` of the outline
+## (its corners or centroid), or Vector2.ZERO when none is that close. Split
+## out of resolve_heading so the placement tool can prefer FESTIVAL roads at
+## one reach and fall back to OSM roads at another.
+static func nearest_road_dir(poly: PackedVector2Array, roads: Array, max_dist_m: float) -> Vector2:
+	if poly.size() < 2:
+		return Vector2.ZERO
 	var probes: Array = [_centroid(poly)]
 	for p in poly:
 		probes.append(p)
-	var best_d := ROAD_ALIGN_DIST_M
+	var best_d := max_dist_m
 	var best_dir := Vector2.ZERO
 	for road in roads:
 		if not (road is Dictionary):
@@ -272,14 +290,7 @@ static func resolve_heading(poly: PackedVector2Array, roads: Array = []) -> floa
 				if d < best_d:
 					best_d = d
 					best_dir = b - a
-	if best_dir == Vector2.ZERO:
-		var best_len := -1.0
-		for i in poly.size():
-			var e := poly[(i + 1) % poly.size()] - poly[i]
-			if e.length_squared() > best_len:
-				best_len = e.length_squared()
-				best_dir = e
-	return direction_to_heading(best_dir)
+	return best_dir
 
 
 ## XZ direction -> compass bearing folded into 0..180 (an axis has no "front").

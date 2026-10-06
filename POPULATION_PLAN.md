@@ -1058,3 +1058,46 @@ because it completes the tagging story and its dock is where the click-tagging
 fix lives. 4c is independent and can land any time after. 4d/4e last and
 together, gated on the Mixamo assets, and behind a graceful fallback so the sim
 never depends on them.
+
+---
+
+# Tier 5 — Festival scale (one camp → the whole event)
+
+Plan file: `~/.claude/plans/we-already-have-the-federated-brooks.md`. Target
+site: Walton, OR (`--user-map=walton`, ~500 people, 25 painted camps).
+Everything in Tiers 1–4 is ONE camp of 10–100 people with a full avatar each;
+this tier replicates that camp as the unit of a festival and scales what
+has to scale: the sim (a light tier), the drawing (a GPU crowd), the graph
+(camps as super-nodes), the power (a per-camp model) and the mood (a vibe).
+
+| # | Phase | Shipped as |
+|---|-------|-----------|
+| 5.0 | Bench | `--capture=crowdbench --count=N`, PerfMonitor `npc_dots` / `npc_host` / `crowd_render` |
+| 5.1 | Placement | `core/camps/festival_*` — roads, zones, equal-USABLE lots, assignment; PLACEMENT toolbar |
+| 5.2 | Venues + programme | `SpaceTypes` venues, `SpaceRegistry` v2, `FestivalProgram`, `NpcVenueChoice` |
+| 5.3 | Light tier | `CrowdCohort` (discrete-event, packed arrays), `CrowdFocus`, `NpcTierConvert` |
+| 5.4 | Crowd drawing | `CrowdRenderer` + `crowd_figure/card.gdshader` + the host's HERO POOL |
+| 5.5 | Camps on the graph | `CampTemplates` → `sync_camps_from_placement`, `CampLedger`, camp cards |
+| 5.6 | Per-camp energy | `CampPowerModel`, per-scope AC in `ResourceFlowEngine` |
+| 5.7 | Vibe + harness | `FestivalVibe` (chip / settlement HUD / dashboard), `--capture=festival` |
+
+**Rules that carry it** (restated from the plan): nothing ticks per person per
+frame on the CPU (positions are GPU-interpolated segments); one slot format
+for every consumer; consumption is tier-independent and PINNED by the
+equivalence selftest; pure cores + Node shells; camps are the unit of
+everything, so districts are the same interface one level up.
+
+**Invariant across the tier: single-camp maps are unchanged.** A site under
+`CrowdFocus.MAX_FULL_PEOPLE` never converts, a roster under the hero budget
+is all avatars, and `npc_population_selftest` + `--capture=population` are
+the regression gate at every step.
+
+**Measured (2026-10-06):** 1000 people on Walton at 33–42 fps with draw
+calls flat in N; the Walton festival harness: 24 lots → 24 camps → 316
+people, both tiers running, blackwater on both bound portapotty tanks, the
+vibe 0.91 → 0.67 naming thirst when the water is cut.
+
+Not built (next scale): a STATISTICAL tier behind the same interface,
+districts, ingress/exodus waves, multiplayer interest management, crowd
+picking, a height raster, the Site Plan MultiMesh dots.
+
