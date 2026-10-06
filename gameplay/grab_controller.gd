@@ -34,6 +34,11 @@ var _moving_valid := false
 # same crosshair-follow feel; on release the marker decides what the drop means.
 var _pending_marker: Node3D = null
 var _moving_marker: Node3D = null
+## Where a self-aiming marker wants to land (world_drag_aim). A marker that
+## implements world_drag_preview(pos) is NOT moved by this controller — it
+## shows the drag itself (a J string light moves every pin, or a fresh copy) —
+## so the commit must be handed this point, not the marker's own position.
+var _marker_target := Vector3.ZERO
 
 
 func setup(player: Node3D, camera: Camera3D, focus: Node, loader: Node) -> void:
@@ -290,7 +295,9 @@ func _cancel_move() -> void:
 		_hold_triggered = false
 		_pending_marker = null
 		# Snap the pin back to the committed centre (drag discarded).
-		if is_instance_valid(marker) and marker.has_method("sync_position"):
+		if is_instance_valid(marker) and marker.has_method("world_drag_cancel"):
+			marker.call("world_drag_cancel")
+		elif is_instance_valid(marker) and marker.has_method("sync_position"):
 			marker.call("sync_position")
 		return
 	var prop := _moving_prop
@@ -351,6 +358,11 @@ func _start_marker_move(marker: Node3D) -> void:
 	_hold_triggered = true
 	_moving_marker = marker
 	_moving_valid = false
+	_marker_target = marker.global_position
+	# Optional: the marker decides what this drag IS from the modifiers held
+	# as it starts (a J light: Ctrl+Shift = duplicate, then move the copy).
+	if marker.has_method("world_drag_begin"):
+		marker.call("world_drag_begin")
 	# Drop crosshair focus (and its outline) for the carry, like a picked-up prop.
 	if _focus != null and _focus.has_method("clear_focus"):
 		_focus.call("clear_focus")
@@ -364,6 +376,18 @@ func _update_marker_position() -> void:
 		return
 	var main := _main_node()
 	if main == null:
+		return
+	# A marker may aim itself (a placed light hangs on walls and props, not
+	# only the ground) — it returns the drop point, or null for "no valid spot".
+	if _moving_marker.has_method("world_drag_aim"):
+		var p: Variant = _moving_marker.call("world_drag_aim", _camera)
+		_moving_valid = p is Vector3
+		if _moving_valid:
+			_marker_target = p
+			if _moving_marker.has_method("world_drag_preview"):
+				_moving_marker.call("world_drag_preview", p)
+			else:
+				_moving_marker.global_position = p
 		return
 	var hit := TerrainSurfaceQuery.raycast_ground_at_camera(main, _camera)
 	if hit.is_empty():
@@ -380,7 +404,9 @@ func _confirm_marker_move() -> void:
 		return
 	if _moving_valid and marker.has_method("world_drag_commit"):
 		# The marker owns what the drop means (SoI pin → new map origin).
-		marker.call("world_drag_commit", marker.global_position)
+		var previewing: bool = marker.has_method("world_drag_preview")
+		var drop: Vector3 = _marker_target if previewing else marker.global_position
+		marker.call("world_drag_commit", drop)
 	elif marker.has_method("sync_position"):
 		marker.call("sync_position")   # released off valid ground → snap back
 

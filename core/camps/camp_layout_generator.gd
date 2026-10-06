@@ -49,6 +49,17 @@ const ALIGNED_SCALE := Vector2(0.96, 1.04)
 const LOOSE_SCALE := Vector2(0.88, 1.08)
 ## Base chance a structure carries a night light (x light_density).
 const GLOW_CHANCE := 0.5
+## A household's main light hangs this far BELOW the top of its structure —
+## under a canopy, at the peak of a tent — never above the roof, where it
+## read as an orb floating over the camp.
+const LIGHT_DROP_M := 1.0
+## Lowest a light hangs off the ground.
+const LIGHT_MIN_Y_M := 0.45
+## Up to this many small string-light points ring a lit household.
+const STRING_LIGHTS_MAX := 4
+## Share of main lights that are warm white (string lights / lanterns) rather
+## than a saturated party colour — the mix a real camp shows at night.
+const WARM_WHITE_SHARE := 0.3
 ## Step for the central-difference slope sample.
 const SLOPE_STEP_M := 2.0
 
@@ -237,9 +248,53 @@ static func generate(area: Dictionary, ctx: Dictionary = {}) -> Dictionary:
 						"cls": cls, "size": size, "edited": not edit.is_empty()})
 					stats["structures"] += 1
 					if lit:
-						glow.append({"pos": pos + Vector3(0.0, size.y + glow_h, 0.0),
-							"color": glow_color})
+						_append_lights(glow, pos, size, draw_ang, glow_h, glow_color,
+							seed, key)
 	return out
+
+
+## One lit household's lights: a main light (`pool: true` — eligible for a
+## real OmniLight near the camera) tucked under the top of the structure, plus
+## a few dim string-light points around its footprint (cards only). COLOR.a is
+## the brightness the card shader reads.
+## Everything beyond the main light's height/colour draws from its OWN stream
+## keyed on (seed, cell key), never from the layout RNG, so adding lights can
+## never move a tent.
+static func _append_lights(glow: Array, pos: Vector3, size: Vector3, ang: float,
+		glow_h: float, glow_color: Color, seed: int, key: String) -> void:
+	var lrng := RandomNumberGenerator.new()
+	lrng.seed = hash([seed, key, "lights"])
+	var top := size.y
+	# glow_h is 0.2..1.2 m: the light lands between LIGHT_DROP_M below the top
+	# and just under it.
+	var y := clampf(top + glow_h - 0.2 - LIGHT_DROP_M, LIGHT_MIN_Y_M,
+		maxf(top - 0.25, LIGHT_MIN_Y_M))
+	var color := glow_color
+	if lrng.randf() < WARM_WHITE_SHARE:
+		color = Color(1.0, lrng.randf_range(0.62, 0.78), lrng.randf_range(0.32, 0.48))
+	color.a = 1.0
+	glow.append({"pos": pos + Vector3(0.0, y, 0.0), "color": color, "pool": true,
+		"ground_y": pos.y, "spill_m": lrng.randf_range(4.5, 7.5)})
+	# String lights: one colour per string (or multicolour), on the footprint's
+	# edge at waist-to-head height.
+	var n := lrng.randi_range(1, STRING_LIGHTS_MAX)
+	var multi := lrng.randf() < 0.35
+	var du := Vector3(cos(ang), 0.0, sin(ang))
+	var dv := Vector3(-sin(ang), 0.0, cos(ang))
+	var hx := size.x * 0.5 + 0.3
+	var hz := size.z * 0.5 + 0.3
+	var y_hi := clampf(top, 0.8, 2.3)
+	for s in n:
+		var c := Color.from_hsv(lrng.randf(), lrng.randf_range(0.5, 0.95), 1.0) \
+			if multi else color
+		c.a = lrng.randf_range(0.35, 0.6)
+		var along := lrng.randf_range(-1.0, 1.0)
+		var side := -1.0 if lrng.randf() < 0.5 else 1.0
+		var off := du * along * hx + dv * side * hz
+		if lrng.randf() < 0.5:
+			off = du * side * hx + dv * along * hz
+		var h := lrng.randf_range(0.5, y_hi)
+		glow.append({"pos": pos + off + Vector3(0.0, h, 0.0), "color": c, "pool": false})
 
 
 # ---------------------------------------------------------------------------

@@ -4811,6 +4811,10 @@ func update_camp_highlight(id: String) -> void:
 
 
 func clear_camp_highlight() -> void:
+	# The crosshair focus is change-gated on _camp_focus_id; a highlight cleared
+	# by any other path (the toolbar's Edit tool, an undo) must reset it, or the
+	# gate and what is drawn disagree and an outline outlives its focus.
+	_camp_focus_id = ""
 	if _camp_highlight != null and is_instance_valid(_camp_highlight):
 		_camp_highlight.visible = false
 		_camp_highlight.mesh = null
@@ -9759,12 +9763,9 @@ func _rebuild_placed_props() -> void:
 	PlacedPropRuntime.rebuild(terrain, _placed_prop_layer, Callable(self, "_ground_height_at"))
 	call_deferred("_try_seed_starshade_graph")
 	
-	# Also rebuild placed lights
-	var PlacedLightService = load("res://core/placed_lights/placed_light_service.gd")
-	var PlacedLightRuntime = load("res://core/placed_lights/placed_light_runtime.gd")
-	var light_layer = PlacedLightService.get_layer(_main)
-	if light_layer != null:
-		PlacedLightRuntime.rebuild(terrain, light_layer)
+	# Placed lights (J Light Studio) — keyed by this site, so rebuild now
+	# that the site is known; they live under Main, not Terrain.
+	PlacedLightService.rebuild_all(_main)
 
 
 func _try_seed_starshade_graph() -> void:

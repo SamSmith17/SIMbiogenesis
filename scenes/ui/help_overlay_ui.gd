@@ -65,7 +65,7 @@ const _GROUPS := [
 		["building_builder", "Building Builder (aim at a building first)"],
 		["space_edit", "NPC area spaces (draw a plaza/zone)"],
 		["camp_scatter", "Camp scatter dock"],
-		["place_light", "Place a light"],
+		["place_light", "Light Studio (omni / spot / string lights)"],
 		["mp_chat", "Multiplayer chat"],
 	]],
 	["Views", [

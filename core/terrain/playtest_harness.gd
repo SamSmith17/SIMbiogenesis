@@ -35,6 +35,7 @@ extends Node
 ##                              (+ diagnostics/perf JSON) for a real user map
 ##                              "windowwall" = the multi-monitor Window Wall
 ##                              "stars" = star field: marker-vs-texture pixel error + 2 h rotation about the pole
+##                              "lights" = J Light Studio end to end with REAL input events (see _run_lights_capture)
 ##                              "dawn"  = sunrise lighting ladder: beam energy/colour + ambient per solar altitude
 ##                              "microclimate" = Walton valley-fog ladder: resolved fog per stop DUMPED + ground/drone PNGs
 ##                              through Main's real entry point: per-slot
@@ -190,6 +191,8 @@ func _ready() -> void:
 			_run_extreme_weather_capture.call_deferred()
 		elif _capture_mode == "stars":
 			_run_star_capture.call_deferred()
+		elif _capture_mode == "lights":
+			_run_lights_capture.call_deferred()
 		elif _capture_mode == "dawn":
 			_run_dawn_capture.call_deferred()
 		elif _capture_mode == "microclimate":
@@ -427,6 +430,8 @@ func _launch_map() -> void:
 		_run_extreme_weather_capture()
 	elif _capture_mode == "stars":
 		_run_star_capture()
+	elif _capture_mode == "lights":
+		_run_lights_capture()
 	elif _capture_mode == "dawn":
 		_run_dawn_capture()
 	elif _capture_mode == "microclimate":
@@ -506,6 +511,8 @@ func _launch_scene_direct() -> void:
 		_run_extreme_weather_capture()
 	elif _capture_mode == "stars":
 		_run_star_capture()
+	elif _capture_mode == "lights":
+		_run_lights_capture()
 	elif _capture_mode == "dawn":
 		_run_dawn_capture()
 	elif _capture_mode == "microclimate":
@@ -9270,3 +9277,411 @@ func _fest_open_kinds(fest: Dictionary) -> Dictionary:
 		for k in (c as Dictionary).get("open", []):
 			out[str(k)] = int(out.get(str(k), 0)) + 1
 	return out
+
+
+# ==================== LIGHT STUDIO (--capture=lights) ====================
+# The J Light Studio end to end, driven with REAL input events through the
+# viewport (a key press for J, mouse presses/motions/releases for every tool),
+# because every interesting failure here is an input-routing one: the dock's
+# panel swallowing world clicks, a pick that misses at range, a double-click
+# that never registers. Asserts what a PNG cannot:
+#   J opens the dock (tool-overlay tier: cursor free, not a modal); a click
+#   with Omni / Spot places one light each ON the surface; a gumball drag on
+#   the X arrow moves the selected spot along X, a drag on the yaw ring turns
+#   it; four clicks + a double-click on the last pin make ONE string with four
+#   pins; a rainbow chase advances its effect clock and the cast light changes
+#   colour; Add to graph makes exactly one load with measured watts and a
+#   second press does not duplicate it; J closes the dock.
+# Write discipline: the map's lights file is byte-restored (or removed if it
+# did not exist) and the graph load is removed again.
+
+func _lc_press(vp: Viewport, pos: Vector2, pressed: bool, double: bool = false,
+		ctrl: bool = false, shift: bool = false) -> void:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = pressed
+	ev.double_click = double
+	ev.ctrl_pressed = ctrl
+	ev.shift_pressed = shift
+	ev.position = pos
+	ev.global_position = pos
+	vp.push_input(ev)
+	await get_tree().process_frame
+
+
+func _lc_move(vp: Viewport, pos: Vector2, ctrl: bool = false, shift: bool = false) -> void:
+	Input.warp_mouse(pos)
+	var mm := InputEventMouseMotion.new()
+	mm.position = pos
+	mm.global_position = pos
+	mm.ctrl_pressed = ctrl
+	mm.shift_pressed = shift
+	vp.push_input(mm)
+	await get_tree().process_frame
+
+
+func _lc_click(vp: Viewport, pos: Vector2, double: bool = false) -> void:
+	await _lc_move(vp, pos)
+	await _lc_press(vp, pos, true, double)
+	await _lc_press(vp, pos, false)
+
+
+func _lc_drag(vp: Viewport, a: Vector2, b: Vector2, ctrl: bool = false, shift: bool = false) -> void:
+	await _lc_move(vp, a, ctrl, shift)
+	await _lc_press(vp, a, true, false, ctrl, shift)
+	for i in range(1, 13):
+		await _lc_move(vp, a.lerp(b, float(i) / 12.0), ctrl, shift)
+	await _lc_press(vp, b, false, false, ctrl, shift)
+
+
+func _lc_result(ok: bool, what: String, fails: Array) -> void:
+	print("PlaytestHarness: lights %s — %s" % ["PASS" if ok else "FAIL", what])
+	if not ok:
+		fails.append(what)
+
+
+func _run_lights_capture() -> void:
+	var tree := get_tree()
+	var loader := tree.current_scene.find_child("TerrainLoader", true, false) \
+		if tree.current_scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var main := _find_main()
+	if main == null:
+		push_error("PlaytestHarness: no Main — aborting lights capture")
+		_maybe_quit()
+		return
+	var label := _shots_label if not _shots_label.is_empty() else "lights"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var fails: Array = []
+	var vp := get_viewport()
+
+	# The map's OWN lights first: with the Studio closed and no modifier held,
+	# no IK sphere may show (only the light itself), and nothing — lights or
+	# painted camps — may be focus-highlighted just by looking at it.
+	PlacedLightService.ensure_built(main)
+	for _i in 30:
+		await tree.physics_frame
+	var shown := 0
+	var total := 0
+	var lroot := main.get_node_or_null(PlacedLightRuntime.ROOT_NAME)
+	if lroot != null:
+		for n in lroot.get_children():
+			if n is PlacedLight:
+				total += 1
+				var g := (n as Node).get_node_or_null("LightGizmo") as Node3D
+				if g != null and g.is_visible_in_tree():
+					shown += 1
+					print("PlaytestHarness: lights — gizmo VISIBLE on %s (selected=%s focus=%s studio=%s ctrl=%s alt=%s)" % [
+						n.name, str(n.get("_selected")), str(n.get("_focus_local")),
+						str(PlacedLightService.is_studio_open()), str(Input.is_key_pressed(KEY_CTRL)),
+						str(Input.is_key_pressed(KEY_ALT))])
+	_lc_result(shown == 0, "with the Studio closed no light shows its IK sphere (%d of %d shown)" % [shown, total], fails)
+	# Look straight at a painted camp (centre-screen, the crosshair's ray) with
+	# no modifier held: the camp must NOT highlight.
+	var cloader := main.find_child("TerrainLoader", true, false)
+	var camps: Variant = cloader.get("camp_areas") if cloader != null else null
+	print("PlaytestHarness: lights — loader %s, camp layer %s, %d camps" % [str(cloader), str(camps != null),
+		(camps.get("areas") as Array).size() if camps != null else -1])
+	if camps != null and not (camps.get("areas") as Array).is_empty():
+		var poly: PackedVector2Array = (camps.get("areas") as Array)[0]["polygon"]
+		var cc := Vector2.ZERO
+		for q in poly:
+			cc += q
+		cc /= float(poly.size())
+		var gy := TerrainSurfaceQuery.ground_height_at(main, cc.x, cc.y)
+		var look_cam := vp.get_camera_3d()
+		var saved_xf := look_cam.global_transform if look_cam != null else Transform3D.IDENTITY
+		if look_cam != null:
+			look_cam.global_position = Vector3(cc.x + 25.0, gy + 12.0, cc.y + 25.0)
+			look_cam.look_at(Vector3(cc.x, gy, cc.y), Vector3.UP)
+		for _i in 20:
+			await tree.physics_frame
+		var hl := main.find_child("CampAreaHighlight", true, false) as Node3D
+		print("PlaytestHarness: lights — aimed at camp %s: highlight %s, ctrl=%s alt=%s, capture=%s" % [
+			str((camps.get("areas") as Array)[0].get("id")), str(hl != null and hl.visible),
+			str(Input.is_key_pressed(KEY_CTRL)), str(Input.is_key_pressed(KEY_ALT)),
+			str(CursorController.should_capture_look())])
+		_lc_result(hl == null or not hl.visible, "aiming at a painted camp without Ctrl does not highlight it", fails)
+		if look_cam != null:
+			look_cam.global_transform = saved_xf
+
+	# Snapshot the lights file; start from an empty layer so the counts below
+	# are this run's own.
+	var path := PlacedLightLayer.path_for_key(PlacedLightService.map_key(main))
+	var had := FileAccess.file_exists(path)
+	var backup := FileAccess.get_file_as_bytes(path) if had else PackedByteArray()
+	var layer := PlacedLightService.get_layer(main)
+	var saved_layer := layer.serialize()
+	layer.lights.clear()
+	layer.styles.clear()
+	layer.groups.clear()
+	PlacedLightService.rebuild_all(main)
+
+	# Night, clock parked, a camera above the player looking down the ground.
+	var saved_scale: Variant = main.get("time_scale")
+	var saved_time: Variant = main.get("day_time")
+	main.set("time_scale", 0.0)
+	main.set("day_time", 22.0)
+	var prev_cam := vp.get_camera_3d()
+	var base := prev_cam.global_position if prev_cam != null else Vector3(0, 2, 0)
+	var fwd := -prev_cam.global_basis.z if prev_cam != null else Vector3.FORWARD
+	fwd.y = 0.0
+	fwd = fwd.normalized() if fwd.length_squared() > 1e-6 else Vector3.FORWARD
+	var focus := base + fwd * 14.0
+	focus.y = TerrainSurfaceQuery.ground_height_at(main, focus.x, focus.z)
+	var cam := Camera3D.new()
+	cam.name = "PlaytestLightsCam"
+	cam.fov = 60.0
+	main.add_child(cam)
+	cam.global_position = focus - fwd * 14.0 + Vector3(0, 9.0, 0)
+	cam.look_at(focus, Vector3.UP)
+	cam.make_current()
+	await tree.process_frame
+
+	# 1. J opens the dock (the real key path through Main).
+	var j := InputEventKey.new()
+	j.physical_keycode = KEY_J
+	j.keycode = KEY_J
+	j.pressed = true
+	Input.parse_input_event(j)
+	await tree.process_frame
+	await tree.process_frame
+	var jr := j.duplicate() as InputEventKey
+	jr.pressed = false
+	Input.parse_input_event(jr)
+	await tree.process_frame
+	var dock := PlacedLightService.find_dock(main)
+	_lc_result(dock != null and bool(dock.call("is_panel_open")), "J opens the Light Studio dock", fails)
+	_lc_result(CursorController.has_tool_overlay() and not CursorController.has_blocking_modal(),
+		"the dock runs in the tool-overlay tier, not as a modal", fails)
+	if dock == null:
+		_lights_capture_restore(main, path, had, backup, saved_layer, cam, prev_cam, saved_scale, saved_time)
+		return
+	await _graph_shot(dir, "00_dock_open", [], "lights")
+
+	var center := vp.get_visible_rect().size * Vector2(0.4, 0.62)
+	# 2. Omni + Spot placement by click.
+	dock.call("_set_tool", "omni")
+	await _lc_click(vp, center + Vector2(-120, 0))
+	dock.call("_set_tool", "spot")
+	await _lc_click(vp, center + Vector2(120, 0))
+	var omni_n := PlacedLightService.group_ids_of_kind(main, "omni").size()
+	var spot_ids := PlacedLightService.group_ids_of_kind(main, "spot")
+	_lc_result(omni_n == 1 and spot_ids.size() == 1, "a click places one omni and one spot (%d / %d)" % [
+		omni_n, spot_ids.size()], fails)
+	if spot_ids.is_empty():
+		_lights_capture_restore(main, path, had, backup, saved_layer, cam, prev_cam, saved_scale, saved_time)
+		return
+	var spot_id := str(spot_ids[0])
+	var spot_rec := layer.find_light(spot_id)
+	var ground_y := TerrainSurfaceQuery.ground_height_at(main, float(spot_rec["x"]), float(spot_rec["z"]))
+	# Clicked on open ground, a spot hangs above the click aimed DOWN at it
+	# (a spot on the ground would shine at the sky).
+	var spot_dir := LightGizmoMath.direction_of(layer.rotation_of(spot_rec))
+	_lc_result(absf(float(spot_rec["y"]) - ground_y - 3.0) < 0.6 and spot_dir.y < -0.95,
+		"a ground-clicked spot hangs 3 m up aiming down (%.2f m, dir.y %.2f)" % [
+		float(spot_rec["y"]) - ground_y, spot_dir.y], fails)
+
+	# 3. Gumball: X arrow drag moves along X; the yaw ring turns.
+	dock.call("_set_tool", "select")
+	PlacedLightService.set_selection(main, [spot_id])
+	await tree.process_frame
+	await tree.process_frame
+	var giz := main.get_node_or_null("LightStudioGizmo") as LightGizmo
+	_lc_result(giz != null and giz.visible, "the gumball shows on the selected spot", fails)
+	if giz != null and giz.visible:
+		var o := giz.global_position
+		var x0 := float(layer.find_light(spot_id)["x"])
+		var tip := o + giz.axis("x") * giz.handle_scale() * 0.7
+		var a := cam.unproject_position(tip)
+		var dir_px := cam.unproject_position(o + giz.axis("x") * giz.handle_scale()) - cam.unproject_position(o)
+		await _lc_drag(vp, a, a + dir_px.normalized() * 90.0)
+		var x1 := float(layer.find_light(spot_id)["x"])
+		var z_same := absf(float(layer.find_light(spot_id)["z"]) - float(spot_rec["z"])) < 0.05
+		_lc_result(x1 - x0 > 0.2 and z_same, "an X-arrow drag moves the spot along X only (%.2f m)" % (x1 - x0), fails)
+		await tree.process_frame
+		var yaw0 := float(layer.find_light(spot_id)["yaw"])
+		o = giz.global_position
+		var rr := giz.handle_scale() * LightGizmo.RING_R
+		# Grab the ring BETWEEN the axes: where it crosses +X it also lies on
+		# the X move arrow, which (correctly) wins the pick.
+		var p0 := o + (Basis(Vector3.UP, deg_to_rad(45.0)) * giz.axis("x")) * rr
+		var p1 := o + (Basis(Vector3.UP, deg_to_rad(85.0)) * giz.axis("x")) * rr
+		await _lc_drag(vp, cam.unproject_position(p0), cam.unproject_position(p1))
+		var yaw1 := float(layer.find_light(spot_id)["yaw"])
+		var dyaw := absf(wrapf(yaw1 - yaw0, -180.0, 180.0))
+		_lc_result(dyaw > 15.0, "a yaw-ring drag turns the spot (%.1f°)" % dyaw, fails)
+	await _graph_shot(dir, "01_gumball", [], "lights")
+
+	# 4. String: four clicks, then a double-click on the last pin.
+	dock.call("_set_tool", "string")
+	var pins := [center + Vector2(-220, -60), center + Vector2(-80, -90), center + Vector2(60, -90),
+		center + Vector2(200, -60)]
+	for p in pins:
+		await _lc_click(vp, p)
+	await tree.create_timer(0.1).timeout
+	await _lc_click(vp, pins[3], true)
+	var strings := PlacedLightService.group_ids_of_kind(main, "string")
+	var pin_n := PlacedLightLayer.waypoints_of(layer.find_light(str(strings[0]))).size() if strings.size() == 1 else 0
+	_lc_result(strings.size() == 1 and pin_n == 4, "4 clicks + a double-click on the last pin make one 4-pin string (%d strings, %d pins)" % [
+		strings.size(), pin_n], fails)
+	if strings.size() == 1:
+		var sid := str(strings[0])
+		# Still on the String tool: dragging a FINISHED string's pin must move
+		# that pin — it used to start a new string from it.
+		var before_pin: Vector3 = PlacedLightLayer.waypoints_of(layer.find_light(sid))[1]
+		var from := cam.unproject_position(before_pin)
+		await _lc_drag(vp, from, from + Vector2(0, 60))
+		var after_pin: Vector3 = PlacedLightLayer.waypoints_of(layer.find_light(sid))[1]
+		_lc_result(PlacedLightService.group_ids_of_kind(main, "string").size() == 1 			and before_pin.distance_to(after_pin) > 0.3,
+			"with the String tool active, dragging a finished pin moves it (%.2f m) and starts no new string" % 			before_pin.distance_to(after_pin), fails)
+		# Ctrl+drag a pin: the WHOLE string moves, every pin by the same offset.
+		var pts0: Array = PlacedLightLayer.waypoints_of(layer.find_light(sid))
+		var grab2 := cam.unproject_position(pts0[2])
+		await _lc_drag(vp, grab2, grab2 + Vector2(-60, 35), true, false)
+		var pts1: Array = PlacedLightLayer.waypoints_of(layer.find_light(sid))
+		var d0: Vector3 = (pts1[0] as Vector3) - (pts0[0] as Vector3)
+		var rigid := d0.length() > 0.3
+		for i in pts1.size():
+			rigid = rigid and ((pts1[i] as Vector3) - (pts0[i] as Vector3)).distance_to(d0) < 0.02
+		_lc_result(rigid, "Ctrl+drag on a pin moves the whole string as one (%.2f m)" % d0.length(), fails)
+		# Shift+drag a pin: duplicate the string, the copy grouped with it.
+		var grab3 := cam.unproject_position(pts1[1])
+		await _lc_drag(vp, grab3, grab3 + Vector2(0, 80), false, true)
+		var strs: Array = PlacedLightService.group_ids_of_kind(main, "string")
+		var pts2: Array = PlacedLightLayer.waypoints_of(layer.find_light(sid))
+		var copy_id := ""
+		for x in strs:
+			if str(x) != sid:
+				copy_id = str(x)
+		var shared := false
+		if not copy_id.is_empty():
+			for g in layer.find_light(sid)["group_ids"]:
+				if g in layer.find_light(copy_id)["group_ids"]:
+					shared = true
+		_lc_result(strs.size() == 2 and shared and (pts2[0] as Vector3).distance_to(pts1[0]) < 0.01,
+			"Shift+drag duplicates the string; the source stays, the copy joins its group", fails)
+		var node := PlacedLightRuntime.find_node(main, sid) as PlacedStringLight
+		print("PlaytestHarness: lights — string %.1f m, %d bulbs, lit=%s" % [
+			node.length_m if node != null else -1.0, node.bulb_count if node != null else -1,
+			str(node.is_lit()) if node != null else "?"])
+		_lc_result(node != null and node.bulb_count > 3 and node.is_lit(), "the string builds bulbs and is lit at 22:00", fails)
+		# 5. Rainbow chase through the inspector.
+		PlacedLightService.set_selection(main, [sid])
+		await tree.process_frame
+		dock.call("_on_field", "effect", "rainbow_chase")
+		dock.call("_on_field", "fx_speed", 8.0)
+		await tree.process_frame
+		var t0 := node.fx_time() if node != null else 0.0
+		await _graph_shot(dir, "02_rainbow_a", [], "lights")
+		await tree.create_timer(0.25).timeout
+		await _graph_shot(dir, "03_rainbow_b", [], "lights")
+		var t1 := node.fx_time() if node != null else 0.0
+		var fields: Dictionary = node.fields if node != null else {}
+		var c0 := LedEffects.color_at(fields, 0, node.bulb_count if node != null else 1, t0, Color.WHITE)
+		var c1 := LedEffects.color_at(fields, 0, node.bulb_count if node != null else 1, t1, Color.WHITE)
+		var moved := (t1 - t0) * 8.0
+		print("PlaytestHarness: lights — chase clock %.3f -> %.3f s (%.2f bulbs moved)" % [t0, t1, moved])
+		_lc_result(t1 - t0 > 0.15 and not c0.is_equal_approx(c1), "the rainbow chase runs (bulb 0 changed colour)", fails)
+		# 6. Add to graph (load only), idempotent.
+		var ok := PlacedLightService.add_to_graph(main, sid)
+		PlacedLightService.add_to_graph(main, sid)
+		var sgv := main.find_child("SystemGraphView", true, false)
+		var gid := str(sgv.call("placed_light_item_id", sid)) if sgv != null else ""
+		var count := 0
+		if sgv != null:
+			for it in (sgv.get("model") as Object).get("items"):
+				if str(((it as Dictionary).get("specs", {}) as Dictionary).get("placed_light_id", "")) == sid:
+					count += 1
+		var watts := float(layer.find_light(sid).get("graph_watts", 0.0))
+		print("PlaytestHarness: lights — graph load %s, %.1f W" % [gid, watts])
+		_lc_result(ok and count == 1 and watts > 0.0, "Add to graph makes exactly one load with measured watts", fails)
+		PlacedLightService.remove_from_graph(main, sid)
+
+	# Movers: a beam head from its preset sweeps; a laser fan grows its beams;
+	# a neon-flex preset draws a glowing tube.
+	dock.call("_set_tool", "mover")
+	PlacedLightService.style_for_preset(main, "mover", "beam_sweep")
+	await _lc_click(vp, center + Vector2(-210, 70))
+	PlacedLightService.style_for_preset(main, "mover", "laser_fan_green")
+	await _lc_click(vp, center + Vector2(230, 70))
+	var movers: Array = PlacedLightService.group_ids_of_kind(main, "mover")
+	_lc_result(movers.size() == 2, "a click with the Mover tool places a fixture (%d)" % movers.size(), fails)
+	if movers.size() == 2:
+		var beam_node := PlacedLightRuntime.find_node(main, str(movers[0])) as PlacedMoverLight
+		var laser_node := PlacedLightRuntime.find_node(main, str(movers[1])) as PlacedMoverLight
+		var dir0 := beam_node.beam_direction() if beam_node != null else Vector3.ZERO
+		await tree.create_timer(1.2).timeout
+		var dir1 := beam_node.beam_direction() if beam_node != null else Vector3.ZERO
+		var swept := rad_to_deg(dir0.angle_to(dir1))
+		print("PlaytestHarness: lights — beam head swept %.1f° in 1.2 s, beam %.1f m" % [swept,
+			beam_node.beam_length() if beam_node != null else -1.0])
+		_lc_result(swept > 3.0, "the beam head sweeps on its program (%.1f°)" % swept, fails)
+		var beams := laser_node.find_children("Laser_*", "", true, false).size() if laser_node != null else 0
+		_lc_result(beams == 7, "the green laser fan draws 7 beams (%d)" % beams, fails)
+	dock.call("_set_tool", "string")
+	PlacedLightService.style_for_preset(main, "string", "neon_flex")
+	var tube_pins := [center + Vector2(-150, 140), center + Vector2(0, 160), center + Vector2(150, 140)]
+	for p in tube_pins:
+		await _lc_click(vp, p)
+	await tree.create_timer(0.1).timeout
+	await _lc_click(vp, tube_pins[2], true)
+	var tube_ok := false
+	for x in PlacedLightService.group_ids_of_kind(main, "string"):
+		var tn := PlacedLightRuntime.find_node(main, str(x)) as PlacedStringLight
+		if tn != null and tn.is_continuous():
+			tube_ok = true
+	_lc_result(tube_ok, "the LED neon flex preset draws a continuous tube", fails)
+	PlacedLightService.set_selection(main, [])
+	cam.global_position = focus - fwd * 22.0 + Vector3(0, 1.7, 0)
+	cam.look_at(focus + Vector3(0, 7.0, 0), Vector3.UP)
+	await tree.create_timer(0.4).timeout
+	await _graph_shot(dir, "05_movers_ground", [], "lights")
+	await tree.create_timer(0.8).timeout
+	await _graph_shot(dir, "05b_movers_ground_later", [], "lights")
+
+	# Drone view of the whole set at night.
+	cam.global_position = focus - fwd * 30.0 + Vector3(0, 40.0, 0)
+	cam.look_at(focus, Vector3.UP)
+	PlacedLightService.set_selection(main, [])
+	await tree.create_timer(0.3).timeout
+	await _graph_shot(dir, "04_drone", [], "lights")
+
+	# 7. J again closes it.
+	Input.parse_input_event(j)
+	await tree.process_frame
+	await tree.process_frame
+	Input.parse_input_event(jr)
+	await tree.process_frame
+	_lc_result(not bool(dock.call("is_panel_open")) and not CursorController.has_tool_overlay(),
+		"J closes the dock and releases the overlay", fails)
+
+	print("PlaytestHarness: lights %s (%d failed)" % ["ALL PASS" if fails.is_empty() else "FAILURES", fails.size()])
+	_lights_capture_restore(main, path, had, backup, saved_layer, cam, prev_cam, saved_scale, saved_time)
+
+
+func _lights_capture_restore(main: Node, path: String, had: bool, backup: PackedByteArray,
+		saved_layer: Dictionary, cam: Camera3D, prev_cam: Camera3D, saved_scale: Variant,
+		saved_time: Variant) -> void:
+	var dock := PlacedLightService.find_dock(main)
+	if dock != null and bool(dock.call("is_panel_open")):
+		dock.call("close")
+	var layer := PlacedLightService.get_layer(main)
+	layer.deserialize(saved_layer)
+	if had:
+		var f := FileAccess.open(path, FileAccess.WRITE)
+		f.store_buffer(backup)
+		f.close()
+	elif FileAccess.file_exists(path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	PlacedLightService.rebuild_all(main)
+	if prev_cam != null and is_instance_valid(prev_cam):
+		prev_cam.make_current()
+	if cam != null and is_instance_valid(cam):
+		cam.queue_free()
+	main.set("time_scale", saved_scale)
+	main.set("day_time", saved_time)
+	_maybe_quit()

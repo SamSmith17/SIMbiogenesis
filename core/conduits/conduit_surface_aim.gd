@@ -54,7 +54,26 @@ static func pick(main: Node, camera: Camera3D,
 				dir = camera.project_ray_normal(center)
 	if dir.length_squared() < 1e-12:
 		dir = -cam_basis.z
+	return pick_ray(main, origin, dir.normalized(), exclude_rids, cam_pos)
+
+
+## Same ladder for an arbitrary ray — the J Light Studio aims with the MOUSE
+## (the cursor is free in its tool-overlay tier), not the screen centre.
+## `cam_pos` only scopes the mesh-fallback range; defaults to the ray origin.
+static func pick_ray(main: Node, origin: Vector3, dir: Vector3,
+		exclude_rids: Array = [], cam_pos: Variant = null) -> Dictionary:
+	var out := {
+		"valid": false,
+		"position": Vector3.ZERO,
+		"normal": Vector3.UP,
+		"pin_path": "",
+		"source": "",
+	}
+	if main == null or dir.length_squared() < 1e-12:
+		return out
 	dir = dir.normalized()
+	if not (cam_pos is Vector3):
+		cam_pos = origin
 
 	# 1) Physics — terrain + PlacedProp colliders (pallet racks, etc.).
 	var phys := _physics_hit(main, origin, dir, exclude_rids)

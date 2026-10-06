@@ -1,88 +1,84 @@
 class_name PlacedLightRuntime
 extends RefCounted
 
-## Builds PlacedLight nodes under Terrain/PlacedLights.
+## Builds PlacedLight / PlacedStringLight nodes under Main/PlacedLights.
+##
+## Every node is top_level with a WORLD transform, so the parent no longer
+## matters. (v2 parented under Terrain and applied the saved world hit point
+## as a LOCAL position, which was only right while Terrain sat at the origin.)
+## Parenting under Main rather than Terrain is what lets the built-in SOAK /
+## Mars scenes — which have no TerrainLoader — show their lights at all.
 
-static func add_one(terrain: Node3D, rec: Dictionary) -> PlacedLight:
-	if terrain == null or rec.is_empty():
+const ROOT_NAME := "PlacedLights"
+
+
+static func root_for(main: Node) -> Node3D:
+	if main == null:
 		return null
-	var root := terrain.get_node_or_null("PlacedLights") as Node3D
+	var root := main.get_node_or_null(ROOT_NAME) as Node3D
 	if root == null:
 		root = Node3D.new()
-		root.name = "PlacedLights"
-		terrain.add_child(root)
-	return _build_light(rec, root)
+		root.name = ROOT_NAME
+		main.add_child(root)
+	return root
 
 
-static func rebuild(terrain: Node3D, layer: PlacedLightLayer) -> void:
-	if terrain == null or layer == null:
+static func rebuild(main: Node, layer: PlacedLightLayer) -> void:
+	var root := root_for(main)
+	if root == null or layer == null:
 		return
-	var root := terrain.get_node_or_null("PlacedLights") as Node3D
-	if root == null:
-		root = Node3D.new()
-		root.name = "PlacedLights"
-		terrain.add_child(root)
 	for child in root.get_children():
+		root.remove_child(child)
 		child.queue_free()
 	for rec in layer.lights:
 		if rec is Dictionary:
-			_build_light(rec as Dictionary, root)
+			build_one(main, layer, rec as Dictionary)
 
 
-static func find_by_id(main: Node, id: String) -> PlacedLight:
+static func build_one(main: Node, layer: PlacedLightLayer, rec: Dictionary) -> Node3D:
+	var root := root_for(main)
+	if root == null or rec.is_empty():
+		return null
+	var id := str(rec.get("id", ""))
+	var old := find_node(main, id)
+	if old != null:
+		root.remove_child(old)
+		old.queue_free()
+	var node: Node3D
+	match str(rec.get("kind", "omni")):
+		"string":
+			node = PlacedStringLight.new()
+		"mover":
+			node = PlacedMoverLight.new()
+		_:
+			node = PlacedLight.new()
+	node.name = "L_%s" % id
+	root.add_child(node)
+	apply(main, layer, node, rec)
+	return node
+
+
+## Push the record onto its node (rebuilding only what changed).
+static func apply(main: Node, layer: PlacedLightLayer, node: Node3D, rec: Dictionary) -> void:
+	var res := layer.resolved(rec)
+	node.visible = not layer.is_hidden_by_group(rec)
+	if node is PlacedStringLight:
+		(node as PlacedStringLight).configure(rec, res, main)
+	elif node is PlacedLight:
+		(node as PlacedLight).configure(rec, res)
+
+
+static func find_node(main: Node, id: String) -> Node3D:
 	if main == null or id.is_empty():
 		return null
-	var terrain := main.get_node_or_null("Terrain")
-	if terrain == null:
-		terrain = main.find_child("Terrain", true, false)
-	if terrain == null:
-		return null
-	var root := terrain.get_node_or_null("PlacedLights")
+	var root := main.get_node_or_null(ROOT_NAME)
 	if root == null:
 		return null
-	for child in root.get_children():
-		if child is PlacedLight and str((child as PlacedLight).light_id) == id:
-			return child as PlacedLight
-	return null
+	return root.get_node_or_null("L_%s" % id) as Node3D
 
 
-static func _build_light(rec: Dictionary, parent: Node3D) -> PlacedLight:
-	var light := PlacedLight.new()
-	light.name = "PlacedLight_%s" % str(rec.get("id", "unknown"))
-	light.light_id = str(rec.get("id", ""))
-	apply_record_to_light(light, rec)
-	parent.add_child(light)
-	return light
-
-
-static func apply_record_to_light(light: PlacedLight, rec: Dictionary) -> void:
-	if light == null or rec.is_empty():
-		return
-	var x := float(rec.get("x", 0.0))
-	var y := float(rec.get("y", 0.0))
-	var z := float(rec.get("z", 0.0))
-	var yaw := float(rec.get("yaw", 0.0))
-	var pitch := float(rec.get("pitch", 0.0))
-	var roll := float(rec.get("roll", 0.0))
-
-	light.position = Vector3(x, y, z)
-	light.rotation = Vector3(pitch, yaw, roll)
-
-	light.light_type = str(rec.get("type", "omni"))
-	light.light_color = parse_color(str(rec.get("color", "ffffff")))
-	light.light_energy = float(rec.get("energy", 1.0))
-	light.light_range = float(rec.get("range", 10.0))
-	light.spot_angle = float(rec.get("spot_angle", 45.0))
-	light.shadow_enabled = bool(rec.get("shadow_enabled", true))
-	light.lod_m = float(rec.get("lod_m", 0.0))
-
-	light.update_light_node()
-
-
-static func parse_color(s: String) -> Color:
-	var hex := s.strip_edges()
-	if hex.is_empty():
-		return Color.WHITE
-	if not hex.begins_with("#"):
-		hex = "#" + hex
-	return Color.html(hex)
+static func remove_node(main: Node, id: String) -> void:
+	var n := find_node(main, id)
+	if n != null:
+		n.get_parent().remove_child(n)
+		n.queue_free()

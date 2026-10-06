@@ -16,7 +16,11 @@ shader_type spatial;
 // projection), NOT from VIEWPORT_SIZE. VIEWPORT_SIZE is unreliable in the vertex
 // stage (reported as (1,1) in some passes — see godot#82782); using it made every
 // marker explode to tens of metres and paint the whole screen a solid colour.
-render_mode unshaded, cull_disabled, shadows_disabled, blend_add, depth_draw_never;
+// fog_disabled is LOAD-BEARING: Godot fogs unshaded/additive materials too,
+// which mixes the fog colour into the WHOLE quad — by day (glow 0) every card
+// became a light-blue rectangle up to 30 m across, and a field of them read as
+// a bluish sheen over every camp seen at a low angle through haze.
+render_mode unshaded, cull_disabled, shadows_disabled, blend_add, depth_draw_never, fog_disabled;
 
 // 0 by day -> markers are nearly black and invisible. Raised at night so EMISSION
 // blooms through the WorldEnvironment glow into colourful points of light.
@@ -36,6 +40,9 @@ uniform float max_world_size : hint_range(1.0, 200.0) = 30.0;
 uniform float near_fade_start : hint_range(0.0, 50.0) = 2.0;
 uniform float near_fade_end : hint_range(0.0, 100.0) = 9.0;
 
+// Lowest point of the shimmer (1.0 = steady).
+uniform float twinkle_floor : hint_range(0.0, 1.0) = 0.3;
+
 varying float v_dist;
 varying float v_twinkle;
 
@@ -53,21 +60,30 @@ void vertex() {
 	vec3 view_pos = origin_view.xyz + vec3(VERTEX.x, VERTEX.y, 0.0) * s;
 	POSITION = PROJECTION_MATRIX * vec4(view_pos, 1.0);
 	
-	// Twinkle effect calculated per-vertex using INSTANCE_ID
+	// A gentle shimmer (bulbs, wind in string lights), not a strobe.
 	float t = TIME * 1.5 + float(INSTANCE_ID) * 2.1;
-	v_twinkle = mix(0.3, 1.0, (sin(t) + sin(t * 1.7 + 1.2)) * 0.25 + 0.5);
+	v_twinkle = mix(twinkle_floor, 1.0, (sin(t) + sin(t * 1.7 + 1.2)) * 0.25 + 0.5);
 }
 
 void fragment() {
-	// Radial falloff so each card reads as a round glow rather than a square,
-	// and the dark corners stay near-black (invisible against the night).
-	vec2 d = UV - vec2(0.5);
-	float mask = clamp(1.0 - length(d) * 2.0, 0.0, 1.0);
-	mask *= mask;
+	if (glow_intensity <= 0.0) {
+		discard;
+	}
+	// Round: a tight hot core plus a soft halo, reaching exactly zero at the
+	// inscribed circle so no card ever shows a square edge.
+	float r = length(UV - vec2(0.5)) * 2.0;
+	if (r >= 1.0) {
+		discard;
+	}
+	float halo = 1.0 - r;
+	halo *= halo;
+	float mask = halo * 0.45 + exp(-r * r * 28.0) * 0.55;
 	// Fade out cards very close to the camera so a player standing among the camps
 	// isn't blinded by full-screen emissive panels.
 	float near_fade = smoothstep(near_fade_start, near_fade_end, v_dist);
 	// Use ALBEDO + blend_add to purely add vibrant light to the background.
-	ALBEDO = COLOR.rgb * glow_intensity * mask * near_fade * v_twinkle;
+	// COLOR.a = this light's brightness (a household's main light 1.0, string
+	// lights dimmer).
+	ALBEDO = COLOR.rgb * COLOR.a * glow_intensity * mask * near_fade * v_twinkle;
 	EMISSION = vec3(0.0);
 }

@@ -8,6 +8,7 @@ extends Node3D
 ##     Area_<id>/Class_<cls>_MM        textured GLB (or the tinted shape), near
 ##     Area_<id>/Class_<cls>_Far_MM    tinted proxy beyond the art range
 ##     CampGlow_MM                     every camp's night lights, one batch
+##     CampLightSpill_MM               their light on the ground, far views only
 ##     CampLightPool                   real OmniLights near the camera
 ##
 ## The node is named "PaintedCamps" on purpose: TerrainLoader's legacy
@@ -20,6 +21,7 @@ extends Node3D
 
 const NODE_NAME := "PaintedCamps"
 const GLOW_SHADER := preload("res://vegetation/camp_glow.gdshader")
+const SPILL_SHADER := preload("res://vegetation/camp_light_spill.gdshader")
 const CampLightPoolScript := preload("res://vegetation/camp_light_pool.gd")
 
 ## Textured art is drawn out to this far from the nearest structure of a batch.
@@ -29,10 +31,26 @@ const FAR_RANGE_M := 1800.0
 ## Whole-map instance budget across every painted camp.
 const MAX_TOTAL_STRUCTURES := 60000
 
+## Night-light look (camp_glow.gdshader + CampLightPool). A painted festival
+## is a few thousand lights, not Black Rock City's 15 000, so it affords more
+## real lights over a longer reach, faded by distance AND time.
+const CARD_WORLD_SIZE_M := 0.3
+const CARD_ANGULAR_SIZE := 0.0045
+## Cards fade in over this distance band (m): inside it the real OmniLights
+## carry the look and a card would only read as a floating orb.
+const CARD_FADE_IN_M := Vector2(22.0, 75.0)
+const POOL_LIGHTS := 64
+const POOL_REACH_M := 200.0
+const POOL_LIGHT_RANGE_M := 13.0
+const POOL_ENERGY := 3.0
+## Emissive-card peak at full night.
+const CARD_INTENSITY := 18.0
+
 var use_art := true
 var _main: Node = null
 var _glow_dirty := false
 var _glow_mat: ShaderMaterial = null
+var _spill_mat: ShaderMaterial = null
 
 
 func _init() -> void:
@@ -229,6 +247,7 @@ func refresh_glow_now() -> void:
 	for child in get_children():
 		glow.append_array(child.get_meta("glow", []))
 	_free_now(get_node_or_null("CampGlow_MM"))
+	_free_now(get_node_or_null("CampLightSpill_MM"))
 	var pool := get_node_or_null("CampLightPool")
 	if glow.is_empty():
 		_free_now(pool)
@@ -236,6 +255,14 @@ func refresh_glow_now() -> void:
 	if _glow_mat == null:
 		_glow_mat = ShaderMaterial.new()
 		_glow_mat.shader = GLOW_SHADER
+		# Painted camps are a festival, not a 15 000-light city: smaller, more
+		# numerous points, and NO card where the real lights already are — up
+		# close you see what a light does to the canopy around it, not an orb.
+		_glow_mat.set_shader_parameter("world_size", CARD_WORLD_SIZE_M)
+		_glow_mat.set_shader_parameter("min_angular_size", CARD_ANGULAR_SIZE)
+		_glow_mat.set_shader_parameter("near_fade_start", CARD_FADE_IN_M.x)
+		_glow_mat.set_shader_parameter("near_fade_end", CARD_FADE_IN_M.y)
+		_glow_mat.set_shader_parameter("twinkle_floor", 0.75)
 	var gmm := MultiMesh.new()
 	gmm.transform_format = MultiMesh.TRANSFORM_3D
 	gmm.use_colors = true
@@ -251,8 +278,51 @@ func refresh_glow_now() -> void:
 	gmmi.material_override = _glow_mat
 	gmmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(gmmi)
+	_build_spill(glow)
 	if pool == null:
 		pool = CampLightPoolScript.new()
 		pool.name = "CampLightPool"
+		pool.set("max_lights", POOL_LIGHTS)
+		pool.set("cull_radius_m", POOL_REACH_M)
+		pool.set("light_range_m", POOL_LIGHT_RANGE_M)
+		pool.set("full_energy", POOL_ENERGY)
+		pool.set("card_intensity", CARD_INTENSITY)
 		add_child(pool)
-	pool.call("setup", glow, _glow_mat, _main)
+	pool.call("setup", glow, _glow_mat, _main, [_spill_mat])
+
+
+## The ground light around each household's main light, for views beyond the
+## real lights' reach (see camp_light_spill.gdshader). The fade band is the
+## pool's own fade-out band, so the two hand over invisibly.
+func _build_spill(glow: Array) -> void:
+	var spills: Array = []
+	for g: Dictionary in glow:
+		if g.has("spill_m"):
+			spills.append(g)
+	if spills.is_empty():
+		return
+	if _spill_mat == null:
+		_spill_mat = ShaderMaterial.new()
+		_spill_mat.shader = SPILL_SHADER
+		_spill_mat.set_shader_parameter("fade_in_m",
+			Vector2(POOL_REACH_M * 0.45, POOL_REACH_M))
+	var plane := PlaneMesh.new()
+	plane.size = Vector2.ONE
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = plane
+	mm.instance_count = spills.size()
+	for i in spills.size():
+		var g: Dictionary = spills[i]
+		var p: Vector3 = g["pos"]
+		var d := float(g["spill_m"]) * 2.0
+		mm.set_instance_transform(i, Transform3D(Basis.IDENTITY.scaled(Vector3(d, 1.0, d)),
+			Vector3(p.x, float(g["ground_y"]) + 0.25, p.z)))
+		mm.set_instance_color(i, g["color"])
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "CampLightSpill_MM"
+	mmi.multimesh = mm
+	mmi.material_override = _spill_mat
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mmi)

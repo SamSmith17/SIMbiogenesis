@@ -8100,6 +8100,85 @@ func add_imported_plant(payload: Dictionary) -> bool:
 	return true
 
 
+## J Light Studio "Add to graph": a placed light becomes an AC LOAD (only the
+## load — the light layer keeps owning the wire, bulbs and look). Idempotent per
+## light (specs.placed_light_id), the add_imported_solar_panels tag rule. The
+## item points `scene_device_path` at the light's node, which gives it a 3D
+## anchor for feed conduits AND lets GraphAcLoad read the node's own
+## get_current_power() — 0 while the light is off or unpowered. Deliberately no
+## `light_conduit` / `watts_per_m`: those would turn the player's FEED cord into
+## a second string of bulbs and bill by the cord's length.
+func add_placed_light_load(light_id: String, kind: String, label: String, watts: float,
+		world_pos: Vector3) -> String:
+	if model == null or light_id.is_empty():
+		return ""
+	var existing := placed_light_item_id(light_id)
+	var main := get_tree().current_scene if is_inside_tree() else null
+	var node_path := ""
+	if main != null:
+		var n := main.get_node_or_null("PlacedLights/L_%s" % light_id)
+		if n != null:
+			node_path = str(n.get_path())
+	var site := Vector2.ZERO
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		site = GraphSiteLayout.world_xz_to_site(Vector2(world_pos.x, world_pos.z),
+			soi.call("world_center") as Vector3)
+	var item_name := "%s (%s)" % [label, "string light" if kind == "string" else kind + " light"]
+	var specs := {
+		"name": item_name,
+		"max_watts": maxf(watts, 0.1),
+		"avg_watts": maxf(watts, 0.1),
+		"requested_state": "on",
+		"placed_light_id": light_id,
+		"scene_device_path": node_path,
+	}
+	if not existing.is_empty():
+		var it := model.get_item(existing)
+		var s0: Dictionary = it.get("specs", {})
+		for k in specs.keys():
+			s0[k] = specs[k]
+		_schedule_graph_autosave()
+		return existing
+	var iid := model.generate_item_id()
+	model.add_item({
+		"id": iid,
+		"type": "appliance",
+		"x": 0.0, "y": 0.0,
+		"width": 160.0, "height": 104.0,
+		"scope_id": "root",
+		"site_x_m": site.x,
+		"site_z_m": site.y,
+		"elevation_m": world_pos.y,
+		"specs": specs,
+		"is_virtual": false,
+	})
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+	return iid
+
+
+func remove_placed_light_load(light_id: String) -> void:
+	var iid := placed_light_item_id(light_id)
+	if iid.is_empty() or model == null:
+		return
+	model.remove_item(iid)
+	_schedule_graph_autosave()
+	_autosave_pending = true
+	_flush_graph_autosave()
+
+
+func placed_light_item_id(light_id: String) -> String:
+	if model == null:
+		return ""
+	for it in model.items:
+		if it is Dictionary and str(((it as Dictionary).get("specs", {}) as Dictionary) \
+				.get("placed_light_id", "")) == light_id:
+			return str((it as Dictionary).get("id", ""))
+	return ""
+
+
 func has_starshade_graph_content() -> bool:
 	return StarShadeGraphSeeder.has_graph_content(model)
 

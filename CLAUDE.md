@@ -211,6 +211,30 @@ Godot.exe.exe --path . --windowed --resolution 640x480 --script core/population/
 # Snapshots and byte-restores camp / placement / spaces files + the graph
 # autosave; strips its cap_fest_* items and the camp compounds:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=festival --shots-dir=<label> --quit-after-capture
+# J Light Studio (offline — core/placed_lights/): layer v2 -> v3 migration
+# (radians -> degrees, type -> kind, identical looks share ONE auto style), the
+# built-in map path staying the v2 path, linked styles (style edit restyles
+# every user, overrides survive / prune / revert, make_unique, push to style,
+# remove_style keeps the look), groups + duplicates incl. string pins, string
+# geometry (sag below the chord, half-spacing bulb inset), LedEffects (rainbow
+# moves one bulb per 1/speed s, theatre chase lights n/gap) + the
+# led_bulb.gdshader mirror constants, gizmo maths round trips, service
+# undo/redo + node refresh, and the graph-load contract (no load until "Add to
+# graph", idempotent, never a power_consumers member). EXPECTED_CHECKS; it
+# byte-restores the bare-scene lights file. --import first:
+Godot.exe.exe --headless --path . --script core/placed_lights/placed_lights_selftest.gd
+# Light Studio end to end (WINDOWED — REAL input events: J through Main, mouse
+# clicks / drags / a double-click pushed through the viewport): omni + spot
+# placement on a surface (a ground-clicked spot hangs 3 m up aiming down), a
+# gumball X-arrow drag and yaw-ring drag, a 4-pin string finished by
+# double-clicking its last pin, a pin drag with the String tool still active,
+# Ctrl+drag moving the WHOLE string rigidly, Shift+drag duplicating it into the
+# source's group, a rainbow chase advancing, Add to graph making exactly one
+# load, a moving-head beam sweeping on its program, a 7-beam laser fan, a
+# neon-flex tube, J closing the dock. Run it on --user-map=walton too: it also
+# asserts no IK sphere shows and no camp highlights with J closed and no
+# modifier held. Byte-restores the map's lights file and removes the graph load:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=lights --shots-dir=<label> --quit-after-capture
 # Legacy street-following camp generator (offline — BrcCampGenerator, still what
 # auto-generate-on-load and the Shift+C dock use; CampMeshLibrary borrows its
 # mesh builders, so this must keep passing):
@@ -1874,6 +1898,22 @@ two systems render into different nodes and do not know about each other.
   candidate / forced-volume resources were deleted (no bake file ever shipped,
   so it rendered nothing). `camp_scatter_profile.gd` and the five
   `camp_profile_*.tres` stay — the legacy generator reads them.
+**Night lights.** A lit household gets ONE main light (`pool: true`) hung
+`LIGHT_DROP_M` under the top of its structure (under a canopy, at a tent's
+peak — they used to float 0.2–1.2 m ABOVE the roof as orbs) plus 1–4 dim
+string-light points (cards only); the extras draw from their own
+(seed, cell key) stream, so they can never move a tent. Three layers hand
+over by distance: real OmniLights (`CampLightPool`, 64 for painted camps)
+with sticky slots that ease in and out (`ease_tau_s`) and dim toward the
+edge of the pool's reach — the old pool snapped full-energy lights on at a
+fixed radius ("motion-activated"); round emissive cards (`camp_glow`) that
+are hidden inside ~22–75 m, where the real lights already carry the look;
+and `camp_light_spill.gdshader`, a flat additive ground disc per main light
+that fades in across the pool's fade-out band so far/aerial views still see
+light pooling between tents. ⚠ Both additive shaders are `fog_disabled`:
+Godot fogs unshaded `blend_add` quads too, so by day every zero-light card
+was a fog-coloured rectangle up to 30 m across — the bluish sheen over
+every camp at low angles.
 Not built: collision on camp structures, camps as NPC `sleep` spaces, per-vertex
 outline editing, the built-in SOAK/Mars scenes (no TerrainLoader), nose-in cars.
 
@@ -3558,6 +3598,131 @@ StaticBody would shove the player); Ctrl/Alt-aim shows "Name — status" and
 that person's Label3D nametag. Selftest + the `--capture=population` harness
 (which also asserts the crosshair contract + space-marker resolution) are in
 the Validation list.
+
+## J Light Studio (core/placed_lights/ + scenes/ui/lights/light_dock.gd)
+
+J opens a right-edge DOCK (not a modal — the old centred, dimmed
+PlacedLightModal hid exactly what was being lit) in CursorController's
+TOOL-OVERLAY tier, like the T/V/C toolbar: free cursor, RMB-look, WASD, one
+Esc peels one layer (string in progress → drag → selection → close). Tools:
+Select (click / Shift-add / box-select, gumball, drag a light or pin along
+surfaces, drag a WIRE to insert a pin), Omni, Spot (on open ground it hangs
+`SPOT_HANG_M` up aiming DOWN at the click — a spot on the ground shines at the
+sky; on a wall it aims out and 30° down), String (click pins, double-click the
+LAST pin or Enter to finish, Backspace drops one), Aim (selected spots face the
+clicked point). Outside the dock, Ctrl/Alt + click on a light or a string pin
+opens the dock on it and Ctrl/Alt + drag moves it (GrabController's
+relocatable-marker contract, which gained `world_drag_aim(camera)` so a marker
+can follow SURFACES, not just the terrain, plus optional
+`world_drag_begin` / `world_drag_preview(pos)` / `world_drag_cancel` hooks so a
+marker can show the drag itself). DRAG RULES, the same in both modes: J closed
+— Ctrl/Alt + drag moves the WHOLE light or string (every pin keeps its place
+relative to the others), Ctrl/Alt + Shift + drag duplicates it and moves the
+copy, a click opens the dock; J open — a plain drag on a pin moves just that
+pin (a light slides along surfaces), Ctrl + drag moves the whole string or the
+whole selection, Shift + drag duplicates. Nothing opens the dock on release (it
+dropped the player back into J on every nudge). All of it goes through
+`PlacedLightService.begin_drag_many` / `drag_to` / `end_drag` / `cancel_drag`
+(one undo step; cancel restores the checkpoint, copy and all). Offsets are
+measured from the FIRST aim point, so a lamp hung 3 m up keeps its height.
+COPIES SHARE the source's style AND groups (a source in no group gets a
+"<style> set" group with them), so by default everything stamped from one
+light restyles and switches together. Inside the dock every tool GRABS an
+existing pin or light under the pointer first — the String tool used to start
+a new string from a finished string's pin — except while a string is in
+progress. A selected string gets a SMALL gumball at its pin centroid (move +
+rotate — rotation swings every pin about the handle) for fine adjustment.
+
+- **Data** (`PlacedLightLayer` v3, `user://maps/placed_lights_<key>.json`):
+  key = `<lat>_<lon>` tokens on a generated map (one file per SITE — v2 keyed
+  every generated map to the shared shell scene, so all user maps read and
+  wrote ONE file; the first site to load adopts it and renames it `.adopted`),
+  `scene_<basename>` on built-in maps (== the v2 path, so they migrate in
+  place). Records hold WORLD xyz and rotation in DEGREES (v2: radians, and the
+  world hit point applied as a LOCAL position under Terrain). Nodes are
+  `top_level` under `Main/PlacedLights` — not Terrain — which is what lets the
+  SOAK/Mars scenes (no TerrainLoader) show their lights at all
+  (`main._build_placed_lights`; generated maps rebuild from
+  `_rebuild_placed_props` once the site key is known).
+- **Linked styles** (`PlacedLightStyles`, pure): a light renders
+  `defaults(kind) ⊕ style ⊕ overrides`. The inspector's scope picker writes
+  either INTO the style (every user follows) or as an override (amber dot + ↺);
+  an override equal to the style is pruned. Make unique / Push to style /
+  removing a style keeps the look. Groups are named sets with on/off + hide.
+- **Undo**: whole-layer snapshots (`checkpoint()` BEFORE a gesture,
+  `commit()` after = one undo step + one file write). Inspector edits within
+  0.6 s coalesce into one step.
+- **String lights** (`PlacedStringLight`) are deliberately NOT conduits: not
+  under ConduitManager (hidden in first person), no x-ray material, NOT in
+  `power_consumers`. Geometry is `ConduitMeshBuilder.sample_path` /
+  `bulb_positions_along` (the lights-as-wires sampler) via
+  `LightStringGeometry`; presets borrow `led_patio/fairy/strip` numbers.
+  One bulb MultiMesh on `gameplay/led_bulb.gdshader` + `real_lights` OmniLights
+  (distance-faded, `DEFAULT_FADE_M` 90).
+- **LED effects**: `LedEffects.color_at` is the ONE definition (solid,
+  rainbow_chase, theatre chase, twinkle, breathe, colour wipe);
+  `led_bulb.gdshader` is its line-for-line MIRROR (HSV output linearised to
+  match a CPU sRGB `Color.from_hsv`), fed the SAME `fx_time` the node advances
+  (real time; "Pause w/ sim" freezes it at time_scale 0) so the OmniLights,
+  which sample `color_at` at their own bulb indices at 15 Hz, chase with the
+  bulbs. The selftest parses the shader's constants.
+- **Gumball** (`LightGizmo` + `LightGizmoMath`, pure ray maths, no colliders):
+  arrows / plane squares / yaw-pitch-roll rings + a spot cone preview, constant
+  screen size, Shift snaps 0.25 m / 15°, L toggles world/local. Where a ring
+  crosses an axis it also lies on that move arrow, and the arrow wins the pick.
+- **Graph (load only)**: "Add to graph" → `SystemGraphView.add_placed_light_load`
+  (idempotent on `specs.placed_light_id`) makes an `appliance` whose
+  `scene_device_path` is the light's node: that gives it a 3D anchor for feed
+  conduits (a string's `PlugAnchor` = its first pin) AND lets GraphAcLoad read
+  the node's `get_current_power()` (0 unless bound + lit). No `light_conduit` /
+  `watts_per_m` on it — those would render the FEED cord as a second string.
+  Bound, a light is lit only when the item is on and AC is available
+  (`PlacedLightPower`). Deleting the light removes its load.
+- **Ctrl/Alt come from `ModifierKeys`**, not `Input.is_key_pressed`: the key
+  table goes stale when a release is lost (Alt+Tab), which left every J IK
+  sphere AND every Ctrl-gated crosshair highlight (camps, props) on while
+  walking. interaction_focus feeds it the latest event's modifier flags (each
+  mouse motion carries them, so a stuck key heals on the next move) and resets
+  it on focus loss. Also: `clear_camp_highlight` resets the loader's
+  change-gated `_camp_focus_id`, so a highlight cleared by another path (the
+  toolbar Edit tool) can no longer desync the gate.
+- **Show bulb** (`show_body` style key): omni/spot default OFF (only the light;
+  the IK sphere only while J is open or Ctrl/Alt held), strings default ON (the
+  bulbs are the look); off on a string hides its bulb MultiMesh.
+- **Presets** (`PlacedLightStyles.PRESETS` / `PRESET_ORDER`, per kind, with
+  real-product numbers): picking one in the dock's "New <kind>:" row makes (or
+  reuses) ONE style per preset per map (`style_for_preset`, keyed by
+  `preset_id`), so every light placed from it restyles together; the
+  inspector's Preset row applies one to the selection. `spot_angle` is Godot's
+  HALF-angle — product sheets quote the full beam angle.
+- **Continuous tubes** (string presets with `continuous: true`: LED rope, LED
+  neon flex, glass neon, EL wire): `LightStringGeometry.build_tube` carries the
+  ARC LENGTH in UV.x and `led_rope.gdshader` puts pixel i at i / `leds_per_m`,
+  blending between pixels (the diffuser look). Graph watts use the preset's
+  `watts_per_m`.
+- **Movers** (kind `mover`, `PlacedMoverLight` extends PlacedLight): moving-head
+  beam / gobo spot / wash / laser / gobo projector / strobe / sky tracker.
+  Base +Y = the mount axis (`MoverProgram.mount_rotation` stands it on the
+  clicked surface — hang one under a truss by clicking its underside); yoke
+  pans about +Y, head tilts away from it; `MoverProgram.direction(pan, tilt)`
+  is pinned against the real node hierarchy in the selftest. Programs (static /
+  pan / tilt / circle / figure-8 / wander) are pure functions of the SHARED
+  `PlacedLightClock`; `phase_deg` + the dock's "Fan phases" turn a set into a
+  fan. The Aim tool centres a mover's sweep (pan/tilt centre) instead of
+  turning its mount. Beams: `light_beam.gdshader` shaft (unit cone scaled to
+  (R, L, R), min apparent width so a 3 mm laser never vanishes, night-gated)
+  plus the SpotLight's volumetric-fog energy; beams and lasers stop at the
+  first surface (10 Hz raycast). Gobos are procedural (`MoverGobo`). ⚠ Clamp
+  the base of every `pow()` in an additive shader: the interpolated
+  `v_along` overshoots 1.0 at the beam's far end, `pow(negative)` is NaN, and
+  the glow pass turns one NaN pixel into a bright square with a black centre.
+- **One effect clock** (`PlacedLightClock`): strings, lamps and movers all read
+  it, so duplicates chase and sweep in step. Effects now include `flicker`
+  (flame / lantern) and `strobe` (fx_speed = flashes/s); the GPU half lives in
+  ONE include, `gameplay/led_effects.gdshaderinc`, used by both the bulb and
+  the tube shaders, and mirrors `LedEffects.color_at`.
+- Light distance fade uses Godot's own Light3D distance fade (the old LOD hid a
+  light outright past a threshold — it popped).
 
 ## Window wall (multi-monitor viewport — `core/windowwall/` + `scenes/windowwall/`)
 

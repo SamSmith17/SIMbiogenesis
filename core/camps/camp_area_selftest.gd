@@ -9,7 +9,7 @@ extends SceneTree
 
 ## A Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS, so the check COUNT is pinned too.
-const EXPECTED_CHECKS := 125
+const EXPECTED_CHECKS := 128
 
 var _failures: int = 0
 var _checks: int = 0
@@ -145,6 +145,31 @@ func _test_places_without_roads() -> void:
 	_check("several classes used", (res["classes"] as Dictionary).size() >= 5,
 		str((res["classes"] as Dictionary).keys()))
 	_check("night lights emitted", (res["glow"] as Array).size() > 10)
+	# Main lights hang UNDER the roofline (under a canopy, at a tent's peak) —
+	# they used to sit 0.2-1.2 m above it and read as orbs floating over camp.
+	var tops: Dictionary = {}
+	for cls in (res["classes"] as Dictionary).keys():
+		for it: Dictionary in res["classes"][cls]:
+			var p: Vector3 = it["pos"]
+			tops[Vector2i(roundi(p.x * 100.0), roundi(p.z * 100.0))] = p.y + (it["size"] as Vector3).y
+	var mains := 0
+	var under := true
+	var strings := 0
+	for g: Dictionary in res["glow"]:
+		var gp: Vector3 = g["pos"]
+		if not bool(g.get("pool", true)):
+			strings += 1
+			continue
+		mains += 1
+		var top: float = tops.get(Vector2i(roundi(gp.x * 100.0), roundi(gp.z * 100.0)), -INF)
+		under = under and gp.y <= maxf(top - 0.25, CampLayoutGenerator.LIGHT_MIN_Y_M) + 1e-3
+	_check("every main light sits under its own structure's top", mains > 0 and under,
+		"mains=%d" % mains)
+	_check("string lights ring lit households (cards only, never pooled)", strings >= mains)
+	var bright := true
+	for g: Dictionary in res["glow"]:
+		bright = bright and ((g["color"] as Color).a > 0.3)
+	_check("every light carries its brightness in alpha", bright)
 	var all_styles := true
 	for sid in CampStyles.STYLE_ORDER:
 		var r := CampLayoutGenerator.generate(_area(_rect(0, 0, 120, 90), sid), {})

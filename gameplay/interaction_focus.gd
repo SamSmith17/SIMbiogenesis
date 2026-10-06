@@ -54,6 +54,17 @@ func _get_route_controller() -> Node:
 	return _route_ctrl
 
 
+## Every event updates the Ctrl/Alt selection modifier (ModifierKeys) — the
+## event's own flags, not Godot's key table, which sticks after Alt+Tab.
+func _input(event: InputEvent) -> void:
+	ModifierKeys.observe(event)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		ModifierKeys.reset()
+
+
 func get_focused() -> Interactable:
 	return _focused
 
@@ -290,7 +301,9 @@ func _is_alt_selection_active() -> bool:
 	if gv != null and bool(gv.get("visible")):
 		return false
 	# Alt is the documented modifier; Ctrl is accepted too (common muscle memory).
-	return Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_CTRL)
+	# Read from the latest input event (ModifierKeys) — Input.is_key_pressed
+	# goes stale after Alt+Tab and left every Ctrl/Alt highlight on.
+	return ModifierKeys.selecting()
 
 
 func is_alt_selection_active() -> bool:

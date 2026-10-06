@@ -8,9 +8,7 @@ const HOURS_IN_DAY : float = 24.0
 const DAYS_IN_YEAR : int = 365
 const DAYS_IN_LEAP_YEAR : int = 366
 const PLACED_PROPS_UI_SCRIPT := preload("res://scenes/ui/placed_props_ui.gd")
-const PLACED_LIGHT_MODAL_SCRIPT := preload("res://scenes/ui/placed_light_modal.gd")
 const PlacedLightService := preload("res://core/placed_lights/placed_light_service.gd")
-const PlacedLightRuntime := preload("res://core/placed_lights/placed_light_runtime.gd")
 
 # ==================== DATE/TIME SYSTEM ====================
 
@@ -828,7 +826,6 @@ var _session_playtime_seconds : float = 0.0
 # Player spawn position
 var player_spawn_position : Vector3 = Vector3(0, 2, 0)
 var _placed_props_ui : Control = null
-var _placed_light_modal : Control = null
 var player_spawn_rotation : Vector3 = Vector3.ZERO
 
 
@@ -927,6 +924,7 @@ func _ready() -> void :
 	call_deferred( "_setup_auto_collision" )
 	# Setup crisis event system (deferred to ensure structure is loaded)
 	call_deferred( "_setup_crisis_events" )
+	call_deferred( "_build_placed_lights" )
 	# Challenge runner (systems-graph missions; UI cards deferred to Composer)
 	call_deferred( "_setup_challenge_runner" )
 	# Spawn fire extinguisher pickups at strategic locations
@@ -1195,23 +1193,6 @@ func _unhandled_input( e : InputEvent ) -> void :
 			solar_node.visible = not solar_node.visible
 		get_viewport().set_input_as_handled()
 		return
-	# Light place mode: mouse must be handled before the key-only early return
-	# (otherwise LMB/RMB never reach confirm/cancel).
-	if PlacedLightService.is_placement_active() and e is InputEventMouseButton \
-			and ( e as InputEventMouseButton ).pressed :
-		var mb := e as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT :
-			# Ctrl/Alt = select/edit an existing light (interaction_focus); bare click places.
-			if Input.is_key_pressed( KEY_CTRL ) or Input.is_key_pressed( KEY_ALT ) :
-				return
-			_ensure_placed_light_modal()
-			PlacedLightService.confirm_placement()
-			get_viewport().set_input_as_handled()
-			return
-		if mb.button_index == MOUSE_BUTTON_RIGHT :
-			PlacedLightService.cancel_placement()
-			get_viewport().set_input_as_handled()
-			return
 	if e is not InputEventKey or not ( e as InputEventKey ).pressed or ( e as InputEventKey ).echo :
 		return
 	# Nothing below may fire while a text field has focus or a blocking modal is
@@ -1226,11 +1207,8 @@ func _unhandled_input( e : InputEvent ) -> void :
 		get_viewport().set_input_as_handled()
 		return
 	if InputMap.has_action( "place_light" ) and e.is_action_pressed( "place_light" ) :
-		_ensure_placed_light_modal()
-		if PlacedLightService.is_placement_active():
-			PlacedLightService.cancel_placement()
-		else:
-			PlacedLightService.begin_placement(self, "omni")
+		# J: the Light Studio dock (scenes/ui/lights/light_dock.gd).
+		PlacedLightService.toggle_studio( self )
 		get_viewport().set_input_as_handled()
 		return
 	var key_event : InputEventKey = e as InputEventKey
@@ -2691,7 +2669,6 @@ func _process( delta: float ) -> void :
 		# SubViewport backdrop needs sun/sky to keep ticking.
 		if not graph_visible or _graph_soi_preview_active() :
 			PerfMonitor.begin("world_env")
-			PlacedLightService.process_placement()
 			# Planets are tiny points, so the 20 Hz sky throttle below makes them
 			# visibly jump at high speed while the sun/moon glide. Push them every
 			# frame (cheap — 5 planets × a few uniforms); PlanetSystem eases each
@@ -4539,23 +4516,12 @@ func _ensure_placed_props_ui() -> void :
 	ui_layer.add_child( edit_ui )
 	_placed_props_ui = edit_ui
 
-func _ensure_placed_light_modal() -> void :
-	if _placed_light_modal != null and is_instance_valid( _placed_light_modal ) :
-		return
-	var ui_layer := get_node_or_null( "UILayer" )
-	if ui_layer == null :
-		return
-	var existing = ui_layer.get_node_or_null( "PlacedLightModal" )
-	if existing != null :
-		_placed_light_modal = existing as Control
-		return
-	var modal = Control.new()
-	modal.name = "PlacedLightModal"
-	modal.set_script( PLACED_LIGHT_MODAL_SCRIPT )
-	ui_layer.add_child( modal )
-	_placed_light_modal = modal
-	if modal.has_method("bind_main"):
-		modal.call("bind_main", self)
+## Build this map's placed lights. Generated maps rebuild again from
+## TerrainLoader once the site is known (the lights file is keyed by site);
+## built-in scenes have no loader, so this is the only call they get.
+func _build_placed_lights() -> void :
+	if get_node_or_null( "TerrainLoader" ) == null :
+		PlacedLightService.ensure_built( self )
 
 ## Setup crisis event UI
 func _setup_crisis_event_ui() -> void :
