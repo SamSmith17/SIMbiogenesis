@@ -120,6 +120,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	# tick (nearest restroom, venue choice, nav anchors) reads the cache
 	# instead of resolving a prop record per candidate.
 	if registry != null:
+		registry.ignore_capacity = PopTestPrefs.ignore_capacity()
 		registry.refresh_positions(func(space: Dictionary) -> Variant:
 			return registry.resolve_position(space, main))
 	_nav_queries_this_tick = 0
@@ -1957,6 +1958,8 @@ func log_since(consumer: String) -> Array:
 const ALARM_H := 0.5
 
 func _service_alarms(iid: String, engine: NpcPopulationEngine, abs_h: float) -> void:
+	if PopTestPrefs.mute_alarms():
+		return
 	var lg := settlement_log()
 	for need in NpcAgent.NEEDS:
 		var worst := 0.0

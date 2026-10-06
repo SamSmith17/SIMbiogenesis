@@ -283,6 +283,8 @@ func _process_departures(abs_hours: float, ctx: Dictionary) -> void:
 	# never actually fire. Choosing "perish" is choosing this instead.
 	if NpcConsequence.normalize(consequence) == NpcConsequence.PERISH:
 		return
+	if PopTestPrefs.no_departures():
+		return
 	var leaving: Array = []
 	for a in agents:
 		# Someone a player is currently inhabiting cannot rage-quit — the body
@@ -318,6 +320,9 @@ func _validate_assignments() -> void:
 
 func _remove_agents(gone: Array, kind: String, abs_hours: float,
 		ctx: Dictionary, reason_override: String = "") -> void:
+	# Testing switch: nobody leaves and nobody is lost.
+	if PopTestPrefs.no_departures():
+		return
 	if gone.is_empty():
 		return
 	for a in gone:

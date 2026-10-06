@@ -575,10 +575,17 @@ func slot_offset(space_id: String, agent_id: String) -> Vector2:
 	return slot_offset_for_index(slot_index_for(space_id, agent_id))
 
 
+## Testing switch (PopTestPrefs.ignore_capacity, set by the bridge each
+## tick): spaces never fill, so nobody queues and nothing is "all full".
+var ignore_capacity := false
+
+
 func has_free_capacity(space_id: String) -> bool:
 	var rec := find_by_id(space_id)
 	if rec.is_empty():
 		return false
+	if ignore_capacity:
+		return true
 	return occupant_count(space_id) < maxi(int(rec.get("capacity", DEFAULT_CAPACITY)), 1)
 
 

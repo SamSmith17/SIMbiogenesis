@@ -15943,7 +15943,8 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 			if changed:
 				out["updated"] = int(out["updated"]) + 1
 			continue
-		var def := CampTemplates.definition(style, n)
+		var preset := str(lot.get("provision", PopTestPrefs.provision_preset()))
+		var def := CampTemplates.definition(style, n, preset)
 		model.put_definition(def)
 		var pos := Vector2(-600.0 + 260.0 * float(col % 6), 700.0 + 220.0 * float(col / 6))
 		col += 1
@@ -16163,3 +16164,117 @@ func _refresh_festival_vibe_from(summaries: Array, queueing: int) -> void:
 ## The festival-wide vibe ({} when the map has no festival camps).
 func festival_vibe() -> Dictionary:
 	return _festival_vibe
+
+
+# ---------------------------------------------------------------------------
+# Provisioning (playability): stock ANY habitat for a preset number of days
+# without the player wiring a thing. For every input the habitat draws and
+# every waste it makes, a tank is sized by CampProvisioning — an unwired port
+# gets a new tank wired in beside the habitat, a wired tank is grown to the
+# preset's size and topped up. Idempotent: provisioning twice restocks.
+# ---------------------------------------------------------------------------
+
+## {added: [tank ids], restocked: [tank ids], preset}
+func provision_habitat(iid: String, preset: String = "") -> Dictionary:
+	var out := {"added": [], "restocked": [], "preset": preset}
+	if model == null:
+		return out
+	var item: Dictionary = model.get_item(iid)
+	if item.is_empty():
+		return out
+	var specs: Dictionary = item.get("specs", {})
+	var n := maxi(int(specs.get("occupants", 1)), 1)
+	var pid := preset if CampProvisioning.PRESETS.has(preset) else PopTestPrefs.provision_preset()
+	out["preset"] = pid
+	var sup := CampProvisioning.supply(n, pid)
+	var scope := str(item.get("scope_id", "root"))
+	var bx := float(item.get("x", 0.0))
+	var by := float(item.get("y", 0.0))
+	_sim_bulk_update = true
+	_history_suppress = true
+	var col := 0
+	for i in (specs.get("inputs", []) as Array).size():
+		var inp: Dictionary = (specs["inputs"] as Array)[i]
+		var kind := ResourceKinds.normalize_kind(str(inp.get("kind", "")))
+		if not sup.has(kind) or not CampProvisioning.SUPPLY_KINDS.has(kind):
+			continue
+		var want: Dictionary = sup[kind]
+		var tank_id := _resource_tank_wired(iid, "res_in_%d" % i, true)
+		if tank_id.is_empty():
+			tank_id = _add_provision_tank(kind, want, scope, Vector2(bx - 220.0 + 150.0 * float(col), by - 200.0), 1.0)
+			model.add_connection({"polarity": "resource", "resource_type": kind,
+				"source_item_id": tank_id, "source_handle_id": "output",
+				"target_item_id": iid, "target_handle_id": "res_in_%d" % i})
+			(out["added"] as Array).append(tank_id)
+		else:
+			_restock_tank(tank_id, float(want["capacity"]), 1.0)
+			(out["restocked"] as Array).append(tank_id)
+		col += 1
+	col = 0
+	for i in (specs.get("outputs", []) as Array).size():
+		var outp: Dictionary = (specs["outputs"] as Array)[i]
+		var kind := ResourceKinds.normalize_kind(str(outp.get("kind", "")))
+		if not sup.has(kind) or not CampProvisioning.WASTE_KINDS.has(kind):
+			continue
+		var want: Dictionary = sup[kind]
+		var tank_id := _resource_tank_wired(iid, "res_out_%d" % i, false)
+		if tank_id.is_empty():
+			tank_id = _add_provision_tank(kind, want, scope, Vector2(bx - 120.0 + 150.0 * float(col), by + 220.0), 0.0)
+			model.add_connection({"polarity": "resource", "resource_type": kind,
+				"source_item_id": iid, "source_handle_id": "res_out_%d" % i,
+				"target_item_id": tank_id, "target_handle_id": "input"})
+			(out["added"] as Array).append(tank_id)
+		else:
+			_restock_tank(tank_id, float(want["capacity"]), -1.0)
+			(out["restocked"] as Array).append(tank_id)
+		col += 1
+	_history_suppress = false
+	_sim_bulk_update = false
+	if _resource_flow != null and _resource_flow.has_method("clear_timelines"):
+		_resource_flow.call("clear_timelines")
+	_mark_dirty_for_autosave()
+	return out
+
+
+func _resource_tank_wired(iid: String, handle: String, want_input: bool) -> String:
+	for c in (model.get("connections") as Array):
+		var cd: Dictionary = c
+		if str(cd.get("polarity", "")) != "resource":
+			continue
+		if want_input and str(cd.get("target_item_id", "")) == iid and str(cd.get("target_handle_id", "")) == handle:
+			var src: Dictionary = model.get_item(str(cd.get("source_item_id", "")))
+			if str(src.get("type", "")) == "resource":
+				return str(src["id"])
+		elif not want_input and str(cd.get("source_item_id", "")) == iid and str(cd.get("source_handle_id", "")) == handle:
+			var tgt: Dictionary = model.get_item(str(cd.get("target_item_id", "")))
+			if str(tgt.get("type", "")) == "resource":
+				return str(tgt["id"])
+	return ""
+
+
+func _add_provision_tank(kind: String, want: Dictionary, scope: String, pos: Vector2, level: float) -> String:
+	var names := {"water": "Water Tank", "food": "Food Store", "biomass": "Firewood",
+		"greywater": "Greywater Tank", "blackwater": "Blackwater Tank"}
+	var tank := {"type": "resource", "x": pos.x, "y": pos.y, "width": 90.0, "height": 100.0,
+		"scope_id": scope,
+		"specs": {"name": str(names.get(kind, kind.capitalize())), "resource_kind": kind,
+			"capacity_qty": float(want["capacity"]), "capacity_unit": str(want["unit"]),
+			"level": level, "provisioned": true}}
+	model.add_item(tank)
+	return str(tank["id"])
+
+
+func _restock_tank(tank_id: String, capacity: float, level: float) -> void:
+	var t: Dictionary = model.get_item(tank_id)
+	if t.is_empty():
+		return
+	var sp: Dictionary = (t.get("specs", {}) as Dictionary).duplicate(true)
+	sp["capacity_qty"] = maxf(float(sp.get("capacity_qty", 0.0)), capacity)
+	if level >= 0.0:
+		sp["level"] = level
+	model.update_item(tank_id, {"specs": sp})
+
+
+func _mark_dirty_for_autosave() -> void:
+	if has_method("_schedule_graph_autosave"):
+		call("_schedule_graph_autosave")

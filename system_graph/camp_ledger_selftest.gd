@@ -66,8 +66,8 @@ func _test_template_stamps() -> void:
 	_check("the habitat is pop-driven with the headcount", not hab.is_empty()
 		and bool(hab["specs"].get("pop_driven", false)) and int(hab["specs"].get("occupants", 0)) == 24)
 	var water := _child(model, cid, "water")
-	_check("stores scale with the headcount", absf(float(water["specs"].get("capacity_qty", 0.0))
-		- CampTemplates.WATER_L_PER_PERSON * 24.0) < 1e-6)
+	_check("stores scale with the headcount (CampProvisioning weekend × 24)", absf(float(water["specs"].get("capacity_qty", 0.0))
+		- float(CampProvisioning.supply(24, "weekend")["water"]["capacity"])) < 1e-6)
 	var handles: Array = inst.get("handles", [])
 	_check("five boundary ports promoted (3 in, 2 out)", handles.size() == 5
 		and int(inst["specs"].get("port_in_count", 0)) == 3 and int(inst["specs"].get("port_out_count", 0)) == 2,
@@ -89,7 +89,9 @@ func _test_ledger_classification() -> void:
 	var rows: Dictionary = led["kinds"]
 	_check("water: demanded, not made, not imported → OPEN", str(rows["water"]["status"]) == CampLedger.STATUS_OPEN)
 	_check("water demand = 2.083 L/h × 20", absf(float(rows["water"]["demand"]) - 2.083 * 20.0) < 1e-6)
-	_check("water runs out in two days", absf(float(rows["water"]["days_to_empty"]) - 2000.0 / (2.083 * 20.0 * 24.0)) < 1e-6,
+	var stock20 := float(CampProvisioning.supply(20, "weekend")["water"]["capacity"])
+	_check("water runs out when the weekend store is drawn at the nominal rate",
+		absf(float(rows["water"]["days_to_empty"]) - stock20 / (2.083 * 20.0 * 24.0)) < 1e-6,
 		"days=%.3f" % float(rows["water"]["days_to_empty"]))
 	_check("greywater: made, nobody takes it → SURPLUS", str(rows["greywater"]["status"]) == CampLedger.STATUS_SURPLUS
 		and float(rows["greywater"]["days_to_full"]) < INF)
@@ -137,6 +139,11 @@ func _test_festival_sum() -> void:
 	_check("people summed from the compounds", int(fest["people"]) == 50)
 	var water: Dictionary = fest["totals"]["water"]
 	_check("festival water demand is the sum", absf(float(water["demand"]) - 2.083 * 50.0) < 1e-6)
+	var want_stock := 0.0
+	for it in model.get_items_in_scope("root"):
+		var sp0: Dictionary = (it as Dictionary).get("specs", {})
+		if sp0.has("camp_headcount"):
+			want_stock += float(CampProvisioning.supply(int(sp0["camp_headcount"]), "weekend")["water"]["capacity"])
 	_check("festival stock sums the camps' stores (not root depots)",
-		absf(float(water["stock"]) - CampTemplates.WATER_L_PER_PERSON * 50.0) < 1e-6)
+		absf(float(water["stock"]) - want_stock) < 1e-6, "%.1f vs %.1f" % [float(water["stock"]), want_stock])
 	_check("each camp reports its open loops", ((fest["camps"] as Array)[0]["open"] as Array).has("water"))

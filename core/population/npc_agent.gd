@@ -831,7 +831,11 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	var registry: SpaceRegistry = ctx.get("registry")
 	var pos_of: Callable = ctx.get("pos_of", Callable())
+	var ideal := PopTestPrefs.ideal_supply()
 	if registry == null or not pos_of.is_valid():
+		if ideal:
+			_begin_virtual_need(need)
+			return
 		_mark_blocked(need, abs_hours)
 		retry_at[need] = abs_hours + RETRY_BACKOFF_H
 		return
@@ -841,6 +845,9 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	var space := registry.nearest_space_by(space_type, pos, pos_of, true, id,
 		ctx.get("agent_live", Callable()))
 	if space.is_empty():
+		if ideal:
+			_begin_virtual_need(need)
+			return
 		# Nothing tagged for this need (or everything is full) — this is a
 		# BLOCKED need, and it costs double morale.
 		_mark_blocked(need, abs_hours)
@@ -848,12 +855,18 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 		return
 	var sid := str(space.get("id", ""))
 	if not registry.claim(sid, id):
+		if ideal:
+			_begin_virtual_need(need)
+			return
 		_mark_blocked(need, abs_hours)
 		retry_at[need] = abs_hours + RETRY_BACKOFF_H
 		return
 	var p: Variant = pos_of.call(space)
 	if not (p is Vector2):
 		registry.release(sid, id)
+		if ideal:
+			_begin_virtual_need(need)
+			return
 		_mark_blocked(need, abs_hours)
 		retry_at[need] = abs_hours + RETRY_BACKOFF_H
 		return
@@ -882,6 +895,24 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	face_anchor = p
 	last_exposure = NpcWeatherGate.EXPOSURE_SHELTERED
 	_request_path(ctx, p, from_key, sid)
+	state = State.TRAVELING
+
+
+## IDEAL SUPPLY (PopTestPrefs): the need is met where the person stands —
+## no space, no claim, no walk. The activity still runs for its duration and
+## still consumes, so the demand it generates is the optimal demand curve;
+## only the WHERE is waived.
+func _begin_virtual_need(need: String) -> void:
+	_clear_blocked(need)
+	trip_distance_m = 0.0
+	activity = need
+	target_space_id = ""
+	target_space_type = str((ACTIVITIES.get(need, {}) as Dictionary).get("space", ""))
+	lie_yaw = NAN
+	target_pos = pos
+	face_anchor = Vector2.INF
+	last_exposure = NpcWeatherGate.EXPOSURE_SHELTERED
+	_clear_path()
 	state = State.TRAVELING
 
 

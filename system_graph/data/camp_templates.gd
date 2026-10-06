@@ -21,11 +21,9 @@ extends RefCounted
 
 const DEF_PREFIX := "camp_"
 ## Stores per PERSON, scaled by headcount at stamping (water 50 L/day).
-const WATER_L_PER_PERSON := 100.0      # two days
-const FOOD_KG_PER_PERSON := 4.0        # ~2.5 days at the camp's own rate
-const GREY_L_PER_PERSON := 80.0
-const BLACK_L_PER_PERSON := 20.0
-const BIOMASS_KG_PER_PERSON := 2.0
+## Store sizes come from CampProvisioning (rates per person × the preset's
+## days × margin) so the templates, the inspector's Provision action and the
+## selftest can never disagree about how long a camp lasts.
 
 const STYLE_LABELS := {
 	"mixed": "Mixed camp", "rv_park": "RV camp", "tent_village": "Tent village",
@@ -33,38 +31,44 @@ const STYLE_LABELS := {
 }
 
 
-static func def_id_for(style: String) -> String:
-	return DEF_PREFIX + (style if STYLE_LABELS.has(style) else "mixed")
+static func def_id_for(style: String, preset: String = "") -> String:
+	var sid := style if STYLE_LABELS.has(style) else "mixed"
+	return DEF_PREFIX + sid + ("" if preset.is_empty() or preset == "weekend" else "_" + preset)
 
 
 ## The definition for a style, sized for `headcount` people (stores scale
 ## with the camp; the layout is the same for every style in this round — the
 ## style's difference, its POWER, arrives with the per-camp energy phase).
-static func definition(style: String, headcount: int) -> Dictionary:
+## `preset` is a CampProvisioning preset id: how many days the camp's
+## stores last before anything has to be wired in (default a weekend).
+static func definition(style: String, headcount: int, preset: String = "weekend") -> Dictionary:
 	var n := maxi(headcount, 1)
 	var sid := style if STYLE_LABELS.has(style) else "mixed"
-	var def_id := def_id_for(sid)
+	var pid := preset if CampProvisioning.PRESETS.has(preset) else "weekend"
+	var def_id := def_id_for(sid, pid)
+	var sup := CampProvisioning.supply(n, pid)
 	return {
 		"id": def_id, "name": str(STYLE_LABELS[sid]), "icon": "⛺", "rev": 1,
 		"width": 220.0, "height": 150.0,
 		"specs": {
 			"summary": "%d people · %s" % [n, STYLE_LABELS[sid]],
 			"camp_template": sid,
+			"camp_provision": pid,
 		},
 		"subgraph": {
 			"items": [
 				{"local_id": "hab", "type": "processor", "dx": 0.0, "dy": 0.0,
 					"specs": _habitat_specs(n)},
 				{"local_id": "water", "type": "resource", "dx": -260.0, "dy": -200.0,
-					"specs": _tank("Water Tank", "water", "L", WATER_L_PER_PERSON * n, 1.0)},
+					"specs": _tank("Water Tank", "water", "L", float(sup["water"]["capacity"]), 1.0)},
 				{"local_id": "food", "type": "resource", "dx": -60.0, "dy": -200.0,
-					"specs": _tank("Food Store", "food", "kg", FOOD_KG_PER_PERSON * n, 1.0)},
+					"specs": _tank("Food Store", "food", "kg", float(sup["food"]["capacity"]), 1.0)},
 				{"local_id": "biomass", "type": "resource", "dx": 140.0, "dy": -200.0,
-					"specs": _tank("Firewood", "biomass", "kg", BIOMASS_KG_PER_PERSON * n, 1.0)},
+					"specs": _tank("Firewood", "biomass", "kg", float(sup["biomass"]["capacity"]), 1.0)},
 				{"local_id": "grey", "type": "resource", "dx": -160.0, "dy": 220.0,
-					"specs": _tank("Greywater Tank", "greywater", "L", GREY_L_PER_PERSON * n, 0.0)},
+					"specs": _tank("Greywater Tank", "greywater", "L", float(sup["greywater"]["capacity"]), 0.0)},
 				{"local_id": "black", "type": "resource", "dx": 60.0, "dy": 220.0,
-					"specs": _tank("Blackwater Tank", "blackwater", "L", BLACK_L_PER_PERSON * n, 0.0)},
+					"specs": _tank("Blackwater Tank", "blackwater", "L", float(sup["blackwater"]["capacity"]), 0.0)},
 			],
 			"connections": [
 				_res("water", "output", "hab", "res_in_0", "water"),

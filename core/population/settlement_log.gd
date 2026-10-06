@@ -68,6 +68,8 @@ static func create_empty() -> SettlementLog:
 ## so every plain-line consumer needs nothing new.
 func add(kind: String, text: String, abs_h: float, severity: int = INFO,
 		subject: String = "", meta: Dictionary = {}) -> void:
+	if PopTestPrefs.mute_alarms():
+		return   # testing switch: no feed, no toasts, no dashboard alerts
 	_seq += 1
 	var entry := {
 		"seq": _seq, "abs_h": abs_h, "kind": kind,

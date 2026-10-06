@@ -568,10 +568,16 @@ func _go_for_need(i: int, t: float, need: String, ctx: Dictionary, hour: float,
 		_go(i, t, slot, A_SLEEP, "", "", ctx)
 		return true
 	var registry: SpaceRegistry = ctx.get("registry")
+	var here := pos_at(i, t)
+	var ideal := PopTestPrefs.ideal_supply()
 	if registry == null:
+		if ideal:
+			_clear_blocked(i, need)
+			_go(i, t, here, a, "", "", ctx)
+			end_h[i] = t + cap_h if cap_h > 0.0 else -1.0
+			return true
 		_mark_blocked(i, need)
 		return false
-	var here := pos_at(i, t)
 	var best: Dictionary = {}
 	var best_d := INF
 	var exists := false
@@ -591,6 +597,12 @@ func _go_for_need(i: int, t: float, need: String, ctx: Dictionary, hour: float,
 			best = s
 	if best.is_empty():
 		if not exists:
+			if ideal:
+				# IDEAL SUPPLY: met where the person stands (see NpcAgent).
+				_clear_blocked(i, need)
+				_go(i, t, here, a, "", "", ctx)
+				end_h[i] = t + cap_h if cap_h > 0.0 else -1.0
+				return true
 			_mark_blocked(i, need)
 			return false
 		# Everything is full: queue at the nearest one.
@@ -814,7 +826,7 @@ func _release(i: int, ctx: Dictionary) -> void:
 func _process_departures(abs_h: float, ctx: Dictionary) -> void:
 	if _leaving.is_empty():
 		return
-	if NpcConsequence.normalize(consequence) == NpcConsequence.PERISH:
+	if NpcConsequence.normalize(consequence) == NpcConsequence.PERISH or PopTestPrefs.no_departures():
 		_leaving = []
 		return
 	var gone: Array = _leaving.duplicate()

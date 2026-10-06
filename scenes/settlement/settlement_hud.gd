@@ -275,6 +275,8 @@ func _refresh() -> void:
 		_speed_lbl.text = "paused" if ts <= 0.0 else "%d× · %s" % [
 			int(round(ts * 3600.0)),
 			("following %s" % _view.following()) if not _view.following().is_empty() else "watching"]
+		if PopTestPrefs.any_active():
+			_speed_lbl.text += "  · TESTING (guardrails off)"
 	if _bridge == null or not _bridge.has_method("settlement_log"):
 		return
 	var lg: SettlementLog = _bridge.call("settlement_log")

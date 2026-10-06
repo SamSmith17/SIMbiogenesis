@@ -3411,6 +3411,7 @@ func _build_population_section(specs: Dictionary) -> void:
 	)
 	h.add_child(cb)
 	_form_vbox.add_child(row)
+	_build_provision_row(specs)
 	if not on:
 		_hint_label("Tag props or buildings as Restroom / Kitchen / Sleeping / Water Point (prop editor or Building Builder) so people have places to go.")
 		return
@@ -6043,3 +6044,57 @@ func _type_icon(itype: String) -> String:
 		"plant":                return "🌱"
 		"catchment":            return "🌧"
 		_:                      return ""
+
+
+## Provisioning + ideal-supply readout for any habitat (playability):
+## "Provision" stocks the habitat's supply + waste tanks for a preset number
+## of days (CampProvisioning) with no wiring on the player's part; the
+## requirements line says what this many people need, and under PopTestPrefs
+## ideal supply the engine's ideal import rates show what a perfect
+## infrastructure is delivering right now.
+func _build_provision_row(specs: Dictionary) -> void:
+	var n := maxi(int(specs.get("occupants", 1)), 1)
+	var prow := HBoxContainer.new()
+	prow.add_theme_constant_override("separation", 8)
+	var plbl := Label.new()
+	plbl.text = "Provision"
+	plbl.add_theme_color_override("font_color", C_TEXT_S)
+	plbl.custom_minimum_size.x = 120.0
+	prow.add_child(plbl)
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var cur := PopTestPrefs.provision_preset()
+	for i in CampProvisioning.PRESET_ORDER.size():
+		var pid := str(CampProvisioning.PRESET_ORDER[i])
+		opt.add_item(CampProvisioning.preset_label(pid), i)
+		if pid == cur:
+			opt.select(i)
+	opt.tooltip_text = "How many days of water, food and firewood to stock (and waste tanks to size) for %d people" % n
+	prow.add_child(opt)
+	var btn := Button.new()
+	btn.text = "Stock up"
+	btn.tooltip_text = "Add or top up this habitat's supply and waste tanks for the chosen number of days — no wiring needed"
+	btn.pressed.connect(func() -> void:
+		var v := _find_owner_graph_view()
+		if v == null or not v.has_method("provision_habitat"):
+			return
+		var pid := str(CampProvisioning.PRESET_ORDER[clampi(opt.selected, 0, CampProvisioning.PRESET_ORDER.size() - 1)])
+		v.call("provision_habitat", _item_id, pid)
+		_rebuild_current_item()
+	)
+	prow.add_child(btn)
+	_form_vbox.add_child(prow)
+	var req := CampProvisioning.requirements(n)
+	_readonly_field("Needs (%d people)" % n, "%.0f L water · %.1f kg food per day · %d restroom slots · %d kitchen seats · %d showers" % [
+		float(req["water_l_day"]), float(req["food_kg_day"]), int(req["restroom_slots"]),
+		int(req["kitchen_seats"]), int(req["shower_slots"])])
+	var imp: Dictionary = specs.get("ideal_import_rates", {})
+	var exp: Dictionary = specs.get("ideal_export_rates", {})
+	if not imp.is_empty() or not exp.is_empty():
+		var bits := PackedStringArray()
+		for k in imp:
+			bits.append("%s %.2f/h in" % [str(k), float(imp[k])])
+		for k in exp:
+			bits.append("%s %.2f/h out" % [str(k), float(exp[k])])
+		_readonly_field("Ideal supply", " · ".join(bits))
+		_hint_label("Ideal supply is ON (Settings → NPC → Testing): shortfalls are met as if by a perfect supplier; these are the rates it would have to deliver.")

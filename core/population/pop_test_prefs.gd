@@ -1,0 +1,150 @@
+class_name PopTestPrefs
+extends RefCounted
+
+## Testing / playability switches for the population simulation — the
+## "turn the guardrails off" set the user asked for, plus the default
+## provisioning preset new camps are stocked with. Global prefs in
+## `user://pop_testing.cfg` (the ExtremeWeatherPrefs pattern): they are about
+## how YOU want to test, not a property of a site, so they never ride a save.
+##
+## - ideal_supply:    every need is met as if the infrastructure were perfect.
+##                    Habitats never starve (the shortfall is counted as an
+##                    IDEAL IMPORT and stamped on the habitat so the ledger and
+##                    the inspector can show what would have to be supplied);
+##                    a need with no space tagged — or every space full — is
+##                    satisfied where the person stands; waste with no sink is
+##                    counted as exported. Consumption is still billed, so the
+##                    numbers it produces ARE the optimal demand curve.
+## - ignore_capacity: spaces never fill — no queues, no "everything is full".
+## - no_departures:   nobody rage-quits, perishes or collapses the colony.
+## - mute_alarms:     the settlement log records nothing (no alarms, toasts,
+##                    feed lines, dashboard alerts).
+## Under --script (selftests) nothing loads the file, so every flag reads
+## false and the pure cores behave exactly as before.
+
+const CFG_PATH := "user://pop_testing.cfg"
+const SECTION := "testing"
+
+const DEFAULT_PRESET := "weekend"
+
+static var _loaded := false
+static var _ideal_supply := false
+static var _ignore_capacity := false
+static var _no_departures := false
+static var _mute_alarms := false
+static var _provision_preset := DEFAULT_PRESET
+static var _generation := 0
+
+
+static func ensure_loaded() -> void:
+	if _loaded:
+		return
+	_loaded = true
+	load_from(CFG_PATH)
+
+
+static func load_from(path: String) -> bool:
+	var cfg := ConfigFile.new()
+	if cfg.load(path) != OK:
+		return false
+	_ideal_supply = bool(cfg.get_value(SECTION, "ideal_supply", _ideal_supply))
+	_ignore_capacity = bool(cfg.get_value(SECTION, "ignore_capacity", _ignore_capacity))
+	_no_departures = bool(cfg.get_value(SECTION, "no_departures", _no_departures))
+	_mute_alarms = bool(cfg.get_value(SECTION, "mute_alarms", _mute_alarms))
+	_provision_preset = str(cfg.get_value(SECTION, "provision_preset", _provision_preset))
+	if not CampProvisioning.PRESETS.has(_provision_preset):
+		_provision_preset = DEFAULT_PRESET
+	_generation += 1
+	return true
+
+
+static func save() -> void:
+	save_to(CFG_PATH)
+
+
+static func save_to(path: String) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(path)   # preserve any other sections
+	cfg.set_value(SECTION, "ideal_supply", _ideal_supply)
+	cfg.set_value(SECTION, "ignore_capacity", _ignore_capacity)
+	cfg.set_value(SECTION, "no_departures", _no_departures)
+	cfg.set_value(SECTION, "mute_alarms", _mute_alarms)
+	cfg.set_value(SECTION, "provision_preset", _provision_preset)
+	cfg.save(path)
+
+
+## Bumps whenever a flag changes — pollers compare it instead of re-reading.
+static func generation() -> int:
+	return _generation
+
+
+static func ideal_supply() -> bool:
+	ensure_loaded()
+	return _ideal_supply
+
+
+static func ignore_capacity() -> bool:
+	ensure_loaded()
+	return _ignore_capacity or _ideal_supply
+
+
+static func no_departures() -> bool:
+	ensure_loaded()
+	return _no_departures
+
+
+static func mute_alarms() -> bool:
+	ensure_loaded()
+	return _mute_alarms
+
+
+static func provision_preset() -> String:
+	ensure_loaded()
+	return _provision_preset
+
+
+static func set_ideal_supply(on: bool) -> void:
+	ensure_loaded()
+	_ideal_supply = on
+	_generation += 1
+
+
+static func set_ignore_capacity(on: bool) -> void:
+	ensure_loaded()
+	_ignore_capacity = on
+	_generation += 1
+
+
+static func set_no_departures(on: bool) -> void:
+	ensure_loaded()
+	_no_departures = on
+	_generation += 1
+
+
+static func set_mute_alarms(on: bool) -> void:
+	ensure_loaded()
+	_mute_alarms = on
+	_generation += 1
+
+
+static func set_provision_preset(id: String) -> void:
+	ensure_loaded()
+	_provision_preset = id if CampProvisioning.PRESETS.has(id) else DEFAULT_PRESET
+	_generation += 1
+
+
+## True when any guardrail is off — the HUD shows a "testing" tag then.
+static func any_active() -> bool:
+	ensure_loaded()
+	return _ideal_supply or _ignore_capacity or _no_departures or _mute_alarms
+
+
+## Reset to the shipped defaults (selftests use this between cases).
+static func reset_defaults() -> void:
+	_loaded = true
+	_ideal_supply = false
+	_ignore_capacity = false
+	_no_departures = false
+	_mute_alarms = false
+	_provision_preset = DEFAULT_PRESET
+	_generation += 1

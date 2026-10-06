@@ -4858,7 +4858,15 @@ func _push_camps_to_graph() -> void:
 	var graph: Node = ServiceLocator.graph()
 	if graph == null or not graph.has_method("sync_camps_from_placement"):
 		return
-	graph.call_deferred("sync_camps_from_placement", placement.lots.duplicate(true))
+	# Each lot carries its zone's provisioning preset (how many days the
+	# camp's stores last), falling back to the global testing default.
+	var lots: Array = placement.lots.duplicate(true)
+	var zones := placement.zones_by_id()
+	for l in lots:
+		var zone: Dictionary = zones.get(str((l as Dictionary).get("zone_id", "")), {})
+		var spec: Dictionary = zone.get("spec", {})
+		(l as Dictionary)["provision"] = str(spec.get("provision", PopTestPrefs.provision_preset()))
+	graph.call_deferred("sync_camps_from_placement", lots)
 
 
 func _placement_ready() -> bool:

@@ -3070,6 +3070,13 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 	var had_demand := false
 	var water_consumed_lph := 0.0
 	var food_consumed_kgph := 0.0
+	# IDEAL SUPPLY (PopTestPrefs): a channel with no tank, no timeline or a
+	# dry tank is not starved — its draw is counted as an ideal import and
+	# the activity goes on. The people still consume, so what accumulates
+	# here is exactly the supply a perfect infrastructure would deliver.
+	var ideal := PopTestPrefs.ideal_supply()
+	var ideal_imports: Dictionary = {}
+	var ideal_exports: Dictionary = {}
 
 	var pop_demand: Dictionary = _habitat_demand.get(iid, {})
 	var pop_driven := _habitat_demand.has(iid)
@@ -3087,18 +3094,16 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 		var tank_id := _tank_at_port(iid, "res_in_%d" % i, true)
 		if tank_id.is_empty():
 			tank_id = _tank_at_port(iid, "input", true)
-		if tank_id.is_empty():
-			if not starved.has(kind):
-				starved.append(kind)
-			continue
-		var tl: ResourceTimeline = _timelines.get(tank_id) as ResourceTimeline
-		if tl == null:
-			if not starved.has(kind):
-				starved.append(kind)
-			continue
-		var lvl := tl.level_at(abs_h)
-		if lvl <= 0.001:
-			if not starved.has(kind):
+		var tl: ResourceTimeline = _timelines.get(tank_id) as ResourceTimeline if not tank_id.is_empty() else null
+		var dry := tank_id.is_empty() or tl == null or tl.level_at(abs_h) <= 0.001
+		if dry:
+			if ideal:
+				ideal_imports[kind] = float(ideal_imports.get(kind, 0.0)) + rate
+				if kind == "water":
+					water_consumed_lph += rate
+				elif kind == "food":
+					food_consumed_kgph += rate
+			elif not starved.has(kind):
 				starved.append(kind)
 			continue
 		net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) - rate
@@ -3133,17 +3138,22 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 		if tank_id.is_empty():
 			tank_id = _tank_at_port(iid, "output", false)
 		if tank_id.is_empty():
+			if ideal:
+				ideal_exports[kind] = float(ideal_exports.get(kind, 0.0)) + credit
 			continue
 		var tl: ResourceTimeline = _timelines.get(tank_id) as ResourceTimeline
 		var tank_item := _model.get_item(tank_id)
 		var tank_specs: Dictionary = tank_item.get("specs", {}) if not tank_item.is_empty() else {}
 		if not _tank_accepts_inflow(tank_specs, tl, abs_h):
+			if ideal:
+				ideal_exports[kind] = float(ideal_exports.get(kind, 0.0)) + credit
 			continue
 		net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) + credit
 		for conn: Dictionary in _connections_from_handle(iid, "res_out_%d" % i):
 			_cache_conn_flow(str(conn.get("id", "")), credit, kind)
 
 	_write_habitat_starved(iid, specs, starved)
+	_write_habitat_ideal(iid, specs, ideal_imports, ideal_exports)
 	# Unified node state: STARVED when any channel is dry, RUNNING while fed,
 	# IDLE only when the habitat has no demand at all.
 	if not starved.is_empty():
@@ -3179,6 +3189,39 @@ func habitat_kind_supplied(item_id: String, kind: String) -> bool:
 		var tl: ResourceTimeline = _timelines.get(tank_id) as ResourceTimeline
 		return tl != null and tl.level_at(maxf(_last_abs_hours, 0.0)) > 0.001
 	return false
+
+
+## The ideal-supply ledger on the habitat (what a perfect infrastructure
+## would import / haul away right now), change-gated to 1 %; erased when the
+## mode is off so the ledger stops reading it.
+func _write_habitat_ideal(item_id: String, specs: Dictionary, imports: Dictionary, exports: Dictionary) -> void:
+	var had := specs.has("ideal_import_rates") or specs.has("ideal_export_rates")
+	if imports.is_empty() and exports.is_empty():
+		if had:
+			specs.erase("ideal_import_rates")
+			specs.erase("ideal_export_rates")
+			_model.update_item(item_id, {"specs": specs})
+		return
+	var prev_i: Dictionary = specs.get("ideal_import_rates", {})
+	var prev_e: Dictionary = specs.get("ideal_export_rates", {})
+	if _rates_close(prev_i, imports) and _rates_close(prev_e, exports):
+		return
+	specs["ideal_import_rates"] = imports.duplicate()
+	specs["ideal_export_rates"] = exports.duplicate()
+	_model.update_item(item_id, {"specs": specs})
+
+
+static func _rates_close(a: Dictionary, b: Dictionary) -> bool:
+	if a.size() != b.size():
+		return false
+	for k in b:
+		if not a.has(k):
+			return false
+		var x := float(a[k])
+		var y := float(b[k])
+		if absf(x - y) > 0.01 * maxf(absf(y), 1e-6) + 1e-6:
+			return false
+	return true
 
 
 func _write_habitat_starved(item_id: String, specs: Dictionary, starved: Array) -> void:

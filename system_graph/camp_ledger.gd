@@ -18,6 +18,9 @@ const STATUS_IMPORTING := "importing"
 const STATUS_SURPLUS := "surplus"
 const STATUS_OPEN := "open"
 const STATUS_IDLE := "idle"
+## A waste somebody hauls away (an ideal-supply export, or later a wired
+## pump-out) — made, taken, not a badge.
+const STATUS_EXPORTING := "exporting"
 
 ## Kinds a camp produces that somebody must take away.
 const WASTE_KINDS: Array = ["greywater", "blackwater", "food_waste", "plastic_waste", "packaging_waste"]
@@ -55,6 +58,18 @@ static func compute(model, scope_id: String, demand_overrides: Dictionary = {}) 
 				if role == "habitat":
 					mult = maxf(float(specs.get("occupants", 1.0)), 1.0)
 				var over: Dictionary = demand_overrides.get(iid, {})
+				# IDEAL SUPPLY: what the engine would have had to import /
+				# haul away for this habitat counts as imports / exports.
+				for k in (specs.get("ideal_import_rates", {}) as Dictionary):
+					var rk := ResourceKinds.normalize_kind(str(k))
+					if not rk.is_empty():
+						var r0 := _row(rows, rk, "")
+						r0["imports"] = float(r0["imports"]) + float((specs["ideal_import_rates"] as Dictionary)[k])
+				for k in (specs.get("ideal_export_rates", {}) as Dictionary):
+					var rk2 := ResourceKinds.normalize_kind(str(k))
+					if not rk2.is_empty():
+						var r1 := _row(rows, rk2, "")
+						r1["exports"] = float(r1["exports"]) + float((specs["ideal_export_rates"] as Dictionary)[k])
 				for inp in specs.get("inputs", []):
 					var kind := ResourceKinds.normalize_kind(str((inp as Dictionary).get("kind", "")))
 					if kind.is_empty():
@@ -103,6 +118,10 @@ static func compute(model, scope_id: String, demand_overrides: Dictionary = {}) 
 			status = STATUS_IMPORTING if float(row["imports"]) > 1e-9 else STATUS_CLOSED
 		elif supply > 1e-9:
 			status = STATUS_SURPLUS if WASTE_KINDS.has(str(kind)) or float(row["capacity"]) > 0.0 else STATUS_IDLE
+			# Anything hauled away (an ideal-supply export today, a wired
+			# pump-out tomorrow) means the waste is not an open loop.
+			if float(row["exports"]) > 1e-9:
+				status = STATUS_EXPORTING
 		row["status"] = status
 		if status == STATUS_OPEN or (status == STATUS_SURPLUS and WASTE_KINDS.has(str(kind))):
 			open.append(str(kind))
@@ -113,7 +132,7 @@ static func compute(model, scope_id: String, demand_overrides: Dictionary = {}) 
 static func _row(rows: Dictionary, kind: String, unit: String) -> Dictionary:
 	if not rows.has(kind):
 		rows[kind] = {"stock": 0.0, "capacity": 0.0, "supply": 0.0, "demand": 0.0,
-			"imports": 0.0, "net": 0.0, "days_to_empty": INF, "days_to_full": INF,
+			"imports": 0.0, "exports": 0.0, "net": 0.0, "days_to_empty": INF, "days_to_full": INF,
 			"unit": unit, "status": STATUS_IDLE}
 	var row: Dictionary = rows[kind]
 	if str(row["unit"]).is_empty() and not unit.is_empty():

@@ -162,6 +162,16 @@ Godot.exe.exe --headless --path . --script system_graph/camp_ledger_selftest.gd
 # EnergyTimeline.step_soc the player's battery uses, the floor + unserved
 # load, two camps stepping independently, the daily balance):
 Godot.exe.exe --headless --path . --script core/power/camp_power_selftest.gd
+# Camp provisioning + the testing switches (offline — CampProvisioning rates
+# / presets / supply sizing / days remaining / space requirements, the
+# PopTestPrefs file round trip against a TEMP path, and every guardrail the
+# switches turn off, each asserted OFF and ON: the flow engine's IDEAL
+# SUPPLY (a habitat with no tanks is not starved; the shortfall is stamped as
+# ideal imports and CampLedger reads it as IMPORTING / EXPORTING), both
+# tiers meeting a need with NOTHING tagged (the guarded camp walks out before
+# the day ends — sample blocked needs DURING the run, not at the end), the
+# registry's capacity switch, no departures, the muted settlement log):
+Godot.exe.exe --headless --path . --script core/population/camp_provisioning_selftest.gd
 # Festival vibe (offline — FestivalVibe over per-camp summaries: headcount
 # weighting, histogram sum, blocked share from CRITICAL needs only,
 # component ordering, the headline, the 24 h trend ring incl. scrub reset):
@@ -2197,6 +2207,42 @@ single-system maps are untouched. Written onto the compound (`camp_soc`,
 `camp_pv_kw`, `camp_load_kw`, `camp_ac`, `camp_hours_left`) at most twice a
 sim-hour or on a 1 % SOC move; a scrub-back or a >6 h jump HOLDS (the SOC is
 a forward integrator). Selftest `core/power/camp_power_selftest.gd`.
+
+**Provisioning + testing switches (playability).** `CampProvisioning`
+(`core/population/camp_provisioning.gd`, pure static) is the ONE source for
+what a headcount consumes (the habitat preset's per-person rates × 24:
+50 L water, 1.5 kg food, 0.5 kg firewood, 40 L grey, 10 L black per day),
+the duration presets (`bare` 1 d / `weekend` 3 d / `week` 7 d /
+`fortnight` 14 d, each with a margin), `supply(n, preset)` (supplies full,
+waste tanks empty, both sized days × rate × margin), `days_remaining`, and
+`requirements(n)` (simultaneous slots per space type from each need's
+visit length over the routine window it is spread across — 316 people need
+~35 restroom slots, which is the queue the Walton harness saw with 48).
+`CampTemplates.definition(style, n, preset)` sizes a camp's stores from it
+(the old per-person constants are gone; `def_id_for(style, preset)` keys
+non-weekend presets separately), the loader stamps each lot with its zone's
+`spec.provision` (else the global default), and
+`SystemGraphView.provision_habitat(iid, preset)` — the inspector's
+**Provision / Stock up** row on ANY habitat — adds a wired tank for every
+unwired supply input and waste output, or grows + tops up a wired one, then
+clears the flow timelines so the levels take. The population section also
+prints "Needs (N people)". `PopTestPrefs` (`user://pop_testing.cfg`,
+Settings → NPC → Testing & provisioning; `reset_defaults()` in selftests,
+all off under `--script`) holds the guardrail switches: **ideal supply**
+(the flow engine never starves a habitat — a dry/absent channel is counted
+as `ideal_import_rates` on the habitat, waste with no sink as
+`ideal_export_rates`, both erased when the switch is off; both tiers meet
+a need with no space tagged, or every space full, WHERE THE PERSON STANDS
+via `NpcAgent._begin_virtual_need` / the cohort's `_go(i, t, here, …)`,
+still consuming, so what it bills IS the optimal demand curve; CampLedger
+reads the stamps as IMPORTING / EXPORTING and the inspector shows "Ideal
+supply … in / out"), **ignore capacity** (`SpaceRegistry.ignore_capacity`,
+set by the bridge each tick — implied by ideal supply), **no departures**
+(`_process_departures` and `_remove_agents` in the engine, the cohort's
+`_process_departures`) and **mute alarms** (`SettlementLog.add` records
+nothing; `_service_alarms` skips). The settlement HUD's speed line says
+"TESTING (guardrails off)" while any is on. Selftest:
+`core/population/camp_provisioning_selftest.gd`.
 
 **Festival vibe + the Walton harness (plan Phase 7) — `FestivalVibe`
 (`core/population/festival_vibe.gd`).** `compute(summaries)` is pure over

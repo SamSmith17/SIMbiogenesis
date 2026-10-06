@@ -2697,6 +2697,49 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	v.add_child(cr_hint)
 
 	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Testing & provisioning")
+	var t_hint := Label.new()
+	t_hint.text = "Guardrails off, for trying things out. 'Ideal supply' meets every need as if the infrastructure were perfect and reports what it would have to deliver (the optimal demand); the others stop queues, departures and the alarm feed."
+	t_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	t_hint.custom_minimum_size = Vector2(420, 0)
+	t_hint.add_theme_color_override("font_color", C_TEXT_S)
+	t_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(t_hint)
+	var ideal_chk := _add_check(v, "Ideal supply — every need met, shortfalls counted as imports", func(on: bool) -> void:
+		PopTestPrefs.set_ideal_supply(on)
+		PopTestPrefs.save())
+	ideal_chk.button_pressed = PopTestPrefs.ideal_supply()
+	var cap_chk := _add_check(v, "Ignore space capacity (no queues)", func(on: bool) -> void:
+		PopTestPrefs.set_ignore_capacity(on)
+		PopTestPrefs.save())
+	cap_chk.button_pressed = PopTestPrefs.ignore_capacity() and not PopTestPrefs.ideal_supply()
+	var dep_chk := _add_check(v, "Nobody leaves, perishes or collapses the colony", func(on: bool) -> void:
+		PopTestPrefs.set_no_departures(on)
+		PopTestPrefs.save())
+	dep_chk.button_pressed = PopTestPrefs.no_departures()
+	var mute_chk2 := _add_check(v, "Mute the settlement feed, alarms and toasts", func(on: bool) -> void:
+		PopTestPrefs.set_mute_alarms(on)
+		PopTestPrefs.save())
+	mute_chk2.button_pressed = PopTestPrefs.mute_alarms()
+	var prov_row := HBoxContainer.new()
+	prov_row.add_theme_constant_override("separation", 8)
+	var prov_lbl := Label.new()
+	prov_lbl.text = "New camps stocked for"
+	prov_lbl.custom_minimum_size = Vector2(150, 0)
+	prov_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	prov_row.add_child(prov_lbl)
+	var prov_opt := OptionButton.new()
+	for i in CampProvisioning.PRESET_ORDER.size():
+		prov_opt.add_item(CampProvisioning.preset_label(str(CampProvisioning.PRESET_ORDER[i])), i)
+	prov_opt.selected = maxi(CampProvisioning.PRESET_ORDER.find(PopTestPrefs.provision_preset()), 0)
+	prov_opt.tooltip_text = "How many days of water, food and firewood a camp stamped from a placement lot starts with (also the inspector's default)"
+	prov_opt.item_selected.connect(func(idx: int) -> void:
+		PopTestPrefs.set_provision_preset(str(CampProvisioning.PRESET_ORDER[clampi(idx, 0, CampProvisioning.PRESET_ORDER.size() - 1)]))
+		PopTestPrefs.save())
+	prov_row.add_child(prov_opt)
+	v.add_child(prov_row)
+
+	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Routines")
 	var routines_btn := Button.new()
 	routines_btn.text = "Routines & chores…"
