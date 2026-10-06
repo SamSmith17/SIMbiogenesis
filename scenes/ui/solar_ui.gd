@@ -2018,7 +2018,16 @@ func _update_sky_visuals() -> void:
 		return
 	
 	# clouds_cutoff: 1.0 = clear, 0.0 = maximum clouds — inverse of cloud_cover
-	var target_cutoff : float = 1.0 - cloud_cover
+	# The site's microclimate adjusts what the SKY shows only: it takes ERA5's
+	# fog-as-100 %-low-cloud back out of the overhead deck (the fog is drawn on
+	# the ground instead) and adds any calibrated cloud. cloud_cover itself —
+	# which the PV and lighting physics read — is untouched.
+	var sky_cover : float = cloud_cover
+	var mc := get_node_or_null("/root/Microclimate")
+	if mc != null and not _user_weather_manual_override:
+		var st: Dictionary = mc.call("current")
+		sky_cover = clampf(cloud_cover + float(st.get("cloud_delta", 0.0)), 0.0, 1.0)
+	var target_cutoff : float = 1.0 - sky_cover
 	# Storm darkness only when precipitation is active — scale with rate so drizzle
 	# stays grey/overcast instead of near-black (full storm weight was drowning rain VFX).
 	var target_weight : float = 0.0

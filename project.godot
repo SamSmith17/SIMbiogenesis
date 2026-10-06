@@ -58,6 +58,7 @@ MultiplayerSession="*res://core/multiplayer/multiplayer_session.gd"
 UiSound="*res://core/ui_sfx.gd"
 AirQualityService="*res://core/weather/air_quality_service.gd"
 ExtremeWeather="*res://core/weather/extreme_weather_director.gd"
+Microclimate="*res://core/microclimate/microclimate_resolver.gd"
 
 [display]
 

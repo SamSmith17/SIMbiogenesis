@@ -256,6 +256,8 @@ var _last_viewport_size: Vector2 = Vector2.ZERO
 ## Record Book Modal — lazy-init on first press.
 var _record_book_panel: Control = null
 var _site_report_panel: Control = null
+## 🌫 Microclimate drawer (scenes/ui/microclimate_drawer.gd), lazy.
+var _microclimate_drawer: CanvasLayer = null
 
 # Tooltip panel — sibling on the parent CanvasLayer. Still used by the NWS
 # alert-band hover on the track (stat-tile hovers moved to WeatherCardUI).
@@ -1195,6 +1197,8 @@ func _draw_track() -> void:
 				_track.draw_string(fnt, Vector2(tx + 2.0, groove_y - 7.0),
 					lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, C_TEXT_M)
 
+	_draw_microclimate_strip(win_start, span, w, groove_y)
+
 	# ── NLE lanes (clips + resizable sensor waveforms) ───────────────────────
 	var lanes_top := TimelineTrackLayout.RULER_HEIGHT
 	var lanes_bottom := lanes_top
@@ -1221,6 +1225,41 @@ func _draw_track() -> void:
 	_track.draw_line(Vector2(px, 0.0), Vector2(px, h), C_AMBER, 2.0)
 	_track.draw_colored_polygon(
 		PackedVector2Array([Vector2(px - 5, 0), Vector2(px + 5, 0), Vector2(px, 6)]), C_AMBER)
+
+
+## Microclimate strip under the ruler groove: the automatic fog as a white
+## band, each calibration rule as a lavender band, nearest-match as a faint
+## one — so a rule made from one foggy night visibly recurs on the others.
+## Skipped beyond two weeks of span (hourly resolution stops meaning anything).
+func _draw_microclimate_strip(win_start : float, span : float, w : float, groove_y : float) -> void:
+	if span > 14.0 * 24.0:
+		return
+	var mc := get_node_or_null("/root/Microclimate")
+	if mc == null or not bool(mc.get("enabled")):
+		return
+	var rows: Array = mc.call("sweep", win_start, win_start + span)
+	if rows.is_empty():
+		return
+	# Inside the provenance band, just under the groove (the ruler is 14 px).
+	var y := groove_y + 1.0
+	var px_per_h := w / span
+	for r in rows:
+		var x0 := (float(r["h"]) - win_start) * px_per_h
+		if x0 > w or x0 + px_per_h < 0.0:
+			continue
+		var fog := float(r["auto_fog"])
+		if fog > 0.05:
+			_track.draw_rect(Rect2(x0, y, px_per_h + 0.5, 2.0), Color(0.92, 0.94, 0.97, 0.25 + 0.55 * fog), true)
+		var rw := 0.0
+		for k in (r["rules"] as Dictionary):
+			rw = maxf(rw, float(r["rules"][k]))
+		if rw > 0.05:
+			_track.draw_rect(Rect2(x0, y + 2.0, px_per_h + 0.5, 2.5),
+				Color(C_LAVENDER.r, C_LAVENDER.g, C_LAVENDER.b, 0.25 + 0.65 * rw), true)
+		var nw := float(r["nearest"])
+		if nw > 0.05:
+			_track.draw_rect(Rect2(x0, y + 4.5, px_per_h + 0.5, 1.5),
+				Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.2 + 0.5 * nw), true)
 
 
 func _draw_track_lanes(win_start : float, span : float, w : float, fnt : Font,
@@ -2446,6 +2485,9 @@ func _build_right_cluster() -> Control:
 	right.add_child(record_btn)
 	var report_btn := _mk_icon_btn("📊", _on_site_report_pressed, "Site Report — year-round & month-by-month solar/wind/rain/PV analysis for this site")
 	right.add_child(report_btn)
+	var mc_btn := _mk_icon_btn("🌫", _on_microclimate_pressed,
+		"Microclimate — calibrate how this site's fog, haze, cloud and wind look against the weather data")
+	right.add_child(mc_btn)
 	var lib_btn := _mk_icon_btn("📦", _on_library_pressed,
 		"Library — buildings, graph nodes, vegetation & structures")
 	right.add_child(lib_btn)
@@ -2598,6 +2640,19 @@ func _on_site_report_pressed() -> void:
 			_site_report_panel.bind_timeline(self)
 	if _site_report_panel.has_method("toggle"):
 		_site_report_panel.toggle()
+
+
+func _on_microclimate_pressed() -> void:
+	if _microclimate_drawer == null or not is_instance_valid(_microclimate_drawer):
+		var script := load("res://scenes/ui/microclimate_drawer.gd") as Script
+		if script == null:
+			push_warning("TimelineUI: could not load microclimate_drawer.gd")
+			return
+		_microclimate_drawer = CanvasLayer.new()
+		_microclimate_drawer.set_script(script)
+		_microclimate_drawer.call("bind_timeline", self)
+		get_tree().root.add_child(_microclimate_drawer)
+	_microclimate_drawer.call("toggle")
 
 
 func _on_challenge_pressed() -> void:

@@ -120,6 +120,16 @@ func _poll_weather() -> void:
 			var sg := WindMath.apply_hazard_wind(speed, gust, hz)
 			speed = sg.x
 			gust = sg.y
+	# The site's microclimate VISUAL wind (a calibrated "the playa blows harder
+	# than the data says" look). Physics wind corrections are already inside
+	# WeatherService.wind_speed_ms above; this is the visual-only multiplier.
+	var mc := get_node_or_null("/root/Microclimate")
+	if mc != null and mc.has_method("current"):
+		var st: Dictionary = mc.call("current")
+		var m := float(st.get("wind_vis_mult", 1.0))
+		if is_finite(m) and absf(m - 1.0) > 0.001:
+			speed *= maxf(m, 0.0)
+			gust *= maxf(m, 0.0)
 
 	var gust_excess := maxf(gust - speed, 0.0)
 	_target_gust = clampf(gust_excess / maxf(speed, 2.0), 0.0, 1.0)

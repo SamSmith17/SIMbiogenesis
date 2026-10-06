@@ -159,12 +159,20 @@ static func sample_weather_with_hazard(lat_deg: float, lon_deg: float, month: in
 static func hazard_at(node: Node, abs_hours: float = NAN) -> Dictionary:
 	if node == null or not node.is_inside_tree():
 		return {}
+	var hz: Dictionary = {}
 	var xw := node.get_tree().root.get_node_or_null("ExtremeWeather")
-	if xw == null:
-		return {}
-	if is_finite(abs_hours):
-		return xw.call("resolve_at", abs_hours)
-	return xw.call("current")
+	if xw != null:
+		hz = xw.call("resolve_at", abs_hours) if is_finite(abs_hours) else xw.call("current")
+	# The site's microclimate, PHYSICS layer only: fog/haze looks the player
+	# ticked "affects physics" become aerosol optical depth. Identity otherwise,
+	# so an uncalibrated site's PV is bit-identical.
+	var mc := node.get_tree().root.get_node_or_null("Microclimate")
+	if mc != null:
+		var st: Dictionary = mc.call("resolve_at", abs_hours) if is_finite(abs_hours) else mc.call("current")
+		var ph := MicroclimateResolver.physics_hazard(st)
+		if HazardState.is_active(ph):
+			hz = HazardState.combine(hz if not hz.is_empty() else HazardState.blank(), ph)
+	return hz
 
 
 ## Direct normal irradiance under a clear sky. `aod` is the aerosol optical

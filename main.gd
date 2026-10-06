@@ -719,6 +719,14 @@ var lightning_flash_boost : float = 0.0
 var _precipitation_vfx : PrecipitationVfx
 var _lightning_vfx : LightningVfx
 var _dust_smoke_vfx : DustSmokeVfx
+## Microclimate ground fog (core/env/ground_fog_layer.gd) and the last resolved
+## microclimate state it was fed — _apply_advanced_rendering_toggles reads the
+## latter to force the volumetric pass on while the fog is present.
+var _ground_fog : GroundFogLayer
+var _mc_state : Dictionary = {}
+## DaylightModel.sky_light from the last environment update — lights the
+## ground fog's droplets (GroundFogLayer.update_from).
+var _fog_sky_light : float = 1.0
 
 const CLOUDS_SPEED_BASE : float = 2.0
 const CIRRUS_SPEED_BASE : float = 1.0
@@ -1930,11 +1938,26 @@ func _apply_advanced_rendering_toggles() -> void :
 	# volumetric fog and is also reachable straight from the settings panel;
 	# writing it in both places meant toggling god-rays erased the dust wall.
 	var haz_vol : bool = bool( _hazard_vol.get( "vol_force", false ) ) and not soi_ct
-	env.volumetric_fog_enabled = volumetric_fog_user_enabled or want_god_rays or haz_vol
+	# Microclimate ground fog lives in a FogVolume, which only draws inside the
+	# volumetric pass — forced on for the same reason as the dust wall.
+	var ground_fog_on : bool = float( _mc_state.get( "fog_sigma", 0.0 ) ) > 1e-5 and not soi_ct
+	env.volumetric_fog_enabled = volumetric_fog_user_enabled or want_god_rays or haz_vol or ground_fog_on
+	# The player's own fog, from the "Fog amount" slider. Every branch below
+	# COMPOSES its density from this explicitly — never by reading
+	# env.volumetric_fog_density back. Reading it back is what made the slider
+	# inert: the plain-toggle branch never wrote density at all, so the scene
+	# file's 0.2546 /m (≈15 m visibility) rendered at every slider position, and
+	# the other branches max()'d against whatever an earlier toggle had left.
+	var user_density : float = 0.0
+	if volumetric_fog_user_enabled :
+		user_density = FogOptics.volumetric_density_for_amount( fog_amount )
+	# Fog fades its ambient lift at night or the froxel frustum glows as a box.
+	var night_fade : float = lerpf( 0.8, 0.0, _vegetation_night_factor )
 	if haz_vol :
-		env.volumetric_fog_density = maxf( float( _hazard_vol[ "vol_density" ] ),
-			env.volumetric_fog_density if volumetric_fog_user_enabled else 0.0 )
+		env.volumetric_fog_density = maxf( float( _hazard_vol[ "vol_density" ] ), user_density )
 		env.volumetric_fog_length = float( _hazard_vol[ "vol_length" ] )
+		env.volumetric_fog_anisotropy = -0.37   # the scene value the dust wall was tuned against
+		env.volumetric_fog_sky_affect = 1.0
 		env.volumetric_fog_detail_spread = 2.0
 		env.volumetric_fog_gi_inject = 0.0
 		env.volumetric_fog_ambient_inject = 0.9
@@ -1949,23 +1972,45 @@ func _apply_advanced_rendering_toggles() -> void :
 		env.volumetric_fog_emission_energy = 0.0
 		# Thin fog + strong in-scattering length so the sun scatters into visible
 		# shafts without fogging the whole scene into a grey wash.
-		var god_ray_density = 0.002
-		# Fade ambient injection at night to prevent the fog frustum from appearing as a glowing square box
-		var ambient_inj = lerpf(0.8, 0.0, _vegetation_night_factor)
-		env.volumetric_fog_density = god_ray_density if not volumetric_fog_user_enabled else maxf( env.volumetric_fog_density, god_ray_density )
-		env.volumetric_fog_length = 96.0
+		var god_ray_density : float = 0.002
+		env.volumetric_fog_density = maxf( god_ray_density, user_density )
+		# Shafts need a short froxel range; a thick user fog needs a longer one
+		# or it stops building up past 96 m.
+		env.volumetric_fog_length = maxf( 96.0,
+			FogOptics.volumetric_length_for_visibility( FogOptics.visibility_for_amount( fog_amount ) )
+			if user_density > god_ray_density else 96.0 )
 		env.volumetric_fog_detail_spread = 2.0
 		env.volumetric_fog_gi_inject = 0.0
-		env.volumetric_fog_ambient_inject = ambient_inj
+		env.volumetric_fog_ambient_inject = night_fade
 		env.volumetric_fog_albedo = Color( 1.0, 0.95, 0.85 )
+		env.volumetric_fog_anisotropy = -0.37
+		env.volumetric_fog_sky_affect = 1.0
 		if is_instance_valid( sun ) :
 			# Tie god ray visibility to cloud cover so beams only show when clouds occlude
 			var ray_energy = 1.5 + (clouds_weight * 2.5)
 			sun.light_volumetric_fog_energy = ray_energy
 	else :
+		# Plain volumetric fog: the slider IS the density (0 = none). Writes the
+		# whole parameter set, so nothing a dust wall or god rays left behind
+		# (length 96/180, dust albedo, ambient 0.9) outlives them here.
 		env.volumetric_fog_emission_energy = 0.0
+		env.volumetric_fog_density = user_density
+		env.volumetric_fog_length = FogOptics.volumetric_length_for_visibility(
+			FogOptics.visibility_for_amount( fog_amount ) )
+		env.volumetric_fog_detail_spread = 2.0
+		env.volumetric_fog_gi_inject = 0.0
+		env.volumetric_fog_ambient_inject = night_fade
+		env.volumetric_fog_albedo = Color( 0.92, 0.94, 0.96 )
+		# Fog droplets scatter strongly forward (Mie, g ≈ 0.7–0.85); a softened
+		# 0.6 keeps the bright halo round the sun without blowing it out.
+		env.volumetric_fog_anisotropy = 0.6
+		env.volumetric_fog_sky_affect = 1.0
 		if is_instance_valid( sun ) :
 			sun.light_volumetric_fog_energy = 0.0 if soi_ct else 1.0
+	if ground_fog_on :
+		var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
+		if cam != null :
+			_fit_volumetric_length_to_ground_fog( cam.global_position.y )
 
 ## Per-frame dust grains (wildfire smoke has no particle system — see
 ## DustSmokeVfx). Driven from _process rather than from the ~20 Hz
@@ -1974,10 +2019,7 @@ func _apply_advanced_rendering_toggles() -> void :
 func _update_hazard_vfx( delta : float ) -> void :
 	if _dust_smoke_vfx == null or not is_instance_valid( _dust_smoke_vfx ) :
 		return
-	var xw := get_node_or_null( "/root/ExtremeWeather" )
-	if xw == null :
-		return
-	var hz : Dictionary = xw.call( "current" )
+	var hz := _combined_visual_hazard()
 	var cam := get_viewport().get_camera_3d()
 	if cam == null :
 		return
@@ -1999,6 +2041,70 @@ func _update_hazard_vfx( delta : float ) -> void :
 	_dust_smoke_vfx.update_frame( delta, hz, wind, cam.global_position )
 
 
+## Extreme weather combined with the site's microclimate VISUAL layer (haze,
+## dust, sun dimming, visual wind). One combined state for every visual
+## consumer, through HazardState.combine — worst optics win, so a calibrated
+## site haze and a smoke event compound rather than fight.
+func _combined_visual_hazard() -> Dictionary :
+	var hz : Dictionary = HazardState.blank()
+	var xw := get_node_or_null( "/root/ExtremeWeather" )
+	if xw != null :
+		hz = xw.call( "current" )
+	var mc := get_node_or_null( "/root/Microclimate" )
+	if mc != null :
+		var vh := MicroclimateResolver.visual_hazard( mc.call( "current" ) )
+		if HazardState.is_active( vh ) :
+			hz = HazardState.combine( hz, vh )
+	return hz
+
+
+## Per-frame ground fog: follows the camera, fed from the microclimate state.
+func _update_ground_fog( delta : float ) -> void :
+	if _ground_fog == null or not is_instance_valid( _ground_fog ) :
+		return
+	var mc := get_node_or_null( "/root/Microclimate" )
+	var cam := get_viewport().get_camera_3d()
+	if mc == null or cam == null or _graph_soi_section_preview_active() :
+		_mc_state = {}
+		_ground_fog.visible = false
+		return
+	var st : Dictionary = mc.call( "current" )
+	var was_on := float( _mc_state.get( "fog_sigma", 0.0 ) ) > 1e-5
+	_mc_state = st
+	var wind := Vector2.ZERO
+	var ws := get_node_or_null( "/root/WeatherService" )
+	if ws != null and bool( ws.call( "has_data" ) ) :
+		var s : float = ws.call( "wind_speed_ms", month, day, day_time )
+		var from_deg : float = ws.call( "wind_direction_deg", month, day, day_time )
+		if is_finite( s ) and is_finite( from_deg ) :
+			wind = WindMath.downwind_xz( from_deg ) * s
+	_ground_fog.update_from( st, cam.global_position, wind, delta, _vegetation_night_factor, _fog_sky_light )
+	# The volumetric pass is switched on/off by the toggles; re-run them on the
+	# edge so the fog appears the frame it starts, not at the next env update.
+	var is_on := float( st.get( "fog_sigma", 0.0 ) ) > 1e-5
+	if is_on != was_on :
+		_apply_advanced_rendering_toggles()
+	elif is_on :
+		_fit_volumetric_length_to_ground_fog( cam.global_position.y )
+
+
+## The froxel range must reach the fog: from the drone the layer may be
+## hundreds of metres below. Clamped — a longer range means coarser froxels.
+func _fit_volumetric_length_to_ground_fog( cam_y : float ) -> void :
+	if not is_instance_valid( environment ) or environment.environment == null :
+		return
+	var vis := float( _mc_state.get( "fog_vis_m", INF ) )
+	var above := maxf( GroundFogLayer.camera_above_top( _mc_state, cam_y ), 0.0 )
+	var want := clampf( maxf( FogOptics.volumetric_length_for_visibility( vis ), above * 1.6 + 150.0 ),
+		96.0, 1200.0 )
+	var env : Environment = environment.environment
+	# A dust wall sets its own range; never shorten it.
+	if bool( _hazard_vol.get( "vol_force", false ) ) :
+		want = maxf( want, float( _hazard_vol.get( "vol_length", 0.0 ) ) )
+	if absf( env.volumetric_fog_length - want ) > 8.0 :
+		env.volumetric_fog_length = want
+
+
 func _setup_environment_vfx() -> void :
 	if Engine.is_editor_hint() :
 		return
@@ -2014,6 +2120,9 @@ func _setup_environment_vfx() -> void :
 	_dust_smoke_vfx = DustSmokeVfx.new()
 	_dust_smoke_vfx.name = "DustSmokeVfx"
 	add_child( _dust_smoke_vfx )
+	_ground_fog = GroundFogLayer.new()
+	_ground_fog.name = "GroundFogLayer"
+	add_child( _ground_fog )
 
 
 func _on_lightning_flash( intensity: float ) -> void :
@@ -2534,6 +2643,7 @@ func _process( delta: float ) -> void :
 		lightning_flash_boost = lerpf( lightning_flash_boost, 0.0, 1.0 - exp( -delta * 18.0 ) )
 		_apply_tonemap_settings()
 	_update_hazard_vfx( delta )
+	_update_ground_fog( delta )
 	if not Engine.is_editor_hint() :
 		# Analemma / ∞ view: each frame jumps to the next day's solar noon and
 		# refreshes the world. Visual-only — time_scale is 0 so no other system
@@ -2908,6 +3018,7 @@ func _update_environment() -> void :
 	# (daylight_fraction in sky.gdshader) darken on ONE solar-depression curve:
 	# exp(-0.25/° of depression) below the horizon, scaled by twilight_length.
 	var sky_light : float = DaylightModel.sky_light( sun_height, twilight_length )
+	_fog_sky_light = sky_light
 	var night_amount : float = DaylightModel.night_amount( sun_height, twilight_length )
 	
 	# Vegetation's "the direct beam is gone" signal (kills the canopy's fake sun
@@ -3000,7 +3111,6 @@ func _update_environment() -> void :
 	environment.environment.fog_enabled = true
 	environment.environment.volumetric_fog_enabled = volumetric_fog_user_enabled
 	environment.environment.ambient_light_sky_contribution = ambient_sky_contribution
-	_apply_advanced_rendering_toggles()
 	_apply_tonemap_settings()
 	
 	# Calculate moon's ambient contribution based on phase, position, and weather
@@ -3035,6 +3145,10 @@ func _update_environment() -> void :
 	# the user fog knob), and a hazard is a modifier on that. One choke point,
 	# so no existing branch above needs to know this subsystem exists.
 	_apply_hazard_atmosphere( night_amount, sun_height )
+	# Volumetric fog AFTER the hazard pass: _apply_hazard_atmosphere refreshes
+	# _hazard_vol, which this reads. Called before it, the dust wall always ran
+	# one environment update behind the storm.
+	_apply_advanced_rendering_toggles()
 
 
 ## Single injection point for extreme weather. AtmosphereApplier does the maths
@@ -3044,12 +3158,8 @@ func _update_environment() -> void :
 ## for field, so a disabled or quiet hazard system leaves every value exactly as
 ## the code above set it.
 func _apply_hazard_atmosphere( night_amount : float, sun_height : float ) -> void :
-	var xw := get_node_or_null( "/root/ExtremeWeather" )
-	if xw == null :
-		_hazard_light_factor = 1.0
-		_hazard_vol = {}
-		return
-	var hz : Dictionary = xw.call( "current" )
+	# Extreme weather + the site's microclimate visual layer, combined.
+	var hz := _combined_visual_hazard()
 	if float( hz.get( "severity", 0.0 ) ) <= 0.005 :
 		_hazard_light_factor = 1.0
 		_hazard_vol = {}

@@ -36,6 +36,7 @@ extends Node
 ##                              "windowwall" = the multi-monitor Window Wall
 ##                              "stars" = star field: marker-vs-texture pixel error + 2 h rotation about the pole
 ##                              "dawn"  = sunrise lighting ladder: beam energy/colour + ambient per solar altitude
+##                              "microclimate" = Walton valley-fog ladder: resolved fog per stop DUMPED + ground/drone PNGs
 ##                              through Main's real entry point: per-slot
 ##                              frustum dump, PNG per window, full-restore
 ##                              assertions (see _run_window_wall_capture)
@@ -191,6 +192,8 @@ func _ready() -> void:
 			_run_star_capture.call_deferred()
 		elif _capture_mode == "dawn":
 			_run_dawn_capture.call_deferred()
+		elif _capture_mode == "microclimate":
+			_run_microclimate_capture.call_deferred()
 		elif _capture_mode == "windowwall":
 			_run_window_wall_capture.call_deferred()
 		elif _capture_mode == "crowdbench":
@@ -426,6 +429,8 @@ func _launch_map() -> void:
 		_run_star_capture()
 	elif _capture_mode == "dawn":
 		_run_dawn_capture()
+	elif _capture_mode == "microclimate":
+		_run_microclimate_capture()
 	elif _capture_mode == "windowwall":
 		_run_window_wall_capture()
 	elif _capture_mode == "crowdbench":
@@ -503,6 +508,8 @@ func _launch_scene_direct() -> void:
 		_run_star_capture()
 	elif _capture_mode == "dawn":
 		_run_dawn_capture()
+	elif _capture_mode == "microclimate":
+		_run_microclimate_capture()
 	elif _capture_mode == "windowwall":
 		_run_window_wall_capture()
 	elif _capture_mode == "crowdbench":
@@ -8679,6 +8686,198 @@ func _run_dawn_capture() -> void:
 		manifest.size(), ProjectSettings.globalize_path(dir),
 		"PASS" if fails.is_empty() else "FAIL: " + "; ".join(PackedStringArray(fails))])
 	_maybe_quit()
+
+
+## Microclimate capture (WINDOWED, `--user-map=walton`): parks the clock at a
+## ladder of times across the two nights the user stood in valley fog at
+## Walton OR (fog ~22–23 h → ~10–11 h on 2026-10-02/03) and, at each stop,
+## DUMPS what the resolver decided — data source, dew-point gap (raw and
+## valley-corrected), low cloud, model visibility, auto-fog fraction and why,
+## the fog visibility/top shown — and shoots a ground-level and a drone view.
+## Asserts fog at 23/03/08 h both nights and none at 15 h, ONLY when the real
+## 2026 data is loaded (otherwise it says SKIP rather than testing 2025's
+## weather). Ends with a live-preview check (a slider look at a clear hour)
+## and restores the clock. Read-only: the map's microclimate file is never
+## written.
+const MICRO_CAP_STOPS := [
+	[10, 2, 20.0], [10, 2, 22.0], [10, 2, 23.0], [10, 3, 3.0], [10, 3, 8.0],
+	[10, 3, 9.5], [10, 3, 10.5], [10, 3, 12.0], [10, 3, 15.0],
+	[10, 3, 22.0], [10, 3, 23.0], [10, 4, 3.0], [10, 4, 8.0], [10, 4, 10.5], [10, 4, 15.0]]
+const MICRO_CAP_MUST_FOG := ["10-02 23", "10-03 03", "10-03 08", "10-03 23", "10-04 03", "10-04 08"]
+const MICRO_CAP_MUST_CLEAR := ["10-03 15", "10-04 15"]
+
+
+func _run_microclimate_capture() -> void:
+	var tree := get_tree()
+	var loader := tree.current_scene.find_child("TerrainLoader", true, false) \
+		if tree.current_scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var main := _find_main()
+	var mc := get_node_or_null("/root/Microclimate")
+	var ws := get_node_or_null("/root/WeatherService")
+	if main == null or mc == null or ws == null:
+		push_error("PlaytestHarness: no Main/Microclimate/WeatherService — aborting microclimate capture")
+		_maybe_quit()
+		return
+	var label := _shots_label if not _shots_label.is_empty() else "microclimate"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var manifest: Array = []
+	var diag := {"stops": [], "fails": [], "skipped": false}
+
+	_set_capture_conditions()
+	var saved_date := [int(main.get("year")), int(main.get("month")), int(main.get("day")), float(main.get("day_time"))]
+	var saved_ts: Variant = main.get("time_scale")
+	main.set("time_scale", 0.0)
+	main.set("year", 2026)
+	main.set("month", 10)
+	main.set("day", 2)
+	main.set("day_time", 20.0)
+	# The real 2026 archive arrives asynchronously the first time a site loads.
+	var waited := 0.0
+	while waited < 90.0 and not bool(ws.call("has_current_year_archive")):
+		await tree.create_timer(1.0).timeout
+		waited += 1.0
+	mc.call("invalidate")
+	var ctx: Dictionary = mc.call("site_context")
+	print("\n=== MICROCLIMATE CAPTURE ===")
+	print("site lat %.4f lon %.4f  current-year archive %s (waited %.0f s)  valley index %.1f m  cold-pool bias %.2f C  default depth %.0f m  floor y %.1f" % [
+		float(main.get("latitude")), float(main.get("longitude")),
+		"YES" if bool(ws.call("has_current_year_archive")) else "NO", waited,
+		float(ctx.get("tpi_m", 0.0)), float(ctx.get("cold_pool_bias_c", 0.0)),
+		float(ctx.get("default_depth_m", 0.0)), float(ctx.get("floor_y", 0.0))])
+	print("  %-8s %-16s %6s %6s %5s %5s %7s %5s %-16s %8s %7s" % ["stop", "source", "gap", "gapV", "RH", "low", "visKm", "auto", "why", "fogVis", "topY"])
+
+	var prev_cam := get_viewport().get_camera_3d()
+	var base_pos := prev_cam.global_position if prev_cam != null else Vector3(0.0, 2.0, 0.0)
+	var ray_y := NAN
+	var space := get_viewport().world_3d.direct_space_state
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(
+		Vector3(base_pos.x, 3000.0, base_pos.z), Vector3(base_pos.x, -3000.0, base_pos.z)))
+	if not hit.is_empty():
+		ray_y = (hit["position"] as Vector3).y
+	var gh := float(loader.call("ground_height_at", base_pos.x, base_pos.z)) if loader != null else NAN
+	print("  camera at (%.0f, %.1f, %.0f)  ground_height_at %.1f  physics ray %.1f (%s)" % [base_pos.x, base_pos.y, base_pos.z,
+		gh, ray_y, str(hit.get("collider", "none"))])
+	var cam := Camera3D.new()
+	cam.name = "PlaytestMicroCam"
+	cam.far = 30000.0
+	cam.fov = 65.0
+	main.add_child(cam)
+	cam.make_current()
+
+	var have_2026 := bool(ws.call("has_current_year_archive"))
+	for stop in MICRO_CAP_STOPS:
+		main.set("month", int(stop[0]))
+		main.set("day", int(stop[1]))
+		main.set("day_time", float(stop[2]))
+		await tree.create_timer(0.6).timeout
+		var h := float(main.call("get_absolute_hours"))
+		var st: Dictionary = mc.call("resolve_at", h)
+		var f: Dictionary = st.get("features", {})
+		var key := "%02d-%02d %02d" % [int(stop[0]), int(stop[1]), int(stop[2])]
+		var vis := float(st.get("fog_vis_m", INF))
+		var row := {"stop": key, "abs_h": h, "source": str(f.get("source", "")),
+			"dep_c": f.get("dep_c", null), "dep_eff_c": f.get("dep_eff_c", null), "rh": f.get("rh", null),
+			"low": f.get("low", null), "vis_km": f.get("vis_km", null), "auto_fog": st.get("auto_fog", 0.0),
+			"why": st.get("auto_source", ""), "fog_vis_m": vis if is_finite(vis) else -1.0,
+			"fog_top_y": st.get("fog_top_y", 0.0), "ground_cloud": st.get("ground_cloud", 0.0)}
+		diag["stops"].append(row)
+		print("  %-8s %-16s %6.1f %6.1f %5.0f %5.2f %7.1f %5.2f %-16s %8s %7.1f" % [key, str(row["source"]),
+			float(f.get("dep_c", NAN)), float(f.get("dep_eff_c", NAN)), float(f.get("rh", NAN)),
+			float(f.get("low", NAN)), float(f.get("vis_km", NAN)), float(st.get("auto_fog", 0.0)),
+			str(st.get("auto_source", "")), ("%d m" % int(vis)) if is_finite(vis) else "none",
+			float(st.get("fog_top_y", 0.0))])
+		if have_2026:
+			if key in MICRO_CAP_MUST_FOG and not (is_finite(vis) and vis < 1500.0):
+				diag["fails"].append("no fog at %s (observed fog on site)" % key)
+			if key in MICRO_CAP_MUST_CLEAR and is_finite(vis) and vis < 3000.0:
+				diag["fails"].append("fog %d m at %s (observed clear)" % [int(vis), key])
+		var tag := key.replace(" ", "_").replace("-", "")
+		# Ground: the player's spot, looking level.
+		cam.global_position = base_pos
+		cam.look_at(base_pos + Vector3(0.0, -0.02, -1.0), Vector3.UP)
+		# Volumetric fog reprojects ~90 % of the previous frame: after a camera
+		# jump it needs ~1 s to converge, or the shot shows stale fog smeared
+		# from the last viewpoint.
+		await tree.create_timer(1.2).timeout
+		_mc_cap_dump_render(main, key)
+		await _graph_shot(dir, "mc_%s_ground" % tag, manifest, "microclimate")
+		# Drone: up and back, ABOVE the fog top, looking down over the valley.
+		var drone_y := maxf(base_pos.y + 140.0, float(st.get("fog_top_y", 0.0)) + 90.0)
+		cam.global_position = Vector3(base_pos.x, drone_y, base_pos.z + 220.0)
+		cam.look_at(base_pos + Vector3(0.0, 0.0, -150.0), Vector3.UP)
+		await tree.create_timer(1.2).timeout
+		await _graph_shot(dir, "mc_%s_drone" % tag, manifest, "microclimate")
+	if not have_2026:
+		diag["skipped"] = true
+		print("  (SKIP assertions: the 2026 archive never loaded - the stops above are 2025's weather)")
+
+	# Live preview: a slider look at a clear afternoon must show.
+	main.set("month", 10)
+	main.set("day", 3)
+	main.set("day_time", 15.0)
+	mc.call("set_preview", {"fog_vis_m": 60.0, "fog_depth_m": 40.0})
+	await tree.create_timer(0.6).timeout
+	var pv: Dictionary = mc.call("current")
+	var pvis := float(pv.get("fog_vis_m", INF))
+	print("  preview look at 10-03 15 h -> fog %s" % (("%d m" % int(pvis)) if is_finite(pvis) else "none"))
+	if not (is_finite(pvis) and absf(pvis - 60.0) < 6.0):
+		diag["fails"].append("preview look not applied (got %s)" % str(pvis))
+	cam.global_position = base_pos
+	cam.look_at(base_pos + Vector3(0.0, -0.02, -1.0), Vector3.UP)
+	await tree.create_timer(1.5).timeout
+	_mc_cap_dump_render(main, "preview")
+	await _graph_shot(dir, "mc_preview_ground", manifest, "microclimate")
+	mc.call("clear_preview")
+
+	# --- restore --------------------------------------------------------------
+	main.set("year", saved_date[0])
+	main.set("month", saved_date[1])
+	main.set("day", saved_date[2])
+	main.set("day_time", saved_date[3])
+	if saved_ts != null:
+		main.set("time_scale", saved_ts)
+	for child in main.get_children():
+		if child is CanvasLayer:
+			child.visible = true
+	cam.queue_free()
+	if prev_cam != null and is_instance_valid(prev_cam):
+		prev_cam.make_current()
+	var mf := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if mf != null:
+		mf.store_string(JSON.stringify(manifest, "\t"))
+		mf.close()
+	var df := FileAccess.open("%s/microclimate_diagnostics.json" % dir, FileAccess.WRITE)
+	if df != null:
+		df.store_string(JSON.stringify(diag, "\t"))
+		df.close()
+	var fails: Array = diag["fails"]
+	for msg in fails:
+		push_error("PlaytestHarness microclimate: %s" % msg)
+	print("PlaytestHarness: microclimate capture - %d shots in %s - %s" % [
+		manifest.size(), ProjectSettings.globalize_path(dir),
+		"PASS" if fails.is_empty() else "FAIL: " + "; ".join(PackedStringArray(fails))])
+	_maybe_quit()
+
+
+## What actually reached the renderer — a PNG cannot say whether the fog pass
+## was even on.
+func _mc_cap_dump_render(main: Node, key: String) -> void:
+	var env: WorldEnvironment = main.get("environment") as WorldEnvironment
+	var gf := main.get_node_or_null("GroundFogLayer") as Node3D
+	var vol := gf.get_node_or_null("GroundFog") as FogVolume if gf != null else null
+	var cam := get_viewport().get_camera_3d()
+	var e := env.environment if env != null else null
+	print("    render %s: volfog %s dens %.4f len %.0f amb %.2f | layer %s box y %.0f..%.0f size %s | cam y %.1f" % [key,
+		str(e.volumetric_fog_enabled) if e != null else "?", e.volumetric_fog_density if e != null else 0.0,
+		e.volumetric_fog_length if e != null else 0.0, e.volumetric_fog_ambient_inject if e != null else 0.0,
+		str(gf.visible) if gf != null else "missing",
+		(vol.global_position.y - vol.size.y * 0.5) if vol != null else 0.0,
+		(vol.global_position.y + vol.size.y * 0.5) if vol != null else 0.0,
+		str(vol.size) if vol != null else "-", cam.global_position.y if cam != null else 0.0])
 
 
 ## Clock hour (morning, 1 h … 12.5 h) at which the sun sits at `alt_deg`, by

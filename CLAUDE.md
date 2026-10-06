@@ -375,6 +375,24 @@ Godot.exe.exe --headless --path . --script vegetation/veg_lod_policy_selftest.gd
 # returns base FIELD FOR FIELD, which is what makes "feature off => not one
 # pixel changes" true. Run --import first:
 Godot.exe.exe --headless --path . --script core/weather/extreme_weather_selftest.gd
+# Microclimate (offline — core/microclimate/): FogDiagnosis pinned to REAL
+# frozen Open-Meteo rows for Walton OR 2026-10-02/03 (testdata/), where the
+# user stood in valley fog ~22–23 h → ~10–11 h: ERA5 shows it as 100 % LOW
+# cloud at RH 100 % (onset/clear asserted), HRRR — what the game reads — only
+# via visibility hours late, and the valley cold-pool correction pulls its
+# onset back to 21–23 h. Plus scrub determinism (windowed == full series),
+# rule soft-ramps + hold, "make rule from now" recurring the next night,
+# nearest-match cutoff, pinned cross-fade, blend, profile round-trip incl.
+# INF/NaN, physics-vs-visual corrections and the HazardState identity.
+# Carries EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/microclimate/microclimate_selftest.gd
+# Microclimate capture (WINDOWED): parks the clock across Walton's two fog
+# nights, DUMPS per stop the data source, dew-point gap (raw + valley), low
+# cloud, model visibility, auto fog + why, fog visibility/top, and shoots a
+# ground + drone PNG each; asserts fog at 23/03/08 h and none at 15 h ONLY when
+# the 2026 archive loaded (else SKIP), then checks a live drawer preview.
+# Read-only:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=microclimate --shots-dir=<label> --quit-after-capture
 # Extreme weather capture (WINDOWED): shoots the settings tab through its real
 # entry point, then a clear baseline and a severity ramp per simulated hazard
 # from one fixed viewpoint with distant terrain in frame, plus a night shot
@@ -4020,6 +4038,55 @@ legitimate (dust fronts really do arrive fast) while one anomalous step is not.
 Related: the US AQI truncates at 500 by definition, which smoke reaches by ~0.6
 severity, so gameplay channels derive from SEVERITY while the displayed AQI stays
 truncated like the real index.
+
+## Microclimate calibration (core/microclimate/ + 🌫 timeline drawer)
+
+Weather models are 10–30 km cells; a valley floor fogs hours before its cell
+saturates and an open playa blows harder than its station. Autoload
+`Microclimate` (`MicroclimateResolver`) is a PURE FUNCTION of abs hours (the
+ExtremeWeather rule — scrubs backwards, no timers) layered on the weather data:
+pinned observations > rules + nearest-match > automatic fog (`FogDiagnosis`),
+blended by `MicroclimateProfile.blend` (fog/haze in EXTINCTION space, worst
+wins). Per-map `user://maps/microclimate_<lat>_<lon>.json` holds looks, rules
+(soft conditions + a `hold` so fog lingers until burn-off), observations and
+input corrections. Deliberately NOT in TerrainCacheSettings' reset sweep.
+- **Fog evidence, worst wins:** ERA5 reports radiation fog as ~100 % LOW cloud
+  at T−Td ≈ 0 (the cloud is on the ground — `ground_cloud` is taken back OUT
+  of the sky's cover in `solar_ui._update_sky_visuals`, never out of
+  `cloud_cover`, which PV reads); HRRR's `visibility`; a radiation index with a
+  terrain cold-pool bias (TPI at 1/2.5 km → 0.03 °C/m, cap 3).
+- **Data:** WeatherService now fetches `dew_point_2m`, `cloud_cover_low`
+  (+ forecast `visibility`), past_days 14, and the CURRENT YEAR's partial
+  archive (`om_v5_*_<year>_partial.json`, daily refresh) — before it a 2026
+  date outside the forecast window silently showed 2025. `_sample_forecast_var`
+  indexed by hour-of-year (always the window's LAST hour) — fixed.
+- **Visual vs physics:** `visual_hazard()` combines with ExtremeWeather in
+  main.gd (`_combined_visual_hazard`) and the veg wind driver; `physics_hazard()`
+  (only looks ticked "affects physics": τ = σ·depth as AOD) in
+  `SolarIrradiance.hazard_at`. Unconditional physics CORRECTIONS (playa wind
+  ×1.5) live in `MicroclimateCorrections`, a static the WeatherService
+  accessors apply (WeatherService must not name the autoload); conditional ones
+  degrade to visual-only.
+- **Ground fog** = `GroundFogLayer`, one camera-following FogVolume whose
+  shader caps fog at an ABSOLUTE world height (valley floor + depth), so ridges
+  stand out of it. Forces the volumetric pass on while present (dust-wall rule)
+  and sizes `volumetric_fog_length` so the drone still samples it. Three traps,
+  each of which rendered "no fog" or "black fog" with no error: (1) the
+  terrain context is measured only once `TerrainLoader.load_completed` — the
+  detail footing exists earlier but answers in metres ABOVE SEA LEVEL (Walton:
+  floor y 119 vs people at y −100); (2) the floor is the LOWEST ground within
+  ~1.5 km of the marker, and the box reaches down past the camera — a fog hung
+  from the marker floated 200 m over the property; (3) the droplets carry a
+  skylight EMISSION (DaylightModel.sky_light), because the player's ambient
+  multiplier can be 0 and a dawn fog lit by the low sun alone reads as black
+  murk. Harness shots need ~1 s after a camera jump: volumetric fog reprojects
+  90 % of the previous frame and smears the last viewpoint's fog.
+- **Volumetric fog slider fix:** the "Fog amount" slider used to touch only the
+  exponential fog (+0.00015); the plain volumetric branch never wrote density,
+  so the scene's 0.2546 /m (≈15 m) rendered at any setting. Every branch of
+  `_apply_advanced_rendering_toggles` now composes density explicitly from
+  `FogOptics.volumetric_density_for_amount` (0 → exactly 0), never reading it
+  back, and writes the full parameter set; it now runs AFTER the hazard pass.
 
 ## Discord-native multiplayer (core/discord/ + core/multiplayer/)
 

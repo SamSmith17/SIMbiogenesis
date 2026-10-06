@@ -527,6 +527,8 @@ func _show_tooltip(key: String, anchor: Control) -> void:
 			src_str = "Open-Meteo GFS Forecast  (GFS/ERA5 blend)"
 		"ha":
 			src_str = "Home Assistant"
+		"archive_current":
+			src_str = "Open-Meteo ERA5 Archive, this year  (~25 km grid)"
 		_:
 			src_str = "Open-Meteo ERA5 Archive  (~25 km grid)"
 

@@ -16,6 +16,8 @@ extends Node
 ## consumers must keep their synthetic fallbacks.
 
 signal weather_data_ready(latitude: float, longitude: float, year: int)
+## The current calendar year's partial archive landed (see ensure_current_year_archive).
+signal current_year_archive_ready(latitude: float, longitude: float, year: int)
 signal weather_fetch_failed(reason: String)
 ## Emitted when a fresh forecast window is available for the current location.
 signal forecast_data_ready(latitude: float, longitude: float)
@@ -31,9 +33,12 @@ signal generation_training_started()
 
 const ARCHIVE_URL := "https://archive-api.open-meteo.com/v1/archive"
 const FORECAST_URL := "https://api.open-meteo.com/v1/forecast"
-const HOURLY_VARS := "shortwave_radiation,diffuse_radiation,wind_speed_10m,windgusts_10m,wind_direction_10m,temperature_2m,relative_humidity_2m,precipitation,cloud_cover,snowfall,snow_depth"
-## Forecast-only extras (archive API returns null for 80 m / 180 m fields).
-const FORECAST_EXTRA_VARS := "wind_direction_80m,wind_direction_180m,wind_speed_80m,wind_speed_180m"
+const HOURLY_VARS := "shortwave_radiation,diffuse_radiation,wind_speed_10m,windgusts_10m,wind_direction_10m,temperature_2m,relative_humidity_2m,precipitation,cloud_cover,snowfall,snow_depth,dew_point_2m,cloud_cover_low"
+## Forecast-only extras (archive API returns null for 80 m / 180 m fields and
+## for `visibility`). Visibility is the model's own fog diagnosis — over CONUS
+## the forecast feed is HRRR, whose visibility caught the Walton valley fog
+## (100–500 m) while its T/RH stayed 3–4 °C off saturation.
+const FORECAST_EXTRA_VARS := "wind_direction_80m,wind_direction_180m,wind_speed_80m,wind_speed_180m,visibility"
 const FORECAST_HOURLY_VARS := HOURLY_VARS + "," + FORECAST_EXTRA_VARS
 ## Daily variables fetched for the 1940-present record book (separate request).
 const RECORDS_DAILY_VARS := "temperature_2m_max,temperature_2m_min,precipitation_sum"
@@ -44,9 +49,12 @@ const CACHE_DIR := "user://weather_cache"
 const MAX_CACHE_BYTES := 25 * 1024 * 1024
 ## Bump this suffix when HOURLY_VARS changes so old cached responses are retired.
 ## v4 = added snowfall + snow_depth for seasonal snow visuals.
-const CACHE_VERSION := "v4"
+## v5 = added dew_point_2m + cloud_cover_low (microclimate fog diagnosis — ERA5
+## reports radiation fog as 100 % LOW cloud at RH 100 %).
+const CACHE_VERSION := "v5"
 ## Bump when forecast cache envelope changes (stored Open-Meteo JSON + metadata).
-const FORECAST_CACHE_VERSION := "v2"
+## v3 = added dew_point_2m, cloud_cover_low, visibility; past_days 5 → 14.
+const FORECAST_CACHE_VERSION := "v3"
 ## Re-fetch the live forecast when older than this (models update several times/day).
 const FORECAST_MAX_AGE_SEC := 6 * 3600
 ## Bump when the generation schema/output changes. v11 = selectable engine
@@ -59,11 +67,18 @@ enum GenEngine { PARAMETRIC, RESAMPLER }
 const ENGINE_CONFIG_PATH := "user://weather_gen_engine.cfg"
 ## Archive years used to train the stochastic generator baseline.
 const TRAINING_YEAR_COUNT := 5
-## Forecast window: 5 past days + 16 future days (~21-day sliding window).
-const FORECAST_PAST_DAYS := 5
+## Forecast window: 14 past days + 16 future days (~30-day sliding window). The
+## past days keep the forecast model's analysis (incl. its `visibility`) for
+## recent nights — the archive has no visibility at all.
+const FORECAST_PAST_DAYS := 14
 const FORECAST_FUTURE_DAYS := 16
 ## Generated weather yields to real forecast for this many hours ahead of now.
 const FORECAST_OVERRIDE_DAYS := 10
+## The current calendar year's PARTIAL archive (Jan 1 → today; ERA5T lags ~5
+## days, those hours come back null) is refetched once a day. Without it a 2026
+## date outside the forecast window silently showed 2025's weather, because
+## effective_year() maps the current year to the last complete one.
+const CURRENT_YEAR_MAX_AGE_SEC := 24 * 3600
 
 ## Locations within this many degrees of the loaded dataset count as covered
 ## (~5.5 km N-S). Archive resolution is ~11 km, so this is conservative.
@@ -86,6 +101,16 @@ var _data_lat: float = NAN
 var _data_lon: float = NAN
 var _data_year: int = 0
 var _series: Dictionary = {}  # var name -> PackedFloat32Array
+
+## Partial archive for the CURRENT calendar year (see CURRENT_YEAR_MAX_AGE_SEC).
+## Same hour-of-year layout as _series; hours not yet published are NAN.
+var _http_cy: HTTPRequest = null
+var _fetching_cy: bool = false
+var _cy_series: Dictionary = {}
+var _cy_year: int = 0
+var _cy_lat: float = NAN
+var _cy_lon: float = NAN
+var _cy_fetched_unix: int = 0
 
 ## Forecast window — separate HTTPRequest, separate series.
 var _http_forecast: HTTPRequest = null
@@ -281,6 +306,7 @@ func _refresh_weather_datasets(lat: float, lon: float, raw_year: int) -> void:
 	# Live forecast: only when sim calendar year matches the real-world year.
 	if raw_year == _current_calendar_year():
 		ensure_forecast_fresh(lat, lon)
+		ensure_current_year_archive(lat, lon)
 
 
 ## Load cached forecast if needed and request a network refresh when stale.
@@ -648,6 +674,10 @@ func get_sample_source(month: int, day: int, hour: float, ha_active: bool = fals
 		var t := _sample_series_dict(_generated[_sim_year], "temperature_2m", month, day, hour)
 		if not is_nan(t):
 			return "generated"
+	if not is_nan(_current_year_sample("temperature_2m", month, day, hour)):
+		return "archive_current"
+	if _sim_year == _current_calendar_year() and _forecast_hour_idx(month, day, hour) >= 0:
+		return "forecast"
 	return "archive"
 
 
@@ -728,6 +758,13 @@ func sample(var_name: String, month: int, day: int, hour: float) -> float:
 		var val := _sample_series_dict(_generated[_sim_year], var_name, month, day, hour)
 		if not is_nan(val):
 			return val
+	# The current year's own archive (real 2026 data for a 2026 date) beats both
+	# the forecast model's past-days analysis and last year's substitute. NAN
+	# (an unpublished recent hour, or a forecast-only var like visibility)
+	# falls through.
+	var cy := _current_year_sample(var_name, month, day, hour)
+	if not is_nan(cy):
+		return cy
 	# Fall back to archive series (and forecast outside the override window for the
 	# current calendar year when generated data does not cover the date).
 	if _sim_year == _current_calendar_year() and not _forecast_series.is_empty():
@@ -775,12 +812,14 @@ func _sample_hourly_array(arr: PackedFloat32Array, month: int, day: int, hour: f
 func wind_speed_ms(month: int, day: int, hour: float) -> float:
 	# Open-Meteo wind_speed_10m is km/h by default.
 	var kmh := sample("wind_speed_10m", month, day, hour)
-	return kmh / 3.6 if not is_nan(kmh) else NAN
+	# Site calibration (e.g. open playa vs the Gerlach grid cell); identity
+	# unless the map's microclimate profile has a physics wind correction.
+	return MicroclimateCorrections.apply("wind_ms", kmh / 3.6) if not is_nan(kmh) else NAN
 
 
 func wind_gust_ms(month: int, day: int, hour: float) -> float:
 	var kmh := sample("windgusts_10m", month, day, hour)
-	return kmh / 3.6 if not is_nan(kmh) else NAN
+	return MicroclimateCorrections.apply("wind_ms", kmh / 3.6) if not is_nan(kmh) else NAN
 
 
 func temperature_c(month: int, day: int, hour: float) -> float:
@@ -794,13 +833,13 @@ func temperature_c(month: int, day: int, hour: float) -> float:
 			if not is_nan(dt) and not is_nan(t):
 				t += dt
 	if is_finite(t):
-		return clampf(t, -55.0, 55.0)
+		return clampf(MicroclimateCorrections.apply("t_c", t), -55.0, 55.0)
 	return NAN
 
 
 func cloud_cover_frac(month: int, day: int, hour: float) -> float:
 	var pct := sample("cloud_cover", month, day, hour)
-	return clampf(pct / 100.0, 0.0, 1.0) if not is_nan(pct) else NAN
+	return clampf(MicroclimateCorrections.apply("cloud", pct / 100.0), 0.0, 1.0) if not is_nan(pct) else NAN
 
 
 func rain_rate_mmh(month: int, day: int, hour: float) -> float:
@@ -864,17 +903,18 @@ func _sample_forecast_var(var_name: String, month: int, day: int, hour: float) -
 	var farr: PackedFloat32Array = _forecast_series.get(var_name, PackedFloat32Array())
 	if farr.is_empty() or fi >= farr.size():
 		return NAN
-	var h := float(_DAYS_BEFORE_MONTH[clampi(month, 1, 12) - 1] + clampi(day, 1, 31) - 1) * 24.0 \
-			+ clampf(hour, 0.0, 23.999)
-	var i0 := clampi(int(h), 0, farr.size() - 1)
-	var i1 := mini(i0 + 1, farr.size() - 1)
-	var a := farr[i0]
+	# Index by the OFFSET into the window (fi), not by hour-of-year: the window
+	# is ~700 entries, so an hour-of-year index clamped every read to its LAST
+	# hour (the 80 m / 180 m cloud-drift winds were a constant).
+	var i1 := mini(fi + 1, farr.size() - 1)
+	var a := farr[fi]
 	var b := farr[i1]
 	if is_nan(a):
 		return b
 	if is_nan(b):
 		return a
-	return lerpf(a, b, h - float(i0))
+	var hc := clampf(hour, 0.0, 23.999)
+	return lerpf(a, b, hc - floorf(hc))
 
 
 ## Low-cloud / cumulus drift: 80 m when forecast has it, else 10 m surface.
@@ -918,7 +958,148 @@ func wind_speed_ms_high(month: int, day: int, hour: float) -> float:
 
 ## Relative humidity as a percent (0–100). NAN when unavailable.
 func humidity_pct(month: int, day: int, hour: float) -> float:
-	return sample("relative_humidity_2m", month, day, hour)
+	var rh := sample("relative_humidity_2m", month, day, hour)
+	return clampf(MicroclimateCorrections.apply("rh", rh), 0.0, 100.0) if is_finite(rh) else rh
+
+
+## Dew point (°C). Falls back to the Magnus form from T + RH when the series
+## has no dew_point_2m (generated years, pre-v5 caches). NAN when neither.
+func dew_point_c(month: int, day: int, hour: float) -> float:
+	var td := sample("dew_point_2m", month, day, hour)
+	if is_finite(td):
+		return td
+	return dew_point_from_rh(sample("temperature_2m", month, day, hour),
+		sample("relative_humidity_2m", month, day, hour))
+
+
+## Magnus–Tetens dew point (Alduchov & Eskridge 1996: a = 17.625,
+## b = 243.04 °C; within ±0.35 °C over −40…50 °C).
+static func dew_point_from_rh(t_c: float, rh_pct: float) -> float:
+	if not is_finite(t_c) or not is_finite(rh_pct) or rh_pct <= 0.0:
+		return NAN
+	var g := log(clampf(rh_pct, 0.1, 100.0) / 100.0) + 17.625 * t_c / (243.04 + t_c)
+	return 243.04 * g / (17.625 - g)
+
+
+## Low-level (< ~2 km) cloud fraction 0..1. In ERA5 a radiation fog appears
+## HERE, as low cloud at RH 100 % — the cloud sits on the ground.
+func low_cloud_frac(month: int, day: int, hour: float) -> float:
+	var pct := sample("cloud_cover_low", month, day, hour)
+	return clampf(pct / 100.0, 0.0, 1.0) if is_finite(pct) else NAN
+
+
+## The forecast model's own surface visibility (m). Forecast window only —
+## the archive carries none. NAN outside the window.
+func model_visibility_m(month: int, day: int, hour: float) -> float:
+	if _sim_year != _current_calendar_year():
+		return NAN
+	return _sample_forecast_var("visibility", month, day, hour)
+
+
+## ---------------------------------------------------------------------------
+## Current-year partial archive
+## ---------------------------------------------------------------------------
+
+static func _current_year_cache_path(lat: float, lon: float, year: int) -> String:
+	return "%s/om_%s_%.2f_%.2f_%d_partial.json" % [CACHE_DIR, CACHE_VERSION, lat, lon, year]
+
+
+func _current_year_sample(var_name: String, month: int, day: int, hour: float) -> float:
+	if _cy_series.is_empty() or _sim_year != _cy_year:
+		return NAN
+	var arr: PackedFloat32Array = _cy_series.get(var_name, PackedFloat32Array())
+	if arr.is_empty():
+		return NAN
+	var doy := _DAYS_BEFORE_MONTH[clampi(month, 1, 12) - 1] + clampi(day, 1, 31) - 1
+	var h := float(doy) * 24.0 + clampf(hour, 0.0, 23.999)
+	var i0 := int(h)
+	# Unlike _sample_hourly_array this never clamps past the end: a date beyond
+	# what the partial year holds must fall through, not repeat the last hour.
+	if i0 >= arr.size():
+		return NAN
+	var a := arr[i0]
+	if is_nan(a):
+		return NAN
+	var b := arr[mini(i0 + 1, arr.size() - 1)]
+	if is_nan(b):
+		return a
+	return lerpf(a, b, h - float(i0))
+
+
+## True when the current calendar year's own archive is loaded.
+func has_current_year_archive() -> bool:
+	return not _cy_series.is_empty()
+
+
+func ensure_current_year_archive(lat: float, lon: float) -> void:
+	var year := _current_calendar_year()
+	var here := not is_nan(_cy_lat) and absf(lat - _cy_lat) <= COVERAGE_EPSILON_DEG \
+		and absf(lon - _cy_lon) <= COVERAGE_EPSILON_DEG and _cy_year == year
+	if not here:
+		_cy_series = {}
+		_try_load_current_year_cache(lat, lon, year)
+		here = not _cy_series.is_empty()
+	var stale := not here \
+		or Time.get_unix_time_from_system() - _cy_fetched_unix > CURRENT_YEAR_MAX_AGE_SEC
+	if stale and not _fetching_cy:
+		_request_current_year(lat, lon, year)
+
+
+func _try_load_current_year_cache(lat: float, lon: float, year: int) -> bool:
+	var text := _read_cache_text(_current_year_cache_path(lat, lon, year))
+	if text.is_empty():
+		return false
+	var parsed: Variant = JSON.parse_string(text)
+	if not (parsed is Dictionary):
+		return false
+	var d := parsed as Dictionary
+	var series := parse_archive_json_to_series(str(d.get("response_text", "")))
+	if series.is_empty():
+		return false
+	_cy_series = series
+	_cy_year = year
+	_cy_lat = lat
+	_cy_lon = lon
+	_cy_fetched_unix = int(d.get("fetched_unix", 0))
+	return true
+
+
+func _request_current_year(lat: float, lon: float, year: int) -> void:
+	if _http_cy == null or not is_instance_valid(_http_cy):
+		_http_cy = HTTPRequest.new()
+		_http_cy.timeout = 45.0
+		add_child(_http_cy)
+		_http_cy.request_completed.connect(_on_current_year_completed)
+	var url := "%s?latitude=%.4f&longitude=%.4f&start_date=%d-01-01&end_date=%s&hourly=%s&timezone=auto" \
+		% [ARCHIVE_URL, lat, lon, year, _today_date_str(), HOURLY_VARS]
+	if _http_cy.request(url) != OK:
+		return
+	_fetching_cy = true
+	set_meta("pending_cy", {"lat": lat, "lon": lon, "year": year})
+
+
+func _on_current_year_completed(result: int, response_code: int,
+		_headers: PackedStringArray, body: PackedByteArray) -> void:
+	_fetching_cy = false
+	var pending: Dictionary = get_meta("pending_cy", {})
+	# A failure stamps the time anyway, so an outage retries once per age
+	# window instead of on every 3 s location poll.
+	_cy_fetched_unix = Time.get_unix_time_from_system()
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		return
+	var text := body.get_string_from_utf8()
+	var series := parse_archive_json_to_series(text)
+	if series.is_empty():
+		return
+	_cy_series = series
+	_cy_year = int(pending.get("year", 0))
+	_cy_lat = float(pending.get("lat", 0.0))
+	_cy_lon = float(pending.get("lon", 0.0))
+	var f := FileAccess.open(_current_year_cache_path(_cy_lat, _cy_lon, _cy_year), FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify({"fetched_unix": _cy_fetched_unix, "response_text": text}))
+		f.close()
+	current_year_archive_ready.emit(_cy_lat, _cy_lon, _cy_year)
 
 
 ## Total precipitation (mm) over the 24 hours ending at the given time.
