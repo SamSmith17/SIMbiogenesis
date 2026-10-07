@@ -382,7 +382,8 @@ func _test_layer_roundtrip() -> void:
 	var layer := CampAreaLayer.create_empty()
 	var id := layer.add(_rect(0, 0, 50, 40), {"style": "rv_park", "density": 0.6,
 		"heading_deg": 200.0, "align_jitter_deg": 3.0, "light_density": 1.5,
-		"name": "Kidsville", "group_id": "g1", "holes": [_rect(10, 10, 20, 20)], "seed": 77})
+		"name": "Kidsville", "group_id": "g1", "holes": [_rect(10, 10, 20, 20)], "seed": 77,
+		"headcount": 36})
 	_check("add returns an id", id == "camp_1")
 	_check("heading is folded into 0..180", absf(float(layer.get_area(id)["heading_deg"]) - 20.0) < 1e-4)
 	_check("degenerate polygons are refused", layer.add(_rect(0, 0, 1, 1), {}) == "")
@@ -395,7 +396,7 @@ func _test_layer_roundtrip() -> void:
 	var b := back.get_area(id)
 	var same := not b.is_empty()
 	for k in ["name", "style", "density", "seed", "heading_deg", "heading_auto",
-			"align_jitter_deg", "light_density", "group_id"]:
+			"align_jitter_deg", "light_density", "group_id", "headcount"]:
 		same = same and str(a.get(k)) == str(b.get(k))
 	same = same and (b.get("polygon", PackedVector2Array()) as PackedVector2Array).size() == 4
 	same = same and (b.get("holes", []) as Array).size() == 1

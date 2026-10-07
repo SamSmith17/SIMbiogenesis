@@ -32,6 +32,11 @@ var _feed_sig := "<unbuilt>"
 var _alarm_lbl: Label = null
 var _speed_lbl: Label = null
 var _pick_lbl: Label = null
+## Festival mode's panel: status, the two clock jumps, leave / clear.
+var _fest_panel: PanelContainer = null
+var _fest_status: Label = null
+var _fest_notes: Label = null
+var _fest_sig := "<unbuilt>"
 
 
 func _ready() -> void:
@@ -106,6 +111,7 @@ func _build() -> void:
 	_pick_lbl.add_theme_color_override("font_color", UITheme.C_INFO)
 	_pick_lbl.visible = false
 	tl.add_child(_pick_lbl)
+	_build_festival_panel()
 
 	# Bottom-left: the settlement feed — the answer to "what happened while I
 	# was fast-forwarding".
@@ -189,6 +195,125 @@ func _build() -> void:
 		if cam != null:
 			cam.call("look_at_xz", _card_task_site))
 	cv.add_child(_card_task)
+
+
+## Festival mode's furniture. Shown only while the mode is on; it is the
+## mode's whole UI, so a tester never has to find Settings -> NPCs -> Testing or
+## the timeline's date box to see the evening. Buttons change CONDITIONS
+## (the clock, the mode) -- never a person.
+func _build_festival_panel() -> void:
+	_fest_panel = PanelContainer.new()
+	_fest_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.86))
+	_fest_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	_fest_panel.offset_left = 16
+	_fest_panel.offset_top = 300
+	_fest_panel.offset_right = 356
+	_fest_panel.visible = false
+	add_child(_fest_panel)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 4)
+	_fest_panel.add_child(v)
+	var title := Label.new()
+	title.text = "🎪 Festival mode · easy supplies"
+	title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	title.add_theme_color_override("font_color", UITheme.C_OK)
+	v.add_child(title)
+	_fest_status = Label.new()
+	_fest_status.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_fest_status.add_theme_color_override("font_color", UITheme.C_TEXT)
+	_fest_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(_fest_status)
+	var hint := Label.new()
+	hint.text = "Every camp is assumed stocked: people still walk to beds, kitchens, portapotties, water and the stage, but nobody starves, queues or leaves. Stage set 20:00–02:00 · camps sleep 02:30–09:30."
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(hint)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	v.add_child(row)
+	var evening := Button.new()
+	UITheme.style_button(evening)
+	evening.text = "⏩ Evening 19:30"
+	evening.tooltip_text = "Set the clock to 19:30 — dinner done, the stage set about to start"
+	evening.pressed.connect(func() -> void:
+		var fm := _festival_mode()
+		if fm != null:
+			fm.call("jump_to_hour", 19.5))
+	row.add_child(evening)
+	var morning := Button.new()
+	UITheme.style_button(morning)
+	morning.text = "☀ Morning 10:00"
+	morning.tooltip_text = "Set the clock to 10:00 — the camps waking up"
+	morning.pressed.connect(func() -> void:
+		var fm := _festival_mode()
+		if fm != null:
+			fm.call("jump_to_hour", 10.0))
+	row.add_child(morning)
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 6)
+	v.add_child(row2)
+	var leave := Button.new()
+	UITheme.style_button(leave)
+	leave.text = "Leave festival mode"
+	leave.tooltip_text = "Guardrails back on; the camps and venues stay"
+	leave.pressed.connect(func() -> void:
+		var fm := _festival_mode()
+		if fm != null:
+			fm.call("close"))
+	row2.add_child(leave)
+	var clear := Button.new()
+	UITheme.style_button(clear)
+	clear.text = "Clear seeded"
+	clear.tooltip_text = "Remove what festival mode seeded: its venues, every painted camp's headcount, the demo zone"
+	clear.pressed.connect(func() -> void:
+		var fm := _festival_mode()
+		if fm != null:
+			fm.call("clear_seeded"))
+	row2.add_child(clear)
+	_fest_notes = Label.new()
+	_fest_notes.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_fest_notes.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_fest_notes.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(_fest_notes)
+
+
+func _festival_mode() -> Node:
+	var main := get_tree().current_scene
+	if main == null or not main.has_method("festival_mode_active"):
+		return null
+	var fm: Variant = main.get("festival_mode")
+	return fm if fm is Node and is_instance_valid(fm) else null
+
+
+func _refresh_festival_panel() -> void:
+	if _fest_panel == null:
+		return
+	var fm := _festival_mode()
+	var on := fm != null and bool(fm.call("is_active"))
+	_fest_panel.visible = on
+	if not on:
+		_fest_sig = "<unbuilt>"
+		return
+	var st: Dictionary = fm.call("status")
+	var notes: PackedStringArray = fm.call("notes")
+	var sig := "%s|%s" % [str(st), ";".join(notes)]
+	if sig == _fest_sig:
+		return
+	_fest_sig = sig
+	var people := int(st.get("people", 0))
+	var tiers := ""
+	if int(st.get("light", 0)) > 0:
+		tiers = " · %d up close, %d as crowd" % [int(st.get("full", 0)), int(st.get("light", 0))]
+	_fest_status.text = "%d people in %d camps%s · %d seeded venues" % [
+		people, int(st.get("camps", 0)), tiers, int(st.get("venues", 0))]
+	if people == 0:
+		_fest_status.text += "\nNobody yet — the sim starts on the next tick (unpause the clock if it is paused)."
+	var tail := PackedStringArray()
+	for i in range(maxi(notes.size() - 3, 0), notes.size()):
+		tail.append(notes[i])
+	_fest_notes.text = "\n".join(tail)
+	_fest_notes.visible = not tail.is_empty()
 
 
 func set_pick_hint(text: String) -> void:
@@ -275,8 +400,11 @@ func _refresh() -> void:
 		_speed_lbl.text = "paused" if ts <= 0.0 else "%d× · %s" % [
 			int(round(ts * 3600.0)),
 			("following %s" % _view.following()) if not _view.following().is_empty() else "watching"]
-		if PopTestPrefs.any_active():
+		if PopTestPrefs.easy_override():
+			_speed_lbl.text += "  · FESTIVAL (supplies assumed infinite)"
+		elif PopTestPrefs.any_active():
 			_speed_lbl.text += "  · TESTING (guardrails off)"
+	_refresh_festival_panel()
 	if _bridge == null or not _bridge.has_method("settlement_log"):
 		return
 	var lg: SettlementLog = _bridge.call("settlement_log")

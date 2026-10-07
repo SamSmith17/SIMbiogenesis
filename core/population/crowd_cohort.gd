@@ -39,6 +39,11 @@ const S_IDLE := 0
 const S_TRAVEL := 1
 const S_DOING := 2
 const S_QUEUE := 3
+## The circle dance round the collapsed effigy: a chain of short arc
+## segments (one event each), so the GPU glides the person round the ring
+## and the sim touches them every CIRCLE_STEP_H.
+const S_CIRCLE := 4
+const CIRCLE_STEP_H := 0.02
 ## Activities (one byte each); ACT_NAMES maps them to NpcAgent's strings.
 const A_NONE := 0
 const A_HUNGER := 1
@@ -132,6 +137,30 @@ var _catchups := 0
 var _dirty: Dictionary = {}
 var _all_dirty := true
 
+## LIVE venues (VenueCrowd): the slot this person holds at their venue, the
+## venue's pose hint for it (VPOSE_* codes), and the venue phase they were
+## seated for — a phase change re-seats them. Transient: never snapshotted
+## (the next event re-derives all three).
+var vslot := PackedInt32Array()
+var vpose := PackedByteArray()
+var vphase := PackedByteArray()
+## Multi-leg routes (the nav grid's A* through the bridge's plan_path): the
+## polyline this person is walking and the index of the leg in progress.
+## Transient like the venue arrays. `last_space` keys the route cache.
+var legs: Array = []
+var leg_i := PackedInt32Array()
+var last_space := PackedStringArray()
+const VPOSE_NONE := 0
+const VPOSE_STAND := 1
+const VPOSE_SIT := 2
+const VPOSE_LIE := 3
+const VPOSE_DANCE := 4
+const VPOSE_WALK := 5
+const VPOSE_CLAP := 6
+const VPOSE_RAVE := 7
+const VPOSE_NAMES: Array = ["", VenueCrowd.POSE_STAND, VenueCrowd.POSE_SIT, VenueCrowd.POSE_LIE,
+	VenueCrowd.POSE_DANCE, VenueCrowd.POSE_WALK, VenueCrowd.POSE_CLAP, VenueCrowd.POSE_RAVE]
+
 ## Pose codes read by crowd_figure.gdshader.
 const POSE_STAND := 0
 const POSE_WALK := 1
@@ -140,6 +169,7 @@ const POSE_LIE := 3
 const POSE_DANCE := 4
 const POSE_WORK := 5
 const POSE_QUEUE := 6
+const POSE_RAVE := 7
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +244,12 @@ func _resize() -> void:
 	offset_h.resize(_n)
 	rng_n.resize(_n)
 	routine_mark.resize(_n)
+	vslot.resize(_n)
+	vpose.resize(_n)
+	vphase.resize(_n)
+	legs.resize(_n)
+	leg_i.resize(_n)
+	last_space.resize(_n)
 
 
 func _slot_for(i: int) -> Vector2:
@@ -256,7 +292,7 @@ func agent_index(agent_id: String) -> int:
 ## Where person i is at sim time t (on their current segment).
 func pos_at(i: int, t: float) -> Vector2:
 	var a := Vector2(ax[i], az[i])
-	if state[i] != S_TRAVEL:
+	if state[i] != S_TRAVEL and state[i] != S_CIRCLE:
 		return a
 	var span := t1[i] - t0[i]
 	if span <= 1e-9:
@@ -273,7 +309,7 @@ func set_starved(kinds: Array) -> void:
 
 func _need_rate(i: int, k: int) -> float:
 	var n := str(NpcAgent.NEEDS[k])
-	var rate := float(NpcAgent.RISE_PER_H[n])
+	var rate := float(NpcAgent.RISE_PER_H[n]) * NpcAgent.rate_scale_for(ids[i], n)
 	var asleep := state[i] == S_DOING and act[i] == A_SLEEP
 	if asleep:
 		if n == "sleep":
@@ -414,12 +450,19 @@ func _fire(i: int, t: float, ctx: Dictionary) -> void:
 		S_TRAVEL:
 			_arrive(i, t, ctx)
 		S_DOING:
-			if t >= end_h[i] - 1e-6:
+			# At a LIVE venue the venue speaks first: an EVENT phase holds the
+			# person (the cap moves), a phase change re-seats them, the
+			# collapse starts the circle. Only then does the clock get a say.
+			if act[i] == A_ENRICH and SpaceTypes.LIVE_VENUE_TYPES.has(space_type[i]) 					and _service_live_venue(i, t, ctx):
+				pass
+			elif t >= end_h[i] - 1e-6:
 				_finish_activity(i, t, ctx)
 			else:
 				_heartbeat(i, t, ctx)
 		S_QUEUE:
 			_poll_queue(i, t, ctx)
+		S_CIRCLE:
+			_circle_step(i, t, ctx)
 		_:
 			_decide(i, t, ctx)
 
@@ -465,13 +508,13 @@ func _most_urgent(i: int) -> String:
 
 ## Tiers 1–2 of NpcAgent._pick: the most pressing CRITICAL need past its
 ## threshold (sleep only in its window), else hygiene.
-func _pick(i: int, hour: float) -> String:
+func _pick(i: int, hour: float, sleep_start: float = NpcAgent.SLEEP_START_H) -> String:
 	var best := ""
 	var best_v := 0.0
 	for n in NpcAgent.CRITICAL_NEEDS:
 		var v := _need(i, str(n))
 		if n == "sleep":
-			var in_window := hour >= NpcAgent.SLEEP_START_H or hour < NpcAgent.SLEEP_END_H
+			var in_window := NpcRoutine.in_sleep_window(hour, sleep_start, NpcAgent.SLEEP_END_H)
 			if not in_window and v < float(NpcAgent.THRESHOLD["sleep"]):
 				continue
 			if in_window and v < 0.25:
@@ -496,7 +539,11 @@ func _decide(i: int, t: float, ctx: Dictionary) -> void:
 	state[i] = S_IDLE
 	act[i] = A_NONE
 	var hour := _hour_at(ctx, t)
-	var need := _pick(i, hour)
+	# The sleep need's window follows the routine's SLEEP block (NpcRoutine
+	# .sleep_start_h), so a festival camp is up for the set and the burn.
+	var r0: NpcRoutine = ctx.get("routine", routine)
+	var sleep_start := r0.sleep_start_h(NpcAgent.SLEEP_START_H) if r0 != null else NpcAgent.SLEEP_START_H
+	var need := _pick(i, hour, sleep_start)
 	if not need.is_empty():
 		if _go_for_need(i, t, need, ctx, hour):
 			return
@@ -507,6 +554,10 @@ func _decide(i: int, t: float, ctx: Dictionary) -> void:
 	var block := r.block_at(hour, offset_h[i]) if r != null else {}
 	var kind := str(block.get("kind", NpcRoutine.FREE))
 	var left := r.hours_left_in_block(hour, offset_h[i]) if r != null else 1.0
+	# An EVENT venue (the effigy burn) pulls people out whether or not they
+	# felt like gathering — the same waiver NpcAgent._wants_enrichment makes.
+	var wants_venue := _need(i, "enrichment") >= float(NpcAgent.THRESHOLD["enrichment"]) \
+		or bool(ctx.get("event_active", false))
 	# NOTE: a block re-issues its activity for as long as it lasts, exactly as
 	# NpcAgent._step_idle does (a second meal inside the same EAT block is
 	# what the full tier does today — the equivalence contract follows it).
@@ -516,7 +567,7 @@ func _decide(i: int, t: float, ctx: Dictionary) -> void:
 			# Only when the night and the need agree — the block runs past
 			# the wake hour, and a just-woken person is not sent back to bed.
 			var wake := NpcAgent.SLEEP_END_H + NpcHash.unit01(ids[i], "wake") * 1.5
-			var night := hour >= NpcAgent.SLEEP_START_H or hour < wake
+			var night := NpcRoutine.in_sleep_window(hour, sleep_start, wake)
 			if night and _need(i, "sleep") > 0.25 and _go_for_need(i, t, "sleep", ctx, hour):
 				routine_mark[i] = mark
 				return
@@ -537,15 +588,14 @@ func _decide(i: int, t: float, ctx: Dictionary) -> void:
 				_start_work(i, t, minf(left, WORK_CHUNK_H), ctx)
 				return
 			# Nothing on the board: gather rather than stand still.
-			if _need(i, "enrichment") >= float(NpcAgent.THRESHOLD["enrichment"]) 					and _go_to_venue(i, t, ctx, hour, left):
+			if wants_venue and _go_to_venue(i, t, ctx, hour, left):
 				return
 		NpcRoutine.ENRICHMENT:
 			if _go_to_venue(i, t, ctx, hour, left):
 				routine_mark[i] = mark
 				return
 		_:
-			if _need(i, "enrichment") >= float(NpcAgent.THRESHOLD["enrichment"]) \
-					and _go_to_venue(i, t, ctx, hour, left):
+			if wants_venue and _go_to_venue(i, t, ctx, hour, left):
 				return
 	# Nothing to do: dawdle where we are.
 	act[i] = A_FREE
@@ -618,7 +668,7 @@ func _go_for_need(i: int, t: float, need: String, ctx: Dictionary, hour: float,
 	var sid := str(best["id"])
 	var centre: Vector2 = registry.cached_position(sid)
 	var slot_i := registry.occupant_count(sid)
-	var dest := centre + SpaceRegistry.slot_offset_for_index(slot_i)
+	var dest := centre + SpaceRegistry.slot_offset_for_index(slot_i) + SpaceRegistry.slot_jitter(ids[i])
 	_go(i, t, dest, a, sid, str(best.get("space_type", "")), ctx)
 	if cap_h > 0.0:
 		end_h[i] = t + cap_h   # read at arrival as the block cap
@@ -643,9 +693,10 @@ func _go_to_venue(i: int, t: float, ctx: Dictionary, hour: float, left: float) -
 			var p: Variant = registry.cached_position(sid)
 			if not (p is Vector2):
 				continue
-			var st := FestivalProgram.state_at(space, hour)
+			var st := _venue_state_of(space, ctx, hour, t)
 			candidates.append({"id": sid, "type": str(stype), "pos": p,
-				"draw": float(st["draw"]), "occupants": registry.occupant_count(sid),
+				"draw": float(st["draw"]), "pull": float(st.get("pull", 0.0)),
+				"occupants": registry.occupant_count(sid),
 				"capacity": int(space.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))})
 			by_id[sid] = space
 	if candidates.is_empty():
@@ -654,15 +705,187 @@ func _go_to_venue(i: int, t: float, ctx: Dictionary, hour: float, left: float) -
 	if win.is_empty():
 		return false
 	var sid2 := str(win["id"])
+	var stype2 := str(win["type"])
 	var centre: Vector2 = win["pos"]
-	var dest := centre + SpaceRegistry.slot_offset_for_index(registry.occupant_count(sid2))
-	_go(i, t, dest, A_ENRICH, sid2, str(win["type"]), ctx)
-	var st2 := FestivalProgram.state_at(by_id[sid2], hour)
+	var st2 := _venue_state_of(by_id[sid2], ctx, hour, t)
+	var slot_i := registry.occupant_count(sid2)
+	vslot[i] = slot_i
+	vphase[i] = _phase_code(int(st2.get("phase", -1)), st2)
+	vpose[i] = maxi(VPOSE_NAMES.find(VenueCrowd.venue_pose(stype2, slot_i, st2, _venue_seed(i))), 0)
+	var dest := VenueCrowd.venue_spot(stype2, centre, slot_i, st2, t, _venue_seed(i),
+		_venue_extra(sid2, stype2, ctx))
+	if dest == Vector2.INF:
+		dest = centre + SpaceRegistry.slot_offset_for_index(slot_i) + SpaceRegistry.slot_jitter(ids[i])
+	_go(i, t, dest, A_ENRICH, sid2, stype2, ctx)
 	var cap := left
 	if bool(st2.get("programmed", false)) and float(st2.get("ends_h", -1.0)) > 0.0:
-		cap = minf(cap, float(st2["ends_h"]))
+		# A set ends when the programme says; an EVENT phase holds people for
+		# the whole phase, past the end of their routine block.
+		cap = float(st2["ends_h"]) if bool(st2.get("event", false)) else minf(cap, float(st2["ends_h"]))
 	end_h[i] = t + cap if cap > 0.0 else -1.0
 	return true
+
+
+## The venue's live state (bridge resolver first — it has the fire records).
+func _venue_state_of(space: Dictionary, ctx: Dictionary, hour: float, t: float) -> Dictionary:
+	var f: Callable = ctx.get("venue_state_of", Callable())
+	if f.is_valid():
+		var v: Variant = f.call(space)
+		if v is Dictionary and not (v as Dictionary).is_empty():
+			return v
+	return NpcVenueState.resolve(space, hour, t)
+
+
+func _venue_extra(sid: String, stype: String, ctx: Dictionary) -> Dictionary:
+	if stype != "stage":
+		return {}
+	var f: Callable = ctx.get("venue_front_of", Callable())
+	if f.is_valid():
+		var v: Variant = f.call(sid)
+		if v is Dictionary:
+			return v
+	return {}
+
+
+func _venue_seed(i: int) -> float:
+	return NpcHash.unit01(ids[i], "venue")
+
+
+## At a LIVE venue, every heartbeat: hold the person for an EVENT phase,
+## re-seat them when the phase changes (ring -> circle -> embers; set on /
+## off), and start the circle dance when the pile lands. True when it took
+## over the person's next event.
+func _service_live_venue(i: int, t: float, ctx: Dictionary) -> bool:
+	var registry: SpaceRegistry = ctx.get("registry")
+	if registry == null or space_id[i].is_empty():
+		return false
+	var rec := registry.find_by_id(space_id[i])
+	var centre: Variant = registry.cached_position(space_id[i])
+	if rec.is_empty() or not (centre is Vector2):
+		return false
+	var hour := _hour_at(ctx, t)
+	var st := _venue_state_of(rec, ctx, hour, t)
+	var phase := int(st.get("phase", -1))
+	if bool(st.get("event", false)) and float(st.get("ends_h", -1.0)) > 0.0:
+		end_h[i] = maxf(end_h[i], t + float(st["ends_h"]))
+	var pose := VPOSE_NAMES.find(VenueCrowd.venue_pose(space_type[i], vslot[i], st, _venue_seed(i)))
+	var code := _phase_code(phase, st)
+	var phase_changed := vphase[i] != code
+	vphase[i] = code
+	vpose[i] = maxi(pose, 0)
+	_dirty[i] = true
+	if space_type[i] == "effigy" and phase == VenueCrowd.EffigyPhase.CIRCLING:
+		_circle_step(i, t, ctx)
+		return true
+	if phase_changed:
+		var spot := VenueCrowd.venue_spot(space_type[i], centre, vslot[i], st, t, _venue_seed(i),
+			_venue_extra(space_id[i], space_type[i], ctx))
+		if spot != Vector2.INF:
+			# Walk to the new seat; the claim is kept (claim() is idempotent
+			# for an occupant) and _begin_activity re-reads the cap.
+			_go(i, t, spot, A_ENRICH, space_id[i], space_type[i], ctx)
+			return true
+	return false
+
+
+## The venue-phase code kept per person: 0 = never seated (a catch-up or a
+## restore left them where they stood), so a real code is never 0 — a
+## stage's phase is -1, and `-1 + 1` once collided with "unset" and left the
+## people the catch-up parked round the stage centre unseated for the whole
+## set. The set's on/off state is folded in, so a set starting re-seats too.
+func _phase_code(phase: int, st: Dictionary) -> int:
+	var live := 1 if (bool(st.get("active", true)) and bool(st.get("programmed", false))) else 0
+	return (phase + 2) * 2 + live
+
+
+## The bridge calls this when a venue's PHASE changes (the effigy lit, the
+## pile landed, a set started): everyone seated there gets their next event
+## NOW, so the whole ring re-seats this tick instead of trickling over the
+## next hour as heartbeats come due. Without it the people who sat down at
+## the unlit effigy's spiral were still sitting 11 m from the fire mid-burn.
+func wake_at_venue(sid: String, t: float) -> void:
+	for i in _n:
+		if alive[i] == 1 and space_id[i] == sid and (state[i] == S_DOING or state[i] == S_QUEUE):
+			next_h[i] = minf(next_h[i], t) if not is_nan(next_h[i]) else t
+
+
+## An EVENT just began (the effigy lit): everyone hanging out or at some
+## other venue re-decides NOW, so the pull can bring them -- otherwise a
+## person two hours into a stage set would not look round until their next
+## heartbeat. Needs and sleep are untouched.
+func wake_for_event(t: float) -> void:
+	for i in _n:
+		if alive[i] == 1 and state[i] == S_DOING and (act[i] == A_ENRICH or act[i] == A_FREE):
+			# END the visit, not just poke it: a woken S_DOING person whose
+			# end_h is still ahead only gets a heartbeat, which re-decides
+			# nothing. Live-venue people are left to _service_live_venue.
+			if SpaceTypes.LIVE_VENUE_TYPES.has(space_type[i]):
+				continue
+			end_h[i] = t
+			next_h[i] = t
+
+
+## One arc of the circle dance: a short segment to where this slot's lane
+## will be CIRCLE_STEP_H from now (VenueCrowd.effigy_slot moves with t), as
+## S_CIRCLE so the renderer draws a walker/dancer gliding round the ring.
+## When the pile has burned past the circling phase the person settles into
+## the embers spiral.
+func _circle_step(i: int, t: float, ctx: Dictionary) -> void:
+	var registry: SpaceRegistry = ctx.get("registry")
+	if registry == null or space_id[i].is_empty():
+		_release(i, ctx)
+		_decide(i, t, ctx)
+		return
+	var rec := registry.find_by_id(space_id[i])
+	var centre: Variant = registry.cached_position(space_id[i])
+	if rec.is_empty() or not (centre is Vector2):
+		_release(i, ctx)
+		_decide(i, t, ctx)
+		return
+	var st := _venue_state_of(rec, ctx, _hour_at(ctx, t), t)
+	var phase := int(st.get("phase", -1))
+	if phase != VenueCrowd.EffigyPhase.CIRCLING:
+		# The dance is over: settle into the embers spiral and carry on as
+		# an ordinary (clapping / standing) visit.
+		vphase[i] = _phase_code(phase, st)
+		vpose[i] = maxi(VPOSE_NAMES.find(VenueCrowd.venue_pose(space_type[i], vslot[i], st, _venue_seed(i))), 0)
+		var spot := VenueCrowd.venue_spot(space_type[i], centre, vslot[i], st, t, _venue_seed(i))
+		state[i] = S_DOING
+		if spot != Vector2.INF:
+			_go(i, t, spot, A_ENRICH, space_id[i], space_type[i], ctx)
+		else:
+			next_h[i] = minf(end_h[i], t + HEARTBEAT_H) if end_h[i] > t else t + HEARTBEAT_H
+		_dirty[i] = true
+		return
+	if end_h[i] > 0.0 and t >= end_h[i] - 1e-6:
+		# Their routine would end the visit, but an event holds them: the
+		# event cap (ends_h) is re-read above by _service_live_venue; here
+		# simply extend to the end of the dance.
+		end_h[i] = t + float(st.get("ends_h", CIRCLE_STEP_H))
+	var here := pos_at(i, t)
+	var safe_r := float(st.get("safe_r", VenueCrowd.EFFIGY_SAFE_R_M))
+	var next := VenueCrowd.effigy_slot(centre, vslot[i], phase, t + CIRCLE_STEP_H,
+		float(st.get("circle_t0", NAN)), _venue_seed(i), safe_r)
+	# Not on the ring yet (the seat they watched the burn from, or a late
+	# arrival): WALK to the lane as a routed trip — a raw chord from a ring
+	# seat to a lane point on the far side runs straight through the pile.
+	var lane_r := next.distance_to(centre)
+	if absf(here.distance_to(centre) - lane_r) > 1.5 or state[i] != S_CIRCLE:
+		if here.distance_to(next) > 1.5:
+			_go(i, t, next, A_ENRICH, space_id[i], space_type[i], ctx)
+			_dirty[i] = true
+			return
+	ax[i] = here.x
+	az[i] = here.y
+	bx[i] = next.x
+	bz[i] = next.y
+	t0[i] = t
+	t1[i] = t + CIRCLE_STEP_H
+	state[i] = S_CIRCLE
+	act[i] = A_ENRICH
+	vpose[i] = maxi(VPOSE_NAMES.find(VenueCrowd.venue_pose(space_type[i], vslot[i], st, _venue_seed(i))), 0)
+	next_h[i] = t1[i]
+	_dirty[i] = true
 
 
 func _start_work(i: int, t: float, hours: float, ctx: Dictionary) -> void:
@@ -678,23 +901,59 @@ func _start_work(i: int, t: float, hours: float, ctx: Dictionary) -> void:
 	next_h[i] = minf(end_h[i], t + HEARTBEAT_H)
 
 
-## Set the motion segment and the arrival event.
+## Set the motion segment and the arrival event. With the nav grid baked the
+## trip follows the SAME A* route the full tier walks (cached per space
+## pair through the bridge), as a chain of legs — one arrival event each —
+## so the light crowd walks round tents and vehicles instead of through
+## them. Straight line when no route is available.
 func _go(i: int, t: float, dest: Vector2, a: int, sid: String, stype: String,
-		_ctx: Dictionary) -> void:
+		ctx: Dictionary) -> void:
 	var from := pos_at(i, t)
 	var d := from.distance_to(dest)
 	# Lane offset: perpendicular to the walk, per person, so a column of
-	# people heading the same way does not share one line.
-	if d > 2.0:
+	# people heading the same way does not share one line. NOT for a
+	# choreographed seat (the ring, the fan, a bed): approached tangentially
+	# the offset is radial and put ring seats 0.8 m inside the perimeter.
+	var choreographed := a == A_SLEEP or (a == A_ENRICH and SpaceTypes.LIVE_VENUE_TYPES.has(stype))
+	if d > 2.0 and not choreographed:
 		var dir := (dest - from) / d
 		var side := (NpcHash.unit01(ids[i], "lane") * 2.0 - 1.0) * LANE_OFFSET_M
 		dest += Vector2(-dir.y, dir.x) * side
+	legs[i] = null
+	leg_i[i] = 0
+	var first := dest
+	if d > 6.0:
+		var planner: Callable = ctx.get("plan_path", Callable())
+		if planner.is_valid():
+			var from_key := str(last_space[i]) if not str(last_space[i]).is_empty() else "home|" + seed_key
+			var to_key := sid if not sid.is_empty() else ("home|" + seed_key if a == A_SLEEP else "")
+			var path: Variant = planner.call(from, dest, from_key, to_key, hash(ids[i]))
+			if path is PackedVector2Array and (path as PackedVector2Array).size() >= 2:
+				var pv: PackedVector2Array = (path as PackedVector2Array).duplicate()
+				# The planner ends on its goal CELL's centre (up to half a cell
+				# off); finish on the exact seat, or a ring seat drifts inward.
+				if pv[pv.size() - 1].distance_to(dest) > 0.1:
+					pv.append(dest)
+				# Drop a leading point that is where we already stand.
+				var start := 1 if pv[0].distance_to(from) < 0.5 else 0
+				if pv.size() - start >= 2 or (pv.size() - start == 1 and pv[start].distance_to(dest) > 0.5):
+					legs[i] = pv
+					leg_i[i] = start
+					first = pv[start]
+	if legs[i] == null:
+		# No route: a straight line, but never THROUGH the fire — one
+		# waypoint round the perimeter (NpcNav.detour).
+		var det := NpcNav.detour(from, dest, ctx.get("no_go", []))
+		if det.size() > 0:
+			legs[i] = det
+			leg_i[i] = 0
+			first = det[0]
 	ax[i] = from.x
 	az[i] = from.y
-	bx[i] = dest.x
-	bz[i] = dest.y
+	bx[i] = first.x
+	bz[i] = first.y
 	t0[i] = t
-	t1[i] = t + NpcNav.hours_for_distance(d)
+	t1[i] = t + NpcNav.hours_for_distance(from.distance_to(first))
 	state[i] = S_TRAVEL
 	act[i] = a
 	space_id[i] = sid
@@ -702,7 +961,32 @@ func _go(i: int, t: float, dest: Vector2, a: int, sid: String, stype: String,
 	next_h[i] = t1[i]
 
 
+## True when the person was walking a route and has just been moved onto
+## its next leg (the caller returns — not an arrival yet).
+func _advance_leg(i: int, t: float) -> bool:
+	if legs[i] == null:
+		return false
+	var pv: PackedVector2Array = legs[i]
+	var k := leg_i[i] + 1
+	if k >= pv.size():
+		legs[i] = null
+		return false
+	var here := Vector2(bx[i], bz[i])
+	ax[i] = here.x
+	az[i] = here.y
+	bx[i] = pv[k].x
+	bz[i] = pv[k].y
+	leg_i[i] = k
+	t0[i] = t
+	t1[i] = t + NpcNav.hours_for_distance(here.distance_to(pv[k]))
+	next_h[i] = t1[i]
+	_dirty[i] = true
+	return true
+
+
 func _arrive(i: int, t: float, ctx: Dictionary) -> void:
+	if _advance_leg(i, t):
+		return
 	ax[i] = bx[i]
 	az[i] = bz[i]
 	_materialize(i, t)
@@ -736,6 +1020,18 @@ func _poll_queue(i: int, t: float, ctx: Dictionary) -> void:
 
 func _begin_activity(i: int, t: float, ctx: Dictionary) -> void:
 	state[i] = S_DOING
+	if act[i] == A_ENRICH and SpaceTypes.LIVE_VENUE_TYPES.has(space_type[i]):
+		var registry0: SpaceRegistry = ctx.get("registry")
+		var rec0: Dictionary = registry0.find_by_id(space_id[i]) if registry0 != null else {}
+		if not rec0.is_empty():
+			var st0 := _venue_state_of(rec0, ctx, _hour_at(ctx, t), t)
+			vphase[i] = _phase_code(int(st0.get("phase", -1)), st0)
+			vpose[i] = maxi(VPOSE_NAMES.find(VenueCrowd.venue_pose(space_type[i], vslot[i], st0, _venue_seed(i))), 0)
+			if bool(st0.get("event", false)) and float(st0.get("ends_h", -1.0)) > 0.0:
+				end_h[i] = maxf(end_h[i], t + float(st0["ends_h"]))
+			if space_type[i] == "effigy" and int(st0.get("phase", -1)) == VenueCrowd.EffigyPhase.CIRCLING:
+				_circle_step(i, t, ctx)
+				return
 	var name := str(ACT_NAMES[act[i]])
 	var cap := end_h[i] - t if end_h[i] > t else -1.0
 	var dur := 0.0
@@ -813,10 +1109,15 @@ func _release(i: int, ctx: Dictionary) -> void:
 	var registry: SpaceRegistry = ctx.get("registry")
 	if registry != null and not space_id[i].is_empty():
 		registry.release(space_id[i], ids[i])
+	# Where the next route starts from (the space-pair route cache key).
+	last_space[i] = space_id[i] if not space_id[i].is_empty() else ("home|" + seed_key if act[i] == A_SLEEP else last_space[i])
 	space_id[i] = ""
 	space_type[i] = ""
 	state[i] = S_IDLE
 	act[i] = A_NONE
+	vslot[i] = -1
+	vpose[i] = VPOSE_NONE
+	vphase[i] = 0
 
 
 # ---------------------------------------------------------------------------
@@ -922,6 +1223,8 @@ func pose_code(i: int) -> int:
 	match state[i]:
 		S_TRAVEL:
 			return POSE_WALK
+		S_CIRCLE:
+			return POSE_DANCE if vpose[i] == VPOSE_DANCE else POSE_WALK
 		S_QUEUE:
 			return POSE_QUEUE
 		S_DOING:
@@ -930,6 +1233,14 @@ func pose_code(i: int) -> int:
 				A_HUNGER: return POSE_SIT
 				A_WORK: return POSE_WORK
 				A_ENRICH:
+					# A LIVE venue's hint for this slot wins (front rows sit
+					# or lie at the burn, the fan raves at a set).
+					match vpose[i]:
+						VPOSE_SIT: return POSE_SIT
+						VPOSE_LIE: return POSE_LIE
+						VPOSE_DANCE: return POSE_DANCE
+						VPOSE_RAVE: return POSE_RAVE
+						VPOSE_STAND, VPOSE_CLAP, VPOSE_WALK: return POSE_STAND
 					var st := space_type[i]
 					if st == "stage" or st == "fire_circle" or st == "movement":
 						return POSE_DANCE
@@ -1073,8 +1384,15 @@ func _status_line(i: int) -> String:
 				A_SLEEP: return "asleep"
 				A_WORK: return "working"
 				A_FREE: return "hanging out"
-				A_ENRICH: return "%s" % SpaceTypes.label(space_type[i])
+				A_ENRICH:
+					if space_type[i] == "effigy":
+						return "watching the burn" if (vpose[i] == VPOSE_SIT or vpose[i] == VPOSE_LIE) else "at the effigy"
+					if vpose[i] == VPOSE_RAVE:
+						return "raving (Bass Stage)"
+					return "%s" % SpaceTypes.label(space_type[i])
 				_: return name
+		S_CIRCLE:
+			return "circling the fire"
 		S_TRAVEL:
 			if act[i] == A_SLEEP:
 				return "heading home"
@@ -1100,7 +1418,7 @@ func agent_dots() -> Array:
 		else:
 			face = NpcFacing.yaw_for(p, home, NpcHash.unit01(ids[i], "face") * TAU, t)
 		var astate := NpcAgent.State.IDLE
-		if state[i] == S_TRAVEL:
+		if state[i] == S_TRAVEL or state[i] == S_CIRCLE:
 			astate = NpcAgent.State.TRAVELING
 		elif state[i] == S_DOING or state[i] == S_QUEUE:
 			astate = NpcAgent.State.DOING
@@ -1113,6 +1431,7 @@ func agent_dots() -> Array:
 			"morale_label": NpcMorale.label(morale[i]),
 			"activity": aname, "state": astate,
 			"space_type": space_type[i] if act[i] == A_ENRICH else "",
+			"venue_pose": str(VPOSE_NAMES[vpose[i]]) if act[i] == A_ENRICH and vpose[i] < VPOSE_NAMES.size() else "",
 			"anim_map": {}, "ends_h": end_h[i], "status": _status_line(i),
 			"trail": [], "possessed": false, "yaw": 0.0, "face_yaw": face,
 			"tier": TIER,

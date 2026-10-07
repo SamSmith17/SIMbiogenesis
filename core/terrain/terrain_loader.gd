@@ -4870,7 +4870,197 @@ func _push_camps_to_graph() -> void:
 		var zone: Dictionary = zones.get(str((l as Dictionary).get("zone_id", "")), {})
 		var spec: Dictionary = zone.get("spec", {})
 		(l as Dictionary)["provision"] = str(spec.get("provision", PopTestPrefs.provision_preset()))
+	# Painted camps the player POPULATED (festival mode's one button, or a
+	# headcount set by hand) ride the SAME sync as lot-shaped records keyed
+	# "camp:<id>" — so a free-painted camp is a camp on the graph too, not
+	# scenery. A live lot's own camp record is skipped here: its headcount is
+	# the lot assignment above.
+	if camp_areas != null:
+		var painted := FestivalSeedLayout.camp_lots(camp_areas.areas, zones)
+		for l in painted:
+			(l as Dictionary)["provision"] = PopTestPrefs.provision_preset()
+		lots.append_array(painted)
 	graph.call_deferred("sync_camps_from_placement", lots)
+
+
+# --- Festival mode: populated painted camps -----------------------------------
+
+## Give every painted camp that has no headcount one — derived from its area
+## and style at the placement tool's own density — so it becomes a camp
+## compound on the graph (the graph sync runs deferred). Returns
+## {"camps": n populated in total, "people": their summed headcount,
+## "changed": n given a headcount by this call}. Camps that already carry a
+## headcount keep it; a live lot's camp is never touched (see camp_lots).
+func populate_camp_areas() -> Dictionary:
+	var out := {"camps": 0, "people": 0, "changed": 0}
+	if not _camp_layer_ready():
+		return out
+	var zones: Dictionary = placement.zones_by_id() if placement != null else {}
+	var changed := 0
+	for raw in camp_areas.areas.duplicate():
+		var rec: Dictionary = raw
+		if not FestivalSeedLayout.is_populatable(rec, zones):
+			continue
+		var n := int(rec.get("headcount", 0))
+		if n <= 0:
+			n = FestivalSeedLayout.camp_headcount(rec)
+			if n <= 0:
+				continue
+			camp_areas.update(str(rec["id"]), {"headcount": n})
+			changed += 1
+		out["camps"] = int(out["camps"]) + 1
+		out["people"] = int(out["people"]) + n
+	out["changed"] = changed
+	if changed > 0:
+		camp_areas.save_to(_camp_areas_path)
+	_push_camps_to_graph()
+	return out
+
+
+## The reverse: every populated painted camp back to scenery (headcount 0);
+## their compounds leave the graph on the deferred sync. Returns how many.
+func depopulate_camp_areas() -> int:
+	if not _camp_layer_ready():
+		return 0
+	var zones: Dictionary = placement.zones_by_id() if placement != null else {}
+	var n := 0
+	for raw in camp_areas.areas.duplicate():
+		var rec: Dictionary = raw
+		if int(rec.get("headcount", 0)) > 0 and FestivalSeedLayout.is_populatable(rec, zones):
+			camp_areas.update(str(rec["id"]), {"headcount": 0})
+			n += 1
+	if n > 0:
+		camp_areas.save_to(_camp_areas_path)
+	_push_camps_to_graph()
+	return n
+
+
+## Headcounts the graph sync will stamp: {"camps", "people"} over assigned
+## placement lots + populated painted camps.
+func camp_population_summary() -> Dictionary:
+	var out := {"camps": 0, "people": 0}
+	if camp_areas == null and placement == null:
+		return out
+	var zones: Dictionary = placement.zones_by_id() if placement != null else {}
+	if placement != null:
+		for l in placement.lots:
+			var ac: Dictionary = (l as Dictionary).get("assigned_camp", {})
+			if not ac.is_empty() and int(ac.get("headcount", 0)) > 0:
+				out["camps"] = int(out["camps"]) + 1
+				out["people"] = int(out["people"]) + int(ac["headcount"])
+	if camp_areas != null:
+		for l in FestivalSeedLayout.camp_lots(camp_areas.areas, zones):
+			out["camps"] = int(out["camps"]) + 1
+			out["people"] = int(out["people"]) + int((l["assigned_camp"] as Dictionary)["headcount"])
+	return out
+
+
+## The world outline behind a camp compound's `camp_lot_id`: a placement lot's
+## polygon, or the painted camp's for a "camp:<id>" key. Empty when unknown.
+func camp_lot_polygon(lot_id: String) -> PackedVector2Array:
+	var cid := FestivalSeedLayout.camp_id_for_lot(lot_id)
+	if not cid.is_empty():
+		if camp_areas == null:
+			return PackedVector2Array()
+		return camp_areas.get_area(cid).get("polygon", PackedVector2Array())
+	if placement != null:
+		return placement.get_lot(lot_id).get("polygon", PackedVector2Array())
+	return PackedVector2Array()
+
+
+## Where people can SLEEP inside a polygon (a camp's sleep area): the camp
+## generator's shelters (tents, pods, yurts, vans, RVs) plus shiftpod props,
+## as [{pos: Vector2, yaw (radians), sleeps}]. Empty when nothing is there —
+## the caller falls back to the ground.
+func camp_shelters_in_polygon(poly: PackedVector2Array) -> Array:
+	var out: Array = []
+	if poly.size() < 3:
+		return out
+	if is_instance_valid(_camp_area_runtime):
+		for s in _camp_area_runtime.all_shelters():
+			var sd: Dictionary = s
+			if Geometry2D.is_point_in_polygon(sd["pos"], poly):
+				out.append({"pos": sd["pos"], "yaw": float(sd.get("yaw", 0.0)),
+					"sleeps": int(sd.get("sleeps", 2))})
+	for r in placed_prop_records():
+		var rec: Dictionary = r
+		var mid := str(rec.get("model_id", ""))
+		var sleeps := int(CampStyles.SHELTER_SLEEPS.get(mid, 0))
+		if sleeps <= 0 and mid == "shiftpod":
+			sleeps = 2
+		if sleeps <= 0 or bool(rec.get("packed", false)):
+			continue
+		var p := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+		if Geometry2D.is_point_in_polygon(p, poly):
+			out.append({"pos": p, "yaw": deg_to_rad(float(rec.get("yaw", 0.0))), "sleeps": sleeps})
+	return out
+
+
+## Footprints people cannot walk THROUGH, for the nav grid: every camp's
+## vehicles and every placed prop over a metre across (PackedSpec dims),
+## as oriented rectangles. Props tagged as a space people must ENTER
+## (`enterable` ids) are left out — the registry's goal snapping puts them
+## beside it anyway.
+func nav_solid_footprints(enterable: Dictionary = {}) -> Array:
+	var out: Array = []
+	if is_instance_valid(_camp_area_runtime):
+		for s in _camp_area_runtime.all_solids():
+			var sd: Dictionary = s
+			var size: Vector3 = sd.get("size", Vector3.ONE)
+			out.append(_oriented_rect(sd["pos"], float(sd.get("yaw", 0.0)), size.x, size.z))
+	# Placed props by their LIVE pick AABB (PackedSpec dims are the shipping
+	# size — a shiftpod packs to 1.3 m and stands 3.6 m). World-aligned
+	# boxes; good enough for a walk-round.
+	var terrain := _main.get_node_or_null("Terrain") if _main != null else null
+	var root := terrain.get_node_or_null("PlacedProps") if terrain != null else null
+	if root != null:
+		for child in root.get_children():
+			if not (child is PlacedProp):
+				continue
+			var prop := child as PlacedProp
+			if enterable.has(prop.prop_id):
+				continue
+			var rec := get_prop_record(prop.prop_id)
+			if bool(rec.get("packed", false)):
+				continue
+			var bb: AABB = prop.get_world_pick_aabb()
+			if bb.size.x < 1.0 or bb.size.z < 1.0 or bb.size.x > 60.0 or bb.size.z > 60.0:
+				continue
+			out.append(PackedVector2Array([Vector2(bb.position.x, bb.position.z),
+				Vector2(bb.end.x, bb.position.z), Vector2(bb.end.x, bb.end.z),
+				Vector2(bb.position.x, bb.end.z)]))
+	return out
+
+
+static func _oriented_rect(c: Vector2, yaw: float, len_x: float, len_z: float) -> PackedVector2Array:
+	# Camp items: X is the long axis in the item's local frame; the world
+	# yaw rotates about +Y (Basis(Vector3.UP, yaw)), which on the XZ plane
+	# carries local +X to (cos yaw, -sin yaw).
+	var ux := Vector2(cos(yaw), -sin(yaw)) * (len_x * 0.5)
+	var uz := Vector2(sin(yaw), cos(yaw)) * (len_z * 0.5)
+	return PackedVector2Array([c - ux - uz, c + ux - uz, c + ux + uz, c - ux + uz])
+
+
+## How many camp structures stand right now — folded into the nav grid's
+## fingerprint so a repainted camp re-bakes the grid.
+func camp_structure_count() -> int:
+	return _camp_area_runtime.structure_count() if is_instance_valid(_camp_area_runtime) else 0
+
+
+## The world's veto for festival mode's venue search: a square footprint is
+## free when neither its centre nor its corners sit on a building, road or
+## water (the camp generator's own exclusion index).
+func festival_ground_free(centre: Vector2, half: float) -> bool:
+	if not _camp_layer_ready():
+		return true
+	var ctx := _camp_ctx()
+	var excl: Callable = ctx.get("is_excluded", Callable())
+	if not excl.is_valid():
+		return true
+	for p in FestivalSeedLayout.square(centre, half):
+		if bool(excl.call(p)):
+			return false
+	return not bool(excl.call(centre))
 
 
 func _placement_ready() -> bool:
@@ -9762,6 +9952,9 @@ func _rebuild_placed_props() -> void:
 	_clear_placed_prop_focus()
 	PlacedPropRuntime.rebuild(terrain, _placed_prop_layer, Callable(self, "_ground_height_at"))
 	call_deferred("_try_seed_starshade_graph")
+	# Saved fires come back at the right moment of their life; the FireNodes
+	# that outlived a rebuild rebind to the new prop nodes on their own.
+	call_deferred("_sync_prop_fires")
 	
 	# Placed lights (J Light Studio) — keyed by this site, so rebuild now
 	# that the site is known; they live under Main, not Terrain.
@@ -9772,6 +9965,11 @@ func _try_seed_starshade_graph() -> void:
 	if _main == null:
 		return
 	StarShadeGraphSeeder.try_seed_from_main(_main, self)
+
+
+func _sync_prop_fires() -> void:
+	if _main != null:
+		FireNode.sync_prop_fires(_main, self)
 
 
 ## Tell the graph view this map's world/OSM data is ready (per-map key + OSM btn).
@@ -10645,6 +10843,86 @@ func update_prop_record(prop_id: String, patch: Dictionary) -> void:
 	_placed_prop_layer.save(_lat, _lon)
 	_attach_buildings()
 	_rebuild_placed_props()
+
+
+## --- fire: the burn record rides the prop ------------------------------------
+## Written by FireNode (ignition, extinguisher holds, going out) and the prop
+## editor (durations). QUIET: no prop rebuild — a rebuild frees every prop
+## node, and spraying writes this once a second. The save is debounced.
+func set_prop_burn_record(prop_id: String, burn: Dictionary) -> void:
+	if _placed_prop_layer == null or prop_id.is_empty():
+		return
+	if not _placed_prop_layer.update_prop(prop_id, {"burn": burn.duplicate(true)}):
+		return
+	_schedule_prop_layer_save()
+
+
+## The player's chosen durations for a fire that has NOT started yet
+## ({climb_h, bonfire_h, ember_h}, any subset); {} clears it. FireNode reads
+## it over the geometry estimate at ignition. Quiet, like the burn record.
+func set_prop_fire_plan(prop_id: String, plan: Dictionary) -> void:
+	if _placed_prop_layer == null or prop_id.is_empty():
+		return
+	var rec := _placed_prop_layer.find_by_id(prop_id)
+	if rec.is_empty():
+		return
+	if plan.is_empty():
+		rec.erase("fire_plan")
+	else:
+		rec["fire_plan"] = plan.duplicate(true)
+	_schedule_prop_layer_save()
+
+
+## A copy of a prop record (already offset by the caller) as a new free prop.
+## Returns the new id, "" when the layer is full.
+func duplicate_prop_record(copy: Dictionary) -> String:
+	if _placed_prop_layer == null or copy.is_empty():
+		return ""
+	var mid := str(copy.get("model_id", ""))
+	var new_id := _placed_prop_layer.add_free_prop(mid, float(copy.get("x", 0.0)),
+		float(copy.get("y_offset", 0.0)), float(copy.get("z", 0.0)),
+		float(copy.get("yaw", 0.0)), float(copy.get("pitch", 0.0)),
+		float(copy.get("roll", 0.0)), float(copy.get("scale", 1.0)))
+	if new_id.is_empty():
+		return ""
+	var patch := copy.duplicate(true)
+	for k in ["id", "type", "model_id", "x", "y_offset", "z", "yaw", "pitch", "roll", "scale",
+			"y", "ground_y", "building_idx"]:
+		patch.erase(k)
+	if not patch.is_empty():
+		_placed_prop_layer.update_prop(new_id, patch)
+	_placed_prop_layer.save(_lat, _lon)
+	_rebuild_placed_props()
+	return new_id
+
+
+## Restore / "forget the fire": the FireNode disposes itself on its next frame.
+func clear_prop_burn_record(prop_id: String) -> void:
+	if _placed_prop_layer == null or prop_id.is_empty():
+		return
+	var rec := _placed_prop_layer.find_by_id(prop_id)
+	if rec.is_empty() or not rec.has("burn"):
+		return
+	rec.erase("burn")
+	_schedule_prop_layer_save()
+
+
+var _prop_layer_save_pending := false
+func _schedule_prop_layer_save() -> void:
+	if _prop_layer_save_pending:
+		return
+	_prop_layer_save_pending = true
+	var tree := get_tree()
+	if tree == null:
+		_flush_prop_layer_save()
+		return
+	tree.create_timer(1.0).timeout.connect(_flush_prop_layer_save)
+
+
+func _flush_prop_layer_save() -> void:
+	_prop_layer_save_pending = false
+	if _placed_prop_layer != null:
+		_placed_prop_layer.save(_lat, _lon)
 
 
 ## Bulk hide/show every generic placeholder twin (generic_box / generic_tank) from

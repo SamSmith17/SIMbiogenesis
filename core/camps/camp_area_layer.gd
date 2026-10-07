@@ -95,6 +95,7 @@ func add(poly: PackedVector2Array, params: Dictionary = {}) -> String:
 		"align_jitter_deg": params.get("align_jitter_deg", 5.0),
 		"light_density": params.get("light_density", 1.0),
 		"group_id": params.get("group_id", ""),
+		"headcount": params.get("headcount", 0),
 		# A new camp draws one of its style's saved layouts, by weight, off its
 		# own seed — and KEEPS it, so adding a layout later never restyles a
 		# camp that is already standing.
@@ -323,6 +324,7 @@ func serialize() -> Dictionary:
 			"align_jitter_deg": float(rec.get("align_jitter_deg", 5.0)),
 			"light_density": float(rec.get("light_density", 1.0)),
 			"group_id": str(rec.get("group_id", "")),
+			"headcount": int(rec.get("headcount", 0)),
 			"variant": str(rec.get("variant", "")),
 			"style_override": rec.get("style_override", {}),
 			"edits": rec.get("edits", {}),
@@ -368,6 +370,7 @@ func deserialize(data: Dictionary) -> void:
 			"align_jitter_deg": d.get("align_jitter_deg", 5.0),
 			"light_density": d.get("light_density", 1.0),
 			"group_id": d.get("group_id", ""),
+			"headcount": d.get("headcount", 0),
 			"variant": d.get("variant", ""),
 			"style_override": d.get("style_override", {}),
 			"edits": d.get("edits", {}),
@@ -414,6 +417,11 @@ static func _normalized(rec: Dictionary) -> Dictionary:
 		"align_jitter_deg": clampf(float(rec.get("align_jitter_deg", 5.0)), 0.0, 45.0),
 		"light_density": clampf(float(rec.get("light_density", 1.0)), 0.0, 2.0),
 		"group_id": str(rec.get("group_id", "")),
+		# How many people LIVE here, for the population sim. 0 = nobody
+		# (the tents are scenery). Festival mode derives one from the area and
+		# style; a placement lot's camp record carries 0 — its headcount lives
+		# on the lot's assignment, which the graph sync reads directly.
+		"headcount": clampi(int(rec.get("headcount", 0)), 0, 5000),
 		"variant": str(rec.get("variant", "")),
 		"style_override": _clean_override(rec.get("style_override", {})),
 		"edits": _clean_edits(rec.get("edits", {})),

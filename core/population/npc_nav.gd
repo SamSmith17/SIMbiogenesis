@@ -56,6 +56,50 @@ static func advance_path(pos: Vector2, path: PackedVector2Array, idx: int,
 
 
 ## Metres left along `path` from `pos` at waypoint `idx`.
+## A straight walk from `a` to `b` that would cut through one of `circles`
+## ([{centre: Vector2, r: float}] — the fire perimeters) gets ONE waypoint
+## pushed out to the circle's edge plus `margin`, on the side the line already
+## favours. Returns [] when the line is clear (or an endpoint is inside, which
+## is a seat problem, not a walking one). Used only where the A* grid is not
+## available: the grid blocks the circle itself.
+static func detour(a: Vector2, b: Vector2, circles: Array, margin: float = 1.5) -> PackedVector2Array:
+	var ab := b - a
+	var len2 := ab.length_squared()
+	if len2 <= 1e-6:
+		return PackedVector2Array()
+	for c in circles:
+		var cd: Dictionary = c
+		var centre: Vector2 = cd.get("centre", Vector2.INF)
+		var r := float(cd.get("r", 0.0))
+		if r <= 0.0 or centre == Vector2.INF:
+			continue
+		if a.distance_to(centre) <= r or b.distance_to(centre) <= r:
+			continue
+		var t := clampf((centre - a).dot(ab) / len2, 0.0, 1.0)
+		var closest := a + ab * t
+		var d := closest.distance_to(centre)
+		if d >= r or t <= 0.0 or t >= 1.0:
+			continue
+		# Walk the arc round the perimeter from a's bearing to b's, the short
+		# way, in steps of at most 60 degrees — one waypoint off the near side
+		# still cut the circle on its second leg when b lay across it.
+		var big := r + margin
+		var ta := (a - centre).angle()
+		var tb := (b - centre).angle()
+		var delta := wrapf(tb - ta, -PI, PI)
+		if absf(delta) < 1e-4:
+			var out_dir := (closest - centre).normalized() if d > 1e-4 else Vector2(-ab.y, ab.x).normalized()
+			return PackedVector2Array([centre + out_dir * big, b])
+		var n := maxi(int(ceil(absf(delta) / (PI / 3.0))), 1)
+		var out := PackedVector2Array()
+		for k in range(0, n + 1):
+			var th := ta + delta * float(k) / float(n)
+			out.append(centre + Vector2(cos(th), sin(th)) * big)
+		out.append(b)
+		return out
+	return PackedVector2Array()
+
+
 static func path_remaining_m(pos: Vector2, path: PackedVector2Array, idx: int) -> float:
 	if idx >= path.size():
 		return 0.0

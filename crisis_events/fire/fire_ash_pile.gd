@@ -5,25 +5,19 @@ extends Node3D
 ## base that burns as a bonfire, dies back to glowing, smoking embers, goes
 ## black and finally turns to grey-white ash.
 ##
-## It is its OWN node, not part of FireNode, because it outlives it: the fire
-## event frees its FireNodes when it times out (2 sim-hours), long before a
-## bonfire has burned down, and the ash is meant to stay. FireNode spawns it at
-## the moment of collapse, hands it copies of its emitters, and from then on only
-## asks it how much flame is left (so the extinguisher and fire damage still
-## have a fire to act on while there is one).
-##
-## Everything it shows is a function of ONE number, `age_hours` of SIM time,
-## through `look()` — so it burns down at the same rate whatever the clock speed.
+## It is a RENDERER: FireNode spawns it at the moment of collapse, hands it
+## copies of its emitters, and every frame hands it the look FireTimeline
+## computed for the clock's hour (`set_look`). It keeps no clock of its own, so
+## scrubbing the world backwards runs it from ash to bonfire like everything
+## else; the only real-time things in it are the flicker and the whoosh.
 
 const PILE_SHADER := preload("res://crisis_events/fire/fire_pile.gdshader")
 const GROUP := "fire_ash_piles"
 
-## Sim-hours after the collapse. Open flame is gone by FLAME; the ember bed is
-## dead black by EMBER; it starts greying at ASH_FROM and is ash by TOTAL.
+## Default durations when a caller gives none (FireTimeline carries the real
+## ones per fire): open flame for FLAME_HOURS, then EMBER_HOURS to cold ash.
 const FLAME_HOURS : float = 3.0
-const EMBER_HOURS : float = 6.5
-const ASH_FROM_HOURS : float = 6.0
-const TOTAL_HOURS : float = 9.0
+const EMBER_HOURS : float = 2.5
 
 const FLAME_AMOUNT : int = 160
 const SMOKE_AMOUNT : int = 110
@@ -33,7 +27,7 @@ const EMISSION_POINTS : int = 200
 const WHOOSH_SECONDS : float = 1.8
 const DOUSE_SECONDS : float = 2.0
 
-var age_hours : float = 0.0
+var age_hours : float = 0.0  # the age last drawn (for the HUD)
 var radius : Vector2 = Vector2.ONE      # footprint half-extents on x / z
 var height : float = 0.4                # how high the mound stands
 var structure_height : float = 3.0      # what fell into it: scales the whoosh
@@ -46,35 +40,40 @@ var light : OmniLight3D = null
 var whoosh_emitters : Array[GPUParticles3D] = []
 
 var _mat : ShaderMaterial = null
-var _aging : bool = false
 var _doused : bool = false
-var _douse_t : float = 0.0
+var _douse_k : float = 1.0
 var _whoosh : float = 0.0
 var _flicker : float = 0.0
 var _look_bucket : int = -1
 var _finished : bool = false
-var _clock : Node = null
+var _last_look : Dictionary = {}
 
 static var _mound_mesh : ArrayMesh = null
 
 
-## The whole burn-down as a pure function of sim-hours since the collapse:
+## The whole burn-down as a pure function of sim-hours since the collapse,
+## for a pile with `flame_h` of open flame and `ember_h` from the last flame
+## to cold ash:
 ##   flame  1 = bonfire .. 0 = no open flame
 ##   heat   1 = whole bed glowing .. 0 = black
 ##   smoke  how much smoke it gives off
 ##   sparks rising embers
 ##   ash    0 = black char .. 1 = grey-white ash
-static func look(age_h: float) -> Dictionary:
-	# Holds as a bonfire for most of its span, then dies back quickly.
-	var flame := 1.0 - pow(clampf(age_h / FLAME_HOURS, 0.0, 1.0), 1.6)
-	var heat := 1.0 - smoothstep(FLAME_HOURS * 0.6, EMBER_HOURS, age_h)
-	var smoke_lvl := (0.3 + 0.7 * flame) * (1.0 - smoothstep(EMBER_HOURS - 1.5, EMBER_HOURS + 0.5, age_h))
+## Holds as a bonfire for most of the flame span, then dies back quickly; the
+## ember bed outlives the flame, is dead black at 70 % of the ember span, and
+## only then greys (from 75 %) — so it is black before it is grey.
+static func look(age_h: float, flame_h: float = FLAME_HOURS, ember_h: float = EMBER_HOURS) -> Dictionary:
+	flame_h = maxf(flame_h, 0.01)
+	ember_h = maxf(ember_h, 0.01)
+	var flame := 1.0 - pow(clampf(age_h / flame_h, 0.0, 1.0), 1.6)
+	var heat := 1.0 - smoothstep(flame_h * 0.9, flame_h + ember_h * 0.7, age_h)
+	var smoke_lvl := (0.3 + 0.7 * flame) * (1.0 - smoothstep(flame_h + ember_h * 0.4, flame_h + ember_h * 0.85, age_h))
 	return {
 		"flame": flame,
 		"heat": heat,
 		"smoke": smoke_lvl,
 		"sparks": maxf(flame, heat * 0.25),
-		"ash": smoothstep(ASH_FROM_HOURS, TOTAL_HOURS, age_h),
+		"ash": smoothstep(flame_h + ember_h * 0.75, flame_h + ember_h, age_h),
 	}
 
 
@@ -162,7 +161,7 @@ func setup(centre: Vector3, footprint_radius: Vector2, mound_height: float,
 	light.omni_attenuation = 1.1
 	light.position = Vector3(0.0, height + 0.6, 0.0)
 	add_child(light)
-	_apply_look(look(0.0), 0.0)
+	_apply_look(look(0.0))
 
 
 ## 0..1 while the structure is coming down: the mound heaps up under it.
@@ -180,19 +179,37 @@ func adopt_emitters(flame_src: GPUParticles3D, smoke_src: GPUParticles3D,
 	smoke = _adopt(smoke_src, "PileSmoke", SMOKE_AMOUNT, 140.0, points)
 	embers = _adopt(ember_src, "PileEmbers", EMBER_AMOUNT, 80.0, points)
 	_look_bucket = -1
-	_apply_look(look(age_hours), 0.0)
+	if not _last_look.is_empty():
+		_apply_look(_last_look)
 
 
-## The structure has landed: from here the pile burns down on the sim clock.
-func ignite() -> void:
-	_aging = true
-	set_rise(1.0)
+## FireNode hands this in every frame: the look for the clock's hour (see
+## `look()`), and whether the fire has been put OUT — a doused bed loses its
+## glow over a couple of real seconds and keeps whatever colour it had.
+func set_look(l: Dictionary, out: bool = false) -> void:
+	_doused = out
+	_last_look = l
+	_apply_look(l)
 
 
-## The short, violent flare as the structure drops into its own fire: a burst of
-## flame, a rolling puff of smoke and a shower of sparks, one shot each.
 func whoosh() -> void:
 	_whoosh = 1.0
+	_spawn_whoosh()
+
+
+func _process(delta: float) -> void:
+	_flicker += delta
+	_whoosh = maxf(0.0, _whoosh - delta / WHOOSH_SECONDS)
+	_douse_k = move_toward(_douse_k, 0.0 if _doused else 1.0, delta / DOUSE_SECONDS)
+	if not _last_look.is_empty():
+		_apply_look(_last_look)
+
+
+func _spawn_whoosh() -> void:
+	for old in whoosh_emitters:
+		if is_instance_valid(old):
+			old.queue_free()
+	whoosh_emitters.clear()
 	var power := clampf(sqrt(maxf(structure_height, 0.5) / 4.0), 0.7, 2.2)
 	var box := Vector3(radius.x * 0.8, 0.25, radius.y * 0.8)
 	var reach := maxf(radius.x, radius.y) + 20.0
@@ -243,87 +260,17 @@ func whoosh() -> void:
 		whoosh_emitters.append(ps)
 
 
-## Put out by the extinguisher: the flames go at once, the glow dies in a couple
-## of seconds, and the pile stays whatever colour it had reached.
-func douse() -> void:
-	if _doused:
-		return
-	_doused = true
-	_douse_t = 0.0
-
-
-## How much open flame is left (0 once it is embers, or doused).
-func flame_level() -> float:
-	if _doused or _finished:
-		return 0.0
-	return float(look(age_hours)["flame"])
-
-
-func is_finished() -> bool:
-	return _finished
-
-
-func _process(delta: float) -> void:
-	advance(delta, delta * maxf(_time_scale(), 0.0))
-
-
-## One step: `delta` real seconds (flicker, the whoosh, dousing) and `sim_hours`
-## of burning down. Public so the selftest can drive it without a clock.
-func advance(delta: float, sim_hours: float) -> void:
-	if _finished:
-		return
-	_flicker += delta
-	_whoosh = maxf(0.0, _whoosh - delta / WHOOSH_SECONDS)
-	var l := look(age_hours)
-	if _doused:
-		_douse_t += delta
-		var k := clampf(1.0 - _douse_t / DOUSE_SECONDS, 0.0, 1.0)
-		l["flame"] = 0.0
-		l["sparks"] = 0.0
-		l["heat"] = float(l["heat"]) * k
-		l["smoke"] = float(l["smoke"]) * k
-		_apply_look(l, delta)
-		if k <= 0.0 and _whoosh <= 0.0:
-			_finish()
-		return
-	if _aging:
-		age_hours += sim_hours
-		l = look(age_hours)
-	_apply_look(l, delta)
-	if age_hours >= TOTAL_HOURS and _whoosh <= 0.0:
-		_finish()
-
-
-## Cold: nothing left to animate. The mound stays as it is.
-func _finish() -> void:
-	_finished = true
-	for ps: GPUParticles3D in [flames, smoke, embers]:
-		if ps != null and is_instance_valid(ps):
-			ps.queue_free()
-	for ps in whoosh_emitters:
-		if is_instance_valid(ps):
-			ps.queue_free()
-	whoosh_emitters.clear()
-	flames = null
-	smoke = null
-	embers = null
-	if light != null:
-		light.queue_free()
-		light = null
-	if _mat != null:
-		_mat.set_shader_parameter("heat", 0.0)
-	set_process(false)
-
-
-func _apply_look(l: Dictionary, _delta: float) -> void:
-	var flame := float(l["flame"])
-	var heat := float(l["heat"])
+func _apply_look(l: Dictionary) -> void:
+	var flame := float(l["flame"]) * (1.0 if _douse_k >= 1.0 else 0.0)
+	var heat := float(l["heat"]) * _douse_k
+	var smoke_lvl := float(l["smoke"]) * maxf(_douse_k, 0.0)
+	var sparks := float(l["sparks"]) * (1.0 if _douse_k >= 1.0 else 0.0)
 	if _mat != null:
 		_mat.set_shader_parameter("heat", heat)
 		_mat.set_shader_parameter("ash", float(l["ash"]))
 	_set_level(flames, flame, 0.15)
-	_set_level(smoke, float(l["smoke"]), 0.08)
-	_set_level(embers, float(l["sparks"]), 0.05)
+	_set_level(smoke, smoke_lvl, 0.08)
+	_set_level(embers, sparks, 0.05)
 	# A bonfire throws flame high; a dying one only licks. Stepped, so the
 	# particle materials are not rewritten every frame.
 	var bucket := int(flame * 16.0)
@@ -411,17 +358,3 @@ func _footprint_points() -> PackedVector3Array:
 			height * pow(1.0 - rr * rr, 1.3) * 0.6,
 			sin(a) * rr * radius.y * 0.9))
 	return out
-
-
-## Sim-hours per real second, off the same root node FireNode reads.
-func _time_scale() -> float:
-	if _clock == null or not is_instance_valid(_clock):
-		_clock = null
-		var tree := get_tree()
-		if tree == null:
-			return 1.0
-		for child in tree.root.get_children():
-			if "time_scale" in child:
-				_clock = child
-				break
-	return float(_clock.time_scale) if _clock != null else 1.0

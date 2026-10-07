@@ -88,11 +88,11 @@ func _build() -> void:
 	add_child(_option)
 
 	_capacity = SpinBox.new()
-	_capacity.min_value = 1.0
+	_capacity.min_value = 0.0
 	_capacity.max_value = 5000.0
 	_capacity.step = 1.0
-	_capacity.value = float(SpaceRegistry.DEFAULT_CAPACITY)
-	_capacity.tooltip_text = "How many people can use this space at once"
+	_capacity.value = float(SpaceRegistry.CAPACITY_AUTO)
+	_capacity.tooltip_text = "How many people can use this space at once. 0 = Auto: never fills; people share the type's spaces by distance and crowding."
 	_capacity.custom_minimum_size.x = 60.0
 	_capacity.value_changed.connect(_on_capacity_changed)
 	_capacity.visible = false

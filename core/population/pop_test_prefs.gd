@@ -21,6 +21,11 @@ extends RefCounted
 ##                    feed lines, dashboard alerts).
 ## Under --script (selftests) nothing loads the file, so every flag reads
 ## false and the pure cores behave exactly as before.
+##
+## EASY-MODE OVERRIDE (festival mode): `set_easy_override(true)` makes every
+## accessor read ON for the SESSION without touching the saved flags, so
+## leaving festival mode hands the player's own testing prefs back exactly.
+## It is deliberately not persisted — it belongs to the mode, not the file.
 
 const CFG_PATH := "user://pop_testing.cfg"
 const SECTION := "testing"
@@ -34,6 +39,7 @@ static var _no_departures := false
 static var _mute_alarms := false
 static var _provision_preset := DEFAULT_PRESET
 static var _generation := 0
+static var _easy_override := false
 
 
 static func ensure_loaded() -> void:
@@ -80,22 +86,43 @@ static func generation() -> int:
 
 static func ideal_supply() -> bool:
 	ensure_loaded()
-	return _ideal_supply
+	return _ideal_supply or _easy_override
 
 
 static func ignore_capacity() -> bool:
 	ensure_loaded()
-	return _ignore_capacity or _ideal_supply
+	return _ignore_capacity or _ideal_supply or _easy_override
 
 
 static func no_departures() -> bool:
 	ensure_loaded()
-	return _no_departures
+	return _no_departures or _easy_override
 
 
 static func mute_alarms() -> bool:
 	ensure_loaded()
-	return _mute_alarms
+	return _mute_alarms or _easy_override
+
+
+## The festival mode's session switch: every guardrail off, nothing saved.
+static func set_easy_override(on: bool) -> void:
+	ensure_loaded()
+	if _easy_override == on:
+		return
+	_easy_override = on
+	_generation += 1
+
+
+static func easy_override() -> bool:
+	return _easy_override
+
+
+## The SAVED flag values, regardless of the override — what the settings tab
+## shows, so its checkboxes never pretend the player ticked them.
+static func saved_flags() -> Dictionary:
+	ensure_loaded()
+	return {"ideal_supply": _ideal_supply, "ignore_capacity": _ignore_capacity,
+		"no_departures": _no_departures, "mute_alarms": _mute_alarms}
 
 
 static func provision_preset() -> String:
@@ -136,7 +163,7 @@ static func set_provision_preset(id: String) -> void:
 ## True when any guardrail is off — the HUD shows a "testing" tag then.
 static func any_active() -> bool:
 	ensure_loaded()
-	return _ideal_supply or _ignore_capacity or _no_departures or _mute_alarms
+	return _ideal_supply or _ignore_capacity or _no_departures or _mute_alarms or _easy_override
 
 
 ## Reset to the shipped defaults (selftests use this between cases).
@@ -147,4 +174,5 @@ static func reset_defaults() -> void:
 	_no_departures = false
 	_mute_alarms = false
 	_provision_preset = DEFAULT_PRESET
+	_easy_override = false
 	_generation += 1

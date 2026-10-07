@@ -78,6 +78,27 @@ const NAV_REGION_SNAP_M := 5.0
 ## hit only counts as another level once it clears the ground by this much.
 const SURFACE_PROBE_TOP_M := 12.0
 const SURFACE_MIN_CLEARANCE_M := 1.6
+## LIVE venue states, resolved ONCE per tick for every venue (NpcVenueState:
+## a stage's programme, an effigy's FIRE RECORD off its tagged prop), plus
+## each stage's front edge + facing for VenueCrowd's fan. Both tiers read
+## them through ctx; `_event_active` is the enrichment-gate waiver.
+var _venue_states: Dictionary = {}
+var _venue_fronts: Dictionary = {}
+var _event_active := false
+## sid -> "phase|active" last tick, so a phase change wakes the people there.
+var _venue_phase_keys: Dictionary = {}
+var _event_was := false
+## sid -> radius currently stamped F_BLOCKED on the nav grid for a burning /
+## burnt effigy, so people neither stand nor walk inside the fire perimeter.
+var _fire_stamps: Dictionary = {}
+## Beds: sleep AREA space id -> expanded list of {pos, yaw} (one entry per
+## sleeper a shelter holds), refreshed when the camps change.
+var _sleep_spots: Dictionary = {}
+var _sleep_spots_rev := -1
+## The population region from the last tick (anchors / centre / half) — the
+## crowd renderer builds its height raster over it.
+var _last_region: Dictionary = {}
+
 ## Cached agent_dots() payload. NpcPopulationHost calls agent_dots() every
 ## RENDER frame, and the Site Plan provider calls it again, but the simulation
 ## only steps on a 0.25–0.5 s accumulator — so the payload was identical between
@@ -123,8 +144,11 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		registry.ignore_capacity = PopTestPrefs.ignore_capacity()
 		registry.refresh_positions(func(space: Dictionary) -> Variant:
 			return registry.resolve_position(space, main))
+	_resolve_venues(main, registry, abs_h, hour_of_day)
+	_resolve_sleep_spots(main, registry)
 	_nav_queries_this_tick = 0
 	var region := _population_region(main, registry)
+	_last_region = region
 	_service_nav(main, registry, region)
 	# Deliberately NOT gated on the nav grid: tracing must start on the first
 	# tick, or the desire map misses everything walked during the bake.
@@ -177,6 +201,18 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 				return _chore_position(chore, main, registry),
 			"hour_of_day": hour_of_day,
 			"weather": _sample_weather(main, hour_of_day),
+			# LIVE venues: what each is doing now (fire phase / set), where a
+			# stage's front is, and whether an EVENT is on.
+			"venue_state_of": func(space: Dictionary) -> Dictionary:
+				return _venue_states.get(str(space.get("id", "")), {}),
+			"venue_front_of": func(sid: String) -> Dictionary:
+				return _venue_fronts.get(sid, {}),
+			"event_active": _event_active,
+			# A bed INSIDE a shelter for slot `k` at a sleep area ({} = none).
+			"bed_spot_of": func(sid: String, k: int) -> Dictionary:
+				return _bed_spot(sid, k),
+			# Fire perimeters a straight-line walk must go round.
+			"no_go": _no_go_circles(),
 			"plan_path": func(from_xz: Vector2, to_xz: Vector2, from_key: String,
 					to_key: String, lane_seed: int) -> Variant:
 				return _plan_path(from_xz, to_xz, from_key, to_key, lane_seed),
@@ -289,7 +325,21 @@ func _tick_light(iid: String, specs: Dictionary, main: Node, flow_engine, model,
 		"meal_available": flow_engine != null and flow_engine.has_method("habitat_kind_supplied")
 			and flow_engine.habitat_kind_supplied(iid, "meal"),
 		"routine": cohort.routine,
+		"venue_state_of": func(space: Dictionary) -> Dictionary:
+			return _venue_states.get(str(space.get("id", "")), {}),
+		"venue_front_of": func(sid: String) -> Dictionary:
+			return _venue_fronts.get(sid, {}),
+		"event_active": _event_active,
+		# The light tier follows the same routes as the full one.
+		"plan_path": func(from_xz: Vector2, to_xz: Vector2, from_key: String,
+				to_key: String, lane_seed: int) -> Variant:
+			return _plan_path(from_xz, to_xz, from_key, to_key, lane_seed),
+		"no_go": _no_go_circles(),
 	}
+	# Home beds: the shelters of the camp this habitat stands in.
+	var beds := _home_beds(main, cohort.home)
+	if beds.size() > 0 and beds != cohort.home_slots:
+		cohort.home_slots = beds
 	var demand: Dictionary = cohort.tick(abs_h, ctx)
 	flow_engine.set_habitat_demand(iid, demand)
 	# What was consumed AT bound venues (a portapotty bank, a water station)
@@ -871,7 +921,8 @@ func _service_nav(main: Node, registry: SpaceRegistry, region: Dictionary) -> vo
 	var center: Vector2 = region["center"]
 	var half: float = region["half"]
 	var fp := NpcNavGrid.compose_fingerprint(
-			registry.spaces.size(), _prop_revision(main), _nav_rev, 0, center, half)
+			registry.spaces.size(), _prop_revision(main) + 1000 * _camp_revision(main),
+			_nav_rev, 0, center, half)
 	if _nav_grid == null or _nav_grid.needs_rebuild(fp):
 		if _nav_fp != fp:
 			_nav_fp = fp
@@ -901,6 +952,10 @@ func _service_nav(main: Node, registry: SpaceRegistry, region: Dictionary) -> vo
 			PerfMonitor.begin("npc_nav_bake")
 			if _nav_grid.bake_step(NAV_CELLS_PER_TICK):
 				_nav_query.setup(_nav_grid)
+				# A fresh grid forgets the fire perimeters: stamp them again.
+				for sid in _fire_stamps.keys():
+					var fs: Dictionary = _fire_stamps[sid]
+					_stamp_fire(fs.get("centre", Vector2.ZERO), float(fs.get("r", 0.0)))
 			PerfMonitor.end("npc_nav_bake")
 
 
@@ -1060,7 +1115,136 @@ func _collect_nav_obstacles(main: Node, registry: SpaceRegistry) -> Array:
 		for poly2 in loader.call("get_still_water_polygons"):
 			out.append({"poly": poly2,
 				"flags": NpcNavGrid.F_BLOCKED | NpcNavGrid.F_WATER})
+	# Camp vehicles and placed props: people walk ROUND them. Props tagged as
+	# a space people enter are left passable.
+	if loader.has_method("nav_solid_footprints"):
+		var enterable: Dictionary = {}
+		if registry != null:
+			for space in registry.spaces:
+				var t2: Dictionary = (space as Dictionary).get("target", {})
+				if str(t2.get("kind", "")) == "prop":
+					enterable[str(t2.get("prop_id", ""))] = true
+		for poly3 in loader.call("nav_solid_footprints", enterable):
+			out.append({"poly": poly3, "flags": NpcNavGrid.F_BLOCKED | NpcNavGrid.F_STRUCTURE})
 	return out
+
+
+func _camp_revision(main: Node) -> int:
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader == null or not loader.has_method("camp_structure_count"):
+		return 0
+	return int(loader.call("camp_structure_count"))
+
+
+# --- beds ---------------------------------------------------------------------
+
+## Sleep AREA spaces -> the shelters inside them, expanded one entry per
+## sleeper and ordered so slot k wraps round the shelters. Refreshed when
+## the camps or props change.
+func _resolve_sleep_spots(main: Node, registry: SpaceRegistry) -> void:
+	if registry == null:
+		return
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader == null or not loader.has_method("camp_shelters_in_polygon"):
+		return
+	var rev := _prop_revision(main) * 7919 + _camp_revision(main) * 31 + registry.spaces.size()
+	if rev == _sleep_spots_rev:
+		return
+	_sleep_spots_rev = rev
+	_sleep_spots = {}
+	for item in registry.spaces_of_type("sleep"):
+		var space: Dictionary = item
+		var tgt: Dictionary = space.get("target", {})
+		if str(tgt.get("kind", "")) != "area":
+			continue
+		var poly := SpaceRegistry.poly_points(tgt.get("poly", []) as Array)
+		var shelters: Array = loader.call("camp_shelters_in_polygon", poly)
+		if shelters.is_empty():
+			continue
+		_sleep_spots[str(space.get("id", ""))] = _expand_beds(shelters)
+
+
+## One entry per sleeper per shelter, scattered inside its footprint, so a
+## tent of two shows two people lying in it rather than one point.
+static func _expand_beds(shelters: Array) -> Array:
+	var out: Array = []
+	for s in shelters:
+		var sd: Dictionary = s
+		var n := maxi(int(sd.get("sleeps", 2)), 1)
+		var yaw := float(sd.get("yaw", 0.0))
+		var p: Vector2 = sd["pos"]
+		# Along the shelter's long axis (local +X -> world (cos, -sin)).
+		var axis := Vector2(cos(yaw), -sin(yaw))
+		for k in n:
+			var off := (float(k) - float(n - 1) * 0.5) * 0.8
+			out.append({"pos": p + axis * off, "yaw": yaw})
+	return out
+
+
+func _bed_spot(sid: String, k: int) -> Dictionary:
+	var beds: Array = _sleep_spots.get(sid, [])
+	if beds.is_empty():
+		return {}
+	return beds[maxi(k, 0) % beds.size()]
+
+
+## The expanded beds of the camp standing at `home` (the light tier's home
+## slots), or an empty array when there is no camp there.
+func _home_beds(main: Node, home: Vector2) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader == null or not loader.has_method("camp_area_at") or not loader.has_method("camp_shelters_in_polygon"):
+		return out
+	var cid := str(loader.call("camp_area_at", home))
+	if cid.is_empty():
+		return out
+	var layer: Variant = loader.get("camp_areas")
+	if layer == null:
+		return out
+	var rec: Dictionary = layer.get_area(cid)
+	var poly: PackedVector2Array = rec.get("polygon", PackedVector2Array())
+	for b in _expand_beds(loader.call("camp_shelters_in_polygon", poly)):
+		out.append((b as Dictionary)["pos"])
+	return out
+
+
+# --- the fire perimeter on the nav grid ----------------------------------------
+
+## Stamp (or clear) the effigy's perimeter as the fire moves through its
+## phases, so nobody walks INTO the fall radius or the pile.
+func _apply_fire_perimeter(sid: String, centre: Vector2, st: Dictionary) -> void:
+	var phase := int(st.get("phase", -1))
+	var r := 0.0
+	if phase == VenueCrowd.EffigyPhase.BURNING or phase == VenueCrowd.EffigyPhase.CIRCLING \
+			or phase == VenueCrowd.EffigyPhase.AFTER:
+		r = float(st.get("safe_r", 0.0))
+	var prev: Dictionary = _fire_stamps.get(sid, {})
+	if absf(float(prev.get("r", 0.0)) - r) < 0.01 and prev.get("centre", Vector2.INF) == centre:
+		return
+	if _nav_grid != null and _nav_grid.is_ready():
+		if not prev.is_empty() and float(prev.get("r", 0.0)) > 0.0:
+			_nav_grid.clear_flags_in_circle(prev.get("centre", centre), float(prev["r"]), NpcNavGrid.F_BLOCKED)
+		_stamp_fire(centre, r)
+		if _nav_query != null:
+			_nav_query.setup(_nav_grid)   # routes through the old ground are stale
+	if r > 0.0:
+		_fire_stamps[sid] = {"centre": centre, "r": r}
+	else:
+		_fire_stamps.erase(sid)
+
+
+## The fire perimeters as [{centre, r}] for straight-line detours.
+func _no_go_circles() -> Array:
+	var out: Array = []
+	for sid in _fire_stamps:
+		out.append(_fire_stamps[sid])
+	return out
+
+
+func _stamp_fire(centre: Vector2, r: float) -> void:
+	if r <= 0.0 or _nav_grid == null or not _nav_grid.is_ready():
+		return
+	_nav_grid.clear_flags_in_circle(centre, r, 0, NpcNavGrid.F_BLOCKED)
 
 
 ## Walkable surfaces ABOVE the ground at a point — deck levels, upper floors.
@@ -1542,6 +1726,103 @@ func has_engine(item_id: String) -> bool:
 
 func active() -> bool:
 	return not _engines.is_empty() or not _cohorts.is_empty()
+
+
+## The venue states this tick resolved: {space_id: NpcVenueState dict}.
+func venue_states() -> Dictionary:
+	return _venue_states
+
+
+func venue_state(space_id: String) -> Dictionary:
+	return _venue_states.get(space_id, {})
+
+
+## A stage's {front: Vector2, fwd: Vector2} this tick ({} for anything else).
+func venue_front(space_id: String) -> Dictionary:
+	return _venue_fronts.get(space_id, {})
+
+
+func event_active() -> bool:
+	return _event_active
+
+
+## Last tick's population region ({anchors, center, half}); {} before the
+## first tick. The crowd renderer sizes its height raster from it.
+func population_region() -> Dictionary:
+	return _last_region
+
+
+## Resolve every venue's live state once per tick. An effigy reads the burn
+## record off its tagged prop (FireTimeline, pure); stages get a front edge
+## and facing — `facing_deg` when set, else toward the mean of the sleep
+## spaces (the camps), else south.
+func _resolve_venues(main: Node, registry: SpaceRegistry, abs_h: float, hour: float) -> void:
+	_venue_states = {}
+	_venue_fronts = {}
+	_event_active = false
+	if registry == null:
+		return
+	var changed: Array = []
+	var camps := Vector2.ZERO
+	var n_camps := 0
+	for rec in registry.spaces_of_type("sleep"):
+		var p: Variant = registry.cached_position(str((rec as Dictionary).get("id", "")))
+		if p is Vector2:
+			camps += p
+			n_camps += 1
+	if n_camps > 0:
+		camps /= float(n_camps)
+	for stype in SpaceTypes.VENUE_TYPES:
+		for item in registry.spaces_of_type(str(stype)):
+			var space: Dictionary = item
+			var sid := str(space.get("id", ""))
+			var fire_rec: Dictionary = {}
+			if str(stype) == "effigy":
+				var tgt: Dictionary = space.get("target", {})
+				if str(tgt.get("kind", "")) == "prop":
+					var prop := PlacedPropService.get_prop_record(main, str(tgt.get("prop_id", "")))
+					var burn: Variant = prop.get("burn", {})
+					if burn is Dictionary:
+						fire_rec = burn
+			var st := NpcVenueState.resolve(space, hour, abs_h, fire_rec)
+			_venue_states[sid] = st
+			if bool(st.get("event", false)):
+				_event_active = true
+			var key := "%d|%s" % [int(st.get("phase", -1)),
+				str(bool(st.get("active", true)) and bool(st.get("programmed", false)))]
+			if _venue_phase_keys.has(sid) and str(_venue_phase_keys[sid]) != key:
+				changed.append(sid)
+			_venue_phase_keys[sid] = key
+			if str(stype) == "effigy":
+				var ec: Variant = registry.cached_position(sid)
+				if ec is Vector2:
+					_apply_fire_perimeter(sid, ec, st)
+			if str(stype) == "stage":
+				var centre: Variant = registry.cached_position(sid)
+				if centre is Vector2:
+					var facing := float(space.get("facing_deg", -1.0))
+					var fwd := Vector2(0.0, 1.0)
+					if facing >= 0.0:
+						# Compass degrees, CelestialClock convention: north −Z, east +X.
+						fwd = Vector2(sin(deg_to_rad(facing)), -cos(deg_to_rad(facing)))
+					elif n_camps > 0:
+						fwd = VenueCrowd.stage_facing(centre, camps)
+					var tgt2: Dictionary = space.get("target", {})
+					var poly := PackedVector2Array()
+					if str(tgt2.get("kind", "")) == "area":
+						poly = SpaceRegistry.poly_points(tgt2.get("poly", []) as Array)
+					_venue_fronts[sid] = {"front": VenueCrowd.stage_front(centre, poly, fwd), "fwd": fwd}
+	# A phase change re-seats the LIGHT tier now (the full tier re-seats
+	# every step on its own).
+	for sid in changed:
+		for iid in _cohorts:
+			(_cohorts[iid] as CrowdCohort).wake_at_venue(str(sid), abs_h)
+	# The first tick of an EVENT: everyone idle or at another venue looks
+	# round (the full tier does the same check itself in _step_doing).
+	if _event_active and not _event_was:
+		for iid in _cohorts:
+			(_cohorts[iid] as CrowdCohort).wake_for_event(abs_h)
+	_event_was = _event_active
 
 
 ## The registry agents will read this map (loader-owned or scene fallback) —

@@ -98,10 +98,30 @@ func rebuild_area(area: Dictionary, ctx: Dictionary, keep_items: bool = false) -
 	if not stats["over_budget"]:
 		var classes: Dictionary = result["classes"]
 		var items: Array = []
+		# ALWAYS kept, compactly: where the shelters are (people sleep in
+		# them) and which footprints are solid (people walk round them).
+		var shelters: Array = []
+		var solids: Array = []
 		for cls in classes.keys():
 			_build_class_batches(node, str(cls), classes[cls])
 			if keep_items:
 				items.append_array(classes[cls])
+			var sleeps := int(CampStyles.SHELTER_SLEEPS.get(str(cls), 0))
+			var solid := bool(CampStyles.SOLID_CLASSES.get(str(cls), false))
+			if sleeps <= 0 and not solid:
+				continue
+			for it in classes[cls]:
+				var d: Dictionary = it
+				var p: Vector3 = d.get("pos", Vector3.ZERO)
+				var entry := {"pos": Vector2(p.x, p.z), "yaw": float(d.get("yaw", 0.0)),
+					"size": d.get("size", Vector3.ONE), "cls": str(cls)}
+				if sleeps > 0:
+					entry["sleeps"] = sleeps
+					shelters.append(entry)
+				if solid:
+					solids.append(entry)
+		node.set_meta("shelters", shelters)
+		node.set_meta("solids", solids)
 		if keep_items:
 			node.set_meta("items", items)
 	_queue_glow_refresh()
@@ -140,6 +160,24 @@ func area_stats(id: String) -> Dictionary:
 func area_items(id: String) -> Array:
 	var node := get_node_or_null(_area_node_name(id))
 	return node.get_meta("items", []) if node != null else []
+
+
+## Every camp's shelters: [{pos: Vector2, yaw, size: Vector3, cls, sleeps}].
+func all_shelters() -> Array:
+	var out: Array = []
+	for child in get_children():
+		if String(child.name).begins_with("Area_"):
+			out.append_array(child.get_meta("shelters", []))
+	return out
+
+
+## Every camp's solid (walk-round) footprints: [{pos, yaw, size, cls}].
+func all_solids() -> Array:
+	var out: Array = []
+	for child in get_children():
+		if String(child.name).begins_with("Area_"):
+			out.append_array(child.get_meta("solids", []))
+	return out
 
 
 func has_area(id: String) -> bool:

@@ -4380,7 +4380,7 @@ func _test_space_tag_row() -> void:
 	_check("tag row accepts an area target", row.visible)
 
 	# Every taggable type must be offered, enrichment included.
-	_check("all space types are offered", SpaceTypes.TYPES.size() == 15,
+	_check("all space types are offered", SpaceTypes.TYPES.size() == 16,
 			"%d types" % SpaceTypes.TYPES.size())
 	for t in SpaceTypes.TYPES:
 		_check("type is valid: %s" % t, SpaceTypes.is_valid(str(t)))
@@ -4521,7 +4521,11 @@ func _separation_run(site: Dictionary) -> PackedFloat32Array:
 ## simulated day; the 0.1% bound leaves room for that while still catching any
 ## systematic bias (e.g. separation being banked as travel, or crowding
 ## starving people).
-const SEPARATION_CONSUMPTION_TOLERANCE := 0.001
+## 0.5 %, not the original 0.1 %: since spaces share their load by occupancy
+## (SpaceRegistry.SHARE_SPREAD_M), the ORDER people arrive in decides which
+## kitchen each walks to, and a separation nudge reorders arrivals — the
+## meals are the same, the walks differ. Measured 0.23 % with sharing on.
+const SEPARATION_CONSUMPTION_TOLERANCE := 0.005
 
 func _test_separation_changes_no_consumption() -> void:
 	var with_sep := _consumption_over_a_day(true)

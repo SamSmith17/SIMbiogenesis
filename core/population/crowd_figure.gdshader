@@ -28,6 +28,14 @@ uniform float rim_power : hint_range(0.5, 16.0) = 6.5;
 uniform float rim_strength : hint_range(0.0, 2.0) = 0.85;
 uniform float rim_emission : hint_range(0.0, 1.0) = 0.16;
 uniform float stride_m = 0.75;
+// Height raster over the population region (CrowdRenderer bakes it from the
+// terrain): R = ground height. Inside the rect the figure's feet follow it
+// EVERY frame along the segment; outside (or before the bake lands) the
+// segment's endpoint heights interpolate linearly — which over a hill is a
+// person in the air or under the ground, the bug this exists to fix.
+uniform sampler2D height_tex : filter_linear, repeat_disable;
+uniform vec4 height_rect = vec4(0.0, 0.0, 1.0, 1.0);   // origin.x, origin.z, size.x, size.z
+uniform float height_ready = 0.0;
 
 // Joint pivots — MUST match CrowdFigureMesh.
 const vec3 PIVOT_SHOULDER_L = vec3(-0.22, 1.42, 0.0);
@@ -44,6 +52,7 @@ const float POSE_LIE = 3.0;
 const float POSE_DANCE = 4.0;
 const float POSE_WORK = 5.0;
 const float POSE_QUEUE = 6.0;
+const float POSE_RAVE = 7.0;
 
 varying vec3 v_tint;
 
@@ -73,6 +82,12 @@ void vertex() {
 	float span = max(t1 - t0, 1e-6);
 	float u = clamp((t_rel - t0) / span, 0.0, 1.0);
 	vec3 p = mix(a, b, u);
+	if (height_ready > 0.5) {
+		vec2 huv = (p.xz - height_rect.xy) / max(height_rect.zw, vec2(1e-3));
+		if (huv.x >= 0.0 && huv.x <= 1.0 && huv.y >= 0.0 && huv.y <= 1.0) {
+			p.y = textureLod(height_tex, huv, 0.0).r;
+		}
+	}
 	vec3 seg = b - a;
 	float seg_len = length(seg.xz);
 	float dist = distance(p, CAMERA_POSITION_WORLD);
@@ -82,13 +97,18 @@ void vertex() {
 		VERTEX = vec3(0.0, 0.0, 1.0);   // behind the camera in view space: clipped
 		NORMAL = vec3(0.0, 0.0, 1.0);
 	} else {
-		float yaw = seg_len > 0.05 ? atan(seg.x, seg.z) : yaw_hint;
+		// Standing people do not all face their anchor dead-on: a per-person
+		// stance offset of up to ±25°. Walkers face where they are going.
+		float yaw = seg_len > 0.05 ? atan(seg.x, seg.z) : yaw_hint + (seed - 0.5) * 0.9;
 		bool walking = pose == POSE_WALK && u < 1.0 && seg_len > 0.05;
+		// Per-person tempo and throw, so a crowd is not a chorus line.
+		float tempo = 0.8 + seed * 0.45;
+		float throw = 0.75 + fract(seed * 7.31) * 0.5;
 		float part = floor(UV2.x * 5.0 + 0.5);
 		float frac = UV2.y;
 		vec3 v = VERTEX;
 		vec3 n = NORMAL;
-		float sway = sin(TIME * 0.9 + seed * 6.283) * 0.02;
+		float sway = sin(TIME * 0.9 * tempo + seed * 6.283) * 0.02 * throw;
 		float limb_angle = 0.0;
 		vec3 pivot = PIVOT_WAIST;
 		if (part == 2.0) { pivot = PIVOT_SHOULDER_L; }
@@ -112,10 +132,18 @@ void vertex() {
 			body_tilt = 1.5;                       // laid back on the ground
 			body_lower = 0.78;
 		} else if (pose == POSE_DANCE) {
-			float beat = TIME * 2.6 + seed * 6.283;
-			if (part == 2.0 || part == 3.0) limb_angle = -2.5 + sin(beat * 2.0) * 0.3;
-			body_lower = -abs(sin(beat)) * 0.08;
-			sway = sin(beat) * 0.05;
+			float beat = TIME * 2.6 * tempo + seed * 6.283;
+			if (part == 2.0 || part == 3.0) limb_angle = -2.5 + sin(beat * 2.0) * 0.3 * throw;
+			body_lower = -abs(sin(beat)) * 0.08 * throw;
+			sway = sin(beat) * 0.05 * throw;
+		} else if (pose == POSE_RAVE) {
+			// The bass stage: the dance thrown harder and faster — a bigger
+			// hop, arms pumping high, more sway. Distinct from a fire circle
+			// at any distance.
+			float beat = TIME * 3.6 * tempo + seed * 6.283;
+			if (part == 2.0 || part == 3.0) limb_angle = -2.7 + sin(beat * 2.0) * 0.55 * throw;
+			body_lower = -abs(sin(beat)) * 0.16 * throw;
+			sway = sin(beat) * 0.09 * throw;
 		} else if (pose == POSE_WORK) {
 			body_tilt = 0.55;                       // bent over the job
 			if (part == 2.0 || part == 3.0) limb_angle = 0.9 + sin(TIME * 2.0 + seed * 6.283) * 0.25;

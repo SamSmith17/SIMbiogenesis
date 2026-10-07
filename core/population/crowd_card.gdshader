@@ -17,6 +17,9 @@ uniform float world_size = 0.9;      // metres across when close enough to matte
 uniform float min_angular = 0.0045;  // ≈ constant on-screen size beyond the crossover
 uniform float max_world_size = 40.0;
 uniform float night_glow = 0.0;      // lifted at night so the field reads like lights
+uniform sampler2D height_tex : filter_linear, repeat_disable;
+uniform vec4 height_rect = vec4(0.0, 0.0, 1.0, 1.0);
+uniform float height_ready = 0.0;
 
 varying vec3 v_tint;
 varying float v_show;
@@ -30,7 +33,14 @@ void vertex() {
 	v_tint = COLOR.rgb;
 	float span = max(t1 - t0, 1e-6);
 	float u = clamp((t_rel - t0) / span, 0.0, 1.0);
-	vec3 p = mix(a, b, u) + vec3(0.0, 0.9, 0.0);   // chest height
+	vec3 p = mix(a, b, u);
+	if (height_ready > 0.5) {
+		vec2 huv = (p.xz - height_rect.xy) / max(height_rect.zw, vec2(1e-3));
+		if (huv.x >= 0.0 && huv.x <= 1.0 && huv.y >= 0.0 && huv.y <= 1.0) {
+			p.y = textureLod(height_tex, huv, 0.0).r;
+		}
+	}
+	p += vec3(0.0, 0.9, 0.0);   // chest height
 	vec4 origin_view = VIEW_MATRIX * vec4(p, 1.0);
 	float dist = max(-origin_view.z, 0.001);
 	float far = distance(p, CAMERA_POSITION_WORLD);

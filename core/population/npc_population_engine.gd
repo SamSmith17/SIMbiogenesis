@@ -500,6 +500,17 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"plan_path": ctx_in.get("plan_path", Callable()),
 		"height_at": ctx_in.get("height_at", Callable()),
 		"walkable": ctx_in.get("walkable", Callable()),
+		# Live venues + the fire: what each venue is doing now (phase / set),
+		# a stage's front edge for the fan, whether an EVENT is on, beds inside
+		# shelters, and the fire perimeters a straight walk must go round. All
+		# five were added to the bridge's ctx and silently never arrived here
+		# — full-tier agents ran on the programme-only fallback (no fire, no
+		# front, no waiver) until this forwarding landed. Same trap as above.
+		"venue_state_of": ctx_in.get("venue_state_of", Callable()),
+		"venue_front_of": ctx_in.get("venue_front_of", Callable()),
+		"event_active": bool(ctx_in.get("event_active", false)),
+		"bed_spot_of": ctx_in.get("bed_spot_of", Callable()),
+		"no_go": ctx_in.get("no_go", []),
 		"routine": routine,
 		"trace": ctx_in.get("trace", Callable()),
 		"hour_of_day": float(ctx_in.get("hour_of_day", 12.0)),
@@ -841,6 +852,11 @@ func agent_dots() -> Array:
 			# yoga block from a fire circle. Already tracked per agent; it was
 			# simply never exposed.
 			"space_type": a.target_space_type,
+			# The venue's pose hint for this person's slot (VenueCrowd: sit /
+			# lie in the front rows round the burn, dance or walk the circle,
+			# rave at a live set). An INPUT to the pose machine, like
+			# work_pose — the machine stays pure.
+			"venue_pose": a.venue_pose,
 			"anim_map": anim_overrides,
 			# When the current activity ends, in absolute sim-hours. The 3D
 			# layer converts to wall-clock with the live time scale to decide

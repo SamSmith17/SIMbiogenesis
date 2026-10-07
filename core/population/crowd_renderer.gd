@@ -24,6 +24,26 @@ const REBASE_H := 24.0
 const FLAG_HIDDEN := 1.0
 const FIGURE_DIST_M := 150.0
 const CARD_DIST_M := 3000.0
+## The height raster (Phase 4b): ground heights over the population region
+## at HEIGHT_CELL_M, baked HEIGHT_SAMPLES_PER_FRAME terrain queries per frame
+## (never inline — the nav grid's TDR note applies). Until it lands the
+## shaders interpolate the segment endpoints as before. Rebuilt when the
+## region moves by more than HEIGHT_REBUILD_M or grows past its bounds.
+const HEIGHT_CELL_M := 2.0
+const HEIGHT_MAX_AXIS := 1024
+const HEIGHT_PAD_M := 80.0
+const HEIGHT_SAMPLES_PER_FRAME := 6000
+const HEIGHT_REBUILD_M := 60.0
+var _h_img: Image = null
+var _h_tex: ImageTexture = null
+var _h_origin := Vector2.ZERO
+var _h_size := Vector2.ONE
+var _h_nx := 0
+var _h_nz := 0
+var _h_cursor := 0
+var _h_ready := false
+var _h_region_center := Vector2.INF
+var _h_region_half := 0.0
 
 var _bridge = null
 var _main: Node = null
@@ -95,6 +115,7 @@ func _process(_delta: float) -> void:
 		var t_rel := float(_main.call("get_absolute_hours")) - _time_base
 		_fig_mat.set_shader_parameter("t_rel", t_rel)
 		_card_mat.set_shader_parameter("t_rel", t_rel)
+	_service_height_raster()
 	var gen := NpcDisplayPrefs.generation()
 	if gen != _last_pref_gen:
 		_last_pref_gen = gen
@@ -197,6 +218,68 @@ func write_slot(c: CrowdCohort, i: int, slot: int) -> void:
 	_mm_fig.set_instance_color(slot, col)
 	_mm_card.set_instance_transform(slot, xf)
 	_mm_card.set_instance_color(slot, col)
+
+
+## The height raster: sized from the bridge's population region, baked a
+## slice per frame, pushed to both shaders when complete. Endpoint heights
+## (write_slot) stay as the fallback outside the rect.
+func _service_height_raster() -> void:
+	if _bridge == null or not _bridge.has_method("population_region"):
+		return
+	var region: Dictionary = _bridge.call("population_region")
+	if region.is_empty():
+		return
+	var center: Vector2 = region.get("center", Vector2.ZERO)
+	var half := float(region.get("half", 0.0)) + HEIGHT_PAD_M
+	var need_new := _h_img == null \
+		or _h_region_center == Vector2.INF \
+		or center.distance_to(_h_region_center) > HEIGHT_REBUILD_M \
+		or half > _h_region_half + 1.0
+	if need_new:
+		_begin_height_raster(center, half)
+	if _h_img == null or _h_ready:
+		return
+	var total := _h_nx * _h_nz
+	var done := 0
+	while _h_cursor < total and done < HEIGHT_SAMPLES_PER_FRAME:
+		var ix := _h_cursor % _h_nx
+		var iz := _h_cursor / _h_nx
+		var x := _h_origin.x + (float(ix) + 0.5) * HEIGHT_CELL_M
+		var z := _h_origin.y + (float(iz) + 0.5) * HEIGHT_CELL_M
+		_h_img.set_pixel(ix, iz, Color(TerrainSurfaceQuery.ground_height_at(_main, x, z), 0.0, 0.0, 1.0))
+		_h_cursor += 1
+		done += 1
+	if _h_cursor >= total:
+		_h_ready = true
+		if _h_tex == null:
+			_h_tex = ImageTexture.create_from_image(_h_img)
+		else:
+			_h_tex.update(_h_img)
+		var rect := Vector4(_h_origin.x, _h_origin.y, _h_size.x, _h_size.y)
+		for m in [_fig_mat, _card_mat]:
+			m.set_shader_parameter("height_tex", _h_tex)
+			m.set_shader_parameter("height_rect", rect)
+			m.set_shader_parameter("height_ready", 1.0)
+
+
+func _begin_height_raster(center: Vector2, half: float) -> void:
+	var n := clampi(int(ceil(half * 2.0 / HEIGHT_CELL_M)), 4, HEIGHT_MAX_AXIS)
+	_h_nx = n
+	_h_nz = n
+	_h_size = Vector2(float(n), float(n)) * HEIGHT_CELL_M
+	_h_origin = center - _h_size * 0.5
+	_h_region_center = center
+	_h_region_half = half
+	_h_cursor = 0
+	_h_ready = false
+	_h_img = Image.create(n, n, false, Image.FORMAT_RF)
+	# A new size needs a new texture (update() requires matching dimensions).
+	_h_tex = null
+	# The old raster (if any) keeps serving until the new one lands.
+
+
+func height_raster_ready() -> bool:
+	return _h_ready
 
 
 ## Ground height at a point, memoised on a 0.5 m grid (segment endpoints

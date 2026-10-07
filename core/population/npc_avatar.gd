@@ -66,6 +66,10 @@ var _morale_trend := 0.0
 ## crosshair grants FOCUS (which also shows the name). Either shows the bar.
 var _ambient := false
 var _focus := false
+## 0..1 fade of the ambient readout with distance (host-driven); the bar
+## and tag fade out across the last metres instead of popping.
+var _ambient_alpha := 1.0
+var _venue_pose := ""
 var _moving := false
 var _lying := false
 
@@ -298,7 +302,9 @@ func _update_status_bar() -> void:
 	# progress-bar trick).
 	_bar_fill.position.x = -STATUS_BAR_WIDTH * 0.5 * (1.0 - frac)
 	if _bar_fill_mat != null:
-		_bar_fill_mat.albedo_color = NpcMorale.color(morale)
+		var fill_col := NpcMorale.color(morale)
+		fill_col.a = 1.0 if _focus else _ambient_alpha
+		_bar_fill_mat.albedo_color = fill_col
 	if _task_lbl != null:
 		_task_lbl.text = _task_text
 	if _trend_lbl != null:
@@ -375,6 +381,43 @@ func set_ambient_status(on: bool) -> void:
 	_refresh_overhead()
 
 
+## How faded the ambient readout is (1 = full, 0 = gone). Set by the host
+## from distance so a bar never pops in or out; a crowd's far readouts
+## thin to nothing instead of stacking into a wall of tags.
+func set_ambient_alpha(a: float) -> void:
+	a = clampf(a, 0.0, 1.0)
+	if absf(a - _ambient_alpha) < 0.01:
+		return
+	_ambient_alpha = a
+	if _status_root != null and _status_root.visible:
+		_apply_ambient_alpha()
+
+
+func _apply_ambient_alpha() -> void:
+	# Focus shows at full strength whatever the distance.
+	var a := 1.0 if _focus else _ambient_alpha
+	if _bar_fill_mat != null:
+		var c := _bar_fill_mat.albedo_color
+		c.a = a
+		_bar_fill_mat.albedo_color = c
+	if _status_root != null:
+		for child in _status_root.get_children():
+			if child is Label3D:
+				var l := child as Label3D
+				var m := l.modulate
+				m.a = 0.92 * a
+				l.modulate = m
+				var om := l.outline_modulate
+				om.a = 0.9 * a
+				l.outline_modulate = om
+			elif child is MeshInstance3D and child != _bar_fill:
+				var mat := (child as MeshInstance3D).get_surface_override_material(0) as StandardMaterial3D
+				if mat != null:
+					var tc := mat.albedo_color
+					tc.a = 0.85 * a
+					mat.albedo_color = tc
+
+
 func _refresh_overhead() -> void:
 	if _tag != null:
 		_tag.visible = _focus
@@ -389,8 +432,11 @@ func _refresh_overhead() -> void:
 			# refresh) — catch up right as it shows.
 			_status_root.visible = true
 			_update_status_bar()
+			_apply_ambient_alpha()
 		else:
 			_status_root.visible = show
+			if show:
+				_apply_ambient_alpha()
 
 
 ## pos = ground point (feet); yaw = facing; moving/activity drive animation.
@@ -428,6 +474,7 @@ func _drive(dt: float, inp: Dictionary) -> void:
 	_moving = bool(inp.get("in_transit", false))
 	_activity = str(inp.get("activity", ""))
 	_space_type = str(inp.get("space_type", ""))
+	_venue_pose = str(inp.get("venue_pose", ""))
 	_apparent_speed = float(inp.get("apparent_speed_mps", WALK_SPEED_MPS))
 	_time_mult = clampf(float(inp.get("time_mult", 1.0)), 0.05, NpcRig.MAX_PLAYBACK_RATE)
 	_carrying = bool(inp.get("carrying", false))
@@ -616,6 +663,9 @@ func _process(delta: float) -> void:
 			flavor = "heavy"
 		elif _moving and _activity == "bladder":
 			flavor = "urgent"
+		elif _venue_pose == VenueCrowd.POSE_RAVE:
+			# The bass stage: the same dance, thrown harder and faster.
+			flavor = "rave"
 		_simple.set_carry_box_suppressed(_carry_prop_live)
 		_simple.pose(_machine.clip(), _speed_scale, delta, flavor)
 		return
@@ -686,6 +736,13 @@ func _ensure_visuals() -> void:
 	add_child(_root)
 	_simple = NpcSimpleFigure.new()
 	_simple.setup(agent_id, _tint)
+	# The stick figure is BUILT facing +Z (its knees bend toward -Z, its
+	# carry box hangs at +Z) while the avatar's forward is -Z — the host's
+	# travel yaw rotates -Z onto the direction of travel, and the rigged body
+	# gets its half-turn from NpcRig.model_yaw_offset(). The simple body never
+	# got one, so every stylised figure walked backwards and faced away from
+	# whatever it was looking at.
+	_simple.rotation.y = PI
 	_root.add_child(_simple)
 	_build_nametag()
 	_build_status_bar()

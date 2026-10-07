@@ -76,6 +76,10 @@ var _anchor_age := 0.0
 
 var _activity := ""
 var _space_type := ""
+## The venue's pose hint for this person's slot (VenueCrowd: sit / lie in the
+## front rows at the burn, dance or walk the circle, rave at a live set).
+## An input, never derived here — the machine stays pure.
+var _venue_pose := ""
 var _sad := false
 ## Hauling a load this frame (Site Projects carry leg). Arrives as a step()
 ## INPUT — the machine has no back-channel to the sim — and only ever affects
@@ -123,7 +127,7 @@ func pose_slot() -> String:
 const SLOTS: Array = [
 	"sleep", "hunger", "bladder", "hygiene", "thirst", "chore", "idle",
 	"fire_circle", "movement", "quiet", "workshop_social",
-	"stage", "temple", "center_camp", "art",
+	"stage", "temple", "center_camp", "art", "effigy",
 ]
 
 
@@ -199,12 +203,17 @@ func step(dt: float, inp: Dictionary) -> void:
 	var dwell := float(inp.get("dwell_left_s", 0.0))
 	_carrying = bool(inp.get("carrying", false))
 	_work_pose = str(inp.get("work_pose", ""))
+	var venue_pose := str(inp.get("venue_pose", ""))
 	_update_mood(float(inp.get("morale", 1.0)))
 	_playback_rate = maxf(float(inp.get("playback_rate", 1.0)), 0.05)
 
-	var activity_changed := activity != _activity or space_type != _space_type
+	# A venue pose change (the front row stands up when the pile lands) is a
+	# change of activity as far as the figure is concerned.
+	var activity_changed := activity != _activity or space_type != _space_type \
+		or venue_pose != _venue_pose
 	_activity = activity
 	_space_type = space_type
+	_venue_pose = venue_pose
 
 	# --- aborts, before any state logic -----------------------------------
 	# The sim jumped (high time scale, catch-up, or a >25 m snap). Whatever the
@@ -339,7 +348,22 @@ func _pose_clip() -> String:
 			var want := NpcWorkPose.clip_for(fam)
 			return want if _has(want) else NpcRig.CLIP_WORK
 		"enrichment":
+			# The venue's hint for this slot wins over the per-type default:
+			# the same effigy seats its front row and stands its back rows.
+			match _venue_pose:
+				VenueCrowd.POSE_LIE:
+					return NpcRig.CLIP_SLEEP
+				VenueCrowd.POSE_SIT:
+					return NpcRig.CLIP_SIT
+				VenueCrowd.POSE_CLAP:
+					return NpcRig.CLIP_CLAP if _has(NpcRig.CLIP_CLAP) else _idle_clip()
+				VenueCrowd.POSE_DANCE, VenueCrowd.POSE_RAVE:
+					return NpcRig.CLIP_DANCE
+				VenueCrowd.POSE_STAND, VenueCrowd.POSE_WALK:
+					return _idle_clip()
 			match _space_type:
+				"effigy":
+					return NpcRig.CLIP_CLAP if _has(NpcRig.CLIP_CLAP) else _idle_clip()
 				"movement":
 					return NpcRig.CLIP_EXERCISE
 				"fire_circle":

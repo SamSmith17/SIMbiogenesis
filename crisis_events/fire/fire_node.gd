@@ -138,17 +138,42 @@ const SURFACE_EMBER_AMOUNT : int = 60
 ## the base (fire_ash.gdshader `collapse`), throws up a flare, and a FireAshPile
 ## over the footprint takes over — bonfire, embers, ash. `dissolve` 0.65 is 75 %
 ## of the surface consumed (measured against the shader's noise, see there).
-const COLLAPSE_AT_DISSOLVE : float = 0.65
+const COLLAPSE_AT_DISSOLVE : float = FireTimeline.DISSOLVE_AT_COLLAPSE
 ## Dissolve value by which every last scrap is gone (reached as it lands).
-const COLLAPSE_END_DISSOLVE : float = 1.35
-enum BurnPhase { BURNING, COLLAPSING, PILE }
-var burn_phase : BurnPhase = BurnPhase.BURNING
+const COLLAPSE_END_DISSOLVE : float = FireTimeline.DISSOLVE_GONE
+## --- The fire is a function of SIM TIME ------------------------------------
+## `burn_rec` is the FireTimeline record (see fire_timeline.gd). This node does
+## not integrate anything: every frame it asks FireTimeline what the fire
+## looks like at the clock's absolute hour and RECONCILES the scene to it, so
+## scrubbing the clock backwards stands the structure up again and the whole
+## life — ignition, climb, collapse, bonfire, embers, ash — runs at the same
+## rate as the rest of the world. The record is written only when something
+## HAPPENS: ignition (FireEvent), spraying (holds), going out, the player
+## editing a duration. For a placed prop it is persisted on the prop record
+## under "burn" (so it survives a reload and a prop rebuild); for a scene
+## structure it lives here.
+var burn_rec : Dictionary = {}
+var prop_id : String = ""
+## The phase this node last rendered (-1 = nothing yet). Transitions are what
+## fire the one-shots (the whoosh) and the event signal.
+var _last_phase : int = -1
+var _last_out : bool = false
 var ash_pile : FireAshPile = null
-var _collapse_t : float = 0.0
-var _collapse_seconds : float = 1.5
-var _collapse_from_dissolve : float = 0.0
 var _whooshed : bool = false
 var _extinguish_signalled : bool = false
+var _record_dirty : bool = false
+var _record_flush_t : float = 0.0
+var _hold_open : bool = false
+var _meshes_burned : bool = false
+var _eaten : bool = false
+var _clock_node : Node = null
+var _abs_h_fallback : float = 0.0
+var _disposed : bool = false
+var _damaged_this_frame : bool = false
+var _flushed_once : bool = false
+const RECORD_FLUSH_SECONDS : float = 1.0
+## Intensity targets by phase; the extinguisher pulls against these.
+const INTENSITY_RECOVER_PER_SEC : float = 12.0
 
 ## 0 = just lit at the base, 1 = the front has reached the top.
 var burn_progress : float = 0.0
@@ -163,6 +188,10 @@ var _burn_step : int = -1
 var _char_mat : ShaderMaterial = null
 var _ash_mat : ShaderMaterial = null
 var _charred : Array[MeshInstance3D] = []
+var _surface_area_m2 : float = 0.0
+var _engulfed : bool = false
+## Total triangle area of the last sample_surface_points call (m2).
+static var _last_sampled_area_m2 : float = 0.0
 
 static var _cached_fire_count : int = 0
 static var _last_fire_count_update_sec : float = -1000.0
@@ -235,8 +264,19 @@ static func regenerate_meshes_under(root: Node) -> int:
 	FireAshPile.clear_for(root)
 	if root is PlacedProp:
 		(root as PlacedProp).clear_burned_flag()
+		_forget_prop_burn((root as PlacedProp).prop_id)
 	invalidate_flammable_mesh_cache()
 	return restored
+
+
+## Drop a prop's burn record (Restore). Its FireNode sees the record gone on
+## its next frame and disposes itself, pile and all.
+static func _forget_prop_burn(pid: String) -> void:
+	if pid.is_empty():
+		return
+	var loader := ServiceLocator.terrain_loader()
+	if loader != null and loader.has_method("clear_prop_burn_record"):
+		loader.call("clear_prop_burn_record", pid)
 
 
 static func _is_ancestor(ancestor: Node, node: Node) -> bool:
@@ -269,6 +309,7 @@ static func _restore_burned_mesh(mesh: MeshInstance3D) -> void:
 	while n != null:
 		if n is PlacedProp:
 			(n as PlacedProp).clear_burned_flag()
+			_forget_prop_burn((n as PlacedProp).prop_id)
 			break
 		n = n.get_parent()
 
@@ -294,6 +335,8 @@ static func _register_burned_mesh(mesh: MeshInstance3D) -> void:
 
 func _ready() -> void:
 	add_to_group("fire_nodes")
+	if not prop_id.is_empty():
+		set_meta("prop_id", prop_id)
 	_creation_time = Time.get_ticks_msec() / 1000.0
 	spread_timer = randf() * SPREAD_CHECK_INTERVAL
 	_cluster_check_timer = randf() * _CLUSTER_CHECK_INTERVAL
@@ -633,93 +676,583 @@ func _create_detection_area() -> void:
 	add_child(detection_area)
 
 func _process(delta: float) -> void:
+	if _disposed:
+		return
 	# Real-time flicker (not affected by sim speed)
 	_flicker_time += delta
-	
-	# Get time scale for simulation-dependent effects ONLY
-	var time_scale := _get_time_scale()
-	var sim_hours := delta * time_scale
-	
-	# Check if being sprayed
-	var being_sprayed := spray_bodies.size() > 0
-	if being_sprayed :
-		_had_extinguisher_help = true
+	var t := _clock_hours(delta)
 
-	# Collapsing, or burning down as a pile: the FireAshPile owns the visuals.
-	if burn_phase != BurnPhase.BURNING:
-		_process_aftermath(delta, being_sprayed)
-		return
-
-	# Periodically check if cluster manager should take over (staggered per-fire)
-	_cluster_check_timer += delta
-	if _cluster_check_timer >= _CLUSTER_CHECK_INTERVAL:
-		_cluster_check_timer -= _CLUSTER_CHECK_INTERVAL
-		_check_cluster_mode()
-
-	# Apply extinguisher damage (REAL-TIME - not sim time)
-	if being_sprayed:
-		intensity -= EXTINGUISHER_DAMAGE * delta * spray_bodies.size()
-		# Fire doesn't grow while being actively sprayed!
-	else:
-		# Natural growth only when NOT being sprayed (SIMULATION time)
-		# But only if fire is above a minimum threshold
-		if intensity > EXTINGUISH_THRESHOLD:
-			intensity += maxf(GROWTH_RATE * sim_hours, WALL_GROWTH_PER_SEC * delta)
-	
-	intensity = clampf(intensity, 0.0, 200.0)
-	_refresh_growth_tier()
-
-	# Track fire time (simulation)
-	fire_time_hours += sim_hours
+	# A placed prop's record is the authority. It can vanish (Restore, delete)
+	# and its node can be rebuilt under us (any prop edit rebuilds them all).
+	if not prop_id.is_empty():
+		if not _refresh_prop_record():
+			_dispose()
+			return
+		if burn_scope == null or not is_instance_valid(burn_scope):
+			_rebind_scope()
+			if burn_scope == null:
+				return
 
 	# The burn front. Set up on the first frame, not in _ready: the event places
 	# this node AFTER add_child, and the ignition spot is where it was placed.
 	if not _surface_setup_done:
 		_surface_setup_done = true
 		_setup_surface_burn()
-	if _surface_mode:
-		_advance_burn_front(delta, sim_hours, being_sprayed)
-		if burn_phase != BurnPhase.BURNING:
-			return  # three quarters gone: it has started to come down
+	if burn_rec.is_empty():
+		# A fire with no record (legacy caller): light it now, in memory.
+		burn_rec = FireTimeline.make(t, _estimate_durations())
 
-	# Check if extinguished - once intensity is low enough, fire is OUT
-	# No need to keep spraying once it's this low
-	if intensity <= EXTINGUISH_THRESHOLD:
-		_extinguish()
-		return
-	
-	# Update state
-	if intensity >= 150 or fire_time_hours >= ENGULF_TIME_HOURS:
-		if state != FireState.INFERNO and state != FireState.ENGULFING:
-			state = FireState.ENGULFING
-			_engulf_nearby_meshes()
-		if intensity >= 150:
-			state = FireState.INFERNO
-	elif intensity >= 100:
-		state = FireState.LARGE
-	elif intensity >= 60:
-		state = FireState.MEDIUM
+	# Check if being sprayed
+	var being_sprayed := spray_bodies.size() > 0
+	if being_sprayed:
+		_had_extinguisher_help = true
+
+	var st := FireTimeline.state_at(burn_rec, t)
+	var phase := int(st["phase"])
+	var out := bool(st["out"])
+
+	# --- record writes: the extinguisher HOLDS the climb, then puts it out ---
+	if not out and phase == FireTimeline.Phase.BURNING:
+		if being_sprayed and not _hold_open:
+			FireTimeline.begin_hold(burn_rec, t)
+			_hold_open = true
+			_record_dirty = true
+		elif not being_sprayed and _hold_open:
+			FireTimeline.end_hold(burn_rec, t)
+			_hold_open = false
+			_record_dirty = true
+	elif _hold_open:
+		FireTimeline.end_hold(burn_rec, t)
+		_hold_open = false
+		_record_dirty = true
+
+	# Intensity is the fight: it sits at the phase's level and the spray pulls
+	# it down; at the threshold the fire is OUT, written into the timeline.
+	var target := _intensity_target(st)
+	if (phase != _last_phase or out != _last_out) and not being_sprayed:
+		intensity = target  # the clock jumped (scrub, load): no slow recovery
+	if out or phase == FireTimeline.Phase.NONE:
+		intensity = move_toward(intensity, 0.0, 60.0 * delta)
+	elif being_sprayed or _damaged_this_frame:
+		if being_sprayed:
+			intensity -= EXTINGUISHER_DAMAGE * delta * spray_bodies.size()
+		_damaged_this_frame = false
+		if intensity <= EXTINGUISH_THRESHOLD:
+			FireTimeline.put_out(burn_rec, t)
+			_hold_open = false
+			_record_dirty = true
+			st = FireTimeline.state_at(burn_rec, t)
+			phase = int(st["phase"])
+			out = true
+			_reward_extinguish()
 	else:
-		state = FireState.SMALL
-	
-	# Destruction check. A surface fire collapses earlier, off the burn-away
-	# itself; this catches point fires and a front that was held back by spray.
-	if fire_time_hours >= DESTROY_TIME_HOURS:
-		_begin_collapse()
+		intensity = move_toward(intensity, target, INTENSITY_RECOVER_PER_SEC * delta)
+	intensity = clampf(intensity, 0.0, 200.0)
+
+	_apply_state(st, delta)
+
+	if phase == FireTimeline.Phase.BURNING and not out:
+		_refresh_growth_tier()
+		_cluster_check_timer += delta
+		if _cluster_check_timer >= _CLUSTER_CHECK_INTERVAL:
+			_cluster_check_timer -= _CLUSTER_CHECK_INTERVAL
+			_check_cluster_mode()
+		# Legacy per-mesh spread inside the scope (surface mode already burns the
+		# whole structure; this keeps intensity climbing on multi-mesh props).
+		_spread_wall_timer += delta
+		if _spread_wall_timer >= SPREAD_WALL_INTERVAL and intensity >= SPREAD_MIN_INTENSITY:
+			_spread_wall_timer = 0.0
+			_try_spread()
+		state = FireState.INFERNO if intensity >= 150 else (
+			FireState.LARGE if intensity >= 100 else (
+			FireState.MEDIUM if intensity >= 60 else FireState.SMALL))
+		if float(st["progress"]) >= 1.0 and state != FireState.INFERNO:
+			state = FireState.ENGULFING
+		_update_visuals_immediate()
+
+	# The event hears "extinguished" ONCE, when there is no open flame left —
+	# put out, or burned down to embers. The node itself stays: it is what
+	# draws the fire at any time the clock is scrubbed to.
+	var flame := not out and (phase == FireTimeline.Phase.BURNING
+		or phase == FireTimeline.Phase.COLLAPSING
+		or (phase == FireTimeline.Phase.PILE and float((st["look"] as Dictionary).get("flame", 0.0)) > 0.0))
+	if not flame and phase != FireTimeline.Phase.NONE and not _extinguish_signalled:
+		_extinguish_signalled = true
+		fire_extinguished.emit()
+	elif flame and _extinguish_signalled and phase == FireTimeline.Phase.BURNING:
+		_extinguish_signalled = false  # scrubbed back into the fire
+
+	_record_flush_t += delta
+	if _record_dirty and (_record_flush_t >= RECORD_FLUSH_SECONDS or out):
+		_flush_record()
+
+
+## The fire's sim clock: the first root child with `get_absolute_hours` (Main),
+## else hours accumulated from `time_scale` (the selftest rig).
+func _clock_hours(delta: float) -> float:
+	if _clock_node == null or not is_instance_valid(_clock_node):
+		_clock_node = null
+		var tree := get_tree()
+		if tree != null:
+			for child in tree.root.get_children():
+				if child.has_method("get_absolute_hours") or "time_scale" in child:
+					_clock_node = child
+					break
+	if _clock_node != null and _clock_node.has_method("get_absolute_hours"):
+		return float(_clock_node.call("get_absolute_hours"))
+	_abs_h_fallback += delta * _get_time_scale()
+	return _abs_h_fallback
+
+
+func _intensity_target(st: Dictionary) -> float:
+	match int(st["phase"]):
+		FireTimeline.Phase.BURNING:
+			return 16.0 + 134.0 * float(st["progress"])
+		FireTimeline.Phase.COLLAPSING:
+			return 150.0
+		FireTimeline.Phase.PILE:
+			return 8.0 + 52.0 * float((st["look"] as Dictionary).get("flame", 0.0))
+	return 0.0
+
+
+## --- reconcile the scene to a timeline state --------------------------------
+## Idempotent and ORDER-FREE: it must land the same picture whether the clock
+## came forward from the previous frame or jumped back a day.
+func _apply_state(st: Dictionary, delta: float) -> void:
+	var phase := int(st["phase"])
+	var out := bool(st["out"])
+	var draw_phase := phase
+	if out:
+		draw_phase = FireTimeline.out_phase(burn_rec)
+	# The whoosh is a one-shot on the way DOWN: it fires once as the fall passes
+	# its midpoint (or on a jump straight past it), never on first draw of a
+	# loaded pile, and re-arms when the clock is scrubbed back above it.
+	var first_draw := _last_phase < 0
+	if draw_phase < FireTimeline.Phase.COLLAPSING:
+		_whooshed = false
+	var landing := not first_draw and not _whooshed and (
+		(draw_phase == FireTimeline.Phase.COLLAPSING and float(st["collapse"]) >= 0.55)
+		or (draw_phase == FireTimeline.Phase.PILE and _last_phase <= FireTimeline.Phase.COLLAPSING))
+
+	# 1. The structure's meshes: standing (char / ash) or gone (pile).
+	var want_gone := draw_phase == FireTimeline.Phase.PILE
+	if want_gone != _meshes_burned:
+		_set_meshes_burned(want_gone)
+	if draw_phase == FireTimeline.Phase.NONE:
+		_clear_structure_visuals()
+	elif _surface_mode:
+		var dissolve := float(st["dissolve"])
+		if dissolve > 0.0 and not _eaten:
+			_set_eaten(true)
+		elif dissolve <= 0.0 and _eaten:
+			_set_eaten(false)
+		if not _eaten:
+			for m in _charred:  # back from "before the fire": the char returns
+				if is_instance_valid(m) and not m.has_meta("fire_char_overlay"):
+					_apply_char_overlay(m)
+		if _char_mat != null:
+			var front_y := _front_y_for(float(st["progress"]))
+			var reach := 1.5 + _burn_reach_max * clampf(float(st["progress"]) * 4.0, 0.0, 1.0) * 1.05
+			_char_mat.set_shader_parameter("front_y", front_y + _char_soft_m() * 0.5)
+			_char_mat.set_shader_parameter("reach_m", reach)
+			_char_mat.set_shader_parameter("char_all", float(st["char_all"]))
+			_char_mat.set_shader_parameter("ember", 0.0 if out else 1.0)
+		if _ash_mat != null:
+			_ash_mat.set_shader_parameter("dissolve", dissolve)
+			_ash_mat.set_shader_parameter("collapse", float(st["collapse"]))
+	burn_progress = float(st["progress"])
+
+	# 2. Our own emitters only burn the standing structure.
+	var own_fire := draw_phase == FireTimeline.Phase.BURNING and not out
+	if _surface_mode and own_fire:
+		var step := int(burn_progress * float(BURN_STEPS))
+		if float(st["dissolve"]) > 0.0:
+			# The top goes first, so the flames come down with what is left of it.
+			step = 1000 + int(float(st["dissolve"]) / COLLAPSE_AT_DISSOLVE * 6.0)
+		if step != _burn_step:
+			_burn_step = step
+			var h := _burn_top_y - _burn_base_y
+			if step >= 1000:
+				_rebuild_emission_points(lerpf(_burn_top_y, _burn_base_y + h * 0.3,
+					float(st["dissolve"]) / COLLAPSE_AT_DISSOLVE), 1.0e9, h)
+			else:
+				_rebuild_emission_points(_front_y_for(burn_progress),
+					1.5 + _burn_reach_max * clampf(burn_progress * 4.0, 0.0, 1.0) * 1.05)
+		if burn_progress >= 1.0 and _last_phase == FireTimeline.Phase.BURNING and not _engulfed:
+			_engulfed = true
+			_engulf_nearby_meshes()
+	if not own_fire:
+		for ps: GPUParticles3D in [flame_particles, smoke_particles, ember_particles, ignition_particles]:
+			if ps != null:
+				ps.emitting = false
+		if indicator_mesh != null:
+			indicator_mesh.visible = false
+		for l: OmniLight3D in [fire_light, fire_light_2]:
+			if l != null:
+				l.light_energy = lerpf(l.light_energy, 0.0, 0.15)
+
+	# 3. The pile: exists from the collapse on, drawn from the state.
+	var want_pile := draw_phase >= FireTimeline.Phase.COLLAPSING
+	if want_pile and (ash_pile == null or not is_instance_valid(ash_pile)):
+		_spawn_pile()
+	elif not want_pile and ash_pile != null and is_instance_valid(ash_pile):
+		ash_pile.queue_free()
+		ash_pile = null
+	if ash_pile != null and is_instance_valid(ash_pile):
+		if draw_phase == FireTimeline.Phase.COLLAPSING:
+			ash_pile.set_rise(float(st["collapse"]))
+			ash_pile.set_look(FireAshPile.look(0.0, FireTimeline.bonfire_h(burn_rec),
+				FireTimeline.ember_h(burn_rec)), out)
+			if landing:
+				_whooshed = true
+				ash_pile.whoosh()  # it hits its own fire
+			global_position = ash_pile.global_position + Vector3(0.0, ash_pile.height, 0.0)
+		elif draw_phase == FireTimeline.Phase.PILE:
+			ash_pile.set_rise(1.0)
+			ash_pile.set_look(st["look"] as Dictionary, out)
+			if landing:
+				_whooshed = true
+				ash_pile.whoosh()  # a jump straight past the fall still lands
+			global_position = ash_pile.global_position + Vector3(0.0, ash_pile.height, 0.0)
+
+	# 4. The state line for the HUD.
+	if draw_phase == FireTimeline.Phase.PILE:
+		var flame := float((st["look"] as Dictionary).get("flame", 0.0))
+		state = FireState.MEDIUM if flame > 0.5 else FireState.SMALL
+	_last_phase = draw_phase
+	_last_out = out
+
+
+## Hide the structure (it has fallen into the pile) or stand it up again.
+func _set_meshes_burned(gone: bool) -> void:
+	_meshes_burned = gone
+	var meshes: Array[MeshInstance3D] = _charred.duplicate()
+	for m in burning_meshes:
+		if is_instance_valid(m) and m not in meshes:
+			meshes.append(m)
+	if target_mesh != null and is_instance_valid(target_mesh) and target_mesh not in meshes:
+		meshes.append(target_mesh)
+	for mesh in meshes:
+		if mesh == null or not is_instance_valid(mesh):
+			continue
+		if gone:
+			mesh.set_meta("fire_active", false)
+			_burn_out_mesh(mesh)
+			mesh_destroyed.emit(mesh)
+		else:
+			mesh.visible = true
+			if mesh.has_meta("fire_burned"):
+				mesh.remove_meta("fire_burned")
+			mesh.set_meta("fire_active", true)
+	if not gone:
+		var n: Node = burn_scope
+		if n is PlacedProp:
+			(n as PlacedProp).clear_burned_flag()
+		invalidate_flammable_mesh_cache()
+
+
+## Clock scrubbed to before the ignition: the structure as it was.
+func _clear_structure_visuals() -> void:
+	if _eaten:
+		_set_eaten(false)
+	for m in _charred:
+		if is_instance_valid(m):
+			_clear_char_overlay(m)
+	if _char_mat != null:
+		_char_mat.set_shader_parameter("char_all", 0.0)
+	_burn_step = -1
+
+
+## Swap the structure's own materials for the dissolving ash material (the
+## char overlay is REMOVED: it redraws the whole mesh and would fill the holes
+## back in), or put them back when the clock runs the other way.
+func _set_eaten(on: bool) -> void:
+	_eaten = on
+	if on:
+		if _ash_mat == null:
+			_ash_mat = ShaderMaterial.new()
+			_ash_mat.shader = ASH_SHADER
+			_ash_mat.set_shader_parameter("base_y", _burn_base_y)
+			_ash_mat.set_shader_parameter("top_y", _burn_top_y)
+			var foot := _pile_footprint()
+			var c: Vector3 = foot["centre"]
+			_ash_mat.set_shader_parameter("pile_xz", Vector2(c.x, c.z))
+			_ash_mat.set_shader_parameter("pile_radius", foot["radius"])
+			_ash_mat.set_shader_parameter("pile_h", foot["pile_h"])
+		for m in _charred:
+			if not is_instance_valid(m):
+				continue
+			if not m.has_meta("fire_pre_burn_override"):
+				m.set_meta("fire_pre_burn_override", m.material_override)
+			m.material_override = _ash_mat
+			m.material_overlay = null
+	else:
+		for m in _charred:
+			if not is_instance_valid(m):
+				continue
+			if m.has_meta("fire_pre_burn_override"):
+				m.material_override = m.get_meta("fire_pre_burn_override") as Material
+				m.remove_meta("fire_pre_burn_override")
+			else:
+				m.material_override = null
+			_apply_char_overlay(m)
+
+
+## The pile is heaped over the footprint of the BASE (the bottom quarter of
+## the structure), not of its widest part — an overhanging top falls inward.
+func _pile_footprint() -> Dictionary:
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	var base_y := global_position.y
+	var h := 1.0
+	if _burn_points.size() >= 8:
+		h = maxf(_burn_top_y - _burn_base_y, 0.01)
+		base_y = _burn_base_y
+		var cut := _burn_base_y + maxf(h * 0.25, 0.3)
+		for p in _burn_points:
+			if p.y > cut:
+				break  # sorted by height
+			lo = lo.min(Vector2(p.x, p.z))
+			hi = hi.max(Vector2(p.x, p.z))
+	else:
+		var meshes: Array[MeshInstance3D] = burning_meshes.duplicate()
+		if target_mesh != null and is_instance_valid(target_mesh) and target_mesh not in meshes:
+			meshes.append(target_mesh)
+		var top := -INF
+		base_y = INF
+		for m in meshes:
+			if m == null or not is_instance_valid(m) or m.mesh == null:
+				continue
+			var box := _mesh_world_aabb(m)
+			lo = lo.min(Vector2(box.position.x, box.position.z))
+			hi = hi.max(Vector2(box.end.x, box.end.z))
+			base_y = minf(base_y, box.position.y)
+			top = maxf(top, box.end.y)
+		if base_y == INF:
+			base_y = _find_ground_level()
+		else:
+			h = maxf(top - base_y, 0.01)
+	if lo.x > hi.x:
+		lo = Vector2(global_position.x, global_position.z)
+		hi = lo
+	var mid := (lo + hi) * 0.5
+	var radius := Vector2(maxf((hi.x - lo.x) * 0.55, 0.5), maxf((hi.y - lo.y) * 0.55, 0.5))
+	return {
+		"centre": Vector3(mid.x, base_y, mid.y),
+		"radius": radius,
+		"height": h,
+		"pile_h": minf(clampf(h * 0.12, 0.2, 1.6), minf(radius.x, radius.y) * 0.9),
+	}
+
+
+func _spawn_pile() -> void:
+	var foot := _pile_footprint()
+	ash_pile = FireAshPile.new()
+	ash_pile.name = "FireAshPile"
+	get_parent().add_child(ash_pile)
+	ash_pile.setup(foot["centre"], foot["radius"], foot["pile_h"], foot["height"], burn_scope)
+	ash_pile.adopt_emitters(flame_particles, smoke_particles, ember_particles)
+	for ps: GPUParticles3D in [flame_particles, smoke_particles, ember_particles, ignition_particles]:
+		if ps != null:
+			ps.emitting = false
+
+
+## --- the record ---------------------------------------------------------------
+
+## What this structure's burn should take, from its geometry (+ its packing
+## mass where the catalog knows it), with the player's plan on top.
+func _estimate_durations() -> Dictionary:
+	var foot := _pile_footprint()
+	var r: Vector2 = foot["radius"]
+	var mass := -1.0
+	var plan: Dictionary = {}
+	if burn_scope is PlacedProp:
+		var loader := ServiceLocator.terrain_loader()
+		if loader != null and loader.has_method("get_prop_record"):
+			var rec: Dictionary = loader.call("get_prop_record", (burn_scope as PlacedProp).prop_id)
+			if not rec.is_empty():
+				mass = float(PlacedPropRuntime.packed_spec_for_record(rec).get("mass_kg", -1.0))
+				if rec.get("fire_plan") is Dictionary:
+					plan = rec["fire_plan"]
+	var est := FireTimeline.estimate(float(foot["height"]), maxf(r.x, r.y), _surface_area_m2, mass)
+	return _with_plan(est, plan)
+
+
+## A fire lit from the estimate keeps the estimate under "auto"; the player's
+## plan overrides the durations themselves.
+static func _with_plan(est: Dictionary, plan: Dictionary) -> Dictionary:
+	var out := est.duplicate()
+	out["auto_est"] = est.duplicate()
+	for k in ["climb_h", "bonfire_h", "ember_h"]:
+		if plan.has(k):
+			out[k] = float(plan[k])
+	return out
+
+
+## The estimate for a placed prop that is NOT burning (the editor's preview):
+## the same geometry sample a fire would take, from the prop's own meshes.
+static func estimate_for_prop(prop: PlacedProp, rec: Dictionary) -> Dictionary:
+	if prop == null:
+		return {}
+	var meshes: Array = []
+	for node in prop.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		if mi != null and mi.mesh != null and mi.visible and not _is_forbidden_burn_target(mi):
+			meshes.append(mi)
+	if meshes.is_empty():
+		return {}
+	var pts := sample_surface_points(meshes, 1200)
+	if pts.size() < 8:
+		return {}
+	var h := pts[pts.size() - 1].y - pts[0].y
+	var cut := pts[0].y + maxf(h * 0.25, 0.3)
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for p in pts:
+		if p.y > cut:
+			break
+		lo = lo.min(Vector2(p.x, p.z))
+		hi = hi.max(Vector2(p.x, p.z))
+	var r := maxf(maxf((hi.x - lo.x) * 0.55, (hi.y - lo.y) * 0.55), 0.5)
+	var mass := float(PlacedPropRuntime.packed_spec_for_record(rec).get("mass_kg", -1.0))
+	return FireTimeline.estimate(h, r, _last_sampled_area_m2, mass)
+
+
+## Re-read the prop's record. False = the burn is gone (Restore / deleted).
+func _refresh_prop_record() -> bool:
+	var loader := ServiceLocator.terrain_loader()
+	if loader == null or not loader.has_method("get_prop_record"):
+		return not burn_rec.is_empty()
+	var rec: Dictionary = loader.call("get_prop_record", prop_id)
+	if rec.is_empty():
+		return false
+	var b: Variant = rec.get("burn", null)
+	if not FireTimeline.is_record(b):
+		# Nothing on the prop yet: fine until our first write has landed —
+		# after that, a missing record means Restore forgot the fire.
+		return not _flushed_once
+	if not _record_dirty:
+		burn_rec = b  # the UI may have edited a duration
+	return true
+
+
+## The prop was rebuilt (every prop edit rebuilds them all): find the new node,
+## resample it and draw the current state onto it.
+func _rebind_scope() -> void:
+	var loader := ServiceLocator.terrain_loader()
+	var prop: PlacedProp = null
+	if loader != null and loader.has_method("_find_placed_prop_node"):
+		prop = loader.call("_find_placed_prop_node", prop_id) as PlacedProp
+	if prop == null:
 		return
+	burn_scope = prop
+	burning_meshes.clear()
+	_charred.clear()
+	target_mesh = null
+	for node in prop.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		if mi != null and mi.mesh != null and not _is_forbidden_burn_target(mi):
+			target_mesh = mi
+			break
+	if target_mesh == null:
+		return
+	burning_meshes.append(target_mesh)
+	_surface_mode = false
+	_surface_setup_done = false
+	_eaten = false
+	_meshes_burned = false
+	_ash_mat = null
+	_char_mat = null
+	_burn_step = -1
+	_last_phase = -1
 
-	# Spread: wall-clock so jumps happen during normal play; sim-time as backup.
-	_spread_wall_timer += delta
-	if _spread_wall_timer >= SPREAD_WALL_INTERVAL and intensity >= SPREAD_MIN_INTENSITY:
-		_spread_wall_timer = 0.0
-		_try_spread()
-	spread_timer += sim_hours
-	if spread_timer >= SPREAD_CHECK_INTERVAL and intensity >= SPREAD_MIN_INTENSITY:
-		spread_timer -= SPREAD_CHECK_INTERVAL
-		_try_spread()
 
-	# Update visuals - always at real-time speed
-	_update_visuals_immediate()
+func _flush_record() -> void:
+	_record_dirty = false
+	_record_flush_t = 0.0
+	if prop_id.is_empty():
+		return
+	var loader := ServiceLocator.terrain_loader()
+	if loader != null and loader.has_method("set_prop_burn_record"):
+		loader.call("set_prop_burn_record", prop_id, burn_rec)
+		_flushed_once = true
+
+
+## Light this node's structure at `t` (FireEvent). Durations come from the
+## geometry once it has been sampled, so they are filled in on the first frame.
+func ignite_at(t: float) -> void:
+	burn_rec = {"ignited_h": t}
+	_record_dirty = true
+
+
+func _reward_extinguish() -> void:
+	if not _had_extinguisher_help:
+		return
+	var tree := get_tree()
+	if tree != null:
+		tree.call_group_flags(SceneTree.GROUP_CALL_DEFERRED, "mars_college_credits_ui", "on_fire_extinguished_reward")
+
+
+## The burn was removed (Restore / prop deleted): leave nothing behind.
+func _dispose() -> void:
+	if _disposed:
+		return
+	_disposed = true
+	if ash_pile != null and is_instance_valid(ash_pile):
+		ash_pile.queue_free()
+	for m in _charred:
+		if is_instance_valid(m):
+			_restore_burned_mesh(m)
+	if not _extinguish_signalled:
+		_extinguish_signalled = true
+		fire_extinguished.emit()
+	queue_free()
+
+
+## One FireNode per placed prop that carries a burn record. Called after the
+## props are rebuilt, so a saved fire comes back on reload at the right moment
+## of its life, and a fire whose record was removed disposes itself.
+static func sync_prop_fires(main: Node, loader: Node) -> void:
+	if main == null or loader == null or not loader.has_method("placed_prop_records"):
+		return
+	var tree := main.get_tree()
+	if tree == null:
+		return
+	var have := {}
+	for n in tree.get_nodes_in_group("fire_nodes"):
+		var pid := str(n.get_meta("prop_id", ""))
+		if not pid.is_empty():
+			have[pid] = true
+	for rec in loader.call("placed_prop_records"):
+		if not (rec is Dictionary):
+			continue
+		var pid := str((rec as Dictionary).get("id", ""))
+		if pid.is_empty() or have.has(pid) or not FireTimeline.is_record((rec as Dictionary).get("burn", null)):
+			continue
+		var prop := PlacedPropRuntime.find_by_prop_id(main, pid)
+		if prop == null:
+			continue
+		var fire := FireNode.new()
+		fire.name = "Fire_%s" % pid
+		fire.prop_id = pid
+		fire.burn_scope = prop
+		fire.burn_rec = (rec as Dictionary).get("burn")
+		for node in prop.find_children("*", "MeshInstance3D", true, false):
+			var mi := node as MeshInstance3D
+			if mi != null and mi.mesh != null and not _is_forbidden_burn_target(mi):
+				fire.target_mesh = mi
+				break
+		if fire.target_mesh == null:
+			continue
+		var scene := tree.current_scene if tree.current_scene != null else main
+		scene.add_child(fire)
+		var b: Dictionary = fire.burn_rec
+		var at: Variant = b.get("ignite_pos", null)
+		if at is Array and (at as Array).size() == 3:
+			fire.global_position = Vector3(float(at[0]), float(at[1]), float(at[2]))
+		else:
+			fire.global_position = ignition_point_on_mesh_bottom(fire.target_mesh)
+
 
 ## Update visuals based on current intensity - runs every frame at real-time
 func _get_visual_quality_tier(fire_count: int, age_seconds: float, visual_factor: float) -> VisualQuality:
@@ -921,7 +1454,7 @@ func absorb_mesh(mesh: MeshInstance3D) -> void:
 		return
 	if mesh in burning_meshes:
 		return
-	if burn_phase != BurnPhase.BURNING:
+	if _last_phase > FireTimeline.Phase.BURNING:
 		return  # a collapsed pile cannot take on another piece
 	mesh.set_meta("fire_active", true)
 	burning_meshes.append(mesh)
@@ -1246,184 +1779,6 @@ func _engulf_nearby_meshes() -> void:
 		absorb_mesh(mesh)
 
 
-## The structure fails. What is left of it drops into the base over a second or
-## two (surface fires: the ash shader's `collapse`), a FireAshPile is heaped up
-## over the footprint, and the fire moves down to it.
-func _begin_collapse() -> void:
-	if burn_phase != BurnPhase.BURNING:
-		return
-	burn_phase = BurnPhase.COLLAPSING
-	_collapse_t = 0.0
-	_whooshed = false
-	for mesh in nearby_meshes_engulfed:
-		if is_instance_valid(mesh):
-			_char_mesh(mesh)
-	nearby_meshes_engulfed.clear()
-	var foot := _pile_footprint()
-	var centre: Vector3 = foot["centre"]
-	var radius: Vector2 = foot["radius"]
-	var fell_from: float = foot["height"]
-	var pile_h := minf(clampf(fell_from * 0.12, 0.2, 1.6), minf(radius.x, radius.y) * 0.9)
-	_collapse_seconds = 0.5
-	if _surface_mode:
-		if _ash_mat == null:
-			_burn_away(0.0)  # a front held back by spray: collapse from standing
-		_collapse_from_dissolve = float(_ash_mat.get_shader_parameter("dissolve"))
-		_ash_mat.set_shader_parameter("pile_xz", Vector2(centre.x, centre.z))
-		_ash_mat.set_shader_parameter("pile_radius", radius)
-		_ash_mat.set_shader_parameter("pile_h", pile_h)
-		# About the time it takes to fall that far, plus the moment it lets go.
-		_collapse_seconds = clampf(sqrt(2.0 * fell_from / 9.8) * 1.15 + 0.4, 1.2, 3.2)
-
-	ash_pile = FireAshPile.new()
-	ash_pile.name = "FireAshPile"
-	get_parent().add_child(ash_pile)
-	ash_pile.setup(centre, radius, pile_h, fell_from, burn_scope)
-	ash_pile.adopt_emitters(flame_particles, smoke_particles, ember_particles)
-
-	# The fire is at the base now; the pile draws it. Our own emitters stop (what
-	# is already in the air finishes), and the lights fade in _process_aftermath.
-	_surface_mode = false
-	global_position = centre + Vector3(0.0, pile_h, 0.0)
-	for ps: GPUParticles3D in [flame_particles, smoke_particles, ember_particles, ignition_particles]:
-		if ps != null:
-			ps.emitting = false
-	if indicator_mesh != null:
-		indicator_mesh.visible = false
-	intensity = maxf(intensity, 60.0)
-
-
-## Where the pile goes: the footprint of the BASE (the bottom quarter of the
-## structure), not of its widest part — an overhanging top falls inward.
-func _pile_footprint() -> Dictionary:
-	var lo := Vector2(INF, INF)
-	var hi := Vector2(-INF, -INF)
-	var base_y := global_position.y
-	var h := 1.0
-	if _burn_points.size() >= 8:
-		h = maxf(_burn_top_y - _burn_base_y, 0.01)
-		base_y = _burn_base_y
-		var cut := _burn_base_y + maxf(h * 0.25, 0.3)
-		for p in _burn_points:
-			if p.y > cut:
-				break  # sorted by height
-			lo = lo.min(Vector2(p.x, p.z))
-			hi = hi.max(Vector2(p.x, p.z))
-	else:
-		var meshes: Array[MeshInstance3D] = burning_meshes.duplicate()
-		if target_mesh != null and is_instance_valid(target_mesh) and target_mesh not in meshes:
-			meshes.append(target_mesh)
-		var top := -INF
-		base_y = INF
-		for m in meshes:
-			if m == null or not is_instance_valid(m) or m.mesh == null:
-				continue
-			var box := _mesh_world_aabb(m)
-			lo = lo.min(Vector2(box.position.x, box.position.z))
-			hi = hi.max(Vector2(box.end.x, box.end.z))
-			base_y = minf(base_y, box.position.y)
-			top = maxf(top, box.end.y)
-		if base_y == INF:
-			base_y = _find_ground_level()
-		else:
-			h = maxf(top - base_y, 0.01)
-	if lo.x > hi.x:
-		lo = Vector2(global_position.x, global_position.z)
-		hi = lo
-	var mid := (lo + hi) * 0.5
-	return {
-		"centre": Vector3(mid.x, base_y, mid.y),
-		"radius": Vector2(maxf((hi.x - lo.x) * 0.55, 0.5), maxf((hi.y - lo.y) * 0.55, 0.5)),
-		"height": h,
-	}
-
-
-## Collapsing, then burning down as a pile. This node is only the fire's HANDLE
-## from here (the extinguisher, fire damage and the event act on it); it goes
-## once there is no open flame, and the pile carries on to embers and ash alone.
-func _process_aftermath(delta: float, being_sprayed: bool) -> void:
-	if being_sprayed:
-		intensity -= EXTINGUISHER_DAMAGE * delta * spray_bodies.size()
-	# Our own lights hand over to the pile's.
-	for l: OmniLight3D in [fire_light, fire_light_2]:
-		if l != null:
-			l.light_energy = lerpf(l.light_energy, 0.0, 0.15)
-	if burn_phase == BurnPhase.COLLAPSING:
-		_advance_collapse(delta)
-		return
-	if ash_pile == null or not is_instance_valid(ash_pile):
-		_leave_quietly()  # the structure was restored or deleted under us
-		return
-	var flame := ash_pile.flame_level()
-	if flame <= 0.0:
-		_leave_quietly()  # embers now: no longer a fire to fight
-		return
-	intensity = clampf(intensity, 0.0, 200.0)
-	if intensity <= EXTINGUISH_THRESHOLD:
-		ash_pile.douse()
-		_extinguish()
-		return
-	if not being_sprayed:
-		intensity = move_toward(intensity, 8.0 + 52.0 * flame, 40.0 * delta)
-	state = FireState.MEDIUM if flame > 0.5 else FireState.SMALL
-
-
-func _advance_collapse(delta: float) -> void:
-	_collapse_t += delta
-	var u := clampf(_collapse_t / _collapse_seconds, 0.0, 1.0)
-	if _ash_mat != null:
-		_ash_mat.set_shader_parameter("collapse", u)
-		# The last scraps burn up as they land, not on the way down.
-		_ash_mat.set_shader_parameter("dissolve", lerpf(_collapse_from_dissolve,
-			COLLAPSE_END_DISSOLVE, smoothstep(0.5, 1.0, u)))
-	var pile_ok := ash_pile != null and is_instance_valid(ash_pile)
-	if pile_ok:
-		ash_pile.set_rise(u)
-		if not _whooshed and u >= 0.55:
-			_whooshed = true
-			ash_pile.whoosh()  # it hits its own fire
-	if u >= 1.0:
-		_settle_into_pile()
-
-
-## The fall is over: the structure's meshes are gone (hidden, restorable) and
-## the pile starts burning down.
-func _settle_into_pile() -> void:
-	var to_burn: Array[MeshInstance3D] = burning_meshes.duplicate()
-	if target_mesh != null and is_instance_valid(target_mesh) and target_mesh not in to_burn:
-		to_burn.append(target_mesh)
-	for mesh in _charred:
-		if is_instance_valid(mesh) and mesh not in to_burn:
-			to_burn.append(mesh)
-	for mesh in to_burn:
-		if mesh != null and is_instance_valid(mesh):
-			mesh.set_meta("fire_active", false)
-			_burn_out_mesh(mesh)
-			mesh_destroyed.emit(mesh)
-	burning_meshes.clear()
-	target_mesh = null  # this fire no longer spreads
-	burn_phase = BurnPhase.PILE
-	state = FireState.MEDIUM
-	if ash_pile != null and is_instance_valid(ash_pile):
-		if not _whooshed:
-			_whooshed = true
-			ash_pile.whoosh()
-		ash_pile.ignite()
-
-
-## Gone without having been put out: burned down to embers, or its structure
-## was restored. The event is told the fire is over; nobody is rewarded.
-func _leave_quietly() -> void:
-	set_process(false)
-	for ps: GPUParticles3D in [flame_particles, smoke_particles, ember_particles, ignition_particles]:
-		if ps != null:
-			ps.emitting = false
-	if not _extinguish_signalled:
-		_extinguish_signalled = true
-		fire_extinguished.emit()
-	queue_free()
-
-
 ## Hide a fully burned mesh (keep in tree for regenerate) and mark parent prop.
 func _burn_out_mesh(mesh: MeshInstance3D) -> void:
 	if mesh == null or not is_instance_valid(mesh):
@@ -1459,57 +1814,6 @@ func _find_ground_level() -> float:
 		return 0.0
 	
 	return result.position.y
-
-func _extinguish() -> void:
-	# The char stays exactly where the front reached; only the embers go out.
-	if _char_mat != null:
-		_char_mat.set_shader_parameter("ember", 0.0)
-	# Char the target mesh (make it black/burned looking)
-	if target_mesh != null and is_instance_valid(target_mesh):
-		target_mesh.set_meta("fire_active", false)
-		_char_mesh(target_mesh)
-	else:
-		pass
-	
-	# Immediately stop and hide everything
-	if ignition_particles != null:
-		ignition_particles.emitting = false
-		ignition_particles.visible = false
-	
-	if flame_particles != null:
-		flame_particles.emitting = false
-		flame_particles.visible = false
-	
-	if smoke_particles != null:
-		smoke_particles.emitting = false
-		smoke_particles.visible = false
-
-	if ember_particles != null:
-		ember_particles.emitting = false
-		ember_particles.visible = false
-
-	if fire_light != null:
-		fire_light.light_energy = 0.0
-
-	if fire_light_2 != null:
-		fire_light_2.light_energy = 0.0
-
-	# Hide indicator immediately
-	if indicator_mesh != null:
-		indicator_mesh.visible = false
-	
-	# Emit signal BEFORE queue_free so event can process it
-	if not _extinguish_signalled:
-		_extinguish_signalled = true
-		fire_extinguished.emit()
-	if _had_extinguisher_help :
-		var tree := get_tree()
-		if tree != null :
-			tree.call_group_flags( SceneTree.GROUP_CALL_DEFERRED, "mars_college_credits_ui", "on_fire_extinguished_reward" )
-	
-	# Quick cleanup - delay to let signals process
-	var tween := create_tween()
-	tween.tween_callback(queue_free).set_delay(0.5)
 
 func _on_body_entered(body: Node3D) -> void:
 	if body.has_method("is_extinguisher_spray"):
@@ -1627,13 +1931,16 @@ static func _is_allowed_flammable_mesh(mesh: MeshInstance3D) -> bool:
 func apply_extinguisher_damage(damage: float) -> void:
 	if damage > 0.0 :
 		_had_extinguisher_help = true
+		_damaged_this_frame = true
 	intensity -= damage
 	intensity = maxf(intensity, 0.0)
 
 func get_state_text() -> String:
-	if burn_phase == BurnPhase.COLLAPSING:
+	if _last_out:
+		return "Out"
+	if _last_phase == FireTimeline.Phase.COLLAPSING:
 		return "COLLAPSING!"
-	if burn_phase == BurnPhase.PILE:
+	if _last_phase == FireTimeline.Phase.PILE:
 		return "Burning down"
 	match state:
 		FireState.SMALL:
@@ -1650,7 +1957,7 @@ func get_state_text() -> String:
 
 ## Pause fire effects (called when time is sped up to save GPU)
 func pause_fire() -> void:
-	if burn_phase != BurnPhase.BURNING:
+	if _last_phase != FireTimeline.Phase.BURNING:
 		return  # the pile draws the fire now, and it is cheap
 	# Hide visual effects but keep state
 	if ignition_particles != null:
@@ -1672,7 +1979,7 @@ func pause_fire() -> void:
 
 ## Resume fire effects (called when back to realtime)
 func resume_fire() -> void:
-	if burn_phase != BurnPhase.BURNING:
+	if _last_phase != FireTimeline.Phase.BURNING:
 		return
 	# Restore visual effects
 	if ignition_particles != null:
@@ -1743,7 +2050,16 @@ func _setup_surface_burn() -> void:
 		ember_particles.amount = SURFACE_EMBER_AMOUNT
 		ember_particles.visibility_aabb = _surface_visibility_aabb(80.0)
 	_burn_step = -1
-	_advance_burn_front(0.0, 0.0, false)
+	_surface_area_m2 = _last_sampled_area_m2
+	# A fire lit without durations (FireEvent lights it with just the hour):
+	# estimate them from the geometry now that it is measured.
+	if burn_rec.has("ignited_h") and not burn_rec.has("auto"):
+		var lit := float(burn_rec["ignited_h"])
+		var est := _estimate_durations()
+		burn_rec = FireTimeline.make(lit, est, est.get("auto_est", est))
+		burn_rec["ignite_pos"] = [global_position.x, global_position.y, global_position.z]
+		_record_dirty = true
+		_flush_record()
 
 
 ## Particles are culled by this box, and the node now travels up the structure.
@@ -1769,76 +2085,12 @@ func _apply_char_overlay(mesh: MeshInstance3D) -> void:
 		_charred.append(mesh)
 
 
-## The structure is fully black by now, so its materials can be swapped for the
-## dissolving ash material without a visible change — and from there it is eaten
-## away. (Instance `transparency` was tried first: it hides an alpha overlay
-## entirely, so the charred structure flashed back to clean wood as it faded.)
-func _burn_away(t: float) -> void:
-	if _ash_mat == null:
-		_ash_mat = ShaderMaterial.new()
-		_ash_mat.shader = ASH_SHADER
-		_ash_mat.set_shader_parameter("base_y", _burn_base_y)
-		_ash_mat.set_shader_parameter("top_y", _burn_top_y)
-		for m in _charred:
-			if not is_instance_valid(m):
-				continue
-			if not m.has_meta("fire_pre_burn_override"):
-				m.set_meta("fire_pre_burn_override", m.material_override)
-			m.material_override = _ash_mat
-			# The overlay redraws the whole mesh and would fill the holes back in.
-			m.material_overlay = null
-	t = clampf(t, 0.0, 1.0)
-	_ash_mat.set_shader_parameter("dissolve", t)
-	# The top goes first, so the flames come down with what is left of it —
-	# otherwise they hang in the air where the top used to be.
-	var step := 1000 + int(t * 6.0)
-	if step != _burn_step:
-		_burn_step = step
-		var h := _burn_top_y - _burn_base_y
-		_rebuild_emission_points(lerpf(_burn_top_y, _burn_base_y + h * 0.3, t), 1.0e9, h)
-
-
 ## World height of the front for a progress value. It starts a little above the
 ## base so there is something alight on the first frame.
 func _front_y_for(progress: float) -> float:
 	var h := _burn_top_y - _burn_base_y
 	var start := minf(maxf(h * 0.04, 0.25), h)
 	return _burn_base_y + start + (h - start) * clampf(progress, 0.0, 1.0)
-
-
-func _advance_burn_front(delta: float, sim_hours: float, being_sprayed: bool) -> void:
-	if burn_phase != BurnPhase.BURNING:
-		return
-	var h := maxf(_burn_top_y - _burn_base_y, 0.01)
-	if not being_sprayed and burn_progress < 1.0:
-		var climb_s := clampf(h / CLIMB_SPEED_MPS, CLIMB_MIN_SECONDS, CLIMB_MAX_SECONDS)
-		burn_progress = minf(1.0, burn_progress
-			+ delta / climb_s * clampf(intensity / 60.0, 0.5, 1.6)
-			+ sim_hours / ENGULF_TIME_HOURS)
-		if burn_progress >= 1.0:
-			_engulf_nearby_meshes()
-	var front_y := _front_y_for(burn_progress)
-	# It catches at one spot and runs round the base well before it tops out.
-	var reach := 1.5 + _burn_reach_max * clampf(burn_progress * 4.0, 0.0, 1.0) * 1.05
-	if _char_mat != null:
-		_char_mat.set_shader_parameter("front_y", front_y + _char_soft_m() * 0.5)
-		_char_mat.set_shader_parameter("reach_m", reach)
-		# Once the front is at the top the whole thing goes black, and over the
-		# last stretch before it collapses it burns away.
-		var life := clampf(fire_time_hours / DESTROY_TIME_HOURS, 0.0, 1.0)
-		var all_black := smoothstep(0.3, 0.75, life) if burn_progress >= 1.0 else 0.0
-		_char_mat.set_shader_parameter("char_all", all_black)
-		if life >= BURN_AWAY_FROM and burn_progress >= 1.0:
-			var eaten := (life - BURN_AWAY_FROM) / (1.0 - BURN_AWAY_FROM)
-			_burn_away(minf(eaten, COLLAPSE_AT_DISSOLVE))
-			if eaten >= COLLAPSE_AT_DISSOLVE:
-				# Three quarters gone: what is left cannot stand.
-				_begin_collapse()
-				return
-	var step := int(burn_progress * float(BURN_STEPS))
-	if _ash_mat == null and step != _burn_step:
-		_burn_step = step
-		_rebuild_emission_points(front_y, reach)
 
 
 ## Point the emitters at the surface that is burning NOW: a band under the front,
@@ -1933,6 +2185,7 @@ static func sample_surface_points(meshes: Array, budget: int) -> PackedVector3Ar
 	var per_mesh := maxi(60, budget / live.size())
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 90210
+	var area_sum := 0.0
 	for mi in live:
 		var xf := mi.global_transform
 		var surfaces := mi.mesh.get_surface_count()
@@ -1965,6 +2218,7 @@ static func sample_surface_points(meshes: Array, budget: int) -> PackedVector3Ar
 				cum.append(total_area)
 			if total_area <= 0.0:
 				continue
+			area_sum += total_area * float(tri_step) * _world_area_scale(xf)
 			for k in per_surface:
 				var t := tris[mini(cum.bsearch(rng.randf() * total_area), tris.size() - 1)]
 				var a: Vector3 = verts[t] if idx.is_empty() else verts[idx[t]]
@@ -1976,6 +2230,14 @@ static func sample_surface_points(meshes: Array, budget: int) -> PackedVector3Ar
 					u = 1.0 - u
 					v = 1.0 - v
 				out.append(xf * (a + (b - a) * u + (c - a) * v))
+	_last_sampled_area_m2 = area_sum
 	var list: Array = Array(out)
 	list.sort_custom(func(p: Vector3, q: Vector3) -> bool: return p.y < q.y)
 	return PackedVector3Array(list)
+
+
+## Area scale of a transform: det^(2/3) — exact for a uniform scale (an
+## inch-unit import is 0.0254^2 per unit area), near enough for a mild
+## anisotropic one.
+static func _world_area_scale(xf: Transform3D) -> float:
+	return pow(absf(xf.basis.determinant()), 2.0 / 3.0)

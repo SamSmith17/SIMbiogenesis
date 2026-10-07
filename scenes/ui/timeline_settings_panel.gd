@@ -2708,19 +2708,23 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	var ideal_chk := _add_check(v, "Ideal supply — every need met, shortfalls counted as imports", func(on: bool) -> void:
 		PopTestPrefs.set_ideal_supply(on)
 		PopTestPrefs.save())
-	ideal_chk.button_pressed = PopTestPrefs.ideal_supply()
+	# The SAVED flags, not the accessors: festival mode's session override
+	# makes every accessor read ON, and the boxes must not pretend the
+	# player ticked them.
+	var saved_flags := PopTestPrefs.saved_flags()
+	ideal_chk.button_pressed = bool(saved_flags["ideal_supply"])
 	var cap_chk := _add_check(v, "Ignore space capacity (no queues)", func(on: bool) -> void:
 		PopTestPrefs.set_ignore_capacity(on)
 		PopTestPrefs.save())
-	cap_chk.button_pressed = PopTestPrefs.ignore_capacity() and not PopTestPrefs.ideal_supply()
+	cap_chk.button_pressed = bool(saved_flags["ignore_capacity"]) and not bool(saved_flags["ideal_supply"])
 	var dep_chk := _add_check(v, "Nobody leaves, perishes or collapses the colony", func(on: bool) -> void:
 		PopTestPrefs.set_no_departures(on)
 		PopTestPrefs.save())
-	dep_chk.button_pressed = PopTestPrefs.no_departures()
+	dep_chk.button_pressed = bool(saved_flags["no_departures"])
 	var mute_chk2 := _add_check(v, "Mute the settlement feed, alarms and toasts", func(on: bool) -> void:
 		PopTestPrefs.set_mute_alarms(on)
 		PopTestPrefs.save())
-	mute_chk2.button_pressed = PopTestPrefs.mute_alarms()
+	mute_chk2.button_pressed = bool(saved_flags["mute_alarms"])
 	var prov_row := HBoxContainer.new()
 	prov_row.add_theme_constant_override("separation", 8)
 	var prov_lbl := Label.new()

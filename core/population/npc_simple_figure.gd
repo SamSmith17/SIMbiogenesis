@@ -510,11 +510,15 @@ func _pose_work_exit(dt: float) -> void:
 ## closing so the silhouette keeps changing. Two per-agent variants: raise-the-
 ## roof pumps vs a side-to-side wave, plus everyone turning slowly in place.
 func _pose_dance(dt: float) -> void:
-	var beat := _phase * 1.15 * _tempo
+	# "rave" (the bass stage, a set on): the same dance thrown harder and
+	# faster — bigger hop, wider arms, quicker beat. What separates the
+	# front of the stage from a fire circle at any distance.
+	var hype := 1.5 if _flavor == "rave" else 1.0
+	var beat := _phase * 1.15 * _tempo * (1.3 if _flavor == "rave" else 1.0)
 	var sway := sin(beat)                    # side-to-side, the groove
 	var pump := sin(beat * 2.0)              # double-time, the bounce
 	var turn := sin(beat * 0.23) * 0.85      # slow drift around, ±~50°
-	var hop := maxf(pump, 0.0)
+	var hop := maxf(pump, 0.0) * hype
 	_place_body(HIP_Y + hop * 0.10 * _amp, 0.0, dt)
 	# Lean BACK, roll with the sway, and keep turning — three axes moving at
 	# once is what separates a dancer from a worker at any distance.

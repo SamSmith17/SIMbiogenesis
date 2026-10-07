@@ -4238,18 +4238,54 @@ func toggle_settlement_view( at: Vector2 = Vector2.INF ) -> void :
 
 ## Returns the view so a caller can drive it further — the Routines panel's
 ## "Where…" button opens it in one-shot pick mode this way.
-func open_settlement_view( at: Vector2 = Vector2.INF ) -> SettlementView :
+## `start_h` is the opening camera height (festival mode frames a whole site).
+func open_settlement_view( at: Vector2 = Vector2.INF, start_h: float = 60.0 ) -> SettlementView :
 	if settlement_view == null or not is_instance_valid( settlement_view ) :
 		settlement_view = SettlementView.new()
 		settlement_view.name = "SettlementView"
 		add_child( settlement_view )
-	settlement_view.open( self, at )
+	settlement_view.open( self, at, start_h )
 	return settlement_view
 
 
 func settlement_view_open() -> bool :
 	return settlement_view != null and is_instance_valid( settlement_view ) \
 		and settlement_view.is_open()
+
+
+# ==================== FESTIVAL MODE ====================
+
+var festival_mode : FestivalMode = null
+
+
+## Festival mode: populate every painted camp, seed the venues a festival
+## needs, assume every camp stocked (PopTestPrefs easy override) and open the
+## settlement view over the crowd -- the one-button test drive of the crowd
+## simulation. Toggles: pressed again it hands the guardrails back.
+func toggle_festival_mode() -> void :
+	if festival_mode_active() :
+		festival_mode.close()
+		return
+	open_festival_mode()
+
+
+func open_festival_mode() -> FestivalMode :
+	if festival_mode == null or not is_instance_valid( festival_mode ) :
+		festival_mode = FestivalMode.new()
+		festival_mode.name = "FestivalMode"
+		add_child( festival_mode )
+	festival_mode.open( self )
+	return festival_mode
+
+
+func close_festival_mode() -> void :
+	if festival_mode_active() :
+		festival_mode.close()
+
+
+func festival_mode_active() -> bool :
+	return festival_mode != null and is_instance_valid( festival_mode ) \
+		and ( festival_mode.is_active() or festival_mode.is_opening() )
 
 
 # ==================== WINDOW WALL (multi-monitor viewport) ====================

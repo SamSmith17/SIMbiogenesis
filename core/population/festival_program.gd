@@ -15,6 +15,11 @@ extends RefCounted
 ## an hour, get back what the venue is doing.
 
 const CLOSED_DRAW := 0.15
+## A set's draw ramps from RAMP_FLOOR to full over its first RAMP_H: the
+## keenest (taste, nearness) arrive first and the crowd BUILDS instead of
+## materialising at the first beat.
+const RAMP_H := 0.5
+const RAMP_FLOOR := 0.35
 const MAX_SLOTS := 24
 
 
@@ -83,7 +88,9 @@ static func state_at(rec: Dictionary, hour: float, day: int = -1) -> Dictionary:
 	if best.is_empty():
 		return {"active": false, "draw": CLOSED_DRAW * base, "label": "", "load_w": 0.0,
 			"ends_h": -1.0, "programmed": true}
-	return {"active": true, "draw": float(best["draw"]), "label": str(best.get("label", "")),
+	var since := fposmod(hour - float(best.get("start_h", hour)), 24.0)
+	var ramp := lerpf(RAMP_FLOOR, 1.0, clampf(since / RAMP_H, 0.0, 1.0))
+	return {"active": true, "draw": float(best["draw"]) * ramp, "label": str(best.get("label", "")),
 		"load_w": float(best.get("load_w", 0.0)), "ends_h": hours_left(best, hour),
 		"programmed": true}
 

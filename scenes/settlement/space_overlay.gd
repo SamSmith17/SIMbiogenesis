@@ -40,6 +40,11 @@ func rebuild(main: Node) -> void:
 		if poly.size() < 3:
 			continue
 		var stype := str(sd.get("space_type", ""))
+		# Festival mode seeds a sleep area over EVERY camp outline and a
+		# kitchen inside it; the tents already show where those are, and 35
+		# pale blobs over 35 camps hid the camps at block height.
+		if str(sd.get("label", "")).begins_with(FestivalSeedLayout.LABEL_PREFIX) 				and (stype == "sleep" or stype == "kitchen"):
+			continue
 		var col: Color = SpaceTypes.COLORS.get(stype, Color(0.6, 0.7, 0.9))
 		col.a = 0.30
 		var pts := PackedVector2Array()

@@ -36,6 +36,7 @@ extends Node
 ##                              "windowwall" = the multi-monitor Window Wall
 ##                              "stars" = star field: marker-vs-texture pixel error + 2 h rotation about the pole
 ##                              "lights" = J Light Studio end to end with REAL input events (see _run_lights_capture)
+##                              "propedit" = the unified placed-prop editor + gumball + fire timeline (see _run_prop_edit_capture)
 ##                              "dawn"  = sunrise lighting ladder: beam energy/colour + ambient per solar altitude
 ##                              "microclimate" = Walton valley-fog ladder: resolved fog per stop DUMPED + ground/drone PNGs
 ##                              through Main's real entry point: per-slot
@@ -193,6 +194,8 @@ func _ready() -> void:
 			_run_star_capture.call_deferred()
 		elif _capture_mode == "lights":
 			_run_lights_capture.call_deferred()
+		elif _capture_mode == "propedit":
+			_run_prop_edit_capture.call_deferred()
 		elif _capture_mode == "dawn":
 			_run_dawn_capture.call_deferred()
 		elif _capture_mode == "microclimate":
@@ -203,6 +206,8 @@ func _ready() -> void:
 			_run_crowd_bench.call_deferred()
 		elif _capture_mode == "festival":
 			_run_festival_capture.call_deferred()
+		elif _capture_mode == "festivalmode":
+			_run_festival_mode_capture.call_deferred()
 		elif _boot_window_wall:
 			_boot_window_wall_view.call_deferred()
 		else:
@@ -432,6 +437,8 @@ func _launch_map() -> void:
 		_run_star_capture()
 	elif _capture_mode == "lights":
 		_run_lights_capture()
+	elif _capture_mode == "propedit":
+		_run_prop_edit_capture()
 	elif _capture_mode == "dawn":
 		_run_dawn_capture()
 	elif _capture_mode == "microclimate":
@@ -442,6 +449,8 @@ func _launch_map() -> void:
 		_run_crowd_bench()
 	elif _capture_mode == "festival":
 		_run_festival_capture()
+	elif _capture_mode == "festivalmode":
+		_run_festival_mode_capture()
 	elif _boot_window_wall:
 		_boot_window_wall_view()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
@@ -513,6 +522,8 @@ func _launch_scene_direct() -> void:
 		_run_star_capture()
 	elif _capture_mode == "lights":
 		_run_lights_capture()
+	elif _capture_mode == "propedit":
+		_run_prop_edit_capture()
 	elif _capture_mode == "dawn":
 		_run_dawn_capture()
 	elif _capture_mode == "microclimate":
@@ -523,6 +534,8 @@ func _launch_scene_direct() -> void:
 		_run_crowd_bench()
 	elif _capture_mode == "festival":
 		_run_festival_capture()
+	elif _capture_mode == "festivalmode":
+		_run_festival_mode_capture()
 	elif _boot_window_wall:
 		_boot_window_wall_view()
 	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
@@ -9684,4 +9697,783 @@ func _lights_capture_restore(main: Node, path: String, had: bool, backup: Packed
 		cam.queue_free()
 	main.set("time_scale", saved_scale)
 	main.set("day_time", saved_time)
+	_maybe_quit()
+
+
+# ==================== PROP EDITOR (--capture=propedit) ====================
+## The unified placed-prop editor end to end, with REAL input events pushed
+## through the viewport (the lights-capture discipline): a seeded prop opens
+## the dock in the TOOL-OVERLAY tier (never a modal), the gumball's X arrow
+## moves it along X only and its yaw ring turns it, Duplicate adds one record
+## and the two-click Delete removes it, a StarShade opens THE SAME editor
+## (with its designer as a button) and can be deleted from it — the complaint
+## that started this — and the Fire section: a planned climb time is written
+## to the record, Ignite lights it with THAT duration, moving the clock past
+## the collapse shows the pile, moving it BACK stands the structure up again,
+## and Restore forgets the fire. Everything seeded is removed afterwards.
+func _run_prop_edit_capture() -> void:
+	var tree := get_tree()
+	var loader := await _find_terrain_loader()
+	if loader == null:
+		push_error("PlaytestHarness: propedit needs a TerrainLoader map (--user-map)")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+	var main := _find_main()
+	if main == null:
+		_maybe_quit()
+		return
+	var label := _shots_label if not _shots_label.is_empty() else "propedit"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var fails: Array = []
+	var vp := get_viewport()
+	var seeded: Array[String] = []
+
+	# A camera over a clear patch in front of the player.
+	var prev_cam := vp.get_camera_3d()
+	var base := prev_cam.global_position if prev_cam != null else Vector3(0, 2, 0)
+	var fwd := -prev_cam.global_basis.z if prev_cam != null else Vector3.FORWARD
+	fwd.y = 0.0
+	fwd = fwd.normalized() if fwd.length_squared() > 1e-6 else Vector3.FORWARD
+	var at := base + fwd * 16.0
+	at.y = TerrainSurfaceQuery.ground_height_at(main, at.x, at.z)
+	var cam := Camera3D.new()
+	cam.name = "PlaytestPropEditCam"
+	cam.fov = 60.0
+	main.add_child(cam)
+	cam.global_position = at - fwd * 11.0 + Vector3(0, 6.0, 0)
+	cam.look_at(at + Vector3(0, 1.0, 0), Vector3.UP)
+	cam.make_current()
+	var saved_scale: Variant = main.get("time_scale")
+	var saved_abs: float = float(main.call("get_absolute_hours"))
+	main.set("time_scale", 0.0)
+	main.set("day_time", 11.0)
+	await tree.process_frame
+
+	# 1. Seed a prop and open the editor on it.
+	var placed: Dictionary = PlacedPropService.place_model_at_xz(main, "shiftpod", at.x, at.z)
+	var pid := str(placed.get("prop_id", ""))
+	_pe_result(bool(placed.get("ok", false)) and not pid.is_empty(), "a shiftpod is placed to edit", fails)
+	if pid.is_empty():
+		_prop_edit_restore(main, seeded, cam, prev_cam, saved_scale, saved_abs)
+		return
+	seeded.append(pid)
+	for _i in 10:
+		await tree.process_frame
+	var dock := tree.current_scene.get_node_or_null("UILayer/PlacedPropEditUI")
+	var focus := main.find_child("InteractionFocus", true, false)
+	var prop: PlacedProp = loader.call("_find_placed_prop_node", pid)
+	if focus != null and focus.has_method("open_prop_edit_ui") and prop != null:
+		focus.call("open_prop_edit_ui", prop)
+	elif dock != null:
+		dock.call("open_for_prop", pid)
+	for _i in 3:
+		await tree.process_frame
+	_pe_result(dock != null and bool(dock.call("is_panel_open")), "the editor opens on the prop", fails)
+	_pe_result(CursorController.has_tool_overlay() and not CursorController.has_blocking_modal(),
+		"the editor runs in the tool-overlay tier, not as a modal", fails)
+	var giz := main.get_node_or_null("PlacedPropGizmo") as LightGizmo
+	_pe_result(giz != null and giz.visible, "the gumball shows on the prop", fails)
+	await _graph_shot(dir, "00_editor", [], "propedit")
+
+	# 2. Gumball: X arrow slides along X only; the yaw ring turns.
+	if giz != null and giz.visible:
+		# get_prop_record hands back the LIVE dict — copy it or "before" == "after".
+		var rec0: Dictionary = (loader.call("get_prop_record", pid) as Dictionary).duplicate()
+		var o := giz.global_position
+		var tip := o + giz.axis("x") * giz.handle_scale() * 0.7
+		var a := cam.unproject_position(tip)
+		var dir_px := cam.unproject_position(o + giz.axis("x") * giz.handle_scale()) - cam.unproject_position(o)
+		await _lc_drag(vp, a, a + dir_px.normalized() * 90.0)
+		for _i in 3:
+			await tree.process_frame
+		var rec1: Dictionary = (loader.call("get_prop_record", pid) as Dictionary).duplicate()
+		var dx := float(rec1["x"]) - float(rec0["x"])
+		var dz := absf(float(rec1["z"]) - float(rec0["z"]))
+		_pe_result(absf(dx) > 0.2 and dz < 0.05, "an X-arrow drag moves the prop along X only (dx %.2f, dz %.2f)" % [dx, dz], fails)
+		giz = main.get_node_or_null("PlacedPropGizmo") as LightGizmo
+		o = giz.global_position
+		var rr := giz.handle_scale() * LightGizmo.RING_R
+		var p0 := o + (Basis(Vector3.UP, deg_to_rad(45.0)) * giz.axis("x")) * rr
+		var p1 := o + (Basis(Vector3.UP, deg_to_rad(85.0)) * giz.axis("x")) * rr
+		await _lc_drag(vp, cam.unproject_position(p0), cam.unproject_position(p1))
+		for _i in 3:
+			await tree.process_frame
+		var rec2: Dictionary = (loader.call("get_prop_record", pid) as Dictionary).duplicate()
+		var dyaw := absf(wrapf(float(rec2.get("yaw", 0.0)) - float(rec1.get("yaw", 0.0)), -180.0, 180.0))
+		_pe_result(dyaw > 15.0, "a yaw-ring drag turns the prop (%.1f°)" % dyaw, fails)
+		_pe_result(prop == null or not is_instance_valid(prop) or bool(dock.call("is_panel_open")),
+			"the editor survives the prop node being rebuilt under it", fails)
+	await _graph_shot(dir, "01_gumball", [], "propedit")
+
+	# 3. Duplicate, then the two-click delete of the copy.
+	var n0 := (loader.call("placed_prop_records") as Array).size()
+	dock.call("_on_duplicate")
+	for _i in 5:
+		await tree.process_frame
+	var n1 := (loader.call("placed_prop_records") as Array).size()
+	var copy_id := str(dock.get("_prop_id"))
+	_pe_result(n1 == n0 + 1 and copy_id != pid and not copy_id.is_empty(),
+		"Duplicate adds one record and selects the copy (%d -> %d)" % [n0, n1], fails)
+	if n1 == n0 + 1:
+		dock.call("_on_delete")
+		await tree.process_frame
+		_pe_result(bool(dock.get("_del_armed")) and (loader.call("placed_prop_records") as Array).size() == n1,
+			"the first Delete click only arms (nothing removed yet)", fails)
+		dock.call("_on_delete")
+		for _i in 5:
+			await tree.process_frame
+		_pe_result((loader.call("placed_prop_records") as Array).size() == n0 and not bool(dock.call("is_panel_open")),
+			"the second click deletes the copy and closes the editor", fails)
+
+	# 4. A StarShade opens the SAME editor and can be deleted from it.
+	var designs := ModelCatalog.starshade_designs()
+	if not designs.is_empty():
+		var sid := str(designs[0].get("id", ""))
+		var sp: Dictionary = PlacedPropService.place_model_at_xz(main, sid, at.x + 7.0, at.z)
+		var spid := str(sp.get("prop_id", ""))
+		if not spid.is_empty():
+			seeded.append(spid)
+			for _i in 10:
+				await tree.process_frame
+			var sprop: PlacedProp = loader.call("_find_placed_prop_node", spid)
+			if focus != null and sprop != null:
+				focus.call("open_prop_edit_ui", sprop)
+			for _i in 3:
+				await tree.process_frame
+			var has_btn := false
+			for b in dock.find_children("*", "Button", true, false):
+				if (b as Button).text.begins_with("StarShade design"):
+					has_btn = true
+			_pe_result(bool(dock.call("is_panel_open")) and str(dock.get("_prop_id")) == spid and has_btn
+				and not CursorController.has_blocking_modal(),
+				"a StarShade opens the one editor, with its designer as a button", fails)
+			await _graph_shot(dir, "02_starshade", [], "propedit")
+			dock.call("_on_delete")
+			await tree.process_frame
+			dock.call("_on_delete")
+			for _i in 5:
+				await tree.process_frame
+			_pe_result((loader.call("get_prop_record", spid) as Dictionary).is_empty(),
+				"a StarShade can be deleted from the editor", fails)
+			if (loader.call("get_prop_record", spid) as Dictionary).is_empty():
+				seeded.erase(spid)
+	else:
+		print("PlaytestHarness: propedit — no StarShade designs in the catalog, skipping that check")
+
+	# 5. Fire: plan a duration, ignite, move the clock both ways, restore.
+	prop = loader.call("_find_placed_prop_node", pid)
+	if focus != null and prop != null:
+		focus.call("open_prop_edit_ui", prop)
+	for _i in 3:
+		await tree.process_frame
+	dock.call("_on_burnable_toggled", true)
+	for _i in 5:
+		await tree.process_frame
+	prop = loader.call("_find_placed_prop_node", pid)  # the toggle rebuilt every prop
+	var spins: Dictionary = dock.get("_fire_spins")
+	(spins["climb_h"] as SpinBox).value = 5.0  # 5 minutes
+	await tree.process_frame
+	var recf: Dictionary = loader.call("get_prop_record", pid)
+	var plan: Dictionary = recf.get("fire_plan", {}) if recf.get("fire_plan") is Dictionary else {}
+	_pe_result(bool(recf.get("burnable", false)) and absf(float(plan.get("climb_h", 0.0)) - 5.0 / 60.0) < 1e-3,
+		"the planned climb time is written to the record before any fire (%.3f h)" % float(plan.get("climb_h", 0.0)), fails)
+	var h0 := float(main.call("get_absolute_hours"))
+	dock.call("_on_fire_ignite")
+	for _i in 20:
+		await tree.process_frame
+	recf = loader.call("get_prop_record", pid)
+	var burn: Dictionary = recf.get("burn", {}) if FireTimeline.is_record(recf.get("burn")) else {}
+	_pe_result(not burn.is_empty() and absf(FireTimeline.climb_h(burn) - 5.0 / 60.0) < 1e-3 and burn.has("auto")
+		and float((burn.get("auto", {}) as Dictionary).get("bonfire_h", 0.0)) > 0.0,
+		"Ignite lights it with the planned climb time and keeps the estimate as auto (%s)" % str(burn), fails)
+	prop = loader.call("_find_placed_prop_node", pid)
+	var fire: FireNode = null
+	for n in tree.get_nodes_in_group("fire_nodes"):
+		if str(n.get_meta("prop_id", "")) == pid:
+			fire = n as FireNode
+	_pe_result(fire != null, "a FireNode carries the prop's fire", fails)
+	await _graph_shot(dir, "03_lit", [], "propedit")
+	if fire != null and not burn.is_empty() and prop != null:
+		var meshes: Array = []
+		for node in prop.find_children("*", "MeshInstance3D", true, false):
+			if (node as MeshInstance3D).mesh != null:
+				meshes.append(node)
+		# Past the collapse: the structure is gone, the pile burns.
+		main.call("set_absolute_hours", h0 + FireTimeline.climb_h(burn) + FireTimeline.COLLAPSE_H + 0.2)
+		for _i in 12:
+			await tree.process_frame
+		var any_visible := false
+		for m in meshes:
+			if is_instance_valid(m) and (m as MeshInstance3D).visible:
+				any_visible = true
+		_pe_result(fire._last_phase == FireTimeline.Phase.PILE and not any_visible
+			and fire.ash_pile != null and is_instance_valid(fire.ash_pile),
+			"clock past the collapse: structure gone, pile burning (phase %d)" % fire._last_phase, fails)
+		await _graph_shot(dir, "04_bonfire", [], "propedit")
+		# BACK into the climb: it stands again, charred.
+		main.call("set_absolute_hours", h0 + FireTimeline.climb_h(burn) * 0.4)
+		for _i in 12:
+			await tree.process_frame
+		var all_visible := true
+		for m in meshes:
+			if is_instance_valid(m) and not (m as MeshInstance3D).visible:
+				all_visible = false
+		_pe_result(fire._last_phase == FireTimeline.Phase.BURNING and all_visible
+			and (fire.ash_pile == null or not is_instance_valid(fire.ash_pile) or fire.ash_pile.is_queued_for_deletion()),
+			"clock scrubbed back: the structure stands again, no pile (phase %d)" % fire._last_phase, fails)
+		await _graph_shot(dir, "05_scrubbed_back", [], "propedit")
+		# Before the ignition: clean.
+		main.call("set_absolute_hours", h0 - 0.5)
+		for _i in 6:
+			await tree.process_frame
+		var clean := true
+		for m in meshes:
+			if is_instance_valid(m) and ((m as MeshInstance3D).material_overlay != null or not (m as MeshInstance3D).visible):
+				clean = false
+		_pe_result(fire._last_phase == FireTimeline.Phase.NONE and clean,
+			"clock before the ignition: the structure is clean", fails)
+		main.call("set_absolute_hours", h0 + FireTimeline.climb_h(burn) * 0.5)
+		for _i in 6:
+			await tree.process_frame
+		# Restore forgets the fire.
+		dock.call("_on_fire_restore")
+		for _i in 6:
+			await tree.process_frame
+		recf = loader.call("get_prop_record", pid)
+		_pe_result(not recf.has("burn") and (fire == null or not is_instance_valid(fire) or fire.is_queued_for_deletion()),
+			"Restore removes the burn record and the fire node", fails)
+	dock.call("close")
+	_prop_edit_restore(main, seeded, cam, prev_cam, saved_scale, saved_abs)
+	if fails.is_empty():
+		print("PlaytestHarness: propedit — ALL CHECKS PASSED")
+	else:
+		print("PlaytestHarness: propedit — %d CHECK(S) FAILED:" % fails.size())
+		for f in fails:
+			print("  - %s" % str(f))
+	_maybe_quit()
+
+
+func _prop_edit_restore(main: Node, seeded: Array[String], cam: Camera3D, prev_cam: Camera3D,
+		saved_scale: Variant, saved_abs: float) -> void:
+	var loader := main.find_child("TerrainLoader", true, false)
+	for pid in seeded:
+		if loader != null:
+			loader.call("delete_prop_by_id", pid)
+	main.call("set_absolute_hours", saved_abs)
+	main.set("time_scale", saved_scale)
+	if prev_cam != null and is_instance_valid(prev_cam):
+		prev_cam.make_current()
+	if cam != null and is_instance_valid(cam):
+		cam.queue_free()
+
+
+func _pe_result(ok: bool, what: String, fails: Array) -> void:
+	print("PlaytestHarness: propedit %s — %s" % ["PASS" if ok else "FAIL", what])
+	if not ok:
+		fails.append(what)
+
+
+# ==================== FESTIVAL MODE (--capture=festivalmode) ====================
+# The one-button entry into the crowd sim, driven through Main's REAL entry
+# point (open_festival_mode) on a saved map with painted camps. Asserts what a
+# PNG cannot: the easy override is on (and the player's SAVED testing flags
+# are untouched), every populated painted camp became a camp compound with a
+# pop-driven habitat, every required space type is tagged (and only the
+# missing ones were seeded, all carrying the festival label prefix), the
+# settlement view opened framed on the camps, people exist for every
+# headcount and MOVE over a few sim-hours with nobody blocked on a need, and
+# then the two exits: leaving hands the guardrails back and keeps the camps,
+# clear_seeded removes exactly the venues it seeded and every festival
+# headcount. Snapshots and byte-restores the map's camp / placement / spaces
+# files, the graph autosave and the NPC display prefs.
+
+func _fm_result(ok: bool, label: String) -> void:
+	print("PlaytestHarness: festivalmode %s — %s" % ["PASS" if ok else "FAIL", label])
+
+
+func _run_festival_mode_capture() -> void:
+	var loader := await _find_terrain_loader()
+	if loader == null or not loader.has_method("populate_camp_areas"):
+		push_error("PlaytestHarness: festivalmode needs a TerrainLoader map (painted camps)")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	_set_capture_conditions()
+	var main := get_tree().current_scene
+	var sgv := await _find_graph_view()
+	if sgv == null or sgv.get("model") == null or not main.has_method("open_festival_mode"):
+		push_error("PlaytestHarness: festivalmode — graph model or Main entry point unavailable")
+		_maybe_quit()
+		return
+	var model: Variant = sgv.get("model")
+	var label := _shots_label if not _shots_label.is_empty() else "festivalmode"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var lat := float(loader.get("_lat"))
+	var lon := float(loader.get("_lon"))
+	var files := [CampAreaLayer.save_path_for_map(lat, lon), FestivalPlacementLayer.save_path_for_map(lat, lon),
+		SpaceRegistry.new().save_path_for_map(lat, lon), NpcDisplayPrefs.CFG_PATH,
+		PlacedPropLayer.new().save_path_for_map(lat, lon)]
+	if sgv.has_method("_graph_autosave_path"):
+		files.append(str(sgv.call("_graph_autosave_path")))
+	var snap := _snapshot_files(files)
+	if "year" in main:
+		main.year = 2026
+		main.month = 7
+		main.day = 15
+	if "day_time" in main:
+		main.day_time = 10.0
+	if "time_scale" in main:
+		main.time_scale = 0.0
+
+	# --- before -----------------------------------------------------------------
+	var layer: Variant = loader.get("camp_areas")
+	var placement: Variant = loader.get("placement")
+	var zones: Dictionary = placement.zones_by_id() if placement != null else {}
+	var populatable := 0
+	for rec in (layer.get("areas") as Array):
+		if FestivalSeedLayout.is_populatable(rec, zones):
+			populatable += 1
+	var summary0: Dictionary = loader.call("camp_population_summary")
+	var lots_total: int = (placement.get("lots") as Array).size() if placement != null else 0
+	var saved0 := PopTestPrefs.saved_flags()
+	print("PlaytestHarness: festivalmode — before: %d painted camps (%d populatable), %d lots, %d populated camps / %d people, %d compounds" % [
+		(layer.get("areas") as Array).size(), populatable, lots_total, int(summary0["camps"]), int(summary0["people"]),
+		(sgv.call("festival_camps") as Array).size()])
+	_fm_result(not PopTestPrefs.easy_override(), "the easy override is OFF before the mode opens")
+
+	# --- open -------------------------------------------------------------------
+	main.call("open_festival_mode")
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 15000:
+		var fm0: Variant = main.get("festival_mode")
+		if fm0 != null and bool(fm0.call("is_active")):
+			break
+		await get_tree().process_frame
+	await get_tree().create_timer(1.5).timeout
+	var fm: Variant = main.get("festival_mode")
+	_fm_result(fm != null and bool(fm.call("is_active")), "festival mode reports active")
+	_fm_result(PopTestPrefs.easy_override() and PopTestPrefs.ideal_supply() and PopTestPrefs.no_departures()
+		and PopTestPrefs.ignore_capacity() and PopTestPrefs.mute_alarms(),
+		"easy override on: ideal supply, no queues, no departures, muted alarms all read ON")
+	_fm_result(bool(main.call("settlement_view_open")), "the settlement view opened")
+	var summary1: Dictionary = loader.call("camp_population_summary")
+	var camps: Array = sgv.call("festival_camps")
+	var people_on_camps := 0
+	var hab_ids: Array = []
+	for c in camps:
+		people_on_camps += int((c as Dictionary).get("headcount", 0))
+		for it in model.get_items_in_scope(str((c as Dictionary)["scope"])):
+			var sp: Dictionary = (it as Dictionary).get("specs", {})
+			if str(sp.get("role", "")) == "habitat" and bool(sp.get("pop_driven", false)):
+				hab_ids.append(str((it as Dictionary)["id"]))
+	print("PlaytestHarness: festivalmode — after open: %d populated camps / %d people; %d compounds carrying %d people, %d pop-driven habitats" % [
+		int(summary1["camps"]), int(summary1["people"]), camps.size(), people_on_camps, hab_ids.size()])
+	_fm_result(camps.size() > 0 and camps.size() == int(summary1["camps"]),
+		"every populated camp is a compound on the graph (%d of %d)" % [camps.size(), int(summary1["camps"])])
+	_fm_result(people_on_camps == int(summary1["people"]), "the compounds carry the populated headcounts")
+	_fm_result(hab_ids.size() == camps.size(), "every compound has exactly one pop-driven habitat")
+	var now_populated := 0
+	for rec in (layer.get("areas") as Array):
+		if FestivalSeedLayout.is_populatable(rec, zones) and int((rec as Dictionary).get("headcount", 0)) > 0:
+			now_populated += 1
+	_fm_result(now_populated == populatable, "every populatable painted camp got a headcount (%d of %d)" % [now_populated, populatable])
+	var unassigned := 0
+	if placement != null:
+		for l in (placement.get("lots") as Array):
+			if ((l as Dictionary).get("assigned_camp", {}) as Dictionary).is_empty():
+				unassigned += 1
+	_fm_result(unassigned == 0, "no placement lot is left unassigned")
+
+	# --- venues -----------------------------------------------------------------
+	var bridge: Variant = sgv.call("npc_population_bridge")
+	var reg: SpaceRegistry = bridge.call("registry_for", main)
+	var present: Array = []
+	var seeded := 0
+	var sleep_areas := 0
+	var prefixed_types: Dictionary = {}
+	for rec in reg.spaces:
+		var rd: Dictionary = rec
+		var t := str(rd.get("space_type", ""))
+		if not present.has(t):
+			present.append(t)
+		if str(rd.get("label", "")).begins_with(FestivalSeedLayout.LABEL_PREFIX):
+			seeded += 1
+			prefixed_types[t] = true
+			if t == "sleep":
+				sleep_areas += 1
+	print("PlaytestHarness: festivalmode — spaces: %d total, %d seeded (%s), types %s" % [
+		reg.spaces.size(), seeded, str(prefixed_types.keys()), str(present)])
+	_fm_result(FestivalSeedLayout.missing_types(present).is_empty(), "every required space type is tagged")
+	_fm_result(seeded > 0, "the mode seeded venues (%d)" % seeded)
+	_fm_result(sleep_areas == camps.size(), "one seeded sleep area per camp (%d for %d camps)" % [sleep_areas, camps.size()])
+	var stage_set := false
+	for rec in reg.spaces:
+		var rd: Dictionary = rec
+		if str(rd.get("space_type", "")) == "stage":
+			var st := FestivalProgram.state_at(rd, 21.0)
+			stage_set = stage_set or bool(st.get("active", false))
+	_fm_result(stage_set, "the seeded stage has its set on at 21:00")
+	# Framing: the camera looks at the camps' cluster from a height that fits it.
+	var view: Variant = main.get("settlement_view")
+	var cam: Variant = view.call("camera") if view != null else null
+	var polys: Array = []
+	for c in camps:
+		polys.append(loader.call("camp_lot_polygon", str((c as Dictionary)["lot_id"])))
+	var cl := FestivalSeedLayout.cluster(polys)
+	if cam != null:
+		var focus: Vector2 = cam.get("focus")
+		print("PlaytestHarness: festivalmode — camera focus %s h=%.0f; cluster centre %s r=%.0f" % [
+			str(focus), float(cam.call("height")), str(cl["centre"]), float(cl["radius"])])
+		_fm_result(focus.distance_to(cl["centre"]) <= float(cl["radius"]) + 1.0
+			and float(cam.call("height")) >= FestivalMode.MIN_START_H - 1.0,
+			"the view opened over the camps' cluster at a framing height")
+
+	# --- run a few sim-hours ----------------------------------------------------
+	main.time_scale = 0.2   # 720×
+	await get_tree().create_timer(2.0).timeout
+	var dots0: Array = bridge.call("agent_dots")
+	var pos0: Dictionary = {}
+	for d in dots0:
+		pos0[str((d as Dictionary)["id"])] = (d as Dictionary).get("pos", Vector2.ZERO)
+	print("PlaytestHarness: festivalmode — %d people simulating for %d populated" % [dots0.size(), int(summary1["people"])])
+	_fm_result(dots0.size() >= int(float(int(summary1["people"])) * 0.95) and dots0.size() > 0,
+		"people exist for the populated headcounts (%d of %d)" % [dots0.size(), int(summary1["people"])])
+	var h_start := float(main.call("get_absolute_hours"))
+	await get_tree().create_timer(20.0).timeout
+	var h_ran := float(main.call("get_absolute_hours")) - h_start
+	var dots1: Array = bridge.call("agent_dots")
+	var moved := 0
+	var seen := 0
+	var light := 0
+	for d in dots1:
+		var dd: Dictionary = d
+		var id := str(dd["id"])
+		if str(dd.get("tier", "")) == CrowdFocus.TIER_LIGHT:
+			light += 1
+		if pos0.has(id):
+			seen += 1
+			if (pos0[id] as Vector2).distance_to(dd.get("pos", Vector2.ZERO)) > 2.0:
+				moved += 1
+	var summaries: Array = []
+	for iid in hab_ids:
+		var sm: Dictionary = bridge.call("summary_for", str(iid))
+		if not sm.is_empty():
+			summaries.append(sm)
+	var vibe := FestivalVibe.compute(summaries)
+	print("PlaytestHarness: festivalmode — ran %.1f sim-h: %d of %d moved, %d light-tier, vibe %s blocked share %.3f" % [
+		h_ran, moved, seen, light, str(vibe.get("label", "")), float(vibe.get("blocked_share", 0.0))])
+	_fm_result(h_ran >= 2.0, "the clock ran (%.1f sim-h)" % h_ran)
+	# How many move in four mid-day hours depends on the loaded state (a
+	# fresh roster all heads out; a restored mid-day one is already settled),
+	# so the bar is a quarter of the roster.
+	_fm_result(seen > 0 and moved >= int(float(seen) * 0.25), "people moved over the run (%d of %d)" % [moved, seen])
+	_fm_result(float(vibe.get("blocked_share", 1.0)) <= 0.0, "nobody is blocked on a need (ideal supply)")
+	await _shoot_ui(dir, "01_festival_open")
+	fm.call("jump_to_hour", 21.0)
+	await get_tree().create_timer(3.0).timeout
+	await _shoot_ui(dir, "02_evening")
+	if cam != null:
+		cam.set("_h_target", 60.0)
+		cam.set("_h", 60.0)
+		await get_tree().create_timer(1.0).timeout
+		await _shoot_ui(dir, "03_block")
+	main.time_scale = 0.0
+
+	# --- the bass stage: a live set ------------------------------------------
+	# 180x: a sim-minute every third of a second, slow enough to sample the
+	# crowd mid-walk and mid-dance.
+	main.time_scale = 0.05
+	fm.call("jump_to_hour", 21.0)
+	await get_tree().create_timer(10.0).timeout
+	var stage_sid := ""
+	for rec in reg.spaces:
+		if str((rec as Dictionary).get("space_type", "")) == "stage":
+			stage_sid = str((rec as Dictionary)["id"])
+			break
+	var stage_state: Dictionary = bridge.call("venue_state", stage_sid) if not stage_sid.is_empty() else {}
+	var stage_front: Dictionary = bridge.call("venue_front", stage_sid) if not stage_sid.is_empty() else {}
+	_fm_result(not stage_sid.is_empty() and bool(stage_state.get("active", false))
+		and bool(stage_state.get("programmed", false)), "the bass stage's set is ON at 21:00")
+	var at_stage := 0
+	var in_front := 0
+	var raving := 0
+	var behind_dump := 0
+	var sf: Vector2 = stage_front.get("front", Vector2.ZERO)
+	var sfwd: Vector2 = stage_front.get("fwd", Vector2(0.0, 1.0))
+	# The map may carry more than one stage (the player's own plus the seeded
+	# one); a dot says only "at a stage", so test each person against the
+	# NEAREST stage's front.
+	var stage_fronts: Array = []
+	for rec in reg.spaces:
+		var rd: Dictionary = rec
+		if str(rd.get("space_type", "")) != "stage":
+			continue
+		var sc: Variant = reg.cached_position(str(rd["id"]))
+		var fr: Dictionary = bridge.call("venue_front", str(rd["id"]))
+		if sc is Vector2 and not fr.is_empty():
+			stage_fronts.append({"centre": sc, "front": fr["front"], "fwd": fr["fwd"]})
+	for d in bridge.call("agent_dots"):
+		var dd: Dictionary = d
+		if str(dd.get("space_type", "")) != "stage" or int(dd.get("state", 0)) != NpcAgent.State.DOING:
+			continue
+		at_stage += 1
+		var pp: Vector2 = dd.get("pos", Vector2.ZERO)
+		var best: Dictionary = {}
+		for sfr in stage_fronts:
+			if best.is_empty() or pp.distance_to((sfr as Dictionary)["centre"]) < pp.distance_to(best["centre"]):
+				best = sfr
+		var f2: Vector2 = best.get("front", sf)
+		var w2: Vector2 = best.get("fwd", sfwd)
+		if (pp - f2).dot(w2) > 0.0:
+			in_front += 1
+		elif behind_dump < 6:
+			behind_dump += 1
+			print("PlaytestHarness: festivalmode — BEHIND the speakers: %s tier=%s pose=%s ahead=%.1f m, %.1f m from the stage centre, status '%s'" % [
+				str(dd.get("id", "")), str(dd.get("tier", "full")), str(dd.get("venue_pose", "")),
+				(pp - f2).dot(w2), pp.distance_to(best.get("centre", f2)), str(dd.get("status", ""))])
+		if str(dd.get("venue_pose", "")) == VenueCrowd.POSE_RAVE:
+			raving += 1
+	print("PlaytestHarness: festivalmode — bass stage at 21:00: %d at the stage, %d in front of the speakers, %d raving; front %s fwd %s" % [
+		at_stage, in_front, raving, str(sf), str(sfwd)])
+	_fm_result(at_stage >= 20, "a crowd gathers at the bass stage for the set (%d)" % at_stage)
+	_fm_result(at_stage > 0 and in_front >= int(float(at_stage) * 0.9),
+		"the crowd stands in FRONT of the speakers (%d of %d)" % [in_front, at_stage])
+	_fm_result(at_stage > 0 and raving >= int(float(at_stage) * 0.9),
+		"the crowd at a live set raves (%d of %d)" % [raving, at_stage])
+	if cam != null and not stage_sid.is_empty():
+		# Frame the FAN (front edge + 12 m along the facing), not the stage
+		# centre — the crowd is in front of the speakers, by construction.
+		var sp: Variant = sf + sfwd * 12.0 if not stage_front.is_empty() else reg.cached_position(stage_sid)
+		if sp is Vector2:
+			cam.call("look_at_xz", sp)
+			cam.set("_h_target", 45.0)
+			cam.set("_h", 45.0)
+			await get_tree().create_timer(1.0).timeout
+			await _shoot_ui(dir, "04_bass_stage")
+
+	# --- the effigy: light it ---------------------------------------------------
+	var eff: Dictionary = {}
+	for rec in reg.spaces:
+		if str((rec as Dictionary).get("space_type", "")) == "effigy":
+			eff = rec
+			break
+	_fm_result(not eff.is_empty(), "festival mode tagged the burnable structure as the Effigy")
+	if not eff.is_empty():
+		var esid := str(eff["id"])
+		var pid := str((eff.get("target", {}) as Dictionary).get("prop_id", ""))
+		var ec: Variant = reg.cached_position(esid)
+		var ecv: Vector2 = ec if ec is Vector2 else Vector2.ZERO
+		var now_h := float(main.call("get_absolute_hours"))
+		# A half-hour climb, an hour of bonfire, half an hour of embers.
+		# An 8 m effigy on a 3 m base: the standing perimeter is 8 + 3.05 m,
+		# the pile perimeter 3 + 1.52 m.
+		loader.call("set_prop_burn_record", pid, FireTimeline.make(now_h,
+			{"climb_h": 0.5, "bonfire_h": 1.0, "ember_h": 0.5, "mass_kg": 600.0,
+				"height_m": 8.0, "footprint_r_m": 3.0}))
+		FireNode.sync_prop_fires(main, loader)
+		await get_tree().create_timer(8.0).timeout   # ~0.4 sim-h into the climb
+		var es: Dictionary = bridge.call("venue_state", esid)
+		_fm_result(int(es.get("phase", -1)) == VenueCrowd.EffigyPhase.BURNING and bool(es.get("event", false)),
+			"the lit effigy is BURNING and an EVENT (phase %s)" % str(es.get("phase_name", "")))
+		var n_eff := 0
+		var min_d := INF
+		var seated := 0
+		var standing := 0
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			if str(dd.get("space_type", "")) != "effigy" or int(dd.get("state", 0)) != NpcAgent.State.DOING:
+				continue
+			n_eff += 1
+			min_d = minf(min_d, (dd.get("pos", Vector2.ZERO) as Vector2).distance_to(ecv))
+			var vp := str(dd.get("venue_pose", ""))
+			if vp == VenueCrowd.POSE_SIT or vp == VenueCrowd.POSE_LIE:
+				seated += 1
+			elif vp == VenueCrowd.POSE_STAND:
+				standing += 1
+		# Who is NOT at the burn, and how far they are: the number that says
+		# whether the pull reaches the far camps.
+		var by_state: Dictionary = {}
+		var far_hist: Dictionary = {}
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			var dist_b := int((dd.get("pos", Vector2.ZERO) as Vector2).distance_to(ecv) / 100.0) * 100
+			if str(dd.get("space_type", "")) == "effigy":
+				var k := "effigy/%d" % int(dd.get("state", 0))
+				by_state[k] = int(by_state.get(k, 0)) + 1
+			else:
+				var k2 := "%s/%s" % [str(dd.get("activity", "")), str(dd.get("space_type", ""))]
+				by_state[k2] = int(by_state.get(k2, 0)) + 1
+				far_hist[dist_b] = int(far_hist.get(dist_b, 0)) + 1
+		print("PlaytestHarness: festivalmode — the burn: %d gathered, nearest %.1f m, %d seated/lying, %d standing" % [
+			n_eff, min_d, seated, standing])
+		print("PlaytestHarness: festivalmode — everyone else by activity/venue: %s" % str(by_state))
+		print("PlaytestHarness: festivalmode — distance of those NOT at the burn (m bucket: people): %s" % str(far_hist))
+		_fm_result(n_eff >= 40, "the festival gathers at the burn (%d)" % n_eff)
+		var safe_r := float(es.get("safe_r", VenueCrowd.EFFIGY_SAFE_R_M))
+		_fm_result(n_eff > 0 and min_d >= safe_r - 0.5,
+			"nobody stands inside the fire perimeter (nearest %.1f m, perimeter %.1f = height + 10 ft)" % [min_d, safe_r])
+		_fm_result(absf(safe_r - (8.0 + VenueCrowd.PERIMETER_STANDING_M)) < 0.01,
+			"the standing perimeter is the structure height plus ten feet (%.2f m)" % safe_r)
+		# The first two rings seat ~144; standing rows only exist past that.
+		var two_rows := int(VenueCrowd.effigy_row(0)["n"])
+		two_rows += int(VenueCrowd.effigy_row(two_rows)["n"])
+		_fm_result(seated > 0 and (standing > 0 or n_eff <= two_rows),
+			"the front rows sit or lie and the back rows stand (%d / %d of %d; two rings seat %d)" % [seated, standing, n_eff, two_rows])
+		if cam != null:
+			cam.call("look_at_xz", ecv)
+			cam.set("_h_target", 45.0)
+			cam.set("_h", 45.0)
+			await get_tree().create_timer(1.0).timeout
+			await _shoot_ui(dir, "05_effigy_burn")
+		await get_tree().create_timer(4.0).timeout   # past the collapse
+		es = bridge.call("venue_state", esid)
+		_fm_result(int(es.get("phase", -1)) == VenueCrowd.EffigyPhase.CIRCLING,
+			"after the collapse the effigy is CIRCLING (phase %s)" % str(es.get("phase_name", "")))
+		var ang0: Dictionary = {}
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			var vp := str(dd.get("venue_pose", ""))
+			if str(dd.get("space_type", "")) == "effigy" and (vp == VenueCrowd.POSE_DANCE or vp == VenueCrowd.POSE_WALK):
+				var pp: Vector2 = dd.get("pos", Vector2.ZERO)
+				ang0[str(dd["id"])] = atan2(-(pp.y - ecv.y), pp.x - ecv.x)
+		# Sample ONE circle step apart (0.02 sim-h = 0.4 s at 180x): a lap takes
+		# 0.1 h, so a longer gap wraps past 180 degrees and reads as clockwise.
+		await get_tree().create_timer(0.4).timeout
+		var ccw := 0
+		var seen_c := 0
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			var id := str(dd["id"])
+			if not ang0.has(id):
+				continue
+			var pp: Vector2 = dd.get("pos", Vector2.ZERO)
+			var a1 := atan2(-(pp.y - ecv.y), pp.x - ecv.x)
+			seen_c += 1
+			if wrapf(a1 - float(ang0[id]), -PI, PI) > 0.0:
+				ccw += 1
+		var pile_r := float(es.get("safe_r", 0.0))
+		var min_c := INF
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			if str(dd.get("space_type", "")) == "effigy":
+				min_c = minf(min_c, (dd.get("pos", Vector2.ZERO) as Vector2).distance_to(ecv))
+		print("PlaytestHarness: festivalmode — circling: %d people moving round the fire, %d counter-clockwise; perimeter %.2f m, nearest %.1f m" % [seen_c, ccw, pile_r, min_c])
+		_fm_result(absf(pile_r - (3.0 + VenueCrowd.PERIMETER_PILE_M)) < 0.01 and min_c >= pile_r - 0.5,
+			"after the collapse the perimeter is five feet off the pile and nobody is inside it (%.2f m, nearest %.1f)" % [pile_r, min_c])
+		_fm_result(seen_c >= 20, "people circle the fire after the collapse (%d)" % seen_c)
+		_fm_result(seen_c > 0 and ccw >= int(float(seen_c) * 0.7), "the circle runs counter-clockwise (%d of %d)" % [ccw, seen_c])
+		await _shoot_ui(dir, "06_effigy_circle")
+		await get_tree().create_timer(16.0).timeout   # the 45 minutes pass
+		es = bridge.call("venue_state", esid)
+		_fm_result(int(es.get("phase", -1)) == VenueCrowd.EffigyPhase.AFTER,
+			"45 min after the collapse the dance is over (phase %s)" % str(es.get("phase_name", "")))
+		var social := 0
+		var still_dancing := 0
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			if str(dd.get("space_type", "")) != "effigy":
+				continue
+			var vp := str(dd.get("venue_pose", ""))
+			if vp == VenueCrowd.POSE_CLAP or vp == VenueCrowd.POSE_STAND:
+				social += 1
+			elif vp == VenueCrowd.POSE_DANCE or vp == VenueCrowd.POSE_WALK:
+				still_dancing += 1
+		_fm_result(social > 0 and still_dancing == 0,
+			"afterwards people socialise round the embers like an art piece (%d, %d still circling)" % [social, still_dancing])
+		await _shoot_ui(dir, "07_effigy_after")
+		loader.call("clear_prop_burn_record", pid)
+		FireNode.sync_prop_fires(main, loader)
+
+	# --- sleeping INSIDE the shelters -------------------------------------------
+	fm.call("jump_to_hour", 4.0)
+	main.time_scale = 0.1
+	await get_tree().create_timer(10.0).timeout   # ~1 sim-h: everyone to bed
+	var beds: Array = []
+	for rec in reg.spaces:
+		var rd: Dictionary = rec
+		if str(rd.get("space_type", "")) != "sleep":
+			continue
+		var tgt: Dictionary = rd.get("target", {})
+		if str(tgt.get("kind", "")) != "area":
+			continue
+		for sh in loader.call("camp_shelters_in_polygon", SpaceRegistry.poly_points(tgt.get("poly", []) as Array)):
+			beds.append((sh as Dictionary)["pos"])
+	var sleepers := 0
+	var in_shelter := 0
+	for d in bridge.call("agent_dots"):
+		var dd: Dictionary = d
+		if str(dd.get("activity", "")) != "sleep" or int(dd.get("state", 0)) != NpcAgent.State.DOING:
+			continue
+		sleepers += 1
+		var pp: Vector2 = dd.get("pos", Vector2.ZERO)
+		for b in beds:
+			if pp.distance_to(b) <= 2.5:
+				in_shelter += 1
+				break
+	print("PlaytestHarness: festivalmode — 04:00: %d asleep, %d of them inside a shelter (%d shelters across the camps)" % [
+		sleepers, in_shelter, beds.size()])
+	_fm_result(beds.size() > 0, "the camps have shelters to sleep in (%d)" % beds.size())
+	_fm_result(sleepers > 0 and in_shelter >= int(float(sleepers) * 0.6),
+		"most sleepers lie inside a tent, pod, van or RV (%d of %d)" % [in_shelter, sleepers])
+	# Frame the busiest camp low, so the shot shows people IN the tents.
+	if cam != null and not beds.is_empty():
+		var best_b: Vector2 = beds[0]
+		var best_n := -1
+		for b in beds:
+			var n_near := 0
+			for d in bridge.call("agent_dots"):
+				if str((d as Dictionary).get("activity", "")) == "sleep" 						and ((d as Dictionary).get("pos", Vector2.ZERO) as Vector2).distance_to(b) < 25.0:
+					n_near += 1
+			if n_near > best_n:
+				best_n = n_near
+				best_b = b
+		cam.call("look_at_xz", best_b)
+		cam.set("_h_target", 18.0)
+		cam.set("_h", 18.0)
+		await get_tree().create_timer(1.0).timeout
+	await _shoot_ui(dir, "08_asleep")
+	main.time_scale = 0.0
+
+	# --- leave ------------------------------------------------------------------
+	fm.call("close")
+	await get_tree().process_frame
+	_fm_result(not PopTestPrefs.easy_override(), "leaving hands the guardrails back")
+	_fm_result(PopTestPrefs.saved_flags() == saved0, "the player's SAVED testing flags are untouched")
+	_fm_result(not bool(main.call("settlement_view_open")), "leaving closed the settlement view")
+	_fm_result((sgv.call("festival_camps") as Array).size() == camps.size(), "the camps stay after leaving")
+	_fm_result(not bool(main.call("festival_mode_active")), "Main reports the mode off")
+
+	# --- clear ------------------------------------------------------------------
+	fm.call("clear_seeded")
+	for _i in 6:
+		await get_tree().process_frame
+	var left := 0
+	for rec in reg.spaces:
+		if str((rec as Dictionary).get("label", "")).begins_with(FestivalSeedLayout.LABEL_PREFIX):
+			left += 1
+	_fm_result(left == 0, "clear removed every seeded venue (%d left)" % left)
+	var still := 0
+	for rec in (layer.get("areas") as Array):
+		if FestivalSeedLayout.is_populatable(rec, zones) and int((rec as Dictionary).get("headcount", 0)) > 0:
+			still += 1
+	_fm_result(still == 0, "clear put every painted camp's headcount back to 0 (%d left)" % still)
+	var after_clear: Array = sgv.call("festival_camps")
+	var assigned_lots := 0
+	if placement != null:
+		for l in (placement.get("lots") as Array):
+			if not ((l as Dictionary).get("assigned_camp", {}) as Dictionary).is_empty():
+				assigned_lots += 1
+	_fm_result(after_clear.size() == assigned_lots,
+		"after clear only the lot camps remain as compounds (%d for %d assigned lots)" % [after_clear.size(), assigned_lots])
+
+	_restore_files(snap)
+	print("PlaytestHarness: festivalmode — restored the map's camp / placement / spaces files, the graph autosave and the NPC display prefs")
+	print("PlaytestHarness: festivalmode — shots in %s" % ProjectSettings.globalize_path(dir))
 	_maybe_quit()

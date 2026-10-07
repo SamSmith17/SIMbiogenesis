@@ -15,6 +15,11 @@ extends RefCounted
 ## `room` drops a venue near capacity; the company term is the old social
 ## pull — people drift toward the fire that already has people at it.
 ## Deterministic: ties break on the venue id.
+##
+## A venue with AUTO capacity (0) never fills and pays no room penalty: a
+## stage or an effigy IS the crowd. `pull` (NpcVenueState) is added straight
+## onto the score -- the effigy burn clears every taste, a live set is a
+## strong nudge toward the stage.
 
 const WALK_COST_M := 150.0      # metres of walk one full point of draw is worth
 const COMPANY_BONUS := 0.08     # per companion, capped
@@ -39,9 +44,9 @@ static func pick(taste: Dictionary, pos: Vector2, candidates: Array) -> Dictiona
 		if not (c is Dictionary):
 			continue
 		var cd: Dictionary = c
-		var cap := maxi(int(cd.get("capacity", 1)), 1)
+		var cap := int(cd.get("capacity", 1))
 		var occ := int(cd.get("occupants", 0))
-		if occ >= cap:
+		if cap > 0 and occ >= cap:
 			continue
 		var s := score(taste, pos, cd)
 		if s > best_score or (absf(s - best_score) < 1e-9 and str(cd.get("id", "")) < str(best.get("id", ""))):
@@ -54,9 +59,10 @@ static func score(taste: Dictionary, pos: Vector2, c: Dictionary) -> float:
 	var kind := SpaceTypes.enrichment_kind(str(c.get("type", "")))
 	var t := clampf(float(taste.get(kind, 0.5)), 0.0, 1.0)
 	var draw := clampf(float(c.get("draw", 0.5)), 0.0, 1.0)
-	var cap := maxi(int(c.get("capacity", 1)), 1)
+	var cap := int(c.get("capacity", 1))
 	var occ := int(c.get("occupants", 0))
-	var room := 1.0 - 0.5 * clampf(float(occ) / float(cap), 0.0, 1.0)
+	var room := 1.0 if cap <= 0 else 1.0 - 0.5 * clampf(float(occ) / float(maxi(cap, 1)), 0.0, 1.0)
 	var company := mini(occ, COMPANY_CAP)
 	var dist := (c.get("pos", pos) as Vector2).distance_to(pos)
-	return draw * (TASTE_FLOOR + t) * room - dist / WALK_COST_M + float(company) * COMPANY_BONUS
+	return draw * (TASTE_FLOOR + t) * room - dist / WALK_COST_M + float(company) * COMPANY_BONUS \
+		+ maxf(float(c.get("pull", 0.0)), 0.0)

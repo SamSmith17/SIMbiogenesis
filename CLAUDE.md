@@ -211,6 +211,58 @@ Godot.exe.exe --path . --windowed --resolution 640x480 --script core/population/
 # Snapshots and byte-restores camp / placement / spaces files + the graph
 # autosave; strips its cap_fest_* items and the camp compounds:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=festival --shots-dir=<label> --quit-after-capture
+# Festival MODE data layer (offline — FestivalSeedLayout + the PopTestPrefs
+# EASY OVERRIDE): painted-camp headcounts (the assigner's own density,
+# floored/clamped, style-aware), the lot-shaped records the graph sync eats
+# (free camps + orphans only, never a live lot's camp), the venue plan (a
+# sleep + kitchen per camp as DISTINCT area targets, shared venues sized
+# from CampProvisioning.requirements, searched outward from the camps'
+# centroid, clear of every camp and past the world veto, the stage carrying
+# its 20:00–02:00 set, every label prefixed), and the override reading ON for
+# all four guardrails while the SAVED flags stay untouched. Carries
+# EXPECTED_CHECKS; --import first. ⚠ A GDScript lambda captures locals BY
+# VALUE — a counter a Callable increments must live in an Array:
+Godot.exe.exe --headless --path . --script core/camps/festival_seed_layout_selftest.gd
+# Venue choreography + capacity sharing (offline — VenueCrowd, NpcVenueState,
+# the AUTO capacity in SpaceRegistry / NpcVenueChoice): the effigy's phases
+# as a pure function of a FireTimeline record (idle → burning → circling for
+# CIRCLE_H → after) with the phase-end caps; the burn RING (rows fill front
+# to back, every seat outside the safe radius, rings further apart and seats
+# looser the further out, no two seats colliding, front row sits/lies, back
+# rows stand); the circle dance (constant lane radius, angle INCREASING with
+# time = counter-clockwise from above, lanes shearing, ~half dancing); the
+# embers spiral; the stage FAN (every slot in FRONT of the front edge, found
+# from the footprint, facing the camps, densest at the front, raving only
+# while a set is on); a set is a pull, the burn an EVENT; AUTO capacity never
+# fills, claims never refuse, six arrivals share two equal restrooms, a
+# crowded nearer space loses to a farther empty one, an explicit cap still
+# refuses; AUTO venues pay no room penalty and pull beats taste. Carries
+# EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/population/venue_crowd_selftest.gd
+# Festival MODE end to end on Walton (WINDOWED, needs a map with painted
+# camps). After the mode asserts below it ALSO drives the two venue
+# choreographies through real sim time at 180×: jumps to 21:00 and asserts a
+# crowd (≥20) stands in FRONT of the bass stage's speakers, every one raving;
+# then writes a burn record onto the tagged Effigy prop (FireTimeline.make,
+# synced through FireNode) and asserts the lit effigy is BURNING + an EVENT,
+# ≥40 gathered with NOBODY inside the safe radius, front rows seated/lying
+# and back rows standing, that after the collapse the phase is CIRCLING with
+# ≥70 % of the movers' bearings increasing counter-clockwise (sampled ONE
+# circle step apart — a lap is 0.1 h, so a longer gap wraps past 180° and
+# reads clockwise), and that 45 min later the dance is over and everyone at
+# the embers claps or stands. Clears the burn record again. PNGs 04–07.
+# Drives Main.open_festival_mode and asserts the easy override is on
+# with the player's saved testing flags untouched, every populatable painted
+# camp got a headcount and became a compound with ONE pop-driven habitat, no
+# lot is left unassigned, every required space type is tagged with one seeded
+# sleep area per camp and the stage's set on at 21:00, the settlement view
+# opened over the camps' cluster at a framing height, people exist for the
+# headcounts and MOVE over ~4 sim-hours with a ZERO blocked share, leaving
+# hands the guardrails back and keeps the camps, and clear_seeded removes
+# exactly the prefixed venues + every festival headcount. Three PNGs
+# (open / evening / block). Snapshots and byte-restores camp / placement /
+# spaces files, the graph autosave and npc_display.cfg:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=festivalmode --shots-dir=<label> --quit-after-capture
 # J Light Studio (offline — core/placed_lights/): layer v2 -> v3 migration
 # (radians -> degrees, type -> kind, identical looks share ONE auto style), the
 # built-in map path staying the v2 path, linked styles (style edit restyles
@@ -250,17 +302,34 @@ Godot.exe.exe --headless --path . --script vegetation/camp_generator_selftest.gd
 # camp_areas_*.json, so a run never leaves camps on the player's site:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=camps --shots-dir=<label> --quit-after-capture
 
-# Fire burn front (offline — FireNode surface mode): on an inch-unit, Z-up rig
-# (the import shape that put the flame at the TOP of a model) ignition lands in
-# the bottom quarter of the WORLD box, the front climbs monotonically to the
-# top, flames emit from surface points, the char overlay follows the front, a
-# sprayed fire holds, the structure goes black then is eaten away, and a restore
-# removes both. Then the end of the fire: at 75 % consumed it collapses into a
-# FireAshPile on its base footprint (no flame left up where it stood), a
-# one-shot whoosh fires on landing, and the pile burns down bonfire -> embers
-# -> black -> ash on SIM time, outliving the fire node. Headless has no
-# renderer, so the three shaders are only proven by running the game:
+# Fire (offline — FireTimeline + FireNode surface mode): the record maths
+# first — burn hours net of extinguisher HOLDS, the phase ladder (climb →
+# 3 s collapse → pile aged from the landing), the fuel estimate (a tonne of
+# fuel ≈ 6 h of bonfire; a known PackedSpec mass beats the surface guess),
+# put-out FREEZING the state at that hour while an earlier hour still burns —
+# then ONE FireNode driven by MOVING THE CLOCK on an inch-unit, Z-up rig:
+# ignition in the bottom quarter of the WORLD box, a monotonic climb, flames
+# from surface points, the char overlay following the front, a sprayed hold
+# that delays the collapse by exactly its length, the collapse into a
+# FireAshPile on the base footprint (whoosh on the way down), bonfire →
+# embers → ash — and then BACK: scrub to the bonfire (flames again), to the
+# climb (the structure stands, charred, no pile), to before the ignition
+# (clean), forward again (the whoosh re-fires). Carries EXPECTED_CHECKS.
+# Headless has no renderer, so the three shaders are only proven windowed:
 Godot.exe.exe --headless --path . --script crisis_events/fire/fire_burn_selftest.gd
+# Placed-prop editor end to end (WINDOWED, needs a REAL TerrainLoader map,
+# REAL input events through the viewport): a seeded shiftpod opens the dock
+# in the TOOL-OVERLAY tier (never a modal), the gumball's X arrow moves it
+# along X only and the yaw ring turns it (the record is read back — note
+# get_prop_record returns the LIVE dict, duplicate it before comparing),
+# Duplicate adds one record, the two-click Delete removes it, a StarShade
+# opens THE SAME editor with its designer as a button and can be deleted from
+# it, and the Fire section: a planned climb time lands on the record before
+# any fire, Ignite lights it with THAT duration (estimate kept as auto), the
+# clock past the collapse shows the pile, the clock scrubbed BACK stands the
+# structure up again, before the ignition it is clean, Restore forgets the
+# fire. Removes everything it seeded:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=propedit --shots-dir=<label> --quit-after-capture
 
 # Night-sky star field self-test (offline — core/astronomy/): StarSkyMath's
 # GMST pinned to Meeus's worked examples 12.a/12.b, the equatorial BASIS form
@@ -2315,6 +2384,196 @@ three readers never walk the model: the top-centre chip
 visible only while camps exist), the settlement HUD's line under the
 scale label, and the dashboard's Festival block. Verify end to end with
 `--capture=festival` on Walton (Validation list).
+
+**Festival MODE (`scenes/settlement/festival_mode.gd`, `FestivalMode`; the
+timeline's **Festival** chip; `Main.open/close/toggle_festival_mode`).** The
+one-button way INTO the crowd simulation, on easy supplies. It exists because
+the whole chain above was unreachable by hand: a painted camp is SCENERY (no
+headcount), only an ASSIGNED placement lot became a compound, nobody moves
+unless beds / kitchen / portapotties / water / showers / a stage are tagged,
+and without the testing switches a camp with no tanks wired starves and walks
+out — Walton had 30-odd painted camps and zero people. `open()`: (1) switches
+`PopTestPrefs.set_easy_override(true)` — ideal supply, no queues, no
+departures, muted alarms, for the SESSION; the saved flags are untouched and
+the settings tab reads `saved_flags()` so its boxes never pretend the player
+ticked them; (2) `TerrainLoader.populate_camp_areas()` gives every painted
+camp a `headcount` (new CampAreaLayer record key, 0 = scenery; derived from
+area × `FestivalAssigner.people_per_m2(style)` — the placement tool's own
+density) and `update_lot_camp` fills every unassigned lot; with no camps at
+all it seeds a demo zone next to the player, and on a scene with no
+TerrainLoader plain `fest_hab_*` habitats on the graph; (3) seeds only the
+MISSING space types from `FestivalSeedLayout.venue_plan` (a `sleep` area over
+each camp outline + a `kitchen` on the inset outline — area targets match by
+polygon, so the two must differ — plus portapotty banks / water stations /
+showers sized from `CampProvisioning.requirements`, a stage with a
+20:00–02:00 set, center camp and temple, searched outward from the camps'
+centroid so they land BETWEEN camps, vetoed by the camp generator's exclusion
+index via `festival_ground_free`), every label prefixed `Festival · `; (4)
+forces `crowd_draw != none` and unpauses the clock (a NUDGE, never a claim);
+(5) opens the settlement view over the camps' cluster at a framing height
+(`open_settlement_view(at, start_h)` — new third parameter, threaded through
+`SettlementView.open`). The settlement HUD shows a festival panel (people /
+camps / up-close vs crowd / seeded venues, Evening 19:30 and Morning 10:00
+jumps, Leave, Clear seeded) and its speed line reads "FESTIVAL (supplies
+assumed infinite)". `close()` hands the guardrails back and closes the view
+but KEEPS the camps and venues (they are the player's site now);
+`clear_seeded()` removes exactly the prefixed venues, every painted camp's
+headcount, the demo zone/road and the fallback habitats. **Painted camps ride
+the SAME graph sync as lots**: `TerrainLoader._push_camps_to_graph` appends
+`FestivalSeedLayout.camp_lots(camp_areas.areas, zones)` — lot-shaped records
+keyed `camp:<id>` — to the placement lots, so `sync_camps_from_placement`
+stamps and removes them idempotently and they survive a reload. A live lot's
+own camp record (`group_id` = an existing zone) is skipped there — its
+headcount is the lot assignment; an ORPHAN lot camp (zone gone) counts as
+painted. Measured on Walton: 32 painted camps + 3 lots → 855 people, 709 in
+the light tier, zero blocked after 4 sim-hours. Verify with
+`core/camps/festival_seed_layout_selftest.gd` and `--capture=festivalmode`.
+
+**Venue choreography + capacity sharing (`core/population/venue_crowd.gd`,
+`npc_venue_state.gd`).** Three asks landed together on 2026-10-06:
+- **Capacity is AUTO by default.** `SpaceRegistry.CAPACITY_AUTO` (0) never
+  fills; `nearest_space_by` charges every occupant already there
+  `SHARE_SPREAD_M` (12 m) of walk, so people draw their share of a type's
+  spaces by distance + crowding instead of converging on the nearest one.
+  An explicit number is still a hard limit (`DEFAULT_CAPACITY` 2 stays the
+  API default for callers that pass nothing — the selftests depend on it);
+  both tagging UIs and every festival seed default to 0. `NpcVenueChoice`
+  gives AUTO venues no room penalty and adds a venue's `pull` to the score.
+- **`NpcVenueState.resolve(space, hour, abs_h, fire_rec)`** is the ONE "what
+  is this venue doing now" for both tiers: a stage's programme (a live set is
+  a `pull` of 0.6), an effigy's FIRE RECORD (the burn is an EVENT, pull 2.0 —
+  the enrichment-need gate is waived while any event is on, in
+  `NpcAgent._wants_enrichment` and `CrowdCohort._decide`). The bridge resolves
+  every venue once per tick (`_resolve_venues`, reading `burn` off the tagged
+  prop) and hands `venue_state_of` / `venue_front_of` / `event_active` through
+  ctx; a PHASE CHANGE wakes everyone seated there (`CrowdCohort.wake_at_venue`)
+  — before that, light-tier people who sat down at the unlit effigy's spiral
+  were still sitting 11 m from the fire mid-burn, waiting for a heartbeat.
+- **The Effigy** (space type `effigy`, tagged on the burn structure; festival
+  mode tags the burnable prop itself): IDLE = an art piece (loose spiral at
+  0.8 × the safe radius); BURNING = everyone comes and sits in concentric
+  RINGS from `EFFIGY_SAFE_R_M` (14 m) outward — row 0 lies (40 %) or sits,
+  row 1 sits, the rest stand, rings further apart and seats looser the
+  further out, so the crowd THINS with distance; from the collapse,
+  CIRCLING for `CIRCLE_H` (45 min) — four lanes, one lap per 6 min, outer
+  lanes a little slower, about half dancing and the rest walking,
+  COUNTER-CLOCKWISE seen from above (`(cos a, −sin a)` with `a` increasing:
+  east toward north); then AFTER = the spiral again, clapping or standing.
+  Full-tier agents re-seat EVERY step (`_update_live_venue` — the circle is a
+  moving slot, so `pos` follows it and the host glides the body; dancers keep
+  the dance because the host clears `in_transit` for `venue_pose` dance /
+  rave); the light tier runs the circle as `S_CIRCLE`, a chain of
+  `CIRCLE_STEP_H` arc segments (`_circle_step`), so the GPU draws the glide.
+- **The Bass Stage** (`stage`, relabelled): while a set is on the crowd packs a
+  FAN in front of the speakers — a Vogel spiral folded onto ±65° ahead of the
+  stage's FRONT EDGE (`stage_front`: the footprint's extent along the
+  facing; `facing_deg` on the record, else toward the mean of the sleep
+  spaces, else south) — and RAVES: `venue_pose` "rave" → pose machine
+  CLIP_DANCE with the "rave" flavour (NpcSimpleFigure throws the dance 1.5×
+  harder and 1.3× faster), crowd shader `POSE_RAVE` (7).
+- **`venue_pose` is an INPUT** to NpcPoseMachine like `work_pose` (dot key
+  from both tiers; `_pose_clip` lets it override the per-type default), which
+  keeps the machine pure; "lie" maps onto CLIP_SLEEP, "sit" CLIP_SIT, "clap"
+  CLIP_CLAP, "dance"/"rave" CLIP_DANCE, "stand"/"walk" idle.
+- **Overhead readouts** fade with 3D distance from the camera (full inside 12
+  m, gone by 34 m — `NpcAvatar.set_ambient_alpha`) and at most
+  `AMBIENT_MAX_TAGS` (10) nearest people carry one; measured in 3D because
+  from the settlement view's block height the camp straight below read as
+  0 m away in XZ and stacked a wall of "sleeping" tags.
+- **"Paths through the air" had two sources, both fixed.** (1) The host
+  sampled a hero's ground height at the SIM position while drawing the body
+  along its prev→next glide; on a slope at speed the two differ by metres —
+  `_pose_avatar` now re-samples at the DRAWN xz. (2) The crowd shaders
+  interpolated the segment ENDPOINTS' heights, so a 300 m tick-to-tick
+  segment flew over a hill: `CrowdRenderer` now bakes a HEIGHT RASTER
+  (2 m cells over the bridge's population region + 80 m, `FORMAT_RF`, 6000
+  terrain queries per frame, rebuilt when the region moves 60 m) and both
+  shaders read `height_tex` at the interpolated xz (`textureLod` in vertex),
+  falling back to endpoint heights outside the rect or before the bake lands.
+- **The sleep NEED's window follows the routine.** `NpcAgent.SLEEP_START_H`
+  (21:00) used to open the sleep window for everyone; a festival camp whose
+  routine sleeps from 02:30 still went to bed at 21:00 by need (the first
+  festival harness measured 200 of 316 asleep at 22:00, through the headline
+  set). Both tiers' `_pick` now take the window start from
+  `NpcRoutine.sleep_start_h(fallback)` (the SLEEP block's start, else the
+  constant); the wake hour and the instant-daytime-nap rule are unchanged.
+- **An EVENT's first tick wakes the site**: `CrowdCohort.wake_for_event` ENDS
+  (not merely pokes — a woken S_DOING person whose end_h is still ahead only
+  gets a heartbeat) every light-tier visit at a non-live venue and every
+  dawdle, so they re-decide and the pull brings them; full-tier agents do the
+  same once per visit in `_step_doing` (`_event_checked`) and leave only if
+  the event venue actually wins the pick — re-picking every step would be a
+  finish/claim livelock.
+Verify with `core/population/venue_crowd_selftest.gd` and the venue half of
+`--capture=festivalmode` (Validation list).
+
+**NPC realism pass (2026-10-07).** Six fixes, each with the trap it closed:
+- **The stick figure walked BACKWARDS.** `NpcSimpleFigure` is built facing
+  +Z (knees bend toward −Z, carry box at +Z) while the avatar's forward is
+  −Z; the rigged body gets its half-turn from `NpcRig.model_yaw_offset()`,
+  the simple body never did. `NpcAvatar._ensure_visuals` now rotates it by
+  PI. Every stylised figure had walked away from its destination and faced
+  away from its anchor since the style landed.
+- **People sleep INSIDE shelters.** `CampAreaRuntime` always keeps a compact
+  `shelters` meta per camp (tents / pods / yurts / vans / RVs with
+  `CampStyles.SHELTER_SLEEPS`) and a `solids` meta (vehicles);
+  `TerrainLoader.camp_shelters_in_polygon(poly)` + shiftpod props feed the
+  bridge's `_sleep_spots` (one bed per sleeper, spread along the shelter's
+  long axis). A sleep AREA resolves slot k to a bed (`bed_spot_of` in ctx,
+  `NpcAgent._begin_need`) with the shelter's yaw as `lie_yaw`; the light
+  tier's `home_slots` become the camp's beds (`_home_beds`). No shelters →
+  the old spiral.
+- **Fire perimeter = height + 10 ft while standing, 5 ft off the pile after.**
+  `FireTimeline.estimate/make` now carry `height_m` / `footprint_r_m`;
+  `VenueCrowd.safe_radius(rec, phase)` derives the radius per phase (defaults
+  reproduce the old 14 m for records without a size) and every ring / lane /
+  spiral keys off it. The bridge STAMPS the perimeter `F_BLOCKED` on the nav
+  grid as the fire moves through its phases (`_apply_fire_perimeter`,
+  re-applied after a rebake), so nobody walks into the fall radius or the
+  pile either.
+- **Crowd jitter.** Per-person scatter in every slot (`SEAT_JITTER_M`,
+  `SpaceRegistry.slot_jitter`), per-person tempo / throw / stance yaw in
+  `crowd_figure.gdshader`, and the circle's lane speeds vary a little.
+- **Needs stagger.** `NpcAgent.rate_scale_for(id, need)` scatters hunger /
+  thirst / bladder rise ±25 % per person (both tiers), and a programme
+  slot's draw RAMPS from 35 % to full over its first half hour
+  (`FestivalProgram.RAMP_H`), so a set's crowd builds by taste and distance
+  instead of materialising at the first beat. ⚠ A per-person "linger" at
+  block boundaries was tried in three forms (dawdle on every block, wait
+  in place on meal blocks, idle delay on the gathering block) and EVERY form
+  drifted the two tiers' morale apart past the 0.08 equivalence pin — the
+  tiers see block boundaries at different moments (substeps vs events), so
+  any boundary-relative delay lands asymmetrically. Do not reintroduce it;
+  stagger through rates, offsets and ramps, which both tiers read
+  identically. The ENRICHMENT routine block now goes through venue choice
+  in the full tier (`_begin_enrichment`, as the light tier always did)
+  instead of "the nearest fire circle".
+- **⚠ `NpcPopulationEngine._make_ctx` is a WHITELIST.** Every ctx key the
+  agents need must be forwarded there by hand; a key added only to the
+  bridge's ctx never arrives, and the agent code falls back silently. All
+  five venue keys (`venue_state_of`, `venue_front_of`, `event_active`,
+  `bed_spot_of`, `no_go`) were missing for the first fourteen harness runs:
+  full-tier agents resolved the effigy with NO fire record (idle spiral), the
+  stage with no front (a fan round the centre facing south — "100 people
+  behind the speakers"), no event waiver, no beds, no detours — while the
+  light tier, which gets the bridge's ctx directly, did everything right.
+  When a behaviour works in one tier and not the other, check this function
+  before anything else.
+- **Fire perimeter on foot.** A straight-line walk (grid baking, query
+  budget spent) that would cut through a fire perimeter takes ONE waypoint
+  round it (`NpcNav.detour`, fed `no_go` circles through ctx in both tiers);
+  the light tier's A* routes end on the exact seat (the planner's goal is a
+  cell centre, up to half a cell inward — a ring seat drifted inside the
+  perimeter).
+- **Paths.** The light tier now walks the SAME A* routes as the full tier
+  (`plan_path` in its ctx; `_go` plans and `_advance_leg` chains the legs,
+  keyed by `last_space` for the route cache), and the nav bake blocks camp
+  vehicles plus every placed prop's live pick AABB
+  (`TerrainLoader.nav_solid_footprints`; props tagged as spaces stay
+  passable; PackedSpec dims are the SHIPPING size and must not be used for
+  this — a shiftpod packs to 1.3 m and stands 3.6 m). Tents and pods are
+  deliberately NOT blocked: people sleep in them. The camp structure count is
+  folded into the nav fingerprint so a repainted camp re-bakes.
 
 **Ponds are player-owned, never auto-added to the graph.** `pond_command` carves a
 basin and optionally seeds a thin puddle; **Rain** / **Drain** (T dock) hold-modulate
@@ -4679,30 +4938,100 @@ starts at the very top"). `FireNode` now runs in **surface mode**:
   leaves the char exactly where the front reached, with the embers off.
 - **Collapse, then a pile that burns down** (`FireAshPile`,
   `fire_ash_pile.gd` + `fire_pile.gdshader`). Burning away used to leave the
-  last quarter of a structure hanging in the air, and the old "smouldering
-  pile" was re-armed every frame (`_destroy_target_mesh` ran each tick past
-  `DESTROY_TIME_HOURS`), so it burned forever — up where the node happened to
-  be, since its ground raycast hit the prop's own collider. Now at
-  `COLLAPSE_AT_DISSOLVE` 0.65 — MEASURED as 75 % of the surface gone against
-  the ash shader's noise, not a guess — `_begin_collapse` runs the ash
-  shader's `collapse` uniform (world_vertex_coords; the burn pattern is keyed
-  on the PRE-fall position so the holes ride down with the piece) over a
-  free-fall-scaled 1.2–3.2 real seconds, the pile fires a one-shot `whoosh()`
-  (flame, smoke, sparks) at ~55 % of the fall, and the meshes are hidden as
-  before when it lands. The pile covers the footprint of the BASE (bottom
-  quarter of the surface points) and everything it shows is
-  `FireAshPile.look(age_hours)` of SIM time: flames to 3 h, ember bed black by
-  6.5 h, grey ash by 9 h.
-  ⚠ The pile is its OWN node (sibling of the FireNode), because the fire event
-  times out at 2 sim-hours and frees its FireNodes; the FireNode stays only as
-  the fire's HANDLE (extinguisher, fire damage, event) while there is open
-  flame, then `_leave_quietly`. The ash stays until the structure is restored
-  (`FireAshPile.clear_for`, from both restore paths) or deleted. It is not
-  saved — a reload shows the burned prop without its ash.
+  last quarter of a structure hanging in the air. At `DISSOLVE_AT_COLLAPSE`
+  0.65 — MEASURED as 75 % of the surface gone against the ash shader's noise,
+  not a guess — the ash shader's `collapse` uniform drops what is left into
+  the base (world_vertex_coords; the burn pattern is keyed on the PRE-fall
+  position so the holes ride down with the piece), the pile fires a one-shot
+  `whoosh()` (flame, smoke, sparks) as the fall passes its midpoint, and the
+  meshes are hidden when it lands. The pile covers the footprint of the BASE
+  (bottom quarter of the surface points) and is a RENDERER: FireNode hands
+  it `FireAshPile.look(age, bonfire_h, ember_h)` every frame (`set_look`);
+  it keeps no clock of its own. It is removed by Restore / prop delete.
+
+**The fire is a PURE FUNCTION of sim time (`FireTimeline`,
+`crisis_events/fire/fire_timeline.gd`).** Everything a fire IS lives in one
+JSON record — `ignited_h`, the three durations `climb_h` (ignition →
+collapse), `bonfire_h`, `ember_h`, their `auto` estimate, `holds`
+(`[[a, b], …]` abs hours the extinguisher held it; the burn clock stops
+inside) and `out_h` (put out: the state FREEZES there) — and
+`FireTimeline.state_at(rec, t)` says what to draw. `FireNode` integrates
+NOTHING any more: each frame it reads the clock
+(`Main.get_absolute_hours`), computes the state and RECONCILES the scene to
+it (`_apply_state`, idempotent and order-free), so scrubbing the timeline
+backwards stands the structure up again and the whole life runs at the
+world's rate at any speed. Records are written only when something happens
+(ignition, spray holds, going out, a duration edit). What it replaced, so
+nobody restores it: a real-time climb (18–90 s regardless of sim speed),
+`fire_time_hours` integration, `DESTROY_TIME_HOURS`, the per-frame re-armed
+smouldering pile, and `FireEvent.cleanup` freeing the nodes. Rules:
+- **For a placed prop the record rides the prop** (`rec["burn"]`, written
+  via `TerrainLoader.set_prop_burn_record`, which is QUIET — a prop rebuild
+  frees every prop node and spraying writes once a second — and debounces
+  the save). `FireNode.sync_prop_fires` (from `_rebuild_placed_props`) brings
+  a saved fire back at the right moment of its life on reload; a FireNode
+  whose prop was rebuilt under it `_rebind_scope`s to the new node and
+  re-applies the state; one whose record was removed (Restore →
+  `clear_prop_burn_record`) disposes itself, pile and all. ⚠ A fresh
+  FireNode has no record on the prop until its first flush — `_flushed_once`
+  is what stops it disposing itself on frame one. Scene structures (no
+  prop) keep the record in memory.
+- **Durations are estimated from the structure** (`FireTimeline.estimate`:
+  climb from height + base footprint, bonfire ∝ fuel mass^0.7 with a tonne ≈
+  6 h, embers a 0.35 share; mass from `PackedSpec` where the catalog knows
+  it, else surface area × 25 mm of timber) and the player can override them
+  in the prop editor's Fire section — on the LIVE record while it burns
+  (`set_duration`, `reset_to_auto`) or as `rec["fire_plan"]` for a fire that
+  has not started, which `_estimate_durations` applies over the estimate at
+  ignition. The collapse itself is `COLLAPSE_H` = 3 s of SIM time: a real
+  fall at 1x, a snap at speed, with the real-time whoosh carrying the moment.
+- **The extinguisher writes HOLDS, not progress.** While sprayed the front
+  simply does not advance (`burn_hours` nets the hold out), so a held fire
+  collapses later by exactly the hold; `intensity` is now only the fight —
+  it sits at the phase's level and the spray pulls it down; at the threshold
+  `put_out` is written and everything freezes at that hour (char where the
+  front reached, embers off, a doused pile loses its glow). `FireEvent` is a
+  thin wrapper: it mints the record (`fire.ignite_at`), hears
+  `fire_extinguished` ONCE when there is no open flame left (put out →
+  RESOLVED; burned down past the collapse → FAILED, the structure is lost)
+  and never frees a FireNode.
 Scope: `MeshInstance3D` only (as `set_burnable` always was) — MultiMesh-built
 structures such as Linkage frames are not sampled. A point fire (no readable
-geometry) still ends at `DESTROY_TIME_HOURS` of SIM time, and gets the same
-pile without the fall.
+geometry) gets the same timeline and pile without the fall.
+
+## Placed-prop editor (`scenes/ui/placed_prop_edit_ui.gd`) — ONE dock, a gumball
+
+`UILayer/PlacedPropEditUI` is the editor for EVERY placed thing. It replaced
+a two-row bottom drawer of spinboxes that locked the mouse into a modal, and
+— the complaint that drove it — the per-model redirects in
+`interaction_focus.open_prop_edit_ui` that sent a StarShade to the StarShade
+designer, a trash/mud printer to the print setup and a pallet rack to its
+builder, none of which could move or delete the prop (a StarShade had no
+Delete anywhere). Those are BUTTONS in its Model section now; the Interact
+key keeps its "use it" meaning (linkage deploy/stow, FDM print setup, packed
+crate unpack) while a click always opens the editor.
+- **Tool-overlay tier** (`CursorController.request_tool_overlay`, the J
+  Light Studio contract): free cursor, RMB look, WASD, one Esc closes (Esc
+  first cancels a drag or disarms Delete). Right-edge dock, `UITheme`
+  sections: Placement / Display / Fire / Model, footer Duplicate + Delete.
+- **The gumball is a `LightGizmo`** (generic despite its name) on the
+  prop's origin: arrows + planes move, rings rotate, `L` or the World/Local
+  button switches frames, Shift snaps 0.25 m / 15°. Drags preview through
+  `TerrainLoader.preview_prop` and COMMIT on release through
+  `PlacedPropService.update_prop_record(main, id, patch, rebuild_prop=true)`
+  — only THIS prop is rebuilt; the loader's `update_prop_record` rebuilds
+  every prop and would pull the node out from under the gizmo (OSM
+  replacements still go through the loader so their building re-attaches).
+  Clicking another prop in the world switches the editor to it.
+- **Fire section**: Burnable; the auto estimate line (durations + fuel
+  mass); three duration spinboxes in MINUTES that write `fire_plan` before a
+  fire and the live record during one; Auto (reset), 🔥 Ignite (through the
+  crisis manager — found by NAME, `CrisisEventManager`, the group is only
+  added later), Put out, Restore.
+- Delete is two-click (arm, confirm); Duplicate goes through
+  `TerrainLoader.duplicate_prop_record` (strips id / burn / graph binding /
+  stow state) and selects the copy.
+Verify with `--capture=propedit` (Validation list).
 
 ## Known pre-existing runtime errors (not regressions)
 

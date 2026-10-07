@@ -1123,6 +1123,13 @@ func _open_placed_prop_edit(prop: PlacedProp) -> void:
 	if deploy != null and deploy.has_method("toggle_deploy"):
 		deploy.call("toggle_deploy")
 		return
+	# An FDM printer's Interact is "use it": the print setup. (A click still
+	# opens the editor, which has the same button.)
+	if _is_fdm_printer_prop(prop):
+		var gv := _graph_view()
+		if gv != null and gv.has_method("open_print_setup_for_prop"):
+			if bool(gv.call("open_print_setup_for_prop", prop.prop_id)):
+				return
 	open_prop_edit_ui(prop)
 
 
@@ -1148,9 +1155,12 @@ func _is_fdm_printer_prop(prop: PlacedProp) -> bool:
 	return str(specs.get("machine_role", "")) == "fdm_printer"
 
 
-## Opens the proper editor for a placed prop — shared by the Interact key
+## Opens THE editor for a placed prop — shared by the Interact key
 ## (interaction_focus) and a no-drag click (GrabController), so every selectable
-## model opens the same UI either way. Printed (mud/clay) objects are move-only.
+## model opens the same UI either way. The StarShade designer, the print setup
+## and the pallet-rack builder used to replace it here; they are buttons in its
+## Model section now, so a StarShade can be moved and deleted like anything
+## else. Printed (mud/clay) objects are move-only.
 func open_prop_edit_ui(prop: PlacedProp) -> void:
 	if prop == null:
 		return
@@ -1159,23 +1169,6 @@ func open_prop_edit_ui(prop: PlacedProp) -> void:
 	var tree := get_tree()
 	if tree == null or tree.current_scene == null:
 		return
-	# Any FDM printer: open the shared Print Setup modal (part/STL, slicer,
-	# bed preview, start). Falls through for non-printer machines.
-	if prop.get_node_or_null("CncMachineRuntime") != null:
-		var gv := _graph_view()
-		if gv != null and gv.has_method("open_print_setup_for_prop"):
-			if bool(gv.call("open_print_setup_for_prop", prop.prop_id)):
-				return
-	# StarShade props open the dedicated modal (design swap + graph reseed).
-	if ModelCatalog.is_starshade_model(prop.model_id):
-		if _loader != null and _loader.has_method("open_starshade_editor"):
-			_loader.call("open_starshade_editor", prop.prop_id)
-			return
-	# Pallet racks open the parametric builder bound to this rack for editing.
-	if prop.model_id == PalletRackBuilder.MODEL_ID:
-		if _loader != null and _loader.has_method("open_pallet_rack_builder_for_prop"):
-			_loader.call("open_pallet_rack_builder_for_prop", prop.prop_id)
-			return
 	var edit_ui := tree.current_scene.get_node_or_null("UILayer/PlacedPropEditUI")
 	if edit_ui != null and edit_ui.has_method("open_for_prop"):
 		edit_ui.call("open_for_prop", prop.prop_id)

@@ -1,458 +1,1192 @@
 extends PanelContainer
 
-## Edit drawer for a placed prop — transform tweaks + delete/replace.
+## The placed-prop EDITOR: one dock for every placed thing in the world.
 ##
-## Laid out as TWO rows: edit controls (model, transform, NPC space tag) above,
-## actions (toggles, sub-editors, Apply/Delete/Close) below. It was one row
-## until the NPC space tag was added, at which point the total ran past 1900 px
-## and pushed **Apply** — which sits near the end — off the right edge of a
-## 1920-wide screen, with no scroll or wrap to recover it.
+## It replaced a two-row bottom drawer of spinboxes that locked the mouse into
+## a modal. This is a right-edge dock in CursorController's TOOL-OVERLAY tier
+## (the J Light Studio / T-V toolbar contract): the cursor is free, RMB still
+## looks, WASD still walks, and ONE Esc closes it. The headline change is the
+## GUMBALL — a LightGizmo on the prop (it is generic; nothing in it is about
+## lights): drag an arrow to slide, a square to slide in a plane, a ring to
+## turn. The numbers are still here for precision, under the gizmo.
+##
+## Every placed model opens HERE — the StarShade designer, the FDM print
+## setup, the pallet-rack builder and the Linkage Lab used to replace this
+## panel outright, and none of them could move or delete the prop (a
+## StarShade had no Delete anywhere). They are now buttons in the "Model"
+## section, so the one surface has everything: place, turn, scale, options,
+## fire, the model's own tools, delete.
+##
+## Node name `UILayer/PlacedPropEditUI` and `open_for_prop` / `close` /
+## `bind_loader` are load-bearing: terrain_loader creates it and
+## interaction_focus / grab_controller open it by name.
 
-const C_BG := Color(0.039, 0.055, 0.098, 0.98)
-const C_PANEL := Color(0.082, 0.114, 0.208, 1.0)
-const C_BORDER := Color(0.227, 0.290, 0.420, 1.0)
-const C_TEXT := Color(0.886, 0.910, 0.941, 1.0)
-
-## Matches slim TimelineUI stack clearance when live height unavailable.
-## Two rows tall (see the class comment on why it is no longer one).
-const DRAWER_HEIGHT := 104.0
+const OVERLAY_NAME := "placed_prop_edit"
+const DOCK_W := 400.0
+const SNAP_M := 0.25
+const SNAP_DEG := 15.0
+const C_TEXT := UITheme.C_TEXT
+const C_TEXT_S := UITheme.C_TEXT_S
+const _SHADOW_MODES := ["", "all", "off"]
 
 var _loader: Node = null
+var _main: Node = null
 var _prop_id: String = ""
+var _rec: Dictionary = {}
+var _active := false
 var _syncing := false
 
-var _model_lbl: Label
-var _packed_lbl: Label
-var _pack_btn: Button = null
-var _crew_breakdown_btn: Button = null
-var _crew_rebuild_btn: Button = null
-var _model_option: OptionButton
-var _off_x: SpinBox
-var _off_y: SpinBox
-var _off_z: SpinBox
-var _yaw: SpinBox
-var _pitch: SpinBox
-var _roll: SpinBox
-var _scale: SpinBox
+# --- world ---
+var _gizmo: LightGizmo = null
+var _dragging := false
+var _drag := {}
+var _local_space := false
+var _tf := {}                 # live transform: x, y_offset, z, yaw, pitch, roll, scale
+var _dirty_tf := false
+
+# --- widgets ---
+var _title_lbl: Label
+var _sub_lbl: Label
+var _hint_lbl: Label
+var _scroll: ScrollContainer
+var _body: VBoxContainer
+var _spins := {}              # key -> SpinBox
+var _space_btn: Button
+var _mode_move: Button
+var _mode_rotate: Button
 var _collision_check: CheckBox
 var _show3d_check: CheckBox
-var _burnable_check: CheckBox
 var _shadow_option: OptionButton
-var _restore_btn: Button
 var _space_row: NpcSpaceTagRow
+var _model_option: OptionButton
+var _packed_lbl: Label
+var _pack_btn: Button
+var _model_section: VBoxContainer
+var _model_btns: VBoxContainer
+# fire
+var _burnable_check: CheckBox
+var _fire_box: VBoxContainer
+var _fire_status: Label
+var _fire_spins := {}         # climb_h / bonfire_h / ember_h -> SpinBox (hours)
+var _fire_auto_lbl: Label
+var _fire_reset_btn: Button
+var _fire_ignite_btn: Button
+var _fire_out_btn: Button
+var _fire_restore_btn: Button
+var _fire_refresh_t := 0.0
+# footer
 var _del_btn: Button
-var _move_btn: Button
-var _linkage_btn: Button
-var _guide_btn: Button
-var _siphon_btn: Button
-var _ports_btn: Button
+var _del_armed := false
 
 
 func _ready() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	add_theme_stylebox_override("panel", UITheme.panel_style(0.94))
+	anchor_left = 1.0
+	anchor_right = 1.0
+	anchor_top = 0.0
+	anchor_bottom = 1.0
+	offset_left = -DOCK_W - 10.0
+	offset_right = -10.0
+	offset_top = 10.0
+	offset_bottom = -(UiScreenLayout.timeline_stack_height() + 10.0)
 	_build_ui()
-	_layout_drawer()
-
-
-func _layout_drawer() -> void:
-	var clearance := UiScreenLayout.timeline_stack_height()
-	var timeline := get_tree().get_first_node_in_group("timeline_ui")
-	if timeline == null:
-		var main := get_tree().current_scene
-		if main != null:
-			timeline = main.get_node_or_null("UILayer/TimelineUI")
-	if timeline != null and timeline.has_method("get_stack_height"):
-		clearance = float(timeline.call("get_stack_height"))
-	UiScreenLayout.pin_above_timeline(self, DRAWER_HEIGHT, clearance)
-
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_RESIZED and visible:
-		_layout_drawer()
+	set_process(false)
 
 
 func bind_loader(loader: Node) -> void:
 	_loader = loader
 
 
+func _resolve_main() -> void:
+	if _main == null or not is_instance_valid(_main):
+		_main = ServiceLocator.main()
+		if _main == null and get_tree() != null:
+			_main = get_tree().current_scene
+
+
+# ---------------------------------------------------------------------------
+# open / close
+# ---------------------------------------------------------------------------
+
 func open_for_prop(prop_id: String) -> void:
-	# Additive printers (mud/clay/concrete) redirect to the in-world Print modal
-	# — the single choke point for both click (GrabController) and Interact key,
-	# so aiming at the printer and interacting always opens the slicer modal.
-	var gv := get_parent().get_node_or_null("SystemGraphView") if get_parent() != null else null
-	if gv == null:
-		var scene := get_tree().current_scene if get_tree() != null else null
-		if scene != null:
-			gv = ServiceLocator.graph()
-	if gv != null and gv.has_method("open_print_setup_for_prop"):
-		if bool(gv.call("open_print_setup_for_prop", prop_id)):
-			return
+	_resolve_main()
+	if prop_id.is_empty() or _loader == null:
+		return
+	var was_open := _active
 	_prop_id = prop_id
-	_refresh_model_list()
-	_load_from_layer()
-	_layout_drawer()
-	visible = true
-	CursorController.request_modal("placed_prop_edit", Callable(self, "close"))
+	_del_armed = false
+	_load_record()
+	if _rec.is_empty():
+		return
+	_rebuild_dynamic_sections()
+	_sync_widgets()
+	if not was_open:
+		_active = true
+		visible = true
+		move_to_front()
+		set_process(true)
+		CursorController.request_tool_overlay(OVERLAY_NAME, Callable(self, "_escape_step"))
+		_ensure_gizmo()
+	_update_gizmo()
+	_hint("Drag the arrows to move, the rings to turn. Shift snaps. Esc closes.")
 
 
 func close() -> void:
-	if not visible:
+	if not _active:
 		return
+	if _dragging:
+		_end_drag(false)
+	_flush_transform()
+	_active = false
 	visible = false
+	set_process(false)
 	_prop_id = ""
-	CursorController.release_modal("placed_prop_edit")
+	_rec = {}
+	CursorController.release_tool_overlay(OVERLAY_NAME)
+	if _gizmo != null and is_instance_valid(_gizmo):
+		_gizmo.hide_gizmo()
 
+
+## Compatibility with every dock's force-close contract.
+func _exit_mode() -> void:
+	close()
+
+
+func _exit_tree() -> void:
+	if _active:
+		close()
+	if _gizmo != null and is_instance_valid(_gizmo):
+		_gizmo.queue_free()
+
+
+func _escape_step() -> void:
+	if _dragging:
+		_end_drag(false)
+		return
+	if _del_armed:
+		_disarm_delete()
+		return
+	close()
+
+
+func is_panel_open() -> bool:
+	return _active
+
+
+# ---------------------------------------------------------------------------
+# UI construction
+# ---------------------------------------------------------------------------
 
 func _build_ui() -> void:
-	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = C_PANEL
-	panel_style.border_color = C_BORDER
-	panel_style.set_border_width_all(1)
-	panel_style.set_corner_radius_all(6)
-	add_theme_stylebox_override("panel", panel_style)
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 10)
-	margin.add_theme_constant_override("margin_right", 10)
-	margin.add_theme_constant_override("margin_top", 6)
-	margin.add_theme_constant_override("margin_bottom", 6)
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, UITheme.SPACE_SM)
 	add_child(margin)
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 4)
-	margin.add_child(root)
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	margin.add_child(outer)
 
-	# Row 1 — what the prop IS: model, transform, and how people use it.
-	var row_edit := HBoxContainer.new()
-	row_edit.add_theme_constant_override("separation", 10)
-	root.add_child(row_edit)
-	# Row 2 — what you can DO to it, ending in Apply / Delete / Close.
-	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 6)
-	root.add_child(actions)
+	# Header
+	var head := HBoxContainer.new()
+	outer.add_child(head)
+	var titles := VBoxContainer.new()
+	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(titles)
+	_title_lbl = Label.new()
+	_title_lbl.add_theme_font_size_override("font_size", UITheme.FONT_LG)
+	_title_lbl.add_theme_color_override("font_color", C_TEXT)
+	titles.add_child(_title_lbl)
+	_sub_lbl = Label.new()
+	_sub_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_sub_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	titles.add_child(_sub_lbl)
+	var close_btn := Button.new()
+	close_btn.text = "✕"
+	close_btn.tooltip_text = "Close (Esc)"
+	UITheme.style_button(close_btn)
+	close_btn.pressed.connect(close)
+	head.add_child(close_btn)
 
-	var left := VBoxContainer.new()
-	left.add_theme_constant_override("separation", 2)
-	left.custom_minimum_size.x = 160.0
-	row_edit.add_child(left)
+	_scroll = ScrollContainer.new()
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	outer.add_child(_scroll)
+	_body = VBoxContainer.new()
+	_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_body.clip_contents = true
+	_body.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	_scroll.add_child(_body)
 
-	_model_lbl = Label.new()
-	_model_lbl.add_theme_color_override("font_color", C_TEXT)
-	_model_lbl.add_theme_font_size_override("font_size", 11)
-	left.add_child(_model_lbl)
+	_build_placement_section()
+	_build_display_section()
+	_build_fire_section()
+	_model_section = _section("Model")
+	_model_btns = VBoxContainer.new()
+	_model_btns.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	_model_section.add_child(_model_btns)
 
-	# Packed ("shipping") size + weight — PACKING_PLAN.md Phase 0.
-	_packed_lbl = Label.new()
-	_packed_lbl.add_theme_color_override("font_color",
-		Color(C_TEXT.r, C_TEXT.g, C_TEXT.b, 0.65))
-	_packed_lbl.add_theme_font_size_override("font_size", 10)
-	_packed_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_packed_lbl.visible = false
-	left.add_child(_packed_lbl)
-
-	_model_option = OptionButton.new()
-	_model_option.item_selected.connect(_on_model_changed)
-	_model_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left.add_child(_model_option)
-
-	_off_x = _spin(0.01)
-	_off_y = _spin(0.01)
-	_off_z = _spin(0.01)
-	_yaw = _spin(1.0, -360.0, 360.0)
-	_pitch = _spin(1.0, -360.0, 360.0)
-	_roll = _spin(1.0, -360.0, 360.0)
-	_scale = _spin(0.05, 0.05, 20.0)
-
-	var fields := HBoxContainer.new()
-	fields.add_theme_constant_override("separation", 6)
-	row_edit.add_child(fields)
-	fields.add_child(_compact_field("X", _off_x))
-	fields.add_child(_compact_field("Y", _off_y))
-	fields.add_child(_compact_field("Z", _off_z))
-	fields.add_child(_compact_field("Yaw", _yaw))
-	fields.add_child(_compact_field("Pitch", _pitch))
-	fields.add_child(_compact_field("Roll", _roll))
-	fields.add_child(_compact_field("Scale", _scale))
-
-	for spin_box in [_off_x, _off_y, _off_z, _yaw, _pitch, _roll, _scale]:
-		spin_box.value_changed.connect(_on_spin_changed)
-
-	_collision_check = CheckBox.new()
-	_collision_check.text = "Collide"
-	_collision_check.button_pressed = true
-	_collision_check.add_theme_color_override("font_color", C_TEXT)
-	_collision_check.toggled.connect(_on_collision_toggled)
-	actions.add_child(_collision_check)
-
-	# Hide this prop from the 3D world (and, since Site Plan renders the same world,
-	# from Site Plan too) without deleting the node — for conceptual/placeholder twins.
-	_show3d_check = CheckBox.new()
-	_show3d_check.text = "Show in 3D"
-	_show3d_check.tooltip_text = "Uncheck to hide this model from the 3D world and Site Plan (the graph node stays)"
-	_show3d_check.button_pressed = true
-	_show3d_check.add_theme_color_override("font_color", C_TEXT)
-	_show3d_check.toggled.connect(_on_show3d_toggled)
-	actions.add_child(_show3d_check)
-
-	_burnable_check = CheckBox.new()
-	_burnable_check.text = "Burnable"
-	_burnable_check.tooltip_text = "Include this prop as fire-crisis ignition / spread geometry (F)"
-	_burnable_check.button_pressed = false
-	_burnable_check.add_theme_color_override("font_color", C_TEXT)
-	_burnable_check.toggled.connect(_on_burnable_toggled)
-	actions.add_child(_burnable_check)
-
-	# Per-prop shadow override (Tier 2 perf). "Default" follows the global Shadow
-	# detail setting; "All" forces every part to cast (e.g. a hero structure);
-	# "Off" drops this prop from the shadow pass entirely.
-	_shadow_option = OptionButton.new()
-	_shadow_option.tooltip_text = "Shadow casting for this prop (overrides the global Shadow detail setting)"
-	_shadow_option.add_item("Shadows: Default", 0)
-	_shadow_option.add_item("Shadows: All parts", 1)
-	_shadow_option.add_item("Shadows: Off", 2)
-	_shadow_option.add_theme_color_override("font_color", C_TEXT)
-	_shadow_option.item_selected.connect(_on_shadow_mode_selected)
-	actions.add_child(_shadow_option)
-
-	# NPC space tag. Shared widget (scenes/ui/npc_space_tag_row.gd) so the
-	# props with their own modals can offer the same control — see that file.
-	_space_row = NpcSpaceTagRow.new()
-	row_edit.add_child(_space_row)
-
-	_move_btn = Button.new()
-	_move_btn.text = "Move"
-	_move_btn.tooltip_text = "Click the world to reposition; camera follows the model"
-	_move_btn.pressed.connect(_on_move_pressed)
-	actions.add_child(_move_btn)
-
-	_restore_btn = Button.new()
-	_restore_btn.text = "Restore"
-	_restore_btn.tooltip_text = "Regenerate this structure after fire damage"
-	_restore_btn.pressed.connect(_on_restore_burned)
-	_restore_btn.visible = false
-	actions.add_child(_restore_btn)
-
-	# PACKED ⇄ DEPLOYED (PACKING_PLAN.md Phase 5). Hidden for non-packable
-	# props; Interact on a packed crate is the other unpack path.
-	_pack_btn = Button.new()
-	_pack_btn.tooltip_text = "Collapse to the packed shipping form / deploy it again"
-	_pack_btn.pressed.connect(_on_pack_toggled)
-	_pack_btn.visible = false
-	actions.add_child(_pack_btn)
-
-	_crew_breakdown_btn = Button.new()
-	_crew_breakdown_btn.text = "👷 Crew breakdown"
-	_crew_breakdown_btn.tooltip_text = "Queue the reverse project: strip panels → unbolt → fold & pack → load out"
-	_crew_breakdown_btn.pressed.connect(_on_crew_breakdown)
-	_crew_breakdown_btn.visible = false
-	actions.add_child(_crew_breakdown_btn)
-
-	_crew_rebuild_btn = Button.new()
-	_crew_rebuild_btn.text = "👷 Crew rebuild"
-	_crew_rebuild_btn.tooltip_text = "Queue the raise: the crew unfolds the frame, re-bolts the ring and re-mounts the panels"
-	_crew_rebuild_btn.pressed.connect(_on_crew_rebuild)
-	_crew_rebuild_btn.visible = false
-	actions.add_child(_crew_rebuild_btn)
-
-	_linkage_btn = Button.new()
-	_linkage_btn.text = "Linkage Lab"
-	_linkage_btn.tooltip_text = "Edit this structure's linkage design in place"
-	_linkage_btn.pressed.connect(_on_edit_linkage)
-	_linkage_btn.visible = false
-	actions.add_child(_linkage_btn)
-
-	_guide_btn = Button.new()
-	_guide_btn.text = "Build guide"
-	_guide_btn.tooltip_text = "Bill of materials, cut list, drill templates and assembly sequence for this structure"
-	_guide_btn.pressed.connect(_on_build_guide)
-	_guide_btn.visible = false
-	actions.add_child(_guide_btn)
-
-	_siphon_btn = Button.new()
-	_siphon_btn.text = "Hydro Lab"
-	_siphon_btn.tooltip_text = "Turbine kind, geometry, penstock, live RPM / power"
-	_siphon_btn.pressed.connect(_on_edit_siphon)
-	_siphon_btn.visible = false
-	actions.add_child(_siphon_btn)
-
-	_ports_btn = Button.new()
-	_ports_btn.text = "Ports"
-	_ports_btn.tooltip_text = "Tag 3D connection ports (plugs / inlets) on this model"
-	_ports_btn.pressed.connect(_on_edit_ports)
-	actions.add_child(_ports_btn)
-
-	var tail_spacer := Control.new()
-	tail_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	actions.add_child(tail_spacer)
-
-	var apply_btn := Button.new()
-	apply_btn.text = "Apply"
-	apply_btn.pressed.connect(_on_apply)
-	actions.add_child(apply_btn)
+	# Footer
+	_hint_lbl = Label.new()
+	_hint_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_hint_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	outer.add_child(_hint_lbl)
+	var foot := HBoxContainer.new()
+	foot.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	outer.add_child(foot)
+	var dup_btn := Button.new()
+	dup_btn.text = "Duplicate"
+	dup_btn.tooltip_text = "Place a copy of this prop beside it"
+	UITheme.style_button(dup_btn)
+	dup_btn.pressed.connect(_on_duplicate)
+	foot.add_child(dup_btn)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	foot.add_child(spacer)
 	_del_btn = Button.new()
 	_del_btn.text = "Delete"
+	_del_btn.tooltip_text = "Remove this prop from the site (asks once)"
+	UITheme.style_button(_del_btn)
 	_del_btn.pressed.connect(_on_delete)
-	actions.add_child(_del_btn)
-	var close_btn := Button.new()
-	close_btn.text = "X"
-	close_btn.pressed.connect(close)
-	actions.add_child(close_btn)
+	foot.add_child(_del_btn)
 
 
-func _spin(step: float, min_v: float = -99999.0, max_v: float = 99999.0) -> SpinBox:
-	var spin_box := SpinBox.new()
-	spin_box.step = step
-	spin_box.min_value = min_v
-	spin_box.max_value = max_v
-	spin_box.allow_greater = true
-	spin_box.allow_lesser = true
-	spin_box.custom_minimum_size.x = 72.0
-	return spin_box
-
-
-func _compact_field(label_text: String, control: Control) -> VBoxContainer:
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 0)
+func _section(title: String) -> VBoxContainer:
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", UITheme.card_style())
+	_body.add_child(card)
+	var m := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		m.add_theme_constant_override("margin_" + side, UITheme.SPACE_SM)
+	card.add_child(m)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	m.add_child(box)
 	var lbl := Label.new()
-	lbl.text = label_text
-	lbl.add_theme_color_override("font_color", C_TEXT)
-	lbl.add_theme_font_size_override("font_size", 10)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	col.add_child(lbl)
-	col.add_child(control)
-	return col
+	lbl.text = title.to_upper()
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	lbl.add_theme_color_override("font_color", UITheme.C_PRIMARY)
+	box.add_child(lbl)
+	return box
 
 
-func _refresh_model_list() -> void:
+func _row(parent: Control) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	parent.add_child(h)
+	return h
+
+
+func _small_label(text: String, parent: Control, min_w: float = 0.0) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	l.add_theme_color_override("font_color", C_TEXT_S)
+	if min_w > 0.0:
+		l.custom_minimum_size.x = min_w
+	parent.add_child(l)
+	return l
+
+
+func _spin(key: String, step: float, min_v: float, max_v: float, suffix: String, parent: Control) -> SpinBox:
+	var sb := SpinBox.new()
+	sb.step = step
+	sb.min_value = min_v
+	sb.max_value = max_v
+	sb.allow_greater = true
+	sb.allow_lesser = true
+	sb.suffix = suffix
+	sb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sb.custom_minimum_size.x = 64.0
+	sb.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	sb.get_line_edit().add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	sb.value_changed.connect(func(_v: float) -> void: _on_tf_spin(key))
+	parent.add_child(sb)
+	_spins[key] = sb
+	return sb
+
+
+func _button(text: String, tip: String, parent: Control, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.tooltip_text = tip
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.style_button(b)
+	b.pressed.connect(cb)
+	parent.add_child(b)
+	return b
+
+
+func _build_placement_section() -> void:
+	var box := _section("Placement")
+	var modes := _row(box)
+	_mode_move = Button.new()
+	_mode_move.text = "Move"
+	_mode_move.toggle_mode = true
+	_mode_move.button_pressed = true
+	_mode_move.tooltip_text = "Show the move arrows and planes on the gizmo"
+	_mode_move.toggled.connect(func(_on: bool) -> void: _update_gizmo())
+	modes.add_child(_mode_move)
+	_mode_rotate = Button.new()
+	_mode_rotate.text = "Rotate"
+	_mode_rotate.toggle_mode = true
+	_mode_rotate.button_pressed = true
+	_mode_rotate.tooltip_text = "Show the rotation rings on the gizmo"
+	_mode_rotate.toggled.connect(func(_on: bool) -> void: _update_gizmo())
+	modes.add_child(_mode_rotate)
+	_space_btn = Button.new()
+	_space_btn.text = "World"
+	_space_btn.tooltip_text = "Gizmo axes: world or the prop's own (L)"
+	_space_btn.pressed.connect(_toggle_space)
+	modes.add_child(_space_btn)
+	for b: Button in [_mode_move, _mode_rotate, _space_btn]:
+		UITheme.style_button(b)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var pos := _row(box)
+	_small_label("X", pos, 14)
+	_spin("x", 0.05, -1.0e6, 1.0e6, " m", pos)
+	_small_label("Z", pos, 14)
+	_spin("z", 0.05, -1.0e6, 1.0e6, " m", pos)
+	var lift := _row(box)
+	_small_label("Lift", lift, 28)
+	_spin("y_offset", 0.05, -50.0, 200.0, " m", lift).tooltip_text = "Height above the ground under the prop"
+	_small_label("Scale", lift, 36)
+	_spin("scale", 0.05, 0.05, 50.0, "×", lift)
+	var rot := _row(box)
+	_small_label("Yaw", rot, 28)
+	_spin("yaw", 1.0, -360.0, 360.0, "°", rot)
+	_small_label("Pitch", rot, 34)
+	_spin("pitch", 1.0, -90.0, 90.0, "°", rot)
+	var rot2 := _row(box)
+	_small_label("Roll", rot2, 28)
+	_spin("roll", 1.0, -180.0, 180.0, "°", rot2)
+	_small_label("", rot2, 34)
+	var filler := Control.new()
+	filler.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rot2.add_child(filler)
+	var quick := _row(box)
+	_button("Level", "Pitch and roll back to zero", quick, func() -> void:
+		_tf["pitch"] = 0.0
+		_tf["roll"] = 0.0
+		_push_transform(true))
+	_button("On ground", "Lift back to zero", quick, func() -> void:
+		_tf["y_offset"] = 0.0
+		_push_transform(true))
+	_button("Free move…", "Carry it with the crosshair; click to set it down", quick, _on_free_move)
+
+
+func _build_display_section() -> void:
+	var box := _section("Display")
+	var toggles := _row(box)
+	_collision_check = CheckBox.new()
+	_collision_check.text = "Collision"
+	_collision_check.tooltip_text = "Walkable / solid"
+	_collision_check.toggled.connect(_on_collision_toggled)
+	toggles.add_child(_collision_check)
+	_show3d_check = CheckBox.new()
+	_show3d_check.text = "Show in 3D"
+	_show3d_check.tooltip_text = "Hide a conceptual twin from the world without removing it"
+	_show3d_check.toggled.connect(_on_show3d_toggled)
+	toggles.add_child(_show3d_check)
+	var shadow_row := _row(box)
+	_small_label("Shadows", shadow_row, 60)
+	_shadow_option = OptionButton.new()
+	_shadow_option.tooltip_text = "Shadow casting for this prop (overrides the global Shadow detail setting)"
+	_shadow_option.add_item("Default", 0)
+	_shadow_option.add_item("All parts", 1)
+	_shadow_option.add_item("Off", 2)
+	_shadow_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_shadow_option.clip_text = true
+	_shadow_option.item_selected.connect(_on_shadow_mode_selected)
+	shadow_row.add_child(_shadow_option)
+	var model_row := _row(box)
+	_small_label("Model", model_row, 60)
+	_model_option = OptionButton.new()
+	_model_option.tooltip_text = "Swap the model, keeping the placement"
+	_model_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_model_option.clip_text = true  # a long model name must not widen the dock
+	_model_option.fit_to_longest_item = false
+	_model_option.item_selected.connect(_on_model_changed)
+	model_row.add_child(_model_option)
+	_space_row = NpcSpaceTagRow.new()
+	_space_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(_space_row)
+
+
+func _build_fire_section() -> void:
+	var box := _section("Fire")
+	_burnable_check = CheckBox.new()
+	_burnable_check.text = "Burnable"
+	_burnable_check.tooltip_text = "Can catch fire (F lights the nearest burnable prop)"
+	_burnable_check.toggled.connect(_on_burnable_toggled)
+	box.add_child(_burnable_check)
+	_fire_box = VBoxContainer.new()
+	_fire_box.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	box.add_child(_fire_box)
+	_fire_status = Label.new()
+	_fire_status.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_fire_status.add_theme_color_override("font_color", C_TEXT)
+	_fire_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_fire_box.add_child(_fire_status)
+	var tips := {
+		"climb_h": ["Ignition → collapse", "How long the structure burns before it falls into its own fire"],
+		"bonfire_h": ["Bonfire", "Open flame on the pile after the collapse"],
+		"ember_h": ["Embers → ash", "From the last flame to cold grey ash"],
+	}
+	for key in ["climb_h", "bonfire_h", "ember_h"]:
+		var r := _row(_fire_box)
+		var l := _small_label(tips[key][0], r, 120)
+		l.tooltip_text = tips[key][1]
+		var sb := SpinBox.new()
+		sb.step = 1.0
+		sb.min_value = 1.0
+		sb.max_value = 48.0 * 60.0
+		sb.allow_greater = true
+		sb.suffix = " min"
+		sb.tooltip_text = tips[key][1]
+		sb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		sb.custom_minimum_size.x = 64.0
+		sb.get_line_edit().add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		sb.value_changed.connect(func(_v: float) -> void: _on_fire_spin(key))
+		r.add_child(sb)
+		_fire_spins[key] = sb
+	_fire_auto_lbl = Label.new()
+	_fire_auto_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_fire_auto_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	_fire_auto_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_fire_box.add_child(_fire_auto_lbl)
+	var acts := _row(_fire_box)
+	_fire_reset_btn = _button("Auto", "Back to the estimate from the structure's size and mass", acts, _on_fire_reset)
+	_fire_ignite_btn = _button("🔥 Ignite", "Light it now, at the clock's current time", acts, _on_fire_ignite)
+	_fire_out_btn = _button("Put out", "Out, at the clock's current time (the char stays)", acts, _on_fire_put_out)
+	_fire_restore_btn = _button("Restore", "Forget the fire: the structure as it was", acts, _on_fire_restore)
+
+
+# ---------------------------------------------------------------------------
+# record <-> widgets
+# ---------------------------------------------------------------------------
+
+func _load_record() -> void:
+	_rec = {}
+	if _loader == null or not _loader.has_method("get_prop_record"):
+		return
+	var rec: Variant = _loader.call("get_prop_record", _prop_id)
+	if rec is Dictionary:
+		_rec = (rec as Dictionary).duplicate(true)
+	if _rec.is_empty():
+		return
+	var mid := str(_rec.get("model_id", ""))
+	var y_off := 0.0
+	if _rec.has("y_offset"):
+		y_off = float(_rec["y_offset"])
+	elif _rec.has("y"):
+		var foot_y := ModelCatalog.foot_local_y(mid)
+		var world_scale := ModelCatalog.resolved_scale(mid, float(_rec.get("scale", 1.0)))
+		y_off = float(_rec["y"]) - (float(_rec.get("ground_y", 0.0)) - foot_y * world_scale)
+	_tf = {
+		"x": float(_rec.get("x", 0.0)), "y_offset": y_off, "z": float(_rec.get("z", 0.0)),
+		"yaw": float(_rec.get("yaw", 0.0)), "pitch": float(_rec.get("pitch", 0.0)),
+		"roll": float(_rec.get("roll", 0.0)), "scale": float(_rec.get("scale", 1.0)),
+	}
+	_dirty_tf = false
+
+
+func _sync_widgets() -> void:
+	_syncing = true
+	var mid := str(_rec.get("model_id", ""))
+	var entry := ModelCatalog.find(mid)
+	_title_lbl.text = str(entry.get("label", mid)) if not entry.is_empty() else mid
+	var kind := "OSM replacement" if str(_rec.get("type", "")) == "osm" else "Placed prop"
+	if bool(_rec.get("packed", false)):
+		kind += " · packed"
+	_sub_lbl.text = "%s · %s" % [kind, _prop_id]
+	for key in _spins:
+		(_spins[key] as SpinBox).set_value_no_signal(float(_tf.get(key, 0.0)))
+	_collision_check.set_pressed_no_signal(bool(_rec.get("collision_enabled", true)))
+	_show3d_check.set_pressed_no_signal(not bool(_rec.get("hidden_3d", false)))
+	_shadow_option.selected = maxi(_SHADOW_MODES.find(str(_rec.get("shadow_mode", ""))), 0)
 	_model_option.clear()
 	for m in ModelCatalog.all_models():
 		_model_option.add_item(str(m.get("label", m.get("id", "?"))))
 		_model_option.set_item_metadata(_model_option.item_count - 1, str(m.get("id", "")))
-
-
-func _load_from_layer() -> void:
-	if _loader == null or not _loader.has_method("get_prop_record"):
-		return
-	var rec: Variant = _loader.call("get_prop_record", _prop_id)
-	if not (rec is Dictionary):
-		return
-	var d: Dictionary = rec
-	_syncing = true
-	_model_lbl.text = "Prop"
-	_refresh_packed_line(d)
-	for i in _model_option.item_count:
-		if str(_model_option.get_item_metadata(i)) == str(d.get("model_id", "")):
-			_model_option.select(i)
-			break
-	_off_x.value = float(d.get("x", 0.0))
-	if d.has("y_offset"):
-		_off_y.value = float(d.get("y_offset", 0.0))
-	elif d.has("y"):
-		var foot_y := ModelCatalog.foot_local_y(str(d.get("model_id", "")))
-		var user_scale := float(d.get("scale", 1.0))
-		var world_scale := ModelCatalog.resolved_scale(str(d.get("model_id", "")), user_scale)
-		var gy := float(d.get("ground_y", 0.0))
-		var grounded_y := gy - foot_y * world_scale
-		_off_y.value = float(d["y"]) - grounded_y
-	else:
-		_off_y.value = 0.0
-	_off_z.value = float(d.get("z", 0.0))
-	_yaw.value = float(d.get("yaw", 0.0))
-	_pitch.value = float(d.get("pitch", 0.0))
-	_roll.value = float(d.get("roll", 0.0))
-	_scale.value = float(d.get("scale", 1.0))
-	_collision_check.button_pressed = bool(d.get("collision_enabled", true))
-	if _show3d_check != null:
-		_show3d_check.button_pressed = not bool(d.get("hidden_3d", false))
-	_burnable_check.button_pressed = bool(d.get("burnable", false))
-	if _shadow_option != null:
-		_shadow_option.selected = _shadow_mode_to_idx(str(d.get("shadow_mode", "")))
-	if _linkage_btn != null:
-		_linkage_btn.visible = str(d.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID
-	if _guide_btn != null:
-		_guide_btn.visible = str(d.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID
-	if _siphon_btn != null:
-		var mid := str(d.get("model_id", ""))
-		var kind := str(d.get("kind", ""))
-		_siphon_btn.visible = ModelCatalog.is_hydro_turbine(mid) \
-				or kind == "siphon_hydro" or kind == "siphon_hoverboard"
-	_refresh_restore_visibility()
+		if str(m.get("id", "")) == mid:
+			_model_option.select(_model_option.item_count - 1)
 	_space_row.bind_prop(_loader, _prop_id)
-
-	if _del_btn != null:
-		var is_osm := str(d.get("type", "")) == "osm"
-		if is_osm:
-			_del_btn.text = "Remove OSM"
-		else:
-			_del_btn.text = "Delete"
+	_del_btn.text = "Remove OSM" if str(_rec.get("type", "")) == "osm" else "Delete"
+	_sync_fire()
 	_syncing = false
 
 
-## Packed ("shipping") line under the model name — PACKING_PLAN.md Phase 0.
-## Linkage props compute theirs from the live design (honest-fold envelope);
-## everything else resolves through PackedSpec; unknown/non-packable hides.
-func _refresh_packed_line(d: Dictionary) -> void:
-	if _packed_lbl == null:
-		return
-	var packed: Dictionary = {}
-	if d.has("linkage_spec") and d.get("linkage_spec") is Dictionary:
-		var p := LinkageParams.new()
-		p.from_config(d.get("linkage_spec") as Dictionary)
-		packed = LinkageStructureBuilder.packed_spec_for(p)
-	elif d.has("container_spec") and d.get("container_spec") is Dictionary:
-		packed = ContainerCatalog.packed_spec_for(
-			str((d.get("container_spec") as Dictionary).get("container_id", "")))
-	if packed.is_empty():
-		packed = PackedSpec.for_model(str(d.get("model_id", "")))
+## The per-model tools: whichever of the special editors applies, plus the
+## shared ones. Rebuilt on every open (the model can change under us).
+func _rebuild_dynamic_sections() -> void:
+	for c in _model_btns.get_children():
+		_model_btns.remove_child(c)
+		c.queue_free()
+	var mid := str(_rec.get("model_id", ""))
+	var prop := _find_prop_node()
+	_packed_lbl = Label.new()
+	_packed_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_packed_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	_packed_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_model_btns.add_child(_packed_lbl)
+	_refresh_packed_line()
+
+	if ModelCatalog.is_starshade_model(mid):
+		_button("StarShade design…", "Swap the design and reseed its graph", _model_btns, _on_starshade)
+	if mid == PalletRackBuilder.MODEL_ID:
+		_button("Edit rack…", "The parametric pallet-rack builder, bound to this rack", _model_btns, _on_pallet_rack)
+	if prop != null and prop.get_node_or_null("CncMachineRuntime") != null:
+		_button("Print setup…", "Part, slicer, bed preview, start", _model_btns, _on_print_setup)
+	if mid == LinkageStructureBuilder.MODEL_ID:
+		var deployed := bool(_rec.get("linkage_deployed", false))
+		_button("Stow" if deployed else "Deploy", "Fold / unfold the structure (3 s)", _model_btns, _on_linkage_toggle)
+		_button("Edit in Linkage Lab…", "The designer, bound to this structure", _model_btns, _on_edit_linkage)
+		_button("Build guide…", "BOM, cut list, drill templates, crew plan", _model_btns, _on_build_guide)
+		if not bool(_rec.get("packed", false)):
+			_button("Crew: break down", "Queue the crew to strip, fold and pack it", _model_btns, _on_crew_breakdown)
+		elif str(_rec.get("stowed_in", "")).is_empty() and not (_rec.get("build_state") is Dictionary):
+			_button("Crew: rebuild", "Queue the crew to raise the packed crate again", _model_btns, _on_crew_rebuild)
+	if ModelCatalog.is_hydro_turbine(mid) or str(_rec.get("kind", "")) in ["siphon_hydro", "siphon_hoverboard"]:
+		_button("Hydro Lab…", "The turbine's lab, on its graph node", _model_btns, _on_edit_siphon)
+	_button("Connection ports…", "Where pipes and wires plug into this prop", _model_btns, _on_edit_ports)
+	var spec := PlacedPropRuntime.packed_spec_for_record(_rec)
+	if not spec.is_empty() and str(_rec.get("stowed_in", "")).is_empty():
+		_pack_btn = _button("Unpack" if bool(_rec.get("packed", false)) else "📦 Pack up",
+			"Pack into its shipping form, or deploy it", _model_btns, _on_pack_toggled)
+
+
+func _refresh_packed_line() -> void:
+	var packed := PlacedPropRuntime.packed_spec_for_record(_rec)
 	_packed_lbl.visible = not packed.is_empty()
-	if _pack_btn != null:
-		_pack_btn.visible = not packed.is_empty()
-		_pack_btn.text = "Unpack" if bool(d.get("packed", false)) else "📦 Pack up"
-	if _crew_breakdown_btn != null:
-		# Reverse project: a DEPLOYED linkage structure only (the crew strips,
-		# unbolts, folds and loads it out — packed crates just get carried).
-		_crew_breakdown_btn.visible = d.get("linkage_spec") is Dictionary \
-			and not bool(d.get("packed", false))
-	if _crew_rebuild_btn != null:
-		# The mirror: a PACKED linkage crate whose parts were already
-		# fabricated — the crew raises it again (no cutting or drilling).
-		# Hidden while stowed in a container: unload the delivery first.
-		_crew_rebuild_btn.visible = d.get("linkage_spec") is Dictionary \
-			and bool(d.get("packed", false)) \
-			and str(d.get("stowed_in", "")).is_empty() \
-			and not (d.get("build_state") is Dictionary)
 	if packed.is_empty():
 		return
 	var est := "  (est.)" if str(packed.get("source", "")) == "estimated" else ""
-	if bool(d.get("packed", false)):
-		# Already a crate: lead with WHAT IS INSIDE (same helper as the
-		# crosshair focus label, so the two never drift).
+	if bool(_rec.get("packed", false)):
 		_packed_lbl.text = "📦 Contains: %s · %s%s" % [
-			PlacedPropRuntime.packed_contents_label(d, get_tree().current_scene),
+			PlacedPropRuntime.packed_contents_label(_rec, get_tree().current_scene),
 			PackedSpec.format_mass(packed), est]
 	else:
 		_packed_lbl.text = "📦 Packs to %s · %s%s" % [
 			PackedSpec.format_dims(packed), PackedSpec.format_mass(packed), est]
 
 
-func _on_pack_toggled() -> void:
-	if _loader == null or _prop_id.is_empty() \
-			or not _loader.has_method("set_prop_packed"):
+# ---------------------------------------------------------------------------
+# transform: gizmo + numbers -> live preview -> commit
+# ---------------------------------------------------------------------------
+
+func _transform_patch() -> Dictionary:
+	return {
+		"x": float(_tf["x"]), "y_offset": float(_tf["y_offset"]), "z": float(_tf["z"]),
+		"yaw": float(_tf["yaw"]), "pitch": float(_tf["pitch"]), "roll": float(_tf["roll"]),
+		"scale": float(_tf["scale"]),
+	}
+
+
+func _on_tf_spin(key: String) -> void:
+	if _syncing:
 		return
-	var now_packed := _loader.has_method("is_prop_packed") \
-		and bool(_loader.call("is_prop_packed", _prop_id))
+	_tf[key] = (_spins[key] as SpinBox).value
+	_push_transform(true)
+
+
+## Show the live transform on the node now; `commit` persists it.
+func _push_transform(commit: bool) -> void:
+	if _loader == null or _prop_id.is_empty():
+		return
+	if _loader.has_method("preview_prop"):
+		_loader.call("preview_prop", _prop_id, _transform_patch())
+	_dirty_tf = true
+	_syncing = true
+	for key in _spins:
+		(_spins[key] as SpinBox).set_value_no_signal(float(_tf.get(key, 0.0)))
+	_syncing = false
+	if commit:
+		_flush_transform()
+	_update_gizmo()
+
+
+## Persist the live transform. Only THIS prop is rebuilt (the loader's
+## update_prop_record rebuilds every prop and would pull the node out from
+## under the gizmo); OSM replacements go through the loader so the building
+## they replace is re-attached.
+func _flush_transform() -> void:
+	if not _dirty_tf or _loader == null or _prop_id.is_empty():
+		return
+	_dirty_tf = false
+	var patch := _transform_patch()
+	if str(_rec.get("type", "")) == "osm":
+		if _loader.has_method("update_prop_record"):
+			_loader.call("update_prop_record", _prop_id, patch)
+	else:
+		_resolve_main()
+		PlacedPropService.update_prop_record(_main, _prop_id, patch, true)
+	for k in patch:
+		_rec[k] = patch[k]
+	var sgv := ServiceLocator.graph()
+	if sgv != null and sgv.has_method("sync_site_from_prop"):
+		sgv.call("sync_site_from_prop", _prop_id)
+
+
+func _find_prop_node() -> PlacedProp:
+	if _loader == null or _prop_id.is_empty():
+		return null
+	if _loader.has_method("_find_placed_prop_node"):
+		return _loader.call("_find_placed_prop_node", _prop_id) as PlacedProp
+	return null
+
+
+func _ensure_gizmo() -> void:
+	_resolve_main()
+	if _gizmo == null or not is_instance_valid(_gizmo):
+		_gizmo = LightGizmo.new()
+		_gizmo.name = "PlacedPropGizmo"
+		if _main != null:
+			_main.add_child(_gizmo)
+
+
+func _prop_basis() -> Basis:
+	return Basis.from_euler(Vector3(deg_to_rad(float(_tf.get("pitch", 0.0))),
+		deg_to_rad(float(_tf.get("yaw", 0.0))), deg_to_rad(float(_tf.get("roll", 0.0)))))
+
+
+## The gizmo sits at the prop's origin — its ground point.
+func _gizmo_origin() -> Vector3:
+	var prop := _find_prop_node()
+	if prop != null:
+		return prop.global_position
+	return Vector3(float(_tf.get("x", 0.0)), 0.0, float(_tf.get("z", 0.0)))
+
+
+func _update_gizmo() -> void:
+	if not _active or _gizmo == null or not is_instance_valid(_gizmo):
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null or _rec.is_empty():
+		_gizmo.hide_gizmo()
+		return
+	_gizmo.world_space = not _local_space
+	_gizmo.show_move = _mode_move.button_pressed
+	_gizmo.show_rotate = _mode_rotate.button_pressed
+	_gizmo.set_target(_gizmo_origin(), _prop_basis(), cam, {})
+
+
+func _toggle_space() -> void:
+	_local_space = not _local_space
+	_space_btn.text = "Local" if _local_space else "World"
+	_update_gizmo()
+
+
+func _process(delta: float) -> void:
+	if not _active:
+		return
+	if _dragging:
+		pass
+	_update_gizmo()
+	_fire_refresh_t += delta
+	if _fire_refresh_t >= 0.5:
+		_fire_refresh_t = 0.0
+		_refresh_fire_status()
+
+
+func _pointer_over_ui() -> bool:
+	return visible and get_global_rect().has_point(get_viewport().get_mouse_position())
+
+
+func _ray(mouse: Vector2) -> Dictionary:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return {}
+	return {"o": cam.project_ray_origin(mouse), "d": cam.project_ray_normal(mouse), "cam": cam}
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not _active:
+		return
+	if event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo:
+		var k := event as InputEventKey
+		if k.physical_keycode == KEY_L and not k.ctrl_pressed:
+			_toggle_space()
+			get_viewport().set_input_as_handled()
+		elif k.physical_keycode == KEY_DELETE:
+			_on_delete()
+			get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseMotion:
+		var pos := (event as InputEventMouseMotion).position
+		if _dragging:
+			var r := _ray(pos)
+			if not r.is_empty():
+				_update_gizmo_drag(r)
+			get_viewport().set_input_as_handled()
+		elif _gizmo != null and not _pointer_over_ui() and not CursorController.overlay_look_active():
+			var r2 := _ray(pos)
+			if not r2.is_empty():
+				_gizmo.set_hot(_gizmo.pick(r2["o"], r2["d"]))
+		return
+	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+		var mb := event as InputEventMouseButton
+		if mb.pressed:
+			if _pointer_over_ui() or CursorController.overlay_look_active():
+				return
+			var r := _ray(mb.position)
+			if r.is_empty():
+				return
+			var handle := _gizmo.pick(r["o"], r["d"]) if _gizmo != null else ""
+			if not handle.is_empty():
+				_begin_gizmo_drag(handle, r)
+				get_viewport().set_input_as_handled()
+				return
+			# Clicking another placed prop switches the editor to it.
+			var other := _pick_prop(r)
+			if other != null and other.prop_id != _prop_id:
+				open_for_prop(other.prop_id)
+				get_viewport().set_input_as_handled()
+		elif _dragging:
+			_end_drag(true)
+			get_viewport().set_input_as_handled()
+
+
+## Physics ray → the PlacedProp under the pointer, if any.
+func _pick_prop(r: Dictionary) -> PlacedProp:
+	var cam := r["cam"] as Camera3D
+	var space := cam.get_world_3d().direct_space_state
+	if space == null:
+		return null
+	var q := PhysicsRayQueryParameters3D.create(r["o"], r["o"] + (r["d"] as Vector3) * 400.0)
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		return null
+	var n: Node = hit.get("collider") as Node
+	while n != null:
+		if n is PlacedProp:
+			return n as PlacedProp
+		n = n.get_parent()
+	return null
+
+
+func _begin_gizmo_drag(handle: String, r: Dictionary) -> void:
+	_dragging = true
+	var o := _gizmo.global_position
+	_drag = {"handle": handle, "origin": o, "tf0": _tf.duplicate(), "applied": Vector3.ZERO}
+	if handle.begins_with("r"):
+		var n := _gizmo.axis(handle)
+		var hit: Variant = LightGizmoMath.ray_plane(r["o"], r["d"], o, n)
+		_drag["axis"] = n
+		_drag["ref"] = ((hit as Vector3) - o) if hit != null else n.cross(Vector3.UP + Vector3(0.01, 0, 0))
+	elif handle.length() == 1:
+		var ax := _gizmo.axis(handle)
+		_drag["axis"] = ax
+		_drag["s0"] = LightGizmoMath.axis_param(r["o"], r["d"], o, ax)
+	else:
+		var n2 := _gizmo.plane_normal(handle)
+		_drag["normal"] = n2
+		_drag["hit0"] = LightGizmoMath.ray_plane(r["o"], r["d"], o, n2)
+	_gizmo.set_hot(handle)
+	var prop := _find_prop_node()
+	if prop != null and prop.has_method("set_move_highlight"):
+		prop.call("set_move_highlight", true)
+
+
+func _update_gizmo_drag(r: Dictionary) -> void:
+	var handle := str(_drag["handle"])
+	var o: Vector3 = _drag["origin"]
+	var snap := Input.is_key_pressed(KEY_SHIFT)
+	var tf0: Dictionary = _drag["tf0"]
+	if handle.begins_with("r"):
+		var n: Vector3 = _drag["axis"]
+		var hit: Variant = LightGizmoMath.ray_plane(r["o"], r["d"], o, n)
+		if hit == null:
+			return
+		var ang := LightGizmoMath.ring_angle(hit, o, n, _drag["ref"])
+		if snap:
+			ang = deg_to_rad(LightGizmoMath.snap(rad_to_deg(ang), SNAP_DEG))
+		var rot0 := Vector3(float(tf0["pitch"]), float(tf0["yaw"]), float(tf0["roll"]))
+		var rot := LightGizmoMath.rotate_by(rot0, n, ang, not _local_space)
+		_tf["pitch"] = rot.x
+		_tf["yaw"] = rot.y
+		_tf["roll"] = rot.z
+		_push_transform(false)
+		_hint("Rotate %.1f°  (Shift snaps to %d°)" % [rad_to_deg(ang), int(SNAP_DEG)])
+		return
+	var delta := Vector3.ZERO
+	if handle.length() == 1:
+		var s := LightGizmoMath.axis_param(r["o"], r["d"], o, _drag["axis"])
+		if is_nan(s) or is_nan(float(_drag["s0"])):
+			return
+		var d := s - float(_drag["s0"])
+		if snap:
+			d = LightGizmoMath.snap(d, SNAP_M)
+		delta = (_drag["axis"] as Vector3) * d
+	else:
+		var hit2: Variant = LightGizmoMath.ray_plane(r["o"], r["d"], o, _drag["normal"])
+		if hit2 == null or _drag["hit0"] == null:
+			return
+		delta = (hit2 as Vector3) - (_drag["hit0"] as Vector3)
+		if snap:
+			delta = LightGizmoMath.snap_vec(delta, SNAP_M)
+	_tf["x"] = float(tf0["x"]) + delta.x
+	_tf["z"] = float(tf0["z"]) + delta.z
+	_tf["y_offset"] = float(tf0["y_offset"]) + delta.y
+	_push_transform(false)
+	_hint("Move %.2f m  (Shift snaps to %.2f m)" % [delta.length(), SNAP_M])
+
+
+func _end_drag(commit: bool) -> void:
+	if not _dragging:
+		return
+	_dragging = false
+	if _gizmo != null:
+		_gizmo.set_hot("")
+	var prop := _find_prop_node()
+	if prop != null and prop.has_method("set_move_highlight"):
+		prop.call("set_move_highlight", false)
+	if commit:
+		_flush_transform()
+	else:
+		_tf = (_drag["tf0"] as Dictionary).duplicate()
+		_dirty_tf = true
+		_push_transform(true)
+	_drag = {}
+	_hint("")
+
+
+func _hint(text: String) -> void:
+	if _hint_lbl != null:
+		_hint_lbl.text = text
+
+
+# ---------------------------------------------------------------------------
+# display options
+# ---------------------------------------------------------------------------
+
+func _on_collision_toggled(pressed: bool) -> void:
+	if _syncing or _loader == null or _prop_id.is_empty():
+		return
+	_rec["collision_enabled"] = pressed
+	_loader.call("update_prop_record", _prop_id, {"collision_enabled": pressed})
+
+
+func _on_show3d_toggled(pressed: bool) -> void:
+	if _syncing or _loader == null or _prop_id.is_empty():
+		return
+	_rec["hidden_3d"] = not pressed
+	_loader.call("update_prop_record", _prop_id, {"hidden_3d": not pressed})
+
+
+func _on_shadow_mode_selected(idx: int) -> void:
+	if _syncing or _loader == null or _prop_id.is_empty():
+		return
+	var mode: String = _SHADOW_MODES[clampi(idx, 0, _SHADOW_MODES.size() - 1)]
+	_rec["shadow_mode"] = mode
+	_loader.call("update_prop_record", _prop_id, {"shadow_mode": mode})
+	var node := _find_prop_node()
+	if node != null:
+		node.set_meta("shadow_mode", mode)
+		var radius := 0.0
+		if node.has_method("get_local_pick_radius"):
+			radius = float(node.call("get_local_pick_radius"))
+		PropRenderTuning.apply_to_prop(node, radius)
+
+
+func _on_model_changed(idx: int) -> void:
+	if _syncing or _loader == null or _prop_id.is_empty() or idx < 0:
+		return
+	var mid := str(_model_option.get_item_metadata(idx))
+	if mid.is_empty() or mid == str(_rec.get("model_id", "")):
+		return
+	_loader.call("update_prop_record", _prop_id, {"model_id": mid})
+	open_for_prop(_prop_id)
+
+
+func _on_pack_toggled() -> void:
+	if _loader == null or _prop_id.is_empty() or not _loader.has_method("set_prop_packed"):
+		return
+	var now_packed := _loader.has_method("is_prop_packed") and bool(_loader.call("is_prop_packed", _prop_id))
 	_loader.call("set_prop_packed", _prop_id, not now_packed)
-	_load_from_layer()
+	# The pack/unpack animates over a few frames; re-read once it has landed.
+	get_tree().create_timer(0.2).timeout.connect(func() -> void:
+		if _active and not _prop_id.is_empty():
+			open_for_prop(_prop_id))
+
+
+# ---------------------------------------------------------------------------
+# fire
+# ---------------------------------------------------------------------------
+
+func _burn_rec() -> Dictionary:
+	var b: Variant = _rec.get("burn", null)
+	return b if FireTimeline.is_record(b) else {}
+
+
+func _clock_hours() -> float:
+	_resolve_main()
+	if _main != null and _main.has_method("get_absolute_hours"):
+		return float(_main.call("get_absolute_hours"))
+	return 0.0
+
+
+func _sync_fire() -> void:
+	var burnable := bool(_rec.get("burnable", false))
+	_burnable_check.set_pressed_no_signal(burnable)
+	_fire_box.visible = burnable
+	if not burnable:
+		return
+	var burn := _burn_rec()
+	# Durations: the live record's while it burns, else the plan for when it
+	# does (a pre-set choice, or the estimate from the geometry).
+	var durations := burn if not burn.is_empty() else _fire_plan_or_estimate()
+	for key in _fire_spins:
+		(_fire_spins[key] as SpinBox).set_value_no_signal(round(float(durations.get(key, 0.0)) * 60.0))
+	var auto: Dictionary = burn.get("auto", {}) if not burn.is_empty() else _estimate()
+	_fire_auto_lbl.text = "Auto estimate: %s to collapse · %s bonfire · %s embers (%s of fuel)" % [
+		FireTimeline.fmt_hours(float(auto.get("climb_h", 0.0))),
+		FireTimeline.fmt_hours(float(auto.get("bonfire_h", 0.0))),
+		FireTimeline.fmt_hours(float(auto.get("ember_h", 0.0))),
+		("%d kg" % int(float(auto.get("mass_kg", 0.0)))) if float(auto.get("mass_kg", -1.0)) > 0.0 else "unknown mass"]
+	_fire_ignite_btn.visible = burn.is_empty()
+	_fire_out_btn.visible = not burn.is_empty()
+	_fire_restore_btn.visible = not burn.is_empty()
+	_refresh_fire_status()
+
+
+func _estimate() -> Dictionary:
+	var prop := _find_prop_node()
+	if prop == null:
+		return {}
+	return FireNode.estimate_for_prop(prop, _rec)
+
+
+## The durations a fire lit NOW would use: the player's plan if set, else
+## the estimate.
+func _fire_plan_or_estimate() -> Dictionary:
+	var plan: Variant = _rec.get("fire_plan", null)
+	var est := _estimate()
+	if plan is Dictionary:
+		var out := est.duplicate()
+		for k in ["climb_h", "bonfire_h", "ember_h"]:
+			if (plan as Dictionary).has(k):
+				out[k] = float((plan as Dictionary)[k])
+		return out
+	return est
+
+
+func _refresh_fire_status() -> void:
+	if not _fire_box.visible:
+		return
+	var burn := _burn_rec()
+	if burn.is_empty():
+		var plan: Variant = _rec.get("fire_plan", null)
+		_fire_status.text = "Not burning. %s" % (
+			"Durations set by you." if plan is Dictionary else "Durations will be estimated when it catches.")
+		return
+	var t := _clock_hours()
+	var st := FireTimeline.state_at(burn, t)
+	var name := FireTimeline.phase_name(st)
+	var line := ""
+	match name:
+		"none":
+			line = "Lit at +%s from now." % FireTimeline.fmt_hours(float(burn["ignited_h"]) - t)
+		"burning":
+			line = "Burning — %d%% up, collapse in %s%s." % [int(float(st["progress"]) * 100.0),
+				FireTimeline.fmt_hours(FireTimeline.climb_h(burn) - float(st["burn_h"])),
+				" (held by the extinguisher)" if bool(st["held"]) else ""]
+		"collapsing":
+			line = "Collapsing."
+		"bonfire":
+			line = "Bonfire — flames for another %s." % FireTimeline.fmt_hours(
+				FireTimeline.bonfire_h(burn) - float(st["age_h"]))
+		"embers":
+			line = "Embers — ash in %s." % FireTimeline.fmt_hours(
+				FireTimeline.bonfire_h(burn) + FireTimeline.ember_h(burn) - float(st["age_h"]))
+		"ash":
+			line = "Burned to ash."
+		"out":
+			line = "Put out %s ago." % FireTimeline.fmt_hours(t - float(burn.get("out_h", t)))
+	_fire_status.text = line
+
+
+func _on_burnable_toggled(pressed: bool) -> void:
+	if _syncing or _loader == null or _prop_id.is_empty():
+		return
+	_rec["burnable"] = pressed
+	_loader.call("update_prop_record", _prop_id, {"burnable": pressed})
+	FireNode.invalidate_flammable_mesh_cache()
+	_syncing = true
+	_sync_fire()
+	_syncing = false
+
+
+## A duration edit: onto the live burn record (the FireNode re-reads it) or
+## onto the plan for a fire that has not started.
+func _on_fire_spin(key: String) -> void:
+	if _syncing or _loader == null or _prop_id.is_empty():
+		return
+	var hours := (_fire_spins[key] as SpinBox).value / 60.0
+	var burn := _burn_rec()
+	if not burn.is_empty():
+		FireTimeline.set_duration(burn, key, hours)
+		_rec["burn"] = burn
+		_loader.call("set_prop_burn_record", _prop_id, burn)
+	else:
+		var plan: Dictionary = (_rec.get("fire_plan", {}) as Dictionary).duplicate() if _rec.get("fire_plan") is Dictionary else {}
+		plan[key] = hours
+		_rec["fire_plan"] = plan
+		_loader.call("set_prop_fire_plan", _prop_id, plan)
+	_refresh_fire_status()
+
+
+func _on_fire_reset() -> void:
+	if _loader == null or _prop_id.is_empty():
+		return
+	var burn := _burn_rec()
+	if not burn.is_empty():
+		FireTimeline.reset_to_auto(burn)
+		_rec["burn"] = burn
+		_loader.call("set_prop_burn_record", _prop_id, burn)
+	else:
+		_rec.erase("fire_plan")
+		_loader.call("set_prop_fire_plan", _prop_id, {})
+	_syncing = true
+	_sync_fire()
+	_syncing = false
+
+
+func _on_fire_ignite() -> void:
+	var prop := _find_prop_node()
+	if prop == null:
+		return
+	var tree := get_tree()
+	var manager := tree.get_first_node_in_group("crisis_event_manager")
+	if manager == null and tree.current_scene != null:
+		manager = tree.current_scene.get_node_or_null("CrisisEventManager")
+	if manager == null or not manager.has_method("trigger_event_manual"):
+		_hint("No crisis manager on this map")
+		return
+	var ev := FireEvent.new()
+	var roots: Array[Node3D] = [prop]
+	manager.call("trigger_event_manual", ev, {"structure": prop, "burnable_roots": roots,
+		"restrict_to_structure": true, "prefer_bottom": true})
+	get_tree().create_timer(0.3).timeout.connect(func() -> void:
+		if _active and not _prop_id.is_empty():
+			_load_record()
+			_syncing = true
+			_sync_fire()
+			_syncing = false)
+
+
+func _on_fire_put_out() -> void:
+	var burn := _burn_rec()
+	if burn.is_empty() or _loader == null:
+		return
+	FireTimeline.put_out(burn, _clock_hours())
+	_rec["burn"] = burn
+	_loader.call("set_prop_burn_record", _prop_id, burn)
+	_refresh_fire_status()
+
+
+func _on_fire_restore() -> void:
+	var prop := _find_prop_node()
+	if prop != null and prop.has_method("restore_after_burn"):
+		prop.call("restore_after_burn")
+	elif _loader != null and _loader.has_method("clear_prop_burn_record"):
+		_loader.call("clear_prop_burn_record", _prop_id)
+	_rec.erase("burn")
+	_syncing = true
+	_sync_fire()
+	_syncing = false
+
+
+# ---------------------------------------------------------------------------
+# model tools
+# ---------------------------------------------------------------------------
+
+func _graph() -> Node:
+	return ServiceLocator.graph()
+
+
+func _on_starshade() -> void:
+	var pid := _prop_id
+	if _loader != null and _loader.has_method("open_starshade_editor"):
+		close()
+		_loader.call("open_starshade_editor", pid)
+
+
+func _on_pallet_rack() -> void:
+	var pid := _prop_id
+	if _loader != null and _loader.has_method("open_pallet_rack_builder_for_prop"):
+		close()
+		_loader.call("open_pallet_rack_builder_for_prop", pid)
+
+
+func _on_print_setup() -> void:
+	var pid := _prop_id
+	var gv := _graph()
+	if gv != null and gv.has_method("open_print_setup_for_prop"):
+		close()
+		gv.call("open_print_setup_for_prop", pid)
+
+
+func _on_linkage_toggle() -> void:
+	var prop := _find_prop_node()
+	if prop == null:
+		return
+	var deploy := prop.get_node_or_null("LinkageDeployRuntime")
+	if deploy != null and deploy.has_method("toggle_deploy"):
+		deploy.call("toggle_deploy")
+		get_tree().create_timer(3.2).timeout.connect(func() -> void:
+			if _active and not _prop_id.is_empty():
+				open_for_prop(_prop_id))
+
+
+func _on_edit_linkage() -> void:
+	var pid := _prop_id
+	_resolve_main()
+	if _main != null and _main.has_method("open_linkage_lab_for_prop"):
+		close()
+		_main.call("open_linkage_lab_for_prop", pid)
+
+
+func _on_build_guide() -> void:
+	var pid := _prop_id
+	_resolve_main()
+	if _main != null and _main.has_method("open_linkage_build_guide_for_prop"):
+		close()
+		_main.call("open_linkage_build_guide_for_prop", pid)
+
+
+func _on_edit_siphon() -> void:
+	var graph_id := str(_rec.get("graph_item_id", ""))
+	var gv := _graph()
+	if gv == null:
+		return
+	if gv.has_method("open_siphon_lab") and not graph_id.is_empty():
+		close()
+		gv.visible = true
+		gv.call("open_siphon_lab", graph_id)
+	elif gv.has_method("_show_toast"):
+		gv.call("_show_toast", "Bind this prop to a hydro turbine graph node first")
+
+
+func _on_edit_ports() -> void:
+	var pid := _prop_id
+	var gv := _graph()
+	if gv != null and gv.has_method("open_connection_ports_for_prop"):
+		close()
+		gv.call("open_connection_ports_for_prop", pid)
 
 
 ## Queue the REVERSE Site Project on a deployed linkage structure: strip
 ## panels → unbolt → fold & pack (the stow sweep) → haul the crate to the
-## nearest container's door when one stands within reach. The chore board's
-## dependency gates run it; effects land through the bridge's post-tick sweep.
+## nearest container's door when one stands within reach.
 func _on_crew_breakdown() -> void:
 	if _prop_id.is_empty():
 		return
 	var scene := get_tree().current_scene
-	var sgv: Node = ServiceLocator.graph()
+	var sgv: Node = _graph()
 	var bridge: Variant = sgv.call("npc_population_bridge") \
 		if sgv != null and sgv.has_method("npc_population_bridge") else null
 	if bridge == null:
@@ -467,23 +1201,15 @@ func _on_crew_breakdown() -> void:
 		return
 	var p := LinkageParams.new()
 	p.from_config(rec.get("linkage_spec") as Dictionary)
-	# Fab counts from the live builder standing at the prop (same sharpening
-	# the Lab's queue-build uses); a missing node degrades to BOM-only counts.
 	var counts: Dictionary = {}
-	var root := scene.find_child("PlacedProps", true, false) if scene != null else null
-	if root != null:
-		for child in root.get_children():
-			if child is PlacedProp and str((child as PlacedProp).prop_id) == _prop_id:
-				var mr := child.get_node_or_null("ModelRoot")
-				if mr != null and mr.has_method("get_stats"):
-					counts = LinkageBom.fab_counts(LinkageBom.compute(p),
-						mr.call("get_stats") as Dictionary)
-				break
+	var prop := _find_prop_node()
+	if prop != null:
+		var mr := prop.get_node_or_null("ModelRoot")
+		if mr != null and mr.has_method("get_stats"):
+			counts = LinkageBom.fab_counts(LinkageBom.compute(p), mr.call("get_stats") as Dictionary)
 	if counts.is_empty():
 		counts = LinkageBom.fab_counts(LinkageBom.compute(p), {})
 	var site := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
-	# Load-out destination: the nearest cargo container's door, if one stands
-	# within 200 m — otherwise the crate stays at the fold site.
 	var loadout: Dictionary = {}
 	if _loader != null and _loader.has_method("placed_prop_records"):
 		var best_d := 200.0
@@ -508,150 +1234,27 @@ func _on_crew_breakdown() -> void:
 			sgv.call("_show_toast", "Chore board is full — clear some chores first")
 		return
 	if sgv.has_method("notify_crew_queued"):
-		sgv.call("notify_crew_queued", site,
-			"👷 Breakdown queued — %d phases" % rows.size())
+		sgv.call("notify_crew_queued", site, "👷 Breakdown queued — %d phases" % rows.size())
 
 
-## The mirror of _on_crew_breakdown: raise a packed, already-fabricated
-## linkage crate again. All the logic lives in
-## PlacedPropService.queue_linkage_rebuild — shared with the Site Projects
-## panel, so the two entry points queue byte-identical projects.
 func _on_crew_rebuild() -> void:
 	if _prop_id.is_empty():
 		return
-	var sgv: Node = ServiceLocator.graph()
-	var res := PlacedPropService.queue_linkage_rebuild(
-		get_tree().current_scene, _prop_id)
+	var sgv: Node = _graph()
+	var res := PlacedPropService.queue_linkage_rebuild(get_tree().current_scene, _prop_id)
 	if not bool(res.get("ok", false)):
-		if sgv != null and sgv.has_method("_show_toast") \
-				and not str(res.get("error", "")).is_empty():
+		if sgv != null and sgv.has_method("_show_toast") and not str(res.get("error", "")).is_empty():
 			sgv.call("_show_toast", str(res.get("error", "")))
 		return
 	if sgv != null and sgv.has_method("notify_crew_queued"):
-		sgv.call("notify_crew_queued", res.get("site", Vector2.ZERO),
-			"👷 Rebuild queued — the crew raises it again")
+		sgv.call("notify_crew_queued", res.get("site", Vector2.ZERO), "👷 Rebuild queued — the crew raises it again")
 
 
-func _on_spin_changed(_v: float = 0.0) -> void:
-	if _syncing:
-		return
-	_preview_live()
+# ---------------------------------------------------------------------------
+# footer
+# ---------------------------------------------------------------------------
 
-
-func _on_model_changed(_idx: int) -> void:
-	if _syncing:
-		return
-	_preview_live()
-
-
-func _on_collision_toggled(pressed: bool) -> void:
-	if _syncing or _loader == null or _prop_id.is_empty():
-		return
-	if _loader.has_method("update_prop_record"):
-		_loader.call("update_prop_record", _prop_id, {"collision_enabled": pressed})
-
-
-func _on_show3d_toggled(pressed: bool) -> void:
-	if _syncing or _loader == null or _prop_id.is_empty():
-		return
-	# hidden_3d is the inverse of "Show in 3D". update_prop_record persists + rebuilds
-	# the prop so PlacedPropRuntime applies ModelRoot.visible immediately.
-	if _loader.has_method("update_prop_record"):
-		_loader.call("update_prop_record", _prop_id, {"hidden_3d": not pressed})
-
-
-func _on_burnable_toggled(pressed: bool) -> void:
-	if _syncing or _loader == null or _prop_id.is_empty():
-		return
-	if _loader.has_method("update_prop_record"):
-		_loader.call("update_prop_record", _prop_id, {"burnable": pressed})
-	FireNode.invalidate_flammable_mesh_cache()
-
-
-const _SHADOW_MODES := ["", "all", "off"]
-
-func _shadow_mode_to_idx(mode: String) -> int:
-	var i := _SHADOW_MODES.find(mode)
-	return i if i >= 0 else 0
-
-func _on_shadow_mode_selected(idx: int) -> void:
-	if _syncing or _loader == null or _prop_id.is_empty():
-		return
-	var mode: String = _SHADOW_MODES[clampi(idx, 0, _SHADOW_MODES.size() - 1)]
-	# Persist on the record so it survives reload…
-	if _loader.has_method("update_prop_record"):
-		_loader.call("update_prop_record", _prop_id, {"shadow_mode": mode})
-	# …and apply to the live node immediately without a full rebuild.
-	var node := _find_prop_node()
-	if node != null:
-		node.set_meta("shadow_mode", mode)
-		var radius := 0.0
-		if node.has_method("get_local_pick_radius"):
-			radius = float(node.call("get_local_pick_radius"))
-		PropRenderTuning.apply_to_prop(node, radius)
-
-
-func _refresh_restore_visibility() -> void:
-	if _restore_btn == null:
-		return
-	var prop := _find_prop_node()
-	_restore_btn.visible = prop != null and prop.has_method("has_burned_geometry") and bool(prop.call("has_burned_geometry"))
-
-
-func _find_prop_node() -> Node:
-	if _loader == null or _prop_id.is_empty():
-		return null
-	if _loader.has_method("_find_placed_prop_node"):
-		return _loader.call("_find_placed_prop_node", _prop_id)
-	return null
-
-
-func _on_restore_burned() -> void:
-	var prop := _find_prop_node()
-	if prop == null or not prop.has_method("restore_after_burn"):
-		return
-	var n: int = int(prop.call("restore_after_burn"))
-	_refresh_restore_visibility()
-	_model_lbl.text = "Restored (%d)" % n if n > 0 else "Nothing to restore"
-
-
-func _transform_patch() -> Dictionary:
-	var model_id := ""
-	if _model_option.selected >= 0:
-		model_id = str(_model_option.get_item_metadata(_model_option.selected))
-	return {
-		"model_id": model_id,
-		"x": _off_x.value, "y_offset": _off_y.value, "z": _off_z.value,
-		"yaw": _yaw.value, "pitch": _pitch.value, "roll": _roll.value,
-		"scale": _scale.value,
-	}
-
-
-func _preview_live() -> void:
-	if _loader == null or _prop_id.is_empty():
-		return
-	if _loader.has_method("preview_prop"):
-		_loader.call("preview_prop", _prop_id, _transform_patch())
-
-
-func _on_apply() -> void:
-	if _loader == null or _prop_id.is_empty():
-		return
-	var patch := _transform_patch()
-	if _loader.has_method("update_prop_record"):
-		_loader.call("update_prop_record", _prop_id, patch)
-	_model_lbl.text = "Model: %s" % str(patch.get("model_id", ""))
-
-
-func _on_delete() -> void:
-	if _loader == null or _prop_id.is_empty():
-		return
-	if _loader.has_method("delete_prop_by_id"):
-		_loader.call("delete_prop_by_id", _prop_id)
-	close()
-
-
-func _on_move_pressed() -> void:
+func _on_free_move() -> void:
 	if _loader == null or _prop_id.is_empty():
 		return
 	var pid := _prop_id
@@ -660,59 +1263,49 @@ func _on_move_pressed() -> void:
 		_loader.call("begin_prop_reposition", pid)
 
 
-## "Edit in Linkage Lab": reopen the designer bound to this placed structure.
-func _on_edit_linkage() -> void:
-	if _prop_id.is_empty():
+## A copy one footprint over, selected.
+func _on_duplicate() -> void:
+	if _loader == null or _prop_id.is_empty() or _rec.is_empty():
+		return
+	_flush_transform()
+	_resolve_main()
+	var mid := str(_rec.get("model_id", ""))
+	var metrics := ModelCatalog.mesh_metrics(mid)
+	var w := maxf(float(metrics.get("width", 2.0)) * ModelCatalog.resolved_scale(mid, float(_rec.get("scale", 1.0))), 1.0) + 0.5
+	var yaw := deg_to_rad(float(_rec.get("yaw", 0.0)))
+	var side := Vector2(cos(yaw), -sin(yaw)) * w
+	var copy := _rec.duplicate(true)
+	for k in ["id", "burn", "graph_item_id", "stowed_in", "packed", "build_state"]:
+		copy.erase(k)
+	copy["x"] = float(_rec.get("x", 0.0)) + side.x
+	copy["z"] = float(_rec.get("z", 0.0)) + side.y
+	if not _loader.has_method("duplicate_prop_record"):
+		_hint("This map cannot duplicate props")
+		return
+	var new_id := str(_loader.call("duplicate_prop_record", copy))
+	if not new_id.is_empty():
+		open_for_prop(new_id)
+		_hint("Copied. This is the copy.")
+
+
+func _on_delete() -> void:
+	if _loader == null or _prop_id.is_empty():
+		return
+	if not _del_armed:
+		_del_armed = true
+		_del_btn.text = "Confirm delete?"
+		_del_btn.add_theme_color_override("font_color", UITheme.C_ERROR)
+		_hint("Click again to delete, Esc to keep it.")
 		return
 	var pid := _prop_id
+	_disarm_delete()
+	if _loader.has_method("delete_prop_by_id"):
+		_loader.call("delete_prop_by_id", pid)
 	close()
-	var main := get_tree().current_scene
-	if main != null and main.has_method("open_linkage_lab_for_prop"):
-		main.call("open_linkage_lab_for_prop", pid)
 
 
-## "Build guide": the BOM / cut list / drill templates for this structure,
-## without having to open the designer first.
-func _on_build_guide() -> void:
-	if _prop_id.is_empty():
-		return
-	var pid := _prop_id
-	close()
-	var main := get_tree().current_scene
-	if main != null and main.has_method("open_linkage_build_guide_for_prop"):
-		main.call("open_linkage_build_guide_for_prop", pid)
-
-
-## Open Siphon Lab for the bound graph item (or toast if unbound).
-func _on_edit_siphon() -> void:
-	if _prop_id.is_empty() or _loader == null:
-		return
-	var rec: Variant = _loader.call("get_prop_record", _prop_id) if _loader.has_method("get_prop_record") else {}
-	var graph_id := ""
-	if rec is Dictionary:
-		graph_id = str((rec as Dictionary).get("graph_item_id", ""))
-	close()
-	var gv := get_parent().get_node_or_null("SystemGraphView") if get_parent() != null else null
-	if gv == null:
-		var scene := get_tree().current_scene if get_tree() != null else null
-		if scene != null:
-			gv = ServiceLocator.graph()
-	if gv != null and gv.has_method("open_siphon_lab") and not graph_id.is_empty():
-		gv.visible = true
-		gv.call("open_siphon_lab", graph_id)
-	elif gv != null and gv.has_method("_show_toast"):
-		gv.call("_show_toast", "Bind this prop to a hydro turbine graph node first")
-
-
-func _on_edit_ports() -> void:
-	if _prop_id.is_empty():
-		return
-	var pid := _prop_id
-	close()
-	var gv := get_parent().get_node_or_null("SystemGraphView") if get_parent() != null else null
-	if gv == null:
-		var scene := get_tree().current_scene if get_tree() != null else null
-		if scene != null:
-			gv = ServiceLocator.graph()
-	if gv != null and gv.has_method("open_connection_ports_for_prop"):
-		gv.call("open_connection_ports_for_prop", pid)
+func _disarm_delete() -> void:
+	_del_armed = false
+	if _del_btn != null:
+		_del_btn.text = "Remove OSM" if str(_rec.get("type", "")) == "osm" else "Delete"
+		_del_btn.remove_theme_color_override("font_color")

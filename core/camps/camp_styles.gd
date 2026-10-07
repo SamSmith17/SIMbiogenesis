@@ -19,6 +19,19 @@ extends RefCounted
 
 ## Footprints: X = length (the long axis, which is what "aligned" aligns),
 ## Y = height, Z = width. Metres.
+## Structures people SLEEP in, and how many each sleeps. The sleep need
+## resolves a camp's sleep area to these (TerrainLoader.camp_shelters_in_
+## polygon), so people lie down inside a tent, pod, van or RV rather than
+## on the ground beside it.
+const SHELTER_SLEEPS := {
+	"rv": 4, "van": 2, "popup_tent": 2, "camping_tent": 2, "shift_pod": 2,
+	"geodesic_dome": 4, "hexayurt": 3, "lotus_tent": 3,
+}
+## Structures a person cannot walk THROUGH (the nav grid blocks their
+## footprint). Tents and pods are enterable — people sleep in them — and
+## shade is walked under, so only the vehicles block.
+const SOLID_CLASSES := {"rv": true, "van": true, "car": true}
+
 const CLASS_SIZE := {
 	"rv": Vector3(8.5, 3.0, 2.6),
 	"van": Vector3(5.8, 2.6, 2.1),

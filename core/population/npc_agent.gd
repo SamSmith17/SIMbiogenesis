@@ -124,6 +124,18 @@ var target_space_type: String = "" # enrichment picks its type per visit
 var _taste: Dictionary = {}
 ## Hours a programmed venue has left when the visit begins (-1 = none).
 var _enrichment_cap_h := -1.0
+## LIVE venues (VenueCrowd: the effigy, a stage with a set on): the slot this
+## person holds there, the pose hint the venue gives that slot (read by the
+## pose machine as an input), the venue's current label for the status line,
+## and whether the venue is in an EVENT (the visit then lasts the phase).
+var venue_pose := ""
+var _venue_slot := -1
+var _venue_label := ""
+var _venue_event := false
+## One-shot per visit: when an EVENT starts elsewhere, re-pick once (and go
+## if the event venue wins) rather than every step -- re-picking the same
+## venue every step would be a finish/claim livelock.
+var _event_checked := false
 var target_pos: Vector2 = Vector2.ZERO
 ## Where this person LOOKS while standing still: the work site, the far end of
 ## a relay line, or the centre of the space they came to. `agent_dots()` turns
@@ -407,16 +419,32 @@ func _roll_day() -> void:
 	need_trips = {}
 
 
+## Per-person scatter on the body's clock: hunger, thirst and bladder rise
+## up to ±RATE_JITTER faster or slower than the table, deterministic per id
+## (NpcHash), identical in both tiers. Without it a camp with the same
+## schedule and the same rates trips every threshold in lockstep and the
+## whole camp walks to the toilets together.
+const RATE_JITTER := 0.25
+const JITTERED_NEEDS: Array = ["hunger", "thirst", "bladder"]
+
+
+static func rate_scale_for(agent_id: String, need: String) -> float:
+	if not JITTERED_NEEDS.has(need):
+		return 1.0
+	return 1.0 + (NpcHash.unit01(agent_id, "rate_" + need) * 2.0 - 1.0) * RATE_JITTER
+
+
 func _decay(dt_hours: float) -> void:
 	var asleep := state == State.DOING and activity == "sleep"
 	for n in NEEDS:
 		var v := float(needs.get(n, 0.0))
+		var rate := float(RISE_PER_H[n]) * rate_scale_for(id, n)
 		if n == "sleep" and asleep:
 			v -= SLEEP_RECOVER_PER_H * dt_hours
 		elif asleep and (n == "hunger" or n == "thirst" or n == "bladder"):
-			v += float(RISE_PER_H[n]) * 0.35 * dt_hours  # metabolic slowdown overnight
+			v += rate * 0.35 * dt_hours  # metabolic slowdown overnight
 		else:
-			v += float(RISE_PER_H[n]) * dt_hours
+			v += rate * dt_hours
 		needs[n] = clampf(v, 0.0, 1.0)
 
 
@@ -445,6 +473,20 @@ func _step_doing(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 			_satisfy("sleep")
 			_finish(ctx, true)
 		return {}
+	if activity == "enrichment" and SpaceTypes.LIVE_VENUE_TYPES.has(target_space_type):
+		_update_live_venue(abs_hours, ctx)
+		if state != State.DOING:
+			return {}   # re-seated by a WALK: the trip's step takes over
+	# The effigy was lit while this person was somewhere else: look round
+	# ONCE, and leave for it if its pull wins.
+	if activity == "enrichment" and bool(ctx.get("event_active", false)) \
+			and not _venue_event and not _event_checked:
+		_event_checked = true
+		var win := _venue_pick(ctx)
+		if not win.is_empty() and float(win.get("pull", 0.0)) >= NpcVenueState.EVENT_THRESHOLD \
+				and str(win.get("id", "")) != target_space_id:
+			_finish(ctx, false)
+			return {}
 	# Time actually spent on the activity within this step.
 	var doing_h := maxf(minf(activity_ends_h, abs_hours) - (abs_hours - dt_hours), 0.0)
 	if abs_hours >= activity_ends_h:
@@ -754,6 +796,13 @@ func _request_path(ctx: Dictionary, dest: Vector2, from_key: String, to_key: Str
 	if p is PackedVector2Array and (p as PackedVector2Array).size() > 0:
 		path = p
 		path_idx = 0
+		return
+	# No route (grid baking, or the query budget spent): a straight line —
+	# but never THROUGH the fire. One waypoint round the perimeter.
+	var det := NpcNav.detour(pos, dest, ctx.get("no_go", []))
+	if det.size() > 0:
+		path = det
+		path_idx = 0
 
 
 static func _scaled(consumes: Dictionary, doing_h: float, dt_hours: float) -> Dictionary:
@@ -808,6 +857,19 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 		# absorbing return — so between wake and 08:00 people drink, eat and
 		# idle near the beds: the camp wakes gradually.
 		if scheduled == "sleep" and float(needs.get("sleep", 0.0)) < 0.25:
+			scheduled = ""
+		# Nobody leaves at the bell: each person lingers a little into a new
+		# block (deterministic per person, day and block), so a camp trickles
+		# to dinner instead of arriving as one column.
+		# The gathering block goes through VENUE CHOICE (stage / effigy /
+		# fire circle by programme and taste — the same rule the light tier
+		# uses), not "the nearest fire circle".
+		if scheduled == "enrichment":
+			routine_kind = kind
+			if abs_hours >= float(retry_at.get("enrichment", 0.0)):
+				_begin_enrichment(abs_hours, ctx)
+				if state != State.IDLE:
+					return
 			scheduled = ""
 		if not scheduled.is_empty() and abs_hours >= float(retry_at.get(scheduled, 0.0)):
 			routine_kind = kind
@@ -887,6 +949,15 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	# or every occupant converges on one spot. Purely positional — the space is
 	# already claimed, so this changes nobody's consumption.
 	target_pos = _standing_spot(registry, sid, p, ctx)
+	# A sleep AREA with shelters in it (a camp): lie down INSIDE a tent, pod,
+	# van or RV — slot k wraps round the beds — rather than on the ground.
+	if need == "sleep":
+		var bed_of: Callable = ctx.get("bed_spot_of", Callable())
+		if bed_of.is_valid():
+			var bed: Variant = bed_of.call(sid, registry.slot_index_for(sid, id))
+			if bed is Dictionary and not (bed as Dictionary).is_empty():
+				target_pos = (bed as Dictionary).get("pos", target_pos)
+				lie_yaw = float((bed as Dictionary).get("yaw", lie_yaw))
 	# Look at the space, not back down the corridor we walked in. The CENTRE,
 	# deliberately, not our own slot — occupants of a fire circle should face
 	# each other. Recomputed from the final position every tick, so the
@@ -924,32 +995,12 @@ func _begin_enrichment(abs_hours: float, ctx: Dictionary) -> void:
 	if registry == null or not pos_of.is_valid():
 		retry_at["enrichment"] = abs_hours + RETRY_BACKOFF_H
 		return
-	var starved: Dictionary = ctx.get("starved", {})
 	# ONE venue rule for every tier (NpcVenueChoice): a venue's programme says
 	# what it is doing now, the person's taste says how much that appeals,
 	# distance and company do the rest. A fire circle with no fuel is skipped
 	# rather than looped on.
-	var hour := float(ctx.get("hour_of_day", 12.0))
-	var candidates: Array = []
-	var by_id: Dictionary = {}
-	for stype in SpaceTypes.ENRICHMENT_TYPES:
-		if str(stype) == "fire_circle" and bool(starved.get("biomass", false)):
-			continue
-		for item in registry.spaces_of_type(str(stype)):
-			var space: Dictionary = item
-			var sid := str(space.get("id", ""))
-			var p: Variant = registry._position_for(space, pos_of)
-			if not (p is Vector2):
-				continue
-			var st := FestivalProgram.state_at(space, hour)
-			candidates.append({"id": sid, "type": str(stype), "pos": p,
-				"draw": float(st["draw"]), "occupants": registry.occupant_count(sid),
-				"capacity": int(space.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))})
-			by_id[sid] = space
-	if _taste.is_empty():
-		_taste = NpcVenueChoice.taste_for(id)
-	var win := NpcVenueChoice.pick(_taste, pos, candidates)
-	var best: Dictionary = by_id.get(str(win.get("id", "")), {}) if not win.is_empty() else {}
+	var win := _venue_pick(ctx)
+	var best: Dictionary = registry.find_by_id(str(win.get("id", ""))) if not win.is_empty() else {}
 	var best_type := str(win.get("type", ""))
 	var best_pos: Vector2 = win.get("pos", Vector2.ZERO) if not win.is_empty() else Vector2.ZERO
 	if best.is_empty():
@@ -964,17 +1015,123 @@ func _begin_enrichment(abs_hours: float, ctx: Dictionary) -> void:
 	activity = "enrichment"
 	target_space_id = sid2
 	target_space_type = best_type
-	target_pos = _standing_spot(registry, sid2, best_pos, ctx)
+	var st2 := _venue_state(best, ctx)
+	_venue_slot = registry.slot_index_for(sid2, id)
+	_venue_label = str(st2.get("label", ""))
+	_venue_event = bool(st2.get("event", false))
+	# A LIVE venue (effigy, stage with a set on) seats people by choreography
+	# — the ring round the fire, the fan in front of the speakers — rather
+	# than the registry's packing spiral.
+	var live := VenueCrowd.venue_spot(best_type, best_pos, _venue_slot, st2,
+		float(ctx.get("abs_hours", 0.0)), _venue_seed(), _venue_extra(sid2, best_type, ctx))
+	target_pos = live if live != Vector2.INF else _standing_spot(registry, sid2, best_pos, ctx)
+	venue_pose = VenueCrowd.venue_pose(best_type, _venue_slot, st2, _venue_seed())
 	face_anchor = best_pos
 	last_exposure = NpcWeatherGate.EXPOSURE_OUTDOOR if SpaceTypes.OUTDOOR_TYPES.has(best_type) \
 			else NpcWeatherGate.EXPOSURE_SHELTERED
-	# A programmed set ends when the programme says, not when the hour is up.
-	var st2 := FestivalProgram.state_at(best, hour)
+	# A programmed set (or a fire's phase) ends when IT says, not when the
+	# hour is up.
 	if bool(st2.get("programmed", false)) and float(st2.get("ends_h", -1.0)) > 0.0:
 		_enrichment_cap_h = float(st2["ends_h"])
 	else:
 		_enrichment_cap_h = -1.0
 	state = State.TRAVELING
+
+
+## The winning venue for this person right now (NpcVenueChoice over every
+## enrichment space), or {} when none is reachable.
+func _venue_pick(ctx: Dictionary) -> Dictionary:
+	var registry: SpaceRegistry = ctx.get("registry")
+	var pos_of: Callable = ctx.get("pos_of", Callable())
+	if registry == null or not pos_of.is_valid():
+		return {}
+	var starved: Dictionary = ctx.get("starved", {})
+	var candidates: Array = []
+	for stype in SpaceTypes.ENRICHMENT_TYPES:
+		if str(stype) == "fire_circle" and bool(starved.get("biomass", false)):
+			continue
+		for item in registry.spaces_of_type(str(stype)):
+			var space: Dictionary = item
+			var sid := str(space.get("id", ""))
+			var p: Variant = registry._position_for(space, pos_of)
+			if not (p is Vector2):
+				continue
+			var st := _venue_state(space, ctx)
+			candidates.append({"id": sid, "type": str(stype), "pos": p,
+				"draw": float(st["draw"]), "pull": float(st.get("pull", 0.0)),
+				"occupants": registry.occupant_count(sid),
+				"capacity": int(space.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))})
+	if _taste.is_empty():
+		_taste = NpcVenueChoice.taste_for(id)
+	return NpcVenueChoice.pick(_taste, pos, candidates)
+
+
+## The venue's live state: the bridge's per-tick resolver when present (it
+## has the fire records), else the programme alone.
+func _venue_state(space: Dictionary, ctx: Dictionary) -> Dictionary:
+	var f: Callable = ctx.get("venue_state_of", Callable())
+	if f.is_valid():
+		var v: Variant = f.call(space)
+		if v is Dictionary and not (v as Dictionary).is_empty():
+			return v
+	return NpcVenueState.resolve(space, _hour(ctx), float(ctx.get("abs_hours", 0.0)))
+
+
+## Stage geometry from the bridge ({front, fwd}); {} for everything else.
+func _venue_extra(sid: String, stype: String, ctx: Dictionary) -> Dictionary:
+	if stype != "stage":
+		return {}
+	var f: Callable = ctx.get("venue_front_of", Callable())
+	if f.is_valid():
+		var v: Variant = f.call(sid)
+		if v is Dictionary:
+			return v
+	return {}
+
+
+func _venue_seed() -> float:
+	return NpcHash.unit01(id, "venue")
+
+
+## Re-seat this person at a LIVE venue every step: the fire's phase can change
+## under them (ring -> circle -> embers), the circle itself MOVES, and a set
+## can start or end. While the venue is in an EVENT the visit lasts the phase
+## — the cap tracks the phase end, so the camp does not drift home mid-burn.
+func _update_live_venue(abs_hours: float, ctx: Dictionary) -> void:
+	var registry: SpaceRegistry = ctx.get("registry")
+	if registry == null or target_space_id.is_empty():
+		return
+	var space := registry.find_by_id(target_space_id)
+	if space.is_empty():
+		return
+	var centre: Variant = registry.cached_position(target_space_id)
+	if not (centre is Vector2):
+		var pos_of: Callable = ctx.get("pos_of", Callable())
+		centre = pos_of.call(space) if pos_of.is_valid() else null
+		if not (centre is Vector2):
+			return
+	var st := _venue_state(space, ctx)
+	if _venue_slot < 0:
+		_venue_slot = registry.slot_index_for(target_space_id, id)
+	var spot := VenueCrowd.venue_spot(target_space_type, centre, _venue_slot, st, abs_hours,
+		_venue_seed(), _venue_extra(target_space_id, target_space_type, ctx))
+	if spot != Vector2.INF:
+		target_pos = spot
+		if pos.distance_to(spot) > RESEAT_WALK_M:
+			# A phase change moved the seat across the venue (ring -> lane):
+			# WALK there along a routed path — a teleport glides the body
+			# straight through the fire. The claim and activity are kept;
+			# arrival re-enters DOING and the next step re-seats as usual.
+			_request_path(ctx, spot, at_space_id, target_space_id)
+			state = State.TRAVELING
+			return
+		pos = spot
+	venue_pose = VenueCrowd.venue_pose(target_space_type, _venue_slot, st, _venue_seed())
+	_venue_label = str(st.get("label", ""))
+	face_anchor = centre
+	_venue_event = bool(st.get("event", false))
+	if _venue_event and float(st.get("ends_h", -1.0)) > 0.0:
+		activity_ends_h = maxf(activity_ends_h, abs_hours + float(st["ends_h"]))
 
 
 func _begin_chore(abs_hours: float, ctx: Dictionary) -> bool:
@@ -1055,7 +1212,7 @@ func _pick(ctx: Dictionary) -> String:
 	for n in CRITICAL_NEEDS:
 		var v := float(needs.get(n, 0.0))
 		if n == "sleep":
-			var in_window := _hour(ctx) >= SLEEP_START_H or _hour(ctx) < SLEEP_END_H
+			var in_window := NpcRoutine.in_sleep_window(_hour(ctx), _sleep_start(ctx), SLEEP_END_H)
 			if not in_window and v < float(THRESHOLD["sleep"]):
 				continue
 			if in_window and v < 0.25:
@@ -1079,7 +1236,10 @@ func _wants_enrichment(ctx: Dictionary) -> bool:
 		return false
 	if float(needs.get("hygiene", 0.0)) >= float(THRESHOLD["hygiene"]):
 		return false
-	if float(needs.get("enrichment", 0.0)) < float(THRESHOLD["enrichment"]):
+	# An EVENT (the effigy burn — NpcVenueState.event) pulls people out whether
+	# or not they felt like gathering; only the free-time gate still applies.
+	if not bool(ctx.get("event_active", false)) \
+			and float(needs.get("enrichment", 0.0)) < float(THRESHOLD["enrichment"]):
 		return false
 	return _has_free_time(ctx)
 
@@ -1143,6 +1303,11 @@ func _finish(ctx: Dictionary, _completed: bool) -> void:
 	face_anchor = Vector2.INF
 	lie_yaw = NAN
 	pickup_wait_h = NAN
+	venue_pose = ""
+	_venue_slot = -1
+	_venue_label = ""
+	_venue_event = false
+	_event_checked = false
 	# Remember the space we finished at: the next trip starts there, which is
 	# what lets the space-pair route cache hit.
 	at_space_id = target_space_id
@@ -1182,6 +1347,9 @@ func is_carrying() -> bool:
 func release_claims(ctx: Dictionary) -> void:
 	_finish(ctx, false)
 
+
+## A live-venue re-seat beyond this is walked (routed), not teleported.
+const RESEAT_WALK_M := 4.0
 
 ## Distance to project a fallback anchor. Far enough that later crowding
 ## rotates the bearing by ~1.4° rather than swinging it, near enough to stay
@@ -1250,6 +1418,13 @@ func _hour(ctx: Dictionary) -> float:
 	return fposmod(float(ctx.get("hour_of_day", 12.0)), 24.0)
 
 
+## When the sleep need may send this person to bed: the routine's SLEEP
+## block start when it has one, else SLEEP_START_H.
+func _sleep_start(ctx: Dictionary) -> float:
+	var r: NpcRoutine = ctx.get("routine")
+	return r.sleep_start_h(SLEEP_START_H) if r != null else SLEEP_START_H
+
+
 # --- readouts ---------------------------------------------------------------
 
 ## Player-facing one-liner: what this person is doing right now.
@@ -1261,6 +1436,16 @@ func status_line() -> String:
 			if activity == CHORE_ACTIVITY:
 				return "working"
 			if activity == "enrichment":
+				if target_space_type == "effigy":
+					match venue_pose:
+						VenueCrowd.POSE_DANCE, VenueCrowd.POSE_WALK:
+							return "circling the fire"
+						VenueCrowd.POSE_SIT, VenueCrowd.POSE_LIE:
+							return "watching the burn"
+					return ("%s (Effigy)" % _venue_label) if not _venue_label.is_empty() \
+						else "at the effigy"
+				if target_space_type == "stage" and venue_pose == VenueCrowd.POSE_RAVE:
+					return "raving (Bass Stage)"
 				return "%s (%s)" % [_enrich_verb(target_space_type),
 						SpaceTypes.label(target_space_type)]
 			return "%s (%s)" % [_verb(activity), SpaceTypes.label(_space_of(activity))]
@@ -1324,7 +1509,8 @@ static func _enrich_verb(space_type: String) -> String:
 		"movement": return "dancing"
 		"quiet": return "resting"
 		"workshop_social": return "making things"
-		"stage": return "at the show"
+		"stage": return "at the bass stage"
+		"effigy": return "at the effigy"
 		"temple": return "at the temple"
 		"center_camp": return "at center camp"
 		"art": return "looking at art"

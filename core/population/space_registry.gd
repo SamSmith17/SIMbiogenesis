@@ -24,7 +24,17 @@ extends RefCounted
 const VERSION := 2
 ## A festival site: every camp's beds plus venues and banks.
 const MAX_SPACES := 4000
+## The API default for callers that do not say (and what every record saved
+## before AUTO existed carries): a hard limit of two.
 const DEFAULT_CAPACITY := 2
+## Capacity 0 = AUTO: the space never fills. People spread THEMSELVES across
+## the spaces of a type instead -- nearest_space_by charges every occupant
+## already there SHARE_SPREAD_M of walk, so a crowded restroom loses to one a
+## little further away and a type's load is shared by distance. The tagging
+## UIs default to this; set a number only where a space genuinely has one
+## (a single portaloo, a four-seat bench).
+const CAPACITY_AUTO := 0
+const SHARE_SPREAD_M := 12.0
 const DEFAULT_DRAW := 0.5
 
 var spaces: Array = []
@@ -116,8 +126,11 @@ func deserialize(data: Dictionary) -> void:
 
 ## Every v2 key present with a sane value; v1 records gain the defaults.
 static func _normalized(rec: Dictionary) -> Dictionary:
-	rec["capacity"] = maxi(int(rec.get("capacity", DEFAULT_CAPACITY)), 1)
+	rec["capacity"] = maxi(int(rec.get("capacity", DEFAULT_CAPACITY)), CAPACITY_AUTO)
 	rec["label"] = str(rec.get("label", ""))
+	# A stage's facing in compass degrees (CelestialClock convention: north
+	# 0, east 90); < 0 = auto (toward the camps). Only stages read it.
+	rec["facing_deg"] = float(rec.get("facing_deg", -1.0))
 	rec["draw"] = clampf(float(rec.get("draw", DEFAULT_DRAW)), 0.0, 1.0)
 	rec["units"] = maxi(int(rec.get("units", 1)), 1)
 	rec["graph_item_id"] = str(rec.get("graph_item_id", ""))
@@ -186,7 +199,7 @@ func set_space_fields(space_id: String, patch: Dictionary) -> bool:
 		return false
 	for k in patch.keys():
 		match str(k):
-			"capacity", "label", "draw", "units", "graph_item_id", "program":
+			"capacity", "label", "draw", "units", "graph_item_id", "program", "facing_deg":
 				rec[str(k)] = patch[k]
 	_normalized(rec)
 	return true
@@ -222,7 +235,7 @@ func set_space_type(target: Dictionary, space_type: String,
 		return ""
 	if not existing.is_empty():
 		existing["space_type"] = space_type
-		existing["capacity"] = maxi(capacity, 1)
+		existing["capacity"] = maxi(capacity, CAPACITY_AUTO)
 		if not label.is_empty():
 			existing["label"] = label
 		_invalidate()
@@ -233,7 +246,7 @@ func set_space_type(target: Dictionary, space_type: String,
 		"id": _new_id(),
 		"space_type": space_type,
 		"target": target.duplicate(true),
-		"capacity": maxi(capacity, 1),
+		"capacity": maxi(capacity, CAPACITY_AUTO),
 		"label": label,
 	})
 	spaces.append(rec)
@@ -354,12 +367,16 @@ func nearest_space_by(space_type: String, pos: Vector2, pos_of: Callable,
 				owner_live = bool(live_check.call(owner))
 			if owner_live:
 				continue
-		if require_free and not has_free_capacity(str(space.get("id", ""))):
+		var sid := str(space.get("id", ""))
+		if require_free and not has_free_capacity(sid):
 			continue
 		var p: Variant = _position_for(space, pos_of)
 		if not (p is Vector2):
 			continue
-		var d := ((p as Vector2) - pos).length_squared()
+		# Share the load: every occupant already there costs SHARE_SPREAD_M
+		# of extra walk, so people draw their share of a type's spaces by
+		# distance instead of all converging on the nearest one.
+		var d := ((p as Vector2) - pos).length() + float(occupant_count(sid)) * SHARE_SPREAD_M
 		if d < best_d:
 			best_d = d
 			best = space
@@ -570,9 +587,21 @@ static func slot_offset_for_index(slot: int) -> Vector2:
 	return Vector2(cos(a), sin(a)) * r
 
 
-## Convenience: the standing offset for this agent at this space.
+## Convenience: the standing offset for this agent at this space, with a
+## per-person shuffle (SLOT_JITTER_M) so the sunflower spiral never reads as
+## the lattice it is.
+const SLOT_JITTER_M := 0.35
+
+
 func slot_offset(space_id: String, agent_id: String) -> Vector2:
-	return slot_offset_for_index(slot_index_for(space_id, agent_id))
+	var slot := slot_index_for(space_id, agent_id)
+	if slot < 0:
+		return Vector2.ZERO   # not an occupant: no slot, no shuffle
+	return slot_offset_for_index(slot) + slot_jitter(agent_id)
+
+
+static func slot_jitter(agent_id: String) -> Vector2:
+	return Vector2(NpcHash.unit01(agent_id, "jx") - 0.5, NpcHash.unit01(agent_id, "jz") - 0.5) * (SLOT_JITTER_M * 2.0)
 
 
 ## Testing switch (PopTestPrefs.ignore_capacity, set by the bridge each
@@ -586,7 +615,16 @@ func has_free_capacity(space_id: String) -> bool:
 		return false
 	if ignore_capacity:
 		return true
-	return occupant_count(space_id) < maxi(int(rec.get("capacity", DEFAULT_CAPACITY)), 1)
+	var cap := int(rec.get("capacity", DEFAULT_CAPACITY))
+	if cap <= CAPACITY_AUTO:
+		return true   # AUTO: never full, the load is shared by choice instead
+	return occupant_count(space_id) < cap
+
+
+## True when a space has no hard limit (capacity AUTO).
+func is_auto_capacity(space_id: String) -> bool:
+	var rec := find_by_id(space_id)
+	return not rec.is_empty() and int(rec.get("capacity", DEFAULT_CAPACITY)) <= CAPACITY_AUTO
 
 
 func claim(space_id: String, agent_id: String) -> bool:

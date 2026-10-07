@@ -18,13 +18,14 @@ const TYPES: Array = [
 	"restroom", "kitchen", "sleep", "water_point", "shower",
 	"fire_circle", "movement", "quiet", "workshop_social",
 	"stage", "temple", "center_camp", "art", "vendor", "medical",
+	"effigy",
 ]
 
 ## Enrichment spaces: where people go once their needs are met and they have
 ## free time. Gathering is what lifts morale past BASELINE_CEILING — a camp
 ## that only functions never gets past "Pretty Good".
 const ENRICHMENT_TYPES: Array = ["fire_circle", "movement", "quiet", "workshop_social",
-	"stage", "temple", "center_camp", "art"]
+	"stage", "temple", "center_camp", "art", "effigy"]
 
 ## The flavour of each enrichment space, matched against a person's TASTE
 ## (NpcVenueChoice): music / quiet / social / art. Two stages pull the same
@@ -33,16 +34,23 @@ const ENRICHMENT_KIND: Dictionary = {
 	"fire_circle": "social", "movement": "music", "quiet": "quiet",
 	"workshop_social": "art", "stage": "music", "temple": "quiet",
 	"center_camp": "social", "art": "art",
+	# The effigy is art until it is lit; the burn itself is the one event no
+	# taste sits out (NpcVenueState gives it an EVENT pull on top of taste).
+	"effigy": "art",
 }
 const TASTE_KINDS: Array = ["music", "quiet", "social", "art"]
 
 ## Types that can carry a PROGRAMME (time windows with a draw): every
 ## enrichment venue plus the vendors (a food truck has hours too).
 const VENUE_TYPES: Array = ["fire_circle", "movement", "quiet", "workshop_social",
-	"stage", "temple", "center_camp", "art", "vendor"]
+	"stage", "temple", "center_camp", "art", "vendor", "effigy"]
 
 ## Venues whose crowd stands in the open (weather exposure).
-const OUTDOOR_TYPES: Array = ["fire_circle", "stage", "art", "center_camp"]
+const OUTDOOR_TYPES: Array = ["fire_circle", "stage", "art", "center_camp", "effigy"]
+
+## Venues whose crowd has CHOREOGRAPHY (VenueCrowd): slots that depend on
+## the venue's live state and move with it.
+const LIVE_VENUE_TYPES: Array = ["effigy", "stage"]
 
 const LABELS: Dictionary = {
 	"restroom": "Restroom",
@@ -54,12 +62,13 @@ const LABELS: Dictionary = {
 	"movement": "Dance / Movement",
 	"quiet": "Quiet / Reflection",
 	"workshop_social": "Making / Craft",
-	"stage": "Stage",
+	"stage": "Bass Stage",
 	"temple": "Temple",
 	"center_camp": "Center Camp",
 	"art": "Art Piece",
 	"vendor": "Food Vendor",
 	"medical": "Medical",
+	"effigy": "Effigy",
 }
 
 ## Need id -> the space type that satisfies it. Enrichment is satisfied by ANY
@@ -122,6 +131,7 @@ const COLORS: Dictionary = {
 	"art": Color(0.55, 0.85, 0.95),
 	"vendor": Color(0.95, 0.55, 0.40),
 	"medical": Color(0.95, 0.35, 0.35),
+	"effigy": Color(1.0, 0.45, 0.15),
 }
 
 ## Short glyph for map markers / crosshair prompts.
@@ -135,12 +145,13 @@ const ICONS: Dictionary = {
 	"movement": "DANCE",
 	"quiet": "CALM",
 	"workshop_social": "CRAFT",
-	"stage": "STAGE",
+	"stage": "BASS",
 	"temple": "TEMPLE",
 	"center_camp": "CENTER",
 	"art": "ART",
 	"vendor": "FOOD",
 	"medical": "MED",
+	"effigy": "BURN",
 }
 
 

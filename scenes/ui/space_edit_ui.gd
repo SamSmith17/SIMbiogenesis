@@ -144,12 +144,21 @@ func _build_ui() -> void:
 	cl.add_theme_color_override("font_color", C_DIM)
 	row.add_child(cl)
 
+	# Capacity defaults to AUTO (0): the space never fills and people share
+	# the load across every space of its type by distance and crowding. Set a
+	# number only where the ground genuinely has one.
 	_capacity = SpinBox.new()
-	_capacity.min_value = 1
+	_capacity.min_value = 0
 	_capacity.max_value = 5000   # a stage holds a crowd
-	_capacity.value = 6      # areas hold more than a single fixture
+	_capacity.value = SpaceRegistry.CAPACITY_AUTO
+	_capacity.prefix = ""
+	_capacity.tooltip_text = "0 = Auto: never fills, people share the type's spaces by distance. Set a number for a genuine limit."
 	_capacity.custom_minimum_size.x = 66
 	row.add_child(_capacity)
+	var cap_hint := Label.new()
+	cap_hint.text = "(0 = auto)"
+	cap_hint.add_theme_color_override("font_color", C_DIM)
+	row.add_child(cap_hint)
 
 	_draw_btn = Button.new()
 	_draw_btn.text = "Draw area"
@@ -314,11 +323,12 @@ func _refresh_list() -> void:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		var lbl := Label.new()
-		lbl.text = "%s  %s  ·  %.0f m²  ·  cap %d" % [
+		var cap := int(rec.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))
+		lbl.text = "%s  %s  ·  %.0f m²  ·  %s" % [
 			SpaceTypes.icon(str(rec.get("space_type", ""))),
 			SpaceTypes.label(str(rec.get("space_type", ""))),
 			SpaceRegistry.polygon_area_m2(target.get("poly", []) as Array),
-			int(rec.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))]
+			("cap %d" % cap) if cap > SpaceRegistry.CAPACITY_AUTO else "shared"]
 		lbl.add_theme_color_override("font_color", C_TEXT)
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(lbl)

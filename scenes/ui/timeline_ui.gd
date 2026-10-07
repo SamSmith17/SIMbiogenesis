@@ -145,6 +145,8 @@ var _conduits_chip: Button = null
 var _projects_chip: Button = null
 ## Settlement view — the watch-the-community-work camera.
 var _settlement_chip: Button = null
+## Festival mode -- populate the painted camps, assume them stocked, watch.
+var _festival_chip: Button = null
 
 var _solar_analyzer: SolarShadingAnalyzer = null
 var _shading_overlay: PanelContainer = null
@@ -422,6 +424,26 @@ func _on_projects_chip_pressed() -> void:
 func _on_settlement_chip_pressed() -> void:
 	if _main != null and _main.has_method("toggle_settlement_view"):
 		_main.call("toggle_settlement_view")
+
+
+## Festival mode. Toggles; the chip reads green while the mode is on (the
+## guardrails are off then, which is worth seeing from every screen).
+func _on_festival_chip_pressed() -> void:
+	if _main == null or not _main.has_method("toggle_festival_mode"):
+		return
+	_main.call("toggle_festival_mode")
+	var fm: Variant = _main.get("festival_mode")
+	if fm is Node and is_instance_valid(fm) and fm.has_signal("changed") \
+			and not fm.changed.is_connected(_refresh_festival_chip):
+		fm.changed.connect(_refresh_festival_chip)
+	_refresh_festival_chip()
+
+
+func _refresh_festival_chip() -> void:
+	if _festival_chip == null or _main == null:
+		return
+	var on := _main.has_method("festival_mode_active") and bool(_main.call("festival_mode_active"))
+	_festival_chip.add_theme_color_override("font_color", UITheme.C_OK if on else UITheme.C_TEXT)
 
 
 func _on_conduits_visible_signal(_enabled: bool) -> void:
@@ -2472,6 +2494,9 @@ func _build_right_cluster() -> Control:
 	_settlement_chip = _mk_chip_btn("Settlement", _on_settlement_chip_pressed,
 		"Settlement view — watch the community at work, from ground level out to the whole site")
 	right.add_child(_settlement_chip)
+	_festival_chip = _mk_chip_btn("Festival", _on_festival_chip_pressed,
+		"Festival mode — populate every painted camp, assume the camps stocked (no starving, no queues, no leaving), and watch the crowd from the settlement view")
+	right.add_child(_festival_chip)
 	var gear_btn := _mk_icon_btn("⚙", _on_settings_pressed, "Settings — clouds, sun/moon, stars & planets, location")
 	right.add_child(gear_btn)
 	_shading_btn = _mk_icon_btn("🔆", _on_solar_shading_pressed, "Solar shading — compute a year-long shadow heatmap")

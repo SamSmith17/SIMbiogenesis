@@ -65,7 +65,9 @@ func is_open() -> bool:
 	return _active
 
 
-func open(main: Node, at: Vector2 = Vector2.INF) -> void:
+## `start_h` is the camera's opening height (metres over the focus): the
+## default reads as a block; festival mode passes one that frames every camp.
+func open(main: Node, at: Vector2 = Vector2.INF, start_h: float = 60.0) -> void:
 	if _active:
 		return
 	_main = main
@@ -76,7 +78,7 @@ func open(main: Node, at: Vector2 = Vector2.INF) -> void:
 	var focus := at
 	if focus == Vector2.INF:
 		focus = _player_xz()
-	_cam.setup(main, focus, 60.0)
+	_cam.setup(main, focus, maxf(start_h, SettlementCamera.EYE_H))
 	_active = true
 	visible = true
 	set_process(true)

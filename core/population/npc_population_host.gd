@@ -172,6 +172,12 @@ func _process_avatars(delta: float) -> void:
 			carry_group_of[str(aid1)] = (carried[cp1] as Array).size()
 	_carry_group_of = carry_group_of
 	var heroes := _pick_heroes(dots, eye)
+	# Who carries an ambient readout this frame: the nearest few inside the
+	# fade radius (plus the focus, always). Measured in 3D from the camera,
+	# not in XZ: from the settlement view's block height the camp directly
+	# below used to read as "0 m away" and stacked a wall of tags.
+	var eye3 := _viewer_pos3()
+	var ambient_ids := _pick_ambient(dots, heroes, eye3)
 	var crowd_entries: Array = []
 	var push_crowd := false
 	if _crowd_renderer != null and is_instance_valid(_crowd_renderer):
@@ -226,7 +232,12 @@ func _process_avatars(delta: float) -> void:
 		var dist := (sim_pos - eye).length()
 		# Near people carry their morale bar + task tag ambiently — the
 		# monitor-the-camp-from-first-person read; far people stay clean.
-		av.set_ambient_status(dist < AMBIENT_STATUS_DIST_M)
+		# Faded with distance and capped in number, so a crowd reads as a few
+		# legible tags rather than a wall of them.
+		var ambient := ambient_ids.has(aid)
+		var dist3 := eye3.distance_to(Vector3(sim_pos.x, _ground_y(aid, sim_pos), sim_pos.y))
+		av.set_ambient_alpha(1.0 - smoothstep(AMBIENT_FULL_DIST_M, AMBIENT_STATUS_DIST_M, dist3))
+		av.set_ambient_status(ambient)
 		# A person someone is PLAYING is never culled, never quarter-rate posed,
 		# and always keeps the rigged body: LOD is an economy for background
 		# figures, and applying it to a player would make them vanish or stutter
@@ -567,8 +578,13 @@ func set_focus_agent(agent_id: String) -> void:
 
 ## How near somebody has to be for their overhead bar + task tag to show
 ## without being aimed at. Under the 45 m rig radius: the readout is for the
-## camp you are standing IN, not the whole valley.
-const AMBIENT_STATUS_DIST_M := 30.0
+## camp you are standing IN, not the whole valley. The readout is FULL inside
+## AMBIENT_FULL_DIST_M and fades to nothing at AMBIENT_STATUS_DIST_M, and at
+## most AMBIENT_MAX_TAGS people (the nearest) carry one at once — in a crowd
+## the tags used to stack into an unreadable wall.
+const AMBIENT_STATUS_DIST_M := 34.0
+const AMBIENT_FULL_DIST_M := 12.0
+const AMBIENT_MAX_TAGS := 10
 
 ## Morale history for the trend tick: agent_id -> [[abs_h, morale], …],
 ## sampled every TREND_SAMPLE_H sim-hours, kept ~TREND_WINDOW_H deep.
@@ -639,6 +655,35 @@ static func _task_text_of(dot: Dictionary) -> String:
 	if int(dot.get("state", 0)) == NpcAgent.State.TRAVELING:
 		return "→ " + text
 	return text
+
+
+## The nearest AMBIENT_MAX_TAGS full-tier people inside the fade radius (the
+## focus person always), as a set of ids.
+func _pick_ambient(dots: Array, heroes: Dictionary, eye3: Vector3) -> Dictionary:
+	var scored: Array = []
+	for dot_v in dots:
+		if not (dot_v is Dictionary):
+			continue
+		var dot: Dictionary = dot_v
+		var aid := str(dot.get("id", ""))
+		if aid.is_empty() or str(dot.get("tier", "")) == "light" or not heroes.has(aid):
+			continue
+		var p2: Vector2 = dot.get("pos", Vector2.ZERO)
+		var d := eye3.distance_to(Vector3(p2.x, _ground_y(aid, p2), p2.y))
+		if d < AMBIENT_STATUS_DIST_M:
+			scored.append([d, aid])
+	scored.sort_custom(func(a, b): return float(a[0]) < float(b[0]))
+	var out: Dictionary = {}
+	for i in mini(scored.size(), AMBIENT_MAX_TAGS):
+		out[str(scored[i][1])] = true
+	if not _focus_id.is_empty():
+		out[_focus_id] = true
+	return out
+
+
+func _viewer_pos3() -> Vector3:
+	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
+	return cam.global_position if cam != null else Vector3.ZERO
 
 
 func _viewer_xz() -> Vector2:
@@ -805,6 +850,12 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 		and _now - float(_moved_at.get(aid, _now)) > MOVE_HOLD_S
 	var in_transit := (travelling and not (stalled and gap <= ARRIVE_EPS_M)) \
 		or catching_up
+	# A DANCER circling the fire or raving at the stage moves while dancing:
+	# the sim slides their position, the body glides after it, and the pose
+	# stays the dance rather than flipping to a walk every frame.
+	var venue_pose := str(dot.get("venue_pose", ""))
+	if not travelling and (venue_pose == VenueCrowd.POSE_DANCE or venue_pose == VenueCrowd.POSE_RAVE):
+		in_transit = false
 
 	var teleported := cur != Vector3.ZERO \
 		and ((step_is_jump and moved) or gap >= tp_threshold)
@@ -882,6 +933,13 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	var apparent := (cur.distance_to(next) / maxf(delta, 0.0001)) if cur != Vector3.ZERO else 0.0
 	if use_interp:
 		apparent = float(st["step_m"]) / maxf(float(st["interval"]), 0.05)
+	# Feet on the ground WHERE THE BODY IS DRAWN, not where the sim dot is.
+	# `target.y` was sampled at the sim position — a tick ahead of the body
+	# while it glides prev→next — so on a slope the figure floated above (or
+	# sank into) the hill for the whole glide: the "paths through the air".
+	# The per-agent cache only re-queries when the body moved 0.35 m.
+	if cur != Vector3.ZERO and Vector2(next.x, next.z).distance_to(sim_pos) > GROUND_MOVE_EPS_M:
+		next.y = _ground_y(aid + "|draw", Vector2(next.x, next.z))
 	av.apply_pose(next, yaw, {
 		"dt": delta,
 		"paused": scale <= 0.0,
@@ -893,6 +951,7 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 		"in_transit": in_transit,
 		"activity": str(dot.get("activity", "")),
 		"space_type": str(dot.get("space_type", "")),
+		"venue_pose": venue_pose,
 		"morale": float(dot.get("morale", 1.0)),
 		"dwell_left_s": _dwell_left_s(dot),
 		"teleported": teleported,
@@ -988,5 +1047,10 @@ static func _crowd_pose_for(dot: Dictionary) -> int:
 	if act == "chore" or act == "work" or not str(dot.get("work_pose", "")).is_empty():
 		return CrowdCohort.POSE_WORK
 	if act == "enrichment" or act == "social":
+		match str(dot.get("venue_pose", "")):
+			VenueCrowd.POSE_SIT: return CrowdCohort.POSE_SIT
+			VenueCrowd.POSE_LIE: return CrowdCohort.POSE_LIE
+			VenueCrowd.POSE_RAVE: return CrowdCohort.POSE_RAVE
+			VenueCrowd.POSE_STAND, VenueCrowd.POSE_CLAP, VenueCrowd.POSE_WALK: return CrowdCohort.POSE_STAND
 		return CrowdCohort.POSE_DANCE
 	return CrowdCohort.POSE_STAND

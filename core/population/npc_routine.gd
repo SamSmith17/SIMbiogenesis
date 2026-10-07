@@ -164,6 +164,31 @@ static func offset_for(agent_id: String) -> float:
 
 ## The block covering `hour_of_day` for an agent with this phase offset.
 ## Returns {} only when `blocks` is empty.
+## The sleep NEED may send someone to bed this long before the routine's
+## SLEEP block begins. 2.5 h puts the default day (bed 23:30) at the
+## long-standing 21:00 exactly, and a festival camp (bed 02:30) at midnight
+## — before this the fixed 21:00 had most of a festival asleep through the
+## headline set.
+const EARLY_BED_H := 2.5
+
+
+## When the sleep need's window opens: EARLY_BED_H before the first SLEEP
+## block, or `fallback` when the routine has none.
+func sleep_start_h(fallback: float) -> float:
+	for b in blocks:
+		if str((b as Dictionary).get("kind", "")) == SLEEP:
+			return fposmod(float((b as Dictionary).get("start_h", fallback)) - EARLY_BED_H, 24.0)
+	return fallback
+
+
+## Is `hour` inside the sleep window [start, end), wrapping midnight when
+## start > end (21:00 → 06:00) and plain when it does not (00:00 → 06:00)?
+static func in_sleep_window(hour: float, start: float, end: float) -> bool:
+	if start > end:
+		return hour >= start or hour < end
+	return hour >= start and hour < end
+
+
 func block_at(hour_of_day: float, phase_offset_h: float = 0.0) -> Dictionary:
 	if blocks.is_empty():
 		return {}

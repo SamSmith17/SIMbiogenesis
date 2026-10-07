@@ -11,6 +11,8 @@ var structure_nodes : Array[Node3D] = []
 
 ## Cluster manager for efficient fire rendering
 var cluster_manager : FireClusterManager = null
+## Set once any fire collapsed its structure: the event then ends as FAILED.
+var _structure_lost : bool = false
 
 ## Time since event started (in sim hours)
 var elapsed_hours : float = 0.0
@@ -282,7 +284,8 @@ func update_event(delta: float, context: Dictionary) -> void:
 		resolve_event()
 		return
 	
-	# Check for timeout (failure)
+	# Timeout: the fire is still the world's (the nodes stay); the EVENT just
+	# stops tracking it.
 	if elapsed_hours >= MAX_DURATION_HOURS:
 		fail_event()
 		return
@@ -306,9 +309,8 @@ func _manage_cluster_manager(context: Dictionary) -> void:
 		cluster_manager = null
 
 func cleanup() -> void:
-	for fire in active_fires:
-		if is_instance_valid(fire):
-			fire.queue_free()
+	# The FireNodes stay: a fire is part of the world's timeline now, not of
+	# this event. Only our bookkeeping goes.
 	active_fires.clear()
 	structure_nodes.clear()
 	
@@ -419,6 +421,11 @@ func _spawn_fire_on_mesh(mesh: MeshInstance3D, tree: SceneTree, scope: Node = nu
 	fire.burn_scope = scope if scope != null else FireNode._structure_root_of(mesh)
 	fire.intensity = 16.0
 	fire.growth_tier = 0
+	# The fire is a function of sim time from this hour on (FireTimeline); on a
+	# placed prop the record rides the prop so it survives reloads and scrubs.
+	if fire.burn_scope is PlacedProp:
+		fire.prop_id = (fire.burn_scope as PlacedProp).prop_id
+	fire.ignite_at(_clock_hours(tree))
 
 	# Start at the BOTTOM of the mesh so tall props (Man) burn upward.
 	var spawn := FireNode.ignition_point_on_mesh_bottom(mesh)
@@ -438,12 +445,31 @@ func _spawn_fire_on_mesh(mesh: MeshInstance3D, tree: SceneTree, scope: Node = nu
 	return fire
 
 
+## The fire node says this once there is no open flame left: put out (the
+## player won) or burned down to embers (the structure is lost). The node
+## itself is NOT ours to free — it draws the fire at whatever hour the clock
+## is scrubbed to, and lives as long as its record does.
 func _on_fire_extinguished(fire: FireNode) -> void:
 	var idx := active_fires.find(fire)
 	if idx >= 0:
 		active_fires.remove_at(idx)
+	if fire != null and is_instance_valid(fire) and fire._last_phase >= FireTimeline.Phase.COLLAPSING:
+		_structure_lost = true
 	if active_fires.is_empty():
-		resolve_event()
+		if _structure_lost:
+			fail_event()
+		else:
+			resolve_event()
+
+
+## Abs sim hours off Main (the first root child with the clock).
+static func _clock_hours(tree: SceneTree) -> float:
+	if tree == null:
+		return 0.0
+	for child in tree.root.get_children():
+		if child.has_method("get_absolute_hours"):
+			return float(child.call("get_absolute_hours"))
+	return 0.0
 
 
 func _on_fire_spread(target_mesh: MeshInstance3D) -> void:
@@ -481,9 +507,12 @@ func get_status_description() -> String:
 				biggest_fire.growth_tier,
 				biggest_fire.burning_meshes.size(),
 			]
-			var time_left := FireNode.DESTROY_TIME_HOURS - biggest_fire.fire_time_hours
-			if time_left > 0:
-				status += " — %d min left" % int(time_left * 60)
+			if not biggest_fire.burn_rec.is_empty():
+				var time_left := FireTimeline.climb_h(biggest_fire.burn_rec) - float(
+					FireTimeline.state_at(biggest_fire.burn_rec, _clock_hours(
+						biggest_fire.get_tree()))["burn_h"])
+				if time_left > 0:
+					status += " — %d min to collapse" % int(time_left * 60)
 		return status
 
 	return super.get_status_description()
